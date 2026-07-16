@@ -1,0 +1,2809 @@
+;;; std/float/mod.req/wf.shard — wf-closure of the L1 ops + the decode/roundtrip
+;;; theorems the per-format surface modules (std/f32, std/f64 — rung R3a,
+;;; docs/FLOATS.md §3a) consume for their refine obligations:
+;;;
+;;;   fadd_wf/fsub_wf/fmul_wf/fdiv_wf  — ops preserve fwf (parametric; the
+;;;     hnan premise covers the NaN-producing table arms: Inf-Inf, Inf*0,
+;;;     0/0, Inf/Inf — every named IEEE/FN instance has a NaN)
+;;;   fabs_wf                          — sign ops (fneg_wf lives in kit.shard)
+;;;   funpack_wf_f32/_f64              — decode is wf on ANY Int (fields are
+;;;     mod-masked; §3a tier 2, fmt-ground)
+;;;   funpack_fpack_f32/_f64           — the combined wf-premised roundtrip,
+;;;     assembling the R2.2 pieces (fin fmt-ground + inf/nan parametric)
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../kernel/facts.shard")  ; ediv/mod range facts for the field bounds
+(import "float.shard")  ; the L1 model: Fmt, FVal, fwf, the ops, frnd
+(import "kit.shard")  ; frnd_wf, fovf_wf, fneg_wf, fpow2_pos, fval pair kit
+(import "pack.shard")  ; funpack/fpack + the R2.2 bijection theorems
+(import "../../rat")  ; mul_pos (interface theorem kit, L0)
+(use (:: kernel facts *))
+(use (:: std float float *))  ; type names (Fmt, FVal) for binders
+(use (:: std float kit *))
+(use (:: std float pack *))
+(use (:: std rat gcd mul_pos))
+
+;; --- small extraction helpers ---------------------------------------------------
+
+;; the signed zero on the bottom row is well-formed (both ops' exact-zero
+;; dispatch arms produce it; the sign never enters fwf).
+(claim fwf_zero
+  (goal ((f Fmt) (s Bool)) ((= (fmt_wf f) True))
+    (= (fwf f (Fin s 0 (fmt_emin f))) True))
+  (chain
+    (have hp1 (= (lt 0 (fpow2 (+ (mw_of f) 1))) True)
+      (rewrite-with (lemma fpow2_pos) lr lhs ((inst k (+ (mw_of f) 1))) () refl))
+    (have hpm (= (lt 0 (fpow2 (mw_of f))) True)
+      (rewrite-with (lemma fpow2_pos) lr lhs ((inst k (mw_of f))) () refl))
+    (have hee (= (le (fmt_emin f) (fmt_emin f)) True)
+      (steps () (by arith (list 1))))
+    (have hex (= (le (fmt_emin f) (fmt_emax f)) True)
+      (rewrite-with
+        (lemma fmt_emin_le_emax)
+        lr
+        lhs
+        ((inst f f))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hie (= (int_eq (fmt_emin f) (fmt_emin f)) True)
+      (steps () (by arith (list (list 1) (list 1)))))
+    (steps
+      ((unfold fwf lhs)
+       (simp lhs)
+       (unfold fwf_fin lhs)
+       (simp lhs)
+       (rewrite (premise 1) lr lhs true ())
+       (simp lhs)
+       (rewrite (premise 3) lr lhs true ())
+       (simp lhs)
+       (rewrite (premise 4) lr lhs true ())
+       (simp lhs)
+       (rewrite (premise 2) lr lhs true ())
+       (simp lhs)
+       (rewrite (premise 5) lr lhs true ()))
+      refl)))
+
+;; the exact-value denominator is positive at EITHER sign (fval_den never
+;; reads the sign; kit's fval_den_pos is spelled at False only).
+(claim fval_den_pos_any
+  (goal ((f Fmt) (s Bool) (m Int) (e Int)) ()
+    (= (lt 0 (fval_den f (Fin s m e))) True))
+  (case-on (le (mw_of f) e) Bool
+    ((case True
+       (chain
+         (have hg (= (le (mw_of f) e) True)
+           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+         (steps
+           ((unfold fval_den lhs)
+            (simp lhs)
+            (rewrite (premise 0) lr lhs true ())
+            (simp lhs))
+           refl)))
+     (case False
+       (chain
+         (have hg (= (le (mw_of f) e) False)
+           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+         (have hp (= (lt 0 (fpow2 (- (mw_of f) e))) True)
+           (rewrite-with
+             (lemma fpow2_pos)
+             lr
+             lhs
+             ((inst k (- (mw_of f) e)))
+             ()
+             refl))
+         (steps
+           ((unfold fval_den lhs)
+            (simp lhs)
+            (rewrite (premise 0) lr lhs true ())
+            (simp lhs)
+            (rewrite (premise 1) lr lhs true ()))
+           refl))))))
+
+;; a well-formed nonzero mantissa is at least 1 (the m >= 1 extraction, done
+;; once: fwf_fin's first guard gives m >= 0, the int_eq disequality kills 0).
+(claim fwf_m_lo
+  (goal ((f Fmt) (m Int) (e Int))
+    ((= (fwf_fin f m e) True) (= (int_eq m 0) False))
+    (= (le 1 m) True))
+  (case-on (le 0 m) Bool
+    ((case True
+       (chain
+         (have hm0 (= (le 0 m) True)
+           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+         (case-on (le m 0) Bool
+           ((case True
+              (chain
+                (have hmz (= (le m 0) True)
+                  (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                (have hmeq (= m 0)
+                  (steps () (by arith (list (list 1 0 0 0 1) (list 1 0 0 1 0)))))
+                (have hff (= False True)
+                  (steps
+                    ((rewrite (premise 1) rl lhs true ())
+                     (rewrite (premise 4) lr lhs true ())
+                     (simp lhs))
+                    refl))
+                (absurd (premise hff))))
+            (case False
+              (chain
+                (have hmnz (= (le m 0) False)
+                  (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                (steps () (by arith (list 1 0 0 0 1)))))))))
+     (case False
+       (chain
+         (have hm0f (= (le 0 m) False)
+           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+         (have hff (= False True)
+           (steps
+             ((rewrite (premise 0) rl rhs true ())
+              (unfold fwf_fin rhs)
+              (rewrite (premise 2) lr rhs true ())
+              (simp rhs))
+             refl))
+         (absurd (premise hff)))))))
+
+;; a nonzero-magnitude numerator that is not negative is strictly positive
+;; (fdiv's divisor-sign probe consumer: the sign split lives HERE, once —
+;; s = True contradicts the probe via fval_num_sign, s = False rides
+;; fval_num_pos).
+(claim fval_num_pos_probe
+  (goal ((f Fmt) (s Bool) (m Int) (e Int))
+    ((= (le 1 m) True) (= (lt (fval_num f (Fin s m e)) 0) False))
+    (= (lt 0 (fval_num f (Fin s m e))) True))
+  (case-on s Bool
+    ((case True
+       (chain
+         (have hs (= s True) (steps ((rewrite (hyp True) lr lhs true ())) refl))
+         (have hspell (= (lt (fval_num f (Fin True m e)) 0) False)
+           (steps
+             ((rewrite (premise hs) rl lhs true ())
+              (rewrite (premise 1) lr lhs true ()))
+             refl))
+         (have hsign
+           (= (fval_num f (Fin True m e)) (- 0 (fval_num f (Fin False m e))))
+           (rewrite-with
+             (lemma fval_num_sign)
+             lr
+             lhs
+             ((inst f f) (inst m m) (inst e e))
+             ()
+             refl))
+         (have hpos (= (le 1 (fval_num f (Fin False m e))) True)
+           (rewrite-with
+             (lemma fval_num_pos)
+             lr
+             lhs
+             ((inst f f) (inst m m) (inst e e))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((rewrite (premise hs) lr lhs true ()))
+           (by arith (rows (hspell 1) (hsign -1) (hpos 1))))))
+     (case False
+       (chain
+         (have hs (= s False)
+           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+         (have hpos (= (le 1 (fval_num f (Fin False m e))) True)
+           (rewrite-with
+             (lemma fval_num_pos)
+             lr
+             lhs
+             ((inst f f) (inst m m) (inst e e))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((rewrite (premise hs) lr lhs true ()))
+           (by arith (rows (goal 1) (hpos 1)))))))))
+
+;; --- fabs preserves wf (fneg's textual twin — fwf never reads the sign) --------
+
+(claim fabs_wf
+  (goal ((f Fmt) (x FVal)) ((= (fwf f x) True)) (= (fwf f (fabs x)) True))
+  (case-on x FVal
+    ((case Fin
+       (s m e)
+       (chain
+         (have hxe (= x (Fin s m e))
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (have hwf (= (fwf_fin f m e) True)
+           (steps
+             ((rewrite (premise 0) rl rhs true ())
+              (rewrite (premise hxe) lr rhs true ())
+              (unfold fwf rhs)
+              (simp rhs))
+             refl))
+         (steps
+           ((rewrite (premise hwf) rl rhs true ())
+            (rewrite (premise hxe) lr lhs true ())
+            (unfold fabs lhs)
+            (unfold fwf lhs)
+            (simp lhs))
+           refl)))
+     (case FInf
+       (s)
+       (chain
+         (have hxe (= x (FInf s))
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (have hwf (= (hinf_of f) True)
+           (steps
+             ((rewrite (premise 0) rl rhs true ())
+              (rewrite (premise hxe) lr rhs true ())
+              (unfold fwf rhs)
+              (simp rhs))
+             refl))
+         (steps
+           ((rewrite (premise hwf) rl rhs true ())
+            (rewrite (premise hxe) lr lhs true ())
+            (unfold fabs lhs)
+            (unfold fwf lhs)
+            (simp lhs))
+           refl)))
+     (case FNaN
+       (chain
+         (have hxe (= x FNaN) (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (have hwf (= (hnan_of f) True)
+           (steps
+             ((rewrite (premise 0) rl rhs true ())
+              (rewrite (premise hxe) lr rhs true ())
+              (unfold fwf rhs)
+              (simp rhs))
+             refl))
+         (steps
+           ((rewrite (premise hwf) rl rhs true ())
+            (rewrite (premise hxe) lr lhs true ())
+            (unfold fabs lhs)
+            (unfold fwf lhs)
+            (simp lhs))
+           refl))))))
+
+;; --- the op wf-closures: fadd/fmul/fdiv/fsub preserve fwf -----------------------
+;; Parametric (§3a tier 1). The hnan premise covers the table arms that
+;; CREATE a NaN from non-NaN inputs (Inf-Inf, Inf*0, 0/0, Inf/Inf); every
+;; named instance has a NaN, so per-format discharge is one ground compute.
+;; Choreography per live arm: hoisted positivity haves, zero-guard case-ons
+;; with unfold+reduce spelling (reduce never unfolds named calls, so frnd and
+;; the fval pair stay FOLDED for the frnd_wf cite).
+
+(claim fadd_wf
+  (goal ((f Fmt) (x FVal) (y FVal))
+    ((= (fmt_wf f) True)
+     (= (hnan_of f) True)
+     (= (fwf f x) True)
+     (= (fwf f y) True))
+    (= (fwf f (fadd f x y)) True))
+  (case-on x FVal
+    ((case Fin
+       (s1 m1 e1)
+       (chain
+         (have hxe (= x (Fin s1 m1 e1))
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (case-on y FVal
+           ((case Fin
+              (s2 m2 e2)
+              (chain
+                (have hye (= y (Fin s2 m2 e2))
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (have hd1 (= (lt 0 (fval_den f (Fin s1 m1 e1))) True)
+                  (rewrite-with
+                    (lemma fval_den_pos_any)
+                    lr
+                    lhs
+                    ((inst f f) (inst s s1) (inst m m1) (inst e e1))
+                    ()
+                    refl))
+                (have hd2 (= (lt 0 (fval_den f (Fin s2 m2 e2))) True)
+                  (rewrite-with
+                    (lemma fval_den_pos_any)
+                    lr
+                    lhs
+                    ((inst f f) (inst s s2) (inst m m2) (inst e e2))
+                    ()
+                    refl))
+                (have hdd
+                  (=
+                    (lt
+                      0
+                      (*
+                        (fval_den f (Fin s1 m1 e1))
+                        (fval_den f (Fin s2 m2 e2))))
+                    True)
+                  (rewrite-with
+                    (lemma mul_pos)
+                    lr
+                    lhs
+                    ((inst a (fval_den f (Fin s1 m1 e1)))
+                     (inst b (fval_den f (Fin s2 m2 e2))))
+                    ((steps ((rewrite (premise hd1) lr lhs true ())) refl)
+                     (steps ((rewrite (premise hd2) lr lhs true ())) refl))
+                    refl))
+                (case-on (int_eq m1 0) Bool
+                  ((case True
+                     (chain
+                       (have hz1 (= (int_eq m1 0) True)
+                         (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                       (case-on (int_eq m2 0) Bool
+                         ((case True
+                            (chain
+                              (have hz2 (= (int_eq m2 0) True)
+                                (steps
+                                  ((rewrite (hyp True) lr lhs true ()))
+                                  refl))
+                              (have hb
+                                (=
+                                  (fadd f (Fin s1 m1 e1) (Fin s2 m2 e2))
+                                  (Fin (if s1 s2 False) 0 (fmt_emin f)))
+                                (steps
+                                  ((unfold fadd lhs)
+                                   (reduce lhs)
+                                   (rewrite (premise hz1) lr lhs true ())
+                                   (reduce lhs)
+                                   (rewrite (premise hz2) lr lhs true ())
+                                   (reduce lhs))
+                                  refl))
+                              (have hwr
+                                (=
+                                  (fwf f (Fin (if s1 s2 False) 0 (fmt_emin f)))
+                                  True)
+                                (rewrite-with
+                                  (lemma fwf_zero)
+                                  lr
+                                  lhs
+                                  ((inst f f) (inst s (if s1 s2 False)))
+                                  ((steps
+                                     ((rewrite (premise 0) lr lhs true ()))
+                                     refl))
+                                  refl))
+                              (steps
+                                ((rewrite (premise hxe) lr lhs true ())
+                                 (rewrite (premise hye) lr lhs true ())
+                                 (rewrite (premise hb) lr lhs true ())
+                                 (rewrite (premise hwr) lr lhs true ()))
+                                refl)))
+                          (case False
+                            (chain
+                              (have hz2 (= (int_eq m2 0) False)
+                                (steps
+                                  ((rewrite (hyp False) lr lhs true ()))
+                                  refl))
+                              (have hb
+                                (=
+                                  (fadd f (Fin s1 m1 e1) (Fin s2 m2 e2))
+                                  (frnd
+                                    f
+                                    (+
+                                      (*
+                                        (fval_num f (Fin s1 m1 e1))
+                                        (fval_den f (Fin s2 m2 e2)))
+                                      (*
+                                        (fval_num f (Fin s2 m2 e2))
+                                        (fval_den f (Fin s1 m1 e1))))
+                                    (*
+                                      (fval_den f (Fin s1 m1 e1))
+                                      (fval_den f (Fin s2 m2 e2)))))
+                                (steps
+                                  ((unfold fadd lhs)
+                                   (reduce lhs)
+                                   (rewrite (premise hz1) lr lhs true ())
+                                   (reduce lhs)
+                                   (rewrite (premise hz2) lr lhs true ())
+                                   (reduce lhs))
+                                  refl))
+                              (have hwr
+                                (=
+                                  (fwf
+                                    f
+                                    (frnd
+                                      f
+                                      (+
+                                        (*
+                                          (fval_num f (Fin s1 m1 e1))
+                                          (fval_den f (Fin s2 m2 e2)))
+                                        (*
+                                          (fval_num f (Fin s2 m2 e2))
+                                          (fval_den f (Fin s1 m1 e1))))
+                                      (*
+                                        (fval_den f (Fin s1 m1 e1))
+                                        (fval_den f (Fin s2 m2 e2)))))
+                                  True)
+                                (rewrite-with
+                                  (lemma frnd_wf)
+                                  lr
+                                  lhs
+                                  ((inst f f)
+                                   (inst
+                                     n
+                                     (+
+                                       (*
+                                         (fval_num f (Fin s1 m1 e1))
+                                         (fval_den f (Fin s2 m2 e2)))
+                                       (*
+                                         (fval_num f (Fin s2 m2 e2))
+                                         (fval_den f (Fin s1 m1 e1)))))
+                                   (inst
+                                     d
+                                     (*
+                                       (fval_den f (Fin s1 m1 e1))
+                                       (fval_den f (Fin s2 m2 e2)))))
+                                  ((steps
+                                     ((rewrite (premise 0) lr lhs true ()))
+                                     refl)
+                                   (steps
+                                     ((rewrite (premise hdd) lr lhs true ()))
+                                     refl))
+                                  refl))
+                              (steps
+                                ((rewrite (premise hxe) lr lhs true ())
+                                 (rewrite (premise hye) lr lhs true ())
+                                 (rewrite (premise hb) lr lhs true ())
+                                 (rewrite (premise hwr) lr lhs true ()))
+                                refl)))))))
+                   (case False
+                     (chain
+                       (have hz1 (= (int_eq m1 0) False)
+                         (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                       (have hb
+                         (=
+                           (fadd f (Fin s1 m1 e1) (Fin s2 m2 e2))
+                           (frnd
+                             f
+                             (+
+                               (*
+                                 (fval_num f (Fin s1 m1 e1))
+                                 (fval_den f (Fin s2 m2 e2)))
+                               (*
+                                 (fval_num f (Fin s2 m2 e2))
+                                 (fval_den f (Fin s1 m1 e1))))
+                             (*
+                               (fval_den f (Fin s1 m1 e1))
+                               (fval_den f (Fin s2 m2 e2)))))
+                         (steps
+                           ((unfold fadd lhs)
+                            (reduce lhs)
+                            (rewrite (premise hz1) lr lhs true ())
+                            (reduce lhs))
+                           refl))
+                       (have hwr
+                         (=
+                           (fwf
+                             f
+                             (frnd
+                               f
+                               (+
+                                 (*
+                                   (fval_num f (Fin s1 m1 e1))
+                                   (fval_den f (Fin s2 m2 e2)))
+                                 (*
+                                   (fval_num f (Fin s2 m2 e2))
+                                   (fval_den f (Fin s1 m1 e1))))
+                               (*
+                                 (fval_den f (Fin s1 m1 e1))
+                                 (fval_den f (Fin s2 m2 e2)))))
+                           True)
+                         (rewrite-with
+                           (lemma frnd_wf)
+                           lr
+                           lhs
+                           ((inst f f)
+                            (inst
+                              n
+                              (+
+                                (*
+                                  (fval_num f (Fin s1 m1 e1))
+                                  (fval_den f (Fin s2 m2 e2)))
+                                (*
+                                  (fval_num f (Fin s2 m2 e2))
+                                  (fval_den f (Fin s1 m1 e1)))))
+                            (inst
+                              d
+                              (*
+                                (fval_den f (Fin s1 m1 e1))
+                                (fval_den f (Fin s2 m2 e2)))))
+                           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                            (steps
+                              ((rewrite (premise hdd) lr lhs true ()))
+                              refl))
+                           refl))
+                       (steps
+                         ((rewrite (premise hxe) lr lhs true ())
+                          (rewrite (premise hye) lr lhs true ())
+                          (rewrite (premise hb) lr lhs true ())
+                          (rewrite (premise hwr) lr lhs true ()))
+                         refl)))))))
+            (case FInf
+              (s2)
+              (chain
+                (have hye (= y (FInf s2))
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (have hwi (= (hinf_of f) True)
+                  (steps
+                    ((rewrite (premise 3) rl rhs true ())
+                     (rewrite (premise hye) lr rhs true ())
+                     (unfold fwf rhs)
+                     (simp rhs))
+                    refl))
+                (steps
+                  ((rewrite (premise hwi) rl rhs true ())
+                   (rewrite (premise hxe) lr lhs true ())
+                   (rewrite (premise hye) lr lhs true ())
+                   (unfold fadd lhs)
+                   (reduce lhs)
+                   (unfold fwf lhs)
+                   (reduce lhs))
+                  refl)))
+            (case FNaN
+              (chain
+                (have hye (= y FNaN)
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (steps
+                  ((rewrite (premise hxe) lr lhs true ())
+                   (rewrite (premise hye) lr lhs true ())
+                   (unfold fadd lhs)
+                   (reduce lhs)
+                   (unfold fwf lhs)
+                   (reduce lhs)
+                   (rewrite (premise 1) lr lhs true ()))
+                  refl)))))))
+     (case FInf
+       (s1)
+       (chain
+         (have hxe (= x (FInf s1))
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (have hwi (= (hinf_of f) True)
+           (steps
+             ((rewrite (premise 2) rl rhs true ())
+              (rewrite (premise hxe) lr rhs true ())
+              (unfold fwf rhs)
+              (simp rhs))
+             refl))
+         (case-on y FVal
+           ((case Fin
+              (s2 m2 e2)
+              (chain
+                (have hye (= y (Fin s2 m2 e2))
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (steps
+                  ((rewrite (premise hwi) rl rhs true ())
+                   (rewrite (premise hxe) lr lhs true ())
+                   (rewrite (premise hye) lr lhs true ())
+                   (unfold fadd lhs)
+                   (reduce lhs)
+                   (unfold fwf lhs)
+                   (reduce lhs))
+                  refl)))
+            (case FInf
+              (s2)
+              (chain
+                (have hye (= y (FInf s2))
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (case-on (beq s1 s2) Bool
+                  ((case True
+                     (chain
+                       (have hbq (= (beq s1 s2) True)
+                         (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                       (steps
+                         ((rewrite (premise hwi) rl rhs true ())
+                          (rewrite (premise hxe) lr lhs true ())
+                          (rewrite (premise hye) lr lhs true ())
+                          (unfold fadd lhs)
+                          (reduce lhs)
+                          (rewrite (premise hbq) lr lhs true ())
+                          (reduce lhs)
+                          (unfold fwf lhs)
+                          (reduce lhs))
+                         refl)))
+                   (case False
+                     (chain
+                       (have hbq (= (beq s1 s2) False)
+                         (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                       (steps
+                         ((rewrite (premise hxe) lr lhs true ())
+                          (rewrite (premise hye) lr lhs true ())
+                          (unfold fadd lhs)
+                          (reduce lhs)
+                          (rewrite (premise hbq) lr lhs true ())
+                          (reduce lhs)
+                          (unfold fwf lhs)
+                          (reduce lhs)
+                          (rewrite (premise 1) lr lhs true ()))
+                         refl)))))))
+            (case FNaN
+              (chain
+                (have hye (= y FNaN)
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (steps
+                  ((rewrite (premise hxe) lr lhs true ())
+                   (rewrite (premise hye) lr lhs true ())
+                   (unfold fadd lhs)
+                   (reduce lhs)
+                   (unfold fwf lhs)
+                   (reduce lhs)
+                   (rewrite (premise 1) lr lhs true ()))
+                  refl)))))))
+     (case FNaN
+       (chain
+         (have hxe (= x FNaN) (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (steps
+           ((rewrite (premise hxe) lr lhs true ())
+            (unfold fadd lhs)
+            (reduce lhs)
+            (unfold fwf lhs)
+            (reduce lhs)
+            (rewrite (premise 1) lr lhs true ()))
+           refl))))))
+
+(claim fmul_wf
+  (goal ((f Fmt) (x FVal) (y FVal))
+    ((= (fmt_wf f) True)
+     (= (hnan_of f) True)
+     (= (fwf f x) True)
+     (= (fwf f y) True))
+    (= (fwf f (fmul f x y)) True))
+  (case-on x FVal
+    ((case Fin
+       (s1 m1 e1)
+       (chain
+         (have hxe (= x (Fin s1 m1 e1))
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (case-on y FVal
+           ((case Fin
+              (s2 m2 e2)
+              (chain
+                (have hye (= y (Fin s2 m2 e2))
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (have hd1 (= (lt 0 (fval_den f (Fin s1 m1 e1))) True)
+                  (rewrite-with
+                    (lemma fval_den_pos_any)
+                    lr
+                    lhs
+                    ((inst f f) (inst s s1) (inst m m1) (inst e e1))
+                    ()
+                    refl))
+                (have hd2 (= (lt 0 (fval_den f (Fin s2 m2 e2))) True)
+                  (rewrite-with
+                    (lemma fval_den_pos_any)
+                    lr
+                    lhs
+                    ((inst f f) (inst s s2) (inst m m2) (inst e e2))
+                    ()
+                    refl))
+                (have hdd
+                  (=
+                    (lt
+                      0
+                      (*
+                        (fval_den f (Fin s1 m1 e1))
+                        (fval_den f (Fin s2 m2 e2))))
+                    True)
+                  (rewrite-with
+                    (lemma mul_pos)
+                    lr
+                    lhs
+                    ((inst a (fval_den f (Fin s1 m1 e1)))
+                     (inst b (fval_den f (Fin s2 m2 e2))))
+                    ((steps ((rewrite (premise hd1) lr lhs true ())) refl)
+                     (steps ((rewrite (premise hd2) lr lhs true ())) refl))
+                    refl))
+                (case-on (int_eq m1 0) Bool
+                  ((case True
+                     (chain
+                       (have hz1 (= (int_eq m1 0) True)
+                         (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                       (have hb
+                         (=
+                           (fmul f (Fin s1 m1 e1) (Fin s2 m2 e2))
+                           (Fin (bxorb s1 s2) 0 (fmt_emin f)))
+                         (steps
+                           ((unfold fmul lhs)
+                            (reduce lhs)
+                            (rewrite (premise hz1) lr lhs true ())
+                            (reduce lhs))
+                           refl))
+                       (have hwr
+                         (= (fwf f (Fin (bxorb s1 s2) 0 (fmt_emin f))) True)
+                         (rewrite-with
+                           (lemma fwf_zero)
+                           lr
+                           lhs
+                           ((inst f f) (inst s (bxorb s1 s2)))
+                           ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                           refl))
+                       (steps
+                         ((rewrite (premise hxe) lr lhs true ())
+                          (rewrite (premise hye) lr lhs true ())
+                          (rewrite (premise hb) lr lhs true ())
+                          (rewrite (premise hwr) lr lhs true ()))
+                         refl)))
+                   (case False
+                     (chain
+                       (have hz1 (= (int_eq m1 0) False)
+                         (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                       (case-on (int_eq m2 0) Bool
+                         ((case True
+                            (chain
+                              (have hz2 (= (int_eq m2 0) True)
+                                (steps
+                                  ((rewrite (hyp True) lr lhs true ()))
+                                  refl))
+                              (have hb
+                                (=
+                                  (fmul f (Fin s1 m1 e1) (Fin s2 m2 e2))
+                                  (Fin (bxorb s1 s2) 0 (fmt_emin f)))
+                                (steps
+                                  ((unfold fmul lhs)
+                                   (reduce lhs)
+                                   (rewrite (premise hz1) lr lhs true ())
+                                   (reduce lhs)
+                                   (rewrite (premise hz2) lr lhs true ())
+                                   (reduce lhs))
+                                  refl))
+                              (have hwr
+                                (=
+                                  (fwf f (Fin (bxorb s1 s2) 0 (fmt_emin f)))
+                                  True)
+                                (rewrite-with
+                                  (lemma fwf_zero)
+                                  lr
+                                  lhs
+                                  ((inst f f) (inst s (bxorb s1 s2)))
+                                  ((steps
+                                     ((rewrite (premise 0) lr lhs true ()))
+                                     refl))
+                                  refl))
+                              (steps
+                                ((rewrite (premise hxe) lr lhs true ())
+                                 (rewrite (premise hye) lr lhs true ())
+                                 (rewrite (premise hb) lr lhs true ())
+                                 (rewrite (premise hwr) lr lhs true ()))
+                                refl)))
+                          (case False
+                            (chain
+                              (have hz2 (= (int_eq m2 0) False)
+                                (steps
+                                  ((rewrite (hyp False) lr lhs true ()))
+                                  refl))
+                              (have hb
+                                (=
+                                  (fmul f (Fin s1 m1 e1) (Fin s2 m2 e2))
+                                  (frnd
+                                    f
+                                    (*
+                                      (fval_num f (Fin s1 m1 e1))
+                                      (fval_num f (Fin s2 m2 e2)))
+                                    (*
+                                      (fval_den f (Fin s1 m1 e1))
+                                      (fval_den f (Fin s2 m2 e2)))))
+                                (steps
+                                  ((unfold fmul lhs)
+                                   (reduce lhs)
+                                   (rewrite (premise hz1) lr lhs true ())
+                                   (reduce lhs)
+                                   (rewrite (premise hz2) lr lhs true ())
+                                   (reduce lhs))
+                                  refl))
+                              (have hwr
+                                (=
+                                  (fwf
+                                    f
+                                    (frnd
+                                      f
+                                      (*
+                                        (fval_num f (Fin s1 m1 e1))
+                                        (fval_num f (Fin s2 m2 e2)))
+                                      (*
+                                        (fval_den f (Fin s1 m1 e1))
+                                        (fval_den f (Fin s2 m2 e2)))))
+                                  True)
+                                (rewrite-with
+                                  (lemma frnd_wf)
+                                  lr
+                                  lhs
+                                  ((inst f f)
+                                   (inst
+                                     n
+                                     (*
+                                       (fval_num f (Fin s1 m1 e1))
+                                       (fval_num f (Fin s2 m2 e2))))
+                                   (inst
+                                     d
+                                     (*
+                                       (fval_den f (Fin s1 m1 e1))
+                                       (fval_den f (Fin s2 m2 e2)))))
+                                  ((steps
+                                     ((rewrite (premise 0) lr lhs true ()))
+                                     refl)
+                                   (steps
+                                     ((rewrite (premise hdd) lr lhs true ()))
+                                     refl))
+                                  refl))
+                              (steps
+                                ((rewrite (premise hxe) lr lhs true ())
+                                 (rewrite (premise hye) lr lhs true ())
+                                 (rewrite (premise hb) lr lhs true ())
+                                 (rewrite (premise hwr) lr lhs true ()))
+                                refl)))))))))))
+            (case FInf
+              (s2)
+              (chain
+                (have hye (= y (FInf s2))
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (have hwi (= (hinf_of f) True)
+                  (steps
+                    ((rewrite (premise 3) rl rhs true ())
+                     (rewrite (premise hye) lr rhs true ())
+                     (unfold fwf rhs)
+                     (simp rhs))
+                    refl))
+                (case-on (int_eq m1 0) Bool
+                  ((case True
+                     (chain
+                       (have hz1 (= (int_eq m1 0) True)
+                         (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                       (steps
+                         ((rewrite (premise hxe) lr lhs true ())
+                          (rewrite (premise hye) lr lhs true ())
+                          (unfold fmul lhs)
+                          (reduce lhs)
+                          (rewrite (premise hz1) lr lhs true ())
+                          (reduce lhs)
+                          (unfold fwf lhs)
+                          (reduce lhs)
+                          (rewrite (premise 1) lr lhs true ()))
+                         refl)))
+                   (case False
+                     (chain
+                       (have hz1 (= (int_eq m1 0) False)
+                         (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                       (steps
+                         ((rewrite (premise hwi) rl rhs true ())
+                          (rewrite (premise hxe) lr lhs true ())
+                          (rewrite (premise hye) lr lhs true ())
+                          (unfold fmul lhs)
+                          (reduce lhs)
+                          (rewrite (premise hz1) lr lhs true ())
+                          (reduce lhs)
+                          (unfold fwf lhs)
+                          (reduce lhs))
+                         refl)))))))
+            (case FNaN
+              (chain
+                (have hye (= y FNaN)
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (steps
+                  ((rewrite (premise hxe) lr lhs true ())
+                   (rewrite (premise hye) lr lhs true ())
+                   (unfold fmul lhs)
+                   (reduce lhs)
+                   (unfold fwf lhs)
+                   (reduce lhs)
+                   (rewrite (premise 1) lr lhs true ()))
+                  refl)))))))
+     (case FInf
+       (s1)
+       (chain
+         (have hxe (= x (FInf s1))
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (have hwi (= (hinf_of f) True)
+           (steps
+             ((rewrite (premise 2) rl rhs true ())
+              (rewrite (premise hxe) lr rhs true ())
+              (unfold fwf rhs)
+              (simp rhs))
+             refl))
+         (case-on y FVal
+           ((case Fin
+              (s2 m2 e2)
+              (chain
+                (have hye (= y (Fin s2 m2 e2))
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (case-on (int_eq m2 0) Bool
+                  ((case True
+                     (chain
+                       (have hz2 (= (int_eq m2 0) True)
+                         (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                       (steps
+                         ((rewrite (premise hxe) lr lhs true ())
+                          (rewrite (premise hye) lr lhs true ())
+                          (unfold fmul lhs)
+                          (reduce lhs)
+                          (rewrite (premise hz2) lr lhs true ())
+                          (reduce lhs)
+                          (unfold fwf lhs)
+                          (reduce lhs)
+                          (rewrite (premise 1) lr lhs true ()))
+                         refl)))
+                   (case False
+                     (chain
+                       (have hz2 (= (int_eq m2 0) False)
+                         (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                       (steps
+                         ((rewrite (premise hwi) rl rhs true ())
+                          (rewrite (premise hxe) lr lhs true ())
+                          (rewrite (premise hye) lr lhs true ())
+                          (unfold fmul lhs)
+                          (reduce lhs)
+                          (rewrite (premise hz2) lr lhs true ())
+                          (reduce lhs)
+                          (unfold fwf lhs)
+                          (reduce lhs))
+                         refl)))))))
+            (case FInf
+              (s2)
+              (chain
+                (have hye (= y (FInf s2))
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (steps
+                  ((rewrite (premise hwi) rl rhs true ())
+                   (rewrite (premise hxe) lr lhs true ())
+                   (rewrite (premise hye) lr lhs true ())
+                   (unfold fmul lhs)
+                   (reduce lhs)
+                   (unfold fwf lhs)
+                   (reduce lhs))
+                  refl)))
+            (case FNaN
+              (chain
+                (have hye (= y FNaN)
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (steps
+                  ((rewrite (premise hxe) lr lhs true ())
+                   (rewrite (premise hye) lr lhs true ())
+                   (unfold fmul lhs)
+                   (reduce lhs)
+                   (unfold fwf lhs)
+                   (reduce lhs)
+                   (rewrite (premise 1) lr lhs true ()))
+                  refl)))))))
+     (case FNaN
+       (chain
+         (have hxe (= x FNaN) (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (steps
+           ((rewrite (premise hxe) lr lhs true ())
+            (unfold fmul lhs)
+            (reduce lhs)
+            (unfold fwf lhs)
+            (reduce lhs)
+            (rewrite (premise 1) lr lhs true ()))
+           refl))))))
+
+(claim fdiv_wf
+  (goal ((f Fmt) (x FVal) (y FVal))
+    ((= (fmt_wf f) True)
+     (= (hnan_of f) True)
+     (= (fwf f x) True)
+     (= (fwf f y) True))
+    (= (fwf f (fdiv f x y)) True))
+  (case-on x FVal
+    ((case Fin
+       (s1 m1 e1)
+       (chain
+         (have hxe (= x (Fin s1 m1 e1))
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (case-on y FVal
+           ((case Fin
+              (s2 m2 e2)
+              (chain
+                (have hye (= y (Fin s2 m2 e2))
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (have hd1 (= (lt 0 (fval_den f (Fin s1 m1 e1))) True)
+                  (rewrite-with
+                    (lemma fval_den_pos_any)
+                    lr
+                    lhs
+                    ((inst f f) (inst s s1) (inst m m1) (inst e e1))
+                    ()
+                    refl))
+                (case-on (int_eq m2 0) Bool
+                  ((case True
+                     (chain
+                       (have hz2 (= (int_eq m2 0) True)
+                         (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                       (case-on (int_eq m1 0) Bool
+                         ((case True
+                            (chain
+                              (have hz1 (= (int_eq m1 0) True)
+                                (steps
+                                  ((rewrite (hyp True) lr lhs true ()))
+                                  refl))
+                              (steps
+                                ((rewrite (premise hxe) lr lhs true ())
+                                 (rewrite (premise hye) lr lhs true ())
+                                 (unfold fdiv lhs)
+                                 (reduce lhs)
+                                 (rewrite (premise hz2) lr lhs true ())
+                                 (reduce lhs)
+                                 (rewrite (premise hz1) lr lhs true ())
+                                 (reduce lhs)
+                                 (unfold fwf lhs)
+                                 (reduce lhs)
+                                 (rewrite (premise 1) lr lhs true ()))
+                                refl)))
+                          (case False
+                            (chain
+                              (have hz1 (= (int_eq m1 0) False)
+                                (steps
+                                  ((rewrite (hyp False) lr lhs true ()))
+                                  refl))
+                              (have hb
+                                (=
+                                  (fdiv f (Fin s1 m1 e1) (Fin s2 m2 e2))
+                                  (fovf f (bxorb s1 s2)))
+                                (steps
+                                  ((unfold fdiv lhs)
+                                   (reduce lhs)
+                                   (rewrite (premise hz2) lr lhs true ())
+                                   (reduce lhs)
+                                   (rewrite (premise hz1) lr lhs true ())
+                                   (reduce lhs))
+                                  refl))
+                              (have hwr (= (fwf f (fovf f (bxorb s1 s2))) True)
+                                (rewrite-with
+                                  (lemma fovf_wf)
+                                  lr
+                                  lhs
+                                  ((inst f f) (inst s (bxorb s1 s2)))
+                                  ((steps
+                                     ((rewrite (premise 0) lr lhs true ()))
+                                     refl))
+                                  refl))
+                              (steps
+                                ((rewrite (premise hxe) lr lhs true ())
+                                 (rewrite (premise hye) lr lhs true ())
+                                 (rewrite (premise hb) lr lhs true ())
+                                 (rewrite (premise hwr) lr lhs true ()))
+                                refl)))))))
+                   (case False
+                     (chain
+                       (have hz2 (= (int_eq m2 0) False)
+                         (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                       (case-on (int_eq m1 0) Bool
+                         ((case True
+                            (chain
+                              (have hz1 (= (int_eq m1 0) True)
+                                (steps
+                                  ((rewrite (hyp True) lr lhs true ()))
+                                  refl))
+                              (have hb
+                                (=
+                                  (fdiv f (Fin s1 m1 e1) (Fin s2 m2 e2))
+                                  (Fin (bxorb s1 s2) 0 (fmt_emin f)))
+                                (steps
+                                  ((unfold fdiv lhs)
+                                   (reduce lhs)
+                                   (rewrite (premise hz2) lr lhs true ())
+                                   (reduce lhs)
+                                   (rewrite (premise hz1) lr lhs true ())
+                                   (reduce lhs))
+                                  refl))
+                              (have hwr
+                                (=
+                                  (fwf f (Fin (bxorb s1 s2) 0 (fmt_emin f)))
+                                  True)
+                                (rewrite-with
+                                  (lemma fwf_zero)
+                                  lr
+                                  lhs
+                                  ((inst f f) (inst s (bxorb s1 s2)))
+                                  ((steps
+                                     ((rewrite (premise 0) lr lhs true ()))
+                                     refl))
+                                  refl))
+                              (steps
+                                ((rewrite (premise hxe) lr lhs true ())
+                                 (rewrite (premise hye) lr lhs true ())
+                                 (rewrite (premise hb) lr lhs true ())
+                                 (rewrite (premise hwr) lr lhs true ()))
+                                refl)))
+                          (case False
+                            (chain
+                              (have hz1 (= (int_eq m1 0) False)
+                                (steps
+                                  ((rewrite (hyp False) lr lhs true ()))
+                                  refl))
+                              (case-on (lt (fval_num f (Fin s2 m2 e2)) 0) Bool
+                                ((case True
+                                   (chain
+                                     (have hpr
+                                       (=
+                                         (lt (fval_num f (Fin s2 m2 e2)) 0)
+                                         True)
+                                       (steps
+                                         ((rewrite (hyp True) lr lhs true ()))
+                                         refl))
+                                     (have hn2
+                                       (=
+                                         (lt
+                                           0
+                                           (- 0 (fval_num f (Fin s2 m2 e2))))
+                                         True)
+                                       (steps
+                                         ()
+                                         (by arith (rows (goal 1) (hpr 1)))))
+                                     (have hdp
+                                       (=
+                                         (lt
+                                           0
+                                           (*
+                                             (fval_den f (Fin s1 m1 e1))
+                                             (- 0 (fval_num f (Fin s2 m2 e2)))))
+                                         True)
+                                       (rewrite-with
+                                         (lemma mul_pos)
+                                         lr
+                                         lhs
+                                         ((inst a (fval_den f (Fin s1 m1 e1)))
+                                          (inst
+                                            b
+                                            (- 0 (fval_num f (Fin s2 m2 e2)))))
+                                         ((steps
+                                            ((rewrite
+                                               (premise hd1)
+                                               lr
+                                               lhs
+                                               true
+                                               ()))
+                                            refl)
+                                          (steps
+                                            ((rewrite
+                                               (premise hn2)
+                                               lr
+                                               lhs
+                                               true
+                                               ()))
+                                            refl))
+                                         refl))
+                                     (have hb
+                                       (=
+                                         (fdiv f (Fin s1 m1 e1) (Fin s2 m2 e2))
+                                         (frnd
+                                           f
+                                           (-
+                                             0
+                                             (*
+                                               (fval_num f (Fin s1 m1 e1))
+                                               (fval_den f (Fin s2 m2 e2))))
+                                           (*
+                                             (fval_den f (Fin s1 m1 e1))
+                                             (- 0 (fval_num f (Fin s2 m2 e2))))))
+                                       (steps
+                                         ((unfold fdiv lhs)
+                                          (reduce lhs)
+                                          (rewrite (premise hz2) lr lhs true ())
+                                          (reduce lhs)
+                                          (rewrite (premise hz1) lr lhs true ())
+                                          (reduce lhs)
+                                          (rewrite (premise hpr) lr lhs true ())
+                                          (reduce lhs))
+                                         refl))
+                                     (have hwr
+                                       (=
+                                         (fwf
+                                           f
+                                           (frnd
+                                             f
+                                             (-
+                                               0
+                                               (*
+                                                 (fval_num f (Fin s1 m1 e1))
+                                                 (fval_den f (Fin s2 m2 e2))))
+                                             (*
+                                               (fval_den f (Fin s1 m1 e1))
+                                               (- 0 (fval_num f (Fin s2 m2 e2))))))
+                                         True)
+                                       (rewrite-with
+                                         (lemma frnd_wf)
+                                         lr
+                                         lhs
+                                         ((inst f f)
+                                          (inst
+                                            n
+                                            (-
+                                              0
+                                              (*
+                                                (fval_num f (Fin s1 m1 e1))
+                                                (fval_den f (Fin s2 m2 e2)))))
+                                          (inst
+                                            d
+                                            (*
+                                              (fval_den f (Fin s1 m1 e1))
+                                              (- 0 (fval_num f (Fin s2 m2 e2))))))
+                                         ((steps
+                                            ((rewrite
+                                               (premise 0)
+                                               lr
+                                               lhs
+                                               true
+                                               ()))
+                                            refl)
+                                          (steps
+                                            ((rewrite
+                                               (premise hdp)
+                                               lr
+                                               lhs
+                                               true
+                                               ()))
+                                            refl))
+                                         refl))
+                                     (steps
+                                       ((rewrite (premise hxe) lr lhs true ())
+                                        (rewrite (premise hye) lr lhs true ())
+                                        (rewrite (premise hb) lr lhs true ())
+                                        (rewrite (premise hwr) lr lhs true ()))
+                                       refl)))
+                                 (case False
+                                   (chain
+                                     (have hpr
+                                       (=
+                                         (lt (fval_num f (Fin s2 m2 e2)) 0)
+                                         False)
+                                       (steps
+                                         ((rewrite (hyp False) lr lhs true ()))
+                                         refl))
+                                     (have hwfy (= (fwf_fin f m2 e2) True)
+                                       (steps
+                                         ((rewrite (premise 3) rl rhs true ())
+                                          (rewrite (premise hye) lr rhs true ())
+                                          (unfold fwf rhs)
+                                          (simp rhs))
+                                         refl))
+                                     (have hm2 (= (le 1 m2) True)
+                                       (rewrite-with
+                                         (lemma fwf_m_lo)
+                                         lr
+                                         lhs
+                                         ((inst f f) (inst m m2) (inst e e2))
+                                         ((steps
+                                            ((rewrite
+                                               (premise hwfy)
+                                               lr
+                                               lhs
+                                               true
+                                               ()))
+                                            refl)
+                                          (steps
+                                            ((rewrite
+                                               (premise hz2)
+                                               lr
+                                               lhs
+                                               true
+                                               ()))
+                                            refl))
+                                         refl))
+                                     (have hnp
+                                       (=
+                                         (lt 0 (fval_num f (Fin s2 m2 e2)))
+                                         True)
+                                       (rewrite-with
+                                         (lemma fval_num_pos_probe)
+                                         lr
+                                         lhs
+                                         ((inst f f)
+                                          (inst s s2)
+                                          (inst m m2)
+                                          (inst e e2))
+                                         ((steps
+                                            ((rewrite
+                                               (premise hm2)
+                                               lr
+                                               lhs
+                                               true
+                                               ()))
+                                            refl)
+                                          (steps
+                                            ((rewrite
+                                               (premise hpr)
+                                               lr
+                                               lhs
+                                               true
+                                               ()))
+                                            refl))
+                                         refl))
+                                     (have hdp
+                                       (=
+                                         (lt
+                                           0
+                                           (*
+                                             (fval_den f (Fin s1 m1 e1))
+                                             (fval_num f (Fin s2 m2 e2))))
+                                         True)
+                                       (rewrite-with
+                                         (lemma mul_pos)
+                                         lr
+                                         lhs
+                                         ((inst a (fval_den f (Fin s1 m1 e1)))
+                                          (inst b (fval_num f (Fin s2 m2 e2))))
+                                         ((steps
+                                            ((rewrite
+                                               (premise hd1)
+                                               lr
+                                               lhs
+                                               true
+                                               ()))
+                                            refl)
+                                          (steps
+                                            ((rewrite
+                                               (premise hnp)
+                                               lr
+                                               lhs
+                                               true
+                                               ()))
+                                            refl))
+                                         refl))
+                                     (have hb
+                                       (=
+                                         (fdiv f (Fin s1 m1 e1) (Fin s2 m2 e2))
+                                         (frnd
+                                           f
+                                           (*
+                                             (fval_num f (Fin s1 m1 e1))
+                                             (fval_den f (Fin s2 m2 e2)))
+                                           (*
+                                             (fval_den f (Fin s1 m1 e1))
+                                             (fval_num f (Fin s2 m2 e2)))))
+                                       (steps
+                                         ((unfold fdiv lhs)
+                                          (reduce lhs)
+                                          (rewrite (premise hz2) lr lhs true ())
+                                          (reduce lhs)
+                                          (rewrite (premise hz1) lr lhs true ())
+                                          (reduce lhs)
+                                          (rewrite (premise hpr) lr lhs true ())
+                                          (reduce lhs))
+                                         refl))
+                                     (have hwr
+                                       (=
+                                         (fwf
+                                           f
+                                           (frnd
+                                             f
+                                             (*
+                                               (fval_num f (Fin s1 m1 e1))
+                                               (fval_den f (Fin s2 m2 e2)))
+                                             (*
+                                               (fval_den f (Fin s1 m1 e1))
+                                               (fval_num f (Fin s2 m2 e2)))))
+                                         True)
+                                       (rewrite-with
+                                         (lemma frnd_wf)
+                                         lr
+                                         lhs
+                                         ((inst f f)
+                                          (inst
+                                            n
+                                            (*
+                                              (fval_num f (Fin s1 m1 e1))
+                                              (fval_den f (Fin s2 m2 e2))))
+                                          (inst
+                                            d
+                                            (*
+                                              (fval_den f (Fin s1 m1 e1))
+                                              (fval_num f (Fin s2 m2 e2)))))
+                                         ((steps
+                                            ((rewrite
+                                               (premise 0)
+                                               lr
+                                               lhs
+                                               true
+                                               ()))
+                                            refl)
+                                          (steps
+                                            ((rewrite
+                                               (premise hdp)
+                                               lr
+                                               lhs
+                                               true
+                                               ()))
+                                            refl))
+                                         refl))
+                                     (steps
+                                       ((rewrite (premise hxe) lr lhs true ())
+                                        (rewrite (premise hye) lr lhs true ())
+                                        (rewrite (premise hb) lr lhs true ())
+                                        (rewrite (premise hwr) lr lhs true ()))
+                                       refl)))))))))))))))
+            (case FInf
+              (s2)
+              (chain
+                (have hye (= y (FInf s2))
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (have hb
+                  (=
+                    (fdiv f (Fin s1 m1 e1) (FInf s2))
+                    (Fin (bxorb s1 s2) 0 (fmt_emin f)))
+                  (steps ((unfold fdiv lhs) (reduce lhs)) refl))
+                (have hwr (= (fwf f (Fin (bxorb s1 s2) 0 (fmt_emin f))) True)
+                  (rewrite-with
+                    (lemma fwf_zero)
+                    lr
+                    lhs
+                    ((inst f f) (inst s (bxorb s1 s2)))
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                    refl))
+                (steps
+                  ((rewrite (premise hxe) lr lhs true ())
+                   (rewrite (premise hye) lr lhs true ())
+                   (rewrite (premise hb) lr lhs true ())
+                   (rewrite (premise hwr) lr lhs true ()))
+                  refl)))
+            (case FNaN
+              (chain
+                (have hye (= y FNaN)
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (steps
+                  ((rewrite (premise hxe) lr lhs true ())
+                   (rewrite (premise hye) lr lhs true ())
+                   (unfold fdiv lhs)
+                   (reduce lhs)
+                   (unfold fwf lhs)
+                   (reduce lhs)
+                   (rewrite (premise 1) lr lhs true ()))
+                  refl)))))))
+     (case FInf
+       (s1)
+       (chain
+         (have hxe (= x (FInf s1))
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (have hwi (= (hinf_of f) True)
+           (steps
+             ((rewrite (premise 2) rl rhs true ())
+              (rewrite (premise hxe) lr rhs true ())
+              (unfold fwf rhs)
+              (simp rhs))
+             refl))
+         (case-on y FVal
+           ((case Fin
+              (s2 m2 e2)
+              (chain
+                (have hye (= y (Fin s2 m2 e2))
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (steps
+                  ((rewrite (premise hwi) rl rhs true ())
+                   (rewrite (premise hxe) lr lhs true ())
+                   (rewrite (premise hye) lr lhs true ())
+                   (unfold fdiv lhs)
+                   (reduce lhs)
+                   (unfold fwf lhs)
+                   (reduce lhs))
+                  refl)))
+            (case FInf
+              (s2)
+              (chain
+                (have hye (= y (FInf s2))
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (steps
+                  ((rewrite (premise hxe) lr lhs true ())
+                   (rewrite (premise hye) lr lhs true ())
+                   (unfold fdiv lhs)
+                   (reduce lhs)
+                   (unfold fwf lhs)
+                   (reduce lhs)
+                   (rewrite (premise 1) lr lhs true ()))
+                  refl)))
+            (case FNaN
+              (chain
+                (have hye (= y FNaN)
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (steps
+                  ((rewrite (premise hxe) lr lhs true ())
+                   (rewrite (premise hye) lr lhs true ())
+                   (unfold fdiv lhs)
+                   (reduce lhs)
+                   (unfold fwf lhs)
+                   (reduce lhs)
+                   (rewrite (premise 1) lr lhs true ()))
+                  refl)))))))
+     (case FNaN
+       (chain
+         (have hxe (= x FNaN) (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (steps
+           ((rewrite (premise hxe) lr lhs true ())
+            (unfold fdiv lhs)
+            (reduce lhs)
+            (unfold fwf lhs)
+            (reduce lhs)
+            (rewrite (premise 1) lr lhs true ()))
+           refl))))))
+
+;; fsub = fadd of the negation; wf composes.
+(claim fsub_wf
+  (goal ((f Fmt) (x FVal) (y FVal))
+    ((= (fmt_wf f) True)
+     (= (hnan_of f) True)
+     (= (fwf f x) True)
+     (= (fwf f y) True))
+    (= (fwf f (fsub f x y)) True))
+  (chain
+    (have hwn (= (fwf f (fneg y)) True)
+      (rewrite-with
+        (lemma fneg_wf)
+        lr
+        lhs
+        ((inst f f) (inst x y))
+        ((steps ((rewrite (premise 3) lr lhs true ())) refl))
+        refl))
+    (have hwa (= (fwf f (fadd f x (fneg y))) True)
+      (rewrite-with
+        (lemma fadd_wf)
+        lr
+        lhs
+        ((inst f f) (inst x x) (inst y (fneg y)))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 4) lr lhs true ())) refl))
+        refl))
+    (steps ((unfold fsub lhs) (rewrite (premise 5) lr lhs true ())) refl)))
+
+;; --- decode is well-formed on ANY Int (fmt-ground, §3a tier 2) ------------------
+;; funpack's fields are mod-masked, so every branch lands wf with NO premise
+;; on b — the from_bits surface door's whole obligation. Choreography: literal
+;; pins as farkas EQUALITY ROWS (never rewritten into the goal — the guard
+;; tree stays at the folded spelling), mod_lo/mod_hi field bounds, guard
+;; case-ons with hv equation-haves, fwf_fin walk with per-guard farkas haves.
+
+(claim funpack_wf_f32
+  (goal ((b Int)) () (= (fwf (fmt_f32) (funpack (fmt_f32) b)) True))
+  (chain
+    (have hPM (= (fpow2 (mw_of (fmt_f32))) 8388608)
+      (steps ((compute lhs)) refl))
+    (have hPM1 (= (fpow2 (+ (mw_of (fmt_f32)) 1)) 16777216)
+      (steps ((compute lhs)) refl))
+    (have hPE (= (fpow2 (ew_of (fmt_f32))) 256) (steps ((compute lhs)) refl))
+    (have hBIAS (= (fmt_bias (fmt_f32)) 127) (steps ((compute lhs)) refl))
+    (have hEMIN (= (fmt_emin (fmt_f32)) -126) (steps ((compute lhs)) refl))
+    (have hEMAX (= (fmt_emax (fmt_f32)) 127) (steps ((compute lhs)) refl))
+    (have hHI (= (hinf_of (fmt_f32)) True) (steps ((compute lhs)) refl))
+    (have hHN (= (hnan_of (fmt_f32)) True) (steps ((compute lhs)) refl))
+    (have hpepos (= (lt 0 (fpow2 (ew_of (fmt_f32)))) True)
+      (rewrite-with
+        (lemma fpow2_pos)
+        lr
+        lhs
+        ((inst k (ew_of (fmt_f32))))
+        ()
+        refl))
+    (have hpmpos (= (lt 0 (fpow2 (mw_of (fmt_f32)))) True)
+      (rewrite-with
+        (lemma fpow2_pos)
+        lr
+        lhs
+        ((inst k (mw_of (fmt_f32))))
+        ()
+        refl))
+    (have heb_lo
+      (=
+        (le
+          0
+          (mod (ediv b (fpow2 (mw_of (fmt_f32)))) (fpow2 (ew_of (fmt_f32)))))
+        True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ((inst n (ediv b (fpow2 (mw_of (fmt_f32)))))
+         (inst d (fpow2 (ew_of (fmt_f32)))))
+        ((steps ((rewrite (premise hpepos) lr lhs true ())) refl))
+        refl))
+    (have heb_hi
+      (=
+        (lt
+          (mod (ediv b (fpow2 (mw_of (fmt_f32)))) (fpow2 (ew_of (fmt_f32))))
+          (fpow2 (ew_of (fmt_f32))))
+        True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ((inst n (ediv b (fpow2 (mw_of (fmt_f32)))))
+         (inst d (fpow2 (ew_of (fmt_f32)))))
+        ((steps ((rewrite (premise hpepos) lr lhs true ())) refl))
+        refl))
+    (have hmb_lo (= (le 0 (mod b (fpow2 (mw_of (fmt_f32))))) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ((inst n b) (inst d (fpow2 (mw_of (fmt_f32)))))
+        ((steps ((rewrite (premise hpmpos) lr lhs true ())) refl))
+        refl))
+    (have hmb_hi
+      (= (lt (mod b (fpow2 (mw_of (fmt_f32)))) (fpow2 (mw_of (fmt_f32)))) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ((inst n b) (inst d (fpow2 (mw_of (fmt_f32)))))
+        ((steps ((rewrite (premise hpmpos) lr lhs true ())) refl))
+        refl))
+    (case-on
+      (int_eq
+        (mod (ediv b (fpow2 (mw_of (fmt_f32)))) (fpow2 (ew_of (fmt_f32))))
+        0)
+      Bool
+      ((case True
+         (chain
+           (have hg1
+             (=
+               (int_eq
+                 (mod
+                   (ediv b (fpow2 (mw_of (fmt_f32))))
+                   (fpow2 (ew_of (fmt_f32))))
+                 0)
+               True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have hv
+             (=
+               (funpack (fmt_f32) b)
+               (Fin
+                 (int_eq
+                   (mod
+                     (ediv b (fpow2 (+ (ew_of (fmt_f32)) (mw_of (fmt_f32)))))
+                     2)
+                   1)
+                 (mod b (fpow2 (mw_of (fmt_f32))))
+                 (fmt_emin (fmt_f32))))
+             (steps
+               ((unfold funpack lhs)
+                (reduce lhs)
+                (rewrite (premise hg1) lr lhs true ())
+                (reduce lhs))
+               refl))
+           (have hw2
+             (=
+               (lt
+                 (mod b (fpow2 (mw_of (fmt_f32))))
+                 (fpow2 (+ (mw_of (fmt_f32)) 1)))
+               True)
+             (steps () (by arith (rows (goal 1) (hmb_hi 1) (hPM -1) (hPM1 1)))))
+           (have hemm (= (le (fmt_emin (fmt_f32)) (fmt_emin (fmt_f32))) True)
+             (steps ((compute lhs)) refl))
+           (have hemx (= (le (fmt_emin (fmt_f32)) (fmt_emax (fmt_f32))) True)
+             (steps ((compute lhs)) refl))
+           (have hiee
+             (= (int_eq (fmt_emin (fmt_f32)) (fmt_emin (fmt_f32))) True)
+             (steps ((compute lhs)) refl))
+           (steps
+             ((rewrite (premise hv) lr lhs true ())
+              (unfold fwf lhs)
+              (reduce lhs)
+              (unfold fwf_fin lhs)
+              (reduce lhs)
+              (rewrite (premise hmb_lo) lr lhs true ())
+              (reduce lhs)
+              (rewrite (premise hw2) lr lhs true ())
+              (reduce lhs)
+              (rewrite (premise hemm) lr lhs true ())
+              (reduce lhs)
+              (rewrite (premise hemx) lr lhs true ())
+              (reduce lhs)
+              (rewrite (premise hmb_hi) lr lhs true ())
+              (reduce lhs)
+              (rewrite (premise hiee) lr lhs true ())
+              (reduce lhs))
+             refl)))
+       (case False
+         (chain
+           (have hg1
+             (=
+               (int_eq
+                 (mod
+                   (ediv b (fpow2 (mw_of (fmt_f32))))
+                   (fpow2 (ew_of (fmt_f32))))
+                 0)
+               False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (case-on
+             (int_eq
+               (mod
+                 (ediv b (fpow2 (mw_of (fmt_f32))))
+                 (fpow2 (ew_of (fmt_f32))))
+               (- (fpow2 (ew_of (fmt_f32))) 1))
+             Bool
+             ((case True
+                (chain
+                  (have hg2
+                    (=
+                      (int_eq
+                        (mod
+                          (ediv b (fpow2 (mw_of (fmt_f32))))
+                          (fpow2 (ew_of (fmt_f32))))
+                        (- (fpow2 (ew_of (fmt_f32))) 1))
+                      True)
+                    (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                  (case-on (int_eq (mod b (fpow2 (mw_of (fmt_f32)))) 0) Bool
+                    ((case True
+                       (chain
+                         (have hgm
+                           (= (int_eq (mod b (fpow2 (mw_of (fmt_f32)))) 0) True)
+                           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                         (have hv
+                           (=
+                             (funpack (fmt_f32) b)
+                             (FInf
+                               (int_eq
+                                 (mod
+                                   (ediv
+                                     b
+                                     (fpow2
+                                       (+ (ew_of (fmt_f32)) (mw_of (fmt_f32)))))
+                                   2)
+                                 1)))
+                           (steps
+                             ((unfold funpack lhs)
+                              (reduce lhs)
+                              (rewrite (premise hg1) lr lhs true ())
+                              (reduce lhs)
+                              (rewrite (premise hg2) lr lhs true ())
+                              (reduce lhs)
+                              (rewrite (premise hHI) lr lhs true ())
+                              (reduce lhs)
+                              (rewrite (premise hgm) lr lhs true ())
+                              (reduce lhs))
+                             refl))
+                         (steps
+                           ((rewrite (premise hv) lr lhs true ())
+                            (unfold fwf lhs)
+                            (reduce lhs)
+                            (rewrite (premise hHI) lr lhs true ()))
+                           refl)))
+                     (case False
+                       (chain
+                         (have hgm
+                           (=
+                             (int_eq (mod b (fpow2 (mw_of (fmt_f32)))) 0)
+                             False)
+                           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                         (have hv (= (funpack (fmt_f32) b) FNaN)
+                           (steps
+                             ((unfold funpack lhs)
+                              (reduce lhs)
+                              (rewrite (premise hg1) lr lhs true ())
+                              (reduce lhs)
+                              (rewrite (premise hg2) lr lhs true ())
+                              (reduce lhs)
+                              (rewrite (premise hHI) lr lhs true ())
+                              (reduce lhs)
+                              (rewrite (premise hgm) lr lhs true ())
+                              (reduce lhs)
+                              (rewrite (premise hHN) lr lhs true ())
+                              (reduce lhs))
+                             refl))
+                         (steps
+                           ((rewrite (premise hv) lr lhs true ())
+                            (unfold fwf lhs)
+                            (reduce lhs)
+                            (rewrite (premise hHN) lr lhs true ()))
+                           refl)))))))
+              (case False
+                (chain
+                  (have hg2
+                    (=
+                      (int_eq
+                        (mod
+                          (ediv b (fpow2 (mw_of (fmt_f32))))
+                          (fpow2 (ew_of (fmt_f32))))
+                        (- (fpow2 (ew_of (fmt_f32))) 1))
+                      False)
+                    (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                  (case-on
+                    (le
+                      (mod
+                        (ediv b (fpow2 (mw_of (fmt_f32))))
+                        (fpow2 (ew_of (fmt_f32))))
+                      0)
+                    Bool
+                    ((case True
+                       (chain
+                         (have hle0
+                           (=
+                             (le
+                               (mod
+                                 (ediv b (fpow2 (mw_of (fmt_f32))))
+                                 (fpow2 (ew_of (fmt_f32))))
+                               0)
+                             True)
+                           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                         (have heq0
+                           (=
+                             (mod
+                               (ediv b (fpow2 (mw_of (fmt_f32))))
+                               (fpow2 (ew_of (fmt_f32))))
+                             0)
+                           (steps
+                             ()
+                             (by
+                               arith
+                               (list
+                                 (rows (goal 1) (hle0 1))
+                                 (rows (goal 1) (heb_lo 1))))))
+                         (have hff (= False True)
+                           (steps
+                             ((rewrite (premise hg1) rl lhs true ())
+                              (rewrite (premise heq0) lr lhs true ())
+                              (simp lhs))
+                             refl))
+                         (absurd (premise hff))))
+                     (case False
+                       (chain
+                         (have hEB1
+                           (=
+                             (le
+                               (mod
+                                 (ediv b (fpow2 (mw_of (fmt_f32))))
+                                 (fpow2 (ew_of (fmt_f32))))
+                               0)
+                             False)
+                           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                         (case-on
+                           (le
+                             255
+                             (mod
+                               (ediv b (fpow2 (mw_of (fmt_f32))))
+                               (fpow2 (ew_of (fmt_f32)))))
+                           Bool
+                           ((case True
+                              (chain
+                                (have h255
+                                  (=
+                                    (le
+                                      255
+                                      (mod
+                                        (ediv b (fpow2 (mw_of (fmt_f32))))
+                                        (fpow2 (ew_of (fmt_f32)))))
+                                    True)
+                                  (steps
+                                    ((rewrite (hyp True) lr lhs true ()))
+                                    refl))
+                                (have heq255
+                                  (=
+                                    (mod
+                                      (ediv b (fpow2 (mw_of (fmt_f32))))
+                                      (fpow2 (ew_of (fmt_f32))))
+                                    255)
+                                  (steps
+                                    ()
+                                    (by
+                                      arith
+                                      (list
+                                        (rows (goal 1) (heb_hi 1) (hPE -1))
+                                        (rows (goal 1) (h255 1))))))
+                                (have hff (= False True)
+                                  (steps
+                                    ((rewrite (premise hg2) rl lhs true ())
+                                     (rewrite (premise heq255) lr lhs true ())
+                                     (rewrite (premise hPE) lr lhs true ())
+                                     (simp lhs))
+                                    refl))
+                                (absurd (premise hff))))
+                            (case False
+                              (chain
+                                (have hEB254
+                                  (=
+                                    (le
+                                      255
+                                      (mod
+                                        (ediv b (fpow2 (mw_of (fmt_f32))))
+                                        (fpow2 (ew_of (fmt_f32)))))
+                                    False)
+                                  (steps
+                                    ((rewrite (hyp False) lr lhs true ()))
+                                    refl))
+                                (have hv
+                                  (=
+                                    (funpack (fmt_f32) b)
+                                    (Fin
+                                      (int_eq
+                                        (mod
+                                          (ediv
+                                            b
+                                            (fpow2
+                                              (+
+                                                (ew_of (fmt_f32))
+                                                (mw_of (fmt_f32)))))
+                                          2)
+                                        1)
+                                      (+
+                                        (mod b (fpow2 (mw_of (fmt_f32))))
+                                        (fpow2 (mw_of (fmt_f32))))
+                                      (-
+                                        (mod
+                                          (ediv b (fpow2 (mw_of (fmt_f32))))
+                                          (fpow2 (ew_of (fmt_f32))))
+                                        (fmt_bias (fmt_f32)))))
+                                  (steps
+                                    ((unfold funpack lhs)
+                                     (reduce lhs)
+                                     (rewrite (premise hg1) lr lhs true ())
+                                     (reduce lhs)
+                                     (rewrite (premise hg2) lr lhs true ())
+                                     (reduce lhs))
+                                    refl))
+                                (have hw1
+                                  (=
+                                    (le
+                                      0
+                                      (+
+                                        (mod b (fpow2 (mw_of (fmt_f32))))
+                                        (fpow2 (mw_of (fmt_f32)))))
+                                    True)
+                                  (steps
+                                    ()
+                                    (by
+                                      arith
+                                      (rows (goal 1) (hmb_lo 1) (hpmpos 1)))))
+                                (have hw2
+                                  (=
+                                    (lt
+                                      (+
+                                        (mod b (fpow2 (mw_of (fmt_f32))))
+                                        (fpow2 (mw_of (fmt_f32))))
+                                      (fpow2 (+ (mw_of (fmt_f32)) 1)))
+                                    True)
+                                  (steps
+                                    ()
+                                    (by
+                                      arith
+                                      (rows
+                                        (goal 1)
+                                        (hmb_hi 1)
+                                        (hPM -2)
+                                        (hPM1 1)))))
+                                (have hw3
+                                  (=
+                                    (le
+                                      (fmt_emin (fmt_f32))
+                                      (-
+                                        (mod
+                                          (ediv b (fpow2 (mw_of (fmt_f32))))
+                                          (fpow2 (ew_of (fmt_f32))))
+                                        (fmt_bias (fmt_f32))))
+                                    True)
+                                  (steps
+                                    ()
+                                    (by
+                                      arith
+                                      (rows
+                                        (goal 1)
+                                        (hEB1 1)
+                                        (hEMIN -1)
+                                        (hBIAS -1)))))
+                                (have hw4
+                                  (=
+                                    (le
+                                      (-
+                                        (mod
+                                          (ediv b (fpow2 (mw_of (fmt_f32))))
+                                          (fpow2 (ew_of (fmt_f32))))
+                                        (fmt_bias (fmt_f32)))
+                                      (fmt_emax (fmt_f32)))
+                                    True)
+                                  (steps
+                                    ()
+                                    (by
+                                      arith
+                                      (rows
+                                        (goal 1)
+                                        (hEB254 1)
+                                        (hBIAS 1)
+                                        (hEMAX 1)))))
+                                (have hw5
+                                  (=
+                                    (lt
+                                      (+
+                                        (mod b (fpow2 (mw_of (fmt_f32))))
+                                        (fpow2 (mw_of (fmt_f32))))
+                                      (fpow2 (mw_of (fmt_f32))))
+                                    False)
+                                  (steps
+                                    ()
+                                    (by arith (rows (goal 1) (hmb_lo 1)))))
+                                (have htop
+                                  (=
+                                    (int_eq
+                                      (-
+                                        (mod
+                                          (ediv b (fpow2 (mw_of (fmt_f32))))
+                                          (fpow2 (ew_of (fmt_f32))))
+                                        (fmt_bias (fmt_f32)))
+                                      (+ (fmt_bias (fmt_f32)) 1))
+                                    False)
+                                  (steps
+                                    ()
+                                    (by
+                                      arith
+                                      (rows (goal 1) (hEB254 1) (hBIAS 2)))))
+                                (steps
+                                  ((rewrite (premise hv) lr lhs true ())
+                                   (unfold fwf lhs)
+                                   (reduce lhs)
+                                   (unfold fwf_fin lhs)
+                                   (reduce lhs)
+                                   (rewrite (premise hw1) lr lhs true ())
+                                   (reduce lhs)
+                                   (rewrite (premise hw2) lr lhs true ())
+                                   (reduce lhs)
+                                   (rewrite (premise hw3) lr lhs true ())
+                                   (reduce lhs)
+                                   (rewrite (premise hw4) lr lhs true ())
+                                   (reduce lhs)
+                                   (rewrite (premise hw5) lr lhs true ())
+                                   (reduce lhs)
+                                   (unfold ftop_ok lhs)
+                                   (reduce lhs)
+                                   (rewrite (premise htop) lr lhs true ())
+                                   (reduce lhs))
+                                  refl)))))))))))))))))))
+
+(claim funpack_wf_f64
+  (goal ((b Int)) () (= (fwf (fmt_f64) (funpack (fmt_f64) b)) True))
+  (chain
+    (have hPM (= (fpow2 (mw_of (fmt_f64))) 4503599627370496)
+      (steps ((compute lhs)) refl))
+    (have hPM1 (= (fpow2 (+ (mw_of (fmt_f64)) 1)) 9007199254740992)
+      (steps ((compute lhs)) refl))
+    (have hPE (= (fpow2 (ew_of (fmt_f64))) 2048) (steps ((compute lhs)) refl))
+    (have hBIAS (= (fmt_bias (fmt_f64)) 1023) (steps ((compute lhs)) refl))
+    (have hEMIN (= (fmt_emin (fmt_f64)) -1022) (steps ((compute lhs)) refl))
+    (have hEMAX (= (fmt_emax (fmt_f64)) 1023) (steps ((compute lhs)) refl))
+    (have hHI (= (hinf_of (fmt_f64)) True) (steps ((compute lhs)) refl))
+    (have hHN (= (hnan_of (fmt_f64)) True) (steps ((compute lhs)) refl))
+    (have hpepos (= (lt 0 (fpow2 (ew_of (fmt_f64)))) True)
+      (rewrite-with
+        (lemma fpow2_pos)
+        lr
+        lhs
+        ((inst k (ew_of (fmt_f64))))
+        ()
+        refl))
+    (have hpmpos (= (lt 0 (fpow2 (mw_of (fmt_f64)))) True)
+      (rewrite-with
+        (lemma fpow2_pos)
+        lr
+        lhs
+        ((inst k (mw_of (fmt_f64))))
+        ()
+        refl))
+    (have heb_lo
+      (=
+        (le
+          0
+          (mod (ediv b (fpow2 (mw_of (fmt_f64)))) (fpow2 (ew_of (fmt_f64)))))
+        True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ((inst n (ediv b (fpow2 (mw_of (fmt_f64)))))
+         (inst d (fpow2 (ew_of (fmt_f64)))))
+        ((steps ((rewrite (premise hpepos) lr lhs true ())) refl))
+        refl))
+    (have heb_hi
+      (=
+        (lt
+          (mod (ediv b (fpow2 (mw_of (fmt_f64)))) (fpow2 (ew_of (fmt_f64))))
+          (fpow2 (ew_of (fmt_f64))))
+        True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ((inst n (ediv b (fpow2 (mw_of (fmt_f64)))))
+         (inst d (fpow2 (ew_of (fmt_f64)))))
+        ((steps ((rewrite (premise hpepos) lr lhs true ())) refl))
+        refl))
+    (have hmb_lo (= (le 0 (mod b (fpow2 (mw_of (fmt_f64))))) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ((inst n b) (inst d (fpow2 (mw_of (fmt_f64)))))
+        ((steps ((rewrite (premise hpmpos) lr lhs true ())) refl))
+        refl))
+    (have hmb_hi
+      (= (lt (mod b (fpow2 (mw_of (fmt_f64)))) (fpow2 (mw_of (fmt_f64)))) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ((inst n b) (inst d (fpow2 (mw_of (fmt_f64)))))
+        ((steps ((rewrite (premise hpmpos) lr lhs true ())) refl))
+        refl))
+    (case-on
+      (int_eq
+        (mod (ediv b (fpow2 (mw_of (fmt_f64)))) (fpow2 (ew_of (fmt_f64))))
+        0)
+      Bool
+      ((case True
+         (chain
+           (have hg1
+             (=
+               (int_eq
+                 (mod
+                   (ediv b (fpow2 (mw_of (fmt_f64))))
+                   (fpow2 (ew_of (fmt_f64))))
+                 0)
+               True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have hv
+             (=
+               (funpack (fmt_f64) b)
+               (Fin
+                 (int_eq
+                   (mod
+                     (ediv b (fpow2 (+ (ew_of (fmt_f64)) (mw_of (fmt_f64)))))
+                     2)
+                   1)
+                 (mod b (fpow2 (mw_of (fmt_f64))))
+                 (fmt_emin (fmt_f64))))
+             (steps
+               ((unfold funpack lhs)
+                (reduce lhs)
+                (rewrite (premise hg1) lr lhs true ())
+                (reduce lhs))
+               refl))
+           (have hw2
+             (=
+               (lt
+                 (mod b (fpow2 (mw_of (fmt_f64))))
+                 (fpow2 (+ (mw_of (fmt_f64)) 1)))
+               True)
+             (steps () (by arith (rows (goal 1) (hmb_hi 1) (hPM -1) (hPM1 1)))))
+           (have hemm (= (le (fmt_emin (fmt_f64)) (fmt_emin (fmt_f64))) True)
+             (steps ((compute lhs)) refl))
+           (have hemx (= (le (fmt_emin (fmt_f64)) (fmt_emax (fmt_f64))) True)
+             (steps ((compute lhs)) refl))
+           (have hiee
+             (= (int_eq (fmt_emin (fmt_f64)) (fmt_emin (fmt_f64))) True)
+             (steps ((compute lhs)) refl))
+           (steps
+             ((rewrite (premise hv) lr lhs true ())
+              (unfold fwf lhs)
+              (reduce lhs)
+              (unfold fwf_fin lhs)
+              (reduce lhs)
+              (rewrite (premise hmb_lo) lr lhs true ())
+              (reduce lhs)
+              (rewrite (premise hw2) lr lhs true ())
+              (reduce lhs)
+              (rewrite (premise hemm) lr lhs true ())
+              (reduce lhs)
+              (rewrite (premise hemx) lr lhs true ())
+              (reduce lhs)
+              (rewrite (premise hmb_hi) lr lhs true ())
+              (reduce lhs)
+              (rewrite (premise hiee) lr lhs true ())
+              (reduce lhs))
+             refl)))
+       (case False
+         (chain
+           (have hg1
+             (=
+               (int_eq
+                 (mod
+                   (ediv b (fpow2 (mw_of (fmt_f64))))
+                   (fpow2 (ew_of (fmt_f64))))
+                 0)
+               False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (case-on
+             (int_eq
+               (mod
+                 (ediv b (fpow2 (mw_of (fmt_f64))))
+                 (fpow2 (ew_of (fmt_f64))))
+               (- (fpow2 (ew_of (fmt_f64))) 1))
+             Bool
+             ((case True
+                (chain
+                  (have hg2
+                    (=
+                      (int_eq
+                        (mod
+                          (ediv b (fpow2 (mw_of (fmt_f64))))
+                          (fpow2 (ew_of (fmt_f64))))
+                        (- (fpow2 (ew_of (fmt_f64))) 1))
+                      True)
+                    (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                  (case-on (int_eq (mod b (fpow2 (mw_of (fmt_f64)))) 0) Bool
+                    ((case True
+                       (chain
+                         (have hgm
+                           (= (int_eq (mod b (fpow2 (mw_of (fmt_f64)))) 0) True)
+                           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                         (have hv
+                           (=
+                             (funpack (fmt_f64) b)
+                             (FInf
+                               (int_eq
+                                 (mod
+                                   (ediv
+                                     b
+                                     (fpow2
+                                       (+ (ew_of (fmt_f64)) (mw_of (fmt_f64)))))
+                                   2)
+                                 1)))
+                           (steps
+                             ((unfold funpack lhs)
+                              (reduce lhs)
+                              (rewrite (premise hg1) lr lhs true ())
+                              (reduce lhs)
+                              (rewrite (premise hg2) lr lhs true ())
+                              (reduce lhs)
+                              (rewrite (premise hHI) lr lhs true ())
+                              (reduce lhs)
+                              (rewrite (premise hgm) lr lhs true ())
+                              (reduce lhs))
+                             refl))
+                         (steps
+                           ((rewrite (premise hv) lr lhs true ())
+                            (unfold fwf lhs)
+                            (reduce lhs)
+                            (rewrite (premise hHI) lr lhs true ()))
+                           refl)))
+                     (case False
+                       (chain
+                         (have hgm
+                           (=
+                             (int_eq (mod b (fpow2 (mw_of (fmt_f64)))) 0)
+                             False)
+                           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                         (have hv (= (funpack (fmt_f64) b) FNaN)
+                           (steps
+                             ((unfold funpack lhs)
+                              (reduce lhs)
+                              (rewrite (premise hg1) lr lhs true ())
+                              (reduce lhs)
+                              (rewrite (premise hg2) lr lhs true ())
+                              (reduce lhs)
+                              (rewrite (premise hHI) lr lhs true ())
+                              (reduce lhs)
+                              (rewrite (premise hgm) lr lhs true ())
+                              (reduce lhs)
+                              (rewrite (premise hHN) lr lhs true ())
+                              (reduce lhs))
+                             refl))
+                         (steps
+                           ((rewrite (premise hv) lr lhs true ())
+                            (unfold fwf lhs)
+                            (reduce lhs)
+                            (rewrite (premise hHN) lr lhs true ()))
+                           refl)))))))
+              (case False
+                (chain
+                  (have hg2
+                    (=
+                      (int_eq
+                        (mod
+                          (ediv b (fpow2 (mw_of (fmt_f64))))
+                          (fpow2 (ew_of (fmt_f64))))
+                        (- (fpow2 (ew_of (fmt_f64))) 1))
+                      False)
+                    (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                  (case-on
+                    (le
+                      (mod
+                        (ediv b (fpow2 (mw_of (fmt_f64))))
+                        (fpow2 (ew_of (fmt_f64))))
+                      0)
+                    Bool
+                    ((case True
+                       (chain
+                         (have hle0
+                           (=
+                             (le
+                               (mod
+                                 (ediv b (fpow2 (mw_of (fmt_f64))))
+                                 (fpow2 (ew_of (fmt_f64))))
+                               0)
+                             True)
+                           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                         (have heq0
+                           (=
+                             (mod
+                               (ediv b (fpow2 (mw_of (fmt_f64))))
+                               (fpow2 (ew_of (fmt_f64))))
+                             0)
+                           (steps
+                             ()
+                             (by
+                               arith
+                               (list
+                                 (rows (goal 1) (hle0 1))
+                                 (rows (goal 1) (heb_lo 1))))))
+                         (have hff (= False True)
+                           (steps
+                             ((rewrite (premise hg1) rl lhs true ())
+                              (rewrite (premise heq0) lr lhs true ())
+                              (simp lhs))
+                             refl))
+                         (absurd (premise hff))))
+                     (case False
+                       (chain
+                         (have hEB1
+                           (=
+                             (le
+                               (mod
+                                 (ediv b (fpow2 (mw_of (fmt_f64))))
+                                 (fpow2 (ew_of (fmt_f64))))
+                               0)
+                             False)
+                           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                         (case-on
+                           (le
+                             2047
+                             (mod
+                               (ediv b (fpow2 (mw_of (fmt_f64))))
+                               (fpow2 (ew_of (fmt_f64)))))
+                           Bool
+                           ((case True
+                              (chain
+                                (have h255
+                                  (=
+                                    (le
+                                      2047
+                                      (mod
+                                        (ediv b (fpow2 (mw_of (fmt_f64))))
+                                        (fpow2 (ew_of (fmt_f64)))))
+                                    True)
+                                  (steps
+                                    ((rewrite (hyp True) lr lhs true ()))
+                                    refl))
+                                (have heq255
+                                  (=
+                                    (mod
+                                      (ediv b (fpow2 (mw_of (fmt_f64))))
+                                      (fpow2 (ew_of (fmt_f64))))
+                                    2047)
+                                  (steps
+                                    ()
+                                    (by
+                                      arith
+                                      (list
+                                        (rows (goal 1) (heb_hi 1) (hPE -1))
+                                        (rows (goal 1) (h255 1))))))
+                                (have hff (= False True)
+                                  (steps
+                                    ((rewrite (premise hg2) rl lhs true ())
+                                     (rewrite (premise heq255) lr lhs true ())
+                                     (rewrite (premise hPE) lr lhs true ())
+                                     (simp lhs))
+                                    refl))
+                                (absurd (premise hff))))
+                            (case False
+                              (chain
+                                (have hEB254
+                                  (=
+                                    (le
+                                      2047
+                                      (mod
+                                        (ediv b (fpow2 (mw_of (fmt_f64))))
+                                        (fpow2 (ew_of (fmt_f64)))))
+                                    False)
+                                  (steps
+                                    ((rewrite (hyp False) lr lhs true ()))
+                                    refl))
+                                (have hv
+                                  (=
+                                    (funpack (fmt_f64) b)
+                                    (Fin
+                                      (int_eq
+                                        (mod
+                                          (ediv
+                                            b
+                                            (fpow2
+                                              (+
+                                                (ew_of (fmt_f64))
+                                                (mw_of (fmt_f64)))))
+                                          2)
+                                        1)
+                                      (+
+                                        (mod b (fpow2 (mw_of (fmt_f64))))
+                                        (fpow2 (mw_of (fmt_f64))))
+                                      (-
+                                        (mod
+                                          (ediv b (fpow2 (mw_of (fmt_f64))))
+                                          (fpow2 (ew_of (fmt_f64))))
+                                        (fmt_bias (fmt_f64)))))
+                                  (steps
+                                    ((unfold funpack lhs)
+                                     (reduce lhs)
+                                     (rewrite (premise hg1) lr lhs true ())
+                                     (reduce lhs)
+                                     (rewrite (premise hg2) lr lhs true ())
+                                     (reduce lhs))
+                                    refl))
+                                (have hw1
+                                  (=
+                                    (le
+                                      0
+                                      (+
+                                        (mod b (fpow2 (mw_of (fmt_f64))))
+                                        (fpow2 (mw_of (fmt_f64)))))
+                                    True)
+                                  (steps
+                                    ()
+                                    (by
+                                      arith
+                                      (rows (goal 1) (hmb_lo 1) (hpmpos 1)))))
+                                (have hw2
+                                  (=
+                                    (lt
+                                      (+
+                                        (mod b (fpow2 (mw_of (fmt_f64))))
+                                        (fpow2 (mw_of (fmt_f64))))
+                                      (fpow2 (+ (mw_of (fmt_f64)) 1)))
+                                    True)
+                                  (steps
+                                    ()
+                                    (by
+                                      arith
+                                      (rows
+                                        (goal 1)
+                                        (hmb_hi 1)
+                                        (hPM -2)
+                                        (hPM1 1)))))
+                                (have hw3
+                                  (=
+                                    (le
+                                      (fmt_emin (fmt_f64))
+                                      (-
+                                        (mod
+                                          (ediv b (fpow2 (mw_of (fmt_f64))))
+                                          (fpow2 (ew_of (fmt_f64))))
+                                        (fmt_bias (fmt_f64))))
+                                    True)
+                                  (steps
+                                    ()
+                                    (by
+                                      arith
+                                      (rows
+                                        (goal 1)
+                                        (hEB1 1)
+                                        (hEMIN -1)
+                                        (hBIAS -1)))))
+                                (have hw4
+                                  (=
+                                    (le
+                                      (-
+                                        (mod
+                                          (ediv b (fpow2 (mw_of (fmt_f64))))
+                                          (fpow2 (ew_of (fmt_f64))))
+                                        (fmt_bias (fmt_f64)))
+                                      (fmt_emax (fmt_f64)))
+                                    True)
+                                  (steps
+                                    ()
+                                    (by
+                                      arith
+                                      (rows
+                                        (goal 1)
+                                        (hEB254 1)
+                                        (hBIAS 1)
+                                        (hEMAX 1)))))
+                                (have hw5
+                                  (=
+                                    (lt
+                                      (+
+                                        (mod b (fpow2 (mw_of (fmt_f64))))
+                                        (fpow2 (mw_of (fmt_f64))))
+                                      (fpow2 (mw_of (fmt_f64))))
+                                    False)
+                                  (steps
+                                    ()
+                                    (by arith (rows (goal 1) (hmb_lo 1)))))
+                                (have htop
+                                  (=
+                                    (int_eq
+                                      (-
+                                        (mod
+                                          (ediv b (fpow2 (mw_of (fmt_f64))))
+                                          (fpow2 (ew_of (fmt_f64))))
+                                        (fmt_bias (fmt_f64)))
+                                      (+ (fmt_bias (fmt_f64)) 1))
+                                    False)
+                                  (steps
+                                    ()
+                                    (by
+                                      arith
+                                      (rows (goal 1) (hEB254 1) (hBIAS 2)))))
+                                (steps
+                                  ((rewrite (premise hv) lr lhs true ())
+                                   (unfold fwf lhs)
+                                   (reduce lhs)
+                                   (unfold fwf_fin lhs)
+                                   (reduce lhs)
+                                   (rewrite (premise hw1) lr lhs true ())
+                                   (reduce lhs)
+                                   (rewrite (premise hw2) lr lhs true ())
+                                   (reduce lhs)
+                                   (rewrite (premise hw3) lr lhs true ())
+                                   (reduce lhs)
+                                   (rewrite (premise hw4) lr lhs true ())
+                                   (reduce lhs)
+                                   (rewrite (premise hw5) lr lhs true ())
+                                   (reduce lhs)
+                                   (unfold ftop_ok lhs)
+                                   (reduce lhs)
+                                   (rewrite (premise htop) lr lhs true ())
+                                   (reduce lhs))
+                                  refl)))))))))))))))))))
+
+;; --- the combined roundtrips + ranges the surfaces cite -------------------------
+;; funpack∘fpack = id on EVERY wf view (assembles the R2.2 pieces: fin
+;; fmt-ground, inf/nan parametric); fpack lands in [0, 2^width) on every wf
+;; view (Fin via fpack_range_fXX, Inf/NaN by ground compute per sign).
+
+(claim funpack_fpack_f32
+  (goal ((x FVal)) ((= (fwf (fmt_f32) x) True))
+    (= (funpack (fmt_f32) (fpack (fmt_f32) x)) x))
+  (case-on x FVal
+    ((case Fin
+       (s m e)
+       (chain
+         (have hxe (= x (Fin s m e))
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (have hwf (= (fwf_fin (fmt_f32) m e) True)
+           (steps
+             ((rewrite (premise 0) rl rhs true ())
+              (rewrite (premise hxe) lr rhs true ())
+              (unfold fwf rhs)
+              (simp rhs))
+             refl))
+         (have hrt
+           (= (funpack (fmt_f32) (fpack (fmt_f32) (Fin s m e))) (Fin s m e))
+           (rewrite-with
+             (lemma funpack_fpack_fin_f32)
+             lr
+             lhs
+             ((inst s s) (inst m m) (inst e e))
+             ((steps ((rewrite (premise hwf) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((rewrite (premise hxe) lr lhs true ())
+            (rewrite (premise hxe) lr rhs true ())
+            (rewrite (premise hrt) lr lhs true ()))
+           refl)))
+     (case FInf
+       (s)
+       (chain
+         (have hxe (= x (FInf s))
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (have hfw (= (fmt_wf (fmt_f32)) True) (steps ((compute lhs)) refl))
+         (have hhi (= (hinf_of (fmt_f32)) True) (steps ((compute lhs)) refl))
+         (have hrt (= (funpack (fmt_f32) (fpack (fmt_f32) (FInf s))) (FInf s))
+           (rewrite-with
+             (lemma funpack_fpack_inf)
+             lr
+             lhs
+             ((inst f (fmt_f32)) (inst s s))
+             ((steps ((rewrite (premise hfw) lr lhs true ())) refl)
+              (steps ((rewrite (premise hhi) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((rewrite (premise hxe) lr lhs true ())
+            (rewrite (premise hxe) lr rhs true ())
+            (rewrite (premise hrt) lr lhs true ()))
+           refl)))
+     (case FNaN
+       (chain
+         (have hxe (= x FNaN) (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (have hfw (= (fmt_wf (fmt_f32)) True) (steps ((compute lhs)) refl))
+         (have hhn (= (hnan_of (fmt_f32)) True) (steps ((compute lhs)) refl))
+         (have hrt (= (funpack (fmt_f32) (fpack (fmt_f32) FNaN)) FNaN)
+           (rewrite-with
+             (lemma funpack_fpack_nan)
+             lr
+             lhs
+             ((inst f (fmt_f32)))
+             ((steps ((rewrite (premise hfw) lr lhs true ())) refl)
+              (steps ((rewrite (premise hhn) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((rewrite (premise hxe) lr lhs true ())
+            (rewrite (premise hxe) lr rhs true ())
+            (rewrite (premise hrt) lr lhs true ()))
+           refl))))))
+
+(claim fpack_range_all_f32
+  (goal ((x FVal)) ((= (fwf (fmt_f32) x) True))
+    (=
+      (if (le 0 (fpack (fmt_f32) x)) (lt (fpack (fmt_f32) x) 4294967296) False)
+      True))
+  (case-on x FVal
+    ((case Fin
+       (s m e)
+       (chain
+         (have hxe (= x (Fin s m e))
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (have hwf (= (fwf_fin (fmt_f32) m e) True)
+           (steps
+             ((rewrite (premise 0) rl rhs true ())
+              (rewrite (premise hxe) lr rhs true ())
+              (unfold fwf rhs)
+              (simp rhs))
+             refl))
+         (have hr
+           (=
+             (if (le 0 (fpack (fmt_f32) (Fin s m e)))
+               (lt (fpack (fmt_f32) (Fin s m e)) 4294967296)
+               False)
+             True)
+           (rewrite-with
+             (lemma fpack_range_f32)
+             lr
+             lhs
+             ((inst s s) (inst m m) (inst e e))
+             ((steps ((rewrite (premise hwf) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((rewrite (premise hxe) lr lhs true ())
+            (rewrite (premise hr) lr lhs true ()))
+           refl)))
+     (case FInf
+       (s)
+       (chain
+         (have hxe (= x (FInf s))
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (case-on s Bool
+           ((case True
+              (chain
+                (have hs (= s True)
+                  (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                (steps
+                  ((rewrite (premise hxe) lr lhs true ())
+                   (rewrite (premise hs) lr lhs true ())
+                   (compute lhs))
+                  refl)))
+            (case False
+              (chain
+                (have hs (= s False)
+                  (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                (steps
+                  ((rewrite (premise hxe) lr lhs true ())
+                   (rewrite (premise hs) lr lhs true ())
+                   (compute lhs))
+                  refl)))))))
+     (case FNaN
+       (chain
+         (have hxe (= x FNaN) (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (steps ((rewrite (premise hxe) lr lhs true ()) (compute lhs)) refl))))))
+
+;; --- the combined roundtrips + ranges the surfaces cite -------------------------
+;; funpack∘fpack = id on EVERY wf view (assembles the R2.2 pieces: fin
+;; fmt-ground, inf/nan parametric); fpack lands in [0, 2^width) on every wf
+;; view (Fin via fpack_range_fXX, Inf/NaN by ground compute per sign).
+
+(claim funpack_fpack_f64
+  (goal ((x FVal)) ((= (fwf (fmt_f64) x) True))
+    (= (funpack (fmt_f64) (fpack (fmt_f64) x)) x))
+  (case-on x FVal
+    ((case Fin
+       (s m e)
+       (chain
+         (have hxe (= x (Fin s m e))
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (have hwf (= (fwf_fin (fmt_f64) m e) True)
+           (steps
+             ((rewrite (premise 0) rl rhs true ())
+              (rewrite (premise hxe) lr rhs true ())
+              (unfold fwf rhs)
+              (simp rhs))
+             refl))
+         (have hrt
+           (= (funpack (fmt_f64) (fpack (fmt_f64) (Fin s m e))) (Fin s m e))
+           (rewrite-with
+             (lemma funpack_fpack_fin_f64)
+             lr
+             lhs
+             ((inst s s) (inst m m) (inst e e))
+             ((steps ((rewrite (premise hwf) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((rewrite (premise hxe) lr lhs true ())
+            (rewrite (premise hxe) lr rhs true ())
+            (rewrite (premise hrt) lr lhs true ()))
+           refl)))
+     (case FInf
+       (s)
+       (chain
+         (have hxe (= x (FInf s))
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (have hfw (= (fmt_wf (fmt_f64)) True) (steps ((compute lhs)) refl))
+         (have hhi (= (hinf_of (fmt_f64)) True) (steps ((compute lhs)) refl))
+         (have hrt (= (funpack (fmt_f64) (fpack (fmt_f64) (FInf s))) (FInf s))
+           (rewrite-with
+             (lemma funpack_fpack_inf)
+             lr
+             lhs
+             ((inst f (fmt_f64)) (inst s s))
+             ((steps ((rewrite (premise hfw) lr lhs true ())) refl)
+              (steps ((rewrite (premise hhi) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((rewrite (premise hxe) lr lhs true ())
+            (rewrite (premise hxe) lr rhs true ())
+            (rewrite (premise hrt) lr lhs true ()))
+           refl)))
+     (case FNaN
+       (chain
+         (have hxe (= x FNaN) (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (have hfw (= (fmt_wf (fmt_f64)) True) (steps ((compute lhs)) refl))
+         (have hhn (= (hnan_of (fmt_f64)) True) (steps ((compute lhs)) refl))
+         (have hrt (= (funpack (fmt_f64) (fpack (fmt_f64) FNaN)) FNaN)
+           (rewrite-with
+             (lemma funpack_fpack_nan)
+             lr
+             lhs
+             ((inst f (fmt_f64)))
+             ((steps ((rewrite (premise hfw) lr lhs true ())) refl)
+              (steps ((rewrite (premise hhn) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((rewrite (premise hxe) lr lhs true ())
+            (rewrite (premise hxe) lr rhs true ())
+            (rewrite (premise hrt) lr lhs true ()))
+           refl))))))
+
+(claim fpack_range_all_f64
+  (goal ((x FVal)) ((= (fwf (fmt_f64) x) True))
+    (=
+      (if (le 0 (fpack (fmt_f64) x))
+        (lt (fpack (fmt_f64) x) 18446744073709551616)
+        False)
+      True))
+  (case-on x FVal
+    ((case Fin
+       (s m e)
+       (chain
+         (have hxe (= x (Fin s m e))
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (have hwf (= (fwf_fin (fmt_f64) m e) True)
+           (steps
+             ((rewrite (premise 0) rl rhs true ())
+              (rewrite (premise hxe) lr rhs true ())
+              (unfold fwf rhs)
+              (simp rhs))
+             refl))
+         (have hr
+           (=
+             (if (le 0 (fpack (fmt_f64) (Fin s m e)))
+               (lt (fpack (fmt_f64) (Fin s m e)) 18446744073709551616)
+               False)
+             True)
+           (rewrite-with
+             (lemma fpack_range_f64)
+             lr
+             lhs
+             ((inst s s) (inst m m) (inst e e))
+             ((steps ((rewrite (premise hwf) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((rewrite (premise hxe) lr lhs true ())
+            (rewrite (premise hr) lr lhs true ()))
+           refl)))
+     (case FInf
+       (s)
+       (chain
+         (have hxe (= x (FInf s))
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (case-on s Bool
+           ((case True
+              (chain
+                (have hs (= s True)
+                  (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                (steps
+                  ((rewrite (premise hxe) lr lhs true ())
+                   (rewrite (premise hs) lr lhs true ())
+                   (compute lhs))
+                  refl)))
+            (case False
+              (chain
+                (have hs (= s False)
+                  (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                (steps
+                  ((rewrite (premise hxe) lr lhs true ())
+                   (rewrite (premise hs) lr lhs true ())
+                   (compute lhs))
+                  refl)))))))
+     (case FNaN
+       (chain
+         (have hxe (= x FNaN) (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (steps ((rewrite (premise hxe) lr lhs true ()) (compute lhs)) refl))))))
