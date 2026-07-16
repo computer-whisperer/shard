@@ -485,10 +485,85 @@
        None))
     (_ None)))
 
+(type TgDistinctPremiseR
+  (TgDistinctPremiseErr (List Int))
+  (TgDistinctPremiseOk TrsGuard))
+
+(type TgDistinctPremisesR
+  (TgDistinctPremisesErr (List Int))
+  (TgDistinctPremisesOk (List TrsGuard)))
+
+(fn tg_false_expr ((e Expr)) Bool
+  (match e
+    ((Ctor q Nil) (core_named q (quote False)))
+    (_ False)))
+
+(fn tg_discriminator_arg ((e Expr)) (Option (Pair QName Int))
+  (match e
+    ((Call discriminator args)
+     (match args
+       ((Cons (BVar index) Nil) (Some (Pair discriminator index)))
+       (_ None)))
+    (_ None)))
+
+(fn tg_distinct_args ((m Module) (left Expr) (right Expr)) TgDistinctPremiseR
+  (match (tg_discriminator_arg left)
+    (None
+      (TgDistinctPremiseErr
+        "distinct premise left side is not disc(rule-variable)"))
+    ((Some (Pair left_disc left_index))
+     (match (tg_discriminator_arg right)
+       (None
+         (TgDistinctPremiseErr
+           "distinct premise right side is not disc(rule-variable)"))
+       ((Some (Pair right_disc right_index))
+        (if (qname_eq left_disc right_disc)
+          (match (trs_inspect_discriminator m left_disc)
+            ((TrsDiscInspectErr msg) (TgDistinctPremiseErr msg))
+            ((TrsDiscInspectOk checked)
+             (TgDistinctPremiseOk
+               (TrsDistinct checked left_index right_index))))
+          (TgDistinctPremiseErr
+            "distinct premise uses two discriminators")))))))
+
+(fn tg_distinct_premise ((m Module) (premise Equation)) TgDistinctPremiseR
+  (match premise
+    ((Equation lhs rhs)
+     (if (tg_false_expr rhs)
+       (match lhs
+         ((Call eq args)
+          (if (core_named eq (quote int_eq))
+            (match args
+              ((Cons left (Cons right Nil)) (tg_distinct_args m left right))
+              (_
+                (TgDistinctPremiseErr
+                  "distinct premise int_eq is not binary")))
+            (TgDistinctPremiseErr
+              "spine premise is not core int_eq(...)=False")))
+         (_
+           (TgDistinctPremiseErr
+             "spine premise is not a decidable distinctness guard")))
+       (TgDistinctPremiseErr
+         "spine premise right side is not core False")))))
+
+(fn tg_distinct_premises ((m Module) (premises (List Equation)))
+  TgDistinctPremisesR
+  (measure (struct premises))
+  (match premises
+    (Nil (TgDistinctPremisesOk Nil))
+    ((Cons premise rest)
+     (match (tg_distinct_premise m premise)
+       ((TgDistinctPremiseErr msg) (TgDistinctPremisesErr msg))
+       ((TgDistinctPremiseOk guard)
+        (match (tg_distinct_premises m rest)
+          ((TgDistinctPremisesErr msg) (TgDistinctPremisesErr msg))
+          ((TgDistinctPremisesOk guards)
+           (TgDistinctPremisesOk (Cons guard guards)))))))))
+
 (type TgSpineObserverLicense
   (TgSpineObserverLicense
-    QName QName TrsSpine (List Param) Expr Expr TgLawEvidence))
-  ; citation, exact observer, inspected spine, params, local lhs/rhs, evidence
+    QName QName TrsSpine (List Param) Expr Expr (List TrsGuard) TgLawEvidence))
+  ; citation, observer, inspected spine, params, local lhs/rhs, guards, evidence
 
 (type TgSpineObserverProfileR
   (TgSpineObserverProfileErr Symbol (List Int))
@@ -499,7 +574,8 @@
   (TgOneSpineObserverOk TgSpineObserverLicense))
 
 (fn tg_spine_observer_goal
-  ((q QName)
+  ((m Module)
+   (q QName)
    (observer QName)
    (spine TrsSpine)
    (goal Goal)
@@ -507,11 +583,9 @@
   TgOneSpineObserverR
   (match goal
     ((Goal params premises (Equation lhs rhs))
-     (match premises
-       ((Cons _ _)
-        (TgOneSpineObserverErr
-          "premise-bearing theorem is not a v1 spine reduction"))
-       (Nil
+     (match (tg_distinct_premises m premises)
+       ((TgDistinctPremisesErr msg) (TgOneSpineObserverErr msg))
+       ((TgDistinctPremisesOk guards)
         (match (tg_unary_observer_arg observer lhs)
           (None
             (TgOneSpineObserverErr
@@ -552,7 +626,7 @@
                               (TgOneSpineObserverOk
                                 (TgSpineObserverLicense
                                   q observer spine params local_lhs local_rhs
-                                  evidence)))))))
+                                  guards evidence)))))))
                            (_
                              (TgOneSpineObserverErr
                                "spine prefix is not a theorem parameter")))
@@ -561,7 +635,7 @@
 
 (fn tg_spine_observer_q ((license TgSpineObserverLicense)) QName
   (match license
-    ((TgSpineObserverLicense q _ _ _ _ _ _) q)))
+    ((TgSpineObserverLicense q _ _ _ _ _ _ _) q)))
 
 (fn tg_spine_observer_mem
   ((q QName) (licenses (List TgSpineObserverLicense))) Bool
@@ -593,7 +667,7 @@
   (match (tg_checked_goal m th srcs q)
     ((TgCheckedGoalErr msg) (TgOneSpineObserverErr msg))
     ((TgCheckedGoalOk goal evidence)
-     (tg_spine_observer_goal q observer spine goal evidence))))
+     (tg_spine_observer_goal m q observer spine goal evidence))))
 
 (fn tg_capture_spine_observer_go
   ((m Module)
@@ -653,7 +727,7 @@
   (measure (struct licenses))
   (match licenses
     (Nil (TgSpineObserverRulesOk Nil))
-    ((Cons (TgSpineObserverLicense q _ spine params lhs rhs _) rest)
+    ((Cons (TgSpineObserverLicense q _ spine params lhs rhs guards _) rest)
      (match (trs_rule q (tg_param_types params) lhs rhs)
        ((TrsRuleErr msg) (TgSpineObserverRulesErr msg))
        ((TrsRuleOk rule)
@@ -661,7 +735,9 @@
           ((TgSpineObserverRulesErr msg) (TgSpineObserverRulesErr msg))
           ((TgSpineObserverRulesOk rules)
            (TgSpineObserverRulesOk
-             (Cons (TrsSpineRule spine rule) rules)))))))))
+             (Cons
+               (TrsSpineRule spine (TrsConditionedRule rule guards))
+               rules)))))))))
 
 (fn tg_compile_spine_observer
   ((licenses (List TgSpineObserverLicense))) TgSpineObserverCompileR

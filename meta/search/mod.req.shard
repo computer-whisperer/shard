@@ -384,7 +384,7 @@
   (measure (struct items))
   (match items
     (Nil Nil)
-    ((Cons (TrsSpineRule _ rule) rest)
+    ((Cons (TrsSpineRule _ (TrsConditionedRule rule _)) rest)
      (Cons rule (ms_spine_plain_rules rest)))))
 
 ;; ---- grammar choice view ---------------------------------------------------
@@ -1019,6 +1019,65 @@
             candidate
             (ms_block_first blocked hole_id)))))))))
 
+(fn ms_distinct_guards
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (guards (List TrsGuard))
+   (env MsNEnv))
+  MsMatch
+  (measure fuel)
+  (if (lt fuel 1) (MsMatchErr "constraint guard fuel exhausted")
+  (match guards
+    (Nil (MsMatchYes))
+    ((Cons (TrsDistinct _ left right) rest)
+     (match (msn_get left env)
+       (None (MsMatchErr "distinct guard left variable is unbound"))
+       ((Some left_value)
+        (match (msn_get right env)
+          (None (MsMatchErr "distinct guard right variable is unbound"))
+          ((Some right_value)
+           (match
+             (ms_equal
+               (- fuel 1) grammar asg left_value right_value)
+             ((MsMatchErr msg) (MsMatchErr msg))
+             ;; Equal bindings falsify a structural-distinctness premise.
+             ((MsMatchYes) (MsMatchNo))
+             ((MsMatchBlocked hole_id) (MsMatchBlocked hole_id))
+             ((MsMatchNo)
+              (ms_distinct_guards
+                (- fuel 1) grammar asg rest env)))))))))))
+
+(fn ms_conditioned_root
+  ((fuel Int)
+   (facts (List MsHoleFacts))
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (conditioned TrsConditionedRule)
+   (candidate Expr))
+  MsVerdict
+  (measure fuel)
+  (if (lt fuel 1) (MsErr "conditioned constraint fuel exhausted")
+  (match conditioned
+    ((TrsConditionedRule rule guards)
+     (match guards
+       (Nil
+         (ms_rules_root
+           (- fuel 1) facts grammar asg (Cons rule Nil) candidate None))
+       ((Cons _ _)
+        (match
+          (msn_match
+            (- fuel 1) grammar asg (trs_rule_lhs rule) candidate (MsNEmpty))
+          ((MsNMatchErr msg) (MsErr msg))
+          ((MsNMatchNo) (MsClear))
+          ((MsNMatchBlocked hole_id) (MsBlocked hole_id))
+          ((MsNMatchYes env)
+           (match (ms_distinct_guards (- fuel 1) grammar asg guards env)
+             ((MsMatchErr msg) (MsErr msg))
+             ((MsMatchNo) (MsClear))
+             ((MsMatchBlocked hole_id) (MsBlocked hole_id))
+             ((MsMatchYes) (MsRedex (trs_rule_name rule))))))))))))
+
 (type MsNode
   (MsNodeErr (List Int))
   (MsNodeOpen Int (List Expr))
@@ -1131,11 +1190,11 @@
        (MsVerdictAgreeStart)))
     ((MsNodeExpr node)
      (match item
-       ((TrsSpineRule (TrsSpine _ ctor child) rule)
+       ((TrsSpineRule (TrsSpine _ ctor child) conditioned)
         (let
           ((root
-             (ms_rules_root
-               (- fuel 1) facts grammar asg (Cons rule Nil) node None)))
+             (ms_conditioned_root
+               (- fuel 1) facts grammar asg conditioned node)))
           (match root
             ((MsErr msg) (MsErr msg))
             ((MsRedex q) (MsRedex q))

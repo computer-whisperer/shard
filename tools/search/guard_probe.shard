@@ -1,0 +1,104 @@
+;;; Regression for guarded residual matching.  A structural-distinctness guard
+;;; is evaluated only after the rule matcher binds its variables: equal ground
+;;; bindings are Clear, unequal bindings are Redex, and an open mixed grammar
+;;; hole is Blocked until its exact choice is supplied.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "../../meta/search/mod.req.shard")
+(use (:: kernel term *))
+(use (:: kernel module Type))
+(use (:: kernel module TCon))
+(use (:: kernel loader World))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: meta search *))
+
+(fn gp_atom ((name Symbol)) Expr (Ctor (qn name) Nil))
+
+(fn gp_pair ((left Expr) (right Expr)) Expr
+  (Ctor (qn (quote PairNode)) (list left right)))
+
+(fn gp_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "GUARD-PROBE FAIL " msg) w)))
+
+(fn gp_expect_clear ((got MsVerdict) (w World)) World
+  (match got
+    ((MsClear) w)
+    (_ (gp_fail "expected Clear\n" w))))
+
+(fn gp_expect_redex ((got MsVerdict) (citation QName) (w World)) World
+  (match got
+    ((MsRedex q) (if (qname_eq q citation) w (gp_fail "wrong citation\n" w)))
+    (_ (gp_fail "expected Redex\n" w))))
+
+(fn gp_expect_blocked ((got MsVerdict) (hole_id Int) (w World)) World
+  (match got
+    ((MsBlocked got_id)
+     (if (int_eq got_id hole_id) w (gp_fail "wrong blocked hole\n" w)))
+    (_ (gp_fail "expected Blocked\n" w))))
+
+(fn gp_run ((conditioned TrsConditionedRule) (citation QName) (w World)) World
+  (let
+    ((a (gp_atom (quote A)))
+     (b (gp_atom (quote B))))
+    (let
+      ((grammar (Grammar (list (GEnt 0 (list a b))))))
+    (let
+      ((w1
+         (gp_expect_clear
+           (ms_conditioned_root 128 Nil grammar Nil conditioned (gp_pair a a))
+           w)))
+      (let
+        ((w2
+           (gp_expect_redex
+             (ms_conditioned_root
+               128 Nil grammar Nil conditioned (gp_pair a b))
+             citation
+             w1)))
+        (let
+          ((w3
+             (gp_expect_blocked
+               (ms_conditioned_root
+                 128 Nil grammar Nil conditioned (gp_pair (hole 0) b))
+               0
+               w2)))
+          (let
+            ((w4
+               (gp_expect_redex
+                 (ms_conditioned_root
+                   128 Nil grammar (list (Pair 0 0)) conditioned
+                   (gp_pair (hole 0) b))
+                 citation
+                 w3)))
+            (write
+              "GUARD-PROBE EQUAL-CLEAR UNEQUAL-REDEX OPEN-BLOCKED ASSIGNED-REDEX OK\n"
+              (gp_expect_clear
+                (ms_conditioned_root
+                  128 Nil grammar (list (Pair 0 1)) conditioned
+                  (gp_pair (hole 0) b))
+                w4)))))))))
+
+(fn main ((w World)) World
+  (let
+    ((citation (QName (list (quote probe)) (quote reduce_distinct)))
+     (disc (QName (list (quote probe)) (quote code)))
+     (ty (TCon (qn (quote Int)) Nil)))
+    (match
+      (trs_rule
+        citation
+        (list ty ty)
+        (gp_pair (BVar 1) (BVar 0))
+        (gp_atom (quote Unit)))
+      ((TrsRuleErr msg) (gp_fail msg w))
+      ((TrsRuleOk rule)
+       (match (trs_conditioned_rule rule (list (TrsDistinct disc 1 0)))
+         ((TrsConditionedRuleErr msg) (gp_fail msg w))
+         ((TrsConditionedRuleOk conditioned)
+          (gp_run conditioned citation w)))))))

@@ -2561,3 +2561,51 @@ checked conditional rules for the mined `d != s` cancellation schema.  The
 next spine-specific refinements are stable whole-hole verdict caching and a
 multi-arm/multi-spine inspector for recursive datatypes with more than one
 structural branch.
+
+#### Checked structural-distinctness guards
+
+The first conditional-rule fragment is now represented without embedding a
+predicate evaluator or an ISA-specific register test in `meta/search`.
+`TrsConditionedRule` pairs an ordinary validated equation with a list of
+`TrsGuard`s; the first guard is structural distinctness between two bound rule
+variables.  Spine rules carry this wrapper, so premise logic is orthogonal to
+the authenticated traversal domain.  An empty guard list is the existing
+unconditional behavior.
+
+The checked source premise has the narrow shape:
+
+    (int_eq (disc x) (disc y)) = False
+
+`disc` is not trusted by name.  `meta/rewrite` inspects its transparent unary
+`FnDef`, requires a match over the complete constructor set of its input type,
+and requires every nullary constructor arm to return a different Int literal.
+The theorem layer then lowers the premise to `TrsDistinct(disc,x,y)`.  Missing
+constructors, foreign constructors, duplicate constructors/codes, other
+predicates, and non-variable arguments are refused.  Rule validation also
+requires both guarded variables to occur in the lhs.
+
+Guard evaluation is lazy over the nonlinear match environment:
+
+* definitely equal bindings falsify the guard and leave the candidate Clear;
+* definitely different bindings enable the cited reduction;
+* an unresolved grammar hole returns Blocked on that exact hole.
+
+`guard_probe.shard` pins all four cases, including a shared open hole which is
+known equal without choosing an alternative and a mixed open hole which blocks
+until assignment.  `spine_probe.shard` separately pins finite-discriminator
+coverage/injectivity and rejects a duplicate code.
+
+The x86 task exercises the full checked path with `xtw_reg_code` and an
+`int_eq(...)=False` premise on a contextual absorber theorem.  That premise is
+deliberately stronger than necessary; the unconditional absorber follows it
+in the ordered profile, so equal-register cases fall through and total
+pressure remains 162:
+
+    SPINE RULES 2; DEFERRED RULES 2
+    RAW 820; ACCEPTED 658; CONSTRAINT KILLED 162
+
+This is a plumbing theorem, not the mined cancellation result.  Admitting
+`xor d,s; xor d,s -> []` under `d != s` still requires the semantic proof: a
+distinct-register `rget/rset` framing law and right-XOR cancellation in the bit
+library.  The engine side can now consume that theorem without further
+ISA-specific changes once those two facts land.

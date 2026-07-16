@@ -41,10 +41,15 @@
 (import "../../kernel/module.shard")
 (use (:: kernel term *))
 (use (:: kernel module Type))
+(use (:: kernel module TCon))
+(use (:: kernel module TVar))
 (use (:: kernel module Module))
 (use (:: kernel module FnDef))
+(use (:: kernel module TypeDef))
+(use (:: kernel module CtorDef))
 (use (:: kernel module trie_lookup))
 (use (:: kernel module type_eq))
+(use (:: kernel module lookup_typedef))
 
 ;; ---- rule/profile values ----------------------------------------------------
 
@@ -85,7 +90,13 @@
 (type TrsSpine (TrsSpine QName QName Int))
   ; transparent context function, repeated constructor, recursive child index
 
-(type TrsSpineRule (TrsSpineRule TrsSpine TrsRule))
+(type TrsGuard (TrsDistinct QName Int Int))
+  ; inspected discriminator function, left rule variable, right rule variable
+
+(type TrsConditionedRule
+  (TrsConditionedRule TrsRule (List TrsGuard)))
+
+(type TrsSpineRule (TrsSpineRule TrsSpine TrsConditionedRule))
 
 (type TrsSpineProfile (TrsSpineProfile (List TrsSpineRule)))
 
@@ -131,7 +142,11 @@
 
 (fn trs_spine_rule_value ((item TrsSpineRule)) TrsRule
   (match item
-    ((TrsSpineRule _ rule) rule)))
+    ((TrsSpineRule _ (TrsConditionedRule rule _)) rule)))
+
+(fn trs_spine_rule_guards ((item TrsSpineRule)) (List TrsGuard)
+  (match item
+    ((TrsSpineRule _ (TrsConditionedRule _ guards)) guards)))
 
 (fn trs_spine_profile_rules ((profile TrsSpineProfile))
   (List TrsSpineRule)
@@ -308,17 +323,124 @@
             (_ (TrsSpineInspectErr "spine context is not binary")))
           (TrsSpineInspectErr "spine context lookup changed QName")))))))
 
-(fn trs_len_types ((ts (List Type))) Int
-  (measure (struct ts))
-  (match ts
-    (Nil 0)
-    ((Cons _ rest) (+ 1 (trs_len_types rest)))))
+;; A finite discriminator maps each nullary constructor of its checked input
+;; type to a different Int literal.  Such a function is an authenticated
+;; bridge from `(int_eq (disc x) (disc y)) = False` to structural distinctness
+;; of the corresponding rule bindings.
+(type TrsDiscInspectR
+  (TrsDiscInspectErr (List Int))
+  (TrsDiscInspectOk QName))
 
 (fn trs_int_mem ((x Int) (xs (List Int))) Bool
   (measure (struct xs))
   (match xs
     (Nil False)
-    ((Cons h rest) (if (int_eq x h) True (trs_int_mem x rest)))))
+    ((Cons y rest) (if (int_eq x y) True (trs_int_mem x rest)))))
+
+(fn trs_qname_mem ((q QName) (qs (List QName))) Bool
+  (measure (struct qs))
+  (match qs
+    (Nil False)
+    ((Cons prior rest)
+     (if (qname_eq q prior) True (trs_qname_mem q rest)))))
+
+(fn trs_qnames_subset ((left (List QName)) (right (List QName))) Bool
+  (measure (struct left))
+  (match left
+    (Nil True)
+    ((Cons q rest)
+     (if (trs_qname_mem q right) (trs_qnames_subset rest right) False))))
+
+(fn trs_ctor_qnames ((ctors (List CtorDef))) (List QName)
+  (measure (struct ctors))
+  (match ctors
+    (Nil Nil)
+    ((Cons (CtorDef q _) rest) (Cons q (trs_ctor_qnames rest)))))
+
+(type TrsDiscArmsR
+  (TrsDiscArmsErr (List Int))
+  (TrsDiscArmsOk (List QName) (List Int)))
+
+(fn trs_disc_arms
+  ((arms (List Arm)) (ctors (List QName)) (codes (List Int))) TrsDiscArmsR
+  (measure (struct arms))
+  (match arms
+    (Nil
+      (match ctors
+        (Nil (TrsDiscArmsErr "finite discriminator has no constructor arms"))
+        ((Cons _ _) (TrsDiscArmsOk ctors codes))))
+    ((Cons (Arm pat body) rest)
+     (match pat
+       ((PCtor ctor Nil)
+        (match body
+          ((IntLit code)
+           (if (trs_qname_mem ctor ctors)
+             (TrsDiscArmsErr "finite discriminator repeats a constructor")
+           (if (trs_int_mem code codes)
+             (TrsDiscArmsErr "finite discriminator repeats an Int code")
+             (trs_disc_arms
+               rest (Cons ctor ctors) (Cons code codes)))))
+          (_
+            (TrsDiscArmsErr
+              "finite discriminator arm does not return an Int literal"))))
+       (_
+         (TrsDiscArmsErr
+           "finite discriminator pattern is not a nullary constructor"))))))
+
+(fn trs_discriminator_arms
+  ((m Module) (input Type) (arms (List Arm)) (discriminator QName))
+  TrsDiscInspectR
+  (match input
+    ((TVar _)
+     (TrsDiscInspectErr "finite discriminator input is not a concrete type"))
+    ((TCon type_name _)
+     (match (lookup_typedef type_name m)
+       (None
+         (TrsDiscInspectErr "finite discriminator input type is absent"))
+       ((Some (TypeDef _ _ constructors _))
+        (let ((expected (trs_ctor_qnames constructors)))
+          (match (trs_disc_arms arms Nil Nil)
+            ((TrsDiscArmsErr msg) (TrsDiscInspectErr msg))
+            ((TrsDiscArmsOk actual _)
+             (if (trs_qnames_subset expected actual)
+               (if (trs_qnames_subset actual expected)
+                 (TrsDiscInspectOk discriminator)
+                 (TrsDiscInspectErr
+                   "finite discriminator has a foreign constructor arm"))
+               (TrsDiscInspectErr
+                 "finite discriminator omits an input constructor"))))))))))
+
+(fn trs_inspect_discriminator ((m Module) (discriminator QName))
+  TrsDiscInspectR
+  (match m
+    ((Module _ _ _ trie _)
+     (match (trie_lookup discriminator trie)
+       (None (TrsDiscInspectErr "finite discriminator function is absent"))
+       ((Some (FnDef q params ret body))
+        (if (qname_eq q discriminator)
+          (match params
+            ((Cons input Nil)
+             (if (type_eq ret (TCon (qn (quote Int)) Nil))
+               (match body
+                 ((Match scrut arms)
+                  (if (expr_eq scrut (BVar 0))
+                    (trs_discriminator_arms m input arms discriminator)
+                    (TrsDiscInspectErr
+                      "finite discriminator does not inspect its argument")))
+                 (_
+                   (TrsDiscInspectErr
+                     "finite discriminator body is not a structural match")))
+               (TrsDiscInspectErr
+                 "finite discriminator does not return Int")))
+            (_ (TrsDiscInspectErr "finite discriminator is not unary")))
+          (TrsDiscInspectErr
+            "finite discriminator lookup changed QName")))))))
+
+(fn trs_len_types ((ts (List Type))) Int
+  (measure (struct ts))
+  (match ts
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (trs_len_types rest)))))
 
 ;; ---- rule validation --------------------------------------------------------
 
@@ -413,6 +535,47 @@
            ((TrsVarsOk _) (TrsRuleOk (TrsRule name types lhs rhs)))))))
       (TrsRuleErr "rewrite lhs must have a nonbinding root"))))
 
+(type TrsConditionedRuleR
+  (TrsConditionedRuleErr (List Int))
+  (TrsConditionedRuleOk TrsConditionedRule))
+
+(fn trs_guards_wf
+  ((guards (List TrsGuard))
+   (arity Int)
+   (lhsvars (List Int)))
+  (Option (List Int))
+  (measure (struct guards))
+  (match guards
+    (Nil None)
+    ((Cons (TrsDistinct _ left right) rest)
+     (if (int_eq left right)
+       (Some "distinct guard compares one rule variable with itself")
+     (if (lt left 0) (Some "distinct guard left index is negative")
+     (if (lt right 0) (Some "distinct guard right index is negative")
+     (if (le arity left) (Some "distinct guard left index is out of range")
+     (if (le arity right) (Some "distinct guard right index is out of range")
+     (if (trs_int_mem left lhsvars)
+       (if (trs_int_mem right lhsvars)
+         (trs_guards_wf rest arity lhsvars)
+         (Some "distinct guard right variable is absent from lhs"))
+       (Some "distinct guard left variable is absent from lhs"))))))))))
+
+(fn trs_conditioned_rule ((rule TrsRule) (guards (List TrsGuard)))
+  TrsConditionedRuleR
+  (match rule
+    ((TrsRule name types lhs rhs)
+     (match (trs_rule name types lhs rhs)
+       ((TrsRuleErr msg) (TrsConditionedRuleErr msg))
+       ((TrsRuleOk checked)
+        (match (trs_lhs_vars lhs (trs_len_types types) Nil)
+          ((TrsVarsErr msg) (TrsConditionedRuleErr msg))
+          ((TrsVarsOk lhsvars)
+           (match (trs_guards_wf guards (trs_len_types types) lhsvars)
+             ((Some msg) (TrsConditionedRuleErr msg))
+             (None
+               (TrsConditionedRuleOk
+                 (TrsConditionedRule checked guards)))))))))))
+
 (fn trs_rule_name_mem ((q QName) (rs (List TrsRule))) Bool
   (measure (struct rs))
   (match rs
@@ -455,7 +618,7 @@
   (measure (struct items))
   (match items
     (Nil False)
-    ((Cons (TrsSpineRule _ rule) rest)
+    ((Cons (TrsSpineRule _ (TrsConditionedRule rule _)) rest)
      (if (qname_eq q (trs_rule_name rule)) True
      (trs_spine_rule_name_mem q rest)))))
 
@@ -475,16 +638,18 @@
     (Nil
       (TrsSpineProfileOk
         (TrsSpineProfile (trs_spine_rules_reverse seen Nil))))
-    ((Cons (TrsSpineRule spine rule) rest)
+    ((Cons (TrsSpineRule spine conditioned) rest)
      (match spine
        ((TrsSpine context ctor child)
         (if (lt child 0)
           (TrsSpineProfileErr "spine child index is negative")
-        (match rule
-          ((TrsRule name types lhs rhs)
-           (match (trs_rule name types lhs rhs)
-             ((TrsRuleErr msg) (TrsSpineProfileErr msg))
-             ((TrsRuleOk checked)
+        (match conditioned
+          ((TrsConditionedRule rule guards)
+           (match rule
+             ((TrsRule name _ _ _)
+              (match (trs_conditioned_rule rule guards)
+                ((TrsConditionedRuleErr msg) (TrsSpineProfileErr msg))
+                ((TrsConditionedRuleOk checked)
               (if (trs_spine_rule_name_mem name seen)
                 (TrsSpineProfileErr "duplicate spine rule name")
                 (trs_spine_profile_go
@@ -493,7 +658,7 @@
                     (TrsSpineRule
                       (TrsSpine context ctor child)
                       checked)
-                    seen)))))))))))))
+                    seen)))))))))))))))
 
 (fn trs_spine_profile ((rules (List TrsSpineRule))) TrsSpineProfileR
   (trs_spine_profile_go rules Nil))
