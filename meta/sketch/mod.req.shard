@@ -913,6 +913,201 @@
                 ((SkIdsErr msg) (SkCErr msg))
                 ((SkIdsOk roots) (prod_counts roots memo))))))))))))
 
+;; Restricted addressing keeps the ordinary candidate ordering after removing
+;; forbidden alternatives and alternatives other than a fixed choice.  This is
+;; not merely a convenience for search drivers: it makes a region an exact,
+;; independently enumerable candidate space without manufacturing a second
+;; Grammar (and therefore without changing any hole identity).
+
+(fn skr_pick_alt
+  ((hole_id Int)
+   (index Int)
+   (alts (List Expr))
+   (memo (List (Pair Int Int)))
+   (region SkRegion)
+   (digit Int))
+  PkR
+  (measure (struct alts))
+  (match alts
+    (Nil (PkRErr "region alternative index out of range (count drift)"))
+    ((Cons alt rest)
+     (let
+       ((allowed
+          (match (skr_choice hole_id region)
+            ((Some chosen) (int_eq index chosen))
+            (None True))))
+       (if (if allowed (skr_forbidden hole_id index region) False)
+         (skr_pick_alt hole_id (+ index 1) rest memo region digit)
+       (if allowed
+         (match (alt_size alt memo)
+           ((SkCErr msg) (PkRErr msg))
+           ((SkCOk size)
+            (if (lt digit size) (PkROk alt digit)
+            (skr_pick_alt
+              hole_id (+ index 1) rest memo region (- digit size)))))
+         (skr_pick_alt hole_id (+ index 1) rest memo region digit)))))))
+
+(fn skr_decide_go
+  ((entries (List GEnt))
+   (memo (List (Pair Int Int)))
+   (region SkRegion)
+   (live (List (Pair Int Int)))
+   (choices (List (Pair Int Expr))))
+  DcR
+  (measure (struct entries))
+  (match entries
+    (Nil (DcROk choices))
+    ((Cons (GEnt hole_id alts) rest)
+     (match (memo_find hole_id live)
+       (None (skr_decide_go rest memo region live choices))
+       ((Some digit)
+        (match (skr_pick_alt hole_id 0 alts memo region digit)
+          ((PkRErr msg) (DcRErr msg))
+          ((PkROk alt residual)
+           (match (holes_e alt Nil)
+             ((SkIdsErr msg) (DcRErr msg))
+             ((SkIdsOk holes)
+              (match (digits_go (ids_rev holes Nil) memo residual Nil)
+                ((DgRErr msg) (DcRErr msg))
+                ((DgROk digits)
+                 (match (live_merge digits live)
+                   (None (DcRErr "hole is owned by two grammar entries"))
+                   ((Some live2)
+                    (skr_decide_go
+                      rest memo region live2
+                      (Cons (Pair hole_id alt) choices)))))))))))))))
+
+(fn skr_find_alt
+  ((hole_id Int)
+   (index Int)
+   (alts (List Expr))
+   (memo (List (Pair Int Int)))
+   (region SkRegion)
+   (value Expr)
+   (offset Int))
+  FaR
+  (measure (struct alts))
+  (match alts
+    (Nil (FaRErr "candidate matches no allowed alternative of a live hole"))
+    ((Cons alt rest)
+     (let
+       ((allowed
+          (match (skr_choice hole_id region)
+            ((Some chosen) (int_eq index chosen))
+            (None True))))
+       (if (if allowed (skr_forbidden hole_id index region) False)
+         (skr_find_alt
+           hole_id (+ index 1) rest memo region value offset)
+       (if allowed
+         (match (match_e alt value Nil)
+           ((MtRErr msg) (FaRErr msg))
+           ((MtROk bindings) (FaROk offset alt bindings))
+           ((MtRNo)
+            (match (alt_size alt memo)
+              ((SkCErr msg) (FaRErr msg))
+              ((SkCOk size)
+               (skr_find_alt
+                 hole_id (+ index 1) rest memo region value
+                 (+ offset size))))))
+         (skr_find_alt
+           hole_id (+ index 1) rest memo region value offset)))))))
+
+(fn skr_rank_decide
+  ((entries (List GEnt))
+   (memo (List (Pair Int Int)))
+   (region SkRegion)
+   (live (List (Pair Int Expr)))
+   (choices (List (Pair Int (Pair Int Expr)))))
+  RkR
+  (measure (struct entries))
+  (match entries
+    (Nil (RkROk choices))
+    ((Cons (GEnt hole_id alts) rest)
+     (match (rk_find hole_id live)
+       (None (skr_rank_decide rest memo region live choices))
+       ((Some value)
+        (match (skr_find_alt hole_id 0 alts memo region value 0)
+          ((FaRErr msg) (RkRErr msg))
+          ((FaROk offset alt bindings)
+           (match (rk_merge bindings live)
+             (None (RkRErr "hole is owned by two grammar entries"))
+             ((Some live2)
+              (skr_rank_decide
+                rest memo region live2
+                (Cons (Pair hole_id (Pair offset alt)) choices)))))))))))
+
+(fn sk_region_rank
+  ((root Expr) (grammar Grammar) (region SkRegion) (candidate Expr)) SkC
+  (match (g_wf grammar)
+    ((GWErr msg) (SkCErr msg))
+    ((GWOk)
+     (match (sk_region_wf grammar region)
+       ((SkRegionWfErr msg) (SkCErr msg))
+       ((SkRegionWfOk)
+        (match (match_e root candidate Nil)
+          ((MtRErr msg) (SkCErr msg))
+          ((MtRNo) (SkCErr "candidate does not match the root sketch"))
+          ((MtROk live0)
+           (match grammar
+             ((Grammar entries)
+              (match (skr_counts_go (ents_rev entries Nil) region Nil)
+                ((GCtErr msg) (SkCErr msg))
+                ((GCtOk memo)
+                 (match (skr_rank_decide entries memo region live0 Nil)
+                   ((RkRErr msg) (SkCErr msg))
+                   ((RkROk choices)
+                    (match (rank_close (ents_rev entries Nil) choices memo Nil)
+                      ((GCtErr msg) (SkCErr msg))
+                      ((GCtOk digits)
+                       (match (holes_e root Nil)
+                         ((SkIdsErr msg) (SkCErr msg))
+                         ((SkIdsOk roots)
+                          (digits_compose roots digits memo 0))))))))))))))))))
+
+(fn sk_region_member
+  ((root Expr) (grammar Grammar) (region SkRegion) (candidate Expr)) Bool
+  (match (sk_region_rank root grammar region candidate)
+    ((SkCErr _) False)
+    ((SkCOk _) True)))
+
+(fn sk_region_unrank
+  ((root Expr) (grammar Grammar) (region SkRegion) (index Int)) SkE
+  (match (g_wf grammar)
+    ((GWErr msg) (SkEErr msg))
+    ((GWOk)
+     (match (sk_region_wf grammar region)
+       ((SkRegionWfErr msg) (SkEErr msg))
+       ((SkRegionWfOk)
+        (match grammar
+          ((Grammar entries)
+           (match (skr_counts_go (ents_rev entries Nil) region Nil)
+             ((GCtErr msg) (SkEErr msg))
+             ((GCtOk memo)
+              (match (holes_e root Nil)
+                ((SkIdsErr msg) (SkEErr msg))
+                ((SkIdsOk roots)
+                 (match (prod_counts roots memo)
+                   ((SkCErr msg) (SkEErr msg))
+                   ((SkCOk total)
+                    (if (lt index 0) (SkEErr "region candidate index below zero")
+                    (if (le total index)
+                      (SkEErr "region candidate index out of range")
+                    (match (digits_go (ids_rev roots Nil) memo index Nil)
+                      ((DgRErr msg) (SkEErr msg))
+                      ((DgROk live0)
+                       (match (skr_decide_go entries memo region live0 Nil)
+                         ((DcRErr msg) (SkEErr msg))
+                         ((DcROk choices)
+                          (match (close_go (ents_rev entries Nil) choices Nil)
+                            ((ClRErr msg) (SkEErr msg))
+                            ((ClROk closed)
+                             (match (fill_e root closed)
+                               ((SkEErr msg) (SkEErr msg))
+                               ((SkEOk result)
+                                (if (sk_closed result) (SkEOk result)
+                                (SkEErr
+                                  "region unrank left holes (grammar incomplete for the root)")))))))))))))))))))))))))
+
 (type SkRegionEditR
   (SkRegionEditErr (List Int))
   (SkRegionEditEmpty)

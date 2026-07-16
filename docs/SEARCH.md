@@ -1821,10 +1821,15 @@ hit and the disjoint complement
 
 `region_probe.shard` pins `RAW 9 = HIT 1 + COMPLEMENT 6+2`, all over the
 original hole ids, plus the zero count obtained by forbidding every choice of
-one hole.  A nested unequal-weight grammar also pins `4 -> 3 -> 2`: excluding
-one of a child hole's three choices updates its parent's recursive alternative,
-then fixing that parent to the recursive alternative preserves the exact child
-count.  This is intentionally a foundation rather than a reported search win:
+one hole.  Regions are independently addressable as well:
+`sk_region_rank`/`sk_region_unrank` preserve the ordinary grammar ordering after
+removing excluded alternatives, and `sk_region_member` is the corresponding
+exact predicate.  The probe pins a two-member non-contiguous slice, its rank
+round trip, and rejection of an excluded candidate.  A nested unequal-weight
+grammar also pins `4 -> 3 -> 2`: excluding one of a child hole's three choices
+updates its parent's recursive alternative, then fixing that parent to the
+recursive alternative preserves the exact child count.  This is intentionally
+a foundation rather than a reported search win:
 `ms_check_region` and `ms_check_prepared_region` now consume those fixed and
 forbidden choices directly over the original grammar.  Full-domain prepared
 facts remain sound under restriction; an uncached match sees only the allowed
