@@ -1,0 +1,177 @@
+;;; std/f32/mod.req.shard — the PUBLIC INTERFACE of the `f32` module.
+;;;
+;;; F32 as an OPAQUE refinement of the core float view: internally
+;;; (refine FVal f32_ok) with f32_ok spelling (fwf (fmt_f32) ·) — the thin
+;;; per-format surface module of docs/FLOATS.md §3a (rung R3a). Consumers
+;;; get a STATICALLY DISTINCT type (mixing formats is a type error) and
+;;; never handle a descriptor; every inhabitant is well-formed by PROVEN
+;;; requirement (f32_wf), the std/str construction.
+;;;
+;;; The DEFINING EQUATIONS are exported requirements: each op is one line
+;;; of core vocabulary ((fadd (fmt_f32) …)), stated through the f32_view
+;;; projection. They are the spec-side entry to spec ⊑ imp (FLOATS.md §4a /
+;;; IMP.md rung I4) — lowering proofs cite THESE, never the impl.
+;;;
+;;; Bits doors (§5 NaN canonicalization lands here): f32_from_bits decodes
+;;; ANY Int (fields are mod-masked; every NaN encoding collapses to the
+;;; model's single NaN), f32_to_bits emits canonical bits — the from∘to
+;;; roundtrip is exact, the to∘from roundtrip is exact off the NaN class
+;;; and canonicalizes on it (f32_from_to_bits, 0x7FC00000 = 2143289344).
+
+(import "../../kernel/stdlib.shard")
+(import "../float/mod.req/float.shard")  ; core vocabulary: FVal, fwf, fmt_f32, the L1 ops
+(import "../float/mod.req/pack.shard")  ; fpack/funpack — the bits doors' meaning
+(import "../float/mod.req/dec.shard")  ; fdec — the decimal-literal pipeline (§9)
+(import "../float/mod.req/hex.shard")  ; fhex — the hex-exact observer (§9)
+(use (:: std float float FVal))
+(use (:: std float float FNaN))
+(use (:: std float float FInf))
+(use (:: std float float fwf))
+(use (:: std float float fmt_f32))
+(use (:: std float float fadd))
+(use (:: std float float fsub))
+(use (:: std float float fmul))
+(use (:: std float float fdiv))
+(use (:: std float float fneg))
+(use (:: std float float fabs))
+(use (:: std float float fle_val))
+(use (:: std float float fval_eqb))
+(use (:: std float pack fpack))
+(use (:: std float pack funpack))
+(use (:: std float dec fdec))
+(use (:: std float hex fhex))
+
+;; an opaque IEEE-754 binary32: every inhabitant is a well-formed view.
+(sig type F32)
+
+;; the refinement predicate, exposed so validity is STATABLE on the interface.
+(sig fn f32_ok ((v FVal)) Bool)
+
+;; project an F32 back to the core value view (refine_val — identity at
+;; runtime); the observer the defining equations speak through.
+(sig fn f32_view ((x F32)) FVal)
+
+;; the bits doors. from_bits is TOTAL on Int (fields decode mod-masked).
+(sig fn f32_from_bits ((b Int)) F32)
+(sig fn f32_to_bits ((x F32)) Int)
+
+;; the decimal-literal door (rung R3b, §9): RNE of the exact decimal
+;; m × 10^e, the sign riding m — 1.5f is (f32_from_dec 15 -1). TOTAL on
+;; (m, e); no host-float laundering anywhere in the pipeline.
+(sig fn f32_from_dec ((m Int) (e Int)) F32)
+
+;; the hex-exact observer (rung R3b, §9): raw integral-significand ASCII,
+;; [-]0x<hex m>p<+/-><dec |e|> ("0xc00000p-23" is 1.5f) — "nan", "+inf",
+;; "-inf" on the specials. Exact and injective on F32.
+(sig fn f32_hex ((x F32)) (List Int))
+
+;; the special constants — no magic bit patterns at consumer sites
+;; (-0.0f is (f32_neg (f32_from_dec 0 0))).
+(sig fn f32_nan () F32)
+(sig fn f32_inf () F32)
+(sig fn f32_neg_inf () F32)
+
+;; arithmetic (RNE, the core model's meaning — see the defining equations).
+(sig fn f32_add ((x F32) (y F32)) F32)
+(sig fn f32_sub ((x F32) (y F32)) F32)
+(sig fn f32_mul ((x F32) (y F32)) F32)
+(sig fn f32_div ((x F32) (y F32)) F32)
+(sig fn f32_neg ((x F32)) F32)
+(sig fn f32_abs ((x F32)) F32)
+
+;; IEEE comparisons (Bool observers, never equality): NaN compares False
+;; under all of them; +0 and -0 compare equal.
+(sig fn f32_le ((x F32) (y F32)) Bool)
+(sig fn f32_lt ((x F32) (y F32)) Bool)
+(sig fn f32_eq ((x F32) (y F32)) Bool)
+
+;; the NaN classifier (the only NaN observer — payloads are unobservable).
+(sig fn f32_is_nan ((x F32)) Bool)
+
+;; --- the structural invariant: every F32 is a well-formed view ------------------
+
+(requirement f32_wf (goal ((x F32)) () (= (f32_ok (f32_view x)) True)))
+
+;; the predicate's meaning is the core shape gate at the ground format.
+(requirement f32_ok_def (goal ((v FVal)) () (= (f32_ok v) (fwf (fmt_f32) v))))
+
+;; --- the defining equations (the spec ⊑ imp entry, one line each) ---------------
+
+(requirement f32_add_def
+  (goal ((x F32) (y F32)) ()
+    (= (f32_view (f32_add x y)) (fadd (fmt_f32) (f32_view x) (f32_view y)))))
+
+(requirement f32_sub_def
+  (goal ((x F32) (y F32)) ()
+    (= (f32_view (f32_sub x y)) (fsub (fmt_f32) (f32_view x) (f32_view y)))))
+
+(requirement f32_mul_def
+  (goal ((x F32) (y F32)) ()
+    (= (f32_view (f32_mul x y)) (fmul (fmt_f32) (f32_view x) (f32_view y)))))
+
+(requirement f32_div_def
+  (goal ((x F32) (y F32)) ()
+    (= (f32_view (f32_div x y)) (fdiv (fmt_f32) (f32_view x) (f32_view y)))))
+
+(requirement f32_neg_def
+  (goal ((x F32)) () (= (f32_view (f32_neg x)) (fneg (f32_view x)))))
+
+(requirement f32_abs_def
+  (goal ((x F32)) () (= (f32_view (f32_abs x)) (fabs (f32_view x)))))
+
+(requirement f32_le_def
+  (goal ((x F32) (y F32)) ()
+    (= (f32_le x y) (fle_val (fmt_f32) (f32_view x) (f32_view y)))))
+
+;; lt/eq derive from le with IEEE NaN/±0 behavior baked in.
+(requirement f32_lt_def
+  (goal ((x F32) (y F32)) ()
+    (= (f32_lt x y) (if (f32_le x y) (if (f32_le y x) False True) False))))
+
+(requirement f32_eq_def
+  (goal ((x F32) (y F32)) ()
+    (= (f32_eq x y) (if (f32_le x y) (f32_le y x) False))))
+
+(requirement f32_is_nan_def
+  (goal ((x F32)) () (= (f32_is_nan x) (fval_eqb (f32_view x) FNaN))))
+
+(requirement f32_view_from_bits
+  (goal ((b Int)) () (= (f32_view (f32_from_bits b)) (funpack (fmt_f32) b))))
+
+(requirement f32_from_dec_def
+  (goal ((m Int) (e Int)) ()
+    (= (f32_view (f32_from_dec m e)) (fdec (fmt_f32) m e))))
+
+(requirement f32_hex_def
+  (goal ((x F32)) () (= (f32_hex x) (fhex (fmt_f32) (f32_view x)))))
+
+;; the special constants' views.
+(requirement f32_nan_def (goal () () (= (f32_view (f32_nan)) FNaN)))
+
+(requirement f32_inf_def (goal () () (= (f32_view (f32_inf)) (FInf False))))
+
+(requirement f32_neg_inf_def
+  (goal () () (= (f32_view (f32_neg_inf)) (FInf True))))
+
+(requirement f32_to_bits_def
+  (goal ((x F32)) () (= (f32_to_bits x) (fpack (fmt_f32) (f32_view x)))))
+
+;; --- the bits roundtrips + range (§5, R2.2 lifted to the surface) ---------------
+
+;; decode inverts encode exactly, for every inhabitant.
+(requirement f32_bits_roundtrip
+  (goal ((x F32)) ()
+    (= (f32_view (f32_from_bits (f32_to_bits x))) (f32_view x))))
+
+;; encode inverts decode on non-NaN encodings and CANONICALIZES the NaN
+;; class (0x7FC00000) — the §5 quotient made bits-concrete.
+(requirement f32_from_to_bits
+  (goal ((b Int)) ((= (le 0 b) True) (= (lt b 4294967296) True))
+    (=
+      (f32_to_bits (f32_from_bits b))
+      (if (f32_is_nan (f32_from_bits b)) 2143289344 b))))
+
+;; encoded bits land in [0, 2^32).
+(requirement f32_to_bits_range
+  (goal ((x F32)) ()
+    (= (if (le 0 (f32_to_bits x)) (lt (f32_to_bits x) 4294967296) False) True)))

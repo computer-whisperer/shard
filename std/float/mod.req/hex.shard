@@ -1,0 +1,240 @@
+;;; std/float/mod.req/hex.shard — the hex-exact observer (FLOATS.md §9, rung
+;;; R3b): raw integral-significand form. A finite value (Fin s m e) — value
+;;; m * 2^(e - mw), e the leading-bit exponent — prints as
+;;;
+;;;   [-]0x<hex digits of m>p<+/-><decimal digits of |e - mw|>
+;;;
+;;; so the string DENOTES the value under the standard hex-float reading
+;;; (integer significand times two-to-the-printed-power): 1.5f32 =
+;;; (Fin False 12582912 0) at mw 23 -> "0xc00000p-23". FNaN -> "nan",
+;;; (FInf s) -> "+inf"/"-inf". Exact and canonical: fwf pins (m, e), so the
+;;; observer is a bijection on well-formed values — §9's "roundtrip-trivial",
+;;; substantiated here at the digit layer (fhexd_val / fdecd_val); the ASCII
+;;; rendering is pinned at the surfaces. Zeros print their true exponent
+;;; ("0x0p-149" at f32) — exactness over prettiness, and -0's sign shows.
+;;;
+;;; Digit lists are LSD-first Int VALUES (calc_show's representation, minus
+;;; the append: the value recursion needs no accumulator and the renderer
+;;; PREPENDS, so MSD-first ASCII falls out and std/list is never touched —
+;;; req-scope keeps to kernel + siblings).
+
+(import "../../../kernel/stdlib.shard")
+(import "float.shard")  ; FVal (Fin/FInf/FNaN), Fmt (mw_of)
+(use (:: std float float *))
+
+;; --- hex digits of the mantissa ---------------------------------------------------
+
+;; LSD-first base-16 digit values of n (garbage below 0 but total; every use
+;; site is a wf mantissa, 0 <= m).
+(fn fhexd ((n Int)) (List Int)
+  (measure
+    n
+    (div-facts n 16 q (by arith (list 16 15 1 1 0 -16)))
+    (div-facts n 16 q (by arith (list 16 1 -1 0 1 16))))
+  (if (lt n 16) (Cons n Nil) (Cons (mod n 16) (fhexd (ediv n 16)))))
+
+;; Horner value of an LSD-first base-16 digit list.
+(fn fhexv ((ds (List Int))) Int
+  (measure (struct ds))
+  (match ds
+    (Nil 0)
+    ((Cons d rest) (+ d (* 16 (fhexv rest))))))
+
+;; THE ROUND TRIP:  0 <= n  |-  fhexv (fhexd n) = n.
+;; WfInduct on n; the loop-guard case split. The div-facts CHAIN ITEM plants
+;; the euclidean rows (decomp/lo/hi/ediv-eq) as premises for the whole arm,
+;; so the measure facts and the final fold close by plain farkas.
+(claim fhexd_val
+  (goal ((n Int)) ((= (le 0 n) True)) (= (fhexv (fhexd n)) n))
+  (wf-induct n
+    (case-on (lt n 16) Bool
+      ((case True
+         (chain
+           (have hg (= (lt n 16) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have hnil (= (fhexv Nil) 0)
+             (steps ((unfold fhexv lhs) (reduce lhs)) refl))
+           (have hb (= (fhexd n) (Cons n Nil))
+             (steps
+               ((unfold fhexd lhs)
+                (rewrite (premise hg) lr lhs true ())
+                (reduce lhs))
+               refl))
+           (have hv (= (fhexv (Cons n Nil)) (+ n (* 16 (fhexv Nil))))
+             (steps ((unfold fhexv lhs) (reduce lhs)) refl))
+           (steps
+             ((rewrite (premise hb) lr lhs true ())
+              (rewrite (premise hv) lr lhs true ())
+              (rewrite (premise hnil) lr lhs true ()))
+             (by arith (list)))))
+       (case False
+         (chain
+           (have hg (= (lt n 16) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (div-facts n 16 q)
+           (have hdlt (= (lt (ediv n 16) n) True)
+             (steps () (by arith (list 16 0 15 1 1 0 -16))))
+           (have hdnn (= (le 0 (ediv n 16)) True)
+             (steps () (by arith (list 16 1 0 -1 0 1 16 0))))
+           (have hb (= (fhexd n) (Cons (mod n 16) (fhexd (ediv n 16))))
+             (steps
+               ((unfold fhexd lhs)
+                (rewrite (premise hg) lr lhs true ())
+                (reduce lhs))
+               refl))
+           (have hv
+             (=
+               (fhexv (Cons (mod n 16) (fhexd (ediv n 16))))
+               (+ (mod n 16) (* 16 (fhexv (fhexd (ediv n 16))))))
+             (steps ((unfold fhexv lhs) (reduce lhs)) refl))
+           (have hih (= (fhexv (fhexd (ediv n 16))) (ediv n 16))
+             (rewrite-with
+               (hyp 1)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise hdnn) lr lhs true ())) refl)
+                (steps ((rewrite (premise hdnn) lr lhs true ())) refl)
+                (steps ((rewrite (premise hdlt) lr lhs true ())) refl))
+               refl))
+           (have hfold (= (+ (mod n 16) (* 16 (ediv n 16))) n)
+             (steps
+               ()
+               (by
+                 arith
+                 (list
+                   (list 1 0 0 1 0 0 -16 0 0 0 0 0)
+                   (list 1 0 0 -1 0 0 16 0 0 0 0 0)))))
+           (steps
+             ((rewrite (premise hb) lr lhs true ())
+              (rewrite (premise hv) lr lhs true ())
+              (rewrite (premise hih) lr lhs true ())
+              (rewrite (premise hfold) lr lhs true ()))
+             refl)))))))
+
+;; --- decimal digits of the exponent -----------------------------------------------
+
+;; LSD-first base-10 digit values of n — fhexd's decimal twin.
+(fn fdecd ((n Int)) (List Int)
+  (measure
+    n
+    (div-facts n 10 q (by arith (list 10 9 1 1 0 -10)))
+    (div-facts n 10 q (by arith (list 10 1 -1 0 1 10))))
+  (if (lt n 10) (Cons n Nil) (Cons (mod n 10) (fdecd (ediv n 10)))))
+
+;; Horner value of an LSD-first base-10 digit list.
+(fn fdecv ((ds (List Int))) Int
+  (measure (struct ds))
+  (match ds
+    (Nil 0)
+    ((Cons d rest) (+ d (* 10 (fdecv rest))))))
+
+;; The decimal twin:  0 <= n  |-  fdecv (fdecd n) = n.
+(claim fdecd_val
+  (goal ((n Int)) ((= (le 0 n) True)) (= (fdecv (fdecd n)) n))
+  (wf-induct n
+    (case-on (lt n 10) Bool
+      ((case True
+         (chain
+           (have hg (= (lt n 10) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have hnil (= (fdecv Nil) 0)
+             (steps ((unfold fdecv lhs) (reduce lhs)) refl))
+           (have hb (= (fdecd n) (Cons n Nil))
+             (steps
+               ((unfold fdecd lhs)
+                (rewrite (premise hg) lr lhs true ())
+                (reduce lhs))
+               refl))
+           (have hv (= (fdecv (Cons n Nil)) (+ n (* 10 (fdecv Nil))))
+             (steps ((unfold fdecv lhs) (reduce lhs)) refl))
+           (steps
+             ((rewrite (premise hb) lr lhs true ())
+              (rewrite (premise hv) lr lhs true ())
+              (rewrite (premise hnil) lr lhs true ()))
+             (by arith (list)))))
+       (case False
+         (chain
+           (have hg (= (lt n 10) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (div-facts n 10 q)
+           (have hdlt (= (lt (ediv n 10) n) True)
+             (steps () (by arith (list 10 0 9 1 1 0 -10))))
+           (have hdnn (= (le 0 (ediv n 10)) True)
+             (steps () (by arith (list 10 1 0 -1 0 1 10 0))))
+           (have hb (= (fdecd n) (Cons (mod n 10) (fdecd (ediv n 10))))
+             (steps
+               ((unfold fdecd lhs)
+                (rewrite (premise hg) lr lhs true ())
+                (reduce lhs))
+               refl))
+           (have hv
+             (=
+               (fdecv (Cons (mod n 10) (fdecd (ediv n 10))))
+               (+ (mod n 10) (* 10 (fdecv (fdecd (ediv n 10))))))
+             (steps ((unfold fdecv lhs) (reduce lhs)) refl))
+           (have hih (= (fdecv (fdecd (ediv n 10))) (ediv n 10))
+             (rewrite-with
+               (hyp 1)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise hdnn) lr lhs true ())) refl)
+                (steps ((rewrite (premise hdnn) lr lhs true ())) refl)
+                (steps ((rewrite (premise hdlt) lr lhs true ())) refl))
+               refl))
+           (have hfold (= (+ (mod n 10) (* 10 (ediv n 10))) n)
+             (steps
+               ()
+               (by
+                 arith
+                 (list
+                   (list 1 0 0 1 0 0 -10 0 0 0 0 0)
+                   (list 1 0 0 -1 0 0 10 0 0 0 0 0)))))
+           (steps
+             ((rewrite (premise hb) lr lhs true ())
+              (rewrite (premise hv) lr lhs true ())
+              (rewrite (premise hih) lr lhs true ())
+              (rewrite (premise hfold) lr lhs true ()))
+             refl)))))))
+
+;; --- ASCII rendering ---------------------------------------------------------------
+
+;; digit value -> ASCII hex byte: 0-9 -> '0'+d, 10-15 -> 'a'+(d-10).
+(fn fhex_byte ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
+
+;; prepend an LSD-first digit list onto acc as hex ASCII — the prepend walk
+;; reverses, so acc gains the digits MSD-first.
+(fn fhex_asc ((ds (List Int)) (acc (List Int))) (List Int)
+  (measure (struct ds))
+  (match ds
+    (Nil acc)
+    ((Cons d rest) (fhex_asc rest (Cons (fhex_byte d) acc)))))
+
+;; the decimal twin ('0'+d only — decimal digits stay below 10).
+(fn fdec_asc ((ds (List Int)) (acc (List Int))) (List Int)
+  (measure (struct ds))
+  (match ds
+    (Nil acc)
+    ((Cons d rest) (fdec_asc rest (Cons (+ 48 d) acc)))))
+
+;; the exponent tail: 'p', the exponent's sign, the decimal digits of |e|.
+(fn fhex_exp ((e Int)) (List Int)
+  (if (lt e 0) (Cons 112 (Cons 45 (fdec_asc (fdecd (- 0 e)) Nil)))
+  (Cons 112 (Cons 43 (fdec_asc (fdecd e) Nil)))))
+
+;; the unsigned finite body: "0x", the mantissa hex digits, the exponent
+;; tail at the INTEGRAL-significand power e - mw (the stored e is the
+;; leading-bit exponent; the printed string must denote m * 2^printed).
+;; Everything assembles by consing right-to-left — no append anywhere.
+(fn fhex_body ((f Fmt) (m Int) (e Int)) (List Int)
+  (Cons 48 (Cons 120 (fhex_asc (fhexd m) (fhex_exp (- e (mw_of f)))))))
+
+;; THE OBSERVER.
+(fn fhex ((f Fmt) (v FVal)) (List Int)
+  (match v
+    ((Fin s m e) (if s (Cons 45 (fhex_body f m e)) (fhex_body f m e)))
+    ((FInf s)
+     (if s (Cons 45 (Cons 105 (Cons 110 (Cons 102 Nil))))
+     (Cons 43 (Cons 105 (Cons 110 (Cons 102 Nil))))))
+    (FNaN (Cons 110 (Cons 97 (Cons 110 Nil))))))
