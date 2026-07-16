@@ -1,0 +1,372 @@
+;;; Kernel-replayed witness for typed_pio_square.shard (docs/PIO.md P3, the
+;;; G4 half): the searched square-wave program's pin-0 trace equals the
+;;; period-4 waveform spec for ALL cycle counts, not just the task's
+;;; twelve-cycle battery.
+;;;
+;;; This is the first SYMBOLIC theorem over pio_run.  The machine is
+;;; periodic: after the first cycle it walks four ground states (Ph0..Ph3,
+;;; one per quarter-period).  Each quarter is one ground step lemma closed
+;;; by (compute both) — the recursive pio_run tail stays folded on the free
+;;; stimulus tail, so both sides meet on the same literal machine state.
+;;; The phase lemma then rides a wf-induct on the stimulus budget, citing
+;;; one step lemma per phase and the IH at the next phase; per-cycle proof
+;;; cost is one compute with a stop-set fence (PIO.md §8's expectation).
+;;;
+;;; The config/state/stimulus constructions mirror the task file exactly
+;;; (sq_cfg/sq_st0/sq_stim/wave_bits); the ground battery claim at the end
+;;; IS the task's search_observe(witness) = search_target equation.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../models/pio/pio.shard")
+(use (:: models pio pio *))
+
+;; Search winner from tools/search/tasks/typed_pio_square.shard (rank 61,
+;; = search_witness): set pins,1 [1] / set pins,0 [1] under wrap.
+(fn sq_winner () (List PIns)
+  (list (MkPIns (PSet SDPins 1) None 1) (MkPIns (PSet SDPins 0) None 1)))
+
+;; The other passing program (rank census: exactly two of 400): the gauge
+;; twin set pindirs,1 [1] / set pindirs,0 [1] — toggling the DIRECTION
+;; against the all-ones reset pin latch reads as the same pad wave, because
+;; an undriven unstimulated pad composes to 0.
+(fn sq_twin () (List PIns)
+  (list (MkPIns (PSet SDPindirs 1) None 1) (MkPIns (PSet SDPindirs 0) None 1)))
+
+(fn sq_code ((body (List PIns))) (List PSlot)
+  (measure (struct body))
+  (match body
+    (Nil Nil)
+    ((Cons i rest) (Cons (PS i) (sq_code rest)))))
+
+;; The task's config: one output pin (pin 0), SET window pin 0, wrap over
+;; the two slots, full divider speed.
+(fn sq_cfg ((body (List PIns))) PCfg
+  (MkPCfg (sq_code body) 1 0 0 0 0 0 0 0 0 0 1 0 1 0 0 32 32 1 1 1 0 0 0 0 4 4))
+
+(fn sqc () PCfg (sq_cfg (sq_winner)))
+
+;; pin 0 preset as an output (the driver's output-pin direction preset).
+(fn sq_st0 () PSt (with_dir_l 1 (pst_new)))
+
+(fn sq_stim ((n Int)) (List Int)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) Nil (Cons 0 (sq_stim (- n 1)))))
+
+;; pin-0 level per cycle (bit 0 of the composed pad word).
+(fn wave_bits ((obs (List (Pair Int Int)))) (List Int)
+  (measure (struct obs))
+  (match obs
+    (Nil Nil)
+    ((Cons o rest)
+     (match o
+       ((Pair levels dirs) (Cons (band levels 1) (wave_bits rest)))))))
+
+;; One-cell distribution, kept as a lemma so proofs can peel an observation
+;; while the tail's wave_bits stays a FOLDED call (computing it against a
+;; stuck pio_run tail parks as an opened match residue the phase lemma's
+;; spellings could never cite).
+(claim wave_bits_cons
+  (goal ((l Int) (d Int) (r (List (Pair Int Int)))) ()
+    (= (wave_bits (Cons (Pair l d) r)) (Cons (band l 1) (wave_bits r))))
+  (steps ((compute both)) refl))
+
+;; --- the four-phase machine orbit -------------------------------------------------
+;;
+;; Quarter-period states, named by the phase of the NEXT observation:
+;;   Ph0: pc 0, no delay, latch bit0 low  — about to re-assert the high;
+;;   Ph1: pc 1, delay 1,  latch all-ones  — the high's delay cycle;
+;;   Ph2: pc 1, no delay, latch all-ones  — about to drive the low;
+;;   Ph3: pc 0, delay 1,  latch bit0 low  — the low's delay cycle.
+;; The initial state sq_st0 is NOT Ph0 (its latch is still all-ones); its
+;; first cycle lands on Ph1, pinned separately by sq_step_init.
+
+(type Ph (Ph0) (Ph1) (Ph2) (Ph3))
+
+(fn sqst ((p Ph)) PSt
+  (match p
+    (Ph0 (MkPSt 0 0 0 0 0 0 32 0 StNone 0 4294967294 1 0 Nil Nil))
+    (Ph1 (MkPSt 1 0 0 0 0 0 32 1 StNone 0 4294967295 1 0 Nil Nil))
+    (Ph2 (MkPSt 1 0 0 0 0 0 32 0 StNone 0 4294967295 1 0 Nil Nil))
+    (Ph3 (MkPSt 0 0 0 0 0 0 32 1 StNone 0 4294967294 1 0 Nil Nil))))
+
+(fn phbit ((p Ph)) Int
+  (match p
+    (Ph0 1)
+    (Ph1 1)
+    (Ph2 0)
+    (Ph3 0)))
+
+(fn phnext ((p Ph)) Ph
+  (match p
+    (Ph0 Ph1)
+    (Ph1 Ph2)
+    (Ph2 Ph3)
+    (Ph3 Ph0)))
+
+;; The waveform spec: high-high-low-low from phase p, one bit per cycle.
+(fn sqwave ((p Ph) (n Int)) (List Int)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) Nil (Cons (phbit p) (sqwave (phnext p) (- n 1)))))
+
+;; --- one ground step lemma per quarter-period --------------------------------------
+;;
+;; Each pins ONE fired cycle: from the phase state, the machine emits the
+;; phase's observation and lands exactly on the next phase state.  The
+;; stimulus tail is free, so (compute both) meets on the folded recursive
+;; call over identical state literals.
+
+(claim sq_step_init
+  (goal ((rest (List Int))) ()
+    (=
+      (pio_run (sqc) (sq_st0) 0 (Cons 0 rest))
+      (Cons (Pair 1 1) (pio_run (sqc) (sqst Ph1) 0 rest))))
+  (steps ((compute both)) refl))
+
+(claim sq_step_ph0
+  (goal ((rest (List Int))) ()
+    (=
+      (pio_run (sqc) (sqst Ph0) 0 (Cons 0 rest))
+      (Cons (Pair 1 1) (pio_run (sqc) (sqst Ph1) 0 rest))))
+  (steps ((compute both)) refl))
+
+(claim sq_step_ph1
+  (goal ((rest (List Int))) ()
+    (=
+      (pio_run (sqc) (sqst Ph1) 0 (Cons 0 rest))
+      (Cons (Pair 1 1) (pio_run (sqc) (sqst Ph2) 0 rest))))
+  (steps ((compute both)) refl))
+
+(claim sq_step_ph2
+  (goal ((rest (List Int))) ()
+    (=
+      (pio_run (sqc) (sqst Ph2) 0 (Cons 0 rest))
+      (Cons (Pair 0 1) (pio_run (sqc) (sqst Ph3) 0 rest))))
+  (steps ((compute both)) refl))
+
+(claim sq_step_ph3
+  (goal ((rest (List Int))) ()
+    (=
+      (pio_run (sqc) (sqst Ph3) 0 (Cons 0 rest))
+      (Cons (Pair 0 1) (pio_run (sqc) (sqst Ph0) 0 rest))))
+  (steps ((compute both)) refl))
+
+;; --- the phase lemma: every phase state realizes its spec, all budgets -------------
+
+(claim sq_pred_nonneg
+  (goal ((n Int)) ((= (lt n 1) False)) (= (le 0 (- n 1)) True))
+  (by arith (list 1 1)))
+
+;; wf-induct on the stimulus budget; hyp stack per phase arm:
+;; hyp 0 = the phase case equation, hyp 1 = (lt n 1) = False, hyp 2 = IH.
+(claim sq_phase
+  (goal ((p Ph) (n Int)) ()
+    (= (wave_bits (pio_run (sqc) (sqst p) 0 (sq_stim n))) (sqwave p n)))
+  (wf-induct n
+    (case-on (lt n 1) Bool
+      ((case True
+         (steps
+           ((unfold sq_stim lhs)
+            (rewrite (hyp 0) lr lhs true ())
+            (reduce lhs)
+            (compute lhs)
+            (unfold sqwave rhs)
+            (rewrite (hyp 0) lr rhs true ())
+            (reduce rhs))
+           refl))
+       (case False
+         (case-on p Ph
+           ((case Ph0
+              (chain
+                (steps
+                  ((rewrite (hyp 0) lr lhs true ())
+                   (rewrite (hyp 0) lr rhs true ())))
+                (have zeq (= (sq_stim n) (Cons 0 (sq_stim (- n 1))))
+                  (steps
+                    ((unfold sq_stim lhs)
+                     (rewrite (hyp 1) lr lhs true ())
+                     (reduce lhs))
+                    refl))
+                (steps
+                  ((rewrite (premise zeq) lr lhs true ())
+                   (rewrite (lemma sq_step_ph0) lr lhs true ())
+                   (rewrite (lemma wave_bits_cons) lr lhs true ())
+                   (compute lhs (stop wave_bits pio_run sqc sqst sq_stim))
+                   (unfold sqwave rhs)
+                   (rewrite (hyp 1) lr rhs true ())
+                   (reduce rhs)
+                   (compute rhs (stop sqwave sq_stim))))
+                (rewrite-with
+                  (hyp 2)
+                  lr
+                  lhs
+                  ()
+                  ((rewrite-with
+                     (lemma sq_pred_nonneg)
+                     lr
+                     lhs
+                     ((inst n n))
+                     ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                     refl)
+                   (by arith (list)))
+                  refl)))
+            (case Ph1
+              (chain
+                (steps
+                  ((rewrite (hyp 0) lr lhs true ())
+                   (rewrite (hyp 0) lr rhs true ())))
+                (have zeq (= (sq_stim n) (Cons 0 (sq_stim (- n 1))))
+                  (steps
+                    ((unfold sq_stim lhs)
+                     (rewrite (hyp 1) lr lhs true ())
+                     (reduce lhs))
+                    refl))
+                (steps
+                  ((rewrite (premise zeq) lr lhs true ())
+                   (rewrite (lemma sq_step_ph1) lr lhs true ())
+                   (rewrite (lemma wave_bits_cons) lr lhs true ())
+                   (compute lhs (stop wave_bits pio_run sqc sqst sq_stim))
+                   (unfold sqwave rhs)
+                   (rewrite (hyp 1) lr rhs true ())
+                   (reduce rhs)
+                   (compute rhs (stop sqwave sq_stim))))
+                (rewrite-with
+                  (hyp 2)
+                  lr
+                  lhs
+                  ()
+                  ((rewrite-with
+                     (lemma sq_pred_nonneg)
+                     lr
+                     lhs
+                     ((inst n n))
+                     ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                     refl)
+                   (by arith (list)))
+                  refl)))
+            (case Ph2
+              (chain
+                (steps
+                  ((rewrite (hyp 0) lr lhs true ())
+                   (rewrite (hyp 0) lr rhs true ())))
+                (have zeq (= (sq_stim n) (Cons 0 (sq_stim (- n 1))))
+                  (steps
+                    ((unfold sq_stim lhs)
+                     (rewrite (hyp 1) lr lhs true ())
+                     (reduce lhs))
+                    refl))
+                (steps
+                  ((rewrite (premise zeq) lr lhs true ())
+                   (rewrite (lemma sq_step_ph2) lr lhs true ())
+                   (rewrite (lemma wave_bits_cons) lr lhs true ())
+                   (compute lhs (stop wave_bits pio_run sqc sqst sq_stim))
+                   (unfold sqwave rhs)
+                   (rewrite (hyp 1) lr rhs true ())
+                   (reduce rhs)
+                   (compute rhs (stop sqwave sq_stim))))
+                (rewrite-with
+                  (hyp 2)
+                  lr
+                  lhs
+                  ()
+                  ((rewrite-with
+                     (lemma sq_pred_nonneg)
+                     lr
+                     lhs
+                     ((inst n n))
+                     ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                     refl)
+                   (by arith (list)))
+                  refl)))
+            (case Ph3
+              (chain
+                (steps
+                  ((rewrite (hyp 0) lr lhs true ())
+                   (rewrite (hyp 0) lr rhs true ())))
+                (have zeq (= (sq_stim n) (Cons 0 (sq_stim (- n 1))))
+                  (steps
+                    ((unfold sq_stim lhs)
+                     (rewrite (hyp 1) lr lhs true ())
+                     (reduce lhs))
+                    refl))
+                (steps
+                  ((rewrite (premise zeq) lr lhs true ())
+                   (rewrite (lemma sq_step_ph3) lr lhs true ())
+                   (rewrite (lemma wave_bits_cons) lr lhs true ())
+                   (compute lhs (stop wave_bits pio_run sqc sqst sq_stim))
+                   (unfold sqwave rhs)
+                   (rewrite (hyp 1) lr rhs true ())
+                   (reduce rhs)
+                   (compute rhs (stop sqwave sq_stim))))
+                (rewrite-with
+                  (hyp 2)
+                  lr
+                  lhs
+                  ()
+                  ((rewrite-with
+                     (lemma sq_pred_nonneg)
+                     lr
+                     lhs
+                     ((inst n n))
+                     ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                     refl)
+                   (by arith (list)))
+                  refl))))))))))
+
+;; --- the refinement: from reset, the winner realizes the spec for ALL n ------------
+
+(claim sq_refines
+  (goal ((n Int)) ()
+    (= (wave_bits (pio_run (sqc) (sq_st0) 0 (sq_stim n))) (sqwave Ph0 n)))
+  (case-on (lt n 1) Bool
+    ((case True
+       (steps
+         ((unfold sq_stim lhs)
+          (rewrite (hyp 0) lr lhs true ())
+          (reduce lhs)
+          (compute lhs)
+          (unfold sqwave rhs)
+          (rewrite (hyp 0) lr rhs true ())
+          (reduce rhs))
+         refl))
+     (case False
+       (chain
+         (have zeq (= (sq_stim n) (Cons 0 (sq_stim (- n 1))))
+           (steps
+             ((unfold sq_stim lhs)
+              (rewrite (hyp 0) lr lhs true ())
+              (reduce lhs))
+             refl))
+         (steps
+           ((rewrite (premise zeq) lr lhs true ())
+            (rewrite (lemma sq_step_init) lr lhs true ())
+            (rewrite (lemma wave_bits_cons) lr lhs true ())
+            (compute lhs (stop wave_bits pio_run sqc sqst sq_stim))
+            (unfold sqwave rhs)
+            (rewrite (hyp 0) lr rhs true ())
+            (reduce rhs)
+            (compute rhs (stop sqwave sq_stim))
+            (rewrite (lemma sq_phase) lr lhs true ()))
+           refl))))))
+
+;; --- ground ties to the search task ------------------------------------------------
+
+;; The task battery: search_observe(witness) = search_target, replayed.
+(claim sq_ground_battery
+  (goal () ()
+    (=
+      (wave_bits (pio_run (sqc) (sq_st0) 0 (sq_stim 12)))
+      (list 1 1 0 0 1 1 0 0 1 1 0 0)))
+  (steps ((compute both)) refl))
+
+;; ... and the spec agrees with the battery's twelve bits.
+(claim sq_spec_battery
+  (goal () () (= (sqwave Ph0 12) (list 1 1 0 0 1 1 0 0 1 1 0 0)))
+  (steps ((compute both)) refl))
+
+;; The gauge twin's ground replay: same pad wave, driven by direction.
+(claim sq_twin_battery
+  (goal () ()
+    (=
+      (wave_bits (pio_run (sq_cfg (sq_twin)) (sq_st0) 0 (sq_stim 12)))
+      (list 1 1 0 0 1 1 0 0 1 1 0 0)))
+  (steps ((compute both)) refl))

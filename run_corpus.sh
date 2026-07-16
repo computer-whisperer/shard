@@ -342,6 +342,8 @@ TARGETS=(
   examples/pio_smoke.shard
   examples/pio_vecrun.shard
   examples/pio_vecgate.shard
+  tools/search/tasks/typed_pio_square.shard
+  tools/search/gen/pio_square_refinement.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -590,6 +592,17 @@ fi
 echo "=== search: checked x86 transition-window narrowing ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/x86_transition_window.shard audit
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# The PIO square-wave objective (docs/PIO.md P3): the same engine over the
+# PIO model's typed instruction scope.  Expected census: TOTAL 400, FOUND 2
+# (the datasheet wave at rank 61 = the witness, plus its set-pindirs gauge
+# twin), BEST = WITNESS 61.
+echo "=== search: typed pio square-wave pin ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_pio_square.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

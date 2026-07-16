@@ -165,16 +165,28 @@ Any drift from this classification is a FAIL. The driver contract
 
 ## 7. Rungs
 
-- **P1 [DECIDED]** — `models/pio/pio.shard` (types + machine + `pio_run`) and
-  `models/pio/encode.shard` (word encode/decode + round-trip theorems), plus
-  ground smoke examples (datasheet program shapes: square wave, WS2812-style
-  loop) checker-green.
-- **P2 [DECIDED]** — the vector gate of §6, corpus-pinned.
-- **P3 [DECIDED]** — first search objective: a square-wave task file on the
-  `typed_x86_calculator` pattern (zones over `PInstr` ctors; observer =
-  `pio_run` over a stimulus battery), plus the G4 half: a kernel-checked
-  refinement artifact proving the winner's trace equals the waveform spec for
-  all cycle counts.
+- **P1 [LANDED 2026-07-16, e6f5e26 + 6237e77]** — `models/pio/pio.shard`
+  (types + machine + `pio_run`) and `models/pio/encode.shard` (config-indexed
+  word encode/decode), with ground smoke pins (square wave, side-set+delay,
+  clock divider, JMP X-- wrap, PULL/OUT, family round trips, fenced decodes).
+- **P2 [LANDED 2026-07-16, 70d8cf1]** — the vector gate of §6, corpus-pinned:
+  `examples/pio_vecgate.shard` `vec_gate_85_13_3`, one claim over all 101
+  vectors (~8s), plus the generated-data regen pin in `run_corpus.sh`.
+- **P3 [LANDED 2026-07-16]** — the first search objective:
+  `tools/search/tasks/typed_pio_square.shard` on the `typed_x86_calculator`
+  pattern — routed `TgScopeEnv` zones over the bare-item PIO ctor scope
+  (`MkPIns`; `PSet`/`PJmp`; four SET destinations; int atoms for value,
+  target, delay; side-set pinned `None`), observer = `wave_bits ∘ pio_run`
+  over a twelve-cycle all-zero battery. Census: TOTAL 400, FOUND 2, BEST =
+  WITNESS = rank 61 (`set pins,1 [1] / set pins,0 [1]`, the datasheet wave);
+  the second solution is the `set pindirs` GAUGE TWIN — toggling the
+  direction against the all-ones reset latch reads as the same pad wave,
+  because an undriven unstimulated pad composes to 0. The G4 half,
+  `tools/search/gen/pio_square_refinement.shard`, proves the winner's trace
+  equals the period-4 waveform spec for ALL cycle counts (`sq_refines`; §8
+  records the measured proof shape) plus ground battery/spec/gauge-twin
+  pins. Both files are corpus targets; the engine run is a corpus pin
+  (expected census in the pin's comment).
 - **P4 [DECIDED]** — the DME reproduction: mlx-pio's `DmeSpec` battery
   transplanted (their `fixtures.rs` reference programs and golden waveforms),
   searched over the PIO scope, winner proven.
@@ -193,3 +205,20 @@ specs must mirror the interpreter's residue; statement literals ride
 question (ISA.md §7's analog) is whether 200-cycle ground traces and
 symbolic-length loop inductions stay cheap; the go/no-go response is model
 re-factoring, never heroic proofs.
+
+**Measured at P3** (`pio_square_refinement.shard`): the expectations hold,
+comfortably. A fired cycle is one ground step lemma closed by `(compute
+both)` — the recursive `pio_run` tail stays folded on the free stimulus
+tail, so both sides meet on the same literal machine state; the winner's
+period is four such lemmas plus one for the reset state's entry cycle. The
+symbolic theorem (`sq_phase`) is a wf-induct on the Int stimulus budget with
+a four-way phase split: per phase, one step-lemma rewrite, one stop-set
+fenced compute, and the IH at the next phase (measure obligations = the
+scan_free_sound pair). The whole artifact — five step lemmas, the induction,
+the refinement, three ground batteries — checks in ~0.2s; the P2 gate's 101
+certified traces (up to ~260 cycles each) compute in ~8s. One idiom is
+load-bearing: computing `wave_bits` against a stuck `pio_run` tail parks as
+an OPENED MATCH RESIDUE that folded spellings cannot cite, so observation
+peeling rides a distribution lemma (`wave_bits_cons`) with `wave_bits` in
+the compute fence — the imp-arc's stuck-scrutinee lesson, replayed at the
+first opportunity.

@@ -1,0 +1,203 @@
+;;; The first PIO search objective (docs/PIO.md P3): find a two-instruction
+;;; PIO program whose pin-0 waveform is the period-4 square wave — the
+;;; datasheet's canonical blink shape (set pins,1 [1] / set pins,0 [1] under
+;;; wrap).  The observer runs the model's total cycle-trace denotation over a
+;;; twelve-cycle all-zero stimulus battery (three full periods) and projects
+;;; the pin-0 level per cycle; the target starts high because slot 0 fires on
+;;; the very first cycle.
+;;;
+;;; Nothing in typed_expr or typed_grammar names PIO.  The candidate scope
+;;; below is solely the bare-item use scope, routed: each instruction is a
+;;; PIns record with its side-set pinned to None and a searched delay, and
+;;; the op is SET (four destinations, value 0/1) or JMP-always (target 0/1).
+;;; That is 20 spellings per slot, 400 programs; the reset pin latch is
+;;; ALL-ONES so "never drive the pin" reads high, and a passing program must
+;;; re-assert the high each period.  Exactly TWO survive: the true wave
+;;; (rank 61, the witness) and its gauge twin `set pindirs,1 [1] /
+;;; set pindirs,0 [1]` — toggling the DIRECTION against the all-ones latch
+;;; reads as the same pad wave, because an undriven unstimulated pad
+;;; composes to 0.  Minimum rank selects the true program.
+;;;
+;;; The companion G4 artifact (tools/search/gen/pio_square_refinement.shard)
+;;; proves the winner's trace equals the waveform spec for ALL cycle counts.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../models/pio/pio.shard")
+(import "../typed_grammar.shard")
+(use (:: tools search typed_grammar *))
+
+;; Generic program spine.
+(use (:: core List))
+(use (:: core Nil))
+(use (:: core Cons))
+(use (:: core None))
+
+;; Candidate PIO scope.
+(use (:: models pio pio PIns))
+(use (:: models pio pio MkPIns))
+(use (:: models pio pio PInstr))
+(use (:: models pio pio PSet))
+(use (:: models pio pio PJmp))
+(use (:: models pio pio SetDst))
+(use (:: models pio pio SDPins))
+(use (:: models pio pio SDPindirs))
+(use (:: models pio pio SDX))
+(use (:: models pio pio SDY))
+(use (:: models pio pio JmpCond))
+(use (:: models pio pio JAlways))
+(use (:: models pio pio PSlot))
+(use (:: models pio pio PCfg))
+(use (:: models pio pio PSt))
+
+;; The full model is oracle-only: qualified names do not become productions.
+(use (:: models pio pio) as pio)
+
+(fn search_forms () (List Symbol) (list (quote ctor)))
+
+(fn search_ints () (List Int) Nil)
+
+(fn search_symbols () (List Symbol) Nil)
+
+;; Routed zones fix the shape (exactly two PIns cells); depth just needs to
+;; cover the deepest routed path (Cons > Cons > MkPIns > PSet > SDPins).
+(fn search_depth () Int 8)
+
+(fn sq_scope_ctor ((name Symbol)) TgScopeHead (TgScopeCtor name))
+
+(fn sq_scope_route ((head Symbol) (index Int) (zone Symbol)) TgScopeRoute
+  (TgScopeRoute (sq_scope_ctor head) index zone))
+
+(fn sq_seq_zone ((name Symbol) (instruction Symbol) (tail Symbol)) TgScopeZone
+  (TgScopeZone
+    name
+    (list (sq_scope_ctor (quote Cons)))
+    Nil
+    Nil
+    (list
+      (sq_scope_route (quote Cons) 0 instruction)
+      (sq_scope_route (quote Cons) 1 tail))))
+
+(fn search_environment () TgScopeEnv
+  (TgScopeEnv
+    (quote sequence0)
+    (list
+      (sq_seq_zone (quote sequence0) (quote instruction) (quote sequence1))
+      (sq_seq_zone (quote sequence1) (quote instruction) (quote sequence2))
+      (TgScopeZone
+        (quote sequence2)
+        (list (sq_scope_ctor (quote Nil)))
+        Nil
+        Nil
+        Nil)
+      (TgScopeZone
+        (quote instruction)
+        (list (sq_scope_ctor (quote MkPIns)))
+        Nil
+        Nil
+        (list
+          (sq_scope_route (quote MkPIns) 0 (quote operation))
+          (sq_scope_route (quote MkPIns) 1 (quote sideset))
+          (sq_scope_route (quote MkPIns) 2 (quote delay))))
+      (TgScopeZone
+        (quote operation)
+        (list (sq_scope_ctor (quote PSet)) (sq_scope_ctor (quote PJmp)))
+        Nil
+        Nil
+        (list
+          (sq_scope_route (quote PSet) 0 (quote setdest))
+          (sq_scope_route (quote PSet) 1 (quote pinvalue))
+          (sq_scope_route (quote PJmp) 0 (quote condition))
+          (sq_scope_route (quote PJmp) 1 (quote target))))
+      (TgScopeZone
+        (quote setdest)
+        (list
+          (sq_scope_ctor (quote SDPins))
+          (sq_scope_ctor (quote SDPindirs))
+          (sq_scope_ctor (quote SDX))
+          (sq_scope_ctor (quote SDY)))
+        Nil
+        Nil
+        Nil)
+      (TgScopeZone
+        (quote condition)
+        (list (sq_scope_ctor (quote JAlways)))
+        Nil
+        Nil
+        Nil)
+      (TgScopeZone
+        (quote sideset)
+        (list (sq_scope_ctor (quote None)))
+        Nil
+        Nil
+        Nil)
+      (TgScopeZone (quote pinvalue) Nil (list 0 1) Nil Nil)
+      (TgScopeZone (quote target) Nil (list 0 1) Nil Nil)
+      (TgScopeZone (quote delay) Nil (list 0 1) Nil Nil))))
+
+;; --- the observer: pio_run over a twelve-cycle all-zero battery ----------------
+
+(fn sq_code ((body (List PIns))) (List PSlot)
+  (measure (struct body))
+  (match body
+    (Nil Nil)
+    ((Cons i rest) (Cons ((:: pio PS) i) (sq_code rest)))))
+
+;; One output pin (pin 0), SET window pin 0, wrap over the two slots, full
+;; divider speed — the smoke file's square-wave config over the candidate.
+(fn sq_cfg ((body (List PIns))) PCfg
+  ((:: pio MkPCfg)
+   (sq_code body)
+   1
+   0
+   0
+   0
+   0
+   0
+   0
+   0
+   0
+   0
+   1
+   0
+   1
+   0
+   0
+   32
+   32
+   1
+   1
+   1
+   0
+   0
+   0
+   0
+   4
+   4))
+
+;; pin 0 preset as an output (the driver's output-pin direction preset).
+(fn sq_st0 () PSt ((:: pio with_dir_l) 1 ((:: pio pst_new))))
+
+(fn sq_stim ((n Int)) (List Int)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) Nil (Cons 0 (sq_stim (- n 1)))))
+
+;; pin-0 level per cycle (bit 0 of the composed pad word).
+(fn wave_bits ((obs (List (Pair Int Int)))) (List Int)
+  (measure (struct obs))
+  (match obs
+    (Nil Nil)
+    ((Cons o rest)
+     (match o
+       ((Pair levels dirs) (Cons (band levels 1) (wave_bits rest)))))))
+
+(fn search_observe ((body (List PIns))) (List Int)
+  (wave_bits ((:: pio pio_run) (sq_cfg body) (sq_st0) 0 (sq_stim 12))))
+
+(fn search_probe ((body (List PIns))) (Option (List Int))
+  (Some (search_observe body)))
+
+;; Three periods of the period-4 wave, high first.
+(fn search_target () (List Int) (list 1 1 0 0 1 1 0 0 1 1 0 0))
+
+(fn search_witness () (List PIns)
+  (list (MkPIns (PSet SDPins 1) None 1) (MkPIns (PSet SDPins 0) None 1)))
