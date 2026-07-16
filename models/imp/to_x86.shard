@@ -25,11 +25,12 @@
 ;;;     band-spelled on both sides.
 ;;; The per-instance bridge certs are UNPREMISED (the wasm-leg
 ;;; discipline: the bridge statement feeds xcall_fn through
-;;; iband_args, exactly what icall does internally), with ONE scoped
-;;; exception: the IRotr composition's left-shift leg wraps at 2^64
-;;; mid-tree, so the rotation twin TIES here but its bridge waits for
-;;; the native 32-bit rotate instruction (named growth — on wasm the
-;;; rotation bridge is already refl).
+;;; iband_args, exactly what icall does internally) — including the
+;;; U32 rotation since V2-6: IRotr emits the native XRorI32, whose
+;;; semantics spell imp's exact banded-operand tree (the V2-2b
+;;; composition through R11 retired with the scoped non-refl it
+;;; carried; the operand-band amendment made the trees identical at
+;;; every register value).
 ;;;
 ;;; The register machine keeps the v1 PATTERN tier: imp locals map to
 ;;; homes (SysV args rdi rsi rdx rcx r8 r9 for locals 0-5, then the
@@ -174,21 +175,6 @@
     ((ITrunc _ _ a) True)
     ((ILoad a) True)))
 
-;; rotate-right a register by a ground count within 32 bits: the
-;; shr/shl/or/and composition (no 32-bit-view rotate instruction yet;
-;; the single-instruction ror rung is named growth). R11 is the
-;; composition's scratch — no imp local ever maps to it. The
-;; left-shift leg wraps at 2^64 mid-tree, which imp's band-spelled
-;; IRotr does not spell — so rotation TIES here but its bridge waits
-;; for the native instruction (see the header).
-(fn ix_rot ((d Reg) (k Int)) (List XInstr)
-  (list
-    (XMovRR R11 d)
-    (XShrI d (mod k 32))
-    (XShlI R11 (- 32 (mod k 32)))
-    (XBin XOr d (SReg R11))
-    (XBin XAnd d (SImm 4294967295))))
-
 ;; fused branch conditions: comparison of a local against an atom —
 ;; kind-agnostic (in-band values compare exactly at every kind)
 (fn ix_cond ((e IExp)) (Option Cond)
@@ -288,7 +274,7 @@
            ((IConst kc)
             (match (ix_acc dst a)
               (None None)
-              ((Some ia) (Some (ix_app ia (ix_rot dst kc))))))
+              ((Some ia) (Some (ix_app ia (list (XRorI32 dst kc)))))))
            (_ None)))
        (U64 None)))
     ((IExt _ _ a) (ix_acc dst a))
@@ -478,8 +464,8 @@
                (match (ix_home j)
                  (None None)
                  ((Some r)
-                  (if (int_eq j i) (Some (ix_app (ix_rot d kc) it))
-                  (Some (Cons (XMovRR d r) (ix_app (ix_rot d kc) it)))))))
+                  (if (int_eq j i) (Some (Cons (XRorI32 d kc) it))
+                  (Some (Cons (XMovRR d r) (Cons (XRorI32 d kc) it)))))))
               (_ None)))
            (_ None)))
        (U64 None)))
@@ -558,6 +544,7 @@
        ((XBin32 _ d _) (if (int_eq (ix_rtag d) t) True (ix_dwl tl t)))
        ((XShlI32 d _) (if (int_eq (ix_rtag d) t) True (ix_dwl tl t)))
        ((XMovRR32 d _) (if (int_eq (ix_rtag d) t) True (ix_dwl tl t)))
+       ((XRorI32 d _) (if (int_eq (ix_rtag d) t) True (ix_dwl tl t)))
        ((XDivU _) (if (int_eq t 0) True (ix_dwl tl t)))
        ((XLoad8 d _) (if (int_eq (ix_rtag d) t) True (ix_dwl tl t)))
        ((XStore8 _ _) (ix_dwl tl t))

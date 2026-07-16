@@ -1952,6 +1952,87 @@ built; the first is a recorded dead end with a measured wall.
   2026-07-15 — unlocks the round/ext/block x86 legs), then I2e
   (./sha256sum: weld = hand block walk ∘ imp_w_shblock).
 
+**V2-6 — the native rotate (2026-07-15; two commits: V2-6a the
+operand-band amendment, V2-6b the instruction + the fence lift).**
+The slice opened on a FALSE-LEMMA FINDING that supersedes V2-2b's
+unlock plan: a hardware 32-bit rotate reads only the low 32 bits of
+its register, while IRotr banded only its RESULT — on the raw
+symbolic locals of the statement-tier claim forms (empty premise
+lists, checked at impgen_x86_out's copy bridge), an unpremised
+bridge over a truncating native rotate is FALSE, not merely
+non-refl (x0 = 2^32, count 2: imp's shr leg drags bit 32 into the
+band window where silicon reads 0). Refl-grade tree identity is the
+ONLY premise-free mechanism at raw locals — a semantic rewrite
+(e.g. discharging the old composition's wrap64 mid-tree by
+absorption) needs nonneg obligations and re-admits the premise
+apparatus.
+
+- **The amendment (V2-6a, user-ruled including the spec deviation):
+  rotation bands its OPERAND at width, both legs, at every tier.**
+  models/imp IRotr (complement stays double-modded), models/wasm
+  BRotr at both widths (identity on typed values — V8 287/0
+  unchanged), std/sha256's private rotr32 (m32 on the operand;
+  value-identical on all in-band input, NIST vector pins re-verify,
+  zero external symbolic consumers), tools/impgen rot_val (mirror
+  hygiene — no committed artifact spells rotation trees; all 8 outs
+  regen byte-stable under V2-6a alone). Aligning the SPEC too is
+  what collapsed the sibling surgery: with spec ≡ imp ≡ machine
+  trees, the pins stay premise-free lockstep-refl and the
+  pass/worker/walk premise plumbing (incl. the block walk's 57
+  positional farkas certs) re-fired UNTOUCHED. The paid cost: a
+  mechanical respell of 117 stated rotation trees to banded-operand
+  form + 20 ladder discharges redirected through band_lo in the ten
+  leaf bounds lemmas (ish_rotr7/17/18/19_lo, ish_rt2/6/11/13/22/25
+  _lo) — sibling 357/0. std/bits grew mask_word32/mask_word64 (the
+  mask_byte precedent at word widths — proved inside the module
+  where pow2 grounds; the band↔mod seam any rotation consumer
+  needs); the imp_scalar rotate twins collapse their operand bands
+  through them.
+- **The instruction (V2-6b): (XRorI32 Reg Int)** — ror r/m32, imm8,
+  immediate-count only (the XShlI32 precedent). Semantics
+  Fable-side spell EXACTLY the amended IRotr-at-U32 tree (operand
+  band both legs, double-modded complement, result band32) —
+  honest to hardware at every register value, so the model change
+  and the bridge doctrine stop being in tension. Encoding + vectors
+  + silicon Opus-delegated per the standing split: C1 /1 ib (the
+  XShlI32 arm at reg field /1), +11 vectors (count boundaries
+  0/1/31/32/33, high-bit wraparound, OPERAND-TRUNCATION witnesses
+  with bits ≥ 32 set, zero-extension, the REX.B r11 leg) — silicon
+  123 agree / 0 disagree, re-run first-hand.
+- **to_x86**: IRotr U32 emits the single XRorI32 in both the ix_acc
+  and ix_set arms; the five-instruction ix_rot composition through
+  R11 RETIRED with the scoped non-refl it carried. xtie_rotr7
+  re-ties at two instructions; imp_x_rotr7 = the once-impossible
+  bridge, plain refl first-try. U64 rotation still refuses (the
+  composition's algebra never scaled to the register width; native
+  ror r/m64 is trivial growth behind a consumer).
+- **The impgen fence lift**: the two x86 rotation refusals in the
+  walkers (se_exp/lw_exp) retire — rotation walks identically on
+  both targets. THE SLICE'S ONE DEBUG (the new-ctor stuck-scan
+  class): the sha x86 regen refused with "spell: unmapped ctor
+  XRorI32" — to_x86's zero-scratch write-scan ix_dwl matches every
+  XInstr ctor explicitly and had no XRorI32 arm, so the SEAL
+  computation stuck and the reflected translated value carried the
+  rotate ctors under a stuck Call node (harvest walks Ctor args
+  only; sp_e spells through non-Ctor nodes — hence the unmapped
+  miss at spl_e's leaf delegation). Site isolated with a minimal
+  statement-tier rotation probe + per-site error tags. RULE
+  RECORDED: growing an ISA type means sweeping its EXPLICIT
+  matchers (grep the last-added ctor); world.shard's walkers use
+  catch-all arms and were safe, encode.shard was the Opus arm.
+- **Outcome**: std/sha256/impgen_x86_out.shard goes from tie+note
+  (689/0, 162KB) to tie + THREE FULL statement-tier bridges —
+  imp_x_shround / imp_x_shcopy / imp_x_shext — 691/0 at 1.66MB
+  (the 51-stmt round and 79-stmt ext walks with their guard splits
+  check on the first generated attempt); the block pin's note
+  flips from the rotation message to the honest remaining gap
+  ("x86 mixed-tier emission (named growth)"). examples
+  impgen_x86_out gains the generated tie_x_rotr7 + imp_x_rotr7
+  (418/0); wasm/loop/mixed outs byte-stable through both phases.
+- Gates: driver 69 products green ×2 (per phase); corpus FAIL-set
+  identical to baseline-65 ×2; V8 287/0; silicon 112→123/0.
+  NEXT: the x86 mixed-tier emission (unlocks the block leg), I2e.
+
 
 ## 7. Non-goals, stated once
 

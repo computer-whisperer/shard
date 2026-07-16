@@ -240,6 +240,12 @@
 ;; shl32(x) = (x << (k mod 32)) mod 2^32 — count masks to 5 bits (C1 /4 ib)
 (fn shl32_f ((k Int)) XFunc (MkXFunc 1 (list (XMovRR RAX RDI) (XShlI32 RAX k))))
 
+;; ror32(x) = (x ror (k mod 32)) mod 2^32 — count masks to 5 bits (C1 /1 ib).
+;; Reads ONLY the low 32 bits of the argument (a garbage-high arg is invisible
+;; to the instruction) and zero-extends the result; one function per baked
+;; immediate count.
+(fn ror32_f ((k Int)) XFunc (MkXFunc 1 (list (XMovRR RAX RDI) (XRorI32 RAX k))))
+
 ;; mov32(x) = x & 0xFFFFFFFF — the one-instruction zero-extending truncate
 (fn mov32_f () XFunc (MkXFunc 1 (list (XMovRR32 RAX RDI))))
 
@@ -273,6 +279,11 @@
 ;; shl32 in r10 (REX.B, no W)
 (fn shlr10_f ((k Int)) XFunc
   (MkXFunc 1 (list (XMovRR R10 RDI) (XShlI32 R10 k) (XMovRR RAX R10))))
+
+;; ror32 in r11 (REX.B, no W): the high-register rotate leg. A garbage-high
+;; argument also witnesses the low-32 read + zero-extension THROUGH REX.B.
+(fn rorr11_f ((k Int)) XFunc
+  (MkXFunc 1 (list (XMovRR R11 RDI) (XRorI32 R11 k) (XMovRR RAX R11))))
 
 ;; register modules have no memory; memory modules bound [DATA_BASE, +0x10000)
 (fn mreg ((f XFunc)) XModule (MkXModule (Cons f Nil) 0 0))
@@ -564,6 +575,32 @@
       (xcase "addr8" (mreg (addr8_f)) (list 4294967295 1) 20)
       (xcase "addr8" (mreg (addr8_f)) (list 4886718345 8589934597) 20)
       (mod_line "shlr10" (shlr10_f 1))
-      (xcase "shlr10" (mreg (shlr10_f 1)) (list 2147483648) 20))))
+      (xcase "shlr10" (mreg (shlr10_f 1)) (list 2147483648) 20)
+      ;; --- ror32 (native 32-bit rotate; C1 /1 ib) -------------------------
+      ;; count boundaries with the 0x80000001 witness: ror0 = identity, ror1
+      ;; = 0xC0000000 (the high-bit wraparound), ror31 = rol1, ror32 behaves
+      ;; as ror0 and ror33 as ror1 (the CPU masks the count to 5 bits).
+      (mod_line "ror32c0" (ror32_f 0))
+      (xcase "ror32c0" (mreg (ror32_f 0)) (list 2147483649) 20)
+      (mod_line "ror32c1" (ror32_f 1))
+      (xcase "ror32c1" (mreg (ror32_f 1)) (list 2147483649) 20)
+      ;; operand-truncation + zero-extension witnesses (garbage-high args; the
+      ;; model reads only the low 32 bits and the result's high half is 0):
+      ;; 0x1_00000000 -> low32 0 -> 0; 0xFFFFFFFF_00000001 -> low32 1 ->
+      ;; 0x80000000; all-ones -> 0xFFFFFFFF; zero -> 0.
+      (xcase "ror32c1" (mreg (ror32_f 1)) (list 4294967296) 20)
+      (xcase "ror32c1" (mreg (ror32_f 1)) (list 18446744069414584321) 20)
+      (xcase "ror32c1" (mreg (ror32_f 1)) (list 18446744073709551615) 20)
+      (xcase "ror32c1" (mreg (ror32_f 1)) (list 0) 20)
+      (mod_line "ror32c31" (ror32_f 31))
+      (xcase "ror32c31" (mreg (ror32_f 31)) (list 2147483649) 20)
+      (mod_line "ror32c32" (ror32_f 32))
+      (xcase "ror32c32" (mreg (ror32_f 32)) (list 2147483649) 20)
+      (mod_line "ror32c33" (ror32_f 33))
+      (xcase "ror32c33" (mreg (ror32_f 33)) (list 2147483649) 20)
+      ;; r8–r15 (REX.B) leg: rotate in r11, plain + garbage-high through REX.B
+      (mod_line "rorr11" (rorr11_f 1))
+      (xcase "rorr11" (mreg (rorr11_f 1)) (list 2147483649) 20)
+      (xcase "rorr11" (mreg (rorr11_f 1)) (list 18446744069414584321) 20))))
 
 (fn main ((w World)) World (exit 0 (write (emit) w)))
