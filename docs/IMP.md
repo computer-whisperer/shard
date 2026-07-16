@@ -2516,6 +2516,88 @@ targets, BRANCHLESS — the DATA-AS-DATA decision stays unforced.**
   pre-existing content (diffs purely additive); weld 942/0.
 - NEXT: I2e-3 (the pure blocks-loop artifact) per the composition
   ruling, then I2e-4 (the bin).
+**IF-1 — the branch tier, wasm leg (2026-07-16; the imp-if-tier fork;
+two commits: IF-1a the foundation, IF-1b the emission).** impgen's
+coverage grows past sha's silhouette to the first branch class:
+top-level `IIf` with straight-line arms in a mixed body, generated
+FULL on wasm; the x86 leg stays an honest tie+note ("top-level branch
+(x86 branch leg = named growth)" — rung 1b, per-arm polarity-premised
+sub-lemmas over the quantified-residue machinery, user-ruled against
+translator arm seals).
+
+- **IF-1a — ist_seam1 + the blueprint.** models/imp grows the
+  SINGLETON seam: `istmts` over `(Cons s b)` at tied fuel =
+  `ist_cont` of the standalone singleton run, for ANY statement — no
+  flatness premise, no induction (the istmts defining equation
+  refactored through the adapter; proof = one stopped compute + two
+  case-ons). This is the imp-side split a branch boundary composes
+  through — `ist_seam`'s flat premise excludes `IIf` and needs no
+  relaxing; the tied fuels cost nothing because sub-lemmas quantify
+  their own fuel tails and towers align by matching.
+  examples/sqbw_probe.shard = the hand-validated blueprint (138/0;
+  corpus pin): a mixed body [segment / branch with a store in the
+  then arm / counting loop] proven end to end in the V2-5e-4 chain
+  form. The branch piece's shapes: the OPEN-TAIL BRANCH SUB-LEMMA is
+  the segment-lemma form verbatim (the Block/BrIf/Br encoding is
+  self-contained, so from outside a branch chunk completes ONorm at
+  the entry stack like inline code) with ONE case-on of the SHARED
+  comparison scrutinee — both machines stick on the same raw-operand
+  cmp tree (iop_val compares unwrapped; iw_cond emits the fused
+  comparison) — and each arm walking concretely by the statement-tier
+  split spine; the parked continuation is CLAIM-MINUS-ONE regardless
+  of which arm ran (the machine hands one reservoir to head and
+  tail), so the chain's fuel bookkeeping sees a branch as a 1-stmt/
+  1-instr segment; the else path is the DEEP path (all seven inner
+  elements including Br 1); branch exits expose by il_slen — the
+  SEGMENT flavor, not il_wlen (a branch preserves arity through
+  istmts generically). At the chain, a branch boundary needs NO
+  isapp/fuel haves: the pasted `(Cons IIf rest)` and the S-tower
+  match ist_seam1 directly; the sub-lemma cite instantiates its
+  dangling `g` so both cites present the SAME standalone term, one
+  case-on absorbs every outcome, and the next boundary is cited at
+  the exposure leaf — cmp cites stay `(inst c2 c2)` with zero
+  offsets.
+- **IF-1b — the emission.** The piece grammar grows `MxPB` (scrutE,
+  flip, per-arm splits, imp fuel bound): `mxc_br` validates a branch
+  at slice time — comparison-headed conditions only, guard-free
+  operands, arm walks at fresh symbolic locals (lw_stmts's own fences
+  keep nested control refused) — everything else declines loud and
+  named. The machine-chunk stream now carries branches (the V2-5e-4
+  "machs advance on loops / msls on segments" law amends to: msls
+  advances on segments AND branches — one invoke of iw_stmts on the
+  singleton per branch). Emission: `sqbr_<nm>_s<b>` sub-lemmas
+  (mxc_spine reused per arm under the condition case-on),
+  `gb_<nm>_s<b>_i` singleton fns, the chain branch case (seam1 +
+  sub-cite + shared case-on + il_slen exposure via mxc_exit
+  verbatim), fuel bounds by conservative node count (oversupply is
+  safe on BOTH sides of a branch sub-lemma: completed standalone runs
+  are fuel-independent above need and the parked continuation is
+  arm-independent). Dispatch widens: a memful straight-line body with
+  a top-level branch routes to the mixed tier (`has_brtop`); memless
+  branches keep the scalar tier; branches inside loop bodies keep
+  their named fence (rung 2). mx_walk continues through a top-level
+  `IIf` at fresh state on wasm (a branch contributes no worker
+  event); on x86 both it and the slicer refuse with the branch-leg
+  note, so the V2-7/V2-8 x86 machinery never sees a branch piece.
+- **Fixture**: examples/imp_if.shard — it_ifm_fn (segment / branch
+  with a store in the then arm / counting loop: the mid-chain branch
+  piece, cited by the segment boundary and citing the loop boundary)
+  + it_ift_fn (memful straight-line + TERMINAL branch through the
+  widened dispatch, guards in the else arm — the flip's other
+  polarity). Outs: impgen_wasm_if_out 123/0 — EVERY generated claim
+  kernel-green FIRST TRY (both sub-lemmas, both chains, both public
+  claims); impgen_x86_if_out 406/0 (ties + notes). Regen
+  deterministic at the canonical raw siblings; canon-stable; all
+  EIGHT pre-existing outs (examples scalar/loop/mixed ×2 targets +
+  the two sha outs) regenerate byte-identical under the extended
+  tool.
+- Gates: driver 74 products green; corpus FAIL-set == baseline-65.
+- NEXT (the fork's ladder): rung 1b the x86 branch leg (per-arm
+  premised sub-lemmas — a fixed xm_scont residue binder set cannot
+  serve two arms; the polarity premise discharges from the chain's
+  case fact; READ the search-arc calculator4 refinement first), rung
+  2 branch-in-loop-body (the sha-adjacent fence), rung 3 nested
+  branches — assess, fence loudly if not taken.
 
 **I2e-3a — THE BLOCKS LOOP, wasm leg (2026-07-16): a counted loop
 CALLS the generated block k times; the composition ruling's icall

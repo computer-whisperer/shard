@@ -149,6 +149,9 @@ TARGETS=(
   examples/sqxc_probe.shard
   examples/weld_probe.shard
   examples/sqbw_probe.shard
+  examples/imp_if.shard
+  examples/impgen_wasm_if_out.shard
+  examples/impgen_x86_if_out.shard
   models/wasm/wasm.shard
   models/wasm/encode.shard
   examples/wasm_smoke.shard
