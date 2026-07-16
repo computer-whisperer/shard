@@ -1,0 +1,129 @@
+;;; std/float/mod.req/dec.shard — the decimal-literal pipeline (FLOATS.md §9,
+;;; rung R3b): an exact decimal is the integer pair (m, e) — value m × 10^e,
+;;; the sign riding m — and fdec rounds it RNE at format f via frnd on the
+;;; exact rational. No host-float laundering anywhere: the surfaces' from_dec
+;;; adapters are the literal story, folded by ground compute at check time.
+;;;
+;;;   fpow10/fpow10_pos — 10^k, fpow2's decimal twin
+;;;   fdec              — RNE(m × 10^e): e >= 0 scales the numerator,
+;;;                       e < 0 the denominator
+;;;   fdec_wf           — total into wf values on ANY (m, e); fmt_wf is the
+;;;                       only premise (frnd_wf's 0 < d discharges as the
+;;;                       ground 1 or via fpow10_pos)
+
+(import "../../../kernel/stdlib.shard")
+(import "float.shard")  ; Fmt, FVal, frnd, fmt_wf, fwf
+(import "kit.shard")  ; frnd_wf
+(use (:: std float float *))
+(use (:: std float kit *))
+
+;; --- fpow10: the power-of-ten tower ----------------------------------------------
+
+;; fpow10 k = 10^k for k >= 0 (and 1 below zero — total, fpow2's shape).
+(fn fpow10 ((k Int)) Int
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le k 0) 1 (* 10 (fpow10 (- k 1)))))
+
+;; 0 < k  |-  10^k = 10 * 10^(k-1)  (the guarded unfold).
+(claim fpow10_unfold_pos
+  (goal ((k Int)) ((= (lt 0 k) True)) (= (fpow10 k) (* 10 (fpow10 (- k 1)))))
+  (chain
+    (have hg (= (le k 0) False) (steps () (by arith (list 1 1))))
+    (steps
+      ((unfold fpow10 lhs) (rewrite (premise hg) lr lhs true ()) (simp lhs))
+      refl)))
+
+;; 10^k is positive at EVERY k (the base case is the below-zero 1).
+(claim fpow10_pos
+  (goal ((k Int)) () (= (lt 0 (fpow10 k)) True))
+  (wf-induct k
+    (case-on (le k 0) Bool
+      ((case True
+         (steps
+           ((unfold fpow10 lhs) (rewrite (hyp True) lr lhs true ()) (simp lhs))
+           refl))
+       (case False
+         (chain
+           (have hg (= (le k 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hih (= (lt 0 (fpow10 (- k 1))) True)
+             (rewrite-with
+               (hyp 1)
+               lr
+               lhs
+               ()
+               ((by arith (list 1 1)) (by arith (list 1 0)))
+               refl))
+           (have hu (= (fpow10 k) (* 10 (fpow10 (- k 1))))
+             (rewrite-with
+               (lemma fpow10_unfold_pos)
+               lr
+               lhs
+               ()
+               ((by arith (list 1 1)))
+               refl))
+           (steps
+             ((rewrite (premise 2) lr lhs true ()))
+             (by arith (list 1 0 10 0)))))))))
+
+;; --- THE decimal entry ------------------------------------------------------------
+
+;; fdec f m e: RNE of the exact rational m × 10^e at format f (§9's literal
+;; pipeline). Both divisor shapes are positive, so the frnd theorems apply.
+(fn fdec ((f Fmt) (m Int) (e Int)) FVal
+  (if (le 0 e) (frnd f (* m (fpow10 e)) 1) (frnd f m (fpow10 (- 0 e)))))
+
+;; THE closure: fdec lands in well-formed values on ANY (m, e) — the
+;; surfaces' from_dec refine obligation.
+(claim fdec_wf
+  (goal ((f Fmt) (m Int) (e Int)) ((= (fmt_wf f) True))
+    (= (fwf f (fdec f m e)) True))
+  (case-on (le 0 e) Bool
+    ((case True
+       (chain
+         (have hg (= (le 0 e) True)
+           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+         (have hb (= (fdec f m e) (frnd f (* m (fpow10 e)) 1))
+           (steps
+             ((unfold fdec lhs)
+              (rewrite (premise hg) lr lhs true ())
+              (reduce lhs))
+             refl))
+         (have hw (= (fwf f (frnd f (* m (fpow10 e)) 1)) True)
+           (rewrite-with
+             (lemma frnd_wf)
+             lr
+             lhs
+             ((inst f f) (inst n (* m (fpow10 e))) (inst d 1))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+              (steps ((compute lhs)) refl))
+             refl))
+         (steps
+           ((rewrite (premise hb) lr lhs true ())
+            (rewrite (premise hw) lr lhs true ()))
+           refl)))
+     (case False
+       (chain
+         (have hg (= (le 0 e) False)
+           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+         (have hb (= (fdec f m e) (frnd f m (fpow10 (- 0 e))))
+           (steps
+             ((unfold fdec lhs)
+              (rewrite (premise hg) lr lhs true ())
+              (reduce lhs))
+             refl))
+         (have hp (= (lt 0 (fpow10 (- 0 e))) True)
+           (rewrite-with (lemma fpow10_pos) lr lhs ((inst k (- 0 e))) () refl))
+         (have hw (= (fwf f (frnd f m (fpow10 (- 0 e)))) True)
+           (rewrite-with
+             (lemma frnd_wf)
+             lr
+             lhs
+             ((inst f f) (inst n m) (inst d (fpow10 (- 0 e))))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+              (steps ((rewrite (premise hp) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((rewrite (premise hb) lr lhs true ())
+            (rewrite (premise hw) lr lhs true ()))
+           refl))))))

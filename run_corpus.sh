@@ -43,6 +43,8 @@ TARGETS=(
   std/float/mod.req/grs.shard
   std/float/mod.req/ops2.shard
   std/float/mod.req/wf.shard
+  std/float/mod.req/dec.shard
+  std/float/mod.req/hex.shard
   examples/float_val_compute.shard
   std/f32/f32.shard
   std/f64/f64.shard

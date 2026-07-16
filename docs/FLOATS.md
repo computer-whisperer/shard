@@ -521,6 +521,46 @@ cheapest.
   floats on consumer pain (interim: gates and probe sources
   construct values via from_bits). Expected pull-in: alongside R4's
   consumer demos, the moment hand-written bit constants get old.
+  **LANDED 2026-07-16** (fork `floats-r3`, three slices; user
+  rulings: pure std, NO syntax — literal constructors are ordinary
+  fns and any token-level literal is a later canon/main-thread
+  rung; raw integral hex; (m, e) pairs; nan/inf/neg_inf constants):
+  - *R3b-a — the decimal door* (std/float/mod.req/dec.shard).
+    `fdec f m e` = RNE of the exact rational m × 10^e via frnd
+    (e >= 0 scales the numerator, e < 0 the denominator) — §9's
+    exact-decimal pipeline with zero new rounding code and no
+    host-float laundering anywhere. fpow10 (fpow2's decimal twin) +
+    fpow10_pos; `fdec_wf` premises fmt_wf ONLY (frnd_wf's 0 < d
+    discharges as the ground 1 or via fpow10_pos), so the
+    surfaces' from_dec refine obligation is one cite. Differential
+    probe vs host IEEE: 14 (m,e) points across both formats —
+    normals, inexact rounding, overflow→±Inf, subnormal round-up,
+    underflow→+0, big-int rounding — all bit-exact.
+  - *R3b-b — the hex-exact observer* (std/float/mod.req/hex.shard).
+    Raw integral-significand form `[-]0x<hex m>p<+/-><dec |e-mw|>`
+    ("0xc00000p-23" is 1.5f32): the string denotes the value under
+    the standard hex-float reading, the printed power adjusting the
+    stored leading-bit exponent by mw (fhex takes the format for
+    exactly this). Specials "nan"/"+inf"/"-inf"; zeros print their
+    true exponent ("0x0p-149" at f32, sign visible on -0). §9's
+    "roundtrip-trivial" substantiated at the digit layer:
+    LSD-first digit-value lists (no append, no accumulator
+    generalization — the calc_show representation minus std/list,
+    which req-scope forbids) with PROVEN roundtrips fhexd_val /
+    fdecd_val (wf-induct; div-facts as a CHAIN ITEM plants the
+    euclidean rows for the measure facts and the final fold).
+    ASCII assembles by right-to-left consing (prepend-render
+    reverses LSD to MSD for free).
+  - *R3b-c — the surfaces.* Both formats: `fXX_from_dec` (refined
+    return via one fdec_wf cite), `fXX_hex`, constants
+    fXX_nan/fXX_inf/fXX_neg_inf (ground-compute obligations); all
+    exported as defining-equation requirements + fulfills; ground
+    pins host-IEEE-verified (1.5/0.1 bits, the 0.1+0.2 classic
+    literal-spelled, sign-on-m, overflow, subnormal ulp,
+    underflow, hex strings incl. -0, constant bits); consumer demo
+    extended (citation-only). Gate: hand-run per the ratified fork
+    policy — every touched file standalone-green, fmt + canon
+    clean, driver green.
 - **R4 — wasm lowering.** f32/f64 fragments, tier-1 quotient
   theorems against the wasm model, tier-2 V8 gates (six-gate
   discipline per the lib arc). wasm first, per width-ordered
