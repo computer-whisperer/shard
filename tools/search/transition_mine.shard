@@ -18,6 +18,7 @@
 (import "../../kernel/loader.shard")
 (import "../../meta/census")
 (import "../../meta/antiunify")
+(import "../../meta/antiunify/typed.shard")
 (import "../../meta/rewrite")
 (import "../../meta/invoke")
 (import "../../meta/invoke/prepared.shard")
@@ -34,6 +35,7 @@
 (use (:: kernel loader exit))
 (use (:: meta census *))
 (use (:: meta antiunify *))
+(use (:: meta antiunify typed *))
 (use (:: meta rewrite *))
 (use (:: meta invoke *))
 (use (:: meta invoke prepared *))
@@ -46,7 +48,7 @@
 (type TmSweepR
   (TmSweepErr (List Int))
   (TmSweepOk KcCensus Int Int (List TmMember)))
-  ; census, accepted, rejected, accepted members
+; census, accepted, rejected, accepted members
 
 (fn tm_at ((rank Int) (msg (List Int))) (List Int)
   (append_int
@@ -89,8 +91,18 @@
                  ((TeObsErr msg) (TmSweepErr (tm_at rank msg)))
                  ((TeObsReject)
                   (tm_sweep
-                    (- remaining 1) total root grammar m want ctx probe census
-                    accepted (+ rejected 1) members))
+                    (- remaining 1)
+                    total
+                    root
+                    grammar
+                    m
+                    want
+                    ctx
+                    probe
+                    census
+                    accepted
+                    (+ rejected 1)
+                    members))
                  ((TeObsOk key_expr)
                   (match (expr_ints key_expr)
                     (None
@@ -101,8 +113,17 @@
                        ((KcErr msg) (TmSweepErr (tm_at rank msg)))
                        ((KcOk more)
                         (tm_sweep
-                          (- remaining 1) total root grammar m want ctx probe
-                          more (+ accepted 1) rejected
+                          (- remaining 1)
+                          total
+                          root
+                          grammar
+                          m
+                          want
+                          ctx
+                          probe
+                          more
+                          (+ accepted 1)
+                          rejected
                           (Cons (TmMember rank candidate key) members))))))))))
             (TmSweepErr (tm_at rank "rank/unrank disagreement"))))))))))
 
@@ -153,7 +174,8 @@
   (match e
     ((Ctor _ args) (+ 1 (tm_exprs_size args)))
     ((Call _ args) (+ 1 (tm_exprs_size args)))
-    ((If c t f) (+ 1 (+ (tm_expr_size c) (+ (tm_expr_size t) (tm_expr_size f)))))
+    ((If c t f)
+     (+ 1 (+ (tm_expr_size c) (+ (tm_expr_size t) (tm_expr_size f)))))
     ((Match scrut arms) (+ 1 (+ (tm_expr_size scrut) (tm_arms_size arms))))
     ((Let bindings body) (+ 1 (+ (tm_exprs_size bindings) (tm_expr_size body))))
     (_ 1)))
@@ -190,33 +212,57 @@
          (None (tm_best_key key rest (Some member)))
          ((Some prior)
           (tm_best_key
-            key rest
+            key
+            rest
             (Some (if (tm_member_better member prior) member prior)))))
        (tm_best_key key rest best)))))
 
 (type TmEdge (TmEdge AuEquation Int Int))  ; equation, member rank, rep rank
 
+(fn tm_min_members ((key (List Int)) (cost Int) (members (List TmMember)))
+  (List TmMember)
+  (measure (struct members))
+  (match members
+    (Nil Nil)
+    ((Cons member rest)
+     (let ((more (tm_min_members key cost rest)))
+       (if (kc_key_eq key (tm_member_key member))
+         (if (int_eq cost (tm_expr_size (tm_member_expr member)))
+           (Cons member more)
+           more)
+         more)))))
+
+(fn tm_edges_to_reps ((member TmMember) (representatives (List TmMember)))
+  (List TmEdge)
+  (measure (struct representatives))
+  (match representatives
+    (Nil Nil)
+    ((Cons representative rest)
+     (let ((more (tm_edges_to_reps member rest)))
+       (if
+         (lt
+           (tm_expr_size (tm_member_expr representative))
+           (tm_expr_size (tm_member_expr member)))
+         (Cons
+           (TmEdge
+             (AuEquation
+               (tm_member_expr member)
+               (tm_member_expr representative))
+             (tm_member_rank member)
+             (tm_member_rank representative))
+           more)
+         more)))))
+
 (fn tm_edge_members
-  ((key (List Int))
-   (representative TmMember)
-   (members (List TmMember)))
+  ((key (List Int)) (representatives (List TmMember)) (members (List TmMember)))
   (List TmEdge)
   (measure (struct members))
   (match members
     (Nil Nil)
     ((Cons member rest)
-     (let ((more (tm_edge_members key representative rest)))
+     (let ((more (tm_edge_members key representatives rest)))
        (if (kc_key_eq key (tm_member_key member))
-         (if (expr_eq (tm_member_expr member) (tm_member_expr representative))
-           more
-           (Cons
-             (TmEdge
-               (AuEquation
-                 (tm_member_expr member)
-                 (tm_member_expr representative))
-               (tm_member_rank member)
-               (tm_member_rank representative))
-             more))
+         (tm_edges_append (tm_edges_to_reps member representatives) more)
          more)))))
 
 (fn tm_edges_append ((xs (List TmEdge)) (ys (List TmEdge))) (List TmEdge)
@@ -225,9 +271,7 @@
     (Nil ys)
     ((Cons x rest) (Cons x (tm_edges_append rest ys)))))
 
-(fn tm_edges
-  ((buckets (List KcBucket)) (members (List TmMember)))
-  (List TmEdge)
+(fn tm_edges ((buckets (List KcBucket)) (members (List TmMember))) (List TmEdge)
   (measure (struct buckets))
   (match buckets
     (Nil Nil)
@@ -237,9 +281,15 @@
          (match (tm_best_key (kc_key bucket) members None)
            (None more)
            ((Some representative)
-            (tm_edges_append
-              (tm_edge_members (kc_key bucket) representative members)
-              more)))
+            (let
+              ((representatives
+                 (tm_min_members
+                   (kc_key bucket)
+                   (tm_expr_size (tm_member_expr representative))
+                   members)))
+              (tm_edges_append
+                (tm_edge_members (kc_key bucket) representatives members)
+                more))))
          more)))))
 
 (fn tm_distinct_eq ((a AuDistinct) (b AuDistinct)) Bool
@@ -248,9 +298,7 @@
      (match b
        ((AuDistinct bi bj) (if (int_eq ai bi) (int_eq aj bj) False))))))
 
-(fn tm_distinct_list_eq
-  ((as (List AuDistinct)) (bs (List AuDistinct)))
-  Bool
+(fn tm_distinct_list_eq ((as (List AuDistinct)) (bs (List AuDistinct))) Bool
   (measure (struct as))
   (match as
     (Nil
@@ -273,8 +321,7 @@
        ((Some av)
         (match (trs_env_get b env)
           (None False)
-          ((Some bv)
-           (if (expr_eq av bv) False (tm_guards_hold env rest)))))))))
+          ((Some bv) (if (expr_eq av bv) False (tm_guards_hold env rest)))))))))
 
 (fn tm_member_expr_find ((wanted Expr) (members (List TmMember)))
   (Option TmMember)
@@ -314,37 +361,46 @@
                   (TmValidateBad))))))
           (tm_validate_schema lhs rhs guards all rest matched)))))))
 
-(fn tm_type_vars ((n Int)) (List Type)
-  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
-  (if (le n 0) Nil
-  (Cons (TCon (qn (quote Int)) Nil) (tm_type_vars (- n 1)))))
-
 (fn tm_schema_well_formed ((schema AuSchema)) Bool
   (match schema
     ((AuSchema (AuEquation lhs rhs) arity)
      (if (lt (tm_expr_size rhs) (tm_expr_size lhs))
-       (match
-         (trs_rule
-           (qn (quote __transition_proposal))
-           (tm_type_vars arity)
-           lhs
-           rhs)
-         ((TrsRuleErr _) False)
-         ((TrsRuleOk _) True))
+       (if (trs_rooted lhs)
+         (if (expr_eq lhs rhs) False
+         (match (trs_lhs_vars lhs arity Nil)
+           ((TrsVarsErr _) False)
+           ((TrsVarsOk lhsvars)
+            (match (trs_rhs_vars rhs arity lhsvars)
+              ((TrsVarsErr _) False)
+              ((TrsVarsOk _) True)))))
+         False)
        False))))
 
-(type TmProposal
-  (TmProposal AuSchema (List AuDistinct) Int Int Int))
-  ; schema, empirical guards, exact matched lhs count, seed ranks
+(fn tm_typed_schema_well_formed ((typed AuTypedSchema)) Bool
+  (match typed
+    ((AuTypedSchema (AuSchema (AuEquation lhs rhs) _) types)
+     (match (trs_rule (qn (quote __transition_proposal)) types lhs rhs)
+       ((TrsRuleErr _) False)
+       ((TrsRuleOk _) True)))))
+
+(type TmProposal (TmProposal AuTypedSchema (List AuDistinct) Int Int Int))
+; typed schema, empirical guards, exact matched lhs count, seed ranks
 
 (fn tm_proposal_eq ((a TmProposal) (b TmProposal)) Bool
   (match a
-    ((TmProposal (AuSchema (AuEquation al ar) aa) ag _ _ _)
+    ((TmProposal (AuTypedSchema (AuSchema (AuEquation al ar) aa) at) ag _ _ _)
      (match b
-       ((TmProposal (AuSchema (AuEquation bl br) ba) bg _ _ _)
+       ((TmProposal
+          (AuTypedSchema (AuSchema (AuEquation bl br) ba) bt)
+          bg
+          _
+          _
+          _)
         (if (int_eq aa ba)
-          (if (expr_eq al bl)
-            (if (expr_eq ar br) (tm_distinct_list_eq ag bg) False)
+          (if (type_eq_list at bt)
+            (if (expr_eq al bl)
+              (if (expr_eq ar br) (tm_distinct_list_eq ag bg) False)
+              False)
             False)
           False))))))
 
@@ -353,8 +409,7 @@
   (match items
     (Nil False)
     ((Cons prior rest)
-     (if (tm_proposal_eq proposal prior) True
-     (tm_proposal_mem proposal rest)))))
+     (if (tm_proposal_eq proposal prior) True (tm_proposal_mem proposal rest)))))
 
 (fn tm_proposal_support ((proposal TmProposal)) Int
   (match proposal
@@ -362,13 +417,34 @@
 
 (fn tm_proposal_arity ((proposal TmProposal)) Int
   (match proposal
-    ((TmProposal schema _ _ _ _) (au_schema_arity schema))))
+    ((TmProposal typed _ _ _ _) (au_schema_arity (au_typed_schema typed)))))
+
+(fn tm_proposal_gain ((proposal TmProposal)) Int
+  (match proposal
+    ((TmProposal
+       (AuTypedSchema (AuSchema (AuEquation lhs rhs) _) _)
+       _
+       support
+       _
+       _)
+     (* support (- (tm_expr_size lhs) (tm_expr_size rhs))))))
+
+(fn tm_proposal_lhs_size ((proposal TmProposal)) Int
+  (match proposal
+    ((TmProposal (AuTypedSchema (AuSchema (AuEquation lhs _) _) _) _ _ _ _)
+     (tm_expr_size lhs))))
 
 (fn tm_proposal_before ((a TmProposal) (b TmProposal)) Bool
-  (let ((as (tm_proposal_support a)) (bs (tm_proposal_support b)))
-    (if (lt bs as) True
-    (if (lt as bs) False
-    (lt (tm_proposal_arity a) (tm_proposal_arity b))))))
+  (let ((ag (tm_proposal_gain a)) (bg (tm_proposal_gain b)))
+    (if (lt bg ag) True
+    (if (lt ag bg) False
+    (let ((as (tm_proposal_support a)) (bs (tm_proposal_support b)))
+      (if (lt bs as) True
+      (if (lt as bs) False
+      (let ((al (tm_proposal_lhs_size a)) (bl (tm_proposal_lhs_size b)))
+        (if (lt al bl) True
+        (if (lt bl al) False
+        (lt (tm_proposal_arity a) (tm_proposal_arity b))))))))))))
 
 (fn tm_proposal_insert ((proposal TmProposal) (items (List TmProposal)))
   (List TmProposal)
@@ -377,9 +453,8 @@
   (match items
     (Nil (Cons proposal Nil))
     ((Cons prior rest)
-     (if (tm_proposal_before proposal prior)
-       (Cons proposal items)
-       (Cons prior (tm_proposal_insert proposal rest)))))))
+     (if (tm_proposal_before proposal prior) (Cons proposal items)
+     (Cons prior (tm_proposal_insert proposal rest)))))))
 
 (fn tm_edge_equation ((edge TmEdge)) AuEquation
   (match edge
@@ -389,58 +464,482 @@
   (match edge
     ((TmEdge _ rank _) rank)))
 
-(fn tm_propose_pair
-  ((a TmEdge)
-   (b TmEdge)
-   (members (List TmMember))
-   (proposals (List TmProposal)))
-  (List TmProposal)
-  (match (au_equations (tm_edge_equation a) (tm_edge_equation b))
-    ((AuSchemaErr _) proposals)
-    ((AuSchemaOk schema)
-     (if (tm_schema_well_formed schema)
-       (match
-         (au_distinct_guards
-           schema
-           (list (tm_edge_equation a) (tm_edge_equation b)))
-         ((AuDistinctErr _) proposals)
-         ((AuDistinctOk guards)
-          (match schema
-            ((AuSchema (AuEquation lhs rhs) _)
-             (match (tm_validate_schema lhs rhs guards members members 0)
-               ((TmValidateBad) proposals)
-               ((TmValidateOk support)
-                (if (lt 1 support)
-                  (tm_proposal_insert
-                    (TmProposal
-                      schema guards support (tm_edge_rank a) (tm_edge_rank b))
-                    proposals)
-                  proposals)))))))
-       proposals))))
+(type TmSeed (TmSeed AuSchema (List AuDistinct) AuEquation AuEquation Int Int))
+; unique untyped schema+guards, two concrete supports, seed ranks
 
-(fn tm_propose_row
-  ((a TmEdge)
-   (rest (List TmEdge))
-   (members (List TmMember))
-   (proposals (List TmProposal)))
-  (List TmProposal)
-  (measure (struct rest))
-  (match rest
-    (Nil proposals)
-    ((Cons b more)
-     (tm_propose_row
-       a more members (tm_propose_pair a b members proposals)))))
+(type TmPairMode (TmGaugePairs) (TmOrbitPairs) (TmAllPairs))
 
-(fn tm_proposals
-  ((edges (List TmEdge))
-   (members (List TmMember))
-   (proposals (List TmProposal)))
-  (List TmProposal)
+;; Gauge-orbit skeleton: preserve every non-leaf algebraic head and its field
+;; topology, while erasing the identity of nullary constructors and literals.
+;; Register names, enum operations, atoms, and constants may therefore vary;
+;; unrelated instruction/list shapes never enter the quadratic anti-unifier.
+;; The optional all-pairs mode retains the broader structural experiment.
+(fn tm_orbit_exprs ((as (List Expr)) (bs (List Expr))) Bool
+  (measure (struct as))
+  (match as
+    (Nil
+      (match bs
+        (Nil True)
+        (_ False)))
+    ((Cons a rest)
+     (match bs
+       (Nil False)
+       ((Cons b rest2)
+        (if (tm_orbit_expr a b) (tm_orbit_exprs rest rest2) False))))))
+
+(fn tm_orbit_expr ((a Expr) (b Expr)) Bool
+  (measure (struct a))
+  (match a
+    ((Ctor q args)
+     (match b
+       ((Ctor q2 args2)
+        (match args
+          (Nil
+            (match args2
+              (Nil True)
+              (_ False)))
+          ((Cons _ _) (if (qname_eq q q2) (tm_orbit_exprs args args2) False))))
+       (_ False)))
+    ((Call q args)
+     (match b
+       ((Call q2 args2)
+        (match args
+          (Nil
+            (match args2
+              (Nil True)
+              (_ False)))
+          ((Cons _ _) (if (qname_eq q q2) (tm_orbit_exprs args args2) False))))
+       (_ False)))
+    ((If ac at af)
+     (match b
+       ((If bc bt bf)
+        (if (tm_orbit_expr ac bc)
+          (if (tm_orbit_expr at bt) (tm_orbit_expr af bf) False)
+          False))
+       (_ False)))
+    ((IntLit _)
+     (match b
+       ((IntLit _) True)
+       (_ False)))
+    ((SymLit _)
+     (match b
+       ((SymLit _) True)
+       (_ False)))
+    (_ (expr_eq a b))))
+
+(fn tm_orbit_equation ((a AuEquation) (b AuEquation)) Bool
+  (if (tm_orbit_expr (au_lhs a) (au_lhs b))
+    (tm_orbit_expr (au_rhs a) (au_rhs b))
+    False))
+
+(fn tm_expr_append ((xs (List Expr)) (ys (List Expr))) (List Expr)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons x rest) (Cons x (tm_expr_append rest ys)))))
+
+(fn tm_orbit_leaves_many ((es (List Expr))) (List Expr)
+  (measure (struct es))
+  (match es
+    (Nil Nil)
+    ((Cons e rest)
+     (tm_expr_append (tm_orbit_leaves e) (tm_orbit_leaves_many rest)))))
+
+(fn tm_orbit_leaves ((e Expr)) (List Expr)
+  (measure (struct e))
+  (match e
+    ((Ctor _ args)
+     (match args
+       (Nil (Cons e Nil))
+       ((Cons _ _) (tm_orbit_leaves_many args))))
+    ((Call _ args)
+     (match args
+       (Nil (Cons e Nil))
+       ((Cons _ _) (tm_orbit_leaves_many args))))
+    ((If c t f)
+     (tm_expr_append
+       (tm_orbit_leaves c)
+       (tm_expr_append (tm_orbit_leaves t) (tm_orbit_leaves f))))
+    ((IntLit _) (Cons e Nil))
+    ((SymLit _) (Cons e Nil))
+    (_ (Cons e Nil))))
+
+(fn tm_equation_leaves ((eq AuEquation)) (List Expr)
+  (tm_expr_append (tm_orbit_leaves (au_lhs eq)) (tm_orbit_leaves (au_rhs eq))))
+
+(fn tm_same_leaf_row ((x Expr) (xs (List Expr)) (y Expr) (ys (List Expr))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil
+      (match ys
+        (Nil True)
+        (_ False)))
+    ((Cons a rest)
+     (match ys
+       (Nil False)
+       ((Cons b rest2)
+        (if (expr_eq x a)
+          (if (expr_eq y b) (tm_same_leaf_row x rest y rest2) False)
+        (if (expr_eq y b) False
+        (tm_same_leaf_row x rest y rest2))))))))
+
+;; Two leaf vectors occupy the same gauge orbit exactly when they induce the
+;; same equality partition.  Concrete leaf identities may all be renamed, but
+;; repeated roles and distinct roles cannot collapse into one another.
+(fn tm_same_leaf_partition ((xs (List Expr)) (ys (List Expr))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil
+      (match ys
+        (Nil True)
+        (_ False)))
+    ((Cons x rest)
+     (match ys
+       (Nil False)
+       ((Cons y rest2)
+        (if (tm_same_leaf_row x rest y rest2)
+          (tm_same_leaf_partition rest rest2)
+          False))))))
+
+(fn tm_same_gauge_orbit ((a AuEquation) (b AuEquation)) Bool
+  (if (tm_orbit_equation a b)
+    (tm_same_leaf_partition (tm_equation_leaves a) (tm_equation_leaves b))
+    False))
+
+(fn tm_pair_allowed ((mode TmPairMode) (a TmEdge) (b TmEdge)) Bool
+  (match mode
+    ((TmAllPairs) True)
+    ((TmOrbitPairs)
+     (tm_orbit_equation (tm_edge_equation a) (tm_edge_equation b)))
+    ((TmGaugePairs)
+     (tm_same_gauge_orbit (tm_edge_equation a) (tm_edge_equation b)))))
+
+;; ---- whole-orbit abstraction ----------------------------------------------
+;;
+;; Pairwise anti-unification can leave a role concrete merely because the two
+;; chosen supports happen to use the same leaf there.  Gauge mode instead
+;; collects the full equivalence class, marks every aligned leaf position that
+;; varies anywhere in that class, and abstracts those roles simultaneously.
+;; Singleton leaves in the scoped corpus (for example its only opcode) remain
+;; concrete.  This is the scope-driven, maximally varying orbit schema.
+
+(type TmGaugeOrbit (TmGaugeOrbit (List TmEdge)))
+
+(fn tm_gauge_insert ((edge TmEdge) (orbits (List TmGaugeOrbit)))
+  (List TmGaugeOrbit)
+  (measure (struct orbits))
+  (match orbits
+    (Nil (Cons (TmGaugeOrbit (Cons edge Nil)) Nil))
+    ((Cons (TmGaugeOrbit items) rest)
+     (match items
+       (Nil (Cons (TmGaugeOrbit (Cons edge Nil)) rest))
+       ((Cons representative _)
+        (if
+          (tm_same_gauge_orbit
+            (tm_edge_equation edge)
+            (tm_edge_equation representative))
+          (Cons (TmGaugeOrbit (Cons edge items)) rest)
+          (Cons (TmGaugeOrbit items) (tm_gauge_insert edge rest))))))))
+
+(fn tm_gauge_orbits ((edges (List TmEdge)) (orbits (List TmGaugeOrbit)))
+  (List TmGaugeOrbit)
   (measure (struct edges))
   (match edges
-    (Nil proposals)
+    (Nil orbits)
+    ((Cons edge rest) (tm_gauge_orbits rest (tm_gauge_insert edge orbits)))))
+
+(fn tm_expr_mem ((wanted Expr) (items (List Expr))) Bool
+  (measure (struct items))
+  (match items
+    (Nil False)
+    ((Cons item rest) (if (expr_eq wanted item) True (tm_expr_mem wanted rest)))))
+
+(fn tm_expr_add ((item Expr) (items (List Expr))) (List Expr)
+  (if (tm_expr_mem item items) items (Cons item items)))
+
+(fn tm_varying_row
+  ((base (List Expr)) (other (List Expr)) (varying (List Expr)))
+  (List Expr)
+  (measure (struct base))
+  (match base
+    (Nil varying)
+    ((Cons a rest)
+     (match other
+       (Nil varying)
+       ((Cons b rest2)
+        (tm_varying_row
+          rest
+          rest2
+          (if (expr_eq a b) varying (tm_expr_add a varying))))))))
+
+(fn tm_gauge_varying
+  ((base (List Expr)) (edges (List TmEdge)) (varying (List Expr)))
+  (List Expr)
+  (measure (struct edges))
+  (match edges
+    (Nil varying)
     ((Cons edge rest)
-     (tm_proposals rest members (tm_propose_row edge rest members proposals)))))
+     (tm_gauge_varying
+       base
+       rest
+       (tm_varying_row
+         base
+         (tm_equation_leaves (tm_edge_equation edge))
+         varying)))))
+
+(type TmAbsState (TmAbsState Int (List (Pair Expr Int))))
+
+(type TmAbsR (TmAbsErr (List Int)) (TmAbsOk Expr TmAbsState))
+
+(type TmAbsListR (TmAbsListErr (List Int)) (TmAbsListOk (List Expr) TmAbsState))
+
+(fn tm_abs_find ((e Expr) (items (List (Pair Expr Int)))) (Option Int)
+  (measure (struct items))
+  (match items
+    (Nil None)
+    ((Cons (Pair prior index) rest)
+     (if (expr_eq e prior) (Some index) (tm_abs_find e rest)))))
+
+(fn tm_abs_leaf ((e Expr) (varying (List Expr)) (state TmAbsState)) TmAbsR
+  (if (tm_expr_mem e varying)
+    (match state
+      ((TmAbsState next items)
+       (match (tm_abs_find e items)
+         ((Some index) (TmAbsOk (BVar index) state))
+         (None
+           (TmAbsOk
+             (BVar next)
+             (TmAbsState (+ next 1) (Cons (Pair e next) items)))))))
+    (TmAbsOk e state)))
+
+(fn tm_abs_exprs ((es (List Expr)) (varying (List Expr)) (state TmAbsState))
+  TmAbsListR
+  (measure (struct es))
+  (match es
+    (Nil (TmAbsListOk Nil state))
+    ((Cons e rest)
+     (match (tm_abs_expr e varying state)
+       ((TmAbsErr msg) (TmAbsListErr msg))
+       ((TmAbsOk item state2)
+        (match (tm_abs_exprs rest varying state2)
+          ((TmAbsListErr msg) (TmAbsListErr msg))
+          ((TmAbsListOk items state3) (TmAbsListOk (Cons item items) state3))))))))
+
+(fn tm_abs_expr ((e Expr) (varying (List Expr)) (state TmAbsState)) TmAbsR
+  (measure (struct e))
+  (match e
+    ((Ctor q args)
+     (match args
+       (Nil (tm_abs_leaf e varying state))
+       ((Cons _ _)
+        (match (tm_abs_exprs args varying state)
+          ((TmAbsListErr msg) (TmAbsErr msg))
+          ((TmAbsListOk rebuilt state2) (TmAbsOk (Ctor q rebuilt) state2))))))
+    ((Call q args)
+     (match args
+       (Nil (tm_abs_leaf e varying state))
+       ((Cons _ _)
+        (match (tm_abs_exprs args varying state)
+          ((TmAbsListErr msg) (TmAbsErr msg))
+          ((TmAbsListOk rebuilt state2) (TmAbsOk (Call q rebuilt) state2))))))
+    ((If c t f)
+     (match (tm_abs_expr c varying state)
+       ((TmAbsErr msg) (TmAbsErr msg))
+       ((TmAbsOk c2 state2)
+        (match (tm_abs_expr t varying state2)
+          ((TmAbsErr msg) (TmAbsErr msg))
+          ((TmAbsOk t2 state3)
+           (match (tm_abs_expr f varying state3)
+             ((TmAbsErr msg) (TmAbsErr msg))
+             ((TmAbsOk f2 state4) (TmAbsOk (If c2 t2 f2) state4))))))))
+    ((IntLit _) (tm_abs_leaf e varying state))
+    ((SymLit _) (tm_abs_leaf e varying state))
+    (_ (TmAbsErr "gauge abstraction requires closed algebraic expressions"))))
+
+(type TmAbsSchemaR (TmAbsSchemaErr (List Int)) (TmAbsSchemaOk AuSchema))
+
+(fn tm_abs_equation ((eq AuEquation) (varying (List Expr))) TmAbsSchemaR
+  (match (tm_abs_expr (au_lhs eq) varying (TmAbsState 0 Nil))
+    ((TmAbsErr msg) (TmAbsSchemaErr msg))
+    ((TmAbsOk lhs state)
+     (match (tm_abs_expr (au_rhs eq) varying state)
+       ((TmAbsErr msg) (TmAbsSchemaErr msg))
+       ((TmAbsOk rhs (TmAbsState arity _))
+        (TmAbsSchemaOk (AuSchema (AuEquation lhs rhs) arity)))))))
+
+(fn tm_edge_equations ((edges (List TmEdge))) (List AuEquation)
+  (measure (struct edges))
+  (match edges
+    (Nil Nil)
+    ((Cons edge rest) (Cons (tm_edge_equation edge) (tm_edge_equations rest)))))
+
+(type TmGaugeSeedR (TmGaugeSeedNo) (TmGaugeSeedYes TmSeed))
+
+(fn tm_gauge_seed_build
+  ((first TmEdge) (second TmEdge) (edges (List TmEdge)) (varying (List Expr)))
+  TmGaugeSeedR
+  (match (tm_abs_equation (tm_edge_equation first) varying)
+    ((TmAbsSchemaErr _) (TmGaugeSeedNo))
+    ((TmAbsSchemaOk schema)
+     (if (tm_schema_well_formed schema)
+       (match (au_distinct_guards schema (tm_edge_equations edges))
+         ((AuDistinctErr _) (TmGaugeSeedNo))
+         ((AuDistinctOk guards)
+          (TmGaugeSeedYes
+            (TmSeed
+              schema
+              guards
+              (tm_edge_equation first)
+              (tm_edge_equation second)
+              (tm_edge_rank first)
+              (tm_edge_rank second)))))
+       (TmGaugeSeedNo)))))
+
+(fn tm_gauge_seed ((orbit TmGaugeOrbit)) TmGaugeSeedR
+  (match orbit
+    ((TmGaugeOrbit edges)
+     (match edges
+       ((Cons first (Cons second _))
+        (let ((base (tm_equation_leaves (tm_edge_equation first))))
+          (let ((varying (tm_gauge_varying base edges Nil)))
+            (match varying
+              (Nil (TmGaugeSeedNo))
+              ((Cons _ _) (tm_gauge_seed_build first second edges varying))))))
+       (_ (TmGaugeSeedNo))))))
+
+(fn tm_gauge_seeds ((orbits (List TmGaugeOrbit)) (seeds (List TmSeed)))
+  (List TmSeed)
+  (measure (struct orbits))
+  (match orbits
+    (Nil seeds)
+    ((Cons orbit rest)
+     (match (tm_gauge_seed orbit)
+       ((TmGaugeSeedNo) (tm_gauge_seeds rest seeds))
+       ((TmGaugeSeedYes seed) (tm_gauge_seeds rest (tm_seed_insert seed seeds)))))))
+
+(fn tm_seed_eq ((a TmSeed) (b TmSeed)) Bool
+  (match a
+    ((TmSeed (AuSchema (AuEquation al ar) aa) ag _ _ _ _)
+     (match b
+       ((TmSeed (AuSchema (AuEquation bl br) ba) bg _ _ _ _)
+        (if (int_eq aa ba)
+          (if (expr_eq al bl)
+            (if (expr_eq ar br) (tm_distinct_list_eq ag bg) False)
+            False)
+          False))))))
+
+(fn tm_seed_mem ((seed TmSeed) (items (List TmSeed))) Bool
+  (measure (struct items))
+  (match items
+    (Nil False)
+    ((Cons prior rest)
+     (if (tm_seed_eq seed prior) True (tm_seed_mem seed rest)))))
+
+(fn tm_seed_insert ((seed TmSeed) (items (List TmSeed))) (List TmSeed)
+  (if (tm_seed_mem seed items) items (Cons seed items)))
+
+(fn tm_seed_pair ((mode TmPairMode) (a TmEdge) (b TmEdge) (seeds (List TmSeed)))
+  (List TmSeed)
+  (if (tm_pair_allowed mode a b)
+    (match (au_equations (tm_edge_equation a) (tm_edge_equation b))
+      ((AuSchemaErr _) seeds)
+      ((AuSchemaOk schema)
+       (if (tm_schema_well_formed schema)
+         (match
+           (au_distinct_guards
+             schema
+             (list (tm_edge_equation a) (tm_edge_equation b)))
+           ((AuDistinctErr _) seeds)
+           ((AuDistinctOk guards)
+            (tm_seed_insert
+              (TmSeed
+                schema
+                guards
+                (tm_edge_equation a)
+                (tm_edge_equation b)
+                (tm_edge_rank a)
+                (tm_edge_rank b))
+              seeds)))
+         seeds)))
+    seeds))
+
+(fn tm_seed_row
+  ((mode TmPairMode) (a TmEdge) (rest (List TmEdge)) (seeds (List TmSeed)))
+  (List TmSeed)
+  (measure (struct rest))
+  (match rest
+    (Nil seeds)
+    ((Cons b more) (tm_seed_row mode a more (tm_seed_pair mode a b seeds)))))
+
+(fn tm_seeds ((mode TmPairMode) (edges (List TmEdge)) (seeds (List TmSeed)))
+  (List TmSeed)
+  (measure (struct edges))
+  (match edges
+    (Nil seeds)
+    ((Cons edge rest) (tm_seeds mode rest (tm_seed_row mode edge rest seeds)))))
+
+(fn tm_mined_seeds ((mode TmPairMode) (edges (List TmEdge))) (List TmSeed)
+  (match mode
+    ((TmGaugePairs) (tm_gauge_seeds (tm_gauge_orbits edges Nil) Nil))
+    (_ (tm_seeds mode edges Nil))))
+
+(fn tm_seed_count ((seeds (List TmSeed))) Int
+  (measure (struct seeds))
+  (match seeds
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (tm_seed_count rest)))))
+
+(fn tm_pair_mode_name ((mode TmPairMode)) (List Int)
+  (match mode
+    ((TmGaugePairs) "gauge-orbit")
+    ((TmOrbitPairs) "orbit-skeleton")
+    ((TmAllPairs) "all-pairs")))
+
+(fn tm_validate_seed
+  ((m Module)
+   (seed TmSeed)
+   (members (List TmMember))
+   (proposals (List TmProposal)))
+  (List TmProposal)
+  (match seed
+    ((TmSeed schema guards left right a b)
+     (match schema
+       ((AuSchema (AuEquation lhs rhs) _)
+        (match (tm_validate_schema lhs rhs guards members members 0)
+          ((TmValidateBad) proposals)
+          ((TmValidateOk support)
+           (if (lt 1 support)
+             (match (au_type_schema m schema left right)
+               ((AuTypedSchemaErr _) proposals)
+               ((AuTypedSchemaOk typed)
+                (if (tm_typed_schema_well_formed typed)
+                  (tm_proposal_insert
+                    (TmProposal typed guards support a b)
+                    proposals)
+                  proposals)))
+             proposals))))))))
+
+(fn tm_validate_seeds
+  ((m Module)
+   (seeds (List TmSeed))
+   (members (List TmMember))
+   (proposals (List TmProposal)))
+  (List TmProposal)
+  (measure (struct seeds))
+  (match seeds
+    (Nil proposals)
+    ((Cons seed rest)
+     (tm_validate_seeds
+       m
+       rest
+       members
+       (tm_validate_seed m seed members proposals)))))
+
+(fn tm_proposal_count ((proposals (List TmProposal))) Int
+  (measure (struct proposals))
+  (match proposals
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (tm_proposal_count rest)))))
 
 (fn tm_meta_name ((arity Int) (index Int)) (List Int)
   (append_int "x" (show_int (- (- arity 1) index))))
@@ -452,13 +951,29 @@
     ((Cons (AuDistinct a b) rest)
      (tm_cat
        (list
-         " " (tm_meta_name arity a) " != " (tm_meta_name arity b)
+         " "
+         (tm_meta_name arity a)
+         " != "
+         (tm_meta_name arity b)
          (tm_distinct_lines arity rest))))))
 
 (fn tm_has_guards ((guards (List AuDistinct))) Bool
   (match guards
     (Nil False)
     ((Cons _ _) True)))
+
+(fn tm_type_lines ((types (List Type)) (index Int)) (List Int)
+  (measure (struct types))
+  (match types
+    (Nil "")
+    ((Cons ty rest)
+     (tm_cat
+       (list
+         " x"
+         (show_int index)
+         ":"
+         (sp_bytes (sp_ty ty))
+         (tm_type_lines rest (+ index 1)))))))
 
 (fn tm_proposal_lines
   ((remaining Int)
@@ -469,7 +984,13 @@
   (if (le remaining 0) Nil
   (match proposals
     (Nil Nil)
-    ((Cons (TmProposal (AuSchema (AuEquation lhs rhs) arity) guards support a b)
+    ((Cons
+       (TmProposal
+         (AuTypedSchema (AuSchema (AuEquation lhs rhs) arity) types)
+         guards
+         support
+         a
+         b)
        rest)
      (match (sp_e table arity lhs)
        ((SpRErr _) (tm_proposal_lines remaining table rest))
@@ -479,11 +1000,26 @@
           ((SpROk rdoc)
            (tm_cat
              (list
-               "  REMOVES " (show_int support)
-               " ARITY " (show_int arity)
-               " SEEDS " (show_int a) "," (show_int b) "\n"
-               "    " (sp_bytes ldoc) "\n"
-               "    => " (sp_bytes rdoc) "\n"
+               "  REMOVES "
+               (show_int support)
+               " GAIN "
+               (show_int (* support (- (tm_expr_size lhs) (tm_expr_size rhs))))
+               " ARITY "
+               (show_int arity)
+               " SEEDS "
+               (show_int a)
+               ","
+               (show_int b)
+               "\n"
+               "    TYPES"
+               (tm_type_lines types 0)
+               "\n"
+               "    "
+               (sp_bytes ldoc)
+               "\n"
+               "    => "
+               (sp_bytes rdoc)
+               "\n"
                (if (tm_has_guards guards)
                  (tm_cat
                    (list
@@ -507,14 +1043,22 @@
        ((SkEErr msg)
         (tm_cat
           (list
-            "    RANK " (show_int rank) " <unrank-error " msg ">\n"
+            "    RANK "
+            (show_int rank)
+            " <unrank-error "
+            msg
+            ">\n"
             (tm_sample_lines table root grammar rest))))
        ((SkEOk candidate)
         (match (sp_e table 0 candidate)
           ((SpRErr msg)
            (tm_cat
              (list
-               "    RANK " (show_int rank) " <spell-error " msg ">\n"
+               "    RANK "
+               (show_int rank)
+               " <spell-error "
+               msg
+               ">\n"
                (tm_sample_lines table root grammar rest))))
           ((SpROk doc)
            (tm_cat
@@ -552,6 +1096,8 @@
 
 (fn tm_report
   ((path (List Int))
+   (mode TmPairMode)
+   (m Module)
    (table (List (Pair QName Symbol)))
    (root Expr)
    (grammar Grammar)
@@ -563,27 +1109,44 @@
   (List Int)
   (match (tm_stats (kc_buckets census) 0 0 0)
     ((TmStats collided excess maximum)
-     (let
-       ((edges (tm_edges (kc_buckets census) members)))
-       (let ((proposals (tm_proposals edges members Nil)))
-         (tm_cat
-           (list
-             "TRANSITION-CENSUS " path "\n"
-             "TOTAL " (show_int total)
-             " ACCEPTED " (show_int accepted)
-             " REJECTED " (show_int rejected)
-             " BEHAVIORS " (show_int (kc_bucket_count census))
-             " COLLIDED-BUCKETS " (show_int collided)
-             " EXCESS " (show_int excess)
-             " MAX-BUCKET " (show_int maximum)
-             "\nTOP COLLISIONS\n"
-             (tm_bucket_lines 8 table root grammar (kc_ranked census))
-             "MINED BASIS (complete-census replay)\n"
-             (tm_proposal_lines 8 table proposals)
-             "EXACT KEYS; MINED SCHEMAS ARE PROPOSALS, NOT LICENSES\n")))))))
+     (let ((edges (tm_edges (kc_buckets census) members)))
+       (let ((seeds (tm_mined_seeds mode edges)))
+         (let ((proposals (tm_validate_seeds m seeds members Nil)))
+           (tm_cat
+             (list
+               "TRANSITION-CENSUS "
+               path
+               "\n"
+               "PAIR-MODE "
+               (tm_pair_mode_name mode)
+               "\n"
+               "TOTAL "
+               (show_int total)
+               " ACCEPTED "
+               (show_int accepted)
+               " REJECTED "
+               (show_int rejected)
+               " BEHAVIORS "
+               (show_int (kc_bucket_count census))
+               " COLLIDED-BUCKETS "
+               (show_int collided)
+               " EXCESS "
+               (show_int excess)
+               " MAX-BUCKET "
+               (show_int maximum)
+               " UNIQUE-SCHEMAS "
+               (show_int (tm_seed_count seeds))
+               " VALIDATED-PROPOSALS "
+               (show_int (tm_proposal_count proposals))
+               "\nTOP COLLISIONS\n"
+               (tm_bucket_lines 8 table root grammar (kc_ranked census))
+               "MINED BASIS (complete-census replay)\n"
+               (tm_proposal_lines 8 table proposals)
+               "EXACT KEYS; MINED SCHEMAS ARE PROPOSALS, NOT LICENSES\n"))))))))
 
 (fn tm_space
   ((path (List Int))
+   (mode TmPairMode)
    (m Module)
    (want Type)
    (ctx InvokeCtx)
@@ -593,23 +1156,38 @@
    (w World))
   World
   (match (te_make_space m want scope cfg)
-    ((TeSpaceErr msg) (exit 1 (write (append_int "TRANSITION-MINE FAIL " msg) w)))
+    ((TeSpaceErr msg)
+     (exit 1 (write (append_int "TRANSITION-MINE FAIL " msg) w)))
     ((TeSpaceOk (TeSpace table _ root grammar _))
      (match (sk_count root grammar)
-       ((SkCErr msg) (exit 1 (write (append_int "TRANSITION-MINE FAIL " msg) w)))
+       ((SkCErr msg)
+        (exit 1 (write (append_int "TRANSITION-MINE FAIL " msg) w)))
        ((SkCOk total)
         (match
-          (tm_sweep total total root grammar m want ctx probe (kc_empty) 0 0 Nil)
+          (tm_sweep
+            total
+            total
+            root
+            grammar
+            m
+            want
+            ctx
+            probe
+            (kc_empty)
+            0
+            0
+            Nil)
           ((TmSweepErr msg)
            (exit 1 (write (append_int "TRANSITION-MINE FAIL " msg) w)))
           ((TmSweepOk census accepted rejected members)
            (write
-             (tm_report
-               path table root grammar total accepted rejected census members)
+             (tm_report path mode m table root grammar total accepted rejected
+               census members)
              w))))))))
 
 (fn tm_ready
-  ((path (List Int)) (src (List Int)) (m Module) (w World)) World
+  ((path (List Int)) (mode TmPairMode) (src (List Int)) (m Module) (w World))
+  World
   (let ((ctx (prepare_invoke m)))
     (match (te_protocol m)
       ((TeSigErr msg)
@@ -623,27 +1201,51 @@
            ((TeCfgErr msg)
             (exit 1 (write (append_int "TRANSITION-MINE FAIL config: " msg) w)))
            ((TeCfgOk cfg)
-            (tm_space path m want ctx probe (te_import_ctx m path src) cfg w)))
+            (tm_space
+              path
+              mode
+              m
+              want
+              ctx
+              probe
+              (te_import_ctx m path src)
+              cfg
+              w)))
          (exit
            1
            (write
              "TRANSITION-MINE FAIL search_probe observation must be List Int\n"
              w)))))))
 
+(fn tm_bytes_eq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        (_ False)))
+    ((Cons x rest)
+     (match b
+       (Nil False)
+       ((Cons y rest2) (if (int_eq x y) (tm_bytes_eq rest rest2) False))))))
+
+(fn tm_main_path ((path (List Int)) (mode TmPairMode) (w World)) World
+  (match (load_run_module path w)
+    ((Pair None w2)
+     (exit 1 (write "TRANSITION-MINE FAIL task module load\n" w2)))
+    ((Pair (Some m) w2)
+     (match (read_file path w2)
+       ((Pair None w3)
+        (exit 1 (write "TRANSITION-MINE FAIL task source read\n" w3)))
+       ((Pair (Some src) w3) (tm_ready path mode src m w3))))))
+
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
      (match args
-       ((Cons path Nil)
-        (match (load_run_module path w1)
-          ((Pair None w2)
-           (exit 1 (write "TRANSITION-MINE FAIL task module load\n" w2)))
-          ((Pair (Some m) w2)
-           (match (read_file path w2)
-             ((Pair None w3)
-              (exit 1 (write "TRANSITION-MINE FAIL task source read\n" w3)))
-             ((Pair (Some src) w3) (tm_ready path src m w3))))))
-       (_
-        (exit
-          2
-          (write "usage: transition_mine TASK.shard\n" w1)))))))
+       ((Cons path Nil) (tm_main_path path (TmGaugePairs) w1))
+       ((Cons path (Cons mode Nil))
+        (if (tm_bytes_eq mode "orbit") (tm_main_path path (TmOrbitPairs) w1)
+        (if (tm_bytes_eq mode "all") (tm_main_path path (TmAllPairs) w1)
+        (exit 2 (write "usage: transition_mine TASK.shard [orbit|all]\n" w1)))))
+       (_ (exit 2 (write "usage: transition_mine TASK.shard [orbit|all]\n" w1)))))))

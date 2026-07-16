@@ -8,31 +8,72 @@
 (import "../../kernel/term.shard")
 (import "../../kernel/loader.shard")
 (import "../../meta/antiunify")
+(import "../../meta/antiunify/typed.shard")
+(import "../../meta/invoke")
 (use (:: kernel term *))
 (use (:: kernel loader World))
 (use (:: kernel loader write))
 (use (:: kernel loader exit))
+(use (:: kernel module Type))
+(use (:: kernel module TCon))
+(use (:: kernel module type_eq))
 (use (:: meta antiunify *))
+(use (:: meta antiunify typed *))
+(use (:: meta invoke load_run_module))
 
 (fn aup_atom ((name Symbol)) Expr (Ctor (qn name) Nil))
 
-(fn aup_f ((a Expr) (b Expr)) Expr
-  (Ctor (qn (quote F)) (list a b)))
+(fn aup_f ((a Expr) (b Expr)) Expr (Ctor (qn (quote F)) (list a b)))
 
-(fn aup_g ((a Expr)) Expr
-  (Ctor (qn (quote G)) (list a)))
+(fn aup_g ((a Expr)) Expr (Ctor (qn (quote G)) (list a)))
 
 (fn aup_fail ((msg (List Int)) (w World)) World
   (exit 1 (write (append_int "ANTIUNIFY-PROBE FAIL " msg) w)))
 
+(fn aup_fixture_q ((name Symbol)) QName
+  (QName
+    (list
+      (quote tools)
+      (quote search)
+      (quote tasks)
+      (quote antiunify_typed_fixture))
+    name))
+
+(fn aup_fixture_ctor ((name Symbol) (args (List Expr))) Expr
+  (Ctor (aup_fixture_q name) args))
+
+(fn aup_typed ((w World)) World
+  (match (load_run_module "tools/search/tasks/antiunify_typed_fixture.shard" w)
+    ((Pair None w2) (aup_fail "typed fixture did not load\n" w2))
+    ((Pair (Some m) w2)
+     (let
+       ((a (aup_fixture_ctor (quote AupA) Nil))
+        (b (aup_fixture_ctor (quote AupB) Nil)))
+       (let
+         ((one
+            (AuEquation
+              (aup_fixture_ctor (quote AupPair) (list a a))
+              (aup_fixture_ctor (quote AupOne) (list a))))
+          (two
+            (AuEquation
+              (aup_fixture_ctor (quote AupPair) (list b b))
+              (aup_fixture_ctor (quote AupOne) (list b)))))
+         (match (au_typed_equations m one two)
+           ((AuTypedSchemaErr msg) (aup_fail msg w2))
+           ((AuTypedSchemaOk (AuTypedSchema schema types))
+            (if (int_eq (au_schema_arity schema) 1)
+              (match types
+                ((Cons ty Nil)
+                 (if (type_eq ty (TCon (aup_fixture_q (quote AupAtom)) Nil))
+                   (write "ANTIUNIFY-PROBE OK\n" w2)
+                   (aup_fail "typed role has the wrong type\n" w2)))
+                (_ (aup_fail "typed role list has the wrong arity\n" w2)))
+              (aup_fail "typed schema has the wrong arity\n" w2)))))))))
+
 (fn aup_guard ((w World)) World
   (let
-    ((a (aup_atom (quote A)))
-     (b (aup_atom (quote B)))
-     (z (aup_atom (quote Z))))
-    (let
-      ((one (AuEquation (aup_f a b) z))
-       (two (AuEquation (aup_f b a) z)))
+    ((a (aup_atom (quote A))) (b (aup_atom (quote B))) (z (aup_atom (quote Z))))
+    (let ((one (AuEquation (aup_f a b) z)) (two (AuEquation (aup_f b a) z)))
       (match (au_equations one two)
         ((AuSchemaErr msg) (aup_fail msg w))
         ((AuSchemaOk schema)
@@ -40,14 +81,11 @@
            ((AuDistinctErr msg) (aup_fail msg w))
            ((AuDistinctOk guards)
             (match guards
-              ((Cons (AuDistinct 0 1) Nil)
-               (write "ANTIUNIFY-PROBE OK\n" w))
+              ((Cons (AuDistinct 0 1) Nil) (aup_typed w))
               (_ (aup_fail "missing exact separated-role guard\n" w))))))))))
 
 (fn aup_shared ((w World)) World
-  (let
-    ((a (aup_atom (quote A)))
-     (b (aup_atom (quote B))))
+  (let ((a (aup_atom (quote A))) (b (aup_atom (quote B))))
     (match
       (au_equations
         (AuEquation (aup_f a a) (aup_g a))
@@ -56,9 +94,8 @@
       ((AuSchemaOk (AuSchema (AuEquation lhs rhs) arity))
        (if (int_eq arity 1)
          (if (expr_eq lhs (aup_f (BVar 0) (BVar 0)))
-           (if (expr_eq rhs (aup_g (BVar 0)))
-             (aup_guard w)
-             (aup_fail "rhs correlation was not retained\n" w))
+           (if (expr_eq rhs (aup_g (BVar 0))) (aup_guard w)
+           (aup_fail "rhs correlation was not retained\n" w))
            (aup_fail "lhs correlation was not retained\n" w))
          (aup_fail "shared mismatch did not produce arity one\n" w))))))
 

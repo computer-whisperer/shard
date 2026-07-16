@@ -2421,7 +2421,9 @@ The first imperative/ISA mining rung now uses the same reflected task boundary
 rather than an instruction-specific engine.  `transition_mine.shard` consumes
 an ordinary `typed_expr` scope whose observation is an exact `List Int` key,
 checks and ranks every grammar member, retains the complete accepted corpus,
-and orients each collided behavior toward its least structural-cost member.
+and orients strict reductions toward every least structural-cost member of a
+collided behavior.  Keeping the complete minimum-cost set avoids introducing
+an arbitrary rank-based gauge choice before schema mining.
 The initial x86 adapter supplies every zero-to-two-instruction register XOR
 sequence over three scoped registers—91 programs, with no x86 name in the
 miner:
@@ -2435,12 +2437,15 @@ mismatch table shared across both sides.  Repeated roles therefore remain one
 nonlinear metavariable even when the correlation crosses the equation.  It
 also reports variable pairs that differ in every concrete support as
 *empirical guard proposals*.  Those guards carry no proof authority.
+The opt-in `meta/antiunify/typed.shard` companion recovers the type of every
+generalized role with the kernel type synthesizer, in theorem-binder order;
+ambiguous or inconsistent role types are refused.
 
-The transition miner anti-unifies pairs of concrete collision edges, rejects
-malformed or non-decreasing orientations, and replays each candidate schema
-against the complete shallow grammar.  Every matching LHS must have a
+The initial transition miner anti-unified pairs of concrete collision edges,
+rejected malformed or non-decreasing orientations, and replayed each candidate
+schema against the complete shallow grammar.  Every matching LHS had to have a
 representable RHS with the same exact behavior key.  The top contracted basis
-contains stronger versions of the motivating double-self-XOR example:
+contained stronger versions of the motivating double-self-XOR example:
 
     xor d,s ; xor d,d  ->  xor d,d       removes 9 / 91
     xor d,d ; xor e,d  ->  xor d,d       removes 9 / 91
@@ -2485,6 +2490,56 @@ double-self-XOR programs.
 The 91-program figures above record the initial depth-4/two-instruction mining
 configuration.  The task has since grown to the depth-5 experiment described
 below; the earlier tables remain the baseline that produced the proposal.
+
+#### Whole gauge-orbit contraction
+
+The depth-5 space makes pairwise proposal construction an algorithmic problem,
+not a Shard-versus-native constant factor.  Its proof-free mining adapter has
+the same scope, observer, and four register files as the checked task, without
+loading the peephole proof closure:
+
+    TOTAL 820; BEHAVIORS 182; COLLIDED-BUCKETS 146
+    EXCESS 638; MAX-BUCKET 37
+
+The default miner now treats a *gauge orbit* as two simultaneous invariants:
+
+* identical non-leaf constructor/call topology; and
+* the same equality partition among aligned leaves.
+
+Register, immediate, enum, and other leaf identities may be renamed, but a
+repeated role cannot silently split and two distinct roles cannot collapse.
+Edges are partitioned by that relation before generalization.  For each whole
+orbit the miner marks every aligned leaf position which varies in any support,
+abstracts all correlated varying roles at once, and retains singleton scoped
+leaves as constants.  Thus the sole allowed `XXor` remains concrete while all
+register roles seen under renaming become typed `Reg` metavariables.  Guards
+are inferred from the complete orbit, not a lucky pair.
+
+This fixes two sources of artificial gauge choice.  Every minimum-cost bucket
+representative contributes strict size-decreasing edges, and whole-orbit
+abstraction cannot leave `RAX` or `RSI` pinned merely because two selected
+supports happened to agree there.  Complete-census replay and type recovery
+then run once per unique schema.  On the 820-program rung:
+
+    pairwise gauge seeds:       595 partially pinned schemas
+    whole-orbit abstraction:    111 unique schemas
+    complete replay accepted:   111 / 111 proposals
+
+The highest-ranked low-complexity result is the motivating family itself,
+with no instruction-specific template in the miner:
+
+    [xor d,s; xor d,s] -> []
+    d : Reg; s : Reg; guard d != s
+    removes 6 corpus members; structural gain 72
+
+The ranking uses total removed structure, then support, then shorter theorem
+LHS.  Longer three-instruction cancellations and reorderings remain in the
+same 111-proposal worklist rather than displacing the simplest proof target.
+`transition_mine TASK` uses whole gauge orbits; `TASK orbit` retains the
+topology-only pair experiment, and `TASK all` retains exhaustive cross-shape
+pairing.  The latter modes are conjecture-expansion tools, not the scalable
+default.  None of the 111 replayed schemas is a search license until a checked
+theorem authenticates it.
 
 #### Checked structural-spine closure
 

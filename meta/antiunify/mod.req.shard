@@ -19,38 +19,44 @@
 ;;; whose matched values differ in every support.  A consumer may use those
 ;;; pairs to propose conditional theorems or to replay a finite census, but
 ;;; must not install them as proof licenses.
+;;;
+;;; The optional `meta/antiunify/typed.shard` companion recovers the type of
+;;; every generalized role from checked concrete equations.  Keeping the
+;;; kernel type synthesizer out of this small interface lets purely syntactic
+;;; census clients retain the lightweight dependency boundary.
 
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
 (import "../rewrite")
 (use (:: kernel term *))
+(use (:: kernel module Type))
 (use (:: meta rewrite *))
 
 (type AuEquation (AuEquation Expr Expr))
 
 (type AuSchema (AuSchema AuEquation Int))  ; generalized equation, arity
 
-(type AuSchemaR
-  (AuSchemaErr (List Int))
-  (AuSchemaOk AuSchema))
+(type AuTypedSchema (AuTypedSchema AuSchema (List Type)))
+; generalized schema, parameter types in binder-introduction order
+
+(type AuSchemaR (AuSchemaErr (List Int)) (AuSchemaOk AuSchema))
+
+(type AuTypedSchemaR
+  (AuTypedSchemaErr (List Int))
+  (AuTypedSchemaOk AuTypedSchema))
 
 (type AuDistinct (AuDistinct Int Int))
 
-(type AuDistinctR
-  (AuDistinctErr (List Int))
-  (AuDistinctOk (List AuDistinct)))
+(type AuDistinctR (AuDistinctErr (List Int)) (AuDistinctOk (List AuDistinct)))
 
 (type AuMismatch (AuMismatch Expr Expr Int))
 
 (type AuState (AuState Int (List AuMismatch)))
 
-(type AuExprR
-  (AuExprErr (List Int))
-  (AuExprOk Expr AuState))
+(type AuExprR (AuExprErr (List Int)) (AuExprOk Expr AuState))
 
-(type AuExprsR
-  (AuExprsErr (List Int))
-  (AuExprsOk (List Expr) AuState))
+(type AuExprsR (AuExprsErr (List Int)) (AuExprsOk (List Expr) AuState))
 
 (fn au_lhs ((eq AuEquation)) Expr
   (match eq
@@ -68,12 +74,19 @@
   (match schema
     ((AuSchema _ arity) arity)))
 
+(fn au_typed_schema ((schema AuTypedSchema)) AuSchema
+  (match schema
+    ((AuTypedSchema untyped _) untyped)))
+
+(fn au_typed_types ((schema AuTypedSchema)) (List Type)
+  (match schema
+    ((AuTypedSchema _ types) types)))
+
 (fn au_closed_list ((es (List Expr))) Bool
   (measure (struct es))
   (match es
     (Nil True)
-    ((Cons e rest)
-     (if (au_closed e) (au_closed_list rest) False))))
+    ((Cons e rest) (if (au_closed e) (au_closed_list rest) False))))
 
 (fn au_closed ((e Expr)) Bool
   (measure (struct e))
@@ -82,8 +95,7 @@
     ((BVar _) False)
     ((Ctor _ args) (au_closed_list args))
     ((Call _ args) (au_closed_list args))
-    ((If c t f)
-     (if (au_closed c) (if (au_closed t) (au_closed f) False) False))
+    ((If c t f) (if (au_closed c) (if (au_closed t) (au_closed f) False) False))
     ((Match _ _) False)
     ((Let _ _) False)
     ((IntLit _) True)
@@ -106,9 +118,8 @@
   (match items
     (Nil None)
     ((Cons (AuMismatch x y k) rest)
-     (if (expr_eq a x)
-       (if (expr_eq b y) (Some k) (au_mismatch_find a b rest))
-       (au_mismatch_find a b rest)))))
+     (if (expr_eq a x) (if (expr_eq b y) (Some k) (au_mismatch_find a b rest))
+     (au_mismatch_find a b rest)))))
 
 (fn au_mismatch ((a Expr) (b Expr) (st AuState)) AuExprR
   (match st
@@ -120,9 +131,7 @@
            (BVar next)
            (AuState (+ next 1) (Cons (AuMismatch a b next) items))))))))
 
-(fn au_exprs
-  ((as (List Expr)) (bs (List Expr)) (st AuState))
-  AuExprsR
+(fn au_exprs ((as (List Expr)) (bs (List Expr)) (st AuState)) AuExprsR
   (measure (struct as))
   (match as
     (Nil
@@ -138,8 +147,7 @@
           ((AuExprOk item st2)
            (match (au_exprs rest rest2 st2)
              ((AuExprsErr msg) (AuExprsErr msg))
-             ((AuExprsOk items st3)
-              (AuExprsOk (Cons item items) st3))))))))))
+             ((AuExprsOk items st3) (AuExprsOk (Cons item items) st3))))))))))
 
 (fn au_expr ((a Expr) (b Expr) (st AuState)) AuExprR
   (measure (struct a))
@@ -152,8 +160,7 @@
           (if (au_same_len args args2)
             (match (au_exprs args args2 st)
               ((AuExprsErr msg) (AuExprErr msg))
-              ((AuExprsOk generalized st2)
-               (AuExprOk (Ctor q generalized) st2)))
+              ((AuExprsOk generalized st2) (AuExprOk (Ctor q generalized) st2)))
             (au_mismatch a b st))
           (au_mismatch a b st)))
        (_ (au_mismatch a b st))))
@@ -164,8 +171,7 @@
           (if (au_same_len args args2)
             (match (au_exprs args args2 st)
               ((AuExprsErr msg) (AuExprErr msg))
-              ((AuExprsOk generalized st2)
-               (AuExprOk (Call q generalized) st2)))
+              ((AuExprsOk generalized st2) (AuExprOk (Call q generalized) st2)))
             (au_mismatch a b st))
           (au_mismatch a b st)))
        (_ (au_mismatch a b st))))
@@ -186,11 +192,7 @@
 
 ;; Simultaneous equation LGG: the RHS continues with the LHS mismatch table.
 (fn au_equations ((a AuEquation) (b AuEquation)) AuSchemaR
-  (let
-    ((al (au_lhs a))
-     (ar (au_rhs a))
-     (bl (au_lhs b))
-     (br (au_rhs b)))
+  (let ((al (au_lhs a)) (ar (au_rhs a)) (bl (au_lhs b)) (br (au_rhs b)))
     (if (au_closed al)
       (if (au_closed ar)
         (if (au_closed bl)
@@ -236,42 +238,31 @@
        ((Some av)
         (match (trs_env_get b env)
           (None False)
-          ((Some bv)
-           (if (expr_eq av bv) False (au_pair_distinct_all a b rest)))))))))
+          ((Some bv) (if (expr_eq av bv) False (au_pair_distinct_all a b rest)))))))))
 
-(fn au_distinct_row
-  ((a Int) (b Int) (remaining Int) (envs (List TrsEnv)))
+(fn au_distinct_row ((a Int) (b Int) (remaining Int) (envs (List TrsEnv)))
   (List AuDistinct)
-  (measure remaining
-    (by arith (list 1 0))
-    (by arith (list 1 1)))
+  (measure remaining (by arith (list 1 0)) (by arith (list 1 1)))
   (if (le remaining 0) Nil
   (let ((rest (au_distinct_row a (+ b 1) (- remaining 1) envs)))
-    (if (au_pair_distinct_all a b envs)
-      (Cons (AuDistinct a b) rest)
-      rest))))
+    (if (au_pair_distinct_all a b envs) (Cons (AuDistinct a b) rest) rest))))
 
-(fn au_distinct_pairs
-  ((a Int) (remaining Int) (envs (List TrsEnv)))
+(fn au_distinct_pairs ((a Int) (remaining Int) (envs (List TrsEnv)))
   (List AuDistinct)
-  (measure remaining
-    (by arith (list 1 0))
-    (by arith (list 1 1)))
+  (measure remaining (by arith (list 1 0)) (by arith (list 1 1)))
   (if (le remaining 0) Nil
   (au_distinct_append
     (au_distinct_row a (+ a 1) remaining envs)
     (au_distinct_pairs (+ a 1) (- remaining 1) envs))))
 
-(fn au_distinct_append
-  ((xs (List AuDistinct)) (ys (List AuDistinct)))
+(fn au_distinct_append ((xs (List AuDistinct)) (ys (List AuDistinct)))
   (List AuDistinct)
   (measure (struct xs))
   (match xs
     (Nil ys)
     ((Cons x rest) (Cons x (au_distinct_append rest ys)))))
 
-(fn au_distinct_guards
-  ((schema AuSchema) (concretes (List AuEquation)))
+(fn au_distinct_guards ((schema AuSchema) (concretes (List AuEquation)))
   AuDistinctR
   (match schema
     ((AuSchema eq arity)
@@ -280,5 +271,4 @@
        ((Cons _ _)
         (match (au_envs eq concretes)
           (None (AuDistinctErr "schema does not cover every support"))
-          ((Some envs)
-           (AuDistinctOk (au_distinct_pairs 0 (- arity 1) envs)))))))))
+          ((Some envs) (AuDistinctOk (au_distinct_pairs 0 (- arity 1) envs)))))))))
