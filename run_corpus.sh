@@ -315,6 +315,8 @@ TARGETS=(
   tools/search/profile_census.shard
   tools/search/rewrite_probe.shard
   tools/search/constraint_probe.shard
+  tools/search/nonlinear_constraint_probe.shard
+  tools/search/nonlinear_symbolic_probe.shard
   tools/search/constraint_superpose_probe.shard
   tools/search/typed_rule_probe.shard
   tools/search/tasks/imp_add1.shard
@@ -485,8 +487,11 @@ if [ -x bin/shard_eval ]; then
   # formation exclusions. The graduated constraint layer classifies open,
   # redex, clean, and root-scoped regions; then both search engines agree that
   # exactly one two-member subtree of the eight generic ADT candidates is
-  # theorem-redundant.
+  # theorem-redundant. Repeated-variable probes separately pin structural
+  # equality across concrete, partial-grammar, prepared, and symbolic values.
   bin/shard_eval run tools/search/constraint_probe.shard
+  bin/shard_eval run tools/search/nonlinear_constraint_probe.shard
+  bin/shard_eval run tools/search/nonlinear_symbolic_probe.shard
   bin/shard_eval run tools/search/constraint_superpose_probe.shard
   bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_observer_conjunctive.shard audit
 else
@@ -573,6 +578,7 @@ if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/context_formation_probe.shard
   bin/shard_eval run tools/search/pure_deep.shard context-probe 2 1
   bin/shard_eval run tools/search/pure_deep.shard order-probe 2 1
+  bin/shard_eval run tools/search/pure_deep.shard nonlinear-probe 2 1
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

@@ -29,10 +29,12 @@
 ;;; preserves the proof-domain distinction even while both kinds share the
 ;;; same partial-pattern machinery.
 ;;;
-;;; V1 consumes meta/rewrite's left-linear algebraic rules.  Consequently a
-;;; BVar is an unconstrained pattern metavariable and never demands a hole.
-;;; Repeated-variable/correlation constraints require an equality-aware match
-;;; environment and remain a later, explicit extension.
+;;; Left-linear rules use the prepared wildcard matcher.  A nonlinear rule is
+;;; retained as a residual constraint and uses a binding environment: its
+;;; first BVar occurrence captures a partial term and every later occurrence
+;;; asks the grammar whether the two represented terms are already equal,
+;;; unequal, or require another hole decision.  Thus correlation is preserved
+;;; without pretending it is an independent formation exclusion.
 
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/term.shard")
@@ -613,6 +615,280 @@
              more
              (ms_block_first blocked hole_id))))))))))
 
+;; ---- equality-aware nonlinear matching -----------------------------------
+;;
+;; Match facts are deliberately absent here.  A nonlinear submatch depends on
+;; bindings established by its siblings, so a cache indexed only by
+;; (pattern,hole) would be unsound.  The ordinary prepared matcher remains the
+;; fast path for left-linear rules; nonlinear rules carry this small local
+;; environment and recompute after each region split.
+
+(type MsNEnv (MsNEmpty) (MsNBind Int Expr MsNEnv))
+
+(fn msn_get ((index Int) (env MsNEnv)) (Option Expr)
+  (measure (struct env))
+  (match env
+    ((MsNEmpty) None)
+    ((MsNBind prior value rest)
+     (if (int_eq index prior) (Some value) (msn_get index rest)))))
+
+(type MsNMatch
+  (MsNMatchErr (List Int))
+  (MsNMatchNo)
+  (MsNMatchBlocked Int)
+  (MsNMatchYes MsNEnv))
+
+;; Structural equality over partial terms.  Identical hole syntax is already
+;; equal by sharing.  Distinct open holes are not guessed equal or unequal;
+;; the first one becomes the next exact partition decision.
+(fn ms_equal
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (left Expr)
+   (right Expr))
+  MsMatch
+  (measure fuel)
+  (if (lt fuel 1) (MsMatchErr "constraint equality fuel exhausted")
+  (if (expr_eq left right) (MsMatchYes)
+  (match (hole_view left)
+    ((HVBad msg) (MsMatchErr msg))
+    ((HVHole hole_id)
+     (match (ms_select grammar asg hole_id)
+       ((MsSelectErr msg) (MsMatchErr msg))
+       ((MsSelectOpen blocked _) (MsMatchBlocked blocked))
+       ((MsSelectExpr selected)
+        (ms_equal (- fuel 1) grammar asg selected right))))
+    ((HVNot)
+     (match (hole_view right)
+       ((HVBad msg) (MsMatchErr msg))
+       ((HVHole hole_id)
+        (match (ms_select grammar asg hole_id)
+          ((MsSelectErr msg) (MsMatchErr msg))
+          ((MsSelectOpen blocked _) (MsMatchBlocked blocked))
+          ((MsSelectExpr selected)
+           (ms_equal (- fuel 1) grammar asg left selected))))
+       ((HVNot)
+        (match left
+          ((FVar x)
+           (match right
+             ((FVar y) (if (sym_eq x y) (MsMatchYes) (MsMatchNo)))
+             (_ (MsMatchNo))))
+          ((BVar x)
+           (match right
+             ((BVar y) (if (int_eq x y) (MsMatchYes) (MsMatchNo)))
+             (_ (MsMatchNo))))
+          ((Ctor q args)
+           (match right
+             ((Ctor q2 args2)
+              (if (qname_eq q q2)
+                (ms_equal_list (- fuel 1) grammar asg args args2 None)
+                (MsMatchNo)))
+             (_ (MsMatchNo))))
+          ((Call q args)
+           (match right
+             ((Call q2 args2)
+              (if (qname_eq q q2)
+                (ms_equal_list (- fuel 1) grammar asg args args2 None)
+                (MsMatchNo)))
+             (_ (MsMatchNo))))
+          ((If c t e)
+           (match right
+             ((If c2 t2 e2)
+              (ms_equal_list
+                (- fuel 1) grammar asg (list c t e) (list c2 t2 e2) None))
+             (_ (MsMatchNo))))
+          ((Match scrut arms)
+           (match right
+             ((Match scrut2 arms2)
+              (match (ms_equal (- fuel 1) grammar asg scrut scrut2)
+                ((MsMatchErr msg) (MsMatchErr msg))
+                ((MsMatchNo) (MsMatchNo))
+                ((MsMatchYes)
+                 (ms_equal_arms (- fuel 1) grammar asg arms arms2 None))
+                ((MsMatchBlocked hole_id)
+                 (ms_equal_arms
+                   (- fuel 1) grammar asg arms arms2 (Some hole_id)))))
+             (_ (MsMatchNo))))
+          ((Let bindings body)
+           (match right
+             ((Let bindings2 body2)
+              (match
+                (ms_equal_list
+                  (- fuel 1) grammar asg bindings bindings2 None)
+                ((MsMatchErr msg) (MsMatchErr msg))
+                ((MsMatchNo) (MsMatchNo))
+                ((MsMatchYes)
+                 (ms_equal (- fuel 1) grammar asg body body2))
+                ((MsMatchBlocked hole_id)
+                 (match (ms_equal (- fuel 1) grammar asg body body2)
+                   ((MsMatchErr msg) (MsMatchErr msg))
+                   ((MsMatchNo) (MsMatchNo))
+                   ((MsMatchYes) (MsMatchBlocked hole_id))
+                   ((MsMatchBlocked _) (MsMatchBlocked hole_id))))))
+             (_ (MsMatchNo))))
+          ((IntLit n)
+           (match right
+             ((IntLit m) (if (int_eq n m) (MsMatchYes) (MsMatchNo)))
+             (_ (MsMatchNo))))
+          ((SymLit s)
+           (match right
+             ((SymLit t) (if (sym_eq s t) (MsMatchYes) (MsMatchNo)))
+             (_ (MsMatchNo))))))))))))
+
+(fn ms_equal_list
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (left (List Expr))
+   (right (List Expr))
+   (blocked (Option Int)))
+  MsMatch
+  (measure fuel)
+  (if (lt fuel 1) (MsMatchErr "constraint equality-list fuel exhausted")
+  (match left
+    (Nil
+     (match right
+       (Nil (ms_match_done blocked))
+       ((Cons _ _) (MsMatchNo))))
+    ((Cons x xs)
+     (match right
+       (Nil (MsMatchNo))
+       ((Cons y ys)
+        (match (ms_equal (- fuel 1) grammar asg x y)
+          ((MsMatchErr msg) (MsMatchErr msg))
+          ((MsMatchNo) (MsMatchNo))
+          ((MsMatchYes)
+           (ms_equal_list (- fuel 1) grammar asg xs ys blocked))
+          ((MsMatchBlocked hole_id)
+           (ms_equal_list
+             (- fuel 1) grammar asg xs ys
+             (ms_block_first blocked hole_id))))))))))
+
+(fn ms_equal_arms
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (left (List Arm))
+   (right (List Arm))
+   (blocked (Option Int)))
+  MsMatch
+  (measure fuel)
+  (if (lt fuel 1) (MsMatchErr "constraint arm-equality fuel exhausted")
+  (match left
+    (Nil
+     (match right
+       (Nil (ms_match_done blocked))
+       ((Cons _ _) (MsMatchNo))))
+    ((Cons (Arm pat body) rest)
+     (match right
+       (Nil (MsMatchNo))
+       ((Cons (Arm pat2 body2) more)
+        (if (pat_eq pat pat2)
+          (match (ms_equal (- fuel 1) grammar asg body body2)
+            ((MsMatchErr msg) (MsMatchErr msg))
+            ((MsMatchNo) (MsMatchNo))
+            ((MsMatchYes)
+             (ms_equal_arms (- fuel 1) grammar asg rest more blocked))
+            ((MsMatchBlocked hole_id)
+             (ms_equal_arms
+               (- fuel 1) grammar asg rest more
+               (ms_block_first blocked hole_id))))
+          (MsMatchNo))))))))
+
+(fn msn_match
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (pattern Expr)
+   (candidate Expr)
+   (env MsNEnv))
+  MsNMatch
+  (measure fuel)
+  (if (lt fuel 1) (MsNMatchErr "nonlinear constraint match fuel exhausted")
+  (match pattern
+    ((BVar index)
+     (match (msn_get index env)
+       (None (MsNMatchYes (MsNBind index candidate env)))
+       ((Some prior)
+        (match (ms_equal (- fuel 1) grammar asg prior candidate)
+          ((MsMatchErr msg) (MsNMatchErr msg))
+          ((MsMatchNo) (MsNMatchNo))
+          ((MsMatchBlocked hole_id) (MsNMatchBlocked hole_id))
+          ((MsMatchYes) (MsNMatchYes env))))))
+    (_
+     (match (hole_view candidate)
+       ((HVBad msg) (MsNMatchErr msg))
+       ((HVHole hole_id)
+        (match (ms_select grammar asg hole_id)
+          ((MsSelectErr msg) (MsNMatchErr msg))
+          ((MsSelectOpen blocked _) (MsNMatchBlocked blocked))
+          ((MsSelectExpr selected)
+           (msn_match (- fuel 1) grammar asg pattern selected env))))
+       ((HVNot)
+        (match pattern
+          ((FVar _) (MsNMatchErr "constraint pattern contains FVar"))
+          ((BVar _) (MsNMatchErr "unreachable nonlinear BVar match"))
+          ((Ctor q args)
+           (match candidate
+             ((Ctor q2 args2)
+              (if (qname_eq q q2)
+                (msn_match_list (- fuel 1) grammar asg args args2 env)
+                (MsNMatchNo)))
+             (_ (MsNMatchNo))))
+          ((Call q args)
+           (match candidate
+             ((Call q2 args2)
+              (if (qname_eq q q2)
+                (msn_match_list (- fuel 1) grammar asg args args2 env)
+                (MsNMatchNo)))
+             (_ (MsNMatchNo))))
+          ((If c t e)
+           (match candidate
+             ((If c2 t2 e2)
+              (msn_match_list
+                (- fuel 1) grammar asg (list c t e) (list c2 t2 e2) env))
+             (_ (MsNMatchNo))))
+          ((Match _ _) (MsNMatchErr "constraint pattern contains Match"))
+          ((Let _ _) (MsNMatchErr "constraint pattern contains Let"))
+          ((IntLit n)
+           (match candidate
+             ((IntLit m)
+              (if (int_eq n m) (MsNMatchYes env) (MsNMatchNo)))
+             (_ (MsNMatchNo))))
+          ((SymLit s)
+           (match candidate
+             ((SymLit t)
+              (if (sym_eq s t) (MsNMatchYes env) (MsNMatchNo)))
+             (_ (MsNMatchNo)))))))))))
+
+(fn msn_match_list
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (patterns (List Expr))
+   (candidates (List Expr))
+   (env MsNEnv))
+  MsNMatch
+  (measure fuel)
+  (if (lt fuel 1) (MsNMatchErr "nonlinear constraint list fuel exhausted")
+  (match patterns
+    (Nil
+     (match candidates
+       (Nil (MsNMatchYes env))
+       ((Cons _ _) (MsNMatchNo))))
+    ((Cons pattern rest)
+     (match candidates
+       (Nil (MsNMatchNo))
+       ((Cons candidate more)
+        (match (msn_match (- fuel 1) grammar asg pattern candidate env)
+          ((MsNMatchErr msg) (MsNMatchErr msg))
+          ((MsNMatchNo) (MsNMatchNo))
+          ((MsNMatchBlocked hole_id) (MsNMatchBlocked hole_id))
+          ((MsNMatchYes env2)
+           (msn_match_list
+             (- fuel 1) grammar asg rest more env2)))))))))
+
 ;; ---- region redex classification ------------------------------------------
 
 (type MsVerdict (MsErr (List Int)) (MsClear) (MsBlocked Int) (MsRedex QName))
@@ -671,21 +947,38 @@
         (None (MsClear))
         ((Some hole_id) (MsBlocked hole_id))))
     ((Cons rule rest)
-     (match
-       (ms_match (- fuel 1) facts grammar asg (trs_rule_lhs rule) candidate)
-       ((MsMatchErr msg) (MsErr msg))
-       ((MsMatchYes) (MsRedex (trs_rule_name rule)))
-       ((MsMatchNo)
-        (ms_rules_root (- fuel 1) facts grammar asg rest candidate blocked))
-       ((MsMatchBlocked hole_id)
-        (ms_rules_root
-          (- fuel 1)
-          facts
-          grammar
-          asg
-          rest
-          candidate
-          (ms_block_first blocked hole_id))))))))
+     (if (trs_rule_left_linear rule)
+       (match
+         (ms_match (- fuel 1) facts grammar asg (trs_rule_lhs rule) candidate)
+         ((MsMatchErr msg) (MsErr msg))
+         ((MsMatchYes) (MsRedex (trs_rule_name rule)))
+         ((MsMatchNo)
+          (ms_rules_root (- fuel 1) facts grammar asg rest candidate blocked))
+         ((MsMatchBlocked hole_id)
+          (ms_rules_root
+            (- fuel 1)
+            facts
+            grammar
+            asg
+            rest
+            candidate
+            (ms_block_first blocked hole_id))))
+       (match
+         (msn_match
+           (- fuel 1) grammar asg (trs_rule_lhs rule) candidate (MsNEmpty))
+         ((MsNMatchErr msg) (MsErr msg))
+         ((MsNMatchYes _) (MsRedex (trs_rule_name rule)))
+         ((MsNMatchNo)
+          (ms_rules_root (- fuel 1) facts grammar asg rest candidate blocked))
+         ((MsNMatchBlocked hole_id)
+          (ms_rules_root
+            (- fuel 1)
+            facts
+            grammar
+            asg
+            rest
+            candidate
+            (ms_block_first blocked hole_id)))))))))
 
 (type MsNode
   (MsNodeErr (List Int))
@@ -1028,7 +1321,9 @@
      (ms_patterns_rules
        fuel
        rest
-       (ms_patterns_expr fuel (trs_rule_lhs rule) patterns)))))
+       (if (trs_rule_left_linear rule)
+         (ms_patterns_expr fuel (trs_rule_lhs rule) patterns)
+         patterns)))))
 
 (type MsFactsR (MsFactsErr (List Int)) (MsFactsOk (List MsHoleFacts)))
 

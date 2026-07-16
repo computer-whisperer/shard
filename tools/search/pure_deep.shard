@@ -10,9 +10,11 @@
 ;;;      bin/shard_eval run tools/search/pure_deep.shard 3
 ;;;      bin/shard_eval run tools/search/pure_deep.shard context 2
 ;;;      bin/shard_eval run tools/search/pure_deep.shard order 2
+;;;      bin/shard_eval run tools/search/pure_deep.shard nonlinear 2
 ;;;      bin/shard_eval run tools/search/pure_deep.shard probe 3 5000
 ;;;      bin/shard_eval run tools/search/pure_deep.shard context-probe 3 5000
 ;;;      bin/shard_eval run tools/search/pure_deep.shard order-probe 3 5000
+;;;      bin/shard_eval run tools/search/pure_deep.shard nonlinear-probe 3 5000
 
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/term.shard")
@@ -37,7 +39,16 @@
 (fn pd_fail ((msg (List Int)) (w World)) World
   (exit 1 (write (append_int "PURE-DEEP FAIL " (append_int msg "\n")) w)))
 
-(fn pd_profile_names ((ordered Bool)) (List Symbol)
+(fn pd_profile_names ((ordered Bool) (nonlinear Bool)) (List Symbol)
+  (if nonlinear
+    (list
+      (quote append_nil_left)
+      (quote append_cons)
+      (quote append_assoc)
+      (quote append_nil_right)
+      (quote if_le_lt_swap)
+      (quote lt_refl_false)
+      (quote int_eq_refl))
   (if ordered
     (list
       (quote append_nil_left)
@@ -49,7 +60,7 @@
       (quote append_nil_left)
       (quote append_cons)
       (quote append_assoc)
-      (quote append_nil_right))))
+      (quote append_nil_right)))))
 
 (fn pd_run
   ((m Module)
@@ -62,6 +73,7 @@
    (context_total Int)
    (context_found Int)
    (contextual Bool)
+   (expected_constrained Int)
    (drive_fuel Int)
    (w World))
   World
@@ -80,15 +92,21 @@
             ((PsFormationOk contextual_task _)
              (match
                (if (le drive_fuel 0)
-                 (ps_run_plan_stats m contextual_task plan 0 raw 4)
-                 (ps_run_plan_stats_fuel m contextual_task plan 0 raw 4
-                   drive_fuel))
+                 (ps_run_plan_stats
+                   m contextual_task plan expected_constrained raw
+                   (ms_rule_count (trs_profile_rules profile)))
+                 (ps_run_plan_stats_fuel m contextual_task plan 0 raw
+                   (ms_rule_count (trs_profile_rules profile)) drive_fuel))
                ((PsRunErr msg) (pd_fail msg w))
                ((PsRunBudget report) (write report w))
                ((PsRunOk report) (write report w)))))
           (match
-            (if (le drive_fuel 0) (ps_run_plan_stats m filtered plan 0 raw 4)
-            (ps_run_plan_stats_fuel m filtered plan 0 raw 4 drive_fuel))
+            (if (le drive_fuel 0)
+              (ps_run_plan_stats
+                m filtered plan expected_constrained raw
+                (ms_rule_count (trs_profile_rules profile)))
+            (ps_run_plan_stats_fuel m filtered plan 0 raw
+              (ms_rule_count (trs_profile_rules profile)) drive_fuel))
             ((PsRunErr msg) (pd_fail msg w))
             ((PsRunBudget report) (write report w))
             ((PsRunOk report) (write report w)))))))))
@@ -102,6 +120,7 @@
    (depth Int)
    (contextual Bool)
    (ordered Bool)
+   (nonlinear Bool)
    (drive_fuel Int)
    (w World))
   World
@@ -117,6 +136,7 @@
       (if ordered 1229681376 1844522064)
       (if ordered 4 8)
       contextual
+      (if nonlinear 87834384 0)
       drive_fuel
       w)
     (pd_run
@@ -130,6 +150,7 @@
       (if ordered 27059730155621856 40589595233432784)
       (if ordered 6 12)
       contextual
+      (if nonlinear -1 0)
       drive_fuel
       w)))
 
@@ -139,13 +160,14 @@
    (depth Int)
    (contextual Bool)
    (ordered Bool)
+   (nonlinear Bool)
    (drive_fuel Int)
    (w World))
   World
   (match
     (tg_load_checked_profile
       "tools/search/tasks/pure_program_obj.shard"
-      (pd_profile_names ordered)
+      (pd_profile_names ordered nonlinear)
       w)
     ((Pair result w2)
      (match result
@@ -167,6 +189,7 @@
                 depth
                 contextual
                 ordered
+                nonlinear
                 drive_fuel
                 w2))))))))))
 
@@ -190,21 +213,24 @@
   (exit
     2
     (write
-      "usage: pure_deep [2|3 | context (2|3) | order (2|3) | probe (2|3) POSITIVE-JOB-BUDGET | context-probe (2|3) POSITIVE-JOB-BUDGET | order-probe (2|3) POSITIVE-JOB-BUDGET]\n"
+      "usage: pure_deep [2|3 | context (2|3) | order (2|3) | nonlinear (2|3) | probe (2|3) POSITIVE-JOB-BUDGET | context-probe (2|3) POSITIVE-JOB-BUDGET | order-probe (2|3) POSITIVE-JOB-BUDGET | nonlinear-probe (2|3) POSITIVE-JOB-BUDGET]\n"
       w)))
 
 (fn pd_args ((as (List (List Int))) (m Module) (appendq QName) (w World)) World
   (match as
-    (Nil (pd_with_profile m appendq 2 False False 0 w))
+    (Nil (pd_with_profile m appendq 2 False False False 0 w))
     ((Cons ds Nil)
      (match (pd_parse_nat ds)
        (None (pd_usage w))
        ((Some depth)
         (if (pd_depth_ok depth)
-          (pd_with_profile m appendq depth False False 0 w)
+          (pd_with_profile m appendq depth False False False 0 w)
           (pd_usage w)))))
     ((Cons mode (Cons ds Nil))
-     (if (if (int_list_eq mode "context") True (int_list_eq mode "order"))
+     (if
+       (if (int_list_eq mode "context") True
+       (if (int_list_eq mode "order") True
+       (int_list_eq mode "nonlinear")))
        (match (pd_parse_nat ds)
          (None (pd_usage w))
          ((Some depth)
@@ -214,7 +240,8 @@
               appendq
               depth
               True
-              (int_list_eq mode "order")
+              (if (int_list_eq mode "context") False True)
+              (int_list_eq mode "nonlinear")
               0
               w)
             (pd_usage w))))
@@ -223,7 +250,8 @@
      (if
        (if (int_list_eq mode "probe") True
        (if (int_list_eq mode "context-probe") True
-       (int_list_eq mode "order-probe")))
+       (if (int_list_eq mode "order-probe") True
+       (int_list_eq mode "nonlinear-probe"))))
        (match (pd_parse_nat ds)
          (None (pd_usage w))
          ((Some depth)
@@ -237,7 +265,12 @@
                    appendq
                    depth
                    (if (int_list_eq mode "probe") False True)
-                   (int_list_eq mode "order-probe")
+                   (if
+                     (if (int_list_eq mode "probe") True
+                     (int_list_eq mode "context-probe"))
+                     False
+                     True)
+                   (int_list_eq mode "nonlinear-probe")
                    fuel
                    w)
                  (pd_usage w))

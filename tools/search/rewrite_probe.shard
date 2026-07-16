@@ -49,7 +49,7 @@
                 (trs_plan_root plan)
                 (TrsCallShape (mrp_q (quote f)) 1))
               (write
-                "META-REWRITE-PROBE VALIDATED FORMATION PROFILE-BUILD ROOT-SCOPED PREORDER BINDER-SAFE NF2 FUEL-OUT OK\n"
+                "META-REWRITE-PROBE VALIDATED FORMATION PROFILE-BUILD ROOT-SCOPED PREORDER BINDER-SAFE NONLINEAR-EQ NF2 FUEL-OUT OK\n"
                 w)
               (mrp_fail "root-only formation projection" w))
             (mrp_fail "root plan polluted everywhere formation" w)))))))))
@@ -87,23 +87,54 @@
            (mrp_fail "conjunctive formation rule admitted" w))
           ((TrsFormationErr _) (mrp_duplicate w))))))))
 
-(fn mrp_invalid ((w World)) World
+(fn mrp_invalid_rhs ((w World)) World
   (match
     (trs_rule
-      (mrp_q (quote nonlinear))
-      (Cons (mrp_ty) Nil)
-      (Call (mrp_q (quote pair)) (Cons (BVar 0) (Cons (BVar 0) Nil)))
-      (BVar 0))
-    ((TrsRuleOk _) (mrp_fail "nonlinear lhs admitted" w))
-    ((TrsRuleErr _)
-     (match
-       (trs_rule
-         (mrp_q (quote unbound))
-         (Cons (mrp_ty) (Cons (mrp_ty) Nil))
-         (Call (mrp_q (quote f)) (Cons (BVar 0) Nil))
-         (BVar 1))
-       ((TrsRuleOk _) (mrp_fail "rhs-only variable admitted" w))
-       ((TrsRuleErr _) (mrp_nonseparable w))))))
+      (mrp_q (quote unbound))
+      (Cons (mrp_ty) (Cons (mrp_ty) Nil))
+      (Call (mrp_q (quote f)) (Cons (BVar 0) Nil))
+      (BVar 1))
+    ((TrsRuleOk _) (mrp_fail "rhs-only variable admitted" w))
+    ((TrsRuleErr _) (mrp_nonseparable w))))
+
+(fn mrp_nonlinear ((w World)) World
+  (let
+    ((same (Call (mrp_q (quote pair)) (list (IntLit 7) (IntLit 7))))
+     (different (Call (mrp_q (quote pair)) (list (IntLit 7) (IntLit 8)))))
+    (match
+      (trs_rule
+        (mrp_q (quote nonlinear))
+        (Cons (mrp_ty) Nil)
+        (Call (mrp_q (quote pair)) (list (BVar 0) (BVar 0)))
+        (BVar 0))
+      ((TrsRuleErr msg) (mrp_fail msg w))
+      ((TrsRuleOk rule)
+       (if (trs_rule_left_linear rule)
+         (mrp_fail "nonlinear lhs reported left-linear" w)
+       (match (trs_profile (Cons rule Nil))
+         ((TrsProfileErr msg) (mrp_fail msg w))
+         ((TrsProfileOk profile)
+          (match (trs_formation profile)
+            ((TrsFormationOk _)
+             (mrp_fail "nonlinear equality projected as separable" w))
+            ((TrsFormationErr _)
+             (match (trs_partition_formation profile)
+               ((TrsProfileFormationErr msg) (mrp_fail msg w))
+               ((TrsProfileFormationOk projected)
+                (if (trs_formation_is_empty
+                      (trs_profile_formation projected))
+                  (match (trs_profile_rules (trs_profile_residual projected))
+                    ((Cons _ Nil)
+                     (match (trs_root profile same)
+                       ((TrsRootYes _ out)
+                        (if (expr_eq out (IntLit 7))
+                          (match (trs_root profile different)
+                            ((TrsRootNo) (mrp_invalid_rhs w))
+                            (_ (mrp_fail "nonlinear unequal term rewrote" w)))
+                          (mrp_fail "nonlinear replacement" w)))
+                       (_ (mrp_fail "nonlinear equal term did not rewrite" w))))
+                    (_ (mrp_fail "nonlinear residual partition" w)))
+                  (mrp_fail "nonlinear partition emitted formation" w)))))))))))))
 
 (fn mrp_formation_ok ((profile TrsProfile)) Bool
   (match (trs_formation profile)
@@ -123,7 +154,7 @@
          ((TrsNfOk _ _) (mrp_fail "cycle reported normal" w))
          ((TrsNfOut out steps)
           (if (expr_eq out start)
-            (if (int_eq steps 2) (mrp_invalid w)
+            (if (int_eq steps 2) (mrp_nonlinear w)
             (mrp_fail "cycle step count" w))
             (mrp_fail "cycle residual" w))))))))
 

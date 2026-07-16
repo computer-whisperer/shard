@@ -1779,16 +1779,40 @@ witness to rank in its exact grammar.  The order experiment exercises this:
 the original textbook `le` witness becomes the equivalent swapped-branch `lt`
 representative before the grammar gate.
 
-The remaining playground vocabulary reduction is categorically different.
-Reflexive comparisons such as `lt x x` need repeated-variable/equality-aware
-formation, which `TrsRule` deliberately refuses today; symmetric operand
-orientation needs a stable syntax order.  Removing `int_eq` from a particular
-hole language is a task vocabulary choice unless an in-budget equivalent is
-proved representable.  Those should remain separate improvements rather than
-being smuggled into the comparison involution.
+Repeated-variable pressure now has its first general implementation.
+`TrsRule` admits nonlinear algebraic LHSs with ordinary first-order semantics:
+the first occurrence binds a term and later occurrences require structural
+equality.  Concrete normalization already had that equality check; the lazy
+constraint engine now carries the same binding environment over partial
+grammar terms.  Shared hole syntax proves equality immediately, distinct open
+holes block on an exact choice, and assigned equal/unequal regions become
+Redex/Clear.  Nonlinear rules never enter the old separable projection (which
+would unsoundly turn `lt x x` into “ban every lt”); lossless partition retains
+them as residual rules.  Context-free prepared match facts are skipped for
+this tier, while stable whole-domain verdicts remain available.
+
+`std/order` supplies checked `lt a a = False` and `int_eq a a = True` claims.
+They are selected by name from the same object closure as the append and order
+laws—there is no comparison-specific table in the engine.  On the complete
+context+order depth-2 sort run, the two residual rules reject 87,834,384 of
+1,229,681,376 programs (7.14%) and reduce the decision tree from 7,407 regions,
+1,554 forks, and 53,701 steps to 6,851 regions, 1,438 forks, and 50,450 steps;
+the same four semantic representatives remain.
+
+At depth 3 the 5,000-job probe attributes 483,209,467,064,676 candidates to
+the two constraints, but frontier coverage is essentially unchanged and costs
+about 6% more steps: the diagonal equality relation still has to split both
+independent operand holes.  That is useful diagnosis rather than a disguised
+win.  The next categorical improvement is an exact correlated grammar product
+that removes repeated-variable diagonals before ordinary search ranking, or a
+relation-aware branch schedule; stable symmetric operand orientation still
+needs a reviewed syntax order.  Removing `int_eq` wholesale remains a task
+vocabulary choice unless an in-budget equivalent is proved representable.
 
     bin/shard_eval run tools/search/pure_deep.shard order 2
     bin/shard_eval run tools/search/pure_deep.shard order-probe 3 5000
+    bin/shard_eval run tools/search/pure_deep.shard nonlinear 2
+    bin/shard_eval run tools/search/pure_deep.shard nonlinear-probe 3 5000
 
 The first dynamic theorem-filtered task searches ordinary closed Shard list
 expressions over `Nil`, `Cons`, bit literals, and the real `std/list append` at
@@ -1981,8 +2005,9 @@ profile:
 The first reusable compiler target has now graduated to `meta/rewrite`.
 `TrsRule` retains a full citation QName, parameter types, and oriented kernel
 `Expr` pair.  Its constructor validates the premise-free algebraic v1
-fragment: rooted, non-reflexive, left-linear LHSs; in-range RHS variables
-drawn from the LHS; and no free variables or binding forms.  `TrsProfile`
+fragment: rooted, non-reflexive algebraic LHSs; in-range RHS variables drawn
+from the LHS; and no free variables or binding forms. Repeated parameters are
+structural-equality constraints. `TrsProfile`
 preserves reviewed rule order and rejects duplicate citations.  The generic
 engine supplies root application, deterministic preorder rewriting through
 ordinary subject binding forms, normality testing, and fuel-bounded normal
@@ -2068,9 +2093,10 @@ profile leaves separable rules in `TrsFormationPlan` and preserves every other
 validated rule, in order, as an `MsPlan`.  `ms_check` interprets a grammar
 sketch plus partial choice assignment and returns `Clear`, `Blocked hole`, or
 `Redex citation`; ordinary rules scan every subterm while `TrsRootProfile`
-rules remain candidate-root-only.  The matcher consumes the current
-left-linear algebraic `TrsRule` fragment, so it does not invent an independent
-hole approximation for coupled patterns.
+rules remain candidate-root-only. Left-linear rules use prepared wildcard
+facts; nonlinear algebraic rules use equality-correlated environments, so the
+matcher does not invent an independent hole approximation for coupled
+patterns.
 
 An unassigned multi-alternative hole is no longer automatically a demand.
 `meta/search` interprets every alternative under the current partial assignment
@@ -2135,11 +2161,10 @@ list-search versus machine-search engines:
 - candidate equality supplies unrestricted congruence; observer equality is
   initially root-only and needs checked contextual/congruence closure before it
   may descend;
-- shallow separable redexes compile directly to hole exclusions; left-linear
-  deep and conjunctive patterns now prune exact partial regions as residual
-  constraints.  A regular-tree-automaton grammar product could move more of
-  that work into quotient formation, while repeated-variable patterns still
-  need equality-aware relational state;
+- shallow separable redexes compile directly to hole exclusions; deep,
+  conjunctive, and repeated-variable patterns now prune exact partial regions
+  as residual constraints. A regular-tree/relational grammar product could
+  move more of that work into quotient formation;
 - partial, effectful, or fuel-bounded interpreters need conditions or a
   refinement theorem that says when the observation is stable; and
 - a useful orientation must stay inside the selected grammar and cost budget,
@@ -2150,10 +2175,10 @@ and hole language, an explicit observation/refinement boundary, checked
 reduction profiles with their application domains, a pre-miner, quotient-first
 grammar construction, and lazy semantic narrowing.  The next general mining
 step is to bucket terms by exact observer behavior, propose oriented schemas,
-and submit the resulting observer equations to the checker; deeper left-linear
-discoveries can immediately enter the residual tier, while nonlinear
-discoveries wait for equality-aware matching instead of being installed as
-unsound shallow filters.
+and submit the resulting observer equations to the checker; deeper algebraic
+discoveries can immediately enter the residual tier, including nonlinear
+discoveries whose repeated bindings are now checked for partial-term equality,
+instead of being installed as unsound shallow filters.
 
 `profile_census.shard` is the reusable measurement join over this mechanism.
 It accepts the same reflected heads, atoms, binders, result type, depth, and
@@ -2178,16 +2203,15 @@ relying on a universal hand ranking.
 Two boundaries remain.  Arbitrary `TgRule` templates are loudly refused by the
 formation-aware path because their multi-level static structure needs the full
 regular-tree automaton product; checked rewrite profiles can nevertheless
-retain such left-linear structure as exact residual constraints after grammar
+retain such structure as exact residual constraints after grammar
 construction.  Ordinary typed grammar behavior is unchanged.
 Symbolic neutral formation now accepts the same profile through `NRTrs`, with
-generic left-linear `Ctor`/`Call`/literal matching and ordinary symbolic RHS
-evaluation.  The full laws driver now loads that profile from its own checked
+generic `Ctor`/`Call`/literal matching, repeated-value equality, and ordinary
+symbolic RHS evaluation.  The full laws driver now loads that profile from its own checked
 root scope and uses the generic route for self proofs, both G3 rungs, proof
 traces, and artifact regeneration; all prior verdict and byte-identity pins
-remain unchanged.  Repeated variables, binding patterns, full tree-automaton
-grammar products, and decision-procedure normalization remain outside this
-first-order tier.
+remain unchanged. Binding patterns, correlated formation products, and
+decision-procedure normalization remain outside this first-order tier.
 Orientation, permission to consume granted requirements, termination, and
 confluence remain reviewed profile gates as specified by CANON.md §6.
 

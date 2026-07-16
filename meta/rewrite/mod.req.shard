@@ -11,9 +11,10 @@
 ;;; metavariable, while a BVar captured from the subject is ordinary syntax.
 ;;; V1 is the premise-free algebraic fragment: Ctor/Call/If/literals and
 ;;; parameter BVars; Match/Let/FVar are refused in rules.  LHSs are rooted and
-;;; left-linear, and every RHS variable must occur on the LHS.  These guards
-;;; make matching deterministic and replacement capture-safe even below
-;;; subject binders.
+;;; may repeat a parameter: repetition denotes structural equality, as in an
+;;; ordinary first-order rewrite rule.  Every RHS variable must occur on the
+;;; LHS.  These guards make matching deterministic and replacement
+;;; capture-safe even below subject binders.
 ;;; Parameter types are retained for typed consumers, audits, and downstream
 ;;; grammar products.  This structural engine does not infer a subject's type;
 ;;; callers must supply already-checked terms when type preservation matters.
@@ -100,8 +101,9 @@
 
 (type TrsVarsR (TrsVarsErr (List Int)) (TrsVarsOk (List Int)))
 
-;; LHS scan: collect parameter indices, refusing nonlinear or non-algebraic
-;; patterns. `seen` order is immaterial; it is only a deterministic set.
+;; LHS scan: collect parameter indices, refusing non-algebraic patterns.
+;; Repeated indices are equality constraints, so this is a set rather than a
+;; list of occurrences. `seen` order is immaterial.
 (fn trs_lhs_vars ((e Expr) (arity Int) (seen (List Int))) TrsVarsR
   (measure (struct e))
   (match e
@@ -109,7 +111,7 @@
     ((BVar k)
      (if (lt k 0) (TrsVarsErr "negative rewrite parameter index")
      (if (le arity k) (TrsVarsErr "rewrite parameter index out of range")
-     (if (trs_int_mem k seen) (TrsVarsErr "rewrite lhs is not left-linear")
+     (if (trs_int_mem k seen) (TrsVarsOk seen)
      (TrsVarsOk (Cons k seen))))))
     ((Ctor _ args) (trs_lhs_vars_list args arity seen))
     ((Call _ args) (trs_lhs_vars_list args arity seen))
@@ -200,9 +202,16 @@
   (match pending
     (Nil (TrsProfileOk (TrsProfile (trs_rules_reverse seen Nil))))
     ((Cons r rest)
-     (if (trs_rule_name_mem (trs_rule_name r) seen)
-       (TrsProfileErr "duplicate rewrite rule name")
-       (trs_profile_go rest (Cons r seen))))))
+     ;; TrsRule is transparent meta vocabulary. Re-run individual validation
+     ;; at the profile boundary before preserving its reviewed order.
+     (match r
+       ((TrsRule name types lhs rhs)
+        (match (trs_rule name types lhs rhs)
+          ((TrsRuleErr msg) (TrsProfileErr msg))
+          ((TrsRuleOk checked)
+           (if (trs_rule_name_mem name seen)
+             (TrsProfileErr "duplicate rewrite rule name")
+             (trs_profile_go rest (Cons checked seen))))))))))
 
 (fn trs_rules_reverse ((rs (List TrsRule)) (acc (List TrsRule))) (List TrsRule)
   (measure (struct rs))
@@ -239,6 +248,42 @@
 (fn trs_profile_snoc ((profile TrsProfile) (rule TrsRule)) TrsProfileR
   (match profile
     ((TrsProfile rules) (trs_profile (trs_rules_snoc rules rule)))))
+
+;; Formation consumers need to distinguish independent wildcards from
+;; repeated-variable equality.  The latter is admitted by the rewrite engine,
+;; but cannot be projected as an independent root/child exclusion.
+(type TrsLinearR (TrsLinearNo) (TrsLinearYes (List Int)))
+
+(fn trs_linear_expr ((e Expr) (seen (List Int))) TrsLinearR
+  (measure (struct e))
+  (match e
+    ((BVar k)
+     (if (trs_int_mem k seen) (TrsLinearNo)
+     (TrsLinearYes (Cons k seen))))
+    ((Ctor _ args) (trs_linear_list args seen))
+    ((Call _ args) (trs_linear_list args seen))
+    ((If c t e2)
+     (match (trs_linear_expr c seen)
+       ((TrsLinearNo) (TrsLinearNo))
+       ((TrsLinearYes s1)
+        (match (trs_linear_expr t s1)
+          ((TrsLinearNo) (TrsLinearNo))
+          ((TrsLinearYes s2) (trs_linear_expr e2 s2))))))
+    (_ (TrsLinearYes seen))))
+
+(fn trs_linear_list ((es (List Expr)) (seen (List Int))) TrsLinearR
+  (measure (struct es))
+  (match es
+    (Nil (TrsLinearYes seen))
+    ((Cons e rest)
+     (match (trs_linear_expr e seen)
+       ((TrsLinearNo) (TrsLinearNo))
+       ((TrsLinearYes more) (trs_linear_list rest more))))))
+
+(fn trs_rule_left_linear ((rule TrsRule)) Bool
+  (match (trs_linear_expr (trs_rule_lhs rule) Nil)
+    ((TrsLinearNo) False)
+    ((TrsLinearYes _) True)))
 
 ;; ---- exact separable formation projection ----------------------------------
 ;;
@@ -377,7 +422,8 @@
      ;; Revalidate because data constructors are transparent meta vocabulary.
      (match (trs_rule name types lhs rhs)
        ((TrsRuleErr msg) (TrsFormOneErr msg))
-       ((TrsRuleOk _)
+       ((TrsRuleOk checked)
+        (if (trs_rule_left_linear checked)
         (match (trs_expr_shape lhs)
           (None (TrsFormOneErr "formation rule has unsupported lhs root"))
           ((Some root)
@@ -387,7 +433,9 @@
               (match disc
                 (None (TrsFormOneOk (TrsForbidRoot name root)))
                 ((Some (Pair index child))
-                 (TrsFormOneOk (TrsForbidArg name root index child)))))))))))))
+                 (TrsFormOneOk (TrsForbidArg name root index child))))))))
+        (TrsFormOneErr
+          "formation rule has repeated-variable equality constraint")))))))
 
 (fn trs_form_reverse ((clauses (List TrsFormClause)) (acc (List TrsFormClause)))
   (List TrsFormClause)
