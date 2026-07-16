@@ -1,0 +1,123 @@
+;;; Regression for checked affine integer-order guards.
+;;;
+;;; A direct theorem premise `le 0 delay = True` lowers to TrsIntLe, validates
+;;; its Int lhs role, decides ground subjects, and blocks lazily on an open
+;;; grammar hole without enumerating the surrounding candidate.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/proof.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "../../meta/search")
+(import "theorem_scope.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel proof Equation))
+(use (:: kernel loader World))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: meta search *))
+(use (:: tools search theorem_scope *))
+
+(fn iogp_q ((name Symbol)) QName
+  (QName (list (quote tools) (quote search) (quote int_order_guard_probe)) name))
+
+(fn iogp_delay ((value Expr)) Expr
+  (Ctor (iogp_q (quote Delay)) (list value)))
+
+(fn iogp_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "INT-ORDER-GUARD-PROBE FAIL " msg) w)))
+
+(fn iogp_empty_module () Module (Module Nil Nil Nil (FnTrie None Nil) Nil))
+
+(fn iogp_grammar () Grammar
+  (Grammar (list (GEnt 0 (list (IntLit (- 0 1)) (IntLit 0) (IntLit 2))))))
+
+(fn iogp_ground
+  ((conditioned TrsConditionedRule) (grammar Grammar) (citation QName) (w World))
+  World
+  (match
+    (ms_conditioned_root
+      64 Nil grammar Nil conditioned (iogp_delay (IntLit (- 0 1))))
+    ((MsClear)
+     (match
+       (ms_conditioned_root
+         64 Nil grammar Nil conditioned (iogp_delay (IntLit 0)))
+       ((MsRedex got)
+        (if (qname_eq got citation)
+          (match
+            (ms_conditioned_root
+              64 Nil grammar Nil conditioned (iogp_delay (hole 0)))
+            ((MsBlocked 0)
+             (write
+               "INT-ORDER-GUARD-PROBE LOWERED MIXED-ORDER TYPED NEGATIVE-CLEAR ZERO-REDEX OPEN-BLOCKED OK\n"
+               w))
+            (_ (iogp_fail "open order guard did not block\n" w)))
+          (iogp_fail "order guard returned the wrong citation\n" w)))
+       (_ (iogp_fail "zero did not satisfy nonnegative order guard\n" w))))
+    (_ (iogp_fail "negative value satisfied nonnegative order guard\n" w))))
+
+(fn iogp_bad_type
+  ((guard TrsGuard)
+   (conditioned TrsConditionedRule)
+   (grammar Grammar)
+   (citation QName)
+   (w World))
+  World
+  (match
+    (trs_rule
+      citation
+      (list (TCon (qn (quote Symbol)) Nil))
+      (iogp_delay (BVar 0))
+      (Ctor (iogp_q (quote Unit)) Nil))
+    ((TrsRuleErr msg) (iogp_fail msg w))
+    ((TrsRuleOk bad_rule)
+     (match (trs_conditioned_rule bad_rule (list guard))
+       ((TrsConditionedRuleErr _)
+        (iogp_ground conditioned grammar citation w))
+       ((TrsConditionedRuleOk _)
+        (iogp_fail "order guard accepted a non-Int variable\n" w))))))
+
+(fn iogp_lowered ((guard TrsGuard) (w World)) World
+  (match guard
+    ((TrsIntLe (TrsIntLit 0) (TrsIntVar 0))
+     (let ((citation (iogp_q (quote nonnegative_delay))))
+       (match
+         (trs_rule
+           citation
+           (list (TCon (qn (quote Int)) Nil))
+           (iogp_delay (BVar 0))
+           (Ctor (iogp_q (quote Unit)) Nil))
+         ((TrsRuleErr msg) (iogp_fail msg w))
+         ((TrsRuleOk rule)
+          (match (trs_conditioned_rule rule (list guard))
+            ((TrsConditionedRuleErr msg) (iogp_fail msg w))
+            ((TrsConditionedRuleOk conditioned)
+             (let ((grammar (iogp_grammar)))
+               (match (g_wf grammar)
+                 ((GWErr msg) (iogp_fail msg w))
+                 ((GWOk)
+                  (iogp_bad_type
+                    guard conditioned grammar citation w))))))))))
+    (_ (iogp_fail "checked le premise lowered to the wrong guard\n" w))))
+
+(fn main ((w World)) World
+  (match
+    (tg_guard_premises
+      (iogp_empty_module)
+      (list
+        (Equation
+          (Call (qn (quote le)) (list (IntLit 0) (BVar 0)))
+          (Ctor (qn (quote True)) Nil))
+        (Equation (BVar 0) (BVar 0))))
+    ((TgGuardPremisesErr msg) (iogp_fail msg w))
+    ((TgGuardPremisesOk guards)
+     (match guards
+       ((Cons guard (Cons (TrsIntEq (TrsIntVar 0) (TrsIntVar 0)) Nil))
+        (iogp_lowered guard w))
+       (_ (iogp_fail "mixed guard premise order changed\n" w))))))

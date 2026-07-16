@@ -2638,14 +2638,15 @@ theorem authenticates it.
 
 Whole-orbit support now also drives a bounded relational pre-mining pass for
 Int-valued roles.  `meta/antiunify` enumerates normalized affine invariants
-with unit coefficients and at most six terms.  The structural disequalities
-remain one baseline guard family; each affine invariant becomes a separate
-alternative family atop that baseline.  They are deliberately not conjoined:
-two observations can imply many unrelated arithmetic coincidences, and a
-large conjunction would overfit while appearing selective.  Every alternative
-is instead replayed against the complete accepted corpus by the same exact-key
-validator used for structural schemas.  Pairwise diagnostic modes retain
-structural guards only because two-example arithmetic evidence is too weak.
+with unit coefficients and at most six terms.  The baseline guard family holds
+the structural disequalities plus the tight interval hull of every Int role;
+each multi-role affine equality becomes a separate alternative atop that
+baseline.  Unrelated equalities are deliberately not conjoined: two
+observations can imply many arithmetic coincidences, and a large conjunction
+would overfit while appearing selective.  Every alternative is instead
+replayed against the complete accepted corpus by the same exact-key validator
+used for structural schemas.  Pairwise diagnostic modes retain structural
+guards only because two-example numeric evidence is too weak.
 
 The miner now closes that classification loop through the same checked profile
 loader as `typed_expr`.  It retains the application domain of each rule
@@ -2882,27 +2883,33 @@ frontier, not missing narrowing pressure.  The miner also still classifies an
 common `Expr` context needs a general checked zipper rather than borrowing the
 more restrictive structural-spine projector.
 
-#### Checked affine-Int guards
+#### Checked affine Int equality and order guards
 
 Conditional spine rules now cover finite arithmetic relations without cloning
 one theorem per literal tuple.  `meta/rewrite` owns a small typed
 `TrsIntExpr` vocabulary over rule variables: Int literals, variables,
-addition, and subtraction.  `TrsIntEq` compares two such expressions.  This is
-an explicit relation language, not an embedded Shard evaluator; rule
-validation requires every referenced variable to occur in the lhs and to have
-the checked `Int` parameter type.
+addition, and subtraction.  `TrsIntEq` compares two such expressions and
+`TrsIntLe` supplies non-strict order.  This is an explicit relation language,
+not an embedded Shard evaluator; rule validation requires every referenced
+variable to occur in the lhs and to have the checked `Int` parameter type.
 
 `theorem_scope` lowers a direct checked premise such as
 
     (= (+ d1 (+ d2 1)) out)
 
-to that vocabulary.  Calls outside the affine fragment, malformed arithmetic,
-non-Int variables, rhs-only variables, and other proposition shapes are
-refused.  Structural distinctness remains the other supported premise form,
-and mixed guard lists retain theorem order.  Ordinary canon and root-observer
-profiles remain premise-free; the guarded vocabulary is attached only to the
-authenticated contextual domain that already knows how to check it at each
-candidate site.
+or
+
+    (= (le 0 d1) True)
+
+to that vocabulary.  Order capture deliberately accepts the checked Boolean
+shape `le(left,right)=True`; strict order and false-order complements are not
+silently reinterpreted.  Calls outside the affine fragment, malformed
+arithmetic, non-Int variables, rhs-only variables, and other proposition
+shapes are refused.  Structural distinctness remains the other supported
+premise form, and mixed guard lists retain theorem order.  Ordinary canon and
+root-observer profiles remain premise-free; the guarded vocabulary is attached
+only to the authenticated contextual domain that already knows how to check it
+at each candidate site.
 
 Arithmetic in a theorem RHS already fits the ordinary kernel `Expr` template.
 After substituting matched rule variables, `trs_inst` now folds ground core
@@ -2926,27 +2933,41 @@ three cited singleton reductions plus three coalesced clear rows:
     RHS GROUND-FOLD; RAW 12; REDUX 3; CLEAR 9
     REGIONS 3 + 3; RELATIONAL FORKS 4
 
+`int_order_guard_probe.shard` similarly pins `0 <= delay` over a grammar that
+contains negative, zero, and positive literals: the negative member is clear,
+zero is a cited redex, and an open delay blocks on its original hole.
+This closes the vocabulary gap exposed by clamped delay semantics: a checked
+cycle-conservation rule can carry `0 <= d1` and `0 <= d2` alongside its affine
+equality, so the rule remains universally sound over Int while firing across
+the task's whole nonnegative delay alphabet.
+
 This is the intended delay-alphabet scaling shape for PIO-style cycle
 conservation: theorem count is independent of the literal alphabet, and
 unreachable combinations disappear when the relation is intersected with the
 task's actual grammar region.
 
 The transition miner now completes the other half of that join.  It discovers
-stable unit-coefficient affine relations from the complete support of each
-whole gauge orbit, emits each relation as an empirical proposal domain, and
-revalidates that domain over the full census before classification.  The
-theorem classifier symbolically normalizes `TrsIntEq` through the proposal's
-alpha-renaming and requires the exact empirical relation; structural guards
-cannot accidentally authenticate arithmetic.  As everywhere else in the
-miner, surviving evidence is still not a search license—only a checked
-conditioned rule can cross that boundary.
+stable unit-coefficient affine relations and per-role intervals from the
+complete support of each whole gauge orbit, emits each relation as an
+empirical proposal domain, and revalidates that domain over the full census
+before classification.  The theorem classifier symbolically normalizes
+`TrsIntEq` and `TrsIntLe` through the proposal's alpha-renaming.  Equality
+requires the exact empirical relation; order uses ordinary bound entailment,
+so an observed `d >= 2` domain can cover a checked theorem requiring only
+`d >= 0`, but never the reverse.  Structural guards cannot accidentally
+authenticate arithmetic.  As everywhere else in the miner, surviving
+evidence is still not a search license—only a checked conditioned rule can
+cross that boundary.
 
 `transition_affine_probe.shard` pins the evidence discipline with two supports
 that imply both a useful five-variable conservation relation and an accidental
 four-variable coincidence.  Both are pre-mined; complete-census replay keeps
 the useful guarded family with support two and rejects the coincidence on a
 third member.  `antiunify_probe.shard` separately checks that an alpha-matched
-checked affine theorem covers the first family, while the same theorem cannot
-be justified by the structural baseline alone.  The established 820-member
-x86 rung has no Int-valued generalized roles and remains unchanged at 111
-unique schemas and 111 validated proposals.
+checked theorem with two nonnegative premises and the five-variable equality
+covers the first family.  Its inferred interval hull entails the weaker
+nonnegative bounds, refuses an excessive lower bound, and cannot justify the
+theorem without the equality relation.  The established 820-member x86 rung
+has no Int-valued generalized roles and remains unchanged at 111 unique
+schemas and 111 validated proposals (26 authenticated in the proof-bearing
+task).

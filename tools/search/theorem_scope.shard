@@ -13,8 +13,8 @@
 ;;; oriented profile and remain a separate ratification gate (CANON.md §6).
 ;;; Ordinary canon and root-observer rules remain premise-free.  Authenticated
 ;;; spine rules admit only the decidable checked guards represented by
-;;; meta/rewrite: finite structural distinctness and affine Int equality.  A
-;;; lazy consumer must prove or block on those guards at every rewrite site.
+;;; meta/rewrite: finite structural distinctness and affine Int equality/order.
+;;; A lazy consumer must prove or block on those guards at every rewrite site.
 ;;;
 ;;; Candidate equalities and observer equalities deliberately compile to
 ;;; different profile types.  The former have ordinary congruence pressure;
@@ -500,6 +500,11 @@
     ((Ctor q Nil) (core_named q (quote False)))
     (_ False)))
 
+(fn tg_true_expr ((e Expr)) Bool
+  (match e
+    ((Ctor q Nil) (core_named q (quote True)))
+    (_ False)))
+
 (fn tg_discriminator_arg ((e Expr)) (Option (Pair QName Int))
   (match e
     ((Call discriminator args)
@@ -564,11 +569,12 @@
 
 ;; ---- checked arithmetic premises -----------------------------------------
 ;;
-;; Direct Int equalities in a checked theorem are lowered to the same small
-;; affine vocabulary used by meta/rewrite.  Only literals, theorem variables,
-;; addition, and subtraction are admitted.  The kernel has already checked
-;; the premise; the conditioned-rule validator subsequently verifies that
-;; every referenced variable is an Int-typed lhs binding.
+;; Direct Int equalities and true `le` propositions in a checked theorem are
+;; lowered to the same small affine vocabulary used by meta/rewrite.  Only
+;; literals, theorem variables, addition, and subtraction are admitted.  The
+;; kernel has already checked the premise; the conditioned-rule validator
+;; subsequently verifies that every referenced variable is an Int-typed lhs
+;; binding.
 
 (type TgIntExprR
   (TgIntExprErr (List Int))
@@ -610,6 +616,23 @@
   (TgGuardPremisesErr (List Int))
   (TgGuardPremisesOk (List TrsGuard)))
 
+(fn tg_int_le_premise ((expr Expr)) TgGuardPremiseR
+  (match expr
+    ((Call q args)
+     (if (core_named q (quote le))
+       (match args
+         ((Cons left (Cons right Nil))
+          (match (tg_int_expr left)
+            ((TgIntExprErr msg) (TgGuardPremiseErr msg))
+            ((TgIntExprOk left_int)
+             (match (tg_int_expr right)
+               ((TgIntExprErr msg) (TgGuardPremiseErr msg))
+               ((TgIntExprOk right_int)
+                (TgGuardPremiseOk (TrsIntLe left_int right_int)))))))
+         (_ (TgGuardPremiseErr "integer order guard le call is not binary")))
+       (TgGuardPremiseErr "true guard premise is not core le")))
+    (_ (TgGuardPremiseErr "true guard premise is not an order call"))))
+
 (fn tg_guard_premise ((m Module) (premise Equation)) TgGuardPremiseR
   (match premise
     ((Equation lhs rhs)
@@ -617,13 +640,15 @@
        (match (tg_distinct_premise m premise)
          ((TgDistinctPremiseErr msg) (TgGuardPremiseErr msg))
          ((TgDistinctPremiseOk guard) (TgGuardPremiseOk guard)))
-       (match (tg_int_expr lhs)
-         ((TgIntExprErr msg) (TgGuardPremiseErr msg))
-         ((TgIntExprOk left)
-          (match (tg_int_expr rhs)
-            ((TgIntExprErr msg) (TgGuardPremiseErr msg))
-            ((TgIntExprOk right)
-             (TgGuardPremiseOk (TrsIntEq left right))))))))))
+       (if (tg_true_expr rhs)
+         (tg_int_le_premise lhs)
+         (match (tg_int_expr lhs)
+           ((TgIntExprErr msg) (TgGuardPremiseErr msg))
+           ((TgIntExprOk left)
+            (match (tg_int_expr rhs)
+              ((TgIntExprErr msg) (TgGuardPremiseErr msg))
+              ((TgIntExprOk right)
+               (TgGuardPremiseOk (TrsIntEq left right)))))))))))
 
 (fn tg_guard_premises ((m Module) (premises (List Equation)))
   TgGuardPremisesR
