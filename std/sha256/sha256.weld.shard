@@ -1303,3 +1303,780 @@
        (rewrite (lemma shw_mem_def) rl lhs true ())
        (compute lhs (stop shw_r shw_mem h8a h8b h8c h8d h8e h8f h8g h8h)))
       refl)))
+
+;; --- I2e-2: THE COLLAPSE — the weld output lands on sha_block ---------------
+;; With the K window holding the round constants and the H window
+;; holding the running state's eight words, the weld's named outputs
+;; collapse to spec vocabulary: shw_r = sha_rounds of the state over
+;; sha_k and the block's schedule, and shw_mem's H window reads back
+;; as sha_block's state (the mod/band crossing rides the I2e-2 range
+;; kit), with the K window and every window below wb untouched. These
+;; are the three memory facts the blocks-loop driver chains.
+
+;; the H-window vocabulary: the eight words of a state, in lane order
+(fn shw_hlist ((st H8)) (List Int)
+  (list (h8a st) (h8b st) (h8c st) (h8d st) (h8e st) (h8f st) (h8g st) (h8h st)))
+
+;; h8_add opened against a concrete left state, componentwise
+(claim shw_hadd_open
+  (goal
+    ((a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (y H8))
+    ()
+    (=
+      (shw_hlist (h8_add (mk_h8 a0 a1 a2 a3 a4 a5 a6 a7) y))
+      (list
+        (m32 (+ a0 (h8a y)))
+        (m32 (+ a1 (h8b y)))
+        (m32 (+ a2 (h8c y)))
+        (m32 (+ a3 (h8d y)))
+        (m32 (+ a4 (h8e y)))
+        (m32 (+ a5 (h8f y)))
+        (m32 (+ a6 (h8g y)))
+        (m32 (+ a7 (h8h y))))))
+  (case-on y H8
+    ((case mk_h8
+       (ya yb yc yd ye yf yg yh)
+       (steps
+         ((rewrite (hyp 0) lr both true ()) (compute both (stop m32)))
+         refl)))))
+
+;; reads at or above the K window pass through the schedule memory
+(claim shw_sm_wget_hi
+  (goal ((m Mem) (src Int) (wb Int) (p Int)) ((= (le (+ wb 256) p) True))
+    (= (wget (shw_sm m src wb) p) (wget m p)))
+  (chain
+    (steps ((rewrite (lemma shw_sm_def) lr lhs true ())))
+    (rewrite-with
+      (lemma ish_wget_sched_hi)
+      lr
+      lhs
+      ()
+      ((steps
+         ((compute lhs) (rewrite (lemma ish_i48p) lr lhs true ()) (compute lhs))
+         (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ish_wget_copy_hi)
+      lr
+      lhs
+      ()
+      ((steps
+         ((compute lhs) (rewrite (lemma ish_i16p) lr lhs true ()) (compute lhs))
+         (by arith (rows (goal 1) (0 1))))))
+    refl))
+
+(claim shw_sm_wlist_hi
+  (goal ((m Mem) (src Int) (wb Int) (p Int) (j Nat))
+    ((= (le (+ wb 256) p) True))
+    (= (wlist (shw_sm m src wb) p j) (wlist m p j)))
+  (chain
+    (steps ((rewrite (lemma shw_sm_def) lr lhs true ())))
+    (rewrite-with
+      (lemma ish_wlist_sched_hi)
+      lr
+      lhs
+      ()
+      ((steps
+         ((compute lhs) (rewrite (lemma ish_i48p) lr lhs true ()) (compute lhs))
+         (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ish_wlist_copy_hi)
+      lr
+      lhs
+      ()
+      ((steps
+         ((compute lhs) (rewrite (lemma ish_i16p) lr lhs true ()) (compute lhs))
+         (by arith (rows (goal 1) (0 1))))))
+    refl))
+
+;; the W window holds the spec schedule of the block's bytes
+(claim shw_w_sched
+  (goal ((m Mem) (src Int) (wb Int)) ((= (le (+ src 64) wb) True))
+    (= (wlist (shw_sm m src wb) wb 64) (sha_sched (mem_read 64 m src))))
+  (chain
+    (steps ((rewrite (lemma shw_sm_def) lr lhs true ())))
+    (have hsp
+      (=
+        (wlist (sched_mem (copy_wmem m src wb 16) (lg_advk wb 4 16) 48) wb 64)
+        (wlist
+          (sched_mem
+            (copy_wmem m src wb (S^ 16 Z))
+            (lg_advk wb 4 (S^ 16 Z))
+            (S^ 48 Z))
+          wb
+          (S^ 64 Z)))
+      (steps
+        ((compute both (stop wlist sched_mem copy_wmem lg_advk wget)))
+        refl))
+    (steps ((rewrite (premise hsp) lr lhs true ())))
+    (rewrite-with
+      (lemma isha_sched_window)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps
+      ((rewrite (lemma ish_words16_read) rl lhs true ())
+       (rewrite (lemma ish_i16) lr lhs true ())
+       (unfold sha_sched rhs)
+       (compute
+         both
+         (stop srev_acc sched_ext words16 mem_read wget wlist mem_get))))
+    refl))
+
+;; the rounds output collapses to spec sha_rounds of the state
+(claim shw_r_sha
+  (goal
+    ((y0 Int)
+     (y1 Int)
+     (y2 Int)
+     (y3 Int)
+     (y4 Int)
+     (y5 Int)
+     (y6 Int)
+     (y7 Int)
+     (m Mem)
+     (src Int)
+     (wb Int))
+    ((= (le (+ src 64) wb) True)
+     (= (wlist m (+ wb 256) 64) (sha_k))
+     (= (wget m (+ wb 512)) y0)
+     (= (wget m (+ (+ wb 512) 4)) y1)
+     (= (wget m (+ (+ (+ wb 512) 4) 4)) y2)
+     (= (wget m (+ (+ (+ (+ wb 512) 4) 4) 4)) y3)
+     (= (wget m (+ (+ (+ (+ (+ wb 512) 4) 4) 4) 4)) y4)
+     (= (wget m (+ (+ (+ (+ (+ (+ wb 512) 4) 4) 4) 4) 4)) y5)
+     (= (wget m (+ (+ (+ (+ (+ (+ (+ wb 512) 4) 4) 4) 4) 4) 4)) y6)
+     (= (wget m (+ (+ (+ (+ (+ (+ (+ (+ wb 512) 4) 4) 4) 4) 4) 4) 4)) y7))
+    (=
+      (shw_r m src wb)
+      (sha_rounds
+        (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+        (sha_k)
+        (sha_sched (mem_read 64 m src)))))
+  (chain
+    (steps ((rewrite (lemma shw_r_def) lr lhs true ())))
+    (rewrite-with
+      (lemma shw_sm_wget_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (rewrite-with
+      (lemma shw_sm_wget_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (rewrite-with
+      (lemma shw_sm_wget_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (rewrite-with
+      (lemma shw_sm_wget_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (rewrite-with
+      (lemma shw_sm_wget_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (rewrite-with
+      (lemma shw_sm_wget_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (rewrite-with
+      (lemma shw_sm_wget_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (rewrite-with
+      (lemma shw_sm_wget_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (steps
+      ((rewrite (premise 2) lr lhs true ())
+       (rewrite (premise 3) lr lhs true ())
+       (rewrite (premise 4) lr lhs true ())
+       (rewrite (premise 5) lr lhs true ())
+       (rewrite (premise 6) lr lhs true ())
+       (rewrite (premise 7) lr lhs true ())
+       (rewrite (premise 8) lr lhs true ())
+       (rewrite (premise 9) lr lhs true ())))
+    (rewrite-with
+      (lemma shw_sm_wlist_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (steps ((rewrite (premise 1) lr lhs true ())))
+    (rewrite-with
+      (lemma shw_w_sched)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    refl))
+
+;; the exit memory's H window reads back as sha_block's state
+(claim shw_out_h
+  (goal
+    ((y0 Int)
+     (y1 Int)
+     (y2 Int)
+     (y3 Int)
+     (y4 Int)
+     (y5 Int)
+     (y6 Int)
+     (y7 Int)
+     (m Mem)
+     (src Int)
+     (wb Int))
+    ((= (le (+ src 64) wb) True)
+     (= (wlist m (+ wb 256) 64) (sha_k))
+     (= (wget m (+ wb 512)) y0)
+     (= (wget m (+ (+ wb 512) 4)) y1)
+     (= (wget m (+ (+ (+ wb 512) 4) 4)) y2)
+     (= (wget m (+ (+ (+ (+ wb 512) 4) 4) 4)) y3)
+     (= (wget m (+ (+ (+ (+ (+ wb 512) 4) 4) 4) 4)) y4)
+     (= (wget m (+ (+ (+ (+ (+ (+ wb 512) 4) 4) 4) 4) 4)) y5)
+     (= (wget m (+ (+ (+ (+ (+ (+ (+ wb 512) 4) 4) 4) 4) 4) 4)) y6)
+     (= (wget m (+ (+ (+ (+ (+ (+ (+ (+ wb 512) 4) 4) 4) 4) 4) 4) 4)) y7))
+    (=
+      (wlist (shw_mem m src wb) (+ wb 512) 8)
+      (shw_hlist
+        (sha_block (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7) (mem_read 64 m src)))))
+  (chain
+    (steps
+      ((rewrite (lemma shw_mem_def) lr lhs true ())
+       (rewrite (lemma ish_h8add_read) lr lhs true ())))
+    (rewrite-with
+      (lemma shw_sm_wget_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (rewrite-with
+      (lemma shw_sm_wget_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (rewrite-with
+      (lemma shw_sm_wget_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (rewrite-with
+      (lemma shw_sm_wget_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (rewrite-with
+      (lemma shw_sm_wget_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (rewrite-with
+      (lemma shw_sm_wget_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (rewrite-with
+      (lemma shw_sm_wget_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (rewrite-with
+      (lemma shw_sm_wget_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (steps
+      ((rewrite (premise 2) lr lhs true ())
+       (rewrite (premise 3) lr lhs true ())
+       (rewrite (premise 4) lr lhs true ())
+       (rewrite (premise 5) lr lhs true ())
+       (rewrite (premise 6) lr lhs true ())
+       (rewrite (premise 7) lr lhs true ())
+       (rewrite (premise 8) lr lhs true ())
+       (rewrite (premise 9) lr lhs true ())))
+    (have hr
+      (=
+        (shw_r m src wb)
+        (sha_rounds
+          (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+          (sha_k)
+          (sha_sched (mem_read 64 m src))))
+      (rewrite-with
+        (lemma shw_r_sha)
+        lr
+        lhs
+        ((inst y0 y0)
+         (inst y1 y1)
+         (inst y2 y2)
+         (inst y3 y3)
+         (inst y4 y4)
+         (inst y5 y5)
+         (inst y6 y6)
+         (inst y7 y7))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 3) lr lhs true ())) refl)
+         (steps ((rewrite (premise 4) lr lhs true ())) refl)
+         (steps ((rewrite (premise 5) lr lhs true ())) refl)
+         (steps ((rewrite (premise 6) lr lhs true ())) refl)
+         (steps ((rewrite (premise 7) lr lhs true ())) refl)
+         (steps ((rewrite (premise 8) lr lhs true ())) refl)
+         (steps ((rewrite (premise 9) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hr) lr lhs true ())))
+    (have hl0 (= (le 0 y0) True)
+      (chain
+        (steps ((rewrite (premise 2) rl lhs true ())))
+        (rewrite-with (lemma ish_wget_range_lo) lr lhs () ())
+        refl))
+    (have hl1 (= (le 0 y1) True)
+      (chain
+        (steps ((rewrite (premise 3) rl lhs true ())))
+        (rewrite-with (lemma ish_wget_range_lo) lr lhs () ())
+        refl))
+    (have hl2 (= (le 0 y2) True)
+      (chain
+        (steps ((rewrite (premise 4) rl lhs true ())))
+        (rewrite-with (lemma ish_wget_range_lo) lr lhs () ())
+        refl))
+    (have hl3 (= (le 0 y3) True)
+      (chain
+        (steps ((rewrite (premise 5) rl lhs true ())))
+        (rewrite-with (lemma ish_wget_range_lo) lr lhs () ())
+        refl))
+    (have hl4 (= (le 0 y4) True)
+      (chain
+        (steps ((rewrite (premise 6) rl lhs true ())))
+        (rewrite-with (lemma ish_wget_range_lo) lr lhs () ())
+        refl))
+    (have hl5 (= (le 0 y5) True)
+      (chain
+        (steps ((rewrite (premise 7) rl lhs true ())))
+        (rewrite-with (lemma ish_wget_range_lo) lr lhs () ())
+        refl))
+    (have hl6 (= (le 0 y6) True)
+      (chain
+        (steps ((rewrite (premise 8) rl lhs true ())))
+        (rewrite-with (lemma ish_wget_range_lo) lr lhs () ())
+        refl))
+    (have hl7 (= (le 0 y7) True)
+      (chain
+        (steps ((rewrite (premise 9) rl lhs true ())))
+        (rewrite-with (lemma ish_wget_range_lo) lr lhs () ())
+        refl))
+    (have hws
+      (= (wlist (shw_sm m src wb) wb 64) (sha_sched (mem_read 64 m src)))
+      (rewrite-with
+        (lemma shw_w_sched)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hsw (= (slo (sha_sched (mem_read 64 m src))) True)
+      (chain
+        (steps ((rewrite (premise hws) rl lhs true ())))
+        (rewrite-with (lemma ish_slo_wlist) lr lhs () ())
+        refl))
+    (have hR
+      (=
+        (h8_los
+          (sha_rounds
+            (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+            (sha_k)
+            (sha_sched (mem_read 64 m src))))
+        (list True True True True True True True True))
+      (rewrite-with
+        (lemma ish_srounds_los)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hl0) lr lhs true ())) refl)
+         (steps ((rewrite (premise hl1) lr lhs true ())) refl)
+         (steps ((rewrite (premise hl2) lr lhs true ())) refl)
+         (steps ((rewrite (premise hl3) lr lhs true ())) refl)
+         (steps ((rewrite (premise hl4) lr lhs true ())) refl)
+         (steps ((rewrite (premise hl5) lr lhs true ())) refl)
+         (steps ((rewrite (premise hl6) lr lhs true ())) refl)
+         (steps ((rewrite (premise hl7) lr lhs true ())) refl)
+         (steps ((rewrite (lemma ish_slo_shak) lr lhs true ())) refl)
+         (steps ((rewrite (premise hsw) lr lhs true ())) refl))
+        refl))
+    (have hx0
+      (=
+        (le
+          0
+          (h8a
+            (sha_rounds
+              (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+              (sha_k)
+              (sha_sched (mem_read 64 m src)))))
+        True)
+      (rewrite-with
+        (lemma ish_h8los_a)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hR) lr lhs true ())) refl))
+        refl))
+    (have hx1
+      (=
+        (le
+          0
+          (h8b
+            (sha_rounds
+              (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+              (sha_k)
+              (sha_sched (mem_read 64 m src)))))
+        True)
+      (rewrite-with
+        (lemma ish_h8los_b)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hR) lr lhs true ())) refl))
+        refl))
+    (have hx2
+      (=
+        (le
+          0
+          (h8c
+            (sha_rounds
+              (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+              (sha_k)
+              (sha_sched (mem_read 64 m src)))))
+        True)
+      (rewrite-with
+        (lemma ish_h8los_c)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hR) lr lhs true ())) refl))
+        refl))
+    (have hx3
+      (=
+        (le
+          0
+          (h8d
+            (sha_rounds
+              (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+              (sha_k)
+              (sha_sched (mem_read 64 m src)))))
+        True)
+      (rewrite-with
+        (lemma ish_h8los_d)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hR) lr lhs true ())) refl))
+        refl))
+    (have hx4
+      (=
+        (le
+          0
+          (h8e
+            (sha_rounds
+              (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+              (sha_k)
+              (sha_sched (mem_read 64 m src)))))
+        True)
+      (rewrite-with
+        (lemma ish_h8los_e)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hR) lr lhs true ())) refl))
+        refl))
+    (have hx5
+      (=
+        (le
+          0
+          (h8f
+            (sha_rounds
+              (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+              (sha_k)
+              (sha_sched (mem_read 64 m src)))))
+        True)
+      (rewrite-with
+        (lemma ish_h8los_f)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hR) lr lhs true ())) refl))
+        refl))
+    (have hx6
+      (=
+        (le
+          0
+          (h8g
+            (sha_rounds
+              (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+              (sha_k)
+              (sha_sched (mem_read 64 m src)))))
+        True)
+      (rewrite-with
+        (lemma ish_h8los_g)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hR) lr lhs true ())) refl))
+        refl))
+    (have hx7
+      (=
+        (le
+          0
+          (h8h
+            (sha_rounds
+              (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+              (sha_k)
+              (sha_sched (mem_read 64 m src)))))
+        True)
+      (rewrite-with
+        (lemma ish_h8los_h)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hR) lr lhs true ())) refl))
+        refl))
+    (have hs0
+      (=
+        (le
+          0
+          (+
+            y0
+            (h8a
+              (sha_rounds
+                (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+                (sha_k)
+                (sha_sched (mem_read 64 m src))))))
+        True)
+      (steps () (by arith (rows (goal 1) (hl0 1) (hx0 1)))))
+    (have hs1
+      (=
+        (le
+          0
+          (+
+            y1
+            (h8b
+              (sha_rounds
+                (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+                (sha_k)
+                (sha_sched (mem_read 64 m src))))))
+        True)
+      (steps () (by arith (rows (goal 1) (hl1 1) (hx1 1)))))
+    (have hs2
+      (=
+        (le
+          0
+          (+
+            y2
+            (h8c
+              (sha_rounds
+                (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+                (sha_k)
+                (sha_sched (mem_read 64 m src))))))
+        True)
+      (steps () (by arith (rows (goal 1) (hl2 1) (hx2 1)))))
+    (have hs3
+      (=
+        (le
+          0
+          (+
+            y3
+            (h8d
+              (sha_rounds
+                (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+                (sha_k)
+                (sha_sched (mem_read 64 m src))))))
+        True)
+      (steps () (by arith (rows (goal 1) (hl3 1) (hx3 1)))))
+    (have hs4
+      (=
+        (le
+          0
+          (+
+            y4
+            (h8e
+              (sha_rounds
+                (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+                (sha_k)
+                (sha_sched (mem_read 64 m src))))))
+        True)
+      (steps () (by arith (rows (goal 1) (hl4 1) (hx4 1)))))
+    (have hs5
+      (=
+        (le
+          0
+          (+
+            y5
+            (h8f
+              (sha_rounds
+                (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+                (sha_k)
+                (sha_sched (mem_read 64 m src))))))
+        True)
+      (steps () (by arith (rows (goal 1) (hl5 1) (hx5 1)))))
+    (have hs6
+      (=
+        (le
+          0
+          (+
+            y6
+            (h8g
+              (sha_rounds
+                (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+                (sha_k)
+                (sha_sched (mem_read 64 m src))))))
+        True)
+      (steps () (by arith (rows (goal 1) (hl6 1) (hx6 1)))))
+    (have hs7
+      (=
+        (le
+          0
+          (+
+            y7
+            (h8h
+              (sha_rounds
+                (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7)
+                (sha_k)
+                (sha_sched (mem_read 64 m src))))))
+        True)
+      (steps () (by arith (rows (goal 1) (hl7 1) (hx7 1)))))
+    (steps
+      ((unfold sha_block rhs)
+       (rewrite (lemma shw_hadd_open) lr rhs true ())
+       (compute
+         rhs
+         (stop band sha_rounds sha_sched sha_k mem_read h8a h8b h8c h8d h8e h8f
+           h8g h8h))))
+    (rewrite-with
+      (lemma ish_mm32)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hs0) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ish_mm32)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hs1) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ish_mm32)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hs2) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ish_mm32)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hs3) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ish_mm32)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hs4) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ish_mm32)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hs5) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ish_mm32)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hs6) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ish_mm32)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hs7) lr lhs true ())) refl)))
+    refl))
+
+;; the exit memory's K window is untouched: the constants persist
+(claim shw_out_k
+  (goal ((m Mem) (src Int) (wb Int)) ((= (wlist m (+ wb 256) 64) (sha_k)))
+    (= (wlist (shw_mem m src wb) (+ wb 256) 64) (sha_k)))
+  (chain
+    (steps ((rewrite (lemma shw_mem_def) lr lhs true ())))
+    (rewrite-with
+      (lemma ish_wlist_h8add_below)
+      lr
+      lhs
+      ()
+      ((steps
+         ((compute lhs) (rewrite (lemma ish_i64p) lr lhs true ()) (compute lhs))
+         (by arith (rows (goal 1))))))
+    (rewrite-with
+      (lemma shw_sm_wlist_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (steps ((rewrite (premise 0) lr lhs true ())))
+    refl))
+
+;; every window below wb is untouched: the message region persists
+(claim shw_out_lo
+  (goal ((m Mem) (src Int) (wb Int) (p Int) (j Nat))
+    ((= (le (+ p (* 4 (int_of_nat j))) wb) True))
+    (= (wlist (shw_mem m src wb) p j) (wlist m p j)))
+  (chain
+    (steps ((rewrite (lemma shw_mem_def) lr lhs true ())))
+    (rewrite-with
+      (lemma ish_wlist_h8add_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (steps ((rewrite (lemma shw_sm_def) lr lhs true ())))
+    (rewrite-with
+      (lemma ish_wlist_sched_below)
+      lr
+      lhs
+      ()
+      ((steps ((compute lhs)) (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ish_wlist_copy_below)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    refl))

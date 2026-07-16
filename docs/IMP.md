@@ -2271,8 +2271,82 @@ claims green on the first structurally-complete draft.
   target; probe = corpus target.
 - NEXT: I2e-2 (padding + digest readback + K/H window init — the
   K-window wlist premise discharges by computation once an init twin
-  writes sha_k into the K window), then the driver composition
-  (blocks loop at World grain) and the (bin …).
+  writes sha_k into the K window), then I2e-3/I2e-4 per the
+  composition ruling below.
+
+**The I2e composition ruling (2026-07-16, user-ratified).** The
+sha256sum bin organizes as NESTED GRAINS with the call boundary as
+the composition primitive at every layer — the bin-organization
+precedent for shard binaries generally:
+
+- **main = World, THIN** (addw X86.md §48 machinery, two calls → a
+  few): read stdin, call the artifacts, write the digest. Compute
+  never lives in the I/O proof (the BIN-BOUNDARY LAW and the
+  req-fulfills principle both want main's premise surface = exactly
+  the glue contract).
+- **The blocks loop = a PURE artifact (I2e-3)**: a Nat-counted loop
+  XCalling the block per iteration — X86.md §18 / wasm §6ac's
+  species with an impgen-generated callee. xcall_bridge's callee
+  slot is discharged by exactly shw_xblock's species (xeval_seq of
+  the body from the caller's registers), so the lift = wrap the
+  block statement list as an XFunc + one adapter lemma. Hand weld,
+  probe first — and the measured blueprint for the coverage arc's
+  icall tier (the redirection above names call = icall as the
+  uniform compiler's primitive; I2e-3 is its hand-built precedent).
+- **v1 SLURPS, streaming = named growth**: stdin buffered into the
+  model window (cap ≈ 64KiB minus schedule/state overhead); oversize
+  input = a controlled-failure leg (MEMORY.md's Done ∨ Fail-prefix
+  claim forms), never a silent wrong answer. A World-loop main
+  interleaving reads with hash calls (cat_loop's clock-discipline
+  species) is the honest streaming form — a future rung, not v1.
+- The capacity rationale, once more: boundaries scale, monoliths
+  don't (64GB monolith vs 645MB compositional; >66GB wall vs 1.2GB
+  seal-points). The loop proven inline in main's World cert would be
+  the monolith shape again.
+
+**I2e-2a — THE COLLAPSE (2026-07-16): the weld output lands on
+sha_block.** With the K window holding sha_k and the H window holding
+the running state's words, the weld's named outputs collapse to spec
+vocabulary — the three memory facts the blocks-loop driver chains,
+all in std/sha256/sha256.weld.shard (closure 838/0):
+
+- `shw_out_h`: the exit memory's H window reads back as
+  `shw_hlist (sha_block (mk_h8 y0…y7) (mem_read 64 m src))` — the
+  per-block step in one equation. `shw_out_k`: the K window persists
+  (the constants survive every block). `shw_out_lo`: every window
+  below wb persists (the message region survives). `shw_r_sha`: the
+  rounds output = `sha_rounds` of the state over `sha_k` and
+  `sha_sched` of the block's bytes (rides `isha_sched_window` +
+  `ish_words16_read`, both pre-existing).
+- **The sibling grew three I2e-2 kits** (sha256.imp.shard, 387/0):
+  the below-side frame mirrors (`ish_wget/wlist_sched_below`,
+  `ish_wlist_copy_below` — the message region reads across the block
+  effect); the ROUNDS RANGE KIT (`slo`/`h8_los` predicates,
+  `ish_rnd_los`/`ish_srounds_los` preservation citing the V2-6
+  tree-identical `ish_ra_lo`/`ish_re_lo`, projection-style
+  extractions `ish_h8los_a..h` — list equations extract by `blnth`
+  projection, NO Bool-chain inversion); and the FINISH READBACK
+  (`ish_h8add_g0..g7` per-lane + `ish_h8add_read` assembly +
+  `ish_wget/wlist_h8add_below` — every address obligation is
+  `ish_d34` stretched by `ish_lt_b4`/`ish_le_b4`, zero arith rows).
+- **The band/mod crossing**: h8add_mem stores mod-spelled sums, the
+  spec's h8_add is band-spelled (m32); `ish_mm32` bridges under
+  nonnegativity — the state side free from `ish_wget_range_lo`
+  (mask-on-read), the rounds side from the range kit. The W-list slo
+  fact converts through `shw_w_sched`'s equation to wlist form where
+  it is free — no slo-of-sha_sched induction needed.
+- Proof-mechanics findings: `int_of_nat` is OPAQUE — ground
+  occurrences in citation obligations collapse via `ish_i16p/48p/64p`
+  (packed) or `ish_i16/i48` (tower), never by compute; the
+  tower-vs-packed ground spelling gap (isha_sched_window spells
+  `(S^ 16 Z)`, the weld spells packed `16`) bridges by a compute-both
+  have under stops (the I2e-1 spelling-bridge species, ground-Nat
+  edition); keyed cert rows `(rows (goal 1) (0 1) (hname 1))` keep
+  have-heavy proofs insertion-stable.
+- NEXT: I2e-2b (the K/H init artifact — an imp source whose
+  generated legs write sha_k + sha_h0 into the windows, discharging
+  shw_r_sha's content premises by computation), then padding +
+  digest-hex artifacts, then I2e-3 per the ruling above.
 
 
 ## 7. Non-goals, stated once
