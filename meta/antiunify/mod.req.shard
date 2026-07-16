@@ -369,6 +369,77 @@
       (- remaining 1))
     False)))
 
+;; A contextual theorem can expose only a local equation while retaining the
+;; complete parameter telescope authenticated by its enclosing context.  Such
+;; a fragment legitimately has declared schema binders which do not occur in
+;; either side of the local equation.  Coverage still has to account for every
+;; binder that the fragment does mention; only the absent telescope entries
+;; may be skipped.  The occurrence walk mirrors `trs_match`'s algebraic rewrite
+;; fragment; Match/Let never reach a successful coverage match.
+(fn au_fragment_bvar_occurs_list ((needle Int) (es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil False)
+    ((Cons e rest)
+     (if (au_fragment_bvar_occurs needle e) True
+     (au_fragment_bvar_occurs_list needle rest)))))
+
+(fn au_fragment_bvar_occurs ((needle Int) (e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((BVar index) (int_eq needle index))
+    ((Ctor _ args) (au_fragment_bvar_occurs_list needle args))
+    ((Call _ args) (au_fragment_bvar_occurs_list needle args))
+    ((If c t f)
+     (if (au_fragment_bvar_occurs needle c) True
+     (if (au_fragment_bvar_occurs needle t) True
+     (au_fragment_bvar_occurs needle f))))
+    (_ False)))
+
+(fn au_fragment_var_occurs ((schema AuEquation) (schema_index Int)) Bool
+  (if (au_fragment_bvar_occurs schema_index (au_lhs schema)) True
+  (au_fragment_bvar_occurs schema_index (au_rhs schema))))
+
+(fn au_schema_fragment_vars_covered
+  ((schema AuEquation)
+   (schema_types (List Type))
+   (rule_types (List Type))
+   (env TrsEnv)
+   (schema_index Int)
+   (remaining Int))
+  Bool
+  (measure
+    remaining
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (le remaining 0) True
+  (if (au_fragment_var_occurs schema schema_index)
+    (if
+      (au_rule_var_sources_schema
+        schema_types
+        rule_types
+        env
+        schema_index
+        0
+        (trs_len_types rule_types))
+      (au_schema_fragment_vars_covered
+        schema
+        schema_types
+        rule_types
+        env
+        (+ schema_index 1)
+        (- remaining 1))
+      False)
+    (au_schema_fragment_vars_covered
+      schema
+      schema_types
+      rule_types
+      env
+      (+ schema_index 1)
+      (- remaining 1)))))
+
 (fn au_rule_bindings_typed
   ((schema_types (List Type))
    (rule_types (List Type))
@@ -424,7 +495,16 @@
           (_
             (match right_value
               ((BVar _) False)
-              (_ (if (expr_eq left_value right_value) False True))))))))))
+              (_
+                ;; Unequal ground syntax proves structural distinctness.
+                ;; Compounds containing proposal BVars may become equal under
+                ;; a later schema substitution and therefore need a stronger
+                ;; relational guard language before they can be accepted.
+                (if (au_closed left_value)
+                  (if (au_closed right_value)
+                    (if (expr_eq left_value right_value) False True)
+                    False)
+                  False))))))))))
 
 (fn au_rule_guards_covered
   ((env TrsEnv)
@@ -464,3 +544,112 @@
                  False)
                False)))
           False))))))
+
+;; Context-fragment counterpart to `au_conditioned_rule_covers`.  The strict
+;; API above requires every declared schema binder to participate in the
+;; equation.  This variant ignores declared binders absent from the fragment,
+;; while retaining the same matching, used-binder type checks, and guard
+;; entailment for everything the fragment actually observes.
+(fn au_conditioned_rule_fragment_covers
+  ((typed AuTypedSchema)
+   (proposal_guards (List AuDistinct))
+   (conditioned TrsConditionedRule))
+  Bool
+  (match typed
+    ((AuTypedSchema (AuSchema schema arity) schema_types)
+     (match conditioned
+       ((TrsConditionedRule (TrsRule _ rule_types lhs rhs) rule_guards)
+        (if (int_eq arity (trs_len_types schema_types))
+          (match (au_match_equation (AuEquation lhs rhs) schema)
+            (None False)
+            ((Some env)
+             (if
+               (au_schema_fragment_vars_covered
+                 schema
+                 schema_types
+                 rule_types
+                 env
+                 0
+                 arity)
+               (if
+                 (au_rule_bindings_typed
+                   schema_types
+                   rule_types
+                   env
+                   0
+                   (trs_len_types rule_types))
+                 (au_rule_guards_covered env proposal_guards rule_guards)
+                 False)
+               False)))
+          False))))))
+
+;; Domain-aware contextual coverage for an authenticated structural spine.
+;; The local theorem may fire at the root or beneath any number of the checked
+;; constructor's recursive-child edges.  A layer is removable only when both
+;; equation sides carry that constructor and every non-child argument is the
+;; same expression, i.e. when it is exactly the one-hole context licensed by
+;; TrsSpine rather than an assumed congruence principle.
+(fn au_spine_context_args
+  ((child Int) (index Int) (lhs (List Expr)) (rhs (List Expr))) Bool
+  (measure (struct lhs))
+  (match lhs
+    (Nil
+      (match rhs
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons left rest_left)
+     (match rhs
+       (Nil False)
+       ((Cons right rest_right)
+        (if (int_eq index child)
+          (au_spine_context_args child (+ index 1) rest_left rest_right)
+          (if (expr_eq left right)
+            (au_spine_context_args child (+ index 1) rest_left rest_right)
+            False)))))))
+
+(fn au_spine_rule_covers
+  ((fuel Int)
+   (typed AuTypedSchema)
+   (proposal_guards (List AuDistinct))
+   (item TrsSpineRule))
+  Bool
+  (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt fuel 1) False
+  (match item
+    ((TrsSpineRule spine conditioned)
+     (if
+       (au_conditioned_rule_fragment_covers
+         typed proposal_guards conditioned)
+       True
+       (match typed
+         ((AuTypedSchema (AuSchema (AuEquation lhs rhs) arity) types)
+          (match spine
+            ((TrsSpine _ ctor child)
+             (match lhs
+               ((Ctor left_ctor left_args)
+                (match rhs
+                  ((Ctor right_ctor right_args)
+                   (if (qname_eq left_ctor ctor)
+                     (if (qname_eq right_ctor ctor)
+                       (if
+                         (au_spine_context_args child 0 left_args right_args)
+                         (match (nth_opt left_args child)
+                           (None False)
+                           ((Some left_child)
+                            (match (nth_opt right_args child)
+                              (None False)
+                              ((Some right_child)
+                               (au_spine_rule_covers
+                                 (- fuel 1)
+                                 (AuTypedSchema
+                                   (AuSchema
+                                     (AuEquation left_child right_child)
+                                     arity)
+                                   types)
+                                 proposal_guards
+                                 item)))))
+                         False)
+                       False)
+                     False))
+                  (_ False)))
+               (_ False)))))))))))

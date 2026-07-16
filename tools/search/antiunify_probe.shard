@@ -29,6 +29,12 @@
 
 (fn aup_g ((a Expr)) Expr (Ctor (qn (quote G)) (list a)))
 
+(fn aup_ctx ((head Expr) (tail Expr)) Expr
+  (Ctor (qn (quote SpineNode)) (list head tail)))
+
+(fn aup_other_ctx ((head Expr) (tail Expr)) Expr
+  (Ctor (qn (quote OtherNode)) (list head tail)))
+
 (fn aup_fail ((msg (List Int)) (w World)) World
   (exit 1 (write (append_int "ANTIUNIFY-PROBE FAIL " msg) w)))
 
@@ -43,6 +49,162 @@
 
 (fn aup_fixture_ctor ((name Symbol) (args (List Expr))) Expr
   (Ctor (aup_fixture_q name) args))
+
+(fn aup_compound_guard_coverage ((w World)) World
+  (let
+    ((int_type (TCon (qn (quote Int)) Nil))
+     (disc (qn (quote compound_probe_disc)))
+     (rule_name (qn (quote compound_probe_rule))))
+    (let
+      ((typed
+         (AuTypedSchema
+           (AuSchema
+             (AuEquation
+               (Ctor
+                 (qn (quote GuardedNode))
+                 (list
+                   (BVar 1)
+                   (BVar 0)
+                   (aup_f (BVar 1) (aup_atom (quote Z)))
+                   (aup_f (BVar 0) (aup_atom (quote Z)))))
+               (Ctor (qn (quote KeptNode)) (list (BVar 1) (BVar 0))))
+             2)
+           (list int_type int_type)))
+       (conditioned
+         (TrsConditionedRule
+           (TrsRule
+             rule_name
+             (list int_type int_type int_type int_type)
+             (Ctor
+               (qn (quote GuardedNode))
+               (list (BVar 3) (BVar 2) (BVar 1) (BVar 0)))
+             (Ctor (qn (quote KeptNode)) (list (BVar 3) (BVar 2))))
+           (list (TrsDistinct disc 1 0)))))
+      (if (au_conditioned_rule_covers typed Nil conditioned)
+        (aup_fail "strict coverage trusted a compound open guard\n" w)
+        (if (au_conditioned_rule_fragment_covers typed Nil conditioned)
+          (aup_fail "fragment coverage trusted a compound open guard\n" w)
+          (write "ANTIUNIFY-PROBE OK\n" w))))))
+
+(fn aup_spine_coverage
+  ((typed AuTypedSchema)
+   (proposal_guards (List AuDistinct))
+   (conditioned TrsConditionedRule)
+   (w World))
+  World
+  (match typed
+    ((AuTypedSchema (AuSchema (AuEquation lhs rhs) arity) types)
+     (let
+       ((a (aup_atom (quote ContextA)))
+        (b (aup_atom (quote ContextB)))
+        (spine (TrsSpine (qn (quote plug)) (qn (quote SpineNode)) 1)))
+       (let
+         ((item (TrsSpineRule spine conditioned))
+          (nested
+            (AuTypedSchema
+              (AuSchema
+                (AuEquation (aup_ctx a (aup_ctx b lhs))
+                            (aup_ctx a (aup_ctx b rhs)))
+                arity)
+              types))
+          (different
+            (AuTypedSchema
+              (AuSchema
+                (AuEquation (aup_ctx a lhs) (aup_ctx b rhs))
+                arity)
+              types))
+          (wrong_ctor
+            (AuTypedSchema
+              (AuSchema
+                (AuEquation (aup_ctx a lhs) (aup_other_ctx a rhs))
+                arity)
+              types)))
+         (if (au_spine_rule_covers 16 nested proposal_guards item)
+           (if (au_spine_rule_covers 16 different proposal_guards item)
+             (aup_fail "spine coverage ignored a non-child difference\n" w)
+             (if (au_spine_rule_covers 16 wrong_ctor proposal_guards item)
+               (aup_fail "spine coverage crossed the wrong constructor\n" w)
+               (if
+                 (au_spine_rule_covers
+                   16
+                   nested
+                   proposal_guards
+                   (TrsSpineRule
+                     (TrsSpine (qn (quote plug)) (qn (quote SpineNode)) 0)
+                     conditioned))
+                 (aup_fail "spine coverage crossed the wrong child\n" w)
+                 (if
+                   (au_spine_rule_covers
+                     16
+                     nested
+                     proposal_guards
+                     (TrsSpineRule
+                       (TrsSpine (qn (quote plug)) (qn (quote SpineNode)) 3)
+                       conditioned))
+                   (aup_fail "spine coverage accepted an absent child\n" w)
+                   (if (au_spine_rule_covers 16 nested Nil item)
+                     (aup_fail "spine coverage weakened a theorem guard\n" w)
+                     (aup_compound_guard_coverage w))))))
+           (aup_fail "nested authenticated spine was not covered\n" w)))))))
+
+(fn aup_fragment_coverage ((w World)) World
+  (let
+    ((int_type (TCon (qn (quote Int)) Nil))
+     (symbol_type (TCon (qn (quote Symbol)) Nil))
+     (disc (qn (quote fragment_probe_disc)))
+     (rule_name (qn (quote fragment_probe_rule))))
+    (let
+      ((typed
+         (AuTypedSchema
+           (AuSchema
+             (AuEquation
+               (aup_f (BVar 0) (aup_f (BVar 1) (aup_atom (quote Z))))
+               (aup_g (BVar 1)))
+             3)
+           (list int_type symbol_type int_type)))
+       (rule
+         (TrsRule
+           rule_name
+           (list int_type int_type symbol_type)
+           (aup_f (BVar 1) (aup_f (BVar 0) (aup_atom (quote Z))))
+           (aup_g (BVar 0))))
+       (bad_type_rule
+         (TrsRule
+           rule_name
+           (list int_type symbol_type symbol_type)
+           (aup_f (BVar 1) (aup_f (BVar 0) (aup_atom (quote Z))))
+           (aup_g (BVar 0))))
+       (proposal_guards (list (AuDistinct 0 1)))
+       (rule_guards (list (TrsDistinct disc 1 0))))
+      (if
+        (au_conditioned_rule_covers
+          typed
+          proposal_guards
+          (TrsConditionedRule rule rule_guards))
+        (aup_fail "strict coverage accepted an unused context binder\n" w)
+        (if
+          (au_conditioned_rule_fragment_covers
+            typed
+            proposal_guards
+            (TrsConditionedRule rule rule_guards))
+          (if
+            (au_conditioned_rule_fragment_covers
+              typed
+              proposal_guards
+              (TrsConditionedRule bad_type_rule rule_guards))
+            (aup_fail "fragment coverage ignored a used binder type\n" w)
+            (if
+              (au_conditioned_rule_fragment_covers
+                typed
+                Nil
+                (TrsConditionedRule rule rule_guards))
+              (aup_fail "fragment coverage weakened a used guard\n" w)
+              (aup_spine_coverage
+                typed
+                proposal_guards
+                (TrsConditionedRule rule rule_guards)
+                w)))
+          (aup_fail "fragment coverage refused an unused context binder\n" w))))))
 
 (fn aup_coverage ((w World)) World
   (let
@@ -95,7 +257,7 @@
                 proposal_guards
                 (TrsConditionedRule bad_type_rule rule_guards))
               (aup_fail "coverage ignored binder types\n" w)
-              (write "ANTIUNIFY-PROBE OK\n" w)))
+              (aup_fragment_coverage w)))
           (aup_fail "unguarded theorem did not cover guarded proposal\n" w))
         (aup_fail "alpha-renamed guarded rule did not cover schema\n" w)))))
 

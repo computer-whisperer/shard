@@ -2735,3 +2735,32 @@ Thus one mined guarded family adds 102 unique reductions and trims another 30
 regions / 15 forks from the branch-and-prune tree.  It remains residual
 pressure (`REMOVED 0`): correlated variable-length window formation is a
 separate relational-grammar problem.
+
+The miner's proof classifier now respects that same contextual domain.  A
+spine-authenticated rule retains its inspected `TrsSpine` descriptor; reusable
+`meta/antiunify` coverage strips zero or more common constructor layers only
+when both sides use the checked constructor, the recursive child exists, and
+every non-child field is `expr_eq`.  Local-fragment coverage may ignore schema
+binders used only by the stripped context, but every binder still present in
+the local equation keeps the existing alpha/type check and theorem guards must
+still be entailed.  Negative probes pin wrong constructors, wrong or absent
+children, changed non-child fields, and missing guards.  Compound guard
+bindings are considered definitely distinct only when both are closed ground
+terms; unequal open syntax containing proposal binders is refused because a
+later substitution could make the terms equal.
+
+That changes no search license and no candidate count; it repairs the mining
+queue's accounting.  The same 111 replay-valid proposals move from
+9 root-shaped recognitions / 102 apparent proof targets to:
+
+    AUTHENTICATED 26; PROOF-WORKLIST 85
+
+The classifier remains deliberately conservative when a theorem metavariable
+matches a compound term containing fresh proposal binders.  General closure
+there needs checked substitution typing under the proposal telescope; merely
+dismissing those binders would be unsound.  Search already applies the theorem
+to such concrete grammar regions, so this is a proof-worklist precision
+frontier, not missing narrowing pressure.  The miner also still classifies an
+`everywhere` theorem at the proposal root; recognizing it through an arbitrary
+common `Expr` context needs a general checked zipper rather than borrowing the
+more restrictive structural-spine projector.
