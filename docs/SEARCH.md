@@ -1854,6 +1854,21 @@ the nonlinear matcher must describe a conditional redex as a choice cube (or
 an exact finite partition).  The scheduler can now subtract that cube and keep
 its lazy complement without changing grammar identities or evaluator caches.
 
+The first general relational partition is now available as
+`ms_equal_partition`.  It repeatedly applies the same partial structural
+equality used by nonlinear matching, but classifies a blocked hole's allowed
+choices before deciding how to refine.  Choices with stable equal or unequal
+verdicts are coalesced by forbidding the opposite class; only choices that
+still block become fixed pending jobs.  Consequently two three-choice atom
+holes partition their nine-member product into three exact diagonal cubes and
+three two-member unequal row regions (`EQ 3 + NE 6`, four relational split
+boundaries), rather than nine ground cases.  The nonlinear probe pins exact
+coverage, region counts, and per-region cardinalities.  This is deliberately
+equality vocabulary rather than an x86 transform table; distinctness premises
+consume the unequal side, while repeated pattern variables consume the equal
+side.  The remaining integration is to lift a rule match into those relation
+partitions and attach its checked citation to the redex side.
+
 `std/order` supplies checked `lt a a = False` and `int_eq a a = True` claims.
 They are selected by name from the same object closure as the append and order
 laws—there is no comparison-specific table in the engine.  On the complete

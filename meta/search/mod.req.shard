@@ -958,6 +958,222 @@
                (ms_block_first blocked hole_id))))
           (MsMatchNo))))))))
 
+;; ---- exact finite equality partitions -----------------------------------
+;;
+;; A nonlinear theorem often depends on equality (or its distinctness dual)
+;; between two partial terms.  `MsBlocked h` is the right compatibility answer
+;; for a one-hole scheduler, but it throws away a useful stronger fact: after
+;; inspecting h's finite alternatives, all equality choices and all inequality
+;; choices can be retained as two exact restricted regions.  The partitioner
+;; below repeatedly performs that split.  Stable choices with the same verdict
+;; are coalesced by forbidding the opposite class; only choices whose selected
+;; alternative still blocks become separate pending jobs.  Thus a three-by-
+;; three diagonal becomes three equality cubes and three unequal row regions,
+;; rather than nine ground cases, over the original Grammar ids.
+
+(fn mse_int_mem ((value Int) (values (List Int))) Bool
+  (measure (struct values))
+  (match values
+    (Nil False)
+    ((Cons head rest)
+     (if (int_eq value head) True (mse_int_mem value rest)))))
+
+(fn mse_regions_append
+  ((left (List SkRegion)) (right (List SkRegion))) (List SkRegion)
+  (measure (struct left))
+  (match left
+    (Nil right)
+    ((Cons head rest) (Cons head (mse_regions_append rest right)))))
+
+(type MsEqChoicesR
+  (MsEqChoicesErr (List Int))
+  (MsEqChoicesOk (List Int) (List Int) (List SkRegion)))
+  ; stable equal choices, stable unequal choices, still-blocked fixed children
+
+(fn mse_classify_choices
+  ((fuel Int)
+   (grammar Grammar)
+   (space Expr)
+   (region SkRegion)
+   (left Expr)
+   (right Expr)
+   (hole_id Int)
+   (index Int)
+   (alts (List Expr))
+   (equal (List Int))
+   (unequal (List Int))
+   (pending (List SkRegion)))
+  MsEqChoicesR
+  (measure (struct alts))
+  (match alts
+    (Nil (MsEqChoicesOk equal unequal pending))
+    ((Cons _ rest)
+     (match (sk_region_choose grammar region hole_id index)
+       ((SkRegionEditErr msg) (MsEqChoicesErr msg))
+       ((SkRegionEditEmpty)
+        (mse_classify_choices
+          fuel grammar space region left right hole_id (+ index 1) rest
+          equal unequal pending))
+       ((SkRegionEditOk child)
+        (match (sk_region_count space grammar child)
+          ((SkCErr msg) (MsEqChoicesErr msg))
+          ((SkCOk count)
+           (if (le count 0)
+             (mse_classify_choices
+               fuel grammar space region left right hole_id (+ index 1) rest
+               equal unequal pending)
+           (match
+             (ms_equal fuel grammar (ms_region_asg child) left right)
+             ((MsMatchErr msg) (MsEqChoicesErr msg))
+             ((MsMatchYes)
+              (mse_classify_choices
+                fuel grammar space region left right hole_id (+ index 1) rest
+                (Cons index equal) unequal pending))
+             ((MsMatchNo)
+              (mse_classify_choices
+                fuel grammar space region left right hole_id (+ index 1) rest
+                equal (Cons index unequal) pending))
+             ((MsMatchBlocked _)
+              (mse_classify_choices
+                fuel grammar space region left right hole_id (+ index 1) rest
+                equal unequal (Cons child pending))))))))))))
+
+(type MsEqRestrictR
+  (MsEqRestrictErr (List Int))
+  (MsEqRestrictNone)
+  (MsEqRestrictSome SkRegion))
+
+(fn mse_restrict_choices_go
+  ((grammar Grammar)
+   (region SkRegion)
+   (hole_id Int)
+   (index Int)
+   (alts (List Expr))
+   (keep (List Int)))
+  MsEqRestrictR
+  (measure (struct alts))
+  (match alts
+    (Nil (MsEqRestrictSome region))
+    ((Cons _ rest)
+     (if (mse_int_mem index keep)
+       (mse_restrict_choices_go
+         grammar region hole_id (+ index 1) rest keep)
+       (match (sk_region_forbid grammar region hole_id index)
+         ((SkRegionEditErr msg) (MsEqRestrictErr msg))
+         ((SkRegionEditEmpty) (MsEqRestrictNone))
+         ((SkRegionEditOk restricted)
+          (mse_restrict_choices_go
+            grammar restricted hole_id (+ index 1) rest keep)))))))
+
+(fn mse_restrict_choices
+  ((grammar Grammar)
+   (region SkRegion)
+   (hole_id Int)
+   (alts (List Expr))
+   (keep (List Int)))
+  MsEqRestrictR
+  (match keep
+    (Nil (MsEqRestrictNone))
+    ((Cons _ _)
+     (mse_restrict_choices_go grammar region hole_id 0 alts keep))))
+
+(fn mse_cons_region
+  ((restricted MsEqRestrictR) (regions (List SkRegion)))
+  (Pair (Option (List Int)) (List SkRegion))
+  (match restricted
+    ((MsEqRestrictErr msg) (Pair (Some msg) regions))
+    ((MsEqRestrictNone) (Pair None regions))
+    ((MsEqRestrictSome region) (Pair None (Cons region regions)))))
+
+(type MsEqPartitionR
+  (MsEqPartitionErr (List Int))
+  (MsEqPartitionOk (List SkRegion) (List SkRegion) Int))
+  ; equal regions, unequal regions, relational split boundaries
+
+(fn mse_partition_go
+  ((fuel Int)
+   (grammar Grammar)
+   (space Expr)
+   (left Expr)
+   (right Expr)
+   (jobs (List SkRegion))
+   (equal (List SkRegion))
+   (unequal (List SkRegion))
+   (forks Int))
+  MsEqPartitionR
+  (measure fuel)
+  (if (lt fuel 1) (MsEqPartitionErr "equality partition fuel exhausted")
+  (match jobs
+    (Nil (MsEqPartitionOk equal unequal forks))
+    ((Cons region rest)
+     (match (sk_region_count space grammar region)
+       ((SkCErr msg) (MsEqPartitionErr msg))
+       ((SkCOk count)
+        (if (le count 0)
+          (mse_partition_go
+            (- fuel 1) grammar space left right rest equal unequal forks)
+        (match (ms_equal fuel grammar (ms_region_asg region) left right)
+          ((MsMatchErr msg) (MsEqPartitionErr msg))
+          ((MsMatchYes)
+           (mse_partition_go
+             (- fuel 1) grammar space left right rest
+             (Cons region equal) unequal forks))
+          ((MsMatchNo)
+           (mse_partition_go
+             (- fuel 1) grammar space left right rest
+             equal (Cons region unequal) forks))
+          ((MsMatchBlocked hole_id)
+           (match (ms_alts grammar hole_id)
+             (None (MsEqPartitionErr "equality partition references unknown hole"))
+             ((Some alts)
+              (match
+                (mse_classify_choices
+                  (- fuel 1) grammar space region left right hole_id 0 alts
+                  Nil Nil Nil)
+                ((MsEqChoicesErr msg) (MsEqPartitionErr msg))
+                ((MsEqChoicesOk equal_choices unequal_choices pending)
+                 (match
+                   (mse_cons_region
+                     (mse_restrict_choices
+                       grammar region hole_id alts equal_choices)
+                     equal)
+                   ((Pair (Some msg) _) (MsEqPartitionErr msg))
+                   ((Pair None equal2)
+                    (match
+                      (mse_cons_region
+                        (mse_restrict_choices
+                          grammar region hole_id alts unequal_choices)
+                        unequal)
+                      ((Pair (Some msg) _) (MsEqPartitionErr msg))
+                      ((Pair None unequal2)
+                       (mse_partition_go
+                         (- fuel 1)
+                         grammar
+                         space
+                         left
+                         right
+                         (mse_regions_append pending rest)
+                         equal2
+                         unequal2
+                         (+ forks 1)))))))))))))))))))
+
+(fn ms_equal_partition
+  ((fuel Int)
+   (grammar Grammar)
+   (space Expr)
+   (region SkRegion)
+   (left Expr)
+   (right Expr))
+  MsEqPartitionR
+  (match (g_wf grammar)
+    ((GWErr msg) (MsEqPartitionErr msg))
+    ((GWOk)
+     (match (sk_region_wf grammar region)
+       ((SkRegionWfErr msg) (MsEqPartitionErr msg))
+       ((SkRegionWfOk)
+        (mse_partition_go
+          fuel grammar space left right (Cons region Nil) Nil Nil 0))))))
+
 (fn msn_match
   ((fuel Int)
    (grammar Grammar)

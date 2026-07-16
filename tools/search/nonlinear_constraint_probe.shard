@@ -62,9 +62,9 @@
 (fn ncp_grammar () Grammar
   (Grammar
     (list
-      (GEnt 0 (list (ncp_atom 0) (ncp_atom 1)))
-      (GEnt 1 (list (ncp_atom 0) (ncp_atom 1)))
-      (GEnt 2 (list (ncp_atom 2) (ncp_atom 3))))))
+      (GEnt 0 (list (ncp_atom 0) (ncp_atom 1) (ncp_atom 2)))
+      (GEnt 1 (list (ncp_atom 0) (ncp_atom 1) (ncp_atom 2)))
+      (GEnt 2 (list (ncp_atom 3) (ncp_atom 4))))))
 
 (fn ncp_equal_asg () (List (Pair Int Int))
   (list (Pair 0 0) (Pair 1 0)))
@@ -99,6 +99,69 @@
                      (ncp_fail "late mismatch emitted no relaxed facts" w)))))
                (_ (ncp_fail "direct late static mismatch" w)))))))))))
 
+(fn ncp_regions_len ((regions (List SkRegion))) Int
+  (measure (struct regions))
+  (match regions
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (ncp_regions_len rest)))))
+
+(fn ncp_regions_count
+  ((space Expr)
+   (grammar Grammar)
+   (regions (List SkRegion))
+   (acc Int))
+  (Option Int)
+  (measure (struct regions))
+  (match regions
+    (Nil (Some acc))
+    ((Cons region rest)
+     (match (sk_region_count space grammar region)
+       ((SkCErr _) None)
+       ((SkCOk count)
+        (ncp_regions_count space grammar rest (+ acc count)))))))
+
+(fn ncp_regions_each_count
+  ((space Expr) (grammar Grammar) (regions (List SkRegion)) (want Int)) Bool
+  (measure (struct regions))
+  (match regions
+    (Nil True)
+    ((Cons region rest)
+     (match (sk_region_count space grammar region)
+       ((SkCErr _) False)
+       ((SkCOk count)
+        (if (int_eq count want)
+          (ncp_regions_each_count space grammar rest want)
+          False))))))
+
+(fn ncp_partition ((grammar Grammar) (w World)) World
+  (let ((space (ncp_pair (hole 0) (hole 1))))
+    (match
+      (ms_equal_partition
+        1000 grammar space (sk_empty_region) (hole 0) (hole 1))
+      ((MsEqPartitionErr msg) (ncp_fail msg w))
+      ((MsEqPartitionOk equal unequal forks)
+       (match (ncp_regions_count space grammar equal 0)
+         (None (ncp_fail "equal partition count" w))
+         ((Some equal_count)
+          (match (ncp_regions_count space grammar unequal 0)
+            (None (ncp_fail "unequal partition count" w))
+            ((Some unequal_count)
+             (if (int_eq equal_count 3)
+               (if (int_eq unequal_count 6)
+                 (if (int_eq (ncp_regions_len equal) 3)
+                   (if (int_eq (ncp_regions_len unequal) 3)
+                     (if (int_eq forks 4)
+                       (if (ncp_regions_each_count space grammar equal 1)
+                         (if (ncp_regions_each_count space grammar unequal 2)
+                           (ncp_late grammar w)
+                           (ncp_fail "unequal rows were not coalesced" w))
+                         (ncp_fail "equal cubes were not exact" w))
+                       (ncp_fail "equality partition fork count" w))
+                     (ncp_fail "unequal partition region count" w))
+                   (ncp_fail "equal partition region count" w))
+                 (ncp_fail "unequal partition coverage" w))
+               (ncp_fail "equal partition coverage" w))))))))))
+
 (fn ncp_prepared_regions
   ((prepared MsPrepared) (grammar Grammar) (rule_name QName) (w World)) World
   (match (sk_region_choose grammar (sk_empty_region) 0 0)
@@ -116,19 +179,24 @@
            (match (sk_region_forbid grammar left 1 1)
              ((SkRegionEditErr msg) (ncp_fail msg w))
              ((SkRegionEditEmpty) (ncp_fail "prepared equal exclusion" w))
-             ((SkRegionEditOk equal)
-              (match
-                (ms_check_prepared_region
-                  1000 prepared equal (ncp_pair (hole 0) (hole 1)))
-                ((MsRedex q)
-                 (if (qname_eq q rule_name)
-                   (ncp_late
-                     grammar
-                     (write
-                       "META-SEARCH-NONLINEAR-PROBE RESIDUAL DISJOINT-CLEAR SHARED-EQUAL BLOCK-0/1 EQUAL-REDEX UNEQUAL-CLEAR RELAXED-PREPARED-3 REGION-EQ/NE OK\n"
-                       w))
-                   (ncp_fail "prepared equal region citation" w)))
-                (_ (ncp_fail "prepared equal restricted region" w))))))
+             ((SkRegionEditOk equal1)
+              (match (sk_region_forbid grammar equal1 1 2)
+                ((SkRegionEditErr msg) (ncp_fail msg w))
+                ((SkRegionEditEmpty)
+                 (ncp_fail "prepared second equal exclusion" w))
+                ((SkRegionEditOk equal)
+                 (match
+                   (ms_check_prepared_region
+                     1000 prepared equal (ncp_pair (hole 0) (hole 1)))
+                   ((MsRedex q)
+                    (if (qname_eq q rule_name)
+                      (ncp_partition
+                        grammar
+                        (write
+                          "META-SEARCH-NONLINEAR-PROBE RESIDUAL DISJOINT-CLEAR SHARED-EQUAL BLOCK-0/1 EQUAL-REDEX UNEQUAL-CLEAR RELAXED-PREPARED-3 REGION-EQ/NE PARTITION EQ3+NE6 IN 3+3/F4 OK\n"
+                          w))
+                      (ncp_fail "prepared equal region citation" w)))
+                   (_ (ncp_fail "prepared equal restricted region" w))))))))
           (_ (ncp_fail "prepared unequal restricted region" w))))))))
 
 (fn ncp_prepared
