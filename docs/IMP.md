@@ -2033,6 +2033,113 @@ apparatus.
   identical to baseline-65 ×2; V8 287/0; silicon 112→123/0.
   NEXT: the x86 mixed-tier emission (unlocks the block leg), I2e.
 
+**V2-7 — the x86 mixed tier (2026-07-15; two commits: V2-7a the
+foundation, V2-7b the emission): the mixed tier lands on the register
+machine; the sha block leg is generated and piece-sound but FENCED on
+a measured engine-capacity wall at the finish segment.** The wasm
+composition (V2-5e-4) factors segments into standalone lemmas joined
+by ist_seam/es_scont; that factoring cannot cross to x86 without the
+generator learning machine semantics — a segment lemma's continuation
+must RECONSTRUCT the register file, and the three scratch registers
+carry concrete trees between pieces that only the checker should
+compute. The x86 design (hand-validated first in
+examples/sqxc_probe.shard, 386/0, the compositional blueprint over
+imp_mixed's program):
+
+- **Loop-exit cuts, inline segment walks.** One chain lemma per
+  [flat segments + counting loop]; the lemma walks its segments
+  INLINE by the statement-tier split spine (scratch states stay
+  concrete all the way to the stuck loop machinery — no x86 append
+  seam exists or is needed at this grain), cites the counter-tied
+  worker at the loop head, exposes the exit locals by il_wlen, and
+  cites the next boundary lemma at the exposure leaf, where the
+  continuation arm holds the next rest-fn's FOLDED CALL protected by
+  the walker stops. An open-walker compute past a braked call leaves
+  match residue no folded statement can cite (measured: the first
+  emission walked boundary tails inline and failed exactly there) —
+  so tails beyond a loop belong to the NEXT lemma, and boundary
+  lemmas state their subjects AS the folded rest-fn calls, opening
+  their own proofs with the unfold (the reduce overshoot is harmless
+  at a proof's start).
+- **Scratch discipline.** ix_mout (to_x86.shard) = the mixed-grain
+  loop-exit adapter — ix_out's sibling carrying all three scratch
+  residues (ix_out ra = ix_mout ra 0 0; the fn-grain loop tier's
+  contract is untouched). Boundary lemmas quantify exactly the FULL
+  body's seal-set registers (the terminal ix_zs zeroes them before
+  the final XNorm; a non-seal-set register never gets written, so
+  quantifying it would state a falsehood — it spells 0). Workers
+  quantify the slots their body never touches (pass-through,
+  restored by ix_mout) and spell 0 in body-dirtied slots (the V2-5a
+  seals). Every unknown tree binds by MATCHING at cite sites — the
+  emitter never spells a scratch value it did not put there (the
+  probe witnesses a store's band tree riding za THROUGH the
+  scratch-clean loop 1 and dying at the next leg's zs).
+- **The instruction-grain counter respell.** The wasm chain respells
+  the ground counter in the locals list; x86 has a second occurrence
+  inside MkRegs whose neighbor slots are unspellable walked trees.
+  Resolution: respell BEFORE the walk, at the instruction —
+  (XMovRI reg K) / (ISet gi (IConst K)) rewritten to the
+  (int_of_nat K) payload at first occurrence (single in the subject
+  because deeper legs are folded behind their rest fns) — so the
+  walk itself carries the worker's counter spelling into the stuck
+  loop term. XMovRI wraps its immediate at 2^64, so the folded
+  payload surfaces as (mod (int_of_nat K) 2^64): a per-file
+  sqm_wid64 twin (iwrap64_id verbatim) collapses it at the loop
+  head.
+- **Workers** (sqxw_<nm>_lN): the counter-tied form at x86 — closed
+  MkRegs/locals (xargs walks the whole list at the exit adapter, so
+  the wasm open-tail rr trick cannot cross), per-iteration store
+  splits at the statement-tier polarity dance, decrement collapse
+  through the wid twin, IH at (inst c2 c2). aw = machine body
+  length + 4; bw = gcost + 5 (the imp side is target-shared).
+- **Emitter** (tools/impgen, all Fable-side — no new instructions or
+  encodings): mxx_mach (XBlock/XLoop scan), mxx_chunks (per-segment
+  ix_stmts by INVOKE), mxx_dirty (scratch scan by INVOKING ix_dwl —
+  the model answers, never a generator-side scan), mxx_legs
+  (loop-exit grammar), mxx_ag (per-loop MAX fuel constraints),
+  per-leg lw_stmts re-walks from fresh params (splits + walked-tree
+  scrutinees: the case-on iwhile term carries the walked locals and
+  mem_set chain), mxc_exit reused verbatim (Doc-parametric),
+  rest fns as Cons spines ending in the next rest fn's call, the
+  tie re-pinned as (ix_sstmts (ibody_of pin)) = (Some (inline
+  gb_<nm>_x)) so it also binds the gb chain to the translator.
+- **THE CAPACITY WALL (measured, then fenced).** Per-lemma churn
+  grows with the leg's straight-line span: goal size × steps, with
+  the walked mem_set chain and local trees renormalized at every
+  split — and unlike the wasm factoring, an x86 chain lemma CANNOT
+  reset that state mid-segment (the wasm segment lemmas each start
+  from a fresh opaque memory and locals; an x86 mid-segment boundary
+  would need scratch-clean cut points that the emitted code does not
+  have). Focus-mode measurements on the generated sha block leg:
+  all three counter-tied workers 400MB each and green (the round
+  worker's 51-stmt body included — per-iteration state resets at the
+  IH); the 79-stmt shext statement bridge costs 3.4GB; the FINISH
+  leg (cmp_x_shblock_b3: ~150 straight-line stmts, 32 byte-stores of
+  word-scale trees) exceeds 66GB against the fast engine's 64GB
+  reserve. The fence: sqx_emit declines pins whose max leg span
+  exceeds 96 stmts with an honest note ("x86 chain capacity: a
+  straight-line span exceeds the per-lemma churn budget
+  (state-reset boundaries = named growth)"). UNLOCK OPTIONS (user
+  ruling pending): (a) translator seal-points — to_x86 emits ix_zs
+  at capped intervals in TOP-LEVEL straight-line runs only (never
+  inside loop bodies; for sha ≈ 40 extra movs once per block,
+  ~0.1%), giving the x86 chain scratch-clean boundaries and the
+  full wasm-style capped segment-lemma factoring; (b) the engine
+  churn/reify-sharing arc; (c) reserve bump (rejected class — the
+  driver inherits the cost).
+- **Outcome**: examples/impgen_x86_mixed_out.shard goes tie+note →
+  the FULL inventory (tie + wid + wid64 + 2 counter-tied workers +
+  rest fns + cmp_x chain + imp_x_imx), 410/0, regen deterministic —
+  the x86 mixed tier is real and generating. The sha block pin:
+  tie + the capacity note (round/copy/ext x86 bridges stand FULL
+  from V2-6; the block's generated chain is retained nowhere — it
+  regenerates identically the day the fence lifts). All other outs
+  byte-stable (sha wasm out included); driver 69; corpus FAIL-set
+  == baseline-65.
+- NEXT: the seal-point ruling (unlocks the block x86 leg), then I2e
+  (./sha256sum — weld = hand block walk ∘ imp_w_shblock; the wasm
+  block leg carries it meanwhile).
+
 
 ## 7. Non-goals, stated once
 
