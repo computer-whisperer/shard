@@ -2414,3 +2414,80 @@ some of which contain the very nonterminating `f(Nil)` recursion R1 excludes;
 their count is a generation-pressure measurement, while behavior equality is
 asserted only across the production/C8/canon layers that the current fragment
 declares total.
+
+### Transition-window mining and checked ISA sequence pressure
+
+The first imperative/ISA mining rung now uses the same reflected task boundary
+rather than an instruction-specific engine.  `transition_mine.shard` consumes
+an ordinary `typed_expr` scope whose observation is an exact `List Int` key,
+checks and ranks every grammar member, retains the complete accepted corpus,
+and orients each collided behavior toward its least structural-cost member.
+The initial x86 adapter supplies every zero-to-two-instruction register XOR
+sequence over three scoped registers—91 programs, with no x86 name in the
+miner:
+
+    TOTAL 91; BEHAVIORS 55; COLLIDED-BUCKETS 19
+    EXCESS 36; MAX-BUCKET 7
+
+`meta/antiunify` is the reusable schema-contraction layer.  It computes a
+simultaneous least-general generalization of two directed equations with one
+mismatch table shared across both sides.  Repeated roles therefore remain one
+nonlinear metavariable even when the correlation crosses the equation.  It
+also reports variable pairs that differ in every concrete support as
+*empirical guard proposals*.  Those guards carry no proof authority.
+
+The transition miner anti-unifies pairs of concrete collision edges, rejects
+malformed or non-decreasing orientations, and replays each candidate schema
+against the complete shallow grammar.  Every matching LHS must have a
+representable RHS with the same exact behavior key.  The top contracted basis
+contains stronger versions of the motivating double-self-XOR example:
+
+    xor d,s ; xor d,d  ->  xor d,d       removes 9 / 91
+    xor d,d ; xor e,d  ->  xor d,d       removes 9 / 91
+    xor d,s ; xor d,s  ->  []            removes 6 / 91, guard d != s
+
+Thus `(xor r,r ; xor r,r) -> xor r,r` is not installed as a bespoke rule; it
+is one instance of the first mined schema.  The third result also pins why
+blind anti-unification is unsound: admitting `d = s` changes zeroing into the
+identity transformer.  Complete-census replay is stronger than inspecting two
+examples but remains battery-relative evidence, so every report still labels
+these schemas proposals rather than licenses.
+
+The first proposal has crossed the proof boundary.  `std/bits` now proves
+`bxor_self` from the kernel recurrence by well-founded induction.  The x86
+peephole module proves generic `rget/rset` laws and then
+`xseq_xor_self_absorbs` for arbitrary destination, source, tail, module,
+register file, and memory.  Its two nonnegative premises expose the model's
+valid-word boundary.  Its fuel is deliberately shifted:
+
+    eval (S^(3+f)) [xor d,s; xor d,d]++tail
+      = eval (S^(2+f)) [xor d,d]++tail
+
+Removing a list cell removes one structural fuel unit.  Same-fuel equality at
+the exhaustion boundary would be false.  The transition task therefore uses
+a sequence-length-normalized fuel observer, proves its sample register files
+satisfy the word premises, and derives the exact premise-free observer theorem
+selected by `search_observer_profile`.
+
+That theorem enters through the existing checked scope/provenance path and the
+ordinary nonlinear residual matcher.  No new ISA rule channel was added:
+
+    CANON RULES 0; OBSERVER RULES 1; DEFERRED RULES 1
+    RAW/TOTAL 91; CONSTRAINT KILLED 9
+    AUDIT accepted 82; constrained 9; exhaustive agreement OK
+
+`REMOVED` remains zero because this correlated deep pattern is intentionally a
+residual constraint rather than a separable formation clause.  The result is
+nevertheless real narrowing pressure: all nine instances are rejected by the
+checked theorem before semantic acceptance, including the three literal
+double-self-XOR programs.
+
+Two general gaps are now sharply separated.  First, empirical disequality
+guards need a checked conditional-rule representation and a lazy premise
+evaluator before the six-member cancellation schema can enter pressure.
+Second, applying semantic window laws below arbitrary sequence prefixes needs
+a checked contextual/spine closure, not promotion of observer equality to
+unrestricted term congruence.  Fuel-normalized sequence observers and the
+shifted model theorem supply the semantic side of that closure; the remaining
+work is to represent and authenticate its application domain in the shared
+rewrite/search vocabulary.

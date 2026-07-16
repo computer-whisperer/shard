@@ -1,0 +1,450 @@
+;;; Small full-state transition census for the first ISA peephole-mining rung.
+;;;
+;;; The candidate language is every zero-to-two-instruction sequence of
+;;; register-register XOR over three ordinary register roles.  The observer
+;;; serializes all three affected registers after several independent initial
+;;; files; it is a collision PROPOSER, not a rewrite license.  The companion
+;;; transition_mine driver groups this exact space and retains exemplars for
+;;; checked schema extraction.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../models/x86/x86.shard")
+(import "../../../models/x86/peephole.shard")
+(import "../../../std/mem")
+(import "../typed_grammar.shard")
+(use (:: tools search typed_grammar *))
+(use (:: models x86 peephole xseq_xor_self_absorbs))
+
+;; Generic program spine.
+(use (:: core List))
+(use (:: core Nil))
+(use (:: core Cons))
+
+;; Candidate x86 scope.
+(use (:: models x86 x86 XInstr))
+(use (:: models x86 x86 Reg))
+(use (:: models x86 x86 Src))
+(use (:: models x86 x86 XBop))
+(use (:: models x86 x86 XBin))
+(use (:: models x86 x86 XXor))
+(use (:: models x86 x86 SReg))
+(use (:: models x86 x86 RAX))
+(use (:: models x86 x86 RCX))
+(use (:: models x86 x86 RDX))
+(use (:: models x86 x86 RBX))
+(use (:: models x86 x86 RBP))
+(use (:: models x86 x86 RDI))
+(use (:: models x86 x86 RSI))
+(use (:: models x86 x86 R8))
+(use (:: models x86 x86 R9))
+(use (:: models x86 x86 R10))
+(use (:: models x86 x86 R11))
+(use (:: models x86 x86 R12))
+(use (:: models x86 x86 R13))
+(use (:: models x86 x86 R14))
+(use (:: models x86 x86 R15))
+
+;; Broad model access is oracle-only; qualified names are not productions.
+(use (:: models x86 x86) as x86)
+(use (:: std mem) as mem)
+
+(fn search_forms () (List Symbol) (list (quote ctor)))
+(fn search_ints () (List Int) Nil)
+(fn search_symbols () (List Symbol) Nil)
+(fn search_depth () Int 4)
+
+(fn xtw_ctor ((name Symbol)) TgScopeHead (TgScopeCtor name))
+
+(fn xtw_route ((head Symbol) (index Int) (zone Symbol)) TgScopeRoute
+  (TgScopeRoute (xtw_ctor head) index zone))
+
+(fn xtw_seq_zone ((name Symbol) (instruction Symbol) (tail Symbol)) TgScopeZone
+  (TgScopeZone
+    name
+    (list (xtw_ctor (quote Nil)) (xtw_ctor (quote Cons)))
+    Nil
+    Nil
+    (list
+      (xtw_route (quote Cons) 0 instruction)
+      (xtw_route (quote Cons) 1 tail))))
+
+(fn search_environment () TgScopeEnv
+  (TgScopeEnv
+    (quote sequence0)
+    (list
+      (xtw_seq_zone (quote sequence0) (quote instruction0) (quote sequence1))
+      (xtw_seq_zone (quote sequence1) (quote instruction1) (quote sequence2))
+      (TgScopeZone
+        (quote sequence2)
+        (list (xtw_ctor (quote Nil)))
+        Nil
+        Nil
+        Nil)
+      (TgScopeZone
+        (quote instruction0)
+        (list (xtw_ctor (quote XBin)))
+        Nil
+        Nil
+        (list
+          (xtw_route (quote XBin) 0 (quote operation))
+          (xtw_route (quote XBin) 1 (quote register))
+          (xtw_route (quote XBin) 2 (quote source))))
+      (TgScopeZone
+        (quote instruction1)
+        (list (xtw_ctor (quote XBin)))
+        Nil
+        Nil
+        (list
+          (xtw_route (quote XBin) 0 (quote operation))
+          (xtw_route (quote XBin) 1 (quote register))
+          (xtw_route (quote XBin) 2 (quote source))))
+      (TgScopeZone
+        (quote operation)
+        (list (xtw_ctor (quote XXor)))
+        Nil
+        Nil
+        Nil)
+      (TgScopeZone
+        (quote register)
+        (list
+          (xtw_ctor (quote RAX))
+          (xtw_ctor (quote RDI))
+          (xtw_ctor (quote RSI)))
+        Nil
+        Nil
+        Nil)
+      (TgScopeZone
+        (quote source)
+        (list (xtw_ctor (quote SReg)))
+        Nil
+        Nil
+        (list (xtw_route (quote SReg) 0 (quote register)))))))
+
+(fn xtw_regs ((a Int) (b Int) (c Int)) ((:: x86 Regs))
+  ((:: x86 rset)
+    ((:: x86 rset)
+      ((:: x86 rset) ((:: x86 xregs0)) RAX a)
+      RDI
+      b)
+    RSI
+    c))
+
+(fn xtw_files () (List ((:: x86 Regs)))
+  (list
+    (xtw_regs 0 0 0)
+    (xtw_regs 1 2 4)
+    (xtw_regs 3 5 6)
+    (xtw_regs 170 85 255)))
+
+(fn xtw_module () ((:: x86 XModule))
+  ((:: x86 MkXModule) Nil 0 0))
+
+;; Fuel tracks structural sequence cost.  This makes cost-changing transition
+;; theorems compositional instead of asserting false same-fuel equality at the
+;; exhaustion boundary.
+(fn xtw_fuel ((body (List XInstr))) Nat
+  (measure (struct body))
+  (match body
+    (Nil (S (S (S Z))))
+    ((Cons _ rest) (S (xtw_fuel rest)))))
+
+(fn xtw_eval ((body (List XInstr)) (rs ((:: x86 Regs))))
+  (Option ((:: x86 XOut)))
+  ((:: x86 xeval_seq)
+    (xtw_fuel body)
+    (xtw_module)
+    body
+    rs
+    ((:: mem mem_empty))))
+
+(fn xtw_regs_key ((rs ((:: x86 Regs)))) (List Int)
+  (list
+    ((:: x86 rget) rs RAX)
+    ((:: x86 rget) rs RDI)
+    ((:: x86 rget) rs RSI)))
+
+(fn xtw_out_key ((out (Option ((:: x86 XOut))))) (List Int)
+  (match out
+    (None (list -1))
+    ((Some value)
+     (match value
+       (((:: x86 XNorm) rs _) (Cons 0 (xtw_regs_key rs)))
+       (((:: x86 XBrk) d rs _) (Cons 1 (Cons d (xtw_regs_key rs))))
+       (((:: x86 XRetO) rs _) (Cons 2 (xtw_regs_key rs)))
+       (((:: x86 XTrap)) (list 3))))))
+
+(fn xtw_app ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (xtw_app t b)))))
+
+(fn xtw_observe
+  ((body (List XInstr)) (files (List ((:: x86 Regs)))))
+  (List Int)
+  (measure (struct files))
+  (match files
+    (Nil Nil)
+    ((Cons rs rest)
+     (xtw_app
+       (xtw_out_key
+         (xtw_eval body rs))
+       (xtw_observe body rest)))))
+
+;; Every field of the small census files is nonnegative.  This helper exposes
+;; that invariant once for arbitrary register roles instead of generating a
+;; theorem per concrete register name.
+(claim xtw_zero_nonneg
+  (goal () () (= (le 0 0) True))
+  (steps ((compute lhs)) refl))
+
+(claim xtw_rget_nonneg
+  (goal
+    ((a Int) (b Int) (c Int) (r Reg))
+    ((= (le 0 a) True) (= (le 0 b) True) (= (le 0 c) True))
+    (= (le 0 ((:: x86 rget) (xtw_regs a b c) r)) True))
+  (case-on r Reg
+    ((case RAX
+       (steps
+         ((rewrite (hyp RAX) lr lhs true ())
+          (compute lhs)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case RCX
+       (steps
+         ((rewrite (hyp RCX) lr lhs true ())
+          (compute lhs (stop le))
+          (rewrite (lemma xtw_zero_nonneg) lr lhs true ()))
+         refl))
+     (case RDX
+       (steps
+         ((rewrite (hyp RDX) lr lhs true ())
+          (compute lhs (stop le))
+          (rewrite (lemma xtw_zero_nonneg) lr lhs true ()))
+         refl))
+     (case RBX
+       (steps
+         ((rewrite (hyp RBX) lr lhs true ())
+          (compute lhs (stop le))
+          (rewrite (lemma xtw_zero_nonneg) lr lhs true ()))
+         refl))
+     (case RBP
+       (steps
+         ((rewrite (hyp RBP) lr lhs true ())
+          (compute lhs (stop le))
+          (rewrite (lemma xtw_zero_nonneg) lr lhs true ()))
+         refl))
+     (case RSI
+       (steps
+         ((rewrite (hyp RSI) lr lhs true ())
+          (compute lhs)
+          (rewrite (premise 2) lr lhs true ()))
+         refl))
+     (case RDI
+       (steps
+         ((rewrite (hyp RDI) lr lhs true ())
+          (compute lhs)
+          (rewrite (premise 1) lr lhs true ()))
+         refl))
+     (case R8
+       (steps
+         ((rewrite (hyp R8) lr lhs true ())
+          (compute lhs (stop le))
+          (rewrite (lemma xtw_zero_nonneg) lr lhs true ()))
+         refl))
+     (case R9
+       (steps
+         ((rewrite (hyp R9) lr lhs true ())
+          (compute lhs (stop le))
+          (rewrite (lemma xtw_zero_nonneg) lr lhs true ()))
+         refl))
+     (case R10
+       (steps
+         ((rewrite (hyp R10) lr lhs true ())
+          (compute lhs (stop le))
+          (rewrite (lemma xtw_zero_nonneg) lr lhs true ()))
+         refl))
+     (case R11
+       (steps
+         ((rewrite (hyp R11) lr lhs true ())
+          (compute lhs (stop le))
+          (rewrite (lemma xtw_zero_nonneg) lr lhs true ()))
+         refl))
+     (case R12
+       (steps
+         ((rewrite (hyp R12) lr lhs true ())
+          (compute lhs (stop le))
+          (rewrite (lemma xtw_zero_nonneg) lr lhs true ()))
+         refl))
+     (case R13
+       (steps
+         ((rewrite (hyp R13) lr lhs true ())
+          (compute lhs (stop le))
+          (rewrite (lemma xtw_zero_nonneg) lr lhs true ()))
+         refl))
+     (case R14
+       (steps
+         ((rewrite (hyp R14) lr lhs true ())
+          (compute lhs (stop le))
+          (rewrite (lemma xtw_zero_nonneg) lr lhs true ()))
+         refl))
+     (case R15
+       (steps
+         ((rewrite (hyp R15) lr lhs true ())
+          (compute lhs (stop le))
+          (rewrite (lemma xtw_zero_nonneg) lr lhs true ()))
+         refl)))))
+
+(claim xtw_eval_xor_self_absorbs
+  (goal
+    ((a Int) (b Int) (c Int) (d Reg) (s Reg))
+    ((= (le 0 a) True) (= (le 0 b) True) (= (le 0 c) True))
+    (=
+      (xtw_eval
+        (list (XBin XXor d (SReg s)) (XBin XXor d (SReg d)))
+        (xtw_regs a b c))
+      (xtw_eval (list (XBin XXor d (SReg d))) (xtw_regs a b c))))
+  (chain
+    (have hd
+      (= (le 0 ((:: x86 rget) (xtw_regs a b c) d)) True)
+      (rewrite-with
+        (lemma xtw_rget_nonneg)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (have hs
+      (= (le 0 ((:: x86 xsrc) (xtw_regs a b c) (SReg s))) True)
+      (chain
+        (steps ((compute lhs (stop (:: x86 rget) xtw_regs))))
+        (rewrite-with
+          (lemma xtw_rget_nonneg)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+           (steps ((rewrite (premise 1) lr lhs true ())) refl)
+           (steps ((rewrite (premise 2) lr lhs true ())) refl))
+          refl)))
+    (have hraw
+      (=
+        ((:: x86 xeval_seq)
+          (S (S (S (S (S Z)))))
+          (xtw_module)
+          (list (XBin XXor d (SReg s)) (XBin XXor d (SReg d)))
+          (xtw_regs a b c)
+          ((:: mem mem_empty)))
+        ((:: x86 xeval_seq)
+          (S (S (S (S Z))))
+          (xtw_module)
+          (list (XBin XXor d (SReg d)))
+          (xtw_regs a b c)
+          ((:: mem mem_empty))))
+      (rewrite-with
+        (lemma xseq_xor_self_absorbs)
+        lr
+        lhs
+        ((inst f (S (S Z)))
+         (inst m (xtw_module))
+         (inst tail Nil)
+         (inst rs (xtw_regs a b c))
+         (inst mem ((:: mem mem_empty)))
+         (inst d d)
+         (inst s (SReg s)))
+        ((steps ((rewrite (premise hd) lr lhs true ())) refl)
+         (steps ((rewrite (premise hs) lr lhs true ())) refl))
+        refl))
+    (steps
+      ((unfold xtw_eval both)
+       (unfold xtw_fuel both)
+       (reduce both)
+       (unfold xtw_fuel both)
+       (reduce both)
+       (unfold xtw_fuel both)
+       (reduce both)
+       (rewrite (premise hraw) lr lhs true ()))
+      refl)))
+
+;; Premise-free exact observer theorem: the model-level validity conditions
+;; are discharged for every census file here.  theorem_scope can therefore
+;; authenticate this as a root observer reduction.
+(claim xtw_xor_self_absorbs
+  (goal
+    ((d Reg) (s Reg))
+    ()
+    (=
+      (search_probe
+        (list (XBin XXor d (SReg s)) (XBin XXor d (SReg d))))
+      (search_probe (list (XBin XXor d (SReg d))))))
+  (chain
+    (have h0
+      (=
+        (xtw_eval
+          (list (XBin XXor d (SReg s)) (XBin XXor d (SReg d)))
+          (xtw_regs 0 0 0))
+        (xtw_eval (list (XBin XXor d (SReg d))) (xtw_regs 0 0 0)))
+      (rewrite-with
+        (lemma xtw_eval_xor_self_absorbs) lr lhs ()
+        ((steps ((compute lhs)) refl)
+         (steps ((compute lhs)) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (have h1
+      (=
+        (xtw_eval
+          (list (XBin XXor d (SReg s)) (XBin XXor d (SReg d)))
+          (xtw_regs 1 2 4))
+        (xtw_eval (list (XBin XXor d (SReg d))) (xtw_regs 1 2 4)))
+      (rewrite-with
+        (lemma xtw_eval_xor_self_absorbs) lr lhs ()
+        ((steps ((compute lhs)) refl)
+         (steps ((compute lhs)) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (have h2
+      (=
+        (xtw_eval
+          (list (XBin XXor d (SReg s)) (XBin XXor d (SReg d)))
+          (xtw_regs 3 5 6))
+        (xtw_eval (list (XBin XXor d (SReg d))) (xtw_regs 3 5 6)))
+      (rewrite-with
+        (lemma xtw_eval_xor_self_absorbs) lr lhs ()
+        ((steps ((compute lhs)) refl)
+         (steps ((compute lhs)) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (have h3
+      (=
+        (xtw_eval
+          (list (XBin XXor d (SReg s)) (XBin XXor d (SReg d)))
+          (xtw_regs 170 85 255))
+        (xtw_eval (list (XBin XXor d (SReg d))) (xtw_regs 170 85 255)))
+      (rewrite-with
+        (lemma xtw_eval_xor_self_absorbs) lr lhs ()
+        ((steps ((compute lhs)) refl)
+         (steps ((compute lhs)) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (steps
+      ((unfold search_probe both)
+       (unfold xtw_observe both)
+       (compute both (stop xtw_eval xtw_regs))
+       (rewrite (premise h0) lr lhs true ())
+       (rewrite (premise h1) lr lhs true ())
+       (rewrite (premise h2) lr lhs true ())
+       (rewrite (premise h3) lr lhs true ()))
+      refl)))
+
+(fn search_observer_profile () (List Symbol)
+  (list (quote xtw_xor_self_absorbs)))
+
+(fn search_probe ((body (List XInstr))) (Option (List Int))
+  (Some (xtw_observe body (xtw_files))))
+
+;; Required by the ordinary typed task protocol. Mining uses every behavior,
+;; while this harmless target/witness pins the empty transformer spelling.
+(fn search_target () (List Int) (xtw_observe Nil (xtw_files)))
+(fn search_witness () (List XInstr) Nil)

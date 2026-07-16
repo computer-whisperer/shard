@@ -1,0 +1,65 @@
+;;; Regression pin for meta/antiunify's simultaneous equation LGG.
+;;;
+;;; The first pair checks that one mismatch shared across LHS and RHS becomes
+;;; one nonlinear metavariable.  The second checks that empirically separated
+;;; roles are reported as a conjectural disequality guard.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/antiunify")
+(use (:: kernel term *))
+(use (:: kernel loader World))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta antiunify *))
+
+(fn aup_atom ((name Symbol)) Expr (Ctor (qn name) Nil))
+
+(fn aup_f ((a Expr) (b Expr)) Expr
+  (Ctor (qn (quote F)) (list a b)))
+
+(fn aup_g ((a Expr)) Expr
+  (Ctor (qn (quote G)) (list a)))
+
+(fn aup_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "ANTIUNIFY-PROBE FAIL " msg) w)))
+
+(fn aup_guard ((w World)) World
+  (let
+    ((a (aup_atom (quote A)))
+     (b (aup_atom (quote B)))
+     (z (aup_atom (quote Z))))
+    (let
+      ((one (AuEquation (aup_f a b) z))
+       (two (AuEquation (aup_f b a) z)))
+      (match (au_equations one two)
+        ((AuSchemaErr msg) (aup_fail msg w))
+        ((AuSchemaOk schema)
+         (match (au_distinct_guards schema (list one two))
+           ((AuDistinctErr msg) (aup_fail msg w))
+           ((AuDistinctOk guards)
+            (match guards
+              ((Cons (AuDistinct 0 1) Nil)
+               (write "ANTIUNIFY-PROBE OK\n" w))
+              (_ (aup_fail "missing exact separated-role guard\n" w))))))))))
+
+(fn aup_shared ((w World)) World
+  (let
+    ((a (aup_atom (quote A)))
+     (b (aup_atom (quote B))))
+    (match
+      (au_equations
+        (AuEquation (aup_f a a) (aup_g a))
+        (AuEquation (aup_f b b) (aup_g b)))
+      ((AuSchemaErr msg) (aup_fail msg w))
+      ((AuSchemaOk (AuSchema (AuEquation lhs rhs) arity))
+       (if (int_eq arity 1)
+         (if (expr_eq lhs (aup_f (BVar 0) (BVar 0)))
+           (if (expr_eq rhs (aup_g (BVar 0)))
+             (aup_guard w)
+             (aup_fail "rhs correlation was not retained\n" w))
+           (aup_fail "lhs correlation was not retained\n" w))
+         (aup_fail "shared mismatch did not produce arity one\n" w))))))
+
+(fn main ((w World)) World (aup_shared w))
