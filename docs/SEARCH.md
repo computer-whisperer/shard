@@ -1652,14 +1652,95 @@ counting.  On the identical d3/5,000-job probe this reduced measured wall time
 from about 26 seconds to 23.9 seconds without changing any region, fork, or
 step count.
 
-That index also exposed the next representation boundary.  Retrofitting every
-Rust thunk boundary onto the present tree-valued evaluator cuts abstract step
-counts substantially, but is slower in wall time: every extra boundary pays
-structural expression interning and persistent memo-key construction.  The
-next executor rung is therefore a compiled expression graph for the captured
-module/body/query/grammar scope, with stable numeric expression and function
-identities.  Call/root sharing should be reintroduced on top of that graph,
-not purchased piecemeal with repeated `Expr` equality.
+This is a local execution improvement, not the next search-research rung.
+Retrofitting every Rust thunk boundary onto the present tree-valued evaluator
+cuts abstract step counts but loses wall time to structural expression
+interning and persistent memo-key construction.  A compiled expression graph
+therefore remains part of Shard's general compilation/optimization path, not
+a prerequisite for categorical search scale.
+
+The checked append-canonical rev run isolates that distinction.  It starts
+from `rev_grammar`, authenticates the same four requirements as the sort run,
+and uses the generic supplied-grammar formation pass—never the hand-written
+`dial_grammar`:
+
+    d3: RAW 40,435,308; TOTAL 2,597,487
+        FOUND 1; REGIONS 390; FORKS 143; STEPS 3,969
+    d4: RAW 1,090,009,422,036,588; TOTAL 2,248,987,364,187
+        FOUND 1; REGIONS 1,726; FORKS 639; STEPS 14,207
+
+Both spaces and the unique textbook witness reproduce the playground's
+append-canonical rows.  More importantly, d4 uses exactly the playground's
+published 639 demanded-choice forks.  Its 14,207 Shard syntax steps and the
+playground's 4,095 evaluator steps are different accounting/hosting constants
+around the same decision structure, not an algorithmic-scale gap.  The run
+completes in roughly five seconds on the current compiled evaluator.  This
+corrects the earlier inference from the incomplete sort d3 probe: the lazy
+executor and separable theorem quotient already compose at the expected
+trillion-candidate scale.  The missing categorical work begins where the
+playground adds contextual, sibling-relational, vocabulary, and algebraic
+formation pressure beyond those four append rules.
+
+    bin/shard_eval run tools/search/rev_deep.shard 3
+    bin/shard_eval run tools/search/rev_deep.shard 4
+
+The next missing category is now represented in `meta/search`, rather than in
+a task dialect.  `ms_filter_match_context` reads arbitrary `Match`/`Pat`
+structure and turns constructor-arm definitional equations into a second exact
+grammar quotient.  A nullary arm excludes the outer scrutinee spelling; a
+binderful arm excludes the exact constructor rebuild throughout the generated
+arm subtree.  Correlated siblings are subtracted as disjoint products—for
+example, removing `(h,t)` from `A x B` becomes
+`{h} x (B-{t}) | (A-{h}) x B`—so no valid program is lost through an unsound
+pair of independent exclusions.  Constructor names, binder counts, and
+rebuild expressions all come from the supplied sketch; none is built into the
+search module.
+
+The generated grammar was checked against rev's old hand-written
+`dial_grammar` oracle:
+
+    depth 1: 56       candidates, exact member/rank audit
+    depth 2: 1,736    candidates, exact member/rank audit
+    depth 3: 1,512,056 candidates, exact count
+
+It also composes with SUPERPOSE at the scale rung:
+
+    rev d3 contextual: TOTAL 1,512,056
+        FOUND 1; REGIONS 414; FORKS 143; STEPS 4,509
+    rev d4 contextual: TOTAL 1,143,161,209,736
+        FOUND 1; REGIONS 1,886; FORKS 639; STEPS 15,807
+
+The unchanged fork counts are expected here: append formation had already
+made the rev witness unique at every demanded choice.  The stronger evidence
+comes from applying the same generic pass to the independent insertion-sort
+grammar.  The complete depth-2 run changes:
+
+    append quotient:  TOTAL 4,469,880,000; FOUND 32
+                      REGIONS 28,721; FORKS 5,969; STEPS 165,629
+    plus arm context: TOTAL 1,844,522,064; FOUND 8
+                      REGIONS 14,249; FORKS 2,985; STEPS 91,102
+
+Thus one scope-derived quotient removes four equivalent solution spellings
+per behavior and nearly halves the actual decision tree.  At depth 3 its exact
+space is 40,589,595,233,432,784 candidates.  A 5,000-job contextual probe
+settles 17,878,750,522,262,628 of them (44.0%) in 4,131 regions, 869 forks,
+and 39,223 evaluator steps, versus 25.5% of the append-only quotient for
+similar work.  This is the intended additive path: reflected scope facts
+compile to the existing `Grammar`; exact counting, rank/unrank, residual
+theorems, and lazy evaluation need no task-specific executor branch.
+
+V1 keeps two boundaries loud.  A grammar hole shared under incompatible arm
+contexts is refused, and an exclusion that can start at a proper hole-bearing
+subtemplate inside a production is refused rather than silently
+under-filtered.  The latter needs the full state product at every static node;
+`context_formation_probe.shard` pins that refusal.  A fixed nested excluded
+value simply removes its entire production.  Ordinary head-plus-hole
+constructor products, including correlated sibling exclusions, are exact.
+
+    bin/shard_eval run tools/search/context_formation_probe.shard
+    bin/shard_eval run tools/search/rev_deep.shard context 4
+    bin/shard_eval run tools/search/pure_deep.shard context 2
+    bin/shard_eval run tools/search/pure_deep.shard context-probe 3 5000
 
 The first dynamic theorem-filtered task searches ordinary closed Shard list
 expressions over `Nil`, `Cons`, bit literals, and the real `std/list append` at

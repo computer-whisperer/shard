@@ -8,7 +8,9 @@
 ;;;
 ;;; RUN: bin/shard_eval run tools/search/pure_deep.shard
 ;;;      bin/shard_eval run tools/search/pure_deep.shard 3
+;;;      bin/shard_eval run tools/search/pure_deep.shard context 2
 ;;;      bin/shard_eval run tools/search/pure_deep.shard probe 3 5000
+;;;      bin/shard_eval run tools/search/pure_deep.shard context-probe 3 5000
 
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/term.shard")
@@ -47,6 +49,9 @@
    (plan MsPlan)
    (depth Int)
    (expected_total Int)
+   (context_total Int)
+   (context_found Int)
+   (contextual Bool)
    (drive_fuel Int)
    (w World))
   World
@@ -58,12 +63,24 @@
     ((PsFormationErr msg) (pd_fail msg w))
     ((PsFormationEmpty) (pd_fail "formation removed the whole task" w))
     ((PsFormationOk filtered raw)
-     (match
-       (if (le drive_fuel 0) (ps_run_plan_stats m filtered plan 0 raw 4)
-       (ps_run_plan_stats_fuel m filtered plan 0 raw 4 drive_fuel))
-       ((PsRunErr msg) (pd_fail msg w))
-       ((PsRunBudget report) (write report w))
-       ((PsRunOk report) (write report w))))))
+     (if contextual
+       (match (ps_apply_match_context filtered context_total context_found)
+         ((PsFormationErr msg) (pd_fail msg w))
+         ((PsFormationEmpty) (pd_fail "context formation removed the task" w))
+         ((PsFormationOk contextual_task _)
+          (match
+            (if (le drive_fuel 0)
+              (ps_run_plan_stats m contextual_task plan 0 raw 4)
+              (ps_run_plan_stats_fuel m contextual_task plan 0 raw 4 drive_fuel))
+            ((PsRunErr msg) (pd_fail msg w))
+            ((PsRunBudget report) (write report w))
+            ((PsRunOk report) (write report w)))))
+       (match
+         (if (le drive_fuel 0) (ps_run_plan_stats m filtered plan 0 raw 4)
+         (ps_run_plan_stats_fuel m filtered plan 0 raw 4 drive_fuel))
+         ((PsRunErr msg) (pd_fail msg w))
+         ((PsRunBudget report) (write report w))
+         ((PsRunOk report) (write report w)))))))
 
 (fn pd_runs
   ((m Module)
@@ -71,15 +88,23 @@
    (formation TrsFormation)
    (plan MsPlan)
    (depth Int)
+   (contextual Bool)
    (drive_fuel Int)
    (w World))
   World
   (if (int_eq depth 2)
-    (pd_run m appendq formation plan 2 4469880000 drive_fuel w)
-    (pd_run m appendq formation plan 3 104277392481024192 drive_fuel w)))
+    (pd_run m appendq formation plan 2 4469880000 1844522064 8 contextual
+      drive_fuel w)
+    (pd_run m appendq formation plan 3 104277392481024192 40589595233432784 12
+      contextual drive_fuel w)))
 
 (fn pd_with_profile
-  ((m Module) (appendq QName) (depth Int) (drive_fuel Int) (w World))
+  ((m Module)
+   (appendq QName)
+   (depth Int)
+   (contextual Bool)
+   (drive_fuel Int)
+   (w World))
   World
   (match
     (tg_load_checked_profile
@@ -103,6 +128,7 @@
                 (trs_profile_formation projected)
                 plan
                 depth
+                contextual
                 drive_fuel
                 w2))))))))))
 
@@ -125,19 +151,29 @@
 (fn pd_usage ((w World)) World
   (exit
     2
-    (write "usage: pure_deep [2|3 | probe (2|3) POSITIVE-JOB-BUDGET]\n" w)))
+    (write
+      "usage: pure_deep [2|3 | context (2|3) | probe (2|3) POSITIVE-JOB-BUDGET | context-probe (2|3) POSITIVE-JOB-BUDGET]\n"
+      w)))
 
 (fn pd_args ((as (List (List Int))) (m Module) (appendq QName) (w World)) World
   (match as
-    (Nil (pd_with_profile m appendq 2 0 w))
+    (Nil (pd_with_profile m appendq 2 False 0 w))
     ((Cons ds Nil)
      (match (pd_parse_nat ds)
        (None (pd_usage w))
        ((Some depth)
-        (if (pd_depth_ok depth) (pd_with_profile m appendq depth 0 w)
+        (if (pd_depth_ok depth) (pd_with_profile m appendq depth False 0 w)
         (pd_usage w)))))
+    ((Cons mode (Cons ds Nil))
+     (if (int_list_eq mode "context")
+       (match (pd_parse_nat ds)
+         (None (pd_usage w))
+         ((Some depth)
+          (if (pd_depth_ok depth) (pd_with_profile m appendq depth True 0 w)
+          (pd_usage w))))
+       (pd_usage w)))
     ((Cons mode (Cons ds (Cons fs Nil)))
-     (if (int_list_eq mode "probe")
+     (if (if (int_list_eq mode "probe") True (int_list_eq mode "context-probe"))
        (match (pd_parse_nat ds)
          (None (pd_usage w))
          ((Some depth)
@@ -145,8 +181,15 @@
             (None (pd_usage w))
             ((Some fuel)
              (if (pd_depth_ok depth)
-               (if (lt 0 fuel) (pd_with_profile m appendq depth fuel w)
-               (pd_usage w))
+               (if (lt 0 fuel)
+                 (pd_with_profile
+                   m
+                   appendq
+                   depth
+                   (int_list_eq mode "context-probe")
+                   fuel
+                   w)
+                 (pd_usage w))
                (pd_usage w))))))
        (pd_usage w)))
     (_ (pd_usage w))))

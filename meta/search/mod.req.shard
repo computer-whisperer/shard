@@ -1314,3 +1314,695 @@
   (match prepared
     ((MsPrepared plan grammar facts tree_facts root_facts)
      (ms_check_facts fuel facts tree_facts root_facts plan grammar asg candidate))))
+
+;; ---- contextual constructor-arm formation ---------------------------------
+;;
+;; A constructor match gives its arm a definitional equation.  For a nullary
+;; pattern the constructor spelling dominates the outer scrutinee spelling;
+;; for a binding pattern the outer scrutinee dominates its exact constructor
+;; rebuild.  These are not global rewrite theorems: their license is the arm
+;; context itself.
+;;
+;; `ms_filter_match_context` compiles those equations into an ordinary exact
+;; Grammar.  It is deliberately vocabulary-independent: constructor names,
+;; binder counts, scrutinees, and rebuild expressions are read from `Match` /
+;; `Pat`.  An exclusion is applied at every generated subtree in the arm.
+;; Correlated products are split exactly.  For example, excluding Cons(h,t)
+;; from Cons(A,B) produces the disjoint, rank-safe order
+;;
+;;   Cons(h, B - {t}) | Cons(A - {h}, B)
+;;
+;; rather than the unsound independent exclusions A-{h}, B-{t}.
+;;
+;; V1 lowers by cloning exclusive grammar branches.  Sharing inside one
+;; production is preserved; a shared hole reached under incompatible arm
+;; contexts is refused loudly.  The exact subtractor handles ordinary
+;; head-plus-child-hole productions.  A fixed nested excluded value removes
+;; its whole production.  If an exclusion can match a proper HOLE-BEARING
+;; subtemplate inside one production, V1 refuses rather than silently
+;; under-filtering it; that case needs the full state product at every static
+;; node.  Nested Match in the root sketch is still context-tracked normally.
+
+(fn msx_expr_mem ((x Expr) (xs (List Expr))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons h rest) (if (expr_eq x h) True (msx_expr_mem x rest)))))
+
+(fn msx_expr_add ((x Expr) (xs (List Expr))) (List Expr)
+  (if (msx_expr_mem x xs) xs (Cons x xs)))
+
+(fn msx_exprs_subset ((xs (List Expr)) (ys (List Expr))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil True)
+    ((Cons x rest) (if (msx_expr_mem x ys) (msx_exprs_subset rest ys) False))))
+
+(fn msx_exprs_eq ((xs (List Expr)) (ys (List Expr))) Bool
+  (if (msx_exprs_subset xs ys) (msx_exprs_subset ys xs) False))
+
+(fn msx_exprs_app ((xs (List Expr)) (ys (List Expr))) (List Expr)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons x rest) (Cons x (msx_exprs_app rest ys)))))
+
+(fn msx_entries_app ((xs (List GEnt)) (ys (List GEnt))) (List GEnt)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons x rest) (Cons x (msx_entries_app rest ys)))))
+
+(fn msx_contains ((whole Expr) (target Expr)) Bool
+  (measure (struct whole))
+  (if (expr_eq whole target) True
+  (match whole
+    ((Ctor _ args) (msx_contains_list args target))
+    ((Call _ args) (msx_contains_list args target))
+    ((Match scrut arms)
+     (if (msx_contains scrut target) True (msx_contains_arms arms target)))
+    ((Let binds body)
+     (if (msx_contains_list binds target) True (msx_contains body target)))
+    ((If c t e)
+     (if (msx_contains c target) True
+     (if (msx_contains t target) True
+     (msx_contains e target))))
+    (_ False))))
+
+(fn msx_contains_list ((xs (List Expr)) (target Expr)) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons x rest)
+     (if (msx_contains x target) True (msx_contains_list rest target)))))
+
+(fn msx_contains_arms ((arms (List Arm)) (target Expr)) Bool
+  (measure (struct arms))
+  (match arms
+    (Nil False)
+    ((Cons (Arm _ body) rest)
+     (if (msx_contains body target) True (msx_contains_arms rest target)))))
+
+(fn msx_avoids ((value Expr) (targets (List Expr))) Bool
+  (measure (struct targets))
+  (match targets
+    (Nil True)
+    ((Cons target rest)
+     (if (msx_contains value target) False (msx_avoids value rest)))))
+
+(fn msx_matches_any ((template Expr) (targets (List Expr))) Bool
+  (measure (struct targets))
+  (match targets
+    (Nil False)
+    ((Cons target rest)
+     (match (match_e template target Nil)
+       ((MtROk _) True)
+       (_ (msx_matches_any template rest))))))
+
+(fn msx_nested_static ((template Expr) (targets (List Expr))) Bool
+  (measure (struct template))
+  (match (hole_view template)
+    ((HVHole _) False)
+    ((HVBad _) True)
+    ((HVNot)
+     (if (msx_matches_any template targets) True
+     (match template
+       ((Ctor _ args) (msx_nested_static_list args targets))
+       ((Call _ args) (msx_nested_static_list args targets))
+       ((Match scrut arms)
+        (if (msx_nested_static scrut targets) True
+        (msx_nested_static_arms arms targets)))
+       ((Let binds body)
+        (if (msx_nested_static_list binds targets) True
+        (msx_nested_static body targets)))
+       ((If c t e)
+        (if (msx_nested_static c targets) True
+        (if (msx_nested_static t targets) True
+        (msx_nested_static e targets))))
+       (_ False))))))
+
+(fn msx_nested_static_list ((templates (List Expr)) (targets (List Expr))) Bool
+  (measure (struct templates))
+  (match templates
+    (Nil False)
+    ((Cons template rest)
+     (if (msx_nested_static template targets) True
+     (msx_nested_static_list rest targets)))))
+
+(fn msx_nested_static_arms ((arms (List Arm)) (targets (List Expr))) Bool
+  (measure (struct arms))
+  (match arms
+    (Nil False)
+    ((Cons (Arm _ body) rest)
+     (if (msx_nested_static body targets) True
+     (msx_nested_static_arms rest targets)))))
+
+(fn msx_has_nested_static ((template Expr) (targets (List Expr))) Bool
+  (match (hole_view template)
+    ((HVBad _) True)
+    ((HVHole _) False)
+    ((HVNot)
+     (match template
+       ((Ctor _ args) (msx_nested_static_list args targets))
+       ((Call _ args) (msx_nested_static_list args targets))
+       ((Match scrut arms)
+        (if (msx_nested_static scrut targets) True
+        (msx_nested_static_arms arms targets)))
+       ((Let binds body)
+        (if (msx_nested_static_list binds targets) True
+        (msx_nested_static body targets)))
+       ((If c t e)
+        (if (msx_nested_static c targets) True
+        (if (msx_nested_static t targets) True
+        (msx_nested_static e targets))))
+       (_ False)))))
+
+(fn msx_shift_targets ((by Int) (targets (List Expr))) (List Expr)
+  (measure (struct targets))
+  (match targets
+    (Nil Nil)
+    ((Cons target rest) (Cons (shift by 0 target) (msx_shift_targets by rest)))))
+
+(type MsxPatR (MsxPatErr (List Int)) (MsxPatOk Expr Int))
+(type MsxPatsR (MsxPatsErr (List Int)) (MsxPatsOk (List Expr) Int))
+
+(fn msx_pat_expr ((p Pat) (total Int) (seen Int)) MsxPatR
+  (measure (struct p))
+  (match p
+    ((PVar)
+     (if (lt seen total) (MsxPatOk (BVar (- (- total 1) seen)) (+ seen 1))
+     (MsxPatErr "pattern binder accounting drift")))
+    ((PCtor q pats)
+     (match (msx_pats_expr pats total seen)
+       ((MsxPatsErr msg) (MsxPatErr msg))
+       ((MsxPatsOk args next) (MsxPatOk (Ctor q args) next))))
+    ((PInt n) (MsxPatOk (IntLit n) seen))
+    ((PSym s) (MsxPatOk (SymLit s) seen))))
+
+(fn msx_pats_expr ((ps (List Pat)) (total Int) (seen Int)) MsxPatsR
+  (measure (struct ps))
+  (match ps
+    (Nil (MsxPatsOk Nil seen))
+    ((Cons p rest)
+     (match (msx_pat_expr p total seen)
+       ((MsxPatErr msg) (MsxPatsErr msg))
+       ((MsxPatOk value next)
+        (match (msx_pats_expr rest total next)
+          ((MsxPatsErr msg) (MsxPatsErr msg))
+          ((MsxPatsOk values end) (MsxPatsOk (Cons value values) end))))))))
+
+(fn msx_ctor_rebuild ((p Pat)) (Option Expr)
+  (match p
+    ((PCtor _ _)
+     (let ((arity (pat_arity p)))
+       (match (msx_pat_expr p arity 0)
+         ((MsxPatErr _) None)
+         ((MsxPatOk value seen) (if (int_eq seen arity) (Some value) None)))))
+    (_ None)))
+
+;; Per-hole root exclusions accumulated while a parent product is split.
+(fn msx_roots_get ((id Int) (roots (List (Pair Int (List Expr))))) (List Expr)
+  (measure (struct roots))
+  (match roots
+    (Nil Nil)
+    ((Cons (Pair key values) rest)
+     (if (int_eq id key) values (msx_roots_get id rest)))))
+
+(fn msx_roots_add ((id Int) (value Expr) (roots (List (Pair Int (List Expr)))))
+  (List (Pair Int (List Expr)))
+  (measure (struct roots))
+  (match roots
+    (Nil (Cons (Pair id (Cons value Nil)) Nil))
+    ((Cons (Pair key values) rest)
+     (if (int_eq id key) (Cons (Pair key (msx_expr_add value values)) rest)
+     (Cons (Pair key values) (msx_roots_add id value rest))))))
+
+(type MsxBranch (MsxBranch Expr (List (Pair Int (List Expr)))))
+
+(fn msx_branches_app ((xs (List MsxBranch)) (ys (List MsxBranch)))
+  (List MsxBranch)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons x rest) (Cons x (msx_branches_app rest ys)))))
+
+(fn msx_binding_allowed
+  ((grammar Grammar)
+   (global (List Expr))
+   (roots (List (Pair Int (List Expr))))
+   (id Int)
+   (value Expr))
+  Bool
+  (if (msx_avoids value global)
+    (if (msx_expr_mem value (msx_roots_get id roots)) False
+    (match (sk_rank (hole id) grammar value)
+      ((SkCErr _) False)
+      ((SkCOk _) True)))
+    False))
+
+(fn msx_bindings_allowed
+  ((grammar Grammar)
+   (global (List Expr))
+   (roots (List (Pair Int (List Expr))))
+   (ids (List Int))
+   (bindings (List (Pair Int Expr))))
+  Bool
+  (measure (struct ids))
+  (match ids
+    (Nil True)
+    ((Cons id rest)
+     (match (asg_find id bindings)
+       (None False)
+       ((Some value)
+        (if (msx_binding_allowed grammar global roots id value)
+          (msx_bindings_allowed grammar global roots rest bindings)
+          False))))))
+
+(fn msx_prefix_bindings
+  ((stop Int) (ids (List Int)) (bindings (List (Pair Int Expr))))
+  (List (Pair Int Expr))
+  (measure (struct ids))
+  (match ids
+    (Nil Nil)
+    ((Cons id rest)
+     (if (int_eq id stop) Nil
+     (match (asg_find id bindings)
+       (None (msx_prefix_bindings stop rest bindings))
+       ((Some value)
+        (Cons (Pair id value) (msx_prefix_bindings stop rest bindings))))))))
+
+(type MsxPointR (MsxPointErr (List Int)) (MsxPointOk (List MsxBranch)))
+
+(fn msx_point_branches
+  ((rev_ids (List Int))
+   (all_ids (List Int))
+   (template Expr)
+   (roots (List (Pair Int (List Expr))))
+   (bindings (List (Pair Int Expr))))
+  MsxPointR
+  (measure (struct rev_ids))
+  (match rev_ids
+    (Nil (MsxPointOk Nil))
+    ((Cons id rest)
+     (match (asg_find id bindings)
+       (None (MsxPointErr "point exclusion lost a hole binding"))
+       ((Some value)
+        (match (sk_fill template (msx_prefix_bindings id all_ids bindings))
+          ((SkEErr msg) (MsxPointErr msg))
+          ((SkEOk branch_template)
+           (match (msx_point_branches rest all_ids template roots bindings)
+             ((MsxPointErr msg) (MsxPointErr msg))
+             ((MsxPointOk tail)
+              (MsxPointOk
+                (Cons
+                  (MsxBranch branch_template (msx_roots_add id value roots))
+                  tail)))))))))))
+
+(fn msx_split_branch_live
+  ((grammar Grammar) (global (List Expr)) (target Expr) (branch MsxBranch))
+  MsxPointR
+  (match branch
+    ((MsxBranch template roots)
+     (match (match_e template target Nil)
+       ((MtRErr msg) (MsxPointErr msg))
+       ((MtRNo) (MsxPointOk (Cons branch Nil)))
+       ((MtROk bindings)
+        (match (holes_e template Nil)
+          ((SkIdsErr msg) (MsxPointErr msg))
+          ((SkIdsOk ids)
+           (match ids
+             (Nil (MsxPointOk Nil))
+             ((Cons _ _)
+              (if (msx_bindings_allowed grammar global roots ids bindings)
+                (msx_point_branches
+                  (ids_rev ids Nil)
+                  ids
+                  template
+                  roots
+                  bindings)
+                (MsxPointOk (Cons branch Nil))))))))))))
+
+(fn msx_split_branch
+  ((grammar Grammar) (global (List Expr)) (target Expr) (branch MsxBranch))
+  MsxPointR
+  (match branch
+    ((MsxBranch template _)
+     (if (msx_avoids template global)
+       (msx_split_branch_live grammar global target branch)
+       (MsxPointOk Nil)))))
+
+(fn msx_split_branches
+  ((grammar Grammar)
+   (global (List Expr))
+   (target Expr)
+   (branches (List MsxBranch)))
+  MsxPointR
+  (measure (struct branches))
+  (match branches
+    (Nil (MsxPointOk Nil))
+    ((Cons branch rest)
+     (match (msx_split_branch grammar global target branch)
+       ((MsxPointErr msg) (MsxPointErr msg))
+       ((MsxPointOk here)
+        (match (msx_split_branches grammar global target rest)
+          ((MsxPointErr msg) (MsxPointErr msg))
+          ((MsxPointOk tail) (MsxPointOk (msx_branches_app here tail)))))))))
+
+(fn msx_apply_targets
+  ((grammar Grammar)
+   (global (List Expr))
+   (targets (List Expr))
+   (branches (List MsxBranch)))
+  MsxPointR
+  (measure (struct targets))
+  (match targets
+    (Nil (MsxPointOk branches))
+    ((Cons target rest)
+     (match (msx_split_branches grammar global target branches)
+       ((MsxPointErr msg) (MsxPointErr msg))
+       ((MsxPointOk next) (msx_apply_targets grammar global rest next))))))
+
+;; A memo entry preserves true sharing inside one production/root expression.
+(type MsxMemoEnt (MsxMemoEnt Int (List Expr) (List Expr) Expr))
+
+(type MsxMemoR (MsxMemoErr (List Int)) (MsxMemoMiss) (MsxMemoHit Expr))
+
+(fn msx_memo_find
+  ((id Int) (global (List Expr)) (roots (List Expr)) (memo (List MsxMemoEnt)))
+  MsxMemoR
+  (measure (struct memo))
+  (match memo
+    (Nil (MsxMemoMiss))
+    ((Cons (MsxMemoEnt key prior_global prior_roots value) rest)
+     (if (int_eq id key)
+       (if (msx_exprs_eq global prior_global)
+         (if (msx_exprs_eq roots prior_roots) (MsxMemoHit value)
+         (MsxMemoErr "shared hole has incompatible contextual root exclusions"))
+         (MsxMemoErr "shared hole has incompatible match-arm contexts"))
+       (msx_memo_find id global roots rest)))))
+
+(type MsxWalkR
+  (MsxWalkErr (List Int))
+  (MsxWalkOk Expr (List GEnt) Int (List MsxMemoEnt)))
+
+(type MsxWalkListR
+  (MsxWalkListErr (List Int))
+  (MsxWalkListOk (List Expr) (List GEnt) Int (List MsxMemoEnt)))
+
+(type MsxWalkArmsR
+  (MsxWalkArmsErr (List Int))
+  (MsxWalkArmsOk (List Arm) (List GEnt) Int (List MsxMemoEnt)))
+
+(type MsxCompileAltsR
+  (MsxCompileAltsErr (List Int))
+  (MsxCompileAltsOk (List Expr) (List GEnt) Int))
+
+(fn msx_walk
+  ((fuel Int)
+   (grammar Grammar)
+   (global (List Expr))
+   (roots (List (Pair Int (List Expr))))
+   (e Expr)
+   (next Int)
+   (memo (List MsxMemoEnt)))
+  MsxWalkR
+  (measure fuel)
+  (if (lt fuel 1) (MsxWalkErr "contextual formation fuel exhausted")
+  (match (hole_view e)
+    ((HVBad msg) (MsxWalkErr msg))
+    ((HVHole id)
+     (let ((root_values (msx_roots_get id roots)))
+       (match (msx_memo_find id global root_values memo)
+         ((MsxMemoErr msg) (MsxWalkErr msg))
+         ((MsxMemoHit value) (MsxWalkOk value Nil next memo))
+         ((MsxMemoMiss)
+          (match
+            (msx_compile_hole (- fuel 1) grammar global root_values id next)
+            ((MsxWalkErr msg) (MsxWalkErr msg))
+            ((MsxWalkOk value entries after _)
+             (MsxWalkOk
+               value
+               entries
+               after
+               (Cons (MsxMemoEnt id global root_values value) memo))))))))
+    ((HVNot)
+     (match e
+       ((Ctor q args)
+        (match (msx_walk_list (- fuel 1) grammar global roots args next memo)
+          ((MsxWalkListErr msg) (MsxWalkErr msg))
+          ((MsxWalkListOk args2 entries after memo2)
+           (MsxWalkOk (Ctor q args2) entries after memo2))))
+       ((Call q args)
+        (match (msx_walk_list (- fuel 1) grammar global roots args next memo)
+          ((MsxWalkListErr msg) (MsxWalkErr msg))
+          ((MsxWalkListOk args2 entries after memo2)
+           (MsxWalkOk (Call q args2) entries after memo2))))
+       ((Match scrut arms)
+        (match (msx_walk (- fuel 1) grammar global roots scrut next memo)
+          ((MsxWalkErr msg) (MsxWalkErr msg))
+          ((MsxWalkOk scrut2 entries after memo2)
+           (match
+             (msx_walk_arms
+               (- fuel 1)
+               grammar
+               global
+               roots
+               scrut
+               arms
+               after
+               memo2)
+             ((MsxWalkArmsErr msg) (MsxWalkErr msg))
+             ((MsxWalkArmsOk arms2 more end memo3)
+              (MsxWalkOk
+                (Match scrut2 arms2)
+                (msx_entries_app entries more)
+                end
+                memo3))))))
+       ((Let binds body)
+        (match (msx_walk_list (- fuel 1) grammar global roots binds next memo)
+          ((MsxWalkListErr msg) (MsxWalkErr msg))
+          ((MsxWalkListOk binds2 entries after memo2)
+           (match
+             (msx_walk
+               (- fuel 1)
+               grammar
+               (msx_shift_targets (len binds) global)
+               roots
+               body
+               after
+               memo2)
+             ((MsxWalkErr msg) (MsxWalkErr msg))
+             ((MsxWalkOk body2 more end memo3)
+              (MsxWalkOk
+                (Let binds2 body2)
+                (msx_entries_app entries more)
+                end
+                memo3))))))
+       ((If c t e2)
+        (match
+          (msx_walk_list
+            (- fuel 1)
+            grammar
+            global
+            roots
+            (list c t e2)
+            next
+            memo)
+          ((MsxWalkListErr msg) (MsxWalkErr msg))
+          ((MsxWalkListOk values entries after memo2)
+           (match values
+             ((Cons c2 (Cons t2 (Cons e3 Nil)))
+              (MsxWalkOk (If c2 t2 e3) entries after memo2))
+             (_ (MsxWalkErr "contextual If walk arity drift"))))))
+       (_ (MsxWalkOk e Nil next memo)))))))
+
+(fn msx_walk_list
+  ((fuel Int)
+   (grammar Grammar)
+   (global (List Expr))
+   (roots (List (Pair Int (List Expr))))
+   (es (List Expr))
+   (next Int)
+   (memo (List MsxMemoEnt)))
+  MsxWalkListR
+  (measure fuel)
+  (if (lt fuel 1) (MsxWalkListErr "contextual list walk fuel exhausted")
+  (match es
+    (Nil (MsxWalkListOk Nil Nil next memo))
+    ((Cons e rest)
+     (match (msx_walk (- fuel 1) grammar global roots e next memo)
+       ((MsxWalkErr msg) (MsxWalkListErr msg))
+       ((MsxWalkOk e2 entries after memo2)
+        (match (msx_walk_list (- fuel 1) grammar global roots rest after memo2)
+          ((MsxWalkListErr msg) (MsxWalkListErr msg))
+          ((MsxWalkListOk rest2 more end memo3)
+           (MsxWalkListOk
+             (Cons e2 rest2)
+             (msx_entries_app entries more)
+             end
+             memo3)))))))))
+
+(fn msx_arm_targets ((scrut Expr) (p Pat) (global (List Expr))) (List Expr)
+  (let
+    ((arity (pat_arity p)) (shifted (msx_shift_targets (pat_arity p) global)))
+    (match p
+      ((PCtor _ _)
+       (if (int_eq arity 0)
+         (if (sk_closed scrut) (msx_expr_add scrut shifted) shifted)
+         (match (msx_ctor_rebuild p)
+           (None shifted)
+           ((Some rebuild) (msx_expr_add rebuild shifted)))))
+      (_ shifted))))
+
+(fn msx_walk_arms
+  ((fuel Int)
+   (grammar Grammar)
+   (global (List Expr))
+   (roots (List (Pair Int (List Expr))))
+   (scrut Expr)
+   (arms (List Arm))
+   (next Int)
+   (memo (List MsxMemoEnt)))
+  MsxWalkArmsR
+  (measure fuel)
+  (if (lt fuel 1) (MsxWalkArmsErr "contextual arm walk fuel exhausted")
+  (match arms
+    (Nil (MsxWalkArmsOk Nil Nil next memo))
+    ((Cons (Arm p body) rest)
+     (match
+       (msx_walk
+         (- fuel 1)
+         grammar
+         (msx_arm_targets scrut p global)
+         roots
+         body
+         next
+         memo)
+       ((MsxWalkErr msg) (MsxWalkArmsErr msg))
+       ((MsxWalkOk body2 entries after memo2)
+        (match
+          (msx_walk_arms (- fuel 1) grammar global roots scrut rest after memo2)
+          ((MsxWalkArmsErr msg) (MsxWalkArmsErr msg))
+          ((MsxWalkArmsOk rest2 more end memo3)
+           (MsxWalkArmsOk
+             (Cons (Arm p body2) rest2)
+             (msx_entries_app entries more)
+             end
+             memo3)))))))))
+
+(fn msx_compile_branches
+  ((fuel Int)
+   (grammar Grammar)
+   (global (List Expr))
+   (branches (List MsxBranch))
+   (next Int))
+  MsxCompileAltsR
+  (measure fuel)
+  (if (lt fuel 1) (MsxCompileAltsErr "contextual branch compile fuel exhausted")
+  (match branches
+    (Nil (MsxCompileAltsOk Nil Nil next))
+    ((Cons (MsxBranch template roots) rest)
+     (match (msx_walk (- fuel 1) grammar global roots template next Nil)
+       ((MsxWalkErr msg) (MsxCompileAltsErr msg))
+       ((MsxWalkOk template2 entries after _)
+        (match (msx_compile_branches (- fuel 1) grammar global rest after)
+          ((MsxCompileAltsErr msg) (MsxCompileAltsErr msg))
+          ((MsxCompileAltsOk rest2 more end)
+           (MsxCompileAltsOk
+             (Cons template2 rest2)
+             (msx_entries_app entries more)
+             end)))))))))
+
+(fn msx_compile_source_alts
+  ((fuel Int)
+   (grammar Grammar)
+   (global (List Expr))
+   (effective (List Expr))
+   (alts (List Expr))
+   (next Int))
+  MsxCompileAltsR
+  (measure fuel)
+  (if (lt fuel 1)
+    (MsxCompileAltsErr "contextual alternative compile fuel exhausted")
+    (match alts
+      (Nil (MsxCompileAltsOk Nil Nil next))
+      ((Cons alt rest)
+       (if (if (msx_avoids alt global) (msx_has_nested_static alt global) False)
+         (MsxCompileAltsErr
+           "context exclusion matches a nested static production template")
+         (match
+           (msx_apply_targets
+             grammar
+             global
+             effective
+             (Cons (MsxBranch alt Nil) Nil))
+           ((MsxPointErr msg) (MsxCompileAltsErr msg))
+           ((MsxPointOk branches)
+            (match
+              (msx_compile_branches (- fuel 1) grammar global branches next)
+              ((MsxCompileAltsErr msg) (MsxCompileAltsErr msg))
+              ((MsxCompileAltsOk here entries after)
+               (match
+                 (msx_compile_source_alts
+                   (- fuel 1)
+                   grammar
+                   global
+                   effective
+                   rest
+                   after)
+                 ((MsxCompileAltsErr msg) (MsxCompileAltsErr msg))
+                 ((MsxCompileAltsOk tail more end)
+                  (MsxCompileAltsOk
+                    (msx_exprs_app here tail)
+                    (msx_entries_app entries more)
+                    end))))))))))))
+
+(fn msx_compile_hole
+  ((fuel Int)
+   (grammar Grammar)
+   (global (List Expr))
+   (root_values (List Expr))
+   (old_id Int)
+   (next Int))
+  MsxWalkR
+  (measure fuel)
+  (if (lt fuel 1) (MsxWalkErr "contextual hole compile fuel exhausted")
+  (match grammar
+    ((Grammar entries)
+     (match (ms_alts_go entries old_id)
+       (None
+         (MsxWalkErr "contextual formation references a missing grammar hole"))
+       ((Some alts)
+        (match
+          (msx_compile_source_alts
+            (- fuel 1)
+            grammar
+            global
+            (msx_exprs_app global root_values)
+            alts
+            (+ next 1))
+          ((MsxCompileAltsErr msg) (MsxWalkErr msg))
+          ((MsxCompileAltsOk alts2 children after)
+           (MsxWalkOk (hole next) (Cons (GEnt next alts2) children) after Nil)))))))))
+
+(type MsContextFilterR
+  (MsContextFilterErr (List Int))
+  (MsContextFilterEmpty)
+  (MsContextFilterOk Expr Grammar))
+
+(fn ms_filter_match_context ((root Expr) (grammar Grammar)) MsContextFilterR
+  (match (g_wf grammar)
+    ((GWErr msg) (MsContextFilterErr msg))
+    ((GWOk)
+     (match (msx_walk 1000000 grammar Nil Nil root 0 Nil)
+       ((MsxWalkErr msg) (MsContextFilterErr msg))
+       ((MsxWalkOk root2 entries _ _)
+        (let ((filtered (Grammar entries)))
+          (match (g_wf filtered)
+            ((GWErr msg) (MsContextFilterErr msg))
+            ((GWOk)
+             (match (sk_count root2 filtered)
+               ((SkCErr msg) (MsContextFilterErr msg))
+               ((SkCOk total)
+                (if (le total 0) (MsContextFilterEmpty)
+                (MsContextFilterOk root2 filtered))))))))))))

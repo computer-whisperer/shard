@@ -564,6 +564,33 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
+# Match-arm definitional facts are compiled generically into an ordinary exact
+# Grammar.  The first pin audits the result against the old hand-written rev
+# dialect; the second composes the same mechanism with the independent sort
+# task and pins its exact contextual quotient without paying for a full run.
+echo "=== search: generic match-context formation ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/context_formation_probe.shard
+  bin/shard_eval run tools/search/pure_deep.shard context-probe 2 1
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Canonical rev is the scale pin for quotient-first formation composed with
+# demanded-hole superposition.  Both runs start from the full grammar and
+# derive the append quotient from four checked requirements.  The d4 fork
+# count (639) exactly matches the playground across both the 2.25-trillion
+# append quotient and the 1.14-trillion contextual quotient; this gate guards
+# the categorical decision structure, not host-language throughput.
+echo "=== search: checked append-canonical rev d3-d4 ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/rev_deep.shard 3
+  bin/shard_eval run tools/search/rev_deep.shard 4
+  bin/shard_eval run tools/search/rev_deep.shard context 4
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 # Ground-search pin (docs/SEARCH.md slice 1): the rev accumulator space,
 # rank-addressed by meta/sketch and settled through the real machine
 # (meta/invoke -> evm_call_pure). Counts and solution sets must match the

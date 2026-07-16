@@ -1,0 +1,245 @@
+;;; Checked append-canonical rev stress run.
+;;;
+;;; This deliberately starts from rev.shard's duplicate-rich FULL grammar.
+;;; The four append requirements are authenticated from the checked object
+;;; closure and projected through meta/search's generic supplied-grammar
+;;; formation pass.  No rev dialect rule is encoded here.
+;;;
+;;; RUN: bin/shard_eval run tools/search/rev_deep.shard 3
+;;;      bin/shard_eval run tools/search/rev_deep.shard 4
+;;;      bin/shard_eval run tools/search/rev_deep.shard context 4
+;;;      bin/shard_eval run tools/search/rev_deep.shard probe 4 100000
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/invoke")
+(import "../../meta/rewrite")
+(import "../../meta/search")
+(import "checked_profile.shard")
+(import "pure_program.shard")
+(import "rev.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader *))
+(use (:: meta invoke *))
+(use (:: meta rewrite *))
+(use (:: meta search *))
+(use (:: tools search checked_profile *))
+(use (:: tools search pure_program *))
+(use (:: tools search rev *))
+
+(fn rd_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "REV-DEEP FAIL " (append_int msg "\n")) w)))
+
+(fn rd_profile_names () (List Symbol)
+  (list
+    (quote append_nil_left)
+    (quote append_cons)
+    (quote append_assoc)
+    (quote append_nil_right)))
+
+(fn rd_probe_q () QName
+  (qn_at
+    (list (quote tools) (quote search) (quote generated))
+    (quote rev_probe)))
+
+(fn rd_query_go ((tests (List (Pair (List Int) (List Int))))) (List Expr)
+  (measure (struct tests))
+  (match tests
+    (Nil Nil)
+    ((Cons (Pair input _) rest)
+     (Cons
+       (Call
+         (cand_q)
+         (list (intlist_to_expr input) (Ctor (qn (quote Nil)) Nil)))
+       (rd_query_go rest)))))
+
+(fn rd_want_go ((tests (List (Pair (List Int) (List Int))))) (List Expr)
+  (measure (struct tests))
+  (match tests
+    (Nil Nil)
+    ((Cons (Pair _ output) rest)
+     (Cons (intlist_to_expr output) (rd_want_go rest)))))
+
+(fn rd_witness () Expr
+  (Match
+    (BVar 1)
+    (list
+      (Arm (PCtor (qn (quote Nil)) Nil) (BVar 0))
+      (Arm
+        (PCtor (qn (quote Cons)) (list (PVar) (PVar)))
+        (Call
+          (cand_q)
+          (list (BVar 0) (Ctor (qn (quote Cons)) (list (BVar 1) (BVar 2)))))))))
+
+(fn rd_task ((depth Int) (appendq QName) (contextual Bool)) PsTask
+  (PsTask
+    (append_int
+      "REV FULL DEPTH "
+      (append_int
+        (show_int depth)
+        (if contextual " + CHECKED APPEND PROFILE + MATCH CONTEXT"
+        " + CHECKED APPEND PROFILE")))
+    (cand_q)
+    (rd_probe_q)
+    (list (ty_ilist) (ty_ilist))
+    (ty_ilist)
+    (rev_sketch)
+    (rev_grammar depth appendq)
+    (TCon (qn (quote List)) (list (ty_ilist)))
+    (list_expr (rd_query_go (rev_tests)))
+    (list_expr (rd_want_go (rev_tests)))
+    (Some (rd_witness))
+    0  ; replaced with the formed exact count before execution
+    1))
+
+(fn rd_expected ((depth Int)) Int (if (int_eq depth 3) 2597487 2248987364187))
+
+(fn rd_context_expected ((depth Int)) Int
+  (if (int_eq depth 3) 1512056 1143161209736))
+
+(fn rd_finish_run
+  ((m Module) (task PsTask) (plan MsPlan) (raw Int) (drive_fuel Int) (w World))
+  World
+  (match (ps_run_plan_stats_fuel m task plan 0 raw 4 drive_fuel)
+    ((PsRunErr msg) (rd_fail msg w))
+    ((PsRunBudget report) (write report w))
+    ((PsRunOk report) (write report w))))
+
+(fn rd_run
+  ((m Module)
+   (appendq QName)
+   (formation TrsFormation)
+   (plan MsPlan)
+   (depth Int)
+   (contextual Bool)
+   (drive_fuel Int)
+   (w World))
+  World
+  (match
+    (ps_apply_formation
+      (rd_task depth appendq contextual)
+      formation
+      (rd_expected depth))
+    ((PsFormationErr msg) (rd_fail msg w))
+    ((PsFormationEmpty) (rd_fail "formation removed the whole task" w))
+    ((PsFormationOk filtered raw)
+     (if contextual
+       (match (ps_apply_match_context filtered (rd_context_expected depth) 1)
+         ((PsFormationErr msg) (rd_fail msg w))
+         ((PsFormationEmpty) (rd_fail "context formation removed the task" w))
+         ((PsFormationOk contextual_task _)
+          (rd_finish_run m contextual_task plan raw drive_fuel w)))
+       (rd_finish_run m filtered plan raw drive_fuel w)))))
+
+(fn rd_with_profile
+  ((m Module)
+   (appendq QName)
+   (depth Int)
+   (contextual Bool)
+   (drive_fuel Int)
+   (w World))
+  World
+  (match
+    (tg_load_checked_profile
+      "tools/search/tasks/pure_program_obj.shard"
+      (rd_profile_names)
+      w)
+    ((Pair result w2)
+     (match result
+       ((TgCheckedProfileErr msg) (rd_fail msg w2))
+       ((TgCheckedProfileOk profile)
+        (match (trs_partition_formation profile)
+          ((TrsProfileFormationErr msg) (rd_fail msg w2))
+          ((TrsProfileFormationOk projected)
+           (match
+             (ms_plan (trs_profile_residual projected) (trs_empty_root_profile))
+             ((MsPlanErr msg) (rd_fail msg w2))
+             ((MsPlanOk plan)
+              (rd_run
+                m
+                appendq
+                (trs_profile_formation projected)
+                plan
+                depth
+                contextual
+                drive_fuel
+                w2))))))))))
+
+(fn rd_parse_nat_go ((cs (List Int)) (acc Int)) (Option Int)
+  (measure (struct cs))
+  (match cs
+    (Nil (Some acc))
+    ((Cons c rest)
+     (if (le 48 c)
+       (if (le c 57) (rd_parse_nat_go rest (+ (* acc 10) (- c 48))) None)
+       None))))
+
+(fn rd_parse_nat ((cs (List Int))) (Option Int)
+  (match cs
+    (Nil None)
+    ((Cons _ _) (rd_parse_nat_go cs 0))))
+
+(fn rd_depth_ok ((depth Int)) Bool (if (int_eq depth 3) True (int_eq depth 4)))
+
+(fn rd_usage ((w World)) World
+  (exit
+    2
+    (write
+      "usage: rev_deep (3|4) | context (3|4) | probe (3|4) POSITIVE-JOB-BUDGET\n"
+      w)))
+
+(fn rd_args ((as (List (List Int))) (m Module) (appendq QName) (w World)) World
+  (match as
+    (Nil (rd_usage w))
+    ((Cons mode rest)
+     (match rest
+       (Nil
+         (match (rd_parse_nat mode)
+           (None (rd_usage w))
+           ((Some depth)
+            (if (rd_depth_ok depth)
+              (rd_with_profile m appendq depth False 1000000 w)
+              (rd_usage w)))))
+       ((Cons ds rest2)
+        (match rest2
+          (Nil
+            (if (int_list_eq mode "context")
+              (match (rd_parse_nat ds)
+                (None (rd_usage w))
+                ((Some depth)
+                 (if (rd_depth_ok depth)
+                   (rd_with_profile m appendq depth True 1000000 w)
+                   (rd_usage w))))
+              (rd_usage w)))
+          ((Cons fs rest3)
+           (match rest3
+             (Nil
+               (if (int_list_eq mode "probe")
+                 (match (rd_parse_nat ds)
+                   (None (rd_usage w))
+                   ((Some depth)
+                    (match (rd_parse_nat fs)
+                      (None (rd_usage w))
+                      ((Some fuel)
+                       (if (rd_depth_ok depth)
+                         (if (lt 0 fuel)
+                           (rd_with_profile m appendq depth False fuel w)
+                           (rd_usage w))
+                         (rd_usage w))))))
+                 (rd_usage w)))
+             ((Cons _ _) (rd_usage w))))))))))
+
+(fn main ((w World)) World
+  (match (load_run_module "tools/search/tasks/pure_program_obj.shard" w)
+    ((Pair result w2)
+     (match result
+       (None (rd_fail "object module load" w2))
+       ((Some m)
+        (match (find_fn (quote append) m)
+          (None (rd_fail "object module has no append" w2))
+          ((Some (FnDef appendq _ _ _))
+           (match (get_args w2)
+             ((Pair as w3) (rd_args as m appendq w3))))))))))
