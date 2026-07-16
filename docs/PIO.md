@@ -228,13 +228,42 @@ Any drift from this classification is a FAIL. The driver contract
     several with a NONLINEAR `MovOp` metavariable held across the window:
     same-value re-drives absorbing into delays, delay redistribution across
     pin-silent windows, MOV Y,Y as a pure hold, and double-toggle collapses.
-  - **P5b [DECIDED]** — the checked-pressure half: a `pio_transition_window`
-    task on the `xtw` pattern — a task-local straight-line trace projection
-    (spine proofs are infeasible over `pio_run` directly: the program is
-    inside the config), the top mined schemas proven as window laws,
-    installed via `search_spine_context`/`search_spine_profile`, enumerative
-    vs lazy audit agreement, and a model-connection lemma over real
-    `pio_run` for the flagship law.
+  - **P5b [LANDED 2026-07-16]** — the checked-pressure half:
+    `tools/search/tasks/pio_transition_window.shard` on the `xtw` pattern.
+    The probe is a task-local straight-line projection (`PTW`, the six
+    observed fields with the pin/pindir latches held PRE-MASKED as bits —
+    spine proofs are infeasible over `pio_run` directly: the program is
+    inside the config): `ptw_step` mirrors the model's
+    `out_shift`/`exec_mov` arms by direct constructor matching, `ptw_wave`
+    emits 1+delay copies of the post-execute pad bit per instruction,
+    `ptw_fin` composes states. Because the latch is pre-masked, every law
+    in the mined re-drive family is an identity of ONE SHARED STUCK TERM
+    (`ptw_op x0 y` parks identically on both sides), so the four checked
+    laws are premise-free, hold for arbitrary Int state fields, need no
+    case split, and quantify the `MovOp` nonlinearly — one theorem covers
+    invert/none/reverse where the x86 adapter needed a word invariant plus
+    guards. Landed laws (each: wave/fin tail lemmas by single-ctor case-on
+    + compute-both, wave/fin context lemmas by prefix induction, observe by
+    seeds induction, spine claim over `search_probe`): `ptw_redrive_spine`
+    (pins[0] pins[0] ⇒ pins[1], the 2-window core that fires at the most
+    positions) and the mined drive-absorb trio `ptw_absorb_{a,b,c}_spine`.
+    Model tie-back: `ptw_model_absorb_a` re-proves the flagship on the REAL
+    `pio_run`/`pio_final` at every census seed for every `MovOp` (case-on +
+    ground compute), and `ptw_projection_pin_a` pins projection ≡ model
+    observer on the flagship windows. Results: audit run (36s) SPINE RULES
+    4 / RAW 1111 / ENUMERATIVE AGREEMENT OK / ACCEPTED 1067 / CONSTRAINED
+    44 (exactly the hand-counted union: 40 re-drive + 4 additional
+    3-window absorbs); mining replay against the projection probe
+    reproduces P5a's census BYTE-IDENTICAL (1111/333/208/54/20) — the
+    strongest adequacy evidence — and now reports AUTHENTICATED 3 (the
+    trio cites its spine theorems by name; worklist 20→17). Boundary
+    finding: the mined mov-y collapse family (pins-y-y ⇒ pins-pins) is
+    NOT state-universal — it needs a y-is-32-bit-word premise (MOInvert
+    double-negation), and spine capture refuses premise-bearing laws by
+    design (only structural-distinctness guards exist); it stays on the
+    proof worklist as the first candidate for a guard-vocabulary
+    extension. First engine exercise of int literals and polymorphic
+    `None` inside checked window patterns — both capture fine.
   - **P5c [DECIDED, parameters open]** — the freer DME synthesis:
     variable-length programs over an unpinned per-slot scope with jumps as
     the only control, searched under the checked pressure; graded

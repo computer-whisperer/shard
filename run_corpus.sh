@@ -347,6 +347,7 @@ TARGETS=(
   tools/search/tasks/typed_pio_dme.shard
   tools/search/gen/pio_dme_refinement.shard
   tools/search/tasks/pio_transition_mining.shard
+  tools/search/tasks/pio_transition_window.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -617,6 +618,18 @@ fi
 echo "=== search: typed pio dme pin ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_pio_dme.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Checked PIO transition-window narrowing (docs/PIO.md P5b): the mining
+# scope searched under four proven spine laws (re-drive merge + the
+# drive-absorb trio, nonlinear MovOp metavariable) over the task-local
+# straight-line projection.  Expected: SPINE RULES 4; RAW 1111; AUDIT
+# ENUMERATIVE AGREEMENT OK ACCEPTED 1067 CONSTRAINED 44.
+echo "=== search: checked pio transition-window narrowing ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/pio_transition_window.shard audit
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
