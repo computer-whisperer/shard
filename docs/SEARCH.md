@@ -2556,11 +2556,9 @@ profile can see.  Enumerative and lazy runs agree exactly:
     AUDIT accepted 658; constrained 162; exhaustive agreement OK
 
 `REMOVED` is still zero: a nonlinear variable-length window is residual
-pressure, not a separable formation clause.  The next independent gap remains
-checked conditional rules for the mined `d != s` cancellation schema.  The
-next spine-specific refinements are stable whole-hole verdict caching and a
-multi-arm/multi-spine inspector for recursive datatypes with more than one
-structural branch.
+pressure, not a separable formation clause.  The next spine-specific
+refinements are stable whole-hole verdict caching and a multi-arm/multi-spine
+inspector for recursive datatypes with more than one structural branch.
 
 #### Checked structural-distinctness guards
 
@@ -2604,8 +2602,25 @@ pressure remains 162:
     SPINE RULES 2; DEFERRED RULES 2
     RAW 820; ACCEPTED 658; CONSTRAINT KILLED 162
 
-This is a plumbing theorem, not the mined cancellation result.  Admitting
-`xor d,s; xor d,s -> []` under `d != s` still requires the semantic proof: a
-distinct-register `rget/rset` framing law and right-XOR cancellation in the bit
-library.  The engine side can now consume that theorem without further
-ISA-specific changes once those two facts land.
+The guarded absorber remains a plumbing theorem, but its two semantic
+prerequisites have now graduated into reusable libraries.  `std/bits` proves
+right cancellation
+
+    bxor (bxor a b) b = a
+
+on the kernel primitive's nonnegative domain, by recurrence plus a checked
+quotient/remainder reconstruction.  The x86 model exposes a complete
+`reg_code` discriminator and proves both distinct-register `rget/rset` framing
+and `rset rs r (rget rs r) = rs`.  Those facts compose into the full-state,
+arbitrary-tail theorem
+
+    xeval ([xor d,s; xor d,s] ++ tail) = xeval tail
+
+under the checked `reg_code d != reg_code s` guard and the model's ordinary
+nonnegative word premises.  No ISA-specific search mechanism was added.
+
+What remains before this becomes additional measured spine pressure is the
+observer boundary: its arbitrary-prefix theorem must carry and preserve the
+searched word-state invariant, then discharge that invariant for the census
+files.  That is now a compositional projection proof, not missing XOR algebra,
+register aliasing semantics, or guard support.
