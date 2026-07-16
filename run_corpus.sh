@@ -150,6 +150,8 @@ TARGETS=(
   examples/weld_probe.shard
   examples/sqbw_probe.shard
   examples/sqbx_probe.shard
+  examples/sqblw_probe.shard
+  examples/sqblx_probe.shard
   examples/imp_if.shard
   examples/impgen_wasm_if_out.shard
   examples/impgen_x86_if_out.shard
