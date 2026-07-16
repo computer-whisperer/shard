@@ -498,6 +498,58 @@
     ((Cons (GEnt id alts) rest)
      (if (int_eq id h) (Some alts) (su_alts_go rest h)))))
 
+;; The proof/counting vocabulary deliberately keeps Grammar as a transparent
+;; ascending list.  Evaluation asks for alternatives on every demanded hole,
+;; though, so compile that stable scope once per drive into a persistent trie.
+;; The original Grammar remains alongside it for exact counting and checked
+;; constraint APIs; this is only an operational view of the same entries.
+(type SuGBr (SuGLeaf) (SuGNode (Option (List Expr)) SuGBr SuGBr))
+
+(fn sgb_get ((t SuGBr) (j Int) (fuel Int)) (Option (List Expr))
+  (measure fuel)
+  (if (lt fuel 1) None
+  (match t
+    ((SuGLeaf) None)
+    ((SuGNode v l r)
+     (if (le j 1) v
+     (if (int_eq (mod j 2) 0) (sgb_get l (ediv j 2) (- fuel 1))
+     (sgb_get r (ediv j 2) (- fuel 1))))))))
+
+(fn sgb_set ((t SuGBr) (j Int) (alts (List Expr)) (fuel Int)) SuGBr
+  (measure fuel)
+  (if (lt fuel 1) t
+  (match t
+    ((SuGLeaf)
+     (if (le j 1) (SuGNode (Some alts) (SuGLeaf) (SuGLeaf))
+     (if (int_eq (mod j 2) 0)
+       (SuGNode None (sgb_set (SuGLeaf) (ediv j 2) alts (- fuel 1)) (SuGLeaf))
+       (SuGNode None (SuGLeaf) (sgb_set (SuGLeaf) (ediv j 2) alts (- fuel 1))))))
+    ((SuGNode v l r)
+     (if (le j 1) (SuGNode (Some alts) l r)
+     (if (int_eq (mod j 2) 0)
+       (SuGNode v (sgb_set l (ediv j 2) alts (- fuel 1)) r)
+       (SuGNode v l (sgb_set r (ediv j 2) alts (- fuel 1)))))))))
+
+(fn sug_index ((es (List GEnt)) (t SuGBr)) SuGBr
+  (measure (struct es))
+  (match es
+    (Nil t)
+    ((Cons (GEnt id alts) rest) (sug_index rest (sgb_set t (+ id 1) alts 64)))))
+
+(type SuG (SuG Grammar SuGBr))
+
+(fn sug_compile ((g Grammar)) SuG
+  (match g
+    ((Grammar es) (SuG g (sug_index es (SuGLeaf))))))
+
+(fn sug_raw ((g SuG)) Grammar
+  (match g
+    ((SuG raw _) raw)))
+
+(fn sug_alts ((g SuG) (h Int)) (Option (List Expr))
+  (match g
+    ((SuG _ index) (sgb_get index (+ h 1) 64))))
+
 (fn alt_nth ((alts (List Expr)) (k Int)) (Option Expr)
   (measure (struct alts))
   (match alts
@@ -602,7 +654,7 @@
    (m Module)
    (candq QName)
    (body Expr)
-   (g Grammar)
+   (g SuG)
    (asg (List (Pair Int Int)))
    (a SuA)
    (r Int))
@@ -652,7 +704,7 @@
    (m Module)
    (candq QName)
    (body Expr)
-   (g Grammar)
+   (g SuG)
    (asg (List (Pair Int Int)))
    (a SuA)
    (env (List Int))
@@ -668,7 +720,7 @@
        ;; deterministic and can be entered without a branch or consultation;
        ;; any genuinely open choice blocks.
        (let ((c (ch_get asg h)))
-         (match (su_alts g h)
+         (match (sug_alts g h)
            (None (SuRErr "superpose: unknown hole"))
            ((Some alts)
             (if (lt c 0)
@@ -796,7 +848,7 @@
    (m Module)
    (candq QName)
    (body Expr)
-   (g Grammar)
+   (g SuG)
    (asg (List (Pair Int Int)))
    (a SuA)
    (env (List Int))
@@ -832,7 +884,7 @@
    (m Module)
    (candq QName)
    (body Expr)
-   (g Grammar)
+   (g SuG)
    (asg (List (Pair Int Int)))
    (a SuA)
    (p Pat)
@@ -890,7 +942,7 @@
    (m Module)
    (candq QName)
    (body Expr)
-   (g Grammar)
+   (g SuG)
    (asg (List (Pair Int Int)))
    (a SuA)
    (ps (List Pat))
@@ -935,7 +987,7 @@
    (m Module)
    (candq QName)
    (body Expr)
-   (g Grammar)
+   (g SuG)
    (asg (List (Pair Int Int)))
    (a SuA)
    (r Int))
@@ -976,7 +1028,7 @@
    (m Module)
    (candq QName)
    (body Expr)
-   (g Grammar)
+   (g SuG)
    (asg (List (Pair Int Int)))
    (a SuA)
    (rs (List Int)))
@@ -1045,7 +1097,7 @@
    (m Module)
    (candq QName)
    (body Expr)
-   (g Grammar)
+   (g SuG)
    (asg (List (Pair Int Int)))
    (a SuA)
    (r Int)
@@ -1108,7 +1160,7 @@
    (m Module)
    (candq QName)
    (body Expr)
-   (g Grammar)
+   (g SuG)
    (asg (List (Pair Int Int)))
    (a SuA)
    (inp (List Int))
@@ -1144,7 +1196,7 @@
    (m Module)
    (candq QName)
    (body Expr)
-   (g Grammar)
+   (g SuG)
    (asg (List (Pair Int Int)))
    (a SuA)
    (ts (List (Pair (List Int) (List Int)))))
@@ -1170,7 +1222,7 @@
    (m Module)
    (candq QName)
    (body Expr)
-   (g Grammar)
+   (g SuG)
    (asg (List (Pair Int Int)))
    (a SuA)
    (r Int)
@@ -1210,7 +1262,7 @@
    (m Module)
    (candq QName)
    (body Expr)
-   (g Grammar)
+   (g SuG)
    (asg (List (Pair Int Int)))
    (a SuA)
    (got (List Int))
@@ -1243,7 +1295,7 @@
    (m Module)
    (candq QName)
    (body Expr)
-   (g Grammar)
+   (g SuG)
    (asg (List (Pair Int Int)))
    (a SuA)
    (query Expr)
@@ -1334,7 +1386,7 @@
    (prepared MsPrepared)
    (query Expr)
    (want Expr)
-   (g Grammar)
+   (g SuG)
    (memo (List (Pair Int Int)))
    (ar SuA)
    (jobs (List (List (Pair Int Int))))
@@ -1363,7 +1415,7 @@
        (match (ms_check_prepared 1000000 prepared asg candidate)
          ((MsErr msg) (SuSErr msg))
          ((MsRedex _)
-          (match (cc_expr g memo asg candidate 1000000)
+          (match (cc_expr (sug_raw g) memo asg candidate 1000000)
             ((CcRErr msg) (SuSErr msg))
             ((CcROk n)
              (su_drive_query_prepared
@@ -1390,7 +1442,7 @@
              ((SuTErr msg) (SuSErr msg))
              ((SuTOut) (SuSErr "superpose: generic evaluation fuel exhausted"))
              ((SuTBlocked h ar2)
-              (match (su_alts g h)
+              (match (sug_alts g h)
                 (None
                   (SuSErr "superpose: generic query blocked on unknown hole"))
                 ((Some alts)
@@ -1414,7 +1466,7 @@
                    (+ forks 1)
                    sols))))
              ((SuTFail ar2)
-              (match (cc_expr g memo asg candidate 1000000)
+              (match (cc_expr (sug_raw g) memo asg candidate 1000000)
                 ((CcRErr msg) (SuSErr msg))
                 ((CcROk n)
                  (su_drive_query_prepared
@@ -1439,7 +1491,7 @@
              ((SuTPass ar2)
               (match constraint_verdict
                 ((MsBlocked h)
-                 (match (su_alts g h)
+                 (match (sug_alts g h)
                    (None
                      (SuSErr
                        "superpose: residual constraint blocked on unknown hole"))
@@ -1464,7 +1516,7 @@
                       (+ forks 1)
                       sols))))
                 ((MsClear)
-                 (match (cc_expr g memo asg candidate 1000000)
+                 (match (cc_expr (sug_raw g) memo asg candidate 1000000)
                    ((CcRErr msg) (SuSErr msg))
                    ((CcROk n)
                     (su_drive_query_prepared
@@ -1514,15 +1566,32 @@
     ((MsPrepareErr msg)
      (SuSErr (append_int "superpose: constraint preparation: " msg)))
     ((MsPrepareOk prepared)
-     (su_drive_query_prepared fuel m candq body candidate prepared query want g
-       memo ar jobs found killed constrained regions forks sols))))
+     (su_drive_query_prepared
+       fuel
+       m
+       candq
+       body
+       candidate
+       prepared
+       query
+       want
+       (sug_compile g)
+       memo
+       ar
+       jobs
+       found
+       killed
+       constrained
+       regions
+       forks
+       sols))))
 
 (fn su_drive
   ((fuel Int)
    (m Module)
    (candq QName)
    (body Expr)
-   (g Grammar)
+   (g SuG)
    (memo (List (Pair Int Int)))
    (ts (List (Pair (List Int) (List Int))))
    (ar SuA)
@@ -1552,7 +1621,7 @@
          ((SuTErr msg) (SuSErr msg))
          ((SuTOut) (SuSErr "superpose: evaluation fuel exhausted"))
          ((SuTBlocked h ar2)
-          (match (su_alts g h)
+          (match (sug_alts g h)
             (None (SuSErr "superpose: blocked on an unknown hole"))
             ((Some alts)
              (su_drive
@@ -1571,7 +1640,7 @@
                (+ forks 1)
                sols))))
          ((SuTFail ar2)
-          (match (cc_expr g memo asg body 1000000)
+          (match (cc_expr (sug_raw g) memo asg body 1000000)
             ((CcRErr msg) (SuSErr msg))
             ((CcROk n)
              (su_drive
@@ -1590,7 +1659,7 @@
                forks
                sols))))
          ((SuTPass ar2)
-          (match (cc_expr g memo asg body 1000000)
+          (match (cc_expr (sug_raw g) memo asg body 1000000)
             ((CcRErr msg) (SuSErr msg))
             ((CcROk n)
              (su_drive
@@ -1875,7 +1944,7 @@
               m
               (cand_q)
               body
-              g
+              (sug_compile g)
               memo
               ts
               (sa_new)

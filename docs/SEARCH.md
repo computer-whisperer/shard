@@ -1609,10 +1609,15 @@ without an append-specific task grammar:
     found 32; killed 4,469,879,968; regions 28,721; forks 5,969
     Shard evaluator steps 165,629; playground evaluator steps 38,994
 
-Thus theorem formation removes 88.0% of the spellings and cuts the full
-playground search from 999,108 to 38,994 evaluator steps; the current Shard
-executor pays about 4.25x more evaluator steps on the same canonical problem,
-while retaining exact coverage and the same 32 solutions.
+Thus theorem formation removes 88.0% of the spellings and retains exact
+coverage and the same 32 solutions.  The equal census does **not** imply equal
+search work, however.  A counter-for-counter replay of the Rust playground
+shows 4,745 splits and 22,841 prunes at d2, versus Shard's 5,969 splits and
+28,689 prunes.  Rust also records 38,994 of its coarser evaluator steps,
+290,231 memo hits, and 10,575 graph nodes.  Shard records 165,629 syntax-level
+steps.  Treating that difference as merely a 4.25x interpreter constant was
+wrong: the step definitions differ, and the 25% larger decision tree is an
+algorithmic delta before host execution speed enters the comparison.
 
 Depth 3 validates the harder scale without making a long interpreter run a
 default gate.  The checked profile maps 22,140,821,944,106,047,728 raw terms
@@ -1622,17 +1627,39 @@ and 38,420 evaluator steps.  Budget exhaustion is a first-class partial
 census, not an error: `SETTLED + PENDING = TOTAL`, and every settled region is
 still counted exactly.
 
+For scale, the playground settles that entire d3 quotient in 349,732
+evaluator steps: 83,553 splits, 406,365 prunes, 5,555,097 memo hits, and
+28,800 graph nodes (10.7 seconds in the measured release run).  The Shard
+probe therefore must not be presented as if extrapolation differed only by a
+linear Shard-versus-Rust execution factor.  Three gaps are now tracked
+separately: formation-equivalent grammars still induce a different deeper
+fork tree; Shard routes fewer stable subcomputations through graph nodes; and
+its hot runtime keys are structural Shard values rather than compiled numeric
+identities.
+
     bin/shard_eval run tools/search/pure_deep.shard               # full d2
     bin/shard_eval run tools/search/pure_deep.shard 3             # full d3
     bin/shard_eval run tools/search/pure_deep.shard probe 3 5000  # bounded d3
 
-The shared executor tables also now match their intended asymptotics more
-closely: node-result and `(expression, environment)` indexes are persistent
-tries, and result rows sharing one consulted-hole signature are grouped and
-indexed by their exact choice key.  Hashes select buckets only; full
-environment/choice equality remains authoritative.  This removes accidental
-linear scans as the narrowing graph grows, while the stable region/fork/step
-counts remain unchanged.
+The shared executor tables now move toward their intended asymptotics:
+node-result and `(expression, environment)` indexes are persistent tries, and
+result rows sharing one consulted-hole signature are grouped and indexed by
+their exact choice key.  Hashes select buckets only; full environment/choice
+equality remains authoritative.  In addition, each drive compiles the stable
+`Grammar` once into `SuG`, an indexed operational scope used for demanded-hole
+lookup while retaining the original grammar for proof, constraints, and exact
+counting.  On the identical d3/5,000-job probe this reduced measured wall time
+from about 26 seconds to 23.9 seconds without changing any region, fork, or
+step count.
+
+That index also exposed the next representation boundary.  Retrofitting every
+Rust thunk boundary onto the present tree-valued evaluator cuts abstract step
+counts substantially, but is slower in wall time: every extra boundary pays
+structural expression interning and persistent memo-key construction.  The
+next executor rung is therefore a compiled expression graph for the captured
+module/body/query/grammar scope, with stable numeric expression and function
+identities.  Call/root sharing should be reintroduced on top of that graph,
+not purchased piecemeal with repeated `Expr` equality.
 
 The first dynamic theorem-filtered task searches ordinary closed Shard list
 expressions over `Nil`, `Cons`, bit literals, and the real `std/list append` at
