@@ -1399,7 +1399,106 @@
                candidate
                (ms_block_first blocked hole_id)))))))))))
 
-(fn ms_distinct_guards
+(type MsIntEval
+  (MsIntEvalErr (List Int))
+  (MsIntEvalBlocked Int)
+  (MsIntEvalOk Int))
+
+;; Read a matched Int rule binding through the same partial grammar assignment
+;; as nonlinear equality.  Delay-like fields are literal values; a still-open
+;; production is reported as the exact blocking hole so the region scheduler
+;; can partition it without enumerating the surrounding program.
+(fn ms_int_term
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (term Expr))
+  MsIntEval
+  (measure fuel)
+  (if (lt fuel 1) (MsIntEvalErr "integer guard term fuel exhausted")
+  (match (hole_view term)
+    ((HVBad msg) (MsIntEvalErr msg))
+    ((HVHole hole_id)
+     (match (ms_select grammar asg hole_id)
+       ((MsSelectErr msg) (MsIntEvalErr msg))
+       ((MsSelectOpen blocked _) (MsIntEvalBlocked blocked))
+       ((MsSelectExpr selected)
+        (ms_int_term (- fuel 1) grammar asg selected))))
+    ((HVNot)
+     (match term
+       ((IntLit value) (MsIntEvalOk value))
+       (_ (MsIntEvalErr "integer guard binding is not an Int literal")))))))
+
+(fn ms_int_expr
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (expr TrsIntExpr)
+   (env MsNEnv))
+  MsIntEval
+  (measure fuel)
+  (if (lt fuel 1) (MsIntEvalErr "integer guard expression fuel exhausted")
+  (match expr
+    ((TrsIntLit value) (MsIntEvalOk value))
+    ((TrsIntVar index)
+     (match (msn_get index env)
+       (None (MsIntEvalErr "integer guard variable is unbound"))
+       ((Some value) (ms_int_term (- fuel 1) grammar asg value))))
+    ((TrsIntAdd left right)
+     (match (ms_int_expr (- fuel 1) grammar asg left env)
+       ((MsIntEvalErr msg) (MsIntEvalErr msg))
+       ((MsIntEvalBlocked hole_id) (MsIntEvalBlocked hole_id))
+       ((MsIntEvalOk left_value)
+        (match (ms_int_expr (- fuel 1) grammar asg right env)
+          ((MsIntEvalErr msg) (MsIntEvalErr msg))
+          ((MsIntEvalBlocked hole_id) (MsIntEvalBlocked hole_id))
+          ((MsIntEvalOk right_value)
+           (MsIntEvalOk (+ left_value right_value)))))))
+    ((TrsIntSub left right)
+     (match (ms_int_expr (- fuel 1) grammar asg left env)
+       ((MsIntEvalErr msg) (MsIntEvalErr msg))
+       ((MsIntEvalBlocked hole_id) (MsIntEvalBlocked hole_id))
+       ((MsIntEvalOk left_value)
+        (match (ms_int_expr (- fuel 1) grammar asg right env)
+          ((MsIntEvalErr msg) (MsIntEvalErr msg))
+          ((MsIntEvalBlocked hole_id) (MsIntEvalBlocked hole_id))
+          ((MsIntEvalOk right_value)
+           (MsIntEvalOk (- left_value right_value))))))))))
+
+(fn ms_guard
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (guard TrsGuard)
+   (env MsNEnv))
+  MsMatch
+  (match guard
+    ((TrsDistinct _ left right)
+     (match (msn_get left env)
+       (None (MsMatchErr "distinct guard left variable is unbound"))
+       ((Some left_value)
+        (match (msn_get right env)
+          (None (MsMatchErr "distinct guard right variable is unbound"))
+          ((Some right_value)
+           (match (ms_equal fuel grammar asg left_value right_value)
+             ((MsMatchErr msg) (MsMatchErr msg))
+             ((MsMatchYes) (MsMatchNo))
+             ((MsMatchBlocked hole_id) (MsMatchBlocked hole_id))
+             ((MsMatchNo) (MsMatchYes))))))))
+    ((TrsIntEq left right)
+     (match (ms_int_expr fuel grammar asg left env)
+       ((MsIntEvalErr msg) (MsMatchErr msg))
+       ((MsIntEvalBlocked hole_id) (MsMatchBlocked hole_id))
+       ((MsIntEvalOk left_value)
+        (match (ms_int_expr fuel grammar asg right env)
+          ((MsIntEvalErr msg) (MsMatchErr msg))
+          ((MsIntEvalBlocked hole_id) (MsMatchBlocked hole_id))
+          ((MsIntEvalOk right_value)
+           (if (int_eq left_value right_value)
+             (MsMatchYes)
+             (MsMatchNo)))))))))
+
+(fn ms_guards
   ((fuel Int)
    (grammar Grammar)
    (asg (List (Pair Int Int)))
@@ -1410,23 +1509,13 @@
   (if (lt fuel 1) (MsMatchErr "constraint guard fuel exhausted")
   (match guards
     (Nil (MsMatchYes))
-    ((Cons (TrsDistinct _ left right) rest)
-     (match (msn_get left env)
-       (None (MsMatchErr "distinct guard left variable is unbound"))
-       ((Some left_value)
-        (match (msn_get right env)
-          (None (MsMatchErr "distinct guard right variable is unbound"))
-          ((Some right_value)
-           (match
-             (ms_equal
-               (- fuel 1) grammar asg left_value right_value)
-             ((MsMatchErr msg) (MsMatchErr msg))
-             ;; Equal bindings falsify a structural-distinctness premise.
-             ((MsMatchYes) (MsMatchNo))
-             ((MsMatchBlocked hole_id) (MsMatchBlocked hole_id))
-             ((MsMatchNo)
-              (ms_distinct_guards
-                (- fuel 1) grammar asg rest env)))))))))))
+    ((Cons guard rest)
+     (match (ms_guard (- fuel 1) grammar asg guard env)
+       ((MsMatchErr msg) (MsMatchErr msg))
+       ((MsMatchNo) (MsMatchNo))
+       ((MsMatchBlocked hole_id) (MsMatchBlocked hole_id))
+       ((MsMatchYes)
+        (ms_guards (- fuel 1) grammar asg rest env)))))))
 
 (fn ms_conditioned_root
   ((fuel Int)
@@ -1457,7 +1546,7 @@
              ((MsNMatchNo) (MsClear))
              ((MsNMatchBlocked hole_id) (MsBlocked hole_id))
              ((MsNMatchYes env)
-              (match (ms_distinct_guards (- fuel 1) grammar asg guards env)
+              (match (ms_guards (- fuel 1) grammar asg guards env)
                 ((MsMatchErr msg) (MsErr msg))
                 ((MsMatchNo) (MsClear))
                 ((MsMatchBlocked hole_id) (MsBlocked hole_id))

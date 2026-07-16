@@ -11,8 +11,10 @@
 ;;; A caller supplies an ordered, reviewed profile of bare names.  It also does
 ;;; not claim termination or confluence: those are properties of the whole
 ;;; oriented profile and remain a separate ratification gate (CANON.md §6).
-;;; Premise-bearing goals are refused in v1 because applying one would require
-;;; a proof of the premise at every rewrite site.
+;;; Ordinary canon and root-observer rules remain premise-free.  Authenticated
+;;; spine rules admit only the decidable checked guards represented by
+;;; meta/rewrite: finite structural distinctness and affine Int equality.  A
+;;; lazy consumer must prove or block on those guards at every rewrite site.
 ;;;
 ;;; Candidate equalities and observer equalities deliberately compile to
 ;;; different profile types.  The former have ordinary congruence pressure;
@@ -560,6 +562,83 @@
           ((TgDistinctPremisesOk guards)
            (TgDistinctPremisesOk (Cons guard guards)))))))))
 
+;; ---- checked arithmetic premises -----------------------------------------
+;;
+;; Direct Int equalities in a checked theorem are lowered to the same small
+;; affine vocabulary used by meta/rewrite.  Only literals, theorem variables,
+;; addition, and subtraction are admitted.  The kernel has already checked
+;; the premise; the conditioned-rule validator subsequently verifies that
+;; every referenced variable is an Int-typed lhs binding.
+
+(type TgIntExprR
+  (TgIntExprErr (List Int))
+  (TgIntExprOk TrsIntExpr))
+
+(fn tg_int_expr ((expr Expr)) TgIntExprR
+  (measure (struct expr))
+  (match expr
+    ((IntLit value) (TgIntExprOk (TrsIntLit value)))
+    ((BVar index) (TgIntExprOk (TrsIntVar index)))
+    ((Call q args)
+     (match args
+       ((Cons left (Cons right Nil))
+        (if (core_named q (quote +))
+          (match (tg_int_expr left)
+            ((TgIntExprErr msg) (TgIntExprErr msg))
+            ((TgIntExprOk left_int)
+             (match (tg_int_expr right)
+               ((TgIntExprErr msg) (TgIntExprErr msg))
+               ((TgIntExprOk right_int)
+                (TgIntExprOk (TrsIntAdd left_int right_int))))))
+        (if (core_named q (quote -))
+          (match (tg_int_expr left)
+            ((TgIntExprErr msg) (TgIntExprErr msg))
+            ((TgIntExprOk left_int)
+             (match (tg_int_expr right)
+               ((TgIntExprErr msg) (TgIntExprErr msg))
+               ((TgIntExprOk right_int)
+                (TgIntExprOk (TrsIntSub left_int right_int))))))
+          (TgIntExprErr "integer guard call is not affine addition/subtraction"))))
+       (_ (TgIntExprErr "integer guard arithmetic call is not binary"))))
+    (_ (TgIntExprErr "integer guard expression is not affine"))))
+
+(type TgGuardPremiseR
+  (TgGuardPremiseErr (List Int))
+  (TgGuardPremiseOk TrsGuard))
+
+(type TgGuardPremisesR
+  (TgGuardPremisesErr (List Int))
+  (TgGuardPremisesOk (List TrsGuard)))
+
+(fn tg_guard_premise ((m Module) (premise Equation)) TgGuardPremiseR
+  (match premise
+    ((Equation lhs rhs)
+     (if (tg_false_expr rhs)
+       (match (tg_distinct_premise m premise)
+         ((TgDistinctPremiseErr msg) (TgGuardPremiseErr msg))
+         ((TgDistinctPremiseOk guard) (TgGuardPremiseOk guard)))
+       (match (tg_int_expr lhs)
+         ((TgIntExprErr msg) (TgGuardPremiseErr msg))
+         ((TgIntExprOk left)
+          (match (tg_int_expr rhs)
+            ((TgIntExprErr msg) (TgGuardPremiseErr msg))
+            ((TgIntExprOk right)
+             (TgGuardPremiseOk (TrsIntEq left right))))))))))
+
+(fn tg_guard_premises ((m Module) (premises (List Equation)))
+  TgGuardPremisesR
+  (measure (struct premises))
+  (match premises
+    (Nil (TgGuardPremisesOk Nil))
+    ((Cons premise rest)
+     (match (tg_guard_premise m premise)
+       ((TgGuardPremiseErr msg) (TgGuardPremisesErr msg))
+       ((TgGuardPremiseOk guard)
+        (match (tg_guard_premises m rest)
+          ((TgGuardPremisesErr msg) (TgGuardPremisesErr msg))
+          ((TgGuardPremisesOk guards)
+           (TgGuardPremisesOk (Cons guard guards)))))))))
+
 (type TgSpineObserverLicense
   (TgSpineObserverLicense
     QName QName TrsSpine (List Param) Expr Expr (List TrsGuard) TgLawEvidence))
@@ -583,9 +662,9 @@
   TgOneSpineObserverR
   (match goal
     ((Goal params premises (Equation lhs rhs))
-     (match (tg_distinct_premises m premises)
-       ((TgDistinctPremisesErr msg) (TgOneSpineObserverErr msg))
-       ((TgDistinctPremisesOk guards)
+     (match (tg_guard_premises m premises)
+       ((TgGuardPremisesErr msg) (TgOneSpineObserverErr msg))
+       ((TgGuardPremisesOk guards)
         (match (tg_unary_observer_arg observer lhs)
           (None
             (TgOneSpineObserverErr

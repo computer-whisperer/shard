@@ -2691,7 +2691,7 @@ The checked theorem shape is:
     search_probe (plug prefix lhs) = search_probe (plug prefix rhs)
 
 `prefix` must be an otherwise-unused theorem parameter.  Capture refuses a
-fixed prefix, different prefixes on the two sides, premise-bearing laws, and
+fixed prefix, different prefixes on the two sides, unsupported premises, and
 the subtle correlated case where the prefix parameter occurs again inside the
 local lhs or rhs.  The stripped local equation retains other parameters such
 as a sequence `tail`, allowing a window law to match in the middle of a
@@ -2870,3 +2870,47 @@ frontier, not missing narrowing pressure.  The miner also still classifies an
 `everywhere` theorem at the proposal root; recognizing it through an arbitrary
 common `Expr` context needs a general checked zipper rather than borrowing the
 more restrictive structural-spine projector.
+
+#### Checked affine-Int guards
+
+Conditional spine rules now cover finite arithmetic relations without cloning
+one theorem per literal tuple.  `meta/rewrite` owns a small typed
+`TrsIntExpr` vocabulary over rule variables: Int literals, variables,
+addition, and subtraction.  `TrsIntEq` compares two such expressions.  This is
+an explicit relation language, not an embedded Shard evaluator; rule
+validation requires every referenced variable to occur in the lhs and to have
+the checked `Int` parameter type.
+
+`theorem_scope` lowers a direct checked premise such as
+
+    (= (+ d1 (+ d2 1)) out)
+
+to that vocabulary.  Calls outside the affine fragment, malformed arithmetic,
+non-Int variables, rhs-only variables, and other proposition shapes are
+refused.  Structural distinctness remains the other supported premise form,
+and mixed guard lists retain theorem order.  Ordinary canon and root-observer
+profiles remain premise-free; the guarded vocabulary is attached only to the
+authenticated contextual domain that already knows how to check it at each
+candidate site.
+
+Ground matching evaluates the relation exactly.  Lazy matching resolves Int
+bindings through the current grammar region and returns `Blocked(h)` at the
+first undecided value.  No arithmetic-specific scheduler was added:
+`ms_partition_prepared` classifies that hole's allowed alternatives, groups
+same-citation redex choices, and represents the complementary choices with
+the existing forbidden-choice regions.
+
+`affine_guard_probe.shard` pins the whole join for `left + 1 = right`.  Over a
+3-by-4 literal product, the one checked relation covers all 12 members as
+three cited singleton reductions plus three coalesced clear rows:
+
+    RAW 12; REDUX 3; CLEAR 9
+    REGIONS 3 + 3; RELATIONAL FORKS 4
+
+This is the intended delay-alphabet scaling shape for PIO-style cycle
+conservation: theorem count is independent of the literal alphabet, and
+unreachable combinations disappear when the relation is intersected with the
+task's actual grammar region.  The transition miner remains conservative for
+now: its proposal evidence describes structural disequality only, so it will
+not report an affine-guarded theorem as covering a proposal until mined
+schemas themselves carry authenticated arithmetic relations.

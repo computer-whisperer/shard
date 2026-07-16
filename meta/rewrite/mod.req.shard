@@ -90,8 +90,21 @@
 (type TrsSpine (TrsSpine QName QName Int))
   ; transparent context function, repeated constructor, recursive child index
 
-(type TrsGuard (TrsDistinct QName Int Int))
-  ; inspected discriminator function, left rule variable, right rule variable
+;; Checked arithmetic premises use their own small expression language over
+;; RULE variables.  They are not arbitrary candidate Exprs: after matching,
+;; every variable must denote an Int value.  This keeps the relation decidable
+;; for both ground rewriting and lazy grammar consumers.
+(type TrsIntExpr
+  (TrsIntLit Int)
+  (TrsIntVar Int)
+  (TrsIntAdd TrsIntExpr TrsIntExpr)
+  (TrsIntSub TrsIntExpr TrsIntExpr))
+
+(type TrsGuard
+  (TrsDistinct QName Int Int)
+    ; inspected discriminator function, left variable, right variable
+  (TrsIntEq TrsIntExpr TrsIntExpr))
+    ; checked equality between affine Int expressions
 
 (type TrsConditionedRule
   (TrsConditionedRule TrsRule (List TrsGuard)))
@@ -442,6 +455,18 @@
     (Nil 0)
     ((Cons _ rest) (+ 1 (trs_len_types rest)))))
 
+(fn trs_type_at ((types (List Type)) (index Int)) (Option Type)
+  (measure (struct types))
+  (match types
+    (Nil None)
+    ((Cons ty rest)
+     (if (int_eq index 0) (Some ty)
+     (if (lt index 0) None (trs_type_at rest (- index 1)))))))
+
+;; Rule BVars are locally nameless: BVar 0 names the last declared parameter.
+(fn trs_rule_var_type ((types (List Type)) (index Int)) (Option Type)
+  (trs_type_at types (- (- (trs_len_types types) 1) index)))
+
 ;; ---- rule validation --------------------------------------------------------
 
 (type TrsVarsR (TrsVarsErr (List Int)) (TrsVarsOk (List Int)))
@@ -539,26 +564,67 @@
   (TrsConditionedRuleErr (List Int))
   (TrsConditionedRuleOk TrsConditionedRule))
 
+(fn trs_int_expr_wf
+  ((expr TrsIntExpr)
+   (types (List Type))
+   (lhsvars (List Int)))
+  (Option (List Int))
+  (measure (struct expr))
+  (match expr
+    ((TrsIntLit _) None)
+    ((TrsIntVar index)
+     (if (lt index 0) (Some "integer guard variable index is negative")
+     (if (le (trs_len_types types) index)
+       (Some "integer guard variable index is out of range")
+     (if (trs_int_mem index lhsvars)
+       (match (trs_rule_var_type types index)
+         (None (Some "integer guard variable has no parameter type"))
+         ((Some ty)
+          (if (type_eq ty (TCon (qn (quote Int)) Nil)) None
+            (Some "integer guard variable is not typed Int"))))
+       (Some "integer guard variable is absent from lhs")))))
+    ((TrsIntAdd left right)
+     (match (trs_int_expr_wf left types lhsvars)
+       ((Some msg) (Some msg))
+       (None (trs_int_expr_wf right types lhsvars))))
+    ((TrsIntSub left right)
+     (match (trs_int_expr_wf left types lhsvars)
+       ((Some msg) (Some msg))
+       (None (trs_int_expr_wf right types lhsvars))))))
+
+(fn trs_distinct_guard_wf
+  ((left Int) (right Int) (arity Int) (lhsvars (List Int)))
+  (Option (List Int))
+  (if (int_eq left right)
+    (Some "distinct guard compares one rule variable with itself")
+  (if (lt left 0) (Some "distinct guard left index is negative")
+  (if (lt right 0) (Some "distinct guard right index is negative")
+  (if (le arity left) (Some "distinct guard left index is out of range")
+  (if (le arity right) (Some "distinct guard right index is out of range")
+  (if (trs_int_mem left lhsvars)
+    (if (trs_int_mem right lhsvars) None
+      (Some "distinct guard right variable is absent from lhs"))
+    (Some "distinct guard left variable is absent from lhs"))))))))
+
 (fn trs_guards_wf
   ((guards (List TrsGuard))
-   (arity Int)
+   (types (List Type))
    (lhsvars (List Int)))
   (Option (List Int))
   (measure (struct guards))
   (match guards
     (Nil None)
     ((Cons (TrsDistinct _ left right) rest)
-     (if (int_eq left right)
-       (Some "distinct guard compares one rule variable with itself")
-     (if (lt left 0) (Some "distinct guard left index is negative")
-     (if (lt right 0) (Some "distinct guard right index is negative")
-     (if (le arity left) (Some "distinct guard left index is out of range")
-     (if (le arity right) (Some "distinct guard right index is out of range")
-     (if (trs_int_mem left lhsvars)
-       (if (trs_int_mem right lhsvars)
-         (trs_guards_wf rest arity lhsvars)
-         (Some "distinct guard right variable is absent from lhs"))
-       (Some "distinct guard left variable is absent from lhs"))))))))))
+     (match (trs_distinct_guard_wf left right (trs_len_types types) lhsvars)
+       ((Some msg) (Some msg))
+       (None (trs_guards_wf rest types lhsvars))))
+    ((Cons (TrsIntEq left right) rest)
+     (match (trs_int_expr_wf left types lhsvars)
+       ((Some msg) (Some msg))
+       (None
+        (match (trs_int_expr_wf right types lhsvars)
+          ((Some msg) (Some msg))
+          (None (trs_guards_wf rest types lhsvars))))))))
 
 (fn trs_conditioned_rule ((rule TrsRule) (guards (List TrsGuard)))
   TrsConditionedRuleR
@@ -570,7 +636,7 @@
         (match (trs_lhs_vars lhs (trs_len_types types) Nil)
           ((TrsVarsErr msg) (TrsConditionedRuleErr msg))
           ((TrsVarsOk lhsvars)
-           (match (trs_guards_wf guards (trs_len_types types) lhsvars)
+           (match (trs_guards_wf guards types lhsvars)
              ((Some msg) (TrsConditionedRuleErr msg))
              (None
                (TrsConditionedRuleOk
@@ -1073,6 +1139,66 @@
   (match env
     ((TrsEmpty) None)
     ((TrsBind j v rest) (if (int_eq k j) (Some v) (trs_env_get k rest)))))
+
+(type TrsIntEvalR
+  (TrsIntEvalErr (List Int))
+  (TrsIntEvalOk Int))
+
+(fn trs_int_expr_eval ((expr TrsIntExpr) (env TrsEnv)) TrsIntEvalR
+  (measure (struct expr))
+  (match expr
+    ((TrsIntLit value) (TrsIntEvalOk value))
+    ((TrsIntVar index)
+     (match (trs_env_get index env)
+       (None (TrsIntEvalErr "integer guard variable is unbound"))
+       ((Some value)
+        (match value
+          ((IntLit integer) (TrsIntEvalOk integer))
+          (_ (TrsIntEvalErr "integer guard binding is not an Int literal"))))))
+    ((TrsIntAdd left right)
+     (match (trs_int_expr_eval left env)
+       ((TrsIntEvalErr msg) (TrsIntEvalErr msg))
+       ((TrsIntEvalOk left_value)
+        (match (trs_int_expr_eval right env)
+          ((TrsIntEvalErr msg) (TrsIntEvalErr msg))
+          ((TrsIntEvalOk right_value)
+           (TrsIntEvalOk (+ left_value right_value)))))))
+    ((TrsIntSub left right)
+     (match (trs_int_expr_eval left env)
+       ((TrsIntEvalErr msg) (TrsIntEvalErr msg))
+       ((TrsIntEvalOk left_value)
+        (match (trs_int_expr_eval right env)
+          ((TrsIntEvalErr msg) (TrsIntEvalErr msg))
+          ((TrsIntEvalOk right_value)
+           (TrsIntEvalOk (- left_value right_value)))))))))
+
+(type TrsGuardEvalR
+  (TrsGuardEvalErr (List Int))
+  (TrsGuardFalse)
+  (TrsGuardTrue))
+
+(fn trs_guard_eval ((guard TrsGuard) (env TrsEnv)) TrsGuardEvalR
+  (match guard
+    ((TrsDistinct _ left right)
+     (match (trs_env_get left env)
+       (None (TrsGuardEvalErr "distinct guard left variable is unbound"))
+       ((Some left_value)
+        (match (trs_env_get right env)
+          (None (TrsGuardEvalErr "distinct guard right variable is unbound"))
+          ((Some right_value)
+           (if (expr_eq left_value right_value)
+             (TrsGuardFalse)
+             (TrsGuardTrue)))))))
+    ((TrsIntEq left right)
+     (match (trs_int_expr_eval left env)
+       ((TrsIntEvalErr msg) (TrsGuardEvalErr msg))
+       ((TrsIntEvalOk left_value)
+        (match (trs_int_expr_eval right env)
+          ((TrsIntEvalErr msg) (TrsGuardEvalErr msg))
+          ((TrsIntEvalOk right_value)
+           (if (int_eq left_value right_value)
+             (TrsGuardTrue)
+             (TrsGuardFalse)))))))))
 
 (fn trs_match ((pat Expr) (cand Expr) (env TrsEnv)) (Option TrsEnv)
   (measure (struct pat))

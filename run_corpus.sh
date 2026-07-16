@@ -499,6 +499,7 @@ if [ -x bin/shard_eval ]; then
   # guard, prepared-cache, and mined-schema contraction boundaries generic.
   bin/shard_eval run tools/search/spine_probe.shard
   bin/shard_eval run tools/search/guard_probe.shard
+  bin/shard_eval run tools/search/affine_guard_probe.shard
   bin/shard_eval run tools/search/antiunify_probe.shard
   bin/shard_eval run tools/search/constraint_superpose_probe.shard
   bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_observer_conjunctive.shard audit

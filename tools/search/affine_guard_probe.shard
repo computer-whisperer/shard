@@ -1,0 +1,240 @@
+;;; Regression for checked affine-Int rule guards.
+;;;
+;;; One relation, left + 1 = right, is lowered from a checked-theorem premise,
+;;; validated against Int-typed lhs binders, decided on ground candidates, and
+;;; exposed lazily on open grammar holes.  The prepared theorem partition must
+;;; cover a 3x4 product as three cited singleton regions plus three coalesced
+;;; clear rows, rather than twelve ground jobs.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/proof.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "../../meta/search")
+(import "theorem_scope.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel proof Equation))
+(use (:: kernel loader World))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: meta search *))
+(use (:: tools search theorem_scope *))
+
+(fn agp_q ((name Symbol)) QName
+  (QName (list (quote tools) (quote search) (quote affine_guard_probe)) name))
+
+(fn agp_pair ((left Expr) (right Expr)) Expr
+  (Ctor (agp_q (quote Pair)) (list left right)))
+
+(fn agp_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "AFFINE-GUARD-PROBE FAIL " (append_int msg "\n")) w)))
+
+(fn agp_empty_module () Module (Module Nil Nil Nil (FnTrie None Nil) Nil))
+
+(fn agp_guard () TrsGuard
+  (TrsIntEq
+    (TrsIntAdd (TrsIntVar 1) (TrsIntLit 1))
+    (TrsIntVar 0)))
+
+(fn agp_rule () TrsRuleR
+  (trs_rule
+    (agp_q (quote adjacent_delays))
+    (list (TCon (qn (quote Int)) Nil) (TCon (qn (quote Int)) Nil))
+    (agp_pair (BVar 1) (BVar 0))
+    (Ctor (agp_q (quote Unit)) Nil)))
+
+(fn agp_grammar () Grammar
+  (Grammar
+    (list
+      (GEnt 0 (list (IntLit 0) (IntLit 1) (IntLit 2)))
+      (GEnt 1 (list (IntLit 0) (IntLit 1) (IntLit 2) (IntLit 3))))))
+
+(fn agp_regions_len ((regions (List SkRegion))) Int
+  (measure (struct regions))
+  (match regions
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (agp_regions_len rest)))))
+
+(fn agp_cited_len ((regions (List MsCitedRegion))) Int
+  (measure (struct regions))
+  (match regions
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (agp_cited_len rest)))))
+
+(fn agp_regions_count
+  ((space Expr) (grammar Grammar) (regions (List SkRegion)) (acc Int))
+  (Option Int)
+  (measure (struct regions))
+  (match regions
+    (Nil (Some acc))
+    ((Cons region rest)
+     (match (sk_region_count space grammar region)
+       ((SkCErr _) None)
+       ((SkCOk count)
+        (agp_regions_count space grammar rest (+ acc count)))))))
+
+(fn agp_cited_count
+  ((space Expr) (grammar Grammar) (regions (List MsCitedRegion)) (acc Int))
+  (Option Int)
+  (measure (struct regions))
+  (match regions
+    (Nil (Some acc))
+    ((Cons (MsCitedRegion _ region) rest)
+     (match (sk_region_count space grammar region)
+       ((SkCErr _) None)
+       ((SkCOk count)
+        (agp_cited_count space grammar rest (+ acc count)))))))
+
+(fn agp_citations ((name QName) (regions (List MsCitedRegion))) Bool
+  (measure (struct regions))
+  (match regions
+    (Nil True)
+    ((Cons (MsCitedRegion cited _) rest)
+     (if (qname_eq name cited) (agp_citations name rest) False))))
+
+(fn agp_partition
+  ((prepared MsPrepared)
+   (grammar Grammar)
+   (citation QName)
+   (w World))
+  World
+  (let ((space (agp_pair (hole 0) (hole 1))))
+    (match (ms_partition_prepared 1000 prepared (sk_empty_region) space)
+      ((MsPlanPartitionErr msg) (agp_fail msg w))
+      ((MsPlanPartitionOk redex clear forks)
+       (match (agp_cited_count space grammar redex 0)
+         (None (agp_fail "redex coverage count" w))
+         ((Some redex_count)
+          (match (agp_regions_count space grammar clear 0)
+            (None (agp_fail "clear coverage count" w))
+            ((Some clear_count)
+             (if (int_eq redex_count 3)
+               (if (int_eq clear_count 9)
+                 (if (int_eq (agp_cited_len redex) 3)
+                   (if (int_eq (agp_regions_len clear) 3)
+                     (if (int_eq forks 4)
+                       (if (agp_citations citation redex)
+                         (write
+                           "AFFINE-GUARD-PROBE LOWERED TYPED GROUND LAZY RAW-12 REDUX-3 CLEAR-9 REGIONS-3+3 FORKS-4 OK\n"
+                           w)
+                         (agp_fail "partition citation" w))
+                       (agp_fail "partition fork count" w))
+                     (agp_fail "clear region count" w))
+                   (agp_fail "redex region count" w))
+                 (agp_fail "clear coverage" w))
+               (agp_fail "redex coverage" w))))))))))
+
+(fn agp_ground
+  ((conditioned TrsConditionedRule)
+   (prepared MsPrepared)
+   (grammar Grammar)
+   (citation QName)
+   (w World))
+  World
+  (match
+    (ms_conditioned_root
+      128 Nil grammar Nil conditioned (agp_pair (IntLit 2) (IntLit 3)))
+    ((MsRedex got)
+     (if (qname_eq got citation)
+       (match
+         (ms_conditioned_root
+           128 Nil grammar Nil conditioned (agp_pair (IntLit 2) (IntLit 4)))
+         ((MsClear)
+          (match
+            (ms_conditioned_root
+              128 Nil grammar Nil conditioned (agp_pair (hole 0) (IntLit 1)))
+            ((MsBlocked 0) (agp_partition prepared grammar citation w))
+            (_ (agp_fail "open affine relation did not block" w))))
+         (_ (agp_fail "false affine relation was not clear" w)))
+       (agp_fail "ground affine relation citation" w)))
+    (_ (agp_fail "true affine relation was not a redex" w))))
+
+(fn agp_plan
+  ((conditioned TrsConditionedRule)
+   (grammar Grammar)
+   (citation QName)
+   (w World))
+  World
+  (match
+    (trs_spine_profile
+      (list
+        (TrsSpineRule
+          (TrsSpine (agp_q (quote plug)) (agp_q (quote Wrap)) 0)
+          conditioned)))
+    ((TrsSpineProfileErr msg) (agp_fail msg w))
+    ((TrsSpineProfileOk spine)
+     (match (ms_plan_spine (trs_empty_profile) (trs_empty_root_profile) spine)
+       ((MsPlanErr msg) (agp_fail msg w))
+       ((MsPlanOk plan)
+        (match (ms_prepare 1000 plan grammar)
+          ((MsPrepareErr msg) (agp_fail msg w))
+          ((MsPrepareOk prepared)
+           (agp_ground conditioned prepared grammar citation w))))))))
+
+(fn agp_bad_type
+  ((rule TrsRule)
+   (guard TrsGuard)
+   (conditioned TrsConditionedRule)
+   (grammar Grammar)
+   (citation QName)
+   (w World))
+  World
+  (match rule
+    ((TrsRule _ _ lhs rhs)
+     (match
+       (trs_rule
+         citation
+         (list
+           (TCon (qn (quote Symbol)) Nil)
+           (TCon (qn (quote Int)) Nil))
+         lhs
+         rhs)
+       ((TrsRuleErr msg) (agp_fail msg w))
+       ((TrsRuleOk bad_rule)
+        (match (trs_conditioned_rule bad_rule (list guard))
+          ((TrsConditionedRuleErr _)
+           (agp_plan conditioned grammar citation w))
+          ((TrsConditionedRuleOk _)
+           (agp_fail "non-Int affine variable was accepted" w))))))))
+
+(fn agp_ready
+  ((rule TrsRule)
+   (guard TrsGuard)
+   (conditioned TrsConditionedRule)
+   (w World))
+  World
+  (let ((grammar (agp_grammar)) (citation (agp_q (quote adjacent_delays))))
+    (match (g_wf grammar)
+      ((GWErr msg) (agp_fail msg w))
+      ((GWOk)
+       (agp_bad_type rule guard conditioned grammar citation w)))))
+
+(fn agp_lowered ((guard TrsGuard) (w World)) World
+  (match guard
+    ((TrsIntEq
+       (TrsIntAdd (TrsIntVar 1) (TrsIntLit 1))
+       (TrsIntVar 0))
+     (match (agp_rule)
+       ((TrsRuleErr msg) (agp_fail msg w))
+       ((TrsRuleOk rule)
+        (match (trs_conditioned_rule rule (list guard))
+          ((TrsConditionedRuleErr msg) (agp_fail msg w))
+          ((TrsConditionedRuleOk conditioned)
+           (agp_ready rule guard conditioned w))))))
+    (_ (agp_fail "checked arithmetic premise lowered to the wrong guard" w))))
+
+(fn main ((w World)) World
+  (match
+    (tg_guard_premise
+      (agp_empty_module)
+      (Equation
+        (Call (qn (quote +)) (list (BVar 1) (IntLit 1)))
+        (BVar 0)))
+    ((TgGuardPremiseErr msg) (agp_fail msg w))
+    ((TgGuardPremiseOk guard) (agp_lowered guard w))))
