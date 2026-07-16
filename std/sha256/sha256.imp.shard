@@ -17034,6 +17034,402 @@
      (rewrite (lemma ish_h8add_g7) lr lhs true ()))
     refl))
 
+;; ---- I2e-2b, the K/H window init ---------------------------------------------------
+;; The driver's one-shot prologue: write the 64 round constants and
+;; H(0) into their windows at the bin's GROUND layout (wb = 64960:
+;; W at 64960, K at 65216, H at 65472, end 65504 — K and H are
+;; CONTIGUOUS, so one pointer walk covers all 288 bytes). The body
+;; stays inside the x86 statement tier's covered fragment: the
+;; address rides local 0 (const ADDRESSES are the measured x86
+;; fence), every store value is a ground byte constant. The memory
+;; value is a word-grain wput fold; its readback is the copy-read
+;; species with the value bounds threaded by sw32.
+
+(fn ikh_h0 () (List Int)
+  (list
+    (h8a (sha_h0))
+    (h8b (sha_h0))
+    (h8c (sha_h0))
+    (h8d (sha_h0))
+    (h8e (sha_h0))
+    (h8f (sha_h0))
+    (h8g (sha_h0))
+    (h8h (sha_h0))))
+
+(fn ikh_kh () (List Int) (sapp (sha_k) (ikh_h0)))
+
+;; per word: walk DOWN from base+3 (LSB first — wput's store order,
+;; the finish lanes' pattern), then jump +7 to the next word's top
+(fn ikh_wstmts ((vs (List Int))) (List IStmt)
+  (measure (struct vs))
+  (match vs
+    (Nil Nil)
+    ((Cons v t)
+     (Cons
+       (IStore (ILoc 0) (IConst (band v 255)))
+       (Cons
+         (ISet 0 (IBin U32 ISub (ILoc 0) (IConst 1)))
+         (Cons
+           (IStore (ILoc 0) (IConst (band (bshr v 8) 255)))
+           (Cons
+             (ISet 0 (IBin U32 ISub (ILoc 0) (IConst 1)))
+             (Cons
+               (IStore (ILoc 0) (IConst (band (bshr v 16) 255)))
+               (Cons
+                 (ISet 0 (IBin U32 ISub (ILoc 0) (IConst 1)))
+                 (Cons
+                   (IStore (ILoc 0) (IConst (band (bshr v 24) 255)))
+                   (Cons
+                     (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 7)))
+                     (ikh_wstmts t))))))))))))
+
+(fn ikh_body () (List IStmt)
+  (Cons (ISet 0 (IConst 65219)) (ikh_wstmts (ikh_kh))))
+
+;; the word-grain fold: later words at higher addresses, outer wputs
+(fn ikh_setw ((m Mem) (a Int) (vs (List Int))) Mem
+  (measure (struct vs))
+  (match vs
+    (Nil m)
+    ((Cons v t) (ikh_setw (wput m a v) (+ a 4) t))))
+
+(fn ikh_mem ((m Mem)) Mem (ikh_setw (ikh_setw m 65216 (sha_k)) 65472 (ikh_h0)))
+
+;; word-list length as a Nat (the readback's count tie)
+(fn wn_len ((xs (List Int))) Nat
+  (measure (struct xs))
+  (match xs
+    (Nil Z)
+    ((Cons _ t) (S (wn_len t)))))
+
+;; elementwise 32-bit boundedness (the wput roundtrip's premises)
+(fn sw32 ((xs (List Int))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil True)
+    ((Cons h t) (if (le 0 h) (if (lt h 4294967296) (sw32 t) False) False))))
+
+(claim ish_sw32_hdlo
+  (goal ((h Int) (t (List Int))) ((= (sw32 (Cons h t)) True)) (= (le 0 h) True))
+  (case-on (le 0 h) Bool
+    ((case True (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+     (case False
+       (chain
+         (have hf (= (sw32 (Cons h t)) False)
+           (steps
+             ((unfold sw32 lhs)
+              (reduce lhs)
+              (rewrite (hyp 0) lr lhs true ())
+              (reduce lhs))
+             refl))
+         (have hx (= False True)
+           (steps
+             ((rewrite (premise hf) rl lhs true ())
+              (rewrite (premise 0) lr lhs true ()))
+             refl))
+         (absurd (premise hx)))))))
+
+(claim ish_sw32_hdhi
+  (goal ((h Int) (t (List Int))) ((= (sw32 (Cons h t)) True))
+    (= (lt h 4294967296) True))
+  (case-on (le 0 h) Bool
+    ((case True
+       (case-on (lt h 4294967296) Bool
+         ((case True (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+          (case False
+            (chain
+              (have hf (= (sw32 (Cons h t)) False)
+                (steps
+                  ((unfold sw32 lhs)
+                   (reduce lhs)
+                   (rewrite (hyp 1) lr lhs true ())
+                   (reduce lhs)
+                   (rewrite (hyp 0) lr lhs true ())
+                   (reduce lhs))
+                  refl))
+              (have hx (= False True)
+                (steps
+                  ((rewrite (premise hf) rl lhs true ())
+                   (rewrite (premise 0) lr lhs true ()))
+                  refl))
+              (absurd (premise hx)))))))
+     (case False
+       (chain
+         (have hf (= (sw32 (Cons h t)) False)
+           (steps
+             ((unfold sw32 lhs)
+              (reduce lhs)
+              (rewrite (hyp 0) lr lhs true ())
+              (reduce lhs))
+             refl))
+         (have hx (= False True)
+           (steps
+             ((rewrite (premise hf) rl lhs true ())
+              (rewrite (premise 0) lr lhs true ()))
+             refl))
+         (absurd (premise hx)))))))
+
+(claim ish_sw32_tl
+  (goal ((h Int) (t (List Int))) ((= (sw32 (Cons h t)) True)) (= (sw32 t) True))
+  (case-on (le 0 h) Bool
+    ((case True
+       (case-on (lt h 4294967296) Bool
+         ((case True
+            (chain
+              (have hc (= (sw32 (Cons h t)) (sw32 t))
+                (steps
+                  ((unfold sw32 lhs)
+                   (reduce lhs)
+                   (rewrite (hyp 1) lr lhs true ())
+                   (reduce lhs)
+                   (rewrite (hyp 0) lr lhs true ())
+                   (reduce lhs))
+                  refl))
+              (steps
+                ((rewrite (premise hc) rl lhs true ())
+                 (rewrite (premise 0) lr lhs true ())))
+              refl))
+          (case False
+            (chain
+              (have hf (= (sw32 (Cons h t)) False)
+                (steps
+                  ((unfold sw32 lhs)
+                   (reduce lhs)
+                   (rewrite (hyp 1) lr lhs true ())
+                   (reduce lhs)
+                   (rewrite (hyp 0) lr lhs true ())
+                   (reduce lhs))
+                  refl))
+              (have hx (= False True)
+                (steps
+                  ((rewrite (premise hf) rl lhs true ())
+                   (rewrite (premise 0) lr lhs true ()))
+                  refl))
+              (absurd (premise hx)))))))
+     (case False
+       (chain
+         (have hf (= (sw32 (Cons h t)) False)
+           (steps
+             ((unfold sw32 lhs)
+              (reduce lhs)
+              (rewrite (hyp 0) lr lhs true ())
+              (reduce lhs))
+             refl))
+         (have hx (= False True)
+           (steps
+             ((rewrite (premise hf) rl lhs true ())
+              (rewrite (premise 0) lr lhs true ()))
+             refl))
+         (absurd (premise hx)))))))
+
+;; one word read below the fold is untouched
+(claim ikh_setw_below_w
+  (goal ((m Mem) (a Int) (p Int) (vs (List Int))) ((= (lt (+ p 3) a) True))
+    (= (wget (ikh_setw m a vs) p) (wget m p)))
+  (induct vs
+    ((case Nil (steps ((compute both (stop wget wput))) refl))
+     (case Cons
+       (v t)
+       (chain
+         (steps ((unfold ikh_setw lhs) (reduce lhs)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma ish_lt_b4)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)))
+         (rewrite-with
+           (lemma ish_wget_wput_other)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+         refl)))))
+
+;; a whole window below the fold is untouched
+(claim ikh_setw_below
+  (goal ((m Mem) (a Int) (p Int) (j Nat) (vs (List Int)))
+    ((= (le (+ p (* 4 (int_of_nat j))) a) True))
+    (= (wlist (ikh_setw m a vs) p j) (wlist m p j)))
+  (induct vs
+    ((case Nil (steps ((compute both (stop wget wput wlist))) refl))
+     (case Cons
+       (v t)
+       (chain
+         (steps ((unfold ikh_setw lhs) (reduce lhs)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma ish_le_b4)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)))
+         (rewrite-with
+           (lemma ish_wlist_wput_above)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+         refl)))))
+
+;; one-step unfoldings (all-occurrence rewrites for the readback)
+(claim ikh_setw_s
+  (goal ((m Mem) (a Int) (v Int) (t (List Int))) ()
+    (= (ikh_setw m a (Cons v t)) (ikh_setw (wput m a v) (+ a 4) t)))
+  (steps ((unfold ikh_setw lhs) (reduce lhs)) refl))
+
+(claim wn_len_s
+  (goal ((v Int) (t (List Int))) () (= (wn_len (Cons v t)) (S (wn_len t))))
+  (steps ((unfold wn_len lhs) (reduce lhs)) refl))
+
+;; THE READBACK: the fold's window reads as its words
+(claim ikh_setw_read
+  (goal ((m Mem) (a Int) (vs (List Int)) (k Nat))
+    ((= k (wn_len vs)) (= (sw32 vs) True))
+    (= (wlist (ikh_setw m a vs) a k) vs))
+  (induct vs
+    ((case Nil
+       (steps ((rewrite (premise 0) lr lhs true ()) (compute both)) refl))
+     (case Cons
+       (v t)
+       (chain
+         (steps
+           ((rewrite (premise 0) lr lhs true ())
+            (rewrite (lemma wn_len_s) lr lhs true ())
+            (rewrite (lemma ikh_setw_s) lr lhs true ())
+            (rewrite (lemma wlist_s) lr lhs true ())))
+         (rewrite-with
+           (lemma ikh_setw_below_w)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma ish_d34) lr lhs () () refl)))
+         (rewrite-with
+           (lemma isha_wput_get)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma ish_sw32_hdlo)
+              lr
+              lhs
+              ((inst t t))
+              ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma ish_sw32_hdhi)
+              lr
+              lhs
+              ((inst t t))
+              ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+              refl)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((steps ((compute both)) refl)
+            (rewrite-with
+              (lemma ish_sw32_tl)
+              lr
+              lhs
+              ((inst h v))
+              ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+              refl)))
+         refl)))))
+
+;; the artifacts: the init memory's three window facts
+(claim ish_init_k
+  (goal ((m Mem)) () (= (wlist (ikh_mem m) 65216 64) (sha_k)))
+  (chain
+    (steps ((unfold ikh_mem lhs)))
+    (rewrite-with
+      (lemma ikh_setw_below)
+      lr
+      lhs
+      ()
+      ((steps
+         ((compute lhs) (rewrite (lemma ish_i64p) lr lhs true ()) (compute lhs))
+         refl)))
+    (rewrite-with
+      (lemma ikh_setw_read)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl) (steps ((compute lhs)) refl)))
+    refl))
+
+(claim ish_init_h
+  (goal ((m Mem)) () (= (wlist (ikh_mem m) 65472 8) (ikh_h0)))
+  (chain
+    (steps ((unfold ikh_mem lhs)))
+    (rewrite-with
+      (lemma ikh_setw_read)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl) (steps ((compute lhs)) refl)))
+    refl))
+
+(claim ish_init_lo
+  (goal ((m Mem) (p Int) (j Nat))
+    ((= (le (+ p (* 4 (int_of_nat j))) 65216) True))
+    (= (wlist (ikh_mem m) p j) (wlist m p j)))
+  (chain
+    (steps ((unfold ikh_mem lhs)))
+    (rewrite-with
+      (lemma ikh_setw_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ikh_setw_below)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    refl))
+
+;; THE INIT WALK: the 577-statement prologue lands on ikh_mem
+(claim isha_init_walk
+  (goal
+    ((x0 Int)
+     (x1 Int)
+     (x2 Int)
+     (x3 Int)
+     (x4 Int)
+     (x5 Int)
+     (x6 Int)
+     (x7 Int)
+     (x8 Int)
+     (x9 Int)
+     (x10 Int)
+     (x11 Int)
+     (m Mem)
+     (d Nat))
+    ()
+    (=
+      (istmts
+        (S^ 600 d)
+        65536
+        (inline ikh_body)
+        (list x0 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11)
+        m)
+      (Some (INorm (list 65507 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11) (ikh_mem m)))))
+  (steps ((compute both (stop mem_set))) refl))
+
 ;; ---- THE BLOCK WALK ---------------------------------------------------------------
 ;; One compression block, machine to spec shapes: from locals src/wb
 ;; and any memory, the 329-statement body computes — through the copy,
@@ -17890,6 +18286,14 @@
     (list U32 U32 U32 U32 U32 U32 U32 U32 U32 U32 U32 U32)
     Nil
     (isha_block_body)
+    (ILoc 0)
+    U32))
+
+(fn it_shinit_fn () IFn
+  (MkIFn
+    (list U32 U32 U32 U32 U32 U32 U32 U32 U32 U32 U32 U32)
+    Nil
+    (ikh_body)
     (ILoc 0)
     U32))
 

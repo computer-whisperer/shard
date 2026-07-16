@@ -2348,6 +2348,70 @@ all in std/sha256/sha256.weld.shard (closure 838/0):
   shw_r_sha's content premises by computation), then padding +
   digest-hex artifacts, then I2e-3 per the ruling above.
 
+**I2e-2b — THE K/H INIT ARTIFACT + THE GROUND-FOLD RESOLUTION
+(2026-07-16): the init legs land, and the walker learns normal
+forms.** The K/H window init (72 words: sha_k into the K window at
+65216, sha_h0 into the H window) is the first GROUND-ADDRESS program
+through the statement tier — a running pointer walked by U32
+decrements over 577 straight-line statements — and it exposed the
+first real scaling failure of the generated-proof layer:
+
+- **The quadratic.** The statement-tier walker tracked locals
+  symbolically with NO constant folding, so after k decrements the
+  pointer spelled as a k-deep `(mod (- … 1) 4294967296)` tower, and
+  every store's bounds case-on spelled the full accumulated address:
+  the generated `imp_w_shinit`/`imp_x_shinit` claims came out 5.9MB
+  EACH (84% of the leg file, 186,624 `mod (-` layers), shardfmt
+  ground 83+ minutes without producing output — and the proofs were
+  UNCHECKABLE anyway: ground guards compute through and never stick,
+  so the case-on hyp rewrites (must-apply) had no occurrences. The
+  walk contract ("emitted terms are the stuck terms compute leaves")
+  already ruled the spelling wrong: ground is never stuck.
+- **The fix (impgen, the walker):** `sc2` folds ground arith at
+  spelling time (both operands literal → compute; the SAME total
+  primitives the checker computes, so the fold is identity by
+  construction); ground comparisons follow the known arm
+  (`se_cond_cmp` → CFollow, the se_cond_val precedent); ground
+  in-bounds addresses elide their guards (`lws_addr` — the checks
+  compute through); ground out-of-bounds refuses (the program traps —
+  there is no refinement claim to state); a ground load through a
+  store chain refuses (the lookup computes through; the chain-lookup
+  mirror is named growth). Regen is byte-identical outside the shinit
+  claims on BOTH targets (the fold never activates on the symbolic
+  legs — ground-ground arith could not have existed in green legs).
+  Effect: the shinit claim collapsed 5,945,809 → 473 bytes, proof =
+  compute-both + refl; the legs format in ~30s each (was
+  unfinishable); the weld closure checks 857/0 in 15s.
+- **The artifact content:** the sibling grew the init kit
+  (`ikh_h0`/`ikh_kh` tables, `ikh_wstmts` — the BE store walk, LSB
+  first down from base+3, matching wput's nesting — `ikh_body`,
+  `ikh_mem`, the setw/read lemmas, `isha_init_walk`); the weld grew
+  the spelling bridges (`shi_src_body`/`shi_nf_body`/`shi_bridge`)
+  and the machine init runs (`shi_winit` at eval fuel S^2024,
+  `shi_xinit` at xeval fuel S^583, both at istmts fuel S^583 with the
+  c2 := (S^ 17 d) alignment). Weld gotcha: the wasm out is imported
+  SELECTIVELY — new generated names need their own use lines
+  (`gb_shinit_w`, `imp_w_shinit`).
+- **THE STANDING SCALING RULES (user-ratified 2026-07-16).** The
+  proof-burden-linear-in-code goal survives; every observed quadratic
+  came from one root: substitution-style symbolic execution over an
+  unbounded straight-line segment. The rules: (i) NORMAL-FORM
+  SPELLING — no walker may spell a tracked value by its construction
+  history (ground folds now; named intermediates are the symbolic
+  analog if ever needed); (ii) SEGMENT BOUNDS — every tier must bound
+  proof-text and goal growth in segment length (the translator
+  seal-points are the mixed-tier instance, measured >66GB → 1.2GB;
+  the statement tier's envelope is short-or-ground bodies until it
+  grows its own bound); (iii) DATA-AS-DATA (named growth, decision
+  owed) — table inits belong to a loop over the table or a
+  module-level data segment (wasm data segments / x86 .rodata), not
+  to unrolled store code; the K/H init as 577 unrolled statements is
+  the founding cautionary case, and I2e-2d's nibble table is the
+  first prospective consumer.
+- NEXT: I2e-2c (the padding artifact — 0x80 + zero-fill + BE length,
+  mixed tier), I2e-2d (digest-hex), then I2e-3 per the composition
+  ruling.
+
 
 ## 7. Non-goals, stated once
 

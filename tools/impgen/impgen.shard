@@ -444,7 +444,37 @@
 
 (fn pq ((s Symbol)) QName (QName Nil s))
 
-(fn sc2 ((s Symbol) (a Expr) (b Expr)) Expr (Call (pq s) (Cons a (Cons b Nil))))
+;; the ground-fold table: the walk's spelling contract (emitted terms
+;; are the stuck terms compute leaves) demands ground arith fold at
+;; spelling time -- a ground op is never stuck, so an unfolded spelling
+;; drifts from every goal the checker produces AND accumulates (a
+;; value chained through k steps spells O(k) deep, quadratic over a
+;; segment). Every op here is the same total primitive the checker
+;; computes, so the fold is identity by construction. Comparisons stay
+;; out (Bool-valued; se_cond grounds them to CFollow instead).
+(fn sc2_op ((s Symbol) (a Int) (b Int)) (Option Int)
+  (if (sym_eq s (quote +)) (Some (+ a b))
+  (if (sym_eq s (quote -)) (Some (- a b))
+  (if (sym_eq s (quote *)) (Some (* a b))
+  (if (sym_eq s (quote ediv)) (Some (ediv a b))
+  (if (sym_eq s (quote mod)) (Some (mod a b))
+  (if (sym_eq s (quote band)) (Some (band a b))
+  (if (sym_eq s (quote bor)) (Some (bor a b))
+  (if (sym_eq s (quote bxor)) (Some (bxor a b))
+  (if (sym_eq s (quote bshl)) (Some (bshl a b))
+  (if (sym_eq s (quote bshr)) (Some (bshr a b))
+  None)))))))))))
+
+(fn sc2 ((s Symbol) (a Expr) (b Expr)) Expr
+  (match a
+    ((IntLit na)
+     (match b
+       ((IntLit nb)
+        (match (sc2_op s na nb)
+          ((Some r) (IntLit r))
+          (None (Call (pq s) (Cons a (Cons b Nil))))))
+       (_ (Call (pq s) (Cons a (Cons b Nil))))))
+    (_ (Call (pq s) (Cons a (Cons b Nil))))))
 
 ;; value-position spelling of an exact op (comparisons refuse upstream)
 (fn op_sym ((o IOp)) Symbol
@@ -683,6 +713,33 @@
        ((IntLit n) (CFollow (int_eq n 0)))
        (_ (CSplit (sc2 (quote int_eq) cv (IntLit 0)) gs True))))))
 
+;; a ground comparison's value (the known arm the walk follows)
+(fn cmp_gd ((o IOp) (a Int) (b Int)) Bool
+  (match o
+    (IEq (int_eq a b))
+    (ILt (lt a b))
+    (ILe (le a b))
+    (_ False)))
+
+;; comparison condition: both operands ground and guard-free follows
+;; the known arm (a spelled scrutinee would never stick -- the checker
+;; computes the comparison through); z flips (True selects ELSE)
+(fn se_cond_cmp
+  ((o IOp) (va Expr) (ga (List Expr)) (vb Expr) (gb (List Expr)))
+  CSpec
+  (match va
+    ((IntLit na)
+     (match vb
+       ((IntLit nb)
+        (match ga
+          (Nil
+            (match gb
+              (Nil (CFollow (if (cmp_gd o na nb) False True)))
+              ((Cons _ _) (CSplit (sc2 (op_sym o) va vb) (ga_app ga gb) False))))
+          ((Cons _ _) (CSplit (sc2 (op_sym o) va vb) (ga_app ga gb) False))))
+       (_ (CSplit (sc2 (op_sym o) va vb) (ga_app ga gb) False))))
+    (_ (CSplit (sc2 (op_sym o) va vb) (ga_app ga gb) False))))
+
 (fn se_cond ((x86 Bool) (c IExp) (st (List Expr))) CSpec
   (match c
     ((IBin _ o a b)
@@ -692,7 +749,7 @@
          ((XOk va ga)
           (match (se_exp x86 b st)
             ((XRf m) (CBad m))
-            ((XOk vb gb) (CSplit (sc2 (op_sym o) va vb) (ga_app ga gb) False)))))
+            ((XOk vb gb) (se_cond_cmp o va ga vb gb)))))
        (se_cond_val x86 c st)))
     (_ (se_cond_val x86 c st))))
 
@@ -999,6 +1056,24 @@
 ;; loop-walk expression result: value + splits (evaluation order)
 (type LXR (LXOk Expr (List GSplit)) (LXRf (List Int)))
 
+;; memory-address guards: a symbolic address emits the low bound + the
+;; mem-hi pair; a ground in-bounds address emits NONE (both checks
+;; compute through -- a spelled scrutinee would never stick); a ground
+;; out-of-bounds address refuses (the program traps unconditionally,
+;; so no refinement claim exists to state)
+(type LWA (LWAGuards (List GSplit)) (LWABad (List Int)))
+
+(fn lws_addr ((va Expr) (msz Int)) LWA
+  (match va
+    ((IntLit n)
+     (if (if (le 0 n) (lt n msz) False) (LWAGuards Nil)
+       (LWABad "ground memory address out of bounds (the program traps)")))
+    (_
+      (LWAGuards
+        (Cons
+          (GShared (sc2 (quote le) (IntLit 0) va))
+          (Cons (GMemHi va) Nil))))))
+
 ;; the loop-body walk runs at RAW binders (the worker quantifies
 ;; arbitrary Int locals) with a symbolic memory
 (fn lw_exp ((x86 Bool) (msz Int) (e IExp) (st (List Expr)) (mem Expr)) LXR
@@ -1082,13 +1157,21 @@
      (match (lw_exp x86 msz a st mem)
        ((LXRf m) (LXRf m))
        ((LXOk va ga)
-        (LXOk
-          (sc2 (quote mem_get) mem va)
-          (gs_app
-            ga
-            (Cons
-              (GShared (sc2 (quote le) (IntLit 0) va))
-              (Cons (GMemHi va) Nil)))))))))
+        (match (lws_addr va msz)
+          ((LWABad m) (LXRf m))
+          ((LWAGuards gp)
+           (match va
+             ;; ground load: the spelling contract holds only against a
+             ;; pristine symbolic memory (over a store chain the lookup
+             ;; itself computes through -- a chain-lookup mirror is
+             ;; named growth)
+             ((IntLit _)
+              (match mem
+                ((FVar _) (LXOk (sc2 (quote mem_get) mem va) (gs_app ga gp)))
+                (_
+                  (LXRf
+                    "ground load through a store chain (the lookup computes through; named growth)"))))
+             (_ (LXOk (sc2 (quote mem_get) mem va) (gs_app ga gp)))))))))))
 
 ;; loop-body statements walk: splits (evaluation order) + post state
 (type LSR (LSOk (List GSplit) (List Expr) Expr) (LSRf (List Int)))
@@ -1126,29 +1209,28 @@
         (match (lw_exp x86 msz ae st mem)
           ((LXRf m) (LSRf m))
           ((LXOk va ga)
-           (match (lw_exp x86 msz ve st mem)
-             ((LXRf m) (LSRf m))
-             ((LXOk vv gv)
-              (match
-                (lw_stmts
-                  (- fuel 1)
-                  x86
-                  msz
-                  t
-                  st
-                  (Call (pq (quote mem_set)) (Cons mem (Cons va (Cons vv Nil)))))
-                ((LSRf m) (LSRf m))
-                ((LSOk gt st3 mem3)
-                 (LSOk
-                   (gs_app
-                     ga
-                     (gs_app
-                       (Cons
-                         (GShared (sc2 (quote le) (IntLit 0) va))
-                         (Cons (GMemHi va) Nil))
-                       (gs_app gv gt)))
-                   st3
-                   mem3))))))))
+           (match (lws_addr va msz)
+             ((LWABad m) (LSRf m))
+             ((LWAGuards gp)
+              (match (lw_exp x86 msz ve st mem)
+                ((LXRf m) (LSRf m))
+                ((LXOk vv gv)
+                 (match
+                   (lw_stmts
+                     (- fuel 1)
+                     x86
+                     msz
+                     t
+                     st
+                     (Call
+                       (pq (quote mem_set))
+                       (Cons mem (Cons va (Cons vv Nil)))))
+                   ((LSRf m) (LSRf m))
+                   ((LSOk gt st3 mem3)
+                    (LSOk
+                      (gs_app ga (gs_app gp (gs_app gv gt)))
+                      st3
+                      mem3))))))))))
        ((IIf _ _ _)
         (LSRf
           "branch inside a loop body (straight-line bodies only; named growth)"))
@@ -2342,7 +2424,14 @@
       (DStr (nl))
       (DStr (nl)))))
 
-;; the seq-grain bridge claim
+;; the seq-grain bridge claim. Bodies spell FLAT ((list e …), via
+;; spl_e) exactly as the mixed tier's sqm_emit does: a Nil-terminated
+;; Cons spine indents at growing depth under shardfmt, so a long
+;; straight-line body (the sha round/ext legs, the K/H init's ~577
+;; stmts) costs quadratically to format as a Cons spine; the flat
+;; form indents at constant depth and stays linear. The desugared
+;; term is identical, so every bridge/tie is byte-unchanged in
+;; meaning (the byte-tie gate re-verifies over canon).
 (fn sq_emit
   ((brpre (List Int))
    (x86 Bool)
@@ -2353,10 +2442,10 @@
    (instrsE Expr)
    (splits (List GSplit)))
   ERes
-  (match (sp_e (harvest bodyE) 0 bodyE)
+  (match (spl_e bodyE)
     ((SpRErr m) (EErr m))
     ((SpROk ibodydoc)
-     (match (sp_e (harvest instrsE) 0 instrsE)
+     (match (spl_e instrsE)
        ((SpRErr m) (EErr m))
        ((SpROk wbodydoc)
         (let
