@@ -1,0 +1,231 @@
+;;; Proof-free PIO transition census adapter (docs/PIO.md P5).
+;;;
+;;; The x86_transition_mining pattern over the PIO model: every zero-to-three
+;;; instruction STRAIGHT-LINE window over the DME-relevant fragment — OUT X,1
+;;; / MOV Y,(!)Y / MOV PINS,(!)Y, each with delay 0 or 1, side-set None, no
+;;; jumps (control flow is composition glue, not window content).  The
+;;; observation key is exact and PIO-specific: from four seed states, the
+;;; full pin-0 cycle trace (the window runs as the whole program with
+;;; wrap_top parked at 31, so the pc falls off the fragment and the trace
+;;; self-truncates — cycle count is part of the key) followed by the
+;;; pio_final state fields the fragment can touch (x, y, osr, osr_cnt, the
+;;; pin latch bit, the direction bit).  Collisions are theorem PROPOSALS
+;;; only; the expected families are PIO's own gauge: same-value re-drives
+;;; absorbing into delays, delay redistribution across pin-silent windows,
+;;; and MOV Y,Y as a pure hold.
+;;;
+;;; RUN:
+;;;   bin/shard_eval run tools/search/transition_mine.shard \
+;;;     tools/search/tasks/pio_transition_mining.shard
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../models/pio/pio.shard")
+(import "../typed_grammar.shard")
+(use (:: tools search typed_grammar *))
+
+;; Generic program spine.
+(use (:: core List))
+(use (:: core Nil))
+(use (:: core Cons))
+(use (:: core None))
+
+;; Candidate PIO scope.
+(use (:: models pio pio PIns))
+(use (:: models pio pio MkPIns))
+(use (:: models pio pio PInstr))
+(use (:: models pio pio POut))
+(use (:: models pio pio OutDst))
+(use (:: models pio pio ODX))
+(use (:: models pio pio PMov))
+(use (:: models pio pio MovDst))
+(use (:: models pio pio MDY))
+(use (:: models pio pio MDPins))
+(use (:: models pio pio MovOp))
+(use (:: models pio pio MOInvert))
+(use (:: models pio pio MONone))
+(use (:: models pio pio MovSrc))
+(use (:: models pio pio MSY))
+(use (:: models pio pio PSlot))
+(use (:: models pio pio PCfg))
+(use (:: models pio pio PSt))
+
+;; Broad model access is observer-only and adds no candidate productions.
+(use (:: models pio pio) as pio)
+
+(fn search_forms () (List Symbol) (list (quote ctor)))
+
+(fn search_ints () (List Int) Nil)
+
+(fn search_symbols () (List Symbol) Nil)
+
+(fn search_depth () Int 8)
+
+(fn ptm_ctor ((name Symbol)) TgScopeHead (TgScopeCtor name))
+
+(fn ptm_route ((head Symbol) (index Int) (zone Symbol)) TgScopeRoute
+  (TgScopeRoute (ptm_ctor head) index zone))
+
+(fn ptm_one ((name Symbol) (head Symbol)) TgScopeZone
+  (TgScopeZone name (list (ptm_ctor head)) Nil Nil Nil))
+
+(fn ptm_seq_zone ((name Symbol) (instruction Symbol) (tail Symbol)) TgScopeZone
+  (TgScopeZone
+    name
+    (list (ptm_ctor (quote Nil)) (ptm_ctor (quote Cons)))
+    Nil
+    Nil
+    (list
+      (ptm_route (quote Cons) 0 instruction)
+      (ptm_route (quote Cons) 1 tail))))
+
+(fn search_environment () TgScopeEnv
+  (TgScopeEnv
+    (quote sequence0)
+    (list
+      (ptm_seq_zone (quote sequence0) (quote instruction) (quote sequence1))
+      (ptm_seq_zone (quote sequence1) (quote instruction) (quote sequence2))
+      (ptm_seq_zone (quote sequence2) (quote instruction) (quote sequence3))
+      (TgScopeZone (quote sequence3) (list (ptm_ctor (quote Nil))) Nil Nil Nil)
+      (TgScopeZone
+        (quote instruction)
+        (list (ptm_ctor (quote MkPIns)))
+        Nil
+        Nil
+        (list
+          (ptm_route (quote MkPIns) 0 (quote operation))
+          (ptm_route (quote MkPIns) 1 (quote sideset))
+          (ptm_route (quote MkPIns) 2 (quote delay))))
+      (TgScopeZone
+        (quote operation)
+        (list (ptm_ctor (quote POut)) (ptm_ctor (quote PMov)))
+        Nil
+        Nil
+        (list
+          (ptm_route (quote POut) 0 (quote odx))
+          (ptm_route (quote POut) 1 (quote one))
+          (ptm_route (quote PMov) 0 (quote movdst))
+          (ptm_route (quote PMov) 1 (quote movop))
+          (ptm_route (quote PMov) 2 (quote msy))))
+      (TgScopeZone
+        (quote movdst)
+        (list (ptm_ctor (quote MDY)) (ptm_ctor (quote MDPins)))
+        Nil
+        Nil
+        Nil)
+      (TgScopeZone
+        (quote movop)
+        (list (ptm_ctor (quote MOInvert)) (ptm_ctor (quote MONone)))
+        Nil
+        Nil
+        Nil)
+      (ptm_one (quote odx) (quote ODX))
+      (ptm_one (quote msy) (quote MSY))
+      (ptm_one (quote sideset) (quote None))
+      (TgScopeZone (quote one) Nil (list 1) Nil Nil)
+      (TgScopeZone (quote delay) Nil (list 0 1) Nil Nil))))
+
+;; --- the transition observer -------------------------------------------------------
+
+(fn ptm_code ((body (List PIns))) (List PSlot)
+  (measure (struct body))
+  (match body
+    (Nil Nil)
+    ((Cons i rest) (Cons ((:: pio PS) i) (ptm_code rest)))))
+
+;; Straight-line config: wrap parked at slot 31 (unreachable), no autopull —
+;; running off the fragment ends the trace, so a window's cycle count is
+;; observable as its trace length.
+(fn ptm_cfg ((body (List PIns))) PCfg
+  ((:: pio MkPCfg)
+   (ptm_code body)
+   31
+   0
+   0
+   0
+   0
+   0
+   0
+   0
+   0
+   0
+   1
+   0
+   1
+   0
+   0
+   32
+   32
+   1
+   1
+   1
+   0
+   0
+   0
+   0
+   4
+   4))
+
+;; Seed states over the fragment's reachable envelope: y level, pin-latch
+;; bit, x, and OSR contents/parity all vary; pin 0 is always an output.
+(fn ptm_seed ((x Int) (y Int) (osr Int) (outl Int)) PSt
+  ((:: pio with_x)
+   x
+   ((:: pio with_y)
+    y
+    ((:: pio with_osr)
+     osr
+     ((:: pio with_osr_cnt)
+      0
+      ((:: pio with_out_l) outl ((:: pio with_dir_l) 1 ((:: pio pst_new)))))))))
+
+(fn ptm_seeds () (List PSt)
+  (list
+    (ptm_seed 0 0 22 4294967295)
+    (ptm_seed 1 4294967295 21 4294967294)
+    (ptm_seed 1 0 10 4294967294)
+    (ptm_seed 0 4294967295 30 4294967295)))
+
+;; Budget past any window's cycle count (3 instructions, delay <= 1 each).
+(fn ptm_stim () (List Int) (list 0 0 0 0 0 0 0 0))
+
+(fn ptm_wave ((obs (List (Pair Int Int)))) (List Int)
+  (measure (struct obs))
+  (match obs
+    (Nil Nil)
+    ((Cons o rest)
+     (match o
+       ((Pair levels dirs) (Cons (band levels 1) (ptm_wave rest)))))))
+
+;; Final-state key: every field the fragment can write.
+(fn ptm_state_key ((st PSt)) (List Int)
+  (list
+    ((:: pio x_of) st)
+    ((:: pio y_of) st)
+    ((:: pio osr_of) st)
+    ((:: pio osr_cnt_of) st)
+    (band ((:: pio out_l_of) st) 1)
+    (band ((:: pio dir_l_of) st) 1)))
+
+(fn ptm_app ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons head tail) (Cons head (ptm_app tail b)))))
+
+(fn ptm_key1 ((body (List PIns)) (st PSt)) (List Int)
+  (ptm_app
+    (ptm_wave ((:: pio pio_run) (ptm_cfg body) st 0 (ptm_stim)))
+    (ptm_state_key ((:: pio pio_final) (ptm_cfg body) st 0 (ptm_stim)))))
+
+(fn ptm_observe ((body (List PIns)) (seeds (List PSt))) (List Int)
+  (measure (struct seeds))
+  (match seeds
+    (Nil Nil)
+    ((Cons st rest) (ptm_app (ptm_key1 body st) (ptm_observe body rest)))))
+
+(fn search_probe ((body (List PIns))) (Option (List Int))
+  (Some (ptm_observe body (ptm_seeds))))
+
+(fn search_target () (List Int) (ptm_observe Nil (ptm_seeds)))
+
+(fn search_witness () (List PIns) Nil)

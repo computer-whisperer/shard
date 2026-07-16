@@ -212,6 +212,35 @@ Any drift from this classification is a FAIL. The driver contract
   oracle (phase-free DP waveform alignment) is not transplanted, and
   window-composition lemmas (`pio_run` over appended stimuli) would
   formalize the golden-plus-constant-tail extension.
+- **P5 [DECIDED 2026-07-16]** — "mine our own DME without the line-by-line
+  template": port the search branch's transition toolkit (whole-orbit
+  transition mining; checked observer/spine/guard profiles) to PIO and
+  re-derive DME with the template freed.
+  - **P5a [LANDED 2026-07-16]** — the mining census:
+    `tools/search/tasks/pio_transition_mining.shard`, straight-line
+    0–3-instruction windows over the DME fragment (OUT X,1 / MOV Y,(!)Y /
+    MOV PINS,(!)Y, delays 0–1, no jumps — control flow is composition glue),
+    observed from four seed states as exact trace-plus-`pio_final` keys (the
+    PSOff self-truncation makes a window's cycle count observable). Census
+    (~1m20s): TOTAL 1,111 / BEHAVIORS 333 / EXCESS 778 / COLLIDED-BUCKETS
+    208 / UNIQUE-SCHEMAS 54 / VALIDATED-PROPOSALS 20, AUTHENTICATED 0 (no
+    PIO window theorems exist yet). The mined families are PIO-native gauge,
+    several with a NONLINEAR `MovOp` metavariable held across the window:
+    same-value re-drives absorbing into delays, delay redistribution across
+    pin-silent windows, MOV Y,Y as a pure hold, and double-toggle collapses.
+  - **P5b [DECIDED]** — the checked-pressure half: a `pio_transition_window`
+    task on the `xtw` pattern — a task-local straight-line trace projection
+    (spine proofs are infeasible over `pio_run` directly: the program is
+    inside the config), the top mined schemas proven as window laws,
+    installed via `search_spine_context`/`search_spine_profile`, enumerative
+    vs lazy audit agreement, and a model-connection lemma over real
+    `pio_run` for the flagship law.
+  - **P5c [DECIDED, parameters open]** — the freer DME synthesis:
+    variable-length programs over an unpinned per-slot scope with jumps as
+    the only control, searched under the checked pressure; graded
+    IMPOSSIBILITY censuses (exhaustive FOUND-0 at small slot counts — a
+    result class the stochastic original cannot produce); scope sized by
+    measurement.
 - **[FUTURE]** — bench certification (hardware-captured vectors adjudicating
   deltas 5–7 and the excluded 3); the 2-SM product machine (mlx-pio's
   statable-but-unproven flagship `2-SM-pair ≡ 1-SM-TX` becomes provable

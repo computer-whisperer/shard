@@ -346,6 +346,7 @@ TARGETS=(
   tools/search/gen/pio_square_refinement.shard
   tools/search/tasks/typed_pio_dme.shard
   tools/search/gen/pio_dme_refinement.shard
+  tools/search/tasks/pio_transition_mining.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
