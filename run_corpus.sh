@@ -37,11 +37,11 @@ TARGETS=(
   std/rat/mod.req/gcd.shard
   std/rat/rat.shard
   examples/rat_demo.shard
-  std/float/float.shard
-  std/float/kit.shard
-  std/float/pack.shard
-  std/float/grs.shard
-  std/float/ops2.shard
+  std/float/mod.req/float.shard
+  std/float/mod.req/kit.shard
+  std/float/mod.req/pack.shard
+  std/float/mod.req/grs.shard
+  std/float/mod.req/ops2.shard
   examples/float_val_compute.shard
   examples/bits_demo.shard
   std/axiom_scope_rejects.shard
