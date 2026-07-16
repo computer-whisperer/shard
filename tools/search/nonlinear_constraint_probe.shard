@@ -3,8 +3,9 @@
 ;;; Pair(x,x) is deliberately not a separable formation exclusion.  Its first
 ;;; occurrence binds a partial term; the second proves shared syntax equal,
 ;;; forks distinct open holes lazily, and distinguishes assigned equal and
-;;; unequal regions.  Prepared and direct checking must agree even though no
-;;; context-free (pattern,hole) facts are valid for this rule.
+;;; unequal regions.  Prepared and direct checking must agree.  Preparation
+;;; may cache the rule's linear relaxation (repeated variables are independent
+;;; wildcards there), but only exact nonlinear matching may report a redex.
 
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/term.shard")
@@ -31,6 +32,9 @@
 (fn ncp_pair ((left Expr) (right Expr)) Expr
   (Ctor (ncp_q (quote Pair)) (list left right)))
 
+(fn ncp_triple ((first Expr) (second Expr) (tag Expr)) Expr
+  (Ctor (ncp_q (quote Triple)) (list first second tag)))
+
 (fn ncp_fail ((msg (List Int)) (w World)) World
   (exit
     1
@@ -45,11 +49,22 @@
     (ncp_pair (BVar 0) (BVar 0))
     (BVar 0)))
 
+;; The exact matcher reaches the equality between the first two fields before
+;; the final literal.  Its linear relaxation must see through that relational
+;; block and prove the later 0/1 mismatch without choosing either hole.
+(fn ncp_late_rule () TrsRuleR
+  (trs_rule
+    (ncp_q (quote triple_refl_zero))
+    (Cons (TCon (qn (quote Int)) Nil) Nil)
+    (ncp_triple (BVar 0) (BVar 0) (IntLit 0))
+    (BVar 0)))
+
 (fn ncp_grammar () Grammar
   (Grammar
     (list
       (GEnt 0 (list (ncp_atom 0) (ncp_atom 1)))
-      (GEnt 1 (list (ncp_atom 0) (ncp_atom 1))))))
+      (GEnt 1 (list (ncp_atom 0) (ncp_atom 1)))
+      (GEnt 2 (list (ncp_atom 2) (ncp_atom 3))))))
 
 (fn ncp_equal_asg () (List (Pair Int Int))
   (list (Pair 0 0) (Pair 1 0)))
@@ -57,46 +72,86 @@
 (fn ncp_unequal_asg () (List (Pair Int Int))
   (list (Pair 0 0) (Pair 1 1)))
 
+(fn ncp_late ((grammar Grammar) (w World)) World
+  (match (ncp_late_rule)
+    ((TrsRuleErr msg) (ncp_fail msg w))
+    ((TrsRuleOk rule)
+     (match (trs_profile (Cons rule Nil))
+       ((TrsProfileErr msg) (ncp_fail msg w))
+       ((TrsProfileOk profile)
+        (match (ms_plan profile (trs_empty_root_profile))
+          ((MsPlanErr msg) (ncp_fail msg w))
+          ((MsPlanOk plan)
+           (let ((candidate (ncp_triple (hole 0) (hole 1) (IntLit 1))))
+             (match (ms_check 1000 plan grammar Nil candidate)
+               ((MsClear)
+                (match (ms_prepare 1000 plan grammar)
+                  ((MsPrepareErr msg) (ncp_fail msg w))
+                  ((MsPrepareOk prepared)
+                   (if (lt 0 (ms_prepared_fact_count prepared))
+                     (match
+                       (ms_check_prepared 1000 prepared Nil candidate)
+                       ((MsClear)
+                        (write
+                          "META-SEARCH-NONLINEAR-PROBE LATE-STATIC-MISMATCH CLEAR OK\n"
+                          w))
+                       (_ (ncp_fail "prepared late static mismatch" w)))
+                     (ncp_fail "late mismatch emitted no relaxed facts" w)))))
+               (_ (ncp_fail "direct late static mismatch" w)))))))))))
+
 (fn ncp_prepared
   ((plan MsPlan) (grammar Grammar) (rule_name QName) (w World)) World
   (match (ms_prepare 1000 plan grammar)
     ((MsPrepareErr msg) (ncp_fail msg w))
     ((MsPrepareOk prepared)
-     (if (int_eq (ms_prepared_fact_count prepared) 0)
+     (if (int_eq (ms_prepared_fact_count prepared) 3)
        (match
-         (ms_check_prepared 1000 prepared Nil (ncp_pair (hole 0) (hole 1)))
-         ((MsBlocked hole_id)
-          (if (int_eq hole_id 0)
-            (match
-              (ms_check_prepared
-                1000 prepared (Cons (Pair 0 0) Nil)
-                (ncp_pair (hole 0) (hole 1)))
-              ((MsBlocked next)
-               (if (int_eq next 1)
-                 (match
-                   (ms_check_prepared
-                     1000 prepared (ncp_equal_asg)
-                     (ncp_pair (hole 0) (hole 1)))
-                   ((MsRedex q)
-                    (if (qname_eq q rule_name)
-                      (match
-                        (ms_check_prepared
-                          1000 prepared (ncp_unequal_asg)
-                          (ncp_pair (hole 0) (hole 1)))
-                        ((MsClear)
-                         (write
-                           "META-SEARCH-NONLINEAR-PROBE RESIDUAL SHARED-EQUAL BLOCK-0/1 EQUAL-REDEX UNEQUAL-CLEAR PREPARED-0 OK\n"
-                           w))
-                        (_ (ncp_fail "prepared unequal region" w)))
-                      (ncp_fail "prepared redex citation" w)))
-                   (_ (ncp_fail "prepared equal region" w)))
-                 (ncp_fail "prepared second equality block" w)))
-              (_ (ncp_fail "prepared first refinement" w)))
-            (ncp_fail "prepared first equality block" w)))
-         (_ (ncp_fail "prepared open equality" w)))
-       (ncp_fail "nonlinear matcher emitted context-free facts" w)))))
+         (ms_check_prepared 1000 prepared Nil (ncp_pair (hole 0) (hole 2)))
+         ((MsClear)
+          (match
+            (ms_check_prepared 1000 prepared Nil (ncp_pair (hole 0) (hole 1)))
+            ((MsBlocked hole_id)
+             (if (int_eq hole_id 0)
+               (match
+                 (ms_check_prepared
+                   1000 prepared (Cons (Pair 0 0) Nil)
+                   (ncp_pair (hole 0) (hole 1)))
+                 ((MsBlocked next)
+                  (if (int_eq next 1)
+                    (match
+                      (ms_check_prepared
+                        1000 prepared (ncp_equal_asg)
+                        (ncp_pair (hole 0) (hole 1)))
+                      ((MsRedex q)
+                       (if (qname_eq q rule_name)
+                         (match
+                           (ms_check_prepared
+                             1000 prepared (ncp_unequal_asg)
+                             (ncp_pair (hole 0) (hole 1)))
+                           ((MsClear)
+                            (ncp_late
+                              grammar
+                              (write
+                                "META-SEARCH-NONLINEAR-PROBE RESIDUAL DISJOINT-CLEAR SHARED-EQUAL BLOCK-0/1 EQUAL-REDEX UNEQUAL-CLEAR RELAXED-PREPARED-3 OK\n"
+                                w)))
+                           (_ (ncp_fail "prepared unequal region" w)))
+                         (ncp_fail "prepared redex citation" w)))
+                      (_ (ncp_fail "prepared equal region" w)))
+                    (ncp_fail "prepared second equality block" w)))
+                 (_ (ncp_fail "prepared first refinement" w)))
+               (ncp_fail "prepared first equality block" w)))
+            (_ (ncp_fail "prepared open equality" w))))
+         (_ (ncp_fail "prepared disjoint equality domains" w)))
+       (ncp_fail "nonlinear relaxation fact count" w)))))
 
 (fn ncp_direct
+  ((plan MsPlan) (grammar Grammar) (rule_name QName) (w World)) World
+  (match (ms_check 1000 plan grammar Nil (ncp_pair (hole 0) (hole 2)))
+    ((MsClear)
+     (ncp_direct_overlap plan grammar rule_name w))
+    (_ (ncp_fail "disjoint equality domains did not clear" w))))
+
+(fn ncp_direct_overlap
   ((plan MsPlan) (grammar Grammar) (rule_name QName) (w World)) World
   (match (ms_check 1000 plan grammar Nil (ncp_pair (hole 0) (hole 0)))
     ((MsRedex q)

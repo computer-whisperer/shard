@@ -34,8 +34,11 @@
 ;;; retained as a residual constraint and uses a binding environment: its
 ;;; first BVar occurrence captures a partial term and every later occurrence
 ;;; asks the grammar whether the two represented terms are already equal,
-;;; unequal, or require another hole decision.  Thus correlation is preserved
-;;; without pretending it is an independent formation exclusion.
+;;; unequal, or require another hole decision.  Before that exact match, the
+;;; prepared matcher treats repeated variables as independent wildcards.  This
+;;; linear relaxation may prove only No; Yes/Blocked still run the correlated
+;;; matcher.  It recovers stable shape/type pressure without pretending the
+;;; equality is an independent formation exclusion.
 
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/term.shard")
@@ -678,8 +681,10 @@
   (MsNMatchYes MsNEnv))
 
 ;; Structural equality over partial terms.  Identical hole syntax is already
-;; equal by sharing.  Distinct open holes are not guessed equal or unequal;
-;; the first one becomes the next exact partition decision.
+;; equal by sharing.  An open hole's complete alternative domain is inspected:
+;; all-equal and all-unequal Cartesian products are stable facts, while a mixed
+;; or internally blocked domain still asks for the outer choice.  Thus routed
+;; domains with disjoint shapes do not fork merely to discover inequality.
 (fn ms_equal
   ((fuel Int)
    (grammar Grammar)
@@ -695,7 +700,16 @@
     ((HVHole hole_id)
      (match (ms_select grammar asg hole_id)
        ((MsSelectErr msg) (MsMatchErr msg))
-       ((MsSelectOpen blocked _) (MsMatchBlocked blocked))
+       ((MsSelectOpen blocked alts)
+        (ms_equal_alts
+          (- fuel 1)
+          grammar
+          asg
+          right
+          alts
+          blocked
+          True
+          (MsMatchAgreeStart)))
        ((MsSelectExpr selected)
         (ms_equal (- fuel 1) grammar asg selected right))))
     ((HVNot)
@@ -704,7 +718,16 @@
        ((HVHole hole_id)
         (match (ms_select grammar asg hole_id)
           ((MsSelectErr msg) (MsMatchErr msg))
-          ((MsSelectOpen blocked _) (MsMatchBlocked blocked))
+          ((MsSelectOpen blocked alts)
+           (ms_equal_alts
+             (- fuel 1)
+             grammar
+             asg
+             left
+             alts
+             blocked
+             False
+             (MsMatchAgreeStart)))
           ((MsSelectExpr selected)
            (ms_equal (- fuel 1) grammar asg left selected))))
        ((HVNot)
@@ -774,6 +797,51 @@
            (match right
              ((SymLit t) (if (sym_eq s t) (MsMatchYes) (MsMatchNo)))
              (_ (MsMatchNo))))))))))))
+
+;; Consensus over one open choice boundary.  `open_left` records which side
+;; owns the alternatives so structural equality retains its ordinary order.
+;; A nested block belongs to an alternative that has not yet been selected;
+;; the exact next partition is therefore still the outer hole.
+(fn ms_equal_alts
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (fixed Expr)
+   (alts (List Expr))
+   (hole_id Int)
+   (open_left Bool)
+   (agree MsMatchAgree))
+  MsMatch
+  (measure fuel)
+  (if (lt fuel 1) (MsMatchErr "constraint equality-domain fuel exhausted")
+  (match alts
+    (Nil
+      (match agree
+        ((MsMatchAgreeStart)
+         (MsMatchErr "constraint reached an empty equality domain"))
+        ((MsMatchAgreeNo) (MsMatchNo))
+        ((MsMatchAgreeYes) (MsMatchYes))))
+    ((Cons alt rest)
+     (match
+       (if open_left
+         (ms_equal (- fuel 1) grammar asg alt fixed)
+         (ms_equal (- fuel 1) grammar asg fixed alt))
+       ((MsMatchErr msg) (MsMatchErr msg))
+       ((MsMatchBlocked _) (MsMatchBlocked hole_id))
+       ((MsMatchNo)
+        (match agree
+          ((MsMatchAgreeYes) (MsMatchBlocked hole_id))
+          (_
+            (ms_equal_alts
+              (- fuel 1) grammar asg fixed rest hole_id open_left
+              (MsMatchAgreeNo)))))
+       ((MsMatchYes)
+        (match agree
+          ((MsMatchAgreeNo) (MsMatchBlocked hole_id))
+          (_
+            (ms_equal_alts
+              (- fuel 1) grammar asg fixed rest hole_id open_left
+              (MsMatchAgreeYes))))))))))
 
 (fn ms_equal_list
   ((fuel Int)
@@ -1033,22 +1101,32 @@
             rest
             candidate
             (ms_block_first blocked hole_id))))
+       ;; `ms_match` is the linear relaxation of this nonlinear lhs: every
+       ;; BVar is a wildcard.  No is therefore conclusive, while Yes/Blocked
+       ;; merely license the exact environment-aware matcher below.
        (match
-         (msn_match
-           (- fuel 1) grammar asg (trs_rule_lhs rule) candidate (MsNEmpty))
-         ((MsNMatchErr msg) (MsErr msg))
-         ((MsNMatchYes _) (MsRedex (trs_rule_name rule)))
-         ((MsNMatchNo)
+         (ms_match (- fuel 1) facts grammar asg (trs_rule_lhs rule) candidate)
+         ((MsMatchErr msg) (MsErr msg))
+         ((MsMatchNo)
           (ms_rules_root (- fuel 1) facts grammar asg rest candidate blocked))
-         ((MsNMatchBlocked hole_id)
-          (ms_rules_root
-            (- fuel 1)
-            facts
-            grammar
-            asg
-            rest
-            candidate
-            (ms_block_first blocked hole_id)))))))))
+         (_
+          (match
+            (msn_match
+              (- fuel 1) grammar asg (trs_rule_lhs rule) candidate (MsNEmpty))
+            ((MsNMatchErr msg) (MsErr msg))
+            ((MsNMatchYes _) (MsRedex (trs_rule_name rule)))
+            ((MsNMatchNo)
+             (ms_rules_root
+               (- fuel 1) facts grammar asg rest candidate blocked))
+            ((MsNMatchBlocked hole_id)
+             (ms_rules_root
+               (- fuel 1)
+               facts
+               grammar
+               asg
+               rest
+               candidate
+               (ms_block_first blocked hole_id)))))))))))
 
 (fn ms_distinct_guards
   ((fuel Int)
@@ -1097,17 +1175,22 @@
            (- fuel 1) facts grammar asg (Cons rule Nil) candidate None))
        ((Cons _ _)
         (match
-          (msn_match
-            (- fuel 1) grammar asg (trs_rule_lhs rule) candidate (MsNEmpty))
-          ((MsNMatchErr msg) (MsErr msg))
-          ((MsNMatchNo) (MsClear))
-          ((MsNMatchBlocked hole_id) (MsBlocked hole_id))
-          ((MsNMatchYes env)
-           (match (ms_distinct_guards (- fuel 1) grammar asg guards env)
-             ((MsMatchErr msg) (MsErr msg))
-             ((MsMatchNo) (MsClear))
-             ((MsMatchBlocked hole_id) (MsBlocked hole_id))
-             ((MsMatchYes) (MsRedex (trs_rule_name rule))))))))))))
+          (ms_match (- fuel 1) facts grammar asg (trs_rule_lhs rule) candidate)
+          ((MsMatchErr msg) (MsErr msg))
+          ((MsMatchNo) (MsClear))
+          (_
+           (match
+             (msn_match
+               (- fuel 1) grammar asg (trs_rule_lhs rule) candidate (MsNEmpty))
+             ((MsNMatchErr msg) (MsErr msg))
+             ((MsNMatchNo) (MsClear))
+             ((MsNMatchBlocked hole_id) (MsBlocked hole_id))
+             ((MsNMatchYes env)
+              (match (ms_distinct_guards (- fuel 1) grammar asg guards env)
+                ((MsMatchErr msg) (MsErr msg))
+                ((MsMatchNo) (MsClear))
+                ((MsMatchBlocked hole_id) (MsBlocked hole_id))
+                ((MsMatchYes) (MsRedex (trs_rule_name rule))))))))))))))
 
 (type MsNode
   (MsNodeErr (List Int))
@@ -1580,9 +1663,10 @@
      (ms_patterns_rules
        fuel
        rest
-       (if (trs_rule_left_linear rule)
-         (ms_patterns_expr fuel (trs_rule_lhs rule) patterns)
-         patterns)))))
+       ;; Repeated BVars are ordinary wildcards to the prepared matcher.  For
+       ;; nonlinear rules these patterns are consumed only as a may-match
+       ;; relaxation; exact equality and guards remain in `msn_match`.
+       (ms_patterns_expr fuel (trs_rule_lhs rule) patterns)))))
 
 (type MsFactsR (MsFactsErr (List Int)) (MsFactsOk (List MsHoleFacts)))
 

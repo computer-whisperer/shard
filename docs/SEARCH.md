@@ -1788,8 +1788,26 @@ grammar terms.  Shared hole syntax proves equality immediately, distinct open
 holes block on an exact choice, and assigned equal/unequal regions become
 Redex/Clear.  Nonlinear rules never enter the old separable projection (which
 would unsoundly turn `lt x x` into “ban every lt”); lossless partition retains
-them as residual rules.  Context-free prepared match facts are skipped for
-this tier, while stable whole-domain verdicts remain available.
+them as residual rules.  Preparation now also compiles the *linear relaxation*
+of every nonlinear lhs: repeated variables are treated as independent
+wildcards, and only a relaxed `No` is consumed as conclusive.  Relaxed
+`Yes`/`Blocked` still enter the exact binding environment and guards.  This
+recovers stable head/shape/type facts and can see a later static mismatch past
+an earlier equality block without weakening the correlated rule.
+
+Partial structural equality also takes unanimous alternative domains
+seriously.  If every member of an open Cartesian domain is unequal it returns
+`No`; if every member is equal it returns `Yes`; mixed or internally blocked
+domains still block on the outer choice.  The nonlinear probe pins both
+improvements: `Triple(x,x,0)` is immediately clear against
+`Triple(open,open,1)`, disjoint two-member atom domains are unequal without a
+fork, and overlapping domains retain the original exact block/equal/unequal
+behavior.  Three relaxed facts are compiled for its three grammar holes.
+The complete depth-2 nonlinear sort report remains exactly
+`6851 regions / 1438 forks / 50450 steps`; on the fixed 5,000-job depth-3
+frontier the schedule moves slightly to `4125 / 875 / 41735` while settling
+928,781 more candidates.  This is useful early classification, not the missing
+diagonal representation, and its extra linear scan cost remains visible.
 
 `std/order` supplies checked `lt a a = False` and `int_eq a a = True` claims.
 They are selected by name from the same object closure as the append and order
@@ -1803,11 +1821,14 @@ At depth 3 the 5,000-job probe attributes 483,209,467,064,676 candidates to
 the two constraints, but frontier coverage is essentially unchanged and costs
 about 6% more steps: the diagonal equality relation still has to split both
 independent operand holes.  That is useful diagnosis rather than a disguised
-win.  The next categorical improvement is an exact correlated grammar product
-that removes repeated-variable diagonals before ordinary search ranking, or a
-relation-aware branch schedule; stable symmetric operand orientation still
-needs a reviewed syntax order.  Removing `int_eq` wholesale remains a task
-vocabulary choice unless an in-budget equivalent is proved representable.
+win.  The playground later tried an exact cloned twin-grammar product for this
+relation and removed it after the cloned hole identities fragmented narrowing
+memo reuse.  The categorical next step is therefore a relation-aware region
+state over the original grammar DAG: assignments plus lazy equality/difference
+restrictions, with exact region counts and no new grammar identities.  Stable
+symmetric operand orientation still needs a reviewed syntax order.  Removing
+`int_eq` wholesale remains a task vocabulary choice unless an in-budget
+equivalent is proved representable.
 
     bin/shard_eval run tools/search/pure_deep.shard order 2
     bin/shard_eval run tools/search/pure_deep.shard order-probe 3 5000
@@ -2735,6 +2756,15 @@ Thus one mined guarded family adds 102 unique reductions and trims another 30
 regions / 15 forks from the branch-and-prune tree.  It remains residual
 pressure (`REMOVED 0`): correlated variable-length window formation is a
 separate relational-grammar problem.
+
+The nonlinear linear-relaxation and equality-domain consensus leave this
+particular report exactly unchanged (`742 / 372 / 25312`).  That is the
+expected control result: every routed register domain has the same three
+members, so the duplicate-XOR laws describe genuinely mixed diagonals rather
+than a hidden shape mismatch or disjoint domain.  The new pressure helps other
+scopes early without manufacturing an x86 win; this task now isolates the next
+engine boundary cleanly—the region/job language must be able to retain a
+choice exclusion or equality relation lazily over the original hole ids.
 
 The miner's proof classifier now respects that same contextual domain.  A
 spine-authenticated rule retains its inspected `TrsSpine` descriptor; reusable
