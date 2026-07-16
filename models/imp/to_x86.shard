@@ -656,18 +656,124 @@
              ((ITrunc _ _ x) None)
              ((ILoad x) None)))))))))
 
+;; --- seal-points: the canonical top-level chunking (V2-8) ---------------
+;; A top-level statement list chunks into maximal flat runs of at most
+;; 24 statements (const-set runs never straddle a cut — the mixed
+;; tier's loop pieces pop them off a chunk tail) with loops and
+;; branches as singleton chunks. Between two consecutive FLAT chunks
+;; the emission inserts the chunk's own zero-scratch seal, so long
+;; straight-line code crosses a scratch-clean boundary at least every
+;; 24 statements — the state-reset points the x86 composition needs
+;; (a chain lemma cannot reset walked state mid-run; the wasm capped
+;; segment factoring relies on exactly this reset, V2-7's measured
+;; wall). Loop bodies are NOT chunked (the V2-5a entry/back-edge
+;; seals already discipline them; mid-body seals would cost every
+;; iteration). Bodies whose flat runs stay within the cap emit
+;; byte-identically to the unchunked translation.
+(fn ix_chflat ((s IStmt)) Bool
+  (match s
+    ((ISet _ _) True)
+    ((IStore _ _) True)
+    ((IIf _ _ _) False)
+    ((IWhile _ _) False)))
+
+;; flush test: cap at 24, but never mid const-run
+(fn ix_capq ((s IStmt) (n Int)) Bool
+  (match s
+    ((ISet _ sv)
+     (match sv
+       ((IConst _) False)
+       (_ (if (lt n 24) False True))))
+    (_ (if (lt n 24) False True))))
+
+(fn ix_chrev ((a (List IStmt)) (acc (List IStmt))) (List IStmt)
+  (measure (struct a))
+  (match a
+    (Nil acc)
+    ((Cons h t) (ix_chrev t (Cons h acc)))))
+
+(fn ix_chgo ((ss (List IStmt)) (acc (List IStmt)) (n Int))
+  (List (List IStmt))
+  (measure (struct ss))
+  (match ss
+    (Nil
+      (match acc
+        (Nil Nil)
+        ((Cons _ _) (Cons (ix_chrev acc Nil) Nil))))
+    ((Cons s t)
+     (if (ix_chflat s)
+       (if (ix_capq s n)
+         (Cons (ix_chrev acc Nil) (ix_chgo t (Cons s Nil) 1))
+         (ix_chgo t (Cons s acc) (+ n 1)))
+       (match acc
+         (Nil (Cons (Cons s Nil) (ix_chgo t Nil 0)))
+         ((Cons _ _)
+          (Cons (ix_chrev acc Nil) (Cons (Cons s Nil) (ix_chgo t Nil 0)))))))))
+
+(fn ix_chunks ((ss (List IStmt))) (List (List IStmt)) (ix_chgo ss Nil 0))
+
+;; a chunk's flatness (chunks are homogeneous by construction)
+(fn ix_chfq ((ch (List IStmt))) Bool
+  (match ch
+    (Nil True)
+    ((Cons s _) (ix_chflat s))))
+
+;; chunked emission: translate each chunk; between two consecutive
+;; FLAT chunks insert the leading chunk's seal
+(fn ix_cjoin ((chs (List (List IStmt)))) (Option (List XInstr))
+  (measure (struct chs))
+  (match chs
+    (Nil (Some Nil))
+    ((Cons c rest)
+     (match (ix_stmts c)
+       (None None)
+       ((Some is)
+        (match (ix_cjoin rest)
+          (None None)
+          ((Some more)
+           (match rest
+             (Nil (Some is))
+             ((Cons c2 _)
+              (if (ix_chfq c)
+                (if (ix_chfq c2)
+                  (Some (ix_app is (ix_app (ix_zs is) more)))
+                  (Some (ix_app is more)))
+                (Some (ix_app is more))))))))))))
+
+(fn ix_cstmts ((ss (List IStmt))) (Option (List XInstr))
+  (ix_cjoin (ix_chunks ss)))
+
 ;; the SEALED statement-sequence entry — the statement tier's
-;; translation boundary: the translated statements followed by the
-;; zero-scratch seal (one XMovRI 0 per scratch register the chunk
-;; dirtied), so a straight-line chunk ENTERS and EXITS at scratch
-;; zero and seq-grain facts compose at (xargs locals) register files
-;; on both ends. The V2-5a loop-boundary invariant in sequence
-;; position: residues resolve BY CONSTRUCTION where the values are
-;; dead, never by per-program closed forms.
+;; translation boundary: the chunked translation followed by the
+;; terminal zero-scratch seal (one XMovRI 0 per scratch register the
+;; body dirtied anywhere), so a top-level body ENTERS and EXITS at
+;; scratch zero and seq-grain facts compose at (xargs locals) register
+;; files on both ends AND at every interior seal point. The V2-5a
+;; loop-boundary invariant in sequence position: residues resolve BY
+;; CONSTRUCTION where the values are dead, never by per-program
+;; closed forms.
 (fn ix_sstmts ((ss (List IStmt))) (Option (List XInstr))
-  (match (ix_stmts ss)
+  (match (ix_cstmts ss)
     (None None)
     ((Some is) (Some (ix_app is (ix_zs is))))))
+
+;; the segment-boundary continuation adapter (V2-8): at a seal point
+;; the chunk exits with every dirtied scratch register re-zeroed, so
+;; imp's INorm corresponds to exactly the (xargs locals) file and the
+;; machine walk continues into the remaining code from it; traps
+;; conflate (es_scont's register-machine mirror).
+(fn xs_scont
+  ((f Nat) (xm XModule) (rest (List XInstr)) (r (Option IOut)))
+  (Option XOut)
+  (match r
+    (None None)
+    ((Some o)
+     (match o
+       ((INorm ls m)
+        (match (xargs ls)
+          (None None)
+          ((Some rs) (xeval_seq f xm rest rs m))))
+       (ITrap (Some XTrap))))))
 
 ;; a function: THE GATE FIRST (only well-kinded fns translate), then
 ;; the boundary limits — params <= 6 (the SysV boundary carries at
@@ -679,7 +785,7 @@
   (if (wk_fn f)
     (if (le (ikn (ikparams_of f)) 6)
       (if (le (+ (ikn (ikparams_of f)) (ikn (ikextra_of f))) 12)
-        (match (ix_stmts (ibody_of f))
+        (match (ix_cstmts (ibody_of f))
           (None None)
           ((Some ist)
            (match (ix_res (iresult_of f))
