@@ -1825,10 +1825,20 @@ one hole.  A nested unequal-weight grammar also pins `4 -> 3 -> 2`: excluding
 one of a child hole's three choices updates its parent's recursive alternative,
 then fixing that parent to the recursive alternative preserves the exact child
 count.  This is intentionally a foundation rather than a reported search win:
-the nonlinear matcher does not yet emit a redex choice cube, and
-SUPERPOSE jobs do not yet carry `SkRegion`.  Those two seams are the next
-integration step; the exact region algebra and counting no longer need to be
-invented inside the engine.
+`ms_check_region` and `ms_check_prepared_region` now consume those fixed and
+forbidden choices directly over the original grammar.  Full-domain prepared
+facts remain sound under restriction; an uncached match sees only the allowed
+alternatives, and a one-member remainder becomes transparent.  The nonlinear
+probe fixes its left atom and then proves the theorem Clear when the equal
+right choice is forbidden, Redex when the unequal right choice is forbidden,
+in both direct and prepared modes.  Ordinary assignment-only search retains
+the exact x86 control report (`742 / 372 / 25312`).
+
+Two seams remain before this changes the x86 frontier automatically: the
+nonlinear matcher must describe a conditional redex as a choice cube, and
+SUPERPOSE jobs must carry `SkRegion` so cube subtraction can retain the lazy
+complement.  The exact region algebra, counting, and theorem-consumer path no
+longer need to be invented inside that driver refactor.
 
 `std/order` supplies checked `lt a a = False` and `int_eq a a = True` claims.
 They are selected by name from the same object closure as the append and order

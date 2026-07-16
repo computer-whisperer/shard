@@ -392,12 +392,51 @@
 
 ;; ---- grammar choice view ---------------------------------------------------
 
+;; Compatibility assignments contain only nonnegative fixed choices. A
+;; region-aware check appends negative exclusion codes `-(choice+2)`. Keeping
+;; both in the same local view lets the existing exact matchers consume
+;; `SkRegion` without changing theorem/profile vocabulary or cloning grammar
+;; holes. -1 remains the ordinary "unassigned" sentinel and is never a code.
+
+(fn ms_ban_code ((choice Int)) Int (- 0 (+ choice 2)))
+
+(fn ms_ban_choice ((code Int)) Int (- (- 0 code) 2))
+
 (fn ms_choice ((asg (List (Pair Int Int))) (hole_id Int)) Int
   (measure (struct asg))
   (match asg
     (Nil -1)
     ((Cons (Pair id choice) rest)
-     (if (int_eq id hole_id) choice (ms_choice rest hole_id)))))
+     (if (int_eq id hole_id)
+       (if (lt choice 0) (ms_choice rest hole_id) choice)
+       (ms_choice rest hole_id)))))
+
+(fn ms_choice_forbidden
+  ((asg (List (Pair Int Int))) (hole_id Int) (choice Int)) Bool
+  (measure (struct asg))
+  (match asg
+    (Nil False)
+    ((Cons (Pair id code) rest)
+     (if (int_eq id hole_id)
+       (if (lt code -1)
+         (if (int_eq choice (ms_ban_choice code)) True
+         (ms_choice_forbidden rest hole_id choice))
+         (ms_choice_forbidden rest hole_id choice))
+       (ms_choice_forbidden rest hole_id choice)))))
+
+(fn ms_region_pairs
+  ((pairs (List (Pair Int Int))) (encoded (List (Pair Int Int))))
+  (List (Pair Int Int))
+  (measure (struct pairs))
+  (match pairs
+    (Nil encoded)
+    ((Cons (Pair hole_id choice) rest)
+     (ms_region_pairs
+       rest (Cons (Pair hole_id (ms_ban_code choice)) encoded)))))
+
+(fn ms_region_asg ((region SkRegion)) (List (Pair Int Int))
+  (match region
+    ((SkRegion choices forbids) (ms_region_pairs forbids choices))))
 
 (fn ms_alts_go ((entries (List GEnt)) (hole_id Int)) (Option (List Expr))
   (measure (struct entries))
@@ -416,6 +455,20 @@
     (Nil None)
     ((Cons alt rest) (if (le index 0) (Some alt) (ms_alt_at rest (- index 1))))))
 
+(fn ms_allowed_alts
+  ((asg (List (Pair Int Int)))
+   (hole_id Int)
+   (index Int)
+   (alts (List Expr)))
+  (List Expr)
+  (measure (struct alts))
+  (match alts
+    (Nil Nil)
+    ((Cons alt rest)
+     (if (ms_choice_forbidden asg hole_id index)
+       (ms_allowed_alts asg hole_id (+ index 1) rest)
+       (Cons alt (ms_allowed_alts asg hole_id (+ index 1) rest))))))
+
 (type MsSelect
   (MsSelectErr (List Int))
   (MsSelectOpen Int (List Expr))
@@ -428,13 +481,15 @@
     ((Some alts)
      (let ((choice (ms_choice asg hole_id)))
        (if (lt choice 0)
-         (match alts
-           (Nil (MsSelectErr "constraint reached an empty grammar entry"))
+         (match (ms_allowed_alts asg hole_id 0 alts)
+           (Nil (MsSelectErr "constraint reached an empty restricted domain"))
            ((Cons only Nil) (MsSelectExpr only))
-           ((Cons _ (Cons _ _)) (MsSelectOpen hole_id alts)))
-         (match (ms_alt_at alts choice)
-           (None (MsSelectErr "constraint choice is outside grammar entry"))
-           ((Some selected) (MsSelectExpr selected))))))))
+           (allowed (MsSelectOpen hole_id allowed)))
+         (if (ms_choice_forbidden asg hole_id choice)
+           (MsSelectErr "constraint fixed choice is also forbidden")
+           (match (ms_alt_at alts choice)
+             (None (MsSelectErr "constraint choice is outside grammar entry"))
+             ((Some selected) (MsSelectExpr selected)))))))))
 
 ;; ---- partial left-linear pattern matching ---------------------------------
 
@@ -2072,6 +2127,42 @@
      (ms_check_facts
        fuel facts tree_facts root_facts spine_facts
        plan grammar asg candidate))))
+
+;; Region-aware compatibility wrappers. Empty regions are removed by the
+;; region scheduler; treating them as either Clear or Redex would make verdict
+;; accounting ambiguous, so the checker refuses them loudly.
+(fn ms_check_region
+  ((fuel Int)
+   (plan MsPlan)
+   (grammar Grammar)
+   (region SkRegion)
+   (candidate Expr))
+  MsVerdict
+  (match (sk_region_count candidate grammar region)
+    ((SkCErr msg) (MsErr msg))
+    ((SkCOk count)
+     (if (le count 0) (MsErr "constraint check received an empty region")
+     (ms_check fuel plan grammar (ms_region_asg region) candidate)))))
+
+(fn ms_check_prepared_region
+  ((fuel Int) (prepared MsPrepared) (region SkRegion) (candidate Expr))
+  MsVerdict
+  (match prepared
+    ((MsPrepared plan grammar facts tree_facts root_facts spine_facts)
+     (match (sk_region_count candidate grammar region)
+       ((SkCErr msg) (MsErr msg))
+       ((SkCOk count)
+        (if (le count 0) (MsErr "prepared check received an empty region")
+        (ms_check_facts
+          fuel
+          facts
+          tree_facts
+          root_facts
+          spine_facts
+          plan
+          grammar
+          (ms_region_asg region)
+          candidate)))))))
 
 ;; ---- contextual constructor-arm formation ---------------------------------
 ;;
