@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# bin/check — the dev-loop front end: kernel verdict first, explanation after.
+#
+# Composition, not authority: pass 1 runs the kernel checker exactly as
+# bin/shard_check would and PRESERVES ITS EXIT CODE UNCONDITIONALLY. Every
+# enrichment pass below is untrusted, runs only after a failing verdict
+# (exit 1), and can never flip it — a broken explainer costs explanation,
+# never soundness. Acceptance runs (corpus diff, ledger, sidecar replay)
+# keep invoking the engine directly; this wrapper is the human/agent loop.
+#
+# Enrichment passes on exit 1:
+#   1. AUTO-FOCUS — a failing branching claim prints only "focus this claim
+#      to trace its cases"; the wrapper does that re-run itself (check FILE
+#      CLAIM) and splices each case trace in, so the failing case is visible
+#      on the first run. Focus re-runs are per-claim and admit everything
+#      else, so they stay cheap.
+#   2. EXPLAIN — tools/explain/explain.shard (if present) re-reads the file
+#      and the captured report and prints suggestions (did-you-mean,
+#      proof-DSL diagnosis). Absent tool = silently skipped.
+#
+# Usage: bin/check FILE.shard            enriched check
+#        bin/check FILE.shard CLAIM      focus mode (passthrough, unchanged)
+#        bin/check admit|scope FILE      report sub-modes (passthrough)
+set -u
+cd "$(dirname "$0")/.."
+
+# Engine ladder, same shape as run_corpus.sh: stamp-fresh bin/shard_check >
+# bin/shard_eval interpreting kernel/check.shard > the Rust interpreter.
+CHECK_CMD=()
+if [ -z "${EVAL:-}" ]; then
+  if [ -x bin/shard_check ] && [ "$(bin/engine_stamp.sh)" = "$(cat bin/shard_check.stamp 2>/dev/null)" ]; then
+    CHECK_CMD=(bin/shard_check)
+  elif [ -x bin/shard_eval ]; then
+    EVAL=bin/shard_eval
+  else
+    EVAL=./rust_bootstrap/target/release/eval
+  fi
+fi
+[ ${#CHECK_CMD[@]} -eq 0 ] && CHECK_CMD=("$EVAL" run kernel/check.shard)
+
+[ $# -ge 1 ] || { echo "usage: bin/check FILE.shard [claim]" >&2; exit 2; }
+
+# More than one arg = an explicit kernel sub-mode (focus / admit / scope):
+# pass through untouched.
+if [ $# -gt 1 ]; then
+  exec "${CHECK_CMD[@]}" "$@"
+fi
+
+# The loader takes repo-relative paths only; accept cwd-relative/absolute.
+FILE="$1"
+[ -f "$FILE" ] || FILE="$(realpath --relative-to=. "$OLDPWD/$1" 2>/dev/null || echo "$1")"
+
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+
+"${CHECK_CMD[@]}" "$FILE" >"$tmp" 2>&1
+code=$?
+cat "$tmp"
+[ $code -eq 1 ] || exit $code
+
+# ── enrichment pass 1: auto-focus each failing branching claim ──
+# A branching FAIL block carries the marker line; associate it with the
+# nearest FAIL name above it. Cap the re-runs so a red file stays readable.
+mapfile -t branching < <(
+  awk '/^FAIL  /{name=$2}
+       /branching proof \(focus this claim to trace its cases\)/{if (name!="") {print name; name=""}}' \
+    "$tmp" | head -5)
+for claim in "${branching[@]}"; do
+  echo
+  "${CHECK_CMD[@]}" "$FILE" "$claim" 2>&1 |
+    awk '/^── trace: /{f=1} f{print; if ($0=="──") exit}'
+done
+
+# ── enrichment pass 2: the explainer (untrusted, optional) ──
+if [ -f tools/explain/explain.shard ] && [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/explain/explain.shard "$FILE" "$tmp" 2>&1 || true
+fi
+
+exit $code
