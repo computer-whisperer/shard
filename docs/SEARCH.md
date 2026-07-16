@@ -2893,6 +2893,14 @@ profiles remain premise-free; the guarded vocabulary is attached only to the
 authenticated contextual domain that already knows how to check it at each
 candidate site.
 
+Arithmetic in a theorem RHS already fits the ordinary kernel `Expr` template.
+After substituting matched rule variables, `trs_inst` now folds ground core
+`+` and `-` calls bottom-up.  Thus a single checked replacement such as
+`delay=(d1+d2+1)` emits the literal delay when its inputs are literal, while an
+open expression or a foreign function remains exact syntax.  Search rejection
+itself only needs the cited lhs, but this definitional fold makes the same rule
+usable by generic normalizers and source-emitting consumers.
+
 Ground matching evaluates the relation exactly.  Lazy matching resolves Int
 bindings through the current grammar region and returns `Blocked(h)` at the
 first undecided value.  No arithmetic-specific scheduler was added:
@@ -2904,7 +2912,7 @@ the existing forbidden-choice regions.
 3-by-4 literal product, the one checked relation covers all 12 members as
 three cited singleton reductions plus three coalesced clear rows:
 
-    RAW 12; REDUX 3; CLEAR 9
+    RHS GROUND-FOLD; RAW 12; REDUX 3; CLEAR 9
     REGIONS 3 + 3; RELATIONAL FORKS 4
 
 This is the intended delay-alphabet scaling shape for PIO-style cycle
