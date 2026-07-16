@@ -2710,8 +2710,28 @@ arbitrary-tail theorem
 under the checked `reg_code d != reg_code s` guard and the model's ordinary
 nonnegative word premises.  No ISA-specific search mechanism was added.
 
-What remains before this becomes additional measured spine pressure is the
-observer boundary: its arbitrary-prefix theorem must carry and preserve the
-searched word-state invariant, then discharge that invariant for the census
-files.  That is now a compositional projection proof, not missing XOR algebra,
-register aliasing semantics, or guard support.
+That observer boundary is now closed by a finite, compositional invariant.
+`xtw_word_regs` normalizes every field of the complete register record through
+`wrap64`; equality with the original record states that the machine state is
+already word-normal.  Generic `rget`/`rset` commutation isolates the finite
+record layout, XOR closure preserves normalization, and the abstract
+transition proves the invariant for every `XInstr` (instructions outside the
+reflected XOR fragment are its specified no-ops).  Induction lifts that result
+through an arbitrary prefix.  The four census files discharge the fixed-point
+premise once, after which `xtw_xor_pair_cancels_spine` exposes the premise-free
+observer equation with only the already-checked structural distinctness guard.
+
+The new rule removes 108 programs by itself: six two-instruction roots and
+102 length-three programs across the two possible window positions.  Six of
+those length-three programs also contain the absorber window, so the composed
+profile removes `162 + 108 - 6 = 264` distinct candidates.  Enumerative and
+lazy paths agree exactly:
+
+    SPINE RULES 3; RAW 820; ACCEPTED 556; CONSTRAINT KILLED 264
+    SUPERPOSED: REGIONS 742; FORKS 372; STEPS 25312
+    AUDIT accepted 556; constrained 264; exhaustive agreement OK
+
+Thus one mined guarded family adds 102 unique reductions and trims another 30
+regions / 15 forks from the branch-and-prune tree.  It remains residual
+pressure (`REMOVED 0`): correlated variable-length window formation is a
+separate relational-grammar problem.

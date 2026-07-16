@@ -16,8 +16,14 @@
 (import "../typed_grammar.shard")
 (use (:: tools search typed_grammar *))
 (use (:: kernel facts mod_lo))
+(use (:: kernel facts mod_hi))
 (use (:: std bits bxor_self))
+(use (:: std bits bxor_cancel_right))
+(use (:: std bits bxor_lo))
+(use (:: std bits bxor_lt64))
 (use (:: models x86 peephole rget_rset_same))
+(use (:: models x86 peephole rget_rset_other))
+(use (:: models x86 peephole rset_rget))
 (use (:: models x86 peephole rset_shadow))
 (use (:: models x86 peephole xseq_xor_self_absorbs))
 
@@ -29,11 +35,38 @@
 ;; Candidate x86 scope.
 (use (:: models x86 x86 XInstr))
 (use (:: models x86 x86 Reg))
+(use (:: models x86 x86 Regs))
 (use (:: models x86 x86 Src))
 (use (:: models x86 x86 XBop))
+(use (:: models x86 x86 XAdd))
+(use (:: models x86 x86 XSub))
+(use (:: models x86 x86 XMul))
+(use (:: models x86 x86 XAnd))
+(use (:: models x86 x86 XOr))
 (use (:: models x86 x86 XBin))
 (use (:: models x86 x86 XXor))
 (use (:: models x86 x86 SReg))
+(use (:: models x86 x86 SImm))
+(use (:: models x86 x86 XMovRI))
+(use (:: models x86 x86 XMovRR))
+(use (:: models x86 x86 XShlI))
+(use (:: models x86 x86 XShrI))
+(use (:: models x86 x86 XBin32))
+(use (:: models x86 x86 XShlI32))
+(use (:: models x86 x86 XMovRR32))
+(use (:: models x86 x86 XRorI32))
+(use (:: models x86 x86 XDivU))
+(use (:: models x86 x86 XLoad8))
+(use (:: models x86 x86 XStore8))
+(use (:: models x86 x86 XBlock))
+(use (:: models x86 x86 XLoop))
+(use (:: models x86 x86 XBr))
+(use (:: models x86 x86 XBrIf))
+(use (:: models x86 x86 XCall))
+(use (:: models x86 x86 XRet))
+(use (:: models x86 x86 XSyscall))
+(use (:: models x86 x86 MkRegs))
+(use (:: models x86 x86 wrap64_id))
 (use (:: models x86 x86 RAX))
 (use (:: models x86 x86 RCX))
 (use (:: models x86 x86 RDX))
@@ -186,6 +219,31 @@
     (R14 13)
     (R15 14)))
 
+;; Canonicalize the complete finite x86 register state one word at a time.
+;; Being a fixed point of this map is the general invariant needed by checked
+;; transition windows: it says every register, including roles not named by a
+;; particular candidate grammar, is already a 64-bit machine word.
+(fn xtw_word_regs ((rs ((:: x86 Regs)))) ((:: x86 Regs))
+  (match rs
+    ((MkRegs
+       v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14)
+     (MkRegs
+       ((:: x86 wrap64) v0)
+       ((:: x86 wrap64) v1)
+       ((:: x86 wrap64) v2)
+       ((:: x86 wrap64) v3)
+       ((:: x86 wrap64) v4)
+       ((:: x86 wrap64) v5)
+       ((:: x86 wrap64) v6)
+       ((:: x86 wrap64) v7)
+       ((:: x86 wrap64) v8)
+       ((:: x86 wrap64) v9)
+       ((:: x86 wrap64) v10)
+       ((:: x86 wrap64) v11)
+       ((:: x86 wrap64) v12)
+       ((:: x86 wrap64) v13)
+       ((:: x86 wrap64) v14)))))
+
 ;; A total transition projection for the searched XOR-register fragment.  It
 ;; agrees with the corresponding x86 instruction arm on valid machine states;
 ;; wrapping inputs makes the local algebra unconditional even for arbitrary
@@ -231,6 +289,815 @@
       lhs
       ()
       ((steps ((compute both)) refl))
+      refl)))
+
+(claim xtw_wrap_lt64
+  (goal
+    ((x Int))
+    ()
+    (= (lt ((:: x86 wrap64) x) 18446744073709551616) True))
+  (chain
+    (steps ((unfold (:: x86 wrap64) lhs)))
+    (rewrite-with
+      (lemma mod_hi)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl))
+      refl)))
+
+;; Normalization commutes with the two generic register operations.  These
+;; finite constructor proofs are the only place the concrete Regs layout is
+;; exposed; all following prefix reasoning is parametric in register roles.
+(claim xtw_word_regs_rget
+  (goal
+    ((rs ((:: x86 Regs))) (r Reg))
+    ()
+    (=
+      ((:: x86 rget) (xtw_word_regs rs) r)
+      ((:: x86 wrap64) ((:: x86 rget) rs r))))
+  (case-on rs Regs
+    ((case MkRegs
+      (v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14)
+      (chain
+        (steps ((rewrite (hyp MkRegs) lr both true ())))
+        (case-on r Reg
+          ((case RAX (steps ((rewrite (hyp RAX) lr both true ()) (compute both)) refl))
+           (case RCX (steps ((rewrite (hyp RCX) lr both true ()) (compute both)) refl))
+           (case RDX (steps ((rewrite (hyp RDX) lr both true ()) (compute both)) refl))
+           (case RBX (steps ((rewrite (hyp RBX) lr both true ()) (compute both)) refl))
+           (case RBP (steps ((rewrite (hyp RBP) lr both true ()) (compute both)) refl))
+           (case RSI (steps ((rewrite (hyp RSI) lr both true ()) (compute both)) refl))
+           (case RDI (steps ((rewrite (hyp RDI) lr both true ()) (compute both)) refl))
+           (case R8 (steps ((rewrite (hyp R8) lr both true ()) (compute both)) refl))
+           (case R9 (steps ((rewrite (hyp R9) lr both true ()) (compute both)) refl))
+           (case R10 (steps ((rewrite (hyp R10) lr both true ()) (compute both)) refl))
+           (case R11 (steps ((rewrite (hyp R11) lr both true ()) (compute both)) refl))
+           (case R12 (steps ((rewrite (hyp R12) lr both true ()) (compute both)) refl))
+           (case R13 (steps ((rewrite (hyp R13) lr both true ()) (compute both)) refl))
+           (case R14 (steps ((rewrite (hyp R14) lr both true ()) (compute both)) refl))
+           (case R15 (steps ((rewrite (hyp R15) lr both true ()) (compute both)) refl)))))))))
+
+(claim xtw_word_regs_rset
+  (goal
+    ((rs ((:: x86 Regs))) (r Reg) (v Int))
+    ()
+    (=
+      (xtw_word_regs ((:: x86 rset) rs r v))
+      ((:: x86 rset)
+        (xtw_word_regs rs)
+        r
+        ((:: x86 wrap64) v))))
+  (case-on rs Regs
+    ((case MkRegs
+      (v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14)
+      (chain
+        (steps ((rewrite (hyp MkRegs) lr both true ())))
+        (case-on r Reg
+          ((case RAX (steps ((rewrite (hyp RAX) lr both true ()) (compute both)) refl))
+           (case RCX (steps ((rewrite (hyp RCX) lr both true ()) (compute both)) refl))
+           (case RDX (steps ((rewrite (hyp RDX) lr both true ()) (compute both)) refl))
+           (case RBX (steps ((rewrite (hyp RBX) lr both true ()) (compute both)) refl))
+           (case RBP (steps ((rewrite (hyp RBP) lr both true ()) (compute both)) refl))
+           (case RSI (steps ((rewrite (hyp RSI) lr both true ()) (compute both)) refl))
+           (case RDI (steps ((rewrite (hyp RDI) lr both true ()) (compute both)) refl))
+           (case R8 (steps ((rewrite (hyp R8) lr both true ()) (compute both)) refl))
+           (case R9 (steps ((rewrite (hyp R9) lr both true ()) (compute both)) refl))
+           (case R10 (steps ((rewrite (hyp R10) lr both true ()) (compute both)) refl))
+           (case R11 (steps ((rewrite (hyp R11) lr both true ()) (compute both)) refl))
+           (case R12 (steps ((rewrite (hyp R12) lr both true ()) (compute both)) refl))
+           (case R13 (steps ((rewrite (hyp R13) lr both true ()) (compute both)) refl))
+           (case R14 (steps ((rewrite (hyp R14) lr both true ()) (compute both)) refl))
+           (case R15 (steps ((rewrite (hyp R15) lr both true ()) (compute both)) refl)))))))))
+
+(claim xtw_word_rget
+  (goal
+    ((rs ((:: x86 Regs))) (r Reg))
+    ((= (xtw_word_regs rs) rs))
+    (=
+      ((:: x86 wrap64) ((:: x86 rget) rs r))
+      ((:: x86 rget) rs r)))
+  (steps
+    ((rewrite (lemma xtw_word_regs_rget) rl lhs true ())
+     (rewrite (premise 0) lr lhs true ()))
+    refl))
+
+(claim xtw_word_rget_nonneg
+  (goal
+    ((rs ((:: x86 Regs))) (r Reg))
+    ((= (xtw_word_regs rs) rs))
+    (= (le 0 ((:: x86 rget) rs r)) True))
+  (rewrite-with
+    (lemma xtw_word_rget)
+    rl
+    lhs
+    ()
+    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+    (steps ((rewrite (lemma xtw_wrap_nonneg) lr lhs true ())) refl)))
+
+;; XOR of normalized words is normalized.  Stating this for arbitrary raw
+;; inputs makes it reusable by both prefix preservation and local window laws.
+(claim xtw_wrap_bxor_words
+  (goal
+    ((a Int) (b Int))
+    ()
+    (=
+      ((:: x86 wrap64)
+        (bxor ((:: x86 wrap64) a) ((:: x86 wrap64) b)))
+      (bxor ((:: x86 wrap64) a) ((:: x86 wrap64) b))))
+  (chain
+    (have ha0 (= (le 0 ((:: x86 wrap64) a)) True)
+      (steps ((rewrite (lemma xtw_wrap_nonneg) lr lhs true ())) refl))
+    (have hb0 (= (le 0 ((:: x86 wrap64) b)) True)
+      (steps ((rewrite (lemma xtw_wrap_nonneg) lr lhs true ())) refl))
+    (have ha1
+      (= (lt ((:: x86 wrap64) a) 18446744073709551616) True)
+      (steps ((rewrite (lemma xtw_wrap_lt64) lr lhs true ())) refl))
+    (have hb1
+      (= (lt ((:: x86 wrap64) b) 18446744073709551616) True)
+      (steps ((rewrite (lemma xtw_wrap_lt64) lr lhs true ())) refl))
+    (have hlo
+      (=
+        (le 0 (bxor ((:: x86 wrap64) a) ((:: x86 wrap64) b)))
+        True)
+      (rewrite-with
+        (lemma bxor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise ha0) lr lhs true ())) refl)
+         (steps ((rewrite (premise hb0) lr lhs true ())) refl))
+        refl))
+    (have hhi
+      (=
+        (lt
+          (bxor ((:: x86 wrap64) a) ((:: x86 wrap64) b))
+          18446744073709551616)
+        True)
+      (rewrite-with
+        (lemma bxor_lt64)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise ha0) lr lhs true ())) refl)
+         (steps ((rewrite (premise ha1) lr lhs true ())) refl)
+         (steps ((rewrite (premise hb0) lr lhs true ())) refl)
+         (steps ((rewrite (premise hb1) lr lhs true ())) refl))
+        refl))
+    (steps ((unfold (:: x86 wrap64) lhs)))
+    (rewrite-with
+      (lemma wrap64_id)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hlo) lr lhs true ())) refl)
+       (steps ((rewrite (premise hhi) lr lhs true ())) refl))
+      refl)))
+
+(claim xtw_word_regs_rset_fixed
+  (goal
+    ((rs ((:: x86 Regs))) (r Reg) (v Int))
+    ((= (xtw_word_regs rs) rs)
+     (= ((:: x86 wrap64) v) v))
+    (=
+      (xtw_word_regs ((:: x86 rset) rs r v))
+      ((:: x86 rset) rs r v)))
+  (steps
+    ((rewrite (lemma xtw_word_regs_rset) lr lhs true ())
+     (rewrite (premise 0) lr lhs true ())
+     (rewrite (premise 1) lr lhs true ()))
+    refl))
+
+;; Every abstract transition preserves the complete word-state invariant.
+;; The observer treats instructions outside its reflected XOR/register scope as
+;; no-ops, but quantifying over all XInstr keeps contextual prefix closure
+;; honest if the surrounding task grammar grows later.
+(claim xtw_sem_step_word
+  (goal
+    ((instruction XInstr) (rs ((:: x86 Regs))))
+    ((= (xtw_word_regs rs) rs))
+    (=
+      (xtw_word_regs (xtw_sem_step instruction rs))
+      (xtw_sem_step instruction rs)))
+  (case-on instruction XInstr
+    ((case XMovRI
+       (r v)
+       (steps
+         ((rewrite (hyp XMovRI) lr both true ())
+          (unfold xtw_sem_step both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case XMovRR
+       (d s)
+       (steps
+         ((rewrite (hyp XMovRR) lr both true ())
+          (unfold xtw_sem_step both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case XBin
+       (operation d source)
+       (chain
+         (steps ((rewrite (hyp XBin) lr both true ())))
+         (case-on operation XBop
+           ((case XAdd
+              (steps
+                ((rewrite (hyp XAdd) lr both true ())
+                 (unfold xtw_sem_step both)
+                 (reduce both)
+                 (rewrite (premise 0) lr lhs true ()))
+                refl))
+            (case XSub
+              (steps
+                ((rewrite (hyp XSub) lr both true ())
+                 (unfold xtw_sem_step both)
+                 (reduce both)
+                 (rewrite (premise 0) lr lhs true ()))
+                refl))
+            (case XMul
+              (steps
+                ((rewrite (hyp XMul) lr both true ())
+                 (unfold xtw_sem_step both)
+                 (reduce both)
+                 (rewrite (premise 0) lr lhs true ()))
+                refl))
+            (case XAnd
+              (steps
+                ((rewrite (hyp XAnd) lr both true ())
+                 (unfold xtw_sem_step both)
+                 (reduce both)
+                 (rewrite (premise 0) lr lhs true ()))
+                refl))
+            (case XOr
+              (steps
+                ((rewrite (hyp XOr) lr both true ())
+                 (unfold xtw_sem_step both)
+                 (reduce both)
+                 (rewrite (premise 0) lr lhs true ()))
+                refl))
+            (case XXor
+              (chain
+                (steps ((rewrite (hyp XXor) lr both true ())))
+                (case-on source Src
+                  ((case SReg
+                     (s)
+                     (steps
+                       ((rewrite (hyp SReg) lr both true ())
+                        (unfold xtw_sem_step both)
+                        (reduce both)
+                        (rewrite (lemma xtw_word_regs_rset) lr lhs true ())
+                        (rewrite (premise 0) lr lhs true ())
+                        (rewrite (lemma xtw_wrap_bxor_words) lr lhs true ()))
+                       refl))
+                   (case SImm
+                     (v)
+                     (steps
+                       ((rewrite (hyp SImm) lr both true ())
+                        (unfold xtw_sem_step both)
+                        (reduce both)
+                        (rewrite (premise 0) lr lhs true ()))
+                       refl))))))))))
+     (case XShlI
+       (d k)
+       (steps
+         ((rewrite (hyp XShlI) lr both true ())
+          (unfold xtw_sem_step both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case XShrI
+       (d k)
+       (steps
+         ((rewrite (hyp XShrI) lr both true ())
+          (unfold xtw_sem_step both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case XBin32
+       (operation d source)
+       (steps
+         ((rewrite (hyp XBin32) lr both true ())
+          (unfold xtw_sem_step both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case XShlI32
+       (d k)
+       (steps
+         ((rewrite (hyp XShlI32) lr both true ())
+          (unfold xtw_sem_step both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case XMovRR32
+       (d s)
+       (steps
+         ((rewrite (hyp XMovRR32) lr both true ())
+          (unfold xtw_sem_step both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case XRorI32
+       (d k)
+       (steps
+         ((rewrite (hyp XRorI32) lr both true ())
+          (unfold xtw_sem_step both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case XDivU
+       (r)
+       (steps
+         ((rewrite (hyp XDivU) lr both true ())
+          (unfold xtw_sem_step both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case XLoad8
+       (d address)
+       (steps
+         ((rewrite (hyp XLoad8) lr both true ())
+          (unfold xtw_sem_step both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case XStore8
+       (address source)
+       (steps
+         ((rewrite (hyp XStore8) lr both true ())
+          (unfold xtw_sem_step both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case XBlock
+       (body)
+       (steps
+         ((rewrite (hyp XBlock) lr both true ())
+          (unfold xtw_sem_step both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case XLoop
+       (body)
+       (steps
+         ((rewrite (hyp XLoop) lr both true ())
+          (unfold xtw_sem_step both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case XBr
+       (depth)
+       (steps
+         ((rewrite (hyp XBr) lr both true ())
+          (unfold xtw_sem_step both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case XBrIf
+       (condition depth)
+       (steps
+         ((rewrite (hyp XBrIf) lr both true ())
+          (unfold xtw_sem_step both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case XCall
+       (index)
+       (steps
+         ((rewrite (hyp XCall) lr both true ())
+          (unfold xtw_sem_step both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case XRet
+       (steps
+         ((rewrite (hyp XRet) lr both true ())
+          (unfold xtw_sem_step both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case XSyscall
+       (steps
+         ((rewrite (hyp XSyscall) lr both true ())
+          (unfold xtw_sem_step both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl)))))
+
+(claim xtw_sem_run_word
+  (goal
+    ((body (List XInstr)) (rs ((:: x86 Regs))))
+    ((= (xtw_word_regs rs) rs))
+    (=
+      (xtw_word_regs (xtw_sem_run body rs))
+      (xtw_sem_run body rs)))
+  (induct body
+    ((case Nil
+       (steps
+         ((unfold xtw_sem_run both)
+          (reduce both)
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case Cons
+       (instruction rest)
+       (chain
+         (have hstep
+           (=
+             (xtw_word_regs (xtw_sem_step instruction rs))
+             (xtw_sem_step instruction rs))
+           (rewrite-with
+             (lemma xtw_sem_step_word)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((unfold xtw_sem_run both)
+            (reduce both)))
+         (rewrite-with
+           (hyp ih)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise hstep) lr lhs true ())) refl))
+           refl))))))
+
+(claim xtw_reg_code_model
+  (goal
+    ((r Reg))
+    ()
+    (= (xtw_reg_code r) ((:: x86 reg_code) r)))
+  (case-on r Reg
+    ((case RAX (steps ((rewrite (hyp RAX) lr both true ()) (compute both)) refl))
+     (case RCX (steps ((rewrite (hyp RCX) lr both true ()) (compute both)) refl))
+     (case RDX (steps ((rewrite (hyp RDX) lr both true ()) (compute both)) refl))
+     (case RBX (steps ((rewrite (hyp RBX) lr both true ()) (compute both)) refl))
+     (case RBP (steps ((rewrite (hyp RBP) lr both true ()) (compute both)) refl))
+     (case RSI (steps ((rewrite (hyp RSI) lr both true ()) (compute both)) refl))
+     (case RDI (steps ((rewrite (hyp RDI) lr both true ()) (compute both)) refl))
+     (case R8 (steps ((rewrite (hyp R8) lr both true ()) (compute both)) refl))
+     (case R9 (steps ((rewrite (hyp R9) lr both true ()) (compute both)) refl))
+     (case R10 (steps ((rewrite (hyp R10) lr both true ()) (compute both)) refl))
+     (case R11 (steps ((rewrite (hyp R11) lr both true ()) (compute both)) refl))
+     (case R12 (steps ((rewrite (hyp R12) lr both true ()) (compute both)) refl))
+     (case R13 (steps ((rewrite (hyp R13) lr both true ()) (compute both)) refl))
+     (case R14 (steps ((rewrite (hyp R14) lr both true ()) (compute both)) refl))
+     (case R15 (steps ((rewrite (hyp R15) lr both true ()) (compute both)) refl)))))
+
+;; The guarded algebraic kernel for duplicate XOR.  Unlike self-XOR
+;; absorption, cancellation requires that the first write not change the
+;; source register; the complete discriminator guard proves exactly that.
+(claim xtw_sem_xor_pair_state
+  (goal
+    ((rs ((:: x86 Regs))) (d Reg) (s Reg))
+    ((= (xtw_word_regs rs) rs)
+     (= (int_eq (xtw_reg_code d) (xtw_reg_code s)) False))
+    (=
+      (xtw_sem_step
+        (XBin XXor d (SReg s))
+        (xtw_sem_step (XBin XXor d (SReg s)) rs))
+      rs))
+  (chain
+    (have hguard
+      (=
+        (int_eq ((:: x86 reg_code) d) ((:: x86 reg_code) s))
+        False)
+      (steps
+        ((rewrite (lemma xtw_reg_code_model) rl lhs true ())
+         (rewrite (premise 1) lr lhs true ()))
+        refl))
+    (have hd0 (= (le 0 ((:: x86 rget) rs d)) True)
+      (rewrite-with
+        (lemma xtw_word_rget_nonneg)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hs0 (= (le 0 ((:: x86 rget) rs s)) True)
+      (rewrite-with
+        (lemma xtw_word_rget_nonneg)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hdw
+      (=
+        ((:: x86 wrap64) ((:: x86 rget) rs d))
+        ((:: x86 rget) rs d))
+      (rewrite-with
+        (lemma xtw_word_rget)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hsw
+      (=
+        ((:: x86 wrap64) ((:: x86 rget) rs s))
+        ((:: x86 rget) rs s))
+      (rewrite-with
+        (lemma xtw_word_rget)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hsrc
+      (=
+        ((:: x86 rget)
+          ((:: x86 rset)
+            rs
+            d
+            (bxor
+              ((:: x86 wrap64) ((:: x86 rget) rs d))
+              ((:: x86 wrap64) ((:: x86 rget) rs s))))
+          s)
+        ((:: x86 rget) rs s))
+      (rewrite-with
+        (lemma rget_rset_other)
+        lr
+        lhs
+        ((inst written d) (inst read s))
+        ((steps ((rewrite (premise hguard) lr lhs true ())) refl))
+        refl))
+    (have hcancel
+      (=
+        (bxor
+          (bxor ((:: x86 rget) rs d) ((:: x86 rget) rs s))
+          ((:: x86 rget) rs s))
+        ((:: x86 rget) rs d))
+      (rewrite-with
+        (lemma bxor_cancel_right)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hd0) lr lhs true ())) refl)
+         (steps ((rewrite (premise hs0) lr lhs true ())) refl))
+        refl))
+    (steps
+      ((unfold xtw_sem_step lhs)
+       (compute lhs (stop (:: x86 rget) (:: x86 rset) bxor
+         (:: x86 wrap64)))
+       (rewrite (lemma rget_rset_same) lr lhs true ())
+       (rewrite (lemma xtw_wrap_bxor_words) lr lhs true ())
+       (rewrite (premise hsrc) lr lhs true ())
+       (rewrite (premise hdw) lr lhs true ())
+       (rewrite (premise hsw) lr lhs true ())
+       (rewrite (premise hcancel) lr lhs true ())
+       (rewrite (lemma rset_shadow) lr lhs true ())
+       (rewrite (lemma rset_rget) lr lhs true ()))
+      refl)))
+
+(claim xtw_sem_xor_pair_tail
+  (goal
+    ((tail (List XInstr))
+     (rs ((:: x86 Regs)))
+     (d Reg)
+     (s Reg))
+    ((= (xtw_word_regs rs) rs)
+     (= (int_eq (xtw_reg_code d) (xtw_reg_code s)) False))
+    (=
+      (xtw_sem_run
+        (Cons (XBin XXor d (SReg s))
+          (Cons (XBin XXor d (SReg s)) tail))
+        rs)
+      (xtw_sem_run tail rs)))
+  (chain
+    (steps
+      ((unfold xtw_sem_run lhs)
+       (reduce lhs)
+       (unfold xtw_sem_run lhs)
+       (reduce lhs)))
+    (rewrite-with
+      (lemma xtw_sem_xor_pair_state)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl))
+      refl)))
+
+(claim xtw_sem_xor_pair_context
+  (goal
+    ((prefix (List XInstr))
+     (tail (List XInstr))
+     (rs ((:: x86 Regs)))
+     (d Reg)
+     (s Reg))
+    ((= (xtw_word_regs rs) rs)
+     (= (int_eq (xtw_reg_code d) (xtw_reg_code s)) False))
+    (=
+      (xtw_sem_run
+        (xtw_plug
+          prefix
+          (Cons (XBin XXor d (SReg s))
+            (Cons (XBin XXor d (SReg s)) tail)))
+        rs)
+      (xtw_sem_run (xtw_plug prefix tail) rs)))
+  (induct prefix
+    ((case Nil
+       (steps
+         ((unfold xtw_plug both)
+          (reduce both))
+         (rewrite-with
+           (lemma xtw_sem_xor_pair_tail)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps ((rewrite (premise 1) lr lhs true ())) refl))
+           refl)))
+     (case Cons
+       (instruction rest)
+       (chain
+         (have hstep
+           (=
+             (xtw_word_regs (xtw_sem_step instruction rs))
+             (xtw_sem_step instruction rs))
+           (rewrite-with
+             (lemma xtw_sem_step_word)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((simp both)))
+         (rewrite-with
+           (hyp ih)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise hstep) lr lhs true ())) refl)
+            (steps ((rewrite (premise 1) lr lhs true ())) refl))
+           refl))))))
+
+;; The sample constructor is word-normal whenever its three live fields are.
+;; This isolates the finite census discharge from the contextual theorem.
+(claim xtw_regs_word
+  (goal
+    ((a Int) (b Int) (c Int))
+    ((= ((:: x86 wrap64) a) a)
+     (= ((:: x86 wrap64) b) b)
+     (= ((:: x86 wrap64) c) c))
+    (= (xtw_word_regs (xtw_regs a b c)) (xtw_regs a b c)))
+  (steps
+    ((unfold xtw_regs both)
+     (compute both (stop (:: x86 wrap64)))
+     (rewrite (premise 0) lr lhs true ())
+     (rewrite (premise 1) lr lhs true ())
+     (rewrite (premise 2) lr lhs true ())
+     (compute lhs))
+    refl))
+
+(claim xtw_sem_xor_pair_observe
+  (goal
+    ((prefix (List XInstr))
+     (tail (List XInstr))
+     (d Reg)
+     (s Reg))
+    ((= (int_eq (xtw_reg_code d) (xtw_reg_code s)) False))
+    (=
+      (xtw_sem_observe
+        (xtw_plug
+          prefix
+          (Cons (XBin XXor d (SReg s))
+            (Cons (XBin XXor d (SReg s)) tail)))
+        (xtw_files))
+      (xtw_sem_observe (xtw_plug prefix tail) (xtw_files))))
+  (chain
+    (have hw0
+      (= (xtw_word_regs (xtw_regs 0 0 0)) (xtw_regs 0 0 0))
+      (rewrite-with
+        (lemma xtw_regs_word)
+        lr
+        lhs
+        ()
+        ((steps ((compute both)) refl)
+         (steps ((compute both)) refl)
+         (steps ((compute both)) refl))
+        refl))
+    (have hw1
+      (= (xtw_word_regs (xtw_regs 1 2 4)) (xtw_regs 1 2 4))
+      (rewrite-with
+        (lemma xtw_regs_word)
+        lr
+        lhs
+        ()
+        ((steps ((compute both)) refl)
+         (steps ((compute both)) refl)
+         (steps ((compute both)) refl))
+        refl))
+    (have hw2
+      (= (xtw_word_regs (xtw_regs 3 5 6)) (xtw_regs 3 5 6))
+      (rewrite-with
+        (lemma xtw_regs_word)
+        lr
+        lhs
+        ()
+        ((steps ((compute both)) refl)
+         (steps ((compute both)) refl)
+         (steps ((compute both)) refl))
+        refl))
+    (have hw3
+      (= (xtw_word_regs (xtw_regs 170 85 255)) (xtw_regs 170 85 255))
+      (rewrite-with
+        (lemma xtw_regs_word)
+        lr
+        lhs
+        ()
+        ((steps ((compute both)) refl)
+         (steps ((compute both)) refl)
+         (steps ((compute both)) refl))
+        refl))
+    (have h0
+      (=
+        (xtw_sem_run
+          (xtw_plug
+            prefix
+            (Cons (XBin XXor d (SReg s))
+              (Cons (XBin XXor d (SReg s)) tail)))
+          (xtw_regs 0 0 0))
+        (xtw_sem_run (xtw_plug prefix tail) (xtw_regs 0 0 0)))
+      (rewrite-with
+        (lemma xtw_sem_xor_pair_context)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hw0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h1
+      (=
+        (xtw_sem_run
+          (xtw_plug
+            prefix
+            (Cons (XBin XXor d (SReg s))
+              (Cons (XBin XXor d (SReg s)) tail)))
+          (xtw_regs 1 2 4))
+        (xtw_sem_run (xtw_plug prefix tail) (xtw_regs 1 2 4)))
+      (rewrite-with
+        (lemma xtw_sem_xor_pair_context)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hw1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h2
+      (=
+        (xtw_sem_run
+          (xtw_plug
+            prefix
+            (Cons (XBin XXor d (SReg s))
+              (Cons (XBin XXor d (SReg s)) tail)))
+          (xtw_regs 3 5 6))
+        (xtw_sem_run (xtw_plug prefix tail) (xtw_regs 3 5 6)))
+      (rewrite-with
+        (lemma xtw_sem_xor_pair_context)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hw2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h3
+      (=
+        (xtw_sem_run
+          (xtw_plug
+            prefix
+            (Cons (XBin XXor d (SReg s))
+              (Cons (XBin XXor d (SReg s)) tail)))
+          (xtw_regs 170 85 255))
+        (xtw_sem_run (xtw_plug prefix tail) (xtw_regs 170 85 255)))
+      (rewrite-with
+        (lemma xtw_sem_xor_pair_context)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hw3) lr lhs true ())) refl)
+         (steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (steps
+      ((unfold xtw_files both)
+       (unfold xtw_sem_observe both)
+       (reduce both)
+       (rewrite (premise h0) lr lhs true ())
+       (unfold xtw_sem_observe both)
+       (reduce both)
+       (rewrite (premise h1) lr lhs true ())
+       (unfold xtw_sem_observe both)
+       (reduce both)
+       (rewrite (premise h2) lr lhs true ())
+       (unfold xtw_sem_observe both)
+       (reduce both)
+       (rewrite (premise h3) lr lhs true ())
+       (unfold xtw_sem_observe both)
+       (reduce both))
       refl)))
 
 ;; The local state transformer is equal before either common continuation is
@@ -663,6 +1530,33 @@
      (rewrite (lemma xtw_sem_xor_self_observe) lr lhs true ()))
     refl))
 
+;; Two identical XORs cancel at any checked spine position when their source
+;; is a distinct register.  The guard is structural search vocabulary, while
+;; xtw_sem_xor_pair_observe discharges the arbitrary-prefix word invariant.
+(claim xtw_xor_pair_cancels_spine
+  (goal
+    ((prefix (List XInstr))
+     (tail (List XInstr))
+     (d Reg)
+     (s Reg))
+    ((= (int_eq (xtw_reg_code d) (xtw_reg_code s)) False))
+    (=
+      (search_probe
+        (xtw_plug
+          prefix
+          (Cons (XBin XXor d (SReg s))
+            (Cons (XBin XXor d (SReg s)) tail))))
+      (search_probe (xtw_plug prefix tail))))
+  (chain
+    (steps ((unfold search_probe both)))
+    (rewrite-with
+      (lemma xtw_sem_xor_pair_observe)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+      refl)))
+
 ;; A deliberately stronger-than-necessary premise exercises the checked guard
 ;; path without changing the rule's truth.  The following unconditional law
 ;; remains in the profile after it, so equal-register instances fall through;
@@ -694,6 +1588,7 @@
 
 (fn search_spine_profile () (List Symbol)
   (list
+    (quote xtw_xor_pair_cancels_spine)
     (quote xtw_xor_self_absorbs_distinct)
     (quote xtw_xor_self_absorbs_spine)))
 

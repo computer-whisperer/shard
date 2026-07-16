@@ -552,6 +552,16 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
+# Checked multi-instruction transition pressure: three observer-spine laws
+# remove 264 of 820 XOR programs, including guarded cancellation under a
+# nonempty prefix.  Audit exhaustively compares lazy narrowing with enumeration.
+echo "=== search: checked x86 transition-window narrowing ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/x86_transition_window.shard audit
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 # Pure Shard function-body pins. These retain the playground's full grammars
 # and exact solution floors while SUPERPOSE settles them by demanded holes.
 # The executable imports kernel/types for an independent representative gate,
