@@ -1,0 +1,664 @@
+;;; explain — the untrusted failure explainer (bin/check's enrichment pass).
+;;;
+;;; EXPLAIN-BY-REPARSE: the kernel checker stays the sole accept/reject
+;;; authority and stays terse; this tool re-reads the same input plus the
+;;; captured check report and prints SUGGESTIONS. It is advisory by
+;;; construction — bin/check runs it only after a failing verdict and
+;;; ignores its exit code, and nothing here feeds back into checking. A
+;;; wrong suggestion costs confusion, never soundness.
+;;;
+;;; v1 explains two report shapes:
+;;;   - `unknown function/type/constructor: NAME` (and `unbound variable:`)
+;;;     type-gate lines — did-you-mean over the closure's defined names.
+;;;     Names are harvested from the RAW top-level forms of every closure
+;;;     source (fn/extern/sig/type heads), not from the built Module, so
+;;;     the harvest works even when module assembly failed.
+;;;   - `malformed declaration (KIND NAME ...)` — locates the named form in
+;;;     the closure sources and flags list-pattern heads inside (match …)
+;;;     arms that are not constructors in scope: the classic silent cause
+;;;     (a typo'd ctor pattern refuses the whole declaration with no
+;;;     pointer at the pattern).
+;;;
+;;; usage: explain FILE.shard REPORT.txt   (REPORT = captured check output)
+
+(import "../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
+(import "../../kernel/term.shard")  ; append_int / chars_of_sym plumbing
+(import "../../kernel/reader.shard")  ; read_all / SExpr / SrcEntry / rev_i
+(import "../../kernel/loader.shard")  ; World externs + resolve_closure + starts_with
+(use (:: kernel stdlib *))
+(use (:: kernel term append_int))
+(use (:: kernel reader *))
+(use (:: kernel loader *))
+
+;; ===========================================================================
+;; byte/list helpers
+;; ===========================================================================
+
+(fn ex_len ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ r) (+ 1 (ex_len r)))))
+
+(fn ex_eq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        (_ False)))
+    ((Cons x ar)
+     (match b
+       (Nil False)
+       ((Cons y br) (if (int_eq x y) (ex_eq ar br) False))))))
+
+(fn ex_drop ((n Int) (xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons _ r) (if (le n 0) xs (ex_drop (- n 1) r)))))
+
+(fn append_ll ((a (List (List Int))) (b (List (List Int)))) (List (List Int))
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (append_ll t b)))))
+
+(fn ex_rev_ll ((xs (List (List Int))) (acc (List (List Int)))) (List (List Int))
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (ex_rev_ll t (Cons h acc)))))
+
+(fn ex_lines_go ((bs (List Int)) (cur (List Int)) (acc (List (List Int))))
+  (List (List Int))
+  (measure (struct bs))
+  (match bs
+    (Nil (ex_rev_ll (Cons (rev_i cur Nil) acc) Nil))
+    ((Cons c r)
+     (if (int_eq c 10) (ex_lines_go r Nil (Cons (rev_i cur Nil) acc))
+     (ex_lines_go r (Cons c cur) acc)))))
+
+(fn ex_lines ((bs (List Int))) (List (List Int)) (ex_lines_go bs Nil Nil))
+
+;; suffix after the first occurrence of `pat`, if any.
+(fn ex_find ((pat (List Int)) (xs (List Int))) (Option (List Int))
+  (measure (struct xs))
+  (if (starts_with pat xs) (Some (ex_drop (ex_len pat) xs))
+  (match xs
+    (Nil None)
+    ((Cons _ r) (ex_find pat r)))))
+
+(fn ex_until_sp ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons c r) (if (int_eq c 32) Nil (Cons c (ex_until_sp r))))))
+
+(fn ex_after_sp ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons c r) (if (int_eq c 32) r (ex_after_sp r)))))
+
+(fn ex_has_name ((n (List Int)) (xs (List (List Int)))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons h r) (if (ex_eq n h) True (ex_has_name n r)))))
+
+(fn ex_dedup_ll ((xs (List (List Int))) (seen (List (List Int))))
+  (List (List Int))
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h r)
+     (if (ex_has_name h seen) (ex_dedup_ll r seen)
+     (Cons h (ex_dedup_ll r (Cons h seen)))))))
+
+(fn ex_join ((xs (List (List Int)))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h r)
+     (match r
+       (Nil h)
+       (_ (append_int h (append_int ", " (ex_join r))))))))
+
+;; ===========================================================================
+;; edit distance (classic two-row Levenshtein) + anagram signature
+;; ===========================================================================
+
+(fn ex_min2 ((a Int) (b Int)) Int (if (lt a b) a b))
+
+(fn ex_min3 ((a Int) (b Int) (c Int)) Int (ex_min2 a (ex_min2 b c)))
+
+(fn ex_row0 ((b (List Int)) (j Int)) (List Int)
+  (measure (struct b))
+  (match b
+    (Nil (Cons j Nil))
+    ((Cons _ r) (Cons j (ex_row0 r (+ j 1))))))
+
+(fn ex_last ((xs (List Int)) (d Int)) Int
+  (measure (struct xs))
+  (match xs
+    (Nil d)
+    ((Cons h r) (ex_last r h))))
+
+;; one DP row: prev is the row for the previous char of `a` (len(b)+1 wide,
+;; head = the diagonal), `left` is the new row's last computed entry.
+(fn ex_step ((b (List Int)) (prev (List Int)) (ca Int) (left Int)) (List Int)
+  (measure (struct b))
+  (match b
+    (Nil Nil)
+    ((Cons cb br)
+     (match prev
+       (Nil Nil)
+       ((Cons pd pr)
+        (match pr
+          (Nil Nil)
+          ((Cons pj _)
+           (let
+             ((v (ex_min3 (+ pj 1) (+ left 1) (+ pd (if (int_eq ca cb) 0 1)))))
+             (Cons v (ex_step br pr ca v))))))))))
+
+(fn ex_lev_go ((a (List Int)) (b (List Int)) (prev (List Int)) (i Int)) Int
+  (measure (struct a))
+  (match a
+    (Nil (ex_last prev 0))
+    ((Cons ca ar) (ex_lev_go ar b (Cons i (ex_step b prev ca i)) (+ i 1)))))
+
+(fn ex_lev ((a (List Int)) (b (List Int))) Int (ex_lev_go a b (ex_row0 b 0) 1))
+
+(fn ex_insc ((c Int) (xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil (Cons c Nil))
+    ((Cons h r) (if (le c h) (Cons c xs) (Cons h (ex_insc c r))))))
+
+(fn ex_sortc ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h r) (ex_insc h (ex_sortc r)))))
+
+;; near-miss score: same chars reordered = 0 (the transposition typo);
+;; else Levenshtein, admitted at d <= 2 and d < len (never suggest a name
+;; sharing no structure). None = not a candidate.
+(fn ex_score ((n (List Int)) (c (List Int))) (Option Int)
+  (if (ex_eq n c) None
+  (if (ex_eq (ex_sortc n) (ex_sortc c)) (Some 0)
+  (let ((d (ex_lev n c)))
+    (if (le d 2) (if (lt d (ex_len n)) (Some d) None) None)))))
+
+(fn ex_cands ((n (List Int)) (pool (List (List Int))))
+  (List (Pair Int (List Int)))
+  (measure (struct pool))
+  (match pool
+    (Nil Nil)
+    ((Cons c r)
+     (match (ex_score n c)
+       (None (ex_cands n r))
+       ((Some s) (Cons (Pair s c) (ex_cands n r)))))))
+
+(fn ex_ins_sc ((p (Pair Int (List Int))) (xs (List (Pair Int (List Int)))))
+  (List (Pair Int (List Int)))
+  (measure (struct xs))
+  (match xs
+    (Nil (Cons p Nil))
+    ((Cons h r)
+     (match p
+       ((Pair s _)
+        (match h
+          ((Pair hs _) (if (lt s hs) (Cons p xs) (Cons h (ex_ins_sc p r))))))))))
+
+(fn ex_sort_sc ((xs (List (Pair Int (List Int))))) (List (Pair Int (List Int)))
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h r) (ex_ins_sc h (ex_sort_sc r)))))
+
+(fn ex_take_names
+  ((xs (List (Pair Int (List Int)))) (seen (List (List Int))) (k Int))
+  (List (List Int))
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons (Pair _ c) r)
+     (if (le k 0) Nil
+     (if (ex_has_name c seen) (ex_take_names r seen k)
+     (Cons c (ex_take_names r (Cons c seen) (- k 1))))))))
+
+(fn ex_suggest ((n (List Int)) (pool (List (List Int)))) (List (List Int))
+  (ex_take_names (ex_sort_sc (ex_cands n pool)) Nil 3))
+
+(fn ex_sugg_str ((n (List Int)) (pool (List (List Int)))) (List Int)
+  (match (ex_suggest n pool)
+    (Nil Nil)
+    (cs (append_int " — did you mean: " (append_int (ex_join cs) "?")))))
+
+;; ===========================================================================
+;; name pools — harvested from the RAW top-level forms of every closure
+;; source, so a broken module still yields suggestions.
+;; ===========================================================================
+
+(type Pools (Pools (List (List Int)) (List (List Int)) (List (List Int))))
+; fns, types, ctors
+
+(fn ex_pool_fns ((p Pools)) (List (List Int))
+  (match p
+    ((Pools f _ _) f)))
+
+(fn ex_pool_tys ((p Pools)) (List (List Int))
+  (match p
+    ((Pools _ t _) t)))
+
+(fn ex_pool_cts ((p Pools)) (List (List Int))
+  (match p
+    ((Pools _ _ c) c)))
+
+;; ctor names from a (type NAME (CTOR …) …) tail; (refine …) has none.
+(fn ex_ctor_names ((forms (List SExpr)) (acc (List (List Int))))
+  (List (List Int))
+  (measure (struct forms))
+  (match forms
+    (Nil acc)
+    ((Cons f r)
+     (match f
+       ((SList (Cons (SSym h) _))
+        (if (sym_eq h (quote refine)) (ex_ctor_names r acc)
+        (ex_ctor_names r (Cons (chars_of_sym h) acc))))
+       (_ (ex_ctor_names r acc))))))
+
+;; the NAME position of a type form: bare or parametric ((List T) …).
+(fn ex_ty_name ((s SExpr)) (Option (List Int))
+  (match s
+    ((SSym n) (Some (chars_of_sym n)))
+    ((SList (Cons (SSym n) _)) (Some (chars_of_sym n)))
+    (_ None)))
+
+(fn ex_harvest ((f SExpr) (p Pools)) Pools
+  (match p
+    ((Pools fns tys cts)
+     (match f
+       ((SList (Cons (SSym h) rest))
+        (if (sym_eq h (quote fn))
+          (match rest
+            ((Cons (SSym n) _) (Pools (Cons (chars_of_sym n) fns) tys cts))
+            (_ p))
+        (if (sym_eq h (quote extern))
+          (match rest
+            ((Cons (SSym n) _) (Pools (Cons (chars_of_sym n) fns) tys cts))
+            (_ p))
+        (if (sym_eq h (quote sig))
+          (match rest
+            ((Cons (SSym k) (Cons (SSym n) _))
+             (if (sym_eq k (quote type))
+               (Pools fns (Cons (chars_of_sym n) tys) cts)
+             (if (sym_eq k (quote fn))
+               (Pools (Cons (chars_of_sym n) fns) tys cts)
+               p)))
+            (_ p))
+        (if (sym_eq h (quote type))
+          (match rest
+            ((Cons tn ctorforms)
+             (match (ex_ty_name tn)
+               (None p)
+               ((Some tname)
+                (Pools fns (Cons tname tys) (ex_ctor_names ctorforms cts)))))
+            (_ p))
+          p)))))
+       (_ p)))))
+
+(fn ex_harvest_forms ((fs (List SExpr)) (p Pools)) Pools
+  (measure (struct fs))
+  (match fs
+    (Nil p)
+    ((Cons f r) (ex_harvest_forms r (ex_harvest f p)))))
+
+(fn ex_pools_go ((srcs (List SrcEntry)) (p Pools)) Pools
+  (measure (struct srcs))
+  (match srcs
+    (Nil p)
+    ((Cons (SrcEntry _ _ bytes) r)
+     (match (read_all bytes)
+       (None (ex_pools_go r p))
+       ((Some forms) (ex_pools_go r (ex_harvest_forms forms p)))))))
+
+;; ===========================================================================
+;; report scanning
+;; ===========================================================================
+
+(type ExF
+  (ExUnknown Int (List Int))  ; tag (0 fn / 1 type / 2 ctor / 3 var), name
+  (ExVar (List Int) (List Int))  ; unbound variable WITH its fn: fn name, var
+  (ExDecl (List Int) (List Int)))  ; malformed declaration: kind, name
+
+(fn ex_until_colon ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons c r) (if (int_eq c 58) Nil (Cons c (ex_until_colon r))))))
+
+;; an `unbound variable` line labeled `fn NAME: …` names the declaration —
+;; keep the name so the render can suggest from that fn's own params.
+(fn ex_var_of ((line (List Int)) (var (List Int))) ExF
+  (if (starts_with "fn " line) (ExVar (ex_until_colon (ex_drop 3 line)) var)
+  (ExUnknown 3 var)))
+
+(fn ex_decl_of ((rest (List Int))) (Option ExF)
+  (let ((kind (ex_until_sp rest)))
+    (let ((name (ex_until_sp (ex_after_sp rest))))
+      (match kind
+        (Nil None)
+        (_
+          (match name
+            (Nil None)
+            (_ (Some (ExDecl kind name)))))))))
+
+(fn ex_scan_line ((line (List Int))) (Option ExF)
+  (match (ex_find "unknown function: " line)
+    ((Some n) (Some (ExUnknown 0 n)))
+    (None
+      (match (ex_find "unknown type: " line)
+        ((Some n) (Some (ExUnknown 1 n)))
+        (None
+          (match (ex_find "unknown constructor in pattern: " line)
+            ((Some n) (Some (ExUnknown 2 n)))
+            (None
+              (match (ex_find "unknown constructor: " line)
+                ((Some n) (Some (ExUnknown 2 n)))
+                (None
+                  (match (ex_find "unbound variable: " line)
+                    ((Some n) (Some (ex_var_of line n)))
+                    (None
+                      (match (ex_find "malformed declaration (" line)
+                        ((Some rest) (ex_decl_of rest))
+                        (None None)))))))))))))
+
+(fn ex_f_eq ((a ExF) (b ExF)) Bool
+  (match a
+    ((ExUnknown ta na)
+     (match b
+       ((ExUnknown tb nb) (if (int_eq ta tb) (ex_eq na nb) False))
+       (_ False)))
+    ((ExVar fa na)
+     (match b
+       ((ExVar fb nb) (if (ex_eq fa fb) (ex_eq na nb) False))
+       (_ False)))
+    ((ExDecl ka na)
+     (match b
+       ((ExDecl kb nb) (if (ex_eq ka kb) (ex_eq na nb) False))
+       (_ False)))))
+
+(fn ex_f_has ((x ExF) (xs (List ExF))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons h r) (if (ex_f_eq x h) True (ex_f_has x r)))))
+
+(fn ex_f_rev ((xs (List ExF)) (acc (List ExF))) (List ExF)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (ex_f_rev t (Cons h acc)))))
+
+(fn ex_scan ((lines (List (List Int))) (acc (List ExF))) (List ExF)
+  (measure (struct lines))
+  (match lines
+    (Nil (ex_f_rev acc Nil))
+    ((Cons l r)
+     (match (ex_scan_line l)
+       (None (ex_scan r acc))
+       ((Some f) (if (ex_f_has f acc) (ex_scan r acc) (ex_scan r (Cons f acc))))))))
+
+;; ===========================================================================
+;; malformed-declaration pattern scan — walk the named form; inside every
+;; (match …) arm, a LIST pattern's head must be a constructor in scope (a
+;; bare symbol is a legal binder, so only list heads are flagged).
+;; ===========================================================================
+
+(fn ex_last_sym ((xs (List SExpr))) (Option Symbol)
+  (measure (struct xs))
+  (match xs
+    (Nil None)
+    ((Cons (SSym s) Nil) (Some s))
+    ((Cons _ r) (ex_last_sym r))))
+
+;; the reader's ctor/binder discrimination (sym_capitalized): a bare pattern
+;; symbol starting A-Z must be a constructor; lowercase binds.
+(fn ex_cap ((n (List Int))) Bool
+  (match n
+    (Nil False)
+    ((Cons c _) (if (le 65 c) (le c 90) False))))
+
+(fn ex_pat_bad ((pat SExpr) (cts (List (List Int)))) (List (List Int))
+  (measure (struct pat))
+  (match pat
+    ((SSym s)
+     (let ((n (chars_of_sym s)))
+       (if (ex_cap n) (if (ex_has_name n cts) Nil (Cons n Nil)) Nil)))
+    ((SList (Cons (SSym h) fields))
+     (if (sym_eq h (quote quote)) Nil
+     (let ((sub (ex_pats_bad fields cts)))
+       (if (ex_has_name (chars_of_sym h) cts) sub (Cons (chars_of_sym h) sub)))))
+    ((SList (Cons (SList (Cons (SSym qq) qrest)) fields))
+     (if (sym_eq qq (quote ::))
+       (let ((sub (ex_pats_bad fields cts)))
+         (match (ex_last_sym qrest)
+           (None sub)
+           ((Some s)
+            (if (ex_has_name (chars_of_sym s) cts) sub
+            (Cons (chars_of_sym s) sub)))))
+       Nil))
+    (_ Nil)))
+
+(fn ex_pats_bad ((pats (List SExpr)) (cts (List (List Int)))) (List (List Int))
+  (measure (struct pats))
+  (match pats
+    (Nil Nil)
+    ((Cons h r) (append_ll (ex_pat_bad h cts) (ex_pats_bad r cts)))))
+
+(fn ex_walk_e ((e SExpr) (cts (List (List Int)))) (List (List Int))
+  (measure (struct e))
+  (match e
+    ((SList items)
+     (match items
+       ((Cons (SSym h) rest)
+        (if (sym_eq h (quote match))
+          (match rest
+            (Nil Nil)
+            ((Cons scrut arms)
+             (append_ll (ex_walk_e scrut cts) (ex_arms arms cts))))
+          (ex_walk_l items cts)))
+       (_ (ex_walk_l items cts))))
+    (_ Nil)))
+
+(fn ex_walk_l ((items (List SExpr)) (cts (List (List Int)))) (List (List Int))
+  (measure (struct items))
+  (match items
+    (Nil Nil)
+    ((Cons h r) (append_ll (ex_walk_e h cts) (ex_walk_l r cts)))))
+
+(fn ex_arms ((arms (List SExpr)) (cts (List (List Int)))) (List (List Int))
+  (measure (struct arms))
+  (match arms
+    (Nil Nil)
+    ((Cons a r) (append_ll (ex_arm a cts) (ex_arms r cts)))))
+
+(fn ex_arm ((a SExpr) (cts (List (List Int)))) (List (List Int))
+  (measure (struct a))
+  (match a
+    ((SList (Cons pat (Cons body Nil)))
+     (append_ll (ex_pat_bad pat cts) (ex_walk_e body cts)))
+    (_ Nil)))
+
+;; locate the reported (KIND NAME …) form anywhere in the closure sources.
+(fn ex_form_is ((f SExpr) (kind Symbol) (name (List Int))) Bool
+  (match f
+    ((SList (Cons (SSym h) (Cons (SSym n) _)))
+     (if (sym_eq h kind) (ex_eq (chars_of_sym n) name) False))
+    (_ False)))
+
+(fn ex_find_form ((fs (List SExpr)) (kind Symbol) (name (List Int)))
+  (Option SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil None)
+    ((Cons f r)
+     (if (ex_form_is f kind name) (Some f) (ex_find_form r kind name)))))
+
+(fn ex_find_decl ((srcs (List SrcEntry)) (kind Symbol) (name (List Int)))
+  (Option SExpr)
+  (measure (struct srcs))
+  (match srcs
+    (Nil None)
+    ((Cons (SrcEntry _ _ bytes) r)
+     (match (read_all bytes)
+       (None (ex_find_decl r kind name))
+       ((Some forms)
+        (match (ex_find_form forms kind name)
+          (None (ex_find_decl r kind name))
+          ((Some f) (Some f))))))))
+
+;; ===========================================================================
+;; rendering
+;; ===========================================================================
+
+(fn ex_tag_label ((t Int)) (List Int)
+  (if (int_eq t 0) "function"
+  (if (int_eq t 1) "type"
+  (if (int_eq t 2) "constructor"
+  "variable"))))
+
+(fn ex_tag_pool ((t Int) (p Pools)) (List (List Int))
+  (if (int_eq t 0) (ex_pool_fns p)
+  (if (int_eq t 1) (ex_pool_tys p)
+  (ex_pool_cts p))))
+
+;; an unknown-name line renders only when it has something to add.
+(fn ex_render_unknown ((t Int) (n (List Int)) (p Pools)) (List (List Int))
+  (match (ex_sugg_str n (ex_tag_pool t p))
+    (Nil Nil)
+    (s
+      (Cons
+        (append_int
+          "unknown "
+          (append_int (ex_tag_label t) (append_int " " (append_int n s))))
+        Nil))))
+
+(fn ex_param_names ((ps (List SExpr)) (acc (List (List Int)))) (List (List Int))
+  (measure (struct ps))
+  (match ps
+    (Nil acc)
+    ((Cons p r)
+     (match p
+       ((SList (Cons (SSym pn) _))
+        (ex_param_names r (Cons (chars_of_sym pn) acc)))
+       (_ (ex_param_names r acc))))))
+
+(fn ex_fn_params ((f SExpr)) (List (List Int))
+  (match f
+    ((SList (Cons _ (Cons _ (Cons (SList ps) _)))) (ex_param_names ps Nil))
+    (_ Nil)))
+
+;; unbound variable inside a named fn: suggest from that fn's own params
+;; first (the common typo), then the constructor pool.
+(fn ex_render_var
+  ((fname (List Int)) (var (List Int)) (srcs (List SrcEntry)) (p Pools))
+  (List (List Int))
+  (let
+    ((params
+       (match (ex_find_decl srcs (quote fn) fname)
+         (None Nil)
+         ((Some f) (ex_fn_params f)))))
+    (match (ex_sugg_str var (append_ll params (ex_pool_cts p)))
+      (Nil Nil)
+      (s (Cons (append_int "unbound variable " (append_int var s)) Nil)))))
+
+(fn ex_render_bad_pats
+  ((kind (List Int)) (name (List Int)) (bads (List (List Int))) (p Pools))
+  (List (List Int))
+  (measure (struct bads))
+  (match bads
+    (Nil Nil)
+    ((Cons h r)
+     (Cons
+       (append_int
+         "("
+         (append_int
+           kind
+           (append_int
+             " "
+             (append_int
+               name
+               (append_int
+                 " ...): match pattern head "
+                 (append_int
+                   h
+                   (append_int
+                     " is not a constructor in scope"
+                     (ex_sugg_str h (ex_pool_cts p)))))))))
+       (ex_render_bad_pats kind name r p)))))
+
+(fn ex_render_decl
+  ((kind (List Int)) (name (List Int)) (srcs (List SrcEntry)) (p Pools))
+  (List (List Int))
+  (match (ex_find_decl srcs (sym_of_chars kind) name)
+    (None Nil)
+    ((Some f)
+     (ex_render_bad_pats
+       kind
+       name
+       (ex_dedup_ll (ex_walk_e f (ex_pool_cts p)) Nil)
+       p))))
+
+(fn ex_render ((fs (List ExF)) (p Pools) (srcs (List SrcEntry)))
+  (List (List Int))
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons f r)
+     (append_ll
+       (match f
+         ((ExUnknown t n) (ex_render_unknown t n p))
+         ((ExVar fname n) (ex_render_var fname n srcs p))
+         ((ExDecl k n) (ex_render_decl k n srcs p)))
+       (ex_render r p srcs)))))
+
+;; ===========================================================================
+;; main
+;; ===========================================================================
+
+(fn ex_emit ((lines (List (List Int))) (w World)) World
+  (measure (struct lines))
+  (match lines
+    (Nil w)
+    ((Cons l r) (ex_emit r (write_line l w)))))
+
+(fn ex_run ((target (List Int)) (report (List Int)) (w World)) World
+  (match (read_file report w)
+    ((Pair mrep w1)
+     (match mrep
+       (None (exit 2 (write "explain: cannot read report file\n" w1)))
+       ((Some rbytes)
+        (match (ex_scan (ex_lines rbytes) Nil)
+          (Nil (exit 0 w1))
+          (fs
+            (match (resolve_closure target False w1)
+              ((Pair srcs w2)
+               (match (ex_render fs (ex_pools_go srcs (Pools Nil Nil Nil)) srcs)
+                 (Nil (exit 0 w2))
+                 (out
+                   (exit
+                     0
+                     (ex_emit
+                       out
+                       (write_line "---- explain (advisory) ----" w2))))))))))))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons target (Cons report Nil)) (ex_run target report w1))
+       (_ (exit 2 (write "usage: explain FILE.shard REPORT.txt\n" w1)))))))
