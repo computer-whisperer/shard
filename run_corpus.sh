@@ -42,7 +42,11 @@ TARGETS=(
   std/float/mod.req/pack.shard
   std/float/mod.req/grs.shard
   std/float/mod.req/ops2.shard
+  std/float/mod.req/wf.shard
   examples/float_val_compute.shard
+  std/f32/f32.shard
+  std/f64/f64.shard
+  examples/float_surface_demo.shard
   examples/bits_demo.shard
   std/axiom_scope_rejects.shard
   examples/ledger_dep/ledger_dep.shard
@@ -738,7 +742,7 @@ if [ -x bin/shard_eval ]; then
   # mod.req interfaces; .auto proof sidecars and derived .low files excluded)
   # produces ZERO CANON advisory lines. New std code that regresses the
   # canonical form fails the corpus here.
-  std_canon=$(ls std/*/*.shard | grep -v '\.auto\.shard$\|\.low\.shard$' | while read -r f; do
+  std_canon=$(ls std/*/*.shard std/*/mod.req/*.shard 2>/dev/null | grep -v '\.auto\.shard$\|\.low\.shard$' | while read -r f; do
     "${CHECK_CMD[@]}" "$f" 2>/dev/null | grep '^CANON ' | sed "s|^|$f |"
   done)
   if [ -z "$std_canon" ]; then

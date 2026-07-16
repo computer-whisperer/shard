@@ -1,0 +1,144 @@
+;;; std/f64/mod.req.shard — the PUBLIC INTERFACE of the `f64` module.
+;;;
+;;; F64 as an OPAQUE refinement of the core float view: internally
+;;; (refine FVal f64_ok) with f64_ok spelling (fwf (fmt_f64) ·) — the thin
+;;; per-format surface module of docs/FLOATS.md §3a (rung R3a). Consumers
+;;; get a STATICALLY DISTINCT type (mixing formats is a type error) and
+;;; never handle a descriptor; every inhabitant is well-formed by PROVEN
+;;; requirement (f64_wf), the std/str construction.
+;;;
+;;; The DEFINING EQUATIONS are exported requirements: each op is one line
+;;; of core vocabulary ((fadd (fmt_f64) …)), stated through the f64_view
+;;; projection. They are the spec-side entry to spec ⊑ imp (FLOATS.md §4a /
+;;; IMP.md rung I4) — lowering proofs cite THESE, never the impl.
+;;;
+;;; Bits doors (§5 NaN canonicalization lands here): f64_from_bits decodes
+;;; ANY Int (fields are mod-masked; every NaN encoding collapses to the
+;;; model's single NaN), f64_to_bits emits canonical bits — the from∘to
+;;; roundtrip is exact, the to∘from roundtrip is exact off the NaN class
+;;; and canonicalizes on it (f64_from_to_bits, 0x7FF8000000000000 = 9221120237041090560).
+
+(import "../../kernel/stdlib.shard")
+(import "../float/mod.req/float.shard")  ; core vocabulary: FVal, fwf, fmt_f64, the L1 ops
+(import "../float/mod.req/pack.shard")  ; fpack/funpack — the bits doors' meaning
+(use (:: std float float FVal))
+(use (:: std float float FNaN))
+(use (:: std float float fwf))
+(use (:: std float float fmt_f64))
+(use (:: std float float fadd))
+(use (:: std float float fsub))
+(use (:: std float float fmul))
+(use (:: std float float fdiv))
+(use (:: std float float fneg))
+(use (:: std float float fabs))
+(use (:: std float float fle_val))
+(use (:: std float float fval_eqb))
+(use (:: std float pack fpack))
+(use (:: std float pack funpack))
+
+;; an opaque IEEE-754 binary64: every inhabitant is a well-formed view.
+(sig type F64)
+
+;; the refinement predicate, exposed so validity is STATABLE on the interface.
+(sig fn f64_ok ((v FVal)) Bool)
+
+;; project an F64 back to the core value view (refine_val — identity at
+;; runtime); the observer the defining equations speak through.
+(sig fn f64_view ((x F64)) FVal)
+
+;; the bits doors. from_bits is TOTAL on Int (fields decode mod-masked).
+(sig fn f64_from_bits ((b Int)) F64)
+(sig fn f64_to_bits ((x F64)) Int)
+
+;; arithmetic (RNE, the core model's meaning — see the defining equations).
+(sig fn f64_add ((x F64) (y F64)) F64)
+(sig fn f64_sub ((x F64) (y F64)) F64)
+(sig fn f64_mul ((x F64) (y F64)) F64)
+(sig fn f64_div ((x F64) (y F64)) F64)
+(sig fn f64_neg ((x F64)) F64)
+(sig fn f64_abs ((x F64)) F64)
+
+;; IEEE comparisons (Bool observers, never equality): NaN compares False
+;; under all of them; +0 and -0 compare equal.
+(sig fn f64_le ((x F64) (y F64)) Bool)
+(sig fn f64_lt ((x F64) (y F64)) Bool)
+(sig fn f64_eq ((x F64) (y F64)) Bool)
+
+;; the NaN classifier (the only NaN observer — payloads are unobservable).
+(sig fn f64_is_nan ((x F64)) Bool)
+
+;; --- the structural invariant: every F64 is a well-formed view ------------------
+
+(requirement f64_wf (goal ((x F64)) () (= (f64_ok (f64_view x)) True)))
+
+;; the predicate's meaning is the core shape gate at the ground format.
+(requirement f64_ok_def (goal ((v FVal)) () (= (f64_ok v) (fwf (fmt_f64) v))))
+
+;; --- the defining equations (the spec ⊑ imp entry, one line each) ---------------
+
+(requirement f64_add_def
+  (goal ((x F64) (y F64)) ()
+    (= (f64_view (f64_add x y)) (fadd (fmt_f64) (f64_view x) (f64_view y)))))
+
+(requirement f64_sub_def
+  (goal ((x F64) (y F64)) ()
+    (= (f64_view (f64_sub x y)) (fsub (fmt_f64) (f64_view x) (f64_view y)))))
+
+(requirement f64_mul_def
+  (goal ((x F64) (y F64)) ()
+    (= (f64_view (f64_mul x y)) (fmul (fmt_f64) (f64_view x) (f64_view y)))))
+
+(requirement f64_div_def
+  (goal ((x F64) (y F64)) ()
+    (= (f64_view (f64_div x y)) (fdiv (fmt_f64) (f64_view x) (f64_view y)))))
+
+(requirement f64_neg_def
+  (goal ((x F64)) () (= (f64_view (f64_neg x)) (fneg (f64_view x)))))
+
+(requirement f64_abs_def
+  (goal ((x F64)) () (= (f64_view (f64_abs x)) (fabs (f64_view x)))))
+
+(requirement f64_le_def
+  (goal ((x F64) (y F64)) ()
+    (= (f64_le x y) (fle_val (fmt_f64) (f64_view x) (f64_view y)))))
+
+;; lt/eq derive from le with IEEE NaN/±0 behavior baked in.
+(requirement f64_lt_def
+  (goal ((x F64) (y F64)) ()
+    (= (f64_lt x y) (if (f64_le x y) (if (f64_le y x) False True) False))))
+
+(requirement f64_eq_def
+  (goal ((x F64) (y F64)) ()
+    (= (f64_eq x y) (if (f64_le x y) (f64_le y x) False))))
+
+(requirement f64_is_nan_def
+  (goal ((x F64)) () (= (f64_is_nan x) (fval_eqb (f64_view x) FNaN))))
+
+(requirement f64_view_from_bits
+  (goal ((b Int)) () (= (f64_view (f64_from_bits b)) (funpack (fmt_f64) b))))
+
+(requirement f64_to_bits_def
+  (goal ((x F64)) () (= (f64_to_bits x) (fpack (fmt_f64) (f64_view x)))))
+
+;; --- the bits roundtrips + range (§5, R2.2 lifted to the surface) ---------------
+
+;; decode inverts encode exactly, for every inhabitant.
+(requirement f64_bits_roundtrip
+  (goal ((x F64)) ()
+    (= (f64_view (f64_from_bits (f64_to_bits x))) (f64_view x))))
+
+;; encode inverts decode on non-NaN encodings and CANONICALIZES the NaN
+;; class (0x7FF8000000000000) — the §5 quotient made bits-concrete.
+(requirement f64_from_to_bits
+  (goal ((b Int)) ((= (le 0 b) True) (= (lt b 18446744073709551616) True))
+    (=
+      (f64_to_bits (f64_from_bits b))
+      (if (f64_is_nan (f64_from_bits b)) 9221120237041090560 b))))
+
+;; encoded bits land in [0, 2^64).
+(requirement f64_to_bits_range
+  (goal ((x F64)) ()
+    (=
+      (if (le 0 (f64_to_bits x)) (lt (f64_to_bits x) 18446744073709551616)
+      False)
+      True)))

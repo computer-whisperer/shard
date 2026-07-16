@@ -485,6 +485,38 @@ cheapest.
   [Rationale AMENDED 2026-07-14 — under §4a the surfaces' defining
   equations are the spec ⊑ imp entry instead; still sequenced
   before the lowering rung. See the close-out block below.]
+  **LANDED 2026-07-16** (fork `floats-r3`, three slices; formats
+  f32 + f64 per user ruling, bf16 on first consumer):
+  - *R3a-a — the core enters req-scope.* The surface interfaces
+    must STATE defining equations in core vocabulary, and the
+    req-scope import gate forbids interfaces importing impl-space
+    files — so the five core files relocated to
+    `std/float/mod.req/` (the std/rat/mod.req/gcd.shard precedent
+    at scale; user-ruled). qname-neutral: `(:: std float float …)`
+    and all sibling imports unchanged.
+  - *R3a-b — the wf/roundtrip theorem layer*
+    (std/float/mod.req/wf.shard): op wf-closure PARAMETRIC (§3a
+    tier 1) — fadd_wf/fsub_wf/fmul_wf/fdiv_wf (premises fmt_wf +
+    hnan; the hnan premise covers the NaN-creating table arms) +
+    fabs_wf + helpers (fwf_zero, fval_den_pos_any, fwf_m_lo,
+    fval_num_pos_probe); decode-side wf fmt-ground (tier 2):
+    funpack_wf_f32/_f64 — funpack is wf on ANY Int, so from_bits
+    is total with zero premises; combined roundtrip/range
+    assemblies funpack_fpack_fXX + fpack_range_all_fXX over the
+    R2.2 pieces.
+  - *R3a-c — the surfaces.* std/f32 + std/f64: opaque
+    `(refine FVal fXX_ok)` modules (str-shape: predicate exposed,
+    invariant a FULFILLED requirement), ops = one-line defining
+    equations exported as requirements (the spec ⊑ imp entry),
+    IEEE le/lt/eq derived from fle_val (NaN-False, ±0-equal),
+    is_nan classifier, bits doors with §5 canonicalization
+    (from_bits total; to∘from = id off the NaN class,
+    canonicalizing on it — 0x7FC00000 / 0x7FF8000000000000), bits
+    range, host-IEEE-verified ground pins (incl. 0.1f+0.2f,
+    sNaN-collapse, 1/-0 = -Inf, ±0 comparisons), consumer demo
+    examples/float_surface_demo.shard (citation-only, the
+    rat_demo shape). Gate: corpus FAIL-set == 65-line baseline,
+    driver green.
 - **R3b — literals + hex printing.** No downstream dependency;
   floats on consumer pain (interim: gates and probe sources
   construct values via from_bits). Expected pull-in: alongside R4's
