@@ -337,6 +337,8 @@ TARGETS=(
   tools/search/gen/imp_mix_refinement.shard
   tools/search/gen/x86_calculator_refinement.shard
   tools/search/gen/x86_calculator4_refinement.shard
+  models/pio/pio.shard
+  examples/pio_smoke.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT

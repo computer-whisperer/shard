@@ -1,0 +1,130 @@
+;;; pio_smoke.shard — ground-truth smoke of the PIO model (PIO.md P1).
+;;; Tiny programs run through pio_run/pio_step at literal inputs, closed by
+;;; (compute both): the checker itself executes the interpreter. Pins the
+;;; cycle plumbing (wrap, side-set, delay, the clock divider, PULL/OUT) and
+;;; the divergence-register row-1 semantics (JMP X-- always decrements)
+;;; before the vector gate (P2) and any symbolic piece theorems (P3).
+
+(import "../kernel/stdlib.shard")  ; List / Option / Pair
+(import "../models/pio/pio.shard")
+(use (:: models pio pio *))
+
+;; A one-output-pin config over the given program: wrap over [0, wtop],
+;; side_count sc on pin 0, clock divisor cdiv. Everything else is the
+;; quiet default (no autopush/autopull, thresholds 32, shift right).
+(fn smoke_cfg ((code (List PSlot)) (wtop Int) (sc Int) (cdiv Int)) PCfg
+  (MkPCfg code wtop 0 sc 0 0 0 0 0 0 0 1 0 1 0 0 32 32 1 1 cdiv 0 0 0 0 4 4))
+
+(fn nopi () PIns (MkPIns (PMov MDY MONone MSY) None 0))
+
+(fn seti ((v Int)) PIns (MkPIns (PSet SDPins v) None 0))
+
+;; pin 0 is an output (the driver's output_pins preset).
+(fn st_out0 () PSt (with_dir_l 1 (pst_new)))
+
+;; --- square wave via SET, full divider speed ------------------------------------
+
+(fn sq_cfg () PCfg (smoke_cfg (list (PS (seti 1)) (PS (seti 0))) 1 0 1))
+
+(claim smoke_square
+  (goal () ()
+    (=
+      (pio_run (sq_cfg) (st_out0) 0 (list 0 0 0 0 0 0))
+      (list (Pair 1 1) (Pair 0 1) (Pair 1 1) (Pair 0 1) (Pair 1 1) (Pair 0 1))))
+  (steps ((compute both)) refl))
+
+;; --- square wave via side-set + delay: nop side 1 [1] / nop side 0 [1] -----------
+
+(fn side_cfg () PCfg
+  (smoke_cfg
+    (list
+      (PS (MkPIns (PMov MDY MONone MSY) (Some 1) 1))
+      (PS (MkPIns (PMov MDY MONone MSY) (Some 0) 1)))
+    1
+    1
+    1))
+
+(claim smoke_sideset_delay
+  (goal () ()
+    (=
+      (pio_run (side_cfg) (st_out0) 0 (list 0 0 0 0 0 0 0 0))
+      (list
+        (Pair 1 1)
+        (Pair 1 1)
+        (Pair 0 1)
+        (Pair 0 1)
+        (Pair 1 1)
+        (Pair 1 1)
+        (Pair 0 1)
+        (Pair 0 1))))
+  (steps ((compute both)) refl))
+
+;; --- the clock divider: same SET program at divisor 2 ----------------------------
+;; Odd cycles don't fire; the reset pin-value latch (ALL-ONES) shows through
+;; on cycle 1 before the first SET lands on cycle 2.
+
+(fn div_cfg () PCfg (smoke_cfg (list (PS (seti 1)) (PS (seti 0))) 1 0 2))
+
+(claim smoke_clkdiv
+  (goal () ()
+    (=
+      (pio_run (div_cfg) (st_out0) 0 (list 0 0 0 0 0 0))
+      (list (Pair 1 1) (Pair 1 1) (Pair 1 1) (Pair 0 1) (Pair 0 1) (Pair 1 1))))
+  (steps ((compute both)) refl))
+
+;; --- JMP X-- always decrements (divergence-register row 1) -----------------------
+;; At X = 0 the branch is NOT taken and X wraps to 2^32-1 (datasheet:
+;; "the decrement is not conditional on the current value").
+
+(fn jmpdec_cfg () PCfg
+  (smoke_cfg (list (PS (MkPIns (PJmp JXDec 0) None 0))) 0 0 1))
+
+(claim smoke_jmpdec_wraps
+  (goal () ()
+    (=
+      (pio_step (jmpdec_cfg) (pst_new) 0)
+      (Some (MkPSt 0 4294967295 0 0 0 0 32 0 StNone 0 4294967295 0 0 Nil Nil))))
+  (steps ((compute both)) refl))
+
+;; ... and at X = 5 the branch IS taken (to slot 0) and X becomes 4.
+
+(claim smoke_jmpdec_taken
+  (goal () ()
+    (=
+      (pio_step (jmpdec_cfg) (with_x 5 (pst_new)) 0)
+      (Some (MkPSt 0 4 0 0 0 0 32 0 StNone 0 4294967295 0 0 Nil Nil))))
+  (steps ((compute both)) refl))
+
+;; --- PULL then OUT X, 32: a TX word lands in X ------------------------------------
+
+(fn pull_cfg () PCfg
+  (smoke_cfg
+    (list (PS (MkPIns (PPull 0 1) None 0)) (PS (MkPIns (POut ODX 32) None 0)))
+    1
+    0
+    1))
+
+(fn pull_two_steps () PSt
+  (match (pio_step (pull_cfg) (with_tx (list 7) (pst_new)) 0)
+    (None (pst_new))
+    ((Some s1)
+     (match (pio_step (pull_cfg) s1 0)
+       (None s1)
+       ((Some s2) s2)))))
+
+(claim smoke_pull_out
+  (goal () ()
+    (=
+      (pull_two_steps)
+      (MkPSt 0 7 0 0 0 0 32 0 StNone 0 4294967295 0 0 Nil Nil)))
+  (steps ((compute both)) refl))
+
+;; --- MOV bit-reverse spot values ---------------------------------------------------
+
+(claim smoke_rev_one
+  (goal () () (= (rev_bits 1) 2147483648))
+  (steps ((compute both)) refl))
+
+(claim smoke_rev_alt
+  (goal () () (= (rev_bits 2863311530) 1431655765))
+  (steps ((compute both)) refl))
