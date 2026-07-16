@@ -46,6 +46,50 @@
   (PsFormationEmpty)
   (PsFormationOk PsTask Int))  ; filtered task, raw count
 
+(type PsTaskR (PsTaskErr (List Int)) (PsTaskOk PsTask))
+
+(type PsWitnessR (PsWitnessErr (List Int)) (PsWitnessOk))
+
+(fn ps_check_witness ((body Expr) (grammar Grammar) (witness (Option Expr)))
+  PsWitnessR
+  (match witness
+    (None (PsWitnessOk))
+    ((Some candidate)
+     (match (sk_rank body grammar candidate)
+       ((SkCErr msg) (PsWitnessErr msg))
+       ((SkCOk _) (PsWitnessOk))))))
+
+;; A known witness is a certification gate, not a privileged spelling.  When
+;; theorem formation removes its old representation, normalize it through the
+;; same checked profile before asking the formed grammar to rank it.
+(fn ps_normalize_witness ((task PsTask) (profile TrsProfile)) PsTaskR
+  (match task
+    ((PsTask name candq probeq params ret body grammar query_ty query want
+       witness total expected_found)
+     (match witness
+       (None (PsTaskOk task))
+       ((Some candidate)
+        (match (trs_nf 10000 profile candidate)
+          ((TrsNfErr msg) (PsTaskErr msg))
+          ((TrsNfOut _ _)
+           (PsTaskErr "witness normalization exhausted its rewrite fuel"))
+          ((TrsNfOk candidate2 _)
+           (PsTaskOk
+             (PsTask
+               name
+               candq
+               probeq
+               params
+               ret
+               body
+               grammar
+               query_ty
+               query
+               want
+               (Some candidate2)
+               total
+               expected_found)))))))))
+
 (fn ps_apply_formation
   ((task PsTask) (formation TrsFormation) (expected_total Int))
   PsFormationR
@@ -63,11 +107,21 @@
              ((SkCErr msg) (PsFormationErr msg))
              ((SkCOk total)
               (if (int_eq total expected_total)
-                (PsFormationOk
-                  (PsTask name candq probeq params ret body2 grammar2 query_ty
-                    query want witness total expected_found)
-                  raw)
-                (PsFormationErr "formation-filtered count drift")))))))))))
+                (match (ps_check_witness body2 grammar2 witness)
+                  ((PsWitnessErr msg)
+                   (PsFormationErr
+                     (append_int "formed witness is outside the grammar: " msg)))
+                  ((PsWitnessOk)
+                   (PsFormationOk
+                     (PsTask name candq probeq params ret body2 grammar2
+                       query_ty query want witness total expected_found)
+                     raw)))
+                (PsFormationErr
+                  (append_int
+                    "formation-filtered count drift: expected "
+                    (append_int
+                      (show_int expected_total)
+                      (append_int " got " (show_int total)))))))))))))))
 
 ;; Constructor-arm contextual formation is a second quotient over the same
 ;; supplied task.  Signature, observation, witness, and solution pins are
@@ -89,10 +143,17 @@
              ((SkCErr msg) (PsFormationErr msg))
              ((SkCOk total)
               (if (int_eq total expected_total)
-                (PsFormationOk
-                  (PsTask name candq probeq params ret body2 grammar2 query_ty
-                    query want witness total expected_found)
-                  prior)
+                (match (ps_check_witness body2 grammar2 witness)
+                  ((PsWitnessErr msg)
+                   (PsFormationErr
+                     (append_int
+                       "contextual witness is outside the grammar: "
+                       msg)))
+                  ((PsWitnessOk)
+                   (PsFormationOk
+                     (PsTask name candq probeq params ret body2 grammar2
+                       query_ty query want witness total expected_found)
+                     prior)))
                 (PsFormationErr "context-filtered count drift")))))))))))
 
 (type PsGateR (PsGateErr (List Int)) (PsGateOk))

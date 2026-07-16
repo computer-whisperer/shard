@@ -1742,6 +1742,54 @@ constructor products, including correlated sibling exclusions, are exact.
     bin/shard_eval run tools/search/pure_deep.shard context 2
     bin/shard_eval run tools/search/pure_deep.shard context-probe 3 5000
 
+Comparison basis pressure now enters through the same checked-profile path.
+`std/order` proves the polymorphic involution
+
+    if (le a b) x y = if (lt b a) y x
+
+by splitting the first comparison and discharging the complementary `lt` pin
+with LIA.  The pure-program object imports that theorem, and the search driver
+adds its name to an explicit five-rule profile.  Although the equation spans
+an `If`, its lhs branches are unconstrained parameters: formation therefore
+projects it exactly to “an `If` condition may not have root `le`.”  Existing
+parent/argument formation removes those alternatives before ranking; no
+sort-specific condition table or new executor case is involved.
+
+The composition has exact counts:
+
+    append profile only:               d2 4,469,880,000
+                                        d3 104,277,392,481,024,192
+    plus checked order involution:      d2 2,979,920,000
+                                        d3 69,518,261,654,016,128
+    plus match context and involution:  d2 1,229,681,376
+                                        d3 27,059,730,155,621,856
+
+The complete depth-2 order run leaves four spellings and settles the space in
+7,407 regions, 1,554 forks, and 53,701 steps.  The context-only run needed
+14,249 regions, 2,985 forks, and 91,102 steps for eight spellings.  Thus a
+single general theorem halves the remaining solution gauge and nearly halves
+the decision tree again.  A depth-3 5,000-job probe settles
+12,080,236,917,486,516 of 27,059,730,155,621,856 candidates in 4,131 regions,
+869 forks, and 39,284 steps.
+
+Formation may remove the spelling supplied as a task's certification witness.
+`ps_normalize_witness` now rewrites that witness through the same authenticated
+profile first, and every formation stage immediately requires the resulting
+witness to rank in its exact grammar.  The order experiment exercises this:
+the original textbook `le` witness becomes the equivalent swapped-branch `lt`
+representative before the grammar gate.
+
+The remaining playground vocabulary reduction is categorically different.
+Reflexive comparisons such as `lt x x` need repeated-variable/equality-aware
+formation, which `TrsRule` deliberately refuses today; symmetric operand
+orientation needs a stable syntax order.  Removing `int_eq` from a particular
+hole language is a task vocabulary choice unless an in-budget equivalent is
+proved representable.  Those should remain separate improvements rather than
+being smuggled into the comparison involution.
+
+    bin/shard_eval run tools/search/pure_deep.shard order 2
+    bin/shard_eval run tools/search/pure_deep.shard order-probe 3 5000
+
 The first dynamic theorem-filtered task searches ordinary closed Shard list
 expressions over `Nil`, `Cons`, bit literals, and the real `std/list append` at
 depth five.  Its four selected append requirements are authenticated from the

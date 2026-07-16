@@ -9,8 +9,10 @@
 ;;; RUN: bin/shard_eval run tools/search/pure_deep.shard
 ;;;      bin/shard_eval run tools/search/pure_deep.shard 3
 ;;;      bin/shard_eval run tools/search/pure_deep.shard context 2
+;;;      bin/shard_eval run tools/search/pure_deep.shard order 2
 ;;;      bin/shard_eval run tools/search/pure_deep.shard probe 3 5000
 ;;;      bin/shard_eval run tools/search/pure_deep.shard context-probe 3 5000
+;;;      bin/shard_eval run tools/search/pure_deep.shard order-probe 3 5000
 
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/term.shard")
@@ -35,16 +37,24 @@
 (fn pd_fail ((msg (List Int)) (w World)) World
   (exit 1 (write (append_int "PURE-DEEP FAIL " (append_int msg "\n")) w)))
 
-(fn pd_profile_names () (List Symbol)
-  (list
-    (quote append_nil_left)
-    (quote append_cons)
-    (quote append_assoc)
-    (quote append_nil_right)))
+(fn pd_profile_names ((ordered Bool)) (List Symbol)
+  (if ordered
+    (list
+      (quote append_nil_left)
+      (quote append_cons)
+      (quote append_assoc)
+      (quote append_nil_right)
+      (quote if_le_lt_swap))
+    (list
+      (quote append_nil_left)
+      (quote append_cons)
+      (quote append_assoc)
+      (quote append_nil_right))))
 
 (fn pd_run
   ((m Module)
    (appendq QName)
+   (profile TrsProfile)
    (formation TrsFormation)
    (plan MsPlan)
    (depth Int)
@@ -55,61 +65,87 @@
    (drive_fuel Int)
    (w World))
   World
-  (match
-    (ps_apply_formation
-      (pt_sort_theorem_task depth appendq)
-      formation
-      expected_total)
-    ((PsFormationErr msg) (pd_fail msg w))
-    ((PsFormationEmpty) (pd_fail "formation removed the whole task" w))
-    ((PsFormationOk filtered raw)
-     (if contextual
-       (match (ps_apply_match_context filtered context_total context_found)
-         ((PsFormationErr msg) (pd_fail msg w))
-         ((PsFormationEmpty) (pd_fail "context formation removed the task" w))
-         ((PsFormationOk contextual_task _)
+  (match (ps_normalize_witness (pt_sort_theorem_task depth appendq) profile)
+    ((PsTaskErr msg) (pd_fail msg w))
+    ((PsTaskOk task)
+     (match (ps_apply_formation task formation expected_total)
+       ((PsFormationErr msg) (pd_fail msg w))
+       ((PsFormationEmpty) (pd_fail "formation removed the whole task" w))
+       ((PsFormationOk filtered raw)
+        (if contextual
+          (match (ps_apply_match_context filtered context_total context_found)
+            ((PsFormationErr msg) (pd_fail msg w))
+            ((PsFormationEmpty)
+             (pd_fail "context formation removed the task" w))
+            ((PsFormationOk contextual_task _)
+             (match
+               (if (le drive_fuel 0)
+                 (ps_run_plan_stats m contextual_task plan 0 raw 4)
+                 (ps_run_plan_stats_fuel m contextual_task plan 0 raw 4
+                   drive_fuel))
+               ((PsRunErr msg) (pd_fail msg w))
+               ((PsRunBudget report) (write report w))
+               ((PsRunOk report) (write report w)))))
           (match
-            (if (le drive_fuel 0)
-              (ps_run_plan_stats m contextual_task plan 0 raw 4)
-              (ps_run_plan_stats_fuel m contextual_task plan 0 raw 4 drive_fuel))
+            (if (le drive_fuel 0) (ps_run_plan_stats m filtered plan 0 raw 4)
+            (ps_run_plan_stats_fuel m filtered plan 0 raw 4 drive_fuel))
             ((PsRunErr msg) (pd_fail msg w))
             ((PsRunBudget report) (write report w))
-            ((PsRunOk report) (write report w)))))
-       (match
-         (if (le drive_fuel 0) (ps_run_plan_stats m filtered plan 0 raw 4)
-         (ps_run_plan_stats_fuel m filtered plan 0 raw 4 drive_fuel))
-         ((PsRunErr msg) (pd_fail msg w))
-         ((PsRunBudget report) (write report w))
-         ((PsRunOk report) (write report w)))))))
+            ((PsRunOk report) (write report w)))))))))
 
 (fn pd_runs
   ((m Module)
    (appendq QName)
+   (profile TrsProfile)
    (formation TrsFormation)
    (plan MsPlan)
    (depth Int)
    (contextual Bool)
+   (ordered Bool)
    (drive_fuel Int)
    (w World))
   World
   (if (int_eq depth 2)
-    (pd_run m appendq formation plan 2 4469880000 1844522064 8 contextual
-      drive_fuel w)
-    (pd_run m appendq formation plan 3 104277392481024192 40589595233432784 12
-      contextual drive_fuel w)))
+    (pd_run
+      m
+      appendq
+      profile
+      formation
+      plan
+      2
+      (if ordered 2979920000 4469880000)
+      (if ordered 1229681376 1844522064)
+      (if ordered 4 8)
+      contextual
+      drive_fuel
+      w)
+    (pd_run
+      m
+      appendq
+      profile
+      formation
+      plan
+      3
+      (if ordered 69518261654016128 104277392481024192)
+      (if ordered 27059730155621856 40589595233432784)
+      (if ordered 6 12)
+      contextual
+      drive_fuel
+      w)))
 
 (fn pd_with_profile
   ((m Module)
    (appendq QName)
    (depth Int)
    (contextual Bool)
+   (ordered Bool)
    (drive_fuel Int)
    (w World))
   World
   (match
     (tg_load_checked_profile
       "tools/search/tasks/pure_program_obj.shard"
-      (pd_profile_names)
+      (pd_profile_names ordered)
       w)
     ((Pair result w2)
      (match result
@@ -125,10 +161,12 @@
               (pd_runs
                 m
                 appendq
+                profile
                 (trs_profile_formation projected)
                 plan
                 depth
                 contextual
+                ordered
                 drive_fuel
                 w2))))))))))
 
@@ -152,28 +190,40 @@
   (exit
     2
     (write
-      "usage: pure_deep [2|3 | context (2|3) | probe (2|3) POSITIVE-JOB-BUDGET | context-probe (2|3) POSITIVE-JOB-BUDGET]\n"
+      "usage: pure_deep [2|3 | context (2|3) | order (2|3) | probe (2|3) POSITIVE-JOB-BUDGET | context-probe (2|3) POSITIVE-JOB-BUDGET | order-probe (2|3) POSITIVE-JOB-BUDGET]\n"
       w)))
 
 (fn pd_args ((as (List (List Int))) (m Module) (appendq QName) (w World)) World
   (match as
-    (Nil (pd_with_profile m appendq 2 False 0 w))
+    (Nil (pd_with_profile m appendq 2 False False 0 w))
     ((Cons ds Nil)
      (match (pd_parse_nat ds)
        (None (pd_usage w))
        ((Some depth)
-        (if (pd_depth_ok depth) (pd_with_profile m appendq depth False 0 w)
-        (pd_usage w)))))
+        (if (pd_depth_ok depth)
+          (pd_with_profile m appendq depth False False 0 w)
+          (pd_usage w)))))
     ((Cons mode (Cons ds Nil))
-     (if (int_list_eq mode "context")
+     (if (if (int_list_eq mode "context") True (int_list_eq mode "order"))
        (match (pd_parse_nat ds)
          (None (pd_usage w))
          ((Some depth)
-          (if (pd_depth_ok depth) (pd_with_profile m appendq depth True 0 w)
-          (pd_usage w))))
+          (if (pd_depth_ok depth)
+            (pd_with_profile
+              m
+              appendq
+              depth
+              True
+              (int_list_eq mode "order")
+              0
+              w)
+            (pd_usage w))))
        (pd_usage w)))
     ((Cons mode (Cons ds (Cons fs Nil)))
-     (if (if (int_list_eq mode "probe") True (int_list_eq mode "context-probe"))
+     (if
+       (if (int_list_eq mode "probe") True
+       (if (int_list_eq mode "context-probe") True
+       (int_list_eq mode "order-probe")))
        (match (pd_parse_nat ds)
          (None (pd_usage w))
          ((Some depth)
@@ -186,7 +236,8 @@
                    m
                    appendq
                    depth
-                   (int_list_eq mode "context-probe")
+                   (if (int_list_eq mode "probe") False True)
+                   (int_list_eq mode "order-probe")
                    fuel
                    w)
                  (pd_usage w))

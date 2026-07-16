@@ -564,14 +564,15 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
-# Match-arm definitional facts are compiled generically into an ordinary exact
-# Grammar.  The first pin audits the result against the old hand-written rev
-# dialect; the second composes the same mechanism with the independent sort
-# task and pins its exact contextual quotient without paying for a full run.
+# Match-arm definitional facts and a checked polymorphic order involution are
+# compiled generically into ordinary exact Grammars.  The first pin audits
+# match context against the old hand-written rev dialect; the next two compose
+# those mechanisms with sort and pin both exact quotients cheaply.
 echo "=== search: generic match-context formation ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/context_formation_probe.shard
   bin/shard_eval run tools/search/pure_deep.shard context-probe 2 1
+  bin/shard_eval run tools/search/pure_deep.shard order-probe 2 1
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
