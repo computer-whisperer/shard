@@ -2636,9 +2636,20 @@ profile can see.  Enumerative and lazy runs agree exactly:
     AUDIT accepted 658; constrained 162; exhaustive agreement OK
 
 `REMOVED` is still zero: a nonlinear variable-length window is residual
-pressure, not a separable formation clause.  The next spine-specific
-refinements are stable whole-hole verdict caching and a multi-arm/multi-spine
-inspector for recursive datatypes with more than one structural branch.
+pressure, not a separable formation clause.
+
+Prepared search now carries stable spine verdicts alongside its existing
+everywhere and root tables.  A cache entry is keyed by the checked spine-rule
+name and grammar hole, because two rules may own different authenticated
+traversal domains.  Preparation records only unanimous `Clear` or
+same-citation `Redex`; mixed and descendant-blocked alternative sets remain
+live decisions.  `guard_probe.shard` constructs one mixed, one all-clear, one
+all-redex, and a nested authenticated-spine region.  It observes exactly four
+cached facts and pins direct/prepared agreement, including a redex reached
+strictly below the checked constructor path and a cached child reached below
+an already materialized parent.  The remaining structural extension is a
+multi-arm/multi-spine inspector for recursive datatypes with more than one
+structural branch.
 
 #### Checked structural-distinctness guards
 

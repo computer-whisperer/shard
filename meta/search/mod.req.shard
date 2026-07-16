@@ -18,11 +18,11 @@
 ;;; rule is exact and keeps irrelevant syntax choices lazy.
 ;;; `ms_prepare` performs the assignment-independent portion once per grammar:
 ;;; every stable pattern/hole Yes or No becomes a reusable `MsMatchFact`.
-;;; It then composes those facts into stable whole-tree and candidate-root
-;;; Clear/Redex verdicts, keeping the two proof domains separate. Blocked
-;;; outcomes are deliberately not cached because later assignments may refine
-;;; them. `ms_check_prepared` and the direct `ms_check` have identical verdict
-;;; semantics.
+;;; It then composes those facts into stable whole-tree, authenticated-spine,
+;;; and candidate-root Clear/Redex verdicts, keeping all proof domains
+;;; separate. Blocked outcomes are deliberately not cached because later
+;;; assignments may refine them. `ms_check_prepared` and the direct `ms_check`
+;;; have identical verdict semantics.
 ;;;
 ;;; Ordinary TrsProfile rules are searched at every candidate subterm.
 ;;; TrsRootProfile rules are matched only at the whole candidate root.
@@ -958,6 +958,37 @@
   (List MsVerdictFact)
   (Cons (MsVerdictFact hole_id verdict) facts))
 
+;; A spine verdict is item-scoped: two checked laws may traverse different
+;; authenticated constructor paths over the same grammar hole.  Spine-profile
+;; validation makes rule names unique, so the checked citation is also the
+;; stable cache key for its traversal domain.
+(type MsSpineVerdictFact
+  (MsSpineVerdictFact QName Int MsStableVerdict))
+
+(fn ms_spine_item_name ((item TrsSpineRule)) QName
+  (match item
+    ((TrsSpineRule _ (TrsConditionedRule rule _)) (trs_rule_name rule))))
+
+(fn ms_spine_verdict_fact
+  ((facts (List MsSpineVerdictFact)) (name QName) (hole_id Int))
+  (Option MsStableVerdict)
+  (measure (struct facts))
+  (match facts
+    (Nil None)
+    ((Cons (MsSpineVerdictFact cached_name cached_hole verdict) rest)
+     (if (qname_eq name cached_name)
+       (if (int_eq hole_id cached_hole) (Some verdict)
+       (ms_spine_verdict_fact rest name hole_id))
+       (ms_spine_verdict_fact rest name hole_id)))))
+
+(fn ms_spine_verdict_fact_put
+  ((facts (List MsSpineVerdictFact))
+   (name QName)
+   (hole_id Int)
+   (verdict MsStableVerdict))
+  (List MsSpineVerdictFact)
+  (Cons (MsSpineVerdictFact name hole_id verdict) facts))
+
 (fn ms_merge ((left MsVerdict) (right MsVerdict)) MsVerdict
   (match left
     ((MsErr msg) (MsErr msg))
@@ -1132,6 +1163,7 @@
 (fn ms_spine_item_alts
   ((fuel Int)
    (facts (List MsHoleFacts))
+   (spine_facts (List MsSpineVerdictFact))
    (grammar Grammar)
    (asg (List (Pair Int Int)))
    (item TrsSpineRule)
@@ -1149,7 +1181,9 @@
         ((MsVerdictAgreeClear) (MsClear))
         ((MsVerdictAgreeRedex q) (MsRedex q))))
     ((Cons alt rest)
-     (match (ms_spine_item (- fuel 1) facts grammar asg item alt)
+     (match
+       (ms_spine_item
+         (- fuel 1) facts spine_facts grammar asg item alt)
        ((MsErr msg) (MsErr msg))
        ((MsBlocked _) (MsBlocked hole_id))
        ((MsClear)
@@ -1157,7 +1191,7 @@
           ((MsVerdictAgreeRedex _) (MsBlocked hole_id))
           (_
             (ms_spine_item_alts
-              (- fuel 1) facts grammar asg item rest hole_id
+              (- fuel 1) facts spine_facts grammar asg item rest hole_id
               (MsVerdictAgreeClear)))))
        ((MsRedex q)
         (match agree
@@ -1165,16 +1199,17 @@
           ((MsVerdictAgreeRedex prior)
            (if (qname_eq prior q)
              (ms_spine_item_alts
-               (- fuel 1) facts grammar asg item rest hole_id agree)
+               (- fuel 1) facts spine_facts grammar asg item rest hole_id agree)
              (MsBlocked hole_id)))
           ((MsVerdictAgreeStart)
            (ms_spine_item_alts
-             (- fuel 1) facts grammar asg item rest hole_id
+             (- fuel 1) facts spine_facts grammar asg item rest hole_id
              (MsVerdictAgreeRedex q))))))))))
 
 (fn ms_spine_item
   ((fuel Int)
    (facts (List MsHoleFacts))
+   (spine_facts (List MsSpineVerdictFact))
    (grammar Grammar)
    (asg (List (Pair Int Int)))
    (item TrsSpineRule)
@@ -1185,9 +1220,14 @@
   (match (ms_node (- fuel 1) grammar asg candidate)
     ((MsNodeErr msg) (MsErr msg))
     ((MsNodeOpen hole_id alts)
-     (ms_spine_item_alts
-       (- fuel 1) facts grammar asg item alts hole_id
-       (MsVerdictAgreeStart)))
+     (match
+       (ms_spine_verdict_fact
+         spine_facts (ms_spine_item_name item) hole_id)
+       ((Some verdict) (ms_stable_verdict verdict))
+       (None
+         (ms_spine_item_alts
+           (- fuel 1) facts spine_facts grammar asg item alts hole_id
+           (MsVerdictAgreeStart)))))
     ((MsNodeExpr node)
      (match item
        ((TrsSpineRule (TrsSpine _ ctor child) conditioned)
@@ -1210,13 +1250,14 @@
                       (ms_merge
                         root
                         (ms_spine_item
-                          (- fuel 1) facts grammar asg item tail))))
+                          (- fuel 1) facts spine_facts grammar asg item tail))))
                    root))
                 (_ root)))))))))))
 
 (fn ms_spines
   ((fuel Int)
    (facts (List MsHoleFacts))
+   (spine_facts (List MsSpineVerdictFact))
    (grammar Grammar)
    (asg (List (Pair Int Int)))
    (items (List TrsSpineRule))
@@ -1233,13 +1274,13 @@
           (ms_merge
             prior
             (ms_spine_item
-              (- fuel 1) facts grammar asg item candidate))))
+              (- fuel 1) facts spine_facts grammar asg item candidate))))
        (match next
          ((MsErr msg) (MsErr msg))
          ((MsRedex q) (MsRedex q))
          (_
            (ms_spines
-             (- fuel 1) facts grammar asg rest candidate next))))))))
+             (- fuel 1) facts spine_facts grammar asg rest candidate next))))))))
 
 ;; Whole-subtree consensus for an unassigned grammar hole.  Different redex
 ;; citations are kept blocked: every alternative is reducible, but `MsRedex q`
@@ -1678,13 +1719,82 @@
           rest
           (ms_verdict_fact_put root_facts hole_id (MsStableRedex q))))))))
 
+(type MsSpineVerdictFactsR
+  (MsSpineVerdictFactsErr (List Int))
+  (MsSpineVerdictFactsOk (List MsSpineVerdictFact)))
+
+(fn ms_compile_spine_holes
+  ((fuel Int)
+   (match_facts (List MsHoleFacts))
+   (grammar Grammar)
+   (item TrsSpineRule)
+   (entries (List GEnt))
+   (spine_facts (List MsSpineVerdictFact)))
+  MsSpineVerdictFactsR
+  (measure (struct entries))
+  (match entries
+    (Nil (MsSpineVerdictFactsOk spine_facts))
+    ((Cons (GEnt hole_id _) rest)
+     (match
+       (ms_spine_item
+         fuel match_facts spine_facts grammar Nil item (hole hole_id))
+       ((MsErr msg) (MsSpineVerdictFactsErr msg))
+       ((MsBlocked _)
+        (ms_compile_spine_holes
+          fuel match_facts grammar item rest spine_facts))
+       ((MsClear)
+        (ms_compile_spine_holes
+          fuel
+          match_facts
+          grammar
+          item
+          rest
+          (ms_spine_verdict_fact_put
+            spine_facts
+            (ms_spine_item_name item)
+            hole_id
+            (MsStableClear))))
+       ((MsRedex q)
+        (ms_compile_spine_holes
+          fuel
+          match_facts
+          grammar
+          item
+          rest
+          (ms_spine_verdict_fact_put
+            spine_facts
+            (ms_spine_item_name item)
+            hole_id
+            (MsStableRedex q))))))))
+
+(fn ms_compile_spine_items
+  ((fuel Int)
+   (match_facts (List MsHoleFacts))
+   (grammar Grammar)
+   (items (List TrsSpineRule))
+   (entries (List GEnt))
+   (spine_facts (List MsSpineVerdictFact)))
+  MsSpineVerdictFactsR
+  (measure (struct items))
+  (match items
+    (Nil (MsSpineVerdictFactsOk spine_facts))
+    ((Cons item rest)
+     (match
+       (ms_compile_spine_holes
+         fuel match_facts grammar item entries spine_facts)
+       ((MsSpineVerdictFactsErr msg) (MsSpineVerdictFactsErr msg))
+       ((MsSpineVerdictFactsOk more)
+        (ms_compile_spine_items
+          fuel match_facts grammar rest entries more))))))
+
 (type MsPrepared
   (MsPrepared
     MsPlan
     Grammar
     (List MsHoleFacts)
     (List MsVerdictFact)
-    (List MsVerdictFact)))
+    (List MsVerdictFact)
+    (List MsSpineVerdictFact)))
 
 (type MsPrepareR (MsPrepareErr (List Int)) (MsPrepareOk MsPrepared))
 
@@ -1707,17 +1817,27 @@
     (Nil 0)
     ((Cons _ rest) (+ 1 (ms_verdict_fact_count rest)))))
 
+(fn ms_spine_verdict_fact_count ((facts (List MsSpineVerdictFact))) Int
+  (measure (struct facts))
+  (match facts
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (ms_spine_verdict_fact_count rest)))))
+
 (fn ms_prepared_fact_count ((prepared MsPrepared)) Int
   (match prepared
-    ((MsPrepared _ _ facts _ _) (ms_fact_count facts))))
+    ((MsPrepared _ _ facts _ _ _) (ms_fact_count facts))))
 
 (fn ms_prepared_anywhere_fact_count ((prepared MsPrepared)) Int
   (match prepared
-    ((MsPrepared _ _ _ facts _) (ms_verdict_fact_count facts))))
+    ((MsPrepared _ _ _ facts _ _) (ms_verdict_fact_count facts))))
 
 (fn ms_prepared_root_fact_count ((prepared MsPrepared)) Int
   (match prepared
-    ((MsPrepared _ _ _ _ facts) (ms_verdict_fact_count facts))))
+    ((MsPrepared _ _ _ _ facts _) (ms_verdict_fact_count facts))))
+
+(fn ms_prepared_spine_fact_count ((prepared MsPrepared)) Int
+  (match prepared
+    ((MsPrepared _ _ _ _ _ facts) (ms_spine_verdict_fact_count facts))))
 
 (fn ms_prepare ((match_fuel Int) (plan MsPlan) (grammar Grammar)) MsPrepareR
   (match plan
@@ -1748,7 +1868,8 @@
                   ((MsFactsOk facts)
                    (let
                      ((everywhere_rules (trs_profile_rules everywhere))
-                      (root_rules (trs_root_profile_rules root)))
+                      (root_rules (trs_root_profile_rules root))
+                      (spine_rules (trs_spine_profile_rules spine)))
                      (match
                        (if (ms_rules_empty everywhere_rules)
                          (MsVerdictFactsOk Nil)
@@ -1762,9 +1883,27 @@
                             root_rules entries Nil))
                           ((MsVerdictFactsErr msg) (MsPrepareErr msg))
                           ((MsVerdictFactsOk root_facts)
-                           (MsPrepareOk
-                             (MsPrepared checked grammar facts tree_facts
-                               root_facts)))))))))))))))))))
+                           (match
+                             (match spine_rules
+                               (Nil (MsSpineVerdictFactsOk Nil))
+                               ((Cons _ _)
+                                (ms_compile_spine_items
+                                  match_fuel
+                                  facts
+                                  grammar
+                                  spine_rules
+                                  ;; Grammar references point to greater hole
+                                  ;; ids.  Compile children first so a stable
+                                  ;; child verdict also accelerates preparation
+                                  ;; of its authenticated parents.
+                                  (ents_rev entries Nil)
+                                  Nil)))
+                             ((MsSpineVerdictFactsErr msg) (MsPrepareErr msg))
+                             ((MsSpineVerdictFactsOk spine_facts)
+                              (MsPrepareOk
+                                (MsPrepared
+                                  checked grammar facts tree_facts root_facts
+                                  spine_facts)))))))))))))))))))))
 
 ;; ---- prepared and direct checking -----------------------------------------
 
@@ -1773,6 +1912,7 @@
    (facts (List MsHoleFacts))
    (tree_facts (List MsVerdictFact))
    (root_facts (List MsVerdictFact))
+   (spine_facts (List MsSpineVerdictFact))
    (plan MsPlan)
    (grammar Grammar)
    (asg (List (Pair Int Int)))
@@ -1806,6 +1946,7 @@
                   (ms_spines
                     (- fuel 1)
                     facts
+                    spine_facts
                     grammar
                     asg
                     spine_rules
@@ -1834,7 +1975,7 @@
    (asg (List (Pair Int Int)))
    (candidate Expr))
   MsVerdict
-  (ms_check_facts fuel Nil Nil Nil plan grammar asg candidate))
+  (ms_check_facts fuel Nil Nil Nil Nil plan grammar asg candidate))
 
 (fn ms_check_prepared
   ((fuel Int)
@@ -1843,8 +1984,10 @@
    (candidate Expr))
   MsVerdict
   (match prepared
-    ((MsPrepared plan grammar facts tree_facts root_facts)
-     (ms_check_facts fuel facts tree_facts root_facts plan grammar asg candidate))))
+    ((MsPrepared plan grammar facts tree_facts root_facts spine_facts)
+     (ms_check_facts
+       fuel facts tree_facts root_facts spine_facts
+       plan grammar asg candidate))))
 
 ;; ---- contextual constructor-arm formation ---------------------------------
 ;;
