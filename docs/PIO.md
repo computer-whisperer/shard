@@ -257,19 +257,60 @@ Any drift from this classification is a FAIL. The driver contract
     reproduces P5a's census BYTE-IDENTICAL (1111/333/208/54/20) — the
     strongest adequacy evidence — and now reports AUTHENTICATED 3 (the
     trio cites its spine theorems by name; worklist 20→17). Boundary
-    finding: the mined mov-y collapse family (pins-y-y ⇒ pins-pins) is
-    NOT state-universal — it needs a y-is-32-bit-word premise (MOInvert
-    double-negation), and spine capture refuses premise-bearing laws by
-    design (only structural-distinctness guards exist); it stays on the
-    proof worklist as the first candidate for a guard-vocabulary
-    extension. First engine exercise of int literals and polymorphic
-    `None` inside checked window patterns — both capture fine.
-  - **P5c [DECIDED, parameters open]** — the freer DME synthesis:
-    variable-length programs over an unpinned per-slot scope with jumps as
-    the only control, searched under the checked pressure; graded
-    IMPOSSIBILITY censuses (exhaustive FOUND-0 at small slot counts — a
-    result class the stochastic original cannot produce); scope sized by
-    measurement.
+    finding (refined post-landing; PIO_REQUEST.md filed in the search
+    worktree): the mined mov-y collapse family (pins-y-y ⇒ pins-pins,
+    nonlinear `x0:MovOp`) is not state-universal as ONE law — MOInvert
+    needs y-is-32-bit-word — but it DECOMPOSES: the MONone instance is a
+    capturable premise-free hold law today, and the MOInvert instance is
+    capturable via the xtw word-invariant pattern (premise discharged at
+    the concrete seeds inside the observe lemma, preserved through
+    arbitrary prefixes — every fragment write keeps y a word; the final
+    spine claim is premise-free), i.e. PIO-side proof labor, no engine
+    change. The GENUINE engine gap is arithmetic relations between int
+    metavariables: the whole delay-redistribution gauge is one schema
+    under cycle-count conservation (`pins[d1] pins[d2] ⇒ pins[d1+d2+1]`),
+    which TrsGuard cannot express — hence four literal-delay laws here,
+    multiplying with the delay alphabet at P5c. First engine exercise of
+    int literals and polymorphic `None` inside checked window patterns —
+    both capture fine.
+  - **P5c-1 [LANDED 2026-07-16]** — the free-synthesis surface + the first
+    scaling measurement: `tools/search/tasks/pio_dme_free.shard` — the P4
+    benchmark with the role skeleton removed (all lengths 0–9, free
+    per-slot alphabet, **wrap PARKED at 31**: P4's wrap_top=7 leaked the
+    loop structure; jumps are the only control, a program that runs off
+    its code dies against the golden's length). Because the engine's
+    witness gate is fatal-on-fail, the census is TWO-SIDED: the grammar
+    spans all lengths ≤ 9 with a passing witness, so "every solution
+    decodes to k slots" carries the < k impossibility inside the
+    affirmative run (standalone FOUND-0 ladders need the absence-gate ask
+    in PIO_REQUEST.md). Two NEW kernel-checked encoders landed as ground
+    pins: `search_witness` = the 9-slot jumps-only reference
+    (delay-redistribution across the loop edge: slot 7 [4]→[3] + explicit
+    `jmp 0` — the jump cycle replaces the displaced delay cycle) and
+    `pdf_ref8` = an EIGHT-slot jumps-only encoder (fold the 0-path
+    through the re-drive slot: `jmp 6` skips only the toggle, the second
+    drive slot and the skip landing collapse) — one instruction less
+    control hardware than mlx-pio's wrap-assisted eight. MEASURED
+    boundary: the full-free alphabet (23 ops × delays 0–7 × 9-way jmp
+    targets, ~4×10²⁰ raw) drove the lazy engine past 64 GB of region
+    frontier and was killed — the golden constrains EDGES, not interior
+    filler, so every pin-silent instruction composition whose delays sum
+    right survives each constant-bit run, and regions never re-merge.
+    The filler gauge cannot be spine-quotiented here (jump-ful probe), so
+    the P5c-2 scope DECLARES it away: a delay-normal-form wrapper
+    grammar (delays only on drives and jumps) via a task-local candidate
+    ADT + decoder, since zone routing cannot couple an op to its own
+    delay domain through a shared MkPIns head.
+  - **P5c-2 [NEXT]** — the delay-normal-form deep run on the rebased
+    engine (search-arc landed the affine-guard + ground-arithmetic-fold +
+    theorem-first features from PIO_REQUEST.md): wrapper-ADT grammar
+    (~54/slot), watchdogged; solution set = the gauge-quotiented encoder
+    census, minimality read from the solution lengths. Affine note: the
+    kernel-checked delay-conservation law over a cycle-emitting
+    projection is FALSE at negative Ints and ℤ-affine equality cannot
+    express 0 ≤ d — the follow-up ask is an inequality guard or ℕ-typed
+    guard variables; graded impossibility censuses below the witness
+    threshold stay gated on the absence gate.
 - **[FUTURE]** — bench certification (hardware-captured vectors adjudicating
   deltas 5–7 and the excluded 3); the 2-SM product machine (mlx-pio's
   statable-but-unproven flagship `2-SM-pair ≡ 1-SM-TX` becomes provable
