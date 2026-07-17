@@ -9,22 +9,56 @@
 # Engine bootstrap: the fast engines (bin/shard_check, bin/shard_eval)
 # are DERIVED artifacts — kernel sources compiled by bin/rebuild.sh via
 # the previous engine (gen-N builds gen-N+1, byte-tie guarded; a cold
-# start falls back to the Rust interpreter and takes ~1h ONCE). The
-# cache keeps the engines and the cargo target dir across runs; the
-# stamp check skips the rebuild entirely when kernel sources are
-# untouched, and pays ~2 minutes when they changed.
+# start falls back to the Rust interpreter and takes ~1h ONCE).
+#
+# TWO JOBS, one cache key. GitLab does NOT upload the cache when a job
+# hits its timeout (measured: pipelines #44/#45 each rebuilt cold after
+# the previous run timed out mid-corpus — a cold-rebuild/timeout cycle
+# that can never converge). The `engine` job does ONLY the bootstrap
+# and always finishes well inside its own timeout, so the cache lands
+# no matter what the corpus later does; the `corpus` job pulls it
+# (policy: pull) and keeps a rebuild fallback for cache eviction.
 
 stages:
+  - engine
   - gate
+
+engine:
+  stage: engine
+  tags:
+    - high-cpu
+  image: docker.io/library/rust:latest
+  timeout: 2h
+  interruptible: true
+  cache:
+    key: shard-engine
+    paths:
+      - rust_bootstrap/target/
+      - bin/shard_check
+      - bin/shard_check.stamp
+      - bin/shard_eval
+      - bin/shard_eval.stamp
+  script:
+    - echo "runner cores:" $(nproc) && (free -g || true)
+    - cargo build --release --manifest-path rust_bootstrap/Cargo.toml
+    - |
+      if [ ! -x bin/shard_check ] || [ "$(bin/engine_stamp.sh)" != "$(cat bin/shard_check.stamp 2>/dev/null)" ]; then
+        echo "engine stale or missing -- rebuilding"
+        bin/rebuild.sh
+      else
+        echo "engine fresh (stamp match) -- rebuild skipped"
+      fi
 
 corpus:
   stage: gate
   tags:
     - high-cpu
   image: docker.io/library/rust:latest
-  timeout: 3h
+  timeout: 6h
+  interruptible: true
   cache:
     key: shard-engine
+    policy: pull
     paths:
       - rust_bootstrap/target/
       - bin/shard_check
@@ -34,13 +68,12 @@ corpus:
   before_script:
     - apt-get update -qq && apt-get install -y -qq nodejs > /dev/null
   script:
+    - echo "runner cores:" $(nproc) && (free -g || true)
     - cargo build --release --manifest-path rust_bootstrap/Cargo.toml
     - |
       if [ ! -x bin/shard_check ] || [ "$(bin/engine_stamp.sh)" != "$(cat bin/shard_check.stamp 2>/dev/null)" ]; then
-        echo "engine stale or missing -- rebuilding"
+        echo "engine stale or missing -- rebuilding (cache eviction fallback)"
         bin/rebuild.sh
-      else
-        echo "engine fresh (stamp match) -- rebuild skipped"
       fi
     - bash run_corpus.sh 2>&1 | tee corpus.log
     - grep '^FAIL' corpus.log | awk '{print $2}' | sort > fails-run.txt
