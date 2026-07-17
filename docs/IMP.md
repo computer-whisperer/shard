@@ -2689,6 +2689,34 @@ on sha_blocks; the targets meet at one spec-side fold.**
   hex-over-final framing; output overwrites the dead input region
   at [0,64)).
 
+**I2e-4b complete (2026-07-17): the digest + hex seals — the back
+half reads back.**
+
+- `shw_digest_read`: any memory whose wlist-grain H window holds st
+  reads the 32-byte digest at 65472 as h8_bytes st — case-on the
+  state, then LANE PROJECTION (the shw_out_hw idiom verbatim)
+  discharges ish_digest_read's eight wget premises inside the
+  citation's obligations (rewrite the case hyp INSIDE each
+  obligation, as always).
+- `shw_hex_read`: the hex effect over any such memory delivers
+  bytes_hex (h8_bytes st) at the output window [0,64) — the dead
+  input region, far below the digest window, so ish_hex_read's
+  separation premise is ground (ish_i32p bridges the opaque
+  int_of_nat 32; a compute-both have respells width 64 as
+  wn_add 32 32 to meet the lemma's wn_add wk wk pattern).
+- `shb_out_read`/`shx_out_read`: THE BACK-HALF READBACKS — under
+  the fold premises, the output window over hex-of-fold-exit is
+  the spec's hex digest of shb_fold, both targets (shb_hread/
+  shx_hread cited inside shw_hex_read's window obligation; st
+  dangles in every one of these patterns — inst it through).
+- All four green on the first check. Gates: sibling 478/0 (no
+  sibling changes), weld 1001/0.
+- NEXT (I2e-4c): the bin — thin World main (slurp ≤ cap,
+  controlled-failure leg), the full-pipe pure composition
+  (write-input + init + pad + fold + hex through the stage seals;
+  shb_pad_w + ish_ediv_mul tie the block count; shb_fold_blocks
+  collapses to sha_blocks = the spec), NIST vectors, gates.
+
 
 ## 7. Non-goals, stated once
 
