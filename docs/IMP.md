@@ -2645,6 +2645,26 @@ on sha_blocks; the targets meet at one spec-side fold.**
   + hex over the final fold; then the bin (I2e-4c: thin World main,
   slurp ≤ cap, controlled-failure leg, NIST vectors).
 
+**I2e-4b progress (2026-07-17): the init crossing + width plumbing.**
+
+- Init crossing: `ish_get_setw_below`/`ish_read_ikh_below` (byte
+  windows at or below the K window survive the whole init) +
+  `ikh_k_read`/`ikh_h_read` (ikh_mem delivers EXACTLY the fold's
+  invariants: K window = sha_k, H window = shw_hlist (sha_h0)).
+- Width plumbing: `ish_read_split` (a read at a wn_add width is the
+  sapp of its halves), `shb_w` (64k as a Nat width) and
+  `shb_bytes_read` (the fold's chunk region as ONE mem_read) — the
+  pad tier's readback width and the fold's chunks now speak the
+  same vocabulary. GOTCHA: canon C6 packs a fn's ground Nat arms
+  (`shb_w Z` → literal 0), so structural-pattern rewrites
+  (mem_read_z) need a stated-form compute-both have as a bridge.
+- Gates: sibling 475/0, weld 992/0.
+- REMAINING for 4b: tie pad width to `shb_w k` (the block-count
+  arithmetic, div_unique at the artifact boundary), then the digest
+  readback + hex chain over the final fold (lane projections +
+  ish_digest_read/ish_hex_read + hex-over-final framing; output
+  overwrites the dead input region at [0,64)).
+
 
 ## 7. Non-goals, stated once
 
