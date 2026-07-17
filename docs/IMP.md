@@ -2659,11 +2659,33 @@ on sha_blocks; the targets meet at one spec-side fold.**
   (`shb_w Z` → literal 0), so structural-pattern rewrites
   (mem_read_z) need a stated-form compute-both have as a bridge.
 - Gates: sibling 475/0, weld 992/0.
-- REMAINING for 4b: tie pad width to `shb_w k` (the block-count
-  arithmetic, div_unique at the artifact boundary), then the digest
-  readback + hex chain over the final fold (lane projections +
-  ish_digest_read/ish_hex_read + hex-over-final framing; output
-  overwrites the dead input region at [0,64)).
+- THE WIDTH TIE (landed): the pad tier's window and the fold tier's
+  chunk region are the same Nat — `shb_pad_w`: under wz's mod-64
+  premise and k = ediv (wn+72) 64, `wn_add wn (1 + wz + 8) = shb_w k`.
+  Machinery: the sibling's Nat/Int TRANSFER KIT — `ish_nat_inj`
+  (injectivity of the opaque embedding, from the surface lemmas
+  alone: nonneg pins the successor case, farkas derives (le 1 0) on
+  the clashing arms and `absurd` closes them — first use of the
+  absurd form in this arc), `ish_iw_add` (the additive hom),
+  `ish_i1p`, and `ish_ediv_mul` (ediv (64x) 64 = x, the fuel-tie
+  step). Weld side: `shb_w_i` (int image = 64k) and the euclidean
+  argument — ediv_mod_id names the mod-64 decomposition of 55−wn,
+  div_unique with witness (q = 1−ediv(55−wn,64), r = 63−wz) pins
+  ediv (wn+72) 64, and ish_nat_inj carries the resulting Int
+  equation back to the Nat widths.
+- GOTCHAS: two-sided equality goals need the two-list farkas cert
+  `(list (dir1…) (dir2…))` — keyed `(rows …)` builds only one row
+  vector (the F2 diagnoser prints the slot table; raw certs cover
+  ALL in-scope premises in order, zeros for unused). And the weld
+  file did NOT import kernel/facts until now (the euclidean axioms
+  resolved in the sibling only); the import adds facts' own claims
+  to the checked closure (992 → 996 base), no new axioms (already
+  transitive via the sibling).
+- Gates: sibling 479/0, weld 998/0.
+- REMAINING for 4b: the digest readback + hex chain over the final
+  fold (lane projections + ish_digest_read/ish_hex_read +
+  hex-over-final framing; output overwrites the dead input region
+  at [0,64)).
 
 
 ## 7. Non-goals, stated once
