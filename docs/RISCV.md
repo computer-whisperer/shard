@@ -212,7 +212,8 @@ whole file.
    and RvLi legality, never layout) + a freestanding qemu-user
    differential at BOTH widths (examples/riscv_diff_run.shard emits
    model-computed expectations; riscv_diff.c replays them under
-   qemu-riscv64/qemu-riscv32): 69 vectors, 0 disagreements. qemu
+   qemu-riscv64/qemu-riscv32): 91 vectors incl. multi-function call
+   images (G2b), 0 disagreements. qemu
    plays V8's role from the wasm arc; hardware (an MCU, or a part
    like Tenstorrent's) remains the eventual realest gate. Every
    emitted encoding is byte-exact vs llvm-mc (dev-side check, not a
@@ -281,11 +282,43 @@ whole file.
     long long. Host clangd lints riscv_diff.c's a0-a7 asm registers
     as errors under the x86 default target — false positives, the
     file only compiles under --target=riscv*.
-- **G2b — the call lowering (named, next):** RvCall → `jal ra, off`
-  with a multi-function image + per-index offset table (x86
-  enc_image's shape) and sp-based ra spill for non-leaf functions;
-  the harness trampoline already presents a clean ABI for it.
-  Nothing in G2 blocks it.
+- **G2b — the call lowering (LANDED 2026-07-17, Opus-authored per
+  the split):** rv_enc_image = the entry-first multi-function image
+  (per-index offset table, x86 enc_image's shape); RvCall k →
+  `jal ra, rel` — RISC-V J-immediates are self-relative, so the
+  offset arithmetic has NO instruction-length fixup (cleaner than
+  x86's +5). Poison reason 4 repurposed to "RvCall unresolvable"
+  (single-function enc keeps its fence — the enc_func/enc_image
+  split), reason 9 added: jal out of J-type reach (±1MiB). The
+  PRIVATE CONTROL STACK materializes as the fixed ra spill:
+  non-leaf functions (any RvCall in the body) get
+  `addi sp,sp,-16; s[dw] ra,8(sp)` / restore + ret, sp 16-aligned
+  (psABI, both widths); **sd/ld (rv64) vs sw/lw (rv32) = the first
+  width-dependent encoding beyond shamt/li** (rv_store_ra/
+  rv_load_ra). In-body RvRet in a non-leaf expands to the FULL
+  epilogue (12 bytes vs the leaf's bare 4-byte ret — a bare ret
+  there would return through clobbered ra); size arithmetic threads
+  a non-leaf flag. Scoreboard: rv64 48 / rv32 43 vectors, 0
+  disagreements; the G2 wire regenerated ADDITIVE-ONLY (0
+  deletions, 34 added lines — independently reproduced at review
+  against the committed G2 encoder), leaf functions byte-identical
+  in and out of images; teeth on the new machinery (corrupted jal
+  offset → faults; corrupted nest expectation → named FAIL, exit 1,
+  reproduced at review). New vector shapes: forward + BACKWARD jal
+  (`jal ra,-16` byte-exact vs llvm-mc), 3-function nest with
+  non-leaf mid, live value parked in s1 across a call, the smoke
+  sum-loop-with-call, stores-through-callee with memory readback,
+  early-return-through-epilogue. Harness needed ZERO changes
+  (entry-first = the blob start it already calls; encoded prologues
+  borrow the process sp qemu-user provides, verified live).
+  **STOP-RULE OUTCOME: no corners hit** — the only stack use in the
+  entire encoder is the single fixed ra slot; locals / callee-saved
+  spills / frame pointers / outgoing-arg slots (x86 §4.3 data-stack
+  territory, unbuilt there too) remain untouched, as ruled.
+  **G3 note recorded:** the model has no ra/sp, so piece theorems
+  state over the PURE body — the prologue/epilogue is a separable,
+  differentially-checked encoder concern (the same trust split as
+  G2); rvcall_bridge's citation story is untouched by this slice.
 - **G3 — loopkit + symbolic piece theorems:** the wasm→x86 transplant
   play (guard/collapse/IH-at-fuel−1 templates at rv_wrap's moduli);
   measures whether the third transplant is as mechanical as the

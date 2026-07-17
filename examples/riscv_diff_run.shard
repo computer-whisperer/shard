@@ -194,6 +194,85 @@
 (fn trapst_f () RvFunc
   (MkRvFunc 2 (list (RvStore8 (RvAReg A0) A1) (RvMv A0 A1))))
 
+;; --- multi-function CALL modules (docs/RISCV.md G2b: the image layout) --------
+;; Entry-first blob: the harness calls the blob START, so the ENTRY (caller)
+;; runs first; callees keep their model indices and the encoder computes each
+;; `jal ra, off` from the per-index table. A NON-LEAF function (caller/mid)
+;; carries the ra spill (prologue/epilogue), so its return survives the calls.
+;; Expectations are the MODEL's (rvcall_fn / rvcall_fn_mem at the entry index).
+
+;; leaf inc(a) = a + 1; entry callit(a) = inc(a) + 10 — a FORWARD call (leaf
+;; laid after the entry -> positive jal offset) then straight-line code.
+(fn inc_f () RvFunc (MkRvFunc 1 (list (RvBin RvAdd A0 A0 (RvSImm 1)))))
+
+(fn callit_f () RvFunc
+  (MkRvFunc 1 (list (RvCall 0) (RvBin RvAdd A0 A0 (RvSImm 10)))))
+
+;; leaf sq(a) = a * a (register-source mul); mid sq1(a) = sq(a) + 1 — sq1 is
+;; NON-LEAF (the ra spill at depth 2); entry chain(a) = sq1(a) * 2 (via add —
+;; no mul-immediate). The three-function nest: layout [chain][sq][sq1], so
+;; chain->sq1 is FORWARD and sq1->sq is a BACKWARD jal.
+(fn sq_f () RvFunc (MkRvFunc 1 (list (RvBin RvMul A0 A0 (RvSReg A0)))))
+
+(fn sq1_f () RvFunc
+  (MkRvFunc 1 (list (RvCall 0) (RvBin RvAdd A0 A0 (RvSImm 1)))))
+
+(fn chain_f () RvFunc
+  (MkRvFunc 1 (list (RvCall 1) (RvBin RvAdd A0 A0 (RvSReg A0)))))
+
+;; entry park(a) = sq(a) + a — a live value parked in s1 ACROSS the call. The
+;; leaf sq never writes s1, so the model passes it through and the CPU agrees
+;; (the encoded prologue/epilogue touch only sp/ra, never a model register).
+(fn park_f () RvFunc
+  (MkRvFunc 1 (list (RvMv S1 A0) (RvCall 0) (RvBin RvAdd A0 A0 (RvSReg S1)))))
+
+;; the smoke file's sum-loop-with-call: acc in a1, park n in a2, Call add(0)
+;; each iteration. sum(n) = n + (n-1) + ... + 1. The loop body contains RvCall,
+;; so sum is non-leaf: its ra, spilled once in the prologue, survives every
+;; in-loop `jal ra`. add_f (above) is the leaf callee.
+(fn sum_f () RvFunc
+  (MkRvFunc
+    1
+    (list
+      (RvLi A1 0)
+      (RvBlock
+        (list
+          (RvLoop
+            (list
+              (RvBrIf (RvBeq A0 X0) 1)
+              (RvMv A2 A0)
+              (RvCall 0)
+              (RvMv A1 A0)
+              (RvBin RvAdd A0 A2 (RvSImm -1))
+              (RvBr 0)))))
+      (RvMv A0 A1))))
+
+;; store callee st(p, v) = *p = v (byte); entry st2(p, v) stores v at p and
+;; p+1 THROUGH the callee (a memory effect across the call boundary).
+(fn st_f () RvFunc (MkRvFunc 2 (list (RvStore8 (RvAReg A0) A1))))
+
+(fn st2_f () RvFunc
+  (MkRvFunc 2 (list (RvCall 0) (RvBin RvAdd A0 A0 (RvSImm 1)) (RvCall 0))))
+
+;; leaf k7(a) = 7; entry early(a): if a == 0, return k7() EARLY through the
+;; epilogue expansion (the in-body RvRet inside a non-leaf); else fall through
+;; to a + 100. early is non-leaf, so BOTH the in-body RvRet and the trailing
+;; return restore ra before ret.
+(fn k7_f () RvFunc (MkRvFunc 1 (list (RvLi A0 7))))
+
+(fn early_f () RvFunc
+  (MkRvFunc
+    1
+    (list
+      (RvBlock (list (RvBrIf (RvBne A0 X0) 0) (RvCall 0) (RvRet)))
+      (RvBin RvAdd A0 A0 (RvSImm 100)))))
+
+;; image module builders: no-memory, and the windowed [DATA_BASE, +0x10000).
+(fn imod ((fs (List RvFunc)) (w RvXlen)) RvModule (MkRvModule fs w 0 0))
+
+(fn imodm ((fs (List RvFunc)) (w RvXlen)) RvModule
+  (MkRvModule fs w 1073741824 1073807360))
+
 ;; --- plan lines --------------------------------------------------------------
 
 (fn rvmod_line ((nm (List Int)) (wd (List Int)) (m RvModule)) (List Int)
@@ -239,6 +318,68 @@
    (fuel Int))
   (List Int)
   (let ((r (rvcall_fn_mem (rvfnat fuel) m 0 args (mem_empty))))
+    (cat
+      (list
+        "RVMEMCASE "
+        nm
+        " "
+        wd
+        " "
+        (dec1 (argc args))
+        (argslots4 args)
+        " READ "
+        (hx addr)
+        " "
+        (hx len)
+        " -> "
+        (memresv r)
+        " "
+        (memouthex r addr (rvfnat len))
+        "\n"))))
+
+;; --- image plan lines (docs/RISCV.md G2b) ------------------------------------
+;; A multi-function image at entry k: the bytes come from rv_enc_image (entry
+;; laid first) and the expectations from the MODEL at that same entry index
+;; (rvcall_fn / rvcall_fn_mem k). The wire grammar is byte-for-byte the same
+;; RVMOD/RVCASE/RVMEMCASE the single-function lines use — the harness always
+;; calls the blob start, so it needs no image awareness.
+
+(fn rvmod_linei ((nm (List Int)) (wd (List Int)) (m RvModule) (k Int))
+  (List Int)
+  (cat (list "RVMOD " nm " " wd " " (hexs (rv_enc_image m k)) "\n")))
+
+(fn rvcasek
+  ((nm (List Int))
+   (wd (List Int))
+   (m RvModule)
+   (k Int)
+   (args (List Int))
+   (fuel Int))
+  (List Int)
+  (cat
+    (list
+      "RVCASE "
+      nm
+      " "
+      wd
+      " "
+      (dec1 (argc args))
+      (argslots4 args)
+      " -> "
+      (showr (rvcall_fn (rvfnat fuel) m k args))
+      "\n")))
+
+(fn rvmemcasek
+  ((nm (List Int))
+   (wd (List Int))
+   (m RvModule)
+   (k Int)
+   (args (List Int))
+   (addr Int)
+   (len Int)
+   (fuel Int))
+  (List Int)
+  (let ((r (rvcall_fn_mem (rvfnat fuel) m k args (mem_empty))))
     (cat
       (list
         "RVMEMCASE "
@@ -468,6 +609,97 @@
         9223372036854775808
         18446744073709551615)
       (shblock "shl32" "32" (sllr_f) RV32 2147483648 4294967295)
-      (shblock "shr32" "32" (srlr_f) RV32 2147483648 4294967295))))
+      (shblock "shr32" "32" (srlr_f) RV32 2147483648 4294967295)
+      ;; ======== G2b: real jal calls (multi-function images, both widths) =====
+      ;; twofn — entry calls a leaf (FORWARD jal): callit(a) = inc(a) + 10.
+      (rvmod_linei "twofn" "64" (imod (list (inc_f) (callit_f)) RV64) 1)
+      (rvcasek "twofn" "64" (imod (list (inc_f) (callit_f)) RV64) 1 (list 5) 20)
+      (rvcasek "twofn" "64" (imod (list (inc_f) (callit_f)) RV64) 1 (list 0) 20)
+      (rvmod_linei "twofn" "32" (imod (list (inc_f) (callit_f)) RV32) 1)
+      (rvcasek "twofn" "32" (imod (list (inc_f) (callit_f)) RV32) 1 (list 5) 20)
+      (rvcasek
+        "twofn"
+        "32"
+        (imod (list (inc_f) (callit_f)) RV32)
+        1
+        (list 4294967295)
+        20)
+      ;; nest — chain -> sq1 (FORWARD) -> sq (BACKWARD); sq1 non-leaf (spill at
+      ;; depth 2). chain(a) = (a*a + 1) * 2.
+      (rvmod_linei "nest" "64" (imod (list (sq_f) (sq1_f) (chain_f)) RV64) 2)
+      (rvcasek
+        "nest"
+        "64"
+        (imod (list (sq_f) (sq1_f) (chain_f)) RV64)
+        2
+        (list 5)
+        30)
+      (rvcasek
+        "nest"
+        "64"
+        (imod (list (sq_f) (sq1_f) (chain_f)) RV64)
+        2
+        (list 0)
+        30)
+      (rvmod_linei "nest" "32" (imod (list (sq_f) (sq1_f) (chain_f)) RV32) 2)
+      (rvcasek
+        "nest"
+        "32"
+        (imod (list (sq_f) (sq1_f) (chain_f)) RV32)
+        2
+        (list 5)
+        30)
+      ;; RV32 wrap witness: sq1(0x10000)=2^32+1 -> wraps to 1 at RV32; *2 -> 2.
+      (rvcasek
+        "nest"
+        "32"
+        (imod (list (sq_f) (sq1_f) (chain_f)) RV32)
+        2
+        (list 65536)
+        30)
+      ;; park — a live value parked in s1 across the call: park(a) = a*a + a.
+      (rvmod_linei "park" "64" (imod (list (sq_f) (park_f)) RV64) 1)
+      (rvcasek "park" "64" (imod (list (sq_f) (park_f)) RV64) 1 (list 5) 20)
+      (rvcasek "park" "64" (imod (list (sq_f) (park_f)) RV64) 1 (list 3) 20)
+      (rvmod_linei "park" "32" (imod (list (sq_f) (park_f)) RV32) 1)
+      (rvcasek "park" "32" (imod (list (sq_f) (park_f)) RV32) 1 (list 5) 20)
+      ;; sumcall — the smoke shape: a loop whose body Calls add. sum(4) = 10,
+      ;; plus the zero-iteration edge sum(0) = 0. Both widths.
+      (rvmod_linei "sumcall" "64" (imod (list (add_f) (sum_f)) RV64) 1)
+      (rvcasek "sumcall" "64" (imod (list (add_f) (sum_f)) RV64) 1 (list 4) 300)
+      (rvcasek "sumcall" "64" (imod (list (add_f) (sum_f)) RV64) 1 (list 0) 40)
+      (rvcasek "sumcall" "64" (imod (list (add_f) (sum_f)) RV64) 1 (list 1) 80)
+      (rvmod_linei "sumcall" "32" (imod (list (add_f) (sum_f)) RV32) 1)
+      (rvcasek "sumcall" "32" (imod (list (add_f) (sum_f)) RV32) 1 (list 4) 300)
+      (rvcasek "sumcall" "32" (imod (list (add_f) (sum_f)) RV32) 1 (list 0) 40)
+      ;; st2 — stores v at p and p+1 THROUGH the callee; readback both bytes.
+      (rvmod_linei "st2" "64" (imodm (list (st_f) (st2_f)) RV64) 1)
+      (rvmemcasek
+        "st2"
+        "64"
+        (imodm (list (st_f) (st2_f)) RV64)
+        1
+        (list 1073741824 65)
+        1073741824
+        2
+        30)
+      (rvmod_linei "st2" "32" (imodm (list (st_f) (st2_f)) RV32) 1)
+      (rvmemcasek
+        "st2"
+        "32"
+        (imodm (list (st_f) (st2_f)) RV32)
+        1
+        (list 1073741840 187)
+        1073741840
+        2
+        30)
+      ;; early — an in-body RvRet inside a non-leaf: early(0) = 7 (early return
+      ;; through the epilogue), early(5) = 105 (fall through).
+      (rvmod_linei "early" "64" (imod (list (k7_f) (early_f)) RV64) 1)
+      (rvcasek "early" "64" (imod (list (k7_f) (early_f)) RV64) 1 (list 0) 30)
+      (rvcasek "early" "64" (imod (list (k7_f) (early_f)) RV64) 1 (list 5) 30)
+      (rvmod_linei "early" "32" (imod (list (k7_f) (early_f)) RV32) 1)
+      (rvcasek "early" "32" (imod (list (k7_f) (early_f)) RV32) 1 (list 0) 30)
+      (rvcasek "early" "32" (imod (list (k7_f) (early_f)) RV32) 1 (list 5) 30))))
 
 (fn main ((w World)) World (exit 0 (write (emit) w)))
