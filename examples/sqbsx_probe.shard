@@ -1,0 +1,1665 @@
+;;; examples/sqbsx_probe.shard — the SEALED-BRANCH-CHUNK x86 blueprint
+;;; (rung IF-3a-a): adjacent top-level branches on x86, resolved by the
+;;; translator's seal-after-branch rule (to_x86 ix_brla/ix_cjoin). The
+;;; program it_bsx = store / br1 (store in the then arm -> real seal) /
+;;; br2 / store+set tail. Chunks: [store]f [br1]+SEAL [br2] [store,set]f
+;;; -- legs: leg1 = [store, br1] parking at br1's own seal, leg2 =
+;;; [br2, store, set] the IF-1c terminal branch leg.
+;;;
+;;; THE NEW MECHANISM (leg1): every chunk of a sealed-branch leg gets an
+;;; open-tail sub-lemma and the leg lemma is a PURE COMPOSITION (the
+;;; V2-8 grammar, two layers of ist_seam1):
+;;;   - sqs_x_bsx_c0: the UNSEALED flat chunk -- its exit scratch is
+;;;     SPELLED (RAX continues at (band x1 255); zb/zc pass through).
+;;;     Flat chunks can spell their exit tree; branches could not (the
+;;;     IF-1c dissolution finding) -- which is exactly what the seal
+;;;     repairs:
+;;;   - sqbr_x_bsx_c1: the SEALED BRANCH chunk -- one case-on of the
+;;;     shared raw scrutinee (lt x1 9) inside the sub-lemma, each
+;;;     polarity arm walks its own guards and rides through the seal,
+;;;     and the seal is THE JOIN: RAX continues at literal 0 on both
+;;;     arms, so the continuation register file is arm-independent and
+;;;     the conclusion is ONE xm_scont form.
+;;;   - the leg lemma (imp_x_bsx) composes: seam1 / c0-cite / shared-run
+;;;     case-on / spine exposure, then seam1 / c1-cite / shared-run
+;;;     case-on / spine exposure, then the next-boundary cite
+;;;     (cmp_x_bsx_b1) at the parked leaf.
+;;; Fuel: blocks are depth budgets -- a branch chunk consumes 1 at the
+;;; top level (+1 for its seal) regardless of arm, so the machine
+;;; towers stay arm-independent: T=72 = 3 (c0) + 2 (c1+seal) + 67 (b1).
+;;;
+;;; cmp_x_bsx_b1 (leg2) is the IF-1c inline branch leg verbatim over
+;;; folded rest fns (the imxl b1 opener idiom).
+
+(import "../kernel/stdlib.shard")
+(import "../models/imp/imp.shard")
+(import "../models/x86/x86.shard")
+(import "../models/imp/to_x86.shard")
+(import "../std/nat.shard")
+(import "../std/mem")
+(import "../models/wasm/loopkit.shard")
+(import "../models/x86/loopkit.shard")
+
+(use (:: models imp imp *))
+(use (:: models x86 x86 *))
+(use (:: models imp to_x86 *))
+(use (:: std nat *))
+(use (:: std mem *))
+(use (:: models wasm loopkit *))
+(use (:: models x86 loopkit *))
+
+(fn it_bsx_fn () IFn
+  (MkIFn
+    (list U32 U32 U32)
+    Nil
+    (list
+      (IStore (ILoc 0) (ITrunc U32 U8 (ILoc 1)))
+      (IIf
+        (IBin U32 ILt (ILoc 1) (IConst 9))
+        (list
+          (ISet 1 (IBin U32 IAdd (ILoc 1) (IConst 6)))
+          (IStore (ILoc 0) (ITrunc U32 U8 (ILoc 1))))
+        (list (ISet 1 (IConst 11))))
+      (IIf
+        (IBin U32 IEq (ILoc 2) (IConst 5))
+        (list (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 2))))
+        (list (ISet 2 (IConst 7))))
+      (IStore (ILoc 0) (ITrunc U32 U8 (ILoc 2)))
+      (ISet 1 (IBin U32 IAdd (ILoc 1) (IConst 3))))
+    (ILoc 1)
+    U32))
+
+;; the tie: the translation carries br1's own seal (XMovRI RAX 0)
+;; between the branch blocks -- the IF-3a ix_brla rule
+(claim tie_x_bsx
+  (goal () ()
+    (=
+      (ix_sstmts (ibody_of (it_bsx_fn)))
+      (Some
+        (list
+          (XMovRR RAX RSI)
+          (XBin XAnd RAX (SImm 255))
+          (XStore8 (AReg RDI) (SReg RAX))
+          (XBlock
+            (list
+              (XBlock
+                (list (XBrIf (CLtU RSI (SImm 9)) 0) (XMovRI RSI 11) (XBr 1)))
+              (XBin32 XAdd RSI (SImm 6))
+              (XMovRR RAX RSI)
+              (XBin XAnd RAX (SImm 255))
+              (XStore8 (AReg RDI) (SReg RAX))))
+          (XMovRI RAX 0)
+          (XBlock
+            (list
+              (XBlock
+                (list (XBrIf (CEq RDX (SImm 5)) 0) (XMovRI RDX 7) (XBr 1)))
+              (XBin32 XAdd RDX (SImm 2))))
+          (XMovRR RAX RDX)
+          (XBin XAnd RAX (SImm 255))
+          (XStore8 (AReg RDI) (SReg RAX))
+          (XBin32 XAdd RSI (SImm 3))
+          (XMovRI RAX 0)))))
+  (steps ((compute both)) refl))
+
+;; --- the leg grammar's fns: chunk fns spelled, rest fns fold forward ---
+
+(fn gb_bsx_c0_i () (List IStmt)
+  (list (IStore (ILoc 0) (ITrunc U32 U8 (ILoc 1)))))
+
+(fn gb_bsx_c1_i () (List IStmt)
+  (list
+    (IIf
+      (IBin U32 ILt (ILoc 1) (IConst 9))
+      (list
+        (ISet 1 (IBin U32 IAdd (ILoc 1) (IConst 6)))
+        (IStore (ILoc 0) (ITrunc U32 U8 (ILoc 1))))
+      (list (ISet 1 (IConst 11))))))
+
+(fn gb_bsx_r1_i () (List IStmt)
+  (list
+    (IIf
+      (IBin U32 IEq (ILoc 2) (IConst 5))
+      (list (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 2))))
+      (list (ISet 2 (IConst 7))))
+    (IStore (ILoc 0) (ITrunc U32 U8 (ILoc 2)))
+    (ISet 1 (IBin U32 IAdd (ILoc 1) (IConst 3)))))
+
+(fn gb_bsx_r1a_i () (List IStmt)
+  (Cons
+    (IIf
+      (IBin U32 ILt (ILoc 1) (IConst 9))
+      (list
+        (ISet 1 (IBin U32 IAdd (ILoc 1) (IConst 6)))
+        (IStore (ILoc 0) (ITrunc U32 U8 (ILoc 1))))
+      (list (ISet 1 (IConst 11))))
+    (gb_bsx_r1_i)))
+
+(fn gb_bsx_i () (List IStmt)
+  (Cons (IStore (ILoc 0) (ITrunc U32 U8 (ILoc 1))) (gb_bsx_r1a_i)))
+
+(fn gb_bsx_r1_x () (List XInstr)
+  (list
+    (XBlock
+      (list
+        (XBlock (list (XBrIf (CEq RDX (SImm 5)) 0) (XMovRI RDX 7) (XBr 1)))
+        (XBin32 XAdd RDX (SImm 2))))
+    (XMovRR RAX RDX)
+    (XBin XAnd RAX (SImm 255))
+    (XStore8 (AReg RDI) (SReg RAX))
+    (XBin32 XAdd RSI (SImm 3))
+    (XMovRI RAX 0)))
+
+(fn gb_bsx_r1a_x () (List XInstr)
+  (Cons
+    (XBlock
+      (list
+        (XBlock (list (XBrIf (CLtU RSI (SImm 9)) 0) (XMovRI RSI 11) (XBr 1)))
+        (XBin32 XAdd RSI (SImm 6))
+        (XMovRR RAX RSI)
+        (XBin XAnd RAX (SImm 255))
+        (XStore8 (AReg RDI) (SReg RAX))))
+    (Cons (XMovRI RAX 0) (gb_bsx_r1_x))))
+
+(fn gb_bsx_x () (List XInstr)
+  (Cons
+    (XMovRR RAX RSI)
+    (Cons
+      (XBin XAnd RAX (SImm 255))
+      (Cons (XStore8 (AReg RDI) (SReg RAX)) (gb_bsx_r1a_x)))))
+
+(claim sqm_wid_bsx
+  (goal ((x Int)) ((= (le 0 x) True) (= (lt x 4294967296) True))
+    (= (mod x 4294967296) x))
+  (div-facts
+    x
+    4294967296
+    q
+    (have qlo (= (le -1 q) True)
+      (by arith (list 4294967296 1 0 -1 0 1 0))
+      (have qhi (= (le q 1) True)
+        (by arith (list 4294967296 0 1 1 1 0 0))
+        (fin-split
+          q
+          (premise qlo)
+          (premise qhi)
+          ((case -1
+             (by
+               arith
+               (list (list 0 1 0 -1 0 1 0 0 0) (list 0 1 0 -1 0 1 0 0 0))))
+           (case 0
+             (by
+               arith
+               (list (list 1 0 0 1 0 0 0 0 0) (list 1 0 0 -1 0 0 0 0 0))))
+           (case 1
+             (by arith (list (list 0 0 1 1 1 0 0 0 0) (list 0 0 1 1 1 0 0 0 0))))))))))
+
+(claim sqm_wid64_bsx
+  (goal ((x Int)) ((= (le 0 x) True) (= (lt x 18446744073709551616) True))
+    (= (mod x 18446744073709551616) x))
+  (div-facts
+    x
+    18446744073709551616
+    q
+    (have qlo (= (le -1 q) True)
+      (by arith (list 18446744073709551616 1 0 -1 0 1 0))
+      (have qhi (= (le q 1) True)
+        (by arith (list 18446744073709551616 0 1 1 1 0 0))
+        (fin-split
+          q
+          (premise qlo)
+          (premise qhi)
+          ((case -1
+             (by
+               arith
+               (list (list 0 1 0 -1 0 1 0 0 0) (list 0 1 0 -1 0 1 0 0 0))))
+           (case 0
+             (by
+               arith
+               (list (list 1 0 0 1 0 0 0 0 0) (list 1 0 0 -1 0 0 0 0 0))))
+           (case 1
+             (by arith (list (list 0 0 1 1 1 0 0 0 0) (list 0 0 1 1 1 0 0 0 0))))))))))
+
+;; the UNSEALED flat chunk sub-lemma: exit scratch SPELLED (RAX carries
+;; the store's masked value; R10/R11 pass through)
+(claim sqs_x_bsx_c0
+  (goal
+    ((x0 Int)
+     (x1 Int)
+     (x2 Int)
+     (za Int)
+     (zb Int)
+     (zc Int)
+     (rw (List XInstr))
+     (m Mem)
+     (f Nat)
+     (g Nat)
+     (restfs (List XFunc)))
+    ()
+    (=
+      (xeval_seq
+        (S^ 3 (S f))
+        (MkXModule restfs 0 65536)
+        (Cons
+          (XMovRR RAX RSI)
+          (Cons
+            (XBin XAnd RAX (SImm 255))
+            (Cons (XStore8 (AReg RDI) (SReg RAX)) rw)))
+        (MkRegs za 0 x2 0 0 x1 x0 0 0 zb zc 0 0 0 0)
+        m)
+      (xm_scont
+        (band x1 255)
+        zb
+        zc
+        (S f)
+        (MkXModule restfs 0 65536)
+        rw
+        (istmts (S^ 1 (S g)) 65536 (inline gb_bsx_c0_i) (list x0 x1 x2) m))))
+  (chain
+    (steps ((compute both (stop xm_scont))))
+    (case-on (le 0 x0) Bool
+      ((case True
+         (chain
+           (steps
+             ((rewrite (hyp 0) lr both true ()) (compute both (stop xm_scont))))
+           (case-on (lt x0 65536) Bool
+             ((case True
+                (chain
+                  (have hlt2 (= (lt x0 65536) True)
+                    (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                  (have hle2 (= (le (+ x0 1) 65536) True)
+                    (steps () (by arith (rows (goal 1) (hlt2 1)))))
+                  (steps
+                    ((rewrite (hyp 0) lr rhs true ())
+                     (rewrite (premise hle2) lr lhs true ())
+                     (compute both)))
+                  refl))
+              (case False
+                (chain
+                  (have hlt2 (= (lt x0 65536) False)
+                    (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                  (have hle2 (= (le (+ x0 1) 65536) False)
+                    (steps () (by arith (rows (goal 1) (hlt2 1)))))
+                  (steps
+                    ((rewrite (hyp 0) lr rhs true ())
+                     (rewrite (premise hle2) lr lhs true ())
+                     (compute both)))
+                  refl))))))
+       (case False
+         (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) refl))))))
+
+;; the SEALED BRANCH chunk sub-lemma (IF-3a's new species): one case-on
+;; of the shared raw scrutinee; each arm walks through the seal; the
+;; seal is the join (RAX continues at 0 on both arms)
+(claim sqbr_x_bsx_c1
+  (goal
+    ((x0 Int)
+     (x1 Int)
+     (x2 Int)
+     (za Int)
+     (zb Int)
+     (zc Int)
+     (rw (List XInstr))
+     (m Mem)
+     (f Nat)
+     (g Nat)
+     (restfs (List XFunc)))
+    ()
+    (=
+      (xeval_seq
+        (S^ 9 (S f))
+        (MkXModule restfs 0 65536)
+        (Cons
+          (XBlock
+            (list
+              (XBlock
+                (list (XBrIf (CLtU RSI (SImm 9)) 0) (XMovRI RSI 11) (XBr 1)))
+              (XBin32 XAdd RSI (SImm 6))
+              (XMovRR RAX RSI)
+              (XBin XAnd RAX (SImm 255))
+              (XStore8 (AReg RDI) (SReg RAX))))
+          (Cons (XMovRI RAX 0) rw))
+        (MkRegs za 0 x2 0 0 x1 x0 0 0 zb zc 0 0 0 0)
+        m)
+      (xm_scont
+        0
+        zb
+        zc
+        (S^ 7 (S f))
+        (MkXModule restfs 0 65536)
+        rw
+        (istmts (S^ 4 (S g)) 65536 (inline gb_bsx_c1_i) (list x0 x1 x2) m))))
+  (chain
+    (steps ((compute both (stop xm_scont))))
+    (case-on (lt x1 9) Bool
+      ((case True
+         (chain
+           (steps
+             ((rewrite (hyp 0) lr both true ()) (compute both (stop xm_scont))))
+           (case-on (le 0 x0) Bool
+             ((case True
+                (chain
+                  (steps
+                    ((rewrite (hyp 0) lr both true ())
+                     (compute both (stop xm_scont))))
+                  (case-on (lt x0 65536) Bool
+                    ((case True
+                       (chain
+                         (have hlt2 (= (lt x0 65536) True)
+                           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                         (have hle2 (= (le (+ x0 1) 65536) True)
+                           (steps () (by arith (rows (goal 1) (hlt2 1)))))
+                         (steps
+                           ((rewrite (hyp 0) lr rhs true ())
+                            (rewrite (premise hle2) lr lhs true ())
+                            (compute both)))
+                         refl))
+                     (case False
+                       (chain
+                         (have hlt2 (= (lt x0 65536) False)
+                           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                         (have hle2 (= (le (+ x0 1) 65536) False)
+                           (steps () (by arith (rows (goal 1) (hlt2 1)))))
+                         (steps
+                           ((rewrite (hyp 0) lr rhs true ())
+                            (rewrite (premise hle2) lr lhs true ())
+                            (compute both)))
+                         refl))))))
+              (case False
+                (chain
+                  (steps ((rewrite (hyp 0) lr both true ()) (compute both)))
+                  refl))))))
+       (case False
+         (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) refl))))))
+
+;; leg2: the IF-1c terminal branch leg over the folded rest fns
+(claim cmp_x_bsx_b1
+  (goal
+    ((x0 Int) (x1 Int) (x2 Int) (m Mem) (c Nat) (c2 Nat) (restfs (List XFunc)))
+    ()
+    (=
+      (xeval_seq
+        (S^ 67 c)
+        (MkXModule restfs 0 65536)
+        (gb_bsx_r1_x)
+        (MkRegs 0 0 x2 0 0 x1 x0 0 0 0 0 0 0 0 0)
+        m)
+      (ix_sout (istmts (S^ 65 c2) 65536 (gb_bsx_r1_i) (list x0 x1 x2) m))))
+  (chain
+    (steps
+      ((unfold gb_bsx_r1_x lhs)
+       (reduce lhs)
+       (unfold gb_bsx_r1_i rhs)
+       (reduce rhs)))
+    (steps ((compute both (stop iwhile xeval_loop lg_fuel int_of_nat))))
+    (case-on (int_eq x2 5) Bool
+      ((case True
+         (chain
+           (steps
+             ((rewrite (hyp 0) lr both true ())
+              (compute both (stop iwhile xeval_loop lg_fuel int_of_nat))))
+           (case-on (le 0 x0) Bool
+             ((case True
+                (chain
+                  (steps
+                    ((rewrite (hyp 0) lr both true ())
+                     (compute both (stop iwhile xeval_loop lg_fuel int_of_nat))))
+                  (case-on (lt x0 65536) Bool
+                    ((case True
+                       (chain
+                         (have hlt2 (= (lt x0 65536) True)
+                           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                         (have hle2 (= (le (+ x0 1) 65536) True)
+                           (steps () (by arith (rows (goal 1) (hlt2 1)))))
+                         (steps
+                           ((rewrite (hyp 0) lr rhs true ())
+                            (rewrite (premise hle2) lr lhs true ())
+                            (compute
+                              both
+                              (stop iwhile xeval_loop lg_fuel int_of_nat))))
+                         (steps ((compute both (stop lg_fuel int_of_nat))))
+                         refl))
+                     (case False
+                       (chain
+                         (have hlt2 (= (lt x0 65536) False)
+                           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                         (have hle2 (= (le (+ x0 1) 65536) False)
+                           (steps () (by arith (rows (goal 1) (hlt2 1)))))
+                         (steps
+                           ((rewrite (hyp 0) lr rhs true ())
+                            (rewrite (premise hle2) lr lhs true ())
+                            (compute both (stop lg_fuel int_of_nat))))
+                         refl))))))
+              (case False
+                (chain
+                  (steps
+                    ((rewrite (hyp 0) lr both true ())
+                     (compute both (stop lg_fuel int_of_nat))))
+                  refl))))))
+       (case False
+         (chain
+           (steps
+             ((rewrite (hyp 0) lr both true ())
+              (compute both (stop iwhile xeval_loop lg_fuel int_of_nat))))
+           (case-on (le 0 x0) Bool
+             ((case True
+                (chain
+                  (steps
+                    ((rewrite (hyp 0) lr both true ())
+                     (compute both (stop iwhile xeval_loop lg_fuel int_of_nat))))
+                  (case-on (lt x0 65536) Bool
+                    ((case True
+                       (chain
+                         (have hlt2 (= (lt x0 65536) True)
+                           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                         (have hle2 (= (le (+ x0 1) 65536) True)
+                           (steps () (by arith (rows (goal 1) (hlt2 1)))))
+                         (steps
+                           ((rewrite (hyp 0) lr rhs true ())
+                            (rewrite (premise hle2) lr lhs true ())
+                            (compute
+                              both
+                              (stop iwhile xeval_loop lg_fuel int_of_nat))))
+                         (steps ((compute both (stop lg_fuel int_of_nat))))
+                         refl))
+                     (case False
+                       (chain
+                         (have hlt2 (= (lt x0 65536) False)
+                           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                         (have hle2 (= (le (+ x0 1) 65536) False)
+                           (steps () (by arith (rows (goal 1) (hlt2 1)))))
+                         (steps
+                           ((rewrite (hyp 0) lr rhs true ())
+                            (rewrite (premise hle2) lr lhs true ())
+                            (compute both (stop lg_fuel int_of_nat))))
+                         refl))))))
+              (case False
+                (chain
+                  (steps
+                    ((rewrite (hyp 0) lr both true ())
+                     (compute both (stop lg_fuel int_of_nat))))
+                  refl))))))))))
+
+;; leg1 + the chain: pure composition -- seam1 / c0-cite / run case-on,
+;; then seam1 / c1-cite / run case-on, then the b1 cite at the park
+(claim imp_x_bsx
+  (goal
+    ((x0 Int) (x1 Int) (x2 Int) (m Mem) (c Nat) (c2 Nat) (restfs (List XFunc)))
+    ()
+    (=
+      (xeval_seq
+        (S^ 72 c)
+        (MkXModule restfs 0 65536)
+        (inline gb_bsx_x)
+        (MkRegs 0 0 x2 0 0 x1 x0 0 0 0 0 0 0 0 0)
+        m)
+      (ix_sout (istmts (S^ 67 c2) 65536 (inline gb_bsx_i) (list x0 x1 x2) m))))
+  (chain
+    (rewrite-with (lemma ist_seam1) lr rhs () ())
+    (rewrite-with (lemma sqs_x_bsx_c0) lr lhs ((inst g (S^ 65 c2))) ())
+    (case-on
+      (istmts
+        (S^ 67 c2)
+        65536
+        (Cons (IStore (ILoc 0) (ITrunc U32 U8 (ILoc 1))) Nil)
+        (list x0 x1 x2)
+        m)
+      Option
+      ((case None
+         (chain
+           (steps
+             ((rewrite (hyp 0) lr both true ())
+              (compute
+                both
+                (stop lg_fuel int_of_nat gb_bsx_r1a_x gb_bsx_r1a_i gb_bsx_r1_x
+                  gb_bsx_r1_i))))
+           refl))
+       (case Some
+         (oc0)
+         (chain
+           (steps ((rewrite (hyp 0) lr both true ())))
+           (case-on oc0 IOut
+             ((case INorm
+                (ec0 mc0)
+                (chain
+                  (steps
+                    ((rewrite (hyp 0) lr both true ())
+                     (compute
+                       both
+                       (stop iwhile xeval_loop lg_fuel int_of_nat istmts
+                         xeval_seq gb_bsx_r1a_x gb_bsx_r1a_i gb_bsx_r1_x
+                         gb_bsx_r1_i))))
+                  (case-on ec0 List
+                    ((case Nil
+                       (chain
+                         (have hbad
+                           (=
+                             (iolen
+                               (ilen (list x0 x1 x2))
+                               (Some (INorm ec0 mc0)))
+                             3)
+                           (chain
+                             (steps
+                               ((rewrite (hyp 1) rl lhs true ())
+                                (rewrite (hyp 2) rl lhs true ())))
+                             (rewrite-with (lemma il_slen) lr lhs () ())
+                             (steps ((compute lhs)))
+                             refl))
+                         (have hlen
+                           (=
+                             (iolen
+                               (ilen (list x0 x1 x2))
+                               (Some (INorm ec0 mc0)))
+                             (ilen ec0))
+                           (steps ((compute both)) refl))
+                         (have hg (= (ilen ec0) 3)
+                           (steps
+                             ((rewrite (premise hlen) rl lhs true ())
+                              (rewrite (premise hbad) lr lhs true ()))
+                             refl))
+                         (have hs (= (ilen ec0) 0)
+                           (steps
+                             ((rewrite (hyp 0) lr lhs true ()) (compute lhs))
+                             refl))
+                         (have hff (= (le 0 0) False)
+                           (steps () (by arith (rows (goal 1) (hg 1) (hs -1)))))
+                         (absurd (premise hff))))
+                     (case Cons
+                       (ec0_0 rc0_0)
+                       (chain
+                         (steps
+                           ((rewrite (hyp 0) lr both true ())
+                            (compute
+                              both
+                              (stop iwhile xeval_loop lg_fuel int_of_nat istmts
+                                xeval_seq gb_bsx_r1a_x gb_bsx_r1a_i gb_bsx_r1_x
+                                gb_bsx_r1_i))))
+                         (case-on rc0_0 List
+                           ((case Nil
+                              (chain
+                                (have hbad
+                                  (=
+                                    (iolen
+                                      (ilen (list x0 x1 x2))
+                                      (Some (INorm ec0 mc0)))
+                                    3)
+                                  (chain
+                                    (steps
+                                      ((rewrite (hyp 2) rl lhs true ())
+                                       (rewrite (hyp 3) rl lhs true ())))
+                                    (rewrite-with (lemma il_slen) lr lhs () ())
+                                    (steps ((compute lhs)))
+                                    refl))
+                                (have hlen
+                                  (=
+                                    (iolen
+                                      (ilen (list x0 x1 x2))
+                                      (Some (INorm ec0 mc0)))
+                                    (ilen ec0))
+                                  (steps ((compute both)) refl))
+                                (have hg (= (ilen ec0) 3)
+                                  (steps
+                                    ((rewrite (premise hlen) rl lhs true ())
+                                     (rewrite (premise hbad) lr lhs true ()))
+                                    refl))
+                                (have hs (= (ilen ec0) 1)
+                                  (steps
+                                    ((rewrite (hyp 1) lr lhs true ())
+                                     (rewrite (hyp 0) lr lhs true ())
+                                     (compute lhs))
+                                    refl))
+                                (have hff (= (le 0 0) False)
+                                  (steps
+                                    ()
+                                    (by arith (rows (goal 1) (hg 1) (hs -1)))))
+                                (absurd (premise hff))))
+                            (case Cons
+                              (ec0_1 rc0_1)
+                              (chain
+                                (steps
+                                  ((rewrite (hyp 0) lr both true ())
+                                   (compute
+                                     both
+                                     (stop iwhile xeval_loop lg_fuel int_of_nat
+                                       istmts xeval_seq gb_bsx_r1a_x
+                                       gb_bsx_r1a_i gb_bsx_r1_x gb_bsx_r1_i))))
+                                (case-on rc0_1 List
+                                  ((case Nil
+                                     (chain
+                                       (have hbad
+                                         (=
+                                           (iolen
+                                             (ilen (list x0 x1 x2))
+                                             (Some (INorm ec0 mc0)))
+                                           3)
+                                         (chain
+                                           (steps
+                                             ((rewrite (hyp 3) rl lhs true ())
+                                              (rewrite (hyp 4) rl lhs true ())))
+                                           (rewrite-with
+                                             (lemma il_slen)
+                                             lr
+                                             lhs
+                                             ()
+                                             ())
+                                           (steps ((compute lhs)))
+                                           refl))
+                                       (have hlen
+                                         (=
+                                           (iolen
+                                             (ilen (list x0 x1 x2))
+                                             (Some (INorm ec0 mc0)))
+                                           (ilen ec0))
+                                         (steps ((compute both)) refl))
+                                       (have hg (= (ilen ec0) 3)
+                                         (steps
+                                           ((rewrite
+                                              (premise hlen)
+                                              rl
+                                              lhs
+                                              true
+                                              ())
+                                            (rewrite
+                                              (premise hbad)
+                                              lr
+                                              lhs
+                                              true
+                                              ()))
+                                           refl))
+                                       (have hs (= (ilen ec0) 2)
+                                         (steps
+                                           ((rewrite (hyp 2) lr lhs true ())
+                                            (rewrite (hyp 1) lr lhs true ())
+                                            (rewrite (hyp 0) lr lhs true ())
+                                            (compute lhs))
+                                           refl))
+                                       (have hff (= (le 0 0) False)
+                                         (steps
+                                           ()
+                                           (by
+                                             arith
+                                             (rows (goal 1) (hg 1) (hs -1)))))
+                                       (absurd (premise hff))))
+                                   (case Cons
+                                     (ec0_2 rc0_2)
+                                     (chain
+                                       (steps
+                                         ((rewrite (hyp 0) lr both true ())
+                                          (compute
+                                            both
+                                            (stop iwhile xeval_loop lg_fuel
+                                              int_of_nat istmts xeval_seq
+                                              gb_bsx_r1a_x gb_bsx_r1a_i
+                                              gb_bsx_r1_x gb_bsx_r1_i))))
+                                       (case-on rc0_2 List
+                                         ((case Nil
+                                            (chain
+                                              (steps
+                                                ((rewrite
+                                                   (hyp 0)
+                                                   lr
+                                                   both
+                                                   true
+                                                   ())
+                                                 (compute
+                                                   both
+                                                   (stop iwhile xeval_loop
+                                                     lg_fuel int_of_nat istmts
+                                                     xeval_seq gb_bsx_r1a_x
+                                                     gb_bsx_r1a_i gb_bsx_r1_x
+                                                     gb_bsx_r1_i))
+                                                 (unfold gb_bsx_r1a_x lhs)
+                                                 (reduce lhs)
+                                                 (unfold gb_bsx_r1a_i rhs)
+                                                 (reduce rhs)))
+                                              (rewrite-with
+                                                (lemma ist_seam1)
+                                                lr
+                                                rhs
+                                                ()
+                                                ())
+                                              (rewrite-with
+                                                (lemma sqbr_x_bsx_c1)
+                                                lr
+                                                lhs
+                                                ((inst g (S^ 61 c2)))
+                                                ())
+                                              (case-on
+                                                (istmts
+                                                  (S^ 66 c2)
+                                                  65536
+                                                  (Cons
+                                                    (IIf
+                                                      (IBin
+                                                        U32
+                                                        ILt
+                                                        (ILoc 1)
+                                                        (IConst 9))
+                                                      (Cons
+                                                        (ISet
+                                                          1
+                                                          (IBin
+                                                            U32
+                                                            IAdd
+                                                            (ILoc 1)
+                                                            (IConst 6)))
+                                                        (Cons
+                                                          (IStore
+                                                            (ILoc 0)
+                                                            (ITrunc
+                                                              U32
+                                                              U8
+                                                              (ILoc 1)))
+                                                          Nil))
+                                                      (Cons
+                                                        (ISet 1 (IConst 11))
+                                                        Nil))
+                                                    Nil)
+                                                  (Cons
+                                                    ec0_0
+                                                    (Cons
+                                                      ec0_1
+                                                      (Cons ec0_2 Nil)))
+                                                  mc0)
+                                                Option
+                                                ((case None
+                                                   (chain
+                                                     (steps
+                                                       ((rewrite
+                                                          (hyp 0)
+                                                          lr
+                                                          both
+                                                          true
+                                                          ())
+                                                        (compute
+                                                          both
+                                                          (stop lg_fuel
+                                                            int_of_nat
+                                                            gb_bsx_r1_x
+                                                            gb_bsx_r1_i))))
+                                                     refl))
+                                                 (case Some
+                                                   (oc1)
+                                                   (chain
+                                                     (steps
+                                                       ((rewrite
+                                                          (hyp 0)
+                                                          lr
+                                                          both
+                                                          true
+                                                          ())))
+                                                     (case-on oc1 IOut
+                                                       ((case INorm
+                                                          (ec1 mc1)
+                                                          (chain
+                                                            (steps
+                                                              ((rewrite
+                                                                 (hyp 0)
+                                                                 lr
+                                                                 both
+                                                                 true
+                                                                 ())
+                                                               (compute
+                                                                 both
+                                                                 (stop iwhile
+                                                                   xeval_loop
+                                                                   lg_fuel
+                                                                   int_of_nat
+                                                                   istmts
+                                                                   xeval_seq
+                                                                   gb_bsx_r1_x
+                                                                   gb_bsx_r1_i))))
+                                                            (case-on ec1 List
+                                                              ((case Nil
+                                                                 (chain
+                                                                   (have hbad
+                                                                     (=
+                                                                       (iolen
+                                                                         (ilen
+                                                                           (Cons
+                                                                             ec0_0
+                                                                             (Cons
+                                                                               ec0_1
+                                                                               (Cons
+                                                                                 ec0_2
+                                                                                 Nil))))
+                                                                         (Some
+                                                                           (INorm
+                                                                             ec1
+                                                                             mc1)))
+                                                                       3)
+                                                                     (chain
+                                                                       (steps
+                                                                         ((rewrite
+                                                                            (hyp
+                                                                              1)
+                                                                            rl
+                                                                            lhs
+                                                                            true
+                                                                            ())
+                                                                          (rewrite
+                                                                            (hyp
+                                                                              2)
+                                                                            rl
+                                                                            lhs
+                                                                            true
+                                                                            ())))
+                                                                       (rewrite-with
+                                                                         (lemma
+                                                                           il_slen)
+                                                                         lr
+                                                                         lhs
+                                                                         ()
+                                                                         ())
+                                                                       (steps
+                                                                         ((compute
+                                                                            lhs)))
+                                                                       refl))
+                                                                   (have hlen
+                                                                     (=
+                                                                       (iolen
+                                                                         (ilen
+                                                                           (Cons
+                                                                             ec0_0
+                                                                             (Cons
+                                                                               ec0_1
+                                                                               (Cons
+                                                                                 ec0_2
+                                                                                 Nil))))
+                                                                         (Some
+                                                                           (INorm
+                                                                             ec1
+                                                                             mc1)))
+                                                                       (ilen ec1))
+                                                                     (steps
+                                                                       ((compute
+                                                                          both))
+                                                                       refl))
+                                                                   (have hg
+                                                                     (=
+                                                                       (ilen ec1)
+                                                                       3)
+                                                                     (steps
+                                                                       ((rewrite
+                                                                          (premise
+                                                                            hlen)
+                                                                          rl
+                                                                          lhs
+                                                                          true
+                                                                          ())
+                                                                        (rewrite
+                                                                          (premise
+                                                                            hbad)
+                                                                          lr
+                                                                          lhs
+                                                                          true
+                                                                          ()))
+                                                                       refl))
+                                                                   (have hs
+                                                                     (=
+                                                                       (ilen ec1)
+                                                                       0)
+                                                                     (steps
+                                                                       ((rewrite
+                                                                          (hyp 0)
+                                                                          lr
+                                                                          lhs
+                                                                          true
+                                                                          ())
+                                                                        (compute
+                                                                          lhs))
+                                                                       refl))
+                                                                   (have hff
+                                                                     (=
+                                                                       (le 0 0)
+                                                                       False)
+                                                                     (steps
+                                                                       ()
+                                                                       (by
+                                                                         arith
+                                                                         (rows
+                                                                           (goal
+                                                                             1)
+                                                                           (hg 1)
+                                                                           (hs
+                                                                             -1)))))
+                                                                   (absurd
+                                                                     (premise
+                                                                       hff))))
+                                                               (case Cons
+                                                                 (ec1_0 rc1_0)
+                                                                 (chain
+                                                                   (steps
+                                                                     ((rewrite
+                                                                        (hyp 0)
+                                                                        lr
+                                                                        both
+                                                                        true
+                                                                        ())
+                                                                      (compute
+                                                                        both
+                                                                        (stop
+                                                                          iwhile
+                                                                          xeval_loop
+                                                                          lg_fuel
+                                                                          int_of_nat
+                                                                          istmts
+                                                                          xeval_seq
+                                                                          gb_bsx_r1_x
+                                                                          gb_bsx_r1_i))))
+                                                                   (case-on
+                                                                     rc1_0
+                                                                     List
+                                                                     ((case Nil
+                                                                        (chain
+                                                                          (have
+                                                                            hbad
+                                                                            (=
+                                                                              (iolen
+                                                                                (ilen
+                                                                                  (Cons
+                                                                                    ec0_0
+                                                                                    (Cons
+                                                                                      ec0_1
+                                                                                      (Cons
+                                                                                        ec0_2
+                                                                                        Nil))))
+                                                                                (Some
+                                                                                  (INorm
+                                                                                    ec1
+                                                                                    mc1)))
+                                                                              3)
+                                                                            (chain
+                                                                              (steps
+                                                                                ((rewrite
+                                                                                   (hyp
+                                                                                     2)
+                                                                                   rl
+                                                                                   lhs
+                                                                                   true
+                                                                                   ())
+                                                                                 (rewrite
+                                                                                   (hyp
+                                                                                     3)
+                                                                                   rl
+                                                                                   lhs
+                                                                                   true
+                                                                                   ())))
+                                                                              (rewrite-with
+                                                                                (lemma
+                                                                                  il_slen)
+                                                                                lr
+                                                                                lhs
+                                                                                ()
+                                                                                ())
+                                                                              (steps
+                                                                                ((compute
+                                                                                   lhs)))
+                                                                              refl))
+                                                                          (have
+                                                                            hlen
+                                                                            (=
+                                                                              (iolen
+                                                                                (ilen
+                                                                                  (Cons
+                                                                                    ec0_0
+                                                                                    (Cons
+                                                                                      ec0_1
+                                                                                      (Cons
+                                                                                        ec0_2
+                                                                                        Nil))))
+                                                                                (Some
+                                                                                  (INorm
+                                                                                    ec1
+                                                                                    mc1)))
+                                                                              (ilen
+                                                                                ec1))
+                                                                            (steps
+                                                                              ((compute
+                                                                                 both))
+                                                                              refl))
+                                                                          (have
+                                                                            hg
+                                                                            (=
+                                                                              (ilen
+                                                                                ec1)
+                                                                              3)
+                                                                            (steps
+                                                                              ((rewrite
+                                                                                 (premise
+                                                                                   hlen)
+                                                                                 rl
+                                                                                 lhs
+                                                                                 true
+                                                                                 ())
+                                                                               (rewrite
+                                                                                 (premise
+                                                                                   hbad)
+                                                                                 lr
+                                                                                 lhs
+                                                                                 true
+                                                                                 ()))
+                                                                              refl))
+                                                                          (have
+                                                                            hs
+                                                                            (=
+                                                                              (ilen
+                                                                                ec1)
+                                                                              1)
+                                                                            (steps
+                                                                              ((rewrite
+                                                                                 (hyp
+                                                                                   1)
+                                                                                 lr
+                                                                                 lhs
+                                                                                 true
+                                                                                 ())
+                                                                               (rewrite
+                                                                                 (hyp
+                                                                                   0)
+                                                                                 lr
+                                                                                 lhs
+                                                                                 true
+                                                                                 ())
+                                                                               (compute
+                                                                                 lhs))
+                                                                              refl))
+                                                                          (have
+                                                                            hff
+                                                                            (=
+                                                                              (le
+                                                                                0
+                                                                                0)
+                                                                              False)
+                                                                            (steps
+                                                                              ()
+                                                                              (by
+                                                                                arith
+                                                                                (rows
+                                                                                  (goal
+                                                                                    1)
+                                                                                  (hg
+                                                                                    1)
+                                                                                  (hs
+                                                                                    -1)))))
+                                                                          (absurd
+                                                                            (premise
+                                                                              hff))))
+                                                                      (case Cons
+                                                                        (ec1_1
+                                                                          rc1_1)
+                                                                        (chain
+                                                                          (steps
+                                                                            ((rewrite
+                                                                               (hyp
+                                                                                 0)
+                                                                               lr
+                                                                               both
+                                                                               true
+                                                                               ())
+                                                                             (compute
+                                                                               both
+                                                                               (stop
+                                                                                 iwhile
+                                                                                 xeval_loop
+                                                                                 lg_fuel
+                                                                                 int_of_nat
+                                                                                 istmts
+                                                                                 xeval_seq
+                                                                                 gb_bsx_r1_x
+                                                                                 gb_bsx_r1_i))))
+                                                                          (case-on
+                                                                            rc1_1
+                                                                            List
+                                                                            ((case
+                                                                               Nil
+                                                                               (chain
+                                                                                 (have
+                                                                                   hbad
+                                                                                   (=
+                                                                                     (iolen
+                                                                                       (ilen
+                                                                                         (Cons
+                                                                                           ec0_0
+                                                                                           (Cons
+                                                                                             ec0_1
+                                                                                             (Cons
+                                                                                               ec0_2
+                                                                                               Nil))))
+                                                                                       (Some
+                                                                                         (INorm
+                                                                                           ec1
+                                                                                           mc1)))
+                                                                                     3)
+                                                                                   (chain
+                                                                                     (steps
+                                                                                       ((rewrite
+                                                                                          (hyp
+                                                                                            3)
+                                                                                          rl
+                                                                                          lhs
+                                                                                          true
+                                                                                          ())
+                                                                                        (rewrite
+                                                                                          (hyp
+                                                                                            4)
+                                                                                          rl
+                                                                                          lhs
+                                                                                          true
+                                                                                          ())))
+                                                                                     (rewrite-with
+                                                                                       (lemma
+                                                                                         il_slen)
+                                                                                       lr
+                                                                                       lhs
+                                                                                       ()
+                                                                                       ())
+                                                                                     (steps
+                                                                                       ((compute
+                                                                                          lhs)))
+                                                                                     refl))
+                                                                                 (have
+                                                                                   hlen
+                                                                                   (=
+                                                                                     (iolen
+                                                                                       (ilen
+                                                                                         (Cons
+                                                                                           ec0_0
+                                                                                           (Cons
+                                                                                             ec0_1
+                                                                                             (Cons
+                                                                                               ec0_2
+                                                                                               Nil))))
+                                                                                       (Some
+                                                                                         (INorm
+                                                                                           ec1
+                                                                                           mc1)))
+                                                                                     (ilen
+                                                                                       ec1))
+                                                                                   (steps
+                                                                                     ((compute
+                                                                                        both))
+                                                                                     refl))
+                                                                                 (have
+                                                                                   hg
+                                                                                   (=
+                                                                                     (ilen
+                                                                                       ec1)
+                                                                                     3)
+                                                                                   (steps
+                                                                                     ((rewrite
+                                                                                        (premise
+                                                                                          hlen)
+                                                                                        rl
+                                                                                        lhs
+                                                                                        true
+                                                                                        ())
+                                                                                      (rewrite
+                                                                                        (premise
+                                                                                          hbad)
+                                                                                        lr
+                                                                                        lhs
+                                                                                        true
+                                                                                        ()))
+                                                                                     refl))
+                                                                                 (have
+                                                                                   hs
+                                                                                   (=
+                                                                                     (ilen
+                                                                                       ec1)
+                                                                                     2)
+                                                                                   (steps
+                                                                                     ((rewrite
+                                                                                        (hyp
+                                                                                          2)
+                                                                                        lr
+                                                                                        lhs
+                                                                                        true
+                                                                                        ())
+                                                                                      (rewrite
+                                                                                        (hyp
+                                                                                          1)
+                                                                                        lr
+                                                                                        lhs
+                                                                                        true
+                                                                                        ())
+                                                                                      (rewrite
+                                                                                        (hyp
+                                                                                          0)
+                                                                                        lr
+                                                                                        lhs
+                                                                                        true
+                                                                                        ())
+                                                                                      (compute
+                                                                                        lhs))
+                                                                                     refl))
+                                                                                 (have
+                                                                                   hff
+                                                                                   (=
+                                                                                     (le
+                                                                                       0
+                                                                                       0)
+                                                                                     False)
+                                                                                   (steps
+                                                                                     ()
+                                                                                     (by
+                                                                                       arith
+                                                                                       (rows
+                                                                                         (goal
+                                                                                           1)
+                                                                                         (hg
+                                                                                           1)
+                                                                                         (hs
+                                                                                           -1)))))
+                                                                                 (absurd
+                                                                                   (premise
+                                                                                     hff))))
+                                                                             (case
+                                                                               Cons
+                                                                               (ec1_2
+                                                                                 rc1_2)
+                                                                               (chain
+                                                                                 (steps
+                                                                                   ((rewrite
+                                                                                      (hyp
+                                                                                        0)
+                                                                                      lr
+                                                                                      both
+                                                                                      true
+                                                                                      ())
+                                                                                    (compute
+                                                                                      both
+                                                                                      (stop
+                                                                                        iwhile
+                                                                                        xeval_loop
+                                                                                        lg_fuel
+                                                                                        int_of_nat
+                                                                                        istmts
+                                                                                        xeval_seq
+                                                                                        gb_bsx_r1_x
+                                                                                        gb_bsx_r1_i))))
+                                                                                 (case-on
+                                                                                   rc1_2
+                                                                                   List
+                                                                                   ((case
+                                                                                      Nil
+                                                                                      (chain
+                                                                                        (steps
+                                                                                          ((rewrite
+                                                                                             (hyp
+                                                                                               0)
+                                                                                             lr
+                                                                                             both
+                                                                                             true
+                                                                                             ())
+                                                                                           (compute
+                                                                                             both
+                                                                                             (stop
+                                                                                               iwhile
+                                                                                               xeval_loop
+                                                                                               lg_fuel
+                                                                                               int_of_nat
+                                                                                               istmts
+                                                                                               xeval_seq
+                                                                                               gb_bsx_r1_x
+                                                                                               gb_bsx_r1_i))))
+                                                                                        (rewrite-with
+                                                                                          (lemma
+                                                                                            cmp_x_bsx_b1)
+                                                                                          lr
+                                                                                          lhs
+                                                                                          ((inst
+                                                                                             c2
+                                                                                             c2))
+                                                                                          ())
+                                                                                        (steps
+                                                                                          ((compute
+                                                                                             both
+                                                                                             (stop
+                                                                                               iwhile
+                                                                                               xeval_loop
+                                                                                               lg_fuel
+                                                                                               int_of_nat
+                                                                                               istmts
+                                                                                               xeval_seq
+                                                                                               gb_bsx_r1_x
+                                                                                               gb_bsx_r1_i))))
+                                                                                        refl))
+                                                                                    (case
+                                                                                      Cons
+                                                                                      (ec1_3
+                                                                                        rc1_3)
+                                                                                      (chain
+                                                                                        (have
+                                                                                          hbad
+                                                                                          (=
+                                                                                            (iolen
+                                                                                              (ilen
+                                                                                                (Cons
+                                                                                                  ec0_0
+                                                                                                  (Cons
+                                                                                                    ec0_1
+                                                                                                    (Cons
+                                                                                                      ec0_2
+                                                                                                      Nil))))
+                                                                                              (Some
+                                                                                                (INorm
+                                                                                                  ec1
+                                                                                                  mc1)))
+                                                                                            3)
+                                                                                          (chain
+                                                                                            (steps
+                                                                                              ((rewrite
+                                                                                                 (hyp
+                                                                                                   4)
+                                                                                                 rl
+                                                                                                 lhs
+                                                                                                 true
+                                                                                                 ())
+                                                                                               (rewrite
+                                                                                                 (hyp
+                                                                                                   5)
+                                                                                                 rl
+                                                                                                 lhs
+                                                                                                 true
+                                                                                                 ())))
+                                                                                            (rewrite-with
+                                                                                              (lemma
+                                                                                                il_slen)
+                                                                                              lr
+                                                                                              lhs
+                                                                                              ()
+                                                                                              ())
+                                                                                            (steps
+                                                                                              ((compute
+                                                                                                 lhs)))
+                                                                                            refl))
+                                                                                        (have
+                                                                                          hlen
+                                                                                          (=
+                                                                                            (iolen
+                                                                                              (ilen
+                                                                                                (Cons
+                                                                                                  ec0_0
+                                                                                                  (Cons
+                                                                                                    ec0_1
+                                                                                                    (Cons
+                                                                                                      ec0_2
+                                                                                                      Nil))))
+                                                                                              (Some
+                                                                                                (INorm
+                                                                                                  ec1
+                                                                                                  mc1)))
+                                                                                            (ilen
+                                                                                              ec1))
+                                                                                          (steps
+                                                                                            ((compute
+                                                                                               both))
+                                                                                            refl))
+                                                                                        (have
+                                                                                          hg
+                                                                                          (=
+                                                                                            (ilen
+                                                                                              ec1)
+                                                                                            3)
+                                                                                          (steps
+                                                                                            ((rewrite
+                                                                                               (premise
+                                                                                                 hlen)
+                                                                                               rl
+                                                                                               lhs
+                                                                                               true
+                                                                                               ())
+                                                                                             (rewrite
+                                                                                               (premise
+                                                                                                 hbad)
+                                                                                               lr
+                                                                                               lhs
+                                                                                               true
+                                                                                               ()))
+                                                                                            refl))
+                                                                                        (have
+                                                                                          hs
+                                                                                          (=
+                                                                                            (ilen
+                                                                                              ec1)
+                                                                                            (+
+                                                                                              1
+                                                                                              (+
+                                                                                                1
+                                                                                                (+
+                                                                                                  1
+                                                                                                  (+
+                                                                                                    1
+                                                                                                    (ilen
+                                                                                                      rc1_3))))))
+                                                                                          (steps
+                                                                                            ((rewrite
+                                                                                               (hyp
+                                                                                                 3)
+                                                                                               lr
+                                                                                               lhs
+                                                                                               true
+                                                                                               ())
+                                                                                             (rewrite
+                                                                                               (hyp
+                                                                                                 2)
+                                                                                               lr
+                                                                                               lhs
+                                                                                               true
+                                                                                               ())
+                                                                                             (rewrite
+                                                                                               (hyp
+                                                                                                 1)
+                                                                                               lr
+                                                                                               lhs
+                                                                                               true
+                                                                                               ())
+                                                                                             (rewrite
+                                                                                               (hyp
+                                                                                                 0)
+                                                                                               lr
+                                                                                               lhs
+                                                                                               true
+                                                                                               ())
+                                                                                             (unfold
+                                                                                               ilen
+                                                                                               lhs)
+                                                                                             (reduce
+                                                                                               lhs)
+                                                                                             (unfold
+                                                                                               ilen
+                                                                                               lhs)
+                                                                                             (reduce
+                                                                                               lhs)
+                                                                                             (unfold
+                                                                                               ilen
+                                                                                               lhs)
+                                                                                             (reduce
+                                                                                               lhs)
+                                                                                             (unfold
+                                                                                               ilen
+                                                                                               lhs)
+                                                                                             (reduce
+                                                                                               lhs))
+                                                                                            refl))
+                                                                                        (have
+                                                                                          hnn
+                                                                                          (=
+                                                                                            (le
+                                                                                              0
+                                                                                              (ilen
+                                                                                                rc1_3))
+                                                                                            True)
+                                                                                          (chain
+                                                                                            (rewrite-with
+                                                                                              (lemma
+                                                                                                ilen_nonneg)
+                                                                                              lr
+                                                                                              lhs
+                                                                                              ()
+                                                                                              ())
+                                                                                            refl))
+                                                                                        (have
+                                                                                          hff
+                                                                                          (=
+                                                                                            (le
+                                                                                              0
+                                                                                              0)
+                                                                                            False)
+                                                                                          (steps
+                                                                                            ()
+                                                                                            (by
+                                                                                              arith
+                                                                                              (rows
+                                                                                                (goal
+                                                                                                  1)
+                                                                                                (hg
+                                                                                                  -1)
+                                                                                                (hs
+                                                                                                  1)
+                                                                                                (hnn
+                                                                                                  1)))))
+                                                                                        (absurd
+                                                                                          (premise
+                                                                                            hff))))))))))))))))))))
+                                                        (case ITrap
+                                                          (chain
+                                                            (steps
+                                                              ((rewrite
+                                                                 (hyp 0)
+                                                                 lr
+                                                                 both
+                                                                 true
+                                                                 ())
+                                                               (compute
+                                                                 both
+                                                                 (stop lg_fuel
+                                                                   int_of_nat
+                                                                   gb_bsx_r1_x
+                                                                   gb_bsx_r1_i))))
+                                                            refl))))))))))
+                                          (case Cons
+                                            (ec0_3 rc0_3)
+                                            (chain
+                                              (have hbad
+                                                (=
+                                                  (iolen
+                                                    (ilen (list x0 x1 x2))
+                                                    (Some (INorm ec0 mc0)))
+                                                  3)
+                                                (chain
+                                                  (steps
+                                                    ((rewrite
+                                                       (hyp 4)
+                                                       rl
+                                                       lhs
+                                                       true
+                                                       ())
+                                                     (rewrite
+                                                       (hyp 5)
+                                                       rl
+                                                       lhs
+                                                       true
+                                                       ())))
+                                                  (rewrite-with
+                                                    (lemma il_slen)
+                                                    lr
+                                                    lhs
+                                                    ()
+                                                    ())
+                                                  (steps ((compute lhs)))
+                                                  refl))
+                                              (have hlen
+                                                (=
+                                                  (iolen
+                                                    (ilen (list x0 x1 x2))
+                                                    (Some (INorm ec0 mc0)))
+                                                  (ilen ec0))
+                                                (steps ((compute both)) refl))
+                                              (have hg (= (ilen ec0) 3)
+                                                (steps
+                                                  ((rewrite
+                                                     (premise hlen)
+                                                     rl
+                                                     lhs
+                                                     true
+                                                     ())
+                                                   (rewrite
+                                                     (premise hbad)
+                                                     lr
+                                                     lhs
+                                                     true
+                                                     ()))
+                                                  refl))
+                                              (have hs
+                                                (=
+                                                  (ilen ec0)
+                                                  (+
+                                                    1
+                                                    (+
+                                                      1
+                                                      (+ 1 (+ 1 (ilen rc0_3))))))
+                                                (steps
+                                                  ((rewrite
+                                                     (hyp 3)
+                                                     lr
+                                                     lhs
+                                                     true
+                                                     ())
+                                                   (rewrite
+                                                     (hyp 2)
+                                                     lr
+                                                     lhs
+                                                     true
+                                                     ())
+                                                   (rewrite
+                                                     (hyp 1)
+                                                     lr
+                                                     lhs
+                                                     true
+                                                     ())
+                                                   (rewrite
+                                                     (hyp 0)
+                                                     lr
+                                                     lhs
+                                                     true
+                                                     ())
+                                                   (unfold ilen lhs)
+                                                   (reduce lhs)
+                                                   (unfold ilen lhs)
+                                                   (reduce lhs)
+                                                   (unfold ilen lhs)
+                                                   (reduce lhs)
+                                                   (unfold ilen lhs)
+                                                   (reduce lhs))
+                                                  refl))
+                                              (have hnn
+                                                (= (le 0 (ilen rc0_3)) True)
+                                                (chain
+                                                  (rewrite-with
+                                                    (lemma ilen_nonneg)
+                                                    lr
+                                                    lhs
+                                                    ()
+                                                    ())
+                                                  refl))
+                                              (have hff (= (le 0 0) False)
+                                                (steps
+                                                  ()
+                                                  (by
+                                                    arith
+                                                    (rows
+                                                      (goal 1)
+                                                      (hg -1)
+                                                      (hs 1)
+                                                      (hnn 1)))))
+                                              (absurd (premise hff))))))))))))))))))))
+              (case ITrap
+                (chain
+                  (steps
+                    ((rewrite (hyp 0) lr both true ())
+                     (compute
+                       both
+                       (stop lg_fuel int_of_nat gb_bsx_r1a_x gb_bsx_r1a_i
+                         gb_bsx_r1_x gb_bsx_r1_i))))
+                  refl))))))))))

@@ -692,8 +692,7 @@
     (Nil acc)
     ((Cons h t) (ix_chrev t (Cons h acc)))))
 
-(fn ix_chgo ((ss (List IStmt)) (acc (List IStmt)) (n Int))
-  (List (List IStmt))
+(fn ix_chgo ((ss (List IStmt)) (acc (List IStmt)) (n Int)) (List (List IStmt))
   (measure (struct ss))
   (match ss
     (Nil
@@ -702,9 +701,8 @@
         ((Cons _ _) (Cons (ix_chrev acc Nil) Nil))))
     ((Cons s t)
      (if (ix_chflat s)
-       (if (ix_capq s n)
-         (Cons (ix_chrev acc Nil) (ix_chgo t (Cons s Nil) 1))
-         (ix_chgo t (Cons s acc) (+ n 1)))
+       (if (ix_capq s n) (Cons (ix_chrev acc Nil) (ix_chgo t (Cons s Nil) 1))
+       (ix_chgo t (Cons s acc) (+ n 1)))
        (match acc
          (Nil (Cons (Cons s Nil) (ix_chgo t Nil 0)))
          ((Cons _ _)
@@ -718,8 +716,37 @@
     (Nil True)
     ((Cons s _) (ix_chflat s))))
 
+;; a branch chunk (singleton by construction)
+(fn ix_chbrq ((ch (List IStmt))) Bool
+  (match ch
+    (Nil False)
+    ((Cons s _)
+     (match s
+       ((IIf _ _ _) True)
+       (_ False)))))
+
+;; would a branch chunk's leg carry a second branch or end at a
+;; mid-flat seal? (IF-3a): scan the unsealed span ahead — another
+;; branch chunk or a flat-flat seal junction means the branch must
+;; seal behind itself; a loop chunk or the terminal parks the span
+;; and no seal is needed
+(fn ix_brla ((chs (List (List IStmt)))) Bool
+  (measure (struct chs))
+  (match chs
+    (Nil False)
+    ((Cons c rest)
+     (if (ix_chbrq c) True
+     (if (ix_chfq c)
+       (match rest
+         (Nil False)
+         ((Cons c2 _) (if (ix_chfq c2) True (ix_brla rest))))
+       False)))))
+
 ;; chunked emission: translate each chunk; between two consecutive
-;; FLAT chunks insert the leading chunk's seal
+;; FLAT chunks insert the leading chunk's seal; a BRANCH chunk seals
+;; behind itself iff its unsealed span would otherwise carry a second
+;; branch or end at a mid-flat seal (IF-3a — single-branch spans
+;; ending at a loop or the terminal emit byte-identically)
 (fn ix_cjoin ((chs (List (List IStmt)))) (Option (List XInstr))
   (measure (struct chs))
   (match chs
@@ -735,10 +762,12 @@
              (Nil (Some is))
              ((Cons c2 _)
               (if (ix_chfq c)
-                (if (ix_chfq c2)
-                  (Some (ix_app is (ix_app (ix_zs is) more)))
-                  (Some (ix_app is more)))
-                (Some (ix_app is more))))))))))))
+                (if (ix_chfq c2) (Some (ix_app is (ix_app (ix_zs is) more)))
+                (Some (ix_app is more)))
+              (if (ix_chbrq c)
+                (if (ix_brla rest) (Some (ix_app is (ix_app (ix_zs is) more)))
+                (Some (ix_app is more)))
+                (Some (ix_app is more)))))))))))))
 
 (fn ix_cstmts ((ss (List IStmt))) (Option (List XInstr))
   (ix_cjoin (ix_chunks ss)))
@@ -762,8 +791,7 @@
 ;; imp's INorm corresponds to exactly the (xargs locals) file and the
 ;; machine walk continues into the remaining code from it; traps
 ;; conflate (es_scont's register-machine mirror).
-(fn xs_scont
-  ((f Nat) (xm XModule) (rest (List XInstr)) (r (Option IOut)))
+(fn xs_scont ((f Nat) (xm XModule) (rest (List XInstr)) (r (Option IOut)))
   (Option XOut)
   (match r
     (None None)
