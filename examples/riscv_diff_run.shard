@@ -1,0 +1,473 @@
+;;; examples/riscv_diff_run.shard — model side of the RISC-V engine differential
+;;; (docs/RISCV.md G2). Emits a PLAN: real RV32I/RV64I machine-code bytes for
+;;; each module plus vectors whose expected results are computed BY THE MODEL
+;;; (rvcall_fn / rvcall_fn_mem). The engine side (examples/riscv_diff.c, run
+;;; under qemu-user at both widths) maps the bytes into an executable page and
+;;; calls them, comparing the emulated core's result (and memory) against the
+;;; model's. Unlike x86 there is no native silicon leg — qemu-user plays V8's
+;;; role from the wasm arc (docs/RISCV.md §7.6).
+;;;
+;;; THE HEADLINE is the WIDTH: the SAME add module is instantiated at RV32 and
+;;; RV64, and the same bytes wrap at 2^32 in one qemu and 2^64 in the other.
+;;; Every line carries a <width> tag (32|64); the harness is one source built
+;;; for both widths, and each qemu invocation processes only its own width's
+;;; lines (a module's bytes are byte-identical across widths for everything
+;;; except shift-shamt and the RvLi fence — the SEMANTICS differ per core).
+;;;
+;;; Plan grammar (all integers 16-char little-endian hex; "None" = the model
+;;; says the call traps; addresses are REAL absolute addresses, DATA_BASE =
+;;; 0x40000000, MAP_FIXED'd by the harness so model-address == core-pointer):
+;;;   RVMOD <name> <width> <hexcode>
+;;;   RVCASE <name> <width> <argc> <a0> <a1> <a2> <a3> -> <exp>
+;;;   RVMEMCASE <name> <width> <argc> <a0> <a1> <a2> <a3> READ <addr> <len>
+;;;             -> <exp> <outhex>
+;;; The trap vectors (load below the window / store at rvmemhi) expect None:
+;;; the model traps, the core SIGSEGVs on the unmapped page, and the harness
+;;; scores the caught signal as AGREEMENT (the trap leg of the differential).
+;;;
+;;; RUN IT:  examples/riscv_diff.sh   (emit + execute under qemu-user, both widths)
+
+(import "../kernel/stdlib.shard")
+(import "../models/riscv/riscv.shard")
+(import "../models/riscv/encode.shard")
+(use (:: models riscv riscv *))
+(use (:: models riscv encode *))
+(import "../std/mem")
+(use (:: std mem *))
+
+(type World (World Int))
+(extern write ((bytes (List Int)) (w World)) World)
+(extern exit ((code Int) (w World)) World)
+
+;; --- text plumbing -----------------------------------------------------------
+
+(fn eap ((xs (List Int)) (ys (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (eap t ys)))))
+
+(fn cat ((xss (List (List Int)))) (List Int)
+  (measure (struct xss))
+  (match xss
+    (Nil Nil)
+    ((Cons h t) (eap h (cat t)))))
+
+(fn hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
+
+(fn hexs ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b t) (Cons (hexd (ediv b 16)) (Cons (hexd (mod b 16)) (hexs t))))))
+
+;; the eight little-endian bytes of a value in [0, 2^64), then 16-char hex.
+;; RV32 expectations wrap at 2^32, so their high half is zero; the harness
+;; zero-extends the (32-bit) core result to 64 bits before comparing.
+(fn le8b ((v Int)) (List Int)
+  (let ((u (mod v 18446744073709551616)))
+    (list
+      (mod u 256)
+      (mod (ediv u 256) 256)
+      (mod (ediv u 65536) 256)
+      (mod (ediv u 16777216) 256)
+      (mod (ediv u 4294967296) 256)
+      (mod (ediv u 1099511627776) 256)
+      (mod (ediv u 281474976710656) 256)
+      (mod (ediv u 72057594037927936) 256))))
+
+(fn hx ((v Int)) (List Int) (hexs (le8b v)))
+
+(fn showr ((r (Option Int))) (List Int)
+  (match r
+    (None "None")
+    ((Some v) (hx v))))
+
+;; four padded arg slots (a0..a3; vectors use at most three, a4..a7 stay 0).
+(fn argslots4 ((args (List Int))) (List Int)
+  (match args
+    (Nil (cat (list " " (hx 0) " " (hx 0) " " (hx 0) " " (hx 0))))
+    ((Cons a0 t0)
+     (match t0
+       (Nil (cat (list " " (hx a0) " " (hx 0) " " (hx 0) " " (hx 0))))
+       ((Cons a1 t1)
+        (match t1
+          (Nil (cat (list " " (hx a0) " " (hx a1) " " (hx 0) " " (hx 0))))
+          ((Cons a2 t2)
+           (match t2
+             (Nil (cat (list " " (hx a0) " " (hx a1) " " (hx a2) " " (hx 0))))
+             ((Cons a3 t3)
+              (cat (list " " (hx a0) " " (hx a1) " " (hx a2) " " (hx a3))))))))))))
+
+(fn argc ((args (List Int))) Int
+  (measure (struct args))
+  (match args
+    (Nil 0)
+    ((Cons h t) (+ 1 (argc t)))))
+
+(fn dec1 ((n Int)) (List Int) (list (+ 48 n)))
+
+;; --- the modules (differential-only; single-function, no proof obligation) ---
+;; RvCall is fenced in the v1 encoder, so every differential module is a lone
+;; function at index 0. mreg = no memory; mmem = the [DATA_BASE, +0x10000)
+;; window the harness MAP_FIXEDs.
+
+(fn mreg ((f RvFunc) (w RvXlen)) RvModule (MkRvModule (list f) w 0 0))
+
+(fn mmem ((f RvFunc) (w RvXlen)) RvModule
+  (MkRvModule (list f) w 1073741824 1073807360))
+
+;; add(a, b) = a0 + a1 (wrapped at width) — the width headline.
+(fn add_f () RvFunc (MkRvFunc 2 (list (RvBin RvAdd A0 A0 (RvSReg A1)))))
+
+;; dec(a) = a - 1 via a NEGATIVE addi immediate (RvSImm -1); pins that the
+;; encoder's 12-bit sign-extension agrees with the model's width-wrap.
+(fn dec_f () RvFunc (MkRvFunc 1 (list (RvBin RvAdd A0 A0 (RvSImm -1)))))
+
+;; register-source shifts: a0 shifted by a1 (count masked at width).
+(fn sllr_f () RvFunc (MkRvFunc 2 (list (RvBin RvSll A0 A0 (RvSReg A1)))))
+
+(fn srlr_f () RvFunc (MkRvFunc 2 (list (RvBin RvSrl A0 A0 (RvSReg A1)))))
+
+(fn srar_f () RvFunc (MkRvFunc 2 (list (RvBin RvSra A0 A0 (RvSReg A1)))))
+
+;; immediate-count shifts: a0 shifted by a baked count k (one fn per count).
+(fn slli_f ((k Int)) RvFunc (MkRvFunc 1 (list (RvBin RvSll A0 A0 (RvSImm k)))))
+
+(fn srli_f ((k Int)) RvFunc (MkRvFunc 1 (list (RvBin RvSrl A0 A0 (RvSImm k)))))
+
+(fn srai_f ((k Int)) RvFunc (MkRvFunc 1 (list (RvBin RvSra A0 A0 (RvSImm k)))))
+
+;; slt(a, b) signed vs sltu(a, b) unsigned — the signed/unsigned disagreement.
+(fn slt_f () RvFunc (MkRvFunc 2 (list (RvBin RvSlt A0 A0 (RvSReg A1)))))
+
+(fn sltu_f () RvFunc (MkRvFunc 2 (list (RvBin RvSltu A0 A0 (RvSReg A1)))))
+
+;; x0: li x0, 7 (a WRITE, discarded) then add a0, a0, x0 (a READ, = 0) — a
+;; rides through unchanged.
+(fn x0_f () RvFunc
+  (MkRvFunc 1 (list (RvLi X0 7) (RvBin RvAdd A0 A0 (RvSReg X0)))))
+
+;; li(v) = wrapped v into a0 (params 0) — small / lui-range / fence-edge.
+(fn li_f ((v Int)) RvFunc (MkRvFunc 0 (list (RvLi A0 v))))
+
+;; count-up register loop: count(n) = n. acc in a1, counter n in a0; a wrong
+;; branch offset hangs or crashes (the strong flattening test).
+(fn count_f () RvFunc
+  (MkRvFunc
+    1
+    (list
+      (RvLi A1 0)
+      (RvBlock
+        (list
+          (RvLoop
+            (list
+              (RvBrIf (RvBeq A0 X0) 1)
+              (RvBin RvAdd A1 A1 (RvSImm 1))
+              (RvBin RvAdd A0 A0 (RvSImm -1))
+              (RvBr 0)))))
+      (RvMv A0 A1))))
+
+;; store+load roundtrip: rt(p, v) stores low byte of v at [p], loads it back
+;; into a0 — result = v & 0xFF, and the harness reads memory[p] too.
+(fn rt_f () RvFunc
+  (MkRvFunc 2 (list (RvStore8 (RvAReg A0) A1) (RvLoad8 A0 (RvAReg A0)))))
+
+;; fill loop: fill(p, v, k) stores v at [p..p+k), returns the final a0 (= p+k).
+(fn fill_f () RvFunc
+  (MkRvFunc
+    3
+    (list
+      (RvBlock
+        (list
+          (RvLoop
+            (list
+              (RvBrIf (RvBeq A2 X0) 1)
+              (RvStore8 (RvAReg A0) A1)
+              (RvBin RvAdd A0 A0 (RvSImm 1))
+              (RvBin RvAdd A2 A2 (RvSImm -1))
+              (RvBr 0))))))))
+
+;; trap legs: load below the window / store at rvmemhi — the model traps.
+(fn trapld_f () RvFunc (MkRvFunc 1 (list (RvLoad8 A0 (RvAReg A0)))))
+
+(fn trapst_f () RvFunc
+  (MkRvFunc 2 (list (RvStore8 (RvAReg A0) A1) (RvMv A0 A1))))
+
+;; --- plan lines --------------------------------------------------------------
+
+(fn rvmod_line ((nm (List Int)) (wd (List Int)) (m RvModule)) (List Int)
+  (cat (list "RVMOD " nm " " wd " " (hexs (rv_enc_module m)) "\n")))
+
+(fn rvcase
+  ((nm (List Int)) (wd (List Int)) (m RvModule) (args (List Int)) (fuel Int))
+  (List Int)
+  (cat
+    (list
+      "RVCASE "
+      nm
+      " "
+      wd
+      " "
+      (dec1 (argc args))
+      (argslots4 args)
+      " -> "
+      (showr (rvcall_fn (rvfnat fuel) m 0 args))
+      "\n")))
+
+(fn memresv ((r (Option (Pair Int Mem)))) (List Int)
+  (match r
+    (None "None")
+    ((Some pr)
+     (match pr
+       ((Pair v mf) (hx v))))))
+
+(fn memouthex ((r (Option (Pair Int Mem))) (addr Int) (len Nat)) (List Int)
+  (match r
+    (None "-")
+    ((Some pr)
+     (match pr
+       ((Pair v mf) (hexs (mem_read len mf addr)))))))
+
+(fn rvmemcase
+  ((nm (List Int))
+   (wd (List Int))
+   (m RvModule)
+   (args (List Int))
+   (addr Int)
+   (len Int)
+   (fuel Int))
+  (List Int)
+  (let ((r (rvcall_fn_mem (rvfnat fuel) m 0 args (mem_empty))))
+    (cat
+      (list
+        "RVMEMCASE "
+        nm
+        " "
+        wd
+        " "
+        (dec1 (argc args))
+        (argslots4 args)
+        " READ "
+        (hx addr)
+        " "
+        (hx len)
+        " -> "
+        (memresv r)
+        " "
+        (memouthex r addr (rvfnat len))
+        "\n"))))
+
+;; one shift module's block: bytes + four value vectors — 0, a small value,
+;; the sign bit (2^(W-1)), and all-ones (2^W-1). The last two are sharp: sll
+;; wraps the top off, srl fills from the top with zeros (logical), sra smears
+;; the sign. Instantiated at ONE width (the count mask differs per width).
+(fn shblock
+  ((nm (List Int)) (wd (List Int)) (f RvFunc) (w RvXlen) (top Int) (allone Int))
+  (List Int)
+  (cat
+    (list
+      (rvmod_line nm wd (mreg f w))
+      (rvcase nm wd (mreg f w) (list 0 1) 20)
+      (rvcase nm wd (mreg f w) (list 5 1) 20)
+      (rvcase nm wd (mreg f w) (list top 1) 20)
+      (rvcase nm wd (mreg f w) (list allone 1) 20))))
+
+;; --- the plan ----------------------------------------------------------------
+;; DATA_BASE = 0x40000000 = 1073741824; window [DATA_BASE, DATA_BASE+0x10000).
+;; The below-window trap addr = DATA_BASE - 1 = 1073741823; the at-hi trap addr
+;; = DATA_BASE + 0x10000 = 1073807360 (one past the last mapped byte).
+
+(fn emit () (List Int)
+  (cat
+    (list
+      ;; --- the width headline: SAME add module at both widths ---------------
+      (rvmod_line "add" "32" (mreg (add_f) RV32))
+      (rvcase "add" "32" (mreg (add_f) RV32) (list 2 3) 20)
+      (rvcase "add" "32" (mreg (add_f) RV32) (list 4294967295 2) 20)
+      (rvcase "add" "32" (mreg (add_f) RV32) (list 4294967295 1) 20)
+      (rvcase "add" "32" (mreg (add_f) RV32) (list 4294967296 4294967296) 20)
+      (rvmod_line "add" "64" (mreg (add_f) RV64))
+      (rvcase "add" "64" (mreg (add_f) RV64) (list 2 3) 20)
+      (rvcase "add" "64" (mreg (add_f) RV64) (list 4294967295 2) 20)
+      (rvcase "add" "64" (mreg (add_f) RV64) (list 18446744073709551615 2) 20)
+      ;; --- negative addi immediate -----------------------------------------
+      (rvmod_line "dec" "32" (mreg (dec_f) RV32))
+      (rvcase "dec" "32" (mreg (dec_f) RV32) (list 5) 20)
+      (rvcase "dec" "32" (mreg (dec_f) RV32) (list 0) 20)
+      (rvmod_line "dec" "64" (mreg (dec_f) RV64))
+      (rvcase "dec" "64" (mreg (dec_f) RV64) (list 5) 20)
+      (rvcase "dec" "64" (mreg (dec_f) RV64) (list 0) 20)
+      ;; --- register-source shifts, both widths (count masking + wrap) -------
+      ;; sra of the top value smears the sign to all-ones; the count at the
+      ;; mask boundary (32 on RV32 -> 0, 64 on RV64 -> 0) probes the datasheet.
+      (rvmod_line "sllr" "32" (mreg (sllr_f) RV32))
+      (rvcase "sllr" "32" (mreg (sllr_f) RV32) (list 1 1) 20)
+      (rvcase "sllr" "32" (mreg (sllr_f) RV32) (list 1 31) 20)
+      (rvcase "sllr" "32" (mreg (sllr_f) RV32) (list 1 32) 20)
+      (rvcase "sllr" "32" (mreg (sllr_f) RV32) (list 4294967295 4) 20)
+      (rvmod_line "srlr" "32" (mreg (srlr_f) RV32))
+      (rvcase "srlr" "32" (mreg (srlr_f) RV32) (list 4294967295 1) 20)
+      (rvcase "srlr" "32" (mreg (srlr_f) RV32) (list 2147483648 31) 20)
+      (rvmod_line "srar" "32" (mreg (srar_f) RV32))
+      (rvcase "srar" "32" (mreg (srar_f) RV32) (list 4294967295 1) 20)
+      (rvcase "srar" "32" (mreg (srar_f) RV32) (list 2147483648 1) 20)
+      (rvmod_line "srar" "64" (mreg (srar_f) RV64))
+      (rvcase "srar" "64" (mreg (srar_f) RV64) (list 18446744073709551615 1) 20)
+      (rvcase "srar" "64" (mreg (srar_f) RV64) (list 8 64) 20)
+      (rvcase "srar" "64" (mreg (srar_f) RV64) (list 9223372036854775808 1) 20)
+      ;; --- immediate-count shifts (RV64 6-bit shamt: 40, and 64->mask 0) ----
+      (rvmod_line "slli40" "64" (mreg (slli_f 40) RV64))
+      (rvcase "slli40" "64" (mreg (slli_f 40) RV64) (list 1) 20)
+      (rvmod_line "srai1" "64" (mreg (srai_f 1) RV64))
+      (rvcase
+        "srai1"
+        "64"
+        (mreg (srai_f 1) RV64)
+        (list 18446744073709551615)
+        20)
+      (rvmod_line "slli33" "32" (mreg (slli_f 33) RV32))
+      (rvcase "slli33" "32" (mreg (slli_f 33) RV32) (list 1) 20)
+      ;; --- slt vs sltu at a signed/unsigned disagreement point --------------
+      ;; a = 2^W-1 (= -1 signed, the TOP unsigned), b = 0: slt = 1, sltu = 0.
+      (rvmod_line "slt" "64" (mreg (slt_f) RV64))
+      (rvcase "slt" "64" (mreg (slt_f) RV64) (list 18446744073709551615 0) 20)
+      (rvcase "slt" "64" (mreg (slt_f) RV64) (list 3 5) 20)
+      (rvmod_line "sltu" "64" (mreg (sltu_f) RV64))
+      (rvcase "sltu" "64" (mreg (sltu_f) RV64) (list 18446744073709551615 0) 20)
+      (rvmod_line "slt" "32" (mreg (slt_f) RV32))
+      (rvcase "slt" "32" (mreg (slt_f) RV32) (list 4294967295 0) 20)
+      (rvmod_line "sltu" "32" (mreg (sltu_f) RV32))
+      (rvcase "sltu" "32" (mreg (sltu_f) RV32) (list 4294967295 0) 20)
+      ;; --- x0 read (0) and write (discard) ----------------------------------
+      (rvmod_line "x0" "64" (mreg (x0_f) RV64))
+      (rvcase "x0" "64" (mreg (x0_f) RV64) (list 5) 20)
+      (rvmod_line "x0" "32" (mreg (x0_f) RV32))
+      (rvcase "x0" "32" (mreg (x0_f) RV32) (list 5) 20)
+      ;; --- RvLi at small / lui-range / fence edges (LEGAL values only) ------
+      ;; RV32: every value is encodable. RV64 fence = [0,2^31) U [2^64-2^31,
+      ;; 2^64); the largest positive-encodable (2^31-1) and the smallest
+      ;; negative-range (2^64-2^31) are the boundary witnesses.
+      (rvmod_line "li_s" "64" (mreg (li_f 5) RV64))
+      (rvcase "li_s" "64" (mreg (li_f 5) RV64) (list) 20)
+      (rvmod_line "li_neg" "64" (mreg (li_f -1) RV64))
+      (rvcase "li_neg" "64" (mreg (li_f -1) RV64) (list) 20)
+      (rvmod_line "li_lui" "64" (mreg (li_f 305419776) RV64))
+      (rvcase "li_lui" "64" (mreg (li_f 305419776) RV64) (list) 20)
+      ;; 0x7FFFF7FF = 2147481599 is the LARGEST positive RV64 lui+addi value;
+      ;; 2^31-1 rounds hi into the sign-extend-negative zone (poison 8), so the
+      ;; boundary the fence actually ships is here, not at 2^31.
+      (rvmod_line "li_hiedge" "64" (mreg (li_f 2147481599) RV64))
+      (rvcase "li_hiedge" "64" (mreg (li_f 2147481599) RV64) (list) 20)
+      (rvmod_line "li_negedge" "64" (mreg (li_f 18446744071562067968) RV64))
+      (rvcase
+        "li_negedge"
+        "64"
+        (mreg (li_f 18446744071562067968) RV64)
+        (list)
+        20)
+      (rvmod_line "li_big" "32" (mreg (li_f 4294967295) RV32))
+      (rvcase "li_big" "32" (mreg (li_f 4294967295) RV32) (list) 20)
+      (rvmod_line "li_lui" "32" (mreg (li_f 305419776) RV32))
+      (rvcase "li_lui" "32" (mreg (li_f 305419776) RV32) (list) 20)
+      ;; --- the count-up loop (strong flattening test) + zero iterations -----
+      (rvmod_line "count" "64" (mreg (count_f) RV64))
+      (rvcase "count" "64" (mreg (count_f) RV64) (list 0) 40)
+      (rvcase "count" "64" (mreg (count_f) RV64) (list 1) 60)
+      (rvcase "count" "64" (mreg (count_f) RV64) (list 7) 120)
+      (rvcase "count" "64" (mreg (count_f) RV64) (list 100) 1200)
+      (rvmod_line "count" "32" (mreg (count_f) RV32))
+      (rvcase "count" "32" (mreg (count_f) RV32) (list 0) 40)
+      (rvcase "count" "32" (mreg (count_f) RV32) (list 50) 700)
+      ;; --- byte store + load at the mapped window ---------------------------
+      (rvmod_line "rt" "64" (mmem (rt_f) RV64))
+      (rvmemcase
+        "rt"
+        "64"
+        (mmem (rt_f) RV64)
+        (list 1073741824 65)
+        1073741824
+        1
+        20)
+      (rvmemcase
+        "rt"
+        "64"
+        (mmem (rt_f) RV64)
+        (list 1073807359 200)
+        1073807359
+        1
+        20)
+      (rvmod_line "rt" "32" (mmem (rt_f) RV32))
+      (rvmemcase
+        "rt"
+        "32"
+        (mmem (rt_f) RV32)
+        (list 1073741824 300)
+        1073741824
+        1
+        20)
+      (rvmod_line "fill" "64" (mmem (fill_f) RV64))
+      (rvmemcase
+        "fill"
+        "64"
+        (mmem (fill_f) RV64)
+        (list 1073741824 65 8)
+        1073741824
+        8
+        200)
+      (rvmod_line "fill" "32" (mmem (fill_f) RV32))
+      (rvmemcase
+        "fill"
+        "32"
+        (mmem (fill_f) RV32)
+        (list 1073741840 187 4)
+        1073741840
+        4
+        200)
+      ;; --- trap legs (model None; the core SIGSEGVs) ------------------------
+      (rvmod_line "trapld" "64" (mmem (trapld_f) RV64))
+      (rvmemcase
+        "trapld"
+        "64"
+        (mmem (trapld_f) RV64)
+        (list 1073741823)
+        1073741823
+        1
+        20)
+      (rvmod_line "trapst" "64" (mmem (trapst_f) RV64))
+      (rvmemcase
+        "trapst"
+        "64"
+        (mmem (trapst_f) RV64)
+        (list 1073807360 65)
+        1073807360
+        1
+        20)
+      (rvmod_line "trapld" "32" (mmem (trapld_f) RV32))
+      (rvmemcase
+        "trapld"
+        "32"
+        (mmem (trapld_f) RV32)
+        (list 1073741823)
+        1073741823
+        1
+        20)
+      ;; --- shift blocks (sll/srl/sra at both widths, the wrap witnesses) ----
+      (shblock
+        "shl64"
+        "64"
+        (sllr_f)
+        RV64
+        9223372036854775808
+        18446744073709551615)
+      (shblock
+        "shr64"
+        "64"
+        (srlr_f)
+        RV64
+        9223372036854775808
+        18446744073709551615)
+      (shblock "shl32" "32" (sllr_f) RV32 2147483648 4294967295)
+      (shblock "shr32" "32" (srlr_f) RV32 2147483648 4294967295))))
+
+(fn main ((w World)) World (exit 0 (write (emit) w)))

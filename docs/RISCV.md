@@ -207,15 +207,17 @@ whole file.
 3. Call-composition keystone (rvcall_bridge) — **landed** (G1).
 4. Representation-collapse lemmas (rv_wrap32_id/rv_wrap64_id) — **landed** (G1); per-op discharge kit grows with the emitter arc.
 5. Literal-spelling discipline — **landed** (G1), pinned by the smoke file's symbolic pieces at both widths.
-6. Encoder + engine differential — **G2, pending.** Both widths from
-   one encoder (the width picks opcode legality, not layout — RV32I
-   and RV64I share encodings for everything modeled). Differential
-   legs available on this box today: clang targets riscv32/riscv64
-   (byte-tie against LLVM's assembler/objdump); EXECUTION needs a
-   `qemu-user` install (package, not a build) or real hardware —
-   unlike x86 there is no native silicon leg, so qemu-user plays V8's
-   role from the wasm arc, and hardware (an MCU, or a part like
-   Tenstorrent's) is the eventual realest gate.
+6. Encoder + engine differential — **landed** (G2). One width-blind
+   encoder (models/riscv/encode.shard — the width picks shamt masking
+   and RvLi legality, never layout) + a freestanding qemu-user
+   differential at BOTH widths (examples/riscv_diff_run.shard emits
+   model-computed expectations; riscv_diff.c replays them under
+   qemu-riscv64/qemu-riscv32): 69 vectors, 0 disagreements. qemu
+   plays V8's role from the wasm arc; hardware (an MCU, or a part
+   like Tenstorrent's) remains the eventual realest gate. Every
+   emitted encoding is byte-exact vs llvm-mc (dev-side check, not a
+   committed gate — the byte-tie gate proper is the bytetie arc's
+   later business).
 7. Memory denotation over std/mem with window guards — **landed** (G1).
 
 ## 8. Slices
@@ -233,10 +235,57 @@ whole file.
   nonnegative operands (no bshr-on-negative dependency); (d) the
   width parameter cost symbolic reduction NOTHING — add_sym closes by
   compute at both widths with ground-modulus residues.
-- **G2 — encoder + differentials:** models/riscv/encode.shard (RvInstr
-  → 4-byte units; RvCall/RvRet via jal/jalr under the private-stack
-  convention; branch-reach legality), byte-tie against llvm, execution
-  differential per §7.6.
+- **G2 — encoder + qemu differential (LANDED 2026-07-17, this fork;
+  byte-emit/runner files Opus-authored per the standing split):**
+  models/riscv/encode.shard (972/0, totality-gated, no claims) +
+  examples/riscv_diff_run.shard (972/0) + examples/riscv_diff.{c,sh}
+  + corpus registration (2 check targets + a qemu-guarded
+  differential pin). Scoreboard: rv64 36 vectors / rv32 33 vectors,
+  0 disagreements (~0.3s end to end); non-vacuity demonstrated three
+  ways (corrupt code byte → exit 3, corrupt expectation → exit 1
+  with a named FAIL line — independently reproduced at review — and
+  trap-teeth: widening a vector window in a scratch copy makes the
+  still-SIGSEGVing core a scored disagreement). Findings:
+  - **The §5 dragon bit at the materializer, exactly once:** the
+    planned closed-form RvLi fence ([0,2^31) ∪ top range) is WRONG
+    at RV64 — the standard li carry-fix (lo12 sign bit set → hi20+1)
+    can round hi20 to 0x80000, which lui SIGN-extends, and on RV64
+    the carry propagates into the high half. The shipped fence is
+    SELF-CHECKING instead: form the (hi20, lo12) split, SIMULATE
+    what `lui; addi` materializes at the module width, and refuse
+    unless it equals the target's rv_wrap image. The real RV64
+    positive edge is 0x7FFFF7FF, not 2^31−1. RV32 encodes every
+    value.
+  - **Refusals are reason-coded POISON words** (reason<<16: low bits
+    00 = an illegal instruction with C absent → SIGILL, confirmed
+    under qemu), one unit wide so flattening arithmetic is
+    untouched; 8 named reasons (bad depth / J-reach / B-reach /
+    RvCall / sub-imm / mul-imm / I-imm domain / RvLi unencodable) in
+    the encoder header.
+  - RvCall = poison (the x86 XCall→int3 precedent); in-body RvRet =
+    `jalr x0, 0(ra)`, correct precisely BECAUSE the fence keeps ra
+    unwritten; enc appends a trailing ret unit.
+  - Data page 0x40000000 MAP_FIXED works under qemu-user at both
+    widths; below-window and at-hi probes SIGSEGV as the model
+    predicts. Trap leg = in-process recovery (freestanding
+    rt_sigaction + hand-written setjmp/longjmp), single-invocation
+    harness like x86_diff.c.
+  - Harness/toolchain facts: one C source both widths (own _start,
+    raw ecall syscalls, a trampoline that saves/restores s0-s11 so
+    encoded code may clobber ANY model GPR); no riscv libc exists on
+    the box — clang -nostdlib -ffreestanding -fno-builtin
+    -fno-stack-protector (clang lowers bare loops to memset/memcpy
+    even under -nostdlib), linker = rust-lld through a symlink NAMED
+    ld.lld (it flavors by argv[0]; -fuse-ld= needs the full path);
+    rv32's `unsigned long` is 32-bit, wire values parse as unsigned
+    long long. Host clangd lints riscv_diff.c's a0-a7 asm registers
+    as errors under the x86 default target — false positives, the
+    file only compiles under --target=riscv*.
+- **G2b — the call lowering (named, next):** RvCall → `jal ra, off`
+  with a multi-function image + per-index offset table (x86
+  enc_image's shape) and sp-based ra spill for non-leaf functions;
+  the harness trampoline already presents a clean ABI for it.
+  Nothing in G2 blocks it.
 - **G3 — loopkit + symbolic piece theorems:** the wasm→x86 transplant
   play (guard/collapse/IH-at-fuel−1 templates at rv_wrap's moduli);
   measures whether the third transplant is as mechanical as the
@@ -257,5 +306,6 @@ whole file.
    kept because most real RV32 targets are IM and the wasm/x86 op
    tables both carry mul; flag if strict-I profile fencing should be
    a named check instead.
-3. The G2 execution-differential leg: qemu-user install acceptable,
-   or wait for hardware?
+3. ~~The G2 execution-differential leg: qemu-user install acceptable,
+   or wait for hardware?~~ RESOLVED 2026-07-17: user installed
+   qemu; qemu-riscv32/64 are the differential engines (§7.6).
