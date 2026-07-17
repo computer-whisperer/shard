@@ -2517,6 +2517,49 @@ targets, BRANCHLESS — the DATA-AS-DATA decision stays unforced.**
 - NEXT: I2e-3 (the pure blocks-loop artifact) per the composition
   ruling, then I2e-4 (the bin).
 
+**I2e-3a — THE BLOCKS LOOP, wasm leg (2026-07-16): a counted loop
+CALLS the generated block k times; the composition ruling's icall
+blueprint, hand-built.**
+
+- The artifact is PURE at the call boundary (the I2e ruling): a
+  2-local loop fn (src, count) whose per-iteration work is `(Call 0)`
+  on the callee `shb_wfn = (MkFunc 10 2 (Cons (I32Const 0)
+  (gb_shblock_w)))` — the generated block VERBATIM behind one pushed
+  `I32Const 0`; the block preserves the stack (shw_wblock quantifies
+  it), so the push surfaces as the return value. No append, no
+  regeneration.
+- `shb_mem m src k`: the k-block memory fold (src advances 64 per
+  block, the ground frame wb=64960 reused every pass) — the loop's
+  entire memory effect, and I2e-4's composition currency.
+- The callee run `shb_wcall` (S^ 1196 c): one-instruction peel
+  (`shb_push`, the phase-pin idiom at machine grain — I32Const costs
+  1 fuel), then shw_wblock with `(inst d c)` (dangling binder).
+- The worker `shb_wloop` (S^ 1212 (lg_fuel k c)): k loop passes from
+  the loop head ARE the fold. call_bridge instantiates the FOLDED
+  callee (`(inst f (inline shb_wfn))`, popped args reversed, `(inst
+  rest st)` for the dangling pivot). Counter bound cert: k2 <= 64896
+  < 2^32 via `(rows (goal 1) (hnn 63) (hqs 1) (0 1))`.
+- THE LITERAL-MODULE-SPINE idiom (new): the denotation needs
+  func_at/body_of to COMPUTE on the loop fn while the worker's cite
+  still matches the module — resolved by spelling the loop fn as a
+  literal `(MkFunc 2 0 (list (Block (list (Loop (inline
+  shb_wbody)))) (I32Const 0)))` IN the module (the callloop_probe
+  pattern); callees stay folded, reconciled inside call_bridge.
+- Denotation `shb_wblocks` (S^ 1216 (lg_fuel k c)): calling fn index
+  1 on (src, k) returns 0 and lands the memory on `shb_mem m src k`,
+  premises `0 <= src` and `src + 64k <= 64960`.
+- THE X86 FINDING (drives the other leg): shw_xblock's output regs
+  are each an h8 word or ZERO — src (r12) and wb (r13) are clobbered.
+  Register-as-interface means the x86 loop MUST spill src/count to
+  memory across each XCall; [65504, 65536) is free (frame ends at
+  65504), spill grain = 4-byte words via the wput/wget chains. The
+  spill loop is additive — the frozen block is untouched.
+- Gate: weld 948/0 (+6: shb_push/shb_wcall/shb_wloop/shb_wblocks +
+  measured shb_mem + shb_mem_z/s).
+- NEXT: the x86 spill-loop leg (I2e-3b); the sha_blocks spec
+  readback (shb_mem → sha_blocks, needs byte-grain shw_mem framing)
+  composes with pad+hex in I2e-4.
+
 
 ## 7. Non-goals, stated once
 
