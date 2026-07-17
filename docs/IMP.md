@@ -2608,6 +2608,43 @@ register-as-interface's real consequence, paid and proven.**
   digest readback + hex into sha256sum, with the spec collapse
   (folds → sha_blocks) riding the byte-grain framing.
 
+**I2e-4a — THE SPEC COLLAPSE (2026-07-17): both machine folds land
+on sha_blocks; the targets meet at one spec-side fold.**
+
+- Point-grain BELOW family (`ish_get_wput/copy/sched/h8add_below` →
+  `ish_get_shw_below` → `ish_read_shw_below`): byte reads below the
+  frame see through one block effect — SOURCE SURVIVAL, the mirror
+  of I2e-3b's above family.
+- `shw_out_hw`: the block step at UNIFORM WLIST GRAIN (K holds
+  sha_k, H holds st → H holds sha_block of st and the chunk). The
+  8 wget premises of shw_out_h discharge by LANE PROJECTION: apply
+  wl_hd/wl_tl^j to both sides of the window equation, then compute
+  (case-on st first — and rewrite the case hyp INSIDE each
+  obligation, since premises don't see the goal's rewrites).
+- `shb_fold` (the memory-chunk spec fold, chunks always read from
+  the ORIGINAL memory) + `shb_fold_frame`/`shx_spill_fold_frame`
+  (the fold ignores writes above its chunks). THE READBACKS:
+  `shb_hread` (wasm) and `shx_hread` (x86) — the loop denotations'
+  H windows BOTH equal `shw_hlist (shb_fold st m src k)` under the
+  K/H invariants; the x86 spill residue is invisible at this grain,
+  so the promised shb_mem/shx_mem unification needed no residue
+  surgery at all.
+- Stage C `shb_fold_blocks` (UNPREMISED): `shb_fold st m src k =
+  sha_blocks st (shb_bytes m src k) (int_of_nat k)` — chunk
+  boundaries are exactly stake/sdrop 64 via `ish_read_len` +
+  the new `ish_stake64_app`/`ish_sdrop64_app` (premised literal-64
+  forms over `ish_stake_app`/`ish_sdrop_app`/`ish_slen_lo`).
+- Gotchas: `stake 0 rest` sticks on a symbolic list (case-on the
+  second list in Nil cases, rewriting the case hyp in BOTH arms);
+  case-on takes a bare type NAME (`List`, not `(List Int)`);
+  `ish_i8p` added (the packed bridge family grows on demand).
+- Gates: sibling 472/0 (+11), weld 986/0 (+17).
+- NEXT (I2e-4b): the K/H init composition (ikh_mem readbacks meet
+  the fold's invariants), the pad-tier crossing (memory holds
+  sha_pad msg → shb_bytes = the padded list), then digest readback
+  + hex over the final fold; then the bin (I2e-4c: thin World main,
+  slurp ≤ cap, controlled-failure leg, NIST vectors).
+
 
 ## 7. Non-goals, stated once
 
