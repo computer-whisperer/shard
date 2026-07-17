@@ -203,6 +203,8 @@ TARGETS=(
   examples/arglen_x86_out.shard
   examples/echoarg_src.shard
   examples/echoarg_x86_out.shard
+  models/riscv/riscv.shard
+  examples/riscv_smoke.shard
   examples/upcase_src.shard
   examples/upcase_x86_out.shard
   examples/parse_src.shard

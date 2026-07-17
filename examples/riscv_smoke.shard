@@ -1,0 +1,218 @@
+;;; examples/riscv_smoke.shard — ground-truth smoke of the RISC-V model
+;;; (docs/RISCV.md G1). The headline is the WIDTH PARAMETER: the same
+;;; two-function module — add(a,b), and sum(n) looping over Call add —
+;;; is instantiated at RV32 and at RV64, and the SAME instruction list
+;;; wraps at 2^32 in one and 2^64 in the other, each pinned by one
+;;; (compute both). Also pinned: x0's constant-zero semantics, the
+;;; signed views (sra/slt vs sltu), the memory WINDOW at all legs of
+;;; both guards (the x86 §23 fixture discipline, incl. the below-window
+;;; leg a prefix guard could not state), fuel exhaustion as None, and
+;;; the slice-2 preview — symbolic-value straight-line pieces at both
+;;; widths.
+
+(import "../kernel/stdlib.shard")
+(import "../std/mem")
+(import "../models/riscv/riscv.shard")
+
+(use (:: std mem *))
+(use (:: models riscv riscv *))
+
+;; func 0: add(a, b) = a + b (wrapped at module width) — a0 = a0 + a1
+(fn add_fn () RvFunc (MkRvFunc 2 (list (RvBin RvAdd A0 A0 (RvSReg A1)))))
+
+;; func 1: sum(n) = n + (n-1) + ... + 1, via block/loop with an
+;; accumulator in a1 and a Call to func 0. beqz = RvBeq against X0; the
+;; decrement is one three-operand addi off the parked copy.
+(fn sum_fn () RvFunc
+  (MkRvFunc
+    1
+    (list
+      (RvLi A1 0)
+      (RvBlock
+        (list
+          (RvLoop
+            (list
+              (RvBrIf (RvBeq A0 X0) 1)  ; n == 0 -> exit the block
+              (RvMv A2 A0)  ; park n (the call clobbers a0)
+              (RvCall 0)  ; n + acc -> a0 (args already home)
+              (RvMv A1 A0)  ; -> acc
+              (RvBin RvAdd A0 A2 (RvSImm -1))  ; addi a0, a2, -1
+              (RvBr 0)))))  ; re-enter the loop
+      (RvMv A0 A1))))
+
+(fn demo32 () RvModule (MkRvModule (list (add_fn) (sum_fn)) RV32 0 0))
+
+(fn demo64 () RvModule (MkRvModule (list (add_fn) (sum_fn)) RV64 0 0))
+
+(claim smoke_add32
+  (goal () () (= (rvcall_fn (rvfnat 20) (demo32) 0 (list 3 4)) (Some 7)))
+  (steps ((compute both)) refl))
+
+;; the width parameter, pinned: (2^32 - 1) + 2 wraps to 1 at RV32 ...
+(claim smoke_wrap32
+  (goal () ()
+    (= (rvcall_fn (rvfnat 20) (demo32) 0 (list 4294967295 2)) (Some 1)))
+  (steps ((compute both)) refl))
+
+;; ... and the SAME instruction list carries to 2^32 + 1 at RV64
+(claim smoke_wrap64
+  (goal () ()
+    (= (rvcall_fn (rvfnat 20) (demo64) 0 (list 4294967295 2)) (Some 4294967297)))
+  (steps ((compute both)) refl))
+
+;; the loop + call plumbing: sum(4) = 10, at both widths
+(claim smoke_sum32
+  (goal () () (= (rvcall_fn (rvfnat 300) (demo32) 1 (list 4)) (Some 10)))
+  (steps ((compute both)) refl))
+
+(claim smoke_sum64
+  (goal () () (= (rvcall_fn (rvfnat 300) (demo64) 1 (list 4)) (Some 10)))
+  (steps ((compute both)) refl))
+
+;; fuel exhaustion is None, exclusively
+(claim smoke_fuel_out
+  (goal () () (= (rvcall_fn (rvfnat 3) (demo32) 1 (list 4)) None))
+  (steps ((compute both)) refl))
+
+;; --- x0 and the signed views ----------------------------------------------------
+
+;; func 0: sra(a) = a >>s 1; func 1: slt(a, b); func 2: sltu(a, b);
+;; func 3: x0(a) — a write to X0 is discarded, a read is 0.
+(fn sra_fn () RvFunc (MkRvFunc 1 (list (RvBin RvSra A0 A0 (RvSImm 1)))))
+
+(fn slt_fn () RvFunc (MkRvFunc 2 (list (RvBin RvSlt A0 A0 (RvSReg A1)))))
+
+(fn sltu_fn () RvFunc (MkRvFunc 2 (list (RvBin RvSltu A0 A0 (RvSReg A1)))))
+
+(fn x0_fn () RvFunc
+  (MkRvFunc 1 (list (RvLi X0 7) (RvBin RvAdd A0 A0 (RvSReg X0)))))
+
+(fn misc64 () RvModule
+  (MkRvModule (list (sra_fn) (slt_fn) (sltu_fn) (x0_fn)) RV64 0 0))
+
+;; arithmetic shift: -1 >>s 1 = -1 (the sign bit smears)
+(claim smoke_sra
+  (goal () ()
+    (=
+      (rvcall_fn (rvfnat 20) (misc64) 0 (list 18446744073709551615))
+      (Some 18446744073709551615)))
+  (steps ((compute both)) refl))
+
+;; signed: -1 <s 0 ...
+(claim smoke_slt
+  (goal () ()
+    (=
+      (rvcall_fn (rvfnat 20) (misc64) 1 (list 18446744073709551615 0))
+      (Some 1)))
+  (steps ((compute both)) refl))
+
+;; ... but unsigned: 2^64 - 1 is the TOP, not below 0
+(claim smoke_sltu
+  (goal () ()
+    (=
+      (rvcall_fn (rvfnat 20) (misc64) 2 (list 18446744073709551615 0))
+      (Some 0)))
+  (steps ((compute both)) refl))
+
+;; x0: the li lands nowhere, the add reads 0 — a passes through
+(claim smoke_x0
+  (goal () () (= (rvcall_fn (rvfnat 20) (misc64) 3 (list 5)) (Some 5)))
+  (steps ((compute both)) refl))
+
+;; --- the memory window, all legs of both guards ---------------------------------
+;; The x86 §23 fixture discipline: RvLoad8 and RvStore8 each carry their
+;; OWN copy of the window guard, so each gets all four legs — in-window,
+;; the last byte (halfopen boundary), at-hi traps, below-window traps.
+;; The below-window leg is the one a prefix guard could not even state.
+;; The Some legs run the SAME fuel as the trap legs, which is what makes
+;; the None legs mean trap rather than exhaustion. Memory is SYMBOLIC —
+;; the stuck opaque mem_get/mem_set terms are the pinned result, so no
+;; std/mem laws are needed.
+
+;; func 0: load(p) = mem[p] — a0 = mem[a0]
+(fn ld_fn () RvFunc (MkRvFunc 1 (list (RvLoad8 A0 (RvAReg A0)))))
+
+;; func 0: store(p, v) — mem[a0] = a1 (a0 rides through unchanged)
+(fn st_fn () RvFunc (MkRvFunc 2 (list (RvStore8 (RvAReg A0) A1))))
+
+(fn ld_mod () RvModule (MkRvModule (list (ld_fn)) RV32 100 200))
+
+(fn st_mod () RvModule (MkRvModule (list (st_fn)) RV32 100 200))
+
+(claim window_in_reads
+  (goal ((mem Mem)) ()
+    (=
+      (rvcall_fn_mem (rvfnat 5) (ld_mod) 0 (list 100) mem)
+      (Some (Pair (mem_get mem 100) mem))))
+  (steps ((compute both)) refl))
+
+(claim window_last_byte_reads
+  (goal ((mem Mem)) ()
+    (=
+      (rvcall_fn_mem (rvfnat 5) (ld_mod) 0 (list 199) mem)
+      (Some (Pair (mem_get mem 199) mem))))
+  (steps ((compute both)) refl))
+
+(claim window_hi_traps
+  (goal ((mem Mem)) ()
+    (= (rvcall_fn_mem (rvfnat 5) (ld_mod) 0 (list 200) mem) None))
+  (steps ((compute both)) refl))
+
+(claim window_below_traps
+  (goal ((mem Mem)) ()
+    (= (rvcall_fn_mem (rvfnat 5) (ld_mod) 0 (list 50) mem) None))
+  (steps ((compute both)) refl))
+
+(claim window_zero_traps
+  (goal ((mem Mem)) ()
+    (= (rvcall_fn_mem (rvfnat 5) (ld_mod) 0 (list 0) mem) None))
+  (steps ((compute both)) refl))
+
+(claim window_store_in_writes
+  (goal ((mem Mem)) ()
+    (=
+      (rvcall_fn_mem (rvfnat 5) (st_mod) 0 (list 100 65) mem)
+      (Some (Pair 100 (mem_set mem 100 65)))))
+  (steps ((compute both)) refl))
+
+(claim window_store_last_byte_writes
+  (goal ((mem Mem)) ()
+    (=
+      (rvcall_fn_mem (rvfnat 5) (st_mod) 0 (list 199 65) mem)
+      (Some (Pair 199 (mem_set mem 199 65)))))
+  (steps ((compute both)) refl))
+
+(claim window_store_hi_traps
+  (goal ((mem Mem)) ()
+    (= (rvcall_fn_mem (rvfnat 5) (st_mod) 0 (list 200 65) mem) None))
+  (steps ((compute both)) refl))
+
+(claim window_store_below_traps
+  (goal ((mem Mem)) ()
+    (= (rvcall_fn_mem (rvfnat 5) (st_mod) 0 (list 50 65) mem) None))
+  (steps ((compute both)) refl))
+
+(claim window_store_zero_traps
+  (goal ((mem Mem)) ()
+    (= (rvcall_fn_mem (rvfnat 5) (st_mod) 0 (list 0 65) mem) None))
+  (steps ((compute both)) refl))
+
+;; --- the slice-2 preview --------------------------------------------------------
+;; A SYMBOLIC-value piece theorem for straight-line code (concrete code +
+;; literal fuel, forall values) closes by compute alone — at BOTH widths,
+;; and the residue is the ground-modulus mod term the wasm/x86 piece
+;; proofs speak (the width parameter costs symbolic reduction nothing).
+
+(claim add_sym32
+  (goal ((a Int) (b Int)) ()
+    (=
+      (rvcall_fn (rvfnat 20) (demo32) 0 (list a b))
+      (Some (rv_wrap RV32 (+ a b)))))
+  (steps ((compute both)) refl))
+
+(claim add_sym64
+  (goal ((a Int) (b Int)) ()
+    (=
+      (rvcall_fn (rvfnat 20) (demo64) 0 (list a b))
+      (Some (rv_wrap RV64 (+ a b)))))
+  (steps ((compute both)) refl))

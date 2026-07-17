@@ -1,0 +1,818 @@
+;;; models/riscv/riscv.shard — the RISC-V ISA model (docs/RISCV.md; groundwork G1).
+;;;
+;;; An ordinary shard library, the THIRD target speaking the operational
+;;; discipline models/wasm/wasm.shard established and models/x86/x86.shard
+;;; proved target-generic: fuel-indexed big-step, named SCC members, Out
+;;; outcomes, a call_fn denotation boundary, and a call-composition
+;;; keystone. The abstraction ledger this file instantiates is
+;;; docs/RISCV.md §3-§4; the LOWERING.md §8 contract items are called out
+;;; inline.
+;;;
+;;; Shape decisions (docs/RISCV.md, pinned here):
+;;;   - ONE MODEL, BOTH WIDTHS: RV32 and RV64 share every datatype and the
+;;;     whole interpreter. The width is a VALUE — (rvxlen RvXlen) in the
+;;;     module record, threaded to exactly the ops whose semantics read it
+;;;     (wrap modulus, shift mask, signed view). On a concrete module,
+;;;     compute collapses rv_mod/rv_bits to ground literals, so piece
+;;;     proofs see the same ground-modulus residues wasm/x86 proofs see.
+;;;     (The floats arc's value-parametric-core precedent.)
+;;;   - Values are bare Int in [0, 2^XLEN), wrapped by euclidean mod at
+;;;     every arithmetic write (rv_wrap) — wrap32/wrap64 generalized. The
+;;;     interpreter must REDUCE in consumer proofs, so the representation
+;;;     is arithmetic, not bit-lists.
+;;;   - THREE-OPERAND ops: rd = rs1 OP src2. RISC-V is a three-operand
+;;;     ISA; the two-operand destructive shape is an x86-ism and does not
+;;;     enter this model.
+;;;   - x0 IS IN THE OPERAND TYPE: reads 0, writes discard — the
+;;;     datasheet's constant-zero register. beqz/bnez/mv/li/neg and
+;;;     store-zero all come free through it, so no zero-test condition
+;;;     ctors are needed (compare against X0).
+;;;   - ra (x1) and sp (x2) are ENCODER-OWNED and absent from the model:
+;;;     the control stack is private (the x86 no-rsp ruling, doubled —
+;;;     RISC-V links through a register, so both the link register and
+;;;     the spill stack belong to the encoder's RvCall/RvRet lowering).
+;;;     Return addresses do not exist as values. The register file is the
+;;;     remaining 29 GPRs, ABI-named.
+;;;   - Fused two-register branch conditions: RvCond's six ctors ARE the
+;;;     six datasheet branches (beq/bne/blt/bge/bltu/bgeu) — unlike x86,
+;;;     the encoder synthesizes nothing. Branches compare REGISTERS only
+;;;     (no immediate compare exists in the ISA); materialize constants
+;;;     first.
+;;;   - Structured control mirrors the proven Block/Loop/Br-depth shape
+;;;     (RvBlock/RvLoop/RvBr/RvBrIf): reducible control is a permanent
+;;;     abstraction; the flattening encoder owns labels and branch
+;;;     offsets (all units 4 bytes in v1 — no RVC).
+;;;   - Memory is std/mem's OPAQUE substrate, byte ops only in v1 (LBU
+;;;     load, SB store; wide/sign-extending forms are named growth).
+;;;     Bounds are byte-precise against the module's static WINDOW
+;;;     [rvmemlo, rvmemhi) — the x86 §23 soundness argument verbatim: a
+;;;     stray access outside the mapped window must TRAP so a Some(...)
+;;;     cert is unprovable for a binary that faults.
+;;;   - Nat fuel, structural, burns on EVERY SCC entry; None = fuel out
+;;;     exclusively; RvTrap = dynamic failure (invalid code, out-of-window
+;;;     access). Fuel is a DEPTH bound: rveval_seq hands the same peeled
+;;;     fuel to head and tail; a loop costs one unit per re-entry (the IH
+;;;     law).
+;;;   - RvEcall is the effect point (the `ecall` instruction). The PURE
+;;;     fragment cannot express what the kernel/monitor does, so here it
+;;;     is a dynamic failure; a world layer interprets this arm when
+;;;     platform work arrives (the models/x86/world.shard precedent).
+
+(import "../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
+(import "../../std/mem")  ; the opaque byte substrate (Mem / mem_get / mem_set)
+(use (:: std mem *))
+
+;; local list length (transparent; std/list is opaque in check mode)
+(fn rvlen ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons h t) (+ 1 (rvlen t)))))
+
+;; ground fuel from an Int count — run/differential ergonomics
+(fn rvfnat_go ((n Int) (acc Nat)) Nat
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) acc (rvfnat_go (- n 1) (S acc))))
+
+(fn rvfnat ((n Int)) Nat (rvfnat_go n Z))
+
+;; --- the width parameter ------------------------------------------------------
+
+;; The machine word width, a VALUE the module carries. Everything
+;; width-dependent dispatches on it: the wrap modulus (rv_mod), the shift
+;; count mask (rv_bits — the datasheet's lower-5/6-bits rule), and the
+;; signed view's pivot (rv_half). Ground modules collapse these to
+;; literals under compute.
+(type RvXlen (RV32) (RV64))
+
+(fn rv_bits ((w RvXlen)) Int
+  (match w
+    (RV32 32)
+    (RV64 64)))
+
+(fn rv_mod ((w RvXlen)) Int
+  (match w
+    (RV32 4294967296)
+    (RV64 18446744073709551616)))
+
+(fn rv_half ((w RvXlen)) Int
+  (match w
+    (RV32 2147483648)
+    (RV64 9223372036854775808)))
+
+;; wrap to XLEN: euclidean mod, so negatives land in [0, 2^XLEN) too
+(fn rv_wrap ((w RvXlen) (x Int)) Int (mod x (rv_mod w)))
+
+;; the signed view of an in-range value: two's-complement read-off
+(fn rv_sgn ((w RvXlen) (x Int)) Int (if (lt x (rv_half w)) x (- x (rv_mod w))))
+
+;; in-range wrap is the identity, once per width — the representation-
+;; collapse lemmas (LOWERING §8 item 4; the emitters discharge at ground
+;; per-module width, so these ground forms are the citation targets).
+;; Transplants: wrap32_id (models/wasm) / wrap64_id (models/x86) —
+;; div-facts names the quotient q, rational farkas pins q to (-1,1) with
+;; the modulus as a coefficient, fin-split supplies the integrality.
+(claim rv_wrap32_id
+  (goal ((x Int)) ((= (le 0 x) True) (= (lt x 4294967296) True))
+    (= (mod x 4294967296) x))
+  (div-facts
+    x
+    4294967296
+    q
+    (have qlo (= (le -1 q) True)
+      (by arith (list 4294967296 1 0 -1 0 1 0))
+      (have qhi (= (le q 1) True)
+        (by arith (list 4294967296 0 1 1 1 0 0))
+        (fin-split
+          q
+          (premise qlo)
+          (premise qhi)
+          ((case -1
+             (by
+               arith
+               (list (list 0 1 0 -1 0 1 0 0 0) (list 0 1 0 -1 0 1 0 0 0))))
+           (case 0
+             (by
+               arith
+               (list (list 1 0 0 1 0 0 0 0 0) (list 1 0 0 -1 0 0 0 0 0))))
+           (case 1
+             (by arith (list (list 0 0 1 1 1 0 0 0 0) (list 0 0 1 1 1 0 0 0 0))))))))))
+
+(claim rv_wrap64_id
+  (goal ((x Int)) ((= (le 0 x) True) (= (lt x 18446744073709551616) True))
+    (= (mod x 18446744073709551616) x))
+  (div-facts
+    x
+    18446744073709551616
+    q
+    (have qlo (= (le -1 q) True)
+      (by arith (list 18446744073709551616 1 0 -1 0 1 0))
+      (have qhi (= (le q 1) True)
+        (by arith (list 18446744073709551616 0 1 1 1 0 0))
+        (fin-split
+          q
+          (premise qlo)
+          (premise qhi)
+          ((case -1
+             (by
+               arith
+               (list (list 0 1 0 -1 0 1 0 0 0) (list 0 1 0 -1 0 1 0 0 0))))
+           (case 0
+             (by
+               arith
+               (list (list 1 0 0 1 0 0 0 0 0) (list 1 0 0 -1 0 0 0 0 0))))
+           (case 1
+             (by arith (list (list 0 0 1 1 1 0 0 0 0) (list 0 0 1 1 1 0 0 0 0))))))))))
+
+;; --- the register file --------------------------------------------------------
+
+;; 29 GPRs in datasheet number order x3..x31, ABI-named (what objdump
+;; prints): gp tp / t0-t2 / s0 s1 / a0-a7 / s2-s11 / t3-t6. x0 is not a
+;; field (it is not state — reads are the constant 0, writes discard);
+;; x1 (ra) and x2 (sp) are the encoder's (private control stack). Record
+;; fields give FIELD_of/with_FIELD get/set that collapse by compute on
+;; any concrete register file — and instructions always name registers
+;; by ground ctor, so machine states in piece proofs stay computable.
+(record
+  RvRegs
+  (gp Int)
+  (tp Int)
+  (t0 Int)
+  (t1 Int)
+  (t2 Int)
+  (s0 Int)
+  (s1 Int)
+  (a0 Int)
+  (a1 Int)
+  (a2 Int)
+  (a3 Int)
+  (a4 Int)
+  (a5 Int)
+  (a6 Int)
+  (a7 Int)
+  (s2 Int)
+  (s3 Int)
+  (s4 Int)
+  (s5 Int)
+  (s6 Int)
+  (s7 Int)
+  (s8 Int)
+  (s9 Int)
+  (s10 Int)
+  (s11 Int)
+  (t3 Int)
+  (t4 Int)
+  (t5 Int)
+  (t6 Int))
+
+(fn rvregs0 () RvRegs
+  (MkRvRegs 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
+
+;; register names as instruction operands: X0 plus the 29 file members
+(type RvReg
+  (X0)
+  (GP)
+  (TP)
+  (T0)
+  (T1)
+  (T2)
+  (S0)
+  (S1)
+  (A0)
+  (A1)
+  (A2)
+  (A3)
+  (A4)
+  (A5)
+  (A6)
+  (A7)
+  (S2)
+  (S3)
+  (S4)
+  (S5)
+  (S6)
+  (S7)
+  (S8)
+  (S9)
+  (S10)
+  (S11)
+  (T3)
+  (T4)
+  (T5)
+  (T6))
+
+(fn rv_get ((rs RvRegs) (r RvReg)) Int
+  (match r
+    (X0 0)
+    (GP (gp_of rs))
+    (TP (tp_of rs))
+    (T0 (t0_of rs))
+    (T1 (t1_of rs))
+    (T2 (t2_of rs))
+    (S0 (s0_of rs))
+    (S1 (s1_of rs))
+    (A0 (a0_of rs))
+    (A1 (a1_of rs))
+    (A2 (a2_of rs))
+    (A3 (a3_of rs))
+    (A4 (a4_of rs))
+    (A5 (a5_of rs))
+    (A6 (a6_of rs))
+    (A7 (a7_of rs))
+    (S2 (s2_of rs))
+    (S3 (s3_of rs))
+    (S4 (s4_of rs))
+    (S5 (s5_of rs))
+    (S6 (s6_of rs))
+    (S7 (s7_of rs))
+    (S8 (s8_of rs))
+    (S9 (s9_of rs))
+    (S10 (s10_of rs))
+    (S11 (s11_of rs))
+    (T3 (t3_of rs))
+    (T4 (t4_of rs))
+    (T5 (t5_of rs))
+    (T6 (t6_of rs))))
+
+(fn rv_set ((rs RvRegs) (r RvReg) (v Int)) RvRegs
+  (match r
+    (X0 rs)
+    (GP (with_gp v rs))
+    (TP (with_tp v rs))
+    (T0 (with_t0 v rs))
+    (T1 (with_t1 v rs))
+    (T2 (with_t2 v rs))
+    (S0 (with_s0 v rs))
+    (S1 (with_s1 v rs))
+    (A0 (with_a0 v rs))
+    (A1 (with_a1 v rs))
+    (A2 (with_a2 v rs))
+    (A3 (with_a3 v rs))
+    (A4 (with_a4 v rs))
+    (A5 (with_a5 v rs))
+    (A6 (with_a6 v rs))
+    (A7 (with_a7 v rs))
+    (S2 (with_s2 v rs))
+    (S3 (with_s3 v rs))
+    (S4 (with_s4 v rs))
+    (S5 (with_s5 v rs))
+    (S6 (with_s6 v rs))
+    (S7 (with_s7 v rs))
+    (S8 (with_s8 v rs))
+    (S9 (with_s9 v rs))
+    (S10 (with_s10 v rs))
+    (S11 (with_s11 v rs))
+    (T3 (with_t3 v rs))
+    (T4 (with_t4 v rs))
+    (T5 (with_t5 v rs))
+    (T6 (with_t6 v rs))))
+
+;; --- operands, conditions, operators ------------------------------------------
+
+;; source operand for the ALU: register or immediate. The immediate wraps
+;; at module width (I-type 12-bit encodability is the ENCODER's legality
+;; check, like x86's SImm=imm32 fence — the model's semantics are total).
+(type RvSrc (RvSReg RvReg) (RvSImm Int))
+
+;; address operand: register-indirect only in v1; the native base+offset
+;; form off(rs1) arrives as a new arm (docs/RISCV.md named growth #1).
+(type RvAddr (RvAReg RvReg))
+
+;; ALU ops, three-operand: rd = a OP b. Arithmetic wraps at width; the
+;; bitwise trio is closed on [0, 2^XLEN); shifts mask their count to the
+;; datasheet's lower 5/6 bits; slt/sltu materialize a comparison as 0/1.
+;; RvMul is the M extension's MUL (low XLEN bits — exactly wrap); the
+;; rest of M (mulh*/div/rem — datasheet-true, non-trapping) is named
+;; growth with its first consumer.
+(type RvBop
+  (RvAdd)
+  (RvSub)
+  (RvMul)
+  (RvAnd)
+  (RvOr)
+  (RvXor)
+  (RvSll)
+  (RvSrl)
+  (RvSra)
+  (RvSlt)
+  (RvSltu))
+
+;; sra: euclidean division of the SIGNED view by 2^count is exactly the
+;; arithmetic shift (floor toward -inf), wrapped back to the unsigned
+;; representation. Spelled via ediv so no shift primitive ever sees a
+;; negative operand.
+(fn rv_bop ((w RvXlen) (o RvBop) (a Int) (b Int)) Int
+  (match o
+    (RvAdd (rv_wrap w (+ a b)))
+    (RvSub (rv_wrap w (- a b)))
+    (RvMul (rv_wrap w (* a b)))
+    (RvAnd (band a b))
+    (RvOr (bor a b))
+    (RvXor (bxor a b))
+    (RvSll (rv_wrap w (bshl a (mod b (rv_bits w)))))
+    (RvSrl (bshr a (mod b (rv_bits w))))
+    (RvSra (rv_wrap w (ediv (rv_sgn w a) (bshl 1 (mod b (rv_bits w))))))
+    (RvSlt (if (lt (rv_sgn w a) (rv_sgn w b)) 1 0))
+    (RvSltu (if (lt a b) 1 0))))
+
+(fn rv_src ((w RvXlen) (rs RvRegs) (s RvSrc)) Int
+  (match s
+    ((RvSReg r) (rv_get rs r))
+    ((RvSImm v) (rv_wrap w v))))
+
+(fn rv_addr ((rs RvRegs) (a RvAddr)) Int
+  (match a
+    ((RvAReg r) (rv_get rs r))))
+
+;; the six datasheet branches, fused and two-register — each ctor IS one
+;; instruction (beq/bne/blt/bge/bltu/bgeu). The branch is TAKEN exactly
+;; when the condition holds. Zero forms come free through X0.
+(type RvCond
+  (RvBeq RvReg RvReg)
+  (RvBne RvReg RvReg)
+  (RvBlt RvReg RvReg)
+  (RvBge RvReg RvReg)
+  (RvBltu RvReg RvReg)
+  (RvBgeu RvReg RvReg))
+
+(fn rv_cond ((w RvXlen) (rs RvRegs) (c RvCond)) Bool
+  (match c
+    ((RvBeq r1 r2) (int_eq (rv_get rs r1) (rv_get rs r2)))
+    ((RvBne r1 r2) (if (int_eq (rv_get rs r1) (rv_get rs r2)) False True))
+    ((RvBlt r1 r2) (lt (rv_sgn w (rv_get rs r1)) (rv_sgn w (rv_get rs r2))))
+    ((RvBge r1 r2) (le (rv_sgn w (rv_get rs r2)) (rv_sgn w (rv_get rs r1))))
+    ((RvBltu r1 r2) (lt (rv_get rs r1) (rv_get rs r2)))
+    ((RvBgeu r1 r2) (le (rv_get rs r2) (rv_get rs r1)))))
+
+;; --- the instruction set (RV32I/RV64I fragment, probe-sized) -------------------
+
+;; RvLi is `li` (the constant materializer — the encoder owns its
+;; addi/lui+addi/shift-build expansion); RvMv is `mv` (addi rd, rs, 0).
+;; Loads are LBU (zero-extending byte), stores SB — a store source is a
+;; REGISTER, as in the ISA (X0 gives store-zero). No AUIPC ever: PC is
+;; not a value (code-is-not-data).
+(type RvInstr
+  (RvLi RvReg Int)
+  (RvMv RvReg RvReg)
+  (RvBin RvBop RvReg RvReg RvSrc)
+  (RvLoad8 RvReg RvAddr)
+  (RvStore8 RvAddr RvReg)
+  (RvBlock (List RvInstr))
+  (RvLoop (List RvInstr))
+  (RvBr Int)
+  (RvBrIf RvCond Int)
+  (RvCall Int)
+  (RvRet)
+  (RvEcall))
+
+;; A function: parameter count (<= 8 — the a0-a7 homes) and a body. The
+;; result is a0 at completion; there is no result-arity machinery.
+(record RvFunc (rvparams Int) (rvbody (List RvInstr)))
+
+;; A module: functions addressed by index, the WIDTH, and the static
+;; memory WINDOW [rvmemlo, rvmemhi) in bytes — the region a process
+;; actually maps. An empty window (lo = hi) admits no access at all.
+(record
+  RvModule
+  (rvfuncs (List RvFunc))
+  (rvxlen RvXlen)
+  (rvmemlo Int)
+  (rvmemhi Int))
+
+(fn rvfunc_at ((fs (List RvFunc)) (i Int)) (Option RvFunc)
+  (measure (struct fs))
+  (match fs
+    (Nil None)
+    ((Cons f t) (if (int_eq i 0) (Some f) (rvfunc_at t (- i 1))))))
+
+;; --- evaluation outcomes -------------------------------------------------------
+
+;; Normal completion carries registers and memory forward; RvBrk is an
+;; in-flight branch unwinding d labels; RvRetO an in-flight return
+;; (registers ride along — a0 is the result); RvTrap is dynamic failure.
+(type RvOut
+  (RvNorm RvRegs Mem)
+  (RvBrk Int RvRegs Mem)
+  (RvRetO RvRegs Mem)
+  (RvTrap))
+
+;; exiting a block: a depth-0 branch becomes normal completion after it
+(fn rv_block_exit ((out RvOut)) RvOut
+  (match out
+    ((RvNorm rs mem) (RvNorm rs mem))
+    ((RvBrk d rs mem) (if (int_eq d 0) (RvNorm rs mem) (RvBrk (- d 1) rs mem)))
+    ((RvRetO rs mem) (RvRetO rs mem))
+    (RvTrap RvTrap)))
+
+;; --- the interpreter (one fuel-countdown SCC) ----------------------------------
+
+;; Same discipline as the wasm/x86 SCCs: every entry burns one fuel unit;
+;; None = fuel exhausted, exclusively; fuel is a depth bound (rveval_seq
+;; hands the same f2 to head and tail; a loop costs one unit per
+;; re-entry).
+
+(fn rveval_instr ((fuel Nat) (m RvModule) (i RvInstr) (rs RvRegs) (mem Mem))
+  (Option RvOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match i
+       ((RvLi r v) (Some (RvNorm (rv_set rs r (rv_wrap (rvxlen_of m) v)) mem)))
+       ((RvMv d s) (Some (RvNorm (rv_set rs d (rv_get rs s)) mem)))
+       ((RvBin o d s1 s2)
+        (Some
+          (RvNorm
+            (rv_set
+              rs
+              d
+              (rv_bop
+                (rvxlen_of m)
+                o
+                (rv_get rs s1)
+                (rv_src (rvxlen_of m) rs s2)))
+            mem)))
+       ((RvLoad8 d a)
+        (let ((p (rv_addr rs a)))
+          (if (le (rvmemlo_of m) p)
+            (if (le (+ p 1) (rvmemhi_of m))
+              (Some (RvNorm (rv_set rs d (mem_get mem p)) mem))
+              (Some RvTrap))
+            (Some RvTrap))))
+       ((RvStore8 a r)
+        (let ((p (rv_addr rs a)))
+          (if (le (rvmemlo_of m) p)
+            (if (le (+ p 1) (rvmemhi_of m))
+              (Some (RvNorm rs (mem_set mem p (rv_get rs r))))
+              (Some RvTrap))
+            (Some RvTrap))))
+       ((RvBlock body)
+        (match (rveval_seq f2 m body rs mem)
+          (None None)
+          ((Some out) (Some (rv_block_exit out)))))
+       ((RvLoop body) (rveval_loop f2 m body rs mem))
+       ((RvBr d) (Some (RvBrk d rs mem)))
+       ((RvBrIf c d)
+        (if (rv_cond (rvxlen_of m) rs c) (Some (RvBrk d rs mem))
+        (Some (RvNorm rs mem))))
+       ((RvCall k) (rveval_call f2 m k rs mem))
+       (RvRet (Some (RvRetO rs mem)))
+       ;; the effect point (`ecall`). The PURE fragment cannot express
+       ;; what the kernel does, so here it is a dynamic failure — None
+       ;; stays exclusively fuel. A world layer interprets this arm when
+       ;; platform work arrives (models/x86/world.shard precedent).
+       (RvEcall (Some RvTrap))))))
+
+;; the call engine — a NAMED SCC member (composed proofs stop here and
+;; cite the callee's cert). No frame construction: the callee runs on the
+;; caller's register file (args already in their a0-a7 homes) and the
+;; caller continues with the callee's final registers. Preservation of
+;; saved registers is the CALLEE CERT's business (the clobber-set form).
+(fn rveval_call ((fuel Nat) (m RvModule) (k Int) (rs RvRegs) (mem Mem))
+  (Option RvOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match (rvfunc_at (rvfuncs_of m) k)
+       (None (Some RvTrap))
+       ((Some f)
+        (match (rveval_seq f2 m (rvbody_of f) rs mem)
+          (None None)
+          ((Some out)
+           (match out
+             ((RvNorm rs2 mem2) (Some (RvNorm rs2 mem2)))
+             ((RvRetO rs2 mem2) (Some (RvNorm rs2 mem2)))
+             ((RvBrk d rs2 mem2) (Some RvTrap))
+             (RvTrap (Some RvTrap))))))))))
+
+;; the loop engine — a NAMED SCC member: loop-body induction recurses on
+;; exactly this unit; a depth-0 branch RE-ENTERS at fuel-1 (the IH law).
+(fn rveval_loop
+  ((fuel Nat) (m RvModule) (body (List RvInstr)) (rs RvRegs) (mem Mem))
+  (Option RvOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match (rveval_seq f2 m body rs mem)
+       (None None)
+       ((Some out)
+        (match out
+          ((RvNorm rs2 mem2) (Some (RvNorm rs2 mem2)))
+          ((RvBrk d rs2 mem2)
+           (if (int_eq d 0) (rveval_loop f2 m body rs2 mem2)
+           (Some (RvBrk (- d 1) rs2 mem2))))
+          ((RvRetO rs2 mem2) (Some (RvRetO rs2 mem2)))
+          (RvTrap (Some RvTrap))))))))
+
+(fn rveval_seq
+  ((fuel Nat) (m RvModule) (is (List RvInstr)) (rs RvRegs) (mem Mem))
+  (Option RvOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match is
+       (Nil (Some (RvNorm rs mem)))
+       ((Cons i rest)
+        (match (rveval_instr f2 m i rs mem)
+          (None None)
+          ((Some out)
+           (match out
+             ((RvNorm rs2 mem2) (rveval_seq f2 m rest rs2 mem2))
+             ((RvBrk d rs2 mem2) (Some (RvBrk d rs2 mem2)))
+             ((RvRetO rs2 mem2) (Some (RvRetO rs2 mem2)))
+             (RvTrap (Some RvTrap))))))))))
+
+;; --- the big-step denotation (the composition boundary) ------------------------
+
+;; The eight model homes: the standard calling convention's argument
+;; registers a0-a7, positions 0-7. Remaining registers zero. None = more
+;; than eight. (The s-register local-home growth arrives with the
+;; lowering arc, the x86 6->12 precedent.)
+(fn rv_args ((args (List Int))) (Option RvRegs)
+  (match args
+    (Nil (Some (rvregs0)))
+    ((Cons v0 t0)
+     (match t0
+       (Nil (Some (with_a0 v0 (rvregs0))))
+       ((Cons v1 t1)
+        (match t1
+          (Nil (Some (with_a1 v1 (with_a0 v0 (rvregs0)))))
+          ((Cons v2 t2)
+           (match t2
+             (Nil (Some (with_a2 v2 (with_a1 v1 (with_a0 v0 (rvregs0))))))
+             ((Cons v3 t3)
+              (match t3
+                (Nil
+                  (Some
+                    (with_a3
+                      v3
+                      (with_a2 v2 (with_a1 v1 (with_a0 v0 (rvregs0)))))))
+                ((Cons v4 t4)
+                 (match t4
+                   (Nil
+                     (Some
+                       (with_a4
+                         v4
+                         (with_a3
+                           v3
+                           (with_a2 v2 (with_a1 v1 (with_a0 v0 (rvregs0))))))))
+                   ((Cons v5 t5)
+                    (match t5
+                      (Nil
+                        (Some
+                          (with_a5
+                            v5
+                            (with_a4
+                              v4
+                              (with_a3
+                                v3
+                                (with_a2 v2 (with_a1 v1 (with_a0 v0 (rvregs0)))))))))
+                      ((Cons v6 t6)
+                       (match t6
+                         (Nil
+                           (Some
+                             (with_a6
+                               v6
+                               (with_a5
+                                 v5
+                                 (with_a4
+                                   v4
+                                   (with_a3
+                                     v3
+                                     (with_a2
+                                       v2
+                                       (with_a1 v1 (with_a0 v0 (rvregs0))))))))))
+                         ((Cons v7 t7)
+                          (match t7
+                            (Nil
+                              (Some
+                                (with_a7
+                                  v7
+                                  (with_a6
+                                    v6
+                                    (with_a5
+                                      v5
+                                      (with_a4
+                                        v4
+                                        (with_a3
+                                          v3
+                                          (with_a2
+                                            v2
+                                            (with_a1 v1 (with_a0 v0 (rvregs0)))))))))))
+                            ((Cons v8 t8) None)))))))))))))))))))
+
+;; Run function k of module m on a given register file and memory; the
+;; result is the FULL final register file plus memory. This regs-general
+;; denotation is the call-composition boundary: a callee's conformance
+;; cert is stated against it with every register field quantified, so
+;; the cert's result record reads off as the CLOBBER SET (changed
+;; fields) and register preservation (fields passed through verbatim).
+;; rvcall_bridge below rewrites an in-body folded (rveval_call ...) term
+;; by exactly this.
+(fn rvrun_regs ((fuel Nat) (m RvModule) (k Int) (rs RvRegs) (mem Mem))
+  (Option (Pair RvRegs Mem))
+  (match (rvfunc_at (rvfuncs_of m) k)
+    (None None)
+    ((Some f)
+     (match (rveval_seq fuel m (rvbody_of f) rs mem)
+       (None None)
+       ((Some out)
+        (match out
+          ((RvNorm rs2 mem2) (Some (Pair rs2 mem2)))
+          ((RvRetO rs2 mem2) (Some (Pair rs2 mem2)))
+          ((RvBrk d rs2 mem2) None)
+          (RvTrap None)))))))
+
+;; the a0 projection: what a caller that only wants the result sees.
+(fn rvrun_fn ((fuel Nat) (m RvModule) (k Int) (rs RvRegs) (mem Mem))
+  (Option (Pair Int Mem))
+  (match (rvrun_regs fuel m k rs mem)
+    (None None)
+    ((Some p)
+     (match p
+       ((Pair rs2 mem2) (Some (Pair (a0_of rs2) mem2)))))))
+
+;; the piece-theorem boundary: args in PARAMETER order into their a0-a7
+;; homes, everything else zero, memory a parameter, memory returned —
+;; the call_fn_mem analog. (A memoryless rvcall_fn is this at mem_empty;
+;; pieces state against the mem form.)
+(fn rvcall_fn_mem ((fuel Nat) (m RvModule) (k Int) (args (List Int)) (mem0 Mem))
+  (Option (Pair Int Mem))
+  (match (rvfunc_at (rvfuncs_of m) k)
+    (None None)
+    ((Some f)
+     (if (int_eq (rvlen args) (rvparams_of f))
+       (match (rv_args args)
+         (None None)
+         ((Some rs) (rvrun_fn fuel m k rs mem0)))
+       None))))
+
+(fn rvcall_fn ((fuel Nat) (m RvModule) (k Int) (args (List Int))) (Option Int)
+  (match (rvcall_fn_mem fuel m k args (mem_empty))
+    (None None)
+    ((Some p)
+     (match p
+       ((Pair v mem) (Some v))))))
+
+;; --- the call-composition keystone ---------------------------------------------
+
+;; rvcall_bridge: an in-body (RvCall k) step — the folded (rveval_call
+;; (S f2) ...) term a stopped compute leaves — completes exactly as
+;; rvrun_regs of the callee on the CALLER'S registers and memory (no
+;; frames, no argument marshalling: the registers ARE the interface).
+;; Premise 0 is ground bookkeeping at any concrete call site (rvfunc_at
+;; computes); premise 1 is the callee's RUN — the slot the callee's own
+;; regs-general conformance cert discharges, whose result record carries
+;; the clobber set. Piece-independent: proven once, cited at every call
+;; site. (xcall_bridge, models/x86 — transplanted verbatim; the proof
+;; never opens an individual register, so the wider file rides along.)
+(claim rvcall_bridge
+  (goal
+    ((f2 Nat)
+     (m RvModule)
+     (k Int)
+     (f RvFunc)
+     (rs RvRegs)
+     (mem Mem)
+     (rs2 RvRegs)
+     (mem2 Mem))
+    ((= (rvfunc_at (rvfuncs_of m) k) (Some f))
+     (= (rvrun_regs f2 m k rs mem) (Some (Pair rs2 mem2))))
+    (= (rveval_call (S f2) m k rs mem) (Some (RvNorm rs2 mem2))))
+  (chain
+    (steps
+      ((unfold rveval_call lhs)
+       (rewrite (premise 0) lr lhs true ())
+       (compute lhs (stop rveval_seq rvbody_of))))
+    (case-on (rveval_seq f2 m (rvbody_of f) rs mem) Option
+      ((case None
+         (chain
+           (have hx (= (Some (Pair rs2 mem2)) None)
+             (steps
+               ((rewrite (premise 1) rl lhs true ())
+                (unfold rvrun_regs lhs)
+                (rewrite (premise 0) lr lhs true ())
+                (compute lhs (stop rveval_seq rvbody_of))
+                (rewrite (hyp None) lr lhs true ())
+                (compute lhs))
+               refl))
+           (absurd (premise hx))))
+       (case Some
+         (out)
+         (case-on out RvOut
+           ((case RvNorm
+              (rs3 mem3)
+              (chain
+                (steps
+                  ((rewrite (hyp Some) lr lhs true ())
+                   (rewrite (hyp RvNorm) lr lhs true ())
+                   (compute lhs)))
+                (have hx (= (Some (Pair rs2 mem2)) (Some (Pair rs3 mem3)))
+                  (steps
+                    ((rewrite (premise 1) rl lhs true ())
+                     (unfold rvrun_regs lhs)
+                     (rewrite (premise 0) lr lhs true ())
+                     (compute lhs (stop rveval_seq rvbody_of))
+                     (rewrite (hyp Some) lr lhs true ())
+                     (rewrite (hyp RvNorm) lr lhs true ())
+                     (compute lhs))
+                    refl))
+                (inject (premise hx) (hpair))
+                (inject (premise hpair) (hreq hmeq))
+                (steps
+                  ((rewrite (premise hreq) lr rhs true ())
+                   (rewrite (premise hmeq) lr rhs true ()))
+                  refl)))
+            (case RvBrk
+              (d rs3 mem3)
+              (chain
+                (have hx (= (Some (Pair rs2 mem2)) None)
+                  (steps
+                    ((rewrite (premise 1) rl lhs true ())
+                     (unfold rvrun_regs lhs)
+                     (rewrite (premise 0) lr lhs true ())
+                     (compute lhs (stop rveval_seq rvbody_of))
+                     (rewrite (hyp Some) lr lhs true ())
+                     (rewrite (hyp RvBrk) lr lhs true ())
+                     (compute lhs))
+                    refl))
+                (absurd (premise hx))))
+            (case RvRetO
+              (rs3 mem3)
+              (chain
+                (steps
+                  ((rewrite (hyp Some) lr lhs true ())
+                   (rewrite (hyp RvRetO) lr lhs true ())
+                   (compute lhs)))
+                (have hx (= (Some (Pair rs2 mem2)) (Some (Pair rs3 mem3)))
+                  (steps
+                    ((rewrite (premise 1) rl lhs true ())
+                     (unfold rvrun_regs lhs)
+                     (rewrite (premise 0) lr lhs true ())
+                     (compute lhs (stop rveval_seq rvbody_of))
+                     (rewrite (hyp Some) lr lhs true ())
+                     (rewrite (hyp RvRetO) lr lhs true ())
+                     (compute lhs))
+                    refl))
+                (inject (premise hx) (hpair))
+                (inject (premise hpair) (hreq hmeq))
+                (steps
+                  ((rewrite (premise hreq) lr rhs true ())
+                   (rewrite (premise hmeq) lr rhs true ()))
+                  refl)))
+            (case RvTrap
+              (chain
+                (have hx (= (Some (Pair rs2 mem2)) None)
+                  (steps
+                    ((rewrite (premise 1) rl lhs true ())
+                     (unfold rvrun_regs lhs)
+                     (rewrite (premise 0) lr lhs true ())
+                     (compute lhs (stop rveval_seq rvbody_of))
+                     (rewrite (hyp Some) lr lhs true ())
+                     (rewrite (hyp RvTrap) lr lhs true ())
+                     (compute lhs))
+                    refl))
+                (absurd (premise hx)))))))))))
