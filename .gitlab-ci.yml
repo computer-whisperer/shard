@@ -1,4 +1,4 @@
-# The corpus gate as an async checkmark per commit (high-cpu runner).
+# The corpus gate as an async checkmark per commit.
 #
 # The corpus (run_corpus.sh) is a FAIL-set diff tool: red targets are
 # pinned reject fixtures, and the gate fails only when the FAIL-set
@@ -6,18 +6,24 @@
 # embedded lowering-driver leg (interactive cycles skip it locally via
 # SKIP_LOWERING=1 after running the driver directly).
 #
-# Engine bootstrap: the fast engines (bin/shard_check, bin/shard_eval)
-# are DERIVED artifacts — kernel sources compiled by bin/rebuild.sh via
-# the previous engine (gen-N builds gen-N+1, byte-tie guarded; a cold
-# start falls back to the Rust interpreter and takes ~1h ONCE).
+# TWO JOBS, TWO RUNNERS. The engine build does not need the corpus
+# machine: the `engine` job runs UNTAGGED (any runner) and builds BOTH
+# fast engines (`bin/rebuild.sh check` — shard_eval, then shard_check
+# compiled by it). The `corpus` job runs on the high-cpu machine.
 #
-# TWO JOBS, one cache key. GitLab does NOT upload the cache when a job
-# hits its timeout (measured: pipelines #44/#45 each rebuilt cold after
-# the previous run timed out mid-corpus — a cold-rebuild/timeout cycle
-# that can never converge). The `engine` job does ONLY the bootstrap
-# and always finishes well inside its own timeout, so the cache lands
-# no matter what the corpus later does; the `corpus` job pulls it
-# (policy: pull) and keeps a rebuild fallback for cache eviction.
+# HAND-OFF IS ARTIFACTS, NOT CACHE: this GitLab has no shared cache
+# server, so each runner's cache is LOCAL — a cache written by the
+# engine runner is invisible to the corpus runner. The engine job
+# publishes the four engine files as artifacts; `needs: [engine]`
+# downloads them into the corpus job wherever it runs. Each job still
+# keeps a local cache for its own run-to-run warm start (cargo target,
+# engines for the fast-boot rebuild path). GitLab uploads neither cache
+# nor artifacts on a TIMED-OUT job (measured, #44/#45) — the engine
+# job's own generous timeout is what guarantees the artifacts land.
+# The one-time cold bootstrap (Rust interpreter builds gen-1) is slow
+# on a small runner; every later rebuild fast-boots from the cached
+# previous engine and only runs when kernel sources actually changed
+# (stamp check).
 
 stages:
   - engine
@@ -25,10 +31,8 @@ stages:
 
 engine:
   stage: engine
-  tags:
-    - high-cpu
   image: docker.io/library/rust:latest
-  timeout: 2h
+  timeout: 4h
   interruptible: true
   cache:
     key: shard-engine
@@ -48,6 +52,13 @@ engine:
       else
         echo "engine fresh (stamp match) -- rebuild skipped"
       fi
+  artifacts:
+    paths:
+      - bin/shard_check
+      - bin/shard_check.stamp
+      - bin/shard_eval
+      - bin/shard_eval.stamp
+    expire_in: 7 days
 
 corpus:
   stage: gate
@@ -56,6 +67,8 @@ corpus:
   image: docker.io/library/rust:latest
   timeout: 6h
   interruptible: true
+  needs:
+    - engine
   cache:
     key: shard-engine
     policy: pull
