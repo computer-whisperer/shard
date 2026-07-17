@@ -26,12 +26,26 @@
 ;;; fuel. Events record what the program OFFERED (a write's bytes are
 ;;; read back from memory), so v1 contracts are unconditional.
 ;;;
-;;; v1 COVERAGE — write (nr 1) and exit (nr 60), the closed set the
-;;; permanent output channel needs. Unmodeled nr = None: refused, never
-;;; guessed. NAMED GROWTH (each lands only with a consumer): EFAULT/
-;;; window checking on buffers, read (memory-out leg), open/close (fd
-;;; table state in the world), mmap/brk (machine-model window growth),
-;;; fork (process-tree traces), per-used-ioctl arms.
+;;; v1 COVERAGE — read (nr 0), write (nr 1), and exit (nr 60): the
+;;; closed set a slurping filter bin needs (read landed with its
+;;; consumer, the sha256sum bin — docs/X86.md read rung). Unmodeled
+;;; nr = None: refused, never guessed. NAMED GROWTH (each lands only
+;;; with a consumer): EFAULT/window checking on buffers, error returns
+;;; (negative ret/errno legs — v1 read draws are normalized into the
+;;; kernel's success range, exactly as exit masks its code), open/close
+;;; (fd table state in the world), mmap/brk (machine-model window
+;;; growth), fork (process-tree traces), per-used-ioctl arms.
+;;;
+;;; THE READ LEG (the first memory-WRITING syscall): the delivered
+;;; bytes are oracle entropy, drawn from the same stream as everything
+;;; else — one draw for the return count (normalized into [0, count]:
+;;; the kernel never delivers more than asked, and the negative/error
+;;; leg is named growth), then exactly that many byte draws (mod-256
+;;; masked: bytes are bytes). The transition's new arm LxGoM carries
+;;; the RESULT MEMORY beside the return/world/event — the additive
+;;; sibling of LxGo, so every write/exit consumer is untouched. The
+;;; event records the bytes DELIVERED (they now live in program
+;;; memory; contracts over reads speak exactly what arrived).
 
 (import "../../kernel/stdlib.shard")
 (import "../../std/mem")
@@ -40,8 +54,9 @@
 ;; --- events: the trace vocabulary contracts are stated over ---------------------
 
 ;; LxWrote fd bytes — the program offered these bytes on this fd;
+;; LxRead fd bytes — the kernel delivered these bytes from this fd;
 ;; LxExited code — the process ended with this wait-status byte.
-(type LxEvent (LxWrote Int (List Int)) (LxExited Int))
+(type LxEvent (LxWrote Int (List Int)) (LxRead Int (List Int)) (LxExited Int))
 
 ;; --- the world: the oracle stream ------------------------------------------------
 
@@ -54,9 +69,15 @@
 ;; --- the transition result --------------------------------------------------------
 
 ;; LxGo ret w' ev — the syscall answered: ret to the program, the world
-;; advanced, one event recorded. LxEnd code ev — terminal (sys_exit):
-;; control never returns; the event closes the trace.
-(type LxStep (LxGo Int LxWorld LxEvent) (LxEnd Int LxEvent))
+;; advanced, one event recorded. LxGoM ret w' ev mem' — the same, for
+;; syscalls that WRITE PROGRAM MEMORY (read): the result memory rides
+;; along (additive: write/exit consumers never see it). LxEnd code ev —
+;; terminal (sys_exit): control never returns; the event closes the
+;; trace.
+(type LxStep
+  (LxGo Int LxWorld LxEvent)
+  (LxGoM Int LxWorld LxEvent Mem)
+  (LxEnd Int LxEvent))
 
 ;; --- byte readback (what a write OFFERS) ------------------------------------------
 
@@ -69,7 +90,39 @@
 
 (fn lx_read ((mem Mem) (p Int) (n Int)) (List Int) (lx_read_r mem p 0 n))
 
+;; --- byte delivery (what a read STORES) -------------------------------------------
+
+;; stores the delivered bytes at p, ascending — the read leg's memory
+;; effect, a mem_set spine consumers frame with get_set_other
+(fn lx_fill ((mem Mem) (p Int) (bs (List Int))) Mem
+  (measure (struct bs))
+  (match bs
+    (Nil mem)
+    ((Cons b t) (lx_fill (mem_set mem p b) (+ p 1) t))))
+
+;; draws n mod-256 byte values off the oracle stream, counting i up:
+;; Some (delivered, remaining-stream), or None when the stream runs dry
+;; mid-read (the resource convention, exactly like fuel)
+(fn lx_take_r ((xs (List Int)) (i Int) (n Int))
+  (Option (Pair (List Int) (List Int)))
+  (measure (- n i) (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt i n)
+    (match xs
+      (Nil None)
+      ((Cons h t)
+       (match (lx_take_r t (+ i 1) n)
+         (None None)
+         ((Some pr)
+          (match pr
+            ((Pair bs rest) (Some (Pair (Cons (mod h 256) bs) rest))))))))
+    (Some (Pair Nil xs))))
+
+(fn lx_take ((xs (List Int)) (n Int)) (Option (Pair (List Int) (List Int)))
+  (lx_take_r xs 0 n))
+
 ;; --- syscall numbers (the closed v1 set, exported for shim emitters) --------------
+
+(fn lx_nr_read () Int 0)
 
 (fn lx_nr_write () Int 1)
 
@@ -78,9 +131,13 @@
 ;; --- the transition ----------------------------------------------------------------
 
 ;; lx_step nr a1 a2 a3 mem w. write: fd = a1, buf = a2, len = a3; the
-;; return comes from the oracle. exit: code = a1, truncated to the
-;; wait-status byte exactly as the kernel does (args are wrap64-maintained
-;; nonneg, so mod IS the masking). Anything else: None — refused.
+;; return comes from the oracle. read: fd = a1, buf = a2, count = a3;
+;; the return draw is normalized into [0, count] (rr), then rr byte
+;; draws are delivered into memory at buf — LxGoM carries the result
+;; memory, the event carries the delivered bytes. exit: code = a1,
+;; truncated to the wait-status byte exactly as the kernel does (args
+;; are wrap64-maintained nonneg, so mod IS the masking). Anything
+;; else: None — refused.
 (fn lx_step ((nr Int) (a1 Int) (a2 Int) (a3 Int) (mem Mem) (w LxWorld))
   (Option LxStep)
   (if (int_eq nr 1)
@@ -89,4 +146,16 @@
       ((Cons r rest)
        (Some (LxGo r (MkLxWorld rest) (LxWrote a1 (lx_read mem a2 a3))))))
   (if (int_eq nr 60) (Some (LxEnd (mod a1 256) (LxExited (mod a1 256))))
-  None)))
+  (if (int_eq nr 0)
+    (match (lxans_of w)
+      (Nil None)
+      ((Cons r rest)
+       (let ((rr (if (lt r 0) 0 (if (lt a3 r) a3 r))))
+         (match (lx_take rest rr)
+           (None None)
+           ((Some pr)
+            (match pr
+              ((Pair bs rest2)
+               (Some
+                 (LxGoM rr (MkLxWorld rest2) (LxRead a1 bs) (lx_fill mem a2 bs))))))))))
+    None))))
