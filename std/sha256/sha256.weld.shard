@@ -7203,3 +7203,501 @@
        (steps ((rewrite (premise 1) lr lhs true ())) refl)))
     (steps ((compute lhs (stop shb_mem))))
     refl))
+
+;; ---- THE BLOCKS LOOP (I2e-3): the x86 leg ----------------------------------------
+;; The register-as-interface consequence: shw_xblock's output file is
+;; h8 words and ZEROS -- the block clobbers src (r12) and wb (r13), so
+;; the loop's induction state cannot ride registers across the call.
+;; The loop SPILLS src and count to [65504, 65508) -- above the frame
+;; end wb + 544 = 65504, the one region the block never touches -- as
+;; two-byte little-endian words (both values sit below 2^16), and the
+;; post-call reload reads them back THROUGH the block's memory effect
+;; (ish_get_shw_above) and recombines by the euclidean round trip
+;; (ish_rt2). Dirtied registers are re-zeroed each pass (the walker's
+;; zero-in/zero-out idiom at the machine grain), so the loop head is
+;; one pinned register file and the worker induction closes.
+
+;; a byte read at or above 65504 sees through the whole block effect
+;; (the frame is [64960, 65504): copy [64960,65024), schedule
+;; [65024,65216), finish adds [65472,65504))
+(claim ish_get_shw_above
+  (goal ((m Mem) (src Int) (p Int)) ((= (le 65504 p) True))
+    (= (mem_get (shw_mem m src 64960) p) (mem_get m p)))
+  (chain
+    (steps
+      ((unfold shw_mem lhs)
+       (unfold shw_sm lhs)
+       (compute lhs (stop mem_get copy_wmem sched_mem h8add_mem shw_r))))
+    (rewrite-with
+      (lemma ish_get_h8add_above)
+      lr
+      lhs
+      ()
+      ((chain
+         (steps ((compute both)))
+         (steps ((rewrite (premise 0) lr lhs true ())) refl))))
+    (rewrite-with
+      (lemma ish_get_sched_above)
+      lr
+      lhs
+      ()
+      ((chain
+         (steps ((rewrite (lemma ish_i48p) lr lhs true ()) (compute both)))
+         (steps () (by arith (rows (goal 1) (0 1)))))))
+    (rewrite-with
+      (lemma ish_get_copy_above)
+      lr
+      lhs
+      ()
+      ((chain
+         (steps ((rewrite (lemma ish_i16p) lr lhs true ()) (compute both)))
+         (steps () (by arith (rows (goal 1) (0 1)))))))
+    refl))
+
+;; the spill image: src at [65504,65506), count at [65506,65508), raw
+;; low byte first (mask-on-read makes them bytes)
+(fn shx_spill ((m Mem) (s Int) (n Int)) Mem
+  (mem_set
+    (mem_set (mem_set (mem_set m 65504 s) 65505 (bshr s 8)) 65506 n)
+    65507
+    (bshr n 8)))
+
+(claim shx_spill_def
+  (goal ((m Mem) (s Int) (n Int)) ()
+    (=
+      (shx_spill m s n)
+      (mem_set
+        (mem_set (mem_set (mem_set m 65504 s) 65505 (bshr s 8)) 65506 n)
+        65507
+        (bshr n 8))))
+  (steps ((unfold shx_spill lhs)) refl))
+
+;; the four spill-cell readbacks (get_set chases at ground addresses)
+(claim shx_get_04
+  (goal ((m Mem) (s Int) (n Int)) ()
+    (= (mem_get (shx_spill m s n) 65504) (mod s 256)))
+  (chain
+    (steps ((unfold shx_spill lhs)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma get_set) lr lhs true ())))
+    refl))
+
+(claim shx_get_05
+  (goal ((m Mem) (s Int) (n Int)) ()
+    (= (mem_get (shx_spill m s n) 65505) (mod (bshr s 8) 256)))
+  (chain
+    (steps ((unfold shx_spill lhs)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma get_set) lr lhs true ())))
+    refl))
+
+(claim shx_get_06
+  (goal ((m Mem) (s Int) (n Int)) ()
+    (= (mem_get (shx_spill m s n) 65506) (mod n 256)))
+  (chain
+    (steps ((unfold shx_spill lhs)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma get_set) lr lhs true ())))
+    refl))
+
+(claim shx_get_07
+  (goal ((m Mem) (s Int) (n Int)) ()
+    (= (mem_get (shx_spill m s n) 65507) (mod (bshr n 8) 256)))
+  (chain
+    (steps ((unfold shx_spill lhs)))
+    (steps ((rewrite (lemma get_set) lr lhs true ())))
+    refl))
+
+;; the loop's memory effect: k blocks folded over the ground frame,
+;; each pass leaving its spill image below the block effect, the
+;; source window advancing 64 per block
+(fn shx_mem ((m Mem) (src Int) (k Nat)) Mem
+  (measure (struct k))
+  (match k
+    (Z m)
+    ((S k2)
+     (shx_mem
+       (shw_mem (shx_spill m src (+ 1 (int_of_nat k2))) src 64960)
+       (+ src 64)
+       k2))))
+
+(claim shx_mem_z (goal ((m Mem) (src Int)) () (= (shx_mem m src Z) m))
+  (steps ((compute both)) refl))
+
+(claim shx_mem_s
+  (goal ((m Mem) (src Int) (k Nat)) ()
+    (=
+      (shx_mem m src (S k))
+      (shx_mem
+        (shw_mem (shx_spill m src (+ 1 (int_of_nat k))) src 64960)
+        (+ src 64)
+        k)))
+  (steps ((unfold shx_mem lhs) (reduce lhs)) refl))
+
+;; the callee's run: the generated block behind the call boundary, on
+;; the caller's register file (no marshalling -- registers ARE the
+;; interface); the scratch slots rcx/rdx/rbx/rbp arrive arbitrary
+(claim shb_xcall
+  (goal
+    ((x2 Int)
+     (x3 Int)
+     (x6 Int)
+     (x7 Int)
+     (src Int)
+     (m Mem)
+     (c Nat)
+     (restfs (List XFunc)))
+    ((= (le 0 src) True) (= (le (+ src 64) 64960) True))
+    (=
+      (xrun_regs
+        (S^ 433 c)
+        (MkXModule (Cons (MkXFunc 0 (gb_shblock_x)) restfs) 0 65536)
+        0
+        (MkRegs 0 x3 x2 x6 x7 0 0 0 0 0 0 src 64960 0 0)
+        m)
+      (Some
+        (Pair
+          (MkRegs
+            0
+            (h8d (shw_r m src 64960))
+            (h8c (shw_r m src 64960))
+            (h8g (shw_r m src 64960))
+            (h8h (shw_r m src 64960))
+            (h8b (shw_r m src 64960))
+            (h8a (shw_r m src 64960))
+            (h8e (shw_r m src 64960))
+            (h8f (shw_r m src 64960))
+            0
+            0
+            0
+            0
+            0
+            0)
+          (shw_mem m src 64960)))))
+  (chain
+    (steps
+      ((unfold xrun_regs lhs)
+       (compute lhs (stop xeval_seq gb_shblock_x shw_r shw_mem))))
+    (rewrite-with
+      (lemma shw_xblock)
+      lr
+      lhs
+      ((inst d c))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((compute both)) refl)))
+    (steps
+      ((compute
+         lhs
+         (stop shw_r shw_mem gb_shblock_x h8a h8b h8c h8d h8e h8f h8g h8h))))
+    refl))
+
+;; the loop body: guard on the count, spill src and count through the
+;; value scratch rcx and address scratch rbx, build the block's entry
+;; file (wb into r13; rax/rsi/rdi/r10/r11/r14/r15 hold zeros from the
+;; head pin), call, reload src (+64) and count (-1), re-zero the dirty
+;; file, loop
+(fn shb_xbody () (List XInstr)
+  (list
+    (XBrIf (CEqz RDX) 1)
+    (XMovRR RCX R12)
+    (XMovRI RBX 65504)
+    (XStore8 (AReg RBX) (SReg RCX))
+    (XShrI RCX 8)
+    (XMovRI RBX 65505)
+    (XStore8 (AReg RBX) (SReg RCX))
+    (XMovRR RCX RDX)
+    (XMovRI RBX 65506)
+    (XStore8 (AReg RBX) (SReg RCX))
+    (XShrI RCX 8)
+    (XMovRI RBX 65507)
+    (XStore8 (AReg RBX) (SReg RCX))
+    (XMovRI R13 64960)
+    (XCall 0)
+    (XMovRI RBX 65505)
+    (XLoad8 R12 (AReg RBX))
+    (XShlI R12 8)
+    (XMovRI RBX 65504)
+    (XLoad8 RCX (AReg RBX))
+    (XBin XAdd R12 (SReg RCX))
+    (XBin XAdd R12 (SImm 64))
+    (XMovRI RBX 65507)
+    (XLoad8 RDX (AReg RBX))
+    (XShlI RDX 8)
+    (XMovRI RBX 65506)
+    (XLoad8 RCX (AReg RBX))
+    (XBin XAdd RDX (SReg RCX))
+    (XBin XSub RDX (SImm 1))
+    (XMovRI RCX 0)
+    (XMovRI RBX 0)
+    (XMovRI RBP 0)
+    (XMovRI RSI 0)
+    (XMovRI RDI 0)
+    (XMovRI R8 0)
+    (XMovRI R9 0)
+    (XBr 0)))
+
+;; the worker: k loop passes from the pinned head file ARE the k-block
+;; fold; xcall_bridge fires on the folded call with the callee's run
+(claim shb_xloop
+  (goal ((src Int) (m Mem) (c Nat) (k Nat) (restfs (List XFunc)))
+    ((= (le 0 src) True)
+     (= (le (+ src (* 64 (int_of_nat k))) 64960) True))
+    (=
+      (xeval_loop
+        (S^ 450 (lg_fuel k c))
+        (MkXModule
+          (Cons
+            (MkXFunc 0 (gb_shblock_x))
+            (Cons
+              (MkXFunc
+                2
+                (list
+                  (XMovRR R12 RDI)
+                  (XMovRR RDX RSI)
+                  (XMovRI RDI 0)
+                  (XMovRI RSI 0)
+                  (XBlock (list (XLoop (inline shb_xbody))))))
+              restfs))
+          0
+          65536)
+        (inline shb_xbody)
+        (MkRegs 0 0 (int_of_nat k) 0 0 0 0 0 0 0 0 src 0 0 0)
+        m)
+      (Some
+        (XBrk
+          0
+          (MkRegs 0 0 0 0 0 0 0 0 0 0 0 (lg_advk src 64 k) 0 0 0)
+          (shx_mem m src k)))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr lhs true ())
+          (compute both (stop shw_mem gb_shblock_x)))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (have hnn (= (le 0 (int_of_nat k2)) True)
+           (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+         (have hqs (= (le (+ src (* 64 (+ 1 (int_of_nat k2)))) 64960) True)
+           (steps
+             ((rewrite (lemma int_of_nat_succ) rl lhs true ())
+              (rewrite (premise 1) lr lhs true ()))
+             refl))
+         (steps
+           ((unfold lg_fuel lhs)
+            (reduce lhs)
+            (unfold xeval_loop lhs)
+            (rewrite (lemma int_of_nat_succ) lr lhs true ())
+            (compute
+              lhs
+              (stop xeval_call xeval_loop lg_fuel gb_shblock_x shw_mem
+                shx_mem shx_spill lg_advk))))
+         (rewrite-with
+           (lemma lg_ne)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps
+           ((compute
+              lhs
+              (stop xeval_call xeval_loop lg_fuel gb_shblock_x shw_mem
+                shx_mem shx_spill lg_advk))))
+         (steps ((rewrite (lemma shx_spill_def) rl lhs true ())))
+         (rewrite-with
+           (lemma xcall_bridge)
+           lr
+           lhs
+           ((inst f (MkXFunc 0 (gb_shblock_x)))
+            (inst
+              rs2
+              (MkRegs
+                0
+                (h8d (shw_r (shx_spill m src (+ 1 (int_of_nat k2))) src 64960))
+                (h8c (shw_r (shx_spill m src (+ 1 (int_of_nat k2))) src 64960))
+                (h8g (shw_r (shx_spill m src (+ 1 (int_of_nat k2))) src 64960))
+                (h8h (shw_r (shx_spill m src (+ 1 (int_of_nat k2))) src 64960))
+                (h8b (shw_r (shx_spill m src (+ 1 (int_of_nat k2))) src 64960))
+                (h8a (shw_r (shx_spill m src (+ 1 (int_of_nat k2))) src 64960))
+                (h8e (shw_r (shx_spill m src (+ 1 (int_of_nat k2))) src 64960))
+                (h8f (shw_r (shx_spill m src (+ 1 (int_of_nat k2))) src 64960))
+                0
+                0
+                0
+                0
+                0
+                0))
+            (inst mem2 (shw_mem (shx_spill m src (+ 1 (int_of_nat k2))) src 64960)))
+           ((steps ((compute both (stop gb_shblock_x))) refl)
+            (chain
+              (rewrite-with
+                (lemma shb_xcall)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                 (steps () (by arith (rows (goal 1) (hqs 1) (hnn 64))))))
+              refl)))
+         (steps
+           ((compute
+              lhs
+              (stop xeval_call xeval_loop lg_fuel gb_shblock_x shw_mem
+                shx_mem shx_spill lg_advk shw_r))))
+         (rewrite-with
+           (lemma ish_get_shw_above)
+           lr
+           lhs
+           ()
+           ((steps ((compute both)) refl)))
+         (rewrite-with
+           (lemma ish_get_shw_above)
+           lr
+           lhs
+           ()
+           ((steps ((compute both)) refl)))
+         (rewrite-with
+           (lemma ish_get_shw_above)
+           lr
+           lhs
+           ()
+           ((steps ((compute both)) refl)))
+         (rewrite-with
+           (lemma ish_get_shw_above)
+           lr
+           lhs
+           ()
+           ((steps ((compute both)) refl)))
+         (steps
+           ((rewrite (lemma shx_get_04) lr lhs true ())
+            (rewrite (lemma shx_get_05) lr lhs true ())
+            (rewrite (lemma shx_get_06) lr lhs true ())
+            (rewrite (lemma shx_get_07) lr lhs true ())))
+         (rewrite-with
+           (lemma ish_rt2)
+           lr
+           lhs
+           ((inst v src))
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps () (by arith (rows (goal 1) (hqs 1) (hnn 64))))))
+         (rewrite-with
+           (lemma ish_rt2)
+           lr
+           lhs
+           ((inst v (+ 1 (int_of_nat k2))))
+           ((steps () (by arith (rows (goal 1) (hnn 1))))
+            (steps () (by arith (rows (goal 64) (hqs 1) (0 1))))))
+         (have hw0 (= (mod (+ src 64) 18446744073709551616) (+ src 64))
+           (rewrite-with
+             (lemma wrap64_id)
+             lr
+             lhs
+             ()
+             ((steps () (by arith (rows (goal 1) (0 1))))
+              (steps () (by arith (rows (goal 1) (hqs 1) (hnn 64)))))
+             refl))
+         (steps ((rewrite (premise hw0) lr lhs true ())))
+         (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2))
+           (rewrite-with (lemma lg_sub) lr lhs () () refl))
+         (steps ((rewrite (premise hsub) lr lhs true ())))
+         (have hwk
+           (=
+             (mod (int_of_nat k2) 18446744073709551616)
+             (int_of_nat k2))
+           (rewrite-with
+             (lemma wrap64_id)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise hnn) lr lhs true ())) refl)
+              (steps () (by arith (rows (goal 64) (hqs 1) (0 1)))))
+             refl))
+         (steps ((rewrite (premise hwk) lr lhs true ())))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (0 1))))
+            (steps () (by arith (rows (goal 1) (hqs 1))))))
+         (steps
+           ((rewrite (lemma lg_advk_s) rl lhs true ())
+            (rewrite (lemma shx_mem_s) rl lhs true ())))
+         refl)))))
+
+;; the loop's denotation: call the loop fn (index 1) on src and the
+;; block count -- the k-block fold with spill residue, the source
+;; consumed 64 per block. The result value is rax's pinned zero.
+(claim shb_xblocks
+  (goal ((src Int) (m Mem) (c Nat) (k Nat) (restfs (List XFunc)))
+    ((= (le 0 src) True)
+     (= (le (+ src (* 64 (int_of_nat k))) 64960) True))
+    (=
+      (xcall_fn_mem
+        (S^ 458 (lg_fuel k c))
+        (MkXModule
+          (Cons
+            (MkXFunc 0 (gb_shblock_x))
+            (Cons
+              (MkXFunc
+                2
+                (list
+                  (XMovRR R12 RDI)
+                  (XMovRR RDX RSI)
+                  (XMovRI RDI 0)
+                  (XMovRI RSI 0)
+                  (XBlock (list (XLoop (inline shb_xbody))))))
+              restfs))
+          0
+          65536)
+        1
+        (list src (int_of_nat k))
+        m)
+      (Some (Pair 0 (shx_mem m src k)))))
+  (chain
+    (steps
+      ((unfold xcall_fn_mem lhs)
+       (compute lhs (stop xeval_loop lg_fuel shx_mem gb_shblock_x))))
+    (rewrite-with
+      (lemma shb_xloop)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute both (stop shx_mem gb_shblock_x))))
+    refl))

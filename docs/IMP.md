@@ -2560,6 +2560,54 @@ blueprint, hand-built.**
   readback (shb_mem → sha_blocks, needs byte-grain shw_mem framing)
   composes with pad+hex in I2e-4.
 
+**I2e-3b — THE BLOCKS LOOP, x86 leg (2026-07-17): the SPILL LOOP —
+register-as-interface's real consequence, paid and proven.**
+
+- The block clobbers everything (r12=src and r13=wb zeroed on
+  output), so the loop's induction state lives in MEMORY across each
+  call: src at [65504,65506), count at [65506,65508) — above the
+  frame end wb+544 = 65504, the one region the block never touches —
+  as two-byte LE words (both values < 2^16). Per pass: guard, spill
+  through rcx (value) + rbx (address — the model has no immediate
+  addressing), wb into r13, XCall 0, reload src (+64) and count
+  (−1), re-zero the seven dirtied registers (the zero-in/zero-out
+  idiom at the register file), loop. 37 instructions, one PINNED
+  head file — the worker induction closes with no residue selectors.
+- THE RELOAD READS THROUGH THE BLOCK: post-call the spill cells are
+  read back through shw_mem's writes. NEW FRAMING FAMILY (point
+  grain, the dual of the wget-grain below-family): `ish_ne_gt` +
+  `ish_get_wput_above` + `ish_get_copy_above` + `ish_get_sched_above`
+  + `ish_get_h8add_above` (imp file, all-symbolic inductions) compose
+  into `ish_get_shw_above` (weld, ground frame: reads at p >= 65504
+  see through the whole block effect). These are the first bricks of
+  I2e-4's byte-grain window framing (mem_read is a fold of mem_get).
+- THE ROUND TRIP `ish_rt2`: the two-byte spill/reload recombination,
+  stated on the machine walk's EXACT tree (get_set's mod-spelled
+  masked reads, XShl/XAdd's wrap64s) = the identity, by shr8_div +
+  the euclidean characterization — div-facts, no bit apparatus.
+- The denotation is the HONEST fold `shx_mem` (shw_mem over
+  shx_spill, src advancing 64): the spill residue is spelled, not
+  hidden. Unification with the wasm leg's shb_mem (residue at 4
+  ground cells over the pure fold) is I2e-4's readback business,
+  where the digest window reads through mem_set-outside anyway.
+- Fuel exactness: xeval_seq burns one per instruction POSITION plus
+  one per nesting level; the call at body position 14 fixes the
+  worker at S^450 (bridge f2 = S^433 = the callee cert, slack ZERO)
+  and the denotation at S^458 (4 preamble movs + block/loop peels).
+- `xcall_bridge` fires with f/rs2/mem2 pinned (dangling binders);
+  the callee run `shb_xcall` is bridge-free (no marshalling — the
+  register file IS the interface; contrast the wasm leg's push-peel).
+- GOTCHA (recurring): int_of_nat is OPAQUE — (int_of_nat 48) does
+  NOT compute; bridge through the existing ish_iNp packed lemmas
+  (ish_i16p/ish_i48p already in the sibling). And a compute that
+  must deliver a FOLDED record result needs the projections stopped
+  (stop h8a..h8h), or they open into stuck matches.
+- Gate: sibling 462/0 (+6), weld 965/0 (+11 claims + measured
+  shx_mem). BOTH machine legs of the blocks loop now land.
+- NEXT: I2e-4 (the bin): compose write-input + pad + blocks-fold +
+  digest readback + hex into sha256sum, with the spec collapse
+  (folds → sha_blocks) riding the byte-grain framing.
+
 
 ## 7. Non-goals, stated once
 
