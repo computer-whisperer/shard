@@ -593,7 +593,9 @@ fi
 # line only; any gate failure changes it and fails the corpus diff.
 for LB in "tools/build/build.sh examples/build_products.shard"; do
   echo "=== lowering: $LB ==="
-  if [ -x bin/shard_eval ]; then
+  if [ -n "${SKIP_LOWERING:-}" ]; then
+    echo "SKIPPED (SKIP_LOWERING set -- the driver ran separately this cycle)"
+  elif [ -x bin/shard_eval ]; then
     if bash $LB > "$TMP/lb.out" 2>&1; then
       tail -1 "$TMP/lb.out"
     else
@@ -746,9 +748,29 @@ if [ -x bin/shard_eval ]; then
   # mod.req interfaces; .auto proof sidecars and derived .low files excluded)
   # produces ZERO CANON advisory lines. New std code that regresses the
   # canonical form fails the corpus here.
-  std_canon=$(ls std/*/*.shard std/*/mod.req/*.shard 2>/dev/null | grep -v '\.auto\.shard$\|\.low\.shard$' | while read -r f; do
-    "${CHECK_CMD[@]}" "$f" 2>/dev/null | grep '^CANON ' | sed "s|^|$f |"
-  done)
+  #
+  # The sweep needs only the CANON advisories, and the checker emits those
+  # at LOAD: files whose proofs the corpus already checked as targets run
+  # in focus mode on a claim name that never exists (full load + canon
+  # pass, zero proof re-checking; measured 2026-07-16: the serial full
+  # sweep was 1368s of a 2343s corpus, wf.shard alone 119s full vs 0.4s
+  # load-only). Files OUTSIDE the target list keep the full check — the
+  # sweep is their only proof coverage. Parallel with buffered output
+  # (the target-phase idiom); green state is empty either way.
+  std_sweep=()
+  while IFS= read -r f; do std_sweep+=("$f"); done < <(ls std/*/*.shard std/*/mod.req/*.shard 2>/dev/null | grep -v '\.auto\.shard$\|\.low\.shard$')
+  for i in "${!std_sweep[@]}"; do
+    while (( $(jobs -rp | wc -l) >= JOBS )); do wait -n; done
+    {
+      f="${std_sweep[$i]}"
+      case " ${TARGETS[*]} " in
+        *" $f "*) "${CHECK_CMD[@]}" "$f" __canon_sweep_load_only__ 2>/dev/null ;;
+        *) "${CHECK_CMD[@]}" "$f" 2>/dev/null ;;
+      esac | grep '^CANON ' | sed "s|^|$f |"
+    } > "$TMP/canon.$i" &
+  done
+  wait
+  std_canon=$(cat "$TMP"/canon.* 2>/dev/null)
   if [ -z "$std_canon" ]; then
     echo "CANON STD STAGE-2 OK (tree at zero)"
   else

@@ -1,0 +1,54 @@
+# The corpus gate as an async checkmark per commit (high-cpu runner).
+#
+# The corpus (run_corpus.sh) is a FAIL-set diff tool: red targets are
+# pinned reject fixtures, and the gate fails only when the FAIL-set
+# drifts from fails-base.txt. CI runs the FULL corpus including the
+# embedded lowering-driver leg (interactive cycles skip it locally via
+# SKIP_LOWERING=1 after running the driver directly).
+#
+# Engine bootstrap: the fast engines (bin/shard_check, bin/shard_eval)
+# are DERIVED artifacts — kernel sources compiled by bin/rebuild.sh via
+# the previous engine (gen-N builds gen-N+1, byte-tie guarded; a cold
+# start falls back to the Rust interpreter and takes ~1h ONCE). The
+# cache keeps the engines and the cargo target dir across runs; the
+# stamp check skips the rebuild entirely when kernel sources are
+# untouched, and pays ~2 minutes when they changed.
+
+stages:
+  - gate
+
+corpus:
+  stage: gate
+  tags:
+    - high-cpu
+  image: docker.io/library/rust:latest
+  timeout: 3h
+  cache:
+    key: shard-engine
+    paths:
+      - rust_bootstrap/target/
+      - bin/shard_check
+      - bin/shard_check.stamp
+      - bin/shard_eval
+      - bin/shard_eval.stamp
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq nodejs > /dev/null
+  script:
+    - cargo build --release --manifest-path rust_bootstrap/Cargo.toml
+    - |
+      if [ ! -x bin/shard_check ] || [ "$(bin/engine_stamp.sh)" != "$(cat bin/shard_check.stamp 2>/dev/null)" ]; then
+        echo "engine stale or missing -- rebuilding"
+        bin/rebuild.sh
+      else
+        echo "engine fresh (stamp match) -- rebuild skipped"
+      fi
+    - bash run_corpus.sh 2>&1 | tee corpus.log
+    - grep '^FAIL' corpus.log | awk '{print $2}' | sort > fails-run.txt
+    - awk -F': ' '{print $2}' fails-base.txt | sort > fails-base-names.txt
+    - diff fails-run.txt fails-base-names.txt
+    - echo "CORPUS == BASELINE"
+  artifacts:
+    paths:
+      - corpus.log
+    when: always
+    expire_in: 30 days
