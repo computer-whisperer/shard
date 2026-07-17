@@ -123,7 +123,9 @@
     ((TeWitnessRank rank)
      (match (sk_unrank root grammar rank)
        ((SkEErr msg) (TsCandErr (append_int "witness unrank: " msg)))
-       ((SkEOk value) (TsCandOk rank value))))))
+       ((SkEOk value) (TsCandOk rank value))))
+    ((TeWitnessEmpty)
+     (TsCandErr "expected-empty mode has no witness candidate"))))
 
 (type TsWitnessR (TsWitnessErr (List Int)) (TsWitnessOk Int))
 
@@ -302,7 +304,7 @@
          "SOLUTIONS "
          (show_int found)
          "\nWITNESS "
-         (show_int witness)
+         (if (lt witness 0) "EXPECTED EMPTY" (show_int witness))
          "\n"
          (ts_audit_report audit)
          "GATES OK\n")))))
@@ -406,6 +408,58 @@
        grammar total found killed constraint_killed regions forks steps sols
        best_rank witness_rank pressure audit_enabled w))))
 
+(fn ts_finish_empty
+  ((path (List Int))
+   (m Module)
+   (want Type)
+   (ctx InvokeCtx)
+   (screen TeScreen)
+   (probe FnDef)
+   (target Expr)
+   (depth Int)
+   (holes Int)
+   (root Expr)
+   (grammar Grammar)
+   (total Int)
+   (found Int)
+   (killed Int)
+   (constraint_killed Int)
+   (regions Int)
+   (forks Int)
+   (steps Int)
+   (sols (List SkRegion))
+   (pressure TsPressure)
+   (audit_enabled Bool)
+   (w World))
+  World
+  (if (int_eq found 0)
+    (match
+      (ts_audit
+        audit_enabled
+        total
+        found
+        root
+        grammar
+        (ts_pressure_constraints pressure)
+        m
+        want
+        ctx
+        screen
+        probe
+        target
+        sols)
+      ((TsAuditErr msg) (ts_fail (append_int "audit: " msg) w))
+      (audit
+        (write
+          (ts_report
+            path depth holes total found killed constraint_killed regions forks
+            steps "BEST NONE\n" -1 pressure audit)
+          w)))
+    (ts_fail
+      (append_int
+        "expected an empty search, but FOUND = " (show_int found))
+      w)))
+
 ;; First-result mode deliberately validates values without ranking them: rank
 ;; arithmetic would reintroduce the full-space cardinality dependency this mode
 ;; exists to avoid.
@@ -477,8 +531,11 @@
              ((TeObsErr msg) (TsFirstWitnessErr msg))
              ((TeObsReject) (TsFirstWitnessErr "witness is rejected"))
              ((TeObsOk key)
-              (if (expr_eq key target) (TsFirstWitnessOk)
-              (TsFirstWitnessErr "witness observation differs")))))))))))
+               (if (expr_eq key target)
+                 (TsFirstWitnessOk)
+                 (TsFirstWitnessErr "witness observation differs")))))))))
+    ((TeWitnessEmpty)
+     (TsFirstWitnessErr "search_expect_empty requires exhaustive mode"))))
 
 (fn ts_first_report
   ((path (List Int))
@@ -685,23 +742,31 @@
        w))
     ((SuSOk found killed constraint_killed regions forks steps sols)
      (if (int_eq (+ found killed) total)
-       (match
-         (ts_reps_gate
-           root
-           grammar
-           (ts_pressure_constraints pressure)
-           m
-           want
-           ctx
-           probe
-           target
-           sols
-           -1)
-         ((TsRepErr msg) (ts_fail msg w))
-         ((TsRepOk best_rank)
-          (ts_finish_witness path m want ctx screen probe target witness table
-            depth holes root grammar total found killed constraint_killed
-            regions forks steps sols best_rank pressure audit_enabled w)))
+       (match witness
+         ((TeWitnessEmpty)
+          (ts_finish_empty
+            path m want ctx screen probe target depth holes root grammar total
+            found killed constraint_killed regions forks steps sols pressure
+            audit_enabled w))
+         (_
+           (match
+             (ts_reps_gate
+               root
+               grammar
+               (ts_pressure_constraints pressure)
+               m
+               want
+               ctx
+               probe
+               target
+               sols
+               -1)
+             ((TsRepErr msg) (ts_fail msg w))
+             ((TsRepOk best_rank)
+              (ts_finish_witness
+                path m want ctx screen probe target witness table depth holes
+                root grammar total found killed constraint_killed regions forks
+                steps sols best_rank pressure audit_enabled w)))))
        (ts_fail
          (te_cat
            (list
@@ -1056,22 +1121,26 @@
     ((TsModeOk mode)
      (match mode
        ((TsModeFirst)
-        (match (te_make_schema_space_plan m want scope cfg plan)
-          ((TeSchemaSpaceErr msg) (ts_fail msg w))
-          ((TeSchemaSpaceOk space)
-           (ts_find_schema_space
-             path
-             m
-             want
-             ctx
-             probe
-             target
-             witness
-             space
-             (TsPressure
-               canon_rules observer_rules constraints raw_total)
-             audit
-             w))))
+        (match witness
+          ((TeWitnessEmpty)
+           (ts_fail "search_expect_empty requires exhaustive mode" w))
+          (_
+            (match (te_make_schema_space_plan m want scope cfg plan)
+              ((TeSchemaSpaceErr msg) (ts_fail msg w))
+              ((TeSchemaSpaceOk space)
+               (ts_find_schema_space
+                 path
+                 m
+                 want
+                 ctx
+                 probe
+                 target
+                 witness
+                 space
+                 (TsPressure
+                   canon_rules observer_rules constraints raw_total)
+                 audit
+                 w))))))
        ((TsModeExhaustive)
         (match (te_make_space_plan m want scope cfg plan)
           ((TeSpaceErr msg) (ts_fail msg w))

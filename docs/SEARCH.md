@@ -2015,6 +2015,15 @@ also accepts `search_witness_rank : () -> Int`.  Rank/unrank reconstructs and
 checks the syntax before execution.  ADT-language tasks retain the more
 readable `search_witness : () -> Candidate` form.
 
+An exhaustive impossibility census may instead declare
+`search_expect_empty : () -> Bool` and return `True`.  This replaces the
+positive witness with a checked `SOLUTIONS = 0` gate: the driver still settles
+the complete space, retains theorem and representative accounting, and an
+optional `audit` must independently agree with zero enumerative solutions.
+The mode is intentionally rejected by cardinality-free first-result search,
+where stopping cannot prove absence.  A false or malformed hook is fatal, as
+is finding even one solution.
+
 The harder reflected `typed_imp_mix` census reaches the same kind-valid space
 as the specialized task, but exposes the cost of a general syntactic domain:
 
@@ -2983,6 +2992,10 @@ cardinalities.  `search_drive_budget` bounds region decisions explicitly.
 Reports mark `CARDINALITY UNCOUNTED` and validate both the productive region
 representative and the supplied witness semantically rather than assigning
 either an exact rank.
+
+Expected-empty tasks remain on the exhaustive path.  A region budget or first
+passing result can establish existence but cannot certify nonexistence, so
+`search_expect_empty` is rejected when `search_result_mode = first`.
 
 `meta/sketch` owns the supporting general operations.  `SkProductivity` is a
 saturating bottom-up grammar analysis with one bit per original alternative;

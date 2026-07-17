@@ -55,6 +55,8 @@
 ;;;   search_witness      : () -> Candidate  ; data/program-value tasks
 ;;; or
 ;;;   search_witness_rank : () -> Int        ; executable-expression tasks
+;;; or
+;;;   search_expect_empty : () -> Bool       ; exhaustive absence tasks
 ;;;
 ;;; RUN IT:
 ;;;   bin/shard_eval run tools/search/typed_expr.shard TASK.shard
@@ -153,7 +155,10 @@
 
 ;; ---- reflected protocol signatures -----------------------------------------
 
-(type TeWitnessFd (TeWitnessValueFd FnDef) (TeWitnessRankFd FnDef))
+(type TeWitnessFd
+  (TeWitnessValueFd FnDef)
+  (TeWitnessRankFd FnDef)
+  (TeWitnessEmptyFd FnDef))
 
 (type TeSigR (TeSigErr (List Int)) (TeSigOk FnDef FnDef TeWitnessFd Type Type))  ; probe, target, witness, cand, obs
 
@@ -183,7 +188,7 @@
                 "search_witness result type disagrees with search_probe")))
           ((Cons _ _) (TeSigErr "search_witness must take no arguments"))))))))
 
-(fn te_witness_sig
+(fn te_positive_witness_sig
   ((m Module) (probe FnDef) (target FnDef) (cand Type) (obs Type))
   TeSigR
   (match (find_fn (quote search_witness_rank) m)
@@ -197,6 +202,23 @@
               (TeSigOk probe target (TeWitnessRankFd witness) cand obs)
               (TeSigErr "search_witness_rank must return Int")))
           ((Cons _ _) (TeSigErr "search_witness_rank must take no arguments"))))))))
+
+(fn te_witness_sig
+  ((m Module) (probe FnDef) (target FnDef) (cand Type) (obs Type))
+  TeSigR
+  (match (find_fn (quote search_expect_empty) m)
+    (None (te_positive_witness_sig m probe target cand obs))
+    ((Some expect_empty)
+     (match expect_empty
+       ((FnDef _ params ret _)
+        (match params
+          (Nil
+            (if (type_eq ret (TCon (qn (quote Bool)) Nil))
+              (TeSigOk
+                probe target (TeWitnessEmptyFd expect_empty) cand obs)
+              (TeSigErr "search_expect_empty must return Bool")))
+          ((Cons _ _)
+           (TeSigErr "search_expect_empty must take no arguments"))))))))
 
 (fn te_target_sig ((m Module) (probe FnDef) (cand Type) (obs Type)) TeSigR
   (match (find_fn (quote search_target) m)
@@ -1008,7 +1030,10 @@
 
 ;; ---- witness and reporting --------------------------------------------------
 
-(type TeWitness (TeWitnessValue Expr) (TeWitnessRank Int))
+(type TeWitness
+  (TeWitnessValue Expr)
+  (TeWitnessRank Int)
+  (TeWitnessEmpty))
 
 (type TeWitnessLoadR (TeWitnessLoadErr (List Int)) (TeWitnessLoadOk TeWitness))
 
@@ -1024,7 +1049,22 @@
        ((Some value)
         (match (expr_int value)
           (None (TeWitnessLoadErr "search_witness_rank is not an Int value"))
-          ((Some rank) (TeWitnessLoadOk (TeWitnessRank rank)))))))))
+          ((Some rank) (TeWitnessLoadOk (TeWitnessRank rank)))))))
+    ((TeWitnessEmptyFd fd)
+     (match (invoke_fd_ctx ctx fd Nil)
+       (None (TeWitnessLoadErr "search_expect_empty invocation failed"))
+       ((Some value)
+        (match value
+          ((Ctor q Nil)
+           (if (core_named q (quote True))
+             (TeWitnessLoadOk (TeWitnessEmpty))
+           (if (core_named q (quote False))
+             (TeWitnessLoadErr "search_expect_empty returned False")
+             (TeWitnessLoadErr
+               "search_expect_empty did not return a Bool value"))))
+          (_
+            (TeWitnessLoadErr
+              "search_expect_empty did not return a Bool value"))))))))
 
 (type TeWitnessR (TeWitnessErr (List Int)) (TeWitnessOk Int))
 
@@ -1091,7 +1131,11 @@
                solutions)
              (TeWitnessErr "witness rank/unrank disagrees")))))))
     ((TeWitnessRank rank)
-     (te_witness_at root grammar m want ctx screen probe target rank solutions))))
+     (te_witness_at root grammar m want ctx screen probe target rank solutions))
+    ((TeWitnessEmpty)
+     (match solutions
+       (Nil (TeWitnessOk -1))
+       ((Cons _ _) (TeWitnessErr "expected an empty solution set"))))))
 
 (type TeBestR (TeBestErr (List Int)) (TeBestOk (List Int)))
 
@@ -1179,7 +1223,7 @@
       "SOLUTIONS "
       (show_int solutions)
       "\nWITNESS "
-      (show_int witness_rank)
+      (if (lt witness_rank 0) "EXPECTED EMPTY" (show_int witness_rank))
       "\nGATES OK\n")))
 
 ;; ---- driver -----------------------------------------------------------------
@@ -1377,29 +1421,50 @@
             solutions)
           ((TeWitnessErr msg) (te_fail msg w))
           ((TeWitnessOk witness_rank)
-           (match (te_best table root grammar solutions)
-             ((TeBestErr msg) (te_fail msg w))
-             ((TeBestOk best)
-              (write
-                (te_report
-                  path
-                  depth
-                  holes
-                  canon_rules
-                  observer_rules
-                  (ms_plan_spine_rule_count constraints)
-                  (ms_plan_rule_count constraints)
-                  (if (lt raw_total 0) total raw_total)
-                  total
-                  accepted
-                  rejected
-                  screened
-                  constrained
-                  (te_bucket_len buckets)
-                  best
-                  (te_int_len solutions)
-                  witness_rank)
-                w))))))))))
+           (if (lt witness_rank 0)
+             (write
+               (te_report
+                 path
+                 depth
+                 holes
+                 canon_rules
+                 observer_rules
+                 (ms_plan_spine_rule_count constraints)
+                 (ms_plan_rule_count constraints)
+                 (if (lt raw_total 0) total raw_total)
+                 total
+                 accepted
+                 rejected
+                 screened
+                 constrained
+                 (te_bucket_len buckets)
+                 "BEST NONE\n"
+                 (te_int_len solutions)
+                 witness_rank)
+               w)
+             (match (te_best table root grammar solutions)
+               ((TeBestErr msg) (te_fail msg w))
+               ((TeBestOk best)
+                (write
+                  (te_report
+                    path
+                    depth
+                    holes
+                    canon_rules
+                    observer_rules
+                    (ms_plan_spine_rule_count constraints)
+                    (ms_plan_rule_count constraints)
+                    (if (lt raw_total 0) total raw_total)
+                    total
+                    accepted
+                    rejected
+                    screened
+                    constrained
+                    (te_bucket_len buckets)
+                    best
+                    (te_int_len solutions)
+                    witness_rank)
+                  w)))))))))))
 
 (fn te_build_filtered
   ((path (List Int))
