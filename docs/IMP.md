@@ -2949,16 +2949,58 @@ IIf-capable statement translators, and `ix_dwl` sees through nested
   branch per loop body; named growth)" — it fires for a branch
   inside a branch arm and for a second branch per loop body; the
   walker adds "loop-body branch condition carries guards" and
-  "non-comparison loop-body branch condition". A branchy loop body
-  in a store-free pin still routes to the PURE loop tier and refuses
-  there (mixed-tier entry needs mem or a top-level branch) — a
-  dispatch seam, not a soundness gap.
-- NEXT (the fork's ladder): rung 3 nested branches + the IF-1c
-  fences (adjacent branches in one unsealed span, branch leg ending
-  at a mid-flat seal point, branch-with-loop-arms) — assess, fence
-  loudly if not taken; the pure-tier dispatch seam above is a
-  candidate small rung (route branchy store-free loop pins to the
-  mixed tier).
+  "non-comparison loop-body branch condition". [The original seam
+  sentence here claimed store-free branchy-loop pins route to the
+  pure tier — measured false at IF-2c, superseded 2026-07-16: loop
+  pin dispatch keys on BODY SHAPE (lp_pieces: body = one bare
+  IWhile), not store-ness. Store-free pins with a const-set counter
+  enter the mixed tier and generate FULL; only bare-IWhile
+  (symbolic-count) pins go pure.]
+
+**IF-2c — the seam measured; the pure-tier fence named; the store-free
+lock (2026-07-16; the imp-if-tier fork; one commit).** No new proof
+machinery — a measurement pass over the IF-2 NEXT items, one fence
+correction, one fixture lock.
+
+- **The dispatch, measured.** A store-free branchy-loop pin with a
+  const-set counter ALREADY generates FULL on both targets — the
+  mixed tier never needed mem (empty guard regions walk fine; the
+  worker is the polarity case-on alone). Locked by fixture:
+  `it_ifl3_fn` (imp_ifl.shard) — outs regenerate strictly
+  ADDITIVELY (committed content = byte-identical prefix), wasm
+  129/0, x86 422/0, deterministic. Driver product count unchanged.
+- **The real seam = the pure loop tier.** Bare-IWhile
+  (symbolic-count) pins are the only branchy-loop shape that
+  refuses, and the refusal borrowed lw_stmts's "nested or repeated
+  branch" message — wrong for a FIRST branch. Now its own named
+  fence in lp_gen: "branch in a symbolic-count loop body (the pure
+  loop tier; named growth)". Branch support there is a REAL rung:
+  the pure tier's worker is Some-conditional (the imp side rides a
+  premise, swapped in by `(rewrite (premise 0) rl rhs)` — a
+  different integration than the mixed tier's synced walk), so the
+  IF-2 case-on mechanism ports but the proof text is new. Queued as
+  a named candidate rung, not taken here.
+- **Rung-3 fences, probed on both targets** (scratch pins, not
+  committed):
+  - *Adjacent top-level branches*: the wasm emitter ALREADY
+    generates AND certifies the two-branch chain — branch legs
+    compose down the boundary chain like any other leg (scratch
+    check 126/0). x86 refuses note-grade at `mxx_legck` ("adjacent
+    branches share an unsealed span") — the open design choice is
+    nested case-ons within one leg (2^n arm paths, no translator
+    change) vs a minimal to_x86 seal between adjacent branches
+    (shared-ground edit; existing pins have ≤1 branch per span so
+    committed bytes hold). RULING OWED before rung 3a.
+  - *Nested branch (IIf inside an arm)*: hard fence fires with the
+    correct message ("nested or repeated branch …").
+  - *Branch-with-loop-arms*: hard fence fires as "nested loop
+    (named growth)" — loud and safe, though the message names the
+    loop rather than the branch context.
+- NEXT (the fork's ladder): rung 3a adjacent branches on x86 (gated
+  on the seal-vs-nesting ruling; wasm side needs only a fixture
+  lock, which should land WITH the x86 leg so fixtures stay
+  both-target); rung 3b nested branches; the pure-tier
+  symbolic-count branch rung; branch-with-loop-arms stays fenced.
 
 
 ## 7. Non-goals, stated once
