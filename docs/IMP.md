@@ -2717,6 +2717,39 @@ half reads back.**
   shb_pad_w + ish_ediv_mul tie the block count; shb_fold_blocks
   collapses to sha_blocks = the spec), NIST vectors, gates.
 
+**I2e-4c progress (2026-07-17): THE FULL-PIPE COMPOSITION — the
+memory-effect pipe IS the spec, both targets.**
+
+- `ish_wget_pad_hi`/`ish_wlist_pad_hi` (sibling): word reads and
+  whole windows at or above the pad span's end see through the pad
+  effect — the wlist-grain lift of ish_pad_hi, by induction on the
+  WINDOW length (the pad effect is composite, so the effect-counter
+  induction of the copy/sched lifts doesn't apply; the head wget
+  frames via the byte-grain lemma, the IH re-binds p at (+ p 4)).
+- `shb_pipe_read`/`shx_pipe_read` (weld): a memory holding the
+  message at [0,wn) flows through ikh_mem → ipd_mem → shb/shx_mem
+  → ihx_mem and the output window [0,64) reads back as the SPEC's
+  `sha256_hex (mem_read wn m 0)`. Premises = the artifact's
+  arithmetic only: wz's mod-64 equation, k's ediv equation, and
+  wn+72 ≤ 64960. Proof: stage seals end to end — ish_wlist_pad_hi
+  carries the init's K/H invariants across the pad; shb_pad_w (rl)
+  + ish_pad_read + ish_read_ikh_below deliver the padded window as
+  sha_pad of the message; shb_out_read (st := sha_h0) runs the
+  back half; shb_fold_blocks collapses the fold; ish_read_len +
+  shb_w_i + ish_ediv_mul tie the spec's ediv block count to the
+  premised Nat k (the fold bound 64k ≤ 64960 falls out of the ediv
+  premise by the euclidean haves + a 5-row farkas).
+- GOTCHA: the spec's `sha256`/`sha256_hex` are mod.req sig→def
+  rebinds — the file star-use does NOT export them; the weld needed
+  the module-surface use lines (`(use (:: std sha256 sha256))` +
+  `sha256_hex`), legal to unfold because the weld is home-module.
+- Gates: sibling 480/0 (+2), weld 1005/0 (+2).
+- REMAINING for 4c: the top-level artifact fn (one imp fn calling
+  init/pad/fold/hex; impgen both targets; machine walks land on the
+  composed memory, then the pipe lemmas finish), then the bin
+  (thin World main, slurp ≤ cap, controlled-failure leg, NIST
+  vectors, gates).
+
 
 ## 7. Non-goals, stated once
 

@@ -43,6 +43,10 @@
 
 (use (:: std sha256 sha256 *))
 
+(use (:: std sha256 sha256))
+
+(use (:: std sha256 sha256_hex))
+
 (use (:: std sha256 sha256.imp *))
 
 (use (:: models imp imp *))
@@ -8711,4 +8715,238 @@
           (steps ((rewrite (premise 2) lr lhs true ())) refl)
           (steps ((rewrite (premise 3) lr lhs true ())) refl))
          refl)))
+    refl))
+
+;; ---- THE FULL-PIPE COMPOSITION ---------------------------------------------
+;; init -> pad -> fold -> hex, end to end: a memory holding the
+;; message at [0,wn) flows through the four stage effects and the
+;; output window [0,64) reads back as the SPEC's sha256_hex of the
+;; message. The premises are the artifact's arithmetic: wz and k are
+;; the machine-computed zero-span and block count (their defining
+;; equations), and the message fits under the frame (wn+72 <= 64960).
+;; The proof is stage seals end to end -- ish_wlist_pad_hi carries
+;; the init's K/H invariants across the pad effect, shb_pad_w +
+;; ish_pad_read + ish_read_ikh_below deliver the padded window as
+;; sha_pad of the message, shb_fold_blocks collapses the fold to
+;; sha_blocks, and ish_read_len + shb_w_i + ish_ediv_mul tie the
+;; spec's ediv block count to the premised Nat k.
+(claim shb_pipe_read
+  (goal ((m Mem) (wn Nat) (wz Nat) (k Nat))
+    ((= (int_of_nat wz) (mod (- 55 (int_of_nat wn)) 64))
+     (= (int_of_nat k) (ediv (+ (int_of_nat wn) 72) 64))
+     (= (le (+ (int_of_nat wn) 72) 64960) True))
+    (=
+      (mem_read
+        64
+        (ihx_mem
+          (shb_mem (ipd_mem (ikh_mem m) 0 (int_of_nat wn)) 0 k)
+          0
+          65472
+          32)
+        0)
+      (sha256_hex (mem_read wn m 0))))
+  (chain
+    (have hnn (= (le 0 (int_of_nat wn)) True)
+      (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+    (have he
+      (=
+        (+ (int_of_nat wn) 72)
+        (+
+          (* 64 (ediv (+ (int_of_nat wn) 72) 64))
+          (mod (+ (int_of_nat wn) 72) 64)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 64))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrlo (= (le 0 (mod (+ (int_of_nat wn) 72) 64)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hpad
+      (=
+        (mem_read (shb_w k) (ipd_mem (ikh_mem m) 0 (int_of_nat wn)) 0)
+        (sha_pad (mem_read wn m 0)))
+      (chain
+        (rewrite-with
+          (lemma shb_pad_w)
+          rl
+          lhs
+          ((inst wn wn) (inst wz wz))
+          ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+           (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+        (rewrite-with
+          (lemma ish_pad_read)
+          lr
+          lhs
+          ()
+          ((steps ((compute lhs)) refl)
+           (steps () (by arith (rows (goal 1) (2 1))))
+           (steps ((rewrite (premise 0) lr lhs true ())) refl)))
+        (rewrite-with
+          (lemma ish_read_ikh_below)
+          lr
+          lhs
+          ()
+          ((steps () (by arith (rows (goal 1) (2 1))))))
+        refl))
+    (have hlen (= (ediv (slen (sha_pad (mem_read wn m 0))) 64) (int_of_nat k))
+      (chain
+        (steps
+          ((rewrite (premise hpad) rl lhs true ())
+           (rewrite (lemma ish_read_len) lr lhs true ())
+           (rewrite (lemma shb_w_i) lr lhs true ())
+           (rewrite (lemma ish_ediv_mul) lr lhs true ())))
+        refl))
+    (rewrite-with
+      (lemma shb_out_read)
+      lr
+      lhs
+      ((inst st (sha_h0)))
+      ((steps ((compute lhs)) refl)
+       (steps () (by arith (rows (goal 1) (1 -64) (he 1) (hrlo 1) (2 1))))
+       (chain
+         (rewrite-with
+           (lemma ish_wlist_pad_hi)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (2 1))))))
+         (steps ((rewrite (lemma ikh_k_read) lr lhs true ())))
+         refl)
+       (chain
+         (rewrite-with
+           (lemma ish_wlist_pad_hi)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (2 1))))))
+         (steps ((rewrite (lemma ikh_h_read) lr lhs true ())))
+         refl)))
+    (steps
+      ((rewrite (lemma shb_fold_blocks) lr lhs true ())
+       (rewrite (lemma shb_bytes_read) lr lhs true ())
+       (rewrite (premise hpad) lr lhs true ())
+       (unfold sha256_hex rhs)
+       (reduce rhs)
+       (unfold sha256 rhs)
+       (reduce rhs)
+       (rewrite (premise hlen) lr rhs true ())))
+    refl))
+
+;; the x86 pipe: same statement over the spill fold's exit memory
+(claim shx_pipe_read
+  (goal ((m Mem) (wn Nat) (wz Nat) (k Nat))
+    ((= (int_of_nat wz) (mod (- 55 (int_of_nat wn)) 64))
+     (= (int_of_nat k) (ediv (+ (int_of_nat wn) 72) 64))
+     (= (le (+ (int_of_nat wn) 72) 64960) True))
+    (=
+      (mem_read
+        64
+        (ihx_mem
+          (shx_mem (ipd_mem (ikh_mem m) 0 (int_of_nat wn)) 0 k)
+          0
+          65472
+          32)
+        0)
+      (sha256_hex (mem_read wn m 0))))
+  (chain
+    (have hnn (= (le 0 (int_of_nat wn)) True)
+      (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+    (have he
+      (=
+        (+ (int_of_nat wn) 72)
+        (+
+          (* 64 (ediv (+ (int_of_nat wn) 72) 64))
+          (mod (+ (int_of_nat wn) 72) 64)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 64))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrlo (= (le 0 (mod (+ (int_of_nat wn) 72) 64)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hpad
+      (=
+        (mem_read (shb_w k) (ipd_mem (ikh_mem m) 0 (int_of_nat wn)) 0)
+        (sha_pad (mem_read wn m 0)))
+      (chain
+        (rewrite-with
+          (lemma shb_pad_w)
+          rl
+          lhs
+          ((inst wn wn) (inst wz wz))
+          ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+           (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+        (rewrite-with
+          (lemma ish_pad_read)
+          lr
+          lhs
+          ()
+          ((steps ((compute lhs)) refl)
+           (steps () (by arith (rows (goal 1) (2 1))))
+           (steps ((rewrite (premise 0) lr lhs true ())) refl)))
+        (rewrite-with
+          (lemma ish_read_ikh_below)
+          lr
+          lhs
+          ()
+          ((steps () (by arith (rows (goal 1) (2 1))))))
+        refl))
+    (have hlen (= (ediv (slen (sha_pad (mem_read wn m 0))) 64) (int_of_nat k))
+      (chain
+        (steps
+          ((rewrite (premise hpad) rl lhs true ())
+           (rewrite (lemma ish_read_len) lr lhs true ())
+           (rewrite (lemma shb_w_i) lr lhs true ())
+           (rewrite (lemma ish_ediv_mul) lr lhs true ())))
+        refl))
+    (rewrite-with
+      (lemma shx_out_read)
+      lr
+      lhs
+      ((inst st (sha_h0)))
+      ((steps ((compute lhs)) refl)
+       (steps () (by arith (rows (goal 1) (1 -64) (he 1) (hrlo 1) (2 1))))
+       (chain
+         (rewrite-with
+           (lemma ish_wlist_pad_hi)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (2 1))))))
+         (steps ((rewrite (lemma ikh_k_read) lr lhs true ())))
+         refl)
+       (chain
+         (rewrite-with
+           (lemma ish_wlist_pad_hi)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (2 1))))))
+         (steps ((rewrite (lemma ikh_h_read) lr lhs true ())))
+         refl)))
+    (steps
+      ((rewrite (lemma shb_fold_blocks) lr lhs true ())
+       (rewrite (lemma shb_bytes_read) lr lhs true ())
+       (rewrite (premise hpad) lr lhs true ())
+       (unfold sha256_hex rhs)
+       (reduce rhs)
+       (unfold sha256 rhs)
+       (reduce rhs)
+       (rewrite (premise hlen) lr rhs true ())))
     refl))
