@@ -96,7 +96,14 @@ echo "OK: bin/shard_eval (stamp $(cat bin/shard_eval.stamp | cut -c1-12))"
 
 # `bin/rebuild.sh check` additionally builds the DIRECT-compiled checker
 # (gate_sweep's fastest engine: ~0.2s/155MB vs ~minutes/40GB interpreting).
+# The checker is built BY THE JUST-BUILT shard_eval, not the boot engine:
+# on a cold start the boot is the Rust interpreter (~hours per engine), and
+# rebinding here keeps the cold path to ONE interpreter-speed compile; the
+# pedigree is unchanged (root builds eval, eval builds check — engines are
+# never the soundness authority) and fast mode gets same-generation builds.
 if [ "${1:-}" = check ]; then
+  BOOT=bin/shard_eval
+  echo "== check engine: the just-built bin/shard_eval"
   build kernel/check.shard bin/shard_check
   bin/engine_stamp.sh > bin/shard_check.stamp
   echo "OK: bin/shard_check (stamp $(cat bin/shard_check.stamp | cut -c1-12))"
