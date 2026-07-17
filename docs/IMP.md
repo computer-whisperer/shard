@@ -2651,8 +2651,10 @@ on sha_blocks; the targets meet at one spec-side fold.**
   windows at or below the K window survive the whole init) +
   `ikh_k_read`/`ikh_h_read` (ikh_mem delivers EXACTLY the fold's
   invariants: K window = sha_k, H window = shw_hlist (sha_h0)).
-- Width plumbing: `ish_read_split` (a read at a wn_add width is the
-  sapp of its halves), `shb_w` (64k as a Nat width) and
+- Width plumbing: `ish_read_app` (a read at a wn_add width is the
+  sapp of its halves — the pad kit already had it; a 4b duplicate
+  `ish_read_split` was landed then retired), `shb_w` (64k as a Nat
+  width) and
   `shb_bytes_read` (the fold's chunk region as ONE mem_read) — the
   pad tier's readback width and the fold's chunks now speak the
   same vocabulary. GOTCHA: canon C6 packs a fn's ground Nat arms
