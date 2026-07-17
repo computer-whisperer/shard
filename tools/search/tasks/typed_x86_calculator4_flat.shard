@@ -1,0 +1,134 @@
+;;; Template-free four-operation mlx86 calculator search.
+;;;
+;;; Unlike typed_x86_calculator4.shard, this task supplies no TgScopeEnv and
+;;; fixes no control-flow skeleton.  The ordinary flat typed grammar may place
+;;; any explicitly admitted x86/list constructor wherever its reflected type
+;;; permits.  The only language policy is this item scope, the four admitted
+;;; integer literals, constructor forms, and the structural depth bound.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../models/x86/x86.shard")
+
+;; Candidate language: generic list structure and the small x86 fragment used
+;; by the historical calculator.  These are scope admissions, not productions
+;; for a calculator-specific tree shape.
+(use (:: core List))
+(use (:: core Nil))
+(use (:: core Cons))
+(use (:: models x86 x86 XInstr))
+(use (:: models x86 x86 Reg))
+(use (:: models x86 x86 Src))
+(use (:: models x86 x86 Cond))
+(use (:: models x86 x86 XBop))
+(use (:: models x86 x86 XBlock))
+(use (:: models x86 x86 XBrIf))
+(use (:: models x86 x86 XBr))
+(use (:: models x86 x86 CEq))
+(use (:: models x86 x86 SImm))
+(use (:: models x86 x86 SReg))
+(use (:: models x86 x86 XMovRR))
+(use (:: models x86 x86 XMovRI))
+(use (:: models x86 x86 XBin))
+(use (:: models x86 x86 XDivU))
+(use (:: models x86 x86 RAX))
+(use (:: models x86 x86 RDX))
+(use (:: models x86 x86 RDI))
+(use (:: models x86 x86 RSI))
+(use (:: models x86 x86 XAdd))
+(use (:: models x86 x86 XSub))
+(use (:: models x86 x86 XMul))
+
+(use (:: models x86 x86) as x86)
+
+(fn search_forms () (List Symbol) (list (quote ctor)))
+
+(fn search_ints () (List Int) (list 0 1 2 3))
+
+(fn search_symbols () (List Symbol) Nil)
+
+;; Depth counts expression heads.  Twenty is the exact first depth containing
+;; the known three-test nested-dispatch witness; it admits no gratuitous rung
+;; beyond the one needed for this completeness check.
+(fn search_depth () Int 20)
+
+;; Synthesis stops at the first passing restricted region.  This intentionally
+;; avoids the exact-cardinality/full-partition work retained by census mode.
+(fn search_result_mode () Symbol (quote first))
+
+(fn search_drive_budget () Int 100000)
+
+(fn mlx86_rand ((seed Int)) Int
+  (mod (ediv (+ (* 214013 seed) 2531011) 65536) 32768))
+
+(fn mlx86_a ((i Int)) Int (mod (mlx86_rand (+ i 100)) 100))
+
+(fn mlx86_b ((i Int)) Int (mod (mlx86_rand (+ i 300)) 100))
+
+(fn mlx86_op ((i Int)) Int (mod (mlx86_rand (+ i 500)) 4))
+
+(fn calc4_result ((a Int) (b Int) (op Int)) Int
+  (if (int_eq op 0) (mod (+ a b) 256)
+  (if (int_eq op 1) (mod (- a b) 256)
+  (if (int_eq op 2) (mod (* a b) 256)
+  (ediv a b)))))
+
+(fn search_run ((body (List XInstr)) (a Int) (b Int) (op Int)) (Option Int)
+  (match
+    ((:: x86 xcall_fn)
+     ((:: x86 xfnat) 100)
+     ((:: x86 MkXModule) (list ((:: x86 MkXFunc) 3 body)) 0 0)
+     0
+     (list a b op))
+    (None None)
+    ((Some value) (Some (mod value 256)))))
+
+(fn search_observe_go ((body (List XInstr)) (i Int) (n Nat))
+  (List (Option Int))
+  (measure (struct n))
+  (match n
+    (Z Nil)
+    ((S n2)
+     (Cons
+       (search_run body (mlx86_a i) (mlx86_b i) (mlx86_op i))
+       (search_observe_go body (+ i 1) n2)))))
+
+(fn search_target_go ((i Int) (n Nat)) (List (Option Int))
+  (measure (struct n))
+  (match n
+    (Z Nil)
+    ((S n2)
+     (Cons
+       (Some (calc4_result (mlx86_a i) (mlx86_b i) (mlx86_op i)))
+       (search_target_go (+ i 1) n2)))))
+
+(fn search_probe ((body (List XInstr))) (Option (List (Option Int)))
+  (Some (search_observe_go body 0 ((:: x86 xfnat) 40))))
+
+(fn search_target () (List (Option Int))
+  (search_target_go 0 ((:: x86 xfnat) 40)))
+
+(fn c4_cat ((xs (List XInstr)) (ys (List XInstr))) (List XInstr)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons x rest) (Cons x (c4_cat rest ys)))))
+
+(fn c4_if ((selector Int) (yes XBop) (no (List XInstr))) XInstr
+  (XBlock
+    (list
+      (XBlock
+        (Cons (XBrIf (CEq RDX (SImm selector)) 0) (c4_cat no (list (XBr 1)))))
+      (XMovRR RAX RDI)
+      (XBin yes RAX (SReg RSI)))))
+
+(fn search_witness () (List XInstr)
+  (list
+    (c4_if
+      0
+      XAdd
+      (list
+        (c4_if
+          1
+          XSub
+          (list
+            (c4_if 2 XMul (list (XMovRR RAX RDI) (XMovRI RDX 0) (XDivU RSI)))))))))

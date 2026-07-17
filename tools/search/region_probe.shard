@@ -39,6 +39,34 @@
           (Ctor (srp_q (quote Wrap)) (Cons (hole 1) Nil))))
       (GEnt 1 (list (srp_atom 0) (srp_atom 1) (srp_atom 2))))))
 
+(fn srp_barren_grammar () Grammar
+  (Grammar
+    (list
+      (GEnt
+        0
+        (list
+          (Ctor (srp_q (quote Dead)) (Cons (hole 1) Nil))
+          (srp_atom 9)))
+      (GEnt 1 Nil))))
+
+(fn srp_schema_grammar () SkSchemaGrammar
+  (SkSchemaGrammar
+    0
+    (list
+      (SkSchemaEnt
+        0
+        (list
+          (SkSchemaAlt
+            (srp_pair (hole 0) (hole 1))
+            (list
+              (SkSchemaRef 0 0 1)
+              (SkSchemaRef 1 1 1)))))
+      (SkSchemaEnt
+        1
+        (list
+          (SkSchemaAlt (srp_atom 0) Nil)
+          (SkSchemaAlt (srp_atom 1) Nil))))))
+
 (fn srp_fail ((msg (List Int)) (w World)) World
   (exit
     1
@@ -84,17 +112,21 @@
        ((SkRegionEditErr msg) (srp_fail msg w))
        ((SkRegionEditEmpty) (srp_fail "addressing choice was empty" w))
        ((SkRegionEditOk addressed)
-        (match (sk_region_unrank root grammar addressed 0)
+        (match (sk_region_first root grammar addressed)
           ((SkEErr msg) (srp_fail msg w))
-          ((SkEOk first)
-           (match (sk_region_unrank root grammar addressed 1)
+          ((SkEOk first_direct)
+           (match (sk_region_unrank root grammar addressed 0)
              ((SkEErr msg) (srp_fail msg w))
-             ((SkEOk second)
+             ((SkEOk first)
+              (match (sk_region_unrank root grammar addressed 1)
+               ((SkEErr msg) (srp_fail msg w))
+               ((SkEOk second)
               (let
                 ((want_first (srp_pair (srp_atom 0) (srp_atom 2)))
                  (want_second (srp_pair (srp_atom 2) (srp_atom 2)))
                  (excluded (srp_pair (srp_atom 1) (srp_atom 2))))
-                (if (expr_eq first want_first)
+                (if (expr_eq first_direct want_first)
+                 (if (expr_eq first want_first)
                   (if (expr_eq second want_second)
                     (match (sk_region_rank root grammar addressed second)
                       ((SkCErr msg) (srp_fail msg w))
@@ -107,7 +139,8 @@
                            (srp_fail "unranked candidate was not a member" w))
                          (srp_fail "restricted rank did not invert unrank" w))))
                     (srp_fail "restricted unrank second candidate" w))
-                  (srp_fail "restricted unrank first candidate" w))))))))))))
+                  (srp_fail "restricted unrank first candidate" w))
+                 (srp_fail "cardinality-free first candidate" w))))))))))))))
 
 (fn srp_nested ((w World)) World
   (let ((grammar (srp_nested_grammar)) (root (hole 0)))
@@ -125,13 +158,70 @@
                (match (srp_count root grammar wrapped)
                  ((Some wrapped_count)
                   (if (int_eq wrapped_count 2)
-                    (write
-                      "REGION-PROBE RAW-9 HIT-1 COMPLEMENT-6+2 EMPTY-0 ADDRESSABLE NESTED-4>3>2 ORIGINAL-IDS OK\n"
-                      w)
+                    (match (sk_region_first root grammar wrapped)
+                      ((SkEErr msg) (srp_fail msg w))
+                      ((SkEOk first)
+                       (if
+                         (expr_eq
+                           first
+                           (Ctor
+                             (srp_q (quote Wrap))
+                             (Cons (srp_atom 0) Nil)))
+                         (srp_barren w)
+                         (srp_fail "nested cardinality-free first" w))))
                     (srp_fail "nested selected count" w)))
                  (None (srp_fail "nested selected region count" w)))))
             (srp_fail "nested restricted count" w)))
          (None (srp_fail "nested region count" w)))))))
+
+(fn srp_barren ((w World)) World
+  (let ((grammar (srp_barren_grammar)) (root (hole 0)))
+    (match (sk_region_first root grammar (sk_empty_region))
+      ((SkEErr msg) (srp_fail msg w))
+      ((SkEOk first)
+       (if (expr_eq first (srp_atom 9))
+         (srp_schema w)
+         (srp_fail "first selected a barren production" w))))))
+
+(fn srp_schema ((w World)) World
+  (let ((grammar (srp_schema_grammar)))
+    (match (sk_schema_wf grammar)
+      ((SkSchemaWfErr msg) (srp_fail msg w))
+      ((SkSchemaWfOk)
+       (match (sk_schema_alts_at grammar 0)
+         ((SkSchemaAltsErr msg) (srp_fail msg w))
+         ((SkSchemaAltsOk root_alts)
+          (match root_alts
+            ((Cons root Nil)
+             (if (expr_eq root (srp_pair (hole 1) (hole 2)))
+               (match (sk_schema_alts_at grammar 1)
+                 ((SkSchemaAltsErr msg) (srp_fail msg w))
+                 ((SkSchemaAltsOk left_alts)
+                  (match (sk_schema_alts_at grammar 2)
+                    ((SkSchemaAltsErr msg) (srp_fail msg w))
+                    ((SkSchemaAltsOk right_alts)
+                     (if (if (srp_exprs_eq left_alts right_alts)
+                           (sk_schema_alt_productive_at
+                             grammar (sk_schema_productivity grammar) 0 0)
+                           False)
+                       (write
+                         "REGION-PROBE RAW-9 HIT-1 COMPLEMENT-6+2 EMPTY-0 ADDRESSABLE FIRST NESTED-4>3>2 PRODUCTIVE ORIGINAL-IDS SCHEMA-SHARED-POLICY-INDEPENDENT-OCCURRENCES OK\n"
+                         w)
+                       (srp_fail "schema child policy/productivity drift" w))))))
+               (srp_fail "schema occurrences were not structurally distinct" w)))
+            (_ (srp_fail "schema root alternative shape" w)))))))))
+
+(fn srp_exprs_eq ((left (List Expr)) (right (List Expr))) Bool
+  (measure (struct left))
+  (match left
+    (Nil
+      (match right
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons x xs)
+     (match right
+       (Nil False)
+       ((Cons y ys) (if (expr_eq x y) (srp_exprs_eq xs ys) False))))))
 
 (fn srp_empty_exclusion
   ((root Expr) (grammar Grammar) (region SkRegion) (w World)) World

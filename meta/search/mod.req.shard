@@ -449,6 +449,35 @@
   (match grammar
     ((Grammar entries) (ms_alts_go entries hole_id))))
 
+;; The residual theorem matcher needs only an occurrence-indexed alternative
+;; language.  Exact counting and rank operations remain properties of a flat
+;; `Grammar`; matching can also consume a regular schema without expanding all
+;; of its structural occurrences first.
+(type MsLanguage
+  (MsLanguageGrammar Grammar)
+  (MsLanguageSchema SkSchemaGrammar))
+
+(type MsLanguageAltsR
+  (MsLanguageAltsErr (List Int))
+  (MsLanguageAltsOk (List Expr)))
+
+(fn ms_language_grammar ((grammar Grammar)) MsLanguage
+  (MsLanguageGrammar grammar))
+
+(fn ms_language_schema ((grammar SkSchemaGrammar)) MsLanguage
+  (MsLanguageSchema grammar))
+
+(fn msl_alts ((language MsLanguage) (hole_id Int)) MsLanguageAltsR
+  (match language
+    ((MsLanguageGrammar grammar)
+     (match (ms_alts grammar hole_id)
+       (None (MsLanguageAltsErr "constraint references an unknown grammar hole"))
+       ((Some alts) (MsLanguageAltsOk alts))))
+    ((MsLanguageSchema grammar)
+     (match (sk_schema_alts_at grammar hole_id)
+       ((SkSchemaAltsErr msg) (MsLanguageAltsErr msg))
+       ((SkSchemaAltsOk alts) (MsLanguageAltsOk alts))))))
+
 (fn ms_alt_at ((alts (List Expr)) (index Int)) (Option Expr)
   (measure (struct alts))
   (match alts
@@ -474,11 +503,12 @@
   (MsSelectOpen Int (List Expr))
   (MsSelectExpr Expr))
 
-(fn ms_select ((grammar Grammar) (asg (List (Pair Int Int))) (hole_id Int))
+(fn ms_select
+  ((grammar MsLanguage) (asg (List (Pair Int Int))) (hole_id Int))
   MsSelect
-  (match (ms_alts grammar hole_id)
-    (None (MsSelectErr "constraint references an unknown grammar hole"))
-    ((Some alts)
+  (match (msl_alts grammar hole_id)
+    ((MsLanguageAltsErr msg) (MsSelectErr msg))
+    ((MsLanguageAltsOk alts)
      (let ((choice (ms_choice asg hole_id)))
        (if (lt choice 0)
          (match (ms_allowed_alts asg hole_id 0 alts)
@@ -556,7 +586,7 @@
 (fn ms_match_alts
   ((fuel Int)
    (facts (List MsHoleFacts))
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (pattern Expr)
    (alts (List Expr))
@@ -606,7 +636,7 @@
 (fn ms_match
   ((fuel Int)
    (facts (List MsHoleFacts))
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (pattern Expr)
    (candidate Expr))
@@ -680,7 +710,7 @@
 (fn ms_match_list
   ((fuel Int)
    (facts (List MsHoleFacts))
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (patterns (List Expr))
    (candidates (List Expr))
@@ -742,7 +772,7 @@
 ;; domains with disjoint shapes do not fork merely to discover inequality.
 (fn ms_equal
   ((fuel Int)
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (left Expr)
    (right Expr))
@@ -859,7 +889,7 @@
 ;; the exact next partition is therefore still the outer hole.
 (fn ms_equal_alts
   ((fuel Int)
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (fixed Expr)
    (alts (List Expr))
@@ -900,7 +930,7 @@
 
 (fn ms_equal_list
   ((fuel Int)
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (left (List Expr))
    (right (List Expr))
@@ -929,7 +959,7 @@
 
 (fn ms_equal_arms
   ((fuel Int)
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (left (List Arm))
    (right (List Arm))
@@ -1023,7 +1053,12 @@
                fuel grammar space region left right hole_id (+ index 1) rest
                equal unequal pending)
            (match
-             (ms_equal fuel grammar (ms_region_asg child) left right)
+             (ms_equal
+               fuel
+               (ms_language_grammar grammar)
+               (ms_region_asg child)
+               left
+               right)
              ((MsMatchErr msg) (MsEqChoicesErr msg))
              ((MsMatchYes)
               (mse_classify_choices
@@ -1112,7 +1147,13 @@
         (if (le count 0)
           (mse_partition_go
             (- fuel 1) grammar space left right rest equal unequal forks)
-        (match (ms_equal fuel grammar (ms_region_asg region) left right)
+        (match
+          (ms_equal
+            fuel
+            (ms_language_grammar grammar)
+            (ms_region_asg region)
+            left
+            right)
           ((MsMatchErr msg) (MsEqPartitionErr msg))
           ((MsMatchYes)
            (mse_partition_go
@@ -1176,7 +1217,7 @@
 
 (fn msn_match
   ((fuel Int)
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (pattern Expr)
    (candidate Expr)
@@ -1242,7 +1283,7 @@
 
 (fn msn_match_list
   ((fuel Int)
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (patterns (List Expr))
    (candidates (List Expr))
@@ -1342,7 +1383,7 @@
 (fn ms_rules_root
   ((fuel Int)
    (facts (List MsHoleFacts))
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (rules (List TrsRule))
    (candidate Expr)
@@ -1410,7 +1451,7 @@
 ;; can partition it without enumerating the surrounding program.
 (fn ms_int_term
   ((fuel Int)
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (term Expr))
   MsIntEval
@@ -1431,7 +1472,7 @@
 
 (fn ms_int_expr
   ((fuel Int)
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (expr TrsIntExpr)
    (env MsNEnv))
@@ -1467,7 +1508,7 @@
 
 (fn ms_guard
   ((fuel Int)
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (guard TrsGuard)
    (env MsNEnv))
@@ -1512,7 +1553,7 @@
 
 (fn ms_guards
   ((fuel Int)
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (guards (List TrsGuard))
    (env MsNEnv))
@@ -1529,10 +1570,10 @@
        ((MsMatchYes)
         (ms_guards (- fuel 1) grammar asg rest env)))))))
 
-(fn ms_conditioned_root
+(fn ms_conditioned_root_language
   ((fuel Int)
    (facts (List MsHoleFacts))
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (conditioned TrsConditionedRule)
    (candidate Expr))
@@ -1564,13 +1605,28 @@
                 ((MsMatchBlocked hole_id) (MsBlocked hole_id))
                 ((MsMatchYes) (MsRedex (trs_rule_name rule))))))))))))))
 
+;; Compatibility entry point for callers that operate on an exact grammar.
+(fn ms_conditioned_root
+  ((fuel Int)
+   (facts (List MsHoleFacts))
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (conditioned TrsConditionedRule)
+   (candidate Expr))
+  MsVerdict
+  (ms_conditioned_root_language
+    fuel facts (ms_language_grammar grammar) asg conditioned candidate))
+
 (type MsNode
   (MsNodeErr (List Int))
   (MsNodeOpen Int (List Expr))
   (MsNodeExpr Expr))
 
 (fn ms_node
-  ((fuel Int) (grammar Grammar) (asg (List (Pair Int Int))) (candidate Expr))
+  ((fuel Int)
+   (grammar MsLanguage)
+   (asg (List (Pair Int Int)))
+   (candidate Expr))
   MsNode
   (measure fuel)
   (if (lt fuel 1) (MsNodeErr "constraint node-view fuel exhausted")
@@ -1587,7 +1643,7 @@
   ((fuel Int)
    (facts (List MsHoleFacts))
    (root_facts (List MsVerdictFact))
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (rules (List TrsRule))
    (candidate Expr))
@@ -1619,7 +1675,7 @@
   ((fuel Int)
    (facts (List MsHoleFacts))
    (spine_facts (List MsSpineVerdictFact))
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (item TrsSpineRule)
    (alts (List Expr))
@@ -1665,7 +1721,7 @@
   ((fuel Int)
    (facts (List MsHoleFacts))
    (spine_facts (List MsSpineVerdictFact))
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (item TrsSpineRule)
    (candidate Expr))
@@ -1688,7 +1744,7 @@
        ((TrsSpineRule (TrsSpine _ ctor child) conditioned)
         (let
           ((root
-             (ms_conditioned_root
+             (ms_conditioned_root_language
                (- fuel 1) facts grammar asg conditioned node)))
           (match root
             ((MsErr msg) (MsErr msg))
@@ -1713,7 +1769,7 @@
   ((fuel Int)
    (facts (List MsHoleFacts))
    (spine_facts (List MsSpineVerdictFact))
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (items (List TrsSpineRule))
    (candidate Expr)
@@ -1744,7 +1800,7 @@
   ((fuel Int)
    (facts (List MsHoleFacts))
    (tree_facts (List MsVerdictFact))
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (rules (List TrsRule))
    (alts (List Expr))
@@ -1810,7 +1866,7 @@
   ((fuel Int)
    (facts (List MsHoleFacts))
    (tree_facts (List MsVerdictFact))
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (rules (List TrsRule))
    (candidate Expr))
@@ -1845,7 +1901,7 @@
   ((fuel Int)
    (facts (List MsHoleFacts))
    (tree_facts (List MsVerdictFact))
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (rules (List TrsRule))
    (candidate Expr)
@@ -1912,7 +1968,7 @@
   ((fuel Int)
    (facts (List MsHoleFacts))
    (tree_facts (List MsVerdictFact))
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (rules (List TrsRule))
    (candidates (List Expr))
@@ -1953,7 +2009,7 @@
   ((fuel Int)
    (facts (List MsHoleFacts))
    (tree_facts (List MsVerdictFact))
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (rules (List TrsRule))
    (arms (List Arm))
@@ -2044,7 +2100,7 @@
 
 (fn ms_compile_holes
   ((match_fuel Int)
-   (grammar Grammar)
+   (grammar MsLanguage)
    (pattern Expr)
    (entries (List GEnt))
    (facts (List MsHoleFacts)))
@@ -2074,7 +2130,7 @@
 
 (fn ms_compile_patterns
   ((match_fuel Int)
-   (grammar Grammar)
+   (grammar MsLanguage)
    (entries (List GEnt))
    (patterns (List Expr))
    (facts (List MsHoleFacts)))
@@ -2095,7 +2151,7 @@
 (fn ms_compile_anywhere_holes
   ((fuel Int)
    (match_facts (List MsHoleFacts))
-   (grammar Grammar)
+   (grammar MsLanguage)
    (rules (List TrsRule))
    (entries (List GEnt))
    (tree_facts (List MsVerdictFact)))
@@ -2137,7 +2193,7 @@
 (fn ms_compile_root_holes
   ((fuel Int)
    (match_facts (List MsHoleFacts))
-   (grammar Grammar)
+   (grammar MsLanguage)
    (rules (List TrsRule))
    (entries (List GEnt))
    (root_facts (List MsVerdictFact)))
@@ -2182,7 +2238,7 @@
 (fn ms_compile_spine_holes
   ((fuel Int)
    (match_facts (List MsHoleFacts))
-   (grammar Grammar)
+   (grammar MsLanguage)
    (item TrsSpineRule)
    (entries (List GEnt))
    (spine_facts (List MsSpineVerdictFact)))
@@ -2226,7 +2282,7 @@
 (fn ms_compile_spine_items
   ((fuel Int)
    (match_facts (List MsHoleFacts))
-   (grammar Grammar)
+   (grammar MsLanguage)
    (items (List TrsSpineRule))
    (entries (List GEnt))
    (spine_facts (List MsSpineVerdictFact)))
@@ -2246,7 +2302,7 @@
 (type MsPrepared
   (MsPrepared
     MsPlan
-    Grammar
+    MsLanguage
     (List MsHoleFacts)
     (List MsVerdictFact)
     (List MsVerdictFact)
@@ -2319,7 +2375,12 @@
              (match grammar
                ((Grammar entries)
                 (match
-                  (ms_compile_patterns match_fuel grammar entries patterns Nil)
+                  (ms_compile_patterns
+                    match_fuel
+                    (ms_language_grammar grammar)
+                    entries
+                    patterns
+                    Nil)
                   ((MsFactsErr msg) (MsPrepareErr msg))
                   ((MsFactsOk facts)
                    (let
@@ -2329,13 +2390,15 @@
                      (match
                        (if (ms_rules_empty everywhere_rules)
                          (MsVerdictFactsOk Nil)
-                         (ms_compile_anywhere_holes match_fuel facts grammar
+                         (ms_compile_anywhere_holes match_fuel facts
+                           (ms_language_grammar grammar)
                            everywhere_rules entries Nil))
                        ((MsVerdictFactsErr msg) (MsPrepareErr msg))
                        ((MsVerdictFactsOk tree_facts)
                         (match
                           (if (ms_rules_empty root_rules) (MsVerdictFactsOk Nil)
-                          (ms_compile_root_holes match_fuel facts grammar
+                          (ms_compile_root_holes match_fuel facts
+                            (ms_language_grammar grammar)
                             root_rules entries Nil))
                           ((MsVerdictFactsErr msg) (MsPrepareErr msg))
                           ((MsVerdictFactsOk root_facts)
@@ -2346,7 +2409,7 @@
                                 (ms_compile_spine_items
                                   match_fuel
                                   facts
-                                  grammar
+                                  (ms_language_grammar grammar)
                                   spine_rules
                                   ;; Grammar references point to greater hole
                                   ;; ids.  Compile children first so a stable
@@ -2358,8 +2421,31 @@
                              ((MsSpineVerdictFactsOk spine_facts)
                               (MsPrepareOk
                                 (MsPrepared
-                                  checked grammar facts tree_facts root_facts
+                                  checked
+                                  (ms_language_grammar grammar)
+                                  facts tree_facts root_facts
                                   spine_facts)))))))))))))))))))))
+
+;; Schema preparation validates the same theorem profiles and regular
+;; language, but intentionally starts without occurrence facts.  Those facts
+;; are an optimization: the matcher remains exact when it computes a verdict
+;; from the demanded occurrence.  A later pass can intern stable facts by
+;; schema state without changing this interface.
+(fn ms_prepare_schema
+  ((match_fuel Int) (plan MsPlan) (grammar SkSchemaGrammar)) MsPrepareR
+  (match plan
+    ((MsPlan everywhere root spine)
+     (match (ms_plan_spine everywhere root spine)
+       ((MsPlanErr msg) (MsPrepareErr msg))
+       ((MsPlanOk checked)
+        (match (sk_schema_wf grammar)
+          ((SkSchemaWfErr msg) (MsPrepareErr msg))
+          ((SkSchemaWfOk)
+           (if (lt match_fuel 1)
+             (MsPrepareErr "constraint preparation fuel exhausted")
+             (MsPrepareOk
+               (MsPrepared
+                 checked (ms_language_schema grammar) Nil Nil Nil Nil))))))))))
 
 ;; ---- prepared and direct checking -----------------------------------------
 
@@ -2370,7 +2456,7 @@
    (root_facts (List MsVerdictFact))
    (spine_facts (List MsSpineVerdictFact))
    (plan MsPlan)
-   (grammar Grammar)
+   (grammar MsLanguage)
    (asg (List (Pair Int Int)))
    (candidate Expr))
   MsVerdict
@@ -2431,7 +2517,18 @@
    (asg (List (Pair Int Int)))
    (candidate Expr))
   MsVerdict
-  (ms_check_facts fuel Nil Nil Nil Nil plan grammar asg candidate))
+  (ms_check_facts
+    fuel Nil Nil Nil Nil plan (ms_language_grammar grammar) asg candidate))
+
+(fn ms_check_schema
+  ((fuel Int)
+   (plan MsPlan)
+   (grammar SkSchemaGrammar)
+   (asg (List (Pair Int Int)))
+   (candidate Expr))
+  MsVerdict
+  (ms_check_facts
+    fuel Nil Nil Nil Nil plan (ms_language_schema grammar) asg candidate))
 
 (fn ms_check_prepared
   ((fuel Int)
@@ -2466,20 +2563,45 @@
   MsVerdict
   (match prepared
     ((MsPrepared plan grammar facts tree_facts root_facts spine_facts)
-     (match (sk_region_count candidate grammar region)
-       ((SkCErr msg) (MsErr msg))
-       ((SkCOk count)
-        (if (le count 0) (MsErr "prepared check received an empty region")
-        (ms_check_facts
-          fuel
-          facts
-          tree_facts
-          root_facts
-          spine_facts
-          plan
-          grammar
-          (ms_region_asg region)
-          candidate)))))))
+     (match grammar
+       ((MsLanguageSchema _)
+        (MsErr "exact prepared region checking requires a flat grammar"))
+       ((MsLanguageGrammar flat)
+        (match (sk_region_count candidate flat region)
+          ((SkCErr msg) (MsErr msg))
+          ((SkCOk count)
+           (if (le count 0) (MsErr "prepared check received an empty region")
+           (ms_check_facts
+             fuel
+             facts
+             tree_facts
+             root_facts
+             spine_facts
+             plan
+             grammar
+             (ms_region_asg region)
+             candidate)))))))))
+
+;; A scheduler that preserves region inhabitance can avoid exact cardinality
+;; arithmetic entirely.  This is the synthesis counterpart of
+;; `ms_check_prepared_region`: it applies the same fixed/forbidden scope to the
+;; prepared matcher, but leaves non-emptiness to the caller.  Census drivers
+;; should retain the checked wrapper above.
+(fn ms_check_prepared_restricted
+  ((fuel Int) (prepared MsPrepared) (region SkRegion) (candidate Expr))
+  MsVerdict
+  (match prepared
+    ((MsPrepared plan grammar facts tree_facts root_facts spine_facts)
+     (ms_check_facts
+       fuel
+       facts
+       tree_facts
+       root_facts
+       spine_facts
+       plan
+       grammar
+       (ms_region_asg region)
+       candidate))))
 
 ;; ---- prepared-plan partitions -------------------------------------------
 ;;
@@ -2687,14 +2809,19 @@
   MsPlanPartitionR
   (match prepared
     ((MsPrepared _ grammar _ _ _ _)
-     (match (g_wf grammar)
-       ((GWErr msg) (MsPlanPartitionErr msg))
-       ((GWOk)
-        (match (sk_region_wf grammar region)
-          ((SkRegionWfErr msg) (MsPlanPartitionErr msg))
-          ((SkRegionWfOk)
-           (mspp_partition_go
-             fuel prepared grammar candidate (Cons region Nil) Nil Nil 0))))))))
+     (match grammar
+       ((MsLanguageSchema _)
+        (MsPlanPartitionErr "exact plan partition requires a flat grammar"))
+       ((MsLanguageGrammar flat)
+        (match (g_wf flat)
+          ((GWErr msg) (MsPlanPartitionErr msg))
+          ((GWOk)
+           (match (sk_region_wf flat region)
+             ((SkRegionWfErr msg) (MsPlanPartitionErr msg))
+             ((SkRegionWfOk)
+              (mspp_partition_go
+                fuel prepared flat candidate
+                (Cons region Nil) Nil Nil 0))))))))))
 
 ;; ---- contextual constructor-arm formation ---------------------------------
 ;;

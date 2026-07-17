@@ -430,6 +430,76 @@
     ((TgCtor q) (tg_ctor_sig m q want))
     ((TgCall q) (tg_call_sig m q want))))
 
+;; Resolve reflected declarations once per grammar build.  The occurrence
+;; grammar may contain hundreds of thousands of holes, while its admitted
+;; scope is normally small and stable.  Re-scanning the whole Module for every
+;; head at every occurrence is pure linear duplication.
+(type TgHeadDef (TgHeadDef TgHead (List Type) Type))
+
+(fn tg_resolve_head_def ((m Module) (head TgHead)) (Option TgHeadDef)
+  (match head
+    ((TgCtor q)
+     (match (tg_find_ctor q m)
+       (None None)
+       ((Some (Pair (TypeDef tname tparams _ _) (CtorDef _ fields)))
+        (Some
+          (TgHeadDef head fields (TCon tname (tg_tvars tparams)))))))
+    ((TgCall q)
+     (match (tg_find_call q m)
+       (None None)
+       ((Some (Pair params ret)) (Some (TgHeadDef head params ret)))))))
+
+(fn tg_head_def_mem ((head TgHead) (defs (List TgHeadDef))) Bool
+  (measure (struct defs))
+  (match defs
+    (Nil False)
+    ((Cons (TgHeadDef prior _ _) rest)
+     (if (tg_head_eq head prior) True (tg_head_def_mem head rest)))))
+
+(fn tg_resolve_head_defs
+  ((m Module) (heads (List TgHead)) (defs (List TgHeadDef)))
+  (List TgHeadDef)
+  (measure (struct heads))
+  (match heads
+    (Nil defs)
+    ((Cons head rest)
+     (if (tg_head_def_mem head defs)
+       (tg_resolve_head_defs m rest defs)
+       (match (tg_resolve_head_def m head)
+         (None (tg_resolve_head_defs m rest defs))
+         ((Some def)
+          (tg_resolve_head_defs m rest (Cons def defs))))))))
+
+(fn tg_resolve_zone_defs
+  ((m Module) (zones (List TgZone)) (defs (List TgHeadDef)))
+  (List TgHeadDef)
+  (measure (struct zones))
+  (match zones
+    (Nil defs)
+    ((Cons (TgZone _ heads _ _ _) rest)
+     (tg_resolve_zone_defs m rest (tg_resolve_head_defs m heads defs)))))
+
+(fn tg_resolve_env_defs ((m Module) (env TgEnv)) (List TgHeadDef)
+  (match env
+    ((TgEnv zones) (tg_resolve_zone_defs m zones Nil))))
+
+(fn tg_head_def_find
+  ((head TgHead) (defs (List TgHeadDef))) (Option TgHeadDef)
+  (measure (struct defs))
+  (match defs
+    (Nil None)
+    ((Cons def rest)
+     (match def
+       ((TgHeadDef prior _ _)
+        (if (tg_head_eq head prior) (Some def)
+          (tg_head_def_find head rest)))))))
+
+(fn tg_cached_head_sig
+  ((defs (List TgHeadDef)) (head TgHead) (want Type)) TgSigR
+  (match (tg_head_def_find head defs)
+    (None (TgSigNo))
+    ((Some (TgHeadDef _ params ret)) (tg_inst_sig params ret want))))
+
 (fn tg_apply ((h TgHead) (args (List Expr))) Expr
   (match h
     ((TgCtor q) (Ctor q args))
@@ -840,6 +910,7 @@
 
 (fn tg_heads_alts
   ((m Module)
+   (defs (List TgHeadDef))
    (heads (List TgHead))
    (routes (List TgRoute))
    (want Type)
@@ -857,9 +928,9 @@
   (match heads
     (Nil (TgHeadsR alts tasks next))
     ((Cons h rest)
-     (match (tg_head_sig m h want)
+     (match (tg_cached_head_sig defs h want)
        ((TgSigNo)
-        (tg_heads_alts m rest routes want binders depth zone formation once
+        (tg_heads_alts m defs rest routes want binders depth zone formation once
           forbids next alts tasks))
        ((TgSigOk params)
         (let ((shape (tg_head_shape h (tg_types_len params))))
@@ -867,12 +938,13 @@
             (if (trs_shape_mem shape forbids) True
             (if (trs_forbids_root formation shape) True
             (trs_forbids_root once shape)))
-            (tg_heads_alts m rest routes want binders depth zone formation once
-              forbids next alts tasks)
+            (tg_heads_alts m defs rest routes want binders depth zone formation
+              once forbids next alts tasks)
             (match params
               (Nil
                 (tg_heads_alts
                   m
+                  defs
                   rest
                   routes
                   want
@@ -887,8 +959,8 @@
                   tasks))
               ((Cons _ _)
                (if (le depth 0)
-                 (tg_heads_alts m rest routes want binders depth zone formation
-                   once forbids next alts tasks)
+                 (tg_heads_alts m defs rest routes want binders depth zone
+                   formation once forbids next alts tasks)
                  (match
                    (tg_slots
                      params
@@ -905,6 +977,7 @@
                    ((TgSlots args more nx)
                     (tg_heads_alts
                       m
+                      defs
                       rest
                       routes
                       want
@@ -1001,7 +1074,12 @@
     ((TgEnv zones) (tg_zone_find name zones))))
 
 (fn tg_one
-  ((m Module) (env TgEnv) (formation TrsFormation) (task TgTask) (next Int))
+  ((m Module)
+   (defs (List TgHeadDef))
+   (env TgEnv)
+   (formation TrsFormation)
+   (task TgTask)
+   (next Int))
   TgOneR
   (match task
     ((TgTask id want binders depth zone_name once forbids)
@@ -1014,8 +1092,8 @@
                (tg_atoms atoms want formation once forbids)
                (tg_vars binders want 0))))
           (match
-            (tg_heads_alts m heads routes want binders depth zone_name formation
-              once forbids next base Nil)
+            (tg_heads_alts m defs heads routes want binders depth zone_name
+              formation once forbids next base Nil)
             ((TgHeadsR head_alts head_tasks nx)
              (match
                (tg_rules_alts rules want binders zone_name depth nx head_alts
@@ -1026,8 +1104,57 @@
 
 (type TgLoopR (TgLoopErr (List Int)) (TgLoopOk (List GEnt) Int))
 
+(type TgQueueR
+  (TgQueueDone)
+  (TgQueueMore TgTask (List TgTask) (List TgTask)))
+  ; task, remaining front, reverse pending tail
+
+(fn tg_queue
+  ((front (List TgTask)) (reverse_tail (List TgTask))) TgQueueR
+  (match front
+    ((Cons task rest) (TgQueueMore task rest reverse_tail))
+    (Nil
+      (match (tg_rev reverse_tail Nil)
+        (Nil (TgQueueDone))
+        ((Cons task rest) (TgQueueMore task rest Nil))))))
+
+;; FIFO construction used to append every new child batch by traversing the
+;; entire pending list.  That is quadratic in the number of grammar holes and
+;; dominates genuinely open recursive scopes.  A conventional front/reversed-
+;; tail queue preserves the exact task and hole-id order in linear total work.
+(fn tg_loop_go
+  ((m Module)
+   (defs (List TgHeadDef))
+   (env TgEnv)
+   (formation TrsFormation)
+   (front (List TgTask))
+   (reverse_tail (List TgTask))
+   (next Int)
+   (rev_entries (List GEnt))
+   (fuel Int))
+  TgLoopR
+  (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
+  (match (tg_queue front reverse_tail)
+    ((TgQueueDone) (TgLoopOk (tg_rev rev_entries Nil) next))
+    ((TgQueueMore task rest reverse_rest)
+     (if (lt fuel 1) (TgLoopErr "typed grammar work-list fuel exhausted")
+     (match (tg_one m defs env formation task next)
+       ((TgOneErr msg) (TgLoopErr msg))
+       ((TgOneOk ent children nx)
+        (tg_loop_go
+          m
+          defs
+          env
+          formation
+          rest
+          (tg_rev children reverse_rest)
+          nx
+          (Cons ent rev_entries)
+          (- fuel 1))))))))
+
 (fn tg_loop
   ((m Module)
+   (defs (List TgHeadDef))
    (env TgEnv)
    (formation TrsFormation)
    (pending (List TgTask))
@@ -1035,22 +1162,259 @@
    (rev_entries (List GEnt))
    (fuel Int))
   TgLoopR
-  (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
-  (match pending
-    (Nil (TgLoopOk (tg_rev rev_entries Nil) next))
-    ((Cons task rest)
-     (if (lt fuel 1) (TgLoopErr "typed grammar work-list fuel exhausted")
-     (match (tg_one m env formation task next)
-       ((TgOneErr msg) (TgLoopErr msg))
-       ((TgOneOk ent children nx)
-        (tg_loop
-          m
-          env
-          formation
-          (tg_app rest children)
-          nx
-          (Cons ent rev_entries)
-          (- fuel 1))))))))
+  (tg_loop_go m defs env formation pending Nil next rev_entries fuel))
+
+;; ---- regular typed-schema construction ------------------------------------
+;;
+;; The occurrence builder above deliberately gives every possible child
+;; position a fresh grammar hole.  First-result synthesis instead consumes a
+;; compact schema grammar: equivalent typed states share their production
+;; policy, while meta/sketch's structural occurrence addresses keep every
+;; reached position's choice independent.
+
+(fn tg_type_list_eq ((left (List Type)) (right (List Type))) Bool
+  (measure (struct left))
+  (match left
+    (Nil
+      (match right
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons x xs)
+     (match right
+       (Nil False)
+       ((Cons y ys) (if (type_eq x y) (tg_type_list_eq xs ys) False))))))
+
+(fn tg_shape_list_eq
+  ((left (List TrsShape)) (right (List TrsShape))) Bool
+  (measure (struct left))
+  (match left
+    (Nil
+      (match right
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons x xs)
+     (match right
+       (Nil False)
+       ((Cons y ys)
+        (if (trs_shape_eq x y) (tg_shape_list_eq xs ys) False))))))
+
+(fn tg_form_clause_eq ((left TrsFormClause) (right TrsFormClause)) Bool
+  (match left
+    ((TrsForbidRoot lname lshape)
+     (match right
+       ((TrsForbidRoot rname rshape)
+        (if (qname_eq lname rname) (trs_shape_eq lshape rshape) False))
+       (_ False)))
+    ((TrsForbidArg lname lroot lindex lchild)
+     (match right
+       ((TrsForbidArg rname rroot rindex rchild)
+        (if (qname_eq lname rname)
+          (if (trs_shape_eq lroot rroot)
+            (if (int_eq lindex rindex) (trs_shape_eq lchild rchild) False)
+            False)
+          False))
+       (_ False)))))
+
+(fn tg_form_clauses_eq
+  ((left (List TrsFormClause)) (right (List TrsFormClause))) Bool
+  (measure (struct left))
+  (match left
+    (Nil
+      (match right
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons x xs)
+     (match right
+       (Nil False)
+       ((Cons y ys)
+        (if (tg_form_clause_eq x y) (tg_form_clauses_eq xs ys) False))))))
+
+(fn tg_formation_eq ((left TrsFormation) (right TrsFormation)) Bool
+  (tg_form_clauses_eq
+    (trs_formation_clauses left)
+    (trs_formation_clauses right)))
+
+(fn tg_task_state_eq ((left TgTask) (right TgTask)) Bool
+  (match left
+    ((TgTask _ ltype lbinders ldepth lzone lonce lforbids)
+     (match right
+       ((TgTask _ rtype rbinders rdepth rzone ronce rforbids)
+        (if (type_eq ltype rtype)
+          (if (tg_type_list_eq lbinders rbinders)
+            (if (int_eq ldepth rdepth)
+              (if (sym_eq lzone rzone)
+                (if (tg_formation_eq lonce ronce)
+                  (tg_shape_list_eq lforbids rforbids)
+                  False)
+                False)
+              False)
+            False)
+          False))))))
+
+(fn tg_task_reid ((task TgTask) (schema_id Int)) TgTask
+  (match task
+    ((TgTask _ want binders depth zone once forbids)
+     (TgTask schema_id want binders depth zone once forbids))))
+
+(type TgSchemaState (TgSchemaState Int TgTask))
+
+(fn tg_schema_state_find
+  ((task TgTask) (states (List TgSchemaState))) (Option Int)
+  (measure (struct states))
+  (match states
+    (Nil None)
+    ((Cons (TgSchemaState schema_id prior) rest)
+     (if (tg_task_state_eq task prior) (Some schema_id)
+       (tg_schema_state_find task rest)))))
+
+(type TgSchemaChildrenR
+  (TgSchemaChildrenR
+    (List TgSchemaState)
+    (List TgTask)
+    (List (Pair Int Int))
+    Int))
+  ; all states, newly pending canonical states, local-hole -> schema, next id
+
+(fn tg_schema_children
+  ((children (List TgTask))
+   (states (List TgSchemaState))
+   (reverse_new (List TgTask))
+   (reverse_mapping (List (Pair Int Int)))
+   (next Int))
+  TgSchemaChildrenR
+  (measure (struct children))
+  (match children
+    (Nil
+      (TgSchemaChildrenR
+        states
+        (tg_rev reverse_new Nil)
+        (tg_rev reverse_mapping Nil)
+        next))
+    ((Cons child rest)
+     (match child
+       ((TgTask local _ _ _ _ _ _)
+        (match (tg_schema_state_find child states)
+          ((Some schema_id)
+           (tg_schema_children
+             rest states reverse_new
+             (Cons (Pair local schema_id) reverse_mapping)
+             next))
+          (None
+           (let ((canonical (tg_task_reid child next)))
+             (tg_schema_children
+               rest
+               (tg_app states (Cons (TgSchemaState next canonical) Nil))
+               (Cons canonical reverse_new)
+               (Cons (Pair local next) reverse_mapping)
+               (+ next 1))))))))))
+
+(fn tg_schema_mapping_find
+  ((local Int) (mapping (List (Pair Int Int)))) (Option Int)
+  (measure (struct mapping))
+  (match mapping
+    (Nil None)
+    ((Cons (Pair prior schema_id) rest)
+     (if (int_eq local prior) (Some schema_id)
+       (tg_schema_mapping_find local rest)))))
+
+(type TgSchemaRefsR
+  (TgSchemaRefsErr (List Int))
+  (TgSchemaRefsOk (List SkSchemaRef)))
+
+(fn tg_schema_refs
+  ((holes (List Int)) (mapping (List (Pair Int Int)))) TgSchemaRefsR
+  (measure (struct holes))
+  (match holes
+    (Nil (TgSchemaRefsOk Nil))
+    ((Cons local rest)
+     (match (tg_schema_mapping_find local mapping)
+       (None (TgSchemaRefsErr "typed schema child has no interned state"))
+       ((Some schema_id)
+        (match (tg_schema_refs rest mapping)
+          ((TgSchemaRefsErr msg) (TgSchemaRefsErr msg))
+          ((TgSchemaRefsOk refs)
+           ;; tg_one allocates child-local ids once across the complete entry,
+           ;; so they are already unique stable edge labels.
+           (TgSchemaRefsOk
+             (Cons (SkSchemaRef local local schema_id) refs)))))))))
+
+(type TgSchemaAltsR
+  (TgSchemaAltsErr (List Int))
+  (TgSchemaAltsOk (List SkSchemaAlt)))
+
+(fn tg_schema_alts
+  ((alts (List Expr)) (mapping (List (Pair Int Int)))) TgSchemaAltsR
+  (measure (struct alts))
+  (match alts
+    (Nil (TgSchemaAltsOk Nil))
+    ((Cons alt rest)
+     (match (sk_holes alt)
+       ((SkIdsErr msg) (TgSchemaAltsErr msg))
+       ((SkIdsOk holes)
+        (match (tg_schema_refs holes mapping)
+          ((TgSchemaRefsErr msg) (TgSchemaAltsErr msg))
+          ((TgSchemaRefsOk refs)
+           (match (tg_schema_alts rest mapping)
+             ((TgSchemaAltsErr msg) (TgSchemaAltsErr msg))
+             ((TgSchemaAltsOk tail)
+              (TgSchemaAltsOk (Cons (SkSchemaAlt alt refs) tail)))))))))))
+
+(type TgSchemaOneR
+  (TgSchemaOneErr (List Int))
+  (TgSchemaOneOk
+    SkSchemaEnt
+    (List TgSchemaState)
+    (List TgTask)
+    Int))
+
+(fn tg_schema_one
+  ((m Module)
+   (defs (List TgHeadDef))
+   (env TgEnv)
+   (formation TrsFormation)
+   (task TgTask)
+   (states (List TgSchemaState))
+   (next Int))
+  TgSchemaOneR
+  (match (tg_one m defs env formation task 0)
+    ((TgOneErr msg) (TgSchemaOneErr msg))
+    ((TgOneOk (GEnt schema_id alts) children _)
+     (match (tg_schema_children children states Nil Nil next)
+       ((TgSchemaChildrenR states2 pending mapping next2)
+        (match (tg_schema_alts alts mapping)
+          ((TgSchemaAltsErr msg) (TgSchemaOneErr msg))
+          ((TgSchemaAltsOk schema_alts)
+           (TgSchemaOneOk
+             (SkSchemaEnt schema_id schema_alts)
+             states2 pending next2))))))))
+
+(type TgSchemaLoopR
+  (TgSchemaLoopErr (List Int))
+  (TgSchemaLoopOk (List SkSchemaEnt) Int))
+
+(fn tg_schema_loop
+  ((m Module)
+   (defs (List TgHeadDef))
+   (env TgEnv)
+   (formation TrsFormation)
+   (front (List TgTask))
+   (reverse_tail (List TgTask))
+   (states (List TgSchemaState))
+   (next Int)
+   (reverse_entries (List SkSchemaEnt))
+   (fuel Int))
+  TgSchemaLoopR
+  (measure fuel)
+  (match (tg_queue front reverse_tail)
+    ((TgQueueDone) (TgSchemaLoopOk (tg_rev reverse_entries Nil) next))
+    ((TgQueueMore task rest reverse_rest)
+     (if (lt fuel 1) (TgSchemaLoopErr "typed schema work-list fuel exhausted")
+     (match (tg_schema_one m defs env formation task states next)
+       ((TgSchemaOneErr msg) (TgSchemaLoopErr msg))
+       ((TgSchemaOneOk entry states2 children next2)
+        (tg_schema_loop
+          m defs env formation rest (tg_rev children reverse_rest) states2
+          next2 (Cons entry reverse_entries) (- fuel 1))))))))
 
 (fn tg_build_fuel () Int 1000000)
 
@@ -1123,12 +1487,14 @@
        (match (tg_prepare_env m env)
          ((TgEnvErr msg) (TgBuildErr msg))
          ((TgEnvOk ready)
+          (let ((defs (tg_resolve_env_defs m ready)))
           (match (tg_env_zone ready root_zone)
             (None (TgBuildErr "missing root typed-hole environment"))
             ((Some _)
              (match
                (tg_loop
                  m
+                 defs
                  ready
                  formation
                  (Cons
@@ -1149,7 +1515,69 @@
                 (let ((g (Grammar entries)) (root (hole 0)))
                   (match (g_wf g)
                     ((GWErr msg) (TgBuildErr msg))
-                    ((GWOk) (TgBuildOk root g nx)))))))))))))))
+                    ((GWOk) (TgBuildOk root g nx))))))))))))))))
+
+(type TgSchemaBuildR
+  (TgSchemaBuildErr (List Int))
+  (TgSchemaBuildOk SkSchemaGrammar Int))
+  ; schema grammar, unique production-state count
+
+(fn tg_build_schema_env_plan
+  ((m Module)
+   (env TgEnv)
+   (binders (List Type))
+   (want Type)
+   (depth Int)
+   (root_zone Symbol)
+   (plan TrsFormationPlan))
+  TgSchemaBuildR
+  (match plan
+    ((TrsFormationPlan formation root_formation)
+     (if (lt depth 0) (TgSchemaBuildErr "negative typed-schema depth")
+     (if (if (trs_plan_is_empty plan) False (tg_env_has_rules env))
+       (TgSchemaBuildErr
+         "formation-aware typed schema does not yet admit template rules")
+       (match (tg_prepare_env m env)
+         ((TgEnvErr msg) (TgSchemaBuildErr msg))
+         ((TgEnvOk ready)
+          (let ((defs (tg_resolve_env_defs m ready)))
+          (match (tg_env_zone ready root_zone)
+            (None (TgSchemaBuildErr "missing root typed-hole environment"))
+            ((Some _)
+             (let
+               ((root_task
+                  (TgTask
+                    0 want binders depth root_zone root_formation Nil)))
+               (match
+                 (tg_schema_loop
+                   m
+                   defs
+                   ready
+                   formation
+                   (Cons root_task Nil)
+                   Nil
+                   (Cons (TgSchemaState 0 root_task) Nil)
+                   1
+                   Nil
+                   (tg_build_fuel))
+                 ((TgSchemaLoopErr msg) (TgSchemaBuildErr msg))
+                 ((TgSchemaLoopOk entries count)
+                  (let ((grammar (SkSchemaGrammar 0 entries)))
+                    (match (sk_schema_wf grammar)
+                      ((SkSchemaWfErr msg) (TgSchemaBuildErr msg))
+                      ((SkSchemaWfOk)
+                       (TgSchemaBuildOk grammar count)))))))))))))))))
+
+(fn tg_build_schema_env
+  ((m Module)
+   (env TgEnv)
+   (binders (List Type))
+   (want Type)
+   (depth Int)
+   (root_zone Symbol))
+  TgSchemaBuildR
+  (tg_build_schema_env_plan
+    m env binders want depth root_zone (trs_empty_formation_plan)))
 
 (fn tg_build_env_formation
   ((m Module)

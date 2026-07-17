@@ -1194,6 +1194,18 @@
 
 (type TeSpaceR (TeSpaceErr (List Int)) (TeSpaceOk TeSpace))
 
+;; Compact first-result language.  `schemas` counts reusable production
+;; states, not possible occurrence holes; occurrences acquire structural ids
+;; only when a search path reaches them.
+(type TeSchemaSpace
+  (TeSchemaSpace
+    (List (Pair QName Symbol)) Int Expr SkSchemaGrammar Int))
+  ; spelling table, depth, root occurrence, schemas, schema count
+
+(type TeSchemaSpaceR
+  (TeSchemaSpaceErr (List Int))
+  (TeSchemaSpaceOk TeSchemaSpace))
+
 (fn te_make_flat_space_plan
   ((m Module)
    (want Type)
@@ -1266,6 +1278,71 @@
 
 (fn te_make_space ((m Module) (want Type) (scope RCtx) (cfg TeCfg)) TeSpaceR
   (te_make_space_formation m want scope cfg (trs_empty_formation)))
+
+(fn te_make_flat_schema_space_plan
+  ((m Module)
+   (want Type)
+   (scope RCtx)
+   (depth Int)
+   (atoms (List TgAtom))
+   (forms TeFormCfg)
+   (plan TrsFormationPlan))
+  TeSchemaSpaceR
+  (match forms
+    ((TeFormCfg ctors calls ifs)
+     (let
+       ((heads (tg_scope_heads m scope ctors calls))
+        (table (tg_scope_table scope)))
+       (match
+         (tg_build_schema_env_plan
+           m
+           (TgEnv
+             (Cons
+               (TgZone
+                 (tg_default_zone)
+                 heads
+                 atoms
+                 (tg_form_rules (TgForms ifs))
+                 Nil)
+               Nil))
+           Nil
+           want
+           depth
+           (tg_default_zone)
+           plan)
+         ((TgSchemaBuildErr msg)
+          (TeSchemaSpaceErr (append_int "schema grammar: " msg)))
+         ((TgSchemaBuildOk grammar schemas)
+          (TeSchemaSpaceOk
+            (TeSchemaSpace table depth (hole 0) grammar schemas))))))))
+
+(fn te_make_scoped_schema_space_plan
+  ((m Module)
+   (want Type)
+   (scope RCtx)
+   (depth Int)
+   (spec TgScopeEnv)
+   (plan TrsFormationPlan))
+  TeSchemaSpaceR
+  (match (tg_resolve_scope_env m scope spec)
+    ((TgScopeErr msg) (TeSchemaSpaceErr (append_int "scope: " msg)))
+    ((TgScopeOk env root_zone)
+     (match (tg_build_schema_env_plan m env Nil want depth root_zone plan)
+       ((TgSchemaBuildErr msg)
+        (TeSchemaSpaceErr (append_int "schema grammar: " msg)))
+       ((TgSchemaBuildOk grammar schemas)
+        (TeSchemaSpaceOk
+          (TeSchemaSpace
+            (tg_scope_table scope) depth (hole 0) grammar schemas)))))))
+
+(fn te_make_schema_space_plan
+  ((m Module) (want Type) (scope RCtx) (cfg TeCfg) (plan TrsFormationPlan))
+  TeSchemaSpaceR
+  (match cfg
+    ((TeCfgFlat depth atoms forms)
+     (te_make_flat_schema_space_plan m want scope depth atoms forms plan))
+    ((TeCfgScoped depth spec)
+     (te_make_scoped_schema_space_plan m want scope depth spec plan))))
 
 (fn te_run_space
   ((path (List Int))

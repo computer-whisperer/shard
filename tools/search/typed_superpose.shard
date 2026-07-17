@@ -406,6 +406,256 @@
        grammar total found killed constraint_killed regions forks steps sols
        best_rank witness_rank pressure audit_enabled w))))
 
+;; First-result mode deliberately validates values without ranking them: rank
+;; arithmetic would reintroduce the full-space cardinality dependency this mode
+;; exists to avoid.
+(type TsFirstCandidateR
+  (TsFirstCandidateErr (List Int))
+  (TsFirstCandidateOk (List Int)))
+
+(fn ts_first_candidate
+  ((table (List (Pair QName Symbol)))
+   (grammar Grammar)
+   (constraints MsPlan)
+   (m Module)
+   (want Type)
+   (ctx InvokeCtx)
+   (probe FnDef)
+   (target Expr)
+   (candidate Expr))
+  TsFirstCandidateR
+  (match (ms_check 1000000 constraints grammar Nil candidate)
+    ((MsErr msg) (TsFirstCandidateErr msg))
+    ((MsBlocked _) (TsFirstCandidateErr "representative constraint blocked"))
+    ((MsRedex _) (TsFirstCandidateErr "representative has a residual redex"))
+    ((MsClear)
+     (match (te_typecheck m want candidate)
+       ((TeTcErr msg) (TsFirstCandidateErr msg))
+       ((TeTcOk)
+        (match (te_observe ctx probe candidate)
+          ((TeObsErr msg) (TsFirstCandidateErr msg))
+          ((TeObsReject) (TsFirstCandidateErr "representative is rejected"))
+          ((TeObsOk key)
+           (if (expr_eq key target)
+             (match (sp_e table 0 candidate)
+               ((SpRErr msg) (TsFirstCandidateErr msg))
+               ((SpROk doc)
+                (TsFirstCandidateOk
+                  (append_int "BEST UNRANKED "
+                    (append_int (sp_bytes doc) "\n")))))
+             (TsFirstCandidateErr
+               "representative observation differs")))))))))
+
+(type TsFirstWitnessR
+  (TsFirstWitnessErr (List Int))
+  (TsFirstWitnessOk))
+
+(fn ts_first_witness
+  ((grammar Grammar)
+   (constraints MsPlan)
+   (m Module)
+   (want Type)
+   (ctx InvokeCtx)
+   (probe FnDef)
+   (target Expr)
+   (witness TeWitness))
+  TsFirstWitnessR
+  (match witness
+    ((TeWitnessRank _)
+     (TsFirstWitnessErr
+       "first result mode requires a value witness, not a rank witness"))
+    ((TeWitnessValue candidate)
+     (match (ms_check 1000000 constraints grammar Nil candidate)
+       ((MsErr msg) (TsFirstWitnessErr msg))
+       ((MsBlocked _) (TsFirstWitnessErr "witness constraint remained blocked"))
+       ((MsRedex _) (TsFirstWitnessErr "witness has a residual redex"))
+       ((MsClear)
+        (match (te_typecheck m want candidate)
+          ((TeTcErr msg) (TsFirstWitnessErr msg))
+          ((TeTcOk)
+           (match (te_observe ctx probe candidate)
+             ((TeObsErr msg) (TsFirstWitnessErr msg))
+             ((TeObsReject) (TsFirstWitnessErr "witness is rejected"))
+             ((TeObsOk key)
+              (if (expr_eq key target) (TsFirstWitnessOk)
+              (TsFirstWitnessErr "witness observation differs")))))))))))
+
+(fn ts_first_report
+  ((path (List Int))
+   (depth Int)
+   (holes Int)
+   (killed Int)
+   (constrained Int)
+   (regions Int)
+   (forks Int)
+   (steps Int)
+   (best (List Int))
+   (pressure TsPressure))
+  (List Int)
+  (match pressure
+    ((TsPressure canon_rules observer_rules constraints _)
+     (te_cat
+       (list
+         "SUPERPOSED-SEARCH " path
+         "\nMODE FIRST\nDEPTH " (show_int depth)
+         "\nHOLES " (show_int holes)
+         "\nCANON RULES " (show_int canon_rules)
+         "\nOBSERVER RULES " (show_int observer_rules)
+         "\nSPINE RULES " (show_int (ms_plan_spine_rule_count constraints))
+         "\nDEFERRED RULES " (show_int (ms_plan_rule_count constraints))
+         "\nCARDINALITY UNCOUNTED"
+         "\nKILLED REGIONS " (show_int killed)
+         "\nCONSTRAINT REGIONS " (show_int constrained)
+         "\nTERMINAL REGIONS " (show_int regions)
+         "\nFORKS " (show_int forks)
+         "\nSTEPS " (show_int steps)
+         "\n" best
+         "WITNESS SEMANTIC OK\nAUDIT SKIPPED\nGATES OK\n")))))
+
+(fn ts_finish_first
+  ((path (List Int))
+   (m Module)
+   (want Type)
+   (ctx InvokeCtx)
+   (probe FnDef)
+   (target Expr)
+   (witness TeWitness)
+   (table (List (Pair QName Symbol)))
+   (depth Int)
+   (holes Int)
+   (root Expr)
+   (grammar Grammar)
+   (pressure TsPressure)
+   (audit Bool)
+   (drive SuFind)
+   (w World))
+  World
+  (if audit (ts_fail "first result mode cannot run an exhaustive audit" w)
+  (match drive
+    ((SuFindErr msg) (ts_fail msg w))
+    ((SuFindBudget killed constrained regions forks steps nodes exprs)
+     (ts_fail
+       (te_cat
+         (list
+           "depth " (show_int depth) " holes " (show_int holes) ": "
+           (su_find_budget_report
+             killed constrained regions forks steps nodes exprs)))
+       w))
+    ((SuFindEmpty killed constrained regions forks steps _ _)
+     (ts_fail
+       (te_cat
+         (list
+           "first result mode exhausted without a passing region; killed-regions "
+           (show_int killed) " constraint-regions " (show_int constrained)
+           " terminal-regions " (show_int regions) " forks " (show_int forks)
+           " steps " (show_int steps)))
+       w))
+    ((SuFindFound killed constrained regions forks steps passing representative)
+     (match
+       (ts_first_candidate table grammar (ts_pressure_constraints pressure) m
+         want ctx probe target representative)
+       ((TsFirstCandidateErr msg) (ts_fail (append_int "best: " msg) w))
+       ((TsFirstCandidateOk best)
+        (match
+          (ts_first_witness grammar (ts_pressure_constraints pressure) m want
+            ctx probe target witness)
+          ((TsFirstWitnessErr msg) (ts_fail msg w))
+          ((TsFirstWitnessOk)
+           (write
+             (ts_first_report path depth holes killed constrained regions forks
+               steps best pressure)
+             w)))))))))
+
+(fn ts_schema_first_report
+  ((path (List Int))
+   (depth Int)
+   (schemas Int)
+   (killed Int)
+   (constrained Int)
+   (regions Int)
+   (forks Int)
+   (steps Int)
+   (best (List Int))
+   (pressure TsPressure))
+  (List Int)
+  (match pressure
+    ((TsPressure canon_rules observer_rules constraints _)
+     (te_cat
+       (list
+         "SUPERPOSED-SEARCH " path
+         "\nMODE FIRST LAZY-SCHEMA\nDEPTH " (show_int depth)
+         "\nHOLES LAZY"
+         "\nSCHEMAS " (show_int schemas)
+         "\nCANON RULES " (show_int canon_rules)
+         "\nOBSERVER RULES " (show_int observer_rules)
+         "\nSPINE RULES " (show_int (ms_plan_spine_rule_count constraints))
+         "\nDEFERRED RULES " (show_int (ms_plan_rule_count constraints))
+         "\nCARDINALITY UNCOUNTED"
+         "\nKILLED REGIONS " (show_int killed)
+         "\nCONSTRAINT REGIONS " (show_int constrained)
+         "\nTERMINAL REGIONS " (show_int regions)
+         "\nFORKS " (show_int forks)
+         "\nSTEPS " (show_int steps)
+         "\n" best
+         "WITNESS SEMANTIC OK\nAUDIT SKIPPED\nGATES OK\n")))))
+
+(fn ts_finish_schema_first
+  ((path (List Int))
+   (m Module)
+   (want Type)
+   (ctx InvokeCtx)
+   (probe FnDef)
+   (target Expr)
+   (witness TeWitness)
+   (table (List (Pair QName Symbol)))
+   (depth Int)
+   (schemas Int)
+   (pressure TsPressure)
+   (audit Bool)
+   (drive SuFind)
+   (w World))
+  World
+  (if audit (ts_fail "first result mode cannot run an exhaustive audit" w)
+  (match drive
+    ((SuFindErr msg) (ts_fail msg w))
+    ((SuFindBudget killed constrained regions forks steps nodes exprs)
+     (ts_fail
+       (te_cat
+         (list
+           "depth " (show_int depth) " schemas " (show_int schemas) ": "
+           (su_find_budget_report
+             killed constrained regions forks steps nodes exprs)))
+       w))
+    ((SuFindEmpty killed constrained regions forks steps _ _)
+     (ts_fail
+       (te_cat
+         (list
+           "first result mode exhausted without a passing region; killed-regions "
+           (show_int killed) " constraint-regions " (show_int constrained)
+           " terminal-regions " (show_int regions) " forks " (show_int forks)
+           " steps " (show_int steps)))
+       w))
+    ((SuFindFound killed constrained regions forks steps _ representative)
+     ;; The representative and witness are closed, so residual validation no
+     ;; longer needs occurrence alternatives.  The ordinary checker over an
+     ;; empty flat language still authenticates the complete theorem plan.
+     (match
+       (ts_first_candidate table (Grammar Nil)
+         (ts_pressure_constraints pressure) m want ctx probe target
+         representative)
+       ((TsFirstCandidateErr msg) (ts_fail (append_int "best: " msg) w))
+       ((TsFirstCandidateOk best)
+        (match
+          (ts_first_witness (Grammar Nil) (ts_pressure_constraints pressure) m
+            want ctx probe target witness)
+          ((TsFirstWitnessErr msg) (ts_fail msg w))
+          ((TsFirstWitnessOk)
+           (write
+             (ts_schema_first_report
+               path depth schemas killed constrained regions forks steps best
+               pressure)
+             w)))))))))
+
 (fn ts_finish
   ((path (List Int))
    (m Module)
@@ -471,6 +721,62 @@
 
 (type TsOrderR (TsOrderErr (List Int)) (TsOrderOk Bool))
 
+(type TsFuelR (TsFuelErr (List Int)) (TsFuelOk Int))
+
+(type TsMode (TsModeExhaustive) (TsModeFirst))
+(type TsModeR (TsModeErr (List Int)) (TsModeOk TsMode))
+
+(fn ts_result_mode ((ctx InvokeCtx) (m Module)) TsModeR
+  (match (find_fn (quote search_result_mode) m)
+    (None (TsModeOk (TsModeExhaustive)))
+    ((Some fd)
+     (match fd
+       ((FnDef _ params ret _)
+        (match params
+          ((Cons _ _)
+           (TsModeErr "search_result_mode must take no arguments"))
+          (Nil
+           (if (type_eq ret (TCon (qn (quote Symbol)) Nil))
+             (match (invoke_fd_ctx ctx fd Nil)
+               (None (TsModeErr "search_result_mode invocation failed"))
+               ((Some value)
+                (match value
+                  ((SymLit mode)
+                   (if (sym_eq mode (quote exhaustive))
+                     (TsModeOk (TsModeExhaustive))
+                   (if (sym_eq mode (quote first))
+                     (TsModeOk (TsModeFirst))
+                     (TsModeErr "unknown search_result_mode"))))
+                  (_ (TsModeErr "search_result_mode did not return Symbol")))))
+             (TsModeErr "search_result_mode must return Symbol")))))))))
+
+;; The total-derived default is convenient for finite censuses, but a symbolic
+;; grammar can contain vastly more members than a practical synthesis run
+;; should attempt to partition.  Tasks may therefore cap driver decisions
+;; explicitly without changing evaluator fuel or weakening any completed-run
+;; gate.  Exhausting this budget remains a loud partial-result failure.
+(fn ts_drive_fuel ((ctx InvokeCtx) (m Module) (total Int)) TsFuelR
+  (match (find_fn (quote search_drive_budget) m)
+    (None (TsFuelOk (+ (* 8 total) 1024)))
+    ((Some fd)
+     (match fd
+       ((FnDef _ params ret _)
+        (match params
+          ((Cons _ _)
+           (TsFuelErr "search_drive_budget must take no arguments"))
+          (Nil
+           (if (type_eq ret (TCon (qn (quote Int)) Nil))
+             (match (invoke_fd_ctx ctx fd Nil)
+               (None (TsFuelErr "search_drive_budget invocation failed"))
+               ((Some value)
+                (match (expr_int value)
+                  (None (TsFuelErr "search_drive_budget is not an Int"))
+                  ((Some fuel)
+                   (if (lt fuel 1)
+                     (TsFuelErr "search_drive_budget must be positive")
+                     (TsFuelOk fuel))))))
+             (TsFuelErr "search_drive_budget must return Int")))))))))
+
 (fn ts_theorem_first ((ctx InvokeCtx) (m Module)) TsOrderR
   (match (find_fn (quote search_narrowing_strategy) m)
     (None (TsOrderOk False))
@@ -524,30 +830,85 @@
     ((FnDef probeq _ _ _)
      (let
        ((query (Call probeq (Cons root Nil)))
+       (expected (Ctor (qn (quote Some)) (Cons target Nil))))
+       (match (ts_drive_fuel ctx m total)
+         ((TsFuelErr msg) (ts_fail msg w))
+         ((TsFuelOk fuel)
+          (match (ts_theorem_first ctx m)
+            ((TsOrderErr msg) (ts_fail msg w))
+            ((TsOrderOk theorem_first)
+             (ts_finish
+               path
+               m
+               want
+               ctx
+               screen
+               probe
+               target
+               witness
+               table
+               depth
+               holes
+               root
+               grammar
+               total
+               pressure
+               audit
+               (su_drive_query_ordered
+                 theorem_first
+                 fuel
+                 m
+                 (qn (quote __typed_superpose_data_candidate))
+                 root
+                 root
+                 (ts_pressure_constraints pressure)
+                 query
+                 expected
+                 grammar
+                 memo
+                 (sa_new)
+                 (Cons (sk_empty_region) Nil)
+                 0
+                 0
+                 0
+                 0
+                 0
+                 Nil)
+               w)))))))))
+
+(fn ts_find_space
+  ((path (List Int))
+   (m Module)
+   (want Type)
+   (ctx InvokeCtx)
+   (probe FnDef)
+   (target Expr)
+   (witness TeWitness)
+   (table (List (Pair QName Symbol)))
+   (depth Int)
+   (holes Int)
+   (root Expr)
+   (grammar Grammar)
+   (pressure TsPressure)
+   (audit Bool)
+   (w World))
+  World
+  (match probe
+    ((FnDef probeq _ _ _)
+     (let
+       ((query (Call probeq (Cons root Nil)))
         (expected (Ctor (qn (quote Some)) (Cons target Nil))))
-       (match (ts_theorem_first ctx m)
-         ((TsOrderErr msg) (ts_fail msg w))
-         ((TsOrderOk theorem_first)
-          (ts_finish
-            path
-            m
-            want
-            ctx
-            screen
-            probe
-            target
-            witness
-            table
-            depth
-            holes
-            root
-            grammar
-            total
-            pressure
-            audit
-            (su_drive_query_ordered
-              theorem_first
-              (+ (* 8 total) 1024)
+       ;; A first-result run has no meaningful total from which to derive a
+       ;; budget.  The existing explicit hook wins; otherwise 801,024 region
+       ;; decisions is a conservative general default.
+       (match (ts_drive_fuel ctx m 100000)
+         ((TsFuelErr msg) (ts_fail msg w))
+         ((TsFuelOk fuel)
+          (ts_finish_first
+            path m want ctx probe target witness table depth holes root grammar
+            pressure audit
+            (su_find_query
+              fuel
               m
               (qn (quote __typed_superpose_data_candidate))
               root
@@ -555,17 +916,56 @@
               (ts_pressure_constraints pressure)
               query
               expected
-              grammar
-              memo
-              (sa_new)
-              (Cons (sk_empty_region) Nil)
-              0
-              0
-              0
-              0
-              0
-              Nil)
+              grammar)
             w)))))))
+
+(fn ts_find_schema_space
+  ((path (List Int))
+   (m Module)
+   (want Type)
+   (ctx InvokeCtx)
+   (probe FnDef)
+   (target Expr)
+   (witness TeWitness)
+   (space TeSchemaSpace)
+   (pressure TsPressure)
+   (audit Bool)
+   (w World))
+  World
+  (match space
+    ((TeSchemaSpace table depth root grammar schemas)
+     (match probe
+       ((FnDef probeq _ _ _)
+        (let
+          ((query (Call probeq (Cons root Nil)))
+           (expected (Ctor (qn (quote Some)) (Cons target Nil))))
+          (match (ts_drive_fuel ctx m 100000)
+            ((TsFuelErr msg) (ts_fail msg w))
+            ((TsFuelOk fuel)
+             (ts_finish_schema_first
+               path
+               m
+               want
+               ctx
+               probe
+               target
+               witness
+               table
+               depth
+               schemas
+               pressure
+               audit
+               (su_find_query_schema
+                 fuel
+                 m
+                 (qn (quote __typed_superpose_data_candidate))
+                 root
+                 root
+                 (ts_pressure_constraints pressure)
+                 query
+                 expected
+                 grammar)
+               w)))))))))
 
 (fn ts_drive_space
   ((path (List Int))
@@ -583,37 +983,45 @@
   World
   (match space
     ((TeSpace table depth root grammar holes)
-     (match (g_counts grammar)
-       ((GCtErr msg) (ts_fail (append_int "counts: " msg) w))
-       ((GCtOk memo)
-        (match (sk_count root grammar)
-          ((SkCErr msg) (ts_fail (append_int "count: " msg) w))
-          ((SkCOk total)
-           (match pressure
-             ((TsPressure canon_rules observer_rules constraints raw)
-              (ts_drive_counted
-                path
-                m
-                want
-                ctx
-                screen
-                probe
-                target
-                witness
-                table
-                depth
-                holes
-                root
-                grammar
-                memo
-                total
-                (TsPressure
-                  canon_rules
-                  observer_rules
-                  constraints
-                  (if (lt raw 0) total raw))
-                audit
-                w))))))))))
+     (match (ts_result_mode ctx m)
+       ((TsModeErr msg) (ts_fail msg w))
+       ((TsModeOk mode)
+        (match mode
+          ((TsModeFirst)
+           (ts_find_space path m want ctx probe target witness table depth holes
+             root grammar pressure audit w))
+          ((TsModeExhaustive)
+           (match (g_counts grammar)
+             ((GCtErr msg) (ts_fail (append_int "counts: " msg) w))
+             ((GCtOk memo)
+              (match (sk_count root grammar)
+                ((SkCErr msg) (ts_fail (append_int "count: " msg) w))
+                ((SkCOk total)
+                 (match pressure
+                   ((TsPressure canon_rules observer_rules constraints raw)
+                    (ts_drive_counted
+                      path
+                      m
+                      want
+                      ctx
+                      screen
+                      probe
+                      target
+                      witness
+                      table
+                      depth
+                      holes
+                      root
+                      grammar
+                      memo
+                      total
+                      (TsPressure
+                        canon_rules
+                        observer_rules
+                        constraints
+                        (if (lt raw 0) total raw))
+                      audit
+                      w))))))))))))))
 
 (type TsCountR (TsCountErr (List Int)) (TsCountOk Int))
 
@@ -643,22 +1051,35 @@
    (raw_total Int)
    (w World))
   World
-  (match (te_make_space_plan m want scope cfg plan)
-    ((TeSpaceErr msg) (ts_fail msg w))
-    ((TeSpaceOk space)
-     (ts_drive_space
-       path
-       m
-       want
-       ctx
-       screen
-       probe
-       target
-       witness
-       space
-       (TsPressure canon_rules observer_rules constraints raw_total)
-       audit
-       w))))
+  (match (ts_result_mode ctx m)
+    ((TsModeErr msg) (ts_fail msg w))
+    ((TsModeOk mode)
+     (match mode
+       ((TsModeFirst)
+        (match (te_make_schema_space_plan m want scope cfg plan)
+          ((TeSchemaSpaceErr msg) (ts_fail msg w))
+          ((TeSchemaSpaceOk space)
+           (ts_find_schema_space
+             path
+             m
+             want
+             ctx
+             probe
+             target
+             witness
+             space
+             (TsPressure
+               canon_rules observer_rules constraints raw_total)
+             audit
+             w))))
+       ((TsModeExhaustive)
+        (match (te_make_space_plan m want scope cfg plan)
+          ((TeSpaceErr msg) (ts_fail msg w))
+          ((TeSpaceOk space)
+           (ts_drive_space
+             path m want ctx screen probe target witness space
+             (TsPressure canon_rules observer_rules constraints raw_total)
+             audit w))))))))
 
 (fn ts_with_witness
   ((path (List Int))
@@ -687,15 +1108,27 @@
          (if (lt rules 1)
            (ts_with_filtered path m audit ctx screen probe want target witness
              scope cfg plan constraints canon_rules observer_rules -1 w)
-           (match (te_make_space m want scope cfg)
-             ((TeSpaceErr msg) (ts_fail (append_int "raw: " msg) w))
-             ((TeSpaceOk raw_space)
-              (match (ts_space_count raw_space)
-                ((TsCountErr msg) (ts_fail (append_int "raw count: " msg) w))
-                ((TsCountOk raw_total)
+           (match (ts_result_mode ctx m)
+             ((TsModeErr msg) (ts_fail msg w))
+             ((TsModeOk mode)
+              (match mode
+                ((TsModeFirst)
+                 ;; Formation and residual theorem pressure still apply; only
+                 ;; the raw/filtered census delta is intentionally uncounted.
                  (ts_with_filtered path m audit ctx screen probe want target
                    witness scope cfg plan constraints canon_rules observer_rules
-                   raw_total w)))))))))))
+                   -1 w))
+                ((TsModeExhaustive)
+                 (match (te_make_space m want scope cfg)
+                   ((TeSpaceErr msg) (ts_fail (append_int "raw: " msg) w))
+                   ((TeSpaceOk raw_space)
+                    (match (ts_space_count raw_space)
+                      ((TsCountErr msg)
+                       (ts_fail (append_int "raw count: " msg) w))
+                      ((TsCountOk raw_total)
+                       (ts_with_filtered path m audit ctx screen probe want
+                         target witness scope cfg plan constraints canon_rules
+                         observer_rules raw_total w)))))))))))))))
 
 (fn ts_with_target
   ((path (List Int))

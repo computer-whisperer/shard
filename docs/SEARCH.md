@@ -2971,3 +2971,99 @@ theorem without the equality relation.  The established 820-member x86 rung
 has no Int-valued generalized roles and remains unchanged at 111 unique
 schemas and 111 validated proposals (26 authenticated in the proof-bearing
 task).
+
+#### Cardinality-free first-result synthesis
+
+Exact candidate weights are a census requirement, not a prerequisite for
+finding one program.  Typed tasks may now select `search_result_mode = first`;
+the SUPERPOSE driver then retains the same partial regions, lazy evaluator,
+checked formation, and residual theorem plan, but stops at the first passing
+region without computing raw, filtered, killed, or passing candidate
+cardinalities.  `search_drive_budget` bounds region decisions explicitly.
+Reports mark `CARDINALITY UNCOUNTED` and validate both the productive region
+representative and the supplied witness semantically rather than assigning
+either an exact rank.
+
+`meta/sketch` owns the supporting general operations.  `SkProductivity` is a
+saturating bottom-up grammar analysis with one bit per original alternative;
+it removes zero-cardinality depth-boundary productions without renumbering
+choices.  `sk_region_first` uses that analysis to choose the first productive
+member of a fixed/forbidden region without bignum arithmetic, including the
+case where an earlier syntactic production is barren.  The known-entry region
+operation applies a choice when the caller already has the grammar entry, so
+an indexed scheduler does not rescan the full grammar at every fork.
+
+Large occurrence grammars exposed two unrelated quadratic setup paths.  The
+typed builder now uses an amortized-linear FIFO work queue and resolves every
+admitted reflected declaration once per build.  Whole-grammar
+well-formedness now validates ids, ownership, and stratification through a
+persistent integer set rather than performing a full id-list scan for every
+child reference.  These changes preserve grammar order and exact ranks: the
+routed four-function x86 control remains `TOTAL 1728`, `REGIONS 140`, `FORKS
+63`, and witness rank `183`.
+
+`typed_list_first.shard` pins theorem-backed first-result behavior, while
+`region_probe.shard` pins fixed and forbidden regions, nested restrictions,
+productive representative selection past a barren production, and preservation
+of original hole ids.  The template-free x86 calculator task admits only a
+plain reflected constructor scope, four integer atoms, and depth 20; it does
+not provide a routed `TgScopeEnv` or a calculator control-flow skeleton.
+
+#### Regular schemas and lazy occurrences
+
+First-result search no longer needs to materialize the complete occurrence
+grammar.  `meta/sketch` now separates a `SkSchemaGrammar`'s reusable production
+states from structural occurrence addresses.  A schema alternative contains
+an expression template plus child references `(local hole, edge, child
+schema)`.  The address
+
+```text
+child(parent, edge) = 2^edge * (2 * parent + 1)
+```
+
+is positive and reversibly identifies the complete parent path.  Consequently
+two positions governed by the same schema consult the same production policy
+but remain distinct region choices.  No mutable occurrence allocator or eager
+hole table is required.  Schema well-formedness checks template coverage,
+edge ownership, and child-schema references; saturating productivity operates
+once over the schema graph, including productive cycles with a finite base and
+rejection of ungrounded cycles.
+
+`typed_grammar` interns the full state that can affect production generation:
+expected type, binder-type environment, remaining depth, scope zone, root-only
+formation state, and inherited child exclusions.  Its existing environment,
+route, reflected-signature, and formation machinery is reused to construct
+each unique schema exactly once.  Equal schemas never imply equal choices.
+
+SUPERPOSE exposes materialized grammars and schema grammars through the same
+read-only demanded-alternative interface.  Representative construction now
+recurses only through the chosen productive candidate instead of scanning the
+whole occurrence grammar.  Counted census remains on `Grammar`; first-result
+tasks use schemas for both semantic evaluation and theorem-backed narrowing.
+Separable theorems are represented directly in schema formation states.
+
+Residual matching in `meta/search` now consumes an `MsLanguage`: either an
+exact occurrence grammar or a regular schema grammar.  Schema preparation is
+exact without eager occurrence facts; a matcher resolves only the structural
+occurrences it demands.  When a semantic pass still leaves the theorem plan
+blocked, SUPERPOSE partitions that relation through the same lazy language,
+fixing one productive occurrence choice at a time.  Exact cardinality and
+citation-coalesced census partitions remain explicitly flat-grammar
+capabilities rather than being approximated on a schema.
+
+The depth-2 checked list search preserves its exact narrowing trace—four forks,
+39 evaluator steps, and the independently chosen value `(Cons 0 (Cons 1
+Nil))`—while replacing 13 occurrence holes with nine schemas.  The genuine
+flat depth-20 four-function x86 calculator compresses 202,177 possible
+occurrence holes to 136 schemas.  A one-region probe reaches its first semantic
+fork in roughly four seconds rather than remaining in eager grammar setup.
+At 1,000 regions its stable trace is 652 semantic failures, 652 terminals, 348
+forks, and 134,057 evaluator steps.  Indexing schema lookup does not materially
+change that runtime, which locates the remaining cost in semantic evaluation
+and branch refinement rather than grammar construction.
+
+`typed_observer_conjunctive_first.shard` pins the nonseparable case.  Its one
+checked observer theorem relates two independent constructor positions, stays
+deferred, and kills a lazy constraint region before the engine returns a clear
+representative.  This is the residual-theorem counterpart of
+`typed_list_first.shard`'s formation-pressure and occurrence-independence pin.
