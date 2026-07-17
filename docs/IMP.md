@@ -3002,6 +3002,84 @@ correction, one fixture lock.
   both-target); rung 3b nested branches; the pure-tier
   symbolic-count branch rung; branch-with-loop-arms stays fenced.
 
+**IF-3a — adjacent branches on x86: the seal direction (2026-07-16;
+the imp-if-tier fork; two commits: IF-3a-a the translator rule + the
+hand blueprint, IF-3a-b the emission). USER-RULED seal over nesting.**
+Both IF-1c leg-grammar fences fall to ONE mechanism: the translator
+seals branch-sealing spans at chunk grain, and a sealed branch chunk
+composes through its own open-tail sub-lemma — IF-1c's dissolution
+finding ("no seal around branches → arm residues unspellable")
+INVERTED into the enabler, and IF-2's "the seal is the join" applied
+mid-flat.
+
+- **The translator rule (models/imp/to_x86.shard — SHARED GROUND,
+  minimal, FLAGGED for merge review).** `ix_chbrq` + `ix_brla` (span
+  lookahead: True at a later branch chunk or a flat-flat junction,
+  False at a loop chunk or the terminal) + two `ix_cjoin` arms: a
+  BRANCH chunk seals behind itself (its own ix_zs) iff `ix_brla`
+  holds ahead of it, and a FLAT chunk seals before a SEALING branch —
+  so every chunk of a branch-sealing span exits at chunk grain and
+  the legs downstream are single-chunk. Single-branch spans (all
+  committed pins) emit byte-identically — verified by full regen
+  sweep (ten example outs + both sha256 outs) at every step. The
+  seal may be EMPTY (arms touching only homes): the leg cut is
+  structural, decided by the slicer, not by instruction presence.
+- **IF-3a-a — the blueprint** (examples/sqbsx_probe.shard). Proved
+  the mechanism by hand FIRST at the seal-after-branch-only rule
+  (411/0 first run): the sqbr sub-lemma with the polarity case-on
+  INSIDE (arms walk guards through the seal; xm_scont continuation
+  arm-independent — RAX literal 0 both arms), the two-layer
+  composition with the entry chunk's exit scratch SPELLED ((band x1
+  255) riding into the branch cite's za by matching), fuel
+  T=72=3+2+67 bound on the first check. The spelled-exit-tree
+  species was then RETIRED by the chunk-grain rule (IF-3a-b): the
+  entry chunk seals, becoming a stock V2-8 zero-exit sub-lemma, and
+  the probe was re-grounded at the emitter's leg grammar (blueprint
+  == generated, the IF-2 parity discipline; 412/0).
+- **IF-3a-b — the emission** (tools/impgen). `mxx_brla` = the
+  slicer's piece-level mirror of ix_brla (pieces↔chunks are 1:1);
+  `mxx_legs` cuts a leg at every sealing branch AND at the flat
+  chunk before it; `mxx_chunks` invokes ix_zs for sealing branch
+  chunks (the model answers, as everywhere); `mxx_segm` lets a
+  trailing branch chunk contribute its seal; `mxx_ag` raises the
+  running maxes at a sealed-branch mid leg so the chain fuel covers
+  its sub-lemma's towers (machine tcost + seal; imp gcost).
+  `mxxbr_seg1` emits the sub-lemma (machine total = tcost(chunk) +
+  seal width — tcost prices the arm nesting as a depth bound;
+  continuation = tcost−1 regardless of arm; imp fuel = gcost;
+  residues from mxx_zflags — an empty seal passes everything
+  through); `mxxbr_case` = the polarity case-on over per-REGION
+  deduped arm guards (the IF-1c law); `mxxbr_cstep` = the
+  composition (ist_seam1 at the branch singleton — tied fuel, NO
+  hsp/hfg/hfb reshapes — then the V2-8 tail verbatim: sub-cite,
+  shared-run case-on, il_slen exposure, next boundary at the parked
+  leaf). The leg lemma NEVER walks its machine side — the V2-8b
+  overshoot finding is why the sub-lemma is mandatory, not a style
+  choice: an inline arm walk cannot park at a folded rest call, and
+  a sub-cite cannot match after the walk enters the branch block.
+  Chain arithmetic: a sealed-branch leg consumes 1+zlen machine / 1
+  imp (fm/gm recursions unchanged in shape). The loopkit import
+  gate widened to mixed-tier pins (loop-free mixed pins spell
+  lg_fuel in seam compositions — reached first here; scalar-tier
+  branch pins deliberately excluded, keeping impgen_wasm/x86_out
+  byte-identical). **Both mxx_legck fences DELETED** (the fn is
+  gone): adjacent branches per leg and branch-legs-at-mid-flat-seals
+  are unreachable by construction. No tie+note path remains in the
+  x86 mixed tier for branch shapes.
+- **Fixture** it_ifs_fn (examples/imp_if.shard): store / dirty br1 /
+  clean br2 / store+set tail — covers the sealed-flat entry
+  sub-lemma, the real-seal branch chunk, and the IF-1c terminal
+  branch leg in one chain. Outs strictly additive: wasm 135/0, x86
+  422/0, deterministic; driver product set unchanged. Dev probe pin
+  chains: x86 412/0, wasm 119/0 (the wasm emitter handles adjacent
+  branches through IF-1b machinery untouched).
+- Gates: impgen 91/0 + fmt-fixpoint; to_x86 380/0; full byte-
+  stability sweep green at each step; corpus + driver leg ride the
+  CI pipeline on push (the fork's gate policy post-rebase).
+- NEXT (the fork's ladder): rung 3b nested branches; the pure-tier
+  symbolic-count branch rung; branch-with-loop-arms stays fenced
+  (hard, named).
+
 
 ## 7. Non-goals, stated once
 

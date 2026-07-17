@@ -5392,9 +5392,9 @@
                             (None None)
                             ((Some more) (Some (Cons (Pair ch zl) more)))))))))))
                 (_ None)))))))
-       ;; a branch is a singleton chunk with NO seal on either side
-       ;; (ix_cjoin seals flat-flat neighbors only) -- its msls entry
-       ;; carries the encoding element and an empty seal
+       ;; a SEALING branch chunk (IF-3a) carries its own ix_zs; a
+       ;; non-sealing branch is a singleton chunk with NO seal on
+       ;; either side -- its msls entry carries an empty seal
        ((MxPB _ sE _ _ _ _ _)
         (match
           (invoke mtr (quote ix_stmts) (Cons (list_expr (Cons sE Nil)) Nil))
@@ -5408,9 +5408,19 @@
                  (match (lpe_spine chE)
                    (None None)
                    ((Some ch)
-                    (match (mxx_chunks rest mtr)
-                      (None None)
-                      ((Some more) (Some (Cons (Pair ch Nil) more)))))))
+                    (if (mxx_brla rest)
+                      (match (invoke mtr (quote ix_zs) (Cons chE Nil))
+                        (None None)
+                        ((Some zv)
+                         (match (lpe_spine zv)
+                           (None None)
+                           ((Some zl)
+                            (match (mxx_chunks rest mtr)
+                              (None None)
+                              ((Some more) (Some (Cons (Pair ch zl) more))))))))
+                      (match (mxx_chunks rest mtr)
+                        (None None)
+                        ((Some more) (Some (Cons (Pair ch Nil) more))))))))
                 (_ None)))))))
        ((MxPL _ _ _ _ _ _ _) (mxx_chunks rest mtr))))))
 
@@ -5734,6 +5744,27 @@
 ;; term and the cite binds everything by matching. Scrutinees and the
 ;; exposure entry spell from the leg's own lw_stmts walk state.
 
+;; would this branch piece's leg carry a second branch or end at a
+;; mid-flat seal? (IF-3a) -- the slicer's mirror of the translator's
+;; ix_brla over the piece stream (pieces and chunks are 1:1): True at
+;; a later branch piece or a flat-flat junction, False at a loop
+;; piece or the terminal
+(fn mxx_brla ((pcs (List MxPc))) Bool
+  (measure (struct pcs))
+  (match pcs
+    (Nil False)
+    ((Cons pc rest)
+     (match pc
+       ((MxPB _ _ _ _ _ _ _) True)
+       ((MxPL _ _ _ _ _ _ _) False)
+       ((MxPS _ _)
+        (match rest
+          (Nil False)
+          ((Cons pc2 _)
+           (match pc2
+             ((MxPS _ _) True)
+             (_ (mxx_brla rest))))))))))
+
 (fn mxx_legs ((pcs (List MxPc))) (List (Pair (List MxPc) (Option MxPc)))
   (measure (struct pcs))
   (match pcs
@@ -5741,13 +5772,16 @@
     ((Cons pc t)
      (match pc
        ((MxPL _ _ _ _ _ _ _) (Cons (Pair Nil (Some pc)) (mxx_legs t)))
-       ;; a branch has no seal on either side: it GLUES into the leg
+       ;; a SEALING branch (IF-3a: another branch or a flat-flat seal
+       ;; shares its span) ends its own leg at its own seal; otherwise
+       ;; a branch has no seal on either side and GLUES into the leg
        ;; that follows it (through the next loop / flat run / end)
        ((MxPB _ _ _ _ _ _ _)
+        (if (mxx_brla t) (Cons (Pair (Cons pc Nil) None) (mxx_legs t))
         (match (mxx_legs t)
           (Nil (Cons (Pair (Cons pc Nil) None) Nil))
           ((Cons (Pair segs2 olp2) rest2)
-           (Cons (Pair (Cons pc segs2) olp2) rest2))))
+           (Cons (Pair (Cons pc segs2) olp2) rest2)))))
        ((MxPS a e)
         (match t
           (Nil (Cons (Pair (Cons (MxPS a e) Nil) None) Nil))
@@ -5756,12 +5790,16 @@
              ((MxPL _ _ _ _ _ _ _)
               (Cons (Pair (Cons (MxPS a e) Nil) (Some pc2)) (mxx_legs t2)))
              ((MxPS _ _) (Cons (Pair (Cons (MxPS a e) Nil) None) (mxx_legs t)))
-             ;; flat followed by a branch: no seal between them either
+             ;; flat before a SEALING branch seals too (IF-3a:
+             ;; chunk-grain legs); before a non-sealing branch there
+             ;; is no seal and the flat glues
              ((MxPB _ _ _ _ _ _ _)
-              (match (mxx_legs t)
-                (Nil (Cons (Pair (Cons (MxPS a e) Nil) None) Nil))
-                ((Cons (Pair segs2 olp2) rest2)
-                 (Cons (Pair (Cons (MxPS a e) segs2) olp2) rest2))))))))))))
+              (if (mxx_brla t2)
+                (Cons (Pair (Cons (MxPS a e) Nil) None) (mxx_legs t))
+                (match (mxx_legs t)
+                  (Nil (Cons (Pair (Cons (MxPS a e) Nil) None) Nil))
+                  ((Cons (Pair segs2 olp2) rest2)
+                   (Cons (Pair (Cons (MxPS a e) segs2) olp2) rest2)))))))))))))
 
 (fn mxx_nlg ((l (List (Pair (List MxPc) (Option MxPc))))) Int
   (measure (struct l))
@@ -5796,14 +5834,23 @@
                     (+ (isz_top segst) t2)))
                 mout))))))
        ;; a branch = ONE machine element (the outer XBlock), ONE imp
-       ;; statement; no seal
+       ;; statement; a SEALING branch (IF-3a) is its leg's trailing
+       ;; chunk and contributes its own seal
        ((MxPB _ _ _ _ _ _ _)
         (match msls
           (Nil (Pair (Pair 0 (Pair 0 0)) Nil))
-          ((Cons _ mrest)
+          ((Cons (Pair _ zl) mrest)
            (match (mxx_segm rest mrest)
              ((Pair (Pair w2 (Pair z2 t2)) mout)
-              (Pair (Pair (+ 1 w2) (Pair z2 (+ 1 t2))) mout))))))
+              (Pair
+                (Pair
+                  (+ 1 w2)
+                  (Pair
+                    (match rest
+                      (Nil (ilen_e zl))
+                      (_ z2))
+                    (+ 1 t2)))
+                mout))))))
        ((MxPL _ _ _ _ _ _ _) (Pair (Pair 0 (Pair 0 0)) msls))))))
 
 ;; the leg's own statement list: segment stmts then the const-run
@@ -5869,7 +5916,23 @@
                   (imax am (+ (+ (+ cm w) (mxx_sgpad segs)) 8))
                   (imax ai (+ (+ (+ ci tn) (mxx_sgpad segs)) 8))))
               ((Cons _ _)
-               (mxx_ag rest lis msls2 (+ cm (+ w z)) (+ ci tn) am ai))))
+               ;; a sealed-branch mid leg (IF-3a): raise the running
+               ;; maxes so the chain fuel AT this leg covers its
+               ;; sub-lemma's towers (machine tcost + seal; imp gcost)
+               (match segs
+                 ((Cons (MxPB st _ _ _ _ _ _) Nil)
+                  (match msls
+                    ((Cons (Pair sl _) _)
+                     (mxx_ag
+                       rest
+                       lis
+                       msls2
+                       (+ cm (+ w z))
+                       (+ ci tn)
+                       (imax am (+ (+ cm 1) (+ (tcost (list_expr sl)) z)))
+                       (imax ai (+ (+ ci 2) (gcost (Cons st Nil))))))
+                    (Nil (mxx_ag rest lis msls2 (+ cm (+ w z)) (+ ci tn) am ai))))
+                 (_ (mxx_ag rest lis msls2 (+ cm (+ w z)) (+ ci tn) am ai))))))
           ((Some pc)
            (match pc
              ((MxPL _ kg lbody _ _ _ csets)
@@ -6354,6 +6417,189 @@
         lst
         (DStr "))) refl))))))))")))))
 
+;; the sealed-branch polarity case-on (IF-3a): ONE case-on of the
+;; shared raw scrutinee; each arm rewrites into both sides, walks its
+;; own region's guards (deduped per-REGION -- the IF-1c law), and
+;; rides through the seal to the arm-independent xm_scont form
+(fn mxxbr_case ((scrut Expr) (tgs (List GSplit)) (egs (List GSplit)) (msz Int))
+  Doc
+  (dconc
+    (list
+      (DStr "(case-on ")
+      (pr_e scrut)
+      (DStr
+        " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both")
+      (match tgs
+        (Nil (DStr ""))
+        ((Cons _ _) (DStr " (stop xm_scont)")))
+      (DStr "))) ")
+      (mxxs_spine (gs_dedup Nil tgs) 1 msz)
+      (DStr
+        ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both")
+      (match egs
+        (Nil (DStr ""))
+        ((Cons _ _) (DStr " (stop xm_scont)")))
+      (DStr "))) ")
+      (mxxs_spine (gs_dedup Nil egs) 1 msz)
+      (DStr "))))"))))
+
+;; one SEALED-BRANCH sub-lemma (IF-3a): the chunk fn + the open-tail
+;; claim. UNPREMISED; the machine walk and the polarity case-on live
+;; HERE, and the seal is the join -- both arms exit to the same
+;; continuation register file (the seal's zero set is the union of
+;; arm dirt), so the conclusion is ONE xm_scont form. Fuel: the
+;; machine total is tcost (a depth bound pricing the arm nesting) +
+;; the seal width; the top level consumes exactly 1 (the block) +
+;; the seal, so the continuation tower is tcost-1 regardless of arm.
+(fn mxxbr_seg1
+  ((nm (List Int))
+   (b Int)
+   (nl Int)
+   (msz Int)
+   (st IStmt)
+   (sE Expr)
+   (scrut Expr)
+   (tgs (List GSplit))
+   (egs (List GSplit))
+   (msls (List (Pair (List Expr) (List Expr)))))
+  Doc
+  (match msls
+    (Nil (DStr ""))
+    ((Cons (Pair sl zl) _)
+     (match (mxx_zflags zl)
+       ((Pair da (Pair db dc))
+        (let
+          ((cnm
+             (dconc
+               (list (DStr "gb_") (DStr nm) (DStr "_c") (dint b) (DStr "_i"))))
+           (t0 (tcost (list_expr sl))))
+          (dconc
+            (list
+              (DStr "(fn ")
+              cnm
+              (DStr " () (List IStmt) ")
+              (mxc_lst (Cons sE Nil))
+              (DStr ")")
+              (DStr (nl))
+              (DStr (nl))
+              (DStr "(claim sqbr_x_")
+              (DStr nm)
+              (DStr "_c")
+              (dint b)
+              (DStr " (goal (")
+              (d_binds_go
+                nl
+                (DStr
+                  "(za Int) (zb Int) (zc Int) (rw (List XInstr)) (m Mem) (f Nat) (g Nat) (restfs (List XFunc))"))
+              (DStr ") () (= (xeval_seq (S^ ")
+              (dint (+ t0 (ilen_e zl)))
+              (DStr " (S f)) (MkXModule restfs 0 ")
+              (dint msz)
+              (DStr ") ")
+              (mxx_spn (st_app sl zl) (DStr "rw"))
+              (DStr " ")
+              (mxx_regs
+                nl
+                (- 0 1)
+                (DStr "")
+                (DStr "x")
+                Nil
+                (DStr "za")
+                (DStr "zb")
+                (DStr "zc"))
+              (DStr " m) (xm_scont ")
+              (if da (DStr "0") (DStr "za"))
+              (DStr " ")
+              (if db (DStr "0") (DStr "zb"))
+              (DStr " ")
+              (if dc (DStr "0") (DStr "zc"))
+              (DStr " (S^ ")
+              (dint (- t0 1))
+              (DStr " (S f)) (MkXModule restfs 0 ")
+              (dint msz)
+              (DStr ") rw (istmts (S^ ")
+              (dint (gcost (Cons st Nil)))
+              (DStr " (S g)) ")
+              (dint msz)
+              (DStr " (inline ")
+              cnm
+              (DStr ") ")
+              (d_args nl)
+              (DStr " m)))) (chain (steps ((compute both (stop xm_scont)))) ")
+              (mxxbr_case scrut tgs egs msz)
+              (DStr "))")
+              (DStr (nl))
+              (DStr (nl))))))))))
+
+;; the sealed-branch composition (IF-3a): ist_seam1 splits the imp
+;; side at the branch singleton (tied fuel -- no reshapes), the
+;; sub-lemma cite rewrites the machine side, and the tail is the V2-8
+;; composition verbatim (shared-run case-on, il_slen exposure, the
+;; next boundary cited at the parked leaf)
+(fn mxxbr_cstep
+  ((nm (List Int))
+   (b Int)
+   (nl Int)
+   (msz Int)
+   (ts Int)
+   (gm Int)
+   (cst Doc)
+   (lst Doc)
+   (cont Doc))
+  Doc
+  (let
+    ((cnm
+       (dconc (list (DStr "gb_") (DStr nm) (DStr "_c") (dint b) (DStr "_i")))))
+    (dconc
+      (list
+        (DStr
+          "(rewrite-with (lemma ist_seam1) lr rhs () ()) (rewrite-with (lemma sqbr_x_")
+        (DStr nm)
+        (DStr "_c")
+        (dint b)
+        (DStr ") lr lhs ((inst g (S^ ")
+        (dint (- (- gm ts) 1))
+        (DStr " c2))) ()) (case-on (istmts (S^ ")
+        (dint gm)
+        (DStr " c2) ")
+        (dint msz)
+        (DStr " (inline ")
+        cnm
+        (DStr ") ")
+        (d_args nl)
+        (DStr
+          " m) Option ((case None (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+        lst
+        (DStr "))) refl)) (case Some (oc")
+        (dint b)
+        (DStr
+          ") (chain (steps ((rewrite (hyp 0) lr both true ()))) (case-on oc")
+        (dint b)
+        (DStr " IOut ((case INorm (ec")
+        (dint b)
+        (DStr " mc")
+        (dint b)
+        (DStr
+          ") (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+        cst
+        (DStr "))) ")
+        (mxc_exit
+          (d_args nl)
+          (dcat3 (DStr "ec") (dint b) (DStr ""))
+          (dcat3 (DStr "mc") (dint b) (DStr ""))
+          0
+          nl
+          (dcat3 (DStr "ec") (dint b) (DStr ""))
+          cont
+          (DStr "il_slen")
+          cst
+          (dcat3 (DStr "ec") (dint b) (DStr "_"))
+          (dcat3 (DStr "rc") (dint b) (DStr "_")))
+        (DStr
+          ")) (case ITrap (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+        lst
+        (DStr "))) refl))))))))")))))
+
 ;; one loop-leg block after the pre-walk respells: the walk compute,
 ;; the fuel reshapes, the worker citation, the shared-iwhile case-on
 ;; shell, and the exposure with the leaf continuation
@@ -6521,15 +6767,6 @@
        ((MxPB _ _ _ _ _ _ _) True)
        (_ (mxx_hasbr t))))))
 
-(fn mxx_nbr ((segs (List MxPc))) Int
-  (measure (struct segs))
-  (match segs
-    (Nil 0)
-    ((Cons pc t)
-     (match pc
-       ((MxPB _ _ _ _ _ _ _) (+ 1 (mxx_nbr t)))
-       (_ (mxx_nbr t))))))
-
 ;; decompose a branch leg's pieces: ([A?] branch [B?])
 (fn mxx_brtail ((segs (List MxPc))) (Option (List IStmt))
   (match segs
@@ -6568,28 +6805,6 @@
           (None None)
           ((Some b2) (Some (Pair Nil (Pair bs b2))))))
        (_ None)))))
-
-;; the leg-grammar fences (v1 scope, note-grade): one branch per
-;; unsealed span; a branch leg ends at a loop or the terminal seal,
-;; never at a mid-flat seal point
-(fn mxx_legck ((legs (List (Pair (List MxPc) (Option MxPc)))))
-  (Option (List Int))
-  (measure (struct legs))
-  (match legs
-    (Nil None)
-    ((Cons (Pair segs olp) rest)
-     (if (lt 1 (mxx_nbr segs))
-       (Some "adjacent branches share an unsealed span (named growth)")
-     (if (mxx_hasbr segs)
-       (match olp
-         ((Some _) (mxx_legck rest))
-         (None
-           (match rest
-             (Nil (mxx_legck rest))
-             (_
-               (Some
-                 "branch leg ending at a mid-flat seal point (named growth)")))))
-       (mxx_legck rest))))))
 
 ;; one branch leg's chain-lemma body: walk the entry segment, case-on
 ;; the shared scrutinee, then per polarity arm walk the arm + tail
@@ -7071,11 +7286,10 @@
            (match (mxx_segm segs msls)
              ((Pair (Pair w (Pair z tn)) msls2)
               (if (mxx_hasbr segs)
-                ;; --- a branch leg (IF-1c): the branch walks inline;
-                ;; loop-tailed legs keep the loop path's arithmetic
-                ;; verbatim (the branch = 1 element / 1 statement),
-                ;; terminal legs walk to ground per arm. Mid legs are
-                ;; fenced upstream (mxx_legck).
+                ;; --- a branch leg: terminal and loop-tailed legs
+                ;; walk inline (IF-1c; the branch = 1 element / 1
+                ;; statement); a SEALED branch mid leg (IF-3a)
+                ;; composes through its own sub-lemma.
                 (match (mxx_brparts segs)
                   (None (DStr ""))
                   ((Some parts)
@@ -7085,7 +7299,49 @@
                          (Nil
                            (mxx_bleg nm nl msz parts None None headdoc opener fm
                              gm w tn b d pst cst lst True))
-                         (_ (DStr ""))))
+                         (_
+                           ;; a SEALED branch mid leg (IF-3a): a
+                           ;; singleton by construction -- the
+                           ;; sub-lemma carries the machine walk and
+                           ;; the polarity case-on; the leg composes
+                           (match segs
+                             ((Cons (MxPB st sE scrut _ tgs egs _) Nil)
+                              (dconc
+                                (list
+                                  (mxx_lems
+                                    rest
+                                    lis
+                                    msls2
+                                    brpre
+                                    nm
+                                    nl
+                                    msz
+                                    (- fm (+ w z))
+                                    (- gm tn)
+                                    (+ b 1)
+                                    d
+                                    nr
+                                    fsa
+                                    fsb
+                                    fsc)
+                                  (mxxbr_seg1 nm b nl msz st sE scrut tgs egs
+                                    msls)
+                                  headdoc
+                                  opener
+                                  (mxxbr_cstep
+                                    nm
+                                    b
+                                    nl
+                                    msz
+                                    (gcost (Cons st Nil))
+                                    gm
+                                    cst
+                                    lst
+                                    (mxx_cite nm (+ b 1) cst))
+                                  (DStr "))")
+                                  (DStr (nl))
+                                  (DStr (nl)))))
+                             (_ (DStr ""))))))
                      ((Some pc)
                       (match pc
                         ((MxPL _ _ _ _ _ _ csets)
@@ -7446,38 +7702,35 @@
                                   "per-segment translation invoke (internal)"))
                               ((Some msls)
                                (let ((legs (mxx_legs pcs)))
-                                 (match (mxx_legck legs)
-                                   ((Some why) (SqxNote why))
-                                   (None
-                                     (match (mxx_ag legs lis msls 0 0 0 0)
-                                       ((Pair aa gg)
-                                        (match (mxxw_all evs lis nm nl msz 1)
-                                          ((EErr m) (SqxErr m))
-                                          ((EOk workers)
-                                           (SqxOk
-                                             (dconc
-                                               (list
-                                                 (mxx_rests legs lis msls nm ssE
-                                                   els 0 0 0)
-                                                 (mx_wid nm)
-                                                 (mx_wid64 nm)
-                                                 workers
-                                                 (mxx_lems
-                                                   legs
-                                                   lis
-                                                   msls
-                                                   brpre
-                                                   nm
-                                                   nl
-                                                   msz
-                                                   aa
-                                                   gg
-                                                   0
-                                                   0
-                                                   (- (mxx_nlg legs) 1)
-                                                   fsa
-                                                   fsb
-                                                   fsc)))))))))))))))))))))))))))))))
+                                 (match (mxx_ag legs lis msls 0 0 0 0)
+                                   ((Pair aa gg)
+                                    (match (mxxw_all evs lis nm nl msz 1)
+                                      ((EErr m) (SqxErr m))
+                                      ((EOk workers)
+                                       (SqxOk
+                                         (dconc
+                                           (list
+                                             (mxx_rests legs lis msls nm ssE els
+                                               0 0 0)
+                                             (mx_wid nm)
+                                             (mx_wid64 nm)
+                                             workers
+                                             (mxx_lems
+                                               legs
+                                               lis
+                                               msls
+                                               brpre
+                                               nm
+                                               nl
+                                               msz
+                                               aa
+                                               gg
+                                               0
+                                               0
+                                               (- (mxx_nlg legs) 1)
+                                               fsa
+                                               fsb
+                                               fsc)))))))))))))))))))))))))))))
 
 ;; --- per-pin emission ------------------------------------------------------------
 
@@ -7729,7 +7982,11 @@
           ((EErr msg) (EErr msg))
           ((EOk ds) (EOk (DCat d ds)))))))))
 
-;; does any pin carry a loop? (the header's loop-tier import gate)
+;; does any pin carry a loop or a top-level branch? (the header's
+;; loopkit import gate: loops need the worker vocabulary, and the
+;; MIXED tier (memful + top-level branch) spells lg_fuel in its seam
+;; compositions even loop-free --
+;; IF-3a's sealed-branch legs reached that path first)
 (fn any_loop ((msrc Module) (pins (List Symbol))) Bool
   (measure (struct pins))
   (match pins
@@ -7740,7 +7997,11 @@
        ((Some gv)
         (match (rf_fn gv)
           (None (any_loop msrc rest))
-          ((Some ifn) (if (has_while (ibody_of ifn)) True (any_loop msrc rest)))))))))
+          ((Some ifn)
+           (if (has_while (ibody_of ifn)) True
+           (if (if (has_mem (ibody_of ifn)) (has_brtop (ibody_of ifn)) False)
+             True
+             (any_loop msrc rest))))))))))
 
 ;; does any pin touch memory? (the header's std/mem import gate — the
 ;; statement tier's Mem binders need the type in scope)
