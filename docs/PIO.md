@@ -301,7 +301,19 @@ Any drift from this classification is a FAIL. The driver contract
     grammar (delays only on drives and jumps) via a task-local candidate
     ADT + decoder, since zone routing cannot couple an op to its own
     delay domain through a shared MkPIns head.
-  - **P5c-2 [NEXT]** — the delay-normal-form deep run on the rebased
+  - **P5c-2 [MEASURED 2026-07-16 — GATED ON ENGINE GROWTH]** — three
+    frontier measurements, all killed at the watchdog line: full-free
+    alphabet (184/slot, lengths ≤9) >64 GB; delay-normal wrapper grammar
+    (50/slot, ≤8) 53 GB at ~8 min; delay-normal + STRUCTURED-LOOP normal
+    form (per-position targets {0}∪{i+2..7}, monotone viable prefixes)
+    53.6 GB. Conclusion: free jump-ful synthesis at DME scale (278-cycle
+    golden, 8 slots) exceeds the engine's current region representation
+    even after quotienting filler gauge and loop structure — the
+    escalation is engine-side (SEARCH.md's own named boundary: a
+    relation-aware region state over the original grammar DAG, and/or
+    region-state compression); measurement appended to PIO_REQUEST.md.
+    The task artifact stays checked and witness-pinned, ready to fire.
+  - **P5c-2-cont [DEFERRED]** — the delay-normal-form deep run on the rebased
     engine (search-arc landed the affine-guard + ground-arithmetic-fold +
     theorem-first features from PIO_REQUEST.md): wrapper-ADT grammar
     (~54/slot), watchdogged; solution set = the gauge-quotiented encoder
