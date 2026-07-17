@@ -348,6 +348,7 @@ TARGETS=(
   tools/search/gen/pio_dme_refinement.shard
   tools/search/tasks/pio_transition_mining.shard
   tools/search/tasks/pio_transition_window.shard
+  tools/search/tasks/pio_dme_model.shard
   tools/search/tasks/pio_dme_free.shard
 )
 TMP=$(mktemp -d)
