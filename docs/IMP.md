@@ -2464,6 +2464,59 @@ place; the design keeps every loop count ground:
   decision owed to the user first bites), then I2e-3 per the
   composition ruling.
 
+**I2e-2d — THE HEX TIER (2026-07-16): digest-hex lands on both
+targets, BRANCHLESS — the DATA-AS-DATA decision stays unforced.**
+
+- Design: the nibble table was sidestepped entirely. For a nibble x
+  the hex character is `(x + 48) + 39*((x + 6) >> 4)` — the shift
+  term is 1 exactly when x >= 10, lifting '0'..'9' onto 'a'..'f'
+  with add/shift/and/mul vocabulary only. No IIf, no value-position
+  comparison (to_x86 refuses those in value position — SETcc is
+  named growth), no data table: both targets in-tier with ZERO
+  model/emitter growth (`XMul`/`BMul` were already encoded). The
+  DATA-AS-DATA ruling stays owed but nothing here forces it.
+- Pin `it_shhex_fn` (6 U32 params: out ptr q, digest ptr p, counter,
+  byte, char, scratch): a ground-count loop (32 iterations, the
+  mixed tier's const-counter species), per pass one byte load and
+  two character stores; scratch re-zeroes each iteration (the
+  zero-in/zero-out idiom — exit locals uniform, no residue
+  selectors) and a pre-loop const-run zeroes it on entry, so the
+  walk holds from arbitrary entry locals.
+- The machine tree meets the spec's `hex_digit` by ONE fin-split
+  lemma (`ish_hexd`, 16 ground cases, everything computes) — the
+  first fin-split use in the sha ladder; it replaces the whole
+  mod-collapse/branch-analysis apparatus a symbolic proof would
+  need. Byte bounds come free from std/mem's `get_lo`/`get_hi`;
+  the hi nibble's `<= 15` runs a descending halving ladder
+  (`ish_ediv2_hi` + `ish_shrh4..0`).
+- NEW GENERAL LEMMA `ish_shr_add`: `bshr (bshr a j) k = bshr a
+  (j+k)` by wf-induct along `bshr_s` (the ish_shr_lo pattern). It
+  converts word_bytes' literal-count shifts (24/16) into chained
+  8-shifts, where `shr8_div` applies per level — no `div_div`, no
+  pow2, no per-count ladder.
+- THE DIGEST CROSSING (`ish_wb_read` + `ish_digest_read`): a 4-byte
+  window reads back as `word_bytes (wget m a)` (div_unique/
+  mod_unique pin every quotient/remainder of the byte sum), and the
+  32-byte digest window IS `h8_bytes` of the eight words it holds —
+  the input-side glue the I2e-4 composition consumes against the
+  block weld's wget equations.
+- Readback `ish_hex_read`: the 64-byte output window over the hex
+  effect is `bytes_hex` of the 32-byte digest window (aligned
+  induction; framing via `ihx_get_below`/`ish_hex_hi` +
+  mem_read_set_below). The denotation `ihx_mem` stores hex_digit
+  values directly — the branchless-tree conversion happens ONCE per
+  pass, where the byte's bounds are at hand.
+- Weld: `shh_whex`/`shh_xhex` — BOTH legs bridge-free (the program
+  ends at its loop, so even the x86 chain has no post-loop rest-fn
+  cut; both generated `gb_shhex_i` spellings are the pin body
+  verbatim). Bridges at istmts (S^ 68 c2), walk at (S^ 122 d),
+  c2 := (S^ 54 d).
+- Gates: sibling 456/0 (+22: 21 claims + measured ihx_mem); wasm
+  out 542/0, x86 out 832/0, regen byte-identical on all
+  pre-existing content (diffs purely additive); weld 942/0.
+- NEXT: I2e-3 (the pure blocks-loop artifact) per the composition
+  ruling, then I2e-4 (the bin).
+
 
 ## 7. Non-goals, stated once
 

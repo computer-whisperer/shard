@@ -20735,3 +20735,1456 @@
   (MkIFn (list U32 U32 U32 U32 U64) Nil (ipd_body) (ILoc 0) U32))
 
 (fn ish_seq_prog ((f IFn)) IProg (MkIProg (list f) 65536))
+
+;; ---- THE HEX TIER (I2e-2d) ----------------------------------------------------------
+;; The digest renders as 64 lowercase-hex ASCII bytes: a ground-count
+;; loop (32 iterations) reads one digest byte per pass and stores two
+;; hex characters. The digit map is BRANCHLESS -- for a nibble x the
+;; character is (x + 48) + 39*((x + 6) >> 4): the shift term is 1
+;; exactly when x >= 10, lifting '0'..'9' onto 'a'..'f' with add/
+;; shift/mul vocabulary only (both targets in-tier: no IIf, no value
+;; comparisons, no data table -- the DATA-AS-DATA ruling stays
+;; unforced). The machine tree meets the spec's hex_digit by
+;; fin-split over the 16 nibble values. Locals: 0=q (out pointer),
+;; 1=p (digest pointer), 2=n (counter), 3=t (byte), 4=u (char),
+;; 5=v (scratch); t/u/v re-zero each iteration (zero-in/zero-out --
+;; exit locals uniform in the count).
+
+(fn ihx_body () (List IStmt)
+  (list
+    (ISet 3 (IConst 0))
+    (ISet 4 (IConst 0))
+    (ISet 5 (IConst 0))
+    (ISet 2 (IConst 32))
+    (IWhile
+      (ILoc 2)
+      (list
+        (ISet 3 (IExt U8 U32 (ILoad (ILoc 1))))
+        (ISet 4 (IBin U32 IShr (ILoc 3) (IConst 4)))
+        (ISet 5 (IBin U32 IAdd (ILoc 4) (IConst 6)))
+        (ISet 5 (IBin U32 IShr (ILoc 5) (IConst 4)))
+        (ISet 5 (IBin U32 IMul (ILoc 5) (IConst 39)))
+        (ISet 4 (IBin U32 IAdd (ILoc 4) (IConst 48)))
+        (ISet 4 (IBin U32 IAdd (ILoc 4) (ILoc 5)))
+        (IStore (ILoc 0) (ITrunc U32 U8 (ILoc 4)))
+        (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 1)))
+        (ISet 4 (IBin U32 IAnd (ILoc 3) (IConst 15)))
+        (ISet 5 (IBin U32 IAdd (ILoc 4) (IConst 6)))
+        (ISet 5 (IBin U32 IShr (ILoc 5) (IConst 4)))
+        (ISet 5 (IBin U32 IMul (ILoc 5) (IConst 39)))
+        (ISet 4 (IBin U32 IAdd (ILoc 4) (IConst 48)))
+        (ISet 4 (IBin U32 IAdd (ILoc 4) (ILoc 5)))
+        (IStore (ILoc 0) (ITrunc U32 U8 (ILoc 4)))
+        (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 1)))
+        (ISet 1 (IBin U32 IAdd (ILoc 1) (IConst 1)))
+        (ISet 3 (IConst 0))
+        (ISet 4 (IConst 0))
+        (ISet 5 (IConst 0))
+        (ISet 2 (IBin U32 ISub (ILoc 2) (IConst 1)))))))
+
+;; the loop body, byte-copied (the (inline ...) carrier for the worker
+;; and pass statements -- spelled exactly as ihx_body's loop arm)
+(fn ihx_zbody () (List IStmt)
+  (list
+    (ISet 3 (IExt U8 U32 (ILoad (ILoc 1))))
+    (ISet 4 (IBin U32 IShr (ILoc 3) (IConst 4)))
+    (ISet 5 (IBin U32 IAdd (ILoc 4) (IConst 6)))
+    (ISet 5 (IBin U32 IShr (ILoc 5) (IConst 4)))
+    (ISet 5 (IBin U32 IMul (ILoc 5) (IConst 39)))
+    (ISet 4 (IBin U32 IAdd (ILoc 4) (IConst 48)))
+    (ISet 4 (IBin U32 IAdd (ILoc 4) (ILoc 5)))
+    (IStore (ILoc 0) (ITrunc U32 U8 (ILoc 4)))
+    (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 1)))
+    (ISet 4 (IBin U32 IAnd (ILoc 3) (IConst 15)))
+    (ISet 5 (IBin U32 IAdd (ILoc 4) (IConst 6)))
+    (ISet 5 (IBin U32 IShr (ILoc 5) (IConst 4)))
+    (ISet 5 (IBin U32 IMul (ILoc 5) (IConst 39)))
+    (ISet 4 (IBin U32 IAdd (ILoc 4) (IConst 48)))
+    (ISet 4 (IBin U32 IAdd (ILoc 4) (ILoc 5)))
+    (IStore (ILoc 0) (ITrunc U32 U8 (ILoc 4)))
+    (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 1)))
+    (ISet 1 (IBin U32 IAdd (ILoc 1) (IConst 1)))
+    (ISet 3 (IConst 0))
+    (ISet 4 (IConst 0))
+    (ISet 5 (IConst 0))
+    (ISet 2 (IBin U32 ISub (ILoc 2) (IConst 1)))))
+
+(fn it_shhex_fn () IFn
+  (MkIFn (list U32 U32 U32 U32 U32 U32) Nil (ihx_body) (ILoc 0) U32))
+
+;; the hex effect: k digest bytes at p render as 2k ascii bytes at q
+;; (each step reads its byte through its own earlier stores, exactly
+;; as the machine does; disjointness enters only at readback)
+(fn ihx_mem ((m Mem) (q Int) (p Int) (k Nat)) Mem
+  (measure (struct k))
+  (match k
+    (Z m)
+    ((S k2)
+     (ihx_mem
+       (mem_set
+         (mem_set m q (hex_digit (bshr (mem_get m p) 4)))
+         (+ q 1)
+         (hex_digit (band (mem_get m p) 15)))
+       (+ q 2)
+       (+ p 1)
+       k2))))
+
+;; ---- hex kit: one-step unfolds ------------------------------------------------------
+
+(claim ihx_mem_z
+  (goal ((m Mem) (q Int) (p Int)) () (= (ihx_mem m q p Z) m))
+  (steps ((unfold ihx_mem lhs) (reduce lhs)) refl))
+
+(claim ihx_mem_s
+  (goal ((m Mem) (q Int) (p Int) (k Nat)) ()
+    (=
+      (ihx_mem m q p (S k))
+      (ihx_mem
+        (mem_set
+          (mem_set m q (hex_digit (bshr (mem_get m p) 4)))
+          (+ q 1)
+          (hex_digit (band (mem_get m p) 15)))
+        (+ q 2)
+        (+ p 1)
+        k)))
+  (steps ((unfold ihx_mem lhs) (reduce lhs)) refl))
+
+;; ---- hex kit: the halving upper bound + the nibble descent -------------------------
+
+;; the euclidean mirror of ish_ediv2_lo: halving respects an odd
+;; upper bound (x <= 2c+1 |- x/2 <= c)
+(claim ish_ediv2_hi
+  (goal ((x Int) (c Int)) ((= (le x (+ (* 2 c) 1)) True))
+    (= (le (ediv x 2) c) True))
+  (have hid (= x (+ (* 2 (ediv x 2)) (mod x 2)))
+    (rewrite-with
+      (lemma ediv_mod_id)
+      lr
+      lhs
+      ((inst d 2))
+      ((steps ((compute lhs)) refl))
+      refl)
+    (have hlo (= (le 0 (mod x 2)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl)
+      (by arith (list 2 1 1 1)))))
+
+;; a byte's high nibble is at most 15: shift counts descend 4..0,
+;; the bound halves 255..15 (bshr_s peels, ish_ediv2_hi carries)
+(claim ish_shrh0
+  (goal ((x Int)) ((= (le 0 x) True) (= (le x 15) True))
+    (= (le (bshr x 0) 15) True))
+  (chain
+    (rewrite-with
+      (lemma bshr_z)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((rewrite (premise 1) lr lhs true ())))
+    refl))
+
+(claim ish_shrh1
+  (goal ((x Int)) ((= (le 0 x) True) (= (le x 31) True))
+    (= (le (bshr x 1) 15) True))
+  (chain
+    (have hk (= 1 (+ 0 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shrh0)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)
+       (rewrite-with
+         (lemma ish_ediv2_hi)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (1 1)))))
+         refl)))
+    refl))
+
+(claim ish_shrh2
+  (goal ((x Int)) ((= (le 0 x) True) (= (le x 63) True))
+    (= (le (bshr x 2) 15) True))
+  (chain
+    (have hk (= 2 (+ 1 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shrh1)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)
+       (rewrite-with
+         (lemma ish_ediv2_hi)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (1 1)))))
+         refl)))
+    refl))
+
+(claim ish_shrh3
+  (goal ((x Int)) ((= (le 0 x) True) (= (le x 127) True))
+    (= (le (bshr x 3) 15) True))
+  (chain
+    (have hk (= 3 (+ 2 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shrh2)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)
+       (rewrite-with
+         (lemma ish_ediv2_hi)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (1 1)))))
+         refl)))
+    refl))
+
+(claim ish_shrh4
+  (goal ((x Int)) ((= (le 0 x) True) (= (le x 255) True))
+    (= (le (bshr x 4) 15) True))
+  (chain
+    (have hk (= 4 (+ 3 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shrh3)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)
+       (rewrite-with
+         (lemma ish_ediv2_hi)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (1 1)))))
+         refl)))
+    refl))
+
+;; ---- hex kit: shift composition (the digest crossing's converter) ------------------
+
+;; shifting twice is shifting by the sum -- the general composition,
+;; by wf-induct along bshr_s (the ish_shr_lo pattern): both shifts
+;; peel to the same ediv-2 nest
+(claim ish_shr_add
+  (goal ((a Int) (j Int) (k Int))
+    ((= (le 0 a) True) (= (le 0 j) True) (= (le 0 k) True))
+    (= (bshr (bshr a j) k) (bshr a (+ j k))))
+  (wf-induct j
+    (case-on (lt 0 j) Bool
+      ((case True
+         (chain
+           (have hjp (= (lt 0 j) True)
+             (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           (have hj (= j (+ (- j 1) 1)) (steps () (by arith (list))))
+           (steps ((rewrite (premise hj) lr lhs false ())))
+           (rewrite-with
+             (lemma bshr_s)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+              (steps () (by arith (rows (goal 1) (hjp 1))))))
+           (rewrite-with
+             (hyp 1)
+             lr
+             lhs
+             ()
+             ((rewrite-with
+                (lemma ish_ediv2_lo)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                refl)
+              (steps () (by arith (rows (goal 1) (hjp 1))))
+              (steps ((rewrite (premise 2) lr lhs true ())) refl)
+              (steps () (by arith (rows (goal 1) (hjp 1))))
+              (steps () (by arith (rows (goal 1))))))
+           (have hjk (= (+ j k) (+ (+ (- j 1) k) 1))
+             (steps () (by arith (list))))
+           (steps ((rewrite (premise hjk) lr rhs true ())))
+           (rewrite-with
+             (lemma bshr_s)
+             lr
+             rhs
+             ()
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+              (steps () (by arith (rows (goal 1) (hjp 1) (2 1))))))
+           refl))
+       (case False
+         (chain
+           (have hjf (= (lt 0 j) False)
+             (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           (have hz (= j 0)
+             (steps () (by arith (list (list 1 0 0 0 1) (list 1 0 1 0 0)))))
+           (steps ((rewrite (premise hz) lr both true ())))
+           (rewrite-with
+             (lemma bshr_z)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+           (have h0k (= (+ 0 k) k) (steps () (by arith (list))))
+           (steps ((rewrite (premise h0k) lr rhs true ())))
+           refl))))))
+
+;; ---- hex kit: ground int_of_nat rungs -----------------------------------------------
+
+(claim ish_i4p
+  (goal () () (= (int_of_nat 4) 4))
+  (chain
+    (have ha (= (int_of_nat 4) (int_of_nat (S (S (S (S Z))))))
+      (steps ((compute both)) refl))
+    (steps
+      ((rewrite (premise ha) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_zero) lr lhs true ())
+       (compute lhs)))
+    refl))
+
+(claim ish_i32p
+  (goal () () (= (int_of_nat 32) 32))
+  (chain
+    (have ha
+      (=
+        (int_of_nat 32)
+        (int_of_nat
+          (S (S (S (S (S (S (S (S (S (S (S (S (S (S (S (S 16))))))))))))))))))
+      (steps ((compute both)) refl))
+    (steps
+      ((rewrite (premise ha) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())
+       (rewrite (lemma ish_i16p) lr lhs true ())
+       (compute lhs)))
+    refl))
+
+;; ---- hex kit: the branchless digit meets hex_digit ----------------------------------
+
+;; the machine's character tree IS the spec's hex_digit on every
+;; nibble -- 16 ground cases, everything computes
+(claim ish_hexd
+  (goal ((x Int)) ((= (le 0 x) True) (= (le x 15) True))
+    (=
+      (band
+        (mod
+          (+
+            (mod (+ x 48) 4294967296)
+            (mod (* (bshr (mod (+ x 6) 4294967296) 4) 39) 4294967296))
+          4294967296)
+        255)
+      (hex_digit x)))
+  (fin-split
+    x
+    (premise 0)
+    (premise 1)
+    ((case 0 (steps ((compute both)) refl))
+     (case 1 (steps ((compute both)) refl))
+     (case 2 (steps ((compute both)) refl))
+     (case 3 (steps ((compute both)) refl))
+     (case 4 (steps ((compute both)) refl))
+     (case 5 (steps ((compute both)) refl))
+     (case 6 (steps ((compute both)) refl))
+     (case 7 (steps ((compute both)) refl))
+     (case 8 (steps ((compute both)) refl))
+     (case 9 (steps ((compute both)) refl))
+     (case 10 (steps ((compute both)) refl))
+     (case 11 (steps ((compute both)) refl))
+     (case 12 (steps ((compute both)) refl))
+     (case 13 (steps ((compute both)) refl))
+     (case 14 (steps ((compute both)) refl))
+     (case 15 (steps ((compute both)) refl)))))
+
+;; hex characters are bytes: '0'..'f' sit in [48, 103)
+(claim ish_hexd_lo
+  (goal ((x Int)) ((= (le 0 x) True) (= (le x 15) True))
+    (= (le 0 (hex_digit x)) True))
+  (fin-split
+    x
+    (premise 0)
+    (premise 1)
+    ((case 0 (steps ((compute both)) refl))
+     (case 1 (steps ((compute both)) refl))
+     (case 2 (steps ((compute both)) refl))
+     (case 3 (steps ((compute both)) refl))
+     (case 4 (steps ((compute both)) refl))
+     (case 5 (steps ((compute both)) refl))
+     (case 6 (steps ((compute both)) refl))
+     (case 7 (steps ((compute both)) refl))
+     (case 8 (steps ((compute both)) refl))
+     (case 9 (steps ((compute both)) refl))
+     (case 10 (steps ((compute both)) refl))
+     (case 11 (steps ((compute both)) refl))
+     (case 12 (steps ((compute both)) refl))
+     (case 13 (steps ((compute both)) refl))
+     (case 14 (steps ((compute both)) refl))
+     (case 15 (steps ((compute both)) refl)))))
+
+;; ---- THE HEX PASS -------------------------------------------------------------------
+;; One iteration from the loop head: read the byte, store its two hex
+;; characters, advance the pointers, re-zero the scratch. The stored
+;; values land directly in hex_digit form (the branchless tree
+;; converts here, where the byte's bounds are at hand).
+
+(claim isha_hex_pass
+  (goal ((q Int) (p Int) (zc Int) (m Mem) (fl Nat))
+    ((= (le 0 q) True)
+     (= (le (+ q 2) 65536) True)
+     (= (le 0 p) True)
+     (= (lt p 65536) True)
+     (= (le 1 zc) True)
+     (= (le zc 4294967296) True))
+    (=
+      (istmts (S^ 46 fl) 65536 (inline ihx_zbody) (list q p zc 0 0 0) m)
+      (Some
+        (INorm
+          (list (+ q 2) (+ p 1) (- zc 1) 0 0 0)
+          (mem_set
+            (mem_set m q (hex_digit (bshr (mem_get m p) 4)))
+            (+ q 1)
+            (hex_digit (band (mem_get m p) 15)))))))
+  (chain
+    (have hblo (= (le 0 (mem_get m p)) True)
+      (rewrite-with (lemma get_lo) lr lhs () () refl))
+    (have hbhi (= (lt (mem_get m p) 256) True)
+      (rewrite-with (lemma get_hi) lr lhs () () refl))
+    (have hb255 (= (le (mem_get m p) 255) True)
+      (steps () (by arith (rows (goal 1) (hbhi 1)))))
+    (have hqlt (= (lt q 65536) True)
+      (steps () (by arith (rows (goal 1) (1 1)))))
+    (have hq1 (= (mod (+ q 1) 4294967296) (+ q 1))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (0 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (have hq1lo (= (le 0 (+ q 1)) True)
+      (steps () (by arith (rows (goal 1) (0 1)))))
+    (have hq1lt (= (lt (+ q 1) 65536) True)
+      (steps () (by arith (rows (goal 1) (1 1)))))
+    (have hq2 (= (mod (+ (+ q 1) 1) 4294967296) (+ (+ q 1) 1))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (0 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (have hp1 (= (mod (+ p 1) 4294967296) (+ p 1))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (2 1))))
+         (steps () (by arith (rows (goal 1) (3 1)))))
+        refl))
+    (have hz1 (= (mod (- zc 1) 4294967296) (- zc 1))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (4 1))))
+         (steps () (by arith (rows (goal 1) (5 1)))))
+        refl))
+    (steps
+      ((compute lhs (stop mem_set mem_get hex_digit))
+       (rewrite (premise 2) lr lhs true ())
+       (compute lhs (stop mem_set mem_get hex_digit))
+       (rewrite (premise 3) lr lhs true ())
+       (compute lhs (stop mem_set mem_get hex_digit))
+       (rewrite (premise 0) lr lhs true ())
+       (compute lhs (stop mem_set mem_get hex_digit))
+       (rewrite (premise hqlt) lr lhs true ())
+       (compute lhs (stop mem_set mem_get hex_digit))
+       (rewrite (premise hq1) lr lhs true ())
+       (compute lhs (stop mem_set mem_get hex_digit))
+       (rewrite (premise hq1lo) lr lhs true ())
+       (compute lhs (stop mem_set mem_get hex_digit))
+       (rewrite (premise hq1lt) lr lhs true ())
+       (compute lhs (stop mem_set mem_get hex_digit))
+       (rewrite (premise hq2) lr lhs true ())
+       (compute lhs (stop mem_set mem_get hex_digit))
+       (rewrite (premise hp1) lr lhs true ())
+       (compute lhs (stop mem_set mem_get hex_digit))
+       (rewrite (premise hz1) lr lhs true ())
+       (compute lhs (stop mem_set mem_get hex_digit))))
+    (rewrite-with
+      (lemma ish_hexd)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_shr4_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise hblo) lr lhs true ())) refl))
+         refl)
+       (rewrite-with
+         (lemma ish_shrh4)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise hblo) lr lhs true ())) refl)
+          (steps ((rewrite (premise hb255) lr lhs true ())) refl))
+         refl)))
+    (rewrite-with
+      (lemma ish_hexd)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma band_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise hblo) lr lhs true ())) refl)
+          (steps ((compute lhs)) refl))
+         refl)
+       (rewrite-with
+         (lemma band_le_r)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise hblo) lr lhs true ())) refl)
+          (steps ((compute lhs)) refl))
+         refl)))
+    (have hq2f (= (+ (+ q 1) 1) (+ q 2))
+      (steps () (by arith (list (list 1) (list 1)))))
+    (steps ((rewrite (premise hq2f) lr lhs true ())))
+    refl))
+
+;; ---- THE HEX WORKER -----------------------------------------------------------------
+;; k iterations from the loop head IS the hex effect: scratch enters
+;; zeroed and exits zeroed (the pass re-zeroes), so the exit locals
+;; are uniform in k -- no residue selectors.
+
+(claim isha_hex_w
+  (goal ((q Int) (p Int) (m Mem) (c Nat) (k Nat))
+    ((= (le 0 q) True)
+     (= (le (+ q (* 2 (int_of_nat k))) 65536) True)
+     (= (le 0 p) True)
+     (= (le (+ p (int_of_nat k)) 65536) True))
+    (=
+      (iwhile
+        (S^ 50 (lg_fuel k c))
+        65536
+        (ILoc 2)
+        (inline ihx_zbody)
+        (list q p (int_of_nat k) 0 0 0)
+        m)
+      (Some
+        (INorm (list (lg_advk q 2 k) (lg_advk p 1 k) 0 0 0 0) (ihx_mem m q p k)))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr lhs true ())
+          (compute both (stop mem_set mem_get hex_digit)))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (have hnn (= (le 0 (int_of_nat k2)) True)
+           (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+         (have hqs (= (le (+ q (* 2 (+ 1 (int_of_nat k2)))) 65536) True)
+           (steps
+             ((rewrite (lemma int_of_nat_succ) rl lhs true ())
+              (rewrite (premise 1) lr lhs true ()))
+             refl))
+         (have hps (= (le (+ p (+ 1 (int_of_nat k2))) 65536) True)
+           (steps
+             ((rewrite (lemma int_of_nat_succ) rl lhs true ())
+              (rewrite (premise 3) lr lhs true ()))
+             refl))
+         (steps
+           ((unfold lg_fuel lhs)
+            (reduce lhs)
+            (unfold iwhile lhs)
+            (rewrite (lemma int_of_nat_succ) lr lhs true ())
+            (compute
+              lhs
+              (stop iwhile lg_fuel istmts mem_set mem_get hex_digit ihx_mem
+                lg_advk))))
+         (rewrite-with
+           (lemma lg_ne)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps
+           ((compute
+              lhs
+              (stop iwhile lg_fuel istmts mem_set mem_get hex_digit ihx_mem
+                lg_advk))))
+         (rewrite-with
+           (lemma isha_hex_pass)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps () (by arith (rows (goal 1) (hqs 1) (hnn 2))))
+            (steps ((rewrite (premise 2) lr lhs true ())) refl)
+            (steps () (by arith (rows (goal 1) (hps 1) (hnn 1))))
+            (steps () (by arith (rows (goal 1) (hnn 1))))
+            (steps () (by arith (rows (goal 2) (hqs 1) (0 1))))))
+         (steps
+           ((rewrite (lemma lg_sub) lr lhs true ())
+            (compute
+              lhs
+              (stop iwhile lg_fuel istmts mem_set mem_get hex_digit ihx_mem
+                lg_advk))))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (0 1))))
+            (steps () (by arith (rows (goal 1) (hqs 1))))
+            (steps () (by arith (rows (goal 1) (2 1))))
+            (steps () (by arith (rows (goal 1) (hps 1))))))
+         (steps
+           ((rewrite (lemma lg_advk_s) rl lhs true ())
+            (rewrite (lemma ihx_mem_s) rl lhs true ())))
+         refl)))))
+
+;; ---- THE HEX WALK -------------------------------------------------------------------
+;; The full body from symbolic q/p: zero the scratch, count 32, run
+;; the loop -- the memory effect IS ihx_mem, the exits are the
+;; advanced pointers.
+
+(claim isha_hex_walk
+  (goal ((q Int) (p Int) (x2 Int) (x3 Int) (x4 Int) (x5 Int) (m Mem) (d Nat))
+    ((= (le 0 q) True)
+     (= (le (+ q 64) 65536) True)
+     (= (le 0 p) True)
+     (= (le (+ p 32) 65536) True))
+    (=
+      (istmts (S^ 122 d) 65536 (inline ihx_body) (list q p x2 x3 x4 x5) m)
+      (Some (INorm (list (+ q 64) (+ p 32) 0 0 0 0) (ihx_mem m q p 32)))))
+  (chain
+    (steps
+      ((compute
+         lhs
+         (stop iwhile lg_fuel int_of_nat ihx_mem lg_advk mem_set mem_get
+           hex_digit))))
+    (have hloc (= (list q p 32 0 0 0) (list q p (int_of_nat 32) 0 0 0))
+      (steps ((rewrite (lemma ish_i32p) lr rhs true ())) refl))
+    (steps ((rewrite (premise hloc) lr lhs true ())))
+    (have hfr (= (S^ 116 d) (S^ 50 (lg_fuel 32 (S^ 34 d))))
+      (steps ((compute both)) refl))
+    (steps ((rewrite (premise hfr) lr lhs true ())))
+    (rewrite-with
+      (lemma isha_hex_w)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps
+         ((rewrite (lemma ish_i32p) lr lhs true ()))
+         (by arith (rows (goal 1) (1 1))))
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps
+         ((rewrite (lemma ish_i32p) lr lhs true ())
+          (rewrite (premise 3) lr lhs true ()))
+         refl)))
+    (steps
+      ((compute lhs (stop int_of_nat ihx_mem lg_advk mem_set mem_get hex_digit))))
+    (have hqe (= (lg_advk q 2 32) (+ q 64))
+      (steps ((compute lhs)) (by arith (list (list 1) (list 1)))))
+    (have hpe (= (lg_advk p 1 32) (+ p 32))
+      (steps ((compute lhs)) (by arith (list (list 1) (list 1)))))
+    (steps
+      ((rewrite (premise hqe) lr lhs true ())
+       (rewrite (premise hpe) lr lhs true ())))
+    refl))
+
+(claim ish_hexd_hi
+  (goal ((x Int)) ((= (le 0 x) True) (= (le x 15) True))
+    (= (lt (hex_digit x) 256) True))
+  (fin-split
+    x
+    (premise 0)
+    (premise 1)
+    ((case 0 (steps ((compute both)) refl))
+     (case 1 (steps ((compute both)) refl))
+     (case 2 (steps ((compute both)) refl))
+     (case 3 (steps ((compute both)) refl))
+     (case 4 (steps ((compute both)) refl))
+     (case 5 (steps ((compute both)) refl))
+     (case 6 (steps ((compute both)) refl))
+     (case 7 (steps ((compute both)) refl))
+     (case 8 (steps ((compute both)) refl))
+     (case 9 (steps ((compute both)) refl))
+     (case 10 (steps ((compute both)) refl))
+     (case 11 (steps ((compute both)) refl))
+     (case 12 (steps ((compute both)) refl))
+     (case 13 (steps ((compute both)) refl))
+     (case 14 (steps ((compute both)) refl))
+     (case 15 (steps ((compute both)) refl)))))
+
+;; ---- hex kit: framing ---------------------------------------------------------------
+
+;; a byte below the output window is untouched by the hex effect
+(claim ihx_get_below
+  (goal ((m Mem) (q Int) (p Int) (k Nat) (a Int)) ((= (lt a q) True))
+    (= (mem_get (ihx_mem m q p k) a) (mem_get m a)))
+  (induct k
+    ((case Z (steps ((rewrite (lemma ihx_mem_z) lr lhs true ())) refl))
+     (case S
+       (k2)
+       (chain
+         (steps ((rewrite (lemma ihx_mem_s) lr lhs true ())))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (0 1))))))
+         (rewrite-with
+           (lemma get_set_other)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (0 1))))))
+         (rewrite-with
+           (lemma get_set_other)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (0 1))))))
+         refl)))))
+
+;; a byte at or above the output window's end is untouched
+(claim ish_hex_hi
+  (goal ((m Mem) (q Int) (p Int) (k Nat) (a Int))
+    ((= (le (+ q (* 2 (int_of_nat k))) a) True))
+    (= (mem_get (ihx_mem m q p k) a) (mem_get m a)))
+  (induct k
+    ((case Z (steps ((rewrite (lemma ihx_mem_z) lr lhs true ())) refl))
+     (case S
+       (k2)
+       (chain
+         (have hnn (= (le 0 (int_of_nat k2)) True)
+           (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+         (have hqs (= (le (+ q (* 2 (+ 1 (int_of_nat k2)))) a) True)
+           (steps
+             ((rewrite (lemma int_of_nat_succ) rl lhs true ())
+              (rewrite (premise 0) lr lhs true ()))
+             refl))
+         (steps ((rewrite (lemma ihx_mem_s) lr lhs true ())))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (hqs 1))))))
+         (rewrite-with
+           (lemma get_set_other)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal -1) (hqs 1) (hnn 2))))))
+         (rewrite-with
+           (lemma get_set_other)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal -1) (hqs 1) (hnn 2))))))
+         refl)))))
+
+;; ---- THE DIGEST CROSSING ------------------------------------------------------------
+;; A four-byte window reads back as the spec's word_bytes of the word
+;; read: word_bytes' literal-count shifts (24/16) convert to chained
+;; 8-shifts through ish_shr_add, each 8-shift is a 256-quotient
+;; (shr8_div), and div_unique/mod_unique pin every quotient and
+;; remainder of the byte sum. The h8_bytes crossing below splits the
+;; 32-byte digest window into eight of these.
+
+(claim ish_wb_read
+  (goal ((m Mem) (a Int)) () (= (mem_read 4 m a) (word_bytes (wget m a))))
+  (chain
+    (have hb (= (mem_read 4 m a) (mem_read (S (S (S (S Z)))) m a))
+      (steps ((compute both (stop mem_read mem_get))) refl))
+    (steps
+      ((rewrite (premise hb) lr lhs true ())
+       (rewrite (lemma mem_read_s) lr lhs true ())
+       (rewrite (lemma mem_read_s) lr lhs true ())
+       (rewrite (lemma mem_read_s) lr lhs true ())
+       (rewrite (lemma mem_read_s) lr lhs true ())
+       (rewrite (lemma mem_read_z) lr lhs true ())))
+    (have ha2 (= (+ (+ a 1) 1) (+ a 2))
+      (steps () (by arith (list (list 1) (list 1)))))
+    (steps ((rewrite (premise ha2) lr lhs true ())))
+    (have ha3 (= (+ (+ a 2) 1) (+ a 3))
+      (steps () (by arith (list (list 1) (list 1)))))
+    (steps
+      ((rewrite (premise ha3) lr lhs true ())
+       (unfold word_bytes rhs)
+       (reduce rhs)
+       (rewrite (lemma wget_be) lr rhs true ())))
+    (have hg0lo (= (le 0 (mem_get m a)) True)
+      (rewrite-with (lemma get_lo) lr lhs () () refl))
+    (have hg0hi (= (lt (mem_get m a) 256) True)
+      (rewrite-with (lemma get_hi) lr lhs () () refl))
+    (have hg1lo (= (le 0 (mem_get m (+ a 1))) True)
+      (rewrite-with (lemma get_lo) lr lhs () () refl))
+    (have hg1hi (= (lt (mem_get m (+ a 1)) 256) True)
+      (rewrite-with (lemma get_hi) lr lhs () () refl))
+    (have hg2lo (= (le 0 (mem_get m (+ a 2))) True)
+      (rewrite-with (lemma get_lo) lr lhs () () refl))
+    (have hg2hi (= (lt (mem_get m (+ a 2)) 256) True)
+      (rewrite-with (lemma get_hi) lr lhs () () refl))
+    (have hg3lo (= (le 0 (mem_get m (+ a 3))) True)
+      (rewrite-with (lemma get_lo) lr lhs () () refl))
+    (have hg3hi (= (lt (mem_get m (+ a 3)) 256) True)
+      (rewrite-with (lemma get_hi) lr lhs () () refl))
+    (have hWlo
+      (=
+        (le
+          0
+          (+
+            (* (mem_get m a) 16777216)
+            (+
+              (* (mem_get m (+ a 1)) 65536)
+              (+ (* (mem_get m (+ a 2)) 256) (mem_get m (+ a 3))))))
+        True)
+      (steps
+        ()
+        (by
+          arith
+          (rows (goal 1) (hg0lo 16777216) (hg1lo 65536) (hg2lo 256) (hg3lo 1)))))
+    (have hS1lo
+      (=
+        (le
+          0
+          (+
+            (* (mem_get m a) 65536)
+            (+ (* (mem_get m (+ a 1)) 256) (mem_get m (+ a 2)))))
+        True)
+      (steps () (by arith (rows (goal 1) (hg0lo 65536) (hg1lo 256) (hg2lo 1)))))
+    (have hS2lo (= (le 0 (+ (* (mem_get m a) 256) (mem_get m (+ a 1)))) True)
+      (steps () (by arith (rows (goal 1) (hg0lo 256) (hg1lo 1)))))
+    (have hs1lo
+      (=
+        (le
+          0
+          (bshr
+            (+
+              (* (mem_get m a) 16777216)
+              (+
+                (* (mem_get m (+ a 1)) 65536)
+                (+ (* (mem_get m (+ a 2)) 256) (mem_get m (+ a 3)))))
+            8))
+        True)
+      (rewrite-with
+        (lemma ish_shr_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hWlo) lr lhs true ())) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (have hs2lo
+      (=
+        (le
+          0
+          (bshr
+            (bshr
+              (+
+                (* (mem_get m a) 16777216)
+                (+
+                  (* (mem_get m (+ a 1)) 65536)
+                  (+ (* (mem_get m (+ a 2)) 256) (mem_get m (+ a 3)))))
+              8)
+            8))
+        True)
+      (rewrite-with
+        (lemma ish_shr_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hs1lo) lr lhs true ())) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (have h16
+      (=
+        (bshr
+          (bshr
+            (+
+              (* (mem_get m a) 16777216)
+              (+
+                (* (mem_get m (+ a 1)) 65536)
+                (+ (* (mem_get m (+ a 2)) 256) (mem_get m (+ a 3)))))
+            8)
+          8)
+        (bshr
+          (+
+            (* (mem_get m a) 16777216)
+            (+
+              (* (mem_get m (+ a 1)) 65536)
+              (+ (* (mem_get m (+ a 2)) 256) (mem_get m (+ a 3)))))
+          16))
+      (chain
+        (rewrite-with
+          (lemma ish_shr_add)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise hWlo) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((compute lhs)))
+        refl))
+    (have h24
+      (=
+        (bshr
+          (bshr
+            (bshr
+              (+
+                (* (mem_get m a) 16777216)
+                (+
+                  (* (mem_get m (+ a 1)) 65536)
+                  (+ (* (mem_get m (+ a 2)) 256) (mem_get m (+ a 3)))))
+              8)
+            8)
+          8)
+        (bshr
+          (+
+            (* (mem_get m a) 16777216)
+            (+
+              (* (mem_get m (+ a 1)) 65536)
+              (+ (* (mem_get m (+ a 2)) 256) (mem_get m (+ a 3)))))
+          24))
+      (chain
+        (steps ((rewrite (premise h16) lr lhs true ())))
+        (rewrite-with
+          (lemma ish_shr_add)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise hWlo) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((compute lhs)))
+        refl))
+    (have hmW
+      (=
+        (mod
+          (+
+            (* (mem_get m a) 16777216)
+            (+
+              (* (mem_get m (+ a 1)) 65536)
+              (+ (* (mem_get m (+ a 2)) 256) (mem_get m (+ a 3)))))
+          256)
+        (mem_get m (+ a 3)))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst
+           q
+           (+
+             (* (mem_get m a) 65536)
+             (+ (* (mem_get m (+ a 1)) 256) (mem_get m (+ a 2)))))
+         (inst r (mem_get m (+ a 3))))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps ((rewrite (premise hg3lo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hg3hi) lr lhs true ())) refl))
+        refl))
+    (have hE1
+      (=
+        (ediv
+          (+
+            (* (mem_get m a) 16777216)
+            (+
+              (* (mem_get m (+ a 1)) 65536)
+              (+ (* (mem_get m (+ a 2)) 256) (mem_get m (+ a 3)))))
+          256)
+        (+
+          (* (mem_get m a) 65536)
+          (+ (* (mem_get m (+ a 1)) 256) (mem_get m (+ a 2)))))
+      (rewrite-with
+        (lemma div_unique)
+        lr
+        lhs
+        ((inst
+           q
+           (+
+             (* (mem_get m a) 65536)
+             (+ (* (mem_get m (+ a 1)) 256) (mem_get m (+ a 2)))))
+         (inst r (mem_get m (+ a 3))))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps ((rewrite (premise hg3lo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hg3hi) lr lhs true ())) refl))
+        refl))
+    (have hm1
+      (=
+        (mod
+          (+
+            (* (mem_get m a) 65536)
+            (+ (* (mem_get m (+ a 1)) 256) (mem_get m (+ a 2))))
+          256)
+        (mem_get m (+ a 2)))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q (+ (* (mem_get m a) 256) (mem_get m (+ a 1))))
+         (inst r (mem_get m (+ a 2))))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps ((rewrite (premise hg2lo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hg2hi) lr lhs true ())) refl))
+        refl))
+    (have hE2
+      (=
+        (ediv
+          (+
+            (* (mem_get m a) 65536)
+            (+ (* (mem_get m (+ a 1)) 256) (mem_get m (+ a 2))))
+          256)
+        (+ (* (mem_get m a) 256) (mem_get m (+ a 1))))
+      (rewrite-with
+        (lemma div_unique)
+        lr
+        lhs
+        ((inst q (+ (* (mem_get m a) 256) (mem_get m (+ a 1))))
+         (inst r (mem_get m (+ a 2))))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps ((rewrite (premise hg2lo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hg2hi) lr lhs true ())) refl))
+        refl))
+    (have hm2
+      (=
+        (mod (+ (* (mem_get m a) 256) (mem_get m (+ a 1))) 256)
+        (mem_get m (+ a 1)))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q (mem_get m a)) (inst r (mem_get m (+ a 1))))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps ((rewrite (premise hg1lo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hg1hi) lr lhs true ())) refl))
+        refl))
+    (have hE3
+      (= (ediv (+ (* (mem_get m a) 256) (mem_get m (+ a 1))) 256) (mem_get m a))
+      (rewrite-with
+        (lemma div_unique)
+        lr
+        lhs
+        ((inst q (mem_get m a)) (inst r (mem_get m (+ a 1))))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps ((rewrite (premise hg1lo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hg1hi) lr lhs true ())) refl))
+        refl))
+    (have hm3 (= (mod (mem_get m a) 256) (mem_get m a))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q 0) (inst r (mem_get m a)))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps ((rewrite (premise hg0lo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hg0hi) lr lhs true ())) refl))
+        refl))
+    (steps
+      ((rewrite (premise h24) rl rhs true ())
+       (rewrite (premise h16) rl rhs true ())))
+    (rewrite-with
+      (lemma shr8_div)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hs2lo) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shr8_div)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hs1lo) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shr8_div)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hWlo) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shr8_div)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hs1lo) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shr8_div)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hWlo) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shr8_div)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hWlo) lr lhs true ())) refl)))
+    (steps
+      ((rewrite (premise hE1) lr rhs true ())
+       (rewrite (premise hE2) lr rhs true ())
+       (rewrite (premise hE3) lr rhs true ())))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hg0lo) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hS2lo) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hS1lo) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hWlo) lr lhs true ())) refl)))
+    (steps
+      ((rewrite (premise hm3) lr rhs true ())
+       (rewrite (premise hm2) lr rhs true ())
+       (rewrite (premise hm1) lr rhs true ())
+       (rewrite (premise hmW) lr rhs true ())))
+    refl))
+
+;; the 32-byte digest window IS h8_bytes of the eight words it holds
+(claim ish_digest_read
+  (goal
+    ((m Mem)
+     (a Int)
+     (y0 Int)
+     (y1 Int)
+     (y2 Int)
+     (y3 Int)
+     (y4 Int)
+     (y5 Int)
+     (y6 Int)
+     (y7 Int))
+    ((= (wget m a) y0)
+     (= (wget m (+ a 4)) y1)
+     (= (wget m (+ a 8)) y2)
+     (= (wget m (+ a 12)) y3)
+     (= (wget m (+ a 16)) y4)
+     (= (wget m (+ a 20)) y5)
+     (= (wget m (+ a 24)) y6)
+     (= (wget m (+ a 28)) y7))
+    (= (mem_read 32 m a) (h8_bytes (mk_h8 y0 y1 y2 y3 y4 y5 y6 y7))))
+  (chain
+    (have hb
+      (=
+        (mem_read 32 m a)
+        (mem_read
+          (wn_add
+            4
+            (wn_add 4 (wn_add 4 (wn_add 4 (wn_add 4 (wn_add 4 (wn_add 4 4)))))))
+          m
+          a))
+      (steps ((compute both (stop mem_read mem_get))) refl))
+    (steps
+      ((rewrite (premise hb) lr lhs true ())
+       (rewrite (lemma ish_read_app) lr lhs true ())
+       (rewrite (lemma ish_read_app) lr lhs true ())
+       (rewrite (lemma ish_read_app) lr lhs true ())
+       (rewrite (lemma ish_read_app) lr lhs true ())
+       (rewrite (lemma ish_read_app) lr lhs true ())
+       (rewrite (lemma ish_read_app) lr lhs true ())
+       (rewrite (lemma ish_read_app) lr lhs true ())
+       (rewrite (lemma ish_i4p) lr lhs true ())))
+    (have hb4 (= (+ (+ a 4) 4) (+ a 8))
+      (steps () (by arith (list (list 1) (list 1)))))
+    (steps ((rewrite (premise hb4) lr lhs true ())))
+    (have hb8 (= (+ (+ a 8) 4) (+ a 12))
+      (steps () (by arith (list (list 1) (list 1)))))
+    (steps ((rewrite (premise hb8) lr lhs true ())))
+    (have hb12 (= (+ (+ a 12) 4) (+ a 16))
+      (steps () (by arith (list (list 1) (list 1)))))
+    (steps ((rewrite (premise hb12) lr lhs true ())))
+    (have hb16 (= (+ (+ a 16) 4) (+ a 20))
+      (steps () (by arith (list (list 1) (list 1)))))
+    (steps ((rewrite (premise hb16) lr lhs true ())))
+    (have hb20 (= (+ (+ a 20) 4) (+ a 24))
+      (steps () (by arith (list (list 1) (list 1)))))
+    (steps ((rewrite (premise hb20) lr lhs true ())))
+    (have hb24 (= (+ (+ a 24) 4) (+ a 28))
+      (steps () (by arith (list (list 1) (list 1)))))
+    (steps
+      ((rewrite (premise hb24) lr lhs true ())
+       (rewrite (lemma ish_wb_read) lr lhs true ())
+       (rewrite (premise 0) lr lhs true ())
+       (rewrite (premise 1) lr lhs true ())
+       (rewrite (premise 2) lr lhs true ())
+       (rewrite (premise 3) lr lhs true ())
+       (rewrite (premise 4) lr lhs true ())
+       (rewrite (premise 5) lr lhs true ())
+       (rewrite (premise 6) lr lhs true ())
+       (rewrite (premise 7) lr lhs true ())
+       (unfold h8_bytes rhs)
+       (reduce rhs)))
+    refl))
+
+;; ---- THE HEX READBACK ---------------------------------------------------------------
+;; The output window over the hex effect reads back as the spec's
+;; bytes_hex of the digest window: one iteration = one byte = two
+;; characters = one bytes_hex step. The digest window sits at or
+;; above the output window's end (the readback's only premise).
+
+(claim ish_hex_read
+  (goal ((m Mem) (q Int) (p Int) (wk Nat))
+    ((= (le 0 q) True) (= (le (+ q (* 2 (int_of_nat wk))) p) True))
+    (=
+      (mem_read (wn_add wk wk) (ihx_mem m q p wk) q)
+      (bytes_hex (mem_read wk m p))))
+  (induct wk
+    ((case Z
+       (steps
+         ((rewrite (lemma wn_add_z) lr lhs true ())
+          (rewrite (lemma mem_read_z) lr both true ())
+          (unfold bytes_hex rhs)
+          (reduce rhs))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (have hnn (= (le 0 (int_of_nat k2)) True)
+           (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+         (have hqs (= (le (+ q (* 2 (+ 1 (int_of_nat k2)))) p) True)
+           (steps
+             ((rewrite (lemma int_of_nat_succ) rl lhs true ())
+              (rewrite (premise 1) lr lhs true ()))
+             refl))
+         (have hblo (= (le 0 (mem_get m p)) True)
+           (rewrite-with (lemma get_lo) lr lhs () () refl))
+         (have hbhi (= (lt (mem_get m p) 256) True)
+           (rewrite-with (lemma get_hi) lr lhs () () refl))
+         (have hb255 (= (le (mem_get m p) 255) True)
+           (steps () (by arith (rows (goal 1) (hbhi 1)))))
+         (have hn1lo (= (le 0 (bshr (mem_get m p) 4)) True)
+           (rewrite-with
+             (lemma ish_shr4_lo)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise hblo) lr lhs true ())) refl))
+             refl))
+         (have hn1hi (= (le (bshr (mem_get m p) 4) 15) True)
+           (rewrite-with
+             (lemma ish_shrh4)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise hblo) lr lhs true ())) refl)
+              (steps ((rewrite (premise hb255) lr lhs true ())) refl))
+             refl))
+         (have hn2lo (= (le 0 (band (mem_get m p) 15)) True)
+           (rewrite-with
+             (lemma band_lo)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise hblo) lr lhs true ())) refl)
+              (steps ((compute lhs)) refl))
+             refl))
+         (have hn2hi (= (le (band (mem_get m p) 15) 15) True)
+           (rewrite-with
+             (lemma band_le_r)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise hblo) lr lhs true ())) refl)
+              (steps ((compute lhs)) refl))
+             refl))
+         (steps
+           ((rewrite (lemma wn_add_s) lr lhs true ())
+            (rewrite (lemma wn_add_sr) lr lhs true ())
+            (rewrite (lemma ihx_mem_s) lr lhs true ())
+            (rewrite (lemma mem_read_s) lr lhs true ())
+            (rewrite (lemma mem_read_s) lr lhs true ())))
+         (rewrite-with
+           (lemma ihx_get_below)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1))))))
+         (rewrite-with
+           (lemma ihx_get_below)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1))))))
+         (rewrite-with
+           (lemma get_set_other)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1))))))
+         (rewrite-with
+           (lemma get_set_byte)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma ish_hexd_lo)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise hn1lo) lr lhs true ())) refl)
+               (steps ((rewrite (premise hn1hi) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma ish_hexd_hi)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise hn1lo) lr lhs true ())) refl)
+               (steps ((rewrite (premise hn1hi) lr lhs true ())) refl))
+              refl)))
+         (rewrite-with
+           (lemma get_set_byte)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma ish_hexd_lo)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise hn2lo) lr lhs true ())) refl)
+               (steps ((rewrite (premise hn2hi) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma ish_hexd_hi)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise hn2lo) lr lhs true ())) refl)
+               (steps ((rewrite (premise hn2hi) lr lhs true ())) refl))
+              refl)))
+         (have ha2 (= (+ (+ q 1) 1) (+ q 2))
+           (steps () (by arith (list (list 1) (list 1)))))
+         (steps ((rewrite (premise ha2) lr lhs true ())))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (0 1))))
+            (steps () (by arith (rows (goal 1) (hqs 1))))))
+         (rewrite-with
+           (lemma mem_read_set_below)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (hqs 1) (hnn 2))))))
+         (rewrite-with
+           (lemma mem_read_set_below)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (hqs 1) (hnn 2))))))
+         (steps
+           ((rewrite (lemma mem_read_s) lr rhs true ())
+            (unfold bytes_hex rhs)
+            (reduce rhs)))
+         refl)))))
