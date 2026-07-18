@@ -1,5 +1,7 @@
 # TCB.md — the bootstrap trusted computing base
 
+> Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
+
 **Status: RATIFIED 2026-07-10 (trust-residue fork).**
 The standing discipline for what a shard verdict rests on, what is
 explicitly NOT authority, and how trust is re-established after an

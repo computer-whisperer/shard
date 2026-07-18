@@ -1,5 +1,7 @@
 # Lowered-conformance certificates — the standard form
 
+> Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
+
 **STATUS: RATIFIED 2026-07-04.** What is ratified is the FORM — the
 statement schema (§2), the portable/linked split (§6d), the mod.build +
 five-gate artifact conventions (§6, §6i), and the tools/low library

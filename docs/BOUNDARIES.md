@@ -1,5 +1,7 @@
 # Modeling and Connecting to Foreign Systems
 
+> Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
+
 The language is pure and total: every reduction is deterministic,
 every function returns a value, nothing in an expression is allowed
 to "do" anything in the world. The proof story rests on that —

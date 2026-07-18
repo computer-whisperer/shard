@@ -211,7 +211,7 @@ TARGETS=(
   tools/lowcheck/fixtures/lib_form_rejects.shard
   tools/lowbuild/fixtures/purelib_src.shard
   tools/lowbuild/fixtures/purelib_out.shard
-  examples/build_products.shard
+  tools/build/build_products.shard
   tools/build/build.shard
   tools/lowbuild/fixtures/purelib_x86_out.shard
   tools/lowbuild/fixtures/arglen_src.shard
@@ -978,7 +978,7 @@ fi
 # / KERNEL / BYTETIE (cert↔binary) / ENGINE (V8; the x86 build's engine
 # is the CPU itself) — run end to end. Summary
 # line only; any gate failure changes it and fails the corpus diff.
-for LB in "tools/build/build.sh examples/build_products.shard"; do
+for LB in "tools/build/build.sh tools/build/build_products.shard"; do
   echo "=== lowering: $LB ==="
   if [ -n "${SKIP_LOWERING:-}" ]; then
     echo "SKIPPED (SKIP_LOWERING set -- the driver ran separately this cycle)"

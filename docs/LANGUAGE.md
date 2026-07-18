@@ -1,5 +1,7 @@
 # Narrow shard
 
+> Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
+
 > The language is **shard**. This document specifies **narrow shard** —
 > the deliberately restricted subset that the disposable Rust bootstrap
 > parses and evaluates, and the form the kernel, engine, parser, and

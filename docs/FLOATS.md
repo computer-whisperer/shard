@@ -1,6 +1,8 @@
 shard floats — FLOATS.md
 ========================
 
+> Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
+
 STATUS: RATIFIED (2026-07-12, user read + sign-off; drafted
 2026-07-11 with all §13 open decision points resolved same day over
 three ruling rounds; R0 landed complete before ratification and

@@ -1,6 +1,8 @@
 shard program search — SEARCH.md
 =================================
 
+> Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
+
 STATUS: RATIFIED (user review 2026-07-11) — the scope ledger for the
 meta-search arc: a lasting, in-repo replication of the search
 playground's basic behaviors, built under meta/ against the real

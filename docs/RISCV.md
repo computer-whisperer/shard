@@ -1,5 +1,7 @@
 # RISC-V — the third target: scope and design ledger
 
+> Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
+
 Status: **RATIFIED 2026-07-17** (user, after G1+G2+G2b landed on the
 `riscv` fork): the decisions as built stand, including the §9 items —
 gp/tp stay ordinary model registers, RvMul stays in the base op table.

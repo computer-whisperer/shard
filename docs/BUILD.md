@@ -1,6 +1,8 @@
 shard builds — BUILD.md
 =======================
 
+> Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
+
 STATUS: DRAFT (2026-07-11) — the scope ledger for the build story: how
 anyone — a person, a model, or a host program — compiles shard, across
 the whole spectrum from "one declaration to ELF, zero configuration"

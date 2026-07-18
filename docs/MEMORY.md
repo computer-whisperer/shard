@@ -1,6 +1,8 @@
 shard memory — MEMORY.md
 ========================
 
+> Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
+
 STATUS: DRAFT (2026-07-11; application-story revision same day — the
 tower now lands at models/imp, see the application ruling in the
 rulings block and docs/IMP.md) — the scope ledger for object

@@ -1,5 +1,7 @@
 # v2 → v3 Revisit Ledger
 
+> Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
+
 Decisions made during v2 design under uncertainty. Each entry is: what
 was chosen, why now, and what would push us to revisit in v3 rather
 than retrofit during v2.

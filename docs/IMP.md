@@ -1,6 +1,8 @@
 shard imp — IMP.md
 ==================
 
+> Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
+
 STATUS: RATIFIED (2026-07-12; drafted 2026-07-11; §2a typed-machine
 amendment ratified 2026-07-14) — the scope ledger
 for **models/imp**, the

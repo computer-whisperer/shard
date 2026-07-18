@@ -1,5 +1,7 @@
 # shard — design intent
 
+> Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
+
 This is the "why" behind the project, in full. The README is the front door;
 `LANGUAGE.md` specifies what runs today; the arc ledgers (the README's
 documentation map) carry each subsystem's rulings. This document records the

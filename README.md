@@ -244,15 +244,23 @@ std/             ; the standard library — directory modules with reviewed
 meta/            ; the meta stdlib: shared machinery for programs-about-
                  ;   programs (plan, invoke, format, shape, proof, sketch …)
 models/          ; machine + OS models as ordinary proven libraries:
-                 ;   wasm, x86, linux (the syscall boundary)
+                 ;   wasm, x86, riscv, pio, linux (the syscall boundary);
+                 ;   each with probes/ (validation articles) and diff/
+                 ;   (engine differentials)
 tools/           ; untrusted toolchain: prove (auto-prover), shardfmt,
-                 ;   canon, wasmgen/x86gen/wordgen (lowering generators),
-                 ;   lowcheck/bytetie/lowbuild (the gates), bench,
-                 ;   plus the temporary native chain (lower/codegen/low)
-examples/        ; demonstrations and corpus pins — every feature lands
-                 ;   with a pinned example; *_rejects.shard files are
-                 ;   deliberate negative tests; lowbuild_*.sh are the
-                 ;   pinned lowering builds
+                 ;   canon, wasmgen/x86gen/impgen/wordgen (generators),
+                 ;   lowcheck/bytetie/lowbuild (the gates), build (the
+                 ;   product driver + build_products.shard), bench, plus
+                 ;   the temporary native chain (lower/codegen/low);
+                 ;   tools own their fixtures/ and blueprints/
+examples/        ; genuine programs and demonstrations: the bin
+                 ;   families (add, addw, sha256sum), feature demos, the
+                 ;   stateful apps; *_rejects.shard files are deliberate
+                 ;   negative demos (see docs/LAYOUT.md for the layout law)
+pins/            ; corpus-law pins: proof/ (proof-layer regressions),
+                 ;   lang/ (language + loader semantics), trust/ (trust-
+                 ;   boundary refusals) — kernel behavior may not drift
+                 ;   from these silently
 bin/             ; local fast engines (shard_check / shard_eval) built by
                  ;   bin/rebuild.sh; stamp files guard source drift
 docs/            ; the documentation map below
@@ -271,6 +279,7 @@ authority for its area:
 | doc | area |
 |---|---|
 | [OVERVIEW.md](docs/OVERVIEW.md) | design intent — the why, in full |
+| [LAYOUT.md](docs/LAYOUT.md) | repository layout: the placement rule + the move map |
 | [LANGUAGE.md](docs/LANGUAGE.md) | the narrow object language (syntax, semantics) |
 | [TOTALITY.md](docs/TOTALITY.md) | measures, admission, mutual recursion |
 | [REFINEMENT.md](docs/REFINEMENT.md) | `(refine …)` — invariants as types |
