@@ -3146,6 +3146,69 @@ branch" fence falls at every non-loop site on both targets.**
   symbolic-count branch rung; branch-with-loop-arms stays fenced
   (hard, named).
 
+**IF-3b-b slice 1 — NESTED AND REPEATED BRANCHES IN LOOP-BODY
+WORKERS (2026-07-18; the imp-if-tier fork).** The loop-body walker
+goes tree-native on both targets; the "second or nested branch in a
+loop body" fence falls.
+
+- Leaf states: `GTrL` now CARRIES its walk state `(List Expr) Expr`
+  (locals, mem). `lw_tree` records it at every leaf; chain embeds
+  whose consumers read no leaf state use `gt_nil`. Ground spines
+  ignore the payload — all ten committed outs regenerate
+  byte-identical across the change (verified twice, before and after
+  the ground fold below).
+- The walker: `lwb_walk`'s branch case walks each arm as
+  `(stmt_app arm post)` through `lw_tree` — the body's post
+  statements ride per leaf (the tree fold), so a nested OR repeated
+  (second top-level) branch is just deeper forks. `gt_decok` checks
+  the trailing band-decrement at EVERY leaf (refuse loud), replacing
+  the flat per-arm check; `LBr` carries the two arm trees and
+  `LWBOk`'s two post-state fields (dead at both call sites) are
+  deleted.
+- The worker spines: `mxw_tspine`/`mxxw_tspine` walk the tree with
+  TWO counters — the hlt/hle index `i` advances at guard case-ons
+  only, the IH depth `dh` advances at every case-on (guards AND
+  forks; forks keep `i`, arms are separate scopes). Each leaf closes
+  with the all-true tail (`mxw_tail`) at its own accumulated depth —
+  the per-leaf IH cite binds by matching (wasm: the back-edge state
+  is the join; x86: ix_zs's seal re-zeroes every leaf's dirt).
+  `mxw_brcase`/`mxxw_brcase` collapse to single tree-spine calls
+  rooted at the polarity `GTrB` (start `i = p+1`, `dh = p`); the
+  flat-worker emission is byte-identical (the flat formula
+  `1 + p + region` is the straight-chain instance of `dh`).
+- GROUND FORK CONDITIONS FOLD IN THE WALK (`cmp_gval`): when both
+  walked operands of a fork's comparison are `IntLit`, both machines
+  compute straight through it — no stick point exists, so no case-on
+  may be emitted. The walker folds the branch and continues into the
+  taken arm alone. Found by the it_ifl5 pin: its else arm sets
+  `x1 = 11`, making the second scrutinee `(int_eq 11 5)` — the
+  emitted case-on's `rewrite (hyp 0)` had nothing to bite on. The
+  fold is walk-tier only; a ground TOP-LEVEL branch condition
+  (mxc_br's scrutinee) remains an unpinned named-growth edge for the
+  pure-tier rung.
+- Blueprint: a hand-transliterated nested-in-body wasm worker
+  (doubly-nested case-ons, per-leaf IH cites at hyp 2/4/1, per-leaf
+  decrement collapse, computed towers S^27/S^14 from
+  tcost/gcost) checked 111/0 on the first run before any impgen
+  edits.
+- Fixture: `it_ifl4_fn` (nested branch heading the then arm,
+  fork-then-guards, hyp depths 2/4/1) and `it_ifl5_fn` (repeated
+  top-level branch: guards-then-fork in the then arm, ground fold in
+  the else arm, three leaves). Both targets FULL, zero notes; outs
+  strictly additive (+5217/−0) and deterministic ×2.
+- Gates: impgen 91/0 fmt-canonical; eight unchanged outs
+  byte-identical ×2; wasm ifl out 143/0; x86 ifl out 434/0; fixture
+  77/0; driver + corpus ride the CI pipeline.
+- NEXT (3b-b slice 2): the x86 loop-bounded legs — `mxx_bleg` goes
+  tree-only (the ground path already emits identical text; the Some
+  path grows `mxx_lspine`, whose leaf builds the per-leaf loop head
+  from the leaf state — `lheadT` verbatim, `(+ d 1)` names
+  scope-safe at every leaf); `mxx_nestck`/`mxp_forked` deleted;
+  `it_ifn3` flips to FULL on x86; a pin for a ground leg whose fork
+  sits only in the ELSE arm (today it slips past the then-arm-refusal
+  route into a silent empty emission — unpinned hole, closed by the
+  tree-only restructure).
+
 
 ## 7. Non-goals, stated once
 
