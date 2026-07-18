@@ -3199,15 +3199,46 @@ loop body" fence falls.
 - Gates: impgen 91/0 fmt-canonical; eight unchanged outs
   byte-identical ×2; wasm ifl out 143/0; x86 ifl out 434/0; fixture
   77/0; driver + corpus ride the CI pipeline.
-- NEXT (3b-b slice 2): the x86 loop-bounded legs — `mxx_bleg` goes
-  tree-only (the ground path already emits identical text; the Some
-  path grows `mxx_lspine`, whose leaf builds the per-leaf loop head
-  from the leaf state — `lheadT` verbatim, `(+ d 1)` names
-  scope-safe at every leaf); `mxx_nestck`/`mxp_forked` deleted;
-  `it_ifn3` flips to FULL on x86; a pin for a ground leg whose fork
-  sits only in the ELSE arm (today it slips past the then-arm-refusal
-  route into a silent empty emission — unpinned hole, closed by the
-  tree-only restructure).
+**IF-3b-b slice 2 — NESTED BRANCHES IN LOOP-BOUNDED LEGS
+(2026-07-18; the imp-if-tier fork).** `mxx_bleg` goes TREE-ONLY and
+the last branch-position fence falls: x86 now generates FULL for
+every branch position the dialect admits.
+
+- `mxx_bleg`: both flat paths deleted. Ground legs route through the
+  3b tree fallback unconditionally (one `mxx_spine` call over
+  `gsA · GTrB(arm ++ leg-tail trees)`); loop-bounded legs walk
+  `(stmt_app arm (bSt ++ csetstmts))` per arm and emit through
+  `mxx_lspine` — an `mxx_spine`-textured tree spine whose LEAF
+  builds its own loop-head cite (`mxx_lhead` + `mxc_exit`) from the
+  leaf's walked state. A forked arm multiplies loop heads per leaf;
+  the separate case scopes make the `(+ d 1)` have-names safe at
+  every one. `respell`/`mx_ladder` stay shared ahead of the spine.
+  Byte parity: all three committed outs carrying the flat Some
+  path's respell text (`hxk` — if/mixed/ifl) regenerate
+  byte-identical under the tree-only paths.
+- `mxx_nestck`/`mxp_forked` deleted; sqx_emit routes straight to
+  `mxx_ag`. `it_ifn3` flips tie+note → FULL on x86 (the only
+  non-additive out change is the deleted tie-only claim + note).
+- THE ELSE-ONLY HOLE closed: pre-3b-b the tree fallback hung off the
+  THEN arm's flat-walk refusal, so a ground leg whose fork sat only
+  in the ELSE arm slipped into a silent empty emission (`(DStr "")`
+  at the else-walk refusal — unpinned, latent since 3b). Tree-only
+  walks both arms symmetrically; new pin `it_ifn4_fn` (then flat,
+  else forked, terminal leg) locks it on both targets.
+- Gates: impgen 91/0 fmt-canonical; nine outs byte-identical, x86 if
+  out fence-flip + additive only; determinism ×2; wasm if out 169/0;
+  x86 if out 444/0 (the per-leaf loop-head lemmas prove on first
+  generation); fixture 77/0; driver + corpus ride the CI pipeline.
+- Branch coverage after 3b-b: sealed chunks, terminal legs,
+  loop-bounded legs, loop bodies — nested/repeated forks FULL on
+  both targets everywhere; ground fork conditions fold in the walk.
+  Still fenced (named): branch-with-loop-arms (`lw_tree` IWhile),
+  guard-carrying / non-comparison branch conditions, ground
+  TOP-LEVEL branch conditions (mxc_br scrutinee — unpinned edge
+  recorded in slice 1).
+- NEXT: the pure-tier symbolic-count branch rung (Some-conditional
+  worker + case-on); branch-with-loop-arms stays fenced (hard,
+  named).
 
 
 ## 7. Non-goals, stated once
