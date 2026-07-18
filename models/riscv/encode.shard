@@ -1,0 +1,621 @@
+;;; models/riscv/encode.shard — RvFunc/RvModule value -> real RV32I/RV64I
+;;; machine-code bytes (docs/RISCV.md G2: the flattening encoder).
+;;;
+;;; The reality-check encoder: turns one RvFunc into a flat 4-byte-unit byte
+;;; string a real core (qemu-user / silicon) executes, so the engine
+;;; differential (examples/riscv_diff*) can run what the model proved. Output
+;;; is (List Int), every element in [0,256). Nothing here is in-logic:
+;;; UNTRUSTED dev-side plumbing; a wrong encoding fails loudly at the CPU
+;;; (SIGILL / SIGSEGV / result mismatch), never in a proof. Totality-only:
+;;; ordinary total fns with structural measures, NO claims (the wasm/x86
+;;; encoder precedent).
+;;;
+;;; THE FLATTENING (the x86 encoder's play, uniform here): RvBlock/RvLoop/
+;;; RvBr/RvBrIf compile to LABELS and RELATIVE branches. Every unit is 4
+;;; bytes (no RVC in v1), so the byte length of any sequence is computable
+;;; WITHOUT knowing displacements (rvsz_* below) — which breaks the
+;;; assembler's usual two-pass circularity. Emission threads a label stack
+;;; whose entries carry, per enclosing block, the bytes remaining to its end,
+;;; and per enclosing loop, the bytes elapsed since its head; a branch reads
+;;; its target's entry and computes the signed byte offset directly. RISC-V
+;;; B/J immediates are byte offsets relative to the branch's OWN address (PC),
+;;; so the offset IS `rem` (block exit) or `-el` (loop head) with no
+;;; instruction-length fixup (x86 needed one because its rel is off the
+;;; instruction END).
+;;;
+;;; Encoding commitments (where the model meets the ISA), docs/RISCV.md §7.6:
+;;;   - All units 4 bytes, little-endian; RV32I/RV64I base + M's MUL. The
+;;;     width picks opcode legality (shift-shamt mask, the RvLi fence), not
+;;;     layout — every other encoding is byte-identical at both widths.
+;;;   - Register numbers: X0=0, GP=3, TP=4, T0..T2=5..7, S0=8, S1=9,
+;;;     A0..A7=10..17, S2..S11=18..27, T3..T6=28..31. x1/ra (regnum 1) and
+;;;     x2/sp (regnum 2) are ENCODER-OWNED: ra is written by `jal ra, off`
+;;;     (the RvCall lowering) and read by the ret `jalr x0,0(ra)`; sp is the
+;;;     private control-stack pointer, moved and dereferenced ONLY in the
+;;;     non-leaf prologue/epilogue ra spill. Neither is a model register.
+;;;   - Three-operand R-type for (RvSReg ...) operands; I-type for (RvSImm
+;;;     ...). I-type immediate domain [-2048, 2048) (hardware sign-extends the
+;;;     12-bit field; the model wraps at width — they agree exactly there).
+;;;     Shift-immediate counts encode `mod count bits` (5-bit shamt RV32 /
+;;;     6-bit RV64) to match the model's masking.
+;;;   - RvLi: single `addi rd, x0, imm` when the wrapped value is
+;;;     addi-reachable ([0,2048) or the top [2^W-2048,2^W)); else lui+addi
+;;;     with the standard carry fix. The lui+addi materialization is a
+;;;     32-bit pattern that RV64 SIGN-EXTENDS, so the v1 legality fence is
+;;;     wrapped in [0, 2^31) OR [2^W - 2^31, 2^W) (RV32: every value; RV64:
+;;;     the sign-extendable set) — a wider materialization is named growth.
+;;;   - LOUD refusals as POISON words (the x86 int3 precedent): a 4-byte
+;;;     guaranteed-illegal word `reason << 16` (low 16 bits 0 -> low 2 bits
+;;;     00 -> not a valid 32-bit instr with C disabled -> SIGILL). Each site
+;;;     names its rule and reason code below. Poison is one 4-byte unit, so
+;;;     the size arithmetic stays trivial. Refused: RvSub/RvMul with an
+;;;     immediate (no subi/muli encoding), out-of-domain I-type immediate,
+;;;     unencodable RvLi (RV64 mid-range), branch/jump out of reach, a bad
+;;;     branch depth, an unresolvable RvCall (the single-function fence — no
+;;;     image table, the x86 enc_func XCall->int3 precedent), and an RvCall
+;;;     whose jal offset is out of J-type reach.
+;;;
+;;; THE CALL LOWERING (docs/RISCV.md §3.3, G2b — the x86 enc_image split):
+;;; single-function rv_enc_func keeps NO offset table, so an RvCall there is
+;;; the poison fence (ra stays unwritten, plain ret is correct). The
+;;; multi-function IMAGE encoder rv_enc_image lays the ENTRY function (any
+;;; index) FIRST and the rest in index order; RvCall k -> `jal ra, off` to
+;;; function k's image offset through a per-index table (all units 4 bytes —
+;;; poison, li expansion, prologue/epilogue included — so the offset table is
+;;; computable one-pass, exactly as x86's fixed-5-byte call). A NON-LEAF
+;;; function (its body contains any RvCall at any depth) gets the private
+;;; control-stack ra spill: prologue `addi sp,sp,-16 ; s[wd] ra,8(sp)`,
+;;; epilogue `l[wd] ra,8(sp) ; addi sp,sp,+16 ; jalr x0,0(ra)` (sp stays
+;;; 16-byte aligned, the psABI rule). An in-body RvRet inside a non-leaf
+;;; expands to the FULL epilogue (a bare ret would return through a clobbered
+;;; ra); leaf RvRet stays the single ret unit, so leaf functions encode
+;;; byte-identically to the single-function output. The spill's store/load
+;;; opcode is the FIRST width-dependent encoding beyond shamt/li: rv64 sd/ld
+;;; (8-byte ra), rv32 sw/lw — rv_store_ra/rv_load_ra below.
+
+(import "riscv.shard")
+(use (:: models riscv riscv *))
+
+;; --- list plumbing (transparent; std/list is opaque in check mode) -----------
+
+(fn eapp ((xs (List Int)) (ys (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (eapp t ys)))))
+
+(fn elen ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons h t) (+ 1 (elen t)))))
+
+;; --- little-endian word splitter + poison ------------------------------------
+
+;; the four little-endian bytes of a 32-bit instruction word.
+(fn rv_word4 ((w Int)) (List Int)
+  (let ((u (mod w 4294967296)))
+    (list
+      (mod u 256)
+      (mod (ediv u 256) 256)
+      (mod (ediv u 65536) 256)
+      (mod (ediv u 16777216) 256))))
+
+;; a LOUD refusal: a 4-byte guaranteed-illegal word carrying a reason code in
+;; its high half. Low 16 bits are 0, so the low 2 bits are 00 — not a valid
+;; 32-bit instruction (and with C disabled not a legal compressed one either),
+;; so it SIGILLs at the CPU while a hexdump shows WHICH rule refused.
+;;   1 = branch depth exceeds the live label stack
+;;   2 = jump (RvBr) offset out of J-type reach (+-1MiB)
+;;   3 = branch (RvBrIf) offset out of B-type reach (+-4KiB)
+;;   4 = RvCall unresolvable (single-function fence — no image offset table,
+;;       or an out-of-range callee index)
+;;   5 = RvSub with an immediate (no subi encoding)
+;;   6 = RvMul with an immediate (no muli encoding)
+;;   7 = I-type immediate outside [-2048, 2048)
+;;   8 = RvLi value unencodable at this width (RV64 mid-range)
+;;   9 = RvCall jal offset out of J-type reach (+-1MiB)
+(fn rv_poison ((reason Int)) (List Int) (rv_word4 (* reason 65536)))
+
+;; --- instruction-format field packers ----------------------------------------
+;; Fields are non-overlapping, so + is bitwise-or; every field is in range by
+;; construction (regnums 0..31, funct3 0..7, funct7 0..0x7f, masked immediates).
+
+;; R-type: funct7[31:25] rs2[24:20] rs1[19:15] funct3[14:12] rd[11:7] op[6:0]
+(fn rv_r ((op Int) (f3 Int) (f7 Int) (rd Int) (rs1 Int) (rs2 Int)) (List Int)
+  (rv_word4
+    (+
+      op
+      (+
+        (* rd 128)
+        (+ (* f3 4096) (+ (* rs1 32768) (+ (* rs2 1048576) (* f7 33554432))))))))
+
+;; I-type: imm[31:20] rs1[19:15] funct3[14:12] rd[11:7] op[6:0]. imm is signed;
+;; (mod imm 4096) is the 12-bit two's-complement field (the CPU sign-extends).
+(fn rv_i ((op Int) (f3 Int) (rd Int) (rs1 Int) (imm Int)) (List Int)
+  (let ((im (mod imm 4096)))
+    (rv_word4
+      (+ op (+ (* rd 128) (+ (* f3 4096) (+ (* rs1 32768) (* im 1048576))))))))
+
+;; S-type: imm[11:5][31:25] rs2[24:20] rs1[19:15] funct3[14:12] imm[4:0][11:7]
+(fn rv_s ((op Int) (f3 Int) (rs1 Int) (rs2 Int) (imm Int)) (List Int)
+  (let ((im (mod imm 4096)))
+    (let ((lo (mod im 32)))
+      (let ((hi (ediv im 32)))
+        (rv_word4
+          (+
+            op
+            (+
+              (* lo 128)
+              (+
+                (* f3 4096)
+                (+ (* rs1 32768) (+ (* rs2 1048576) (* hi 33554432)))))))))))
+
+;; U-type (lui): imm[31:12][31:12] rd[11:7] op[6:0]
+(fn rv_u ((op Int) (rd Int) (imm20 Int)) (List Int)
+  (rv_word4 (+ op (+ (* rd 128) (* (mod imm20 1048576) 4096)))))
+
+;; B-type: imm[12]->31, imm[10:5]->30:25, rs2->24:20, rs1->19:15, f3->14:12,
+;; imm[4:1]->11:8, imm[11]->7, op->6:0. off is a signed even byte offset.
+(fn rv_b ((f3 Int) (rs1 Int) (rs2 Int) (off Int)) (List Int)
+  (let ((u (mod off 8192)))
+    (let ((b12 (mod (ediv u 4096) 2)))
+      (let ((b11 (mod (ediv u 2048) 2)))
+        (let ((b10_5 (mod (ediv u 32) 64)))
+          (let ((b4_1 (mod (ediv u 2) 16)))
+            (rv_word4
+              (+
+                99
+                (+
+                  (* b12 2147483648)
+                  (+
+                    (* b10_5 33554432)
+                    (+
+                      (* rs2 1048576)
+                      (+
+                        (* rs1 32768)
+                        (+ (* f3 4096) (+ (* b4_1 256) (* b11 128)))))))))))))))
+
+;; J-type (jal): imm[20]->31, imm[10:1]->30:21, imm[11]->20, imm[19:12]->19:12,
+;; rd->11:7, op->6:0. off is a signed even byte offset.
+(fn rv_j ((rd Int) (off Int)) (List Int)
+  (let ((u (mod off 2097152)))
+    (let ((j20 (mod (ediv u 1048576) 2)))
+      (let ((j10_1 (mod (ediv u 2) 1024)))
+        (let ((j11 (mod (ediv u 2048) 2)))
+          (let ((j19_12 (mod (ediv u 4096) 256)))
+            (rv_word4
+              (+
+                111
+                (+
+                  (* rd 128)
+                  (+
+                    (* j20 2147483648)
+                    (+ (* j10_1 2097152) (+ (* j11 1048576) (* j19_12 4096)))))))))))))
+
+;; --- register numbering -------------------------------------------------------
+
+;; datasheet x-number; x1/ra and x2/sp are absent (encoder-owned).
+(fn rv_regnum ((r RvReg)) Int
+  (match r
+    (X0 0)
+    (GP 3)
+    (TP 4)
+    (T0 5)
+    (T1 6)
+    (T2 7)
+    (S0 8)
+    (S1 9)
+    (A0 10)
+    (A1 11)
+    (A2 12)
+    (A3 13)
+    (A4 14)
+    (A5 15)
+    (A6 16)
+    (A7 17)
+    (S2 18)
+    (S3 19)
+    (S4 20)
+    (S5 21)
+    (S6 22)
+    (S7 23)
+    (S8 24)
+    (S9 25)
+    (S10 26)
+    (S11 27)
+    (T3 28)
+    (T4 29)
+    (T5 30)
+    (T6 31)))
+
+;; --- ALU: register source (R-type) --------------------------------------------
+
+(fn rv_enc_bin_rr ((o RvBop) (rd Int) (rs1 Int) (rs2 Int)) (List Int)
+  (match o
+    (RvAdd (rv_r 51 0 0 rd rs1 rs2))
+    (RvSub (rv_r 51 0 32 rd rs1 rs2))
+    (RvMul (rv_r 51 0 1 rd rs1 rs2))
+    (RvAnd (rv_r 51 7 0 rd rs1 rs2))
+    (RvOr (rv_r 51 6 0 rd rs1 rs2))
+    (RvXor (rv_r 51 4 0 rd rs1 rs2))
+    (RvSll (rv_r 51 1 0 rd rs1 rs2))
+    (RvSrl (rv_r 51 5 0 rd rs1 rs2))
+    (RvSra (rv_r 51 5 32 rd rs1 rs2))
+    (RvSlt (rv_r 51 2 0 rd rs1 rs2))
+    (RvSltu (rv_r 51 3 0 rd rs1 rs2))))
+
+;; --- ALU: immediate source (I-type / shift-imm / refuse) ----------------------
+
+;; addi/andi/ori/xori/slti/sltiu with the [-2048, 2048) domain fence.
+(fn rv_imm12 ((op Int) (f3 Int) (rd Int) (rs1 Int) (v Int)) (List Int)
+  (if (lt v -2048) (rv_poison 7)
+  (if (lt 2047 v) (rv_poison 7)
+  (rv_i op f3 rd rs1 v))))
+
+;; slli/srli/srai: shamt = (mod count bits) matches the model's masking; the
+;; srai flag is instruction bit 30 = imm12 bit 10 = 1024. shamt < 64 so it
+;; never collides with the flag.
+(fn rv_shift_imm ((w RvXlen) (f3 Int) (sra Int) (rd Int) (rs1 Int) (v Int))
+  (List Int)
+  (let ((shamt (mod v (rv_bits w)))) (rv_i 19 f3 rd rs1 (+ shamt (* sra 1024)))))
+
+(fn rv_enc_bin_ri ((w RvXlen) (o RvBop) (rd Int) (rs1 Int) (v Int)) (List Int)
+  (match o
+    (RvAdd (rv_imm12 19 0 rd rs1 v))
+    (RvAnd (rv_imm12 19 7 rd rs1 v))
+    (RvOr (rv_imm12 19 6 rd rs1 v))
+    (RvXor (rv_imm12 19 4 rd rs1 v))
+    (RvSlt (rv_imm12 19 2 rd rs1 v))
+    (RvSltu (rv_imm12 19 3 rd rs1 v))
+    (RvSll (rv_shift_imm w 1 0 rd rs1 v))
+    (RvSrl (rv_shift_imm w 5 0 rd rs1 v))
+    (RvSra (rv_shift_imm w 5 1 rd rs1 v))
+    (RvSub (rv_poison 5))
+    (RvMul (rv_poison 6))))
+
+(fn rv_enc_bin ((w RvXlen) (o RvBop) (d RvReg) (s1 RvReg) (s2 RvSrc)) (List Int)
+  (match s2
+    ((RvSReg r2) (rv_enc_bin_rr o (rv_regnum d) (rv_regnum s1) (rv_regnum r2)))
+    ((RvSImm v) (rv_enc_bin_ri w o (rv_regnum d) (rv_regnum s1) v))))
+
+;; --- RvLi: the constant materializer -----------------------------------------
+;;
+;; THE SIGN-EXTENSION DRAGON (docs/RISCV.md §5) at the materializer: on RV64
+;; `lui rd, hi` writes the SIGN-EXTENDED 32-bit (hi<<12), and `addi` then adds
+;; the sign-extended 12-bit immediate in FULL 64-bit arithmetic — so a carry
+;; out of bit 31 propagates into the high half, and values near 2^31 (e.g.
+;; 2^31-1, which needs hi = 2^19 = a NEGATIVE 20-bit field) are simply not
+;; reachable by two instructions. Rather than carry the ugly closed-form
+;; boundary, the encoder is SELF-CHECKING: it forms the standard carry-fixed
+;; (hi20, lo) split, SIMULATES what `lui hi20 ; addi lo` actually materializes
+;; at this width, and refuses (poison 8) unless that equals the target. Wider
+;; materializations (the addiw/slli builds) are named growth, not v1.
+
+;; sign-extend a 32-bit value to a signed integer (RV64 lui semantics).
+(fn rv_sx32 ((x Int)) Int (if (lt x 2147483648) x (- x 4294967296)))
+
+;; the value `lui rd, hi20 ; addi rd, rd, lo` materializes at width w.
+(fn rv_lui_addi_val ((w RvXlen) (hi20 Int) (lo Int)) Int
+  (let ((losig (if (lt lo 2048) lo (- lo 4096))))
+    (rv_wrap w (+ (rv_sx32 (* hi20 4096)) losig))))
+
+(fn rv_enc_li ((w RvXlen) (r RvReg) (v Int)) (List Int)
+  (let ((wrapped (mod v (rv_mod w))))
+    (let ((rd (rv_regnum r)))
+      (if (lt wrapped 2048) (rv_i 19 0 rd 0 wrapped)
+      (if (le (- (rv_mod w) 2048) wrapped)
+        (rv_i 19 0 rd 0 (- wrapped (rv_mod w)))
+        (let ((lo (mod wrapped 4096)))
+          (let ((carry (if (lt lo 2048) 0 1)))
+            (let
+              ((hi20
+                 (mod (+ (ediv (mod wrapped 4294967296) 4096) carry) 1048576)))
+              (if (int_eq (rv_lui_addi_val w hi20 lo) wrapped)
+                (eapp (rv_u 55 rd hi20) (rv_i 19 0 rd rd lo))
+                (rv_poison 8))))))))))
+
+;; --- straight-line (non-control) instructions ---------------------------------
+
+(fn rv_enc_simple ((w RvXlen) (i RvInstr)) (List Int)
+  (match i
+    ((RvLi r v) (rv_enc_li w r v))
+    ((RvMv d s) (rv_i 19 0 (rv_regnum d) (rv_regnum s) 0))
+    ((RvBin o d s1 s2) (rv_enc_bin w o d s1 s2))
+    ((RvLoad8 d a)
+     (match a
+       ((RvAReg b) (rv_i 3 4 (rv_regnum d) (rv_regnum b) 0))))
+    ((RvStore8 a r)
+     (match a
+       ((RvAReg b) (rv_s 35 0 (rv_regnum b) (rv_regnum r) 0))))
+    (RvEcall (rv_word4 115))
+    (other Nil)))
+
+;; --- the label stack and reach-checked branches -------------------------------
+
+;; a live enclosing construct: RvLB rem = a block whose end is `rem` bytes past
+;; the current instruction's start; RvLL el = a loop whose head is `el` bytes
+;; back.
+(type RvLbl (RvLB Int) (RvLL Int))
+
+(fn rvlbl_at ((env (List RvLbl)) (d Int)) (Option RvLbl)
+  (measure (struct env))
+  (match env
+    (Nil None)
+    ((Cons h t) (if (int_eq d 0) (Some h) (rvlbl_at t (- d 1))))))
+
+;; advance every live label by the bytes just emitted: blocks shrink toward
+;; their end, loops grow away from their head.
+(fn rvadv1 ((l RvLbl) (s Int)) RvLbl
+  (match l
+    ((RvLB r) (RvLB (- r s)))
+    ((RvLL e) (RvLL (+ e s)))))
+
+(fn rvadv ((env (List RvLbl)) (s Int)) (List RvLbl)
+  (measure (struct env))
+  (match env
+    (Nil Nil)
+    ((Cons h t) (Cons (rvadv1 h s) (rvadv t s)))))
+
+;; jal x0, off — J-type reach +-1MiB (imm is a 21-bit signed even offset,
+;; range [-2^20, 2^20 - 2]).
+(fn rv_jal_reach ((off Int)) (List Int)
+  (if (lt off -1048576) (rv_poison 2)
+  (if (lt 1048574 off) (rv_poison 2)
+  (rv_j 0 off))))
+
+(fn rv_enc_br ((d Int) (env (List RvLbl))) (List Int)
+  (match (rvlbl_at env d)
+    (None (rv_poison 1))
+    ((Some l)
+     (match l
+       ((RvLB rem) (rv_jal_reach rem))
+       ((RvLL el) (rv_jal_reach (- 0 el)))))))
+
+;; the SAME-polarity B-type branch, TAKEN exactly when the model condition
+;; holds (no polarity inversion). B-type reach +-4KiB (13-bit signed even
+;; offset, range [-2^12, 2^12 - 2]).
+(fn rv_branch ((c RvCond) (off Int)) (List Int)
+  (if (lt off -4096) (rv_poison 3)
+  (if (lt 4094 off) (rv_poison 3)
+  (match c
+    ((RvBeq a b) (rv_b 0 (rv_regnum a) (rv_regnum b) off))
+    ((RvBne a b) (rv_b 1 (rv_regnum a) (rv_regnum b) off))
+    ((RvBlt a b) (rv_b 4 (rv_regnum a) (rv_regnum b) off))
+    ((RvBge a b) (rv_b 5 (rv_regnum a) (rv_regnum b) off))
+    ((RvBltu a b) (rv_b 6 (rv_regnum a) (rv_regnum b) off))
+    ((RvBgeu a b) (rv_b 7 (rv_regnum a) (rv_regnum b) off))))))
+
+(fn rv_enc_brif ((c RvCond) (d Int) (env (List RvLbl))) (List Int)
+  (match (rvlbl_at env d)
+    (None (rv_poison 1))
+    ((Some l)
+     (match l
+       ((RvLB rem) (rv_branch c rem))
+       ((RvLL el) (rv_branch c (- 0 el)))))))
+
+;; --- the call lowering: jal ra + the private control-stack ra spill ----------
+;;
+;; RvCall k -> `jal ra, off` (J-type, rd = ra = 1) to function k's image
+;; offset, resolved through a per-index table. The offset is target - PC (the
+;; jal's OWN image offset, threaded as `pos`), no instruction-length fixup
+;; (RISC-V J-immediates are PC-relative to the branch's own address). A
+;; missing table entry (single-function encoding's Nil table, or an
+;; out-of-range callee index) is poison 4 — the x86 enc_func XCall->int3
+;; fence; an in-reach offset is the jal, an out-of-reach one is poison 9.
+
+(fn rv_off_at ((offs (List Int)) (k Int)) (Option Int)
+  (measure (struct offs))
+  (match offs
+    (Nil None)
+    ((Cons o t) (if (int_eq k 0) (Some o) (rv_off_at t (- k 1))))))
+
+;; jal ra, disp — J-type reach +-1MiB (the same 21-bit signed even field as
+;; rv_jal_reach, but rd = ra so the return address is written).
+(fn rv_jal_call ((disp Int)) (List Int)
+  (if (lt disp -1048576) (rv_poison 9)
+  (if (lt 1048574 disp) (rv_poison 9)
+  (rv_j 1 disp))))
+
+(fn rv_call ((k Int) (pos Int) (offs (List Int))) (List Int)
+  (match (rv_off_at offs k)
+    (None (rv_poison 4))
+    ((Some o) (rv_jal_call (- o pos)))))
+
+;; the ra spill store/load — the FIRST width-dependent encoding beyond
+;; shamt/li. ra (regnum 1) spilled to 8(sp) (sp = regnum 2, 16-byte aligned):
+;; rv64 sd/ld (funct3 3, 8 bytes), rv32 sw/lw (funct3 2, 4 bytes). Offset 8 is
+;; aligned for both (8-aligned within the 16-aligned frame).
+(fn rv_store_ra ((w RvXlen)) (List Int)
+  (match w
+    (RV32 (rv_s 35 2 2 1 8))
+    (RV64 (rv_s 35 3 2 1 8))))
+
+(fn rv_load_ra ((w RvXlen)) (List Int)
+  (match w
+    (RV32 (rv_i 3 2 1 2 8))
+    (RV64 (rv_i 3 3 1 2 8))))
+
+;; prologue: addi sp, sp, -16 ; s[wd] ra, 8(sp)  (two 4-byte units)
+(fn rv_prologue ((w RvXlen)) (List Int)
+  (eapp (rv_i 19 0 2 2 -16) (rv_store_ra w)))
+
+;; epilogue: l[wd] ra, 8(sp) ; addi sp, sp, +16 ; jalr x0, 0(ra)  (three units)
+(fn rv_epilogue ((w RvXlen)) (List Int)
+  (eapp (rv_load_ra w) (eapp (rv_i 19 0 2 2 16) (rv_i 103 0 0 1 0))))
+
+;; a function is NON-LEAF iff its body contains an RvCall at any depth — then
+;; it links through ra and must spill it (the psABI non-leaf rule).
+(fn rv_has_call_instr ((i RvInstr)) Bool
+  (measure (struct i))
+  (match i
+    ((RvBlock b) (rv_has_call_seq b))
+    ((RvLoop b) (rv_has_call_seq b))
+    ((RvCall k) True)
+    (other False)))
+
+(fn rv_has_call_seq ((is (List RvInstr))) Bool
+  (measure (struct is))
+  (match is
+    (Nil False)
+    ((Cons i t) (if (rv_has_call_instr i) True (rv_has_call_seq t)))))
+
+(fn rv_nonleaf ((f RvFunc)) Bool (rv_has_call_seq (rvbody_of f)))
+
+;; --- sizes (fixed per control instr; the flattening's foundation) -------------
+;;
+;; nl = the enclosing function is non-leaf, so an in-body RvRet expands to the
+;; full 3-unit epilogue (a bare ret would return through a clobbered ra); in a
+;; leaf function RvRet stays the single ret unit. Every other unit is 4 bytes
+;; regardless (jal, poison, li expansion), so the offset table stays one-pass.
+
+(fn rvsz_instr ((w RvXlen) (nl Bool) (i RvInstr)) Int
+  (measure (struct i))
+  (match i
+    ((RvBlock b) (rvsz_seq w nl b))
+    ((RvLoop b) (rvsz_seq w nl b))
+    ((RvBr d) 4)
+    ((RvBrIf c d) 4)
+    (RvRet (if nl 12 4))
+    ((RvCall k) 4)
+    (i2 (elen (rv_enc_simple w i2)))))
+
+(fn rvsz_seq ((w RvXlen) (nl Bool) (is (List RvInstr))) Int
+  (measure (struct is))
+  (match is
+    (Nil 0)
+    ((Cons i t) (+ (rvsz_instr w nl i) (rvsz_seq w nl t)))))
+
+;; the whole-function byte size in an image: a non-leaf carries the 8-byte
+;; prologue and the 12-byte epilogue; a leaf just its body and one ret unit.
+(fn rvsz_func ((w RvXlen) (f RvFunc)) Int
+  (if (rv_nonleaf f) (+ 8 (+ (rvsz_seq w True (rvbody_of f)) 12))
+  (+ (rvsz_seq w False (rvbody_of f)) 4)))
+
+;; --- the flattening emit ------------------------------------------------------
+;;
+;; Threads, alongside the label stack: `nl` (the function's non-leaf status,
+;; picking the RvRet expansion), `pos` (the ABSOLUTE image offset of the
+;; instruction being encoded — a block/loop emits no bytes so its body starts
+;; at the same pos), and `offs` (the per-index call table). This mirrors x86's
+;; enc_instr/enc_seq pos+offs threading; `nl` is the RISC-V-specific addition
+;; for the epilogue-expanded return.
+
+(fn rv_enc_instr
+  ((w RvXlen)
+   (nl Bool)
+   (i RvInstr)
+   (env (List RvLbl))
+   (pos Int)
+   (offs (List Int)))
+  (List Int)
+  (measure (struct i))
+  (match i
+    ((RvBlock b)
+     (rv_enc_seq w nl b (Cons (RvLB (rvsz_seq w nl b)) env) pos offs))
+    ((RvLoop b) (rv_enc_seq w nl b (Cons (RvLL 0) env) pos offs))
+    ((RvBr d) (rv_enc_br d env))
+    ((RvBrIf c d) (rv_enc_brif c d env))
+    (RvRet (if nl (rv_epilogue w) (rv_i 103 0 0 1 0)))
+    ((RvCall k) (rv_call k pos offs))
+    (i2 (rv_enc_simple w i2))))
+
+(fn rv_enc_seq
+  ((w RvXlen)
+   (nl Bool)
+   (is (List RvInstr))
+   (env (List RvLbl))
+   (pos Int)
+   (offs (List Int)))
+  (List Int)
+  (measure (struct is))
+  (match is
+    (Nil Nil)
+    ((Cons i t)
+     (eapp
+       (rv_enc_instr w nl i env pos offs)
+       (rv_enc_seq
+         w
+         nl
+         t
+         (rvadv env (rvsz_instr w nl i))
+         (+ pos (rvsz_instr w nl i))
+         offs)))))
+
+;; a function placed at image offset `fnbase`, resolving RvCall through `offs`.
+;; A NON-LEAF function gets the ra spill: prologue + body (flattened starting
+;; PAST the 8-byte prologue) + epilogue, with in-body RvRet epilogue-expanded.
+;; A LEAF encodes exactly as the single-function G2 output: no prologue, the
+;; body at fnbase, one trailing ret (the byte-stability gate).
+(fn rv_enc_fn_at ((w RvXlen) (f RvFunc) (fnbase Int) (offs (List Int)))
+  (List Int)
+  (if (rv_nonleaf f)
+    (eapp
+      (rv_prologue w)
+      (eapp
+        (rv_enc_seq w True (rvbody_of f) Nil (+ fnbase 8) offs)
+        (rv_epilogue w)))
+    (eapp (rv_enc_seq w False (rvbody_of f) Nil fnbase offs) (rv_i 103 0 0 1 0))))
+
+;; a single-function module's bytes at its declared width (function 0). No
+;; offset table (Nil), so an RvCall is the poison-4 fence and ra stays
+;; unwritten — a plain trailing ret is correct (the x86 enc_func split).
+(fn rv_enc_func ((w RvXlen) (f RvFunc)) (List Int)
+  (eapp (rv_enc_seq w False (rvbody_of f) Nil 0 Nil) (rv_i 103 0 0 1 0)))
+
+(fn rv_enc_module ((m RvModule)) (List Int)
+  (match (rvfunc_at (rvfuncs_of m) 0)
+    (None Nil)
+    ((Some f) (rv_enc_func (rvxlen_of m) f))))
+
+;; --- the multi-function image (docs/RISCV.md §3.3; the x86 enc_image split) ---
+;;
+;; The ENTRY function (any index) is laid FIRST — the harness calls the blob's
+;; start — and every other function follows in INDEX order. Function indices
+;; are model truth and never move; only the byte layout is entry-first. RvCall
+;; resolves through the shared per-index offset table; every jal is
+;; PC-relative, so the blob runs correctly wherever it is mapped.
+
+;; per-index offsets, entry-first: the entry at 0, others in index order after
+;; it (acc = the next free offset, seeded with the entry's size).
+(fn rv_img_offs ((w RvXlen) (fs (List RvFunc)) (i Int) (entry Int) (acc Int))
+  (List Int)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons f t)
+     (if (int_eq i entry) (Cons 0 (rv_img_offs w t (+ i 1) entry acc))
+     (Cons acc (rv_img_offs w t (+ i 1) entry (+ acc (rvsz_func w f))))))))
+
+;; the non-entry functions, index order, each at its table offset
+(fn rv_img_emit
+  ((w RvXlen)
+   (fs (List RvFunc))
+   (myoffs (List Int))
+   (i Int)
+   (entry Int)
+   (offs (List Int)))
+  (List Int)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons f t)
+     (match myoffs
+       (Nil Nil)
+       ((Cons o ot)
+        (if (int_eq i entry) (rv_img_emit w t ot (+ i 1) entry offs)
+        (eapp (rv_enc_fn_at w f o offs) (rv_img_emit w t ot (+ i 1) entry offs))))))))
+
+;; the image: entry function's bytes first, the rest in index order; every
+;; RvCall resolves through the shared per-index table. An out-of-range entry
+;; yields the empty image (loud at the differ).
+(fn rv_enc_image ((m RvModule) (entry Int)) (List Int)
+  (let ((w (rvxlen_of m)))
+    (let ((fs (rvfuncs_of m)))
+      (match (rvfunc_at fs entry)
+        (None Nil)
+        ((Some ef)
+         (let ((offs (rv_img_offs w fs 0 entry (rvsz_func w ef))))
+           (eapp
+             (rv_enc_fn_at w ef 0 offs)
+             (rv_img_emit w fs offs 0 entry offs))))))))

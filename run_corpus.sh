@@ -216,6 +216,12 @@ TARGETS=(
   examples/arglen_x86_out.shard
   examples/echoarg_src.shard
   examples/echoarg_x86_out.shard
+  models/riscv/riscv.shard
+  examples/riscv_smoke.shard
+  models/riscv/encode.shard
+  examples/riscv_diff_run.shard
+  models/riscv/loopkit.shard
+  examples/riscv_pieces.shard
   examples/upcase_src.shard
   examples/upcase_x86_out.shard
   examples/parse_src.shard
@@ -940,6 +946,20 @@ if command -v cc >/dev/null && [ -x bin/shard_eval ]; then
   bash examples/x86_diff.sh 2>&1 | tail -1
 else
   echo "SKIPPED (needs cc + bin/shard_eval)"
+fi
+
+# RISC-V engine differential (the RISC-V arc's G2): encode each RvFunc to real
+# RV32I/RV64I bytes, map them executable, and CALL them under qemu-user at BOTH
+# widths — comparing the emulated core's result + memory (and the trap leg:
+# model None == core fault) against the model. The "core conforms to the
+# model" trust leaf; qemu-user plays V8's role (there is no native silicon leg
+# on this box). Summary line only; disagreements change it and fail the diff.
+# riscv_diff.sh self-guards (SKIP exit 0) when clang/qemu-user/rust-lld absent.
+echo "=== riscv: engine differential ==="
+if command -v clang >/dev/null && command -v qemu-riscv64 >/dev/null && [ -x bin/shard_eval ]; then
+  bash examples/riscv_diff.sh 2>&1 | tail -1
+else
+  echo "SKIPPED (needs clang + qemu-user + bin/shard_eval)"
 fi
 
 echo "=== guard: absolute path ==="

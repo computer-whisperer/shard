@@ -1,0 +1,860 @@
+;;; examples/riscv_pieces.shard — G3 hand pieces for the RISC-V model
+;;; (docs/RISCV.md §8): the first symbolic conformance certificates stated
+;;; against models/riscv/riscv.shard, the third target speaking the cert
+;;; forms of examples/wasm_pieces.shard and examples/x86_pieces.shard —
+;;; the transplant play, third iteration.
+;;;
+;;;   1. rvadd_thm32/rvadd_thm64 / rvaddmul_thm — straight-line register
+;;;      pieces at BOTH widths: the standard cert form (S-tower fuel with
+;;;      quantified slack, minimal-prefix module pinning via restfs,
+;;;      machine spelling = spec spelling) closes by pure compute; the
+;;;      width parameter collapses to ground-modulus residues. The
+;;;      three-operand shape retires x86's mov dance: the sum lands in t0
+;;;      WITHOUT clobbering a0.
+;;;   2. rvput_thm — a straight-line memory piece: byte store through the
+;;;      operand datatype, bounds premises discharged by the staged
+;;;      compute/rewrite interleave (the wasm mem-piece idiom, unchanged).
+;;;   3. rvlgw_fill32/64 + rvfill_thm32/64 — the loop piece at BOTH
+;;;      widths, citing models/riscv/loopkit.shard. The 32/64 pairs are
+;;;      textually identical up to modulus literals and _32/_64 lemma
+;;;      names — the §8-contract genericity measurement. Two riscv-isms
+;;;      surface: the guard is the FUSED beq-against-x0 (no synthesized
+;;;      cmp), and the counter decrement is addi -1 (no sub-imm exists),
+;;;      collapsed by the kit's rvlg_dec twins. The piece returns the
+;;;      ADVANCED POINTER (a0 is both first argument and result home).
+;;;   4. rvsq_cert + rvsumsq_thm — the call arc: a regs-general
+;;;      clobber-set callee cert (29 quantified fields) welded into a
+;;;      two-call consumer through rvcall_bridge, never computing into
+;;;      the callee's body; a live value parked in s1 rides the cert's
+;;;      passthrough. Stated at RV32 — the call machinery's width
+;;;      transplant check.
+
+(import "../kernel/stdlib.shard")
+(import "../std/nat.shard")
+(import "../models/riscv/riscv.shard")
+(import "../models/riscv/loopkit.shard")
+(use (:: models riscv riscv *))
+(use (:: models riscv loopkit *))
+(use (:: std mem *))
+(use (:: std nat *))
+
+;; ground smoke: 2 + 3 through the a-register entry at ground fuel
+(claim rvground_add
+  (goal () ()
+    (=
+      (rvcall_fn
+        (rvfnat 10)
+        (MkRvModule
+          (Cons (MkRvFunc 2 (list (RvBin RvAdd A0 A0 (RvSReg A1)))) Nil)
+          RV32
+          0
+          0)
+        0
+        (list 2 3))
+      (Some 5)))
+  (steps ((compute both)) refl))
+
+;; --- straight-line register pieces ---------------------------------------------
+
+;; f(a,b) = a + b (wrapped), both widths: machine result spelling IS the
+;; spec spelling, and the width is one ctor in the module literal.
+(claim rvadd_thm32
+  (goal ((a Int) (b Int) (c Nat) (restfs (List RvFunc)) (mem Mem)) ()
+    (=
+      (rvcall_fn_mem
+        (S^ 6 c)
+        (MkRvModule
+          (Cons (MkRvFunc 2 (list (RvBin RvAdd A0 A0 (RvSReg A1)))) restfs)
+          RV32
+          0
+          0)
+        0
+        (list a b)
+        mem)
+      (Some (Pair (rv_wrap RV32 (+ a b)) mem))))
+  (steps ((compute both)) refl))
+
+(claim rvadd_thm64
+  (goal ((a Int) (b Int) (c Nat) (restfs (List RvFunc)) (mem Mem)) ()
+    (=
+      (rvcall_fn_mem
+        (S^ 6 c)
+        (MkRvModule
+          (Cons (MkRvFunc 2 (list (RvBin RvAdd A0 A0 (RvSReg A1)))) restfs)
+          RV64
+          0
+          0)
+        0
+        (list a b)
+        mem)
+      (Some (Pair (rv_wrap RV64 (+ a b)) mem))))
+  (steps ((compute both)) refl))
+
+;; f(a,b) = (a + b) * a: THREE-OPERAND — the sum lands in t0 without
+;; clobbering a0, so the multiplier still reads the original argument
+;; (x86 needed a mov to save it). Nested wraps ride the residue exactly.
+(claim rvaddmul_thm
+  (goal ((a Int) (b Int) (c Nat) (restfs (List RvFunc)) (mem Mem)) ()
+    (=
+      (rvcall_fn_mem
+        (S^ 6 c)
+        (MkRvModule
+          (Cons
+            (MkRvFunc
+              2
+              (list
+                (RvBin RvAdd T0 A0 (RvSReg A1))
+                (RvBin RvMul A0 T0 (RvSReg A0))))
+            restfs)
+          RV64
+          0
+          0)
+        0
+        (list a b)
+        mem)
+      (Some (Pair (rv_wrap RV64 (* (rv_wrap RV64 (+ a b)) a)) mem))))
+  (steps ((compute both)) refl))
+
+;; --- a straight-line memory piece ----------------------------------------------
+
+;; f(p,v) = store byte v at [p], return v: the bounds guards stick on the
+;; symbolic address and the premises rewrite them open — the wasm staged
+;; discharge, verbatim. (No wrap appears: register-indirect addressing
+;; does no arithmetic, so the piece is width-blind.)
+(claim rvput_thm
+  (goal ((p Int) (v Int) (c Nat) (restfs (List RvFunc)) (mem Mem))
+    ((= (le 0 p) True) (= (le (+ p 1) 65536) True))
+    (=
+      (rvcall_fn_mem
+        (S^ 6 c)
+        (MkRvModule
+          (Cons
+            (MkRvFunc 2 (list (RvStore8 (RvAReg A0) A1) (RvMv A0 A1)))
+            restfs)
+          RV64
+          0
+          65536)
+        0
+        (list p v)
+        mem)
+      (Some (Pair v (mem_set mem p v)))))
+  (chain
+    (steps
+      ((compute lhs (stop mem_set))
+       (rewrite (premise 0) lr lhs true ())
+       (compute lhs (stop mem_set))
+       (rewrite (premise 1) lr lhs true ())
+       (compute both (stop mem_set))))
+    refl))
+
+;; --- stage 2: the loop piece (fill), both widths -------------------------------
+;; The counter-as-local template transplanted to the three-operand
+;; machine: pointer in a0, value in a1, counter in a2 (ENC = int_of_nat,
+;; opened by the std/nat defining lemmas). The kit is
+;; models/riscv/loopkit.shard — cited, not copied. Two riscv spellings:
+;; the guard is (RvBeq A2 X0) — the fused datasheet beqz — and the
+;; decrement is addi -1, whose wrapped-immediate residue the kit's
+;; rvlg_dec twins collapse.
+
+;; the spec (lp_fill's exact shape)
+(fn rvp_fill ((m Mem) (p Int) (v Int) (k Nat)) Mem
+  (measure (struct k))
+  (match k
+    (Z m)
+    ((S k2) (rvp_fill (mem_set m p v) (+ p 1) v k2))))
+
+;; the machine loop body: 5 instructions
+(fn rvp_fill_body () (List RvInstr)
+  (list
+    (RvBrIf (RvBeq A2 X0) 1)
+    (RvStore8 (RvAReg A0) A1)
+    (RvBin RvAdd A0 A0 (RvSImm 1))
+    (RvBin RvAdd A2 A2 (RvSImm -1))
+    (RvBr 0)))
+
+;; the RV32 loop worker: induction on k against the folded rveval_loop
+;; term. Register state rides as a concrete record literal (a0 the
+;; advancing pointer, a1 the value, a2 the counter; the other 26 fields
+;; stay 0). The IH re-enters at EXACTLY one lower S (the depth-bound
+;; law): (S^ 9 (rvlg_fuel (S k2) c)) respells as one S around
+;; (S^ 9 (rvlg_fuel k2 c)).
+(claim rvlgw_fill32
+  (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List RvFunc)))
+    ((= (le 0 x0) True) (= (le (+ x0 (int_of_nat k)) 65536) True))
+    (=
+      (rveval_loop
+        (S^ 9 (rvlg_fuel k c))
+        (MkRvModule
+          (Cons
+            (MkRvFunc 3 (list (RvBlock (list (RvLoop (inline rvp_fill_body))))))
+            restfs)
+          RV32
+          0
+          65536)
+        (inline rvp_fill_body)
+        (MkRvRegs
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          x0
+          x1
+          (int_of_nat k)
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0)
+        m0)
+      (Some
+        (RvBrk
+          0
+          (MkRvRegs
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            (rvlg_adv x0 k)
+            x1
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0)
+          (rvp_fill m0 x0 x1 k)))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((unfold rvlg_fuel lhs)
+            (reduce lhs)
+            (unfold rveval_loop lhs)
+            (rewrite (lemma int_of_nat_succ) lr lhs true ())
+            (compute lhs (stop rveval_loop rvlg_fuel))))
+         (rewrite-with
+           (lemma rvlg_ne)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps
+           ((compute lhs (stop rveval_loop rvlg_fuel))
+            (rewrite (premise 0) lr lhs true ())
+            (compute lhs (stop rveval_loop rvlg_fuel))))
+         (rewrite-with
+           (lemma rvlg_a1_ms)
+           lr
+           lhs
+           ((inst c k2))
+           ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+            (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps ((compute lhs (stop rveval_loop rvlg_fuel))))
+         (have hdec
+           (=
+             (mod (+ (+ 1 (int_of_nat k2)) 4294967295) 4294967296)
+             (int_of_nat k2))
+           (rewrite-with
+             (lemma rvlg_dec32)
+             lr
+             lhs
+             ()
+             ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)
+              (rewrite-with
+                (lemma rvlg_kM32)
+                lr
+                lhs
+                ((inst a x0) (inst w 65536) (inst l 0))
+                ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                 (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+                 (steps ((rewrite (premise 0) lr lhs true ())) refl)
+                 (steps ((compute both)) refl)
+                 (steps ((compute both)) refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hdec) lr lhs true ())))
+         (have hw0 (= (mod (+ x0 1) 4294967296) (+ x0 1))
+           (rewrite-with
+             (lemma rv_wrap32_id)
+             lr
+             lhs
+             ((inst x (+ x0 1)))
+             ((rewrite-with
+                (lemma rvlg_lo0)
+                lr
+                lhs
+                ((inst l 0))
+                ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                 (steps ((compute both)) refl))
+                refl)
+              (rewrite-with
+                (lemma rvlg_m32)
+                lr
+                lhs
+                ((inst w 65536))
+                ((rewrite-with
+                   (lemma rvlg_a1_ms)
+                   lr
+                   lhs
+                   ((inst c k2))
+                   ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                    (steps
+                      ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                      refl)
+                    (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+                   refl)
+                 (steps ((compute both)) refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hw0) lr lhs true ())))
+         (steps ((unfold rvp_fill rhs) (unfold rvlg_adv rhs) (reduce rhs)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma rvlg_lo0)
+              lr
+              lhs
+              ((inst l 0))
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+               (steps ((compute both)) refl))
+              refl)
+            (rewrite-with
+              (lemma rvlg_shift)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              refl)))
+         (steps ((compute both)))
+         refl)))))
+
+;; the RV32 piece theorem: entry spine (outer seq / RvBlock / inner seq /
+;; RvLoop = +4 over the worker), then the worker by citation. The result
+;; is the ADVANCED POINTER — a0 is both the pointer argument's home and
+;; the result home, so the machine hands back rvlg_adv for free.
+(claim rvfill_thm32
+  (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List RvFunc)))
+    ((= (le 0 x0) True) (= (le (+ x0 (int_of_nat k)) 65536) True))
+    (=
+      (rvcall_fn_mem
+        (S^ 13 (rvlg_fuel k c))
+        (MkRvModule
+          (Cons
+            (MkRvFunc 3 (list (RvBlock (list (RvLoop (inline rvp_fill_body))))))
+            restfs)
+          RV32
+          0
+          65536)
+        0
+        (list x0 x1 (int_of_nat k))
+        m0)
+      (Some (Pair (rvlg_adv x0 k) (rvp_fill m0 x0 x1 k)))))
+  (chain
+    (steps ((compute lhs (stop rveval_loop rvlg_fuel))))
+    (rewrite-with
+      (lemma rvlgw_fill32)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute both)))
+    refl))
+
+;; the RV64 worker: textually the RV32 worker up to modulus literals and
+;; _64 lemma names — the genericity measurement, passed or failed right
+;; here.
+(claim rvlgw_fill64
+  (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List RvFunc)))
+    ((= (le 0 x0) True) (= (le (+ x0 (int_of_nat k)) 65536) True))
+    (=
+      (rveval_loop
+        (S^ 9 (rvlg_fuel k c))
+        (MkRvModule
+          (Cons
+            (MkRvFunc 3 (list (RvBlock (list (RvLoop (inline rvp_fill_body))))))
+            restfs)
+          RV64
+          0
+          65536)
+        (inline rvp_fill_body)
+        (MkRvRegs
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          x0
+          x1
+          (int_of_nat k)
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0
+          0)
+        m0)
+      (Some
+        (RvBrk
+          0
+          (MkRvRegs
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            (rvlg_adv x0 k)
+            x1
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0)
+          (rvp_fill m0 x0 x1 k)))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((unfold rvlg_fuel lhs)
+            (reduce lhs)
+            (unfold rveval_loop lhs)
+            (rewrite (lemma int_of_nat_succ) lr lhs true ())
+            (compute lhs (stop rveval_loop rvlg_fuel))))
+         (rewrite-with
+           (lemma rvlg_ne)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps
+           ((compute lhs (stop rveval_loop rvlg_fuel))
+            (rewrite (premise 0) lr lhs true ())
+            (compute lhs (stop rveval_loop rvlg_fuel))))
+         (rewrite-with
+           (lemma rvlg_a1_ms)
+           lr
+           lhs
+           ((inst c k2))
+           ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+            (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps ((compute lhs (stop rveval_loop rvlg_fuel))))
+         (have hdec
+           (=
+             (mod
+               (+ (+ 1 (int_of_nat k2)) 18446744073709551615)
+               18446744073709551616)
+             (int_of_nat k2))
+           (rewrite-with
+             (lemma rvlg_dec64)
+             lr
+             lhs
+             ()
+             ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)
+              (rewrite-with
+                (lemma rvlg_kM64)
+                lr
+                lhs
+                ((inst a x0) (inst w 65536) (inst l 0))
+                ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                 (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+                 (steps ((rewrite (premise 0) lr lhs true ())) refl)
+                 (steps ((compute both)) refl)
+                 (steps ((compute both)) refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hdec) lr lhs true ())))
+         (have hw0 (= (mod (+ x0 1) 18446744073709551616) (+ x0 1))
+           (rewrite-with
+             (lemma rv_wrap64_id)
+             lr
+             lhs
+             ((inst x (+ x0 1)))
+             ((rewrite-with
+                (lemma rvlg_lo0)
+                lr
+                lhs
+                ((inst l 0))
+                ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                 (steps ((compute both)) refl))
+                refl)
+              (rewrite-with
+                (lemma rvlg_m64)
+                lr
+                lhs
+                ((inst w 65536))
+                ((rewrite-with
+                   (lemma rvlg_a1_ms)
+                   lr
+                   lhs
+                   ((inst c k2))
+                   ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                    (steps
+                      ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                      refl)
+                    (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+                   refl)
+                 (steps ((compute both)) refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hw0) lr lhs true ())))
+         (steps ((unfold rvp_fill rhs) (unfold rvlg_adv rhs) (reduce rhs)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma rvlg_lo0)
+              lr
+              lhs
+              ((inst l 0))
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+               (steps ((compute both)) refl))
+              refl)
+            (rewrite-with
+              (lemma rvlg_shift)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              refl)))
+         (steps ((compute both)))
+         refl)))))
+
+(claim rvfill_thm64
+  (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List RvFunc)))
+    ((= (le 0 x0) True) (= (le (+ x0 (int_of_nat k)) 65536) True))
+    (=
+      (rvcall_fn_mem
+        (S^ 13 (rvlg_fuel k c))
+        (MkRvModule
+          (Cons
+            (MkRvFunc 3 (list (RvBlock (list (RvLoop (inline rvp_fill_body))))))
+            restfs)
+          RV64
+          0
+          65536)
+        0
+        (list x0 x1 (int_of_nat k))
+        m0)
+      (Some (Pair (rvlg_adv x0 k) (rvp_fill m0 x0 x1 k)))))
+  (chain
+    (steps ((compute lhs (stop rveval_loop rvlg_fuel))))
+    (rewrite-with
+      (lemma rvlgw_fill64)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute both)))
+    refl))
+
+;; --- stage 3: call composition — the keystone in action ------------------------
+;; A callee's REGS-GENERAL cert (every register field quantified, so the
+;; result record literal reads off as the CLOBBER SET) welded into a
+;; two-call consumer through rvcall_bridge. The consumer parks sq(a) in
+;; s1 ACROSS the second call — justified purely by s1 passing through the
+;; callee cert verbatim. The callee's body is never computed into.
+;; Stated at RV32.
+
+;; the callee: f(a) = a*a (wrapped) — ONE instruction, three-operand
+(fn rvp_sq_func () RvFunc (MkRvFunc 1 (list (RvBin RvMul A0 A0 (RvSReg A0)))))
+
+;; the clobber-set cert: a0 changes (the result); the other twenty-eight
+;; fields pass through verbatim. Pure compute — matches reduce on the
+;; MkRvRegs literal even with every field symbolic.
+(claim rvsq_cert
+  (goal
+    ((c Nat)
+     (restfs (List RvFunc))
+     (mlo Int)
+     (mhi Int)
+     (mem Mem)
+     (gp Int)
+     (tp Int)
+     (t0 Int)
+     (t1 Int)
+     (t2 Int)
+     (s0 Int)
+     (s1 Int)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (s2 Int)
+     (s3 Int)
+     (s4 Int)
+     (s5 Int)
+     (s6 Int)
+     (s7 Int)
+     (s8 Int)
+     (s9 Int)
+     (s10 Int)
+     (s11 Int)
+     (t3 Int)
+     (t4 Int)
+     (t5 Int)
+     (t6 Int))
+    ()
+    (=
+      (rvrun_regs
+        (S (S c))
+        (MkRvModule (Cons (inline rvp_sq_func) restfs) RV32 mlo mhi)
+        0
+        (MkRvRegs gp tp t0 t1 t2 s0 s1 a0 a1 a2 a3 a4 a5 a6 a7 s2 s3 s4 s5 s6 s7
+          s8 s9 s10 s11 t3 t4 t5 t6)
+        mem)
+      (Some
+        (Pair
+          (MkRvRegs
+            gp
+            tp
+            t0
+            t1
+            t2
+            s0
+            s1
+            (rv_wrap RV32 (* a0 a0))
+            a1
+            a2
+            a3
+            a4
+            a5
+            a6
+            a7
+            s2
+            s3
+            s4
+            s5
+            s6
+            s7
+            s8
+            s9
+            s10
+            s11
+            t3
+            t4
+            t5
+            t6)
+          mem))))
+  (steps ((compute both)) refl))
+
+;; the consumer: f(a) = sq(a+1) + sq(a) (all wrapped). a is parked in t0
+;; before the first call (the callee's result home IS the argument home);
+;; sq(a) parks in s1 across the second call; the a+1 bump is one
+;; three-operand addi off t0.
+(fn rvc_sumsq_func () RvFunc
+  (MkRvFunc
+    1
+    (list
+      (RvMv T0 A0)
+      (RvCall 0)
+      (RvMv S1 A0)
+      (RvBin RvAdd A0 T0 (RvSImm 1))
+      (RvCall 0)
+      (RvBin RvAdd A0 A0 (RvSReg S1)))))
+
+;; the composed theorem: each call site is a stopped fold rewritten by
+;; rvcall_bridge, its run premise discharged by rvsq_cert at the concrete
+;; site registers (the machine spelling of the result is the honest
+;; postorder wrap nesting, as everywhere in this file).
+(claim rvsumsq_thm
+  (goal ((a Int) (m0 Mem) (c Nat) (restfs (List RvFunc))) ()
+    (=
+      (rvcall_fn_mem
+        (S^ 10 c)
+        (MkRvModule
+          (Cons (inline rvp_sq_func) (Cons (inline rvc_sumsq_func) restfs))
+          RV32
+          0
+          0)
+        1
+        (list a)
+        m0)
+      (Some
+        (Pair
+          (rv_wrap
+            RV32
+            (+
+              (rv_wrap RV32 (* (rv_wrap RV32 (+ a 1)) (rv_wrap RV32 (+ a 1))))
+              (rv_wrap RV32 (* a a))))
+          m0))))
+  (chain
+    (steps ((compute lhs (stop rveval_call))))
+    (rewrite-with
+      (lemma rvcall_bridge)
+      lr
+      lhs
+      ((inst f (inline rvp_sq_func))
+       (inst
+         rs2
+         (MkRvRegs
+           0
+           0
+           a
+           0
+           0
+           0
+           0
+           (rv_wrap RV32 (* a a))
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0))
+       (inst mem2 m0))
+      ((steps ((compute both)) refl)
+       (chain
+         (rewrite-with (lemma rvsq_cert) lr lhs () ())
+         (steps ((compute both)))
+         refl)))
+    (steps ((compute lhs (stop rveval_call))))
+    (rewrite-with
+      (lemma rvcall_bridge)
+      lr
+      lhs
+      ((inst f (inline rvp_sq_func))
+       (inst
+         rs2
+         (MkRvRegs
+           0
+           0
+           a
+           0
+           0
+           0
+           (rv_wrap RV32 (* a a))
+           (rv_wrap RV32 (* (rv_wrap RV32 (+ a 1)) (rv_wrap RV32 (+ a 1))))
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0))
+       (inst mem2 m0))
+      ((steps ((compute both)) refl)
+       (chain
+         (rewrite-with (lemma rvsq_cert) lr lhs () ())
+         (steps ((compute both)))
+         refl)))
+    (steps ((compute both)))
+    refl))
