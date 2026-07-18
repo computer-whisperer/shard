@@ -6,7 +6,10 @@
 ;;; read-accumulate twin (lp_sum) cover the class's two memory
 ;;; directions at the portable {U32 pointer/counter, U8 byte} kinds;
 ;;; the doubling twin (lq_dbl) is the U64 tier's loop member — its
-;;; while guard is a bare U64 local, the i64.eqz consumer.
+;;; while guard is a bare U64 local, the i64.eqz consumer.  The
+;;; il_br* members (the IF tier's pure-loop rung) put a fork in the
+;;; loop body: equal-depth arms generate FULL on both targets;
+;;; il_bru pins the unequal-depth fence.
 ;;;
 ;;; THE V2 WIDTH STORY, LOOP TIER: the machine wraps every op to its
 ;;; kind, the specs are exact (lp_fill/lp_sum) or band-spelled
@@ -107,6 +110,100 @@
   (match k
     (Z a)
     ((S k2) (lq_dbl (mod (+ a a) 18446744073709551616) k2))))
+
+;; --- the branchy members (the IF tier's pure-loop rung) --------------------------
+;; Symbolic-count loops with a fork in the body: the worker walks the
+;; body as a guard TREE (fork case-ons with both arms live, per-leaf
+;; post-states), sound at the exact premise tower only for depth-EQUAL
+;; arms -- il_bru pins the unequal-depth fence.
+
+;; (d v n): while n != 0 { if (v < 128) d += 1 else d += 2; n -= 1 }
+;; -> d.  The minimal branchy member: scalar equal-depth single-ISet
+;; arms, ILoc result.
+(fn il_brc_body () (List IStmt)
+  (list
+    (IIf
+      (IBin U32 ILt (ILoc 1) (IConst 128))
+      (list (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 1))))
+      (list (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 2)))))
+    (ISet 2 (IBin U32 ISub (ILoc 2) (IConst 1)))))
+
+(fn il_brc_fn () IFn
+  (MkIFn
+    (list U32 U32 U32)
+    Nil
+    (list (IWhile (ILoc 2) (il_brc_body)))
+    (ILoc 0)
+    U32))
+
+;; (d v n): while n != 0 { if (d < 1000) mem[d] := v else d += 1;
+;; n -= 1 }.  A store inside one arm: the leaf under the fork carries
+;; the arm's own address guards (case-ons INSIDE the fork's True arm)
+;; and a mem_set post-state; the else leaf keeps the entry memory.
+(fn il_brs_body () (List IStmt)
+  (list
+    (IIf
+      (IBin U32 ILt (ILoc 0) (IConst 1000))
+      (list (IStore (ILoc 0) (ILoc 1)))
+      (list (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 1)))))
+    (ISet 2 (IBin U32 ISub (ILoc 2) (IConst 1)))))
+
+(fn il_brs_fn () IFn
+  (MkIFn
+    (list U32 U8 U32)
+    Nil
+    (list (IWhile (ILoc 2) (il_brs_body)))
+    (IConst 0)
+    U32))
+
+;; (d v n): while n != 0 { if (v < 64) { if (v < 32) d += 1 else
+;; d += 2 } else { d += 3; d += 5; d += 7 }; n -= 1 } -> d.  A nested
+;; fork balanced against a flat arm: gdepth(then) = gdepth(else) = 4,
+;; three leaves, hyp depths differ per path.
+(fn il_brn_body () (List IStmt)
+  (list
+    (IIf
+      (IBin U32 ILt (ILoc 1) (IConst 64))
+      (list
+        (IIf
+          (IBin U32 ILt (ILoc 1) (IConst 32))
+          (list (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 1))))
+          (list (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 2))))))
+      (list
+        (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 3)))
+        (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 5)))
+        (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 7)))))
+    (ISet 2 (IBin U32 ISub (ILoc 2) (IConst 1)))))
+
+(fn il_brn_fn () IFn
+  (MkIFn
+    (list U32 U32 U32)
+    Nil
+    (list (IWhile (ILoc 2) (il_brn_body)))
+    (ILoc 0)
+    U32))
+
+;; (d v n): unequal arm depths (then 1 statement, else 2) -- the named
+;; fence: the cheap path would complete under the exact base-case
+;; tower, so this shape waits for the count-tied worker (named
+;; growth).  Note-and-tie only.
+(fn il_bru_body () (List IStmt)
+  (list
+    (IIf
+      (IBin U32 ILt (ILoc 1) (IConst 128))
+      (list (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 1))))
+      (list
+        (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 1)))
+        (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 2)))))
+    (ISet 2 (IBin U32 ISub (ILoc 2) (IConst 1)))))
+
+(fn il_bru_fn () IFn
+  (MkIFn
+    (list U32 U32 U32)
+    Nil
+    (list (IWhile (ILoc 2) (il_bru_body)))
+    (IConst 0)
+    U32))
 
 ;; --- the range lemmas ------------------------------------------------------------
 

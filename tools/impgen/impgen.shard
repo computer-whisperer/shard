@@ -432,6 +432,42 @@
        1)))
     (_ 1)))
 
+;; the EXACT istmts depth need (the pure loop tier's premise fuel):
+;; istmts F (Cons s t) runs s AND t at F-1; an IIf runs its arm at one
+;; less again. gdepth == gcost - 1 on flat bodies (the landed flat
+;; calibration); on branchy bodies gcost's IIf row overshoots by one,
+;; and the Z-case absurd needs the death depth EXACT in both
+;; directions -- sufficiency for the step transport, necessity for the
+;; base-case fuel death.
+(fn gdepth ((ss (List IStmt))) Int
+  (measure (struct ss))
+  (match ss
+    (Nil 1)
+    ((Cons s t)
+     (match s
+       ((ISet _ _) (+ 1 (imax 1 (gdepth t))))
+       ((IStore _ _) (+ 1 (imax 1 (gdepth t))))
+       ((IIf _ tb eb)
+        (+ 1 (imax (+ 1 (imax (gdepth tb) (gdepth eb))) (gdepth t))))
+       ((IWhile _ _) (+ 1 (imax 1 (gdepth t))))))))
+
+;; every fork depth-balanced (recursively): with equal arm depths the
+;; base-case death point is path-uniform, so ONE premise fuel serves
+;; every path. Unequal arms would let the cheap path complete under
+;; the exact tower and break the Z absurd -- that shape needs a
+;; count-tied worker (named growth).
+(fn gdeq ((ss (List IStmt))) Bool
+  (measure (struct ss))
+  (match ss
+    (Nil True)
+    ((Cons s t)
+     (match s
+       ((IIf _ tb eb)
+        (if (int_eq (gdepth tb) (gdepth eb))
+          (if (gdeq tb) (if (gdeq eb) (gdeq t) False) False)
+          False))
+       (_ (gdeq t))))))
+
 ;; --- the symbolic walk: events in evaluation order -------------------------------
 ;; The bridge's premise discipline: walk the pin's statements and result
 ;; with a SYMBOLIC local state (params = x0…, extras = 0), emitting one
@@ -506,6 +542,24 @@
     (ISub True)
     (IMul True)
     (_ False)))
+
+;; a comparison over two GROUND walked operands folds in the walk:
+;; both machines compute straight through a constant comparison (no
+;; stick point), so no case-on may be emitted -- the taken arm alone
+;; continues. Banded operands make the plain integer relation exact.
+;; None = symbolic (fork). Callers gate on is_cmp, so _ = ILe.
+(fn cmp_gval ((o IOp) (va Expr) (vb Expr)) (Option Bool)
+  (match va
+    ((IntLit a)
+     (match vb
+       ((IntLit b)
+        (Some
+          (match o
+            (IEq (int_eq a b))
+            (ILt (lt a b))
+            (_ (le a b)))))
+       (_ None)))
+    (_ None)))
 
 (fn has_fv ((e Expr)) Bool
   (measure (struct e))
@@ -724,8 +778,7 @@
 ;; comparison condition: both operands ground and guard-free follows
 ;; the known arm (a spelled scrutinee would never stick -- the checker
 ;; computes the comparison through); z flips (True selects ELSE)
-(fn se_cond_cmp
-  ((o IOp) (va Expr) (ga (List Expr)) (vb Expr) (gb (List Expr)))
+(fn se_cond_cmp ((o IOp) (va Expr) (ga (List Expr)) (vb Expr) (gb (List Expr)))
   CSpec
   (match va
     ((IntLit na)
@@ -1033,14 +1086,18 @@
 
 ;; drop through the first underscore (the whole tail if none)
 ;; --- the loop tier: the generic Some-conditional worker (V2-5) --------------------
-;; One IWhile as the WHOLE body, bare-local guard, straight-line loop
-;; body, IConst/ILoc result -- the probe-validated form
-;; (examples/iwg_probe.shard): the worker carries NO per-program
-;; premises; the imp run's landing (= Some o) at ghost-count fuel
-;; (S^B (lg_fuel k 0)) is the one premise, B = gcost(loop body) EXACT
-;; so base-case fuel death is contradictory. Everything else declines
-;; to note-and-tie (branches/nested loops in a body, comparison
-;; guards, expression results: named growth).
+;; One IWhile as the WHOLE body, bare-local guard, IConst/ILoc result
+;; -- the probe-validated form (examples/iwg_probe.shard): the worker
+;; carries NO per-program premises; the imp run's landing (= Some o)
+;; at ghost-count fuel (S^B (lg_fuel k 0)) is the one premise, B =
+;; gdepth(loop body) EXACT so base-case fuel death is contradictory.
+;; Loop bodies walk as guard TREES (the IF tier): a branch forks the
+;; walk, both machines stick on the shared comparison, and each leaf
+;; carries its own post-state -- sound at the exact tower only when
+;; every fork's arms are depth-EQUAL (gdeq), because the base case
+;; needs the death point path-uniform; unequal arms are a named fence
+;; (the count-tied worker rung). Nested loops, comparison guards and
+;; expression results decline to note-and-tie (named growth).
 
 ;; a split the loop walk emits: shared scrutinee (both machines stick
 ;; on the same term) or the mem-hi bound (imp spells (lt a MSZ), the
@@ -1067,12 +1124,10 @@
   (match va
     ((IntLit n)
      (if (if (le 0 n) (lt n msz) False) (LWAGuards Nil)
-       (LWABad "ground memory address out of bounds (the program traps)")))
+     (LWABad "ground memory address out of bounds (the program traps)")))
     (_
       (LWAGuards
-        (Cons
-          (GShared (sc2 (quote le) (IntLit 0) va))
-          (Cons (GMemHi va) Nil))))))
+        (Cons (GShared (sc2 (quote le) (IntLit 0) va)) (Cons (GMemHi va) Nil))))))
 
 ;; the loop-body walk runs at RAW binders (the worker quantifies
 ;; arbitrary Int locals) with a symbolic memory
@@ -1227,26 +1282,287 @@
                        (Cons mem (Cons va (Cons vv Nil)))))
                    ((LSRf m) (LSRf m))
                    ((LSOk gt st3 mem3)
-                    (LSOk
-                      (gs_app ga (gs_app gp (gs_app gv gt)))
-                      st3
-                      mem3))))))))))
+                    (LSOk (gs_app ga (gs_app gp (gs_app gv gt))) st3 mem3))))))))))
        ((IIf _ _ _)
         (LSRf
-          "branch inside a loop body (straight-line bodies only; named growth)"))
+          "second or nested branch in a loop body (one top-level branch; named growth)"))
        ((IWhile _ _) (LSRf "nested loop (named growth)")))))))
 
-;; drop the last statement (the base case's fuel death point: at
-;; B = gcost exactly, iteration one dies at the LAST statement's
-;; istmt entry, so only the earlier statements' splits fire)
-(fn lw_butlast ((ss (List IStmt))) (List IStmt)
-  (measure (struct ss))
+;; --- the ARM TREE walk (rung 3b) -----------------------------------------
+;; Branch arms as a GUARD TREE: straight-line runs are GTrG chains, a
+;; nested (or repeated) IIf forks the walk with the statement tail
+;; folded into both arms (se_stmts's continuation discipline), so every
+;; leaf carries one complete path's stick sequence. Guard kinds stay
+;; GSplit (the two emission textures); each leaf CARRIES its post
+;; state (locals, mem) -- the loop-body walker checks the trailing
+;; band-decrement per leaf and the loop-bounded leg emitter builds
+;; per-leaf loop heads from it; ground consumers ignore it (the join
+;; binds by matching). Loops in arms refuse (named).
+(type GTr (GTrL (List Expr) Expr) (GTrG GSplit GTr) (GTrB Expr GTr GTr))
+(type LTR (LTOk GTr) (LTRf (List Int)))
+
+;; the payload-free leaf for chain embeds whose consumers read no
+;; leaf state (shared-tail spines)
+(fn gt_nil () GTr (GTrL Nil (FVar (quote m))))
+
+(fn gs_chain ((gs (List GSplit)) (k GTr)) GTr
+  (measure (struct gs))
+  (match gs
+    (Nil k)
+    ((Cons g t) (GTrG g (gs_chain t k)))))
+
+;; live = at least one stick point ahead (the stop-flag question)
+(fn gt_live ((t GTr)) Bool
+  (match t
+    ((GTrL _ _) False)
+    ((GTrG _ _) True)
+    ((GTrB _ _ _) True)))
+
+;; does the tree fork anywhere (emitters that cannot host a fork fence
+;; on this)
+(fn gt_hasbr ((t GTr)) Bool
+  (measure (struct t))
+  (match t
+    ((GTrL _ _) False)
+    ((GTrG _ k) (gt_hasbr k))
+    ((GTrB _ _ _) True)))
+
+(fn lw_tree
+  ((fuel Int)
+   (x86 Bool)
+   (msz Int)
+   (ss (List IStmt))
+   (st (List Expr))
+   (mem Expr))
+  LTR
+  (measure
+    fuel
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (lt fuel 1) (LTRf "walk fuel underflow (internal)")
   (match ss
-    (Nil Nil)
+    (Nil (LTOk (GTrL st mem)))
     ((Cons s t)
-     (match t
-       (Nil Nil)
-       ((Cons _ _) (Cons s (lw_butlast t)))))))
+     (match s
+       ((ISet i e)
+        (match (lw_exp x86 msz e st mem)
+          ((LXRf m) (LTRf m))
+          ((LXOk v gs)
+           (match (st_set st i v)
+             (None (LTRf "local index out of range"))
+             ((Some st2)
+              (match (lw_tree (- fuel 1) x86 msz t st2 mem)
+                ((LTRf m) (LTRf m))
+                ((LTOk k) (LTOk (gs_chain gs k)))))))))
+       ((IStore ae ve)
+        (match (lw_exp x86 msz ae st mem)
+          ((LXRf m) (LTRf m))
+          ((LXOk va ga)
+           (match (lws_addr va msz)
+             ((LWABad m) (LTRf m))
+             ((LWAGuards gp)
+              (match (lw_exp x86 msz ve st mem)
+                ((LXRf m) (LTRf m))
+                ((LXOk vv gv)
+                 (match
+                   (lw_tree
+                     (- fuel 1)
+                     x86
+                     msz
+                     t
+                     st
+                     (Call
+                       (pq (quote mem_set))
+                       (Cons mem (Cons va (Cons vv Nil)))))
+                   ((LTRf m) (LTRf m))
+                   ((LTOk k) (LTOk (gs_chain ga (gs_chain gp (gs_chain gv k)))))))))))))
+       ((IIf cnd tb eb)
+        (match cnd
+          ((IBin k2 o a b)
+           (if (is_cmp o)
+             (match (lw_exp x86 msz a st mem)
+               ((LXRf m) (LTRf m))
+               ((LXOk va ga)
+                (match (lw_exp x86 msz b st mem)
+                  ((LXRf m) (LTRf m))
+                  ((LXOk vb gb)
+                   (match (gs_app ga gb)
+                     ((Cons _ _)
+                      (LTRf "branch condition carries guards (named growth)"))
+                     (Nil
+                       (match (cmp_gval o va vb)
+                         ((Some tk)
+                          (lw_tree
+                            (- fuel 1)
+                            x86
+                            msz
+                            (stmt_app (if tk tb eb) t)
+                            st
+                            mem))
+                         (None
+                           (match
+                             (lw_tree (- fuel 1) x86 msz (stmt_app tb t) st mem)
+                             ((LTRf m) (LTRf m))
+                             ((LTOk tt)
+                              (match
+                                (lw_tree
+                                  (- fuel 1)
+                                  x86
+                                  msz
+                                  (stmt_app eb t)
+                                  st
+                                  mem)
+                                ((LTRf m) (LTRf m))
+                                ((LTOk et)
+                                 (LTOk (GTrB (sc2 (op_sym o) va vb) tt et))))))))))))))
+             (LTRf "non-comparison branch condition (named growth)")))
+          (_ (LTRf "non-comparison branch condition (named growth)"))))
+       ((IWhile _ _) (LTRf "loop inside a branch arm (named growth)")))))))
+
+;; the Z walk: symbolically execute istmts at CONCRETE fuel to the
+;; base case's death point, emitting exactly the case-ons the absurd
+;; premise chain resolves -- guards of statements that EXECUTE, forks
+;; the computation passes through. Leaves mark death states (payload
+;; unread: wk_absurd needs only the path scope). On a flat body this
+;; is lw_butlast's walk (death at the last statement's istmt entry);
+;; with forks the death point can sit inside an arm (istmt Z
+;; short-circuits None before the arm's guards) or in the tail after
+;; a survived arm -- kont carries the pending tails at their own
+;; istmts fuels (istmt returns into its caller's reservoir). wfuel is
+;; the WALK bound (depth of one path, not the tree size); sfuel is
+;; the semantic istmts fuel, entered at gdepth(body) - 1.
+(fn lwz_tree
+  ((wfuel Int)
+   (sfuel Int)
+   (x86 Bool)
+   (msz Int)
+   (ss (List IStmt))
+   (st (List Expr))
+   (mem Expr)
+   (kont (List (Pair Int (List IStmt)))))
+  LTR
+  (measure
+    wfuel
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (lt wfuel 1) (LTRf "z-walk fuel underflow (internal)")
+  (if (lt sfuel 1) (LTOk (GTrL st mem))
+  (match ss
+    (Nil
+      (match kont
+        (Nil (LTRf "z-walk completed the body (internal)"))
+        ((Cons (Pair f2 t2) k2) (lwz_tree (- wfuel 1) f2 x86 msz t2 st mem k2))))
+    ((Cons s t)
+     (match s
+       ((ISet i e)
+        (if (lt (- sfuel 1) 1) (LTOk (GTrL st mem))
+        (match (lw_exp x86 msz e st mem)
+          ((LXRf m) (LTRf m))
+          ((LXOk v gs)
+           (match (st_set st i v)
+             (None (LTRf "local index out of range"))
+             ((Some st2)
+              (match (lwz_tree (- wfuel 1) (- sfuel 1) x86 msz t st2 mem kont)
+                ((LTRf m) (LTRf m))
+                ((LTOk k) (LTOk (gs_chain gs k))))))))))
+       ((IStore ae ve)
+        (if (lt (- sfuel 1) 1) (LTOk (GTrL st mem))
+        (match (lw_exp x86 msz ae st mem)
+          ((LXRf m) (LTRf m))
+          ((LXOk va ga)
+           (match (lws_addr va msz)
+             ((LWABad m) (LTRf m))
+             ((LWAGuards gp)
+              (match (lw_exp x86 msz ve st mem)
+                ((LXRf m) (LTRf m))
+                ((LXOk vv gv)
+                 (match
+                   (lwz_tree
+                     (- wfuel 1)
+                     (- sfuel 1)
+                     x86
+                     msz
+                     t
+                     st
+                     (Call
+                       (pq (quote mem_set))
+                       (Cons mem (Cons va (Cons vv Nil))))
+                     kont)
+                   ((LTRf m) (LTRf m))
+                   ((LTOk k) (LTOk (gs_chain ga (gs_chain gp (gs_chain gv k))))))))))))))
+       ((IIf cnd tb eb)
+        (if (lt (- sfuel 1) 1) (LTOk (GTrL st mem))
+        (match cnd
+          ((IBin k2 o a b)
+           (if (is_cmp o)
+             (match (lw_exp x86 msz a st mem)
+               ((LXRf m) (LTRf m))
+               ((LXOk va ga)
+                (match (lw_exp x86 msz b st mem)
+                  ((LXRf m) (LTRf m))
+                  ((LXOk vb gb)
+                   (match (gs_app ga gb)
+                     ((Cons _ _)
+                      (LTRf "branch condition carries guards (named growth)"))
+                     (Nil
+                       (match (cmp_gval o va vb)
+                         ((Some tk)
+                          (lwz_tree
+                            (- wfuel 1)
+                            (- sfuel 2)
+                            x86
+                            msz
+                            (if tk tb eb)
+                            st
+                            mem
+                            (Cons (Pair (- sfuel 1) t) kont)))
+                         (None
+                           (match
+                             (lwz_tree
+                               (- wfuel 1)
+                               (- sfuel 2)
+                               x86
+                               msz
+                               tb
+                               st
+                               mem
+                               (Cons (Pair (- sfuel 1) t) kont))
+                             ((LTRf m) (LTRf m))
+                             ((LTOk tt)
+                              (match
+                                (lwz_tree
+                                  (- wfuel 1)
+                                  (- sfuel 2)
+                                  x86
+                                  msz
+                                  eb
+                                  st
+                                  mem
+                                  (Cons (Pair (- sfuel 1) t) kont))
+                                ((LTRf m) (LTRf m))
+                                ((LTOk et)
+                                 (LTOk (GTrB (sc2 (op_sym o) va vb) tt et))))))))))))))
+             (LTRf "non-comparison branch condition (named growth)")))
+          (_ (LTRf "non-comparison branch condition (named growth)")))))
+       ((IWhile _ _) (LTRf "loop inside a branch arm (named growth)"))))))))
 
 ;; --- loop-tier emission: the generic worker + the conditional denotation ---------
 ;; All hyp citations are POSITIONAL (innermost 0). At a leaf under
@@ -1369,12 +1685,17 @@
 
 ;; a bound test failed: both machines trap. scope = guard + every
 ;; split up to AND INCLUDING the failed one (its polarity False, the
-;; others True); mem-hi haves at their stated polarities.
-(fn wk_trap
+;; others True); mem-hi haves at their stated polarities. ipfx is
+;; spliced after the premise rewrite: empty at top level; the
+;; step-case ghost unfold when the trap sits under a fork (an arm
+;; statement runs one istmt level deeper, so the exact tower's
+;; explicit prefix is spent and the k-S must be materialized first).
+(fn wk_trapg
   ((scope (List (Pair GSplit Int)))
    (failed (Pair GSplit Int))
    (msz Int)
-   (mstop Doc))
+   (mstop Doc)
+   (ipfx Doc))
   Doc
   (let ((nh (ilen_gs scope)))
     (dconc
@@ -1403,7 +1724,9 @@
                   (dl_hlt i)
                   (DStr "l 1)))) ) ")))))))
         (DStr
-          "(have hro (= (Some ITrap) (Some o)) (steps ((rewrite (premise 0) rl rhs true ()) (compute rhs (stop lg_fuel)) ")
+          "(have hro (= (Some ITrap) (Some o)) (steps ((rewrite (premise 0) rl rhs true ()) ")
+        ipfx
+        (DStr "(compute rhs (stop lg_fuel)) ")
         (dl_impchain scope nh (DStr "(stop lg_fuel)"))
         (DStr
           ") refl)) (steps ((rewrite (premise hro) rl rhs true ()) (compute rhs) (compute lhs ")
@@ -1411,6 +1734,22 @@
         (DStr ") ")
         (dl_machchain scope nh mstop)
         (DStr ") refl))")))))
+
+(fn wk_trap
+  ((scope (List (Pair GSplit Int)))
+   (failed (Pair GSplit Int))
+   (msz Int)
+   (mstop Doc))
+  Doc
+  (wk_trapg scope failed msz mstop (DStr "")))
+
+(fn wk_trapd
+  ((scope (List (Pair GSplit Int)))
+   (failed (Pair GSplit Int))
+   (msz Int)
+   (mstop Doc))
+  Doc
+  (wk_trapg scope failed msz mstop (DStr "(unfold lg_fuel rhs) (reduce rhs) ")))
 
 ;; base-case fuel death under the premise: contradictory, absurd
 (fn wk_absurd ((scope (List (Pair GSplit Int)))) Doc
@@ -1503,36 +1842,144 @@
          (DStr ") lr rhs true ()) (compute rhs) ")
          (dl_impchain_plain t nhyps))))))
 
-;; the split tree: nested case-ons, every False arm a trap leaf, the
-;; spine ending at the final leaf (absurd in base, the step arm in
-;; step). scope carries the guard at order 0.
-(fn wk_tree
-  ((remaining (List (Pair GSplit Int)))
-   (scope (List (Pair GSplit Int)))
-   (msz Int)
-   (mstop Doc)
-   (final Doc))
-  Doc
-  (measure (struct remaining))
-  (match remaining
-    (Nil final)
-    ((Cons (Pair g i) rest)
-     (dconc
-       (list
-         (DStr "(case-on ")
-         (gsp_scrut g msz)
-         (DStr " Bool ((case True ")
-         (wk_tree rest (gsp_snoc scope (Pair g i)) msz mstop final)
-         (DStr ") (case False ")
-         (wk_trap (gsp_snoc scope (Pair g i)) (Pair g i) msz mstop)
-         (DStr ")))"))))))
-
 (fn gsp_snoc ((l (List (Pair GSplit Int))) (x (Pair GSplit Int)))
   (List (Pair GSplit Int))
   (measure (struct l))
   (match l
     (Nil (Cons x Nil))
     ((Cons h t) (Cons h (gsp_snoc t x)))))
+
+;; spelled post-state locals list
+(fn d_exprlist_go ((es (List Expr))) Doc
+  (measure (struct es))
+  (match es
+    (Nil (DStr ""))
+    ((Cons h t) (dcat3 (sp) (pr_e h) (d_exprlist_go t)))))
+
+(fn d_exprlist ((es (List Expr))) Doc
+  (match es
+    (Nil (DStr "Nil"))
+    ((Cons _ _) (dcat3 (DStr "(list") (d_exprlist_go es) (DStr ")")))))
+
+;; the worker's split tree, base case: guard nodes case-on with a trap
+;; False arm; fork nodes case-on with BOTH arms recursing (both
+;; machines stick on the shared comparison term -- a fork resolves
+;; exactly like a shared split, but its False arm is the else path,
+;; not a trap); leaves absurd from their path scope (the death point).
+;; scope carries the guard at order 0, i = the next case-on order.
+(fn wkbz
+  ((tr GTr) (scope (List (Pair GSplit Int))) (i Int) (msz Int) (mstop Doc))
+  Doc
+  (measure (struct tr))
+  (match tr
+    ((GTrL _ _) (wk_absurd scope))
+    ((GTrG g k)
+     (dconc
+       (list
+         (DStr "(case-on ")
+         (gsp_scrut g msz)
+         (DStr " Bool ((case True ")
+         (wkbz k (gsp_snoc scope (Pair g i)) (+ i 1) msz mstop)
+         (DStr ") (case False ")
+         (wk_trap (gsp_snoc scope (Pair g i)) (Pair g i) msz mstop)
+         (DStr ")))"))))
+    ((GTrB sc a b)
+     (dconc
+       (list
+         (DStr "(case-on ")
+         (pr_e sc)
+         (DStr " Bool ((case True ")
+         (wkbz a (gsp_snoc scope (Pair (GShared sc) i)) (+ i 1) msz mstop)
+         (DStr ") (case False ")
+         (wkbz b (gsp_snoc scope (Pair (GShared sc) i)) (+ i 1) msz mstop)
+         (DStr ")))"))))))
+
+;; the worker's split tree, step case: same node textures, leaves are
+;; step arms at their own path scope and PER-LEAF post-state (the
+;; walked locals/mem of that path), IH at hyp |scope|. deep = below a
+;; fork: trap arms there use wk_trapd (the arm's istmt runs past the
+;; exact tower's explicit prefix, so the k-S must be unfolded first).
+(fn wkbs
+  ((tr GTr)
+   (scope (List (Pair GSplit Int)))
+   (i Int)
+   (deep Bool)
+   (msz Int)
+   (bfl Int)
+   (conddoc Doc)
+   (ibody Doc)
+   (mstop Doc)
+   (mfuel Doc)
+   (mloop Doc))
+  Doc
+  (measure (struct tr))
+  (match tr
+    ((GTrL lc mm)
+     (wk_step
+       scope
+       msz
+       bfl
+       conddoc
+       ibody
+       (d_exprlist lc)
+       (pr_e mm)
+       mstop
+       mfuel
+       mloop))
+    ((GTrG g k)
+     (dconc
+       (list
+         (DStr "(case-on ")
+         (gsp_scrut g msz)
+         (DStr " Bool ((case True ")
+         (wkbs
+           k
+           (gsp_snoc scope (Pair g i))
+           (+ i 1)
+           deep
+           msz
+           bfl
+           conddoc
+           ibody
+           mstop
+           mfuel
+           mloop)
+         (DStr ") (case False ")
+         (if deep (wk_trapd (gsp_snoc scope (Pair g i)) (Pair g i) msz mstop)
+         (wk_trap (gsp_snoc scope (Pair g i)) (Pair g i) msz mstop))
+         (DStr ")))"))))
+    ((GTrB sc a b)
+     (dconc
+       (list
+         (DStr "(case-on ")
+         (pr_e sc)
+         (DStr " Bool ((case True ")
+         (wkbs
+           a
+           (gsp_snoc scope (Pair (GShared sc) i))
+           (+ i 1)
+           True
+           msz
+           bfl
+           conddoc
+           ibody
+           mstop
+           mfuel
+           mloop)
+         (DStr ") (case False ")
+         (wkbs
+           b
+           (gsp_snoc scope (Pair (GShared sc) i))
+           (+ i 1)
+           True
+           msz
+           bfl
+           conddoc
+           ibody
+           mstop
+           mfuel
+           mloop)
+         (DStr ")))"))))))
 
 ;; --- loop-pin extraction ----------------------------------------------------------
 
@@ -1880,64 +2327,72 @@
           pin
           "loop shape (one IWhile over a bare local as the whole body; named growth)")))
     ((Some (Pair gi lbody))
-     (match (lpe_ibody gv)
-       (None (EErr "loop pin body shape (internal)"))
-       ((Some (Pair condE lbodyE))
-        (match (ec_is tv (quote Some))
-          (None (EErr "translated value is not Some (internal)"))
-          ((Some sargs)
-           (match sargs
-             ((Cons fexp Nil)
-              (match fexp
-                ((Ctor _ margs)
-                 (match (last_e margs)
-                   (None (EErr "translated func has no body (internal)"))
-                   ((Some instrs)
-                    (match (lpe_spine instrs)
-                      (None (EErr "translated body spine (internal)"))
-                      ((Some els)
-                       (match (lpe_wsplit els)
-                         (None
-                           (EOk (d_note pin "translated loop shape (internal)")))
-                         ((Some (Pair pre (Pair wbodyE post)))
-                          (match (rescheck (iresult_of ifn))
-                            (None
-                              (EOk
-                                (d_note
-                                  pin
-                                  "loop result (IConst/ILoc only; named growth)")))
-                            ((Some rdepth)
-                             (match
-                               (lw_stmts
-                                 (+ (isz_stmts lbody) 2)
-                                 x86
-                                 msz
-                                 lbody
-                                 (st_params
-                                   (+
-                                     (ikn (ikparams_of ifn))
-                                     (ikn (ikextra_of ifn))))
-                                 (FVar (quote m)))
-                               ((LSRf why) (EOk (d_note pin why)))
-                               ((LSOk fsplits postlc postmem)
-                                (match
-                                  (lw_stmts
-                                    (+ (isz_stmts lbody) 2)
-                                    x86
-                                    msz
-                                    (lw_butlast lbody)
-                                    (st_params
-                                      (+
-                                        (ikn (ikparams_of ifn))
-                                        (ikn (ikextra_of ifn))))
-                                    (FVar (quote m)))
-                                  ((LSRf why) (EOk (d_note pin why)))
-                                  ((LSOk bsplits _ _)
-                                   (lp_emit brpre trans x86 wrapnm msz pin ifn
-                                     gi lbody condE lbodyE wbodyE pre post margs
-                                     rdepth fsplits postlc postmem bsplits))))))))))))))
-                (_ (EErr "translated value shape (internal)"))))
-             (_ (EErr "translated value shape (internal)"))))))))))
+     (if (gdeq lbody)
+       (match (lpe_ibody gv)
+         (None (EErr "loop pin body shape (internal)"))
+         ((Some (Pair condE lbodyE))
+          (match (ec_is tv (quote Some))
+            (None (EErr "translated value is not Some (internal)"))
+            ((Some sargs)
+             (match sargs
+               ((Cons fexp Nil)
+                (match fexp
+                  ((Ctor _ margs)
+                   (match (last_e margs)
+                     (None (EErr "translated func has no body (internal)"))
+                     ((Some instrs)
+                      (match (lpe_spine instrs)
+                        (None (EErr "translated body spine (internal)"))
+                        ((Some els)
+                         (match (lpe_wsplit els)
+                           (None
+                             (EOk
+                               (d_note pin "translated loop shape (internal)")))
+                           ((Some (Pair pre (Pair wbodyE post)))
+                            (match (rescheck (iresult_of ifn))
+                              (None
+                                (EOk
+                                  (d_note
+                                    pin
+                                    "loop result (IConst/ILoc only; named growth)")))
+                              ((Some rdepth)
+                               (match
+                                 (lw_tree
+                                   (+ (isz_stmts lbody) 2)
+                                   x86
+                                   msz
+                                   lbody
+                                   (st_params
+                                     (+
+                                       (ikn (ikparams_of ifn))
+                                       (ikn (ikextra_of ifn))))
+                                   (FVar (quote m)))
+                                 ((LTRf why) (EOk (d_note pin why)))
+                                 ((LTOk stree)
+                                  (match
+                                    (lwz_tree
+                                      (* 2 (+ (isz_stmts lbody) 4))
+                                      (- (gdepth lbody) 1)
+                                      x86
+                                      msz
+                                      lbody
+                                      (st_params
+                                        (+
+                                          (ikn (ikparams_of ifn))
+                                          (ikn (ikextra_of ifn))))
+                                      (FVar (quote m))
+                                      Nil)
+                                    ((LTRf why) (EOk (d_note pin why)))
+                                    ((LTOk ztree)
+                                     (lp_emit brpre trans x86 wrapnm msz pin ifn
+                                       gi lbody condE lbodyE wbodyE pre post
+                                       margs rdepth stree ztree))))))))))))))
+                  (_ (EErr "translated value shape (internal)"))))
+               (_ (EErr "translated value shape (internal)")))))))
+       (EOk
+         (d_note
+           pin
+           "unequal-depth branch arms in a symbolic-count loop body (named growth)"))))))
 
 ;; result must be IConst (depth 0) or ILoc i (spine depth i+1)
 (fn rescheck ((e IExp)) (Option Int)
@@ -1963,10 +2418,8 @@
    (post (List Expr))
    (margs (List Expr))
    (rdepth Int)
-   (fsplits (List GSplit))
-   (postlc (List Expr))
-   (postmem Expr)
-   (bsplits (List GSplit)))
+   (stree GTr)
+   (ztree GTr))
   ERes
   (match (sp_e (harvest lbodyE) 0 lbodyE)
     ((SpRErr m) (EErr m))
@@ -1987,7 +2440,7 @@
                    ((nl2 (+ (ikn (ikparams_of ifn)) (ikn (ikextra_of ifn))))
                     (np (ikn (ikparams_of ifn)))
                     (nm (pin_nm pin))
-                    (bfl (- (gcost lbody) 1))
+                    (bfl (gdepth lbody))
                     (afl (+ (tcost wbodyE) 4))
                     (guard
                       (Pair
@@ -2066,8 +2519,6 @@
                               (DStr ")) restfs) ")
                               (dint msz)
                               (DStr ")")))))
-                      (fscope (gsp_snoc_all guard (gs_index fsplits 1)))
-                      (bscope (gsp_snoc_all guard (gs_index bsplits 1)))
                       (entry (lp_banded (ikparams_of ifn) (- nl2 np))))
                      (let
                        ((worker
@@ -2104,33 +2555,24 @@
                               (DStr " 0) Bool ((case True ")
                               (wk_exit (d_args nl2) mstop)
                               (DStr ") (case False ")
-                              (wk_tree
-                                (gs_index bsplits 1)
-                                (Cons guard Nil)
-                                msz
-                                mstop
-                                (wk_absurd bscope))
+                              (wkbz ztree (Cons guard Nil) 1 msz mstop)
                               (DStr ")))) (case S (k2) (case-on (int_eq x")
                               (dint gi)
                               (DStr " 0) Bool ((case True ")
                               (wk_exit (d_args nl2) mstop)
                               (DStr ") (case False ")
-                              (wk_tree
-                                (gs_index fsplits 1)
+                              (wkbs
+                                stree
                                 (Cons guard Nil)
+                                1
+                                False
                                 msz
+                                bfl
+                                conddoc
+                                (dcat3 (DStr "gb_") (DStr nm) (DStr "_i"))
                                 mstop
-                                (wk_step
-                                  fscope
-                                  msz
-                                  bfl
-                                  conddoc
-                                  (dcat3 (DStr "gb_") (DStr nm) (DStr "_i"))
-                                  (d_exprlist postlc)
-                                  (pr_e postmem)
-                                  mstop
-                                  mfuel
-                                  mloop))
+                                mfuel
+                                mloop)
                               (DStr "))))))")
                               (DStr ")")
                               (DStr (nl))
@@ -2244,18 +2686,6 @@
     (Nil 0)
     ((Cons _ t) (+ 1 (ilen_e t)))))
 
-;; spelled post-state locals list
-(fn d_exprlist_go ((es (List Expr))) Doc
-  (measure (struct es))
-  (match es
-    (Nil (DStr ""))
-    ((Cons h t) (dcat3 (sp) (pr_e h) (d_exprlist_go t)))))
-
-(fn d_exprlist ((es (List Expr))) Doc
-  (match es
-    (Nil (DStr "Nil"))
-    ((Cons _ _) (dcat3 (DStr "(list") (d_exprlist_go es) (DStr ")")))))
-
 ;; --- the statement tier: seq-grain legs for memful straight-line pins --------------
 ;; A pin whose body is straight-line but touches memory (the sha
 ;; bodies) bridges at STATEMENT grain: machine seq run = seq adapter
@@ -2334,6 +2764,18 @@
     (Nil Nil)
     ((Cons g t)
      (if (gs_seen seen g) (gs_dedup seen t) (Cons g (gs_dedup (Cons g seen) t))))))
+
+;; per-REGION dedup (the IF-1c law lifted to the tree): a guard run
+;; dedups against the guards seen in ITS region; each fork arm is a
+;; fresh region (arm occurrences materialize only after the polarity
+;; resolves; duplicate case-ons close by conflated traps)
+(fn gt_dedup ((seen (List GSplit)) (t GTr)) GTr
+  (measure (struct t))
+  (match t
+    ((GTrL lc mm) (GTrL lc mm))
+    ((GTrG g k)
+     (if (gs_seen seen g) (gt_dedup seen k) (GTrG g (gt_dedup (Cons g seen) k))))
+    ((GTrB scrut tt et) (GTrB scrut (gt_dedup Nil tt) (gt_dedup Nil et)))))
 
 ;; the mem-hi bridge at one polarity: lift the case hyp into a have
 ;; (case hyps never join farkas rows), derive the machine spelling by
@@ -2630,6 +3072,14 @@
 ;; x86 emission (named growth; rotating bodies refuse in the walk with
 ;; the honest V2-2b note).
 
+;; the loop-body branch payload (IF-2): the shared raw comparison
+;; scrutinee at the walked post-prefix state + the per-REGION deduped
+;; splits (then / else; the prefix region rides the wsplits field).
+;; Regions never dedup across the polarity case-on — arm guard
+;; occurrences materialize only after the polarity resolves (the
+;; IF-1c law, blueprint-validated inside the worker by sqblw/sqblx).
+(type LBr (MkLBr Expr GTr GTr))
+
 (type MxLp
   (MkMxLp
     Int  ;; gi — the counter slot
@@ -2638,7 +3088,8 @@
     (List IStmt)  ;; lbody — the loop body, reified
     (List Expr)  ;; hlocals — walked locals at the loop head
     Expr  ;; hmem — walked memory at the loop head
-    (List GSplit)  ;; wsplits — the worker's per-iteration splits
+    (List GSplit)  ;; wsplits — the worker's per-iteration splits (the prefix region when a branch is present)
+    (Option LBr)  ;; lbr — the loop-body branch payload (IF-2)
     Int))  ;; pi — imp spine position
 
 (type MxEv (MxSp GSplit) (MxL MxLp))
@@ -2653,8 +3104,233 @@
 ;; body, body Expr, per-iteration splits).
 (type MxPc
   (MxPS (List IStmt) (List Expr))
-  (MxPL Int Int (List IStmt) Expr (List GSplit) (List (Pair Int Int))))
+  (MxPL
+    Int
+    Int
+    (List IStmt)
+    Expr
+    (List GSplit)
+    (Option LBr)
+    (List (Pair Int Int)))
+  (MxPB IStmt Expr Expr Bool GTr GTr Int))
 (type MxPR (MxPOk (List MxPc)) (MxPRf (List Int)))
+
+;; conservative node count over a reified tree (Ctor/Call nodes +
+;; leaves); 2x + 4 bounds any walk path's fuel need (each seq element
+;; costs one seq peel + one instr peel; block nesting is covered by
+;; the Block node's own count) -- oversupply is safe on both sides of
+;; a branch sub-lemma (the parked continuation is claim-minus-one
+;; regardless of arm, and completed standalone runs are
+;; fuel-independent above need)
+(fn mxb_count ((e Expr)) Int
+  (measure (struct e))
+  (match e
+    ((Ctor _ args) (+ 1 (mxb_countl args)))
+    ((Call _ args) (+ 1 (mxb_countl args)))
+    (_ 1)))
+
+(fn mxb_countl ((es (List Expr))) Int
+  (measure (struct es))
+  (match es
+    (Nil 0)
+    ((Cons h t) (+ (mxb_count h) (mxb_countl t)))))
+
+(fn mxb_k ((sl (List Expr))) Int
+  (match sl
+    (Nil 8)
+    ((Cons h _) (+ (* 2 (mxb_count h)) 4))))
+
+;; --- the loop-body region walk (IF-2) ----------------------------------
+;; A loop body holding at most ONE top-level IIf: the prefix walks at
+;; the loop-head state, the shared raw comparison scrutinee is taken
+;; at the post-prefix state (mxc_br's constraints: comparison-headed,
+;; guard-free operands), and EACH ARM walks arm-stmts ++ post-tail
+;; from the post-prefix state — per-region deduped splits and a
+;; per-arm post-state, the counter's trailing band-decrement checked
+;; on BOTH. A second IIf lands in the post-tail walk and bubbles
+;; lw_stmts's own named refusal.
+
+(fn lwb_split ((ss (List IStmt)))
+  (Option (Pair (List IStmt) (Pair IStmt (List IStmt))))
+  (measure (struct ss))
+  (match ss
+    (Nil None)
+    ((Cons s t)
+     (match s
+       ((IIf _ _ _) (Some (Pair Nil (Pair s t))))
+       (_
+         (match (lwb_split t)
+           (None None)
+           ((Some (Pair pre (Pair br post)))
+            (Some (Pair (Cons s pre) (Pair br post))))))))))
+
+(type LWBR (LWBOk (List GSplit) (Option LBr)) (LWBRf (List Int)))
+
+;; the trailing band-decrement shape at the counter slot
+(fn lwb_dec ((gi Int) (lc (List Expr))) Bool
+  (match (st_get lc gi)
+    (None False)
+    ((Some pv)
+     (expr_eq
+       pv
+       (sc2
+         (quote mod)
+         (sc2
+           (quote -)
+           (sc2
+             (quote +)
+             (IntLit 1)
+             (Call (pq (quote int_of_nat)) (Cons (FVar (quote k2)) Nil)))
+           (IntLit 1))
+         (IntLit 4294967296))))))
+
+;; every leaf's counter slot ends at the band-decrement (the worker's
+;; IH re-entry shape) -- checked leaf-wise so forked arms qualify
+(fn gt_decok ((gi Int) (t GTr)) Bool
+  (measure (struct t))
+  (match t
+    ((GTrL lc _) (lwb_dec gi lc))
+    ((GTrG _ k) (gt_decok gi k))
+    ((GTrB _ a b) (if (gt_decok gi a) (gt_decok gi b) False))))
+
+(fn lwb_walk
+  ((x86 Bool) (msz Int) (gi Int) (lbody (List IStmt)) (wst (List Expr)))
+  LWBR
+  (match (lwb_split lbody)
+    (None
+      (match
+        (lw_stmts (+ (isz_stmts lbody) 2) x86 msz lbody wst (FVar (quote m)))
+        ((LSRf why) (LWBRf why))
+        ((LSOk wsplits postlc _)
+         (if (lwb_dec gi postlc) (LWBOk (gs_dedup Nil wsplits) None)
+         (LWBRf "loop counter is not a trailing band-decrement (named growth)")))))
+    ((Some (Pair pre (Pair br post)))
+     (match br
+       ((IIf cnd tb eb)
+        (match (lw_stmts (+ (isz_stmts pre) 2) x86 msz pre wst (FVar (quote m)))
+          ((LSRf why) (LWBRf why))
+          ((LSOk gspre sta mema)
+           (match cnd
+             ((IBin _ o ca cb)
+              (if (is_cmp o)
+                (match (lw_exp x86 msz ca sta mema)
+                  ((LXRf m2) (LWBRf m2))
+                  ((LXOk va ga)
+                   (match (lw_exp x86 msz cb sta mema)
+                     ((LXRf m2) (LWBRf m2))
+                     ((LXOk vb gb)
+                      (match (gs_app ga gb)
+                        ((Cons _ _)
+                         (LWBRf
+                           "loop-body branch condition carries guards (named growth)"))
+                        (Nil
+                          ;; the arm rides the body's post statements
+                          ;; per leaf (the tree fold), so a nested or
+                          ;; repeated branch in an arm is just deeper
+                          ;; forks; the band-decrement is checked at
+                          ;; EVERY leaf
+                          (match
+                            (lw_tree
+                              (+ (isz_stmts (stmt_app tb post)) 2)
+                              x86
+                              msz
+                              (stmt_app tb post)
+                              sta
+                              mema)
+                            ((LTRf m2) (LWBRf m2))
+                            ((LTOk trT)
+                             (match
+                               (lw_tree
+                                 (+ (isz_stmts (stmt_app eb post)) 2)
+                                 x86
+                                 msz
+                                 (stmt_app eb post)
+                                 sta
+                                 mema)
+                               ((LTRf m2) (LWBRf m2))
+                               ((LTOk trE)
+                                (if (gt_decok gi trT)
+                                  (if (gt_decok gi trE)
+                                    (LWBOk
+                                      (gs_dedup Nil gspre)
+                                      (Some
+                                        (MkLBr
+                                          (sc2 (op_sym o) va vb)
+                                          (gt_dedup Nil trT)
+                                          (gt_dedup Nil trE))))
+                                    (LWBRf
+                                      "loop counter is not a trailing band-decrement (named growth)"))
+                                  (LWBRf
+                                    "loop counter is not a trailing band-decrement (named growth)"))))))))))))
+                (LWBRf
+                  "non-comparison loop-body branch condition (named growth)")))
+             (_
+               (LWBRf
+                 "non-comparison loop-body branch condition (named growth)"))))))
+       (_ (LWBRf "loop-body walk shape (internal)"))))))
+
+;; validate one top-level branch and build its piece: comparison-headed
+;; condition only (both machines stick on the SAME raw-operand
+;; comparison tree -- iop_val compares unwrapped, iw_cond emits the
+;; fused comparison; the shared scrutinee IS the inner cmp term),
+;; guard-free condition operands, straight-line arms (lw_stmts's own
+;; fences refuse nested control). The arm walks run at fresh symbolic
+;; locals -- exactly the sub-lemma's binders.
+(fn mxc_br
+  ((x86 Bool)
+   (msz Int)
+   (cnd IExp)
+   (tb (List IStmt))
+   (eb (List IStmt))
+   (sE Expr)
+   (nl Int))
+  MxPR
+  (match cnd
+    ((IBin k o a b)
+     (if (is_cmp o)
+       (match (lw_exp x86 msz a (st_params nl) (FVar (quote m)))
+         ((LXRf m2) (MxPRf m2))
+         ((LXOk va ga)
+          (match (lw_exp x86 msz b (st_params nl) (FVar (quote m)))
+            ((LXRf m2) (MxPRf m2))
+            ((LXOk vb gb)
+             (match (gs_app ga gb)
+               ((Cons _ _)
+                (MxPRf "branch condition carries guards (named growth)"))
+               (Nil
+                 (match
+                   (lw_tree
+                     (+ (isz_stmts tb) 2)
+                     x86
+                     msz
+                     tb
+                     (st_params nl)
+                     (FVar (quote m)))
+                   ((LTRf m2) (MxPRf m2))
+                   ((LTOk tgs)
+                    (match
+                      (lw_tree
+                        (+ (isz_stmts eb) 2)
+                        x86
+                        msz
+                        eb
+                        (st_params nl)
+                        (FVar (quote m)))
+                      ((LTRf m2) (MxPRf m2))
+                      ((LTOk egs)
+                       (MxPOk
+                         (Cons
+                           (MxPB
+                             (IIf cnd tb eb)
+                             sE
+                             (sc2 (op_sym o) va vb)
+                             True
+                             tgs
+                             egs
+                             (+ (* 2 (mxb_count sE)) 4))
+                           Nil))))))))))))
+       (MxPRf "non-comparison branch condition (named growth)")))
+    (_ (MxPRf "non-comparison branch condition (named growth)"))))
 
 ;; validate one loop head (guard/kind/count/decrement) and build its
 ;; worker inventory -- the mx_walk IWhile block, state-free: the
@@ -2690,37 +3366,10 @@
                      (Call (pq (quote int_of_nat)) (Cons (FVar (quote k2)) Nil))))
                  (None (MxPRf "counter slot out of range (internal)"))
                  ((Some wst)
-                  (match
-                    (lw_stmts
-                      (+ (isz_stmts lbody) 2)
-                      x86
-                      msz
-                      lbody
-                      wst
-                      (FVar (quote m)))
-                    ((LSRf why) (MxPRf why))
-                    ((LSOk wsplits postlc _)
-                     (match (st_get postlc gi)
-                       (None (MxPRf "counter slot out of range (internal)"))
-                       ((Some pv)
-                        (if
-                          (expr_eq
-                            pv
-                            (sc2
-                              (quote mod)
-                              (sc2
-                                (quote -)
-                                (sc2
-                                  (quote +)
-                                  (IntLit 1)
-                                  (Call
-                                    (pq (quote int_of_nat))
-                                    (Cons (FVar (quote k2)) Nil)))
-                                (IntLit 1))
-                              (IntLit 4294967296)))
-                          (MxPOk (Cons (MxPL gi kg lbody lbE wsplits Nil) Nil))
-                          (MxPRf
-                            "loop counter is not a trailing band-decrement (named growth)")))))))))
+                  (match (lwb_walk x86 msz gi lbody wst)
+                    ((LWBRf why) (MxPRf why))
+                    ((LWBOk wsplits lbr)
+                     (MxPOk (Cons (MxPL gi kg lbody lbE wsplits lbr Nil) Nil)))))))
               (_ (MxPRf "loop Expr shape (internal)")))))))
        (_ (MxPRf "non-U32 loop counter (named growth)"))))))
 
@@ -2756,6 +3405,8 @@
     (by arith (list 1 0))
     (by arith (list 1 1))
     (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
     (by arith (list 1 1)))
   (if (lt fuel 1) (MxPRf "piece slicer fuel underflow (internal)")
   (match ss
@@ -2784,14 +3435,16 @@
                        (match lps
                          ((Cons lp0 _)
                           (match lp0
-                            ((MxPL g2 k2 lb2 le2 ws2 _)
+                            ((MxPL g2 k2 lb2 le2 ws2 br2 _)
                              (match
                                (mxc_slice (- fuel 1) x86 msz t tE Nil Nil nl ks)
                                ((MxPRf m2) (MxPRf m2))
                                ((MxPOk more)
                                 (let
                                   ((tail
-                                     (Cons (MxPL g2 k2 lb2 le2 ws2 csets) more)))
+                                     (Cons
+                                       (MxPL g2 k2 lb2 le2 ws2 br2 csets)
+                                       more)))
                                   (match rp
                                     (Nil (MxPOk tail))
                                     (_
@@ -2802,8 +3455,22 @@
                             (_ (MxPRf "loop record shape (internal)"))))
                          (Nil (MxPRf "loop record shape (internal)"))))))))))
              (_ (MxPRf "while guard is not a bare local (named growth)"))))
-          ((IIf _ _ _)
-           (MxPRf "top-level branch in a mixed body (named growth)"))
+          ((IIf cnd tb eb)
+           (match (mxc_br x86 msz cnd tb eb sE nl)
+             ((MxPRf m2) (MxPRf m2))
+             ((MxPOk bps)
+              (match bps
+                (Nil (MxPRf "branch record shape (internal)"))
+                ((Cons bp _)
+                 (match (mxc_slice (- fuel 1) x86 msz t tE Nil Nil nl ks)
+                   ((MxPRf m2) (MxPRf m2))
+                   ((MxPOk more)
+                    (let ((btail (Cons bp more)))
+                      (match rs
+                        (Nil (MxPOk btail))
+                        (_
+                          (MxPOk
+                            (Cons (MxPS (rev_stmts rs) (rev_exprs rsE)) btail))))))))))))
           (_
             (if (mxc_capq s rs)
               (match
@@ -2935,7 +3602,27 @@
                       (None None)
                       ((Some more) (Some (Cons ch more)))))))
                 (_ None)))))))
-       ((MxPL _ _ _ _ _ _) (mxc_chunks rest mtr ksE))))))
+       ((MxPB _ sE _ _ _ _ _)
+        (match
+          (invoke
+            mtr
+            (quote iw_stmts)
+            (Cons ksE (Cons (list_expr (Cons sE Nil)) Nil)))
+          (None None)
+          ((Some tv)
+           (match (ec_is tv (quote Some))
+             (None None)
+             ((Some sargs)
+              (match sargs
+                ((Cons chE Nil)
+                 (match (lpe_spine chE)
+                   (None None)
+                   ((Some ch)
+                    (match (mxc_chunks rest mtr ksE)
+                      (None None)
+                      ((Some more) (Some (Cons ch more)))))))
+                (_ None)))))))
+       ((MxPL _ _ _ _ _ _ _) (mxc_chunks rest mtr ksE))))))
 
 ;; the whole-claim fuels: continuation positions are depth-flavored
 ;; (segments consume their instr/stmt counts; loop pieces consume 3
@@ -2968,10 +3655,22 @@
              (+ ci (isz_top segst))
              am
              ai))))
-       ((MxPL _ kg lbody _ _ csets)
+       ((MxPB _ _ _ _ _ _ gsub)
+        (match msls
+          (Nil (Pair (imax am (+ cm 8)) (imax ai (+ ci 8))))
+          ((Cons sl mrest)
+           (mxc_ag
+             rest
+             mrest
+             machs
+             (+ cm 1)
+             (+ ci 1)
+             (imax am (+ cm (+ (mxb_k sl) 2)))
+             (imax ai (+ ci (+ gsub 2)))))))
+       ((MxPL _ kg lbody _ _ _ csets)
         (match machs
           (Nil (Pair (imax am (+ cm 8)) (imax ai (+ ci 8))))
-          ((Cons (Pair _ (Pair wlen _)) hrest)
+          ((Cons (Pair _ (Pair _ wcode)) hrest)
            (let ((q (mxc_clen csets)))
              (mxc_ag
                rest
@@ -2979,7 +3678,9 @@
                hrest
                (+ cm (+ (* 2 q) 1))
                (+ ci (+ q 1))
-               (imax am (+ (+ (+ cm (+ (* 2 q) 4)) (+ wlen 4)) (+ kg 1)))
+               (imax
+                 am
+                 (+ (+ (+ cm (+ (* 2 q) 4)) (+ (tcost wcode) 2)) (+ kg 1)))
                (imax ai (+ (+ (+ ci (+ q 2)) (+ (gcost lbody) 5)) (+ kg 1))))))))))))
 
 ;; print an Expr list as a ground (Cons ... Nil) spine, or with an
@@ -3167,25 +3868,23 @@
       (if mid (DStr ") lr lhs true ()) (compute both (stop es_scont))))")
       (DStr ") lr lhs true ()) (compute both)))")))))
 
-(fn mxc_spine ((gs (List GSplit)) (i Int) (msz Int)) Doc
-  (measure (struct gs))
-  (match gs
-    (Nil (DStr "refl"))
-    ((Cons g t)
+(fn mxc_spine ((t GTr) (i Int) (msz Int)) Doc
+  (measure (struct t))
+  (match t
+    ((GTrL _ _) (DStr "refl"))
+    ((GTrG g k)
      (match g
        ((GShared e)
         (dconc
           (list
             (DStr "(case-on ")
             (pr_e e)
-            (match t
-              (Nil
-                (DStr
-                  " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) "))
-              ((Cons _ _)
-               (DStr
-                 " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop es_scont)))) ")))
-            (mxc_spine t (+ i 1) msz)
+            (if (gt_live k)
+              (DStr
+                " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop es_scont)))) ")
+              (DStr
+                " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) "))
+            (mxc_spine k (+ i 1) msz)
             (DStr
               ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) refl))))"))))
        ((GMemHi a)
@@ -3196,19 +3895,30 @@
             (DStr " ")
             (dint msz)
             (DStr ") Bool ((case True (chain ")
-            (mxc_mh
-              i
-              a
-              msz
-              "True"
-              (match t
-                (Nil False)
-                ((Cons _ _) True)))
+            (mxc_mh i a msz "True" (gt_live k))
             (DStr " ")
-            (mxc_spine t (+ i 1) msz)
+            (mxc_spine k (+ i 1) msz)
             (DStr ")) (case False (chain ")
             (mxc_mh i a msz "False" False)
-            (DStr " refl))))"))))))))
+            (DStr " refl))))"))))))
+    ((GTrB scrut tt et)
+     (dconc
+       (list
+         (DStr "(case-on ")
+         (pr_e scrut)
+         (if (gt_live tt)
+           (DStr
+             " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop es_scont)))) ")
+           (DStr
+             " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) "))
+         (mxc_spine tt i msz)
+         (if (gt_live et)
+           (DStr
+             ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop es_scont)))) ")
+           (DStr
+             ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) "))
+         (mxc_spine et i msz)
+         (DStr "))))"))))))
 
 ;; one open-spine segment lemma: machine walk of the segment's kW
 ;; instrs over ANY tail rw = es_scont of the standalone imp run.
@@ -3253,7 +3963,7 @@
         (Nil (DStr " m)))) (chain (steps ((compute both))) "))
         ((Cons _ _)
          (DStr " m)))) (chain (steps ((compute both (stop es_scont)))) ")))
-      (mxc_spine gs 1 msz)
+      (mxc_spine (gs_chain gs (gt_nil)) 1 msz)
       (DStr "))")
       (DStr (nl))
       (DStr (nl)))))
@@ -3476,7 +4186,7 @@
    (cont Doc))
   Doc
   (let
-    ((aw (+ wlen 4))
+    ((aw (+ (tcost lcode) 2))
      (q (mxc_clen csets))
      (kd (dcat3 (DStr "(int_of_nat ") (dint kg) (DStr ")"))))
     (let
@@ -3686,7 +4396,56 @@
                ")) (case ITrap (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
              lstop
              (DStr ")) refl))))))))")))))
-      ((MxPL gi kg lbody lbE wsplits csets)
+      ;; THE BRANCH PIECE (the sqbw_probe blueprint's cmp_sqb_b1): no
+      ;; isapp/fuel haves -- the singleton seam matches the pasted
+      ;; (Cons IIf rest) and the S-tower directly; the sub-lemma cite
+      ;; instantiates its dangling g so both cites present the SAME
+      ;; standalone term; ONE case-on of that shared run; il_slen
+      ;; exposure (branch exits are SEGMENT-flavored)
+      ((MxPB _ _ _ _ _ _ gsub)
+       (dconc
+         (list
+           (DStr
+             "(rewrite-with (lemma ist_seam1) lr rhs () ()) (rewrite-with (lemma sqbr_")
+           (DStr nm)
+           (DStr "_s")
+           (dint b)
+           (DStr ") lr lhs ((inst g ")
+           (mxx_tw (- (- gm gsub) 1) (DStr "c2"))
+           (DStr ")) ()) (case-on (istmts (S^ ")
+           (dint gm)
+           (DStr " c2) ")
+           (dint msz)
+           (DStr " (inline ")
+           (mxc_snm nm b "_i")
+           (DStr ") ")
+           locsp
+           (DStr " ")
+           mmv
+           (DStr
+             ") Option ((case None (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+           lstop
+           (DStr
+             ")) refl)) (case Some (os0) (chain (steps ((rewrite (hyp 0) lr both true ()))) (case-on os0 IOut ((case INorm (es0 mms0) (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+           cstop
+           (DStr "))) ")
+           (mxc_exit
+             locsp
+             (DStr "es0")
+             (DStr "mms0")
+             0
+             nl
+             (DStr "es0")
+             cont
+             (DStr "il_slen")
+             cstop
+             (DStr "es0_")
+             (DStr "rs0_"))
+           (DStr
+             ")) (case ITrap (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+           lstop
+           (DStr ")) refl))))))))"))))
+      ((MxPL gi kg lbody lbE wsplits _ csets)
        (match mach
          ((Pair _ (Pair wlen lcodeE))
           (let
@@ -3795,7 +4554,8 @@
                   (+ b 1)
                   (match pc
                     ((MxPS _ _) d)
-                    ((MxPL _ _ _ _ _ _) (+ d 1)))
+                    ((MxPB _ _ _ _ _ _ _) d)
+                    ((MxPL _ _ _ _ _ _ _) (+ d 1)))
                   nr)
                 (DStr "(claim ")
                 nmdoc
@@ -3859,7 +4619,11 @@
        (Nil (Pair (Pair fm gm) (Pair Nil 0)))
        ((Cons sl mrest)
         (Pair (Pair (- fm (ilen_e sl)) (- gm (isz_top segst))) (Pair mrest 0)))))
-    ((MxPL _ _ _ _ _ csets)
+    ((MxPB _ _ _ _ _ _ _)
+     (match msls
+       (Nil (Pair (Pair fm gm) (Pair Nil 0)))
+       ((Cons _ mrest) (Pair (Pair (- fm 1) (- gm 1)) (Pair mrest 0)))))
+    ((MxPL _ _ _ _ _ _ csets)
      (let ((q (mxc_clen csets)))
        (Pair (Pair (- fm (+ (* 2 q) 1)) (- gm (+ q 1))) (Pair msls (- 0 1)))))))
 
@@ -3943,6 +4707,8 @@
     (by arith (list 1 0))
     (by arith (list 1 1))
     (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
     (by arith (list 1 1)))
   (if (lt fuel 1) (MxRf "mixed walk fuel underflow (internal)")
   (match ss
@@ -3987,68 +4753,54 @@
                                        (MxRf
                                          "counter slot out of range (internal)"))
                                      ((Some wst)
-                                      (match
-                                        (lw_stmts
-                                          (+ (isz_stmts lbody) 2)
-                                          x86
-                                          msz
-                                          lbody
-                                          wst
-                                          (FVar (quote m)))
-                                        ((LSRf why) (MxRf why))
-                                        ((LSOk wsplits postlc _)
-                                         (match (st_get postlc gi)
-                                           (None
-                                             (MxRf
-                                               "counter slot out of range (internal)"))
-                                           ((Some pv)
-                                            (if
-                                              (expr_eq
-                                                pv
-                                                (sc2
-                                                  (quote mod)
-                                                  (sc2
-                                                    (quote -)
-                                                    (sc2
-                                                      (quote +)
-                                                      (IntLit 1)
-                                                      (Call
-                                                        (pq (quote int_of_nat))
-                                                        (Cons
-                                                          (FVar (quote k2))
-                                                          Nil)))
-                                                    (IntLit 1))
-                                                  (IntLit 4294967296)))
-                                              (match
-                                                (mx_walk
-                                                  (- fuel 1)
-                                                  x86
-                                                  msz
-                                                  t
-                                                  tE
-                                                  (mx_fresh d 0 nl)
-                                                  (FVar (mxs1 "mm" d))
-                                                  (+ p 1)
-                                                  (+ d 1)
-                                                  nl
-                                                  ks)
-                                                ((MxRf m2) (MxRf m2))
-                                                ((MxOk evs)
-                                                 (MxOk
-                                                   (Cons
-                                                     (MxL
-                                                       (MkMxLp gi kg lbE lbody
-                                                         st mem wsplits p))
-                                                     evs))))
-                                              (MxRf
-                                                "loop counter is not a trailing band-decrement (named growth)")))))))))
+                                      (match (lwb_walk x86 msz gi lbody wst)
+                                        ((LWBRf why) (MxRf why))
+                                        ((LWBOk wsplits lbr)
+                                         (match
+                                           (mx_walk
+                                             (- fuel 1)
+                                             x86
+                                             msz
+                                             t
+                                             tE
+                                             (mx_fresh d 0 nl)
+                                             (FVar (mxs1 "mm" d))
+                                             (+ p 1)
+                                             (+ d 1)
+                                             nl
+                                             ks)
+                                           ((MxRf m2) (MxRf m2))
+                                           ((MxOk evs)
+                                            (MxOk
+                                              (Cons
+                                                (MxL
+                                                  (MkMxLp gi kg lbE lbody st mem
+                                                    wsplits lbr p))
+                                                evs)))))))))
                                   (_ (MxRf "loop Expr shape (internal)")))))))
                           (_
                             (MxRf
                               "loop counter is not ground at the loop head (named growth)"))))))
                    (_ (MxRf "non-U32 loop counter (named growth)"))))))
              (_ (MxRf "while guard is not a bare local (named growth)"))))
-          ((IIf _ _ _) (MxRf "top-level branch in a mixed body (named growth)"))
+          ;; a top-level branch contributes no worker event; the walk
+          ;; continues at FRESH state (the per-arm walked states are
+          ;; the chain emitters' business: the wasm legs take them from
+          ;; the piece slicer at fresh locals, the x86 legs re-walk at
+          ;; the leg's in-flight state)
+          ((IIf _ _ _)
+           (mx_walk
+             (- fuel 1)
+             x86
+             msz
+             t
+             tE
+             (mx_fresh d 0 nl)
+             (FVar (mxs1 "mm" d))
+             (+ p 1)
+             (+ d 1)
+             nl
+             ks))
           (_
             (match (lw_stmts 3 x86 msz (Cons s Nil) st mem)
               ((LSRf m2) (MxRf m2))
@@ -4216,6 +4968,70 @@
       (DStr
         ") lr lhs ((inst c2 c2)) ((steps ((rewrite (premise hcap) lr lhs true ())) refl))) refl"))))
 
+;; the worker guard-TREE spine (rung 3b-b): guard case-ons advance
+;; the hlt/hle index i AND the IH depth dh; fork case-ons advance dh
+;; only (arms are separate scopes and may reuse each other's split
+;; names); both fork arms stay live (no trap closer). Each leaf
+;; closes with the all-true tail at its own accumulated depth -- the
+;; per-leaf IH cite binds by matching (the back-edge state is the
+;; join).
+(fn mxw_tspine ((tr GTr) (i Int) (dh Int) (msz Int) (widnm Doc)) Doc
+  (measure (struct tr))
+  (match tr
+    ((GTrL _ _) (mxw_tail widnm dh))
+    ((GTrG g k)
+     (match g
+       ((GShared e)
+        (dconc
+          (list
+            (DStr "(case-on ")
+            (pr_e e)
+            (DStr
+              " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+            (mx_wstop)
+            (DStr "))) ")
+            (mxw_tspine k (+ i 1) (+ dh 1) msz widnm)
+            (DStr
+              ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop lg_fuel)))) refl))))"))))
+       ((GMemHi a)
+        (dconc
+          (list
+            (DStr "(case-on (lt ")
+            (pr_e a)
+            (DStr " ")
+            (dint msz)
+            (DStr ") Bool ((case True (chain ")
+            (mxw_mh i a msz "True" (mx_wstop))
+            (DStr " ")
+            (mxw_tspine k (+ i 1) (+ dh 1) msz widnm)
+            (DStr ")) (case False (chain ")
+            (mxw_mh i a msz "False" (DStr "(stop lg_fuel)"))
+            (DStr " refl))))"))))))
+    ((GTrB scrut tt et)
+     (dconc
+       (list
+         (DStr "(case-on ")
+         (pr_e scrut)
+         (DStr
+           " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+         (mx_wstop)
+         (DStr "))) ")
+         (mxw_tspine tt i (+ dh 1) msz widnm)
+         (DStr
+           ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+         (mx_wstop)
+         (DStr "))) ")
+         (mxw_tspine et i (+ dh 1) msz widnm)
+         (DStr "))))"))))))
+
+;; the loop-body branch inside the induct step (IF-2, tree-native
+;; since 3b-b): one tree-spine call rooted at the polarity fork.
+;; p = the prefix split count; the arms continue at index p+1 and
+;; depth p (the fork itself deepens to p+1).
+(fn mxw_brcase ((scrut Expr) (tgs GTr) (egs GTr) (p Int) (msz Int) (widnm Doc))
+  Doc
+  (mxw_tspine (GTrB scrut tgs egs) (+ p 1) p msz widnm))
+
 ;; one counter-tied worker claim + its body-copy fns
 (fn mxw_emit
   ((nm (List Int))
@@ -4227,7 +5043,7 @@
    (wcodeE Expr))
   ERes
   (match lp
-    ((MkMxLp gi _ lbodyE lbody _ _ wsplits _)
+    ((MkMxLp gi _ lbodyE lbody _ _ wsplits lbr _)
      (match (spl_e lbodyE)
        ((SpRErr m) (EErr m))
        ((SpROk lbdoc)
@@ -4236,7 +5052,7 @@
           ((SpROk wcdoc)
            (let
              ((bw (+ (gcost lbody) 5))
-              (aw (+ wlen 4))
+              (aw (+ (tcost wcodeE) 2))
               (ds (gs_dedup Nil wsplits))
               (locs (mxw_locs_go 0 nl gi (DStr "(int_of_nat k)"))))
              (EOk
@@ -4304,9 +5120,19 @@
                      ds
                      1
                      msz
-                     (mxw_tail
-                       (dcat3 (DStr "sqm_wid_") (DStr nm) (DStr ""))
-                       (ilen_gs (gs_index ds 0))))
+                     (match lbr
+                       (None
+                         (mxw_tail
+                           (dcat3 (DStr "sqm_wid_") (DStr nm) (DStr ""))
+                           (ilen_gs (gs_index ds 0))))
+                       ((Some (MkLBr scrut tgs egs))
+                        (mxw_brcase
+                          scrut
+                          tgs
+                          egs
+                          (ilen_gs (gs_index ds 0))
+                          msz
+                          (dcat3 (DStr "sqm_wid_") (DStr nm) (DStr ""))))))
                    (DStr ")))))")
                    (DStr (nl))
                    (DStr (nl)))))))))))))
@@ -4360,11 +5186,11 @@
 
 (fn mxlp_body ((lp MxLp)) (List IStmt)
   (match lp
-    ((MkMxLp _ _ _ lbody _ _ _ _) lbody)))
+    ((MkMxLp _ _ _ lbody _ _ _ _ _) lbody)))
 
 (fn mxlp_kg ((lp MxLp)) Int
   (match lp
-    ((MkMxLp _ kg _ _ _ _ _ _) kg)))
+    ((MkMxLp _ kg _ _ _ _ _ _ _) kg)))
 
 ;; all workers, in loop order
 (fn mxw_all
@@ -4534,7 +5360,78 @@
                          (mxc_lst segE))
                        (mxc_seglemma nm b nl msz (isz_top segst) sl gs)
                        more))))))))))
-       ((MxPL _ _ _ _ _ _) (mxc_sfl rest msls nm nl msz (+ b 1)))))))
+       ((MxPB _ sE scrutE flip tgs egs gsub)
+        (match msls
+          (Nil (EErr "branch/machine slice mismatch (internal)"))
+          ((Cons sl mrest)
+           (match (mxc_sfl rest mrest nm nl msz (+ b 1))
+             ((EErr m) (EErr m))
+             ((EOk more)
+              (EOk
+                (dconc
+                  (list
+                    (mxc_fn1
+                      (mxc_snm nm b "_i")
+                      (DStr "(List IStmt)")
+                      (mxc_lst (Cons sE Nil)))
+                    (mxc_brlemma nm b nl msz gsub sl scrutE flip tgs egs)
+                    more))))))))
+       ((MxPL _ _ _ _ _ _ _) (mxc_sfl rest msls nm nl msz (+ b 1)))))))
+
+;; one open-tail BRANCH sub-lemma (the sqbw_probe blueprint): machine
+;; walk of the branch chunk over ANY tail rw = es_scont of the
+;; standalone imp run of the branch SINGLETON. ONE case-on of the
+;; shared comparison scrutinee (both machines stick on the raw-operand
+;; cmp tree); each arm walks concretely by the statement-tier split
+;; spine; the parked continuation is claim-minus-one regardless of
+;; which arm ran, so the fuel spelling is arm-independent.
+(fn mxc_brlemma
+  ((nm (List Int))
+   (j Int)
+   (nl Int)
+   (msz Int)
+   (gsub Int)
+   (msl (List Expr))
+   (scrutE Expr)
+   (flip Bool)
+   (tgs GTr)
+   (egs GTr))
+  Doc
+  (let ((kk (mxb_k msl)) (armT (if flip tgs egs)) (armF (if flip egs tgs)))
+    (dconc
+      (list
+        (DStr "(claim sqbr_")
+        (DStr nm)
+        (DStr "_s")
+        (dint j)
+        (DStr " (goal (")
+        (d_binds_go nl (DStr ""))
+        (DStr
+          "(rw (List Instr)) (st (List Int)) (m Mem) (f Nat) (g Nat) (restfs (List Func))) () (= (eval_seq (S^ ")
+        (dint kk)
+        (DStr " (S f)) (MkWModule restfs ")
+        (dint msz)
+        (DStr ") ")
+        (mxc_spn msl (DStr "rw"))
+        (DStr " ")
+        (d_argspine nl)
+        (DStr " st m) (es_scont (S^ ")
+        (dint (- kk 1))
+        (DStr " (S f)) (MkWModule restfs ")
+        (dint msz)
+        (DStr ") rw st (istmts (S^ ")
+        (dint gsub)
+        (DStr " (S g)) ")
+        (dint msz)
+        (DStr " (inline ")
+        (mxc_snm nm j "_i")
+        (DStr ") ")
+        (d_argspine nl)
+        (DStr " m)))) (chain (steps ((compute both (stop es_scont)))) ")
+        (mxc_spine (GTrB scrutE armT armF) 1 msz)
+        (DStr "))")
+        (DStr (nl))
+        (DStr (nl))))))
 
 ;; the rest fns (boundaries 1..n-1): literal suffix slices, both sides
 (fn mxc_rests
@@ -4577,7 +5474,29 @@
                       (mxc_drop els kw)
                       nm
                       (+ b 1))))))))
-          ((MxPL _ _ _ _ _ csets)
+          ((MxPB _ _ _ _ _ _ _)
+           (match msls
+             (Nil (DStr ""))
+             ((Cons _ mrest)
+              (dconc
+                (list
+                  (mxc_fn1
+                    (mxc_rnm nm b "_i")
+                    (DStr "(List IStmt)")
+                    (mxc_lst (edrop ssE 1)))
+                  (mxc_fn1
+                    (mxc_rnm nm b "_w")
+                    (DStr "(List Instr)")
+                    (mxc_lst (mxc_drop els 1)))
+                  (mxc_rests
+                    rest
+                    mrest
+                    (sdrop ss 1)
+                    (edrop ssE 1)
+                    (mxc_drop els 1)
+                    nm
+                    (+ b 1)))))))
+          ((MxPL _ _ _ _ _ _ csets)
            (let ((q (mxc_clen csets)))
              (dconc
                (list
@@ -4716,15 +5635,8 @@
                                      ((MxOk evs)
                                       (if x86
                                         (match
-                                          (sqx_emit
-                                            brpre
-                                            msz
-                                            pin
-                                            ifn
-                                            bodyE
-                                            instrsE
-                                            evs
-                                            mtr)
+                                          (sqx_emit brpre msz pin ifn bodyE
+                                            instrsE evs mtr)
                                           ((SqxErr msg) (EErr msg))
                                           ((SqxNote why)
                                            (EOk (DCat tie (d_note pin why))))
@@ -4817,8 +5729,7 @@
 
 ;; a fuel tower doc that degrades to the bare tail at count 0
 (fn mxx_tw ((n Int) (v Doc)) Doc
-  (if (lt n 1) v
-  (dconc (list (DStr "(S^ ") (dint n) (DStr " ") v (DStr ")")))))
+  (if (lt n 1) v (dconc (list (DStr "(S^ ") (dint n) (DStr " ") v (DStr ")")))))
 
 ;; ask the MODEL which scratch register a code list dirties (ix_dwl
 ;; through the translator module -- never a generator-side scan)
@@ -4846,9 +5757,7 @@
           ((Some d11)
            (Some
              (MkMxXLi
-               (+
-                 (if d0 1 0)
-                 (+ (if d10 1 0) (if d11 1 0)))
+               (+ (if d0 1 0) (+ (if d10 1 0) (if d11 1 0)))
                wlen
                wcodeE
                (if d0 False True)
@@ -4936,7 +5845,37 @@
                             (None None)
                             ((Some more) (Some (Cons (Pair ch zl) more)))))))))))
                 (_ None)))))))
-       ((MxPL _ _ _ _ _ _) (mxx_chunks rest mtr))))))
+       ;; a SEALING branch chunk (IF-3a) carries its own ix_zs; a
+       ;; non-sealing branch is a singleton chunk with NO seal on
+       ;; either side -- its msls entry carries an empty seal
+       ((MxPB _ sE _ _ _ _ _)
+        (match
+          (invoke mtr (quote ix_stmts) (Cons (list_expr (Cons sE Nil)) Nil))
+          (None None)
+          ((Some tv)
+           (match (ec_is tv (quote Some))
+             (None None)
+             ((Some sargs)
+              (match sargs
+                ((Cons chE Nil)
+                 (match (lpe_spine chE)
+                   (None None)
+                   ((Some ch)
+                    (if (mxx_brla rest)
+                      (match (invoke mtr (quote ix_zs) (Cons chE Nil))
+                        (None None)
+                        ((Some zv)
+                         (match (lpe_spine zv)
+                           (None None)
+                           ((Some zl)
+                            (match (mxx_chunks rest mtr)
+                              (None None)
+                              ((Some more) (Some (Cons (Pair ch zl) more))))))))
+                      (match (mxx_chunks rest mtr)
+                        (None None)
+                        ((Some more) (Some (Cons (Pair ch Nil) more))))))))
+                (_ None)))))))
+       ((MxPL _ _ _ _ _ _ _) (mxx_chunks rest mtr))))))
 
 ;; the register-file doc: scratch fields take the given docs; home
 ;; fields take kd at the counter, the const-run's ground value at a
@@ -4979,10 +5918,7 @@
    (sb Doc)
    (sc Doc))
   Doc
-  (dcat3
-    (DStr "(MkRegs")
-    (mxx_regs_go 0 nl gi kd ep cs sa sb sc)
-    (DStr ")")))
+  (dcat3 (DStr "(MkRegs") (mxx_regs_go 0 nl gi kd ep cs sa sb sc) (DStr ")")))
 
 ;; the worker's CLOSED locals spine (xargs walks the whole list at the
 ;; exit adapter, so no open tail is possible on this target)
@@ -5044,17 +5980,69 @@
             (mxw_mh i a msz "False" (DStr "(stop lg_fuel)"))
             (DStr " refl))))"))))))))
 
+;; the x86 twin of mxw_tspine (identical structure, x86 stops); the
+;; loop's own ix_zs seal re-zeroes the arm dirt before the back-edge
+;; -- ix_dwl descends nested XBlocks, so the seal covers every leaf's
+;; dirt and the per-leaf IH cites bind by matching. The seal IS the
+;; join.
+(fn mxxw_tspine ((tr GTr) (i Int) (dh Int) (msz Int) (widnm Doc)) Doc
+  (measure (struct tr))
+  (match tr
+    ((GTrL _ _) (mxw_tail widnm dh))
+    ((GTrG g k)
+     (match g
+       ((GShared e)
+        (dconc
+          (list
+            (DStr "(case-on ")
+            (pr_e e)
+            (DStr
+              " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+            (mxx_wstop)
+            (DStr "))) ")
+            (mxxw_tspine k (+ i 1) (+ dh 1) msz widnm)
+            (DStr
+              ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop lg_fuel)))) refl))))"))))
+       ((GMemHi a)
+        (dconc
+          (list
+            (DStr "(case-on (lt ")
+            (pr_e a)
+            (DStr " ")
+            (dint msz)
+            (DStr ") Bool ((case True (chain ")
+            (mxw_mh i a msz "True" (mxx_wstop))
+            (DStr " ")
+            (mxxw_tspine k (+ i 1) (+ dh 1) msz widnm)
+            (DStr ")) (case False (chain ")
+            (mxw_mh i a msz "False" (DStr "(stop lg_fuel)"))
+            (DStr " refl))))"))))))
+    ((GTrB scrut tt et)
+     (dconc
+       (list
+         (DStr "(case-on ")
+         (pr_e scrut)
+         (DStr
+           " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+         (mxx_wstop)
+         (DStr "))) ")
+         (mxxw_tspine tt i (+ dh 1) msz widnm)
+         (DStr
+           ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+         (mxx_wstop)
+         (DStr "))) ")
+         (mxxw_tspine et i (+ dh 1) msz widnm)
+         (DStr "))))"))))))
+
 ;; one counter-tied x86 worker: body-copy fns + the claim (probe shape)
-(fn mxxw_emit
-  ((nm (List Int))
-   (d Int)
-   (nl Int)
-   (msz Int)
-   (lp MxLp)
-   (li MxXLi))
+(fn mxxw_brcase ((scrut Expr) (tgs GTr) (egs GTr) (p Int) (msz Int) (widnm Doc))
+  Doc
+  (mxxw_tspine (GTrB scrut tgs egs) (+ p 1) p msz widnm))
+
+(fn mxxw_emit ((nm (List Int)) (d Int) (nl Int) (msz Int) (lp MxLp) (li MxXLi))
   ERes
   (match lp
-    ((MkMxLp gi _ lbodyE lbody _ _ wsplits _)
+    ((MkMxLp gi _ lbodyE lbody _ _ wsplits lbr _)
      (match li
        ((MkMxXLi _ wlen wcodeE sa sb sc)
         (match (spl_e lbodyE)
@@ -5065,7 +6053,7 @@
              ((SpROk wcdoc)
               (let
                 ((bw (+ (gcost lbody) 5))
-                 (aw (+ wlen 4))
+                 (aw (+ (tcost wcodeE) 2))
                  (ds (gs_dedup Nil wsplits))
                  (sad (if sa (DStr "za") (DStr "0")))
                  (sbd (if sb (DStr "zb") (DStr "0")))
@@ -5162,9 +6150,19 @@
                           ds
                           1
                           msz
-                          (mxw_tail
-                            (dcat3 (DStr "sqm_wid_") (DStr nm) (DStr ""))
-                            (ilen_gs (gs_index ds 0))))
+                          (match lbr
+                            (None
+                              (mxw_tail
+                                (dcat3 (DStr "sqm_wid_") (DStr nm) (DStr ""))
+                                (ilen_gs (gs_index ds 0))))
+                            ((Some (MkLBr scrut tgs egs))
+                             (mxxw_brcase
+                               scrut
+                               tgs
+                               egs
+                               (ilen_gs (gs_index ds 0))
+                               msz
+                               (dcat3 (DStr "sqm_wid_") (DStr nm) (DStr ""))))))
                         (DStr ")))))")
                         (DStr (nl))
                         (DStr (nl))))))))))))))))
@@ -5221,22 +6219,62 @@
 ;; term and the cite binds everything by matching. Scrutinees and the
 ;; exposure entry spell from the leg's own lw_stmts walk state.
 
+;; would this branch piece's leg carry a second branch or end at a
+;; mid-flat seal? (IF-3a) -- the slicer's mirror of the translator's
+;; ix_brla over the piece stream (pieces and chunks are 1:1): True at
+;; a later branch piece or a flat-flat junction, False at a loop
+;; piece or the terminal
+(fn mxx_brla ((pcs (List MxPc))) Bool
+  (measure (struct pcs))
+  (match pcs
+    (Nil False)
+    ((Cons pc rest)
+     (match pc
+       ((MxPB _ _ _ _ _ _ _) True)
+       ((MxPL _ _ _ _ _ _ _) False)
+       ((MxPS _ _)
+        (match rest
+          (Nil False)
+          ((Cons pc2 _)
+           (match pc2
+             ((MxPS _ _) True)
+             (_ (mxx_brla rest))))))))))
+
 (fn mxx_legs ((pcs (List MxPc))) (List (Pair (List MxPc) (Option MxPc)))
   (measure (struct pcs))
   (match pcs
     (Nil Nil)
     ((Cons pc t)
      (match pc
-       ((MxPL _ _ _ _ _ _) (Cons (Pair Nil (Some pc)) (mxx_legs t)))
+       ((MxPL _ _ _ _ _ _ _) (Cons (Pair Nil (Some pc)) (mxx_legs t)))
+       ;; a SEALING branch (IF-3a: another branch or a flat-flat seal
+       ;; shares its span) ends its own leg at its own seal; otherwise
+       ;; a branch has no seal on either side and GLUES into the leg
+       ;; that follows it (through the next loop / flat run / end)
+       ((MxPB _ _ _ _ _ _ _)
+        (if (mxx_brla t) (Cons (Pair (Cons pc Nil) None) (mxx_legs t))
+        (match (mxx_legs t)
+          (Nil (Cons (Pair (Cons pc Nil) None) Nil))
+          ((Cons (Pair segs2 olp2) rest2)
+           (Cons (Pair (Cons pc segs2) olp2) rest2)))))
        ((MxPS a e)
         (match t
           (Nil (Cons (Pair (Cons (MxPS a e) Nil) None) Nil))
           ((Cons pc2 t2)
            (match pc2
-             ((MxPL _ _ _ _ _ _)
+             ((MxPL _ _ _ _ _ _ _)
               (Cons (Pair (Cons (MxPS a e) Nil) (Some pc2)) (mxx_legs t2)))
-             ((MxPS _ _)
-              (Cons (Pair (Cons (MxPS a e) Nil) None) (mxx_legs t)))))))))))
+             ((MxPS _ _) (Cons (Pair (Cons (MxPS a e) Nil) None) (mxx_legs t)))
+             ;; flat before a SEALING branch seals too (IF-3a:
+             ;; chunk-grain legs); before a non-sealing branch there
+             ;; is no seal and the flat glues
+             ((MxPB _ _ _ _ _ _ _)
+              (if (mxx_brla t2)
+                (Cons (Pair (Cons (MxPS a e) Nil) None) (mxx_legs t))
+                (match (mxx_legs t)
+                  (Nil (Cons (Pair (Cons (MxPS a e) Nil) None) Nil))
+                  ((Cons (Pair segs2 olp2) rest2)
+                   (Cons (Pair (Cons (MxPS a e) segs2) olp2) rest2)))))))))))))
 
 (fn mxx_nlg ((l (List (Pair (List MxPc) (Option MxPc))))) Int
   (measure (struct l))
@@ -5246,21 +6284,49 @@
 
 ;; the leg's chunk metrics from the invoked stream: (machine width,
 ;; (seal width, stmt count)); a chunkless leg passes msls through
-(fn mxx_segm
-  ((segs (List MxPc)) (msls (List (Pair (List Expr) (List Expr)))))
+(fn mxx_segm ((segs (List MxPc)) (msls (List (Pair (List Expr) (List Expr)))))
   (Pair (Pair Int (Pair Int Int)) (List (Pair (List Expr) (List Expr))))
+  (measure (struct segs))
   (match segs
     (Nil (Pair (Pair 0 (Pair 0 0)) msls))
-    ((Cons pc _)
+    ((Cons pc rest)
      (match pc
        ((MxPS segst _)
         (match msls
           (Nil (Pair (Pair 0 (Pair 0 0)) Nil))
           ((Cons (Pair sl zl) mrest)
-           (Pair
-             (Pair (ilen_e sl) (Pair (ilen_e zl) (isz_top segst)))
-             mrest))))
-       ((MxPL _ _ _ _ _ _) (Pair (Pair 0 (Pair 0 0)) msls))))))
+           (match (mxx_segm rest mrest)
+             ((Pair (Pair w2 (Pair z2 t2)) mout)
+              ;; z = the TRAILING flat chunk's seal (a mid leg ends at
+              ;; it); seals between glued pieces are never emitted
+              (Pair
+                (Pair
+                  (+ (ilen_e sl) w2)
+                  (Pair
+                    (match rest
+                      (Nil (ilen_e zl))
+                      (_ z2))
+                    (+ (isz_top segst) t2)))
+                mout))))))
+       ;; a branch = ONE machine element (the outer XBlock), ONE imp
+       ;; statement; a SEALING branch (IF-3a) is its leg's trailing
+       ;; chunk and contributes its own seal
+       ((MxPB _ _ _ _ _ _ _)
+        (match msls
+          (Nil (Pair (Pair 0 (Pair 0 0)) Nil))
+          ((Cons (Pair _ zl) mrest)
+           (match (mxx_segm rest mrest)
+             ((Pair (Pair w2 (Pair z2 t2)) mout)
+              (Pair
+                (Pair
+                  (+ 1 w2)
+                  (Pair
+                    (match rest
+                      (Nil (ilen_e zl))
+                      (_ z2))
+                    (+ 1 t2)))
+                mout))))))
+       ((MxPL _ _ _ _ _ _ _) (Pair (Pair 0 (Pair 0 0)) msls))))))
 
 ;; the leg's own statement list: segment stmts then the const-run
 (fn mxx_segstmts ((segs (List MxPc))) (List IStmt)
@@ -5270,7 +6336,8 @@
     ((Cons pc t)
      (match pc
        ((MxPS segst _) (isapp2 segst (mxx_segstmts t)))
-       ((MxPL _ _ _ _ _ _) (mxx_segstmts t))))))
+       ((MxPB _ _ _ _ _ _ _) (mxx_segstmts t))
+       ((MxPL _ _ _ _ _ _ _) (mxx_segstmts t))))))
 
 (fn isapp2 ((a (List IStmt)) (b (List IStmt))) (List IStmt)
   (measure (struct a))
@@ -5284,9 +6351,23 @@
     (Nil Nil)
     ((Cons (Pair si v) t) (Cons (ISet si (IConst v)) (mxx_csetstmts t)))))
 
+;; conservative nested-walk headroom for a leg's branches (the arm
+;; walks run BELOW the top-level countdown; oversupply is safe --
+;; machine surplus binds by matching, imp towers derive by
+;; subtraction)
+(fn mxx_sgpad ((segs (List MxPc))) Int
+  (measure (struct segs))
+  (match segs
+    (Nil 0)
+    ((Cons pc t)
+     (match pc
+       ((MxPB _ sE _ _ _ _ _) (+ (+ (* 2 (mxb_count sE)) 4) (mxx_sgpad t)))
+       (_ (mxx_sgpad t))))))
+
 ;; whole-claim fuels at leg grain (MAX constraint per loop); mid-flat
 ;; legs consume their chunk + its seal exactly (the cite alignment
-;; needs the chain arithmetic exact at every boundary)
+;; needs the chain arithmetic exact at every boundary); branch legs
+;; add conservative headroom for the nested arm walks
 (fn mxx_ag
   ((legs (List (Pair (List MxPc) (Option MxPc))))
    (lis (List MxXLi))
@@ -5305,15 +6386,34 @@
         (match olp
           (None
             (match rest
-              (Nil (Pair (imax am (+ (+ cm w) 8)) (imax ai (+ (+ ci tn) 8))))
+              (Nil
+                (Pair
+                  (imax am (+ (+ (+ cm w) (mxx_sgpad segs)) 8))
+                  (imax ai (+ (+ (+ ci tn) (mxx_sgpad segs)) 8))))
               ((Cons _ _)
-               (mxx_ag rest lis msls2 (+ cm (+ w z)) (+ ci tn) am ai))))
+               ;; a sealed-branch mid leg (IF-3a): raise the running
+               ;; maxes so the chain fuel AT this leg covers its
+               ;; sub-lemma's towers (machine tcost + seal; imp gcost)
+               (match segs
+                 ((Cons (MxPB st _ _ _ _ _ _) Nil)
+                  (match msls
+                    ((Cons (Pair sl _) _)
+                     (mxx_ag
+                       rest
+                       lis
+                       msls2
+                       (+ cm (+ w z))
+                       (+ ci tn)
+                       (imax am (+ (+ cm 1) (+ (tcost (list_expr sl)) z)))
+                       (imax ai (+ (+ ci 2) (gcost (Cons st Nil))))))
+                    (Nil (mxx_ag rest lis msls2 (+ cm (+ w z)) (+ ci tn) am ai))))
+                 (_ (mxx_ag rest lis msls2 (+ cm (+ w z)) (+ ci tn) am ai))))))
           ((Some pc)
            (match pc
-             ((MxPL _ kg lbody _ _ csets)
+             ((MxPL _ kg lbody _ _ _ csets)
               (match lis
                 (Nil (Pair (imax am (+ cm 8)) (imax ai (+ ci 8))))
-                ((Cons (MkMxXLi zlen wlen _ _ _ _) lrest)
+                ((Cons (MkMxXLi zlen _ wcode _ _ _) lrest)
                  (let ((q (mxc_clen csets)))
                    (mxx_ag
                      rest
@@ -5323,10 +6423,18 @@
                      (+ (+ ci tn) (+ q 1))
                      (imax
                        am
-                       (+ (+ (+ (+ cm w) (+ (+ q zlen) 4)) (+ wlen 4)) (+ kg 1)))
+                       (+
+                         (+
+                           (+ (+ (+ cm w) (mxx_sgpad segs)) (+ (+ q zlen) 4))
+                           (+ (tcost wcode) 2))
+                         (+ kg 1)))
                      (imax
                        ai
-                       (+ (+ (+ (+ ci tn) (+ q 2)) (+ (gcost lbody) 5)) (+ kg 1))))))))
+                       (+
+                         (+
+                           (+ (+ (+ ci tn) (mxx_sgpad segs)) (+ q 2))
+                           (+ (gcost lbody) 5))
+                         (+ kg 1))))))))
              (_ (Pair (imax am (+ cm 8)) (imax ai (+ ci 8))))))))))))
 
 ;; --- rest fns: cuts AFTER each loop; spines brake at the next call --------
@@ -5403,15 +6511,12 @@
                   (+ b 1)))))
             ((Some pc)
              (match pc
-               ((MxPL _ _ _ _ _ csets)
+               ((MxPL _ _ _ _ _ _ csets)
                 (match lis
                   (Nil (DStr ""))
                   ((Cons (MkMxXLi zlen _ _ _ _ _) lrest)
-                   (let
-                     ((q (mxc_clen csets)))
-                     (let
-                       ((ki (+ tn (+ q 1)))
-                        (kw (+ w (+ (+ q zlen) 1))))
+                   (let ((q (mxc_clen csets)))
+                     (let ((ki (+ tn (+ q 1))) (kw (+ w (+ (+ q zlen) 1))))
                        (DCat
                          (mxx_rest1 nm b ssE els ip mp ki kw lastp)
                          (mxx_rests
@@ -5428,13 +6533,11 @@
 
 ;; the chain split spine: True arms continue at pst, False arms
 ;; conflate traps at lst
-(fn mxx_spine
-  ((gs (List GSplit)) (i Int) (msz Int) (pst Doc) (lst Doc) (tail Doc))
-  Doc
-  (measure (struct gs))
-  (match gs
-    (Nil tail)
-    ((Cons g t)
+(fn mxx_spine ((t GTr) (i Int) (msz Int) (pst Doc) (lst Doc) (tail Doc)) Doc
+  (measure (struct t))
+  (match t
+    ((GTrL _ _) tail)
+    ((GTrG g k)
      (match g
        ((GShared e)
         (dconc
@@ -5445,7 +6548,7 @@
               " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
             pst
             (DStr "))) ")
-            (mxx_spine t (+ i 1) msz pst lst tail)
+            (mxx_spine k (+ i 1) msz pst lst tail)
             (DStr
               ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
             lst
@@ -5460,10 +6563,26 @@
             (DStr ") Bool ((case True (chain ")
             (mxw_mh i a msz "True" pst)
             (DStr " ")
-            (mxx_spine t (+ i 1) msz pst lst tail)
+            (mxx_spine k (+ i 1) msz pst lst tail)
             (DStr ")) (case False (chain ")
             (mxw_mh i a msz "False" lst)
-            (DStr " refl))))"))))))))
+            (DStr " refl))))"))))))
+    ((GTrB scrut tt et)
+     (dconc
+       (list
+         (DStr "(case-on ")
+         (pr_e scrut)
+         (DStr
+           " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+         pst
+         (DStr "))) ")
+         (mxx_spine tt i msz pst lst tail)
+         (DStr
+           ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+         pst
+         (DStr "))) ")
+         (mxx_spine et i msz pst lst tail)
+         (DStr "))))"))))))
 
 ;; cite the next boundary lemma at the exposure leaf: the goal holds
 ;; the FOLDED continuation (walkers stopped), which is the cited
@@ -5548,25 +6667,23 @@
 ;; the sub-lemma split spine: mid computes brake at (stop xm_scont);
 ;; the final arm and the trap arms compute open, so both sides
 ;; converge on the braked-tail residue / the trap
-(fn mxxs_spine ((gs (List GSplit)) (i Int) (msz Int)) Doc
-  (measure (struct gs))
-  (match gs
-    (Nil (DStr "refl"))
-    ((Cons g t)
+(fn mxxs_spine ((t GTr) (i Int) (msz Int)) Doc
+  (measure (struct t))
+  (match t
+    ((GTrL _ _) (DStr "refl"))
+    ((GTrG g k)
      (match g
        ((GShared e)
         (dconc
           (list
             (DStr "(case-on ")
             (pr_e e)
-            (match t
-              (Nil
-                (DStr
-                  " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) "))
-              ((Cons _ _)
-               (DStr
-                 " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop xm_scont)))) ")))
-            (mxxs_spine t (+ i 1) msz)
+            (if (gt_live k)
+              (DStr
+                " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop xm_scont)))) ")
+              (DStr
+                " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) "))
+            (mxxs_spine k (+ i 1) msz)
             (DStr
               ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) refl))))"))))
        ((GMemHi a)
@@ -5582,14 +6699,30 @@
               a
               msz
               "True"
-              (match t
-                (Nil (DStr ""))
-                ((Cons _ _) (DStr "(stop xm_scont)"))))
+              (if (gt_live k) (DStr "(stop xm_scont)") (DStr "")))
             (DStr " ")
-            (mxxs_spine t (+ i 1) msz)
+            (mxxs_spine k (+ i 1) msz)
             (DStr ")) (case False (chain ")
             (mxw_mh i a msz "False" (DStr ""))
-            (DStr " refl))))"))))))))
+            (DStr " refl))))"))))))
+    ((GTrB scrut tt et)
+     (dconc
+       (list
+         (DStr "(case-on ")
+         (pr_e scrut)
+         (if (gt_live tt)
+           (DStr
+             " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop xm_scont)))) ")
+           (DStr
+             " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) "))
+         (mxxs_spine tt i msz)
+         (if (gt_live et)
+           (DStr
+             ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop xm_scont)))) ")
+           (DStr
+             ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) "))
+         (mxxs_spine et i msz)
+         (DStr "))))"))))))
 
 ;; one seal-point sub-lemma: the chunk fn + the open-tail claim.
 ;; UNPREMISED; splits from the chunk's own walk at fresh locals.
@@ -5607,7 +6740,7 @@
     (Nil (DStr ""))
     ((Cons pc _)
      (match pc
-       ((MxPL _ _ _ _ _ _) (DStr ""))
+       ((MxPL _ _ _ _ _ _ _) (DStr ""))
        ((MxPS _ segE)
         (match msls
           (Nil (DStr ""))
@@ -5617,7 +6750,12 @@
               (let
                 ((cnm
                    (dconc
-                     (list (DStr "gb_") (DStr nm) (DStr "_c") (dint b) (DStr "_i")))))
+                     (list
+                       (DStr "gb_")
+                       (DStr nm)
+                       (DStr "_c")
+                       (dint b)
+                       (DStr "_i")))))
                 (dconc
                   (list
                     (DStr "(fn ")
@@ -5673,7 +6811,7 @@
                       ((Cons _ _)
                        (DStr
                          " m)))) (chain (steps ((compute both (stop xm_scont)))) ")))
-                    (mxxs_spine gs 1 msz)
+                    (mxxs_spine (gs_chain gs (gt_nil)) 1 msz)
                     (DStr "))")
                     (DStr (nl))
                     (DStr (nl))))))))))))))
@@ -5754,13 +6892,179 @@
         lst
         (DStr "))) refl)) (case Some (oc")
         (dint b)
-        (DStr ") (chain (steps ((rewrite (hyp 0) lr both true ()))) (case-on oc")
+        (DStr
+          ") (chain (steps ((rewrite (hyp 0) lr both true ()))) (case-on oc")
         (dint b)
         (DStr " IOut ((case INorm (ec")
         (dint b)
         (DStr " mc")
         (dint b)
-        (DStr ") (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+        (DStr
+          ") (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+        cst
+        (DStr "))) ")
+        (mxc_exit
+          (d_args nl)
+          (dcat3 (DStr "ec") (dint b) (DStr ""))
+          (dcat3 (DStr "mc") (dint b) (DStr ""))
+          0
+          nl
+          (dcat3 (DStr "ec") (dint b) (DStr ""))
+          cont
+          (DStr "il_slen")
+          cst
+          (dcat3 (DStr "ec") (dint b) (DStr "_"))
+          (dcat3 (DStr "rc") (dint b) (DStr "_")))
+        (DStr
+          ")) (case ITrap (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+        lst
+        (DStr "))) refl))))))))")))))
+
+;; the sealed-branch polarity case-on (IF-3a): ONE case-on of the
+;; shared raw scrutinee; each arm rewrites into both sides, walks its
+;; own region's guards (deduped per-REGION -- the IF-1c law), and
+;; rides through the seal to the arm-independent xm_scont form
+(fn mxxbr_case ((scrut Expr) (tgs GTr) (egs GTr) (msz Int)) Doc
+  (mxxs_spine (GTrB scrut (gt_dedup Nil tgs) (gt_dedup Nil egs)) 1 msz))
+
+;; one SEALED-BRANCH sub-lemma (IF-3a): the chunk fn + the open-tail
+;; claim. UNPREMISED; the machine walk and the polarity case-on live
+;; HERE, and the seal is the join -- both arms exit to the same
+;; continuation register file (the seal's zero set is the union of
+;; arm dirt), so the conclusion is ONE xm_scont form. Fuel: the
+;; machine total is tcost (a depth bound pricing the arm nesting) +
+;; the seal width; the top level consumes exactly 1 (the block) +
+;; the seal, so the continuation tower is tcost-1 regardless of arm.
+(fn mxxbr_seg1
+  ((nm (List Int))
+   (b Int)
+   (nl Int)
+   (msz Int)
+   (st IStmt)
+   (sE Expr)
+   (scrut Expr)
+   (tgs GTr)
+   (egs GTr)
+   (msls (List (Pair (List Expr) (List Expr)))))
+  Doc
+  (match msls
+    (Nil (DStr ""))
+    ((Cons (Pair sl zl) _)
+     (match (mxx_zflags zl)
+       ((Pair da (Pair db dc))
+        (let
+          ((cnm
+             (dconc
+               (list (DStr "gb_") (DStr nm) (DStr "_c") (dint b) (DStr "_i"))))
+           (t0 (tcost (list_expr sl))))
+          (dconc
+            (list
+              (DStr "(fn ")
+              cnm
+              (DStr " () (List IStmt) ")
+              (mxc_lst (Cons sE Nil))
+              (DStr ")")
+              (DStr (nl))
+              (DStr (nl))
+              (DStr "(claim sqbr_x_")
+              (DStr nm)
+              (DStr "_c")
+              (dint b)
+              (DStr " (goal (")
+              (d_binds_go
+                nl
+                (DStr
+                  "(za Int) (zb Int) (zc Int) (rw (List XInstr)) (m Mem) (f Nat) (g Nat) (restfs (List XFunc))"))
+              (DStr ") () (= (xeval_seq (S^ ")
+              (dint (+ t0 (ilen_e zl)))
+              (DStr " (S f)) (MkXModule restfs 0 ")
+              (dint msz)
+              (DStr ") ")
+              (mxx_spn (st_app sl zl) (DStr "rw"))
+              (DStr " ")
+              (mxx_regs
+                nl
+                (- 0 1)
+                (DStr "")
+                (DStr "x")
+                Nil
+                (DStr "za")
+                (DStr "zb")
+                (DStr "zc"))
+              (DStr " m) (xm_scont ")
+              (if da (DStr "0") (DStr "za"))
+              (DStr " ")
+              (if db (DStr "0") (DStr "zb"))
+              (DStr " ")
+              (if dc (DStr "0") (DStr "zc"))
+              (DStr " (S^ ")
+              (dint (- t0 1))
+              (DStr " (S f)) (MkXModule restfs 0 ")
+              (dint msz)
+              (DStr ") rw (istmts (S^ ")
+              (dint (gcost (Cons st Nil)))
+              (DStr " (S g)) ")
+              (dint msz)
+              (DStr " (inline ")
+              cnm
+              (DStr ") ")
+              (d_args nl)
+              (DStr " m)))) (chain (steps ((compute both (stop xm_scont)))) ")
+              (mxxbr_case scrut tgs egs msz)
+              (DStr "))")
+              (DStr (nl))
+              (DStr (nl))))))))))
+
+;; the sealed-branch composition (IF-3a): ist_seam1 splits the imp
+;; side at the branch singleton (tied fuel -- no reshapes), the
+;; sub-lemma cite rewrites the machine side, and the tail is the V2-8
+;; composition verbatim (shared-run case-on, il_slen exposure, the
+;; next boundary cited at the parked leaf)
+(fn mxxbr_cstep
+  ((nm (List Int))
+   (b Int)
+   (nl Int)
+   (msz Int)
+   (ts Int)
+   (gm Int)
+   (cst Doc)
+   (lst Doc)
+   (cont Doc))
+  Doc
+  (let
+    ((cnm
+       (dconc (list (DStr "gb_") (DStr nm) (DStr "_c") (dint b) (DStr "_i")))))
+    (dconc
+      (list
+        (DStr
+          "(rewrite-with (lemma ist_seam1) lr rhs () ()) (rewrite-with (lemma sqbr_x_")
+        (DStr nm)
+        (DStr "_c")
+        (dint b)
+        (DStr ") lr lhs ((inst g (S^ ")
+        (dint (- (- gm ts) 1))
+        (DStr " c2))) ()) (case-on (istmts (S^ ")
+        (dint gm)
+        (DStr " c2) ")
+        (dint msz)
+        (DStr " (inline ")
+        cnm
+        (DStr ") ")
+        (d_args nl)
+        (DStr
+          " m) Option ((case None (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+        lst
+        (DStr "))) refl)) (case Some (oc")
+        (dint b)
+        (DStr
+          ") (chain (steps ((rewrite (hyp 0) lr both true ()))) (case-on oc")
+        (dint b)
+        (DStr " IOut ((case INorm (ec")
+        (dint b)
+        (DStr " mc")
+        (dint b)
+        (DStr
+          ") (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
         cst
         (DStr "))) ")
         (mxc_exit
@@ -5794,7 +7098,7 @@
    (yi Int)
    (q Int)
    (zlen Int)
-   (wlen Int)
+   (aw Int)
    (bw Int)
    (locdoc Doc)
    (memdoc Doc)
@@ -5802,12 +7106,8 @@
    (cst Doc)
    (cont Doc))
   Doc
-  (let
-    ((aw (+ wlen 4))
-     (kd (dcat3 (DStr "(int_of_nat ") (dint kg) (DStr ")"))))
-    (let
-      ((sm (- (- xm aw) kg))
-       (si (- (- yi bw) kg)))
+  (let ((kd (dcat3 (DStr "(int_of_nat ") (dint kg) (DStr ")"))))
+    (let ((sm (- (- xm aw) kg)) (si (- (- yi bw) kg)))
       (dconc
         (list
           (DStr "(have hkw")
@@ -5820,7 +7120,8 @@
           (DStr nm)
           (DStr ") lr lhs ((inst x ")
           kd
-          (DStr ")) ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl) (steps ((rewrite (premise hi")
+          (DStr
+            ")) ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl) (steps ((rewrite (premise hi")
           (dint kg)
           (DStr
             ") lr lhs true ()) (compute lhs)) refl)) refl)) (steps ((rewrite (premise hkw")
@@ -5845,7 +7146,8 @@
           (dint kg)
           (DStr " ")
           (mxx_tw sm (DStr "c"))
-          (DStr "))) (steps ((compute both)) refl)) (steps ((rewrite (premise hf")
+          (DStr
+            "))) (steps ((compute both)) refl)) (steps ((rewrite (premise hf")
           (dint d)
           (DStr "i) lr rhs true ()) (rewrite (premise hf")
           (dint d)
@@ -5857,7 +7159,8 @@
           (mxx_tw si (DStr "c2"))
           (DStr ")) ((steps ((rewrite (premise hi")
           (dint kg)
-          (DStr ") lr lhs true ()) (compute lhs)) refl))) (case-on (iwhile (S^ ")
+          (DStr
+            ") lr lhs true ()) (compute lhs)) refl))) (case-on (iwhile (S^ ")
           (dint bw)
           (DStr " (lg_fuel ")
           (dint kg)
@@ -5903,8 +7206,7 @@
           (mxx_tw sm (DStr "c"))
           (DStr ") ")
           (mxx_tw (+ sm kg) (DStr "c"))
-          (DStr
-            ") (steps ((compute both)) refl)) (steps ((rewrite (premise hc")
+          (DStr ") (steps ((compute both)) refl)) (steps ((rewrite (premise hc")
           (dint d)
           (DStr "i) lr both true ()) (rewrite (premise hc")
           (dint d)
@@ -5916,6 +7218,441 @@
             ")) (case ITrap (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
           cst
           (DStr "))) refl))))))))"))))))
+
+;; --- branch legs (IF-1c) ---------------------------------------------------
+;; A branch has NO seal on either side (ix_cjoin seals flat-flat
+;; neighbors only), so its arm dirt rides out unspellable and no
+;; sub-lemma factoring exists on this target (the V2-7 finding): the
+;; branch walks INLINE in its chain lemma, the loop-leg precedent.
+;; ONE case-on of the shared raw-operand comparison scrutinee -- both
+;; machines stick on the same inner cmp term, walked at the LEG'S
+;; IN-FLIGHT state -- and each polarity arm carries its own tail text
+;; (arm guards, worker cite, exposure) to the SAME cite targets.
+;; Towers are ARM-INDEPENDENT on both sides (both machines hand
+;; continuations the same reservoir -- depth budgets, not step
+;; counts), so the chain arithmetic carries over with the branch
+;; counted as 1 machine element / 1 imp statement, and joins bind by
+;; MATCHING: the next boundary's za binder absorbs the arms'
+;; different RAX trees, its fuel binder any machine surplus.
+;; Blueprint: examples/sqbx_probe.shard.
+
+(fn gsl_len ((gs (List GSplit))) Int
+  (measure (struct gs))
+  (match gs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (gsl_len t)))))
+
+(fn mxx_hasbr ((segs (List MxPc))) Bool
+  (measure (struct segs))
+  (match segs
+    (Nil False)
+    ((Cons pc t)
+     (match pc
+       ((MxPB _ _ _ _ _ _ _) True)
+       (_ (mxx_hasbr t))))))
+
+;; decompose a branch leg's pieces: ([A?] branch [B?])
+(fn mxx_brtail ((segs (List MxPc))) (Option (List IStmt))
+  (match segs
+    (Nil (Some Nil))
+    ((Cons pc t)
+     (match pc
+       ((MxPS b2 _)
+        (match t
+          (Nil (Some b2))
+          (_ None)))
+       (_ None)))))
+
+(fn mxx_brparts2 ((segs (List MxPc))) (Option (Pair IStmt (List IStmt)))
+  (match segs
+    (Nil None)
+    ((Cons pc t)
+     (match pc
+       ((MxPB bs _ _ _ _ _ _)
+        (match (mxx_brtail t)
+          (None None)
+          ((Some b2) (Some (Pair bs b2)))))
+       (_ None)))))
+
+(fn mxx_brparts ((segs (List MxPc)))
+  (Option (Pair (List IStmt) (Pair IStmt (List IStmt))))
+  (match segs
+    (Nil None)
+    ((Cons pc t)
+     (match pc
+       ((MxPS a _)
+        (match (mxx_brparts2 t)
+          (None None)
+          ((Some (Pair bs b2)) (Some (Pair a (Pair bs b2))))))
+       ((MxPB bs _ _ _ _ _ _)
+        (match (mxx_brtail t)
+          (None None)
+          ((Some b2) (Some (Pair Nil (Pair bs b2))))))
+       (_ None)))))
+
+;; one branch leg's chain-lemma body: walk the entry segment, case-on
+;; the shared scrutinee, then per polarity arm walk the arm + tail
+;; inline to the leg's target (worker cite + exposure + next-boundary
+;; cite for loop legs; ground for the terminal leg). The arm tails
+;; are the SAME text except for the walked locals/memory.
+;; the loop-bounded leg's tree spine (rung 3b-b): guard and fork
+;; textures exactly as mxx_spine, but each LEAF builds its own
+;; loop-head cite from the leaf's walked state -- a forked arm
+;; multiplies loop heads per leaf, and the separate case scopes make
+;; the (+ d 1) have-names safe at every one of them.
+(fn mxx_lspine
+  ((tr GTr)
+   (i Int)
+   (nm (List Int))
+   (nl Int)
+   (msz Int)
+   (gi Int)
+   (kg Int)
+   (d Int)
+   (xm Int)
+   (yi Int)
+   (q Int)
+   (zlen Int)
+   (aw Int)
+   (bw Int)
+   (pst Doc)
+   (cst Doc)
+   (lst Doc)
+   (cont Doc))
+  Doc
+  (measure (struct tr))
+  (match tr
+    ((GTrL lc mm)
+     (let ((kd (dcat3 (DStr "(int_of_nat ") (dint kg) (DStr ")"))))
+       (let ((locdoc (mxx_locdoc lc gi kd)))
+         (mxx_lhead
+           nm
+           nl
+           msz
+           gi
+           kg
+           (+ d 1)
+           xm
+           yi
+           q
+           zlen
+           aw
+           bw
+           locdoc
+           (pr_e mm)
+           pst
+           cst
+           (mxc_exit
+             locdoc
+             (dcat3 (DStr "lc") (dint (+ d 1)) (DStr ""))
+             (dcat3 (DStr "mm") (dint (+ d 1)) (DStr ""))
+             0
+             nl
+             (dcat3 (DStr "lc") (dint (+ d 1)) (DStr ""))
+             cont
+             (DStr "il_wlen")
+             cst
+             (dcat3 (DStr "e") (dint (+ d 1)) (DStr "_"))
+             (dcat3 (DStr "r") (dint (+ d 1)) (DStr "_")))))))
+    ((GTrG g k)
+     (match g
+       ((GShared e)
+        (dconc
+          (list
+            (DStr "(case-on ")
+            (pr_e e)
+            (DStr
+              " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+            pst
+            (DStr "))) ")
+            (mxx_lspine
+              k
+              (+ i 1)
+              nm
+              nl
+              msz
+              gi
+              kg
+              d
+              xm
+              yi
+              q
+              zlen
+              aw
+              bw
+              pst
+              cst
+              lst
+              cont)
+            (DStr
+              ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+            lst
+            (DStr "))) refl))))"))))
+       ((GMemHi a)
+        (dconc
+          (list
+            (DStr "(case-on (lt ")
+            (pr_e a)
+            (DStr " ")
+            (dint msz)
+            (DStr ") Bool ((case True (chain ")
+            (mxw_mh i a msz "True" pst)
+            (DStr " ")
+            (mxx_lspine
+              k
+              (+ i 1)
+              nm
+              nl
+              msz
+              gi
+              kg
+              d
+              xm
+              yi
+              q
+              zlen
+              aw
+              bw
+              pst
+              cst
+              lst
+              cont)
+            (DStr ")) (case False (chain ")
+            (mxw_mh i a msz "False" lst)
+            (DStr " refl))))"))))))
+    ((GTrB scrut tt et)
+     (dconc
+       (list
+         (DStr "(case-on ")
+         (pr_e scrut)
+         (DStr
+           " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+         pst
+         (DStr "))) ")
+         (mxx_lspine tt i nm nl msz gi kg d xm yi q zlen aw bw pst cst lst cont)
+         (DStr
+           ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+         pst
+         (DStr "))) ")
+         (mxx_lspine et i nm nl msz gi kg d xm yi q zlen aw bw pst cst lst cont)
+         (DStr "))))"))))))
+
+(fn mxx_bleg
+  ((nm (List Int))
+   (nl Int)
+   (msz Int)
+   (parts (Pair (List IStmt) (Pair IStmt (List IStmt))))
+   (olp (Option MxPc))
+   (li (Option MxXLi))
+   (headdoc Doc)
+   (opener Doc)
+   (fm Int)
+   (gm Int)
+   (w Int)
+   (tn Int)
+   (b Int)
+   (d Int)
+   (pst Doc)
+   (cst Doc)
+   (lst Doc)
+   (lastp Bool))
+  Doc
+  (match parts
+    ((Pair aSt (Pair bs bSt))
+     (match bs
+       ((IIf cnd tb eb)
+        (match cnd
+          ((IBin _ o ca cb)
+           (match
+             (lw_stmts
+               (+ (isz_stmts aSt) 2)
+               True
+               msz
+               aSt
+               (st_params nl)
+               (FVar (quote m)))
+             ((LSRf _) (DStr ""))
+             ((LSOk gsA stA memA)
+              (match (lw_exp True msz ca stA memA)
+                ((LXRf _) (DStr ""))
+                ((LXOk va _)
+                 (match (lw_exp True msz cb stA memA)
+                   ((LXRf _) (DStr ""))
+                   ((LXOk vb _)
+                    (match olp
+                      (None
+                        ;; ground-terminated leg: ONE tree spine to
+                        ;; the shared ground closer (rung 3b/3b-b) --
+                        ;; either arm may fork (nested/repeated); the
+                        ;; leg tail rides per leaf.
+                        (match
+                          (lw_tree
+                            (+ (isz_stmts (stmt_app tb bSt)) 2)
+                            True
+                            msz
+                            (stmt_app tb bSt)
+                            stA
+                            memA)
+                          ((LTRf _) (DStr ""))
+                          ((LTOk trT)
+                           (match
+                             (lw_tree
+                               (+ (isz_stmts (stmt_app eb bSt)) 2)
+                               True
+                               msz
+                               (stmt_app eb bSt)
+                               stA
+                               memA)
+                             ((LTRf _) (DStr ""))
+                             ((LTOk trE)
+                              (dconc
+                                (list
+                                  headdoc
+                                  opener
+                                  (DStr "(steps ((compute both ")
+                                  pst
+                                  (DStr "))) ")
+                                  (mxx_spine
+                                    (gt_dedup
+                                      Nil
+                                      (gs_chain
+                                        gsA
+                                        (GTrB (sc2 (op_sym o) va vb) trT trE)))
+                                    1
+                                    msz
+                                    pst
+                                    lst
+                                    (DStr
+                                      "(steps ((compute both (stop lg_fuel int_of_nat)))) refl"))
+                                  (DStr "))")
+                                  (DStr (nl))
+                                  (DStr (nl)))))))))
+                      ((Some pc)
+                       ;; loop-bounded leg (rung 3b-b): the arms ride
+                       ;; the leg tail AND the counter const-run per
+                       ;; leaf; every leaf builds its own loop-head
+                       ;; cite from its walked state via mxx_lspine.
+                       (match pc
+                         ((MxPL gi kg lbody _ _ _ csets)
+                          (match li
+                            (None (DStr ""))
+                            ((Some (MkMxXLi zlen _ wcode _ _ _))
+                             (let
+                               ((q (mxc_clen csets))
+                                (bw (+ (gcost lbody) 5))
+                                (tailSt (isapp2 bSt (mxx_csetstmts csets))))
+                               (match
+                                 (lw_tree
+                                   (+ (isz_stmts (stmt_app tb tailSt)) 2)
+                                   True
+                                   msz
+                                   (stmt_app tb tailSt)
+                                   stA
+                                   memA)
+                                 ((LTRf _) (DStr ""))
+                                 ((LTOk trT)
+                                  (match
+                                    (lw_tree
+                                      (+ (isz_stmts (stmt_app eb tailSt)) 2)
+                                      True
+                                      msz
+                                      (stmt_app eb tailSt)
+                                      stA
+                                      memA)
+                                    ((LTRf _) (DStr ""))
+                                    ((LTOk trE)
+                                     (let
+                                       ((xm (- (- fm (+ w (+ q zlen))) 4))
+                                        (yi (- (- gm (+ tn q)) 2))
+                                        (kd
+                                          (dcat3
+                                            (DStr "(int_of_nat ")
+                                            (dint kg)
+                                            (DStr ")"))))
+                                       (let
+                                         ((cont
+                                            (if lastp
+                                              (DStr
+                                                "(steps ((compute both (stop lg_fuel int_of_nat)))) refl")
+                                              (mxx_cite nm (+ b 1) cst)))
+                                          (respell
+                                            (dconc
+                                              (list
+                                                (mx_ladder kg)
+                                                (DStr "(have hxk")
+                                                (dint d)
+                                                (DStr " (= (XMovRI ")
+                                                (mxx_regnm gi)
+                                                (DStr " ")
+                                                kd
+                                                (DStr ") (XMovRI ")
+                                                (mxx_regnm gi)
+                                                (DStr " ")
+                                                (dint kg)
+                                                (DStr
+                                                  ")) (steps ((rewrite (premise hi")
+                                                (dint kg)
+                                                (DStr
+                                                  ") lr lhs true ())) refl)) (steps ((rewrite (premise hxk")
+                                                (dint d)
+                                                (DStr
+                                                  ") rl lhs false ()))) (have hik")
+                                                (dint d)
+                                                (DStr " (= (ISet ")
+                                                (dint gi)
+                                                (DStr " (IConst ")
+                                                kd
+                                                (DStr ")) (ISet ")
+                                                (dint gi)
+                                                (DStr " (IConst ")
+                                                (dint kg)
+                                                (DStr
+                                                  "))) (steps ((rewrite (premise hi")
+                                                (dint kg)
+                                                (DStr
+                                                  ") lr lhs true ())) refl)) (steps ((rewrite (premise hik")
+                                                (dint d)
+                                                (DStr ") rl rhs false ()))) ")))))
+                                         (dconc
+                                           (list
+                                             headdoc
+                                             opener
+                                             respell
+                                             (DStr "(steps ((compute both ")
+                                             pst
+                                             (DStr "))) ")
+                                             (mxx_lspine
+                                               (gt_dedup
+                                                 Nil
+                                                 (gs_chain
+                                                   gsA
+                                                   (GTrB
+                                                     (sc2 (op_sym o) va vb)
+                                                     trT
+                                                     trE)))
+                                               1
+                                               nm
+                                               nl
+                                               msz
+                                               gi
+                                               kg
+                                               d
+                                               xm
+                                               yi
+                                               q
+                                               zlen
+                                               (+ (tcost wcode) 2)
+                                               bw
+                                               pst
+                                               cst
+                                               lst
+                                               cont)
+                                             (DStr "))")
+                                             (DStr (nl))
+                                             (DStr (nl))))))))))))))
+                         (_ (DStr ""))))))))))))
+          (_ (DStr ""))))
+       (_ (DStr ""))))))
 
 ;; the chain driver over legs, deepest-first
 (fn mxx_lems
@@ -5976,235 +7713,409 @@
        (let
          ((headregs
             (if (int_eq b 0)
-              (mxx_regs nl (- 0 1) (DStr "") (DStr "x") Nil (DStr "0") (DStr "0") (DStr "0"))
+              (mxx_regs
+                nl
+                (- 0 1)
+                (DStr "")
+                (DStr "x")
+                Nil
+                (DStr "0")
+                (DStr "0")
+                (DStr "0"))
               (mxx_regs nl (- 0 1) (DStr "") (DStr "x") Nil zad zbd zcd))))
-       (let
-         ((headdoc
-            (dconc
-              (list
-                (DStr "(claim ")
-                nmdoc
-                (DStr " (goal (")
-                (d_binds_go
-                  nl
-                  (dcat3
-                    (if (int_eq b 0) (DStr "")
-                    (dconc
-                      (list
-                        (if fsa (DStr "(za Int) ") (DStr ""))
-                        (if fsb (DStr "(zb Int) ") (DStr ""))
-                        (if fsc (DStr "(zc Int) ") (DStr "")))))
-                    (DStr "(m Mem) (c Nat) (c2 Nat) (restfs (List XFunc))")
-                    (DStr "")))
-                (DStr ") () (= (xeval_seq (S^ ")
-                (dint fm)
-                (DStr " c) (MkXModule restfs 0 ")
-                (dint msz)
-                (DStr ") ")
-                codex
-                (DStr " ")
-                headregs
-                (DStr " m) (ix_sout (istmts (S^ ")
-                (dint gm)
-                (DStr " c2) ")
-                (dint msz)
-                (DStr " ")
-                codei
-                (DStr " ")
-                (d_args nl)
-                (DStr " m)))) (chain ")))))
-         (match (mxx_segm segs msls)
-           ((Pair (Pair w (Pair z tn)) msls2)
-            (match olp
-              (None
-                ;; a flat leg. Last: walk the chunk (+ the terminal
-                ;; seal) to ground. Mid (V2-8): the chunk ends at its
-                ;; seal point -- emit the open-tail sub-lemma (the
-                ;; machine walk lives THERE) and compose by ist_seam +
-                ;; il_slen; the machine side of the chain lemma is
-                ;; never walked, so it parks at the folded rest-fn
-                ;; call for the next boundary's cite.
-                (let
-                  ((lastp
-                     (match rest
-                       (Nil True)
-                       ((Cons _ _) False))))
-                  (match
-                    (lw_stmts
-                      (+ (isz_stmts (mxx_segstmts segs)) 2)
-                      True
-                      msz
-                      (mxx_segstmts segs)
-                      (st_params nl)
-                      (FVar (quote m)))
-                    ((LSRf _) (DStr ""))
-                    ((LSOk gs _ _)
-                     (if lastp
-                       (dconc
-                         (list
-                           headdoc
-                           opener
-                           (DStr "(steps ((compute both ")
-                           pst
-                           (DStr "))) ")
-                           (mxx_spine
-                             (gs_dedup Nil gs)
-                             1
-                             msz
-                             pst
-                             lst
-                             (DStr
-                               "(steps ((compute both (stop lg_fuel int_of_nat)))) refl"))
-                           (DStr "))")
-                           (DStr (nl))
-                           (DStr (nl))))
-                       (dconc
-                         (list
-                           (mxx_lems
-                             rest lis msls2 brpre nm nl msz
-                             (- fm (+ w z)) (- gm tn) (+ b 1) d nr fsa fsb
-                             fsc)
-                           (mxx_seg1 nm b nl msz tn segs msls (gs_dedup Nil gs))
-                           headdoc
-                           mopener
-                           (mxx_cstep
-                             nm b nl msz tn gm cst lst
-                             (mxx_cite nm (+ b 1) cst))
-                           (DStr "))")
-                           (DStr (nl))
-                           (DStr (nl)))))))))
-              ((Some pc)
-               (match pc
-                 ((MxPL gi kg lbody _ _ csets)
-                  (match lis
-                    (Nil (DStr ""))
-                    ((Cons (MkMxXLi zlen wlen _ _ _ _) lrest)
-                     (let
-                       ((q (mxc_clen csets))
-                        (bw (+ (gcost lbody) 5))
-                        (wstmts
-                          (isapp2 (mxx_segstmts segs) (mxx_csetstmts csets))))
-                       (match
-                         (lw_stmts
-                           (+ (isz_stmts wstmts) 2)
-                           True
-                           msz
-                           wstmts
-                           (st_params nl)
-                           (FVar (quote m)))
-                         ((LSRf _) (DStr ""))
-                         ((LSOk gs postlc postmem)
-                          (let
-                            ((fm2 (- (- fm (+ w (+ (+ q zlen) 1))) 0))
-                             (gm2 (- gm (+ tn (+ q 1))))
-                             (xm (- (- fm (+ w (+ q zlen))) 4))
-                             (yi (- (- gm (+ tn q)) 2))
-                             (kd
-                               (dcat3
-                                 (DStr "(int_of_nat ")
-                                 (dint kg)
-                                 (DStr ")"))))
-                            (let
-                              ((locdoc (mxx_locdoc postlc gi kd))
-                               (memdoc (pr_e postmem))
-                               (lastp
-                                 (match rest
-                                   (Nil True)
-                                   ((Cons _ _) False))))
+         (let
+           ((headdoc
+              (dconc
+                (list
+                  (DStr "(claim ")
+                  nmdoc
+                  (DStr " (goal (")
+                  (d_binds_go
+                    nl
+                    (dcat3
+                      (if (int_eq b 0) (DStr "")
+                      (dconc
+                        (list
+                          (if fsa (DStr "(za Int) ") (DStr ""))
+                          (if fsb (DStr "(zb Int) ") (DStr ""))
+                          (if fsc (DStr "(zc Int) ") (DStr "")))))
+                      (DStr "(m Mem) (c Nat) (c2 Nat) (restfs (List XFunc))")
+                      (DStr "")))
+                  (DStr ") () (= (xeval_seq (S^ ")
+                  (dint fm)
+                  (DStr " c) (MkXModule restfs 0 ")
+                  (dint msz)
+                  (DStr ") ")
+                  codex
+                  (DStr " ")
+                  headregs
+                  (DStr " m) (ix_sout (istmts (S^ ")
+                  (dint gm)
+                  (DStr " c2) ")
+                  (dint msz)
+                  (DStr " ")
+                  codei
+                  (DStr " ")
+                  (d_args nl)
+                  (DStr " m)))) (chain ")))))
+           (match (mxx_segm segs msls)
+             ((Pair (Pair w (Pair z tn)) msls2)
+              (if (mxx_hasbr segs)
+                ;; --- a branch leg: terminal and loop-tailed legs
+                ;; walk inline (IF-1c; the branch = 1 element / 1
+                ;; statement); a SEALED branch mid leg (IF-3a)
+                ;; composes through its own sub-lemma.
+                (match (mxx_brparts segs)
+                  (None (DStr ""))
+                  ((Some parts)
+                   (match olp
+                     (None
+                       (match rest
+                         (Nil
+                           (mxx_bleg nm nl msz parts None None headdoc opener fm
+                             gm w tn b d pst cst lst True))
+                         (_
+                           ;; a SEALED branch mid leg (IF-3a): a
+                           ;; singleton by construction -- the
+                           ;; sub-lemma carries the machine walk and
+                           ;; the polarity case-on; the leg composes
+                           (match segs
+                             ((Cons (MxPB st sE scrut _ tgs egs _) Nil)
+                              (dconc
+                                (list
+                                  (mxx_lems
+                                    rest
+                                    lis
+                                    msls2
+                                    brpre
+                                    nm
+                                    nl
+                                    msz
+                                    (- fm (+ w z))
+                                    (- gm tn)
+                                    (+ b 1)
+                                    d
+                                    nr
+                                    fsa
+                                    fsb
+                                    fsc)
+                                  (mxxbr_seg1 nm b nl msz st sE scrut tgs egs
+                                    msls)
+                                  headdoc
+                                  opener
+                                  (mxxbr_cstep
+                                    nm
+                                    b
+                                    nl
+                                    msz
+                                    (gcost (Cons st Nil))
+                                    gm
+                                    cst
+                                    lst
+                                    (mxx_cite nm (+ b 1) cst))
+                                  (DStr "))")
+                                  (DStr (nl))
+                                  (DStr (nl)))))
+                             (_ (DStr ""))))))
+                     ((Some pc)
+                      (match pc
+                        ((MxPL _ _ _ _ _ _ csets)
+                         (match lis
+                           (Nil (DStr ""))
+                           ((Cons li lrest)
+                            (match li
+                              ((MkMxXLi zlen _ _ _ _ _)
+                               (let
+                                 ((q (mxc_clen csets))
+                                  (lastp
+                                    (match rest
+                                      (Nil True)
+                                      ((Cons _ _) False))))
+                                 (let
+                                   ((fm2 (- (- fm (+ w (+ (+ q zlen) 1))) 0))
+                                    (gm2 (- gm (+ tn (+ q 1)))))
+                                   (DCat
+                                     (mxx_lems
+                                       rest
+                                       lrest
+                                       msls2
+                                       brpre
+                                       nm
+                                       nl
+                                       msz
+                                       fm2
+                                       gm2
+                                       (+ b 1)
+                                       (+ d 1)
+                                       nr
+                                       fsa
+                                       fsb
+                                       fsc)
+                                     (mxx_bleg
+                                       nm
+                                       nl
+                                       msz
+                                       parts
+                                       (Some pc)
+                                       (Some li)
+                                       headdoc
+                                       opener
+                                       fm
+                                       gm
+                                       w
+                                       tn
+                                       b
+                                       d
+                                       pst
+                                       cst
+                                       lst
+                                       lastp)))))))))
+                        (_ (DStr "")))))))
+                (match olp
+                  (None
+                    ;; a flat leg. Last: walk the chunk (+ the terminal
+                    ;; seal) to ground. Mid (V2-8): the chunk ends at its
+                    ;; seal point -- emit the open-tail sub-lemma (the
+                    ;; machine walk lives THERE) and compose by ist_seam +
+                    ;; il_slen; the machine side of the chain lemma is
+                    ;; never walked, so it parks at the folded rest-fn
+                    ;; call for the next boundary's cite.
+                    (let
+                      ((lastp
+                         (match rest
+                           (Nil True)
+                           ((Cons _ _) False))))
+                      (match
+                        (lw_stmts
+                          (+ (isz_stmts (mxx_segstmts segs)) 2)
+                          True
+                          msz
+                          (mxx_segstmts segs)
+                          (st_params nl)
+                          (FVar (quote m)))
+                        ((LSRf _) (DStr ""))
+                        ((LSOk gs _ _)
+                         (if lastp
+                           (dconc
+                             (list
+                               headdoc
+                               opener
+                               (DStr "(steps ((compute both ")
+                               pst
+                               (DStr "))) ")
+                               (mxx_spine
+                                 (gs_chain (gs_dedup Nil gs) (gt_nil))
+                                 1
+                                 msz
+                                 pst
+                                 lst
+                                 (DStr
+                                   "(steps ((compute both (stop lg_fuel int_of_nat)))) refl"))
+                               (DStr "))")
+                               (DStr (nl))
+                               (DStr (nl))))
+                           (dconc
+                             (list
+                               (mxx_lems
+                                 rest
+                                 lis
+                                 msls2
+                                 brpre
+                                 nm
+                                 nl
+                                 msz
+                                 (- fm (+ w z))
+                                 (- gm tn)
+                                 (+ b 1)
+                                 d
+                                 nr
+                                 fsa
+                                 fsb
+                                 fsc)
+                               (mxx_seg1
+                                 nm
+                                 b
+                                 nl
+                                 msz
+                                 tn
+                                 segs
+                                 msls
+                                 (gs_dedup Nil gs))
+                               headdoc
+                               mopener
+                               (mxx_cstep
+                                 nm
+                                 b
+                                 nl
+                                 msz
+                                 tn
+                                 gm
+                                 cst
+                                 lst
+                                 (mxx_cite nm (+ b 1) cst))
+                               (DStr "))")
+                               (DStr (nl))
+                               (DStr (nl)))))))))
+                  ((Some pc)
+                   (match pc
+                     ((MxPL gi kg lbody _ _ _ csets)
+                      (match lis
+                        (Nil (DStr ""))
+                        ((Cons (MkMxXLi zlen _ wcode _ _ _) lrest)
+                         (let
+                           ((q (mxc_clen csets))
+                            (bw (+ (gcost lbody) 5))
+                            (wstmts
+                              (isapp2 (mxx_segstmts segs) (mxx_csetstmts csets))))
+                           (match
+                             (lw_stmts
+                               (+ (isz_stmts wstmts) 2)
+                               True
+                               msz
+                               wstmts
+                               (st_params nl)
+                               (FVar (quote m)))
+                             ((LSRf _) (DStr ""))
+                             ((LSOk gs postlc postmem)
                               (let
-                                ((cont
-                                   (if lastp
-                                     (DStr
-                                       "(steps ((compute both (stop lg_fuel int_of_nat)))) refl")
-                                     (mxx_cite nm (+ b 1) cst)))
-                                 (respell
-                                   (dconc
-                                     (list
-                                       (mx_ladder kg)
-                                       (DStr "(have hxk")
-                                       (dint d)
-                                       (DStr " (= (XMovRI ")
-                                       (mxx_regnm gi)
-                                       (DStr " ")
-                                       kd
-                                       (DStr ") (XMovRI ")
-                                       (mxx_regnm gi)
-                                       (DStr " ")
-                                       (dint kg)
-                                       (DStr ")) (steps ((rewrite (premise hi")
-                                       (dint kg)
-                                       (DStr
-                                         ") lr lhs true ())) refl)) (steps ((rewrite (premise hxk")
-                                       (dint d)
-                                       (DStr
-                                         ") rl lhs false ()))) (have hik")
-                                       (dint d)
-                                       (DStr " (= (ISet ")
-                                       (dint gi)
-                                       (DStr " (IConst ")
-                                       kd
-                                       (DStr ")) (ISet ")
-                                       (dint gi)
-                                       (DStr " (IConst ")
-                                       (dint kg)
-                                       (DStr "))) (steps ((rewrite (premise hi")
-                                       (dint kg)
-                                       (DStr
-                                         ") lr lhs true ())) refl)) (steps ((rewrite (premise hik")
-                                       (dint d)
-                                       (DStr ") rl rhs false ()))) ")))))
-                                (dconc
-                                  (list
-                                    (mxx_lems
-                                      rest lrest msls2 brpre nm nl msz
-                                      (- fm2 0) gm2 (+ b 1) (+ d 1) nr fsa fsb
-                                      fsc)
-                                    headdoc
-                                    opener
-                                    respell
-                                    (DStr "(steps ((compute both ")
-                                    pst
-                                    (DStr "))) ")
-                                    (mxx_spine
-                                      (gs_dedup Nil gs)
-                                      1
-                                      msz
-                                      pst
-                                      lst
-                                      (mxx_lhead
-                                        nm nl msz gi kg (+ d 1) xm yi q zlen
-                                        wlen bw locdoc memdoc pst cst
-                                        (mxc_exit
-                                          locdoc
-                                          (dcat3
-                                            (DStr "lc")
-                                            (dint (+ d 1))
-                                            (DStr ""))
-                                          (dcat3
-                                            (DStr "mm")
-                                            (dint (+ d 1))
-                                            (DStr ""))
-                                          0
+                                ((fm2 (- (- fm (+ w (+ (+ q zlen) 1))) 0))
+                                 (gm2 (- gm (+ tn (+ q 1))))
+                                 (xm (- (- fm (+ w (+ q zlen))) 4))
+                                 (yi (- (- gm (+ tn q)) 2))
+                                 (kd
+                                   (dcat3
+                                     (DStr "(int_of_nat ")
+                                     (dint kg)
+                                     (DStr ")"))))
+                                (let
+                                  ((locdoc (mxx_locdoc postlc gi kd))
+                                   (memdoc (pr_e postmem))
+                                   (lastp
+                                     (match rest
+                                       (Nil True)
+                                       ((Cons _ _) False))))
+                                  (let
+                                    ((cont
+                                       (if lastp
+                                         (DStr
+                                           "(steps ((compute both (stop lg_fuel int_of_nat)))) refl")
+                                         (mxx_cite nm (+ b 1) cst)))
+                                     (respell
+                                       (dconc
+                                         (list
+                                           (mx_ladder kg)
+                                           (DStr "(have hxk")
+                                           (dint d)
+                                           (DStr " (= (XMovRI ")
+                                           (mxx_regnm gi)
+                                           (DStr " ")
+                                           kd
+                                           (DStr ") (XMovRI ")
+                                           (mxx_regnm gi)
+                                           (DStr " ")
+                                           (dint kg)
+                                           (DStr
+                                             ")) (steps ((rewrite (premise hi")
+                                           (dint kg)
+                                           (DStr
+                                             ") lr lhs true ())) refl)) (steps ((rewrite (premise hxk")
+                                           (dint d)
+                                           (DStr
+                                             ") rl lhs false ()))) (have hik")
+                                           (dint d)
+                                           (DStr " (= (ISet ")
+                                           (dint gi)
+                                           (DStr " (IConst ")
+                                           kd
+                                           (DStr ")) (ISet ")
+                                           (dint gi)
+                                           (DStr " (IConst ")
+                                           (dint kg)
+                                           (DStr
+                                             "))) (steps ((rewrite (premise hi")
+                                           (dint kg)
+                                           (DStr
+                                             ") lr lhs true ())) refl)) (steps ((rewrite (premise hik")
+                                           (dint d)
+                                           (DStr ") rl rhs false ()))) ")))))
+                                    (dconc
+                                      (list
+                                        (mxx_lems
+                                          rest
+                                          lrest
+                                          msls2
+                                          brpre
+                                          nm
                                           nl
-                                          (dcat3
-                                            (DStr "lc")
-                                            (dint (+ d 1))
-                                            (DStr ""))
-                                          cont
-                                          (DStr "il_wlen")
-                                          cst
-                                          (dcat3
-                                            (DStr "e")
-                                            (dint (+ d 1))
-                                            (DStr "_"))
-                                          (dcat3
-                                            (DStr "r")
-                                            (dint (+ d 1))
-                                            (DStr "_")))))
-                                    (DStr "))")
-                                    (DStr (nl))
-                                    (DStr (nl)))))))))))))
-                 (_ (DStr "")))))))))))))
+                                          msz
+                                          (- fm2 0)
+                                          gm2
+                                          (+ b 1)
+                                          (+ d 1)
+                                          nr
+                                          fsa
+                                          fsb
+                                          fsc)
+                                        headdoc
+                                        opener
+                                        respell
+                                        (DStr "(steps ((compute both ")
+                                        pst
+                                        (DStr "))) ")
+                                        (mxx_spine
+                                          (gs_chain (gs_dedup Nil gs) (gt_nil))
+                                          1
+                                          msz
+                                          pst
+                                          lst
+                                          (mxx_lhead
+                                            nm
+                                            nl
+                                            msz
+                                            gi
+                                            kg
+                                            (+ d 1)
+                                            xm
+                                            yi
+                                            q
+                                            zlen
+                                            (+ (tcost wcode) 2)
+                                            bw
+                                            locdoc
+                                            memdoc
+                                            pst
+                                            cst
+                                            (mxc_exit
+                                              locdoc
+                                              (dcat3
+                                                (DStr "lc")
+                                                (dint (+ d 1))
+                                                (DStr ""))
+                                              (dcat3
+                                                (DStr "mm")
+                                                (dint (+ d 1))
+                                                (DStr ""))
+                                              0
+                                              nl
+                                              (dcat3
+                                                (DStr "lc")
+                                                (dint (+ d 1))
+                                                (DStr ""))
+                                              cont
+                                              (DStr "il_wlen")
+                                              cst
+                                              (dcat3
+                                                (DStr "e")
+                                                (dint (+ d 1))
+                                                (DStr "_"))
+                                              (dcat3
+                                                (DStr "r")
+                                                (dint (+ d 1))
+                                                (DStr "_")))))
+                                        (DStr "))")
+                                        (DStr (nl))
+                                        (DStr (nl)))))))))))))
+                     (_ (DStr ""))))))))))))))
 
 
 (type SqxR (SqxOk Doc) (SqxNote (List Int)) (SqxErr (List Int)))
@@ -6244,7 +8155,8 @@
                       ((Some fsc)
                        (let
                          ((nm (pin_nm pin))
-                          (nl (+ (ikn (ikparams_of ifn)) (ikn (ikextra_of ifn))))
+                          (nl
+                            (+ (ikn (ikparams_of ifn)) (ikn (ikextra_of ifn))))
                           (ss (ibody_of ifn)))
                          (match
                            (mxc_slice
@@ -6261,7 +8173,8 @@
                            ((MxPOk pcs)
                             (match (mxx_chunks pcs mtr)
                               (None
-                                (SqxErr "per-segment translation invoke (internal)"))
+                                (SqxErr
+                                  "per-segment translation invoke (internal)"))
                               ((Some msls)
                                (let ((legs (mxx_legs pcs)))
                                  (match (mxx_ag legs lis msls 0 0 0 0)
@@ -6272,16 +8185,27 @@
                                        (SqxOk
                                          (dconc
                                            (list
-                                             (mxx_rests
-                                               legs lis msls nm ssE els 0 0 0)
+                                             (mxx_rests legs lis msls nm ssE els
+                                               0 0 0)
                                              (mx_wid nm)
                                              (mx_wid64 nm)
                                              workers
                                              (mxx_lems
-                                               legs lis msls brpre nm nl
-                                               msz aa gg 0 0
+                                               legs
+                                               lis
+                                               msls
+                                               brpre
+                                               nm
+                                               nl
+                                               msz
+                                               aa
+                                               gg
+                                               0
+                                               0
                                                (- (mxx_nlg legs) 1)
-                                               fsa fsb fsc)))))))))))))))))))))))))))))
+                                               fsa
+                                               fsb
+                                               fsc)))))))))))))))))))))))))))))
 
 ;; --- per-pin emission ------------------------------------------------------------
 
@@ -6407,8 +8331,22 @@
              (gen_fn_pin msrc mtr trans tiepre brpre tname x86 wrap pin gv ifn))
             (None (sqm_pin msrc mtr tiepre brpre tname x86 wrap pin gv ifn)))
         (if (has_mem (ibody_of ifn))
-          (sq_pin msrc mtr tiepre brpre tname x86 wrap pin gv ifn)
+          (if (has_brtop (ibody_of ifn))
+            (sqm_pin msrc mtr tiepre brpre tname x86 wrap pin gv ifn)
+            (sq_pin msrc mtr tiepre brpre tname x86 wrap pin gv ifn))
           (gen_fn_pin msrc mtr trans tiepre brpre tname x86 wrap pin gv ifn))))))))
+
+;; a TOP-LEVEL branch (statement position, outside any loop): routes a
+;; memful body to the mixed tier, whose piece grammar owns branches --
+;; the statement tier's walk stays straight-line-only
+(fn has_brtop ((ss (List IStmt))) Bool
+  (measure (struct ss))
+  (match ss
+    (Nil False)
+    ((Cons s t)
+     (match s
+       ((IIf _ _ _) True)
+       (_ (has_brtop t))))))
 
 ;; the fn-grain flow (loop + scalar tiers): run the FUNCTION translator
 ;; on the pin value, spell the tie, then the per-tier bridge
@@ -6519,7 +8457,11 @@
           ((EErr msg) (EErr msg))
           ((EOk ds) (EOk (DCat d ds)))))))))
 
-;; does any pin carry a loop? (the header's loop-tier import gate)
+;; does any pin carry a loop or a top-level branch? (the header's
+;; loopkit import gate: loops need the worker vocabulary, and the
+;; MIXED tier (memful + top-level branch) spells lg_fuel in its seam
+;; compositions even loop-free --
+;; IF-3a's sealed-branch legs reached that path first)
 (fn any_loop ((msrc Module) (pins (List Symbol))) Bool
   (measure (struct pins))
   (match pins
@@ -6530,7 +8472,11 @@
        ((Some gv)
         (match (rf_fn gv)
           (None (any_loop msrc rest))
-          ((Some ifn) (if (has_while (ibody_of ifn)) True (any_loop msrc rest)))))))))
+          ((Some ifn)
+           (if (has_while (ibody_of ifn)) True
+           (if (if (has_mem (ibody_of ifn)) (has_brtop (ibody_of ifn)) False)
+             True
+             (any_loop msrc rest))))))))))
 
 ;; does any pin touch memory? (the header's std/mem import gate — the
 ;; statement tier's Mem binders need the type in scope)
