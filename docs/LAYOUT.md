@@ -61,12 +61,12 @@ string — argv references hide where import-resolvers cannot see.
 | `binelf_probe.{shard,sh}`, `stdin_echo_probe` | `models/x86/probes/` | X86.md de-risk probes |
 | `invoke_probe`, `invoke_fixture(.auto)` | `tools/invoke/` | meta/invoke end-to-end pair |
 | `build_products.shard` | `tools/build/` | the driver's product list |
+| `add_*`, `addw_*`, `sha256sum_*` | `examples/{add,addw,sha256sum}/` | bin programs, one dir per program (sha256sum/ also carries its untracked run-only writer glue, silicon script, and built ELF) |
 
-Deliberately still in `examples/`: `tie_probe` (a minimal example
+Deliberately still flat in `examples/`: `tie_probe` (a minimal example
 World app; bin/rebuild.sh's engine-parity fixture), `weld_probe`,
 `bytes_bridge`, the demos and pins that ARE demonstrations
-(`natview_*`, `spell_pin`, …), the app directories, and the bin
-program families (add, addw, sha256sum).
+(`natview_*`, `spell_pin`, …), and the app directories.
 
 ## The path-map policy
 

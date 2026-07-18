@@ -188,20 +188,20 @@ TARGETS=(
   models/x86/probes/xworld_probe.shard
   models/x86/probes/xadequacy_probe.shard
   models/x86/probes/xweff_probe.shard
-  examples/addw_src.shard
-  examples/sha256sum_src.shard
-  examples/sha256sum_x86_out.shard
-  examples/sha256sum_elf.shard
+  examples/addw/addw_src.shard
+  examples/sha256sum/sha256sum_src.shard
+  examples/sha256sum/sha256sum_x86_out.shard
+  examples/sha256sum/sha256sum_elf.shard
   models/x86/probes/stdin_echo_probe.shard
-  examples/addw_x86_out.shard
+  examples/addw/addw_x86_out.shard
   models/x86/probes/xitoa_probe.shard
   tools/lowbuild/fixtures/x86div_src.shard
   tools/lowbuild/fixtures/x86div_out.shard
   tools/lowbuild/fixtures/x86itoa_src.shard
   tools/lowbuild/fixtures/x86itoa_out.shard
   models/x86/probes/xbinadd_probe.shard
-  examples/add_src.shard
-  examples/add_x86_out.shard
+  examples/add/add_src.shard
+  examples/add/add_x86_out.shard
   models/x86/probes/xbinsum_probe.shard
   models/x86/probes/xid_probe.shard
   tools/lowbuild/fixtures/bytesum_src.shard
