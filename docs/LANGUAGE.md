@@ -10,7 +10,7 @@
 Concentrated reference for narrow shard as currently implemented —
 restricted enough to host a small, trusted Rust evaluator over it,
 expressive enough that the proof checker kernel is written *in* this
-form (see TRANSFER.md).
+form (see docs/archive/TRANSFER.md).
 
 This document describes only what the v2 loader and evaluator
 actually accept and run today. Things planned but not implemented are
@@ -959,7 +959,7 @@ compile story is **full shard through the neutral imperative dialect
    runtime values).
 2. **Provable lowering.** Each step from full toward the metal is an
    explicit, separately *proven* refinement (`spec ⊑ … ⊑ machine`), not
-   a "sufficiently smart compiler." See TRANSFER.md and
+   a "sufficiently smart compiler." See docs/archive/TRANSFER.md and
    `docs/OVERVIEW.md` for the broader picture.
 
 

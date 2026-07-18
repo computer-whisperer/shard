@@ -284,9 +284,13 @@ authority for its area:
 | [MEMORY.md](docs/MEMORY.md) | representation + memory management (draft) |
 | [BUILD.md](docs/BUILD.md) | the build layer: products, profiles, PIN/DERIVE/SYNTHESIZE |
 | [SEARCH.md](docs/SEARCH.md) | program search over shard terms (arc complete, merged) |
+| [FLOATS.md](docs/FLOATS.md) | rationals + parametric floats: the value-level numeric core |
+| [PIO.md](docs/PIO.md) | the RP2350 PIO ISA model + program search |
+| [RISCV.md](docs/RISCV.md) | the RISC-V third target: one model, both widths |
 | [REVISIT.md](docs/REVISIT.md) | the design-decision ledger: choice + revisit-when |
 | [archive/M3-V1-VS-V2.md](docs/archive/M3-V1-VS-V2.md) | v1 vs v2 proof-effort comparison (history) |
 | [archive/TRANSFER.md](docs/archive/TRANSFER.md) | the founding premise and v1→v2 mandate |
+| [archive/DESIGN-REVIEW-2026-07-18.md](docs/archive/DESIGN-REVIEW-2026-07-18.md) | the three-way design review at the sha-on-silicon milestone |
 
 ## Live arcs
 
