@@ -1,0 +1,729 @@
+;;; xtransform_probe.shard — the x86 TRANSFORM-LOOP probe (docs/X86.md
+;;; §28, A2's 2b slice). One-pointer read-modify-write: the stored value
+;;; is a FUNCTION of the byte just read —
+;;;   (t (mem_set m p (F (mem_get m p))) (+ p 1) k2)
+;;; with F = upcase's range shift. No recognizer admits this today (store
+;;; values are accum / literal / bare-read), and no loop body anywhere yet
+;;; BRANCHES on a loaded byte. Two new things at once:
+;;;
+;;;   1. THE DIAMOND IN THE BODY. The ISA has NO cmov and NO setcc — a
+;;;      comparison exists only as an XBrIf Cond (models/x86/x86.shard:
+;;;      "NO FLAGS") — so F compiles as the §12 nested-XBlock diamond
+;;;      INSIDE the loop body, the first such nesting in the tree. The
+;;;      range test rides the wrap trick: b is lowercase iff
+;;;      (b - 97) <u 26, ONE unsigned compare on a scratch (rcx), because
+;;;      below 97 the wrap64 subtraction lands near 2^64. x86 conds do not
+;;;      negate at the use site, so the taken branch is the SKIP (XBr 1).
+;;;
+;;;   2. THE SYMBOLIC BRANCH IN THE INDUCTION. Every prior loop only
+;;;      stored or accumulated the loaded byte; here the machine BRANCHES
+;;;      on it, so the worker's S case forks. The case-on is on the SPEC's
+;;;      conditions, and in each leg a bridge lemma pins the MACHINE cond
+;;;      to a literal — std/mem's get_lo/get_hi supply the bytehood the
+;;;      bridges need. Three legs, no absurd case: each spec case
+;;;      determines the machine cond.
+;;;
+;;; Register homes: the count of a 2-arg loop fn lives in RSI (the
+;;; xl_stamp convention), leaving RCX free as the compare scratch. rax
+;;; carries the byte, so the lowercase arm's store is wrap64(b-32) and the
+;;; other arms store b EXACTLY; after the wrap64 strip (xtg_st) the
+;;; machine terms match the spec's shape-for-shape.
+;;;
+;;; Residues: rax exits as the last stored byte, rcx as wrap64(last - 97),
+;;; both THROUGH the loop's own memory evolution (the xlg_lastc
+;;; precedent). The piece's epilogue (XMovRI RAX 0) overwrites rax, and
+;;; the theorem reads only rax_of, so neither residue reaches it.
+;;;
+;;; Fuel: a 9-instruction body rides S^13 worker / S^17 theorem (the
+;;; instrs+4 rule; the nested XBlocks cost nothing — fuel is DEPTH-shaped).
+;;;
+;;; On success the bridge lemmas graduate to models/x86/loopkit.shard and
+;;; the emitter learns the range-shift store value.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../kernel/facts.shard")
+(import "../../../std/mem")
+(import "../../../std/nat.shard")
+(import "../x86.shard")
+(import "../loopkit.shard")
+(use (:: std mem *))
+(use (:: std nat *))
+(use (:: kernel facts *))
+(use (:: models x86 x86 *))
+(use (:: models x86 loopkit *))
+
+;; the transform: upcase's range shift
+(fn xt_uc ((b Int)) Int (if (le 97 b) (if (le b 122) (- b 32) b) b))
+
+;; the source article: upcase k bytes in place at p
+(fn xt_upcase ((m Mem) (p Int) (k Nat)) Mem
+  (measure (struct k))
+  (match k
+    (Z m)
+    ((S k2) (xt_upcase (mem_set m p (xt_uc (mem_get m p))) (+ p 1) k2))))
+
+;; --- the bridge lemmas: the MACHINE cond and store value, at the ------
+;; --- SPEC's conditions, under std/mem's bytehood ----------------------
+
+;; lowercase: the machine cond is True
+(claim xtg_ucT
+  (goal ((b Int)) ((= (le 97 b) True) (= (le b 122) True))
+    (= (lt (mod (- b 97) 18446744073709551616) 26) True))
+  (chain
+    (rewrite-with
+      (lemma wrap64_id)
+      lr
+      lhs
+      ((inst x (- b 97)))
+      ((by arith (list 1 1 0)) (by arith (list 1 0 1))))
+    (by arith (list 1 0 1))))
+
+;; above the range (and a byte): the cond is False
+(claim xtg_ucFhi
+  (goal ((b Int)) ((= (le b 122) False) (= (lt b 256) True))
+    (= (lt (mod (- b 97) 18446744073709551616) 26) False))
+  (chain
+    (rewrite-with
+      (lemma wrap64_id)
+      lr
+      lhs
+      ((inst x (- b 97)))
+      ((by arith (list 1 1 0)) (by arith (list 1 0 1))))
+    (by arith (list 1 1 0))))
+
+;; below the range (and a byte): the subtraction wraps to near 2^64, so
+;; the UNSIGNED compare is False — the trick's whole point. mod_unique at
+;; the exhibited decomposition q = -1 is the one-window-below step.
+(claim xtg_ucFlo
+  (goal ((b Int)) ((= (le 97 b) False) (= (le 0 b) True))
+    (= (lt (mod (- b 97) 18446744073709551616) 26) False))
+  (chain
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst q -1) (inst r (+ (- b 97) 18446744073709551616)))
+      ((by arith (list (list 1 0 0) (list 1 0 0)))
+       (by arith (list 1 0 1))
+       (by arith (list 1 1 0))))
+    (by arith (list 1 0 1))))
+
+;; the lowercase arm's stored value strips to the spec's (- b 32)
+(claim xtg_st
+  (goal ((b Int)) ((= (le 97 b) True) (= (lt b 256) True))
+    (= (mod (- b 32) 18446744073709551616) (- b 32)))
+  (rewrite-with
+    (lemma wrap64_id)
+    lr
+    lhs
+    ((inst x (- b 32)))
+    ((by arith (list 1 1 0)) (by arith (list 1 0 1)))
+    refl))
+
+;; --- the machine piece ------------------------------------------------
+
+(fn xtu_body () (List XInstr)
+  (list
+    (XBrIf (CEqz RSI) 1)
+    (XLoad8 RAX (AReg RDI))
+    (XMovRR RCX RAX)
+    (XBin XSub RCX (SImm 97))
+    (XBlock
+      (list
+        (XBlock (list (XBrIf (CLtU RCX (SImm 26)) 0) (XBr 1)))
+        (XBin XSub RAX (SImm 32))))
+    (XStore8 (AReg RDI) (SReg RAX))
+    (XBin XAdd RDI (SImm 1))
+    (XBin XSub RSI (SImm 1))
+    (XBr 0)))
+
+;; the load register's residue: the last byte STORED, threaded through the
+;; loop's own memory evolution (a fixed memory would be unfaithful here,
+;; exactly as for the copy loop)
+(fn xtu_lastr ((m Mem) (p Int) (r Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z r)
+    ((S k2)
+     (xtu_lastr
+       (mem_set m p (xt_uc (mem_get m p)))
+       (+ p 1)
+       (xt_uc (mem_get m p))
+       k2))))
+
+;; the compare scratch's residue: wrap64 of (last byte READ - 97)
+(fn xtu_lastx ((m Mem) (p Int) (r Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z r)
+    ((S k2)
+     (xtu_lastx
+       (mem_set m p (xt_uc (mem_get m p)))
+       (+ p 1)
+       (mod (- (mem_get m p) 97) 18446744073709551616)
+       k2))))
+
+(claim xtuw_xt_upcase
+  (goal
+    ((ra Int) (rc Int) (x0 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List XFunc)))
+    ((= (le 0 x0) True) (= (le (+ x0 (int_of_nat k)) 65536) True))
+    (=
+      (xeval_loop
+        (S^ 13 (xlg_fuel k c))
+        (MkXModule
+          (Cons
+            (MkXFunc
+              2
+              (list (XBlock (list (XLoop (inline xtu_body)))) (XMovRI RAX 0)))
+            restfs)
+          0
+          65536)
+        (inline xtu_body)
+        (MkRegs ra rc 0 0 0 (int_of_nat k) x0 0 0 0 0 0 0 0 0)
+        m0)
+      (Some
+        (XBrk
+          0
+          (MkRegs
+            (xtu_lastr m0 x0 ra k)
+            (xtu_lastx m0 x0 rc k)
+            0
+            0
+            0
+            0
+            (xlg_adv x0 k)
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0)
+          (xt_upcase m0 x0 k)))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((unfold xlg_fuel lhs)
+            (reduce lhs)
+            (unfold xeval_loop lhs)
+            (rewrite (lemma int_of_nat_succ) lr lhs true ())
+            (compute lhs (stop xeval_loop xlg_fuel))))
+         (rewrite-with
+           (lemma xlg_ne)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps
+           ((compute lhs (stop xeval_loop xlg_fuel))
+            (rewrite (premise 0) lr lhs true ())
+            (compute lhs (stop xeval_loop xlg_fuel))))
+         (rewrite-with
+           (lemma xlg_a1_ms)
+           lr
+           lhs
+           ((inst c k2))
+           ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+            (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (case-on (le 97 (mem_get m0 x0)) Bool
+           ((case True
+              (case-on (le (mem_get m0 x0) 122) Bool
+                ((case True
+                   (chain
+                     (steps ((compute lhs (stop xeval_loop xlg_fuel))))
+                     (rewrite-with
+                       (lemma xtg_ucT)
+                       lr
+                       lhs
+                       ((inst b (mem_get m0 x0)))
+                       ((steps ((rewrite (hyp 1) lr lhs true ())) refl)
+                        (steps ((rewrite (hyp 0) lr lhs true ())) refl)))
+                     (steps
+                       ((compute lhs (stop xeval_loop xlg_fuel))
+                        (rewrite (premise 0) lr lhs true ())
+                        (compute lhs (stop xeval_loop xlg_fuel))))
+                     (rewrite-with
+                       (lemma xlg_a1_ms)
+                       lr
+                       lhs
+                       ((inst c k2))
+                       ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                        (steps
+                          ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                          refl)
+                        (rewrite-with
+                          (lemma int_of_nat_nonneg)
+                          lr
+                          lhs
+                          ()
+                          ()
+                          refl)))
+                     (steps ((compute lhs (stop xeval_loop xlg_fuel))))
+                     (have hst
+                       (=
+                         (mod (- (mem_get m0 x0) 32) 18446744073709551616)
+                         (- (mem_get m0 x0) 32))
+                       (rewrite-with
+                         (lemma xtg_st)
+                         lr
+                         lhs
+                         ((inst b (mem_get m0 x0)))
+                         ((steps ((rewrite (hyp 1) lr lhs true ())) refl)
+                          (rewrite-with
+                            (lemma get_hi)
+                            lr
+                            lhs
+                            ((inst m m0) (inst a x0))
+                            ()
+                            refl))
+                         refl))
+                     (steps ((rewrite (premise hst) lr lhs true ())))
+                     (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2))
+                       (rewrite-with (lemma xlg_sub) lr lhs () () refl))
+                     (steps ((rewrite (premise hsub) lr lhs true ())))
+                     (have hwk
+                       (=
+                         (mod (int_of_nat k2) 18446744073709551616)
+                         (int_of_nat k2))
+                       (rewrite-with
+                         (lemma wrap64_id)
+                         lr
+                         lhs
+                         ((inst x (int_of_nat k2)))
+                         ((rewrite-with
+                            (lemma int_of_nat_nonneg)
+                            lr
+                            lhs
+                            ()
+                            ()
+                            refl)
+                          (rewrite-with
+                            (lemma xlg_kM)
+                            lr
+                            lhs
+                            ((inst a x0) (inst c k2) (inst w 65536) (inst l 0))
+                            ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                             (steps
+                               ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                               refl)
+                             (steps ((rewrite (premise 0) lr lhs true ())) refl)
+                             (steps ((compute both)) refl)
+                             (steps ((compute both)) refl))
+                            refl))
+                         refl))
+                     (steps ((rewrite (premise hwk) lr lhs true ())))
+                     (have hw0 (= (mod (+ x0 1) 18446744073709551616) (+ x0 1))
+                       (rewrite-with
+                         (lemma wrap64_id)
+                         lr
+                         lhs
+                         ((inst x (+ x0 1)))
+                         ((rewrite-with
+                            (lemma xlg_lo0)
+                            lr
+                            lhs
+                            ((inst l 0))
+                            ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                             (steps ((compute both)) refl))
+                            refl)
+                          (rewrite-with
+                            (lemma xlg_64)
+                            lr
+                            lhs
+                            ((inst w 65536))
+                            ((rewrite-with
+                               (lemma xlg_a1_ms)
+                               lr
+                               lhs
+                               ((inst c k2))
+                               ((steps
+                                  ((rewrite (premise 1) lr lhs true ()))
+                                  refl)
+                                (steps
+                                  ((rewrite
+                                     (lemma int_of_nat_succ)
+                                     lr
+                                     lhs
+                                     true
+                                     ()))
+                                  refl)
+                                (rewrite-with
+                                  (lemma int_of_nat_nonneg)
+                                  lr
+                                  lhs
+                                  ()
+                                  ()
+                                  refl))
+                               refl)
+                             (steps ((compute both)) refl))
+                            refl))
+                         refl))
+                     (steps ((rewrite (premise hw0) lr lhs true ())))
+                     (steps
+                       ((unfold xt_upcase rhs)
+                        (unfold xtu_lastr rhs)
+                        (unfold xtu_lastx rhs)
+                        (unfold xlg_adv rhs)
+                        (reduce rhs)))
+                     (have huc
+                       (= (xt_uc (mem_get m0 x0)) (- (mem_get m0 x0) 32))
+                       (steps
+                         ((unfold xt_uc lhs)
+                          (rewrite (hyp 1) lr lhs true ())
+                          (rewrite (hyp 0) lr lhs true ())
+                          (reduce lhs))
+                         refl))
+                     (steps ((rewrite (premise huc) lr rhs true ())))
+                     (rewrite-with
+                       (hyp 2)
+                       lr
+                       lhs
+                       ()
+                       ((rewrite-with
+                          (lemma xlg_lo1)
+                          lr
+                          lhs
+                          ()
+                          ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                          refl)
+                        (rewrite-with
+                          (lemma xlg_shift)
+                          lr
+                          lhs
+                          ()
+                          ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                           (steps
+                             ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                             refl))
+                          refl)))
+                     refl))
+                 (case False
+                   (chain
+                     (steps ((compute lhs (stop xeval_loop xlg_fuel))))
+                     (rewrite-with
+                       (lemma xtg_ucFhi)
+                       lr
+                       lhs
+                       ((inst b (mem_get m0 x0)))
+                       ((steps ((rewrite (hyp 0) lr lhs true ())) refl)
+                        (rewrite-with
+                          (lemma get_hi)
+                          lr
+                          lhs
+                          ((inst m m0) (inst a x0))
+                          ()
+                          refl)))
+                     (steps
+                       ((compute lhs (stop xeval_loop xlg_fuel))
+                        (rewrite (premise 0) lr lhs true ())
+                        (compute lhs (stop xeval_loop xlg_fuel))))
+                     (rewrite-with
+                       (lemma xlg_a1_ms)
+                       lr
+                       lhs
+                       ((inst c k2))
+                       ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                        (steps
+                          ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                          refl)
+                        (rewrite-with
+                          (lemma int_of_nat_nonneg)
+                          lr
+                          lhs
+                          ()
+                          ()
+                          refl)))
+                     (steps ((compute lhs (stop xeval_loop xlg_fuel))))
+                     (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2))
+                       (rewrite-with (lemma xlg_sub) lr lhs () () refl))
+                     (steps ((rewrite (premise hsub) lr lhs true ())))
+                     (have hwk
+                       (=
+                         (mod (int_of_nat k2) 18446744073709551616)
+                         (int_of_nat k2))
+                       (rewrite-with
+                         (lemma wrap64_id)
+                         lr
+                         lhs
+                         ((inst x (int_of_nat k2)))
+                         ((rewrite-with
+                            (lemma int_of_nat_nonneg)
+                            lr
+                            lhs
+                            ()
+                            ()
+                            refl)
+                          (rewrite-with
+                            (lemma xlg_kM)
+                            lr
+                            lhs
+                            ((inst a x0) (inst c k2) (inst w 65536) (inst l 0))
+                            ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                             (steps
+                               ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                               refl)
+                             (steps ((rewrite (premise 0) lr lhs true ())) refl)
+                             (steps ((compute both)) refl)
+                             (steps ((compute both)) refl))
+                            refl))
+                         refl))
+                     (steps ((rewrite (premise hwk) lr lhs true ())))
+                     (have hw0 (= (mod (+ x0 1) 18446744073709551616) (+ x0 1))
+                       (rewrite-with
+                         (lemma wrap64_id)
+                         lr
+                         lhs
+                         ((inst x (+ x0 1)))
+                         ((rewrite-with
+                            (lemma xlg_lo0)
+                            lr
+                            lhs
+                            ((inst l 0))
+                            ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                             (steps ((compute both)) refl))
+                            refl)
+                          (rewrite-with
+                            (lemma xlg_64)
+                            lr
+                            lhs
+                            ((inst w 65536))
+                            ((rewrite-with
+                               (lemma xlg_a1_ms)
+                               lr
+                               lhs
+                               ((inst c k2))
+                               ((steps
+                                  ((rewrite (premise 1) lr lhs true ()))
+                                  refl)
+                                (steps
+                                  ((rewrite
+                                     (lemma int_of_nat_succ)
+                                     lr
+                                     lhs
+                                     true
+                                     ()))
+                                  refl)
+                                (rewrite-with
+                                  (lemma int_of_nat_nonneg)
+                                  lr
+                                  lhs
+                                  ()
+                                  ()
+                                  refl))
+                               refl)
+                             (steps ((compute both)) refl))
+                            refl))
+                         refl))
+                     (steps ((rewrite (premise hw0) lr lhs true ())))
+                     (steps
+                       ((unfold xt_upcase rhs)
+                        (unfold xtu_lastr rhs)
+                        (unfold xtu_lastx rhs)
+                        (unfold xlg_adv rhs)
+                        (reduce rhs)))
+                     (have huc (= (xt_uc (mem_get m0 x0)) (mem_get m0 x0))
+                       (steps
+                         ((unfold xt_uc lhs)
+                          (rewrite (hyp 1) lr lhs true ())
+                          (rewrite (hyp 0) lr lhs true ())
+                          (reduce lhs))
+                         refl))
+                     (steps ((rewrite (premise huc) lr rhs true ())))
+                     (rewrite-with
+                       (hyp 2)
+                       lr
+                       lhs
+                       ()
+                       ((rewrite-with
+                          (lemma xlg_lo1)
+                          lr
+                          lhs
+                          ()
+                          ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                          refl)
+                        (rewrite-with
+                          (lemma xlg_shift)
+                          lr
+                          lhs
+                          ()
+                          ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                           (steps
+                             ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                             refl))
+                          refl)))
+                     refl)))))
+            (case False
+              (chain
+                (steps ((compute lhs (stop xeval_loop xlg_fuel))))
+                (rewrite-with
+                  (lemma xtg_ucFlo)
+                  lr
+                  lhs
+                  ((inst b (mem_get m0 x0)))
+                  ((steps ((rewrite (hyp 0) lr lhs true ())) refl)
+                   (rewrite-with
+                     (lemma get_lo)
+                     lr
+                     lhs
+                     ((inst m m0) (inst a x0))
+                     ()
+                     refl)))
+                (steps
+                  ((compute lhs (stop xeval_loop xlg_fuel))
+                   (rewrite (premise 0) lr lhs true ())
+                   (compute lhs (stop xeval_loop xlg_fuel))))
+                (rewrite-with
+                  (lemma xlg_a1_ms)
+                  lr
+                  lhs
+                  ((inst c k2))
+                  ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                   (steps
+                     ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                     refl)
+                   (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+                (steps ((compute lhs (stop xeval_loop xlg_fuel))))
+                (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2))
+                  (rewrite-with (lemma xlg_sub) lr lhs () () refl))
+                (steps ((rewrite (premise hsub) lr lhs true ())))
+                (have hwk
+                  (= (mod (int_of_nat k2) 18446744073709551616) (int_of_nat k2))
+                  (rewrite-with
+                    (lemma wrap64_id)
+                    lr
+                    lhs
+                    ((inst x (int_of_nat k2)))
+                    ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)
+                     (rewrite-with
+                       (lemma xlg_kM)
+                       lr
+                       lhs
+                       ((inst a x0) (inst c k2) (inst w 65536) (inst l 0))
+                       ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                        (steps
+                          ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                          refl)
+                        (steps ((rewrite (premise 0) lr lhs true ())) refl)
+                        (steps ((compute both)) refl)
+                        (steps ((compute both)) refl))
+                       refl))
+                    refl))
+                (steps ((rewrite (premise hwk) lr lhs true ())))
+                (have hw0 (= (mod (+ x0 1) 18446744073709551616) (+ x0 1))
+                  (rewrite-with
+                    (lemma wrap64_id)
+                    lr
+                    lhs
+                    ((inst x (+ x0 1)))
+                    ((rewrite-with
+                       (lemma xlg_lo0)
+                       lr
+                       lhs
+                       ((inst l 0))
+                       ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                        (steps ((compute both)) refl))
+                       refl)
+                     (rewrite-with
+                       (lemma xlg_64)
+                       lr
+                       lhs
+                       ((inst w 65536))
+                       ((rewrite-with
+                          (lemma xlg_a1_ms)
+                          lr
+                          lhs
+                          ((inst c k2))
+                          ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                           (steps
+                             ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                             refl)
+                           (rewrite-with
+                             (lemma int_of_nat_nonneg)
+                             lr
+                             lhs
+                             ()
+                             ()
+                             refl))
+                          refl)
+                        (steps ((compute both)) refl))
+                       refl))
+                    refl))
+                (steps ((rewrite (premise hw0) lr lhs true ())))
+                (steps
+                  ((unfold xt_upcase rhs)
+                   (unfold xtu_lastr rhs)
+                   (unfold xtu_lastx rhs)
+                   (unfold xlg_adv rhs)
+                   (reduce rhs)))
+                (have huc (= (xt_uc (mem_get m0 x0)) (mem_get m0 x0))
+                  (steps
+                    ((unfold xt_uc lhs)
+                     (rewrite (hyp 0) lr lhs true ())
+                     (reduce lhs))
+                    refl))
+                (steps ((rewrite (premise huc) lr rhs true ())))
+                (rewrite-with
+                  (hyp 1)
+                  lr
+                  lhs
+                  ()
+                  ((rewrite-with
+                     (lemma xlg_lo1)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                     refl)
+                   (rewrite-with
+                     (lemma xlg_shift)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                      (steps
+                        ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                        refl))
+                     refl)))
+                refl)))))))))
+
+;; --- the piece theorem -------------------------------------------------------
+;; entry spine (outer seq / XBlock / inner seq / XLoop = +4 over the
+;; worker), the worker by citation, then the epilogue zeroes rax — so
+;; neither residue reaches the conclusion
+(claim lowered_xt_upcase
+  (goal ((x0 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List XFunc)))
+    ((= (le 0 x0) True) (= (le (+ x0 (int_of_nat k)) 65536) True))
+    (=
+      (xcall_fn_mem
+        (S^ 17 (xlg_fuel k c))
+        (MkXModule
+          (Cons
+            (MkXFunc
+              2
+              (list (XBlock (list (XLoop (inline xtu_body)))) (XMovRI RAX 0)))
+            restfs)
+          0
+          65536)
+        0
+        (list x0 (int_of_nat k))
+        m0)
+      (Some (Pair 0 (xt_upcase m0 x0 k)))))
+  (chain
+    (steps ((compute lhs (stop xeval_loop xlg_fuel))))
+    (rewrite-with
+      (lemma xtuw_xt_upcase)
+      lr
+      lhs
+      ((inst ra 0) (inst rc 0))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute both)))
+    refl))

@@ -1,0 +1,545 @@
+;;; examples/wasm_copy.shard — the SECOND in-place wasm piece: forward byte
+;;; copy over linear memory, proven down from examples/mem_copy's functional
+;;; spec. First piece written with the QoL trio (docs/ISA.md §10):
+;;;   - (inline copy_body) — the claim spellings ride the ONE body definition
+;;;     (wasm_rev hand-pasted its 22-instr literal three times);
+;;;   - (S^ N (pfc k c)) — fuel towers without hand-balanced parens;
+;;;   - (compute … (stop eval_loop pfc)) — the folded loop redex is kept by the
+;;;     normalizer directly: NO pf_body opaque-head wrapper, NO vacuous
+;;;     guard, NO fuel-prefix stall choreography, and the worker cites its
+;;;     IH against the stopped re-entry with no hih materialization.
+;;;
+;;; The piece: copy8 (slot 0), params (s, d, e) — src, dst, src END
+;;; (exclusive). Loop: exit unless s < e; m[d] := m[s]; s++; d++; re-enter.
+;;; The spec loop is guard-free (counter-driven); the worker's premises pin
+;;; e = s + k, which decides the machine guard both ways (S: s < e; Z: s = e).
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")  ; Mem — the opaque substrate the model threads
+(import "../../../std/nat.shard")  ; int_of_nat lemmas (the bounds)
+(import "../../../examples/mem_reverse.shard")  ; length_nat / byte_ok / load / dump
+(import "../../../examples/mem_copy.shard")  ; copy_loop + mem_copies + cp_shift
+(import "../wasm.shard")
+(use (:: std mem *))
+(use (:: std nat *))
+(use (:: examples mem_reverse *))
+(use (:: examples mem_copy *))
+(use (:: models wasm wasm *))
+
+;; --- the piece -------------------------------------------------------------------
+
+;; loop body: guard (exit when NOT s < e), push d, load m[s], store —
+;; the interpreter's memory residue is exactly copy_loop's
+;; (mem_set m d (mem_get m s)) — advance both pointers, re-enter.
+(fn copy_body () (List Instr)
+  (list
+    (LocalGet 0)
+    (LocalGet 2)
+    (I32Bin BLtU)
+    (I32Eqz)
+    (BrIf 1)
+    (LocalGet 1)
+    (LocalGet 0)
+    (I32Load8U)
+    (I32Store8)
+    (LocalGet 0)
+    (I32Const 1)
+    (I32Bin BAdd)
+    (LocalSet 0)
+    (LocalGet 1)
+    (I32Const 1)
+    (I32Bin BAdd)
+    (LocalSet 1)
+    (Br 0)))
+
+(fn pcopy () Func
+  (MkFunc 3 0 (list (Block (list (Loop (copy_body)))) (I32Const 0))))
+
+;; one 64KiB page — the segment bound every guard checks against.
+(fn cmod () WModule (MkWModule (list (pcopy)) 65536))
+
+;; --- spec twins (transparent; one step per iteration) -----------------------------
+
+;; final pointer positions: each advances by exactly k (no guard — the
+;; worker's premises make the machine guard true for the whole run).
+(fn cs ((x Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z x)
+    ((S k2) (cs (+ x 1) k2))))
+
+(fn cd ((x Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z x)
+    ((S k2) (cd (+ x 1) k2))))
+
+;; --- fuel ------------------------------------------------------------------------
+
+;; one S per remaining iteration over the slack tail; the concrete budget
+;; for one body pass rides OUTSIDE (the worker's S^22 prefix — fuel is a
+;; depth bound; one pass of the 18-instruction body needs 22).
+(fn pfc ((k Nat) (c Nat)) Nat
+  (measure (struct k))
+  (match k
+    (Z c)
+    ((S k2) (S (pfc k2 c)))))
+
+;; --- arithmetic helpers (single farkas facts) --------------------------------------
+;; int_of_nat_succ / _nonneg taken as premises, base_le_j style; cp_shift
+;; (the dst-bound step) is imported from mem_copy.
+
+;; the pinned end decides the guard, S case: e = s + (S c) ⊢ s < e.
+(claim hg_true
+  (goal ((s Int) (e Int) (c Nat))
+    ((= (+ s (int_of_nat (S c))) e)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c)))
+     (= (le 0 (int_of_nat c)) True))
+    (= (lt s e) True))
+  (by arith (list 1 -1 1 1)))
+
+;; ...and Z case: e = s + 0 ⊢ NOT s < e.
+(claim hg_false
+  (goal ((s Int) (e Int)) ((= (+ s (int_of_nat Z)) e) (= (int_of_nat Z) 0))
+    (= (lt s e) False))
+  (by arith (list 1 1 -1)))
+
+;; segment bounds for the two memory guards.
+(claim hc_s1_ms
+  (goal ((s Int) (e Int) (c Nat))
+    ((= (+ s (int_of_nat (S c))) e)
+     (= (le e 65536) True)
+     (= (le 0 (int_of_nat c)) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c))))
+    (= (le (+ s 1) 65536) True))
+  (by arith (list 1 -1 1 1 1)))
+
+(claim hc_d1_ms
+  (goal ((d Int) (c Nat))
+    ((= (le (+ d (int_of_nat (S c))) 65536) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c)))
+     (= (le 0 (int_of_nat c)) True))
+    (= (le (+ d 1) 65536) True))
+  (by arith (list 1 1 1 1)))
+
+;; pointer-advance ranges for the wrap32 cleanups.
+(claim hc_lo1
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (+ x 1)) True))
+  (by arith (list 1 1)))
+
+(claim hc_32
+  (goal ((x Int)) ((= (le (+ x 1) 65536) True))
+    (= (lt (+ x 1) 4294967296) True))
+  (by arith (list 1 1)))
+
+;; the pinned end steps to the IH: e = s + (S c) ⊢ e = (s+1) + c.
+(claim hc_eshift
+  (goal ((s Int) (e Int) (c Nat))
+    ((= (+ s (int_of_nat (S c))) e) (= (int_of_nat (S c)) (+ 1 (int_of_nat c))))
+    (= (+ (+ s 1) (int_of_nat c)) e))
+  (by arith (list (list 1 -1 1) (list 1 1 -1))))
+
+;; --- the loop worker ---------------------------------------------------------------
+
+;; ∀ s d e st mm: entering the loop engine with the dst range in-segment,
+;; the end pointer pinned at e = s + k, any stack, any memory, and fuel
+;; S^22(pfc k c), exits via the BrIf branch with both pointers advanced by
+;; k, the stack untouched, and the memory EXACTLY (copy_loop mm s d k).
+(claim copy_loop_worker
+  (goal
+    ((s Int)
+     (d Int)
+     (e Int)
+     (st (List Int))
+     (mm Mem)
+     (c Nat)
+     (k Nat)
+     (restfs (List Func)))
+    ((= (le 0 s) True)
+     (= (le 0 d) True)
+     (= (le (+ d (int_of_nat k)) 65536) True)
+     (= (le e 65536) True)
+     (= (+ s (int_of_nat k)) e))
+    (=
+      (eval_loop
+        (S^ 22 (pfc k c))
+        (MkWModule
+          (Cons
+            (MkFunc
+              3
+              0
+              (list (Block (list (Loop (inline copy_body)))) (I32Const 0)))
+            restfs)
+          65536)
+        (inline copy_body)
+        (list s d e)
+        st
+        mm)
+      (Some (OBr 0 st (list (cs s k) (cd d k) e) (copy_loop mm s d k)))))
+  (induct k
+    ((case Z
+       (steps
+         ((compute lhs))
+         (have hg (= (lt s e) False)
+           (rewrite-with
+             (lemma hg_false)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise 4) lr lhs true ())) refl)
+              (steps ((rewrite (lemma int_of_nat_zero) lr lhs true ())) refl))
+             refl)
+           (steps ((rewrite (premise hg) lr lhs true ()) (compute both)) refl))))
+     (case S
+       (k2)
+       (steps
+         ((unfold pfc lhs)
+          (reduce lhs)
+          (unfold eval_loop lhs)
+          (compute lhs (stop eval_loop pfc)))
+         (rewrite-with
+           (lemma hg_true)
+           lr
+           lhs
+           ((inst c k2))
+           ((steps ((rewrite (premise 4) lr lhs true ())) refl)
+            (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+           (steps
+             ((compute lhs (stop eval_loop pfc))
+              (rewrite (premise 0) lr lhs true ())
+              (compute lhs (stop eval_loop pfc)))
+             (rewrite-with
+               (lemma hc_s1_ms)
+               lr
+               lhs
+               ((inst e e) (inst c k2))
+               ((steps ((rewrite (premise 4) lr lhs true ())) refl)
+                (steps ((rewrite (premise 3) lr lhs true ())) refl)
+                (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)
+                (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+               (steps
+                 ((compute lhs (stop eval_loop pfc))
+                  (rewrite (premise 1) lr lhs true ())
+                  (compute lhs (stop eval_loop pfc)))
+                 (rewrite-with
+                   (lemma hc_d1_ms)
+                   lr
+                   lhs
+                   ((inst c k2))
+                   ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+                    (steps
+                      ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                      refl)
+                    (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+                   (steps
+                     ((compute lhs (stop eval_loop pfc)))
+                     (have hw1 (= (mod (+ s 1) 4294967296) (+ s 1))
+                       (rewrite-with
+                         (lemma wrap32_id)
+                         lr
+                         lhs
+                         ((inst x (+ s 1)))
+                         ((rewrite-with
+                            (lemma hc_lo1)
+                            lr
+                            lhs
+                            ()
+                            ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                            refl)
+                          (rewrite-with
+                            (lemma hc_32)
+                            lr
+                            lhs
+                            ()
+                            ((rewrite-with
+                               (lemma hc_s1_ms)
+                               lr
+                               lhs
+                               ((inst e e) (inst c k2))
+                               ((steps
+                                  ((rewrite (premise 4) lr lhs true ()))
+                                  refl)
+                                (steps
+                                  ((rewrite (premise 3) lr lhs true ()))
+                                  refl)
+                                (rewrite-with
+                                  (lemma int_of_nat_nonneg)
+                                  lr
+                                  lhs
+                                  ()
+                                  ()
+                                  refl)
+                                (steps
+                                  ((rewrite
+                                     (lemma int_of_nat_succ)
+                                     lr
+                                     lhs
+                                     true
+                                     ()))
+                                  refl))
+                               refl))
+                            refl))
+                         refl)
+                       (have hw2 (= (mod (+ d 1) 4294967296) (+ d 1))
+                         (rewrite-with
+                           (lemma wrap32_id)
+                           lr
+                           lhs
+                           ((inst x (+ d 1)))
+                           ((rewrite-with
+                              (lemma hc_lo1)
+                              lr
+                              lhs
+                              ()
+                              ((steps
+                                 ((rewrite (premise 1) lr lhs true ()))
+                                 refl))
+                              refl)
+                            (rewrite-with
+                              (lemma hc_32)
+                              lr
+                              lhs
+                              ()
+                              ((rewrite-with
+                                 (lemma hc_d1_ms)
+                                 lr
+                                 lhs
+                                 ((inst c k2))
+                                 ((steps
+                                    ((rewrite (premise 2) lr lhs true ()))
+                                    refl)
+                                  (steps
+                                    ((rewrite
+                                       (lemma int_of_nat_succ)
+                                       lr
+                                       lhs
+                                       true
+                                       ()))
+                                    refl)
+                                  (rewrite-with
+                                    (lemma int_of_nat_nonneg)
+                                    lr
+                                    lhs
+                                    ()
+                                    ()
+                                    refl))
+                                 refl))
+                              refl))
+                           refl)
+                         (steps
+                           ((rewrite (premise hw1) lr lhs true ())
+                            (rewrite (premise hw2) lr lhs true ())
+                            (unfold copy_loop rhs)
+                            (unfold cs rhs)
+                            (unfold cd rhs)
+                            (reduce rhs))
+                           (rewrite-with
+                             (hyp 0)
+                             lr
+                             lhs
+                             ()
+                             ((rewrite-with
+                                (lemma hc_lo1)
+                                lr
+                                lhs
+                                ()
+                                ((steps
+                                   ((rewrite (premise 0) lr lhs true ()))
+                                   refl))
+                                refl)
+                              (rewrite-with
+                                (lemma hc_lo1)
+                                lr
+                                lhs
+                                ()
+                                ((steps
+                                   ((rewrite (premise 1) lr lhs true ()))
+                                   refl))
+                                refl)
+                              (rewrite-with
+                                (lemma cp_shift)
+                                lr
+                                lhs
+                                ()
+                                ((steps
+                                   ((rewrite (premise 2) lr lhs true ()))
+                                   refl)
+                                 (steps
+                                   ((rewrite
+                                      (lemma int_of_nat_succ)
+                                      lr
+                                      lhs
+                                      true
+                                      ()))
+                                   refl))
+                                refl)
+                              (steps
+                                ((rewrite (premise 3) lr lhs true ()))
+                                refl)
+                              (rewrite-with
+                                (lemma hc_eshift)
+                                lr
+                                lhs
+                                ((inst c k2) (inst e e))
+                                ((steps
+                                   ((rewrite (premise 4) lr lhs true ()))
+                                   refl)
+                                 (steps
+                                   ((rewrite
+                                      (lemma int_of_nat_succ)
+                                      lr
+                                      lhs
+                                      true
+                                      ()))
+                                   refl))
+                                refl))
+                             (steps ((compute both)) refl))))))))))))))))
+
+;; --- the piece theorem (the memory-observable denotation) --------------------------
+
+;; copy8's whole denotation: from ANY memory, dst range in-segment and the
+;; end pointer pinned, the piece returns 0 and its final memory IS
+;; mem_copy's copy_loop. Fuel is a PLAIN tower — S^4 of plumbing over the
+;; worker's S^22 — because (stop eval_loop pfc) holds the loop redex folded;
+;; no opaque-head fuel fn, no vacuous guard (contrast wasm_rev's pf_body).
+(claim copy8_thm
+  (goal ((s Int) (d Int) (e Int) (mm Mem) (c Nat) (k Nat) (restfs (List Func)))
+    ((= (le 0 s) True)
+     (= (le 0 d) True)
+     (= (le (+ d (int_of_nat k)) 65536) True)
+     (= (le e 65536) True)
+     (= (+ s (int_of_nat k)) e))
+    (=
+      (call_fn_mem
+        (S^ 26 (pfc k c))
+        (MkWModule
+          (Cons
+            (MkFunc
+              3
+              0
+              (list (Block (list (Loop (inline copy_body)))) (I32Const 0)))
+            restfs)
+          65536)
+        0
+        (list s d e)
+        mm)
+      (Some (Pair 0 (copy_loop mm s d k)))))
+  (steps
+    ((compute lhs (stop eval_loop pfc)))
+    (rewrite-with
+      (lemma copy_loop_worker)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl))
+      (steps ((compute both)) refl))))
+
+;; --- the capstone: spec ⊑ wasm, in place -------------------------------------------
+
+;; capstone-side arithmetic (single farkas facts over the length).
+(claim hc_le0_dd
+  (goal ((dd Int) (n Nat))
+    ((= (le (int_of_nat n) dd) True) (= (le 0 (int_of_nat n)) True))
+    (= (le 0 dd) True))
+  (by arith (list 1 1 1)))
+
+(claim hc_e_ms
+  (goal ((dd Int) (n Nat))
+    ((= (le (int_of_nat n) dd) True)
+     (= (le (+ dd (int_of_nat n)) 65536) True)
+     (= (le 0 (int_of_nat n)) True))
+    (= (le (int_of_nat n) 65536) True))
+  (by arith (list 1 1 1 1)))
+
+(claim hc_add0
+  (goal ((x Int)) () (= (+ 0 x) x))
+  (by arith (list (list 1) (list 1))))
+
+(claim hc_bound0
+  (goal ((dd Int) (n Nat)) ((= (le (int_of_nat n) dd) True))
+    (= (le (+ 0 (int_of_nat n)) dd) True))
+  (by arith (list 1 1)))
+
+;; the final memory of a run (None is unreachable at the theorem's fuel).
+(fn omem ((r (Option (Pair Int Mem)))) Mem
+  (match r
+    (None (mem_empty))
+    ((Some p)
+     (match p
+       ((Pair v m2) m2)))))
+
+;; Load a byte list at 0, run the wasm piece with dst dd (at or above the
+;; list's end), dump the dst range: you get xs back — mem_copy's capstone
+;; carried to the ISA level by citation. Composition IS citation:
+;; copy8_thm supplies the final memory as (copy_loop …), mem_copies
+;; finishes.
+(claim copy8_copies
+  (goal ((xs (List Int)) (dd Int) (c Nat) (restfs (List Func)))
+    ((= (byte_ok xs) True)
+     (= (le (int_of_nat (length_nat xs)) dd) True)
+     (= (le (+ dd (int_of_nat (length_nat xs))) 65536) True))
+    (=
+      (dump
+        dd
+        (length_nat xs)
+        (omem
+          (call_fn_mem
+            (S^ 26 (pfc (length_nat xs) c))
+            (MkWModule
+              (Cons
+                (MkFunc
+                  3
+                  0
+                  (list (Block (list (Loop (inline copy_body)))) (I32Const 0)))
+                restfs)
+              65536)
+            0
+            (list 0 dd (int_of_nat (length_nat xs)))
+            (load xs 0 (mem_empty)))))
+      xs))
+  (rewrite-with
+    (lemma copy8_thm)
+    lr
+    lhs
+    ()
+    ((steps ((compute both)) refl)
+     (rewrite-with
+       (lemma hc_le0_dd)
+       lr
+       lhs
+       ((inst n (length_nat xs)))
+       ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+        (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+       refl)
+     (steps ((rewrite (premise 2) lr lhs true ())) refl)
+     (rewrite-with
+       (lemma hc_e_ms)
+       lr
+       lhs
+       ((inst dd dd))
+       ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+        (steps ((rewrite (premise 2) lr lhs true ())) refl)
+        (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+       refl)
+     (steps ((rewrite (lemma hc_add0) lr lhs true ())) refl))
+    (steps
+      ((unfold omem lhs) (reduce lhs))
+      (rewrite-with
+        (lemma mem_copies)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (rewrite-with
+           (lemma hc_bound0)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+           refl))
+        refl))))

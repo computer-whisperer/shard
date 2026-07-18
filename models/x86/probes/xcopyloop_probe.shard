@@ -1,0 +1,344 @@
+;;; xcopyloop_probe.shard — the x86 COPY-LOOP probe (docs/X86.md §26, the
+;;; A2 rung's first slice; the wasm twin is lp_copy in
+;;; examples/wasmgen_loop_src.shard). Hand-plays the §14 store-loop
+;;; template extended to the store value (mem_get m ADV-ACCUM) — the
+;;; LVRead arm meta/shape already recognizes and wasmgen already emits,
+;;; which the x86 emitter refuses (xlv_src). This is A2's shape: the
+;;; entry WRITES what it read, byte by byte.
+;;;
+;;; Template deltas over xl_mark (the two-advancing-accum store loop),
+;;; each by mechanical rule:
+;;;   1. x86 has no mem-to-mem move: the byte lands in a REGISTER first
+;;;      (XLoad8 RAX [rdi] / XStore8 [rsi] RAX). So the loop carries the
+;;;      Int-return probe's rax machinery — the worker QUANTIFIES the
+;;;      entry rax (ra) and closes the exit rax over a residue fn — while
+;;;      keeping mark's Mem-return conclusion.
+;;;   2. The residue CANNOT be xlg_last: that fn reads a FIXED memory,
+;;;      faithful for the read-only sum loop and wrong here, where each
+;;;      iteration's store changes what the next load sees. xcg_lastc
+;;;      threads the memory exactly as the spec's own recursion does.
+;;;      (Overlapping src/dst therefore stays faithful for free.)
+;;;   3. TWO address guards per iteration (the load at rdi, the store at
+;;;      rsi), so the guard stage runs twice — mark's stage on premises
+;;;      (0,2), then again on (1,3).
+;;;   4. The piece's epilogue XMovRI RAX 0 overwrites the residue, so the
+;;;      Mem-return conclusion keeps its (Pair 0 mem') shape and xcg_lastc
+;;;      never reaches a lowered theorem. (The sum loop's XMovRR RAX RSI
+;;;      is the same move with a different result.)
+;;;   5. Fuel: 7-instruction body -> S^11 worker / S^15 theorem (the
+;;;      instrs+4 rule: fill's 5 rides 9/13, mark's 6 and the sum's 6
+;;;      ride 10/14).
+;;;
+;;; On success xcg_lastc graduates to models/x86/loopkit.shard as
+;;; xlg_lastc and the emitter's loop route learns the LVRead store value.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")
+(import "../../../std/nat.shard")
+(import "../x86.shard")
+(import "../loopkit.shard")
+(use (:: std mem *))
+(use (:: std nat *))
+(use (:: models x86 x86 *))
+(use (:: models x86 loopkit *))
+
+;; the source article: copy k bytes from s to d (the wasm lp_copy shape)
+(fn xcp_copy ((m Mem) (s Int) (d Int) (k Nat)) Mem
+  (measure (struct k))
+  (match k
+    (Z m)
+    ((S k2) (xcp_copy (mem_set m d (mem_get m s)) (+ s 1) (+ d 1) k2))))
+
+;; the load register's residue after k iterations: the entry value if the
+;; loop never ran, else the last byte read — THROUGH the loop's own
+;; memory evolution (delta 2 above)
+(fn xcg_lastc ((m Mem) (s Int) (d Int) (r Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z r)
+    ((S k2)
+     (xcg_lastc (mem_set m d (mem_get m s)) (+ s 1) (+ d 1) (mem_get m s) k2))))
+
+;; the machine body: guard / rax = mem[rdi] / mem[rsi] = rax / rdi += 1 /
+;; rsi += 1 / rdx -= 1 / loop
+(fn xcp_copy_body () (List XInstr)
+  (list
+    (XBrIf (CEqz RDX) 1)
+    (XLoad8 RAX (AReg RDI))
+    (XStore8 (AReg RSI) (SReg RAX))
+    (XBin XAdd RDI (SImm 1))
+    (XBin XAdd RSI (SImm 1))
+    (XBin XSub RDX (SImm 1))
+    (XBr 0)))
+
+;; the piece: the loop plus the epilogue that zeroes the residue
+(fn xcp_copy_func () XFunc
+  (MkXFunc 3 (list (XBlock (list (XLoop (xcp_copy_body)))) (XMovRI RAX 0))))
+
+;; --- the worker induction ----------------------------------------------------
+
+(claim xcgw_xcp_copy
+  (goal
+    ((ra Int) (x0 Int) (x1 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List XFunc)))
+    ((= (le 0 x0) True)
+     (= (le 0 x1) True)
+     (= (le (+ x0 (int_of_nat k)) 65536) True)
+     (= (le (+ x1 (int_of_nat k)) 65536) True))
+    (=
+      (xeval_loop
+        (S^ 11 (xlg_fuel k c))
+        (MkXModule
+          (Cons
+            (MkXFunc
+              3
+              (list
+                (XBlock (list (XLoop (inline xcp_copy_body))))
+                (XMovRI RAX 0)))
+            restfs)
+          0
+          65536)
+        (inline xcp_copy_body)
+        (MkRegs ra 0 (int_of_nat k) 0 0 x1 x0 0 0 0 0 0 0 0 0)
+        m0)
+      (Some
+        (XBrk
+          0
+          (MkRegs
+            (xcg_lastc m0 x0 x1 ra k)
+            0
+            0
+            0
+            0
+            (xlg_adv x1 k)
+            (xlg_adv x0 k)
+            0
+            0
+            0
+            0
+            0
+            0
+            0
+            0)
+          (xcp_copy m0 x0 x1 k)))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((unfold xlg_fuel lhs)
+            (reduce lhs)
+            (unfold xeval_loop lhs)
+            (rewrite (lemma int_of_nat_succ) lr lhs true ())
+            (compute lhs (stop xeval_loop xlg_fuel))))
+         (rewrite-with
+           (lemma xlg_ne)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         ;; the LOAD's address guard (rdi): premises 0 and 2
+         (steps
+           ((compute lhs (stop xeval_loop xlg_fuel))
+            (rewrite (premise 0) lr lhs true ())
+            (compute lhs (stop xeval_loop xlg_fuel))))
+         (rewrite-with
+           (lemma xlg_a1_ms)
+           lr
+           lhs
+           ((inst c k2))
+           ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+            (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         ;; the STORE's address guard (rsi): premises 1 and 3
+         (steps
+           ((compute lhs (stop xeval_loop xlg_fuel))
+            (rewrite (premise 1) lr lhs true ())
+            (compute lhs (stop xeval_loop xlg_fuel))))
+         (rewrite-with
+           (lemma xlg_a1_ms)
+           lr
+           lhs
+           ((inst c k2))
+           ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+            (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps ((compute lhs (stop xeval_loop xlg_fuel))))
+         (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2))
+           (rewrite-with (lemma xlg_sub) lr lhs () () refl))
+         (steps ((rewrite (premise hsub) lr lhs true ())))
+         (have hwk
+           (= (mod (int_of_nat k2) 18446744073709551616) (int_of_nat k2))
+           (rewrite-with
+             (lemma wrap64_id)
+             lr
+             lhs
+             ((inst x (int_of_nat k2)))
+             ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)
+              (rewrite-with
+                (lemma xlg_kM)
+                lr
+                lhs
+                ((inst a x0) (inst c k2) (inst w 65536) (inst l 0))
+                ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+                 (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+                 (steps ((rewrite (premise 0) lr lhs true ())) refl)
+                 (steps ((compute both)) refl)
+                 (steps ((compute both)) refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hwk) lr lhs true ())))
+         (have hw0 (= (mod (+ x0 1) 18446744073709551616) (+ x0 1))
+           (rewrite-with
+             (lemma wrap64_id)
+             lr
+             lhs
+             ((inst x (+ x0 1)))
+             ((rewrite-with
+                (lemma xlg_lo0)
+                lr
+                lhs
+                ((inst l 0))
+                ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                 (steps ((compute both)) refl))
+                refl)
+              (rewrite-with
+                (lemma xlg_64)
+                lr
+                lhs
+                ((inst w 65536))
+                ((rewrite-with
+                   (lemma xlg_a1_ms)
+                   lr
+                   lhs
+                   ((inst c k2))
+                   ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+                    (steps
+                      ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                      refl)
+                    (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+                   refl)
+                 (steps ((compute both)) refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hw0) lr lhs true ())))
+         (have hw1 (= (mod (+ x1 1) 18446744073709551616) (+ x1 1))
+           (rewrite-with
+             (lemma wrap64_id)
+             lr
+             lhs
+             ((inst x (+ x1 1)))
+             ((rewrite-with
+                (lemma xlg_lo0)
+                lr
+                lhs
+                ((inst l 0))
+                ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                 (steps ((compute both)) refl))
+                refl)
+              (rewrite-with
+                (lemma xlg_64)
+                lr
+                lhs
+                ((inst w 65536))
+                ((rewrite-with
+                   (lemma xlg_a1_ms)
+                   lr
+                   lhs
+                   ((inst c k2))
+                   ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+                    (steps
+                      ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                      refl)
+                    (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+                   refl)
+                 (steps ((compute both)) refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hw1) lr lhs true ())))
+         (steps
+           ((unfold xcp_copy rhs)
+            (unfold xcg_lastc rhs)
+            (unfold xlg_adv rhs)
+            (reduce rhs)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma xlg_lo1)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma xlg_lo1)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma xlg_shift)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma xlg_shift)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              refl)))
+         (steps ((compute both)))
+         refl)))))
+
+;; --- the piece theorem -------------------------------------------------------
+;; entry spine (outer seq / XBlock / inner seq / XLoop = +4 over the
+;; worker), the worker by citation, then the epilogue zeroes rax
+
+(claim lowered_xcp_copy
+  (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List XFunc)))
+    ((= (le 0 x0) True)
+     (= (le 0 x1) True)
+     (= (le (+ x0 (int_of_nat k)) 65536) True)
+     (= (le (+ x1 (int_of_nat k)) 65536) True))
+    (=
+      (xcall_fn_mem
+        (S^ 15 (xlg_fuel k c))
+        (MkXModule
+          (Cons
+            (MkXFunc
+              3
+              (list
+                (XBlock (list (XLoop (inline xcp_copy_body))))
+                (XMovRI RAX 0)))
+            restfs)
+          0
+          65536)
+        0
+        (list x0 x1 (int_of_nat k))
+        m0)
+      (Some (Pair 0 (xcp_copy m0 x0 x1 k)))))
+  (chain
+    (steps ((compute lhs (stop xeval_loop xlg_fuel))))
+    (rewrite-with
+      (lemma xcgw_xcp_copy)
+      lr
+      lhs
+      ((inst ra 0))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    (steps ((compute both)))
+    refl))

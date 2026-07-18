@@ -1,0 +1,503 @@
+;;; xbinadd_probe.shard — the TWO-ARG WRAPPER probe (docs/X86.md rung
+;;; W4b): the bin entry that calls a loop callee TWICE — `add 2 3`'s
+;;; composition shape, hand-played before the emitter templates it.
+;;;
+;;; The findings this probe pins:
+;;;   1. THE GENERALIZED FOLD WORKER (xfgw_ad_go): B1's worker pinned
+;;;      every non-participating register to 0 — sound for the single
+;;;      call whose site IS all-zeros, but the second call of a two-call
+;;;      wrapper sees parked arguments (r8/r9), the preserved rcx, and
+;;;      the stashed first result. The worker generalizes to QUANTIFIED
+;;;      passthroughs (the do-while workers' §39 form); B1's proof text
+;;;      carries over unchanged.
+;;;   2. SEQUENTIAL LOOP-CALLEE FUEL: the depth bound is shared, not
+;;;      consumed — the second call site's fuel term keeps the first
+;;;      loop's (xlg_fuel k1 _) atom outside. The kit's fuel algebra
+;;;      (xlg_fuel_s to SINK surplus explicit S's into the tail,
+;;;      xlg_fuel_comm to bring the right loop's structure to the
+;;;      surface) lets each per-site cert meet its site exactly:
+;;;      xcert_1 at S^21 sinks five, xcert_2 at S^16 commutes once.
+;;;   3. The wrapper (13 instructions): park argv2 (r8/r9), marshal and
+;;;      call the fold on payload 1, stash (rcx), marshal and call on
+;;;      payload 2, add stashed (spec order — XAdd RCX RAX then the
+;;;      move), mask. THE SPEC SPELLS THE MACHINE'S ADD WRAP (§11's
+;;;      law): band 255 of the wrapped sum.
+;;;   4. Premise surface = TWO window pairs — exactly what the two-arg
+;;;      glue contract signs (§42), nothing else.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")
+(import "../../../std/nat.shard")
+(import "../x86.shard")
+(import "../loopkit.shard")
+(use (:: std mem *))
+(use (:: std nat *))
+(use (:: models x86 x86 *))
+(use (:: models x86 loopkit *))
+
+;; the fold (B1's decimal parse, verbatim)
+(fn ad_go ((m Mem) (p Int) (a Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z a)
+    ((S k2)
+     (ad_go
+       m
+       (+ p 1)
+       (mod
+         (-
+           (mod
+             (+ (mod (* a 10) 18446744073709551616) (mem_get m p))
+             18446744073709551616)
+           48)
+         18446744073709551616)
+       k2))))
+
+;; the entry: parse both payloads, add (the spec spells the machine's
+;; wrap), mask to an exit code
+(fn ad_main ((m Mem) (p1 Int) (k1 Nat) (p2 Int) (k2 Nat)) Int
+  (band (mod (+ (ad_go m p1 0 k1) (ad_go m p2 0 k2)) 18446744073709551616) 255))
+
+;; the two-call wrapper: park, call, stash, call, add, mask
+(fn ad_main_body () (List XInstr)
+  (list
+    (XMovRR R8 RDX)
+    (XMovRR R9 RCX)
+    (XMovRR RDX RSI)
+    (XMovRI RSI 0)
+    (XCall 0)
+    (XMovRR RCX RAX)
+    (XMovRR RDI R8)
+    (XMovRR RDX R9)
+    (XMovRI RSI 0)
+    (XCall 0)
+    (XBin XAdd RCX (SReg RAX))
+    (XMovRR RAX RCX)
+    (XBin XAnd RAX (SImm 255))))
+
+(fn ad_go_body () (List XInstr)
+  (list
+    (XBrIf (CEqz RDX) 1)
+    (XLoad8 RAX (AReg RDI))
+    (XBin XMul RSI (SImm 10))
+    (XBin XAdd RSI (SReg RAX))
+    (XBin XSub RSI (SImm 48))
+    (XBin XAdd RDI (SImm 1))
+    (XBin XSub RDX (SImm 1))
+    (XBr 0)))
+
+(claim xfgw_ad_go
+  (goal
+    ((ra Int)
+     (c0 Int)
+     (b0 Int)
+     (p0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (x0 Int)
+     (x1 Int)
+     (m0 Mem)
+     (c Nat)
+     (k Nat)
+     (restfs (List XFunc)))
+    ((= (le 6291456 x0) True) (= (le (+ x0 (int_of_nat k)) 6295552) True))
+    (=
+      (xeval_loop
+        (S^ 12 (xlg_fuel k c))
+        (MkXModule
+          (Cons
+            (MkXFunc
+              3
+              (list
+                (XBlock (list (XLoop (inline ad_go_body))))
+                (XMovRR RAX RSI)))
+            restfs)
+          6291456
+          6295552)
+        (inline ad_go_body)
+        (MkRegs ra c0 (int_of_nat k) b0 p0 x1 x0 e8 e9 e10 e11 e12 e13 e14 e15)
+        m0)
+      (Some
+        (XBrk
+          0
+          (MkRegs
+            (xlg_last m0 x0 ra k)
+            c0
+            0
+            b0
+            p0
+            (ad_go m0 x0 x1 k)
+            (xlg_adv x0 k)
+            e8
+            e9
+            e10
+            e11
+            e12
+            e13
+            e14
+            e15)
+          m0))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((unfold xlg_fuel lhs)
+            (reduce lhs)
+            (unfold xeval_loop lhs)
+            (rewrite (lemma int_of_nat_succ) lr lhs true ())
+            (compute lhs (stop xeval_loop xlg_fuel))))
+         (rewrite-with
+           (lemma xlg_ne)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps
+           ((compute lhs (stop xeval_loop xlg_fuel))
+            (rewrite (premise 0) lr lhs true ())
+            (compute lhs (stop xeval_loop xlg_fuel))))
+         (rewrite-with
+           (lemma xlg_a1_ms)
+           lr
+           lhs
+           ((inst c k2))
+           ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+            (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps ((compute lhs (stop xeval_loop xlg_fuel))))
+         (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2))
+           (rewrite-with (lemma xlg_sub) lr lhs () () refl))
+         (steps ((rewrite (premise hsub) lr lhs true ())))
+         (have hwk
+           (= (mod (int_of_nat k2) 18446744073709551616) (int_of_nat k2))
+           (rewrite-with
+             (lemma wrap64_id)
+             lr
+             lhs
+             ((inst x (int_of_nat k2)))
+             ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)
+              (rewrite-with
+                (lemma xlg_kM)
+                lr
+                lhs
+                ((inst a x0) (inst c k2) (inst w 6295552) (inst l 6291456))
+                ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                 (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+                 (steps ((rewrite (premise 0) lr lhs true ())) refl)
+                 (steps ((compute both)) refl)
+                 (steps ((compute both)) refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hwk) lr lhs true ())))
+         (have hw0 (= (mod (+ x0 1) 18446744073709551616) (+ x0 1))
+           (rewrite-with
+             (lemma wrap64_id)
+             lr
+             lhs
+             ((inst x (+ x0 1)))
+             ((rewrite-with
+                (lemma xlg_lo0)
+                lr
+                lhs
+                ((inst l 6291456))
+                ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                 (steps ((compute both)) refl))
+                refl)
+              (rewrite-with
+                (lemma xlg_64)
+                lr
+                lhs
+                ((inst w 6295552))
+                ((rewrite-with
+                   (lemma xlg_a1_ms)
+                   lr
+                   lhs
+                   ((inst c k2))
+                   ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                    (steps
+                      ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                      refl)
+                    (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+                   refl)
+                 (steps ((compute both)) refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hw0) lr lhs true ())))
+         (steps
+           ((unfold ad_go rhs)
+            (unfold xlg_adv rhs)
+            (unfold xlg_last rhs)
+            (reduce rhs)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma xlg_lo1)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma xlg_shift)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              refl)))
+         (steps ((compute both)))
+         refl)))))
+
+(claim xcert_ad_go_1
+  (goal
+    ((x0 Int) (x2 Int) (m0 Mem) (c Nat) (k Nat) (k2 Nat) (restfs (List XFunc)))
+    ((= (le 6291456 x0) True) (= (le (+ x0 (int_of_nat k)) 6295552) True))
+    (=
+      (xrun_regs
+        (S^ 21 (xlg_fuel k c))
+        (MkXModule
+          (Cons
+            (MkXFunc
+              3
+              (list
+                (XBlock (list (XLoop (inline ad_go_body))))
+                (XMovRR RAX RSI)))
+            restfs)
+          6291456
+          6295552)
+        0
+        (MkRegs
+          0
+          (int_of_nat k2)
+          (int_of_nat k)
+          0
+          0
+          0
+          x0
+          x2
+          (int_of_nat k2)
+          0
+          0
+          0
+          0
+          0
+          0)
+        m0)
+      (Some
+        (Pair
+          (MkRegs
+            (ad_go m0 x0 0 k)
+            (int_of_nat k2)
+            0
+            0
+            0
+            (ad_go m0 x0 0 k)
+            (xlg_adv x0 k)
+            x2
+            (int_of_nat k2)
+            0
+            0
+            0
+            0
+            0
+            0)
+          m0))))
+  (chain
+    (steps ((compute lhs (stop xeval_loop xlg_fuel))))
+    (rewrite-with (lemma xlg_fuel_s) rl lhs () ())
+    (rewrite-with (lemma xlg_fuel_s) rl lhs () ())
+    (rewrite-with (lemma xlg_fuel_s) rl lhs () ())
+    (rewrite-with (lemma xlg_fuel_s) rl lhs () ())
+    (rewrite-with (lemma xlg_fuel_s) rl lhs () ())
+    (rewrite-with
+      (lemma xfgw_ad_go)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute both)))
+    refl))
+
+(claim xcert_ad_go_2
+  (goal
+    ((a1 Int)
+     (v1 Int)
+     (x2 Int)
+     (m0 Mem)
+     (c Nat)
+     (k1 Nat)
+     (k Nat)
+     (restfs (List XFunc)))
+    ((= (le 6291456 x2) True) (= (le (+ x2 (int_of_nat k)) 6295552) True))
+    (=
+      (xrun_regs
+        (S^ 16 (xlg_fuel k1 (xlg_fuel k c)))
+        (MkXModule
+          (Cons
+            (MkXFunc
+              3
+              (list
+                (XBlock (list (XLoop (inline ad_go_body))))
+                (XMovRR RAX RSI)))
+            restfs)
+          6291456
+          6295552)
+        0
+        (MkRegs a1 v1 (int_of_nat k) 0 0 0 x2 x2 (int_of_nat k) 0 0 0 0 0 0)
+        m0)
+      (Some
+        (Pair
+          (MkRegs
+            (ad_go m0 x2 0 k)
+            v1
+            0
+            0
+            0
+            (ad_go m0 x2 0 k)
+            (xlg_adv x2 k)
+            x2
+            (int_of_nat k)
+            0
+            0
+            0
+            0
+            0
+            0)
+          m0))))
+  (chain
+    (steps ((compute lhs (stop xeval_loop xlg_fuel))))
+    (rewrite-with (lemma xlg_fuel_comm) lr lhs () ())
+    (rewrite-with
+      (lemma xfgw_ad_go)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute both)))
+    refl))
+
+(claim lowered_ad_main
+  (goal
+    ((x0 Int) (k1 Nat) (x2 Int) (k2 Nat) (m0 Mem) (c Nat) (restfs (List XFunc)))
+    ((= (le 6291456 x0) True)
+     (= (le (+ x0 (int_of_nat k1)) 6295552) True)
+     (= (le 6291456 x2) True)
+     (= (le (+ x2 (int_of_nat k2)) 6295552) True))
+    (=
+      (xcall_fn_mem
+        (S^ 28 (xlg_fuel k1 (xlg_fuel k2 c)))
+        (MkXModule
+          (Cons
+            (MkXFunc
+              3
+              (list
+                (XBlock (list (XLoop (inline ad_go_body))))
+                (XMovRR RAX RSI)))
+            (Cons (MkXFunc 4 (inline ad_main_body)) restfs))
+          6291456
+          6295552)
+        1
+        (list x0 (int_of_nat k1) x2 (int_of_nat k2))
+        m0)
+      (Some (Pair (ad_main m0 x0 k1 x2 k2) m0))))
+  (chain
+    (steps ((compute lhs (stop xeval_call xeval_loop xlg_fuel))))
+    (rewrite-with
+      (lemma xcall_bridge)
+      lr
+      lhs
+      ((inst
+         f
+         (MkXFunc
+           3
+           (list (XBlock (list (XLoop (inline ad_go_body)))) (XMovRR RAX RSI))))
+       (inst
+         rs2
+         (MkRegs
+           (ad_go m0 x0 0 k1)
+           (int_of_nat k2)
+           0
+           0
+           0
+           (ad_go m0 x0 0 k1)
+           (xlg_adv x0 k1)
+           x2
+           (int_of_nat k2)
+           0
+           0
+           0
+           0
+           0
+           0))
+       (inst mem2 m0))
+      ((steps ((compute both)) refl)
+       (chain
+         (rewrite-with
+           (lemma xcert_ad_go_1)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+         (steps ((compute both)))
+         refl)))
+    (steps ((compute lhs (stop xeval_call xeval_loop xlg_fuel))))
+    (rewrite-with
+      (lemma xcall_bridge)
+      lr
+      lhs
+      ((inst
+         f
+         (MkXFunc
+           3
+           (list (XBlock (list (XLoop (inline ad_go_body)))) (XMovRR RAX RSI))))
+       (inst
+         rs2
+         (MkRegs
+           (ad_go m0 x2 0 k2)
+           (ad_go m0 x0 0 k1)
+           0
+           0
+           0
+           (ad_go m0 x2 0 k2)
+           (xlg_adv x2 k2)
+           x2
+           (int_of_nat k2)
+           0
+           0
+           0
+           0
+           0
+           0))
+       (inst mem2 m0))
+      ((steps ((compute both)) refl)
+       (chain
+         (rewrite-with
+           (lemma xcert_ad_go_2)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+            (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+         (steps ((compute both)))
+         refl)))
+    (steps ((compute lhs)))
+    (steps ((unfold ad_main rhs) (reduce rhs)))
+    (steps ((compute both)))
+    refl))

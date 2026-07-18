@@ -161,49 +161,49 @@ TARGETS=(
   examples/impgen_x86_ifl_out.shard
   models/wasm/wasm.shard
   models/wasm/encode.shard
-  examples/wasm_smoke.shard
-  examples/wasm_pieces.shard
-  examples/wasm_weld.shard
-  examples/wasm_weld_out.shard
-  examples/wasm_diff_run.shard
-  examples/wasm_rev.shard
-  examples/wasm_copy.shard
+  models/wasm/probes/wasm_smoke.shard
+  models/wasm/probes/wasm_pieces.shard
+  models/wasm/probes/wasm_weld.shard
+  models/wasm/probes/wasm_weld_out.shard
+  models/wasm/diff/wasm_diff_run.shard
+  models/wasm/probes/wasm_rev.shard
+  models/wasm/probes/wasm_copy.shard
   examples/lowered_form.shard
   pins/lang/w64_probe.shard
   models/x86/x86.shard
   models/x86/encode.shard
-  examples/x86_pieces.shard
+  models/x86/probes/x86_pieces.shard
   std/mem/mem.x86.shard
-  examples/xmemcall_probe.shard
-  examples/x86_window_law.shard
-  examples/xsibcall_probe.shard
-  examples/xchain_probe.shard
-  examples/xloopcall_probe.shard
-  examples/xintloop_probe.shard
-  examples/xcopyloop_probe.shard
-  examples/xtransform_probe.shard
-  examples/xfoldloop_probe.shard
-  examples/xdiv_probe.shard
-  examples/lxkernel_probe.shard
-  examples/xworld_probe.shard
-  examples/xadequacy_probe.shard
-  examples/xweff_probe.shard
+  models/x86/probes/xmemcall_probe.shard
+  models/x86/probes/x86_window_law.shard
+  models/x86/probes/xsibcall_probe.shard
+  models/x86/probes/xchain_probe.shard
+  models/x86/probes/xloopcall_probe.shard
+  models/x86/probes/xintloop_probe.shard
+  models/x86/probes/xcopyloop_probe.shard
+  models/x86/probes/xtransform_probe.shard
+  models/x86/probes/xfoldloop_probe.shard
+  models/x86/probes/xdiv_probe.shard
+  models/linux/probes/lxkernel_probe.shard
+  models/x86/probes/xworld_probe.shard
+  models/x86/probes/xadequacy_probe.shard
+  models/x86/probes/xweff_probe.shard
   examples/addw_src.shard
   examples/sha256sum_src.shard
   examples/sha256sum_x86_out.shard
   examples/sha256sum_elf.shard
   examples/stdin_echo_probe.shard
   examples/addw_x86_out.shard
-  examples/xitoa_probe.shard
+  models/x86/probes/xitoa_probe.shard
   examples/x86div_src.shard
   examples/x86div_out.shard
   examples/x86itoa_src.shard
   examples/x86itoa_out.shard
-  examples/xbinadd_probe.shard
+  models/x86/probes/xbinadd_probe.shard
   examples/add_src.shard
   examples/add_x86_out.shard
-  examples/xbinsum_probe.shard
-  examples/xid_probe.shard
+  models/x86/probes/xbinsum_probe.shard
+  models/x86/probes/xid_probe.shard
   examples/bytesum_src.shard
   examples/bytesum_x86_out.shard
   examples/libmod_probe.shard
@@ -219,17 +219,17 @@ TARGETS=(
   examples/echoarg_src.shard
   examples/echoarg_x86_out.shard
   models/riscv/riscv.shard
-  examples/riscv_smoke.shard
+  models/riscv/probes/riscv_smoke.shard
   models/riscv/encode.shard
-  examples/riscv_diff_run.shard
+  models/riscv/diff/riscv_diff_run.shard
   models/riscv/loopkit.shard
-  examples/riscv_pieces.shard
+  models/riscv/probes/riscv_pieces.shard
   examples/upcase_src.shard
   examples/upcase_x86_out.shard
   examples/parse_src.shard
   examples/parse_x86_out.shard
   pins/trust/bin_entry_rejects.shard
-  examples/x86_diff_run.shard
+  models/x86/diff/x86_diff_run.shard
   examples/rep_probe.shard
   examples/lowfrag_probe.shard
   examples/divfrag_probe.shard
@@ -360,9 +360,9 @@ TARGETS=(
   tools/search/gen/x86_calculator4_refinement.shard
   models/pio/pio.shard
   models/pio/encode.shard
-  examples/pio_smoke.shard
-  examples/pio_vecrun.shard
-  examples/pio_vecgate.shard
+  models/pio/probes/pio_smoke.shard
+  models/pio/diff/pio_vecrun.shard
+  models/pio/diff/pio_vecgate.shard
   tools/search/tasks/typed_pio_square.shard
   tools/search/gen/pio_square_refinement.shard
   tools/search/tasks/typed_pio_dme.shard
@@ -403,12 +403,12 @@ echo "=== scope: snake_game_3/game ==="
 # structural drift, this catches the silent kind).
 echo "=== weld: regen wasm_weld_out ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run examples/wasm_weld.shard > "$TMP/weld.raw" 2>/dev/null
+  bin/shard_eval run models/wasm/probes/wasm_weld.shard > "$TMP/weld.raw" 2>/dev/null
   bin/shard_eval run tools/shardfmt/shardfmt.shard "$TMP/weld.raw" > "$TMP/weld.fmt" 2>/dev/null
-  if diff -q "$TMP/weld.fmt" examples/wasm_weld_out.shard >/dev/null; then
+  if diff -q "$TMP/weld.fmt" models/wasm/probes/wasm_weld_out.shard >/dev/null; then
     echo "REGEN OK (byte-identical)"
   else
-    echo "REGEN DRIFT: emitted certificate differs from examples/wasm_weld_out.shard"
+    echo "REGEN DRIFT: emitted certificate differs from models/wasm/probes/wasm_weld_out.shard"
   fi
 else
   echo "SKIPPED (no bin/shard_eval)"
@@ -422,10 +422,10 @@ echo "=== pio: regen pio_vectors_data ==="
 if [ -x bin/shard_eval ] && command -v python3 >/dev/null; then
   python3 tools/piovec/gen_vectors.py > "$TMP/piovec.raw" 2>/dev/null
   bin/shard_eval run tools/shardfmt/shardfmt.shard "$TMP/piovec.raw" > "$TMP/piovec.fmt" 2>/dev/null
-  if diff -q "$TMP/piovec.fmt" examples/pio_vectors_data.shard >/dev/null; then
+  if diff -q "$TMP/piovec.fmt" models/pio/diff/pio_vectors_data.shard >/dev/null; then
     echo "REGEN OK (byte-identical)"
   else
-    echo "REGEN DRIFT: generated vector data differs from examples/pio_vectors_data.shard"
+    echo "REGEN DRIFT: generated vector data differs from models/pio/diff/pio_vectors_data.shard"
   fi
 else
   echo "SKIPPED (no bin/shard_eval or python3)"
@@ -933,7 +933,7 @@ fi
 # disagreements change it and fail the diff.
 echo "=== wasm: engine differential ==="
 if command -v node >/dev/null && [ -x bin/shard_eval ]; then
-  bash examples/wasm_diff.sh 2>&1 | tail -1
+  bash models/wasm/diff/wasm_diff.sh 2>&1 | tail -1
 else
   echo "SKIPPED (needs node + bin/shard_eval)"
 fi
@@ -945,7 +945,7 @@ fi
 # only; disagreements change it and fail the diff.
 echo "=== x86: silicon differential ==="
 if command -v cc >/dev/null && [ -x bin/shard_eval ]; then
-  bash examples/x86_diff.sh 2>&1 | tail -1
+  bash models/x86/diff/x86_diff.sh 2>&1 | tail -1
 else
   echo "SKIPPED (needs cc + bin/shard_eval)"
 fi
@@ -959,7 +959,7 @@ fi
 # riscv_diff.sh self-guards (SKIP exit 0) when clang/qemu-user/rust-lld absent.
 echo "=== riscv: engine differential ==="
 if command -v clang >/dev/null && command -v qemu-riscv64 >/dev/null && [ -x bin/shard_eval ]; then
-  bash examples/riscv_diff.sh 2>&1 | tail -1
+  bash models/riscv/diff/riscv_diff.sh 2>&1 | tail -1
 else
   echo "SKIPPED (needs clang + qemu-user + bin/shard_eval)"
 fi

@@ -1,0 +1,729 @@
+;;; wasm_diff_run.shard — the differential PLAN emitter (ISA slice 4).
+;;;
+;;; RUN-mode script: encodes the welded composite (and a constant-width probe
+;;; module) to real .wasm bytes and prints a plan — modules as hex plus test
+;;; vectors whose expected results are computed BY THE MODEL (call_fn), not
+;;; hardcoded. examples/wasm_diff.sh feeds the plan to a real engine
+;;; (node/V8 via examples/wasm_diff.mjs) and compares. This is the dev-side
+;;; exercise of the "engine conforms to model" trust leaf: agreement is
+;;; evidence for the leaf, disagreement is a model bug or an encoder bug —
+;;; either way loud, never a silent proof-side artifact.
+;;;
+;;; Plan format (one record per line):
+;;;   MOD <name> <hex-bytes>
+;;;   CASE <name> f<k> <args...> -> <expected>   (expected: u32 decimal | None)
+;;;
+;;; RUN: bash examples/wasm_diff.sh
+
+(import "../../../kernel/stdlib.shard")
+(import "../wasm.shard")
+(use (:: models wasm wasm *))
+(import "../encode.shard")
+(use (:: models wasm encode *))
+(import "../probes/wasm_pieces.shard")
+(use (:: models wasm probes wasm_pieces *))
+(import "../probes/wasm_rev.shard")
+(use (:: models wasm probes wasm_rev prev))
+(import "../probes/wasm_copy.shard")
+(use (:: models wasm probes wasm_copy pcopy))
+(import "../../../std/mem/mem.wasm.shard")
+(use (:: std mem mem.wasm mget_f))
+(use (:: std mem mem.wasm mset_f))
+(import "../../../examples/callcomp_probe.shard")
+(use (:: examples callcomp_probe sum2_f))
+(import "../../../examples/msetcomp_probe.shard")
+(use (:: examples msetcomp_probe setget_f))
+(use (:: examples msetcomp_probe bump_f))
+(import "../../../examples/portcert_probe.shard")  ; check-closure coverage (no new machine code)
+(import "../../../examples/prehyg_probe.shard")  ; check-closure coverage (no new machine code)
+(import "../../../examples/intloop_probe.shard")  ; check-closure coverage (Int-return loop template)
+(import "../../../examples/revloop_probe.shard")  ; check-closure coverage (multi-store/dec template)
+(import "../../../examples/scanloop_probe.shard")  ; check-closure coverage (early-exit template)
+(import "../../../examples/beqloop_probe.shard")  ; check-closure coverage (two-read flag template)
+(import "../../../examples/strideloop_probe.shard")  ; check-closure coverage (stride != 1 template)
+(import "../../../examples/callloop_probe.shard")
+(use (:: examples callloop_probe clg_c))
+(use (:: examples callloop_probe cls_c))
+(use (:: examples callloop_probe cp_put_f))
+(use (:: examples callloop_probe cw_fill_f))
+(import "../../../examples/wtrmem_probe.shard")  ; check-closure coverage (write-then-read)
+(import "../../../examples/bytesrep_probe.shard")  ; check-closure coverage (aggregate rep relation)
+(import "../../../examples/byteswr_probe.shard")  ; check-closure coverage (write-side aggregate rep)
+(import "../../../examples/bytescp_probe.shard")  ; check-closure coverage (two-region aggregate rep)
+(import "../../../examples/repswap_probe.shard")
+(use (:: examples repswap_probe mget2_c))
+(use (:: examples repswap_probe mset2_c))
+(use (:: examples repswap_probe sum2_c))
+(use (:: examples repswap_probe bump_c))
+(import "../../../examples/loopgen_probe.shard")
+(use (:: examples loopgen_probe fl_func))
+(use (:: examples loopgen_probe cp_func))
+(import "../../../examples/mem_reverse.shard")
+(use (:: examples mem_reverse load))
+(use (:: examples mem_reverse dump))
+(use (:: examples mem_reverse length_nat))
+(import "../../../std/mem")
+(use (:: std mem *))
+
+(type World (World Int))
+
+(extern write ((bytes (List Int)) (w World)) World)
+(extern exit ((code Int) (w World)) World)
+
+;; the welded composite, same ABI layout as the slice-3 certificate.
+(fn dmod () WModule (MkWModule (list (padd) (psum) (ptriple)) 0))
+
+;; constant-width probe: one function per interesting I32Const immediate —
+;; every sleb width boundary, both signs of the signed view, and negative
+;; immediates (the model wraps them; the encoder must mirror that).
+(fn kf ((c Int)) Func (MkFunc 0 0 (list (I32Const c))))
+
+(fn kmod () WModule
+  (MkWModule
+    (list
+      (kf 0)
+      (kf 1)
+      (kf 63)
+      (kf 64)
+      (kf 8191)
+      (kf 8192)
+      (kf 1048575)
+      (kf 1048576)
+      (kf 134217727)
+      (kf 134217728)
+      (kf 2147483647)
+      (kf 2147483648)
+      (kf 4294967295)
+      (kf -1)
+      (kf -64))
+    0))
+
+;; the in-place byte-reverse piece (wasm_rev.shard), with its 64KiB memory.
+(fn rmod2 () WModule (MkWModule (list (prev)) 65536))
+
+;; the forward byte-copy piece (wasm_copy.shard), same one-page memory.
+(fn cmod2 () WModule (MkWModule (list (pcopy)) 65536))
+
+;; call-composition module (callcomp_probe.shard): f0 = mget (byte read as a
+;; module function), f1 = sum2 (two byte reads BY CALL + add). The only plan
+;; entries exercising the model's Call instruction against the engine.
+(fn ccmod () WModule (MkWModule (list (mget_f) (sum2_f)) 65536))
+
+;; the rep-swap module (repswap_probe.shard): std/mem's V2 variant
+;; implementations behind the SAME consumer binaries — f0/f1 = mget2/mset2
+;; (scratch-local detours), f2 = sum2, f3 = bump. The engine leg of the
+;; rep-swap acceptance test.
+(fn rsmod () WModule
+  (MkWModule (list (mget2_c) (mset2_c) (sum2_c) (bump_c)) 65536))
+
+;; the loop-generation module (loopgen_probe.shard): f0 = fill (constant byte
+;; store over a range), f1 = copy (forward byte copy) — both bodies
+;; machine-template loops (counter-as-local). The engine leg of the
+;; loop-generation probe: Loop/Br/BrIf/I32Eqz/BSub over memory for real.
+(fn lpmod () WModule (MkWModule (list (fl_func) (cp_func)) 65536))
+
+;; mset frame-flow module (msetcomp_probe.shard): f0 = mget, f1 = mset (byte
+;; store BY CALL, returns the raw value), f2 = setget (write x then read
+;; y — the framed observation), f3 = bump (read-modify-write). Exercises
+;; Call with memory WRITES in the callee against the engine.
+(fn mcmod () WModule
+  (MkWModule (list (mget_f) (mset_f) (setget_f) (bump_f)) 65536))
+
+;; comparison probe: one function per comparison Bop, f(a b) = a OP b.
+;; The vector pairs straddle the SIGNED boundary (2^31) so a signed-variant
+;; encoding slip (lt_s 0x48 for lt_u 0x49, etc.) flips an expected value —
+;; the differential is loud exactly where the two orders disagree.
+(fn cmpf ((o Bop)) Func
+  (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin o))))
+
+(fn cmpmod () WModule
+  (MkWModule
+    (list (cmpf BEq) (cmpf BNe) (cmpf BLtU) (cmpf BLeU) (cmpf BGtU) (cmpf BGeU))
+    0))
+
+;; division probe: f0 = div_u, f1 = rem_u. The zero-divisor vectors expect
+;; None — the model's OTrap and the engine's runtime trap must AGREE (the
+;; trap leg of the differential, live for the first time here).
+(fn divmod () WModule (MkWModule (list (cmpf BDivU) (cmpf BRemU)) 0))
+
+;; bitwise probe: f0 = and, f1 = or, f2 = xor. The model computes with the
+;; band/bor/bxor PRIMS — this leg is a live differential for the kernel's
+;; bitwise prims against a real engine, on top of the encoder bytes.
+(fn bitmod () WModule (MkWModule (list (cmpf BAnd) (cmpf BOr) (cmpf BXor)) 0))
+
+;; shift/rotate probe (rung I2a): f0 = shl, f1 = shr_u, f2 = rotr. The
+;; count-mod-32 semantics and the rotate's wrapped-around bits are where
+;; a model/engine slip would hide: counts 0, 31, 32, 33 probe the count
+;; masking; the high-bit and all-ones values probe the wrap legs (and
+;; the model's band-spelled rotr containment against the real i32.rotr).
+(fn shmod () WModule (MkWModule (list (cmpf BShl) (cmpf BShrU) (cmpf BRotr)) 0))
+
+;; calls-in-loops module (callloop_probe.shard): f0/f1 = mget/mset, f2 =
+;; cp_put (2-byte cell store by call), f3 = cw_fill (stride-2 loop CALLING
+;; f2, Drop after the call). The first engine leg combining Loop/Br with
+;; Call and Drop in one body.
+(fn clmod () WModule
+  (MkWModule (list (clg_c) (cls_c) (cp_put_f) (cw_fill_f)) 65536))
+
+;; drop probe: f0(a b) pushes both and drops the top — the result is a, and
+;; a signed/stack slip (dropping the wrong slot) answers b instead. f1 drops
+;; mid-expression and keeps computing above the survivor.
+(fn dropmod () WModule
+  (MkWModule
+    (list
+      (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (Drop)))
+      (MkFunc
+        2
+        0
+        (list (LocalGet 0) (LocalGet 1) (Drop) (I32Const 5) (I32Bin BAdd))))
+    0))
+
+;; --- the i64 tier probes (imp §2a rung V2-2c) -------------------------------------
+;; i64 values never cross the module boundary (the functype/local
+;; declarations stay all-i32): operands enter as I64Const immediates,
+;; results leave through i32.wrap_i64 — the LOW half directly, the
+;; HIGH half through a shr-32 first. Comparisons are i32-valued and
+;; return directly. The count-mod-64 shift vectors are the
+;; divergence-from-32 witnesses (count 32 must SHIFT, count 64 must
+;; mask to 0); the comparison vectors straddle the 2^63 signed
+;; boundary (an _s-encoding slip flips them) and pair equal LOW
+;; halves with different high halves (a compare-on-32 slip equates
+;; them).
+
+(fn qlo ((a Int) (b Int) (o Bop)) Func
+  (MkFunc 0 0 (list (I64Const a) (I64Const b) (I64Bin o) (I32WrapI64))))
+
+(fn qhi ((a Int) (b Int) (o Bop)) Func
+  (MkFunc
+    0
+    0
+    (list
+      (I64Const a)
+      (I64Const b)
+      (I64Bin o)
+      (I64Const 32)
+      (I64Bin BShrU)
+      (I32WrapI64))))
+
+(fn qcmp ((a Int) (b Int) (o Bop)) Func
+  (MkFunc 0 0 (list (I64Const a) (I64Const b) (I64Bin o))))
+
+;; the conversion probes: extend a live i32 param up, observe both
+;; halves (an extend_s slip fills the high half), and round-trip
+;; through the high half (a narrower-than-64 register loses it)
+(fn extlo () Func (MkFunc 1 0 (list (LocalGet 0) (I64ExtendI32U) (I32WrapI64))))
+
+(fn exthi () Func
+  (MkFunc
+    1
+    0
+    (list
+      (LocalGet 0)
+      (I64ExtendI32U)
+      (I64Const 32)
+      (I64Bin BShrU)
+      (I32WrapI64))))
+
+(fn extsh () Func
+  (MkFunc
+    1
+    0
+    (list
+      (LocalGet 0)
+      (I64ExtendI32U)
+      (I64Const 32)
+      (I64Bin BShl)
+      (I64Const 32)
+      (I64Bin BShrU)
+      (I32WrapI64))))
+
+;; the i64.eqz probes (V2-3, the U64 while-guard consumer): the zero
+;; test's result is i32 directly. The 2^32 operand is the tell — its
+;; LOW half is zero, so an i32.eqz-of-wrap confusion answers 1 where
+;; i64.eqz must answer 0.
+(fn qez ((c Int)) Func (MkFunc 0 0 (list (I64Const c) (I64Eqz))))
+
+;; eqz against a live computed value (param through extend)
+(fn qezp () Func (MkFunc 1 0 (list (LocalGet 0) (I64ExtendI32U) (I64Eqz))))
+
+(fn qmod () WModule
+  (MkWModule
+    (list
+      (qlo 18446744073709551615 2 BAdd)
+      (qhi 18446744073709551615 2 BAdd)
+      (qlo 4294967295 1 BAdd)
+      (qhi 4294967295 1 BAdd)
+      (qlo 0 1 BSub)
+      (qhi 0 1 BSub)
+      (qlo 4294967295 4294967295 BMul)
+      (qhi 4294967295 4294967295 BMul)
+      (qlo 4294967296 3 BMul)
+      (qhi 4294967296 3 BMul)
+      (qlo 9223372036854775808 2 BDivU)
+      (qhi 9223372036854775808 2 BDivU)
+      (qlo 18446744073709551615 10000000000 BRemU)
+      (qhi 18446744073709551615 10000000000 BRemU)
+      (qlo 7 0 BDivU)
+      (qlo 7 0 BRemU)
+      (qlo 17361641481138401520 1148417904979476464 BAnd)
+      (qhi 17361641481138401520 1148417904979476464 BAnd)
+      (qlo 1311768467463790320 6148914691236517205 BOr)
+      (qhi 1311768467463790320 6148914691236517205 BOr)
+      (qlo 12297829382473034410 6148914691236517205 BXor)
+      (qhi 12297829382473034410 6148914691236517205 BXor)
+      (qlo 1 32 BShl)
+      (qhi 1 32 BShl)
+      (qlo 1 63 BShl)
+      (qhi 1 63 BShl)
+      (qlo 1 64 BShl)
+      (qhi 1 64 BShl)
+      (qlo 1311768467463790320 65 BShl)
+      (qhi 1311768467463790320 65 BShl)
+      (qlo 9223372036854775808 63 BShrU)
+      (qhi 9223372036854775808 63 BShrU)
+      (qlo 9223372036854775808 32 BShrU)
+      (qhi 9223372036854775808 32 BShrU)
+      (qlo 5 64 BShrU)
+      (qhi 5 64 BShrU)
+      (qlo 1 1 BRotr)
+      (qhi 1 1 BRotr)
+      (qlo 1311768467463790320 36 BRotr)
+      (qhi 1311768467463790320 36 BRotr)
+      (qlo 12297829382473034410 64 BRotr)
+      (qhi 12297829382473034410 64 BRotr)
+      (qcmp 9223372036854775808 9223372036854775808 BEq)
+      (qcmp 9223372036854775808 9223372036854775807 BNe)
+      (qcmp 9223372036854775807 9223372036854775808 BLtU)
+      (qcmp 9223372036854775808 9223372036854775807 BLtU)
+      (qcmp 18446744073709551615 0 BLeU)
+      (qcmp 18446744073709551615 1 BGtU)
+      (qcmp 0 18446744073709551615 BGeU)
+      (qcmp 4294967297 1 BEq)
+      (qcmp 1 4294967297 BLtU)
+      (extlo)
+      (exthi)
+      (extsh)
+      (qez 0)
+      (qez 5)
+      (qez 4294967296)
+      (qez 9223372036854775808)
+      (qez 18446744073709551615)
+      (qezp))
+    0))
+
+;; i64.const width probe: one lo/hi pair per sleb64 ladder boundary
+;; (both sides of every chunk-count step, the sign frontier at 2^63,
+;; all-ones, and the 1-vs-2-chunk negative boundary at -64/-65)
+(fn qk_lo ((c Int)) Func (MkFunc 0 0 (list (I64Const c) (I32WrapI64))))
+
+(fn qk_hi ((c Int)) Func
+  (MkFunc 0 0 (list (I64Const c) (I64Const 32) (I64Bin BShrU) (I32WrapI64))))
+
+(fn qkmod () WModule
+  (MkWModule
+    (list
+      (qk_lo 0)
+      (qk_hi 0)
+      (qk_lo 1)
+      (qk_hi 1)
+      (qk_lo 63)
+      (qk_hi 63)
+      (qk_lo 64)
+      (qk_hi 64)
+      (qk_lo 8191)
+      (qk_hi 8191)
+      (qk_lo 8192)
+      (qk_hi 8192)
+      (qk_lo 1048575)
+      (qk_hi 1048575)
+      (qk_lo 1048576)
+      (qk_hi 1048576)
+      (qk_lo 134217727)
+      (qk_hi 134217727)
+      (qk_lo 134217728)
+      (qk_hi 134217728)
+      (qk_lo 17179869183)
+      (qk_hi 17179869183)
+      (qk_lo 17179869184)
+      (qk_hi 17179869184)
+      (qk_lo 2199023255551)
+      (qk_hi 2199023255551)
+      (qk_lo 2199023255552)
+      (qk_hi 2199023255552)
+      (qk_lo 281474976710655)
+      (qk_hi 281474976710655)
+      (qk_lo 281474976710656)
+      (qk_hi 281474976710656)
+      (qk_lo 36028797018963967)
+      (qk_hi 36028797018963967)
+      (qk_lo 36028797018963968)
+      (qk_hi 36028797018963968)
+      (qk_lo 4611686018427387903)
+      (qk_hi 4611686018427387903)
+      (qk_lo 4611686018427387904)
+      (qk_hi 4611686018427387904)
+      (qk_lo 9223372036854775807)
+      (qk_hi 9223372036854775807)
+      (qk_lo 9223372036854775808)
+      (qk_hi 9223372036854775808)
+      (qk_lo 18446744073709551615)
+      (qk_hi 18446744073709551615)
+      (qk_lo 18446744073709551552)
+      (qk_hi 18446744073709551552)
+      (qk_lo 18446744073709551551)
+      (qk_hi 18446744073709551551))
+    0))
+
+;; --- plan rendering -------------------------------------------------------------
+
+(fn cat ((xs (List (List Int)))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil "")
+    ((Cons h t) (wapp h (cat t)))))
+
+(fn hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
+
+(fn hexs ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b t) (Cons (hexd (ediv b 16)) (Cons (hexd (mod b 16)) (hexs t))))))
+
+(fn showr ((r (Option Int))) (List Int)
+  (match r
+    (None "None")
+    ((Some v) (dec v))))
+
+(fn showargs ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil "")
+    ((Cons h t) (wapp " " (wapp (dec h) (showargs t))))))
+
+(fn mod_line ((nm (List Int)) (m WModule)) (List Int)
+  (cat (list "MOD " nm " " (hexs (enc_module m)) "\n")))
+
+;; a vector: run the MODEL at generous ground fuel, print what it said.
+(fn case_line ((nm (List Int)) (m WModule) (k Int) (args (List Int)) (fuel Int))
+  (List Int)
+  (cat
+    (list
+      "CASE "
+      nm
+      " f"
+      (dec k)
+      (showargs args)
+      " -> "
+      (showr (call_fn (fnat fuel) m k args))
+      "\n")))
+
+(fn kcase ((k Int)) (List Int) (case_line "kmod" (kmod) k (list) 10))
+
+;; the division vectors for one divmod function: exact/inexact quotients,
+;; zero dividend, ZERO DIVISOR (the trap vectors), the 2^31 signed boundary
+;; (div_s would answer differently), divisor above the dividend, extremes.
+(fn dcases ((k Int)) (List Int)
+  (cat
+    (list
+      (case_line "divmod" (divmod) k (list 7 3) 20)
+      (case_line "divmod" (divmod) k (list 12 4) 20)
+      (case_line "divmod" (divmod) k (list 0 5) 20)
+      (case_line "divmod" (divmod) k (list 7 0) 20)
+      (case_line "divmod" (divmod) k (list 0 0) 20)
+      (case_line "divmod" (divmod) k (list 4294967295 2) 20)
+      (case_line "divmod" (divmod) k (list 2147483648 3) 20)
+      (case_line "divmod" (divmod) k (list 5 2147483648) 20)
+      (case_line "divmod" (divmod) k (list 4294967295 4294967295) 20))))
+
+;; the bitwise vectors for one bitmod function: complementary nibble masks,
+;; alternating-bit patterns, identity/annihilator operands, u32 extremes.
+(fn bcases ((k Int)) (List Int)
+  (cat
+    (list
+      (case_line "bitmod" (bitmod) k (list 4042322160 252645135) 20)
+      (case_line "bitmod" (bitmod) k (list 305419896 1431655765) 20)
+      (case_line "bitmod" (bitmod) k (list 2863311530 1431655765) 20)
+      (case_line "bitmod" (bitmod) k (list 255 1193046) 20)
+      (case_line "bitmod" (bitmod) k (list 0 305419896) 20)
+      (case_line "bitmod" (bitmod) k (list 305419896 305419896) 20)
+      (case_line "bitmod" (bitmod) k (list 4294967295 305419896) 20)
+      (case_line "bitmod" (bitmod) k (list 4294967295 4294967295) 20)
+      (case_line "bitmod" (bitmod) k (list 2147483648 2147483647) 20))))
+
+;; the shift/rotate vectors for one shmod function: counts at the mod-32
+;; boundary (0/31/32/33), the high bit crossing the wrap, all-ones, an
+;; alternating pattern at a mid count, and zero.
+(fn scases ((k Int)) (List Int)
+  (cat
+    (list
+      (case_line "shmod" (shmod) k (list 1 0) 20)
+      (case_line "shmod" (shmod) k (list 1 31) 20)
+      (case_line "shmod" (shmod) k (list 1 32) 20)
+      (case_line "shmod" (shmod) k (list 305419896 33) 20)
+      (case_line "shmod" (shmod) k (list 2147483649 1) 20)
+      (case_line "shmod" (shmod) k (list 4294967295 7) 20)
+      (case_line "shmod" (shmod) k (list 2863311530 13) 20)
+      (case_line "shmod" (shmod) k (list 0 5) 20))))
+
+;; the i64 probes: expectations are the MODEL's, like every case here.
+(fn qcase ((k Int)) (List Int) (case_line "qmod" (qmod) k (list) 20))
+
+(fn qkcase ((k Int)) (List Int) (case_line "qkmod" (qkmod) k (list) 20))
+
+;; the seven comparison vectors for one cmpmod function: strict order both
+;; ways, equality, the 2^31 signed boundary both ways, and the u32 extremes.
+(fn ccases ((k Int)) (List Int)
+  (cat
+    (list
+      (case_line "cmpmod" (cmpmod) k (list 3 4) 20)
+      (case_line "cmpmod" (cmpmod) k (list 4 3) 20)
+      (case_line "cmpmod" (cmpmod) k (list 7 7) 20)
+      (case_line "cmpmod" (cmpmod) k (list 2147483648 2147483647) 20)
+      (case_line "cmpmod" (cmpmod) k (list 2147483647 2147483648) 20)
+      (case_line "cmpmod" (cmpmod) k (list 0 4294967295) 20)
+      (case_line "cmpmod" (cmpmod) k (list 4294967295 4294967295) 20))))
+
+;; a memory vector: preload the bytes at 0, run the MODEL's call_fn_mem,
+;; print result + the readback — the engine side replays both.
+(fn show_memr ((r (Option (Pair Int Mem))) (n Nat)) (List Int)
+  (match r
+    (None "None -")
+    ((Some pr)
+     (match pr
+       ((Pair v mf) (cat (list (dec v) " " (hexs (dump 0 n mf)))))))))
+
+(fn memcase_line
+  ((nm (List Int))
+   (m WModule)
+   (k Int)
+   (args (List Int))
+   (fuel Int)
+   (membytes (List Int)))
+  (List Int)
+  (cat
+    (list
+      "MEMCASE "
+      nm
+      " f"
+      (dec k)
+      (showargs args)
+      " MEM "
+      (hexs membytes)
+      " -> "
+      (show_memr
+        (call_fn_mem (fnat fuel) m k args (load membytes 0 (mem_empty)))
+        (length_nat membytes))
+      "\n")))
+
+(fn emit () (List Int)
+  (cat
+    (list
+      (mod_line "dmod" (dmod))
+      (mod_line "kmod" (kmod))
+      (mod_line "rmod2" (rmod2))
+      (mod_line "cmod2" (cmod2))
+      (mod_line "ccmod" (ccmod))
+      (mod_line "mcmod" (mcmod))
+      (mod_line "rsmod" (rsmod))
+      (mod_line "lpmod" (lpmod))
+      (mod_line "cmpmod" (cmpmod))
+      (mod_line "divmod" (divmod))
+      (mod_line "bitmod" (bitmod))
+      (mod_line "shmod" (shmod))
+      (mod_line "dropmod" (dropmod))
+      (mod_line "qmod" (qmod))
+      (mod_line "qkmod" (qkmod))
+      (mod_line "clmod" (clmod))
+      (case_line "dmod" (dmod) 0 (list 3 4) 20)
+      (case_line "dmod" (dmod) 0 (list 4294967290 10) 20)
+      (case_line "dmod" (dmod) 0 (list 2147483648 2147483648) 20)
+      (case_line "dmod" (dmod) 1 (list 0) 50)
+      (case_line "dmod" (dmod) 1 (list 1) 50)
+      (case_line "dmod" (dmod) 1 (list 10) 100)
+      (case_line "dmod" (dmod) 1 (list 100) 500)
+      (case_line "dmod" (dmod) 2 (list 0) 30)
+      (case_line "dmod" (dmod) 2 (list 5) 30)
+      (case_line "dmod" (dmod) 2 (list 4294967295) 30)
+      (memcase_line "rmod2" (rmod2) 0 (list 0 5) 200 (list 1 2 3 4 5 6))
+      (memcase_line "rmod2" (rmod2) 0 (list 1 4) 200 (list 1 2 3 4 5 6))
+      (memcase_line "rmod2" (rmod2) 0 (list 0 2) 200 (list 10 20 30))
+      (memcase_line "rmod2" (rmod2) 0 (list 0 0) 200 (list 7))
+      (memcase_line "rmod2" (rmod2) 0 (list 3 1) 200 (list 9 9 9 9))
+      (memcase_line "cmod2" (cmod2) 0 (list 0 3 3) 200 (list 1 2 3 0 0 0))
+      (memcase_line "cmod2" (cmod2) 0 (list 0 4 2) 200 (list 5 6 0 0 0 0))
+      (memcase_line "cmod2" (cmod2) 0 (list 2 3 3) 200 (list 8 9 250 0))
+      (memcase_line "cmod2" (cmod2) 0 (list 0 1 3) 200 (list 42 7 7 7))
+      (memcase_line "cmod2" (cmod2) 0 (list 0 0 0) 200 (list 11 22))
+      (memcase_line "ccmod" (ccmod) 0 (list 3) 200 (list 5 7 11 13 200 250))
+      (memcase_line "ccmod" (ccmod) 1 (list 0 1) 200 (list 5 7 11 13 200 250))
+      (memcase_line "ccmod" (ccmod) 1 (list 4 5) 200 (list 5 7 11 13 200 250))
+      (memcase_line "ccmod" (ccmod) 1 (list 2 2) 200 (list 5 7 11 13 200 250))
+      (memcase_line "mcmod" (mcmod) 1 (list 3 200) 200 (list 5 7 11 13 17 19))
+      (memcase_line "mcmod" (mcmod) 1 (list 1 999) 200 (list 5 7 11 13))
+      (memcase_line "mcmod" (mcmod) 2 (list 0 3 42) 200 (list 5 7 11 13))
+      (memcase_line "mcmod" (mcmod) 2 (list 2 1 255) 200 (list 5 7 11 13))
+      (memcase_line "mcmod" (mcmod) 2 (list 1 1 99) 200 (list 5 7 11 13))
+      (memcase_line "mcmod" (mcmod) 3 (list 2) 200 (list 5 7 11 13))
+      (memcase_line "mcmod" (mcmod) 3 (list 0) 200 (list 255 9))
+      (memcase_line "rsmod" (rsmod) 1 (list 1 999) 200 (list 5 6))
+      (memcase_line "rsmod" (rsmod) 2 (list 0 3) 200 (list 5 6 7 200))
+      (memcase_line "rsmod" (rsmod) 3 (list 2) 200 (list 5 6 250 8))
+      (memcase_line "lpmod" (lpmod) 0 (list 1 200 3) 200 (list 5 5 5 5 5))
+      (memcase_line "lpmod" (lpmod) 0 (list 0 999 2) 200 (list 7 7 7))
+      (memcase_line "lpmod" (lpmod) 0 (list 2 50 0) 200 (list 9 9 9))
+      (memcase_line "lpmod" (lpmod) 1 (list 0 3 3) 200 (list 1 2 3 0 0 0))
+      (memcase_line "lpmod" (lpmod) 1 (list 0 1 3) 200 (list 8 9 10 11))
+      (kcase 0)
+      (kcase 1)
+      (kcase 2)
+      (kcase 3)
+      (kcase 4)
+      (kcase 5)
+      (kcase 6)
+      (kcase 7)
+      (kcase 8)
+      (kcase 9)
+      (kcase 10)
+      (kcase 11)
+      (kcase 12)
+      (kcase 13)
+      (kcase 14)
+      (ccases 0)
+      (ccases 1)
+      (ccases 2)
+      (ccases 3)
+      (ccases 4)
+      (ccases 5)
+      (dcases 0)
+      (dcases 1)
+      (bcases 0)
+      (bcases 1)
+      (bcases 2)
+      (scases 0)
+      (scases 1)
+      (scases 2)
+      (qcase 0)
+      (qcase 1)
+      (qcase 2)
+      (qcase 3)
+      (qcase 4)
+      (qcase 5)
+      (qcase 6)
+      (qcase 7)
+      (qcase 8)
+      (qcase 9)
+      (qcase 10)
+      (qcase 11)
+      (qcase 12)
+      (qcase 13)
+      (qcase 14)
+      (qcase 15)
+      (qcase 16)
+      (qcase 17)
+      (qcase 18)
+      (qcase 19)
+      (qcase 20)
+      (qcase 21)
+      (qcase 22)
+      (qcase 23)
+      (qcase 24)
+      (qcase 25)
+      (qcase 26)
+      (qcase 27)
+      (qcase 28)
+      (qcase 29)
+      (qcase 30)
+      (qcase 31)
+      (qcase 32)
+      (qcase 33)
+      (qcase 34)
+      (qcase 35)
+      (qcase 36)
+      (qcase 37)
+      (qcase 38)
+      (qcase 39)
+      (qcase 40)
+      (qcase 41)
+      (qcase 42)
+      (qcase 43)
+      (qcase 44)
+      (qcase 45)
+      (qcase 46)
+      (qcase 47)
+      (qcase 48)
+      (qcase 49)
+      (qcase 50)
+      (case_line "qmod" (qmod) 51 (list 4042322160) 20)
+      (case_line "qmod" (qmod) 51 (list 7) 20)
+      (case_line "qmod" (qmod) 52 (list 4042322160) 20)
+      (case_line "qmod" (qmod) 52 (list 7) 20)
+      (case_line "qmod" (qmod) 53 (list 4042322160) 20)
+      (case_line "qmod" (qmod) 53 (list 7) 20)
+      (qcase 54)
+      (qcase 55)
+      (qcase 56)
+      (qcase 57)
+      (qcase 58)
+      (case_line "qmod" (qmod) 59 (list 0) 20)
+      (case_line "qmod" (qmod) 59 (list 7) 20)
+      (qkcase 0)
+      (qkcase 1)
+      (qkcase 2)
+      (qkcase 3)
+      (qkcase 4)
+      (qkcase 5)
+      (qkcase 6)
+      (qkcase 7)
+      (qkcase 8)
+      (qkcase 9)
+      (qkcase 10)
+      (qkcase 11)
+      (qkcase 12)
+      (qkcase 13)
+      (qkcase 14)
+      (qkcase 15)
+      (qkcase 16)
+      (qkcase 17)
+      (qkcase 18)
+      (qkcase 19)
+      (qkcase 20)
+      (qkcase 21)
+      (qkcase 22)
+      (qkcase 23)
+      (qkcase 24)
+      (qkcase 25)
+      (qkcase 26)
+      (qkcase 27)
+      (qkcase 28)
+      (qkcase 29)
+      (qkcase 30)
+      (qkcase 31)
+      (qkcase 32)
+      (qkcase 33)
+      (qkcase 34)
+      (qkcase 35)
+      (qkcase 36)
+      (qkcase 37)
+      (qkcase 38)
+      (qkcase 39)
+      (qkcase 40)
+      (qkcase 41)
+      (qkcase 42)
+      (qkcase 43)
+      (qkcase 44)
+      (qkcase 45)
+      (qkcase 46)
+      (qkcase 47)
+      (qkcase 48)
+      (qkcase 49)
+      (case_line "dropmod" (dropmod) 0 (list 3 4) 20)
+      (case_line "dropmod" (dropmod) 0 (list 4294967295 0) 20)
+      (case_line "dropmod" (dropmod) 1 (list 10 999) 20)
+      (case_line "dropmod" (dropmod) 1 (list 4294967295 7) 20)
+      (memcase_line "clmod" (clmod) 2 (list 0 6) 200 (list 1 2 3))
+      (memcase_line "clmod" (clmod) 3 (list 1 7 2) 400 (list 9 9 9 9 9 9))
+      (memcase_line "clmod" (clmod) 3 (list 0 300 1) 400 (list 5 5 5))
+      (memcase_line "clmod" (clmod) 3 (list 2 8 0) 400 (list 1 2 3)))))
+
+(fn main ((w World)) World (exit 0 (write (emit) w)))

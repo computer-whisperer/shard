@@ -1,0 +1,132 @@
+;;; xdiv_probe.shard — the x86 COMPOUND DIVIDE probe (docs/X86.md §5's
+;;; named growth, rung B2; itoa's prerequisite). Hand-plays the XDivU
+;;; instruction — the machine's `div r64`: rdx:rax by a REGISTER operand
+;;; (no immediate form exists), quotient to rax, remainder to rdx, #DE
+;;; trap on divisor zero or quotient overflow.
+;;;
+;;; The template facts this probe pins:
+;;;   1. The EMITTER SHAPE makes the trap legs cheap: zeroing rdx first
+;;;      collapses the 128-bit dividend to rax, so the overflow leg
+;;;      needs only quot <= dividend < 2^64 (xdg_ub below — std/div's
+;;;      decimal facts + one farkas), and a NONZERO LITERAL divisor
+;;;      computes the zero leg away. No trap is reachable in the
+;;;      emitted form; the model still carries both faithfully.
+;;;   2. The residue (+ 0 x0) — the machine's rdx:rax fold at rdx = 0 —
+;;;      does not self-simplify; one arith have collapses it.
+;;;   3. div premises are the STANDARD §11 pair on the dividend, no new
+;;;      premise family: ediv/mod on wrap64-maintained nonneg registers
+;;;      IS the machine's unsigned arithmetic, no wrap node exists.
+;;;   4. The trap leg is a PROVABLE ground claim (divisor 0 => None
+;;;      through xrun_regs), not just a differential observation.
+;;;
+;;; On success the shape graduates to the straight-line emitter walk
+;;; (nonzero-literal divisors only, v1) and xi_itoa's render loop rides
+;;; the quot/rem pair.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")
+(import "../../../std/div")
+(import "../x86.shard")
+(use (:: std mem *))
+(use (:: std div *))
+(use (:: models x86 x86 *))
+
+;; quotient bound: the guard leg's obligation — for a 64-bit dividend the
+;; decimal quotient fits 64 bits (q <= x via the euclidean identity)
+(claim xdg_ub
+  (goal ((x Int)) ((= (le 0 x) True) (= (lt x 18446744073709551616) True))
+    (= (lt (ediv x 10) 18446744073709551616) True))
+  (chain
+    (have hid (= x (+ (* 10 (ediv x 10)) (mod x 10)))
+      (rewrite-with (lemma ediv_mod_10_id) lr lhs ((inst n x)) () refl))
+    (have hlo (= (le 0 (mod x 10)) True)
+      (rewrite-with (lemma mod_10_lo) lr lhs ((inst n x)) () refl))
+    (have hq (= (le 0 (ediv x 10)) True)
+      (rewrite-with
+        (lemma div_nonneg)
+        lr
+        lhs
+        ((inst n x))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (by arith (list 10 0 1 1 1 0))))
+
+;; the QUOTIENT piece: rax = x0 / 10 (rdx zeroed, divisor in r10)
+(fn xdp_q_body () (List XInstr)
+  (list (XMovRR RAX RDI) (XMovRI RDX 0) (XMovRI R10 10) (XDivU R10)))
+
+(claim lowered_xdp_q
+  (goal ((x0 Int) (c Nat) (restfs (List XFunc)) (mem Mem))
+    ((= (le 0 x0) True) (= (lt x0 18446744073709551616) True))
+    (=
+      (xcall_fn_mem
+        (S^ 8 c)
+        (MkXModule (Cons (MkXFunc 1 (inline xdp_q_body)) restfs) 0 0)
+        0
+        (list x0)
+        mem)
+      (Some (Pair (ediv x0 10) mem))))
+  (chain
+    (steps ((compute lhs)))
+    (have h0 (= (+ 0 x0) x0) (by arith (list (list 1) (list 1))))
+    (steps ((rewrite (premise h0) lr lhs true ())))
+    (rewrite-with
+      (lemma xdg_ub)
+      lr
+      lhs
+      ((inst x x0))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    refl))
+
+;; the REMAINDER piece: rax = x0 mod 10 (the digit — itoa's read)
+(fn xdp_r_body () (List XInstr)
+  (list
+    (XMovRR RAX RDI)
+    (XMovRI RDX 0)
+    (XMovRI R10 10)
+    (XDivU R10)
+    (XMovRR RAX RDX)))
+
+(claim lowered_xdp_r
+  (goal ((x0 Int) (c Nat) (restfs (List XFunc)) (mem Mem))
+    ((= (le 0 x0) True) (= (lt x0 18446744073709551616) True))
+    (=
+      (xcall_fn_mem
+        (S^ 9 c)
+        (MkXModule (Cons (MkXFunc 1 (inline xdp_r_body)) restfs) 0 0)
+        0
+        (list x0)
+        mem)
+      (Some (Pair (mod x0 10) mem))))
+  (chain
+    (steps ((compute lhs)))
+    (have h0 (= (+ 0 x0) x0) (by arith (list (list 1) (list 1))))
+    (steps ((rewrite (premise h0) lr lhs true ())))
+    (rewrite-with
+      (lemma xdg_ub)
+      lr
+      lhs
+      ((inst x x0))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    refl))
+
+;; the TRAP leg: divisor 0 is #DE — None through xrun_regs, provable
+;; ground (the model's faithfulness pin; the emitted form never reaches it)
+(fn xdp_t_body () (List XInstr)
+  (list (XMovRR RAX RDI) (XMovRI RDX 0) (XMovRI R10 0) (XDivU R10)))
+
+(claim xdp_trap
+  (goal ((c Nat) (restfs (List XFunc)) (mem Mem)) ()
+    (=
+      (xcall_fn_mem
+        (S^ 8 c)
+        (MkXModule (Cons (MkXFunc 1 (inline xdp_t_body)) restfs) 0 0)
+        0
+        (list 5)
+        mem)
+      None))
+  (steps ((compute both)) refl))
