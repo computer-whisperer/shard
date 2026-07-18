@@ -73,6 +73,10 @@ corpus:
   image: docker.io/library/rust:latest
   timeout: 6h
   interruptible: true
+  rules:
+    - if: $PIO_DEEP == "1"
+      when: never
+    - when: on_success
   needs:
     - engine
   cache:
@@ -102,5 +106,78 @@ corpus:
   artifacts:
     paths:
       - corpus.log
+    when: always
+    expire_in: 30 days
+
+# The template-free DME first-result probe (docs/PIO.md P5c-2),
+# variable-gated on any branch carrying the task (merged to main
+# 2026-07-17).  Fire with:  glab ci run -b main --variables PIO_DEEP:1
+# (PIO_DEEP=1 also SKIPS the corpus job -- the deep probe replaces the
+# gate for that pipeline).
+#
+# The task's committed drive budget (50) is the fast smoke value; this
+# job seds it to 38,000 — sized to the runner's 512Gi pod cap at the
+# measured ~11-12 MB/decision region retention (local calibration:
+# budget 6,000 peaked at 67.6 GB and exhausted with no passing region,
+# so the first winner lies deeper).  Projected peak ~400 GiB; an
+# in-script watchdog kills the engine below the pod limit so the log
+# survives OOM territory.  Green = a winner region in the log; red =
+# budget exhausted (informative — recalibrates the frontier, not a
+# regression).
+pio-dme-free:
+  stage: gate
+  tags:
+    - high-cpu
+  image: docker.io/library/rust:latest
+  timeout: 24h
+  rules:
+    - if: $PIO_DEEP == "1"
+      when: on_success
+    - when: never
+  cache:
+    key: shard-engine
+    paths:
+      - rust_bootstrap/target/
+      - bin/shard_check
+      - bin/shard_check.stamp
+      - bin/shard_eval
+      - bin/shard_eval.stamp
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq nodejs > /dev/null
+  script:
+    - cargo build --release --manifest-path rust_bootstrap/Cargo.toml
+    - |
+      if [ ! -x bin/shard_check ] || [ "$(bin/engine_stamp.sh)" != "$(cat bin/shard_check.stamp 2>/dev/null)" ]; then
+        echo "engine stale or missing -- rebuilding"
+        bin/rebuild.sh
+      else
+        echo "engine fresh (stamp match) -- rebuild skipped"
+      fi
+    - sed -i 's/(fn search_drive_budget () Int 50)/(fn search_drive_budget () Int 38000)/' tools/search/tasks/pio_dme_free.shard
+    - grep -F '(fn search_drive_budget () Int 38000)' tools/search/tasks/pio_dme_free.shard
+    - |
+      bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/pio_dme_free.shard > pio_dme_free.log 2>&1 &
+      ENG=$!
+      CAP_KB=$((490 * 1024 * 1024))
+      PEAK=0; TICK=0
+      while kill -0 "$ENG" 2>/dev/null; do
+        RSS=$(awk '/VmRSS/{print $2}' /proc/$ENG/status 2>/dev/null)
+        [ "${RSS:-0}" -gt "$PEAK" ] && PEAK=$RSS
+        if [ "${RSS:-0}" -gt "$CAP_KB" ]; then
+          echo "WATCHDOG: RSS ${RSS} kB over ${CAP_KB} kB cap -- killing engine"
+          kill -9 "$ENG"
+          break
+        fi
+        TICK=$((TICK + 1))
+        if [ $((TICK % 10)) -eq 0 ]; then echo "watchdog: RSS ${RSS:-0} kB (peak ${PEAK} kB)"; fi
+        sleep 30
+      done
+      wait "$ENG"; STATUS=$?
+      echo "ENGINE EXIT ${STATUS}  PEAK RSS ${PEAK} kB"
+      cat pio_dme_free.log
+      exit "$STATUS"
+  artifacts:
+    paths:
+      - pio_dme_free.log
     when: always
     expire_in: 30 days

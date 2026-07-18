@@ -337,6 +337,19 @@ TARGETS=(
   tools/search/gen/imp_mix_refinement.shard
   tools/search/gen/x86_calculator_refinement.shard
   tools/search/gen/x86_calculator4_refinement.shard
+  models/pio/pio.shard
+  models/pio/encode.shard
+  examples/pio_smoke.shard
+  examples/pio_vecrun.shard
+  examples/pio_vecgate.shard
+  tools/search/tasks/typed_pio_square.shard
+  tools/search/gen/pio_square_refinement.shard
+  tools/search/tasks/typed_pio_dme.shard
+  tools/search/gen/pio_dme_refinement.shard
+  tools/search/tasks/pio_transition_mining.shard
+  tools/search/tasks/pio_transition_window.shard
+  tools/search/tasks/pio_dme_model.shard
+  tools/search/tasks/pio_dme_free.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -378,6 +391,23 @@ if [ -x bin/shard_eval ]; then
   fi
 else
   echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# PIO vector-data regen pin: the committed generated data file must be
+# byte-identical to gen_vectors.py's output re-formatted (docs/PIO.md §6 —
+# the gate claim already fails loudly on semantic drift; this catches
+# silent drift of the data itself).
+echo "=== pio: regen pio_vectors_data ==="
+if [ -x bin/shard_eval ] && command -v python3 >/dev/null; then
+  python3 tools/piovec/gen_vectors.py > "$TMP/piovec.raw" 2>/dev/null
+  bin/shard_eval run tools/shardfmt/shardfmt.shard "$TMP/piovec.raw" > "$TMP/piovec.fmt" 2>/dev/null
+  if diff -q "$TMP/piovec.fmt" examples/pio_vectors_data.shard >/dev/null; then
+    echo "REGEN OK (byte-identical)"
+  else
+    echo "REGEN DRIFT: generated vector data differs from examples/pio_vectors_data.shard"
+  fi
+else
+  echo "SKIPPED (no bin/shard_eval or python3)"
 fi
 
 # Nat-former RUN pin: ground construction/packing, view matching, deep
@@ -568,6 +598,40 @@ fi
 echo "=== search: checked x86 transition-window narrowing ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/x86_transition_window.shard audit
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# The PIO square-wave objective (docs/PIO.md P3): the same engine over the
+# PIO model's typed instruction scope.  Expected census: TOTAL 400, FOUND 2
+# (the datasheet wave at rank 61 = the witness, plus its set-pindirs gauge
+# twin), BEST = WITNESS 61.
+echo "=== search: typed pio square-wave pin ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_pio_square.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# The PIO DME reproduction (docs/PIO.md P4): mlx-pio's locked benchmark over
+# the fixed-role dme_spec_ref skeleton with timing/wiring holes.  Expected
+# census: TOTAL 4608, FOUND 2 — the jmp-6[0] re-drive gauge twin at BEST 834,
+# the transplanted reference at WITNESS 854.  (~2m40s single-thread.)
+echo "=== search: typed pio dme pin ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_pio_dme.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Checked PIO transition-window narrowing (docs/PIO.md P5b): the mining
+# scope searched under four proven spine laws (re-drive merge + the
+# drive-absorb trio, nonlinear MovOp metavariable) over the task-local
+# straight-line projection.  Expected: SPINE RULES 4; RAW 1111; AUDIT
+# ENUMERATIVE AGREEMENT OK ACCEPTED 1067 CONSTRAINED 44.
+echo "=== search: checked pio transition-window narrowing ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/pio_transition_window.shard audit
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

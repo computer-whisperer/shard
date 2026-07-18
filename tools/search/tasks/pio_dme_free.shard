@@ -1,0 +1,326 @@
+;;; Template-free DME synthesis (docs/PIO.md P5c): the P4 benchmark with the
+;;; role skeleton REMOVED, searched in DELAY-NORMAL FORM.
+;;;
+;;; Every program of zero to eight slots over a free per-slot alphabet
+;;; against the same locked 278-cycle golden, config, and TX preload as
+;;; typed_pio_dme, with the wrap PARKED at slot 31: P4's wrap_top=7 leaked
+;;; the loop structure; here jumps are the only control and a program that
+;;; runs off its code ends its trace (PSOff) and dies against the golden's
+;;; length.
+;;;
+;;; The candidate language is a task-local wrapper ADT, not raw PIns, for
+;;; two measured reasons.  (1) The first full-alphabet run (delays 0-7 on
+;;; every op, 9-way jump targets) drove the lazy engine's region frontier
+;;; past 64 GB: the golden constrains EDGES, not interior filler, so every
+;;; pin-silent instruction composition whose delays sum right survives each
+;;; constant-bit run — and that delay-splitting freedom is exactly the
+;;; gauge the P5a census mined and P5b proved.  No spine law can quotient
+;;; it HERE (window rewrites are unsound under absolute jump targets), so
+;;; the grammar declares the normal form instead: delays live ONLY on
+;;; drives (hold times, 0-7) and jumps (path balancing, 0-1); OUT and the
+;;; Y-toggle execute in one cycle.  (2) Zone routing cannot couple an
+;;; operation to its own delay domain through the shared MkPIns head; the
+;;; wrapper constructors carry their delay fields directly and pdf_ins
+;;; erases them to real instructions.
+;;;
+;;; The witness is pdf_ref8 in wrapper form: an EIGHT-slot jumps-only
+;;; encoder found by folding the 0-path through the re-drive slot (the
+;;; skip landing and the second drive collapse; jmp 6 skips only the
+;;; toggle) — one instruction less control hardware than mlx-pio's
+;;; wrap-assisted eight.  pdf_ref8_pin proves it against the golden on the
+;;; real model; pdf_ref9_pin keeps the 9-slot delay-redistributed variant
+;;; (slot 7 [4] -> [3] + explicit jmp 0) as a second kernel-checked
+;;; encoder outside the searched lengths.
+;;;
+;;; The census reading is TWO-SIDED: FOUND enumerates every delay-normal
+;;; jumps-only DME encoder of <= 8 slots over the declared alphabet, and
+;;; the solution lengths carry the impossibility reading (no solution
+;;; shorter than k slots) inside the affirmative run.
+;;;
+;;; STRUCTURED-LOOP NORMAL FORM (measured iteration 3): with filler gauge
+;;; gone, run 2 still crossed 50 GB (killed at 53 GB) — unrestricted jump
+;;; targets let the pc walk arbitrary slot orders, so viable prefixes are
+;;; arbitrary walks.  Targets at slot i are now {0} u {i+2..7}: forward
+;;; skips plus the single back edge; the fall-through target (pure gauge)
+;;; and self-jumps (spin) are excluded.  Every single-loop program is
+;;; representable up to slot relabeling; viable prefixes become monotone.
+;;;
+;;; RUN:
+;;;   bin/shard_eval run tools/search/typed_superpose.shard \
+;;;     tools/search/tasks/pio_dme_free.shard
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../models/pio/pio.shard")
+(import "pio_dme_model.shard")
+(import "../typed_grammar.shard")
+(use (:: tools search typed_grammar *))
+
+;; Generic program spine.
+(use (:: core List))
+(use (:: core Nil))
+(use (:: core Cons))
+(use (:: core None))
+
+;; Candidate PIO scope (wrapper leaves).
+(use (:: models pio pio PIns))
+(use (:: models pio pio MkPIns))
+(use (:: models pio pio PInstr))
+(use (:: models pio pio POut))
+(use (:: models pio pio OutDst))
+(use (:: models pio pio ODX))
+(use (:: models pio pio PMov))
+(use (:: models pio pio MovDst))
+(use (:: models pio pio MDY))
+(use (:: models pio pio MDPins))
+(use (:: models pio pio MovOp))
+(use (:: models pio pio MOInvert))
+(use (:: models pio pio MONone))
+(use (:: models pio pio MovSrc))
+(use (:: models pio pio MSY))
+(use (:: models pio pio PJmp))
+(use (:: models pio pio JmpCond))
+(use (:: models pio pio JAlways))
+(use (:: models pio pio JXDec))
+(use (:: models pio pio PSlot))
+(use (:: models pio pio PCfg))
+(use (:: models pio pio PSt))
+
+;; The full model is oracle-only: qualified names do not become productions.
+(use (:: models pio pio) as pio)
+
+;; The delay-normal candidate ADT (bare items: grammar ctor heads resolve
+;; against the use scope).
+(use (:: tools search tasks pio_dme_model PDFOp))
+(use (:: tools search tasks pio_dme_model PDFOut))
+(use (:: tools search tasks pio_dme_model PDFTogg))
+(use (:: tools search tasks pio_dme_model PDFDrive))
+(use (:: tools search tasks pio_dme_model PDFJump))
+
+;; --- the delay-normal candidate language (type: pio_dme_model.shard) ---------------
+
+(fn pdf_ins ((op PDFOp)) PIns
+  (match op
+    (PDFOut (MkPIns (POut ODX 1) None 0))
+    (PDFTogg (MkPIns (PMov MDY MOInvert MSY) None 0))
+    ((PDFDrive o d) (MkPIns (PMov MDPins o MSY) None d))
+    ((PDFJump c t d) (MkPIns (PJmp c t) None d))))
+
+(fn pdf_decode ((body (List PDFOp))) (List PIns)
+  (measure (struct body))
+  (match body
+    (Nil Nil)
+    ((Cons op rest) (Cons (pdf_ins op) (pdf_decode rest)))))
+
+(fn search_forms () (List Symbol) (list (quote ctor)))
+
+(fn search_ints () (List Int) Nil)
+
+(fn search_symbols () (List Symbol) Nil)
+
+;; Eighth Cons > PDFJump > condition head.
+(fn search_depth () Int 12)
+
+;; First-result synthesis over lazy regular schemas (57 schemas at depth
+;; 12): stop at the first passing region (CARDINALITY UNCOUNTED) under an
+;; explicit decision budget.  MEASURED LADDER CAP (2026-07-16): ~12 MB of
+;; region state is retained per drive decision (budget 50 = 2.3 GB peak,
+;; terminates in ~20 s with 26 killed regions; budgets 4000/5000 crossed
+;; 48 GB before completing), so ladders top out near 3-4k decisions and
+;; the first passing region lies deeper.  Budget pinned at the clean
+;; diagnostic size; raise it when killed-region state is released
+;; upstream.  The census/minimality reading stays gated separately on
+;; exact region representation growth (docs/PIO.md P5c-2).
+(fn search_result_mode () Symbol (quote first))
+
+(fn search_drive_budget () Int 50)
+
+(fn pdf_ctor ((name Symbol)) TgScopeHead (TgScopeCtor name))
+
+(fn pdf_route ((head Symbol) (index Int) (zone Symbol)) TgScopeRoute
+  (TgScopeRoute (pdf_ctor head) index zone))
+
+(fn pdf_seq_zone ((name Symbol) (instruction Symbol) (tail Symbol)) TgScopeZone
+  (TgScopeZone
+    name
+    (list (pdf_ctor (quote Nil)) (pdf_ctor (quote Cons)))
+    Nil
+    Nil
+    (list
+      (pdf_route (quote Cons) 0 instruction)
+      (pdf_route (quote Cons) 1 tail))))
+
+(fn pdf_slot_zone ((name Symbol) (target Symbol)) TgScopeZone
+  (TgScopeZone
+    name
+    (list
+      (pdf_ctor (quote PDFOut))
+      (pdf_ctor (quote PDFTogg))
+      (pdf_ctor (quote PDFDrive))
+      (pdf_ctor (quote PDFJump)))
+    Nil
+    Nil
+    (list
+      (pdf_route (quote PDFDrive) 0 (quote polarity))
+      (pdf_route (quote PDFDrive) 1 (quote hold))
+      (pdf_route (quote PDFJump) 0 (quote condition))
+      (pdf_route (quote PDFJump) 1 target)
+      (pdf_route (quote PDFJump) 2 (quote balance)))))
+
+(fn search_environment () TgScopeEnv
+  (TgScopeEnv
+    (quote sequence0)
+    (list
+      (pdf_seq_zone (quote sequence0) (quote slot0) (quote sequence1))
+      (pdf_seq_zone (quote sequence1) (quote slot1) (quote sequence2))
+      (pdf_seq_zone (quote sequence2) (quote slot2) (quote sequence3))
+      (pdf_seq_zone (quote sequence3) (quote slot3) (quote sequence4))
+      (pdf_seq_zone (quote sequence4) (quote slot4) (quote sequence5))
+      (pdf_seq_zone (quote sequence5) (quote slot5) (quote sequence6))
+      (pdf_seq_zone (quote sequence6) (quote slot6) (quote sequence7))
+      (pdf_seq_zone (quote sequence7) (quote slot7) (quote sequence8))
+      (TgScopeZone (quote sequence8) (list (pdf_ctor (quote Nil))) Nil Nil Nil)
+      (pdf_slot_zone (quote slot0) (quote target0))
+      (pdf_slot_zone (quote slot1) (quote target1))
+      (pdf_slot_zone (quote slot2) (quote target2))
+      (pdf_slot_zone (quote slot3) (quote target3))
+      (pdf_slot_zone (quote slot4) (quote target4))
+      (pdf_slot_zone (quote slot5) (quote target5))
+      (pdf_slot_zone (quote slot6) (quote target6))
+      (pdf_slot_zone (quote slot7) (quote target7))
+      (TgScopeZone
+        (quote polarity)
+        (list (pdf_ctor (quote MOInvert)) (pdf_ctor (quote MONone)))
+        Nil
+        Nil
+        Nil)
+      (TgScopeZone
+        (quote condition)
+        (list (pdf_ctor (quote JAlways)) (pdf_ctor (quote JXDec)))
+        Nil
+        Nil
+        Nil)
+      (TgScopeZone (quote hold) Nil (list 0 1 2 3 4 5 6 7) Nil Nil)
+      (TgScopeZone (quote target0) Nil (list 0 2 3 4 5 6 7) Nil Nil)
+      (TgScopeZone (quote target1) Nil (list 0 3 4 5 6 7) Nil Nil)
+      (TgScopeZone (quote target2) Nil (list 0 4 5 6 7) Nil Nil)
+      (TgScopeZone (quote target3) Nil (list 0 5 6 7) Nil Nil)
+      (TgScopeZone (quote target4) Nil (list 0 6 7) Nil Nil)
+      (TgScopeZone (quote target5) Nil (list 0 7) Nil Nil)
+      (TgScopeZone (quote target6) Nil (list 0) Nil Nil)
+      (TgScopeZone (quote target7) Nil (list 0) Nil Nil)
+      (TgScopeZone (quote balance) Nil (list 0 1) Nil Nil))))
+
+;; --- the observer: the P4 benchmark surface with the wrap parked ----------------
+
+(fn pdf_code ((body (List PIns))) (List PSlot)
+  (measure (struct body))
+  (match body
+    (Nil Nil)
+    ((Cons i rest) (Cons ((:: pio PS) i) (pdf_code rest)))))
+
+;; typed_pio_dme's dme_cfg except wrap_top = 31: no implicit loop — a
+;; program must close its own loop with a jump or fall off and die.
+(fn pdf_cfg ((body (List PIns))) PCfg
+  ((:: pio MkPCfg)
+   (pdf_code body)
+   31
+   0
+   0
+   0
+   0
+   0
+   0
+   0
+   0
+   0
+   1
+   0
+   1
+   0
+   1
+   32
+   5
+   1
+   1
+   1
+   0
+   0
+   0
+   0
+   4
+   4))
+
+(fn pdf_st0 () PSt
+  ((:: pio with_tx)
+   (list 30 10 21 9)
+   ((:: pio with_dir_l) 1 ((:: pio pst_new)))))
+
+(fn pdf_stim ((n Int)) (List Int)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) Nil (Cons 0 (pdf_stim (- n 1)))))
+
+(fn pdf_wave ((obs (List (Pair Int Int)))) (List Int)
+  (measure (struct obs))
+  (match obs
+    (Nil Nil)
+    ((Cons o rest)
+     (match o
+       ((Pair levels dirs) (Cons (band levels 1) (pdf_wave rest)))))))
+
+(fn pdf_observe ((body (List PIns))) (List Int)
+  (pdf_wave ((:: pio pio_run) (pdf_cfg body) (pdf_st0) 0 (pdf_stim 278))))
+
+(fn search_probe ((body (List PDFOp))) (Option (List Int))
+  (Some (pdf_observe (pdf_decode body))))
+
+;; The P4 golden, unchanged: the transplanted reference's own 278-cycle
+;; trace on this model.
+(fn search_target () (List Int)
+  (list 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1
+    1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1
+    1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1
+    1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1
+    1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 0
+    0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
+    1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0
+    0 0 0 0 0 0 0 0 0 0 0 1 1 1))
+
+;; EIGHT slots, jumps only: out / toggle / drive[5] / branch to the toggle
+;; on a 1-bit / skip just the toggle on a 0-bit (the landing re-drives the
+;; held level harmlessly) / toggle / drive[3] / loop [1].
+(fn search_witness () (List PDFOp)
+  (list
+    PDFOut
+    PDFTogg
+    (PDFDrive MOInvert 5)
+    (PDFJump JXDec 5 0)
+    (PDFJump JAlways 6 0)
+    PDFTogg
+    (PDFDrive MOInvert 3)
+    (PDFJump JAlways 0 1)))
+
+;; The witness IS a DME encoder under the parked wrap: ground, kernel-checked
+;; on the real model through the decoder.
+(claim pdf_ref8_pin
+  (goal () () (= (pdf_observe (pdf_decode (search_witness))) (search_target)))
+  (steps ((compute both)) refl))
+
+;; NINE slots: the delay-redistributed jumps-only reference (dme_spec_ref
+;; slots 0-6, slot 7 at [3], explicit loop jump).  Outside the searched
+;; lengths; kept as the second kernel-checked encoder from the P5c-1
+;; derivation.
+(fn pdf_ref9 () (List PIns)
+  (list
+    (MkPIns (POut ODX 1) None 0)
+    (MkPIns (PMov MDY MOInvert MSY) None 0)
+    (MkPIns (PMov MDPins MOInvert MSY) None 5)
+    (MkPIns (PJmp JXDec 5) None 0)
+    (MkPIns (PJmp JAlways 7) None 1)
+    (MkPIns (PMov MDY MOInvert MSY) None 0)
+    (MkPIns (PMov MDPins MOInvert MSY) None 0)
+    (MkPIns (PMov MDPins MOInvert MSY) None 3)
+    (MkPIns (PJmp JAlways 0) None 0)))
+
+(claim pdf_ref9_pin
+  (goal () () (= (pdf_observe (pdf_ref9)) (search_target)))
+  (steps ((compute both)) refl))

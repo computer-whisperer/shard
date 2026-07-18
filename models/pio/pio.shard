@@ -1,0 +1,721 @@
+;;; models/pio/pio.shard — the RP2350 PIO state-machine ISA model (docs/PIO.md).
+;;;
+;;; An ordinary shard library: typed instruction datatypes plus a cycle-stepped
+;;; interpreter. Zero axioms, zero kernel involvement. The trust leaf a
+;;; consumer inherits is "RP2350 silicon conforms to these semantics"; its
+;;; current pedigree is the datasheet text plus the 85/13/3 vector gate
+;;; against mlx-pio's emulator-certified corpus (PIO.md §5-§6 — the model
+;;; speaks DATASHEET truth where the two disagree; bench certification is the
+;;; named-growth authority).
+;;;
+;;; Shape decisions (PIO.md §2-§4, pinned here):
+;;;   - The denotation is a TOTAL cycle-trace transformer: one stimulus word
+;;;     in per system-clock cycle, one (levels, dirs) pair out. No fuel, no
+;;;     Option outcome on the run: the stimulus list's length is the budget
+;;;     and a cycle is physically one clock. The only early exit is fetching
+;;;     an off-fragment slot (PSOff) — the run's honest end, surfaced as a
+;;;     SHORTER trace (the vector gate's clean-prefix leg reads the length).
+;;;   - Instructions are a typed ADT with per-field enums: illegal encodings
+;;;     are unrepresentable, and every field is a typed zone for the search
+;;;     grammar. Side-set/delay ride each instruction DECODED (the packed
+;;;     5-bit field split is the encoder's business, models/pio/encode.shard).
+;;;   - Values are bare Int in [0, 2^32), masked at operation boundaries
+;;;     (the wasm model's discipline: everything on the run path must REDUCE
+;;;     in consumer proofs). Flags are Int 0/1; enums are ctors.
+;;;   - Quiet-neighbor IRQ (PIO.md §3): cross-block targets (Prev/Next) are
+;;;     modeled as a single active block in an idle system — remote set/clear
+;;;     is locally invisible, remote wait reads 0 (wait-for-1 parks). The
+;;;     assumption is named in the ledger; multi-block growth revisits it.
+;;;   - Autopush/autopull follow the datasheet §3.5.4 shapes: the IN that
+;;;     reaches threshold on a full RX FIFO holds POST-shift (StPushHold);
+;;;     an OUT at threshold refills-if-possible and stalls one cycle
+;;;     (StPullRe — "cannot fill an empty OSR and OUT it on the same cycle");
+;;;     non-OUT cycles background-refill; PULL on a full OSR is a no-op.
+
+(import "../../kernel/stdlib.shard")  ; List / Option / Pair / Bool
+
+;; --- small total helpers ------------------------------------------------------
+
+(fn imin ((a Int) (b Int)) Int (if (lt a b) a b))
+
+;; low-n-bits mask, n in [0,32].
+(fn bit_lo ((n Int)) Int (- (bshl 1 n) 1))
+
+;; bit i of v as 0/1, i in [0,31].
+(fn bit_at ((v Int) (i Int)) Int (band (bshr v i) 1))
+
+;; 32-bit rotates; operands in [0, 2^32), k in [0,31]. The band keeps the
+;; left leg in range; k = 0 degenerates through shift-by-32 harmlessly
+;; (the shifted-out word lands entirely above the mask).
+(fn rotl32 ((v Int) (k Int)) Int
+  (band (bor (bshl v k) (bshr v (- 32 k))) 4294967295))
+
+(fn rotr32 ((v Int) (k Int)) Int
+  (band (bor (bshr v k) (bshl v (- 32 k))) 4294967295))
+
+;; MOV bit-reverse: the 5-stage butterfly (branch-free, compute-friendly).
+(fn rev_bits ((v Int)) Int
+  (let
+    ((r1
+       (bor
+         (band (bshr v 1) 1431655765)
+         (band (bshl (band v 1431655765) 1) 4294967295))))
+    (let
+      ((r2
+         (bor
+           (band (bshr r1 2) 858993459)
+           (band (bshl (band r1 858993459) 2) 4294967295))))
+      (let
+        ((r4
+           (bor
+             (band (bshr r2 4) 252645135)
+             (band (bshl (band r2 252645135) 4) 4294967295))))
+        (let
+          ((r8
+             (bor
+               (band (bshr r4 8) 16711935)
+               (band (bshl (band r4 16711935) 8) 4294967295))))
+          (band (bor (bshr r8 16) (bshl r8 16)) 4294967295))))))
+
+;; Replace `count` pin bits of `field` starting at `base` (mod-32 rotate);
+;; no-op when count = 0; count >= 32 means the whole word.
+(fn write_pin_field ((field Int) (value Int) (base Int) (count Int)) Int
+  (if (int_eq count 0) field
+  (let ((m (if (le 32 count) 4294967295 (bit_lo count))))
+    (let ((pm (rotl32 m base)) (pv (rotl32 (band value m) base)))
+      (bor (band field (bxor pm 4294967295)) pv)))))
+
+;; --- FIFOs (plain front-first lists; depth checked at push) --------------------
+
+(fn flen ((q (List Int))) Int
+  (measure (struct q))
+  (match q
+    (Nil 0)
+    ((Cons h t) (+ 1 (flen t)))))
+
+(fn fapp ((q (List Int)) (v Int)) (List Int)
+  (measure (struct q))
+  (match q
+    (Nil (Cons v Nil))
+    ((Cons h t) (Cons h (fapp t v)))))
+
+;; push drops silently when full — the hardware FIFO write behavior the
+;; PUSH-noblock drop leg relies on.
+(fn fpush ((q (List Int)) (v Int) (depth Int)) (List Int)
+  (if (lt (flen q) depth) (fapp q v) q))
+
+(fn fpop ((q (List Int))) (Pair (Option Int) (List Int))
+  (match q
+    (Nil (Pair None Nil))
+    ((Cons h t) (Pair (Some h) t))))
+
+;; --- the instruction set (PIO.md §3 fragment) -----------------------------------
+
+(type JmpCond
+  (JAlways)  ; unconditional
+  (JXZero)  ; !X
+  (JXDec)  ; X-- : branch on pre-value, ALWAYS decrements (datasheet;
+  ;       divergence-register row 1 — the emulator holds at 0)
+  (JYZero)  ; !Y
+  (JYDec)  ; Y--
+  (JXNeY)  ; X != Y
+  (JPin)  ; EXECCTRL_JMP_PIN level
+  (JOsrNE))  ; !OSRE: osr_cnt < pull threshold
+
+;; IRQ flag targets (RP2350 IdxMode). Prev/Next are cross-block: modeled
+;; quiet-neighbor (set/clear invisible, wait reads 0).
+(type IrqIx
+  (IxThis Int)  ; flag 0-7 on this block
+  (IxRel Int)  ; ((n&3)+sm_id)%4 | (n&4)
+  (IxPrev Int)
+  (IxNext Int))
+
+(type WaitTgt
+  (WtGpio Int)  ; absolute GPIO 0-31
+  (WtPin Int)  ; in_base-relative, mod 32
+  (WtIrq IrqIx)  ; PIO IRQ flag; met at pol=1 auto-clears
+  (WtJmpPin Int))  ; jmp_pin + idx (idx 0-3), mod 32 — RP2350 only
+
+(type InSrc (ISPins) (ISX) (ISY) (ISNull) (ISIsr) (ISOsr))
+
+;; v1 fences OUT PC / OUT EXEC (PIO.md §3 named growth).
+(type OutDst (ODPins) (ODX) (ODY) (ODNull) (ODPindirs) (ODIsr))
+
+;; v1 fences MOV PC / MOV EXEC. MDPindirs is RP2350 (dst 011).
+(type MovDst (MDPins) (MDX) (MDY) (MDPindirs) (MDIsr) (MDOsr))
+(type MovOp (MONone) (MOInvert) (MOReverse))
+(type MovSrc (MSPins) (MSX) (MSY) (MSNull) (MSStatus) (MSIsr) (MSOsr))
+
+(type SetDst (SDPins) (SDX) (SDY) (SDPindirs))
+
+(type PInstr
+  (PJmp JmpCond Int)  ; target address 0-31
+  (PWait Int WaitTgt)  ; polarity 0/1
+  (PIn InSrc Int)  ; bit count 1-32 (the encoder spells 32 as 00000)
+  (POut OutDst Int)  ; bit count 1-32
+  (PPush Int Int)  ; iffull 0/1, block 0/1
+  (PPull Int Int)  ; ifempty 0/1, block 0/1
+  (PMov MovDst MovOp MovSrc)
+  (PIrq Int Int IrqIx)  ; clear 0/1, wait 0/1
+  (PSet SetDst Int))  ; immediate 0-31
+
+;; One program slot: the op plus its DECODED side-set/delay. pi_side None =
+;; no side-set asserted (side_en opt-out, or side_count = 0).
+(record PIns (pi_op PInstr) (pi_side (Option Int)) (pi_delay Int))
+
+;; A code slot: in-fragment instruction, or a word outside the modeled
+;; fragment (reserved encoding / fenced feature). Fetching PSOff ends the
+;; run — the model refuses to guess at undefined behavior. Out-of-range
+;; fetches (pc beyond the list) are PSOff for the same reason.
+(type PSlot (PS PIns) (PSOff))
+
+;; --- configuration (immutable per program) --------------------------------------
+
+;; Thresholds are stored NORMALIZED to 1..32 (the encoding's 0-means-32 is
+;; the decoder's business). clkdiv_int 0 means 65536 (kept raw — the tick
+;; computes the period).
+(record
+  PCfg
+  (code (List PSlot))
+  (wrap_top Int)
+  (wrap_bottom Int)
+  (side_count Int)
+  (side_en Int)
+  (side_pindir Int)
+  (sideset_base Int)
+  (jmp_pin Int)
+  (in_base Int)
+  (in_count Int)
+  (out_base Int)
+  (out_count Int)
+  (set_base Int)
+  (set_count Int)
+  (autopush Int)
+  (autopull Int)
+  (push_thresh Int)
+  (pull_thresh Int)
+  (in_right Int)
+  (out_right Int)
+  (clkdiv_int Int)
+  (clkdiv_frac Int)
+  (status_sel Int)
+  (status_n Int)
+  (sm_id Int)
+  (tx_depth Int)
+  (rx_depth Int))
+
+;; --- machine state ---------------------------------------------------------------
+
+;; Stall reasons. Re-execute stalls (wait/pull/push families) repeat the
+;; fetch when resolved; hold stalls (StPushHold) complete a finished
+;; instruction's pending action instead. StPullRe is the datasheet's
+;; refill bubble: the OSR was just refilled, the OUT retries next cycle.
+(type Stall
+  (StNone)
+  (StGpio Int Int)  ; pol, absolute pin
+  (StPin Int Int)  ; pol, in_base-relative index
+  (StJPin Int Int)  ; pol, jmp_pin-relative index
+  (StIrq Int Int)  ; pol, RESOLVED flag index
+  (StIrqRemote)  ; wait-for-1 on a quiet neighbor: parks
+  (StIrqWait Int)  ; own flag raised, waiting for someone to clear it
+  (StIrqWaitRemote)  ; remote flag raised: parks
+  (StPull)
+  (StPullRe)
+  (StPush)
+  (StPushHold Int))  ; autopush hold: carries the completed IN's delay
+
+(record
+  PSt
+  (pc Int)
+  (x Int)
+  (y Int)
+  (isr Int)
+  (osr Int)
+  (isr_cnt Int)
+  (osr_cnt Int)
+  (delay Int)
+  (stall Stall)
+  (irq Int)
+  (out_l Int)
+  (dir_l Int)
+  (clk Int)
+  (tx (List Int))
+  (rx (List Int)))
+
+;; Reset state (datasheet + evaluator-spec §1): pin-value latch ALL-ONES,
+;; direction latch 0, OSR empty (count 32), ISR empty (count 0).
+(fn pst_new () PSt (MkPSt 0 0 0 0 0 0 32 0 StNone 0 4294967295 0 0 Nil Nil))
+
+;; --- GPIO compose and the clock divider (spec §3-§4) ------------------------------
+
+;; PIO drives where OE; external stimulus OVERRIDES on its mask; else 0.
+(fn compose ((st PSt) (emask Int) (extv Int)) Int
+  (bor
+    (band (band (out_l_of st) (dir_l_of st)) (bxor emask 4294967295))
+    (band extv emask)))
+
+;; acc += 256; fire iff acc >= T (then subtract); T = int*256 + frac,
+;; int 0 meaning 65536.
+(fn clock_tick ((cfg PCfg) (st PSt)) (Pair PSt Int)
+  (let
+    ((t
+       (if (int_eq (clkdiv_int_of cfg) 0) 16777216
+       (+ (* (clkdiv_int_of cfg) 256) (clkdiv_frac_of cfg))))
+     (acc (+ (clk_of st) 256)))
+    (if (le t acc) (Pair (with_clk (- acc t) st) 1) (Pair (with_clk acc st) 0))))
+
+;; --- IRQ index resolution (quiet-neighbor: None = remote) -------------------------
+
+(fn irq_resolve ((ix IrqIx) (sm Int)) (Option Int)
+  (match ix
+    ((IxThis n) (Some (band n 7)))
+    ((IxRel n) (Some (bor (mod (+ (band n 3) sm) 4) (band n 4))))
+    ((IxPrev n) None)
+    ((IxNext n) None)))
+
+;; --- stall re-check (spec §7) ------------------------------------------------------
+
+(fn rx_full ((cfg PCfg) (st PSt)) Int
+  (if (lt (flen (rx_of st)) (rx_depth_of cfg)) 0 1))
+
+(fn tx_empty ((st PSt)) Int
+  (match (tx_of st)
+    (Nil 1)
+    ((Cons h t) 0)))
+
+(fn still_stalled ((cfg PCfg) (st PSt) (gpio Int)) Int
+  (match (stall_of st)
+    (StNone 0)
+    ((StGpio pol idx) (if (int_eq (bit_at gpio (band idx 31)) pol) 0 1))
+    ((StPin pol idx)
+     (if (int_eq (bit_at gpio (band (+ (in_base_of cfg) idx) 31)) pol) 0 1))
+    ((StJPin pol idx)
+     (if (int_eq (bit_at gpio (band (+ (jmp_pin_of cfg) idx) 31)) pol) 0 1))
+    ((StIrq pol f) (if (int_eq (bit_at (irq_of st) (band f 7)) pol) 0 1))
+    (StIrqRemote 1)
+    ((StIrqWait f) (bit_at (irq_of st) (band f 7)))
+    (StIrqWaitRemote 1)
+    (StPull (tx_empty st))
+    (StPullRe 0)
+    (StPush (rx_full cfg st))
+    ((StPushHold d) (rx_full cfg st))))
+
+;; --- instruction semantics (spec §8, datasheet-true) -------------------------------
+
+;; JMP: X--/Y-- ALWAYS decrement (euclidean mod wraps 0 to 2^32-1); the
+;; branch tests the PRE-decrement value. Returns (Pair state taken).
+(fn exec_jmp ((cfg PCfg) (st PSt) (cond JmpCond) (addr Int) (gpio Int))
+  (Pair PSt Int)
+  (match cond
+    (JAlways (Pair (with_pc addr st) 1))
+    (JXZero (if (int_eq (x_of st) 0) (Pair (with_pc addr st) 1) (Pair st 0)))
+    (JXDec
+      (let
+        ((take (if (int_eq (x_of st) 0) 0 1))
+         (st1 (with_x (mod (- (x_of st) 1) 4294967296) st)))
+        (if (int_eq take 1) (Pair (with_pc addr st1) 1) (Pair st1 0))))
+    (JYZero (if (int_eq (y_of st) 0) (Pair (with_pc addr st) 1) (Pair st 0)))
+    (JYDec
+      (let
+        ((take (if (int_eq (y_of st) 0) 0 1))
+         (st1 (with_y (mod (- (y_of st) 1) 4294967296) st)))
+        (if (int_eq take 1) (Pair (with_pc addr st1) 1) (Pair st1 0))))
+    (JXNeY
+      (if (int_eq (x_of st) (y_of st)) (Pair st 0) (Pair (with_pc addr st) 1)))
+    (JPin
+      (if (int_eq (bit_at gpio (band (jmp_pin_of cfg) 31)) 1)
+        (Pair (with_pc addr st) 1)
+        (Pair st 0)))
+    (JOsrNE
+      (if (lt (osr_cnt_of st) (pull_thresh_of cfg)) (Pair (with_pc addr st) 1)
+      (Pair st 0)))))
+
+(fn irq_clear_bit ((st PSt) (f Int)) PSt
+  (with_irq (band (irq_of st) (bxor (bshl 1 (band f 7)) 255)) st))
+
+;; WAIT: met = complete in one cycle; unmet = stall (re-executed on resolve).
+;; A met IRQ wait at polarity 1 auto-clears the flag.
+(fn exec_wait ((cfg PCfg) (st PSt) (pol Int) (tgt WaitTgt) (gpio Int)) PSt
+  (match tgt
+    ((WtGpio idx)
+     (if (int_eq (bit_at gpio (band idx 31)) pol) st
+     (with_stall (StGpio pol idx) st)))
+    ((WtPin idx)
+     (if (int_eq (bit_at gpio (band (+ (in_base_of cfg) idx) 31)) pol) st
+     (with_stall (StPin pol idx) st)))
+    ((WtIrq ix)
+     (match (irq_resolve ix (sm_id_of cfg))
+       (None (if (int_eq pol 1) (with_stall StIrqRemote st) st))
+       ((Some f)
+        (if (int_eq (bit_at (irq_of st) (band f 7)) pol)
+          (if (int_eq pol 1) (irq_clear_bit st f) st)
+          (with_stall (StIrq pol f) st)))))
+    ((WtJmpPin idx)
+     (if (int_eq (bit_at gpio (band (+ (jmp_pin_of cfg) idx) 31)) pol) st
+     (with_stall (StJPin pol idx) st)))))
+
+;; push ISR to RX (drops if full — the noblock data-loss leg), clear ISR.
+(fn isr_flush ((cfg PCfg) (st PSt)) PSt
+  (with_isr_cnt
+    0
+    (with_isr 0 (with_rx (fpush (rx_of st) (isr_of st) (rx_depth_of cfg)) st))))
+
+(fn in_val ((cfg PCfg) (st PSt) (src InSrc) (gpio Int)) Int
+  (match src
+    (ISPins (rotr32 gpio (in_base_of cfg)))
+    (ISX (x_of st))
+    (ISY (y_of st))
+    (ISNull 0)
+    (ISIsr (isr_of st))
+    (ISOsr (osr_of st))))
+
+;; IN (datasheet §3.5.4.1 shape): shift FIRST; at threshold push, or HOLD
+;; post-shift on a full RX FIFO (StPushHold completes the push when room
+;; appears, without re-executing the shift).
+(fn exec_in ((cfg PCfg) (st PSt) (src InSrc) (bc Int) (gpio Int)) PSt
+  (let
+    ((data
+       (if (le 32 bc) (in_val cfg st src gpio)
+       (band (in_val cfg st src gpio) (bit_lo bc)))))
+    (let
+      ((nisr
+         (if (int_eq (in_right_of cfg) 1)
+           (if (le 32 bc) data
+           (band (bor (bshr (isr_of st) bc) (bshl data (- 32 bc))) 4294967295))
+         (if (le 32 bc) data
+         (band (bor (bshl (isr_of st) bc) data) 4294967295)))))
+      (let
+        ((st1
+           (with_isr_cnt (imin (+ (isr_cnt_of st) bc) 32) (with_isr nisr st))))
+        (if (int_eq (autopush_of cfg) 1)
+          (if (le (push_thresh_of cfg) (isr_cnt_of st1))
+            (if (int_eq (rx_full cfg st1) 1) (with_stall (StPushHold 0) st1)
+            (isr_flush cfg st1))
+            st1)
+          st1)))))
+
+(fn osr_refill ((st PSt) (v Int) (ntx (List Int))) PSt
+  (with_osr_cnt 0 (with_osr v (with_tx ntx st))))
+
+;; OUT destination write. PINS/PINDIRS drive the FULL out_count window with
+;; the zero-padded shifted value (datasheet; divergence-register row 8 —
+;; the emulator clips to the bit count). OUT ISR sets the input shift
+;; counter to the bit count (row 4).
+(fn out_write ((cfg PCfg) (st PSt) (dst OutDst) (data Int) (bc Int)) PSt
+  (match dst
+    (ODPins
+      (with_out_l
+        (write_pin_field
+          (out_l_of st)
+          data
+          (out_base_of cfg)
+          (out_count_of cfg))
+        st))
+    (ODX (with_x data st))
+    (ODY (with_y data st))
+    (ODNull st)
+    (ODPindirs
+      (with_dir_l
+        (write_pin_field
+          (dir_l_of st)
+          data
+          (out_base_of cfg)
+          (out_count_of cfg))
+        st))
+    (ODIsr (with_isr_cnt (imin bc 32) (with_isr data st)))))
+
+(fn out_shift ((cfg PCfg) (st PSt) (dst OutDst) (bc Int)) PSt
+  (let ((osr (osr_of st)))
+    (let
+      ((nosr
+         (if (int_eq (out_right_of cfg) 1) (if (le 32 bc) 0 (bshr osr bc))
+         (if (le 32 bc) 0
+         (band (bshl osr bc) 4294967295))))
+       (data
+         (if (int_eq (out_right_of cfg) 1)
+           (if (le 32 bc) osr (band osr (bit_lo bc)))
+         (if (le 32 bc) osr
+         (bshr osr (- 32 bc))))))
+      (let
+        ((st1
+           (with_osr_cnt (imin (+ (osr_cnt_of st) bc) 32) (with_osr nosr st))))
+        (out_write cfg st1 dst data bc)))))
+
+;; OUT (datasheet §3.5.4.2 shape): at threshold the OSR refills if data is
+;; available and the OUT stalls one cycle regardless (StPullRe); below
+;; threshold it shifts, then background-refills eagerly.
+(fn exec_out ((cfg PCfg) (st PSt) (dst OutDst) (bc Int)) PSt
+  (if (int_eq (autopull_of cfg) 1)
+    (if (le (pull_thresh_of cfg) (osr_cnt_of st))
+      (match (fpop (tx_of st))
+        ((Pair popped ntx)
+         (match popped
+           (None (with_stall StPull st))
+           ((Some v) (with_stall StPullRe (osr_refill st v ntx))))))
+      (let ((st1 (out_shift cfg st dst bc)))
+        (if (le (pull_thresh_of cfg) (osr_cnt_of st1))
+          (match (fpop (tx_of st1))
+            ((Pair popped ntx)
+             (match popped
+               (None st1)
+               ((Some v) (osr_refill st1 v ntx)))))
+          st1)))
+    (out_shift cfg st dst bc)))
+
+;; PUSH: IfFull is a THRESHOLD gate (no-op below it, regardless of FIFO
+;; state — divergence-register row 2); then full+block stalls, full+noblock
+;; drops (ISR still cleared, the datasheet's data-loss leg).
+(fn exec_push ((cfg PCfg) (st PSt) (iff Int) (blk Int)) PSt
+  (if (int_eq iff 1)
+    (if (lt (isr_cnt_of st) (push_thresh_of cfg)) st
+    (if (int_eq (rx_full cfg st) 1)
+      (if (int_eq blk 1) (with_stall StPush st) (isr_flush cfg st))
+      (isr_flush cfg st)))
+  (if (int_eq (rx_full cfg st) 1)
+    (if (int_eq blk 1) (with_stall StPush st) (isr_flush cfg st))
+    (isr_flush cfg st))))
+
+;; PULL: under autopull a full OSR makes any PULL a no-op (the DMA-race
+;; fence, §3.5.4.2); IfEmpty is a threshold gate like IfFull; an empty TX
+;; blocks or copies X (the documented nonblocking empty-pull).
+(fn exec_pull ((cfg PCfg) (st PSt) (ife Int) (blk Int)) PSt
+  (if (int_eq (autopull_of cfg) 1)
+    (if (int_eq (osr_cnt_of st) 0) st (exec_pull_go cfg st ife blk))
+    (exec_pull_go cfg st ife blk)))
+
+(fn exec_pull_go ((cfg PCfg) (st PSt) (ife Int) (blk Int)) PSt
+  (if (int_eq ife 1)
+    (if (lt (osr_cnt_of st) (pull_thresh_of cfg)) st (exec_pull_do cfg st blk))
+    (exec_pull_do cfg st blk)))
+
+(fn exec_pull_do ((cfg PCfg) (st PSt) (blk Int)) PSt
+  (match (fpop (tx_of st))
+    ((Pair popped ntx)
+     (match popped
+       (None
+         (if (int_eq blk 1) (with_stall StPull st)
+         (with_osr_cnt 0 (with_osr (x_of st) st))))
+       ((Some v) (osr_refill st v ntx))))))
+
+(fn mov_status ((cfg PCfg) (st PSt)) Int
+  (let
+    ((lvl
+       (if (int_eq (status_sel_of cfg) 1) (flen (rx_of st)) (flen (tx_of st)))))
+    (if (lt lvl (status_n_of cfg)) 4294967295 0)))
+
+(fn mov_val ((cfg PCfg) (st PSt) (src MovSrc) (gpio Int)) Int
+  (match src
+    (MSPins
+      (let ((ic (in_count_of cfg)) (r (rotr32 gpio (in_base_of cfg))))
+        (if (int_eq ic 0) r (if (le 32 ic) r (band r (bit_lo ic))))))
+    (MSX (x_of st))
+    (MSY (y_of st))
+    (MSNull 0)
+    (MSStatus (mov_status cfg st))
+    (MSIsr (isr_of st))
+    (MSOsr (osr_of st))))
+
+;; MOV to a shift register clears its counter (datasheet §3.2.3.3 —
+;; divergence-register row 3: the emulator leaves counters untouched).
+(fn exec_mov
+  ((cfg PCfg) (st PSt) (dst MovDst) (op MovOp) (src MovSrc) (gpio Int))
+  PSt
+  (let ((raw (mov_val cfg st src gpio)))
+    (let
+      ((val
+         (match op
+           (MONone raw)
+           (MOInvert (bxor raw 4294967295))
+           (MOReverse (rev_bits raw)))))
+      (match dst
+        (MDPins
+          (with_out_l
+            (write_pin_field
+              (out_l_of st)
+              val
+              (out_base_of cfg)
+              (out_count_of cfg))
+            st))
+        (MDX (with_x val st))
+        (MDY (with_y val st))
+        (MDPindirs
+          (with_dir_l
+            (write_pin_field
+              (dir_l_of st)
+              val
+              (out_base_of cfg)
+              (out_count_of cfg))
+            st))
+        (MDIsr (with_isr_cnt 0 (with_isr val st)))
+        (MDOsr (with_osr_cnt 0 (with_osr val st)))))))
+
+;; IRQ: set (optionally waiting for the flag to clear) or clear a flag.
+;; Remote targets: set/clear locally invisible; set+wait parks.
+(fn exec_irq ((cfg PCfg) (st PSt) (clr Int) (wt Int) (ix IrqIx)) PSt
+  (match (irq_resolve ix (sm_id_of cfg))
+    (None
+      (if (int_eq clr 0) (if (int_eq wt 1) (with_stall StIrqWaitRemote st) st)
+      st))
+    ((Some f)
+     (if (int_eq clr 1) (irq_clear_bit st f)
+     (let ((st1 (with_irq (bor (irq_of st) (bshl 1 (band f 7))) st)))
+       (if (int_eq wt 1) (with_stall (StIrqWait f) st1) st1))))))
+
+(fn exec_set ((cfg PCfg) (st PSt) (dst SetDst) (v Int)) PSt
+  (match dst
+    (SDPins
+      (with_out_l
+        (write_pin_field (out_l_of st) v (set_base_of cfg) (set_count_of cfg))
+        st))
+    (SDX (with_x v st))
+    (SDY (with_y v st))
+    (SDPindirs
+      (with_dir_l
+        (write_pin_field (dir_l_of st) v (set_base_of cfg) (set_count_of cfg))
+        st))))
+
+;; dispatch: (Pair state pc_set). Only JMP sets the PC in this fragment.
+(fn exec_ins ((cfg PCfg) (st PSt) (op PInstr) (gpio Int)) (Pair PSt Int)
+  (match op
+    ((PJmp c a) (exec_jmp cfg st c a gpio))
+    ((PWait p t) (Pair (exec_wait cfg st p t gpio) 0))
+    ((PIn s b) (Pair (exec_in cfg st s b gpio) 0))
+    ((POut d b) (Pair (exec_out cfg st d b) 0))
+    ((PPush f b) (Pair (exec_push cfg st f b) 0))
+    ((PPull f b) (Pair (exec_pull cfg st f b) 0))
+    ((PMov d o s) (Pair (exec_mov cfg st d o s gpio) 0))
+    ((PIrq c w ix) (Pair (exec_irq cfg st c w ix) 0))
+    ((PSet d v) (Pair (exec_set cfg st d v) 0))))
+
+;; --- the cycle (spec §5) -----------------------------------------------------------
+
+(fn ins_at ((code (List PSlot)) (i Int)) PSlot
+  (measure (struct code))
+  (match code
+    (Nil PSOff)
+    ((Cons s t) (if (int_eq i 0) s (ins_at t (- i 1))))))
+
+(fn advance_pc ((cfg PCfg) (st PSt)) PSt
+  (if (int_eq (pc_of st) (wrap_top_of cfg)) (with_pc (wrap_bottom_of cfg) st)
+  (with_pc (band (+ (pc_of st) 1) 31) st)))
+
+;; Side-set applies ALWAYS — even when the op stalled — and AFTER the op's
+;; own pin writes (an asserted side-set wins on a shared pin that cycle).
+(fn apply_side ((cfg PCfg) (st PSt) (ss (Option Int))) PSt
+  (match ss
+    (None st)
+    ((Some v)
+     (let ((vb (- (side_count_of cfg) (side_en_of cfg))))
+       (if (lt 0 vb)
+         (if (int_eq (side_pindir_of cfg) 1)
+           (with_dir_l
+             (write_pin_field (dir_l_of st) v (sideset_base_of cfg) vb)
+             st)
+           (with_out_l
+             (write_pin_field (out_l_of st) v (sideset_base_of cfg) vb)
+             st))
+         st)))))
+
+;; Is the next fired instruction an OUT? (Gates the background autopull:
+;; the datasheet refills on non-OUT cycles only — an OUT at threshold must
+;; take its one-cycle refill bubble.)
+(fn fetch_is_out ((cfg PCfg) (st PSt)) Int
+  (if (int_eq (delay_of st) 0)
+    (match (stall_of st)
+      (StNone
+        (match (ins_at (code_of cfg) (pc_of st))
+          ((PS i)
+           (match (pi_op_of i)
+             ((POut d b) 1)
+             (_ 0)))
+          (PSOff 0)))
+      (_ 0))
+    0))
+
+;; Background autopull (datasheet §3.5.4.2, non-OUT cycles): a spent OSR
+;; refills as soon as data is available.
+(fn bg_refill ((cfg PCfg) (st PSt)) PSt
+  (if (int_eq (autopull_of cfg) 1)
+    (if (int_eq (fetch_is_out cfg st) 0)
+      (if (le (pull_thresh_of cfg) (osr_cnt_of st))
+        (match (fpop (tx_of st))
+          ((Pair popped ntx)
+           (match popped
+             (None st)
+             ((Some v) (osr_refill st v ntx)))))
+        st)
+      st)
+    st))
+
+;; Execute the fetched slot: side-set after the op, delay latched and PC
+;; advanced only on completion (a stalling execution keeps both pending;
+;; a resolved re-execute stall repeats the fetch). None = off-fragment.
+(fn step_exec ((cfg PCfg) (st PSt) (gpio Int)) (Option PSt)
+  (match (ins_at (code_of cfg) (pc_of st))
+    ((PS i)
+     (match (exec_ins cfg st (pi_op_of i) gpio)
+       ((Pair st1 pc_set)
+        (let ((st2 (apply_side cfg st1 (pi_side_of i))))
+          (match (stall_of st2)
+            (StNone
+              (let ((st3 (with_delay (pi_delay_of i) st2)))
+                (Some (if (int_eq pc_set 1) st3 (advance_pc cfg st3)))))
+            ((StPushHold d0)
+             ;; hold: the IN finished; stash its delay for the resume.
+             (Some (with_stall (StPushHold (pi_delay_of i)) st2)))
+            (_ (Some st2)))))))
+    (PSOff None)))
+
+;; One fired (divided-clock) cycle: background refill, delay countdown,
+;; stall service, execute.
+(fn pio_step ((cfg PCfg) (st PSt) (gpio Int)) (Option PSt)
+  (let ((st0 (bg_refill cfg st)))
+    (if (lt 0 (delay_of st0)) (Some (with_delay (- (delay_of st0) 1) st0))
+    (match (stall_of st0)
+      (StNone (step_exec cfg st0 gpio))
+      ((StPushHold d)
+       (if (int_eq (rx_full cfg st0) 1) (Some st0)
+       (let ((st1 (isr_flush cfg (with_stall StNone st0))))
+         (Some (advance_pc cfg (with_delay d st1))))))
+      (_
+        (if (int_eq (still_stalled cfg st0 gpio) 1) (Some st0)
+        (step_exec cfg (with_stall StNone st0) gpio)))))))
+
+;; --- the denotation ----------------------------------------------------------------
+
+;; One system-clock cycle: compose the pad, tick the divider, step if fired.
+(fn pio_cycle ((cfg PCfg) (st PSt) (emask Int) (extv Int)) (Option PSt)
+  (let ((gpio (compose st emask extv)))
+    (match (clock_tick cfg st)
+      ((Pair st1 fire) (if (int_eq fire 1) (pio_step cfg st1 gpio) (Some st1))))))
+
+;; The trace transformer (PIO.md §2): one stimulus word per system-clock
+;; cycle in, one (levels, dirs) observation out, levels re-composed AFTER
+;; the step (this cycle's writes visible; the SM itself read start-of-cycle
+;; values — the one-cycle loopback). An off-fragment fetch ends the trace
+;; early: the result's length is the clean-prefix bound.
+(fn pio_run ((cfg PCfg) (st PSt) (emask Int) (stims (List Int)))
+  (List (Pair Int Int))
+  (measure (struct stims))
+  (match stims
+    (Nil Nil)
+    ((Cons v rest)
+     (match (pio_cycle cfg st emask v)
+       (None Nil)
+       ((Some st1)
+        (Cons
+          (Pair (compose st1 emask v) (dir_l_of st1))
+          (pio_run cfg st1 emask rest)))))))
+
+;; The run's final state (pio_run's companion): where the machine lands
+;; after the stimulus budget. An off-fragment fetch freezes the pre-fetch
+;; state, mirroring the trace's early end. Lets consumers PIN steady states
+;; (e.g. a drained-FIFO park) and compose windows.
+(fn pio_final ((cfg PCfg) (st PSt) (emask Int) (stims (List Int))) PSt
+  (measure (struct stims))
+  (match stims
+    (Nil st)
+    ((Cons v rest)
+     (match (pio_cycle cfg st emask v)
+       (None st)
+       ((Some st1) (pio_final cfg st1 emask rest))))))

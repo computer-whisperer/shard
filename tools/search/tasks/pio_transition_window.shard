@@ -1,0 +1,1002 @@
+;;; Checked PIO transition-window narrowing (docs/PIO.md P5b).
+;;;
+;;; The x86_transition_window pattern over the PIO model: the same
+;;; zero-to-three instruction straight-line scope as pio_transition_mining,
+;;; now searched under CHECKED spine pressure.  The probe is a task-local
+;;; total projection of the straight-line fragment (PTW below) — pio_run
+;;; carries the program inside its configuration, so prefix induction is
+;;; stated over the projection and the real model is tied back by a
+;;; flagship theorem on pio_run/pio_final plus a ground observer-agreement
+;;; pin.  The checked laws are the mining census's top schema family: a
+;;; same-value pin re-drive absorbs into delay cycles.  Each law holds for
+;;; EVERY start state and carries its MovOp as a nonlinear metavariable —
+;;; both sides compute the identical stuck operation, so no case split and
+;;; no premise is needed.  The mined mov-y collapse family (pins-y-y =>
+;;; pins-pins) needs a y-is-32-bit-word state premise, which spine capture
+;;; refuses by design; it stays on the proof worklist.
+;;;
+;;; RUN:
+;;;   bin/shard_eval run tools/search/typed_superpose.shard \
+;;;     tools/search/tasks/pio_transition_window.shard audit
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../models/pio/pio.shard")
+(import "../typed_grammar.shard")
+(use (:: tools search typed_grammar *))
+
+;; Generic program spine.
+(use (:: core List))
+(use (:: core Nil))
+(use (:: core Cons))
+(use (:: core None))
+
+;; Candidate PIO scope.
+(use (:: models pio pio PIns))
+(use (:: models pio pio MkPIns))
+(use (:: models pio pio PInstr))
+(use (:: models pio pio POut))
+(use (:: models pio pio OutDst))
+(use (:: models pio pio ODX))
+(use (:: models pio pio PMov))
+(use (:: models pio pio MovDst))
+(use (:: models pio pio MDY))
+(use (:: models pio pio MDPins))
+(use (:: models pio pio MovOp))
+(use (:: models pio pio MOInvert))
+(use (:: models pio pio MONone))
+(use (:: models pio pio MOReverse))
+(use (:: models pio pio MovSrc))
+(use (:: models pio pio MSY))
+(use (:: models pio pio PSlot))
+(use (:: models pio pio PCfg))
+(use (:: models pio pio PSt))
+
+;; Broad model access is observer-only and adds no candidate productions.
+(use (:: models pio pio) as pio)
+
+(fn search_forms () (List Symbol) (list (quote ctor)))
+
+(fn search_ints () (List Int) Nil)
+
+(fn search_symbols () (List Symbol) Nil)
+
+(fn search_depth () Int 8)
+
+;; Narrowing stays semantic-first (the default): this task's observation is
+;; a cycle TRACE, so behavioral prefixes kill broad parents early — measured
+;; 45 regions / 2408 steps vs 140 / 3418 under theorem_first, the opposite
+;; of the state-observed x86 window census.  The checked laws still settle
+;; the same 44-candidate quotient either way.
+
+(fn ptw_ctor ((name Symbol)) TgScopeHead (TgScopeCtor name))
+
+(fn ptw_route ((head Symbol) (index Int) (zone Symbol)) TgScopeRoute
+  (TgScopeRoute (ptw_ctor head) index zone))
+
+(fn ptw_one ((name Symbol) (head Symbol)) TgScopeZone
+  (TgScopeZone name (list (ptw_ctor head)) Nil Nil Nil))
+
+(fn ptw_seq_zone ((name Symbol) (instruction Symbol) (tail Symbol)) TgScopeZone
+  (TgScopeZone
+    name
+    (list (ptw_ctor (quote Nil)) (ptw_ctor (quote Cons)))
+    Nil
+    Nil
+    (list
+      (ptw_route (quote Cons) 0 instruction)
+      (ptw_route (quote Cons) 1 tail))))
+
+(fn search_environment () TgScopeEnv
+  (TgScopeEnv
+    (quote sequence0)
+    (list
+      (ptw_seq_zone (quote sequence0) (quote instruction) (quote sequence1))
+      (ptw_seq_zone (quote sequence1) (quote instruction) (quote sequence2))
+      (ptw_seq_zone (quote sequence2) (quote instruction) (quote sequence3))
+      (TgScopeZone (quote sequence3) (list (ptw_ctor (quote Nil))) Nil Nil Nil)
+      (TgScopeZone
+        (quote instruction)
+        (list (ptw_ctor (quote MkPIns)))
+        Nil
+        Nil
+        (list
+          (ptw_route (quote MkPIns) 0 (quote operation))
+          (ptw_route (quote MkPIns) 1 (quote sideset))
+          (ptw_route (quote MkPIns) 2 (quote delay))))
+      (TgScopeZone
+        (quote operation)
+        (list (ptw_ctor (quote POut)) (ptw_ctor (quote PMov)))
+        Nil
+        Nil
+        (list
+          (ptw_route (quote POut) 0 (quote odx))
+          (ptw_route (quote POut) 1 (quote one))
+          (ptw_route (quote PMov) 0 (quote movdst))
+          (ptw_route (quote PMov) 1 (quote movop))
+          (ptw_route (quote PMov) 2 (quote msy))))
+      (TgScopeZone
+        (quote movdst)
+        (list (ptw_ctor (quote MDY)) (ptw_ctor (quote MDPins)))
+        Nil
+        Nil
+        Nil)
+      (TgScopeZone
+        (quote movop)
+        (list (ptw_ctor (quote MOInvert)) (ptw_ctor (quote MONone)))
+        Nil
+        Nil
+        Nil)
+      (ptw_one (quote odx) (quote ODX))
+      (ptw_one (quote msy) (quote MSY))
+      (ptw_one (quote sideset) (quote None))
+      (TgScopeZone (quote one) Nil (list 1) Nil Nil)
+      (TgScopeZone (quote delay) Nil (list 0 1) Nil Nil))))
+
+;; --- the straight-line projection --------------------------------------------------
+
+;; Exactly the state the fragment can read or write, with the pin and pindir
+;; latches held as single BITS (the mining observer's band-1 view).  Keeping
+;; the latch pre-masked makes every window law an identity of one shared
+;; stuck term, so the laws hold for arbitrary Int fields with no
+;; normalization premise (the x86 adapter needed a word invariant here).
+(type PTW (MkPTW Int Int Int Int Int Int))
+
+(fn ptw_op ((op MovOp) (v Int)) Int
+  (match op
+    (MONone v)
+    (MOInvert (bxor v 4294967295))
+    (MOReverse ((:: pio rev_bits) v))))
+
+;; One instruction's state action, mirroring the model's out_shift/exec_mov
+;; arms for the searched scope (out_right = 1, out_base 0, out_count 1, no
+;; autopull, so nothing ever stalls).  Non-fragment instructions are
+;; observational no-ops and are absent from the reflected candidate scope.
+(fn ptw_step ((i PIns) (st PTW)) PTW
+  (match i
+    ((MkPIns op side delay)
+     (match st
+       ((MkPTW x y osr oc pin dir)
+        (match op
+          ((POut d b)
+           (match d
+             (ODX
+               (MkPTW
+                 (band osr ((:: pio bit_lo) b))
+                 y
+                 (bshr osr b)
+                 ((:: pio imin) (+ oc b) 32)
+                 pin
+                 dir))
+             (_ st)))
+          ((PMov d o s)
+           (match s
+             (MSY
+               (match d
+                 (MDY (MkPTW x (ptw_op o y) osr oc pin dir))
+                 (MDPins (MkPTW x y osr oc (band (ptw_op o y) 1) dir))
+                 (_ st)))
+             (_ st)))
+          (_ st)))))))
+
+(fn ptw_reps ((n Int) (b Int)) (List Int)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) Nil (Cons b (ptw_reps (- n 1) b))))
+
+;; The observed pad bit: driven level AND output-enable, like the model's
+;; compose at bit 0.
+(fn ptw_bit ((st PTW)) Int
+  (match st
+    ((MkPTW x y osr oc pin dir) (band pin dir))))
+
+(fn ptw_app ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons head tail) (Cons head (ptw_app tail b)))))
+
+;; The pin-0 cycle trace: an instruction occupies 1 + delay cycles and the
+;; post-execute level is visible on every one of them (the model records
+;; levels AFTER the step, and a delay cycle only counts down).
+(fn ptw_wave ((body (List PIns)) (st PTW)) (List Int)
+  (measure (struct body))
+  (match body
+    (Nil Nil)
+    ((Cons i rest)
+     (let ((st1 (ptw_step i st)))
+       (ptw_app
+         (ptw_reps (+ 1 ((:: pio pi_delay_of) i)) (ptw_bit st1))
+         (ptw_wave rest st1))))))
+
+(fn ptw_fin ((body (List PIns)) (st PTW)) PTW
+  (measure (struct body))
+  (match body
+    (Nil st)
+    ((Cons i rest) (ptw_fin rest (ptw_step i st)))))
+
+(fn ptw_key ((st PTW)) (List Int)
+  (match st
+    ((MkPTW x y osr oc pin dir) (list x y osr oc pin dir))))
+
+(fn ptw_key1 ((body (List PIns)) (st PTW)) (List Int)
+  (ptw_app (ptw_wave body st) (ptw_key (ptw_fin body st))))
+
+;; The mining seeds' projections: (x y osr osr_cnt pin dir).
+(fn ptw_seeds () (List PTW)
+  (list
+    (MkPTW 0 0 22 0 1 1)
+    (MkPTW 1 4294967295 21 0 0 1)
+    (MkPTW 1 0 10 0 0 1)
+    (MkPTW 0 4294967295 30 0 1 1)))
+
+(fn ptw_observe ((body (List PIns)) (seeds (List PTW))) (List Int)
+  (measure (struct seeds))
+  (match seeds
+    (Nil Nil)
+    ((Cons st rest) (ptw_app (ptw_key1 body st) (ptw_observe body rest)))))
+
+(fn search_probe ((body (List PIns))) (Option (List Int))
+  (Some (ptw_observe body (ptw_seeds))))
+
+(fn search_target () (List Int) (ptw_observe Nil (ptw_seeds)))
+
+(fn search_witness () (List PIns) Nil)
+
+;; Transparent right action used to authenticate contextual sequence laws.
+;; theorem_scope derives the Cons/tail path from this body; the task never
+;; states that path as configuration data.
+(fn ptw_plug ((prefix (List PIns)) (suffix (List PIns))) (List PIns)
+  (measure (struct prefix))
+  (match prefix
+    (Nil suffix)
+    ((Cons head tail) (Cons head (ptw_plug tail suffix)))))
+
+;; --- law A: pins[0] pins[1] y[0]  =>  pins[1] y[1]  (drive-absorb) -----------------
+;;
+;; Both sides drive the same value for four cycles and land in the same
+;; state: the second same-value drive is a delay in disguise.  The MovOp
+;; stays a shared stuck term, so one theorem covers invert/none/reverse.
+
+(claim ptw_absorb_a_wave_tail
+  (goal ((tail (List PIns)) (st PTW) (x0 MovOp)) ()
+    (=
+      (ptw_wave
+        (Cons
+          (MkPIns (PMov MDPins x0 MSY) None 0)
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 1)
+            (Cons (MkPIns (PMov MDY x0 MSY) None 0) tail)))
+        st)
+      (ptw_wave
+        (Cons
+          (MkPIns (PMov MDPins x0 MSY) None 1)
+          (Cons (MkPIns (PMov MDY x0 MSY) None 1) tail))
+        st)))
+  (case-on st PTW
+    ((case MkPTW
+       (x y osr oc pin dir)
+       (steps ((rewrite (hyp MkPTW) lr both true ()) (compute both)) refl)))))
+
+(claim ptw_absorb_a_fin_tail
+  (goal ((tail (List PIns)) (st PTW) (x0 MovOp)) ()
+    (=
+      (ptw_fin
+        (Cons
+          (MkPIns (PMov MDPins x0 MSY) None 0)
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 1)
+            (Cons (MkPIns (PMov MDY x0 MSY) None 0) tail)))
+        st)
+      (ptw_fin
+        (Cons
+          (MkPIns (PMov MDPins x0 MSY) None 1)
+          (Cons (MkPIns (PMov MDY x0 MSY) None 1) tail))
+        st)))
+  (case-on st PTW
+    ((case MkPTW
+       (x y osr oc pin dir)
+       (steps ((rewrite (hyp MkPTW) lr both true ()) (compute both)) refl)))))
+
+(claim ptw_absorb_a_wave_ctx
+  (goal ((prefix (List PIns)) (tail (List PIns)) (st PTW) (x0 MovOp)) ()
+    (=
+      (ptw_wave
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons
+              (MkPIns (PMov MDPins x0 MSY) None 1)
+              (Cons (MkPIns (PMov MDY x0 MSY) None 0) tail))))
+        st)
+      (ptw_wave
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 1)
+            (Cons (MkPIns (PMov MDY x0 MSY) None 1) tail)))
+        st)))
+  (induct prefix
+    ((case Nil
+       (steps
+         ((unfold ptw_plug both)
+          (reduce both)
+          (rewrite (lemma ptw_absorb_a_wave_tail) lr lhs true ()))
+         refl))
+     (case Cons
+       (head rest)
+       (steps ((simp both) (rewrite (hyp ih) lr lhs true ())) refl)))))
+
+(claim ptw_absorb_a_fin_ctx
+  (goal ((prefix (List PIns)) (tail (List PIns)) (st PTW) (x0 MovOp)) ()
+    (=
+      (ptw_fin
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons
+              (MkPIns (PMov MDPins x0 MSY) None 1)
+              (Cons (MkPIns (PMov MDY x0 MSY) None 0) tail))))
+        st)
+      (ptw_fin
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 1)
+            (Cons (MkPIns (PMov MDY x0 MSY) None 1) tail)))
+        st)))
+  (induct prefix
+    ((case Nil
+       (steps
+         ((unfold ptw_plug both)
+          (reduce both)
+          (rewrite (lemma ptw_absorb_a_fin_tail) lr lhs true ()))
+         refl))
+     (case Cons
+       (head rest)
+       (steps ((simp both) (rewrite (hyp ih) lr lhs true ())) refl)))))
+
+(claim ptw_absorb_a_observe
+  (goal ((prefix (List PIns)) (tail (List PIns)) (seeds (List PTW)) (x0 MovOp))
+    ()
+    (=
+      (ptw_observe
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons
+              (MkPIns (PMov MDPins x0 MSY) None 1)
+              (Cons (MkPIns (PMov MDY x0 MSY) None 0) tail))))
+        seeds)
+      (ptw_observe
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 1)
+            (Cons (MkPIns (PMov MDY x0 MSY) None 1) tail)))
+        seeds)))
+  (induct seeds
+    ((case Nil (steps ((simp both)) refl))
+     (case Cons
+       (rs rest)
+       (steps
+         ((unfold ptw_observe both)
+          (reduce both)
+          (unfold ptw_key1 both)
+          (reduce both)
+          (rewrite (lemma ptw_absorb_a_wave_ctx) lr lhs true ())
+          (rewrite (lemma ptw_absorb_a_fin_ctx) lr lhs true ())
+          (rewrite (hyp ih) lr lhs true ()))
+         refl)))))
+
+(claim ptw_absorb_a_spine
+  (goal ((prefix (List PIns)) (tail (List PIns)) (x0 MovOp)) ()
+    (=
+      (search_probe
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons
+              (MkPIns (PMov MDPins x0 MSY) None 1)
+              (Cons (MkPIns (PMov MDY x0 MSY) None 0) tail)))))
+      (search_probe
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 1)
+            (Cons (MkPIns (PMov MDY x0 MSY) None 1) tail))))))
+  (steps
+    ((unfold search_probe both)
+     (rewrite (lemma ptw_absorb_a_observe) lr lhs true ()))
+    refl))
+
+;; --- law B: pins[1] pins[0] y[0]  =>  pins[1] y[1] ---------------------------------
+
+(claim ptw_absorb_b_wave_tail
+  (goal ((tail (List PIns)) (st PTW) (x0 MovOp)) ()
+    (=
+      (ptw_wave
+        (Cons
+          (MkPIns (PMov MDPins x0 MSY) None 1)
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons (MkPIns (PMov MDY x0 MSY) None 0) tail)))
+        st)
+      (ptw_wave
+        (Cons
+          (MkPIns (PMov MDPins x0 MSY) None 1)
+          (Cons (MkPIns (PMov MDY x0 MSY) None 1) tail))
+        st)))
+  (case-on st PTW
+    ((case MkPTW
+       (x y osr oc pin dir)
+       (steps ((rewrite (hyp MkPTW) lr both true ()) (compute both)) refl)))))
+
+(claim ptw_absorb_b_fin_tail
+  (goal ((tail (List PIns)) (st PTW) (x0 MovOp)) ()
+    (=
+      (ptw_fin
+        (Cons
+          (MkPIns (PMov MDPins x0 MSY) None 1)
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons (MkPIns (PMov MDY x0 MSY) None 0) tail)))
+        st)
+      (ptw_fin
+        (Cons
+          (MkPIns (PMov MDPins x0 MSY) None 1)
+          (Cons (MkPIns (PMov MDY x0 MSY) None 1) tail))
+        st)))
+  (case-on st PTW
+    ((case MkPTW
+       (x y osr oc pin dir)
+       (steps ((rewrite (hyp MkPTW) lr both true ()) (compute both)) refl)))))
+
+(claim ptw_absorb_b_wave_ctx
+  (goal ((prefix (List PIns)) (tail (List PIns)) (st PTW) (x0 MovOp)) ()
+    (=
+      (ptw_wave
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 1)
+            (Cons
+              (MkPIns (PMov MDPins x0 MSY) None 0)
+              (Cons (MkPIns (PMov MDY x0 MSY) None 0) tail))))
+        st)
+      (ptw_wave
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 1)
+            (Cons (MkPIns (PMov MDY x0 MSY) None 1) tail)))
+        st)))
+  (induct prefix
+    ((case Nil
+       (steps
+         ((unfold ptw_plug both)
+          (reduce both)
+          (rewrite (lemma ptw_absorb_b_wave_tail) lr lhs true ()))
+         refl))
+     (case Cons
+       (head rest)
+       (steps ((simp both) (rewrite (hyp ih) lr lhs true ())) refl)))))
+
+(claim ptw_absorb_b_fin_ctx
+  (goal ((prefix (List PIns)) (tail (List PIns)) (st PTW) (x0 MovOp)) ()
+    (=
+      (ptw_fin
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 1)
+            (Cons
+              (MkPIns (PMov MDPins x0 MSY) None 0)
+              (Cons (MkPIns (PMov MDY x0 MSY) None 0) tail))))
+        st)
+      (ptw_fin
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 1)
+            (Cons (MkPIns (PMov MDY x0 MSY) None 1) tail)))
+        st)))
+  (induct prefix
+    ((case Nil
+       (steps
+         ((unfold ptw_plug both)
+          (reduce both)
+          (rewrite (lemma ptw_absorb_b_fin_tail) lr lhs true ()))
+         refl))
+     (case Cons
+       (head rest)
+       (steps ((simp both) (rewrite (hyp ih) lr lhs true ())) refl)))))
+
+(claim ptw_absorb_b_observe
+  (goal ((prefix (List PIns)) (tail (List PIns)) (seeds (List PTW)) (x0 MovOp))
+    ()
+    (=
+      (ptw_observe
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 1)
+            (Cons
+              (MkPIns (PMov MDPins x0 MSY) None 0)
+              (Cons (MkPIns (PMov MDY x0 MSY) None 0) tail))))
+        seeds)
+      (ptw_observe
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 1)
+            (Cons (MkPIns (PMov MDY x0 MSY) None 1) tail)))
+        seeds)))
+  (induct seeds
+    ((case Nil (steps ((simp both)) refl))
+     (case Cons
+       (rs rest)
+       (steps
+         ((unfold ptw_observe both)
+          (reduce both)
+          (unfold ptw_key1 both)
+          (reduce both)
+          (rewrite (lemma ptw_absorb_b_wave_ctx) lr lhs true ())
+          (rewrite (lemma ptw_absorb_b_fin_ctx) lr lhs true ())
+          (rewrite (hyp ih) lr lhs true ()))
+         refl)))))
+
+(claim ptw_absorb_b_spine
+  (goal ((prefix (List PIns)) (tail (List PIns)) (x0 MovOp)) ()
+    (=
+      (search_probe
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 1)
+            (Cons
+              (MkPIns (PMov MDPins x0 MSY) None 0)
+              (Cons (MkPIns (PMov MDY x0 MSY) None 0) tail)))))
+      (search_probe
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 1)
+            (Cons (MkPIns (PMov MDY x0 MSY) None 1) tail))))))
+  (steps
+    ((unfold search_probe both)
+     (rewrite (lemma ptw_absorb_b_observe) lr lhs true ()))
+    refl))
+
+;; --- law C: pins[0] pins[0] y[0]  =>  pins[0] y[1] ---------------------------------
+
+(claim ptw_absorb_c_wave_tail
+  (goal ((tail (List PIns)) (st PTW) (x0 MovOp)) ()
+    (=
+      (ptw_wave
+        (Cons
+          (MkPIns (PMov MDPins x0 MSY) None 0)
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons (MkPIns (PMov MDY x0 MSY) None 0) tail)))
+        st)
+      (ptw_wave
+        (Cons
+          (MkPIns (PMov MDPins x0 MSY) None 0)
+          (Cons (MkPIns (PMov MDY x0 MSY) None 1) tail))
+        st)))
+  (case-on st PTW
+    ((case MkPTW
+       (x y osr oc pin dir)
+       (steps ((rewrite (hyp MkPTW) lr both true ()) (compute both)) refl)))))
+
+(claim ptw_absorb_c_fin_tail
+  (goal ((tail (List PIns)) (st PTW) (x0 MovOp)) ()
+    (=
+      (ptw_fin
+        (Cons
+          (MkPIns (PMov MDPins x0 MSY) None 0)
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons (MkPIns (PMov MDY x0 MSY) None 0) tail)))
+        st)
+      (ptw_fin
+        (Cons
+          (MkPIns (PMov MDPins x0 MSY) None 0)
+          (Cons (MkPIns (PMov MDY x0 MSY) None 1) tail))
+        st)))
+  (case-on st PTW
+    ((case MkPTW
+       (x y osr oc pin dir)
+       (steps ((rewrite (hyp MkPTW) lr both true ()) (compute both)) refl)))))
+
+(claim ptw_absorb_c_wave_ctx
+  (goal ((prefix (List PIns)) (tail (List PIns)) (st PTW) (x0 MovOp)) ()
+    (=
+      (ptw_wave
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons
+              (MkPIns (PMov MDPins x0 MSY) None 0)
+              (Cons (MkPIns (PMov MDY x0 MSY) None 0) tail))))
+        st)
+      (ptw_wave
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons (MkPIns (PMov MDY x0 MSY) None 1) tail)))
+        st)))
+  (induct prefix
+    ((case Nil
+       (steps
+         ((unfold ptw_plug both)
+          (reduce both)
+          (rewrite (lemma ptw_absorb_c_wave_tail) lr lhs true ()))
+         refl))
+     (case Cons
+       (head rest)
+       (steps ((simp both) (rewrite (hyp ih) lr lhs true ())) refl)))))
+
+(claim ptw_absorb_c_fin_ctx
+  (goal ((prefix (List PIns)) (tail (List PIns)) (st PTW) (x0 MovOp)) ()
+    (=
+      (ptw_fin
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons
+              (MkPIns (PMov MDPins x0 MSY) None 0)
+              (Cons (MkPIns (PMov MDY x0 MSY) None 0) tail))))
+        st)
+      (ptw_fin
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons (MkPIns (PMov MDY x0 MSY) None 1) tail)))
+        st)))
+  (induct prefix
+    ((case Nil
+       (steps
+         ((unfold ptw_plug both)
+          (reduce both)
+          (rewrite (lemma ptw_absorb_c_fin_tail) lr lhs true ()))
+         refl))
+     (case Cons
+       (head rest)
+       (steps ((simp both) (rewrite (hyp ih) lr lhs true ())) refl)))))
+
+(claim ptw_absorb_c_observe
+  (goal ((prefix (List PIns)) (tail (List PIns)) (seeds (List PTW)) (x0 MovOp))
+    ()
+    (=
+      (ptw_observe
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons
+              (MkPIns (PMov MDPins x0 MSY) None 0)
+              (Cons (MkPIns (PMov MDY x0 MSY) None 0) tail))))
+        seeds)
+      (ptw_observe
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons (MkPIns (PMov MDY x0 MSY) None 1) tail)))
+        seeds)))
+  (induct seeds
+    ((case Nil (steps ((simp both)) refl))
+     (case Cons
+       (rs rest)
+       (steps
+         ((unfold ptw_observe both)
+          (reduce both)
+          (unfold ptw_key1 both)
+          (reduce both)
+          (rewrite (lemma ptw_absorb_c_wave_ctx) lr lhs true ())
+          (rewrite (lemma ptw_absorb_c_fin_ctx) lr lhs true ())
+          (rewrite (hyp ih) lr lhs true ()))
+         refl)))))
+
+(claim ptw_absorb_c_spine
+  (goal ((prefix (List PIns)) (tail (List PIns)) (x0 MovOp)) ()
+    (=
+      (search_probe
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons
+              (MkPIns (PMov MDPins x0 MSY) None 0)
+              (Cons (MkPIns (PMov MDY x0 MSY) None 0) tail)))))
+      (search_probe
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons (MkPIns (PMov MDY x0 MSY) None 1) tail))))))
+  (steps
+    ((unfold search_probe both)
+     (rewrite (lemma ptw_absorb_c_observe) lr lhs true ()))
+    refl))
+
+;; --- law D: pins[0] pins[0]  =>  pins[1]  (re-drive merge) -------------------------
+;;
+;; The two-instruction core of the family: an immediate same-value re-drive
+;; IS one extra delay cycle.  As a length-2 window this law fires at far
+;; more spine positions than the three-instruction schemas.
+
+(claim ptw_redrive_wave_tail
+  (goal ((tail (List PIns)) (st PTW) (x0 MovOp)) ()
+    (=
+      (ptw_wave
+        (Cons
+          (MkPIns (PMov MDPins x0 MSY) None 0)
+          (Cons (MkPIns (PMov MDPins x0 MSY) None 0) tail))
+        st)
+      (ptw_wave (Cons (MkPIns (PMov MDPins x0 MSY) None 1) tail) st)))
+  (case-on st PTW
+    ((case MkPTW
+       (x y osr oc pin dir)
+       (steps ((rewrite (hyp MkPTW) lr both true ()) (compute both)) refl)))))
+
+(claim ptw_redrive_fin_tail
+  (goal ((tail (List PIns)) (st PTW) (x0 MovOp)) ()
+    (=
+      (ptw_fin
+        (Cons
+          (MkPIns (PMov MDPins x0 MSY) None 0)
+          (Cons (MkPIns (PMov MDPins x0 MSY) None 0) tail))
+        st)
+      (ptw_fin (Cons (MkPIns (PMov MDPins x0 MSY) None 1) tail) st)))
+  (case-on st PTW
+    ((case MkPTW
+       (x y osr oc pin dir)
+       (steps ((rewrite (hyp MkPTW) lr both true ()) (compute both)) refl)))))
+
+(claim ptw_redrive_wave_ctx
+  (goal ((prefix (List PIns)) (tail (List PIns)) (st PTW) (x0 MovOp)) ()
+    (=
+      (ptw_wave
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons (MkPIns (PMov MDPins x0 MSY) None 0) tail)))
+        st)
+      (ptw_wave
+        (ptw_plug prefix (Cons (MkPIns (PMov MDPins x0 MSY) None 1) tail))
+        st)))
+  (induct prefix
+    ((case Nil
+       (steps
+         ((unfold ptw_plug both)
+          (reduce both)
+          (rewrite (lemma ptw_redrive_wave_tail) lr lhs true ()))
+         refl))
+     (case Cons
+       (head rest)
+       (steps ((simp both) (rewrite (hyp ih) lr lhs true ())) refl)))))
+
+(claim ptw_redrive_fin_ctx
+  (goal ((prefix (List PIns)) (tail (List PIns)) (st PTW) (x0 MovOp)) ()
+    (=
+      (ptw_fin
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons (MkPIns (PMov MDPins x0 MSY) None 0) tail)))
+        st)
+      (ptw_fin
+        (ptw_plug prefix (Cons (MkPIns (PMov MDPins x0 MSY) None 1) tail))
+        st)))
+  (induct prefix
+    ((case Nil
+       (steps
+         ((unfold ptw_plug both)
+          (reduce both)
+          (rewrite (lemma ptw_redrive_fin_tail) lr lhs true ()))
+         refl))
+     (case Cons
+       (head rest)
+       (steps ((simp both) (rewrite (hyp ih) lr lhs true ())) refl)))))
+
+(claim ptw_redrive_observe
+  (goal ((prefix (List PIns)) (tail (List PIns)) (seeds (List PTW)) (x0 MovOp))
+    ()
+    (=
+      (ptw_observe
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons (MkPIns (PMov MDPins x0 MSY) None 0) tail)))
+        seeds)
+      (ptw_observe
+        (ptw_plug prefix (Cons (MkPIns (PMov MDPins x0 MSY) None 1) tail))
+        seeds)))
+  (induct seeds
+    ((case Nil (steps ((simp both)) refl))
+     (case Cons
+       (rs rest)
+       (steps
+         ((unfold ptw_observe both)
+          (reduce both)
+          (unfold ptw_key1 both)
+          (reduce both)
+          (rewrite (lemma ptw_redrive_wave_ctx) lr lhs true ())
+          (rewrite (lemma ptw_redrive_fin_ctx) lr lhs true ())
+          (rewrite (hyp ih) lr lhs true ()))
+         refl)))))
+
+(claim ptw_redrive_spine
+  (goal ((prefix (List PIns)) (tail (List PIns)) (x0 MovOp)) ()
+    (=
+      (search_probe
+        (ptw_plug
+          prefix
+          (Cons
+            (MkPIns (PMov MDPins x0 MSY) None 0)
+            (Cons (MkPIns (PMov MDPins x0 MSY) None 0) tail))))
+      (search_probe
+        (ptw_plug prefix (Cons (MkPIns (PMov MDPins x0 MSY) None 1) tail)))))
+  (steps
+    ((unfold search_probe both)
+     (rewrite (lemma ptw_redrive_observe) lr lhs true ()))
+    refl))
+
+;; --- the model connection -----------------------------------------------------------
+;;
+;; The flagship law re-proven against the REAL pio_run/pio_final under the
+;; mining harness (same straight-line config, seeds, and observation key as
+;; pio_transition_mining), plus a ground pin that the projection observer
+;; and the model observer agree on the flagship windows.
+
+(fn ptwm_code ((body (List PIns))) (List PSlot)
+  (measure (struct body))
+  (match body
+    (Nil Nil)
+    ((Cons i rest) (Cons ((:: pio PS) i) (ptwm_code rest)))))
+
+(fn ptwm_cfg ((body (List PIns))) PCfg
+  ((:: pio MkPCfg)
+   (ptwm_code body)
+   31
+   0
+   0
+   0
+   0
+   0
+   0
+   0
+   0
+   0
+   1
+   0
+   1
+   0
+   0
+   32
+   32
+   1
+   1
+   1
+   0
+   0
+   0
+   0
+   4
+   4))
+
+(fn ptwm_seed ((x Int) (y Int) (osr Int) (outl Int)) PSt
+  ((:: pio with_x)
+   x
+   ((:: pio with_y)
+    y
+    ((:: pio with_osr)
+     osr
+     ((:: pio with_osr_cnt)
+      0
+      ((:: pio with_out_l) outl ((:: pio with_dir_l) 1 ((:: pio pst_new)))))))))
+
+(fn ptwm_seeds () (List PSt)
+  (list
+    (ptwm_seed 0 0 22 4294967295)
+    (ptwm_seed 1 4294967295 21 4294967294)
+    (ptwm_seed 1 0 10 4294967294)
+    (ptwm_seed 0 4294967295 30 4294967295)))
+
+(fn ptwm_stim () (List Int) (list 0 0 0 0 0 0 0 0))
+
+(fn ptwm_wave ((obs (List (Pair Int Int)))) (List Int)
+  (measure (struct obs))
+  (match obs
+    (Nil Nil)
+    ((Cons o rest)
+     (match o
+       ((Pair levels dirs) (Cons (band levels 1) (ptwm_wave rest)))))))
+
+(fn ptwm_state_key ((st PSt)) (List Int)
+  (list
+    ((:: pio x_of) st)
+    ((:: pio y_of) st)
+    ((:: pio osr_of) st)
+    ((:: pio osr_cnt_of) st)
+    (band ((:: pio out_l_of) st) 1)
+    (band ((:: pio dir_l_of) st) 1)))
+
+(fn ptwm_key1 ((body (List PIns)) (st PSt)) (List Int)
+  (ptw_app
+    (ptwm_wave ((:: pio pio_run) (ptwm_cfg body) st 0 (ptwm_stim)))
+    (ptwm_state_key ((:: pio pio_final) (ptwm_cfg body) st 0 (ptwm_stim)))))
+
+(fn ptwm_go ((body (List PIns)) (seeds (List PSt))) (List Int)
+  (measure (struct seeds))
+  (match seeds
+    (Nil Nil)
+    ((Cons st rest) (ptw_app (ptwm_key1 body st) (ptwm_go body rest)))))
+
+(fn ptwm_observe ((body (List PIns))) (List Int) (ptwm_go body (ptwm_seeds)))
+
+(fn ptwm_lhs_a ((op MovOp)) (List PIns)
+  (list
+    (MkPIns (PMov MDPins op MSY) None 0)
+    (MkPIns (PMov MDPins op MSY) None 1)
+    (MkPIns (PMov MDY op MSY) None 0)))
+
+(fn ptwm_rhs_a ((op MovOp)) (List PIns)
+  (list (MkPIns (PMov MDPins op MSY) None 1) (MkPIns (PMov MDY op MSY) None 1)))
+
+;; Law A holds on the datasheet-true model at every census seed, for every
+;; MOV operation — the model-side license behind the projection-level spine
+;; theorem (xtw_eval precedent).
+(claim ptw_model_absorb_a
+  (goal ((x0 MovOp)) ()
+    (= (ptwm_observe (ptwm_lhs_a x0)) (ptwm_observe (ptwm_rhs_a x0))))
+  (case-on x0 MovOp
+    ((case MONone
+       (steps ((rewrite (hyp MONone) lr both true ()) (compute both)) refl))
+     (case MOInvert
+       (steps ((rewrite (hyp MOInvert) lr both true ()) (compute both)) refl))
+     (case MOReverse
+       (steps ((rewrite (hyp MOReverse) lr both true ()) (compute both)) refl)))))
+
+;; The projection observer and the model observer agree on the flagship
+;; windows (ground; the full-scope agreement is pinned by replaying the
+;; mining census against this task's projection probe).
+(claim ptw_projection_pin_a
+  (goal () ()
+    (=
+      (list
+        (ptw_observe (ptwm_lhs_a MOInvert) (ptw_seeds))
+        (ptw_observe (ptwm_rhs_a MOInvert) (ptw_seeds))
+        (ptw_observe (ptwm_lhs_a MONone) (ptw_seeds))
+        (ptw_observe (ptwm_rhs_a MONone) (ptw_seeds)))
+      (list
+        (ptwm_observe (ptwm_lhs_a MOInvert))
+        (ptwm_observe (ptwm_rhs_a MOInvert))
+        (ptwm_observe (ptwm_lhs_a MONone))
+        (ptwm_observe (ptwm_rhs_a MONone)))))
+  (steps ((compute both)) refl))
+
+;; --- the checked hooks ---------------------------------------------------------------
+
+(fn search_observer_profile () (List Symbol) Nil)
+
+(fn search_spine_context () Symbol (quote ptw_plug))
+
+(fn search_spine_profile () (List Symbol)
+  (list
+    (quote ptw_redrive_spine)
+    (quote ptw_absorb_a_spine)
+    (quote ptw_absorb_b_spine)
+    (quote ptw_absorb_c_spine)))
