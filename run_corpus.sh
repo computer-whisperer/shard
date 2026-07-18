@@ -454,6 +454,17 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
+# ---- long-tier engine pins (CORPUS_LONG=1) ---------------------------------
+# Every section from here to the matching `fi` is a search/PIO ENGINE RUN
+# (bin/shard_eval executing censuses, hunters, superposition and mining
+# tasks) — seconds-to-minutes each, ~45-90 min of serial wall clock in
+# total (measured 2026-07-17: the block grew the CI corpus from ~35 min
+# to 80+). The default corpus skips them; CORPUS_LONG=1 includes them
+# (the corpus-long CI job, or an occasional local run). New search-family
+# run pins belong INSIDE this guard; their proof artifacts stay in
+# TARGETS above as ordinary check targets regardless.
+if [ "${CORPUS_LONG:-0}" = "1" ]; then
+
 # Typed model-fragment pin: a task supplies only imp signature/grammar data,
 # a combined wf+observation probe, a target vector, and one certified witness.
 # The generic engine builds the grammar, rank/unrank-checks all 52 members,
@@ -877,6 +888,11 @@ if [ -x bin/shard_eval ]; then
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
+
+else
+  echo "=== long-tier engine pins: SKIPPED (CORPUS_LONG=0) ==="
+fi
+# ---- end long-tier engine pins ----------------------------------------------
 
 # Run-mode qualified-dispatch pin (the enc_instr bug): two co-loaded modules
 # define the same-named internal helper; each pick must call its OWN. Also
