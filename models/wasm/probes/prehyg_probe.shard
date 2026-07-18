@@ -1,0 +1,370 @@
+;;; models/wasm/probes/prehyg_probe.shard — the PRE-HYGIENE probe (docs/LOWERING.md
+;;; ratification queue, last item). Hand-plays the two discharge templates
+;;; the emitter is about to mechanize:
+;;;
+;;;   A. READ-BOUND AUTO-DISCHARGE (mem fragment): an arith node linear in
+;;;      byte reads needs NO wrap premises — every read is a byte
+;;;      (get_lo/get_hi), and interval arithmetic realized as a Farkas
+;;;      multiplier list proves the node's bounds. The multipliers are
+;;;      COMPUTED, not searched: per read, the lower-bound cert multiplies
+;;;      the read's ge-0 premise by max(c,0) and its lt-256 premise by
+;;;      max(-c,0); the upper-bound cert swaps them. pb_bump_thm is
+;;;      lowered_mg_bump minus its two derivable premises.
+;;;
+;;;   B. CONDITION-RELATIVE PREMISES (pure fragment, the P2c caveat): an
+;;;      arm-local node's range premise quantifies only over executions
+;;;      that REACH the arm — the premise is if-wrapped in the arm's
+;;;      condition path and STRIPPED inside the arm (premise rl-rewrite,
+;;;      hyp rewrites, compute); a side derivable from a path condition
+;;;      (the abs pattern) is discharged SILENTLY by a generated
+;;;      single-condition Farkas helper and emits no premise at all.
+;;;      pd_dec_thm is the caveat's own example (if (lt 0 x) (- x 1) 0),
+;;;      previously outside the honest contract.
+;;;
+;;;   C. the nested same-polarity path: positional (hyp K) citations
+;;;      (innermost = 0) reach shadowed outer case hyps; the silent helper
+;;;      derives from the OUTER condition.
+;;;
+;;;   D. the link-side address shapes: a read-derived address's bound pair
+;;;      via the same helpers; a ground address's pair by compute.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")
+(import "../wasm.shard")
+
+(use (:: std mem *))
+(use (:: models wasm wasm *))
+
+;; ---- A. read-bound auto-discharge (the portable bump twin) -----------------
+
+(fn pb_bump ((m Mem) (x Int)) Mem (mem_set m x (+ (mem_get m x) 1)))
+
+;; interval-Farkas helpers, multipliers computed from the node's read
+;; coefficients (here (+ r0 1): c0 = 1)
+(claim pw_bump_lo
+  (goal ((r0 Int)) ((= (le 0 r0) True) (= (lt r0 256) True))
+    (= (le 0 (+ r0 1)) True))
+  (by arith (list 1 1 0)))
+
+(claim pw_bump_hi
+  (goal ((r0 Int)) ((= (le 0 r0) True) (= (lt r0 256) True))
+    (= (lt (+ r0 1) 4294967296) True))
+  (by arith (list 1 0 1)))
+
+;; lowered_mg_bump minus premises 4/5 (the derivable read bounds); the
+;; wrap event's facts come from haves citing the helpers, their read
+;; premises from get_lo/get_hi
+(claim pb_bump_thm
+  (goal
+    ((x0 Int)
+     (m0 Mem)
+     (m WModule)
+     (f0 Func)
+     (f1 Func)
+     (restm (List Func))
+     (c Nat))
+    ((=
+       (funcs_of m)
+       (Cons
+         f0
+         (Cons
+           f1
+           (Cons
+             (MkFunc
+               1
+               0
+               (list
+                 (LocalGet 0)
+                 (LocalGet 0)
+                 (Call 0)
+                 (I32Const 1)
+                 (I32Bin BAdd)
+                 (Call 1)))
+             restm))))
+     (= (params_of f0) 1)
+     (= (params_of f1) 2)
+     (=
+       (call_fn_mem (S^ 44 c) m 0 (Cons x0 Nil) m0)
+       (Some (Pair (mem_get m0 x0) m0)))
+     (=
+       (call_fn_mem (S^ 41 c) m 1 (Cons x0 (Cons (+ (mem_get m0 x0) 1) Nil)) m0)
+       (Some (Pair (+ (mem_get m0 x0) 1) (mem_set m0 x0 (+ (mem_get m0 x0) 1))))))
+    (=
+      (call_fn_mem (S^ 49 c) m 2 (list x0) m0)
+      (Some (Pair (+ (mem_get m0 x0) 1) (pb_bump m0 x0)))))
+  (chain
+    (steps
+      ((compute lhs (stop eval_call funcs_of))
+       (rewrite (premise 0) lr lhs true ())
+       (unfold pb_bump rhs)
+       (reduce rhs)))
+    (steps ((compute lhs (stop eval_call))))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f f0)
+       (inst popped (Cons x0 Nil))
+       (inst rest (Cons x0 Nil))
+       (inst args (Cons x0 Nil))
+       (inst v (mem_get m0 x0))
+       (inst mem2 m0))
+      ((steps ((rewrite (premise 0) lr lhs true ()) (compute both)) refl)
+       (steps ((rewrite (premise 1) lr lhs true ()) (compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((rewrite (premise 1) lr lhs true ()) (compute both)) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    (steps ((compute lhs (stop eval_call))))
+    (have b0 (= (le 0 (+ (mem_get m0 x0) 1)) True)
+      (rewrite-with
+        (lemma pw_bump_lo)
+        lr
+        lhs
+        ((inst r0 (mem_get m0 x0)))
+        ((steps ((rewrite (lemma get_lo) lr lhs true ())) refl)
+         (steps ((rewrite (lemma get_hi) lr lhs true ())) refl))
+        refl))
+    (have b1 (= (lt (+ (mem_get m0 x0) 1) 4294967296) True)
+      (rewrite-with
+        (lemma pw_bump_hi)
+        lr
+        lhs
+        ((inst r0 (mem_get m0 x0)))
+        ((steps ((rewrite (lemma get_lo) lr lhs true ())) refl)
+         (steps ((rewrite (lemma get_hi) lr lhs true ())) refl))
+        refl))
+    (have w2 (= (mod (+ (mem_get m0 x0) 1) 4294967296) (+ (mem_get m0 x0) 1))
+      (rewrite-with
+        (lemma wrap32_id)
+        lr
+        lhs
+        ((inst x (+ (mem_get m0 x0) 1)))
+        ((steps ((rewrite (premise b0) lr lhs true ())) refl)
+         (steps ((rewrite (premise b1) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise w2) lr lhs true ())))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f f1)
+       (inst popped (Cons (+ (mem_get m0 x0) 1) (Cons x0 Nil)))
+       (inst rest Nil)
+       (inst args (Cons x0 (Cons (+ (mem_get m0 x0) 1) Nil)))
+       (inst v (+ (mem_get m0 x0) 1))
+       (inst mem2 (mem_set m0 x0 (+ (mem_get m0 x0) 1))))
+      ((steps ((rewrite (premise 0) lr lhs true ()) (compute both)) refl)
+       (steps ((rewrite (premise 2) lr lhs true ()) (compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((rewrite (premise 2) lr lhs true ()) (compute both)) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    refl))
+
+;; ---- B. condition-relative premises (the P2c caveat's example) -------------
+
+(fn pd_dec ((x Int)) Int (if (lt 0 x) (- x 1) 0))
+
+;; the silent side: 0 <= x-1 from the arm's own condition (single-cond
+;; Farkas, unit multipliers)
+(claim pd_cb0
+  (goal ((x0 Int)) ((= (lt 0 x0) True)) (= (le 0 (- x0 1)) True))
+  (by arith (list 1 1)))
+
+(claim pd_dec_thm
+  (goal ((x0 Int) (c Nat) (restfs (List Func)))
+    ((= (if (lt 0 x0) (lt (- x0 1) 4294967296) True) True))
+    (=
+      (call_fn
+        (S^ 31 c)
+        (MkWModule
+          (Cons
+            (MkFunc
+              1
+              1
+              (list
+                (Block
+                  (list
+                    (Block
+                      (list
+                        (I32Const 0)
+                        (LocalGet 0)
+                        (I32Bin BLtU)
+                        (BrIf 0)
+                        (I32Const 0)
+                        (LocalSet 1)
+                        (Br 1)))
+                    (LocalGet 0)
+                    (I32Const 1)
+                    (I32Bin BSub)
+                    (LocalSet 1)))
+                (LocalGet 1)))
+            restfs)
+          0)
+        0
+        (list x0))
+      (Some (pd_dec x0))))
+  (chain
+    (steps ((compute lhs) (unfold pd_dec rhs) (reduce rhs)))
+    (case-on (lt 0 x0) Bool
+      ((case True
+         (chain
+           (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+           (have p0 (= (lt (- x0 1) 4294967296) True)
+             (chain
+               (steps
+                 ((rewrite (premise 0) rl rhs true ())
+                  (rewrite (hyp 0) lr rhs true ())
+                  (compute rhs)))
+               refl))
+           (have d1 (= (le 0 (- x0 1)) True)
+             (rewrite-with
+               (lemma pd_cb0)
+               lr
+               lhs
+               ((inst x0 x0))
+               ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+               refl))
+           (have w2 (= (mod (- x0 1) 4294967296) (- x0 1))
+             (rewrite-with
+               (lemma wrap32_id)
+               lr
+               lhs
+               ((inst x (- x0 1)))
+               ((steps ((rewrite (premise d1) lr lhs true ())) refl)
+                (steps ((rewrite (premise p0) lr lhs true ())) refl))
+               refl))
+           (steps ((rewrite (premise w2) lr lhs true ())))
+           refl))
+       (case False
+         (chain
+           (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+           refl))))))
+
+;; ---- C. nested same-polarity path: positional hyps + outer-cond helper -----
+
+(fn pd_clamp ((x Int)) Int (if (lt x 10) 0 (if (lt x 100) (- x 10) 1)))
+
+;; silent side from the OUTER (False-polarity) condition: x >= 10
+(claim pd_cb1
+  (goal ((x0 Int)) ((= (lt x0 10) False)) (= (le 0 (- x0 10)) True))
+  (by arith (list 1 1)))
+
+(claim pd_clamp_thm
+  (goal ((x0 Int) (c Nat) (restfs (List Func)))
+    ((=
+       (if (lt x0 10) True (if (lt x0 100) (lt (- x0 10) 4294967296) True))
+       True))
+    (=
+      (call_fn
+        (S^ 53 c)
+        (MkWModule
+          (Cons
+            (MkFunc
+              1
+              2
+              (list
+                (Block
+                  (list
+                    (Block
+                      (list
+                        (LocalGet 0)
+                        (I32Const 10)
+                        (I32Bin BLtU)
+                        (BrIf 0)
+                        (Block
+                          (list
+                            (Block
+                              (list
+                                (LocalGet 0)
+                                (I32Const 100)
+                                (I32Bin BLtU)
+                                (BrIf 0)
+                                (I32Const 1)
+                                (LocalSet 2)
+                                (Br 1)))
+                            (LocalGet 0)
+                            (I32Const 10)
+                            (I32Bin BSub)
+                            (LocalSet 2)))
+                        (LocalGet 2)
+                        (LocalSet 1)
+                        (Br 1)))
+                    (I32Const 0)
+                    (LocalSet 1)))
+                (LocalGet 1)))
+            restfs)
+          0)
+        0
+        (list x0))
+      (Some (pd_clamp x0))))
+  (chain
+    (steps ((compute lhs) (unfold pd_clamp rhs) (reduce rhs)))
+    (case-on (lt x0 10) Bool
+      ((case True
+         (chain
+           (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+           refl))
+       (case False
+         (chain
+           (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+           (case-on (lt x0 100) Bool
+             ((case True
+                (chain
+                  (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+                  (have p0 (= (lt (- x0 10) 4294967296) True)
+                    (chain
+                      (steps
+                        ((rewrite (premise 0) rl rhs true ())
+                         (rewrite (hyp 1) lr rhs true ())
+                         (rewrite (hyp 0) lr rhs true ())
+                         (compute rhs)))
+                      refl))
+                  (have d1 (= (le 0 (- x0 10)) True)
+                    (rewrite-with
+                      (lemma pd_cb1)
+                      lr
+                      lhs
+                      ((inst x0 x0))
+                      ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                      refl))
+                  (have w2 (= (mod (- x0 10) 4294967296) (- x0 10))
+                    (rewrite-with
+                      (lemma wrap32_id)
+                      lr
+                      lhs
+                      ((inst x (- x0 10)))
+                      ((steps ((rewrite (premise d1) lr lhs true ())) refl)
+                       (steps ((rewrite (premise p0) lr lhs true ())) refl))
+                      refl))
+                  (steps ((rewrite (premise w2) lr lhs true ())))
+                  refl))
+              (case False
+                (chain
+                  (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+                  refl))))))))))
+
+;; ---- D. the link-side address-bound shapes ----------------------------------
+
+;; a read-derived address's upper pair member: read + 1 <= 65536
+(claim pa_hi
+  (goal ((r0 Int)) ((= (le 0 r0) True) (= (lt r0 256) True))
+    (= (le (+ r0 1) 65536) True))
+  (by arith (list 1 0 1)))
+
+;; the in-context discharge (what link_beh's sub-proofs will emit)
+(claim pa_test
+  (goal ((m0 Mem) (p0 Int)) () (= (le (+ (mem_get m0 p0) 1) 65536) True))
+  (rewrite-with
+    (lemma pa_hi)
+    lr
+    lhs
+    ((inst r0 (mem_get m0 p0)))
+    ((steps ((rewrite (lemma get_lo) lr lhs true ())) refl)
+     (steps ((rewrite (lemma get_hi) lr lhs true ())) refl))
+    refl))
+
+;; a ground address's pair discharges by compute alone
+(claim pa_ground
+  (goal ((m0 Mem)) () (= (le (+ 0 1) 65536) True))
+  (steps ((compute both)) refl))

@@ -1,0 +1,325 @@
+;;; intloop_probe.shard — the INT-ACCUMULATOR LOOP RETURN probe
+;;; (docs/LOWERING.md §7 item 7, fragment growth). Hand-plays the §6f/§6h
+;;; loop template extended to loops whose Z arm returns an ACCUMULATOR
+;;; (Int return) instead of the memory: sum-of-bytes over a range — the
+;;; read-only loop with a data-dependent accumulator update
+;;; (+ acc (mem_get m p)).
+;;;
+;;; Template deltas over the Mem-return loop (each line by mechanical
+;;; rule, the emitter's future output):
+;;;   1. The function epilogue is (LocalGet R) — R = the return accum's
+;;;      local — instead of (I32Const 0); the theorem's scalar result is
+;;;      the SPEC call, memory result is m0 (no store).
+;;;   2. The worker's final-locals entry for the return accum carries the
+;;;      SPEC-CALL spelling (ip_sum m0 x0 x1 k) — data-dependent accums
+;;;      have no lg_adv closed form; the IH and the rhs-opened spec meet
+;;;      at exactly this spelling.
+;;;   3. A data-dependent update needs a K-SCALED WRAP INVARIANT premise
+;;;      pair: (le 0 acc) and (le (+ acc (* 256 (int_of_nat k)))
+;;;      4294967296) — self-sustaining through the induction since the
+;;;      accum grows by a byte (< 256) while k drops by one.
+;;;   4. Three new template-constant helper certs (farkas multipliers
+;;;      COMPUTED, never searched — the §6j discipline): ig_sum_lo /
+;;;      ig_sum_32 (the wrap32_id bounds for the machine BAdd) /
+;;;      ig_sum_shift (the invariant step to the IH). Byte bounds come
+;;;      from std/mem's get_lo/get_hi.
+;;;   5. Machine update ORDER: the return accum's update reads other
+;;;      accums' OLD values, so it is emitted FIRST, before the address
+;;;      accums advance (spec updates are simultaneous; the machine's
+;;;      are sequential).
+;;;
+;;; On success these helpers graduate to models/wasm/loopkit.shard as
+;;; lg_sum_lo / lg_sum_32 / lg_sum_shift and the emitter's loop fragment
+;;; learns the Int-return shape.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")
+(import "../../../std/nat.shard")
+(import "../wasm.shard")
+(import "../loopkit.shard")
+(use (:: std mem *))
+(use (:: std nat *))
+(use (:: models wasm wasm *))
+(use (:: models wasm loopkit *))
+
+;; the source article: sum of k bytes starting at p, accumulated onto acc
+(fn ip_sum ((m Mem) (p Int) (acc Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z acc)
+    ((S k2) (ip_sum m (+ p 1) (+ acc (mem_get m p)) k2))))
+
+;; the machine body: guard / acc += mem[p] / p += 1 / k -= 1 / loop
+(fn ip_sum_body () (List Instr)
+  (list
+    (LocalGet 2)
+    (I32Eqz)
+    (BrIf 1)
+    (LocalGet 1)
+    (LocalGet 0)
+    (I32Load8U)
+    (I32Bin BAdd)
+    (LocalSet 1)
+    (LocalGet 0)
+    (I32Const 1)
+    (I32Bin BAdd)
+    (LocalSet 0)
+    (LocalGet 2)
+    (I32Const 1)
+    (I32Bin BSub)
+    (LocalSet 2)
+    (Br 0)))
+
+(fn ip_sum_func () Func
+  (MkFunc 3 0 (list (Block (list (Loop (ip_sum_body)))) (LocalGet 1))))
+
+;; --- the sum-invariant helper certs (template constants) --------------------
+
+;; accumulator stays nonneg: 0 <= a, 0 <= b  |-  0 <= a + b.
+(claim ig_sum_lo
+  (goal ((a Int) (b Int)) ((= (le 0 a) True) (= (le 0 b) True))
+    (= (le 0 (+ a b)) True))
+  (by arith (list 1 1 1)))
+
+;; the machine BAdd never wraps: a + 256*(S c) <= 2^32, b < 256  |-  a + b < 2^32.
+(claim ig_sum_32
+  (goal ((a Int) (b Int) (c Nat))
+    ((= (le (+ a (* 256 (int_of_nat (S c)))) 4294967296) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c)))
+     (= (lt b 256) True)
+     (= (le 0 (int_of_nat c)) True))
+    (= (lt (+ a b) 4294967296) True))
+  (by arith (list 1 1 256 1 256)))
+
+;; invariant step to the IH: a + 256*(S c) <= 2^32, b < 256  |-  (a+b) + 256*c <= 2^32.
+(claim ig_sum_shift
+  (goal ((a Int) (b Int) (c Nat))
+    ((= (le (+ a (* 256 (int_of_nat (S c)))) 4294967296) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c)))
+     (= (lt b 256) True))
+    (= (le (+ (+ a b) (* 256 (int_of_nat c))) 4294967296) True))
+  (by arith (list 1 1 256 1)))
+
+;; --- the worker induction ----------------------------------------------------
+
+(claim igw_ip_sum
+  (goal
+    ((x0 Int)
+     (x1 Int)
+     (st (List Int))
+     (m0 Mem)
+     (c Nat)
+     (k Nat)
+     (restfs (List Func)))
+    ((= (le 0 x0) True)
+     (= (le 0 x1) True)
+     (= (le (+ x0 (int_of_nat k)) 65536) True)
+     (= (le (+ x1 (* 256 (int_of_nat k))) 4294967296) True))
+    (=
+      (eval_loop
+        (S^ 21 (lg_fuel k c))
+        (MkWModule
+          (Cons
+            (MkFunc
+              3
+              0
+              (list (Block (list (Loop (inline ip_sum_body)))) (LocalGet 1)))
+            restfs)
+          65536)
+        (inline ip_sum_body)
+        (list x0 x1 (int_of_nat k))
+        st
+        m0)
+      (Some (OBr 0 st (list (lg_adv x0 k) (ip_sum m0 x0 x1 k) 0) m0))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((unfold lg_fuel lhs)
+            (reduce lhs)
+            (unfold eval_loop lhs)
+            (rewrite (lemma int_of_nat_succ) lr lhs true ())
+            (compute lhs (stop eval_loop lg_fuel))))
+         (rewrite-with
+           (lemma lg_ne)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps
+           ((compute lhs (stop eval_loop lg_fuel))
+            (rewrite (premise 0) lr lhs true ())
+            (compute lhs (stop eval_loop lg_fuel))))
+         (rewrite-with
+           (lemma lg_a1_ms)
+           lr
+           lhs
+           ((inst c k2))
+           ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+            (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps ((compute lhs (stop eval_loop lg_fuel))))
+         (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2))
+           (rewrite-with (lemma lg_sub) lr lhs () () refl))
+         (steps ((rewrite (premise hsub) lr lhs true ())))
+         (have hwk (= (mod (int_of_nat k2) 4294967296) (int_of_nat k2))
+           (rewrite-with
+             (lemma wrap32_id)
+             lr
+             lhs
+             ((inst x (int_of_nat k2)))
+             ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)
+              (rewrite-with
+                (lemma lg_kM)
+                lr
+                lhs
+                ((inst a x0) (inst c k2))
+                ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+                 (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+                 (steps ((rewrite (premise 0) lr lhs true ())) refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hwk) lr lhs true ())))
+         (have hw0 (= (mod (+ x0 1) 4294967296) (+ x0 1))
+           (rewrite-with
+             (lemma wrap32_id)
+             lr
+             lhs
+             ((inst x (+ x0 1)))
+             ((rewrite-with
+                (lemma lg_lo1)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                refl)
+              (rewrite-with
+                (lemma lg_32)
+                lr
+                lhs
+                ()
+                ((rewrite-with
+                   (lemma lg_a1_ms)
+                   lr
+                   lhs
+                   ((inst c k2))
+                   ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+                    (steps
+                      ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                      refl)
+                    (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+                   refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hw0) lr lhs true ())))
+         (have hwa
+           (=
+             (mod (+ x1 (mem_get m0 x0)) 4294967296)
+             (+ x1 (mem_get m0 x0)))
+           (rewrite-with
+             (lemma wrap32_id)
+             lr
+             lhs
+             ((inst x (+ x1 (mem_get m0 x0))))
+             ((rewrite-with
+                (lemma ig_sum_lo)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                 (rewrite-with (lemma get_lo) lr lhs () () refl))
+                refl)
+              (rewrite-with
+                (lemma ig_sum_32)
+                lr
+                lhs
+                ((inst c k2))
+                ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+                 (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+                 (rewrite-with (lemma get_hi) lr lhs () () refl)
+                 (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hwa) lr lhs true ())))
+         (steps ((unfold ip_sum rhs) (unfold lg_adv rhs) (reduce rhs)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma lg_lo1)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma ig_sum_lo)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+               (rewrite-with (lemma get_lo) lr lhs () () refl))
+              refl)
+            (rewrite-with
+              (lemma lg_shift)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma ig_sum_shift)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+               (rewrite-with (lemma get_hi) lr lhs () () refl))
+              refl)))
+         (steps ((compute both)))
+         refl)))))
+
+;; --- the lowered theorem ------------------------------------------------------
+
+(claim lowered_ip_sum
+  (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List Func)))
+    ((= (le 0 x0) True)
+     (= (le 0 x1) True)
+     (= (le (+ x0 (int_of_nat k)) 65536) True)
+     (= (le (+ x1 (* 256 (int_of_nat k))) 4294967296) True))
+    (=
+      (call_fn_mem
+        (S^ 25 (lg_fuel k c))
+        (MkWModule
+          (Cons
+            (MkFunc
+              3
+              0
+              (list (Block (list (Loop (inline ip_sum_body)))) (LocalGet 1)))
+            restfs)
+          65536)
+        0
+        (list x0 x1 (int_of_nat k))
+        m0)
+      (Some (Pair (ip_sum m0 x0 x1 k) m0))))
+  (chain
+    (steps ((compute lhs (stop eval_loop lg_fuel))))
+    (rewrite-with
+      (lemma igw_ip_sum)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    (steps ((compute both)))
+    refl))

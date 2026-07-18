@@ -1,0 +1,132 @@
+;;; tools/lowbuild/fixtures/x86loopcall_src.build.shard — the BUILD ENTRY for the x86_64
+;;; CALLS-IN-LOOPS set (docs/X86.md §18) under the re-founded charter
+;;; (docs/BUILD.md §4/§5, rung 2): content only. ARTIFACT bindings, plan
+;;; assembly, and wire are DERIVED (tools/lowbuild pinlib); the manifest
+;;; gate verifies the derived index bindings against the cert file read
+;;; raw.
+;;;
+;;;     (fn build_mods ((t Target)) (List PinMod))   — the standard symbol
+;;;
+;;; Each loop ships as a [get, set, put, loop] IMAGE with the loop as
+;;; the ENTRY (enc_image entry=3); the callee also ships standalone as
+;;; a [get, set, put] image (entry 2). Function literals come from the
+;;; GENERATED cert file; the cert<->binary tie is the BYTETIE gate.
+;;; Vectors are wire export f0 with XMEMCASE readback windows (stores;
+;;; the harness data page is zeroed, DATA_BASE = 0x40000000); the cert
+;;; premise domain is [0, 65536), the shipped binary range-agnostic.
+;;;
+;;; RUN IT:
+;;;   bin/shard_eval run tools/lowbuild/lowbuild.shard pinlib tools/lowbuild/fixtures/x86loopcall_src.build.shard x86
+
+(import "../../../kernel/stdlib.shard")
+(import "x86loopcall_src.shard")
+(use (:: tools lowbuild fixtures x86loopcall_src *))
+(import "x86loopcall_out.shard")
+(use (:: tools lowbuild fixtures x86loopcall_out xg_mget_f))
+(use (:: tools lowbuild fixtures x86loopcall_out xg_mset_f))
+(use (:: tools lowbuild fixtures x86loopcall_out xgf_xw_put))
+(use (:: tools lowbuild fixtures x86loopcall_out xw_fill_body))
+(use (:: tools lowbuild fixtures x86loopcall_out xw_wipe_body))
+(import "../../../std/mem")
+(use (:: std mem *))
+(import "../../../std/nat.shard")
+(use (:: std nat *))
+(import "../../../models/x86/x86.shard")
+(use (:: models x86 x86 *))
+(import "../../../models/x86/encode.shard")
+(use (:: models x86 encode enc_image))
+(use (:: models x86 encode eapp))
+(import "../../../meta/plan")
+(use (:: meta plan *))
+(import "../../../meta/build")
+(use (:: meta build *))
+
+;; Nat of a small machine count
+(fn xnat_go ((i Int) (acc Nat)) Nat
+  (measure i (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt i 1) acc (xnat_go (- i 1) (S acc))))
+
+(fn xnat ((i Int)) Nat (xnat_go i Z))
+
+;; n bytes read out of a spec-side memory at address a
+(fn xdump ((a Int) (n Nat) (m Mem)) (List Int)
+  (measure (struct n))
+  (match n
+    (Z Nil)
+    ((S n2) (Cons (mem_get m a) (xdump (+ a 1) n2 m)))))
+
+;; the [get, set, put] image, put as entry (index 2)
+(fn imgp () (List Int)
+  (enc_image (Cons (xg_mget_f) (Cons (xg_mset_f) (Cons (xgf_xw_put) Nil))) 2))
+
+;; a [get, set, put, loop] image, loop as entry (index 3)
+(fn imgl ((body (List XInstr))) (List Int)
+  (enc_image
+    (Cons
+      (xg_mget_f)
+      (Cons
+        (xg_mset_f)
+        (Cons
+          (xgf_xw_put)
+          (Cons (MkXFunc 3 (list (XBlock (list (XLoop body))))) Nil))))
+    3))
+
+;; --- the build entry -------------------------------------------------------------
+
+;; a store vector: readback window at addr
+(fn svec ((args (List Int)) (addr Int) (n Int) (mf Mem)) PVec
+  (PXV 0 args addr 0 (xdump addr (xnat n) mf)))
+
+(fn pmod
+  ((nm (List Int))
+   (cert (List Int))
+   (idx Int)
+   (bytes (List Int))
+   (vs (List PVec)))
+  PinMod
+  (MkPinMod nm bytes "tools/lowbuild/fixtures/x86loopcall_out.shard" idx "" (list cert) vs))
+
+;; DATA_BASE = 0x40000000
+(fn dbase () Int 1073741824)
+
+(fn build_mods ((t Target)) (List PinMod)
+  (list
+    (pmod
+      "xw_put"
+      "lowered_xw_put"
+      2
+      (imgp)
+      (list
+        (svec (list (dbase) 200) (dbase) 2 (xw_put (mem_empty) (dbase) 200))))
+    (pmod
+      "xw_fill"
+      "lowered_xw_fill"
+      3
+      (imgl (xw_fill_body))
+      (list
+        (svec
+          (list (dbase) 65 3)
+          (dbase)
+          4
+          (xw_fill (mem_empty) (dbase) 65 (xnat 3)))
+        (svec
+          (list (+ (dbase) 8) 255 1)
+          (+ (dbase) 7)
+          3
+          (xw_fill (mem_empty) (+ (dbase) 8) 255 (xnat 1)))))
+    (pmod
+      "xw_wipe"
+      "lowered_xw_wipe"
+      3
+      (imgl (xw_wipe_body))
+      (list
+        (svec
+          (list (dbase) 7 0)
+          (dbase)
+          2
+          (xw_wipe (mem_empty) (dbase) 7 (xnat 0)))
+        (svec
+          (list (+ (dbase) 16) 9 2)
+          (+ (dbase) 16)
+          3
+          (xw_wipe (mem_empty) (+ (dbase) 16) 9 (xnat 2)))))))

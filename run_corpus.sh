@@ -114,8 +114,8 @@ TARGETS=(
   pins/proof/measure_import_synth.shard
   pins/proof/measure_lex_demo.shard
   examples/io/cat_loop.shard
-  examples/invoke_fixture.shard
-  examples/invoke_probe.shard
+  tools/invoke/invoke_fixture.shard
+  tools/invoke/invoke_probe.shard
   pins/proof/measure_tree_demo.shard
   pins/proof/nested_measure.shard
   examples/mem_reverse.shard
@@ -140,7 +140,7 @@ TARGETS=(
   tools/impgen/fixtures/imp_mixed.shard
   tools/impgen/fixtures/impgen_wasm_mixed_out.shard
   tools/impgen/fixtures/impgen_x86_mixed_out.shard
-  examples/iwg_probe.shard
+  tools/impgen/blueprints/iwg_probe.shard
   tools/impgen/blueprints/sqw_probe.shard
   tools/impgen/blueprints/sqx_probe.shard
   tools/impgen/blueprints/sqmw_probe.shard
@@ -168,7 +168,7 @@ TARGETS=(
   models/wasm/diff/wasm_diff_run.shard
   models/wasm/probes/wasm_rev.shard
   models/wasm/probes/wasm_copy.shard
-  examples/lowered_form.shard
+  models/wasm/probes/lowered_form.shard
   pins/lang/w64_probe.shard
   models/x86/x86.shard
   models/x86/encode.shard
@@ -192,50 +192,50 @@ TARGETS=(
   examples/sha256sum_src.shard
   examples/sha256sum_x86_out.shard
   examples/sha256sum_elf.shard
-  examples/stdin_echo_probe.shard
+  models/x86/probes/stdin_echo_probe.shard
   examples/addw_x86_out.shard
   models/x86/probes/xitoa_probe.shard
-  examples/x86div_src.shard
-  examples/x86div_out.shard
-  examples/x86itoa_src.shard
-  examples/x86itoa_out.shard
+  tools/lowbuild/fixtures/x86div_src.shard
+  tools/lowbuild/fixtures/x86div_out.shard
+  tools/lowbuild/fixtures/x86itoa_src.shard
+  tools/lowbuild/fixtures/x86itoa_out.shard
   models/x86/probes/xbinadd_probe.shard
   examples/add_src.shard
   examples/add_x86_out.shard
   models/x86/probes/xbinsum_probe.shard
   models/x86/probes/xid_probe.shard
-  examples/bytesum_src.shard
-  examples/bytesum_x86_out.shard
-  examples/libmod_probe.shard
-  examples/lib_form.shard
-  examples/lib_form_rejects.shard
-  examples/purelib_src.shard
-  examples/purelib_out.shard
+  tools/lowbuild/fixtures/bytesum_src.shard
+  tools/lowbuild/fixtures/bytesum_x86_out.shard
+  models/wasm/probes/libmod_probe.shard
+  tools/lowcheck/fixtures/lib_form.shard
+  tools/lowcheck/fixtures/lib_form_rejects.shard
+  tools/lowbuild/fixtures/purelib_src.shard
+  tools/lowbuild/fixtures/purelib_out.shard
   examples/build_products.shard
   tools/build/build.shard
-  examples/purelib_x86_out.shard
-  examples/arglen_src.shard
-  examples/arglen_x86_out.shard
-  examples/echoarg_src.shard
-  examples/echoarg_x86_out.shard
+  tools/lowbuild/fixtures/purelib_x86_out.shard
+  tools/lowbuild/fixtures/arglen_src.shard
+  tools/lowbuild/fixtures/arglen_x86_out.shard
+  tools/lowbuild/fixtures/echoarg_src.shard
+  tools/lowbuild/fixtures/echoarg_x86_out.shard
   models/riscv/riscv.shard
   models/riscv/probes/riscv_smoke.shard
   models/riscv/encode.shard
   models/riscv/diff/riscv_diff_run.shard
   models/riscv/loopkit.shard
   models/riscv/probes/riscv_pieces.shard
-  examples/upcase_src.shard
-  examples/upcase_x86_out.shard
-  examples/parse_src.shard
-  examples/parse_x86_out.shard
+  tools/lowbuild/fixtures/upcase_src.shard
+  tools/lowbuild/fixtures/upcase_x86_out.shard
+  tools/lowbuild/fixtures/parse_src.shard
+  tools/lowbuild/fixtures/parse_x86_out.shard
   pins/trust/bin_entry_rejects.shard
   models/x86/diff/x86_diff_run.shard
-  examples/rep_probe.shard
-  examples/lowfrag_probe.shard
-  examples/divfrag_probe.shard
-  examples/bitfrag_probe.shard
-  examples/wordfrag_probe.shard
-  examples/lowcheck_rejects.shard
+  models/wasm/probes/rep_probe.shard
+  models/wasm/probes/lowfrag_probe.shard
+  models/wasm/probes/divfrag_probe.shard
+  models/wasm/probes/bitfrag_probe.shard
+  models/wasm/probes/wordfrag_probe.shard
+  tools/lowcheck/fixtures/lowcheck_rejects.shard
   pins/lang/record_rejects.shard
   pins/lang/record_sugar_rejects.shard
   pins/lang/statement_sugar.shard
@@ -470,7 +470,7 @@ fi
 # app: one OK/FAIL line per case, exit 0 iff all OK.
 echo "=== invoke: dynamic-invocation probe ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run examples/invoke_probe.shard
+  bin/shard_eval run tools/invoke/invoke_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -998,7 +998,7 @@ done
 # schema-REFUSED (truth ≠ composability) — the recognizer must reject it.
 echo "=== lowering: lowcheck negative fixture ==="
 if [ -x bin/shard_eval ]; then
-  if bin/shard_eval run tools/lowcheck/lowcheck.shard examples/lowcheck_rejects.shard > "$TMP/lc.out" 2>&1; then
+  if bin/shard_eval run tools/lowcheck/lowcheck.shard tools/lowcheck/fixtures/lowcheck_rejects.shard > "$TMP/lc.out" 2>&1; then
     echo "GATE FAILED: nonconforming fixture ACCEPTED"
     tail -5 "$TMP/lc.out"
   else
@@ -1014,7 +1014,7 @@ fi
 # fields were checked by nothing (docs/LOWERING.md §6ad).
 echo "=== lowering: manifest negative fixture ==="
 if [ -x bin/shard_eval ]; then
-  if bin/shard_eval run tools/lowcheck/manifest.shard examples/manifest_rejects.txt models/wasm/wasm.shard examples/wasmgen_call_link.shard > "$TMP/mf.out" 2>&1; then
+  if bin/shard_eval run tools/lowcheck/manifest.shard tools/lowcheck/fixtures/manifest_rejects.txt models/wasm/wasm.shard tools/lowbuild/fixtures/wasmgen_call_link.shard > "$TMP/mf.out" 2>&1; then
     echo "GATE FAILED: misbound manifest ACCEPTED"
     tail -5 "$TMP/mf.out"
   else

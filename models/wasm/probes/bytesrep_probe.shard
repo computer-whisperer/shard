@@ -1,0 +1,181 @@
+;;; models/wasm/probes/bytesrep_probe.shard — the AGGREGATE REP-RELATION probe (the
+;;; std/str runway, slice 1): can a lowered statement speak about a LIST
+;;; value living in linear memory, with the existing machine certs left
+;;; UNTOUCHED?
+;;;
+;;; The design under test — the aggregate statement DECOMPOSES:
+;;;
+;;;   1. the rep relation is an EQUATION, not a Bool predicate:
+;;;          (mem_read n m p) = bs       "the readback at [p, p+n) IS bs"
+;;;      (mem_read = std/mem's abstraction function, graduated from this
+;;;      probe's br_read; stating it as an equation avoids Bool-invariant
+;;;      inversion entirely, and both proof sides case on the SAME
+;;;      scrutinee — the spelling-alignment law again);
+;;;   2. the core theorem is PURE SHARD, premise-free, machine-free:
+;;;          lp_scan m p n = p + br_z (mem_read n m p)
+;;;      (br_z = the rep-independent list spec: index of the first 0 —
+;;;      the strlen shape; lp_scan = the memory-walking source fn the
+;;;      emitter already compiled);
+;;;   3. the aggregate-level cert (lowered_br_z) is COMPOSITION BY
+;;;      CITATION: lowered_lp_scan (machine ⊑ mem-walking fn, generated,
+;;;      untouched) + the core theorem + the rep premise. Zero new
+;;;      machine reasoning, zero new kernel features — the
+;;;      refinement-lowering vision's decomposition.
+;;;
+;;; The abstraction function GRADUATED (2026-07-05): mem_read + its window
+;;; framing laws now live on std/mem's surface, and this probe consumes
+;;; them opaquely — the same posture std/str's certs will take. br_len
+;;; stays probe-local (list vocabulary, a std/list question); the composed
+;;; statement's shape (rep premise + bounds premises + list-spec RHS) is
+;;; the schema candidate for aggregate-typed module surfaces.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")
+(import "../../../std/nat.shard")
+(import "../wasm.shard")
+(import "../loopkit.shard")
+(import "../../../tools/lowbuild/fixtures/wasmgen_loop_src.shard")
+(import "../../../tools/lowbuild/fixtures/wasmgen_loop_out.shard")
+(use (:: std mem *))
+(use (:: std nat *))
+(use (:: models wasm wasm *))
+(use (:: models wasm loopkit *))
+(use (:: tools lowbuild fixtures wasmgen_loop_src *))
+(use (:: tools lowbuild fixtures wasmgen_loop_out *))
+
+;; --- the abstraction function is std/mem's mem_read --------------------------
+;; (this probe's br_read, graduated to the surface — option A, 2026-07-05:
+;; the rep equation is now spelled (mem_read n m p) = bs and the window
+;; framing law is mem_read_set_above/below; proofs below rewrite with the
+;; exported defining equations mem_read_z/mem_read_s instead of unfolding).
+
+;; list length as the machine's loop budget
+(fn br_len ((bs (List Int))) Nat
+  (measure (struct bs))
+  (match bs
+    (Nil Z)
+    ((Cons _ t) (S (br_len t)))))
+
+;; --- the rep-independent LIST spec: index of the first 0 (strlen shape) ---------
+
+(fn br_z ((bs (List Int))) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons b t) (if (int_eq b 0) 0 (+ 1 (br_z t))))))
+
+;; --- local arith kit -------------------------------------------------------------
+
+(claim br_p0 (goal ((p Int)) () (= (+ p 0) p)) (by arith (list)))
+
+(claim br_shift
+  (goal ((p Int) (x Int)) () (= (+ (+ p 1) x) (+ p (+ 1 x))))
+  (by arith (list)))
+
+;; --- THE CORE THEOREM: pure shard, no machine terms, no premises ----------------
+;; The mem-walking fn the emitter compiled equals the list spec applied to
+;; the readback. Induction on the budget; both sides case on the same
+;; (int_eq (mem_get m p) 0) scrutinee, so the arms align by spelling.
+
+(claim br_scan_read
+  (goal ((m Mem) (p Int) (n Nat)) ()
+    (= (lp_scan m p n) (+ p (br_z (mem_read n m p)))))
+  (induct n
+    ((case Z
+       (steps
+         ((rewrite (lemma mem_read_z) lr rhs true ())
+          (compute both)
+          (rewrite (lemma br_p0) lr rhs true ()))
+         refl))
+     (case S
+       (k2)
+       (case-on (int_eq (mem_get m p) 0) Bool
+         ((case True
+            (steps
+              ((unfold lp_scan lhs)
+               (reduce lhs)
+               (rewrite (hyp 0) lr lhs true ())
+               (reduce lhs)
+               (rewrite (lemma mem_read_s) lr rhs true ())
+               (unfold br_z rhs)
+               (reduce rhs)
+               (rewrite (hyp 0) lr rhs true ())
+               (reduce rhs)
+               (rewrite (lemma br_p0) lr rhs true ()))
+              refl))
+          (case False
+            (chain
+              (steps
+                ((unfold lp_scan lhs)
+                 (reduce lhs)
+                 (rewrite (hyp 0) lr lhs true ())
+                 (reduce lhs)))
+              (rewrite-with (hyp 1) lr lhs () ())
+              (steps
+                ((rewrite (lemma mem_read_s) lr rhs true ())
+                 (unfold br_z rhs)
+                 (reduce rhs)
+                 (rewrite (hyp 0) lr rhs true ())
+                 (reduce rhs)
+                 (rewrite (lemma br_shift) lr lhs true ())))
+              refl))))))))
+
+;; --- the machine body: byte-identical local copy ((inline …) is same-file-only) --
+
+(fn br_body () (List Instr)
+  (list
+    (LocalGet 1)
+    (I32Eqz)
+    (BrIf 1)
+    (LocalGet 0)
+    (I32Load8U)
+    (I32Eqz)
+    (BrIf 1)
+    (LocalGet 0)
+    (I32Const 1)
+    (I32Bin BAdd)
+    (LocalSet 0)
+    (LocalGet 1)
+    (I32Const 1)
+    (I32Bin BSub)
+    (LocalSet 1)
+    (Br 0)))
+
+;; --- THE AGGREGATE-LEVEL CERT: composition by citation ---------------------------
+;; Machine runs lp_scan's compiled body on (p, len bs) against a memory
+;; whose [p, p+len) readback IS bs — and lands on p + the LIST spec of bs.
+;; lowered_lp_scan is cited as shipped; br_scan_read bridges reps; the rep
+;; premise rewrites the readback away. Bounds premises are inherited
+;; verbatim from the machine cert (with k := br_len bs).
+
+(claim lowered_br_z
+  (goal ((bs (List Int)) (x0 Int) (m0 Mem) (c Nat) (restfs (List Func)))
+    ((= (mem_read (br_len bs) m0 x0) bs)
+     (= (le 0 x0) True)
+     (= (le (+ x0 (int_of_nat (br_len bs))) 65536) True))
+    (=
+      (call_fn_mem
+        (S^ 24 (lg_fuel (br_len bs) c))
+        (MkWModule
+          (Cons
+            (MkFunc
+              2
+              0
+              (list (Block (list (Loop (inline br_body)))) (LocalGet 0)))
+            restfs)
+          65536)
+        0
+        (list x0 (int_of_nat (br_len bs)))
+        m0)
+      (Some (Pair (+ x0 (br_z bs)) m0))))
+  (chain
+    (rewrite-with
+      (lemma lowered_lp_scan)
+      lr
+      lhs
+      ((inst k (br_len bs)))
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)))
+    (rewrite-with (lemma br_scan_read) lr lhs ((inst n (br_len bs))) ())
+    (steps ((rewrite (premise 0) lr lhs true ())))
+    refl))

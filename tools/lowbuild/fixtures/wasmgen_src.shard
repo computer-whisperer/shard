@@ -1,0 +1,126 @@
+;;; tools/lowbuild/fixtures/wasmgen_src.shard — source fns for the certifying emitter
+;;; (tools/wasmgen). Every fn here is in the scalar let/straight-line
+;;; fragment: Int params, Int return, body = + - * over params, u32
+;;; literals, and single-binding lets; every substituted arith node
+;;; containing a param. wasmgen emits tools/lowbuild/fixtures/wasmgen_out.shard from
+;;; this file: one wasm function literal + one standard
+;;; lowered-conformance claim (docs/LOWERING.md §2) with a full
+;;; machine-written proof, per fn.
+
+(import "../../../kernel/stdlib.shard")
+
+;; the hand article's twin (lowered_add1 in lowered_form.shard)
+(fn lg_add1 ((x Int)) Int (+ x 1))
+
+;; two params — and lg_sub is NON-commutative: it pins the BVar/LocalGet
+;; index convention (innermost-first binders vs parameter-order locals)
+(fn lg_add ((x Int) (y Int)) Int (+ x y))
+
+(fn lg_sub ((x Int) (y Int)) Int (- x y))
+
+;; three arith nodes: exercises the innermost-first wrap32_id chain and
+;; positional premise discharge (premises 2j / 2j+1)
+(fn lg_mix ((x Int) (y Int)) Int (+ (* x 2) (- y x)))
+
+;; the degenerate end: no arith nodes, empty chain
+(fn lg_id ((x Int)) Int x)
+
+;; a let read twice — the sharing case: one LocalSet, two LocalGets on the
+;; wasm side; ζ duplicates (* x x) on the spec side; ONE citation via the
+;; emitted have discharges both copies
+(fn lg_share ((x Int)) Int (let ((y (* x x))) (+ y y)))
+
+;; nested lets, the outer one read again after the inner — two locals, and
+;; the node dedup sees (+ x z) inside b's spelling AND standalone
+(fn lg_nest ((x Int) (z Int)) Int
+  (let ((a (+ x z))) (let ((b (* a 2))) (+ b a))))
+
+;; a bare-param alias — no arith node of its own, transparent in the spec
+(fn lg_alias ((x Int)) Int (let ((y x)) (+ y 1)))
+
+;; ground-arm branch — the pure diamond, no arith nodes at all
+(fn lg_gate ((x Int)) Int (if (lt x 10) 1 0))
+
+;; arith arms — nodes discharged inside their own case-on arm
+(fn lg_sel ((x Int) (y Int)) Int (if (int_eq x 0) (+ y 1) (* y 2)))
+
+;; nested if in the else arm — two case-ons, inner hyps shadow outer
+(fn lg_clamp2 ((x Int)) Int (if (lt x 10) 0 (if (lt x 100) 1 2)))
+
+;; let ABOVE the if: (* x x) is discharged pre-branch; the True arm's
+;; result is just the local read (zero new nodes), the False arm adds one
+(fn lg_selsq ((x Int) (y Int)) Int
+  (let ((s (* x x))) (if (int_eq y 0) s (+ s y))))
+
+;; the PRE-hygiene article (docs/LOWERING.md §6j): (- x 1) is arm-local,
+;; its LOWER bound derives from the arm's own condition (a silent cb_*
+;; helper, no premise), its upper bound becomes a condition-relative
+;; premise — the P2c caveat's example, now in the honest contract
+(fn lg_dec ((x Int)) Int (if (lt 0 x) (- x 1) 0))
+
+;; le condition — the BLeU arm of the comparison family (Ring 0 slice A);
+;; ground-arm diamond like lg_gate, machine side (I32Bin BLeU)
+(fn lg_le ((x Int)) Int (if (le x 10) 1 0))
+
+;; ---- the staged div fragment (docs/LOWERING.md §6y) ---------------------------
+;; ediv/mod lower to BDivU/BRemU behind the divisor guard PRE
+;; (= (le 1 B) True); the proofs interleave compute with guard rewrites
+;; (the stage law). The eight instances mirror models/wasm/probes/divfrag_probe.shard.
+
+;; bare div — one stage, no wraps anywhere
+(fn lg_divq ((a Int) (b Int)) Int (ediv a b))
+
+;; bare rem — the BRemU twin
+(fn lg_divr ((a Int) (b Int)) Int (mod a b))
+
+;; wrapped operands — both wrap events flush BEFORE the guard rewrite
+(fn lg_divw ((a Int) (b Int)) Int (ediv (+ a b) (- b a)))
+
+;; literal divisor — the guard computes away: zero staging, zero premises
+;; (and (ediv x 2^k) is slice D's constant right shift, landed free)
+(fn lg_divl ((a Int)) Int (ediv a 7))
+
+;; div feeding arith — stage first, wrap event after
+(fn lg_diva ((a Int) (b Int)) Int (+ (ediv a b) 1))
+
+;; let-shared div — machine computes once (local), spec duplicates under ζ
+(fn lg_divs ((a Int) (b Int)) Int (let ((d (ediv a b))) (+ d d)))
+
+;; two sites at one divisor spelling — premise dedup, the stage RE-FIRES
+(fn lg_divd ((a Int) (b Int)) Int (+ (ediv a b) (mod a b)))
+
+;; div-of-div — two distinct guards, staged in code order
+(fn lg_divn ((a Int) (b Int) (e Int)) Int (ediv (ediv a b) e))
+
+;; ---- the bitwise fragment (docs/LOWERING.md §6z) ------------------------------
+;; band/bor/bxor are TRANSPARENT ops: bop_val applies the prims directly
+;; (total, no wrap, no guard), so a bitwise node contributes no premise
+;; and no discharge event — and composes everywhere the fragment goes,
+;; ifs included. First six mirror models/wasm/probes/bitfrag_probe.shard; the last
+;; three exercise the region-path and sharing compositions.
+
+;; the bare trio — zero premises, plain one-shot proofs
+(fn lg_band ((a Int) (b Int)) Int (band a b))
+
+(fn lg_bor ((a Int) (b Int)) Int (bor a b))
+
+(fn lg_bxor ((a Int) (b Int)) Int (bxor a b))
+
+;; literal mask — the emblematic use
+(fn lg_bmask ((a Int)) Int (band a 255))
+
+;; arith over bitwise — the wrap premise pair at a band-containing spelling
+(fn lg_barith ((a Int) (b Int)) Int (+ (band a b) 1))
+
+;; bitwise divisor — the §6y stage at an already-clean bor spelling
+(fn lg_bdiv ((a Int) (b Int)) Int (ediv a (bor b 1)))
+
+;; bitwise inside an if arm — the region path, arm with no discharge items
+(fn lg_bif ((a Int) (b Int)) Int (if (int_eq a 0) (band b 15) b))
+
+;; arm-local arith over bitwise — the condition-relative premise machinery
+;; over a band-containing spelling
+(fn lg_bifp ((a Int) (b Int)) Int (if (int_eq a 0) (+ (band b 15) 1) b))
+
+;; let-shared bitwise — one LocalSet, ζ duplicates the band spelling
+(fn lg_bshare ((a Int)) Int (let ((m (band a 240))) (+ m m)))

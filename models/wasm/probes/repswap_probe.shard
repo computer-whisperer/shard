@@ -1,0 +1,169 @@
+;;; repswap_probe.shard — THE REP-SWAP ACCEPTANCE TEST (docs/LOWERING.md
+;;; ratification round). One interface, two conformant artifact sets, one
+;;; consumer — swap the implementation, ZERO consumer proof edits.
+;;;
+;;; std/mem ships two variants: mem.wasm.shard (v1) and mem.wasm2.shard
+;;; (v2 — different bytes, different towers, same behavior). The
+;;; consumers' PORTABLE certs (tools/lowbuild/fixtures/wasmgen_mem_port.shard) are
+;;; IMPORTED UNCHANGED — this file never edits or restates them; note it
+;;; imports the v2 certs and NOT v1's. The two claims below are the v2
+;;; LINK DERIVATIONS: the same structural artifact statements the machine
+;;; emits against v1, re-derived against the v2 module by pure citation.
+;;;
+;;; What this pins: a representation/implementation change behind the
+;;; module surface is a RELINK — the consumer proof burden is zero, and
+;;; the v2 towers (S^10/S^14 vs v1's S^6/S^10) land inside the consumers'
+;;; 2x fuel budgets, so even a LARGER implementation swaps in without
+;;; touching a consumer.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")
+(import "../wasm.shard")
+(import "../../../std/mem/mem.wasm2.shard")  ; the v2 shipped certs — v1 NOT imported
+(import "../../../tools/lowbuild/fixtures/wasmgen_mem_port.shard")  ; the UNCHANGED portable consumers
+(import "../../../tools/lowbuild/fixtures/wasmgen_mem_src.shard")  ; spec fns (the statements' RHS)
+(use (:: std mem *))
+(use (:: models wasm wasm *))
+(use (:: std mem mem.wasm2 *))
+(use (:: tools lowbuild fixtures wasmgen_mem_port *))
+(use (:: tools lowbuild fixtures wasmgen_mem_src *))
+
+;; local byte-identical literals ((inline …) is same-file-only)
+(fn mget2_c () Func
+  (MkFunc 1 1 (list (LocalGet 0) (LocalSet 1) (LocalGet 1) (I32Load8U))))
+
+(fn mset2_c () Func
+  (MkFunc
+    2
+    1
+    (list
+      (LocalGet 0)
+      (LocalGet 1)
+      (I32Store8)
+      (LocalGet 1)
+      (LocalSet 2)
+      (LocalGet 2))))
+
+(fn sum2_c () Func
+  (MkFunc 2 0 (list (LocalGet 0) (Call 0) (LocalGet 1) (Call 0) (I32Bin BAdd))))
+
+(fn bump_c () Func
+  (MkFunc
+    1
+    0
+    (list
+      (LocalGet 0)
+      (LocalGet 0)
+      (Call 0)
+      (I32Const 1)
+      (I32Bin BAdd)
+      (Call 1))))
+
+;; --- sum2 over the v2 module ----------------------------------------------------
+
+(claim repswap_sum2
+  (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (restfs (List Func)))
+    ((= (le 0 x0) True)
+     (= (le (+ x0 1) 65536) True)
+     (= (le 0 x1) True)
+     (= (le (+ x1 1) 65536) True))
+    (=
+      (call_fn_mem
+        (S^ 39 c)
+        (MkWModule
+          (Cons
+            (inline mget2_c)
+            (Cons (inline mset2_c) (Cons (inline sum2_c) restfs)))
+          65536)
+        2
+        (Cons x0 (Cons x1 Nil))
+        m0)
+      (Some (Pair (mg_sum2 m0 x0 x1) m0))))
+  (chain
+    (rewrite-with
+      (lemma lowered_mg_sum2)
+      lr
+      lhs
+      ((inst
+         m
+         (MkWModule
+           (Cons
+             (inline mget2_c)
+             (Cons (inline mset2_c) (Cons (inline sum2_c) restfs)))
+           65536))
+       (inst f0 (inline mget2_c))
+       (inst f1 (inline mset2_c))
+       (inst restm restfs))
+      ((steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (rewrite-with
+         (lemma lowered_mem_get2)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+          (steps ((rewrite (premise 1) lr lhs true ())) refl))
+         refl)
+       (rewrite-with
+         (lemma lowered_mem_get2)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+          (steps ((rewrite (premise 3) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+;; --- bump over the v2 module ----------------------------------------------------
+
+(claim repswap_bump
+  (goal ((x0 Int) (m0 Mem) (c Nat) (restfs (List Func)))
+    ((= (le 0 x0) True) (= (le (+ x0 1) 65536) True))
+    (=
+      (call_fn_mem
+        (S^ 49 c)
+        (MkWModule
+          (Cons
+            (inline mget2_c)
+            (Cons (inline mset2_c) (Cons (inline bump_c) restfs)))
+          65536)
+        2
+        (Cons x0 Nil)
+        m0)
+      (Some (Pair (+ (mem_get m0 x0) 1) (mg_bump m0 x0)))))
+  (chain
+    (rewrite-with
+      (lemma lowered_mg_bump)
+      lr
+      lhs
+      ((inst
+         m
+         (MkWModule
+           (Cons
+             (inline mget2_c)
+             (Cons (inline mset2_c) (Cons (inline bump_c) restfs)))
+           65536))
+       (inst f0 (inline mget2_c))
+       (inst f1 (inline mset2_c))
+       (inst restm restfs))
+      ((steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (rewrite-with
+         (lemma lowered_mem_get2)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+          (steps ((rewrite (premise 1) lr lhs true ())) refl))
+         refl)
+       (rewrite-with
+         (lemma lowered_mem_set2)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+          (steps ((rewrite (premise 1) lr lhs true ())) refl))
+         refl)))
+    refl))

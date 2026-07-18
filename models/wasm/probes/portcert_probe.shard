@@ -1,0 +1,339 @@
+;;; portcert_probe.shard — the PORTABLE-CERT probe (the callee-coupling
+;;; schema question, docs/LOWERING.md ratification round).
+;;;
+;;; Question under test: can a consumer's lowered-conformance cert avoid
+;;; embedding its CALLEES' bytes — the structural coupling that makes
+;;; statements grow with the transitive closure of callee bodies and
+;;; invalidates every upstream cert on a leaf edit? Candidate form: the
+;;; cert quantifies over the MODULE and takes, as premises,
+;;;   1. the funcs SPINE down to its own slot — abstract slots (f0, f1)
+;;;      for callees, its OWN literal pinned (that is the binary the cert
+;;;      is about), a rest binder after;
+;;;   2. each callee's ARITY (params_of f0 = 1) — call_bridge needs the
+;;;      pop count, never the body;
+;;;   3. each call SITE's behavior: one call_fn_mem equation per site, at
+;;;      that site's exact fuel spelling (the emitter knows it) — the
+;;;      slot the callee's shipped cert discharges at link time.
+;;; The callee's implementation appears NOWHERE. Coupling drops to a fuel
+;;; budget (the site tower must dominate the callee's tower at link) plus
+;;; the spec-level behavior equations.
+;;;
+;;; Two consumers, each in two forms:
+;;;   sum2_port / bump_port     — the PORTABLE form (abstract module)
+;;;   sum2_linked / bump_linked — today's STRUCTURAL form, DERIVED from
+;;;     the portable cert + std/mem's shipped certs by pure citation (no
+;;;     interpreter steps): the derive-at-link story. If the callee's
+;;;     bytes change, only this cheap derivation re-runs — the portable
+;;;     proof (the expensive one) re-checks only when ITS source changes.
+;;;
+;;; Note the read-only consumer's slot-1 binder (f1) carries NO premises
+;;; at all: the portable form couples to strictly less than the
+;;; structural form even pointwise (sum2's structural cert pins mset's
+;;; bytes for no reason).
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")
+(import "../wasm.shard")
+(import "../../../std/mem/mem.wasm.shard")  ; the shipped certs (link-time discharge)
+(use (:: std mem *))
+(use (:: models wasm wasm *))
+(use (:: std mem mem.wasm *))
+
+;; local byte-identical literals ((inline …) is same-file-only; the linked
+;; forms pin the same module layout the emitter would emit)
+(fn mget_c () Func (MkFunc 1 0 (list (LocalGet 0) (I32Load8U))))
+
+(fn mset_c () Func
+  (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Store8) (LocalGet 1))))
+
+(fn sum2_c () Func
+  (MkFunc 2 0 (list (LocalGet 0) (Call 0) (LocalGet 1) (Call 0) (I32Bin BAdd))))
+
+(fn bump_c () Func
+  (MkFunc
+    1
+    0
+    (list
+      (LocalGet 0)
+      (LocalGet 0)
+      (Call 0)
+      (I32Const 1)
+      (I32Bin BAdd)
+      (Call 1))))
+
+;; --- sum2, portable form --------------------------------------------------------
+
+(claim sum2_port
+  (goal
+    ((x0 Int)
+     (x1 Int)
+     (m0 Mem)
+     (m WModule)
+     (f0 Func)
+     (f1 Func)
+     (restm (List Func))
+     (c Nat))
+    ((= (funcs_of m) (Cons f0 (Cons f1 (Cons (inline sum2_c) restm))))
+     (= (params_of f0) 1)
+     (=
+       (call_fn_mem (S^ 23 c) m 0 (Cons x0 Nil) m0)
+       (Some (Pair (mem_get m0 x0) m0)))
+     (=
+       (call_fn_mem (S^ 21 c) m 0 (Cons x1 Nil) m0)
+       (Some (Pair (mem_get m0 x1) m0)))
+     (= (le 0 (+ (mem_get m0 x0) (mem_get m0 x1))) True)
+     (= (lt (+ (mem_get m0 x0) (mem_get m0 x1)) 4294967296) True))
+    (=
+      (call_fn_mem (S^ 27 c) m 2 (Cons x0 (Cons x1 Nil)) m0)
+      (Some (Pair (+ (mem_get m0 x0) (mem_get m0 x1)) m0))))
+  (chain
+    ;; keep the accessor FOLDED through the first compute so the spine
+    ;; premise's (funcs_of m) spelling survives to be rewritten
+    (steps
+      ((compute lhs (stop eval_call funcs_of))
+       (rewrite (premise 0) lr lhs true ())
+       (compute lhs (stop eval_call))))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f f0)
+       (inst popped (Cons x0 Nil))
+       (inst rest Nil)
+       (inst args (Cons x0 Nil))
+       (inst v (mem_get m0 x0))
+       (inst mem2 m0))
+      ((steps ((rewrite (premise 0) lr lhs true ()) (compute both)) refl)
+       (steps ((rewrite (premise 1) lr lhs true ()) (compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((rewrite (premise 1) lr lhs true ()) (compute both)) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)))
+    (steps ((compute lhs (stop eval_call))))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f f0)
+       (inst popped (Cons x1 Nil))
+       (inst rest (Cons (mem_get m0 x0) Nil))
+       (inst args (Cons x1 Nil))
+       (inst v (mem_get m0 x1))
+       (inst mem2 m0))
+      ((steps ((rewrite (premise 0) lr lhs true ()) (compute both)) refl)
+       (steps ((rewrite (premise 1) lr lhs true ()) (compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((rewrite (premise 1) lr lhs true ()) (compute both)) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (have hw
+      (=
+        (mod (+ (mem_get m0 x0) (mem_get m0 x1)) 4294967296)
+        (+ (mem_get m0 x0) (mem_get m0 x1)))
+      (rewrite-with
+        (lemma wrap32_id)
+        lr
+        lhs
+        ((inst x (+ (mem_get m0 x0) (mem_get m0 x1))))
+        ((steps ((rewrite (premise 4) lr lhs true ())) refl)
+         (steps ((rewrite (premise 5) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hw) lr lhs true ())) refl)))
+
+;; --- sum2, linked form: DERIVED from the portable cert by pure citation --------
+
+;; today's structural statement (the artifact form lowcheck recognizes),
+;; recovered with ZERO interpreter steps: instantiate the module, discharge
+;; the spine/arity premises by compute and the behavior premises by citing
+;; std/mem's shipped certs (slack instantiates by unification). When a
+;; callee's bytes change, ONLY this derivation re-runs.
+(claim sum2_linked
+  (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (restfs (List Func)))
+    ((= (le 0 x0) True)
+     (= (le (+ x0 1) 65536) True)
+     (= (le 0 x1) True)
+     (= (le (+ x1 1) 65536) True)
+     (= (le 0 (+ (mem_get m0 x0) (mem_get m0 x1))) True)
+     (= (lt (+ (mem_get m0 x0) (mem_get m0 x1)) 4294967296) True))
+    (=
+      (call_fn_mem
+        (S^ 27 c)
+        (MkWModule
+          (Cons
+            (inline mget_c)
+            (Cons (inline mset_c) (Cons (inline sum2_c) restfs)))
+          65536)
+        2
+        (Cons x0 (Cons x1 Nil))
+        m0)
+      (Some (Pair (+ (mem_get m0 x0) (mem_get m0 x1)) m0))))
+  (chain
+    (rewrite-with
+      (lemma sum2_port)
+      lr
+      lhs
+      ((inst
+         m
+         (MkWModule
+           (Cons
+             (inline mget_c)
+             (Cons (inline mset_c) (Cons (inline sum2_c) restfs)))
+           65536))
+       (inst f0 (inline mget_c))
+       (inst f1 (inline mset_c))
+       (inst restm restfs))
+      ((steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (rewrite-with
+         (lemma lowered_mem_get)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+          (steps ((rewrite (premise 1) lr lhs true ())) refl))
+         refl)
+       (rewrite-with
+         (lemma lowered_mem_get)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+          (steps ((rewrite (premise 3) lr lhs true ())) refl))
+         refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)
+       (steps ((rewrite (premise 5) lr lhs true ())) refl)))
+    refl))
+
+;; --- bump (read-modify-write), portable form ------------------------------------
+
+;; the write callee's behavior premise carries the memory EFFECT
+;; ((mem_set m0 …) on its RHS) and a COMPUTED argument; the wrap collapses
+;; before the write bridge (the stage law), so the premise is stated over
+;; the clean sum.
+(claim bump_port
+  (goal
+    ((x0 Int)
+     (m0 Mem)
+     (m WModule)
+     (f0 Func)
+     (f1 Func)
+     (restm (List Func))
+     (c Nat))
+    ((= (funcs_of m) (Cons f0 (Cons f1 (Cons (inline bump_c) restm))))
+     (= (params_of f0) 1)
+     (= (params_of f1) 2)
+     (=
+       (call_fn_mem (S^ 28 c) m 0 (Cons x0 Nil) m0)
+       (Some (Pair (mem_get m0 x0) m0)))
+     (=
+       (call_fn_mem (S^ 25 c) m 1 (Cons x0 (Cons (+ (mem_get m0 x0) 1) Nil)) m0)
+       (Some (Pair (+ (mem_get m0 x0) 1) (mem_set m0 x0 (+ (mem_get m0 x0) 1)))))
+     (= (le 0 (+ (mem_get m0 x0) 1)) True)
+     (= (lt (+ (mem_get m0 x0) 1) 4294967296) True))
+    (=
+      (call_fn_mem (S^ 33 c) m 2 (Cons x0 Nil) m0)
+      (Some (Pair (+ (mem_get m0 x0) 1) (mem_set m0 x0 (+ (mem_get m0 x0) 1))))))
+  (chain
+    (steps
+      ((compute lhs (stop eval_call funcs_of))
+       (rewrite (premise 0) lr lhs true ())
+       (compute lhs (stop eval_call))))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f f0)
+       (inst popped (Cons x0 Nil))
+       (inst rest (Cons x0 Nil))
+       (inst args (Cons x0 Nil))
+       (inst v (mem_get m0 x0))
+       (inst mem2 m0))
+      ((steps ((rewrite (premise 0) lr lhs true ()) (compute both)) refl)
+       (steps ((rewrite (premise 1) lr lhs true ()) (compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((rewrite (premise 1) lr lhs true ()) (compute both)) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    (steps ((compute lhs (stop eval_call))))
+    (have hw (= (mod (+ (mem_get m0 x0) 1) 4294967296) (+ (mem_get m0 x0) 1))
+      (rewrite-with
+        (lemma wrap32_id)
+        lr
+        lhs
+        ((inst x (+ (mem_get m0 x0) 1)))
+        ((steps ((rewrite (premise 5) lr lhs true ())) refl)
+         (steps ((rewrite (premise 6) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hw) lr lhs true ())))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f f1)
+       (inst popped (Cons (+ (mem_get m0 x0) 1) (Cons x0 Nil)))
+       (inst rest Nil)
+       (inst args (Cons x0 (Cons (+ (mem_get m0 x0) 1) Nil)))
+       (inst v (+ (mem_get m0 x0) 1))
+       (inst mem2 (mem_set m0 x0 (+ (mem_get m0 x0) 1))))
+      ((steps ((rewrite (premise 0) lr lhs true ()) (compute both)) refl)
+       (steps ((rewrite (premise 2) lr lhs true ()) (compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((rewrite (premise 2) lr lhs true ()) (compute both)) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)))
+    (steps ((compute lhs)) refl)))
+
+;; --- bump, linked form ----------------------------------------------------------
+
+(claim bump_linked
+  (goal ((x0 Int) (m0 Mem) (c Nat) (restfs (List Func)))
+    ((= (le 0 x0) True)
+     (= (le (+ x0 1) 65536) True)
+     (= (le 0 (+ (mem_get m0 x0) 1)) True)
+     (= (lt (+ (mem_get m0 x0) 1) 4294967296) True))
+    (=
+      (call_fn_mem
+        (S^ 33 c)
+        (MkWModule
+          (Cons
+            (inline mget_c)
+            (Cons (inline mset_c) (Cons (inline bump_c) restfs)))
+          65536)
+        2
+        (Cons x0 Nil)
+        m0)
+      (Some (Pair (+ (mem_get m0 x0) 1) (mem_set m0 x0 (+ (mem_get m0 x0) 1))))))
+  (chain
+    (rewrite-with
+      (lemma bump_port)
+      lr
+      lhs
+      ((inst
+         m
+         (MkWModule
+           (Cons
+             (inline mget_c)
+             (Cons (inline mset_c) (Cons (inline bump_c) restfs)))
+           65536))
+       (inst f0 (inline mget_c))
+       (inst f1 (inline mset_c))
+       (inst restm restfs))
+      ((steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (rewrite-with
+         (lemma lowered_mem_get)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+          (steps ((rewrite (premise 1) lr lhs true ())) refl))
+         refl)
+       (rewrite-with
+         (lemma lowered_mem_set)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+          (steps ((rewrite (premise 1) lr lhs true ())) refl))
+         refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    refl))

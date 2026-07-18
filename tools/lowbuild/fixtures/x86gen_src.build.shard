@@ -1,0 +1,357 @@
+;;; tools/lowbuild/fixtures/x86gen_src.build.shard — the BUILD ENTRY for the x86
+;;; straight-line artifact set (docs/X86.md §11) under the re-founded
+;;; charter (docs/BUILD.md §4/§5, rung 2): content only.
+;;;
+;;;     (fn build_mods ((t Target)) (List PinMod))   — the standard symbol
+;;;
+;;; One single-function module per fn (the cert's module literal at
+;;; restfs := Nil, no memory), one pin binding each (lowered_<fn> over
+;;; export f0), and vectors whose expected value is the SOURCE fn applied
+;;; directly (spec-side semantics; in-range args per the certs' premise
+;;; discipline — wrap edges spell wrap64 explicitly). Module bytes are
+;;; PRE-ENCODED through the x86 flattening encoder (meta/plan's
+;;; pre-encoded law). ARTIFACT bindings, plan assembly, and wire are
+;;; DERIVED (tools/lowbuild pinlib); the manifest gate verifies the
+;;; derived index bindings against the cert file read raw.
+;;;
+;;; The func literals here are copied from the generated certs; the
+;;; cert↔binary tie is CHECKED by the BYTETIE gate (tools/bytetie — the
+;;; x86 reflector), so drift fails the build.
+;;;
+;;; RUN IT:
+;;;   bin/shard_eval run tools/lowbuild/lowbuild.shard pinlib tools/lowbuild/fixtures/x86gen_src.build.shard x86
+
+(import "../../../kernel/stdlib.shard")
+(import "x86gen_src.shard")
+(use (:: tools lowbuild fixtures x86gen_src *))
+(import "../../../models/x86/x86.shard")
+(use (:: models x86 x86 *))
+(import "../../../models/x86/encode.shard")
+(use (:: models x86 encode enc_func))
+(use (:: models x86 encode eapp))
+(import "../../../meta/plan")
+(use (:: meta plan *))
+(import "../../../meta/build")
+(use (:: meta build *))
+
+;; --- the binaries: one function per source fn (copied from the certs) ----------
+
+(fn f_add1 () XFunc
+  (MkXFunc 1 (list (XMovRR RAX RDI) (XBin XAdd RAX (SImm 1)))))
+
+(fn f_add () XFunc
+  (MkXFunc 2 (list (XMovRR RAX RDI) (XBin XAdd RAX (SReg RSI)))))
+
+(fn f_sub () XFunc
+  (MkXFunc 2 (list (XMovRR RAX RDI) (XBin XSub RAX (SReg RSI)))))
+
+(fn f_mix () XFunc
+  (MkXFunc
+    2
+    (list
+      (XMovRR RAX RDI)
+      (XBin XMul RAX (SImm 2))
+      (XMovRR R10 RSI)
+      (XBin XSub R10 (SReg RDI))
+      (XBin XAdd RAX (SReg R10)))))
+
+(fn f_id () XFunc (MkXFunc 1 (list (XMovRR RAX RDI))))
+
+(fn f_madd () XFunc
+  (MkXFunc
+    3
+    (list
+      (XMovRR RAX RDI)
+      (XBin XMul RAX (SReg RSI))
+      (XBin XAdd RAX (SReg RDX)))))
+
+(fn f_share () XFunc
+  (MkXFunc
+    1
+    (list
+      (XMovRR RAX RDI)
+      (XBin XMul RAX (SReg RDI))
+      (XMovRR R10 RAX)
+      (XBin XAdd R10 (SReg RAX))
+      (XMovRR RAX R10))))
+
+(fn f_nest () XFunc
+  (MkXFunc
+    2
+    (list
+      (XMovRR RAX RDI)
+      (XBin XAdd RAX (SReg RSI))
+      (XMovRR R10 RAX)
+      (XBin XMul R10 (SImm 2))
+      (XMovRR R11 R10)
+      (XBin XAdd R11 (SReg RAX))
+      (XMovRR RAX R11))))
+
+(fn f_alias () XFunc
+  (MkXFunc
+    1
+    (list
+      (XMovRR RAX RDI)
+      (XMovRR R10 RAX)
+      (XBin XAdd R10 (SImm 1))
+      (XMovRR RAX R10))))
+
+(fn f_band () XFunc
+  (MkXFunc 2 (list (XMovRR RAX RDI) (XBin XAnd RAX (SReg RSI)))))
+
+(fn f_bor () XFunc
+  (MkXFunc 2 (list (XMovRR RAX RDI) (XBin XOr RAX (SReg RSI)))))
+
+(fn f_bxor () XFunc
+  (MkXFunc 2 (list (XMovRR RAX RDI) (XBin XXor RAX (SReg RSI)))))
+
+(fn f_bmask () XFunc
+  (MkXFunc 1 (list (XMovRR RAX RDI) (XBin XAnd RAX (SImm 255)))))
+
+(fn f_barith () XFunc
+  (MkXFunc
+    2
+    (list (XMovRR RAX RDI) (XBin XAnd RAX (SReg RSI)) (XBin XAdd RAX (SImm 1)))))
+
+(fn f_bshare () XFunc
+  (MkXFunc
+    1
+    (list
+      (XMovRR RAX RDI)
+      (XBin XAnd RAX (SImm 240))
+      (XMovRR R10 RAX)
+      (XBin XAdd R10 (SReg RAX))
+      (XMovRR RAX R10))))
+
+;; --- the if fragment binaries (diamonds; copied from the certs) ----------------
+
+(fn f_gate () XFunc
+  (MkXFunc
+    1
+    (list
+      (XBlock
+        (list
+          (XBlock (list (XBrIf (CLtU RDI (SImm 10)) 0) (XMovRI RAX 0) (XBr 1)))
+          (XMovRI RAX 1))))))
+
+(fn f_lecond () XFunc
+  (MkXFunc
+    1
+    (list
+      (XBlock
+        (list
+          (XBlock (list (XBrIf (CLeU RDI (SImm 10)) 0) (XMovRI RAX 0) (XBr 1)))
+          (XMovRI RAX 1))))))
+
+(fn f_cmpreg () XFunc
+  (MkXFunc
+    2
+    (list
+      (XBlock
+        (list
+          (XBlock (list (XBrIf (CLtU RDI (SReg RSI)) 0) (XMovRI RAX 0) (XBr 1)))
+          (XMovRI RAX 1))))))
+
+(fn f_sel () XFunc
+  (MkXFunc
+    2
+    (list
+      (XBlock
+        (list
+          (XBlock
+            (list
+              (XBrIf (CEq RDI (SImm 0)) 0)
+              (XMovRR R10 RSI)
+              (XBin XMul R10 (SImm 2))
+              (XMovRR RAX R10)
+              (XBr 1)))
+          (XMovRR R10 RSI)
+          (XBin XAdd R10 (SImm 1))
+          (XMovRR RAX R10))))))
+
+(fn f_eqinc () XFunc
+  (MkXFunc
+    2
+    (list
+      (XBlock
+        (list
+          (XBlock
+            (list
+              (XBrIf (CEq RDI (SImm 0)) 0)
+              (XMovRR R10 RSI)
+              (XBin XAdd R10 (SImm 1))
+              (XMovRR RAX R10)
+              (XBr 1)))
+          (XMovRR RAX RSI))))))
+
+(fn f_clamp2 () XFunc
+  (MkXFunc
+    1
+    (list
+      (XBlock
+        (list
+          (XBlock
+            (list
+              (XBrIf (CLtU RDI (SImm 10)) 0)
+              (XBlock
+                (list
+                  (XBlock
+                    (list
+                      (XBrIf (CLtU RDI (SImm 100)) 0)
+                      (XMovRI RAX 2)
+                      (XBr 1)))
+                  (XMovRI RAX 1)))
+              (XBr 1)))
+          (XMovRI RAX 0))))))
+
+(fn f_selsq () XFunc
+  (MkXFunc
+    2
+    (list
+      (XMovRR R10 RDI)
+      (XBin XMul R10 (SReg RDI))
+      (XBlock
+        (list
+          (XBlock
+            (list
+              (XBrIf (CEq RSI (SImm 0)) 0)
+              (XMovRR R11 R10)
+              (XBin XAdd R11 (SReg RSI))
+              (XMovRR RAX R11)
+              (XBr 1)))
+          (XMovRR RAX R10))))))
+
+(fn f_dec () XFunc
+  (MkXFunc
+    1
+    (list
+      (XBlock
+        (list
+          (XBlock
+            (list
+              (XBrIf (CLtU RDI (SImm 1)) 0)
+              (XMovRR R10 RDI)
+              (XBin XSub R10 (SImm 1))
+              (XMovRR RAX R10)
+              (XBr 1)))
+          (XMovRI RAX 0))))))
+
+;; --- the build entry -------------------------------------------------------------
+
+(fn pv ((args (List Int)) (want Int)) PVec (PV 0 args Nil want Nil))
+
+(fn pmod ((nm (List Int)) (f XFunc) (vs (List PVec))) PinMod
+  (MkPinMod
+    nm
+    (enc_func f)
+    "tools/lowbuild/fixtures/x86gen_out.shard"
+    0
+    ""
+    (list (eapp "lowered_" nm))
+    vs))
+
+(fn build_mods ((t Target)) (List PinMod)
+  (list
+    (pmod
+      "xg_add1"
+      (f_add1)
+      (list
+        (pv (list 5) (xg_add1 5))
+        (pv (list 18446744073709551615) (wrap64 (xg_add1 18446744073709551615)))))
+    (pmod
+      "xg_add"
+      (f_add)
+      (list
+        (pv (list 7 9) (xg_add 7 9))
+        (pv
+          (list 18446744073709551615 2)
+          (wrap64 (xg_add 18446744073709551615 2)))))
+    (pmod
+      "xg_sub"
+      (f_sub)
+      (list (pv (list 9 7) (xg_sub 9 7)) (pv (list 3 5) (wrap64 (xg_sub 3 5)))))
+    (pmod
+      "xg_mix"
+      (f_mix)
+      (list (pv (list 6 20) (xg_mix 6 20)) (pv (list 0 1) (xg_mix 0 1))))
+    (pmod "xg_id" (f_id) (list (pv (list 42) (xg_id 42))))
+    (pmod
+      "xg_madd"
+      (f_madd)
+      (list
+        (pv (list 6 7 5) (xg_madd 6 7 5))
+        (pv
+          (list 4294967296 4294967296 1)
+          (wrap64 (xg_madd 4294967296 4294967296 1)))))
+    (pmod
+      "xg_share"
+      (f_share)
+      (list
+        (pv (list 9) (xg_share 9))
+        (pv (list 4294967296) (wrap64 (xg_share 4294967296)))))
+    (pmod "xg_nest" (f_nest) (list (pv (list 3 4) (xg_nest 3 4))))
+    (pmod "xg_alias" (f_alias) (list (pv (list 41) (xg_alias 41))))
+    (pmod
+      "xg_band"
+      (f_band)
+      (list
+        (pv
+          (list 12297829382473034410 6148914691236517205)
+          (xg_band 12297829382473034410 6148914691236517205))
+        (pv (list 255 240) (xg_band 255 240))))
+    (pmod "xg_bor" (f_bor) (list (pv (list 240 15) (xg_bor 240 15))))
+    (pmod
+      "xg_bxor"
+      (f_bxor)
+      (list
+        (pv
+          (list 18446744073709551615 6148914691236517205)
+          (xg_bxor 18446744073709551615 6148914691236517205))))
+    (pmod "xg_bmask" (f_bmask) (list (pv (list 65535) (xg_bmask 65535))))
+    (pmod "xg_barith" (f_barith) (list (pv (list 255 15) (xg_barith 255 15))))
+    (pmod "xg_bshare" (f_bshare) (list (pv (list 255) (xg_bshare 255))))
+    (pmod
+      "xg_gate"
+      (f_gate)
+      (list
+        (pv (list 5) (xg_gate 5))
+        (pv (list 10) (xg_gate 10))
+        (pv (list 100) (xg_gate 100))))
+    (pmod
+      "xg_lecond"
+      (f_lecond)
+      (list (pv (list 10) (xg_lecond 10)) (pv (list 11) (xg_lecond 11))))
+    (pmod
+      "xg_cmpreg"
+      (f_cmpreg)
+      (list
+        (pv (list 3 5) (xg_cmpreg 3 5))
+        (pv (list 5 3) (xg_cmpreg 5 3))
+        (pv (list 5 5) (xg_cmpreg 5 5))))
+    (pmod
+      "xg_sel"
+      (f_sel)
+      (list (pv (list 0 7) (xg_sel 0 7)) (pv (list 1 7) (xg_sel 1 7))))
+    (pmod
+      "xg_eqinc"
+      (f_eqinc)
+      (list (pv (list 0 7) (xg_eqinc 0 7)) (pv (list 1 7) (xg_eqinc 1 7))))
+    (pmod
+      "xg_clamp2"
+      (f_clamp2)
+      (list
+        (pv (list 5) (xg_clamp2 5))
+        (pv (list 50) (xg_clamp2 50))
+        (pv (list 500) (xg_clamp2 500))))
+    (pmod
+      "xg_selsq"
+      (f_selsq)
+      (list (pv (list 3 0) (xg_selsq 3 0)) (pv (list 3 4) (xg_selsq 3 4))))
+    (pmod
+      "xg_dec"
+      (f_dec)
+      (list
+        (pv (list 0) (xg_dec 0))
+        (pv (list 1) (xg_dec 1))
+        (pv (list 5) (xg_dec 5))
+        (pv (list 18446744073709551615) (xg_dec 18446744073709551615))))))

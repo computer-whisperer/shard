@@ -1,0 +1,307 @@
+;;; tools/lowbuild/fixtures/wasmgen_mem_src.build.shard — the BUILD ENTRY for wasmgen's
+;;; MEM fragment (docs/LOWERING.md §6) under the re-founded charter
+;;; (docs/BUILD.md §4/§5, rung 2): content only. Every pinned module
+;;; carries std/mem's callee prefix ([mget, mset, self], linear memory
+;;; from the Target; pre 2, callees std/mem — linked_<fn> pins export
+;;; f2); MEMCASE vectors' expected value AND memory readback computed
+;;; SPEC-SIDE (the source fn + std/mem applied directly, not the
+;;; model). ARTIFACT bindings, plan assembly, and wire are DERIVED
+;;; (tools/lowbuild pinlib); the manifest gate verifies the derived
+;;; index bindings against the cert file read raw.
+;;;
+;;; KNOWN GAP (v1, same as P4b): the self-function literals are copied
+;;; from the generated certs rather than shared (the generated link file
+;;; inlines its MkFunc literals; there are no named Func fns to import) —
+;;; the cert↔binary tie is CHECKED by the BYTETIE gate, so drift fails
+;;; the build.
+;;;
+;;;     (fn build_mods ((t Target)) (List PinMod))   — the standard symbol
+;;;
+;;; RUN IT:
+;;;   bin/shard_eval run tools/lowbuild/lowbuild.shard pinlib tools/lowbuild/fixtures/wasmgen_mem_src.build.shard
+
+(import "../../../kernel/stdlib.shard")
+(import "wasmgen_mem_src.shard")
+(use (:: tools lowbuild fixtures wasmgen_mem_src *))
+(import "../../../std/mem")
+(use (:: std mem *))
+(import "../../../std/mem/mem.wasm.shard")
+(use (:: std mem mem.wasm *))
+(import "../../../models/wasm/wasm.shard")
+(use (:: models wasm wasm *))
+(import "../../../models/wasm/encode.shard")
+(use (:: models wasm encode *))
+(import "../../../meta/plan")
+(use (:: meta plan *))
+(import "../../../meta/build")
+(use (:: meta build *))
+
+;; --- the binaries: [mget, mset, self] per source fn ---------------------------
+
+(fn mmod ((self Func) (limit Int)) WModule
+  (MkWModule (list (mget_f) (mset_f) self) limit))
+
+(fn m_mg_first () Func (MkFunc 0 0 (list (I32Const 0) (Call 0))))
+
+(fn m_mg_at () Func (MkFunc 1 0 (list (LocalGet 0) (Call 0))))
+
+(fn m_mg_sum2 () Func
+  (MkFunc 2 0 (list (LocalGet 0) (Call 0) (LocalGet 1) (Call 0) (I32Bin BAdd))))
+
+(fn m_mg_dbl () Func
+  (MkFunc
+    1
+    1
+    (list
+      (LocalGet 0)
+      (Call 0)
+      (LocalSet 1)
+      (LocalGet 1)
+      (LocalGet 1)
+      (I32Bin BAdd))))
+
+(fn m_mg_ind () Func (MkFunc 1 0 (list (LocalGet 0) (Call 0) (Call 0))))
+
+(fn m_mg_sq () Func
+  (MkFunc
+    1
+    0
+    (list
+      (LocalGet 0)
+      (LocalGet 0)
+      (I32Bin BMul)
+      (Call 0)
+      (LocalGet 0)
+      (LocalGet 0)
+      (I32Bin BMul)
+      (I32Bin BAdd))))
+
+(fn m_mg_store () Func (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (Call 1))))
+
+(fn m_mg_copy () Func
+  (MkFunc 2 0 (list (LocalGet 1) (LocalGet 0) (Call 0) (Call 1))))
+
+(fn m_mg_prod () Func
+  (MkFunc 2 0 (list (LocalGet 0) (Call 0) (LocalGet 1) (Call 0) (I32Bin BMul))))
+
+(fn m_mg_bump () Func
+  (MkFunc
+    1
+    0
+    (list
+      (LocalGet 0)
+      (LocalGet 0)
+      (Call 0)
+      (I32Const 1)
+      (I32Bin BAdd)
+      (Call 1))))
+
+(fn m_mg_putget () Func
+  (MkFunc
+    2
+    1
+    (list
+      (LocalGet 0)
+      (I32Const 7)
+      (Call 1)
+      (LocalSet 2)
+      (LocalGet 1)
+      (LocalGet 0)
+      (Call 0)
+      (Call 1))))
+
+(fn m_mg_swap () Func
+  (MkFunc
+    2
+    3
+    (list
+      (LocalGet 0)
+      (Call 0)
+      (LocalSet 2)
+      (LocalGet 1)
+      (Call 0)
+      (LocalSet 3)
+      (LocalGet 0)
+      (LocalGet 3)
+      (Call 1)
+      (LocalSet 4)
+      (LocalGet 1)
+      (LocalGet 2)
+      (Call 1))))
+
+;; --- spec-side memory helpers ---------------------------------------------------
+
+(fn mload ((bs (List Int)) (a Int) (m Mem)) Mem
+  (measure (struct bs))
+  (match bs
+    (Nil m)
+    ((Cons b t) (mload t (+ a 1) (mem_set m a b)))))
+
+(fn mdump ((a Int) (n Nat) (m Mem)) (List Int)
+  (measure (struct n))
+  (match n
+    (Z Nil)
+    ((S k) (Cons (mem_get m a) (mdump (+ a 1) k m)))))
+
+(fn len_nat ((xs (List Int))) Nat
+  (measure (struct xs))
+  (match xs
+    (Nil Z)
+    ((Cons _ t) (S (len_nat t)))))
+
+;; --- the build entry: content only ------------------------------------------------
+
+;; a memory vector: expected value + final-memory readback, both SPEC-side
+(fn vec ((args (List Int)) (membytes (List Int)) (v Int) (mf Mem)) PVec
+  (PV 2 args membytes v (mdump 0 (len_nat membytes) mf)))
+
+(fn ld ((bs (List Int))) Mem (mload bs 0 (mem_empty)))
+
+;; one linked pin: [mget, mset, self], linked_<nm> pins index 2
+(fn pmod ((nm (List Int)) (self Func) (limit Int) (vs (List PVec))) PinMod
+  (MkPinMod
+    nm
+    (enc_module (mmod self limit))
+    "tools/lowbuild/fixtures/wasmgen_mem_link.shard"
+    2
+    "std/mem"
+    (list (wapp "linked_" nm))
+    vs))
+
+(fn build_mods ((t Target)) (List PinMod)
+  (match (mem_limit_of t)
+    (lim
+      (list
+        (pmod
+          "mg_first"
+          (m_mg_first)
+          lim
+          (list
+            (vec (list) (list 7 9) (mg_first (ld (list 7 9))) (ld (list 7 9)))))
+        (pmod
+          "mg_at"
+          (m_mg_at)
+          lim
+          (list
+            (vec
+              (list 2)
+              (list 5 6 7 8)
+              (mg_at (ld (list 5 6 7 8)) 2)
+              (ld (list 5 6 7 8)))))
+        (pmod
+          "mg_sum2"
+          (m_mg_sum2)
+          lim
+          (list
+            (vec
+              (list 0 3)
+              (list 5 6 7 200)
+              (mg_sum2 (ld (list 5 6 7 200)) 0 3)
+              (ld (list 5 6 7 200)))))
+        (pmod
+          "mg_dbl"
+          (m_mg_dbl)
+          lim
+          (list
+            (vec
+              (list 1)
+              (list 5 250)
+              (mg_dbl (ld (list 5 250)) 1)
+              (ld (list 5 250)))))
+        (pmod
+          "mg_ind"
+          (m_mg_ind)
+          lim
+          (list
+            (vec
+              (list 0)
+              (list 2 9 77)
+              (mg_ind (ld (list 2 9 77)) 0)
+              (ld (list 2 9 77)))))
+        (pmod
+          "mg_sq"
+          (m_mg_sq)
+          lim
+          (list
+            (vec
+              (list 2)
+              (list 0 0 0 0 9)
+              (mg_sq (ld (list 0 0 0 0 9)) 2)
+              (ld (list 0 0 0 0 9)))))
+        (pmod
+          "mg_store"
+          (m_mg_store)
+          lim
+          (list
+            (vec (list 1 99) (list 5 6 7) 99 (mg_store (ld (list 5 6 7)) 1 99))
+            (vec (list 0 999) (list 1 2) 999 (mg_store (ld (list 1 2)) 0 999))))
+        (pmod
+          "mg_copy"
+          (m_mg_copy)
+          lim
+          (list
+            (vec
+              (list 0 3)
+              (list 42 0 0 7)
+              (mem_get (ld (list 42 0 0 7)) 0)
+              (mg_copy (ld (list 42 0 0 7)) 0 3))))
+        (pmod
+          "mg_bump"
+          (m_mg_bump)
+          lim
+          (list
+            (vec
+              (list 2)
+              (list 5 6 250 8)
+              (+ (mem_get (ld (list 5 6 250 8)) 2) 1)
+              (mg_bump (ld (list 5 6 250 8)) 2))
+            (vec
+              (list 0)
+              (list 255 1)
+              (+ (mem_get (ld (list 255 1)) 0) 1)
+              (mg_bump (ld (list 255 1)) 0))))
+        (pmod
+          "mg_prod"
+          (m_mg_prod)
+          lim
+          (list
+            (vec
+              (list 0 1)
+              (list 6 7)
+              (mg_prod (ld (list 6 7)) 0 1)
+              (ld (list 6 7)))
+            (vec
+              (list 0 1)
+              (list 255 255)
+              (mg_prod (ld (list 255 255)) 0 1)
+              (ld (list 255 255)))))
+        (pmod
+          "mg_putget"
+          (m_mg_putget)
+          lim
+          (list
+            (vec
+              (list 0 3)
+              (list 9 9 9 9)
+              (mem_get (mem_set (ld (list 9 9 9 9)) 0 7) 0)
+              (mg_putget (ld (list 9 9 9 9)) 0 3))
+            (vec
+              (list 2 2)
+              (list 1 2 3)
+              (mem_get (mem_set (ld (list 1 2 3)) 2 7) 2)
+              (mg_putget (ld (list 1 2 3)) 2 2))))
+        (pmod
+          "mg_swap"
+          (m_mg_swap)
+          lim
+          (list
+            (vec
+              (list 0 2)
+              (list 10 20 30)
+              (mem_get (ld (list 10 20 30)) 0)
+              (mg_swap (ld (list 10 20 30)) 0 2))
+            (vec
+              (list 1 1)
+              (list 5 6 7)
+              (mem_get (ld (list 5 6 7)) 1)
+              (mg_swap (ld (list 5 6 7)) 1 1))))))))

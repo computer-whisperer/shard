@@ -1,0 +1,148 @@
+;;; callcomp_probe.shard — the CALL-COMPOSITION probe (mod.build design,
+;;; docs/LOWERING.md arc). Question under test: can a consumer's
+;;; lowered-conformance cert be proven by CITING its callee's cert at the
+;;; call site — never computing into the callee's body — so that a module
+;;; (std/mem first) can ship wasm implementations of its surface functions
+;;; as ordinary certified artifacts and consumers compose by call?
+;;;
+;;; The probe's callee cert and keystone lemma both GRADUATED when
+;;; std/mem's mod.build landed: the mget cert is now std/mem's canonical
+;;; lowered_mem_get (std/mem/mem.wasm.shard) and call_bridge lives in the
+;;; model (models/wasm/wasm.shard). What remains here is the CONSUMER
+;;; article — the composed-by-citation proof this probe existed to test:
+;;;   sum2_thm — reads bytes at x and y via TWO calls to function 0 and
+;;;   adds them. Its proof stops the interpreter at each call site
+;;;   ((compute … (stop eval_call))), rewrites by call_bridge with
+;;;   lowered_mem_get discharging the run premise, and never sees the
+;;;   callee's body.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")  ; mem_get (opaque) + get_lo/get_hi byte bounds
+(import "../wasm.shard")
+(import "../../../std/mem/mem.wasm.shard")  ; the canonical artifact certs
+(use (:: std mem *))
+(use (:: models wasm wasm *))
+(use (:: std mem mem.wasm *))
+
+;; local byte-identical copy of std/mem's mget_f — (inline …) is same-file
+;; only, so the consumer statement carries its own literal (the link-time
+;; generator will splice these; drift fails loudly at the bridge citation).
+(fn mget_c () Func (MkFunc 1 0 (list (LocalGet 0) (I32Load8U))))
+
+;; --- the consumer: two byte reads BY CALL, composed by citation ----------------
+
+;; farkas helpers: two byte-bounded values sum inside u32 range
+(claim sum_lo
+  (goal ((p Int) (q Int)) ((= (le 0 p) True) (= (le 0 q) True))
+    (= (le 0 (+ p q)) True))
+  (by arith (list 1 1 1)))
+
+(claim sum_hi
+  (goal ((p Int) (q Int)) ((= (lt p 256) True) (= (lt q 256) True))
+    (= (lt (+ p q) 4294967296) True))
+  (by arith (list 1 1 1)))
+
+(fn sum2_f () Func
+  (MkFunc 2 0 (list (LocalGet 0) (Call 0) (LocalGet 1) (Call 0) (I32Bin BAdd))))
+
+;; the consumer's cert: function 1 of the two-function module, proven by
+;; stopping the interpreter at each call site and citing lowered_mem_get
+;; through call_bridge. The callee's body is NEVER computed into — this
+;; proof reads the callee purely through std/mem's shipped cert.
+(claim sum2_thm
+  (goal ((x Int) (y Int) (m0 Mem) (c Nat) (restfs (List Func)))
+    ((= (le 0 x) True)
+     (= (le (+ x 1) 65536) True)
+     (= (le 0 y) True)
+     (= (le (+ y 1) 65536) True))
+    (=
+      (call_fn_mem
+        (S^ 24 c)
+        (MkWModule (Cons (inline mget_c) (Cons (inline sum2_f) restfs)) 65536)
+        1
+        (list x y)
+        m0)
+      (Some (Pair (+ (mem_get m0 x) (mem_get m0 y)) m0))))
+  (chain
+    (steps ((compute lhs (stop eval_call))))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f (inline mget_c))
+       (inst popped (Cons x Nil))
+       (inst rest Nil)
+       (inst args (Cons x Nil))
+       (inst v (mem_get m0 x))
+       (inst mem2 m0))
+      ((steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (rewrite-with
+         (lemma lowered_mem_get)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+          (steps ((rewrite (premise 1) lr lhs true ())) refl))
+         refl)))
+    (steps ((compute lhs (stop eval_call))))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f (inline mget_c))
+       (inst popped (Cons y Nil))
+       (inst rest (Cons (mem_get m0 x) Nil))
+       (inst args (Cons y Nil))
+       (inst v (mem_get m0 y))
+       (inst mem2 m0))
+      ((steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (rewrite-with
+         (lemma lowered_mem_get)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+          (steps ((rewrite (premise 3) lr lhs true ())) refl))
+         refl)))
+    (steps ((compute lhs)))
+    (have h1 (= (le 0 (mem_get m0 x)) True)
+      (steps ((rewrite (lemma get_lo) lr lhs true ())) refl))
+    (have h2 (= (lt (mem_get m0 x) 256) True)
+      (steps ((rewrite (lemma get_hi) lr lhs true ())) refl))
+    (have h3 (= (le 0 (mem_get m0 y)) True)
+      (steps ((rewrite (lemma get_lo) lr lhs true ())) refl))
+    (have h4 (= (lt (mem_get m0 y) 256) True)
+      (steps ((rewrite (lemma get_hi) lr lhs true ())) refl))
+    (have hw
+      (=
+        (mod (+ (mem_get m0 x) (mem_get m0 y)) 4294967296)
+        (+ (mem_get m0 x) (mem_get m0 y)))
+      (rewrite-with
+        (lemma wrap32_id)
+        lr
+        lhs
+        ((inst x (+ (mem_get m0 x) (mem_get m0 y))))
+        ((rewrite-with
+           (lemma sum_lo)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise h1) lr lhs true ())) refl)
+            (steps ((rewrite (premise h3) lr lhs true ())) refl))
+           refl)
+         (rewrite-with
+           (lemma sum_hi)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise h2) lr lhs true ())) refl)
+            (steps ((rewrite (premise h4) lr lhs true ())) refl))
+           refl))
+        refl))
+    (steps ((rewrite (premise hw) lr lhs true ())) refl)))

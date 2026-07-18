@@ -1,0 +1,392 @@
+;;; revloop_probe.shard — the MULTI-STORE / TWO-POINTER LOOP probe
+;;; (docs/LOWERING.md §7 item 7, fragment growth; slice 2 of the
+;;; user-approved sequence). Hand-plays the §6f/§6h loop template
+;;; extended to IN-PLACE RANGE REVERSE: two stores per iteration and a
+;;; DECREMENTING address accumulator. The answer key is the hand-proven
+;;; wasm_rev piece; this probe is its counter-as-local template twin.
+;;;
+;;; Template deltas over the single-store loop:
+;;;   1. TWO stores per iteration: the source work is a NESTED mem_set
+;;;      (inner at lo, outer at hi). The machine pushes the OUTER store's
+;;;      (addr, value) pair first, then the INNER's, then stores twice —
+;;;      both loads execute BEFORE either store (pure stack discipline,
+;;;      no scratch locals), so the interpreter's memory residue is
+;;;      exactly the spec's nested spelling. NO aliasing/disequality
+;;;      lemmas are needed for this shape — reads-before-writes keeps
+;;;      both sides on the same mem_get/mem_set spellings.
+;;;   2. DECREMENTING accumulator (- a 1): a new stride twin (rg_dec) and
+;;;      a premise pair oriented the other way — count-lower
+;;;      (le (int_of_nat k) x) and address-upper (le (+ x 1) 65536); the
+;;;      upper GUARD premise-rewrites directly (it IS the model's check
+;;;      spelling), the lower guard and the wrap/IH steps ride four new
+;;;      template-constant helper certs (rg_dlo / rg_dlo1 / rg_d32 /
+;;;      rg_dshift / rg_dhi — farkas multipliers computed, §6j).
+;;;      Fence recorded: the dec pair keeps every touched address >= 1
+;;;      and the final local >= 0 (no wrap on the last decrement); a dec
+;;;      accum can therefore never touch byte 0.
+;;;   3. Guard stages fire PER MEMORY-OP OCCURRENCE in code order
+;;;      (load lo / load hi / store lo / store hi) — re-used addresses
+;;;      re-fire their stage, the §6c stage law unchanged.
+;;;
+;;; On success the helpers graduate to models/wasm/loopkit.shard as
+;;; lg_dec / lg_dlo / lg_dlo1 / lg_d32 / lg_dshift / lg_dhi and the
+;;; emitter's loop fragment learns nested-store work + dec updates.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")
+(import "../../../std/nat.shard")
+(import "../wasm.shard")
+(import "../loopkit.shard")
+(use (:: std mem *))
+(use (:: std nat *))
+(use (:: models wasm wasm *))
+(use (:: models wasm loopkit *))
+
+;; the source article: k swaps, lo walking up, hi walking down (spec
+;; updates simultaneous; reads against the OLD memory)
+(fn rv_rev ((m Mem) (lo Int) (hi Int) (k Nat)) Mem
+  (measure (struct k))
+  (match k
+    (Z m)
+    ((S k2)
+     (rv_rev
+       (mem_set (mem_set m lo (mem_get m hi)) hi (mem_get m lo))
+       (+ lo 1)
+       (- hi 1)
+       k2))))
+
+;; the machine body: guard / push outer (hi, m[lo]) / push inner
+;; (lo, m[hi]) / store lo / store hi / lo += 1 / hi -= 1 / k -= 1 / loop
+(fn rv_rev_body () (List Instr)
+  (list
+    (LocalGet 2)
+    (I32Eqz)
+    (BrIf 1)
+    (LocalGet 1)
+    (LocalGet 0)
+    (I32Load8U)
+    (LocalGet 0)
+    (LocalGet 1)
+    (I32Load8U)
+    (I32Store8)
+    (I32Store8)
+    (LocalGet 0)
+    (I32Const 1)
+    (I32Bin BAdd)
+    (LocalSet 0)
+    (LocalGet 1)
+    (I32Const 1)
+    (I32Bin BSub)
+    (LocalSet 1)
+    (LocalGet 2)
+    (I32Const 1)
+    (I32Bin BSub)
+    (LocalSet 2)
+    (Br 0)))
+
+(fn rv_rev_func () Func
+  (MkFunc 3 0 (list (Block (list (Loop (rv_rev_body)))) (I32Const 0))))
+
+;; --- the decrementing-accumulator kit (template constants) -------------------------
+
+;; final position of a stride -1 accum after k iterations
+(fn rg_dec ((x Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z x)
+    ((S k2) (rg_dec (- x 1) k2))))
+
+;; lower guard: int_of_nat (S c) <= x  |-  0 <= x.
+(claim rg_dlo
+  (goal ((x Int) (c Nat))
+    ((= (le (int_of_nat (S c)) x) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c)))
+     (= (le 0 (int_of_nat c)) True))
+    (= (le 0 x) True))
+  (by arith (list 1 1 1 1)))
+
+;; wrap lower bound for the decrement: int_of_nat (S c) <= x  |-  0 <= x - 1.
+(claim rg_dlo1
+  (goal ((x Int) (c Nat))
+    ((= (le (int_of_nat (S c)) x) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c)))
+     (= (le 0 (int_of_nat c)) True))
+    (= (le 0 (- x 1)) True))
+  (by arith (list 1 1 1 1)))
+
+;; wrap upper bound for the decrement: x + 1 <= 65536  |-  x - 1 < 2^32.
+(claim rg_d32
+  (goal ((x Int)) ((= (le (+ x 1) 65536) True))
+    (= (lt (- x 1) 4294967296) True))
+  (by arith (list 1 1)))
+
+;; count-lower premise steps to the IH: int_of_nat (S c) <= x  |-  int_of_nat c <= x - 1.
+(claim rg_dshift
+  (goal ((x Int) (c Nat))
+    ((= (le (int_of_nat (S c)) x) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c))))
+    (= (le (int_of_nat c) (- x 1)) True))
+  (by arith (list 1 1 1)))
+
+;; address-upper premise steps to the IH: x + 1 <= 65536  |-  (x-1) + 1 <= 65536.
+(claim rg_dhi
+  (goal ((x Int)) ((= (le (+ x 1) 65536) True))
+    (= (le (+ (- x 1) 1) 65536) True))
+  (by arith (list 1 1)))
+
+;; --- the worker induction ----------------------------------------------------------
+
+(claim rgw_rv_rev
+  (goal
+    ((x0 Int)
+     (x1 Int)
+     (st (List Int))
+     (m0 Mem)
+     (c Nat)
+     (k Nat)
+     (restfs (List Func)))
+    ((= (le 0 x0) True)
+     (= (le (int_of_nat k) x1) True)
+     (= (le (+ x0 (int_of_nat k)) 65536) True)
+     (= (le (+ x1 1) 65536) True))
+    (=
+      (eval_loop
+        (S^ 28 (lg_fuel k c))
+        (MkWModule
+          (Cons
+            (MkFunc
+              3
+              0
+              (list (Block (list (Loop (inline rv_rev_body)))) (I32Const 0)))
+            restfs)
+          65536)
+        (inline rv_rev_body)
+        (list x0 x1 (int_of_nat k))
+        st
+        m0)
+      (Some
+        (OBr 0 st (list (lg_adv x0 k) (rg_dec x1 k) 0) (rv_rev m0 x0 x1 k)))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((unfold lg_fuel lhs)
+            (reduce lhs)
+            (unfold eval_loop lhs)
+            (rewrite (lemma int_of_nat_succ) lr lhs true ())
+            (compute lhs (stop eval_loop lg_fuel))))
+         (rewrite-with
+           (lemma lg_ne)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps
+           ((compute lhs (stop eval_loop lg_fuel))
+            (rewrite (premise 0) lr lhs true ())
+            (compute lhs (stop eval_loop lg_fuel))))
+         (rewrite-with
+           (lemma lg_a1_ms)
+           lr
+           lhs
+           ((inst c k2))
+           ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+            (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps ((compute lhs (stop eval_loop lg_fuel))))
+         (rewrite-with
+           (lemma rg_dlo)
+           lr
+           lhs
+           ((inst c k2))
+           ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+            (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps
+           ((compute lhs (stop eval_loop lg_fuel))
+            (rewrite (premise 3) lr lhs true ())
+            (compute lhs (stop eval_loop lg_fuel))
+            (rewrite (premise 0) lr lhs true ())
+            (compute lhs (stop eval_loop lg_fuel))))
+         (rewrite-with
+           (lemma lg_a1_ms)
+           lr
+           lhs
+           ((inst c k2))
+           ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+            (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps ((compute lhs (stop eval_loop lg_fuel))))
+         (rewrite-with
+           (lemma rg_dlo)
+           lr
+           lhs
+           ((inst c k2))
+           ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+            (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps
+           ((compute lhs (stop eval_loop lg_fuel))
+            (rewrite (premise 3) lr lhs true ())
+            (compute lhs (stop eval_loop lg_fuel))))
+         (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2))
+           (rewrite-with (lemma lg_sub) lr lhs () () refl))
+         (steps ((rewrite (premise hsub) lr lhs true ())))
+         (have hwk (= (mod (int_of_nat k2) 4294967296) (int_of_nat k2))
+           (rewrite-with
+             (lemma wrap32_id)
+             lr
+             lhs
+             ((inst x (int_of_nat k2)))
+             ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)
+              (rewrite-with
+                (lemma lg_kM)
+                lr
+                lhs
+                ((inst a x0) (inst c k2))
+                ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+                 (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+                 (steps ((rewrite (premise 0) lr lhs true ())) refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hwk) lr lhs true ())))
+         (have hw0 (= (mod (+ x0 1) 4294967296) (+ x0 1))
+           (rewrite-with
+             (lemma wrap32_id)
+             lr
+             lhs
+             ((inst x (+ x0 1)))
+             ((rewrite-with
+                (lemma lg_lo1)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                refl)
+              (rewrite-with
+                (lemma lg_32)
+                lr
+                lhs
+                ()
+                ((rewrite-with
+                   (lemma lg_a1_ms)
+                   lr
+                   lhs
+                   ((inst c k2))
+                   ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+                    (steps
+                      ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                      refl)
+                    (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+                   refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hw0) lr lhs true ())))
+         (have hw1 (= (mod (- x1 1) 4294967296) (- x1 1))
+           (rewrite-with
+             (lemma wrap32_id)
+             lr
+             lhs
+             ((inst x (- x1 1)))
+             ((rewrite-with
+                (lemma rg_dlo1)
+                lr
+                lhs
+                ((inst c k2))
+                ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                 (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+                 (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+                refl)
+              (rewrite-with
+                (lemma rg_d32)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise 3) lr lhs true ())) refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hw1) lr lhs true ())))
+         (steps
+           ((unfold rv_rev rhs)
+            (unfold lg_adv rhs)
+            (unfold rg_dec rhs)
+            (reduce rhs)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma lg_lo1)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma rg_dshift)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma lg_shift)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma rg_dhi)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 3) lr lhs true ())) refl))
+              refl)))
+         (steps ((compute both)))
+         refl)))))
+
+;; --- the lowered theorem ------------------------------------------------------------
+
+(claim lowered_rv_rev
+  (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List Func)))
+    ((= (le 0 x0) True)
+     (= (le (int_of_nat k) x1) True)
+     (= (le (+ x0 (int_of_nat k)) 65536) True)
+     (= (le (+ x1 1) 65536) True))
+    (=
+      (call_fn_mem
+        (S^ 32 (lg_fuel k c))
+        (MkWModule
+          (Cons
+            (MkFunc
+              3
+              0
+              (list (Block (list (Loop (inline rv_rev_body)))) (I32Const 0)))
+            restfs)
+          65536)
+        0
+        (list x0 x1 (int_of_nat k))
+        m0)
+      (Some (Pair 0 (rv_rev m0 x0 x1 k)))))
+  (chain
+    (steps ((compute lhs (stop eval_loop lg_fuel))))
+    (rewrite-with
+      (lemma rgw_rv_rev)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    (steps ((compute both)))
+    refl))

@@ -1,0 +1,85 @@
+;;; wasmgen_loop_src.shard — source articles for wasmgen's LOOP fragment
+;;; (docs/LOWERING.md §6h): Nat-counted tail recursions in the §6f
+;;; template shape. Each lowers to a counter-as-local wasm loop with a
+;;; machine-written induction worker + lowered_* theorem.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")
+(use (:: std mem *))
+
+;; fill: constant value across a range (1 advancing accum + a value accum)
+(fn lp_fill ((m Mem) (d Int) (v Int) (k Nat)) Mem
+  (measure (struct k))
+  (match k
+    (Z m)
+    ((S k2) (lp_fill (mem_set m d v) (+ d 1) v k2))))
+
+;; copy: forward byte copy (2 advancing accums, read + write per pass)
+(fn lp_copy ((m Mem) (s Int) (d Int) (k Nat)) Mem
+  (measure (struct k))
+  (match k
+    (Z m)
+    ((S k2) (lp_copy (mem_set m d (mem_get m s)) (+ s 1) (+ d 1) k2))))
+
+;; stamp: literal value across a range (the literal-value template path)
+(fn lp_stamp ((m Mem) (d Int) (k Nat)) Mem
+  (measure (struct k))
+  (match k
+    (Z m)
+    ((S k2) (lp_stamp (mem_set m d 7) (+ d 1) k2))))
+
+;; sum: byte checksum over a range (the INT-RETURN template path — the Z
+;; arm returns the accumulator; read-only, no store)
+(fn lp_sum ((m Mem) (p Int) (acc Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z acc)
+    ((S k2) (lp_sum m (+ p 1) (+ acc (mem_get m p)) k2))))
+
+;; rev: in-place range reverse, k swaps (TWO stores per iteration + a
+;; DECREMENTING accumulator; reads against the OLD memory — the machine
+;; loads both bytes before either store)
+(fn lp_rev ((m Mem) (lo Int) (hi Int) (k Nat)) Mem
+  (measure (struct k))
+  (match k
+    (Z m)
+    ((S k2)
+     (lp_rev
+       (mem_set (mem_set m lo (mem_get m hi)) hi (mem_get m lo))
+       (+ lo 1)
+       (- hi 1)
+       k2))))
+
+;; scan: first zero's address in [p, p+k), else p+k (the SCAN template
+;; path — data-dependent EARLY EXIT; strlen shape)
+(fn lp_scan ((m Mem) (p Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z p)
+    ((S k2) (if (int_eq (mem_get m p) 0) p (lp_scan m (+ p 1) k2)))))
+
+;; tag: stamp v at the head byte of each of k 4-byte cells (the STRIDE
+;; template path — a stride-4 accum with the scaled range premise and
+;; generated lgs_* helper certs; the uniform-rep cell-walk shape)
+(fn lp_tag ((m Mem) (d Int) (v Int) (k Nat)) Mem
+  (measure (struct k))
+  (match k
+    (Z m)
+    ((S k2) (lp_tag (mem_set m d v) (+ d 4) v k2))))
+
+;; find: first newline's address in [p, p+k), else p+k (the SCAN
+;; template path with a NONZERO literal — I32Const + BEq; memchr shape)
+(fn lp_find ((m Mem) (p Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z p)
+    ((S k2) (if (int_eq (mem_get m p) 10) p (lp_find m (+ p 1) k2)))))
+
+;; beq: 1 if the k bytes at s and d agree, else 0 (the FLAG template
+;; path — two-read condition, mismatch EARLY EXIT; bytes_eq/memcmp shape)
+(fn lp_beq ((m Mem) (s Int) (d Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z 1)
+    ((S k2)
+     (if (int_eq (mem_get m s) (mem_get m d)) (lp_beq m (+ s 1) (+ d 1) k2) 0))))

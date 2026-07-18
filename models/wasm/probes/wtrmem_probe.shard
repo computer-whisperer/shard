@@ -1,0 +1,224 @@
+;;; wtrmem_probe.shard — the WRITE-THEN-READ probe for the straight-line
+;;; mem fragment (docs/LOWERING.md §7 item 7 residue; slice 4 of the
+;;; fragment-growth sequence). Hand-plays, in the emitter's exact
+;;; generated shapes, a body that READS THROUGH AN EARLIER STORE:
+;;;
+;;;   (fn wr_putget ((m Mem) (x Int) (y Int)) Mem
+;;;     (let ((m2 (mem_set m x 7))) (mem_set m2 y (mem_get m2 x))))
+;;;
+;;; What is genuinely new over portcert/msetcomp:
+;;;   1. A GET behavior premise AT UPDATED MEMORY — the site equation's
+;;;      memory slots carry (mem_set m0 x0 7) instead of m0, in both the
+;;;      input position and the result Pair. The walk will thread the
+;;;      CURRENT MEMORY TERM; Mem-typed lets are the linear sequencing
+;;;      form and ζ-open by substitution on the spec side, so machine
+;;;      and spec spellings stay identical — NO get_set_other collapse,
+;;;      NO disequality premises (reads that should see through a store
+;;;      DO, on both sides, by spelling).
+;;;   2. The link derivation discharges that premise by citing
+;;;      lowered_mem_get with its m0 binder unifying against the
+;;;      mem_set term — the arbitrary-m0 framed schema at a premise
+;;;      boundary (msetcomp validated it at a bridge boundary).
+;;;   3. The machine parks the intermediate mset's leftover return in a
+;;;      scratch local (the no-Drop discipline) — MkFunc 2 1, the mem
+;;;      fragment's first nonzero extra-locals count from a Mem binding.
+;;;
+;;; Machine code (8 instrs, budget N = 2*8+3+13*1+21*2 = 74; site fuels
+;;; N-(pos+3)): [LocalGet 0, I32Const 7, Call 1@2 -> S^69, LocalSet 2,
+;;; LocalGet 1, LocalGet 0, Call 0@6 -> S^65, Call 1@7 -> S^64].
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")
+(import "../wasm.shard")
+(import "../../../std/mem/mem.wasm.shard")  ; the shipped certs (link-time discharge)
+(use (:: std mem *))
+(use (:: models wasm wasm *))
+(use (:: std mem mem.wasm *))
+
+;; the source article
+(fn wr_putget ((m Mem) (x Int) (y Int)) Mem
+  (let ((m2 (mem_set m x 7)))
+    (mem_set m2 y (mem_get m2 x))))
+
+;; local byte-identical callee literals ((inline …) is same-file-only)
+(fn mget_c () Func (MkFunc 1 0 (list (LocalGet 0) (I32Load8U))))
+
+(fn mset_c () Func
+  (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Store8) (LocalGet 1))))
+
+;; the emitted body (scratch local 2 parks the intermediate mset return)
+(fn wr_putget_c () Func
+  (MkFunc
+    2
+    1
+    (list
+      (LocalGet 0)
+      (I32Const 7)
+      (Call 1)
+      (LocalSet 2)
+      (LocalGet 1)
+      (LocalGet 0)
+      (Call 0)
+      (Call 1))))
+
+;; --- the PORTABLE cert (the primary form the emitter will write) ------------------
+
+(claim wr_putget_port
+  (goal
+    ((x0 Int)
+     (x1 Int)
+     (m0 Mem)
+     (m WModule)
+     (f0 Func)
+     (f1 Func)
+     (restm (List Func))
+     (c Nat))
+    ((= (funcs_of m) (Cons f0 (Cons f1 (Cons (inline wr_putget_c) restm))))
+     (= (params_of f0) 1)
+     (= (params_of f1) 2)
+     (=
+       (call_fn_mem (S^ 69 c) m 1 (Cons x0 (Cons 7 Nil)) m0)
+       (Some (Pair 7 (mem_set m0 x0 7))))
+     (=
+       (call_fn_mem (S^ 65 c) m 0 (Cons x0 Nil) (mem_set m0 x0 7))
+       (Some
+         (Pair (mem_get (mem_set m0 x0 7) x0) (mem_set m0 x0 7))))
+     (=
+       (call_fn_mem
+         (S^ 64 c)
+         m
+         1
+         (Cons x1 (Cons (mem_get (mem_set m0 x0 7) x0) Nil))
+         (mem_set m0 x0 7))
+       (Some
+         (Pair
+           (mem_get (mem_set m0 x0 7) x0)
+           (mem_set (mem_set m0 x0 7) x1 (mem_get (mem_set m0 x0 7) x0))))))
+    (=
+      (call_fn_mem (S^ 74 c) m 2 (Cons x0 (Cons x1 Nil)) m0)
+      (Some
+        (Pair (mem_get (mem_set m0 x0 7) x0) (wr_putget m0 x0 x1)))))
+  (chain
+    (steps
+      ((compute lhs (stop eval_call funcs_of))
+       (rewrite (premise 0) lr lhs true ())
+       (unfold wr_putget rhs)
+       (reduce rhs)))
+    (steps ((compute lhs (stop eval_call))))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f f1)
+       (inst popped (Cons 7 (Cons x0 Nil)))
+       (inst rest Nil)
+       (inst args (Cons x0 (Cons 7 Nil)))
+       (inst v 7)
+       (inst mem2 (mem_set m0 x0 7)))
+      ((steps ((rewrite (premise 0) lr lhs true ()) (compute both)) refl)
+       (steps ((rewrite (premise 2) lr lhs true ()) (compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((rewrite (premise 2) lr lhs true ()) (compute both)) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    (steps ((compute lhs (stop eval_call))))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f f0)
+       (inst popped (Cons x0 Nil))
+       (inst rest (Cons x1 Nil))
+       (inst args (Cons x0 Nil))
+       (inst v (mem_get (mem_set m0 x0 7) x0))
+       (inst mem2 (mem_set m0 x0 7)))
+      ((steps ((rewrite (premise 0) lr lhs true ()) (compute both)) refl)
+       (steps ((rewrite (premise 1) lr lhs true ()) (compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((rewrite (premise 1) lr lhs true ()) (compute both)) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)))
+    (steps ((compute lhs (stop eval_call))))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f f1)
+       (inst popped (Cons (mem_get (mem_set m0 x0 7) x0) (Cons x1 Nil)))
+       (inst rest Nil)
+       (inst args (Cons x1 (Cons (mem_get (mem_set m0 x0 7) x0) Nil)))
+       (inst v (mem_get (mem_set m0 x0 7) x0))
+       (inst
+         mem2
+         (mem_set (mem_set m0 x0 7) x1 (mem_get (mem_set m0 x0 7) x0))))
+      ((steps ((rewrite (premise 0) lr lhs true ()) (compute both)) refl)
+       (steps ((rewrite (premise 2) lr lhs true ()) (compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((rewrite (premise 2) lr lhs true ()) (compute both)) refl)
+       (steps ((rewrite (premise 5) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    refl))
+
+;; --- the LINKED derivation (pure citation; lowered_mem_get's m0 binder
+;; unifies against the mem_set term) -------------------------------------------------
+
+(claim wr_putget_linked
+  (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (restfs (List Func)))
+    ((= (le 0 x0) True)
+     (= (le (+ x0 1) 65536) True)
+     (= (le 0 x1) True)
+     (= (le (+ x1 1) 65536) True))
+    (=
+      (call_fn_mem
+        (S^ 74 c)
+        (MkWModule
+          (Cons
+            (inline mget_c)
+            (Cons (inline mset_c) (Cons (inline wr_putget_c) restfs)))
+          65536)
+        2
+        (Cons x0 (Cons x1 Nil))
+        m0)
+      (Some
+        (Pair (mem_get (mem_set m0 x0 7) x0) (wr_putget m0 x0 x1)))))
+  (chain
+    (rewrite-with
+      (lemma wr_putget_port)
+      lr
+      lhs
+      ((inst
+         m
+         (MkWModule
+           (Cons
+             (inline mget_c)
+             (Cons (inline mset_c) (Cons (inline wr_putget_c) restfs)))
+           65536))
+       (inst f0 (inline mget_c))
+       (inst f1 (inline mset_c))
+       (inst restm restfs))
+      ((steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (rewrite-with
+         (lemma lowered_mem_set)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+          (steps ((rewrite (premise 1) lr lhs true ())) refl))
+         refl)
+       (rewrite-with
+         (lemma lowered_mem_get)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+          (steps ((rewrite (premise 1) lr lhs true ())) refl))
+         refl)
+       (rewrite-with
+         (lemma lowered_mem_set)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+          (steps ((rewrite (premise 3) lr lhs true ())) refl))
+         refl)))
+    refl))

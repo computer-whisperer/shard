@@ -1,0 +1,274 @@
+;;; tools/lowbuild/fixtures/wasmgen_loop_src.build.shard — the BUILD ENTRY for wasmgen's
+;;; LOOP fragment (docs/LOWERING.md §6h) under the re-founded charter
+;;; (docs/BUILD.md §4/§5, rung 2): content only. Loop pieces are LEAF
+;;; certs (no callee prefix): each pinned module is the cert's module at
+;;; restfs := Nil — [self], linear memory from the Target; lowered_<fn>
+;;; pins export f0. The Func literals come from the GENERATED cert file
+;;; itself (wasmgen_loop_out.shard's lp_*_func) — no hand copies.
+;;; MEMCASE vectors' expected value AND memory readback computed
+;;; SPEC-SIDE (the source fn applied directly — the Nat counter arg via
+;;; fnat of the machine i32). ARTIFACT bindings, plan assembly, and wire
+;;; are DERIVED (tools/lowbuild pinlib); the manifest gate verifies the
+;;; derived index bindings against the cert file read raw.
+;;;
+;;;     (fn build_mods ((t Target)) (List PinMod))   — the standard symbol
+;;;
+;;; RUN IT:
+;;;   bin/shard_eval run tools/lowbuild/lowbuild.shard pinlib tools/lowbuild/fixtures/wasmgen_loop_src.build.shard
+
+(import "../../../kernel/stdlib.shard")
+(import "wasmgen_loop_src.shard")
+(use (:: tools lowbuild fixtures wasmgen_loop_src *))
+(import "wasmgen_loop_out.shard")
+(use (:: tools lowbuild fixtures wasmgen_loop_out lp_fill_func))
+(use (:: tools lowbuild fixtures wasmgen_loop_out lp_copy_func))
+(use (:: tools lowbuild fixtures wasmgen_loop_out lp_stamp_func))
+(use (:: tools lowbuild fixtures wasmgen_loop_out lp_sum_func))
+(use (:: tools lowbuild fixtures wasmgen_loop_out lp_rev_func))
+(use (:: tools lowbuild fixtures wasmgen_loop_out lp_scan_func))
+(use (:: tools lowbuild fixtures wasmgen_loop_out lp_tag_func))
+(use (:: tools lowbuild fixtures wasmgen_loop_out lp_find_func))
+(use (:: tools lowbuild fixtures wasmgen_loop_out lp_beq_func))
+(import "../../../std/mem")
+(use (:: std mem *))
+(import "../../../models/wasm/wasm.shard")
+(use (:: models wasm wasm *))
+(import "../../../models/wasm/encode.shard")
+(use (:: models wasm encode *))
+(import "../../../meta/plan")
+(use (:: meta plan *))
+(import "../../../meta/build")
+(use (:: meta build *))
+
+;; --- the binaries: [self] per source fn (leaf pieces, no callee prefix) ----------
+
+(fn lmod ((self Func) (limit Int)) WModule (MkWModule (list self) limit))
+
+;; --- spec-side memory helpers ---------------------------------------------------
+
+(fn mload ((bs (List Int)) (a Int) (m Mem)) Mem
+  (measure (struct bs))
+  (match bs
+    (Nil m)
+    ((Cons b t) (mload t (+ a 1) (mem_set m a b)))))
+
+(fn mdump ((a Int) (n Nat) (m Mem)) (List Int)
+  (measure (struct n))
+  (match n
+    (Z Nil)
+    ((S k) (Cons (mem_get m a) (mdump (+ a 1) k m)))))
+
+(fn len_nat ((xs (List Int))) Nat
+  (measure (struct xs))
+  (match xs
+    (Nil Z)
+    ((Cons _ t) (S (len_nat t)))))
+
+;; --- the build entry: content only ------------------------------------------------
+
+;; a memory vector: expected value + final-memory readback, both SPEC-side
+(fn vec ((args (List Int)) (membytes (List Int)) (v Int) (mf Mem)) PVec
+  (PV 0 args membytes v (mdump 0 (len_nat membytes) mf)))
+
+(fn ld ((bs (List Int))) Mem (mload bs 0 (mem_empty)))
+
+;; one leaf pin: [self] module, lowered_<nm> pins index 0
+(fn pmod ((nm (List Int)) (self Func) (limit Int) (vs (List PVec))) PinMod
+  (MkPinMod
+    nm
+    (enc_module (lmod self limit))
+    "tools/lowbuild/fixtures/wasmgen_loop_out.shard"
+    0
+    ""
+    (list (wapp "lowered_" nm))
+    vs))
+
+(fn build_mods ((t Target)) (List PinMod)
+  (match (mem_limit_of t)
+    (lim
+      (list
+        (pmod
+          "lp_fill"
+          (lp_fill_func)
+          lim
+          (list
+            (vec
+              (list 1 200 3)
+              (list 5 5 5 5 5)
+              0
+              (lp_fill (ld (list 5 5 5 5 5)) 1 200 (fnat 3)))
+            (vec
+              (list 0 999 2)
+              (list 7 7 7)
+              0
+              (lp_fill (ld (list 7 7 7)) 0 999 (fnat 2)))
+            (vec
+              (list 2 50 0)
+              (list 9 9 9)
+              0
+              (lp_fill (ld (list 9 9 9)) 2 50 (fnat 0)))))
+        (pmod
+          "lp_copy"
+          (lp_copy_func)
+          lim
+          (list
+            (vec
+              (list 0 3 3)
+              (list 1 2 3 0 0 0)
+              0
+              (lp_copy (ld (list 1 2 3 0 0 0)) 0 3 (fnat 3)))
+            (vec
+              (list 0 1 3)
+              (list 8 9 10 11)
+              0
+              (lp_copy (ld (list 8 9 10 11)) 0 1 (fnat 3)))))
+        (pmod
+          "lp_stamp"
+          (lp_stamp_func)
+          lim
+          (list
+            (vec
+              (list 1 3)
+              (list 0 0 0 0 0)
+              0
+              (lp_stamp (ld (list 0 0 0 0 0)) 1 (fnat 3)))))
+        (pmod
+          "lp_sum"
+          (lp_sum_func)
+          lim
+          (list
+            (vec
+              (list 0 0 4)
+              (list 1 2 3 4 5)
+              (lp_sum (ld (list 1 2 3 4 5)) 0 0 (fnat 4))
+              (ld (list 1 2 3 4 5)))
+            (vec
+              (list 1 100 3)
+              (list 10 20 30 40)
+              (lp_sum (ld (list 10 20 30 40)) 1 100 (fnat 3))
+              (ld (list 10 20 30 40)))
+            (vec
+              (list 2 7 0)
+              (list 9 9 9)
+              (lp_sum (ld (list 9 9 9)) 2 7 (fnat 0))
+              (ld (list 9 9 9)))))
+        (pmod
+          "lp_rev"
+          (lp_rev_func)
+          lim
+          (list
+            (vec
+              (list 0 5 3)
+              (list 1 2 3 4 5 6)
+              0
+              (lp_rev (ld (list 1 2 3 4 5 6)) 0 5 (fnat 3)))
+            (vec
+              (list 0 4 2)
+              (list 9 8 7 6 5)
+              0
+              (lp_rev (ld (list 9 8 7 6 5)) 0 4 (fnat 2)))
+            (vec
+              (list 1 3 0)
+              (list 4 4 4 4)
+              0
+              (lp_rev (ld (list 4 4 4 4)) 1 3 (fnat 0)))))
+        (pmod
+          "lp_scan"
+          (lp_scan_func)
+          lim
+          (list
+            (vec
+              (list 0 4)
+              (list 65 66 0 68)
+              (lp_scan (ld (list 65 66 0 68)) 0 (fnat 4))
+              (ld (list 65 66 0 68)))
+            (vec
+              (list 0 3)
+              (list 1 2 3)
+              (lp_scan (ld (list 1 2 3)) 0 (fnat 3))
+              (ld (list 1 2 3)))
+            (vec
+              (list 1 3)
+              (list 0 7 7 0)
+              (lp_scan (ld (list 0 7 7 0)) 1 (fnat 3))
+              (ld (list 0 7 7 0)))
+            (vec
+              (list 2 0)
+              (list 9 9 9)
+              (lp_scan (ld (list 9 9 9)) 2 (fnat 0))
+              (ld (list 9 9 9)))))
+        (pmod
+          "lp_tag"
+          (lp_tag_func)
+          lim
+          (list
+            (vec
+              (list 0 9 3)
+              (list 0 1 2 3 4 5 6 7 8 9 10 11)
+              0
+              (lp_tag (ld (list 0 1 2 3 4 5 6 7 8 9 10 11)) 0 9 (fnat 3)))
+            (vec
+              (list 1 255 2)
+              (list 7 7 7 7 7 7 7 7 7)
+              0
+              (lp_tag (ld (list 7 7 7 7 7 7 7 7 7)) 1 255 (fnat 2)))
+            (vec
+              (list 3 5 0)
+              (list 4 4 4 4)
+              0
+              (lp_tag (ld (list 4 4 4 4)) 3 5 (fnat 0)))))
+        (pmod
+          "lp_find"
+          (lp_find_func)
+          lim
+          (list
+            (vec
+              (list 0 4)
+              (list 65 66 10 68)
+              (lp_find (ld (list 65 66 10 68)) 0 (fnat 4))
+              (ld (list 65 66 10 68)))
+            (vec
+              (list 0 3)
+              (list 1 2 3)
+              (lp_find (ld (list 1 2 3)) 0 (fnat 3))
+              (ld (list 1 2 3)))
+            (vec
+              (list 1 3)
+              (list 10 7 7 10)
+              (lp_find (ld (list 10 7 7 10)) 1 (fnat 3))
+              (ld (list 10 7 7 10)))
+            (vec
+              (list 2 0)
+              (list 10 10 10)
+              (lp_find (ld (list 10 10 10)) 2 (fnat 0))
+              (ld (list 10 10 10)))))
+        (pmod
+          "lp_beq"
+          (lp_beq_func)
+          lim
+          (list
+            (vec
+              (list 0 3 3)
+              (list 5 6 7 5 6 7)
+              (lp_beq (ld (list 5 6 7 5 6 7)) 0 3 (fnat 3))
+              (ld (list 5 6 7 5 6 7)))
+            (vec
+              (list 0 3 3)
+              (list 1 2 3 1 9 3)
+              (lp_beq (ld (list 1 2 3 1 9 3)) 0 3 (fnat 3))
+              (ld (list 1 2 3 1 9 3)))
+            (vec
+              (list 0 3 3)
+              (list 4 5 6 4 5 7)
+              (lp_beq (ld (list 4 5 6 4 5 7)) 0 3 (fnat 3))
+              (ld (list 4 5 6 4 5 7)))
+            (vec
+              (list 2 5 0)
+              (list 8 8 8 8 8 8)
+              (lp_beq (ld (list 8 8 8 8 8 8)) 2 5 (fnat 0))
+              (ld (list 8 8 8 8 8 8)))
+            (vec
+              (list 1 1 2)
+              (list 3 4 5)
+              (lp_beq (ld (list 3 4 5)) 1 1 (fnat 2))
+              (ld (list 3 4 5)))))))))

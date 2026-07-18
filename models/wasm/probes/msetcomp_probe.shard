@@ -1,0 +1,257 @@
+;;; msetcomp_probe.shard — the MSET FRAME-FLOW probe (mod.build design,
+;;; docs/LOWERING.md arc; the arc-after of callcomp_probe.shard).
+;;;
+;;; Question under test: when a CALLEE WRITES memory, how does the frame
+;;; flow to the caller's cert? Hypothesis: entirely through citation —
+;;; the callee's cert returns its memory effect DENOTATIONALLY as an
+;;; abstract (mem_set m0 a v) term, so
+;;;   1. the caller's later observations instantiate their own callee
+;;;      certs AT the post-write memory (the arbitrary-m0 framed schema
+;;;      earning its keep at call boundaries), and
+;;;   2. std/mem's existing surface laws (get_set_other here) collapse
+;;;      framed reads — no frame companions, no memory-equality theory,
+;;;      no new kernel or model machinery.
+;;;
+;;; The writing callee's cert developed here GRADUATED to std/mem's
+;;; canonical artifact file when mod.build landed (lowered_mem_set in
+;;; std/mem/mem.wasm.shard). What remains are the CONSUMER articles:
+;;;   1. setget_thm — THE FRAME CONSUMER: store v at x, then read y ≠ x
+;;;      by call. The read's cert is cited at m0 := (mem_set m0 x v) and
+;;;      get_set_other collapses the value to (mem_get m0 y) while the
+;;;      final memory keeps the write.
+;;;   2. bump_thm  — read-modify-write: the callee cert cited with a
+;;;      COMPUTED argument (v := (mem_get m0 x) + 1), the shape every
+;;;      real in-place algorithm has.
+;;;
+;;; The consumers park callee return values in a scratch local (LocalSet)
+;;; rather than a Drop — the model has no Drop, and P2c's locals-not-stack
+;;; discipline is what the emitter speaks anyway.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")  ; mem_get/mem_set surface: get_lo/get_hi/get_set_other
+(import "../wasm.shard")
+(import "../../../std/mem/mem.wasm.shard")  ; the canonical artifact certs
+(import "callcomp_probe.shard")  ; sum_lo/sum_hi arith helpers
+(use (:: std mem *))
+(use (:: models wasm wasm *))
+(use (:: std mem mem.wasm *))
+(use (:: models wasm probes callcomp_probe sum_lo))
+(use (:: models wasm probes callcomp_probe sum_hi))
+
+;; PROBE FINDING: (inline NAME) is same-file-only (reader-level table), so a
+;; consumer file cannot ride a FOREIGN fn's body into its statements. Cert
+;; statements pin function LITERALS, and citation matching is structural —
+;; so byte-identical local copies of std/mem's shipped fns work, and the
+;; canonical certs (stated over the same literals) apply to them. If the
+;; shipped fns ever drift, the bridge citations here fail loudly. The real
+;; fix lives in the regenerate-at-link story: the generator splices literals.
+(fn mget_c () Func (MkFunc 1 0 (list (LocalGet 0) (I32Load8U))))
+
+;; local copy of std/mem's mset_f, same deal as mget_c above.
+(fn mset_c () Func
+  (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Store8) (LocalGet 1))))
+
+;; --- the frame consumer: write x, read y, frame past the write -----------------
+
+;; params (x, y, v), one scratch local: store v at x (call 1), park the
+;; return, read y (call 0). The read is the FRAMED observation.
+(fn setget_f () Func
+  (MkFunc
+    3
+    1
+    (list (LocalGet 0) (LocalGet 2) (Call 1) (LocalSet 3) (LocalGet 1) (Call 0))))
+
+;; the frame-flow statement: the value is the ORIGINAL byte at y — the
+;; callee's write is invisible to the read (premise: y ≠ x) — while the
+;; final memory carries the write. Proof shape: bridge + lowered_mem_set
+;; hands back (mem_set m0 x v); bridge + lowered_mem_get is cited AT that
+;; memory; get_set_other finishes. The callees' bodies are never entered.
+(claim setget_thm
+  (goal ((x Int) (y Int) (v Int) (m0 Mem) (c Nat) (restfs (List Func)))
+    ((= (le 0 x) True)
+     (= (le (+ x 1) 65536) True)
+     (= (le 0 y) True)
+     (= (le (+ y 1) 65536) True)
+     (= (int_eq y x) False))
+    (=
+      (call_fn_mem
+        (S^ 30 c)
+        (MkWModule
+          (Cons
+            (inline mget_c)
+            (Cons (inline mset_c) (Cons (inline setget_f) restfs)))
+          65536)
+        2
+        (list x y v)
+        m0)
+      (Some (Pair (mem_get m0 y) (mem_set m0 x v)))))
+  (chain
+    (steps ((compute lhs (stop eval_call))))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f (inline mset_c))
+       (inst popped (Cons v (Cons x Nil)))
+       (inst rest Nil)
+       (inst args (Cons x (Cons v Nil)))
+       (inst v v)
+       (inst mem2 (mem_set m0 x v)))
+      ((steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (rewrite-with
+         (lemma lowered_mem_set)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+          (steps ((rewrite (premise 1) lr lhs true ())) refl))
+         refl)))
+    (steps ((compute lhs (stop eval_call))))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f (inline mget_c))
+       (inst popped (Cons y Nil))
+       (inst rest Nil)
+       (inst args (Cons y Nil))
+       (inst v (mem_get (mem_set m0 x v) y))
+       (inst mem2 (mem_set m0 x v)))
+      ((steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (rewrite-with
+         (lemma lowered_mem_get)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+          (steps ((rewrite (premise 3) lr lhs true ())) refl))
+         refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 4) lr lhs true ())) refl))
+      refl)))
+
+;; --- the read-modify-write consumer: a COMPUTED callee argument ----------------
+
+;; params (x): read m[x] (call 0), add 1, store back (call 1), return the
+;; stored value. The mset cert is cited at v := (mem_get m0 x) + 1 — an
+;; argument the caller COMPUTED, not one it was passed.
+(fn bump_f () Func
+  (MkFunc
+    1
+    0
+    (list
+      (LocalGet 0)
+      (LocalGet 0)
+      (Call 0)
+      (I32Const 1)
+      (I32Bin BAdd)
+      (Call 1))))
+
+;; index 3 of the four-function module: citing callees at 0/1 from deeper
+;; in the table. The +1 wraps at the BAdd; get_lo/get_hi bound the read so
+;; wrap32_id (via callcomp's sum_lo/sum_hi at q := 1) collapses the mod
+;; BEFORE the second bridge — the callee cert then matches the clean sum.
+(claim bump_thm
+  (goal ((x Int) (m0 Mem) (c Nat) (restfs (List Func)))
+    ((= (le 0 x) True) (= (le (+ x 1) 65536) True))
+    (=
+      (call_fn_mem
+        (S^ 30 c)
+        (MkWModule
+          (Cons
+            (inline mget_c)
+            (Cons
+              (inline mset_c)
+              (Cons (inline setget_f) (Cons (inline bump_f) restfs))))
+          65536)
+        3
+        (list x)
+        m0)
+      (Some (Pair (+ (mem_get m0 x) 1) (mem_set m0 x (+ (mem_get m0 x) 1))))))
+  (chain
+    (steps ((compute lhs (stop eval_call))))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f (inline mget_c))
+       (inst popped (Cons x Nil))
+       (inst rest (Cons x Nil))
+       (inst args (Cons x Nil))
+       (inst v (mem_get m0 x))
+       (inst mem2 m0))
+      ((steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (rewrite-with
+         (lemma lowered_mem_get)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+          (steps ((rewrite (premise 1) lr lhs true ())) refl))
+         refl)))
+    (steps ((compute lhs (stop eval_call))))
+    (have h1 (= (le 0 (mem_get m0 x)) True)
+      (steps ((rewrite (lemma get_lo) lr lhs true ())) refl))
+    (have h2 (= (lt (mem_get m0 x) 256) True)
+      (steps ((rewrite (lemma get_hi) lr lhs true ())) refl))
+    (have hw (= (mod (+ (mem_get m0 x) 1) 4294967296) (+ (mem_get m0 x) 1))
+      (rewrite-with
+        (lemma wrap32_id)
+        lr
+        lhs
+        ((inst x (+ (mem_get m0 x) 1)))
+        ((rewrite-with
+           (lemma sum_lo)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise h1) lr lhs true ())) refl)
+            (steps ((compute both)) refl))
+           refl)
+         (rewrite-with
+           (lemma sum_hi)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise h2) lr lhs true ())) refl)
+            (steps ((compute both)) refl))
+           refl))
+        refl))
+    (steps ((rewrite (premise hw) lr lhs true ())))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f (inline mset_c))
+       (inst popped (Cons (+ (mem_get m0 x) 1) (Cons x Nil)))
+       (inst rest Nil)
+       (inst args (Cons x (Cons (+ (mem_get m0 x) 1) Nil)))
+       (inst v (+ (mem_get m0 x) 1))
+       (inst mem2 (mem_set m0 x (+ (mem_get m0 x) 1))))
+      ((steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (rewrite-with
+         (lemma lowered_mem_set)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+          (steps ((rewrite (premise 1) lr lhs true ())) refl))
+         refl)))
+    (steps ((compute lhs)) refl)))

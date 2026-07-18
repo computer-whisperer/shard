@@ -1,0 +1,223 @@
+;;; models/x86/probes/binelf_probe.shard — the hand-driven BIN-rung de-risk probe
+;;; (docs/X86.md §21, the "plainly-executable ELF" rung). Same pattern as the
+;;; §20 self-checking ELF: this is UNTRUSTED plumbing (like enc_elf / the
+;;; x86_diff harness), no proofs — it confirms the NEW mechanisms of a gcc-shaped
+;;; binary IN ISOLATION, before any pipeline wiring:
+;;;
+;;;   1. TWO PT_LOAD — a second, RW segment (the data buffer at 0x600000)
+;;;      alongside the R+X code/headers segment at 0x400000.
+;;;   2. ENTRY-STACK ARGV — the `_start` glue reads argc at [rsp] and argv[1]
+;;;      at [rsp+16]; argc < 2 -> sys_exit(1).
+;;;   3. GLUE COPY — a copy loop moves argv[1]'s bytes (to NUL, guarded by a
+;;;      max) into the data segment as [len:8 LE][bytes…]; bytes moved, never
+;;;      interpreted.
+;;;   4. IMAGE FN — a probe-local x86 function receives the buffer BASE in rdi
+;;;      (the SAME convention std/mem's x86 exports use: address in rdi, byte
+;;;      to rax via XLoad8), reads len + sums the payload bytes, and returns
+;;;      (len << 32) | byte_sum in rax.
+;;;   5. OUTPUT + EXIT — the glue sys_writes the 8-byte result, sys_exit(0).
+;;;
+;;; The emitter prints `ELF <hex>` (the whole binary) and `EXPOUT <hex>` (the
+;;; expected 8-byte stdout, computed PURELY here over the test string — the
+;;; spec side). models/x86/probes/binelf_probe.sh un-hexes, runs the binary on real
+;;; Linux, and diffs. A wrong header/glue/image byte fails LOUDLY at the loader
+;;; or the diff, never in a proof.
+;;;
+;;; DATA SEGMENT decision: a pure BSS segment (p_filesz = 0, p_memsz = 4096,
+;;; kernel zero-filled). No file bytes to carry; p_vaddr 0x600000 ≡ p_offset 0
+;;; (mod 4096). The zero fill also makes the single-byte len store below a
+;;; correct 8-byte little-endian len field for len < 256.
+
+(import "../../../kernel/loader.shard")
+(import "../x86.shard")
+(import "../encode.shard")
+(import "../linux.shard")
+(use (:: kernel loader *))
+(use (:: models x86 x86 *))
+(use (:: models x86 encode *))
+(use (:: models x86 linux *))
+
+;; --- local list plumbing ------------------------------------------------------
+
+(fn gcat ((xs (List (List Int)))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (eapp h (gcat t)))))
+
+;; --- fixed layout constants ---------------------------------------------------
+
+(fn load_base () Int 4194304)  ; 0x400000 — the R+X code/headers segment
+(fn data_base () Int 6291456)  ; 0x600000 — the RW data segment (BSS)
+(fn data_size () Int 4096)  ; zero-filled bytes reserved at data_base
+(fn maxlen () Int 256)  ; copy-loop length guard
+(fn hdrs_sz () Int 176)  ; 64 (ELF header) + 2*56 (two program headers)
+
+;; --- the test string + the SPEC computation (the expected result) -------------
+
+;; the argument models/x86/probes/binelf_probe.sh passes; the emitter computes EXPOUT
+;; over these bytes so the two stay in lockstep (change one, change the other).
+(fn tstr () (List Int) (list 104 101 108 108 111))  ; "hello"
+
+(fn bsum ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons h t) (+ h (bsum t)))))
+
+(fn blen ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (blen t)))))
+
+;; result = (len << 32) | byte_sum ; len < 256 and byte_sum < 2^32, so the two
+;; fields are bit-disjoint and | == +.  4294967296 = 2^32.
+(fn expected () Int (+ (* (blen (tstr)) 4294967296) (bsum (tstr))))
+
+;; --- the IMAGE function (probe-local, hand-driven; no cert) --------------------
+;;
+;; Buffer base arrives in rdi (SysV arg 0, exactly how the §20 stub marshals
+;; arg 0 and how std/mem's xmget_f takes its address in rdi). Layout at base:
+;; [len:8 LE][payload…].  rcx = len; sum the len payload bytes into rax; then
+;; rax = (len << 32) | sum.  len << 32 via two imul-by-2^16 (2^32 exceeds imm32).
+(fn image_fn () XFunc
+  (MkXFunc
+    1
+    (list
+      (XLoad8 RCX (AReg RDI))  ; rcx = byte[base] = len (low byte; hi are 0)
+      (XMovRR RDX RCX)  ; rdx = len (saved for the shift)
+      (XBin XAdd RDI (SImm 8))  ; rdi -> payload (base + 8)
+      (XMovRI RAX 0)  ; rax = running sum
+      (XBlock
+        (list
+          (XLoop
+            (list
+              (XBrIf (CEqz RCX) 1)  ; len == 0 -> exit the loop
+              (XLoad8 R8 (AReg RDI))  ; r8 = byte[rdi]
+              (XBin XAdd RAX (SReg R8))  ; sum += r8
+              (XBin XAdd RDI (SImm 1))  ; rdi++
+              (XBin XSub RCX (SImm 1))  ; len--
+              (XBr 0)))))  ; loop
+      (XBin XMul RDX (SImm 65536))
+      (XBin XMul RDX (SImm 65536))  ; rdx = len << 32
+      (XBin XOr RAX (SReg RDX)))))  ; rax = (len << 32) | sum
+
+;; --- the _start glue (hand-laid; fixed-width, so offsets are computable) -------
+;;
+;; Offsets (bytes from glue start) annotate each line; the forward/backward
+;; branch displacements are (target - instruction end).  glue length = 165,
+;; so the image function begins at glue offset 165 and `call` reaches it with
+;; rel32 = 165 - 131 = 34.
+(fn glue () (List Int)
+  (gcat
+    (list
+      (enc_mov_reg_rsp8 RAX 0)  ; 0   mov rax,[rsp]      argc
+      (enc_cmp_rs RAX (SImm 2))  ; 5   cmp rax,2
+      (enc_jcc_rel32 131 12)  ; 12  jae +12 -> 30 (skip error)
+      (sys_exit_code 1)  ; 18  argc<2: sys_exit(1)
+      (enc_mov_reg_rsp8 RSI 16)  ; 30  mov rsi,[rsp+16]  argv[1] (src)
+      (enc_mov_imm64 RDI (+ (data_base) 8))  ; 35  mov rdi,DATA+8 (dest = payload)
+      (enc_mov_imm64 RBX (data_base))  ; 45  mov rbx,DATA (base: len store + arg)
+      (enc_mov_imm64 RCX 0)  ; 55  mov rcx,0 (length/counter)
+      ;; loop_start = 65
+      (enc_cmp_rs RCX (SImm (maxlen)))  ; 65  cmp rcx,256
+      (enc_jcc_rel32 131 42)  ; 72  jae +42 -> 120 (guard: max)
+      (enc_simple (XLoad8 RDX (AReg RSI)))  ; 78  movzx rdx,byte[rsi]
+      (enc_test_r RDX)  ; 82  test rdx,rdx
+      (enc_jcc_rel32 132 29)  ; 85  jz +29 -> 120 (NUL terminator)
+      (enc_simple (XStore8 (AReg RDI) (SReg RDX)))  ; 91  mov [rdi],dl
+      (enc_bin_ri XAdd RSI 1)  ; 94   add rsi,1
+      (enc_bin_ri XAdd RDI 1)  ; 101  add rdi,1
+      (enc_bin_ri XAdd RCX 1)  ; 108  add rcx,1
+      (enc_jmp_rel32 -55)  ; 115  jmp -55 -> 65 (loop_start)
+      ;; loop_done = 120
+      (enc_simple (XStore8 (AReg RBX) (SReg RCX)))  ; 120  mov [rbx],cl (len byte 0)
+      (enc_simple (XMovRR RDI RBX))  ; 123  mov rdi,rbx (arg0 = buffer base)
+      (enc_call_rel32 34)  ; 126  call +34 -> image_fn
+      (enc_push_reg RAX)  ; 131  push rax
+      (sys_write_top8)  ; 132  write(1, rsp, 8)
+      (enc_pop_reg RCX)  ; 152  pop rcx
+      (sys_exit_code 0))))  ; 153  sys_exit(0)  (ends at 165)
+
+;; --- the two-segment ELF64 container ------------------------------------------
+
+;; 64-byte ELF header: ET_EXEC, x86-64, TWO program headers, entry at the glue
+;; (first code after the headers).
+(fn elf_hdr2 () (List Int)
+  (gcat
+    (list
+      (list 127 69 76 70 2 1 1 0)  ; magic, ELFCLASS64, LE, ver 1, SysV
+      (list 0 0 0 0 0 0 0 0)  ; EI_ABIVERSION + pad
+      (list 2 0)  ; e_type = ET_EXEC
+      (list 62 0)  ; e_machine = x86-64
+      (list 1 0 0 0)  ; e_version
+      (le8 (+ (load_base) (hdrs_sz)))  ; e_entry
+      (le8 64)  ; e_phoff
+      (le8 0)  ; e_shoff
+      (list 0 0 0 0)  ; e_flags
+      (list 64 0)  ; e_ehsize
+      (list 56 0)  ; e_phentsize
+      (list 2 0)  ; e_phnum = 2
+      (list 0 0)  ; e_shentsize
+      (list 0 0)  ; e_shnum
+      (list 0 0))))  ; e_shstrndx
+
+;; program header 1: PT_LOAD, R+X, the whole file at load_base.
+(fn phdr_code ((filesz Int)) (List Int)
+  (gcat
+    (list
+      (list 1 0 0 0)  ; p_type = PT_LOAD
+      (list 5 0 0 0)  ; p_flags = R+X
+      (le8 0)  ; p_offset
+      (le8 (load_base))  ; p_vaddr
+      (le8 (load_base))  ; p_paddr
+      (le8 filesz)  ; p_filesz
+      (le8 filesz)  ; p_memsz
+      (le8 4096))))  ; p_align
+
+;; program header 2: PT_LOAD, RW, a zero-filled BSS segment at data_base
+;; (p_filesz = 0, p_memsz = data_size; p_vaddr ≡ p_offset mod 4096).
+(fn phdr_data () (List Int)
+  (gcat
+    (list
+      (list 1 0 0 0)  ; p_type = PT_LOAD
+      (list 6 0 0 0)  ; p_flags = R+W
+      (le8 0)  ; p_offset
+      (le8 (data_base))  ; p_vaddr
+      (le8 (data_base))  ; p_paddr
+      (le8 0)  ; p_filesz = 0 (no file bytes)
+      (le8 (data_size))  ; p_memsz = zero-filled reserve
+      (le8 4096))))  ; p_align
+
+;; code region = glue then the image function (body + ret via enc_func).
+(fn code_bytes () (List Int) (eapp (glue) (enc_func (image_fn))))
+
+(fn elf_bytes () (List Int)
+  (let ((code (code_bytes)))
+    (let ((filesz (+ (hdrs_sz) (elen code))))
+      (eapp (elf_hdr2) (eapp (phdr_code filesz) (eapp (phdr_data) code))))))
+
+;; --- hex rendering + the entry ------------------------------------------------
+
+(fn hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
+
+(fn hexs ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b t) (Cons (hexd (ediv b 16)) (Cons (hexd (mod b 16)) (hexs t))))))
+
+(fn main ((w World)) World
+  (exit
+    0
+    (write
+      (gcat
+        (list
+          "ELF "
+          (hexs (elf_bytes))
+          "\n"
+          "EXPOUT "
+          (hexs (le8 (expected)))
+          "\n"))
+      w)))
