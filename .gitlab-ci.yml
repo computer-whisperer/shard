@@ -157,20 +157,28 @@ corpus-long:
 # gate for that pipeline).
 #
 # The task's committed drive budget (50) is the fast smoke value; this
-# job seds it to 38,000 — sized to the runner's 512Gi pod cap at the
-# measured ~11-12 MB/decision region retention (local calibration:
-# budget 6,000 peaked at 67.6 GB and exhausted with no passing region,
-# so the first winner lies deeper).  Projected peak ~400 GiB; an
-# in-script watchdog kills the engine below the pod limit so the log
-# survives OOM territory.  Green = a winner region in the log; red =
-# budget exhausted (informative — recalibrates the frontier, not a
-# regression).
+# job seds it to $PIO_BUDGET (default 38,000).  Measured shape (local
+# A/B 2026-07-17): the ~11-12 MB/decision retention SATURATES at
+# ~67.6 GB around 6k decisions — RSS is byte-flat from there on, and
+# flat RSS is HEALTHY search, not a stall.  Per-decision cost grows
+# with depth (~quadratic fit: 6,100 decisions = 18 min local; 38k
+# projected ~10-12 h local, more on these cores).  Override the budget
+# per-run to climb the validation ladder:
+#   glab ci run -b BRANCH --variables PIO_DEEP:1 --variables PIO_BUDGET:12000
+# Each on-time clean exit extends the validated frontier; a run far
+# past its prediction has BRACKETED a stuck decision — attach and dump
+# before killing.  Green = a winner region in the log; red = budget
+# exhausted (informative — recalibrates the frontier, not a
+# regression).  The watchdog cap stays at 490 GiB (512Gi pod tier);
+# nothing measured yet needs the 1.5T high-mem slot.
 pio-dme-free:
   stage: gate
   tags:
     - high-cpu
   image: docker.io/library/rust:latest
   timeout: 24h
+  variables:
+    PIO_BUDGET: "38000"
   rules:
     - if: $PIO_DEEP == "1"
       when: on_success
@@ -194,8 +202,8 @@ pio-dme-free:
       else
         echo "engine fresh (stamp match) -- rebuild skipped"
       fi
-    - sed -i 's/(fn search_drive_budget () Int 50)/(fn search_drive_budget () Int 38000)/' tools/search/tasks/pio_dme_free.shard
-    - grep -F '(fn search_drive_budget () Int 38000)' tools/search/tasks/pio_dme_free.shard
+    - sed -i "s/(fn search_drive_budget () Int 50)/(fn search_drive_budget () Int ${PIO_BUDGET})/" tools/search/tasks/pio_dme_free.shard
+    - grep -F "(fn search_drive_budget () Int ${PIO_BUDGET})" tools/search/tasks/pio_dme_free.shard
     - |
       bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/pio_dme_free.shard > pio_dme_free.log 2>&1 &
       ENG=$!
