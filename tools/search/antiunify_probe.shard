@@ -1,0 +1,441 @@
+;;; Regression pin for meta/antiunify's simultaneous equation LGG.
+;;;
+;;; The first pair checks that one mismatch shared across LHS and RHS becomes
+;;; one nonlinear metavariable.  The second checks that empirically separated
+;;; roles are reported as a conjectural disequality guard.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/antiunify")
+(import "../../meta/antiunify/typed.shard")
+(import "../../meta/invoke")
+(import "../../meta/rewrite")
+(use (:: kernel term *))
+(use (:: kernel loader World))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: kernel module Type))
+(use (:: kernel module TCon))
+(use (:: kernel module type_eq))
+(use (:: meta antiunify *))
+(use (:: meta antiunify typed *))
+(use (:: meta invoke load_run_module))
+(use (:: meta rewrite *))
+
+(fn aup_atom ((name Symbol)) Expr (Ctor (qn name) Nil))
+
+(fn aup_f ((a Expr) (b Expr)) Expr (Ctor (qn (quote F)) (list a b)))
+
+(fn aup_g ((a Expr)) Expr (Ctor (qn (quote G)) (list a)))
+
+(fn aup_ctx ((head Expr) (tail Expr)) Expr
+  (Ctor (qn (quote SpineNode)) (list head tail)))
+
+(fn aup_other_ctx ((head Expr) (tail Expr)) Expr
+  (Ctor (qn (quote OtherNode)) (list head tail)))
+
+(fn aup_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "ANTIUNIFY-PROBE FAIL " msg) w)))
+
+(fn aup_fixture_q ((name Symbol)) QName
+  (QName
+    (list
+      (quote tools)
+      (quote search)
+      (quote tasks)
+      (quote antiunify_typed_fixture))
+    name))
+
+(fn aup_fixture_ctor ((name Symbol) (args (List Expr))) Expr
+  (Ctor (aup_fixture_q name) args))
+
+(fn aup_compound_guard_coverage ((w World)) World
+  (let
+    ((int_type (TCon (qn (quote Int)) Nil))
+     (disc (qn (quote compound_probe_disc)))
+     (rule_name (qn (quote compound_probe_rule))))
+    (let
+      ((typed
+         (AuTypedSchema
+           (AuSchema
+             (AuEquation
+               (Ctor
+                 (qn (quote GuardedNode))
+                 (list
+                   (BVar 1)
+                   (BVar 0)
+                   (aup_f (BVar 1) (aup_atom (quote Z)))
+                   (aup_f (BVar 0) (aup_atom (quote Z)))))
+               (Ctor (qn (quote KeptNode)) (list (BVar 1) (BVar 0))))
+             2)
+           (list int_type int_type)))
+       (conditioned
+         (TrsConditionedRule
+           (TrsRule
+             rule_name
+             (list int_type int_type int_type int_type)
+             (Ctor
+               (qn (quote GuardedNode))
+               (list (BVar 3) (BVar 2) (BVar 1) (BVar 0)))
+             (Ctor (qn (quote KeptNode)) (list (BVar 3) (BVar 2))))
+           (list (TrsDistinct disc 1 0)))))
+      (if (au_conditioned_rule_covers typed Nil conditioned)
+        (aup_fail "strict coverage trusted a compound open guard\n" w)
+        (if (au_conditioned_rule_fragment_covers typed Nil conditioned)
+          (aup_fail "fragment coverage trusted a compound open guard\n" w)
+          (write "ANTIUNIFY-PROBE OK\n" w))))))
+
+(fn aup_spine_coverage
+  ((typed AuTypedSchema)
+   (proposal_guards (List AuGuard))
+   (conditioned TrsConditionedRule)
+   (w World))
+  World
+  (match typed
+    ((AuTypedSchema (AuSchema (AuEquation lhs rhs) arity) types)
+     (let
+       ((a (aup_atom (quote ContextA)))
+        (b (aup_atom (quote ContextB)))
+        (spine (TrsSpine (qn (quote plug)) (qn (quote SpineNode)) 1)))
+       (let
+         ((item (TrsSpineRule spine conditioned))
+          (nested
+            (AuTypedSchema
+              (AuSchema
+                (AuEquation (aup_ctx a (aup_ctx b lhs))
+                            (aup_ctx a (aup_ctx b rhs)))
+                arity)
+              types))
+          (different
+            (AuTypedSchema
+              (AuSchema
+                (AuEquation (aup_ctx a lhs) (aup_ctx b rhs))
+                arity)
+              types))
+          (wrong_ctor
+            (AuTypedSchema
+              (AuSchema
+                (AuEquation (aup_ctx a lhs) (aup_other_ctx a rhs))
+                arity)
+              types)))
+         (if (au_spine_rule_covers 16 nested proposal_guards item)
+           (if (au_spine_rule_covers 16 different proposal_guards item)
+             (aup_fail "spine coverage ignored a non-child difference\n" w)
+             (if (au_spine_rule_covers 16 wrong_ctor proposal_guards item)
+               (aup_fail "spine coverage crossed the wrong constructor\n" w)
+               (if
+                 (au_spine_rule_covers
+                   16
+                   nested
+                   proposal_guards
+                   (TrsSpineRule
+                     (TrsSpine (qn (quote plug)) (qn (quote SpineNode)) 0)
+                     conditioned))
+                 (aup_fail "spine coverage crossed the wrong child\n" w)
+                 (if
+                   (au_spine_rule_covers
+                     16
+                     nested
+                     proposal_guards
+                     (TrsSpineRule
+                       (TrsSpine (qn (quote plug)) (qn (quote SpineNode)) 3)
+                       conditioned))
+                   (aup_fail "spine coverage accepted an absent child\n" w)
+                   (if (au_spine_rule_covers 16 nested Nil item)
+                     (aup_fail "spine coverage weakened a theorem guard\n" w)
+                     (aup_compound_guard_coverage w))))))
+           (aup_fail "nested authenticated spine was not covered\n" w)))))))
+
+(fn aup_fragment_coverage ((w World)) World
+  (let
+    ((int_type (TCon (qn (quote Int)) Nil))
+     (symbol_type (TCon (qn (quote Symbol)) Nil))
+     (disc (qn (quote fragment_probe_disc)))
+     (rule_name (qn (quote fragment_probe_rule))))
+    (let
+      ((typed
+         (AuTypedSchema
+           (AuSchema
+             (AuEquation
+               (aup_f (BVar 0) (aup_f (BVar 1) (aup_atom (quote Z))))
+               (aup_g (BVar 1)))
+             3)
+           (list int_type symbol_type int_type)))
+       (rule
+         (TrsRule
+           rule_name
+           (list int_type int_type symbol_type)
+           (aup_f (BVar 1) (aup_f (BVar 0) (aup_atom (quote Z))))
+           (aup_g (BVar 0))))
+       (bad_type_rule
+         (TrsRule
+           rule_name
+           (list int_type symbol_type symbol_type)
+           (aup_f (BVar 1) (aup_f (BVar 0) (aup_atom (quote Z))))
+           (aup_g (BVar 0))))
+       (proposal_guards (list (AuGuardDistinct 0 1)))
+       (rule_guards (list (TrsDistinct disc 1 0))))
+      (if
+        (au_conditioned_rule_covers
+          typed
+          proposal_guards
+          (TrsConditionedRule rule rule_guards))
+        (aup_fail "strict coverage accepted an unused context binder\n" w)
+        (if
+          (au_conditioned_rule_fragment_covers
+            typed
+            proposal_guards
+            (TrsConditionedRule rule rule_guards))
+          (if
+            (au_conditioned_rule_fragment_covers
+              typed
+              proposal_guards
+              (TrsConditionedRule bad_type_rule rule_guards))
+            (aup_fail "fragment coverage ignored a used binder type\n" w)
+            (if
+              (au_conditioned_rule_fragment_covers
+                typed
+                Nil
+                (TrsConditionedRule rule rule_guards))
+              (aup_fail "fragment coverage weakened a used guard\n" w)
+              (aup_spine_coverage
+                typed
+                proposal_guards
+                (TrsConditionedRule rule rule_guards)
+                w)))
+          (aup_fail "fragment coverage refused an unused context binder\n" w))))))
+
+(fn aup_coverage ((w World)) World
+  (let
+    ((int_type (TCon (qn (quote Int)) Nil))
+     (symbol_type (TCon (qn (quote Symbol)) Nil))
+     (disc (qn (quote probe_disc)))
+     (rule_name (qn (quote probe_rule))))
+    (let
+      ((typed
+         (AuTypedSchema
+           (AuSchema
+             (AuEquation
+               (aup_f (BVar 0) (aup_f (BVar 1) (aup_atom (quote Z))))
+               (aup_g (BVar 1)))
+             2)
+           (list symbol_type int_type)))
+       (rule
+         (TrsRule
+           rule_name
+           (list int_type symbol_type int_type symbol_type)
+           (aup_f (BVar 1) (aup_f (BVar 0) (BVar 2)))
+           (aup_g (BVar 0))))
+       (bad_type_rule
+         (TrsRule
+           rule_name
+           (list int_type symbol_type symbol_type symbol_type)
+           (aup_f (BVar 1) (aup_f (BVar 0) (BVar 2)))
+           (aup_g (BVar 0))))
+       (proposal_guards (list (AuGuardDistinct 0 1)))
+       (rule_guards (list (TrsDistinct disc 1 0))))
+      (if
+        (au_conditioned_rule_covers
+          typed
+          proposal_guards
+          (TrsConditionedRule rule rule_guards))
+        (if
+          (au_conditioned_rule_covers
+            typed
+            proposal_guards
+            (TrsConditionedRule rule Nil))
+          (if
+            (au_conditioned_rule_covers
+              typed
+              Nil
+              (TrsConditionedRule rule rule_guards))
+            (aup_fail "guarded theorem covered an unguarded proposal\n" w)
+            (if
+              (au_conditioned_rule_covers
+                typed
+                proposal_guards
+                (TrsConditionedRule bad_type_rule rule_guards))
+              (aup_fail "coverage ignored binder types\n" w)
+              (aup_fragment_coverage w)))
+          (aup_fail "unguarded theorem did not cover guarded proposal\n" w))
+        (aup_fail "alpha-renamed guarded rule did not cover schema\n" w)))))
+
+(fn aup_typed ((w World)) World
+  (match (load_run_module "tools/search/tasks/antiunify_typed_fixture.shard" w)
+    ((Pair None w2) (aup_fail "typed fixture did not load\n" w2))
+    ((Pair (Some m) w2)
+     (let
+       ((a (aup_fixture_ctor (quote AupA) Nil))
+        (b (aup_fixture_ctor (quote AupB) Nil)))
+       (let
+         ((one
+            (AuEquation
+              (aup_fixture_ctor (quote AupPair) (list a a))
+              (aup_fixture_ctor (quote AupOne) (list a))))
+          (two
+            (AuEquation
+              (aup_fixture_ctor (quote AupPair) (list b b))
+              (aup_fixture_ctor (quote AupOne) (list b)))))
+         (match (au_typed_equations m one two)
+           ((AuTypedSchemaErr msg) (aup_fail msg w2))
+           ((AuTypedSchemaOk (AuTypedSchema schema types))
+            (if (int_eq (au_schema_arity schema) 1)
+              (match types
+                ((Cons ty Nil)
+                 (if (type_eq ty (TCon (aup_fixture_q (quote AupAtom)) Nil))
+                   (aup_coverage w2)
+                   (aup_fail "typed role has the wrong type\n" w2)))
+                (_ (aup_fail "typed role list has the wrong arity\n" w2)))
+              (aup_fail "typed schema has the wrong arity\n" w2)))))))))
+
+(fn aup_five ((a Expr) (b Expr) (c Expr) (d Expr) (e Expr)) Expr
+  (Ctor (qn (quote Five)) (list a b c d e)))
+
+(fn aup_affine_equation ((a Int) (b Int) (c Int) (d Int) (e Int)) AuEquation
+  (AuEquation
+    (aup_five (IntLit a) (IntLit b) (IntLit c) (IntLit d) (IntLit e))
+    (aup_g (IntLit a))))
+
+(fn aup_affine_set_find
+  ((wanted AuAffine) (sets (List (List AuGuard)))) (Option (List AuGuard))
+  (measure (struct sets))
+  (match sets
+    (Nil None)
+    ((Cons guards rest)
+     (if (au_affine_mem wanted guards)
+       (Some guards)
+       (aup_affine_set_find wanted rest)))))
+
+(fn aup_affine ((w World)) World
+  (let
+    ((int_type (TCon (qn (quote Int)) Nil))
+     (lhs (aup_five (BVar 0) (BVar 1) (BVar 2) (BVar 3) (BVar 4)))
+     (rhs (aup_g (BVar 0)))
+     (wanted
+       (AuAffine
+         (list
+           (Pair 0 1)
+           (Pair 1 1)
+           (Pair 2 (- 0 1))
+           (Pair 3 (- 0 1))
+           (Pair 4 (- 0 1)))
+         1)))
+    (let
+      ((schema (AuSchema (AuEquation lhs rhs) 5))
+       (one (aup_affine_equation 9 4 1 3 8))
+       (two (aup_affine_equation 12 5 2 4 10))
+       (counterexample (aup_affine_equation 11 5 1 4 9)))
+      (match (au_guard_sets 5 schema (list one two))
+        ((AuGuardSetsErr msg) (aup_fail msg w))
+        ((AuGuardSetsOk sets)
+         (match sets
+           (Nil (aup_fail "affine inference omitted its baseline family\n" w))
+           ((Cons baseline _)
+            (match (aup_affine_set_find wanted sets)
+              (None (aup_fail "missing five-variable affine relation\n" w))
+              ((Some guards)
+               (match (trs_match lhs (au_lhs counterexample) (TrsEmpty))
+                 (None (aup_fail "affine counterexample did not match schema\n" w))
+                 ((Some counter_env)
+                  (if (au_guards_hold counter_env guards)
+                    (aup_fail "affine guard accepted a counterexample\n" w)
+                    (let
+                      ((typed
+                         (AuTypedSchema
+                           schema
+                           (list int_type int_type int_type int_type int_type)))
+                       (rule
+                         (TrsRule
+                           (qn (quote affine_probe_rule))
+                           (list int_type int_type int_type int_type int_type)
+                           (aup_five
+                             (BVar 4)
+                             (BVar 2)
+                             (BVar 0)
+                             (BVar 3)
+                             (BVar 1))
+                           (aup_g (BVar 4))))
+                       (rule_guards
+                         (list
+                           (TrsIntLe (TrsIntLit 0) (TrsIntVar 4))
+                           (TrsIntLe (TrsIntLit 0) (TrsIntVar 2))
+                           (TrsIntEq
+                             (TrsIntAdd (TrsIntVar 4) (TrsIntVar 2))
+                             (TrsIntAdd
+                               (TrsIntVar 0)
+                               (TrsIntAdd
+                                 (TrsIntVar 3)
+                                 (TrsIntAdd
+                                   (TrsIntVar 1)
+                                   (TrsIntLit 1))))))))
+                      (if
+                        (au_conditioned_rule_covers
+                          typed guards (TrsConditionedRule rule rule_guards))
+                        (if
+                          (au_conditioned_rule_covers
+                            typed baseline (TrsConditionedRule rule rule_guards))
+                          (aup_fail
+                            "affine theorem was covered without its relation\n"
+                            w)
+                          (if
+                            (au_conditioned_rule_covers
+                              typed
+                              baseline
+                              (TrsConditionedRule
+                                rule
+                                (list
+                                  (TrsIntLe
+                                    (TrsIntLit 0) (TrsIntVar 4))
+                                  (TrsIntLe
+                                    (TrsIntLit 0) (TrsIntVar 2)))))
+                            (if
+                              (au_conditioned_rule_covers
+                                typed
+                                baseline
+                                (TrsConditionedRule
+                                  rule
+                                  (list
+                                    (TrsIntLe
+                                      (TrsIntLit 100) (TrsIntVar 4)))))
+                              (aup_fail
+                                "interval hull entailed an excessive bound\n"
+                                w)
+                              (aup_typed w))
+                            (aup_fail
+                              "interval hull did not entail nonnegative theorem guards\n"
+                              w)))
+                        (aup_fail
+                          "checked affine theorem did not cover mined relation\n"
+                          w)))))))))))))))
+
+(fn aup_guard ((w World)) World
+  (let
+    ((a (aup_atom (quote A))) (b (aup_atom (quote B))) (z (aup_atom (quote Z))))
+    (let ((one (AuEquation (aup_f a b) z)) (two (AuEquation (aup_f b a) z)))
+      (match (au_equations one two)
+        ((AuSchemaErr msg) (aup_fail msg w))
+        ((AuSchemaOk schema)
+         (match (au_distinct_guards schema (list one two))
+           ((AuDistinctErr msg) (aup_fail msg w))
+           ((AuDistinctOk guards)
+            (match guards
+              ((Cons (AuDistinct 0 1) Nil) (aup_affine w))
+              (_ (aup_fail "missing exact separated-role guard\n" w))))))))))
+
+(fn aup_shared ((w World)) World
+  (let ((a (aup_atom (quote A))) (b (aup_atom (quote B))))
+    (match
+      (au_equations
+        (AuEquation (aup_f a a) (aup_g a))
+        (AuEquation (aup_f b b) (aup_g b)))
+      ((AuSchemaErr msg) (aup_fail msg w))
+      ((AuSchemaOk (AuSchema (AuEquation lhs rhs) arity))
+       (if (int_eq arity 1)
+         (if (expr_eq lhs (aup_f (BVar 0) (BVar 0)))
+           (if (expr_eq rhs (aup_g (BVar 0))) (aup_guard w)
+           (aup_fail "rhs correlation was not retained\n" w))
+           (aup_fail "lhs correlation was not retained\n" w))
+         (aup_fail "shared mismatch did not produce arity one\n" w))))))
+
+(fn main ((w World)) World (aup_shared w))

@@ -1,0 +1,103 @@
+;;; Typed role recovery for meta/antiunify schemas.
+;;;
+;;; Anti-unification itself stays syntax-directed and lightweight.  Clients
+;;; that need theorem-compatible schemas opt into this companion, which
+;;; recovers every correlated role's concrete type with kernel/types.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/types.shard")
+(import "../../meta/antiunify")
+(import "../../meta/rewrite")
+(use (:: kernel term *))
+(use (:: kernel module Module))
+(use (:: kernel module Type))
+(use (:: kernel module TCon))
+(use (:: kernel module TVar))
+(use (:: kernel types *))
+(use (:: meta antiunify *))
+(use (:: meta rewrite *))
+
+(type AuTypeR (AuTypeErr (List Int)) (AuTypeOk Type))
+
+(type AuTypesR (AuTypesErr (List Int)) (AuTypesOk (List Type)))
+
+(fn au_type_stable ((ty Type)) Bool
+  (measure (struct ty))
+  (match ty
+    ((TVar name) (if (tc_is_meta name) False True))
+    ((TCon _ args) (au_types_stable args))))
+
+(fn au_types_stable ((types (List Type))) Bool
+  (measure (struct types))
+  (match types
+    (Nil True)
+    ((Cons ty rest) (if (au_type_stable ty) (au_types_stable rest) False))))
+
+(fn au_infer_pair_type ((m Module) (a Expr) (b Expr)) AuTypeR
+  (match (tc_infer m (Tc 0 Nil) Nil Nil a)
+    ((TcErr msg) (AuTypeErr msg))
+    ((TcOk tc1 aty)
+     (match (tc_infer m tc1 Nil Nil b)
+       ((TcErr msg) (AuTypeErr msg))
+       ((TcOk tc2 bty)
+        (match (tc_unify aty bty tc2)
+          (None (AuTypeErr "anti-unified role has inconsistent types"))
+          ((Some (Tc _ subst))
+           (let ((resolved (tc_resolve aty subst)))
+             (if (au_type_stable resolved) (AuTypeOk resolved)
+             (AuTypeErr
+               "anti-unified role type remains polymorphically ambiguous"))))))))))
+
+(fn au_typed_types_go
+  ((m Module)
+   (index Int)
+   (remaining Int)
+   (left TrsEnv)
+   (right TrsEnv)
+   (acc (List Type)))
+  AuTypesR
+  (measure remaining (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le remaining 0) (AuTypesOk acc)
+  (match (trs_env_get index left)
+    (None (AuTypesErr "anti-unified role is absent from left support"))
+    ((Some a)
+     (match (trs_env_get index right)
+       (None (AuTypesErr "anti-unified role is absent from right support"))
+       ((Some b)
+        (match (au_infer_pair_type m a b)
+          ((AuTypeErr msg) (AuTypesErr msg))
+          ((AuTypeOk ty)
+           ;; Discovery numbers BVars from zero upward.  Prepending each type
+           ;; reverses that order into kernel binder-introduction order.
+           (au_typed_types_go
+             m
+             (+ index 1)
+             (- remaining 1)
+             left
+             right
+             (Cons ty acc))))))))))
+
+(fn au_type_schema ((m Module) (schema AuSchema) (a AuEquation) (b AuEquation))
+  AuTypedSchemaR
+  (match schema
+    ((AuSchema equation arity)
+     (match (au_match_equation equation a)
+       (None
+         (AuTypedSchemaErr
+           "anti-unified schema does not replay over left support"))
+       ((Some left)
+        (match (au_match_equation equation b)
+          (None
+            (AuTypedSchemaErr
+              "anti-unified schema does not replay over right support"))
+          ((Some right)
+           (match (au_typed_types_go m 0 arity left right Nil)
+             ((AuTypesErr msg) (AuTypedSchemaErr msg))
+             ((AuTypesOk types) (AuTypedSchemaOk (AuTypedSchema schema types)))))))))))
+
+(fn au_typed_equations ((m Module) (a AuEquation) (b AuEquation)) AuTypedSchemaR
+  (match (au_equations a b)
+    ((AuSchemaErr msg) (AuTypedSchemaErr msg))
+    ((AuSchemaOk schema) (au_type_schema m schema a b))))

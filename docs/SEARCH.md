@@ -592,12 +592,18 @@ spellings-per-behavior numbers against the real dialect.
   - rung 1: **GEN 20 / CLEAN 17 / BEHAVIORS 13** (flagged: 2 vacuous,
     1 rebuild) — ties exactly to the playground's certified "19
     programs = exactly 13 functions" (their 19 = our 17 clean + the 2
-    vacuous members their catalog kept);
+    vacuous members their catalog kept).  The exact sample gauge is
+    **4 excess spellings / 3 collided buckets / 7 collided members /
+    max bucket 3**;
   - rung 2: **GEN 3,395 / CLEAN 2,345 / BEHAVIORS 1,068** (flagged:
     1,039 rebuilds, 11 vacuous; 44s) — behaviors match the
     playground's 1,068 EXACTLY, rev = 2 spellings (their post-R1
     number), id = 4; spellings-per-behavior 2.20 (playground post-R1:
-    2.21).
+    2.21).  The exact sample gauge is **1,277 excess spellings / 596
+    collided buckets / 1,873 collided members / max bucket 18**: under
+    this battery, 54% of the clean address space is redundant beyond one
+    representative per observed behavior.  This remains an observational
+    quotient until laws/bracket proves individual bucket edges;
   - Rank/unrank round-trips verified per candidate across the whole
     sweep (the first multi-sub-hole, Match-shaped alternatives through
     sk_rank).
@@ -648,9 +654,10 @@ arc's remaining slices, so they are pinned now:
   machine.
 - **S5/D4 PIN — rule sets are DATA.** The oracle's rewrite table is a
   passed-in parameter (proven, typed equations per D4), not a
-  baked-in list; "the append four + lia" is the first VALUE of that
-  parameter. A model's defining-equation lemmas plus the word/memory
-  laws are then a rule-set choice, not a code change.
+  baked-in list.  The append four are now the first checked value of that
+  parameter: explicit root scope and driver Theory compile to `TrsProfile`,
+  then enter the oracle as `NRTrs`. A model's defining-equation lemmas plus
+  the word/memory laws are then a profile choice, not a code change.
 
 The rest of the assessment, recorded for the future ledger. The
 candidate space is nearly free: models are ordinary shard libraries
@@ -751,11 +758,15 @@ optimization).
   unstuck).
 - **The two future-arc pins, honored day one:** nothing in sym.shard
   knows a task vocabulary (type-table shapes, qname heads), and the
-  rewrite table is passed-in DATA — `(NRAppend append Nil Cons)` over
-  the OBJECT module's own qnames is v1's only rule family (the append
-  four applied at neutral-formation time, right-nested Nil-free
-  spines). The lia normalizer is a later VALUE of the same parameter
-  (deliberately deferred: G3 measured it unnecessary at these rungs).
+  rewrite table is passed-in DATA.  The initial
+  `(NRAppend append Nil Cons)` route applies the append four at
+  neutral-formation time; the later `NRTrs TrsProfile` route consumes a
+  generic ordered algebraic profile and interprets successful RHSs through
+  the ordinary symbolic evaluator.  The laws driver now uses `NRTrs` from its
+  checked root scope; `NRAppend` remains only as an explicit compatibility
+  constructor for older callers.  The lia normalizer is a later VALUE of the
+  same parameter (deliberately deferred: G3 measured it unnecessary at these
+  rungs).
 - **tools/search/laws.shard — the S5 oracle.** Laws come from the REAL
   interface through the kernel's single goal seam (read_file +
   parse_decls + parse_goal_r under file_rctx — the tools/prove
@@ -766,9 +777,14 @@ optimization).
   (atoms for Int/Symbol/tyvars — the ∀-tyvar-instantiates-at-Int
   refutation license — depth-0 slots for data). Verdicts compose over
   the law set: any Refuted refutes, all Proven proves, else Undecided.
+  Its canon profile now comes through `checked_profile.shard`: load the CHECK
+  closure and sidecars, recover the root `RCtx`, join explicit names to
+  `Theory`, and compile once for every self/G3/mine/artifact consumer.
 - **Corpus pins (run output; laws.shard rides kernel/driver so, like
   tools/prove, it is NOT a check target — the known kernel/types
   tc_infer measure gap lives in that closure):**
+  - **PROFILE-PIN:** `LAWS PROFILE APPEND 4 CHECKED GENERIC` precedes every
+    mode, proving the oracle did not fall back to the compatibility rule.
   - **SELF-PIN:** std/list's own rev and len symbolically PROVE their
     own interface requirements (rev_nil/rev_cons, len_nil/len_cons) —
     the interface's implementation is the first candidate the oracle
@@ -1110,14 +1126,23 @@ partially-filled template — match_e reused verbatim); every found
 region's representative (don't-cares at alternative 0) passes the
 kernel/evm battery.
 
+**General task seam (LANDED 2026-07-15).**  The lazy evaluator was
+already vocabulary-independent; only this first rev test adapter was
+specialized.  `su_expect_expr` now compares arbitrary ground Shard values
+lazily, and `su_drive_query` executes an arbitrary query containing the root
+sketch while retaining exact consistent-subspace settlement.  The dynamic
+`typed_superpose` adapter connects that seam to the reflected/routed `TeSpace`.
+On the full mlx86 four-operation task it settles 1,728 candidates as 140
+terminal regions and 63 demanded-choice forks, finding the same six ranks as
+the exhaustive census.  The optional census audit agrees exactly.  No x86,
+Wasm, imp, or task constructor occurs in the executor.
+
 **Design notes.** Call-by-need vs the kernel's call-by-value: for the
 total, grammar-typed fragments searched here the results agree
 (totality), and the AGREE gate polices it empirically — recorded,
-not assumed. The consulted-choice-set MEMO (cross-region thunk
-sharing, the ratified second half of S4b's core) is the next lever
-INSIDE this component: v1 runs per-region arenas, correctness gated
-first; the fork counts above are the baseline it will be measured
-against.
+not assumed. The consulted-choice-set memo and shared arena are described in
+component 2 below; region/fork counts remain the stable algorithmic baseline
+independent of that evaluation-work optimization.
 
 **THE LADDER IS COMPLETE.** S1–S8 and every gate G1–G5 have landed
 instances; the exit criterion was met in slice 5. What remains in
@@ -1295,7 +1320,9 @@ accumulation tier:
 
 - **meta/** — sketch (holes, count/unrank/rank — D9/D10 as ratified);
   spell grown to the full renderer (D11); invoke grown extend_fn (the
-  interface ruling) — durable "stdlib for manipulating shard".
+  interface ruling); rewrite grown typed ordered first-order profiles,
+  structural application, and fuel-bounded normalization — durable "stdlib
+  for manipulating shard".
 - **tools/search/** — the instrument suite: search (ground pin),
   census (G1/G2), catalog (G5), sym (S4a), laws (S5 + traces + synth
   + bracket), render_gate (D11 reload), superpose (S4b + memo), hunt
@@ -1325,3 +1352,1731 @@ accumulation tier:
    when the residue matters at a deeper rung; NRLia as a rule value
    with its first consumer task.
 6. The joint compile⊗exec task — deferred per the ruling above.
+
+
+## MODEL-FRAGMENT RESEARCH SPIKE (2026-07-14)
+
+The new north star is automated refinement: for low-complexity shard
+functions, search should routinely produce a small imp program and a
+kernel-replayed wasm refinement.  The search focus must stay generic.  A
+task may state its signature, vocabulary, observations, and proof contract;
+it must not hand the engine a function-specific sketch that amounts to the
+implementation.
+
+### First component: typed imp expression search
+
+`tools/search/imp_expr.shard` is the first model-fragment engine.  A task
+module supplies only:
+
+    search_local_kinds : () -> List IKind
+    search_result_kind : () -> IKind
+    search_constants   : () -> List Int
+    search_ops         : () -> List IOp
+    search_depth       : () -> Int
+    search_probe       : IExp -> Option (List (Option Int))
+    search_target      : () -> List (Option Int)
+    search_witness     : () -> IExp
+
+The engine constructs the same-kind straight-line `IBin` grammar from the
+signature.  Candidate programs are imp values, not generated host code.
+Every member passes `meta/sketch` count/unrank/rank round trips and the task's
+combined well-kindedness + observation probe; `None` is a loud G1 failure,
+never a filtered spelling.  Behavior keys are complete vectors.  The census
+uses an exact lexicographic tree (no digest/collision qualification), reports
+the lowest rank, and renders it through `meta/spell`.  The known-certified
+witness is only a regression/non-emptiness gate at this rung: it must rank,
+round-trip, and occur among the observational solutions.
+
+Repeated calls use the new `meta/invoke/prepared.shard` surface.  It retains
+the EVM name index, effect analysis, and translated function table and also
+lets a caller hoist a fixed `FnDef` lookup.  This is a sibling opt-in layer,
+not an expansion of `meta/invoke/mod.req.shard`: exposing EVM table types in
+that interface creates a checker import cycle and widens the interface's
+deliberately smaller trust floor.  The old one-shot API is unchanged.
+
+### Measurements and the first better-than-existing refinement
+
+The corpus-pinned `imp_add1` task is deliberately small and exact:
+
+    depth 1; 52 candidates; 17 behaviors
+    2 solutions; BEST 6 = (IBin U32 IAdd (ILoc 0) (IConst 1))
+
+`gen/imp_add1_refinement.shard` ties rank 6 into the existing
+spec ⊑ imp ⊑ wasm tower.  Its final wasm statement replays in the checker.
+
+The exploratory `imp_mix` task is the first nested rung:
+
+    depth 2; 19,205 candidates; 626 behaviors; 246 solutions
+    old structured witness: rank 4,760
+    BEST 6: (IBin U32 IAdd (ILoc 0) (ILoc 1))
+
+This is not merely a shorter spelling of the same lowering.  `lg_mix x y =
+2*x + (y-x)` is algebraically `x+y`.  The searched result therefore removes
+the old implementation's intermediate wrap obligations.
+`gen/imp_mix_refinement.shard` proves that rank-6 expression lowers to the
+three-instruction wasm add and refines `lg_mix` with only the two final-result
+fit premises; the existing structured imp theorem carries ten fit premises.
+The algebra step was found by the ordinary proof solver and stored in a
+machine-owned sidecar; the checker only replays it.
+
+The depth-2 exact sweep is still expensive (about 97 seconds initially;
+about 73 seconds after the exact-tree/prepared-context changes; combining
+wf+observation into one probe left it around 71 seconds).  This negative
+performance result is useful: neither top-level dispatch reconstruction nor
+the linear behavior map is now the dominant cost.  Re-evaluating all 19,205
+syntax trees over the full nine-point oracle is.
+
+### General scope-to-grammar layer
+
+`tools/search/typed_grammar.shard` removes the imp vocabulary from grammar
+construction.  Its input is the kernel's loaded `Module`, one or more named
+hole environments, the expected root type and binder environment, and a
+depth bound.  An environment contains reflected heads, typed atoms, and
+optional typed template rules; the common path populates its heads from a
+resolved `RCtx`.  Constructor, function, and extern heads are reflected from
+their real kernel signatures.  Matching a result type scheme against the
+hole type determines the parameter types; unresolved child-only polymorphism
+is refused rather than guessed.  The output is an ordinary exact
+`meta/sketch` grammar, so count/rank/unrank remain shared infrastructure.
+
+There are three intentionally separate policy levels:
+
+1. **Availability:** the root task's explicit bare-item `use` scope selects
+   constructor/call heads.  A merged module closure is not a scope: it also
+   contains transitive implementation details.  Module aliases remain usable
+   by the oracle but add no candidate productions.
+2. **Hole admissibility:** expected `Type`, innermost-first BVar types, atom
+   pools, enabled structural forms, and depth decide what can fill each hole.
+3. **Semantic domain:** `search_probe : Candidate -> Option Observation`
+   decides which typed programs are meaningful.  `None` is rejection; any
+   Shard value can be the opaque observation key.
+
+`TgRule` is the non-ISA escape hatch.  It contains a result type scheme, an
+arbitrary kernel `Expr` template with local sketch holes, and a `TgSlot` for
+each hole.  A slot supplies its expected type scheme and any binder types to
+prepend while filling that hole; the rule also states its depth cost.  Thus
+`If`, `Let`, `Match` arms, native primitives, and domain-specific binding
+forms can use one mechanism.  The convenience `if` switch is itself lowered
+to a `TgRule`, not special-cased in the work-list builder.  Recursive rules
+must consume depth, template holes and slots must agree exactly, and all
+result-determined type variables are substituted into child/binder types.
+
+Type is not the whole hole property.  `ILoc 0` and `IConst 0` both contain an
+`Int`, but their useful literal domains differ.  The advanced `tg_build_env`
+surface therefore takes named `TgZone`s, each with its own reflected heads,
+atoms, and rules.  Ordinary `TgSlot` children inherit their zone;
+`TgSlotIn` routes a child to another named zone while retaining its true
+kernel type and binder environment.  A `TgRoute` does the same for an
+argument of an ordinary reflected constructor/call head, keyed by the full
+head QName and zero-based argument index.  The old `tg_build` call is a
+single-zone convenience wrapper.  This gives field roles, fixed structural
+skeletons, lvalue/rvalue contexts, pattern-only syntax, or restricted operand
+classes a common mechanism without inventing nominal pseudo-types or ISA
+cases in the engine.
+
+Dynamic tasks expose the same facility as a `search_environment : () ->
+TgScopeEnv`.  The transport deliberately contains local symbols rather than
+fabricated QNames: `typed_expr` resolves every `TgScopeCtor`/`TgScopeCall`
+against the task's explicit bare-item `use` scope, verifies that it denotes a
+real constructor/function in the loaded module, and only then builds the
+internal typed environment.  Named routes are validated for existing zones,
+heads, argument indices, and duplicate keys before grammar construction.
+Consequently changing from x86 to Wasm—or to an application ADT—changes the
+task context and environment value, not an engine-side ISA table.
+
+A task may now also expose the optional, explicit
+`search_canon_profile : () -> List Symbol`.  These are not trusted rewrite
+names and imports do not grant them automatically.  The dynamic runner loads
+the task's CHECK closure, resolves the ordered names through that root file's
+real `RCtx`, admits only proven claims or granted requirements, compiles their
+typed equations through `meta/rewrite`, and partitions them without loss.  The
+exact separable fragment shapes `TeSpace`; valid deep or conjunctive rules are
+retained as residual search constraints.  Failure at scope, evidence, or
+profile validation is fatal; absence of the function means an empty profile.
+
+`tools/search/typed_rule_probe.shard` is the first binder regression.  A
+polymorphic `Let` template adds an `Int` BVar only to its body hole.  With
+root/body atoms `{0,1}`, an RHS routed to the `{0}` literal zone, and depth one
+it has exactly five members; the witness
+`(Let (0) (BVar 0))` is rank 4 and round-trips.  A zero-cost recursive rule is
+rejected before construction, as is any slot routed to a missing zone.
+
+`tools/search/typed_expr.shard` is the exhaustive dynamic census consumer.  It
+infers Candidate and opaque Observation from the task's protocol, derives
+heads from the root file's actual use scope, and independently runs every
+closed candidate through `kernel/types.tc_infer` before observation.  A task
+may additionally provide `search_screen : Candidate -> Bool`; this typed,
+optional **census accelerator** runs before the expensive opaque probe and is
+counted separately from semantic-domain rejection.  The selected witness
+still must pass the screen, match the complete target observation,
+round-trip through rank/unrank, and occur in the final solution set.
+
+`tools/search/typed_superpose.shard` consumes exactly the same first-class
+`TeSpace`—the same reflected scope, routes, root sketch, grammar, and rank
+space—but uses S4b SUPERPOSE as the search algorithm.  It evaluates
+`search_probe(root-sketch)` under a partial assignment, forks only at the
+first demanded open hole, and compares the resulting arbitrary Shard value
+to `Some(search_target())` lazily from left to right.  A mismatch kills the
+whole consistent subspace; holes untouched by a passing query remain
+don't-cares.  Singleton grammar entries are transparent in evaluation,
+consistent-subspace counting, and region templates, so fixed routed
+skeletons do not manufacture one-way branches or hide descendant choices.
+Residual checked reductions are classified over that same partial assignment.
+A definite redex kills its whole consistent subspace; a blocked constraint is
+allowed to wait while the semantic query tries to reject a still larger
+region, and demands its own hole only after the query passes.
+
+Every run requires exact `FOUND + KILLED = TOTAL`, validates one eager,
+kernel-typed representative per passing region against the full probe, and
+requires the task witness to belong to a passing region.  An explicit
+`audit` argument adds `typed_expr`'s complete sweep afterward and proves that
+every enumerative solution is region-covered and that the two solution
+counts agree.  `search_screen` is used only inside that optional audit; it is
+never consulted by the branch-and-prune drive.  On the small generic imp task
+the audit records:
+
+    total 114; found 2; killed 112; regions 80; forks 59
+    exhaustive agreement: accepted 52; rejected 62; solutions 2
+    BEST/WITNESS 10
+
+### Pure Shard function-body benchmarks
+
+`tools/search/pure_program.shard` opens the same lazy engine to ordinary
+recursive Shard definitions.  A `PsTask` supplies a candidate QName and
+signature, a kernel `Expr` body containing grammar holes, and one closed
+observation query.  Recursive calls to the synthetic QName re-enter the body
+inside SUPERPOSE, so the query can force just enough of a candidate to reject
+an entire consistent subtree.  The protocol is independent of any ISA and is
+also more general than the closed-value dynamic task protocol: the searched
+artifact is a function body with parameters, binders, matches, and structural
+recursion.
+
+Passing regions have a deliberately independent backstop.  The runner fills
+one representative, injects its `FnDef` into the real loaded object module,
+checks the body against the declared parameter/result types with
+`kernel/types`, and repeats the whole closed query through `meta/invoke`.
+Untyped grammars may construct malformed intermediate data; if a ground call
+then has no reduction (for example `le(Int, Nil)`), SUPERPOSE rejects that
+candidate region instead of treating the stuck program as an engine fault.
+The type/invocation gate prevents such a region from ever being accepted.
+
+`tools/search/pure_tasks.shard` now ports three exact playground questions,
+retaining their duplicate-rich full grammars rather than baking in the later
+dialects.  `pure_bench.shard` pins the complete counts and known witnesses:
+
+    insertion sort d0: total 9,072; found 0; regions 157; steps 1,672
+    insertion sort d1: total 1,533,168; found 8; regions 1,517; steps 17,167
+    sorted-list merge d1: total 5,263,380; found 4; regions 1,562; steps 30,070
+    PExpr evaluator d1: total 10,077,696; found 200; regions 1,792; steps 11,314
+
+The depth-0 insertion result is an exact absence certificate over its grammar.
+Merge adds nested pattern matching and two different structurally decreasing
+recursive calls; the evaluator adds tree recursion and arbitrary ADT
+constructors.  Together with the existing `rev` task, these provide a pure
+Shard progression on which theorem-backed formation pressure, stronger test
+batteries, and proof-producing refinement can be developed without an ISA
+encoding obscuring the result.
+
+#### Checked formation pressure on supplied grammars
+
+`meta/search` now gives already-supplied program grammars the same
+quotient-first path that reflected grammar builders use.  The general
+`ms_filter_formation(root, grammar, formation)` pass walks arbitrary static
+`Match`/`Let`/`If`/constructor/call skeletons, intersects each reachable hole
+with the separable root/argument constraints derived by `meta/rewrite`, and
+returns another ordinary `Expr` + `Grammar`.  It neither knows nor encodes
+append, lists, or the benchmark dialect.
+
+Hole identity remains semantic.  Repeated occurrences under the same
+formation state stay one shared choice; if one hole is demanded under two
+incompatible formation states, v1 refuses loudly instead of cloning away the
+correlation or unsafely unioning constraints.  After filtering, `g_wf` and
+the exact grammar counter run again.  Non-separable checked rules remain in
+the residual `MsPlan` and can still prune partial regions during SUPERPOSE.
+
+`tools/search/pure_deep.shard` exercises the complete path:
+
+1. load four append requirements from the checked object-module closure;
+2. compile and partition the profile into formation and residual pieces;
+3. apply formation to the full, task-supplied insertion-sort grammar;
+4. run lazy semantic settlement over only the quotient; and
+5. independently type and invoke one representative per passing region.
+
+The full depth-2 result reproduces the playground quotient and solution floor
+without an append-specific task grammar:
+
+    raw 37,347,981,552; removed 32,878,101,552; quotient 4,469,880,000
+    found 32; killed 4,469,879,968; regions 28,721; forks 5,969
+    Shard evaluator steps 165,629; playground evaluator steps 38,994
+
+Thus theorem formation removes 88.0% of the spellings and retains exact
+coverage and the same 32 solutions.  The equal census does **not** imply equal
+search work, however.  A counter-for-counter replay of the Rust playground
+shows 4,745 splits and 22,841 prunes at d2, versus Shard's 5,969 splits and
+28,689 prunes.  Rust also records 38,994 of its coarser evaluator steps,
+290,231 memo hits, and 10,575 graph nodes.  Shard records 165,629 syntax-level
+steps.  Treating that difference as merely a 4.25x interpreter constant was
+wrong: the step definitions differ, and the 25% larger decision tree is an
+algorithmic delta before host execution speed enters the comparison.
+
+Depth 3 validates the harder scale without making a long interpreter run a
+default gate.  The checked profile maps 22,140,821,944,106,047,728 raw terms
+to exactly 104,277,392,481,024,192 canonical terms.  A 5,000-job probe settles
+26,612,572,263,529,286 of them (25.5%) in 4,138 terminal regions, 862 forks,
+and 38,420 evaluator steps.  Budget exhaustion is a first-class partial
+census, not an error: `SETTLED + PENDING = TOTAL`, and every settled region is
+still counted exactly.
+
+For scale, the playground settles that entire d3 quotient in 349,732
+evaluator steps: 83,553 splits, 406,365 prunes, 5,555,097 memo hits, and
+28,800 graph nodes (10.7 seconds in the measured release run).  The Shard
+probe therefore must not be presented as if extrapolation differed only by a
+linear Shard-versus-Rust execution factor.  Three gaps are now tracked
+separately: formation-equivalent grammars still induce a different deeper
+fork tree; Shard routes fewer stable subcomputations through graph nodes; and
+its hot runtime keys are structural Shard values rather than compiled numeric
+identities.
+
+    bin/shard_eval run tools/search/pure_deep.shard               # full d2
+    bin/shard_eval run tools/search/pure_deep.shard 3             # full d3
+    bin/shard_eval run tools/search/pure_deep.shard probe 3 5000  # bounded d3
+
+The shared executor tables now move toward their intended asymptotics:
+node-result and `(expression, environment)` indexes are persistent tries, and
+result rows sharing one consulted-hole signature are grouped and indexed by
+their exact choice key.  Hashes select buckets only; full environment/choice
+equality remains authoritative.  In addition, each drive compiles the stable
+`Grammar` once into `SuG`, an indexed operational scope used for demanded-hole
+lookup while retaining the original grammar for proof, constraints, and exact
+counting.  On the identical d3/5,000-job probe this reduced measured wall time
+from about 26 seconds to 23.9 seconds without changing any region, fork, or
+step count.
+
+This is a local execution improvement, not the next search-research rung.
+Retrofitting every Rust thunk boundary onto the present tree-valued evaluator
+cuts abstract step counts but loses wall time to structural expression
+interning and persistent memo-key construction.  A compiled expression graph
+therefore remains part of Shard's general compilation/optimization path, not
+a prerequisite for categorical search scale.
+
+The checked append-canonical rev run isolates that distinction.  It starts
+from `rev_grammar`, authenticates the same four requirements as the sort run,
+and uses the generic supplied-grammar formation pass—never the hand-written
+`dial_grammar`:
+
+    d3: RAW 40,435,308; TOTAL 2,597,487
+        FOUND 1; REGIONS 390; FORKS 143; STEPS 3,969
+    d4: RAW 1,090,009,422,036,588; TOTAL 2,248,987,364,187
+        FOUND 1; REGIONS 1,726; FORKS 639; STEPS 14,207
+
+Both spaces and the unique textbook witness reproduce the playground's
+append-canonical rows.  More importantly, d4 uses exactly the playground's
+published 639 demanded-choice forks.  Its 14,207 Shard syntax steps and the
+playground's 4,095 evaluator steps are different accounting/hosting constants
+around the same decision structure, not an algorithmic-scale gap.  The run
+completes in roughly five seconds on the current compiled evaluator.  This
+corrects the earlier inference from the incomplete sort d3 probe: the lazy
+executor and separable theorem quotient already compose at the expected
+trillion-candidate scale.  The missing categorical work begins where the
+playground adds contextual, sibling-relational, vocabulary, and algebraic
+formation pressure beyond those four append rules.
+
+    bin/shard_eval run tools/search/rev_deep.shard 3
+    bin/shard_eval run tools/search/rev_deep.shard 4
+
+The next missing category is now represented in `meta/search`, rather than in
+a task dialect.  `ms_filter_match_context` reads arbitrary `Match`/`Pat`
+structure and turns constructor-arm definitional equations into a second exact
+grammar quotient.  A nullary arm excludes the outer scrutinee spelling; a
+binderful arm excludes the exact constructor rebuild throughout the generated
+arm subtree.  Correlated siblings are subtracted as disjoint products—for
+example, removing `(h,t)` from `A x B` becomes
+`{h} x (B-{t}) | (A-{h}) x B`—so no valid program is lost through an unsound
+pair of independent exclusions.  Constructor names, binder counts, and
+rebuild expressions all come from the supplied sketch; none is built into the
+search module.
+
+The generated grammar was checked against rev's old hand-written
+`dial_grammar` oracle:
+
+    depth 1: 56       candidates, exact member/rank audit
+    depth 2: 1,736    candidates, exact member/rank audit
+    depth 3: 1,512,056 candidates, exact count
+
+It also composes with SUPERPOSE at the scale rung:
+
+    rev d3 contextual: TOTAL 1,512,056
+        FOUND 1; REGIONS 414; FORKS 143; STEPS 4,509
+    rev d4 contextual: TOTAL 1,143,161,209,736
+        FOUND 1; REGIONS 1,886; FORKS 639; STEPS 15,807
+
+The unchanged fork counts are expected here: append formation had already
+made the rev witness unique at every demanded choice.  The stronger evidence
+comes from applying the same generic pass to the independent insertion-sort
+grammar.  The complete depth-2 run changes:
+
+    append quotient:  TOTAL 4,469,880,000; FOUND 32
+                      REGIONS 28,721; FORKS 5,969; STEPS 165,629
+    plus arm context: TOTAL 1,844,522,064; FOUND 8
+                      REGIONS 14,249; FORKS 2,985; STEPS 91,102
+
+Thus one scope-derived quotient removes four equivalent solution spellings
+per behavior and nearly halves the actual decision tree.  At depth 3 its exact
+space is 40,589,595,233,432,784 candidates.  A 5,000-job contextual probe
+settles 17,878,750,522,262,628 of them (44.0%) in 4,131 regions, 869 forks,
+and 39,223 evaluator steps, versus 25.5% of the append-only quotient for
+similar work.  This is the intended additive path: reflected scope facts
+compile to the existing `Grammar`; exact counting, rank/unrank, residual
+theorems, and lazy evaluation need no task-specific executor branch.
+
+V1 keeps two boundaries loud.  A grammar hole shared under incompatible arm
+contexts is refused, and an exclusion that can start at a proper hole-bearing
+subtemplate inside a production is refused rather than silently
+under-filtered.  The latter needs the full state product at every static node;
+`context_formation_probe.shard` pins that refusal.  A fixed nested excluded
+value simply removes its entire production.  Ordinary head-plus-hole
+constructor products, including correlated sibling exclusions, are exact.
+
+    bin/shard_eval run tools/search/context_formation_probe.shard
+    bin/shard_eval run tools/search/rev_deep.shard context 4
+    bin/shard_eval run tools/search/pure_deep.shard context 2
+    bin/shard_eval run tools/search/pure_deep.shard context-probe 3 5000
+
+Comparison basis pressure now enters through the same checked-profile path.
+`std/order` proves the polymorphic involution
+
+    if (le a b) x y = if (lt b a) y x
+
+by splitting the first comparison and discharging the complementary `lt` pin
+with LIA.  The pure-program object imports that theorem, and the search driver
+adds its name to an explicit five-rule profile.  Although the equation spans
+an `If`, its lhs branches are unconstrained parameters: formation therefore
+projects it exactly to “an `If` condition may not have root `le`.”  Existing
+parent/argument formation removes those alternatives before ranking; no
+sort-specific condition table or new executor case is involved.
+
+The composition has exact counts:
+
+    append profile only:               d2 4,469,880,000
+                                        d3 104,277,392,481,024,192
+    plus checked order involution:      d2 2,979,920,000
+                                        d3 69,518,261,654,016,128
+    plus match context and involution:  d2 1,229,681,376
+                                        d3 27,059,730,155,621,856
+
+The complete depth-2 order run leaves four spellings and settles the space in
+7,407 regions, 1,554 forks, and 53,701 steps.  The context-only run needed
+14,249 regions, 2,985 forks, and 91,102 steps for eight spellings.  Thus a
+single general theorem halves the remaining solution gauge and nearly halves
+the decision tree again.  A depth-3 5,000-job probe settles
+12,080,236,917,486,516 of 27,059,730,155,621,856 candidates in 4,131 regions,
+869 forks, and 39,284 steps.
+
+Formation may remove the spelling supplied as a task's certification witness.
+`ps_normalize_witness` now rewrites that witness through the same authenticated
+profile first, and every formation stage immediately requires the resulting
+witness to rank in its exact grammar.  The order experiment exercises this:
+the original textbook `le` witness becomes the equivalent swapped-branch `lt`
+representative before the grammar gate.
+
+Repeated-variable pressure now has its first general implementation.
+`TrsRule` admits nonlinear algebraic LHSs with ordinary first-order semantics:
+the first occurrence binds a term and later occurrences require structural
+equality.  Concrete normalization already had that equality check; the lazy
+constraint engine now carries the same binding environment over partial
+grammar terms.  Shared hole syntax proves equality immediately, distinct open
+holes block on an exact choice, and assigned equal/unequal regions become
+Redex/Clear.  Nonlinear rules never enter the old separable projection (which
+would unsoundly turn `lt x x` into “ban every lt”); lossless partition retains
+them as residual rules.  Preparation now also compiles the *linear relaxation*
+of every nonlinear lhs: repeated variables are treated as independent
+wildcards, and only a relaxed `No` is consumed as conclusive.  Relaxed
+`Yes`/`Blocked` still enter the exact binding environment and guards.  This
+recovers stable head/shape/type facts and can see a later static mismatch past
+an earlier equality block without weakening the correlated rule.
+
+Partial structural equality also takes unanimous alternative domains
+seriously.  If every member of an open Cartesian domain is unequal it returns
+`No`; if every member is equal it returns `Yes`; mixed or internally blocked
+domains still block on the outer choice.  The nonlinear probe pins both
+improvements: `Triple(x,x,0)` is immediately clear against
+`Triple(open,open,1)`, disjoint two-member atom domains are unequal without a
+fork, and overlapping domains retain the original exact block/equal/unequal
+behavior.  Three relaxed facts are compiled for its three grammar holes.
+The complete depth-2 nonlinear sort report remains exactly
+`6851 regions / 1438 forks / 50450 steps`; on the fixed 5,000-job depth-3
+frontier the schedule moves slightly to `4125 / 875 / 41735` while settling
+928,781 more candidates.  This is useful early classification, not the missing
+diagonal representation, and its extra linear scan cost remains visible.
+
+The original-id region vocabulary is now in `meta/sketch`, below the search
+policy.  `SkRegion` combines fixed grammar choices with forbidden choices;
+`sk_region_count` performs the exact reverse grammar fold under both, and
+`sk_region_subtract_cube` subtracts a conjunction without cloning a grammar.
+For the nine-member product `Pair(h0,h1)`, subtracting `h0=1,h1=2` yields one
+hit and the disjoint complement
+
+    h0 != 1                  count 6
+    h0  = 1, h1 != 2         count 2
+
+`region_probe.shard` pins `RAW 9 = HIT 1 + COMPLEMENT 6+2`, all over the
+original hole ids, plus the zero count obtained by forbidding every choice of
+one hole.  Regions are independently addressable as well:
+`sk_region_rank`/`sk_region_unrank` preserve the ordinary grammar ordering after
+removing excluded alternatives, and `sk_region_member` is the corresponding
+exact predicate.  The probe pins a two-member non-contiguous slice, its rank
+round trip, and rejection of an excluded candidate.  A nested unequal-weight
+grammar also pins `4 -> 3 -> 2`: excluding one of a child hole's three choices
+updates its parent's recursive alternative, then fixing that parent to the
+recursive alternative preserves the exact child count.  This is intentionally
+a foundation rather than a reported search win:
+`ms_check_region` and `ms_check_prepared_region` now consume those fixed and
+forbidden choices directly over the original grammar.  Full-domain prepared
+facts remain sound under restriction; an uncached match sees only the allowed
+alternatives, and a one-member remainder becomes transparent.  The nonlinear
+probe fixes its left atom and then proves the theorem Clear when the equal
+right choice is forbidden, Redex when the unequal right choice is forbidden,
+in both direct and prepared modes.  Ordinary assignment-only search retains
+the exact semantic-first x86 control report (`742 / 372 / 25312`).
+
+SUPERPOSE jobs now carry `SkRegion` end to end.  Fixed choices alone feed the
+lazy evaluator and its consulted-choice memo; forks skip forbidden choices;
+theorem checking sees the complete region; killed and passing subspaces use
+`sk_region_count`; passing-region membership and representatives use restricted
+rank/unrank.  The mixed residual-rule integration probe starts the driver from
+each non-contiguous singleton remainder and pins clear/redex settlement as
+`1/1` with no fork.  The ordinary rev, pure-program, calculator, and default
+semantic-first paths retain their exact controls.
+
+The first general relational partition is now available as
+`ms_equal_partition`.  It repeatedly applies the same partial structural
+equality used by nonlinear matching, but classifies a blocked hole's allowed
+choices before deciding how to refine.  Choices with stable equal or unequal
+verdicts are coalesced by forbidding the opposite class; only choices that
+still block become fixed pending jobs.  Consequently two three-choice atom
+holes partition their nine-member product into three exact diagonal cubes and
+three two-member unequal row regions (`EQ 3 + NE 6`, four relational split
+boundaries), rather than nine ground cases.  The nonlinear probe pins exact
+coverage, region counts, and per-region cardinalities.  This is deliberately
+equality vocabulary rather than an x86 transform table; distinctness premises
+consume the unequal side, while repeated pattern variables consume the equal
+side.
+
+`ms_partition_prepared` lifts the same operation to a complete prepared theorem
+plan.  It groups redex alternatives only when their checked theorem citation
+agrees, groups the Clear complement independently, and keeps still-blocked
+children as fixed pending jobs.  The nonlinear probe now pins both the raw
+equality partition and the cited plan partition at `EQ 3 + NE 6` in `3+3`
+regions and four split boundaries.  SUPERPOSE can consume that partition in a
+general theorem-first mode: cited redex regions settle before evaluation, and
+only the exact Clear complement reaches behavioral narrowing.  Typed tasks opt
+in with `search_narrowing_strategy = theorem_first`; semantic-first remains the
+default because a behavioral failure can sometimes kill a broader parent than
+any theorem partition.
+
+The x86 transition census now opts into theorem-first scheduling.  Its exact
+264-program checked quotient and exhaustive agreement are unchanged, while
+terminal regions fall from 742 to 625 and evaluator steps from 25,312 to
+23,267.  Relational split boundaries rise from 372 to 411: the current finite
+partition spends 39 additional theorem-side decisions to obtain 117 fewer
+terminal regions.  This is the first actual engine-level gain from the
+original-id negative-region representation, and it applies to any prepared
+Shard theorem plan rather than to XOR syntax.
+
+`std/order` supplies checked `lt a a = False` and `int_eq a a = True` claims.
+They are selected by name from the same object closure as the append and order
+laws—there is no comparison-specific table in the engine.  On the complete
+context+order depth-2 sort run, the two residual rules reject 87,834,384 of
+1,229,681,376 programs (7.14%) and reduce the decision tree from 7,407 regions,
+1,554 forks, and 53,701 steps to 6,851 regions, 1,438 forks, and 50,450 steps;
+the same four semantic representatives remain.
+
+At depth 3 the 5,000-job probe attributes 483,209,467,064,676 candidates to
+the two constraints, but frontier coverage is essentially unchanged and costs
+about 6% more steps: the diagonal equality relation still has to split both
+independent operand holes.  That is useful diagnosis rather than a disguised
+win.  The playground later tried an exact cloned twin-grammar product for this
+relation and removed it after the cloned hole identities fragmented narrowing
+memo reuse.  The categorical next step is therefore a relation-aware region
+state over the original grammar DAG: assignments plus lazy equality/difference
+restrictions, with exact region counts and no new grammar identities.  Stable
+symmetric operand orientation still needs a reviewed syntax order.  Removing
+`int_eq` wholesale remains a task vocabulary choice unless an in-budget
+equivalent is proved representable.
+
+    bin/shard_eval run tools/search/pure_deep.shard order 2
+    bin/shard_eval run tools/search/pure_deep.shard order-probe 3 5000
+    bin/shard_eval run tools/search/pure_deep.shard nonlinear 2
+    bin/shard_eval run tools/search/pure_deep.shard nonlinear-probe 3 5000
+
+The first dynamic theorem-filtered task searches ordinary closed Shard list
+expressions over `Nil`, `Cons`, bit literals, and the real `std/list append` at
+depth five.  Its four selected append requirements are authenticated from the
+task scope and remove theorem-redex spellings before rank construction:
+
+    CANON RULES 4
+    RAW 210,066,388,900; REMOVED 210,066,388,837; TOTAL 63
+    FOUND 1; KILLED 62; REGIONS 6; FORKS 8; STEPS 72
+    BEST/WITNESS 17 = [0, 1]
+
+The optional exhaustive audit visits only the 63-member quotient and agrees
+on its unique solution.  This is the intended composition: theorem-backed
+formation pressure first, then lazy semantic narrowing—not a 210-billion-term
+filtering sweep.
+
+The generic imp task deliberately admits all `Int` atoms at both `ILoc` and
+`IConst`; the imp kind checker supplies the semantic distinction.  Its
+exhaustive behavior census remains:
+
+    typed_imp_add1: depth 2; generated 114; accepted 52; rejected 62
+    17 behaviors; 2 solutions
+    BEST 10 = (IBin U32 IAdd (ILoc 0) (IConst 1))
+
+The unchanged engine also searches a different model and a parametric data
+shape.  `typed_wasm_add1.shard` exposes generic `Nil`/`Cons` plus only
+`LocalGet`, `I32Const`, `I32Bin`, and `BAdd`.  Reflection instantiates
+`List a` at `List Instr`; depth four is all zero-to-three-instruction bodies:
+
+    typed_wasm_add1: depth 4; generated/accepted 156; 7 behaviors
+    2 solutions
+    BEST 25 = [LocalGet 0, I32Const 1, I32Bin BAdd]
+
+Wasm traps remain inner `Option` observation cells in this task rather than
+engine-level rejections.  Changing that policy would change only the probe.
+This cross-model result is the important scope test: neither general search
+component contains an imp or Wasm name.
+
+The same engine now reproduces the calculator search from
+`~/workspace/mlx86`, this time over the real Shard x86_64 model.  Inspection of
+the historical source matters: despite the calculator name and a four-arm
+switch, its checked-in `op` was fixed to zero.  The actual benchmark was
+therefore byte addition over forty deterministic `(a,b)` pairs.  A 512-byte
+x86 genome ran with zeroed registers against bytes `a`, `b`, `op`, and `o` at
+addresses 0 through 3.
+
+`typed_x86_calculator.shard` transcribes the old LCG and all forty addition
+pairs, while moving the search boundary to the current model's ordinary SysV
+entry registers.  Its `TgScopeEnv` routes an exact two-cell instruction list
+and operand roles through the bare-item x86 scope; the semantic choices remain
+the move/binop/register/operator heads.  No x86 name was added to
+`typed_expr` or `typed_grammar`:
+
+    depth 4; total 729; found 8; killed 721
+    197 terminal regions; 109 demanded-choice forks
+    BEST 38 = [XMovRR RAX RDI, XBin XAdd RAX (SReg RSI)]
+
+The earlier flat scope generated 7,318 trees and rejected 6,561 merely to
+recover the 757 length-at-most-two programs.  Routing expresses the intended
+structural domain directly: no ragged tail is generated, and the full 729 are
+typed and observable.  The eight solutions are useful census evidence in
+miniature: move-vs-add-from-zero and whether the sum is first accumulated in
+`RAX`, `RDI`, or `RSI` are gauge spellings of the same behavior.  The minimum
+rank chooses the expected `mov rax,rdi; add rax,rsi` representative.
+
+`gen/x86_calculator_refinement.shard` is the G4 half.  It proves the searched
+body computes `wrap64(a+b)` for arbitrary integers and separately replays the
+old ABI as a six-instruction load/add/store program from a zero register file,
+with input bytes at addresses 0/1 and output at 3.  The old encoding had
+absolute 32-bit addresses; the current x86_64 model deliberately has
+register-indirect addressing, so the faithful witness materializes pointers 1
+and 3.  The memory proof closes through `std/mem`'s public framing theorems,
+not its representation.
+
+`typed_x86_calculator4.shard` then restores the switch that was present in the
+mlx86 source but disabled at the sample site: opcode 0/1/2/3 selects unsigned
+byte add/sub/mul/div over the same forty deterministic rows.  Its environment
+is an actual structured x86 program—nested `XBlock`/`XBrIf`/`XBr` control,
+register moves, `XBin`, and `XDivU`—with only three selector literals and
+three arithmetic heads left as semantic holes.  This is environment
+composition, not an encoded calculator production set:
+
+    depth 40; holes 90; total 1,728 = 4^3 * 3^3
+    found 6; killed 1,722; 140 terminal regions; 63 demanded-choice forks
+    6 solutions; BEST/WITNESS 183; exact settlement and eager gates OK
+
+The actual search narrows directly against all forty rows and never calls
+`search_screen`.  A separate `audit` run then reproduced the old census
+exactly—1,722 screened, six accepted, zero rejected—and proved its six ranks
+are covered by the passing regions.  The four high-information historical
+rows remain useful only as that enumerative audit's accelerator.  The six
+solutions are precisely the `3!` gauge symmetry of permuting the add/sub/mul
+tests while keeping division as the default.
+`gen/x86_calculator4_refinement.shard` fixes the rank-183 instruction tree,
+proves its add/sub/mul arms for arbitrary integers, replays the guarded
+division arm, proves identity with the task witness, and kernel-checks the
+complete forty-row historical contract.
+
+The candidate need not be an ADT program.  `typed_shard_call.shard` exposes
+the ordinary Shard function `lg_add1`, `True`/`False`, and the generic `If`
+rule.  Its 24 closed expressions execute normally through the probe; the
+unique target is `BEST 5 = (lg_add1 2)`.  Such a witness cannot be returned as
+an ordinary `Int`-typed expression without reducing to `3`, so the protocol
+also accepts `search_witness_rank : () -> Int`.  Rank/unrank reconstructs and
+checks the syntax before execution.  ADT-language tasks retain the more
+readable `search_witness : () -> Candidate` form.
+
+An exhaustive impossibility census may instead declare
+`search_expect_empty : () -> Bool` and return `True`.  This replaces the
+positive witness with a checked `SOLUTIONS = 0` gate: the driver still settles
+the complete space, retains theorem and representative accounting, and an
+optional `audit` must independently agree with zero enumerative solutions.
+The mode is intentionally rejected by cardinality-free first-result search,
+where stopping cannot prove absence.  A false or malformed hook is fatal, as
+is finding even one solution.
+
+The harder reflected `typed_imp_mix` census reaches the same kind-valid space
+as the specialized task, but exposes the cost of a general syntactic domain:
+
+    depth 3; generated 38,994; accepted 19,205; rejected 19,789
+    626 behaviors; 246 solutions
+    BEST 7 = (IBin U32 IAdd (ILoc 0) (ILoc 1)); witness rank 9,516
+
+The full run took roughly 160 seconds with the current compiled engine,
+versus about 71 seconds for the specialized 19,205-member sweep.  The extra
+members are all kernel-well-typed—most differ only by an out-of-range `ILoc`
+integer—but the general consumer still performs `tc_infer` and rank roundtrip
+on every one before the semantic probe.  This is a useful boundary, not a
+reason to weaken final checking: the next optimization should either reuse a
+checked typed-grammar invariant or make exhaustive per-member typechecking a
+small-corpus audit mode while always rechecking selected/refinement-bound
+candidates.
+
+Two boundaries remain explicit.  `TgScopeEnv` now transports reflected
+constructor/call heads, atoms, named zones, and argument routes, but arbitrary
+`TgRule` templates still do not have a stable dynamic task-file codec.  That
+future codec must preserve full kernel `Type`/`Expr` identity instead of
+growing a symbol-name pseudo-ISA.  Also, `meta/sketch` rank requires ordered
+alternatives not to overlap structurally.  The exhaustive consumer gates
+`rank(unrank(i)) = i`, but a future public rule codec should diagnose obvious
+overlapping template shapes before a sweep.
+
+### Theorem scope and canonicalization pressure
+
+The first reflected grammar did **not** yet reproduce the playground's most
+important scaling lever.  `RCtx` already carried claim/requirement/axiom item
+names through the same strict `use` machinery as constructor and call heads,
+but `tg_scope_heads` intentionally discarded non-executable items.  Meanwhile
+kernel/canon's C7 append recognizer remained a fixed global shape check.  A
+post-generation `cn_e` gate would verify canonicality, but would still pay to
+generate the enormous noncanonical space; it is not the quotient-first result
+measured by the playground.
+
+`tools/search/theorem_scope.shard` now supplies the missing checked join.  A
+caller gives an explicit ordered profile of bare theorem names.  Each name is
+resolved through the task's real `RCtx`, must denote a claim item in its
+`Module`, and must have a full-QName entry in the kernel driver's accumulated
+`Theory`.  The captured `TgCanonLicense` retains the checked `Goal`'s binder
+types and left-to-right equation plus exact accepted provenance (`Proven` or
+`GrantedRequirement`).  Because `Theory.Axiom` alone also represents authored
+and upstream axioms, capture re-reads the closure's declaration kinds and
+rejects every Axiom entry not produced from a granted requirement.  V1 also
+rejects duplicate and premise-bearing rules.  It never silently promotes every
+in-scope equality into a rewrite rule.
+
+`theorem_scope_probe.shard` exercises this path against the real `std/list`
+interface and the real checker pipeline, including sidecars.  The explicit
+scope captures the four ratified append requirements with parameter arities
+`1,3,3,1`; all arrive as granted-interface entries.  The probe also pins that
+an existing but out-of-scope requirement, an in-scope conditional requirement,
+an authored premise-free kernel axiom, and a duplicate selection are refused:
+
+    THEOREM-SCOPE-PROBE APPEND 4 GRANTED TYPED META-TRS NF3 SCOPE-GATES OK
+
+The same run now precedes that line with the quotient-first formation pin:
+
+    THEOREM-FORMATION APPEND 4 RAW 243 CANON 31 REDUNDANT 212 EXACT
+
+It now also runs a generated cumulative-profile census before that full-profile
+pin.  At depth 2 every prefix is exhaustively audited against the raw normal
+subset; at depth 3 intermediate prefixes are exact formation-grammar counts and
+the selected full profile receives the exhaustive audit:
+
+    depth 2: 243 -> 147 (-96) -> 111 (-36) -> 39 (-72) -> 31 (-8)
+    depth 3: 59295 -> 21612 (-37683) -> 10992 (-10620)
+                   -> 120 (-10872) -> 94 (-26, AUDITED)
+
+The order is the explicit reviewed profile order: nil-left, cons, association,
+nil-right.  Marginals are therefore cumulative and may reflect overlap with
+earlier rules; they are not an order-independent property of an equation.
+
+It then feeds that identical checked `TrsProfile` to symbolic neutral
+formation—without constructing `NRAppend`—and pins both a capture/substitution
+rewrite and a constructor-producing RHS whose nested call re-enters the same
+profile:
+
+    THEOREM-SYMBOLIC APPEND PROFILE RHS-REENTRY OK
+
+The first reusable compiler target has now graduated to `meta/rewrite`.
+`TrsRule` retains a full citation QName, parameter types, and oriented kernel
+`Expr` pair.  Its constructor validates the premise-free algebraic v1
+fragment: rooted, non-reflexive algebraic LHSs; in-range RHS variables drawn
+from the LHS; and no free variables or binding forms. Repeated parameters are
+structural-equality constraints. `TrsProfile`
+preserves reviewed rule order and rejects duplicate citations.  The generic
+engine supplies root application, deterministic preorder rewriting through
+ordinary subject binding forms, normality testing, and fuel-bounded normal
+forms with an honest exhaustion result.  It does not authenticate equations,
+infer subject types, or claim orientation, termination, or confluence.
+`trs_empty_profile` and `trs_profile_snoc` now provide validated construction
+for generated cumulative or ablated profile families without manipulating the
+transparent profile constructor at consumers.
+
+`tg_compile_canon` is the narrow join: after `theorem_scope` authenticates an
+explicit checked license list, it compiles that list into the generic profile.
+The scope probe now also normalizes a nested append expression to `BVar 0` in
+exactly three rewrites.  `rewrite_probe.shard` separately imports only the
+graduated module and pins validation, ordered rewriting below a binder, normal
+forms, duplicate rejection, and fuel exhaustion.  Thus the additional proof
+base can automatically fuel a reusable term-level canonicalizer after explicit
+profile selection; it is no longer just a standalone license report.
+
+The first quotient-first use has now landed as well.  `trs_formation` projects
+an exact **separable** formation profile from the same validated LHSs.  A rule
+may either forbid an entire root, or have exactly one shallow rooted child
+discriminator whose children are all metavariables.  Multiple discriminators
+would denote a conjunction, and a deep discriminator would require additional
+tree state; both are rejected rather than independently excluded and
+over-pruned.  Shapes retain Ctor/Call arity, so the projection remains exact
+outside the typed producer too.
+
+`tg_build_formation` threads those clauses through the signature-driven typed
+grammar.  Every generated node applies the global root exclusions; when a head
+is admitted, its argument holes receive the root exclusions derived for their
+positions.  Consequently theorem-redex programs are absent from `sk_count`,
+not generated and filtered later.  The four checked append laws derive, rather
+than hand-code, `Nil`/`Cons`/`append` exclusions for the left operand and `Nil`
+for the right.  Over the probe's depth-2 list-expression grammar, exhaustive
+rank/unrank checks establish:
+
+- the raw grammar has 243 unique members;
+- exactly 31 are normal under the compiled theorem profile;
+- the formation grammar has those same 31 members, each normal and rankable in
+  the raw grammar; and
+- 212 theorem-redex spellings never enter the quotient grammar.
+
+This path is now a normal dynamic-search input rather than only a probe API.
+`search_canon_profile` selects the checked equations, and both the exhaustive
+typed census and the superposed runner build through
+`tg_build_env_formation`.  The superposed report counts the unfiltered grammar
+without enumerating it and prints checked rule count, raw count, removed
+spellings, and filtered total before its region metrics.
+
+An observational program law is categorically different from an ordinary
+term equality, but it is not a different search engine.  If the checker has
+proved only
+
+    search_probe(candidate_lhs) = search_probe(candidate_rhs)
+
+then replacing `candidate_lhs` below an arbitrary candidate constructor is
+unsound: that constructor need not preserve the observer's equivalence.
+`search_observer_profile : () -> List Symbol` therefore captures exactly this
+premise-free, unary-observer theorem shape through the same checked scope and
+provenance path.  The common observer call is removed only after the theorem
+has been authenticated.  Its candidate equation compiles to a distinct
+`TrsRootProfile`, not a `TrsProfile`; the types prevent passing an observational
+law to the recursive rewriter by accident.
+
+`TrsFormationPlan` combines the two licensed pressures.  Ordinary congruence
+formation applies at every generated node.  Root-profile formation is consumed
+exactly once at the whole candidate, although its shallow argument exclusions
+still constrain that root's child holes.  The dynamic runners load both
+profiles from one checked closure and report `CANON RULES` and `OBSERVER RULES`
+separately.  `typed_observer_value.shard` pins the distinction on a generic ADT:
+
+    CANON RULES 0; OBSERVER RULES 1
+    RAW 4; REMOVED 1; TOTAL 3
+
+The law removes `Leaf(Noise 1)` in favor of `Leaf(Keep 1)`, while
+`Wrap(Leaf(Noise 1))` deliberately remains.  This is the reusable foundation
+for ISA refinement laws: the observer can be an interpreter, refinement
+relation encoded as an exact result, or another task-specific semantic map,
+without putting an ISA name in the engine.
+
+The lossless second tier now lives in `meta/search`.  Partitioning a complete
+profile leaves separable rules in `TrsFormationPlan` and preserves every other
+validated rule, in order, as an `MsPlan`.  `ms_check` interprets a grammar
+sketch plus partial choice assignment and returns `Clear`, `Blocked hole`, or
+`Redex citation`; ordinary rules scan every subterm while `TrsRootProfile`
+rules remain candidate-root-only. Left-linear rules use prepared wildcard
+facts; nonlinear algebraic rules use equality-correlated environments, so the
+matcher does not invent an independent hole approximation for coupled
+patterns.
+
+An unassigned multi-alternative hole is no longer automatically a demand.
+`meta/search` interprets every alternative under the current partial assignment
+and promotes only unanimous facts: all clear becomes `Clear`, and all reducible
+becomes `Redex` only when one citation is valid across the complete domain.
+Mixed results, different citations, or a blocked descendant remain `Blocked`
+on the outer hole, preserving disjoint region accounting.  The fold stops as
+soon as disagreement is established; singleton holes remain transparent.
+
+`constraint_superpose_probe.shard` measures the resulting lazy behavior on
+three two-member domains under a semantic query that demands none of them:
+
+    all clear:  FOUND 2, REGIONS 1, FORKS 0
+    all redex:  KILLED 2, CONSTRAINT KILLED 2, REGIONS 1, FORKS 0
+    mixed:      FOUND 1, KILLED 1, REGIONS 2, FORKS 1
+
+Thus grammar vocabulary that cannot contain a residual redex remains a true
+don't-care, while an unavoidable checked redex kills the full hole domain.
+`ms_prepare` now amortizes the stable part of this analysis.  It extracts every
+non-variable pattern state from the selected residual rules and classifies that
+state against every complete grammar-hole domain.  Only unconditional
+`Yes`/`No` results are retained in `MsPrepared`; blocked results are omitted
+because descendant assignments may refine them.  Facts are indexed first by
+grammar hole, so a recursive check scans only that hole's pattern row rather
+than the complete preparation table.  SUPERPOSE prepares once at
+the public drive boundary and reuses those facts throughout its recursive
+region loop.  The generic probe compiles 12 such facts and checks that direct
+and prepared classification agree on clear, redex, and mixed domains.
+
+Preparation now composes those match facts one step further as well.  For each
+grammar hole it runs the complete rule-ordered classifier once and retains an
+unconditional whole-tree `Clear` or common-citation `Redex`; candidate-root
+observer facts are compiled into a separate table so their proof domain cannot
+leak below the root.  The probe obtains four whole-tree and four root-only
+facts.  Its mixed domain produces neither, remains blocked, and is still
+settled lazily after refinement.  A later compiled layer could preserve those
+blocked dependencies as a decision DAG rather than rerunning them, but it must
+keep rule order, common citations, and the exact demanded-hole choice.
+
+`typed_observer_conjunctive.shard` is the non-ISA end-to-end pin.  Its candidate
+is simply `Trio Tagged Tagged Tagged`, with independent `Keep`/`Noise` choices.
+The checked observer theorem has two simultaneous child discriminators:
+
+    Trio(Noise a, Noise b, rest)  ~observe~  Trio(Keep a, Keep b, rest)
+
+Independent child exclusions would incorrectly remove the two mixed terms.
+Formation therefore removes none, while one residual rule removes exactly the
+two-member all-Noise-prefix subtree without demanding `rest`:
+
+    RAW/TOTAL 8; DEFERRED RULES 1
+    FOUND 6; KILLED 2; CONSTRAINT KILLED 2
+    exhaustive agreement: accepted 6; constrained 2; solutions 6
+
+This is the same engine contract as append or the calculator: a reflected
+environment and hole language, checked reductions with explicit application
+domains, and an observation/refinement target.  The example happens to be a
+tiny datatype so the exact settlement is easy to audit.
+
+The remaining differences are proof and constraint tiers rather than
+list-search versus machine-search engines:
+
+- candidate equality supplies unrestricted congruence; observer equality is
+  initially root-only and needs checked contextual/congruence closure before it
+  may descend;
+- shallow separable redexes compile directly to hole exclusions; deep,
+  conjunctive, and repeated-variable patterns now prune exact partial regions
+  as residual constraints. A regular-tree/relational grammar product could
+  move more of that work into quotient formation;
+- partial, effectful, or fuel-bounded interpreters need conditions or a
+  refinement theorem that says when the observation is stable; and
+- a useful orientation must stay inside the selected grammar and cost budget,
+  or provide an explicit representability certificate.
+
+Consequently the general target remains one pipeline: reflected environment
+and hole language, an explicit observation/refinement boundary, checked
+reduction profiles with their application domains, a pre-miner, quotient-first
+grammar construction, and lazy semantic narrowing.  The next general mining
+step is to bucket terms by exact observer behavior, propose oriented schemas,
+and submit the resulting observer equations to the checker; deeper algebraic
+discoveries can immediately enter the residual tier, including nonlinear
+discoveries whose repeated bindings are now checked for partial-term equality,
+instead of being installed as unsound shallow filters.
+
+`profile_census.shard` is the reusable measurement join over this mechanism.
+It accepts the same reflected heads, atoms, binders, result type, depth, and
+ordered `TrsRule` list as the generic typed grammar—not an append-specific ISA
+table.  For each cumulative prefix it projects formation constraints, builds
+the quotient-first grammar, and reports exact count and marginal reduction.
+`PcAuditEvery` additionally enumerates raw terms and proves every formed term
+ranks back into the raw normal subset at every prefix; `PcAuditEndpoint` pays
+that cost only for the selected full profile.  This distinction mattered at
+the first harder rung: auditing every depth-3 prefix ran for 8.5 minutes
+without finishing, while endpoint audit completed the full census in
+3m19s on the same compiled evaluator.
+
+The result is already useful profile-selection evidence.  The full checked
+append profile removes 59,201 of 59,295 depth-3 terms, a roughly 631x reduction
+before enumeration.  Nil-left dominates both rungs; association narrowly
+overtakes cons at depth 3; nil-right remains small but uniquely useful.  The
+ordering is stable here, while the changed marginal magnitudes demonstrate why
+the engine should measure rules in the actual scope and hole policy instead of
+relying on a universal hand ranking.
+
+Two boundaries remain.  Arbitrary `TgRule` templates are loudly refused by the
+formation-aware path because their multi-level static structure needs the full
+regular-tree automaton product; checked rewrite profiles can nevertheless
+retain such structure as exact residual constraints after grammar
+construction.  Ordinary typed grammar behavior is unchanged.
+Symbolic neutral formation now accepts the same profile through `NRTrs`, with
+generic `Ctor`/`Call`/literal matching, repeated-value equality, and ordinary
+symbolic RHS evaluation.  The full laws driver now loads that profile from its own checked
+root scope and uses the generic route for self proofs, both G3 rungs, proof
+traces, and artifact regeneration; all prior verdict and byte-identity pins
+remain unchanged. Binding patterns, correlated formation products, and
+decision-procedure normalization remain outside this first-order tier.
+Orientation, permission to consume granted requirements, termination, and
+confluence remain reviewed profile gates as specified by CANON.md §6.
+
+### Census-driven theorem pre-mining
+
+The playground's real flywheel was stronger than importing an existing lemma
+family.  Its catalog measured the gap between syntax and behavior, inspected
+high-collision buckets, separated contextual respellings from genuinely
+different algorithms, bought the cheapest licensed rule, and re-ran the same
+census.  The decisive historical measurements were:
+
+- canonical list programs grew from `19 / 7,790 / 653,491,008` at rungs
+  `1 / 2 / 3`, while observed behaviors grew only `13 / about 1,100 /
+  at least 4,453,248`; spellings per behavior rose `1.5 -> about 7 -> about
+  147`;
+- at rung 2, 6,630 of 7,790 forms—85%—were contextual respellings rather
+  than new algorithms;
+- the first mined generative rule preserved all 1,068 rung-2 behaviors while
+  cutting 7,790 forms to 2,356, and cut rung-3 forms from 653M to 58M with
+  bit-identical battery behavior;
+- contextual partial evaluation ultimately collapsed the stack machine's
+  `80 -> 24 -> 8` solution spellings to one, reducing exact-settlement work
+  from 450,492 to 21,551 steps over a `2.54e24`-candidate space.
+
+The main repository can go further because conjectures need not remain
+playground observations.  A general pre-miner should run before a hard search:
+
+1. Census a shallow instance of the same `TgEnv` and hole policy.  Exact rungs
+   retain complete observation vectors; larger rungs use deterministic
+   rank-sampling and report confidence separately.
+2. Keep the minimum-rank representative, spelling multiplicity, and several
+   structurally diverse exemplars per observed bucket.  Rank proof attempts by
+   prospective collision mass removed, not merely by term size.
+3. Turn representative/member pairs into typed equivalence or refinement
+   goals and run the structural-induction oracle.  `Proven` emits a generated
+   claim plus replayable proof; `Refuted` contributes its counterexample to the
+   battery and rebuckets; `Undecided` records the stuck neutral equations.
+4. Census recurring undecided subgoals.  High-frequency frontiers are explicit
+   auxiliary-lemma conjectures: pre-mine and prove those smaller statements,
+   then retry the parent refinements.  This is the theorem analogue of using
+   collision mass to choose a grammar quotient.
+5. Classify every proven equality before feeding it back.  A typed,
+   well-oriented, high-coverage algebraic equality may enter a ratified canon
+   profile; a contextual definitional equality belongs in partial evaluation;
+   an equivalence between genuinely different algorithms remains a catalog
+   edge/refinement theorem and must not impose a global spelling convention.
+6. Re-run the raw/profile census and pin forms, observed behaviors, proof-closed
+   buckets, unresolved buckets, and sample-gauge statistics.  A proposed rule
+   is purchased only when its claimed behavior preservation replays through
+   the kernel at the censusable rungs.
+
+`catalog.shard` now prints the first general measurement needed by this loop:
+`SAMPLE-GAUGE` gives exact excess spellings, collided buckets, collided
+members, and maximum bucket size for its battery.  The existing rung-1
+generated bracket proves all four excess spellings are genuine equivalences;
+rung 2 is the first useful mining corpus because it has 1,277 observed excess
+spellings.  This metric must remain visibly battery-relative: a collision
+proposes a theorem, never licenses one.
+
+`laws.shard mine N` now turns that proposal into an exact proof census.  In
+each behavior bucket it compares every non-representative member with the
+minimum-rank representative, using the same symbolic evaluator, append
+theory, and structural-induction license as the generated rung-1 bracket:
+
+    MINE rung 1: CLEAN 17 / BUCKETS 13 / EDGES 4
+                 PROVEN 4 / REFUTED 0 / UNDECIDED 0
+    MINE rung 2: CLEAN 2345 / BUCKETS 1068 / EDGES 1277
+                 PROVEN 1242 / REFUTED 0 / UNDECIDED 35
+                 FRONTIER PERMUTATION 35 / OTHER 0 / MISSING 0
+
+Thus 97.3% of the rung-2 sample gauge already closes in the theorem oracle.
+The current battery floor is 1,068 behaviors and the star-to-representative
+proof ceiling is 1,103 functions, before proving any auxiliary lemma.  These
+are oracle proof skeletons rather than a committed rung-2 kernel artifact;
+the rung-1 generated bracket remains the fully replayed exact result.
+
+This census also found and repaired an important general evaluator gap.
+Originally only 757 edges proved and 520 were undecided.  A structural IH
+recognized an opaque child slot, but after case-splitting that child it lost
+the fact that the resulting constructor shape was the same strict subterm.
+`SVCtor` now carries branch-local split provenance (`-1` for ordinary
+computed constructors), exactly mirroring the playground's shape-owner rule.
+The IH accepts a shape only when its origin slot is beyond the goal binders;
+the depth-0 goal shape still cannot cite the goal itself.  That one general
+change proves 485 more edges and is pinned by the corpus proof census.
+
+Undecided verdicts now retain the first exact residual equation at which
+symbolic refinement stopped.  `laws.shard front N MEMBER REP` prints its
+stable symbolic spelling (neutral head, blocker, slot ids, and constructor
+origin); speculative neutral-argument comparisons restore the prior frontier
+when the outer blocker can still split, so the retained equation is the real
+terminal obligation rather than an abandoned congruence probe.  Flattening
+the already-right-associated append neutrals and comparing their atom bags is
+diagnostic only—it classifies a conjecture and grants no rewrite.
+
+That classifier makes the first remaining frontier exact: all 35 are reversed
+or permuted append spines over recursive results on a tail and its tail; none
+has another residual shape.  For example, two functions share their base
+cases and differ by
+`f(x2) ++ f(x4)` versus `g(x4) ++ g(x2)`.  Their outputs happen to inhabit a
+commuting submonoid (in the smallest pair, repetitions of the last element),
+but global list append is not commutative.  The next useful pre-mining
+component is therefore conditional/range theorem discovery from recurring
+stuck equations—not an unsound global commutativity rule and not another
+task-specific template.
+
+That component now has its first complete census.  `meta/census` is the
+general exact weighted-key substrate: it records support, prospective mass,
+first occurrence, bounded distinct exemplars, and a deterministic
+mass/support/first ranking.  `tools/search/frontier.shard` supplies the
+search-specific structural keys: full QNames except for caller-declared head
+roles, separate alpha-renaming for universal atoms and data slots, and
+orientation-independent residual equations.  Mining accumulates these keys
+during the existing proof pass, so no second 1,277-edge oracle sweep is needed.
+
+At rung 2 the result is highly regular:
+
+    AUXILIARY SIGNATURES 5 SUPPORT 35 MASS 35
+    AUX rank 1..5:       SUPPORT 7 MASS 7 each
+    COMMUTATION BASES 1 SUPPORT 35 MASS 35
+
+The second line of analysis is deliberately diagnostic.  It flattens only an
+already-classified append permutation, finds pairs of distinct atoms whose
+relative order changes, and ranks the smaller commutation basis; it neither
+changes a verdict nor installs a rewrite.  All five exact residual contexts
+reduce to one typed candidate schema (where `f` is the bucket representative):
+
+    append (f (Cons h t)) (f t) = append (f t) (f (Cons h t))
+
+`laws.shard range N REP` materializes that schema as an ordinary `LLaw` and
+runs the same symbolic oracle.  Representative 295 (and the other sampled
+owners) is honestly still `Undecided`, with one permutation/commutation basis:
+
+    MINE-RANGE UNDECIDED FRONTIER PERMUTATION COMMUTATION-BASES 1
+
+This rules out “just census the residuals” as the next step and makes the proof
+gap precise.  More case budget merely expands the same permutation.  The
+needed general facility is induction over a derived relation or range
+invariant, so that the smaller commutation theorem can be assumed on strict
+subterms and then replayed as a checked auxiliary claim.  Only after such a
+claim proves may parent edges be retried or a profile-pressure experiment be
+considered; observational support 35 is ranking evidence, not a canon license.
+
+### Soundness boundary and next experiment
+
+Observation selects candidates; it does not prove refinement.  G4 is closed
+today by the two checked pin artifacts.  The engine does not yet generically
+render its chosen `IExp` into an owned proof artifact, nor does it synthesize
+the spec⊑imp proof for an arbitrary task.  The task's certified witness is a
+temporary gate, not a claim that search has solved proof discovery.
+
+The next proof experiment should give `LLaw` a general derived-relation
+induction path: nominate a structural parameter, generalize the remaining
+parameters, retain the root relation as an IH schema, and permit an application
+only when provenance proves the nominated argument is a strict subterm.  The
+range-commutation candidate is the first regression target.  If it proves, the
+engine should retry its 35 dependent parent edges and render the accepted
+auxiliary claim for kernel replay.  Only a typed, well-oriented theorem that
+survives that path may be considered by the shared profile-pressure census.
+The theorem quotient remains proof-licensed and task-independent; the
+observational quotient remains battery-relative.  Keeping those identities
+separate lets them compose without mistaking test equivalence for theorem
+equality.
+
+### Playground transfer: contextual generation pressure
+
+`catalog_pressure.shard` makes the playground's first mined generative rule an
+explicit ablation of the current catalog builder.  `CatPolicy` is an ordinary
+Shard value whose first control governs recursive calls on binders pinned to
+`Nil`; the ordinary `cat_grammar` API selects the safe default.  The experiment
+counts the policy-off space, proves every production candidate ranks into it,
+and sweeps the production space once.  Each candidate is then placed in three
+nested layers:
+production, no C8 violation, and fully `cn_e`-clean.  The complete behavior-key
+sets—not only their cardinalities—must agree between all three terminating
+layers:
+
+    rung 1: R1-OFF-GEN 20 / PIN-SAFE 20 / C8-NORMAL 19 / CANON 17
+            BEHAVIORS 13 / 13 / 13 EXACT
+            SPELLINGS C8-NORMAL rev 0 / id 3; CANON rev 0 / id 2
+    rung 2: R1-OFF-GEN 9435 / PIN-SAFE 3395 / C8-NORMAL 2356 / CANON 2345
+            BEHAVIORS 1068 / 1068 / 1068 EXACT
+            SPELLINGS C8-NORMAL rev 2 / id 6; CANON rev 2 / id 4
+
+The exact transferred junction is the playground's post-R1 result:
+**2,356 forms, 1,068 behaviors, and 2 / 6 rev / id spellings**.  The current
+engine exposes its pressure more finely: pin-aware formation first avoids 6,040
+policy-off members, C8's
+remaining rebuild discipline removes 1,039 spellings without losing a sampled
+behavior, and the newer C10 vacuous-match pressure removes 11 more, again with
+the behavior set unchanged.  At rung 1, C8-normal also reproduces the old
+`19 programs = exactly 13 behaviors` catalog boundary before C10 tightens it to
+17 spellings.
+
+`R1-OFF-GEN` is deliberately not called `RAW`: the playground's raw twin also
+disabled append orientation, pin-normal-form, and match-order constraints and
+therefore measured 150 and 69,567,550 forms at depths 1 and 2.  This ablation
+isolates one causal policy.  It also does not execute the policy-off members,
+some of which contain the very nonterminating `f(Nil)` recursion R1 excludes;
+their count is a generation-pressure measurement, while behavior equality is
+asserted only across the production/C8/canon layers that the current fragment
+declares total.
+
+### Transition-window mining and checked ISA sequence pressure
+
+The first imperative/ISA mining rung now uses the same reflected task boundary
+rather than an instruction-specific engine.  `transition_mine.shard` consumes
+an ordinary `typed_expr` scope whose observation is an exact `List Int` key,
+checks and ranks every grammar member, retains the complete accepted corpus,
+and orients strict reductions toward every least structural-cost member of a
+collided behavior.  Keeping the complete minimum-cost set avoids introducing
+an arbitrary rank-based gauge choice before schema mining.
+The initial x86 adapter supplies every zero-to-two-instruction register XOR
+sequence over three scoped registers—91 programs, with no x86 name in the
+miner:
+
+    TOTAL 91; BEHAVIORS 55; COLLIDED-BUCKETS 19
+    EXCESS 36; MAX-BUCKET 7
+
+`meta/antiunify` is the reusable schema-contraction layer.  It computes a
+simultaneous least-general generalization of two directed equations with one
+mismatch table shared across both sides.  Repeated roles therefore remain one
+nonlinear metavariable even when the correlation crosses the equation.  It
+also reports variable pairs that differ in every concrete support as
+*empirical guard proposals*.  Those guards carry no proof authority.
+The opt-in `meta/antiunify/typed.shard` companion recovers the type of every
+generalized role with the kernel type synthesizer, in theorem-binder order;
+ambiguous or inconsistent role types are refused.
+
+The initial transition miner anti-unified pairs of concrete collision edges,
+rejected malformed or non-decreasing orientations, and replayed each candidate
+schema against the complete shallow grammar.  Every matching LHS had to have a
+representable RHS with the same exact behavior key.  The top contracted basis
+contained stronger versions of the motivating double-self-XOR example:
+
+    xor d,s ; xor d,d  ->  xor d,d       removes 9 / 91
+    xor d,d ; xor e,d  ->  xor d,d       removes 9 / 91
+    xor d,s ; xor d,s  ->  []            removes 6 / 91, guard d != s
+
+Thus `(xor r,r ; xor r,r) -> xor r,r` is not installed as a bespoke rule; it
+is one instance of the first mined schema.  The third result also pins why
+blind anti-unification is unsound: admitting `d = s` changes zeroing into the
+identity transformer.  Complete-census replay is stronger than inspecting two
+examples but remains battery-relative evidence, so every report still labels
+these schemas proposals rather than licenses.
+
+The first proposal has crossed the proof boundary.  `std/bits` now proves
+`bxor_self` from the kernel recurrence by well-founded induction.  The x86
+peephole module proves generic `rget/rset` laws and then
+`xseq_xor_self_absorbs` for arbitrary destination, source, tail, module,
+register file, and memory.  Its two nonnegative premises expose the model's
+valid-word boundary.  Its fuel is deliberately shifted:
+
+    eval (S^(3+f)) [xor d,s; xor d,d]++tail
+      = eval (S^(2+f)) [xor d,d]++tail
+
+Removing a list cell removes one structural fuel unit.  Same-fuel equality at
+the exhaustion boundary would be false.  The transition task therefore uses
+a sequence-length-normalized fuel observer, proves its sample register files
+satisfy the word premises, and derives the exact premise-free observer theorem
+selected by `search_observer_profile`.
+
+That theorem enters through the existing checked scope/provenance path and the
+ordinary nonlinear residual matcher.  No new ISA rule channel was added:
+
+    CANON RULES 0; OBSERVER RULES 1; DEFERRED RULES 1
+    RAW/TOTAL 91; CONSTRAINT KILLED 9
+    AUDIT accepted 82; constrained 9; exhaustive agreement OK
+
+`REMOVED` remains zero because this correlated deep pattern is intentionally a
+residual constraint rather than a separable formation clause.  The result is
+nevertheless real narrowing pressure: all nine instances are rejected by the
+checked theorem before semantic acceptance, including the three literal
+double-self-XOR programs.
+
+The 91-program figures above record the initial depth-4/two-instruction mining
+configuration.  The task has since grown to the depth-5 experiment described
+below; the earlier tables remain the baseline that produced the proposal.
+
+#### Whole gauge-orbit contraction
+
+The depth-5 space makes pairwise proposal construction an algorithmic problem,
+not a Shard-versus-native constant factor.  Its proof-free mining adapter has
+the same scope, observer, and four register files as the checked task, without
+loading the peephole proof closure:
+
+    TOTAL 820; BEHAVIORS 182; COLLIDED-BUCKETS 146
+    EXCESS 638; MAX-BUCKET 37
+
+The default miner now treats a *gauge orbit* as two simultaneous invariants:
+
+* identical non-leaf constructor/call topology; and
+* the same equality partition among aligned leaves.
+
+Register, immediate, enum, and other leaf identities may be renamed, but a
+repeated role cannot silently split and two distinct roles cannot collapse.
+Edges are partitioned by that relation before generalization.  For each whole
+orbit the miner marks every aligned leaf position which varies in any support,
+abstracts all correlated varying roles at once, and retains singleton scoped
+leaves as constants.  Thus the sole allowed `XXor` remains concrete while all
+register roles seen under renaming become typed `Reg` metavariables.  Guards
+are inferred from the complete orbit, not a lucky pair.
+
+This fixes two sources of artificial gauge choice.  Every minimum-cost bucket
+representative contributes strict size-decreasing edges, and whole-orbit
+abstraction cannot leave `RAX` or `RSI` pinned merely because two selected
+supports happened to agree there.  Complete-census replay and type recovery
+then run once per unique schema.  On the 820-program rung:
+
+    pairwise gauge seeds:       595 partially pinned schemas
+    whole-orbit abstraction:    111 unique schemas
+    complete replay accepted:   111 / 111 proposals
+
+The highest-ranked low-complexity result is the motivating family itself,
+with no instruction-specific template in the miner:
+
+    [xor d,s; xor d,s] -> []
+    d : Reg; s : Reg; guard d != s
+    removes 6 corpus members; structural gain 72
+
+The ranking uses total removed structure, then support, then shorter theorem
+LHS.  Longer three-instruction cancellations and reorderings remain in the
+same 111-proposal worklist rather than displacing the simplest proof target.
+`transition_mine TASK` uses whole gauge orbits; `TASK orbit` retains the
+topology-only pair experiment, and `TASK all` retains exhaustive cross-shape
+pairing.  The latter modes are conjecture-expansion tools, not the scalable
+default.  None of the 111 replayed schemas is a search license until a checked
+theorem authenticates it.
+
+Whole-orbit support now also drives a bounded relational pre-mining pass for
+Int-valued roles.  `meta/antiunify` enumerates normalized affine invariants
+with unit coefficients and at most six terms.  The baseline guard family holds
+the structural disequalities plus the tight interval hull of every Int role;
+each multi-role affine equality becomes a separate alternative atop that
+baseline.  Unrelated equalities are deliberately not conjoined: two
+observations can imply many arithmetic coincidences, and a large conjunction
+would overfit while appearing selective.  Every alternative is instead
+replayed against the complete accepted corpus by the same exact-key validator
+used for structural schemas.  Pairwise diagnostic modes retain structural
+guards only because two-example numeric evidence is too weak.
+
+The miner now closes that classification loop through the same checked profile
+loader as `typed_expr`.  It retains the application domain of each rule
+(`everywhere`, root observer, or authenticated spine) and compares proposals
+with `TrsConditionedRule` values, never theorem names.  Coverage is
+alpha-invariant and type-aware.  More importantly, it is a theorem-domain
+*superset* test: a general checked rule may instantiate an extra tail binder to
+the proposal's `Nil`, and an unused stripped prefix binder is harmless.  Every
+mined metavariable must still have a type-correct theorem source, and every
+theorem guard must hold throughout the proposal's empirical guard domain.
+The regression additionally refuses binder-type drift and refuses using a
+guarded theorem for an unguarded proposal.
+
+On the proof-bearing x86 task, the existing checked absorber profile covers
+four finite orbit schemas:
+
+    VALIDATED-PROPOSALS 111; AUTHENTICATED 4; PROOF-WORKLIST 107
+
+Three are distinct-register absorber windows at different concrete tails,
+authenticated by `xtw_xor_self_absorbs_distinct`; the equal-register orbit is
+authenticated by the unconditional `xtw_xor_self_absorbs_spine`.  The report
+prints these under `AUTHENTICATED BASIS` with citation and domain.  The
+double-XOR cancellation remains first under `PROOF WORKLIST`, correctly
+reflecting that its full-state theorem exists but its observer-prefix invariant
+closure is not yet a checked spine license.
+
+#### Checked structural-spine closure
+
+The contextual gap is now closed for a deliberately small, general structural
+fragment.  `meta/rewrite` has three distinct equation domains:
+
+* `TrsProfile`: ordinary candidate equality, valid below every constructor;
+* `TrsRootProfile`: exact observer equality, valid only for the whole program;
+* `TrsSpineProfile`: contextual observer equality, valid at the root and then
+  only down one authenticated repeated-constructor child.
+
+A spine path is not configuration data.  The reusable `trs_inspect_spine`
+examines a transparent binary `FnDef` and accepts exactly a structural right
+action with one base arm and one constructor arm:
+
+    plug prefix suffix =
+      match prefix with
+        Leaf       -> suffix
+        C fields   -> C fields[child := plug child suffix]
+
+It derives the context QName, constructor QName, and recursive child index
+from the locally-nameless body.  A regression derives `Cons/1` from an
+append-shaped function and refuses a function which recurses in two fields.
+The recognizer is in `meta/`; checked Theory/provenance joining remains in
+`tools/search/theorem_scope.shard`.
+
+The checked theorem shape is:
+
+    search_probe (plug prefix lhs) = search_probe (plug prefix rhs)
+
+`prefix` must be an otherwise-unused theorem parameter.  Capture refuses a
+fixed prefix, different prefixes on the two sides, unsupported premises, and
+the subtle correlated case where the prefix parameter occurs again inside the
+local lhs or rhs.  The stripped local equation retains other parameters such
+as a sequence `tail`, allowing a window law to match in the middle of a
+program.  Tasks select the transparent context and ordered laws through the
+optional `search_spine_context` and `search_spine_profile` functions.
+
+`meta/search` validates all three domains in one `MsPlan`.  Existing two-domain
+callers still use `ms_plan`; `ms_plan_spine` adds the third profile.  Its
+partial matcher uses the existing left-linear cache and nonlinear equality
+environment, treats an unassigned grammar hole by exact consensus, and enters
+only the inspected constructor child.  It never upgrades observer equality to
+unrestricted congruence.
+
+The x86 transition task now contains a transparent `xtw_plug` and a proven
+prefix-and-tail law for the mined XOR/self-XOR schema.  The contextual proof
+factors through a total transition projection for the searched register-XOR
+fragment; the earlier `xeval_seq` theorem remains the full-model semantic
+kernel for the original root experiment.  The contextual theorem is
+premise-free and is checked before capture:
+
+    probe (prefix ++ [xor d,s; xor d,d] ++ tail)
+      = probe (prefix ++ [xor d,d] ++ tail)
+
+At depth 5 the explicit scope contains every length-zero-through-three
+sequence: `1 + 9 + 81 + 729 = 820` programs.  The spine rule removes 162:
+
+    root window:       9 + 81 = 90
+    one-step prefix:       81
+    overlap:                9
+    union:          90 + 81 - 9 = 162
+
+Thus 72 reductions are genuinely new contextual pressure which no root-only
+profile can see.  Enumerative and lazy runs agree exactly:
+
+    TYPED: SPINE RULES 1; RAW 820; ACCEPTED 658; CONSTRAINT KILLED 162
+    SUPERPOSED: SPINE RULES 1; REGIONS 772; FORKS 387; CONSTRAINT KILLED 162
+    AUDIT accepted 658; constrained 162; exhaustive agreement OK
+
+`REMOVED` is still zero: a nonlinear variable-length window is residual
+pressure, not a separable formation clause.
+
+Prepared search now carries stable spine verdicts alongside its existing
+everywhere and root tables.  A cache entry is keyed by the checked spine-rule
+name and grammar hole, because two rules may own different authenticated
+traversal domains.  Preparation records only unanimous `Clear` or
+same-citation `Redex`; mixed and descendant-blocked alternative sets remain
+live decisions.  `guard_probe.shard` constructs one mixed, one all-clear, one
+all-redex, and a nested authenticated-spine region.  It observes exactly four
+cached facts and pins direct/prepared agreement, including a redex reached
+strictly below the checked constructor path and a cached child reached below
+an already materialized parent.  The remaining structural extension is a
+multi-arm/multi-spine inspector for recursive datatypes with more than one
+structural branch.
+
+#### Checked structural-distinctness guards
+
+The first conditional-rule fragment is now represented without embedding a
+predicate evaluator or an ISA-specific register test in `meta/search`.
+`TrsConditionedRule` pairs an ordinary validated equation with a list of
+`TrsGuard`s; the first guard is structural distinctness between two bound rule
+variables.  Spine rules carry this wrapper, so premise logic is orthogonal to
+the authenticated traversal domain.  An empty guard list is the existing
+unconditional behavior.
+
+The checked source premise has the narrow shape:
+
+    (int_eq (disc x) (disc y)) = False
+
+`disc` is not trusted by name.  `meta/rewrite` inspects its transparent unary
+`FnDef`, requires a match over the complete constructor set of its input type,
+and requires every nullary constructor arm to return a different Int literal.
+The theorem layer then lowers the premise to `TrsDistinct(disc,x,y)`.  Missing
+constructors, foreign constructors, duplicate constructors/codes, other
+predicates, and non-variable arguments are refused.  Rule validation also
+requires both guarded variables to occur in the lhs.
+
+Guard evaluation is lazy over the nonlinear match environment:
+
+* definitely equal bindings falsify the guard and leave the candidate Clear;
+* definitely different bindings enable the cited reduction;
+* an unresolved grammar hole returns Blocked on that exact hole.
+
+`guard_probe.shard` pins all four cases, including a shared open hole which is
+known equal without choosing an alternative and a mixed open hole which blocks
+until assignment.  `spine_probe.shard` separately pins finite-discriminator
+coverage/injectivity and rejects a duplicate code.
+
+The x86 task exercises the full checked path with `xtw_reg_code` and an
+`int_eq(...)=False` premise on a contextual absorber theorem.  That premise is
+deliberately stronger than necessary; the unconditional absorber follows it
+in the ordered profile, so equal-register cases fall through and total
+pressure remains 162:
+
+    SPINE RULES 2; DEFERRED RULES 2
+    RAW 820; ACCEPTED 658; CONSTRAINT KILLED 162
+
+The guarded absorber remains a plumbing theorem, but its two semantic
+prerequisites have now graduated into reusable libraries.  `std/bits` proves
+right cancellation
+
+    bxor (bxor a b) b = a
+
+on the kernel primitive's nonnegative domain, by recurrence plus a checked
+quotient/remainder reconstruction.  The x86 model exposes a complete
+`reg_code` discriminator and proves both distinct-register `rget/rset` framing
+and `rset rs r (rget rs r) = rs`.  Those facts compose into the full-state,
+arbitrary-tail theorem
+
+    xeval ([xor d,s; xor d,s] ++ tail) = xeval tail
+
+under the checked `reg_code d != reg_code s` guard and the model's ordinary
+nonnegative word premises.  No ISA-specific search mechanism was added.
+
+That observer boundary is now closed by a finite, compositional invariant.
+`xtw_word_regs` normalizes every field of the complete register record through
+`wrap64`; equality with the original record states that the machine state is
+already word-normal.  Generic `rget`/`rset` commutation isolates the finite
+record layout, XOR closure preserves normalization, and the abstract
+transition proves the invariant for every `XInstr` (instructions outside the
+reflected XOR fragment are its specified no-ops).  Induction lifts that result
+through an arbitrary prefix.  The four census files discharge the fixed-point
+premise once, after which `xtw_xor_pair_cancels_spine` exposes the premise-free
+observer equation with only the already-checked structural distinctness guard.
+
+The new rule removes 108 programs by itself: six two-instruction roots and
+102 length-three programs across the two possible window positions.  Six of
+those length-three programs also contain the absorber window, so the composed
+profile removes `162 + 108 - 6 = 264` distinct candidates.  Enumerative and
+lazy paths agree exactly:
+
+    SPINE RULES 3; RAW 820; ACCEPTED 556; CONSTRAINT KILLED 264
+    SEMANTIC-FIRST: REGIONS 742; FORKS 372; STEPS 25312
+    THEOREM-FIRST: REGIONS 625; FORKS 411; STEPS 23267
+    AUDIT accepted 556; constrained 264; exhaustive agreement OK
+
+Thus one mined guarded family adds 102 unique reductions.  The theorem-first
+partition exposes that quotient before behavioral narrowing without cloning
+the grammar (`REMOVED 0` still denotes formation-time removal); correlated
+variable-length window formation remains a separate relational-grammar
+problem.
+
+The nonlinear linear-relaxation and equality-domain consensus leave this
+particular report exactly unchanged (`742 / 372 / 25312`).  That is the
+expected control result: every routed register domain has the same three
+members, so the duplicate-XOR laws describe genuinely mixed diagonals rather
+than a hidden shape mismatch or disjoint domain.  The new pressure helps other
+scopes early without manufacturing an x86 win; this task now isolates the next
+engine boundary cleanly—the region/job language must be able to retain a
+choice exclusion or equality relation lazily over the original hole ids.
+
+The miner's proof classifier now respects that same contextual domain.  A
+spine-authenticated rule retains its inspected `TrsSpine` descriptor; reusable
+`meta/antiunify` coverage strips zero or more common constructor layers only
+when both sides use the checked constructor, the recursive child exists, and
+every non-child field is `expr_eq`.  Local-fragment coverage may ignore schema
+binders used only by the stripped context, but every binder still present in
+the local equation keeps the existing alpha/type check and theorem guards must
+still be entailed.  Negative probes pin wrong constructors, wrong or absent
+children, changed non-child fields, and missing guards.  Compound guard
+bindings are considered definitely distinct only when both are closed ground
+terms; unequal open syntax containing proposal binders is refused because a
+later substitution could make the terms equal.
+
+That changes no search license and no candidate count; it repairs the mining
+queue's accounting.  The same 111 replay-valid proposals move from
+9 root-shaped recognitions / 102 apparent proof targets to:
+
+    AUTHENTICATED 26; PROOF-WORKLIST 85
+
+The classifier remains deliberately conservative when a theorem metavariable
+matches a compound term containing fresh proposal binders.  General closure
+there needs checked substitution typing under the proposal telescope; merely
+dismissing those binders would be unsound.  Search already applies the theorem
+to such concrete grammar regions, so this is a proof-worklist precision
+frontier, not missing narrowing pressure.  The miner also still classifies an
+`everywhere` theorem at the proposal root; recognizing it through an arbitrary
+common `Expr` context needs a general checked zipper rather than borrowing the
+more restrictive structural-spine projector.
+
+#### Checked affine Int equality and order guards
+
+Conditional spine rules now cover finite arithmetic relations without cloning
+one theorem per literal tuple.  `meta/rewrite` owns a small typed
+`TrsIntExpr` vocabulary over rule variables: Int literals, variables,
+addition, and subtraction.  `TrsIntEq` compares two such expressions and
+`TrsIntLe` supplies non-strict order.  This is an explicit relation language,
+not an embedded Shard evaluator; rule validation requires every referenced
+variable to occur in the lhs and to have the checked `Int` parameter type.
+
+`theorem_scope` lowers a direct checked premise such as
+
+    (= (+ d1 (+ d2 1)) out)
+
+or
+
+    (= (le 0 d1) True)
+
+to that vocabulary.  Order capture deliberately accepts the checked Boolean
+shape `le(left,right)=True`; strict order and false-order complements are not
+silently reinterpreted.  Calls outside the affine fragment, malformed
+arithmetic, non-Int variables, rhs-only variables, and other proposition
+shapes are refused.  Structural distinctness remains the other supported
+premise form, and mixed guard lists retain theorem order.  Ordinary canon and
+root-observer profiles remain premise-free; the guarded vocabulary is attached
+only to the authenticated contextual domain that already knows how to check it
+at each candidate site.
+
+Arithmetic in a theorem RHS already fits the ordinary kernel `Expr` template.
+After substituting matched rule variables, `trs_inst` now folds ground core
+`+` and `-` calls bottom-up.  Thus a single checked replacement such as
+`delay=(d1+d2+1)` emits the literal delay when its inputs are literal, while an
+open expression or a foreign function remains exact syntax.  Search rejection
+itself only needs the cited lhs, but this definitional fold makes the same rule
+usable by generic normalizers and source-emitting consumers.
+
+Ground matching evaluates the relation exactly.  Lazy matching resolves Int
+bindings through the current grammar region and returns `Blocked(h)` at the
+first undecided value.  No arithmetic-specific scheduler was added:
+`ms_partition_prepared` classifies that hole's allowed alternatives, groups
+same-citation redex choices, and represents the complementary choices with
+the existing forbidden-choice regions.
+
+`affine_guard_probe.shard` pins the whole join for `left + 1 = right`.  Over a
+3-by-4 literal product, the one checked relation covers all 12 members as
+three cited singleton reductions plus three coalesced clear rows:
+
+    RHS GROUND-FOLD; RAW 12; REDUX 3; CLEAR 9
+    REGIONS 3 + 3; RELATIONAL FORKS 4
+
+`int_order_guard_probe.shard` similarly pins `0 <= delay` over a grammar that
+contains negative, zero, and positive literals: the negative member is clear,
+zero is a cited redex, and an open delay blocks on its original hole.
+This closes the vocabulary gap exposed by clamped delay semantics: a checked
+cycle-conservation rule can carry `0 <= d1` and `0 <= d2` alongside its affine
+equality, so the rule remains universally sound over Int while firing across
+the task's whole nonnegative delay alphabet.
+
+This is the intended delay-alphabet scaling shape for PIO-style cycle
+conservation: theorem count is independent of the literal alphabet, and
+unreachable combinations disappear when the relation is intersected with the
+task's actual grammar region.
+
+The transition miner now completes the other half of that join.  It discovers
+stable unit-coefficient affine relations and per-role intervals from the
+complete support of each whole gauge orbit, emits each relation as an
+empirical proposal domain, and revalidates that domain over the full census
+before classification.  The theorem classifier symbolically normalizes
+`TrsIntEq` and `TrsIntLe` through the proposal's alpha-renaming.  Equality
+requires the exact empirical relation; order uses ordinary bound entailment,
+so an observed `d >= 2` domain can cover a checked theorem requiring only
+`d >= 0`, but never the reverse.  Structural guards cannot accidentally
+authenticate arithmetic.  As everywhere else in the miner, surviving
+evidence is still not a search license—only a checked conditioned rule can
+cross that boundary.
+
+`transition_affine_probe.shard` pins the evidence discipline with two supports
+that imply both a useful five-variable conservation relation and an accidental
+four-variable coincidence.  Both are pre-mined; complete-census replay keeps
+the useful guarded family with support two and rejects the coincidence on a
+third member.  `antiunify_probe.shard` separately checks that an alpha-matched
+checked theorem with two nonnegative premises and the five-variable equality
+covers the first family.  Its inferred interval hull entails the weaker
+nonnegative bounds, refuses an excessive lower bound, and cannot justify the
+theorem without the equality relation.  The established 820-member x86 rung
+has no Int-valued generalized roles and remains unchanged at 111 unique
+schemas and 111 validated proposals (26 authenticated in the proof-bearing
+task).
+
+#### Cardinality-free first-result synthesis
+
+Exact candidate weights are a census requirement, not a prerequisite for
+finding one program.  Typed tasks may now select `search_result_mode = first`;
+the SUPERPOSE driver then retains the same partial regions, lazy evaluator,
+checked formation, and residual theorem plan, but stops at the first passing
+region without computing raw, filtered, killed, or passing candidate
+cardinalities.  `search_drive_budget` bounds region decisions explicitly.
+Reports mark `CARDINALITY UNCOUNTED` and validate both the productive region
+representative and the supplied witness semantically rather than assigning
+either an exact rank.
+
+Expected-empty tasks remain on the exhaustive path.  A region budget or first
+passing result can establish existence but cannot certify nonexistence, so
+`search_expect_empty` is rejected when `search_result_mode = first`.
+
+`meta/sketch` owns the supporting general operations.  `SkProductivity` is a
+saturating bottom-up grammar analysis with one bit per original alternative;
+it removes zero-cardinality depth-boundary productions without renumbering
+choices.  `sk_region_first` uses that analysis to choose the first productive
+member of a fixed/forbidden region without bignum arithmetic, including the
+case where an earlier syntactic production is barren.  The known-entry region
+operation applies a choice when the caller already has the grammar entry, so
+an indexed scheduler does not rescan the full grammar at every fork.
+
+Large occurrence grammars exposed two unrelated quadratic setup paths.  The
+typed builder now uses an amortized-linear FIFO work queue and resolves every
+admitted reflected declaration once per build.  Whole-grammar
+well-formedness now validates ids, ownership, and stratification through a
+persistent integer set rather than performing a full id-list scan for every
+child reference.  These changes preserve grammar order and exact ranks: the
+routed four-function x86 control remains `TOTAL 1728`, `REGIONS 140`, `FORKS
+63`, and witness rank `183`.
+
+`typed_list_first.shard` pins theorem-backed first-result behavior, while
+`region_probe.shard` pins fixed and forbidden regions, nested restrictions,
+productive representative selection past a barren production, and preservation
+of original hole ids.  The template-free x86 calculator task admits only a
+plain reflected constructor scope, four integer atoms, and depth 20; it does
+not provide a routed `TgScopeEnv` or a calculator control-flow skeleton.
+
+#### Regular schemas and lazy occurrences
+
+First-result search no longer needs to materialize the complete occurrence
+grammar.  `meta/sketch` now separates a `SkSchemaGrammar`'s reusable production
+states from structural occurrence addresses.  A schema alternative contains
+an expression template plus child references `(local hole, edge, child
+schema)`.  The address
+
+```text
+child(parent, edge) = 2^edge * (2 * parent + 1)
+```
+
+is positive and reversibly identifies the complete parent path.  Consequently
+two positions governed by the same schema consult the same production policy
+but remain distinct region choices.  No mutable occurrence allocator or eager
+hole table is required.  Schema well-formedness checks template coverage,
+edge ownership, and child-schema references; saturating productivity operates
+once over the schema graph, including productive cycles with a finite base and
+rejection of ungrounded cycles.
+
+`typed_grammar` interns the full state that can affect production generation:
+expected type, binder-type environment, remaining depth, scope zone, root-only
+formation state, and inherited child exclusions.  Its existing environment,
+route, reflected-signature, and formation machinery is reused to construct
+each unique schema exactly once.  Equal schemas never imply equal choices.
+
+SUPERPOSE exposes materialized grammars and schema grammars through the same
+read-only demanded-alternative interface.  Representative construction now
+recurses only through the chosen productive candidate instead of scanning the
+whole occurrence grammar.  Counted census remains on `Grammar`; first-result
+tasks use schemas for both semantic evaluation and theorem-backed narrowing.
+Separable theorems are represented directly in schema formation states.
+
+Residual matching in `meta/search` now consumes an `MsLanguage`: either an
+exact occurrence grammar or a regular schema grammar.  Schema preparation is
+exact without eager occurrence facts; a matcher resolves only the structural
+occurrences it demands.  When a semantic pass still leaves the theorem plan
+blocked, SUPERPOSE partitions that relation through the same lazy language,
+fixing one productive occurrence choice at a time.  Exact cardinality and
+citation-coalesced census partitions remain explicitly flat-grammar
+capabilities rather than being approximated on a schema.
+
+The depth-2 checked list search preserves its exact narrowing trace—four forks,
+39 evaluator steps, and the independently chosen value `(Cons 0 (Cons 1
+Nil))`—while replacing 13 occurrence holes with nine schemas.  The genuine
+flat depth-20 four-function x86 calculator compresses 202,177 possible
+occurrence holes to 136 schemas.  A one-region probe reaches its first semantic
+fork in roughly four seconds rather than remaining in eager grammar setup.
+At 1,000 regions its stable trace is 652 semantic failures, 652 terminals, 348
+forks, and 134,057 evaluator steps.  Indexing schema lookup does not materially
+change that runtime, which locates the remaining cost in semantic evaluation
+and branch refinement rather than grammar construction.
+
+`typed_observer_conjunctive_first.shard` pins the nonseparable case.  Its one
+checked observer theorem relates two independent constructor positions, stays
+deferred, and kills a lazy constraint region before the engine returns a clear
+representative.  This is the residual-theorem counterpart of
+`typed_list_first.shard`'s formation-pressure and occurrence-independence pin.

@@ -1,0 +1,559 @@
+;;; End-to-end regression for theorem_scope.shard.  This loads a real CHECK
+;;; closure, builds the driver's checked Theory (including sidecars), recovers
+;;; the root file's strict RCtx, and captures std/list's four append equations.
+;;; It therefore pins the join that a RUN-only Module cannot provide:
+;;;
+;;;   explicit use scope × checked Theory -> typed, oriented canon licenses.
+;;;
+;;; The captured append profile is then compiled into meta/rewrite's generic
+;;; first-order TRS and normalizes a three-redex term to BVar 0.  Its four LHSs
+;;; also generate an exact separable formation profile.  The generic typed
+;;; grammar uses it to turn a 243-term raw space into exactly its 31 normal
+;;; members before enumeration.  The same checked profile then drives the
+;;; generic symbolic neutral normalizer, including evaluation of a rule RHS
+;;; which constructs a nested call.  This pins the first real proof-base ->
+;;; graduated mechanism -> quotient-first and symbolic consumer chain.
+;;; The generic profile census also grows the checked rule list cumulatively:
+;;; every depth-2 prefix is exhaustively audited, and the harder 59,295-term
+;;; depth-3 space is counted per prefix with its 94-term endpoint audited.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/proof.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/driver.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "sym.shard")
+(import "typed_grammar.shard")
+(import "theorem_scope.shard")
+(import "checked_profile.shard")
+(import "profile_census.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel reader *))
+(use (:: kernel proof *))
+(use (:: kernel loader *))
+(use (:: kernel driver *))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: tools search sym *))
+(use (:: tools search typed_grammar *))
+(use (:: tools search theorem_scope *))
+(use (:: tools search checked_profile *))
+(use (:: tools search profile_census *))
+
+(fn tsp_path () (List Int) "tools/search/tasks/theorem_scope_append.shard")
+
+(fn tsp_fail ((msg (List Int)) (w World)) World
+  (exit
+    1
+    (write (append_int "THEOREM-SCOPE-PROBE FAIL " (append_int msg "\n")) w)))
+
+(fn tsp_profile () (List Symbol)
+  (list
+    (quote append_nil_left)
+    (quote append_cons)
+    (quote append_assoc)
+    (quote append_nil_right)))
+
+(fn tsp_params_len ((xs (List Param))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (tsp_params_len rest)))))
+
+(fn tsp_licenses_ok ((ls (List TgCanonLicense)) (arities (List Int))) Bool
+  (measure (struct ls))
+  (match ls
+    (Nil
+      (match arities
+        (Nil True)
+        (_ False)))
+    ((Cons (TgCanonLicense q params _ _ evidence) rest)
+     (match arities
+       (Nil False)
+       ((Cons arity more)
+        (if
+          (if (sym_path_eq (qn_mod q) (list (quote std) (quote list)))
+            (if (int_eq (tsp_params_len params) arity)
+              (match evidence
+                ((TgLawGrantedRequirement) True)
+                ((TgLawProven) False))
+              False)
+            False)
+          (tsp_licenses_ok rest more)
+          False))))))
+
+(fn tsp_shape_len ((shapes (List TrsShape))) Int
+  (measure (struct shapes))
+  (match shapes
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (tsp_shape_len rest)))))
+
+(fn tsp_clause_len ((clauses (List TrsFormClause))) Int
+  (measure (struct clauses))
+  (match clauses
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (tsp_clause_len rest)))))
+
+(type TspRawR (TspRawErr (List Int)) (TspRawOk Int Int))  ; normal, redex-bearing
+
+(fn tsp_raw_sweep
+  ((k Int)
+   (total Int)
+   (root Expr)
+   (grammar Grammar)
+   (profile TrsProfile)
+   (normal Int)
+   (redex Int))
+  TspRawR
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le k 0) (TspRawOk normal redex)
+  (let ((rank (- total k)))
+    (match (sk_unrank root grammar rank)
+      ((SkEErr msg) (TspRawErr msg))
+      ((SkEOk candidate)
+       (match (sk_rank root grammar candidate)
+         ((SkCErr msg) (TspRawErr msg))
+         ((SkCOk rank2)
+          (if (int_eq rank rank2)
+            (match (trs_normal profile candidate)
+              ((TrsNormalErr msg) (TspRawErr msg))
+              ((TrsNormalOk clean)
+               (tsp_raw_sweep
+                 (- k 1)
+                 total
+                 root
+                 grammar
+                 profile
+                 (if clean (+ normal 1) normal)
+                 (if clean redex (+ redex 1)))))
+            (TspRawErr "raw grammar rank roundtrip")))))))))
+
+(type TspCanonR (TspCanonErr (List Int)) (TspCanonOk))
+
+(fn tsp_canon_sweep
+  ((k Int)
+   (total Int)
+   (root Expr)
+   (grammar Grammar)
+   (raw_root Expr)
+   (raw_grammar Grammar)
+   (profile TrsProfile))
+  TspCanonR
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le k 0) (TspCanonOk)
+  (let ((rank (- total k)))
+    (match (sk_unrank root grammar rank)
+      ((SkEErr msg) (TspCanonErr msg))
+      ((SkEOk candidate)
+       (match (sk_rank root grammar candidate)
+         ((SkCErr msg) (TspCanonErr msg))
+         ((SkCOk rank2)
+          (if (int_eq rank rank2)
+            (match (trs_normal profile candidate)
+              ((TrsNormalErr msg) (TspCanonErr msg))
+              ((TrsNormalOk clean)
+               (if clean
+                 (match (sk_rank raw_root raw_grammar candidate)
+                   ((SkCErr msg) (TspCanonErr msg))
+                   ((SkCOk _)
+                    (tsp_canon_sweep
+                      (- k 1)
+                      total
+                      root
+                      grammar
+                      raw_root
+                      raw_grammar
+                      profile)))
+                 (TspCanonErr "formation grammar emitted a theorem redex"))))
+            (TspCanonErr "formation grammar rank roundtrip")))))))))
+
+(fn tsp_formation_report ((raw Int) (canon Int) (redex Int) (w World)) World
+  (write
+    (append_int
+      "THEOREM-FORMATION APPEND 4 RAW "
+      (append_int
+        (show_int raw)
+        (append_int
+          " CANON "
+          (append_int
+            (show_int canon)
+            (append_int " REDUNDANT " (append_int (show_int redex) " EXACT\n"))))))
+    w))
+
+(fn tsp_ev_eq ((result EvR) (expected SV)) Bool
+  (match result
+    ((EvRErr _) False)
+    ((EvROut) False)
+    ((EvRFail) False)
+    ((EvRStuck _) False)
+    ((EvRVal actual) (sv_eq actual expected))))
+
+(fn tsp_symbolic_profile
+  ((m Module)
+   (ctx RCtx)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (profile TrsProfile)
+   (apq QName)
+   (w World))
+  World
+  (let
+    ((nilq (qn (quote Nil)))
+     (consq (qn (quote Cons)))
+     (rules (Cons (NRTrs profile) Nil)))
+    (let
+      ((nil (SVCtor nilq Nil -1))
+       (cons (SVCtor consq (list (SVInt 9) (SVData 8)) -1))
+       (expected_cons
+         (SVCtor
+           consq
+           (list (SVInt 9) (SVNeu apq (list (SVData 8) (SVData 9)) 8))
+           -1)))
+      ;; append x Nil -> x exercises capture/substitution from the generic
+      ;; profile rather than the compatibility NRAppend implementation.
+      (if
+        (tsp_ev_eq (sv_form 64 m rules apq (list (SVData 7) nil) 7) (SVData 7))
+        ;; append (Cons h t) y -> Cons h (append t y) also proves that the
+        ;; rule RHS is interpreted by the ordinary evaluator and that its
+        ;; nested append returns through this same generic profile.
+        (if
+          (tsp_ev_eq
+            (sv_form 64 m rules apq (list cons (SVData 9)) 8)
+            expected_cons)
+          (tsp_rejections
+            m
+            ctx
+            th
+            srcs
+            (write "THEOREM-SYMBOLIC APPEND PROFILE RHS-REENTRY OK\n" w))
+          (tsp_fail "symbolic cons rewrite" w))
+        (tsp_fail "symbolic nil-right rewrite" w)))))
+
+(fn tsp_rejections
+  ((m Module) (ctx RCtx) (th Theory) (srcs (List SrcEntry)) (w World))
+  World
+  ;; rev_nil exists in Module/Theory but is not imported into the fixture.
+  (match (tg_capture_canon m ctx th srcs (Cons (quote rev_nil) Nil))
+    ((TgCanonProfileOk _) (tsp_fail "out-of-scope theorem admitted" w))
+    ((TgCanonProfileErr _ _)
+     ;; drop_zero is explicitly in scope, but has a premise.
+     (match (tg_capture_canon m ctx th srcs (Cons (quote drop_zero) Nil))
+       ((TgCanonProfileOk _) (tsp_fail "conditional theorem admitted" w))
+       ((TgCanonProfileErr _ _)
+        (match
+          (tg_capture_canon
+            m
+            ctx
+            th
+            srcs
+            (list (quote append_cons) (quote append_cons)))
+          ((TgCanonProfileOk _) (tsp_fail "duplicate theorem admitted" w))
+          ((TgCanonProfileErr _ _)
+           ;; mul_comm is a premise-free reviewed kernel fact, but it is an
+           ;; authored operational axiom, not theorem evidence for this tier.
+           (match (tg_capture_canon m ctx th srcs (Cons (quote mul_comm) Nil))
+             ((TgCanonProfileOk _) (tsp_fail "authored axiom admitted" w))
+             ((TgCanonProfileErr _ _)
+              (write
+                "THEOREM-SCOPE-PROBE APPEND 4 GRANTED TYPED META-TRS NF3 SCOPE-GATES OK\n"
+                w))))))))))
+
+(fn tsp_formation_shape_ok ((formation TrsFormation) (append_shape TrsShape))
+  Bool
+  (let
+    ((nil_shape (TrsCtorShape (qn (quote Nil)) 0))
+     (cons_shape (TrsCtorShape (qn (quote Cons)) 2))
+     (left (trs_arg_forbids formation append_shape 0))
+     (right (trs_arg_forbids formation append_shape 1)))
+    (if (int_eq (tsp_clause_len (trs_formation_clauses formation)) 4)
+      (if (trs_forbids_root formation append_shape) False
+      (if (int_eq (tsp_shape_len left) 3)
+        (if (trs_shape_mem nil_shape left)
+          (if (trs_shape_mem cons_shape left)
+            (if (trs_shape_mem append_shape left)
+              (if (int_eq (tsp_shape_len right) 1)
+                (trs_shape_mem nil_shape right)
+                False)
+              False)
+            False)
+          False)
+        False))
+      False)))
+
+(fn tsp_formation_checked
+  ((m Module)
+   (ctx RCtx)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (profile TrsProfile)
+   (formation TrsFormation)
+   (append_shape TrsShape)
+   (w World))
+  World
+  (match append_shape
+    ((TrsCallShape apq arity)
+     (if (int_eq arity 2)
+       (let
+         ((int_ty (TCon (qn (quote Int)) Nil))
+          (list_ty
+            (TCon (qn (quote List)) (Cons (TCon (qn (quote Int)) Nil) Nil)))
+          (heads
+            (list
+              (TgCtor (qn (quote Nil)))
+              (TgCtor (qn (quote Cons)))
+              (TgCall apq))))
+         (match
+           (tg_build
+             m
+             heads
+             Nil
+             Nil
+             (list list_ty list_ty int_ty)
+             list_ty
+             2
+             (TgForms False))
+           ((TgBuildErr msg) (tsp_fail (append_int "raw grammar: " msg) w))
+           ((TgBuildOk raw_root raw_grammar _)
+            (match
+              (tg_build_formation
+                m
+                heads
+                Nil
+                (list list_ty list_ty int_ty)
+                list_ty
+                2
+                formation)
+              ((TgBuildErr msg)
+               (tsp_fail (append_int "formation grammar: " msg) w))
+              ((TgBuildOk root grammar _)
+               (match (sk_count raw_root raw_grammar)
+                 ((SkCErr msg) (tsp_fail (append_int "raw count: " msg) w))
+                 ((SkCOk raw_count)
+                  (match (sk_count root grammar)
+                    ((SkCErr msg)
+                     (tsp_fail (append_int "formation count: " msg) w))
+                    ((SkCOk canon_count)
+                     (match
+                       (tsp_raw_sweep raw_count raw_count raw_root raw_grammar
+                         profile 0 0)
+                       ((TspRawErr msg)
+                        (tsp_fail (append_int "raw sweep: " msg) w))
+                       ((TspRawOk normal redex)
+                        (if (int_eq normal canon_count)
+                          (if (int_eq (+ normal redex) raw_count)
+                            (if (lt canon_count raw_count)
+                              (match
+                                (tsp_canon_sweep canon_count canon_count root
+                                  grammar raw_root raw_grammar profile)
+                                ((TspCanonErr msg)
+                                 (tsp_fail
+                                   (append_int "formation sweep: " msg)
+                                   w))
+                                ((TspCanonOk)
+                                 (tsp_symbolic_profile
+                                   m
+                                   ctx
+                                   th
+                                   srcs
+                                   profile
+                                   apq
+                                   (tsp_formation_report raw_count canon_count
+                                     redex w))))
+                              (tsp_fail "formation profile removed nothing" w))
+                            (tsp_fail "raw partition arithmetic" w))
+                          (tsp_fail
+                            "formation count differs from raw normal subset"
+                            w)))))))))))))
+       (tsp_fail "append formation root arity" w)))
+    (_ (tsp_fail "append formation root shape" w))))
+
+(fn tsp_pressure_last ((rows (List PcRow)) (prior Int)) Int
+  (measure (struct rows))
+  (match rows
+    (Nil prior)
+    ((Cons row rest)
+     (match row
+       ((PcBase count _) (tsp_pressure_last rest count))
+       ((PcRule _ count _ _) (tsp_pressure_last rest count))))))
+
+(fn tsp_pressure_suffix ((audited Bool)) (List Int)
+  (if audited " AUDITED\n" " COUNT\n"))
+
+(fn tsp_pressure_write ((depth Int) (rows (List PcRow)) (w World)) World
+  (measure (struct rows))
+  (match rows
+    (Nil w)
+    ((Cons row rest)
+     (match row
+       ((PcBase count audited)
+        (tsp_pressure_write
+          depth
+          rest
+          (write
+            (append_int
+              "THEOREM-PRESSURE depth "
+              (append_int
+                (show_int depth)
+                (append_int
+                  " BASE FORMS "
+                  (append_int (show_int count) (tsp_pressure_suffix audited)))))
+            w)))
+       ((PcRule q count marginal audited)
+        (tsp_pressure_write
+          depth
+          rest
+          (write
+            (append_int
+              "THEOREM-PRESSURE depth "
+              (append_int
+                (show_int depth)
+                (append_int
+                  " +"
+                  (append_int
+                    (chars_of_sym (qn_name q))
+                    (append_int
+                      " FORMS "
+                      (append_int
+                        (show_int count)
+                        (append_int
+                          " MARGINAL "
+                          (append_int
+                            (show_int marginal)
+                            (tsp_pressure_suffix audited)))))))))
+            w)))))))
+
+;; Run the generic prefix census before the full-profile regression.  The
+;; checked scope selected the rules; profile_census only composes their
+;; validated TrsRules with the reflected typed grammar.
+(fn tsp_formation_space
+  ((m Module)
+   (ctx RCtx)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (profile TrsProfile)
+   (formation TrsFormation)
+   (append_shape TrsShape)
+   (w World))
+  World
+  (match append_shape
+    ((TrsCallShape apq arity)
+     (if (int_eq arity 2)
+       (let
+         ((int_ty (TCon (qn (quote Int)) Nil))
+          (list_ty
+            (TCon (qn (quote List)) (Cons (TCon (qn (quote Int)) Nil) Nil)))
+          (heads
+            (list
+              (TgCtor (qn (quote Nil)))
+              (TgCtor (qn (quote Cons)))
+              (TgCall apq))))
+         (match
+           (pc_census_with
+             m
+             heads
+             Nil
+             (list list_ty list_ty int_ty)
+             list_ty
+             2
+             (trs_profile_rules profile)
+             (PcAuditEvery))
+           ((PcErr msg) (tsp_fail (append_int "profile census: " msg) w))
+           ((PcOk (PcCensus raw rows))
+            (if (int_eq raw 243)
+              (if (int_eq (tsp_pressure_last rows -1) 31)
+                (match
+                  (pc_census
+                    m
+                    heads
+                    Nil
+                    (list list_ty list_ty int_ty)
+                    list_ty
+                    3
+                    (trs_profile_rules profile))
+                  ((PcErr msg)
+                   (tsp_fail (append_int "profile census depth 3: " msg) w))
+                  ((PcOk (PcCensus raw3 rows3))
+                   (if (lt raw raw3)
+                     (if (lt (tsp_pressure_last rows3 -1) raw3)
+                       (tsp_formation_checked
+                         m
+                         ctx
+                         th
+                         srcs
+                         profile
+                         formation
+                         append_shape
+                         (tsp_pressure_write
+                           3
+                           rows3
+                           (tsp_pressure_write 2 rows w)))
+                       (tsp_fail "profile census depth 3 removed nothing" w))
+                     (tsp_fail "profile census depth 3 raw count" w))))
+                (tsp_fail "profile census full count" w))
+              (tsp_fail "profile census raw count" w)))))
+       (tsp_fail "profile census append arity" w)))
+    (_ (tsp_fail "profile census append shape" w))))
+
+(fn tsp_meta_profile
+  ((m Module)
+   (ctx RCtx)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (ls (List TgCanonLicense))
+   (w World))
+  World
+  (match (tg_compile_canon ls)
+    ((TgCanonCompileErr msg) (tsp_fail (append_int "meta compile: " msg) w))
+    ((TgCanonCompileOk profile)
+     (match ls
+       (Nil (tsp_fail "empty compiled profile" w))
+       ((Cons (TgCanonLicense _ _ lhs _ _) _)
+        (match lhs
+          ((Call apq _)
+           (let ((nil (Ctor (qn (quote Nil)) Nil)))
+             (let ((inner (Call apq (Cons nil (Cons (BVar 0) Nil)))))
+               (let ((raw (Call apq (Cons inner (Cons nil Nil)))))
+                 (match (trs_nf 16 profile raw)
+                   ((TrsNfErr msg) (tsp_fail (append_int "meta nf: " msg) w))
+                   ((TrsNfOut _ _) (tsp_fail "meta nf exhausted" w))
+                   ((TrsNfOk out steps)
+                    (if (expr_eq out (BVar 0))
+                      (if (int_eq steps 3)
+                        (match (trs_formation profile)
+                          ((TrsFormationErr msg)
+                           (tsp_fail (append_int "formation compile: " msg) w))
+                          ((TrsFormationOk formation)
+                           (match (trs_expr_shape lhs)
+                             (None (tsp_fail "formation lhs root" w))
+                             ((Some append_shape)
+                              (if
+                                (tsp_formation_shape_ok formation append_shape)
+                                (tsp_formation_space m ctx th srcs profile
+                                  formation append_shape w)
+                                (tsp_fail "append formation clauses" w))))))
+                        (tsp_fail "meta nf step count" w))
+                      (tsp_fail "meta nf result" w))))))))
+          (_ (tsp_fail "first theorem lhs is not call-rooted" w))))))))
+
+(fn tsp_capture ((scope TgCheckedScope) (w World)) World
+  (match scope
+    ((TgCheckedScope m ctx th srcs)
+     (match (tg_capture_canon m ctx th srcs (tsp_profile))
+       ((TgCanonProfileErr name msg)
+        (tsp_fail (append_int (chars_of_sym name) (append_int ": " msg)) w))
+       ((TgCanonProfileOk ls)
+        (if (tsp_licenses_ok ls (list 1 3 3 1))
+          (tsp_meta_profile m ctx th srcs ls w)
+          (tsp_fail "captured profile shape/provenance" w)))))))
+
+(fn main ((w World)) World
+  (match (tg_load_checked_scope (tsp_path) w)
+    ((Pair result w1)
+     (match result
+       ((TgCheckedScopeErr msg) (tsp_fail msg w1))
+       ((TgCheckedScopeOk scope) (tsp_capture scope w1))))))

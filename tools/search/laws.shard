@@ -22,6 +22,11 @@
 ;;; through reduction + congruence alone. The interface's implementation
 ;;; is the first candidate the oracle ever judges.
 ;;;
+;;; CANON PROFILE: rev_obj's explicit theorem item scope is loaded in CHECK
+;;; mode with sidecars, joined to the driver's Theory, and compiled through
+;;; theorem_scope -> meta/rewrite.  Every oracle path receives that one NRTrs
+;;; value; the former hand-coded NRAppend construction is no longer used.
+;;;
 ;;; NOTE this file rides kernel/driver (goal parsing/resolution), whose
 ;;; closure carries the known pre-existing kernel/types tc_infer measure
 ;;; gap — so like tools/prove it is exercised by its pinned RUN output,
@@ -30,6 +35,10 @@
 ;;; RUN IT: bin/shard_eval run tools/search/laws.shard          (self + g3 1 + g3 2)
 ;;;         bin/shard_eval run tools/search/laws.shard self     (self-pin only)
 ;;;         bin/shard_eval run tools/search/laws.shard g3 N     (one rung)
+;;;         bin/shard_eval run tools/search/laws.shard mine N   (collision proofs)
+;;;         bin/shard_eval run tools/search/laws.shard show N MEMBER REP
+;;;         bin/shard_eval run tools/search/laws.shard front N MEMBER REP
+;;;         bin/shard_eval run tools/search/laws.shard range N REP
 
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/term.shard")
@@ -45,7 +54,10 @@
 (import "../../meta/doc")
 (import "../../meta/spell")
 (import "../../meta/format")
+(import "../../meta/census")
 (import "sym.shard")
+(import "frontier.shard")
+(import "checked_profile.shard")
 (import "rev.shard")
 (import "catalog.shard")
 (import "render_gate.shard")
@@ -88,7 +100,10 @@
 (use (:: meta spell *))
 (use (:: meta format fmt))
 (use (:: meta format bytes_eq))
+(use (:: meta census *))
 (use (:: tools search sym *))
+(use (:: tools search frontier *))
+(use (:: tools search checked_profile *))
 (use (:: tools search rev *))
 (use (:: tools search catalog *))
 (use (:: tools search render_gate *))
@@ -292,9 +307,14 @@
 
 ;; ---- the oracle: one law, one candidate module ------------------------------
 
-;; a Proven verdict carries its comparison TRACE (sym.shard Tr — the
-;; proof skeleton the render component consumes)
-(type LVd (LVdErr (List Int)) (LVdUndec) (LVdRef) (LVdProv Tr))
+;; A Proven verdict carries its comparison TRACE (sym.shard Tr — the proof
+;; skeleton the render component consumes).  Undecided retains the first exact
+;; residual equation when comparison reached a symbolic refinement frontier.
+(type LVd
+  (LVdErr (List Int))
+  (LVdUndec (Option (Pair SV SV)))
+  (LVdRef)
+  (LVdProv Tr))
 
 (fn law_verdict
   ((m2 Module)
@@ -306,7 +326,7 @@
   LVd
   (match lw
     ((LLaw _ (Goal ps _ (Equation lhs rhs)))
-     (match (binders_svs ps (SvSt 0 Nil))
+     (match (binders_svs ps (SvSt 0 Nil None))
        ((Pair svs st)
         (match (extend_fn m2 (law_fd (lhs_q) ps lhs))
           (None (LVdErr "laws: lhs wrapper qname bound in the closure"))
@@ -316,27 +336,33 @@
              ((Some mb)
               (match (sv_call efuel mb rules (lhs_q) svs)
                 ((EvRErr msg) (LVdErr msg))
-                ((EvROut) (LVdUndec))
+                ((EvROut) (LVdUndec None))
                 ((EvRFail) (LVdRef))
                 ((EvRStuck _) (LVdErr "laws: stuck escaped the lhs boundary"))
                 ((EvRVal va)
                  (match (sv_call efuel mb rules (rhs_q) svs)
                    ((EvRErr msg) (LVdErr msg))
-                   ((EvROut) (LVdUndec))
+                   ((EvROut) (LVdUndec None))
                    ((EvRFail) (LVdRef))
                    ((EvRStuck _)
                     (LVdErr "laws: stuck escaped the rhs boundary"))
                    ((EvRVal vb)
                     (match (cp_sv cfuel budget efuel mb rules va vb st)
                       ((CpRErr msg) (LVdErr msg))
-                      ((CpROk vd tr _)
+                      ((CpROk vd tr st2)
                        (match vd
-                         ((VdUndec) (LVdUndec))
+                         ((VdUndec) (LVdUndec (st_front st2)))
                          ((VdRef) (LVdRef))
                          ((VdProv) (LVdProv tr))))))))))))))))))
 
 ;; law-set composition: any Refuted refutes; all Proven proves; else
 ;; Undecided
+(fn front_first ((a (Option (Pair SV SV))) (b (Option (Pair SV SV))))
+  (Option (Pair SV SV))
+  (match a
+    (None b)
+    ((Some _) a)))
+
 (fn laws_verdict
   ((m2 Module)
    (rules (List NRule))
@@ -351,29 +377,24 @@
     ((Cons lw rest)
      (match (law_verdict m2 rules budget efuel cfuel lw)
        ((LVdErr msg) (LVdErr msg))
-       ((LVdUndec)
+       ((LVdUndec front)
         (match (laws_verdict m2 rules budget efuel cfuel rest)
           ((LVdErr msg) (LVdErr msg))
-          ((LVdUndec) (LVdUndec))
+          ((LVdUndec front2) (LVdUndec (front_first front front2)))
           ((LVdRef) (LVdRef))
-          ((LVdProv _) (LVdUndec))))
+          ((LVdProv _) (LVdUndec front))))
        ((LVdRef) (LVdRef))
        ((LVdProv _) (laws_verdict m2 rules budget efuel cfuel rest))))))
 
-;; the D4 rule table for this object module: the append four, keyed by
-;; the closure's own qnames
-(fn mk_rules ((m Module)) (Option (List NRule))
-  (match (find_fn (quote append) m)
-    (None None)
-    ((Some apfd)
-     (match apfd
-       ((FnDef apq _ _ _)
-        (match (ctor_qn m (quote Nil))
-          (None None)
-          ((Some nilq)
-           (match (ctor_qn m (quote Cons))
-             (None None)
-             ((Some consq) (Some (Cons (NRAppend apq nilq consq) Nil)))))))))))
+;; The D4 rule table is generated once from rev_obj's checked theorem scope.
+;; These are explicit profile data, not an instruction to sweep every visible
+;; equality into canon.
+(fn lw_canon_names () (List Symbol)
+  (list
+    (quote append_nil_left)
+    (quote append_cons)
+    (quote append_assoc)
+    (quote append_nil_right)))
 
 ;; ---- fixed engine parameters (task data, pinned with the census) ------------
 
@@ -399,7 +420,7 @@
        ((LxROk lws)
         (match (laws_verdict m rules (lw_budget) (lw_efuel) (lw_cfuel) lws)
           ((LVdErr msg) (exit 1 (write (append_int "LAWS SELF FAIL " msg) w2)))
-          ((LVdUndec)
+          ((LVdUndec _)
            (exit 1 (write "LAWS SELF FAIL: own impl UNDECIDED\n" w2)))
           ((LVdRef) (exit 1 (write "LAWS SELF FAIL: own impl REFUTED\n" w2)))
           ((LVdProv _)
@@ -409,11 +430,8 @@
                (append_int (chars_of_sym subject) " PROVEN\n"))
              w2))))))))
 
-(fn run_self ((m Module) (w World)) World
-  (match (mk_rules m)
-    (None (exit 1 (write "LAWS FAIL: append/Nil/Cons not in the closure\n" w)))
-    ((Some rules)
-     (run_self_one m rules (quote len) (run_self_one m rules (quote rev) w)))))
+(fn run_self ((m Module) (rules (List NRule)) (w World)) World
+  (run_self_one m rules (quote len) (run_self_one m rules (quote rev) w)))
 
 ;; ---- G3: the symbolic partition against the ground battery ------------------
 
@@ -466,7 +484,7 @@
                          (lw_cfuel)
                          lws)
                        ((LVdErr msg) (G3SErr (cz_at "g3 verdict" i msg)))
-                       ((LVdUndec)
+                       ((LVdUndec _)
                         (g3_sweep
                           (- k 1)
                           total
@@ -539,85 +557,80 @@
             ref
             undec))))))))
 
-(fn run_g3 ((m Module) (apq QName) (d Int) (w World)) World
-  (match (mk_rules m)
-    (None (exit 1 (write "LAWS FAIL: append/Nil/Cons not in the closure\n" w)))
-    ((Some rules)
-     (match (find_fn (quote rev) m)
-       (None (exit 1 (write "LAWS FAIL: no rev in the closure\n" w)))
-       ((Some revfd)
-        (match revfd
-          ((FnDef revq _ _ _)
-           (match
-             (lx_laws
-               m
-               "std/list/mod.req.shard"
-               (Cons (quote rev_nil) (Cons (quote rev_cons) Nil))
-               w)
-             ((Pair lx w2)
-              (match lx
-                ((LxRErr msg) (exit 1 (write (append_int "LAWS FAIL " msg) w2)))
-                ((LxROk lws0)
-                 (match (cat_grammar d apq)
-                   ((CatRErr msg)
-                    (exit
-                      1
-                      (write
-                        (append_int "LAWS FAIL grammar: " (append_int msg "\n"))
-                        w2)))
-                   ((CatROk es _)
-                    (let ((root (hole 0)) (g (Grammar es)))
-                      (match (sk_count root g)
-                        ((SkCErr msg)
-                         (exit
-                           1
-                           (write
+(fn run_g3 ((m Module) (apq QName) (rules (List NRule)) (d Int) (w World)) World
+  (match (find_fn (quote rev) m)
+    (None (exit 1 (write "LAWS FAIL: no rev in the closure\n" w)))
+    ((Some revfd)
+     (match revfd
+       ((FnDef revq _ _ _)
+        (match
+          (lx_laws
+            m
+            "std/list/mod.req.shard"
+            (Cons (quote rev_nil) (Cons (quote rev_cons) Nil))
+            w)
+          ((Pair lx w2)
+           (match lx
+             ((LxRErr msg) (exit 1 (write (append_int "LAWS FAIL " msg) w2)))
+             ((LxROk lws0)
+              (match (cat_grammar d apq)
+                ((CatRErr msg)
+                 (exit
+                   1
+                   (write
+                     (append_int "LAWS FAIL grammar: " (append_int msg "\n"))
+                     w2)))
+                ((CatROk es _)
+                 (let ((root (hole 0)) (g (Grammar es)))
+                   (match (sk_count root g)
+                     ((SkCErr msg)
+                      (exit
+                        1
+                        (write
+                          (append_int "LAWS FAIL count: " (append_int msg "\n"))
+                          w2)))
+                     ((SkCOk total)
+                      (match
+                        (g3_sweep
+                          total
+                          total
+                          root
+                          g
+                          m
+                          rules
+                          (rm_laws revq (cat_q) lws0)
+                          (cat_battery)
+                          (vecs_rev (cat_battery))
+                          0
+                          0
+                          0
+                          0)
+                        ((G3SErr msg)
+                         (exit 1 (write (append_int "LAWS FAIL " msg) w2)))
+                        ((G3SOk clean prov ref undec)
+                         (write
+                           (append_int
+                             "LAWS rung "
                              (append_int
-                               "LAWS FAIL count: "
-                               (append_int msg "\n"))
-                             w2)))
-                        ((SkCOk total)
-                         (match
-                           (g3_sweep
-                             total
-                             total
-                             root
-                             g
-                             m
-                             rules
-                             (rm_laws revq (cat_q) lws0)
-                             (cat_battery)
-                             (vecs_rev (cat_battery))
-                             0
-                             0
-                             0
-                             0)
-                           ((G3SErr msg)
-                            (exit 1 (write (append_int "LAWS FAIL " msg) w2)))
-                           ((G3SOk clean prov ref undec)
-                            (write
-                              (append_int
-                                "LAWS rung "
-                                (append_int
-                                  (show_int d)
-                                  (append_int
-                                    "\nCLEAN "
-                                    (append_int
-                                      (show_int clean)
-                                      (append_int
-                                        " PROVEN "
-                                        (append_int
-                                          (show_int prov)
-                                          (append_int
-                                            " REFUTED "
-                                            (append_int
-                                              (show_int ref)
-                                              (append_int
-                                                " UNDECIDED "
-                                                (append_int
-                                                  (show_int undec)
-                                                  "\nG3 OK\n"))))))))))
-                              w2)))))))))))))))))))
+                               (show_int d)
+                               (append_int
+                                 "\nCLEAN "
+                                 (append_int
+                                   (show_int clean)
+                                   (append_int
+                                     " PROVEN "
+                                     (append_int
+                                       (show_int prov)
+                                       (append_int
+                                         " REFUTED "
+                                         (append_int
+                                           (show_int ref)
+                                           (append_int
+                                             " UNDECIDED "
+                                             (append_int
+                                               (show_int undec)
+                                               "\nG3 OK\n"))))))))))
+                           w2)))))))))))))))))
 
 ;; ---- trace shapes: the pinned proof skeletons (slice 5, component 2) --------
 ;;
@@ -675,7 +688,7 @@
        ((LLaw ln _)
         (match (law_verdict m2 rules (lw_budget) (lw_efuel) (lw_cfuel) lw)
           ((LVdErr msg) (TlRErr msg))
-          ((LVdUndec) (tr_lawline m2 rules subject ln "UNDECIDED" rest))
+          ((LVdUndec _) (tr_lawline m2 rules subject ln "UNDECIDED" rest))
           ((LVdRef) (tr_lawline m2 rules subject ln "REFUTED" rest))
           ((LVdProv tr) (tr_lawline m2 rules subject ln (tr_line tr) rest))))))))
 
@@ -719,84 +732,79 @@
        (None (TlRErr (cz_at "trace extend" i "candidate qname bound")))
        ((Some m2) (tr_laws m2 rules subject lws))))))
 
-(fn run_trace ((m Module) (apq QName) (w World)) World
-  (match (mk_rules m)
-    (None (exit 1 (write "LAWS FAIL: append/Nil/Cons not in the closure\n" w)))
-    ((Some rules)
-     (match (find_fn (quote rev) m)
-       (None (exit 1 (write "LAWS FAIL: no rev in the closure\n" w)))
-       ((Some revfd)
-        (match revfd
-          ((FnDef revq _ _ _)
-           (match
-             (lx_laws
-               m
-               "std/list/mod.req.shard"
-               (Cons (quote rev_nil) (Cons (quote rev_cons) Nil))
-               w)
-             ((Pair lxr w2)
-              (match lxr
-                ((LxRErr msg) (exit 1 (write (append_int "LAWS FAIL " msg) w2)))
-                ((LxROk rlaws)
-                 (match
-                   (lx_laws
-                     m
-                     "std/list/mod.req.shard"
-                     (Cons (quote len_nil) (Cons (quote len_cons) Nil))
-                     w2)
-                   ((Pair lxl w3)
-                    (match lxl
-                      ((LxRErr msg)
+(fn run_trace ((m Module) (apq QName) (rules (List NRule)) (w World)) World
+  (match (find_fn (quote rev) m)
+    (None (exit 1 (write "LAWS FAIL: no rev in the closure\n" w)))
+    ((Some revfd)
+     (match revfd
+       ((FnDef revq _ _ _)
+        (match
+          (lx_laws
+            m
+            "std/list/mod.req.shard"
+            (Cons (quote rev_nil) (Cons (quote rev_cons) Nil))
+            w)
+          ((Pair lxr w2)
+           (match lxr
+             ((LxRErr msg) (exit 1 (write (append_int "LAWS FAIL " msg) w2)))
+             ((LxROk rlaws)
+              (match
+                (lx_laws
+                  m
+                  "std/list/mod.req.shard"
+                  (Cons (quote len_nil) (Cons (quote len_cons) Nil))
+                  w2)
+                ((Pair lxl w3)
+                 (match lxl
+                   ((LxRErr msg)
+                    (exit 1 (write (append_int "LAWS FAIL " msg) w3)))
+                   ((LxROk llaws)
+                    (match (tr_laws m rules "std_rev" rlaws)
+                      ((TlRErr msg)
                        (exit 1 (write (append_int "LAWS FAIL " msg) w3)))
-                      ((LxROk llaws)
-                       (match (tr_laws m rules "std_rev" rlaws)
+                      ((TlROk l1)
+                       (match (tr_laws m rules "std_len" llaws)
                          ((TlRErr msg)
                           (exit 1 (write (append_int "LAWS FAIL " msg) w3)))
-                         ((TlROk l1)
-                          (match (tr_laws m rules "std_len" llaws)
-                            ((TlRErr msg)
-                             (exit 1 (write (append_int "LAWS FAIL " msg) w3)))
-                            ((TlROk l2)
-                             (match (cat_grammar 2 apq)
-                               ((CatRErr _)
-                                (exit 1 (write "LAWS FAIL: trace grammar\n" w3)))
-                               ((CatROk es _)
-                                (let ((root (hole 0)) (g (Grammar es)))
+                         ((TlROk l2)
+                          (match (cat_grammar 2 apq)
+                            ((CatRErr _)
+                             (exit 1 (write "LAWS FAIL: trace grammar\n" w3)))
+                            ((CatROk es _)
+                             (let ((root (hole 0)) (g (Grammar es)))
+                               (match
+                                 (tr_cand
+                                   m
+                                   rules
+                                   root
+                                   g
+                                   62
+                                   "rev_c62"
+                                   (rm_laws revq (cat_q) rlaws))
+                                 ((TlRErr msg)
+                                  (exit
+                                    1
+                                    (write (append_int "LAWS FAIL " msg) w3)))
+                                 ((TlROk l3)
                                   (match
                                     (tr_cand
                                       m
                                       rules
                                       root
                                       g
-                                      62
-                                      "rev_c62"
+                                      347
+                                      "rev_c347"
                                       (rm_laws revq (cat_q) rlaws))
                                     ((TlRErr msg)
                                      (exit
                                        1
                                        (write (append_int "LAWS FAIL " msg) w3)))
-                                    ((TlROk l3)
-                                     (match
-                                       (tr_cand
-                                         m
-                                         rules
-                                         root
-                                         g
-                                         347
-                                         "rev_c347"
-                                         (rm_laws revq (cat_q) rlaws))
-                                       ((TlRErr msg)
-                                        (exit
-                                          1
-                                          (write
-                                            (append_int "LAWS FAIL " msg)
-                                            w3)))
-                                       ((TlROk l4)
-                                        (write
-                                          (append_int
-                                            l1
-                                            (append_int l2 (append_int l3 l4)))
-                                          w3)))))))))))))))))))))))))))
+                                    ((TlROk l4)
+                                     (write
+                                       (append_int
+                                         l1
+                                         (append_int l2 (append_int l3 l4)))
+                                       w3)))))))))))))))))))))))))
 
 ;; ---- proof rendering: traces -> replayable claims (slice 5, component 3) ----
 ;;
@@ -1103,7 +1111,7 @@
            (match (sp_e tbl 0 rhs)
              ((SpRErr msg) (PtRErr msg))
              ((SpROk rd)
-              (match (binders_svs ps (SvSt 0 Nil))
+              (match (binders_svs ps (SvSt 0 Nil None))
                 ((Pair svs _)
                  (match (pc_flags mc ih (mk_slotenv ps svs) olhs orhs tr)
                    ((PcTErr msg) (PtRErr msg))
@@ -1207,7 +1215,7 @@
     ((Cons (Pair olw dlw) rest)
      (match (law_verdict m2 rules (lw_budget) (lw_efuel) (lw_cfuel) olw)
        ((LVdErr msg) (PcRErr msg))
-       ((LVdUndec) (PcRErr "render: a claim's verdict is not Proven"))
+       ((LVdUndec _) (PcRErr "render: a claim's verdict is not Proven"))
        ((LVdRef) (PcRErr "render: a claim's verdict is not Proven"))
        ((LVdProv tr)
         (match (pc_claim mc None tbl subject olw dlw tr)
@@ -1305,36 +1313,34 @@
 ;; shared front half: rules + rev qname + the rev laws + the twin
 (type SxR (SxRErr (List Int)) (SxROk (List Int)))
 
-(fn synth_go ((m Module) (apq QName) (w World)) (Pair SxR World)
-  (match (mk_rules m)
-    (None (Pair (SxRErr "synth: append/Nil/Cons not in the closure") w))
-    ((Some rules)
-     (match (find_fn (quote rev) m)
-       (None (Pair (SxRErr "synth: no rev in the closure") w))
-       ((Some revfd)
-        (match revfd
-          ((FnDef revq _ _ _)
-           (match
-             (lx_laws
-               m
-               "std/list/mod.req.shard"
-               (Cons (quote rev_nil) (Cons (quote rev_cons) Nil))
-               w)
-             ((Pair lxr w2)
-              (match lxr
-                ((LxRErr msg) (Pair (SxRErr msg) w2))
-                ((LxROk rlaws)
-                 (match (load_twin w2)
-                   ((Pair twr w3)
-                    (match twr
-                      ((TwRErr msg) (Pair (SxRErr msg) w3))
-                      ((TwROk mc0)
-                       (match (synth_bytes m mc0 apq revq rlaws rules)
-                         ((SyRErr msg) (Pair (SxRErr msg) w3))
-                         ((SyROk bytes) (Pair (SxROk bytes) w3))))))))))))))))))
+(fn synth_go ((m Module) (apq QName) (rules (List NRule)) (w World))
+  (Pair SxR World)
+  (match (find_fn (quote rev) m)
+    (None (Pair (SxRErr "synth: no rev in the closure") w))
+    ((Some revfd)
+     (match revfd
+       ((FnDef revq _ _ _)
+        (match
+          (lx_laws
+            m
+            "std/list/mod.req.shard"
+            (Cons (quote rev_nil) (Cons (quote rev_cons) Nil))
+            w)
+          ((Pair lxr w2)
+           (match lxr
+             ((LxRErr msg) (Pair (SxRErr msg) w2))
+             ((LxROk rlaws)
+              (match (load_twin w2)
+                ((Pair twr w3)
+                 (match twr
+                   ((TwRErr msg) (Pair (SxRErr msg) w3))
+                   ((TwROk mc0)
+                    (match (synth_bytes m mc0 apq revq rlaws rules)
+                      ((SyRErr msg) (Pair (SxRErr msg) w3))
+                      ((SyROk bytes) (Pair (SxROk bytes) w3))))))))))))))))
 
-(fn run_emit ((m Module) (apq QName) (w World)) World
-  (match (synth_go m apq w)
+(fn run_emit ((m Module) (apq QName) (rules (List NRule)) (w World)) World
+  (match (synth_go m apq rules w)
     ((Pair sx w2)
      (match sx
        ((SxRErr msg)
@@ -1345,8 +1351,8 @@
            (if ok (write "SYNTH EMITTED\n" w3)
            (exit 1 (write "SYNTH FAIL: write refused\n" w3))))))))))
 
-(fn run_regen ((m Module) (apq QName) (w World)) World
-  (match (synth_go m apq w)
+(fn run_regen ((m Module) (apq QName) (rules (List NRule)) (w World)) World
+  (match (synth_go m apq rules w)
     ((Pair sx w2)
      (match sx
        ((SxRErr msg)
@@ -1553,7 +1559,7 @@
                              (lw_cfuel)
                              (bx_eqlaw lnm (cat_q) (catg_q)))
                            ((LVdErr msg) (PcRErr msg))
-                           ((LVdUndec)
+                           ((LVdUndec _)
                             (PcRErr "bracket: a pair's verdict is not Proven"))
                            ((LVdRef)
                             (PcRErr "bracket: a pair's verdict is not Proven"))
@@ -1620,6 +1626,668 @@
         (match (bx_eqs_members m mc0 rules0 apq root g rep rest)
           ((PcRErr msg) (PcRErr msg))
           ((PcROk more) (PcROk (append_int claim more)))))))))
+
+;; ---- behavior-collision proof census ---------------------------------------
+;;
+;; Battery equality proposes one edge from every non-representative bucket
+;; member to that bucket's minimum-rank representative.  The D5 structural-IH
+;; oracle classifies each proposed equality independently.  This is the first
+;; pre-mining queue: Proven edges are theorem candidates, Refuted edges expose
+;; an under-separating battery, and Undecided edges are the auxiliary-lemma
+;; frontier.  No verdict here changes the grammar or canon profile.
+
+(fn mn_sv_eq ((a SV) (b SV)) Bool
+  (measure (struct a))
+  (match a
+    ((SVInt x)
+     (match b
+       ((SVInt y) (int_eq x y))
+       (_ False)))
+    ((SVQuote x)
+     (match b
+       ((SVQuote y) (sym_eq x y))
+       (_ False)))
+    ((SVSym x)
+     (match b
+       ((SVSym y) (int_eq x y))
+       (_ False)))
+    ((SVData x)
+     (match b
+       ((SVData y) (int_eq x y))
+       (_ False)))
+    ((SVCtor q fs origin)
+     (match b
+       ((SVCtor q2 fs2 origin2)
+        (if (qname_eq q q2)
+          (if (int_eq origin origin2) (mn_svs_eq fs fs2) False)
+          False))
+       (_ False)))
+    ((SVNeu q args blocker)
+     (match b
+       ((SVNeu q2 args2 blocker2)
+        (if (qname_eq q q2)
+          (if (int_eq blocker blocker2) (mn_svs_eq args args2) False)
+          False))
+       (_ False)))))
+
+(fn mn_svs_eq ((as (List SV)) (bs (List SV))) Bool
+  (measure (struct as))
+  (match as
+    (Nil
+      (match bs
+        (Nil True)
+        (_ False)))
+    ((Cons a rest)
+     (match bs
+       (Nil False)
+       ((Cons b rest2) (if (mn_sv_eq a b) (mn_svs_eq rest rest2) False))))))
+
+(type MnRem (MnRemNo) (MnRemYes (List SV)))
+
+(fn mn_remove ((wanted SV) (xs (List SV))) MnRem
+  (measure (struct xs))
+  (match xs
+    (Nil (MnRemNo))
+    ((Cons x rest)
+     (if (mn_sv_eq wanted x) (MnRemYes rest)
+     (match (mn_remove wanted rest)
+       ((MnRemNo) (MnRemNo))
+       ((MnRemYes rest2) (MnRemYes (Cons x rest2))))))))
+
+(fn mn_bag_eq ((xs (List SV)) (ys (List SV))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil
+      (match ys
+        (Nil True)
+        (_ False)))
+    ((Cons x rest)
+     (match (mn_remove x ys)
+       ((MnRemNo) False)
+       ((MnRemYes ys2) (mn_bag_eq rest ys2))))))
+
+;; The append theory already right-associates every neutral spine.  Flattening
+;; here is observational only: equal atom bags with unequal spines name the
+;; conditional-commutation theorem family; they do not authorize a rewrite.
+(fn mn_append_atoms ((apq QName) (v SV)) (List SV)
+  (measure (struct v))
+  (match v
+    ((SVNeu q args _)
+     (if (qname_eq q apq)
+       (match args
+         ((Cons x (Cons y Nil))
+          (svs_app (mn_append_atoms apq x) (mn_append_atoms apq y)))
+         (_ (Cons v Nil)))
+       (Cons v Nil)))
+    (_ (Cons v Nil))))
+
+;; 0 = no retained frontier, 1 = append permutation, 2 = other residual.
+(fn mn_front_class ((apq QName) (front (Option (Pair SV SV)))) Int
+  (match front
+    (None 0)
+    ((Some (Pair lhs rhs))
+     (let ((la (mn_append_atoms apq lhs)) (ra (mn_append_atoms apq rhs)))
+       (if (mn_svs_eq la ra) 2 (if (mn_bag_eq la ra) 1 2))))))
+
+(type MnEdge (MnEdge Int Int))  ; member rank, representative rank
+
+(type MnStats
+  (MnStats
+    Int
+    Int
+    Int
+    Int
+    Int
+    Int
+    (List MnEdge)
+    (List MnEdge)
+    KcCensus
+    KcCensus))
+;; proven, refuted, undecided; permutation/other/missing frontiers; first
+;; refuted examples, first undecided examples; exact residual signatures;
+;; smaller append-atom commutation bases
+
+(type MnR (MnRErr (List Int)) (MnROk MnStats))
+
+(fn mn_edge_len ((es (List MnEdge))) Int
+  (measure (struct es))
+  (match es
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (mn_edge_len rest)))))
+
+(fn mn_keep ((e MnEdge) (es (List MnEdge))) (List MnEdge)
+  (if (lt (mn_edge_len es) 6) (Cons e es) es))
+
+(fn mn_front_roles ((apq QName)) (List FcRole)
+  (list (FcRole apq 0) (FcRole (cat_q) 1) (FcRole (catg_q) 2)))
+
+;; One proof edge represents one removable spelling in the current
+;; star-to-representative queue, hence weight 1.  Missing residuals stay in the
+;; verdict accounting but cannot enter the exact structural census.
+(fn mn_front_add
+  ((apq QName) (member Int) (front (Option (Pair SV SV))) (census KcCensus))
+  KcR
+  (match front
+    (None (KcOk census))
+    ((Some (Pair lhs rhs))
+     (kc_add (fc_signature (mn_front_roles apq) lhs rhs) 1 member 6 census))))
+
+(fn mn_keys_add ((keys (List (List Int))) (member Int) (census KcCensus)) KcR
+  (measure (struct keys))
+  (match keys
+    (Nil (KcOk census))
+    ((Cons key rest)
+     (match (kc_add key 1 member 8 census)
+       ((KcErr msg) (KcErr msg))
+       ((KcOk census2) (mn_keys_add rest member census2))))))
+
+(fn mn_basis_add
+  ((apq QName) (member Int) (front (Option (Pair SV SV))) (census KcCensus))
+  KcR
+  (match front
+    (None (KcOk census))
+    ((Some (Pair lhs rhs))
+     (mn_keys_add
+       (fc_commutation_keys apq (mn_front_roles apq) lhs rhs)
+       member
+       census))))
+
+(fn mn_key_count ((keys (List (List Int)))) Int
+  (measure (struct keys))
+  (match keys
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (mn_key_count rest)))))
+
+(fn mn_front_name ((class Int)) (List Int)
+  (if (int_eq class 1) "PERMUTATION" (if (int_eq class 2) "OTHER" "MISSING")))
+
+(fn mn_pair
+  ((m Module) (rules0 (List NRule)) (root Expr) (g Grammar) (mi Int) (ri Int))
+  LVd
+  (match (sk_unrank root g mi)
+    ((SkEErr msg) (LVdErr msg))
+    ((SkEOk cm)
+     (match (sk_unrank root g ri)
+       ((SkEErr msg) (LVdErr msg))
+       ((SkEOk cr)
+        (let
+          ((gfd
+             (FnDef
+               (catg_q)
+               (Cons (ty_ilist) Nil)
+               (ty_ilist)
+               (rm_e (cat_q) (catg_q) cr))))
+          (match (extend_fn m (cat_fd cm))
+            (None (LVdErr "mine: candidate qname bound"))
+            ((Some ma)
+             (match (extend_fn ma gfd)
+               (None (LVdErr "mine: representative qname bound"))
+               ((Some m2)
+                (law_verdict
+                  m2
+                  (Cons (NRIh (cat_q) (catg_q) 1) rules0)
+                  (lw_budget)
+                  (lw_efuel)
+                  (lw_cfuel)
+                  (bx_eqlaw (quote mine_eq) (cat_q) (catg_q)))))))))))))
+
+(fn mn_members
+  ((m Module)
+   (rules0 (List NRule))
+   (apq QName)
+   (root Expr)
+   (g Grammar)
+   (rep Int)
+   (members (List Int))
+   (stats MnStats))
+  MnR
+  (measure (struct members))
+  (match members
+    (Nil (MnROk stats))
+    ((Cons mi rest)
+     (match stats
+       ((MnStats proven refuted undecided perms others missing refs undecs
+          fronts bases)
+        (match (mn_pair m rules0 root g mi rep)
+          ((LVdErr msg) (MnRErr (cz_at "mine pair" mi msg)))
+          ((LVdProv _)
+           (mn_members
+             m
+             rules0
+             apq
+             root
+             g
+             rep
+             rest
+             (MnStats
+               (+ proven 1)
+               refuted
+               undecided
+               perms
+               others
+               missing
+               refs
+               undecs
+               fronts
+               bases)))
+          ((LVdRef)
+           (mn_members
+             m
+             rules0
+             apq
+             root
+             g
+             rep
+             rest
+             (MnStats
+               proven
+               (+ refuted 1)
+               undecided
+               perms
+               others
+               missing
+               (mn_keep (MnEdge mi rep) refs)
+               undecs
+               fronts
+               bases)))
+          ((LVdUndec front)
+           (let ((fc (mn_front_class apq front)))
+             (match (mn_front_add apq mi front fronts)
+               ((KcErr msg) (MnRErr msg))
+               ((KcOk fronts2)
+                (match (mn_basis_add apq rep front bases)
+                  ((KcErr msg) (MnRErr msg))
+                  ((KcOk bases2)
+                   (mn_members
+                     m
+                     rules0
+                     apq
+                     root
+                     g
+                     rep
+                     rest
+                     (MnStats
+                       proven
+                       refuted
+                       (+ undecided 1)
+                       (if (int_eq fc 1) (+ perms 1) perms)
+                       (if (int_eq fc 2) (+ others 1) others)
+                       (if (int_eq fc 0) (+ missing 1) missing)
+                       refs
+                       (mn_keep (MnEdge mi rep) undecs)
+                       fronts2
+                       bases2))))))))))))))
+
+(fn mn_buckets
+  ((m Module)
+   (rules0 (List NRule))
+   (apq QName)
+   (root Expr)
+   (g Grammar)
+   (bs (List (Pair (List (List Int)) (List Int))))
+   (stats MnStats))
+  MnR
+  (measure (struct bs))
+  (match bs
+    (Nil (MnROk stats))
+    ((Cons (Pair _ ranks) rest)
+     (match ranks
+       (Nil (mn_buckets m rules0 apq root g rest stats))
+       ((Cons rep members)
+        (match (mn_members m rules0 apq root g rep members stats)
+          ((MnRErr msg) (MnRErr msg))
+          ((MnROk next) (mn_buckets m rules0 apq root g rest next))))))))
+
+(fn mn_int_len ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (mn_int_len rest)))))
+
+(fn mn_bucket_len ((bs (List (Pair (List (List Int)) (List Int))))) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (mn_bucket_len rest)))))
+
+(fn mn_edge_lines ((kind (List Int)) (es (List MnEdge))) (List Int)
+  (measure (struct es))
+  (match es
+    (Nil Nil)
+    ((Cons (MnEdge member rep) rest)
+     (append_int
+       kind
+       (append_int
+         " member "
+         (append_int
+           (show_int member)
+           (append_int
+             " rep "
+             (append_int
+               (show_int rep)
+               (append_int "\n" (mn_edge_lines kind rest))))))))))
+
+(fn mn_num ((label (List Int)) (n Int) (tail (List Int))) (List Int)
+  (append_int label (append_int (show_int n) tail)))
+
+(fn mn_sample_text ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil "]")
+    ((Cons x rest)
+     (match rest
+       (Nil (append_int (show_int x) "]"))
+       ((Cons _ _)
+        (append_int (show_int x) (append_int "," (mn_sample_text rest))))))))
+
+(fn mn_rank_lines ((kind (List Int)) (rank Int) (bs (List KcBucket))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b rest)
+     (append_int
+       kind
+       (mn_num
+         " rank "
+         rank
+         (mn_num
+           " SUPPORT "
+           (kc_support b)
+           (mn_num
+             " MASS "
+             (kc_mass b)
+             (mn_num
+               " FIRST "
+               (kc_first b)
+               (append_int
+                 " SAMPLES ["
+                 (append_int
+                   (mn_sample_text (kc_samples b))
+                   (append_int
+                     "\nKEY "
+                     (append_int
+                       (kc_key b)
+                       (append_int "\n" (mn_rank_lines kind (+ rank 1) rest))))))))))))))
+
+(fn mn_aux_report ((census KcCensus)) (List Int)
+  (mn_num
+    "AUXILIARY SIGNATURES "
+    (kc_bucket_count census)
+    (mn_num
+      " SUPPORT "
+      (kc_total_support census)
+      (mn_num
+        " MASS "
+        (kc_total_mass census)
+        (append_int "\n" (mn_rank_lines "AUX" 1 (kc_ranked census)))))))
+
+(fn mn_basis_report ((census KcCensus)) (List Int)
+  (mn_num
+    "COMMUTATION BASES "
+    (kc_bucket_count census)
+    (mn_num
+      " SUPPORT "
+      (kc_total_support census)
+      (mn_num
+        " MASS "
+        (kc_total_mass census)
+        (append_int "\n" (mn_rank_lines "COMMUTE" 1 (kc_ranked census)))))))
+
+(fn mn_report ((d Int) (nc Int) (nb Int) (stats MnStats)) (List Int)
+  (match stats
+    ((MnStats proven refuted undecided perms others missing refs undecs fronts
+       bases)
+     (mn_num
+       "MINE rung "
+       d
+       (mn_num
+         "\nCLEAN "
+         nc
+         (mn_num
+           " BUCKETS "
+           nb
+           (mn_num
+             " EDGES "
+             (+ proven (+ refuted undecided))
+             (mn_num
+               "\nPROVEN "
+               proven
+               (mn_num
+                 " REFUTED "
+                 refuted
+                 (mn_num
+                   " UNDECIDED "
+                   undecided
+                   (mn_num
+                     "\nFRONTIER PERMUTATION "
+                     perms
+                     (mn_num
+                       " OTHER "
+                       others
+                       (mn_num
+                         " MISSING "
+                         missing
+                         (append_int
+                           "\n"
+                           (append_int
+                             (mn_edge_lines "REFUTED" refs)
+                             (append_int
+                               (mn_edge_lines "UNDECIDED" undecs)
+                               (append_int
+                                 (mn_aux_report fronts)
+                                 (mn_basis_report bases))))))))))))))))))
+
+(fn mn_finish
+  ((d Int)
+   (bs (List (Pair (List (List Int)) (List Int))))
+   (clean (List Int))
+   (stats MnStats)
+   (w World))
+  World
+  (let ((nb (mn_bucket_len bs)) (nc (mn_int_len clean)))
+    (match stats
+      ((MnStats proven refuted undecided perms others missing _ _ fronts bases)
+       (if (int_eq (+ proven (+ refuted undecided)) (- nc nb))
+         (if (int_eq (+ perms (+ others missing)) undecided)
+           (if (int_eq (kc_total_support fronts) (+ perms others))
+             (if (int_eq (kc_total_mass fronts) (+ perms others))
+               (if (if (lt 0 perms) (lt 0 (kc_total_support bases)) True)
+                 (write (mn_report d nc nb stats) w)
+                 (exit 1 (write "MINE FAIL: permutation basis missing\n" w)))
+               (exit 1 (write "MINE FAIL: frontier mass accounting\n" w)))
+             (exit 1 (write "MINE FAIL: signature support accounting\n" w)))
+           (exit 1 (write "MINE FAIL: frontier accounting\n" w)))
+         (exit 1 (write "MINE FAIL: edge accounting\n" w)))))))
+
+(fn run_mine ((m Module) (apq QName) (rules0 (List NRule)) (d Int) (w World))
+  World
+  (match (cat_grammar d apq)
+    ((CatRErr msg) (exit 1 (write (append_int "MINE FAIL " msg) w)))
+    ((CatROk es _)
+     (let ((root (hole 0)) (g (Grammar es)))
+       (match (sk_count root g)
+         ((SkCErr msg) (exit 1 (write (append_int "MINE FAIL " msg) w)))
+         ((SkCOk total)
+          (match (bx_sweep total total root g m (cat_battery) Nil Nil)
+            ((BxSErr msg) (exit 1 (write (append_int "MINE FAIL " msg) w)))
+            ((BxSOk bs clean)
+             (match
+               (mn_buckets
+                 m
+                 rules0
+                 apq
+                 root
+                 g
+                 bs
+                 (MnStats 0 0 0 0 0 0 Nil Nil (kc_empty) (kc_empty)))
+               ((MnRErr msg) (exit 1 (write (append_int "MINE FAIL " msg) w)))
+               ((MnROk stats) (mn_finish d bs clean stats w)))))))))))
+
+;; The commutation-basis census above specializes to this typed range law for
+;; a unary List function `f`: adjacent recursive results at a nonempty list and
+;; its tail commute under append.  `range` runs the existing oracle on that
+;; smaller conjecture without granting it an IH or feeding it into canon.  Its
+;; verdict measures the next proof capability honestly.
+(fn mn_range_law ((apq QName) (fq QName)) LLaw
+  (let ((h (FVar (quote h))) (t (FVar (quote t))))
+    (let
+      ((ft (Call fq (Cons t Nil)))
+       (fcons
+         (Call fq (Cons (Ctor (qn (quote Cons)) (Cons h (Cons t Nil))) Nil))))
+      (LLaw
+        (quote range_commute)
+        (Goal
+          (Cons
+            (Param (quote h) (TCon (qn (quote Int)) Nil))
+            (Cons (Param (quote t) (ty_ilist)) Nil))
+          Nil
+          (Equation
+            (Call apq (Cons fcons (Cons ft Nil)))
+            (Call apq (Cons ft (Cons fcons Nil)))))))))
+
+(fn run_mine_range
+  ((m Module) (apq QName) (rules0 (List NRule)) (d Int) (rep Int) (w World))
+  World
+  (match (cat_grammar d apq)
+    ((CatRErr msg) (exit 1 (write (append_int "MINE RANGE FAIL " msg) w)))
+    ((CatROk es _)
+     (let ((root (hole 0)) (g (Grammar es)))
+       (match (sk_unrank root g rep)
+         ((SkEErr msg) (exit 1 (write (append_int "MINE RANGE FAIL " msg) w)))
+         ((SkEOk cr)
+          (match (extend_fn m (cat_fd cr))
+            (None (exit 1 (write "MINE RANGE FAIL: candidate qname bound\n" w)))
+            ((Some m2)
+             (match
+               (law_verdict
+                 m2
+                 rules0
+                 (lw_budget)
+                 (lw_efuel)
+                 (lw_cfuel)
+                 (mn_range_law apq (cat_q)))
+               ((LVdErr msg)
+                (exit 1 (write (append_int "MINE RANGE FAIL " msg) w)))
+               ((LVdRef) (write "MINE-RANGE REFUTED\n" w))
+               ((LVdProv _) (write "MINE-RANGE PROVEN\n" w))
+               ((LVdUndec front)
+                (match front
+                  (None (write "MINE-RANGE UNDECIDED NO-RESIDUAL\n" w))
+                  ((Some (Pair lhs rhs))
+                   (write
+                     (append_int
+                       "MINE-RANGE UNDECIDED FRONTIER "
+                       (append_int
+                         (mn_front_name
+                           (mn_front_class apq (Some (Pair lhs rhs))))
+                         (append_int
+                           " "
+                           (mn_num
+                             "COMMUTATION-BASES "
+                             (mn_key_count
+                               (fc_commutation_keys
+                                 apq
+                                 (mn_front_roles apq)
+                                 lhs
+                                 rhs))
+                             "\n"))))
+                     w)))))))))))))
+
+(fn run_mine_show
+  ((m Module) (apq QName) (d Int) (member Int) (rep Int) (w World))
+  World
+  (match (cat_grammar d apq)
+    ((CatRErr msg) (exit 1 (write (append_int "MINE SHOW FAIL " msg) w)))
+    ((CatROk es _)
+     (let ((root (hole 0)) (g (Grammar es)))
+       (match (sk_unrank root g member)
+         ((SkEErr msg) (exit 1 (write (append_int "MINE SHOW FAIL " msg) w)))
+         ((SkEOk cm)
+          (match (sk_unrank root g rep)
+            ((SkEErr msg) (exit 1 (write (append_int "MINE SHOW FAIL " msg) w)))
+            ((SkEOk cr)
+             (match (rg_fn (quote mine_member) apq cm)
+               ((RgRErr msg)
+                (exit 1 (write (append_int "MINE SHOW FAIL " msg) w)))
+               ((RgROk mt)
+                (match (rg_fn (quote mine_rep) apq cr)
+                  ((RgRErr msg)
+                   (exit 1 (write (append_int "MINE SHOW FAIL " msg) w)))
+                  ((RgROk rt)
+                   (write
+                     (append_int
+                       "MINE-SHOW member\n"
+                       (append_int mt (append_int "\nMINE-SHOW rep\n" rt)))
+                     w)))))))))))))
+
+;; Stable diagnostic spelling for a symbolic residual.  This is deliberately
+;; not source syntax: slot/symbol ids and constructor provenance are the useful
+;; information for grouping proof frontiers across candidate pairs.
+(fn sv_line ((v SV)) (List Int)
+  (measure (struct v))
+  (match v
+    ((SVInt n) (append_int "I" (show_int n)))
+    ((SVQuote s) (append_int "Q:" (chars_of_sym s)))
+    ((SVSym n) (append_int "A" (show_int n)))
+    ((SVData n) (append_int "D" (show_int n)))
+    ((SVCtor q fs origin)
+     (append_int
+       "(C:"
+       (append_int
+         (chars_of_sym (qn_name q))
+         (append_int
+           "@"
+           (append_int
+             (show_int origin)
+             (append_int " " (append_int (svs_line fs) ")")))))))
+    ((SVNeu q args blocker)
+     (append_int
+       "(N:"
+       (append_int
+         (chars_of_sym (qn_name q))
+         (append_int
+           "#"
+           (append_int
+             (show_int blocker)
+             (append_int " " (append_int (svs_line args) ")")))))))))
+
+(fn svs_line ((vs (List SV))) (List Int)
+  (measure (struct vs))
+  (match vs
+    (Nil Nil)
+    ((Cons v rest)
+     (match rest
+       (Nil (sv_line v))
+       ((Cons _ _) (append_int (sv_line v) (append_int " " (svs_line rest))))))))
+
+(fn run_mine_front
+  ((m Module)
+   (apq QName)
+   (rules0 (List NRule))
+   (d Int)
+   (member Int)
+   (rep Int)
+   (w World))
+  World
+  (match (cat_grammar d apq)
+    ((CatRErr msg) (exit 1 (write (append_int "MINE FRONT FAIL " msg) w)))
+    ((CatROk es _)
+     (let ((root (hole 0)) (g (Grammar es)))
+       (match (mn_pair m rules0 root g member rep)
+         ((LVdErr msg) (exit 1 (write (append_int "MINE FRONT FAIL " msg) w)))
+         ((LVdRef) (write "MINE-FRONT REFUTED\n" w))
+         ((LVdProv _) (write "MINE-FRONT PROVEN\n" w))
+         ((LVdUndec front)
+          (match front
+            (None (write "MINE-FRONT UNDECIDED NO-RESIDUAL\n" w))
+            ((Some (Pair lhs rhs))
+             (write
+               (append_int
+                 "MINE-FRONT "
+                 (append_int
+                   (sv_line lhs)
+                   (append_int " == " (append_int (sv_line rhs) "\n"))))
+               w)))))))))
 
 ;; ---- the local append twin -----------------------------------------------------
 ;; The candidates' task vocabulary cites std/list append, whose impl
@@ -1793,21 +2461,20 @@
                           (SyRErr "bracket: generated text is not formattable"))
                         ((Some bytes) (SyROk bytes)))))))))))))))))
 
-(fn bracket_go ((m Module) (apq QName) (w World)) (Pair SxR World)
-  (match (mk_rules m)
-    (None (Pair (SxRErr "bracket: append/Nil/Cons not in the closure") w))
-    ((Some rules)
-     (match (load_twin w)
-       ((Pair twr w2)
-        (match twr
-          ((TwRErr msg) (Pair (SxRErr msg) w2))
-          ((TwROk mc0)
-           (match (bx_bytes m mc0 apq rules)
-             ((SyRErr msg) (Pair (SxRErr msg) w2))
-             ((SyROk bytes) (Pair (SxROk bytes) w2))))))))))
+(fn bracket_go ((m Module) (apq QName) (rules (List NRule)) (w World))
+  (Pair SxR World)
+  (match (load_twin w)
+    ((Pair twr w2)
+     (match twr
+       ((TwRErr msg) (Pair (SxRErr msg) w2))
+       ((TwROk mc0)
+        (match (bx_bytes m mc0 apq rules)
+          ((SyRErr msg) (Pair (SxRErr msg) w2))
+          ((SyROk bytes) (Pair (SxROk bytes) w2))))))))
 
-(fn run_bracket_emit ((m Module) (apq QName) (w World)) World
-  (match (bracket_go m apq w)
+(fn run_bracket_emit ((m Module) (apq QName) (rules (List NRule)) (w World))
+  World
+  (match (bracket_go m apq rules w)
     ((Pair sx w2)
      (match sx
        ((SxRErr msg)
@@ -1818,8 +2485,9 @@
            (if ok (write "BRACKET EMITTED\n" w3)
            (exit 1 (write "BRACKET FAIL: write refused\n" w3))))))))))
 
-(fn run_bracket_regen ((m Module) (apq QName) (w World)) World
-  (match (bracket_go m apq w)
+(fn run_bracket_regen ((m Module) (apq QName) (rules (List NRule)) (w World))
+  World
+  (match (bracket_go m apq rules w)
     ((Pair sx w2)
      (match sx
        ((SxRErr msg)
@@ -1846,21 +2514,32 @@
 
 ;; args: none -> the pinned suite (self, g3 at rungs 1 and 2, traces,
 ;; both artifact regens); "self" -> the self-pin alone; "g3 N" -> one
-;; rung; "trace" -> traces; "emit" / "bracket" -> rewrite an artifact
-(fn lw_args ((as (List (List Int))) (m Module) (apq QName) (w World)) World
+;; rung; "mine N" -> behavior-collision proof census; "show" renders a pair;
+;; "front" prints its first exact symbolic residual; "range N REP" probes the
+;; mined range-commutation law; "trace" -> traces;
+;; "emit" / "bracket" -> rewrite an artifact
+(fn lw_args
+  ((as (List (List Int))) (m Module) (apq QName) (rules (List NRule)) (w World))
+  World
   (match as
     (Nil
       (run_bracket_regen
         m
         apq
+        rules
         (run_regen
           m
           apq
-          (run_trace m apq (run_g3 m apq 2 (run_g3 m apq 1 (run_self m w)))))))
+          rules
+          (run_trace
+            m
+            apq
+            rules
+            (run_g3 m apq rules 2 (run_g3 m apq rules 1 (run_self m rules w)))))))
     ((Cons a rest)
      (if (int_list_eq a "self")
        (match rest
-         (Nil (run_self m w))
+         (Nil (run_self m rules w))
          (_
            (exit
              2
@@ -1873,44 +2552,116 @@
               (exit
                 2
                 (write "usage: laws [self | g3 N | trace | emit | bracket]\n" w)))
-            ((Some d) (run_g3 m apq d w))))
+            ((Some d) (run_g3 m apq rules d w))))
          (_
            (exit
              2
              (write "usage: laws [self | g3 N | trace | emit | bracket]\n" w))))
      (if (int_list_eq a "trace")
        (match rest
-         (Nil (run_trace m apq w))
+         (Nil (run_trace m apq rules w))
          (_
            (exit
              2
              (write "usage: laws [self | g3 N | trace | emit | bracket]\n" w))))
      (if (int_list_eq a "emit")
        (match rest
-         (Nil (run_emit m apq w))
+         (Nil (run_emit m apq rules w))
          (_
            (exit
              2
              (write "usage: laws [self | g3 N | trace | emit | bracket]\n" w))))
      (if (int_list_eq a "bracket")
        (match rest
-         (Nil (run_bracket_emit m apq w))
+         (Nil (run_bracket_emit m apq rules w))
          (_
            (exit
              2
-             (write "usage: laws [self | g3 N | trace | emit | bracket]\n" w))))
-       (exit 2 (write "usage: laws [self | g3 N | trace | emit | bracket]\n" w))))))))))
+             (write
+               "usage: laws [self | g3 N | mine N | trace | emit | bracket]\n"
+               w))))
+     (if (int_list_eq a "mine")
+       (match rest
+         ((Cons ds Nil)
+          (match (parse_nat ds)
+            (None
+              (exit
+                2
+                (write
+                  "usage: laws [self | g3 N | mine N | trace | emit | bracket]\n"
+                  w)))
+            ((Some d) (run_mine m apq rules d w))))
+         (_
+           (exit
+             2
+             (write
+               "usage: laws [self | g3 N | mine N | show N MEMBER REP | trace | emit | bracket]\n"
+               w))))
+     (if (int_list_eq a "show")
+       (match rest
+         ((Cons ds (Cons ms (Cons rs Nil)))
+          (match (parse_nat ds)
+            (None (exit 2 (write "usage: laws show N MEMBER REP\n" w)))
+            ((Some d)
+             (match (parse_nat ms)
+               (None (exit 2 (write "usage: laws show N MEMBER REP\n" w)))
+               ((Some member)
+                (match (parse_nat rs)
+                  (None (exit 2 (write "usage: laws show N MEMBER REP\n" w)))
+                  ((Some rep) (run_mine_show m apq d member rep w))))))))
+         (_ (exit 2 (write "usage: laws show N MEMBER REP\n" w))))
+     (if (int_list_eq a "front")
+       (match rest
+         ((Cons ds (Cons ms (Cons rs Nil)))
+          (match (parse_nat ds)
+            (None (exit 2 (write "usage: laws front N MEMBER REP\n" w)))
+            ((Some d)
+             (match (parse_nat ms)
+               (None (exit 2 (write "usage: laws front N MEMBER REP\n" w)))
+               ((Some member)
+                (match (parse_nat rs)
+                  (None (exit 2 (write "usage: laws front N MEMBER REP\n" w)))
+                  ((Some rep) (run_mine_front m apq rules d member rep w))))))))
+         (_ (exit 2 (write "usage: laws front N MEMBER REP\n" w))))
+     (if (int_list_eq a "range")
+       (match rest
+         ((Cons ds (Cons rs Nil))
+          (match (parse_nat ds)
+            (None (exit 2 (write "usage: laws range N REP\n" w)))
+            ((Some d)
+             (match (parse_nat rs)
+               (None (exit 2 (write "usage: laws range N REP\n" w)))
+               ((Some rep) (run_mine_range m apq rules d rep w))))))
+         (_ (exit 2 (write "usage: laws range N REP\n" w))))
+       (exit
+         2
+         (write
+           "usage: laws [self | g3 N | mine N | show/front N MEMBER REP | range N REP | trace | emit | bracket]\n"
+           w))))))))))))))
 
 (fn main ((w World)) World
-  (match (load_run_module "tools/search/rev_obj.shard" w)
-    ((Pair om w2)
-     (match om
-       (None (exit 1 (write "LAWS FAIL: object module load\n" w2)))
-       ((Some m)
-        (match (find_fn (quote append) m)
-          (None (exit 1 (write "LAWS FAIL: no append in closure\n" w2)))
-          ((Some apfd)
-           (match apfd
-             ((FnDef apq _ _ _)
-              (match (get_args w2)
-                ((Pair as w3) (lw_args as m apq w3))))))))))))
+  (match
+    (tg_load_checked_profile "tools/search/rev_obj.shard" (lw_canon_names) w)
+    ((Pair profile_result w1)
+     (match profile_result
+       ((TgCheckedProfileErr msg)
+        (exit 1 (write (append_int "LAWS FAIL: checked profile: " msg) w1)))
+       ((TgCheckedProfileOk profile)
+        (match (load_run_module "tools/search/rev_obj.shard" w1)
+          ((Pair om w2)
+           (match om
+             (None (exit 1 (write "LAWS FAIL: object module load\n" w2)))
+             ((Some m)
+              (match (find_fn (quote append) m)
+                (None (exit 1 (write "LAWS FAIL: no append in closure\n" w2)))
+                ((Some apfd)
+                 (match apfd
+                   ((FnDef apq _ _ _)
+                    (match (get_args w2)
+                      ((Pair as w3)
+                       (lw_args
+                         as
+                         m
+                         apq
+                         (Cons (NRTrs profile) Nil)
+                         (write "LAWS PROFILE APPEND 4 CHECKED GENERIC\n" w3)))))))))))))))))

@@ -1,0 +1,114 @@
+;;; Kernel replay for the full four-operation mlx86 calculator search.
+;;;
+;;; The searched program is a structured x86 dispatch over the third SysV
+;;; argument: 0/1/2 select add/sub/mul and the default is unsigned division.
+;;; The first three claims are symbolic refinements for arbitrary inputs.  The
+;;; division path is pinned both directly and through the final theorem, which
+;;; replays all forty deterministic historical byte-calculator observations.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")
+(import "../../../models/x86/x86.shard")
+(import "../tasks/typed_x86_calculator4.shard")
+(use (:: std mem *))
+(use (:: models x86 x86 *))
+(use (:: tools search tasks typed_x86_calculator4) as task)
+
+;; BEST 183, rendered without helper calls so the proof artifact fixes the
+;; exact searched instruction tree.
+(fn searched_x86_calculator4_root () XInstr
+  (XBlock
+    (list
+      (XBlock
+        (list
+          (XBrIf (CEq RDX (SImm 0)) 0)
+          (XBlock
+            (list
+              (XBlock
+                (list
+                  (XBrIf (CEq RDX (SImm 1)) 0)
+                  (XBlock
+                    (list
+                      (XBlock
+                        (list
+                          (XBrIf (CEq RDX (SImm 2)) 0)
+                          (XMovRR RAX RDI)
+                          (XMovRI RDX 0)
+                          (XDivU RSI)
+                          (XBr 1)))
+                      (XMovRR RAX RDI)
+                      (XBin XMul RAX (SReg RSI))))
+                  (XBr 1)))
+              (XMovRR RAX RDI)
+              (XBin XSub RAX (SReg RSI))))
+          (XBr 1)))
+      (XMovRR RAX RDI)
+      (XBin XAdd RAX (SReg RSI)))))
+
+(fn searched_x86_calculator4 () XFunc
+  (MkXFunc 3 (list (searched_x86_calculator4_root))))
+
+(claim searched_x86_calculator4_add
+  (goal ((a Int) (b Int) (c Nat) (restfs (List XFunc)) (mem Mem)) ()
+    (=
+      (xcall_fn_mem
+        (S^ 32 c)
+        (MkXModule (Cons (searched_x86_calculator4) restfs) 0 0)
+        0
+        (list a b 0)
+        mem)
+      (Some (Pair (wrap64 (+ a b)) mem))))
+  (steps ((compute both)) refl))
+
+(claim searched_x86_calculator4_sub
+  (goal ((a Int) (b Int) (c Nat) (restfs (List XFunc)) (mem Mem)) ()
+    (=
+      (xcall_fn_mem
+        (S^ 32 c)
+        (MkXModule (Cons (searched_x86_calculator4) restfs) 0 0)
+        0
+        (list a b 1)
+        mem)
+      (Some (Pair (wrap64 (- a b)) mem))))
+  (steps ((compute both)) refl))
+
+(claim searched_x86_calculator4_mul
+  (goal ((a Int) (b Int) (c Nat) (restfs (List XFunc)) (mem Mem)) ()
+    (=
+      (xcall_fn_mem
+        (S^ 32 c)
+        (MkXModule (Cons (searched_x86_calculator4) restfs) 0 0)
+        0
+        (list a b 2)
+        mem)
+      (Some (Pair (wrap64 (* a b)) mem))))
+  (steps ((compute both)) refl))
+
+;; Historical row zero reaches the default divide path (65 / 18 = 3).  This
+;; ground theorem exercises the XDivU zero-divisor and quotient-fit guards.
+(claim searched_x86_calculator4_div
+  (goal ((c Nat) (restfs (List XFunc)) (mem Mem)) ()
+    (=
+      (xcall_fn_mem
+        (S^ 32 c)
+        (MkXModule (Cons (searched_x86_calculator4) restfs) 0 0)
+        0
+        (list 65 18 3)
+        mem)
+      (Some (Pair 3 mem))))
+  (steps ((compute both)) refl))
+
+;; The task witness and the fixed proof spelling are definitionally identical.
+(claim searched_x86_calculator4_is_task_witness
+  (goal () ()
+    (= ((:: task search_witness)) (list (searched_x86_calculator4_root))))
+  (steps ((compute both)) refl))
+
+;; Final benchmark contract: the exact witness matches all forty LCG-generated
+;; a/b/op rows, including every add/sub/mul/div arm and byte-result wrapping.
+(claim searched_x86_calculator4_historical_40
+  (goal () ()
+    (=
+      ((:: task search_probe) ((:: task search_witness)))
+      (Some ((:: task search_target)))))
+  (steps ((compute both)) refl))

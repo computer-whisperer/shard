@@ -303,6 +303,392 @@
 
 (type Grammar (Grammar (List GEnt)))
 
+;; ---- regular schema grammars -----------------------------------------------
+;;
+;; A materialized Grammar gives every possible occurrence a hole id up front.
+;; That is the right representation for exact ranking, but recursively typed
+;; languages repeat the same production state at exponentially many possible
+;; positions.  Schema grammars separate the reusable production policy from
+;; the independent occurrence that eventually chooses one production.
+;;
+;; `local` names a hole in the alternative template.  `edge` is unique within
+;; the parent schema and gives that child position a stable structural address.
+;; `child_schema` names the reusable policy at that child.  Equal child schemas
+;; do *not* share choices: occurrence addresses include the whole parent path.
+(type SkSchemaRef (SkSchemaRef Int Int Int))
+  ; local template hole, parent-local edge, child schema
+
+(type SkSchemaAlt (SkSchemaAlt Expr (List SkSchemaRef)))
+(type SkSchemaEnt (SkSchemaEnt Int (List SkSchemaAlt)))
+(type SkSchemaGrammar (SkSchemaGrammar Int (List SkSchemaEnt)))
+  ; root schema, entries
+
+(fn sks_ent_find
+  ((schema_id Int) (entries (List SkSchemaEnt)))
+  (Option (List SkSchemaAlt))
+  (measure (struct entries))
+  (match entries
+    (Nil None)
+    ((Cons (SkSchemaEnt prior alts) rest)
+     (if (int_eq schema_id prior) (Some alts)
+       (sks_ent_find schema_id rest)))))
+
+(fn sks_ref_edge_find
+  ((edge Int) (alts (List SkSchemaAlt))) (Option SkSchemaRef)
+  (measure (struct alts))
+  (match alts
+    (Nil None)
+    ((Cons (SkSchemaAlt _ refs) rest)
+     (match (sks_ref_edge_find_go edge refs)
+       (None (sks_ref_edge_find edge rest))
+       ((Some ref) (Some ref))))))
+
+(fn sks_ref_edge_find_go
+  ((edge Int) (refs (List SkSchemaRef))) (Option SkSchemaRef)
+  (measure (struct refs))
+  (match refs
+    (Nil None)
+    ((Cons ref rest)
+     (match ref
+       ((SkSchemaRef _ prior _)
+        (if (int_eq edge prior) (Some ref)
+          (sks_ref_edge_find_go edge rest)))))))
+
+(fn sks_ints_eq ((left (List Int)) (right (List Int))) Bool
+  (measure (struct left))
+  (match left
+    (Nil
+      (match right
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons x xs)
+     (match right
+       (Nil False)
+       ((Cons y ys) (if (int_eq x y) (sks_ints_eq xs ys) False))))))
+
+(fn sks_ref_locals ((refs (List SkSchemaRef))) (List Int)
+  (measure (struct refs))
+  (match refs
+    (Nil Nil)
+    ((Cons (SkSchemaRef local _ _) rest)
+     (Cons local (sks_ref_locals rest)))))
+
+(type SkSchemaRefsWfR
+  (SkSchemaRefsWfErr (List Int))
+  (SkSchemaRefsWfOk (List Int)))
+  ; updated entry-global edge set
+
+(fn sks_refs_wf
+  ((refs (List SkSchemaRef))
+   (schema_ids (List Int))
+   (prior_local Int)
+   (edges (List Int)))
+  SkSchemaRefsWfR
+  (measure (struct refs))
+  (match refs
+    (Nil (SkSchemaRefsWfOk edges))
+    ((Cons (SkSchemaRef local edge child_schema) rest)
+     (if (lt local 0)
+       (SkSchemaRefsWfErr "schema local hole must be nonnegative")
+     (if (if (lt prior_local 0) False (le local prior_local))
+       (SkSchemaRefsWfErr "schema local holes must be strictly ascending")
+     (if (lt edge 0)
+       (SkSchemaRefsWfErr "schema edge must be nonnegative")
+     (if (ids_member edge edges)
+       (SkSchemaRefsWfErr "schema edge is owned by two alternatives")
+     (if (ids_member child_schema schema_ids)
+       (sks_refs_wf rest schema_ids local (ids_insert edge edges))
+       (SkSchemaRefsWfErr "schema edge references a missing schema")))))))))
+
+(type SkSchemaAltsWfR
+  (SkSchemaAltsWfErr (List Int))
+  (SkSchemaAltsWfOk (List Int)))
+
+(fn sks_alts_wf
+  ((alts (List SkSchemaAlt))
+   (schema_ids (List Int))
+   (edges (List Int)))
+  SkSchemaAltsWfR
+  (measure (struct alts))
+  (match alts
+    (Nil (SkSchemaAltsWfOk edges))
+    ((Cons (SkSchemaAlt template refs) rest)
+     (match (sk_holes template)
+       ((SkIdsErr msg) (SkSchemaAltsWfErr msg))
+       ((SkIdsOk holes)
+        (if (sks_ints_eq holes (sks_ref_locals refs))
+          (match (sks_refs_wf refs schema_ids -1 edges)
+            ((SkSchemaRefsWfErr msg) (SkSchemaAltsWfErr msg))
+            ((SkSchemaRefsWfOk edges2)
+             (sks_alts_wf rest schema_ids edges2)))
+          (SkSchemaAltsWfErr
+            "schema references do not equal alternative holes")))))))
+
+(type SkSchemaWf (SkSchemaWfErr (List Int)) (SkSchemaWfOk))
+
+(fn sks_entries_wf
+  ((entries (List SkSchemaEnt)) (schema_ids (List Int))) SkSchemaWf
+  (measure (struct entries))
+  (match entries
+    (Nil (SkSchemaWfOk))
+    ((Cons (SkSchemaEnt _ alts) rest)
+     (match (sks_alts_wf alts schema_ids Nil)
+       ((SkSchemaAltsWfErr msg) (SkSchemaWfErr msg))
+       ((SkSchemaAltsWfOk _) (sks_entries_wf rest schema_ids))))))
+
+(fn sks_ids ((entries (List SkSchemaEnt))) (List Int)
+  (measure (struct entries))
+  (match entries
+    (Nil Nil)
+    ((Cons (SkSchemaEnt schema_id _) rest)
+     (Cons schema_id (sks_ids rest)))))
+
+(fn sks_ids_nonnegative ((ids (List Int))) Bool
+  (measure (struct ids))
+  (match ids
+    (Nil True)
+    ((Cons schema_id rest)
+     (if (lt schema_id 0) False (sks_ids_nonnegative rest)))))
+
+(fn sk_schema_wf ((grammar SkSchemaGrammar)) SkSchemaWf
+  (match grammar
+    ((SkSchemaGrammar root entries)
+     (let ((ids (sks_ids entries)))
+       (if (lt root 0) (SkSchemaWfErr "schema root must be nonnegative")
+       (if (if (sks_ids_nonnegative ids) (ids_ascending ids) False)
+         (if (ids_member root ids)
+           (sks_entries_wf entries ids)
+           (SkSchemaWfErr "schema root has no entry"))
+         (SkSchemaWfErr
+           "schema entry ids must be nonnegative and strictly ascending")))))))
+
+;; Structural occurrence addresses.  A child address is
+;;
+;;     2^edge * (2 * parent + 1)
+;;
+;; and is therefore positive and uniquely reversible by removing factors of
+;; two.  The complete parent path remains in the number, so two occurrences of
+;; the same schema are independent without a mutable/global id allocator.
+(fn sks_pow2 ((n Int) (fuel Int)) Int
+  (measure fuel)
+  (if (lt fuel 1) 1
+  (if (lt n 1) 1
+    (* 2 (sks_pow2 (- n 1) (- fuel 1))))))
+
+(fn sk_occ_child ((parent Int) (edge Int)) Int
+  (* (sks_pow2 edge (+ edge 1)) (+ (* 2 parent) 1)))
+
+(type SkOccSplitR
+  (SkOccSplitErr (List Int))
+  (SkOccSplitOk Int Int))
+  ; parent, edge
+
+(fn sk_occ_split_go ((value Int) (edge Int) (fuel Int)) SkOccSplitR
+  (measure fuel)
+  (if (lt fuel 1) (SkOccSplitErr "occurrence address split fuel exhausted")
+  (if (lt value 1) (SkOccSplitErr "occurrence address must be positive")
+  (if (int_eq (mod value 2) 0)
+    (sk_occ_split_go (ediv value 2) (+ edge 1) (- fuel 1))
+    (SkOccSplitOk (ediv (- value 1) 2) edge)))))
+
+(fn sk_occ_split ((occurrence Int)) SkOccSplitR
+  (sk_occ_split_go occurrence 0 1000000))
+
+(type SkSchemaIdR
+  (SkSchemaIdErr (List Int))
+  (SkSchemaIdOk Int))
+
+(fn sk_schema_id_at_go
+  ((grammar SkSchemaGrammar) (occurrence Int) (fuel Int)) SkSchemaIdR
+  (measure fuel)
+  (if (lt fuel 1) (SkSchemaIdErr "occurrence schema lookup fuel exhausted")
+  (match grammar
+    ((SkSchemaGrammar root entries)
+     (if (int_eq occurrence 0) (SkSchemaIdOk root)
+     (if (lt occurrence 0) (SkSchemaIdErr "negative occurrence address")
+     (match (sk_occ_split occurrence)
+       ((SkOccSplitErr msg) (SkSchemaIdErr msg))
+       ((SkOccSplitOk parent edge)
+        (match (sk_schema_id_at_go grammar parent (- fuel 1))
+          ((SkSchemaIdErr msg) (SkSchemaIdErr msg))
+          ((SkSchemaIdOk parent_schema)
+           (match (sks_ent_find parent_schema entries)
+             (None (SkSchemaIdErr "occurrence parent schema is missing"))
+             ((Some alts)
+              (match (sks_ref_edge_find edge alts)
+                (None (SkSchemaIdErr "occurrence edge is absent from schema"))
+                ((Some (SkSchemaRef _ _ child_schema))
+                 (SkSchemaIdOk child_schema)))))))))))))))
+
+(fn sk_schema_id_at
+  ((grammar SkSchemaGrammar) (occurrence Int)) SkSchemaIdR
+  (sk_schema_id_at_go grammar occurrence 1000000))
+
+(fn sks_ref_asg
+  ((parent Int) (refs (List SkSchemaRef))) (List (Pair Int Expr))
+  (measure (struct refs))
+  (match refs
+    (Nil Nil)
+    ((Cons (SkSchemaRef local edge _) rest)
+     (Cons
+       (Pair local (hole (sk_occ_child parent edge)))
+       (sks_ref_asg parent rest)))))
+
+(type SkSchemaAltsR
+  (SkSchemaAltsErr (List Int))
+  (SkSchemaAltsOk (List Expr)))
+
+(fn sks_instantiate_alts
+  ((parent Int) (alts (List SkSchemaAlt))) SkSchemaAltsR
+  (measure (struct alts))
+  (match alts
+    (Nil (SkSchemaAltsOk Nil))
+    ((Cons (SkSchemaAlt template refs) rest)
+     (match (sk_fill template (sks_ref_asg parent refs))
+       ((SkEErr msg) (SkSchemaAltsErr msg))
+       ((SkEOk instantiated)
+        (match (sks_instantiate_alts parent rest)
+          ((SkSchemaAltsErr msg) (SkSchemaAltsErr msg))
+          ((SkSchemaAltsOk tail)
+           (SkSchemaAltsOk (Cons instantiated tail)))))))))
+
+(fn sk_schema_alts_at
+  ((grammar SkSchemaGrammar) (occurrence Int)) SkSchemaAltsR
+  (match (sk_schema_id_at grammar occurrence)
+    ((SkSchemaIdErr msg) (SkSchemaAltsErr msg))
+    ((SkSchemaIdOk schema_id)
+     (match grammar
+       ((SkSchemaGrammar _ entries)
+        (match (sks_ent_find schema_id entries)
+          (None (SkSchemaAltsErr "occurrence schema is missing"))
+          ((Some alts) (sks_instantiate_alts occurrence alts))))))))
+
+;; Saturating productivity over the schema graph.  Unlike occurrence-grammar
+;; productivity, schema ids need not be topologically ordered.  Starting from
+;; all-false alternative facts, N rounds suffice for every finite productive
+;; derivation in an N-schema graph; ungrounded cycles remain unproductive.
+(type SkSchemaProductivity
+  (SkSchemaProductivity (List (Pair Int (List Bool)))))
+
+(fn sks_false_bits ((alts (List SkSchemaAlt))) (List Bool)
+  (measure (struct alts))
+  (match alts
+    (Nil Nil)
+    ((Cons _ rest) (Cons False (sks_false_bits rest)))))
+
+(fn sks_false_facts
+  ((entries (List SkSchemaEnt))) (List (Pair Int (List Bool)))
+  (measure (struct entries))
+  (match entries
+    (Nil Nil)
+    ((Cons (SkSchemaEnt schema_id alts) rest)
+     (Cons
+       (Pair schema_id (sks_false_bits alts))
+       (sks_false_facts rest)))))
+
+(fn sks_fact_find
+  ((schema_id Int) (facts (List (Pair Int (List Bool)))))
+  (Option (List Bool))
+  (measure (struct facts))
+  (match facts
+    (Nil None)
+    ((Cons (Pair prior bits) rest)
+     (if (int_eq schema_id prior) (Some bits)
+       (sks_fact_find schema_id rest)))))
+
+(fn sks_bits_any ((bits (List Bool))) Bool
+  (measure (struct bits))
+  (match bits
+    (Nil False)
+    ((Cons bit rest) (if bit True (sks_bits_any rest)))))
+
+(fn sks_schema_productive
+  ((schema_id Int) (facts (List (Pair Int (List Bool))))) Bool
+  (match (sks_fact_find schema_id facts)
+    (None False)
+    ((Some bits) (sks_bits_any bits))))
+
+(fn sks_refs_productive
+  ((refs (List SkSchemaRef)) (facts (List (Pair Int (List Bool))))) Bool
+  (measure (struct refs))
+  (match refs
+    (Nil True)
+    ((Cons (SkSchemaRef _ _ child_schema) rest)
+     (if (sks_schema_productive child_schema facts)
+       (sks_refs_productive rest facts)
+       False))))
+
+(fn sks_alts_productivity
+  ((alts (List SkSchemaAlt)) (facts (List (Pair Int (List Bool)))))
+  (List Bool)
+  (measure (struct alts))
+  (match alts
+    (Nil Nil)
+    ((Cons (SkSchemaAlt _ refs) rest)
+     (Cons
+       (sks_refs_productive refs facts)
+       (sks_alts_productivity rest facts)))))
+
+(fn sks_productivity_round
+  ((entries (List SkSchemaEnt))
+   (prior (List (Pair Int (List Bool)))))
+  (List (Pair Int (List Bool)))
+  (measure (struct entries))
+  (match entries
+    (Nil Nil)
+    ((Cons (SkSchemaEnt schema_id alts) rest)
+     (Cons
+       (Pair schema_id (sks_alts_productivity alts prior))
+       (sks_productivity_round rest prior)))))
+
+(fn sks_productivity_rounds
+  ((entries (List SkSchemaEnt))
+   (facts (List (Pair Int (List Bool))))
+   (fuel Int))
+  (List (Pair Int (List Bool)))
+  (measure fuel)
+  (if (lt fuel 1) facts
+    (sks_productivity_rounds
+      entries
+      (sks_productivity_round entries facts)
+      (- fuel 1))))
+
+(fn sks_entries_len ((entries (List SkSchemaEnt))) Int
+  (measure (struct entries))
+  (match entries
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (sks_entries_len rest)))))
+
+(fn sk_schema_productivity
+  ((grammar SkSchemaGrammar)) SkSchemaProductivity
+  (match grammar
+    ((SkSchemaGrammar _ entries)
+     (SkSchemaProductivity
+       (sks_productivity_rounds
+         entries (sks_false_facts entries) (sks_entries_len entries))))))
+
+(fn sks_nth_bool ((bits (List Bool)) (index Int)) Bool
+  (measure (struct bits))
+  (match bits
+    (Nil False)
+    ((Cons bit rest)
+     (if (le index 0) bit (sks_nth_bool rest (- index 1))))))
+
+(fn sk_schema_alt_productive_at
+  ((grammar SkSchemaGrammar)
+   (productivity SkSchemaProductivity)
+   (occurrence Int)
+   (index Int))
+  Bool
+  (match productivity
+    ((SkSchemaProductivity facts)
+     (match (sk_schema_id_at grammar occurrence)
+       ((SkSchemaIdErr _) False)
+       ((SkSchemaIdOk schema_id)
+        (match (sks_fact_find schema_id facts)
+          (None False)
+          ((Some bits) (sks_nth_bool bits index))))))))
+
 (fn ents_rev ((es (List GEnt)) (acc (List GEnt))) (List GEnt)
   (measure (struct es))
   (match es
@@ -323,6 +709,56 @@
      (match t
        (Nil True)
        ((Cons b _) (if (lt a b) (ids_ascending t) False))))))
+
+;; Persistent integer sets for grammar-scale validation.  Occurrence grammars
+;; can contain hundreds of thousands of entries; checking every reference by
+;; scanning the complete id list makes the otherwise-linear stratification
+;; gate quadratic.  Keys are stored as id+1 in a binary digital trie.
+(type SkIdSet (SkIdSetLeaf) (SkIdSetNode Bool SkIdSet SkIdSet))
+
+(fn sk_idset_get ((set SkIdSet) (key Int) (fuel Int)) Bool
+  (measure fuel)
+  (if (lt fuel 1) False
+  (match set
+    ((SkIdSetLeaf) False)
+    ((SkIdSetNode here left right)
+     (if (le key 1) here
+     (if (int_eq (mod key 2) 0)
+       (sk_idset_get left (ediv key 2) (- fuel 1))
+       (sk_idset_get right (ediv key 2) (- fuel 1))))))))
+
+(fn sk_idset_put ((set SkIdSet) (key Int) (fuel Int)) SkIdSet
+  (measure fuel)
+  (if (lt fuel 1) set
+  (match set
+    ((SkIdSetLeaf)
+     (if (le key 1)
+       (SkIdSetNode True (SkIdSetLeaf) (SkIdSetLeaf))
+     (if (int_eq (mod key 2) 0)
+       (SkIdSetNode False
+         (sk_idset_put (SkIdSetLeaf) (ediv key 2) (- fuel 1))
+         (SkIdSetLeaf))
+       (SkIdSetNode False
+         (SkIdSetLeaf)
+         (sk_idset_put (SkIdSetLeaf) (ediv key 2) (- fuel 1))))))
+    ((SkIdSetNode here left right)
+     (if (le key 1) (SkIdSetNode True left right)
+     (if (int_eq (mod key 2) 0)
+       (SkIdSetNode here (sk_idset_put left (ediv key 2) (- fuel 1)) right)
+       (SkIdSetNode here left
+         (sk_idset_put right (ediv key 2) (- fuel 1)))))))))
+
+(type SkIdSetBuildR
+  (SkIdSetBuildErr (List Int))
+  (SkIdSetBuildOk SkIdSet))
+
+(fn sk_idset_build ((ids (List Int)) (set SkIdSet)) SkIdSetBuildR
+  (measure (struct ids))
+  (match ids
+    (Nil (SkIdSetBuildOk set))
+    ((Cons id rest)
+     (if (lt id 0) (SkIdSetBuildErr "grammar hole id must be nonnegative")
+       (sk_idset_build rest (sk_idset_put set (+ id 1) 64))))))
 
 ;; ---- well-formedness: the stratification law, checked whole ------------------
 
@@ -351,11 +787,160 @@
           ((GWErr m) (GWErr m))
           ((GWOk) (wf_go rest tids (ids_union hs seen)))))))))
 
+(type GWSet (GWSetErr (List Int)) (GWSetOk SkIdSet))
+
+(fn refs_check_set
+  ((hs (List Int)) (h Int) (ids SkIdSet) (seen SkIdSet)) GWSet
+  (measure (struct hs))
+  (match hs
+    (Nil (GWSetOk seen))
+    ((Cons k rest)
+     (if (le k h) (GWSetErr "alternative hole id must exceed its entry id")
+     (if (sk_idset_get ids (+ k 1) 64)
+       (if (sk_idset_get seen (+ k 1) 64)
+         (GWSetErr "hole is owned by two grammar entries")
+         (refs_check_set rest h ids (sk_idset_put seen (+ k 1) 64)))
+       (GWSetErr "alternative references a hole with no grammar entry"))))))
+
+(fn wf_go_set ((es (List GEnt)) (ids SkIdSet) (seen SkIdSet)) GW
+  (measure (struct es))
+  (match es
+    (Nil (GWOk))
+    ((Cons (GEnt h alts) rest)
+     (match (holes_l alts Nil)
+       ((SkIdsErr msg) (GWErr msg))
+       ((SkIdsOk hs)
+        (match (refs_check_set hs h ids seen)
+          ((GWSetErr msg) (GWErr msg))
+          ((GWSetOk seen2) (wf_go_set rest ids seen2))))))))
+
 (fn g_wf ((g Grammar)) GW
   (match g
     ((Grammar es)
-     (if (ids_ascending (ge_ids es)) (wf_go es (ge_ids es) Nil)
-     (GWErr "grammar entry ids must be strictly ascending")))))
+     (let ((ids (ge_ids es)))
+       (if (ids_ascending ids)
+         (match (sk_idset_build ids (SkIdSetLeaf))
+           ((SkIdSetBuildErr msg) (GWErr msg))
+           ((SkIdSetBuildOk id_set)
+            (wf_go_set es id_set (SkIdSetLeaf))))
+         (GWErr "grammar entry ids must be strictly ascending"))))))
+
+;; Saturating (zero/nonzero) grammar analysis.  Synthesis schedulers need to
+;; avoid barren depth-boundary productions without paying exact bignum counts.
+;; Keep one productivity bit per original alternative so choice indices remain
+;; stable for regions, ranks, and checked theorem facts.
+(type SkProductivity
+  (SkProductivityLeaf)
+  (SkProductivityNode
+    (Option (List Bool)) SkProductivity SkProductivity))
+
+(fn skp_get
+  ((productivity SkProductivity) (key Int) (fuel Int))
+  (Option (List Bool))
+  (measure fuel)
+  (if (lt fuel 1) None
+  (match productivity
+    ((SkProductivityLeaf) None)
+    ((SkProductivityNode value left right)
+     (if (le key 1) value
+     (if (int_eq (mod key 2) 0)
+       (skp_get left (ediv key 2) (- fuel 1))
+       (skp_get right (ediv key 2) (- fuel 1))))))))
+
+(fn skp_put
+  ((productivity SkProductivity)
+   (key Int)
+   (bits (List Bool))
+   (fuel Int))
+  SkProductivity
+  (measure fuel)
+  (if (lt fuel 1) productivity
+  (match productivity
+    ((SkProductivityLeaf)
+     (if (le key 1)
+       (SkProductivityNode
+         (Some bits) (SkProductivityLeaf) (SkProductivityLeaf))
+     (if (int_eq (mod key 2) 0)
+       (SkProductivityNode None
+         (skp_put (SkProductivityLeaf) (ediv key 2) bits (- fuel 1))
+         (SkProductivityLeaf))
+       (SkProductivityNode None
+         (SkProductivityLeaf)
+         (skp_put (SkProductivityLeaf) (ediv key 2) bits (- fuel 1))))))
+    ((SkProductivityNode value left right)
+     (if (le key 1) (SkProductivityNode (Some bits) left right)
+     (if (int_eq (mod key 2) 0)
+       (SkProductivityNode value
+         (skp_put left (ediv key 2) bits (- fuel 1)) right)
+       (SkProductivityNode value left
+         (skp_put right (ediv key 2) bits (- fuel 1)))))))))
+
+(fn skp_any ((bits (List Bool))) Bool
+  (measure (struct bits))
+  (match bits
+    (Nil False)
+    ((Cons bit rest) (if bit True (skp_any rest)))))
+
+(fn skp_holes ((holes (List Int)) (productivity SkProductivity)) Bool
+  (measure (struct holes))
+  (match holes
+    (Nil True)
+    ((Cons hole_id rest)
+     (match (skp_get productivity (+ hole_id 1) 64)
+       (None False)
+       ((Some bits)
+        (if (skp_any bits) (skp_holes rest productivity) False))))))
+
+(fn skp_expr ((e Expr) (productivity SkProductivity)) Bool
+  (match (holes_e e Nil)
+    ((SkIdsErr _) False)
+    ((SkIdsOk holes) (skp_holes holes productivity))))
+
+(fn skp_rev_bools ((bits (List Bool)) (acc (List Bool))) (List Bool)
+  (measure (struct bits))
+  (match bits
+    (Nil acc)
+    ((Cons bit rest) (skp_rev_bools rest (Cons bit acc)))))
+
+(fn skp_alts
+  ((alts (List Expr))
+   (productivity SkProductivity)
+   (reverse_bits (List Bool)))
+  (List Bool)
+  (measure (struct alts))
+  (match alts
+    (Nil (skp_rev_bools reverse_bits Nil))
+    ((Cons alt rest)
+     (skp_alts rest productivity
+       (Cons (skp_expr alt productivity) reverse_bits)))))
+
+(fn skp_index
+  ((reverse_entries (List GEnt)) (productivity SkProductivity))
+  SkProductivity
+  (measure (struct reverse_entries))
+  (match reverse_entries
+    (Nil productivity)
+    ((Cons (GEnt hole_id alts) rest)
+     (let ((bits (skp_alts alts productivity Nil)))
+       (skp_index rest (skp_put productivity (+ hole_id 1) bits 64))))))
+
+(fn sk_productivity ((grammar Grammar)) SkProductivity
+  (match grammar
+    ((Grammar entries)
+     (skp_index (ents_rev entries Nil) (SkProductivityLeaf)))))
+
+(fn skp_nth ((bits (List Bool)) (index Int)) Bool
+  (measure (struct bits))
+  (match bits
+    (Nil False)
+    ((Cons bit rest)
+     (if (le index 0) bit (skp_nth rest (- index 1))))))
+
+(fn sk_alt_productive
+  ((productivity SkProductivity) (hole_id Int) (index Int)) Bool
+  (match (skp_get productivity (+ hole_id 1) 64)
+    (None False)
+    ((Some bits) (skp_nth bits index))))
 
 ;; ---- exact counting: one reverse fold over the entries -----------------------
 
@@ -746,6 +1331,558 @@
                  (match (holes_e root Nil)
                    ((SkIdsErr m) (SkCErr m))
                    ((SkIdsOk roots) (digits_compose roots dmemo memo 0))))))))))))))
+
+;; ---- exact restricted regions ---------------------------------------------
+;;
+;; A narrowing job normally fixes some grammar choices. Relational pressure
+;; also needs the dual operation: retain the original hole identity while
+;; excluding one or more choices. `SkRegion` records both over the unchanged
+;; Grammar DAG. This is deliberately below any rewrite/search policy.
+;;
+;; Exact counting is the ordinary reverse grammar fold with each entry's
+;; alternatives restricted before summation. No grammar nodes are cloned, so
+;; evaluators and their memos continue to use the original stable hole ids.
+;;
+;; `sk_region_subtract_cube` subtracts a conjunction of required choices as a
+;; disjoint sum of products. For cube [h=a, k=b], the complement is
+;;
+;;   h!=a  |  (h=a, k!=b)
+;;
+;; and the optional hit is the final h=a,k=b region.
+
+(type SkRegion
+  (SkRegion
+    (List (Pair Int Int))
+    (List (Pair Int Int))))
+  ; fixed hole -> alternative index, forbidden hole -> alternative index
+
+(fn sk_empty_region () SkRegion (SkRegion Nil Nil))
+
+(fn sk_region_choices ((region SkRegion)) (List (Pair Int Int))
+  (match region
+    ((SkRegion choices _) choices)))
+
+(fn sk_region_forbids ((region SkRegion)) (List (Pair Int Int))
+  (match region
+    ((SkRegion _ forbids) forbids)))
+
+(fn skr_pair_mem ((hole_id Int) (choice Int) (pairs (List (Pair Int Int)))) Bool
+  (measure (struct pairs))
+  (match pairs
+    (Nil False)
+    ((Cons (Pair h c) rest)
+     (if (int_eq hole_id h)
+       (if (int_eq choice c) True (skr_pair_mem hole_id choice rest))
+       (skr_pair_mem hole_id choice rest)))))
+
+(fn skr_hole_mem ((hole_id Int) (pairs (List (Pair Int Int)))) Bool
+  (measure (struct pairs))
+  (match pairs
+    (Nil False)
+    ((Cons (Pair h _) rest)
+     (if (int_eq hole_id h) True (skr_hole_mem hole_id rest)))))
+
+(fn skr_choice ((hole_id Int) (region SkRegion)) (Option Int)
+  (match region
+    ((SkRegion choices _) (memo_find hole_id choices))))
+
+(fn skr_forbidden ((hole_id Int) (choice Int) (region SkRegion)) Bool
+  (match region
+    ((SkRegion _ forbids) (skr_pair_mem hole_id choice forbids))))
+
+(fn skr_alts_len ((alts (List Expr))) Int
+  (measure (struct alts))
+  (match alts
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (skr_alts_len rest)))))
+
+(fn skr_choice_valid ((choice Int) (alts (List Expr))) Bool
+  (if (lt choice 0) False (lt choice (skr_alts_len alts))))
+
+(fn skr_entry_alts ((entries (List GEnt)) (hole_id Int)) (Option (List Expr))
+  (measure (struct entries))
+  (match entries
+    (Nil None)
+    ((Cons (GEnt h alts) rest)
+     (if (int_eq hole_id h) (Some alts) (skr_entry_alts rest hole_id)))))
+
+(fn skr_pairs_wf
+  ((entries (List GEnt))
+   (pairs (List (Pair Int Int)))
+   (unique_holes Bool)
+   (seen (List (Pair Int Int))))
+  (Option (List Int))
+  (measure (struct pairs))
+  (match pairs
+    (Nil None)
+    ((Cons (Pair hole_id choice) rest)
+     (if (if unique_holes (skr_hole_mem hole_id seen) False)
+       (Some "region fixes one hole more than once")
+       (match (skr_entry_alts entries hole_id)
+         (None (Some "region references an unknown grammar hole"))
+         ((Some alts)
+          (if (skr_choice_valid choice alts)
+            (skr_pairs_wf
+              entries rest unique_holes (Cons (Pair hole_id choice) seen))
+            (Some "region choice is outside its grammar entry"))))))))
+
+(type SkRegionWfR (SkRegionWfErr (List Int)) (SkRegionWfOk))
+
+(fn sk_region_wf ((grammar Grammar) (region SkRegion)) SkRegionWfR
+  (match grammar
+    ((Grammar entries)
+     (match region
+       ((SkRegion choices forbids)
+        (match (skr_pairs_wf entries choices True Nil)
+          ((Some msg) (SkRegionWfErr msg))
+          (None
+            (match (skr_pairs_wf entries forbids False Nil)
+              ((Some msg) (SkRegionWfErr msg))
+              (None (SkRegionWfOk))))))))))
+
+(fn skr_sum_region_alts
+  ((hole_id Int)
+   (index Int)
+   (alts (List Expr))
+   (memo (List (Pair Int Int)))
+   (region SkRegion))
+  SkC
+  (measure (struct alts))
+  (match alts
+    (Nil (SkCOk 0))
+    ((Cons alt rest)
+     (match (skr_choice hole_id region)
+       ((Some chosen)
+        (if (int_eq index chosen)
+          (if (skr_forbidden hole_id index region) (SkCOk 0)
+          (alt_size alt memo))
+          (skr_sum_region_alts hole_id (+ index 1) rest memo region)))
+       (None
+        (match
+          (if (skr_forbidden hole_id index region) (SkCOk 0)
+          (alt_size alt memo))
+          ((SkCErr msg) (SkCErr msg))
+          ((SkCOk here)
+           (match
+             (skr_sum_region_alts hole_id (+ index 1) rest memo region)
+             ((SkCErr msg) (SkCErr msg))
+             ((SkCOk tail) (SkCOk (+ here tail)))))))))))
+
+(fn skr_counts_go
+  ((rev_entries (List GEnt))
+   (region SkRegion)
+   (memo (List (Pair Int Int))))
+  GCt
+  (measure (struct rev_entries))
+  (match rev_entries
+    (Nil (GCtOk memo))
+    ((Cons (GEnt hole_id alts) rest)
+     (match (skr_sum_region_alts hole_id 0 alts memo region)
+       ((SkCErr msg) (GCtErr msg))
+       ((SkCOk count)
+        (skr_counts_go rest region (Cons (Pair hole_id count) memo)))))))
+
+(fn sk_region_count ((root Expr) (grammar Grammar) (region SkRegion)) SkC
+  (match (g_wf grammar)
+    ((GWErr msg) (SkCErr msg))
+    ((GWOk)
+     (match (sk_region_wf grammar region)
+       ((SkRegionWfErr msg) (SkCErr msg))
+       ((SkRegionWfOk)
+        (match grammar
+          ((Grammar entries)
+           (match (skr_counts_go (ents_rev entries Nil) region Nil)
+             ((GCtErr msg) (SkCErr msg))
+             ((GCtOk memo)
+              (match (holes_e root Nil)
+                ((SkIdsErr msg) (SkCErr msg))
+                ((SkIdsOk roots) (prod_counts roots memo))))))))))))
+
+;; Restricted addressing keeps the ordinary candidate ordering after removing
+;; forbidden alternatives and alternatives other than a fixed choice.  This is
+;; not merely a convenience for search drivers: it makes a region an exact,
+;; independently enumerable candidate space without manufacturing a second
+;; Grammar (and therefore without changing any hole identity).
+
+(fn skr_pick_alt
+  ((hole_id Int)
+   (index Int)
+   (alts (List Expr))
+   (memo (List (Pair Int Int)))
+   (region SkRegion)
+   (digit Int))
+  PkR
+  (measure (struct alts))
+  (match alts
+    (Nil (PkRErr "region alternative index out of range (count drift)"))
+    ((Cons alt rest)
+     (let
+       ((allowed
+          (match (skr_choice hole_id region)
+            ((Some chosen) (int_eq index chosen))
+            (None True))))
+       (if (if allowed (skr_forbidden hole_id index region) False)
+         (skr_pick_alt hole_id (+ index 1) rest memo region digit)
+       (if allowed
+         (match (alt_size alt memo)
+           ((SkCErr msg) (PkRErr msg))
+           ((SkCOk size)
+            (if (lt digit size) (PkROk alt digit)
+            (skr_pick_alt
+              hole_id (+ index 1) rest memo region (- digit size)))))
+         (skr_pick_alt hole_id (+ index 1) rest memo region digit)))))))
+
+(fn skr_decide_go
+  ((entries (List GEnt))
+   (memo (List (Pair Int Int)))
+   (region SkRegion)
+   (live (List (Pair Int Int)))
+   (choices (List (Pair Int Expr))))
+  DcR
+  (measure (struct entries))
+  (match entries
+    (Nil (DcROk choices))
+    ((Cons (GEnt hole_id alts) rest)
+     (match (memo_find hole_id live)
+       (None (skr_decide_go rest memo region live choices))
+       ((Some digit)
+        (match (skr_pick_alt hole_id 0 alts memo region digit)
+          ((PkRErr msg) (DcRErr msg))
+          ((PkROk alt residual)
+           (match (holes_e alt Nil)
+             ((SkIdsErr msg) (DcRErr msg))
+             ((SkIdsOk holes)
+              (match (digits_go (ids_rev holes Nil) memo residual Nil)
+                ((DgRErr msg) (DcRErr msg))
+                ((DgROk digits)
+                 (match (live_merge digits live)
+                   (None (DcRErr "hole is owned by two grammar entries"))
+                   ((Some live2)
+                    (skr_decide_go
+                      rest memo region live2
+                      (Cons (Pair hole_id alt) choices)))))))))))))))
+
+(fn skr_find_alt
+  ((hole_id Int)
+   (index Int)
+   (alts (List Expr))
+   (memo (List (Pair Int Int)))
+   (region SkRegion)
+   (value Expr)
+   (offset Int))
+  FaR
+  (measure (struct alts))
+  (match alts
+    (Nil (FaRErr "candidate matches no allowed alternative of a live hole"))
+    ((Cons alt rest)
+     (let
+       ((allowed
+          (match (skr_choice hole_id region)
+            ((Some chosen) (int_eq index chosen))
+            (None True))))
+       (if (if allowed (skr_forbidden hole_id index region) False)
+         (skr_find_alt
+           hole_id (+ index 1) rest memo region value offset)
+       (if allowed
+         (match (match_e alt value Nil)
+           ((MtRErr msg) (FaRErr msg))
+           ((MtROk bindings) (FaROk offset alt bindings))
+           ((MtRNo)
+            (match (alt_size alt memo)
+              ((SkCErr msg) (FaRErr msg))
+              ((SkCOk size)
+               (skr_find_alt
+                 hole_id (+ index 1) rest memo region value
+                 (+ offset size))))))
+         (skr_find_alt
+           hole_id (+ index 1) rest memo region value offset)))))))
+
+(fn skr_rank_decide
+  ((entries (List GEnt))
+   (memo (List (Pair Int Int)))
+   (region SkRegion)
+   (live (List (Pair Int Expr)))
+   (choices (List (Pair Int (Pair Int Expr)))))
+  RkR
+  (measure (struct entries))
+  (match entries
+    (Nil (RkROk choices))
+    ((Cons (GEnt hole_id alts) rest)
+     (match (rk_find hole_id live)
+       (None (skr_rank_decide rest memo region live choices))
+       ((Some value)
+        (match (skr_find_alt hole_id 0 alts memo region value 0)
+          ((FaRErr msg) (RkRErr msg))
+          ((FaROk offset alt bindings)
+           (match (rk_merge bindings live)
+             (None (RkRErr "hole is owned by two grammar entries"))
+             ((Some live2)
+              (skr_rank_decide
+                rest memo region live2
+                (Cons (Pair hole_id (Pair offset alt)) choices)))))))))))
+
+(fn sk_region_rank
+  ((root Expr) (grammar Grammar) (region SkRegion) (candidate Expr)) SkC
+  (match (g_wf grammar)
+    ((GWErr msg) (SkCErr msg))
+    ((GWOk)
+     (match (sk_region_wf grammar region)
+       ((SkRegionWfErr msg) (SkCErr msg))
+       ((SkRegionWfOk)
+        (match (match_e root candidate Nil)
+          ((MtRErr msg) (SkCErr msg))
+          ((MtRNo) (SkCErr "candidate does not match the root sketch"))
+          ((MtROk live0)
+           (match grammar
+             ((Grammar entries)
+              (match (skr_counts_go (ents_rev entries Nil) region Nil)
+                ((GCtErr msg) (SkCErr msg))
+                ((GCtOk memo)
+                 (match (skr_rank_decide entries memo region live0 Nil)
+                   ((RkRErr msg) (SkCErr msg))
+                   ((RkROk choices)
+                    (match (rank_close (ents_rev entries Nil) choices memo Nil)
+                      ((GCtErr msg) (SkCErr msg))
+                      ((GCtOk digits)
+                       (match (holes_e root Nil)
+                         ((SkIdsErr msg) (SkCErr msg))
+                         ((SkIdsOk roots)
+                          (digits_compose roots digits memo 0))))))))))))))))))
+
+(fn sk_region_member
+  ((root Expr) (grammar Grammar) (region SkRegion) (candidate Expr)) Bool
+  (match (sk_region_rank root grammar region candidate)
+    ((SkCErr _) False)
+    ((SkCOk _) True)))
+
+(fn sk_region_unrank
+  ((root Expr) (grammar Grammar) (region SkRegion) (index Int)) SkE
+  (match (g_wf grammar)
+    ((GWErr msg) (SkEErr msg))
+    ((GWOk)
+     (match (sk_region_wf grammar region)
+       ((SkRegionWfErr msg) (SkEErr msg))
+       ((SkRegionWfOk)
+        (match grammar
+          ((Grammar entries)
+           (match (skr_counts_go (ents_rev entries Nil) region Nil)
+             ((GCtErr msg) (SkEErr msg))
+             ((GCtOk memo)
+              (match (holes_e root Nil)
+                ((SkIdsErr msg) (SkEErr msg))
+                ((SkIdsOk roots)
+                 (match (prod_counts roots memo)
+                   ((SkCErr msg) (SkEErr msg))
+                   ((SkCOk total)
+                    (if (lt index 0) (SkEErr "region candidate index below zero")
+                    (if (le total index)
+                      (SkEErr "region candidate index out of range")
+                    (match (digits_go (ids_rev roots Nil) memo index Nil)
+                      ((DgRErr msg) (SkEErr msg))
+                      ((DgROk live0)
+                       (match (skr_decide_go entries memo region live0 Nil)
+                         ((DcRErr msg) (SkEErr msg))
+                         ((DcROk choices)
+                          (match (close_go (ents_rev entries Nil) choices Nil)
+                            ((ClRErr msg) (SkEErr msg))
+                            ((ClROk closed)
+                             (match (fill_e root closed)
+                               ((SkEErr msg) (SkEErr msg))
+                               ((SkEOk result)
+                                (if (sk_closed result) (SkEOk result)
+                                (SkEErr
+                                  "region unrank left holes (grammar incomplete for the root)")))))))))))))))))))))))))
+
+;; Cardinality-free representative selection.  Synthesis only needs one
+;; member of a surviving restricted region; computing its rank first couples
+;; that operation to every (potentially enormous) sibling subspace.  Walk the
+;; stratified grammar instead, choosing the first permitted alternative of
+;; each live hole and closing bottom-up exactly as ordinary unrank does.
+(type SkrFirstAltR
+  (SkrFirstAltErr (List Int))
+  (SkrFirstAltOk Expr))
+
+(fn skr_first_alt
+  ((hole_id Int)
+   (index Int)
+   (alts (List Expr))
+   (region SkRegion)
+   (productivity SkProductivity))
+  SkrFirstAltR
+  (measure (struct alts))
+  (match alts
+    (Nil (SkrFirstAltErr "region has no permitted alternative"))
+    ((Cons alt rest)
+     (let
+       ((selected
+          (match (skr_choice hole_id region)
+            ((Some chosen) (int_eq chosen index))
+            (None True))))
+       (if (if selected (skr_forbidden hole_id index region) False)
+         (skr_first_alt hole_id (+ index 1) rest region productivity)
+       (if (if selected (sk_alt_productive productivity hole_id index) False)
+         (SkrFirstAltOk alt)
+         (skr_first_alt hole_id (+ index 1) rest region productivity)))))))
+
+(type SkrFirstDecideR
+  (SkrFirstDecideErr (List Int))
+  (SkrFirstDecideOk (List (Pair Int Expr))))
+
+(fn skr_first_decide
+  ((entries (List GEnt))
+   (region SkRegion)
+   (productivity SkProductivity)
+   (live (List Int))
+   (choices (List (Pair Int Expr))))
+  SkrFirstDecideR
+  (measure (struct entries))
+  (match entries
+    (Nil (SkrFirstDecideOk choices))
+    ((Cons (GEnt hole_id alts) rest)
+     (if (ids_member hole_id live)
+       (match (skr_first_alt hole_id 0 alts region productivity)
+         ((SkrFirstAltErr msg) (SkrFirstDecideErr msg))
+         ((SkrFirstAltOk alt)
+          (match (holes_e alt Nil)
+            ((SkIdsErr msg) (SkrFirstDecideErr msg))
+            ((SkIdsOk children)
+             (skr_first_decide
+               rest
+               region
+               productivity
+               (ids_union children live)
+               (Cons (Pair hole_id alt) choices))))))
+       (skr_first_decide rest region productivity live choices)))))
+
+(fn sk_region_first
+  ((root Expr) (grammar Grammar) (region SkRegion)) SkE
+  (match (g_wf grammar)
+    ((GWErr msg) (SkEErr msg))
+    ((GWOk)
+     (match (sk_region_wf grammar region)
+       ((SkRegionWfErr msg) (SkEErr msg))
+       ((SkRegionWfOk)
+        (match (holes_e root Nil)
+          ((SkIdsErr msg) (SkEErr msg))
+          ((SkIdsOk roots)
+           (match grammar
+             ((Grammar entries)
+              (match
+                (skr_first_decide
+                  entries region (sk_productivity grammar) roots Nil)
+                ((SkrFirstDecideErr msg) (SkEErr msg))
+                ((SkrFirstDecideOk choices)
+                 (match (close_go (ents_rev entries Nil) choices Nil)
+                   ((ClRErr msg) (SkEErr msg))
+                   ((ClROk closed)
+                    (match (fill_e root closed)
+                      ((SkEErr msg) (SkEErr msg))
+                      ((SkEOk result)
+                       (if (sk_closed result) (SkEOk result)
+                       (SkEErr
+                         "region first left holes (grammar incomplete for the root)")))))))))))))))))
+
+(type SkRegionEditR
+  (SkRegionEditErr (List Int))
+  (SkRegionEditEmpty)
+  (SkRegionEditOk SkRegion))
+
+(fn sk_region_choose_known
+  ((region SkRegion) (hole_id Int) (choice Int) (alts (List Expr)))
+  SkRegionEditR
+  (if (skr_choice_valid choice alts)
+    (match (skr_choice hole_id region)
+      ((Some prior)
+       (if (int_eq prior choice) (SkRegionEditOk region)
+       (SkRegionEditEmpty)))
+      (None
+       (if (skr_forbidden hole_id choice region) (SkRegionEditEmpty)
+       (match region
+         ((SkRegion choices forbids)
+          (SkRegionEditOk
+            (SkRegion (Cons (Pair hole_id choice) choices) forbids)))))))
+    (SkRegionEditErr "region choice is outside its grammar entry")))
+
+(fn sk_region_choose
+  ((grammar Grammar) (region SkRegion) (hole_id Int) (choice Int))
+  SkRegionEditR
+  (match grammar
+    ((Grammar entries)
+     (match (skr_entry_alts entries hole_id)
+       (None (SkRegionEditErr "region choice references an unknown hole"))
+       ((Some alts) (sk_region_choose_known region hole_id choice alts))))))
+
+(fn skr_forbid_known ((region SkRegion) (hole_id Int) (choice Int))
+  SkRegionEditR
+  (match (skr_choice hole_id region)
+    ((Some prior)
+     (if (int_eq prior choice) (SkRegionEditEmpty) (SkRegionEditOk region)))
+    (None
+     (if (skr_forbidden hole_id choice region) (SkRegionEditOk region)
+     (match region
+       ((SkRegion choices forbids)
+        (SkRegionEditOk
+          (SkRegion choices (Cons (Pair hole_id choice) forbids)))))))))
+
+(fn sk_region_forbid
+  ((grammar Grammar) (region SkRegion) (hole_id Int) (choice Int))
+  SkRegionEditR
+  (match grammar
+    ((Grammar entries)
+     (match (skr_entry_alts entries hole_id)
+       (None (SkRegionEditErr "region exclusion references an unknown hole"))
+       ((Some alts)
+        (if (skr_choice_valid choice alts)
+          (skr_forbid_known region hole_id choice)
+          (SkRegionEditErr
+            "region exclusion is outside its grammar entry")))))))
+
+(fn skr_regions_reverse
+  ((regions (List SkRegion)) (acc (List SkRegion))) (List SkRegion)
+  (measure (struct regions))
+  (match regions
+    (Nil acc)
+    ((Cons region rest) (skr_regions_reverse rest (Cons region acc)))))
+
+(type SkRegionSubtractR
+  (SkRegionSubtractErr (List Int))
+  (SkRegionSubtractOk (Option SkRegion) (List SkRegion)))
+  ; exact cube hit, disjoint complement regions
+
+(fn skr_subtract_cube_go
+  ((grammar Grammar)
+   (prefix SkRegion)
+   (cube (List (Pair Int Int)))
+   (rev_complement (List SkRegion)))
+  SkRegionSubtractR
+  (measure (struct cube))
+  (match cube
+    (Nil
+      (SkRegionSubtractOk
+        (Some prefix)
+        (skr_regions_reverse rev_complement Nil)))
+    ((Cons (Pair hole_id choice) rest)
+     (match (sk_region_choose grammar prefix hole_id choice)
+       ((SkRegionEditErr msg) (SkRegionSubtractErr msg))
+       ((SkRegionEditEmpty)
+        (SkRegionSubtractOk
+          None
+          (skr_regions_reverse (Cons prefix rev_complement) Nil)))
+       ((SkRegionEditOk hit_prefix)
+        (match (sk_region_forbid grammar prefix hole_id choice)
+          ((SkRegionEditErr msg) (SkRegionSubtractErr msg))
+          ((SkRegionEditEmpty)
+           (skr_subtract_cube_go grammar hit_prefix rest rev_complement))
+          ((SkRegionEditOk miss_branch)
+           (skr_subtract_cube_go
+             grammar hit_prefix rest (Cons miss_branch rev_complement)))))))))
+
+(fn sk_region_subtract_cube
+  ((grammar Grammar) (region SkRegion) (cube (List (Pair Int Int))))
+  SkRegionSubtractR
+  (match (sk_region_wf grammar region)
+    ((SkRegionWfErr msg) (SkRegionSubtractErr msg))
+    ((SkRegionWfOk) (skr_subtract_cube_go grammar region cube Nil))))
 
 ;; index -> the closed candidate it addresses (range-checked, loud)
 (fn sk_unrank ((root Expr) (g Grammar) (ix Int)) SkE

@@ -1,0 +1,104 @@
+;;; Kernel-replayed witnesses for typed_x86_calculator.shard.
+;;;
+;;; The searched program uses the current x86 model's SysV register boundary.
+;;; `mlx86_memory_body` additionally replays the historical benchmark ABI:
+;;; registers begin at zero; bytes a/b live at addresses 0/1; byte 3 is the
+;;; output.  The old x86 used absolute addresses, while the current x86_64
+;;; model deliberately exposes register-indirect addressing, hence the two
+;;; pointer-materialization instructions.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")
+(import "../../../models/x86/x86.shard")
+(use (:: std mem *))
+(use (:: models x86 x86 *))
+
+;; Search witness from tools/search/tasks/typed_x86_calculator.shard.
+(fn searched_x86_calculator () XFunc
+  (MkXFunc 2 (list (XMovRR RAX RDI) (XBin XAdd RAX (SReg RSI)))))
+
+;; The machine result is the x86 wrap64 spelling of a+b for all integers.
+(claim searched_x86_calculator_refines
+  (goal ((a Int) (b Int) (c Nat) (restfs (List XFunc)) (mem Mem)) ()
+    (=
+      (xcall_fn_mem
+        (S (S (S (S (S (S c))))))
+        (MkXModule (Cons (searched_x86_calculator) restfs) 0 0)
+        0
+        (list a b)
+        mem)
+      (Some (Pair (wrap64 (+ a b)) mem))))
+  (steps ((compute both)) refl))
+
+;; Faithful shape of the old memory calculator on the modern model.  The
+;; initial zero register file supplies address 0 for the first load.
+(fn mlx86_memory_body () (List XInstr)
+  (list
+    (XLoad8 RAX (AReg RAX))
+    (XMovRI RCX 1)
+    (XLoad8 RBX (AReg RCX))
+    (XBin XAdd RAX (SReg RBX))
+    (XMovRI RDX 3)
+    (XStore8 (AReg RDX) (SReg RAX))))
+
+(fn mlx86_memory ((a Int) (b Int)) Mem (mem_set (mem_set (mem_empty) 0 a) 1 b))
+
+(fn mlx86_memory_run ((a Int) (b Int)) (Option (Pair Regs Mem))
+  (xrun_regs
+    (xfnat 20)
+    (MkXModule (list (MkXFunc 0 (mlx86_memory_body))) 0 44)
+    0
+    (xregs0)
+    (mlx86_memory a b)))
+
+(claim mlx86_input_a
+  (goal ((a Int) (b Int)) () (= (mem_get (mlx86_memory a b) 0) (mod a 256)))
+  (chain
+    (steps ((unfold mlx86_memory lhs)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl)))
+    (rewrite-with (lemma get_set) lr lhs () ())
+    refl))
+
+(claim mlx86_input_b
+  (goal ((a Int) (b Int)) () (= (mem_get (mlx86_memory a b) 1) (mod b 256)))
+  (chain
+    (steps ((unfold mlx86_memory lhs)))
+    (rewrite-with (lemma get_set) lr lhs () ())
+    refl))
+
+(fn mlx86_memory_output ((a Int) (b Int)) (Option Int)
+  (match (mlx86_memory_run a b)
+    (None None)
+    ((Some p)
+     (match p
+       ((Pair rs mem) (Some (mem_get mem 3)))))))
+
+;; Universal old-ABI refinement.  Inputs are bytes because mem_get is a byte;
+;; the stored output is the low byte of their x86_64 sum.
+(claim mlx86_memory_refines
+  (goal ((a Int) (b Int)) ()
+    (=
+      (mlx86_memory_output a b)
+      (Some (mod (wrap64 (+ (mod a 256) (mod b 256))) 256))))
+  (chain
+    (steps
+      ((unfold mlx86_memory_output lhs)
+       (compute lhs (stop mem_get mem_set mlx86_memory))))
+    (rewrite-with (lemma mlx86_input_a) lr lhs () ())
+    (rewrite-with (lemma mlx86_input_b) lr lhs () ())
+    (rewrite-with (lemma get_set) lr lhs () ())
+    (steps ((unfold wrap64 rhs)))
+    refl))
+
+;; One of the original forty samples: a=65, b=18, output byte=83.  This is a
+;; ground replay of the entire load/add/store path, including memory framing.
+(claim mlx86_memory_ground
+  (goal () () (= (mlx86_memory_output 65 18) (Some 83)))
+  (chain
+    (rewrite-with (lemma mlx86_memory_refines) lr lhs () ())
+    (steps ((compute both)) refl)))

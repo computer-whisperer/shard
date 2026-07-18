@@ -1,0 +1,161 @@
+;;; The calculator benchmark from ~/workspace/mlx86, transplanted onto the
+;;; current x86_64 model.  The historical task ran a 512-byte x86 genome on
+;;; forty deterministic byte pairs and scored byte 3 as a+b.  Its checked-in
+;;; opcode selector was fixed at zero, so only addition was active.
+;;;
+;;; This search keeps the old forty-pair battery exactly, but uses the current
+;;; model's ordinary SysV entry surface: a and b arrive in RDI/RSI and the
+;;; result leaves in RAX.  The companion G4 artifact preserves the old
+;;; memory-at-zero ABI as a load/add/store witness as well.
+;;;
+;;; Nothing in typed_expr or typed_grammar names x86.  The candidate ISA below
+;;; is solely the bare-item use scope: two instruction shapes, three registers,
+;;; register sources, and two binary operations.  Changing those uses changes
+;;; the searched machine language without changing the engine.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../models/x86/x86.shard")
+(import "../typed_grammar.shard")
+(use (:: tools search typed_grammar *))
+
+;; Generic program spine.
+(use (:: core List))
+(use (:: core Nil))
+(use (:: core Cons))
+
+;; Candidate x86 scope.
+(use (:: models x86 x86 XInstr))
+(use (:: models x86 x86 Reg))
+(use (:: models x86 x86 Src))
+(use (:: models x86 x86 XBop))
+(use (:: models x86 x86 XMovRR))
+(use (:: models x86 x86 XBin))
+(use (:: models x86 x86 RAX))
+(use (:: models x86 x86 RDI))
+(use (:: models x86 x86 RSI))
+(use (:: models x86 x86 SReg))
+(use (:: models x86 x86 XAdd))
+(use (:: models x86 x86 XSub))
+
+;; The full model is oracle-only: qualified names do not become productions.
+(use (:: models x86 x86) as x86)
+
+(fn search_forms () (List Symbol) (list (quote ctor)))
+
+(fn search_ints () (List Int) Nil)
+
+(fn search_symbols () (List Symbol) Nil)
+
+;; XBin's Src child adds one constructor level beyond XMovRR.  The routed
+;; sequence zones below admit exactly two instructions, so depth four now
+;; counts the useful product directly rather than generating longer tails and
+;; rejecting them after construction.
+(fn search_depth () Int 4)
+
+(fn calc_scope_ctor ((name Symbol)) TgScopeHead (TgScopeCtor name))
+
+(fn calc_scope_route ((head Symbol) (index Int) (zone Symbol)) TgScopeRoute
+  (TgScopeRoute (calc_scope_ctor head) index zone))
+
+(fn calc_instr_zone ((name Symbol)) TgScopeZone
+  (TgScopeZone
+    name
+    (list (calc_scope_ctor (quote XMovRR)) (calc_scope_ctor (quote XBin)))
+    Nil
+    Nil
+    (list
+      (calc_scope_route (quote XMovRR) 0 (quote register))
+      (calc_scope_route (quote XMovRR) 1 (quote register))
+      (calc_scope_route (quote XBin) 0 (quote operation))
+      (calc_scope_route (quote XBin) 1 (quote register))
+      (calc_scope_route (quote XBin) 2 (quote source)))))
+
+(fn calc_seq_zone ((name Symbol) (instruction Symbol) (tail Symbol)) TgScopeZone
+  (TgScopeZone
+    name
+    (list (calc_scope_ctor (quote Cons)))
+    Nil
+    Nil
+    (list
+      (calc_scope_route (quote Cons) 0 instruction)
+      (calc_scope_route (quote Cons) 1 tail))))
+
+(fn search_environment () TgScopeEnv
+  (TgScopeEnv
+    (quote sequence0)
+    (list
+      (calc_seq_zone (quote sequence0) (quote instruction0) (quote sequence1))
+      (calc_seq_zone (quote sequence1) (quote instruction1) (quote sequence2))
+      (TgScopeZone
+        (quote sequence2)
+        (list (calc_scope_ctor (quote Nil)))
+        Nil
+        Nil
+        Nil)
+      (calc_instr_zone (quote instruction0))
+      (calc_instr_zone (quote instruction1))
+      (TgScopeZone
+        (quote register)
+        (list
+          (calc_scope_ctor (quote RAX))
+          (calc_scope_ctor (quote RDI))
+          (calc_scope_ctor (quote RSI)))
+        Nil
+        Nil
+        Nil)
+      (TgScopeZone
+        (quote operation)
+        (list (calc_scope_ctor (quote XAdd)) (calc_scope_ctor (quote XSub)))
+        Nil
+        Nil
+        Nil)
+      (TgScopeZone
+        (quote source)
+        (list (calc_scope_ctor (quote SReg)))
+        Nil
+        Nil
+        (list (calc_scope_route (quote SReg) 0 (quote register)))))))
+
+;; mlx86's fast_rand_seeded, transcribed literally.  The historical seeds here
+;; are small enough that the C signed-int multiplication never overflowed.
+(fn mlx86_rand ((seed Int)) Int
+  (mod (ediv (+ (* 214013 seed) 2531011) 65536) 32768))
+
+(fn mlx86_a ((i Int)) Int (mod (mlx86_rand (+ i 100)) 100))
+
+(fn mlx86_b ((i Int)) Int (mod (mlx86_rand (+ i 300)) 100))
+
+(fn search_run ((body (List XInstr)) (a Int) (b Int)) (Option Int)
+  ((:: x86 xcall_fn)
+   ((:: x86 xfnat) 20)
+   ((:: x86 MkXModule) (list ((:: x86 MkXFunc) 2 body)) 0 0)
+   0
+   (list a b)))
+
+(fn search_observe_go ((body (List XInstr)) (i Int) (n Nat)) (List (Option Int))
+  (measure (struct n))
+  (match n
+    (Z Nil)
+    ((S n2)
+     (Cons
+       (search_run body (mlx86_a i) (mlx86_b i))
+       (search_observe_go body (+ i 1) n2)))))
+
+(fn search_observe ((body (List XInstr))) (List (Option Int))
+  (search_observe_go body 0 ((:: x86 xfnat) 40)))
+
+(fn search_target_go ((i Int) (n Nat)) (List (Option Int))
+  (measure (struct n))
+  (match n
+    (Z Nil)
+    ((S n2)
+     (Cons (Some (+ (mlx86_a i) (mlx86_b i))) (search_target_go (+ i 1) n2)))))
+
+(fn search_probe ((body (List XInstr))) (Option (List (Option Int)))
+  (Some (search_observe body)))
+
+(fn search_target () (List (Option Int))
+  (search_target_go 0 ((:: x86 xfnat) 40)))
+
+(fn search_witness () (List XInstr)
+  (list (XMovRR RAX RDI) (XBin XAdd RAX (SReg RSI))))

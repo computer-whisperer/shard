@@ -1,0 +1,289 @@
+;;; Theorem-pressure stress run for pure Shard function synthesis.
+;;;
+;;; The grammar is the playground's FULL insertion-sort grammar.  The four
+;;; append requirements are loaded from the object's checked closure and used
+;;; as formation constraints; no append-specific filter is encoded in the task
+;;; builder.  Depths 2 and 3 reproduce the playground's published
+;;; append-canonical spaces while retaining the raw-space count.
+;;;
+;;; RUN: bin/shard_eval run tools/search/pure_deep.shard
+;;;      bin/shard_eval run tools/search/pure_deep.shard 3
+;;;      bin/shard_eval run tools/search/pure_deep.shard context 2
+;;;      bin/shard_eval run tools/search/pure_deep.shard order 2
+;;;      bin/shard_eval run tools/search/pure_deep.shard nonlinear 2
+;;;      bin/shard_eval run tools/search/pure_deep.shard probe 3 5000
+;;;      bin/shard_eval run tools/search/pure_deep.shard context-probe 3 5000
+;;;      bin/shard_eval run tools/search/pure_deep.shard order-probe 3 5000
+;;;      bin/shard_eval run tools/search/pure_deep.shard nonlinear-probe 3 5000
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/invoke")
+(import "../../meta/rewrite")
+(import "../../meta/search")
+(import "checked_profile.shard")
+(import "pure_program.shard")
+(import "pure_tasks.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader *))
+(use (:: meta invoke *))
+(use (:: meta rewrite *))
+(use (:: meta search *))
+(use (:: tools search checked_profile *))
+(use (:: tools search pure_program *))
+(use (:: tools search pure_tasks *))
+
+(fn pd_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "PURE-DEEP FAIL " (append_int msg "\n")) w)))
+
+(fn pd_profile_names ((ordered Bool) (nonlinear Bool)) (List Symbol)
+  (if nonlinear
+    (list
+      (quote append_nil_left)
+      (quote append_cons)
+      (quote append_assoc)
+      (quote append_nil_right)
+      (quote if_le_lt_swap)
+      (quote lt_refl_false)
+      (quote int_eq_refl))
+  (if ordered
+    (list
+      (quote append_nil_left)
+      (quote append_cons)
+      (quote append_assoc)
+      (quote append_nil_right)
+      (quote if_le_lt_swap))
+    (list
+      (quote append_nil_left)
+      (quote append_cons)
+      (quote append_assoc)
+      (quote append_nil_right)))))
+
+(fn pd_run
+  ((m Module)
+   (appendq QName)
+   (profile TrsProfile)
+   (formation TrsFormation)
+   (plan MsPlan)
+   (depth Int)
+   (expected_total Int)
+   (context_total Int)
+   (context_found Int)
+   (contextual Bool)
+   (expected_constrained Int)
+   (drive_fuel Int)
+   (w World))
+  World
+  (match (ps_normalize_witness (pt_sort_theorem_task depth appendq) profile)
+    ((PsTaskErr msg) (pd_fail msg w))
+    ((PsTaskOk task)
+     (match (ps_apply_formation task formation expected_total)
+       ((PsFormationErr msg) (pd_fail msg w))
+       ((PsFormationEmpty) (pd_fail "formation removed the whole task" w))
+       ((PsFormationOk filtered raw)
+        (if contextual
+          (match (ps_apply_match_context filtered context_total context_found)
+            ((PsFormationErr msg) (pd_fail msg w))
+            ((PsFormationEmpty)
+             (pd_fail "context formation removed the task" w))
+            ((PsFormationOk contextual_task _)
+             (match
+               (if (le drive_fuel 0)
+                 (ps_run_plan_stats
+                   m contextual_task plan expected_constrained raw
+                   (ms_rule_count (trs_profile_rules profile)))
+                 (ps_run_plan_stats_fuel m contextual_task plan 0 raw
+                   (ms_rule_count (trs_profile_rules profile)) drive_fuel))
+               ((PsRunErr msg) (pd_fail msg w))
+               ((PsRunBudget report) (write report w))
+               ((PsRunOk report) (write report w)))))
+          (match
+            (if (le drive_fuel 0)
+              (ps_run_plan_stats
+                m filtered plan expected_constrained raw
+                (ms_rule_count (trs_profile_rules profile)))
+            (ps_run_plan_stats_fuel m filtered plan 0 raw
+              (ms_rule_count (trs_profile_rules profile)) drive_fuel))
+            ((PsRunErr msg) (pd_fail msg w))
+            ((PsRunBudget report) (write report w))
+            ((PsRunOk report) (write report w)))))))))
+
+(fn pd_runs
+  ((m Module)
+   (appendq QName)
+   (profile TrsProfile)
+   (formation TrsFormation)
+   (plan MsPlan)
+   (depth Int)
+   (contextual Bool)
+   (ordered Bool)
+   (nonlinear Bool)
+   (drive_fuel Int)
+   (w World))
+  World
+  (if (int_eq depth 2)
+    (pd_run
+      m
+      appendq
+      profile
+      formation
+      plan
+      2
+      (if ordered 2979920000 4469880000)
+      (if ordered 1229681376 1844522064)
+      (if ordered 4 8)
+      contextual
+      (if nonlinear 87834384 0)
+      drive_fuel
+      w)
+    (pd_run
+      m
+      appendq
+      profile
+      formation
+      plan
+      3
+      (if ordered 69518261654016128 104277392481024192)
+      (if ordered 27059730155621856 40589595233432784)
+      (if ordered 6 12)
+      contextual
+      (if nonlinear -1 0)
+      drive_fuel
+      w)))
+
+(fn pd_with_profile
+  ((m Module)
+   (appendq QName)
+   (depth Int)
+   (contextual Bool)
+   (ordered Bool)
+   (nonlinear Bool)
+   (drive_fuel Int)
+   (w World))
+  World
+  (match
+    (tg_load_checked_profile
+      "tools/search/tasks/pure_program_obj.shard"
+      (pd_profile_names ordered nonlinear)
+      w)
+    ((Pair result w2)
+     (match result
+       ((TgCheckedProfileErr msg) (pd_fail msg w2))
+       ((TgCheckedProfileOk profile)
+        (match (trs_partition_formation profile)
+          ((TrsProfileFormationErr msg) (pd_fail msg w2))
+          ((TrsProfileFormationOk projected)
+           (match
+             (ms_plan (trs_profile_residual projected) (trs_empty_root_profile))
+             ((MsPlanErr msg) (pd_fail msg w2))
+             ((MsPlanOk plan)
+              (pd_runs
+                m
+                appendq
+                profile
+                (trs_profile_formation projected)
+                plan
+                depth
+                contextual
+                ordered
+                nonlinear
+                drive_fuel
+                w2))))))))))
+
+(fn pd_parse_nat_go ((cs (List Int)) (acc Int)) (Option Int)
+  (measure (struct cs))
+  (match cs
+    (Nil (Some acc))
+    ((Cons c rest)
+     (if (le 48 c)
+       (if (le c 57) (pd_parse_nat_go rest (+ (* acc 10) (- c 48))) None)
+       None))))
+
+(fn pd_parse_nat ((cs (List Int))) (Option Int)
+  (match cs
+    (Nil None)
+    ((Cons _ _) (pd_parse_nat_go cs 0))))
+
+(fn pd_depth_ok ((depth Int)) Bool (if (int_eq depth 2) True (int_eq depth 3)))
+
+(fn pd_usage ((w World)) World
+  (exit
+    2
+    (write
+      "usage: pure_deep [2|3 | context (2|3) | order (2|3) | nonlinear (2|3) | probe (2|3) POSITIVE-JOB-BUDGET | context-probe (2|3) POSITIVE-JOB-BUDGET | order-probe (2|3) POSITIVE-JOB-BUDGET | nonlinear-probe (2|3) POSITIVE-JOB-BUDGET]\n"
+      w)))
+
+(fn pd_args ((as (List (List Int))) (m Module) (appendq QName) (w World)) World
+  (match as
+    (Nil (pd_with_profile m appendq 2 False False False 0 w))
+    ((Cons ds Nil)
+     (match (pd_parse_nat ds)
+       (None (pd_usage w))
+       ((Some depth)
+        (if (pd_depth_ok depth)
+          (pd_with_profile m appendq depth False False False 0 w)
+          (pd_usage w)))))
+    ((Cons mode (Cons ds Nil))
+     (if
+       (if (int_list_eq mode "context") True
+       (if (int_list_eq mode "order") True
+       (int_list_eq mode "nonlinear")))
+       (match (pd_parse_nat ds)
+         (None (pd_usage w))
+         ((Some depth)
+          (if (pd_depth_ok depth)
+            (pd_with_profile
+              m
+              appendq
+              depth
+              True
+              (if (int_list_eq mode "context") False True)
+              (int_list_eq mode "nonlinear")
+              0
+              w)
+            (pd_usage w))))
+       (pd_usage w)))
+    ((Cons mode (Cons ds (Cons fs Nil)))
+     (if
+       (if (int_list_eq mode "probe") True
+       (if (int_list_eq mode "context-probe") True
+       (if (int_list_eq mode "order-probe") True
+       (int_list_eq mode "nonlinear-probe"))))
+       (match (pd_parse_nat ds)
+         (None (pd_usage w))
+         ((Some depth)
+          (match (pd_parse_nat fs)
+            (None (pd_usage w))
+            ((Some fuel)
+             (if (pd_depth_ok depth)
+               (if (lt 0 fuel)
+                 (pd_with_profile
+                   m
+                   appendq
+                   depth
+                   (if (int_list_eq mode "probe") False True)
+                   (if
+                     (if (int_list_eq mode "probe") True
+                     (int_list_eq mode "context-probe"))
+                     False
+                     True)
+                   (int_list_eq mode "nonlinear-probe")
+                   fuel
+                   w)
+                 (pd_usage w))
+               (pd_usage w))))))
+       (pd_usage w)))
+    (_ (pd_usage w))))
+
+(fn main ((w World)) World
+  (match (load_run_module "tools/search/tasks/pure_program_obj.shard" w)
+    ((Pair None w2) (pd_fail "object module load" w2))
+    ((Pair (Some m) w2)
+     (match (find_fn (quote append) m)
+       (None (pd_fail "object module has no append" w2))
+       ((Some (FnDef appendq _ _ _))
+        (match (get_args w2)
+          ((Pair as w3) (pd_args as m appendq w3))))))))

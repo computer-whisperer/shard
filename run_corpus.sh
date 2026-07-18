@@ -290,18 +290,53 @@ TARGETS=(
   std/sha256/impgen_x86_out.shard
   std/sha256/sha256.weld.shard
   examples/sketch_pin.shard
+  meta/sketch/mod.req.shard
+  meta/invoke/prepared.shard
+  meta/census/mod.req.shard
+  meta/rewrite/mod.req.shard
+  meta/search/mod.req.shard
   tools/search/rev_obj.shard
+  tools/search/tasks/pure_program_obj.shard
   tools/search/rev.shard
   tools/search/search.shard
   tools/search/census.shard
   tools/search/catalog.shard
+  tools/search/catalog_pressure.shard
   tools/search/sym.shard
+  tools/search/frontier.shard
   examples/spell_pin.shard
   tools/search/render_gate.shard
   tools/search/gen/rev_synth.shard
   tools/search/gen/cat_bracket.shard
   tools/search/superpose.shard
   tools/search/subsume.shard
+  tools/search/imp_expr.shard
+  tools/search/typed_grammar.shard
+  tools/search/theorem_scope.shard
+  tools/search/profile_census.shard
+  tools/search/rewrite_probe.shard
+  tools/search/constraint_probe.shard
+  tools/search/nonlinear_constraint_probe.shard
+  tools/search/region_probe.shard
+  tools/search/nonlinear_symbolic_probe.shard
+  tools/search/constraint_superpose_probe.shard
+  tools/search/typed_rule_probe.shard
+  tools/search/tasks/imp_add1.shard
+  tools/search/tasks/imp_mix.shard
+  tools/search/tasks/typed_imp_add1.shard
+  tools/search/tasks/typed_imp_mix.shard
+  tools/search/tasks/typed_shard_call.shard
+  tools/search/tasks/typed_wasm_add1.shard
+  tools/search/tasks/typed_x86_calculator.shard
+  tools/search/tasks/typed_x86_calculator4.shard
+  tools/search/tasks/typed_append_value.shard
+  tools/search/tasks/observer_model.shard
+  tools/search/tasks/typed_observer_value.shard
+  tools/search/tasks/typed_observer_conjunctive.shard
+  tools/search/gen/imp_add1_refinement.shard
+  tools/search/gen/imp_mix_refinement.shard
+  tools/search/gen/x86_calculator_refinement.shard
+  tools/search/gen/x86_calculator4_refinement.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -389,6 +424,205 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
+# Typed model-fragment pin: a task supplies only imp signature/grammar data,
+# a combined wf+observation probe, a target vector, and one certified witness.
+# The generic engine builds the grammar, rank/unrank-checks all 52 members,
+# keeps an exact full-vector census, canonically spells the lowest solution,
+# and requires the certified witness to occur in the solution set.  Its G4
+# spec-to-wasm proof is a check target above.
+echo "=== search: typed imp expression pin ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/imp_expr.shard tools/search/tasks/imp_add1.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# General typed-grammar pins: first exercise an ISA-free Let template whose
+# body hole receives a new BVar, then drive the same reflected scope engine
+# over imp expressions and parametric Wasm instruction lists.  typed_expr is
+# an executable pin rather than a checker target because its independent
+# candidate gate imports kernel/types, whose tc_infer/tc_arms mutual-recursion
+# measure gap is a known pre-existing checker failure.  typed_superpose imports
+# the same independent gate and is executable-pinned for the same reason.
+echo "=== search: graduated meta rewrite profile pin ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/rewrite_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+echo "=== search: theorem-scoped canon license pin ==="
+if [ -x bin/shard_eval ]; then
+  # Checked append licenses generate four separable formation clauses. The
+  # generic prefix census audits every depth-2 profile (243 -> 31) and counts
+  # the harder depth-3 prefixes (59295 -> 94), exhaustively auditing the selected
+  # endpoint. The identical generic profile also rewrites symbolic neutrals and
+  # re-enters on nested calls produced by a theorem RHS.
+  bin/shard_eval run tools/search/theorem_scope_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+echo "=== search: theorem-filtered dynamic superposition pin ==="
+if [ -x bin/shard_eval ]; then
+  # Four checked append requirements quotient 210,066,388,900 raw depth-5
+  # expressions to 63 normal forms before narrowing; the audit enumerates only
+  # that filtered rank space and agrees on its unique target.
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_append_value.shard audit
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+echo "=== search: checked observer-root reduction pin ==="
+if [ -x bin/shard_eval ]; then
+  # The checked law equates observations rather than candidate values. It
+  # removes Leaf(Noise 1) only at the candidate root: Wrap(Leaf(Noise 1))
+  # remains in the three-member quotient because congruence was not proved.
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_observer_value.shard audit
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+echo "=== search: residual theorem-constraint pin ==="
+if [ -x bin/shard_eval ]; then
+  # A coupled two-child observer law cannot be weakened into independent
+  # formation exclusions. The graduated constraint layer classifies open,
+  # redex, clean, and root-scoped regions; then both search engines agree that
+  # exactly one two-member subtree of the eight generic ADT candidates is
+  # theorem-redundant. Repeated-variable probes separately pin structural
+  # equality across concrete, partial-grammar, prepared, and symbolic values.
+  bin/shard_eval run tools/search/constraint_probe.shard
+  bin/shard_eval run tools/search/nonlinear_constraint_probe.shard
+  bin/shard_eval run tools/search/region_probe.shard
+  bin/shard_eval run tools/search/nonlinear_symbolic_probe.shard
+  # Contextual sequence pressure keeps its checked traversal, conditional
+  # guard, prepared-cache, and mined-schema contraction boundaries generic.
+  bin/shard_eval run tools/search/spine_probe.shard
+  bin/shard_eval run tools/search/guard_probe.shard
+  bin/shard_eval run tools/search/affine_guard_probe.shard
+  bin/shard_eval run tools/search/int_order_guard_probe.shard
+  bin/shard_eval run tools/search/antiunify_probe.shard
+  # Empirical affine families are inferred from orbit support and each is
+  # replayed independently; a two-support coincidence must fail on the full
+  # transition corpus before it can reach theorem classification.
+  bin/shard_eval run tools/search/transition_affine_probe.shard
+  bin/shard_eval run tools/search/constraint_superpose_probe.shard
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_observer_conjunctive.shard audit
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+echo "=== search: general typed-rule binder pin ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/typed_rule_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+echo "=== search: general typed imp scope pin ==="
+if [ -x bin/shard_eval ]; then
+  # The audit proves the narrowing regions agree with all 114 enumerated
+  # members while keeping enumeration visibly separate from the search path.
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_imp_add1.shard audit
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+echo "=== search: general typed Wasm scope pin ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/typed_expr.shard tools/search/tasks/typed_wasm_add1.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+echo "=== search: native Shard call/if scope pin ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/typed_expr.shard tools/search/tasks/typed_shard_call.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Portability/flex pins: the reflected engine searches the current x86 model
+# over the old mlx86 calculator battery.  The first task retains the checked-in
+# addition-only sample site; the second restores the source's complete
+# add/sub/mul/div switch and uses the generic routed task environment.  Both
+# are searched by demanded-hole superposition against the complete probe.
+echo "=== search: typed x86 calculator pin ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_x86_calculator.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+echo "=== search: typed x86 four-operation calculator pin ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_x86_calculator4.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Checked multi-instruction transition pressure: three observer-spine laws
+# remove 264 of 820 XOR programs, including guarded cancellation under a
+# nonempty prefix.  The task opts into generic theorem-first region partition;
+# audit exhaustively compares the resulting lazy narrowing with enumeration.
+echo "=== search: checked x86 transition-window narrowing ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/x86_transition_window.shard audit
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Pure Shard function-body pins. These retain the playground's full grammars
+# and exact solution floors while SUPERPOSE settles them by demanded holes.
+# The executable imports kernel/types for an independent representative gate,
+# so (like typed_superpose above) it is not a checker target until the known
+# tc_infer/tc_arms mutual-recursion measure gap is closed.
+echo "=== search: pure Shard function-body benchmarks ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/pure_bench.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Checked theorem formation over a supplied pure-Shard grammar.  The bounded
+# depth-3 run pins the 10^17-member quotient and an exact partial census without
+# making the much longer complete interpreter run a routine corpus cost.
+echo "=== search: pure Shard checked-formation depth-3 probe ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/pure_deep.shard probe 3 5000
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Match-arm definitional facts and a checked polymorphic order involution are
+# compiled generically into ordinary exact Grammars.  The first pin audits
+# match context against the old hand-written rev dialect; the next two compose
+# those mechanisms with sort and pin both exact quotients cheaply.
+echo "=== search: generic match-context formation ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/context_formation_probe.shard
+  bin/shard_eval run tools/search/pure_deep.shard context-probe 2 1
+  bin/shard_eval run tools/search/pure_deep.shard order-probe 2 1
+  bin/shard_eval run tools/search/pure_deep.shard nonlinear-probe 2 1
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Canonical rev is the scale pin for quotient-first formation composed with
+# demanded-hole superposition.  Both runs start from the full grammar and
+# derive the append quotient from four checked requirements.  The d4 fork
+# count (639) exactly matches the playground across both the 2.25-trillion
+# append quotient and the 1.14-trillion contextual quotient; this gate guards
+# the categorical decision structure, not host-language throughput.
+echo "=== search: checked append-canonical rev d3-d4 ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/rev_deep.shard 3
+  bin/shard_eval run tools/search/rev_deep.shard 4
+  bin/shard_eval run tools/search/rev_deep.shard context 4
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 # Ground-search pin (docs/SEARCH.md slice 1): the rev accumulator space,
 # rank-addressed by meta/sketch and settled through the real machine
 # (meta/invoke -> evm_call_pure). Counts and solution sets must match the
@@ -420,13 +654,14 @@ fi
 
 # Catalog census pin (docs/SEARCH.md S7-lite, G5): the structural list
 # fragment enumerated at rungs 1-2, post-filtered through cn_e, and
-# battery-bucketed by behavior. GEN/CLEAN/BEHAVIORS + the flagged
-# content-family tallies + rev/id spelling counts are the arc's first
-# spellings-per-behavior numbers against the REAL dialect (rung 1:
-# 20/17/13 — the playground's certified "exactly 13"; rung 2:
-# 3395/2345/1068 — behaviors match the playground's 1068, rev = 2
-# spellings). A canon-rule or grammar change moves these lines and
-# fails the diff — re-pin deliberately, with the change.
+# battery-bucketed by behavior. GEN/CLEAN/BEHAVIORS, SAMPLE-GAUGE
+# (excess spellings / collided buckets / collided members / max bucket),
+# flagged content families, and rev/id spelling counts are pinned against the
+# REAL dialect. Rung 1: 20/17/13, gauge 4/3/7/3 — the playground's certified
+# "exactly 13". Rung 2: 3395/2345/1068, gauge 1277/596/1873/18 — behaviors
+# match the playground's 1068, rev = 2 spellings. A canon-rule, grammar, or
+# sample-pattern change moves these lines and fails the diff; re-pin
+# deliberately with the change.
 echo "=== search: catalog census (G5) ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/catalog.shard
@@ -434,8 +669,23 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
+# Playground-transfer pin: ablate the catalog's mined R1 generation policy,
+# then compare the production, C8-normal, and fully canonical behavior-key
+# sets exactly. Rung 2: 9435/3395/2356/2345 forms; every terminating layer
+# retains the same 1068 sampled behaviors. In particular 2356/1068 reproduces
+# the playground's post-R1 endpoint, including rev/id spellings 2/6, against
+# the newer kernel ledger (whose full-canon rev/id endpoint is 2/4).
+echo "=== search: catalog pressure (playground R1 transfer) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/catalog_pressure.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 # Laws-oracle pin (docs/SEARCH.md S4a+S5, G3): the symbolic evaluator +
-# requirements-as-oracle. SELF: std/list's own rev and len must
+# requirements-as-oracle. The first line pins that the append four came from
+# rev_obj's CHECKED item scope as a generic profile (no NRAppend fallback).
+# SELF: std/list's own rev and len must
 # symbolically PROVE their own interface laws (reduction + congruence +
 # the append canon). G3: over the catalog's cn_e-clean candidates,
 # law verdicts against the ground battery — rung 1: 17 clean, 0 proven,
@@ -466,6 +716,28 @@ fi
 echo "=== search: laws oracle (S4a+S5, G3) ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/laws.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Behavior-collision proof census (the pre-mining queue): every clean
+# catalog member is compared with its bucket's minimum-rank representative.
+# Rung 1 closes all 4 observational edges.  Rung 2 proposes 1,277 edges;
+# structural induction + append normalization proves 1,242, refutes none,
+# and leaves 35 explicit auxiliary-lemma candidates; retained symbolic
+# residuals classify all 35 as append-spine permutations (other/missing 0).
+# Exact alpha-stable grouping then collapses them to five residual signatures
+# with support 7 each; relative-order analysis finds one smaller commutation
+# basis with support 35. `range` materializes that basis as a typed law for a
+# representative and pins the honest next boundary: still Undecided with one
+# permutation basis (derived-relation induction is not yet licensed).
+# This also pins partially-decided strict-subterm provenance: losing it drops
+# hundreds of these proofs while leaving ordinary G3 tests green.
+echo "=== search: behavior-collision proof census ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/laws.shard mine 1
+  bin/shard_eval run tools/search/laws.shard mine 2
+  bin/shard_eval run tools/search/laws.shard range 2 295
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

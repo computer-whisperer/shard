@@ -1,0 +1,1167 @@
+;;; meta/antiunify — least-general generalization of closed algebraic Expr.
+;;;
+;;; Program, proof-frontier, and transition censuses observe concrete terms,
+;;; while useful conjectures normally quantify the roles that vary between
+;;; observations.  This component computes a simultaneous anti-unifier for a
+;;; pair of directed equations.  One mismatch table is shared by both sides,
+;;; so correlations survive across the complete equation:
+;;;
+;;;   f A A = g A       f B B = g B
+;;;              ==>   f $0 $0 = g $0
+;;;
+;;; Inputs are deliberately the closed first-order fragment.  BVar is reserved
+;;; for the resulting metavariables; FVar/Match/Let are refused rather than
+;;; assigned an accidental mining meaning.  Repeated mismatch pairs receive
+;;; the same BVar, which is the ordinary Plotkin anti-unification construction.
+;;;
+;;; `au_guard_sets` is observational metadata, not a theorem.  Given a schema
+;;; and its concrete supporting equations it reports a structural baseline
+;;; plus alternate low-complexity affine domains over Int-valued roles.  A
+;;; consumer must replay every domain over its complete census and may use the
+;;; survivors to propose conditional theorems, but must not install them as
+;;; proof licenses.  `au_distinct_guards` remains as the small compatibility
+;;; API for clients which only need the structural baseline.
+;;;
+;;; The optional `meta/antiunify/typed.shard` companion recovers the type of
+;;; every generalized role from checked concrete equations.  Keeping the
+;;; kernel type synthesizer out of this small interface lets purely syntactic
+;;; census clients retain the lightweight dependency boundary.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../rewrite")
+(use (:: kernel term *))
+(use (:: kernel module Type))
+(use (:: kernel module type_eq))
+(use (:: meta rewrite *))
+
+(type AuEquation (AuEquation Expr Expr))
+
+(type AuSchema (AuSchema AuEquation Int))  ; generalized equation, arity
+
+(type AuTypedSchema (AuTypedSchema AuSchema (List Type)))
+; generalized schema, parameter types in binder-introduction order
+
+(type AuSchemaR (AuSchemaErr (List Int)) (AuSchemaOk AuSchema))
+
+(type AuTypedSchemaR
+  (AuTypedSchemaErr (List Int))
+  (AuTypedSchemaOk AuTypedSchema))
+
+(type AuDistinct (AuDistinct Int Int))
+
+(type AuDistinctR (AuDistinctErr (List Int)) (AuDistinctOk (List AuDistinct)))
+
+;; Empirical guards are finite-census metadata, never proof licenses.  An
+;; affine value stores an ordered linear form and a constant.  Equality uses
+;; it as
+;;
+;;   sum (coefficient * rule-variable) = constant
+;;
+;; and order uses the same payload with `<=`.  Terms are ordered by increasing
+;; variable index.  Equality fixes the first coefficient positive because its
+;; sign dual is equivalent; order retains either sign.  Inference currently
+;; bounds coefficients to {-1,1}; the general representation lets checked-
+;; theorem normalization compare equivalent addition/subtraction spellings.
+(type AuAffine (AuAffine (List (Pair Int Int)) Int))
+
+(type AuGuard
+  (AuGuardDistinct Int Int)
+  (AuGuardAffine AuAffine)
+  (AuGuardAffineLe AuAffine))
+
+(type AuGuardSetsR
+  (AuGuardSetsErr (List Int))
+  (AuGuardSetsOk (List (List AuGuard))))
+
+(type AuMismatch (AuMismatch Expr Expr Int))
+
+(type AuState (AuState Int (List AuMismatch)))
+
+(type AuExprR (AuExprErr (List Int)) (AuExprOk Expr AuState))
+
+(type AuExprsR (AuExprsErr (List Int)) (AuExprsOk (List Expr) AuState))
+
+(fn au_lhs ((eq AuEquation)) Expr
+  (match eq
+    ((AuEquation lhs _) lhs)))
+
+(fn au_rhs ((eq AuEquation)) Expr
+  (match eq
+    ((AuEquation _ rhs) rhs)))
+
+(fn au_schema_equation ((schema AuSchema)) AuEquation
+  (match schema
+    ((AuSchema eq _) eq)))
+
+(fn au_schema_arity ((schema AuSchema)) Int
+  (match schema
+    ((AuSchema _ arity) arity)))
+
+(fn au_typed_schema ((schema AuTypedSchema)) AuSchema
+  (match schema
+    ((AuTypedSchema untyped _) untyped)))
+
+(fn au_typed_types ((schema AuTypedSchema)) (List Type)
+  (match schema
+    ((AuTypedSchema _ types) types)))
+
+(fn au_closed_list ((es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil True)
+    ((Cons e rest) (if (au_closed e) (au_closed_list rest) False))))
+
+(fn au_closed ((e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((FVar _) False)
+    ((BVar _) False)
+    ((Ctor _ args) (au_closed_list args))
+    ((Call _ args) (au_closed_list args))
+    ((If c t f) (if (au_closed c) (if (au_closed t) (au_closed f) False) False))
+    ((Match _ _) False)
+    ((Let _ _) False)
+    ((IntLit _) True)
+    ((SymLit _) True)))
+
+(fn au_same_len ((xs (List Expr)) (ys (List Expr))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil
+      (match ys
+        (Nil True)
+        (_ False)))
+    ((Cons _ rest)
+     (match ys
+       (Nil False)
+       ((Cons _ rest2) (au_same_len rest rest2))))))
+
+(fn au_mismatch_find ((a Expr) (b Expr) (items (List AuMismatch))) (Option Int)
+  (measure (struct items))
+  (match items
+    (Nil None)
+    ((Cons (AuMismatch x y k) rest)
+     (if (expr_eq a x) (if (expr_eq b y) (Some k) (au_mismatch_find a b rest))
+     (au_mismatch_find a b rest)))))
+
+(fn au_mismatch ((a Expr) (b Expr) (st AuState)) AuExprR
+  (match st
+    ((AuState next items)
+     (match (au_mismatch_find a b items)
+       ((Some k) (AuExprOk (BVar k) st))
+       (None
+         (AuExprOk
+           (BVar next)
+           (AuState (+ next 1) (Cons (AuMismatch a b next) items))))))))
+
+(fn au_exprs ((as (List Expr)) (bs (List Expr)) (st AuState)) AuExprsR
+  (measure (struct as))
+  (match as
+    (Nil
+      (match bs
+        (Nil (AuExprsOk Nil st))
+        (_ (AuExprsErr "anti-unification arity mismatch"))))
+    ((Cons a rest)
+     (match bs
+       (Nil (AuExprsErr "anti-unification arity mismatch"))
+       ((Cons b rest2)
+        (match (au_expr a b st)
+          ((AuExprErr msg) (AuExprsErr msg))
+          ((AuExprOk item st2)
+           (match (au_exprs rest rest2 st2)
+             ((AuExprsErr msg) (AuExprsErr msg))
+             ((AuExprsOk items st3) (AuExprsOk (Cons item items) st3))))))))))
+
+(fn au_expr ((a Expr) (b Expr) (st AuState)) AuExprR
+  (measure (struct a))
+  (if (expr_eq a b) (AuExprOk a st)
+  (match a
+    ((Ctor q args)
+     (match b
+       ((Ctor q2 args2)
+        (if (qname_eq q q2)
+          (if (au_same_len args args2)
+            (match (au_exprs args args2 st)
+              ((AuExprsErr msg) (AuExprErr msg))
+              ((AuExprsOk generalized st2) (AuExprOk (Ctor q generalized) st2)))
+            (au_mismatch a b st))
+          (au_mismatch a b st)))
+       (_ (au_mismatch a b st))))
+    ((Call q args)
+     (match b
+       ((Call q2 args2)
+        (if (qname_eq q q2)
+          (if (au_same_len args args2)
+            (match (au_exprs args args2 st)
+              ((AuExprsErr msg) (AuExprErr msg))
+              ((AuExprsOk generalized st2) (AuExprOk (Call q generalized) st2)))
+            (au_mismatch a b st))
+          (au_mismatch a b st)))
+       (_ (au_mismatch a b st))))
+    ((If c t f)
+     (match b
+       ((If c2 t2 f2)
+        (match (au_expr c c2 st)
+          ((AuExprErr msg) (AuExprErr msg))
+          ((AuExprOk cg st2)
+           (match (au_expr t t2 st2)
+             ((AuExprErr msg) (AuExprErr msg))
+             ((AuExprOk tg st3)
+              (match (au_expr f f2 st3)
+                ((AuExprErr msg) (AuExprErr msg))
+                ((AuExprOk fg st4) (AuExprOk (If cg tg fg) st4))))))))
+       (_ (au_mismatch a b st))))
+    (_ (au_mismatch a b st)))))
+
+;; Simultaneous equation LGG: the RHS continues with the LHS mismatch table.
+(fn au_equations ((a AuEquation) (b AuEquation)) AuSchemaR
+  (let ((al (au_lhs a)) (ar (au_rhs a)) (bl (au_lhs b)) (br (au_rhs b)))
+    (if (au_closed al)
+      (if (au_closed ar)
+        (if (au_closed bl)
+          (if (au_closed br)
+            (match (au_expr al bl (AuState 0 Nil))
+              ((AuExprErr msg) (AuSchemaErr msg))
+              ((AuExprOk lhs st)
+               (match (au_expr ar br st)
+                 ((AuExprErr msg) (AuSchemaErr msg))
+                 ((AuExprOk rhs (AuState next _))
+                  (AuSchemaOk (AuSchema (AuEquation lhs rhs) next))))))
+            (AuSchemaErr "anti-unification rhs is not closed algebraic"))
+          (AuSchemaErr "anti-unification lhs is not closed algebraic"))
+        (AuSchemaErr "anti-unification rhs is not closed algebraic"))
+      (AuSchemaErr "anti-unification lhs is not closed algebraic"))))
+
+(fn au_match_equation ((schema AuEquation) (concrete AuEquation))
+  (Option TrsEnv)
+  (match (trs_match (au_lhs schema) (au_lhs concrete) (TrsEmpty))
+    (None None)
+    ((Some env) (trs_match (au_rhs schema) (au_rhs concrete) env))))
+
+(fn au_envs ((schema AuEquation) (concretes (List AuEquation)))
+  (Option (List TrsEnv))
+  (measure (struct concretes))
+  (match concretes
+    (Nil (Some Nil))
+    ((Cons concrete rest)
+     (match (au_match_equation schema concrete)
+       (None None)
+       ((Some env)
+        (match (au_envs schema rest)
+          (None None)
+          ((Some envs) (Some (Cons env envs)))))))))
+
+(fn au_pair_distinct_all ((a Int) (b Int) (envs (List TrsEnv))) Bool
+  (measure (struct envs))
+  (match envs
+    (Nil True)
+    ((Cons env rest)
+     (match (trs_env_get a env)
+       (None False)
+       ((Some av)
+        (match (trs_env_get b env)
+          (None False)
+          ((Some bv) (if (expr_eq av bv) False (au_pair_distinct_all a b rest)))))))))
+
+(fn au_distinct_row ((a Int) (b Int) (remaining Int) (envs (List TrsEnv)))
+  (List AuDistinct)
+  (measure remaining (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le remaining 0) Nil
+  (let ((rest (au_distinct_row a (+ b 1) (- remaining 1) envs)))
+    (if (au_pair_distinct_all a b envs) (Cons (AuDistinct a b) rest) rest))))
+
+(fn au_distinct_pairs ((a Int) (remaining Int) (envs (List TrsEnv)))
+  (List AuDistinct)
+  (measure remaining (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le remaining 0) Nil
+  (au_distinct_append
+    (au_distinct_row a (+ a 1) remaining envs)
+    (au_distinct_pairs (+ a 1) (- remaining 1) envs))))
+
+(fn au_distinct_append ((xs (List AuDistinct)) (ys (List AuDistinct)))
+  (List AuDistinct)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons x rest) (Cons x (au_distinct_append rest ys)))))
+
+(fn au_distinct_guards ((schema AuSchema) (concretes (List AuEquation)))
+  AuDistinctR
+  (match schema
+    ((AuSchema eq arity)
+     (match concretes
+       (Nil (AuDistinctErr "distinct-guard inference needs support"))
+       ((Cons _ _)
+        (match (au_envs eq concretes)
+          (None (AuDistinctErr "schema does not cover every support"))
+          ((Some envs) (AuDistinctOk (au_distinct_pairs 0 (- arity 1) envs)))))))))
+
+;; ---- bounded empirical affine guards -------------------------------------
+
+(fn au_env_var_int ((index Int) (env TrsEnv)) (Option Int)
+  (match (trs_env_get index env)
+    ((Some (IntLit value)) (Some value))
+    (_ None)))
+
+(fn au_env_var_int_all ((index Int) (envs (List TrsEnv))) Bool
+  (measure (struct envs))
+  (match envs
+    (Nil True)
+    ((Cons env rest)
+     (match (au_env_var_int index env)
+       (None False)
+       ((Some _) (au_env_var_int_all index rest))))))
+
+(fn au_int_indices
+  ((index Int) (remaining Int) (envs (List TrsEnv))) (List Int)
+  (measure remaining (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le remaining 0) Nil
+  (let ((rest (au_int_indices (+ index 1) (- remaining 1) envs)))
+    (if (au_env_var_int_all index envs) (Cons index rest) rest))))
+
+(fn au_int_bounds_rest
+  ((index Int) (envs (List TrsEnv)) (lower Int) (upper Int))
+  (Option (Pair Int Int))
+  (measure (struct envs))
+  (match envs
+    (Nil (Some (Pair lower upper)))
+    ((Cons env rest)
+     (match (au_env_var_int index env)
+       (None None)
+       ((Some value)
+        (au_int_bounds_rest
+          index
+          rest
+          (if (lt value lower) value lower)
+          (if (lt upper value) value upper)))))))
+
+(fn au_int_bounds ((index Int) (envs (List TrsEnv)))
+  (Option (Pair Int Int))
+  (match envs
+    (Nil None)
+    ((Cons env rest)
+     (match (au_env_var_int index env)
+       (None None)
+       ((Some value) (au_int_bounds_rest index rest value value))))))
+
+;; A finite support set has a principled interval abstraction independent of
+;; any ISA: each Int role contributes its tight observed lower and upper bound.
+;; The lower bound is stored as `-x <= -lower`, so checked `0 <= x` premises
+;; use ordinary affine-order entailment rather than a bespoke nonnegative tag.
+(fn au_interval_guards ((indices (List Int)) (envs (List TrsEnv)))
+  (List AuGuard)
+  (measure (struct indices))
+  (match indices
+    (Nil Nil)
+    ((Cons index rest)
+     (match (au_int_bounds index envs)
+       (None (au_interval_guards rest envs))
+       ((Some (Pair lower upper))
+        (Cons
+          (AuGuardAffineLe
+            (AuAffine (Cons (Pair index (- 0 1)) Nil) (- 0 lower)))
+          (Cons
+            (AuGuardAffineLe
+              (AuAffine (Cons (Pair index 1) Nil) upper))
+            (au_interval_guards rest envs))))))))
+
+(fn au_affine_value_go
+  ((terms (List (Pair Int Int))) (env TrsEnv) (acc Int)) (Option Int)
+  (measure (struct terms))
+  (match terms
+    (Nil (Some acc))
+    ((Cons (Pair index coefficient) rest)
+     (match (au_env_var_int index env)
+       (None None)
+       ((Some value)
+        (au_affine_value_go
+          rest env (+ acc (* coefficient value))))))))
+
+(fn au_affine_value ((terms (List (Pair Int Int))) (env TrsEnv)) (Option Int)
+  (au_affine_value_go terms env 0))
+
+(fn au_affine_rest_equal
+  ((terms (List (Pair Int Int))) (constant Int) (envs (List TrsEnv))) Bool
+  (measure (struct envs))
+  (match envs
+    (Nil True)
+    ((Cons env rest)
+     (match (au_affine_value terms env)
+       (None False)
+       ((Some value)
+        (if (int_eq value constant)
+          (au_affine_rest_equal terms constant rest)
+          False))))))
+
+(fn au_affine_from_terms
+  ((terms (List (Pair Int Int))) (envs (List TrsEnv))) (Option AuGuard)
+  (match envs
+    (Nil None)
+    ((Cons first rest)
+     (match (au_affine_value terms first)
+       (None None)
+       ((Some constant)
+        (if (au_affine_rest_equal terms constant rest)
+          (Some (AuGuardAffine (AuAffine terms constant)))
+          None))))))
+
+(fn au_guard_append ((left (List AuGuard)) (right (List AuGuard)))
+  (List AuGuard)
+  (measure (struct left))
+  (match left
+    (Nil right)
+    ((Cons guard rest) (Cons guard (au_guard_append rest right)))))
+
+(fn au_term_snoc
+  ((terms (List (Pair Int Int))) (term (Pair Int Int)))
+  (List (Pair Int Int))
+  (measure (struct terms))
+  (match terms
+    (Nil (Cons term Nil))
+    ((Cons head rest) (Cons head (au_term_snoc rest term)))))
+
+;; Enumerate normalized unit-coefficient relations over the Int-valued schema
+;; variables.  The first selected coefficient is fixed positive to remove the
+;; sign-dual duplicate.  `max_terms` is a structural complexity bound, not an
+;; ISA property; callers choose how much relational vocabulary to pre-mine.
+(fn au_affine_choices
+  ((indices (List Int))
+   (max_terms Int)
+   (seen Bool)
+   (terms (List (Pair Int Int)))
+   (envs (List TrsEnv)))
+  (List AuGuard)
+  (measure (struct indices))
+  (match indices
+    (Nil
+      (if seen
+        (match (au_affine_from_terms terms envs)
+          (None Nil)
+          ((Some guard) (Cons guard Nil)))
+        Nil))
+    ((Cons index rest)
+     (let
+       ((skipped (au_affine_choices rest max_terms seen terms envs)))
+       (if (le max_terms 0) skipped
+       (let
+         ((positive
+            (au_affine_choices
+              rest
+              (- max_terms 1)
+              True
+              (au_term_snoc terms (Pair index 1))
+              envs)))
+         (if seen
+           (au_guard_append
+             positive
+             (au_guard_append
+               (au_affine_choices
+                 rest
+                 (- max_terms 1)
+                 True
+                 (au_term_snoc terms (Pair index (- 0 1)))
+                 envs)
+               skipped))
+           (au_guard_append positive skipped))))))))
+
+(fn au_wrap_distinct ((guards (List AuDistinct))) (List AuGuard)
+  (measure (struct guards))
+  (match guards
+    (Nil Nil)
+    ((Cons (AuDistinct left right) rest)
+     (Cons (AuGuardDistinct left right) (au_wrap_distinct rest)))))
+
+(fn au_guard_sets_affine
+  ((baseline (List AuGuard)) (affine (List AuGuard)))
+  (List (List AuGuard))
+  (measure (struct affine))
+  (match affine
+    (Nil Nil)
+    ((Cons guard rest)
+     (Cons
+       (Cons guard baseline)
+       (au_guard_sets_affine baseline rest)))))
+
+;; The baseline structural family remains first and, when numeric inference is
+;; enabled, carries the interval hull of every Int role.  Every inferred
+;; affine equality then forms a separate alternative family atop that
+;; baseline; the consumer must replay each family over its complete census
+;; before retaining it.  This avoids treating unrelated multi-role
+;; coincidences as one giant conjunction while still preserving the ordinary
+;; scope bounds needed by checked domain premises.
+(fn au_guard_sets
+  ((max_terms Int) (schema AuSchema) (concretes (List AuEquation)))
+  AuGuardSetsR
+  (match schema
+    ((AuSchema eq arity)
+     (match concretes
+       (Nil (AuGuardSetsErr "guard inference needs support"))
+       ((Cons _ _)
+        (match (au_envs eq concretes)
+          (None (AuGuardSetsErr "schema does not cover every support"))
+          ((Some envs)
+           (let
+             ((indices (au_int_indices 0 arity envs))
+              (structural
+                (au_wrap_distinct
+                  (au_distinct_pairs 0 (- arity 1) envs))))
+             (let
+               ((baseline
+                  (if (lt 0 max_terms)
+                    (au_guard_append
+                      structural (au_interval_guards indices envs))
+                    structural))
+                (affine
+                  (au_affine_choices
+                    indices
+                    max_terms
+                    False
+                    Nil
+                    envs)))
+               (AuGuardSetsOk
+                 (Cons baseline (au_guard_sets_affine baseline affine))))))))))))
+
+(fn au_affine_terms_eq
+  ((left (List (Pair Int Int))) (right (List (Pair Int Int)))) Bool
+  (measure (struct left))
+  (match left
+    (Nil
+      (match right
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons (Pair left_index left_coefficient) rest)
+     (match right
+       (Nil False)
+       ((Cons (Pair right_index right_coefficient) more)
+        (if (int_eq left_index right_index)
+          (if (int_eq left_coefficient right_coefficient)
+            (au_affine_terms_eq rest more)
+            False)
+          False))))))
+
+(fn au_affine_eq ((left AuAffine) (right AuAffine)) Bool
+  (match left
+    ((AuAffine left_terms left_constant)
+     (match right
+       ((AuAffine right_terms right_constant)
+        (if (int_eq left_constant right_constant)
+          (au_affine_terms_eq left_terms right_terms)
+          False))))))
+
+(fn au_guard_eq ((left AuGuard) (right AuGuard)) Bool
+  (match left
+    ((AuGuardDistinct left_a left_b)
+     (match right
+       ((AuGuardDistinct right_a right_b)
+        (if (int_eq left_a right_a) (int_eq left_b right_b) False))
+       (_ False)))
+    ((AuGuardAffine left_affine)
+     (match right
+       ((AuGuardAffine right_affine) (au_affine_eq left_affine right_affine))
+       (_ False)))
+    ((AuGuardAffineLe left_affine)
+     (match right
+       ((AuGuardAffineLe right_affine) (au_affine_eq left_affine right_affine))
+       (_ False)))))
+
+(fn au_guard_list_eq ((left (List AuGuard)) (right (List AuGuard))) Bool
+  (measure (struct left))
+  (match left
+    (Nil
+      (match right
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons guard rest)
+     (match right
+       (Nil False)
+       ((Cons guard2 more)
+        (if (au_guard_eq guard guard2)
+          (au_guard_list_eq rest more)
+          False))))))
+
+(fn au_guard_holds ((env TrsEnv) (guard AuGuard)) Bool
+  (match guard
+    ((AuGuardDistinct left right)
+     (match (trs_env_get left env)
+       (None False)
+       ((Some left_value)
+        (match (trs_env_get right env)
+          (None False)
+          ((Some right_value) (if (expr_eq left_value right_value) False True))))))
+    ((AuGuardAffine (AuAffine terms constant))
+     (match (au_affine_value terms env)
+       (None False)
+       ((Some value) (int_eq value constant))))
+    ((AuGuardAffineLe (AuAffine terms constant))
+     (match (au_affine_value terms env)
+       (None False)
+       ((Some value) (le value constant))))))
+
+(fn au_guards_hold ((env TrsEnv) (guards (List AuGuard))) Bool
+  (measure (struct guards))
+  (match guards
+    (Nil True)
+    ((Cons guard rest)
+     (if (au_guard_holds env guard) (au_guards_hold env rest) False))))
+
+;; ---- authenticated-rule coverage ------------------------------------------
+;;
+;; A mined schema and a checked theorem need not introduce their binders in
+;; the same order.  Match the schema against the theorem equation, require a
+;; type-preserving bijection between their BVars, and then ensure that every
+;; theorem guard is entailed by the proposal's empirical guard domain.  The
+;; caller remains responsible for supplying only authenticated rules and for
+;; respecting their root/spine/everywhere application domain.
+
+(fn au_type_at ((types (List Type)) (index Int)) (Option Type)
+  (measure (struct types))
+  (match types
+    (Nil None)
+    ((Cons ty rest)
+     (if (int_eq index 0) (Some ty) (au_type_at rest (- index 1))))))
+
+(fn au_bvar_type ((types (List Type)) (index Int)) (Option Type)
+  (au_type_at types (- (- (trs_len_types types) 1) index)))
+
+(fn au_index_pair_eq ((a Int) (b Int) (x Int) (y Int)) Bool
+  (if (int_eq a x) (int_eq b y) (if (int_eq a y) (int_eq b x) False)))
+
+(fn au_distinct_mem ((left Int) (right Int) (guards (List AuGuard))) Bool
+  (measure (struct guards))
+  (match guards
+    (Nil False)
+    ((Cons (AuGuardDistinct a b) rest)
+     (if (au_index_pair_eq left right a b) True
+     (au_distinct_mem left right rest)))
+    ((Cons (AuGuardAffine _) rest) (au_distinct_mem left right rest))
+    ((Cons (AuGuardAffineLe _) rest) (au_distinct_mem left right rest))))
+
+(fn au_rule_var_sources_schema
+  ((schema_types (List Type))
+   (rule_types (List Type))
+   (env TrsEnv)
+   (schema_index Int)
+   (rule_index Int)
+   (remaining Int))
+  Bool
+  (measure
+    remaining
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (le remaining 0) False
+  (match (trs_env_get rule_index env)
+    ((Some (BVar target))
+     (if (int_eq target schema_index)
+       (match (au_bvar_type schema_types schema_index)
+         (None False)
+         ((Some schema_type)
+          (match (au_bvar_type rule_types rule_index)
+            (None False)
+            ((Some rule_type) (type_eq schema_type rule_type)))))
+       (au_rule_var_sources_schema
+         schema_types
+         rule_types
+         env
+         schema_index
+         (+ rule_index 1)
+         (- remaining 1))))
+    (_
+      (au_rule_var_sources_schema
+        schema_types
+        rule_types
+        env
+        schema_index
+        (+ rule_index 1)
+        (- remaining 1))))))
+
+(fn au_schema_vars_covered
+  ((schema_types (List Type))
+   (rule_types (List Type))
+   (env TrsEnv)
+   (schema_index Int)
+   (remaining Int))
+  Bool
+  (measure remaining (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le remaining 0) True
+  (if
+    (au_rule_var_sources_schema
+      schema_types
+      rule_types
+      env
+      schema_index
+      0
+      (trs_len_types rule_types))
+    (au_schema_vars_covered
+      schema_types
+      rule_types
+      env
+      (+ schema_index 1)
+      (- remaining 1))
+    False)))
+
+;; A contextual theorem can expose only a local equation while retaining the
+;; complete parameter telescope authenticated by its enclosing context.  Such
+;; a fragment legitimately has declared schema binders which do not occur in
+;; either side of the local equation.  Coverage still has to account for every
+;; binder that the fragment does mention; only the absent telescope entries
+;; may be skipped.  The occurrence walk mirrors `trs_match`'s algebraic rewrite
+;; fragment; Match/Let never reach a successful coverage match.
+(fn au_fragment_bvar_occurs_list ((needle Int) (es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil False)
+    ((Cons e rest)
+     (if (au_fragment_bvar_occurs needle e) True
+     (au_fragment_bvar_occurs_list needle rest)))))
+
+(fn au_fragment_bvar_occurs ((needle Int) (e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((BVar index) (int_eq needle index))
+    ((Ctor _ args) (au_fragment_bvar_occurs_list needle args))
+    ((Call _ args) (au_fragment_bvar_occurs_list needle args))
+    ((If c t f)
+     (if (au_fragment_bvar_occurs needle c) True
+     (if (au_fragment_bvar_occurs needle t) True
+     (au_fragment_bvar_occurs needle f))))
+    (_ False)))
+
+(fn au_fragment_var_occurs ((schema AuEquation) (schema_index Int)) Bool
+  (if (au_fragment_bvar_occurs schema_index (au_lhs schema)) True
+  (au_fragment_bvar_occurs schema_index (au_rhs schema))))
+
+(fn au_schema_fragment_vars_covered
+  ((schema AuEquation)
+   (schema_types (List Type))
+   (rule_types (List Type))
+   (env TrsEnv)
+   (schema_index Int)
+   (remaining Int))
+  Bool
+  (measure
+    remaining
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (le remaining 0) True
+  (if (au_fragment_var_occurs schema schema_index)
+    (if
+      (au_rule_var_sources_schema
+        schema_types
+        rule_types
+        env
+        schema_index
+        0
+        (trs_len_types rule_types))
+      (au_schema_fragment_vars_covered
+        schema
+        schema_types
+        rule_types
+        env
+        (+ schema_index 1)
+        (- remaining 1))
+      False)
+    (au_schema_fragment_vars_covered
+      schema
+      schema_types
+      rule_types
+      env
+      (+ schema_index 1)
+      (- remaining 1)))))
+
+(fn au_rule_bindings_typed
+  ((schema_types (List Type))
+   (rule_types (List Type))
+   (env TrsEnv)
+   (rule_index Int)
+   (remaining Int))
+  Bool
+  (measure
+    remaining
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (le remaining 0) True
+  (match (trs_env_get rule_index env)
+    ((Some (BVar schema_index))
+     (match (au_bvar_type schema_types schema_index)
+       (None False)
+       ((Some schema_type)
+        (match (au_bvar_type rule_types rule_index)
+          (None False)
+          ((Some rule_type)
+           (if (type_eq schema_type rule_type)
+             (au_rule_bindings_typed
+               schema_types
+               rule_types
+               env
+               (+ rule_index 1)
+               (- remaining 1))
+             False))))))
+    (_
+      (au_rule_bindings_typed
+        schema_types
+        rule_types
+        env
+        (+ rule_index 1)
+        (- remaining 1))))))
+
+(fn au_rule_guard_covered
+  ((env TrsEnv) (proposal_guards (List AuGuard)) (left Int) (right Int))
+  Bool
+  (match (trs_env_get left env)
+    (None False)
+    ((Some left_value)
+     (match (trs_env_get right env)
+       (None False)
+       ((Some right_value)
+        (match left_value
+          ((BVar a)
+           (match right_value
+             ((BVar b) (au_distinct_mem a b proposal_guards))
+             (_ False)))
+          (_
+            (match right_value
+              ((BVar _) False)
+              (_
+                ;; Unequal ground syntax proves structural distinctness.
+                ;; Compounds containing proposal BVars may become equal under
+                ;; a later schema substitution and therefore need a stronger
+                ;; relational guard language before they can be accepted.
+                (if (au_closed left_value)
+                  (if (au_closed right_value)
+                    (if (expr_eq left_value right_value) False True)
+                    False)
+                  False))))))))))
+
+(type AuPoly (AuPoly (List (Pair Int Int)) Int))
+
+(fn au_coeff_add
+  ((index Int) (coefficient Int) (terms (List (Pair Int Int))))
+  (List (Pair Int Int))
+  (measure (struct terms))
+  (if (int_eq coefficient 0) terms
+  (match terms
+    (Nil (Cons (Pair index coefficient) Nil))
+    ((Cons (Pair prior prior_coefficient) rest)
+     (if (int_eq index prior)
+       (let ((combined (+ coefficient prior_coefficient)))
+         (if (int_eq combined 0) rest
+           (Cons (Pair prior combined) rest)))
+     (if (lt index prior)
+       (Cons (Pair index coefficient) terms)
+       (Cons
+         (Pair prior prior_coefficient)
+         (au_coeff_add index coefficient rest))))))))
+
+(fn au_coeff_merge
+  ((from (List (Pair Int Int))) (into (List (Pair Int Int))))
+  (List (Pair Int Int))
+  (measure (struct from))
+  (match from
+    (Nil into)
+    ((Cons (Pair index coefficient) rest)
+     (au_coeff_merge rest (au_coeff_add index coefficient into)))))
+
+(fn au_coeff_scale
+  ((factor Int) (terms (List (Pair Int Int)))) (List (Pair Int Int))
+  (measure (struct terms))
+  (match terms
+    (Nil Nil)
+    ((Cons (Pair index coefficient) rest)
+     (Cons
+       (Pair index (* factor coefficient))
+       (au_coeff_scale factor rest)))))
+
+(fn au_poly_add ((left AuPoly) (right AuPoly)) AuPoly
+  (match left
+    ((AuPoly left_terms left_constant)
+     (match right
+       ((AuPoly right_terms right_constant)
+        (AuPoly
+          (au_coeff_merge left_terms right_terms)
+          (+ left_constant right_constant)))))))
+
+(fn au_poly_neg ((poly AuPoly)) AuPoly
+  (match poly
+    ((AuPoly terms constant)
+     (AuPoly (au_coeff_scale (- 0 1) terms) (- 0 constant)))))
+
+(fn au_rule_int_poly ((env TrsEnv) (expr TrsIntExpr)) (Option AuPoly)
+  (measure (struct expr))
+  (match expr
+    ((TrsIntLit value) (Some (AuPoly Nil value)))
+    ((TrsIntVar index)
+     (match (trs_env_get index env)
+       ((Some (BVar schema_index))
+        (Some (AuPoly (Cons (Pair schema_index 1) Nil) 0)))
+       ((Some (IntLit value)) (Some (AuPoly Nil value)))
+       (_ None)))
+    ((TrsIntAdd left right)
+     (match (au_rule_int_poly env left)
+       (None None)
+       ((Some left_poly)
+        (match (au_rule_int_poly env right)
+          (None None)
+          ((Some right_poly) (Some (au_poly_add left_poly right_poly)))))))
+    ((TrsIntSub left right)
+     (match (au_rule_int_poly env left)
+       (None None)
+       ((Some left_poly)
+        (match (au_rule_int_poly env right)
+          (None None)
+          ((Some right_poly)
+           (Some (au_poly_add left_poly (au_poly_neg right_poly))))))))))
+
+(fn au_affine_mem ((wanted AuAffine) (guards (List AuGuard))) Bool
+  (measure (struct guards))
+  (match guards
+    (Nil False)
+    ((Cons (AuGuardDistinct _ _) rest) (au_affine_mem wanted rest))
+    ((Cons (AuGuardAffine affine) rest)
+     (if (au_affine_eq wanted affine) True (au_affine_mem wanted rest)))
+    ((Cons (AuGuardAffineLe _) rest) (au_affine_mem wanted rest))))
+
+(fn au_affine_le_by_eq ((wanted AuAffine) (equal AuAffine)) Bool
+  (match wanted
+    ((AuAffine wanted_terms wanted_constant)
+     (match equal
+       ((AuAffine equal_terms equal_constant)
+        (if (au_affine_terms_eq wanted_terms equal_terms)
+          (le equal_constant wanted_constant)
+          (if
+            (au_affine_terms_eq
+              wanted_terms (au_coeff_scale (- 0 1) equal_terms))
+            (le (- 0 equal_constant) wanted_constant)
+            False)))))))
+
+;; A tighter empirical bound entails a weaker checked theorem bound over the
+;; same linear form.  An equality guard also entails either orientation of a
+;; compatible order guard.
+(fn au_affine_le_mem ((wanted AuAffine) (guards (List AuGuard))) Bool
+  (measure (struct guards))
+  (match guards
+    (Nil False)
+    ((Cons (AuGuardDistinct _ _) rest) (au_affine_le_mem wanted rest))
+    ((Cons (AuGuardAffine affine) rest)
+     (if (au_affine_le_by_eq wanted affine) True
+       (au_affine_le_mem wanted rest)))
+    ((Cons (AuGuardAffineLe affine) rest)
+     (match wanted
+       ((AuAffine wanted_terms wanted_constant)
+        (match affine
+          ((AuAffine terms constant)
+           (if (au_affine_terms_eq wanted_terms terms)
+             (if (le constant wanted_constant) True
+               (au_affine_le_mem wanted rest))
+             (au_affine_le_mem wanted rest)))))))))
+
+(fn au_rule_int_guard_covered
+  ((env TrsEnv)
+   (proposal_guards (List AuGuard))
+   (left TrsIntExpr)
+   (right TrsIntExpr))
+  Bool
+  (match (au_rule_int_poly env left)
+    (None False)
+    ((Some left_poly)
+     (match (au_rule_int_poly env right)
+       (None False)
+       ((Some right_poly)
+        (match (au_poly_add left_poly (au_poly_neg right_poly))
+          ((AuPoly terms constant)
+           (match terms
+             (Nil (int_eq constant 0))
+             ((Cons (Pair _ first_coefficient) _)
+              (if (lt first_coefficient 0)
+                (au_affine_mem
+                  (AuAffine
+                    (au_coeff_scale (- 0 1) terms)
+                    constant)
+                  proposal_guards)
+                (au_affine_mem
+                  (AuAffine terms (- 0 constant))
+                  proposal_guards)))))))))))
+
+(fn au_rule_int_le_guard_covered
+  ((env TrsEnv)
+   (proposal_guards (List AuGuard))
+   (left TrsIntExpr)
+   (right TrsIntExpr))
+  Bool
+  (match (au_rule_int_poly env left)
+    (None False)
+    ((Some left_poly)
+     (match (au_rule_int_poly env right)
+       (None False)
+       ((Some right_poly)
+        (match (au_poly_add left_poly (au_poly_neg right_poly))
+          ((AuPoly terms constant)
+           (match terms
+             (Nil (le constant 0))
+             ((Cons _ _)
+              (au_affine_le_mem
+                (AuAffine terms (- 0 constant))
+                proposal_guards))))))))))
+
+(fn au_rule_guards_covered
+  ((env TrsEnv)
+   (proposal_guards (List AuGuard))
+   (rule_guards (List TrsGuard)))
+  Bool
+  (measure (struct rule_guards))
+  (match rule_guards
+    (Nil True)
+    ((Cons (TrsDistinct _ left right) rest)
+     (if (au_rule_guard_covered env proposal_guards left right)
+       (au_rule_guards_covered env proposal_guards rest)
+       False))
+    ((Cons (TrsIntEq left right) rest)
+     (if (au_rule_int_guard_covered env proposal_guards left right)
+       (au_rule_guards_covered env proposal_guards rest)
+       False))
+    ((Cons (TrsIntLe left right) rest)
+     (if (au_rule_int_le_guard_covered env proposal_guards left right)
+       (au_rule_guards_covered env proposal_guards rest)
+       False))))
+
+(fn au_conditioned_rule_covers
+  ((typed AuTypedSchema)
+   (proposal_guards (List AuGuard))
+   (conditioned TrsConditionedRule))
+  Bool
+  (match typed
+    ((AuTypedSchema (AuSchema schema arity) schema_types)
+     (match conditioned
+       ((TrsConditionedRule (TrsRule _ rule_types lhs rhs) rule_guards)
+        (if (int_eq arity (trs_len_types schema_types))
+          (match (au_match_equation (AuEquation lhs rhs) schema)
+            (None False)
+            ((Some env)
+             (if (au_schema_vars_covered schema_types rule_types env 0 arity)
+               (if
+                 (au_rule_bindings_typed
+                   schema_types
+                   rule_types
+                   env
+                   0
+                   (trs_len_types rule_types))
+                 (au_rule_guards_covered env proposal_guards rule_guards)
+                 False)
+               False)))
+          False))))))
+
+;; Context-fragment counterpart to `au_conditioned_rule_covers`.  The strict
+;; API above requires every declared schema binder to participate in the
+;; equation.  This variant ignores declared binders absent from the fragment,
+;; while retaining the same matching, used-binder type checks, and guard
+;; entailment for everything the fragment actually observes.
+(fn au_conditioned_rule_fragment_covers
+  ((typed AuTypedSchema)
+   (proposal_guards (List AuGuard))
+   (conditioned TrsConditionedRule))
+  Bool
+  (match typed
+    ((AuTypedSchema (AuSchema schema arity) schema_types)
+     (match conditioned
+       ((TrsConditionedRule (TrsRule _ rule_types lhs rhs) rule_guards)
+        (if (int_eq arity (trs_len_types schema_types))
+          (match (au_match_equation (AuEquation lhs rhs) schema)
+            (None False)
+            ((Some env)
+             (if
+               (au_schema_fragment_vars_covered
+                 schema
+                 schema_types
+                 rule_types
+                 env
+                 0
+                 arity)
+               (if
+                 (au_rule_bindings_typed
+                   schema_types
+                   rule_types
+                   env
+                   0
+                   (trs_len_types rule_types))
+                 (au_rule_guards_covered env proposal_guards rule_guards)
+                 False)
+               False)))
+          False))))))
+
+;; Domain-aware contextual coverage for an authenticated structural spine.
+;; The local theorem may fire at the root or beneath any number of the checked
+;; constructor's recursive-child edges.  A layer is removable only when both
+;; equation sides carry that constructor and every non-child argument is the
+;; same expression, i.e. when it is exactly the one-hole context licensed by
+;; TrsSpine rather than an assumed congruence principle.
+(fn au_spine_context_args
+  ((child Int) (index Int) (lhs (List Expr)) (rhs (List Expr))) Bool
+  (measure (struct lhs))
+  (match lhs
+    (Nil
+      (match rhs
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons left rest_left)
+     (match rhs
+       (Nil False)
+       ((Cons right rest_right)
+        (if (int_eq index child)
+          (au_spine_context_args child (+ index 1) rest_left rest_right)
+          (if (expr_eq left right)
+            (au_spine_context_args child (+ index 1) rest_left rest_right)
+            False)))))))
+
+(fn au_spine_rule_covers
+  ((fuel Int)
+   (typed AuTypedSchema)
+   (proposal_guards (List AuGuard))
+   (item TrsSpineRule))
+  Bool
+  (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt fuel 1) False
+  (match item
+    ((TrsSpineRule spine conditioned)
+     (if
+       (au_conditioned_rule_fragment_covers
+         typed proposal_guards conditioned)
+       True
+       (match typed
+         ((AuTypedSchema (AuSchema (AuEquation lhs rhs) arity) types)
+          (match spine
+            ((TrsSpine _ ctor child)
+             (match lhs
+               ((Ctor left_ctor left_args)
+                (match rhs
+                  ((Ctor right_ctor right_args)
+                   (if (qname_eq left_ctor ctor)
+                     (if (qname_eq right_ctor ctor)
+                       (if
+                         (au_spine_context_args child 0 left_args right_args)
+                         (match (nth_opt left_args child)
+                           (None False)
+                           ((Some left_child)
+                            (match (nth_opt right_args child)
+                              (None False)
+                              ((Some right_child)
+                               (au_spine_rule_covers
+                                 (- fuel 1)
+                                 (AuTypedSchema
+                                   (AuSchema
+                                     (AuEquation left_child right_child)
+                                     arity)
+                                   types)
+                                 proposal_guards
+                                 item)))))
+                         False)
+                       False)
+                     False))
+                  (_ False)))
+               (_ False)))))))))))

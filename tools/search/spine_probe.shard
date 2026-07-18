@@ -1,0 +1,106 @@
+;;; Regression for meta/rewrite's proof-agnostic structural-context inspector.
+;;; The positive function is append-shaped but constructed directly as a
+;;; checked FnDef value, so the expected locally-nameless binder positions are
+;;; pinned.  The negative twin recurses in two fields and must be refused.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/rewrite")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader World))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta rewrite *))
+
+(fn spp_ty () Type
+  (TCon (qn (quote List)) (Cons (TCon (qn (quote Int)) Nil) Nil)))
+
+(fn spp_body ((context QName) (twice Bool)) Expr
+  (Match
+    (BVar 1)
+    (list
+      (Arm (PCtor (qn (quote Nil)) Nil) (BVar 0))
+      (Arm
+        (PCtor (qn (quote Cons)) (list (PVar) (PVar)))
+        (Ctor
+          (qn (quote Cons))
+          (list
+            (if twice
+              (Call context (list (BVar 1) (BVar 2)))
+              (BVar 1))
+            (Call context (list (BVar 0) (BVar 2)))))))))
+
+(fn spp_module ((context QName) (twice Bool)) Module
+  (let
+    ((fd
+       (FnDef
+         context
+         (list (spp_ty) (spp_ty))
+         (spp_ty)
+         (spp_body context twice))))
+    (Module Nil (list fd) Nil (build_fn_trie (list fd)) Nil)))
+
+(fn spp_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "SPINE-PROBE FAIL " msg) w)))
+
+(fn spp_disc_module ((disc QName) (duplicate Bool)) Module
+  (let
+    ((color (QName (list (quote probe)) (quote Color)))
+     (red (QName (list (quote probe)) (quote Red)))
+     (blue (QName (list (quote probe)) (quote Blue))))
+    (let
+      ((fd
+         (FnDef
+           disc
+           (list (TCon color Nil))
+           (TCon (qn (quote Int)) Nil)
+           (Match
+             (BVar 0)
+             (list
+               (Arm (PCtor red Nil) (IntLit 0))
+               (Arm (PCtor blue Nil) (IntLit (if duplicate 0 1))))))))
+      (Module
+        (list
+          (TypeDef
+            color
+            Nil
+            (list (CtorDef red Nil) (CtorDef blue Nil))
+            None))
+        (list fd)
+        Nil
+        (build_fn_trie (list fd))
+        Nil))))
+
+(fn spp_discriminator ((w World)) World
+  (let ((disc (QName (list (quote probe)) (quote color_code))))
+    (match (trs_inspect_discriminator (spp_disc_module disc False) disc)
+      ((TrsDiscInspectErr msg) (spp_fail msg w))
+      ((TrsDiscInspectOk _)
+       (match (trs_inspect_discriminator (spp_disc_module disc True) disc)
+         ((TrsDiscInspectErr _)
+          (write
+            "SPINE-PROBE FINITE-DISCRIMINATOR INJECTIVE/COVERAGE OK\n"
+            w))
+         ((TrsDiscInspectOk _)
+          (spp_fail "duplicate discriminator code was accepted\n" w)))))))
+
+(fn main ((w World)) World
+  (let ((context (QName (list (quote probe)) (quote plug))))
+    (match (trs_inspect_spine (spp_module context False) context)
+      ((TrsSpineInspectErr msg) (spp_fail msg w))
+      ((TrsSpineInspectOk (TrsSpine got ctor child))
+       (if (qname_eq got context)
+         (if (qname_eq ctor (qn (quote Cons)))
+           (if (int_eq child 1)
+             (match (trs_inspect_spine (spp_module context True) context)
+               ((TrsSpineInspectErr _)
+                (spp_discriminator
+                  (write "SPINE-PROBE DERIVED CONS/1 AND REFUSED MULTI-RECURSION OK\n" w)))
+               ((TrsSpineInspectOk _)
+                (spp_fail "multi-recursive context was accepted\n" w)))
+             (spp_fail "derived the wrong recursive child\n" w))
+           (spp_fail "derived the wrong constructor\n" w))
+         (spp_fail "lost the context QName\n" w))))))

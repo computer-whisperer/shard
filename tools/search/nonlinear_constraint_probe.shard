@@ -1,0 +1,384 @@
+;;; Regression for equality-correlated residual rewrite constraints.
+;;;
+;;; Pair(x,x) is deliberately not a separable formation exclusion.  Its first
+;;; occurrence binds a partial term; the second proves shared syntax equal,
+;;; forks distinct open holes lazily, and distinguishes assigned equal and
+;;; unequal regions.  Prepared and direct checking must agree.  Preparation
+;;; may cache the rule's linear relaxation (repeated variables are independent
+;;; wildcards there), but only exact nonlinear matching may report a redex.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "../../meta/search")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader World))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: meta search *))
+
+(fn ncp_q ((name Symbol)) QName
+  (QName (list (quote tools) (quote search) (quote nonlinear_probe)) name))
+
+(fn ncp_atom ((value Int)) Expr
+  (Ctor (ncp_q (quote Atom)) (Cons (IntLit value) Nil)))
+
+(fn ncp_pair ((left Expr) (right Expr)) Expr
+  (Ctor (ncp_q (quote Pair)) (list left right)))
+
+(fn ncp_triple ((first Expr) (second Expr) (tag Expr)) Expr
+  (Ctor (ncp_q (quote Triple)) (list first second tag)))
+
+(fn ncp_fail ((msg (List Int)) (w World)) World
+  (exit
+    1
+    (write
+      (append_int "META-SEARCH-NONLINEAR-PROBE FAIL " (append_int msg "\n"))
+      w)))
+
+(fn ncp_rule () TrsRuleR
+  (trs_rule
+    (ncp_q (quote pair_refl))
+    (Cons (TCon (qn (quote Int)) Nil) Nil)
+    (ncp_pair (BVar 0) (BVar 0))
+    (BVar 0)))
+
+;; The exact matcher reaches the equality between the first two fields before
+;; the final literal.  Its linear relaxation must see through that relational
+;; block and prove the later 0/1 mismatch without choosing either hole.
+(fn ncp_late_rule () TrsRuleR
+  (trs_rule
+    (ncp_q (quote triple_refl_zero))
+    (Cons (TCon (qn (quote Int)) Nil) Nil)
+    (ncp_triple (BVar 0) (BVar 0) (IntLit 0))
+    (BVar 0)))
+
+(fn ncp_grammar () Grammar
+  (Grammar
+    (list
+      (GEnt 0 (list (ncp_atom 0) (ncp_atom 1) (ncp_atom 2)))
+      (GEnt 1 (list (ncp_atom 0) (ncp_atom 1) (ncp_atom 2)))
+      (GEnt 2 (list (ncp_atom 3) (ncp_atom 4))))))
+
+(fn ncp_equal_asg () (List (Pair Int Int))
+  (list (Pair 0 0) (Pair 1 0)))
+
+(fn ncp_unequal_asg () (List (Pair Int Int))
+  (list (Pair 0 0) (Pair 1 1)))
+
+(fn ncp_late ((grammar Grammar) (w World)) World
+  (match (ncp_late_rule)
+    ((TrsRuleErr msg) (ncp_fail msg w))
+    ((TrsRuleOk rule)
+     (match (trs_profile (Cons rule Nil))
+       ((TrsProfileErr msg) (ncp_fail msg w))
+       ((TrsProfileOk profile)
+        (match (ms_plan profile (trs_empty_root_profile))
+          ((MsPlanErr msg) (ncp_fail msg w))
+          ((MsPlanOk plan)
+           (let ((candidate (ncp_triple (hole 0) (hole 1) (IntLit 1))))
+             (match (ms_check 1000 plan grammar Nil candidate)
+               ((MsClear)
+                (match (ms_prepare 1000 plan grammar)
+                  ((MsPrepareErr msg) (ncp_fail msg w))
+                  ((MsPrepareOk prepared)
+                   (if (lt 0 (ms_prepared_fact_count prepared))
+                     (match
+                       (ms_check_prepared 1000 prepared Nil candidate)
+                       ((MsClear)
+                        (write
+                          "META-SEARCH-NONLINEAR-PROBE LATE-STATIC-MISMATCH CLEAR OK\n"
+                          w))
+                       (_ (ncp_fail "prepared late static mismatch" w)))
+                     (ncp_fail "late mismatch emitted no relaxed facts" w)))))
+               (_ (ncp_fail "direct late static mismatch" w)))))))))))
+
+(fn ncp_regions_len ((regions (List SkRegion))) Int
+  (measure (struct regions))
+  (match regions
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (ncp_regions_len rest)))))
+
+(fn ncp_regions_count
+  ((space Expr)
+   (grammar Grammar)
+   (regions (List SkRegion))
+   (acc Int))
+  (Option Int)
+  (measure (struct regions))
+  (match regions
+    (Nil (Some acc))
+    ((Cons region rest)
+     (match (sk_region_count space grammar region)
+       ((SkCErr _) None)
+       ((SkCOk count)
+        (ncp_regions_count space grammar rest (+ acc count)))))))
+
+(fn ncp_regions_each_count
+  ((space Expr) (grammar Grammar) (regions (List SkRegion)) (want Int)) Bool
+  (measure (struct regions))
+  (match regions
+    (Nil True)
+    ((Cons region rest)
+     (match (sk_region_count space grammar region)
+       ((SkCErr _) False)
+       ((SkCOk count)
+        (if (int_eq count want)
+          (ncp_regions_each_count space grammar rest want)
+          False))))))
+
+(fn ncp_cited_len ((regions (List MsCitedRegion))) Int
+  (measure (struct regions))
+  (match regions
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (ncp_cited_len rest)))))
+
+(fn ncp_cited_count
+  ((space Expr)
+   (grammar Grammar)
+   (regions (List MsCitedRegion))
+   (acc Int))
+  (Option Int)
+  (measure (struct regions))
+  (match regions
+    (Nil (Some acc))
+    ((Cons (MsCitedRegion _ region) rest)
+     (match (sk_region_count space grammar region)
+       ((SkCErr _) None)
+       ((SkCOk count)
+        (ncp_cited_count space grammar rest (+ acc count)))))))
+
+(fn ncp_cited_name
+  ((name QName) (regions (List MsCitedRegion))) Bool
+  (measure (struct regions))
+  (match regions
+    (Nil True)
+    ((Cons (MsCitedRegion cited _) rest)
+     (if (qname_eq name cited) (ncp_cited_name name rest) False))))
+
+(fn ncp_plan_partition
+  ((prepared MsPrepared) (grammar Grammar) (rule_name QName) (w World)) World
+  (let ((space (ncp_pair (hole 0) (hole 1))))
+    (match
+      (ms_partition_prepared 1000 prepared (sk_empty_region) space)
+      ((MsPlanPartitionErr msg) (ncp_fail msg w))
+      ((MsPlanPartitionOk redex clear forks)
+       (match (ncp_cited_count space grammar redex 0)
+         (None (ncp_fail "plan redex partition count" w))
+         ((Some redex_count)
+          (match (ncp_regions_count space grammar clear 0)
+            (None (ncp_fail "plan clear partition count" w))
+            ((Some clear_count)
+             (if (int_eq redex_count 3)
+               (if (int_eq clear_count 6)
+                 (if (int_eq (ncp_cited_len redex) 3)
+                   (if (int_eq (ncp_regions_len clear) 3)
+                     (if (int_eq forks 4)
+                       (if (ncp_cited_name rule_name redex)
+                         (if (ncp_regions_each_count space grammar clear 2)
+                           (ncp_late grammar w)
+                           (ncp_fail "plan clear rows were not coalesced" w))
+                         (ncp_fail "plan partition citation" w))
+                       (ncp_fail "plan partition fork count" w))
+                     (ncp_fail "plan clear region count" w))
+                   (ncp_fail "plan redex region count" w))
+                 (ncp_fail "plan clear coverage" w))
+               (ncp_fail "plan redex coverage" w))))))))))
+
+(fn ncp_partition
+  ((prepared MsPrepared) (grammar Grammar) (rule_name QName) (w World)) World
+  (let ((space (ncp_pair (hole 0) (hole 1))))
+    (match
+      (ms_equal_partition
+        1000 grammar space (sk_empty_region) (hole 0) (hole 1))
+      ((MsEqPartitionErr msg) (ncp_fail msg w))
+      ((MsEqPartitionOk equal unequal forks)
+       (match (ncp_regions_count space grammar equal 0)
+         (None (ncp_fail "equal partition count" w))
+         ((Some equal_count)
+          (match (ncp_regions_count space grammar unequal 0)
+            (None (ncp_fail "unequal partition count" w))
+            ((Some unequal_count)
+             (if (int_eq equal_count 3)
+               (if (int_eq unequal_count 6)
+                 (if (int_eq (ncp_regions_len equal) 3)
+                   (if (int_eq (ncp_regions_len unequal) 3)
+                     (if (int_eq forks 4)
+                       (if (ncp_regions_each_count space grammar equal 1)
+                         (if (ncp_regions_each_count space grammar unequal 2)
+                           (ncp_plan_partition
+                             prepared grammar rule_name w)
+                           (ncp_fail "unequal rows were not coalesced" w))
+                         (ncp_fail "equal cubes were not exact" w))
+                       (ncp_fail "equality partition fork count" w))
+                     (ncp_fail "unequal partition region count" w))
+                   (ncp_fail "equal partition region count" w))
+                 (ncp_fail "unequal partition coverage" w))
+               (ncp_fail "equal partition coverage" w))))))))))
+
+(fn ncp_prepared_regions
+  ((prepared MsPrepared) (grammar Grammar) (rule_name QName) (w World)) World
+  (match (sk_region_choose grammar (sk_empty_region) 0 0)
+    ((SkRegionEditErr msg) (ncp_fail msg w))
+    ((SkRegionEditEmpty) (ncp_fail "prepared region left choice" w))
+    ((SkRegionEditOk left)
+     (match (sk_region_forbid grammar left 1 0)
+       ((SkRegionEditErr msg) (ncp_fail msg w))
+       ((SkRegionEditEmpty) (ncp_fail "prepared unequal exclusion" w))
+       ((SkRegionEditOk unequal)
+        (match
+          (ms_check_prepared_region
+            1000 prepared unequal (ncp_pair (hole 0) (hole 1)))
+          ((MsClear)
+           (match (sk_region_forbid grammar left 1 1)
+             ((SkRegionEditErr msg) (ncp_fail msg w))
+             ((SkRegionEditEmpty) (ncp_fail "prepared equal exclusion" w))
+             ((SkRegionEditOk equal1)
+              (match (sk_region_forbid grammar equal1 1 2)
+                ((SkRegionEditErr msg) (ncp_fail msg w))
+                ((SkRegionEditEmpty)
+                 (ncp_fail "prepared second equal exclusion" w))
+                ((SkRegionEditOk equal)
+                 (match
+                   (ms_check_prepared_region
+                     1000 prepared equal (ncp_pair (hole 0) (hole 1)))
+                   ((MsRedex q)
+                    (if (qname_eq q rule_name)
+                      (ncp_partition
+                        prepared grammar rule_name
+                        (write
+                          "META-SEARCH-NONLINEAR-PROBE RESIDUAL DISJOINT-CLEAR SHARED-EQUAL BLOCK-0/1 EQUAL-REDEX UNEQUAL-CLEAR RELAXED-PREPARED-3 REGION-EQ/NE PARTITION EQ3+NE6 IN 3+3/F4 PLAN-CITED OK\n"
+                          w))
+                      (ncp_fail "prepared equal region citation" w)))
+                   (_ (ncp_fail "prepared equal restricted region" w))))))))
+          (_ (ncp_fail "prepared unequal restricted region" w))))))))
+
+(fn ncp_prepared
+  ((plan MsPlan) (grammar Grammar) (rule_name QName) (w World)) World
+  (match (ms_prepare 1000 plan grammar)
+    ((MsPrepareErr msg) (ncp_fail msg w))
+    ((MsPrepareOk prepared)
+     (if (int_eq (ms_prepared_fact_count prepared) 3)
+       (match
+         (ms_check_prepared 1000 prepared Nil (ncp_pair (hole 0) (hole 2)))
+         ((MsClear)
+          (match
+            (ms_check_prepared 1000 prepared Nil (ncp_pair (hole 0) (hole 1)))
+            ((MsBlocked hole_id)
+             (if (int_eq hole_id 0)
+               (match
+                 (ms_check_prepared
+                   1000 prepared (Cons (Pair 0 0) Nil)
+                   (ncp_pair (hole 0) (hole 1)))
+                 ((MsBlocked next)
+                  (if (int_eq next 1)
+                    (match
+                      (ms_check_prepared
+                        1000 prepared (ncp_equal_asg)
+                        (ncp_pair (hole 0) (hole 1)))
+                      ((MsRedex q)
+                       (if (qname_eq q rule_name)
+                         (match
+                           (ms_check_prepared
+                             1000 prepared (ncp_unequal_asg)
+                             (ncp_pair (hole 0) (hole 1)))
+                        ((MsClear)
+                            (ncp_prepared_regions
+                              prepared grammar rule_name w))
+                           (_ (ncp_fail "prepared unequal region" w)))
+                         (ncp_fail "prepared redex citation" w)))
+                      (_ (ncp_fail "prepared equal region" w)))
+                    (ncp_fail "prepared second equality block" w)))
+                 (_ (ncp_fail "prepared first refinement" w)))
+               (ncp_fail "prepared first equality block" w)))
+            (_ (ncp_fail "prepared open equality" w))))
+         (_ (ncp_fail "prepared disjoint equality domains" w)))
+       (ncp_fail "nonlinear relaxation fact count" w)))))
+
+(fn ncp_direct
+  ((plan MsPlan) (grammar Grammar) (rule_name QName) (w World)) World
+  (match (sk_region_choose grammar (sk_empty_region) 0 0)
+    ((SkRegionEditErr msg) (ncp_fail msg w))
+    ((SkRegionEditEmpty) (ncp_fail "direct region left choice" w))
+    ((SkRegionEditOk left)
+     (match (sk_region_forbid grammar left 1 0)
+       ((SkRegionEditErr msg) (ncp_fail msg w))
+       ((SkRegionEditEmpty) (ncp_fail "direct unequal exclusion" w))
+       ((SkRegionEditOk unequal)
+        (match
+          (ms_check_region
+            1000 plan grammar unequal (ncp_pair (hole 0) (hole 1)))
+          ((MsClear) (ncp_direct_disjoint plan grammar rule_name w))
+          (_ (ncp_fail "direct unequal restricted region" w))))))))
+
+(fn ncp_direct_disjoint
+  ((plan MsPlan) (grammar Grammar) (rule_name QName) (w World)) World
+  (match (ms_check 1000 plan grammar Nil (ncp_pair (hole 0) (hole 2)))
+    ((MsClear)
+     (ncp_direct_overlap plan grammar rule_name w))
+    (_ (ncp_fail "disjoint equality domains did not clear" w))))
+
+(fn ncp_direct_overlap
+  ((plan MsPlan) (grammar Grammar) (rule_name QName) (w World)) World
+  (match (ms_check 1000 plan grammar Nil (ncp_pair (hole 0) (hole 0)))
+    ((MsRedex q)
+     (if (qname_eq q rule_name)
+       (match (ms_check 1000 plan grammar Nil (ncp_pair (hole 0) (hole 1)))
+         ((MsBlocked hole_id)
+          (if (int_eq hole_id 0)
+            (match
+              (ms_check
+                1000 plan grammar (Cons (Pair 0 0) Nil)
+                (ncp_pair (hole 0) (hole 1)))
+              ((MsBlocked next)
+               (if (int_eq next 1)
+                 (match
+                   (ms_check
+                     1000 plan grammar (ncp_equal_asg)
+                     (ncp_pair (hole 0) (hole 1)))
+                   ((MsRedex _)
+                    (match
+                      (ms_check
+                        1000 plan grammar (ncp_unequal_asg)
+                        (ncp_pair (hole 0) (hole 1)))
+                      ((MsClear) (ncp_prepared plan grammar rule_name w))
+                      (_ (ncp_fail "direct unequal region" w))))
+                   (_ (ncp_fail "direct equal region" w)))
+                 (ncp_fail "direct second equality block" w)))
+              (_ (ncp_fail "direct first refinement" w)))
+            (ncp_fail "direct first equality block" w)))
+         (_ (ncp_fail "direct open equality" w)))
+       (ncp_fail "shared equality citation" w)))
+    (_ (ncp_fail "shared hole was not known equal" w))))
+
+(fn ncp_profile ((grammar Grammar) (w World)) World
+  (match (ncp_rule)
+    ((TrsRuleErr msg) (ncp_fail msg w))
+    ((TrsRuleOk rule)
+     (match (trs_profile (Cons rule Nil))
+       ((TrsProfileErr msg) (ncp_fail msg w))
+       ((TrsProfileOk profile)
+        (match (trs_partition_formation profile)
+          ((TrsProfileFormationErr msg) (ncp_fail msg w))
+          ((TrsProfileFormationOk projected)
+           (if (trs_formation_is_empty (trs_profile_formation projected))
+             (match
+               (ms_plan
+                 (trs_profile_residual projected)
+                 (trs_empty_root_profile))
+               ((MsPlanErr msg) (ncp_fail msg w))
+               ((MsPlanOk plan)
+                (ncp_direct plan grammar (trs_rule_name rule) w)))
+             (ncp_fail "nonlinear rule escaped into formation" w)))))))))
+
+(fn main ((w World)) World
+  (let ((grammar (ncp_grammar)))
+    (match (g_wf grammar)
+      ((GWErr msg) (ncp_fail msg w))
+      ((GWOk) (ncp_profile grammar w)))))

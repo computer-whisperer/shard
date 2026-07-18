@@ -1,0 +1,277 @@
+;;; tools/search/frontier.shard — exact alpha-stable keys for symbolic proof
+;;; frontiers.  The symbolic evaluator owns `SV`; meta/census owns exact
+;;; grouping and ranking.  This adapter makes residual equations comparable
+;;; across proof attempts without treating an observational group as a lemma.
+;;;
+;;; Producers may assign distinct stable small roles to distinguished call
+;;; heads (for example append, candidate, representative).  Every other QName
+;;; is encoded in full.  Universal atoms and data slots are alpha-renamed
+;;; independently by first occurrence, and equation orientation is
+;;; canonicalized.  The resulting byte key is injective for the represented
+;;; structure and remains readable enough to print directly in a mining report.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "sym.shard")
+(use (:: kernel term *))
+(use (:: tools search sym *))
+
+(type FcRole (FcRole QName Int))
+
+(type FcAlpha (FcAlpha Int (List (Pair Int Int)) Int (List (Pair Int Int))))
+;; next universal atom, atom ids; next data slot, slot ids
+
+(type FcMapR (FcMapR Int FcAlpha))
+
+(type FcEnc (FcEnc (List Int) FcAlpha))
+
+(fn fc_empty () FcAlpha (FcAlpha 0 Nil 0 Nil))
+
+(fn fc_len ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (fc_len rest)))))
+
+(fn fc_find ((x Int) (xs (List (Pair Int Int)))) (Option Int)
+  (measure (struct xs))
+  (match xs
+    (Nil None)
+    ((Cons (Pair old fresh) rest)
+     (if (int_eq x old) (Some fresh) (fc_find x rest)))))
+
+(fn fc_atom ((old Int) (st FcAlpha)) FcMapR
+  (match st
+    ((FcAlpha next atoms snext slots)
+     (match (fc_find old atoms)
+       ((Some fresh) (FcMapR fresh st))
+       (None
+         (FcMapR
+           next
+           (FcAlpha (+ next 1) (Cons (Pair old next) atoms) snext slots)))))))
+
+(fn fc_slot ((old Int) (st FcAlpha)) FcMapR
+  (match st
+    ((FcAlpha next atoms snext slots)
+     (match (fc_find old slots)
+       ((Some fresh) (FcMapR fresh st))
+       (None
+         (FcMapR
+           snext
+           (FcAlpha next atoms (+ snext 1) (Cons (Pair old snext) slots))))))))
+
+(fn fc_role ((q QName) (roles (List FcRole))) (Option Int)
+  (measure (struct roles))
+  (match roles
+    (Nil None)
+    ((Cons (FcRole q0 role) rest)
+     (if (qname_eq q q0) (Some role) (fc_role q rest)))))
+
+;; A symbol segment is length-prefixed, making QName concatenation exact even
+;; when source symbols contain punctuation used by the diagnostic syntax.
+(fn fc_symbol ((s Symbol)) (List Int)
+  (let ((cs (chars_of_sym s))) (append_int (show_int (fc_len cs)) (Cons 58 cs))))
+
+(fn fc_path ((path (List Symbol))) (List Int)
+  (measure (struct path))
+  (match path
+    (Nil "]")
+    ((Cons s rest) (append_int (fc_symbol s) (Cons 44 (fc_path rest))))))
+
+(fn fc_qname ((q QName) (roles (List FcRole))) (List Int)
+  (match (fc_role q roles)
+    ((Some role) (append_int "R" (append_int (show_int role) ";")))
+    (None
+      (match q
+        ((QName path name)
+         (append_int "Q[" (append_int (fc_path path) (fc_symbol name))))))))
+
+(fn fc_slot_text ((old Int) (st FcAlpha)) FcEnc
+  (if (lt old 0) (FcEnc "_" st)
+  (match (fc_slot old st)
+    ((FcMapR fresh st2) (FcEnc (show_int fresh) st2)))))
+
+(fn fc_sv ((roles (List FcRole)) (v SV) (st FcAlpha)) FcEnc
+  (measure (struct v))
+  (match v
+    ((SVInt n) (FcEnc (append_int "I" (append_int (show_int n) ";")) st))
+    ((SVQuote s) (FcEnc (append_int "L" (append_int (fc_symbol s) ";")) st))
+    ((SVSym old)
+     (match (fc_atom old st)
+       ((FcMapR fresh st2)
+        (FcEnc (append_int "A" (append_int (show_int fresh) ";")) st2))))
+    ((SVData old)
+     (match (fc_slot old st)
+       ((FcMapR fresh st2)
+        (FcEnc (append_int "D" (append_int (show_int fresh) ";")) st2))))
+    ((SVCtor q fields origin)
+     (match (fc_slot_text origin st)
+       ((FcEnc ot st2)
+        (match (fc_svs roles fields st2)
+          ((FcEnc fs st3)
+           (FcEnc
+             (append_int
+               "C"
+               (append_int
+                 (fc_qname q roles)
+                 (append_int "@" (append_int ot (append_int "[" fs)))))
+             st3))))))
+    ((SVNeu q args blocker)
+     (match (fc_slot_text blocker st)
+       ((FcEnc bt st2)
+        (match (fc_svs roles args st2)
+          ((FcEnc as st3)
+           (FcEnc
+             (append_int
+               "N"
+               (append_int
+                 (fc_qname q roles)
+                 (append_int "#" (append_int bt (append_int "[" as)))))
+             st3))))))))
+
+(fn fc_svs ((roles (List FcRole)) (vs (List SV)) (st FcAlpha)) FcEnc
+  (measure (struct vs))
+  (match vs
+    (Nil (FcEnc "]" st))
+    ((Cons v rest)
+     (match (fc_sv roles v st)
+       ((FcEnc txt st2)
+        (match (fc_svs roles rest st2)
+          ((FcEnc more st3) (FcEnc (append_int txt (Cons 44 more)) st3))))))))
+
+(fn fc_directed ((roles (List FcRole)) (lhs SV) (rhs SV)) (List Int)
+  (match (fc_sv roles lhs (fc_empty))
+    ((FcEnc lt st)
+     (match (fc_sv roles rhs st)
+       ((FcEnc rt _)
+        (append_int "EQ{" (append_int lt (append_int "}{" (append_int rt "}")))))))))
+
+(fn fc_lex_lt ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil False)
+        (_ True)))
+    ((Cons x rest)
+     (match b
+       (Nil False)
+       ((Cons y rest2)
+        (if (lt x y) True (if (lt y x) False (fc_lex_lt rest rest2))))))))
+
+;; Equality is symmetric.  Re-encode from an empty alpha environment in each
+;; direction and retain the lexicographically smaller exact representation.
+(fn fc_signature ((roles (List FcRole)) (lhs SV) (rhs SV)) (List Int)
+  (let ((lr (fc_directed roles lhs rhs)) (rl (fc_directed roles rhs lhs)))
+    (if (fc_lex_lt rl lr) rl lr)))
+
+;; ---- append-permutation basis ---------------------------------------------
+;;
+;; Exact residual groups still distinguish every larger append context.  For
+;; lemma discovery we also ask which pairs of distinct append atoms change
+;; relative order.  If both spines have the same exact atom bag, each such pair
+;; proposes the smaller conditional/range commutation obligation that could
+;; join the larger equation by congruence.  It remains a proposal: no rule is
+;; added and no verdict changes here.
+
+(fn fc_append_atoms ((apq QName) (v SV)) (List SV)
+  (measure (struct v))
+  (match v
+    ((SVNeu q args _)
+     (if (qname_eq q apq)
+       (match args
+         ((Cons x (Cons y Nil))
+          (svs_app (fc_append_atoms apq x) (fc_append_atoms apq y)))
+         (_ (Cons v Nil)))
+       (Cons v Nil)))
+    (_ (Cons v Nil))))
+
+(fn fc_remove ((wanted SV) (xs (List SV))) (Option (List SV))
+  (measure (struct xs))
+  (match xs
+    (Nil None)
+    ((Cons x rest)
+     (if (sv_eq wanted x) (Some rest)
+     (match (fc_remove wanted rest)
+       (None None)
+       ((Some rest2) (Some (Cons x rest2))))))))
+
+(fn fc_bag_eq ((xs (List SV)) (ys (List SV))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil
+      (match ys
+        (Nil True)
+        (_ False)))
+    ((Cons x rest)
+     (match (fc_remove x ys)
+       (None False)
+       ((Some ys2) (fc_bag_eq rest ys2))))))
+
+(fn fc_sv_mem ((wanted SV) (xs (List SV))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons x rest) (if (sv_eq wanted x) True (fc_sv_mem wanted rest)))))
+
+(fn fc_unique ((xs (List SV)) (seen (List SV))) (List SV)
+  (measure (struct xs))
+  (match xs
+    (Nil seen)
+    ((Cons x rest)
+     (if (fc_sv_mem x seen) (fc_unique rest seen)
+     (fc_unique rest (Cons x seen))))))
+
+(fn fc_count ((wanted SV) (xs (List SV))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons x rest) (+ (if (sv_eq wanted x) 1 0) (fc_count wanted rest)))))
+
+;; Number of ordered (a,b) occurrences with an a left of a b.
+(fn fc_before_count ((a SV) (b SV) (xs (List SV))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons x rest)
+     (+ (if (sv_eq a x) (fc_count b rest) 0) (fc_before_count a b rest)))))
+
+(fn fc_basis_tail
+  ((roles (List FcRole))
+   (lhs (List SV))
+   (rhs (List SV))
+   (a SV)
+   (rest (List SV)))
+  (List (List Int))
+  (measure (struct rest))
+  (match rest
+    (Nil Nil)
+    ((Cons b more)
+     (let ((tail (fc_basis_tail roles lhs rhs a more)))
+       (if (int_eq (fc_before_count a b lhs) (fc_before_count a b rhs)) tail
+       (Cons
+         (append_int "COMMUTE{" (append_int (fc_signature roles a b) "}"))
+         tail))))))
+
+(fn fc_keys_app ((xs (List (List Int))) (ys (List (List Int))))
+  (List (List Int))
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons x rest) (Cons x (fc_keys_app rest ys)))))
+
+(fn fc_basis_pairs
+  ((roles (List FcRole)) (lhs (List SV)) (rhs (List SV)) (atoms (List SV)))
+  (List (List Int))
+  (measure (struct atoms))
+  (match atoms
+    (Nil Nil)
+    ((Cons a rest)
+     (fc_keys_app
+       (fc_basis_tail roles lhs rhs a rest)
+       (fc_basis_pairs roles lhs rhs rest)))))
+
+(fn fc_commutation_keys ((apq QName) (roles (List FcRole)) (lhs SV) (rhs SV))
+  (List (List Int))
+  (let ((la (fc_append_atoms apq lhs)) (ra (fc_append_atoms apq rhs)))
+    (if (fc_bag_eq la ra) (fc_basis_pairs roles la ra (fc_unique la Nil)) Nil)))

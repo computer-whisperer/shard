@@ -1,0 +1,155 @@
+;;; Executable regression for TgRule, the arbitrary typed-template layer.
+;;; It is intentionally unrelated to an ISA: a polymorphic Let rule adds an
+;;; Int binder only while filling its body hole.  Its RHS is routed to a
+;;; separate `literal` environment containing only 0, while the root/body
+;;; `expression` environment has atoms {0, 1}.  At depth one the exact space is:
+;;;
+;;;   2 atoms + 1 binding choice * (2 atoms + BVar 0) = 5 expressions.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "typed_grammar.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader World))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: tools search typed_grammar *))
+
+(fn trp_int () Type (TCon (qn (quote Int)) Nil))
+
+(fn trp_empty_module () Module (Module Nil Nil Nil (FnTrie None Nil) Nil))
+
+(fn trp_wrap_q () QName (qn (quote trp_wrap)))
+
+(fn trp_route_module () Module
+  (Module
+    (list
+      (TypeDef
+        (qn (quote TrpBox))
+        Nil
+        (list (CtorDef (trp_wrap_q) (list (trp_int))))
+        None))
+    Nil
+    Nil
+    (FnTrie None Nil)
+    Nil))
+
+(fn trp_let_rule () TgRule
+  (let ((a (TVar (quote trp_result))) (ity (trp_int)))
+    (TgRule
+      1
+      a
+      (Let (Cons (hole 0) Nil) (hole 1))
+      (list (TgSlotIn 0 ity Nil (quote literal)) (TgSlot 1 a (Cons ity Nil))))))
+
+(fn trp_bad_rule () TgRule
+  (TgRule
+    0
+    (trp_int)
+    (Let (Cons (hole 0) Nil) (hole 1))
+    (list (TgSlot 0 (trp_int) Nil) (TgSlot 1 (trp_int) (Cons (trp_int) Nil)))))
+
+(fn trp_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "TYPED-RULE-PROBE FAIL " (append_int msg "\n")) w)))
+
+(fn trp_missing_env () TgEnv
+  (TgEnv
+    (Cons
+      (TgZone
+        (quote expression)
+        Nil
+        (Cons (TgAtom (trp_int) (IntLit 0)) Nil)
+        (Cons (trp_let_rule) Nil)
+        Nil)
+      Nil)))
+
+(fn trp_env () TgEnv
+  (TgEnv
+    (list
+      (TgZone
+        (quote expression)
+        Nil
+        (list (TgAtom (trp_int) (IntLit 0)) (TgAtom (trp_int) (IntLit 1)))
+        (Cons (trp_let_rule) Nil)
+        Nil)
+      (TgZone
+        (quote literal)
+        Nil
+        (Cons (TgAtom (trp_int) (IntLit 0)) Nil)
+        Nil
+        Nil))))
+
+(fn trp_bad_head_route_env () TgEnv
+  (TgEnv
+    (list
+      (TgZone
+        (quote expression)
+        (list (TgCtor (trp_wrap_q)))
+        Nil
+        Nil
+        (list (TgRoute (TgCtor (trp_wrap_q)) 1 (quote literal))))
+      (TgZone (quote literal) Nil (list (TgAtom (trp_int) (IntLit 0))) Nil Nil))))
+
+(fn trp_space ((w World)) World
+  (match
+    (tg_build_env
+      (trp_empty_module)
+      (trp_env)
+      Nil
+      (trp_int)
+      1
+      (quote expression))
+    ((TgBuildErr msg) (trp_fail msg w))
+    ((TgBuildOk root grammar _)
+     (match (sk_count root grammar)
+       ((SkCErr msg) (trp_fail msg w))
+       ((SkCOk count)
+        (if (int_eq count 5)
+          (let ((witness (Let (Cons (IntLit 0) Nil) (BVar 0))))
+            (match (sk_rank root grammar witness)
+              ((SkCErr msg) (trp_fail msg w))
+              ((SkCOk rank)
+               (if (int_eq rank 4)
+                 (match (sk_unrank root grammar rank)
+                   ((SkEErr msg) (trp_fail msg w))
+                   ((SkEOk roundtrip)
+                    (if (expr_eq roundtrip witness)
+                      (write
+                        "TYPED-RULE-PROBE COUNT 5 WITNESS 4 FORMATION-REFUSAL GATES OK\n"
+                        w)
+                      (trp_fail "rank/unrank drift" w))))
+                 (trp_fail "unexpected witness rank" w)))))
+          (trp_fail "unexpected count" w)))))))
+
+(fn trp_formation_refusal ((w World)) World
+  (match
+    (tg_build_env_formation
+      (trp_empty_module)
+      (trp_env)
+      Nil
+      (trp_int)
+      1
+      (quote expression)
+      (TrsFormation
+        (Cons (TrsForbidRoot (qn (quote zero_rule)) (TrsIntShape 0)) Nil)))
+    ((TgBuildOk _ _ _)
+     (trp_fail "formation-aware template grammar was admitted" w))
+    ((TgBuildErr _) (trp_space w))))
+
+(fn main ((w World)) World
+  (match (tg_rule_wf (trp_bad_rule))
+    ((TgRuleWfErr _)
+     (match (tg_prepare_env (trp_route_module) (trp_bad_head_route_env))
+       ((TgEnvOk _) (trp_fail "out-of-range head route was admitted" w))
+       ((TgEnvErr _)
+        (match (tg_prepare_env (trp_empty_module) (trp_missing_env))
+          ((TgEnvErr _) (trp_formation_refusal w))
+          ((TgEnvOk _) (trp_fail "missing routed environment was admitted" w))))))
+    ((TgRuleWfOk) (trp_fail "zero-cost recursive rule was admitted" w))))

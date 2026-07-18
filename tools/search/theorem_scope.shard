@@ -1,0 +1,854 @@
+;;; tools/search/theorem_scope.shard — CHECKED, SCOPE-BOUND REDUCTION LICENSES.
+;;;
+;;; Program search must not grow a second theorem namespace.  A requested
+;;; canonicalization rule is resolved through the same RCtx that controls the
+;;; candidate vocabulary, then joined to the kernel driver's accumulated
+;;; Theory by full QName.  The Goal is already parsed, resolved, typechecked,
+;;; and closed by the driver; its binder types and equation are therefore the
+;;; only rule payload exposed here.
+;;;
+;;; This layer deliberately does NOT turn every theorem in scope into a rule.
+;;; A caller supplies an ordered, reviewed profile of bare names.  It also does
+;;; not claim termination or confluence: those are properties of the whole
+;;; oriented profile and remain a separate ratification gate (CANON.md §6).
+;;; Ordinary canon and root-observer rules remain premise-free.  Authenticated
+;;; spine rules admit only the decidable checked guards represented by
+;;; meta/rewrite: finite structural distinctness and affine Int equality/order.
+;;; A lazy consumer must prove or block on those guards at every rewrite site.
+;;;
+;;; Candidate equalities and observer equalities deliberately compile to
+;;; different profile types.  The former have ordinary congruence pressure;
+;;; the latter have the exact shape O(lhs) = O(rhs) and are licensed only at
+;;; the whole candidate root searched through that same O.
+;;;
+;;; Theory records imported interface requirements as Axiom entries in a
+;;; consumer closure: they are upstream-proven contracts, admitted at that
+;;; boundary.  The closure's SrcEntry/Decl stream distinguishes their internal
+;;; `granted` kind from an upstream or authored axiom.  Capture preserves that
+;;; distinction and refuses every Axiom entry that is not a granted requirement.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/proof.shard")
+(import "../../meta/rewrite")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel reader *))
+(use (:: kernel proof *))
+(use (:: meta rewrite *))
+
+(type TgLawEvidence (TgLawProven) (TgLawGrantedRequirement))
+
+;; The oriented equation is always left-to-right. Params retain the Goal's
+;; introduction order; BVars in lhs/rhs retain the kernel's locally-nameless
+;; convention (BVar 0 is the last Param).
+(type TgCanonLicense
+  (TgCanonLicense QName (List Param) Expr Expr TgLawEvidence))
+
+(type TgCanonProfileR
+  (TgCanonProfileErr Symbol (List Int))
+  (TgCanonProfileOk (List TgCanonLicense)))
+
+(type TgTheoryHit (TgTheoryProven Goal) (TgTheoryAxiom Goal))
+
+(fn tg_claim_qname_mem ((q QName) (items (List (Pair Symbol (List Symbol)))))
+  Bool
+  (measure (struct items))
+  (match items
+    (Nil False)
+    ((Cons (Pair name path) rest)
+     (if (qname_eq q (QName path name)) True (tg_claim_qname_mem q rest)))))
+
+;; Module's final field is exactly the resolver-visible item table for
+;; claim/requirement/axiom declarations.  Checking this before Theory lookup
+;; prevents an out-of-scope theory entry from being selected by spelling.
+(fn tg_claim_item ((m Module) (q QName)) Bool
+  (tg_claim_qname_mem q (module_claims m)))
+
+(fn tg_theory_find ((q QName) (th Theory)) (Option TgTheoryHit)
+  (measure (struct th))
+  (match th
+    ((TheoryEmpty) None)
+    ((TheoryCons entry rest)
+     (match entry
+       ((Proven eq eg)
+        (if (qname_eq q eq) (Some (TgTheoryProven eg)) (tg_theory_find q rest)))
+       ((Axiom eq eg)
+        (if (qname_eq q eq) (Some (TgTheoryAxiom eg)) (tg_theory_find q rest)))))))
+
+;; Recover the driver's internal axiom kind for one exact declaration.  Most
+;; importantly, collect_decls rewrites a requirement in a granted interface to
+;; DAxiom(kind=granted), while an interface's authored axiom becomes
+;; DAxiom(kind=upstream).  Theory's Axiom constructor alone cannot tell these
+;; apart, so canon capture must consult this stream as well.
+(fn tg_decl_axiom_kind ((name Symbol) (ds (List Decl))) (Option Symbol)
+  (measure (struct ds))
+  (match ds
+    (Nil None)
+    ((Cons d rest)
+     (match d
+       ((DAxiom a)
+        (if (sym_eq name (ax_name a)) (Some (ax_kind a))
+        (tg_decl_axiom_kind name rest)))
+       (_ (tg_decl_axiom_kind name rest))))))
+
+(fn tg_axiom_kind ((q QName) (ctors (List Symbol)) (srcs (List SrcEntry)))
+  (Option Symbol)
+  (measure (struct srcs))
+  (match srcs
+    (Nil None)
+    ((Cons (SrcEntry path granted src) rest)
+     (if (sym_path_eq (qn_mod q) (module_path_of path))
+       (match (parse_decls src ctors granted)
+         (None (tg_axiom_kind q ctors rest))
+         ((Some ds)
+          (match (tg_decl_axiom_kind (qn_name q) ds)
+            (None (tg_axiom_kind q ctors rest))
+            ((Some kind) (Some kind)))))
+       (tg_axiom_kind q ctors rest)))))
+
+(fn tg_license_q ((l TgCanonLicense)) QName
+  (match l
+    ((TgCanonLicense q _ _ _ _) q)))
+
+(fn tg_license_mem ((q QName) (ls (List TgCanonLicense))) Bool
+  (measure (struct ls))
+  (match ls
+    (Nil False)
+    ((Cons l rest)
+     (if (qname_eq q (tg_license_q l)) True (tg_license_mem q rest)))))
+
+(fn tg_license_snoc ((ls (List TgCanonLicense)) (l TgCanonLicense))
+  (List TgCanonLicense)
+  (measure (struct ls))
+  (match ls
+    (Nil (Cons l Nil))
+    ((Cons h rest) (Cons h (tg_license_snoc rest l)))))
+
+(type TgOneLicenseR
+  (TgOneLicenseErr (List Int))
+  (TgOneLicenseOk TgCanonLicense))
+
+(type TgCheckedGoalR
+  (TgCheckedGoalErr (List Int))
+  (TgCheckedGoalOk Goal TgLawEvidence))
+
+(fn tg_license_goal ((q QName) (goal Goal) (evidence TgLawEvidence))
+  TgOneLicenseR
+  (match goal
+    ((Goal params premises (Equation lhs rhs))
+     (match premises
+       (Nil (TgOneLicenseOk (TgCanonLicense q params lhs rhs evidence)))
+       (_ (TgOneLicenseErr "premise-bearing theorem is not a v1 canon rule"))))))
+
+(fn tg_checked_goal ((m Module) (th Theory) (srcs (List SrcEntry)) (q QName))
+  TgCheckedGoalR
+  (match (tg_theory_find q th)
+    (None
+      (TgCheckedGoalErr "rule is in item scope but absent from checked Theory"))
+    ((Some hit)
+     (match hit
+       ((TgTheoryProven goal) (TgCheckedGoalOk goal (TgLawProven)))
+       ((TgTheoryAxiom goal)
+        (match (tg_axiom_kind q (typedef_ctors (module_typedefs m)) srcs)
+          ((Some kind)
+           (if (sym_eq kind (quote granted))
+             (TgCheckedGoalOk goal (TgLawGrantedRequirement))
+             (TgCheckedGoalErr
+               "reduction rules require a proven claim or granted requirement")))
+          (None
+            (TgCheckedGoalErr
+              "reduction rules require a proven claim or granted requirement"))))))))
+
+(fn tg_one_license ((m Module) (th Theory) (srcs (List SrcEntry)) (q QName))
+  TgOneLicenseR
+  (match (tg_checked_goal m th srcs q)
+    ((TgCheckedGoalErr msg) (TgOneLicenseErr msg))
+    ((TgCheckedGoalOk goal evidence) (tg_license_goal q goal evidence))))
+
+(fn tg_capture_canon_go
+  ((m Module)
+   (ctx RCtx)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (names (List Symbol))
+   (acc (List TgCanonLicense)))
+  TgCanonProfileR
+  (measure (struct names))
+  (match names
+    (Nil (TgCanonProfileOk acc))
+    ((Cons name rest)
+     (let ((q (rhead (qn name) ctx)))
+       (if (tg_claim_item m q)
+         (if (tg_license_mem q acc)
+           (TgCanonProfileErr name "duplicate canon rule")
+           (match (tg_one_license m th srcs q)
+             ((TgOneLicenseErr msg) (TgCanonProfileErr name msg))
+             ((TgOneLicenseOk license)
+              (tg_capture_canon_go
+                m
+                ctx
+                th
+                srcs
+                rest
+                (tg_license_snoc acc license)))))
+         (TgCanonProfileErr name "canon rule is not a claim item in scope"))))))
+
+;; Capture an EXPLICIT ordered profile.  An empty profile is valid and applies
+;; no theorem quotient.  The output order is the requested orientation order.
+(fn tg_capture_canon
+  ((m Module)
+   (ctx RCtx)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (names (List Symbol)))
+  TgCanonProfileR
+  (tg_capture_canon_go m ctx th srcs names Nil))
+
+;; ---- observer-scoped reduction licenses -----------------------------------
+;;
+;; A candidate datatype need not identify programs that have equal behavior.
+;; For an exact unary observer O, a checked theorem
+;;
+;;     O candidate_lhs = O candidate_rhs
+;;
+;; licenses a reduction only at the whole candidate root searched through O.
+;; It does NOT license rewriting candidate_lhs below an arbitrary constructor.
+;; The stripped candidate patterns therefore compile to TrsRootProfile rather
+;; than TrsProfile.  This is the generic bridge for interpreted ADTs (ISA
+;; programs, plans, circuits, query trees) without claiming that distinct data
+;; constructors are propositionally equal.
+
+(type TgObserverLicense
+  (TgObserverLicense QName QName (List Param) Expr Expr TgLawEvidence))
+  ; citation, exact observer, params, candidate lhs/rhs, provenance
+
+(type TgObserverProfileR
+  (TgObserverProfileErr Symbol (List Int))
+  (TgObserverProfileOk (List TgObserverLicense)))
+
+(type TgOneObserverR
+  (TgOneObserverErr (List Int))
+  (TgOneObserverOk TgObserverLicense))
+
+(fn tg_unary_observer_arg ((observer QName) (e Expr)) (Option Expr)
+  (match e
+    ((Call q args)
+     (if (qname_eq q observer)
+       (match args
+         ((Cons candidate Nil) (Some candidate))
+         (_ None))
+       None))
+    (_ None)))
+
+(fn tg_observer_goal
+  ((q QName) (observer QName) (goal Goal) (evidence TgLawEvidence))
+  TgOneObserverR
+  (match goal
+    ((Goal params premises (Equation lhs rhs))
+     (match premises
+       ((Cons _ _)
+        (TgOneObserverErr
+          "premise-bearing theorem is not a v1 observer reduction"))
+       (Nil
+        (match (tg_unary_observer_arg observer lhs)
+          (None
+            (TgOneObserverErr
+              "observer reduction lhs is not the exact unary observer"))
+          ((Some candidate_lhs)
+           (match (tg_unary_observer_arg observer rhs)
+             (None
+               (TgOneObserverErr
+                 "observer reduction rhs is not the exact unary observer"))
+             ((Some candidate_rhs)
+              (TgOneObserverOk
+                (TgObserverLicense
+                  q
+                  observer
+                  params
+                  candidate_lhs
+                  candidate_rhs
+                  evidence)))))))))))
+
+(fn tg_one_observer
+  ((m Module)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (q QName)
+   (observer QName))
+  TgOneObserverR
+  (match (tg_checked_goal m th srcs q)
+    ((TgCheckedGoalErr msg) (TgOneObserverErr msg))
+    ((TgCheckedGoalOk goal evidence)
+     (tg_observer_goal q observer goal evidence))))
+
+(fn tg_observer_q ((license TgObserverLicense)) QName
+  (match license
+    ((TgObserverLicense q _ _ _ _ _) q)))
+
+(fn tg_observer_mem ((q QName) (licenses (List TgObserverLicense))) Bool
+  (measure (struct licenses))
+  (match licenses
+    (Nil False)
+    ((Cons license rest)
+     (if (qname_eq q (tg_observer_q license)) True
+     (tg_observer_mem q rest)))))
+
+(fn tg_observer_snoc
+  ((licenses (List TgObserverLicense)) (license TgObserverLicense))
+  (List TgObserverLicense)
+  (measure (struct licenses))
+  (match licenses
+    (Nil (Cons license Nil))
+    ((Cons head rest) (Cons head (tg_observer_snoc rest license)))))
+
+(fn tg_capture_observer_go
+  ((m Module)
+   (ctx RCtx)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (observer QName)
+   (names (List Symbol))
+   (acc (List TgObserverLicense)))
+  TgObserverProfileR
+  (measure (struct names))
+  (match names
+    (Nil (TgObserverProfileOk acc))
+    ((Cons name rest)
+     (let ((q (rhead (qn name) ctx)))
+       (if (tg_claim_item m q)
+         (if (tg_observer_mem q acc)
+           (TgObserverProfileErr name "duplicate observer reduction")
+           (match (tg_one_observer m th srcs q observer)
+             ((TgOneObserverErr msg) (TgObserverProfileErr name msg))
+             ((TgOneObserverOk license)
+              (tg_capture_observer_go
+                m
+                ctx
+                th
+                srcs
+                observer
+                rest
+                (tg_observer_snoc acc license)))))
+         (TgObserverProfileErr
+           name
+           "observer reduction is not a claim item in scope"))))))
+
+(fn tg_capture_observer
+  ((m Module)
+   (ctx RCtx)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (observer QName)
+   (names (List Symbol)))
+  TgObserverProfileR
+  (tg_capture_observer_go m ctx th srcs observer names Nil))
+
+;; ---- graduation join: checked licenses -> generic meta rewrite profile ----
+;;
+;; theorem_scope owns authenticity and scope; meta/rewrite owns only the
+;; proof-agnostic equation mechanism.  Compilation preserves profile order,
+;; binder types, full citation QName, and left-to-right orientation.  The meta
+;; validator then enforces its algebraic/left-linear v1 fragment.  Neither
+;; layer silently claims termination or confluence.
+
+(type TgCanonCompileR
+  (TgCanonCompileErr (List Int))
+  (TgCanonCompileOk TrsProfile))
+
+(type TgCanonRulesR
+  (TgCanonRulesErr (List Int))
+  (TgCanonRulesOk (List TrsRule)))
+
+(fn tg_param_types ((ps (List Param))) (List Type)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons (Param _ ty) rest) (Cons ty (tg_param_types rest)))))
+
+(fn tg_compile_rules ((licenses (List TgCanonLicense))) TgCanonRulesR
+  (measure (struct licenses))
+  (match licenses
+    (Nil (TgCanonRulesOk Nil))
+    ((Cons (TgCanonLicense q params lhs rhs _) rest)
+     (match (trs_rule q (tg_param_types params) lhs rhs)
+       ((TrsRuleErr msg) (TgCanonRulesErr msg))
+       ((TrsRuleOk rule)
+        (match (tg_compile_rules rest)
+          ((TgCanonRulesErr msg) (TgCanonRulesErr msg))
+          ((TgCanonRulesOk rules) (TgCanonRulesOk (Cons rule rules)))))))))
+
+(fn tg_compile_canon ((licenses (List TgCanonLicense))) TgCanonCompileR
+  (match (tg_compile_rules licenses)
+    ((TgCanonRulesErr msg) (TgCanonCompileErr msg))
+    ((TgCanonRulesOk rules)
+     (match (trs_profile rules)
+       ((TrsProfileErr msg) (TgCanonCompileErr msg))
+       ((TrsProfileOk profile) (TgCanonCompileOk profile))))))
+
+(type TgObserverCompileR
+  (TgObserverCompileErr (List Int))
+  (TgObserverCompileOk TrsRootProfile))
+
+(type TgObserverRulesR
+  (TgObserverRulesErr (List Int))
+  (TgObserverRulesOk (List TrsRule)))
+
+(fn tg_compile_observer_rules ((licenses (List TgObserverLicense)))
+  TgObserverRulesR
+  (measure (struct licenses))
+  (match licenses
+    (Nil (TgObserverRulesOk Nil))
+    ((Cons (TgObserverLicense q _ params lhs rhs _) rest)
+     (match (trs_rule q (tg_param_types params) lhs rhs)
+       ((TrsRuleErr msg) (TgObserverRulesErr msg))
+       ((TrsRuleOk rule)
+        (match (tg_compile_observer_rules rest)
+          ((TgObserverRulesErr msg) (TgObserverRulesErr msg))
+          ((TgObserverRulesOk rules)
+           (TgObserverRulesOk (Cons rule rules)))))))))
+
+(fn tg_compile_observer ((licenses (List TgObserverLicense)))
+  TgObserverCompileR
+  (match (tg_compile_observer_rules licenses)
+    ((TgObserverRulesErr msg) (TgObserverCompileErr msg))
+    ((TgObserverRulesOk rules)
+     (match (trs_root_profile rules)
+       ((TrsRootProfileErr msg) (TgObserverCompileErr msg))
+       ((TrsRootProfileOk profile) (TgObserverCompileOk profile))))))
+
+;; ---- observer-scoped structural-spine licenses ---------------------------
+;;
+;; Root observation does not justify arbitrary congruence, but a theorem may
+;; quantify the exact prefix context in which a local reduction is valid:
+;;
+;;   O (plug prefix lhs) = O (plug prefix rhs)
+;;
+;; This section accepts that stronger theorem only after inspecting `plug`'s
+;; checked FnDef.  V1 recognizes a transparent binary right action with one
+;; nullary base arm and one first-order constructor arm:
+;;
+;;   plug prefix suffix =
+;;     match prefix with Leaf -> suffix
+;;                     | C fields -> C fields[child := plug child suffix]
+;;
+;; The constructor and recursive child are derived from the body.  Neither
+;; theorem names nor candidate/ISA constructors can assert the spine.
+
+(fn tg_param_count ((ps (List Param))) Int
+  (measure (struct ps))
+  (match ps
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (tg_param_count rest)))))
+
+(fn tg_bvar_occurs ((needle Int) (e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((BVar k) (int_eq needle k))
+    ((Ctor _ args) (tg_bvar_occurs_list needle args))
+    ((Call _ args) (tg_bvar_occurs_list needle args))
+    ((Match scrut arms)
+     (if (tg_bvar_occurs needle scrut) True
+     (tg_bvar_occurs_arms needle arms)))
+    ((Let bindings body)
+     (if (tg_bvar_occurs_list needle bindings) True
+     (tg_bvar_occurs needle body)))
+    ((If c t e2)
+     (if (tg_bvar_occurs needle c) True
+     (if (tg_bvar_occurs needle t) True (tg_bvar_occurs needle e2))))
+    (_ False)))
+
+(fn tg_bvar_occurs_list ((needle Int) (es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil False)
+    ((Cons e rest)
+     (if (tg_bvar_occurs needle e) True
+     (tg_bvar_occurs_list needle rest)))))
+
+(fn tg_bvar_occurs_arms ((needle Int) (arms (List Arm))) Bool
+  (measure (struct arms))
+  (match arms
+    (Nil False)
+    ((Cons (Arm _ body) rest)
+     (if (tg_bvar_occurs needle body) True
+     (tg_bvar_occurs_arms needle rest)))))
+
+(fn tg_context_args ((context QName) (e Expr))
+  (Option (Pair Expr Expr))
+  (match e
+    ((Call q args)
+     (if (qname_eq q context)
+       (match args
+         ((Cons prefix (Cons local Nil)) (Some (Pair prefix local)))
+         (_ None))
+       None))
+    (_ None)))
+
+(type TgDistinctPremiseR
+  (TgDistinctPremiseErr (List Int))
+  (TgDistinctPremiseOk TrsGuard))
+
+(type TgDistinctPremisesR
+  (TgDistinctPremisesErr (List Int))
+  (TgDistinctPremisesOk (List TrsGuard)))
+
+(fn tg_false_expr ((e Expr)) Bool
+  (match e
+    ((Ctor q Nil) (core_named q (quote False)))
+    (_ False)))
+
+(fn tg_true_expr ((e Expr)) Bool
+  (match e
+    ((Ctor q Nil) (core_named q (quote True)))
+    (_ False)))
+
+(fn tg_discriminator_arg ((e Expr)) (Option (Pair QName Int))
+  (match e
+    ((Call discriminator args)
+     (match args
+       ((Cons (BVar index) Nil) (Some (Pair discriminator index)))
+       (_ None)))
+    (_ None)))
+
+(fn tg_distinct_args ((m Module) (left Expr) (right Expr)) TgDistinctPremiseR
+  (match (tg_discriminator_arg left)
+    (None
+      (TgDistinctPremiseErr
+        "distinct premise left side is not disc(rule-variable)"))
+    ((Some (Pair left_disc left_index))
+     (match (tg_discriminator_arg right)
+       (None
+         (TgDistinctPremiseErr
+           "distinct premise right side is not disc(rule-variable)"))
+       ((Some (Pair right_disc right_index))
+        (if (qname_eq left_disc right_disc)
+          (match (trs_inspect_discriminator m left_disc)
+            ((TrsDiscInspectErr msg) (TgDistinctPremiseErr msg))
+            ((TrsDiscInspectOk checked)
+             (TgDistinctPremiseOk
+               (TrsDistinct checked left_index right_index))))
+          (TgDistinctPremiseErr
+            "distinct premise uses two discriminators")))))))
+
+(fn tg_distinct_premise ((m Module) (premise Equation)) TgDistinctPremiseR
+  (match premise
+    ((Equation lhs rhs)
+     (if (tg_false_expr rhs)
+       (match lhs
+         ((Call eq args)
+          (if (core_named eq (quote int_eq))
+            (match args
+              ((Cons left (Cons right Nil)) (tg_distinct_args m left right))
+              (_
+                (TgDistinctPremiseErr
+                  "distinct premise int_eq is not binary")))
+            (TgDistinctPremiseErr
+              "spine premise is not core int_eq(...)=False")))
+         (_
+           (TgDistinctPremiseErr
+             "spine premise is not a decidable distinctness guard")))
+       (TgDistinctPremiseErr
+         "spine premise right side is not core False")))))
+
+(fn tg_distinct_premises ((m Module) (premises (List Equation)))
+  TgDistinctPremisesR
+  (measure (struct premises))
+  (match premises
+    (Nil (TgDistinctPremisesOk Nil))
+    ((Cons premise rest)
+     (match (tg_distinct_premise m premise)
+       ((TgDistinctPremiseErr msg) (TgDistinctPremisesErr msg))
+       ((TgDistinctPremiseOk guard)
+        (match (tg_distinct_premises m rest)
+          ((TgDistinctPremisesErr msg) (TgDistinctPremisesErr msg))
+          ((TgDistinctPremisesOk guards)
+           (TgDistinctPremisesOk (Cons guard guards)))))))))
+
+;; ---- checked arithmetic premises -----------------------------------------
+;;
+;; Direct Int equalities and true `le` propositions in a checked theorem are
+;; lowered to the same small affine vocabulary used by meta/rewrite.  Only
+;; literals, theorem variables, addition, and subtraction are admitted.  The
+;; kernel has already checked the premise; the conditioned-rule validator
+;; subsequently verifies that every referenced variable is an Int-typed lhs
+;; binding.
+
+(type TgIntExprR
+  (TgIntExprErr (List Int))
+  (TgIntExprOk TrsIntExpr))
+
+(fn tg_int_expr ((expr Expr)) TgIntExprR
+  (measure (struct expr))
+  (match expr
+    ((IntLit value) (TgIntExprOk (TrsIntLit value)))
+    ((BVar index) (TgIntExprOk (TrsIntVar index)))
+    ((Call q args)
+     (match args
+       ((Cons left (Cons right Nil))
+        (if (core_named q (quote +))
+          (match (tg_int_expr left)
+            ((TgIntExprErr msg) (TgIntExprErr msg))
+            ((TgIntExprOk left_int)
+             (match (tg_int_expr right)
+               ((TgIntExprErr msg) (TgIntExprErr msg))
+               ((TgIntExprOk right_int)
+                (TgIntExprOk (TrsIntAdd left_int right_int))))))
+        (if (core_named q (quote -))
+          (match (tg_int_expr left)
+            ((TgIntExprErr msg) (TgIntExprErr msg))
+            ((TgIntExprOk left_int)
+             (match (tg_int_expr right)
+               ((TgIntExprErr msg) (TgIntExprErr msg))
+               ((TgIntExprOk right_int)
+                (TgIntExprOk (TrsIntSub left_int right_int))))))
+          (TgIntExprErr "integer guard call is not affine addition/subtraction"))))
+       (_ (TgIntExprErr "integer guard arithmetic call is not binary"))))
+    (_ (TgIntExprErr "integer guard expression is not affine"))))
+
+(type TgGuardPremiseR
+  (TgGuardPremiseErr (List Int))
+  (TgGuardPremiseOk TrsGuard))
+
+(type TgGuardPremisesR
+  (TgGuardPremisesErr (List Int))
+  (TgGuardPremisesOk (List TrsGuard)))
+
+(fn tg_int_le_premise ((expr Expr)) TgGuardPremiseR
+  (match expr
+    ((Call q args)
+     (if (core_named q (quote le))
+       (match args
+         ((Cons left (Cons right Nil))
+          (match (tg_int_expr left)
+            ((TgIntExprErr msg) (TgGuardPremiseErr msg))
+            ((TgIntExprOk left_int)
+             (match (tg_int_expr right)
+               ((TgIntExprErr msg) (TgGuardPremiseErr msg))
+               ((TgIntExprOk right_int)
+                (TgGuardPremiseOk (TrsIntLe left_int right_int)))))))
+         (_ (TgGuardPremiseErr "integer order guard le call is not binary")))
+       (TgGuardPremiseErr "true guard premise is not core le")))
+    (_ (TgGuardPremiseErr "true guard premise is not an order call"))))
+
+(fn tg_guard_premise ((m Module) (premise Equation)) TgGuardPremiseR
+  (match premise
+    ((Equation lhs rhs)
+     (if (tg_false_expr rhs)
+       (match (tg_distinct_premise m premise)
+         ((TgDistinctPremiseErr msg) (TgGuardPremiseErr msg))
+         ((TgDistinctPremiseOk guard) (TgGuardPremiseOk guard)))
+       (if (tg_true_expr rhs)
+         (tg_int_le_premise lhs)
+         (match (tg_int_expr lhs)
+           ((TgIntExprErr msg) (TgGuardPremiseErr msg))
+           ((TgIntExprOk left)
+            (match (tg_int_expr rhs)
+              ((TgIntExprErr msg) (TgGuardPremiseErr msg))
+              ((TgIntExprOk right)
+               (TgGuardPremiseOk (TrsIntEq left right)))))))))))
+
+(fn tg_guard_premises ((m Module) (premises (List Equation)))
+  TgGuardPremisesR
+  (measure (struct premises))
+  (match premises
+    (Nil (TgGuardPremisesOk Nil))
+    ((Cons premise rest)
+     (match (tg_guard_premise m premise)
+       ((TgGuardPremiseErr msg) (TgGuardPremisesErr msg))
+       ((TgGuardPremiseOk guard)
+        (match (tg_guard_premises m rest)
+          ((TgGuardPremisesErr msg) (TgGuardPremisesErr msg))
+          ((TgGuardPremisesOk guards)
+           (TgGuardPremisesOk (Cons guard guards)))))))))
+
+(type TgSpineObserverLicense
+  (TgSpineObserverLicense
+    QName QName TrsSpine (List Param) Expr Expr (List TrsGuard) TgLawEvidence))
+  ; citation, observer, inspected spine, params, local lhs/rhs, guards, evidence
+
+(type TgSpineObserverProfileR
+  (TgSpineObserverProfileErr Symbol (List Int))
+  (TgSpineObserverProfileOk (List TgSpineObserverLicense)))
+
+(type TgOneSpineObserverR
+  (TgOneSpineObserverErr (List Int))
+  (TgOneSpineObserverOk TgSpineObserverLicense))
+
+(fn tg_spine_observer_goal
+  ((m Module)
+   (q QName)
+   (observer QName)
+   (spine TrsSpine)
+   (goal Goal)
+   (evidence TgLawEvidence))
+  TgOneSpineObserverR
+  (match goal
+    ((Goal params premises (Equation lhs rhs))
+     (match (tg_guard_premises m premises)
+       ((TgGuardPremisesErr msg) (TgOneSpineObserverErr msg))
+       ((TgGuardPremisesOk guards)
+        (match (tg_unary_observer_arg observer lhs)
+          (None
+            (TgOneSpineObserverErr
+              "spine reduction lhs is not the exact unary observer"))
+          ((Some contextual_lhs)
+           (match (tg_unary_observer_arg observer rhs)
+             (None
+               (TgOneSpineObserverErr
+                 "spine reduction rhs is not the exact unary observer"))
+             ((Some contextual_rhs)
+              (match spine
+                ((TrsSpine context _ _)
+                 (match (tg_context_args context contextual_lhs)
+                   (None
+                     (TgOneSpineObserverErr
+                       "spine lhs does not use the inspected context"))
+                   ((Some (Pair prefix local_lhs))
+                    (match (tg_context_args context contextual_rhs)
+                      (None
+                        (TgOneSpineObserverErr
+                          "spine rhs does not use the inspected context"))
+                      ((Some (Pair prefix2 local_rhs))
+                       (if (expr_eq prefix prefix2)
+                         (match prefix
+                           ((BVar index)
+                            (if (lt index 0)
+                              (TgOneSpineObserverErr
+                                "spine prefix parameter index is negative")
+                            (if (le (tg_param_count params) index)
+                              (TgOneSpineObserverErr
+                                "spine prefix parameter is out of range")
+                            (if (tg_bvar_occurs index local_lhs)
+                              (TgOneSpineObserverErr
+                                "spine prefix is correlated with the local lhs")
+                            (if (tg_bvar_occurs index local_rhs)
+                              (TgOneSpineObserverErr
+                                "spine prefix is correlated with the local rhs")
+                              (TgOneSpineObserverOk
+                                (TgSpineObserverLicense
+                                  q observer spine params local_lhs local_rhs
+                                  guards evidence)))))))
+                           (_
+                             (TgOneSpineObserverErr
+                               "spine prefix is not a theorem parameter")))
+                         (TgOneSpineObserverErr
+                           "spine theorem uses different prefixes")))))))))))))))))
+
+(fn tg_spine_observer_q ((license TgSpineObserverLicense)) QName
+  (match license
+    ((TgSpineObserverLicense q _ _ _ _ _ _ _) q)))
+
+(fn tg_spine_observer_mem
+  ((q QName) (licenses (List TgSpineObserverLicense))) Bool
+  (measure (struct licenses))
+  (match licenses
+    (Nil False)
+    ((Cons license rest)
+     (if (qname_eq q (tg_spine_observer_q license)) True
+     (tg_spine_observer_mem q rest)))))
+
+(fn tg_spine_observer_snoc
+  ((licenses (List TgSpineObserverLicense))
+   (license TgSpineObserverLicense))
+  (List TgSpineObserverLicense)
+  (measure (struct licenses))
+  (match licenses
+    (Nil (Cons license Nil))
+    ((Cons head rest)
+     (Cons head (tg_spine_observer_snoc rest license)))))
+
+(fn tg_one_spine_observer
+  ((m Module)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (q QName)
+   (observer QName)
+   (spine TrsSpine))
+  TgOneSpineObserverR
+  (match (tg_checked_goal m th srcs q)
+    ((TgCheckedGoalErr msg) (TgOneSpineObserverErr msg))
+    ((TgCheckedGoalOk goal evidence)
+     (tg_spine_observer_goal m q observer spine goal evidence))))
+
+(fn tg_capture_spine_observer_go
+  ((m Module)
+   (ctx RCtx)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (observer QName)
+   (spine TrsSpine)
+   (names (List Symbol))
+   (acc (List TgSpineObserverLicense)))
+  TgSpineObserverProfileR
+  (measure (struct names))
+  (match names
+    (Nil (TgSpineObserverProfileOk acc))
+    ((Cons name rest)
+     (let ((q (rhead (qn name) ctx)))
+       (if (tg_claim_item m q)
+         (if (tg_spine_observer_mem q acc)
+           (TgSpineObserverProfileErr name "duplicate spine reduction")
+           (match (tg_one_spine_observer m th srcs q observer spine)
+             ((TgOneSpineObserverErr msg)
+              (TgSpineObserverProfileErr name msg))
+             ((TgOneSpineObserverOk license)
+              (tg_capture_spine_observer_go
+                m ctx th srcs observer spine rest
+                (tg_spine_observer_snoc acc license)))))
+         (TgSpineObserverProfileErr
+           name "spine reduction is not a claim item in scope"))))))
+
+(fn tg_capture_spine_observer
+  ((m Module)
+   (ctx RCtx)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (observer QName)
+   (context Symbol)
+   (names (List Symbol)))
+  TgSpineObserverProfileR
+  (let ((context_q (rhead (qn context) ctx)))
+    (match (trs_inspect_spine m context_q)
+      ((TrsSpineInspectErr msg)
+       (TgSpineObserverProfileErr context msg))
+      ((TrsSpineInspectOk spine)
+       (tg_capture_spine_observer_go
+         m ctx th srcs observer spine names Nil)))))
+
+(type TgSpineObserverCompileR
+  (TgSpineObserverCompileErr (List Int))
+  (TgSpineObserverCompileOk TrsSpineProfile))
+
+(type TgSpineObserverRulesR
+  (TgSpineObserverRulesErr (List Int))
+  (TgSpineObserverRulesOk (List TrsSpineRule)))
+
+(fn tg_compile_spine_observer_rules
+  ((licenses (List TgSpineObserverLicense))) TgSpineObserverRulesR
+  (measure (struct licenses))
+  (match licenses
+    (Nil (TgSpineObserverRulesOk Nil))
+    ((Cons (TgSpineObserverLicense q _ spine params lhs rhs guards _) rest)
+     (match (trs_rule q (tg_param_types params) lhs rhs)
+       ((TrsRuleErr msg) (TgSpineObserverRulesErr msg))
+       ((TrsRuleOk rule)
+        (match (tg_compile_spine_observer_rules rest)
+          ((TgSpineObserverRulesErr msg) (TgSpineObserverRulesErr msg))
+          ((TgSpineObserverRulesOk rules)
+           (TgSpineObserverRulesOk
+             (Cons
+               (TrsSpineRule spine (TrsConditionedRule rule guards))
+               rules)))))))))
+
+(fn tg_compile_spine_observer
+  ((licenses (List TgSpineObserverLicense))) TgSpineObserverCompileR
+  (match (tg_compile_spine_observer_rules licenses)
+    ((TgSpineObserverRulesErr msg) (TgSpineObserverCompileErr msg))
+    ((TgSpineObserverRulesOk rules)
+     (match (trs_spine_profile rules)
+       ((TrsSpineProfileErr msg) (TgSpineObserverCompileErr msg))
+       ((TrsSpineProfileOk profile)
+        (TgSpineObserverCompileOk profile))))))

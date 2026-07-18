@@ -1,0 +1,177 @@
+;;; meta/census — exact weighted censuses over stable byte keys.
+;;;
+;;; Search, profiling, and proof mining repeatedly need the same small-data
+;;; operation: group an exact structural signature, retain bounded exemplars,
+;;; and rank the groups by prospective value.  The producer owns the key
+;;; encoding and the meaning of its nonnegative weight; this component owns
+;;; exact key equality, accounting, and deterministic ranking.
+;;;
+;;; A `KcBucket` records key, support (observations), accumulated weight,
+;;; first rank, and at most `sample_cap` distinct ranks in encounter order.
+;;; `kc_ranked` orders by weight descending, support descending, then first rank
+;;; ascending.
+;;; This is deliberately a list implementation: mining frontiers normally have
+;;; few distinct signatures, and keeping the representation transparent makes
+;;; it suitable for theorem-side tools.  A tree/hash index can preserve this
+;;; interface if a future census makes lookup the bottleneck.
+
+(import "../../kernel/stdlib.shard")
+
+(type KcBucket (KcBucket (List Int) Int Int Int (List Int)))
+
+(type KcCensus (KcCensus (List KcBucket)))
+
+(type KcR (KcErr (List Int)) (KcOk KcCensus))
+
+(fn kc_empty () KcCensus (KcCensus Nil))
+
+(fn kc_buckets ((c KcCensus)) (List KcBucket)
+  (match c
+    ((KcCensus bs) bs)))
+
+(fn kc_key ((b KcBucket)) (List Int)
+  (match b
+    ((KcBucket key _ _ _ _) key)))
+
+(fn kc_support ((b KcBucket)) Int
+  (match b
+    ((KcBucket _ support _ _ _) support)))
+
+(fn kc_mass ((b KcBucket)) Int
+  (match b
+    ((KcBucket _ _ mass _ _) mass)))
+
+(fn kc_first ((b KcBucket)) Int
+  (match b
+    ((KcBucket _ _ _ first _) first)))
+
+(fn kc_samples ((b KcBucket)) (List Int)
+  (match b
+    ((KcBucket _ _ _ _ samples) samples)))
+
+(fn kc_len_ints ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (kc_len_ints rest)))))
+
+(fn kc_snoc_int ((xs (List Int)) (x Int)) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil (Cons x Nil))
+    ((Cons h rest) (Cons h (kc_snoc_int rest x)))))
+
+(fn kc_int_mem ((x Int) (xs (List Int))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons y rest) (if (int_eq x y) True (kc_int_mem x rest)))))
+
+(fn kc_key_eq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        (_ False)))
+    ((Cons x rest)
+     (match b
+       (Nil False)
+       ((Cons y rest2) (if (int_eq x y) (kc_key_eq rest rest2) False))))))
+
+(fn kc_keep_sample ((cap Int) (rank Int) (samples (List Int))) (List Int)
+  (if (kc_int_mem rank samples) samples
+  (if (lt (kc_len_ints samples) cap) (kc_snoc_int samples rank)
+  samples)))
+
+(fn kc_add_buckets
+  ((key (List Int))
+   (weight Int)
+   (rank Int)
+   (sample_cap Int)
+   (bs (List KcBucket)))
+  (List KcBucket)
+  (measure (struct bs))
+  (match bs
+    (Nil
+      (Cons
+        (KcBucket key 1 weight rank (kc_keep_sample sample_cap rank Nil))
+        Nil))
+    ((Cons (KcBucket key0 support mass first samples) rest)
+     (if (kc_key_eq key key0)
+       (Cons
+         (KcBucket
+           key0
+           (+ support 1)
+           (+ mass weight)
+           first
+           (kc_keep_sample sample_cap rank samples))
+         rest)
+       (Cons
+         (KcBucket key0 support mass first samples)
+         (kc_add_buckets key weight rank sample_cap rest))))))
+
+(fn kc_add
+  ((key (List Int)) (weight Int) (rank Int) (sample_cap Int) (c KcCensus))
+  KcR
+  (if (lt weight 0) (KcErr "census weight must be nonnegative")
+  (if (lt sample_cap 0) (KcErr "census sample cap must be nonnegative")
+  (match c
+    ((KcCensus bs)
+     (KcOk (KcCensus (kc_add_buckets key weight rank sample_cap bs))))))))
+
+(fn kc_find_buckets ((key (List Int)) (bs (List KcBucket))) (Option KcBucket)
+  (measure (struct bs))
+  (match bs
+    (Nil None)
+    ((Cons b rest)
+     (if (kc_key_eq key (kc_key b)) (Some b) (kc_find_buckets key rest)))))
+
+(fn kc_find ((key (List Int)) (c KcCensus)) (Option KcBucket)
+  (kc_find_buckets key (kc_buckets c)))
+
+(fn kc_bucket_count_buckets ((bs (List KcBucket))) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (kc_bucket_count_buckets rest)))))
+
+(fn kc_bucket_count ((c KcCensus)) Int (kc_bucket_count_buckets (kc_buckets c)))
+
+(fn kc_total_support_buckets ((bs (List KcBucket))) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons b rest) (+ (kc_support b) (kc_total_support_buckets rest)))))
+
+(fn kc_total_support ((c KcCensus)) Int
+  (kc_total_support_buckets (kc_buckets c)))
+
+(fn kc_total_mass_buckets ((bs (List KcBucket))) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons b rest) (+ (kc_mass b) (kc_total_mass_buckets rest)))))
+
+(fn kc_total_mass ((c KcCensus)) Int (kc_total_mass_buckets (kc_buckets c)))
+
+(fn kc_before ((a KcBucket) (b KcBucket)) Bool
+  (if (lt (kc_mass b) (kc_mass a)) True
+  (if (lt (kc_mass a) (kc_mass b)) False
+  (if (lt (kc_support b) (kc_support a)) True
+  (if (lt (kc_support a) (kc_support b)) False
+  (lt (kc_first a) (kc_first b)))))))
+
+(fn kc_insert ((b KcBucket) (bs (List KcBucket))) (List KcBucket)
+  (measure (struct bs))
+  (match bs
+    (Nil (Cons b Nil))
+    ((Cons h rest) (if (kc_before b h) (Cons b bs) (Cons h (kc_insert b rest))))))
+
+(fn kc_sort ((src (List KcBucket)) (dst (List KcBucket))) (List KcBucket)
+  (measure (struct src))
+  (match src
+    (Nil dst)
+    ((Cons b rest) (kc_sort rest (kc_insert b dst)))))
+
+(fn kc_ranked ((c KcCensus)) (List KcBucket) (kc_sort (kc_buckets c) Nil))

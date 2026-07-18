@@ -1,0 +1,107 @@
+;;; Regression for empirical affine pre-mining at the transition-miner join.
+;;;
+;;; Two supports imply both a useful five-variable relation and an accidental
+;;; four-variable relation.  Replaying each alternative guard family over the
+;;; complete census retains the useful domain and rejects the coincidence.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/antiunify")
+(import "transition_mine.shard")
+(use (:: kernel term *))
+(use (:: kernel loader World))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta antiunify *))
+(use (:: tools search transition_mine *))
+
+(fn tap_q ((name Symbol)) QName
+  (QName (list (quote tools) (quote search) (quote transition_affine_probe)) name))
+
+(fn tap_five ((a Expr) (b Expr) (c Expr) (d Expr) (e Expr)) Expr
+  (Ctor (tap_q (quote Five)) (list a b c d e)))
+
+(fn tap_kept ((a Expr)) Expr (Ctor (tap_q (quote Kept)) (list a)))
+
+(fn tap_equation ((a Int) (b Int) (c Int) (d Int) (e Int)) AuEquation
+  (AuEquation
+    (tap_five (IntLit a) (IntLit b) (IntLit c) (IntLit d) (IntLit e))
+    (tap_kept (IntLit a))))
+
+(fn tap_affine_set_find
+  ((wanted AuAffine) (sets (List (List AuGuard)))) (Option (List AuGuard))
+  (measure (struct sets))
+  (match sets
+    (Nil None)
+    ((Cons guards rest)
+     (if (au_affine_mem wanted guards)
+       (Some guards)
+       (tap_affine_set_find wanted rest)))))
+
+(fn tap_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "TRANSITION-AFFINE-PROBE FAIL " msg) w)))
+
+(fn tap_replay
+  ((lhs Expr)
+   (rhs Expr)
+   (sets (List (List AuGuard)))
+   (members (List TmMember))
+   (w World))
+  World
+  (let
+    ((useful
+       (AuAffine
+         (list
+           (Pair 0 1)
+           (Pair 1 1)
+           (Pair 2 (- 0 1))
+           (Pair 3 (- 0 1))
+           (Pair 4 (- 0 1)))
+         1))
+     (coincidence
+       (AuAffine
+         (list
+           (Pair 0 1)
+           (Pair 1 (- 0 1))
+           (Pair 2 (- 0 1))
+           (Pair 3 (- 0 1)))
+         1)))
+    (match (tap_affine_set_find useful sets)
+      (None (tap_fail "useful relation was not inferred\n" w))
+      ((Some useful_guards)
+       (match (tap_affine_set_find coincidence sets)
+         (None (tap_fail "control coincidence was not inferred\n" w))
+         ((Some coincidence_guards)
+          (match
+            (tm_validate_schema lhs rhs useful_guards members members 0)
+            ((TmValidateOk 2)
+             (match
+               (tm_validate_schema
+                 lhs rhs coincidence_guards members members 0)
+               ((TmValidateBad)
+                (write
+                  "TRANSITION-AFFINE-PROBE INFERRED USEFUL-REPLAY-2 COINCIDENCE-REJECTED OK\n"
+                  w))
+               (_ (tap_fail "complete replay retained a coincidence\n" w))))
+            (_ (tap_fail "complete replay rejected useful relation\n" w)))))))))
+
+(fn main ((w World)) World
+  (let
+    ((lhs (tap_five (BVar 0) (BVar 1) (BVar 2) (BVar 3) (BVar 4)))
+     (rhs (tap_kept (BVar 0)))
+     (one (tap_equation 9 4 1 3 8))
+     (two (tap_equation 12 5 2 4 10))
+     (counter (tap_equation 11 5 1 4 9)))
+    (let
+      ((schema (AuSchema (AuEquation lhs rhs) 5))
+       (members
+         (list
+           (TmMember 0 (au_lhs one) (list 1))
+           (TmMember 1 (au_rhs one) (list 1))
+           (TmMember 2 (au_lhs two) (list 2))
+           (TmMember 3 (au_rhs two) (list 2))
+           (TmMember 4 (au_lhs counter) (list 3)))))
+      (match (au_guard_sets 5 schema (list one two))
+        ((AuGuardSetsErr msg) (tap_fail msg w))
+        ((AuGuardSetsOk sets) (tap_replay lhs rhs sets members w))))))

@@ -1,0 +1,232 @@
+;;; Generic match-context formation against the existing rev dialect oracle.
+;;;
+;;; The production path starts from the FULL rev grammar, derives append
+;;; pressure from four checked requirements, then derives Nil/Cons arm facts
+;;; from the sketch itself.  The hand-written dial_grammar is consulted only
+;;; for its exact count; no dialect leaf or constructor name enters meta/search.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "../../meta/search")
+(import "checked_profile.shard")
+(import "rev.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader *))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: meta search *))
+(use (:: tools search checked_profile *))
+(use (:: tools search rev *))
+
+(fn cfp_fail ((msg (List Int)) (w World)) World
+  (exit
+    1
+    (write (append_int "CONTEXT-FORMATION FAIL " (append_int msg "\n")) w)))
+
+(fn cfp_names () (List Symbol)
+  (list
+    (quote append_nil_left)
+    (quote append_cons)
+    (quote append_assoc)
+    (quote append_nil_right)))
+
+(fn cfp_count ((root Expr) (grammar Grammar)) (Option Int)
+  (match (sk_count root grammar)
+    ((SkCErr _) None)
+    ((SkCOk count) (Some count))))
+
+(fn cfp_subset
+  ((i Int)
+   (total Int)
+   (root Expr)
+   (grammar Grammar)
+   (oracle_root Expr)
+   (oracle Grammar))
+  (Option (List Int))
+  (measure (- total i))
+  (if (le total i) None
+  (match (sk_unrank root grammar i)
+    ((SkEErr msg) (Some msg))
+    ((SkEOk candidate)
+     (match (sk_rank root grammar candidate)
+       ((SkCErr msg) (Some msg))
+       ((SkCOk back)
+        (if (int_eq back i)
+          (match (sk_rank oracle_root oracle candidate)
+            ((SkCErr msg) (Some msg))
+            ((SkCOk oracle_rank)
+             (match (sk_unrank oracle_root oracle oracle_rank)
+               ((SkEErr msg) (Some msg))
+               ((SkEOk candidate2)
+                (if (expr_eq candidate candidate2)
+                  (cfp_subset (+ i 1) total root grammar oracle_root oracle)
+                  (Some "oracle roundtrip changed a candidate"))))))
+          (Some "generic rank/unrank drift"))))))))
+
+(fn cfp_depth
+  ((depth Int) (want Int) (appendq QName) (formation TrsFormation) (w World))
+  World
+  (let ((root (rev_sketch)) (raw (rev_grammar depth appendq)))
+    (match (ms_filter_formation root raw formation)
+      ((MsFormationFilterErr msg) (cfp_fail msg w))
+      ((MsFormationFilterEmpty) (cfp_fail "append formation emptied rev" w))
+      ((MsFormationFilterOk canon_root canon_grammar)
+       (match (ms_filter_match_context canon_root canon_grammar)
+         ((MsContextFilterErr msg) (cfp_fail msg w))
+         ((MsContextFilterEmpty) (cfp_fail "context formation emptied rev" w))
+         ((MsContextFilterOk dialect_root dialect_grammar)
+          (match (cfp_count dialect_root dialect_grammar)
+            (None (cfp_fail "context grammar count" w))
+            ((Some got)
+             (let ((oracle_grammar (dial_grammar depth appendq)))
+               (match (cfp_count root oracle_grammar)
+                 (None (cfp_fail "oracle grammar count" w))
+                 ((Some oracle)
+                  (if (int_eq got want)
+                    (if (int_eq got oracle)
+                      (match
+                        (if (le depth 2)
+                          (cfp_subset 0 got dialect_root dialect_grammar root
+                            oracle_grammar)
+                          None)
+                        ((Some msg) (cfp_fail msg w))
+                        (None
+                          (write
+                            (append_int
+                              "CONTEXT-FORMATION rev DEPTH "
+                              (append_int
+                                (show_int depth)
+                                (append_int
+                                  " TOTAL "
+                                  (append_int (show_int got) " ORACLE EXACT\n"))))
+                            w)))
+                      (cfp_fail "generic/oracle count drift" w))
+                    (cfp_fail "pinned contextual count drift" w)))))))))))))
+
+(fn cfp_run ((appendq QName) (formation TrsFormation) (w World)) World
+  (cfp_depth
+    3
+    1512056
+    appendq
+    formation
+    (cfp_depth 2 1736 appendq formation (cfp_depth 1 56 appendq formation w))))
+
+;; A fixed nested violation is not a relational product: the containing
+;; production can be removed exactly.  The Nil arm excludes its BVar 0
+;; scrutinee, leaving only Wrap(0) from these two alternatives.
+(fn cfp_fixed_nested ((w World)) World
+  (let
+    ((root
+       (Match (BVar 0) (Cons (Arm (PCtor (qn (quote Nil)) Nil) (hole 0)) Nil)))
+     (grammar
+       (Grammar
+         (Cons
+           (GEnt
+             0
+             (list
+               (Ctor (qn (quote Wrap)) (Cons (BVar 0) Nil))
+               (Ctor (qn (quote Wrap)) (Cons (IntLit 0) Nil))))
+           Nil)))
+     (want
+       (Match
+         (BVar 0)
+         (Cons
+           (Arm
+             (PCtor (qn (quote Nil)) Nil)
+             (Ctor (qn (quote Wrap)) (Cons (IntLit 0) Nil)))
+           Nil))))
+    (if
+      (msx_expr_mem
+        (BVar 0)
+        (msx_arm_targets (BVar 0) (PCtor (qn (quote Nil)) Nil) Nil))
+      (match (ms_filter_match_context root grammar)
+        ((MsContextFilterErr msg) (cfp_fail msg w))
+        ((MsContextFilterEmpty)
+         (cfp_fail "fixed nested exclusion emptied the grammar" w))
+        ((MsContextFilterOk root2 grammar2)
+         (match (sk_count root2 grammar2)
+           ((SkCErr msg) (cfp_fail msg w))
+           ((SkCOk count)
+            (if (int_eq count 1)
+              (match (sk_unrank root2 grammar2 0)
+                ((SkEErr msg) (cfp_fail msg w))
+                ((SkEOk got)
+                 (if (expr_eq got want)
+                   (write "CONTEXT-FORMATION FIXED-NESTED DROP OK\n" w)
+                   (cfp_fail "fixed nested exclusion kept the wrong member" w))))
+              (cfp_fail
+                (append_int
+                  "fixed nested exclusion count drift: "
+                  (show_int count))
+                w))))))
+      (cfp_fail "nullary arm did not derive its scrutinee exclusion" w))))
+
+;; V1 deliberately refuses an exclusion that begins below a static production
+;; head and still contains holes.  In the Cons arm, the exact rebuild Cons(h,t)
+;; can occur inside Wrap(...), so accepting this grammar without a deeper state
+;; product would under-filter.  A fixed nested occurrence is simpler: its whole
+;; production is removed.
+(fn cfp_nested_refusal ((w World)) World
+  (let
+    ((root
+       (Match
+         (BVar 0)
+         (Cons
+           (Arm
+             (PCtor (qn (quote Cons)) (Cons (PVar) (Cons (PVar) Nil)))
+             (hole 0))
+           Nil)))
+     (grammar
+       (Grammar
+         (Cons
+           (GEnt
+             0
+             (Cons
+               (Ctor
+                 (qn (quote Wrap))
+                 (Cons
+                   (Ctor (qn (quote Cons)) (Cons (hole 1) (Cons (hole 2) Nil)))
+                   Nil))
+               Nil))
+           (Cons
+             (GEnt 1 (Cons (BVar 1) Nil))
+             (Cons (GEnt 2 (Cons (BVar 0) Nil)) Nil))))))
+    (match (ms_filter_match_context root grammar)
+      ((MsContextFilterErr _)
+       (write "CONTEXT-FORMATION NESTED-STATIC REFUSAL OK\n" w))
+      ((MsContextFilterEmpty)
+       (cfp_fail "nested-static case was emptied instead of refused" w))
+      ((MsContextFilterOk _ _)
+       (cfp_fail "nested-static case was silently accepted" w)))))
+
+(fn main ((w World)) World
+  (match
+    (tg_load_checked_profile
+      "tools/search/tasks/pure_program_obj.shard"
+      (cfp_names)
+      w)
+    ((Pair result w2)
+     (match result
+       ((TgCheckedProfileErr msg) (cfp_fail msg w2))
+       ((TgCheckedProfileOk profile)
+        (match (trs_partition_formation profile)
+          ((TrsProfileFormationErr msg) (cfp_fail msg w2))
+          ((TrsProfileFormationOk projected)
+           (match
+             (load_run_module "tools/search/tasks/pure_program_obj.shard" w2)
+             ((Pair loaded w3)
+              (match loaded
+                (None (cfp_fail "object module load" w3))
+                ((Some m)
+                 (match (find_fn (quote append) m)
+                   (None (cfp_fail "object module has no append" w3))
+                   ((Some (FnDef appendq _ _ _))
+                    (cfp_run
+                      appendq
+                      (trs_profile_formation projected)
+                      (cfp_nested_refusal (cfp_fixed_nested w3))))))))))))))))
