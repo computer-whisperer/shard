@@ -1,0 +1,131 @@
+;;; examples/stdin_echo_probe.shard — the no-argv PAGE-0 de-risk probe
+;;; (docs/X86.md §20/§21 tradition; I2e-4c-4 path A pre-flight). UNTRUSTED
+;;; plumbing, no proofs. It confirms IN ISOLATION the three NEW mechanisms
+;;; the sha256sum silicon rung needs, before the full image is involved:
+;;;
+;;;   1. PAGE-0 DATA SEGMENT — a second RW PT_LOAD at vaddr 0 covering
+;;;      [0, 65536) (p_filesz 0, p_memsz 65536, kernel zero-fill). This is
+;;;      the window the weld's frame lives in; it needs the page-0 hack
+;;;      (mmap_min_addr forbids mapping page 0 unmodified).
+;;;   2. NO-ARGV STUB — the `_start` glue does NOT marshal argv. It just
+;;;      runs the body (here inline) and self-exits. sha256sum's shs_main
+;;;      takes an all-zero entry state, so its stub only zeroes and calls.
+;;;   3. FD-0 READ INTO BUF@0 — read(0, 0, cap) lands the input at address
+;;;      0 (inside the page-0 segment) and echoes it back with write(1,0,n).
+;;;
+;;; Fully hand-laid, fixed-width, no branches — so no offset arithmetic.
+;;; The emitter prints `ELF <hex>`; examples/stdin_echo_probe.sh un-hexes,
+;;; applies the page-0 hack, and diffs stdin against stdout.
+
+(import "../kernel/loader.shard")
+(import "../models/x86/x86.shard")
+(import "../models/x86/encode.shard")
+(import "../models/x86/linux.shard")
+(use (:: kernel loader *))
+(use (:: models x86 x86 *))
+(use (:: models x86 encode le8))
+(use (:: models x86 encode eapp))
+(use (:: models x86 encode elen))
+(use (:: models x86 encode enc_mov_imm64))
+(use (:: models x86 encode enc_simple))
+(use (:: models x86 linux i_syscall))
+
+;; --- local list plumbing ------------------------------------------------------
+
+(fn gcat ((xs (List (List Int)))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (eapp h (gcat t)))))
+
+;; --- fixed layout constants ---------------------------------------------------
+
+(fn load_base () Int 4194304)  ; 0x400000 — the R+X code/headers segment
+(fn win_size () Int 65536)  ; the page-0 RW window [0, 65536)
+(fn read_cap () Int 65536)  ; read up to a full window's worth
+(fn hdrs_sz () Int 176)  ; 64 (ELF header) + 2*56 (two program headers)
+
+;; --- the flat no-argv glue (read stdin @ buf 0, echo to stdout, exit 0) -------
+
+(fn echo_glue () (List Int)
+  (gcat
+    (list
+      (enc_mov_imm64 RDI 0)  ; fd = stdin
+      (enc_mov_imm64 RSI 0)  ; buf = 0 (page 0)
+      (enc_mov_imm64 RDX (read_cap))  ; count
+      (enc_mov_imm64 RAX 0)  ; sys_read nr
+      (i_syscall)  ; rax = bytes read
+      (enc_simple (XMovRR RDX RAX))  ; count = bytes read
+      (enc_mov_imm64 RDI 1)  ; fd = stdout
+      (enc_mov_imm64 RSI 0)  ; buf = 0
+      (enc_mov_imm64 RAX 1)  ; sys_write nr
+      (i_syscall)  ; write(1, 0, n)
+      (enc_mov_imm64 RDI 0)  ; exit code 0
+      (enc_mov_imm64 RAX 60)  ; sys_exit nr
+      (i_syscall))))  ; exit(0)
+
+;; --- the two-segment ELF64 container (data segment at vaddr 0) -----------------
+
+;; 64-byte ELF header: ET_EXEC, x86-64, TWO program headers, entry at the glue.
+(fn elf_hdr2 () (List Int)
+  (gcat
+    (list
+      (list 127 69 76 70 2 1 1 0)  ; magic, ELFCLASS64, LE, ver 1, SysV
+      (list 0 0 0 0 0 0 0 0)  ; EI_ABIVERSION + pad
+      (list 2 0)  ; e_type = ET_EXEC
+      (list 62 0)  ; e_machine = x86-64
+      (list 1 0 0 0)  ; e_version
+      (le8 (+ (load_base) (hdrs_sz)))  ; e_entry
+      (le8 64)  ; e_phoff
+      (le8 0)  ; e_shoff
+      (list 0 0 0 0)  ; e_flags
+      (list 64 0)  ; e_ehsize
+      (list 56 0)  ; e_phentsize
+      (list 2 0)  ; e_phnum = 2
+      (list 0 0)  ; e_shentsize
+      (list 0 0)  ; e_shnum
+      (list 0 0))))  ; e_shstrndx
+
+;; program header, RW BSS at vaddr 0 (the page-0 window; ascending order first)
+(fn phdr_data () (List Int)
+  (gcat
+    (list
+      (list 1 0 0 0)  ; p_type = PT_LOAD
+      (list 6 0 0 0)  ; p_flags = R+W
+      (le8 0)  ; p_offset (≡ p_vaddr 0 mod 4096)
+      (le8 0)  ; p_vaddr = 0
+      (le8 0)  ; p_paddr = 0
+      (le8 0)  ; p_filesz = 0 (no file bytes)
+      (le8 (win_size))  ; p_memsz = zero-filled reserve
+      (le8 4096))))  ; p_align
+
+;; program header, R+X, the whole file at load_base.
+(fn phdr_code ((filesz Int)) (List Int)
+  (gcat
+    (list
+      (list 1 0 0 0)  ; p_type = PT_LOAD
+      (list 5 0 0 0)  ; p_flags = R+X
+      (le8 0)  ; p_offset
+      (le8 (load_base))  ; p_vaddr
+      (le8 (load_base))  ; p_paddr
+      (le8 filesz)  ; p_filesz
+      (le8 filesz)  ; p_memsz
+      (le8 4096))))  ; p_align
+
+(fn elf_bytes () (List Int)
+  (let ((code (echo_glue)))
+    (let ((filesz (+ (hdrs_sz) (elen code))))
+      (eapp (elf_hdr2) (eapp (phdr_data) (eapp (phdr_code filesz) code))))))
+
+;; --- hex rendering + the entry ------------------------------------------------
+
+(fn hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
+
+(fn hexs ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b t) (Cons (hexd (ediv b 16)) (Cons (hexd (mod b 16)) (hexs t))))))
+
+(fn main ((w World)) World
+  (exit 0 (write (gcat (list "ELF " (hexs (elf_bytes)) "\n")) w)))

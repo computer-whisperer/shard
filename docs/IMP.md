@@ -2750,6 +2750,39 @@ memory-effect pipe IS the spec, both targets.**
   (thin World main, slurp ≤ cap, controlled-failure leg, NIST
   vectors, gates).
 
+**I2e-4c-3 + 4c-4 LAND: the sha256sum bin, proven then RUN
+(2026-07-18).** 4c-3 = the machine module (examples/
+sha256sum_x86_out.shard, 1026/0, corpus-green f2fb8bb): the thin
+World main reads at the ground cap, branches on the full-read leg,
+and makes ONE call into a PURE PIPE fn (init → pad → shr-6 block
+count → fold → hex, 11 instrs). The pipe boundary is load-bearing,
+not cosmetic — weval_call's 96-instr effect budget mirrors any
+longer body into the world tower where the weld's xeval_seq claims
+can't fire, so the whole pipeline runs behind one delegated call in
+the base tower. The artifact theorem is two premised claims over
+raw oracle draws: lowered_w_shs_done (len < cap → trace [LxRead 0
+bs, LxWrote 1 (sha256_hex bs), LxExited 0]) and lowered_w_shs_fail
+(≥ cap → [LxRead 0 bs, LxExited 1]). Both compose with std/sha256's
+compute-proven NIST pins (sha256_abc_pin &c) — so the bin's
+behavior on any FIPS vector is a proven, corpus-gated consequence.
+
+- **4c-4 = the on-silicon confirmation (docs/X86.md §51).** THE
+  KEY FINDING: the in-logic NIST story was ALREADY complete at 4c-3
+  (pins ∘ artifact theorem, corpus-gated), so 4c-4's only content is
+  the silicon differential — proving the real ELF matches the model
+  on hardware. `./sha256sum < FILE` prints the file's SHA-256 and
+  exits 0; oversize exits 1; all three NIST vectors green,
+  cross-checked vs system sha256sum, cap boundary pinned (64887
+  pass / 64888 fail). ONE-TIME LOCAL milestone (path A, user-ratified)
+  — the in-logic gate rides CI; the silicon leg can't (needs page 0
+  mapped). Encoder divergence from every argv bin: a no-argv stub
+  (zero 15 regs, call entry, ud2 fence — the entry self-exits) + a
+  page-0 RW PT_LOAD [0,65536); the differential feeds inputs by FILE
+  REDIRECT (one read at cap = min(count,size); pipes short-read).
+  Page-0 hack = setcap cap_sys_rawio+ep (per-binary; mmap_min_addr
+  untouched; task #65 = the proper window relocation). The read rung's
+  consumer story is CLOSED.
+
 
 ## 7. Non-goals, stated once
 

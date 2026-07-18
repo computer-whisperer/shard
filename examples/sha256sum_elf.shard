@@ -1,0 +1,151 @@
+;;; examples/sha256sum_elf.shard — package the PROVEN sha256sum machine
+;;; module (examples/sha256sum_x86_out.shard) as a real static Linux ELF
+;;; (docs/IMP.md I2e-4c-4, path A: the one-time on-silicon confirmation).
+;;; UNTRUSTED plumbing, no proofs — a wrong header/stub byte fails LOUDLY
+;;; at the loader or the NIST diff, never in a proof.
+;;;
+;;; THE ARGV DIVERGENCE: shs_main (image index 6) takes NO argv — the
+;;; artifact claims enter it with an all-zero MkRegs. So the `_start` stub
+;;; ZEROES all 15 model registers and `call`s the entry; it does NOT
+;;; marshal argv (the one structural difference from addw's world-bin glue).
+;;; shs_main self-exits through the in-image exit shim, so there is no exit
+;;; tail — a single `ud2` trap fence sits after the `call` (the §44 never-
+;;; returns fence), and the process's observable behaviour is the entry's
+;;; own trace (read / write / exit through the in-image shims).
+;;;
+;;; THE PAGE-0 WINDOW: the module window is the weld's [0, 65536). The read
+;;; buffer AND the hex digest both live at address 0, so the ELF carries a
+;;; second RW zero-filled PT_LOAD covering [0, 65536) at vaddr 0 (BSS:
+;;; p_filesz 0, p_memsz 65536). Mapping page 0 needs the loader hack
+;;; (mmap_min_addr / CAP_SYS_RAWIO) — see examples/sha256sum_elf.sh.
+;;;
+;;; PURE BY THE BIN-BOUNDARY LAW: this file is a HOST TOOL over the machine
+;;; module — it must NOT drag a World main into the closure, because the
+;;; closure already carries the `(bin sha256sum … (externs nw_read nw_write
+;;; nw_exit))` form (via sha256sum_x86_out → sha256sum_src) and the boundary
+;;; law demands the closure's declared-extern surface EQUAL the bin's list.
+;;; So the ELF bytes are a nullary fn `shs_elf`; the World glue that writes
+;;; them to disk lives in the run-only examples/sha256sum_write.shard.
+
+(import "../models/x86/x86.shard")
+(import "../models/x86/encode.shard")
+(import "../models/x86/linux.shard")
+(import "sha256sum_x86_out.shard")
+(use (:: models x86 x86 *))
+(use (:: models x86 encode le8))
+(use (:: models x86 encode eapp))
+(use (:: models x86 encode elen))
+(use (:: models x86 encode enc_mov_imm64))
+(use (:: models x86 encode enc_call_rel32))
+(use (:: examples sha256sum_x86_out shs_elf_image))
+(use (:: examples sha256sum_x86_out shs_elf_offsets))
+
+;; --- local list plumbing ------------------------------------------------------
+
+(fn gcat ((xs (List (List Int)))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (eapp h (gcat t)))))
+
+(fn nth ((xs (List Int)) (i Int)) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons h t) (if (int_eq i 0) h (nth t (- i 1))))))
+
+;; --- fixed layout constants ---------------------------------------------------
+
+(fn load_base () Int 4194304)  ; 0x400000 — the R+X code/headers segment
+(fn win_size () Int 65536)  ; the page-0 RW window [0, 65536)
+(fn hdrs_sz () Int 176)  ; 64 (ELF header) + 2*56 (two program headers)
+
+;; --- the no-argv `_start` stub ------------------------------------------------
+;; 15 * (mov r64, 0) = 150 bytes (the all-zero entry state) then call entry
+;; (ends at stub offset 155) then ud2 (ends at 157). The image begins at
+;; stub offset 157, so the entry (image offset entry_off) is reached with
+;; rel32 = (157 + entry_off) - 155 = 2 + entry_off.
+
+(fn zero_regs () (List Int)
+  (gcat
+    (list
+      (enc_mov_imm64 RAX 0)
+      (enc_mov_imm64 RCX 0)
+      (enc_mov_imm64 RDX 0)
+      (enc_mov_imm64 RBX 0)
+      (enc_mov_imm64 RBP 0)
+      (enc_mov_imm64 RSI 0)
+      (enc_mov_imm64 RDI 0)
+      (enc_mov_imm64 R8 0)
+      (enc_mov_imm64 R9 0)
+      (enc_mov_imm64 R10 0)
+      (enc_mov_imm64 R11 0)
+      (enc_mov_imm64 R12 0)
+      (enc_mov_imm64 R13 0)
+      (enc_mov_imm64 R14 0)
+      (enc_mov_imm64 R15 0))))
+
+(fn stub ((entry_off Int)) (List Int)
+  (gcat
+    (list
+      (zero_regs)  ; 0    all-zero entry state (150 bytes)
+      (enc_call_rel32 (+ 2 entry_off))  ; 150  call entry (ends 155)
+      (list 15 11))))  ; 155  ud2 (0F 0B) trap fence (ends 157)
+
+(fn entry_off () Int (nth (shs_elf_offsets) 6))  ; shs_main = image index 6
+
+(fn code_bytes () (List Int) (eapp (stub (entry_off)) (shs_elf_image)))
+
+;; --- the two-segment ELF64 container (data segment at vaddr 0) -----------------
+
+(fn elf_hdr2 () (List Int)
+  (gcat
+    (list
+      (list 127 69 76 70 2 1 1 0)  ; magic, ELFCLASS64, LE, ver 1, SysV
+      (list 0 0 0 0 0 0 0 0)  ; EI_ABIVERSION + pad
+      (list 2 0)  ; e_type = ET_EXEC
+      (list 62 0)  ; e_machine = x86-64
+      (list 1 0 0 0)  ; e_version
+      (le8 (+ (load_base) (hdrs_sz)))  ; e_entry = the stub
+      (le8 64)  ; e_phoff
+      (le8 0)  ; e_shoff
+      (list 0 0 0 0)  ; e_flags
+      (list 64 0)  ; e_ehsize
+      (list 56 0)  ; e_phentsize
+      (list 2 0)  ; e_phnum = 2
+      (list 0 0)  ; e_shentsize
+      (list 0 0)  ; e_shnum
+      (list 0 0))))  ; e_shstrndx
+
+;; program header, RW BSS at vaddr 0 (page-0 window; ascending vaddr, so first)
+(fn phdr_data () (List Int)
+  (gcat
+    (list
+      (list 1 0 0 0)  ; p_type = PT_LOAD
+      (list 6 0 0 0)  ; p_flags = R+W
+      (le8 0)  ; p_offset (≡ p_vaddr 0 mod 4096)
+      (le8 0)  ; p_vaddr = 0
+      (le8 0)  ; p_paddr = 0
+      (le8 0)  ; p_filesz = 0 (no file bytes)
+      (le8 (win_size))  ; p_memsz = zero-filled reserve [0, 65536)
+      (le8 4096))))  ; p_align
+
+;; program header, R+X, the whole file at load_base.
+(fn phdr_code ((filesz Int)) (List Int)
+  (gcat
+    (list
+      (list 1 0 0 0)  ; p_type = PT_LOAD
+      (list 5 0 0 0)  ; p_flags = R+X
+      (le8 0)  ; p_offset
+      (le8 (load_base))  ; p_vaddr
+      (le8 (load_base))  ; p_paddr
+      (le8 filesz)  ; p_filesz
+      (le8 filesz)  ; p_memsz
+      (le8 4096))))  ; p_align
+
+;; the whole static ELF, as raw bytes (each in [0,256)). The run-only
+;; examples/sha256sum_write.shard write_file's this to examples/sha256sum.
+(fn shs_elf () (List Int)
+  (let ((code (code_bytes)))
+    (let ((filesz (+ (hdrs_sz) (elen code))))
+      (eapp (elf_hdr2) (eapp (phdr_data) (eapp (phdr_code filesz) code))))))
