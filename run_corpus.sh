@@ -191,6 +191,8 @@ TARGETS=(
   examples/addw_src.shard
   examples/sha256sum_src.shard
   examples/sha256sum_x86_out.shard
+  examples/sha256sum_elf.shard
+  examples/stdin_echo_probe.shard
   examples/addw_x86_out.shard
   examples/xitoa_probe.shard
   examples/x86div_src.shard
