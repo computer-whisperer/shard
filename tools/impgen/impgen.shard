@@ -1227,8 +1227,123 @@
                     (LSOk (gs_app ga (gs_app gp (gs_app gv gt))) st3 mem3))))))))))
        ((IIf _ _ _)
         (LSRf
-          "nested or repeated branch (straight-line arms; one branch per loop body; named growth)"))
+          "second or nested branch in a loop body (one top-level branch; named growth)"))
        ((IWhile _ _) (LSRf "nested loop (named growth)")))))))
+
+;; --- the ARM TREE walk (rung 3b) -----------------------------------------
+;; Branch arms as a GUARD TREE: straight-line runs are GTrG chains, a
+;; nested (or repeated) IIf forks the walk with the statement tail
+;; folded into both arms (se_stmts's continuation discipline), so every
+;; leaf carries one complete path's stick sequence. Guard kinds stay
+;; GSplit (the two emission textures); per-leaf post states are
+;; DISCARDED (branch arms conclude at the join, where state binds by
+;; matching). Loops in arms refuse (named).
+(type GTr (GTrL) (GTrG GSplit GTr) (GTrB Expr GTr GTr))
+(type LTR (LTOk GTr) (LTRf (List Int)))
+
+(fn gs_chain ((gs (List GSplit)) (k GTr)) GTr
+  (measure (struct gs))
+  (match gs
+    (Nil k)
+    ((Cons g t) (GTrG g (gs_chain t k)))))
+
+;; live = at least one stick point ahead (the stop-flag question)
+(fn gt_live ((t GTr)) Bool
+  (match t
+    (GTrL False)
+    ((GTrG _ _) True)
+    ((GTrB _ _ _) True)))
+
+;; does the tree fork anywhere (emitters that cannot host a fork fence
+;; on this)
+(fn gt_hasbr ((t GTr)) Bool
+  (measure (struct t))
+  (match t
+    (GTrL False)
+    ((GTrG _ k) (gt_hasbr k))
+    ((GTrB _ _ _) True)))
+
+(fn lw_tree
+  ((fuel Int)
+   (x86 Bool)
+   (msz Int)
+   (ss (List IStmt))
+   (st (List Expr))
+   (mem Expr))
+  LTR
+  (measure
+    fuel
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (lt fuel 1) (LTRf "walk fuel underflow (internal)")
+  (match ss
+    (Nil (LTOk GTrL))
+    ((Cons s t)
+     (match s
+       ((ISet i e)
+        (match (lw_exp x86 msz e st mem)
+          ((LXRf m) (LTRf m))
+          ((LXOk v gs)
+           (match (st_set st i v)
+             (None (LTRf "local index out of range"))
+             ((Some st2)
+              (match (lw_tree (- fuel 1) x86 msz t st2 mem)
+                ((LTRf m) (LTRf m))
+                ((LTOk k) (LTOk (gs_chain gs k)))))))))
+       ((IStore ae ve)
+        (match (lw_exp x86 msz ae st mem)
+          ((LXRf m) (LTRf m))
+          ((LXOk va ga)
+           (match (lws_addr va msz)
+             ((LWABad m) (LTRf m))
+             ((LWAGuards gp)
+              (match (lw_exp x86 msz ve st mem)
+                ((LXRf m) (LTRf m))
+                ((LXOk vv gv)
+                 (match
+                   (lw_tree
+                     (- fuel 1)
+                     x86
+                     msz
+                     t
+                     st
+                     (Call
+                       (pq (quote mem_set))
+                       (Cons mem (Cons va (Cons vv Nil)))))
+                   ((LTRf m) (LTRf m))
+                   ((LTOk k) (LTOk (gs_chain ga (gs_chain gp (gs_chain gv k)))))))))))))
+       ((IIf cnd tb eb)
+        (match cnd
+          ((IBin k2 o a b)
+           (if (is_cmp o)
+             (match (lw_exp x86 msz a st mem)
+               ((LXRf m) (LTRf m))
+               ((LXOk va ga)
+                (match (lw_exp x86 msz b st mem)
+                  ((LXRf m) (LTRf m))
+                  ((LXOk vb gb)
+                   (match (gs_app ga gb)
+                     ((Cons _ _)
+                      (LTRf "branch condition carries guards (named growth)"))
+                     (Nil
+                       (match
+                         (lw_tree (- fuel 1) x86 msz (stmt_app tb t) st mem)
+                         ((LTRf m) (LTRf m))
+                         ((LTOk tt)
+                          (match
+                            (lw_tree (- fuel 1) x86 msz (stmt_app eb t) st mem)
+                            ((LTRf m) (LTRf m))
+                            ((LTOk et)
+                             (LTOk (GTrB (sc2 (op_sym o) va vb) tt et))))))))))))
+             (LTRf "non-comparison branch condition (named growth)")))
+          (_ (LTRf "non-comparison branch condition (named growth)"))))
+       ((IWhile _ _) (LTRf "loop inside a branch arm (named growth)")))))))
 
 ;; drop the last statement (the base case's fuel death point: at
 ;; B = gcost exactly, iteration one dies at the LAST statement's
@@ -2336,6 +2451,18 @@
     ((Cons g t)
      (if (gs_seen seen g) (gs_dedup seen t) (Cons g (gs_dedup (Cons g seen) t))))))
 
+;; per-REGION dedup (the IF-1c law lifted to the tree): a guard run
+;; dedups against the guards seen in ITS region; each fork arm is a
+;; fresh region (arm occurrences materialize only after the polarity
+;; resolves; duplicate case-ons close by conflated traps)
+(fn gt_dedup ((seen (List GSplit)) (t GTr)) GTr
+  (measure (struct t))
+  (match t
+    (GTrL GTrL)
+    ((GTrG g k)
+     (if (gs_seen seen g) (gt_dedup seen k) (GTrG g (gt_dedup (Cons g seen) k))))
+    ((GTrB scrut tt et) (GTrB scrut (gt_dedup Nil tt) (gt_dedup Nil et)))))
+
 ;; the mem-hi bridge at one polarity: lift the case hyp into a have
 ;; (case hyps never join farkas rows), derive the machine spelling by
 ;; the integer-tight cert, then resolve the imp side by the hyp and
@@ -2671,7 +2798,7 @@
     (List GSplit)
     (Option LBr)
     (List (Pair Int Int)))
-  (MxPB IStmt Expr Expr Bool (List GSplit) (List GSplit) Int))
+  (MxPB IStmt Expr Expr Bool GTr GTr Int))
 (type MxPR (MxPOk (List MxPc)) (MxPRf (List Int)))
 
 ;; conservative node count over a reified tree (Ctor/Call nodes +
@@ -2864,25 +2991,25 @@
                 (MxPRf "branch condition carries guards (named growth)"))
                (Nil
                  (match
-                   (lw_stmts
+                   (lw_tree
                      (+ (isz_stmts tb) 2)
                      x86
                      msz
                      tb
                      (st_params nl)
                      (FVar (quote m)))
-                   ((LSRf m2) (MxPRf m2))
-                   ((LSOk tgs _ _)
+                   ((LTRf m2) (MxPRf m2))
+                   ((LTOk tgs)
                     (match
-                      (lw_stmts
+                      (lw_tree
                         (+ (isz_stmts eb) 2)
                         x86
                         msz
                         eb
                         (st_params nl)
                         (FVar (quote m)))
-                      ((LSRf m2) (MxPRf m2))
-                      ((LSOk egs _ _)
+                      ((LTRf m2) (MxPRf m2))
+                      ((LTOk egs)
                        (MxPOk
                          (Cons
                            (MxPB
@@ -3433,25 +3560,23 @@
       (if mid (DStr ") lr lhs true ()) (compute both (stop es_scont))))")
       (DStr ") lr lhs true ()) (compute both)))")))))
 
-(fn mxc_spine ((gs (List GSplit)) (i Int) (msz Int)) Doc
-  (measure (struct gs))
-  (match gs
-    (Nil (DStr "refl"))
-    ((Cons g t)
+(fn mxc_spine ((t GTr) (i Int) (msz Int)) Doc
+  (measure (struct t))
+  (match t
+    (GTrL (DStr "refl"))
+    ((GTrG g k)
      (match g
        ((GShared e)
         (dconc
           (list
             (DStr "(case-on ")
             (pr_e e)
-            (match t
-              (Nil
-                (DStr
-                  " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) "))
-              ((Cons _ _)
-               (DStr
-                 " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop es_scont)))) ")))
-            (mxc_spine t (+ i 1) msz)
+            (if (gt_live k)
+              (DStr
+                " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop es_scont)))) ")
+              (DStr
+                " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) "))
+            (mxc_spine k (+ i 1) msz)
             (DStr
               ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) refl))))"))))
        ((GMemHi a)
@@ -3462,19 +3587,30 @@
             (DStr " ")
             (dint msz)
             (DStr ") Bool ((case True (chain ")
-            (mxc_mh
-              i
-              a
-              msz
-              "True"
-              (match t
-                (Nil False)
-                ((Cons _ _) True)))
+            (mxc_mh i a msz "True" (gt_live k))
             (DStr " ")
-            (mxc_spine t (+ i 1) msz)
+            (mxc_spine k (+ i 1) msz)
             (DStr ")) (case False (chain ")
             (mxc_mh i a msz "False" False)
-            (DStr " refl))))"))))))))
+            (DStr " refl))))"))))))
+    ((GTrB scrut tt et)
+     (dconc
+       (list
+         (DStr "(case-on ")
+         (pr_e scrut)
+         (if (gt_live tt)
+           (DStr
+             " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop es_scont)))) ")
+           (DStr
+             " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) "))
+         (mxc_spine tt i msz)
+         (if (gt_live et)
+           (DStr
+             ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop es_scont)))) ")
+           (DStr
+             ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) "))
+         (mxc_spine et i msz)
+         (DStr "))))"))))))
 
 ;; one open-spine segment lemma: machine walk of the segment's kW
 ;; instrs over ANY tail rw = es_scont of the standalone imp run.
@@ -3519,7 +3655,7 @@
         (Nil (DStr " m)))) (chain (steps ((compute both))) "))
         ((Cons _ _)
          (DStr " m)))) (chain (steps ((compute both (stop es_scont)))) ")))
-      (mxc_spine gs 1 msz)
+      (mxc_spine (gs_chain gs GTrL) 1 msz)
       (DStr "))")
       (DStr (nl))
       (DStr (nl)))))
@@ -4916,17 +5052,6 @@
 ;; cmp tree); each arm walks concretely by the statement-tier split
 ;; spine; the parked continuation is claim-minus-one regardless of
 ;; which arm ran, so the fuel spelling is arm-independent.
-(fn mxc_brarm ((gs (List GSplit)) (msz Int)) Doc
-  (dconc
-    (list
-      (DStr "(chain (steps ((rewrite (hyp 0) lr both true ()) (compute both")
-      (match gs
-        (Nil (DStr ""))
-        ((Cons _ _) (DStr " (stop es_scont)")))
-      (DStr "))) ")
-      (mxc_spine gs 1 msz)
-      (DStr ")"))))
-
 (fn mxc_brlemma
   ((nm (List Int))
    (j Int)
@@ -4936,8 +5061,8 @@
    (msl (List Expr))
    (scrutE Expr)
    (flip Bool)
-   (tgs (List GSplit))
-   (egs (List GSplit)))
+   (tgs GTr)
+   (egs GTr))
   Doc
   (let ((kk (mxb_k msl)) (armT (if flip tgs egs)) (armF (if flip egs tgs)))
     (dconc
@@ -4969,14 +5094,9 @@
         (mxc_snm nm j "_i")
         (DStr ") ")
         (d_argspine nl)
-        (DStr
-          " m)))) (chain (steps ((compute both (stop es_scont)))) (case-on ")
-        (pr_e scrutE)
-        (DStr " Bool ((case True ")
-        (mxc_brarm armT msz)
-        (DStr ") (case False ")
-        (mxc_brarm armF msz)
-        (DStr ")))))")
+        (DStr " m)))) (chain (steps ((compute both (stop es_scont)))) ")
+        (mxc_spine (GTrB scrutE armT armF) 1 msz)
+        (DStr "))")
         (DStr (nl))
         (DStr (nl))))))
 
@@ -6058,13 +6178,11 @@
 
 ;; the chain split spine: True arms continue at pst, False arms
 ;; conflate traps at lst
-(fn mxx_spine
-  ((gs (List GSplit)) (i Int) (msz Int) (pst Doc) (lst Doc) (tail Doc))
-  Doc
-  (measure (struct gs))
-  (match gs
-    (Nil tail)
-    ((Cons g t)
+(fn mxx_spine ((t GTr) (i Int) (msz Int) (pst Doc) (lst Doc) (tail Doc)) Doc
+  (measure (struct t))
+  (match t
+    (GTrL tail)
+    ((GTrG g k)
      (match g
        ((GShared e)
         (dconc
@@ -6075,7 +6193,7 @@
               " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
             pst
             (DStr "))) ")
-            (mxx_spine t (+ i 1) msz pst lst tail)
+            (mxx_spine k (+ i 1) msz pst lst tail)
             (DStr
               ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
             lst
@@ -6090,10 +6208,26 @@
             (DStr ") Bool ((case True (chain ")
             (mxw_mh i a msz "True" pst)
             (DStr " ")
-            (mxx_spine t (+ i 1) msz pst lst tail)
+            (mxx_spine k (+ i 1) msz pst lst tail)
             (DStr ")) (case False (chain ")
             (mxw_mh i a msz "False" lst)
-            (DStr " refl))))"))))))))
+            (DStr " refl))))"))))))
+    ((GTrB scrut tt et)
+     (dconc
+       (list
+         (DStr "(case-on ")
+         (pr_e scrut)
+         (DStr
+           " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+         pst
+         (DStr "))) ")
+         (mxx_spine tt i msz pst lst tail)
+         (DStr
+           ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+         pst
+         (DStr "))) ")
+         (mxx_spine et i msz pst lst tail)
+         (DStr "))))"))))))
 
 ;; cite the next boundary lemma at the exposure leaf: the goal holds
 ;; the FOLDED continuation (walkers stopped), which is the cited
@@ -6178,25 +6312,23 @@
 ;; the sub-lemma split spine: mid computes brake at (stop xm_scont);
 ;; the final arm and the trap arms compute open, so both sides
 ;; converge on the braked-tail residue / the trap
-(fn mxxs_spine ((gs (List GSplit)) (i Int) (msz Int)) Doc
-  (measure (struct gs))
-  (match gs
-    (Nil (DStr "refl"))
-    ((Cons g t)
+(fn mxxs_spine ((t GTr) (i Int) (msz Int)) Doc
+  (measure (struct t))
+  (match t
+    (GTrL (DStr "refl"))
+    ((GTrG g k)
      (match g
        ((GShared e)
         (dconc
           (list
             (DStr "(case-on ")
             (pr_e e)
-            (match t
-              (Nil
-                (DStr
-                  " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) "))
-              ((Cons _ _)
-               (DStr
-                 " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop xm_scont)))) ")))
-            (mxxs_spine t (+ i 1) msz)
+            (if (gt_live k)
+              (DStr
+                " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop xm_scont)))) ")
+              (DStr
+                " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) "))
+            (mxxs_spine k (+ i 1) msz)
             (DStr
               ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) refl))))"))))
        ((GMemHi a)
@@ -6212,14 +6344,30 @@
               a
               msz
               "True"
-              (match t
-                (Nil (DStr ""))
-                ((Cons _ _) (DStr "(stop xm_scont)"))))
+              (if (gt_live k) (DStr "(stop xm_scont)") (DStr "")))
             (DStr " ")
-            (mxxs_spine t (+ i 1) msz)
+            (mxxs_spine k (+ i 1) msz)
             (DStr ")) (case False (chain ")
             (mxw_mh i a msz "False" (DStr ""))
-            (DStr " refl))))"))))))))
+            (DStr " refl))))"))))))
+    ((GTrB scrut tt et)
+     (dconc
+       (list
+         (DStr "(case-on ")
+         (pr_e scrut)
+         (if (gt_live tt)
+           (DStr
+             " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop xm_scont)))) ")
+           (DStr
+             " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) "))
+         (mxxs_spine tt i msz)
+         (if (gt_live et)
+           (DStr
+             ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop xm_scont)))) ")
+           (DStr
+             ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) "))
+         (mxxs_spine et i msz)
+         (DStr "))))"))))))
 
 ;; one seal-point sub-lemma: the chunk fn + the open-tail claim.
 ;; UNPREMISED; splits from the chunk's own walk at fresh locals.
@@ -6308,7 +6456,7 @@
                       ((Cons _ _)
                        (DStr
                          " m)))) (chain (steps ((compute both (stop xm_scont)))) ")))
-                    (mxxs_spine gs 1 msz)
+                    (mxxs_spine (gs_chain gs GTrL) 1 msz)
                     (DStr "))")
                     (DStr (nl))
                     (DStr (nl))))))))))))))
@@ -6421,27 +6569,8 @@
 ;; shared raw scrutinee; each arm rewrites into both sides, walks its
 ;; own region's guards (deduped per-REGION -- the IF-1c law), and
 ;; rides through the seal to the arm-independent xm_scont form
-(fn mxxbr_case ((scrut Expr) (tgs (List GSplit)) (egs (List GSplit)) (msz Int))
-  Doc
-  (dconc
-    (list
-      (DStr "(case-on ")
-      (pr_e scrut)
-      (DStr
-        " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both")
-      (match tgs
-        (Nil (DStr ""))
-        ((Cons _ _) (DStr " (stop xm_scont)")))
-      (DStr "))) ")
-      (mxxs_spine (gs_dedup Nil tgs) 1 msz)
-      (DStr
-        ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both")
-      (match egs
-        (Nil (DStr ""))
-        ((Cons _ _) (DStr " (stop xm_scont)")))
-      (DStr "))) ")
-      (mxxs_spine (gs_dedup Nil egs) 1 msz)
-      (DStr "))))"))))
+(fn mxxbr_case ((scrut Expr) (tgs GTr) (egs GTr) (msz Int)) Doc
+  (mxxs_spine (GTrB scrut (gt_dedup Nil tgs) (gt_dedup Nil egs)) 1 msz))
 
 ;; one SEALED-BRANCH sub-lemma (IF-3a): the chunk fn + the open-tail
 ;; claim. UNPREMISED; the machine walk and the polarity case-on live
@@ -6459,8 +6588,8 @@
    (st IStmt)
    (sE Expr)
    (scrut Expr)
-   (tgs (List GSplit))
-   (egs (List GSplit))
+   (tgs GTr)
+   (egs GTr)
    (msls (List (Pair (List Expr) (List Expr)))))
   Doc
   (match msls
@@ -6854,7 +6983,58 @@
                    ((LXRf _) (DStr ""))
                    ((LXOk vb _)
                     (match (lw_stmts (+ (isz_stmts tb) 2) True msz tb stA memA)
-                      ((LSRf _) (DStr ""))
+                      ((LSRf _)
+                       ;; forked (nested/repeated) arms: the flat walk
+                       ;; refuses; the TREE walk carries the fork
+                       ;; (rung 3b) -- the arm rides the leg tail per
+                       ;; leaf, one spine call over the whole tree.
+                       ;; Ground-terminated legs only: loop-bounded
+                       ;; legs are fenced upstream by mxx_nestck.
+                       (match olp
+                         ((Some _) (DStr ""))
+                         (None
+                           (match
+                             (lw_tree
+                               (+ (isz_stmts (stmt_app tb bSt)) 2)
+                               True
+                               msz
+                               (stmt_app tb bSt)
+                               stA
+                               memA)
+                             ((LTRf _) (DStr ""))
+                             ((LTOk trT)
+                              (match
+                                (lw_tree
+                                  (+ (isz_stmts (stmt_app eb bSt)) 2)
+                                  True
+                                  msz
+                                  (stmt_app eb bSt)
+                                  stA
+                                  memA)
+                                ((LTRf _) (DStr ""))
+                                ((LTOk trE)
+                                 (dconc
+                                   (list
+                                     headdoc
+                                     opener
+                                     (DStr "(steps ((compute both ")
+                                     pst
+                                     (DStr "))) ")
+                                     (mxx_spine
+                                       (gt_dedup
+                                         Nil
+                                         (gs_chain
+                                           gsA
+                                           (GTrB (sc2 (op_sym o) va vb) trT trE)))
+                                       1
+                                       msz
+                                       pst
+                                       lst
+                                       (DStr
+                                         "(steps ((compute both (stop lg_fuel int_of_nat)))) refl"))
+                                     (DStr "))")
+                                     (DStr (nl))
+                                     (DStr (nl)))))))))))
                       ((LSOk gsT stT memT)
                        (match
                          (lw_stmts (+ (isz_stmts eb) 2) True msz eb stA memA)
@@ -6899,7 +7079,7 @@
                                           pst
                                           (DStr "))) ")
                                           (mxx_spine
-                                            prefix
+                                            (gs_chain prefix GTrL)
                                             1
                                             msz
                                             pst
@@ -6913,7 +7093,7 @@
                                                 pst
                                                 (DStr "))) ")
                                                 (mxx_spine
-                                                  sufT
+                                                  (gs_chain sufT GTrL)
                                                   (+ 1 (gsl_len prefix))
                                                   msz
                                                   pst
@@ -6924,7 +7104,7 @@
                                                 pst
                                                 (DStr "))) ")
                                                 (mxx_spine
-                                                  sufE
+                                                  (gs_chain sufE GTrL)
                                                   (+ 1 (gsl_len prefix))
                                                   msz
                                                   pst
@@ -7132,7 +7312,7 @@
                                                      pst
                                                      (DStr "))) ")
                                                      (mxx_spine
-                                                       prefix
+                                                       (gs_chain prefix GTrL)
                                                        1
                                                        msz
                                                        pst
@@ -7150,7 +7330,7 @@
                                                            pst
                                                            (DStr "))) ")
                                                            (mxx_spine
-                                                             sufT
+                                                             (gs_chain sufT GTrL)
                                                              (+
                                                                1
                                                                (gsl_len prefix))
@@ -7163,7 +7343,7 @@
                                                            pst
                                                            (DStr "))) ")
                                                            (mxx_spine
-                                                             sufE
+                                                             (gs_chain sufE GTrL)
                                                              (+
                                                                1
                                                                (gsl_len prefix))
@@ -7429,7 +7609,7 @@
                                pst
                                (DStr "))) ")
                                (mxx_spine
-                                 (gs_dedup Nil gs)
+                                 (gs_chain (gs_dedup Nil gs) GTrL)
                                  1
                                  msz
                                  pst
@@ -7588,7 +7768,7 @@
                                         pst
                                         (DStr "))) ")
                                         (mxx_spine
-                                          (gs_dedup Nil gs)
+                                          (gs_chain (gs_dedup Nil gs) GTrL)
                                           1
                                           msz
                                           pst
@@ -7642,6 +7822,34 @@
                                         (DStr (nl)))))))))))))
                      (_ (DStr ""))))))))))))))
 
+
+;; rung 3b fence: forked (nested/repeated) branch arms ride the tree
+;; emitters -- sealed chunks, wasm sub-lemmas, ground-terminated legs.
+;; A LOOP-BOUNDED leg's branch walks per-arm to the loop head (per-arm
+;; post states), which a forked arm multiplies per leaf -- named
+;; growth with the loop-body workers.
+(fn mxp_forked ((pcs (List MxPc))) Bool
+  (measure (struct pcs))
+  (match pcs
+    (Nil False)
+    ((Cons p t)
+     (match p
+       ((MxPB _ _ _ _ tt et _)
+        (if (gt_hasbr tt) True (if (gt_hasbr et) True (mxp_forked t))))
+       (_ (mxp_forked t))))))
+
+(fn mxx_nestck ((legs (List (Pair (List MxPc) (Option MxPc)))))
+  (Option (List Int))
+  (measure (struct legs))
+  (match legs
+    (Nil None)
+    ((Cons (Pair pcs olp) t)
+     (match olp
+       ((Some _)
+        (if (mxp_forked pcs)
+          (Some "nested branch in a loop-bounded leg (named growth)")
+          (mxx_nestck t)))
+       (None (mxx_nestck t))))))
 
 (type SqxR (SqxOk Doc) (SqxNote (List Int)) (SqxErr (List Int)))
 
@@ -7702,35 +7910,38 @@
                                   "per-segment translation invoke (internal)"))
                               ((Some msls)
                                (let ((legs (mxx_legs pcs)))
-                                 (match (mxx_ag legs lis msls 0 0 0 0)
-                                   ((Pair aa gg)
-                                    (match (mxxw_all evs lis nm nl msz 1)
-                                      ((EErr m) (SqxErr m))
-                                      ((EOk workers)
-                                       (SqxOk
-                                         (dconc
-                                           (list
-                                             (mxx_rests legs lis msls nm ssE els
-                                               0 0 0)
-                                             (mx_wid nm)
-                                             (mx_wid64 nm)
-                                             workers
-                                             (mxx_lems
-                                               legs
-                                               lis
-                                               msls
-                                               brpre
-                                               nm
-                                               nl
-                                               msz
-                                               aa
-                                               gg
-                                               0
-                                               0
-                                               (- (mxx_nlg legs) 1)
-                                               fsa
-                                               fsb
-                                               fsc)))))))))))))))))))))))))))))
+                                 (match (mxx_nestck legs)
+                                   ((Some why) (SqxNote why))
+                                   (None
+                                     (match (mxx_ag legs lis msls 0 0 0 0)
+                                       ((Pair aa gg)
+                                        (match (mxxw_all evs lis nm nl msz 1)
+                                          ((EErr m) (SqxErr m))
+                                          ((EOk workers)
+                                           (SqxOk
+                                             (dconc
+                                               (list
+                                                 (mxx_rests legs lis msls nm ssE
+                                                   els 0 0 0)
+                                                 (mx_wid nm)
+                                                 (mx_wid64 nm)
+                                                 workers
+                                                 (mxx_lems
+                                                   legs
+                                                   lis
+                                                   msls
+                                                   brpre
+                                                   nm
+                                                   nl
+                                                   msz
+                                                   aa
+                                                   gg
+                                                   0
+                                                   0
+                                                   (- (mxx_nlg legs) 1)
+                                                   fsa
+                                                   fsb
+                                                   fsc)))))))))))))))))))))))))))))))
 
 ;; --- per-pin emission ------------------------------------------------------------
 

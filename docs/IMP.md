@@ -3080,6 +3080,72 @@ mid-flat.
   symbolic-count branch rung; branch-with-loop-arms stays fenced
   (hard, named).
 
+**IF-3b — NESTED AND REPEATED BRANCHES (2026-07-18; the imp-if-tier
+fork): branch arms become GUARD TREES; the "nested or repeated
+branch" fence falls at every non-loop site on both targets.**
+
+- **The assessment held before a line was written.** Both
+  translators already recurse into IIf arms (nested IIf = nested
+  XBlock/Block inside the OUTER chunk — the chunk grain and the
+  IF-3a seal rules are untouched); `ix_dwl` descends nested blocks,
+  so the seal's zero set covers nested arm dirt (the seal is the
+  join AT EVERY LEAF); tcost/gcost price nesting by their recursive
+  max discipline unchanged. The blueprint (a scratch sealed-chunk
+  sub-lemma with an inner IIf heading the then arm) checked 406/0
+  FIRST RUN with towers computed from the fuel laws (S^16 total =
+  tcost 15 + seal 1, S^14 continuation, S^9 imp) — no
+  claim-mismatch corrections. The scalar tier's BT/se_stmts
+  machinery was the design precedent (continuation folding, guards
+  as tree nodes); the mixed tree keeps GSplit guard kinds.
+- **The mechanism: `GTr` — GTrG guard steps, GTrB fork nodes, GTrL
+  leaves.** `lw_tree` walks arms with the statement tail FOLDED
+  into both fork arms (se_stmts's discipline), so every leaf
+  carries one complete path's stick sequence; per-leaf post states
+  are discarded (branch arms conclude at the join, where state
+  binds by matching). REPEATED branches in an arm are just two GTrB
+  nodes on one path — they fall out of the same recursion. Fork
+  conditions obey mxc_br's laws (comparison-headed, guard-free
+  operands, sc2 shared-raw scrutinee). `gt_dedup` lifts the IF-1c
+  per-REGION law: seen accumulates along a guard run and RESETS at
+  each fork arm.
+- **The spines walk trees.** mxxs_spine / mxc_spine / mxx_spine
+  take GTr; a GTrB emits the case-on with per-arm
+  rewrite+compute(+stop iff the subtree is live) and recurses —
+  forks do NOT advance the hlt/hle index (case arms are separate
+  scopes; the counter grows only along guard runs, so path names
+  never shadow). Flat callers chain-embed via `gs_chain` — all
+  eight pre-existing outs regenerate BYTE-IDENTICALLY. mxxbr_case
+  and mxc_brlemma collapsed to single tree-spine calls on a
+  GTrB-rooted tree (mxc_brarm deleted); MxPB carries GTr arms.
+- **Sites and fences.** Supported: x86 sealed branch chunks, wasm
+  branch sub-lemmas (all positions), x86 GROUND-TERMINATED legs
+  (mxx_bleg grew a tree fallback on the flat walk's refusal: one
+  mxx_spine call over prefix-chain + GTrB, the leg tail folded per
+  leaf). Fenced loud: `mxx_nestck` (wired where mxx_legck was) —
+  "nested branch in a loop-bounded leg (named growth)" (per-arm
+  post states at the loop head multiply per leaf; 3b-b territory
+  with the loop-body workers); lw_stmts's IIf refusal narrowed to
+  its true remaining scope: "second or nested branch in a loop body
+  (one top-level branch; named growth)".
+- **Fixture** (examples/imp_if.shard): `it_ifn_fn` = nested branch
+  in a SEALED chunk (the blueprint program as a full pin);
+  `it_ifn2_fn` = nested + repeated branches in a TERMINAL leg (five
+  leaves ride the folded tail's store guards); `it_ifn3_fn` = the
+  fence lock — x86 tie+note, wasm FULL (sqbr_ifn3_s0 + the loop
+  worker — wasm sub-lemmas are position-independent). Outs strictly
+  additive and deterministic: wasm 161/0 (was 135), x86 435/0 (was
+  422), all generated chains green FIRST RUN after one emitter
+  parity fix (the fork index-advance — caught by the additive-
+  prefix compare, not by a checker failure).
+- Gates: impgen 91/0 fmt-canonical; eight unchanged outs
+  byte-identical; fixture 77/0; driver + corpus ride the CI
+  pipeline.
+- NEXT: rung 3b-b — nested branches in loop-body workers and
+  loop-bounded legs (per-leaf post states meet the worker's
+  band-decrement checks and the loop-head cites); the pure-tier
+  symbolic-count branch rung; branch-with-loop-arms stays fenced
+  (hard, named).
+
 
 ## 7. Non-goals, stated once
 
