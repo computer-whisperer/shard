@@ -3238,7 +3238,85 @@ every branch position the dialect admits.
   recorded in slice 1).
 - NEXT: the pure-tier symbolic-count branch rung (Some-conditional
   worker + case-on); branch-with-loop-arms stays fenced (hard,
-  named).
+  named). [Taken next — the IF-P record below.]
+
+**IF-P — branches in the pure loop tier: the equal-depth rung
+(2026-07-18; the imp-if-tier fork; one commit).** The IF-2c fence
+("branch in a symbolic-count loop body") falls for depth-balanced
+arms: the pure tier's Some-conditional worker walks the loop body as
+a guard TREE, and a fork resolves exactly like a shared split — both
+machines stick on the same comparison term, one case-on serves both
+chains — except its False arm is the else path, not a trap, and each
+leaf carries its own post-state into the step transport.
+
+- **The soundness finding that shapes the rung (measured before
+  building, then blueprint-validated).** The recorded design sketch —
+  "the IF-2 case-on mechanism ports" — is sound ONLY for
+  depth-equal arms. `iwhile` hands the same reservoir to the body
+  and the recursion, so the step case tolerates any path depth ≤ the
+  explicit prefix; but the base case needs istmts to DIE at fuel
+  B−1 on EVERY path. With unequal arm depths the cheap path
+  completes under the exact tower (and with the counter near zero
+  the premise is then satisfiable at k=Z while the machine's c-slack
+  can be 0) — the claim SHAPE goes false, not just the proof. Equal
+  depths keep the death point path-uniform; the unequal shape needs
+  a count-tied worker (k = the counter, premises gain the tie + the
+  counter band) — queued as the named follow-on rung.
+- **Pricing.** `gcost`'s IIf row overshoots the true istmts depth by
+  one (mixed-tier slack pricing); the pure tier's base-case absurd
+  needs the depth EXACT in both directions. New `gdepth` = the
+  literal istmts-need (≡ gcost−1 on flat bodies — the landed flat
+  calibration, so flat pins keep their fuel constants); `gdeq` =
+  every fork depth-balanced (the dispatch fence, recursive).
+- **The walks.** The step tree = `lw_tree` over the body (the 3b
+  walker: per-leaf (locals, mem), stmt_app tail folding, ground-fork
+  `cmp_gval` folds, guard-carrying/non-comparison conditions
+  refused). The base tree = new `lwz_tree`, a FUELED symbolic
+  execution mirroring istmts/istmt exactly (kont carries pending
+  tails at their own reservoirs): emits case-ons only for what the
+  dying premise chain actually resolves — guards of statements that
+  execute, forks passed through; death can sit inside an arm (istmt
+  Z short-circuits None before the arm's guards) or in the tail
+  after a survived arm. On a flat body this reproduces the old
+  butlast walk byte-for-byte.
+- **The emission, unified tree-only** (the 3b-b mxx_bleg precedent):
+  `wk_tree` (the flat split-list walker) DELETED; `wkbz`/`wkbs` walk
+  the GTr with the same node textures (flat chains emit
+  byte-identical text — regen-compare proved before fixtures were
+  added); `lp_emit` takes the two trees; the denotation theorem's
+  texture is UNTOUCHED (the worker's statement shape is unchanged —
+  only its proof body and the bfl pricing moved).
+- **The one texture the blueprint missed** (found by il_brs, the
+  memful-arm pin): a trap arm UNDER a fork sits one istmt level
+  deeper, past the exact tower's explicit prefix — its premise chain
+  sticks on the opaque `lg_fuel (S k2) 0` before the guard
+  materializes. `wk_trapd` (the deep trap) prepends the step case's
+  ghost unfold (`unfold lg_fuel / reduce`); top-level traps keep the
+  old bytes (`wk_trapg` splices an empty prefix — flat parity
+  exact).
+- **Fixtures** (imp_loop.shard, both targets by construction):
+  `il_brc` (scalar fork, ILoc result), `il_brs` (IStore in one arm —
+  address guards + mem_set post-state inside the fork's True arm,
+  deep traps), `il_brn` (nested fork balanced against a 3-statement
+  flat arm — three leaves at different hyp depths), `il_bru`
+  (unequal depths — pins the fence note).
+- **Blueprint** (.lpb_probe/.lpb_probe_x, deleted after parity):
+  wasm worker + denot 112/0 FIRST RUN; x86 worker 406/0 first run —
+  the generated il_brc emission == the blueprint modulo whitespace.
+- **Gates:** wasm loop out 160/0, x86 loop out 455/0 (committed
+  content = byte-identical prefix, strictly additive); the OTHER
+  eight outs byte-identical under the edited generator (regen
+  sweep); determinism ×2 both targets; post-fmt regen byte-stable;
+  impgen 91/0 fmt-canonical; imp_loop 109/0 fmt-canonical; driver +
+  corpus ride the CI pipeline.
+- Branch coverage after IF-P: the pure loop tier joins — equal-depth
+  forks (incl. nested, memful arms) FULL on both targets. Still
+  fenced (named): unequal-depth arms (count-tied worker, next),
+  branch-with-loop-arms, guard-carrying / non-comparison branch
+  conditions, ground top-level branch conditions (mxc_br scrutinee).
+- NEXT: the count-tied pure-tier worker (unequal arm depths — k tied
+  to the counter, band premises, exit derived not case-on'd); or the
+  mixed tier's remaining named edges. User gates the pick.
 
 
 ## 7. Non-goals, stated once

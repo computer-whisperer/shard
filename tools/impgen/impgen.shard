@@ -432,6 +432,42 @@
        1)))
     (_ 1)))
 
+;; the EXACT istmts depth need (the pure loop tier's premise fuel):
+;; istmts F (Cons s t) runs s AND t at F-1; an IIf runs its arm at one
+;; less again. gdepth == gcost - 1 on flat bodies (the landed flat
+;; calibration); on branchy bodies gcost's IIf row overshoots by one,
+;; and the Z-case absurd needs the death depth EXACT in both
+;; directions -- sufficiency for the step transport, necessity for the
+;; base-case fuel death.
+(fn gdepth ((ss (List IStmt))) Int
+  (measure (struct ss))
+  (match ss
+    (Nil 1)
+    ((Cons s t)
+     (match s
+       ((ISet _ _) (+ 1 (imax 1 (gdepth t))))
+       ((IStore _ _) (+ 1 (imax 1 (gdepth t))))
+       ((IIf _ tb eb)
+        (+ 1 (imax (+ 1 (imax (gdepth tb) (gdepth eb))) (gdepth t))))
+       ((IWhile _ _) (+ 1 (imax 1 (gdepth t))))))))
+
+;; every fork depth-balanced (recursively): with equal arm depths the
+;; base-case death point is path-uniform, so ONE premise fuel serves
+;; every path. Unequal arms would let the cheap path complete under
+;; the exact tower and break the Z absurd -- that shape needs a
+;; count-tied worker (named growth).
+(fn gdeq ((ss (List IStmt))) Bool
+  (measure (struct ss))
+  (match ss
+    (Nil True)
+    ((Cons s t)
+     (match s
+       ((IIf _ tb eb)
+        (if (int_eq (gdepth tb) (gdepth eb))
+          (if (gdeq tb) (if (gdeq eb) (gdeq t) False) False)
+          False))
+       (_ (gdeq t))))))
+
 ;; --- the symbolic walk: events in evaluation order -------------------------------
 ;; The bridge's premise discipline: walk the pin's statements and result
 ;; with a SYMBOLIC local state (params = x0…, extras = 0), emitting one
@@ -1050,14 +1086,18 @@
 
 ;; drop through the first underscore (the whole tail if none)
 ;; --- the loop tier: the generic Some-conditional worker (V2-5) --------------------
-;; One IWhile as the WHOLE body, bare-local guard, straight-line loop
-;; body, IConst/ILoc result -- the probe-validated form
-;; (examples/iwg_probe.shard): the worker carries NO per-program
-;; premises; the imp run's landing (= Some o) at ghost-count fuel
-;; (S^B (lg_fuel k 0)) is the one premise, B = gcost(loop body) EXACT
-;; so base-case fuel death is contradictory. Everything else declines
-;; to note-and-tie (branches/nested loops in a body, comparison
-;; guards, expression results: named growth).
+;; One IWhile as the WHOLE body, bare-local guard, IConst/ILoc result
+;; -- the probe-validated form (examples/iwg_probe.shard): the worker
+;; carries NO per-program premises; the imp run's landing (= Some o)
+;; at ghost-count fuel (S^B (lg_fuel k 0)) is the one premise, B =
+;; gdepth(loop body) EXACT so base-case fuel death is contradictory.
+;; Loop bodies walk as guard TREES (the IF tier): a branch forks the
+;; walk, both machines stick on the shared comparison, and each leaf
+;; carries its own post-state -- sound at the exact tower only when
+;; every fork's arms are depth-EQUAL (gdeq), because the base case
+;; needs the death point path-uniform; unequal arms are a named fence
+;; (the count-tied worker rung). Nested loops, comparison guards and
+;; expression results decline to note-and-tie (named growth).
 
 ;; a split the loop walk emits: shared scrutinee (both machines stick
 ;; on the same term) or the mem-hi bound (imp spells (lt a MSZ), the
@@ -1387,17 +1427,142 @@
           (_ (LTRf "non-comparison branch condition (named growth)"))))
        ((IWhile _ _) (LTRf "loop inside a branch arm (named growth)")))))))
 
-;; drop the last statement (the base case's fuel death point: at
-;; B = gcost exactly, iteration one dies at the LAST statement's
-;; istmt entry, so only the earlier statements' splits fire)
-(fn lw_butlast ((ss (List IStmt))) (List IStmt)
-  (measure (struct ss))
+;; the Z walk: symbolically execute istmts at CONCRETE fuel to the
+;; base case's death point, emitting exactly the case-ons the absurd
+;; premise chain resolves -- guards of statements that EXECUTE, forks
+;; the computation passes through. Leaves mark death states (payload
+;; unread: wk_absurd needs only the path scope). On a flat body this
+;; is lw_butlast's walk (death at the last statement's istmt entry);
+;; with forks the death point can sit inside an arm (istmt Z
+;; short-circuits None before the arm's guards) or in the tail after
+;; a survived arm -- kont carries the pending tails at their own
+;; istmts fuels (istmt returns into its caller's reservoir). wfuel is
+;; the WALK bound (depth of one path, not the tree size); sfuel is
+;; the semantic istmts fuel, entered at gdepth(body) - 1.
+(fn lwz_tree
+  ((wfuel Int)
+   (sfuel Int)
+   (x86 Bool)
+   (msz Int)
+   (ss (List IStmt))
+   (st (List Expr))
+   (mem Expr)
+   (kont (List (Pair Int (List IStmt)))))
+  LTR
+  (measure
+    wfuel
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (lt wfuel 1) (LTRf "z-walk fuel underflow (internal)")
+  (if (lt sfuel 1) (LTOk (GTrL st mem))
   (match ss
-    (Nil Nil)
+    (Nil
+      (match kont
+        (Nil (LTRf "z-walk completed the body (internal)"))
+        ((Cons (Pair f2 t2) k2) (lwz_tree (- wfuel 1) f2 x86 msz t2 st mem k2))))
     ((Cons s t)
-     (match t
-       (Nil Nil)
-       ((Cons _ _) (Cons s (lw_butlast t)))))))
+     (match s
+       ((ISet i e)
+        (if (lt (- sfuel 1) 1) (LTOk (GTrL st mem))
+        (match (lw_exp x86 msz e st mem)
+          ((LXRf m) (LTRf m))
+          ((LXOk v gs)
+           (match (st_set st i v)
+             (None (LTRf "local index out of range"))
+             ((Some st2)
+              (match (lwz_tree (- wfuel 1) (- sfuel 1) x86 msz t st2 mem kont)
+                ((LTRf m) (LTRf m))
+                ((LTOk k) (LTOk (gs_chain gs k))))))))))
+       ((IStore ae ve)
+        (if (lt (- sfuel 1) 1) (LTOk (GTrL st mem))
+        (match (lw_exp x86 msz ae st mem)
+          ((LXRf m) (LTRf m))
+          ((LXOk va ga)
+           (match (lws_addr va msz)
+             ((LWABad m) (LTRf m))
+             ((LWAGuards gp)
+              (match (lw_exp x86 msz ve st mem)
+                ((LXRf m) (LTRf m))
+                ((LXOk vv gv)
+                 (match
+                   (lwz_tree
+                     (- wfuel 1)
+                     (- sfuel 1)
+                     x86
+                     msz
+                     t
+                     st
+                     (Call
+                       (pq (quote mem_set))
+                       (Cons mem (Cons va (Cons vv Nil))))
+                     kont)
+                   ((LTRf m) (LTRf m))
+                   ((LTOk k) (LTOk (gs_chain ga (gs_chain gp (gs_chain gv k))))))))))))))
+       ((IIf cnd tb eb)
+        (if (lt (- sfuel 1) 1) (LTOk (GTrL st mem))
+        (match cnd
+          ((IBin k2 o a b)
+           (if (is_cmp o)
+             (match (lw_exp x86 msz a st mem)
+               ((LXRf m) (LTRf m))
+               ((LXOk va ga)
+                (match (lw_exp x86 msz b st mem)
+                  ((LXRf m) (LTRf m))
+                  ((LXOk vb gb)
+                   (match (gs_app ga gb)
+                     ((Cons _ _)
+                      (LTRf "branch condition carries guards (named growth)"))
+                     (Nil
+                       (match (cmp_gval o va vb)
+                         ((Some tk)
+                          (lwz_tree
+                            (- wfuel 1)
+                            (- sfuel 2)
+                            x86
+                            msz
+                            (if tk tb eb)
+                            st
+                            mem
+                            (Cons (Pair (- sfuel 1) t) kont)))
+                         (None
+                           (match
+                             (lwz_tree
+                               (- wfuel 1)
+                               (- sfuel 2)
+                               x86
+                               msz
+                               tb
+                               st
+                               mem
+                               (Cons (Pair (- sfuel 1) t) kont))
+                             ((LTRf m) (LTRf m))
+                             ((LTOk tt)
+                              (match
+                                (lwz_tree
+                                  (- wfuel 1)
+                                  (- sfuel 2)
+                                  x86
+                                  msz
+                                  eb
+                                  st
+                                  mem
+                                  (Cons (Pair (- sfuel 1) t) kont))
+                                ((LTRf m) (LTRf m))
+                                ((LTOk et)
+                                 (LTOk (GTrB (sc2 (op_sym o) va vb) tt et))))))))))))))
+             (LTRf "non-comparison branch condition (named growth)")))
+          (_ (LTRf "non-comparison branch condition (named growth)")))))
+       ((IWhile _ _) (LTRf "loop inside a branch arm (named growth)"))))))))
 
 ;; --- loop-tier emission: the generic worker + the conditional denotation ---------
 ;; All hyp citations are POSITIONAL (innermost 0). At a leaf under
@@ -1520,12 +1685,17 @@
 
 ;; a bound test failed: both machines trap. scope = guard + every
 ;; split up to AND INCLUDING the failed one (its polarity False, the
-;; others True); mem-hi haves at their stated polarities.
-(fn wk_trap
+;; others True); mem-hi haves at their stated polarities. ipfx is
+;; spliced after the premise rewrite: empty at top level; the
+;; step-case ghost unfold when the trap sits under a fork (an arm
+;; statement runs one istmt level deeper, so the exact tower's
+;; explicit prefix is spent and the k-S must be materialized first).
+(fn wk_trapg
   ((scope (List (Pair GSplit Int)))
    (failed (Pair GSplit Int))
    (msz Int)
-   (mstop Doc))
+   (mstop Doc)
+   (ipfx Doc))
   Doc
   (let ((nh (ilen_gs scope)))
     (dconc
@@ -1554,7 +1724,9 @@
                   (dl_hlt i)
                   (DStr "l 1)))) ) ")))))))
         (DStr
-          "(have hro (= (Some ITrap) (Some o)) (steps ((rewrite (premise 0) rl rhs true ()) (compute rhs (stop lg_fuel)) ")
+          "(have hro (= (Some ITrap) (Some o)) (steps ((rewrite (premise 0) rl rhs true ()) ")
+        ipfx
+        (DStr "(compute rhs (stop lg_fuel)) ")
         (dl_impchain scope nh (DStr "(stop lg_fuel)"))
         (DStr
           ") refl)) (steps ((rewrite (premise hro) rl rhs true ()) (compute rhs) (compute lhs ")
@@ -1562,6 +1734,22 @@
         (DStr ") ")
         (dl_machchain scope nh mstop)
         (DStr ") refl))")))))
+
+(fn wk_trap
+  ((scope (List (Pair GSplit Int)))
+   (failed (Pair GSplit Int))
+   (msz Int)
+   (mstop Doc))
+  Doc
+  (wk_trapg scope failed msz mstop (DStr "")))
+
+(fn wk_trapd
+  ((scope (List (Pair GSplit Int)))
+   (failed (Pair GSplit Int))
+   (msz Int)
+   (mstop Doc))
+  Doc
+  (wk_trapg scope failed msz mstop (DStr "(unfold lg_fuel rhs) (reduce rhs) ")))
 
 ;; base-case fuel death under the premise: contradictory, absurd
 (fn wk_absurd ((scope (List (Pair GSplit Int)))) Doc
@@ -1654,36 +1842,144 @@
          (DStr ") lr rhs true ()) (compute rhs) ")
          (dl_impchain_plain t nhyps))))))
 
-;; the split tree: nested case-ons, every False arm a trap leaf, the
-;; spine ending at the final leaf (absurd in base, the step arm in
-;; step). scope carries the guard at order 0.
-(fn wk_tree
-  ((remaining (List (Pair GSplit Int)))
-   (scope (List (Pair GSplit Int)))
-   (msz Int)
-   (mstop Doc)
-   (final Doc))
-  Doc
-  (measure (struct remaining))
-  (match remaining
-    (Nil final)
-    ((Cons (Pair g i) rest)
-     (dconc
-       (list
-         (DStr "(case-on ")
-         (gsp_scrut g msz)
-         (DStr " Bool ((case True ")
-         (wk_tree rest (gsp_snoc scope (Pair g i)) msz mstop final)
-         (DStr ") (case False ")
-         (wk_trap (gsp_snoc scope (Pair g i)) (Pair g i) msz mstop)
-         (DStr ")))"))))))
-
 (fn gsp_snoc ((l (List (Pair GSplit Int))) (x (Pair GSplit Int)))
   (List (Pair GSplit Int))
   (measure (struct l))
   (match l
     (Nil (Cons x Nil))
     ((Cons h t) (Cons h (gsp_snoc t x)))))
+
+;; spelled post-state locals list
+(fn d_exprlist_go ((es (List Expr))) Doc
+  (measure (struct es))
+  (match es
+    (Nil (DStr ""))
+    ((Cons h t) (dcat3 (sp) (pr_e h) (d_exprlist_go t)))))
+
+(fn d_exprlist ((es (List Expr))) Doc
+  (match es
+    (Nil (DStr "Nil"))
+    ((Cons _ _) (dcat3 (DStr "(list") (d_exprlist_go es) (DStr ")")))))
+
+;; the worker's split tree, base case: guard nodes case-on with a trap
+;; False arm; fork nodes case-on with BOTH arms recursing (both
+;; machines stick on the shared comparison term -- a fork resolves
+;; exactly like a shared split, but its False arm is the else path,
+;; not a trap); leaves absurd from their path scope (the death point).
+;; scope carries the guard at order 0, i = the next case-on order.
+(fn wkbz
+  ((tr GTr) (scope (List (Pair GSplit Int))) (i Int) (msz Int) (mstop Doc))
+  Doc
+  (measure (struct tr))
+  (match tr
+    ((GTrL _ _) (wk_absurd scope))
+    ((GTrG g k)
+     (dconc
+       (list
+         (DStr "(case-on ")
+         (gsp_scrut g msz)
+         (DStr " Bool ((case True ")
+         (wkbz k (gsp_snoc scope (Pair g i)) (+ i 1) msz mstop)
+         (DStr ") (case False ")
+         (wk_trap (gsp_snoc scope (Pair g i)) (Pair g i) msz mstop)
+         (DStr ")))"))))
+    ((GTrB sc a b)
+     (dconc
+       (list
+         (DStr "(case-on ")
+         (pr_e sc)
+         (DStr " Bool ((case True ")
+         (wkbz a (gsp_snoc scope (Pair (GShared sc) i)) (+ i 1) msz mstop)
+         (DStr ") (case False ")
+         (wkbz b (gsp_snoc scope (Pair (GShared sc) i)) (+ i 1) msz mstop)
+         (DStr ")))"))))))
+
+;; the worker's split tree, step case: same node textures, leaves are
+;; step arms at their own path scope and PER-LEAF post-state (the
+;; walked locals/mem of that path), IH at hyp |scope|. deep = below a
+;; fork: trap arms there use wk_trapd (the arm's istmt runs past the
+;; exact tower's explicit prefix, so the k-S must be unfolded first).
+(fn wkbs
+  ((tr GTr)
+   (scope (List (Pair GSplit Int)))
+   (i Int)
+   (deep Bool)
+   (msz Int)
+   (bfl Int)
+   (conddoc Doc)
+   (ibody Doc)
+   (mstop Doc)
+   (mfuel Doc)
+   (mloop Doc))
+  Doc
+  (measure (struct tr))
+  (match tr
+    ((GTrL lc mm)
+     (wk_step
+       scope
+       msz
+       bfl
+       conddoc
+       ibody
+       (d_exprlist lc)
+       (pr_e mm)
+       mstop
+       mfuel
+       mloop))
+    ((GTrG g k)
+     (dconc
+       (list
+         (DStr "(case-on ")
+         (gsp_scrut g msz)
+         (DStr " Bool ((case True ")
+         (wkbs
+           k
+           (gsp_snoc scope (Pair g i))
+           (+ i 1)
+           deep
+           msz
+           bfl
+           conddoc
+           ibody
+           mstop
+           mfuel
+           mloop)
+         (DStr ") (case False ")
+         (if deep (wk_trapd (gsp_snoc scope (Pair g i)) (Pair g i) msz mstop)
+         (wk_trap (gsp_snoc scope (Pair g i)) (Pair g i) msz mstop))
+         (DStr ")))"))))
+    ((GTrB sc a b)
+     (dconc
+       (list
+         (DStr "(case-on ")
+         (pr_e sc)
+         (DStr " Bool ((case True ")
+         (wkbs
+           a
+           (gsp_snoc scope (Pair (GShared sc) i))
+           (+ i 1)
+           True
+           msz
+           bfl
+           conddoc
+           ibody
+           mstop
+           mfuel
+           mloop)
+         (DStr ") (case False ")
+         (wkbs
+           b
+           (gsp_snoc scope (Pair (GShared sc) i))
+           (+ i 1)
+           True
+           msz
+           bfl
+           conddoc
+           ibody
+           mstop
+           mfuel
+           mloop)
+         (DStr ")))"))))))
 
 ;; --- loop-pin extraction ----------------------------------------------------------
 
@@ -2031,11 +2327,7 @@
           pin
           "loop shape (one IWhile over a bare local as the whole body; named growth)")))
     ((Some (Pair gi lbody))
-     (if (has_brtop lbody)
-       (EOk
-         (d_note
-           pin
-           "branch in a symbolic-count loop body (the pure loop tier; named growth)"))
+     (if (gdeq lbody)
        (match (lpe_ibody gv)
          (None (EErr "loop pin body shape (internal)"))
          ((Some (Pair condE lbodyE))
@@ -2065,7 +2357,7 @@
                                     "loop result (IConst/ILoc only; named growth)")))
                               ((Some rdepth)
                                (match
-                                 (lw_stmts
+                                 (lw_tree
                                    (+ (isz_stmts lbody) 2)
                                    x86
                                    msz
@@ -2075,27 +2367,32 @@
                                        (ikn (ikparams_of ifn))
                                        (ikn (ikextra_of ifn))))
                                    (FVar (quote m)))
-                                 ((LSRf why) (EOk (d_note pin why)))
-                                 ((LSOk fsplits postlc postmem)
+                                 ((LTRf why) (EOk (d_note pin why)))
+                                 ((LTOk stree)
                                   (match
-                                    (lw_stmts
-                                      (+ (isz_stmts lbody) 2)
+                                    (lwz_tree
+                                      (* 2 (+ (isz_stmts lbody) 4))
+                                      (- (gdepth lbody) 1)
                                       x86
                                       msz
-                                      (lw_butlast lbody)
+                                      lbody
                                       (st_params
                                         (+
                                           (ikn (ikparams_of ifn))
                                           (ikn (ikextra_of ifn))))
-                                      (FVar (quote m)))
-                                    ((LSRf why) (EOk (d_note pin why)))
-                                    ((LSOk bsplits _ _)
+                                      (FVar (quote m))
+                                      Nil)
+                                    ((LTRf why) (EOk (d_note pin why)))
+                                    ((LTOk ztree)
                                      (lp_emit brpre trans x86 wrapnm msz pin ifn
                                        gi lbody condE lbodyE wbodyE pre post
-                                       margs rdepth fsplits postlc postmem
-                                       bsplits))))))))))))))
+                                       margs rdepth stree ztree))))))))))))))
                   (_ (EErr "translated value shape (internal)"))))
-               (_ (EErr "translated value shape (internal)")))))))))))
+               (_ (EErr "translated value shape (internal)")))))))
+       (EOk
+         (d_note
+           pin
+           "unequal-depth branch arms in a symbolic-count loop body (named growth)"))))))
 
 ;; result must be IConst (depth 0) or ILoc i (spine depth i+1)
 (fn rescheck ((e IExp)) (Option Int)
@@ -2121,10 +2418,8 @@
    (post (List Expr))
    (margs (List Expr))
    (rdepth Int)
-   (fsplits (List GSplit))
-   (postlc (List Expr))
-   (postmem Expr)
-   (bsplits (List GSplit)))
+   (stree GTr)
+   (ztree GTr))
   ERes
   (match (sp_e (harvest lbodyE) 0 lbodyE)
     ((SpRErr m) (EErr m))
@@ -2145,7 +2440,7 @@
                    ((nl2 (+ (ikn (ikparams_of ifn)) (ikn (ikextra_of ifn))))
                     (np (ikn (ikparams_of ifn)))
                     (nm (pin_nm pin))
-                    (bfl (- (gcost lbody) 1))
+                    (bfl (gdepth lbody))
                     (afl (+ (tcost wbodyE) 4))
                     (guard
                       (Pair
@@ -2224,8 +2519,6 @@
                               (DStr ")) restfs) ")
                               (dint msz)
                               (DStr ")")))))
-                      (fscope (gsp_snoc_all guard (gs_index fsplits 1)))
-                      (bscope (gsp_snoc_all guard (gs_index bsplits 1)))
                       (entry (lp_banded (ikparams_of ifn) (- nl2 np))))
                      (let
                        ((worker
@@ -2262,33 +2555,24 @@
                               (DStr " 0) Bool ((case True ")
                               (wk_exit (d_args nl2) mstop)
                               (DStr ") (case False ")
-                              (wk_tree
-                                (gs_index bsplits 1)
-                                (Cons guard Nil)
-                                msz
-                                mstop
-                                (wk_absurd bscope))
+                              (wkbz ztree (Cons guard Nil) 1 msz mstop)
                               (DStr ")))) (case S (k2) (case-on (int_eq x")
                               (dint gi)
                               (DStr " 0) Bool ((case True ")
                               (wk_exit (d_args nl2) mstop)
                               (DStr ") (case False ")
-                              (wk_tree
-                                (gs_index fsplits 1)
+                              (wkbs
+                                stree
                                 (Cons guard Nil)
+                                1
+                                False
                                 msz
+                                bfl
+                                conddoc
+                                (dcat3 (DStr "gb_") (DStr nm) (DStr "_i"))
                                 mstop
-                                (wk_step
-                                  fscope
-                                  msz
-                                  bfl
-                                  conddoc
-                                  (dcat3 (DStr "gb_") (DStr nm) (DStr "_i"))
-                                  (d_exprlist postlc)
-                                  (pr_e postmem)
-                                  mstop
-                                  mfuel
-                                  mloop))
+                                mfuel
+                                mloop)
                               (DStr "))))))")
                               (DStr ")")
                               (DStr (nl))
@@ -2401,18 +2685,6 @@
   (match l
     (Nil 0)
     ((Cons _ t) (+ 1 (ilen_e t)))))
-
-;; spelled post-state locals list
-(fn d_exprlist_go ((es (List Expr))) Doc
-  (measure (struct es))
-  (match es
-    (Nil (DStr ""))
-    ((Cons h t) (dcat3 (sp) (pr_e h) (d_exprlist_go t)))))
-
-(fn d_exprlist ((es (List Expr))) Doc
-  (match es
-    (Nil (DStr "Nil"))
-    ((Cons _ _) (dcat3 (DStr "(list") (d_exprlist_go es) (DStr ")")))))
 
 ;; --- the statement tier: seq-grain legs for memful straight-line pins --------------
 ;; A pin whose body is straight-line but touches memory (the sha
