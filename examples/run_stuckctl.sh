@@ -9,14 +9,14 @@ set -u
 cd "$(dirname "$0")/.."
 fail=0
 
-out=$(bin/shard_eval run examples/stuckctl_exit.shard 2>&1); rc=$?
+out=$(bin/shard_eval run pins/lang/stuckctl_exit.shard 2>&1); rc=$?
 if [ "$rc" -ne 4 ] || ! echo "$out" | grep -q "match fell through"; then
   echo "STUCKCTL FAIL: stuck exit code did not die loudly (rc=$rc)"; fail=1
 else
   echo "STUCKCTL OK: stuck exit dies loudly (rc=4)"
 fi
 
-out=$(bin/shard_eval run examples/stuckctl_write.shard 2>&1); rc=$?
+out=$(bin/shard_eval run pins/lang/stuckctl_write.shard 2>&1); rc=$?
 if [ "$rc" -ne 4 ] || ! echo "$out" | grep -q "error:"; then
   echo "STUCKCTL FAIL: poisoned write did not die loudly (rc=$rc)"; fail=1
 else

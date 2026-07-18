@@ -29,9 +29,9 @@ fi
 JOBS="${JOBS:-$(nproc)}"
 TARGETS=(
   examples/add_nat_zero.shard
-  examples/nat_prim.shard
-  examples/axiom_kind_rejects.shard
-  examples/axiom_untagged_rejects.shard
+  pins/lang/nat_prim.shard
+  pins/trust/axiom_kind_rejects.shard
+  pins/trust/axiom_untagged_rejects.shard
   kernel/facts.shard
   std/bits/bits.shard
   std/rat/mod.req/gcd.shard
@@ -52,77 +52,77 @@ TARGETS=(
   examples/bits_demo.shard
   std/axiom_scope_rejects.shard
   examples/ledger_dep/ledger_dep.shard
-  examples/auto_demo.shard
-  examples/auto_missing_rejects.shard
-  examples/admit_demo.shard
+  pins/proof/auto_demo.shard
+  pins/proof/auto_missing_rejects.shard
+  pins/proof/admit_demo.shard
   examples/bytes_bridge.shard
-  examples/contract_demo.shard
-  examples/decl_rejects.shard
-  examples/div_pairs.shard
-  examples/double_claims.shard
-  examples/use_demo.shard
-  examples/double_lib.shard
-  examples/shadow_rejects.shard
-  examples/finsplit_test.shard
-  examples/have_test.shard
-  examples/inject_basic.shard
-  examples/inject_rejects.shard
-  examples/rewrite_at.shard
-  examples/rewrite_at_rejects.shard
-  examples/cert_rows.shard
-  examples/cert_rows_rejects.shard
-  examples/rewrite_with_occ.shard
-  examples/rewrite_with_occ_rejects.shard
-  examples/prove_cond_mine.shard
-  examples/homonym_dispatch.shard
-  examples/runhom_run.shard
-  examples/inspect_demo.shard
-  examples/cite_resolves.shard
-  examples/cite_rejects.shard
+  pins/trust/contract_demo.shard
+  pins/lang/decl_rejects.shard
+  pins/proof/div_pairs.shard
+  pins/lang/double_claims.shard
+  pins/lang/use_demo.shard
+  pins/lang/double_lib.shard
+  pins/lang/shadow_rejects.shard
+  pins/proof/finsplit_test.shard
+  pins/proof/have_test.shard
+  pins/proof/inject_basic.shard
+  pins/proof/inject_rejects.shard
+  pins/proof/rewrite_at.shard
+  pins/proof/rewrite_at_rejects.shard
+  pins/proof/cert_rows.shard
+  pins/proof/cert_rows_rejects.shard
+  pins/proof/rewrite_with_occ.shard
+  pins/proof/rewrite_with_occ_rejects.shard
+  pins/proof/prove_cond_mine.shard
+  pins/lang/homonym_dispatch.shard
+  pins/lang/runhom_run.shard
+  pins/proof/inspect_demo.shard
+  pins/proof/cite_resolves.shard
+  pins/proof/cite_rejects.shard
   examples/req_dir_demo/consumer.shard
   examples/req_dir_demo/demo/demo.shard
   examples/req_gate_rejects/mod.req.shard
-  examples/lia_basics.shard
-  examples/lia_rejects.shard
-  examples/list_named_hyp.shard
-  examples/named_haves.shard
-  examples/named_case_hyps.shard
-  examples/reflect_demo.shard
-  examples/reflect_rejects.shard
-  examples/refine_basic.shard
-  examples/refine_rejects.shard
-  examples/refine_return.shard
-  examples/refine_return_rejects.shard
-  examples/refine_circular_rejects.shard
-  examples/refine_try.shard
-  examples/refine_try_rejects.shard
-  examples/utf8_compute.shard
+  pins/proof/lia_basics.shard
+  pins/proof/lia_rejects.shard
+  pins/proof/list_named_hyp.shard
+  pins/proof/named_haves.shard
+  pins/proof/named_case_hyps.shard
+  pins/proof/reflect_demo.shard
+  pins/proof/reflect_rejects.shard
+  pins/lang/refine_basic.shard
+  pins/lang/refine_rejects.shard
+  pins/lang/refine_return.shard
+  pins/lang/refine_return_rejects.shard
+  pins/lang/refine_circular_rejects.shard
+  pins/lang/refine_try.shard
+  pins/lang/refine_try_rejects.shard
+  pins/lang/utf8_compute.shard
   examples/str_demo.shard
-  examples/module_gate_rejects.shard
-  examples/parse_rejects.shard
+  pins/lang/module_gate_rejects.shard
+  pins/lang/parse_rejects.shard
   examples/pending_demo.shard
   examples/reverse_proof.shard
-  examples/rewrite_arms_test.shard
-  examples/rewrite_with_demo.shard
-  examples/tracer_demo.shard
-  examples/unfold_scrutinee.shard
-  examples/trust_ledger.shard
-  examples/types_gate.shard
-  examples/types_gate_cite.shard
-  examples/wf_induct_demo.shard
-  examples/measure_clause.shard
-  examples/measure_import_synth.shard
-  examples/measure_lex_demo.shard
+  pins/proof/rewrite_arms_test.shard
+  pins/proof/rewrite_with_demo.shard
+  pins/proof/tracer_demo.shard
+  pins/proof/unfold_scrutinee.shard
+  pins/trust/trust_ledger.shard
+  pins/lang/types_gate.shard
+  pins/lang/types_gate_cite.shard
+  pins/proof/wf_induct_demo.shard
+  pins/proof/measure_clause.shard
+  pins/proof/measure_import_synth.shard
+  pins/proof/measure_lex_demo.shard
   examples/io/cat_loop.shard
   examples/invoke_fixture.shard
   examples/invoke_probe.shard
-  examples/measure_tree_demo.shard
-  examples/nested_measure.shard
+  pins/proof/measure_tree_demo.shard
+  pins/proof/nested_measure.shard
   examples/mem_reverse.shard
   examples/mem_copy.shard
-  examples/mutual_toy.shard
-  examples/record_proto.shard
-  examples/record_basic.shard
+  pins/proof/mutual_toy.shard
+  pins/lang/record_proto.shard
+  pins/lang/record_basic.shard
   models/imp/imp.shard
   examples/imp_probe.shard
   examples/imp_scalar.shard
@@ -169,7 +169,7 @@ TARGETS=(
   examples/wasm_rev.shard
   examples/wasm_copy.shard
   examples/lowered_form.shard
-  examples/w64_probe.shard
+  pins/lang/w64_probe.shard
   models/x86/x86.shard
   models/x86/encode.shard
   examples/x86_pieces.shard
@@ -228,7 +228,7 @@ TARGETS=(
   examples/upcase_x86_out.shard
   examples/parse_src.shard
   examples/parse_x86_out.shard
-  examples/bin_entry_rejects.shard
+  pins/trust/bin_entry_rejects.shard
   examples/x86_diff_run.shard
   examples/rep_probe.shard
   examples/lowfrag_probe.shard
@@ -236,32 +236,32 @@ TARGETS=(
   examples/bitfrag_probe.shard
   examples/wordfrag_probe.shard
   examples/lowcheck_rejects.shard
-  examples/record_rejects.shard
-  examples/record_sugar_rejects.shard
-  examples/statement_sugar.shard
-  examples/statement_sugar_rejects.shard
-  examples/chain_sugar.shard
-  examples/chain_sugar_rejects.shard
-  examples/named_cite_rejects.shard
-  examples/compute_stop.shard
-  examples/simp_stop.shard
-  examples/subterm_induct.shard
-  examples/subterm_induct_rejects.shard
-  examples/struct_clause.shard
-  examples/struct_mutual_list.shard
-  examples/adq13_probe.shard
-  examples/natview_pin.shard
+  pins/lang/record_rejects.shard
+  pins/lang/record_sugar_rejects.shard
+  pins/lang/statement_sugar.shard
+  pins/lang/statement_sugar_rejects.shard
+  pins/proof/chain_sugar.shard
+  pins/proof/chain_sugar_rejects.shard
+  pins/proof/named_cite_rejects.shard
+  pins/proof/compute_stop.shard
+  pins/proof/simp_stop.shard
+  pins/proof/subterm_induct.shard
+  pins/proof/subterm_induct_rejects.shard
+  pins/proof/struct_clause.shard
+  pins/proof/struct_mutual_list.shard
+  pins/proof/adq13_probe.shard
+  pins/proof/natview_pin.shard
   examples/natview_pin2.shard
   examples/natview_rejects.shard
-  examples/zerocase_rejects.shard
-  examples/canon_pin.shard
-  examples/canon_rejects.shard
+  pins/proof/zerocase_rejects.shard
+  pins/lang/canon_pin.shard
+  pins/lang/canon_rejects.shard
   tools/canon/rewrite.shard
   tools/canon/canon.shard
   tools/canon/census.shard
   tools/canon/hash.shard
-  examples/hash_pin.shard
-  examples/parlet_pin.shard
+  pins/proof/hash_pin.shard
+  pins/proof/parlet_pin.shard
   examples/render_model.shard
   examples/modules_demo/consumer.shard
   examples/modules_demo/views/module_view.shard
@@ -310,7 +310,7 @@ TARGETS=(
   std/sha256/impgen_wasm_out.shard
   std/sha256/impgen_x86_out.shard
   std/sha256/sha256.weld.shard
-  examples/sketch_pin.shard
+  pins/proof/sketch_pin.shard
   meta/sketch/mod.req.shard
   meta/invoke/prepared.shard
   meta/census/mod.req.shard
@@ -435,7 +435,7 @@ fi
 # patterns under the RUN engine (ev). Output must be engine-independent.
 echo "=== nat: run probe ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run examples/nat_run_probe.shard
+  bin/shard_eval run pins/lang/nat_run_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -448,7 +448,7 @@ fi
 # stuck run would drop from the diff.
 echo "=== facts: ground differential ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run examples/facts_probe.shard
+  bin/shard_eval run pins/proof/facts_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -459,7 +459,7 @@ fi
 # (wrap64_id's farkas certificate carries 2^64 coefficients).
 echo "=== facts: 64-bit range probe ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run examples/w64_probe.shard
+  bin/shard_eval run pins/lang/w64_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -922,7 +922,7 @@ fi
 # sticks loudly, exit 4). Self-checking: OK lines, exit 0 iff both hold.
 echo "=== run-mode: qualified dispatch (runhom) ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run examples/runhom_run.shard
+  bin/shard_eval run pins/lang/runhom_run.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -965,7 +965,7 @@ else
 fi
 
 echo "=== guard: absolute path ==="
-out=$("${CHECK_CMD[@]}" "$PWD/examples/auto_demo.shard" 2>&1); code=$?
+out=$("${CHECK_CMD[@]}" "$PWD/pins/proof/auto_demo.shard" 2>&1); code=$?
 if [ "$code" -eq 2 ] && grep -q "escapes the repo root" <<<"$out"; then
   echo "REFUSED (exit 2)"
 else
@@ -1030,7 +1030,7 @@ fi
 # nothing at the byte level.
 echo "=== lowering: percolation negative fixture ==="
 if [ -x bin/shard_eval ]; then
-  if bin/shard_eval run tools/bytetie/bytetie.shard examples/percolation_rejects.shard > "$TMP/pc.out" 2>&1; then
+  if bin/shard_eval run tools/bytetie/bytetie.shard pins/trust/percolation_rejects.shard > "$TMP/pc.out" 2>&1; then
     echo "GATE FAILED: hidden effect-point ACCEPTED"
     tail -5 "$TMP/pc.out"
   else
@@ -1047,7 +1047,7 @@ fi
 # its next rebuild, the source must refuse it TODAY.
 echo "=== reader: pattern binder-capture negative fixture ==="
 if [ -x bin/shard_eval ]; then
-  if bin/shard_eval run kernel/check.shard examples/pat_binder_rejects.shard > "$TMP/pb.out" 2>&1; then
+  if bin/shard_eval run kernel/check.shard pins/lang/pat_binder_rejects.shard > "$TMP/pb.out" 2>&1; then
     echo "GATE FAILED: capitalized binder-capture pattern ACCEPTED"
     tail -5 "$TMP/pb.out"
   else
@@ -1065,7 +1065,7 @@ fi
 # so the corpus FAIL-set diff catches them.
 echo "=== canon: stage-1 advisory pins ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run kernel/check.shard examples/canon_pin.shard > "$TMP/cnp.out" 2>&1
+  bin/shard_eval run kernel/check.shard pins/lang/canon_pin.shard > "$TMP/cnp.out" 2>&1
   cnp_rc=$?
   if [ $cnp_rc -ne 0 ]; then
     echo "FAIL canon_pin (exit $cnp_rc)"
@@ -1075,7 +1075,7 @@ if [ -x bin/shard_eval ]; then
   else
     echo "CANON PIN OK"
   fi
-  bin/shard_eval run kernel/check.shard examples/canon_rejects.shard > "$TMP/cnr.out" 2>&1
+  bin/shard_eval run kernel/check.shard pins/lang/canon_rejects.shard > "$TMP/cnr.out" 2>&1
   cnr_rc=$?
   if [ $cnr_rc -ne 0 ]; then
     echo "FAIL canon_rejects (advisory changed the exit code: $cnr_rc)"
@@ -1098,14 +1098,14 @@ if [ -x bin/shard_eval ]; then
   # re-checks with EXACTLY those 7 advisory lines and no others. (C6 left
   # the refusal tier with the tc_nat_lit_view return-position fix; C11
   # joined the FIXABLE tier in §13 slice 3 — the tool fires shape pins.)
-  bin/shard_eval run tools/canon/canon.shard examples/canon_pin.shard > "$TMP/cnt_pin.out" 2>/dev/null
-  if cmp -s "$TMP/cnt_pin.out" examples/canon_pin.shard; then
+  bin/shard_eval run tools/canon/canon.shard pins/lang/canon_pin.shard > "$TMP/cnt_pin.out" 2>/dev/null
+  if cmp -s "$TMP/cnt_pin.out" pins/lang/canon_pin.shard; then
     echo "CANON TOOL PIN-IDENTITY OK"
   else
     echo "FAIL canon_tool (pin file not a fixed point of the rewriter)"
   fi
   # the rewritten file must sit in examples/ so its relative imports resolve
-  bin/shard_eval run tools/canon/canon.shard examples/canon_rejects.shard > examples/.cnt_rej_tmp.shard 2>/dev/null
+  bin/shard_eval run tools/canon/canon.shard pins/lang/canon_rejects.shard > examples/.cnt_rej_tmp.shard 2>/dev/null
   cnt_rc=$?
   if [ $cnt_rc -ne 0 ]; then
     echo "FAIL canon_tool (rejects rewrite exited $cnt_rc)"
@@ -1168,8 +1168,8 @@ if [ -x bin/shard_eval ]; then
   # properties only — alpha-twins hash equal, Merkle callers of equal
   # referents hash equal, distinct definitions hash apart, deterministic —
   # so the digest swap (FNV-1a-128 -> std/sha256) touches no goldens.
-  bin/shard_eval run tools/canon/hash.shard examples/hash_pin.shard > "$TMP/hx1.out" 2>&1
-  bin/shard_eval run tools/canon/hash.shard examples/hash_pin.shard > "$TMP/hx2.out" 2>&1
+  bin/shard_eval run tools/canon/hash.shard pins/proof/hash_pin.shard > "$TMP/hx1.out" 2>&1
+  bin/shard_eval run tools/canon/hash.shard pins/proof/hash_pin.shard > "$TMP/hx2.out" 2>&1
   hx_f() { grep "hash_pin.$1\$" "$TMP/hx1.out" | cut -d' ' -f1; }
   if ! cmp -s "$TMP/hx1.out" "$TMP/hx2.out"; then
     echo "FAIL canon_hash (nondeterministic)"

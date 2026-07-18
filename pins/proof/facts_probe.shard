@@ -1,0 +1,222 @@
+;;; pins/proof/facts_probe.shard — the GROUND DIFFERENTIAL for kernel/facts.shard:
+;;; every axiom stated there about the Int prims (band/bor/bxor/bshl/bshr/mod)
+;;; is checked HERE as a ground equation over a value grid against the live
+;;; prims — the axiom file's engine-differential gate (the same posture as the
+;;; wasm model's V8 leg: an admitted statement rides with executable evidence).
+;;;
+;;;   1. band_rec/bor_rec/bxor_rec — the defining recurrences, all pairs over
+;;;      a grid of small values, powers of two (± 1), bit patterns, and the
+;;;      2^31/2^32 edges.
+;;;   2. bshl_s/bshr_s — the shift recurrences chained over k up to 62 at
+;;;      every grid value (results reach ~2^128; the compiled chain is
+;;;      bignum-exact since 2026-07-06).
+;;;   3. bshl_z/bshr_z — shift by zero is the identity.
+;;;   4. mod_lo/mod_hi — euclidean remainder range, dividends INCLUDING
+;;;      negatives, positive divisors.
+;;;   5. ediv_mod_id (+ div_unique/mod_unique, whose truth is identity +
+;;;      range: the decomposition with an in-range remainder is unique) —
+;;;      the euclidean identity over the same dividend/divisor grid.
+;;;   6. mul_comm/mul_assoc/mul_dist — the ring laws over signed triples.
+;;;
+;;; Self-checking: one OK/FAIL line per section; exit 0 iff all OK.
+;;;
+;;; RUN IT:  bin/shard_eval run pins/proof/facts_probe.shard
+
+(import "../../kernel/stdlib.shard")
+
+;; the World and the two effects this probe needs (direct-style threading;
+;; a runnable program declares its own World + externs — the cat_loop pattern)
+(type World (World Int))
+(extern write ((bytes (List Int)) (w World)) World)
+(extern exit ((code Int) (w World)) World)
+
+(fn sapp ((xs (List Int)) (ys (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (sapp t ys)))))
+
+;; --- the grids -------------------------------------------------------------
+
+(fn grid () (List Int)
+  (list 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 31 32 63 64 127 128 255 256
+    1023 1024 65535 65536 16777215 16777216 305419896 1431655765 2147483647
+    2147483648 2863311530 4294967295 4294967296 9223372036854775807
+    9223372036854775808 18446744073709551615 18446744073709551616
+    18446744073709551617))
+
+;; k+1 <= 63 keeps the chained check inside the defined shift domain (both
+;; engines refuse counts >= 64: stuck interpreted, trap compiled)
+(fn shifts () (List Int)
+  (list 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 30 31 32 47 61 62))
+
+(fn neg_grid () (List Int)
+  (list -1 -2 -3 -7 -8 -100 -255 -256 -65535 -65536 -4294967295 -4294967296
+    -9223372036854775808 -18446744073709551616))
+
+(fn divisors () (List Int)
+  (list 1 2 3 5 7 8 10 16 255 256 257 65536 4294967296 9223372036854775808
+    18446744073709551616))
+
+;; --- the axiom equations, as ground predicates ------------------------------
+
+(fn band_rec_ok ((a Int) (b Int)) Bool
+  (int_eq
+    (band a b)
+    (+ (* 2 (band (ediv a 2) (ediv b 2))) (* (mod a 2) (mod b 2)))))
+
+(fn bor_rec_ok ((a Int) (b Int)) Bool
+  (int_eq
+    (bor a b)
+    (+
+      (* 2 (bor (ediv a 2) (ediv b 2)))
+      (- (+ (mod a 2) (mod b 2)) (* (mod a 2) (mod b 2))))))
+
+(fn bxor_rec_ok ((a Int) (b Int)) Bool
+  (int_eq
+    (bxor a b)
+    (+
+      (* 2 (bxor (ediv a 2) (ediv b 2)))
+      (- (+ (mod a 2) (mod b 2)) (* 2 (* (mod a 2) (mod b 2)))))))
+
+(fn bit_pair_ok ((a Int) (b Int)) Bool
+  (if (band_rec_ok a b) (if (bor_rec_ok a b) (bxor_rec_ok a b) False) False))
+
+(fn shl_s_ok ((a Int) (k Int)) Bool (int_eq (bshl a (+ k 1)) (* 2 (bshl a k))))
+
+(fn shr_s_ok ((a Int) (k Int)) Bool
+  (int_eq (bshr a (+ k 1)) (bshr (ediv a 2) k)))
+
+(fn shift_pair_ok ((a Int) (k Int)) Bool
+  (if (shl_s_ok a k) (shr_s_ok a k) False))
+
+(fn z_ok ((a Int)) Bool (if (int_eq (bshl a 0) a) (int_eq (bshr a 0) a) False))
+
+(fn mod_range_ok ((n Int) (d Int)) Bool
+  (if (le 0 (mod n d)) (lt (mod n d) d) False))
+
+(fn ediv_id_ok ((n Int) (d Int)) Bool (int_eq n (+ (* d (ediv n d)) (mod n d))))
+
+;; the signed triple grid for the ring laws. The old < 2^20 fence (the
+;; compiled chain's i63 mul trap) fell with the bignum runtime (2026-07-06,
+;; the x86_64 arc's probe 0a): values now straddle the i63 line and triple
+;; products reach ~2^192 — this grid is the live big-mul differential on
+;; both engines.
+(fn mul_grid () (List Int)
+  (list -1048576 -65536 -255 -7 -2 -1 0 1 2 3 7 255 256 65535 65536 1048576
+    4611686018427387903 -4611686018427387904 9223372036854775807
+    -9223372036854775807 18446744073709551616 -18446744073709551616))
+
+(fn mul_laws_ok ((a Int) (b Int) (c Int)) Bool
+  (if (int_eq (* a b) (* b a))
+    (if (int_eq (* (* a b) c) (* a (* b c)))
+      (int_eq (* a (+ b c)) (+ (* a b) (* a c)))
+      False)
+    False))
+
+;; --- fold the grids ----------------------------------------------------------
+
+(fn count_bit_bs ((a Int) (bs (List Int))) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons b t) (+ (if (bit_pair_ok a b) 0 1) (count_bit_bs a t)))))
+
+(fn count_bit ((as (List Int)) (bs (List Int))) Int
+  (measure (struct as))
+  (match as
+    (Nil 0)
+    ((Cons a t) (+ (count_bit_bs a bs) (count_bit t bs)))))
+
+(fn count_shift_ks ((a Int) (ks (List Int))) Int
+  (measure (struct ks))
+  (match ks
+    (Nil 0)
+    ((Cons k t) (+ (if (shift_pair_ok a k) 0 1) (count_shift_ks a t)))))
+
+(fn count_shift ((as (List Int)) (ks (List Int))) Int
+  (measure (struct as))
+  (match as
+    (Nil 0)
+    ((Cons a t) (+ (count_shift_ks a ks) (count_shift t ks)))))
+
+(fn count_z ((as (List Int))) Int
+  (measure (struct as))
+  (match as
+    (Nil 0)
+    ((Cons a t) (+ (if (z_ok a) 0 1) (count_z t)))))
+
+(fn count_mod_ds ((n Int) (ds (List Int))) Int
+  (measure (struct ds))
+  (match ds
+    (Nil 0)
+    ((Cons d t) (+ (if (mod_range_ok n d) 0 1) (count_mod_ds n t)))))
+
+(fn count_mod ((ns (List Int)) (ds (List Int))) Int
+  (measure (struct ns))
+  (match ns
+    (Nil 0)
+    ((Cons n t) (+ (count_mod_ds n ds) (count_mod t ds)))))
+
+(fn count_id_ds ((n Int) (ds (List Int))) Int
+  (measure (struct ds))
+  (match ds
+    (Nil 0)
+    ((Cons d t) (+ (if (ediv_id_ok n d) 0 1) (count_id_ds n t)))))
+
+(fn count_id ((ns (List Int)) (ds (List Int))) Int
+  (measure (struct ns))
+  (match ns
+    (Nil 0)
+    ((Cons n t) (+ (count_id_ds n ds) (count_id t ds)))))
+
+(fn count_mul_cs ((a Int) (b Int) (cs (List Int))) Int
+  (measure (struct cs))
+  (match cs
+    (Nil 0)
+    ((Cons c t) (+ (if (mul_laws_ok a b c) 0 1) (count_mul_cs a b t)))))
+
+(fn count_mul_bs ((a Int) (bs (List Int))) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons b t) (+ (count_mul_cs a b (mul_grid)) (count_mul_bs a t)))))
+
+(fn count_mul ((as (List Int))) Int
+  (measure (struct as))
+  (match as
+    (Nil 0)
+    ((Cons a t) (+ (count_mul_bs a (mul_grid)) (count_mul t)))))
+
+;; --- report ------------------------------------------------------------------
+
+(fn chk ((label (List Int)) (fails Int)) (List Int)
+  (sapp label (if (int_eq fails 0) " OK\n" " FAIL\n")))
+
+(fn main ((w World)) World
+  (let ((c_bit (count_bit (grid) (grid))))
+    (let ((c_shift (count_shift (grid) (shifts))))
+      (let ((c_z (count_z (grid))))
+        (let ((c_mod (count_mod (sapp (grid) (neg_grid)) (divisors))))
+          (let ((c_id (count_id (sapp (grid) (neg_grid)) (divisors))))
+            (let ((c_mul (count_mul (mul_grid))))
+              (let
+                ((allok
+                   (int_eq
+                     (+ (+ (+ c_bit c_shift) (+ c_z c_mod)) (+ c_id c_mul))
+                     0)))
+                (exit
+                  (if allok 0 1)
+                  (write
+                    (sapp
+                      (chk "facts_probe bitwise recurrences" c_bit)
+                      (sapp
+                        (chk "facts_probe shift recurrences" c_shift)
+                        (sapp
+                          (chk "facts_probe shift-zero identities" c_z)
+                          (sapp
+                            (chk "facts_probe mod range" c_mod)
+                            (sapp
+                              (chk "facts_probe euclidean identity" c_id)
+                              (chk "facts_probe mul ring laws" c_mul))))))
+                    w))))))))))

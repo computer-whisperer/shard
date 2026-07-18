@@ -1,0 +1,101 @@
+;;; trust_ledger.shard — the bin TRUST-LEDGER pin (driver.shard's
+;;; LedgerEntry machinery). One small artifact exercising every ledger
+;;; color at once:
+;;;   - own axioms, one per surface kind: (kind operational), (kind
+;;;     bridging) — spare_ax [bridging] is cited by NOTHING, so the
+;;;     dead-trust flag line must fire (an UNTAGGED axiom no longer
+;;;     admits at all — pins/trust/axiom_untagged_rejects.shard pins the
+;;;     refusal);
+;;;   - a KERNEL core-math axiom (mod_lo, kernel/facts.shard) cited through
+;;;     a plain-file import — the reviewed-core trust pattern;
+;;;   - an upstream axiom (dep_bolt) and a granted fact (dep_fact)
+;;;     reached through the granted ledger_dep module interface;
+;;;   - extern reachability from the entry fn: ping is reached
+;;;     TRANSITIVELY (main -> hop -> ping); dust is declared but never
+;;;     called, so the unreachable flag line must fire.
+;;; Expected: 6 passed, 0 failed, 20 axiom(s) admitted; BIN 1/1; and
+;;;   LEDGER ledger_demo
+;;;     axioms (transitively cited): ping_bolt [operational], model_two [bridging]
+;;;     upstream axioms (granted-source, trusted): dep_bolt
+;;;     kernel axioms (reviewed core): mod_lo
+;;;     granted (upstream-proven): dep_fact
+;;;     lemmas (proven, interior): 6
+;;;     externs (reachable from entry): ping
+;;;     externs (declared, unreachable): dust
+;;;     own axioms uncited by this bin: spare_ax
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/facts.shard")  ; the reviewed core-math axioms (mod_lo)
+(import "../../examples/ledger_dep")  ; granted: upstream axiom + upstream-proven fact
+(use (:: kernel facts *))
+(use (:: examples ledger_dep *))
+
+(type World (World Int))
+
+;; the I/O boundary: ping is reachable from main, dust is dead surface.
+(extern ping ((w World)) World)
+(extern dust ((w World)) World)
+
+(fn hop ((w World)) World (ping w))
+
+(fn main ((w World)) World (hop w))
+
+;; own axioms — one per surface kind.
+(axiom ping_bolt
+  (kind operational)
+  (goal ((w World)) () (= (ping (ping w)) (ping w))))
+
+(axiom model_two (kind bridging) (goal ((n Int)) () (= (+ n n) (* 2 n))))
+
+(axiom spare_ax (kind bridging) (goal ((n Int)) () (= (* 1 n) n)))  ; never cited
+
+;; one claim per leaf, so the citation DAG fans out through the fulfills.
+(claim c_ping
+  (goal ((w World)) () (= (ping (ping w)) (ping w)))
+  (steps ((rewrite (lemma ping_bolt) lr lhs true ())) refl))
+
+(claim c_two
+  (goal () () (= (+ 1 1) (* 2 1)))
+  (steps ((rewrite (lemma model_two) lr lhs true ())) refl))
+
+;; cites the UPSTREAM axiom mod_lo (premised — rewrite-with).
+(claim c_mod
+  (goal () () (= (le 0 (mod 3 10)) True))
+  (rewrite-with
+    (lemma mod_lo)
+    lr
+    lhs
+    ((inst n 3) (inst d 10))
+    ((steps ((compute both)) refl))
+    refl))
+
+;; cites the UPSTREAM axiom dep_bolt (granted-source, trusted).
+(claim c_dep_bolt
+  (goal ((y Int)) () (= (lt y (dep_bump y)) True))
+  (steps ((rewrite (lemma dep_bolt) lr lhs true ((inst x y)))) refl))
+
+;; cites the GRANTED (upstream-proven) fact dep_fact.
+(claim c_dep_fact
+  (goal () () (= (le (+ 3 3) (* 2 3)) True))
+  (rewrite-with (lemma dep_fact) lr lhs ((inst n 3)) () refl))
+
+;; the artifact's one requirement; its fulfills cites all four claims
+;; (three via have-cuts), pulling every leaf into the bin's closure.
+(requirement ledger_req (goal ((w World)) () (= (ping (ping w)) (ping w))))
+
+(fulfills ledger_req
+  (have (= (+ 1 1) (* 2 1))
+    (steps ((rewrite (lemma c_two) lr lhs true ())) refl)
+    (have (= (le 0 (mod 3 10)) True)
+      (steps ((rewrite (lemma c_mod) lr lhs true ())) refl)
+      (have (= (lt 5 (dep_bump 5)) True)
+        (steps ((rewrite (lemma c_dep_bolt) lr lhs true ((inst y 5)))) refl)
+        (have (= (le (+ 3 3) (* 2 3)) True)
+          (steps ((rewrite (lemma c_dep_fact) lr lhs true ())) refl)
+          (steps ((rewrite (lemma c_ping) lr lhs true ())) refl))))))
+
+(bin ledger_demo
+  (entry main)
+  (externs ping dust)
+  (trusts ping_bolt model_two spare_ax)
+  (requires ledger_req))

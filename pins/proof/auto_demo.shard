@@ -1,0 +1,140 @@
+;;; auto_demo.shard — the `auto` proof indirection. Each `auto` proof below
+;;; is REPLAYED from the sidecar `auto_demo.auto.shard` next to this file: one
+;;; (proof-for NAME PROOF) entry per decl. The sidecar is MACHINE-OWNED —
+;;; every entry in it is tools/prove output (flat-ladder closers, hinted and
+;;; unhinted induction). The checker never searches — a sidecar proof goes through
+;;; the same parse/desugar/check path as an inline one, and a missing entry
+;;; is a hard failure (auto_missing_rejects.shard).
+
+(import "../../kernel/stdlib.shard")  ; stdlib types (List/Option/Bool/Pair)
+
+;; Nat and add, defined and OWNED here (so the sidecar proofs may unfold add).
+(type Nat (Z) (S Nat))
+(fn add ((a Nat) (b Nat)) Nat
+  (measure (struct a))
+  (match a
+    (Z b)
+    ((S k) (S (add k b)))))
+
+;; bare `auto`: the proof is the sidecar's plus_comm_auto entry.
+(claim plus_comm_auto (goal ((x Int) (y Int)) () (= (+ x y) (+ y x))) auto)
+
+;; `(auto …)`: the tail is reserved as SOLVER hints — the checker ignores it
+;; and splices the sidecar entry exactly as for bare `auto`.
+(claim add_n_zero_auto (goal ((n Nat)) () (= (add n Z) n)) (auto (induct n)))
+
+;; `auto` on a fulfills: the requirement still owns the goal; only the proof
+;; comes from the sidecar (the solver finds the goal in the requirement).
+(requirement add_zero_right (goal ((n Nat)) () (= (add n Z) n)))
+(fulfills add_zero_right (auto (induct n)))
+
+;; UNHINTED induction: bare `auto` on a goal the flat ladder cannot close —
+;; the solver tries induction on each goal parameter itself (a hint is an
+;; accelerator, not a requirement). The synthesized case proofs chain
+;; unfolds across BOTH sides (the rhs needs two: outer then inner add).
+(claim add_assoc_auto
+  (goal ((a Nat) (b Nat) (c Nat)) () (= (add a (add b c)) (add (add a b) c)))
+  auto)
+
+;; LEMMA-CITING synthesis: the solver threads the theory as it stands just
+;; before each decl and may rewrite with any earlier lemma that
+;; shares a fn head with the goal. These two bare-auto claims chain: the
+;; solver derives add_n_succ by plain induction, then proves commutativity by
+;; citing add_n_zero_auto (Z case) and add_n_succ_auto (S case, after the IH)
+;; — machine-built on its own earlier wins.
+(claim add_n_succ_auto
+  (goal ((a Nat) (b Nat)) () (= (add a (S b)) (S (add a b))))
+  auto)
+(claim add_comm_nat_auto
+  (goal ((a Nat) (b Nat)) () (= (add a b) (add b a)))
+  auto)
+
+;; ENTAILMENT (a premised goal): the tautology backends ignore premises, so
+;; this needs a farkas certificate — whose multipliers are exactly what the
+;; "untrusted proposer" is supposed to find. The solver tests weight-ordered
+;; multiplier vectors against the kernel's own farkas math, so the first hit
+;; is a minimal certificate.
+(claim lt_step_auto
+  (goal ((p Int) (i Int)) ((= (lt p i) True)) (= (lt p (+ i 1)) True))
+  auto)
+
+;; TWO-SIDED certificate: an (int_eq a b) = True conclusion is two
+;; independent refutations — ¬(a<=b) and ¬(b<=a) — each searched separately;
+;; the cert is (list (list …) (list …)). Antisymmetry is the canonical one.
+(claim int_le_antisym_auto
+  (goal ((a Int) (b Int)) ((= (le a b) True) (= (le b a) True))
+    (= (int_eq a b) True))
+  auto)
+
+;; PLAIN L = R by entailment (also two-sided), and one side needs a NEGATIVE
+;; multiplier on the equality premise i = p+1 — sign-aware search: equality
+;; premises take either sign, inequality premises stay nonneg.
+(claim index_shift_auto
+  (goal ((p Int) (i Int)) ((= (int_eq i (+ p 1)) True)) (= (+ i 1) (+ p 2)))
+  auto)
+
+;; a coefficient (M = 3) beyond what small fixed enumerations reach — the
+;; weight-ordered scan just keeps going until the budget cap.
+(claim le_scale3_auto
+  (goal ((x Int) (y Int)) ((= (le x y) True)) (= (le (* 3 x) (* 3 y)) True))
+  auto)
+
+;; `(auto (case-on TERM TYPE))`: a case split on a COMPUTED term — the gap
+;; induction can't reach. imax's If is stuck on (lt a a); each synthesized
+;; branch rewrites the case hypothesis in and re-reduces to fire the If.
+(fn imax ((a Int) (b Int)) Int (if (lt a b) b a))
+(claim max_idem_auto
+  (goal ((a Int)) () (= (imax a a) a))
+  (auto (case-on (lt a a) Bool)))
+
+;; NESTED hints: (auto (induct n) (induct m)) — a case of the first
+;; induction that resists its ladder gets the next hint synthesized on its
+;; own subgoal. beq's Z case is stuck on m (inner induction), and the S
+;; case's inner S branch consumes the OUTER IH, which the kernel
+;; generalizes over m.
+(fn beq ((a Nat) (b Nat)) Bool
+  (measure (struct a))
+  (match a
+    (Z
+      (match b
+        (Z True)
+        ((S k) False)))
+    ((S k)
+     (match b
+       (Z False)
+       ((S j) (beq k j))))))
+
+(claim beq_sym_auto
+  (goal ((n Nat) (m Nat)) () (= (beq n m) (beq m n)))
+  (auto (induct n) (induct m)))
+
+;; multi-IH: Node has TWO recursive fields, so its case carries two
+;; induction hypotheses — the synthesized proof consumes (hyp 0) AND (hyp 1).
+(type Tree (Leaf) (Node Tree Tree))
+(fn mirror ((t Tree)) Tree
+  (measure (struct t))
+  (match t
+    (Leaf Leaf)
+    ((Node l r) (Node (mirror r) (mirror l)))))
+
+(claim mirror_mirror_auto
+  (goal ((t Tree)) () (= (mirror (mirror t)) t))
+  (auto (induct t)))
+
+;; div-facts arm pins (friction item 7): euclidean mod-range goals are
+;; div-facts' injected rlo/rhi one step away — the solver spells the cert.
+;; mod_hi_fn's bound is a call that merely COMPUTES to the modulus (the
+;; xaddw_sr2 shape) — the (compute lhs) chain-prefixed candidate closes it.
+(claim mod_lo_auto
+  (goal ((a Int) (b Int)) () (= (le 0 (mod (+ a b) 256)) True))
+  auto)
+
+(fn df_bound () Int 256)
+
+(claim mod_hi_fn_auto
+  (goal ((a Int) (b Int)) () (= (lt (mod (+ a b) 256) (df_bound)) True))
+  auto)
+
+(claim mod_hi_auto
+  (goal ((a Int) (b Int)) () (= (lt (mod (+ a b) 256) 256) True))
+  auto)

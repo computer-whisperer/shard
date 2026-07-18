@@ -1,0 +1,65 @@
+;;; compute_stop.shard — the (compute SIDE (stop FN …)) clause: compute
+;;; normalizes everything EXCEPT calls to the stop fns, which stay folded
+;;; with evaluated args (ceval's stuck-Call reify shape). This exists for
+;;; loop-piece proofs: the citable (eval_loop …) redex arises only if the
+;;; normalizer does not unfold the loop into its match body — previously
+;;; that took a hand-tuned fuel prefix stalling compute one level above
+;;; the loop (wasm_pieces/wasm_rev), now the stop clause says it directly.
+;;; Soundness: strictly fewer reductions than plain compute — the folded
+;;; call is definitionally equal to its unfolding.
+;;;
+;;; PIN (ground caveat): a GROUND Nat arg of a stopped call packs to its
+;;; IntLit under ceval (evaluation-grade packing), and the rewrite matcher
+;;; is syntactic — so a lemma spelled with an S-tower will not match a
+;;; packed ground residue. The loop-worker pattern is unaffected: worker
+;;; fuel is OPEN (S^ P around a fn of the induction var), which never
+;;; packs. stop_leaves_call_folded pins the ground shape; the citation
+;;; claims pin the open shape.
+
+(import "../../kernel/stdlib.shard")
+
+(fn go ((k Nat) (acc Int)) Int
+  (measure (struct k))
+  (match k
+    (Z acc)
+    ((S k2) (go k2 (+ acc 1)))))
+
+(fn dub ((x Int)) Int (* 2 x))
+
+(fn run3 () Int (+ 1 (go (S^ 3 Z) 0)))
+
+(fn caller ((k Nat)) Int (+ 1 (go (S^ 2 k) 0)))
+
+;; ground: the stopped call stays folded on both sides (args pack alike)
+(claim stop_leaves_call_folded
+  (goal () () (= (run3) (+ 1 (go (S^ 3 Z) 0))))
+  (steps ((compute both (stop go))) refl))
+
+;; multiple stop names parse and resolve
+(claim stop_list_parses
+  (goal () () (= (run3) (+ 1 (go (S^ 3 Z) 0))))
+  (steps ((compute both (stop go dub))) refl))
+
+;; plain compute still barrels straight through
+(claim plain_compute_unchanged
+  (goal () () (= (run3) 4))
+  (steps ((compute lhs)) refl))
+
+;; the defining step of go — what a loop-worker theorem looks like here
+(claim go_s
+  (goal ((k Nat) (a Int)) () (= (go (S k) a) (go k (+ a 1))))
+  (steps ((unfold go lhs) (reduce lhs)) refl))
+
+;; THE pattern: normalize the caller with the loop stopped, cite the
+;; worker against the folded redex, re-stop, cite again, converge. Open
+;; fuel (free k) — exactly the wasm_rev/rev_loop_worker choreography,
+;; minus the hand-tuned fuel prefix.
+(claim stopped_redex_is_citable
+  (goal ((k Nat)) () (= (caller k) (+ 1 (go k 2))))
+  (steps
+    ((compute lhs (stop go))
+     (rewrite (lemma go_s) lr lhs true ())
+     (compute lhs (stop go))
+     (rewrite (lemma go_s) lr lhs true ())
+     (compute lhs (stop go)))
+    refl))
