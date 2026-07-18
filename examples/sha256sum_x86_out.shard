@@ -1,0 +1,1471 @@
+;;; examples/sha256sum_x86_out.shard — the sha256sum BIN's x86 MODULE
+;;; (docs/IMP.md I2e-4c-3, docs/X86.md §50): HAND-BUILT per the I2e-3
+;;; weld pattern (no tool growth) — the imp-generated stage code
+;;; splices into one executable image whose machine walk lands on the
+;;; weld's shx_pipe_read memory term.
+;;;
+;;; THE SHAPE (the I2e composition ruling, operationalized): the
+;;; World-leading main is THIN — read at the ground cap, branch on the
+;;; full-read leg, ONE call into the PURE PIPE, write, exit. The pipe
+;;; fn (init → pad → count → fold → hex) is a PURE artifact behind a
+;;; single call boundary: its body is 11 instructions, under the world
+;;; layer's effect budget, so weval_call DELEGATES it whole into the
+;;; base tower where the weld's xeval_seq stage claims compose via
+;;; xcall_bridge. (The 577-instruction init body is OVER the budget —
+;;; a direct stage call from the world tower would take the mirror
+;;; arm, where the weld claims cannot fire. The pipe boundary is not a
+;;; convenience: it is what makes the composition typecheck.)
+;;;
+;;; The module window is the weld's [0, 65536) frame (W@64960 K@65216
+;;; H@65472; spill cells at 65504) — NOT addw's 6 MiB glue window: the
+;;; stage claims spell the window inside their statements. The
+;;; ELF/loader story for a low window is the gate slice's business.
+;;;
+;;; The oracle discipline (models/linux/kernel.shard): the read draws
+;;; 1 (return) + ret (bytes, mod-256 masked) + 2 (rcx/r11 trash); the
+;;; write draws 1 + 2; the exit draws nothing. The artifact claims
+;;; quantify RAW draws and spell the delivered list (shs_msk bs) — the
+;;; strongest reading, the read-pin precedent.
+
+(import "../kernel/stdlib.shard")
+(import "../kernel/facts.shard")
+(import "../models/x86/x86.shard")
+(import "../models/x86/encode.shard")
+(import "../models/x86/loopkit.shard")
+(import "../models/wasm/loopkit.shard")
+(import "../models/linux/kernel.shard")
+(import "../models/x86/world.shard")
+(import "../std/nat.shard")
+(import "../std/mem")
+(import "../std/bits")
+(import "../std/sha256/sha256.imp.shard")
+(import "../std/sha256/sha256.weld.shard")
+(import "../std/sha256/impgen_x86_out.shard")
+(import "sha256sum_src.shard")
+
+(use (:: kernel facts *))
+
+(use (:: models x86 x86 *))
+
+(use (:: models wasm loopkit *))
+
+(use (:: models linux kernel *))
+
+(use (:: models x86 world *))
+
+(use (:: std nat *))
+
+(use (:: std mem *))
+
+(use (:: std bits *))
+
+(use (:: std sha256 sha256_hex))
+
+(use (:: std sha256 sha256.imp *))
+
+(use (:: std sha256 sha256.weld *))
+
+(use (:: std sha256 impgen_x86_out *))
+
+(use (:: models x86 encode XExport))
+
+(use (:: models x86 encode XX))
+
+(use (:: models x86 encode enc_image))
+
+(use (:: models x86 encode enc_image_ord))
+
+(use (:: models x86 encode img_offs_ord))
+
+(use (:: examples sha256sum_src *))
+
+;; --- the fold-loop body, byte-copied from the weld (shb_xbody: (inline …)
+;; resolves against the file's OWN nullary fns only) ------------------------
+
+(fn shs_xbody () (List XInstr)
+  (list
+    (XBrIf (CEqz RDX) 1)
+    (XMovRR RCX R12)
+    (XMovRI RBX 65504)
+    (XStore8 (AReg RBX) (SReg RCX))
+    (XShrI RCX 8)
+    (XMovRI RBX 65505)
+    (XStore8 (AReg RBX) (SReg RCX))
+    (XMovRR RCX RDX)
+    (XMovRI RBX 65506)
+    (XStore8 (AReg RBX) (SReg RCX))
+    (XShrI RCX 8)
+    (XMovRI RBX 65507)
+    (XStore8 (AReg RBX) (SReg RCX))
+    (XMovRI R13 64960)
+    (XCall 0)
+    (XMovRI RBX 65505)
+    (XLoad8 R12 (AReg RBX))
+    (XShlI R12 8)
+    (XMovRI RBX 65504)
+    (XLoad8 RCX (AReg RBX))
+    (XBin XAdd R12 (SReg RCX))
+    (XBin XAdd R12 (SImm 64))
+    (XMovRI RBX 65507)
+    (XLoad8 RDX (AReg RBX))
+    (XShlI RDX 8)
+    (XMovRI RBX 65506)
+    (XLoad8 RCX (AReg RBX))
+    (XBin XAdd RDX (SReg RCX))
+    (XBin XSub RDX (SImm 1))
+    (XMovRI RCX 0)
+    (XMovRI RBX 0)
+    (XMovRI RBP 0)
+    (XMovRI RSI 0)
+    (XMovRI RDI 0)
+    (XMovRI R8 0)
+    (XMovRI R9 0)
+    (XBr 0)))
+
+;; --- the pure pipe: init → pad → block count → fold → hex -----------------
+;; Entry: rsi = the byte count n, rdi = 0 (the message base), rax/rbx/
+;; rbp/r9-r15 zero, rcx/rdx/r8 arbitrary. The count computation is the
+;; machine's own ediv-by-64: add 72, shr 6 (the weld's block-count
+;; witness premise ties it to int_of_nat k). Exit: the hex window is
+;; [0,64), registers all zero but rsi=65504 rdi=64.
+
+(fn shs_pipe_body () (List XInstr)
+  (list
+    (XCall 2)
+    (XMovRI RDI 0)
+    (XCall 3)
+    (XBin XAdd RSI (SImm 72))
+    (XShrI RSI 6)
+    (XMovRI RCX 0)
+    (XMovRI R8 0)
+    (XCall 1)
+    (XMovRI RSI 65472)
+    (XMovRI R12 0)
+    (XCall 4)))
+
+;; --- the thin World main --------------------------------------------------
+;; read(0, 0, 64888); if ret == 64888 exit(1); pipe; write(1, 0, 64);
+;; exit(0). The success path lives inside the block and ends at the
+;; terminal exit call; the full-read branch breaks out to the fail
+;; tail. rax/r11 are re-zeroed after the read (the shim's trash) so
+;; the pipe sees the stage entry discipline.
+
+(fn shs_main_body () (List XInstr)
+  (list
+    (XMovRI RDI 0)
+    (XMovRI RSI 0)
+    (XMovRI RDX 64888)
+    (XCall 7)
+    (XMovRR RSI RAX)
+    (XMovRI RAX 0)
+    (XMovRI R11 0)
+    (XBlock
+      (list
+        (XBrIf (CEq RSI (SImm 64888)) 0)
+        (XCall 5)
+        (XMovRI RDI 1)
+        (XMovRI RSI 0)
+        (XMovRI RDX 64)
+        (XCall 8)
+        (XMovRI RDI 0)
+        (XCall 9)))
+    (XMovRI RDI 1)
+    (XCall 9)))
+
+;; --- the shim bodies (models/x86/linux.shard's, local copies) -------------
+
+(fn shs_read_body () (List XInstr) (list (XMovRI RAX 0) XSyscall))
+
+(fn shs_write_body () (List XInstr) (list (XMovRI RAX 1) XSyscall))
+
+(fn shs_exit_body () (List XInstr) (list (XMovRI RAX 60) XSyscall))
+
+;; --- stream vocabulary (local twins: the module surface exports no
+;; list kit, and the artifact statements need append/length/mask) ----------
+
+(fn shs_app ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (shs_app t b)))))
+
+(fn shs_len ((bs (List Int))) Nat
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons b t) (S (shs_len t)))))
+
+(fn shs_msk ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b t) (Cons (mod b 256) (shs_msk t)))))
+
+;; --- the lib image --------------------------------------------------------
+
+(fn shs_xfuncs () (List XFunc)
+  (Cons
+    (MkXFunc 0 (gb_shblock_x))
+    (Cons
+      (MkXFunc
+        2
+        (list
+          (XMovRR R12 RDI)
+          (XMovRR RDX RSI)
+          (XMovRI RDI 0)
+          (XMovRI RSI 0)
+          (XBlock (list (XLoop (shs_xbody))))))
+      (Cons
+        (MkXFunc 0 (gb_shinit_x))
+        (Cons
+          (MkXFunc 0 (gb_shpad_x))
+          (Cons
+            (MkXFunc 0 (gb_shhex_x))
+            (Cons
+              (MkXFunc 0 (shs_pipe_body))
+              (Cons
+                (MkXFunc 0 (shs_main_body))
+                (Cons
+                  (MkXFunc 3 (shs_read_body))
+                  (Cons
+                    (MkXFunc 3 (shs_write_body))
+                    (Cons (MkXFunc 1 (shs_exit_body)) Nil)))))))))))
+
+(fn shs_exports () (List XExport) (list (XX "shs_main" 6)))
+
+(fn shs_entry_bytes ((k Int)) (List Int) (enc_image (shs_xfuncs) k))
+
+(fn shs_elf_image () (List Int) (enc_image_ord (shs_xfuncs)))
+
+(fn shs_elf_offsets () (List Int) (img_offs_ord (shs_xfuncs) 0))
+
+;; --- kit: shr-6 is ediv-64 (the block-count computation) ------------------
+
+(claim shs_shr6
+  (goal ((a Int)) ((= (le 0 a) True)) (= (bshr a 6) (ediv a 64)))
+  (chain
+    (have hp (= (pow2 6) 64)
+      (chain
+        (have h6 (= 6 (+ 5 1)) (steps ((compute both)) refl))
+        (steps ((rewrite (premise h6) lr lhs true ())))
+        (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+        (have h5 (= 5 (+ 4 1)) (steps ((compute both)) refl))
+        (steps ((rewrite (premise h5) lr lhs true ())))
+        (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+        (have h4 (= 4 (+ 3 1)) (steps ((compute both)) refl))
+        (steps ((rewrite (premise h4) lr lhs true ())))
+        (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+        (have h3 (= 3 (+ 2 1)) (steps ((compute both)) refl))
+        (steps ((rewrite (premise h3) lr lhs true ())))
+        (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+        (have h2 (= 2 (+ 1 1)) (steps ((compute both)) refl))
+        (steps ((rewrite (premise h2) lr lhs true ())))
+        (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+        (have h1 (= 1 (+ 0 1)) (steps ((compute both)) refl))
+        (steps ((rewrite (premise h1) lr lhs true ())))
+        (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+        (steps ((rewrite (lemma pow2_z) lr lhs true ()) (compute both)) refl)))
+    (rewrite-with
+      (lemma shr_pow2)
+      lr
+      lhs
+      ((inst k 6))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute both)) refl)))
+    (steps ((rewrite (premise hp) lr lhs true ())) refl)))
+
+;; --- kit: bulk fuel push (the loop-fuel reshape at the fold call) ---------
+
+(claim shs_fuel_push
+  (goal ((k Nat) (c Nat)) () (= (lg_fuel k (S^ 133 c)) (S^ 133 (lg_fuel k c))))
+  (induct k
+    ((case Z (steps ((compute both)) refl))
+     (case S
+       (k2)
+       (chain
+         (have hs (= (lg_fuel (S k2) (S^ 133 c)) (S (lg_fuel k2 (S^ 133 c))))
+           (steps ((unfold lg_fuel lhs) (reduce lhs)) refl))
+         (have hs2 (= (lg_fuel (S k2) c) (S (lg_fuel k2 c)))
+           (steps ((unfold lg_fuel lhs) (reduce lhs)) refl))
+         (steps
+           ((rewrite (premise hs) lr lhs true ())
+            (rewrite (premise hs2) lr rhs true ())
+            (rewrite (hyp 0) lr lhs true ()))
+           refl))))))
+;; --- kit: the oracle take lemma -------------------------------------------
+;; lx_take splits the drawn stream at the delivered length: the byte
+;; segment masks (mod-256) into the delivered list, the tail flows on.
+
+(claim shs_take_go
+  (goal ((bs (List Int)) (t (List Int)) (i Int)) ()
+    (=
+      (lx_take_r (shs_app bs t) i (+ i (int_of_nat (shs_len bs))))
+      (Some (Pair (shs_msk bs) t))))
+  (induct bs
+    ((case Nil
+       (chain
+         (have hz (= (int_of_nat (shs_len Nil)) (int_of_nat Z))
+           (steps ((compute both)) refl))
+         (have ha (= (shs_app Nil t) t)
+           (steps ((unfold shs_app lhs) (reduce lhs)) refl))
+         (steps
+           ((rewrite (premise hz) lr lhs true ())
+            (rewrite (lemma int_of_nat_zero) lr lhs true ())
+            (rewrite (premise ha) lr lhs true ())
+            (unfold lx_take_r lhs)))
+         (have hlt (= (lt i (+ i 0)) False) (by arith (rows (goal 1))))
+         (steps ((rewrite (premise hlt) lr lhs true ()) (compute both)))
+         refl))
+     (case Cons
+       (b bs2)
+       (chain
+         (have hl (= (shs_len (Cons b bs2)) (S (shs_len bs2)))
+           (steps ((unfold shs_len lhs) (reduce lhs)) refl))
+         (have ha (= (shs_app (Cons b bs2) t) (Cons b (shs_app bs2 t)))
+           (steps ((unfold shs_app lhs) (reduce lhs)) refl))
+         (have hm (= (shs_msk (Cons b bs2)) (Cons (mod b 256) (shs_msk bs2)))
+           (steps ((unfold shs_msk lhs) (reduce lhs)) refl))
+         (steps
+           ((rewrite (premise hl) lr lhs true ())
+            (rewrite (lemma int_of_nat_succ) lr lhs true ())
+            (rewrite (premise ha) lr lhs true ())
+            (rewrite (premise hm) lr rhs true ())
+            (unfold lx_take_r lhs)))
+         (have hnn (= (le 0 (int_of_nat (shs_len bs2))) True)
+           (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+         (have hlt (= (lt i (+ i (+ 1 (int_of_nat (shs_len bs2))))) True)
+           (by arith (rows (goal 1) (hnn 1))))
+         (steps
+           ((rewrite (premise hlt) lr lhs true ())
+            (compute
+              lhs
+              (stop lx_take_r shs_app shs_msk shs_len int_of_nat mod))))
+         (have hsh
+           (=
+             (+ i (+ 1 (int_of_nat (shs_len bs2))))
+             (+ (+ i 1) (int_of_nat (shs_len bs2))))
+           (by arith (list (list 1) (list 1))))
+         (steps
+           ((rewrite (premise hsh) lr lhs true ())
+            (rewrite (hyp 0) lr lhs true ())
+            (compute both (stop shs_msk mod))))
+         refl)))))
+
+(claim shs_take
+  (goal ((bs (List Int)) (t (List Int))) ()
+    (=
+      (lx_take (shs_app bs t) (int_of_nat (shs_len bs)))
+      (Some (Pair (shs_msk bs) t))))
+  (chain
+    (steps ((unfold lx_take lhs)))
+    (have hz (= (int_of_nat (shs_len bs)) (+ 0 (int_of_nat (shs_len bs))))
+      (by arith (list (list 1) (list 1))))
+    (steps
+      ((rewrite (premise hz) lr lhs true ())
+       (rewrite (lemma shs_take_go) lr lhs true ()))
+      refl)))
+
+;; --- kit: fill framing + readback -----------------------------------------
+
+;; a fill strictly above the probe is invisible
+(claim shs_fill_below
+  (goal ((ds (List Int)) (m Mem) (q Int) (p Int)) ((= (lt p q) True))
+    (= (mem_get (lx_fill m q ds) p) (mem_get m p)))
+  (induct ds
+    ((case Nil
+       (chain
+         (have hf (= (lx_fill m q Nil) m)
+           (steps ((unfold lx_fill lhs) (reduce lhs)) refl))
+         (steps ((rewrite (premise hf) lr lhs true ())) refl)))
+     (case Cons
+       (d t)
+       (chain
+         (have hf
+           (= (lx_fill m q (Cons d t)) (lx_fill (mem_set m q d) (+ q 1) t))
+           (steps ((unfold lx_fill lhs) (reduce lhs)) refl))
+         (steps ((rewrite (premise hf) lr lhs true ())))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (0 1))))))
+         (rewrite-with
+           (lemma get_set_other)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma ish_ne_lt)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)))
+         refl)))))
+
+;; the delivered window reads back as the masked list
+(claim shs_fill_read
+  (goal ((ds (List Int)) (m Mem) (p Int)) ()
+    (= (mem_read (shs_len ds) (lx_fill m p ds) p) (shs_msk ds)))
+  (induct ds
+    ((case Nil
+       (chain
+         (have hz
+           (= (mem_read (shs_len Nil) (lx_fill m p Nil) p) (mem_read Z m p))
+           (steps ((compute both (stop mem_read))) refl))
+         (steps
+           ((rewrite (premise hz) lr lhs true ())
+            (rewrite (lemma mem_read_z) lr lhs true ())
+            (compute both)))
+         refl))
+     (case Cons
+       (d t)
+       (chain
+         (have hl (= (shs_len (Cons d t)) (S (shs_len t)))
+           (steps ((unfold shs_len lhs) (reduce lhs)) refl))
+         (have hf
+           (= (lx_fill m p (Cons d t)) (lx_fill (mem_set m p d) (+ p 1) t))
+           (steps ((unfold lx_fill lhs) (reduce lhs)) refl))
+         (have hm (= (shs_msk (Cons d t)) (Cons (mod d 256) (shs_msk t)))
+           (steps ((unfold shs_msk lhs) (reduce lhs)) refl))
+         (steps
+           ((rewrite (premise hl) lr lhs true ())
+            (rewrite (premise hf) lr lhs true ())
+            (rewrite (premise hm) lr rhs true ())
+            (rewrite (lemma mem_read_s) lr lhs true ())))
+         (rewrite-with
+           (lemma shs_fill_below)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1))))))
+         (steps
+           ((rewrite (lemma get_set) lr lhs true ())
+            (rewrite (hyp 0) lr lhs true ()))
+           refl))))))
+
+;; masking is idempotent; masking preserves length
+(claim shs_msk_id
+  (goal ((bs (List Int))) () (= (shs_msk (shs_msk bs)) (shs_msk bs)))
+  (induct bs
+    ((case Nil
+       (chain
+         (have hm (= (shs_msk Nil) Nil)
+           (steps ((unfold shs_msk lhs) (reduce lhs)) refl))
+         (steps
+           ((rewrite (premise hm) lr both true ())
+            (rewrite (premise hm) lr lhs true ()))
+           refl)))
+     (case Cons
+       (b t)
+       (chain
+         (have hm (= (shs_msk (Cons b t)) (Cons (mod b 256) (shs_msk t)))
+           (steps ((unfold shs_msk lhs) (reduce lhs)) refl))
+         (steps ((rewrite (premise hm) lr both true ())))
+         (have hm2
+           (=
+             (shs_msk (Cons (mod b 256) (shs_msk t)))
+             (Cons (mod (mod b 256) 256) (shs_msk (shs_msk t))))
+           (steps ((unfold shs_msk lhs) (reduce lhs)) refl))
+         (steps ((rewrite (premise hm2) lr lhs true ())))
+         (have hmm (= (mod (mod b 256) 256) (mod b 256))
+           (rewrite-with
+             (lemma mod_unique)
+             lr
+             lhs
+             ((inst q 0) (inst r (mod b 256)))
+             ((steps () (by arith (list (list 1) (list 1))))
+              (rewrite-with
+                (lemma mod_lo)
+                lr
+                lhs
+                ()
+                ((steps ((compute lhs)) refl))
+                refl)
+              (rewrite-with
+                (lemma mod_hi)
+                lr
+                lhs
+                ()
+                ((steps ((compute lhs)) refl))
+                refl))
+             refl))
+         (steps
+           ((rewrite (premise hmm) lr lhs true ())
+            (rewrite (hyp 0) lr lhs true ()))
+           refl))))))
+
+(claim shs_len_msk
+  (goal ((bs (List Int))) () (= (shs_len (shs_msk bs)) (shs_len bs)))
+  (induct bs
+    ((case Nil
+       (chain
+         (have hm (= (shs_msk Nil) Nil)
+           (steps ((unfold shs_msk lhs) (reduce lhs)) refl))
+         (steps ((rewrite (premise hm) lr lhs true ())) refl)))
+     (case Cons
+       (b t)
+       (chain
+         (have hm (= (shs_msk (Cons b t)) (Cons (mod b 256) (shs_msk t)))
+           (steps ((unfold shs_msk lhs) (reduce lhs)) refl))
+         (have hl2
+           (=
+             (shs_len (Cons (mod b 256) (shs_msk t)))
+             (S (shs_len (shs_msk t))))
+           (steps ((unfold shs_len lhs) (reduce lhs)) refl))
+         (have hl (= (shs_len (Cons b t)) (S (shs_len t)))
+           (steps ((unfold shs_len lhs) (reduce lhs)) refl))
+         (steps
+           ((rewrite (premise hm) lr lhs true ())
+            (rewrite (premise hl2) lr lhs true ())
+            (rewrite (premise hl) lr rhs true ())
+            (rewrite (hyp 0) lr lhs true ()))
+           refl))))))
+
+;; --- kit: the event-window bridge (lx_read at the ground 64 IS mem_read) --
+
+(claim shs_lxrd64
+  (goal ((m Mem)) () (= (lx_read m 0 64) (mem_read 64 m 0)))
+  (chain
+    (have hb (= (mem_read 64 m 0) (mem_read (S^ 64 Z) m 0))
+      (steps ((compute both (stop mem_read))) refl))
+    (steps
+      ((compute lhs (stop mem_get))
+       (rewrite (premise hb) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_s) lr rhs true ())
+       (rewrite (lemma mem_read_z) lr rhs true ())
+       (compute both (stop mem_get)))
+      refl)))
+
+;; --- the per-stage callee certs (xcall_bridge's premise-1 slots) ----------
+;; Each wraps a weld stage claim as xrun_regs over THIS module's
+;; spelling (restfs-tailed): the weld claims quantify their module
+;; (straight-line stages) or pin the block/loop prefix (the fold),
+;; and this file's list instantiates them.
+
+(claim xcs_init
+  (goal
+    ((x0 Int)
+     (x1 Int)
+     (x2 Int)
+     (x3 Int)
+     (x4 Int)
+     (x5 Int)
+     (x6 Int)
+     (x7 Int)
+     (x8 Int)
+     (x9 Int)
+     (x10 Int)
+     (x11 Int)
+     (m Mem)
+     (c Nat)
+     (restfs (List XFunc)))
+    ()
+    (=
+      (xrun_regs
+        (S^ 583 c)
+        (MkXModule
+          (Cons
+            (MkXFunc 0 (gb_shblock_x))
+            (Cons
+              (MkXFunc
+                2
+                (list
+                  (XMovRR R12 RDI)
+                  (XMovRR RDX RSI)
+                  (XMovRI RDI 0)
+                  (XMovRI RSI 0)
+                  (XBlock (list (XLoop (inline shs_xbody))))))
+              (Cons
+                (MkXFunc 0 (gb_shinit_x))
+                (Cons
+                  (MkXFunc 0 (gb_shpad_x))
+                  (Cons
+                    (MkXFunc 0 (gb_shhex_x))
+                    (Cons
+                      (MkXFunc 0 (inline shs_pipe_body))
+                      (Cons
+                        (MkXFunc 0 (inline shs_main_body))
+                        (Cons
+                          (MkXFunc 3 (inline shs_read_body))
+                          (Cons
+                            (MkXFunc 3 (inline shs_write_body))
+                            (Cons (MkXFunc 1 (inline shs_exit_body)) restfs))))))))))
+          0
+          65536)
+        2
+        (MkRegs 0 x3 x2 x6 x7 x1 x0 x4 x5 0 0 x8 x9 x10 x11)
+        m)
+      (Some
+        (Pair
+          (MkRegs 0 x3 x2 x6 x7 x1 65507 x4 x5 0 0 x8 x9 x10 x11)
+          (ikh_mem m)))))
+  (chain
+    (steps
+      ((unfold xrun_regs lhs)
+       (compute
+         lhs
+         (stop xeval_seq gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x ikh_mem))))
+    (rewrite-with (lemma shi_xinit) lr lhs ((inst d c)) ())
+    (steps ((compute both (stop ikh_mem))))
+    refl))
+
+(claim xcs_pad
+  (goal
+    ((src Int)
+     (n Int)
+     (x2 Int)
+     (x3 Int)
+     (x4 Int)
+     (m Mem)
+     (c Nat)
+     (restfs (List XFunc)))
+    ((= (le 0 src) True) (= (le 0 n) True) (= (le (+ (+ src n) 72) 65536) True))
+    (=
+      (xrun_regs
+        (S^ 89 c)
+        (MkXModule
+          (Cons
+            (MkXFunc 0 (gb_shblock_x))
+            (Cons
+              (MkXFunc
+                2
+                (list
+                  (XMovRR R12 RDI)
+                  (XMovRR RDX RSI)
+                  (XMovRI RDI 0)
+                  (XMovRI RSI 0)
+                  (XBlock (list (XLoop (inline shs_xbody))))))
+              (Cons
+                (MkXFunc 0 (gb_shinit_x))
+                (Cons
+                  (MkXFunc 0 (gb_shpad_x))
+                  (Cons
+                    (MkXFunc 0 (gb_shhex_x))
+                    (Cons
+                      (MkXFunc 0 (inline shs_pipe_body))
+                      (Cons
+                        (MkXFunc 0 (inline shs_main_body))
+                        (Cons
+                          (MkXFunc 3 (inline shs_read_body))
+                          (Cons
+                            (MkXFunc 3 (inline shs_write_body))
+                            (Cons (MkXFunc 1 (inline shs_exit_body)) restfs))))))))))
+          0
+          65536)
+        3
+        (MkRegs 0 x3 x2 0 0 n src x4 0 0 0 0 0 0 0)
+        m)
+      (Some
+        (Pair
+          (MkRegs
+            0
+            (ipd_zf n)
+            (+ (+ (+ (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 1) 1) 1)
+            0
+            0
+            n
+            src
+            (ipd_l n)
+            0
+            0
+            0
+            0
+            0
+            0
+            0)
+          (ipd_mem m src n)))))
+  (chain
+    (steps
+      ((unfold xrun_regs lhs)
+       (compute
+         lhs
+         (stop xeval_seq gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x ipd_mem
+           ipd_zf ipd_ql ipd_l))))
+    (rewrite-with
+      (lemma shp_xpad)
+      lr
+      lhs
+      ((inst d c))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)))
+    (steps ((compute both (stop ipd_mem ipd_zf ipd_ql ipd_l))))
+    refl))
+
+(claim xcs_hex
+  (goal
+    ((q Int)
+     (p Int)
+     (x2 Int)
+     (x3 Int)
+     (x4 Int)
+     (x5 Int)
+     (m Mem)
+     (c Nat)
+     (restfs (List XFunc)))
+    ((= (le 0 q) True)
+     (= (le (+ q 64) 65536) True)
+     (= (le 0 p) True)
+     (= (le (+ p 32) 65536) True))
+    (=
+      (xrun_regs
+        (S^ 79 c)
+        (MkXModule
+          (Cons
+            (MkXFunc 0 (gb_shblock_x))
+            (Cons
+              (MkXFunc
+                2
+                (list
+                  (XMovRR R12 RDI)
+                  (XMovRR RDX RSI)
+                  (XMovRI RDI 0)
+                  (XMovRI RSI 0)
+                  (XBlock (list (XLoop (inline shs_xbody))))))
+              (Cons
+                (MkXFunc 0 (gb_shinit_x))
+                (Cons
+                  (MkXFunc 0 (gb_shpad_x))
+                  (Cons
+                    (MkXFunc 0 (gb_shhex_x))
+                    (Cons
+                      (MkXFunc 0 (inline shs_pipe_body))
+                      (Cons
+                        (MkXFunc 0 (inline shs_main_body))
+                        (Cons
+                          (MkXFunc 3 (inline shs_read_body))
+                          (Cons
+                            (MkXFunc 3 (inline shs_write_body))
+                            (Cons (MkXFunc 1 (inline shs_exit_body)) restfs))))))))))
+          0
+          65536)
+        4
+        (MkRegs 0 x3 x2 0 0 p q x4 x5 0 0 0 0 0 0)
+        m)
+      (Some
+        (Pair
+          (MkRegs 0 0 0 0 0 (+ p 32) (+ q 64) 0 0 0 0 0 0 0 0)
+          (ihx_mem m q p 32)))))
+  (chain
+    (steps
+      ((unfold xrun_regs lhs)
+       (compute
+         lhs
+         (stop xeval_seq gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x ihx_mem))))
+    (rewrite-with
+      (lemma shh_xhex)
+      lr
+      lhs
+      ((inst d c))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    (steps ((compute both (stop ihx_mem))))
+    refl))
+
+(claim xcs_fold
+  (goal
+    ((src Int) (xd Int) (x12 Int) (k Nat) (m Mem) (c Nat) (restfs (List XFunc)))
+    ((= (le 0 src) True) (= (le (+ src (* 64 (int_of_nat k))) 64960) True))
+    (=
+      (xrun_regs
+        (S^ 458 (lg_fuel k c))
+        (MkXModule
+          (Cons
+            (MkXFunc 0 (gb_shblock_x))
+            (Cons
+              (MkXFunc
+                2
+                (list
+                  (XMovRR R12 RDI)
+                  (XMovRR RDX RSI)
+                  (XMovRI RDI 0)
+                  (XMovRI RSI 0)
+                  (XBlock (list (XLoop (inline shs_xbody))))))
+              (Cons
+                (MkXFunc 0 (gb_shinit_x))
+                (Cons
+                  (MkXFunc 0 (gb_shpad_x))
+                  (Cons
+                    (MkXFunc 0 (gb_shhex_x))
+                    (Cons
+                      (MkXFunc 0 (inline shs_pipe_body))
+                      (Cons
+                        (MkXFunc 0 (inline shs_main_body))
+                        (Cons
+                          (MkXFunc 3 (inline shs_read_body))
+                          (Cons
+                            (MkXFunc 3 (inline shs_write_body))
+                            (Cons (MkXFunc 1 (inline shs_exit_body)) restfs))))))))))
+          0
+          65536)
+        1
+        (MkRegs 0 0 xd 0 0 (int_of_nat k) src 0 0 0 0 x12 0 0 0)
+        m)
+      (Some
+        (Pair
+          (MkRegs 0 0 0 0 0 0 0 0 0 0 0 (lg_advk src 64 k) 0 0 0)
+          (shx_mem m src k)))))
+  (chain
+    (steps
+      ((unfold xrun_regs lhs)
+       (compute
+         lhs
+         (stop xeval_loop lg_fuel gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x
+           shx_mem lg_advk int_of_nat))))
+    (rewrite-with
+      (lemma shb_xloop)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute both (stop shx_mem lg_advk gb_shblock_x))))
+    refl))
+
+;; --- the pipe cert: the four stages compose behind ONE call boundary ------
+;; xrun_regs of fn 5 = the full pure pipeline memory term (the weld's
+;; shx_pipe_read lhs, exactly). The fuel is one linear tower; at the
+;; fold call the spare S's push through lg_fuel (shs_fuel_push) so the
+;; loop cert's exact spelling is met.
+
+(claim xcs_pipe
+  (goal
+    ((xc Int)
+     (xd Int)
+     (x8 Int)
+     (wn Nat)
+     (k Nat)
+     (m Mem)
+     (c Nat)
+     (restfs (List XFunc)))
+    ((= (int_of_nat k) (ediv (+ (int_of_nat wn) 72) 64))
+     (= (le (+ (int_of_nat wn) 72) 64960) True))
+    (=
+      (xrun_regs
+        (S^ 601 (lg_fuel k c))
+        (MkXModule
+          (Cons
+            (MkXFunc 0 (gb_shblock_x))
+            (Cons
+              (MkXFunc
+                2
+                (list
+                  (XMovRR R12 RDI)
+                  (XMovRR RDX RSI)
+                  (XMovRI RDI 0)
+                  (XMovRI RSI 0)
+                  (XBlock (list (XLoop (inline shs_xbody))))))
+              (Cons
+                (MkXFunc 0 (gb_shinit_x))
+                (Cons
+                  (MkXFunc 0 (gb_shpad_x))
+                  (Cons
+                    (MkXFunc 0 (gb_shhex_x))
+                    (Cons
+                      (MkXFunc 0 (inline shs_pipe_body))
+                      (Cons
+                        (MkXFunc 0 (inline shs_main_body))
+                        (Cons
+                          (MkXFunc 3 (inline shs_read_body))
+                          (Cons
+                            (MkXFunc 3 (inline shs_write_body))
+                            (Cons (MkXFunc 1 (inline shs_exit_body)) restfs))))))))))
+          0
+          65536)
+        5
+        (MkRegs 0 xc xd 0 0 (int_of_nat wn) 0 x8 0 0 0 0 0 0 0)
+        m)
+      (Some
+        (Pair
+          (MkRegs 0 0 0 0 0 65504 64 0 0 0 0 0 0 0 0)
+          (ihx_mem
+            (shx_mem (ipd_mem (ikh_mem m) 0 (int_of_nat wn)) 0 k)
+            0
+            65472
+            32)))))
+  (chain
+    (have hnn (= (le 0 (int_of_nat wn)) True)
+      (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+    (have he
+      (=
+        (+ (int_of_nat wn) 72)
+        (+
+          (* 64 (ediv (+ (int_of_nat wn) 72) 64))
+          (mod (+ (int_of_nat wn) 72) 64)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 64))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrlo (= (le 0 (mod (+ (int_of_nat wn) 72) 64)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (steps
+      ((unfold xrun_regs lhs)
+       (compute
+         lhs
+         (stop xeval_call lg_fuel gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x
+           ikh_mem ipd_mem ihx_mem shx_mem ipd_zf ipd_ql ipd_l lg_advk
+           int_of_nat))))
+    (rewrite-with
+      (lemma xcall_bridge)
+      lr
+      lhs
+      ((inst f (MkXFunc 0 (gb_shinit_x)))
+       (inst rs2 (MkRegs 0 xc xd 0 0 (int_of_nat wn) 65507 x8 0 0 0 0 0 0 0))
+       (inst mem2 (ikh_mem m)))
+      ((steps
+         ((compute both (stop gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x)))
+         refl)
+       (steps ((rewrite (lemma xcs_init) lr lhs true ())) refl)))
+    (steps
+      ((compute
+         lhs
+         (stop xeval_call lg_fuel gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x
+           ikh_mem ipd_mem ihx_mem shx_mem ipd_zf ipd_ql ipd_l lg_advk
+           int_of_nat))))
+    (rewrite-with
+      (lemma xcall_bridge)
+      lr
+      lhs
+      ((inst f (MkXFunc 0 (gb_shpad_x)))
+       (inst
+         rs2
+         (MkRegs
+           0
+           (ipd_zf (int_of_nat wn))
+           (+ (+ (+ (+ (+ (+ (+ (ipd_ql 0 (int_of_nat wn)) 1) 1) 1) 1) 1) 1) 1)
+           0
+           0
+           (int_of_nat wn)
+           0
+           (ipd_l (int_of_nat wn))
+           0
+           0
+           0
+           0
+           0
+           0
+           0))
+       (inst mem2 (ipd_mem (ikh_mem m) 0 (int_of_nat wn))))
+      ((steps
+         ((compute both (stop gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x)))
+         refl)
+       (chain
+         (rewrite-with
+           (lemma xcs_pad)
+           lr
+           lhs
+           ()
+           ((steps ((compute both)) refl)
+            (steps ((rewrite (premise hnn) lr lhs true ())) refl)
+            (steps () (by arith (rows (goal 1) (1 1))))))
+         refl)))
+    (steps
+      ((compute
+         lhs
+         (stop xeval_call lg_fuel gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x
+           ikh_mem ipd_mem ihx_mem shx_mem ipd_zf ipd_ql ipd_l lg_advk
+           int_of_nat))))
+    (have hw72
+      (=
+        (mod (+ (int_of_nat wn) 72) 18446744073709551616)
+        (+ (int_of_nat wn) 72))
+      (rewrite-with
+        (lemma wrap64_id)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (hnn 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (steps
+      ((rewrite (premise hw72) lr lhs true ())
+       (compute
+         lhs
+         (stop xeval_call lg_fuel bshr gb_shblock_x gb_shinit_x gb_shpad_x
+           gb_shhex_x ikh_mem ipd_mem ihx_mem shx_mem ipd_zf ipd_ql ipd_l
+           lg_advk int_of_nat))))
+    (have hk6 (= (bshr (+ (int_of_nat wn) 72) 6) (int_of_nat k))
+      (chain
+        (rewrite-with
+          (lemma shs_shr6)
+          lr
+          lhs
+          ()
+          ((steps () (by arith (rows (goal 1) (hnn 1))))))
+        (steps ((rewrite (premise 0) rl lhs true ())) refl)))
+    (steps
+      ((rewrite (premise hk6) lr lhs true ())
+       (rewrite (lemma shs_fuel_push) rl lhs true ())
+       (compute
+         lhs
+         (stop xeval_call lg_fuel gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x
+           ikh_mem ipd_mem ihx_mem shx_mem ipd_zf ipd_ql ipd_l lg_advk
+           int_of_nat))))
+    (rewrite-with
+      (lemma xcall_bridge)
+      lr
+      lhs
+      ((inst
+         f
+         (MkXFunc
+           2
+           (list
+             (XMovRR R12 RDI)
+             (XMovRR RDX RSI)
+             (XMovRI RDI 0)
+             (XMovRI RSI 0)
+             (XBlock (list (XLoop (inline shs_xbody)))))))
+       (inst rs2 (MkRegs 0 0 0 0 0 0 0 0 0 0 0 (lg_advk 0 64 k) 0 0 0))
+       (inst mem2 (shx_mem (ipd_mem (ikh_mem m) 0 (int_of_nat wn)) 0 k)))
+      ((steps
+         ((compute both (stop gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x)))
+         refl)
+       (chain
+         (rewrite-with
+           (lemma xcs_fold)
+           lr
+           lhs
+           ()
+           ((steps ((compute both)) refl)
+            (chain
+              (steps ((rewrite (premise 0) lr lhs true ())))
+              (steps () (by arith (rows (goal 1) (he 1) (hrlo 1) (1 1)))))))
+         refl)))
+    (steps
+      ((compute
+         lhs
+         (stop xeval_call lg_fuel gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x
+           ikh_mem ipd_mem ihx_mem shx_mem ipd_zf ipd_ql ipd_l lg_advk
+           int_of_nat))))
+    (rewrite-with
+      (lemma xcall_bridge)
+      lr
+      lhs
+      ((inst f (MkXFunc 0 (gb_shhex_x)))
+       (inst rs2 (MkRegs 0 0 0 0 0 (+ 65472 32) (+ 0 64) 0 0 0 0 0 0 0 0))
+       (inst
+         mem2
+         (ihx_mem
+           (shx_mem (ipd_mem (ikh_mem m) 0 (int_of_nat wn)) 0 k)
+           0
+           65472
+           32)))
+      ((steps
+         ((compute both (stop gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x)))
+         refl)
+       (chain
+         (rewrite-with
+           (lemma xcs_hex)
+           lr
+           lhs
+           ()
+           ((steps ((compute both)) refl)
+            (steps ((compute both)) refl)
+            (steps ((compute both)) refl)
+            (steps ((compute both)) refl)))
+         refl)))
+    (steps
+      ((compute
+         both
+         (stop ikh_mem ipd_mem ihx_mem shx_mem ipd_zf ipd_ql ipd_l lg_advk
+           int_of_nat))))
+    refl))
+
+;; --- THE ARTIFACT THEOREM (docs/MEMORY.md D8: Done + Fail-prefix as
+;; two premised claims) -----------------------------------------------------
+;;
+;; Done leg: the kernel returns fewer bytes than the cap. The head
+;; draw is spelled as the delivered length (any conforming world
+;; decomposes this way); wz and k are the weld's witness Nats, tied by
+;; the same premises shx_pipe_read carries. The trace: the read's
+;; delivered bytes, the write of exactly their sha256_hex, exit 0.
+
+(claim lowered_w_shs_done
+  (goal
+    ((m0 Mem)
+     (bs (List Int))
+     (wz Nat)
+     (k Nat)
+     (c1 Int)
+     (c2 Int)
+     (r2 Int)
+     (c3 Int)
+     (c4 Int)
+     (ws (List Int))
+     (c Nat)
+     (restfs (List XFunc)))
+    ((= (lt (int_of_nat (shs_len bs)) 64888) True)
+     (= (int_of_nat wz) (mod (- 55 (int_of_nat (shs_len bs))) 64))
+     (= (int_of_nat k) (ediv (+ (int_of_nat (shs_len bs)) 72) 64)))
+    (=
+      (xrun_w
+        (S^ 614 (lg_fuel k c))
+        (MkXModule
+          (Cons
+            (MkXFunc 0 (gb_shblock_x))
+            (Cons
+              (MkXFunc
+                2
+                (list
+                  (XMovRR R12 RDI)
+                  (XMovRR RDX RSI)
+                  (XMovRI RDI 0)
+                  (XMovRI RSI 0)
+                  (XBlock (list (XLoop (inline shs_xbody))))))
+              (Cons
+                (MkXFunc 0 (gb_shinit_x))
+                (Cons
+                  (MkXFunc 0 (gb_shpad_x))
+                  (Cons
+                    (MkXFunc 0 (gb_shhex_x))
+                    (Cons
+                      (MkXFunc 0 (inline shs_pipe_body))
+                      (Cons
+                        (MkXFunc 0 (inline shs_main_body))
+                        (Cons
+                          (MkXFunc 3 (inline shs_read_body))
+                          (Cons
+                            (MkXFunc 3 (inline shs_write_body))
+                            (Cons (MkXFunc 1 (inline shs_exit_body)) restfs))))))))))
+          0
+          65536)
+        6
+        (MkRegs 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+        m0
+        (MkLxWorld
+          (Cons
+            (int_of_nat (shs_len bs))
+            (shs_app bs (Cons c1 (Cons c2 (Cons r2 (Cons c3 (Cons c4 ws)))))))))
+      (Some
+        (WExit
+          0
+          (Cons
+            (LxRead 0 (shs_msk bs))
+            (Cons (LxWrote 1 (sha256_hex (shs_msk bs))) (Cons (LxExited 0) Nil)))))))
+  (chain
+    (have hnn (= (le 0 (int_of_nat (shs_len bs))) True)
+      (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+    (have hlt0 (= (lt (int_of_nat (shs_len bs)) 0) False)
+      (by arith (rows (goal 1) (hnn 1))))
+    (have hlt1 (= (lt 64888 (int_of_nat (shs_len bs))) False)
+      (by arith (rows (goal 1) (0 1))))
+    (have hne (= (int_eq (int_of_nat (shs_len bs)) 64888) False)
+      (rewrite-with
+        (lemma ish_ne_lt)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hwN
+      (=
+        (mod (int_of_nat (shs_len bs)) 18446744073709551616)
+        (int_of_nat (shs_len bs)))
+      (rewrite-with
+        (lemma wrap64_id)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hnn) lr lhs true ())) refl)
+         (steps () (by arith (rows (goal 1) (0 1)))))
+        refl))
+    (steps
+      ((unfold xrun_w lhs)
+       (compute
+         lhs
+         (stop xeval_call lx_take lx_fill lx_read lg_fuel int_of_nat shs_app
+           shs_len shs_msk gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x
+           ikh_mem ipd_mem ihx_mem shx_mem sha256_hex))))
+    (steps
+      ((rewrite (premise hlt0) lr lhs true ())
+       (compute
+         lhs
+         (stop xeval_call lx_take lx_fill lx_read lg_fuel int_of_nat shs_app
+           shs_len shs_msk gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x
+           ikh_mem ipd_mem ihx_mem shx_mem sha256_hex))))
+    (steps
+      ((rewrite (premise hlt1) lr lhs true ())
+       (compute
+         lhs
+         (stop xeval_call lx_take lx_fill lx_read lg_fuel int_of_nat shs_app
+           shs_len shs_msk gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x
+           ikh_mem ipd_mem ihx_mem shx_mem sha256_hex))))
+    (steps
+      ((rewrite (lemma shs_take) lr lhs true ())
+       (compute
+         lhs
+         (stop xeval_call lx_take lx_fill lx_read lg_fuel int_of_nat shs_app
+           shs_len shs_msk gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x
+           ikh_mem ipd_mem ihx_mem shx_mem sha256_hex))))
+    (steps
+      ((rewrite (premise hwN) lr lhs true ())
+       (compute
+         lhs
+         (stop xeval_call lx_take lx_fill lx_read lg_fuel int_of_nat shs_app
+           shs_len shs_msk gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x
+           ikh_mem ipd_mem ihx_mem shx_mem sha256_hex))))
+    (steps
+      ((rewrite (premise hne) lr lhs true ())
+       (compute
+         lhs
+         (stop xeval_call lx_take lx_fill lx_read lg_fuel int_of_nat shs_app
+           shs_len shs_msk gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x
+           ikh_mem ipd_mem ihx_mem shx_mem sha256_hex))))
+    (rewrite-with
+      (lemma xcall_bridge)
+      lr
+      lhs
+      ((inst f (MkXFunc 0 (inline shs_pipe_body)))
+       (inst rs2 (MkRegs 0 0 0 0 0 65504 64 0 0 0 0 0 0 0 0))
+       (inst
+         mem2
+         (ihx_mem
+           (shx_mem
+             (ipd_mem
+               (ikh_mem (lx_fill m0 0 (shs_msk bs)))
+               0
+               (int_of_nat (shs_len bs)))
+             0
+             k)
+           0
+           65472
+           32)))
+      ((steps
+         ((compute both (stop gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x)))
+         refl)
+       (chain
+         (rewrite-with
+           (lemma xcs_pipe)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+            (steps () (by arith (rows (goal 1) (0 1))))))
+         refl)))
+    (steps
+      ((compute
+         lhs
+         (stop xeval_call lx_take lx_fill lx_read lg_fuel int_of_nat shs_app
+           shs_len shs_msk gb_shblock_x gb_shinit_x gb_shpad_x gb_shhex_x
+           ikh_mem ipd_mem ihx_mem shx_mem sha256_hex))))
+    (steps ((rewrite (lemma shs_lxrd64) lr lhs true ())))
+    (rewrite-with
+      (lemma shx_pipe_read)
+      lr
+      lhs
+      ((inst wz wz))
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps () (by arith (rows (goal 1) (0 1))))))
+    (have hrd
+      (= (mem_read (shs_len bs) (lx_fill m0 0 (shs_msk bs)) 0) (shs_msk bs))
+      (chain
+        (have hlm (= (shs_len bs) (shs_len (shs_msk bs)))
+          (steps ((rewrite (lemma shs_len_msk) lr rhs true ())) refl))
+        (steps
+          ((rewrite (premise hlm) lr lhs true ())
+           (rewrite (lemma shs_fill_read) lr lhs true ())
+           (rewrite (lemma shs_msk_id) lr lhs true ()))
+          refl)))
+    (steps
+      ((rewrite (premise hrd) lr lhs true ())
+       (compute
+         both
+         (stop lx_fill int_of_nat shs_app shs_len shs_msk gb_shblock_x
+           gb_shinit_x gb_shpad_x gb_shhex_x ikh_mem ipd_mem ihx_mem shx_mem
+           sha256_hex)))
+      refl)))
+
+;; Fail-prefix leg: the kernel answers the FULL cap (any draw at or
+;; above it clamps there) -- one read cannot distinguish exactly-cap
+;; from oversize, so the bin refuses: exit 1, nothing written. The
+;; kernel still delivered 64888 bytes; the trace records them.
+
+(claim lowered_w_shs_fail
+  (goal
+    ((m0 Mem)
+     (r Int)
+     (bs (List Int))
+     (c1 Int)
+     (c2 Int)
+     (ws (List Int))
+     (c Nat)
+     (restfs (List XFunc)))
+    ((= (le 64888 r) True) (= (int_of_nat (shs_len bs)) 64888))
+    (=
+      (xrun_w
+        (S^ 614 c)
+        (MkXModule
+          (Cons
+            (MkXFunc 0 (gb_shblock_x))
+            (Cons
+              (MkXFunc
+                2
+                (list
+                  (XMovRR R12 RDI)
+                  (XMovRR RDX RSI)
+                  (XMovRI RDI 0)
+                  (XMovRI RSI 0)
+                  (XBlock (list (XLoop (inline shs_xbody))))))
+              (Cons
+                (MkXFunc 0 (gb_shinit_x))
+                (Cons
+                  (MkXFunc 0 (gb_shpad_x))
+                  (Cons
+                    (MkXFunc 0 (gb_shhex_x))
+                    (Cons
+                      (MkXFunc 0 (inline shs_pipe_body))
+                      (Cons
+                        (MkXFunc 0 (inline shs_main_body))
+                        (Cons
+                          (MkXFunc 3 (inline shs_read_body))
+                          (Cons
+                            (MkXFunc 3 (inline shs_write_body))
+                            (Cons (MkXFunc 1 (inline shs_exit_body)) restfs))))))))))
+          0
+          65536)
+        6
+        (MkRegs 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+        m0
+        (MkLxWorld (Cons r (shs_app bs (Cons c1 (Cons c2 ws))))))
+      (Some (WExit 1 (Cons (LxRead 0 (shs_msk bs)) (Cons (LxExited 1) Nil))))))
+  (chain
+    (have hlt0 (= (lt r 0) False) (by arith (rows (goal 1) (0 1))))
+    (have htake
+      (=
+        (lx_take (shs_app bs (Cons c1 (Cons c2 ws))) 64888)
+        (Some (Pair (shs_msk bs) (Cons c1 (Cons c2 ws)))))
+      (steps
+        ((rewrite (premise 1) rl lhs true ())
+         (rewrite (lemma shs_take) lr lhs true ()))
+        refl))
+    (case-on (lt 64888 r) Bool
+      ((case True
+         (chain
+           (steps
+             ((unfold xrun_w lhs)
+              (compute
+                lhs
+                (stop xeval_call lx_take lx_fill lx_read lg_fuel int_of_nat
+                  shs_app shs_len shs_msk gb_shblock_x gb_shinit_x gb_shpad_x
+                  gb_shhex_x ikh_mem ipd_mem ihx_mem shx_mem sha256_hex))))
+           (steps
+             ((rewrite (premise hlt0) lr lhs true ())
+              (compute
+                lhs
+                (stop xeval_call lx_take lx_fill lx_read lg_fuel int_of_nat
+                  shs_app shs_len shs_msk gb_shblock_x gb_shinit_x gb_shpad_x
+                  gb_shhex_x ikh_mem ipd_mem ihx_mem shx_mem sha256_hex))))
+           (steps
+             ((rewrite (hyp True) lr lhs true ())
+              (compute
+                lhs
+                (stop xeval_call lx_take lx_fill lx_read lg_fuel int_of_nat
+                  shs_app shs_len shs_msk gb_shblock_x gb_shinit_x gb_shpad_x
+                  gb_shhex_x ikh_mem ipd_mem ihx_mem shx_mem sha256_hex))))
+           (steps
+             ((rewrite (premise htake) lr lhs true ())
+              (compute
+                both
+                (stop lx_fill int_of_nat shs_app shs_len shs_msk gb_shblock_x
+                  gb_shinit_x gb_shpad_x gb_shhex_x ikh_mem ipd_mem ihx_mem
+                  shx_mem sha256_hex)))
+             refl)))
+       (case False
+         (chain
+           (have hnl (= (lt 64888 r) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hr (= r 64888)
+             (by arith (list (list 1 0 0 0 0 1) (list 1 1 0 0 0 0))))
+           (steps ((rewrite (premise hr) lr lhs true ())))
+           (steps
+             ((unfold xrun_w lhs)
+              (compute
+                lhs
+                (stop xeval_call lx_take lx_fill lx_read lg_fuel int_of_nat
+                  shs_app shs_len shs_msk gb_shblock_x gb_shinit_x gb_shpad_x
+                  gb_shhex_x ikh_mem ipd_mem ihx_mem shx_mem sha256_hex))))
+           (steps
+             ((rewrite (premise htake) lr lhs true ())
+              (compute
+                both
+                (stop lx_fill int_of_nat shs_app shs_len shs_msk gb_shblock_x
+                  gb_shinit_x gb_shpad_x gb_shhex_x ikh_mem ipd_mem ihx_mem
+                  shx_mem sha256_hex)))
+             refl)))))))

@@ -179,6 +179,7 @@ TARGETS=(
   examples/xweff_probe.shard
   examples/addw_src.shard
   examples/sha256sum_src.shard
+  examples/sha256sum_x86_out.shard
   examples/addw_x86_out.shard
   examples/xitoa_probe.shard
   examples/x86div_src.shard
