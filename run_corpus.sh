@@ -124,41 +124,41 @@ TARGETS=(
   pins/lang/record_proto.shard
   pins/lang/record_basic.shard
   models/imp/imp.shard
-  examples/imp_probe.shard
-  examples/imp_scalar.shard
+  models/imp/probes/imp_probe.shard
+  tools/impgen/fixtures/imp_scalar.shard
   models/imp/to_wasm.shard
-  examples/imp_wasm_bridge.shard
+  models/imp/probes/imp_wasm_bridge.shard
   models/imp/to_x86.shard
-  examples/imp_x86_bridge.shard
-  examples/imp_loop.shard
-  examples/imp_wasm_loop_bridge.shard
-  examples/imp_x86_loop_bridge.shard
-  examples/impgen_wasm_out.shard
-  examples/impgen_x86_out.shard
-  examples/impgen_wasm_loop_out.shard
-  examples/impgen_x86_loop_out.shard
-  examples/imp_mixed.shard
-  examples/impgen_wasm_mixed_out.shard
-  examples/impgen_x86_mixed_out.shard
+  models/imp/probes/imp_x86_bridge.shard
+  tools/impgen/fixtures/imp_loop.shard
+  models/imp/probes/imp_wasm_loop_bridge.shard
+  models/imp/probes/imp_x86_loop_bridge.shard
+  tools/impgen/fixtures/impgen_wasm_out.shard
+  tools/impgen/fixtures/impgen_x86_out.shard
+  tools/impgen/fixtures/impgen_wasm_loop_out.shard
+  tools/impgen/fixtures/impgen_x86_loop_out.shard
+  tools/impgen/fixtures/imp_mixed.shard
+  tools/impgen/fixtures/impgen_wasm_mixed_out.shard
+  tools/impgen/fixtures/impgen_x86_mixed_out.shard
   examples/iwg_probe.shard
-  examples/sqw_probe.shard
-  examples/sqx_probe.shard
-  examples/sqmw_probe.shard
-  examples/sqm2_probe.shard
-  examples/sqmc_probe.shard
-  examples/sqxc_probe.shard
+  tools/impgen/blueprints/sqw_probe.shard
+  tools/impgen/blueprints/sqx_probe.shard
+  tools/impgen/blueprints/sqmw_probe.shard
+  tools/impgen/blueprints/sqm2_probe.shard
+  tools/impgen/blueprints/sqmc_probe.shard
+  tools/impgen/blueprints/sqxc_probe.shard
   examples/weld_probe.shard
-  examples/sqbw_probe.shard
-  examples/sqbx_probe.shard
-  examples/sqblw_probe.shard
-  examples/sqblx_probe.shard
-  examples/sqbsx_probe.shard
-  examples/imp_if.shard
-  examples/impgen_wasm_if_out.shard
-  examples/impgen_x86_if_out.shard
-  examples/imp_ifl.shard
-  examples/impgen_wasm_ifl_out.shard
-  examples/impgen_x86_ifl_out.shard
+  tools/impgen/blueprints/sqbw_probe.shard
+  tools/impgen/blueprints/sqbx_probe.shard
+  tools/impgen/blueprints/sqblw_probe.shard
+  tools/impgen/blueprints/sqblx_probe.shard
+  tools/impgen/blueprints/sqbsx_probe.shard
+  tools/impgen/fixtures/imp_if.shard
+  tools/impgen/fixtures/impgen_wasm_if_out.shard
+  tools/impgen/fixtures/impgen_x86_if_out.shard
+  tools/impgen/fixtures/imp_ifl.shard
+  tools/impgen/fixtures/impgen_wasm_ifl_out.shard
+  tools/impgen/fixtures/impgen_x86_ifl_out.shard
   models/wasm/wasm.shard
   models/wasm/encode.shard
   models/wasm/probes/wasm_smoke.shard

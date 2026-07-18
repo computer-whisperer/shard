@@ -1,0 +1,934 @@
+;;; models/imp/probes/imp_wasm_loop_bridge.shard — imp ⊑ wasm, the LOOP class
+;;; (docs/IMP.md rung I1b; re-landed on the v2 typed machine at V2-3).
+;;; Four claim families:
+;;;
+;;;   TIES     — the translator's output IS the generated artifact:
+;;;              (imp2w_fn (il_*_fn)) = (Some (lp_*_func)) against the
+;;;              named funcs of examples/wasmgen_loop_out.shard (the
+;;;              v2 kinds change ZERO emitted bytes for the U32 class),
+;;;              and the U64 doubling twin ties against its literal —
+;;;              the first IWhile artifact with an i64.eqz guard.
+;;;   WORKERS  — the machine-vs-machine loop alignment, per program:
+;;;              eval_loop over the translated body = (iw_out st
+;;;              (iwhile … over the imp body)), by induction on the
+;;;              counter. THE V2 DISSOLUTION LIVES HERE: both machines
+;;;              wrap every op to its kind, so the locals stay
+;;;              syntactically aligned through the walk and the v1
+;;;              width-residue apparatus is GONE — the sum worker's
+;;;              accumulator premises (nonneg + the k-scaled invariant,
+;;;              v1's premises 1 and 3) and its hwa collapse have no v2
+;;;              analogue (they live at spec ⊑ imp now, once, in
+;;;              tools/impgen/fixtures/imp_loop.shard). What remains is the memory
+;;;              story: the pointer-range premises that resolve the
+;;;              store/load guards and cap the counter — plus the
+;;;              IH-shape collapses they drive on BOTH sides.
+;;;   BRIDGES  — the denotation boundary: call_fn_mem over the
+;;;              translated module = icall_mem over the imp program,
+;;;              the machine fed through iband_args (the v2 statement
+;;;              shape — both sides band identically; the U8 value
+;;;              local needs no premise at all, it rides banded).
+;;;   COMPOSE  — spec ⊑ imp (imp_lp_*/imp_lq_*, imp_loop.shard) chains
+;;;              with imp ⊑ wasm (this file) into spec ⊑ wasm in two
+;;;              rewrites.
+;;;
+;;; PROOF GATES ONLY (DI2): no engine leg exists at imp; the wasm
+;;; artifacts these certs describe are gated by the existing wasm
+;;; machinery when they ship.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/nat.shard")
+(use (:: std nat *))
+(import "../../../std/mem")
+(use (:: std mem *))
+(import "../../../examples/wasmgen_loop_src.shard")
+(use (:: examples wasmgen_loop_src *))
+(import "../../../examples/wasmgen_loop_out.shard")
+(use (:: examples wasmgen_loop_out *))
+(import "../../../tools/impgen/fixtures/imp_scalar.shard")
+(use (:: tools impgen fixtures imp_scalar *))
+(import "../imp.shard")
+(use (:: models imp imp *))
+(import "../../wasm/wasm.shard")
+(use (:: models wasm wasm *))
+(import "../to_wasm.shard")
+(use (:: models imp to_wasm *))
+(import "../../wasm/loopkit.shard")
+(use (:: models wasm loopkit *))
+(import "../../../tools/impgen/fixtures/imp_loop.shard")
+(use (:: tools impgen fixtures imp_loop *))
+
+;; --- local body copies for the (inline …) sugar ---------------------------------
+;; (inline F) resolves against THIS file's nullary fns only, so the
+;; loop bodies the claims state are copied here — and tied to their
+;; originals by the tie_*body claims below, so the copies cannot drift.
+
+(fn br_fill_w () (List Instr)
+  (list
+    (LocalGet 2)
+    (I32Eqz)
+    (BrIf 1)
+    (LocalGet 0)
+    (LocalGet 1)
+    (I32Store8)
+    (LocalGet 0)
+    (I32Const 1)
+    (I32Bin BAdd)
+    (LocalSet 0)
+    (LocalGet 2)
+    (I32Const 1)
+    (I32Bin BSub)
+    (LocalSet 2)
+    (Br 0)))
+
+(fn br_sum_w () (List Instr)
+  (list
+    (LocalGet 2)
+    (I32Eqz)
+    (BrIf 1)
+    (LocalGet 1)
+    (LocalGet 0)
+    (I32Load8U)
+    (I32Bin BAdd)
+    (LocalSet 1)
+    (LocalGet 0)
+    (I32Const 1)
+    (I32Bin BAdd)
+    (LocalSet 0)
+    (LocalGet 2)
+    (I32Const 1)
+    (I32Bin BSub)
+    (LocalSet 2)
+    (Br 0)))
+
+;; the U64 doubling body: the i64.eqz guard is the loop-tier consumer
+;; the V2-2c refusal named
+(fn br_dblq_w () (List Instr)
+  (list
+    (LocalGet 1)
+    (I64Eqz)
+    (BrIf 1)
+    (LocalGet 0)
+    (LocalGet 0)
+    (I64Bin BAdd)
+    (LocalSet 0)
+    (LocalGet 1)
+    (I64Const 1)
+    (I64Bin BSub)
+    (LocalSet 1)
+    (Br 0)))
+
+(fn br_fill_i () (List IStmt)
+  (list
+    (IStore (ILoc 0) (ILoc 1))
+    (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 1)))
+    (ISet 2 (IBin U32 ISub (ILoc 2) (IConst 1)))))
+
+(fn br_sum_i () (List IStmt)
+  (list
+    (ISet 1 (IBin U32 IAdd (ILoc 1) (IExt U8 U32 (ILoad (ILoc 0)))))
+    (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 1)))
+    (ISet 2 (IBin U32 ISub (ILoc 2) (IConst 1)))))
+
+(fn br_dblq_i () (List IStmt)
+  (list
+    (ISet 0 (IBin U64 IAdd (ILoc 0) (ILoc 0)))
+    (ISet 1 (IBin U64 ISub (ILoc 1) (IConst 1)))))
+
+;; --- the ties: translator output = the artifact ---------------------------------
+
+;; the U32 twins re-tie against the generated file byte for byte (the
+;; v2 kinds and the explicit IExt change zero emitted bytes)
+(claim tie_fill
+  (goal () () (= (imp2w_fn (il_fill_fn)) (Some (lp_fill_func))))
+  (steps ((compute both)) refl))
+
+(claim tie_sum
+  (goal () () (= (imp2w_fn (il_sum_fn)) (Some (lp_sum_func))))
+  (steps ((compute both)) refl))
+
+;; the U64 twin's artifact — wasmgen never made one; the literal pins
+;; the kind-directed emission (i64 body ops, the i64.eqz guard)
+(claim tie_dblq
+  (goal () ()
+    (=
+      (imp2w_fn (il_dblq_fn))
+      (Some (MkFunc 2 0 (list (Block (list (Loop (br_dblq_w)))) (LocalGet 0))))))
+  (steps ((compute both)) refl))
+
+;; the local body copies are the originals, byte for byte
+(claim tie_fill_wbody
+  (goal () () (= (br_fill_w) (lp_fill_body)))
+  (steps ((compute both)) refl))
+
+(claim tie_sum_wbody
+  (goal () () (= (br_sum_w) (lp_sum_body)))
+  (steps ((compute both)) refl))
+
+(claim tie_fill_ibody
+  (goal () () (= (br_fill_i) (il_fill_body)))
+  (steps ((compute both)) refl))
+
+(claim tie_sum_ibody
+  (goal () () (= (br_sum_i) (il_sum_body)))
+  (steps ((compute both)) refl))
+
+(claim tie_dblq_ibody
+  (goal () () (= (br_dblq_i) (il_dblq_body)))
+  (steps ((compute both)) refl))
+
+;; --- the fill worker bridge: both machines, one induction -----------------------
+
+(claim iww_fill
+  (goal
+    ((d Int)
+     (v Int)
+     (st (List Int))
+     (m0 Mem)
+     (c Nat)
+     (k Nat)
+     (restfs (List Func)))
+    ((= (le 0 d) True) (= (le (+ d (int_of_nat k)) 65536) True))
+    (=
+      (eval_loop
+        (S^ 19 (lg_fuel k c))
+        (MkWModule
+          (Cons
+            (MkFunc
+              3
+              0
+              (list (Block (list (Loop (inline br_fill_w)))) (I32Const 0)))
+            restfs)
+          65536)
+        (inline br_fill_w)
+        (list d v (int_of_nat k))
+        st
+        m0)
+      (iw_out
+        st
+        (iwhile
+          (S^ 10 (lg_fuel k c))
+          65536
+          (ILoc 2)
+          (inline br_fill_i)
+          (list d v (int_of_nat k))
+          m0))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr both true ()) (compute both))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((unfold lg_fuel lhs)
+            (reduce lhs)
+            (unfold lg_fuel rhs)
+            (reduce rhs)
+            (unfold eval_loop lhs)
+            (unfold iwhile rhs)
+            (rewrite (lemma int_of_nat_succ) lr both true ())
+            (compute both (stop eval_loop iwhile lg_fuel iw_out))))
+         (rewrite-with
+           (lemma lg_ne)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (rewrite-with
+           (lemma lg_ne)
+           lr
+           rhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps
+           ((compute both (stop eval_loop iwhile lg_fuel iw_out))
+            (rewrite (premise 0) lr both true ())
+            (compute both (stop eval_loop iwhile lg_fuel iw_out))))
+         (rewrite-with
+           (lemma lg_a1_ms)
+           lr
+           lhs
+           ((inst c k2))
+           ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+            (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (rewrite-with
+           (lemma im_lt)
+           lr
+           rhs
+           ((inst c k2))
+           ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+            (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps ((compute both (stop eval_loop iwhile lg_fuel iw_out))))
+         (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2))
+           (rewrite-with (lemma lg_sub) lr lhs () () refl))
+         (steps
+           ((rewrite (premise hsub) lr both true ())
+            (compute both (stop eval_loop iwhile lg_fuel iw_out))))
+         (have hwk (= (mod (int_of_nat k2) 4294967296) (int_of_nat k2))
+           (rewrite-with
+             (lemma iwrap32_id)
+             lr
+             lhs
+             ((inst x (int_of_nat k2)))
+             ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)
+              (rewrite-with
+                (lemma lg_kM)
+                lr
+                lhs
+                ((inst a d) (inst c k2))
+                ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                 (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+                 (steps ((rewrite (premise 0) lr lhs true ())) refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hwk) lr both true ())))
+         (have hw0 (= (mod (+ d 1) 4294967296) (+ d 1))
+           (rewrite-with
+             (lemma iwrap32_id)
+             lr
+             lhs
+             ((inst x (+ d 1)))
+             ((rewrite-with
+                (lemma lg_lo1)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                refl)
+              (rewrite-with
+                (lemma lg_32)
+                lr
+                lhs
+                ()
+                ((rewrite-with
+                   (lemma lg_a1_ms)
+                   lr
+                   lhs
+                   ((inst c k2))
+                   ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                    (steps
+                      ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                      refl)
+                    (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+                   refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hw0) lr both true ())))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma lg_lo1)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma lg_shift)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              refl)))
+         refl)))))
+
+;; --- the sum worker bridge: the read direction, accumulator apparatus GONE ------
+;; v1 carried four premises and the hwa collapse; v2 carries the
+;; pointer pair only — both machines wrap the accumulator identically,
+;; so it rides the IH's quantifier as the shared mod term.
+
+(claim iww_sum
+  (goal
+    ((p Int)
+     (acc Int)
+     (st (List Int))
+     (m0 Mem)
+     (c Nat)
+     (k Nat)
+     (restfs (List Func)))
+    ((= (le 0 p) True) (= (le (+ p (int_of_nat k)) 65536) True))
+    (=
+      (eval_loop
+        (S^ 21 (lg_fuel k c))
+        (MkWModule
+          (Cons
+            (MkFunc
+              3
+              0
+              (list (Block (list (Loop (inline br_sum_w)))) (LocalGet 1)))
+            restfs)
+          65536)
+        (inline br_sum_w)
+        (list p acc (int_of_nat k))
+        st
+        m0)
+      (iw_out
+        st
+        (iwhile
+          (S^ 10 (lg_fuel k c))
+          65536
+          (ILoc 2)
+          (inline br_sum_i)
+          (list p acc (int_of_nat k))
+          m0))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr both true ()) (compute both))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((unfold lg_fuel lhs)
+            (reduce lhs)
+            (unfold lg_fuel rhs)
+            (reduce rhs)
+            (unfold eval_loop lhs)
+            (unfold iwhile rhs)
+            (rewrite (lemma int_of_nat_succ) lr both true ())
+            (compute both (stop eval_loop iwhile lg_fuel iw_out))))
+         (rewrite-with
+           (lemma lg_ne)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (rewrite-with
+           (lemma lg_ne)
+           lr
+           rhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps
+           ((compute both (stop eval_loop iwhile lg_fuel iw_out))
+            (rewrite (premise 0) lr both true ())
+            (compute both (stop eval_loop iwhile lg_fuel iw_out))))
+         (rewrite-with
+           (lemma lg_a1_ms)
+           lr
+           lhs
+           ((inst c k2))
+           ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+            (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (rewrite-with
+           (lemma im_lt)
+           lr
+           rhs
+           ((inst c k2))
+           ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+            (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps ((compute both (stop eval_loop iwhile lg_fuel iw_out))))
+         (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2))
+           (rewrite-with (lemma lg_sub) lr lhs () () refl))
+         (steps
+           ((rewrite (premise hsub) lr both true ())
+            (compute both (stop eval_loop iwhile lg_fuel iw_out))))
+         (have hwk (= (mod (int_of_nat k2) 4294967296) (int_of_nat k2))
+           (rewrite-with
+             (lemma iwrap32_id)
+             lr
+             lhs
+             ((inst x (int_of_nat k2)))
+             ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)
+              (rewrite-with
+                (lemma lg_kM)
+                lr
+                lhs
+                ((inst a p) (inst c k2))
+                ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                 (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+                 (steps ((rewrite (premise 0) lr lhs true ())) refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hwk) lr both true ())))
+         (have hw0 (= (mod (+ p 1) 4294967296) (+ p 1))
+           (rewrite-with
+             (lemma iwrap32_id)
+             lr
+             lhs
+             ((inst x (+ p 1)))
+             ((rewrite-with
+                (lemma lg_lo1)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                refl)
+              (rewrite-with
+                (lemma lg_32)
+                lr
+                lhs
+                ()
+                ((rewrite-with
+                   (lemma lg_a1_ms)
+                   lr
+                   lhs
+                   ((inst c k2))
+                   ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                    (steps
+                      ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                      refl)
+                    (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+                   refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hw0) lr both true ())))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma lg_lo1)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma lg_shift)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              refl)))
+         refl)))))
+
+;; --- the U64 doubling worker bridge: the i64.eqz guard on the machine ------------
+
+(claim iww_dblq
+  (goal ((a Int) (st (List Int)) (m0 Mem) (c Nat) (k Nat) (restfs (List Func)))
+    ((= (lt (int_of_nat k) 18446744073709551616) True))
+    (=
+      (eval_loop
+        (S^ 16 (lg_fuel k c))
+        (MkWModule
+          (Cons
+            (MkFunc
+              2
+              0
+              (list (Block (list (Loop (inline br_dblq_w)))) (LocalGet 0)))
+            restfs)
+          0)
+        (inline br_dblq_w)
+        (list a (int_of_nat k))
+        st
+        m0)
+      (iw_out
+        st
+        (iwhile
+          (S^ 10 (lg_fuel k c))
+          0
+          (ILoc 1)
+          (inline br_dblq_i)
+          (list a (int_of_nat k))
+          m0))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr both true ()) (compute both))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((unfold lg_fuel lhs)
+            (reduce lhs)
+            (unfold lg_fuel rhs)
+            (reduce rhs)
+            (unfold eval_loop lhs)
+            (unfold iwhile rhs)
+            (rewrite (lemma int_of_nat_succ) lr both true ())
+            (compute both (stop eval_loop iwhile lg_fuel iw_out))))
+         (rewrite-with
+           (lemma lg_ne)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (rewrite-with
+           (lemma lg_ne)
+           lr
+           rhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps ((compute both (stop eval_loop iwhile lg_fuel iw_out))))
+         (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2))
+           (rewrite-with (lemma lg_sub) lr lhs () () refl))
+         (steps
+           ((rewrite (premise hsub) lr both true ())
+            (compute both (stop eval_loop iwhile lg_fuel iw_out))))
+         (have hwk
+           (= (mod (int_of_nat k2) 18446744073709551616) (int_of_nat k2))
+           (rewrite-with
+             (lemma iwrap64_id)
+             lr
+             lhs
+             ((inst x (int_of_nat k2)))
+             ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)
+              (rewrite-with
+                (lemma il_kdec)
+                lr
+                lhs
+                ((inst x (int_of_nat (S k2))))
+                ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                 (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+                 (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hwk) lr both true ())))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma il_kdec)
+              lr
+              lhs
+              ((inst x (int_of_nat (S k2))))
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+               (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+              refl)))
+         refl)))))
+
+;; --- the denotation bridges: call_fn_mem = icall_mem ------------------------------
+;; The v2 statement shape: the machine is fed through iband_args —
+;; both sides band identically, and the pointer/counter bands collapse
+;; through the range premises before the workers take over. The banded
+;; U8/accumulator positions ride the workers' quantifiers directly.
+
+(claim imp_w_fill
+  (goal ((d Int) (v Int) (m0 Mem) (c Nat) (c2 Nat) (k Nat))
+    ((= (le 0 d) True) (= (le (+ d (int_of_nat k)) 65536) True))
+    (=
+      (call_fn_mem
+        (S^ 23 (lg_fuel k c))
+        (MkWModule (list (w_of (imp2w_fn (il_fill_fn)))) 65536)
+        0
+        (iband_args (list U32 U8 U32) (list d v (int_of_nat k)))
+        m0)
+      (icall_mem
+        (S^ 12 (lg_fuel k c2))
+        (il_prog (il_fill_fn))
+        0
+        (list d v (int_of_nat k))
+        m0)))
+  (chain
+    (steps ((compute both (stop eval_loop iwhile lg_fuel iw_out))))
+    (have hbd (= (mod d 4294967296) d)
+      (rewrite-with
+        (lemma iwrap32_id)
+        lr
+        lhs
+        ((inst x d))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (rewrite-with
+           (lemma il_dM)
+           lr
+           lhs
+           ((inst kk (int_of_nat k)))
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps ((rewrite (premise 1) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+           refl))
+        refl))
+    (have hbk (= (mod (int_of_nat k) 4294967296) (int_of_nat k))
+      (rewrite-with
+        (lemma iwrap32_id)
+        lr
+        lhs
+        ((inst x (int_of_nat k)))
+        ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)
+         (rewrite-with
+           (lemma il_kM)
+           lr
+           lhs
+           ((inst a d))
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps ((rewrite (premise 1) lr lhs true ())) refl))
+           refl))
+        refl))
+    (steps
+      ((rewrite (premise hbd) lr both true ())
+       (rewrite (premise hbk) lr both true ())))
+    (rewrite-with
+      (lemma iww_fill)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma imw_fill)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma imw_fill)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute both)))
+    refl))
+
+(claim imp_w_sum
+  (goal ((p Int) (acc Int) (m0 Mem) (c Nat) (c2 Nat) (k Nat))
+    ((= (le 0 p) True)
+     (= (le (+ p (int_of_nat k)) 65536) True)
+     (= (le 0 acc) True)
+     (= (lt acc 4294967296) True)
+     (= (le (+ acc (* 256 (int_of_nat k))) 4294967296) True))
+    (=
+      (call_fn_mem
+        (S^ 25 (lg_fuel k c))
+        (MkWModule (list (w_of (imp2w_fn (il_sum_fn)))) 65536)
+        0
+        (iband_args (list U32 U32 U32) (list p acc (int_of_nat k)))
+        m0)
+      (icall_mem
+        (S^ 12 (lg_fuel k c2))
+        (il_prog (il_sum_fn))
+        0
+        (list p acc (int_of_nat k))
+        m0)))
+  (chain
+    (steps ((compute both (stop eval_loop iwhile lg_fuel iw_out))))
+    (have hbp (= (mod p 4294967296) p)
+      (rewrite-with
+        (lemma iwrap32_id)
+        lr
+        lhs
+        ((inst x p))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (rewrite-with
+           (lemma il_dM)
+           lr
+           lhs
+           ((inst kk (int_of_nat k)))
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps ((rewrite (premise 1) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+           refl))
+        refl))
+    (have hba (= (mod acc 4294967296) acc)
+      (rewrite-with
+        (lemma iwrap32_id)
+        lr
+        lhs
+        ((inst x acc))
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 3) lr lhs true ())) refl))
+        refl))
+    (have hbk (= (mod (int_of_nat k) 4294967296) (int_of_nat k))
+      (rewrite-with
+        (lemma iwrap32_id)
+        lr
+        lhs
+        ((inst x (int_of_nat k)))
+        ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)
+         (rewrite-with
+           (lemma il_kM)
+           lr
+           lhs
+           ((inst a p))
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps ((rewrite (premise 1) lr lhs true ())) refl))
+           refl))
+        refl))
+    (steps
+      ((rewrite (premise hbp) lr both true ())
+       (rewrite (premise hba) lr both true ())
+       (rewrite (premise hbk) lr both true ())))
+    (rewrite-with
+      (lemma iww_sum)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma imw_sum)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma imw_sum)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)))
+    (steps ((compute both)))
+    refl))
+
+(claim imp_w_dblq
+  (goal ((a Int) (c Nat) (c2 Nat) (k Nat))
+    ((= (lt (int_of_nat k) 18446744073709551616) True))
+    (=
+      (call_fn
+        (S^ 20 (lg_fuel k c))
+        (MkWModule (list (w_of (imp2w_fn (il_dblq_fn)))) 0)
+        0
+        (iband_args (list U64 U64) (list a (int_of_nat k))))
+      (icall
+        (S^ 12 (lg_fuel k c2))
+        (il_qprog (il_dblq_fn))
+        0
+        (list a (int_of_nat k)))))
+  (chain
+    (steps ((compute both (stop eval_loop iwhile lg_fuel iw_out lq_dbl))))
+    (have hbk (= (mod (int_of_nat k) 18446744073709551616) (int_of_nat k))
+      (rewrite-with
+        (lemma iwrap64_id)
+        lr
+        lhs
+        ((inst x (int_of_nat k)))
+        ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)
+         (steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hbk) lr both true ())))
+    (rewrite-with
+      (lemma iww_dblq)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma imw_dblq)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma imw_dblq)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((compute both (stop lq_dbl))))
+    refl))
+
+;; --- the compositions: the factored tower closes over loops ---------------------
+
+(claim wcomp_lp_fill
+  (goal ((d Int) (v Int) (m0 Mem) (c Nat) (k Nat))
+    ((= (le 0 d) True)
+     (= (le (+ d (int_of_nat k)) 65536) True)
+     (= (le 0 v) True)
+     (= (lt v 256) True))
+    (=
+      (call_fn_mem
+        (S^ 23 (lg_fuel k c))
+        (MkWModule (list (w_of (imp2w_fn (il_fill_fn)))) 65536)
+        0
+        (iband_args (list U32 U8 U32) (list d v (int_of_nat k)))
+        m0)
+      (Some (Pair 0 (lp_fill m0 d v k)))))
+  (chain
+    (rewrite-with
+      (lemma imp_w_fill)
+      lr
+      lhs
+      ((inst c2 Z))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma imp_lp_fill)
+      lr
+      lhs
+      ((inst c Z))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    refl))
+
+(claim wcomp_lp_sum
+  (goal ((p Int) (acc Int) (m0 Mem) (c Nat) (k Nat))
+    ((= (le 0 p) True)
+     (= (le (+ p (int_of_nat k)) 65536) True)
+     (= (le 0 acc) True)
+     (= (lt acc 4294967296) True)
+     (= (le (+ acc (* 256 (int_of_nat k))) 4294967296) True))
+    (=
+      (call_fn_mem
+        (S^ 25 (lg_fuel k c))
+        (MkWModule (list (w_of (imp2w_fn (il_sum_fn)))) 65536)
+        0
+        (iband_args (list U32 U32 U32) (list p acc (int_of_nat k)))
+        m0)
+      (Some (Pair (lp_sum m0 p acc k) m0))))
+  (chain
+    (rewrite-with
+      (lemma imp_w_sum)
+      lr
+      lhs
+      ((inst c2 Z))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma imp_lp_sum)
+      lr
+      lhs
+      ((inst c Z))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)))
+    refl))
+
+(claim wcomp_lq_dblq
+  (goal ((a Int) (c Nat) (k Nat))
+    ((= (le 0 a) True)
+     (= (lt a 18446744073709551616) True)
+     (= (lt (int_of_nat k) 18446744073709551616) True))
+    (=
+      (call_fn
+        (S^ 20 (lg_fuel k c))
+        (MkWModule (list (w_of (imp2w_fn (il_dblq_fn)))) 0)
+        0
+        (iband_args (list U64 U64) (list a (int_of_nat k))))
+      (Some (lq_dbl a k))))
+  (chain
+    (rewrite-with
+      (lemma imp_w_dblq)
+      lr
+      lhs
+      ((inst c2 Z))
+      ((steps ((rewrite (premise 2) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma imp_lq_dblq)
+      lr
+      lhs
+      ((inst c Z))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)))
+    refl))

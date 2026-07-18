@@ -1,0 +1,469 @@
+;;; models/imp/probes/imp_wasm_bridge.shard — imp ⊑ wasm, the straight-line and
+;;; branching classes (docs/IMP.md rungs I1a/I1b; re-landed on the v2
+;;; typed machine, §2a). Three claim families:
+;;;
+;;;   TIES     — the translator's output IS the instruction sequence
+;;;              the direct generator (wasmgen) produced for the same
+;;;              source fns, byte-identical — and the v2 kind tags
+;;;              change ZERO emitted bytes for the U32 class. The U64
+;;;              tier (V2-2c) ties to the i64 emissions: this target's
+;;;              capability set is the full {U8, U32, U64}, with ONE
+;;;              scoped refusal pinned below (the direct U64→U8
+;;;              narrowing — no single band-spelled emission; named
+;;;              growth). The rotate asymmetry runs the other way from
+;;;              division: it_rotrq is native HERE and refuses on x86.
+;;;   BRIDGES  — call_fn over the translated func equals icall over
+;;;              the imp twin, and EVERY BRIDGE IS UNPREMISED: the
+;;;              statement feeds call_fn the same banded args icall
+;;;              computes internally (iband_args — the alignment
+;;;              relation made syntax), after which the two machines
+;;;              compute identical values at every step BY TYPE. The
+;;;              v1 range-premise apparatus (six premises and three
+;;;              haves on mix; four conditional premises on sel) has
+;;;              no v2 analogue — compare this file with its v1 self.
+;;;   COMPOSE  — spec ⊑ imp (fit premises, stated once) + imp ⊑ wasm
+;;;              (unpremised) chain into spec ⊑ wasm in two rewrites
+;;;              (wcomp_lg_add1): the factored tower closes end to
+;;;              end, with the width story paid exactly once.
+;;;
+;;; PROOF GATES ONLY (DI2): no engine leg exists at imp; the wasm
+;;; artifacts these certs describe are gated by the existing wasm
+;;; machinery when they ship.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../examples/wasmgen_src.shard")
+(use (:: examples wasmgen_src *))
+(import "../imp.shard")
+(use (:: models imp imp *))
+(import "../../wasm/wasm.shard")
+(use (:: models wasm wasm *))
+(import "../to_wasm.shard")
+(use (:: models imp to_wasm *))
+(import "../../../tools/impgen/fixtures/imp_scalar.shard")
+(use (:: tools impgen fixtures imp_scalar *))
+
+;; --- the ties: translator output = the direct generator's literals -------------
+
+(claim tie_add1
+  (goal () ()
+    (=
+      (imp2w_fn (it_add1_fn))
+      (Some (MkFunc 1 0 (list (LocalGet 0) (I32Const 1) (I32Bin BAdd))))))
+  (steps ((compute both)) refl))
+
+(claim tie_add
+  (goal () ()
+    (=
+      (imp2w_fn (it_add_fn))
+      (Some (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BAdd))))))
+  (steps ((compute both)) refl))
+
+(claim tie_mix
+  (goal () ()
+    (=
+      (imp2w_fn (it_mix_fn))
+      (Some
+        (MkFunc
+          2
+          0
+          (list
+            (LocalGet 0)
+            (I32Const 2)
+            (I32Bin BMul)
+            (LocalGet 1)
+            (LocalGet 0)
+            (I32Bin BSub)
+            (I32Bin BAdd))))))
+  (steps ((compute both)) refl))
+
+(claim tie_divq
+  (goal () ()
+    (=
+      (imp2w_fn (it_divq_fn))
+      (Some (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BDivU))))))
+  (steps ((compute both)) refl))
+
+;; the IIf encoding ties byte-identical to the generated gate shape
+(claim tie_sel
+  (goal () ()
+    (=
+      (imp2w_fn (it_sel_fn))
+      (Some
+        (MkFunc
+          2
+          1
+          (list
+            (Block
+              (list
+                (Block
+                  (list
+                    (LocalGet 0)
+                    (I32Const 0)
+                    (I32Bin BEq)
+                    (BrIf 0)
+                    (LocalGet 1)
+                    (I32Const 2)
+                    (I32Bin BMul)
+                    (LocalSet 2)
+                    (Br 1)))
+                (LocalGet 1)
+                (I32Const 1)
+                (I32Bin BAdd)
+                (LocalSet 2)))
+            (LocalGet 2))))))
+  (steps ((compute both)) refl))
+
+(claim tie_shr3
+  (goal () ()
+    (=
+      (imp2w_fn (it_shr3_fn))
+      (Some (MkFunc 1 0 (list (LocalGet 0) (I32Const 3) (I32Bin BShrU))))))
+  (steps ((compute both)) refl))
+
+(claim tie_rotr7
+  (goal () ()
+    (=
+      (imp2w_fn (it_rotr7_fn))
+      (Some (MkFunc 1 0 (list (LocalGet 0) (I32Const 7) (I32Bin BRotr))))))
+  (steps ((compute both)) refl))
+
+;; the conversion emissions: zero-extension inside the band is a
+;; no-op; mask-narrowing is the And-mask
+(claim tie_ext
+  (goal () ()
+    (= (imp2w_fn (it_ext_fn)) (Some (MkFunc 1 0 (list (LocalGet 0))))))
+  (steps ((compute both)) refl))
+
+(claim tie_tob
+  (goal () ()
+    (=
+      (imp2w_fn (it_tob_fn))
+      (Some (MkFunc 1 0 (list (LocalGet 0) (I32Const 255) (I32Bin BAnd))))))
+  (steps ((compute both)) refl))
+
+;; --- the U64 tier ties (V2-2c: the i64 vocabulary landed) --------------------------
+
+(claim tie_addq
+  (goal () ()
+    (=
+      (imp2w_fn (it_addq_fn))
+      (Some (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I64Bin BAdd))))))
+  (steps ((compute both)) refl))
+
+;; the conversions out of and into U64: the band-spelled i32.wrap_i64
+;; and the real extension instruction
+(claim tie_tow
+  (goal () ()
+    (=
+      (imp2w_fn (it_tow_fn))
+      (Some (MkFunc 1 0 (list (LocalGet 0) (I32WrapI64))))))
+  (steps ((compute both)) refl))
+
+(claim tie_extq
+  (goal () ()
+    (=
+      (imp2w_fn (it_extq_fn))
+      (Some (MkFunc 1 0 (list (LocalGet 0) (I64ExtendI32U))))))
+  (steps ((compute both)) refl))
+
+;; the U64 rotation is NATIVE here (i64.rotr) — it refuses on x86:
+;; the rotate asymmetry, pinned from both sides like division's
+(claim tie_rotrq
+  (goal () ()
+    (=
+      (imp2w_fn (it_rotrq_fn))
+      (Some (MkFunc 1 0 (list (LocalGet 0) (I64Const 7) (I64Bin BRotr))))))
+  (steps ((compute both)) refl))
+
+;; the U64 gate: the fused comparison feeds BrIf directly (i64
+;; comparisons are i32-valued — the x86 leg's condition fusion, same
+;; move), the branch bodies ride the i64 ops
+(claim tie_selq
+  (goal () ()
+    (=
+      (imp2w_fn (it_selq_fn))
+      (Some
+        (MkFunc
+          2
+          1
+          (list
+            (Block
+              (list
+                (Block
+                  (list
+                    (LocalGet 0)
+                    (I64Const 0)
+                    (I64Bin BEq)
+                    (BrIf 0)
+                    (LocalGet 1)
+                    (I64Const 2)
+                    (I64Bin BMul)
+                    (LocalSet 2)
+                    (Br 1)))
+                (LocalGet 1)
+                (I64Const 1)
+                (I64Bin BAdd)
+                (LocalSet 2)))
+            (LocalGet 2))))))
+  (steps ((compute both)) refl))
+
+;; THE CAPABILITY FENCE, narrowed to its one remaining hole: the
+;; direct U64→U8 narrowing has no single band-spelled emission here
+;; (named growth) — refusal is loud, never a wrong artifact
+(claim tie_tobq_refuses
+  (goal () () (= (imp2w_fn (it_tobq_fn)) None))
+  (steps ((compute both)) refl))
+
+;; --- the bridges: imp ⊑ wasm, ALL UNPREMISED -------------------------------------
+
+(claim imp_w_add1
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (call_fn
+        (S^ 9 c)
+        (MkWModule (list (w_of (imp2w_fn (it_add1_fn)))) 0)
+        0
+        (iband_args (list U32) (list x)))
+      (icall (S c2) (it_prog (it_add1_fn)) 0 (list x))))
+  (steps ((compute both)) refl))
+
+;; three exact ops, ZERO premises — v1 carried six range premises and
+;; three wrap-identity haves here; by type they are gone
+(claim imp_w_mix
+  (goal ((x Int) (y Int) (c Nat) (c2 Nat)) ()
+    (=
+      (call_fn
+        (S^ 17 c)
+        (MkWModule (list (w_of (imp2w_fn (it_mix_fn)))) 0)
+        0
+        (iband_args (list U32 U32) (list x y)))
+      (icall (S c2) (it_prog (it_mix_fn)) 0 (list x y))))
+  (steps ((compute both)) refl))
+
+;; division: BOTH sides guard the banded divisor, so even the divisor
+;; premise dissolves into a case split — div0 is None = None
+(claim imp_w_divq
+  (goal ((x Int) (y Int) (c Nat) (c2 Nat)) ()
+    (=
+      (call_fn
+        (S^ 9 c)
+        (MkWModule (list (w_of (imp2w_fn (it_divq_fn)))) 0)
+        0
+        (iband_args (list U32 U32) (list x y)))
+      (icall (S c2) (it_prog (it_divq_fn)) 0 (list x y))))
+  (chain
+    (steps ((compute both)))
+    (case-on (le 1 (mod y 4294967296)) Bool
+      ((case True
+         (chain
+           (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+           refl))
+       (case False
+         (chain
+           (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+           refl))))))
+
+;; the gate: the branch premises of v1 dissolve too — the case split
+;; is on the shared banded scrutinee and each branch is refl
+(claim imp_w_sel
+  (goal ((x Int) (y Int) (c Nat) (c2 Nat)) ()
+    (=
+      (call_fn
+        (S^ 35 c)
+        (MkWModule (list (w_of (imp2w_fn (it_sel_fn)))) 0)
+        0
+        (iband_args (list U32 U32) (list x y)))
+      (icall (S^ 8 c2) (it_prog (it_sel_fn)) 0 (list x y))))
+  (chain
+    (steps ((compute both)))
+    (case-on (int_eq (mod x 4294967296) 0) Bool
+      ((case True
+         (chain
+           (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+           refl))
+       (case False
+         (chain
+           (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+           refl))))))
+
+(claim imp_w_clamp2
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (call_fn
+        (S^ 49 c)
+        (MkWModule (list (w_of (imp2w_fn (it_clamp2_fn)))) 0)
+        0
+        (iband_args (list U32) (list x)))
+      (icall (S^ 10 c2) (it_prog (it_clamp2_fn)) 0 (list x))))
+  (chain
+    (steps ((compute both)))
+    (case-on (lt (mod x 4294967296) 10) Bool
+      ((case True
+         (chain
+           (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+           refl))
+       (case False
+         (chain
+           (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+           (case-on (lt (mod x 4294967296) 100) Bool
+             ((case True
+                (chain
+                  (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+                  refl))
+              (case False
+                (chain
+                  (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+                  refl))))))))))
+
+(claim imp_w_shr3
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (call_fn
+        (S^ 9 c)
+        (MkWModule (list (w_of (imp2w_fn (it_shr3_fn)))) 0)
+        0
+        (iband_args (list U32) (list x)))
+      (icall (S c2) (it_prog (it_shr3_fn)) 0 (list x))))
+  (steps ((compute both)) refl))
+
+(claim imp_w_rotr7
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (call_fn
+        (S^ 9 c)
+        (MkWModule (list (w_of (imp2w_fn (it_rotr7_fn)))) 0)
+        0
+        (iband_args (list U32) (list x)))
+      (icall (S c2) (it_prog (it_rotr7_fn)) 0 (list x))))
+  (steps ((compute both)) refl))
+
+;; the conversions: imp's band-spelled ITrunc meets the And-mask
+;; emission and imp's identity IExt meets the no-op emission — refl
+(claim imp_w_tob
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (call_fn
+        (S^ 13 c)
+        (MkWModule (list (w_of (imp2w_fn (it_tob_fn)))) 0)
+        0
+        (iband_args (list U32) (list x)))
+      (icall (S c2) (it_prog (it_tob_fn)) 0 (list x))))
+  (steps ((compute both)) refl))
+
+(claim imp_w_ext
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (call_fn
+        (S^ 9 c)
+        (MkWModule (list (w_of (imp2w_fn (it_ext_fn)))) 0)
+        0
+        (iband_args (list U8) (list x)))
+      (icall (S c2) (it_prog (it_ext_fn)) 0 (list x))))
+  (steps ((compute both)) refl))
+
+;; the U64 tier bridges: the same unpremised statement shape at the
+;; wide kind — both machines band the args at 2^64 and compute the
+;; same values by type, exactly the U32 story one modulus up
+(claim imp_w_addq
+  (goal ((x Int) (y Int) (c Nat) (c2 Nat)) ()
+    (=
+      (call_fn
+        (S^ 9 c)
+        (MkWModule (list (w_of (imp2w_fn (it_addq_fn)))) 0)
+        0
+        (iband_args (list U64 U64) (list x y)))
+      (icall (S c2) (it_prog (it_addq_fn)) 0 (list x y))))
+  (steps ((compute both)) refl))
+
+;; the conversions: imp's band-spelled ITrunc meets the band-spelled
+;; i32.wrap_i64, and imp's identity IExt meets the identity-valued
+;; extension — refl on both
+(claim imp_w_tow
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (call_fn
+        (S^ 9 c)
+        (MkWModule (list (w_of (imp2w_fn (it_tow_fn)))) 0)
+        0
+        (iband_args (list U64) (list x)))
+      (icall (S c2) (it_prog (it_tow_fn)) 0 (list x))))
+  (steps ((compute both)) refl))
+
+(claim imp_w_extq
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (call_fn
+        (S^ 9 c)
+        (MkWModule (list (w_of (imp2w_fn (it_extq_fn)))) 0)
+        0
+        (iband_args (list U32) (list x)))
+      (icall (S c2) (it_prog (it_extq_fn)) 0 (list x))))
+  (steps ((compute both)) refl))
+
+;; the U64 rotation: band meets band at the wide width — refl, where
+;; the x86 leg has no bridge at all
+(claim imp_w_rotrq
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (call_fn
+        (S^ 9 c)
+        (MkWModule (list (w_of (imp2w_fn (it_rotrq_fn)))) 0)
+        0
+        (iband_args (list U64) (list x)))
+      (icall (S c2) (it_prog (it_rotrq_fn)) 0 (list x))))
+  (steps ((compute both)) refl))
+
+;; the U64 gate: the case split rides the shared banded scrutinee at
+;; 2^64 — each branch refl, zero premises (the imp_w_sel story at the
+;; wide kind)
+(claim imp_w_selq
+  (goal ((x Int) (y Int) (c Nat) (c2 Nat)) ()
+    (=
+      (call_fn
+        (S^ 35 c)
+        (MkWModule (list (w_of (imp2w_fn (it_selq_fn)))) 0)
+        0
+        (iband_args (list U64 U64) (list x y)))
+      (icall (S^ 8 c2) (it_prog (it_selq_fn)) 0 (list x y))))
+  (chain
+    (steps ((compute both)))
+    (case-on (int_eq (mod x 18446744073709551616) 0) Bool
+      ((case True
+         (chain
+           (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+           refl))
+       (case False
+         (chain
+           (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+           refl))))))
+
+;; --- the composition: the factored tower closes ---------------------------------
+
+;; spec ⊑ wasm by chaining imp ⊑ wasm (unpremised) with spec ⊑ imp
+;; (the fit premises, stated once at imp) — the width story paid
+;; exactly once, in the target-free half
+(claim wcomp_lg_add1
+  (goal ((x Int) (c Nat))
+    ((= (le 0 x) True)
+     (= (lt x 4294967296) True)
+     (= (le 0 (+ x 1)) True)
+     (= (lt (+ x 1) 4294967296) True))
+    (=
+      (call_fn
+        (S^ 9 c)
+        (MkWModule (list (w_of (imp2w_fn (it_add1_fn)))) 0)
+        0
+        (iband_args (list U32) (list x)))
+      (Some (lg_add1 x))))
+  (chain
+    (rewrite-with (lemma imp_w_add1) lr lhs ((inst c2 Z)) ())
+    (rewrite-with
+      (lemma imp_lg_add1)
+      lr
+      lhs
+      ((inst c Z))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    refl))
