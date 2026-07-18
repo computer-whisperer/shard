@@ -1,7 +1,11 @@
 # RISC-V — the third target: scope and design ledger
 
-Status: **DRAFT — groundwork built on the `riscv` fork 2026-07-17,
-awaiting ratification.** The model instantiates the target-model
+Status: **RATIFIED 2026-07-17** (user, after G1+G2+G2b landed on the
+`riscv` fork): the decisions as built stand, including the §9 items —
+gp/tp stay ordinary model registers, RvMul stays in the base op table.
+Later slices amend this ledger by their own records; re-ratification
+is only needed if a §9-class position is REVERSED. The model
+instantiates the target-model
 contract of docs/LOWERING.md §8, exactly as docs/X86.md did for the
 second target; every abstraction below is classified under X86.md §2's
 three-bin discipline (permanent / training wheels with a named path /
@@ -328,17 +332,17 @@ whole file.
   models/imp is the neutral dialect riscv legs would serve). Not
   started until that sequencing is ruled.
 
-## 9. Open questions for ratification
+## 9. Ratification record (all resolved 2026-07-17)
 
-1. Register-file scope: 29 modeled + x0 + {ra, sp} encoder-owned — is
-   reserving gp/tp as ORDINARY model registers acceptable? (They are
-   ABI-reserved only for foreign-code interop, a non-goal under
-   platform-externs; modeling them costs nothing and E-profile
-   fencing is orthogonal.)
-2. RvMul in the base op table vs strict-I purity (the M note in §2) —
-   kept because most real RV32 targets are IM and the wasm/x86 op
-   tables both carry mul; flag if strict-I profile fencing should be
-   a named check instead.
+1. ~~Register-file scope: gp/tp as ordinary model registers?~~
+   RATIFIED as built: 29 modeled + x0 + {ra, sp} encoder-owned; gp/tp
+   are ordinary model registers (ABI-reserved only for foreign-code
+   interop, a non-goal under platform-externs; E-profile fencing is
+   orthogonal).
+2. ~~RvMul in the base op table vs strict-I purity?~~ RATIFIED as
+   built: RvMul stays in the base table (most real RV32 targets are
+   IM; the wasm/x86 op tables both carry mul). A strict-I profile
+   fence, if ever wanted, is a named check, not a model change.
 3. ~~The G2 execution-differential leg: qemu-user install acceptable,
    or wait for hardware?~~ RESOLVED 2026-07-17: user installed
    qemu; qemu-riscv32/64 are the differential engines (§7.6).
