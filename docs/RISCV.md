@@ -323,10 +323,54 @@ whole file.
   state over the PURE body — the prologue/epilogue is a separable,
   differentially-checked encoder concern (the same trust split as
   G2); rvcall_bridge's citation story is untouched by this slice.
-- **G3 — loopkit + symbolic piece theorems:** the wasm→x86 transplant
-  play (guard/collapse/IH-at-fuel−1 templates at rv_wrap's moduli);
-  measures whether the third transplant is as mechanical as the
-  second (the §8-contract genericity claim, tested).
+- **G3 — loopkit + symbolic piece theorems (LANDED 2026-07-17, this
+  fork):** models/riscv/loopkit.shard (11/0) +
+  examples/riscv_pieces.shard (994/0), both corpus-registered, both
+  shardfmt-canonical. **THE MEASUREMENT CAME BACK: the entire pieces
+  file was green on the FIRST CHECK — zero debug iterations.** The
+  third transplant is template-grade mechanical; the §8-contract
+  genericity claim is now tested three-for-three. Contents:
+  straight-line register pieces at BOTH widths (add32/add64 + an
+  add-mul showcasing the three-operand shape — the sum lands in t0
+  without clobbering a0, retiring x86's mov dance), the byte-store
+  piece (width-blind: register-indirect addressing does no
+  arithmetic), the fill LOOP worker + piece theorem at BOTH widths,
+  and the call arc at RV32 (a 29-field regs-general clobber-set cert
+  welded into a two-call consumer through rvcall_bridge, a live value
+  parked in s1 riding the cert's passthrough, the callee's body never
+  computed into). Findings:
+  - **The kit graduated at birth.** models/riscv/loopkit.shard is
+    window-parametric from day one (the x86 §24 lesson applied
+    prospectively) and the pieces file CITES it rather than keeping
+    self-contained copies — the probe-copy stage is skippable when
+    the design article already exists twice (loopgen_probe →
+    x86_pieces).
+  - **One kit fact family has NO x86 analog: rvlg_dec32/64.** RISC-V
+    has no sub-with-immediate, so the counter decrement is
+    `addi rd, rs, -1`; the model wraps the immediate at module width,
+    putting the machine's counter residue at
+    mod ((1+n) + (2^W−1)) 2^W — one full modulus above n. The
+    collapse is mod_unique at the exhibited q = 1 decomposition, one
+    fact per width. In exchange x86's xlg_sub + separate wrap-id
+    cleanup FUSE into this single rewrite — the §3.13 sub-imm
+    respelling reaches the proof layer exactly once, priced at two
+    kit facts.
+  - **The x0-fused guard is proof-invisible:** rv_cond of
+    (RvBeq counter X0) computes to the same (int_eq v 0) spelling
+    x86's synthesized CEqz produced, so the guard decider rvlg_ne
+    transplants verbatim. The datasheet's branch fusion costs the
+    proof layer nothing.
+  - **The 32/64 worker proofs are textually identical up to modulus
+    literals and _32/_64 lemma names** — the width-as-value design's
+    G1 promise (ground-modulus residues) held through a full
+    loop-induction proof, both directions.
+  - **Fuel towers transplanted as constants:** S^9 at the worker,
+    S^13 at the entry (+4 spine: outer seq / RvBlock / inner seq /
+    RvLoop) — the same numbers as x86, because the body shape (5
+    instructions) and spine depth are the same.
+  - The fill piece returns the ADVANCED POINTER: a0 is both the
+    pointer argument's home and the result home, so the machine hands
+    back rvlg_adv for free (x86's returned a parked 0 in rax).
 - **Emitter arc — deliberately unsequenced:** rides the common
   lowering step / imp arc (wasmgen/x86gen are frozen during I2e;
   models/imp is the neutral dialect riscv legs would serve). Not

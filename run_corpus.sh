@@ -207,6 +207,8 @@ TARGETS=(
   examples/riscv_smoke.shard
   models/riscv/encode.shard
   examples/riscv_diff_run.shard
+  models/riscv/loopkit.shard
+  examples/riscv_pieces.shard
   examples/upcase_src.shard
   examples/upcase_x86_out.shard
   examples/parse_src.shard

@@ -1,0 +1,148 @@
+;;; models/riscv/loopkit.shard — the shared support article for RISC-V loop
+;;; certs (docs/RISCV.md G3; the siblings are models/wasm/loopkit.shard and
+;;; models/x86/loopkit.shard). The counter-as-local template's helper facts,
+;;; proven ONCE and cited by name: the fuel fn (one S per remaining iteration
+;;; over the slack tail), the stride-1 twin (final accumulator positions),
+;;; the guard decider, the counter collapse, wrap bounds, address guards,
+;;; and the IH range shifts. Window-parametric from birth (the x86 §24
+;;; lesson: the harness window and a bin's process window must state the
+;;; SAME loop cert, so the bounds ride as parameters).
+;;;
+;;; Width discipline (docs/RISCV.md §4): facts that mention the modulus get
+;;; GROUND per-width twins (_32/_64 — the rv_wrap32_id/rv_wrap64_id
+;;; precedent; emitters discharge at a concrete module's ground width);
+;;; model-independent arithmetic transplants once, verbatim from the
+;;; wasm/x86 kits.
+;;;
+;;; THE ONE FACT WITH NO x86 ANALOG: rvlg_dec32/rvlg_dec64. RISC-V has no
+;;; sub-with-immediate — a counter decrement is `addi rd, rs, -1`, and the
+;;; model wraps the immediate at module width (RvSrc decode), so the
+;;; machine's counter residue is  mod ((1+n) + (2^W - 1)) 2^W  — one full
+;;; modulus above n. The collapse is mod_unique at the exhibited q = 1
+;;; decomposition. In exchange, x86's xlg_sub + separate wrap-id cleanup
+;;; fuse into this single rewrite: the sub-imm respelling reaches the proof
+;;; layer, and costs one kit fact per width.
+;;;
+;;; First validated by hand-play in examples/riscv_pieces.shard (which
+;;; CITES this kit rather than keeping self-contained copies — the third
+;;; transplant can skip the probe-copy stage because the design article
+;;; already exists twice: loopgen_probe → x86_pieces).
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/facts.shard")
+(import "../../std/nat.shard")
+
+(use (:: kernel facts *))
+(use (:: std nat *))
+
+;; one S per remaining iteration over the slack tail (the pfc shape)
+(fn rvlg_fuel ((k Nat) (c Nat)) Nat
+  (measure (struct k))
+  (match k
+    (Z c)
+    ((S k2) (S (rvlg_fuel k2 c)))))
+
+;; final position of a stride-1 accum after k iterations (ONE twin per
+;; stride, shared by every advancing accum)
+(fn rvlg_adv ((x Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z x)
+    ((S k2) (rvlg_adv (+ x 1) k2))))
+
+;; guard decider, S case: the counter register reads 1 + n with n >= 0
+;; (the machine guard is beq counter, x0 — the fused zero test through X0)
+(claim rvlg_ne
+  (goal ((n Int)) ((= (le 0 n) True)) (= (int_eq (+ 1 n) 0) False))
+  (by arith (list -1 1)))
+
+;; counter wrap upper bound, per width (w = the window high bound, l the
+;; low bound — parameters, see the header)
+(claim rvlg_kM32
+  (goal ((a Int) (c Nat) (w Int) (l Int))
+    ((= (le (+ a (int_of_nat (S c))) w) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c)))
+     (= (le l a) True)
+     (= (le w 4294967296) True)
+     (= (le 0 l) True))
+    (= (lt (int_of_nat c) 4294967296) True))
+  (by arith (list 1 1 1 1 1 1)))
+
+(claim rvlg_kM64
+  (goal ((a Int) (c Nat) (w Int) (l Int))
+    ((= (le (+ a (int_of_nat (S c))) w) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c)))
+     (= (le l a) True)
+     (= (le w 18446744073709551616) True)
+     (= (le 0 l) True))
+    (= (lt (int_of_nat c) 18446744073709551616) True))
+  (by arith (list 1 1 1 1 1 1)))
+
+;; the addi -1 counter collapse (see the header): the wrapped -1 immediate
+;; puts the residue one modulus above the decremented counter
+(claim rvlg_dec32
+  (goal ((n Int)) ((= (le 0 n) True) (= (lt n 4294967296) True))
+    (= (mod (+ (+ 1 n) 4294967295) 4294967296) n))
+  (rewrite-with
+    (lemma mod_unique)
+    lr
+    lhs
+    ((inst q 1) (inst r n))
+    ((by arith (list (list 1 0 0) (list 1 0 0)))
+     (steps ((rewrite (premise 0) lr lhs true ())) refl)
+     (steps ((rewrite (premise 1) lr lhs true ())) refl))
+    refl))
+
+(claim rvlg_dec64
+  (goal ((n Int)) ((= (le 0 n) True) (= (lt n 18446744073709551616) True))
+    (= (mod (+ (+ 1 n) 18446744073709551615) 18446744073709551616) n))
+  (rewrite-with
+    (lemma mod_unique)
+    lr
+    lhs
+    ((inst q 1) (inst r n))
+    ((by arith (list (list 1 0 0) (list 1 0 0)))
+     (steps ((rewrite (premise 0) lr lhs true ())) refl)
+     (steps ((rewrite (premise 1) lr lhs true ())) refl))
+    refl))
+
+;; address guard, upper: a + (S c) <= w  |-  a + 1 <= w
+(claim rvlg_a1_ms
+  (goal ((a Int) (c Nat) (w Int))
+    ((= (le (+ a (int_of_nat (S c))) w) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c)))
+     (= (le 0 (int_of_nat c)) True))
+    (= (le (+ a 1) w) True))
+  (by arith (list 1 1 1 1)))
+
+;; pointer-advance ranges for the wrap cleanups: the IH's window-low
+;; step (l <= x  |-  l <= x + 1) …
+(claim rvlg_lo1
+  (goal ((x Int) (l Int)) ((= (le l x) True)) (= (le l (+ x 1)) True))
+  (by arith (list 1 1)))
+
+;; … and the wrap-id nonneg at any window (its 0 <= l leg is ground)
+(claim rvlg_lo0
+  (goal ((x Int) (l Int)) ((= (le l x) True) (= (le 0 l) True))
+    (= (le 0 (+ x 1)) True))
+  (by arith (list 1 1 1)))
+
+;; the advanced pointer stays under the modulus, per width
+(claim rvlg_m32
+  (goal ((x Int) (w Int)) ((= (le (+ x 1) w) True) (= (lt w 4294967296) True))
+    (= (lt (+ x 1) 4294967296) True))
+  (by arith (list 1 1 1)))
+
+(claim rvlg_m64
+  (goal ((x Int) (w Int))
+    ((= (le (+ x 1) w) True) (= (lt w 18446744073709551616) True))
+    (= (lt (+ x 1) 18446744073709551616) True))
+  (by arith (list 1 1 1)))
+
+;; range premise steps to the IH: a + (S c) <= w  |-  (a+1) + c <= w
+(claim rvlg_shift
+  (goal ((b Int) (w Int) (c Nat))
+    ((= (le (+ b (int_of_nat (S c))) w) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c))))
+    (= (le (+ (+ b 1) (int_of_nat c)) w) True))
+  (by arith (list 1 1 1)))
