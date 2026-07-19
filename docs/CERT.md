@@ -205,6 +205,28 @@ Three measured variants, serial on main, in this order:
   The kernel commitment is gated on A3's OWN numbers; A1/A2 carry
   no kernel risk and their verdicts stand independently.
 
+**A1 VERDICT (2026-07-19; run as a validation spike per the user
+ruling of the same date — the full-arc review remains a later user
+decision point).** `vxg_valid` proven: `valid_imp_x86 = True`
+entails unpremised total machine/imp equality over every
+straight-line declaration the compiler accepts (recompile-design
+validator, 9-guard chain; models/imp/probes/vx86_acc_probe.shard).
+All 14 straight-line impgen pins re-derived by citation with ZERO
+execution replay, a pass-constant ~8-line skeleton per pin
+(vx86_oracle_probe.shard); a 10..400-statement size ladder proves
+the same statements by compute-both replay AND by citation.
+Measured: gate (a) CONFIRMED — the generic theorem is a linear
+citation ladder, per-program proofs are pass-constant. Gate (b) is
+UNDISCRIMINATED on this family: at ≤400 straight-line statements
+both dialects check inside the ~3.3s file-load floor; the
+discriminating measurement lives on the block leg (A2) or needs
+reduction-count/RSS instrumentation the engine does not yet expose
+(a §9 instruments line item). Coverage fences on record: single-fn,
+ISet-only, mem-free, banded programs; branchy pins (sel/selq/clamp2)
+excluded; witness v0 consistency-checked only (segment-local check +
+segf factorization deferred, as priced). **A2 OPENED 2026-07-19
+(user ruling: proceed).**
+
 Prediction on record (review consensus): conversion + DAG storage
 gives the quickest 10-50x representation win and kills most weld
 glue; base+patch prevents the next program from recreating
