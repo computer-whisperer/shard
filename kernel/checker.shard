@@ -262,8 +262,8 @@
                     (match seq
                       ((Sequent s_params s_hyps s_premises goal_eq)
                        (match
-                         (apply_rewrite_with_occ pat_var_names opened_eq dir
-                           side occ goal_eq)
+                         (apply_rewrite_with_occ m s_params pat_var_names
+                           opened_eq dir side occ goal_eq)
                          (None False)
                          ((Some (Pair env new_eq))
                           ;; TYPE GATE: the citation's bindings (insts +
@@ -477,8 +477,8 @@
                     (match seq
                       ((Sequent s_params hyps premises goal_eq)
                        (match
-                         (apply_rewrite pat_var_names opened_eq dir side occ
-                           goal_eq)
+                         (apply_rewrite m s_params pat_var_names opened_eq dir
+                           side occ goal_eq)
                          ((Some (Pair envs new_eq))
                           ;; TYPE GATE: every match site instantiates the
                           ;; cited ∀-binders — each binding (inst or capture)
@@ -949,12 +949,490 @@
            (None None)))))))
 
 ;; ---------------------------------------------------------------------------
-;; apply_rewrite: flip the cited equation by Dir, then rewrite on the
-;; chosen Side using rewrite_first / rewrite_all / rewrite_nth per `occ`.
+;; Literal-sort gate. Ground Nat literals pack to the SAME IntLit atom
+;; as Int (reduce.shard nat_pack; tc_nat_lit_view is the typing twin),
+;; so a BARE ground-literal rewrite pattern is the one shape the
+;; untyped walk can apply across sorts: the replacement lands at a
+;; position of the OTHER sort and no later gate re-types the rewritten
+;; goal (the wn_q incident, IMP.md). When the pattern side of a cited
+;; equation is a bare IntLit, the rwl_* walk below mirrors the generic
+;; walk but carries each position's expected sort from declared
+;; signatures and refuses sites whose sort provably conflicts with the
+;; replacement's. Unknown positions (type vars, parameterized/opaque
+;; types, Match scrutinees, roots without an inferable head) stay
+;; unrestricted — the old behavior; only KNOWN crossings refuse.
+;; Compound patterns never take this path: their head fixes every
+;; literal subposition's sort syntactically.
 ;; ---------------------------------------------------------------------------
 
+(type LSort (LInt) (LNat) (LAny))
+
+(fn ls_compat ((site LSort) (want LSort)) Bool
+  (match site
+    ((LAny) True)
+    ((LInt)
+     (match want
+       ((LNat) False)
+       (_ True)))
+    ((LNat)
+     (match want
+       ((LInt) False)
+       (_ True)))))
+
+(fn ls_of_type ((t Type)) LSort
+  (match t
+    ((TCon q Nil)
+     (if (core_named q (quote Int)) (LInt)
+     (if (core_named q (quote Nat)) (LNat)
+     (LAny))))
+    (_ (LAny))))
+
+;; arithmetic prims: Int argument positions (fuel arithmetic lives here)
+(fn ls_prim_int_args ((f QName)) Bool
+  (if (core_named f (quote +)) True
+  (if (core_named f (quote -)) True
+  (if (core_named f (quote *)) True
+  (if (core_named f (quote /)) True
+  (if (core_named f (quote mod)) True
+  (if (core_named f (quote tmod)) True
+  (if (core_named f (quote ediv)) True
+  (if (core_named f (quote band)) True
+  (if (core_named f (quote bor)) True
+  (if (core_named f (quote bxor)) True
+  (if (core_named f (quote bshl)) True
+  (if (core_named f (quote bshr)) True
+  (if (core_named f (quote lt)) True
+  (if (core_named f (quote le)) True
+  (if (core_named f (quote int_eq)) True
+  False))))))))))))))))
+
+;; arithmetic prims whose RESULT is Int (comparisons return Bool)
+(fn ls_prim_int_ret ((f QName)) Bool
+  (if (core_named f (quote lt)) False
+  (if (core_named f (quote le)) False
+  (if (core_named f (quote int_eq)) False
+  (ls_prim_int_args f)))))
+
+(fn ls_ctor_owner ((c QName) (tds (List TypeDef))) (Option QName)
+  (measure (struct tds))
+  (match tds
+    (Nil None)
+    ((Cons (TypeDef tn _ cs _) rest)
+     (if (ls_ctor_member c cs) (Some tn) (ls_ctor_owner c rest)))))
+
+(fn ls_ctor_member ((c QName) (cs (List CtorDef))) Bool
+  (measure (struct cs))
+  (match cs
+    (Nil False)
+    ((Cons (CtorDef cn _) rest)
+     (if (qname_eq c cn) True (ls_ctor_member c rest)))))
+
+(fn ls_ctor_fields ((c QName) (tds (List TypeDef))) (Option (List Type))
+  (measure (struct tds))
+  (match tds
+    (Nil None)
+    ((Cons (TypeDef _ _ cs _) rest)
+     (match (find_ctor_fields c cs)
+       ((Some fts) (Some fts))
+       (None (ls_ctor_fields c rest))))))
+
+;; sort of a term by its head, for the replacement and equation roots.
+;; A NONNEG literal is valid at both sorts (tc_nat_lit_view) → LAny.
+(fn ls_of_expr ((m Module) (params (List Param)) (e Expr)) LSort
+  (match e
+    ((IntLit n) (if (lt n 0) (LInt) (LAny)))
+    ((FVar x)
+     (match (find_param x params)
+       ((Some (Param _ t)) (ls_of_type t))
+       (None (LAny))))
+    ((Call f _)
+     (match m
+       ((Module _ _ _ trie _)
+        (match (trie_lookup f trie)
+          ((Some (FnDef _ _ rt _)) (ls_of_type rt))
+          (None (if (ls_prim_int_ret f) (LInt) (LAny)))))))
+    ((Ctor c _)
+     (match m
+       ((Module tds _ _ _ _)
+        (match (ls_ctor_owner c tds)
+          ((Some tn) (if (core_named tn (quote Nat)) (LNat) (LAny)))
+          (None (LAny))))))
+    (_ (LAny))))
+
+(fn ls_of_types ((ts (List Type))) (List LSort)
+  (measure (struct ts))
+  (match ts
+    (Nil Nil)
+    ((Cons t rest) (Cons (ls_of_type t) (ls_of_types rest)))))
+
+;; per-argument expected sorts of a Ctor / Call head: (Pair default list) —
+;; positions past the list (arity skew, prims) take the default.
+(fn ls_args_ctor ((m Module) (c QName)) (Pair LSort (List LSort))
+  (match m
+    ((Module tds _ _ _ _)
+     (match (ls_ctor_fields c tds)
+       ((Some fts) (Pair (LAny) (ls_of_types fts)))
+       (None (Pair (LAny) Nil))))))
+
+(fn ls_args_call ((m Module) (f QName)) (Pair LSort (List LSort))
+  (match m
+    ((Module _ _ _ trie _)
+     (match (trie_lookup f trie)
+       ((Some (FnDef _ pts _ _)) (Pair (LAny) (ls_of_types pts)))
+       (None (if (ls_prim_int_args f) (Pair (LInt) Nil) (Pair (LAny) Nil)))))))
+
+;; ---------------------------------------------------------------------------
+;; rwl_all / rwl_first / rwl_nth: the bare-literal twins of rewrite_all /
+;; rewrite_first_with_env / rewrite_nth — same walk order, same result
+;; shapes (every site env = Empty: a ground pattern binds nothing), plus
+;; the sort check at each site. `cur` = the position's expected sort.
+;; ---------------------------------------------------------------------------
+
+(fn rwl_hit ((k Int) (n Int) (cur LSort) (want LSort)) Bool
+  (if (int_eq k n) (ls_compat cur want) False))
+
+(fn rwl_all ((m Module) (n Int) (repl Expr) (want LSort) (cur LSort) (e Expr))
+  (Option (Pair (List Env) Expr))
+  (measure (size e))
+  (match e
+    ((IntLit k)
+     (if (rwl_hit k n cur want) (Some (Pair (Cons Empty Nil) repl)) None))
+    ((Ctor c args)
+     (match (ls_args_ctor m c)
+       ((Pair df ts)
+        (match (rwl_all_list m n repl want df ts args)
+          ((Some (Pair envs args2)) (Some (Pair envs (Ctor c args2))))
+          (None None)))))
+    ((Call f args)
+     (match (ls_args_call m f)
+       ((Pair df ts)
+        (match (rwl_all_list m n repl want df ts args)
+          ((Some (Pair envs args2)) (Some (Pair envs (Call f args2))))
+          (None None)))))
+    ((If c t el) (rwl_all_if m n repl want cur c t el))
+    ((Match scrut arms)
+     (let
+       ((s2 (rwl_all m n repl want (LAny) scrut))
+        (a2 (if (no_bvars repl) (rwl_all_arms m n repl want cur arms) None)))
+       (match s2
+         ((Some (Pair es scrut2))
+          (match a2
+            ((Some (Pair es2 arms2))
+             (Some (Pair (envs_concat es es2) (Match scrut2 arms2))))
+            (None (Some (Pair es (Match scrut2 arms))))))
+         (None
+           (match a2
+             ((Some (Pair es2 arms2)) (Some (Pair es2 (Match scrut arms2))))
+             (None None))))))
+    (_ None)))
+
+(fn rwl_all_arms
+  ((m Module) (n Int) (repl Expr) (want LSort) (cur LSort) (arms (List Arm)))
+  (Option (Pair (List Env) (List Arm)))
+  (measure (size_arms arms))
+  (match arms
+    (Nil None)
+    ((Cons (Arm p b) t)
+     (match (rwl_all m n repl want cur b)
+       ((Some (Pair es b2))
+        (match (rwl_all_arms m n repl want cur t)
+          ((Some (Pair es2 t2))
+           (Some (Pair (envs_concat es es2) (Cons (Arm p b2) t2))))
+          (None (Some (Pair es (Cons (Arm p b2) t))))))
+       (None
+         (match (rwl_all_arms m n repl want cur t)
+           ((Some (Pair es2 t2)) (Some (Pair es2 (Cons (Arm p b) t2))))
+           (None None)))))))
+
+;; args in lockstep with their expected sorts; exhausted list → default.
+(fn rwl_all_list
+  ((m Module)
+   (n Int)
+   (repl Expr)
+   (want LSort)
+   (df LSort)
+   (ts (List LSort))
+   (es (List Expr)))
+  (Option (Pair (List Env) (List Expr)))
+  (measure (size_list es))
+  (match es
+    (Nil None)
+    ((Cons h t)
+     (match (ls_split df ts)
+       ((Pair cur ts2)
+        (match (rwl_all m n repl want cur h)
+          ((Some (Pair envs h2))
+           (match (rwl_all_list m n repl want df ts2 t)
+             ((Some (Pair envs2 t2))
+              (Some (Pair (envs_concat envs envs2) (Cons h2 t2))))
+             (None (Some (Pair envs (Cons h2 t))))))
+          (None
+            (match (rwl_all_list m n repl want df ts2 t)
+              ((Some (Pair envs2 t2)) (Some (Pair envs2 (Cons h t2))))
+              (None None)))))))))
+
+(fn ls_split ((df LSort) (ts (List LSort))) (Pair LSort (List LSort))
+  (match ts
+    (Nil (Pair df Nil))
+    ((Cons h t) (Pair h t))))
+
+(fn rwl_all_if
+  ((m Module)
+   (n Int)
+   (repl Expr)
+   (want LSort)
+   (cur LSort)
+   (c Expr)
+   (t Expr)
+   (el Expr))
+  (Option (Pair (List Env) Expr))
+  (measure (+ 1 (+ (size c) (+ (size t) (size el)))))
+  (match (rwl_all m n repl want (LAny) c)
+    ((Some (Pair ec c2))
+     (match (rwl_all m n repl want cur t)
+       ((Some (Pair et t2))
+        (match (rwl_all m n repl want cur el)
+          ((Some (Pair ee el2))
+           (Some (Pair (envs_concat ec (envs_concat et ee)) (If c2 t2 el2))))
+          (None (Some (Pair (envs_concat ec et) (If c2 t2 el))))))
+       (None
+         (match (rwl_all m n repl want cur el)
+           ((Some (Pair ee el2))
+            (Some (Pair (envs_concat ec ee) (If c2 t el2))))
+           (None (Some (Pair ec (If c2 t el))))))))
+    (None
+      (match (rwl_all m n repl want cur t)
+        ((Some (Pair et t2))
+         (match (rwl_all m n repl want cur el)
+           ((Some (Pair ee el2))
+            (Some (Pair (envs_concat et ee) (If c t2 el2))))
+           (None (Some (Pair et (If c t2 el))))))
+        (None
+          (match (rwl_all m n repl want cur el)
+            ((Some (Pair ee el2)) (Some (Pair ee (If c t el2))))
+            (None None)))))))
+
+(fn rwl_first ((m Module) (n Int) (repl Expr) (want LSort) (cur LSort) (e Expr))
+  (Option Expr)
+  (measure (size e))
+  (match e
+    ((IntLit k) (if (rwl_hit k n cur want) (Some repl) None))
+    ((Ctor c args)
+     (match (ls_args_ctor m c)
+       ((Pair df ts)
+        (match (rwl_first_list m n repl want df ts args)
+          ((Some args2) (Some (Ctor c args2)))
+          (None None)))))
+    ((Call f args)
+     (match (ls_args_call m f)
+       ((Pair df ts)
+        (match (rwl_first_list m n repl want df ts args)
+          ((Some args2) (Some (Call f args2)))
+          (None None)))))
+    ((If c t el)
+     (match (rwl_first m n repl want (LAny) c)
+       ((Some c2) (Some (If c2 t el)))
+       (None
+         (match (rwl_first m n repl want cur t)
+           ((Some t2) (Some (If c t2 el)))
+           (None
+             (match (rwl_first m n repl want cur el)
+               ((Some el2) (Some (If c t el2)))
+               (None None)))))))
+    ;; Match scrutinee only — rewrite_first_with_env's walk verbatim.
+    ((Match scrut arms)
+     (match (rwl_first m n repl want (LAny) scrut)
+       ((Some scrut2) (Some (Match scrut2 arms)))
+       (None None)))
+    (_ None)))
+
+(fn rwl_first_list
+  ((m Module)
+   (n Int)
+   (repl Expr)
+   (want LSort)
+   (df LSort)
+   (ts (List LSort))
+   (es (List Expr)))
+  (Option (List Expr))
+  (measure (size_list es))
+  (match es
+    (Nil None)
+    ((Cons h t)
+     (match (ls_split df ts)
+       ((Pair cur ts2)
+        (match (rwl_first m n repl want cur h)
+          ((Some h2) (Some (Cons h2 t)))
+          (None
+            (match (rwl_first_list m n repl want df ts2 t)
+              ((Some t2) (Some (Cons h t2)))
+              (None None)))))))))
+
+(fn rwl_nth
+  ((m Module) (n Int) (repl Expr) (want LSort) (cur LSort) (e Expr) (k Int))
+  RwNth
+  (measure (size e))
+  (match e
+    ((IntLit j)
+     (if (rwl_hit j n cur want)
+       (if (int_eq k 0) (RwNthHit Empty repl) (RwNthMiss (- k 1)))
+       (RwNthMiss k)))
+    ((Ctor c args)
+     (match (ls_args_ctor m c)
+       ((Pair df ts)
+        (match (rwl_nth_list m n repl want df ts args k)
+          ((RwNthHitL env args2) (RwNthHit env (Ctor c args2)))
+          ((RwNthMissL k2) (RwNthMiss k2))))))
+    ((Call f args)
+     (match (ls_args_call m f)
+       ((Pair df ts)
+        (match (rwl_nth_list m n repl want df ts args k)
+          ((RwNthHitL env args2) (RwNthHit env (Call f args2)))
+          ((RwNthMissL k2) (RwNthMiss k2))))))
+    ((If c t el)
+     (match (rwl_nth m n repl want (LAny) c k)
+       ((RwNthHit env c2) (RwNthHit env (If c2 t el)))
+       ((RwNthMiss k2)
+        (match (rwl_nth m n repl want cur t k2)
+          ((RwNthHit env t2) (RwNthHit env (If c t2 el)))
+          ((RwNthMiss k3)
+           (match (rwl_nth m n repl want cur el k3)
+             ((RwNthHit env el2) (RwNthHit env (If c t el2)))
+             ((RwNthMiss k4) (RwNthMiss k4))))))))
+    ((Match scrut arms)
+     (match (rwl_nth m n repl want (LAny) scrut k)
+       ((RwNthHit env scrut2) (RwNthHit env (Match scrut2 arms)))
+       ((RwNthMiss k2)
+        (if (no_bvars repl)
+          (match (rwl_nth_arms m n repl want cur arms k2)
+            ((RwNthHitA env arms2) (RwNthHit env (Match scrut arms2)))
+            ((RwNthMissA k3) (RwNthMiss k3)))
+          (RwNthMiss k2)))))
+    (_ (RwNthMiss k))))
+
+(fn rwl_nth_list
+  ((m Module)
+   (n Int)
+   (repl Expr)
+   (want LSort)
+   (df LSort)
+   (ts (List LSort))
+   (es (List Expr))
+   (k Int))
+  RwNthL
+  (measure (size_list es))
+  (match es
+    (Nil (RwNthMissL k))
+    ((Cons h t)
+     (match (ls_split df ts)
+       ((Pair cur ts2)
+        (match (rwl_nth m n repl want cur h k)
+          ((RwNthHit env h2) (RwNthHitL env (Cons h2 t)))
+          ((RwNthMiss k2)
+           (match (rwl_nth_list m n repl want df ts2 t k2)
+             ((RwNthHitL env t2) (RwNthHitL env (Cons h t2)))
+             ((RwNthMissL k3) (RwNthMissL k3))))))))))
+
+(fn rwl_nth_arms
+  ((m Module)
+   (n Int)
+   (repl Expr)
+   (want LSort)
+   (cur LSort)
+   (arms (List Arm))
+   (k Int))
+  RwNthA
+  (measure (size_arms arms))
+  (match arms
+    (Nil (RwNthMissA k))
+    ((Cons (Arm p b) t)
+     (match (rwl_nth m n repl want cur b k)
+       ((RwNthHit env b2) (RwNthHitA env (Cons (Arm p b2) t)))
+       ((RwNthMiss k2)
+        (match (rwl_nth_arms m n repl want cur t k2)
+          ((RwNthHitA env t2) (RwNthHitA env (Cons (Arm p b) t2)))
+          ((RwNthMissA k3) (RwNthMissA k3))))))))
+
+;; side + occurrence drivers for the gated walk. Root expected sort =
+;; the OTHER side's head sort (a bare-literal goal side is exactly the
+;; (= n 16) shape, where the other side names the sort).
+(fn rwl_one_or_all
+  ((m Module) (n Int) (repl Expr) (want LSort) (cur LSort) (occ Occ) (e Expr))
+  (Option (Pair (List Env) Expr))
+  (match occ
+    ((OccAll) (rwl_all m n repl want cur e))
+    ((OccFirst)
+     (match (rwl_first m n repl want cur e)
+       ((Some e2) (Some (Pair (Cons Empty Nil) e2)))
+       (None None)))
+    ((OccAt k)
+     (match (rwl_nth m n repl want cur e k)
+       ((RwNthHit env e2) (Some (Pair (Cons env Nil) e2)))
+       ((RwNthMiss _) None)))))
+
+(fn rwl_side
+  ((m Module)
+   (params (List Param))
+   (n Int)
+   (repl Expr)
+   (side Side)
+   (occ Occ)
+   (goal_eq Equation))
+  (Option (Pair (List Env) Equation))
+  (match goal_eq
+    ((Equation gl gr)
+     (match (ls_of_expr m params repl)
+       (want
+         (match side
+           ((Lhs)
+            (match
+              (rwl_one_or_all m n repl want (ls_of_expr m params gr) occ gl)
+              ((Some (Pair envs gl2)) (Some (Pair envs (Equation gl2 gr))))
+              (None None)))
+           ((Rhs)
+            (match
+              (rwl_one_or_all m n repl want (ls_of_expr m params gl) occ gr)
+              ((Some (Pair envs gr2)) (Some (Pair envs (Equation gl gr2))))
+              (None None)))
+           ((Both)
+            (match
+              (rwl_one_or_all m n repl want (ls_of_expr m params gr) occ gl)
+              ((Some (Pair el gl2))
+               (match
+                 (rwl_one_or_all m n repl want (ls_of_expr m params gl) occ gr)
+                 ((Some (Pair er gr2))
+                  (Some (Pair (envs_concat el er) (Equation gl2 gr2))))
+                 (None (Some (Pair el (Equation gl2 gr))))))
+              (None
+                (match
+                  (rwl_one_or_all m n repl want (ls_of_expr m params gl) occ gr)
+                  ((Some (Pair er gr2)) (Some (Pair er (Equation gl gr2))))
+                  (None None)))))))))))
+
+;; ---------------------------------------------------------------------------
+;; apply_rewrite: flip the cited equation by Dir, then rewrite on the
+;; chosen Side using rewrite_first / rewrite_all / rewrite_nth per `occ`.
+;; A bare-IntLit pattern dispatches to the sort-gated rwl_ walk instead.
+;; ---------------------------------------------------------------------------
+
+(fn rw_dispatch
+  ((m Module)
+   (params (List Param))
+   (pat_vars (List Symbol))
+   (pat Expr)
+   (repl Expr)
+   (side Side)
+   (occ Occ)
+   (goal_eq Equation))
+  (Option (Pair (List Env) Equation))
+  (match pat
+    ((IntLit n) (rwl_side m params n repl side occ goal_eq))
+    (_ (rewrite_side pat_vars pat repl side occ goal_eq))))
+
 (fn apply_rewrite
-  ((pat_vars (List Symbol))
+  ((m Module)
+   (params (List Param))
+   (pat_vars (List Symbol))
    (cited Equation)
    (dir Dir)
    (side Side)
@@ -964,8 +1442,8 @@
   (match cited
     ((Equation cl cr)
      (match dir
-       ((Lr) (rewrite_side pat_vars cl cr side occ goal_eq))
-       ((Rl) (rewrite_side pat_vars cr cl side occ goal_eq))))))
+       ((Lr) (rw_dispatch m params pat_vars cl cr side occ goal_eq))
+       ((Rl) (rw_dispatch m params pat_vars cr cl side occ goal_eq))))))
 
 (fn rewrite_side
   ((pat_vars (List Symbol))
@@ -1022,8 +1500,54 @@
 ;; per-site envs in the cert shape; deferred.
 ;; ---------------------------------------------------------------------------
 
+;; first-match driver of the gated walk for the RewriteWith path; the
+;; match env is always Empty (a ground pattern binds nothing).
+(fn rwl_side_first
+  ((m Module)
+   (params (List Param))
+   (n Int)
+   (repl Expr)
+   (side Side)
+   (goal_eq Equation))
+  (Option (Pair Env Equation))
+  (match goal_eq
+    ((Equation gl gr)
+     (match (ls_of_expr m params repl)
+       (want
+         (match side
+           ((Lhs)
+            (match (rwl_first m n repl want (ls_of_expr m params gr) gl)
+              ((Some gl2) (Some (Pair Empty (Equation gl2 gr))))
+              (None None)))
+           ((Rhs)
+            (match (rwl_first m n repl want (ls_of_expr m params gl) gr)
+              ((Some gr2) (Some (Pair Empty (Equation gl gr2))))
+              (None None)))
+           ((Both)
+            (match (rwl_first m n repl want (ls_of_expr m params gr) gl)
+              ((Some gl2) (Some (Pair Empty (Equation gl2 gr))))
+              (None
+                (match (rwl_first m n repl want (ls_of_expr m params gl) gr)
+                  ((Some gr2) (Some (Pair Empty (Equation gl gr2))))
+                  (None None)))))))))))
+
+(fn rw_dispatch_env
+  ((m Module)
+   (params (List Param))
+   (pat_vars (List Symbol))
+   (pat Expr)
+   (repl Expr)
+   (side Side)
+   (goal_eq Equation))
+  (Option (Pair Env Equation))
+  (match pat
+    ((IntLit n) (rwl_side_first m params n repl side goal_eq))
+    (_ (rewrite_side_with_env pat_vars pat repl side goal_eq))))
+
 (fn apply_rewrite_with_env
-  ((pat_vars (List Symbol))
+  ((m Module)
+   (params (List Param))
+   (pat_vars (List Symbol))
    (cited Equation)
    (dir Dir)
    (side Side)
@@ -1032,8 +1556,8 @@
   (match cited
     ((Equation cl cr)
      (match dir
-       ((Lr) (rewrite_side_with_env pat_vars cl cr side goal_eq))
-       ((Rl) (rewrite_side_with_env pat_vars cr cl side goal_eq))))))
+       ((Lr) (rw_dispatch_env m params pat_vars cl cr side goal_eq))
+       ((Rl) (rw_dispatch_env m params pat_vars cr cl side goal_eq))))))
 
 (fn rewrite_side_with_env
   ((pat_vars (List Symbol))
@@ -1078,7 +1602,9 @@
     ((Equation l r) (Equation (subst env l) (subst env r)))))
 
 (fn apply_rewrite_with_occ
-  ((pat_vars (List Symbol))
+  ((m Module)
+   (params (List Param))
+   (pat_vars (List Symbol))
    (cited Equation)
    (dir Dir)
    (side Side)
@@ -1086,13 +1612,16 @@
    (goal_eq Equation))
   (Option (Pair Env Equation))
   (match occ
-    ((OccFirst) (apply_rewrite_with_env pat_vars cited dir side goal_eq))
+    ((OccFirst)
+     (apply_rewrite_with_env m params pat_vars cited dir side goal_eq))
     (_
-      (match (apply_rewrite_with_env pat_vars cited dir side goal_eq)
+      (match (apply_rewrite_with_env m params pat_vars cited dir side goal_eq)
         (None None)
         ((Some (Pair env _))
          (match
            (apply_rewrite
+             m
+             params
              Nil
              (close_eq_with_env env cited)
              dir
