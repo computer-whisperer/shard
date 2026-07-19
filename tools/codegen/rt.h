@@ -103,6 +103,22 @@ static char *rt_gc_trigger;           /* next GC when bump passes this */
 #define RT_GC_MAX_SPACING (2ul << 30)
 static size_t rt_live_bytes = 0;      /* live bytes found by the last sweep */
 
+/* ---- stats (SHARD_STATS=1 dumps to stderr at exit) ---------------------- */
+/* Counters are unconditional (one increment per event — noise next to the
+   work each event performs); only the dump is gated. Per-generated-fn call
+   counters live in the GENERATED file (rt_fnctr_g/rt_fnname_g, one slot per
+   fn, incremented at fn entry AND self-tail iteration); main binds them here
+   before rt_init so the dump can rank them. The measured quantities are the
+   CERT.md §9 instruments: total calls (checker work), allocations (term
+   construction), GC live peak (peak live terms), maxrss. */
+static long long rt_stat_allocs, rt_stat_alloc_bytes, rt_stat_gcs;
+static size_t rt_stat_live_peak;
+static long long *rt_fnctr_p; static const char *const *rt_fnname_p;
+static int rt_nfn_p;
+static void rt_stats_bind(long long *c, const char *const *n, int k) {
+  rt_fnctr_p = c; rt_fnname_p = n; rt_nfn_p = k;
+}
+
 static inline size_t rt_slot(char *p) { return (size_t)(p - rt_heap_base) >> 4; }
 static inline void rt_setstart(char *p) {
   size_t s = rt_slot(p); rt_startmap[s >> 3] |= (uint8_t)(1u << (s & 7));
@@ -154,6 +170,7 @@ static void rt_scan_range(char *lo, char *hi) {
 /* preallocated nullary cells, filled in rt_init from generated tag macros */
 static value_t rt_true_, rt_false_, rt_nil_, rt_none_, rt_unit_world;
 static void rt_gc(void) {
+  rt_stat_gcs++;
   for (int i = 0; i < RT_NCLASS; i++) rt_free[i] = 0;
   rt_mtop = 0;
   /* roots: the preallocated singletons, callee-saved registers, the stack */
@@ -196,10 +213,12 @@ static void rt_gc(void) {
     p += sz;
   }
   rt_live_bytes = live;
+  if (live > rt_stat_live_peak) rt_stat_live_peak = live;
 }
 
 static value_t rt_alloc(uint32_t tag, uint32_t arity) {
   size_t sz = rt_cellsz(arity);
+  rt_stat_allocs++; rt_stat_alloc_bytes += (long long)sz;
   unsigned cl = (unsigned)(sz >> 4);
   for (;;) {
     rt_cell *c = rt_free[cl];
@@ -857,13 +876,49 @@ static value_t rt_no_match(const char *fn) {
   exit(3);
 }
 
+/* ---- stats dump ---------------------------------------------------------- */
+static int rt_statcmp(const void *a, const void *b) {
+  long long ca = rt_fnctr_p[*(const int *)a], cb = rt_fnctr_p[*(const int *)b];
+  return ca < cb ? 1 : ca > cb ? -1 : 0;
+}
+static void rt_stats_dump(void) {
+  struct rusage ru;
+  getrusage(RUSAGE_SELF, &ru);
+  long long total = 0;
+  for (int i = 0; i < rt_nfn_p; i++) total += rt_fnctr_p[i];
+  fprintf(stderr, "== shard stats\n");
+  fprintf(stderr, "calls_total %lld\n", total);
+  fprintf(stderr, "allocs %lld\n", rt_stat_allocs);
+  fprintf(stderr, "alloc_bytes %lld\n", rt_stat_alloc_bytes);
+  fprintf(stderr, "gcs %lld\n", rt_stat_gcs);
+  fprintf(stderr, "live_peak_bytes %zu\n", rt_stat_live_peak);
+  fprintf(stderr, "live_last_bytes %zu\n", rt_live_bytes);
+  fprintf(stderr, "heap_extent_bytes %zu\n", (size_t)(rt_heap - rt_heap_base));
+  fprintf(stderr, "maxrss_kb %ld\n", ru.ru_maxrss);
+  if (!rt_nfn_p) return;
+  int *idx = (int *)malloc((size_t)rt_nfn_p * sizeof(int));
+  if (!idx) return;
+  for (int i = 0; i < rt_nfn_p; i++) idx[i] = i;
+  qsort(idx, (size_t)rt_nfn_p, sizeof(int), rt_statcmp);
+  int top = rt_nfn_p < 40 ? rt_nfn_p : 40;
+  for (int i = 0; i < top; i++)
+    if (rt_fnctr_p[idx[i]] > 0)
+      fprintf(stderr, "fn %lld %s\n", rt_fnctr_p[idx[i]], rt_fnname_p[idx[i]]);
+  free(idx);
+}
+
 /* ---- init ---------------------------------------------------------------- */
-/* Called from main as `rt_init(argc, argv)`, so this frame sits just below
-   main's — &argc is a safe high boundary for the conservative stack scan
-   (all later computation frames are at lower addresses). */
+/* The stack-scan upper bound must sit ABOVE every later computation frame.
+   argv points at the kernel-placed argv array on the initial process stack,
+   above main's frame — a layout-independent bound. (&argc was used before:
+   a spill slot INSIDE rt_init's frame, safe only while the compiler happened
+   to place it at the frame top; adding calls to rt_init moved the slot and
+   frames above it escaped the root scan — live cells got swept. Measured
+   2026-07-19, gcc 16.1.1 -O2, first surfaced by the stats additions.) */
 static void rt_init(int argc, char **argv) {
   rt_argc = argc; rt_argv = argv;
-  rt_stack_base = (char *)&argc;
+  if (getenv("SHARD_STATS")) atexit(rt_stats_dump);
+  rt_stack_base = (char *)argv;
   struct rlimit rl = { 2ul << 30, 2ul << 30 };
   setrlimit(RLIMIT_STACK, &rl);  /* best effort; deep non-self recursion */
   size_t cap = 64ul << 30;       /* 64 GB reserve, NORESERVE — pay as used */
