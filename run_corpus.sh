@@ -310,6 +310,7 @@ TARGETS=(
   std/nat/nat.shard
   std/sha256/sha256.shard
   std/sha256/sha256.imp.shard
+  std/sha256/sha256.patch.shard
   std/sha256/impgen_wasm_out.shard
   std/sha256/impgen_x86_out.shard
   std/sha256/sha256.weld.shard

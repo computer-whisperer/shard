@@ -1,0 +1,1361 @@
+;;; std/sha256/sha256.patch.shard — ARC A2 RUNG (c) (docs/CERT.md §8): the
+;;; base+patch EXERCISE on the sha block leg's phase seams. The hand chain's
+;;; three memory writers (copy_wmem / sched_mem / h8add_mem) get PATCH TWINS
+;;; — computed patch lists mirroring each writer's own recursion verbatim —
+;;; with UNPREMISED collapse laws (writer = xp_mem ∘ twin), ONE byte-footprint
+;;; lemma pair per writer, and a generic wget frame law; the demonstrations
+;;; at the bottom re-derive representative members of the hand-built
+;;; observation×writer framing family (ish_wget_copy_below and kin) as
+;;; few-line citation chains. THE MEASUREMENT: the pair-lemma PRODUCT
+;;; (every observation × every writer, one bespoke induction each) becomes
+;;; a SUM (one twin + one footprint pair per writer, one frame law per
+;;; observation). SPIKE STATUS: measured against the landed ish_* family,
+;;; replacing nothing while Arc A runs.
+
+(import "../../kernel/stdlib.shard")
+(import "../../std/nat.shard")
+(use (:: std nat *))
+(import "../../std/mem")
+(use (:: std mem *))
+(import "sha256.shard")
+(use (:: std sha256 sha256 *))
+(import "../../models/imp/imp.shard")
+(use (:: models imp imp *))
+(import "../../models/imp/probes/ipatch_probe.shard")
+(use (:: models imp probes ipatch_probe *))
+(import "sha256.imp.shard")
+(use (:: std sha256 sha256.imp *))
+
+;; --- patch-list append (the seam composition primitive) ----------------------------
+
+(fn papp ((a (List IPatch)) (b (List IPatch))) (List IPatch)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (papp t b)))))
+
+;; apply distributes over append: the LATER patches (list b, applied first)
+;; materialize inside, the earlier ones on top — seams never respell states
+(claim xhg_mapp
+  (goal ((m Mem) (a (List IPatch)) (b (List IPatch))) ()
+    (= (xp_mem m (papp a b)) (xp_mem (xp_mem m b) a)))
+  (induct a
+    ((case Nil
+       (steps
+         ((unfold papp lhs) (reduce lhs) (unfold xp_mem rhs) (reduce rhs))
+         refl))
+     (case Cons
+       (p rest)
+       (case-on p IPatch
+         ((case PLoc
+            (i v)
+            (chain
+              (have hp (= p (PLoc i v))
+                (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+              (steps
+                ((rewrite (premise hp) lr both true ())
+                 (unfold papp lhs)
+                 (reduce lhs)
+                 (unfold xp_mem lhs)
+                 (reduce lhs)
+                 (unfold xp_mem rhs)
+                 (reduce rhs)))
+              (rewrite-with (hyp ih) lr lhs ((inst m m) (inst b b)) ())
+              refl))
+          (case PByte
+            (a2 v)
+            (chain
+              (have hp (= p (PByte a2 v))
+                (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+              (steps
+                ((rewrite (premise hp) lr both true ())
+                 (unfold papp lhs)
+                 (reduce lhs)
+                 (unfold xp_mem lhs)
+                 (reduce lhs)
+                 (unfold xp_mem rhs)
+                 (reduce rhs)))
+              (rewrite-with (hyp ih) lr lhs ((inst m m) (inst b b)) ())
+              refl))
+          (case PWord
+            (a2 v)
+            (chain
+              (have hp (= p (PWord a2 v))
+                (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+              (steps
+                ((rewrite (premise hp) lr both true ())
+                 (unfold papp lhs)
+                 (reduce lhs)
+                 (unfold xp_mem lhs)
+                 (reduce lhs)
+                 (unfold xp_mem rhs)
+                 (reduce rhs)))
+              (rewrite-with (hyp ih) lr lhs ((inst m m) (inst b b)) ())
+              refl))))))))
+
+;; the probe's BE word write IS the sha kit's wput
+(claim xhg_wpb
+  (goal ((m Mem) (p Int) (v Int)) () (= (xp_wput m p v) (wput m p v)))
+  (steps ((compute both)) refl))
+
+;; --- the writer patch twins --------------------------------------------------------
+;; Each twin mirrors its writer's OWN recursion verbatim — values read the
+;; current (mutated) memory exactly as the writer does, so the collapse
+;; laws below are unpremised and refl-grade. Newest write at the HEAD
+;; (papp puts the recursive tail's later writes in front).
+
+;; copy_wmem's twin: k words from s to d
+(fn cwp ((m Mem) (s Int) (d Int) (k Nat)) (List IPatch)
+  (measure (struct k))
+  (match k
+    (Z Nil)
+    ((S k2)
+     (papp
+       (cwp (wput m d (wget m s)) (+ s 4) (+ d 4) k2)
+       (list (PWord d (wget m s)))))))
+
+;; sched_mem's twin: k schedule words at p (reads its OWN earlier writes —
+;; the mutated-m threading carries them exactly)
+(fn sdp ((m Mem) (p Int) (k Nat)) (List IPatch)
+  (measure (struct k))
+  (match k
+    (Z Nil)
+    ((S k2)
+     (papp
+       (sdp (wput m p (sched_w m p)) (+ p 4) k2)
+       (list (PWord p (sched_w m p)))))))
+
+;; h8add_mem's twin, via a value-list fold (h8add_mem is the flat 8-lane
+;; nest; h8go below is its fold spelling and the two meet by compute)
+(fn h8p_go ((m Mem) (a Int) (vs (List Int))) (List IPatch)
+  (measure (struct vs))
+  (match vs
+    (Nil Nil)
+    ((Cons x vt)
+     (papp
+       (h8p_go (wput m a (mod (+ (wget m a) x) 4294967296)) (+ a 4) vt)
+       (list (PWord a (mod (+ (wget m a) x) 4294967296)))))))
+
+(fn h8go ((m Mem) (a Int) (vs (List Int))) Mem
+  (measure (struct vs))
+  (match vs
+    (Nil m)
+    ((Cons x vt) (h8go (wput m a (mod (+ (wget m a) x) 4294967296)) (+ a 4) vt))))
+
+(fn h8p ((m Mem) (hb Int) (st H8)) (List IPatch)
+  (h8p_go
+    m
+    hb
+    (list
+      (h8a st)
+      (h8b st)
+      (h8c st)
+      (h8d st)
+      (h8e st)
+      (h8f st)
+      (h8g st)
+      (h8h st))))
+
+;; --- the collapse laws: writer = apply ∘ twin (unpremised) -------------------------
+
+(claim xhg_cwc
+  (goal ((m Mem) (s Int) (d Int) (k Nat)) ()
+    (= (copy_wmem m s d k) (xp_mem m (cwp m s d k))))
+  (induct k
+    ((case Z
+       (steps
+         ((unfold copy_wmem lhs)
+          (reduce lhs)
+          (unfold cwp rhs)
+          (reduce rhs)
+          (unfold xp_mem rhs)
+          (reduce rhs))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (have hone
+           (= (xp_mem m (list (PWord d (wget m s)))) (wput m d (wget m s)))
+           (chain
+             (steps
+               ((unfold xp_mem lhs)
+                (reduce lhs)
+                (unfold xp_mem lhs)
+                (reduce lhs)))
+             (rewrite-with
+               (lemma xhg_wpb)
+               lr
+               lhs
+               ((inst m m) (inst p d) (inst v (wget m s)))
+               ())
+             refl))
+         (steps ((unfold copy_wmem lhs) (reduce lhs)))
+         (rewrite-with
+           (hyp ih)
+           lr
+           lhs
+           ((inst m (wput m d (wget m s))) (inst s (+ s 4)) (inst d (+ d 4)))
+           ())
+         (steps
+           ((unfold cwp rhs)
+            (reduce rhs)
+            (rewrite (lemma xhg_mapp) lr rhs true ())
+            (rewrite (premise hone) lr rhs true ()))
+           refl))))))
+
+(claim xhg_sdc
+  (goal ((m Mem) (p Int) (k Nat)) ()
+    (= (sched_mem m p k) (xp_mem m (sdp m p k))))
+  (induct k
+    ((case Z
+       (steps
+         ((unfold sched_mem lhs)
+          (reduce lhs)
+          (unfold sdp rhs)
+          (reduce rhs)
+          (unfold xp_mem rhs)
+          (reduce rhs))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (have hone
+           (=
+             (xp_mem m (list (PWord p (sched_w m p))))
+             (wput m p (sched_w m p)))
+           (chain
+             (steps
+               ((unfold xp_mem lhs)
+                (reduce lhs)
+                (unfold xp_mem lhs)
+                (reduce lhs)))
+             (rewrite-with
+               (lemma xhg_wpb)
+               lr
+               lhs
+               ((inst m m) (inst p p) (inst v (sched_w m p)))
+               ())
+             refl))
+         (steps ((unfold sched_mem lhs) (reduce lhs)))
+         (rewrite-with
+           (hyp ih)
+           lr
+           lhs
+           ((inst m (wput m p (sched_w m p))) (inst p (+ p 4)))
+           ())
+         (steps
+           ((unfold sdp rhs)
+            (reduce rhs)
+            (rewrite (lemma xhg_mapp) lr rhs true ())
+            (rewrite (premise hone) lr rhs true ()))
+           refl))))))
+
+(claim xhg_h8gc
+  (goal ((m Mem) (a Int) (vs (List Int))) ()
+    (= (h8go m a vs) (xp_mem m (h8p_go m a vs))))
+  (induct vs
+    ((case Nil
+       (steps
+         ((unfold h8go lhs)
+          (reduce lhs)
+          (unfold h8p_go rhs)
+          (reduce rhs)
+          (unfold xp_mem rhs)
+          (reduce rhs))
+         refl))
+     (case Cons
+       (x vt)
+       (chain
+         (have hone
+           (=
+             (xp_mem m (list (PWord a (mod (+ (wget m a) x) 4294967296))))
+             (wput m a (mod (+ (wget m a) x) 4294967296)))
+           (chain
+             (steps
+               ((unfold xp_mem lhs)
+                (reduce lhs)
+                (unfold xp_mem lhs)
+                (reduce lhs)))
+             (rewrite-with
+               (lemma xhg_wpb)
+               lr
+               lhs
+               ((inst m m)
+                (inst p a)
+                (inst v (mod (+ (wget m a) x) 4294967296)))
+               ())
+             refl))
+         (steps ((unfold h8go lhs) (reduce lhs)))
+         (rewrite-with
+           (hyp ih)
+           lr
+           lhs
+           ((inst m (wput m a (mod (+ (wget m a) x) 4294967296)))
+            (inst a (+ a 4)))
+           ())
+         (steps
+           ((unfold h8p_go rhs)
+            (reduce rhs)
+            (rewrite (lemma xhg_mapp) lr rhs true ())
+            (rewrite (premise hone) lr rhs true ()))
+           refl))))))
+
+(claim xhg_h8c
+  (goal ((m Mem) (hb Int) (st H8)) ()
+    (= (h8add_mem m hb st) (xp_mem m (h8p m hb st))))
+  (chain
+    (steps
+      ((unfold h8p rhs)
+       (rewrite (lemma xhg_h8gc) rl rhs true ())
+       (compute both (stop wput wget))))
+    refl))
+
+;; --- footprint distribution over append --------------------------------------------
+
+(claim xhg_tbapp
+  (goal ((a (List IPatch)) (b (List IPatch)) (c Int))
+    ((= (xp_tb a c) False) (= (xp_tb b c) False))
+    (= (xp_tb (papp a b) c) False))
+  (induct a
+    ((case Nil
+       (steps
+         ((unfold papp lhs) (reduce lhs) (rewrite (premise 1) lr lhs true ()))
+         refl))
+     (case Cons
+       (p rest)
+       (case-on p IPatch
+         ((case PLoc
+            (j v)
+            (chain
+              (have hp (= p (PLoc j v))
+                (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+              (have hrest (= (xp_tb rest c) False)
+                (steps
+                  ((rewrite (premise 0) rl rhs true ())
+                   (rewrite (premise hp) lr rhs true ())
+                   (unfold xp_tb rhs)
+                   (reduce rhs))
+                  refl))
+              (steps
+                ((rewrite (premise hp) lr lhs true ())
+                 (unfold papp lhs)
+                 (reduce lhs)
+                 (unfold xp_tb lhs)
+                 (reduce lhs)))
+              (rewrite-with
+                (hyp ih)
+                lr
+                lhs
+                ((inst b b) (inst c c))
+                ((steps ((rewrite (premise hrest) lr lhs true ())) refl)
+                 (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+              refl))
+          (case PByte
+            (a2 v)
+            (chain
+              (have hp (= p (PByte a2 v))
+                (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+              (have hpu (= (if (int_eq c a2) True (xp_tb rest c)) False)
+                (steps
+                  ((rewrite (premise 0) rl rhs true ())
+                   (rewrite (premise hp) lr rhs true ())
+                   (unfold xp_tb rhs)
+                   (reduce rhs))
+                  refl))
+              (steps
+                ((rewrite (premise hp) lr lhs true ())
+                 (unfold papp lhs)
+                 (reduce lhs)
+                 (unfold xp_tb lhs)
+                 (reduce lhs)))
+              (case-on (int_eq c a2) Bool
+                ((case True
+                   (chain
+                     (have hca (= (int_eq c a2) True)
+                       (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                     (have hff (= True False)
+                       (steps
+                         ((rewrite (premise hpu) rl rhs true ())
+                          (rewrite (premise hca) lr rhs true ())
+                          (reduce rhs))
+                         refl))
+                     (absurd (premise hff))))
+                 (case False
+                   (chain
+                     (have hcaf (= (int_eq c a2) False)
+                       (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                     (have hrest (= (xp_tb rest c) False)
+                       (steps
+                         ((rewrite (premise hpu) rl rhs true ())
+                          (rewrite (premise hcaf) lr rhs true ())
+                          (reduce rhs))
+                         refl))
+                     (steps
+                       ((rewrite (premise hcaf) lr lhs true ()) (reduce lhs)))
+                     (rewrite-with
+                       (hyp ih)
+                       lr
+                       lhs
+                       ((inst b b) (inst c c))
+                       ((steps ((rewrite (premise hrest) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+                     refl))))))
+          (case PWord
+            (a2 v)
+            (chain
+              (have hp (= p (PWord a2 v))
+                (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+              (have hpu
+                (=
+                  (if (int_eq c a2) True
+                  (if (int_eq c (+ a2 1)) True
+                  (if (int_eq c (+ a2 2)) True
+                  (if (int_eq c (+ a2 3)) True
+                  (xp_tb rest c)))))
+                  False)
+                (steps
+                  ((rewrite (premise 0) rl rhs true ())
+                   (rewrite (premise hp) lr rhs true ())
+                   (unfold xp_tb rhs)
+                   (reduce rhs))
+                  refl))
+              (steps
+                ((rewrite (premise hp) lr lhs true ())
+                 (unfold papp lhs)
+                 (reduce lhs)
+                 (unfold xp_tb lhs)
+                 (reduce lhs)))
+              (case-on (int_eq c a2) Bool
+                ((case True
+                   (chain
+                     (have h0 (= (int_eq c a2) True)
+                       (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                     (have hff (= True False)
+                       (steps
+                         ((rewrite (premise hpu) rl rhs true ())
+                          (rewrite (premise h0) lr rhs true ())
+                          (reduce rhs))
+                         refl))
+                     (absurd (premise hff))))
+                 (case False
+                   (chain
+                     (have h0f (= (int_eq c a2) False)
+                       (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                     (steps
+                       ((rewrite (premise h0f) lr lhs true ()) (reduce lhs)))
+                     (case-on (int_eq c (+ a2 1)) Bool
+                       ((case True
+                          (chain
+                            (have h1 (= (int_eq c (+ a2 1)) True)
+                              (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                            (have hff (= True False)
+                              (steps
+                                ((rewrite (premise hpu) rl rhs true ())
+                                 (rewrite (premise h0f) lr rhs true ())
+                                 (reduce rhs)
+                                 (rewrite (premise h1) lr rhs true ())
+                                 (reduce rhs))
+                                refl))
+                            (absurd (premise hff))))
+                        (case False
+                          (chain
+                            (have h1f (= (int_eq c (+ a2 1)) False)
+                              (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                            (steps
+                              ((rewrite (premise h1f) lr lhs true ())
+                               (reduce lhs)))
+                            (case-on (int_eq c (+ a2 2)) Bool
+                              ((case True
+                                 (chain
+                                   (have h2 (= (int_eq c (+ a2 2)) True)
+                                     (steps
+                                       ((rewrite (hyp 0) lr lhs true ()))
+                                       refl))
+                                   (have hff (= True False)
+                                     (steps
+                                       ((rewrite (premise hpu) rl rhs true ())
+                                        (rewrite (premise h0f) lr rhs true ())
+                                        (reduce rhs)
+                                        (rewrite (premise h1f) lr rhs true ())
+                                        (reduce rhs)
+                                        (rewrite (premise h2) lr rhs true ())
+                                        (reduce rhs))
+                                       refl))
+                                   (absurd (premise hff))))
+                               (case False
+                                 (chain
+                                   (have h2f (= (int_eq c (+ a2 2)) False)
+                                     (steps
+                                       ((rewrite (hyp 0) lr lhs true ()))
+                                       refl))
+                                   (steps
+                                     ((rewrite (premise h2f) lr lhs true ())
+                                      (reduce lhs)))
+                                   (case-on (int_eq c (+ a2 3)) Bool
+                                     ((case True
+                                        (chain
+                                          (have h3 (= (int_eq c (+ a2 3)) True)
+                                            (steps
+                                              ((rewrite (hyp 0) lr lhs true ()))
+                                              refl))
+                                          (have hff (= True False)
+                                            (steps
+                                              ((rewrite
+                                                 (premise hpu)
+                                                 rl
+                                                 rhs
+                                                 true
+                                                 ())
+                                               (rewrite
+                                                 (premise h0f)
+                                                 lr
+                                                 rhs
+                                                 true
+                                                 ())
+                                               (reduce rhs)
+                                               (rewrite
+                                                 (premise h1f)
+                                                 lr
+                                                 rhs
+                                                 true
+                                                 ())
+                                               (reduce rhs)
+                                               (rewrite
+                                                 (premise h2f)
+                                                 lr
+                                                 rhs
+                                                 true
+                                                 ())
+                                               (reduce rhs)
+                                               (rewrite
+                                                 (premise h3)
+                                                 lr
+                                                 rhs
+                                                 true
+                                                 ())
+                                               (reduce rhs))
+                                              refl))
+                                          (absurd (premise hff))))
+                                      (case False
+                                        (chain
+                                          (have h3f
+                                            (= (int_eq c (+ a2 3)) False)
+                                            (steps
+                                              ((rewrite (hyp 0) lr lhs true ()))
+                                              refl))
+                                          (have hrest (= (xp_tb rest c) False)
+                                            (steps
+                                              ((rewrite
+                                                 (premise hpu)
+                                                 rl
+                                                 rhs
+                                                 true
+                                                 ())
+                                               (rewrite
+                                                 (premise h0f)
+                                                 lr
+                                                 rhs
+                                                 true
+                                                 ())
+                                               (reduce rhs)
+                                               (rewrite
+                                                 (premise h1f)
+                                                 lr
+                                                 rhs
+                                                 true
+                                                 ())
+                                               (reduce rhs)
+                                               (rewrite
+                                                 (premise h2f)
+                                                 lr
+                                                 rhs
+                                                 true
+                                                 ())
+                                               (reduce rhs)
+                                               (rewrite
+                                                 (premise h3f)
+                                                 lr
+                                                 rhs
+                                                 true
+                                                 ())
+                                               (reduce rhs))
+                                              refl))
+                                          (steps
+                                            ((rewrite
+                                               (premise h3f)
+                                               lr
+                                               lhs
+                                               true
+                                               ())
+                                             (reduce lhs)))
+                                          (rewrite-with
+                                            (hyp ih)
+                                            lr
+                                            lhs
+                                            ((inst b b) (inst c c))
+                                            ((steps
+                                               ((rewrite
+                                                  (premise hrest)
+                                                  lr
+                                                  lhs
+                                                  true
+                                                  ()))
+                                               refl)
+                                             (steps
+                                               ((rewrite
+                                                  (premise 1)
+                                                  lr
+                                                  lhs
+                                                  true
+                                                  ()))
+                                               refl)))
+                                          refl))))))))))))))))))))))))
+
+(claim xhg_pw1b
+  (goal ((d Int) (v Int) (c Int)) ((= (lt c d) True))
+    (= (xp_tb (list (PWord d v)) c) False))
+  (chain
+    (steps ((unfold xp_tb lhs) (reduce lhs) (unfold xp_tb lhs) (reduce lhs)))
+    (case-on (int_eq c d) Bool
+      ((case True
+         (chain
+           (have h0 (= (int_eq c d) True)
+             (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           (have hltf (= (lt c d) False) (by arith (list 1 0 1)))
+           (have hff (= True False)
+             (steps
+               ((rewrite (premise 0) rl lhs true ())
+                (rewrite (premise hltf) lr lhs true ()))
+               refl))
+           (absurd (premise hff))))
+       (case False
+         (chain
+           (have h0f (= (int_eq c d) False)
+             (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           (steps ((rewrite (premise h0f) lr lhs true ()) (reduce lhs)))
+           (case-on (int_eq c (+ d 1)) Bool
+             ((case True
+                (chain
+                  (have h1 (= (int_eq c (+ d 1)) True)
+                    (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                  (have hltf (= (lt c d) False) (by arith (list 1 0 0 1)))
+                  (have hff (= True False)
+                    (steps
+                      ((rewrite (premise 0) rl lhs true ())
+                       (rewrite (premise hltf) lr lhs true ()))
+                      refl))
+                  (absurd (premise hff))))
+              (case False
+                (chain
+                  (have h1f (= (int_eq c (+ d 1)) False)
+                    (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                  (steps ((rewrite (premise h1f) lr lhs true ()) (reduce lhs)))
+                  (case-on (int_eq c (+ d 2)) Bool
+                    ((case True
+                       (chain
+                         (have h2 (= (int_eq c (+ d 2)) True)
+                           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                         (have hltf (= (lt c d) False)
+                           (by arith (list 1 0 0 0 1)))
+                         (have hff (= True False)
+                           (steps
+                             ((rewrite (premise 0) rl lhs true ())
+                              (rewrite (premise hltf) lr lhs true ()))
+                             refl))
+                         (absurd (premise hff))))
+                     (case False
+                       (chain
+                         (have h2f (= (int_eq c (+ d 2)) False)
+                           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                         (steps
+                           ((rewrite (premise h2f) lr lhs true ()) (reduce lhs)))
+                         (case-on (int_eq c (+ d 3)) Bool
+                           ((case True
+                              (chain
+                                (have h3 (= (int_eq c (+ d 3)) True)
+                                  (steps
+                                    ((rewrite (hyp 0) lr lhs true ()))
+                                    refl))
+                                (have hltf (= (lt c d) False)
+                                  (by arith (list 1 0 0 0 0 1)))
+                                (have hff (= True False)
+                                  (steps
+                                    ((rewrite (premise 0) rl lhs true ())
+                                     (rewrite (premise hltf) lr lhs true ()))
+                                    refl))
+                                (absurd (premise hff))))
+                            (case False
+                              (chain
+                                (have h3f (= (int_eq c (+ d 3)) False)
+                                  (steps
+                                    ((rewrite (hyp 0) lr lhs true ()))
+                                    refl))
+                                (steps
+                                  ((rewrite (premise h3f) lr lhs true ())
+                                   (reduce lhs))
+                                  refl)))))))))))))))))))
+
+(claim xhg_pw1a
+  (goal ((d Int) (v Int) (c Int)) ((= (le (+ d 4) c) True))
+    (= (xp_tb (list (PWord d v)) c) False))
+  (chain
+    (steps ((unfold xp_tb lhs) (reduce lhs) (unfold xp_tb lhs) (reduce lhs)))
+    (case-on (int_eq c d) Bool
+      ((case True
+         (chain
+           (have h0 (= (int_eq c d) True)
+             (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           (have hlef (= (le (+ d 4) c) False) (by arith (list 1 0 -1)))
+           (have hff (= True False)
+             (steps
+               ((rewrite (premise 0) rl lhs true ())
+                (rewrite (premise hlef) lr lhs true ()))
+               refl))
+           (absurd (premise hff))))
+       (case False
+         (chain
+           (have h0f (= (int_eq c d) False)
+             (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           (steps ((rewrite (premise h0f) lr lhs true ()) (reduce lhs)))
+           (case-on (int_eq c (+ d 1)) Bool
+             ((case True
+                (chain
+                  (have h1 (= (int_eq c (+ d 1)) True)
+                    (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                  (have hlef (= (le (+ d 4) c) False)
+                    (by arith (list 1 0 0 -1)))
+                  (have hff (= True False)
+                    (steps
+                      ((rewrite (premise 0) rl lhs true ())
+                       (rewrite (premise hlef) lr lhs true ()))
+                      refl))
+                  (absurd (premise hff))))
+              (case False
+                (chain
+                  (have h1f (= (int_eq c (+ d 1)) False)
+                    (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                  (steps ((rewrite (premise h1f) lr lhs true ()) (reduce lhs)))
+                  (case-on (int_eq c (+ d 2)) Bool
+                    ((case True
+                       (chain
+                         (have h2 (= (int_eq c (+ d 2)) True)
+                           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                         (have hlef (= (le (+ d 4) c) False)
+                           (by arith (list 1 0 0 0 -1)))
+                         (have hff (= True False)
+                           (steps
+                             ((rewrite (premise 0) rl lhs true ())
+                              (rewrite (premise hlef) lr lhs true ()))
+                             refl))
+                         (absurd (premise hff))))
+                     (case False
+                       (chain
+                         (have h2f (= (int_eq c (+ d 2)) False)
+                           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                         (steps
+                           ((rewrite (premise h2f) lr lhs true ()) (reduce lhs)))
+                         (case-on (int_eq c (+ d 3)) Bool
+                           ((case True
+                              (chain
+                                (have h3 (= (int_eq c (+ d 3)) True)
+                                  (steps
+                                    ((rewrite (hyp 0) lr lhs true ()))
+                                    refl))
+                                (have hlef (= (le (+ d 4) c) False)
+                                  (by arith (list 1 0 0 0 0 -1)))
+                                (have hff (= True False)
+                                  (steps
+                                    ((rewrite (premise 0) rl lhs true ())
+                                     (rewrite (premise hlef) lr lhs true ()))
+                                    refl))
+                                (absurd (premise hff))))
+                            (case False
+                              (chain
+                                (have h3f (= (int_eq c (+ d 3)) False)
+                                  (steps
+                                    ((rewrite (hyp 0) lr lhs true ()))
+                                    refl))
+                                (steps
+                                  ((rewrite (premise h3f) lr lhs true ())
+                                   (reduce lhs))
+                                  refl)))))))))))))))))))
+
+;; --- per-writer byte footprints (ONE pair per writer, all observations ride them) --
+
+(claim xhg_cwf_b
+  (goal ((m Mem) (s Int) (d Int) (k Nat) (c Int)) ((= (lt c d) True))
+    (= (xp_tb (cwp m s d k) c) False))
+  (induct k
+    ((case Z
+       (steps
+         ((unfold cwp lhs) (reduce lhs) (unfold xp_tb lhs) (reduce lhs))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (have h1
+           (= (xp_tb (cwp (wput m d (wget m s)) (+ s 4) (+ d 4) k2) c) False)
+           (rewrite-with
+             (hyp ih)
+             lr
+             lhs
+             ((inst m (wput m d (wget m s)))
+              (inst s (+ s 4))
+              (inst d (+ d 4))
+              (inst c c))
+             ((by arith (list 1 1)))
+             refl))
+         (have h2 (= (xp_tb (list (PWord d (wget m s))) c) False)
+           (rewrite-with
+             (lemma xhg_pw1b)
+             lr
+             lhs
+             ((inst d d) (inst v (wget m s)) (inst c c))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (steps ((unfold cwp lhs) (reduce lhs)))
+         (rewrite-with
+           (lemma xhg_tbapp)
+           lr
+           lhs
+           ((inst a (cwp (wput m d (wget m s)) (+ s 4) (+ d 4) k2))
+            (inst b (list (PWord d (wget m s))))
+            (inst c c))
+           ((steps ((rewrite (premise h1) lr lhs true ())) refl)
+            (steps ((rewrite (premise h2) lr lhs true ())) refl)))
+         refl)))))
+
+(claim xhg_cwf_a
+  (goal ((m Mem) (s Int) (d Int) (k Nat) (c Int))
+    ((= (le (+ d (* 4 (int_of_nat k))) c) True))
+    (= (xp_tb (cwp m s d k) c) False))
+  (induct k
+    ((case Z
+       (steps
+         ((unfold cwp lhs) (reduce lhs) (unfold xp_tb lhs) (reduce lhs))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (have hsucc (= (int_of_nat (S k2)) (+ 1 (int_of_nat k2)))
+           (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+         (have hp0b (= (le (+ d (* 4 (+ 1 (int_of_nat k2)))) c) True)
+           (steps
+             ((rewrite (premise hsucc) rl lhs true ())
+              (rewrite (premise 0) lr lhs true ()))
+             refl))
+         (have hnn (= (le 0 (int_of_nat k2)) True)
+           (steps ((rewrite (lemma int_of_nat_nonneg) lr lhs true ())) refl))
+         (have h1
+           (= (xp_tb (cwp (wput m d (wget m s)) (+ s 4) (+ d 4) k2) c) False)
+           (rewrite-with
+             (hyp ih)
+             lr
+             lhs
+             ((inst m (wput m d (wget m s)))
+              (inst s (+ s 4))
+              (inst d (+ d 4))
+              (inst c c))
+             ((by arith (list 1 0 0 1 0)))
+             refl))
+         (have h2 (= (xp_tb (list (PWord d (wget m s))) c) False)
+           (rewrite-with
+             (lemma xhg_pw1a)
+             lr
+             lhs
+             ((inst d d) (inst v (wget m s)) (inst c c))
+             ((by arith (list 1 0 0 1 4 0)))
+             refl))
+         (steps ((unfold cwp lhs) (reduce lhs)))
+         (rewrite-with
+           (lemma xhg_tbapp)
+           lr
+           lhs
+           ((inst a (cwp (wput m d (wget m s)) (+ s 4) (+ d 4) k2))
+            (inst b (list (PWord d (wget m s))))
+            (inst c c))
+           ((steps ((rewrite (premise h1) lr lhs true ())) refl)
+            (steps ((rewrite (premise h2) lr lhs true ())) refl)))
+         refl)))))
+
+(claim xhg_sdf_b
+  (goal ((m Mem) (p Int) (k Nat) (c Int)) ((= (lt c p) True))
+    (= (xp_tb (sdp m p k) c) False))
+  (induct k
+    ((case Z
+       (steps
+         ((unfold sdp lhs) (reduce lhs) (unfold xp_tb lhs) (reduce lhs))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (have h1 (= (xp_tb (sdp (wput m p (sched_w m p)) (+ p 4) k2) c) False)
+           (rewrite-with
+             (hyp ih)
+             lr
+             lhs
+             ((inst m (wput m p (sched_w m p))) (inst p (+ p 4)) (inst c c))
+             ((by arith (list 1 1)))
+             refl))
+         (have h2 (= (xp_tb (list (PWord p (sched_w m p))) c) False)
+           (rewrite-with
+             (lemma xhg_pw1b)
+             lr
+             lhs
+             ((inst d p) (inst v (sched_w m p)) (inst c c))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (steps ((unfold sdp lhs) (reduce lhs)))
+         (rewrite-with
+           (lemma xhg_tbapp)
+           lr
+           lhs
+           ((inst a (sdp (wput m p (sched_w m p)) (+ p 4) k2))
+            (inst b (list (PWord p (sched_w m p))))
+            (inst c c))
+           ((steps ((rewrite (premise h1) lr lhs true ())) refl)
+            (steps ((rewrite (premise h2) lr lhs true ())) refl)))
+         refl)))))
+
+(claim xhg_sdf_a
+  (goal ((m Mem) (p Int) (k Nat) (c Int))
+    ((= (le (+ p (* 4 (int_of_nat k))) c) True))
+    (= (xp_tb (sdp m p k) c) False))
+  (induct k
+    ((case Z
+       (steps
+         ((unfold sdp lhs) (reduce lhs) (unfold xp_tb lhs) (reduce lhs))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (have hsucc (= (int_of_nat (S k2)) (+ 1 (int_of_nat k2)))
+           (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+         (have hp0b (= (le (+ p (* 4 (+ 1 (int_of_nat k2)))) c) True)
+           (steps
+             ((rewrite (premise hsucc) rl lhs true ())
+              (rewrite (premise 0) lr lhs true ()))
+             refl))
+         (have hnn (= (le 0 (int_of_nat k2)) True)
+           (steps ((rewrite (lemma int_of_nat_nonneg) lr lhs true ())) refl))
+         (have h1 (= (xp_tb (sdp (wput m p (sched_w m p)) (+ p 4) k2) c) False)
+           (rewrite-with
+             (hyp ih)
+             lr
+             lhs
+             ((inst m (wput m p (sched_w m p))) (inst p (+ p 4)) (inst c c))
+             ((by arith (list 1 0 0 1 0)))
+             refl))
+         (have h2 (= (xp_tb (list (PWord p (sched_w m p))) c) False)
+           (rewrite-with
+             (lemma xhg_pw1a)
+             lr
+             lhs
+             ((inst d p) (inst v (sched_w m p)) (inst c c))
+             ((by arith (list 1 0 0 1 4 0)))
+             refl))
+         (steps ((unfold sdp lhs) (reduce lhs)))
+         (rewrite-with
+           (lemma xhg_tbapp)
+           lr
+           lhs
+           ((inst a (sdp (wput m p (sched_w m p)) (+ p 4) k2))
+            (inst b (list (PWord p (sched_w m p))))
+            (inst c c))
+           ((steps ((rewrite (premise h1) lr lhs true ())) refl)
+            (steps ((rewrite (premise h2) lr lhs true ())) refl)))
+         refl)))))
+
+(claim xhg_h8gf_b
+  (goal ((m Mem) (a Int) (vs (List Int)) (c Int)) ((= (lt c a) True))
+    (= (xp_tb (h8p_go m a vs) c) False))
+  (induct vs
+    ((case Nil
+       (steps
+         ((unfold h8p_go lhs) (reduce lhs) (unfold xp_tb lhs) (reduce lhs))
+         refl))
+     (case Cons
+       (x vt)
+       (chain
+         (have h1
+           (=
+             (xp_tb
+               (h8p_go (wput m a (mod (+ (wget m a) x) 4294967296)) (+ a 4) vt)
+               c)
+             False)
+           (rewrite-with
+             (hyp ih)
+             lr
+             lhs
+             ((inst m (wput m a (mod (+ (wget m a) x) 4294967296)))
+              (inst a (+ a 4))
+              (inst c c))
+             ((by arith (list 1 1)))
+             refl))
+         (have h2
+           (=
+             (xp_tb (list (PWord a (mod (+ (wget m a) x) 4294967296))) c)
+             False)
+           (rewrite-with
+             (lemma xhg_pw1b)
+             lr
+             lhs
+             ((inst d a) (inst v (mod (+ (wget m a) x) 4294967296)) (inst c c))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (steps ((unfold h8p_go lhs) (reduce lhs)))
+         (rewrite-with
+           (lemma xhg_tbapp)
+           lr
+           lhs
+           ((inst
+              a
+              (h8p_go (wput m a (mod (+ (wget m a) x) 4294967296)) (+ a 4) vt))
+            (inst b (list (PWord a (mod (+ (wget m a) x) 4294967296))))
+            (inst c c))
+           ((steps ((rewrite (premise h1) lr lhs true ())) refl)
+            (steps ((rewrite (premise h2) lr lhs true ())) refl)))
+         refl)))))
+
+(claim xhg_h8gf_a
+  (goal ((m Mem) (a Int) (vs (List Int)) (c Int))
+    ((= (le (+ a (* 4 (ilen vs))) c) True))
+    (= (xp_tb (h8p_go m a vs) c) False))
+  (induct vs
+    ((case Nil
+       (steps
+         ((unfold h8p_go lhs) (reduce lhs) (unfold xp_tb lhs) (reduce lhs))
+         refl))
+     (case Cons
+       (x vt)
+       (chain
+         (have hlen (= (ilen (Cons x vt)) (+ 1 (ilen vt)))
+           (steps ((unfold ilen lhs) (reduce lhs)) refl))
+         (have hp0b (= (le (+ a (* 4 (+ 1 (ilen vt)))) c) True)
+           (steps
+             ((rewrite (premise hlen) rl lhs true ())
+              (rewrite (premise 0) lr lhs true ()))
+             refl))
+         (have hnn (= (le 0 (ilen vt)) True)
+           (steps ((rewrite (lemma ilen_nonneg) lr lhs true ())) refl))
+         (have h1
+           (=
+             (xp_tb
+               (h8p_go (wput m a (mod (+ (wget m a) x) 4294967296)) (+ a 4) vt)
+               c)
+             False)
+           (rewrite-with
+             (hyp ih)
+             lr
+             lhs
+             ((inst m (wput m a (mod (+ (wget m a) x) 4294967296)))
+              (inst a (+ a 4))
+              (inst c c))
+             ((by arith (list 1 0 0 1 0)))
+             refl))
+         (have h2
+           (=
+             (xp_tb (list (PWord a (mod (+ (wget m a) x) 4294967296))) c)
+             False)
+           (rewrite-with
+             (lemma xhg_pw1a)
+             lr
+             lhs
+             ((inst d a) (inst v (mod (+ (wget m a) x) 4294967296)) (inst c c))
+             ((by arith (list 1 0 0 1 4 0)))
+             refl))
+         (steps ((unfold h8p_go lhs) (reduce lhs)))
+         (rewrite-with
+           (lemma xhg_tbapp)
+           lr
+           lhs
+           ((inst
+              a
+              (h8p_go (wput m a (mod (+ (wget m a) x) 4294967296)) (+ a 4) vt))
+            (inst b (list (PWord a (mod (+ (wget m a) x) 4294967296))))
+            (inst c c))
+           ((steps ((rewrite (premise h1) lr lhs true ())) refl)
+            (steps ((rewrite (premise h2) lr lhs true ())) refl)))
+         refl)))))
+
+(claim xhg_h8f_b
+  (goal ((m Mem) (hb Int) (st H8) (c Int)) ((= (lt c hb) True))
+    (= (xp_tb (h8p m hb st) c) False))
+  (chain
+    (steps ((unfold h8p lhs)))
+    (rewrite-with
+      (lemma xhg_h8gf_b)
+      lr
+      lhs
+      ((inst m m)
+       (inst a hb)
+       (inst
+         vs
+         (list
+           (h8a st)
+           (h8b st)
+           (h8c st)
+           (h8d st)
+           (h8e st)
+           (h8f st)
+           (h8g st)
+           (h8h st)))
+       (inst c c))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    refl))
+
+(claim xhg_h8f_a
+  (goal ((m Mem) (hb Int) (st H8) (c Int)) ((= (le (+ hb 32) c) True))
+    (= (xp_tb (h8p m hb st) c) False))
+  (chain
+    (have hil
+      (=
+        (ilen
+          (list
+            (h8a st)
+            (h8b st)
+            (h8c st)
+            (h8d st)
+            (h8e st)
+            (h8f st)
+            (h8g st)
+            (h8h st)))
+        8)
+      (steps ((compute lhs)) refl))
+    (steps ((unfold h8p lhs)))
+    (rewrite-with
+      (lemma xhg_h8gf_a)
+      lr
+      lhs
+      ((inst m m)
+       (inst a hb)
+       (inst
+         vs
+         (list
+           (h8a st)
+           (h8b st)
+           (h8c st)
+           (h8d st)
+           (h8e st)
+           (h8f st)
+           (h8g st)
+           (h8h st)))
+       (inst c c))
+      ((steps
+         ((rewrite (premise hil) lr lhs true ())
+          (compute lhs)
+          (rewrite (premise 0) lr lhs true ()))
+         refl)))
+    refl))
+
+;; --- the generic word-observation frame law ----------------------------------------
+
+;; a wget past a patch list touching none of its four bytes is the base
+;; read — EVERY (writer × wget) pair below is this law + that writer's
+;; footprint lemma, nothing else
+(claim xhg_wgetf
+  (goal ((m Mem) (ps (List IPatch)) (p Int))
+    ((= (xp_tb ps p) False)
+     (= (xp_tb ps (+ p 1)) False)
+     (= (xp_tb ps (+ p 2)) False)
+     (= (xp_tb ps (+ p 3)) False))
+    (= (wget (xp_mem m ps) p) (wget m p)))
+  (chain
+    (steps
+      ((unfold wget both)
+       (reduce both)
+       (rewrite (lemma xpg_mgetfid) lr lhs true ())))
+    (rewrite-with
+      (lemma xpg_tbf)
+      lr
+      lhs
+      ((inst m m) (inst ps ps) (inst b p))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma xpg_tbf)
+      lr
+      lhs
+      ((inst m m) (inst ps ps) (inst b (+ p 1)))
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma xpg_tbf)
+      lr
+      lhs
+      ((inst m m) (inst ps ps) (inst b (+ p 2)))
+      ((steps ((rewrite (premise 2) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma xpg_tbf)
+      lr
+      lhs
+      ((inst m m) (inst ps ps) (inst b (+ p 3)))
+      ((steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    refl))
+
+;; --- THE DEMONSTRATIONS: the ish_* pair-lemma statements, re-derived ---------------
+;; Each is collapse + frame + footprint — a few-line citation chain where
+;; the hand family spends a bespoke induction per (observation × writer).
+
+;; ish_wget_copy_below's statement
+(claim xhd_wget_copy_below
+  (goal ((m Mem) (s Int) (d Int) (c Int) (k Nat)) ((= (lt (+ c 3) d) True))
+    (= (wget (copy_wmem m s d k) c) (wget m c)))
+  (chain
+    (steps ((rewrite (lemma xhg_cwc) lr lhs true ())))
+    (rewrite-with
+      (lemma xhg_wgetf)
+      lr
+      lhs
+      ((inst m m) (inst ps (cwp m s d k)) (inst p c))
+      ((rewrite-with
+         (lemma xhg_cwf_b)
+         lr
+         lhs
+         ((inst m m) (inst s s) (inst d d) (inst k k) (inst c c))
+         ((by arith (list 1 1)))
+         refl)
+       (rewrite-with
+         (lemma xhg_cwf_b)
+         lr
+         lhs
+         ((inst m m) (inst s s) (inst d d) (inst k k) (inst c (+ c 1)))
+         ((by arith (list 1 1)))
+         refl)
+       (rewrite-with
+         (lemma xhg_cwf_b)
+         lr
+         lhs
+         ((inst m m) (inst s s) (inst d d) (inst k k) (inst c (+ c 2)))
+         ((by arith (list 1 1)))
+         refl)
+       (rewrite-with
+         (lemma xhg_cwf_b)
+         lr
+         lhs
+         ((inst m m) (inst s s) (inst d d) (inst k k) (inst c (+ c 3)))
+         ((by arith (list 1 1)))
+         refl)))
+    refl))
+
+;; ish_wget_sched_below's statement
+(claim xhd_wget_sched_below
+  (goal ((m Mem) (p Int) (c Int) (k Nat)) ((= (lt (+ c 3) p) True))
+    (= (wget (sched_mem m p k) c) (wget m c)))
+  (chain
+    (steps ((rewrite (lemma xhg_sdc) lr lhs true ())))
+    (rewrite-with
+      (lemma xhg_wgetf)
+      lr
+      lhs
+      ((inst m m) (inst ps (sdp m p k)) (inst p c))
+      ((rewrite-with
+         (lemma xhg_sdf_b)
+         lr
+         lhs
+         ((inst m m) (inst p p) (inst k k) (inst c c))
+         ((by arith (list 1 1)))
+         refl)
+       (rewrite-with
+         (lemma xhg_sdf_b)
+         lr
+         lhs
+         ((inst m m) (inst p p) (inst k k) (inst c (+ c 1)))
+         ((by arith (list 1 1)))
+         refl)
+       (rewrite-with
+         (lemma xhg_sdf_b)
+         lr
+         lhs
+         ((inst m m) (inst p p) (inst k k) (inst c (+ c 2)))
+         ((by arith (list 1 1)))
+         refl)
+       (rewrite-with
+         (lemma xhg_sdf_b)
+         lr
+         lhs
+         ((inst m m) (inst p p) (inst k k) (inst c (+ c 3)))
+         ((by arith (list 1 1)))
+         refl)))
+    refl))
+
+;; the K-table shape: reads ABOVE the whole schedule window
+(claim xhd_wget_sched_above
+  (goal ((m Mem) (p Int) (c Int) (k Nat))
+    ((= (le (+ p (* 4 (int_of_nat k))) c) True))
+    (= (wget (sched_mem m p k) c) (wget m c)))
+  (chain
+    (steps ((rewrite (lemma xhg_sdc) lr lhs true ())))
+    (rewrite-with
+      (lemma xhg_wgetf)
+      lr
+      lhs
+      ((inst m m) (inst ps (sdp m p k)) (inst p c))
+      ((rewrite-with
+         (lemma xhg_sdf_a)
+         lr
+         lhs
+         ((inst m m) (inst p p) (inst k k) (inst c c))
+         ((by arith (list 1 1)))
+         refl)
+       (rewrite-with
+         (lemma xhg_sdf_a)
+         lr
+         lhs
+         ((inst m m) (inst p p) (inst k k) (inst c (+ c 1)))
+         ((by arith (list 1 1)))
+         refl)
+       (rewrite-with
+         (lemma xhg_sdf_a)
+         lr
+         lhs
+         ((inst m m) (inst p p) (inst k k) (inst c (+ c 2)))
+         ((by arith (list 1 1)))
+         refl)
+       (rewrite-with
+         (lemma xhg_sdf_a)
+         lr
+         lhs
+         ((inst m m) (inst p p) (inst k k) (inst c (+ c 3)))
+         ((by arith (list 1 1)))
+         refl)))
+    refl))
+
+;; ish_wget_h8add_below's statement
+(claim xhd_wget_h8add_below
+  (goal ((m Mem) (hb Int) (st H8) (c Int)) ((= (lt (+ c 3) hb) True))
+    (= (wget (h8add_mem m hb st) c) (wget m c)))
+  (chain
+    (steps ((rewrite (lemma xhg_h8c) lr lhs true ())))
+    (rewrite-with
+      (lemma xhg_wgetf)
+      lr
+      lhs
+      ((inst m m) (inst ps (h8p m hb st)) (inst p c))
+      ((rewrite-with
+         (lemma xhg_h8f_b)
+         lr
+         lhs
+         ((inst m m) (inst hb hb) (inst st st) (inst c c))
+         ((by arith (list 1 1)))
+         refl)
+       (rewrite-with
+         (lemma xhg_h8f_b)
+         lr
+         lhs
+         ((inst m m) (inst hb hb) (inst st st) (inst c (+ c 1)))
+         ((by arith (list 1 1)))
+         refl)
+       (rewrite-with
+         (lemma xhg_h8f_b)
+         lr
+         lhs
+         ((inst m m) (inst hb hb) (inst st st) (inst c (+ c 2)))
+         ((by arith (list 1 1)))
+         refl)
+       (rewrite-with
+         (lemma xhg_h8f_b)
+         lr
+         lhs
+         ((inst m m) (inst hb hb) (inst st st) (inst c (+ c 3)))
+         ((by arith (list 1 1)))
+         refl)))
+    refl))
