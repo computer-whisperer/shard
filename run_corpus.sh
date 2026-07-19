@@ -133,6 +133,7 @@ TARGETS=(
   tools/impgen/fixtures/imp_loop.shard
   models/imp/probes/imp_wasm_loop_bridge.shard
   models/imp/probes/imp_x86_loop_bridge.shard
+  models/imp/probes/vx86_acc_probe.shard
   tools/impgen/fixtures/impgen_wasm_out.shard
   tools/impgen/fixtures/impgen_x86_out.shard
   tools/impgen/fixtures/impgen_wasm_loop_out.shard
