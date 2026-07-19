@@ -342,6 +342,48 @@
     (None None)
     ((Some (Pair sd qs)) (Some (Compute sd qs)))))
 
+;; A standalone `(stop FN FN…)` argument (change / exact-conv's optional
+;; tail) — an empty (stop) is refused (it would silently be the unfenced
+;; form), mirroring p_side_stops.
+(fn p_stop_list ((s SExpr)) (Option (List QName))
+  (match s
+    ((SList (Cons (SSym sh) names))
+     (if (sym_eq sh (quote stop))
+       (match names
+         (Nil None)
+         (_ (p_qnames names)))
+       None))
+    (_ None)))
+
+;; (change SIDE OCC TERM) | (change SIDE OCC TERM (stop FN FN…)) —
+;; OCC = true | false | (at K), the rewrite spelling.
+(fn p_change_step ((args (List SExpr)) (ctors (List Symbol))) (Option Step)
+  (match args
+    ((Cons sideS (Cons occS (Cons termS Nil)))
+     (match (p_side sideS)
+       (None None)
+       ((Some sd)
+        (match (p_occ occS)
+          (None None)
+          ((Some occ)
+           (match (p_term termS ctors)
+             (None None)
+             ((Some t) (Some (Change sd occ t Nil)))))))))
+    ((Cons sideS (Cons occS (Cons termS (Cons stopS Nil))))
+     (match (p_side sideS)
+       (None None)
+       ((Some sd)
+        (match (p_occ occS)
+          (None None)
+          ((Some occ)
+           (match (p_term termS ctors)
+             (None None)
+             ((Some t)
+              (match (p_stop_list stopS)
+                (None None)
+                ((Some qs) (Some (Change sd occ t qs)))))))))))
+    (_ None)))
+
 (fn p_simp_step ((args (List SExpr))) (Option Step)
   (match (p_side_stops args)
     (None None)
@@ -362,6 +404,7 @@
   (if (sym_eq h (quote rewrite)) (p_rewrite_step args ctors)
   (if (sym_eq h (quote compute)) (p_compute_step args)
   (if (sym_eq h (quote simp)) (p_simp_step args)
+  (if (sym_eq h (quote change)) (p_change_step args ctors)
   (if (sym_eq h (quote inspect))
     (match args
       (Nil (Some Inspect))
@@ -371,7 +414,7 @@
        (match (p_side sideS)
          (None None)
          ((Some sd) (if (sym_eq h (quote reduce)) (Some (Reduce sd)) None))))
-      (_ None))))))))
+      (_ None)))))))))
 
 (fn p_step ((s SExpr) (ctors (List Symbol))) (Option Step)
   (match (p_form s)
@@ -579,7 +622,9 @@
                              (None None)
                              ((Some sub) (Some (Inject ref n sub)))))))))
                     (_ None))
-                  None)))))))))))))))))
+                (if (sym_eq h (quote exact-conv))
+                  (p_exact_conv args ctors type_names)
+                  None))))))))))))))))))
        (_ None)))
     (_ None)))
 
@@ -658,6 +703,55 @@
                              (Some
                                (RewriteWith ref dir sd OccFirst insts subs cont)))))))
                       (_ None)))))))))))))
+    (_ None)))
+
+;; exact-conv: (exact-conv EQREF (INST…) (PROOF…))
+;;         or: (exact-conv EQREF (INST…) (PROOF…) (stop FN FN…))
+;; A CLOSING form — no continuation. The INST list is the mandatory full
+;; instantiation (the checker refuses a citation with any unpinned binder);
+;; the PROOF list discharges the cited premises like rewrite-with's; the
+;; optional (stop …) fences both normalizations. Arity disambiguates, two
+;; flat cascades (the file's parse style, see p_rewrite_with).
+(fn p_exact_conv
+  ((args (List SExpr)) (ctors (List Symbol)) (type_names (List Symbol)))
+  (Option Proof)
+  (measure (struct args))
+  (match args
+    ((Cons refS (Cons instsS (Cons subsS Nil)))
+     (match (p_eqref refS)
+       (None None)
+       ((Some ref)
+        (match (p_items instsS)
+          (None None)
+          ((Some instList)
+           (match (p_insts instList ctors)
+             (None None)
+             ((Some insts)
+              (match subsS
+                ((SList subList)
+                 (match (p_proofs subList ctors type_names)
+                   (None None)
+                   ((Some subs) (Some (ExactConv ref insts subs Nil)))))
+                (_ None)))))))))
+    ((Cons refS (Cons instsS (Cons subsS (Cons stopS Nil))))
+     (match (p_eqref refS)
+       (None None)
+       ((Some ref)
+        (match (p_items instsS)
+          (None None)
+          ((Some instList)
+           (match (p_insts instList ctors)
+             (None None)
+             ((Some insts)
+              (match subsS
+                ((SList subList)
+                 (match (p_proofs subList ctors type_names)
+                   (None None)
+                   ((Some subs)
+                    (match (p_stop_list stopS)
+                      (None None)
+                      ((Some qs) (Some (ExactConv ref insts subs qs)))))))
+                (_ None)))))))))
     (_ None)))
 
 (fn p_proofs

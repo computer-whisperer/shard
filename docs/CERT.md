@@ -333,8 +333,20 @@ point.
 - **DC1 — witness grammar granularity per pass**: OPEN; discovered
   by A1 on the straight-line family (start minimal: block
   correspondence + register choice; grow only on demand).
-- **DC2 — `change`/`exact-conv` surface spelling**: OPEN until A3;
-  the two-form split itself is ratified (§3).
+- **DC2 — `change`/`exact-conv` surface spelling**: provisionally
+  DECIDED at A3 rung (c) (the naive forms, landed; final adjudication
+  rides A3's verdict). Step: `(change SIDE OCC TERM)` /
+  `(change SIDE OCC TERM (stop F …))`, OCC in the rewrite spelling
+  (`true` all / `false` first / `(at K)`); `change` FOLDS — it
+  replaces occurrences of the term's normal form (under the stop set)
+  by the term itself, so matching stays syntactic against the NF and a
+  bare-literal NF rides the sort-gated literal walk. Closing form:
+  `(exact-conv REF (INST …) (PROOF …))` /
+  `(exact-conv REF (INST …) (PROOF …) (stop F …))` — full
+  instantiation mandatory, premise sub-proofs discharge like
+  rewrite-with obligations, both equations normalized under the one
+  stop set and compared per side. Pins:
+  pins/proof/conv_probe.shard / conv_rejects.shard.
 - **DC3 — checkpointed-walk proof form** (the seal discipline
   promoted to kernel tactic): CANDIDATE, deliberately second
   priority — build only if a measured leg says generated walks are

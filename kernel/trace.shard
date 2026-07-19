@@ -380,7 +380,21 @@
              (append_int
                (Cons 32 Nil)
                (append_int (render_side sd) (render_occ occ))))))))
-    ((Inspect) "Inspect")))
+    ((Inspect) "Inspect")
+    ((Change sd occ compact stops)
+     (append_int
+       "Change "
+       (append_int
+         (render_side sd)
+         (append_int
+           (render_occ occ)
+           (append_int
+             (Cons 32 Nil)
+             (append_int
+               (render_term compact)
+               (match stops
+                 (Nil Nil)
+                 (_ (append_int " stop" (stop_names stops))))))))))))
 
 ;; ---- failure-site context (the premises + hyps in scope) -------------------
 ;; Rendered ONLY at failure points (a failed step / rewrite / Refl / Absurd),
@@ -887,6 +901,29 @@
     ((Rewrite er dir side occ insts)
      (rewrite_fail_reason m th seq er dir side occ insts))
     ((Unfold fname side) (unfold_fail_reason m seq fname side))
+    ;; change fails at exactly two links — the term's type gate, or the
+    ;; normal form matching nowhere on the chosen side ((at K) range
+    ;; included). Mirror apply_change link by link and RENDER the NF: the
+    ;; author's next move is computing the goal to that spelling.
+    ((Change sd occ compact stops)
+     (match (tc_check_expr m (seq_params seq) compact)
+       ((Some msg) (append_int "change: TYPE GATE: " msg))
+       (None
+         (append_int
+           "change: "
+           (append_int
+             (rw_no_match_msg
+               m
+               (seq_params seq)
+               Nil
+               (Equation (compute_eval m stops compact) compact)
+               Lr
+               sd
+               occ
+               (seq_eq seq))
+             (append_int
+               " for the term's normal form  "
+               (render_term (compute_eval m stops compact))))))))
     (_ "no match")))
 
 ;; the checker's RewriteWith citation gates, re-run on a SUCCESSFUL replay
@@ -1044,6 +1081,62 @@
                          "]  FAILED to apply ("
                          (append_int (step_fail_reason m th cur s) ")")))))))
              (context_lines cur depth))))))))
+
+;; ---- exact-conv diagnostics -------------------------------------------------
+;; the cited binders an exact-conv left unpinned (full instantiation is
+;; mandatory — there is no conclusion match to infer bindings from).
+(fn xc_missing ((cps (List Param)) (insts (List Inst))) (List Int)
+  (measure (struct cps))
+  (match cps
+    (Nil Nil)
+    ((Cons (Param pname _) rest)
+     (match (find_inst pname insts)
+       ((Some _) (xc_missing rest insts))
+       (None
+         (Cons 32 (append_int (chars_of_sym pname) (xc_missing rest insts))))))))
+
+;; one side's conversion verdict: convertible, or both normal forms shown.
+(fn xc_side_lines ((label (List Int)) (cnf Expr) (gnf Expr) (depth Int))
+  (List (List Int))
+  (if (expr_eq cnf gnf)
+    (Cons
+      (append_int (mk_ind depth) (append_int label " sides convertible"))
+      Nil)
+    (Cons
+      (append_int (mk_ind depth) (append_int label " sides NOT convertible:"))
+      (Cons
+        (append_int
+          (mk_ind depth)
+          (append_int "  cited NF  " (render_term cnf)))
+        (Cons
+          (append_int
+            (mk_ind depth)
+            (append_int "  goal  NF  " (render_term gnf)))
+          Nil)))))
+
+;; the per-side comparison, mirroring conv_sides_ok with the NFs rendered.
+(fn xc_compare_lines
+  ((m Module)
+   (stops (List QName))
+   (cited Equation)
+   (goal_eq Equation)
+   (depth Int))
+  (List (List Int))
+  (match cited
+    ((Equation cl cr)
+     (match goal_eq
+       ((Equation gl gr)
+        (append_lines
+          (xc_side_lines
+            "exact-conv: lhs"
+            (compute_eval m stops cl)
+            (compute_eval m stops gl)
+            depth)
+          (xc_side_lines
+            "exact-conv: rhs"
+            (compute_eval m stops cr)
+            (compute_eval m stops gr)
+            depth)))))))
 
 ;; Descend the proof spine, rendering the sequent equation at each level.
 ;; Branching proofs (Induct) stop the walk; CaseOn/WfInduct recurse.
@@ -1466,7 +1559,72 @@
                  (Sequent params hyps (append_eqs premises facts) goal_eq)
                  pr
                  (+ depth 1)
-                 verbose))))))))))
+                 verbose))))))))
+    ((ExactConv er insts prems stops)
+     ;; mirror check_sequent's ExactConv arm link by link: resolve, full
+     ;; instantiation, the citation TYPE GATE, obligations (descending
+     ;; into a failing one), then the per-side conversion verdict with
+     ;; both normal forms rendered on a mismatch.
+     (match (resolve_eq er seq th)
+       (None
+         (Cons
+           (append_int
+             (mk_ind depth)
+             (append_int
+               "exact-conv ("
+               (append_int (render_eqref er) ") does not resolve")))
+           (context_lines seq depth)))
+       ((Some (Goal cited_params cited_premises cited_eq))
+        (if (all_insts_named insts cited_params)
+          (match (split_params_by_insts cited_params insts)
+            ((Pair openings pat_var_names)
+             (match pat_var_names
+               ((Cons _ _)
+                (Cons
+                  (append_int
+                    (mk_ind depth)
+                    (append_int
+                      "exact-conv — REJECTED (every cited binder needs an inst; missing:"
+                      (append_int (xc_missing cited_params insts) ")")))
+                  (context_lines seq depth)))
+               (Nil
+                 (let ((opening_fvars (reverse_exprs openings)))
+                   (let
+                     ((opened_eq (open_eq_with opening_fvars cited_eq))
+                      (opened_premises
+                        (open_eqs_with opening_fvars cited_premises)))
+                     (match seq
+                       ((Sequent s_params _ _ goal_eq)
+                        (match
+                          (tc_check_site m s_params cited_params Nil openings
+                            Empty)
+                          ((Some msg)
+                           (Cons
+                             (append_int
+                               (mk_ind depth)
+                               (append_int
+                                 "exact-conv — REJECTED by the TYPE GATE: "
+                                 msg))
+                             (context_lines seq depth)))
+                          (None
+                            (append_lines
+                              (trace_obligations
+                                m
+                                th
+                                seq
+                                Empty
+                                opened_premises
+                                prems
+                                er
+                                0
+                                (+ depth 1)
+                                verbose)
+                              (xc_compare_lines m stops opened_eq goal_eq depth))))))))))))
+          (Cons
+            (append_int
+              (mk_ind depth)
+              "exact-conv — REJECTED (an inst names a binder the cited goal does not have)")
+            (context_lines seq depth))))))))
 
 ;; one "  + EQ" line per injected fact (word-fact / div-facts tracing).
 (fn trace_fact_lines ((eqs (List Equation)) (depth Int)) (List (List Int))

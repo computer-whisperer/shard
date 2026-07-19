@@ -71,6 +71,8 @@ TARGETS=(
   pins/proof/rewrite_at_rejects.shard
   pins/proof/sort_gate.shard
   pins/proof/sort_gate_rejects.shard
+  pins/proof/conv_probe.shard
+  pins/proof/conv_rejects.shard
   pins/proof/cert_rows.shard
   pins/proof/cert_rows_rejects.shard
   pins/proof/rewrite_with_occ.shard

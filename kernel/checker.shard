@@ -395,7 +395,51 @@
              m
              th
              (Sequent params hyps (append_eqs premises facts) goal_eq)
-             pr))))))))
+             pr))))))
+
+    ((ExactConv er insts premise_proofs stops)
+     ;; Close from a cited theorem up to conversion (CERT.md §3):
+     ;;   1. Resolve er → cited Goal.
+     ;;   2. FULL instantiation is mandatory: every cited ∀-binder must
+     ;;      be pinned by an inst — split_params_by_insts returning any
+     ;;      fresh pat_var name means an unpinned binder; refuse. There
+     ;;      is no conclusion match to infer bindings from.
+     ;;   3. TYPE GATE the instantiation (tc_check_site with no capture
+     ;;      vars — same gate as Rewrite/RewriteWith citations).
+     ;;   4. Discharge the cited premises like RewriteWith obligations
+     ;;      (env Empty — the openings already instantiated them).
+     ;;   5. Normalize both equations under the ONE stop set and compare
+     ;;      per side (conv_sides_ok). No continuation — this closes.
+     (match (resolve_eq er seq th)
+       (None False)
+       ((Some g)
+        (match g
+          ((Goal cited_params cited_premises cited_eq)
+           (if (all_insts_named insts cited_params)
+             (match (split_params_by_insts cited_params insts)
+               ((Pair openings pat_var_names)
+                (match pat_var_names
+                  ((Cons _ _) False)  ; an unpinned binder — refuse
+                  (Nil
+                    (let ((opening_fvars (reverse_exprs openings)))
+                      (let
+                        ((opened_eq (open_eq_with opening_fvars cited_eq))
+                         (opened_premises
+                           (open_eqs_with opening_fvars cited_premises)))
+                        (match seq
+                          ((Sequent s_params s_hyps s_premises goal_eq)
+                           (match
+                             (tc_check_site m s_params cited_params Nil openings
+                               Empty)
+                             ((Some _) False)
+                             (None
+                               (if
+                                 (check_premise_proofs m th s_params s_hyps
+                                   s_premises Empty opened_premises
+                                   premise_proofs)
+                                 (conv_sides_ok m stops opened_eq goal_eq)
+                                 False)))))))))))
+             False))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; apply_steps / apply_step: run non-branching steps, threading the
@@ -491,7 +535,14 @@
                             None))
                          (None None))))))))
              None))
-          (_ None)))))))  ;; non-Nil premises
+          (_ None)))))  ;; non-Nil premises
+    ((Change side occ compact stops)
+     ;; explicit conversion, fold direction — see apply_change.
+     (match seq
+       ((Sequent params hyps premises goal_eq)
+        (match (apply_change m params side occ compact stops goal_eq)
+          ((Some eq2) (Some (Sequent params hyps premises eq2)))
+          (None None)))))))
 
 ;; Drive simp_stop_expr (full δ+ι under the stop fence) on the chosen
 ;; side(s) of an equation. Used by apply_step's `Simp` arm.
@@ -1630,6 +1681,64 @@
              goal_eq)
            (None None)
            ((Some (Pair _ eq2)) (Some (Pair env eq2)))))))))
+
+;; ---------------------------------------------------------------------------
+;; The conversion forms (CERT.md §3): change / exact-conv.
+;;
+;; apply_change: the `change` step's whole semantics, shared verbatim by
+;; apply_step's Change arm and the tracer's failure diagnoser (the
+;; trace-mirror law). The kernel normalizes the INTRODUCED compact term
+;; under the stop set (compute_eval — the same definitional-equality
+;; normalizer Compute trusts) and rewrites the chosen side(s), replacing
+;; occurrences of the NORMAL FORM by the compact term: the FOLD direction
+;; of explicit conversion. Matching stays syntactic against the NF (spell
+;; the goal there first — compute — if it differs); a bare-literal NF
+;; dispatches through the sort-gated rwl_ walk like any literal pattern
+;; (rw_dispatch), so an Int/Nat crossing refuses here exactly as it does
+;; for a cited literal equation. The pattern binds nothing (pat_vars Nil);
+;; the type gate rejects an ill-typed compact term before any
+;; normalization runs (the have-cut rationale).
+;; ---------------------------------------------------------------------------
+
+(fn apply_change
+  ((m Module)
+   (params (List Param))
+   (side Side)
+   (occ Occ)
+   (compact Expr)
+   (stops (List QName))
+   (goal_eq Equation))
+  (Option Equation)
+  (match (tc_check_expr m params compact)
+    ((Some _) None)
+    (None
+      (match
+        (apply_rewrite
+          m
+          params
+          Nil
+          (Equation (compute_eval m stops compact) compact)
+          Lr
+          side
+          occ
+          goal_eq)
+        ((Some (Pair _ eq2)) (Some eq2))
+        (None None)))))
+
+;; exact-conv's closing comparison: both equations normalized under the
+;; ONE stop set, compared per side — NF(cited.lhs) = NF(goal.lhs) and
+;; NF(cited.rhs) = NF(goal.rhs). Definitional equality on each side lets
+;; a cited theorem close a differently-spelled goal.
+(fn conv_sides_ok
+  ((m Module) (stops (List QName)) (cited Equation) (goal_eq Equation))
+  Bool
+  (match cited
+    ((Equation cl cr)
+     (match goal_eq
+       ((Equation gl gr)
+        (if (expr_eq (compute_eval m stops cl) (compute_eval m stops gl))
+          (expr_eq (compute_eval m stops cr) (compute_eval m stops gr))
+          False))))))
 
 ;; ---------------------------------------------------------------------------
 ;; check_premise_proofs: dispatch one sub-proof per cited-equation
