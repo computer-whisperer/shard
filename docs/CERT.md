@@ -227,6 +227,62 @@ excluded; witness v0 consistency-checked only (segment-local check +
 segf factorization deferred, as priced). **A2 OPENED 2026-07-19
 (user ruling: proceed).**
 
+**A2 VERDICT (2026-07-19; run in the same spike spirit — measured
+against the landed certs, replacing nothing).** The patch algebra
+landed as an ordinary library: `IPatch` (PLoc/PByte/PWord), ONE
+newest-first list per model, apply/view/footprint functions,
+unpremised read-through laws, one generic framing law per
+observation, and the istmts collapse theorems — proven once in
+models/imp/probes/ipatch_probe.shard — then exercised on BOTH legs
+of the block worst case. Hand leg (std/sha256/sha256.patch.shard):
+the observation×writer pair-lemma PRODUCT becomes a SUM — one
+patch twin + footprint pair per writer, one frame law per
+observation grain (byte and window); the family's bespoke
+inductions (30–500 lines each) re-derive as ~12–15-line citation
+chains, and `blk_ps` names the block walk's repeated writer chain
+once, with collapse = patch-append plus an occurrence-targeted
+rewrite. Generated leg (std/sha256/sha256.xpatch.shard): the
+cmp_x_shblock seam family — ~2200 lines of 12-deep state exposure
+per seam, ~26k lines ≈ 30% of the 92k x86 out file — derives at
+view states by pure citation: the per-segment step cert
+instantiates at the canonical view reads, xm_scont's register
+rebuild COMPUTES through the literal-of-reads state, and the
+suffix cert cites at the post-segment reads; zero case-ons, ~250
+formatted lines per seam of which ~150 are the per-segment
+instruction split the generator already owns. Segment interiors:
+8 verbatim generated statements collapse to ONE named patch term
+with the segment's root bounds as the only premises, every proof
+leaf first-check. The §9 falsification item — "base+patch cannot
+avoid materializing full state at most composition seams" — is
+answered NO on every seam exercised: hand-leg phase seams are
+patch-append plus footprint arithmetic; the generated-leg suffix
+seam is citation at view reads. Full state is never respelled.
+
+Structural findings for the coverage-compiler design: (1) the
+read-through laws carry ONLY symbolic-patch seams — on concrete
+patch lists the view materializes by computation, so segment
+interiors stay compute-driven exactly like today's certs; the
+dialects split cleanly at the seam boundary. (2) VALUES TELESCOPE
+— base+patch does not by itself tame value-term growth; a
+generator must emit value-naming ladders (the gb_ discipline it
+already practices), or the sharing arrives at A3's representation
+layer instead. This is the arc's live coupling: A2's residual cost
+is exactly the term-sharing problem A3 prices. Gate (b) remains
+structurally measured only: text volume (better than 10x on the
+seam family at the demonstrated shape) and per-statement
+constancy; wall clock stays inside the load floor (the 92k-file
+closure 3.9s → 4.4s with the exercise file), and reduction-count/
+RSS instrumentation is still the §9 instruments line item.
+Coverage fences on record: straight-line ISet/IStore segments and
+the sha writer family only; loop bodies as computed patch lists
+(the round_deltas shape) designed but unexercised; the sched value
+characterization and the full block-walk re-derivation deferred
+with named interfaces (the absorption seed xhg_wget_hit landed);
+the A1 validator and the patch dialect have not been composed —
+independent spikes. **A2 CLOSED 2026-07-19. A3 (conversion forms,
+the only kernel-touching variant) is the next decision point,
+gated on its own numbers per the protocol.**
+
 Prediction on record (review consensus): conversion + DAG storage
 gives the quickest 10-50x representation win and kills most weld
 glue; base+patch prevents the next program from recreating
