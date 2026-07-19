@@ -3390,3 +3390,25 @@ leaf carries its own post-state into the step transport.
 - **DI4 — residence of the lowering families: RESOLVED
   (2026-07-12).** As leaned: theorems live with the model,
   generators in tools/, matching the wasm/x86 split today.
+
+
+## 9. The certificate redirection (2026-07-18)
+
+The 2026-07-18 design review (docs/archive/DESIGN-REVIEW-2026-07-18.md)
+ratified a redirection that governs this ledger's NEXT pointer:
+**docs/CERT.md is now the law for certificate representation**, and
+Arc A (its pathfinder protocol, CERT.md §8) is the next arc — before
+any new emission tier, coverage family, or lowering rung.
+
+Standing consequences here:
+
+- impgen (V2-5) and its emitted dialect are FROZEN as the
+  oracle/regression source (CERT.md §10). Existing outs regenerate
+  byte-identically; no new cert family learns the replay dialect.
+- The rung ladder past IF-1 (calls/stack, signed kinds, the
+  coverage families) continues as DESIGN work only; first emission
+  waits for CERT.md's representation verdict.
+- The v2 crystallized kinds (§2a) are what make the generic
+  validator induction tractable — alignment is program-independent
+  by type. The validator pilot (CERT.md §8 A1) runs on this
+  machine's smallest straight-line family.

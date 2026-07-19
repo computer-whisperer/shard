@@ -670,3 +670,37 @@ ALL RESOLVED (1–5: 2026-07-11, three ruling rounds; 6: the
    (IMP.md rung I4), the fork merges at R2-complete, and R3a/R3b
    move post-merge onto main. Landed content unaffected (§4a;
    §10 close-out block).
+
+
+## 15. ML numerics — the four-level contract (CDR 2026-07-18; direction ratified, arc HELD)
+
+The 2026-07-18 design review ratified the DIRECTION for ML-facing
+numerics; the arc itself is deliberately held until the certificate
+architecture proves itself (docs/CERT.md §10 — no planning past
+Arc A). Recorded here so the law survives; the archive holds the
+full correspondence.
+
+- **Four contract levels**: A — exact machine arithmetic (this
+  ledger's L1-L3, unchanged ground truth); B — an allowed numeric
+  policy (policy-indexed allowed-result relations; the §5 NaN
+  observation quotient is Level B in miniature, and generalizing
+  quotient → policy-indexed relation is design work, not a new kind
+  of thing); C — numerical error against mathematical intent
+  (error-budget relations); D — task adequacy (external, measured,
+  never a kernel-visible claim).
+- **The bit-exact rule (pinned)**: ISA/accelerator models stay
+  BIT-EXACT per platform, always. Imprecision lives in RELATIONS
+  between spec and target, never inside machine semantics — a fuzzy
+  model would destroy the differential-gate methodology. For
+  vendor-error-bound instructions (rsqrt et al.) the denotation is
+  honestly bounded-nondeterministic (result-in-interval) and the
+  differential checks membership. Level A stays ground truth
+  everywhere.
+- **whisper-tensor is the importable oracle**: a reference
+  implementation, 142 ONNX ops with real usage frequencies, and
+  2000+ backend conformance tests — the external differential
+  oracle and frequency-ordered coverage checklist for any future
+  flagship (the V8 pattern at tensor grain).
+- **Candidate flagship (archive, not law)**: BF16-in/F32-accumulate
+  dot product, fixed tree first, storage/compute/accumulator
+  formats explicit. Re-adjudicated when Arc A reports.

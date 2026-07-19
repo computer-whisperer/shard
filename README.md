@@ -286,6 +286,7 @@ authority for its area:
 | [BOUNDARIES.md](docs/BOUNDARIES.md) | modeling external systems; extern + axiom |
 | [ISA.md](docs/ISA.md) | machine models as libraries; target architecture |
 | [LOWERING.md](docs/LOWERING.md) | the lowering-form paradigm: statements, certs, gates |
+| [CERT.md](docs/CERT.md) | the certificate architecture: conversion, sharing, validators |
 | [IMP.md](docs/IMP.md) | the neutral imperative dialect: spec ⊑ imp ⊑ wasm/x86 |
 | [X86.md](docs/X86.md) | the x86-64 target: emitter → bin ladder → World on silicon |
 | [CANON.md](docs/CANON.md) | the canonical dialect: rules, census, content addressing |

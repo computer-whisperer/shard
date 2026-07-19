@@ -650,3 +650,16 @@ entire gap).
   it. The calc pathfinder genuinely exercises the overflow family
   (user-supplied arithmetic is unbounded by design), so the
   milestone forces D8's resolution honestly.
+
+
+## Note — base+patch states (CERT.md, 2026-07-18)
+
+The certificate architecture (docs/CERT.md §5) ratified base+patch
+proof-facing states as an observation layer with a per-model
+collapse theorem. If Arc A confirms it, the heap era's separation/
+framing library gets built IN that vocabulary from day one — heap
+framing and parallel disjointness are patch-footprint statements,
+and the hand-built framing families (below/above/point-grain/
+wlist-grain) are the ad-hoc precursors it internalizes. The D8
+observation-relation work also gains its natural home in the
+Runs/RunsWithin interface (CERT.md §6).
