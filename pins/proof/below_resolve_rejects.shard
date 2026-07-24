@@ -1,0 +1,82 @@
+;;; below_resolve_rejects.shard — SOUNDNESS pins for (below)'s hypothesis
+;;; resolution. ALL claims must FAIL and the binary must exit non-zero. Not part
+;;; of the "everything works" suite; the twin of subterm_induct_rejects, one
+;;; layer down — that file pins the REFLEXIVE citation with no hyp in scope,
+;;; this one pins the citation made reflexive BY a hyp.
+;;;
+;;; THE HOLE (found + closed 2026-07-24). below_resolve took ANY in-scope hyp
+;;; with `x` on one side as a case-hypothesis for x, and handed the other side
+;;; to the subterm walk — which descended through Call args. An enclosing
+;;; (induct v) whose goal equation carries v BARE on one side leaves an IH
+;;; `f = RHS(f)` with the field name f FREE, so f resolved to a form containing
+;;; f, the walk called f a proper subterm of ITSELF, and the strong subterm-IH
+;;; became self-justifying. PIN 1 below then closed circularly and proved "every
+;;; T is Leaf"; absurd turned that into 0 = 1 — no axiom, no admit, no name
+;;; shadowing, exit 0 on the Rust bootstrap authority.
+;;;
+;;; The guards (checker.shard below_resolve): the resolving hyp must be
+;;; UNCONDITIONAL AND UNQUANTIFIED, its form must be a CONSTRUCTOR, and `x` must
+;;; not OCCUR in that form — plus eps_h descends constructor nodes only.
+;;;
+;;; WHAT EACH PIN DETECTS (they are not interchangeable):
+;;;   PIN 1/2 — resolving form is a CALL, so the CONSTRUCTOR-FORM guard (and
+;;;     equivalently the constructor-only descent) is what refuses it.
+;;;   PIN 3  — resolving form is Nil/Nil AND constructor-shaped, so those two
+;;;     guards both pass and ONLY the occurs-check refuses it.
+;;; The unconditional/unquantified guard is deliberately NOT pinned here: an
+;;; IH goal closes all its own params to BVars, so a premised hyp's form
+;;; carries no free name for the walk to match and no pass/fail flip exists to
+;;; detect. It is kept as defense-in-depth — a hyp with premises asserts its
+;;; equation only under them, and nothing else in the kernel reads a Goal's
+;;; conclusion past its binders (Absurd/Inject/fin_bound all demand Nil/Nil).
+;;;
+;;; FLIP DETECTION: this file is 0 passed, 3 failed. Lose the constructor guard
+;;; and PIN 1/2 flip; lose the occurs-check and PIN 3 flips. Either way the
+;;; corpus FAIL-set diff catches it.
+
+(import "../../kernel/stdlib.shard")
+
+(type T (Leaf) (Node T))
+
+;; constantly Leaf — so (= v (g v)) says "every T is Leaf", which is FALSE.
+(fn g ((x T)) T
+  (match x
+    (Leaf Leaf)
+    ((Node y) Leaf)))
+
+;; PIN 1 — the circular close. The Node case's only route is the strong
+;; subterm-IH cited AT f ITSELF, whose ordering premise is (subterm_below f f).
+;; In scope there is the enclosing induct's IH, `f = (g f)` — a CALL form, whose
+;; argument is not a component of its value. Resolving f through it must not
+;; make f a subterm of f, so (below) refuses and the claim FAILS.
+(claim evil
+  (goal ((v T)) () (= v (g v)))
+  (induct v
+    ((case Leaf (steps ((simp rhs)) refl))
+     (case Node
+       (f)
+       (subterm-induct f (rewrite-with (hyp ih) lr lhs () ((below)) refl))))))
+
+;; PIN 2 — the consequence, kept so the pin states what was actually at stake.
+;; Given `evil`, (Node Leaf) = Leaf and no-confusion yields 0 = 1. A failed
+;; claim never enters the theory, so this FAILS on the unresolved citation for
+;; as long as PIN 1 does.
+(claim zero_is_one
+  (goal () () (= 0 1))
+  (have (= (Node Leaf) (g (Node Leaf)))
+    (rewrite-with (lemma evil) lr lhs ((inst v (Node Leaf))) () refl)
+    (absurd (premise 0))))
+
+;; PIN 3 — the occurs-check, isolated. U has NO base constructor, so the single
+;; Wrap case is the whole induction and nothing else can block it. The resolving
+;; hyp `f = (Wrap f)` is unquantified, unconditional AND constructor-shaped —
+;; every other guard passes it — so only "x must not occur in its own form"
+;; stands between this and a self-justifying IH.
+(type U (Wrap U))
+
+(claim occurs_guard
+  (goal ((v U)) () (= v (Wrap v)))
+  (induct v
+    ((case Wrap
+       (f)
+       (subterm-induct f (rewrite-with (hyp ih) lr lhs () ((below)) refl))))))

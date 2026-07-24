@@ -241,6 +241,20 @@ order**, exposed as two proof primitives:
   `subterm_below`, which is otherwise inert (no reduction rule, unprovable by
   farkas/simp/refl).
 
+  **`CTORFORM` is load-bearing, and so is every word of the hyp shape**
+  (2026-07-24, a confirmed `0 = 1`). The descent walks **constructor nodes
+  only** — a `Call`/`Match`/`If`/`Let` child is an *input to a computation*,
+  not a component of the value, so treating it as a descendant is unsound. And
+  the resolving hyp must be exactly the case-hyp shape: `Goal Nil Nil`
+  (unconditional and unquantified — a hyp with binders or premises asserts its
+  equation only under them), a constructor form, and one in which `x` does not
+  occur (a genuine case-hyp names *fresh* fields, so it never can). Without
+  these, an enclosing `(induct v)` on a goal carrying `v` bare on one side
+  leaves an IH `f = RHS(f)` whose free field name resolves `f` into a form
+  containing `f` — making `f` a proper subterm of itself, the strong IH
+  self-justifying, and any such goal provable. Pinned by
+  `pins/proof/below_resolve_rejects.shard`.
+
 `size_nonneg` then proves by `(subterm-induct e)`: its `Ctor`/`Call` case walks
 the child list by ordinary `(induct args)`, pulling each head's `0 ≤ size a` from
 the strong IH (head ⊰ node, via `below`); `size_list_nonneg` cites `size_nonneg`

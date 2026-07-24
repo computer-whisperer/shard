@@ -2861,44 +2861,24 @@
 ;; carries FUEL. A give-up returns False (conservative: (below) fails, the
 ;; citing proof fails — sound). The budget dwarfs any real proof's hyp nesting,
 ;; and case-analysis hyps are acyclic, so give-up is dead code on real input.
+;;
+;; DESCENT IS CONSTRUCTOR-ONLY (written in blood). ⊰ is the sub-VALUE order, and
+;; only a constructor node's children are components of its value: for a Call /
+;; Match / If / Let node the children are INPUTS to a computation, and the value
+;; they produce need not contain them. Descending into a Call's args let a hyp
+;; `f = (g f)` (g constant) make f a proper subterm of ITSELF, which made the
+;; strong IH self-justifying and proved 0 = 1. See below_resolve's guards; the
+;; two fixes are independent and both are load-bearing.
 (fn below_budget () Int 1000000000)
 
 (fn eps_h ((a Expr) (x Expr) (hyps (List Goal)) (fuel Int)) Bool
-  (measure
-    fuel
-    (by arith (list 1 0))
-    (by arith (list 1 1))
-    (by arith (list 1 0))
-    (by arith (list 1 1))
-    (by arith (list 1 0))
-    (by arith (list 1 1))
-    (by arith (list 1 0))
-    (by arith (list 1 1))
-    (by arith (list 1 0))
-    (by arith (list 1 1))
-    (by arith (list 1 0))
-    (by arith (list 1 1))
-    (by arith (list 1 0))
-    (by arith (list 1 1))
-    (by arith (list 1 0))
-    (by arith (list 1 1))
-    (by arith (list 1 0))
-    (by arith (list 1 1)))
+  (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
   (if (lt fuel 1) False
   (match x
     ((Ctor _ args) (eps_list_h a args hyps (- fuel 1)))
-    ((Call _ args) (eps_list_h a args hyps (- fuel 1)))
-    ((If c t e)
-     (if (eps_child_h a c hyps (- fuel 1)) True
-     (if (eps_child_h a t hyps (- fuel 1)) True
-     (eps_child_h a e hyps (- fuel 1)))))
-    ((Match s arms)
-     (if (eps_child_h a s hyps (- fuel 1)) True
-     (eps_arms_h a arms hyps (- fuel 1))))
-    ((Let bs body)
-     (if (eps_list_h a bs hyps (- fuel 1)) True
-     (eps_child_h a body hyps (- fuel 1))))
-    (_ False))))  ; FVar/BVar/IntLit/SymLit: leaves, no children
+    ;; everything else has no VALUE components: FVar/BVar/IntLit/SymLit are
+    ;; leaves, and Call/Match/If/Let are computations, not value formers.
+    (_ False))))
 
 (fn eps_child_h ((a Expr) (c Expr) (hyps (List Goal)) (fuel Int)) Bool
   (measure
@@ -2933,30 +2913,92 @@
      (if (eps_child_h a h hyps (- fuel 1)) True
      (eps_list_h a t hyps (- fuel 1)))))))
 
-(fn eps_arms_h ((a Expr) (arms (List Arm)) (hyps (List Goal)) (fuel Int)) Bool
-  (measure
-    fuel
-    (by arith (list 1 0))
-    (by arith (list 1 1))
-    (by arith (list 1 0))
-    (by arith (list 1 1)))
-  (if (lt fuel 1) False
+;; resolve an FVar `x` to a constructor-form term via an in-scope hyp
+;; (= x form) — the CaseOn / Induct case-hyp shape, `Goal Nil Nil (Equation x
+;; (Ctor c fresh-fields))`. THREE guards, each of which was a 0 = 1 without it:
+;;
+;;   1. UNCONDITIONAL AND UNQUANTIFIED (Goal Nil Nil). A hyp with ∀-binders or
+;;      premises asserts its equation only UNDER those; reading its conclusion
+;;      unconditionally promotes a vacuous induction hypothesis to a fact. The
+;;      real case-hyps this rule serves are all Nil/Nil.
+;;   2. CONSTRUCTOR FORM. The descent below reads the form's children as the
+;;      value's components, which holds for a ctor node and nothing else.
+;;   3. `x` DOES NOT OCCUR IN THE FORM. A genuine case-hyp names FRESH fields,
+;;      so x can never appear inside its own form; without the check, a hyp
+;;      `f = (Node f)` walks straight to `f ⊰ f` and the strong IH becomes
+;;      self-justifying. (Such a hyp is unsatisfiable on an inductive datatype,
+;;      but the kernel must not need that argument to stay sound.)
+;;
+;; Guard 2 alone kills the reported exploit (its resolving form was a Call);
+;; the other two are the same hole reachable by other spellings. Pinned by
+;; pins/proof/below_resolve_rejects.shard.
+(fn below_plain_hyp ((ps (List Param)) (prems (List Equation))) Bool
+  (match ps
+    (Nil
+      (match prems
+        (Nil True)
+        (_ False)))
+    (_ False)))
+
+;; does `x` occur anywhere in `e`? Looks EVERYWHERE (unlike the descent, which
+;; is constructor-only): an occurrence under a Call is still a reason to refuse.
+(fn below_occurs ((x Expr) (e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((FVar _) (expr_eq x e))
+    ((BVar _) (expr_eq x e))
+    ((IntLit _) (expr_eq x e))
+    ((SymLit _) (expr_eq x e))
+    ((Ctor _ args) (if (expr_eq x e) True (below_occurs_list x args)))
+    ((Call _ args) (if (expr_eq x e) True (below_occurs_list x args)))
+    ((If c t el)
+     (if (expr_eq x e) True
+     (if (below_occurs x c) True
+     (if (below_occurs x t) True
+     (below_occurs x el)))))
+    ((Let bs body)
+     (if (expr_eq x e) True
+     (if (below_occurs_list x bs) True
+     (below_occurs x body))))
+    ((Match s arms)
+     (if (expr_eq x e) True
+     (if (below_occurs x s) True
+     (below_occurs_arms x arms))))))
+
+(fn below_occurs_list ((x Expr) (es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil False)
+    ((Cons h t) (if (below_occurs x h) True (below_occurs_list x t)))))
+
+(fn below_occurs_arms ((x Expr) (arms (List Arm))) Bool
+  (measure (struct arms))
   (match arms
     (Nil False)
-    ((Cons (Arm _ body) rest)
-     (if (eps_child_h a body hyps (- fuel 1)) True
-     (eps_arms_h a rest hyps (- fuel 1)))))))
+    ((Cons (Arm _ b) t) (if (below_occurs x b) True (below_occurs_arms x t)))))
 
-;; resolve an FVar `x` to a constructor-form term via an in-scope hyp
-;; (= x form) (the CaseOn case-hyp shape: Goal Nil Nil (Equation x form)).
+;; the OTHER side of a candidate hyp, accepted only as a ctor form free of `x`.
+(fn below_form_ok ((x Expr) (form Expr)) (Option Expr)
+  (match form
+    ((Ctor _ _) (if (below_occurs x form) None (Some form)))
+    (_ None)))
+
 (fn below_resolve ((x Expr) (hyps (List Goal))) (Option Expr)
   (measure (struct hyps))
   (match hyps
     (Nil None)
-    ((Cons (Goal _ _ (Equation l r)) rest)
-     (if (expr_eq l x) (Some r)
-     (if (expr_eq r x) (Some l)
-     (below_resolve x rest))))))
+    ((Cons (Goal ps prems (Equation l r)) rest)
+     (if (below_plain_hyp ps prems)
+       (if (expr_eq l x)
+         (match (below_form_ok x r)
+           ((Some form) (Some form))
+           (None (below_resolve x rest)))
+       (if (expr_eq r x)
+         (match (below_form_ok x l)
+           ((Some form) (Some form))
+           (None (below_resolve x rest)))
+         (below_resolve x rest)))
+       (below_resolve x rest)))))
 
 (fn below_is_true ((e Expr)) Bool
   (match e
