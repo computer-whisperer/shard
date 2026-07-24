@@ -1,0 +1,42 @@
+;;; finsplit_shadow_rejects.shard — SOUNDNESS REGRESSION TEST (must FAIL to check).
+;;;
+;;; The fin-split twin of shadow_rejects.shard. `do_fin_split` does not ASSUME
+;;; its range: it reads two bound facts off cited in-scope equations, each
+;;; required to be `(le L var) = True` / `(le var U) = True`. Recognizing that
+;;; `le` is the built-in linear <= — and not some same-named user fn — is what
+;;; makes the enumeration exhaustive.
+;;;
+;;; The bug: `fin_bound` matched the call head by BARE NAME
+;;; (`(sym_eq (qn_name f) (quote le))`), so the constant-True `le` below —
+;;; which under strict resolution lives at THIS file's module path, not core —
+;;; was read as the built-in <=. It then "bounded" an arbitrary Int into [0,3],
+;;; and four ground cases stood in for a universal claim: the goal below
+;;; checked, and `(= False True)` follows by citing it at x = 4. Same shape as
+;;; the farkas hole shadow_rejects.shard pins, one tactic over.
+;;;
+;;; The fix: `fin_bound` / `fin_is_true` admit the interpreted `le` and `True`
+;;; only through `core_named` (core module-path AND name), the discipline
+;;; term.shard states and the theory backends already follow.
+;;;
+;;; If a future change re-opens the hole, this file flips from "0 passed, 1
+;;; failed" to "1 passed" and the corpus diff catches it. The POSITIVE control
+;;; — fin-split still closing over genuine core `le` bounds — is
+;;; pins/proof/finsplit_test.shard.
+
+(import "../../kernel/stdlib.shard")
+
+(fn le ((a Int) (b Int)) Bool True)  ; NOT core::le
+
+;; MUST FAIL — the claim is false at x = 4.
+(claim finsplit_shadow_le_must_not_bound
+  (goal ((x Int)) () (= (lt x 4) True))
+  (have (= (le 0 x) True) (steps ((compute lhs)) refl)
+    (have (= (le x 3) True) (steps ((compute lhs)) refl)
+      (fin-split
+        x
+        (premise 0)
+        (premise 1)
+        ((case 0 (steps ((compute lhs)) refl))
+         (case 1 (steps ((compute lhs)) refl))
+         (case 2 (steps ((compute lhs)) refl))
+         (case 3 (steps ((compute lhs)) refl)))))))

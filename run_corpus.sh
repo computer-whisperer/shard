@@ -63,6 +63,7 @@ TARGETS=(
   pins/lang/use_demo.shard
   pins/lang/double_lib.shard
   pins/lang/shadow_rejects.shard
+  pins/lang/finsplit_shadow_rejects.shard
   pins/proof/finsplit_test.shard
   pins/proof/have_test.shard
   pins/proof/inject_basic.shard
