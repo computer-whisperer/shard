@@ -99,23 +99,65 @@
 ;; to detect contradictory equations after simp.
 ;;
 ;; Distinct ctors / distinct IntLits / distinct SymLits, OR a
-;; cross-variant value-type mismatch (Ctor vs IntLit, etc.) — these
+;; cross-variant value-type mismatch (Ctor vs SymLit, etc.) — these
 ;; all clash. FVar / BVar / stuck Call / stuck Match / Let / If on
 ;; either side means "we can't decide" — return False.
+;;
+;; Ctor-vs-IntLit is the ONE mixed pair that is not a blanket clash: the
+;; kernel Nat former is LITERAL-BACKED, so it goes through nat_lit_clash.
 ;; ---------------------------------------------------------------------------
+
+;; nat_lit_clash: decide a ctor-headed term against a literal, instead of
+;; assuming they are distinct.
+;;
+;; A ground Z/S tower and its packed nonneg literal are the SAME value
+;; (reduce.shard nat_pack; tc_nat_lit_view is the typing twin; the literal-sort
+;; gate's ls_of_expr already knows it), and the PROOF-FACING normalizers
+;; deliberately do NOT pack — so `simp`, which is what Absurd normalizes with,
+;; can leave one side spelled (S Z) and the other spelled 1. A blanket
+;; Ctor-vs-IntLit "clash" is then a LIE, and Absurd turns it into any goal at
+;; all: (= 0 1) checked with no axiom, no shadowing and no admit.
+;;
+;; Decided structurally on the ctor side, straight off the packing definition
+;; (Z = 0, (S e) = e + 1):
+;;   Z      vs n : clash iff n /= 0
+;;   (S e)  vs n : recurse — (S e) = n iff e = n-1
+;;   IntLit m    : an already-packed sub-tower; clash iff m /= n
+;;   any OTHER ctor vs a literal: a genuine cross-sort clash. Only CORE Nat is
+;;     literal-backed, so a user's own shadowing Z/S is a different identity
+;;     and still clashes — the core_named discipline, same as everywhere else.
+;;   symbolic tail (FVar/BVar/stuck Call/…): undecided.
+;;
+;; The recursion needs NO typing assumption: it never asks whether e is a
+;; well-typed Nat, so (S x) vs 0 simply goes undecided rather than leaning on
+;; "a Nat is nonneg" (match_nat_view makes the same conservative choice —
+;; negative literals are MStuck there, not MNo). Ground cases still all decide:
+;; (S Z) vs 0 walks to Z vs -1 and clashes.
+(fn nat_lit_clash ((c Expr) (n Int)) Bool
+  (measure (struct c))
+  (match c
+    ((Ctor q args)
+     (if (core_named q (quote Z)) (if (int_eq n 0) False True)
+     (if (core_named q (quote S))
+       (match args
+         ((Cons e Nil) (nat_lit_clash e (- n 1)))
+         (_ False))  ; arity garbage — the typer rules it out; stay undecided
+       True)))  ; a non-Nat ctor is never a literal
+    ((IntLit m) (if (int_eq m n) False True))
+    (_ False)))
 
 (fn head_clash ((a Expr) (b Expr)) Bool
   (match a
     ((Ctor na _)
      (match b
        ((Ctor nb _) (if (qname_eq na nb) False True))
-       ((IntLit _) True)
+       ((IntLit nb) (nat_lit_clash a nb))
        ((SymLit _) True)
        (_ False)))
     ((IntLit na)
      (match b
        ((IntLit nb) (if (int_eq na nb) False True))
-       ((Ctor _ _) True)
+       ((Ctor _ _) (nat_lit_clash b na))
        ((SymLit _) True)
        (_ False)))
     ((SymLit na)

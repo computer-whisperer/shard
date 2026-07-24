@@ -116,8 +116,16 @@ checker) re-establishes a fresh engine by construction and by gate:
    targets:
 
    ```
-   awk '/^=== /{t=$2} /^FAIL/{print t, $0}' out.txt | sort | diff fails-base.txt -
+   awk '/^=== /{t=$2} /^FAIL /{print t ": " $2}' out.txt | sort > fails-run.txt
+   diff <(sort fails-base.txt) fails-run.txt
    ```
+
+   The gate is the FAIL **set**, not the file's line order: `fails-base.txt`
+   is broadly basename-sorted but has drifted (entries appended in place
+   over several arcs), so diffing a sorted run against the file as-is
+   reports spurious hunks on a clean tree — sort BOTH sides. `.gitlab-ci.yml`
+   runs the same gate on claim NAMES only; comparing full `target: claim`
+   pairs locally is the stricter check.
 
    Engine-suspicious changes additionally re-run the corpus on the
    Rust authority and require byte-identical verdicts across engines

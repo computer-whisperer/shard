@@ -30,6 +30,7 @@ JOBS="${JOBS:-$(nproc)}"
 TARGETS=(
   examples/add_nat_zero.shard
   pins/lang/nat_prim.shard
+  pins/lang/nat_absurd_rejects.shard
   pins/trust/axiom_kind_rejects.shard
   pins/trust/axiom_untagged_rejects.shard
   kernel/facts.shard
