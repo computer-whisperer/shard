@@ -34,6 +34,19 @@ TARGETS=(
   pins/trust/axiom_kind_rejects.shard
   pins/trust/axiom_untagged_rejects.shard
   kernel/facts.shard
+  # THE KERNEL ITSELF. Checking a target checks its whole IMPORT CLOSURE's
+  # claims plus the type/totality gates over the merged module, so these two
+  # entry points gate every kernel/*.shard between them: check.shard covers the
+  # checking kernel (admit arith canon checker desugar driver expr_size loader
+  # module proof proof_reader proof_size reader reduce stdlib term trace types,
+  # ~58s) and eval.shard adds the evaluator pair (eval evm, ~13s). Before this
+  # the corpus reached only canon/evm/expr_size/loader/module/reader/reduce/term
+  # -- incidentally, via other targets' imports -- so checker, types, driver,
+  # trace and arith were gated by NOTHING, and kernel/types' unverified tc_infer
+  # measure obligation sat unnoticed. Per-file kernel targets would be pure
+  # redundancy against these closures; add one only to sharpen a diagnosis.
+  kernel/check.shard
+  kernel/eval.shard
   std/bits/bits.shard
   std/rat/mod.req/gcd.shard
   std/rat/rat.shard
