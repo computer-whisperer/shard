@@ -547,9 +547,34 @@
        ((TcOk tc1 st)
         (match (tc_fresh tc1)
           ((Pair rty tc2)
-           (match (tc_arms m tc2 fenv env st arms rty)
-             ((TcsErr msg) (TcErr msg))
-             ((TcsOk tc3) (TcOk tc3 rty))))))))
+           ;; The arm passes are INLINED here rather than reached through a
+           ;; `tc_arms` wrapper. That wrapper was a SAME-ARGUMENTS forwarder —
+           ;; it handed `arms` to tc_arms_infer UNCHANGED — so its edge in the
+           ;; tc_infer SCC carried no structural drop and no (struct …) clause
+           ;; could ever close the cycle (the gate reported it as "call to
+           ;; tc_arms has no (struct …) clause"). Calling the passes directly
+           ;; leaves ONE in-SCC edge out of this arm, tc_arms_infer at `arms` —
+           ;; a direct field of `e`, so the (struct e) descent is honest. Same
+           ;; inlining discipline as checker.shard's Induct/CaseOn arms.
+           ;;
+           ;; The shape: elaborate every pattern + body first, then JOIN in two
+           ;; passes — non-literal arms pin the join type, then literal arms
+           ;; unify or take the Nat-literal view against it. Two passes because
+           ;; rty is a fresh meta and C4's canonical order puts literal arms
+           ;; FIRST: a one-pass join would bind the meta to Int at `(Nil 0)`
+           ;; and refuse the `(S …)` arm that follows, exactly backwards.
+           ;; tc_arms_join is OUTSIDE the SCC — it never calls tc_infer — so
+           ;; its two calls carry no obligation.
+           (match (tc_arms_infer m tc2 fenv env st arms Nil)
+             ((TBErr msg) (TcErr msg))
+             ((TBOk tc3 bts_rev)
+              (let ((bts (tc_rev_tys bts_rev Nil)))
+                (match (tc_arms_join arms bts rty False tc3)
+                  ((TcsErr msg) (TcErr msg))
+                  ((TcsOk tc4)
+                   (match (tc_arms_join arms bts rty True tc4)
+                     ((TcsErr msg) (TcErr msg))
+                     ((TcsOk tc5) (TcOk tc5 rty)))))))))))))
     ((Let bs body)
      (match (tc_infer_rhss m tc fenv env bs Nil)
        ((TBErr msg) (TcErr msg))
@@ -636,28 +661,10 @@
        ((TcErr msg) (TBErr msg))
        ((TcOk tc1 t) (tc_infer_rhss m tc1 fenv env rest (Cons t acc)))))))
 
-;; match arms: elaborate every pattern + body first, then JOIN in two
-;; passes — non-literal arms pin the join type, then literal arms unify or
-;; take the Nat-literal view against it. Two passes because rty is a fresh
-;; meta and C4's canonical order puts literal arms FIRST: a one-pass join
-;; would bind the meta to Int at `(Nil 0)` and refuse the `(S …)` arm that
-;; follows, exactly backwards.
-(fn tc_arms
-  ((m Module)
-   (tc Tc)
-   (fenv (List Param))
-   (env (List Type))
-   (st Type)
-   (arms (List Arm))
-   (rty Type))
-  TcsRes
-  (match (tc_arms_infer m tc fenv env st arms Nil)
-    ((TBErr msg) (TcsErr msg))
-    ((TBOk tc1 bts_rev)
-     (let ((bts (tc_rev_tys bts_rev Nil)))
-       (match (tc_arms_join arms bts rty False tc1)
-         ((TcsErr msg) (TcsErr msg))
-         ((TcsOk tc2) (tc_arms_join arms bts rty True tc2)))))))
+;; (tc_arms was DELETED, not merely bypassed: it was the same-arguments
+;; forwarder whose SCC edge blocked tc_infer's measure. Its two-pass body now
+;; lives inline in tc_infer's Match arm, which is its only ever caller. Leaving
+;; it defined would leave the unverifiable edge one call away from returning.)
 
 ;; pass 1: per arm, the pattern against the scrutinee type, then the body
 ;; under the new bindings; body types collected (reversed — prepend order)
