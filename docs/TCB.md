@@ -130,16 +130,30 @@ checker) re-establishes a fresh engine by construction and by gate:
    targets:
 
    ```
-   awk '/^=== /{t=$2} /^FAIL /{print t ": " $2}' out.txt | sort > fails-run.txt
+   awk '/^=== /{t=$2} /^(FAIL|TYPE!) /{print t ": " $2}' out.txt | sort > fails-run.txt
    diff <(sort fails-base.txt) fails-run.txt
    ```
+
+   **Both line shapes, not just `FAIL`.** A decl-level type rejection
+   prints `TYPE! NAME` and never `FAIL NAME`, so a `^FAIL`-only
+   projection cannot see one. Until 2026-07-25 that was a real hole in
+   the gate: `pins/lang/types_gate.shard` (3 legs) and
+   `refine_try_rejects.shard` (2) had no baseline rows at all and gated
+   NOTHING — reopening the holes they watch moved no diff. Both shapes
+   put the subject in field 2, so one `awk` serves both, and the command
+   above regenerates the entire baseline mechanically.
 
    The gate is the FAIL **set**, not the file's line order: `fails-base.txt`
    is broadly basename-sorted but has drifted (entries appended in place
    over several arcs), so diffing a sorted run against the file as-is
    reports spurious hunks on a clean tree — sort BOTH sides. `.gitlab-ci.yml`
    runs the same gate on claim NAMES only; comparing full `target: claim`
-   pairs locally is the stricter check.
+   pairs locally is the stricter check, and it is stricter in a way that
+   now matters: with `TYPE!` folded in, six names are carried by more
+   than one row (`bad_premise`, `big`, `zero_is_one`, `__decls__`,
+   `__module__`, `__totality__`), so the name-only diff rests on
+   MULTIPLICITY — a leg lost in one file and gained in another under the
+   same name would pass CI and fail this local check.
 
    Engine-suspicious changes additionally re-run the corpus on the
    Rust authority and require byte-identical verdicts across engines
