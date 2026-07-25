@@ -805,8 +805,19 @@ scrutinee then arm bodies), and a matched site is never entered for nested
 matches. An out-of-range `K` fails the step; the failure trace reports the
 actual site count. **`INST`** is `(inst NAME TERM)`, instantiating a
 variable of the cited equation to an object-term snippet. When pattern and
-replacement are closed (no bound variables), `rewrite` also descends into
-`match` arm bodies. Pin: `examples/rewrite_at.shard`.
+replacement are closed (no bound variables) **and the replacement introduces
+no binder of its own**, `rewrite` also descends into `match` arm bodies. Pin:
+`examples/rewrite_at.shard`.
+
+The binder condition is a soundness one, not a convenience: an arm body is the
+one place a sequent equation carries loose de Bruijn indices (its pattern's
+fields), and substitution does not shift, so a pat_var occurrence beneath a
+`let`/`match` **in the replacement** would land a binder deeper than the site it
+matched and be re-bound there. Cite `∀y. (Node y) = (let ((z 0)) (Node y))` into
+a residual arm `((Node n) (Node @0))` and the field comes back as `0`. Pin:
+`pins/proof/rewrite_arm_capture_rejects.shard`. A replacement that needs a
+binder can still be rewritten in anywhere outside an arm body; inside one, name
+the binder-free spelling as its own lemma and cite that.
 
 ### 10.6 Equation references (`EQREF`)
 

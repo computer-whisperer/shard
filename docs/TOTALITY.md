@@ -234,7 +234,16 @@ order**, exposed as two proof primitives:
   (`y` a strict structural sub-value of `x`) instead of an Int measure. One
   subgoal, strong IH at Hyp 0: `∀P'. premises(P') → (subterm_below x' x) →
   goal(P')`. Reaches nested occurrences the shallow IH cannot. Gated to datatype
-  vars (⊰ is only well-founded on an inductive type).
+  vars (⊰ is only well-founded on an inductive type) **with at least one
+  constructor** — a ctorless typedef (an opaque `sig` view, or a refined type
+  whose values are their base carriers) resolves like any other type but has no
+  constructor form anywhere, so ⊰ has nothing to descend and the strong IH would
+  range over an order that is empty by construction. That is the issue-#16 shape
+  `Induct` has refused since the zerocase fix; the subterm twin was written
+  without the check and got it, until 2026-07-25, from `do_below` three layers
+  down (measured: the induct was admitted, the IH type-checked and the citation
+  applied, leaving only `(subterm_below z z)` for `below` to refuse). Pinned by
+  `pins/proof/subterm_ctorless_rejects.shard`.
 - `(below)` — discharges the IH's ordering premise `(subterm_below a x) = True`
   by checking `a` is a strict structural sub-term of `x` (resolved to ctor form
   via substitution, or an in-scope `x = CTORFORM` hyp). The ONLY discharger of

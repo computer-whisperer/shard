@@ -269,6 +269,19 @@ ordinary fn — one body in every reducer, its own signature in the typer — an
 genuine calls, which elaborate and resolve to `(:: core refine_try)`, keep
 kernel semantics everywhere. Pin: `pins/lang/refine_shadow_rejects.shard`.
 
+The same sweep took `tc_is_prim_ty` (2026-07-25). Type well-formedness accepts
+`Int`/`Symbol` on identity alone — they are the two types with no typedef to
+look up — and it tested the bare name, so a module's own `(type Int …)` skipped
+the declaration check (and its arity with it) and an explicit `(:: elsewhere
+Int)` naming nothing at all was accepted as well-formed. No exploit: every
+consumer downstream is qname-exact (`tc_unify_go` compares `TCon` heads with
+`qname_eq`, `FinSplit` `type_eq`s against core `Int`, ctor access goes through
+`lookup_typedef`), so an undeclared `Int` is uninhabited and unifies with
+nothing. It is `core_named` now anyway — a well-formedness gate that admits an
+undeclared type is a hole waiting for its first non-exact reader. (A user type
+named `Int` remains legal and remains *distinct* from the primitive; the
+diagnostic for mixing them reads `Int vs Int`, which is honest and unhelpful.)
+
 One thing `core_named` does **not** reach: `elab_refine_try` (§9) claims the
 *surface* form unconditionally, and elaboration precedes resolution, so it
 cannot know the name is shadowed and rewraps arg0 as a type marker either way.

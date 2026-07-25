@@ -1,0 +1,100 @@
+;;; rewrite_arm_capture_rejects.shard — SOUNDNESS pin for rewrite_all's descent
+;;; into MATCH ARM BODIES. Both claims must FAIL and the binary must exit
+;;; non-zero.
+;;;
+;;; THE SHAPE (found + closed 2026-07-25). Arm bodies are the one place a
+;;; sequent equation carries LOOSE de Bruijn indices: `compute` on a match with
+;;; a symbolic scrutinee leaves the arms unreduced, and an arm's body refers to
+;;; its pattern's fields as BVars. rewrite_all descends there so that guards
+;;; reified into arm bodies stay reachable, guarded by `no_bvars` on the pattern
+;;; and the replacement — and the substitution that lands a matched piece back
+;;; into the replacement (term.shard `subst`) DOES NOT SHIFT.
+;;;
+;;; That guard was one term short of its own soundness argument. `no_bvars`
+;;; forbids BVar NODES; it does not forbid a BINDER. A replacement like
+;;; `(let ((z 0)) (Node y))` has no BVar in it — y is an FVar, the pat_var — so
+;;; the guard passed, and the piece bound to y (the arm's field, a BVar) was
+;;; substituted UNDERNEATH the let. One binder deeper than the site it came
+;;; from, it was re-bound by z. The arm's field silently became 0.
+;;;
+;;; PIN 1 is that term. f and g differ exactly on the Node arm, `compute both`
+;;; leaves both as stuck matches, and the captured rewrite turns f's arm into
+;;; g's — so the two normalize to the same term and refl closes a FALSE claim.
+;;; PIN 2 cashes it out: f (Node 5) = 5 and g (Node 5) = 0, so `bad` gives
+;;; 5 = 0 and, one absurd later, 0 = 1. Nothing but the citation TYPE GATE
+;;; (which rejects the loose BVar in the capture env, three layers up in
+;;; check_sequent) ever stood between this file and that — measured, at the
+;;; time of writing, as `FAILED to apply (TYPE GATE: unbound BVar)`: the capture
+;;; had already happened and was caught after the fact.
+;;;
+;;; THE FIX: `no_binders repl` joins `no_bvars pat` / `no_bvars repl` on the arm
+;;; descent in BOTH walkers (rewrite_all and rewrite_nth; the literal twins
+;;; rwl_* build no capture env and ExactConv refuses unpinned binders, so those
+;;; paths have no capture route). A replacement with no binder of its own places
+;;; every substituted piece at the depth that piece came from, which is exactly
+;;; the argument the code claims to be making. The type gate still stands behind
+;;; it; the point of the guard is that the argument is now local and complete.
+;;;
+;;; FLIP DETECTION: this file is 3 passed, 2 failed —
+;;;   PASS node_let / five_via_f / zero_via_g   (honest supporting lemmas)
+;;;   FAIL bad                                  (the capture)
+;;;   FAIL contra                               (the consequence)
+;;; Drop `no_binders` and `bad` reports FAILED to apply (TYPE GATE: unbound
+;;; BVar) — still red, because the gate behind it holds. Drop BOTH and the file
+;;; goes 5 passed, 0 failed with `contra` proving 5 = 0. Both legs report at
+;;; claim level as `FAIL`, so both are visible to CI's fail-set projection.
+
+(import "../../kernel/stdlib.shard")
+
+(type T (Leaf) (Node Int))
+
+(fn f ((t T)) T
+  (match t
+    (Leaf Leaf)
+    ((Node n) (Node n))))
+
+;; identical to f except on the Node arm, where the field is DISCARDED.
+(fn g ((t T)) T
+  (match t
+    (Leaf Leaf)
+    ((Node n) (Node 0))))
+
+(fn obs ((x T)) Int
+  (match x
+    (Leaf 0)
+    ((Node n) n)))
+
+;; TRUE, and provable: the let is vacuous, so both sides compute to (Node y).
+;; Its RHS is the capture vehicle — a BVar-free replacement that nonetheless
+;; carries a binder, with the pat_var underneath it.
+(claim node_let
+  (goal ((y Int)) () (= (Node y) (let ((z 0)) (Node y))))
+  (steps ((compute rhs)) refl))
+
+;; PIN 1 — FALSE. compute leaves (match t (Leaf Leaf) ((Node _) (Node @0))) on
+;; the left and the same with 0 on the right; the rewrite is what makes them
+;; equal, by capturing @0 under node_let's let.
+(claim bad
+  (goal ((t T)) () (= (f t) (g t)))
+  (steps
+    ((compute both) (rewrite (lemma node_let) lr lhs true ()) (compute lhs))
+    refl))
+
+(claim five_via_f
+  (goal () () (= (obs (f (Node 5))) 5))
+  (steps ((compute lhs)) refl))
+
+(claim zero_via_g
+  (goal () () (= (obs (g (Node 5))) 0))
+  (steps ((compute lhs)) refl))
+
+;; PIN 2 — the consequence, kept so the pin states what was at stake. A failed
+;; claim never enters the theory, so this reports an unresolved citation for as
+;; long as PIN 1 fails.
+(claim contra
+  (goal () () (= 5 0))
+  (steps
+    ((rewrite (lemma five_via_f) rl lhs true ())
+     (rewrite (lemma bad) lr lhs true ())
+     (rewrite (lemma zero_via_g) lr lhs true ()))
+    refl))

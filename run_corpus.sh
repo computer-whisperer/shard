@@ -271,6 +271,8 @@ TARGETS=(
   pins/proof/subterm_induct.shard
   pins/proof/subterm_induct_rejects.shard
   pins/proof/below_resolve_rejects.shard
+  pins/proof/subterm_ctorless_rejects.shard
+  pins/proof/rewrite_arm_capture_rejects.shard
   pins/proof/struct_clause.shard
   pins/proof/struct_mutual_list.shard
   pins/proof/adq13_probe.shard

@@ -636,7 +636,8 @@
 ;;
 ;; rewrite_all additionally descends into Match ARM BODIES when both
 ;; pattern and replacement are BVar-free (always true for cited sequent
-;; equations — they bind via FVars), which is shift-free and capture-free
+;; equations — they bind via FVars) AND the replacement introduces no
+;; binder of its own, which together are shift-free and capture-free
 ;; across the arm binders. Let bodies and rewrite_first remain
 ;; binder-blind — depth-aware rewriting there still pending.
 ;; ---------------------------------------------------------------------------
@@ -758,24 +759,41 @@
            ((Some (Pair envs args2)) (Some (Pair envs (Call f args2))))
            (None None)))
         ((If c t el) (rewrite_all_if pat_vars pat repl c t el))
-        ;; Match: scrutinee, and — when pattern AND replacement are BVar-free —
-        ;; the arm BODIES too. Cited goal equations bind via FVars (a sequent
-        ;; equation never contains a loose BVar), so this guard is satisfied by
-        ;; every premise/hyp/lemma citation; it is belt-and-braces against any
-        ;; future caller. SOUNDNESS: a BVar-free pattern mentions no de Bruijn
-        ;; index, so crossing an arm's pattern binders needs no shift; a
-        ;; pat_var-matched piece (which MAY contain arm-bound BVars) is placed
-        ;; back at its own position — same depth, no capture. Without this,
-        ;; guards reified INTO arm bodies (ceval's open_many_arms residuals —
-        ;; e.g. a stuck if-chain inside an opt_pair_eq arm) are unreachable by
-        ;; rewriting, which blocks compute/rewrite alternation on stuck terms.
+        ;; Match: scrutinee, and — when pattern AND replacement are BVar-free
+        ;; AND the replacement introduces no binder — the arm BODIES too.
+        ;; Cited goal equations bind via FVars (a sequent equation never
+        ;; contains a loose BVar), so the BVar-free half is satisfied by every
+        ;; premise/hyp/lemma citation; it is belt-and-braces against any future
+        ;; caller. Without the descent, guards reified INTO arm bodies (ceval's
+        ;; open_many_arms residuals — e.g. a stuck if-chain inside an
+        ;; opt_pair_eq arm) are unreachable by rewriting, which blocks
+        ;; compute/rewrite alternation on stuck terms.
+        ;;
+        ;; SOUNDNESS. A BVar-free pattern mentions no de Bruijn index, so
+        ;; crossing an arm's pattern binders needs no shift; a pat_var-matched
+        ;; piece (which MAY contain arm-bound BVars) is placed back at the same
+        ;; DEPTH it came from, so nothing is captured. That last step is what
+        ;; needs `no_binders repl`: subst (term.shard) does not shift, so if the
+        ;; replacement carries a Let or Match of its own, a pat_var occurrence
+        ;; under it lands one binder DEEPER than its site and the piece's BVars
+        ;; are re-bound by the replacement's binder. Measured, before this
+        ;; guard: cite `∀y. (Node y) = (let ((z 0)) (Node y))` into the residual
+        ;; arm `((Node n) (Node @0))` and @0 comes back bound by z — the arm's
+        ;; field silently becomes 0, and (f t) = (g t) closes by refl for two
+        ;; functions that differ. Nothing but the citation TYPE GATE (which
+        ;; rejects the loose BVar in the capture env, three layers up in
+        ;; check_sequent) stood between that and 0 = 1. The gate still stands;
+        ;; this guard makes the argument local and complete.
         ((Match scrut arms)
          (let
            ((s2 (rewrite_all pat_vars pat repl scrut))
             (a2
               (if (no_bvars pat)
-                (if (no_bvars repl) (rewrite_all_arms pat_vars pat repl arms)
-                None)
+                (if (no_bvars repl)
+                  (if (no_binders repl)
+                    (rewrite_all_arms pat_vars pat repl arms)
+                    None)
+                  None)
                 None)))
            (match s2
              ((Some (Pair es scrut2))
@@ -815,6 +833,32 @@
   (match arms
     (Nil True)
     ((Cons (Arm p b) t) (if (no_bvars b) (no_bvars_arms t) False))))
+
+;; No binder-introducing node anywhere in the term. Let and Match are the only
+;; binders in Expr, and both are refused outright rather than only where a
+;; pat_var sits beneath them: this is a replacement about to be pushed under an
+;; arm's binders, and a term with no binder of its own places every piece
+;; substituted into it at the depth that piece came from. The partner guard to
+;; no_bvars for the arm descent — see rewrite_all's Match arm.
+(fn no_binders ((e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((BVar _) True)
+    ((IntLit _) True)
+    ((SymLit _) True)
+    ((FVar _) True)
+    ((Ctor _ args) (no_binders_list args))
+    ((Call _ args) (no_binders_list args))
+    ((If c t el)
+     (if (no_binders c) (if (no_binders t) (no_binders el) False) False))
+    ((Let _ _) False)
+    ((Match _ _) False)))
+
+(fn no_binders_list ((es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil True)
+    ((Cons h t) (if (no_binders h) (no_binders_list t) False))))
 
 ;; rewrite_all over arm bodies (patterns untouched). Some iff ANY arm changed.
 (fn rewrite_all_arms
@@ -886,7 +930,7 @@
 ;; rewrite_nth: replace exactly the K-th match site (0-based), counting
 ;; sites in rewrite_all's walk order — preorder, Ctor/Call args left to
 ;; right, If cond/then/else, Match scrutinee then arm bodies (same
-;; BVar-free guard as rewrite_all), and a matched site is counted once
+;; BVar-free/binder-free guard as rewrite_all), and a matched site is counted once
 ;; and never entered. So `(at K)` targets precisely the K-th of the
 ;; sites an all-occurrences rewrite would touch. A miss threads the
 ;; remaining count out; fewer than K+1 sites in the whole term means
@@ -924,9 +968,11 @@
            ((RwNthMiss k2)
             (if (no_bvars pat)
               (if (no_bvars repl)
-                (match (rewrite_nth_arms pat_vars pat repl arms k2)
-                  ((RwNthHitA env arms2) (RwNthHit env (Match scrut arms2)))
-                  ((RwNthMissA k3) (RwNthMiss k3)))
+                (if (no_binders repl)
+                  (match (rewrite_nth_arms pat_vars pat repl arms k2)
+                    ((RwNthHitA env arms2) (RwNthHit env (Match scrut arms2)))
+                    ((RwNthMissA k3) (RwNthMiss k3)))
+                  (RwNthMiss k2))
                 (RwNthMiss k2))
               (RwNthMiss k2)))))
         (_ (RwNthMiss k))))))
@@ -2804,11 +2850,21 @@
 
 ;; ⊰ is well-founded only on an inductive datatype value — gate it so a misuse
 ;; (e.g. subterm-induct on an Int) is a clean rejection, not a vacuous IH.
+;; A typedef with ZERO constructors is such a misuse: an opaque sig view or a
+;; refined type has no constructor form, so ⊰ has nothing to descend and the
+;; strong IH is issued over an order that is empty by construction. Refuse it
+;; here for the same reason Induct does (issue #16) rather than leaving the
+;; refusal to do_below's CTORFORM requirement three layers down — measured:
+;; subterm-induct on `(type Zed (refine Int zero_p))` WAS admitted, the IH
+;; type-checked and the citation applied, and only (below) stopped it.
 (fn subterm_is_datatype ((ty Type) (m Module)) Bool
   (match ty
     ((TCon tname _)
      (match (lookup_typedef tname m)
-       ((Some _) True)
+       ((Some (TypeDef _ _ ctors _))
+        (match ctors
+          (Nil False)
+          (_ True)))
        (None False)))
     (_ False)))
 
