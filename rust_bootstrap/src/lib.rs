@@ -762,21 +762,28 @@ mod tests {
 
     // ------------------------------------------------------------------
     // Primitive conformance: prim.rs::try_apply vs reduce.shard's
-    // try_step_prim, swept over a value matrix.
+    // prim_apply, swept over a value matrix.
     //
     // These are the TWO primitive tables (eval.shard's interpreter
-    // reuses try_step_prim, so there is no third): the native one the
+    // reuses prim_apply, so there is no third): the native one the
     // host applies to stuck calls, and the shard one the object reducer
     // (proof-side compute/simp) and the hosted interpreter dispatch.
     // Their "KEEP IN SYNC" contract was only a comment until now; this
     // sweep makes drift a test failure (ARCHITECTURE_REVIEW finding 5).
     //
+    // TABLE, NOT DISPATCH: reducers reach the table through reduce.shard's
+    // `try_step_prim`, which admits only CORE-pathed qnames (a bare-name
+    // fall-through gave a user's bodyless `(extern int_eq …)` the core prim's
+    // semantics — 0=1, see that fn's comment). This sweep is about the two
+    // tables agreeing, so it drives prim_apply directly; dispatch policy is
+    // pinned by pins/lang/prim_shadow_rejects.shard.
+    //
     // Method: for each (name, args), the native answer is
     // `prim::try_apply` directly; the object answer is the kernel's
-    // `try_step_prim` evaluated in the VM over the REFLECTED args (the
+    // `prim_apply` evaluated in the VM over the REFLECTED args (the
     // object-Expr encoding of the values). Both must agree as Options:
     // Some(reflected value) ↔ (Some <object value>), None ↔ None. An
-    // eval ERROR on the object side means try_step_prim delegated to a
+    // eval ERROR on the object side means prim_apply delegated to a
     // host prim outside its domain (crash where native is stuck) — the
     // exact divergence class the `/`-on-zero and shift-range bugs were.
     //
@@ -879,7 +886,7 @@ mod tests {
         }
     }
 
-    /// The object-table answer: `(try_step_prim 'name (list <reflected args>))`
+    /// The object-table answer: `(prim_apply 'name (list <reflected args>))`
     /// evaluated in the VM. Err means the reducer itself got stuck on a
     /// host prim outside its domain — a would-be crash at check time.
     fn object_apply(
@@ -888,7 +895,7 @@ mod tests {
         args: &[ast::Expr],
     ) -> Result<ast::Expr, String> {
         let call = ast::Expr::Call(
-            "try_step_prim".into(),
+            "prim_apply".into(),
             vec![
                 ast::Expr::SymLit(name.into()),
                 expr_spine(args.iter().map(reflect).collect()),

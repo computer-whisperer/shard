@@ -1,0 +1,58 @@
+;;; prim_shadow_rejects.shard — SOUNDNESS REGRESSION TEST.
+;;;
+;;; The prim table's dispatch gate. Every reducer resolves a Call TRIE-FIRST and
+;;; falls through to the primitive table on a MISS — and a BODYLESS declaration
+;;; (an extern, a bodyless sig) is never in the trie, so for one of those the
+;;; fall-through ALWAYS fires. While that fall-through keyed on the BARE name,
+;;; a declaration at any module path whose local name happened to be a core
+;;; prim's was TYPED by its own signature and REDUCED by the core prim.
+;;;
+;;; That is a full 0=1 with no axiom, no admit and no shadowed proof rule --
+;;; `zero_is_one` below CHECKED, exit 0, on both engines:
+;;;
+;;;   the typer reads (extern int_eq ((a Int) (b Int)) T), so (int_eq 1 2) is a
+;;;   T value and case-on over T is admitted with both ctors covered;
+;;;   the reducer reads the core Bool prim, so in EVERY arm the case equation
+;;;   (= (int_eq 1 2) Yes) simps to (= False Yes) — a genuine ctor clash — and
+;;;   `absurd` closes the arm. Every arm closed, so the goal (= 0 1) is proved.
+;;;
+;;; The fix: try_step_prim (kernel/reduce.shard) takes the QName and admits only
+;;; the CORE path, delegating to the bare-name table `prim_apply` behind that
+;;; gate. A non-core name is then an ordinary STUCK call — same value in every
+;;; reducer, its own declared signature in the typer. Same ruling as
+;;; refine_try/refine_val (5ce1cf6): core identity is unforgeable, bare names
+;;; are not.
+;;;
+;;; Reachable names are the whole table: + - * / ediv mod tmod band bor bxor
+;;; bshl bshr int_eq le lt sym_eq chars_of_sym sym_of_chars gen_fresh refine_val.
+;;;
+;;; The first two claims pin the two things the gate must NOT cost:
+;;; an unshadowed prim still reduces, and a shadow WITH A BODY is still an
+;;; ordinary fn reached through the trie.
+;;;
+;;; If a future change re-opens the hole this file flips from "2 passed, 1
+;;; failed" to "3 passed" and the corpus FAIL-set diff catches it.
+
+(import "../../kernel/stdlib.shard")
+
+(type T (Yes) (No))
+
+;; the exploit's carrier: bodyless, so the trie never holds it.
+(extern int_eq ((a Int) (b Int)) T)
+
+;; a shadow WITH a body — the trie holds this one, so it is an ordinary fn.
+(fn lt ((a Int) (b Int)) T (Yes))
+
+;; PASSES — `le` is not declared here, so it resolves to (:: core le) and the
+;; core prim reduces. The gate must not cost a genuine prim call.
+(claim prim_unshadowed (goal () () (= (le 1 2) True)) (steps ((compute lhs)) refl))
+
+;; PASSES — trie-first shadowing: the user's body wins, the prim never runs.
+(claim shadow_with_body (goal () () (= (lt 5 1) Yes)) (steps ((compute lhs)) refl))
+
+;; MUST FAIL — the exploit. With the gate, (int_eq 1 2) is a stuck call: it
+;; clashes with nothing, so `absurd` closes neither arm.
+(claim zero_is_one
+  (goal () () (= 0 1))
+  (case-on (int_eq 1 2) T
+    ((case Yes (absurd (hyp 0))) (case No (absurd (hyp 0))))))

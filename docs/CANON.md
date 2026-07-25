@@ -660,8 +660,12 @@ once, at its home module. Nothing fails; no exit code changes.
 Facts the slice pinned:
 
 - **C1 is drift-proof by construction**: the recognizer consults
-  try_step_prim itself — a ground prim redex is exactly a core-pathed
-  Call whose literal args make the reducer's own table step. Excluded
+  the reducer's own prim table itself — a ground prim redex is exactly a
+  core-pathed Call whose literal args make that table step. (Since
+  2026-07-25 the kernel recognizer calls `try_step_prim`, which *is* the
+  core gate; `tools/canon`'s pre-resolution walk has only a bare symbol,
+  so it establishes core-ness itself via `cw_core_free` and then calls
+  the ungated table `prim_apply` directly.) Excluded
   from flagging: gen_fresh (effectful — folding it would be WRONG, not
   merely non-canonical) and refine_val (a typing coercion).
 - **The Let binder convention** (needed by C3's first-use walk):

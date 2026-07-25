@@ -439,6 +439,20 @@ treated as a function call. The evaluator looks up the fn in the
 module; unknown calls are tried as primitives; if neither matches,
 the call is *stuck* (`EvalError::UnknownCall`).
 
+**A primitive is a CORE identity, not a name.** Dispatch is *trie-first*:
+a fn you declare with a body always wins over a primitive of the same
+name — it is an ordinary fn, with your body in every reducer and your
+signature in the typer. The "tried as primitives" fall-through then
+admits only names at the `core` module-path, so a **bodyless**
+declaration (an `extern`, a bodyless sig) whose local name collides with
+a primitive is a *stuck call*, not the primitive: it is never in the
+trie, so before that gate it took the primitive's semantics while the
+typer read its declared signature — one term, two values, and a `0 = 1`
+(`kernel/reduce.shard` `try_step_prim`,
+`pins/lang/prim_shadow_rejects.shard`). If you meant the primitive,
+don't declare the name; if you meant your own function, give it a body
+or a name of its own.
+
 ### 4.5 `if`
 
 ```sexp

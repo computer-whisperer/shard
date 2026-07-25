@@ -288,6 +288,23 @@ cannot know the name is shadowed and rewraps arg0 as a type marker either way.
 A shadowing fn is therefore awkward to call, not dangerous — the soundness
 property is that no term has two values, and that holds.
 
+**The table row above understated it: the trie-miss fall-through was itself a
+`0=1`, for the WHOLE prim table.** [FIXED 2026-07-25.] "Trie first, prim on a
+miss" reads like the shadowing contract honored — but a **bodyless** declaration
+is never in the trie, so for an `extern` (or a bodyless sig) the miss-path
+*always* fires, at any module path. Keyed on the bare name, that gave a user's
+`(extern int_eq ((a Int) (b Int)) T)` the core Bool prim's semantics while the
+typer read `T` from its declared signature: `case-on` over `T` is admitted, and
+in every arm the case equation simps to `(= False Yes)` — a genuine ctor clash —
+so `absurd` closes them all and `(= 0 1)` checks. No axiom, no admit, no
+shadowed proof rule; every reachable name in the table (`+ - * / ediv mod tmod
+band bor bxor bshl bshr int_eq le lt sym_eq chars_of_sym sym_of_chars gen_fresh
+refine_val`) is a carrier. `try_step_prim` now takes the **QName** and admits
+only the core path, delegating to the bare-name table `prim_apply` behind that
+gate — so the gate lives at the single entry point every dispatcher already
+funnels through, rather than at each call site where the next dispatcher would
+have to remember it. Pin: `pins/lang/prim_shadow_rejects.shard`.
+
 **Predicate totality is a prerequisite, not an option.** `refine-fact` hands out
 `PRED x = True`; if `PRED` does not provably terminate, that fact is meaningless
 and the extension is unsound. So a refinement predicate must be **measure-admitted

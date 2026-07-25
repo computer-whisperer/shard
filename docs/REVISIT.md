@@ -317,7 +317,9 @@ is where to start when planning v3.
   unfolded to `(+ 5 5)` but then stuck (no kernel handling of `+`).
 - **Cost:** the kernel duplicates the primitive table (names and
   argument-shape patterns). Each primitive added in `src/prim.rs`
-  also needs a clause in `try_step_prim`.
+  also needs a clause in `prim_apply` (the table; `try_step_prim` is
+  the core-gated dispatch entry point above it — see that fn's comment
+  for why the gate is load-bearing).
 - **Revisit if:** the primitive set grows beyond a dozen or two,
   or if we want primitives to be discoverable rather than
   hardcoded. The cleaner long-term fix is for the kernel to call

@@ -221,7 +221,7 @@
 ;; the primitive table; otherwise step an argument. Stuck calls
 ;; (unknown name AND not a primitive AND no reducible arg) return None.
 ;; CORE refine_try is reserved (handled before trie lookup, like refine_val
-;; in try_step_prim) — see refine_try_step.
+;; in prim_apply) — see refine_try_step.
 ;;
 ;; The core_named gate is LOAD-BEARING, not decoration. This intercept runs
 ;; BEFORE the trie, which breaks the trie-first shadowing contract every
@@ -249,23 +249,53 @@
           ((Some e2) (Some e2))
           (None (step_args_in_call m f args))))
        (None
-         (match (try_step_prim (qn_name f) args)
+         (match (try_step_prim f args)
            ((Some e2) (Some e2))
            (None (step_args_in_call m f args)))))))))
 
-;; try_step_prim: dispatch a Call value to the primitive table when
-;; all args are already values of the expected shapes. Returns None
-;; if `f` isn't a known primitive or the args don't fit (e.g. not yet
-;; reduced to literals). The primitives invoked in the bodies below
-;; ARE narrow calls — the Rust runtime intercepts them via the same
-;; mechanism that powers ordinary in-language arithmetic.
+;; try_step_prim: the DISPATCH entry point every reducer reaches the prim
+;; table through — a Call value whose qname is a CORE identity and whose args
+;; are already values of the expected shapes.
+;;
+;; THE CORE GATE IS THE SOUNDNESS BOUNDARY, not a formality. Every dispatcher
+;; is trie-first and falls through to here on a MISS — and a BODYLESS
+;; declaration (an extern, a bodyless sig) is never in the trie, so the
+;; fall-through always fires for one. While the test was on the BARE name, a
+;; user `(extern int_eq ((a Int) (b Int)) T)` at their own module path was
+;; TYPED by its declared signature and REDUCED by the core Bool prim: case-on
+;; the extern's result at T is admitted by the type gate, and in every arm the
+;; case equation simps to (= False Yes) — a genuine ctor clash — so `absurd`
+;; closes them all. That is 0=1 on an acceptance run with no axiom, no admit
+;; and no shadowed proof rule (pins/lang/prim_shadow_rejects.shard).
+;;
+;; Under the gate a non-core name is an ORDINARY stuck call: the same value in
+;; every reducer, its own declared signature in the typer. Genuine prim calls
+;; elaborate+resolve to (:: core NAME) — env_lookup defaults an unresolved name
+;; to (qn_core) — so this costs nothing that was ever legitimate. Same ruling as
+;; refine_try/refine_val (5ce1cf6): core identity is unforgeable, bare names are
+;; not. Gating HERE rather than at the call sites means a future dispatcher
+;; inherits the gate instead of having to remember it.
+(fn try_step_prim ((f QName) (args (List Expr))) (Option Expr)
+  (if (sym_path_eq (qn_mod f) (qn_core)) (prim_apply (qn_name f) args) None))
+
+;; prim_apply: the primitive TABLE, keyed by bare name. Returns None if `f`
+;; isn't a known primitive or the args don't fit (e.g. not yet reduced to
+;; literals). The primitives invoked in the bodies below ARE narrow calls — the
+;; Rust runtime intercepts them via the same mechanism that powers ordinary
+;; in-language arithmetic.
+;;
+;; Bare-name keying is correct HERE and only here: this is the table, and
+;; try_step_prim above has already established that `f` is a core identity.
+;; Reducers must go through try_step_prim — calling prim_apply directly
+;; re-opens the hole documented there.
 ;;
 ;; KEEP IN SYNC with src/prim.rs — enforced by the prim conformance
 ;; sweep (rust_bootstrap/src/lib.rs, prim_conformance_*): both tables
 ;; are swept over a value matrix, so value drift, domain drift (a guard
 ;; on one side only), and coverage drift all fail `cargo test`. When
-;; adding a primitive, update the spec lists there too.
-(fn try_step_prim ((f Symbol) (args (List Expr))) (Option Expr)
+;; adding a primitive, update the spec lists there too. The sweep drives
+;; prim_apply (table vs table); dispatch policy is try_step_prim's business.
+(fn prim_apply ((f Symbol) (args (List Expr))) (Option Expr)
   ;; refine_val : R -> BASE is IDENTITY — a refined value IS its carrier (zero
   ;; runtime content), for ANY carrier shape. Reducing it lets a refined-return
   ;; obligation see through (refine_val (f args)) to the body once f unfolds.
@@ -345,7 +375,7 @@
       (_ None))))
 
 ;; Convert a Bool VALUE to the corresponding narrow Expr VALUE
-;; (Ctor "True" Nil) / (Ctor "False" Nil). Used by try_step_prim's
+;; (Ctor "True" Nil) / (Ctor "False" Nil). Used by prim_apply's
 ;; comparison cases.
 (fn bool_as_expr ((b Bool)) Expr
   (if b (Ctor (qn (quote True)) Nil) (Ctor (qn (quote False)) Nil)))
@@ -1266,7 +1296,7 @@
        ((Ctor (QName _ (quote True)) Nil) (Some t))
        ((Ctor (QName _ (quote False)) Nil) (Some el))
        (_ None)))
-    ((Call f args) (try_step_prim (qn_name f) args))
+    ((Call f args) (try_step_prim f args))
     ;; NOTE: no nat_pack — step_head is step_smart's gate; the gate must not
     ;; promise a head step the smart reducer won't take.
     (_ None)))
@@ -1363,7 +1393,7 @@
        (None
          ;; Not a user fn — try primitive table; primitives have no
          ;; gate (they always reduce when arg shapes match).
-         (match (try_step_prim (qn_name f) args)
+         (match (try_step_prim f args)
            ((Some e2) (Some e2))
            (None (step_smart_args_in_call m stops f args)))))))))
 
@@ -1549,7 +1579,7 @@
 ;;
 ;; SOUNDNESS — ceval agrees with `step`'s normal form (same definitional
 ;; equality the kernel already trusts):
-;;   - SAME primitive table (try_step_prim) and SAME three-valued matcher
+;;   - SAME primitive table (prim_apply, via try_step_prim) and SAME matcher
 ;;     (match_pat / MStuck) as `step` — so a stuck scrutinee with an undecided
 ;;     ctor-arm stays stuck (it does NOT fall through to a later `_`, the
 ;;     two-valued bug `ev` is allowed because it only runs closed apps).
@@ -1750,7 +1780,7 @@
               (ceval m stops (reverse_exprs vs) body (- fuel 1))  ; (reverse args) ⊢ body
               (Call f vs)))  ; partial app → stuck
            (None
-             (match (try_step_prim (qn_name f) vs)
+             (match (try_step_prim f vs)
                ((Some r) r)
                (None (Call f vs)))))))))))  ; prim-miss / extern → stuck
 

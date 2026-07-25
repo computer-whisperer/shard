@@ -26,7 +26,7 @@ use crate::ast::{Expr, IntLit as Int, Symbol};
 /// shape; `None` otherwise (the call stays stuck, which the
 /// evaluator surfaces as `UnknownCall`).
 ///
-/// CONFORMANCE: this table and kernel/reduce.shard's `try_step_prim`
+/// CONFORMANCE: this table and kernel/reduce.shard's `prim_apply`
 /// are the two primitive tables (eval.shard's interpreter reuses the
 /// latter). The `prim_conformance_*` tests in lib.rs sweep both over a
 /// value matrix — when adding/removing a name here, update the spec

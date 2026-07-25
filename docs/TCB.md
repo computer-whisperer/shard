@@ -45,11 +45,25 @@ A shard acceptance verdict ultimately rests on, in order:
    it never widens the floor.
 5. **The prim tables, tied by conformance.** Exactly two prim
    implementations exist: `prim.rs::try_apply` (native) and
-   `reduce.shard::try_step_prim` (object reducer; eval.shard reuses
+   `reduce.shard::prim_apply` (object reducer; eval.shard reuses
    it). The `prim_conformance_*` cargo tests in `rust_bootstrap`
    sweep them against each other over a value matrix; the spec lists
    (`SHARED_INT2` / `OBJECT_ONLY_*`) in lib.rs are the prim-set source
    of truth.
+
+   **Table conformance is only half of it — WHICH terms reach the table
+   is the other half, and it is a soundness question.** Every reducer is
+   trie-first and falls through to the table on a miss, and a *bodyless*
+   declaration is never in the trie, so for an `extern` the miss-path
+   always fires. Keyed on the bare name that handed a user's
+   `(extern int_eq …)` the core prim's semantics while the typer read its
+   declared signature — one term, two values, `0 = 1` on an acceptance
+   run (2026-07-25). `reduce.shard::try_step_prim` is now the single
+   core-gated entry point above the table: it takes the **QName** and
+   admits only the `core` path. Reducers go through it; the conformance
+   sweep drives `prim_apply` directly, because its job is table-vs-table.
+   Dispatch policy is pinned separately by
+   `pins/lang/prim_shadow_rejects.shard`.
 
 The C compiler, shardfmt, and the test scripts are NOT on the roster:
 cc's output is differentially gated (below), shardfmt is a gate that
