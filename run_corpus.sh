@@ -115,6 +115,7 @@ TARGETS=(
   pins/lang/refine_circular_rejects.shard
   pins/lang/refine_try.shard
   pins/lang/refine_try_rejects.shard
+  pins/lang/refine_shadow_rejects.shard
   pins/lang/utf8_compute.shard
   examples/str_demo.shard
   pins/lang/module_gate_rejects.shard

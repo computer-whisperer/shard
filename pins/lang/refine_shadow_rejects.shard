@@ -1,0 +1,114 @@
+;;; refine_shadow_rejects.shard — SOUNDNESS REGRESSION TEST (must FAIL to check).
+;;;
+;;; The third bare-name identity hole, and the first one that was a genuine
+;;; 0=1 rather than a latent misread. `refine_try` and `refine_val` are the
+;;; two RESERVED names of the refinement machinery (docs/REFINEMENT.md), and
+;;; the kernel's own stated dispatch contract (kernel/types.shard) is that a
+;;; user fn of a prim's name shadows it TRIE-FIRST, "exactly as it shadows at
+;;; runtime". Both names broke that contract, in opposite directions.
+;;;
+;;; THE BUG — refine_try. Three sites tested the BARE name AHEAD of the trie:
+;;; the typer (types.shard tc_infer's Call arm), `step_call` and `ceval_call`
+;;; (reduce.shard). `unfold_one` (reduce.shard) does its OWN trie_lookup and
+;;; intercepts NOTHING. So with a user (fn refine_try …) in scope, one term
+;;; had TWO values: `unfold` opened the user's body, `compute` ran the kernel
+;;; downcast. Routing the disagreement through a Bool-valued observer keeps
+;;; the divergent value inside the computation, so only a Bool ever crosses
+;;; the equation boundary and the type gate never sees a mismatch —
+;;; `(= True False)`, `absurd`, 0=1, on an ACCEPTANCE run with no axiom, no
+;;; admit and no shadowed proof rule.
+;;;
+;;; THE BUG — refine_val. Intercepted by bare name in the TYPER only; every
+;;; reducer reaches it trie-first (try_step_prim's identity rule fires on a
+;;; trie MISS). So a shadow was TYPED as the kernel projection R -> BASE and
+;;; EVALUATED as the user's body. No exploit was found through refine-fact —
+;;; the kernel injects that premise with the CORE qname, so it still reduces
+;;; by the identity — but the type/value split was real and is closed here.
+;;;
+;;; THE FIX: all four intercepts admit the reserved name only through
+;;; `core_named` (core module-path AND name), the discipline term.shard
+;;; states and the theory backends have followed since Stage 3. A shadow is
+;;; then an ORDINARY fn — one body in every reducer, its own signature in the
+;;; typer — and genuine calls, which elaborate and resolve to
+;;; (:: core refine_try), keep kernel semantics everywhere.
+;;;
+;;; WHAT EACH PIN DETECTS — they do not all watch the same site:
+;;;   shadow_unfold   — the TYPER's refine_try gate. Needs the bare-name rule
+;;;                     to type the shadowed call at all; `unfold` then opens
+;;;                     the user body.
+;;;   shadow_compute  — the typer gate AND step_call's. Kernel downcast on a
+;;;                     non-core name: pos_p 5 = True, so the term is (Some 5).
+;;;   zero_is_one     — both together: the two legs disagree, and the
+;;;                     disagreement cashes out.
+;;;   val_shadow      — the refine_val gate in the typer, independently: with
+;;;                     the bare name this claim PASSES (the user body returns
+;;;                     7 while the typer calls the term a projection of s).
+;;;
+;;; A NOTE ON WHAT THE FIX DOES NOT DO. `elab_refine_try` (reader.shard)
+;;; claims the SURFACE form unconditionally, and elaboration runs before
+;;; resolution, so it cannot know the name is shadowed: it rewraps arg0 as a
+;;; type MARKER either way. A shadowing fn is therefore awkward to call — its
+;;; first argument arrives as a marker ctor — which is why these claims now
+;;; report "unknown constructor: Pos" rather than a proof failure. That is a
+;;; usability wart, not a soundness one; the soundness property is that no
+;;; term has two values.
+;;;
+;;; WHICH LEG ACTUALLY GATES IN CI. Re-opening the hole flips this file from
+;;; "0 passed, 4 failed" to "4 passed, 0 failed" — but CI's fail-set diff is
+;;; built by `grep '^FAIL'`, and three of the four legs report at DECL level
+;;; as `TYPE!`, a line prefix that projection cannot see. `zero_is_one` is the
+;;; leg that gates: it reports `FAIL`, so it has a fails-base.txt entry whose
+;;; disappearance breaks the diff. That is also the leg that IS the exploit,
+;;; so the gate is sufficient — but do not read the other three as CI-gated.
+;;; (The blind spot is not specific to this file: pins/lang/types_gate.shard
+;;; is three TYPE! failures with no fails-base entry at all, hence ungated.)
+;;;
+;;; The POSITIVE control — the genuine downcast and projection still
+;;; working — is pins/lang/refine_basic.shard and pins/lang/refine_try.shard.
+
+(import "../../kernel/stdlib.shard")
+
+(fn pos_p ((x Int)) Bool (le 0 x))
+
+(type Pos (refine Int pos_p))
+
+;; NOT core::refine_try — a user fn that merely shares the reserved bare name.
+(fn refine_try ((r Int) (x Int)) (Option Pos) None)
+
+(fn is_none ((o (Option Pos))) Bool
+  (match o
+    (None True)
+    ((Some _) False)))
+
+;; MUST FAIL — reaches the trie and opens the shadow's body.
+(claim shadow_unfold
+  (goal () () (= (is_none (refine_try Pos 5)) True))
+  (steps ((unfold refine_try lhs) (compute lhs)) refl))
+
+;; MUST FAIL — the same term under the kernel downcast instead.
+(claim shadow_compute
+  (goal () () (= (is_none (refine_try Pos 5)) False))
+  (steps ((compute lhs)) refl))
+
+;; MUST FAIL — one term, two values.
+(claim zero_is_one
+  (goal () () (= 0 1))
+  (have (= True False)
+    (steps
+      ((rewrite (lemma shadow_unfold) rl lhs true ())
+       (rewrite (lemma shadow_compute) lr lhs true ()))
+      refl)
+    (absurd (premise 0))))
+
+(fn zero_p ((x Int)) Bool (int_eq x 0))
+
+(type Zed (refine Int zero_p))
+
+;; NOT core::refine_val — the kernel's identity projection, replaced.
+(fn refine_val ((x Int)) Int 7)
+
+;; MUST FAIL — the typer must not call this term a projection of s while the
+;; reducers run the shadow's body.
+(claim val_shadow
+  (goal ((s Zed)) () (= (refine_val s) 7))
+  (steps ((compute lhs)) refl))

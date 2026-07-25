@@ -220,15 +220,27 @@
 ;; step_call: unfold user-fn application if possible; otherwise try
 ;; the primitive table; otherwise step an argument. Stuck calls
 ;; (unknown name AND not a primitive AND no reducible arg) return None.
-;; refine_try is reserved (handled before trie lookup, like refine_val in
-;; try_step_prim) — see refine_try_step.
+;; CORE refine_try is reserved (handled before trie lookup, like refine_val
+;; in try_step_prim) — see refine_try_step.
+;;
+;; The core_named gate is LOAD-BEARING, not decoration. This intercept runs
+;; BEFORE the trie, which breaks the trie-first shadowing contract every
+;; other prim honors (types.shard: "a user fn of the same name shadows them
+;; here exactly as it shadows at runtime"). unfold_one does NOT intercept —
+;; it is trie-only — so while the test was on the BARE name, one term had
+;; two values: `unfold` opened a user (fn refine_try …)'s body while
+;; simp/compute ran the kernel downcast. Routed through a Bool-valued
+;; observer so the type gate never saw the mismatch, that is 0=1 on an
+;; acceptance run (pins/lang/refine_shadow_rejects.shard). Under core_named
+;; a shadow is an ORDINARY fn: same body in every reducer, own signature in
+;; the typer. Genuine calls elaborate+resolve to (:: core refine_try).
 ;;
 ;; The primitive dispatch happens at the data level — the kernel is
 ;; reducing a Call VALUE, not invoking a function. See REVISIT —
 ;; "Primitives reachable from the kernel's reducer".
 (fn step_call ((m Module) (f QName) (args (List Expr))) (Option Expr)
   (measure (+ (* 2 (size_list args)) 2))
-  (if (sym_eq (qn_name f) (quote refine_try)) (refine_try_step m args)
+  (if (core_named f (quote refine_try)) (refine_try_step m args)
   (match m
     ((Module _ _ _ trie _)
      (match (trie_lookup f trie)
@@ -1712,10 +1724,13 @@
     ;; a STOP fn stays folded — args are already evaluated, so this IS the
     ;; stuck-Call shape; strictly fewer reductions than plain compute.
     (if (qn_member f stops) (Call f vs)
-    (if (sym_eq (qn_name f) (quote refine_try))
+    (if (core_named f (quote refine_try))
       ;; (refine_try (Ctor R Nil) ev): vs already evaluated. Compute R's PRED on
       ;; ev; wrap Some ONLY on True. Stuck (return the Call) if not a refined type
       ;; or PRED doesn't decide — the typer rules the former out. docs/REFINEMENT.md.
+      ;; core_named, not the bare name: see step_call's note — a bare-name test
+      ;; here gave a user (fn refine_try …) kernel semantics under compute while
+      ;; unfold opened its body, and two values for one term is 0=1.
       (match vs
         ((Cons (Ctor rname _) (Cons ev Nil))
          (match (typedef_refine rname m)

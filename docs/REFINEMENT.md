@@ -244,6 +244,37 @@ so this is additive.
 **Not trusted** (advisory / re-checked): the obligation *proofs* (re-checked by
 `check_sequent`); the `tools/prove` search that finds them.
 
+**`refine_try` and `refine_val` are CORE-QUALIFIED names, and every intercept
+must say so.** [FIXED 2026-07-25, after a confirmed `0=1`.] Both names are
+reserved: the typer gives them their own rules, and the reducer gives
+`refine_try` the downcast step. Four sites tested the **bare** name, and the
+kernel's own dispatch contract — a user fn of a prim's name shadows it
+*trie-first*, "exactly as it shadows at runtime" (`kernel/types.shard`) — was
+broken by each in a different direction:
+
+| site | order | with a user `refine_try`/`refine_val` in scope |
+|---|---|---|
+| `types.shard` tc_infer Call arm | bare name **before** `tc_fn_sig` | kernel rule |
+| `reduce.shard` `step_call`, `ceval_call` | bare name **before** the trie | kernel semantics (`refine_try`) |
+| `reduce.shard` `unfold_one` | trie only, **no** intercept | the user's body |
+| `reduce.shard` `try_step_prim` | trie first, prim on a miss | the user's body (`refine_val`) |
+
+So one term had two values: `unfold` opened the shadow's body while `compute`
+ran the downcast. Routed through a `Bool`-valued observer — keeping the
+divergent value *inside* the computation, so only a `Bool` crosses the equation
+boundary — that is `(= True False)`, `absurd`, `0 = 1`, on an acceptance run
+with no axiom, no admit, and no shadowed proof rule. All four intercepts now
+gate on `core_named` (core module-path **and** name), so a shadow is an
+ordinary fn — one body in every reducer, its own signature in the typer — and
+genuine calls, which elaborate and resolve to `(:: core refine_try)`, keep
+kernel semantics everywhere. Pin: `pins/lang/refine_shadow_rejects.shard`.
+
+One thing `core_named` does **not** reach: `elab_refine_try` (§9) claims the
+*surface* form unconditionally, and elaboration precedes resolution, so it
+cannot know the name is shadowed and rewraps arg0 as a type marker either way.
+A shadowing fn is therefore awkward to call, not dangerous — the soundness
+property is that no term has two values, and that holds.
+
 **Predicate totality is a prerequisite, not an option.** `refine-fact` hands out
 `PRED x = True`; if `PRED` does not provably terminate, that fact is meaningless
 and the extension is unsound. So a refinement predicate must be **measure-admitted

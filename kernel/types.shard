@@ -451,10 +451,16 @@
              ((TcsErr msg) (TcErr msg))
              ((TcsOk tc2) (TcOk tc2 (TCon tname metas)))))))))
     ((Call f args)
-     (if (sym_eq (qn_name f) (quote refine_val))
+     (if (core_named f (quote refine_val))
        ;; refine_val : R -> BASE, a RESERVED projection prim for a refined type
        ;; R = (refine BASE PRED). Identity at runtime; here it retypes from the
        ;; argument's refined type to its base. See docs/REFINEMENT.md.
+       ;; core_named: the REDUCERS reach refine_val trie-first (step_call and
+       ;; ceval_call fall through to try_step_prim only on a trie MISS), so a
+       ;; bare-name test here typed a user (fn refine_val …) as the kernel
+       ;; projection while every reducer ran its body — a type/value split.
+       ;; Gating on core identity puts the typer back on the same footing as
+       ;; the reducers: a shadow is typed by its own signature.
        (match args
          ((Cons ev Nil)
           (match (tc_infer m tc fenv env ev)
@@ -473,11 +479,21 @@
                            (chars_of_sym (qn_name rname)))))
                      ((Some (Pair base _)) (TcOk tc1 base))))))))))
          (_ (TcErr "refine_val: expects exactly one argument")))
-       (if (sym_eq (qn_name f) (quote refine_try))
+       (if (core_named f (quote refine_try))
          ;; refine_try : BASE -> (Option R), the decidable downcast into a refined
          ;; type R = (refine BASE PRED). arg0 is the type MARKER (Ctor R Nil); arg1
          ;; the candidate, which must have type BASE. Result is (Option R). The
          ;; reducer computes PRED to wrap Some only on True. See docs/REFINEMENT.md.
+         ;; core_named for the reason in reduce.shard's step_call: on the bare
+         ;; name a user (fn refine_try …) was TYPED by this rule and COMPUTED by
+         ;; the kernel downcast while `unfold` opened its body — 0=1. A shadow
+         ;; now falls through to tc_fn_sig and is typed by its own signature.
+         ;; NOTE the surface name stays claimed by elab_refine_try
+         ;; (reader.shard) — elaboration precedes resolution, so it cannot know
+         ;; about a shadow and rewraps arg0 as a type marker regardless. A
+         ;; shadowing fn is therefore hard to CALL (its arg0 becomes a marker
+         ;; ctor and fails to type); that is a usability wart, not a soundness
+         ;; one, and the pin records it.
          (match args
            ((Cons (Ctor rname _) (Cons ev Nil))
             (match (typedef_refine rname m)
