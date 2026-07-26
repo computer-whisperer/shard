@@ -58,6 +58,13 @@
 ;;; or
 ;;;   search_expect_empty : () -> Bool       ; exhaustive absence tasks
 ;;;
+;;; The search_ prefix is RESERVED for these hooks: te_task_scan refuses any
+;;; other search_*-named fn in the task closure (typo/vestige hardening), a
+;;; multiply-defined witness, a solo spine hook, and flat vocabulary hooks
+;;; under search_environment. Task-local helpers use another prefix (the
+;;; task_* convention). imp_expr's four local hooks are a separate protocol
+;;; and never pass through this scan.
+;;;
 ;;; RUN IT:
 ;;;   bin/shard_eval run tools/search/typed_expr.shard TASK.shard
 
@@ -80,6 +87,7 @@
 (use (:: kernel reader *))
 (use (:: kernel types *))
 (use (:: kernel loader World))
+(use (:: kernel loader starts_with))
 (use (:: kernel loader read_file))
 (use (:: kernel loader get_args))
 (use (:: kernel loader write))
@@ -214,11 +222,9 @@
         (match params
           (Nil
             (if (type_eq ret (TCon (qn (quote Bool)) Nil))
-              (TeSigOk
-                probe target (TeWitnessEmptyFd expect_empty) cand obs)
+              (TeSigOk probe target (TeWitnessEmptyFd expect_empty) cand obs)
               (TeSigErr "search_expect_empty must return Bool")))
-          ((Cons _ _)
-           (TeSigErr "search_expect_empty must take no arguments"))))))))
+          ((Cons _ _) (TeSigErr "search_expect_empty must take no arguments"))))))))
 
 (fn te_target_sig ((m Module) (probe FnDef) (cand Type) (obs Type)) TeSigR
   (match (find_fn (quote search_target) m)
@@ -469,13 +475,103 @@
     (None (te_flat_config ctx m))
     ((Some fd) (te_scoped_fd ctx m depth fd)))))
 
+;; ---- task hook scan ---------------------------------------------------------
+;; Every fn named search_* anywhere in the loaded task closure must be a hook
+;; this protocol consumes, and structurally contradictory hook sets are
+;; refused at load: a typo'd or vestigial hook is a task bug, never a silent
+;; no-op. Engine-policy combinations (result mode against screen/audit/
+;; expect-empty) stay with the engines; this scan owns what is task-intrinsic.
+
+(fn te_hooks () (List Symbol)
+  (list
+    (quote search_forms)
+    (quote search_ints)
+    (quote search_symbols)
+    (quote search_depth)
+    (quote search_environment)
+    (quote search_canon_profile)
+    (quote search_observer_profile)
+    (quote search_spine_context)
+    (quote search_spine_profile)
+    (quote search_narrowing_strategy)
+    (quote search_screen)
+    (quote search_probe)
+    (quote search_target)
+    (quote search_witness)
+    (quote search_witness_rank)
+    (quote search_expect_empty)
+    (quote search_result_mode)
+    (quote search_drive_budget)))
+
+(fn te_hook_member ((s Symbol) (xs (List Symbol))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (sym_eq h s) True (te_hook_member s t)))))
+
+(fn te_scan_fns ((fns (List FnDef))) (Option (List Int))
+  (measure (struct fns))
+  (match fns
+    (Nil None)
+    ((Cons fd rest)
+     (match fd
+       ((FnDef q _ _ _)
+        (if (starts_with "search_" (chars_of_sym (qn_name q)))
+          (if (te_hook_member (qn_name q) (te_hooks)) (te_scan_fns rest)
+          (Some (append_int "unknown task hook: " (chars_of_sym (qn_name q)))))
+          (te_scan_fns rest)))))))
+
+(fn te_has_hook ((m Module) (s Symbol)) Bool
+  (match (find_fn s m)
+    (None False)
+    ((Some _) True)))
+
+(fn te_hook_flag ((b Bool)) Int (if b 1 0))
+
+(fn te_task_scan ((m Module)) (Option (List Int))
+  (match m
+    ((Module _ fns _ _ _)
+     (match (te_scan_fns fns)
+       (None
+         (if
+           (lt
+             1
+             (+
+               (te_hook_flag (te_has_hook m (quote search_witness)))
+               (+
+                 (te_hook_flag (te_has_hook m (quote search_witness_rank)))
+                 (te_hook_flag (te_has_hook m (quote search_expect_empty))))))
+           (Some
+             "conflicting witness hooks: define exactly one of search_witness / search_witness_rank / search_expect_empty")
+           (if
+             (int_eq
+               1
+               (+
+                 (te_hook_flag (te_has_hook m (quote search_spine_context)))
+                 (te_hook_flag (te_has_hook m (quote search_spine_profile)))))
+             (Some
+               "search_spine_context and search_spine_profile are mutually required")
+             (if
+               (if (te_has_hook m (quote search_environment))
+                 (if (te_has_hook m (quote search_forms)) True
+                 (if (te_has_hook m (quote search_ints)) True
+                 (te_has_hook m (quote search_symbols))))
+                 False)
+               (Some
+                 "search_forms/search_ints/search_symbols are unread under search_environment; delete them")
+               None))))
+       ((Some msg) (Some msg))))))
+
 (fn te_config ((ctx InvokeCtx) (m Module)) TeCfgR
-  (match (te_call0 ctx m (quote search_depth))
-    (None (TeCfgErr "missing/failed search_depth"))
-    ((Some de)
-     (match (expr_int de)
-       (None (TeCfgErr "search_depth is not Int"))
-       ((Some depth) (te_config_depth ctx m depth))))))
+  (match (te_task_scan m)
+    (None
+      (match (te_call0 ctx m (quote search_depth))
+        (None (TeCfgErr "missing/failed search_depth"))
+        ((Some de)
+         (match (expr_int de)
+           (None (TeCfgErr "search_depth is not Int"))
+           ((Some depth) (te_config_depth ctx m depth))))))
+    ((Some msg) (TeCfgErr msg))))
 
 ;; ---- explicit theorem-backed formation profile ----------------------------
 
@@ -518,35 +614,29 @@
     ((FnDef _ params ret _)
      (match params
        ((Cons _ _)
-        (TeObserverNamesErr
-          "search_observer_profile must take no arguments"))
+        (TeObserverNamesErr "search_observer_profile must take no arguments"))
        (Nil
-        (if (type_eq ret (te_canon_names_ty))
-          (match (invoke_fd_ctx ctx fd Nil)
-            (None
-              (TeObserverNamesErr
-                "search_observer_profile invocation failed"))
-            ((Some value)
-             (match (te_symbols value)
-               (None
-                 (TeObserverNamesErr
-                   "search_observer_profile is not a List Symbol"))
-               ((Some names) (TeObserverNamesOk names)))))
-          (TeObserverNamesErr
-            "search_observer_profile must return List Symbol")))))))
+         (if (type_eq ret (te_canon_names_ty))
+           (match (invoke_fd_ctx ctx fd Nil)
+             (None
+               (TeObserverNamesErr "search_observer_profile invocation failed"))
+             ((Some value)
+              (match (te_symbols value)
+                (None
+                  (TeObserverNamesErr
+                    "search_observer_profile is not a List Symbol"))
+                ((Some names) (TeObserverNamesOk names)))))
+           (TeObserverNamesErr
+             "search_observer_profile must return List Symbol")))))))
 
 (fn te_observer_names ((ctx InvokeCtx) (m Module)) TeObserverNamesR
   (match (find_fn (quote search_observer_profile) m)
     (None (TeObserverNamesOk Nil))
     ((Some fd) (te_observer_names_fd ctx fd))))
 
-(type TeSpineCfg
-  (TeSpineNone)
-  (TeSpineSome Symbol (List Symbol)))
+(type TeSpineCfg (TeSpineNone) (TeSpineSome Symbol (List Symbol)))
 
-(type TeSpineCfgR
-  (TeSpineCfgErr (List Int))
-  (TeSpineCfgOk TeSpineCfg))
+(type TeSpineCfgR (TeSpineCfgErr (List Int)) (TeSpineCfgOk TeSpineCfg))
 
 (fn te_spine_context_fd ((ctx InvokeCtx) (fd FnDef)) (Option Symbol)
   (match fd
@@ -578,25 +668,19 @@
       (match (find_fn (quote search_spine_profile) m)
         (None (TeSpineCfgOk (TeSpineNone)))
         ((Some _)
-         (TeSpineCfgErr
-           "search_spine_profile requires search_spine_context"))))
+         (TeSpineCfgErr "search_spine_profile requires search_spine_context"))))
     ((Some context_fd)
      (match (find_fn (quote search_spine_profile) m)
        (None
-         (TeSpineCfgErr
-           "search_spine_context requires search_spine_profile"))
+         (TeSpineCfgErr "search_spine_context requires search_spine_profile"))
        ((Some names_fd)
         (match (te_spine_context_fd ctx context_fd)
-          (None
-            (TeSpineCfgErr
-              "search_spine_context must return one Symbol"))
+          (None (TeSpineCfgErr "search_spine_context must return one Symbol"))
           ((Some context)
            (match (te_spine_names_fd ctx names_fd)
              (None
-               (TeSpineCfgErr
-                 "search_spine_profile must return List Symbol"))
-             ((Some names)
-              (TeSpineCfgOk (TeSpineSome context names)))))))))))
+               (TeSpineCfgErr "search_spine_profile must return List Symbol"))
+             ((Some names) (TeSpineCfgOk (TeSpineSome context names)))))))))))
 
 (fn te_symbol_len ((xs (List Symbol))) Int
   (measure (struct xs))
@@ -604,25 +688,19 @@
     (Nil 0)
     ((Cons _ rest) (+ 1 (te_symbol_len rest)))))
 
-(type TeCanon
-  (TeCanon TrsProfile TrsFormation TrsProfile Int))
-  ; authenticated profile, exact separable formation, residual, total count
+(type TeCanon (TeCanon TrsProfile TrsFormation TrsProfile Int))
+; authenticated profile, exact separable formation, residual, total count
 
 (type TeCanonR (TeCanonErr (List Int)) (TeCanonOk TeCanon))
 
-(type TeObserved
-  (TeObserved TrsRootProfile TrsFormation TrsRootProfile Int))
-  ; authenticated observer profile, root formation, residual, total count
+(type TeObserved (TeObserved TrsRootProfile TrsFormation TrsRootProfile Int))
+; authenticated observer profile, root formation, residual, total count
 
-(type TeObservedR
-  (TeObservedErr (List Int))
-  (TeObservedOk TeObserved))
+(type TeObservedR (TeObservedErr (List Int)) (TeObservedOk TeObserved))
 
 (type TeReductions (TeReductions TeCanon TeObserved MsPlan))
 
-(type TeReductionsR
-  (TeReductionsErr (List Int))
-  (TeReductionsOk TeReductions))
+(type TeReductionsR (TeReductionsErr (List Int)) (TeReductionsOk TeReductions))
 
 (fn te_canon_from_profile ((profile TrsProfile) (rules Int)) TeCanonR
   (match (trs_partition_formation profile)
@@ -648,11 +726,7 @@
 
 (fn te_empty_reductions () TeReductions
   (TeReductions
-    (TeCanon
-      (trs_empty_profile)
-      (trs_empty_formation)
-      (trs_empty_profile)
-      0)
+    (TeCanon (trs_empty_profile) (trs_empty_formation) (trs_empty_profile) 0)
     (TeObserved
       (trs_empty_root_profile)
       (trs_empty_formation)
@@ -675,12 +749,10 @@
              ((TeCanon _ _ canon_residual _)
               (match o
                 ((TeObserved _ _ observer_residual _)
-                 (match
-                   (ms_plan_spine canon_residual observer_residual spine)
+                 (match (ms_plan_spine canon_residual observer_residual spine)
                    ((MsPlanErr msg) (TeReductionsErr msg))
                    ((MsPlanOk constraints)
-                    (TeReductionsOk
-                      (TeReductions c o constraints)))))))))))))))
+                    (TeReductionsOk (TeReductions c o constraints)))))))))))))))
 
 (fn te_load_some_reductions
   ((path (List Int))
@@ -698,11 +770,10 @@
         (match
           (match spine_cfg
             ((TeSpineNone)
-             (tg_checked_reductions
-               scope observer canon_names observer_names))
+             (tg_checked_reductions scope observer canon_names observer_names))
             ((TeSpineSome context spine_names)
-             (tg_checked_spine_reductions
-               scope observer canon_names observer_names context spine_names)))
+             (tg_checked_spine_reductions scope observer canon_names
+               observer_names context spine_names)))
           ((TgCheckedReductionsErr msg) (Pair (TeReductionsErr msg) w2))
           ((TgCheckedReductionsOk checked)
            (Pair
@@ -715,7 +786,8 @@
 (fn te_reduction_names_present
   ((canon_names (List Symbol))
    (observer_names (List Symbol))
-   (spine_cfg TeSpineCfg)) Bool
+   (spine_cfg TeSpineCfg))
+  Bool
   (match canon_names
     (Nil
       (match observer_names
@@ -738,8 +810,8 @@
    (w World))
   (Pair TeReductionsR World)
   (if (te_reduction_names_present canon_names observer_names spine_cfg)
-    (te_load_some_reductions
-      path observer canon_names observer_names spine_cfg w)
+    (te_load_some_reductions path observer canon_names observer_names spine_cfg
+      w)
     (Pair (TeReductionsOk (te_empty_reductions)) w)))
 
 (fn te_load_canon ((path (List Int)) (names (List Symbol)) (w World))
@@ -883,7 +955,7 @@
 (type TeSweepR
   (TeSweepErr (List Int))
   (TeSweepOk (List TeBucket) Int Int Int Int (List Int)))
-  ; buckets, accepted, rejected, screened, constraint-killed, solutions
+; buckets, accepted, rejected, screened, constraint-killed, solutions
 
 (fn te_at ((phase (List Int)) (rank Int) (msg (List Int))) (List Int)
   (append_int
@@ -921,7 +993,12 @@
     (by arith (list 1 1)))
   (if (le k 0)
     (TeSweepOk
-      buckets accepted rejected screened constrained (te_int_rev solutions Nil))
+      buckets
+      accepted
+      rejected
+      screened
+      constrained
+      (te_int_rev solutions Nil))
     (let ((rank (- total k)))
       (match (sk_unrank root grammar rank)
         ((SkEErr msg) (TeSweepErr (te_at "unrank" rank msg)))
@@ -962,8 +1039,7 @@
                       solutions))
                    ((MsClear)
                     (match (te_screen_run ctx screen candidate)
-                      ((TeScreenErr msg)
-                       (TeSweepErr (te_at "screen" rank msg)))
+                      ((TeScreenErr msg) (TeSweepErr (te_at "screen" rank msg)))
                       ((TeScreenDrop)
                        (te_sweep
                          (- k 1)
@@ -985,8 +1061,7 @@
                          solutions))
                       ((TeScreenPass)
                        (match (te_observe ctx probe candidate)
-                         ((TeObsErr msg)
-                          (TeSweepErr (te_at "probe" rank msg)))
+                         ((TeObsErr msg) (TeSweepErr (te_at "probe" rank msg)))
                          ((TeObsReject)
                           (te_sweep
                             (- k 1)
@@ -1030,10 +1105,7 @@
 
 ;; ---- witness and reporting --------------------------------------------------
 
-(type TeWitness
-  (TeWitnessValue Expr)
-  (TeWitnessRank Int)
-  (TeWitnessEmpty))
+(type TeWitness (TeWitnessValue Expr) (TeWitnessRank Int) (TeWitnessEmpty))
 
 (type TeWitnessLoadR (TeWitnessLoadErr (List Int)) (TeWitnessLoadOk TeWitness))
 
@@ -1056,15 +1128,13 @@
        ((Some value)
         (match value
           ((Ctor q Nil)
-           (if (core_named q (quote True))
-             (TeWitnessLoadOk (TeWitnessEmpty))
+           (if (core_named q (quote True)) (TeWitnessLoadOk (TeWitnessEmpty))
            (if (core_named q (quote False))
              (TeWitnessLoadErr "search_expect_empty returned False")
              (TeWitnessLoadErr
                "search_expect_empty did not return a Bool value"))))
           (_
-            (TeWitnessLoadErr
-              "search_expect_empty did not return a Bool value"))))))))
+            (TeWitnessLoadErr "search_expect_empty did not return a Bool value"))))))))
 
 (type TeWitnessR (TeWitnessErr (List Int)) (TeWitnessOk Int))
 
@@ -1242,9 +1312,8 @@
 ;; states, not possible occurrence holes; occurrences acquire structural ids
 ;; only when a search path reaches them.
 (type TeSchemaSpace
-  (TeSchemaSpace
-    (List (Pair QName Symbol)) Int Expr SkSchemaGrammar Int))
-  ; spelling table, depth, root occurrence, schemas, schema count
+  (TeSchemaSpace (List (Pair QName Symbol)) Int Expr SkSchemaGrammar Int))
+; spelling table, depth, root occurrence, schemas, schema count
 
 (type TeSchemaSpaceR
   (TeSchemaSpaceErr (List Int))
@@ -1357,8 +1426,7 @@
          ((TgSchemaBuildErr msg)
           (TeSchemaSpaceErr (append_int "schema grammar: " msg)))
          ((TgSchemaBuildOk grammar schemas)
-          (TeSchemaSpaceOk
-            (TeSchemaSpace table depth (hole 0) grammar schemas))))))))
+          (TeSchemaSpaceOk (TeSchemaSpace table depth (hole 0) grammar schemas))))))))
 
 (fn te_make_scoped_schema_space_plan
   ((m Module)
@@ -1376,8 +1444,7 @@
         (TeSchemaSpaceErr (append_int "schema grammar: " msg)))
        ((TgSchemaBuildOk grammar schemas)
         (TeSchemaSpaceOk
-          (TeSchemaSpace
-            (tg_scope_table scope) depth (hole 0) grammar schemas)))))))
+          (TeSchemaSpace (tg_scope_table scope) depth (hole 0) grammar schemas)))))))
 
 (fn te_make_schema_space_plan
   ((m Module) (want Type) (scope RCtx) (cfg TeCfg) (plan TrsFormationPlan))
@@ -1521,18 +1588,18 @@
      (let
        ((rules (+ canon_rules observer_rules))
         (plan (trs_formation_plan formation root_formation)))
-     (if (lt rules 1)
-       (te_build_filtered path m want ictx screen probe target witness scope cfg
-         plan constraints canon_rules observer_rules -1 w)
-       (match (te_make_space m want scope cfg)
-         ((TeSpaceErr msg) (te_fail (append_int "raw: " msg) w))
-         ((TeSpaceOk raw_space)
-          (match (te_space_count raw_space)
-            ((TeCountErr msg) (te_fail (append_int "raw count: " msg) w))
-            ((TeCountOk raw_total)
-             (te_build_filtered path m want ictx screen probe target witness
-               scope cfg plan constraints canon_rules observer_rules raw_total
-               w))))))))))
+       (if (lt rules 1)
+         (te_build_filtered path m want ictx screen probe target witness scope
+           cfg plan constraints canon_rules observer_rules -1 w)
+         (match (te_make_space m want scope cfg)
+           ((TeSpaceErr msg) (te_fail (append_int "raw: " msg) w))
+           ((TeSpaceOk raw_space)
+            (match (te_space_count raw_space)
+              ((TeCountErr msg) (te_fail (append_int "raw count: " msg) w))
+              ((TeCountOk raw_total)
+               (te_build_filtered path m want ictx screen probe target witness
+                 scope cfg plan constraints canon_rules observer_rules raw_total
+                 w))))))))))
 
 (fn te_search_ready
   ((path (List Int))

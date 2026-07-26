@@ -3082,3 +3082,51 @@ checked observer theorem relates two independent constructor positions, stays
 deferred, and kills a lazy constraint region before the engine returns a clear
 representative.  This is the residual-theorem counterpart of
 `typed_list_first.shard`'s formation-pressure and occurrence-independence pin.
+
+## Slice 0 — pre-arc refactors for the heuristic tier (2026-07-25, more-search branch)
+
+RATIFIED DIRECTION (user, 2026-07-25): the next arc adds HEURISTIC search
+engines (rip-up/re-route-class exploration, graded cost, region
+perturbation) beside the exact tier, on the measured PIO evidence that
+exhaustive settlement stops short of deep winners (~37.9k decisions, no
+DME). The trust posture is unchanged — heuristic engines are exploration
+policies; G4 stays the only certificate; the claim ladder (exact census /
+first-result existence / heuristic existence) types what each mode may
+pin. Before the arc: harden the seams the survey found soft. Landed:
+
+- **0a (three commits):** the pre-SkRegion cc_* counting path, the CcR
+  wrapper, the unread `memo` thread through all five drive entry points
+  (plus the g_counts layers feeding it in three consumers), and the dead
+  su_tpl/su_rep/su_member assignment-template family are DELETED; the
+  legacy per-test rev battery (su_expect/su_test/su_tests/su_drive) is
+  retired — su_run drives the pinned rev suite through the GENERIC query
+  path (settlement bit-identical both depths; STEPS re-pinned 623/12,651
+  -> 489/7,777). search_screen under first-result mode is now a loud
+  refusal (it was silently dropped).
+  SURVEY CORRECTIONS, recorded: (1) su_first_* is NOT a sk_region_first
+  duplicate — it is the newer root-directed, schema-aware representative
+  closure; its graduation into the region-algebra home belongs to the
+  relation-aware region slice. (2) There is no killed-region list to
+  release: long-run retention lives in the arena memo/node trie (rows
+  from killed regions are never evicted) and the DFS sibling frontier —
+  shard#19 updated; the release lever is a substrate-internal
+  sa_forget-style memo scoping op (slice 0c).
+- **0b-1:** the task-protocol hook scan. te_task_scan (typed_expr, wired
+  at te_config so every engine passes through it) owns the KNOWN-HOOK
+  table and the structural refusal matrix: unknown search_*-named fns,
+  witness multiplicity (previously priority-shadowed silently), solo
+  spine hooks, and flat vocabulary under search_environment all refuse
+  loudly. The search_ prefix is now RESERVED for protocol hooks; task
+  helpers renamed to task_* (10 files), 8 tasks shed vestigial flat
+  hooks (all pins unchanged — the hooks were unread). protocol_probe
+  pins the matrix; typed_expr and typed_superpose are ALSO check targets
+  now (42902ae closed the tc_infer gap that excluded them).
+
+QUEUED: **0b-2** — the engine-internal task RECORD (one loader resolving
+every hook once; ts_result_mode/ts_drive_fuel/ts_theorem_first and the
+per-engine policy matrix consume the record; the heuristic-tier hooks
+join the table there). **0c** — arena memo scoping/eviction. Then the
+arc proper opens with RELATION-AWARE REGION STATE built at the
+meta/sketch region-algebra layer (engine-agnostic by construction), with
+PIO P5c-2 and the routing/regalloc task family as its measured
+consumers.

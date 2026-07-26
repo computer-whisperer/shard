@@ -364,6 +364,9 @@ TARGETS=(
   tools/search/subsume.shard
   tools/search/imp_expr.shard
   tools/search/typed_grammar.shard
+  tools/search/typed_expr.shard
+  tools/search/typed_superpose.shard
+  tools/search/protocol_probe.shard
   tools/search/theorem_scope.shard
   tools/search/profile_census.shard
   tools/search/rewrite_probe.shard
@@ -532,11 +535,21 @@ fi
 
 # General typed-grammar pins: first exercise an ISA-free Let template whose
 # body hole receives a new BVar, then drive the same reflected scope engine
-# over imp expressions and parametric Wasm instruction lists.  typed_expr is
-# an executable pin rather than a checker target because its independent
-# candidate gate imports kernel/types, whose tc_infer/tc_arms mutual-recursion
-# measure gap is a known pre-existing checker failure.  typed_superpose imports
-# the same independent gate and is executable-pinned for the same reason.
+# over imp expressions and parametric Wasm instruction lists.  typed_expr and
+# typed_superpose are ALSO check targets since 42902ae closed the
+# tc_infer/tc_arms measure gap that used to fail in their kernel/types
+# closure; the executable pins below remain the behavioral half.
+# Task-protocol scan pin: the hook table + structural refusal matrix
+# (unknown search_* fn, witness multiplicity, solo spine hook, flat
+# vocabulary under search_environment) — every rule pinned on synthetic
+# modules; every real task passes through the same scan via te_config.
+echo "=== search: task-protocol scan pin ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/protocol_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 echo "=== search: graduated meta rewrite profile pin ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/rewrite_probe.shard
