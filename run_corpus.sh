@@ -158,6 +158,7 @@ TARGETS=(
   models/imp/probes/vx86_acc_probe.shard
   models/imp/probes/vx86_oracle_probe.shard
   models/imp/probes/ipatch_probe.shard
+  models/imp/probes/ilinv_probe.shard
   tools/impgen/fixtures/impgen_wasm_out.shard
   tools/impgen/fixtures/impgen_x86_out.shard
   tools/impgen/fixtures/impgen_wasm_loop_out.shard
