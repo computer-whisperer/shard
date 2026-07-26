@@ -130,6 +130,7 @@ TARGETS=(
   pins/trust/trust_ledger.shard
   pins/lang/types_gate.shard
   pins/lang/types_gate_cite.shard
+  pins/lang/occurs_rejects.shard
   pins/proof/wf_induct_demo.shard
   pins/proof/measure_clause.shard
   pins/proof/measure_import_synth.shard

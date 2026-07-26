@@ -1,0 +1,48 @@
+;;; occurs_rejects.shard — TYPE-GATE REGRESSION TEST.
+;;;
+;;; The unifier's OCCURS CHECK. `tc_unify_go` (kernel/types.shard) binds a meta
+;;; with a bare-looking `(tc_bind xa wb tc)` and no visible occurs test — the
+;;; check lives one function away, in `tc_bind` itself:
+;;;
+;;;   (fn tc_bind ((x Symbol) (t Type) (tc Tc)) (Option Tc)
+;;;     (match tc
+;;;       ((Tc n s) (if (tc_occurs x t s) None (Some (Tc n (Cons (Pair x t) s)))))))
+;;;
+;;; and `tc_occurs_go` is SUBSTITUTION-AWARE (it tc_walks at every node, so it
+;;; catches cycles reachable through `s`, not just syntactic ones). That check
+;;; is what keeps `s` acyclic, and acyclicity is in turn what makes the whole
+;;; tc_walk / tc_resolve / tc_unify family terminate — types.shard says so at
+;;; its head. Deleting it would not merely admit infinite types; it would put
+;;; the type gate's own walkers on a cyclic substitution.
+;;;
+;;; Reaching it needs a genuine META. Goal binders auto-generalize to RIGID
+;;; tvars, which cannot bind at all, so a monomorphic let-binding of the
+;;; polymorphic `Nil` is the cheapest source of one:
+;;;
+;;;   Cons : T -> (List T) -> (List T),   y := Nil  so  y : (List ?1)
+;;;   (Cons y y):  arg 1   (List ?1) vs ?0         =>  ?0 := (List ?1)
+;;;                arg 2   (List ?1) vs (List ?0)  =>  ?1 vs (List ?1)   OCCURS
+;;;
+;;; `control` is the same shape WITHOUT the shared meta and must keep passing —
+;;; the guard has to reject the cycle, not lists-of-lists.
+;;;
+;;; NOTE the leg shape: occurs_guard reports TYPE!, not FAIL. It gates only
+;;; because the corpus projection reads both (`.gitlab-ci.yml`); before
+;;; 2026-07-25 a pin like this one gated nothing at all.
+;;;
+;;; If the check is lost this file flips from "1 passed, 1 failed" to
+;;; "2 passed" and the corpus FAIL-set diff catches it.
+
+(import "../../kernel/stdlib.shard")
+
+;; PASSES — a legitimate list-of-lists. No cycle: the two Nils are independent
+;; metas, so nothing has to occur in itself.
+(claim control
+  (goal () () (= (let ((y Nil)) (Cons Nil y)) (Cons Nil Nil)))
+  (steps ((compute lhs)) refl))
+
+;; MUST FAIL — typing this needs ?1 = (List ?1). The kernel reports
+;; `Cons arg 2: (List ?0) vs (List (List ?0))`.
+(claim occurs_guard
+  (goal () () (= (let ((y Nil)) (Cons y y)) Nil))
+  (steps ((compute lhs)) refl))
