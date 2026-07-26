@@ -609,6 +609,15 @@ if [ -x bin/shard_eval ]; then
   # descends (6), eq fixes its partner, a last closed-template ne pair
   # becomes a forbid, split partitions 9=3+6, release restores by policy,
   # and the v1 boundaries (iso/liveness/closure/cap/rank) refuse loudly.
+  # nonlinear_constraint_probe pins the PAIR-CARRYING verdicts (R2): the
+  # both-open equality reports MsBlockedPair 0/1 (direct and prepared), the
+  # exact equality partition consumes it TERMINALLY (EQ3+NE6 in 1+1 regions,
+  # 1 relational split, 0 ground forks), the non-isomorphic-domain door
+  # refusal falls back to ground (1+3/F2), a two-pair conjunction degrades
+  # its second pair and splits under each diagonal assignment (9+72/F4S3),
+  # a distinct guard over two open holes pairs through the conditioned
+  # verdict, and the PREPARED plan partition still grounds pairs (3+3/F4 —
+  # the R2 degradation pin; R3 flips it to relational splits).
   bin/shard_eval run tools/search/constraint_probe.shard
   bin/shard_eval run tools/search/nonlinear_constraint_probe.shard
   bin/shard_eval run tools/search/region_probe.shard

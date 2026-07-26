@@ -3316,3 +3316,64 @@ check only replays. Fixed on main (02daf2f, cherry-picked here), the
 lethal class swept (prove's line was the only instance), and two
 follow-ups recorded on the issue: a loud refusal for bare-item uses of
 nonexistent exports, and a corpus pin that actually SOLVES something.
+
+### R2 — pair-carrying verdicts + relational partitions (LANDED 2026-07-26)
+
+**What landed (meta/search).** The three matcher result types gained the
+pair arm: `MsMatchBlockedPair` / `MsNMatchBlockedPair` /
+`MsBlockedPair`.  The MsMatch arm carries a CONTRACT: it may be produced
+only when the whole comparison is decided by exactly one hole-pair
+equality (left == right IFF the two subtrees agree).  That contract is
+enforced by the event lattice (`MsEqEvent` + `ms_eq_event_join`): the
+equality walkers (list/arms/Let) accumulate one blocked event, and a
+second DISTINCT event degrades a pair to its first hole — exactly the
+hole the pre-relational walkers reported, so every degradation point is
+bit-identical with the old behavior.  Only a repeat of the same
+unordered pair survives the join.  The pair is born in `ms_equal`'s
+both-open-heads case: the existing domain scan still runs first (an
+all-unequal product still decides No without a fork — the documented
+disjoint-shapes property), and only the mixed outcome upgrades from the
+outer hole to the exact pair.  A partner behind a fixed selection chain
+is left to the ordinary scan (sound, less sharp).
+
+`ms_equal_partition` consumes the pair TERMINALLY via
+`sk_region_split_pair`: the eq child goes whole to the equal list, the
+ne child to the unequal list, no re-evaluation — licensed by the IFF
+contract.  Any refusal (iso door, counting) falls back to the factored
+ground step (`mse_ground`); soundness never rides the new path.
+`MsEqPartitionOk` now carries ground forks and relational splits as
+separate counters.  At the verdict layer the pair is a BRANCHING HINT,
+not an IFF (msn short-circuits; rules and guards accumulate
+first-event-wins via `ms_event_first`), produced by the repeated-
+variable env comparison in `msn_match` and by `TrsDistinct` guards over
+two open holes, and carried through `ms_conditioned_root_language` /
+`ms_rules_root` / `ms_merge`.  Blocked-kind verdicts were never stored
+as stable facts, so relations never enter prepared facts by
+construction.  The alt-consensus scanners (spine/anywhere/equal-alts)
+degrade nested pairs to the outer hole as before.
+
+**R2 degradation discipline (R3's worklist).** The prepared plan
+partition (`ms_partition_prepared`) and the superpose drives GROUND
+pairs to their first hole: the prepared evaluator cannot see relations
+yet, so a relational split there would re-block on the same pair
+forever.  The flip points are grep-able: `ms_verdict_ground` (the
+compatibility door, used at su_theory_partition) plus the explicit
+`MsBlockedPair` degradation arms in mspp_partition_go and the two
+drive verdict matches in superpose.shard.  typed_superpose/typed_expr/
+pure_program treat a pair like Blocked on their error paths.
+
+**Pinned (nonlinear_constraint_probe, all counts hand-computed first):**
+the both-open equality verdict is `MsBlockedPair 0 1` direct AND
+prepared; the diagonal partition is EQ3+NE6 in **1+1 regions, 1
+relational split, 0 ground forks** (was 3+3 regions, 4 forks);
+non-isomorphic overlapping domains ({A0,A1} vs {A1,A2}) refuse at the
+door and ground-fall-back to 1+3/F2S0; the two-pair conjunction
+(Pair(h0,h2) vs Pair(h1,h3), four 3-atom holes) degrades its second
+pair, grounds h0 then h1, and splits each diagonal child relationally —
+9+72 in 3+6 regions, F4S3; a TrsDistinct guard over two open holes
+pairs through the conditioned verdict; and the PREPARED plan partition
+still grounds (3+3/F4 — the degradation pin R3 will deliberately
+re-pin).  Whole existing battery bit-identical: region_probe both
+lines, rev_deep d3 (390/143/3,969), the ground rev pin (108, 7788),
+constraint/guard/affine/int-order probes, typed_observer_conjunctive
+audit, typed_superpose as a check target (323/0).

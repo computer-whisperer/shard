@@ -513,10 +513,17 @@
 
 ;; ---- partial left-linear pattern matching ---------------------------------
 
+;; `MsMatchBlockedPair h0 h1` is the relation-aware refinement of Blocked:
+;; it may be produced only when the whole comparison is decided by exactly
+;; one hole-pair equality — left == right holds IFF the two holes' subtrees
+;; agree.  That contract is what licenses the relational partitioner to
+;; consume both split children terminally (no re-evaluation).  Consumers
+;; that ground-refine may always degrade a pair to its first hole.
 (type MsMatch
   (MsMatchErr (List Int))
   (MsMatchNo)
   (MsMatchBlocked Int)
+  (MsMatchBlockedPair Int Int)
   (MsMatchYes))
 
 ;; A prepared fact is valid for the complete domain of one grammar hole.
@@ -570,6 +577,49 @@
     (None (MsMatchYes))
     ((Some hole_id) (MsMatchBlocked hole_id))))
 
+;; ---- blocked-event accumulation for equality obligations -------------------
+;;
+;; The equality walkers accumulate one blocked EVENT: a single hole, or the
+;; exact hole pair whose subtree agreement is the residual obligation.  A
+;; second distinct event destroys the pair contract (the residual becomes a
+;; conjunction), so joining degrades the pair to its first hole — exactly the
+;; hole the pre-relational walkers reported.  Only a repeat of the same
+;; unordered pair preserves it: the conjunction of one equality with itself.
+(type MsEqEvent (MsEqEvHole Int) (MsEqEvPair Int Int))
+
+(fn ms_eq_pair_same ((a0 Int) (a1 Int) (b0 Int) (b1 Int)) Bool
+  (if (if (int_eq a0 b0) (int_eq a1 b1) False) True
+  (if (int_eq a0 b1) (int_eq a1 b0)
+  False)))
+
+(fn ms_eq_event_join ((prior (Option MsEqEvent)) (event MsEqEvent))
+  (Option MsEqEvent)
+  (match prior
+    (None (Some event))
+    ((Some (MsEqEvHole h)) (Some (MsEqEvHole h)))
+    ((Some (MsEqEvPair h0 h1))
+     (match event
+       ((MsEqEvHole _) (Some (MsEqEvHole h0)))
+       ((MsEqEvPair g0 g1)
+        (if (ms_eq_pair_same h0 h1 g0 g1) (Some (MsEqEvPair h0 h1))
+        (Some (MsEqEvHole h0))))))))
+
+(fn ms_eq_done ((blocked (Option MsEqEvent))) MsMatch
+  (match blocked
+    (None (MsMatchYes))
+    ((Some (MsEqEvHole h)) (MsMatchBlocked h))
+    ((Some (MsEqEvPair h0 h1)) (MsMatchBlockedPair h0 h1))))
+
+;; Verdict-level accumulation keeps the FIRST event whole: no terminal
+;; consumption rides a verdict pair (it is a branching hint, not an IFF),
+;; and first-wins preserves the pre-relational first-blocked-hole order
+;; under degradation.
+(fn ms_event_first ((prior (Option MsEqEvent)) (event MsEqEvent))
+  (Option MsEqEvent)
+  (match prior
+    (None (Some event))
+    ((Some existing) (Some existing))))
+
 ;; Classify an unassigned hole without choosing an alternative.  Only a
 ;; unanimous result is promoted; a mixed or internally blocked domain still
 ;; demands the outer hole, preserving disjoint region accounting.
@@ -596,6 +646,7 @@
      (match (ms_match (- fuel 1) facts grammar asg pattern alt)
        ((MsMatchErr msg) (MsMatchErr msg))
        ((MsMatchBlocked _) (MsMatchBlocked hole_id))
+       ((MsMatchBlockedPair _ _) (MsMatchBlocked hole_id))
        ((MsMatchNo)
         (match agree
           ((MsMatchAgreeYes) (MsMatchBlocked hole_id))
@@ -730,6 +781,15 @@
              asg
              rest
              more
+             (ms_block_first blocked hole_id)))
+          ((MsMatchBlockedPair hole_id _)
+           (ms_match_list
+             (- fuel 1)
+             facts
+             grammar
+             asg
+             rest
+             more
              (ms_block_first blocked hole_id))))))))))
 
 ;; ---- equality-aware nonlinear matching -----------------------------------
@@ -749,17 +809,41 @@
     ((MsNBind prior value rest)
      (if (int_eq index prior) (Some value) (msn_get index rest)))))
 
+;; The nonlinear pair arm is a BRANCHING HINT, not an IFF: the walk
+;; short-circuits, so positions after the blocked one are unexamined.
+;; Splitting eq/ne on the pair is always exhaustive; deciding the child
+;; regions needs re-evaluation (relation-aware from R3).
 (type MsNMatch
   (MsNMatchErr (List Int))
   (MsNMatchNo)
   (MsNMatchBlocked Int)
+  (MsNMatchBlockedPair Int Int)
   (MsNMatchYes MsNEnv))
+
+;; Detect an OPEN hole at the head of the other side of an equality.  A
+;; partner behind a fixed selection chain is left to the ordinary domain
+;; scan (sound, merely less sharp); errors are also left to the scan,
+;; which re-raises them.
+(fn ms_equal_open_partner
+  ((grammar MsLanguage) (asg (List (Pair Int Int))) (term Expr))
+  (Option Int)
+  (match (hole_view term)
+    ((HVBad _) None)
+    ((HVNot) None)
+    ((HVHole hole_id)
+     (match (ms_select grammar asg hole_id)
+       ((MsSelectErr _) None)
+       ((MsSelectOpen partner _) (Some partner))
+       ((MsSelectExpr _) None)))))
 
 ;; Structural equality over partial terms.  Identical hole syntax is already
 ;; equal by sharing.  An open hole's complete alternative domain is inspected:
 ;; all-equal and all-unequal Cartesian products are stable facts, while a mixed
 ;; or internally blocked domain still asks for the outer choice.  Thus routed
 ;; domains with disjoint shapes do not fork merely to discover inequality.
+;; When BOTH heads are open holes the comparison IS the hole pair — the scan
+;; still decides all-equal / all-unequal domains without a fork, and only its
+;; mixed outcome upgrades from the outer hole to the exact pair.
 (fn ms_equal
   ((fuel Int)
    (grammar MsLanguage)
@@ -776,15 +860,31 @@
      (match (ms_select grammar asg hole_id)
        ((MsSelectErr msg) (MsMatchErr msg))
        ((MsSelectOpen blocked alts)
-        (ms_equal_alts
-          (- fuel 1)
-          grammar
-          asg
-          right
-          alts
-          blocked
-          True
-          (MsMatchAgreeStart)))
+        (match (ms_equal_open_partner grammar asg right)
+          (None
+            (ms_equal_alts
+              (- fuel 1)
+              grammar
+              asg
+              right
+              alts
+              blocked
+              True
+              (MsMatchAgreeStart)))
+          ((Some partner)
+           (match
+             (ms_equal_alts
+               (- fuel 1)
+               grammar
+               asg
+               right
+               alts
+               blocked
+               True
+               (MsMatchAgreeStart))
+             ((MsMatchBlocked _) (MsMatchBlockedPair blocked partner))
+             ((MsMatchBlockedPair _ _) (MsMatchBlockedPair blocked partner))
+             (decided decided)))))
        ((MsSelectExpr selected)
         (ms_equal (- fuel 1) grammar asg selected right))))
     ((HVNot)
@@ -855,7 +955,15 @@
                    asg
                    arms
                    arms2
-                   (Some hole_id)))))
+                   (Some (MsEqEvHole hole_id))))
+                ((MsMatchBlockedPair h0 h1)
+                 (ms_equal_arms
+                   (- fuel 1)
+                   grammar
+                   asg
+                   arms
+                   arms2
+                   (Some (MsEqEvPair h0 h1))))))
              (_ (MsMatchNo))))
           ((Let bindings body)
            (match right
@@ -866,11 +974,21 @@
                 ((MsMatchNo) (MsMatchNo))
                 ((MsMatchYes) (ms_equal (- fuel 1) grammar asg body body2))
                 ((MsMatchBlocked hole_id)
-                 (match (ms_equal (- fuel 1) grammar asg body body2)
-                   ((MsMatchErr msg) (MsMatchErr msg))
-                   ((MsMatchNo) (MsMatchNo))
-                   ((MsMatchYes) (MsMatchBlocked hole_id))
-                   ((MsMatchBlocked _) (MsMatchBlocked hole_id))))))
+                 (ms_equal_let_body
+                   (- fuel 1)
+                   grammar
+                   asg
+                   body
+                   body2
+                   (MsEqEvHole hole_id)))
+                ((MsMatchBlockedPair h0 h1)
+                 (ms_equal_let_body
+                   (- fuel 1)
+                   grammar
+                   asg
+                   body
+                   body2
+                   (MsEqEvPair h0 h1)))))
              (_ (MsMatchNo))))
           ((IntLit n)
            (match right
@@ -880,6 +998,28 @@
            (match right
              ((SymLit t) (if (sym_eq s t) (MsMatchYes) (MsMatchNo)))
              (_ (MsMatchNo))))))))))))
+
+;; The Let body under an already-blocked bindings walk: the bindings event
+;; joins the body outcome, so a body No still refutes the whole equality
+;; and a second distinct event degrades the pair per the join contract.
+(fn ms_equal_let_body
+  ((fuel Int)
+   (grammar MsLanguage)
+   (asg (List (Pair Int Int)))
+   (body Expr)
+   (body2 Expr)
+   (bindings_event MsEqEvent))
+  MsMatch
+  (measure fuel)
+  (if (lt fuel 1) (MsMatchErr "constraint equality-let fuel exhausted")
+  (match (ms_equal (- fuel 1) grammar asg body body2)
+    ((MsMatchErr msg) (MsMatchErr msg))
+    ((MsMatchNo) (MsMatchNo))
+    ((MsMatchYes) (ms_eq_done (Some bindings_event)))
+    ((MsMatchBlocked hole_id)
+     (ms_eq_done (ms_eq_event_join (Some bindings_event) (MsEqEvHole hole_id))))
+    ((MsMatchBlockedPair h0 h1)
+     (ms_eq_done (ms_eq_event_join (Some bindings_event) (MsEqEvPair h0 h1)))))))
 
 ;; Consensus over one open choice boundary.  `open_left` records which side
 ;; owns the alternatives so structural equality retains its ordinary order.
@@ -910,6 +1050,7 @@
        (ms_equal (- fuel 1) grammar asg fixed alt))
        ((MsMatchErr msg) (MsMatchErr msg))
        ((MsMatchBlocked _) (MsMatchBlocked hole_id))
+       ((MsMatchBlockedPair _ _) (MsMatchBlocked hole_id))
        ((MsMatchNo)
         (match agree
           ((MsMatchAgreeYes) (MsMatchBlocked hole_id))
@@ -943,14 +1084,14 @@
    (asg (List (Pair Int Int)))
    (left (List Expr))
    (right (List Expr))
-   (blocked (Option Int)))
+   (blocked (Option MsEqEvent)))
   MsMatch
   (measure fuel)
   (if (lt fuel 1) (MsMatchErr "constraint equality-list fuel exhausted")
   (match left
     (Nil
       (match right
-        (Nil (ms_match_done blocked))
+        (Nil (ms_eq_done blocked))
         ((Cons _ _) (MsMatchNo))))
     ((Cons x xs)
      (match right
@@ -967,7 +1108,15 @@
              asg
              xs
              ys
-             (ms_block_first blocked hole_id))))))))))
+             (ms_eq_event_join blocked (MsEqEvHole hole_id))))
+          ((MsMatchBlockedPair h0 h1)
+           (ms_equal_list
+             (- fuel 1)
+             grammar
+             asg
+             xs
+             ys
+             (ms_eq_event_join blocked (MsEqEvPair h0 h1)))))))))))
 
 (fn ms_equal_arms
   ((fuel Int)
@@ -975,14 +1124,14 @@
    (asg (List (Pair Int Int)))
    (left (List Arm))
    (right (List Arm))
-   (blocked (Option Int)))
+   (blocked (Option MsEqEvent)))
   MsMatch
   (measure fuel)
   (if (lt fuel 1) (MsMatchErr "constraint arm-equality fuel exhausted")
   (match left
     (Nil
       (match right
-        (Nil (ms_match_done blocked))
+        (Nil (ms_eq_done blocked))
         ((Cons _ _) (MsMatchNo))))
     ((Cons (Arm pat body) rest)
      (match right
@@ -1001,7 +1150,15 @@
                asg
                rest
                more
-               (ms_block_first blocked hole_id))))
+               (ms_eq_event_join blocked (MsEqEvHole hole_id))))
+            ((MsMatchBlockedPair h0 h1)
+             (ms_equal_arms
+               (- fuel 1)
+               grammar
+               asg
+               rest
+               more
+               (ms_eq_event_join blocked (MsEqEvPair h0 h1)))))
           (MsMatchNo))))))))
 
 ;; ---- exact finite equality partitions -----------------------------------
@@ -1136,6 +1293,20 @@
                   rest
                   equal
                   unequal
+                  (Cons child pending)))
+               ((MsMatchBlockedPair _ _)
+                (mse_classify_choices
+                  fuel
+                  grammar
+                  space
+                  region
+                  left
+                  right
+                  hole_id
+                  (+ index 1)
+                  rest
+                  equal
+                  unequal
                   (Cons child pending))))))))))))
 
 (type MsEqRestrictR
@@ -1189,8 +1360,87 @@
 
 (type MsEqPartitionR
   (MsEqPartitionErr (List Int))
-  (MsEqPartitionOk (List SkRegion) (List SkRegion) Int))
-; equal regions, unequal regions, relational split boundaries
+  (MsEqPartitionOk (List SkRegion) (List SkRegion) Int Int))
+; equal regions, unequal regions, ground fork boundaries, relational splits
+
+(fn mse_child_count ((space Expr) (grammar Grammar) (child (Option SkRegion)))
+  (Option Int)
+  (match child
+    (None (Some 0))
+    ((Some region)
+     (match (sk_region_count space grammar region)
+       ((SkCErr _) None)
+       ((SkCOk n) (Some n))))))
+
+(fn mse_push_counted
+  ((child (Option SkRegion)) (count Int) (regions (List SkRegion)))
+  (List SkRegion)
+  (match child
+    (None regions)
+    ((Some region) (if (le count 0) regions (Cons region regions)))))
+
+;; One ground refinement step: classify the blocked hole's choices, coalesce
+;; the decided classes, and re-queue the still-blocked fixed children.  This
+;; is both the ordinary Blocked answer and the fallback whenever the
+;; relational path refuses (door or count) — soundness never rides the pair.
+(fn mse_ground
+  ((fuel Int)
+   (grammar Grammar)
+   (space Expr)
+   (left Expr)
+   (right Expr)
+   (region SkRegion)
+   (hole_id Int)
+   (rest (List SkRegion))
+   (equal (List SkRegion))
+   (unequal (List SkRegion))
+   (forks Int)
+   (splits Int))
+  MsEqPartitionR
+  (measure fuel)
+  (if (lt fuel 1) (MsEqPartitionErr "equality partition fuel exhausted")
+  (match (ms_alts grammar hole_id)
+    (None (MsEqPartitionErr "equality partition references unknown hole"))
+    ((Some alts)
+     (match
+       (mse_classify_choices
+         (- fuel 1)
+         grammar
+         space
+         region
+         left
+         right
+         hole_id
+         0
+         alts
+         Nil
+         Nil
+         Nil)
+       ((MsEqChoicesErr msg) (MsEqPartitionErr msg))
+       ((MsEqChoicesOk equal_choices unequal_choices pending)
+        (match
+          (mse_cons_region
+            (mse_restrict_choices grammar region hole_id alts equal_choices)
+            equal)
+          ((Pair (Some msg) _) (MsEqPartitionErr msg))
+          ((Pair None equal2)
+           (match
+             (mse_cons_region
+               (mse_restrict_choices grammar region hole_id alts unequal_choices)
+               unequal)
+             ((Pair (Some msg) _) (MsEqPartitionErr msg))
+             ((Pair None unequal2)
+              (mse_partition_go
+                (- fuel 1)
+                grammar
+                space
+                left
+                right
+                (mse_regions_append pending rest)
+                equal2
+                unequal2
+                (+ forks 1)
+                splits)))))))))))
 
 (fn mse_partition_go
   ((fuel Int)
@@ -1201,12 +1451,13 @@
    (jobs (List SkRegion))
    (equal (List SkRegion))
    (unequal (List SkRegion))
-   (forks Int))
+   (forks Int)
+   (splits Int))
   MsEqPartitionR
   (measure fuel)
   (if (lt fuel 1) (MsEqPartitionErr "equality partition fuel exhausted")
   (match jobs
-    (Nil (MsEqPartitionOk equal unequal forks))
+    (Nil (MsEqPartitionOk equal unequal forks splits))
     ((Cons region rest)
      (match (sk_region_count space grammar region)
        ((SkCErr msg) (MsEqPartitionErr msg))
@@ -1221,7 +1472,8 @@
             rest
             equal
             unequal
-            forks)
+            forks
+            splits)
           (match
             (ms_equal
               fuel
@@ -1240,7 +1492,8 @@
                rest
                (Cons region equal)
                unequal
-               forks))
+               forks
+               splits))
             ((MsMatchNo)
              (mse_partition_go
                (- fuel 1)
@@ -1251,52 +1504,86 @@
                rest
                equal
                (Cons region unequal)
-               forks))
+               forks
+               splits))
             ((MsMatchBlocked hole_id)
-             (match (ms_alts grammar hole_id)
-               (None
-                 (MsEqPartitionErr "equality partition references unknown hole"))
-               ((Some alts)
-                (match
-                  (mse_classify_choices
-                    (- fuel 1)
-                    grammar
-                    space
-                    region
-                    left
-                    right
-                    hole_id
-                    0
-                    alts
-                    Nil
-                    Nil
-                    Nil)
-                  ((MsEqChoicesErr msg) (MsEqPartitionErr msg))
-                  ((MsEqChoicesOk equal_choices unequal_choices pending)
-                   (match
-                     (mse_cons_region
-                       (mse_restrict_choices grammar region hole_id alts
-                         equal_choices)
-                       equal)
-                     ((Pair (Some msg) _) (MsEqPartitionErr msg))
-                     ((Pair None equal2)
-                      (match
-                        (mse_cons_region
-                          (mse_restrict_choices grammar region hole_id alts
-                            unequal_choices)
-                          unequal)
-                        ((Pair (Some msg) _) (MsEqPartitionErr msg))
-                        ((Pair None unequal2)
-                         (mse_partition_go
-                           (- fuel 1)
-                           grammar
-                           space
-                           left
-                           right
-                           (mse_regions_append pending rest)
-                           equal2
-                           unequal2
-                           (+ forks 1)))))))))))))))))))
+             (mse_ground
+               (- fuel 1)
+               grammar
+               space
+               left
+               right
+               region
+               hole_id
+               rest
+               equal
+               unequal
+               forks
+               splits))
+            ((MsMatchBlockedPair h0 h1)
+             ;; The pair arm's IFF contract makes both split children
+             ;; TERMINAL: every member of the eq child satisfies the
+             ;; equality, every member of the ne child refutes it.  The
+             ;; diagonal is one region now.
+             (match (sk_region_split_pair grammar region h0 h1)
+               ((SkRegionSplitErr _)
+                (mse_ground
+                  (- fuel 1)
+                  grammar
+                  space
+                  left
+                  right
+                  region
+                  h0
+                  rest
+                  equal
+                  unequal
+                  forks
+                  splits))
+               ((SkRegionSplitOk eq_child ne_child)
+                (match (mse_child_count space grammar eq_child)
+                  (None
+                    (mse_ground
+                      (- fuel 1)
+                      grammar
+                      space
+                      left
+                      right
+                      region
+                      h0
+                      rest
+                      equal
+                      unequal
+                      forks
+                      splits))
+                  ((Some eq_n)
+                   (match (mse_child_count space grammar ne_child)
+                     (None
+                       (mse_ground
+                         (- fuel 1)
+                         grammar
+                         space
+                         left
+                         right
+                         region
+                         h0
+                         rest
+                         equal
+                         unequal
+                         forks
+                         splits))
+                     ((Some ne_n)
+                      (mse_partition_go
+                        (- fuel 1)
+                        grammar
+                        space
+                        left
+                        right
+                        rest
+                        (mse_push_counted eq_child eq_n equal)
+                        (mse_push_counted ne_child ne_n unequal)
+                        forks
+                        (+ splits 1)))))))))))))))))
 
 (fn ms_equal_partition
   ((fuel Int)
@@ -1321,6 +1608,7 @@
           (Cons region Nil)
           Nil
           Nil
+          0
           0))))))
 
 (fn msn_match
@@ -1342,6 +1630,7 @@
           ((MsMatchErr msg) (MsNMatchErr msg))
           ((MsMatchNo) (MsNMatchNo))
           ((MsMatchBlocked hole_id) (MsNMatchBlocked hole_id))
+          ((MsMatchBlockedPair h0 h1) (MsNMatchBlockedPair h0 h1))
           ((MsMatchYes) (MsNMatchYes env))))))
     (_
       (match (hole_view candidate)
@@ -1415,12 +1704,36 @@
           ((MsNMatchErr msg) (MsNMatchErr msg))
           ((MsNMatchNo) (MsNMatchNo))
           ((MsNMatchBlocked hole_id) (MsNMatchBlocked hole_id))
+          ((MsNMatchBlockedPair h0 h1) (MsNMatchBlockedPair h0 h1))
           ((MsNMatchYes env2)
            (msn_match_list (- fuel 1) grammar asg rest more env2)))))))))
 
 ;; ---- region redex classification ------------------------------------------
 
-(type MsVerdict (MsErr (List Int)) (MsClear) (MsBlocked Int) (MsRedex QName))
+;; `MsBlockedPair h0 h1` names the exact hole pair whose eq/ne dichotomy is
+;; the blocked obligation's natural branching variable.  It is a HINT beside
+;; MsBlocked, never a promise about the split children's verdicts.
+(type MsVerdict
+  (MsErr (List Int))
+  (MsClear)
+  (MsBlocked Int)
+  (MsBlockedPair Int Int)
+  (MsRedex QName))
+
+(fn ms_verdict_done ((blocked (Option MsEqEvent))) MsVerdict
+  (match blocked
+    (None (MsClear))
+    ((Some (MsEqEvHole h)) (MsBlocked h))
+    ((Some (MsEqEvPair h0 h1)) (MsBlockedPair h0 h1))))
+
+;; R2 compatibility door: collapse a pair verdict to its first hole for
+;; consumers that still answer every block with ground refinement.  R3
+;; (relation-aware evaluation) replaces each use with a relational split;
+;; this name is that rung's worklist.
+(fn ms_verdict_ground ((verdict MsVerdict)) MsVerdict
+  (match verdict
+    ((MsBlockedPair h0 _) (MsBlocked h0))
+    (other other)))
 
 ;; Stable whole-domain verdicts can be reused under every refinement of a
 ;; partial assignment.  Blocked is intentionally absent: it names a decision
@@ -1487,7 +1800,12 @@
      (match right
        ((MsErr msg) (MsErr msg))
        ((MsRedex q) (MsRedex q))
-       (_ (MsBlocked hole_id))))))
+       (_ (MsBlocked hole_id))))
+    ((MsBlockedPair h0 h1)
+     (match right
+       ((MsErr msg) (MsErr msg))
+       ((MsRedex q) (MsRedex q))
+       (_ (MsBlockedPair h0 h1))))))
 
 (fn ms_rules_root
   ((fuel Int)
@@ -1496,15 +1814,12 @@
    (asg (List (Pair Int Int)))
    (rules (List TrsRule))
    (candidate Expr)
-   (blocked (Option Int)))
+   (blocked (Option MsEqEvent)))
   MsVerdict
   (measure fuel)
   (if (lt fuel 1) (MsErr "constraint rule scan fuel exhausted")
   (match rules
-    (Nil
-      (match blocked
-        (None (MsClear))
-        ((Some hole_id) (MsBlocked hole_id))))
+    (Nil (ms_verdict_done blocked))
     ((Cons rule rest)
      (if (trs_rule_left_linear rule)
        (match
@@ -1521,7 +1836,16 @@
             asg
             rest
             candidate
-            (ms_block_first blocked hole_id))))
+            (ms_event_first blocked (MsEqEvHole hole_id))))
+         ((MsMatchBlockedPair h0 h1)
+          (ms_rules_root
+            (- fuel 1)
+            facts
+            grammar
+            asg
+            rest
+            candidate
+            (ms_event_first blocked (MsEqEvPair h0 h1)))))
        ;; `ms_match` is the linear relaxation of this nonlinear lhs: every
        ;; BVar is a wildcard.  No is therefore conclusive, while Yes/Blocked
        ;; merely license the exact environment-aware matcher below.
@@ -1558,7 +1882,16 @@
                 asg
                 rest
                 candidate
-                (ms_block_first blocked hole_id)))))))))))
+                (ms_event_first blocked (MsEqEvHole hole_id))))
+             ((MsNMatchBlockedPair h0 h1)
+              (ms_rules_root
+                (- fuel 1)
+                facts
+                grammar
+                asg
+                rest
+                candidate
+                (ms_event_first blocked (MsEqEvPair h0 h1))))))))))))
 
 (type MsIntEval
   (MsIntEvalErr (List Int))
@@ -1635,10 +1968,13 @@
         (match (msn_get right env)
           (None (MsMatchErr "distinct guard right variable is unbound"))
           ((Some right_value)
+           ;; The pair passes through the Yes/No inversion untouched: the
+           ;; guard's dichotomy is the same pair's, with the sides swapped.
            (match (ms_equal fuel grammar asg left_value right_value)
              ((MsMatchErr msg) (MsMatchErr msg))
              ((MsMatchYes) (MsMatchNo))
              ((MsMatchBlocked hole_id) (MsMatchBlocked hole_id))
+             ((MsMatchBlockedPair h0 h1) (MsMatchBlockedPair h0 h1))
              ((MsMatchNo) (MsMatchYes))))))))
     ((TrsIntEq left right)
      (match (ms_int_expr fuel grammar asg left env)
@@ -1677,6 +2013,7 @@
        ((MsMatchErr msg) (MsMatchErr msg))
        ((MsMatchNo) (MsMatchNo))
        ((MsMatchBlocked hole_id) (MsMatchBlocked hole_id))
+       ((MsMatchBlockedPair h0 h1) (MsMatchBlockedPair h0 h1))
        ((MsMatchYes) (ms_guards (- fuel 1) grammar asg rest env)))))))
 
 (fn ms_conditioned_root_language
@@ -1718,11 +2055,13 @@
               ((MsNMatchErr msg) (MsErr msg))
               ((MsNMatchNo) (MsClear))
               ((MsNMatchBlocked hole_id) (MsBlocked hole_id))
+              ((MsNMatchBlockedPair h0 h1) (MsBlockedPair h0 h1))
               ((MsNMatchYes env)
                (match (ms_guards (- fuel 1) grammar asg guards env)
                  ((MsMatchErr msg) (MsErr msg))
                  ((MsMatchNo) (MsClear))
                  ((MsMatchBlocked hole_id) (MsBlocked hole_id))
+                 ((MsMatchBlockedPair h0 h1) (MsBlockedPair h0 h1))
                  ((MsMatchYes) (MsRedex (trs_rule_name rule))))))))))))))
 
 ;; Compatibility entry point for callers that operate on an exact grammar.
@@ -1817,6 +2156,7 @@
      (match (ms_spine_item (- fuel 1) facts spine_facts grammar asg item alt)
        ((MsErr msg) (MsErr msg))
        ((MsBlocked _) (MsBlocked hole_id))
+       ((MsBlockedPair _ _) (MsBlocked hole_id))
        ((MsClear)
         (match agree
           ((MsVerdictAgreeRedex _) (MsBlocked hole_id))
@@ -1992,6 +2332,7 @@
      (match (ms_anywhere (- fuel 1) facts tree_facts grammar asg rules alt)
        ((MsErr msg) (MsErr msg))
        ((MsBlocked _) (MsBlocked hole_id))
+       ((MsBlockedPair _ _) (MsBlocked hole_id))
        ((MsClear)
         (match agree
           ((MsVerdictAgreeRedex _) (MsBlocked hole_id))
@@ -2285,6 +2626,8 @@
        ((MsMatchErr msg) (MsFactsErr msg))
        ((MsMatchBlocked _)
         (ms_compile_holes match_fuel grammar pattern rest facts))
+       ((MsMatchBlockedPair _ _)
+        (ms_compile_holes match_fuel grammar pattern rest facts))
        ((MsMatchNo)
         (ms_compile_holes
           match_fuel
@@ -2345,6 +2688,9 @@
        ((MsBlocked _)
         (ms_compile_anywhere_holes fuel match_facts grammar rules rest
           tree_facts))
+       ((MsBlockedPair _ _)
+        (ms_compile_anywhere_holes fuel match_facts grammar rules rest
+          tree_facts))
        ((MsClear)
         (ms_compile_anywhere_holes
           fuel
@@ -2385,6 +2731,8 @@
          (hole hole_id))
        ((MsErr msg) (MsVerdictFactsErr msg))
        ((MsBlocked _)
+        (ms_compile_root_holes fuel match_facts grammar rules rest root_facts))
+       ((MsBlockedPair _ _)
         (ms_compile_root_holes fuel match_facts grammar rules rest root_facts))
        ((MsClear)
         (ms_compile_root_holes
@@ -2430,6 +2778,8 @@
          (hole hole_id))
        ((MsErr msg) (MsSpineVerdictFactsErr msg))
        ((MsBlocked _)
+        (ms_compile_spine_holes fuel match_facts grammar item rest spine_facts))
+       ((MsBlockedPair _ _)
         (ms_compile_spine_holes fuel match_facts grammar item rest spine_facts))
        ((MsClear)
         (ms_compile_spine_holes
@@ -2928,6 +3278,19 @@
                   rest
                   redex
                   clear
+                  (Cons child pending)))
+               ((MsBlockedPair _ _)
+                (mspp_classify_choices
+                  fuel
+                  prepared
+                  grammar
+                  candidate
+                  region
+                  hole_id
+                  (+ index 1)
+                  rest
+                  redex
+                  clear
                   (Cons child pending))))))))))))
 
 (type MsCitedBuildR
@@ -2963,6 +3326,70 @@
   (MsPlanPartitionErr (List Int))
   (MsPlanPartitionOk (List MsCitedRegion) (List SkRegion) Int))
 ; cited redex regions, clear regions, relational split boundaries
+
+;; One ground refinement step over the prepared plan verdict.  In R2 this is
+;; also the answer to a PAIR verdict: the prepared evaluator cannot see
+;; relations yet, so a relational split here would re-block on the same pair
+;; forever.  R3 (relation-aware evaluation) turns the pair arm below into a
+;; relational split.
+(fn mspp_ground
+  ((fuel Int)
+   (prepared MsPrepared)
+   (grammar Grammar)
+   (candidate Expr)
+   (region SkRegion)
+   (hole_id Int)
+   (rest (List SkRegion))
+   (redex (List MsCitedRegion))
+   (clear (List SkRegion))
+   (forks Int))
+  MsPlanPartitionR
+  (measure fuel)
+  (if (lt fuel 1) (MsPlanPartitionErr "plan partition fuel exhausted")
+  (match (ms_alts grammar hole_id)
+    (None (MsPlanPartitionErr "plan partition references unknown hole"))
+    ((Some alts)
+     (match
+       (mspp_classify_choices
+         (- fuel 1)
+         prepared
+         grammar
+         candidate
+         region
+         hole_id
+         0
+         alts
+         Nil
+         Nil
+         Nil)
+       ((MsPlanChoicesErr msg) (MsPlanPartitionErr msg))
+       ((MsPlanChoicesOk redex_choices clear_choices pending)
+        (match (mspp_build_cited grammar region hole_id alts redex_choices Nil)
+          ((MsCitedBuildErr msg) (MsPlanPartitionErr msg))
+          ((MsCitedBuildOk redex_here)
+           (match
+             (mse_restrict_choices grammar region hole_id alts clear_choices)
+             ((MsEqRestrictErr msg) (MsPlanPartitionErr msg))
+             ((MsEqRestrictNone)
+              (mspp_partition_go
+                (- fuel 1)
+                prepared
+                grammar
+                candidate
+                (mse_regions_append pending rest)
+                (mspp_cited_append redex_here redex)
+                clear
+                (+ forks 1)))
+             ((MsEqRestrictSome clear_here)
+              (mspp_partition_go
+                (- fuel 1)
+                prepared
+                grammar
+                candidate
+                (mse_regions_append pending rest)
+                (mspp_cited_append redex_here redex)
+                (Cons clear_here clear)
+                (+ forks 1))))))))))))
 
 (fn mspp_partition_go
   ((fuel Int)
@@ -3015,54 +3442,29 @@
                (Cons region clear)
                forks))
             ((MsBlocked hole_id)
-             (match (ms_alts grammar hole_id)
-               (None
-                 (MsPlanPartitionErr "plan partition references unknown hole"))
-               ((Some alts)
-                (match
-                  (mspp_classify_choices
-                    (- fuel 1)
-                    prepared
-                    grammar
-                    candidate
-                    region
-                    hole_id
-                    0
-                    alts
-                    Nil
-                    Nil
-                    Nil)
-                  ((MsPlanChoicesErr msg) (MsPlanPartitionErr msg))
-                  ((MsPlanChoicesOk redex_choices clear_choices pending)
-                   (match
-                     (mspp_build_cited grammar region hole_id alts redex_choices
-                       Nil)
-                     ((MsCitedBuildErr msg) (MsPlanPartitionErr msg))
-                     ((MsCitedBuildOk redex_here)
-                      (match
-                        (mse_restrict_choices grammar region hole_id alts
-                          clear_choices)
-                        ((MsEqRestrictErr msg) (MsPlanPartitionErr msg))
-                        ((MsEqRestrictNone)
-                         (mspp_partition_go
-                           (- fuel 1)
-                           prepared
-                           grammar
-                           candidate
-                           (mse_regions_append pending rest)
-                           (mspp_cited_append redex_here redex)
-                           clear
-                           (+ forks 1)))
-                        ((MsEqRestrictSome clear_here)
-                         (mspp_partition_go
-                           (- fuel 1)
-                           prepared
-                           grammar
-                           candidate
-                           (mse_regions_append pending rest)
-                           (mspp_cited_append redex_here redex)
-                           (Cons clear_here clear)
-                           (+ forks 1)))))))))))))))))))
+             (mspp_ground
+               (- fuel 1)
+               prepared
+               grammar
+               candidate
+               region
+               hole_id
+               rest
+               redex
+               clear
+               forks))
+            ((MsBlockedPair h0 _)
+             (mspp_ground
+               (- fuel 1)
+               prepared
+               grammar
+               candidate
+               region
+               h0
+               rest
+               redex
+               clear
+               forks))))))))))
 
 (fn ms_partition_prepared
   ((fuel Int) (prepared MsPrepared) (region SkRegion) (candidate Expr))

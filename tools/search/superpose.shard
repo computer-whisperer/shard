@@ -1609,45 +1609,6 @@
                      sols))))
                ((SuTPass ar2)
                 (match constraint_verdict
-                  ((MsBlocked h)
-                   ;; The semantic query passed without demanding the theorem's
-                   ;; blocked choice.  Every refinement therefore preserves that
-                   ;; pass.  Finish the theorem-only relation tree now, coalescing
-                   ;; equal verdict classes into exact restricted regions.
-                   (match
-                     (ms_partition_prepared 1000000 prepared region candidate)
-                     ((MsPlanPartitionErr msg) (SuSErr msg))
-                     ((MsPlanPartitionOk redex clear partition_forks)
-                      (match
-                        (su_count_partition
-                          candidate
-                          (sug_raw g)
-                          redex
-                          clear
-                          0
-                          0
-                          sols)
-                        ((SuPartitionCountErr msg) (SuSErr msg))
-                        ((SuPartitionCountOk redex_count clear_count terminals
-                           sols2)
-                         (su_drive_query_prepared
-                           (- fuel 1)
-                           m
-                           candq
-                           body
-                           candidate
-                           prepared
-                           query
-                           want
-                           g
-                           ar2
-                           rest
-                           (+ found clear_count)
-                           (+ killed redex_count)
-                           (+ constrained redex_count)
-                           (+ regions terminals)
-                           (+ forks partition_forks)
-                           sols2))))))
                   ((MsClear)
                    (match (sk_region_count candidate (sug_raw g) region)
                      ((SkCErr msg) (SuSErr msg))
@@ -1672,7 +1633,48 @@
                         (Cons region sols)))))
                   ((MsErr msg) (SuSErr msg))
                   ((MsRedex _)
-                   (SuSErr "superpose: inconsistent residual verdict"))))))))))))
+                   (SuSErr "superpose: inconsistent residual verdict"))
+                  (_
+                    ;; Blocked (single hole or R2's hole pair — the prepared
+                    ;; partition grounds pairs until R3 splits relationally).
+                    ;; The semantic query passed without demanding the theorem's
+                    ;; blocked choice.  Every refinement therefore preserves that
+                    ;; pass.  Finish the theorem-only relation tree now, coalescing
+                    ;; equal verdict classes into exact restricted regions.
+                    (match
+                      (ms_partition_prepared 1000000 prepared region candidate)
+                      ((MsPlanPartitionErr msg) (SuSErr msg))
+                      ((MsPlanPartitionOk redex clear partition_forks)
+                       (match
+                         (su_count_partition
+                           candidate
+                           (sug_raw g)
+                           redex
+                           clear
+                           0
+                           0
+                           sols)
+                         ((SuPartitionCountErr msg) (SuSErr msg))
+                         ((SuPartitionCountOk redex_count clear_count terminals
+                            sols2)
+                          (su_drive_query_prepared
+                            (- fuel 1)
+                            m
+                            candq
+                            body
+                            candidate
+                            prepared
+                            query
+                            want
+                            g
+                            ar2
+                            rest
+                            (+ found clear_count)
+                            (+ killed redex_count)
+                            (+ constrained redex_count)
+                            (+ regions terminals)
+                            (+ forks partition_forks)
+                            sols2))))))))))))))))
 
 (fn su_drive_query
   ((fuel Int)
@@ -1912,7 +1914,11 @@
     (match jobs
       (Nil (SuTheoryPartitionOk redex clear forks))
       ((Cons region rest)
-       (match (ms_check_prepared_restricted 1000000 prepared region candidate)
+       ;; R2: pair verdicts are grounded to their first hole here; R3 turns
+       ;; them into relational splits over the region's SkRel field.
+       (match
+         (ms_verdict_ground
+           (ms_check_prepared_restricted 1000000 prepared region candidate))
          ((MsErr msg) (SuTheoryPartitionErr msg))
          ((MsRedex _)
           (su_theory_partition
@@ -1934,6 +1940,9 @@
             redex
             (Cons region clear)
             forks))
+         ((MsBlockedPair _ _)
+          (SuTheoryPartitionErr
+            "theorem partition: ungrounded relational block"))
          ((MsBlocked hole_id)
           (match (sug_alts g hole_id)
             (None
@@ -2060,49 +2069,6 @@
                   forks))
                ((SuTPass ar2)
                 (match constraint_verdict
-                  ((MsBlocked _)
-                   (match
-                     (su_theory_partition
-                       1000000
-                       prepared
-                       candidate
-                       g
-                       (Cons region Nil)
-                       0
-                       Nil
-                       0)
-                     ((SuTheoryPartitionErr msg) (SuFindErr msg))
-                     ((SuTheoryPartitionOk redex_regions clear partition_forks)
-                      (match clear
-                        (Nil
-                          (su_find_query_prepared
-                            (- fuel 1)
-                            m
-                            candq
-                            body
-                            candidate
-                            prepared
-                            query
-                            want
-                            g
-                            ar2
-                            rest
-                            killed
-                            (+ constrained redex_regions)
-                            (+ regions redex_regions)
-                            (+ forks partition_forks)))
-                        ((Cons passing _)
-                         (match (su_region_first candidate g passing)
-                           ((SkEErr msg) (SuFindErr msg))
-                           ((SkEOk representative)
-                            (SuFindFound
-                              killed
-                              (+ constrained redex_regions)
-                              (+ regions (+ redex_regions 1))
-                              (+ forks partition_forks)
-                              (sa_steps ar2)
-                              passing
-                              representative))))))))
                   ((MsClear)
                    (match (su_region_first candidate g region)
                      ((SkEErr msg) (SuFindErr msg))
@@ -2117,7 +2083,52 @@
                         representative))))
                   ((MsErr msg) (SuFindErr msg))
                   ((MsRedex _)
-                   (SuFindErr "superpose: inconsistent residual verdict"))))))))))))
+                   (SuFindErr "superpose: inconsistent residual verdict"))
+                  (_
+                    ;; Blocked (single hole or R2's hole pair — the theorem
+                    ;; partition grounds pairs until R3 splits relationally).
+                    (match
+                      (su_theory_partition
+                        1000000
+                        prepared
+                        candidate
+                        g
+                        (Cons region Nil)
+                        0
+                        Nil
+                        0)
+                      ((SuTheoryPartitionErr msg) (SuFindErr msg))
+                      ((SuTheoryPartitionOk redex_regions clear partition_forks)
+                       (match clear
+                         (Nil
+                           (su_find_query_prepared
+                             (- fuel 1)
+                             m
+                             candq
+                             body
+                             candidate
+                             prepared
+                             query
+                             want
+                             g
+                             ar2
+                             rest
+                             killed
+                             (+ constrained redex_regions)
+                             (+ regions redex_regions)
+                             (+ forks partition_forks)))
+                         ((Cons passing _)
+                          (match (su_region_first candidate g passing)
+                            ((SkEErr msg) (SuFindErr msg))
+                            ((SkEOk representative)
+                             (SuFindFound
+                               killed
+                               (+ constrained redex_regions)
+                               (+ regions (+ redex_regions 1))
+                               (+ forks partition_forks)
+                               (sa_steps ar2)
+                               passing
+                               representative))))))))))))))))))
 
 (fn su_find_query
   ((fuel Int)
