@@ -1785,109 +1785,19 @@
 
 ;; Cardinality-free representative selection.  Synthesis only needs one
 ;; member of a surviving restricted region; computing its rank first couples
-;; that operation to every (potentially enormous) sibling subspace.  Walk the
-;; stratified grammar instead, choosing the first permitted alternative of
-;; each live hole and closing bottom-up exactly as ordinary unrank does.
+;; that operation to every (potentially enormous) sibling subspace.  The
+;; graduated walk lives below with the language interface
+;; (`sk_region_first_lang`); this materialized-Grammar door validates and
+;; delegates.
 (type SkrFirstAltR (SkrFirstAltErr (List Int)) (SkrFirstAltOk Expr))
 
-(fn skr_first_alt
-  ((hole_id Int)
-   (index Int)
-   (alts (List Expr))
-   (region SkRegion)
-   (productivity SkProductivity))
-  SkrFirstAltR
-  (measure (struct alts))
-  (match alts
-    (Nil (SkrFirstAltErr "region has no permitted alternative"))
-    ((Cons alt rest)
-     (let
-       ((selected
-          (match (skr_choice hole_id region)
-            ((Some chosen) (int_eq chosen index))
-            (None True))))
-       (if (if selected (skr_forbidden hole_id index region) False)
-         (skr_first_alt hole_id (+ index 1) rest region productivity)
-       (if (if selected (sk_alt_productive productivity hole_id index) False)
-         (SkrFirstAltOk alt)
-         (skr_first_alt hole_id (+ index 1) rest region productivity)))))))
-
-(type SkrFirstDecideR
-  (SkrFirstDecideErr (List Int))
-  (SkrFirstDecideOk (List (Pair Int Expr))))
-
-(fn skr_first_decide
-  ((entries (List GEnt))
-   (region SkRegion)
-   (productivity SkProductivity)
-   (live (List Int))
-   (choices (List (Pair Int Expr))))
-  SkrFirstDecideR
-  (measure (struct entries))
-  (match entries
-    (Nil (SkrFirstDecideOk choices))
-    ((Cons (GEnt hole_id alts) rest)
-     (if (ids_member hole_id live)
-       (match (skr_first_alt hole_id 0 alts region productivity)
-         ((SkrFirstAltErr msg) (SkrFirstDecideErr msg))
-         ((SkrFirstAltOk alt)
-          (match (holes_e alt Nil)
-            ((SkIdsErr msg) (SkrFirstDecideErr msg))
-            ((SkIdsOk children)
-             (skr_first_decide
-               rest
-               region
-               productivity
-               (ids_union children live)
-               (Cons (Pair hole_id alt) choices))))))
-       (skr_first_decide rest region productivity live choices)))))
-
-(fn skr_first_plain
-  ((root Expr)
-   (entries (List GEnt))
-   (region SkRegion)
-   (productivity SkProductivity))
-  SkE
-  (match (holes_e root Nil)
-    ((SkIdsErr msg) (SkEErr msg))
-    ((SkIdsOk roots)
-     (match (skr_first_decide entries region productivity roots Nil)
-       ((SkrFirstDecideErr msg) (SkEErr msg))
-       ((SkrFirstDecideOk choices)
-        (match (close_go (ents_rev entries Nil) choices Nil)
-          ((ClRErr msg) (SkEErr msg))
-          ((ClROk closed)
-           (match (fill_e root closed)
-             ((SkEErr msg) (SkEErr msg))
-             ((SkEOk result)
-              (if (sk_closed result) (SkEOk result)
-              (SkEErr
-                "region first left holes (grammar incomplete for the root)")))))))))))
-
-;; Relational regions pick their representative by bounded backtracking over
-;; the RELATED holes only: normalize, fix the first blocked pair's open side
-;; to each allowed productive alternative in turn, and recurse; unrelated
-;; holes close through the ordinary cardinality-free walk once every event
-;; has discharged. Fuel is a loud bound, not a policy.
 (fn sk_region_first ((root Expr) (grammar Grammar) (region SkRegion)) SkE
   (match (g_wf grammar)
     ((GWErr msg) (SkEErr msg))
     ((GWOk)
      (match (sk_region_wf grammar region)
        ((SkRegionWfErr msg) (SkEErr msg))
-       ((SkRegionWfOk)
-        (match grammar
-          ((Grammar entries)
-           (match (sk_region_rels region)
-             (Nil
-               (skr_first_plain root entries region (sk_productivity grammar)))
-             ((Cons _ _)
-              (skr_first_rel_go
-                root
-                entries
-                region
-                (sk_productivity grammar)
-                100000))))))))))
+       ((SkRegionWfOk) (sk_region_first_lang root (SkLangFlat grammar) region))))))
 
 (type SkRegionEditR
   (SkRegionEditErr (List Int))
@@ -1991,6 +1901,87 @@
   (match (sk_region_wf grammar region)
     ((SkRegionWfErr msg) (SkRegionSubtractErr msg))
     ((SkRegionWfOk) (skr_subtract_cube_go grammar region cube Nil))))
+
+;; ---- the language interface: one relational algebra over both grammars ----
+;;
+;; The relational region machinery (the doors, normalization, and the
+;; first walk) is language-parametric: a materialized Grammar and a
+;; regular schema grammar answer the same three questions — a hole's
+;; instantiated alternatives, endpoint isomorphism, and per-alternative
+;; productivity.  Schema isomorphism holds BY CONSTRUCTION: two
+;; occurrences governed by the same schema id instantiate index-aligned
+;; identical domains at every depth, so the door's check is id equality.
+;; Exact counting and rank/unrank remain materialized-Grammar-only —
+;; first-mode never counts.
+(type SkLang (SkLangFlat Grammar) (SkLangSchema SkSchemaGrammar))
+
+(fn skl_alts ((lang SkLang) (hole_id Int)) SkSchemaAltsR
+  (match lang
+    ((SkLangFlat (Grammar entries))
+     (match (skr_entry_alts entries hole_id)
+       (None (SkSchemaAltsErr "region hole is absent from its grammar"))
+       ((Some alts) (SkSchemaAltsOk alts))))
+    ((SkLangSchema grammar) (sk_schema_alts_at grammar hole_id))))
+
+(fn skl_iso ((lang SkLang) (h0 Int) (h1 Int)) SkIsoR
+  (match lang
+    ((SkLangFlat (Grammar entries))
+     (skr_iso_holes entries h0 h1 (skr_iso_fuel entries)))
+    ((SkLangSchema grammar)
+     (match (sk_schema_id_at grammar h0)
+       ((SkSchemaIdErr msg) (SkIsoErr msg))
+       ((SkSchemaIdOk id0)
+        (match (sk_schema_id_at grammar h1)
+          ((SkSchemaIdErr msg) (SkIsoErr msg))
+          ((SkSchemaIdOk id1)
+           (if (int_eq id0 id1) (SkIsoOk)
+           (SkIsoErr "relation endpoints have non-isomorphic domains")))))))))
+
+(fn skl_size ((lang SkLang)) Int
+  (match lang
+    ((SkLangFlat (Grammar entries)) (skr_ents_len entries))
+    ((SkLangSchema (SkSchemaGrammar _ entries)) (sks_entries_len entries))))
+
+(fn skl_pairs_len ((pairs (List (Pair Int Int)))) Int
+  (measure (struct pairs))
+  (match pairs
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (skl_pairs_len rest)))))
+
+;; Normalization rounds are bounded by the live description, not by the
+;; (schema-infinite) occurrence space: entries + fixed chains + events.
+(fn skl_norm_fuel ((lang SkLang) (region SkRegion)) Int
+  (match region
+    ((SkRegion choices _ rels)
+     (+
+       16
+       (* 8 (+ (skl_size lang) (+ (skl_pairs_len choices) (skr_rels_len rels))))))))
+
+(type SkLangProd
+  (SkLangProdFlat SkProductivity)
+  (SkLangProdSchema SkSchemaProductivity))
+
+(fn skl_productivity ((lang SkLang)) SkLangProd
+  (match lang
+    ((SkLangFlat grammar) (SkLangProdFlat (sk_productivity grammar)))
+    ((SkLangSchema grammar) (SkLangProdSchema (sk_schema_productivity grammar)))))
+
+(fn skl_alt_productive
+  ((lang SkLang) (prod SkLangProd) (hole_id Int) (index Int))
+  Bool
+  (match prod
+    ((SkLangProdFlat productivity)
+     (sk_alt_productive productivity hole_id index))
+    ((SkLangProdSchema (SkSchemaProductivity facts))
+     (match lang
+       ((SkLangFlat _) False)
+       ((SkLangSchema grammar)
+        (match (sk_schema_id_at grammar hole_id)
+          ((SkSchemaIdErr _) False)
+          ((SkSchemaIdOk schema_id)
+           (match (sks_fact_find schema_id facts)
+             (None False)
+             ((Some bits) (sks_nth_bool bits index))))))))))
 
 ;; ---- relation machinery: alignment, isomorphism, pair evaluation ----------
 
@@ -2282,19 +2273,17 @@
 
 ;; ---- relation propagation: three-valued pair evaluation + normalization ---
 
-(fn skr_choose_at
-  ((entries (List GEnt)) (region SkRegion) (hole_id Int) (choice Int))
+(fn skr_choose_at ((lang SkLang) (region SkRegion) (hole_id Int) (choice Int))
   SkRegionEditR
-  (match (skr_entry_alts entries hole_id)
-    (None (SkRegionEditErr "region choice references an unknown hole"))
-    ((Some alts) (sk_region_choose_known region hole_id choice alts))))
+  (match (skl_alts lang hole_id)
+    ((SkSchemaAltsErr msg) (SkRegionEditErr msg))
+    ((SkSchemaAltsOk alts) (sk_region_choose_known region hole_id choice alts))))
 
-(fn skr_forbid_at
-  ((entries (List GEnt)) (region SkRegion) (hole_id Int) (choice Int))
+(fn skr_forbid_at ((lang SkLang) (region SkRegion) (hole_id Int) (choice Int))
   SkRegionEditR
-  (match (skr_entry_alts entries hole_id)
-    (None (SkRegionEditErr "region exclusion references an unknown hole"))
-    ((Some alts)
+  (match (skl_alts lang hole_id)
+    ((SkSchemaAltsErr msg) (SkRegionEditErr msg))
+    ((SkSchemaAltsOk alts)
      (if (skr_choice_valid choice alts) (skr_forbid_known region hole_id choice)
      (SkRegionEditErr "region exclusion is outside its grammar entry")))))
 
@@ -2310,15 +2299,14 @@
   (SkRelPairBlocked)
   (SkRelPairDescend (List (Pair Int Int))))
 
-(fn skr_pair_eval ((entries (List GEnt)) (region SkRegion) (h0 Int) (h1 Int))
-  SkRelPairR
+(fn skr_pair_eval ((lang SkLang) (region SkRegion) (h0 Int) (h1 Int)) SkRelPairR
   (if (int_eq h0 h1) (SkRelPairEqual)
-  (match (skr_entry_alts entries h0)
-    (None (SkRelPairErr "relation references an unknown grammar hole"))
-    ((Some alts0)
-     (match (skr_entry_alts entries h1)
-       (None (SkRelPairErr "relation references an unknown grammar hole"))
-       ((Some alts1)
+  (match (skl_alts lang h0)
+    ((SkSchemaAltsErr msg) (SkRelPairErr msg))
+    ((SkSchemaAltsOk alts0)
+     (match (skl_alts lang h1)
+       ((SkSchemaAltsErr msg) (SkRelPairErr msg))
+       ((SkSchemaAltsOk alts1)
         (match (skr_choice h0 region)
           ((Some c0)
            (match (skr_choice h1 region)
@@ -2365,35 +2353,35 @@
   (SkRelSingDrop SkRegion))
 
 (fn skr_ne_singleton_side
-  ((entries (List GEnt))
+  ((lang SkLang)
    (region SkRegion)
    (fixed_hole Int)
    (fixed_choice Int)
    (open_hole Int))
   SkRelSingR
-  (match (skr_entry_alts entries fixed_hole)
-    (None (SkRelSingErr "relation references an unknown grammar hole"))
-    ((Some alts)
+  (match (skl_alts lang fixed_hole)
+    ((SkSchemaAltsErr msg) (SkRelSingErr msg))
+    ((SkSchemaAltsOk alts)
      (match (skr_nth_alt alts fixed_choice)
        (None (SkRelSingErr "region choice is outside its grammar entry"))
        ((Some template)
         (if (sk_closed template)
-          (match (skr_forbid_at entries region open_hole fixed_choice)
+          (match (skr_forbid_at lang region open_hole fixed_choice)
             ((SkRegionEditErr msg) (SkRelSingErr msg))
             ((SkRegionEditEmpty) (SkRelSingEmpty))
             ((SkRegionEditOk region2) (SkRelSingDrop region2)))
           (SkRelSingKeep)))))))
 
-(fn skr_ne_singleton ((entries (List GEnt)) (region SkRegion) (h0 Int) (h1 Int))
+(fn skr_ne_singleton ((lang SkLang) (region SkRegion) (h0 Int) (h1 Int))
   SkRelSingR
   (match (skr_choice h0 region)
     ((Some c0)
      (match (skr_choice h1 region)
        ((Some _) (SkRelSingKeep))
-       (None (skr_ne_singleton_side entries region h0 c0 h1))))
+       (None (skr_ne_singleton_side lang region h0 c0 h1))))
     (None
       (match (skr_choice h1 region)
-        ((Some c1) (skr_ne_singleton_side entries region h1 c1 h0))
+        ((Some c1) (skr_ne_singleton_side lang region h1 c1 h0))
         (None (SkRelSingKeep))))))
 
 (type SkRelVecR
@@ -2403,7 +2391,7 @@
   (SkRelVecOk (List (Pair Int Int)) SkRegion Bool))
 
 (fn skr_norm_eq_pairs
-  ((entries (List GEnt))
+  ((lang SkLang)
    (region SkRegion)
    (pairs (List (Pair Int Int)))
    (acc (List (Pair Int Int)))
@@ -2413,48 +2401,43 @@
   (match pairs
     (Nil (SkRelVecOk (skr_pairs_rev acc) region changed))
     ((Cons (Pair h0 h1) rest)
-     (match (skr_pair_eval entries region h0 h1)
+     (match (skr_pair_eval lang region h0 h1)
        ((SkRelPairErr msg) (SkRelVecErr msg))
-       ((SkRelPairEqual) (skr_norm_eq_pairs entries region rest acc True))
+       ((SkRelPairEqual) (skr_norm_eq_pairs lang region rest acc True))
        ((SkRelPairDiffer) (SkRelVecEmpty))
        ((SkRelPairBlocked)
         (match (skr_choice h0 region)
           ((Some c0)
-           (match (skr_choose_at entries region h1 c0)
+           (match (skr_choose_at lang region h1 c0)
              ((SkRegionEditErr msg) (SkRelVecErr msg))
              ((SkRegionEditEmpty) (SkRelVecEmpty))
              ((SkRegionEditOk region2)
-              (skr_norm_eq_pairs
-                entries
-                region2
-                rest
-                (Cons (Pair h0 h1) acc)
-                True))))
+              (skr_norm_eq_pairs lang region2 rest (Cons (Pair h0 h1) acc) True))))
           (None
             (match (skr_choice h1 region)
               ((Some c1)
-               (match (skr_choose_at entries region h0 c1)
+               (match (skr_choose_at lang region h0 c1)
                  ((SkRegionEditErr msg) (SkRelVecErr msg))
                  ((SkRegionEditEmpty) (SkRelVecEmpty))
                  ((SkRegionEditOk region2)
                   (skr_norm_eq_pairs
-                    entries
+                    lang
                     region2
                     rest
                     (Cons (Pair h0 h1) acc)
                     True))))
               (None
                 (skr_norm_eq_pairs
-                  entries
+                  lang
                   region
                   rest
                   (Cons (Pair h0 h1) acc)
                   changed))))))
        ((SkRelPairDescend subs)
-        (skr_norm_eq_pairs entries region rest (skr_pairs_onto subs acc) True))))))
+        (skr_norm_eq_pairs lang region rest (skr_pairs_onto subs acc) True))))))
 
 (fn skr_norm_ne_pairs
-  ((entries (List GEnt))
+  ((lang SkLang)
    (region SkRegion)
    (pairs (List (Pair Int Int)))
    (acc (List (Pair Int Int)))
@@ -2467,14 +2450,14 @@
         (Nil (SkRelVecEmpty))
         ((Cons _ _) (SkRelVecOk (skr_pairs_rev acc) region changed))))
     ((Cons (Pair h0 h1) rest)
-     (match (skr_pair_eval entries region h0 h1)
+     (match (skr_pair_eval lang region h0 h1)
        ((SkRelPairErr msg) (SkRelVecErr msg))
-       ((SkRelPairEqual) (skr_norm_ne_pairs entries region rest acc True))
+       ((SkRelPairEqual) (skr_norm_ne_pairs lang region rest acc True))
        ((SkRelPairDiffer) (SkRelVecSat))
        ((SkRelPairBlocked)
-        (skr_norm_ne_pairs entries region rest (Cons (Pair h0 h1) acc) changed))
+        (skr_norm_ne_pairs lang region rest (Cons (Pair h0 h1) acc) changed))
        ((SkRelPairDescend subs)
-        (skr_norm_ne_pairs entries region rest (skr_pairs_onto subs acc) True))))))
+        (skr_norm_ne_pairs lang region rest (skr_pairs_onto subs acc) True))))))
 
 (type SkRelNormR
   (SkRelNormErr (List Int))
@@ -2482,7 +2465,7 @@
   (SkRelNormOk SkRegion Bool))
 
 (fn skr_norm_rels
-  ((entries (List GEnt))
+  ((lang SkLang)
    (region SkRegion)
    (rels (List SkRel))
    (acc (List SkRel))
@@ -2496,115 +2479,106 @@
      (match rel
        ((SkRelEq lefts rights)
         (match
-          (skr_norm_eq_pairs
-            entries
-            region
-            (skr_vec_pairs lefts rights)
-            Nil
-            False)
+          (skr_norm_eq_pairs lang region (skr_vec_pairs lefts rights) Nil False)
           ((SkRelVecErr msg) (SkRelNormErr msg))
           ((SkRelVecEmpty) (SkRelNormEmpty))
-          ((SkRelVecSat) (skr_norm_rels entries region rest acc True))
+          ((SkRelVecSat) (skr_norm_rels lang region rest acc True))
           ((SkRelVecOk pairs2 region2 ch)
            (match pairs2
-             (Nil (skr_norm_rels entries region2 rest acc True))
+             (Nil (skr_norm_rels lang region2 rest acc True))
              ((Cons _ _)
               (skr_norm_rels
-                entries
+                lang
                 region2
                 rest
                 (Cons (skr_rel_eq_of pairs2) acc)
                 (if changed True ch)))))))
        ((SkRelNe lefts rights)
         (match
-          (skr_norm_ne_pairs
-            entries
-            region
-            (skr_vec_pairs lefts rights)
-            Nil
-            False)
+          (skr_norm_ne_pairs lang region (skr_vec_pairs lefts rights) Nil False)
           ((SkRelVecErr msg) (SkRelNormErr msg))
           ((SkRelVecEmpty) (SkRelNormEmpty))
-          ((SkRelVecSat) (skr_norm_rels entries region rest acc True))
+          ((SkRelVecSat) (skr_norm_rels lang region rest acc True))
           ((SkRelVecOk pairs2 region2 ch)
            (match pairs2
              (Nil (SkRelNormEmpty))
              ((Cons (Pair h0 h1) more)
               (match more
                 (Nil
-                  (match (skr_ne_singleton entries region2 h0 h1)
+                  (match (skr_ne_singleton lang region2 h0 h1)
                     ((SkRelSingErr msg) (SkRelNormErr msg))
                     ((SkRelSingEmpty) (SkRelNormEmpty))
                     ((SkRelSingKeep)
                      (skr_norm_rels
-                       entries
+                       lang
                        region2
                        rest
                        (Cons (skr_rel_ne_of pairs2) acc)
                        (if changed True ch)))
                     ((SkRelSingDrop region3)
-                     (skr_norm_rels entries region3 rest acc True))))
+                     (skr_norm_rels lang region3 rest acc True))))
                 ((Cons _ _)
                  (skr_norm_rels
-                   entries
+                   lang
                    region2
                    rest
                    (Cons (skr_rel_ne_of pairs2) acc)
                    (if changed True ch)))))))))))))
 
-(fn skr_norm_fuel ((entries (List GEnt))) Int
-  (+ 16 (* 8 (skr_ents_len entries))))
-
-(fn skr_norm_go ((entries (List GEnt)) (region SkRegion) (fuel Int))
-  SkRegionEditR
+(fn skr_norm_go ((lang SkLang) (region SkRegion) (fuel Int)) SkRegionEditR
   (measure fuel)
   (if (lt fuel 1) (SkRegionEditErr "relational normalization fuel exhausted")
-  (match (skr_norm_rels entries region (sk_region_rels region) Nil False)
+  (match (skr_norm_rels lang region (sk_region_rels region) Nil False)
     ((SkRelNormErr msg) (SkRegionEditErr msg))
     ((SkRelNormEmpty) (SkRegionEditEmpty))
     ((SkRelNormOk region2 changed)
-     (if changed (skr_norm_go entries region2 (- fuel 1))
-     (SkRegionEditOk region2))))))
+     (if changed (skr_norm_go lang region2 (- fuel 1)) (SkRegionEditOk region2))))))
 
 ;; Normalization to a fixpoint: discharge decided pairs, descend fixed deep
 ;; pairs, fix eq partners, convert last-pair closed-template `ne` to a
 ;; forbid. Verdict-neutral: it rewrites the region's DESCRIPTION, never its
 ;; candidate set.
+(fn sk_region_norm_lang ((lang SkLang) (region SkRegion)) SkRegionEditR
+  (skr_norm_go lang region (skl_norm_fuel lang region)))
+
 (fn sk_region_norm ((grammar Grammar) (region SkRegion)) SkRegionEditR
-  (match grammar
-    ((Grammar entries) (skr_norm_go entries region (skr_norm_fuel entries)))))
+  (sk_region_norm_lang (SkLangFlat grammar) region))
 
 ;; ---- the validated relation doors + the split and release ops -------------
 
+(fn sk_region_relate_eq_lang ((lang SkLang) (region SkRegion) (h0 Int) (h1 Int))
+  SkRegionEditR
+  (if (int_eq h0 h1) (SkRegionEditOk region)
+  (match (skl_iso lang h0 h1)
+    ((SkIsoErr msg) (SkRegionEditErr msg))
+    ((SkIsoOk)
+     (skr_norm_go
+       lang
+       (skr_region_with_rels
+         region
+         (Cons (SkRelEq (Cons h0 Nil) (Cons h1 Nil)) (sk_region_rels region)))
+       (skl_norm_fuel lang region))))))
+
 (fn sk_region_relate_eq ((grammar Grammar) (region SkRegion) (h0 Int) (h1 Int))
   SkRegionEditR
-  (match grammar
-    ((Grammar entries)
-     (if (int_eq h0 h1) (SkRegionEditOk region)
-     (match (skr_iso_holes entries h0 h1 (skr_iso_fuel entries))
-       ((SkIsoErr msg) (SkRegionEditErr msg))
-       ((SkIsoOk)
-        (skr_norm_go
-          entries
-          (skr_region_with_rels
-            region
-            (Cons (SkRelEq (Cons h0 Nil) (Cons h1 Nil)) (sk_region_rels region)))
-          (skr_norm_fuel entries))))))))
+  (sk_region_relate_eq_lang (SkLangFlat grammar) region h0 h1))
+
+(fn sk_region_relate_ne_lang ((lang SkLang) (region SkRegion) (h0 Int) (h1 Int))
+  SkRegionEditR
+  (if (int_eq h0 h1) (SkRegionEditEmpty)
+  (match (skl_iso lang h0 h1)
+    ((SkIsoErr msg) (SkRegionEditErr msg))
+    ((SkIsoOk)
+     (skr_norm_go
+       lang
+       (skr_region_with_rels
+         region
+         (Cons (SkRelNe (Cons h0 Nil) (Cons h1 Nil)) (sk_region_rels region)))
+       (skl_norm_fuel lang region))))))
 
 (fn sk_region_relate_ne ((grammar Grammar) (region SkRegion) (h0 Int) (h1 Int))
   SkRegionEditR
-  (match grammar
-    ((Grammar entries)
-     (if (int_eq h0 h1) (SkRegionEditEmpty)
-     (match (skr_iso_holes entries h0 h1 (skr_iso_fuel entries))
-       ((SkIsoErr msg) (SkRegionEditErr msg))
-       ((SkIsoOk)
-        (skr_norm_go
-          entries
-          (skr_region_with_rels
-            region
-            (Cons (SkRelNe (Cons h0 Nil) (Cons h1 Nil)) (sk_region_rels region)))
-          (skr_norm_fuel entries))))))))
+  (sk_region_relate_ne_lang (SkLangFlat grammar) region h0 h1))
 
 ;; The relational split: one region becomes the disjoint (eq, ne) pair —
 ;; the drive's answer to a blocked hole-pair obligation, replacing
@@ -2613,21 +2587,26 @@
   (SkRegionSplitErr (List Int))
   (SkRegionSplitOk (Option SkRegion) (Option SkRegion)))
 
-(fn sk_region_split_pair ((grammar Grammar) (region SkRegion) (h0 Int) (h1 Int))
+(fn sk_region_split_pair_lang
+  ((lang SkLang) (region SkRegion) (h0 Int) (h1 Int))
   SkRegionSplitR
-  (match (sk_region_relate_eq grammar region h0 h1)
+  (match (sk_region_relate_eq_lang lang region h0 h1)
     ((SkRegionEditErr msg) (SkRegionSplitErr msg))
     ((SkRegionEditEmpty)
-     (match (sk_region_relate_ne grammar region h0 h1)
+     (match (sk_region_relate_ne_lang lang region h0 h1)
        ((SkRegionEditErr msg) (SkRegionSplitErr msg))
        ((SkRegionEditEmpty) (SkRegionSplitOk None None))
        ((SkRegionEditOk ne_region) (SkRegionSplitOk None (Some ne_region)))))
     ((SkRegionEditOk eq_region)
-     (match (sk_region_relate_ne grammar region h0 h1)
+     (match (sk_region_relate_ne_lang lang region h0 h1)
        ((SkRegionEditErr msg) (SkRegionSplitErr msg))
        ((SkRegionEditEmpty) (SkRegionSplitOk (Some eq_region) None))
        ((SkRegionEditOk ne_region)
         (SkRegionSplitOk (Some eq_region) (Some ne_region)))))))
+
+(fn sk_region_split_pair ((grammar Grammar) (region SkRegion) (h0 Int) (h1 Int))
+  SkRegionSplitR
+  (sk_region_split_pair_lang (SkLangFlat grammar) region h0 h1))
 
 ;; The perturbation seam (rip-up): release the given holes' assignments.
 ;; Relations are knowledge-or-branch-policy — the caller chooses whether
@@ -3398,21 +3377,152 @@
           (Nil None)
           ((Cons pair _) (Some pair))))))))
 
-(fn skr_first_rel_go
-  ((root Expr)
-   (entries (List GEnt))
+;; ---- the graduated first walk (language-parametric, relational) -----------
+;;
+;; ONE cardinality-free representative walk serves both grammar languages
+;; and both drives (tools/search/superpose's su_first_* family graduated
+;; here).  The cube walk is demand-driven from the root: at each open hole
+;; take the first allowed PRODUCTIVE alternative and recurse into its
+;; instantiation, so only the selected candidate's occurrences are ever
+;; touched — exactly what a lazy schema language requires.  A relational
+;; region normalizes first, then backtracks over the RELATED holes only:
+;; fix the first live pair's open side to each allowed productive
+;; alternative in turn and recurse; unrelated holes close through the
+;; plain walk once every event has discharged.  Fuel is a loud bound, not
+;; a policy.  The lang entry trusts its region: doors and forks build
+;; well-formed regions by construction, and the materialized-Grammar door
+;; above validates before delegating.
+
+(fn skf_alt
+  ((lang SkLang)
+   (prod SkLangProd)
    (region SkRegion)
-   (productivity SkProductivity)
-   (fuel Int))
+   (hole_id Int)
+   (index Int)
+   (alts (List Expr)))
+  SkrFirstAltR
+  (measure (struct alts))
+  (match alts
+    (Nil (SkrFirstAltErr "region has no permitted alternative"))
+    ((Cons alt rest)
+     (let
+       ((selected
+          (match (skr_choice hole_id region)
+            ((Some chosen) (int_eq chosen index))
+            (None True))))
+       (if (if selected (skr_forbidden hole_id index region) False)
+         (skf_alt lang prod region hole_id (+ index 1) rest)
+       (if (if selected (skl_alt_productive lang prod hole_id index) False)
+         (SkrFirstAltOk alt)
+         (skf_alt lang prod region hole_id (+ index 1) rest)))))))
+
+(fn skf_expr
+  ((fuel Int) (lang SkLang) (prod SkLangProd) (region SkRegion) (e Expr))
+  SkE
+  (measure fuel)
+  (if (lt fuel 1) (SkEErr "region first fuel exhausted")
+  (match (hole_view e)
+    ((HVBad msg) (SkEErr msg))
+    ((HVHole hole_id)
+     (match (skl_alts lang hole_id)
+       ((SkSchemaAltsErr msg) (SkEErr msg))
+       ((SkSchemaAltsOk alts)
+        (match (skf_alt lang prod region hole_id 0 alts)
+          ((SkrFirstAltErr msg) (SkEErr msg))
+          ((SkrFirstAltOk alt) (skf_expr (- fuel 1) lang prod region alt))))))
+    ((HVNot)
+     (match e
+       ((Ctor q args)
+        (match (skf_list (- fuel 1) lang prod region args)
+          ((SkELErr msg) (SkEErr msg))
+          ((SkELOk args2) (SkEOk (Ctor q args2)))))
+       ((Call q args)
+        (match (skf_list (- fuel 1) lang prod region args)
+          ((SkELErr msg) (SkEErr msg))
+          ((SkELOk args2) (SkEOk (Call q args2)))))
+       ((Match scrut arms)
+        (match (skf_expr (- fuel 1) lang prod region scrut)
+          ((SkEErr msg) (SkEErr msg))
+          ((SkEOk scrut2)
+           (match (skf_arms (- fuel 1) lang prod region arms)
+             ((SkEAErr msg) (SkEErr msg))
+             ((SkEAOk arms2) (SkEOk (Match scrut2 arms2)))))))
+       ((Let binds body)
+        (match (skf_list (- fuel 1) lang prod region binds)
+          ((SkELErr msg) (SkEErr msg))
+          ((SkELOk binds2)
+           (match (skf_expr (- fuel 1) lang prod region body)
+             ((SkEErr msg) (SkEErr msg))
+             ((SkEOk body2) (SkEOk (Let binds2 body2)))))))
+       ((If cond yes no)
+        (match (skf_expr (- fuel 1) lang prod region cond)
+          ((SkEErr msg) (SkEErr msg))
+          ((SkEOk cond2)
+           (match (skf_expr (- fuel 1) lang prod region yes)
+             ((SkEErr msg) (SkEErr msg))
+             ((SkEOk yes2)
+              (match (skf_expr (- fuel 1) lang prod region no)
+                ((SkEErr msg) (SkEErr msg))
+                ((SkEOk no2) (SkEOk (If cond2 yes2 no2)))))))))
+       (_ (SkEOk e)))))))
+
+(fn skf_list
+  ((fuel Int)
+   (lang SkLang)
+   (prod SkLangProd)
+   (region SkRegion)
+   (es (List Expr)))
+  SkEL
+  (measure fuel)
+  (if (lt fuel 1) (SkELErr "region first list fuel exhausted")
+  (match es
+    (Nil (SkELOk Nil))
+    ((Cons head rest)
+     (match (skf_expr (- fuel 1) lang prod region head)
+       ((SkEErr msg) (SkELErr msg))
+       ((SkEOk head2)
+        (match (skf_list (- fuel 1) lang prod region rest)
+          ((SkELErr msg) (SkELErr msg))
+          ((SkELOk rest2) (SkELOk (Cons head2 rest2))))))))))
+
+(fn skf_arms
+  ((fuel Int)
+   (lang SkLang)
+   (prod SkLangProd)
+   (region SkRegion)
+   (arms (List Arm)))
+  SkEA
+  (measure fuel)
+  (if (lt fuel 1) (SkEAErr "region first arms fuel exhausted")
+  (match arms
+    (Nil (SkEAOk Nil))
+    ((Cons (Arm pattern body) rest)
+     (match (skf_expr (- fuel 1) lang prod region body)
+       ((SkEErr msg) (SkEAErr msg))
+       ((SkEOk body2)
+        (match (skf_arms (- fuel 1) lang prod region rest)
+          ((SkEAErr msg) (SkEAErr msg))
+          ((SkEAOk rest2) (SkEAOk (Cons (Arm pattern body2) rest2))))))))))
+
+(fn skf_plain ((lang SkLang) (prod SkLangProd) (region SkRegion) (root Expr))
+  SkE
+  (match (skf_expr 1000000 lang prod region root)
+    ((SkEErr msg) (SkEErr msg))
+    ((SkEOk result)
+     (if (sk_closed result) (SkEOk result)
+     (SkEErr "region first left holes (grammar incomplete for the root)")))))
+
+(fn skf_rel_go
+  ((root Expr) (lang SkLang) (prod SkLangProd) (region SkRegion) (fuel Int))
   SkE
   (measure fuel)
   (if (lt fuel 1) (SkEErr "relational first-productive fuel exhausted")
-  (match (skr_norm_go entries region (skr_norm_fuel entries))
+  (match (skr_norm_go lang region (skl_norm_fuel lang region))
     ((SkRegionEditErr msg) (SkEErr msg))
     ((SkRegionEditEmpty) (SkEErr "relational region is empty"))
     ((SkRegionEditOk region2)
      (match (sk_region_rels region2)
-       (Nil (skr_first_plain root entries region2 productivity))
+       (Nil (skf_plain lang prod region2 root))
        ((Cons _ _)
         (match (skr_rel_first_pair (sk_region_rels region2))
           (None (SkEErr "internal: relational region without a live pair"))
@@ -3422,24 +3532,16 @@
                 (match (skr_choice h0 region2)
                   (None h0)
                   ((Some _) h1))))
-             (match (skr_entry_alts entries target)
-               (None (SkEErr "relation references an unknown grammar hole"))
-               ((Some alts)
-                (skr_first_rel_try
-                  root
-                  entries
-                  region2
-                  productivity
-                  target
-                  0
-                  alts
-                  (- fuel 1)))))))))))))
+             (match (skl_alts lang target)
+               ((SkSchemaAltsErr msg) (SkEErr msg))
+               ((SkSchemaAltsOk alts)
+                (skf_rel_try root lang prod region2 target 0 alts (- fuel 1)))))))))))))
 
-(fn skr_first_rel_try
+(fn skf_rel_try
   ((root Expr)
-   (entries (List GEnt))
+   (lang SkLang)
+   (prod SkLangProd)
    (region SkRegion)
-   (productivity SkProductivity)
    (hole_id Int)
    (index Int)
    (alts (List Expr))
@@ -3452,43 +3554,40 @@
     ((Cons _ rest)
      (if
        (if (skr_forbidden hole_id index region) True
-       (if (sk_alt_productive productivity hole_id index) False
+       (if (skl_alt_productive lang prod hole_id index) False
        True))
-       (skr_first_rel_try
-         root
-         entries
-         region
-         productivity
-         hole_id
-         (+ index 1)
-         rest
-         (- fuel 1))
-       (match (skr_choose_at entries region hole_id index)
+       (skf_rel_try root lang prod region hole_id (+ index 1) rest (- fuel 1))
+       (match (skr_choose_at lang region hole_id index)
          ((SkRegionEditErr msg) (SkEErr msg))
          ((SkRegionEditEmpty)
-          (skr_first_rel_try
+          (skf_rel_try
             root
-            entries
+            lang
+            prod
             region
-            productivity
             hole_id
             (+ index 1)
             rest
             (- fuel 1)))
          ((SkRegionEditOk region2)
-          (match (skr_first_rel_go root entries region2 productivity (- fuel 1))
+          (match (skf_rel_go root lang prod region2 (- fuel 1))
             ((SkEErr _)
-             (skr_first_rel_try
+             (skf_rel_try
                root
-               entries
+               lang
+               prod
                region
-               productivity
                hole_id
                (+ index 1)
                rest
                (- fuel 1)))
             ((SkEOk result) (SkEOk result))))))))))
 
+(fn sk_region_first_lang ((root Expr) (lang SkLang) (region SkRegion)) SkE
+  (let ((prod (skl_productivity lang)))
+    (match (sk_region_rels region)
+      (Nil (skf_plain lang prod region root))
+      ((Cons _ _) (skf_rel_go root lang prod region 100000)))))
 ;; index -> the closed candidate it addresses (range-checked, loud)
 (fn sk_unrank ((root Expr) (g Grammar) (ix Int)) SkE
   (match (g_counts g)

@@ -3522,3 +3522,71 @@ O(edges) decision tree.  Controls stay bit-identical: both first-mode
 typed tasks, the DIAG-SPLIT pin, the superpose rev pin (443/133/7,777),
 the x86 window (625/411/23,267, agreement OK), and the driver check
 targets (superpose 33/0, typed_superpose 323/0, pure_program 33/0).
+
+### R4 — the graduated first walk + the schema-side relational algebra (LANDED 2026-07-26)
+
+**Why this is the R5 gate.**  The P5c-2-cont consumer is first-mode over
+REGULAR SCHEMAS; until this rung, the relational region machinery
+(doors, normalization, the first walk) was materialized-Grammar-only, so
+the schema find drive could only ground its pairs.  R4 makes the
+relational algebra language-parametric and graduates superpose's
+`su_first_*` family into it.
+
+**The language interface (meta/sketch).**  `SkLang` (materialized
+Grammar | regular schema grammar) answers the three questions the
+relational machinery asks: a hole's instantiated alternatives
+(`skl_alts` — flat entry lookup / `sk_schema_alts_at`), endpoint
+isomorphism (`skl_iso` — the recursive flat walker / SCHEMA-ID EQUALITY,
+which holds by construction: two occurrences of one schema id
+instantiate index-aligned identical domains at every depth), and
+per-alternative productivity (`skl_alt_productive` over `SkLangProd`).
+The whole normalization SCC (`skr_pair_eval`, the eq/ne pair walkers,
+`skr_norm_rels`/`skr_norm_go`, the ne-singleton forbid conversion, the
+region-edit helpers) now takes the language; descent needs no
+schema-special code — aligning two instantiations of one template pairs
+the child occurrences positionally.  The doors and split gained `_lang`
+entries (`sk_region_relate_eq_lang`/`_ne_lang`/`sk_region_split_pair_lang`,
+`sk_region_norm_lang`); the materialized-Grammar names remain as
+validating wrappers, so every existing call site is untouched.
+Exact counting and rank/unrank stay materialized-Grammar-only —
+first-mode never counts.
+
+**The graduated walk.**  ONE demand-driven representative walk
+(`sk_region_first_lang`) replaces both the flat entries-walk
+(`skr_first_plain`/`skr_first_rel_*`, deleted) and superpose's
+`su_first_expr` family (deleted): recurse from the root, at each open
+hole take the first allowed PRODUCTIVE alternative and recurse into its
+instantiation — touching only the selected candidate's occurrences,
+which is exactly what a lazy schema language requires; relational
+regions normalize, then backtrack over related holes only.  Per-hole
+choices are traversal-order-independent, so flat representatives are
+bit-identical with both old walkers.  `su_region_first` is now a thin
+delegate over `sug_lang` (SuG retains its schema grammar, so the drives
+hand the doors their language directly), and `su_theory_partition`
+splits through `sk_region_split_pair_lang` — the schema find drive
+shares the whole R3 split path.  `su_fork` normalizes RELATIONAL
+children before pushing them (cube children skip at zero cost): fixing
+a relation endpoint propagates — the eq partner gets the same choice, a
+decided ne becomes a forbid, a contradiction is detected as Empty — so
+no job carries a stale undischarged event past a fixed endpoint.
+
+**Pinned.**  region_probe line 3 (REGION-PROBE-SCHEMA-REL): the eq door
+propagates through the first walk (Pair(A0,A0)), ne separates
+(Pair(A0,A1)), the split yields both children, a cross-schema relate
+refuses at the door, and a DEEP fixed pair descends to its
+child-occurrence tuple with the backtracker resolving it (the walk pins
+the descended event's normalized order: it equates (6,10) and separates
+(3,5) — a verified ne-region member).  constraint_superpose_probe's
+SCHEMA-DIAG-SPLIT line drives the same nonlinear diagonal over a
+regular schema end to end: the single-alternative root hole is
+TRANSPARENT (a one-member domain chases through `ms_select`), so the
+occurrence pair (1,2) splits at the empty region — CONSTRAINED 1
+(the eq child cited), 2 terminal regions, ONE boundary, and the
+relational passing region's representative Pair(A0,A1) from the
+graduated walk.  Whole battery bit-identical: region_probe lines 1-2,
+the coloring probe (K6 16R/S15 rides the graduated walk), DIAG-SPLIT,
+rev (443/133/7,777), rev_deep d3 (390/143/3,969), the x86 window
+(625/411/23,267, agreement OK), the PIO window (45/44), both
+first-mode typed tasks, guard/affine/int-order/constraint probes, and
+the check targets (meta/sketch, meta/search 8/0, superpose 33/0,
+typed_superpose 323/0, typed_expr 323/0, pure_program 33/0).

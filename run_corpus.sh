@@ -630,6 +630,16 @@ if [ -x bin/shard_eval ]; then
   # as FOUND 6 (the relational ne child, counted exactly) + KILLED 3 (the
   # cited eq child) in 2 regions / 1 boundary, and the relational passing
   # region yields an in-region first-walk representative.
+  # region_probe's third line pins the SCHEMA-side relational algebra (R4):
+  # relate/split doors over occurrence addresses (iso = schema-id equality),
+  # cross-schema refusal, and the graduated language-parametric first walk
+  # (eq propagates to Pair(A0,A0); ne separates to Pair(A0,A1); a deep
+  # fixed pair descends to the child-occurrence tuple and the backtracker
+  # resolves it).  constraint_superpose_probe's SCHEMA-DIAG-SPLIT line pins
+  # the same diagonal drive over a regular schema: the single-alternative
+  # root is transparent, the occurrence pair splits at the empty region
+  # (1 boundary), and the relational passing region's representative comes
+  # from the graduated walk.
   bin/shard_eval run tools/search/constraint_probe.shard
   bin/shard_eval run tools/search/nonlinear_constraint_probe.shard
   bin/shard_eval run tools/search/region_probe.shard

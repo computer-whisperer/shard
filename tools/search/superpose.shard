@@ -757,6 +757,13 @@
     ;; burdening the evaluator's read-only language interface with an Option.
     ((SuGSchema _ _ _ _) (Grammar Nil))))
 
+;; The region-algebra language: doors, normalization, and the first walk
+;; are language-parametric in meta/sketch (R4); this is the drive's view.
+(fn sug_lang ((g SuG)) SkLang
+  (match g
+    ((SuGMaterialized raw _ _) (SkLangFlat raw))
+    ((SuGSchema grammar _ _ _) (SkLangSchema grammar))))
+
 (fn sug_alts ((g SuG) (h Int)) (Option (List Expr))
   (match g
     ((SuGMaterialized _ index _) (sgb_get index (+ h 1) 64))
@@ -1358,7 +1365,21 @@
 ;; Push one job per still-allowed alternative of the demanded hole.  Fixed
 ;; choices remain the evaluator's ordinary positive assignment map; forbidden
 ;; choices stay in the region and never contaminate consulted-choice memo keys.
+;; A relational child NORMALIZES before it is pushed (R4): fixing a relation
+;; endpoint must propagate — an eq partner gets the same choice, a decided ne
+;; becomes a forbid, a contradiction is detected as Empty — so no job ever
+;; carries a stale undischarged event past a fixed endpoint.  Cube children
+;; skip the door at zero cost.
 (type SuForkR (SuForkErr (List Int)) (SuForkOk (List SkRegion)))
+
+(fn su_fork_push ((g SuG) (child SkRegion) (jobs (List SkRegion))) SuForkR
+  (match (sk_region_rels child)
+    (Nil (SuForkOk (Cons child jobs)))
+    ((Cons _ _)
+     (match (sk_region_norm_lang (sug_lang g) child)
+       ((SkRegionEditErr msg) (SuForkErr msg))
+       ((SkRegionEditEmpty) (SuForkOk jobs))
+       ((SkRegionEditOk child2) (SuForkOk (Cons child2 jobs)))))))
 
 (fn su_fork
   ((g SuG)
@@ -1375,14 +1396,16 @@
       (match (sk_region_choose_known region h 0 alts)
         ((SkRegionEditErr msg) (SuForkErr msg))
         ((SkRegionEditEmpty) (SuForkOk jobs))
-        ((SkRegionEditOk child) (SuForkOk (Cons child jobs))))
+        ((SkRegionEditOk child) (su_fork_push g child jobs)))
       (SuForkOk jobs)))
   (if (sug_productive g h k)
     (match (sk_region_choose_known region h k alts)
       ((SkRegionEditErr msg) (SuForkErr msg))
       ((SkRegionEditEmpty) (su_fork g alts region h (- k 1) jobs))
       ((SkRegionEditOk child)
-       (su_fork g alts region h (- k 1) (Cons child jobs))))
+       (match (su_fork_push g child jobs)
+         ((SuForkErr msg) (SuForkErr msg))
+         ((SuForkOk jobs2) (su_fork g alts region h (- k 1) jobs2)))))
     (su_fork g alts region h (- k 1) jobs))))
 
 (type SuPartitionCountR
@@ -1776,130 +1799,11 @@
 ;; An unconsulted hole may still have a syntactically admitted but barren first
 ;; production at the depth boundary; choosing the first *productive* allowed
 ;; alternative keeps first-result extraction cardinality-free and exact.
-(type SuFirstAltR (SuFirstAltErr (List Int)) (SuFirstAltOk Expr))
-
-(fn su_first_alt
-  ((hole_id Int) (index Int) (alts (List Expr)) (g SuG) (region SkRegion))
-  SuFirstAltR
-  (measure (struct alts))
-  (match alts
-    (Nil (SuFirstAltErr "region has no productive permitted alternative"))
-    ((Cons alt rest)
-     (let
-       ((selected
-          (match (skr_choice hole_id region)
-            ((Some chosen) (int_eq chosen index))
-            (None True))))
-       (if
-         (if selected
-           (if (skr_forbidden hole_id index region) True
-           (if (sug_productive g hole_id index) False
-           True))
-           True)
-         (su_first_alt hole_id (+ index 1) rest g region)
-         (SuFirstAltOk alt))))))
-
-(type SuFirstExprR (SuFirstExprErr (List Int)) (SuFirstExprOk Expr))
-
-(type SuFirstListR (SuFirstListErr (List Int)) (SuFirstListOk (List Expr)))
-
-(type SuFirstArmsR (SuFirstArmsErr (List Int)) (SuFirstArmsOk (List Arm)))
-
-;; Close a productive region directly through the language interface.  The
-;; old representative pass scanned every entry of a materialized occurrence
-;; grammar.  Structural occurrence addresses make recursive closure both more
-;; general and proportional only to the selected candidate.
-(fn su_first_expr ((fuel Int) (g SuG) (region SkRegion) (e Expr)) SuFirstExprR
-  (measure fuel)
-  (if (lt fuel 1) (SuFirstExprErr "region first fuel exhausted")
-  (match (hole_view e)
-    ((HVBad msg) (SuFirstExprErr msg))
-    ((HVHole hole_id)
-     (match (sug_alts g hole_id)
-       (None (SuFirstExprErr "region first references an unknown occurrence"))
-       ((Some alts)
-        (match (su_first_alt hole_id 0 alts g region)
-          ((SuFirstAltErr msg) (SuFirstExprErr msg))
-          ((SuFirstAltOk alt) (su_first_expr (- fuel 1) g region alt))))))
-    ((HVNot)
-     (match e
-       ((Ctor q args)
-        (match (su_first_list (- fuel 1) g region args)
-          ((SuFirstListErr msg) (SuFirstExprErr msg))
-          ((SuFirstListOk args2) (SuFirstExprOk (Ctor q args2)))))
-       ((Call q args)
-        (match (su_first_list (- fuel 1) g region args)
-          ((SuFirstListErr msg) (SuFirstExprErr msg))
-          ((SuFirstListOk args2) (SuFirstExprOk (Call q args2)))))
-       ((Match scrut arms)
-        (match (su_first_expr (- fuel 1) g region scrut)
-          ((SuFirstExprErr msg) (SuFirstExprErr msg))
-          ((SuFirstExprOk scrut2)
-           (match (su_first_arms (- fuel 1) g region arms)
-             ((SuFirstArmsErr msg) (SuFirstExprErr msg))
-             ((SuFirstArmsOk arms2) (SuFirstExprOk (Match scrut2 arms2)))))))
-       ((Let binds body)
-        (match (su_first_list (- fuel 1) g region binds)
-          ((SuFirstListErr msg) (SuFirstExprErr msg))
-          ((SuFirstListOk binds2)
-           (match (su_first_expr (- fuel 1) g region body)
-             ((SuFirstExprErr msg) (SuFirstExprErr msg))
-             ((SuFirstExprOk body2) (SuFirstExprOk (Let binds2 body2)))))))
-       ((If cond yes no)
-        (match (su_first_expr (- fuel 1) g region cond)
-          ((SuFirstExprErr msg) (SuFirstExprErr msg))
-          ((SuFirstExprOk cond2)
-           (match (su_first_expr (- fuel 1) g region yes)
-             ((SuFirstExprErr msg) (SuFirstExprErr msg))
-             ((SuFirstExprOk yes2)
-              (match (su_first_expr (- fuel 1) g region no)
-                ((SuFirstExprErr msg) (SuFirstExprErr msg))
-                ((SuFirstExprOk no2) (SuFirstExprOk (If cond2 yes2 no2)))))))))
-       (_ (SuFirstExprOk e)))))))
-
-(fn su_first_list ((fuel Int) (g SuG) (region SkRegion) (es (List Expr)))
-  SuFirstListR
-  (measure fuel)
-  (if (lt fuel 1) (SuFirstListErr "region first list fuel exhausted")
-  (match es
-    (Nil (SuFirstListOk Nil))
-    ((Cons head rest)
-     (match (su_first_expr (- fuel 1) g region head)
-       ((SuFirstExprErr msg) (SuFirstListErr msg))
-       ((SuFirstExprOk head2)
-        (match (su_first_list (- fuel 1) g region rest)
-          ((SuFirstListErr msg) (SuFirstListErr msg))
-          ((SuFirstListOk rest2) (SuFirstListOk (Cons head2 rest2))))))))))
-
-(fn su_first_arms ((fuel Int) (g SuG) (region SkRegion) (arms (List Arm)))
-  SuFirstArmsR
-  (measure fuel)
-  (if (lt fuel 1) (SuFirstArmsErr "region first arms fuel exhausted")
-  (match arms
-    (Nil (SuFirstArmsOk Nil))
-    ((Cons (Arm pattern body) rest)
-     (match (su_first_expr (- fuel 1) g region body)
-       ((SuFirstExprErr msg) (SuFirstArmsErr msg))
-       ((SuFirstExprOk body2)
-        (match (su_first_arms (- fuel 1) g region rest)
-          ((SuFirstArmsErr msg) (SuFirstArmsErr msg))
-          ((SuFirstArmsOk rest2)
-           (SuFirstArmsOk (Cons (Arm pattern body2) rest2))))))))))
-
-;; A relational region rides the sketch-side first walk (it backtracks over
-;; related holes; su_first_alt is relation-blind until R4 graduates it).
-;; Relational regions arise only on flat grammars today — the split doors
-;; refuse schemas — so sug_raw is the real Grammar on that branch.
+;; The representative walk is meta/sketch's graduated, language-parametric,
+;; relation-aware first walk (R4) — the su_first_* family lived here until
+;; it graduated into the region algebra.
 (fn su_region_first ((root Expr) (g SuG) (region SkRegion)) SkE
-  (match (sk_region_rels region)
-    ((Cons _ _) (sk_region_first root (sug_raw g) region))
-    (Nil
-      (match (su_first_expr 1000000 g region root)
-        ((SuFirstExprErr msg) (SkEErr msg))
-        ((SuFirstExprOk result)
-         (if (sk_closed result) (SkEOk result)
-         (SkEErr "region first left holes")))))))
-
+  (sk_region_first_lang root (sug_lang g) region))
 ;; Cardinality-free theorem partitioning uses the same demanded language as
 ;; evaluation.  It needs neither materialized occurrence entries nor exact
 ;; counts: every productive fixed child is inhabited by construction, and a
@@ -1974,7 +1878,7 @@
             (Cons region clear)
             forks))
          ((MsBlockedPair h0 h1)
-          (match (sk_region_split_pair (sug_raw g) region h0 h1)
+          (match (sk_region_split_pair_lang (sug_lang g) region h0 h1)
             ((SkRegionSplitErr _)
              (su_theory_ground
                (- fuel 1)

@@ -655,11 +655,167 @@
                ((SkRelDecideUnknown)
                 (match (sk_rels_decide rels 6 6)
                   ((SkRelDecideEq)
-                   (write
-                     "REGION-PROBE-REL EQ-3 NE-6 CLIQUE-6 DEEP-4/12 DESCEND-6 PROPAGATE FORBID-2 SPLIT-3+6 RELEASE-6/9 ISO-REFUSE LIVE-REFUSE CLOSURE-REFUSE CAP-REFUSE RANK-REFUSE DECIDE-TRANS/NE-LIFT/VEC-UNKNOWN/REFL OK\n"
-                     w))
+                   (srp3_schema
+                     (write
+                       "REGION-PROBE-REL EQ-3 NE-6 CLIQUE-6 DEEP-4/12 DESCEND-6 PROPAGATE FORBID-2 SPLIT-3+6 RELEASE-6/9 ISO-REFUSE LIVE-REFUSE CLOSURE-REFUSE CAP-REFUSE RANK-REFUSE DECIDE-TRANS/NE-LIFT/VEC-UNKNOWN/REFL OK\n"
+                       w)))
                   (_ (srp_fail "decide reflexive" w))))
                (_ (srp_fail "decide unrelated was not unknown" w))))
             (_ (srp_fail "decide vector ne was not unknown" w))))
          (_ (srp_fail "decide ne class lift" w))))
       (_ (srp_fail "decide transitive eq" w)))))
+
+;; R4: the schema-side relational algebra.  Two occurrences of one schema
+;; id are index-aligned isomorphic BY CONSTRUCTION (the door checks id
+;; equality); occurrence addresses carry the whole parent path; the
+;; graduated first walk backtracks over related occurrences and closes
+;; the rest demand-driven.
+(fn srp3_pair ((left Expr) (right Expr)) Expr
+  (Ctor (srp_q (quote SPair)) (list left right)))
+
+(fn srp3_pair2 ((left Expr) (right Expr)) Expr
+  (Ctor (srp_q (quote SPair2)) (list left right)))
+
+(fn srp3_atoms3 () (List SkSchemaAlt)
+  (list
+    (SkSchemaAlt (srp_atom 0) Nil)
+    (SkSchemaAlt (srp_atom 1) Nil)
+    (SkSchemaAlt (srp_atom 2) Nil)))
+
+(fn srp3_grammar () SkSchemaGrammar
+  (SkSchemaGrammar
+    0
+    (list
+      (SkSchemaEnt
+        0
+        (list
+          (SkSchemaAlt
+            (srp3_pair (hole 0) (hole 1))
+            (list (SkSchemaRef 0 0 1) (SkSchemaRef 1 1 1)))))
+      (SkSchemaEnt 1 (srp3_atoms3)))))
+
+(fn srp3_mix_grammar () SkSchemaGrammar
+  (SkSchemaGrammar
+    0
+    (list
+      (SkSchemaEnt
+        0
+        (list
+          (SkSchemaAlt
+            (srp3_pair (hole 0) (hole 1))
+            (list (SkSchemaRef 0 0 1) (SkSchemaRef 1 1 2)))))
+      (SkSchemaEnt 1 (srp3_atoms3))
+      (SkSchemaEnt
+        2
+        (list (SkSchemaAlt (srp_atom 3) Nil) (SkSchemaAlt (srp_atom 4) Nil))))))
+
+(fn srp3_deep_grammar () SkSchemaGrammar
+  (SkSchemaGrammar
+    0
+    (list
+      (SkSchemaEnt
+        0
+        (list
+          (SkSchemaAlt
+            (srp3_pair2 (hole 0) (hole 1))
+            (list (SkSchemaRef 0 0 1) (SkSchemaRef 1 1 1)))))
+      (SkSchemaEnt
+        1
+        (list
+          (SkSchemaAlt
+            (srp3_pair (hole 0) (hole 1))
+            (list (SkSchemaRef 0 0 2) (SkSchemaRef 1 1 2)))))
+      (SkSchemaEnt 2 (srp3_atoms3)))))
+
+(fn srp3_deep ((w World)) World
+  (let ((dlang (SkLangSchema (srp3_deep_grammar))))
+    (match
+      (sk_region_relate_ne_lang
+        dlang
+        (SkRegion (list (Pair 1 0) (Pair 2 0)) Nil Nil)
+        1
+        2)
+      ((SkRegionEditErr msg) (srp_fail msg w))
+      ((SkRegionEditEmpty) (srp_fail "schema deep ne went empty" w))
+      ((SkRegionEditOk deep_region)
+       (match (sk_region_first_lang (hole 0) dlang deep_region)
+         ((SkEErr msg) (srp_fail msg w))
+         ((SkEOk deep_first)
+          ;; The backtracker resolves the descended tuple's pairs in the
+          ;; normalized event order: it pins (6,10) equal and separates
+          ;; (3,5) via the closed-template forbid — a verified member of
+          ;; the ne region, deterministic under the walk order.
+          (if
+            (expr_eq
+              deep_first
+              (srp3_pair2
+                (srp3_pair (srp_atom 0) (srp_atom 0))
+                (srp3_pair (srp_atom 1) (srp_atom 0))))
+            (write
+              "REGION-PROBE-SCHEMA-REL EQ-FIRST NE-FIRST SPLIT ISO-XSCHEMA-REFUSE DEEP-NE-DESCEND-FIRST OK\n"
+              w)
+            (srp_fail "schema deep descend representative" w))))))))
+
+(fn srp3_schema ((w World)) World
+  (match (sk_schema_wf (srp3_grammar))
+    ((SkSchemaWfErr msg) (srp_fail msg w))
+    ((SkSchemaWfOk)
+     (match (sk_schema_wf (srp3_mix_grammar))
+       ((SkSchemaWfErr msg) (srp_fail msg w))
+       ((SkSchemaWfOk)
+        (match (sk_schema_wf (srp3_deep_grammar))
+          ((SkSchemaWfErr msg) (srp_fail msg w))
+          ((SkSchemaWfOk)
+           (let ((lang (SkLangSchema (srp3_grammar))))
+             (match (sk_region_relate_eq_lang lang (sk_empty_region) 1 2)
+               ((SkRegionEditErr msg) (srp_fail msg w))
+               ((SkRegionEditEmpty) (srp_fail "schema eq relate empty" w))
+               ((SkRegionEditOk eq_region)
+                (match (sk_region_first_lang (hole 0) lang eq_region)
+                  ((SkEErr msg) (srp_fail msg w))
+                  ((SkEOk eq_first)
+                   (if (expr_eq eq_first (srp3_pair (srp_atom 0) (srp_atom 0)))
+                     (match
+                       (sk_region_relate_ne_lang lang (sk_empty_region) 1 2)
+                       ((SkRegionEditErr msg) (srp_fail msg w))
+                       ((SkRegionEditEmpty)
+                        (srp_fail "schema ne relate empty" w))
+                       ((SkRegionEditOk ne_region)
+                        (match (sk_region_first_lang (hole 0) lang ne_region)
+                          ((SkEErr msg) (srp_fail msg w))
+                          ((SkEOk ne_first)
+                           (if
+                             (expr_eq
+                               ne_first
+                               (srp3_pair (srp_atom 0) (srp_atom 1)))
+                             (match
+                               (sk_region_split_pair_lang
+                                 lang
+                                 (sk_empty_region)
+                                 1
+                                 2)
+                               ((SkRegionSplitErr msg) (srp_fail msg w))
+                               ((SkRegionSplitOk eq_side ne_side)
+                                (match eq_side
+                                  (None (srp_fail "schema split lost eq" w))
+                                  ((Some _)
+                                   (match ne_side
+                                     (None (srp_fail "schema split lost ne" w))
+                                     ((Some _)
+                                      (match
+                                        (sk_region_relate_eq_lang
+                                          (SkLangSchema (srp3_mix_grammar))
+                                          (sk_empty_region)
+                                          1
+                                          2)
+                                        ((SkRegionEditOk _)
+                                         (srp_fail
+                                           "cross-schema relate did not refuse"
+                                           w))
+                                        ((SkRegionEditEmpty)
+                                         (srp_fail
+                                           "cross-schema relate went empty"
+                                           w))
+                                        ((SkRegionEditErr _) (srp3_deep w)))))))))
+                             (srp_fail "schema ne representative" w))))))
+                     (srp_fail "schema eq representative" w))))))))))))))
