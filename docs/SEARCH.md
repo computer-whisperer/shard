@@ -3184,3 +3184,135 @@ construction), with PIO P5c-2 and the routing/regalloc task family as
 its measured consumers. Heuristic-tier hooks (cost, neighborhood, seed)
 join the TeTask record and te_hooks table when the first heuristic
 engine lands.
+
+## Arc opener — relation-aware region state (design RATIFIED 2026-07-25)
+
+The measured problem (this ledger's own boundary statement, and PIO
+P5c-2's gating line): relations between holes — repeated-variable
+equality in nonlinear rules, structural-distinctness guards — can only
+be applied by ground refinement today, so the diagonal of `lt x x`
+costs one region per value (the pinned EQ 3 + NE 6 is six regions and
+four forks for two facts), and relation-driven splits multiply the
+region frontier. The playground's cloned twin-grammar product is the
+recorded dead end (cloned hole identities fragmented memo reuse).
+
+**The design (user-ratified after review):**
+
+- **Representation:** `SkRegion` gains a third field, `(List SkRel)`,
+  with `SkRelEq`/`SkRelNe` over PARALLEL HOLE VECTORS (singleton
+  vectors = plain edges). Vector `ne` is tuple-difference — the form
+  that keeps the algebra CLOSED under propagation: when both endpoints
+  of a deep `ne` fix the same alternative, the event descends to the
+  sub-hole vector pair (a disjunction stays one event); `eq` descends
+  pointwise (a conjunction splits into edges). Edges are between holes
+  of the UNCHANGED grammar — no new hole identities, and relations
+  (like forbids) never enter consulted-choice memo keys.
+- **Exact counting or loud refusal, never approximation:** relation
+  events partition into connected components; unrelated holes keep the
+  ordinary product fold (masked to 1 at related closures). Per
+  component: contract `eq` by union-find — v1 requires INDEX-ALIGNED
+  DOMAIN ISOMORPHISM within a class (class count = the shared
+  restricted domain; non-isomorphic domains refuse; intersection
+  counting is the recorded extension) — then count `ne` by
+  INCLUSION–EXCLUSION over ne events (exact for arbitrary graphs,
+  2^events per component, explicit cap ~12 as a loud refusal).
+  Endpoints must be live through fixed chains and no endpoint may lie
+  inside another relation class's domain closure (drive-introduced
+  relations satisfy both by construction; refusals guard hand-built
+  regions). `rank`/`unrank` REFUSE relational regions in v1;
+  `member` is direct (cube check + relation evaluation), not via rank.
+- **Verdicts:** a new arm beside `MsBlocked` carries the blocked HOLE
+  PAIR when the residual obligation is exactly hole-vs-hole equality;
+  drives answer it with a RELATIONAL SPLIT (two children: ∧eq, ∧ne)
+  instead of per-value forks. Anything not expressible as a pair falls
+  back to ground refinement — soundness never depends on the new path.
+- **v1 vocabulary is structural eq/ne ONLY.** Affine relations over
+  literal-valued holes (the PIO delay-conservation quotient) are the
+  NAMED FOLLOW-ON rung — the SkRel enum and per-component counter
+  interface are designed for the extension; the P5c-2-cont measurement
+  runs the delay-normal WRAPPER grammar where the delay gauge is
+  declared away structurally and the firing relational pressure is the
+  nonlinear MovOp family (structural eq).
+- **Consumers (deviation from the ratified list, user-approved):**
+  measured on PIO P5c-2-cont plus the two EXISTING relational pins —
+  sort nonlinear (6851/1438/50450 + the d3 probe) and the x86
+  transition window (742/372/25312 semantic-first, 625/411/23267
+  theorem-first; its register-distinctness guards are regalloc-shaped
+  ne pressure). A REAL routing/regalloc task lands with the first
+  heuristic engine (it is that rung's benchmark); building a contrived
+  one now just to tick the admission box was rejected.
+- **su_first_*** graduates into the region-algebra home in this slice
+  (the 0a survey correction), relational-aware, shared by both drives.
+- **Heuristic seam:** the region release op (un-fix holes, keep/drop
+  relations by policy) pairs with 0c's sa_forget_holes as the
+  rip-up vocabulary. **TABOO = FORBIDDEN REGION (user ruling,
+  2026-07-25):** the heuristic tier's learned-nogood store is a list
+  of forbidden REGIONS (cube + relations) consulted by region overlap
+  — in/undetermined/out with no predicate evaluation — with the
+  relational region state as its representation language. Arbitrary
+  `Candidate -> Bool` predicates stay where search_screen sits
+  (closed-candidate audit acceleration): unproven, uncountable,
+  unintrospectable code is sound nowhere else. A learned taboo that
+  earns generality promotes into the exact tier through the existing
+  miner → schema → checked theorem pipeline. Not prioritized; lands
+  with the heuristic engine.
+
+Rungs: R1 meta/sketch vocabulary+count+ops+probe pins; R2 meta/search
+pair verdicts + relational partitions; R3 drive consumption + re-pins;
+R4 su_first_* graduation; R5 measured consumers (re-pins + the
+watchdogged P5c-2-cont deep run). Orientation of symmetric operands
+(which gauge twin a census prefers) remains a separate reviewed
+decision, out of scope here.
+
+### R1 — the relational region algebra (LANDED 2026-07-26)
+
+**What landed (meta/sketch).** `SkRel` (`SkRelEq`/`SkRelNe` over parallel
+hole vectors) and the three-field `SkRegion`; structural wf; the
+template-alignment walker (bijective sub-hole renaming — one walker
+serving the iso door, class counting, and descent); the by-index
+isomorphism door; three-valued pair evaluation (equal / differ /
+blocked / descend); fixpoint normalization (eq fixes its open partner;
+both-fixed deep pairs descend — eq pointwise, ne to the sub-vector as
+ONE tuple event; a last ne pair against a fixed CLOSED template
+converts to an ordinary forbid); the validated doors
+`sk_region_relate_eq`/`_ne`, the relational split
+(`sk_region_split_pair`), and the rip-up seam (`sk_region_release`,
+keep/drop relations by policy — sa_forget_holes' region-side partner).
+Exact counting: connected components over events; eq contraction by
+recursive class counting through aligned templates (restrictions
+intersect naturally at every depth); ne by inclusion–exclusion over ne
+events (`count(ne_e ∧ rest) = count(rest) − count(allEq_e ∧ rest)`,
+exact for arbitrary relation graphs); the unrelated product rides the
+ordinary fold with endpoint factors masked to 1. `member` is now
+DIRECT (the same first-match forward walk rank uses, without counts,
+plus expr_eq over bound subtrees) for cube and relational regions
+alike; `rank`/`unrank` refuse relational regions. The v1 boundaries
+all refuse loudly: non-isomorphic domains at the door, an endpoint not
+unconditionally live under the region's fixed chains, an endpoint
+inside another endpoint's domain closure (reachable only by hand-built
+regions — door-made relations cannot construct it), a component past
+the 12-ne-event cap.
+
+**Pinned (region_probe, second output line, all counts hand-computed
+first):** EQ-3 (the diagonal is ONE region), NE-6, CLIQUE-6 (3! by
+inclusion–exclusion, 2^3 terms), DEEP-4/12 (the (Atom | Wrap ·) domain
+diagonalizes: 4 = 1 + 3), DESCEND-6 (both sides fix Wrap: the ne event
+becomes the sub-pair tuple event, 9 − 3), PROPAGATE (choose h0=2 under
+eq fixes h1=2 and discharges the event), FORBID-2, SPLIT-3+6,
+RELEASE-6/9, and the five refusals. The relational first-productive
+representative backtracks over related holes only (the clique's
+greedy representative is pinned deterministic under the newest-first
+event order). Whole existing battery bit-identical: region_probe line
+1, the superpose rev pin (443/133/7,777 STEPS), the nonlinear/
+constraint probes, typed_superpose as a check target (323/0).
+
+**The prove blocker this rung surfaced (fixed on main, #20):** the 12
+new fuel-measured fns could not mint descent sidecars — tools/prove's
+whole SOLVE path was broken by a dangling
+`(use (:: kernel term chars_of_sym))` (a bare-item use aliasing a
+REDUCER PRIM through a module that never defined it), harmless until
+dfb8631 keyed the prim table by CORE identity, invisible to CI because
+check only replays. Fixed on main (02daf2f, cherry-picked here), the
+lethal class swept (prove's line was the only instance), and two
+follow-ups recorded on the issue: a loud refusal for bare-item uses of
+nonexistent exports, and a corpus pin that actually SOLVES something.

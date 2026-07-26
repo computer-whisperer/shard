@@ -603,6 +603,12 @@ if [ -x bin/shard_eval ]; then
   # exactly one two-member subtree of the eight generic ADT candidates is
   # theorem-redundant. Repeated-variable probes separately pin structural
   # equality across concrete, partial-grammar, prepared, and symbolic values.
+  # region_probe's second line pins the RELATION-AWARE region algebra (R1):
+  # the diagonal counts as ONE region (EQ-3/NE-6), the 3-clique closes by
+  # inclusion-exclusion (6), deep domains diagonalize (4/12) and tuple-ne
+  # descends (6), eq fixes its partner, a last closed-template ne pair
+  # becomes a forbid, split partitions 9=3+6, release restores by policy,
+  # and the v1 boundaries (iso/liveness/closure/cap/rank) refuse loudly.
   bin/shard_eval run tools/search/constraint_probe.shard
   bin/shard_eval run tools/search/nonlinear_constraint_probe.shard
   bin/shard_eval run tools/search/region_probe.shard
