@@ -1,13 +1,14 @@
 # STREAM.md — Arc B: the streaming bin (the bin story generalized)
 
-STATUS: DRAFT for ratification (Fable, 2026-07-26). Arc B is the
-ratified successor to the certificate pathfinder arc (CERT.md §8 R4,
-§10: "Arc B opens next, rung 1 = the replacement-basis measurement").
-Charter sources: the design review's Arc B section and the D8-closer
-delta (docs/archive/DESIGN-REVIEW-2026-07-18.md), the full-arc
-review's scoping (docs/archive/ARC-A-REVIEW-2026-07-26.md §2e–§2g).
-Rung B1's scope is ALREADY RATIFIED (review R4); everything else
-below is draft until ruled on. Results that amend certificate law
+STATUS: RATIFIED 2026-07-26 (user ruling; drafted by Fable the same
+day). Arc B is the ratified successor to the certificate pathfinder
+arc (CERT.md §8 R4, §10: "Arc B opens next, rung 1 = the
+replacement-basis measurement"). Charter sources: the design review's
+Arc B section and the D8-closer delta
+(docs/archive/DESIGN-REVIEW-2026-07-18.md), the full-arc review's
+scoping (docs/archive/ARC-A-REVIEW-2026-07-26.md §2e–§2g). Rung B1's
+scope was pre-ratified at the full-arc review (R4); the full ladder
+was ratified with this ledger. Results that amend certificate law
 (the D-number, DC3 evidence, final dialect ratification) are recorded
 in CERT.md; this ledger tracks the arc.
 
