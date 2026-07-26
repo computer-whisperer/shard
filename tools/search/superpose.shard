@@ -1886,16 +1886,45 @@
           ((SuFirstArmsOk rest2)
            (SuFirstArmsOk (Cons (Arm pattern body2) rest2))))))))))
 
+;; A relational region rides the sketch-side first walk (it backtracks over
+;; related holes; su_first_alt is relation-blind until R4 graduates it).
+;; Relational regions arise only on flat grammars today — the split doors
+;; refuse schemas — so sug_raw is the real Grammar on that branch.
 (fn su_region_first ((root Expr) (g SuG) (region SkRegion)) SkE
-  (match (su_first_expr 1000000 g region root)
-    ((SuFirstExprErr msg) (SkEErr msg))
-    ((SuFirstExprOk result)
-     (if (sk_closed result) (SkEOk result) (SkEErr "region first left holes")))))
+  (match (sk_region_rels region)
+    ((Cons _ _) (sk_region_first root (sug_raw g) region))
+    (Nil
+      (match (su_first_expr 1000000 g region root)
+        ((SuFirstExprErr msg) (SkEErr msg))
+        ((SuFirstExprOk result)
+         (if (sk_closed result) (SkEOk result)
+         (SkEErr "region first left holes")))))))
 
 ;; Cardinality-free theorem partitioning uses the same demanded language as
 ;; evaluation.  It needs neither materialized occurrence entries nor exact
 ;; counts: every productive fixed child is inhabited by construction, and a
 ;; complete walk yields an exact disjoint cover of redex and clear regions.
+;; Relational split children are screened COUNT-FREE too: the first walk
+;; witnesses inhabitance directly, so dense relational components never hit
+;; the exact-counting inclusion-exclusion cap.  A walk failure cannot be
+;; told apart from genuine emptiness here, so it routes to the ground
+;; fallback instead of dropping the child — soundness never rides the walk.
+(type SuAliveR (SuAliveDead) (SuAliveLive SkRegion) (SuAliveUnknown))
+
+(fn su_child_alive ((candidate Expr) (g SuG) (child (Option SkRegion))) SuAliveR
+  (match child
+    (None (SuAliveDead))
+    ((Some region)
+     (match (su_region_first candidate g region)
+       ((SkEErr _) (SuAliveUnknown))
+       ((SkEOk _) (SuAliveLive region))))))
+
+(fn su_alive_push ((state SuAliveR) (jobs (List SkRegion))) (List SkRegion)
+  (match state
+    ((SuAliveDead) jobs)
+    ((SuAliveUnknown) jobs)
+    ((SuAliveLive region) (Cons region jobs))))
+
 (type SuTheoryPartitionR
   (SuTheoryPartitionErr (List Int))
   (SuTheoryPartitionOk Int (List SkRegion) Int))
@@ -1919,8 +1948,9 @@
       ((Cons region rest)
        ;; R3: a pair verdict is answered with a relational split, and the
        ;; relation-aware checker decides the pair inside each child on its
-       ;; re-evaluation.  Door or count refusals fall back to the ground
-       ;; fork on the pair's first hole — soundness never rides the pair.
+       ;; re-evaluation.  Door or first-walk refusals fall back to the
+       ;; ground fork on the pair's first hole — soundness never rides
+       ;; the pair.
        (match (ms_check_prepared_restricted 1000000 prepared region candidate)
          ((MsErr msg) (SuTheoryPartitionErr msg))
          ((MsRedex _)
@@ -1958,22 +1988,22 @@
                clear
                forks))
             ((SkRegionSplitOk eq_child ne_child)
-             (match (mse_child_count candidate (sug_raw g) eq_child)
-               (None
-                 (su_theory_ground
-                   (- fuel 1)
-                   prepared
-                   candidate
-                   g
-                   region
-                   h0
-                   rest
-                   redex
-                   clear
-                   forks))
-               ((Some eq_n)
-                (match (mse_child_count candidate (sug_raw g) ne_child)
-                  (None
+             (match (su_child_alive candidate g eq_child)
+               ((SuAliveUnknown)
+                (su_theory_ground
+                  (- fuel 1)
+                  prepared
+                  candidate
+                  g
+                  region
+                  h0
+                  rest
+                  redex
+                  clear
+                  forks))
+               (eq_state
+                 (match (su_child_alive candidate g ne_child)
+                   ((SuAliveUnknown)
                     (su_theory_ground
                       (- fuel 1)
                       prepared
@@ -1985,19 +2015,16 @@
                       redex
                       clear
                       forks))
-                  ((Some ne_n)
-                   (su_theory_partition
-                     (- fuel 1)
-                     prepared
-                     candidate
-                     g
-                     (mse_push_counted
-                       eq_child
-                       eq_n
-                       (mse_push_counted ne_child ne_n rest))
-                     redex
-                     clear
-                     (+ forks 1)))))))))
+                   (ne_state
+                     (su_theory_partition
+                       (- fuel 1)
+                       prepared
+                       candidate
+                       g
+                       (su_alive_push eq_state (su_alive_push ne_state rest))
+                       redex
+                       clear
+                       (+ forks 1)))))))))
          ((MsBlocked hole_id)
           (su_theory_ground
             (- fuel 1)

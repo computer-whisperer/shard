@@ -646,6 +646,16 @@ if [ -x bin/shard_eval ]; then
   # transition corpus before it can reach theorem classification.
   bin/shard_eval run tools/search/transition_affine_probe.shard
   bin/shard_eval run tools/search/constraint_superpose_probe.shard
+  # The minimal ROUTING-SHAPED consumer: graph coloring as one nonlinear
+  # diagonal rule per interference edge over per-variable register holes,
+  # constraint-dominated so every pair survives to the partition.  Pins:
+  # P4/3 census 24+57 in 4 regions / 3 relational splits; K3/3 census
+  # 6+21 in 4/3 (the drive twin of region_probe's CLIQUE-6); K6/6 FIND
+  # succeeds past the exact-counting cap (15 ne edges, one component) in
+  # 16 regions / 15 splits via count-free inhabitance screening, with the
+  # representative verified in-region; K4/3 FIND terminates EMPTY through
+  # the walk-refusal ground fallback.
+  bin/shard_eval run tools/search/coloring_probe.shard
   bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_observer_conjunctive.shard audit
 else
   echo "SKIPPED (no bin/shard_eval)"

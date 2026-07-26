@@ -1,0 +1,344 @@
+;;; Coloring probe — the minimal ROUTING-SHAPED consumer (R3b).
+;;;
+;;; Graph coloring is the shape the relational tier is for: per-variable
+;;; register holes, one nonlinear diagonal rule per interference edge
+;;; (Cfg(..x..x..) fires exactly on an equal pair — a proper coloring is a
+;;; normal form), and a constraint-dominated drive (the constant-pass query
+;;; never demands a hole, so every pair verdict survives to the partition).
+;;; Unlike the sort census (semantic demand fixes operands first) and the
+;;; transition windows (whole-instruction alternatives never form pairs),
+;;; every edge here splits relationally.
+;;;
+;;; Pinned, all hand-computed first:
+;;;   - P4 path, 4 vars x 3 registers: census 24 proper colorings + 57
+;;;     killed in FOUR terminal regions and THREE relational splits (the
+;;;     ground schedule would pay per-value forks per edge).
+;;;   - K3 triangle, 3 x 3: census 6 (= 3!) + 21 killed in 4 regions / 3
+;;;     splits — the drive-level twin of region_probe's CLIQUE-6 count.
+;;;   - K6 clique, 6 x 6, FIND mode: the all-ne leaf carries 15 ne edges in
+;;;     ONE component — past the exact-counting cap — and the count-free
+;;;     inhabitance screening still walks it: found in 16 regions / 15
+;;;     splits, representative verified as a member (hence all-distinct).
+;;;   - K4 clique, 4 x 3, FIND mode: uncolorable; the empty all-ne child
+;;;     fails the first walk, routes to the ground fallback, and the drive
+;;;     terminates EMPTY — the walk-refusal path exercised end to end.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "../../meta/search")
+(import "superpose.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader World))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: meta search *))
+(use (:: tools search superpose *))
+
+(fn clp_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "COLORING-PROBE FAIL " (append_int msg "\n")) w)))
+
+(fn clp_q ((name Symbol)) QName
+  (QName (list (quote tools) (quote search) (quote coloring)) name))
+
+(fn clp_reg ((value Int)) Expr
+  (Ctor (clp_q (quote Reg)) (Cons (IntLit value) Nil)))
+
+(fn clp_cfg ((args (List Expr))) Expr (Ctor (clp_q (quote Cfg)) args))
+
+(fn clp_empty_module () Module (Module Nil Nil Nil (FnTrie None Nil) Nil))
+
+(fn clp_regs3 () (List Expr) (list (clp_reg 0) (clp_reg 1) (clp_reg 2)))
+
+(fn clp_regs6 () (List Expr)
+  (list (clp_reg 0) (clp_reg 1) (clp_reg 2) (clp_reg 3) (clp_reg 4) (clp_reg 5)))
+
+(fn clp_ents ((holes (List Int)) (alts (List Expr))) (List GEnt)
+  (measure (struct holes))
+  (match holes
+    (Nil Nil)
+    ((Cons hole_id rest) (Cons (GEnt hole_id alts) (clp_ents rest alts)))))
+
+(fn clp_holes ((positions (List Int))) (List Expr)
+  (measure (struct positions))
+  (match positions
+    (Nil Nil)
+    ((Cons position rest) (Cons (hole position) (clp_holes rest)))))
+
+(fn clp_pos3 () (List Int) (list 0 1 2))
+
+(fn clp_pos4 () (List Int) (list 0 1 2 3))
+
+(fn clp_pos6 () (List Int) (list 0 1 2 3 4 5))
+
+(fn clp_ty () Type (TCon (qn (quote Int)) Nil))
+
+;; Edge-rule lhs: the two edge positions share BVar 0; every other position
+;; is a fresh wildcard binder.
+(fn clp_lhs_go ((positions (List Int)) (i Int) (j Int) (next Int))
+  (Pair Int (List Expr))
+  (measure (struct positions))
+  (match positions
+    (Nil (Pair next Nil))
+    ((Cons position rest)
+     (if (if (int_eq position i) True (int_eq position j))
+       (match (clp_lhs_go rest i j next)
+         ((Pair used args) (Pair used (Cons (BVar 0) args))))
+       (match (clp_lhs_go rest i j (+ next 1))
+         ((Pair used args) (Pair used (Cons (BVar next) args))))))))
+
+(fn clp_tys ((count Int) (acc (List Type))) (List Type)
+  (measure count)
+  (if (le count 0) acc (clp_tys (- count 1) (Cons (clp_ty) acc))))
+
+(type ClpRulesR (ClpRulesErr (List Int)) (ClpRulesOk (List TrsRule)))
+
+(fn clp_edge_rule ((positions (List Int)) (name Symbol) (i Int) (j Int))
+  TrsRuleR
+  (match (clp_lhs_go positions i j 1)
+    ((Pair binders args)
+     (trs_rule (clp_q name) (clp_tys binders Nil) (clp_cfg args) (BVar 0)))))
+
+(fn clp_rules
+  ((positions (List Int))
+   (edges (List (Pair Symbol (Pair Int Int))))
+   (acc (List TrsRule)))
+  ClpRulesR
+  (measure (struct edges))
+  (match edges
+    (Nil (ClpRulesOk acc))
+    ((Cons (Pair name (Pair i j)) rest)
+     (match (clp_edge_rule positions name i j)
+       ((TrsRuleErr msg) (ClpRulesErr msg))
+       ((TrsRuleOk rule)
+        (match (clp_rules positions rest acc)
+          ((ClpRulesErr msg) (ClpRulesErr msg))
+          ((ClpRulesOk more) (ClpRulesOk (Cons rule more)))))))))
+
+(type ClpPlanR (ClpPlanErr (List Int)) (ClpPlanOk MsPlan))
+
+(fn clp_plan ((rules (List TrsRule))) ClpPlanR
+  (match (trs_profile rules)
+    ((TrsProfileErr msg) (ClpPlanErr msg))
+    ((TrsProfileOk profile)
+     (match (trs_partition_formation profile)
+       ((TrsProfileFormationErr msg) (ClpPlanErr msg))
+       ((TrsProfileFormationOk projected)
+        (if (trs_formation_is_empty (trs_profile_formation projected))
+          (match
+            (ms_plan (trs_profile_residual projected) (trs_empty_root_profile))
+            ((MsPlanErr msg) (ClpPlanErr msg))
+            ((MsPlanOk plan) (ClpPlanOk plan)))
+          (ClpPlanErr "an interference edge escaped into formation")))))))
+
+(fn clp_plan_for
+  ((positions (List Int)) (edges (List (Pair Symbol (Pair Int Int)))))
+  ClpPlanR
+  (match (clp_rules positions edges Nil)
+    ((ClpRulesErr msg) (ClpPlanErr msg))
+    ((ClpRulesOk rules) (clp_plan rules))))
+
+(fn clp_p4_edges () (List (Pair Symbol (Pair Int Int)))
+  (list
+    (Pair (quote e01) (Pair 0 1))
+    (Pair (quote e12) (Pair 1 2))
+    (Pair (quote e23) (Pair 2 3))))
+
+(fn clp_k3_edges () (List (Pair Symbol (Pair Int Int)))
+  (list
+    (Pair (quote t01) (Pair 0 1))
+    (Pair (quote t12) (Pair 1 2))
+    (Pair (quote t02) (Pair 0 2))))
+
+(fn clp_k6_edges () (List (Pair Symbol (Pair Int Int)))
+  (list
+    (Pair (quote k0) (Pair 0 1))
+    (Pair (quote k1) (Pair 0 2))
+    (Pair (quote k2) (Pair 0 3))
+    (Pair (quote k3) (Pair 0 4))
+    (Pair (quote k4) (Pair 0 5))
+    (Pair (quote k5) (Pair 1 2))
+    (Pair (quote k6) (Pair 1 3))
+    (Pair (quote k7) (Pair 1 4))
+    (Pair (quote k8) (Pair 1 5))
+    (Pair (quote k9) (Pair 2 3))
+    (Pair (quote k10) (Pair 2 4))
+    (Pair (quote k11) (Pair 2 5))
+    (Pair (quote k12) (Pair 3 4))
+    (Pair (quote k13) (Pair 3 5))
+    (Pair (quote k14) (Pair 4 5))))
+
+(fn clp_k4_edges () (List (Pair Symbol (Pair Int Int)))
+  (list
+    (Pair (quote f01) (Pair 0 1))
+    (Pair (quote f02) (Pair 0 2))
+    (Pair (quote f03) (Pair 0 3))
+    (Pair (quote f12) (Pair 1 2))
+    (Pair (quote f13) (Pair 1 3))
+    (Pair (quote f23) (Pair 2 3))))
+
+;; Census: semantic-first drive before a constant-pass query — the theorem
+;; partition settles everything on the single initial job.
+(fn clp_census
+  ((tag (List Int))
+   (grammar Grammar)
+   (space Expr)
+   (plan MsPlan)
+   (want_found Int)
+   (want_killed Int)
+   (want_regions Int)
+   (want_forks Int)
+   (w World))
+  World
+  (match
+    (su_drive_query
+      1000
+      (clp_empty_module)
+      (clp_q (quote candidate))
+      space
+      space
+      plan
+      (IntLit 0)
+      (IntLit 0)
+      grammar
+      (sa_new)
+      (Cons (sk_empty_region) Nil)
+      0
+      0
+      0
+      0
+      0
+      Nil)
+    ((SuSErr msg) (clp_fail msg w))
+    ((SuSBudget _ _ _ _ _ _ _ _ _)
+     (clp_fail (append_int tag " census budget") w))
+    ((SuSOk found killed constrained regions forks _ sols)
+     (if (int_eq found want_found)
+       (if (int_eq killed want_killed)
+         (if (int_eq constrained want_killed)
+           (if (int_eq regions want_regions)
+             (if (int_eq forks want_forks)
+               (match sols
+                 ((Cons sol Nil)
+                  (match (su_region_rep grammar sol space)
+                    (None (clp_fail (append_int tag " representative") w))
+                    ((Some rep)
+                     (if (sk_region_member space grammar sol rep) w
+                     (clp_fail (append_int tag " member") w)))))
+                 (_ (clp_fail (append_int tag " solution regions") w)))
+               (clp_fail (append_int tag " fork count") w))
+             (clp_fail (append_int tag " region count") w))
+           (clp_fail (append_int tag " constraint count") w))
+         (clp_fail (append_int tag " killed count") w))
+       (clp_fail (append_int tag " found count") w)))))
+
+(fn clp_find_k6 ((w World)) World
+  (match (clp_plan_for (clp_pos6) (clp_k6_edges))
+    ((ClpPlanErr msg) (clp_fail msg w))
+    ((ClpPlanOk plan)
+     (let ((grammar (Grammar (clp_ents (clp_pos6) (clp_regs6)))))
+       (let ((space (clp_cfg (clp_holes (clp_pos6)))))
+         (match (g_wf grammar)
+           ((GWErr msg) (clp_fail msg w))
+           ((GWOk)
+            (match
+              (su_find_query
+                1000
+                (clp_empty_module)
+                (clp_q (quote candidate))
+                space
+                space
+                plan
+                (IntLit 0)
+                (IntLit 0)
+                grammar)
+              ((SuFindErr msg) (clp_fail msg w))
+              ((SuFindBudget _ _ _ _ _ _ _) (clp_fail "k6 find budget" w))
+              ((SuFindEmpty _ _ _ _ _ _ _) (clp_fail "k6 find came up empty" w))
+              ((SuFindFound killed constrained regions forks _ region rep)
+               (if (int_eq killed 0)
+                 (if (int_eq constrained 15)
+                   (if (int_eq regions 16)
+                     (if (int_eq forks 15)
+                       (if (sk_region_member space grammar region rep)
+                         (clp_find_k4 w)
+                         (clp_fail "k6 representative escaped its region" w))
+                       (clp_fail "k6 fork count" w))
+                     (clp_fail "k6 region count" w))
+                   (clp_fail "k6 constraint count" w))
+                 (clp_fail "k6 killed count" w)))))))))))
+
+(fn clp_find_k4 ((w World)) World
+  (match (clp_plan_for (clp_pos4) (clp_k4_edges))
+    ((ClpPlanErr msg) (clp_fail msg w))
+    ((ClpPlanOk plan)
+     (let ((grammar (Grammar (clp_ents (clp_pos4) (clp_regs3)))))
+       (let ((space (clp_cfg (clp_holes (clp_pos4)))))
+         (match (g_wf grammar)
+           ((GWErr msg) (clp_fail msg w))
+           ((GWOk)
+            (match
+              (su_find_query
+                1000
+                (clp_empty_module)
+                (clp_q (quote candidate))
+                space
+                space
+                plan
+                (IntLit 0)
+                (IntLit 0)
+                grammar)
+              ((SuFindErr msg) (clp_fail msg w))
+              ((SuFindBudget _ _ _ _ _ _ _) (clp_fail "k4 find budget" w))
+              ((SuFindFound _ _ _ _ _ _ _)
+               (clp_fail "k4 found a coloring that cannot exist" w))
+              ((SuFindEmpty _ _ _ _ _ _ _)
+               (write
+                 "COLORING-PROBE P4/3 24+57/4R/S3 K3/3 6+21/4R/S3 FIND-K6/6 16R/S15 REP-MEMBER FIND-K4/3 EMPTY OK\n"
+                 w))))))))))
+
+(fn clp_k3 ((w World)) World
+  (match (clp_plan_for (clp_pos3) (clp_k3_edges))
+    ((ClpPlanErr msg) (clp_fail msg w))
+    ((ClpPlanOk plan)
+     (let ((grammar (Grammar (clp_ents (clp_pos3) (clp_regs3)))))
+       (match (g_wf grammar)
+         ((GWErr msg) (clp_fail msg w))
+         ((GWOk)
+          (clp_find_k6
+            (clp_census
+              "k3"
+              grammar
+              (clp_cfg (clp_holes (clp_pos3)))
+              plan
+              6
+              21
+              4
+              3
+              w))))))))
+
+(fn main ((w World)) World
+  (match (clp_plan_for (clp_pos4) (clp_p4_edges))
+    ((ClpPlanErr msg) (clp_fail msg w))
+    ((ClpPlanOk plan)
+     (let ((grammar (Grammar (clp_ents (clp_pos4) (clp_regs3)))))
+       (match (g_wf grammar)
+         ((GWErr msg) (clp_fail msg w))
+         ((GWOk)
+          (clp_k3
+            (clp_census
+              "p4"
+              grammar
+              (clp_cfg (clp_holes (clp_pos4)))
+              plan
+              24
+              57
+              4
+              3
+              w))))))))

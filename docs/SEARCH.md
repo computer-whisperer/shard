@@ -3467,3 +3467,58 @@ tasks, and the check targets (meta/sketch, meta/search 8/0, superpose
 33/0, typed_superpose 323/0, typed_expr 323/0, pure_program 33/0);
 new measure sidecars machine-minted by prove for the decision kit, the
 threaded SCCs, and the su_theory SCC.
+
+### R3b — find-mode goes count-free + the coloring shape pin (LANDED 2026-07-26)
+
+**Why (the reappraisal after R3's null census result).**  The question on
+the table was whether the relational tier still promises applicable gains
+on routing-style problems.  Two findings answer it.  FIRST, the P5c-2-cont
+wrapper shape-check: unlike the transition windows, the delay-normal
+wrapper grammar is NOT whole-instruction-packed — its slot zones route
+`PDFDrive`'s polarity (the MovOp) and hold, and `PDFJump`'s
+condition/target/balance, into their OWN sub-zones, so the nonlinear MovOp
+family can form hole pairs.  But the task is first-mode over REGULAR
+SCHEMAS (57 schemas at depth 12), and the R1 relational region algebra and
+split doors are flat-Grammar-only — so R4's schema-aware graduation is the
+GATING rung for the R5 deep run to exercise relations at all, not optional
+plumbing.  SECOND, the routing shape itself wins, measured below.
+
+**Find-mode is now count-free end to end.**  R3 had introduced exact
+child counting into `su_theory_partition`'s split screening — the one
+counting site in the otherwise cardinality-free find path, and the site
+where the inclusion–exclusion cap (~12 ne events/component) would silently
+degrade dense relational components to ground refinement exactly where
+relations matter most.  The screening now rides the first-productive walk
+(`su_child_alive`): a successful walk witnesses inhabitance directly with
+no cap; a walk failure is indistinguishable from genuine emptiness, so it
+routes to the ground fallback rather than dropping the child — soundness
+never rides the walk.  `su_region_first` bridges relational regions to the
+sketch-side walk (`sk_region_first` backtracks over related holes;
+`su_first_alt` is relation-blind until R4 graduates it), closing a latent
+representative bug: the SuG-side walk could have emitted a NON-MEMBER
+representative for a relational passing region.  Relational regions arise
+only on flat grammars today, so `sug_raw` is the real Grammar on that
+branch.  The census path deliberately keeps exact counting — census
+claims need the cardinalities, and a cap refusal there falls back to
+ground inside `mspp` as before.
+
+**The coloring probe (tools/search/coloring_probe.shard) — the minimal
+routing-shaped consumer, all pins hand-computed and confirmed on the
+first run.**  Graph coloring is the shape the tier is for: per-variable
+register holes, ONE nonlinear diagonal rule per interference edge
+(`Cfg(..x..x..)` — a proper coloring is a normal form), and a
+constraint-dominated drive, so every pair survives to the partition.
+Census: the P4 path (4 vars × 3 registers) settles 24 proper colorings +
+57 killed in FOUR terminal regions and THREE relational splits; the K3
+triangle settles 6 (= 3!) + 21 in 4/3 — the drive-level twin of
+region_probe's CLIQUE-6.  Terminal regions scale with EDGES, not with
+value tuples.  Find: K6 × 6 registers succeeds PAST the census cap (the
+all-ne leaf carries 15 ne edges in one component) in 16 regions / 15
+splits, with the representative verified in-region; K4 × 3 (uncolorable)
+terminates EMPTY through the walk-refusal ground fallback.  Verdict for
+the reappraisal: the design stands — the R3 null result was about task
+shape, and on the routing shape the relational schedule is the exact
+O(edges) decision tree.  Controls stay bit-identical: both first-mode
+typed tasks, the DIAG-SPLIT pin, the superpose rev pin (443/133/7,777),
+the x86 window (625/411/23,267, agreement OK), and the driver check
+targets (superpose 33/0, typed_superpose 323/0, pure_program 33/0).
