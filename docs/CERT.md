@@ -99,6 +99,18 @@ needed anyway as a soundness hardening; it gates this feature). The
 three-valued matcher and opaque module boundaries carry over
 unchanged: sealed fns do not reduce; stop sets already model that.
 
+Known boundaries, recorded at the DC2 freeze (2026-07-26): (1)
+`exact-conv` cannot cite WfInduct/SubtermInduct induction hypotheses
+— their binders are checker gensyms an author cannot name in
+`(inst …)`; the refusal is loud. If a deep run needs
+conversion-closure against a strong IH, that is a named
+expressiveness rung, not a bug. (2) On gated bare-literal patterns,
+occurrence counting (`false`/`(at K)`) counts only sort-compatible
+sites — refused sites are skipped, not counted — which differs from
+compound patterns' counting. (3) Stop sets are per-site; compute
+fences and change stop sets are hand-kept in sync today (an ambient
+per-steps-block fence is compatible future QoL, no syntax change).
+
 What conversion buys, sink by sink: sink 1 — boundaries become named
 state fns (st_17, defined once), citations fire through definitions,
 a 300-line lemma becomes ~5; sink 2 — claims state (imp2x_fn prog)
@@ -136,6 +148,27 @@ house non-negotiables, verified in review):
   to be one canonical verified lowering.
 - Validators and their soundness theorems are ordinary shard
   libraries — the kernel never learns a compiler pass.
+
+**A1 adjudication (full-arc review 2026-07-26; evidence:
+docs/archive/ARC-A-REVIEW-2026-07-26.md §2a).** The landed A1 tier
+is a RECOMPILE design — acceptance pins dst uniquely, so the
+many-legal-targets bullet above is DEFERRED, not delivered; the
+honest name for this tier is "verified canonical lowering with an
+extensional acceptance check" (every trust property above holds; the
+compiler stays out of the TCB). Gates-dissolved is RATIFIED for
+SHAPE gates: acceptance rides the compiler's own success set plus
+the SEMANTIC fences (bands, constant shift counts in range) the
+compiler does not check — hand shape grammars are banned (the vx_sa
+corpse: it silently under-approximated the compiler by 24 live
+leaves, commit 42daf67). The growth door is the CLAUSE ARCHITECTURE:
+recompile-equality = clause 0 of a disjunctive acceptance; dst
+freedom arrives as new clauses, each with its own soundness leg and
+witness tag, triggered by the FIRST real non-canonical consumer
+(expected: Arc B's hand-optimized/SHA-NI leg). Witness v0 is an
+ARITY PLACEHOLDER — one guard reads it (a sum check), it carries no
+independent information, and soundness never touches it; kept to
+hold the (src, dst, witness) shape open. DC1 is MOOT at this tier;
+delete-or-grow is decided when clause 1 arrives.
 
 The historical blocker to generic simulation arguments was the v1
 untyped machine; the v2 crystallized kinds made alignment
@@ -182,8 +215,13 @@ later, parallel-tier cost claims.
 
 Hash-consed term representation, content-addressed cert sidecars,
 binary serialization with source rendered on demand, memoized
-conversion checking. Pure engineering, no design risk, multiplies
-with everything above. Task #62 (per-module check cache over shared
+conversion checking. Multiplies with everything above. CORRECTED at
+the full-arc review (2026-07-26): the serialization and cache faces
+are engineering, but the arena threads the term representation
+through reader/types/checker — the deepest commitment in the
+redirection (the pricing memo's finding) — so this slice gets a
+GATED-SLICE protocol when it opens, not an engineering-slice
+treatment. Task #62 (per-module check cache over shared
 import closures) is this layer's incremental-checking face and
 lands with it. Canon's content-addressing work (CANON.md) is the
 existing house precedent.
@@ -196,8 +234,8 @@ serialization + content addressing + gate (d) incremental behavior
 in a single design, on the replacement-basis number the next
 block-chain touch owes (see the A3 verdict, §8).
 
-## 8. Arc A — the pathfinder protocol (all three verdicts recorded;
-the full-arc review is the next user decision point)
+## 8. Arc A — the pathfinder protocol (CLOSED: verdicts recorded,
+full-arc review COMPLETE 2026-07-26)
 
 Three measured variants, serial on main, in this order:
 
@@ -218,8 +256,10 @@ Three measured variants, serial on main, in this order:
 ruling of the same date — the full-arc review remains a later user
 decision point).** `vxg_valid` proven: `valid_imp_x86 = True`
 entails unpremised total machine/imp equality over every
-straight-line declaration the compiler accepts (recompile-design
-validator, 9-guard chain; models/imp/probes/vx86_acc_probe.shard).
+straight-line declaration that is both compiler-accepted and
+fence-passing (recompile design; 12 rejection paths — two emission
+matches, 9 guards, the witness sum;
+models/imp/probes/vx86_acc_probe.shard).
 All 14 straight-line impgen pins re-derived by citation with ZERO
 execution replay, a pass-constant ~8-line skeleton per pin
 (vx86_oracle_probe.shard); a 10..400-statement size ladder proves
@@ -252,7 +292,10 @@ chains, and `blk_ps` names the block walk's repeated writer chain
 once, with collapse = patch-append plus an occurrence-targeted
 rewrite. Generated leg (std/sha256/sha256.xpatch.shard): the
 cmp_x_shblock seam family — ~2200 lines of 12-deep state exposure
-per seam, ~26k lines ≈ 30% of the 92k x86 out file — derives at
+per seam, ~26k lines of exposure ≈ 30% of the 92k x86 out file
+(CORRECTED 2026-07-26: the family on disk is ~40.6k lines — the two
+loop seams, 9.4k + 2.9k, and the 1.3k replay tail sit on top of the
+counted exposure portions) — derives at
 view states by pure citation: the per-segment step cert
 instantiates at the canonical view reads, xm_scont's register
 rebuild COMPUTES through the literal-of-reads state, and the
@@ -327,6 +370,39 @@ are complete; the full-arc review — the A1 spike ruling, DC2 final
 adjudication, the generator-freeze dialect ratification, Arc B/C/D
 re-adjudication — is the next user decision point.**
 
+**FULL-ARC REVIEW COMPLETE (2026-07-26; four independent
+fresh-context reviews; synthesis + evidence:
+docs/archive/ARC-A-REVIEW-2026-07-26.md; NO UNSOUNDNESS found in Arc
+A's kernel surface — all five survey lenses clean, probe-driven).**
+Rulings, all ratified: **R1** — the A1 spike ruling resolves to
+gates-dissolved RATIFIED + the honest rename + the
+clause-architecture growth door (recorded in §4; witness v0 = arity
+placeholder; DC1 moot at this tier). **R2** — DC2 FROZEN with the
+recorded boundaries (§3). **R3** — the generator dialect RATIFIED
+PROVISIONALLY: the 12-point spec of the review's §2d (value-naming
+ladders; named boundary states per segment; ∀-bound seam boundaries
++ exactly one exact-conv per seam; patch terms at SYMBOLIC seams
+only; ONE state representation per claim, values shared by name;
+generator-emitted stop sets), with the LOOP FENCE explicit — no
+conversion-dialect loop exercise exists; final ratification rides
+the replacement-basis measurement. **R4** — the post-Arc-A sequence:
+ARC B OPENS NEXT with the replacement-basis measurement as rung 1
+(scope: review §2f — the 13 cmp_bN seams + the weld-facing walk
+region restated in conversion dialect, one new once-per-model
+12-slot list-inversion law, the cmp_ family dropped from the
+closure, SHARD_STATS both ways; the two loop seams are the
+make-or-break and double as DC3's gate evidence) and the ~120-line
+A1×A2 composition exercise riding along; §7's design opens when the
+D-number lands; Arc C's paper half may run alongside; the coverage
+arc unfreezes after B's dialect exercise; Arc D last. **R5** — the
+corrections batch applied: this file (§3, §4, §7, §8, §10, §11), the
+pricing memo (erratum), kernel/checker.shard's compound-exemption
+comment. Known fence on record from the review: the literal-sort
+gate's LAny fence is reachable through polymorphic ctor fields from
+both the compound path and `change` (ratified scope, probe-verified,
+not escalatable to 0=1); if the fence ever tightens, poly-ctor field
+positions go first.
+
 Prediction on record (review consensus): conversion + DAG storage
 gives the quickest 10-50x representation win and kills most weld
 glue; base+patch prevents the next program from recreating
@@ -365,22 +441,27 @@ point.
 - **The coverage arc does not emit.** Its design frontier
   (calls/stack, signed kinds, address policy, heap patch/framing
   algebra, the cons/match/free micro-flagship) proceeds on paper;
-  its first emitted certs wait for the representation verdict.
-  Generators must be born speaking the ratified dialect.
-- **Post-Arc-A candidates live in the archive, not in law**: the
-  streaming-sha flagship, ML numeric contract, parallel pilot
-  (archive §"The next arcs I would actually run" and the closing
-  turns). They are re-adjudicated when Arc A reports.
+  its first emitted certs wait for FINAL dialect ratification
+  (provisional 2026-07-26, §8 R3; final rides Arc B's
+  replacement-basis measurement). Generators must be born speaking
+  the ratified dialect.
+- **Post-Arc-A candidates: RE-ADJUDICATED 2026-07-26 (§8 R4).** Arc
+  B opens next (rung 1 = the replacement-basis measurement); Arc C's
+  paper half may run alongside, its runtime half queues behind I4
+  behind the emission machinery; the coverage arc unfreezes after
+  B's dialect exercise; Arc D last; PARALLEL.md drafts during the
+  coverage arc.
 
 ## 11. Decision points
 
-- **DC1 — witness grammar granularity per pass**: OPEN; discovered
-  by A1 on the straight-line family (start minimal: block
-  correspondence + register choice; grow only on demand).
-- **DC2 — `change`/`exact-conv` surface spelling**: provisionally
-  DECIDED at A3 rung (c) (the naive forms, landed; the A3 verdict is
-  recorded with the spelling unchanged in the field — final
-  adjudication now queued at the full-arc review). Step: `(change SIDE OCC TERM)` /
+- **DC1 — witness grammar granularity per pass**: MOOT at the
+  canonical-lowering tier (full-arc review 2026-07-26): witness v0
+  is an arity placeholder (§4); delete-or-grow is decided when
+  clause 1 of the §4 clause architecture arrives with a real
+  non-canonical consumer.
+- **DC2 — `change`/`exact-conv` surface spelling**: DECIDED — FROZEN
+  at the full-arc review 2026-07-26 with the §3 boundaries recorded
+  (gensym-IH citation, gated-Occ counting, per-site stop sets). Step: `(change SIDE OCC TERM)` /
   `(change SIDE OCC TERM (stop F …))`, OCC in the rewrite spelling
   (`true` all / `false` first / `(at K)`); `change` FOLDS — it
   replaces occurrences of the term's normal form (under the stop set)
@@ -395,6 +476,8 @@ point.
 - **DC3 — checkpointed-walk proof form** (the seal discipline
   promoted to kernel tactic): CANDIDATE, deliberately second
   priority — build only if a measured leg says generated walks are
-  still too big after conversion+DAG.
+  still too big after conversion+DAG. The measured leg is now named:
+  Arc B rung 1 (the replacement-basis measurement; its two loop
+  seams are exactly this gate's evidence).
 - **DC4 — cert binary serialization format**: OPEN; engineering,
   decided inside §7's slice.
