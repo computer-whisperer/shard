@@ -1153,128 +1153,6 @@
   (SuTFail SuA)
   (SuTPass SuA))
 
-;; walk the result spine against the expected ints, forcing lazily
-(fn su_expect
-  ((fuel Int)
-   (m Module)
-   (candq QName)
-   (body Expr)
-   (g SuG)
-   (asg (List (Pair Int Int)))
-   (a SuA)
-   (r Int)
-   (want (List Int)))
-  SuT
-  (measure fuel)
-  (if (lt fuel 1) (SuTOut)
-  (match (su_whnf (- fuel 1) m candq body g asg a r)
-    ((SuRErr msg) (SuTErr msg))
-    ((SuROut) (SuTOut))
-    ((SuRBlocked h a2) (SuTBlocked h a2))
-    ((SuRFail a2) (SuTFail a2))
-    ((SuRVal v a2)
-     (match (sa_get a2 v)
-       (None (SuTErr "superpose: dangling result"))
-       ((Some n)
-        (match n
-          ((SuCtor cq fs)
-           (if (sym_eq (qn_name cq) (quote Cons))
-             (match fs
-               ((Cons hf (Cons tf Nil))
-                (match want
-                  (Nil (SuTFail a2))
-                  ((Cons w rest)
-                   (match (su_whnf (- fuel 1) m candq body g asg a2 hf)
-                     ((SuRErr msg) (SuTErr msg))
-                     ((SuROut) (SuTOut))
-                     ((SuRBlocked h a3) (SuTBlocked h a3))
-                     ((SuRFail a3) (SuTFail a3))
-                     ((SuRVal hv a3)
-                      (match (sa_get a3 hv)
-                        (None (SuTErr "superpose: dangling head"))
-                        ((Some hn)
-                         (match hn
-                           ((SuInt x)
-                            (if (int_eq x w)
-                              (su_expect
-                                (- fuel 1)
-                                m
-                                candq
-                                body
-                                g
-                                asg
-                                a3
-                                tf
-                                rest)
-                              (SuTFail a3)))
-                           (_ (SuTFail a3))))))))))
-               (_ (SuTErr "superpose: malformed Cons")))
-           (if (sym_eq (qn_name cq) (quote Nil))
-             (match want
-               (Nil (SuTPass a2))
-               ((Cons _ _) (SuTFail a2)))
-             (SuTFail a2))))
-          (_ (SuTFail a2)))))))))
-
-;; one test: the sketch body under (xs = input, acc = Nil)
-(fn su_test
-  ((fuel Int)
-   (m Module)
-   (candq QName)
-   (body Expr)
-   (g SuG)
-   (asg (List (Pair Int Int)))
-   (a SuA)
-   (inp (List Int))
-   (want (List Int)))
-  SuT
-  (measure fuel)
-  (if (lt fuel 1) (SuTOut)
-  (match (su_thunk1 a (intlist_to_expr inp) Nil)
-    ((Pair xsr a2)
-     (match (su_thunk1 a2 (Ctor (qn (quote Nil)) Nil) Nil)
-       ((Pair accr a3)
-        (match
-          (su_eval
-            (- fuel 1)
-            m
-            candq
-            body
-            g
-            asg
-            a3
-            (Cons accr (Cons xsr Nil))
-            body)
-          ((SuRErr msg) (SuTErr msg))
-          ((SuROut) (SuTOut))
-          ((SuRBlocked h a4) (SuTBlocked h a4))
-          ((SuRFail a4) (SuTFail a4))
-          ((SuRVal r a4) (su_expect (- fuel 1) m candq body g asg a4 r want)))))))))
-
-;; the battery, sequential; the arena THREADS across tests (within a
-;; region, forced thunks stay forced)
-(fn su_tests
-  ((fuel Int)
-   (m Module)
-   (candq QName)
-   (body Expr)
-   (g SuG)
-   (asg (List (Pair Int Int)))
-   (a SuA)
-   (ts (List (Pair (List Int) (List Int)))))
-  SuT
-  (measure fuel)
-  (if (lt fuel 1) (SuTOut)
-  (match ts
-    (Nil (SuTPass a))
-    ((Cons (Pair inp want) rest)
-     (match (su_test (- fuel 1) m candq body g asg a inp want)
-       ((SuTErr msg) (SuTErr msg))
-       ((SuTOut) (SuTOut))
-       ((SuTBlocked h a2) (SuTBlocked h a2))
-       ((SuTFail a2) (SuTFail a2))
-       ((SuTPass a2) (su_tests (- fuel 1) m candq body g asg a2 rest)))))))
-
 ;; Generic value comparison for dynamic tasks.  `want` is an already-invoked
 ;; ground Shard value; the candidate side stays lazy.  Constructor fields are
 ;; compared left-to-right, so the first differing observation blocks only on
@@ -2333,98 +2211,6 @@
     (su_drive_query fuel m candq body candidate constraints query want g ar jobs
       found killed constrained regions forks sols)))
 
-(fn su_drive
-  ((fuel Int)
-   (m Module)
-   (candq QName)
-   (body Expr)
-   (g SuG)
-   (ts (List (Pair (List Int) (List Int))))
-   (ar SuA)
-   (jobs (List SkRegion))
-   (found Int)
-   (killed Int)
-   (regions Int)
-   (forks Int)
-   (sols (List SkRegion)))
-  SuS
-  (measure fuel)
-  (if (lt fuel 1)
-    (SuSBudget
-      found
-      killed
-      0
-      regions
-      forks
-      (sa_steps ar)
-      (sa_nodes ar)
-      (sa_exprs ar)
-      sols)
-    (match jobs
-      (Nil (SuSOk found killed 0 regions forks (sa_steps ar) sols))
-      ((Cons region rest)
-       (let ((asg (sk_region_choices region)))
-         (match (su_tests (su_efuel) m candq body g asg ar ts)
-           ((SuTErr msg) (SuSErr msg))
-           ((SuTOut) (SuSErr "superpose: evaluation fuel exhausted"))
-           ((SuTBlocked h ar2)
-            (match (sug_alts g h)
-              (None (SuSErr "superpose: blocked on an unknown hole"))
-              ((Some alts)
-               (match (su_fork g alts region h (- (alts_len alts) 1) rest)
-                 ((SuForkErr msg) (SuSErr msg))
-                 ((SuForkOk jobs2)
-                  (su_drive
-                    (- fuel 1)
-                    m
-                    candq
-                    body
-                    g
-                    ts
-                    ar2
-                    jobs2
-                    found
-                    killed
-                    regions
-                    (+ forks 1)
-                    sols))))))
-           ((SuTFail ar2)
-            (match (sk_region_count body (sug_raw g) region)
-              ((SkCErr msg) (SuSErr msg))
-              ((SkCOk n)
-               (su_drive
-                 (- fuel 1)
-                 m
-                 candq
-                 body
-                 g
-                 ts
-                 ar2
-                 rest
-                 found
-                 (+ killed n)
-                 (+ regions 1)
-                 forks
-                 sols))))
-           ((SuTPass ar2)
-            (match (sk_region_count body (sug_raw g) region)
-              ((SkCErr msg) (SuSErr msg))
-              ((SkCOk n)
-               (su_drive
-                 (- fuel 1)
-                 m
-                 candq
-                 body
-                 g
-                 ts
-                 ar2
-                 rest
-                 (+ found n)
-                 killed
-                 (+ regions 1)
-                 forks
-                 (Cons region sols)))))))))))
-
 ;; ---- region membership + representatives (the AGREE gate) ---------------------
 
 ;; Exact region gates use meta/sketch's restricted addressing.
@@ -2483,6 +2269,33 @@
 
 ;; ---- driver --------------------------------------------------------------------
 
+;; The pinned rev suite drives the GENERIC query path: one battery query per
+;; drive — the candidate called on every test input (argument order matches
+;; run_tests: (input, Nil-acc)) — compared lazily against the ground expected
+;; outputs, so demand order and early exit match the old per-test battery.
+(fn su_battery_query ((candq QName) (ts (List (Pair (List Int) (List Int)))))
+  Expr
+  (measure (struct ts))
+  (match ts
+    (Nil (Ctor (qn (quote Nil)) Nil))
+    ((Cons (Pair inp _) rest)
+     (Ctor
+       (qn (quote Cons))
+       (Cons
+         (Call
+           candq
+           (Cons (intlist_to_expr inp) (Cons (Ctor (qn (quote Nil)) Nil) Nil)))
+         (Cons (su_battery_query candq rest) Nil))))))
+
+(fn su_battery_want ((ts (List (Pair (List Int) (List Int))))) Expr
+  (measure (struct ts))
+  (match ts
+    (Nil (Ctor (qn (quote Nil)) Nil))
+    ((Cons (Pair _ want) rest)
+     (Ctor
+       (qn (quote Cons))
+       (Cons (intlist_to_expr want) (Cons (su_battery_want rest) Nil))))))
+
 (fn su_run ((m Module) (apq QName) (d Int) (w World)) World
   (let ((body (rev_sketch)) (g (rev_grammar d apq)) (ts (rev_tests)))
     (match (sk_count body g)
@@ -2492,15 +2305,19 @@
          (write (append_int "SUPERPOSE FAIL count: " (append_int msg "\n")) w)))
       ((SkCOk total)
        (match
-         (su_drive
+         (su_drive_query
            (+ (* 4 total) 64)
            m
            (cand_q)
            body
-           (sug_compile g)
-           ts
+           body
+           (ms_empty_plan)
+           (su_battery_query (cand_q) ts)
+           (su_battery_want ts)
+           g
            (sa_new)
            (Cons (sk_empty_region) Nil)
+           0
            0
            0
            0

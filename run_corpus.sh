@@ -885,13 +885,15 @@ fi
 # named superpose; "narrow" is the bootstrap dialect's name): the
 # choices-map machine settles the rev spaces EXACTLY — d1: 108
 # candidates in 26 regions (8 forks), 1 found; d2: 7,788 in 443
-# regions (133 forks), 13 found. STEPS pins the consulted-choice-set
-# memo's leverage (pre-memo baselines: 896 / 29,008 — the memo halves
-# re-evaluation at d2 and compounds with depth). AGREE extends G3
-# three ways: found coverage == the enumerative solution count, every
-# enumerative solution lies in a found region, and every region
-# representative passes the kernel/evm battery. Any drift exits 1
-# inside the tool.
+# regions (133 forks), 13 found. The rev suite rides the GENERIC
+# query drive (slice-0 retirement of the legacy per-test battery;
+# settlement identical, STEPS re-pinned 623/12,651 -> 489/7,777 —
+# one interned battery query per drive replaces per-test input
+# re-thunking). STEPS still pins the consulted-choice-set memo's
+# leverage. AGREE extends G3 three ways: found coverage == the
+# enumerative solution count, every enumerative solution lies in a
+# found region, and every region representative passes the
+# kernel/evm battery. Any drift exits 1 inside the tool.
 echo "=== search: superposed executor (S4b) ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/superpose.shard
