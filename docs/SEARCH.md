@@ -3122,11 +3122,40 @@ pin. Before the arc: harden the seams the survey found soft. Landed:
   pins the matrix; typed_expr and typed_superpose are ALSO check targets
   now (42902ae closed the tc_infer gap that excluded them).
 
-QUEUED: **0b-2** — the engine-internal task RECORD (one loader resolving
-every hook once; ts_result_mode/ts_drive_fuel/ts_theorem_first and the
-per-engine policy matrix consume the record; the heuristic-tier hooks
-join the table there). **0c** — arena memo scoping/eviction. Then the
-arc proper opens with RELATION-AWARE REGION STATE built at the
-meta/sketch region-algebra layer (engine-agnostic by construction), with
-PIO P5c-2 and the routing/regalloc task family as its measured
-consumers.
+- **0b-2:** the engine-internal task RECORD. te_load_task (typed_expr)
+  resolves EVERY protocol hook exactly once into the TeTask record —
+  protocol signatures, config, canon/observer/spine profiles, screen,
+  result mode, narrowing strategy, drive budget, invoked target and
+  witness — and derives the task's CLAIM-LADDER rung: TeClaim =
+  census / empty (exhaustive absence) / first (existence under budget);
+  the heuristic rung joins this enum later and can never feed census
+  pins or absence claims. The mode x hook legality matrix lives in the
+  loader (expect_empty⊗first, rank-witness⊗first, screen⊗first all
+  refuse at load, messages unchanged); the only engine-side legality
+  check left is typed_superpose's audit-flag⊗first (a CLI matter, now
+  refused BEFORE the drive instead of after it). Both engines consume
+  the record: typed_expr's driver chain collapsed onto it and the
+  census engine now LOUDLY REFUSES first-result tasks (claim-type
+  mismatch, previously a silent census); typed_superpose lost
+  ts_result_mode/ts_drive_fuel/ts_theorem_first (moved into the loader
+  as te_result_mode/te_drive_budget/te_narrowing_strategy + te_task_fuel)
+  plus its whole ts_with_* resolution chain, the DEAD pre-schema
+  first path (ts_find_space/ts_finish_first/ts_first_report — unreachable
+  since the schema drive landed) and its te_space_count duplicate
+  (~560 lines net). su_find_query stays in superpose.shard: it is a thin
+  adapter over the shared su_find_query_prepared core, completing the
+  drive/find x materialized/schema surface. transition_mine still rides
+  te_protocol+te_config only (no record fields it needs yet); it joins
+  the record when the heuristic hooks land, and is now a CHECK TARGET
+  like the other engines. protocol_probe pins the claim ladder
+  (every mode x witness cell + both screen-legality directions,
+  refusal messages byte-exact). Every settlement pin bit-identical
+  across the whole battery (census, audits, first-mode schema drives,
+  deep pio_dme).
+
+QUEUED: **0c** — arena memo scoping/eviction. Then the arc proper opens
+with RELATION-AWARE REGION STATE built at the meta/sketch region-algebra
+layer (engine-agnostic by construction), with PIO P5c-2 and the
+routing/regalloc task family as its measured consumers. Heuristic-tier
+hooks (cost, neighborhood, seed) join the TeTask record and te_hooks
+table when the first heuristic engine lands.

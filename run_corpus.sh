@@ -366,6 +366,7 @@ TARGETS=(
   tools/search/typed_grammar.shard
   tools/search/typed_expr.shard
   tools/search/typed_superpose.shard
+  tools/search/transition_mine.shard
   tools/search/protocol_probe.shard
   tools/search/theorem_scope.shard
   tools/search/profile_census.shard
@@ -543,6 +544,10 @@ fi
 # (unknown search_* fn, witness multiplicity, solo spine hook, flat
 # vocabulary under search_environment) — every rule pinned on synthetic
 # modules; every real task passes through the same scan via te_config.
+# Also the claim-ladder pins: every mode x witness cell of te_claim
+# (census / absence / first) and both te_screen_legal directions, refusal
+# messages byte-exact — the legality matrix te_load_task enforces for
+# every engine consuming the TeTask record.
 echo "=== search: task-protocol scan pin ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/protocol_probe.shard

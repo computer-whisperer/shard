@@ -58,6 +58,19 @@
 ;;; or
 ;;;   search_expect_empty : () -> Bool       ; exhaustive absence tasks
 ;;;
+;;;   search_result_mode        : () -> Symbol ; exhaustive (default) or first
+;;;   search_narrowing_strategy : () -> Symbol ; semantic_first/theorem_first
+;;;   search_drive_budget       : () -> Int    ; superposition decision budget
+;;;
+;;; te_load_task resolves every hook exactly once into the TeTask record all
+;;; engines consume, and derives the task's CLAIM-LADDER rung (exact census /
+;;; exhaustive absence / first-result existence; a heuristic rung joins the
+;;; enum with the heuristic tier).  Mode-against-hook legality is decided
+;;; there, in one place: expect-empty and rank witnesses and census screens
+;;; all contradict first-result mode and refuse at load.  The narrowing
+;;; strategy and drive budget parametrize the superposition drive; the census
+;;; engine carries them without consulting them.
+;;;
 ;;; The search_ prefix is RESERVED for these hooks: te_task_scan refuses any
 ;;; other search_*-named fn in the task closure (typo/vestige hardening), a
 ;;; multiply-defined witness, a solo spine hook, and flat vocabulary hooks
@@ -1136,6 +1149,237 @@
           (_
             (TeWitnessLoadErr "search_expect_empty did not return a Bool value"))))))))
 
+;; ---- the resolved task record -----------------------------------------------
+;; One loader resolves every protocol hook exactly once; engines consume the
+;; record instead of re-searching the module mid-drive.  The claim ladder
+;; types what a run may pin, and every mode-against-hook contradiction is a
+;; load-time refusal here — engines add only checks involving their own
+;; invocation (typed_superpose's audit flag).
+
+(type TeMode (TeModeExhaustive) (TeModeFirst))
+
+(type TeModeHookR (TeModeHookErr (List Int)) (TeModeHookOk TeMode))
+
+(fn te_result_mode ((ctx InvokeCtx) (m Module)) TeModeHookR
+  (match (find_fn (quote search_result_mode) m)
+    (None (TeModeHookOk (TeModeExhaustive)))
+    ((Some fd)
+     (match fd
+       ((FnDef _ params ret _)
+        (match params
+          ((Cons _ _)
+           (TeModeHookErr "search_result_mode must take no arguments"))
+          (Nil
+            (if (type_eq ret (TCon (qn (quote Symbol)) Nil))
+              (match (invoke_fd_ctx ctx fd Nil)
+                (None (TeModeHookErr "search_result_mode invocation failed"))
+                ((Some value)
+                 (match value
+                   ((SymLit mode)
+                    (if (sym_eq mode (quote exhaustive))
+                      (TeModeHookOk (TeModeExhaustive))
+                    (if (sym_eq mode (quote first)) (TeModeHookOk (TeModeFirst))
+                    (TeModeHookErr "unknown search_result_mode"))))
+                   (_
+                     (TeModeHookErr "search_result_mode did not return Symbol")))))
+              (TeModeHookErr "search_result_mode must return Symbol")))))))))
+
+(type TeStrategyR (TeStrategyErr (List Int)) (TeStrategyOk Bool))
+
+(fn te_narrowing_strategy ((ctx InvokeCtx) (m Module)) TeStrategyR
+  (match (find_fn (quote search_narrowing_strategy) m)
+    (None (TeStrategyOk False))
+    ((Some fd)
+     (match fd
+       ((FnDef _ params ret _)
+        (match params
+          ((Cons _ _)
+           (TeStrategyErr "search_narrowing_strategy must take no arguments"))
+          (Nil
+            (if (type_eq ret (TCon (qn (quote Symbol)) Nil))
+              (match (invoke_fd_ctx ctx fd Nil)
+                (None
+                  (TeStrategyErr "search_narrowing_strategy invocation failed"))
+                ((Some value)
+                 (match value
+                   ((SymLit strategy)
+                    (if (sym_eq strategy (quote semantic_first))
+                      (TeStrategyOk False)
+                    (if (sym_eq strategy (quote theorem_first))
+                      (TeStrategyOk True)
+                      (TeStrategyErr "unknown search_narrowing_strategy"))))
+                   (_
+                     (TeStrategyErr
+                       "search_narrowing_strategy did not return Symbol")))))
+              (TeStrategyErr "search_narrowing_strategy must return Symbol")))))))))
+
+(type TeBudgetR (TeBudgetErr (List Int)) (TeBudgetOk (Option Int)))
+
+(fn te_drive_budget ((ctx InvokeCtx) (m Module)) TeBudgetR
+  (match (find_fn (quote search_drive_budget) m)
+    (None (TeBudgetOk None))
+    ((Some fd)
+     (match fd
+       ((FnDef _ params ret _)
+        (match params
+          ((Cons _ _)
+           (TeBudgetErr "search_drive_budget must take no arguments"))
+          (Nil
+            (if (type_eq ret (TCon (qn (quote Int)) Nil))
+              (match (invoke_fd_ctx ctx fd Nil)
+                (None (TeBudgetErr "search_drive_budget invocation failed"))
+                ((Some value)
+                 (match (expr_int value)
+                   (None (TeBudgetErr "search_drive_budget is not an Int"))
+                   ((Some fuel)
+                    (if (lt fuel 1)
+                      (TeBudgetErr "search_drive_budget must be positive")
+                      (TeBudgetOk (Some fuel)))))))
+              (TeBudgetErr "search_drive_budget must return Int")))))))))
+
+;; The claim ladder.  A census claim pins exact counts and absence; an
+;; expect-empty claim pins exhaustive absence; a first claim pins existence
+;; under a budget and nothing else.  A heuristic rung joins here later and
+;; can never feed census pins or absence claims.
+(type TeClaim (TeClaimCensus) (TeClaimEmpty) (TeClaimFirst))
+
+(type TeClaimR (TeClaimErr (List Int)) (TeClaimOk TeClaim))
+
+(fn te_claim ((mode TeMode) (witness TeWitness)) TeClaimR
+  (match mode
+    ((TeModeExhaustive)
+     (match witness
+       ((TeWitnessEmpty) (TeClaimOk (TeClaimEmpty)))
+       (_ (TeClaimOk (TeClaimCensus)))))
+    ((TeModeFirst)
+     (match witness
+       ((TeWitnessValue _) (TeClaimOk (TeClaimFirst)))
+       ((TeWitnessRank _)
+        (TeClaimErr
+          "first result mode requires a value witness, not a rank witness"))
+       ((TeWitnessEmpty)
+        (TeClaimErr "search_expect_empty requires exhaustive mode"))))))
+
+;; The screen is an exhaustive-census audit accelerator; the lazy drive never
+;; consults it.  Refuse the combination rather than silently ignoring the
+;; task's hook.
+(fn te_screen_legal ((mode TeMode) (screen TeScreen)) (Option (List Int))
+  (match screen
+    ((TeNoScreen) None)
+    ((TeScreenFd _)
+     (match mode
+       ((TeModeExhaustive) None)
+       ((TeModeFirst) (Some "search_screen requires exhaustive mode"))))))
+
+(record
+  TeTask
+  (task_probe FnDef)
+  (task_want Type)
+  (task_obs Type)
+  (task_target Expr)
+  (task_witness TeWitness)
+  (task_claim TeClaim)
+  (task_cfg TeCfg)
+  (task_screen TeScreen)
+  (task_canon (List Symbol))
+  (task_observer (List Symbol))
+  (task_spine TeSpineCfg)
+  (task_theorem_first Bool)
+  (task_budget (Option Int)))
+
+(type TeTaskR (TeTaskErr (List Int)) (TeTaskOk TeTask))
+
+(fn te_task_claimed
+  ((mode TeMode)
+   (probe FnDef)
+   (want Type)
+   (obs Type)
+   (target Expr)
+   (witness TeWitness)
+   (cfg TeCfg)
+   (screen TeScreen)
+   (canon (List Symbol))
+   (observer (List Symbol))
+   (spine TeSpineCfg)
+   (theorem_first Bool)
+   (budget (Option Int)))
+  TeTaskR
+  (match (te_claim mode witness)
+    ((TeClaimErr msg) (TeTaskErr msg))
+    ((TeClaimOk claim)
+     (match (te_screen_legal mode screen)
+       ((Some msg) (TeTaskErr msg))
+       (None
+         (TeTaskOk
+           (MkTeTask probe want obs target witness claim cfg screen canon
+             observer spine theorem_first budget)))))))
+
+(fn te_task_drive
+  ((ctx InvokeCtx)
+   (m Module)
+   (probe FnDef)
+   (target_fd FnDef)
+   (witness_fd TeWitnessFd)
+   (want Type)
+   (obs Type)
+   (cfg TeCfg)
+   (canon (List Symbol))
+   (observer (List Symbol))
+   (spine TeSpineCfg)
+   (screen TeScreen))
+  TeTaskR
+  (match (te_result_mode ctx m)
+    ((TeModeHookErr msg) (TeTaskErr msg))
+    ((TeModeHookOk mode)
+     (match (te_narrowing_strategy ctx m)
+       ((TeStrategyErr msg) (TeTaskErr msg))
+       ((TeStrategyOk theorem_first)
+        (match (te_drive_budget ctx m)
+          ((TeBudgetErr msg) (TeTaskErr msg))
+          ((TeBudgetOk budget)
+           (match (invoke_fd_ctx ctx target_fd Nil)
+             (None (TeTaskErr "target invocation"))
+             ((Some target)
+              (match (te_load_witness ctx witness_fd)
+                ((TeWitnessLoadErr msg) (TeTaskErr msg))
+                ((TeWitnessLoadOk witness)
+                 (te_task_claimed mode probe want obs target witness cfg screen
+                   canon observer spine theorem_first budget))))))))))))
+
+(fn te_load_task ((ctx InvokeCtx) (m Module)) TeTaskR
+  (match (te_protocol m)
+    ((TeSigErr msg) (TeTaskErr (append_int "protocol: " msg)))
+    ((TeSigOk probe target_fd witness_fd want obs)
+     (match (te_config ctx m)
+       ((TeCfgErr msg) (TeTaskErr (append_int "config: " msg)))
+       ((TeCfgOk cfg)
+        (match (te_canon_names ctx m)
+          ((TeCanonNamesErr msg) (TeTaskErr (append_int "protocol: " msg)))
+          ((TeCanonNamesOk canon)
+           (match (te_observer_names ctx m)
+             ((TeObserverNamesErr msg)
+              (TeTaskErr (append_int "protocol: " msg)))
+             ((TeObserverNamesOk observer)
+              (match (te_spine_cfg ctx m)
+                ((TeSpineCfgErr msg) (TeTaskErr (append_int "protocol: " msg)))
+                ((TeSpineCfgOk spine)
+                 (match (te_screen_sig m want)
+                   ((TeScreenSigErr msg)
+                    (TeTaskErr (append_int "protocol: " msg)))
+                   ((TeScreenSigOk screen)
+                    (te_task_drive ctx m probe target_fd witness_fd want obs cfg
+                      canon observer spine screen))))))))))))))
+
+;; The total-derived default is convenient for finite censuses, but a symbolic
+;; grammar can contain vastly more members than a practical synthesis run
+;; should attempt to partition.  Tasks may therefore cap driver decisions
+;; explicitly without changing evaluator fuel or weakening any completed-run
+;; gate.  Exhausting this budget remains a loud partial-result failure.
+(fn te_task_fuel ((task TeTask) (total Int)) Int
+  (match (task_budget_of task)
+    (None (+ (* 8 total) 1024))
+    ((Some fuel) fuel)))
+
 (type TeWitnessR (TeWitnessErr (List Int)) (TeWitnessOk Int))
 
 (fn te_witness_at
@@ -1601,94 +1845,56 @@
                  scope cfg plan constraints canon_rules observer_rules raw_total
                  w))))))))))
 
-(fn te_search_ready
-  ((path (List Int))
-   (m Module)
-   (want Type)
-   (ictx InvokeCtx)
-   (scope RCtx)
-   (probe FnDef)
-   (target_fd FnDef)
-   (witness_mode TeWitnessFd)
-   (search_cfg TeCfg)
-   (reductions TeReductions)
-   (w World))
-  World
-  (match (te_screen_sig m want)
-    ((TeScreenSigErr msg) (te_fail (append_int "protocol: " msg) w))
-    ((TeScreenSigOk screen)
-     (match (invoke_fd_ctx ictx target_fd Nil)
-       (None (te_fail "target invocation" w))
-       ((Some target)
-        (match (te_load_witness ictx witness_mode)
-          ((TeWitnessLoadErr msg) (te_fail msg w))
-          ((TeWitnessLoadOk witness)
-           (te_build_space path m want ictx screen probe target witness scope
-             search_cfg reductions w))))))))
-
 (fn te_probe_qname ((probe FnDef)) QName
   (match probe
     ((FnDef q _ _ _) q)))
 
 (fn te_search_reductions
   ((path (List Int))
+   (src (List Int))
    (m Module)
-   (want Type)
    (ictx InvokeCtx)
-   (scope RCtx)
-   (probe FnDef)
-   (target_fd FnDef)
-   (witness_mode TeWitnessFd)
-   (search_cfg TeCfg)
-   (canon_names (List Symbol))
-   (observer_names (List Symbol))
-   (spine_cfg TeSpineCfg)
+   (task TeTask)
    (w World))
   World
   (match
     (te_load_reductions
       path
-      (te_probe_qname probe)
-      canon_names
-      observer_names
-      spine_cfg
+      (te_probe_qname (task_probe_of task))
+      (task_canon_of task)
+      (task_observer_of task)
+      (task_spine_of task)
       w)
     ((Pair result w2)
      (match result
        ((TeReductionsErr msg) (te_fail (append_int "reductions: " msg) w2))
        ((TeReductionsOk reductions)
-        (te_search_ready path m want ictx scope probe target_fd witness_mode
-          search_cfg reductions w2))))))
+        (te_build_space
+          path
+          m
+          (task_want_of task)
+          ictx
+          (task_screen_of task)
+          (task_probe_of task)
+          (task_target_of task)
+          (task_witness_of task)
+          (te_import_ctx m path src)
+          (task_cfg_of task)
+          reductions
+          w2))))))
 
-(fn te_search
-  ((path (List Int))
-   (src (List Int))
-   (m Module)
-   (protocol TeSigR)
-   (cfg TeCfgR)
-   (w World))
-  World
-  (match protocol
-    ((TeSigErr msg) (te_fail (append_int "protocol: " msg) w))
-    ((TeSigOk probe target_fd witness_mode want _)
-     (match cfg
-       ((TeCfgErr msg) (te_fail (append_int "config: " msg) w))
-       ((TeCfgOk search_cfg)
-        (let ((ictx (prepare_invoke m)) (scope (te_import_ctx m path src)))
-          (match (te_canon_names ictx m)
-            ((TeCanonNamesErr msg) (te_fail (append_int "protocol: " msg) w))
-            ((TeCanonNamesOk canon_names)
-             (match (te_observer_names ictx m)
-               ((TeObserverNamesErr msg)
-                (te_fail (append_int "protocol: " msg) w))
-               ((TeObserverNamesOk observer_names)
-                (match (te_spine_cfg ictx m)
-                  ((TeSpineCfgErr msg)
-                   (te_fail (append_int "protocol: " msg) w))
-                  ((TeSpineCfgOk spine_cfg)
-                   (te_search_reductions path m want ictx scope probe target_fd
-                     witness_mode search_cfg canon_names observer_names
-                     spine_cfg w)))))))))))))
+(fn te_search ((path (List Int)) (src (List Int)) (m Module) (w World)) World
+  (let ((ictx (prepare_invoke m)))
+    (match (te_load_task ictx m)
+      ((TeTaskErr msg) (te_fail msg w))
+      ((TeTaskOk task)
+       (match (task_claim_of task)
+         ((TeClaimFirst)
+          (te_fail
+            "first-result tasks pin existence only; run typed_superpose (typed_expr is the exhaustive census engine)"
+            w))
+         (_ (te_search_reductions path src m ictx task w)))))))
+
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
@@ -1704,12 +1910,5 @@
                  (match osrc
                    (None
                      (exit 1 (write "TYPED-SEARCH FAIL task source read\n" w3)))
-                   ((Some src)
-                    (te_search
-                      path
-                      src
-                      m
-                      (te_protocol m)
-                      (te_config (prepare_invoke m) m)
-                      w3))))))))))
+                   ((Some src) (te_search path src m w3))))))))))
        (_ (exit 2 (write "usage: typed_expr TASK.shard\n" w1)))))))
