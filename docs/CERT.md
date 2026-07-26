@@ -188,7 +188,16 @@ import closures) is this layer's incremental-checking face and
 lands with it. Canon's content-addressing work (CANON.md) is the
 existing house precedent.
 
-## 8. Arc A — the pathfinder protocol (OPEN)
+**This slice now carries Arc A's rung (e) sharing mandate (user
+ruling 2026-07-26; docs/archive/A3E-PRICING-2026-07-26.md = the
+evidence trail).** Term sharing — the hash-consed arena and any
+conversion-checking memo — arrives ONCE, here, priced with binary
+serialization + content addressing + gate (d) incremental behavior
+in a single design, on the replacement-basis number the next
+block-chain touch owes (see the A3 verdict, §8).
+
+## 8. Arc A — the pathfinder protocol (all three verdicts recorded;
+the full-arc review is the next user decision point)
 
 Three measured variants, serial on main, in this order:
 
@@ -283,6 +292,41 @@ independent spikes. **A2 CLOSED 2026-07-19. A3 (conversion forms,
 the only kernel-touching variant) is the next decision point,
 gated on its own numbers per the protocol.**
 
+**A3 VERDICT (2026-07-26; rungs (a)–(d) landed 2026-07-19/20, rung
+(e) ruled on the pricing memo).** The conversion forms landed at the
+smallest kernel commitment in the redirection: (a) SHARD_STATS
+instruments (calls/allocs/live-peak/RSS + per-fn counters; the first
+instrumented build surfaced and fixed the GC stack-base soundness
+bug); (b) the literal-sort rewrite gate — the packed-Nat/Int atom
+hazard now refused, zero existing proofs broken; (c) naive
+`change`/`exact-conv` — reduction-based, zero new axioms, explicit
+occurrence + stop-set spelling so implicit search stays shut out
+(accept pins 9/0 first try, reject pins 5/5 with exact diagnostics);
+(d) the conversion leg on A2(d)'s objects — the suffix seam closes by
+ONE fully-instantiated exact-conv, per-seam text 2695 (replay) → 243
+(patch) → 106 (conversion), marginal checker cost +6.7M calls vs the
+patch leg's +24.2M ≈ 3.6x, reproduced exactly on post-kernel-survey
+main. The instruments' structural finding: the closure's bill is
+parse (~31%) plus env/name/type traffic (~40%); proof-step machinery
+sits at the bottom of the per-fn table — source-text shrink IS
+checker-work shrink, and an evaluation memo cannot reach the dominant
+costs. **Rung (e) DESCOPED TO §7 (user ruling 2026-07-26): the
+late-fold recompute is bounded by the whole conversion marginal
+(≈0.65% of the closure) at exercised scale; the hash-consed arena is
+§7's slice and lands there once.** Owed forward: the
+replacement-basis measurement — the block chain re-derived in the
+conversion dialect WITHOUT the cmp_ replay family in the closure —
+falls out of the next block-chain touch (or the coverage compiler's
+first family) and doubles as DC3's gate evidence. Gate (b) status:
+text 10–25x on the exercised family, marginal calls 3.6x below
+patch, replacement basis owed. Gate (d): explicitly deferred to §7.
+Coverage fences: one segment sampled (8 of ~23 statements) + one
+suffix seam; the full 13-seam chain re-derivation deferred with
+named interfaces. **A3 CLOSED 2026-07-26 (task #74). Arc A's rungs
+are complete; the full-arc review — the A1 spike ruling, DC2 final
+adjudication, the generator-freeze dialect ratification, Arc B/C/D
+re-adjudication — is the next user decision point.**
+
 Prediction on record (review consensus): conversion + DAG storage
 gives the quickest 10-50x representation win and kills most weld
 glue; base+patch prevents the next program from recreating
@@ -334,8 +378,9 @@ point.
   by A1 on the straight-line family (start minimal: block
   correspondence + register choice; grow only on demand).
 - **DC2 — `change`/`exact-conv` surface spelling**: provisionally
-  DECIDED at A3 rung (c) (the naive forms, landed; final adjudication
-  rides A3's verdict). Step: `(change SIDE OCC TERM)` /
+  DECIDED at A3 rung (c) (the naive forms, landed; the A3 verdict is
+  recorded with the spelling unchanged in the field — final
+  adjudication now queued at the full-arc review). Step: `(change SIDE OCC TERM)` /
   `(change SIDE OCC TERM (stop F …))`, OCC in the rewrite spelling
   (`true` all / `false` first / `(at K)`); `change` FOLDS — it
   replaces occurrences of the term's normal form (under the stop set)
