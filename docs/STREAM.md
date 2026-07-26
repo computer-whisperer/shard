@@ -97,6 +97,40 @@ needs a real consumer forcing its decisions:
     closing the recorded composition gap. The mem-capable statement
     tier stays a named door (§6), not this rung.
 
+  **B1 RECORD (2026-07-26; measurement complete, B1b pending).**
+  Landed: models/imp/probes/ilinv_probe.shard (ilv_inv12, e965ec2) +
+  std/sha256/sha256.xchain.shard (37de92a, 71f0065, c700ea9, 2a7f586)
+  — every statement byte-identical to its cmp_x_shblock_bN /
+  imp_x_shblock original, corpus-registered, ZERO cmp_ citations in
+  the chain. The design that survived contact (amends the R3
+  provisional dialect — final ratification is the user's): chain
+  interiors are UNPREMISED seams — ist_seam + the kept sqs_cN put
+  the same segment term on both sides, the proof case-forks on it,
+  fail forks close by compute (xm_scont/ist_cont/ix_sout mirror
+  failure), and the Some-INorm fork derives arity by a change-fold
+  into il_slen (il_wlen at loops), mints the twelve reads with ONE
+  ilv_inv12 citation, and closes with ONE exact-conv of the next
+  seam; the ∀-y premised shape remains the leaf/library form only.
+  Loop seams closed WITHOUT any checkpointed-walk form (DC3's
+  evidence): approach paths kept verbatim (the guard-fork trees are
+  the semantic floor), the 12-deep exposures died. Per-seam
+  formatted lines (replay → conversion): ten uniform seams 2,695 →
+  172–173 (≈15.6x); b1 loop 2,922 → 212; b5 loop 9,401 → 3,031 (the
+  kept guard tree dominates); b13 tail 1,330 → 885 (stop-strip only
+  — no exposure existed); imp_x walk 2,884 → 272; support = 577
+  lines of local instr copies/constants + 1,209 once-per-model
+  inversion law. Text total: 43,451 → 7,969 on disk (5.5x; ≈9.5x
+  excluding the two semantic-floor trees). THE D-NUMBER (idle box,
+  bin/shard_check, whole closures; variant = scratch
+  impgen_x86_out minus the 14 claims + import-swapped xchain,
+  872/0 green): calls 1,008.4M → 814.2M (−19.3%); live peak 407.2MB
+  → 267.0MB (−34%); maxrss 1.64GB → 1.22GB (−26%); wall 4.31s →
+  3.54s; reader pair 317.1M → 205.6M; env_lookup pair 237.9M →
+  194.4M. Decisions this record opens (CERT.md §8 R3, §11 DC3, §7):
+  final dialect ratification, DC3 disposition, §7 design opening —
+  all the user's. B1b (the A1×A2 composition exercise) still rides
+  before B1 closes.
+
 - **B2 — the streaming World design note** (paper before build, the
   house pattern). The read-until-EOF World shape: the read shim's
   short-read/EOF contract (X86.md §32 discipline — syscall-direct,
