@@ -3153,9 +3153,34 @@ pin. Before the arc: harden the seams the survey found soft. Landed:
   across the whole battery (census, audits, first-mode schema drives,
   deep pio_dme).
 
-QUEUED: **0c** — arena memo scoping/eviction. Then the arc proper opens
-with RELATION-AWARE REGION STATE built at the meta/sketch region-algebra
-layer (engine-agnostic by construction), with PIO P5c-2 and the
-routing/regalloc task family as its measured consumers. Heuristic-tier
-hooks (cost, neighborhood, seed) join the TeTask record and te_hooks
-table when the first heuristic engine lands.
+- **0c:** arena memo scoping — the release lever, plus the measurement
+  that RESIZED the problem. Ops (superpose substrate, drives untouched):
+  sa_forget_holes drops every row whose consulted-hole set touches a
+  ripped hole (the perturbation-loop companion); sa_forget_mm flushes
+  the whole table (an episode boundary); sa_mm_rows counts live rows
+  (report-boundary traversal). All are VERDICT-NEUTRAL BY CONSTRUCTION:
+  the memo is agreement-keyed, so a forgotten row can only cost a
+  re-forcing — arena_probe pins the full contract (same-id zero-step
+  hits, untouched-hole spare, fresh-id re-evaluation with re-record,
+  flush sparing region-independent indirections). Rows also shed their
+  stored consulted pair list (SuRow keeps key+result; the pair list is
+  zip(SuMe holes, key), reconstructed at probe time) — whole battery
+  bit-identical including STEPS.
+  THE MEASUREMENT (800-decision pio_dme_free, depth 12, reports
+  bit-identical old vs new): live-set peak 2.49 GB -> 2.30 GB (the row
+  diet's real share: ~7.5%), but peak RSS 27.1 GB -> 26.5 GB (~2%),
+  because RSS is HEAP EXTENT, not live data: ~326 GB allocation churn
+  across 54 GCs, extent ~11x live, live_peak == live_last (the live
+  set saturates). shard#19's ~12 MB/decision attribution to memo-row
+  payload is therefore CORRECTED on the issue: the 67.6 GB CI plateau
+  is allocator/GC extent policy in the NATIVE runtime (GC pacing /
+  extent return), main-worktree scope — substrate hygiene cannot move
+  it. The forget ops stand as the heuristic tier's episode/rip-up seam
+  (live-set hygiene for long heterogeneous runs), not as an RSS fix.
+
+SLICE 0 COMPLETE. The arc proper opens with RELATION-AWARE REGION
+STATE built at the meta/sketch region-algebra layer (engine-agnostic by
+construction), with PIO P5c-2 and the routing/regalloc task family as
+its measured consumers. Heuristic-tier hooks (cost, neighborhood, seed)
+join the TeTask record and te_hooks table when the first heuristic
+engine lands.

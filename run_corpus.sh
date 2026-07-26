@@ -368,6 +368,7 @@ TARGETS=(
   tools/search/typed_superpose.shard
   tools/search/transition_mine.shard
   tools/search/protocol_probe.shard
+  tools/search/arena_probe.shard
   tools/search/theorem_scope.shard
   tools/search/profile_census.shard
   tools/search/rewrite_probe.shard
@@ -915,6 +916,20 @@ fi
 echo "=== search: superposed executor (S4b) ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/superpose.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Arena memo-scoping pin (shard#19 ask 4, slice 0c): the release lever's
+# contract on the substrate directly — a hit replays the SAME node id at
+# zero steps; sa_forget_holes spares rows over untouched holes and forces
+# fresh-id re-evaluation (same ground value, row re-recorded) for ripped
+# ones; sa_forget_mm empties the table while region-independent
+# indirections keep replaying for free. The memo is agreement-keyed, so
+# every forget is verdict-neutral by construction; this pins it.
+echo "=== search: arena memo-scoping (forget) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/arena_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

@@ -1,0 +1,151 @@
+;;; Arena memo-scoping pin: the release lever's contract, on the substrate
+;;; directly.
+;;;
+;;; The consulted-choice memo is agreement-keyed, so forgetting rows can
+;;; never change a verdict — only cost a re-forcing. Pinned here: a hit
+;;; replays the SAME node id at zero evaluation steps; forgetting an
+;;; untouched hole spares every row; forgetting a consulted hole forces
+;;; re-evaluation (fresh id, same ground value, steps burned, row
+;;; re-recorded); a full flush empties the table while region-independent
+;;; indirections keep replaying their forced node for free.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/sketch")
+(import "superpose.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader World))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta sketch *))
+(use (:: tools search superpose *))
+
+(fn ap_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "ARENA-PROBE FAIL " (append_int msg "\n")) w)))
+
+(fn ap_m () Module (Module Nil Nil Nil (FnTrie None Nil) Nil))
+
+(fn ap_g () SuG
+  (sug_compile (Grammar (list (GEnt 1 (list (IntLit 10) (IntLit 20)))))))
+
+(fn ap_force ((g SuG) (asg (List (Pair Int Int))) (a SuA) (r Int)) SuR
+  (su_whnf 10000 (ap_m) (qn (quote ap_candidate)) (IntLit 0) g asg a r))
+
+(fn ap_ground ((a SuA) (v Int)) (Option Int)
+  (match (sa_get a v)
+    ((Some (SuInt k)) (Some k))
+    (_ None)))
+
+;; step 7: after a full flush the memo is empty, but the region-independent
+;; indirection still replays its forced node at zero evaluation steps
+(fn ap_flush ((g SuG) (a SuA) (r_ind Int) (v_ind Int) (w World)) World
+  (let ((a2 (sa_forget_mm a)))
+    (if (int_eq (sa_mm_rows a2) 0)
+      (match (ap_force g Nil a2 r_ind)
+        ((SuRVal v2 a3)
+         (if (int_eq v2 v_ind)
+           (if (int_eq (sa_steps a3) (sa_steps a2))
+             (write "ARENA-FORGET HIT SCOPE FLUSH SPARE OK\n" w)
+             (ap_fail "flush: indirection replay burned steps" w))
+           (ap_fail "flush: indirection lost its forced node" w)))
+        (_ (ap_fail "flush: indirection replay" w)))
+      (ap_fail "flush: table not empty" w))))
+
+;; step 6: forgetting the consulted hole drops the rows; the next forcing
+;; re-evaluates — fresh node id, same ground value, steps burned, row back
+(fn ap_scope_hit
+  ((g SuG) (a SuA) (r_dep Int) (v10 Int) (r_ind Int) (v_ind Int) (w World))
+  World
+  (let ((a2 (sa_forget_holes a (list 1))))
+    (if (int_eq (sa_mm_rows a2) 0)
+      (match (ap_force g (list (Pair 1 0)) a2 r_dep)
+        ((SuRVal v3 a3)
+         (if (int_eq v3 v10) (ap_fail "scope: forgotten row still replayed" w)
+         (match (ap_ground a3 v3)
+           ((Some 10)
+            (if (lt (sa_steps a2) (sa_steps a3))
+              (if (int_eq (sa_mm_rows a3) 1) (ap_flush g a3 r_ind v_ind w)
+              (ap_fail "scope: re-forcing did not re-record" w))
+              (ap_fail "scope: re-forcing burned no steps" w)))
+           (_ (ap_fail "scope: re-forcing ground value" w)))))
+        (_ (ap_fail "scope: re-forcing failed" w)))
+      (ap_fail "scope: consulted hole not forgotten" w))))
+
+;; step 5: forgetting an untouched hole spares every row and the hit
+(fn ap_scope_miss
+  ((g SuG) (a SuA) (r_dep Int) (v10 Int) (r_ind Int) (v_ind Int) (w World))
+  World
+  (let ((a2 (sa_forget_holes a (list 9))))
+    (if (int_eq (sa_mm_rows a2) 2)
+      (match (ap_force g (list (Pair 1 0)) a2 r_dep)
+        ((SuRVal v3 a3)
+         (if (int_eq v3 v10) (ap_scope_hit g a3 r_dep v10 r_ind v_ind w)
+         (ap_fail "spare: surviving row did not replay" w)))
+        (_ (ap_fail "spare: forcing failed" w)))
+      (ap_fail "spare: untouched forget dropped rows" w))))
+
+;; step 4: the second alternative records its own row
+(fn ap_second
+  ((g SuG) (a SuA) (r_dep Int) (v10 Int) (r_ind Int) (v_ind Int) (w World))
+  World
+  (match (ap_force g (list (Pair 1 1)) a r_dep)
+    ((SuRVal v20 a2)
+     (match (ap_ground a2 v20)
+       ((Some 20)
+        (if (int_eq (sa_mm_rows a2) 2)
+          (ap_scope_miss g a2 r_dep v10 r_ind v_ind w)
+          (ap_fail "second: row count" w)))
+       (_ (ap_fail "second: ground value" w))))
+    (_ (ap_fail "second: forcing failed" w))))
+
+;; step 3: an agreeing assignment replays the SAME node id at zero steps
+(fn ap_hit
+  ((g SuG) (a SuA) (r_dep Int) (v10 Int) (r_ind Int) (v_ind Int) (w World))
+  World
+  (match (ap_force g (list (Pair 1 0)) a r_dep)
+    ((SuRVal v2 a2)
+     (if (int_eq v2 v10)
+       (if (int_eq (sa_steps a2) (sa_steps a))
+         (ap_second g a2 r_dep v10 r_ind v_ind w)
+         (ap_fail "hit: replay burned steps" w))
+       (ap_fail "hit: replay returned a different node" w)))
+    (_ (ap_fail "hit: forcing failed" w))))
+
+;; step 2: a consult-dependent forcing records one row
+(fn ap_dep ((g SuG) (a SuA) (r_dep Int) (r_ind Int) (v_ind Int) (w World)) World
+  (match (ap_force g (list (Pair 1 0)) a r_dep)
+    ((SuRVal v10 a2)
+     (match (ap_ground a2 v10)
+       ((Some 10)
+        (if (int_eq (sa_mm_rows a2) 1) (ap_hit g a2 r_dep v10 r_ind v_ind w)
+        (ap_fail "dep: row count" w)))
+       (_ (ap_fail "dep: ground value" w))))
+    (_ (ap_fail "dep: forcing failed" w))))
+
+;; step 1: a consult-free forcing becomes an indirection, never a row
+(fn ap_ind ((g SuG) (a SuA) (r_dep Int) (r_ind Int) (w World)) World
+  (match (ap_force g Nil a r_ind)
+    ((SuRVal v_ind a2)
+     (match (ap_ground a2 v_ind)
+       ((Some 42)
+        (if (int_eq (sa_mm_rows a2) 0)
+          (match (sa_get a2 r_ind)
+            ((Some (SuInd target))
+             (if (int_eq target v_ind) (ap_dep g a2 r_dep r_ind v_ind w)
+             (ap_fail "ind: indirection target" w)))
+            (_ (ap_fail "ind: thunk did not become an indirection" w)))
+          (ap_fail "ind: consult-free forcing recorded a row" w)))
+       (_ (ap_fail "ind: ground value" w))))
+    (_ (ap_fail "ind: forcing failed" w))))
+
+(fn ap_run ((w World)) World
+  (let ((g (ap_g)))
+    (match (su_thunk1 (sa_new) (hole 1) Nil)
+      ((Pair r_dep a1)
+       (match (su_thunk1 a1 (IntLit 42) Nil)
+         ((Pair r_ind a2) (ap_ind g a2 r_dep r_ind w)))))))
+
+(fn main ((w World)) World (ap_run w))

@@ -107,7 +107,10 @@
 ;; (paid once for the whole drive). Blocked forcings record nothing.
 (type SuMR (SuMFail) (SuMVal Int))
 
-(type SuRow (SuRow (List Int) (List (Pair Int Int)) SuMR))
+;; a row stores only its choice key and result: the hole list lives once on
+;; the covering SuMe, and the consulted pair list a hit must re-charge is
+;; exactly zip(holes, key), reconstructed at probe time
+(type SuRow (SuRow (List Int) SuMR))
 
 (type SuRowBr (SuRowLeaf) (SuRowNode (Option (List SuRow)) SuRowBr SuRowBr))
 
@@ -381,7 +384,7 @@
        ((Some key)
         (match (mp_rows rows key)
           (None (mp_probe rest asg))
-          ((Some (SuRow _ cons res)) (MpHit res cons))))))))
+          ((Some (SuRow _ res)) (MpHit res (cs_zip hs key)))))))))
 
 (fn mr_hash_go ((key (List Int)) (acc Int)) Int
   (measure (struct key))
@@ -426,8 +429,7 @@
     (Nil None)
     ((Cons row rest)
      (match row
-       ((SuRow k _ _)
-        (if (ilist_eq k key) (Some row) (mp_rows_bucket rest key)))))))
+       ((SuRow k _) (if (ilist_eq k key) (Some row) (mp_rows_bucket rest key)))))))
 
 (fn mp_rows ((rows SuRowBr) (key (List Int))) (Option SuRow)
   (match (srb_get rows (+ (mr_hash_go key 17) 1) 64)
@@ -440,27 +442,22 @@
       (None (srb_set rows j (Cons row Nil) 64))
       ((Some bucket) (srb_set rows j (Cons row bucket) 64)))))
 
-(fn me_record
-  ((es (List SuMe))
-   (hs (List Int))
-   (key (List Int))
-   (cons (List (Pair Int Int)))
-   (res SuMR))
+(fn me_record ((es (List SuMe)) (hs (List Int)) (key (List Int)) (res SuMR))
   (List SuMe)
   (measure (struct es))
   (match es
-    (Nil (Cons (SuMe hs (srb_put (SuRowLeaf) key (SuRow key cons res))) Nil))
+    (Nil (Cons (SuMe hs (srb_put (SuRowLeaf) key (SuRow key res))) Nil))
     ((Cons (SuMe old_hs rows) rest)
      (if (ilist_eq hs old_hs)
-       (Cons (SuMe old_hs (srb_put rows key (SuRow key cons res))) rest)
-       (Cons (SuMe old_hs rows) (me_record rest hs key cons res))))))
+       (Cons (SuMe old_hs (srb_put rows key (SuRow key res))) rest)
+       (Cons (SuMe old_hs rows) (me_record rest hs key res))))))
 
 ;; record a completed forcing under its consulted set
 (fn mm_record ((a SuA) (r Int) (cons (List (Pair Int Int))) (res SuMR)) SuA
   (match a
     ((SuA sz t k mm te tc cs)
      (let ((hs (cs_holes cons)) (key (cs_choices cons)) (es (mm_find mm r)))
-       (SuA sz t k (mm_put mm r (me_record es hs key cons res)) te tc cs)))))
+       (SuA sz t k (mm_put mm r (me_record es hs key res)) te tc cs)))))
 
 (fn cs_holes ((cons (List (Pair Int Int)))) (List Int)
   (measure (struct cons))
@@ -473,6 +470,110 @@
   (match cons
     (Nil Nil)
     ((Cons (Pair _ c) rest) (Cons c (cs_choices rest)))))
+
+;; the inverse of the cs_holes/cs_choices projections: rebuild the consulted
+;; pair list a hit re-charges (both lists come from one recorded set, so the
+;; lengths agree by construction)
+(fn cs_zip ((hs (List Int)) (key (List Int))) (List (Pair Int Int))
+  (measure (struct hs))
+  (match hs
+    (Nil Nil)
+    ((Cons h hrest)
+     (match key
+       (Nil Nil)
+       ((Cons c crest) (Cons (Pair h c) (cs_zip hrest crest)))))))
+
+;; ---- memo scoping: the release lever -----------------------------------------
+;; The memo is agreement-keyed — a row replays only under assignments that
+;; agree with its exact consulted choices — so forgetting rows can never
+;; change a verdict, only cost a re-forcing. These are the substrate's
+;; capacity-hygiene ops (shard#19 ask 4): a perturbation loop forgets the
+;; rows touching the holes it rips; an episode boundary flushes the whole
+;; table. Region-INDEPENDENT results are plain indirections in the node trie
+;; and survive every forget — paid once per drive stays paid.
+
+(fn srb_rows_len ((rows (List SuRow))) Int
+  (measure (struct rows))
+  (match rows
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (srb_rows_len rest)))))
+
+(fn srb_count ((t SuRowBr)) Int
+  (measure (struct t))
+  (match t
+    ((SuRowLeaf) 0)
+    ((SuRowNode v l r)
+     (+
+       (match v
+         (None 0)
+         ((Some rows) (srb_rows_len rows)))
+       (+ (srb_count l) (srb_count r))))))
+
+(fn me_count ((es (List SuMe))) Int
+  (measure (struct es))
+  (match es
+    (Nil 0)
+    ((Cons (SuMe _ rows) rest) (+ (srb_count rows) (me_count rest)))))
+
+(fn mmb_count ((t SuMmBr)) Int
+  (measure (struct t))
+  (match t
+    ((SuMmLeaf) 0)
+    ((SuMmNode v l r)
+     (+
+       (match v
+         (None 0)
+         ((Some es) (me_count es)))
+       (+ (mmb_count l) (mmb_count r))))))
+
+;; live memo rows (a traversal: call at report boundaries, not per decision)
+(fn sa_mm_rows ((a SuA)) Int (mmb_count (sa_mm a)))
+
+(fn hs_member ((h Int) (hs (List Int))) Bool
+  (measure (struct hs))
+  (match hs
+    (Nil False)
+    ((Cons x rest) (if (int_eq x h) True (hs_member h rest)))))
+
+(fn me_touches ((hs (List Int)) (ripped (List Int))) Bool
+  (measure (struct hs))
+  (match hs
+    (Nil False)
+    ((Cons h rest) (if (hs_member h ripped) True (me_touches rest ripped)))))
+
+(fn mes_keep ((es (List SuMe)) (ripped (List Int))) (List SuMe)
+  (measure (struct es))
+  (match es
+    (Nil Nil)
+    ((Cons (SuMe hs rows) rest)
+     (if (me_touches hs ripped) (mes_keep rest ripped)
+     (Cons (SuMe hs rows) (mes_keep rest ripped))))))
+
+(fn mmb_forget ((t SuMmBr) (ripped (List Int))) SuMmBr
+  (measure (struct t))
+  (match t
+    ((SuMmLeaf) (SuMmLeaf))
+    ((SuMmNode v l r)
+     (SuMmNode
+       (match v
+         (None None)
+         ((Some es)
+          (match (mes_keep es ripped)
+            (Nil None)
+            ((Cons e rest) (Some (Cons e rest))))))
+       (mmb_forget l ripped)
+       (mmb_forget r ripped)))))
+
+;; drop every row whose consulted-hole set touches a ripped hole
+(fn sa_forget_holes ((a SuA) (ripped (List Int))) SuA
+  (match a
+    ((SuA sz t k mm te tc cs) (SuA sz t k (mmb_forget mm ripped) te tc cs))))
+
+;; drop the whole memo (an episode boundary); interning, indirections and
+;; the node trie survive, so replays of region-independent work stay free
+(fn sa_forget_mm ((a SuA)) SuA
+  (match a
+    ((SuA sz t k _ te tc cs) (SuA sz t k (SuMmLeaf) te tc cs))))
 
 ;; ---- choices: hole id -> chosen alternative (assoc; -1 = absent) ------------
 
