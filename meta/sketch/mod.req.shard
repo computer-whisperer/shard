@@ -2660,6 +2660,116 @@
        (skr_pairs_drop forbids holes)
        (if keep_rels rels (skr_rels_drop rels holes))))))
 
+;; ---- relational entailment decisions --------------------------------------
+;;
+;; The relation-aware evaluator asks exactly one question: do this region's
+;; relation events already decide subtree(h0) == subtree(h1)?  Only entailed
+;; structure answers.  An eq event entails every pointwise pair (it is a
+;; conjunction), so entailed equality is reachability over its edges; a ne
+;; event entails a pair only when it is a SINGLETON (tuple-difference over
+;; two or more pairs is a disjunction), lifted across eq classes.  Anything
+;; else is Unknown — the sound pre-relational behavior.  Choices and forbids
+;; are the caller's business; a decision on an empty region is vacuous.
+
+(type SkRelDecideR (SkRelDecideEq) (SkRelDecideNe) (SkRelDecideUnknown))
+
+(fn skd_eq_onto
+  ((lefts (List Int)) (rights (List Int)) (acc (List (Pair Int Int))))
+  (List (Pair Int Int))
+  (measure (struct lefts))
+  (match lefts
+    (Nil acc)
+    ((Cons l lrest)
+     (match rights
+       (Nil acc)
+       ((Cons r rrest) (skd_eq_onto lrest rrest (Cons (Pair l r) acc)))))))
+
+(fn skd_eq_edges ((rels (List SkRel)) (acc (List (Pair Int Int))))
+  (List (Pair Int Int))
+  (measure (struct rels))
+  (match rels
+    (Nil acc)
+    ((Cons rel rest)
+     (match rel
+       ((SkRelEq lefts rights)
+        (skd_eq_edges rest (skd_eq_onto lefts rights acc)))
+       ((SkRelNe _ _) (skd_eq_edges rest acc))))))
+
+(fn skd_edges_len ((edges (List (Pair Int Int)))) Int
+  (measure (struct edges))
+  (match edges
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (skd_edges_len rest)))))
+
+(fn skd_mem ((hole_id Int) (set (List Int))) Bool
+  (measure (struct set))
+  (match set
+    (Nil False)
+    ((Cons head rest) (if (int_eq hole_id head) True (skd_mem hole_id rest)))))
+
+(fn skd_singleton ((values (List Int))) (Option Int)
+  (match values
+    (Nil None)
+    ((Cons head rest)
+     (match rest
+       (Nil (Some head))
+       ((Cons _ _) None)))))
+
+(type SkdPassR (SkdPass (List Int) (List (Pair Int Int)) Bool))
+
+;; One growth pass: move every edge incident to the set into it.  A growing
+;; pass consumes at least one edge, so edge-count passes reach the fixpoint.
+(fn skd_pass
+  ((edges (List (Pair Int Int)))
+   (set (List Int))
+   (missed (List (Pair Int Int)))
+   (grew Bool))
+  SkdPassR
+  (measure (struct edges))
+  (match edges
+    (Nil (SkdPass set missed grew))
+    ((Cons (Pair a b) rest)
+     (if (skd_mem a set)
+       (if (skd_mem b set) (skd_pass rest set missed grew)
+       (skd_pass rest (Cons b set) missed True))
+     (if (skd_mem b set) (skd_pass rest (Cons a set) missed True)
+     (skd_pass rest set (Cons (Pair a b) missed) grew))))))
+
+(fn skd_reach ((fuel Int) (edges (List (Pair Int Int))) (set (List Int)))
+  (List Int)
+  (measure fuel)
+  (if (lt fuel 1) set
+  (match (skd_pass edges set Nil False)
+    ((SkdPass set2 missed grew)
+     (if grew (skd_reach (- fuel 1) missed set2) set2)))))
+
+(fn skd_ne_hits ((rels (List SkRel)) (seta (List Int)) (setb (List Int))) Bool
+  (measure (struct rels))
+  (match rels
+    (Nil False)
+    ((Cons rel rest)
+     (match rel
+       ((SkRelEq _ _) (skd_ne_hits rest seta setb))
+       ((SkRelNe lefts rights)
+        (match (skd_singleton lefts)
+          (None (skd_ne_hits rest seta setb))
+          ((Some l)
+           (match (skd_singleton rights)
+             (None (skd_ne_hits rest seta setb))
+             ((Some r)
+              (if (if (skd_mem l seta) (skd_mem r setb) False) True
+              (if (if (skd_mem l setb) (skd_mem r seta) False) True
+              (skd_ne_hits rest seta setb))))))))))))
+
+(fn sk_rels_decide ((rels (List SkRel)) (h0 Int) (h1 Int)) SkRelDecideR
+  (if (int_eq h0 h1) (SkRelDecideEq)
+  (let ((edges (skd_eq_edges rels Nil)))
+    (let ((fuel (+ (skd_edges_len edges) 1)))
+      (let ((seta (skd_reach fuel edges (Cons h0 Nil))))
+        (if (skd_mem h1 seta) (SkRelDecideEq)
+        (let ((setb (skd_reach fuel edges (Cons h1 Nil))))
+          (if (skd_ne_hits rels seta setb) (SkRelDecideNe) (SkRelDecideUnknown)))))))))
+
 ;; ---- direct membership (cube first-match walk + relations on bindings) ----
 
 (type MbAltR (MbAltErr (List Int)) (MbAltNo) (MbAltOk (List (Pair Int Expr))))

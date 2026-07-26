@@ -1635,16 +1635,19 @@
                   ((MsRedex _)
                    (SuSErr "superpose: inconsistent residual verdict"))
                   (_
-                    ;; Blocked (single hole or R2's hole pair — the prepared
-                    ;; partition grounds pairs until R3 splits relationally).
+                    ;; Blocked (single hole or a hole pair — the prepared
+                    ;; partition answers pairs with relational splits, R3).
                     ;; The semantic query passed without demanding the theorem's
                     ;; blocked choice.  Every refinement therefore preserves that
                     ;; pass.  Finish the theorem-only relation tree now, coalescing
                     ;; equal verdict classes into exact restricted regions.
+                    ;; Ground forks and relational splits both count as drive
+                    ;; branch boundaries.
                     (match
                       (ms_partition_prepared 1000000 prepared region candidate)
                       ((MsPlanPartitionErr msg) (SuSErr msg))
-                      ((MsPlanPartitionOk redex clear partition_forks)
+                      ((MsPlanPartitionOk redex clear partition_forks
+                         partition_splits)
                        (match
                          (su_count_partition
                            candidate
@@ -1673,7 +1676,7 @@
                             (+ killed redex_count)
                             (+ constrained redex_count)
                             (+ regions terminals)
-                            (+ forks partition_forks)
+                            (+ forks (+ partition_forks partition_splits))
                             sols2))))))))))))))))
 
 (fn su_drive_query
@@ -1914,11 +1917,11 @@
     (match jobs
       (Nil (SuTheoryPartitionOk redex clear forks))
       ((Cons region rest)
-       ;; R2: pair verdicts are grounded to their first hole here; R3 turns
-       ;; them into relational splits over the region's SkRel field.
-       (match
-         (ms_verdict_ground
-           (ms_check_prepared_restricted 1000000 prepared region candidate))
+       ;; R3: a pair verdict is answered with a relational split, and the
+       ;; relation-aware checker decides the pair inside each child on its
+       ;; re-evaluation.  Door or count refusals fall back to the ground
+       ;; fork on the pair's first hole — soundness never rides the pair.
+       (match (ms_check_prepared_restricted 1000000 prepared region candidate)
          ((MsErr msg) (SuTheoryPartitionErr msg))
          ((MsRedex _)
           (su_theory_partition
@@ -1940,27 +1943,106 @@
             redex
             (Cons region clear)
             forks))
-         ((MsBlockedPair _ _)
-          (SuTheoryPartitionErr
-            "theorem partition: ungrounded relational block"))
+         ((MsBlockedPair h0 h1)
+          (match (sk_region_split_pair (sug_raw g) region h0 h1)
+            ((SkRegionSplitErr _)
+             (su_theory_ground
+               (- fuel 1)
+               prepared
+               candidate
+               g
+               region
+               h0
+               rest
+               redex
+               clear
+               forks))
+            ((SkRegionSplitOk eq_child ne_child)
+             (match (mse_child_count candidate (sug_raw g) eq_child)
+               (None
+                 (su_theory_ground
+                   (- fuel 1)
+                   prepared
+                   candidate
+                   g
+                   region
+                   h0
+                   rest
+                   redex
+                   clear
+                   forks))
+               ((Some eq_n)
+                (match (mse_child_count candidate (sug_raw g) ne_child)
+                  (None
+                    (su_theory_ground
+                      (- fuel 1)
+                      prepared
+                      candidate
+                      g
+                      region
+                      h0
+                      rest
+                      redex
+                      clear
+                      forks))
+                  ((Some ne_n)
+                   (su_theory_partition
+                     (- fuel 1)
+                     prepared
+                     candidate
+                     g
+                     (mse_push_counted
+                       eq_child
+                       eq_n
+                       (mse_push_counted ne_child ne_n rest))
+                     redex
+                     clear
+                     (+ forks 1)))))))))
          ((MsBlocked hole_id)
-          (match (sug_alts g hole_id)
-            (None
-              (SuTheoryPartitionErr
-                "theorem partition references an unknown occurrence"))
-            ((Some alts)
-             (match (su_fork g alts region hole_id (- (alts_len alts) 1) rest)
-               ((SuForkErr msg) (SuTheoryPartitionErr msg))
-               ((SuForkOk jobs2)
-                (su_theory_partition
-                  (- fuel 1)
-                  prepared
-                  candidate
-                  g
-                  jobs2
-                  redex
-                  clear
-                  (+ forks 1))))))))))))
+          (su_theory_ground
+            (- fuel 1)
+            prepared
+            candidate
+            g
+            region
+            hole_id
+            rest
+            redex
+            clear
+            forks)))))))
+
+(fn su_theory_ground
+  ((fuel Int)
+   (prepared MsPrepared)
+   (candidate Expr)
+   (g SuG)
+   (region SkRegion)
+   (hole_id Int)
+   (rest (List SkRegion))
+   (redex Int)
+   (clear (List SkRegion))
+   (forks Int))
+  SuTheoryPartitionR
+  (measure fuel)
+  (if (lt fuel 1)
+    (SuTheoryPartitionErr "schema theorem partition fuel exhausted")
+    (match (sug_alts g hole_id)
+      (None
+        (SuTheoryPartitionErr
+          "theorem partition references an unknown occurrence"))
+      ((Some alts)
+       (match (su_fork g alts region hole_id (- (alts_len alts) 1) rest)
+         ((SuForkErr msg) (SuTheoryPartitionErr msg))
+         ((SuForkOk jobs2)
+          (su_theory_partition
+            (- fuel 1)
+            prepared
+            candidate
+            g
+            jobs2
+            redex
+            clear
+            (+ forks 1))))))))
 
 (fn su_find_query_prepared
   ((fuel Int)
@@ -2085,8 +2167,8 @@
                   ((MsRedex _)
                    (SuFindErr "superpose: inconsistent residual verdict"))
                   (_
-                    ;; Blocked (single hole or R2's hole pair — the theorem
-                    ;; partition grounds pairs until R3 splits relationally).
+                    ;; Blocked (single hole or a hole pair — the theorem
+                    ;; partition answers pairs with relational splits, R3).
                     (match
                       (su_theory_partition
                         1000000
@@ -2237,7 +2319,7 @@
       ((Cons region rest)
        (match (ms_partition_prepared fuel prepared region candidate)
          ((MsPlanPartitionErr msg) (SuPrepartitionErr msg))
-         ((MsPlanPartitionOk redex clear partition_forks)
+         ((MsPlanPartitionOk redex clear partition_forks partition_splits)
           (match (su_count_partition candidate grammar redex Nil 0 0 Nil)
             ((SuPartitionCountErr msg) (SuPrepartitionErr msg))
             ((SuPartitionCountOk here _ terminals _)
@@ -2250,7 +2332,7 @@
                (su_regions_append clear clear_jobs)
                (+ redex_count here)
                (+ redex_regions terminals)
-               (+ forks partition_forks))))))))))
+               (+ forks (+ partition_forks partition_splits)))))))))))
 
 (fn su_drive_query_theorem_first
   ((fuel Int)
@@ -2325,9 +2407,11 @@
 
 ;; ---- region membership + representatives (the AGREE gate) ---------------------
 
-;; Exact region gates use meta/sketch's restricted addressing.
+;; Exact region gates use meta/sketch's restricted addressing.  The
+;; representative rides the first-productive walk: identical to unrank-0 on
+;; cube regions, and defined on relational regions (where rank refuses).
 (fn su_region_rep ((g Grammar) (region SkRegion) (body Expr)) (Option Expr)
-  (match (sk_region_unrank body g region 0)
+  (match (sk_region_first body g region)
     ((SkEErr _) None)
     ((SkEOk candidate) (Some candidate))))
 

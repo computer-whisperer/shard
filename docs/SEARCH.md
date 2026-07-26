@@ -3377,3 +3377,93 @@ re-pin).  Whole existing battery bit-identical: region_probe both
 lines, rev_deep d3 (390/143/3,969), the ground rev pin (108, 7788),
 constraint/guard/affine/int-order probes, typed_observer_conjunctive
 audit, typed_superpose as a check target (323/0).
+
+### R3 — relation-aware evaluation + drive consumption (LANDED 2026-07-26)
+
+**What landed.**  The evaluator can now SEE a region's relation events, so
+a relational split child makes progress instead of re-blocking on its own
+pair.  meta/sketch gained the entailment decision `sk_rels_decide`
+(`Eq`/`Ne`/`Unknown`): entailed equality is reachability over the
+pointwise edges of eq events (each eq event is a conjunction); a ne event
+entails a pair only when it is a SINGLETON (tuple-difference over two or
+more pairs is a disjunction), lifted across eq classes; everything else —
+including every vector ne — answers Unknown, the sound pre-relational
+behavior.  meta/search threads `(List SkRel)` beside the assignment
+through the whole verdict layer (equality walkers, nonlinear matcher,
+guards, rules/spine/anywhere scans, `ms_check_facts`), and `ms_equal`'s
+both-open-heads case consults the decision BEFORE the domain scan: an
+entailed answer holds for every region member, so the IFF contract
+carries it directly.  The region wrappers (`ms_check_region`,
+`ms_check_prepared_region`, `ms_check_prepared_restricted`) extract the
+region's rels; the bare-assignment entries (`ms_check`,
+`ms_check_prepared`, `ms_conditioned_root`, …) pass none and stay
+bit-identical.  The law that keeps memo reuse sound is now three-sided
+and holds BY CONSTRUCTION: the semantic evaluator sees only
+`sk_region_choices` (relations, like forbids, never reach
+consulted-choice memo keys), constraint verdicts are computed fresh per
+region (never memoized), and the prepare-time fact compilers evaluate
+with NO relations (facts must be reusable under every region).
+
+**Drive consumption.**  Both R2 degradation points flipped:
+`mspp_partition_go` answers a pair verdict with `sk_region_split_pair`
+and RE-QUEUES both children (the verdict pair is a hint, not an IFF —
+relation-aware re-evaluation decides the pair inside each child), and
+`su_theory_partition` does the same in the find/theorem path, with the
+factored `su_theory_ground` as the door/count-refusal fallback.
+`MsPlanPartitionOk` carries ground forks and relational splits
+separately (mirroring the equality partition); at the SuS drive boundary
+both fold into the existing branch-boundary counter.  The R2
+compatibility door `ms_verdict_ground` is DELETED — its only consumer
+was the flip site.  Progress terminates: every split adds the singleton
+edge that decides its own pair in both children, and a child made empty
+by later contradictory edges (a vector-ne violation the decision cannot
+see) counts to zero exactly and is dropped.  `su_region_rep` now rides
+`sk_region_first` instead of unrank-0 — identical on cube regions,
+defined on relational passing regions, so the representative/AGREE gates
+accept relational solutions.
+
+**Pinned (all counts hand-computed first, confirmed on the first run).**
+region_probe line 2 gained the decision pins
+(DECIDE-TRANS/NE-LIFT/VEC-UNKNOWN/REFL).  The nonlinear probe pins
+relation-aware checking end to end: an eq relational region drives the
+prepared verdict to the cited Redex and a ne region to Clear
+(REL-EQ-REDEX / REL-NE-CLEAR — the split-child progress property); the
+distinct guard is decided by eq/ne relation events (GUARD-REL-EQ/NE);
+the prepared plan partition now SPLITS the diagonal — 3+6 members in
+1+1 regions, 0 forks, 1 split (the R2 degradation pin was 3+3 in 3
+regions, F4) — and the non-isomorphic plan case falls back to ground
+(1+3 in 1+2, F2S0).  constraint_superpose_probe gained the DRIVE-level
+pin: a nonlinear diagonal rule before a constant-pass query settles as
+FOUND 6 + KILLED/CONSTRAINED 3 in 2 terminal regions and ONE branch
+boundary (the relational split), and the relational passing region
+yields an in-region first-walk representative (DIAG-SPLIT … REL-SOL-REP).
+
+**The measurement — the named census pins do NOT move.**  All three
+ratified consumers are BIT-IDENTICAL under R3: the depth-2 nonlinear
+sort census re-ran to exactly 6,851 regions / 1,438 forks / 50,450 steps
+(FOUND 4, constraint-killed 87,834,384); the x86 transition window
+(theorem-first) to exactly 625 / 411 / 23,267 with enumerative agreement;
+the PIO transition window to exactly 45 / 44 / 2,408 (verified against a
+fresh 653fa78 baseline run).  The arc opener's "expected to drop" prior
+is refuted for these task shapes, and the reason is structural: a drive
+split fires only when a PAIR VERDICT survives to a partition site, but
+in the sort census the semantic-first schedule demands the operand holes
+(forking them) before any pass-with-blocked-pair state arises, and the
+two window grammars pack the guarded operands inside whole-instruction
+alternatives, where nested pairs degrade to the outer-hole consensus by
+design.  The machinery is exercised and pinned at every level (matcher,
+partition, theorem path, drive, solutions) by the probes above; whether
+a MEASURED consumer benefits is a property of task shape — R5 should
+select for shapes whose pairs survive demand (theorem-first over
+operand-level holes, e.g. the delay-normal PIO wrapper's nonlinear MovOp
+family) rather than expect the existing pins to drop.
+
+**Battery.**  Everything else bit-identical: region_probe line 1, the
+superpose rev pin (443/133/7,777), rev_deep d3 (390/143/3,969), the
+pure benchmarks, guard/affine/int-order/constraint/spine/symbolic
+probes (the affine plan partition now also pins splits = 0), the
+typed audits (append/observer/imp/pio-square/dme-window), first-mode
+tasks, and the check targets (meta/sketch, meta/search 8/0, superpose
+33/0, typed_superpose 323/0, typed_expr 323/0, pure_program 33/0);
+new measure sidecars machine-minted by prove for the decision kit, the
+threaded SCCs, and the su_theory SCC.

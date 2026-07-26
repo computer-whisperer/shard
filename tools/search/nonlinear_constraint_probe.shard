@@ -179,13 +179,16 @@
     ((Cons (MsCitedRegion cited _) rest)
      (if (qname_eq name cited) (ncp_cited_name name rest) False))))
 
+;; R3: the prepared plan answers the pair with ONE relational split, and the
+;; relation-aware checker decides each child terminally on its re-evaluation:
+;; the whole eq child is the cited redex, the whole ne child is clear.
 (fn ncp_plan_partition
   ((prepared MsPrepared) (grammar Grammar) (rule_name QName) (w World)) World
   (let ((space (ncp_pair (hole 0) (hole 1))))
     (match
       (ms_partition_prepared 1000 prepared (sk_empty_region) space)
       ((MsPlanPartitionErr msg) (ncp_fail msg w))
-      ((MsPlanPartitionOk redex clear forks)
+      ((MsPlanPartitionOk redex clear forks splits)
        (match (ncp_cited_count space grammar redex 0)
          (None (ncp_fail "plan redex partition count" w))
          ((Some redex_count)
@@ -194,19 +197,75 @@
             ((Some clear_count)
              (if (int_eq redex_count 3)
                (if (int_eq clear_count 6)
-                 (if (int_eq (ncp_cited_len redex) 3)
-                   (if (int_eq (ncp_regions_len clear) 3)
-                     (if (int_eq forks 4)
-                       (if (ncp_cited_name rule_name redex)
-                         (if (ncp_regions_each_count space grammar clear 2)
-                           (ncp_late grammar w)
-                           (ncp_fail "plan clear rows were not coalesced" w))
-                         (ncp_fail "plan partition citation" w))
+                 (if (int_eq (ncp_cited_len redex) 1)
+                   (if (int_eq (ncp_regions_len clear) 1)
+                     (if (int_eq forks 0)
+                       (if (int_eq splits 1)
+                         (if (ncp_cited_name rule_name redex)
+                           (if (ncp_regions_each_count space grammar clear 6)
+                             (ncp_plan_fallback grammar w)
+                             (ncp_fail "plan clear rows were not coalesced" w))
+                           (ncp_fail "plan partition citation" w))
+                         (ncp_fail "plan partition split count" w))
                        (ncp_fail "plan partition fork count" w))
                      (ncp_fail "plan clear region count" w))
                    (ncp_fail "plan redex region count" w))
                  (ncp_fail "plan clear coverage" w))
                (ncp_fail "plan redex coverage" w))))))))))
+
+;; Non-isomorphic overlapping domains at the PLAN level: the split door
+;; refuses and the ground fallback reproduces the pre-relational refinement
+;; exactly (1 cited + 3 clear members in 1+2 regions, two ground forks).
+(fn ncp_plan_fallback ((grammar Grammar) (w World)) World
+  (match (ncp_rule)
+    ((TrsRuleErr msg) (ncp_fail msg w))
+    ((TrsRuleOk rule)
+     (match (trs_profile (Cons rule Nil))
+       ((TrsProfileErr msg) (ncp_fail msg w))
+       ((TrsProfileOk profile)
+        (match (trs_partition_formation profile)
+          ((TrsProfileFormationErr msg) (ncp_fail msg w))
+          ((TrsProfileFormationOk projected)
+           (match
+             (ms_plan
+               (trs_profile_residual projected)
+               (trs_empty_root_profile))
+             ((MsPlanErr msg) (ncp_fail msg w))
+             ((MsPlanOk plan)
+              (let ((offset (ncp_grammar_offset)))
+                (match (ms_prepare 1000 plan offset)
+                  ((MsPrepareErr msg) (ncp_fail msg w))
+                  ((MsPrepareOk prepared)
+                   (let ((space (ncp_pair (hole 0) (hole 1))))
+                     (match
+                       (ms_partition_prepared
+                         1000 prepared (sk_empty_region) space)
+                       ((MsPlanPartitionErr msg) (ncp_fail msg w))
+                       ((MsPlanPartitionOk redex clear forks splits)
+                        (match (ncp_cited_count space offset redex 0)
+                          (None (ncp_fail "plan fallback redex count" w))
+                          ((Some redex_count)
+                           (match (ncp_regions_count space offset clear 0)
+                             (None (ncp_fail "plan fallback clear count" w))
+                             ((Some clear_count)
+                              (if (int_eq redex_count 1)
+                                (if (int_eq clear_count 3)
+                                  (if (int_eq (ncp_cited_len redex) 1)
+                                    (if (int_eq (ncp_regions_len clear) 2)
+                                      (if (int_eq forks 2)
+                                        (if (int_eq splits 0)
+                                          (ncp_late grammar w)
+                                          (ncp_fail
+                                            "plan fallback split count" w))
+                                        (ncp_fail
+                                          "plan fallback fork count" w))
+                                      (ncp_fail
+                                        "plan fallback clear regions" w))
+                                    (ncp_fail
+                                      "plan fallback redex regions" w))
+                                  (ncp_fail "plan fallback clear coverage" w))
+                                (ncp_fail
+                                  "plan fallback redex coverage" w)))))))))))))))))))))
 
 ;; Shared expectation harness for the exact equality partitions: pins the
 ;; region-list shapes, the member coverage, and both boundary counters.
@@ -326,7 +385,35 @@
         (match
           (ms_conditioned_root
             128 Nil grammar Nil conditioned (ncp_pair (hole 0) (hole 1)))
-          ((MsBlockedPair 0 1) (ncp_plan_partition prepared grammar rule_name w))
+          ((MsBlockedPair 0 1)
+           ;; R3: relation events decide the guard.  An entailed eq refutes
+           ;; the distinctness guard (Clear); an entailed ne satisfies it
+           ;; (the redex fires).
+           (match
+             (ms_conditioned_root_language
+               128
+               Nil
+               (ms_language_grammar grammar)
+               Nil
+               (Cons (SkRelEq (Cons 0 Nil) (Cons 1 Nil)) Nil)
+               conditioned
+               (ncp_pair (hole 0) (hole 1)))
+             ((MsClear)
+              (match
+                (ms_conditioned_root_language
+                  128
+                  Nil
+                  (ms_language_grammar grammar)
+                  Nil
+                  (Cons (SkRelNe (Cons 0 Nil) (Cons 1 Nil)) Nil)
+                  conditioned
+                  (ncp_pair (hole 0) (hole 1)))
+                ((MsRedex q)
+                 (if (qname_eq q (ncp_q (quote pair_distinct)))
+                   (ncp_plan_partition prepared grammar rule_name w)
+                   (ncp_fail "distinct guard ne citation" w)))
+                (_ (ncp_fail "distinct guard under ne relation" w))))
+             (_ (ncp_fail "distinct guard under eq relation" w))))
           (_ (ncp_fail "distinct guard pair verdict" w))))))))
 
 (fn ncp_prepared_regions
@@ -357,14 +444,41 @@
                      1000 prepared equal (ncp_pair (hole 0) (hole 1)))
                    ((MsRedex q)
                     (if (qname_eq q rule_name)
-                      (ncp_partition
-                        prepared grammar rule_name
-                        (write
-                          "META-SEARCH-NONLINEAR-PROBE RESIDUAL DISJOINT-CLEAR SHARED-EQUAL PAIR-0/1 EQUAL-REDEX UNEQUAL-CLEAR RELAXED-PREPARED-3 REGION-EQ/NE PARTITION EQ3+NE6 IN 1+1/S1 FALLBACK-1+3/F2 CONJ-9+72/F4S3 GUARD-PAIR PLAN-GROUNDED-3+3/F4 OK\n"
-                          w))
+                      (ncp_relational_regions prepared grammar rule_name w)
                       (ncp_fail "prepared equal region citation" w)))
                    (_ (ncp_fail "prepared equal restricted region" w))))))))
           (_ (ncp_fail "prepared unequal restricted region" w))))))))
+
+;; R3: a relational region DECIDES the pair inside the checker — the exact
+;; property that makes a relational split child progress instead of
+;; re-blocking on its own pair.
+(fn ncp_relational_regions
+  ((prepared MsPrepared) (grammar Grammar) (rule_name QName) (w World)) World
+  (match (sk_region_relate_eq grammar (sk_empty_region) 0 1)
+    ((SkRegionEditErr msg) (ncp_fail msg w))
+    ((SkRegionEditEmpty) (ncp_fail "relational eq region went empty" w))
+    ((SkRegionEditOk eq_region)
+     (match
+       (ms_check_prepared_region
+         1000 prepared eq_region (ncp_pair (hole 0) (hole 1)))
+       ((MsRedex q)
+        (if (qname_eq q rule_name)
+          (match (sk_region_relate_ne grammar (sk_empty_region) 0 1)
+            ((SkRegionEditErr msg) (ncp_fail msg w))
+            ((SkRegionEditEmpty) (ncp_fail "relational ne region went empty" w))
+            ((SkRegionEditOk ne_region)
+             (match
+               (ms_check_prepared_region
+                 1000 prepared ne_region (ncp_pair (hole 0) (hole 1)))
+               ((MsClear)
+                (ncp_partition
+                  prepared grammar rule_name
+                  (write
+                    "META-SEARCH-NONLINEAR-PROBE RESIDUAL DISJOINT-CLEAR SHARED-EQUAL PAIR-0/1 EQUAL-REDEX UNEQUAL-CLEAR RELAXED-PREPARED-3 REGION-EQ/NE REL-EQ-REDEX REL-NE-CLEAR PARTITION EQ3+NE6 IN 1+1/S1 FALLBACK-1+3/F2 CONJ-9+72/F4S3 GUARD-PAIR GUARD-REL-EQ/NE PLAN-SPLIT-3+6/1+1/S1 PLAN-FALLBACK-1+3/F2 OK\n"
+                    w)))
+               (_ (ncp_fail "relational ne region verdict" w)))))
+          (ncp_fail "relational eq region citation" w)))
+       (_ (ncp_fail "relational eq region verdict" w))))))
 
 (fn ncp_prepared
   ((plan MsPlan) (grammar Grammar) (rule_name QName) (w World)) World

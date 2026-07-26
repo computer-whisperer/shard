@@ -609,15 +609,27 @@ if [ -x bin/shard_eval ]; then
   # descends (6), eq fixes its partner, a last closed-template ne pair
   # becomes a forbid, split partitions 9=3+6, release restores by policy,
   # and the v1 boundaries (iso/liveness/closure/cap/rank) refuse loudly.
-  # nonlinear_constraint_probe pins the PAIR-CARRYING verdicts (R2): the
-  # both-open equality reports MsBlockedPair 0/1 (direct and prepared), the
-  # exact equality partition consumes it TERMINALLY (EQ3+NE6 in 1+1 regions,
+  # region_probe also pins the R3 entailment decision (sk_rels_decide):
+  # transitive eq reachability, singleton ne lifted across eq classes,
+  # vector ne entails nothing pointwise, unrelated stays Unknown.
+  # nonlinear_constraint_probe pins the PAIR-CARRYING verdicts (R2) and
+  # RELATION-AWARE evaluation (R3): the both-open equality reports
+  # MsBlockedPair 0/1 (direct and prepared), an eq/ne relational region
+  # DECIDES it (Redex/Clear — the split-child progress property), the exact
+  # equality partition consumes it TERMINALLY (EQ3+NE6 in 1+1 regions,
   # 1 relational split, 0 ground forks), the non-isomorphic-domain door
   # refusal falls back to ground (1+3/F2), a two-pair conjunction degrades
   # its second pair and splits under each diagonal assignment (9+72/F4S3),
   # a distinct guard over two open holes pairs through the conditioned
-  # verdict, and the PREPARED plan partition still grounds pairs (3+3/F4 —
-  # the R2 degradation pin; R3 flips it to relational splits).
+  # verdict and is decided by eq/ne relation events, and the PREPARED plan
+  # partition now SPLITS the pair relationally (3+6 in 1+1 regions, S1;
+  # was the R2 degradation pin 3+3/F4) with the non-isomorphic plan case
+  # falling back to ground (1+3 in 1+2, F2S0).
+  # constraint_superpose_probe's DIAG-SPLIT line pins the DRIVE-level R3
+  # split: a nonlinear diagonal rule before a constant-pass query settles
+  # as FOUND 6 (the relational ne child, counted exactly) + KILLED 3 (the
+  # cited eq child) in 2 regions / 1 boundary, and the relational passing
+  # region yields an in-region first-walk representative.
   bin/shard_eval run tools/search/constraint_probe.shard
   bin/shard_eval run tools/search/nonlinear_constraint_probe.shard
   bin/shard_eval run tools/search/region_probe.shard

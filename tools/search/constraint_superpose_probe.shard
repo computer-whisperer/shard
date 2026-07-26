@@ -82,9 +82,10 @@
                          (if (int_eq constrained2 1)
                            (if (int_eq regions2 1)
                              (if (int_eq forks2 0)
-                               (write
-                                 "META-SEARCH-SUPERPOSE-PROBE CLEAR 2 REDUX 2 MIXED 1+1 FORKS 0/0/1 RESTRICTED CLEAR/REDUX 1/1 OK\n"
-                                 w)
+                               (csp_diag
+                                 (write
+                                   "META-SEARCH-SUPERPOSE-PROBE CLEAR 2 REDUX 2 MIXED 1+1 FORKS 0/0/1 RESTRICTED CLEAR/REDUX 1/1 OK\n"
+                                   w))
                                (csp_fail "restricted redex fork count" w))
                              (csp_fail "restricted redex region count" w))
                            (csp_fail "restricted redex constraint count" w))
@@ -158,6 +159,86 @@
     ((SuSErr msg) (csp_fail msg w))
     ((SuSBudget _ _ _ _ _ _ _ _ _)
      (csp_fail "unexpected drive budget exhaustion" w))))
+
+;; R3 drive-level relational split: a nonlinear diagonal rule over two open
+;; 3-atom holes, before a constant-pass query.  The pair verdict survives to
+;; the passing region, the prepared partition answers it with ONE relational
+;; split, and the ne child lands in the solutions as a RELATIONAL region —
+;; counted exactly, represented by the first-productive walk.
+(fn csp_diag_q ((name Symbol)) QName
+  (QName (list (quote tools) (quote search) (quote superpose_diag)) name))
+
+(fn csp_atom ((value Int)) Expr
+  (Ctor (csp_diag_q (quote Atom)) (Cons (IntLit value) Nil)))
+
+(fn csp_pair ((left Expr) (right Expr)) Expr
+  (Ctor (csp_diag_q (quote Pair)) (list left right)))
+
+(fn csp_diag_grammar () Grammar
+  (Grammar
+    (list
+      (GEnt 0 (list (csp_atom 0) (csp_atom 1) (csp_atom 2)))
+      (GEnt 1 (list (csp_atom 0) (csp_atom 1) (csp_atom 2))))))
+
+(fn csp_diag_sol
+  ((grammar Grammar) (space Expr) (sols (List SkRegion)) (w World))
+  World
+  (match sols
+    (Nil (csp_fail "diagonal drive produced no passing region" w))
+    ((Cons sol rest)
+     (match rest
+       ((Cons _ _) (csp_fail "diagonal drive produced extra regions" w))
+       (Nil
+         (match (su_region_rep grammar sol space)
+           (None (csp_fail "relational solution has no representative" w))
+           ((Some rep)
+            (if (sk_region_member space grammar sol rep)
+              (write
+                "META-SEARCH-SUPERPOSE-PROBE DIAG-SPLIT FOUND-6 KILLED-3 REGIONS-2 FORKS-1 REL-SOL-REP OK\n"
+                w)
+              (csp_fail "relational representative escaped its region" w)))))))))
+
+(fn csp_diag ((w World)) World
+  (match
+    (trs_rule
+      (csp_diag_q (quote pair_refl))
+      (Cons (TCon (qn (quote Int)) Nil) Nil)
+      (csp_pair (BVar 0) (BVar 0))
+      (BVar 0))
+    ((TrsRuleErr msg) (csp_fail msg w))
+    ((TrsRuleOk rule)
+     (match (trs_profile (Cons rule Nil))
+       ((TrsProfileErr msg) (csp_fail msg w))
+       ((TrsProfileOk profile)
+        (match (trs_partition_formation profile)
+          ((TrsProfileFormationErr msg) (csp_fail msg w))
+          ((TrsProfileFormationOk projected)
+           (match
+             (ms_plan (trs_profile_residual projected) (trs_empty_root_profile))
+             ((MsPlanErr msg) (csp_fail msg w))
+             ((MsPlanOk plan)
+              (let ((grammar (csp_diag_grammar)))
+                (let ((space (csp_pair (hole 0) (hole 1))))
+                  (match (g_wf grammar)
+                    ((GWErr msg) (csp_fail msg w))
+                    ((GWOk)
+                     (match
+                       (csp_drive_region space plan grammar (sk_empty_region))
+                       ((SuSOk found killed constrained regions forks _ sols)
+                        (if (int_eq found 6)
+                          (if (int_eq killed 3)
+                            (if (int_eq constrained 3)
+                              (if (int_eq regions 2)
+                                (if (int_eq forks 1)
+                                  (csp_diag_sol grammar space sols w)
+                                  (csp_fail "diagonal fork count" w))
+                                (csp_fail "diagonal region count" w))
+                              (csp_fail "diagonal constraint count" w))
+                            (csp_fail "diagonal killed count" w))
+                          (csp_fail "diagonal found count" w)))
+                       ((SuSErr msg) (csp_fail msg w))
+                       ((SuSBudget _ _ _ _ _ _ _ _ _)
+                        (csp_fail "diagonal drive budget" w))))))))))))))))
 
 (fn csp_profile ((grammar Grammar) (w World)) World
   (match (msp_rule)
