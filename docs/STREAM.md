@@ -128,8 +128,27 @@ needs a real consumer forcing its decisions:
   3.54s; reader pair 317.1M → 205.6M; env_lookup pair 237.9M →
   194.4M. Decisions this record opens (CERT.md §8 R3, §11 DC3, §7):
   final dialect ratification, DC3 disposition, §7 design opening —
-  all the user's. B1b (the A1×A2 composition exercise) still rides
-  before B1 closes.
+  all the user's.
+
+  **B1b RECORD (2026-07-27; landed).** std/sha256/sha256.xcomp.shard
+  (154 fmt lines, corpus-registered): vxq8_add = vxo_add's oracle
+  skeleton (vx86_oracle_probe.shard) with both ∀-bound Int args
+  instantiated at A2's xq8-boundary view reads — x0 = xp_loc of the
+  segment's accumulator local (slot 11) through the patch view, x1 =
+  xp_byte of the byte the segment just wrote (address xv7) through
+  the mem view. FIRST CHECK, 957/0. The recorded composition gap is
+  closed as the review's §2e predicted: the A1 soundness theorem
+  (vxg_valid) and the A2 patch dialect compose in ONE claim with
+  zero new machinery — neither execution is replayed, neither view
+  is materialized; the read terms ride the citation as opaque
+  values. The mem-tier fence stands as recorded: the validator
+  family is mem-free by construction, and the mem-capable statement
+  tier is its next growth rung, not an Arc A/B defect. Closure note:
+  the file is the first to import BOTH the x86 out file and the acc
+  probe — 2.38B calls / 1.22GB live / 4.17GB RSS per check, the
+  incremental-checking debt's (task #62) loudest exhibit to date.
+  With B1b landed, B1's WORK is complete; the rung closes on the
+  three user rulings above.
 
 - **B2 — the streaming World design note** (paper before build, the
   house pattern). The read-until-EOF World shape: the read shim's
