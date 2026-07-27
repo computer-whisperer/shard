@@ -1755,19 +1755,22 @@
 
 (type SuFind
   (SuFindErr (List Int))
-  (SuFindBudget Int Int Int Int Int Int Int)
-  (SuFindEmpty Int Int Int Int Int Int Int)
-  (SuFindFound Int Int Int Int Int SkRegion Expr))
-; budget/empty: killed regions, constraint regions, terminal regions, forks,
-;               evaluator steps, arena nodes, arena expressions
-; found:        killed regions, constraint regions, terminal regions, forks,
-;               evaluator steps, passing region, productive representative
+  (SuFindBudget Int Int Int Int Int Int Int Int)
+  (SuFindEmpty Int Int Int Int Int Int Int Int)
+  (SuFindFound Int Int Int Int Int Int SkRegion Expr))
+; budget/empty: killed regions, constraint regions, terminal regions, ground
+;               forks, relational splits, evaluator steps, arena nodes, arena
+;               expressions
+; found:        killed regions, constraint regions, terminal regions, ground
+;               forks, relational splits, evaluator steps, passing region,
+;               productive representative
 
 (fn su_find_budget_report
   ((killed Int)
    (constrained Int)
    (regions Int)
    (forks Int)
+   (splits Int)
    (steps Int)
    (nodes Int)
    (exprs Int))
@@ -1782,6 +1785,8 @@
       (show_int regions)
       " forks "
       (show_int forks)
+      " splits "
+      (show_int splits)
       " steps "
       (show_int steps)
       " nodes "
@@ -1831,8 +1836,9 @@
 
 (type SuTheoryPartitionR
   (SuTheoryPartitionErr (List Int))
-  (SuTheoryPartitionOk Int (List SkRegion) Int))
-; redex terminal regions, clear terminal regions, split boundaries
+  (SuTheoryPartitionOk Int (List SkRegion) Int Int))
+; redex terminal regions, clear terminal regions, ground fork boundaries,
+; relational split boundaries
 
 (fn su_theory_partition
   ((fuel Int)
@@ -1842,13 +1848,14 @@
    (jobs (List SkRegion))
    (redex Int)
    (clear (List SkRegion))
-   (forks Int))
+   (forks Int)
+   (splits Int))
   SuTheoryPartitionR
   (measure fuel)
   (if (lt fuel 1)
     (SuTheoryPartitionErr "schema theorem partition fuel exhausted")
     (match jobs
-      (Nil (SuTheoryPartitionOk redex clear forks))
+      (Nil (SuTheoryPartitionOk redex clear forks splits))
       ((Cons region rest)
        ;; R3: a pair verdict is answered with a relational split, and the
        ;; relation-aware checker decides the pair inside each child on its
@@ -1866,7 +1873,8 @@
             rest
             (+ redex 1)
             clear
-            forks))
+            forks
+            splits))
          ((MsClear)
           (su_theory_partition
             (- fuel 1)
@@ -1876,7 +1884,8 @@
             rest
             redex
             (Cons region clear)
-            forks))
+            forks
+            splits))
          ((MsBlockedPair h0 h1)
           (match (sk_region_split_pair_lang (sug_lang g) region h0 h1)
             ((SkRegionSplitErr _)
@@ -1890,7 +1899,8 @@
                rest
                redex
                clear
-               forks))
+               forks
+               splits))
             ((SkRegionSplitOk eq_child ne_child)
              (match (su_child_alive candidate g eq_child)
                ((SuAliveUnknown)
@@ -1904,7 +1914,8 @@
                   rest
                   redex
                   clear
-                  forks))
+                  forks
+                  splits))
                (eq_state
                  (match (su_child_alive candidate g ne_child)
                    ((SuAliveUnknown)
@@ -1918,7 +1929,8 @@
                       rest
                       redex
                       clear
-                      forks))
+                      forks
+                      splits))
                    (ne_state
                      (su_theory_partition
                        (- fuel 1)
@@ -1928,7 +1940,8 @@
                        (su_alive_push eq_state (su_alive_push ne_state rest))
                        redex
                        clear
-                       (+ forks 1)))))))))
+                       forks
+                       (+ splits 1)))))))))
          ((MsBlocked hole_id)
           (su_theory_ground
             (- fuel 1)
@@ -1940,7 +1953,8 @@
             rest
             redex
             clear
-            forks)))))))
+            forks
+            splits)))))))
 
 (fn su_theory_ground
   ((fuel Int)
@@ -1952,7 +1966,8 @@
    (rest (List SkRegion))
    (redex Int)
    (clear (List SkRegion))
-   (forks Int))
+   (forks Int)
+   (splits Int))
   SuTheoryPartitionR
   (measure fuel)
   (if (lt fuel 1)
@@ -1973,7 +1988,8 @@
             jobs2
             redex
             clear
-            (+ forks 1))))))))
+            (+ forks 1)
+            splits)))))))
 
 (fn su_find_query_prepared
   ((fuel Int)
@@ -1990,7 +2006,8 @@
    (killed Int)
    (constrained Int)
    (regions Int)
-   (forks Int))
+   (forks Int)
+   (splits Int))
   SuFind
   (measure fuel)
   (if (lt fuel 1)
@@ -1999,6 +2016,7 @@
       constrained
       regions
       forks
+      splits
       (sa_steps ar)
       (sa_nodes ar)
       (sa_exprs ar))
@@ -2009,6 +2027,7 @@
           constrained
           regions
           forks
+          splits
           (sa_steps ar)
           (sa_nodes ar)
           (sa_exprs ar)))
@@ -2032,7 +2051,8 @@
               killed
               (+ constrained 1)
               (+ regions 1)
-              forks))
+              forks
+              splits))
            (constraint_verdict
              (match (su_query (su_efuel) m candq body g asg ar query want)
                ((SuTErr msg) (SuFindErr msg))
@@ -2062,7 +2082,8 @@
                         killed
                         constrained
                         regions
-                        (+ forks 1)))))))
+                        (+ forks 1)
+                        splits))))))
                ((SuTFail ar2)
                 (su_find_query_prepared
                   (- fuel 1)
@@ -2079,7 +2100,8 @@
                   (+ killed 1)
                   constrained
                   (+ regions 1)
-                  forks))
+                  forks
+                  splits))
                ((SuTPass ar2)
                 (match constraint_verdict
                   ((MsClear)
@@ -2091,6 +2113,7 @@
                         constrained
                         (+ regions 1)
                         forks
+                        splits
                         (sa_steps ar2)
                         region
                         representative))))
@@ -2109,9 +2132,11 @@
                         (Cons region Nil)
                         0
                         Nil
+                        0
                         0)
                       ((SuTheoryPartitionErr msg) (SuFindErr msg))
-                      ((SuTheoryPartitionOk redex_regions clear partition_forks)
+                      ((SuTheoryPartitionOk redex_regions clear partition_forks
+                         partition_splits)
                        (match clear
                          (Nil
                            (su_find_query_prepared
@@ -2129,7 +2154,8 @@
                              killed
                              (+ constrained redex_regions)
                              (+ regions redex_regions)
-                             (+ forks partition_forks)))
+                             (+ forks partition_forks)
+                             (+ splits partition_splits)))
                          ((Cons passing _)
                           (match (su_region_first candidate g passing)
                             ((SkEErr msg) (SuFindErr msg))
@@ -2139,6 +2165,7 @@
                                (+ constrained redex_regions)
                                (+ regions (+ redex_regions 1))
                                (+ forks partition_forks)
+                               (+ splits partition_splits)
                                (sa_steps ar2)
                                passing
                                representative))))))))))))))))))
@@ -2170,6 +2197,7 @@
        (sug_compile g)
        (sa_new)
        (Cons (sk_empty_region) Nil)
+       0
        0
        0
        0
@@ -2209,6 +2237,7 @@
        0
        0
        0
+       0
        0))))
 
 ;; Theorem-first entry for the find path — the same optional mode the counted
@@ -2243,9 +2272,10 @@
            (Cons (sk_empty_region) Nil)
            0
            Nil
+           0
            0)
          ((SuTheoryPartitionErr msg) (SuFindErr msg))
-         ((SuTheoryPartitionOk redex clear partition_forks)
+         ((SuTheoryPartitionOk redex clear partition_forks partition_splits)
           (su_find_query_prepared
             fuel
             m
@@ -2261,7 +2291,8 @@
             0
             redex
             redex
-            partition_forks)))))))
+            partition_forks
+            partition_splits)))))))
 
 (fn su_find_query_schema_ordered
   ((theorem_first Bool)
