@@ -1,0 +1,246 @@
+;;; Swap-network model: four registers, adjacent transpositions, and the
+;;; checked law tower the swap_route task's spine profile rides on.
+;;;
+;;; The semantics is deliberately position-uniform — swr_step touches a
+;;; fixed window of the register file and nothing else — so sequence laws
+;;; hold at EVERY spine position and lift through the plug by plain
+;;; structural induction.  That is the soundness license pio_dme_free's
+;;; delay-normal grammar could not have (absolute jump targets), and it is
+;;; what lets this task carry a real theorem quotient:
+;;;   - involution: s . s = id for every swap s (the nonlinear window);
+;;;   - disjoint commutation: Sw0 . Sw2 = Sw2 . Sw0 (positions 0-1 and
+;;;     2-3 do not overlap).
+;;; The proof tower keeps ONE case split per claim (hypothesis names stay
+;;; unambiguous) and never computes through swr_step at law statements —
+;;; controlled unfolding preserves the patterns the rewrites cite.
+
+(import "../../../kernel/stdlib.shard")
+
+(use (:: core List))
+(use (:: core Nil))
+(use (:: core Cons))
+
+(type Swp (Sw0) (Sw1) (Sw2))
+
+;; Swap the first two elements; shorter lists are fixed.
+(fn swr_swap_head ((v (List Int))) (List Int)
+  (match v
+    (Nil Nil)
+    ((Cons a v1)
+     (match v1
+       (Nil (Cons a Nil))
+       ((Cons b r) (Cons b (Cons a r)))))))
+
+(fn swr_step ((s Swp) (v (List Int))) (List Int)
+  (match s
+    ((Sw0) (swr_swap_head v))
+    ((Sw1)
+     (match v
+       (Nil Nil)
+       ((Cons a v1) (Cons a (swr_swap_head v1)))))
+    ((Sw2)
+     (match v
+       (Nil Nil)
+       ((Cons a v1)
+        (match v1
+          (Nil (Cons a Nil))
+          ((Cons b v2) (Cons a (Cons b (swr_swap_head v2))))))))))
+
+(fn swr_run ((body (List Swp)) (v (List Int))) (List Int)
+  (measure (struct body))
+  (match body
+    (Nil v)
+    ((Cons s rest) (swr_run rest (swr_step s v)))))
+
+(fn swr_observe ((body (List Swp))) (List Int) (swr_run body (list 0 1 2 3)))
+
+;; Transparent right action used to authenticate contextual sequence laws
+;; (theorem_scope derives the Cons/tail path from this body).
+(fn swr_plug ((prefix (List Swp)) (suffix (List Swp))) (List Swp)
+  (measure (struct prefix))
+  (match prefix
+    (Nil suffix)
+    ((Cons head tail) (Cons head (swr_plug tail suffix)))))
+
+;; --- involution: s . s = id ------------------------------------------------
+
+(claim swr_swap_head_invol_cons
+  (goal ((a Int) (v1 (List Int))) ()
+    (= (swr_swap_head (swr_swap_head (Cons a v1))) (Cons a v1)))
+  (induct v1
+    ((case Nil (steps ((compute both)) refl))
+     (case Cons (b r) (steps ((compute both)) refl)))))
+
+(claim swr_swap_head_invol
+  (goal ((v (List Int))) () (= (swr_swap_head (swr_swap_head v)) v))
+  (induct v
+    ((case Nil (steps ((compute both)) refl))
+     (case Cons
+       (a v1)
+       (steps ((rewrite (lemma swr_swap_head_invol_cons) lr lhs true ())) refl)))))
+
+(claim swr_sw0_invol
+  (goal ((v (List Int))) () (= (swr_step (Sw0) (swr_step (Sw0) v)) v))
+  (steps
+    ((unfold swr_step lhs)
+     (reduce lhs)
+     (unfold swr_step lhs)
+     (reduce lhs)
+     (rewrite (lemma swr_swap_head_invol) lr lhs true ()))
+    refl))
+
+(claim swr_sw1_invol
+  (goal ((v (List Int))) () (= (swr_step (Sw1) (swr_step (Sw1) v)) v))
+  (induct v
+    ((case Nil (steps ((compute both)) refl))
+     (case Cons
+       (a v1)
+       (steps
+         ((unfold swr_step lhs)
+          (reduce lhs)
+          (unfold swr_step lhs)
+          (reduce lhs)
+          (rewrite (lemma swr_swap_head_invol) lr lhs true ()))
+         refl)))))
+
+(claim swr_sw2_invol_cons
+  (goal ((a Int) (v1 (List Int))) ()
+    (= (swr_step (Sw2) (swr_step (Sw2) (Cons a v1))) (Cons a v1)))
+  (induct v1
+    ((case Nil (steps ((compute both)) refl))
+     (case Cons
+       (b v2)
+       (steps
+         ((unfold swr_step lhs)
+          (reduce lhs)
+          (unfold swr_step lhs)
+          (reduce lhs)
+          (rewrite (lemma swr_swap_head_invol) lr lhs true ()))
+         refl)))))
+
+(claim swr_sw2_invol
+  (goal ((v (List Int))) () (= (swr_step (Sw2) (swr_step (Sw2) v)) v))
+  (induct v
+    ((case Nil (steps ((compute both)) refl))
+     (case Cons
+       (a v1)
+       (steps ((rewrite (lemma swr_sw2_invol_cons) lr lhs true ())) refl)))))
+
+(claim swr_step_invol
+  (goal ((s Swp) (v (List Int))) () (= (swr_step s (swr_step s v)) v))
+  (case-on s Swp
+    ((case Sw0
+       (steps
+         ((rewrite (hyp Sw0) lr both true ())
+          (rewrite (lemma swr_sw0_invol) lr lhs true ()))
+         refl))
+     (case Sw1
+       (steps
+         ((rewrite (hyp Sw1) lr both true ())
+          (rewrite (lemma swr_sw1_invol) lr lhs true ()))
+         refl))
+     (case Sw2
+       (steps
+         ((rewrite (hyp Sw2) lr both true ())
+          (rewrite (lemma swr_sw2_invol) lr lhs true ()))
+         refl)))))
+
+;; --- disjoint commutation: Sw0 . Sw2 = Sw2 . Sw0 ---------------------------
+
+(claim swr_comm20_cons3
+  (goal ((a Int) (b Int) (c Int) (v3 (List Int))) ()
+    (=
+      (swr_step (Sw0) (swr_step (Sw2) (Cons a (Cons b (Cons c v3)))))
+      (swr_step (Sw2) (swr_step (Sw0) (Cons a (Cons b (Cons c v3)))))))
+  (induct v3
+    ((case Nil (steps ((compute both)) refl))
+     (case Cons (d r) (steps ((compute both)) refl)))))
+
+(claim swr_comm20_cons2
+  (goal ((a Int) (b Int) (v2 (List Int))) ()
+    (=
+      (swr_step (Sw0) (swr_step (Sw2) (Cons a (Cons b v2))))
+      (swr_step (Sw2) (swr_step (Sw0) (Cons a (Cons b v2))))))
+  (induct v2
+    ((case Nil (steps ((compute both)) refl))
+     (case Cons
+       (c v3)
+       (steps ((rewrite (lemma swr_comm20_cons3) lr lhs true ())) refl)))))
+
+(claim swr_comm20_cons1
+  (goal ((a Int) (v1 (List Int))) ()
+    (=
+      (swr_step (Sw0) (swr_step (Sw2) (Cons a v1)))
+      (swr_step (Sw2) (swr_step (Sw0) (Cons a v1)))))
+  (induct v1
+    ((case Nil (steps ((compute both)) refl))
+     (case Cons
+       (b v2)
+       (steps ((rewrite (lemma swr_comm20_cons2) lr lhs true ())) refl)))))
+
+(claim swr_comm20
+  (goal ((v (List Int))) ()
+    (= (swr_step (Sw0) (swr_step (Sw2) v)) (swr_step (Sw2) (swr_step (Sw0) v))))
+  (induct v
+    ((case Nil (steps ((compute both)) refl))
+     (case Cons
+       (a v1)
+       (steps ((rewrite (lemma swr_comm20_cons1) lr lhs true ())) refl)))))
+
+;; --- the run-level window laws and their plug lifts ------------------------
+
+(claim swr_run_cancel
+  (goal ((tail (List Swp)) (v (List Int)) (s Swp)) ()
+    (= (swr_run (Cons s (Cons s tail)) v) (swr_run tail v)))
+  (steps
+    ((unfold swr_run lhs)
+     (reduce lhs)
+     (unfold swr_run lhs)
+     (reduce lhs)
+     (rewrite (lemma swr_step_invol) lr lhs true ()))
+    refl))
+
+(claim swr_run_order20
+  (goal ((tail (List Swp)) (v (List Int))) ()
+    (=
+      (swr_run (Cons (Sw2) (Cons (Sw0) tail)) v)
+      (swr_run (Cons (Sw0) (Cons (Sw2) tail)) v)))
+  (steps
+    ((unfold swr_run both)
+     (reduce both)
+     (unfold swr_run both)
+     (reduce both)
+     (rewrite (lemma swr_comm20) lr lhs true ()))
+    refl))
+
+(claim swr_run_cancel_ctx
+  (goal ((prefix (List Swp)) (tail (List Swp)) (v (List Int)) (s Swp)) ()
+    (=
+      (swr_run (swr_plug prefix (Cons s (Cons s tail))) v)
+      (swr_run (swr_plug prefix tail) v)))
+  (induct prefix
+    ((case Nil
+       (steps
+         ((unfold swr_plug both)
+          (reduce both)
+          (rewrite (lemma swr_run_cancel) lr lhs true ()))
+         refl))
+     (case Cons
+       (head rest)
+       (steps ((simp both) (rewrite (hyp ih) lr lhs true ())) refl)))))
+
+(claim swr_run_order20_ctx
+  (goal ((prefix (List Swp)) (tail (List Swp)) (v (List Int))) ()
+    (=
+      (swr_run (swr_plug prefix (Cons (Sw2) (Cons (Sw0) tail))) v)
+      (swr_run (swr_plug prefix (Cons (Sw0) (Cons (Sw2) tail))) v)))
+  (induct prefix
+    ((case Nil
+       (steps
+         ((unfold swr_plug both)
+          (reduce both)
+          (rewrite (lemma swr_run_order20) lr lhs true ()))
+         refl))
+     (case Cons
+       (head rest)
+       (steps ((simp both) (rewrite (hyp ih) lr lhs true ())) refl)))))
