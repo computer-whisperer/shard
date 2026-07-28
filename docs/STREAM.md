@@ -165,7 +165,8 @@ needs a real consumer forcing its decisions:
   form the streaming bin lands on (`given` vs `except` — if
   `except`, the (bin …) grammar slice gets its own gated rung);
   the incremental-SHA state shape and the entry contract. Ratified
-  before B3 emits anything.
+  before B3 emits anything. DRAFT = §7 of this ledger (2026-07-28),
+  awaiting ratification.
 
 - **B3 — the conventional program on silicon.** #65 relocation
   (elf.shard proper, two-PT_LOAD with data above page 0, no
@@ -245,3 +246,110 @@ learns the dialect — same law as Arc A's.
   decision stays deferred (CERT.md §4).
 - **The 64-bit/length-extension SHA variants, other hash families**:
   out. One program, made conventional and fast.
+
+## 7. B2 — the streaming World design note (DRAFT 2026-07-28, for
+ratification before B3 emits anything)
+
+Ground truth this note stands on: the read rung landed (X86.md §50
+— LxRead delivered-bytes events, LxGoM, lx_fill/lx_take, the
+two-instruction read shim, pins green) with the v1 fence "effect
+points in straight-line positions only; read-until-EOF loops are
+the streaming rung's named growth". This note designs that growth
+plus the interfaces B2 owes (D8 observation relation,
+Runs/RunsWithin, claim form, state shape, generic tail).
+
+**7.1 The generic bin tail = ONE combinator.** The streaming main
+is written once, as a spec-level World combinator (working name
+`stream_main`): given a pure incremental step `st × chunk → st`
+and a finalizer `st → bytes`, the main is THE read-until-EOF loop
+— read into the window at a ground cap, step on delivered bytes,
+repeat until ret 0, write the finalized output, exit 0.
+sha256sum's main becomes `stream_main sha_step sha_fin` and every
+future filter-shaped bin instantiates the same combinator (thin
+World mains + PURE artifacts — IMP.md's composition ruling). The
+window policy is the combinator's parameter pair (base, cap);
+task #65 relocates base above page 0 before B3's ELF.
+
+**7.2 The read contract.** Per iteration: ret ∈ [0, cap]; ret = 0
+is EOF and ONLY EOF; short reads are legal at any time (the pipe
+case the one-shot bin had to exclude by file-redirect discipline —
+the streaming loop makes pipes first-class). ONE pulled-in named
+growth, needed for honesty: the ERROR LEG. Today's kernel model
+normalizes a negative return draw to 0 — under a loop that reads
+as EOF, so a real read error would silently produce a digest of a
+prefix. A conventional program must fail-stop instead: the model's
+read arm grows an error outcome (negative draw ⇒ error event, not
+EOF), and stream_main's loop exits nonzero on it. Without this leg
+the B4 coreutils comparison would be dishonest on error paths.
+The write side stays v1 offered-bytes (single write, no retry
+loop); effect atomicity stays one-syscall-grain.
+
+**7.3 The observation relation (D8's first sub-question,
+resolved here).** Defined ONCE at the kernel-model event grammar:
+each bin DECLARES its contracted-event projection (which of
+LxRead/LxWrote/LxExited… its requirements observe; undeclared
+events are ghost). For sha256sum the projection is total: the
+LxRead sequence DEFINES the input (delivered bytes concatenate to
+the message), LxWrote carries the digest, LxExited the verdict.
+The artifact-satisfaction statement is D8's disjunction over
+PROJECTED sequences: machine run = Done (projection equals spec
+main's) ∨ Fail(declared family) with the projection a strict
+prefix of spec's followed by the fallback signature (disjoint from
+contracted observables except exit code). The syscall-trace side
+of the relation is the W-rung differential layer's existing
+vocabulary — no new trust surface.
+
+**7.4 Runs/RunsWithin v1 (first landing, CERT.md §6).** No
+existential machinery: `RunsWithin P args C v` is the MONOTONE
+THRESHOLD form — "∀ f ≥ C: eval f args = Some v" — with the
+fuel-monotonicity lemma proven once per machine and composition by
+cost addition. Exact fuel becomes interpreter-internal; the bin
+equations shed their S^N towers (B1's per-seam fuel constants
+G_N = 24N + c are exactly these cost functions in embryo, so the
+cost algebra has measured ground truth from day one). For the
+streaming bin the cost is input-length-linear: C(n) = a·⌈n/cap⌉ +
+b. First consumers: the B3 bin equation's machine leg, then sink
+3's tower bookkeeping dies by attrition, never by rewrite.
+
+**7.5 The artifact claim form (D8 ladder, worked).** Per
+condition: memory — fixed window, no allocator, oom DISSOLVED by
+construction (the landed embedded tier's shape); stack — no
+recursion, DISSOLVED; overflow — the only counter is the SHA-256
+length field, and FIPS 180-4 itself bounds messages < 2^64 bits,
+so the bound lives in the REQUIREMENT's domain (spec vocabulary,
+not failure vocabulary). Consequence: the streaming sha256sum
+lands **UNCONDITIONAL — claim form 1, no given, no except** — and
+the `(bin …)` except-grammar kernel slice stays deferred to the
+coverage arc (the calc pathfinder remains its honest forcing
+consumer). FORK for ratification: behavior outside R's domain
+(inputs ≥ 2^61 bytes ≈ 2.3 EB). Lean: no runtime length check —
+physically unreachable for a stream, formally outside R, and a
+check would be theater; record it as documented non-contract.
+Alternative: a checked counter with fail-stop, which would drag in
+the except clause this bin otherwise avoids.
+
+**7.6 Incremental state + the correspondence theorem.** State =
+(H-vector of 8 words, pending tail < 64 bytes, total length);
+`sha_step` folds whole 64-byte blocks from window bytes into H and
+carries the remaining tail; `sha_fin` pads and produces the 32-byte
+digest. The spec-side theorem, proven once at list grain with no
+memory vocabulary: folding chunks then finalizing = one-shot
+sha256 of the concatenation (chunk-association law). The machine
+leg then refines exactly this via the B1-ratified dialect — the
+streaming loop is the shape the loop seams priced.
+
+**7.7 What B3 builds (consequences, in order).** #65 window
+relocation in elf.shard proper (capless load; the silicon
+differential leg joins CI); the model's read-error outcome + the
+stream_main combinator + its trace theorem; the incremental spec
+correspondence; the sha instantiation replacing the one-shot cap
+bin; the bin verdict line carrying `MET (artifact: unconditional)`
+— a bare MET is never an artifact verdict (D8 law).
+
+Open forks going into ratification: (a) 7.5's oversize-input
+lean; (b) error-leg event spelling (new event kind vs an error
+payload on LxRead — lean: payload-free new event, additive like
+LxGoM); (c) whether stream_main's chunk type is bytes-in-window
+(mem view) or an abstract byte list at spec level with the window
+only in the machine leg (lean: the latter — spec stays
+memory-free, the dialect's patch/view layer carries the window).
