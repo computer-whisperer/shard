@@ -150,6 +150,13 @@ needs a real consumer forcing its decisions:
   With B1b landed, B1's WORK is complete; the rung closes on the
   three user rulings above.
 
+  **B1 CLOSED (2026-07-28, user ratification of the B1 record):
+  final dialect RATIFIED with the unpremised-interior amendment
+  (CERT.md §8 FINAL DIALECT RATIFICATION — fences named there);
+  DC3 CLOSED-DORMANT on the loop-seam evidence (CERT.md §11); §7's
+  design formally OPEN under its gated-slice protocol (CERT.md §7);
+  the coverage arc UNFREEZES per §4. Next rung: B2.**
+
 - **B2 — the streaming World design note** (paper before build, the
   house pattern). The read-until-EOF World shape: the read shim's
   short-read/EOF contract (X86.md §32 discipline — syscall-direct,

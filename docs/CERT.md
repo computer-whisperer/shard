@@ -234,6 +234,11 @@ serialization + content addressing + gate (d) incremental behavior
 in a single design, on the replacement-basis number the next
 block-chain touch owes (see the A3 verdict, §8).
 
+**TRIGGER FIRED (2026-07-28): the D-number landed (STREAM.md §3 B1
+RECORD) and the B1 ratification formally OPENS this slice's design
+under the gated-slice protocol** — parallel to Arc B's B2+ rungs,
+not part of that arc.
+
 ## 8. Arc A — the pathfinder protocol (CLOSED: verdicts recorded,
 full-arc review COMPLETE 2026-07-26)
 
@@ -409,6 +414,38 @@ glue; base+patch prevents the next program from recreating
 quadratic symbolic states; validators are the change that collapses
 per-program proof structure to one checked pass boundary.
 
+**FINAL DIALECT RATIFICATION (2026-07-28; user ruling on the B1
+record — STREAM.md §3 holds the full measurement).** The
+replacement-basis measurement landed green: the 13-seam chain plus
+the weld-facing walk restated at statements byte-identical to the
+replay originals, 43,451 → 7,969 lines, D-number −19.3% calls /
+−34% live peak, both loop seams closed, and the A1×A2 composition
+exercise first-check. R3's provisional spec is RATIFIED FINAL with
+one amendment from contact: **chain interiors are UNPREMISED
+seams**. The seam statement is the replay statement; the proof
+case-forks on the shared segment term (fail forks close by compute
+because the adapters mirror failure), derives the locals arity by a
+change-fold into the length law (il_slen; il_wlen at loops), mints
+the slot reads with ONE once-per-model list-inversion citation
+(ilv_inv12 — per-arity; the generator emits it once per model), and
+closes with exactly one fully-instantiated exact-conv of the next
+seam. The ∀-bound-boundary premised shape of the §2d spec remains
+the LEAF/LIBRARY form only — it cannot chain, because successor
+premises are undischargeable at symbolic state. The loop fence is
+CLOSED: loop seams keep their approach paths (fuel reshapes, wrap
+collapses, the sqxw citation) and end at the same case-fork;
+guard-fork trees are the semantic floor and survive in every
+dialect. Fences carried forward, named and open: machine-side
+segment steps still cite replay-dialect sqs_ certs (a
+pure-conversion generator owes the conversion form of the segment
+step); branchy code and multi-fn remain unexercised; the committed
+block closure still contains the cmp_ family until a migration
+touch — the measurement's variant was a scratch artifact by
+ratified scope. Same-ruling consequences: DC3 CLOSED-DORMANT on the
+loop-seam evidence (§11); §7's design formally OPEN under its
+gated-slice protocol; the coverage arc UNFREEZES (§10's B1
+condition met).
+
 ## 9. Gates and falsification
 
 The decision question is NOT "did 92k lines become 2k?". Required,
@@ -474,10 +511,13 @@ point.
   stop set and compared per side. Pins:
   pins/proof/conv_probe.shard / conv_rejects.shard.
 - **DC3 — checkpointed-walk proof form** (the seal discipline
-  promoted to kernel tactic): CANDIDATE, deliberately second
-  priority — build only if a measured leg says generated walks are
-  still too big after conversion+DAG. The measured leg is now named:
-  Arc B rung 1 (the replacement-basis measurement; its two loop
-  seams are exactly this gate's evidence).
+  promoted to kernel tactic): CLOSED-DORMANT (2026-07-28, on the
+  named measured leg's evidence — Arc B rung 1): both loop seams
+  (the 9.4k-line rounds loop, the 2.9k schedule loop) closed in the
+  conversion dialect with NO checkpointed-walk form — the replay
+  exposures died via the inversion law, and the residual bulk is
+  semantic guard forks no walk form removes. The door reopens only
+  on a future measured need (a loop family whose converted walks
+  are still too big); nothing builds until then.
 - **DC4 — cert binary serialization format**: OPEN; engineering,
   decided inside §7's slice.
