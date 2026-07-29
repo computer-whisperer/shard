@@ -409,3 +409,89 @@ program means by `chunk`:
   memory vocabulary, every consumer of the combinator couples to
   the window representation, and the correspondence theorem stops
   being memory-free.
+
+**7.9 The machine leg, laddered (B3 execution plan — DRAFT, forks
+D–F await ruling; spec-side §7.6/§7.7 pieces already landed:
+sha_stream_corresponds + the sst_trace ghost theorem).**
+
+What already exists and is reused as-is: the FROZEN compression
+block artifact and its Nat-counted fold loop (both targets; the
+x86 spill idiom at [65504,65536)); the padding and hex tiers; the
+one-shot window layout W@64960 K@65216 H@65472 — H already has a
+persistent memory home; the hand-built thin-main pattern
+(I2e-4c-3: the main is ~11 instructions delegated whole into the
+bridge, NO tool growth); enc_winelf at base 65536 (#65 groundwork,
+landed); the B1-ratified conversion dialect for every new cert.
+
+The ladder:
+
+- **M0 — the effect-loop walk probe.** The genuinely NEW proof
+  ground is a BACKWARD BRANCH around an effect point (every landed
+  effect sits in a straight-line position — §50's fence, lifted
+  here). De-risk it minimal first, in the §20/§21 probe tradition:
+  a byte-counter bin (read-until-EOF at a ground cap, count
+  delivered bytes, print the count) — the machine sst_fuel analog:
+  a fueled walk quantified over per-iteration oracle draws, the
+  three-way branch (error/EOF/data), the loop-carried state at a
+  ground address. Everything sha adds later is pure artifacts this
+  probe doesn't need.
+- **M1 — the streaming absorber artifact (pure, imp grain).**
+  sha_step at machine grain: merge the pending tail with the
+  delivered bytes, fold every whole block via the frozen block
+  loop, keep the remainder pending, bump the count — H updated in
+  place at its landed home. Artifact theorem reads back as
+  `sha_step` of the window state.
+- **M2 — the streaming finalizer artifact (pure, imp grain).**
+  sha_fin at machine grain: pad the pending tail with the TOTAL
+  count (the landed padding species with its length source
+  changed), fold the last block(s), hex to [0,64). Reads back as
+  `bytes_hex (sha_fin st)`.
+- **M3 — the streaming main (hand, thin).** The read-until-EOF
+  loop instantiating M0's proven walk shape with M1/M2 at the two
+  call boundaries. The composition ruling holds: compute never
+  lives in the I/O proof.
+- **M4 — the weld.** The loop invariant (the window realizes the
+  ShaSt) composed with sst_trace's ghost form: the machine run's
+  projection = "read everything, wrote sha256_hex(everything)" ∨
+  the declared Fail legs — D8's disjunction, closed.
+- **M5 — emission and gates.** The image regenerated at base
+  65536 (every ground address +65536 — regeneration, not
+  re-proof), enc_winelf ELF, corpus registration, the differential
+  leg fed by PIPES (short reads are now first-class — the §51
+  file-redirect discipline retires), capless silicon joining CI,
+  and the verdict line: `MET (artifact: unconditional)`.
+
+**Fork D — where does the pending tail live across iterations?**
+The read effect's destination address is the question: the walk
+stack prices GROUND addresses everywhere (shim certs, frame
+lemmas, the differential's trace grammar all speak fixed
+addresses).
+- *Fixed read address + copy-the-tail-home (lean).* The read
+  always lands at one ground buffer address; after folding whole
+  blocks the ≤63 remaining bytes are copied to a fixed tail home;
+  the absorber consumes tail-then-buffer. Cost: a ≤63-byte copy
+  loop artifact and its (routine, landed-species) proof per the
+  absorber. Benefit: every effect point in the program keeps a
+  ground address — zero new machinery in the shim/walk layer.
+- *In-place rolling offset.* The read lands at buffer + pending
+  length, so no copy — but the read's buf argument varies per
+  iteration, forcing symbolic-address read certs: new machinery in
+  the one layer (the effect/walk stack) where everything landed is
+  ground. Saves a 63-byte copy; costs a new cert species.
+
+**Fork E — absorber call grain?** Settled by precedent, recorded
+for completeness: ONE pure XCall'd absorber per iteration. The
+4c-3 pipe-boundary finding (weval's effect budget forces
+delegating pure work whole behind a call) plus the thin-main law
+leave no second option worth pricing.
+
+**Fork F — the read cap now?** The spec article pinned one page
+(4096) provisionally; the machine window fits caps to ~56 KiB
+below the W frame.
+- *Keep 4096 for the proving rung (lean).* Smallest surface while
+  the novel walk lands; B4's benchmark retunes the cap as a
+  REGENERATION (the same every-literal-shifts mechanism as the
+  #65 relocation — priced once, reused).
+- *Pick the benchmark cap now (~56 KiB).* Saves one regeneration
+  later; costs tuning discussion before the walk shape even
+  exists, on a number B4 will re-measure anyway.
