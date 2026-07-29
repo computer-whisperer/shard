@@ -409,6 +409,8 @@ TARGETS=(
   tools/search/tasks/pio_dme_free.shard
   tools/search/tasks/swap_route_model.shard
   tools/search/tasks/swap_route.shard
+  tools/search/tasks/swap_route5_model.shard
+  tools/search/tasks/swap_route5.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
