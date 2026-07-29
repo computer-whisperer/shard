@@ -769,10 +769,12 @@ fi
 
 # Swap-network routing (R5): theorem-first FIND-mode synthesis under two
 # proven spine laws (nonlinear self-inverse cancel + disjoint-swap
-# ordering) — the live consumer of the find path's theorem-first entry
-# and the separated SPLITS counter.  Expected: SPINE RULES 2; a green
-# six-swap canonical route (KILLED 13 CONSTRAINT 116 FORKS 168 SPLITS 0
-# STEPS 742 at depth 7, measured 2026-07-27).
+# ordering) — the live consumer of the find path's theorem-first entry,
+# the separated SPLITS counter, AND the skl_iso structural extension
+# (cross-depth leaf schema states relate; the first task with live
+# relational splits).  Expected: SPINE RULES 2; a green six-swap
+# canonical route (KILLED 59 CONSTRAINT 78 FORKS 174 SPLITS 6 STEPS 4542
+# at depth 7, measured 2026-07-28).
 echo "=== search: swap-network routing synthesis ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/swap_route.shard
