@@ -24,6 +24,8 @@
 ;;; The image's pure Int exports need no writable data segment.
 ;;; enc_binelf (the §22 bin rung) has its OWN two-segment layout and its
 ;;; own GLUE CONTRACT — see the contract block above it, not this banner.
+;;; enc_winelf (the #65 WINDOW rung) has a THIRD: the same two segments with
+;;; the RW one PARAMETERIZED (base, size) — again its own contract block.
 
 (import "../../kernel/stdlib.shard")
 (import "x86.shard")
@@ -32,9 +34,18 @@
 (use (:: models x86 x86 RAX))
 (use (:: models x86 x86 RCX))
 (use (:: models x86 x86 RDX))
+(use (:: models x86 x86 RBX))
+(use (:: models x86 x86 RBP))
 (use (:: models x86 x86 RSI))
 (use (:: models x86 x86 RDI))
 (use (:: models x86 x86 R8))
+(use (:: models x86 x86 R9))
+(use (:: models x86 x86 R10))
+(use (:: models x86 x86 R11))
+(use (:: models x86 x86 R12))
+(use (:: models x86 x86 R13))
+(use (:: models x86 x86 R14))
+(use (:: models x86 x86 R15))
 (use (:: models x86 x86 XMovRR))
 (use (:: models x86 x86 XLoad8))
 (use (:: models x86 x86 XStore8))
@@ -143,18 +154,29 @@
       (list 0 0)  ; e_shnum
       (list 0 0))))  ; e_shstrndx
 
-;; the 56-byte program header: one PT_LOAD, R+X, whole file at LOAD_BASE
-(fn elf_phdr ((filesz Int)) (List Int)
+;; THE ONE PT_LOAD EMITTER — every segment in this file (the §20 stub's, the
+;; §22 bin rung's two, the #65 window rung's two) goes through it, so "the code
+;; segment is emitted exactly as before" is a statement about ARGUMENTS, not
+;; about two copies of a byte layout staying in step. p_paddr = p_vaddr and
+;; p_align = 4096 throughout (the loader's only structural demand on a static
+;; ET_EXEC is p_vaddr ≡ p_offset mod p_align).
+(fn elf_phdr_load
+  ((flags Int) (offset Int) (vaddr Int) (filesz Int) (memsz Int))
+  (List Int)
   (catb
     (list
       (list 1 0 0 0)  ; p_type = PT_LOAD
-      (list 5 0 0 0)  ; p_flags = R+X
-      (le8 0)  ; p_offset
-      (le8 (load_base))  ; p_vaddr
-      (le8 (load_base))  ; p_paddr
+      (le4 flags)  ; p_flags
+      (le8 offset)  ; p_offset
+      (le8 vaddr)  ; p_vaddr
+      (le8 vaddr)  ; p_paddr
       (le8 filesz)  ; p_filesz
-      (le8 filesz)  ; p_memsz
+      (le8 memsz)  ; p_memsz
       (le8 4096))))  ; p_align
+
+;; the 56-byte program header: one PT_LOAD, R+X, whole file at LOAD_BASE
+(fn elf_phdr ((filesz Int)) (List Int)
+  (elf_phdr_load 5 0 (load_base) filesz filesz))
 
 ;; the whole executable: headers + stub + image
 (fn enc_elf ((img (List Int)) (offs (List Int)) (vs (List EVec))) (List Int)
@@ -455,32 +477,16 @@
       (list 0 0)  ; e_shnum
       (list 0 0))))  ; e_shstrndx
 
-;; program header 1: PT_LOAD, R+X, the whole file at load_base.
+;; program header 1: PT_LOAD, R+X, the whole file at load_base. (Identical to
+;; the §20 stub's elf_phdr by construction — both rungs map the same code
+;; segment — but stated per rung, so a layout change to one never leaks.)
 (fn bin_phdr_code ((filesz Int)) (List Int)
-  (catb
-    (list
-      (list 1 0 0 0)  ; p_type = PT_LOAD
-      (list 5 0 0 0)  ; p_flags = R+X
-      (le8 0)  ; p_offset
-      (le8 (load_base))  ; p_vaddr
-      (le8 (load_base))  ; p_paddr
-      (le8 filesz)  ; p_filesz
-      (le8 filesz)  ; p_memsz
-      (le8 4096))))  ; p_align
+  (elf_phdr_load 5 0 (load_base) filesz filesz))
 
 ;; program header 2: PT_LOAD, RW, a zero-filled BSS segment at bin_data_base
 ;; (clause 2; p_filesz = 0, p_memsz = bin_data_size, p_vaddr ≡ p_offset mod 4096).
 (fn bin_phdr_data () (List Int)
-  (catb
-    (list
-      (list 1 0 0 0)  ; p_type = PT_LOAD
-      (list 6 0 0 0)  ; p_flags = R+W
-      (le8 0)  ; p_offset
-      (le8 (bin_data_base))  ; p_vaddr
-      (le8 (bin_data_base))  ; p_paddr
-      (le8 0)  ; p_filesz = 0 (no file bytes)
-      (le8 (bin_data_size))  ; p_memsz = zero-filled reserve
-      (le8 4096))))  ; p_align
+  (elf_phdr_load 6 0 (bin_data_base) 0 (bin_data_size)))
 
 ;; the plainly-executable binary: [ELF hdr:64][phdr0:56][phdr1:56][glue][image].
 ;; e_entry = load_base + 176 (the glue); the entry function sits at glue offset
@@ -528,3 +534,118 @@
       (eapp
         (bin_elf_hdr)
         (eapp (bin_phdr_code filesz) (eapp (bin_phdr_data) code))))))
+
+;; ============================================================================
+;; THE WINDOW RUNG — a RELOCATABLE RW window (task #65, docs/STREAM.md §7.7)
+;; ============================================================================
+;;
+;; enc_winelf packages a NO-ARGV, NEVER-RETURNING World entry — one that does
+;; its own reads/writes/exit through in-image shims (X86.md §32) — in a
+;; two-segment ELF64 whose RW segment sits at a CALLER-SUPPLIED base. It is the
+;; sha256sum demonstrator's layout (examples/sha256sum/sha256sum_elf.shard,
+;; X86.md §51) with the ONE constant that made that emitter provisional — the
+;; vaddr-0 window — lifted into a parameter. A capless load follows: with a base
+;; at or above vm.mmap_min_addr the binary needs no `setcap cap_sys_rawio+ep`,
+;; no sysctl change, and no non-nosuid filesystem, so the silicon differential
+;; leg can run anywhere (task #65's whole point).
+;;
+;; This rung ADDS; it changes nothing. The §20 and §22 encoders keep their own
+;; bases (0x400000 code, 0x600000 bin data) and their own glue.
+;;
+;; ----------------------------------------------------------------------------
+;; THE WINDOW CONTRACT (task #65) — what a bin built for this encoder may assume
+;; ----------------------------------------------------------------------------
+;;   W1. ENTRY STATE. The process starts under the Linux x86_64 SysV entry ABI.
+;;       The glue reads NOTHING from it (no argc, no argv, no marshalling): it
+;;       zeroes all 15 model registers, realizing the all-zero MkRegs entry
+;;       state the artifact claims quantify over.
+;;
+;;   W2. THE WINDOW. [base, base + size) is mapped read-write and KERNEL-ZERO-
+;;       FILLED at load (PT_LOAD #2, p_filesz 0, p_memsz size). This is the bin
+;;       rung's clause 2 with its two constants freed.
+;;
+;;   W3. MODEL ADDRESSES ARE PROCESS ADDRESSES (X86.md §15's dispensation, the
+;;       permanent home the bin rung's clause 4 gave it). The encoder relocates
+;;       the MAPPING, never the image: an image whose model window is [0, size)
+;;       runs correctly ONLY at base 0. Building it for a nonzero base means the
+;;       image's own address literals already carry the base — the model-side
+;;       half of #65, which lives in the bin's source and its lowering, not here.
+;;
+;;   W4. CALLER OBLIGATIONS. Untrusted plumbing checks nothing; each violation
+;;       fails LOUDLY at the loader or with SIGSEGV, never in a proof:
+;;         (a) base ≥ vm.mmap_min_addr (65536 on stock Linux) — below it the
+;;             kernel refuses the mapping unless the process holds CAP_SYS_RAWIO;
+;;         (b) base ≡ 0 (mod 4096) — the loader demands p_vaddr ≡ p_offset
+;;             mod p_align, and p_offset is 0;
+;;         (c) [base, base + size) disjoint from [load_base, load_base + filesz)
+;;             — overlapping PT_LOADs are not a layout, they are a bug.
+;;
+;;   W5. TERMINATION. The entry NEVER RETURNS. After the `call` sits one `ud2`
+;;       (0F 0B): the §44 trap fence, so a violated never-returns contract dies
+;;       with SIGILL instead of running off the segment. The process's whole
+;;       observable behaviour is the entry's own syscall trace.
+;;
+;;   W6. THE LAW. The glue neither moves nor interprets bytes — it zeroes
+;;       registers, calls, and traps. (The bin rung's clause 6 at its floor.)
+;; ----------------------------------------------------------------------------
+
+;; 0x10000 — THE canonical relocated base. Chosen because it is exactly
+;; vm.mmap_min_addr's stock value: the LOWEST page-aligned address a stock Linux
+;; maps without CAP_SYS_RAWIO, so it is the smallest relocation that retires the
+;; capability (W4a) and the least disturbance to a model built at 0. It is
+;; page-aligned (W4b), it leaves the window strictly below load_base for any
+;; size ≤ 0x3F0000 (W4c) — which keeps the ascending-vaddr phdr order data-first,
+;; the §51 demonstrator's order — and for the 64 KiB windows the imp tower emits
+;; the relocation is one clean constant: process addr = model addr + 0x10000.
+(fn win_base () Int 65536)
+
+;; the no-argv `_start` glue (W1/W5). 15 * (mov r64, 0) = 150 bytes, then the
+;; `call` (at 150, ending 155), then `ud2` (ends at 157). The image begins at
+;; glue offset 157, so the entry (at image offset entry_off) is reached with
+;; rel32 = (157 + entry_off) - 155 = 2 + entry_off — the same +2 as bin_glue2w,
+;; for the same reason (a 2-byte ud2 tail, not a 15-byte exit tail).
+(fn win_zero_regs () (List Int)
+  (catb
+    (list
+      (enc_mov_imm64 RAX 0)
+      (enc_mov_imm64 RCX 0)
+      (enc_mov_imm64 RDX 0)
+      (enc_mov_imm64 RBX 0)
+      (enc_mov_imm64 RBP 0)
+      (enc_mov_imm64 RSI 0)
+      (enc_mov_imm64 RDI 0)
+      (enc_mov_imm64 R8 0)
+      (enc_mov_imm64 R9 0)
+      (enc_mov_imm64 R10 0)
+      (enc_mov_imm64 R11 0)
+      (enc_mov_imm64 R12 0)
+      (enc_mov_imm64 R13 0)
+      (enc_mov_imm64 R14 0)
+      (enc_mov_imm64 R15 0))))
+
+(fn win_glue ((entry_off Int)) (List Int)
+  (catb
+    (list
+      (win_zero_regs)  ; 0    all-zero entry state (150 bytes, W1)
+      (enc_call_rel32 (+ 2 entry_off))  ; 150  call entry (ends 155)
+      (list 15 11))))  ; 155  ud2 (0F 0B) trap fence (W5) (ends 157)
+
+;; the two PT_LOADs in ASCENDING p_vaddr order — the ELF spec's sort law, which
+;; both landed layouts already obey by accident of their constants and which a
+;; free base must obey on purpose. A window below load_base emits data-first
+;; (the §51 demonstrator's order at base 0x10000); a window above it emits
+;; code-first (the §22 bin rung's order at 0x600000).
+(fn win_phdrs ((base Int) (size Int) (filesz Int)) (List Int)
+  (let ((pcode (elf_phdr_load 5 0 (load_base) filesz filesz)))
+    (let ((pdata (elf_phdr_load 6 0 base 0 size)))
+      (if (lt base (load_base)) (eapp pdata pcode) (eapp pcode pdata)))))
+
+;; the relocated-window binary: [ELF hdr:64][phdr:56][phdr:56][glue:157][image].
+;; The header is bin_elf_hdr verbatim — two phdrs, e_entry = load_base + 176 (the
+;; glue, first code after the headers) — because this rung's header IS the bin
+;; rung's; only the window and the glue differ.
+(fn enc_winelf ((image (List Int)) (entry_off Int) (base Int) (size Int))
+  (List Int)
+  (let ((code (eapp (win_glue entry_off) image)))
+    (let ((filesz (+ (bin_hdrs_sz) (elen code))))
+      (eapp (bin_elf_hdr) (eapp (win_phdrs base size filesz) code)))))
