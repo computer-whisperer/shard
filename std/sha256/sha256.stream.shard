@@ -12,12 +12,15 @@
 ;;;
 ;;; The CORRESPONDENCE THEOREM (§7.6: folding chunks then finalizing =
 ;;; the one-shot sha256 of the concatenation, at list grain, memory-
-;;; free) is this file's NEXT slice; this slice lands the definitions
-;;; under ground pins that cross every boundary shape — empty message,
+;;; free) lands at the bottom of this file — sha_stream_corresponds,
+;;; over the abstraction fn sha_abs and the shift/split/prefix lemma
+;;; road. The ground pins cross every boundary shape — empty message,
 ;;; sub-block chunks, an empty chunk mid-stream, a fold inside a step,
 ;;; two folds inside one step, and the exact-block-boundary tail.
 
 (import "../../kernel/stdlib.shard")
+(import "../../kernel/facts.shard")
+(use (:: kernel facts *))
 (import "sha256.shard")
 (use (:: std sha256 sha256 *))
 (use (:: std sha256 sha256))
@@ -489,3 +492,663 @@
               (steps () (by arith (rows (goal 1) (hz 1))))
               (steps () (by arith (list))))
              (steps () (by arith (list))))))))))
+
+;; ---- the correspondence theorem (§7.6, slice 3) ----------------------------------
+;; sha_abs is the abstraction function: the incremental state a whole
+;; absorbed message denotes. The lemma road: the euclidean shift law
+;; moves whole-block counts through ediv; blocks_split cuts a fold at
+;; any fuel boundary; blocks_prefix discharges appended bytes the fuel
+;; never reaches; absorb (step) and finalize (fin) commute sha_abs
+;; with the two state operations; the main induction folds a chunk
+;; list into one concatenation. No case split on the tail's length is
+;; ever needed — the fuel shifts by exactly kM on both legs.
+
+(fn sha_abs ((msg (List Int))) ShaSt
+  (MkShaSt
+    (sha_blocks (sha_h0) msg (ediv (slen msg) 64))
+    (sdrop (* 64 (ediv (slen msg) 64)) msg)
+    (slen msg)))
+
+;; the spec-level chunk concatenation the theorem quantifies over.
+(fn scat ((cs (List (List Int)))) (List Int)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons c t) (sapp c (scat t)))))
+
+;; the quotient of a nonneg dividend is nonneg (divisor 64).
+(claim shc_ediv64_lo
+  (goal ((n Int)) ((= (le 0 n) True)) (= (le 0 (ediv n 64)) True))
+  (chain
+    (have hid (= n (+ (* 64 (ediv n 64)) (mod n 64)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 64))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hhi (= (lt (mod n 64) 64) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (steps () (by arith (rows (goal 64) (0 1) (hid -1) (hhi 1))))))
+
+;; 64 * quotient stays below the dividend.
+(claim shc_ediv64_ub
+  (goal ((n Int)) ((= (le 0 n) True)) (= (le (* 64 (ediv n 64)) n) True))
+  (chain
+    (have hid (= n (+ (* 64 (ediv n 64)) (mod n 64)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 64))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hlo (= (le 0 (mod n 64)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (steps () (by arith (rows (goal 1) (hid 1) (hlo 1))))))
+
+;; the euclidean shift law: a whole multiple of the divisor moves out
+;; of the quotient (div_unique at the exhibited decomposition).
+(claim shc_ediv_shift
+  (goal ((a Int) (x Int)) () (= (ediv (+ (* 64 a) x) 64) (+ a (ediv x 64))))
+  (chain
+    (have hx (= x (+ (* 64 (ediv x 64)) (mod x 64)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 64))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hlo (= (le 0 (mod x 64)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hhi (= (lt (mod x 64) 64) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (rewrite-with
+      (lemma div_unique)
+      lr
+      lhs
+      ((inst q (+ a (ediv x 64))) (inst r (mod x 64)))
+      ((steps () (by arith (list (list 1 -1 0 0) (list 1 1 0 0))))
+       (steps ((rewrite (premise hlo) lr lhs true ())) refl)
+       (steps ((rewrite (premise hhi) lr lhs true ())) refl)))
+    refl))
+
+;; a sha_blocks fold cuts at any fuel boundary: a+b blocks = a blocks,
+;; then b blocks from 64a bytes in.
+(claim shc_blocks_split
+  (goal ((a Int) (b Int) (st H8) (bs (List Int)))
+    ((= (le 0 a) True) (= (le 0 b) True))
+    (=
+      (sha_blocks st bs (+ a b))
+      (sha_blocks (sha_blocks st bs a) (sdrop (* 64 a) bs) b)))
+  (wf-induct a
+    (case-on (le a 0) Bool
+      ((case True
+         (chain
+           (have ha (= (le a 0) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have ha0 (= a 0)
+             (by arith (list (rows (goal 1) (ha 1)) (rows (goal 1) (0 1)))))
+           (have hzf (= (sha_blocks st bs 0) st) (steps ((compute lhs)) refl))
+           (have h640 (= (* 64 0) 0) (steps ((compute lhs)) refl))
+           (have h0b (= (+ 0 b) b) (by arith (list)))
+           (steps
+             ((rewrite (premise ha0) lr both true ())
+              (rewrite (premise h0b) lr lhs true ())
+              (rewrite (premise hzf) lr rhs true ())
+              (rewrite (premise h640) lr rhs true ())
+              (rewrite (lemma shc_sdrop0) lr rhs true ()))
+             refl)))
+       (case False
+         (chain
+           (have ha (= (le a 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hab (= (le (+ a b) 0) False)
+             (by arith (rows (goal 1) (ha 1) (1 1))))
+           (have hL
+             (=
+               (sha_blocks st bs (+ a b))
+               (sha_blocks
+                 (sha_block st (stake 64 bs))
+                 (sdrop 64 bs)
+                 (- (+ a b) 1)))
+             (steps
+               ((unfold sha_blocks lhs)
+                (reduce lhs)
+                (rewrite (premise hab) lr lhs true ())
+                (reduce lhs))
+               refl))
+           (have hstep
+             (=
+               (sha_blocks st bs a)
+               (sha_blocks (sha_block st (stake 64 bs)) (sdrop 64 bs) (- a 1)))
+             (steps
+               ((unfold sha_blocks lhs)
+                (reduce lhs)
+                (rewrite (premise ha) lr lhs true ())
+                (reduce lhs))
+               refl))
+           (have hsh (= (- (+ a b) 1) (+ (- a 1) b)) (by arith (list)))
+           (have hma (= (* 64 a) (+ (* 64 (- a 1)) 64)) (by arith (list)))
+           (steps
+             ((rewrite (premise hL) lr lhs true ())
+              (rewrite (premise hsh) lr lhs true ())
+              (rewrite (premise hstep) lr rhs true ())
+              (rewrite (premise hma) lr rhs true ())))
+           (rewrite-with
+             (lemma shc_sdrop_sdrop)
+             rl
+             rhs
+             ()
+             ((steps () (by arith (rows (goal 1) (ha 64))))
+              (steps ((compute lhs)) refl)))
+           (rewrite-with
+             (hyp 1)
+             lr
+             lhs
+             ()
+             ((steps () (by arith (rows (goal 1) (ha 1))))
+              (steps ((rewrite (premise 1) lr lhs true ())) refl)
+              (steps () (by arith (rows (goal 1) (ha 1))))
+              (steps () (by arith (list))))
+             refl)))))))
+
+;; bytes appended past the fueled prefix never reach the fold: with
+;; 64k bytes of prefix available, a k-block fold ignores the suffix.
+(claim shc_blocks_prefix
+  (goal ((k Int) (st H8) (xs (List Int)) (ys (List Int)))
+    ((= (le 0 k) True) (= (le (* 64 k) (slen xs)) True))
+    (= (sha_blocks st (sapp xs ys) k) (sha_blocks st xs k)))
+  (wf-induct k
+    (case-on (le k 0) Bool
+      ((case True
+         (chain
+           (have hk (= (le k 0) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have hL (= (sha_blocks st (sapp xs ys) k) st)
+             (steps
+               ((unfold sha_blocks lhs)
+                (rewrite (premise hk) lr lhs true ())
+                (reduce lhs))
+               refl))
+           (have hR (= (sha_blocks st xs k) st)
+             (steps
+               ((unfold sha_blocks lhs)
+                (rewrite (premise hk) lr lhs true ())
+                (reduce lhs))
+               refl))
+           (steps
+             ((rewrite (premise hL) lr lhs true ())
+              (rewrite (premise hR) lr rhs true ()))
+             refl)))
+       (case False
+         (chain
+           (have hk (= (le k 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have h64 (= (le 64 (slen xs)) True)
+             (by arith (rows (goal 1) (1 1) (hk 64))))
+           (have hsd (= (slen (sdrop 64 xs)) (- (slen xs) 64))
+             (rewrite-with
+               (lemma shc_slen_sdrop)
+               lr
+               lhs
+               ()
+               ((steps ((compute lhs)) refl)
+                (steps ((rewrite (premise h64) lr lhs true ())) refl))
+               refl))
+           (have hL
+             (=
+               (sha_blocks st (sapp xs ys) k)
+               (sha_blocks
+                 (sha_block st (stake 64 (sapp xs ys)))
+                 (sdrop 64 (sapp xs ys))
+                 (- k 1)))
+             (steps
+               ((unfold sha_blocks lhs)
+                (reduce lhs)
+                (rewrite (premise hk) lr lhs true ())
+                (reduce lhs))
+               refl))
+           (have hR
+             (=
+               (sha_blocks st xs k)
+               (sha_blocks (sha_block st (stake 64 xs)) (sdrop 64 xs) (- k 1)))
+             (steps
+               ((unfold sha_blocks lhs)
+                (reduce lhs)
+                (rewrite (premise hk) lr lhs true ())
+                (reduce lhs))
+               refl))
+           (steps
+             ((rewrite (premise hL) lr lhs true ())
+              (rewrite (premise hR) lr rhs true ())))
+           (rewrite-with
+             (lemma shc_stake_pre)
+             lr
+             lhs
+             ()
+             ((steps ((compute lhs)) refl)
+              (steps ((rewrite (premise h64) lr lhs true ())) refl)))
+           (rewrite-with
+             (lemma shc_sdrop_pre)
+             lr
+             lhs
+             ()
+             ((steps ((compute lhs)) refl)
+              (steps ((rewrite (premise h64) lr lhs true ())) refl)))
+           (rewrite-with
+             (hyp 1)
+             lr
+             lhs
+             ()
+             ((steps () (by arith (rows (goal 1) (hk 1))))
+              (steps
+                ((rewrite (premise hsd) lr lhs true ()))
+                (by arith (rows (goal 1) (1 1))))
+              (steps () (by arith (rows (goal 1) (hk 1))))
+              (steps () (by arith (list))))
+             refl)))))))
+
+;; absorb: one sha_step from an absorbed state is the absorbed state
+;; of the extended message (the main induction's step).
+(claim shc_step_abs
+  (goal ((M (List Int)) (c (List Int))) ()
+    (= (sha_step (sha_abs M) c) (sha_abs (sapp M c))))
+  (chain
+    (have hm (= (le 0 (slen M)) True)
+      (steps ((rewrite (lemma shc_slen_nn) lr lhs true ())) refl))
+    (have hklo (= (le 0 (ediv (slen M) 64)) True)
+      (rewrite-with
+        (lemma shc_ediv64_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hm) lr lhs true ())) refl))
+        refl))
+    (have hkub (= (le (* 64 (ediv (slen M) 64)) (slen M)) True)
+      (rewrite-with
+        (lemma shc_ediv64_ub)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hm) lr lhs true ())) refl))
+        refl))
+    (have hlp
+      (=
+        (slen (sdrop (* 64 (ediv (slen M) 64)) M))
+        (- (slen M) (* 64 (ediv (slen M) 64))))
+      (rewrite-with
+        (lemma shc_slen_sdrop)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (hklo 64))))
+         (steps ((rewrite (premise hkub) lr lhs true ())) refl))
+        refl))
+    (have hlb
+      (=
+        (slen (sapp (sdrop (* 64 (ediv (slen M) 64)) M) c))
+        (+ (slen (sdrop (* 64 (ediv (slen M) 64)) M)) (slen c)))
+      (steps ((rewrite (lemma shc_slen_sapp) lr lhs true ())) refl))
+    (have hlmc (= (slen (sapp M c)) (+ (slen M) (slen c)))
+      (steps ((rewrite (lemma shc_slen_sapp) lr lhs true ())) refl))
+    (have hbnn
+      (= (le 0 (slen (sapp (sdrop (* 64 (ediv (slen M) 64)) M) c))) True)
+      (steps ((rewrite (lemma shc_slen_nn) lr lhs true ())) refl))
+    (have hkblo
+      (=
+        (le 0 (ediv (slen (sapp (sdrop (* 64 (ediv (slen M) 64)) M) c)) 64))
+        True)
+      (rewrite-with
+        (lemma shc_ediv64_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hbnn) lr lhs true ())) refl))
+        refl))
+    (have hsplit
+      (=
+        (slen (sapp M c))
+        (+
+          (* 64 (ediv (slen M) 64))
+          (slen (sapp (sdrop (* 64 (ediv (slen M) 64)) M) c))))
+      (steps
+        ()
+        (by
+          arith
+          (list
+            (rows (goal 1) (hlp 1) (hlb 1) (hlmc -1))
+            (rows (goal 1) (hlp -1) (hlb -1) (hlmc 1))))))
+    (have hKC
+      (=
+        (ediv (slen (sapp M c)) 64)
+        (+
+          (ediv (slen M) 64)
+          (ediv (slen (sapp (sdrop (* 64 (ediv (slen M) 64)) M) c)) 64)))
+      (steps
+        ((rewrite (premise hsplit) lr lhs true ())
+         (rewrite (lemma shc_ediv_shift) lr lhs true ()))
+        refl))
+    (have hma64
+      (=
+        (*
+          64
+          (+
+            (ediv (slen M) 64)
+            (ediv (slen (sapp (sdrop (* 64 (ediv (slen M) 64)) M) c)) 64)))
+        (+
+          (* 64 (ediv (slen (sapp (sdrop (* 64 (ediv (slen M) 64)) M) c)) 64))
+          (* 64 (ediv (slen M) 64))))
+      (by arith (list)))
+    (steps
+      ((unfold sha_abs lhs)
+       (unfold sha_step lhs)
+       (reduce lhs)
+       (unfold sha_abs rhs)
+       (rewrite (premise hKC) lr rhs true ())
+       (rewrite (premise hlmc) lr rhs true ())
+       (rewrite (premise hma64) lr rhs true ())))
+    (rewrite-with
+      (lemma shc_sdrop_sdrop)
+      rl
+      rhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hkblo 64))))
+       (steps () (by arith (rows (goal 1) (hklo 64))))))
+    (rewrite-with
+      (lemma shc_blocks_split)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hklo) lr lhs true ())) refl)
+       (steps ((rewrite (premise hkblo) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shc_blocks_prefix)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hklo) lr lhs true ())) refl)
+       (steps ((rewrite (premise hkub) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shc_sdrop_pre)
+      lr
+      rhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hklo 64))))
+       (steps ((rewrite (premise hkub) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shc_sdrop_pre)
+      lr
+      rhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hklo 64))))
+       (steps ((rewrite (premise hkub) lr lhs true ())) refl)))
+    refl))
+
+;; finalize: sha_fin of an absorbed state is the one-shot digest. The
+;; padded message splits as 64*kM absorbed bytes ++ the padded tail,
+;; and the fuel shifts by exactly kM — the r<=55 / r>55 tail shapes
+;; never need separating.
+(claim shc_fin_abs
+  (goal ((M (List Int))) () (= (sha_fin (sha_abs M)) (sha256 M)))
+  (chain
+    (have hm (= (le 0 (slen M)) True)
+      (steps ((rewrite (lemma shc_slen_nn) lr lhs true ())) refl))
+    (have hklo (= (le 0 (ediv (slen M) 64)) True)
+      (rewrite-with
+        (lemma shc_ediv64_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hm) lr lhs true ())) refl))
+        refl))
+    (have hkub (= (le (* 64 (ediv (slen M) 64)) (slen M)) True)
+      (rewrite-with
+        (lemma shc_ediv64_ub)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hm) lr lhs true ())) refl))
+        refl))
+    (have hlp
+      (=
+        (slen (sdrop (* 64 (ediv (slen M) 64)) M))
+        (- (slen M) (* 64 (ediv (slen M) 64))))
+      (rewrite-with
+        (lemma shc_slen_sdrop)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (hklo 64))))
+         (steps ((rewrite (premise hkub) lr lhs true ())) refl))
+        refl))
+    (have hpad
+      (=
+        (sha_pad M)
+        (sapp
+          M
+          (Cons
+            128
+            (sapp (szeros (mod (- 55 (slen M)) 64)) (len_be (* 8 (slen M)))))))
+      (steps ((unfold sha_pad lhs) (reduce lhs)) refl))
+    (have hlpd
+      (=
+        (slen
+          (sapp
+            M
+            (Cons
+              128
+              (sapp (szeros (mod (- 55 (slen M)) 64)) (len_be (* 8 (slen M)))))))
+        (+
+          (slen M)
+          (slen
+            (Cons
+              128
+              (sapp (szeros (mod (- 55 (slen M)) 64)) (len_be (* 8 (slen M))))))))
+      (steps ((rewrite (lemma shc_slen_sapp) lr lhs true ())) refl))
+    (have hltl
+      (=
+        (slen
+          (sapp
+            (sdrop (* 64 (ediv (slen M) 64)) M)
+            (Cons
+              128
+              (sapp (szeros (mod (- 55 (slen M)) 64)) (len_be (* 8 (slen M)))))))
+        (+
+          (slen (sdrop (* 64 (ediv (slen M) 64)) M))
+          (slen
+            (Cons
+              128
+              (sapp (szeros (mod (- 55 (slen M)) 64)) (len_be (* 8 (slen M))))))))
+      (steps ((rewrite (lemma shc_slen_sapp) lr lhs true ())) refl))
+    (have hpdtl
+      (=
+        (slen
+          (sapp
+            M
+            (Cons
+              128
+              (sapp (szeros (mod (- 55 (slen M)) 64)) (len_be (* 8 (slen M)))))))
+        (+
+          (* 64 (ediv (slen M) 64))
+          (slen
+            (sapp
+              (sdrop (* 64 (ediv (slen M) 64)) M)
+              (Cons
+                128
+                (sapp (szeros (mod (- 55 (slen M)) 64)) (len_be (* 8 (slen M)))))))))
+      (steps
+        ()
+        (by
+          arith
+          (list
+            (rows (goal 1) (hlp 1) (hlpd -1) (hltl 1))
+            (rows (goal 1) (hlp -1) (hlpd 1) (hltl -1))))))
+    (have hfuel
+      (=
+        (ediv
+          (slen
+            (sapp
+              M
+              (Cons
+                128
+                (sapp (szeros (mod (- 55 (slen M)) 64)) (len_be (* 8 (slen M)))))))
+          64)
+        (+
+          (ediv (slen M) 64)
+          (ediv
+            (slen
+              (sapp
+                (sdrop (* 64 (ediv (slen M) 64)) M)
+                (Cons
+                  128
+                  (sapp
+                    (szeros (mod (- 55 (slen M)) 64))
+                    (len_be (* 8 (slen M)))))))
+            64)))
+      (steps
+        ((rewrite (premise hpdtl) lr lhs true ())
+         (rewrite (lemma shc_ediv_shift) lr lhs true ()))
+        refl))
+    (have htlnn
+      (=
+        (le
+          0
+          (slen
+            (sapp
+              (sdrop (* 64 (ediv (slen M) 64)) M)
+              (Cons
+                128
+                (sapp (szeros (mod (- 55 (slen M)) 64)) (len_be (* 8 (slen M))))))))
+        True)
+      (steps ((rewrite (lemma shc_slen_nn) lr lhs true ())) refl))
+    (have htlo
+      (=
+        (le
+          0
+          (ediv
+            (slen
+              (sapp
+                (sdrop (* 64 (ediv (slen M) 64)) M)
+                (Cons
+                  128
+                  (sapp
+                    (szeros (mod (- 55 (slen M)) 64))
+                    (len_be (* 8 (slen M)))))))
+            64))
+        True)
+      (rewrite-with
+        (lemma shc_ediv64_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise htlnn) lr lhs true ())) refl))
+        refl))
+    (steps
+      ((unfold sha_abs lhs)
+       (unfold sha_fin lhs)
+       (reduce lhs)
+       (unfold sha256 rhs)
+       (reduce rhs)
+       (rewrite (premise hpad) lr rhs true ())
+       (rewrite (premise hfuel) lr rhs true ())))
+    (rewrite-with
+      (lemma shc_blocks_split)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hklo) lr lhs true ())) refl)
+       (steps ((rewrite (premise htlo) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shc_blocks_prefix)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hklo) lr lhs true ())) refl)
+       (steps ((rewrite (premise hkub) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shc_sdrop_pre)
+      lr
+      rhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hklo 64))))
+       (steps ((rewrite (premise hkub) lr lhs true ())) refl)))
+    refl))
+
+;; the generalized main induction: folding any chunk list from any
+;; absorbed state finalizes to the one-shot digest of the whole
+;; concatenation.
+(claim shc_stream_gen
+  (goal ((cs (List (List Int))) (M (List Int))) ()
+    (= (sha_fin (sha_steps (sha_abs M) cs)) (sha256 (sapp M (scat cs)))))
+  (induct cs
+    ((case Nil
+       (chain
+         (have hs (= (sha_steps (sha_abs M) Nil) (sha_abs M))
+           (steps ((unfold sha_steps lhs) (reduce lhs)) refl))
+         (have hc (= (scat Nil) Nil)
+           (steps ((unfold scat lhs) (reduce lhs)) refl))
+         (steps
+           ((rewrite (premise hs) lr lhs true ())
+            (rewrite (premise hc) lr rhs true ())
+            (rewrite (lemma shc_sapp_nil) lr rhs true ())
+            (rewrite (lemma shc_fin_abs) lr lhs true ()))
+           refl)))
+     (case Cons
+       (c t)
+       (chain
+         (have hs
+           (=
+             (sha_steps (sha_abs M) (Cons c t))
+             (sha_steps (sha_step (sha_abs M) c) t))
+           (steps ((unfold sha_steps lhs) (reduce lhs)) refl))
+         (have hc (= (scat (Cons c t)) (sapp c (scat t)))
+           (steps ((unfold scat lhs) (reduce lhs)) refl))
+         (steps
+           ((rewrite (premise hs) lr lhs true ())
+            (rewrite (premise hc) lr rhs true ())
+            (rewrite (lemma shc_step_abs) lr lhs true ())))
+         (rewrite-with (hyp 0) lr lhs ((inst M (sapp M c))) ())
+         (steps ((rewrite (lemma shc_sapp_assoc) lr lhs true ())) refl))))))
+
+;; THE §7.6 CORRESPONDENCE THEOREM: folding chunks from init then
+;; finalizing = the one-shot sha256 of the concatenation. Pure list
+;; grain; the window is the machine leg's business (Fork C ruling).
+(claim sha_stream_corresponds
+  (goal ((cs (List (List Int)))) ()
+    (= (sha_fin (sha_steps (sha_init) cs)) (sha256 (scat cs))))
+  (chain
+    (have hi (= (sha_init) (sha_abs Nil)) (steps ((compute both)) refl))
+    (have hn (= (sapp Nil (scat cs)) (scat cs))
+      (steps ((unfold sapp lhs) (reduce lhs)) refl))
+    (steps
+      ((rewrite (premise hi) lr lhs true ())
+       (rewrite (lemma shc_stream_gen) lr lhs true ())
+       (rewrite (premise hn) lr lhs true ()))
+      refl)))
