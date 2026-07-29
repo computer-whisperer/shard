@@ -342,6 +342,7 @@ TARGETS=(
   std/sha256/sha256.xchain.shard
   std/sha256/sha256.xcomp.shard
   std/sha256/sha256.stream.shard
+  examples/sha256sum/sha256sum_stream_src.shard
   std/sha256/impgen_wasm_out.shard
   std/sha256/impgen_x86_out.shard
   std/sha256/sha256.weld.shard

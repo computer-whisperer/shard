@@ -1,0 +1,169 @@
+;;; examples/sha256sum/sha256sum_stream_src.shard — the STREAMING spec
+;;; main (Arc B rung B3, docs/STREAM.md §7.1/§7.2/§7.7): stream_main's
+;;; sha instantiation at spec grain — THE read-until-EOF World loop:
+;;; read into the window at a ground cap, absorb the delivered bytes
+;;; through sha_step, repeat until ret 0, write the 64 hex digits of
+;;; the finalized digest, exit 0. A read ERROR fail-stops — exit 1,
+;;; nothing written, never EOF (§7.2; RdErr mirrors the model's
+;;; payload-free LxReadErr, the Fork-B ruling). Short reads are legal
+;;; at any time; ret 0 is EOF and ONLY EOF. The (base, cap) window
+;;; policy is the machine leg's business (#65); the ground cap here is
+;;; one page.
+;;;
+;;; FIRST-ORDER realization (LOWERING.md §1: no fn-typed params):
+;;; stream_main is a STATEMENT SCHEMA, not a higher-order value — this
+;;; file is its exemplar instance with sha_step/sha_fin inline; every
+;;; future filter-shaped bin copies the loop shape.
+;;;
+;;; The cat_loop split (TOTALITY.md §8): `sst_loop` (unbounded) is
+;;; what RUNS — a program no proof reaches, needing no measure;
+;;; `sst_fuel` is the Nat-fueled twin carrying the ∀-fuel theorems.
+;;; THE TRACE THEOREM (sst_trace): for EVERY fuel and EVERY oracle
+;;; behavior, the fueled loop from an absorbed state equals the GHOST
+;;; loop that accumulates the whole message and hashes it one-shot at
+;;; EOF — §7.6's correspondence lifted to the World loop. Every
+;;; observable (worlds, deposited bytes, writes, exits) is equal as a
+;;; term, so the streaming bin's I/O behavior IS "read everything,
+;;; write sha256(everything)": the incremental state is invisible.
+
+(import "../../kernel/stdlib.shard")
+(import "../../std/mem")
+(use (:: std mem *))
+(import "../../std/nat")
+(use (:: std nat *))
+(import "../../std/sha256/sha256.stream.shard")
+(use (:: std sha256 sha256.stream *))
+(use (:: std sha256 sha256 *))
+(use (:: std sha256 sha256))
+
+(type World (World Int))
+
+;; the read outcome: delivered data (advanced world, filled window,
+;; count as Nat — ret 0 = EOF and only EOF), or the payload-free error
+;; leg (memory untouched, so RdErr carries no Mem).
+(type RdRes (RdData World Mem Nat) (RdErr World))
+
+;; the effect externs (bin-local v1; write/exit = the one-shot bin's
+;; verbatim, read = the streaming contract's spec face)
+(extern nw_read ((w World) (m Mem) (fd Int) (buf Int) (cap Int)) RdRes)
+
+(extern nw_write ((w World) (m Mem) (fd Int) (buf Int) (n Int)) World)
+
+(extern nw_exit ((w World) (code Int)) World)
+
+;; the hex deposit: store a byte list ascending at p (the one-shot
+;; bin's shs_store, restated bin-locally)
+(fn sst_store ((m Mem) (bs (List Int)) (p Int)) Mem
+  (measure (struct bs))
+  (match bs
+    (Nil m)
+    ((Cons b t) (sst_store (mem_set m p b) t (+ p 1)))))
+
+;; the loop — WHAT RUNS (unbounded: a program no proof reaches; the
+;; oracle decides the trip count). Read at the cap; error → exit 1;
+;; EOF → deposit + write the 64 hex digits of the finalized digest,
+;; exit 0; data → absorb the delivered window bytes, loop.
+(fn sst_loop ((st ShaSt) (w World) (m Mem)) World
+  (match (nw_read w m 0 0 4096)
+    ((RdData w2 m2 k)
+     (match k
+       (Z
+         (nw_exit
+           (nw_write w2 (sst_store m2 (bytes_hex (sha_fin st)) 0) 1 0 64)
+           0))
+       ((S _) (sst_loop (sha_step st (mem_read k m2 0)) w2 m2))))
+    ((RdErr w2) (nw_exit w2 1))))
+
+;; the entry: the loop from the empty absorbed state.
+(fn sst_main ((w World) (m Mem)) World (sst_loop (sha_init) w m))
+
+;; the fueled twin: the same loop with a Nat fuel — the structural
+;; measure the ∀-fuel theorems induct on (out of fuel returns the
+;; world unchanged, covering every finite run at every prefix).
+(fn sst_fuel ((n Nat) (st ShaSt) (w World) (m Mem)) World
+  (measure (struct n))
+  (match n
+    (Z w)
+    ((S f)
+     (match (nw_read w m 0 0 4096)
+       ((RdData w2 m2 k)
+        (match k
+          (Z
+            (nw_exit
+              (nw_write w2 (sst_store m2 (bytes_hex (sha_fin st)) 0) 1 0 64)
+              0))
+          ((S _) (sst_fuel f (sha_step st (mem_read k m2 0)) w2 m2))))
+       ((RdErr w2) (nw_exit w2 1))))))
+
+;; the GHOST twin: the same loop carrying the WHOLE accumulated
+;; message instead of the incremental state, hashing one-shot at EOF —
+;; the loop a reader would trust on sight. Proof-only vocabulary.
+(fn sst_ghost ((n Nat) (msg (List Int)) (w World) (m Mem)) World
+  (measure (struct n))
+  (match n
+    (Z w)
+    ((S f)
+     (match (nw_read w m 0 0 4096)
+       ((RdData w2 m2 k)
+        (match k
+          (Z
+            (nw_exit
+              (nw_write w2 (sst_store m2 (bytes_hex (sha256 msg)) 0) 1 0 64)
+              0))
+          ((S _) (sst_ghost f (sapp msg (mem_read k m2 0)) w2 m2))))
+       ((RdErr w2) (nw_exit w2 1))))))
+
+;; THE TRACE THEOREM: fueled loop from an absorbed state = ghost loop
+;; on the message, for every fuel and every oracle behavior. Induct on
+;; fuel; case the read outcome; the data leg is shc_step_abs + the IH,
+;; the EOF leg is shc_fin_abs under bytes_hex.
+(claim sst_trace
+  (goal ((n Nat) (M (List Int)) (w World) (m Mem)) ()
+    (= (sst_fuel n (sha_abs M) w m) (sst_ghost n M w m)))
+  (induct n
+    ((case Z (steps ((simp both)) refl))
+     (case S
+       (chain
+         (steps ((simp lhs) (simp rhs)))
+         (case-on (nw_read w m 0 0 4096) RdRes
+           ((case RdData
+              (w2 m2 k)
+              (chain
+                (steps ((rewrite (hyp 0) lr both true ()) (reduce both)))
+                (case-on k Nat
+                  ((case Z
+                     (steps
+                       ((rewrite (hyp 0) lr both true ())
+                        (reduce both)
+                        (rewrite (lemma shc_fin_abs) lr lhs true ()))
+                       refl))
+                   (case S
+                     (kk)
+                     (chain
+                       (steps
+                         ((rewrite (hyp 0) lr both true ())
+                          (reduce both)
+                          (rewrite (lemma shc_step_abs) lr lhs true ())))
+                       (rewrite-with
+                         (hyp 2)
+                         lr
+                         lhs
+                         ((inst M (sapp M (mem_read (S kk) m2 0))))
+                         ()
+                         refl)))))))
+            (case RdErr
+              (w2)
+              (steps ((rewrite (hyp 0) lr both true ()) (reduce both)) refl)))))))))
+
+;; the entry corollary: from sha_init the streaming loop IS the ghost
+;; loop on the empty message — the bin's behavior is one-shot sha256
+;; of everything the oracle delivers.
+(claim sst_trace_init
+  (goal ((n Nat) (w World) (m Mem)) ()
+    (= (sst_fuel n (sha_init) w m) (sst_ghost n Nil w m)))
+  (chain
+    (have hi (= (sha_init) (sha_abs Nil)) (steps ((compute both)) refl))
+    (steps
+      ((rewrite (premise hi) lr lhs true ())
+       (rewrite (lemma sst_trace) lr lhs true ()))
+      refl)))
