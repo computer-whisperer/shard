@@ -1,0 +1,138 @@
+;;; std/sha256/sha256.stream.shard — the INCREMENTAL SHA-256 state
+;;; (Arc B rung B3, docs/STREAM.md §7.6, ratified 2026-07-29): the
+;;; spec-level step/finalizer pair the streaming bin's read loop folds.
+;;; State = (H after the absorbed whole blocks, the pending tail
+;;; (< 64 bytes), the total byte count); `sha_step` absorbs a chunk —
+;;; a PLAIN BYTE LIST, the §7.8 Fork-C ruling: the spec side never
+;;; speaks memory; the window is the machine leg's business — folding
+;;; every whole 64-byte block through `sha_block` and carrying the
+;;; remainder; `sha_fin` pads the tail with the TOTAL length (the same
+;;; zeros formula as `sha_pad`, driven by n ≡ |pend| mod 64) and
+;;; produces the 32 digest bytes.
+;;;
+;;; The CORRESPONDENCE THEOREM (§7.6: folding chunks then finalizing =
+;;; the one-shot sha256 of the concatenation, at list grain, memory-
+;;; free) is this file's NEXT slice; this slice lands the definitions
+;;; under ground pins that cross every boundary shape — empty message,
+;;; sub-block chunks, an empty chunk mid-stream, a fold inside a step,
+;;; two folds inside one step, and the exact-block-boundary tail.
+
+(import "../../kernel/stdlib.shard")
+(import "sha256.shard")
+(use (:: std sha256 sha256 *))
+(use (:: std sha256 sha256))
+
+;; the incremental state: H = the hash state after the absorbed whole
+;; blocks, pend = the unabsorbed tail (always < 64 bytes), n = total
+;; bytes seen (the finalizer's length field — FIPS 180-4 pads with the
+;; MESSAGE length, not the tail's).
+(type ShaSt (MkShaSt H8 (List Int) Int))
+
+(fn sha_init () ShaSt (MkShaSt (sha_h0) Nil 0))
+
+;; absorb one chunk: append to the pending tail, fold every whole
+;; 64-byte block into H (sha_blocks consumes exactly k blocks and
+;; leaves the remainder untouched), keep the rest pending.
+(fn sha_step ((st ShaSt) (chunk (List Int))) ShaSt
+  (match st
+    ((MkShaSt h pend n)
+     (let ((buf (sapp pend chunk)))
+       (let ((k (ediv (slen buf) 64)))
+         (MkShaSt (sha_blocks h buf k) (sdrop (* 64 k) buf) (+ n (slen chunk))))))))
+
+;; finalize: pad the pending tail exactly as sha_pad pads a whole
+;; message — 0x80, zeros, the 64-bit bit length — with n the TOTAL
+;; count. zeros = (55 - n) mod 64 keeps the padded tail a whole number
+;; of blocks because |pend| ≡ n (mod 64).
+(fn sha_fin ((st ShaSt)) (List Int)
+  (match st
+    ((MkShaSt h pend n)
+     (let
+       ((tl
+          (sapp
+            pend
+            (Cons 128 (sapp (szeros (mod (- 55 n) 64)) (len_be (* 8 n)))))))
+       (h8_bytes (sha_blocks h tl (ediv (slen tl) 64)))))))
+
+;; the chunk-sequence fold (first-order): the spine the correspondence
+;; theorem quantifies over — sha_fin (sha_steps sha_init cs) will be
+;; proven equal to sha256 of the concatenation of cs.
+(fn sha_steps ((st ShaSt) (chunks (List (List Int)))) ShaSt
+  (measure (struct chunks))
+  (match chunks
+    (Nil st)
+    ((Cons c t) (sha_steps (sha_step st c) t))))
+
+;; ---- ground pins: the incremental path reproduces the one-shot ------------------
+;; compute-proven both sides — a definition bug in step/fin can never
+;; slip past these into the correspondence proof.
+
+;; the empty message: finalize straight from init (pure padding block).
+(claim shst_empty_pin
+  (goal () () (= (sha_fin (sha_init)) (sha256 Nil)))
+  (steps ((compute both)) refl))
+
+;; one sub-block chunk.
+(claim shst_abc_pin
+  (goal () () (= (sha_fin (sha_step (sha_init) "abc")) (sha256 "abc")))
+  (steps ((compute both)) refl))
+
+;; the same message split — the pending tail carries across steps.
+(claim shst_abc_split_pin
+  (goal () ()
+    (= (sha_fin (sha_steps (sha_init) (list "a" "bc"))) (sha256 "abc")))
+  (steps ((compute both)) refl))
+
+;; an empty chunk mid-stream is absorbed silently (the short-read case:
+;; a legal ret > 0 loop iteration can still deliver few bytes).
+(claim shst_empty_chunk_pin
+  (goal () ()
+    (= (sha_fin (sha_steps (sha_init) (list "a" Nil "bc"))) (sha256 "abc")))
+  (steps ((compute both)) refl))
+
+;; a fold INSIDE each step: 70-byte then 60-byte chunks — step 1 folds
+;; one block and pends 6 bytes, step 2 reaches 66 and folds again,
+;; the finalizer pads the 2-byte tail with n = 130.
+(claim shst_two_chunk_fold_pin
+  (goal () ()
+    (=
+      (sha_fin
+        (sha_steps
+          (sha_init)
+          (list
+            "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopq"
+            "012345678901234567890123456789012345678901234567890123456789")))
+      (sha256
+        (sapp
+          "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopq"
+          "012345678901234567890123456789012345678901234567890123456789"))))
+  (steps ((compute both)) refl))
+
+;; TWO folds inside ONE step: the same 130 bytes as a single chunk.
+(claim shst_one_chunk_two_block_pin
+  (goal () ()
+    (=
+      (sha_fin
+        (sha_step
+          (sha_init)
+          (sapp
+            "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopq"
+            "012345678901234567890123456789012345678901234567890123456789")))
+      (sha256
+        (sapp
+          "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopq"
+          "012345678901234567890123456789012345678901234567890123456789"))))
+  (steps ((compute both)) refl))
+
+;; the exact-block boundary: a 64-byte chunk folds clean (pend = Nil),
+;; the finalizer's tail is the pure padding block with n = 64.
+(claim shst_block_boundary_pin
+  (goal () ()
+    (=
+      (sha_fin
+        (sha_step
+          (sha_init)
+          "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijkl"))
+      (sha256
+        "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijkl")))
+  (steps ((compute both)) refl))
