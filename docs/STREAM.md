@@ -165,8 +165,9 @@ needs a real consumer forcing its decisions:
   form the streaming bin lands on (`given` vs `except` — if
   `except`, the (bin …) grammar slice gets its own gated rung);
   the incremental-SHA state shape and the entry contract. Ratified
-  before B3 emits anything. DRAFT = §7 of this ledger (2026-07-28),
-  awaiting ratification.
+  before B3 emits anything. **RATIFIED 2026-07-29 — design = §7 of
+  this ledger, all three §7.8 forks ruled to their leans. B2 is
+  CLOSED; B3 is the active rung.**
 
 - **B3 — the conventional program on silicon.** #65 relocation
   (elf.shard proper, two-PT_LOAD with data above page 0, no
@@ -247,8 +248,19 @@ learns the dialect — same law as Arc A's.
 - **The 64-bit/length-extension SHA variants, other hash families**:
   out. One program, made conventional and fast.
 
-## 7. B2 — the streaming World design note (DRAFT 2026-07-28, for
-ratification before B3 emits anything)
+## 7. B2 — the streaming World design note (RATIFIED 2026-07-29)
+
+**RATIFICATION (2026-07-29, user ruling: "agreed on all of those
+— ratify it and continue").** The §7 body is law: stream_main as
+the one spec-level combinator (7.1), the read contract with the
+fail-stop error leg (7.2), the per-bin contracted-event projection
+as D8's observation relation (7.3), Runs/RunsWithin v1 in the
+monotone threshold form (7.4), the UNCONDITIONAL claim form with
+the except-grammar slice staying deferred (7.5), and the
+list-grain incremental correspondence (7.6). All three §7.8 forks
+ruled to their leans — the rulings are recorded inline there, with
+the rejected options' costs kept as the record of why. B3 builds
+to §7.7's list.
 
 Ground truth this note stands on: the read rung landed (X86.md §50
 — LxRead delivered-bytes events, LxGoM, lx_fill/lx_take, the
@@ -344,10 +356,13 @@ bin; the bin verdict line carrying `MET (artifact: unconditional)`
 
 **7.8 Open forks — the three decisions this note needs ruled.**
 Each is stated self-contained: the question, the options, what
-each costs, and the lean.
+each costs, and the lean. **ALL THREE RULED 2026-07-29: the lean
+adopted in each case** (rulings marked inline; the non-adopted
+option's cost text stands as the REJECTED-because record).
 
 **Fork A — what does the program do on an input too large for
-SHA-256 itself?** SHA-256 is only defined for messages shorter
+SHA-256 itself?** RULED: no runtime check. SHA-256 is only
+defined for messages shorter
 than 2^64 bits — 2^61 bytes, about 2.3 exabytes. That bound is
 FIPS 180-4's, not ours; a streaming bin could in principle be fed
 more.
@@ -364,7 +379,8 @@ more.
   (deferred to the coverage arc, above).
 
 **Fork B — how is "a read failed" spelled in the event
-vocabulary?** The machine model records a run as a list of events:
+vocabulary?** RULED: a new payload-free event kind. The machine
+model records a run as a list of events:
 LxRead (these bytes were delivered), LxWrote (these bytes were
 written), LxExited (this exit code). §7.2 adds a new observable
 outcome — a read that errors rather than delivering bytes or
@@ -380,7 +396,8 @@ signaling EOF. Two spellings:
   churn buys no expressiveness.
 
 **Fork C — what type is a "chunk" in stream_main's spec-level
-signature?** The combinator takes a step function
+signature?** RULED: a plain byte list. The combinator takes a
+step function
 `state × chunk → state`. The question is what the spec-level
 program means by `chunk`:
 - *A plain byte list (lean).* The spec side never mentions memory.
