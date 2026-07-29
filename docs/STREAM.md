@@ -321,12 +321,8 @@ not failure vocabulary). Consequence: the streaming sha256sum
 lands **UNCONDITIONAL — claim form 1, no given, no except** — and
 the `(bin …)` except-grammar kernel slice stays deferred to the
 coverage arc (the calc pathfinder remains its honest forcing
-consumer). FORK for ratification: behavior outside R's domain
-(inputs ≥ 2^61 bytes ≈ 2.3 EB). Lean: no runtime length check —
-physically unreachable for a stream, formally outside R, and a
-check would be theater; record it as documented non-contract.
-Alternative: a checked counter with fail-stop, which would drag in
-the except clause this bin otherwise avoids.
+consumer). The one open question here — what the program does on
+an input exceeding SHA-256's own domain — is Fork A in §7.8.
 
 **7.6 Incremental state + the correspondence theorem.** State =
 (H-vector of 8 words, pending tail < 64 bytes, total length);
@@ -346,10 +342,53 @@ correspondence; the sha instantiation replacing the one-shot cap
 bin; the bin verdict line carrying `MET (artifact: unconditional)`
 — a bare MET is never an artifact verdict (D8 law).
 
-Open forks going into ratification: (a) 7.5's oversize-input
-lean; (b) error-leg event spelling (new event kind vs an error
-payload on LxRead — lean: payload-free new event, additive like
-LxGoM); (c) whether stream_main's chunk type is bytes-in-window
-(mem view) or an abstract byte list at spec level with the window
-only in the machine leg (lean: the latter — spec stays
-memory-free, the dialect's patch/view layer carries the window).
+**7.8 Open forks — the three decisions this note needs ruled.**
+Each is stated self-contained: the question, the options, what
+each costs, and the lean.
+
+**Fork A — what does the program do on an input too large for
+SHA-256 itself?** SHA-256 is only defined for messages shorter
+than 2^64 bits — 2^61 bytes, about 2.3 exabytes. That bound is
+FIPS 180-4's, not ours; a streaming bin could in principle be fed
+more.
+- *No runtime check (lean).* The requirement's domain is "the
+  messages SHA-256 defines"; larger inputs are documented
+  non-contract. Cost: none. At 100 GB/s a stream needs roughly
+  nine months to cross the bound — it is physically unreachable,
+  and a check that can never fire is theater.
+- *Checked counter with fail-stop.* The bin gains a length counter
+  and a declared failure mode. Cost: the claim stops being
+  unconditional — a declared failure mode is exactly what the
+  `(bin …)` except clause expresses, so this option drags in the
+  kernel grammar slice the design otherwise avoids entirely
+  (deferred to the coverage arc, above).
+
+**Fork B — how is "a read failed" spelled in the event
+vocabulary?** The machine model records a run as a list of events:
+LxRead (these bytes were delivered), LxWrote (these bytes were
+written), LxExited (this exit code). §7.2 adds a new observable
+outcome — a read that errors rather than delivering bytes or
+signaling EOF. Two spellings:
+- *A new payload-free event kind (lean).* Precedent: LxGoM is
+  already a payload-free event. Purely additive — no existing
+  event constructor changes type, so no existing proof, pin, or
+  differential check is touched; bins that don't declare the new
+  event never see it.
+- *An error payload on LxRead itself.* LxRead's constructor
+  changes type, so everything that pattern-matches it must be
+  revisited. The error carries no data we contract on, so the
+  churn buys no expressiveness.
+
+**Fork C — what type is a "chunk" in stream_main's spec-level
+signature?** The combinator takes a step function
+`state × chunk → state`. The question is what the spec-level
+program means by `chunk`:
+- *A plain byte list (lean).* The spec side never mentions memory.
+  The correspondence theorem (§7.6: folding chunks then finalizing
+  equals hashing the concatenation) is a pure list statement, and
+  the fixed memory window appears only in the machine leg — the
+  same spec-pure/machine-view split the B1 dialect already prices.
+- *A memory-view chunk (bytes-in-window).* Spec statements acquire
+  memory vocabulary, every consumer of the combinator couples to
+  the window representation, and the correspondence theorem stops
+  being memory-free.
