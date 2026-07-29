@@ -136,3 +136,356 @@
       (sha256
         "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijkl")))
   (steps ((compute both)) refl))
+
+;; ---- the correspondence kit (§7.6, slice 2): list-plumbing laws ------------------
+;; over sha256.shard's LOCAL transparent copies — stated here, not in the
+;; impl file, so the stream article stays a light self-contained closure
+;; (sha256.imp.shard proved sibling shapes for the weld; its closure is
+;; the whole imp tower, wrong import for a spec-side theorem file).
+
+;; slen is nonnegative.
+(claim shc_slen_nn (goal ((xs (List Int))) () (= (le 0 (slen xs)) True)) auto)
+
+;; slen distributes over sapp.
+(claim shc_slen_sapp
+  (goal ((xs (List Int)) (ys (List Int))) ()
+    (= (slen (sapp xs ys)) (+ (slen xs) (slen ys))))
+  auto)
+
+;; sapp right identity.
+(claim shc_sapp_nil (goal ((xs (List Int))) () (= (sapp xs Nil) xs)) auto)
+
+;; sapp associates.
+(claim shc_sapp_assoc
+  (goal ((xs (List Int)) (ys (List Int)) (zs (List Int))) ()
+    (= (sapp (sapp xs ys) zs) (sapp xs (sapp ys zs))))
+  auto)
+
+;; dropping zero is the identity.
+(claim shc_sdrop0 (goal ((xs (List Int))) () (= (sdrop 0 xs) xs)) auto)
+
+;; taking zero is empty.
+(claim shc_stake0 (goal ((xs (List Int))) () (= (stake 0 xs) Nil)) auto)
+
+;; len_be always spells 8 bytes.
+(claim shc_len_be_len (goal ((v Int)) () (= (slen (len_be v)) 8)) auto)
+
+;; the successor-argument collapse the premised inductions cite
+;; (loopkit's lg_sub, restated locally to keep the closure light).
+(claim shc_sub (goal ((n Int)) () (= (- (+ 1 n) 1) n)) (by arith (list)))
+
+;; slen opens one Cons — the have the premise-computation dance cites.
+(claim shc_slen_cons
+  (goal ((h Int) (t (List Int))) () (= (slen (Cons h t)) (+ 1 (slen t))))
+  (steps ((unfold slen lhs) (reduce lhs)) refl))
+
+;; ---- the premised drop/take family (hand proofs — the solver's ladder
+;; exhausts on premised inductions; each is the ish_* idiom: case the
+;; guard, convert case hyps to premises by have, isolate each single
+;; call in a have so unfolds are unambiguous, discharge the IH's
+;; premises by keyed-row arith, close by rewrite).
+
+;; drops compose additively.
+(claim shc_sdrop_sdrop
+  (goal ((a Int) (b Int) (xs (List Int))) ((= (le 0 a) True) (= (le 0 b) True))
+    (= (sdrop a (sdrop b xs)) (sdrop (+ a b) xs)))
+  (induct xs
+    ((case Nil (steps ((compute both)) refl))
+     (case Cons
+       (h t)
+       (case-on (le b 0) Bool
+         ((case True
+            (chain
+              (have hb (= (le b 0) True)
+                (steps ((rewrite (hyp True) lr lhs true ())) refl))
+              (have hb0 (= b 0)
+                (by arith (list (rows (goal 1) (hb 1)) (rows (goal 1) (1 1)))))
+              (have ha0 (= (+ a 0) a) (by arith (list)))
+              (steps
+                ((rewrite (premise hb0) lr both true ())
+                 (rewrite (lemma shc_sdrop0) lr lhs true ())
+                 (rewrite (premise ha0) lr rhs true ()))
+                refl)))
+          (case False
+            (chain
+              (have hb (= (le b 0) False)
+                (steps ((rewrite (hyp False) lr lhs true ())) refl))
+              (have hab (= (le (+ a b) 0) False)
+                (by arith (rows (goal 1) (hb 1) (0 1))))
+              (have hsh (= (+ a (- b 1)) (- (+ a b) 1)) (by arith (list)))
+              (have hin (= (sdrop b (Cons h t)) (sdrop (- b 1) t))
+                (steps
+                  ((unfold sdrop lhs)
+                   (reduce lhs)
+                   (rewrite (premise hb) lr lhs true ())
+                   (reduce lhs))
+                  refl))
+              (have hout (= (sdrop (+ a b) (Cons h t)) (sdrop (- (+ a b) 1) t))
+                (steps
+                  ((unfold sdrop lhs)
+                   (reduce lhs)
+                   (rewrite (premise hab) lr lhs true ())
+                   (reduce lhs))
+                  refl))
+              (steps
+                ((rewrite (premise hin) lr lhs true ())
+                 (rewrite (premise hout) lr rhs true ())))
+              (rewrite-with
+                (hyp 1)
+                lr
+                lhs
+                ((inst b (- b 1)))
+                ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                 (steps () (by arith (rows (goal 1) (hb 1)))))
+                (steps ((rewrite (premise hsh) lr lhs true ())) refl))))))))))
+
+;; a take within the prefix ignores the appended tail.
+(claim shc_stake_pre
+  (goal ((n Int) (xs (List Int)) (ys (List Int)))
+    ((= (le 0 n) True) (= (le n (slen xs)) True))
+    (= (stake n (sapp xs ys)) (stake n xs)))
+  (induct xs
+    ((case Nil
+       (chain
+         (have hz (= (slen Nil) 0) (steps ((compute lhs)) refl))
+         (have hn0 (= (le n 0) True)
+           (steps
+             ((rewrite (premise hz) rl lhs true ())
+              (rewrite (premise 1) lr lhs true ()))
+             refl))
+         (have he (= n 0)
+           (by arith (list (rows (goal 1) (hn0 1)) (rows (goal 1) (0 1)))))
+         (steps
+           ((rewrite (premise he) lr both true ())
+            (rewrite (lemma shc_stake0) lr both true ()))
+           refl)))
+     (case Cons
+       (h t)
+       (case-on (le n 0) Bool
+         ((case True
+            (chain
+              (have hn (= (le n 0) True)
+                (steps ((rewrite (hyp True) lr lhs true ())) refl))
+              (have he (= n 0)
+                (by arith (list (rows (goal 1) (hn 1)) (rows (goal 1) (0 1)))))
+              (steps
+                ((rewrite (premise he) lr both true ())
+                 (rewrite (lemma shc_stake0) lr both true ()))
+                refl)))
+          (case False
+            (chain
+              (have hn (= (le n 0) False)
+                (steps ((rewrite (hyp False) lr lhs true ())) refl))
+              (have hsc (= (slen (Cons h t)) (+ 1 (slen t)))
+                (steps ((rewrite (lemma shc_slen_cons) lr lhs true ())) refl))
+              (have hnt (= (le n (+ 1 (slen t))) True)
+                (steps
+                  ((rewrite (premise hsc) rl lhs true ())
+                   (rewrite (premise 1) lr lhs true ()))
+                  refl))
+              (have hap (= (sapp (Cons h t) ys) (Cons h (sapp t ys)))
+                (steps ((unfold sapp lhs) (reduce lhs)) refl))
+              (have hl
+                (=
+                  (stake n (Cons h (sapp t ys)))
+                  (Cons h (stake (- n 1) (sapp t ys))))
+                (steps
+                  ((unfold stake lhs)
+                   (reduce lhs)
+                   (rewrite (premise hn) lr lhs true ())
+                   (reduce lhs))
+                  refl))
+              (have hr (= (stake n (Cons h t)) (Cons h (stake (- n 1) t)))
+                (steps
+                  ((unfold stake lhs)
+                   (reduce lhs)
+                   (rewrite (premise hn) lr lhs true ())
+                   (reduce lhs))
+                  refl))
+              (steps
+                ((rewrite (premise hap) lr lhs true ())
+                 (rewrite (premise hl) lr lhs true ())
+                 (rewrite (premise hr) lr rhs true ())))
+              (rewrite-with
+                (hyp 1)
+                lr
+                lhs
+                ((inst n (- n 1)))
+                ((steps () (by arith (rows (goal 1) (hn 1))))
+                 (steps () (by arith (rows (goal 1) (hnt 1)))))
+                refl)))))))))
+
+;; a drop within the prefix passes the appended tail through.
+(claim shc_sdrop_pre
+  (goal ((n Int) (xs (List Int)) (ys (List Int)))
+    ((= (le 0 n) True) (= (le n (slen xs)) True))
+    (= (sdrop n (sapp xs ys)) (sapp (sdrop n xs) ys)))
+  (induct xs
+    ((case Nil
+       (chain
+         (have hz (= (slen Nil) 0) (steps ((compute lhs)) refl))
+         (have hn0 (= (le n 0) True)
+           (steps
+             ((rewrite (premise hz) rl lhs true ())
+              (rewrite (premise 1) lr lhs true ()))
+             refl))
+         (have he (= n 0)
+           (by arith (list (rows (goal 1) (hn0 1)) (rows (goal 1) (0 1)))))
+         (steps
+           ((rewrite (premise he) lr both true ())
+            (rewrite (lemma shc_sdrop0) lr both true ())
+            (compute both))
+           refl)))
+     (case Cons
+       (h t)
+       (case-on (le n 0) Bool
+         ((case True
+            (chain
+              (have hn (= (le n 0) True)
+                (steps ((rewrite (hyp True) lr lhs true ())) refl))
+              (have he (= n 0)
+                (by arith (list (rows (goal 1) (hn 1)) (rows (goal 1) (0 1)))))
+              (steps
+                ((rewrite (premise he) lr both true ())
+                 (rewrite (lemma shc_sdrop0) lr both true ()))
+                refl)))
+          (case False
+            (chain
+              (have hn (= (le n 0) False)
+                (steps ((rewrite (hyp False) lr lhs true ())) refl))
+              (have hsc (= (slen (Cons h t)) (+ 1 (slen t)))
+                (steps ((rewrite (lemma shc_slen_cons) lr lhs true ())) refl))
+              (have hnt (= (le n (+ 1 (slen t))) True)
+                (steps
+                  ((rewrite (premise hsc) rl lhs true ())
+                   (rewrite (premise 1) lr lhs true ()))
+                  refl))
+              (have hap (= (sapp (Cons h t) ys) (Cons h (sapp t ys)))
+                (steps ((unfold sapp lhs) (reduce lhs)) refl))
+              (have hl
+                (= (sdrop n (Cons h (sapp t ys))) (sdrop (- n 1) (sapp t ys)))
+                (steps
+                  ((unfold sdrop lhs)
+                   (reduce lhs)
+                   (rewrite (premise hn) lr lhs true ())
+                   (reduce lhs))
+                  refl))
+              (have hr (= (sdrop n (Cons h t)) (sdrop (- n 1) t))
+                (steps
+                  ((unfold sdrop lhs)
+                   (reduce lhs)
+                   (rewrite (premise hn) lr lhs true ())
+                   (reduce lhs))
+                  refl))
+              (steps
+                ((rewrite (premise hap) lr lhs true ())
+                 (rewrite (premise hl) lr lhs true ())
+                 (rewrite (premise hr) lr rhs true ())))
+              (rewrite-with
+                (hyp 1)
+                lr
+                lhs
+                ((inst n (- n 1)))
+                ((steps () (by arith (rows (goal 1) (hn 1))))
+                 (steps () (by arith (rows (goal 1) (hnt 1)))))
+                refl)))))))))
+
+;; the length of a drop within bounds.
+(claim shc_slen_sdrop
+  (goal ((n Int) (xs (List Int))) ((= (le 0 n) True) (= (le n (slen xs)) True))
+    (= (slen (sdrop n xs)) (- (slen xs) n)))
+  (induct xs
+    ((case Nil
+       (chain
+         (have hz (= (slen Nil) 0) (steps ((compute lhs)) refl))
+         (have hn0 (= (le n 0) True)
+           (steps
+             ((rewrite (premise hz) rl lhs true ())
+              (rewrite (premise 1) lr lhs true ()))
+             refl))
+         (steps ((compute both)))
+         (steps
+           ()
+           (by arith (list (rows (goal 1) (hn0 1)) (rows (goal 1) (0 1)))))))
+     (case Cons
+       (h t)
+       (case-on (le n 0) Bool
+         ((case True
+            (chain
+              (have hn (= (le n 0) True)
+                (steps ((rewrite (hyp True) lr lhs true ())) refl))
+              (have he (= n 0)
+                (by arith (list (rows (goal 1) (hn 1)) (rows (goal 1) (0 1)))))
+              (steps
+                ((rewrite (premise he) lr both true ())
+                 (rewrite (lemma shc_sdrop0) lr lhs true ())))
+              (steps () (by arith (list)))))
+          (case False
+            (chain
+              (have hn (= (le n 0) False)
+                (steps ((rewrite (hyp False) lr lhs true ())) refl))
+              (have hsc (= (slen (Cons h t)) (+ 1 (slen t)))
+                (steps ((rewrite (lemma shc_slen_cons) lr lhs true ())) refl))
+              (have hnt (= (le n (+ 1 (slen t))) True)
+                (steps
+                  ((rewrite (premise hsc) rl lhs true ())
+                   (rewrite (premise 1) lr lhs true ()))
+                  refl))
+              (have hd (= (sdrop n (Cons h t)) (sdrop (- n 1) t))
+                (steps
+                  ((unfold sdrop lhs)
+                   (reduce lhs)
+                   (rewrite (premise hn) lr lhs true ())
+                   (reduce lhs))
+                  refl))
+              (steps
+                ((rewrite (premise hd) lr lhs true ())
+                 (rewrite (premise hsc) lr rhs true ())))
+              (rewrite-with
+                (hyp 1)
+                lr
+                lhs
+                ((inst n (- n 1)))
+                ((steps () (by arith (rows (goal 1) (hn 1))))
+                 (steps () (by arith (rows (goal 1) (hnt 1)))))
+                (steps () (by arith (list))))))))))))
+
+;; the length of szeros.
+(claim shc_szeros_len
+  (goal ((z Int)) ((= (le 0 z) True)) (= (slen (szeros z)) z))
+  (wf-induct z
+    (case-on (le z 0) Bool
+      ((case True
+         (chain
+           (have hz (= (le z 0) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (steps
+             ((unfold szeros lhs)
+              (rewrite (premise hz) lr lhs true ())
+              (compute lhs)))
+           (steps
+             ()
+             (by arith (list (rows (goal 1) (0 1)) (rows (goal 1) (hz 1)))))))
+       (case False
+         (chain
+           (have hz (= (le z 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hu (= (szeros z) (Cons 0 (szeros (- z 1))))
+             (steps
+               ((unfold szeros lhs)
+                (rewrite (premise hz) lr lhs true ())
+                (reduce lhs))
+               refl))
+           (steps
+             ((rewrite (premise hu) lr lhs true ())
+              (unfold slen lhs)
+              (reduce lhs)))
+           (rewrite-with
+             (hyp 1)
+             lr
+             lhs
+             ()
+             ((steps () (by arith (rows (goal 1) (hz 1))))
+              (steps () (by arith (rows (goal 1) (hz 1))))
+              (steps () (by arith (list))))
+             (steps () (by arith (list))))))))))
