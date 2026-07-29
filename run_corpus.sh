@@ -964,11 +964,17 @@ fi
 
 # Engine-differential pin: encode the composite + const probe to real .wasm
 # and replay the model-computed vectors under node/V8 (the slice-4 reality
-# check — the "engine conforms to model" trust leaf). Summary line only;
-# disagreements change it and fail the diff.
+# check — the "engine conforms to model" trust leaf). FULL output flows
+# through: the replayer prints per-mismatch `FAIL <line> [detail]` at
+# column 0, which is what CI's ^(FAIL|TYPE!) projection gates on (the old
+# `| tail -1` kept only the always-printed summary line, so disagreements
+# were INVISIBLE to the gate — fixed 2026-07-29, all three differential
+# legs). The `||` arm turns a nonzero exit (crash or disagreement count)
+# into a synthetic FAIL row, so a differ that DIES is as loud as one that
+# differs.
 echo "=== wasm: engine differential ==="
 if command -v node >/dev/null && [ -x bin/shard_eval ]; then
-  bash models/wasm/diff/wasm_diff.sh 2>&1 | tail -1
+  bash models/wasm/diff/wasm_diff.sh 2>&1 || echo "FAIL wasm-differential (exit $?)"
 else
   echo "SKIPPED (needs node + bin/shard_eval)"
 fi
@@ -976,11 +982,12 @@ fi
 # Silicon differential (the x86_64 arc's Probe B): flatten each XFunc to real
 # machine code, mmap it executable, and CALL it on this CPU — comparing the
 # hardware result + memory (and the trap leg: model None == hardware fault)
-# against the model. The "CPU conforms to the model" trust leaf. Summary line
-# only; disagreements change it and fail the diff.
+# against the model. The "CPU conforms to the model" trust leaf. Full output;
+# per-mismatch FAIL lines gate via the CI projection, nonzero exit adds a
+# synthetic FAIL row (see the wasm leg's note).
 echo "=== x86: silicon differential ==="
 if command -v cc >/dev/null && [ -x bin/shard_eval ]; then
-  bash models/x86/diff/x86_diff.sh 2>&1 | tail -1
+  bash models/x86/diff/x86_diff.sh 2>&1 || echo "FAIL x86-differential (exit $?)"
 else
   echo "SKIPPED (needs cc + bin/shard_eval)"
 fi
@@ -990,11 +997,12 @@ fi
 # widths — comparing the emulated core's result + memory (and the trap leg:
 # model None == core fault) against the model. The "core conforms to the
 # model" trust leaf; qemu-user plays V8's role (there is no native silicon leg
-# on this box). Summary line only; disagreements change it and fail the diff.
+# on this box). Full output; per-mismatch FAIL lines gate via the CI
+# projection, nonzero exit adds a synthetic FAIL row (see the wasm leg's note).
 # riscv_diff.sh self-guards (SKIP exit 0) when clang/qemu-user/rust-lld absent.
 echo "=== riscv: engine differential ==="
 if command -v clang >/dev/null && command -v qemu-riscv64 >/dev/null && [ -x bin/shard_eval ]; then
-  bash models/riscv/diff/riscv_diff.sh 2>&1 | tail -1
+  bash models/riscv/diff/riscv_diff.sh 2>&1 || echo "FAIL riscv-differential (exit $?)"
 else
   echo "SKIPPED (needs clang + qemu-user + bin/shard_eval)"
 fi
