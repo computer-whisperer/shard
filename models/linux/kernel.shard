@@ -29,18 +29,23 @@
 ;;; v1 COVERAGE — read (nr 0), write (nr 1), and exit (nr 60): the
 ;;; closed set a slurping filter bin needs (read landed with its
 ;;; consumer, the sha256sum bin — docs/X86.md read rung). Unmodeled
-;;; nr = None: refused, never guessed. NAMED GROWTH (each lands only
-;;; with a consumer): EFAULT/window checking on buffers, error returns
-;;; (negative ret/errno legs — v1 read draws are normalized into the
-;;; kernel's success range, exactly as exit masks its code), open/close
-;;; (fd table state in the world), mmap/brk (machine-model window
-;;; growth), fork (process-tree traces), per-used-ioctl arms.
+;;; nr = None: refused, never guessed. The read arm's ERROR LEG landed
+;;; with the streaming rung (STREAM.md §7.2: a negative return draw is
+;;; LxReadErr, never the EOF shape — under a read loop, error-as-EOF
+;;; would silently digest a prefix). NAMED GROWTH (each lands only
+;;; with a consumer): EFAULT/window checking on buffers, errno DECODING
+;;; (the error event is payload-free; which errno is layer-3 business),
+;;; open/close (fd table state in the world), mmap/brk (machine-model
+;;; window growth), fork (process-tree traces), per-used-ioctl arms.
 ;;;
 ;;; THE READ LEG (the first memory-WRITING syscall): the delivered
 ;;; bytes are oracle entropy, drawn from the same stream as everything
-;;; else — one draw for the return count (normalized into [0, count]:
-;;; the kernel never delivers more than asked, and the negative/error
-;;; leg is named growth), then exactly that many byte draws (mod-256
+;;; else — one draw for the return count. A NEGATIVE draw is the error
+;;; leg: LxReadErr, the draw returned as-is (the unconstrained-return
+;;; convention — the differential feeds the real -errno straight in),
+;;; nothing delivered, no byte draws. A nonneg draw is clamped to
+;;; count (the kernel never delivers more than asked), then exactly
+;;; that many byte draws (mod-256
 ;;; masked: bytes are bytes). The transition's new arm LxGoM carries
 ;;; the RESULT MEMORY beside the return/world/event — the additive
 ;;; sibling of LxGo, so every write/exit consumer is untouched. The
@@ -55,8 +60,15 @@
 
 ;; LxWrote fd bytes — the program offered these bytes on this fd;
 ;; LxRead fd bytes — the kernel delivered these bytes from this fd;
-;; LxExited code — the process ended with this wait-status byte.
-(type LxEvent (LxWrote Int (List Int)) (LxRead Int (List Int)) (LxExited Int))
+;; LxExited code — the process ended with this wait-status byte;
+;; LxReadErr — a read FAILED (payload-free by the streaming-rung ruling,
+;; STREAM.md §7.8 Fork B: contracts observe THAT a read failed; which
+;; errno is layer-3 business, named growth).
+(type LxEvent
+  (LxWrote Int (List Int))
+  (LxRead Int (List Int))
+  (LxExited Int)
+  (LxReadErr))
 
 ;; --- the world: the oracle stream ------------------------------------------------
 
@@ -132,7 +144,9 @@
 
 ;; lx_step nr a1 a2 a3 mem w. write: fd = a1, buf = a2, len = a3; the
 ;; return comes from the oracle. read: fd = a1, buf = a2, count = a3;
-;; the return draw is normalized into [0, count] (rr), then rr byte
+;; a NEGATIVE return draw is the error leg — LxReadErr, the draw
+;; returned, nothing delivered (LxGo: memory untouched); a nonneg draw
+;; is clamped to count (rr), then rr byte
 ;; draws are delivered into memory at buf — LxGoM carries the result
 ;; memory, the event carries the delivered bytes. exit: code = a1,
 ;; truncated to the wait-status byte exactly as the kernel does (args
@@ -150,12 +164,13 @@
     (match (lxans_of w)
       (Nil None)
       ((Cons r rest)
-       (let ((rr (if (lt r 0) 0 (if (lt a3 r) a3 r))))
+       (if (lt r 0) (Some (LxGo r (MkLxWorld rest) (LxReadErr)))
+       (let ((rr (if (lt a3 r) a3 r)))
          (match (lx_take rest rr)
            (None None)
            ((Some pr)
             (match pr
               ((Pair bs rest2)
                (Some
-                 (LxGoM rr (MkLxWorld rest2) (LxRead a1 bs) (lx_fill mem a2 bs))))))))))
+                 (LxGoM rr (MkLxWorld rest2) (LxRead a1 bs) (lx_fill mem a2 bs)))))))))))
     None))))
