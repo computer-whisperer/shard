@@ -1,0 +1,1328 @@
+;;; models/x86/probes/stdin_count_probe.shard — THE EFFECT-LOOP WALK PROBE
+;;; (docs/STREAM.md §7.9 rung M0, in the §20/§21 de-risk-probe tradition).
+;;;
+;;; The genuinely new proof ground of the streaming rung is a BACKWARD
+;;; BRANCH AROUND AN EFFECT POINT. Every landed effect sits in a
+;;; straight-line position (X86.md §50's v1 fence: "a slurping main issues
+;;; ONE read at a ground cap"); this probe lifts that fence on the
+;;; smallest possible program, so the streaming sha main (M3) can
+;;; instantiate a PROVEN walk shape rather than discover one.
+;;;
+;;; THE PROGRAM — a byte counter. read(0, BUF, 4096) at the loop head,
+;;; then the three-way branch:
+;;;   ret >u 4096   the error leg (a negative kernel return wraps into the
+;;;                 top half of the register file, so ONE unsigned compare
+;;;                 catches it) -> exit(1);
+;;;   ret == 0      EOF -> load the counter cell, exit(counter);
+;;;   otherwise     data -> counter += ret, BACK EDGE.
+;;; The loop-carried state lives in MEMORY at a ground address — M3's
+;;; shape deliberately (the ShaSt lives in the window, not in registers).
+;;;
+;;; WINDOW LAYOUT (all ground — STREAM.md §7.9 fork D: every effect point
+;;; keeps a ground address). The window is [65536, 131072), the #65
+;;; relocated base (elf.shard win_base = 0x10000 = stock vm.mmap_min_addr):
+;;;   65536          the counter cell, ONE byte (the exit status is a byte
+;;;                  anyway — the kernel's wait-status masking IS the
+;;;                  program's modulus, not an added instruction);
+;;;   65600 .. 69696 the read buffer, cap 4096 (fork F).
+;;; The counter sits BELOW the buffer on purpose: the read's memory
+;;; effect is an lx_fill spine at 65600, so the counter read-back frames
+;;; through scp_fill_below (probe strictly below the fill) with NO length
+;;; premise — the framing law that costs nothing.
+;;;
+;;; THE WALK STATEMENTS (the payload). Three PIECE theorems, one per leg,
+;;; each head-to-head: from a loop head with the cell holding c, one
+;;; iteration under one oracle ITERATION RECORD either lands back at the
+;;; loop head at fuel-minus-one with the cell holding c + ret (data), or
+;;; terminates (error / EOF). Then the FUELED COMPOSITION: an induction
+;;; over a list of iteration records, quantified over RAW DRAWS (the world
+;;; is spelled as scp_ws its tail — the sha256sum_x86_out precedent of
+;;; spelling the delivered list, grown to a LIST of deliveries). Three
+;;; TERMINATORS, so three composition theorems: an EOF answer, an error
+;;; answer, and a stream that runs out (None — the world-layer resource
+;;; convention). The fuel tail f is UNIVERSALLY QUANTIFIED, so each is
+;;; already CERT.md §6's monotone-threshold shape and no separate
+;;; "ran out of fuel" leg is stated: the walks say what happens AT OR
+;;; ABOVE the cost, which is what RunsWithin consumes. Two corollaries
+;;; lift all this across the entry boundary (xrun_w on function 0 — what
+;;; the ELF's glue actually calls, two fuel units above the loop node),
+;;; and one ground pin turns the silicon transcript into a theorem.
+;;;
+;;; STATEMENT-FORM NOTE for M3 — the per-iteration delivered COUNT is
+;;; SYMBOLIC (a chunk is an arbitrary byte list); what is ground is the
+;;; CAP, the addresses, and the per-iteration fuel constant. The chunk
+;;; record spells its bytes as head+tail, so "a data iteration delivers
+;;; at least one byte" is STRUCTURAL, never a premise; the cap bound
+;;; (le (scp_ilen it) 4096) is the one per-element premise, carried over
+;;; the record list by the scp_ok fold and split by scp_ok_hd/scp_ok_tl.
+;;;
+;;; FUEL LAW (x86 fuel is a DEPTH bound, so a loop iteration costs ONE
+;;; unit at the weval_loop level and the body's depth is the constant):
+;;; the body's deepest position is the EOF block (position 5, whose own
+;;; deepest is the exit XCall at its position 3) — 16 units; the loop
+;;; node's own peel makes 17. Hence the piece theorems step S^17 -> S^16
+;;; and the composition rides (S^ 17 (scp_fuel its f)) with scp_fuel
+;;; laying ONE S per iteration. No fuel-push lemma is needed: the
+;;; constant sits OUTSIDE the per-iteration ladder, so the data piece's
+;;; S^16 residue and the IH's S^17 head are the same term.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")
+(import "../../../kernel/facts.shard")
+(import "../../../std/nat.shard")
+(import "../x86.shard")
+(import "../../linux/kernel.shard")
+(import "../world.shard")
+(use (:: kernel facts *))
+(use (:: std mem *))
+(use (:: std nat *))
+(use (:: models x86 x86 *))
+(use (:: models linux kernel *))
+(use (:: models x86 world *))
+
+;; --- the program ------------------------------------------------------------
+
+;; the shim bodies (models/x86/linux.shard's, local copies — the probe
+;; species: a design article carries its own text)
+(fn scp_read_body () (List XInstr) (list (XMovRI RAX 0) XSyscall))
+
+(fn scp_exit_body () (List XInstr) (list (XMovRI RAX 60) XSyscall))
+
+;; the loop body: read, the three-way branch, the memory counter bump,
+;; the back edge. Image index 1 is the read shim, index 2 the exit shim.
+(fn scp_loop_body () (List XInstr)
+  (list
+    (XMovRI RDI 0)
+    (XMovRI RSI 65600)
+    (XMovRI RDX 4096)
+    (XCall 1)
+    (XBlock (list (XBrIf (CLeU RAX (SImm 4096)) 0) (XMovRI RDI 1) (XCall 2)))
+    (XBlock
+      (list
+        (XBrIf (CNz RAX) 0)
+        (XMovRI RDI 65536)
+        (XLoad8 RDI (AReg RDI))
+        (XCall 2)))
+    (XMovRI RBX 65536)
+    (XLoad8 RCX (AReg RBX))
+    (XBin XAdd RCX (SReg RAX))
+    (XStore8 (AReg RBX) (SReg RCX))
+    (XBr 0)))
+
+;; --- stream vocabulary (local twins: models export no list kit, and the
+;; --- walk statements need append/length/mask) --------------------------------
+
+(fn scp_app ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (scp_app t b)))))
+
+(fn scp_len ((bs (List Int))) Nat
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons b t) (S (scp_len t)))))
+
+(fn scp_msk ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b t) (Cons (mod b 256) (scp_msk t)))))
+
+;; --- the iteration record ----------------------------------------------------
+;;
+;; ONE data iteration's whole oracle appetite: the delivered bytes
+;; (spelled head + tail, so NONEMPTY is structural — an empty delivery is
+;; the EOF leg, a different theorem) and the two rcx/r11 trash draws the
+;; world layer takes per syscall.
+(record ScpIt (scb0 Int) (scbs (List Int)) (scc1 Int) (scc2 Int))
+
+(fn scp_ibs ((it ScpIt)) (List Int) (Cons (scb0_of it) (scbs_of it)))
+
+(fn scp_ilen ((it ScpIt)) Int (int_of_nat (scp_len (scp_ibs it))))
+
+;; the RAW draw stream a record list asks for, with a tail: per iteration
+;; the return count, the delivered bytes, then the two trash draws.
+(fn scp_ws ((its (List ScpIt)) (tail (List Int))) (List Int)
+  (measure (struct its))
+  (match its
+    (Nil tail)
+    ((Cons it rest)
+     (Cons
+       (scp_ilen it)
+       (scp_app
+         (scp_ibs it)
+         (Cons (scc1_of it) (Cons (scc2_of it) (scp_ws rest tail))))))))
+
+;; the trace those iterations contribute, with a continuation
+(fn scp_tr ((its (List ScpIt)) (k (List LxEvent))) (List LxEvent)
+  (measure (struct its))
+  (match its
+    (Nil k)
+    ((Cons it rest) (Cons (LxRead 0 (scp_msk (scp_ibs it))) (scp_tr rest k)))))
+
+;; the counter cell's value after those iterations (mask-on-read is the
+;; program's modulus — the cell is ONE byte)
+(fn scp_cnt ((c Int) (its (List ScpIt))) Int
+  (measure (struct its))
+  (match its
+    (Nil c)
+    ((Cons it rest) (scp_cnt (mod (+ c (scp_ilen it)) 256) rest))))
+
+;; every iteration's delivery fits the cap — the ONE per-element premise
+(fn scp_ok ((its (List ScpIt))) Bool
+  (measure (struct its))
+  (match its
+    (Nil True)
+    ((Cons it rest) (if (le (scp_ilen it) 4096) (scp_ok rest) False))))
+
+;; one S per iteration over the slack tail (the xlg_fuel shape; the body's
+;; depth constant rides OUTSIDE this ladder)
+(fn scp_fuel ((its (List ScpIt)) (c Nat)) Nat
+  (measure (struct its))
+  (match its
+    (Nil c)
+    ((Cons it rest) (S (scp_fuel rest c)))))
+
+;; weval_loop's own back-edge shape: the body's events prepended to the
+;; continuation's outcome (world.shard's wtr_pre, lifted through Option)
+(fn scp_pre ((tr (List LxEvent)) (o (Option WOut))) (Option WOut)
+  (match o
+    (None None)
+    ((Some out) (Some (wtr_pre tr out)))))
+
+;; --- the kit ------------------------------------------------------------------
+
+;; strict order refutes equality (std/sha256's ish_ne_lt, local twin)
+(claim scp_ne_lt
+  (goal ((a Int) (b Int)) ((= (lt a b) True)) (= (int_eq a b) False))
+  (by arith (list 1 1)))
+
+;; the oracle take lemma: lx_take splits the drawn stream at the delivered
+;; length — the byte segment masks (mod-256) into the delivered list, the
+;; tail flows on. (sha256sum_x86_out's shs_take_go/shs_take, local twins.)
+(claim scp_take_go
+  (goal ((bs (List Int)) (t (List Int)) (i Int)) ()
+    (=
+      (lx_take_r (scp_app bs t) i (+ i (int_of_nat (scp_len bs))))
+      (Some (Pair (scp_msk bs) t))))
+  (induct bs
+    ((case Nil
+       (chain
+         (have hz (= (int_of_nat (scp_len Nil)) (int_of_nat Z))
+           (steps ((compute both)) refl))
+         (have ha (= (scp_app Nil t) t)
+           (steps ((unfold scp_app lhs) (reduce lhs)) refl))
+         (steps
+           ((rewrite (premise hz) lr lhs true ())
+            (rewrite (lemma int_of_nat_zero) lr lhs true ())
+            (rewrite (premise ha) lr lhs true ())
+            (unfold lx_take_r lhs)))
+         (have hlt (= (lt i (+ i 0)) False) (by arith (rows (goal 1))))
+         (steps ((rewrite (premise hlt) lr lhs true ()) (compute both)))
+         refl))
+     (case Cons
+       (b bs2)
+       (chain
+         (have hl (= (scp_len (Cons b bs2)) (S (scp_len bs2)))
+           (steps ((unfold scp_len lhs) (reduce lhs)) refl))
+         (have ha (= (scp_app (Cons b bs2) t) (Cons b (scp_app bs2 t)))
+           (steps ((unfold scp_app lhs) (reduce lhs)) refl))
+         (have hm (= (scp_msk (Cons b bs2)) (Cons (mod b 256) (scp_msk bs2)))
+           (steps ((unfold scp_msk lhs) (reduce lhs)) refl))
+         (steps
+           ((rewrite (premise hl) lr lhs true ())
+            (rewrite (lemma int_of_nat_succ) lr lhs true ())
+            (rewrite (premise ha) lr lhs true ())
+            (rewrite (premise hm) lr rhs true ())
+            (unfold lx_take_r lhs)))
+         (have hnn (= (le 0 (int_of_nat (scp_len bs2))) True)
+           (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+         (have hlt (= (lt i (+ i (+ 1 (int_of_nat (scp_len bs2))))) True)
+           (by arith (rows (goal 1) (hnn 1))))
+         (steps
+           ((rewrite (premise hlt) lr lhs true ())
+            (compute
+              lhs
+              (stop lx_take_r scp_app scp_msk scp_len int_of_nat mod))))
+         (have hsh
+           (=
+             (+ i (+ 1 (int_of_nat (scp_len bs2))))
+             (+ (+ i 1) (int_of_nat (scp_len bs2))))
+           (by arith (list (list 1) (list 1))))
+         (steps
+           ((rewrite (premise hsh) lr lhs true ())
+            (rewrite (hyp 0) lr lhs true ())
+            (compute both (stop scp_msk mod))))
+         refl)))))
+
+(claim scp_take
+  (goal ((bs (List Int)) (t (List Int))) ()
+    (=
+      (lx_take (scp_app bs t) (int_of_nat (scp_len bs)))
+      (Some (Pair (scp_msk bs) t))))
+  (chain
+    (steps ((unfold lx_take lhs)))
+    (have hz (= (int_of_nat (scp_len bs)) (+ 0 (int_of_nat (scp_len bs))))
+      (by arith (list (list 1) (list 1))))
+    (steps
+      ((rewrite (premise hz) lr lhs true ())
+       (rewrite (lemma scp_take_go) lr lhs true ()))
+      refl)))
+
+;; …spelled at the iteration record, which is the form the walk meets
+(claim scp_take_it
+  (goal ((it ScpIt) (t (List Int))) ()
+    (=
+      (lx_take (scp_app (scp_ibs it) t) (scp_ilen it))
+      (Some (Pair (scp_msk (scp_ibs it)) t))))
+  (chain
+    (steps ((unfold scp_ilen lhs) (rewrite (lemma scp_take) lr lhs true ())))
+    refl))
+
+;; a fill strictly ABOVE the probed cell is invisible (the counter's
+;; framing law — no length premise, which is why the counter lives below
+;; the buffer). sha256sum_x86_out's shs_fill_below, local twin.
+(claim scp_fill_below
+  (goal ((ds (List Int)) (m Mem) (q Int) (p Int)) ((= (lt p q) True))
+    (= (mem_get (lx_fill m q ds) p) (mem_get m p)))
+  (induct ds
+    ((case Nil
+       (chain
+         (have hf (= (lx_fill m q Nil) m)
+           (steps ((unfold lx_fill lhs) (reduce lhs)) refl))
+         (steps ((rewrite (premise hf) lr lhs true ())) refl)))
+     (case Cons
+       (d t)
+       (chain
+         (have hf
+           (= (lx_fill m q (Cons d t)) (lx_fill (mem_set m q d) (+ q 1) t))
+           (steps ((unfold lx_fill lhs) (reduce lhs)) refl))
+         (steps ((rewrite (premise hf) lr lhs true ())))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (0 1))))))
+         (rewrite-with
+           (lemma get_set_other)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma scp_ne_lt)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)))
+         refl)))))
+
+;; the counter cell read back through ONE iteration's memory effect
+(claim scp_cell_read
+  (goal ((it ScpIt) (m Mem)) ()
+    (=
+      (mem_get (lx_fill m 65600 (scp_msk (scp_ibs it))) 65536)
+      (mem_get m 65536)))
+  (rewrite-with
+    (lemma scp_fill_below)
+    lr
+    lhs
+    ()
+    ((steps ((compute both)) refl))
+    refl))
+
+;; a delivery is at least one byte (structural: the record spells head +
+;; tail) and never negative
+(claim scp_ilen_nn
+  (goal ((it ScpIt)) () (= (le 0 (scp_ilen it)) True))
+  (chain
+    (steps ((unfold scp_ilen lhs)))
+    (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+
+(claim scp_ilen_ge1
+  (goal ((it ScpIt)) () (= (le 1 (scp_ilen it)) True))
+  (chain
+    (have hl (= (scp_len (scp_ibs it)) (S (scp_len (scbs_of it))))
+      (steps ((unfold scp_ibs lhs) (unfold scp_len lhs) (reduce lhs)) refl))
+    (have hnn (= (le 0 (int_of_nat (scp_len (scbs_of it)))) True)
+      (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+    (steps
+      ((unfold scp_ilen lhs)
+       (rewrite (premise hl) lr lhs true ())
+       (rewrite (lemma int_of_nat_succ) lr lhs true ())))
+    (steps () (by arith (rows (goal 1) (hnn 1))))))
+
+;; --- PIECE 1: the DATA leg (the back edge — the new proof ground) --------------
+;;
+;; From a loop head with the cell holding c, one iteration under one
+;; oracle record: the delivered bytes land in the buffer, the cell
+;; becomes c + ret, the trace gains one LxRead, and control is back AT
+;; THE LOOP HEAD one fuel unit down. EVERY register field is quantified
+;; at the head (the §10 clobber form) — which is exactly what lets the
+;; composition's induction hypothesis re-enter at the next head.
+(claim scp_iter_data
+  (goal
+    ((it ScpIt)
+     (m0 Mem)
+     (rest (List Int))
+     (a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (f Nat))
+    ((= (le (scp_ilen it) 4096) True))
+    (=
+      (weval_loop
+        (S^ 17 f)
+        (MkXModule
+          (Cons
+            (MkXFunc 0 (list (XLoop (inline scp_loop_body))))
+            (Cons
+              (MkXFunc 3 (inline scp_read_body))
+              (Cons (MkXFunc 1 (inline scp_exit_body)) Nil)))
+          65536
+          131072)
+        (inline scp_loop_body)
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        m0
+        (MkLxWorld
+          (Cons
+            (scp_ilen it)
+            (scp_app (scp_ibs it) (Cons (scc1_of it) (Cons (scc2_of it) rest))))))
+      (scp_pre
+        (Cons (LxRead 0 (scp_msk (scp_ibs it))) Nil)
+        (weval_loop
+          (S^ 16 f)
+          (MkXModule
+            (Cons
+              (MkXFunc 0 (list (XLoop (inline scp_loop_body))))
+              (Cons
+                (MkXFunc 3 (inline scp_read_body))
+                (Cons (MkXFunc 1 (inline scp_exit_body)) Nil)))
+            65536
+            131072)
+          (inline scp_loop_body)
+          (MkRegs
+            (scp_ilen it)
+            (+ (mem_get m0 65536) (scp_ilen it))
+            4096
+            65536
+            p0
+            65600
+            0
+            e8
+            e9
+            e10
+            (mod (scc2_of it) 18446744073709551616)
+            e12
+            e13
+            e14
+            e15)
+          (mem_set
+            (lx_fill m0 65600 (scp_msk (scp_ibs it)))
+            65536
+            (+ (mem_get m0 65536) (scp_ilen it)))
+          (MkLxWorld rest)))))
+  (chain
+    (have hnn (= (le 0 (scp_ilen it)) True)
+      (rewrite-with (lemma scp_ilen_nn) lr lhs () () refl))
+    (have hge1 (= (le 1 (scp_ilen it)) True)
+      (rewrite-with (lemma scp_ilen_ge1) lr lhs () () refl))
+    (have hlt0 (= (lt (scp_ilen it) 0) False)
+      (by arith (rows (goal 1) (hnn 1))))
+    (have hclamp (= (lt 4096 (scp_ilen it)) False)
+      (by arith (rows (goal 1) (0 1))))
+    (have hne0 (= (int_eq (scp_ilen it) 0) False)
+      (by arith (rows (goal -1) (hge1 1))))
+    (have hwN (= (mod (scp_ilen it) 18446744073709551616) (scp_ilen it))
+      (rewrite-with
+        (lemma wrap64_id)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hnn) lr lhs true ())) refl)
+         (steps () (by arith (rows (goal 1) (0 1)))))
+        refl))
+    (have hclo (= (le 0 (mem_get m0 65536)) True)
+      (rewrite-with (lemma get_lo) lr lhs () () refl))
+    (have hchi (= (lt (mem_get m0 65536) 256) True)
+      (rewrite-with (lemma get_hi) lr lhs () () refl))
+    (have hwC
+      (=
+        (mod (+ (mem_get m0 65536) (scp_ilen it)) 18446744073709551616)
+        (+ (mem_get m0 65536) (scp_ilen it)))
+      (rewrite-with
+        (lemma wrap64_id)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (hclo 1) (hnn 1))))
+         (steps () (by arith (rows (goal 1) (hchi 1) (0 1)))))
+        refl))
+    (steps
+      ((unfold weval_loop lhs)
+       (compute
+         lhs
+         (stop weval_loop lx_take lx_fill lx_read scp_app scp_len scp_msk
+           scp_ibs scp_ilen int_of_nat))
+       (rewrite (premise hlt0) lr lhs true ())
+       (compute
+         lhs
+         (stop weval_loop lx_take lx_fill lx_read scp_app scp_len scp_msk
+           scp_ibs scp_ilen int_of_nat))
+       (rewrite (premise hclamp) lr lhs true ())
+       (compute
+         lhs
+         (stop weval_loop lx_take lx_fill lx_read scp_app scp_len scp_msk
+           scp_ibs scp_ilen int_of_nat))
+       (rewrite (lemma scp_take_it) lr lhs true ())
+       (compute
+         lhs
+         (stop weval_loop lx_take lx_fill lx_read scp_app scp_len scp_msk
+           scp_ibs scp_ilen int_of_nat))
+       (rewrite (premise hwN) lr lhs true ())
+       (compute
+         lhs
+         (stop weval_loop lx_take lx_fill lx_read scp_app scp_len scp_msk
+           scp_ibs scp_ilen int_of_nat))
+       (rewrite (premise 0) lr lhs true ())
+       (compute
+         lhs
+         (stop weval_loop lx_take lx_fill lx_read scp_app scp_len scp_msk
+           scp_ibs scp_ilen int_of_nat))
+       (rewrite (premise hne0) lr lhs true ())
+       (compute
+         lhs
+         (stop weval_loop lx_take lx_fill lx_read scp_app scp_len scp_msk
+           scp_ibs scp_ilen int_of_nat))
+       (rewrite (lemma scp_cell_read) lr lhs true ())
+       (compute
+         lhs
+         (stop weval_loop lx_take lx_fill lx_read scp_app scp_len scp_msk
+           scp_ibs scp_ilen int_of_nat))
+       (rewrite (premise hwC) lr lhs true ())
+       (compute
+         both
+         (stop weval_loop lx_take lx_fill lx_read scp_app scp_len scp_msk
+           scp_ibs scp_ilen int_of_nat)))
+      refl)))
+
+;; --- PIECE 2: the EOF leg (ret = 0) --------------------------------------------
+;;
+;; The kernel answers zero — the ONLY EOF signal (STREAM.md §7.2). The
+;; read still records its (empty) delivery, the counter cell is loaded
+;; into the exit code, and the process ends: the exit arm's own
+;; wait-status masking IS the program's modulus, so the byte cell needs
+;; no instruction of its own.
+(claim scp_iter_eof
+  (goal
+    ((m0 Mem)
+     (rest (List Int))
+     (ce1 Int)
+     (ce2 Int)
+     (a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (f Nat))
+    ()
+    (=
+      (weval_loop
+        (S^ 17 f)
+        (MkXModule
+          (Cons
+            (MkXFunc 0 (list (XLoop (inline scp_loop_body))))
+            (Cons
+              (MkXFunc 3 (inline scp_read_body))
+              (Cons (MkXFunc 1 (inline scp_exit_body)) Nil)))
+          65536
+          131072)
+        (inline scp_loop_body)
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        m0
+        (MkLxWorld (Cons 0 (Cons ce1 (Cons ce2 rest)))))
+      (Some
+        (WExit
+          (mod (mem_get m0 65536) 256)
+          (Cons
+            (LxRead 0 Nil)
+            (Cons (LxExited (mod (mem_get m0 65536) 256)) Nil))))))
+  (steps ((compute both)) refl))
+
+;; --- PIECE 3: the ERROR leg (a negative kernel return) --------------------------
+;;
+;; STREAM.md §7.2's fail-stop leg. The kernel returns the raw negative
+;; draw (the unconstrained-return convention — the differential feeds the
+;; real -errno straight in) and records the payload-free LxReadErr;
+;; nothing is delivered and memory is untouched. On the machine the
+;; negative lands in rax through wrap64, i.e. in the TOP HALF of the
+;; register file, so the SINGLE unsigned compare against the cap that the
+;; loop already needs is also the error test — no signed compare, no
+;; second branch. The premises are exactly "a signed 64-bit negative".
+(claim scp_iter_err
+  (goal
+    ((m0 Mem)
+     (rest (List Int))
+     (rv Int)
+     (ce1 Int)
+     (ce2 Int)
+     (a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (f Nat))
+    ((= (lt rv 0) True) (= (le -9223372036854775808 rv) True))
+    (=
+      (weval_loop
+        (S^ 17 f)
+        (MkXModule
+          (Cons
+            (MkXFunc 0 (list (XLoop (inline scp_loop_body))))
+            (Cons
+              (MkXFunc 3 (inline scp_read_body))
+              (Cons (MkXFunc 1 (inline scp_exit_body)) Nil)))
+          65536
+          131072)
+        (inline scp_loop_body)
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        m0
+        (MkLxWorld (Cons rv (Cons ce1 (Cons ce2 rest)))))
+      (Some (WExit 1 (Cons LxReadErr (Cons (LxExited 1) Nil))))))
+  (chain
+    (have hwR (= (mod rv 18446744073709551616) (+ rv 18446744073709551616))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q -1) (inst r (+ rv 18446744073709551616)))
+        ((steps () (by arith (list)))
+         (steps () (by arith (rows (goal 1) (1 1))))
+         (steps () (by arith (rows (goal 1) (0 1)))))
+        refl))
+    (have hguard (= (le (+ rv 18446744073709551616) 4096) False)
+      (by arith (rows (goal 1) (1 1))))
+    (steps
+      ((compute lhs)
+       (rewrite (premise 0) lr lhs true ())
+       (compute lhs)
+       (rewrite (premise hwR) lr lhs true ())
+       (compute lhs)
+       (rewrite (premise hguard) lr lhs true ())
+       (compute both))
+      refl)))
+
+;; --- the cap premise, split across the record list -----------------------------
+
+(claim scp_ok_hd
+  (goal ((it ScpIt) (rest (List ScpIt))) ((= (scp_ok (Cons it rest)) True))
+    (= (le (scp_ilen it) 4096) True))
+  (case-on (le (scp_ilen it) 4096) Bool
+    ((case True (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+     (case False
+       (have hf (= (scp_ok (Cons it rest)) False)
+         (steps
+           ((unfold scp_ok lhs)
+            (reduce lhs)
+            (rewrite (hyp 0) lr lhs true ())
+            (reduce lhs))
+           refl)
+         (have contra (= True False)
+           (steps
+             ((rewrite (premise 0) rl lhs true ())
+              (rewrite (premise hf) lr lhs true ()))
+             refl)
+           (absurd (premise contra))))))))
+
+(claim scp_ok_tl
+  (goal ((it ScpIt) (rest (List ScpIt))) ((= (scp_ok (Cons it rest)) True))
+    (= (scp_ok rest) True))
+  (case-on (le (scp_ilen it) 4096) Bool
+    ((case True
+       (have hred (= (scp_ok (Cons it rest)) (scp_ok rest))
+         (steps
+           ((unfold scp_ok lhs)
+            (reduce lhs)
+            (rewrite (hyp 0) lr lhs true ())
+            (reduce lhs))
+           refl)
+         (steps
+           ((rewrite (premise hred) rl lhs true ())
+            (rewrite (premise 0) lr lhs true ()))
+           refl)))
+     (case False
+       (have hf (= (scp_ok (Cons it rest)) False)
+         (steps
+           ((unfold scp_ok lhs)
+            (reduce lhs)
+            (rewrite (hyp 0) lr lhs true ())
+            (reduce lhs))
+           refl)
+         (have contra (= True False)
+           (steps
+             ((rewrite (premise 0) rl lhs true ())
+              (rewrite (premise hf) lr lhs true ()))
+             refl)
+           (absurd (premise contra))))))))
+
+;; --- THE FUELED COMPOSITION: the walk, quantified over RAW DRAWS ---------------
+;;
+;; An induction over the record list. The world is spelled as the raw
+;; draw stream those records ask for (scp_ws) with a TERMINATOR tail, and
+;; the three theorems below are the three terminators: an EOF answer, an
+;; error answer, and a stream that simply runs out (the resource
+;; convention — None, exactly like fuel). Registers are quantified at the
+;; head and never appear in the conclusion: WExit erases them, which is
+;; what makes the induction go through with no register fold.
+;;
+;; The fuel is (S^ 17 (scp_fuel its f)) — the body's depth constant
+;; OUTSIDE the per-iteration ladder — and f is UNIVERSALLY QUANTIFIED, so
+;; the statement is already CERT.md §6's monotone-threshold shape: at any
+;; fuel at or above the cost, the walk lands.
+
+(claim scp_walk_eof
+  (goal
+    ((its (List ScpIt))
+     (m0 Mem)
+     (ce1 Int)
+     (ce2 Int)
+     (ws (List Int))
+     (a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (f Nat))
+    ((= (scp_ok its) True))
+    (=
+      (weval_loop
+        (S^ 17 (scp_fuel its f))
+        (MkXModule
+          (Cons
+            (MkXFunc 0 (list (XLoop (inline scp_loop_body))))
+            (Cons
+              (MkXFunc 3 (inline scp_read_body))
+              (Cons (MkXFunc 1 (inline scp_exit_body)) Nil)))
+          65536
+          131072)
+        (inline scp_loop_body)
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        m0
+        (MkLxWorld (scp_ws its (Cons 0 (Cons ce1 (Cons ce2 ws))))))
+      (Some
+        (WExit
+          (mod (scp_cnt (mem_get m0 65536) its) 256)
+          (scp_tr
+            its
+            (Cons
+              (LxRead 0 Nil)
+              (Cons (LxExited (mod (scp_cnt (mem_get m0 65536) its) 256)) Nil)))))))
+  (induct its
+    ((case Nil
+       (steps
+         ((compute
+            both
+            (stop weval_loop lx_take lx_fill lx_read scp_app scp_len scp_msk
+              scp_ibs scp_ilen int_of_nat scb0_of scbs_of scc1_of scc2_of))
+          (rewrite (lemma scp_iter_eof) lr lhs true ()))
+         refl))
+     (case Cons
+       (it rest)
+       (chain
+         (have hhd (= (le (scp_ilen it) 4096) True)
+           (rewrite-with
+             (lemma scp_ok_hd)
+             lr
+             lhs
+             ((inst rest rest))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have htl (= (scp_ok rest) True)
+           (rewrite-with
+             (lemma scp_ok_tl)
+             lr
+             lhs
+             ((inst it it))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have hfu (= (scp_fuel (Cons it rest) f) (S (scp_fuel rest f)))
+           (steps ((unfold scp_fuel lhs) (reduce lhs)) refl))
+         (have hws
+           (=
+             (scp_ws (Cons it rest) (Cons 0 (Cons ce1 (Cons ce2 ws))))
+             (Cons
+               (scp_ilen it)
+               (scp_app
+                 (scp_ibs it)
+                 (Cons
+                   (scc1_of it)
+                   (Cons
+                     (scc2_of it)
+                     (scp_ws rest (Cons 0 (Cons ce1 (Cons ce2 ws)))))))))
+           (steps ((unfold scp_ws lhs) (reduce lhs)) refl))
+         (steps
+           ((rewrite (premise hfu) lr lhs true ())
+            (rewrite (premise hws) lr lhs true ())))
+         (rewrite-with
+           (lemma scp_iter_data)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise hhd) lr lhs true ())) refl)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise htl) lr lhs true ())) refl)))
+         (have hcn
+           (=
+             (scp_cnt (mem_get m0 65536) (Cons it rest))
+             (scp_cnt (mod (+ (mem_get m0 65536) (scp_ilen it)) 256) rest))
+           (steps ((unfold scp_cnt lhs) (reduce lhs)) refl))
+         (have htr
+           (=
+             (scp_tr
+               (Cons it rest)
+               (Cons
+                 (LxRead 0 Nil)
+                 (Cons
+                   (LxExited
+                     (mod (scp_cnt (mem_get m0 65536) (Cons it rest)) 256))
+                   Nil)))
+             (Cons
+               (LxRead 0 (scp_msk (scp_ibs it)))
+               (scp_tr
+                 rest
+                 (Cons
+                   (LxRead 0 Nil)
+                   (Cons
+                     (LxExited
+                       (mod (scp_cnt (mem_get m0 65536) (Cons it rest)) 256))
+                     Nil)))))
+           (steps ((unfold scp_tr lhs) (reduce lhs)) refl))
+         (steps
+           ((rewrite (lemma get_set) lr lhs true ())
+            (compute
+              both
+              (stop weval_loop lx_take lx_fill lx_read scp_app scp_len scp_msk
+                scp_ibs scp_ilen int_of_nat scb0_of scbs_of scc1_of scc2_of
+                scp_cnt scp_tr scp_fuel scp_ws))
+            (rewrite (premise hcn) rl lhs true ())
+            (rewrite (premise htr) rl lhs true ()))
+           refl))))))
+
+;; the ERROR terminator: the same walk, ending on the fail-stop leg. The
+;; trace is the delivered prefix followed by LxReadErr and exit 1 — D8's
+;; Fail leg, with the projection a strict prefix of the Done one.
+(claim scp_walk_err
+  (goal
+    ((its (List ScpIt))
+     (m0 Mem)
+     (rv Int)
+     (ce1 Int)
+     (ce2 Int)
+     (ws (List Int))
+     (a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (f Nat))
+    ((= (scp_ok its) True)
+     (= (lt rv 0) True)
+     (= (le -9223372036854775808 rv) True))
+    (=
+      (weval_loop
+        (S^ 17 (scp_fuel its f))
+        (MkXModule
+          (Cons
+            (MkXFunc 0 (list (XLoop (inline scp_loop_body))))
+            (Cons
+              (MkXFunc 3 (inline scp_read_body))
+              (Cons (MkXFunc 1 (inline scp_exit_body)) Nil)))
+          65536
+          131072)
+        (inline scp_loop_body)
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        m0
+        (MkLxWorld (scp_ws its (Cons rv (Cons ce1 (Cons ce2 ws))))))
+      (Some (WExit 1 (scp_tr its (Cons LxReadErr (Cons (LxExited 1) Nil)))))))
+  (induct its
+    ((case Nil
+       (chain
+         (steps
+           ((compute
+              both
+              (stop weval_loop lx_take lx_fill lx_read scp_app scp_len scp_msk
+                scp_ibs scp_ilen int_of_nat scb0_of scbs_of scc1_of scc2_of))))
+         (rewrite-with
+           (lemma scp_iter_err)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+            (steps ((rewrite (premise 2) lr lhs true ())) refl)))
+         refl))
+     (case Cons
+       (it rest)
+       (chain
+         (have hhd (= (le (scp_ilen it) 4096) True)
+           (rewrite-with
+             (lemma scp_ok_hd)
+             lr
+             lhs
+             ((inst rest rest))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have htl (= (scp_ok rest) True)
+           (rewrite-with
+             (lemma scp_ok_tl)
+             lr
+             lhs
+             ((inst it it))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have hfu (= (scp_fuel (Cons it rest) f) (S (scp_fuel rest f)))
+           (steps ((unfold scp_fuel lhs) (reduce lhs)) refl))
+         (have hws
+           (=
+             (scp_ws (Cons it rest) (Cons rv (Cons ce1 (Cons ce2 ws))))
+             (Cons
+               (scp_ilen it)
+               (scp_app
+                 (scp_ibs it)
+                 (Cons
+                   (scc1_of it)
+                   (Cons
+                     (scc2_of it)
+                     (scp_ws rest (Cons rv (Cons ce1 (Cons ce2 ws)))))))))
+           (steps ((unfold scp_ws lhs) (reduce lhs)) refl))
+         (have htr
+           (=
+             (scp_tr (Cons it rest) (Cons LxReadErr (Cons (LxExited 1) Nil)))
+             (Cons
+               (LxRead 0 (scp_msk (scp_ibs it)))
+               (scp_tr rest (Cons LxReadErr (Cons (LxExited 1) Nil)))))
+           (steps ((unfold scp_tr lhs) (reduce lhs)) refl))
+         (steps
+           ((rewrite (premise hfu) lr lhs true ())
+            (rewrite (premise hws) lr lhs true ())))
+         (rewrite-with
+           (lemma scp_iter_data)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise hhd) lr lhs true ())) refl)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise htl) lr lhs true ())) refl)
+            (steps ((rewrite (premise 1) lr lhs true ())) refl)
+            (steps ((rewrite (premise 2) lr lhs true ())) refl)))
+         (steps
+           ((compute
+              both
+              (stop weval_loop lx_take lx_fill lx_read scp_app scp_len scp_msk
+                scp_ibs scp_ilen int_of_nat scb0_of scbs_of scc1_of scc2_of
+                scp_cnt scp_tr scp_fuel scp_ws))
+            (rewrite (premise htr) rl lhs true ()))
+           refl))))))
+
+;; the DRY terminator: the oracle stream runs out at a loop head. None is
+;; the world-layer resource convention (exactly like fuel) — the third
+;; way a walk can end, and the one a real machine never takes.
+(claim scp_walk_dry
+  (goal
+    ((its (List ScpIt))
+     (m0 Mem)
+     (a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (f Nat))
+    ((= (scp_ok its) True))
+    (=
+      (weval_loop
+        (S^ 17 (scp_fuel its f))
+        (MkXModule
+          (Cons
+            (MkXFunc 0 (list (XLoop (inline scp_loop_body))))
+            (Cons
+              (MkXFunc 3 (inline scp_read_body))
+              (Cons (MkXFunc 1 (inline scp_exit_body)) Nil)))
+          65536
+          131072)
+        (inline scp_loop_body)
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        m0
+        (MkLxWorld (scp_ws its Nil)))
+      None))
+  (induct its
+    ((case Nil (steps ((compute both)) refl))
+     (case Cons
+       (it rest)
+       (chain
+         (have hhd (= (le (scp_ilen it) 4096) True)
+           (rewrite-with
+             (lemma scp_ok_hd)
+             lr
+             lhs
+             ((inst rest rest))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have htl (= (scp_ok rest) True)
+           (rewrite-with
+             (lemma scp_ok_tl)
+             lr
+             lhs
+             ((inst it it))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have hfu (= (scp_fuel (Cons it rest) f) (S (scp_fuel rest f)))
+           (steps ((unfold scp_fuel lhs) (reduce lhs)) refl))
+         (have hws
+           (=
+             (scp_ws (Cons it rest) Nil)
+             (Cons
+               (scp_ilen it)
+               (scp_app
+                 (scp_ibs it)
+                 (Cons (scc1_of it) (Cons (scc2_of it) (scp_ws rest Nil))))))
+           (steps ((unfold scp_ws lhs) (reduce lhs)) refl))
+         (steps
+           ((rewrite (premise hfu) lr lhs true ())
+            (rewrite (premise hws) lr lhs true ())))
+         (rewrite-with
+           (lemma scp_iter_data)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise hhd) lr lhs true ())) refl)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise htl) lr lhs true ())) refl)))
+         (steps
+           ((compute
+              both
+              (stop weval_loop lx_take lx_fill lx_read scp_app scp_len scp_msk
+                scp_ibs scp_ilen int_of_nat scb0_of scbs_of scc1_of scc2_of
+                scp_cnt scp_tr scp_fuel scp_ws)))
+           refl))))))
+
+;; --- THE ENTRY EQUATION: the same walks at xrun_w, the bin contract level ------
+;;
+;; What the ELF actually enters is FUNCTION 0, not the loop node: the
+;; glue zeroes the register file and calls the image's first function,
+;; whose whole body is the loop. These two corollaries lift the walk
+;; theorems across that boundary — the shape M3's bin equation takes,
+;; and the reason the entry costs exactly TWO more fuel units (the seq
+;; peel plus the XLoop instruction's own).
+(claim scp_main_eof
+  (goal
+    ((its (List ScpIt))
+     (m0 Mem)
+     (ce1 Int)
+     (ce2 Int)
+     (ws (List Int))
+     (a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (f Nat))
+    ((= (scp_ok its) True))
+    (=
+      (xrun_w
+        (S^ 19 (scp_fuel its f))
+        (MkXModule
+          (Cons
+            (MkXFunc 0 (list (XLoop (inline scp_loop_body))))
+            (Cons
+              (MkXFunc 3 (inline scp_read_body))
+              (Cons (MkXFunc 1 (inline scp_exit_body)) Nil)))
+          65536
+          131072)
+        0
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        m0
+        (MkLxWorld (scp_ws its (Cons 0 (Cons ce1 (Cons ce2 ws))))))
+      (Some
+        (WExit
+          (mod (scp_cnt (mem_get m0 65536) its) 256)
+          (scp_tr
+            its
+            (Cons
+              (LxRead 0 Nil)
+              (Cons (LxExited (mod (scp_cnt (mem_get m0 65536) its) 256)) Nil)))))))
+  (chain
+    (steps
+      ((unfold xrun_w lhs)
+       (compute
+         lhs
+         (stop weval_loop lx_take lx_fill lx_read scp_app scp_len scp_msk
+           scp_ibs scp_ilen int_of_nat scb0_of scbs_of scc1_of scc2_of scp_cnt
+           scp_tr scp_fuel scp_ws))))
+    (rewrite-with
+      (lemma scp_walk_eof)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps
+      ((compute
+         both
+         (stop weval_loop lx_take lx_fill lx_read scp_app scp_len scp_msk
+           scp_ibs scp_ilen int_of_nat scb0_of scbs_of scc1_of scc2_of scp_cnt
+           scp_tr scp_fuel scp_ws)))
+      refl)))
+
+(claim scp_main_err
+  (goal
+    ((its (List ScpIt))
+     (m0 Mem)
+     (rv Int)
+     (ce1 Int)
+     (ce2 Int)
+     (ws (List Int))
+     (a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (f Nat))
+    ((= (scp_ok its) True)
+     (= (lt rv 0) True)
+     (= (le -9223372036854775808 rv) True))
+    (=
+      (xrun_w
+        (S^ 19 (scp_fuel its f))
+        (MkXModule
+          (Cons
+            (MkXFunc 0 (list (XLoop (inline scp_loop_body))))
+            (Cons
+              (MkXFunc 3 (inline scp_read_body))
+              (Cons (MkXFunc 1 (inline scp_exit_body)) Nil)))
+          65536
+          131072)
+        0
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        m0
+        (MkLxWorld (scp_ws its (Cons rv (Cons ce1 (Cons ce2 ws))))))
+      (Some (WExit 1 (scp_tr its (Cons LxReadErr (Cons (LxExited 1) Nil)))))))
+  (chain
+    (steps
+      ((unfold xrun_w lhs)
+       (compute
+         lhs
+         (stop weval_loop lx_take lx_fill lx_read scp_app scp_len scp_msk
+           scp_ibs scp_ilen int_of_nat scb0_of scbs_of scc1_of scc2_of scp_cnt
+           scp_tr scp_fuel scp_ws))))
+    (rewrite-with
+      (lemma scp_walk_err)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)))
+    (steps
+      ((compute
+         both
+         (stop weval_loop lx_take lx_fill lx_read scp_app scp_len scp_msk
+           scp_ibs scp_ilen int_of_nat scb0_of scbs_of scc1_of scc2_of scp_cnt
+           scp_tr scp_fuel scp_ws)))
+      refl)))
+
+;; --- THE GROUND PIN: the silicon transcript, as a theorem -----------------------
+;;
+;; `printf 'hello' | ./stdin_count_probe` exits 5 — one 5-byte delivery
+;; then EOF. Derived from the entry equation (never re-computed), so the
+;; ground numbers and the symbolic walk are the SAME theorem; the four
+;; oracle trash draws stay quantified (the real CPU's rip/rflags are not
+;; ours to predict) and the window's zero-fill enters as the one premise.
+(claim scp_run_hello
+  (goal ((m0 Mem) (c Nat) (t1 Int) (t2 Int) (t3 Int) (t4 Int))
+    ((= (mem_get m0 65536) 0))
+    (=
+      (xrun_w
+        (S^ 20 c)
+        (MkXModule
+          (Cons
+            (MkXFunc 0 (list (XLoop (inline scp_loop_body))))
+            (Cons
+              (MkXFunc 3 (inline scp_read_body))
+              (Cons (MkXFunc 1 (inline scp_exit_body)) Nil)))
+          65536
+          131072)
+        0
+        (MkRegs 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+        m0
+        (MkLxWorld (list 5 104 101 108 108 111 t1 t2 0 t3 t4)))
+      (Some
+        (WExit
+          5
+          (list
+            (LxRead 0 (list 104 101 108 108 111))
+            (LxRead 0 Nil)
+            (LxExited 5))))))
+  (chain
+    (have hi5
+      (=
+        (scp_ilen
+          (MkScpIt 104 (Cons 101 (Cons 108 (Cons 108 (Cons 111 Nil)))) t1 t2))
+        5)
+      (chain
+        (have ha (= (int_of_nat 5) (int_of_nat (S (S (S (S (S Z)))))))
+          (steps ((compute both)) refl))
+        (steps
+          ((compute lhs (stop int_of_nat))
+           (rewrite (premise ha) lr lhs true ())
+           (rewrite (lemma int_of_nat_succ) lr lhs true ())
+           (rewrite (lemma int_of_nat_succ) lr lhs true ())
+           (rewrite (lemma int_of_nat_succ) lr lhs true ())
+           (rewrite (lemma int_of_nat_succ) lr lhs true ())
+           (rewrite (lemma int_of_nat_succ) lr lhs true ())
+           (rewrite (lemma int_of_nat_zero) lr lhs true ())
+           (compute both))
+          refl)))
+    (have hfu
+      (=
+        (scp_fuel
+          (Cons
+            (MkScpIt 104 (Cons 101 (Cons 108 (Cons 108 (Cons 111 Nil)))) t1 t2)
+            Nil)
+          c)
+        (S c))
+      (steps ((compute both)) refl))
+    (have hws
+      (=
+        (scp_ws
+          (Cons
+            (MkScpIt 104 (Cons 101 (Cons 108 (Cons 108 (Cons 111 Nil)))) t1 t2)
+            Nil)
+          (Cons 0 (Cons t3 (Cons t4 Nil))))
+        (list 5 104 101 108 108 111 t1 t2 0 t3 t4))
+      (steps
+        ((compute lhs (stop scp_ilen))
+         (rewrite (premise hi5) lr lhs true ())
+         (compute both))
+        refl))
+    (have hok
+      (=
+        (scp_ok
+          (Cons
+            (MkScpIt 104 (Cons 101 (Cons 108 (Cons 108 (Cons 111 Nil)))) t1 t2)
+            Nil))
+        True)
+      (steps
+        ((compute lhs (stop scp_ilen))
+         (rewrite (premise hi5) lr lhs true ())
+         (compute both))
+        refl))
+    (steps
+      ((rewrite (premise hfu) rl lhs true ())
+       (rewrite (premise hws) rl lhs true ())))
+    (rewrite-with
+      (lemma scp_main_eof)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hok) lr lhs true ())) refl)))
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (compute lhs (stop scp_ilen))
+       (rewrite (premise hi5) lr lhs true ())
+       (compute both))
+      refl)))
