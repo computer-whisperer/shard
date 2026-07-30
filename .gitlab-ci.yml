@@ -96,6 +96,8 @@ corpus:
       when: never
     - if: $SWAP_DEEP == "1"
       when: never
+    - if: $ENGINE_RUN == "1"
+      when: never
     - if: $CORPUS_LONG == "1"
       when: never
     - when: on_success
@@ -180,6 +182,74 @@ corpus-long:
 # for a worse-than-quadratic tail.  The margin is load-bearing: GitLab
 # uploads NO artifacts on a timed-out job, and the engine reports only
 # at exit — a timeout here means total loss of the run.
+# Generic engine-run job for probe-style programs (drivers, demos) whose
+# runtime is UNVALIDATED.  The standing rule: any new engine-run
+# configuration — new task, instance, budget, or driver — fires HERE
+# first (RSS watchdog + artifact capture); the dev box only runs
+# configurations already measured fast.  Founding case: the PCB routing
+# driver sat at the ~67.6GB retention plateau for six CPU-hours locally
+# because refutation levels cost exponential-in-slack.  Fire with:
+#   glab ci run -b BRANCH --variables ENGINE_RUN:1 \
+#     --variables ENGINE_RUN_TARGET:tools/search/pcb_route_probe.shard
+engine-run:
+  stage: gate
+  tags:
+    - high-cpu
+  image: docker.io/library/rust:latest
+  timeout: 8h
+  variables:
+    ENGINE_RUN_TARGET: "tools/search/pcb_route_probe.shard"
+  rules:
+    - if: $ENGINE_RUN == "1"
+      when: on_success
+    - when: never
+  cache:
+    key: shard-engine
+    paths:
+      - rust_bootstrap/target/
+      - bin/shard_check
+      - bin/shard_check.stamp
+      - bin/shard_eval
+      - bin/shard_eval.stamp
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq nodejs > /dev/null
+  script:
+    - cargo build --release --manifest-path rust_bootstrap/Cargo.toml
+    - |
+      if [ ! -x bin/shard_check ] || [ "$(bin/engine_stamp.sh)" != "$(cat bin/shard_check.stamp 2>/dev/null)" ]; then
+        echo "engine stale or missing -- rebuilding"
+        bin/rebuild.sh
+      else
+        echo "engine fresh (stamp match) -- rebuild skipped"
+      fi
+    - echo "target: ${ENGINE_RUN_TARGET}"
+    - |
+      bin/shard_eval run "$ENGINE_RUN_TARGET" > engine_run.log 2>&1 &
+      ENG=$!
+      CAP_KB=$((490 * 1024 * 1024))
+      PEAK=0; TICK=0
+      while kill -0 "$ENG" 2>/dev/null; do
+        RSS=$(awk '/VmRSS/{print $2}' /proc/$ENG/status 2>/dev/null)
+        [ "${RSS:-0}" -gt "$PEAK" ] && PEAK=$RSS
+        if [ "${RSS:-0}" -gt "$CAP_KB" ]; then
+          echo "WATCHDOG: RSS ${RSS} kB over ${CAP_KB} kB cap -- killing engine"
+          kill -9 "$ENG"
+          break
+        fi
+        TICK=$((TICK + 1))
+        if [ $((TICK % 10)) -eq 0 ]; then echo "watchdog: RSS ${RSS:-0} kB (peak ${PEAK} kB)"; fi
+        sleep 30
+      done
+      wait "$ENG"; STATUS=$?
+      echo "ENGINE EXIT ${STATUS}  PEAK RSS ${PEAK} kB"
+      cat engine_run.log
+      exit "$STATUS"
+  artifacts:
+    paths:
+      - engine_run.log
+    when: always
+    expire_in: 30 days
+
 # The swap-network split-economics ladder (R5 follow-on): the k=4 routing
 # task (swap_route5, depth 11, four-letter alphabet) under three arms —
 #   theorem-first WITH relational splits   (more-search HEAD)

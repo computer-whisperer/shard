@@ -1,0 +1,359 @@
+;;; PCB routing demo: the first heuristic-tier driver.  Sequential net
+;;; routing with rip-up/re-route over the EXACT engine as a library —
+;;; su_find_query_schema is the inner maze solver (one net against an
+;;; occupancy list), iterative deepening supplies shortest-first, and the
+;;; model's bounded walk (Manhattan floor checked before the move list is
+;;; demanded) gives admissible pruning through laziness alone.  The outer
+;;; loop is the ratified LNS shape: greedy in queue order; on failure rip
+;;; the OLDEST routed net, requeue it at the back, retry the failed net
+;;; first; a rip cap bounds the loop.  Heuristic existence only: the
+;;; final assignment is certified by a full replay — every route re-walks
+;;; legally against the keepouts and the union of all cells is
+;;; duplicate-free (pairwise disjointness follows).
+;;;
+;;; The board (8x8, wall x=4 rows 2..4) and nets are chosen so the naive
+;;; order NEEDS one rip: F's shortest route (straight row 1) eats both
+;;; cells of R (the two-cell net at (4,0)-(4,1)); after the rip R takes
+;;; its only route and F re-routes below the wall at length 13.  D is
+;;; independent on the right edge.  Budgets are deliberately SMALL: a
+;;; refutation level explores a wander-tree exponential in its slack
+;;; (walks may revisit cells; the Manhattan bound prunes only against
+;;; remaining budget), so per-call budget 50k + five deepening levels
+;;; keep every exhaustion tiny — the first version of this file ran a
+;;; 500k budget into the ~67.6GB retention plateau for six CPU-hours.
+;;;
+;;; The model module is ALSO loaded at runtime (resolve_closure +
+;;; build_module_d on the file path below) because the su evaluator
+;;; resolves the query's pcb_walk call against a Module value.  Runtime
+;;; path string — update it if the model file moves.
+;;;
+;;; RUN:  bin/shard_eval run tools/search/pcb_route_probe.shard
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/driver.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "../../meta/search")
+(import "superpose.shard")
+(import "tasks/pcb_route_model.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel reader *))
+(use (:: kernel loader *))
+(use (:: kernel driver *))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: meta search *))
+(use (:: tools search superpose *))
+(use (:: tools search tasks pcb_route_model *))
+
+(fn pcbp_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "PCB-ROUTE FAIL " (append_int msg "\n")) w)))
+
+;; ---- the model module, twice: imported above for direct calls, loaded
+;; ---- here for the su evaluator's query resolution ------------------------
+
+(fn pcbp_model_file () (List Int) "tools/search/tasks/pcb_route_model.shard")
+
+(fn pcbp_model_path () (List Symbol)
+  (list (quote tools) (quote search) (quote tasks) (quote pcb_route_model)))
+
+(fn pcbp_model_q ((name Symbol)) QName (QName (pcbp_model_path) name))
+
+(fn pcbp_probe_q ((name Symbol)) QName
+  (QName (list (quote tools) (quote search) (quote pcb_route_probe)) name))
+
+(type PcbpLoadR (PcbpLoadErr (List Int)) (PcbpLoadOk Module))
+
+(fn pcbp_build ((srcs (List SrcEntry))) PcbpLoadR
+  (match
+    (build_module_d
+      srcs
+      (Module Nil Nil Nil (FnTrie None Nil) Nil)
+      (prelude_ctors)
+      1)
+    ((BMFail msg) (PcbpLoadErr msg))
+    ((BMOk m) (PcbpLoadOk m))))
+
+(fn pcbp_load ((w World)) (Pair PcbpLoadR World)
+  (match (resolve_closure (pcbp_model_file) False w)
+    ((Pair srcs w1)
+     (match srcs
+       (Nil (Pair (PcbpLoadErr "model closure is empty") w1))
+       (_ (Pair (pcbp_build srcs) w1))))))
+
+;; ---- the depth-bounded move-list schema grammar ---------------------------
+
+(fn pcbp_move_alt ((name Symbol)) SkSchemaAlt
+  (SkSchemaAlt (Ctor (pcbp_model_q name) Nil) Nil))
+
+(fn pcbp_move_ent ((id Int)) SkSchemaEnt
+  (SkSchemaEnt
+    id
+    (list
+      (pcbp_move_alt (quote MvN))
+      (pcbp_move_alt (quote MvE))
+      (pcbp_move_alt (quote MvS))
+      (pcbp_move_alt (quote MvW)))))
+
+(fn pcbp_nil_alt () SkSchemaAlt (SkSchemaAlt (Ctor (qn (quote Nil)) Nil) Nil))
+
+(fn pcbp_cons_alt ((move_id Int) (tail_id Int)) SkSchemaAlt
+  (SkSchemaAlt
+    (Ctor (qn (quote Cons)) (list (hole 0) (hole 1)))
+    (list (SkSchemaRef 0 0 move_id) (SkSchemaRef 1 1 tail_id))))
+
+;; Entries ascending by id: list states 0..d (id = remaining length), the
+;; move alphabet last at id d+1.
+(fn pcbp_ents_up ((i Int) (d Int)) (List SkSchemaEnt)
+  (measure (- (+ d 1) i))
+  (if (lt d i) (Cons (pcbp_move_ent (+ d 1)) Nil)
+  (Cons
+    (if (lt i 1) (SkSchemaEnt 0 (Cons (pcbp_nil_alt) Nil))
+    (SkSchemaEnt i (list (pcbp_nil_alt) (pcbp_cons_alt (+ d 1) (- i 1)))))
+    (pcbp_ents_up (+ i 1) d))))
+
+(fn pcbp_grammar ((d Int)) SkSchemaGrammar
+  (SkSchemaGrammar d (pcbp_ents_up 0 d)))
+
+;; ---- query construction ---------------------------------------------------
+
+(fn pcbp_int_list_expr ((xs (List Int))) Expr
+  (measure (struct xs))
+  (match xs
+    (Nil (Ctor (qn (quote Nil)) Nil))
+    ((Cons h t)
+     (Ctor (qn (quote Cons)) (list (IntLit h) (pcbp_int_list_expr t))))))
+
+(fn pcbp_query ((occ (List Int)) (goal Int) (d Int) (start Int)) Expr
+  (Call
+    (pcbp_model_q (quote pcb_walk))
+    (list
+      (pcbp_int_list_expr occ)
+      (IntLit goal)
+      (IntLit d)
+      (IntLit start)
+      (hole 0))))
+
+(fn pcbp_want ((goal Int)) Expr
+  (Ctor (qn (quote Some)) (Cons (IntLit goal) Nil)))
+
+(fn pcbp_find ((m Module) (occ (List Int)) (start Int) (goal Int) (d Int))
+  SuFind
+  (su_find_query_schema
+    50000
+    m
+    (pcbp_probe_q (quote candidate))
+    (hole 0)
+    (hole 0)
+    (ms_empty_plan)
+    (pcbp_query occ goal d start)
+    (pcbp_want goal)
+    (pcbp_grammar d)))
+
+;; ---- representative decoding ----------------------------------------------
+
+(fn pcbp_decode_move ((e Expr)) (Option PMove)
+  (match e
+    ((Ctor q args)
+     (match args
+       ((Cons _ _) None)
+       (Nil
+         (if (qname_eq q (pcbp_model_q (quote MvN))) (Some (MvN))
+         (if (qname_eq q (pcbp_model_q (quote MvE))) (Some (MvE))
+         (if (qname_eq q (pcbp_model_q (quote MvS))) (Some (MvS))
+         (if (qname_eq q (pcbp_model_q (quote MvW))) (Some (MvW))
+         None)))))))
+    (_ None)))
+
+(fn pcbp_decode ((e Expr)) (Option (List PMove))
+  (measure (struct e))
+  (match e
+    ((Ctor q args)
+     (match args
+       (Nil (if (qname_eq q (qn (quote Nil))) (Some Nil) None))
+       ((Cons h rest0)
+        (match rest0
+          (Nil None)
+          ((Cons t rest1)
+           (match rest1
+             ((Cons _ _) None)
+             (Nil
+               (if (qname_eq q (qn (quote Cons)))
+                 (match (pcbp_decode_move h)
+                   (None None)
+                   ((Some mv)
+                    (match (pcbp_decode t)
+                      (None None)
+                      ((Some moves) (Some (Cons mv moves))))))
+                 None))))))))
+    (_ None)))
+
+;; ---- iterative deepening per net ------------------------------------------
+
+(type PcbNetR
+  (PcbNetErr (List Int))
+  (PcbNetNone)
+  (PcbNetRoute (List PMove) (List Int) Int))
+
+(fn pcbp_deepen
+  ((m Module) (occ (List Int)) (start Int) (goal Int) (d Int) (levels Int))
+  PcbNetR
+  (measure levels)
+  (if (lt levels 1) (PcbNetNone)
+  (match (pcbp_find m occ start goal d)
+    ((SuFindErr msg) (PcbNetErr msg))
+    ((SuFindFound _ _ _ _ _ _ _ rep)
+     (match (pcbp_decode rep)
+       (None (PcbNetErr "undecodable representative"))
+       ((Some moves) (PcbNetRoute moves (pcb_cells start moves) d))))
+    ((SuFindEmpty _ _ _ _ _ _ _ _)
+     (pcbp_deepen m occ start goal (+ d 2) (- levels 1)))
+    ((SuFindBudget _ _ _ _ _ _ _ _)
+     (pcbp_deepen m occ start goal (+ d 2) (- levels 1))))))
+
+;; ---- the rip-up / re-route loop -------------------------------------------
+
+(type PcbNet (PcbNet Int Int))
+
+(type PcbRouted (PcbRouted PcbNet (List PMove) (List Int)))
+
+(type PcbAllR (PcbAllErr (List Int)) (PcbAllOk (List PcbRouted) Int))
+
+(fn pcbp_app_cells ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (pcbp_app_cells t b)))))
+
+(fn pcbp_app_nets ((a (List PcbNet)) (b (List PcbNet))) (List PcbNet)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (pcbp_app_nets t b)))))
+
+(fn pcbp_app_routed ((a (List PcbRouted)) (b (List PcbRouted))) (List PcbRouted)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (pcbp_app_routed t b)))))
+
+(fn pcbp_routed_cells ((rs (List PcbRouted))) (List Int)
+  (measure (struct rs))
+  (match rs
+    (Nil Nil)
+    ((Cons (PcbRouted _ _ cells) rest)
+     (pcbp_app_cells cells (pcbp_routed_cells rest)))))
+
+(fn pcbp_levels () Int 5)
+
+(fn pcbp_route_all
+  ((m Module)
+   (keep (List Int))
+   (queue (List PcbNet))
+   (routed (List PcbRouted))
+   (rips Int)
+   (fuel Int))
+  PcbAllR
+  (measure fuel)
+  (if (lt fuel 1) (PcbAllErr "rip cap exceeded")
+  (match queue
+    (Nil (PcbAllOk routed rips))
+    ((Cons net rest)
+     (match net
+       ((PcbNet start goal)
+        (match
+          (pcbp_deepen
+            m
+            (pcbp_app_cells keep (pcbp_routed_cells routed))
+            start
+            goal
+            (pcb_manhattan start goal)
+            (pcbp_levels))
+          ((PcbNetErr msg) (PcbAllErr msg))
+          ((PcbNetRoute moves cells _)
+           (pcbp_route_all
+             m
+             keep
+             rest
+             (pcbp_app_routed routed (Cons (PcbRouted net moves cells) Nil))
+             rips
+             (- fuel 1)))
+          ((PcbNetNone)
+           (match routed
+             (Nil (PcbAllErr "infeasible: unroutable with empty board"))
+             ((Cons (PcbRouted oldest _ _) younger)
+              (pcbp_route_all
+                m
+                keep
+                (Cons net (pcbp_app_nets rest (Cons oldest Nil)))
+                younger
+                (+ rips 1)
+                (- fuel 1))))))))))))
+
+;; ---- the certificate: full replay ----------------------------------------
+
+(fn pcbp_len_moves ((moves (List PMove))) Int
+  (measure (struct moves))
+  (match moves
+    (Nil 0)
+    ((Cons _ t) (+ 1 (pcbp_len_moves t)))))
+
+(fn pcbp_dup_free ((xs (List Int))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil True)
+    ((Cons h t) (if (pcb_mem h t) False (pcbp_dup_free t)))))
+
+(fn pcbp_replay_ok ((keep (List Int)) (rs (List PcbRouted))) Bool
+  (measure (struct rs))
+  (match rs
+    (Nil True)
+    ((Cons (PcbRouted (PcbNet start goal) moves _) rest)
+     (match (pcb_walk keep goal (pcbp_len_moves moves) start moves)
+       (None False)
+       ((Some c) (if (int_eq c goal) (pcbp_replay_ok keep rest) False))))))
+
+(fn pcbp_wire ((rs (List PcbRouted))) Int
+  (measure (struct rs))
+  (match rs
+    (Nil 0)
+    ((Cons (PcbRouted _ moves _) rest)
+     (+ (pcbp_len_moves moves) (pcbp_wire rest)))))
+
+;; ---- the board instance ---------------------------------------------------
+
+(fn pcbp_keepouts () (List Int) (list 20 28 36))
+
+(fn pcbp_nets () (List PcbNet)
+  (list (PcbNet 9 14) (PcbNet 4 12) (PcbNet 39 55)))
+
+(fn pcbp_report ((rips Int) (wire Int) (w World)) World
+  (write
+    (append_int
+      "PCB-ROUTE 8x8 KEEP-3 NETS-3 RIPS-"
+      (append_int
+        (show_int rips)
+        (append_int " WIRE-" (append_int (show_int wire) " CERT-DISJOINT-OK\n"))))
+    w))
+
+(fn pcbp_run ((m Module) (w World)) World
+  (match (pcbp_route_all m (pcbp_keepouts) (pcbp_nets) Nil 0 12)
+    ((PcbAllErr msg) (pcbp_fail msg w))
+    ((PcbAllOk routed rips)
+     (if
+       (pcbp_dup_free
+         (pcbp_app_cells (pcbp_keepouts) (pcbp_routed_cells routed)))
+       (if (pcbp_replay_ok (pcbp_keepouts) routed)
+         (pcbp_report rips (pcbp_wire routed) w)
+         (pcbp_fail "certificate: replay rejected a route" w))
+       (pcbp_fail "certificate: overlapping cells" w)))))
+
+(fn main ((w World)) World
+  (match (pcbp_load w)
+    ((Pair (PcbpLoadErr msg) w1) (pcbp_fail msg w1))
+    ((Pair (PcbpLoadOk m) w1) (pcbp_run m w1))))
