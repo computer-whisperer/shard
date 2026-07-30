@@ -23008,3 +23008,724 @@
        (steps () (by arith (list)))
        (steps () (by arith (list)))))
     refl))
+
+;; ---- THE STREAMING TIER (STREAM.md §7.9 M1) ----------------------------------------
+;; Two pure pieces the streaming absorber composes at the machine
+;; boundary (one XCall each, the pipe-body species): the byte-grain
+;; TAIL COPY (re-homing the ≤63 pending bytes against the fixed read
+;; buffer after the whole-block fold) and the 8-byte LE TOTAL BUMP
+;; (the persistent byte count — the ONLY loop state beside H; pend
+;; derives as total & 63, the sha_abs invariant). The copy twin is
+;; CLEAN (hex-tier precedent: the pass pays the band collapse); the
+;; bump vocabulary is machine-spelled (pad-tier precedent: ipd_b's
+;; double band, mod-wrapped U64 Horner). The cell is BIG-ENDIAN and
+;; the bump is TWO pins — read (Horner, U64 result slot) and write
+;; (the ipd store-ladder species at a U64 arg) — because each pin
+;; must sweep its addresses ONCE: the seq bridge recipe splits every
+;; guard at first materialization, and a revisited symbolic address
+;; materializes its duplicate guard only after later computes, past
+;; the all-occurrence rewrite (the one-pin RMW form emits a red
+;; bridge). The hand absorber adds the delta between the two XCalls.
+;; M2's finalizer reuses the read pin for the length bytes. The cell
+;; is mod-2^64 faithful BY CONSTRUCTION: 64 | 2^64 keeps pend exact,
+;; and 8·(total mod 2^64) ≡ 8·total (mod 2^64) keeps the finalizer's
+;; length bytes exact — no bound premise anywhere.
+;; Copy locals: 0=dst, 1=src, 2=count, 3=scratch (zero-in/zero-out).
+;; Read locals: 0=cell, 1=value (U64, the result), 2=pointer, 3=byte.
+;; Write locals: 0=cell, 1=value (U64 arg), 2=pointer.
+
+(fn icp_zbody () (List IStmt)
+  (list
+    (ISet 3 (IExt U8 U32 (ILoad (ILoc 1))))
+    (IStore (ILoc 0) (ITrunc U32 U8 (ILoc 3)))
+    (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 1)))
+    (ISet 1 (IBin U32 IAdd (ILoc 1) (IConst 1)))
+    (ISet 3 (IConst 0))
+    (ISet 2 (IBin U32 ISub (ILoc 2) (IConst 1)))))
+
+(fn icp_body () (List IStmt)
+  (list
+    (ISet 3 (IConst 0))
+    (IWhile
+      (ILoc 2)
+      (list
+        (ISet 3 (IExt U8 U32 (ILoad (ILoc 1))))
+        (IStore (ILoc 0) (ITrunc U32 U8 (ILoc 3)))
+        (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 1)))
+        (ISet 1 (IBin U32 IAdd (ILoc 1) (IConst 1)))
+        (ISet 3 (IConst 0))
+        (ISet 2 (IBin U32 ISub (ILoc 2) (IConst 1)))))))
+
+;; the copy effect: k bytes ascending, each read THROUGH the earlier
+;; stores exactly as the machine does (overlap enters at readback)
+(fn icp_mem ((m Mem) (q Int) (p Int) (k Nat)) Mem
+  (measure (struct k))
+  (match k
+    (Z m)
+    ((S k2) (icp_mem (mem_set m q (mem_get m p)) (+ q 1) (+ p 1) k2))))
+
+(claim icp_mem_z
+  (goal ((m Mem) (q Int) (p Int)) () (= (icp_mem m q p Z) m))
+  (steps ((unfold icp_mem lhs) (reduce lhs)) refl))
+
+(claim icp_mem_s
+  (goal ((m Mem) (q Int) (p Int) (k Nat)) ()
+    (=
+      (icp_mem m q p (S k))
+      (icp_mem (mem_set m q (mem_get m p)) (+ q 1) (+ p 1) k)))
+  (steps ((unfold icp_mem lhs) (reduce lhs)) refl))
+
+;; the copy pass: one arm from the loop head
+(claim icp_pass
+  (goal ((q Int) (p Int) (zc Int) (m Mem) (fl Nat))
+    ((= (le 0 q) True)
+     (= (lt q 65536) True)
+     (= (le 0 p) True)
+     (= (lt p 65536) True)
+     (= (le 1 zc) True)
+     (= (lt zc 4294967296) True))
+    (=
+      (istmts (S^ 14 fl) 65536 (inline icp_zbody) (list q p zc 0) m)
+      (Some
+        (INorm (list (+ q 1) (+ p 1) (- zc 1) 0) (mem_set m q (mem_get m p))))))
+  (chain
+    (have hblo (= (le 0 (mem_get m p)) True)
+      (rewrite-with (lemma get_lo) lr lhs () () refl))
+    (have hbhi (= (lt (mem_get m p) 256) True)
+      (rewrite-with (lemma get_hi) lr lhs () () refl))
+    (have hb (= (band (mem_get m p) 255) (mem_get m p))
+      (chain
+        (rewrite-with
+          (lemma mask_byte)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise hblo) lr lhs true ())) refl)))
+        (rewrite-with
+          (lemma mod_unique)
+          lr
+          lhs
+          ((inst q 0) (inst r (mem_get m p)))
+          ((steps () (by arith (list (list 1) (list 1))))
+           (steps ((rewrite (premise hblo) lr lhs true ())) refl)
+           (steps ((rewrite (premise hbhi) lr lhs true ())) refl))
+          refl)))
+    (have hq1 (= (mod (+ q 1) 4294967296) (+ q 1))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (0 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (have hp1 (= (mod (+ p 1) 4294967296) (+ p 1))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (2 1))))
+         (steps () (by arith (rows (goal 1) (3 1)))))
+        refl))
+    (have hz1 (= (mod (- zc 1) 4294967296) (- zc 1))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (4 1))))
+         (steps () (by arith (rows (goal 1) (5 1)))))
+        refl))
+    (steps
+      ((compute lhs (stop mem_set mem_get))
+       (rewrite (premise 2) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (rewrite (premise 3) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (rewrite (premise 0) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (rewrite (premise 1) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (rewrite (premise hb) lr lhs true ())
+       (rewrite (premise hq1) lr lhs true ())
+       (rewrite (premise hp1) lr lhs true ())
+       (rewrite (premise hz1) lr lhs true ())
+       (compute lhs (stop mem_set mem_get)))
+      refl)))
+
+;; the copy worker: k iterations from the loop head IS the copy effect
+;; (exit locals uniform in k — the scratch re-zeroes, the count runs out)
+(claim icp_w
+  (goal ((q Int) (p Int) (m Mem) (c Nat) (k Nat))
+    ((= (le 0 q) True)
+     (= (le (+ q (int_of_nat k)) 65536) True)
+     (= (le 0 p) True)
+     (= (le (+ p (int_of_nat k)) 65536) True))
+    (=
+      (iwhile
+        (S^ 18 (lg_fuel k c))
+        65536
+        (ILoc 2)
+        (inline icp_zbody)
+        (list q p (int_of_nat k) 0)
+        m)
+      (Some
+        (INorm (list (lg_advk q 1 k) (lg_advk p 1 k) 0 0) (icp_mem m q p k)))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr lhs true ())
+          (compute both (stop mem_set mem_get)))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (have hnn (= (le 0 (int_of_nat k2)) True)
+           (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+         (have hqs (= (le (+ q (+ 1 (int_of_nat k2))) 65536) True)
+           (steps
+             ((rewrite (lemma int_of_nat_succ) rl lhs true ())
+              (rewrite (premise 1) lr lhs true ()))
+             refl))
+         (have hps (= (le (+ p (+ 1 (int_of_nat k2))) 65536) True)
+           (steps
+             ((rewrite (lemma int_of_nat_succ) rl lhs true ())
+              (rewrite (premise 3) lr lhs true ()))
+             refl))
+         (steps
+           ((unfold lg_fuel lhs)
+            (reduce lhs)
+            (unfold iwhile lhs)
+            (rewrite (lemma int_of_nat_succ) lr lhs true ())
+            (compute
+              lhs
+              (stop iwhile lg_fuel istmts mem_set mem_get icp_mem lg_advk))))
+         (rewrite-with
+           (lemma lg_ne)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps
+           ((compute
+              lhs
+              (stop iwhile lg_fuel istmts mem_set mem_get icp_mem lg_advk))))
+         (rewrite-with
+           (lemma icp_pass)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps () (by arith (rows (goal 1) (hqs 1) (hnn 1))))
+            (steps ((rewrite (premise 2) lr lhs true ())) refl)
+            (steps () (by arith (rows (goal 1) (hps 1) (hnn 1))))
+            (steps () (by arith (rows (goal 1) (hnn 1))))
+            (steps () (by arith (rows (goal 1) (hqs 1) (0 1))))))
+         (steps
+           ((rewrite (lemma lg_sub) lr lhs true ())
+            (compute
+              lhs
+              (stop iwhile lg_fuel istmts mem_set mem_get icp_mem lg_advk))))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (0 1))))
+            (steps () (by arith (rows (goal 1) (hqs 1))))
+            (steps () (by arith (rows (goal 1) (2 1))))
+            (steps () (by arith (rows (goal 1) (hps 1))))))
+         (steps
+           ((rewrite (lemma lg_advk_s) rl lhs true ())
+            (rewrite (lemma icp_mem_s) rl lhs true ())))
+         refl)))))
+
+;; THE COPY WALK — the full body at symbolic dst/src/count
+(claim icp_walk
+  (goal ((q Int) (p Int) (x3 Int) (m Mem) (c Nat) (k Nat))
+    ((= (le 0 q) True)
+     (= (le (+ q (int_of_nat k)) 65536) True)
+     (= (le 0 p) True)
+     (= (le (+ p (int_of_nat k)) 65536) True))
+    (=
+      (istmts
+        (S^ 21 (lg_fuel k c))
+        65536
+        (inline icp_body)
+        (list q p (int_of_nat k) x3)
+        m)
+      (Some
+        (INorm (list (lg_advk q 1 k) (lg_advk p 1 k) 0 0) (icp_mem m q p k)))))
+  (chain
+    (steps
+      ((compute lhs (stop iwhile lg_fuel mem_set mem_get icp_mem lg_advk))))
+    (rewrite-with
+      (lemma icp_w)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    (steps
+      ((compute lhs (stop iwhile lg_fuel mem_set mem_get icp_mem lg_advk))))
+    refl))
+
+;; the bump body: Horner load MSB->LSB (t descends cell+7 -> cell),
+;; add the delta at U64, store ladder shifts 0..56 ascending
+(fn ibtr_body () (List IStmt)
+  (list
+    (ISet 2 (ILoc 0))
+    (ISet 3 (IExt U8 U32 (ILoad (ILoc 2))))
+    (ISet 1 (IExt U32 U64 (ILoc 3)))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (ISet 3 (IExt U8 U32 (ILoad (ILoc 2))))
+    (ISet 1 (IBin U64 IMul (ILoc 1) (IConst 256)))
+    (ISet 1 (IBin U64 IAdd (ILoc 1) (IExt U32 U64 (ILoc 3))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (ISet 3 (IExt U8 U32 (ILoad (ILoc 2))))
+    (ISet 1 (IBin U64 IMul (ILoc 1) (IConst 256)))
+    (ISet 1 (IBin U64 IAdd (ILoc 1) (IExt U32 U64 (ILoc 3))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (ISet 3 (IExt U8 U32 (ILoad (ILoc 2))))
+    (ISet 1 (IBin U64 IMul (ILoc 1) (IConst 256)))
+    (ISet 1 (IBin U64 IAdd (ILoc 1) (IExt U32 U64 (ILoc 3))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (ISet 3 (IExt U8 U32 (ILoad (ILoc 2))))
+    (ISet 1 (IBin U64 IMul (ILoc 1) (IConst 256)))
+    (ISet 1 (IBin U64 IAdd (ILoc 1) (IExt U32 U64 (ILoc 3))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (ISet 3 (IExt U8 U32 (ILoad (ILoc 2))))
+    (ISet 1 (IBin U64 IMul (ILoc 1) (IConst 256)))
+    (ISet 1 (IBin U64 IAdd (ILoc 1) (IExt U32 U64 (ILoc 3))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (ISet 3 (IExt U8 U32 (ILoad (ILoc 2))))
+    (ISet 1 (IBin U64 IMul (ILoc 1) (IConst 256)))
+    (ISet 1 (IBin U64 IAdd (ILoc 1) (IExt U32 U64 (ILoc 3))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (ISet 3 (IExt U8 U32 (ILoad (ILoc 2))))
+    (ISet 1 (IBin U64 IMul (ILoc 1) (IConst 256)))
+    (ISet 1 (IBin U64 IAdd (ILoc 1) (IExt U32 U64 (ILoc 3))))
+    (ISet 3 (IConst 0))))
+
+(fn ibtw_body () (List IStmt)
+  (list
+    (ISet 2 (ILoc 0))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 1) (IConst 56)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 1) (IConst 48)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 1) (IConst 40)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 1) (IConst 32)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 1) (IConst 24)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 1) (IConst 16)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 1) (IConst 8)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore (ILoc 2) (ITrunc U32 U8 (ITrunc U64 U32 (ILoc 1))))))
+
+;; the walked value vocabulary: the Horner readback of the LE cell,
+;; spelled EXACTLY as the machine computes it
+(fn ibt_v ((m Mem) (p Int)) Int
+  (mod
+    (+
+      (mod
+        (*
+          (mod
+            (+
+              (mod
+                (*
+                  (mod
+                    (+
+                      (mod
+                        (*
+                          (mod
+                            (+
+                              (mod
+                                (*
+                                  (mod
+                                    (+
+                                      (mod
+                                        (*
+                                          (mod
+                                            (+
+                                              (mod
+                                                (*
+                                                  (mod
+                                                    (+
+                                                      (mod
+                                                        (* (mem_get m p) 256)
+                                                        18446744073709551616)
+                                                      (mem_get m (+ p 1)))
+                                                    18446744073709551616)
+                                                  256)
+                                                18446744073709551616)
+                                              (mem_get m (+ p 2)))
+                                            18446744073709551616)
+                                          256)
+                                        18446744073709551616)
+                                      (mem_get m (+ p 3)))
+                                    18446744073709551616)
+                                  256)
+                                18446744073709551616)
+                              (mem_get m (+ p 4)))
+                            18446744073709551616)
+                          256)
+                        18446744073709551616)
+                      (mem_get m (+ p 5)))
+                    18446744073709551616)
+                  256)
+                18446744073709551616)
+              (mem_get m (+ p 6)))
+            18446744073709551616)
+          256)
+        18446744073709551616)
+      (mem_get m (+ p 7)))
+    18446744073709551616))
+
+;; the bumped sum (the value every store extracts from)
+(fn ibt_s ((m Mem) (p Int) (r Int)) Int
+  (mod (+ (ibt_v m p) r) 18446744073709551616))
+
+;; byte extracts (ITrunc U64 U32 then U32 U8 = the ipd_b double band)
+(fn ibt_b ((x Int) (s Int)) Int (band (band (bshr x s) 4294967295) 255))
+
+(fn ibt_b0 ((x Int)) Int (band (band x 4294967295) 255))
+
+;; the bump effect: the 8-byte LE store ladder of the bumped sum
+(fn ibtw_mem ((m Mem) (p Int) (w Int)) Mem
+  (mem_set
+    (mem_set
+      (mem_set
+        (mem_set
+          (mem_set
+            (mem_set
+              (mem_set (mem_set m p (ibt_b w 56)) (+ p 1) (ibt_b w 48))
+              (+ p 2)
+              (ibt_b w 40))
+            (+ p 3)
+            (ibt_b w 32))
+          (+ p 4)
+          (ibt_b w 24))
+        (+ p 5)
+        (ibt_b w 16))
+      (+ p 6)
+      (ibt_b w 8))
+    (+ p 7)
+    (ibt_b0 w)))
+
+;; THE BUMP WALK — straight-line at symbolic cell/delta
+(claim ibtr_walk
+  (goal ((p Int) (x1 Int) (x2 Int) (x3 Int) (m Mem) (d Nat))
+    ((= (le 0 p) True) (= (le (+ p 8) 65536) True))
+    (=
+      (istmts (S^ 120 d) 65536 (inline ibtr_body) (list p x1 x2 x3) m)
+      (Some (INorm (list p (ibt_v m p) (+ p 7) 0) m))))
+  (chain
+    (have wa1 (= (mod (+ p 1) 4294967296) (+ p 1))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q 0) (inst r (+ p 1)))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps () (by arith (rows (goal 1) (0 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (have wa2 (= (mod (+ (+ p 1) 1) 4294967296) (+ p 2))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q 0) (inst r (+ p 2)))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps () (by arith (rows (goal 1) (0 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (have wa3 (= (mod (+ (+ p 2) 1) 4294967296) (+ p 3))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q 0) (inst r (+ p 3)))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps () (by arith (rows (goal 1) (0 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (have wa4 (= (mod (+ (+ p 3) 1) 4294967296) (+ p 4))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q 0) (inst r (+ p 4)))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps () (by arith (rows (goal 1) (0 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (have wa5 (= (mod (+ (+ p 4) 1) 4294967296) (+ p 5))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q 0) (inst r (+ p 5)))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps () (by arith (rows (goal 1) (0 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (have wa6 (= (mod (+ (+ p 5) 1) 4294967296) (+ p 6))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q 0) (inst r (+ p 6)))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps () (by arith (rows (goal 1) (0 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (have wa7 (= (mod (+ (+ p 6) 1) 4294967296) (+ p 7))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q 0) (inst r (+ p 7)))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps () (by arith (rows (goal 1) (0 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (have g0hi (= (lt p 65536) True)
+      (steps () (by arith (rows (goal 1) (1 1)))))
+    (have g1lo (= (le 0 (+ p 1)) True)
+      (steps () (by arith (rows (goal 1) (0 1)))))
+    (have g1hi (= (lt (+ p 1) 65536) True)
+      (steps () (by arith (rows (goal 1) (1 1)))))
+    (have g2lo (= (le 0 (+ p 2)) True)
+      (steps () (by arith (rows (goal 1) (0 1)))))
+    (have g2hi (= (lt (+ p 2) 65536) True)
+      (steps () (by arith (rows (goal 1) (1 1)))))
+    (have g3lo (= (le 0 (+ p 3)) True)
+      (steps () (by arith (rows (goal 1) (0 1)))))
+    (have g3hi (= (lt (+ p 3) 65536) True)
+      (steps () (by arith (rows (goal 1) (1 1)))))
+    (have g4lo (= (le 0 (+ p 4)) True)
+      (steps () (by arith (rows (goal 1) (0 1)))))
+    (have g4hi (= (lt (+ p 4) 65536) True)
+      (steps () (by arith (rows (goal 1) (1 1)))))
+    (have g5lo (= (le 0 (+ p 5)) True)
+      (steps () (by arith (rows (goal 1) (0 1)))))
+    (have g5hi (= (lt (+ p 5) 65536) True)
+      (steps () (by arith (rows (goal 1) (1 1)))))
+    (have g6lo (= (le 0 (+ p 6)) True)
+      (steps () (by arith (rows (goal 1) (0 1)))))
+    (have g6hi (= (lt (+ p 6) 65536) True)
+      (steps () (by arith (rows (goal 1) (1 1)))))
+    (have g7lo (= (le 0 (+ p 7)) True)
+      (steps () (by arith (rows (goal 1) (0 1)))))
+    (have g7hi (= (lt (+ p 7) 65536) True)
+      (steps () (by arith (rows (goal 1) (1 1)))))
+    (steps
+      ((compute lhs (stop mem_set mem_get))
+       (rewrite (premise 0) lr lhs true ())
+       (rewrite (premise g0hi) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (rewrite (premise wa1) lr lhs true ())
+       (rewrite (premise g1lo) lr lhs true ())
+       (rewrite (premise g1hi) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (rewrite (premise wa2) lr lhs true ())
+       (rewrite (premise g2lo) lr lhs true ())
+       (rewrite (premise g2hi) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (rewrite (premise wa3) lr lhs true ())
+       (rewrite (premise g3lo) lr lhs true ())
+       (rewrite (premise g3hi) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (rewrite (premise wa4) lr lhs true ())
+       (rewrite (premise g4lo) lr lhs true ())
+       (rewrite (premise g4hi) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (rewrite (premise wa5) lr lhs true ())
+       (rewrite (premise g5lo) lr lhs true ())
+       (rewrite (premise g5hi) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (rewrite (premise wa6) lr lhs true ())
+       (rewrite (premise g6lo) lr lhs true ())
+       (rewrite (premise g6hi) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (rewrite (premise wa7) lr lhs true ())
+       (rewrite (premise g7lo) lr lhs true ())
+       (rewrite (premise g7hi) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (compute rhs (stop mem_set mem_get)))
+      refl)))
+
+(claim ibtw_walk
+  (goal ((p Int) (w Int) (x2 Int) (m Mem) (d Nat))
+    ((= (le 0 p) True) (= (le (+ p 8) 65536) True))
+    (=
+      (istmts (S^ 120 d) 65536 (inline ibtw_body) (list p w x2) m)
+      (Some (INorm (list p w (+ p 7)) (ibtw_mem m p w)))))
+  (chain
+    (have wa1 (= (mod (+ p 1) 4294967296) (+ p 1))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q 0) (inst r (+ p 1)))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps () (by arith (rows (goal 1) (0 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (have wa2 (= (mod (+ (+ p 1) 1) 4294967296) (+ p 2))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q 0) (inst r (+ p 2)))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps () (by arith (rows (goal 1) (0 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (have wa3 (= (mod (+ (+ p 2) 1) 4294967296) (+ p 3))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q 0) (inst r (+ p 3)))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps () (by arith (rows (goal 1) (0 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (have wa4 (= (mod (+ (+ p 3) 1) 4294967296) (+ p 4))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q 0) (inst r (+ p 4)))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps () (by arith (rows (goal 1) (0 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (have wa5 (= (mod (+ (+ p 4) 1) 4294967296) (+ p 5))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q 0) (inst r (+ p 5)))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps () (by arith (rows (goal 1) (0 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (have wa6 (= (mod (+ (+ p 5) 1) 4294967296) (+ p 6))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q 0) (inst r (+ p 6)))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps () (by arith (rows (goal 1) (0 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (have wa7 (= (mod (+ (+ p 6) 1) 4294967296) (+ p 7))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q 0) (inst r (+ p 7)))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps () (by arith (rows (goal 1) (0 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (have g0hi (= (lt p 65536) True)
+      (steps () (by arith (rows (goal 1) (1 1)))))
+    (have g1lo (= (le 0 (+ p 1)) True)
+      (steps () (by arith (rows (goal 1) (0 1)))))
+    (have g1hi (= (lt (+ p 1) 65536) True)
+      (steps () (by arith (rows (goal 1) (1 1)))))
+    (have g2lo (= (le 0 (+ p 2)) True)
+      (steps () (by arith (rows (goal 1) (0 1)))))
+    (have g2hi (= (lt (+ p 2) 65536) True)
+      (steps () (by arith (rows (goal 1) (1 1)))))
+    (have g3lo (= (le 0 (+ p 3)) True)
+      (steps () (by arith (rows (goal 1) (0 1)))))
+    (have g3hi (= (lt (+ p 3) 65536) True)
+      (steps () (by arith (rows (goal 1) (1 1)))))
+    (have g4lo (= (le 0 (+ p 4)) True)
+      (steps () (by arith (rows (goal 1) (0 1)))))
+    (have g4hi (= (lt (+ p 4) 65536) True)
+      (steps () (by arith (rows (goal 1) (1 1)))))
+    (have g5lo (= (le 0 (+ p 5)) True)
+      (steps () (by arith (rows (goal 1) (0 1)))))
+    (have g5hi (= (lt (+ p 5) 65536) True)
+      (steps () (by arith (rows (goal 1) (1 1)))))
+    (have g6lo (= (le 0 (+ p 6)) True)
+      (steps () (by arith (rows (goal 1) (0 1)))))
+    (have g6hi (= (lt (+ p 6) 65536) True)
+      (steps () (by arith (rows (goal 1) (1 1)))))
+    (have g7lo (= (le 0 (+ p 7)) True)
+      (steps () (by arith (rows (goal 1) (0 1)))))
+    (have g7hi (= (lt (+ p 7) 65536) True)
+      (steps () (by arith (rows (goal 1) (1 1)))))
+    (steps
+      ((compute lhs (stop mem_set mem_get))
+       (rewrite (premise 0) lr lhs true ())
+       (rewrite (premise g0hi) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (rewrite (premise wa1) lr lhs true ())
+       (rewrite (premise g1lo) lr lhs true ())
+       (rewrite (premise g1hi) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (rewrite (premise wa2) lr lhs true ())
+       (rewrite (premise g2lo) lr lhs true ())
+       (rewrite (premise g2hi) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (rewrite (premise wa3) lr lhs true ())
+       (rewrite (premise g3lo) lr lhs true ())
+       (rewrite (premise g3hi) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (rewrite (premise wa4) lr lhs true ())
+       (rewrite (premise g4lo) lr lhs true ())
+       (rewrite (premise g4hi) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (rewrite (premise wa5) lr lhs true ())
+       (rewrite (premise g5lo) lr lhs true ())
+       (rewrite (premise g5hi) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (rewrite (premise wa6) lr lhs true ())
+       (rewrite (premise g6lo) lr lhs true ())
+       (rewrite (premise g6hi) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (rewrite (premise wa7) lr lhs true ())
+       (rewrite (premise g7lo) lr lhs true ())
+       (rewrite (premise g7hi) lr lhs true ())
+       (compute lhs (stop mem_set mem_get))
+       (compute rhs (stop mem_set mem_get)))
+      refl)))
+
+;; the streaming pins (impgen statement tier; SysV boundary at the
+;; hand absorber: rdi/rsi/rdx = locals 0/1/2)
+(fn it_shtcopy_fn () IFn
+  (MkIFn (list U32 U32 U32 U32) Nil (icp_body) (ILoc 0) U32))
+
+(fn it_shtotr_fn () IFn
+  (MkIFn (list U32 U64 U32 U32) Nil (ibtr_body) (ILoc 1) U64))
+
+(fn it_shtotw_fn () IFn (MkIFn (list U32 U64 U32) Nil (ibtw_body) (ILoc 0) U32))
