@@ -3701,7 +3701,7 @@ is opening new optimization problems and adding navigation tricks;
 this one is banked.  Deferred cheap follow-up: a REFUSALS counter on
 the silent split-fallback edges.
 
-## The routing tier opens — the PCB demo slice (2026-07-28, IN FLIGHT)
+## The routing tier opens — the PCB demo slice (2026-07-28; FIRST GREEN RUN 2026-07-30)
 
 USER STEER: focus shifts to the root routing problem; a PCB routing
 demo is the problem statement.  Landed 40ab30a (+ CI fix eaefd3f,
@@ -3746,11 +3746,36 @@ not budget-bound — ate the full 8h job timeout without completing, and
 the pod kill lost the artifact.  Iteration 2 (6c602cb): the driver is
 World-threaded to stream one evidence line per engine call
 (net/depth/budget/outcome/steps/forks + ROUTED/RIP events); the flat
-budget became a ramp (1000·2^level over the five levels, sizing each
-level's give-up to its slack); the CI job gained an internal
-watchdog-enforced deadline (ENGINE_RUN_SECS, default 7h) below the pod
-timeout so artifacts always upload.  First complete run pending
-(pipeline 180).
+budget became a ramp (1000·2^level, sizing each level's give-up to its
+slack); the CI job gained an internal watchdog-enforced deadline
+(ENGINE_RUN_SECS, default 7h) below the pod timeout so artifacts
+always upload.
+
+**The measured slack ladder (pipeline 182, the first complete trace).**
+Iteration 2 completed in ~6.9h and failed at the rip cap, delivering
+the tier's first empirical cost curve: at ~1.4k evaluator steps/sec,
+refuting slack 4 costs ~29k steps, slack 6 ~156k, slack 8 ~783k, and a
+slack-8 FIND is out of reach (>10M steps per BUDGET give-up; the
+su_find budget parameter counts DECISIONS, not evaluator steps —
+~600× apart at depth 13).  The trace also showed the rip loop's
+failure mode: F's length-13 detour (slack 8) unreachable → rip-oldest
+evicts R → F re-takes row 1 → R blocked → an exact 2-cycle burns the
+fuel.  And it measured a policy error: deepening past a BUDGET give-up
+burned 20M of the run's 35M steps (the next level is strictly bigger).
+
+**Iteration 3 (c267a2d) — sized from the curve, GREEN (pipeline 184,
+2026-07-30).**  The wall shrinks to a single keepout at (4,2) so F's
+forced detour is length 9 through row 3 (slack 4); levels 5→4 (worst
+refutation slack 6); the ladder deepens ONLY on EMPTY — a true
+refutation licenses the next level, a BUDGET give-up stops the net
+(the BUDGET-STOP arm).  The run landed in a 325s CI job, line-for-line
+the predicted story: F routes row 1 (d=5), R's ladder refutes d=1..7,
+ONE rip, R routes len 1 + D len 2, F re-routes row 3 at d=9 (FOUND at
+328,796 steps / 356 forks), certificate replay passes —
+**PCB-ROUTE 8x8 KEEP-1 NETS-3 RIPS-1 WIRE-12 CERT-DISJOINT-OK**.
+The demo is pinned in CORPUS_LONG (heuristic existence only, per the
+claim ladder).  The routing tier has its problem statement, its first
+working LNS driver, and its first cost model.
 
 **Task-authoring gotchas banked while building the swap + PCB
 instruments:** te_import_ctx admits only bare item uses as candidate
