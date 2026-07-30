@@ -410,9 +410,11 @@ program means by `chunk`:
   the window representation, and the correspondence theorem stops
   being memory-free.
 
-**7.9 The machine leg, laddered (B3 execution plan — DRAFT, forks
-D–F await ruling; spec-side §7.6/§7.7 pieces already landed:
-sha_stream_corresponds + the sst_trace ghost theorem).**
+**7.9 The machine leg, laddered (B3 execution plan — RATIFIED
+2026-07-29, user: "agreed on both"; forks D and F ruled to their
+leans, rejected options' costs kept as the record; spec-side
+§7.6/§7.7 pieces already landed: sha_stream_corresponds + the
+sst_trace ghost theorem).**
 
 What already exists and is reused as-is: the FROZEN compression
 block artifact and its Nat-counted fold loop (both targets; the
@@ -462,6 +464,7 @@ The ladder:
   and the verdict line: `MET (artifact: unconditional)`.
 
 **Fork D — where does the pending tail live across iterations?**
+RULED: fixed read address + copy-the-tail-home.
 The read effect's destination address is the question: the walk
 stack prices GROUND addresses everywhere (shim certs, frame
 lemmas, the differential's trace grammar all speak fixed
@@ -485,7 +488,8 @@ for completeness: ONE pure XCall'd absorber per iteration. The
 delegating pure work whole behind a call) plus the thin-main law
 leave no second option worth pricing.
 
-**Fork F — the read cap now?** The spec article pinned one page
+**Fork F — the read cap now?** RULED: 4096 for the proving rung.
+The spec article pinned one page
 (4096) provisionally; the machine window fits caps to ~56 KiB
 below the W frame.
 - *Keep 4096 for the proving rung (lean).* Smallest surface while
