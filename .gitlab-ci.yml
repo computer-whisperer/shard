@@ -199,6 +199,11 @@ engine-run:
   timeout: 8h
   variables:
     ENGINE_RUN_TARGET: "tools/search/pcb_route_probe.shard"
+    # Internal deadline BELOW the job timeout: a pod killed at the job
+    # timeout uploads NO artifacts (measured: pipeline 174 lost its log).
+    # The watchdog loop kills the engine at this age, so the script ends
+    # while artifacts can still upload.  Exit 124 = deadline hit.
+    ENGINE_RUN_SECS: "25200"
   rules:
     - if: $ENGINE_RUN == "1"
       when: on_success
@@ -227,7 +232,7 @@ engine-run:
       bin/shard_eval run "$ENGINE_RUN_TARGET" > engine_run.log 2>&1 &
       ENG=$!
       CAP_KB=$((490 * 1024 * 1024))
-      PEAK=0; TICK=0
+      PEAK=0; TICK=0; DEADLINE=0
       while kill -0 "$ENG" 2>/dev/null; do
         RSS=$(awk '/VmRSS/{print $2}' /proc/$ENG/status 2>/dev/null)
         [ "${RSS:-0}" -gt "$PEAK" ] && PEAK=$RSS
@@ -236,12 +241,21 @@ engine-run:
           kill -9 "$ENG"
           break
         fi
+        if [ $((TICK * 30)) -ge "$ENGINE_RUN_SECS" ]; then
+          echo "WATCHDOG: internal deadline ${ENGINE_RUN_SECS}s hit -- killing engine"
+          DEADLINE=1
+          kill -9 "$ENG"
+          break
+        fi
         TICK=$((TICK + 1))
-        if [ $((TICK % 10)) -eq 0 ]; then echo "watchdog: RSS ${RSS:-0} kB (peak ${PEAK} kB)"; fi
+        if [ $((TICK % 10)) -eq 0 ]; then
+          echo "watchdog: RSS ${RSS:-0} kB (peak ${PEAK} kB)  log: $(tail -n 1 engine_run.log 2>/dev/null)"
+        fi
         sleep 30
       done
       wait "$ENG"; STATUS=$?
-      echo "ENGINE EXIT ${STATUS}  PEAK RSS ${PEAK} kB"
+      [ "$DEADLINE" -eq 1 ] && STATUS=124
+      echo "ENGINE EXIT ${STATUS}  PEAK RSS ${PEAK} kB  (124 = internal deadline)"
       cat engine_run.log
       exit "$STATUS"
   artifacts:

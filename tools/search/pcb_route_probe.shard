@@ -15,12 +15,19 @@
 ;;; order NEEDS one rip: F's shortest route (straight row 1) eats both
 ;;; cells of R (the two-cell net at (4,0)-(4,1)); after the rip R takes
 ;;; its only route and F re-routes below the wall at length 13.  D is
-;;; independent on the right edge.  Budgets are deliberately SMALL: a
-;;; refutation level explores a wander-tree exponential in its slack
-;;; (walks may revisit cells; the Manhattan bound prunes only against
-;;; remaining budget), so per-call budget 50k + five deepening levels
-;;; keep every exhaustion tiny — the first version of this file ran a
-;;; 500k budget into the ~67.6GB retention plateau for six CPU-hours.
+;;; independent on the right edge.  Budgets are deliberately SMALL and
+;;; RAMPED: a refutation level explores a wander-tree exponential in its
+;;; slack (walks may revisit cells; the Manhattan bound prunes only
+;;; against remaining budget), so each deepening level doubles the
+;;; per-call step budget from 1k (1k/2k/4k/8k/16k) — a level's give-up
+;;; is sized to its slack instead of one oversized cap.  Measured, in
+;;; blood, twice: a 500k flat budget sat at the ~67.6GB retention
+;;; plateau for six CPU-hours on the dev box, and a 50k flat budget
+;;; reproduced the SAME plateau on CI (pipeline 174, 2026-07-30) and ate
+;;; the whole 8h job timeout without printing a single line.  The
+;;; plateau is structure-bound, not budget-bound.  Every engine call now
+;;; logs one line to the World (net, depth, budget, outcome, steps,
+;;; forks) so a hung run leaves evidence in the artifact.
 ;;;
 ;;; The model module is ALSO loaded at runtime (resolve_closure +
 ;;; build_module_d on the file path below) because the su evaluator
@@ -142,10 +149,11 @@
 (fn pcbp_want ((goal Int)) Expr
   (Ctor (qn (quote Some)) (Cons (IntLit goal) Nil)))
 
-(fn pcbp_find ((m Module) (occ (List Int)) (start Int) (goal Int) (d Int))
+(fn pcbp_find
+  ((m Module) (occ (List Int)) (start Int) (goal Int) (d Int) (budget Int))
   SuFind
   (su_find_query_schema
-    50000
+    budget
     m
     (pcbp_probe_q (quote candidate))
     (hole 0)
@@ -200,21 +208,122 @@
   (PcbNetNone)
   (PcbNetRoute (List PMove) (List Int) Int))
 
+;; The base of the per-level budget ramp; level ell runs at
+;; (pcbp_budget0) * 2^ell steps.
+(fn pcbp_budget0 () Int 1000)
+
+(fn pcbp_len_moves ((moves (List PMove))) Int
+  (measure (struct moves))
+  (match moves
+    (Nil 0)
+    ((Cons _ t) (+ 1 (pcbp_len_moves t)))))
+
+;; One streamed line per engine call: a hung run must leave evidence.
+(fn pcbp_log_call
+  ((start Int)
+   (goal Int)
+   (d Int)
+   (budget Int)
+   (tag (List Int))
+   (steps Int)
+   (forks Int)
+   (w World))
+  World
+  (write
+    (append_int
+      "NET "
+      (append_int
+        (show_int start)
+        (append_int
+          "->"
+          (append_int
+            (show_int goal)
+            (append_int
+              " d="
+              (append_int
+                (show_int d)
+                (append_int
+                  " b="
+                  (append_int
+                    (show_int budget)
+                    (append_int
+                      " "
+                      (append_int
+                        tag
+                        (append_int
+                          " steps="
+                          (append_int
+                            (show_int steps)
+                            (append_int
+                              " forks="
+                              (append_int (show_int forks) "\n"))))))))))))))
+    w))
+
+(fn pcbp_log_routed ((start Int) (goal Int) (d Int) (len Int) (w World)) World
+  (write
+    (append_int
+      "ROUTED "
+      (append_int
+        (show_int start)
+        (append_int
+          "->"
+          (append_int
+            (show_int goal)
+            (append_int
+              " d="
+              (append_int
+                (show_int d)
+                (append_int " len=" (append_int (show_int len) "\n"))))))))
+    w))
+
+(fn pcbp_log_rip ((start Int) (goal Int) (w World)) World
+  (write
+    (append_int
+      "RIP "
+      (append_int
+        (show_int start)
+        (append_int "->" (append_int (show_int goal) "\n"))))
+    w))
+
 (fn pcbp_deepen
-  ((m Module) (occ (List Int)) (start Int) (goal Int) (d Int) (levels Int))
-  PcbNetR
+  ((m Module)
+   (occ (List Int))
+   (start Int)
+   (goal Int)
+   (d Int)
+   (levels Int)
+   (budget Int)
+   (w World))
+  (Pair PcbNetR World)
   (measure levels)
-  (if (lt levels 1) (PcbNetNone)
-  (match (pcbp_find m occ start goal d)
-    ((SuFindErr msg) (PcbNetErr msg))
-    ((SuFindFound _ _ _ _ _ _ _ rep)
-     (match (pcbp_decode rep)
-       (None (PcbNetErr "undecodable representative"))
-       ((Some moves) (PcbNetRoute moves (pcb_cells start moves) d))))
-    ((SuFindEmpty _ _ _ _ _ _ _ _)
-     (pcbp_deepen m occ start goal (+ d 2) (- levels 1)))
-    ((SuFindBudget _ _ _ _ _ _ _ _)
-     (pcbp_deepen m occ start goal (+ d 2) (- levels 1))))))
+  (if (lt levels 1) (Pair (PcbNetNone) w)
+  (match (pcbp_find m occ start goal d budget)
+    ((SuFindErr msg) (Pair (PcbNetErr msg) w))
+    ((SuFindFound _ _ _ forks _ steps _ rep)
+     (let ((w2 (pcbp_log_call start goal d budget "FOUND" steps forks w)))
+       (match (pcbp_decode rep)
+         (None (Pair (PcbNetErr "undecodable representative") w2))
+         ((Some moves) (Pair (PcbNetRoute moves (pcb_cells start moves) d) w2)))))
+    ((SuFindEmpty _ _ _ forks _ steps _ _)
+     (pcbp_deepen
+       m
+       occ
+       start
+       goal
+       (+ d 2)
+       (- levels 1)
+       (* 2 budget)
+       (pcbp_log_call start goal d budget "EMPTY" steps forks w)))
+    ((SuFindBudget _ _ _ forks _ steps _ _)
+     (pcbp_deepen
+       m
+       occ
+       start
+       goal
+       (+ d 2)
+       (- levels 1)
+       (* 2 budget)
+       (pcbp_log_call start goal d budget "BUDGET" steps forks w))))))
 
 ;; ---- the rip-up / re-route loop -------------------------------------------
 
@@ -257,12 +366,13 @@
    (queue (List PcbNet))
    (routed (List PcbRouted))
    (rips Int)
-   (fuel Int))
-  PcbAllR
+   (fuel Int)
+   (w World))
+  (Pair PcbAllR World)
   (measure fuel)
-  (if (lt fuel 1) (PcbAllErr "rip cap exceeded")
+  (if (lt fuel 1) (Pair (PcbAllErr "rip cap exceeded") w)
   (match queue
-    (Nil (PcbAllOk routed rips))
+    (Nil (Pair (PcbAllOk routed rips) w))
     ((Cons net rest)
      (match net
        ((PcbNet start goal)
@@ -273,35 +383,36 @@
             start
             goal
             (pcb_manhattan start goal)
-            (pcbp_levels))
-          ((PcbNetErr msg) (PcbAllErr msg))
-          ((PcbNetRoute moves cells _)
+            (pcbp_levels)
+            (pcbp_budget0)
+            w)
+          ((Pair (PcbNetErr msg) w2) (Pair (PcbAllErr msg) w2))
+          ((Pair (PcbNetRoute moves cells d) w2)
            (pcbp_route_all
              m
              keep
              rest
              (pcbp_app_routed routed (Cons (PcbRouted net moves cells) Nil))
              rips
-             (- fuel 1)))
-          ((PcbNetNone)
+             (- fuel 1)
+             (pcbp_log_routed start goal d (pcbp_len_moves moves) w2)))
+          ((Pair (PcbNetNone) w2)
            (match routed
-             (Nil (PcbAllErr "infeasible: unroutable with empty board"))
+             (Nil
+               (Pair (PcbAllErr "infeasible: unroutable with empty board") w2))
              ((Cons (PcbRouted oldest _ _) younger)
-              (pcbp_route_all
-                m
-                keep
-                (Cons net (pcbp_app_nets rest (Cons oldest Nil)))
-                younger
-                (+ rips 1)
-                (- fuel 1))))))))))))
+              (match oldest
+                ((PcbNet ostart ogoal)
+                 (pcbp_route_all
+                   m
+                   keep
+                   (Cons net (pcbp_app_nets rest (Cons oldest Nil)))
+                   younger
+                   (+ rips 1)
+                   (- fuel 1)
+                   (pcbp_log_rip ostart ogoal w2))))))))))))))
 
 ;; ---- the certificate: full replay ----------------------------------------
-
-(fn pcbp_len_moves ((moves (List PMove))) Int
-  (measure (struct moves))
-  (match moves
-    (Nil 0)
-    ((Cons _ t) (+ 1 (pcbp_len_moves t)))))
 
 (fn pcbp_dup_free ((xs (List Int))) Bool
   (measure (struct xs))
@@ -342,16 +453,16 @@
     w))
 
 (fn pcbp_run ((m Module) (w World)) World
-  (match (pcbp_route_all m (pcbp_keepouts) (pcbp_nets) Nil 0 12)
-    ((PcbAllErr msg) (pcbp_fail msg w))
-    ((PcbAllOk routed rips)
+  (match (pcbp_route_all m (pcbp_keepouts) (pcbp_nets) Nil 0 12 w)
+    ((Pair (PcbAllErr msg) w2) (pcbp_fail msg w2))
+    ((Pair (PcbAllOk routed rips) w2)
      (if
        (pcbp_dup_free
          (pcbp_app_cells (pcbp_keepouts) (pcbp_routed_cells routed)))
        (if (pcbp_replay_ok (pcbp_keepouts) routed)
-         (pcbp_report rips (pcbp_wire routed) w)
-         (pcbp_fail "certificate: replay rejected a route" w))
-       (pcbp_fail "certificate: overlapping cells" w)))))
+         (pcbp_report rips (pcbp_wire routed) w2)
+         (pcbp_fail "certificate: replay rejected a route" w2))
+       (pcbp_fail "certificate: overlapping cells" w2)))))
 
 (fn main ((w World)) World
   (match (pcbp_load w)
