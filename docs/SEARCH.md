@@ -3187,6 +3187,14 @@ engine lands.
 
 ## Arc opener — relation-aware region state (design RATIFIED 2026-07-25)
 
+> **Outcome (recorded 2026-07-28, USER ruling):** the find-mode
+> application of relational splits was REFUTED at scale and the trick
+> SET ASIDE — frozen at current scope, no further investment, find-mode
+> application closed permanently.  The census/exclusion win (the
+> coloring probe's 15 exact splits) stands, and theorem-first STEERING
+> emerged as the rung's real deliverable.  Full evidence and the ruling
+> in the R5 record below.  This block is kept as ratified history.
+
 The measured problem (this ledger's own boundary statement, and PIO
 P5c-2's gating line): relations between holes — repeated-variable
 equality in nonlinear rules, structural-distinctness guards — can only
@@ -3590,3 +3598,166 @@ rev (443/133/7,777), rev_deep d3 (390/143/3,969), the x86 window
 first-mode typed tasks, guard/affine/int-order/constraint probes, and
 the check targets (meta/sketch, meta/search 8/0, superpose 33/0,
 typed_superpose 323/0, typed_expr 323/0, pure_program 33/0).
+
+### R5 — measured consumers: the deep-run A/B, the routing task, and the split verdict (COMPLETE 2026-07-28)
+
+R5 was scoped as "measured consumers (re-pins + the watchdogged
+P5c-2-cont deep run)".  What it actually measured, in order:
+
+**The PIO 12k A/B (CI job 509, pipeline 158, 2026-07-27).**  The
+deep-run law rode in from the PIO branch's two post-merge CI commits
+(cherry-picked d114044/54fc99b): retention saturates ~67.6 GB
+(67,639,812 kB byte-flat) around 6k decisions — FLAT RSS IS HEALTHY
+SEARCH, not a stall; per-decision cost ~quadratic (T_CI(n) ≈
+1.32e-6·n² min); a timed-out job is TOTAL LOSS (the engine reports
+only at exit).  History: job 346 = the old engine's 38k rung died at
+the 48h timeout; job 336 = old engine 12k, on-time 11,672s.  The R4
+engine's 12k rung came back BIT-IDENTICAL to job 336 on every counter
+(killed 8,191 / constraint-regions 0 / terminal 8,191 / forks 3,809 /
+steps 8,225,025 / nodes 5,048,430 / exprs 186) at +0.4% wall — the
+relational machinery costs ~0.4% when dormant, and the semantic-first
+null is confirmed at depth: constraint-regions 0 means the theorem
+layer never fires, so no blocked verdicts, no pairs, no splits.
+**NEVER re-fire 38k under semantic-first** (= job 346's 48h loss).
+
+**Theorem-first find scheduling (9ed1c2f) — and why PIO could not
+consume it.**  The find path SILENTLY DROPPED `task_theorem_first_of`
+(only the counted census drive consumed it); the fix adds
+`su_find_query_schema_theorem_first` (a count-free
+`su_theory_partition` prepass over the initial orbit) behind the
+`su_find_query_schema_ordered` dispatcher, threaded via `ts_first`.
+Probe-verified, smoke bit-identical on the False path.  Then the
+deeper discovery: pio_dme_free carries ZERO theorem rules BY
+DOCUMENTED DESIGN (window rewrites are unsound under absolute jump
+targets; the delay quotient is baked into the grammar normal form), so
+constraint-regions 0 is STRUCTURAL, not scheduling — a theorem-first
+12k run would be job 509 bit-for-bit and was NOT fired.  USER RULED
+(2026-07-27): build an actual routing problem instead of forcing the
+PIO branch to demo the additions.
+
+**The swap-network routing task (f1840cf) + the SPLITS counter
+(5914ee4).**  tools/search/tasks/swap_route{,_model}.shard: 4
+registers, adjacent transpositions Sw0/Sw1/Sw2, target = reversal
+(longest element of S4, 6 swaps minimum), find-mode + theorem_first at
+depth 7, two proven spine laws (nonlinear s.s cancellation ∀s;
+Sw2.Sw0→Sw0.Sw2 disjoint ordering), 15-claim model tower.  GREEN:
+FOUND the canonical 6-word s0s1s0s2s1s0.  A/B at depth 7:
+theorem-first 13/116/168/742 (killed/constrained/forks/steps) vs
+semantic-first 54/86/78/4,994 — the theorem layer prunes
+pre-evaluation at 6.7× fewer steps.  The SPLITS counter separates
+ground forks from relational splits on the find path (SuFind +
+SuTheoryPartitionOk; counted SuS keeps its combined fold
+deliberately); probe re-pins prove the attribution (coloring K6 =
+forks 0 / splits 15; schema-diag = SPLITS-1).
+
+**SPLITS-0 root cause and the skl_iso structural fix (b019bda).**  The
+first swap_route runs showed splits 0 under theorem-first.  Loud-tracer
+bisect: pair verdicts WERE produced at fixed-spine windows, but
+`sk_region_split_pair_lang` refused every one ("relation endpoints
+have non-isomorphic domains") and the silent ground fallback ate them.
+Real cause: schema interning keys on REMAINING DEPTH
+(`tg_task_state_eq` includes the depth), so a depth-independent leaf
+alphabet gets a fresh schema id per spine level, and skl_iso's
+schema-id-equality check refuses every cross-depth pair.  Fix
+(door-side, option B): on id mismatch, skl_iso falls back to
+STRUCTURAL state equality — identical alternative templates AND
+identical refs including targets — parity with the flat branch; spine
+states still correctly refuse.  First live splits: swap_route
+theorem-first 59/78/174/SPLITS 6/4,542 steps, same BEST;
+semantic-first bit-identical 54/86/78/0/4,994.  Splits are
+STRUCTURALLY theorem-first-only: passing regions have their demanded
+holes fixed, so no open pairs survive to the juncture under
+semantic-first.  Economics flag raised immediately: the coarser
+ne-children push work to the evaluator (742→4,542 steps vs the pure
+ground-fork theorem tree).
+
+**The k=4 scaling ladder (170aec4; CI job swap-route-deep; pipelines
+165/166/167 + 170, 2026-07-28).**  swap_route5{,_model}.shard: 5
+registers, reversal of S5 (10 swaps minimum), depth 11, cancellation +
+three ordering laws, 30 new claims; the model reuses swr_swap_head +
+invol via import.  Three arms: splits (more-search HEAD), ground forks
+only (branch swap-ground = HEAD + revert of b019bda — THROWAWAY
+baseline, never merge), semantic-first (SWAP_SCHED sed-deletes the
+narrowing hook).  Budget 5k: splits RED exhaust 4,285/9,157/8,358
+forks/SPLITS 10/326,459 steps ~56min; ground GREEN FOUND
+656/9,205/9,205/0/34,004 ~19min (descending-runs canonical word);
+semantic RED exhaust 1,276/2,467/1,257/0/141,015 ~5min.  Splits at
+budget 20k: GREEN, the SAME word as ground — 4,772/9,157/8,439/SPLITS
+STILL 10/358,082 steps ~55min.  **Final ladder verdict: identical
+outcome; splits need >5k budget where ground needs <5k; 10.5× steps,
+~2.9× wall; splits frozen at 10 across budgets 500/5k/20k — the
+mechanism contributes nothing productive in find mode, pure
+early-ne-child overhead.  The k-trend refutes the bigger-alphabet
+hypothesis (k=3: 6×; k=4: 10.5× and outcome-changing).**
+
+**USER RULING (2026-07-28).**  The relational-split trick is SET
+ASIDE: frozen at current scope, no further investment (no guarded
+relations), find-mode application closed permanently; its verdict on
+census/exclusion shapes is deferred to the routing tier.
+Theorem-first STEERING is the rung's deliverable — the schedule-level
+win (ground-fork theorem-first FOUND where semantic-first exhausted)
+is what the theorem layer was built for.  Not wasted: the arc's point
+is opening new optimization problems and adding navigation tricks;
+this one is banked.  Deferred cheap follow-up: a REFUSALS counter on
+the silent split-fallback edges.
+
+## The routing tier opens — the PCB demo slice (2026-07-28, IN FLIGHT)
+
+USER STEER: focus shifts to the root routing problem; a PCB routing
+demo is the problem statement.  Landed 40ab30a (+ CI fix eaefd3f,
+iteration 2 in 6c602cb):
+
+**The model (tools/search/tasks/pcb_route_model.shard).**  8×8 grid,
+cells y*8+x, single layer, occupancy as a cell list, PMove =
+MvN/E/S/W.  The load-bearing trick — new trick #1 of the tier — is the
+BOUNDED WALK: `pcb_walk` checks the Manhattan floor against remaining
+budget BEFORE demanding the move list, so the su engine gets
+admissible A*-style pruning purely through lazy observation, zero
+engine features.  No theorem laws BY DESIGN: interior path rewrites
+are unsound under occupancy (the same structural fact as
+pio_dme_free), so this instrument exercises the semantic/heuristic
+tier, not the theorem layer.
+
+**The driver (tools/search/pcb_route_probe.shard).**  Engine-as-
+library: probes call `su_find_query_schema` directly; the model module
+is ALSO loaded at runtime (resolve_closure + build_module_d +
+prelude_ctors) because the su evaluator resolves the query's pcb_walk
+call against a Module value.  Hand-built depth-bounded move-list
+schema grammar (entries ascending by id).  Iterative deepening from
+the Manhattan distance (+2 per level, 5 levels) supplies
+shortest-first; the outer loop is the ratified LNS shape — greedy in
+queue order, on failure rip the OLDEST routed net, requeue at the
+back, retry the failed net first, rip-cap fuel.  Certificate = full
+replay (every route re-walks legally against the keepouts) + a
+duplicate-free cell union.  CLAIM LADDER: heuristic existence only —
+never census pins, never absence claims.
+
+**The budget-economics law (measured in blood, twice).**  A refutation
+level explores a wander-tree EXPONENTIAL IN ITS SLACK (walks may
+revisit cells; the Manhattan bound prunes only against remaining
+budget) — size per-call budgets for the REFUTATIONS, not the finds.
+Iteration 1 (flat 500k budget) sat at the ~67.6GB retention plateau
+for six CPU-hours on the dev box before being killed — which also
+minted the standing rule that UNVALIDATED ENGINE-RUN CONFIGURATIONS
+FIRE ON CI, never the dev box (the generic ENGINE_RUN:1 job carries
+the RSS watchdog + artifact capture).  The first CI run (pipeline 174,
+flat 50k budget) reproduced the SAME plateau — it is structure-bound,
+not budget-bound — ate the full 8h job timeout without completing, and
+the pod kill lost the artifact.  Iteration 2 (6c602cb): the driver is
+World-threaded to stream one evidence line per engine call
+(net/depth/budget/outcome/steps/forks + ROUTED/RIP events); the flat
+budget became a ramp (1000·2^level over the five levels, sizing each
+level's give-up to its slack); the CI job gained an internal
+watchdog-enforced deadline (ENGINE_RUN_SECS, default 7h) below the pod
+timeout so artifacts always upload.  First complete run pending
+(pipeline 180).
+
+**Task-authoring gotchas banked while building the swap + PCB
+instruments:** te_import_ctx admits only bare item uses as candidate
+heads (in-file type decls are invisible — models live in sibling
+modules); proof-DSL case-on refuses parametric type args like
+(List Int) — use induct, which also substitutes; compute inlines
+helpers into match trees destroying rewrite patterns — use controlled
+(unfold F lhs)(reduce lhs) ×2 rounds; the Euclidean division surface
+name is `ediv` (pairs with `mod`); schema entry ids must be
+nonnegative and strictly ascending.
