@@ -11,23 +11,30 @@
 ;;; legally against the keepouts and the union of all cells is
 ;;; duplicate-free (pairwise disjointness follows).
 ;;;
-;;; The board (8x8, wall x=4 rows 2..4) and nets are chosen so the naive
-;;; order NEEDS one rip: F's shortest route (straight row 1) eats both
-;;; cells of R (the two-cell net at (4,0)-(4,1)); after the rip R takes
-;;; its only route and F re-routes below the wall at length 13.  D is
-;;; independent on the right edge.  Budgets are deliberately SMALL and
-;;; RAMPED: a refutation level explores a wander-tree exponential in its
-;;; slack (walks may revisit cells; the Manhattan bound prunes only
-;;; against remaining budget), so each deepening level doubles the
-;;; per-call step budget from 1k (1k/2k/4k/8k/16k) — a level's give-up
-;;; is sized to its slack instead of one oversized cap.  Measured, in
-;;; blood, twice: a 500k flat budget sat at the ~67.6GB retention
-;;; plateau for six CPU-hours on the dev box, and a 50k flat budget
-;;; reproduced the SAME plateau on CI (pipeline 174, 2026-07-30) and ate
-;;; the whole 8h job timeout without printing a single line.  The
-;;; plateau is structure-bound, not budget-bound.  Every engine call now
-;;; logs one line to the World (net, depth, budget, outcome, steps,
-;;; forks) so a hung run leaves evidence in the artifact.
+;;; The board (8x8, single keepout at (4,2)) and nets are chosen so the
+;;; naive order NEEDS one rip: F's shortest route (straight row 1) eats
+;;; cell (4,1) that R (the two-cell net (4,0)-(4,1)) must reach; after
+;;; the rip R takes its one-move route and F re-routes through row 3 at
+;;; length 9 (slack 4: row 0 is blocked by R, row 2 by the keepout).  D
+;;; is independent on the right edge.  Expected: RIPS-1 WIRE-12.
+;;;
+;;; SLACK ECONOMICS (measured, CI pipeline 182 full trace): a level
+;;; explores a wander-tree exponential in its SLACK (= depth minus the
+;;; Manhattan floor; walks may revisit cells, the floor prunes only
+;;; against remaining budget).  At ~1.4k evaluator steps/sec: slack-4
+;;; refutation ~29k steps, slack-6 ~156k, slack-8 ~783k to refute and
+;;; >10M to NOT find (BUDGET give-up at 16k decisions).  Hence the
+;;; three sizing rules baked in here: (1) the instance keeps the forced
+;;; detour at slack 4; (2) per-call budgets RAMP 1000*2^level — a
+;;; level's give-up is sized to its slack, never one oversized cap
+;;; (flat 500k = the ~67.6GB dev-box incident; flat 50k = the SAME
+;;; structure-bound plateau on CI pipeline 174, 8h timeout, artifact
+;;; lost); (3) the ladder deepens only on EMPTY — a true refutation
+;;; licenses the next level, a BUDGET give-up stops the net (the next
+;;; level is strictly bigger; pipeline 182 burned 20M of its 35M steps
+;;; in post-BUDGET levels).  Every engine call logs one line to the
+;;; World (net, depth, budget, outcome, steps, forks) so a hung run
+;;; leaves evidence in the artifact.
 ;;;
 ;;; The model module is ALSO loaded at runtime (resolve_closure +
 ;;; build_module_d on the file path below) because the su evaluator
@@ -315,15 +322,9 @@
        (* 2 budget)
        (pcbp_log_call start goal d budget "EMPTY" steps forks w)))
     ((SuFindBudget _ _ _ forks _ steps _ _)
-     (pcbp_deepen
-       m
-       occ
-       start
-       goal
-       (+ d 2)
-       (- levels 1)
-       (* 2 budget)
-       (pcbp_log_call start goal d budget "BUDGET" steps forks w))))))
+     (Pair
+       (PcbNetNone)
+       (pcbp_log_call start goal d budget "BUDGET-STOP" steps forks w))))))
 
 ;; ---- the rip-up / re-route loop -------------------------------------------
 
@@ -358,7 +359,7 @@
     ((Cons (PcbRouted _ _ cells) rest)
      (pcbp_app_cells cells (pcbp_routed_cells rest)))))
 
-(fn pcbp_levels () Int 5)
+(fn pcbp_levels () Int 4)
 
 (fn pcbp_route_all
   ((m Module)
@@ -438,7 +439,7 @@
 
 ;; ---- the board instance ---------------------------------------------------
 
-(fn pcbp_keepouts () (List Int) (list 20 28 36))
+(fn pcbp_keepouts () (List Int) (list 20))
 
 (fn pcbp_nets () (List PcbNet)
   (list (PcbNet 9 14) (PcbNet 4 12) (PcbNet 39 55)))
@@ -446,7 +447,7 @@
 (fn pcbp_report ((rips Int) (wire Int) (w World)) World
   (write
     (append_int
-      "PCB-ROUTE 8x8 KEEP-3 NETS-3 RIPS-"
+      "PCB-ROUTE 8x8 KEEP-1 NETS-3 RIPS-"
       (append_int
         (show_int rips)
         (append_int " WIRE-" (append_int (show_int wire) " CERT-DISJOINT-OK\n"))))
