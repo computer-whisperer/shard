@@ -25399,3 +25399,3545 @@
   (MkIFn (list U32 U64 U32 U32) Nil (ibtr_body) (ILoc 1) U64))
 
 (fn it_shtotw_fn () IFn (MkIFn (list U32 U64 U32) Nil (ibtw_body) (ILoc 0) U32))
+
+;; ==== THE FINALIZER PAD TIER (STREAM.md 7.9 M2) ====================================
+;; sha_fin at machine grain: ipf_body = ipd_body with ONE line changed
+;; -- the bit length comes from local 5 (the U64 total argument, fed
+;; by the it_shtotr_fn read pin at the hand glue), while local 1 stays
+;; the pad-start address grain (the pend length). The zero span
+;; (55 - pend) & 63 equals the spec's (55 - total) mod 64 because
+;; pend = total mod 64 (ipf_zc). The length bytes are exact through
+;; the cell's 2^64 wrap: 8*(total mod 2^64) = 8*total (mod 2^64)
+;; (ipf_lm), and each len_be byte tree sees through the wrap at its
+;; shift (ipf_bdrop rungs) -- no bound premise anywhere. The readback
+;; ish_fpad_read lands sha_fin's tail formula: pend ++ 0x80 ++ zeros
+;; ++ len_be(8n) at the exact total n.
+
+;; ---- species 1: the mul-mod collapse ----------------------------------------------
+;; 8·(total mod 2^64) ≡ 8·total (mod 2^64) — the finalizer's length
+;; value at the wrapped cell IS the spec's length value, wrapped.
+;; Unconditional (mod_unique's bounds come from mod_lo/mod_hi).
+
+(claim ipf_lm
+  (goal ((n Int)) ()
+    (=
+      (mod (* 8 (mod n 18446744073709551616)) 18446744073709551616)
+      (mod (* 8 n) 18446744073709551616)))
+  (chain
+    (have hid
+      (=
+        n
+        (+
+          (* 18446744073709551616 (ediv n 18446744073709551616))
+          (mod n 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hid8
+      (=
+        (* 8 (mod n 18446744073709551616))
+        (+
+          (*
+            18446744073709551616
+            (ediv (* 8 (mod n 18446744073709551616)) 18446744073709551616))
+          (mod (* 8 (mod n 18446744073709551616)) 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (* 8 (mod n 18446744073709551616)))
+         (inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hml
+      (=
+        (le 0 (mod (* 8 (mod n 18446744073709551616)) 18446744073709551616))
+        True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hmh
+      (=
+        (lt
+          (mod (* 8 (mod n 18446744073709551616)) 18446744073709551616)
+          18446744073709551616)
+        True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdec
+      (=
+        (* 8 n)
+        (+
+          (*
+            18446744073709551616
+            (+
+              (* 8 (ediv n 18446744073709551616))
+              (ediv (* 8 (mod n 18446744073709551616)) 18446744073709551616)))
+          (mod (* 8 (mod n 18446744073709551616)) 18446744073709551616)))
+      (steps () (by arith (list (list 1 -8 -1) (list 1 8 1)))))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      rhs
+      ((inst n (* 8 n))
+       (inst d 18446744073709551616)
+       (inst
+         q
+         (+
+           (* 8 (ediv n 18446744073709551616))
+           (ediv (* 8 (mod n 18446744073709551616)) 18446744073709551616)))
+       (inst r (mod (* 8 (mod n 18446744073709551616)) 18446744073709551616)))
+      ((steps ((rewrite (premise hdec) lr lhs true ())) refl)
+       (steps ((rewrite (premise hml) lr lhs true ())) refl)
+       (steps ((rewrite (premise hmh) lr lhs true ())) refl)))
+    refl))
+
+;; ---- species 2: the byte-drop rung (S=56 exemplar) --------------------------------
+;; A len_be byte tree over the WRAPPED value equals the byte tree over
+;; the exact value: band (bshr (mod w 2^64) S) 255 = band (bshr w S) 255.
+;; Route: mask_byte + ibt_shrS convert both sides to the euclidean
+;; vocabulary; one div_unique exhibits ediv w 2^S = 2^(64-S)·(ediv w 2^64)
+;; + ediv (mod w 2^64) 2^S; one mod_unique drops the 256-multiple.
+
+(claim ipf_bdrop56
+  (goal ((w Int)) ((= (le 0 w) True))
+    (= (band (bshr (mod w 18446744073709551616) 56) 255) (band (bshr w 56) 255)))
+  (chain
+    (have hml (= (le 0 (mod w 18446744073709551616)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hsl (= (le 0 (bshr (mod w 18446744073709551616) 56)) True)
+      (rewrite-with
+        (lemma ish_shr_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hml) lr lhs true ())) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (have hsr (= (le 0 (bshr w 56)) True)
+      (rewrite-with
+        (lemma ish_shr_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hsl) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hsr) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ibt_shr56)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hml) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ibt_shr56)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (have hidw
+      (=
+        w
+        (+
+          (* 18446744073709551616 (ediv w 18446744073709551616))
+          (mod w 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hidm
+      (=
+        (mod w 18446744073709551616)
+        (+
+          (*
+            72057594037927936
+            (ediv (mod w 18446744073709551616) 72057594037927936))
+          (mod (mod w 18446744073709551616) 72057594037927936)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (mod w 18446744073709551616)) (inst d 72057594037927936))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrl
+      (= (le 0 (mod (mod w 18446744073709551616) 72057594037927936)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrh
+      (=
+        (lt
+          (mod (mod w 18446744073709551616) 72057594037927936)
+          72057594037927936)
+        True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdec
+      (=
+        w
+        (+
+          (*
+            72057594037927936
+            (+
+              (* 256 (ediv w 18446744073709551616))
+              (ediv (mod w 18446744073709551616) 72057594037927936)))
+          (mod (mod w 18446744073709551616) 72057594037927936)))
+      (steps () (by arith (list (list 1 0 0 0 0 -1 -1) (list 1 0 0 0 0 1 1)))))
+    (have hq
+      (=
+        (ediv w 72057594037927936)
+        (+
+          (* 256 (ediv w 18446744073709551616))
+          (ediv (mod w 18446744073709551616) 72057594037927936)))
+      (rewrite-with
+        (lemma div_unique)
+        lr
+        lhs
+        ((inst d 72057594037927936)
+         (inst
+           q
+           (+
+             (* 256 (ediv w 18446744073709551616))
+             (ediv (mod w 18446744073709551616) 72057594037927936)))
+         (inst r (mod (mod w 18446744073709551616) 72057594037927936)))
+        ((steps ((rewrite (premise hdec) lr lhs true ())) refl)
+         (steps ((rewrite (premise hrl) lr lhs true ())) refl)
+         (steps ((rewrite (premise hrh) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hq) lr rhs true ())))
+    (have hidq
+      (=
+        (ediv (mod w 18446744073709551616) 72057594037927936)
+        (+
+          (*
+            256
+            (ediv (ediv (mod w 18446744073709551616) 72057594037927936) 256))
+          (mod (ediv (mod w 18446744073709551616) 72057594037927936) 256)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (ediv (mod w 18446744073709551616) 72057594037927936))
+         (inst d 256))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hql
+      (=
+        (le 0 (mod (ediv (mod w 18446744073709551616) 72057594037927936) 256))
+        True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hqh
+      (=
+        (lt (mod (ediv (mod w 18446744073709551616) 72057594037927936) 256) 256)
+        True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdec2
+      (=
+        (+
+          (* 256 (ediv w 18446744073709551616))
+          (ediv (mod w 18446744073709551616) 72057594037927936))
+        (+
+          (*
+            256
+            (+
+              (ediv w 18446744073709551616)
+              (ediv (ediv (mod w 18446744073709551616) 72057594037927936) 256)))
+          (mod (ediv (mod w 18446744073709551616) 72057594037927936) 256)))
+      (steps
+        ()
+        (by
+          arith
+          (list (list 1 0 0 0 0 0 0 0 0 0 0 -1) (list 1 0 0 0 0 0 0 0 0 0 0 1)))))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      rhs
+      ((inst
+         n
+         (+
+           (* 256 (ediv w 18446744073709551616))
+           (ediv (mod w 18446744073709551616) 72057594037927936)))
+       (inst d 256)
+       (inst
+         q
+         (+
+           (ediv w 18446744073709551616)
+           (ediv (ediv (mod w 18446744073709551616) 72057594037927936) 256)))
+       (inst r (mod (ediv (mod w 18446744073709551616) 72057594037927936) 256)))
+      ((steps ((rewrite (premise hdec2) lr lhs true ())) refl)
+       (steps ((rewrite (premise hql) lr lhs true ())) refl)
+       (steps ((rewrite (premise hqh) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst n (ediv (mod w 18446744073709551616) 72057594037927936))
+       (inst d 256)
+       (inst q (ediv (ediv (mod w 18446744073709551616) 72057594037927936) 256))
+       (inst r (mod (ediv (mod w 18446744073709551616) 72057594037927936) 256)))
+      ((steps ((rewrite (premise hidq) lr lhs true ())) refl)
+       (steps ((rewrite (premise hql) lr lhs true ())) refl)
+       (steps ((rewrite (premise hqh) lr lhs true ())) refl)))
+    refl))
+
+;; ---- species 2b: the S=0 rung (the low byte) --------------------------------------
+;; band (mod w 2^64) 255 = band w 255 — mod-mod at 256 | 2^64
+;; (ibt_mm's template at the wide modulus).
+
+(claim ipf_bdrop0
+  (goal ((w Int)) ((= (le 0 w) True))
+    (= (band (mod w 18446744073709551616) 255) (band w 255)))
+  (chain
+    (have hml (= (le 0 (mod w 18446744073709551616)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hml) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (have hidw
+      (=
+        w
+        (+
+          (* 18446744073709551616 (ediv w 18446744073709551616))
+          (mod w 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hidm
+      (=
+        (mod w 18446744073709551616)
+        (+
+          (* 256 (ediv (mod w 18446744073709551616) 256))
+          (mod (mod w 18446744073709551616) 256)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (mod w 18446744073709551616)) (inst d 256))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrl (= (le 0 (mod (mod w 18446744073709551616) 256)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrh (= (lt (mod (mod w 18446744073709551616) 256) 256) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdec
+      (=
+        w
+        (+
+          (*
+            256
+            (+
+              (* 72057594037927936 (ediv w 18446744073709551616))
+              (ediv (mod w 18446744073709551616) 256)))
+          (mod (mod w 18446744073709551616) 256)))
+      (steps () (by arith (list (list 1 0 0 -1 -1) (list 1 0 0 1 1)))))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      rhs
+      ((inst d 256)
+       (inst
+         q
+         (+
+           (* 72057594037927936 (ediv w 18446744073709551616))
+           (ediv (mod w 18446744073709551616) 256)))
+       (inst r (mod (mod w 18446744073709551616) 256)))
+      ((steps ((rewrite (premise hdec) lr lhs true ())) refl)
+       (steps ((rewrite (premise hrl) lr lhs true ())) refl)
+       (steps ((rewrite (premise hrh) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst n (mod w 18446744073709551616))
+       (inst d 256)
+       (inst q (ediv (mod w 18446744073709551616) 256))
+       (inst r (mod (mod w 18446744073709551616) 256)))
+      ((steps ((rewrite (premise hidm) lr lhs true ())) refl)
+       (steps ((rewrite (premise hrl) lr lhs true ())) refl)
+       (steps ((rewrite (premise hrh) lr lhs true ())) refl)))
+    refl))
+
+;; ---- species 3: the zeros-span congruence -----------------------------------------
+;; mod a 64 = mod b 64  ⊢  mod (55-a) 64 = mod (55-b) 64 — ties the
+;; machine's zero span (driven by the pend length) to sha_fin's
+;; (driven by the total).
+
+(claim ipf_zc
+  (goal ((a Int) (b Int)) ((= (mod a 64) (mod b 64)))
+    (= (mod (- 55 a) 64) (mod (- 55 b) 64)))
+  (chain
+    (have hida (= a (+ (* 64 (ediv a 64)) (mod a 64)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 64))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hidb (= b (+ (* 64 (ediv b 64)) (mod b 64)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n b) (inst d 64))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hidc (= (- 55 a) (+ (* 64 (ediv (- 55 a) 64)) (mod (- 55 a) 64)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (- 55 a)) (inst d 64))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrl (= (le 0 (mod (- 55 a) 64)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrh (= (lt (mod (- 55 a) 64) 64) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdec
+      (=
+        (- 55 b)
+        (+
+          (* 64 (+ (ediv (- 55 a) 64) (- (ediv a 64) (ediv b 64))))
+          (mod (- 55 a) 64)))
+      (steps () (by arith (list (list 1 -1 -1 1 -1) (list 1 1 1 -1 1)))))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      rhs
+      ((inst n (- 55 b))
+       (inst d 64)
+       (inst q (+ (ediv (- 55 a) 64) (- (ediv a 64) (ediv b 64))))
+       (inst r (mod (- 55 a) 64)))
+      ((steps ((rewrite (premise hdec) lr lhs true ())) refl)
+       (steps ((rewrite (premise hrl) lr lhs true ())) refl)
+       (steps ((rewrite (premise hrh) lr lhs true ())) refl)))
+    refl))
+
+;; ---- byte-drop rung S=8 (template of ipf_bdrop56) -------------------------------
+
+(claim ipf_bdrop8
+  (goal ((w Int)) ((= (le 0 w) True))
+    (= (band (bshr (mod w 18446744073709551616) 8) 255) (band (bshr w 8) 255)))
+  (chain
+    (have hml (= (le 0 (mod w 18446744073709551616)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hsl (= (le 0 (bshr (mod w 18446744073709551616) 8)) True)
+      (rewrite-with
+        (lemma ish_shr_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hml) lr lhs true ())) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (have hsr (= (le 0 (bshr w 8)) True)
+      (rewrite-with
+        (lemma ish_shr_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hsl) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hsr) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ibt_shr8)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hml) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ibt_shr8)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (have hidw
+      (=
+        w
+        (+
+          (* 18446744073709551616 (ediv w 18446744073709551616))
+          (mod w 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hidm
+      (=
+        (mod w 18446744073709551616)
+        (+
+          (* 256 (ediv (mod w 18446744073709551616) 256))
+          (mod (mod w 18446744073709551616) 256)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (mod w 18446744073709551616)) (inst d 256))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrl (= (le 0 (mod (mod w 18446744073709551616) 256)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrh (= (lt (mod (mod w 18446744073709551616) 256) 256) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdec
+      (=
+        w
+        (+
+          (*
+            256
+            (+
+              (* 72057594037927936 (ediv w 18446744073709551616))
+              (ediv (mod w 18446744073709551616) 256)))
+          (mod (mod w 18446744073709551616) 256)))
+      (steps () (by arith (list (list 1 0 0 0 0 -1 -1) (list 1 0 0 0 0 1 1)))))
+    (have hq
+      (=
+        (ediv w 256)
+        (+
+          (* 72057594037927936 (ediv w 18446744073709551616))
+          (ediv (mod w 18446744073709551616) 256)))
+      (rewrite-with
+        (lemma div_unique)
+        lr
+        lhs
+        ((inst d 256)
+         (inst
+           q
+           (+
+             (* 72057594037927936 (ediv w 18446744073709551616))
+             (ediv (mod w 18446744073709551616) 256)))
+         (inst r (mod (mod w 18446744073709551616) 256)))
+        ((steps ((rewrite (premise hdec) lr lhs true ())) refl)
+         (steps ((rewrite (premise hrl) lr lhs true ())) refl)
+         (steps ((rewrite (premise hrh) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hq) lr rhs true ())))
+    (have hidq
+      (=
+        (ediv (mod w 18446744073709551616) 256)
+        (+
+          (* 256 (ediv (ediv (mod w 18446744073709551616) 256) 256))
+          (mod (ediv (mod w 18446744073709551616) 256) 256)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (ediv (mod w 18446744073709551616) 256)) (inst d 256))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hql (= (le 0 (mod (ediv (mod w 18446744073709551616) 256) 256)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hqh
+      (= (lt (mod (ediv (mod w 18446744073709551616) 256) 256) 256) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdec2
+      (=
+        (+
+          (* 72057594037927936 (ediv w 18446744073709551616))
+          (ediv (mod w 18446744073709551616) 256))
+        (+
+          (*
+            256
+            (+
+              (* 281474976710656 (ediv w 18446744073709551616))
+              (ediv (ediv (mod w 18446744073709551616) 256) 256)))
+          (mod (ediv (mod w 18446744073709551616) 256) 256)))
+      (steps
+        ()
+        (by
+          arith
+          (list (list 1 0 0 0 0 0 0 0 0 0 0 -1) (list 1 0 0 0 0 0 0 0 0 0 0 1)))))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      rhs
+      ((inst
+         n
+         (+
+           (* 72057594037927936 (ediv w 18446744073709551616))
+           (ediv (mod w 18446744073709551616) 256)))
+       (inst d 256)
+       (inst
+         q
+         (+
+           (* 281474976710656 (ediv w 18446744073709551616))
+           (ediv (ediv (mod w 18446744073709551616) 256) 256)))
+       (inst r (mod (ediv (mod w 18446744073709551616) 256) 256)))
+      ((steps ((rewrite (premise hdec2) lr lhs true ())) refl)
+       (steps ((rewrite (premise hql) lr lhs true ())) refl)
+       (steps ((rewrite (premise hqh) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst n (ediv (mod w 18446744073709551616) 256))
+       (inst d 256)
+       (inst q (ediv (ediv (mod w 18446744073709551616) 256) 256))
+       (inst r (mod (ediv (mod w 18446744073709551616) 256) 256)))
+      ((steps ((rewrite (premise hidq) lr lhs true ())) refl)
+       (steps ((rewrite (premise hql) lr lhs true ())) refl)
+       (steps ((rewrite (premise hqh) lr lhs true ())) refl)))
+    refl))
+
+
+;; ---- byte-drop rung S=16 (template of ipf_bdrop56) -------------------------------
+
+(claim ipf_bdrop16
+  (goal ((w Int)) ((= (le 0 w) True))
+    (= (band (bshr (mod w 18446744073709551616) 16) 255) (band (bshr w 16) 255)))
+  (chain
+    (have hml (= (le 0 (mod w 18446744073709551616)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hsl (= (le 0 (bshr (mod w 18446744073709551616) 16)) True)
+      (rewrite-with
+        (lemma ish_shr_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hml) lr lhs true ())) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (have hsr (= (le 0 (bshr w 16)) True)
+      (rewrite-with
+        (lemma ish_shr_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hsl) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hsr) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ibt_shr16)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hml) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ibt_shr16)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (have hidw
+      (=
+        w
+        (+
+          (* 18446744073709551616 (ediv w 18446744073709551616))
+          (mod w 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hidm
+      (=
+        (mod w 18446744073709551616)
+        (+
+          (* 65536 (ediv (mod w 18446744073709551616) 65536))
+          (mod (mod w 18446744073709551616) 65536)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (mod w 18446744073709551616)) (inst d 65536))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrl (= (le 0 (mod (mod w 18446744073709551616) 65536)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrh (= (lt (mod (mod w 18446744073709551616) 65536) 65536) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdec
+      (=
+        w
+        (+
+          (*
+            65536
+            (+
+              (* 281474976710656 (ediv w 18446744073709551616))
+              (ediv (mod w 18446744073709551616) 65536)))
+          (mod (mod w 18446744073709551616) 65536)))
+      (steps () (by arith (list (list 1 0 0 0 0 -1 -1) (list 1 0 0 0 0 1 1)))))
+    (have hq
+      (=
+        (ediv w 65536)
+        (+
+          (* 281474976710656 (ediv w 18446744073709551616))
+          (ediv (mod w 18446744073709551616) 65536)))
+      (rewrite-with
+        (lemma div_unique)
+        lr
+        lhs
+        ((inst d 65536)
+         (inst
+           q
+           (+
+             (* 281474976710656 (ediv w 18446744073709551616))
+             (ediv (mod w 18446744073709551616) 65536)))
+         (inst r (mod (mod w 18446744073709551616) 65536)))
+        ((steps ((rewrite (premise hdec) lr lhs true ())) refl)
+         (steps ((rewrite (premise hrl) lr lhs true ())) refl)
+         (steps ((rewrite (premise hrh) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hq) lr rhs true ())))
+    (have hidq
+      (=
+        (ediv (mod w 18446744073709551616) 65536)
+        (+
+          (* 256 (ediv (ediv (mod w 18446744073709551616) 65536) 256))
+          (mod (ediv (mod w 18446744073709551616) 65536) 256)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (ediv (mod w 18446744073709551616) 65536)) (inst d 256))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hql
+      (= (le 0 (mod (ediv (mod w 18446744073709551616) 65536) 256)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hqh
+      (= (lt (mod (ediv (mod w 18446744073709551616) 65536) 256) 256) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdec2
+      (=
+        (+
+          (* 281474976710656 (ediv w 18446744073709551616))
+          (ediv (mod w 18446744073709551616) 65536))
+        (+
+          (*
+            256
+            (+
+              (* 1099511627776 (ediv w 18446744073709551616))
+              (ediv (ediv (mod w 18446744073709551616) 65536) 256)))
+          (mod (ediv (mod w 18446744073709551616) 65536) 256)))
+      (steps
+        ()
+        (by
+          arith
+          (list (list 1 0 0 0 0 0 0 0 0 0 0 -1) (list 1 0 0 0 0 0 0 0 0 0 0 1)))))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      rhs
+      ((inst
+         n
+         (+
+           (* 281474976710656 (ediv w 18446744073709551616))
+           (ediv (mod w 18446744073709551616) 65536)))
+       (inst d 256)
+       (inst
+         q
+         (+
+           (* 1099511627776 (ediv w 18446744073709551616))
+           (ediv (ediv (mod w 18446744073709551616) 65536) 256)))
+       (inst r (mod (ediv (mod w 18446744073709551616) 65536) 256)))
+      ((steps ((rewrite (premise hdec2) lr lhs true ())) refl)
+       (steps ((rewrite (premise hql) lr lhs true ())) refl)
+       (steps ((rewrite (premise hqh) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst n (ediv (mod w 18446744073709551616) 65536))
+       (inst d 256)
+       (inst q (ediv (ediv (mod w 18446744073709551616) 65536) 256))
+       (inst r (mod (ediv (mod w 18446744073709551616) 65536) 256)))
+      ((steps ((rewrite (premise hidq) lr lhs true ())) refl)
+       (steps ((rewrite (premise hql) lr lhs true ())) refl)
+       (steps ((rewrite (premise hqh) lr lhs true ())) refl)))
+    refl))
+
+
+;; ---- byte-drop rung S=24 (template of ipf_bdrop56) -------------------------------
+
+(claim ipf_bdrop24
+  (goal ((w Int)) ((= (le 0 w) True))
+    (= (band (bshr (mod w 18446744073709551616) 24) 255) (band (bshr w 24) 255)))
+  (chain
+    (have hml (= (le 0 (mod w 18446744073709551616)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hsl (= (le 0 (bshr (mod w 18446744073709551616) 24)) True)
+      (rewrite-with
+        (lemma ish_shr_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hml) lr lhs true ())) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (have hsr (= (le 0 (bshr w 24)) True)
+      (rewrite-with
+        (lemma ish_shr_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hsl) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hsr) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ibt_shr24)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hml) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ibt_shr24)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (have hidw
+      (=
+        w
+        (+
+          (* 18446744073709551616 (ediv w 18446744073709551616))
+          (mod w 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hidm
+      (=
+        (mod w 18446744073709551616)
+        (+
+          (* 16777216 (ediv (mod w 18446744073709551616) 16777216))
+          (mod (mod w 18446744073709551616) 16777216)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (mod w 18446744073709551616)) (inst d 16777216))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrl (= (le 0 (mod (mod w 18446744073709551616) 16777216)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrh (= (lt (mod (mod w 18446744073709551616) 16777216) 16777216) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdec
+      (=
+        w
+        (+
+          (*
+            16777216
+            (+
+              (* 1099511627776 (ediv w 18446744073709551616))
+              (ediv (mod w 18446744073709551616) 16777216)))
+          (mod (mod w 18446744073709551616) 16777216)))
+      (steps () (by arith (list (list 1 0 0 0 0 -1 -1) (list 1 0 0 0 0 1 1)))))
+    (have hq
+      (=
+        (ediv w 16777216)
+        (+
+          (* 1099511627776 (ediv w 18446744073709551616))
+          (ediv (mod w 18446744073709551616) 16777216)))
+      (rewrite-with
+        (lemma div_unique)
+        lr
+        lhs
+        ((inst d 16777216)
+         (inst
+           q
+           (+
+             (* 1099511627776 (ediv w 18446744073709551616))
+             (ediv (mod w 18446744073709551616) 16777216)))
+         (inst r (mod (mod w 18446744073709551616) 16777216)))
+        ((steps ((rewrite (premise hdec) lr lhs true ())) refl)
+         (steps ((rewrite (premise hrl) lr lhs true ())) refl)
+         (steps ((rewrite (premise hrh) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hq) lr rhs true ())))
+    (have hidq
+      (=
+        (ediv (mod w 18446744073709551616) 16777216)
+        (+
+          (* 256 (ediv (ediv (mod w 18446744073709551616) 16777216) 256))
+          (mod (ediv (mod w 18446744073709551616) 16777216) 256)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (ediv (mod w 18446744073709551616) 16777216)) (inst d 256))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hql
+      (= (le 0 (mod (ediv (mod w 18446744073709551616) 16777216) 256)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hqh
+      (= (lt (mod (ediv (mod w 18446744073709551616) 16777216) 256) 256) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdec2
+      (=
+        (+
+          (* 1099511627776 (ediv w 18446744073709551616))
+          (ediv (mod w 18446744073709551616) 16777216))
+        (+
+          (*
+            256
+            (+
+              (* 4294967296 (ediv w 18446744073709551616))
+              (ediv (ediv (mod w 18446744073709551616) 16777216) 256)))
+          (mod (ediv (mod w 18446744073709551616) 16777216) 256)))
+      (steps
+        ()
+        (by
+          arith
+          (list (list 1 0 0 0 0 0 0 0 0 0 0 -1) (list 1 0 0 0 0 0 0 0 0 0 0 1)))))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      rhs
+      ((inst
+         n
+         (+
+           (* 1099511627776 (ediv w 18446744073709551616))
+           (ediv (mod w 18446744073709551616) 16777216)))
+       (inst d 256)
+       (inst
+         q
+         (+
+           (* 4294967296 (ediv w 18446744073709551616))
+           (ediv (ediv (mod w 18446744073709551616) 16777216) 256)))
+       (inst r (mod (ediv (mod w 18446744073709551616) 16777216) 256)))
+      ((steps ((rewrite (premise hdec2) lr lhs true ())) refl)
+       (steps ((rewrite (premise hql) lr lhs true ())) refl)
+       (steps ((rewrite (premise hqh) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst n (ediv (mod w 18446744073709551616) 16777216))
+       (inst d 256)
+       (inst q (ediv (ediv (mod w 18446744073709551616) 16777216) 256))
+       (inst r (mod (ediv (mod w 18446744073709551616) 16777216) 256)))
+      ((steps ((rewrite (premise hidq) lr lhs true ())) refl)
+       (steps ((rewrite (premise hql) lr lhs true ())) refl)
+       (steps ((rewrite (premise hqh) lr lhs true ())) refl)))
+    refl))
+
+
+;; ---- byte-drop rung S=32 (template of ipf_bdrop56) -------------------------------
+
+(claim ipf_bdrop32
+  (goal ((w Int)) ((= (le 0 w) True))
+    (= (band (bshr (mod w 18446744073709551616) 32) 255) (band (bshr w 32) 255)))
+  (chain
+    (have hml (= (le 0 (mod w 18446744073709551616)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hsl (= (le 0 (bshr (mod w 18446744073709551616) 32)) True)
+      (rewrite-with
+        (lemma ish_shr_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hml) lr lhs true ())) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (have hsr (= (le 0 (bshr w 32)) True)
+      (rewrite-with
+        (lemma ish_shr_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hsl) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hsr) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ibt_shr32)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hml) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ibt_shr32)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (have hidw
+      (=
+        w
+        (+
+          (* 18446744073709551616 (ediv w 18446744073709551616))
+          (mod w 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hidm
+      (=
+        (mod w 18446744073709551616)
+        (+
+          (* 4294967296 (ediv (mod w 18446744073709551616) 4294967296))
+          (mod (mod w 18446744073709551616) 4294967296)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (mod w 18446744073709551616)) (inst d 4294967296))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrl (= (le 0 (mod (mod w 18446744073709551616) 4294967296)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrh
+      (= (lt (mod (mod w 18446744073709551616) 4294967296) 4294967296) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdec
+      (=
+        w
+        (+
+          (*
+            4294967296
+            (+
+              (* 4294967296 (ediv w 18446744073709551616))
+              (ediv (mod w 18446744073709551616) 4294967296)))
+          (mod (mod w 18446744073709551616) 4294967296)))
+      (steps () (by arith (list (list 1 0 0 0 0 -1 -1) (list 1 0 0 0 0 1 1)))))
+    (have hq
+      (=
+        (ediv w 4294967296)
+        (+
+          (* 4294967296 (ediv w 18446744073709551616))
+          (ediv (mod w 18446744073709551616) 4294967296)))
+      (rewrite-with
+        (lemma div_unique)
+        lr
+        lhs
+        ((inst d 4294967296)
+         (inst
+           q
+           (+
+             (* 4294967296 (ediv w 18446744073709551616))
+             (ediv (mod w 18446744073709551616) 4294967296)))
+         (inst r (mod (mod w 18446744073709551616) 4294967296)))
+        ((steps ((rewrite (premise hdec) lr lhs true ())) refl)
+         (steps ((rewrite (premise hrl) lr lhs true ())) refl)
+         (steps ((rewrite (premise hrh) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hq) lr rhs true ())))
+    (have hidq
+      (=
+        (ediv (mod w 18446744073709551616) 4294967296)
+        (+
+          (* 256 (ediv (ediv (mod w 18446744073709551616) 4294967296) 256))
+          (mod (ediv (mod w 18446744073709551616) 4294967296) 256)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (ediv (mod w 18446744073709551616) 4294967296)) (inst d 256))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hql
+      (= (le 0 (mod (ediv (mod w 18446744073709551616) 4294967296) 256)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hqh
+      (= (lt (mod (ediv (mod w 18446744073709551616) 4294967296) 256) 256) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdec2
+      (=
+        (+
+          (* 4294967296 (ediv w 18446744073709551616))
+          (ediv (mod w 18446744073709551616) 4294967296))
+        (+
+          (*
+            256
+            (+
+              (* 16777216 (ediv w 18446744073709551616))
+              (ediv (ediv (mod w 18446744073709551616) 4294967296) 256)))
+          (mod (ediv (mod w 18446744073709551616) 4294967296) 256)))
+      (steps
+        ()
+        (by
+          arith
+          (list (list 1 0 0 0 0 0 0 0 0 0 0 -1) (list 1 0 0 0 0 0 0 0 0 0 0 1)))))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      rhs
+      ((inst
+         n
+         (+
+           (* 4294967296 (ediv w 18446744073709551616))
+           (ediv (mod w 18446744073709551616) 4294967296)))
+       (inst d 256)
+       (inst
+         q
+         (+
+           (* 16777216 (ediv w 18446744073709551616))
+           (ediv (ediv (mod w 18446744073709551616) 4294967296) 256)))
+       (inst r (mod (ediv (mod w 18446744073709551616) 4294967296) 256)))
+      ((steps ((rewrite (premise hdec2) lr lhs true ())) refl)
+       (steps ((rewrite (premise hql) lr lhs true ())) refl)
+       (steps ((rewrite (premise hqh) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst n (ediv (mod w 18446744073709551616) 4294967296))
+       (inst d 256)
+       (inst q (ediv (ediv (mod w 18446744073709551616) 4294967296) 256))
+       (inst r (mod (ediv (mod w 18446744073709551616) 4294967296) 256)))
+      ((steps ((rewrite (premise hidq) lr lhs true ())) refl)
+       (steps ((rewrite (premise hql) lr lhs true ())) refl)
+       (steps ((rewrite (premise hqh) lr lhs true ())) refl)))
+    refl))
+
+
+;; ---- byte-drop rung S=40 (template of ipf_bdrop56) -------------------------------
+
+(claim ipf_bdrop40
+  (goal ((w Int)) ((= (le 0 w) True))
+    (= (band (bshr (mod w 18446744073709551616) 40) 255) (band (bshr w 40) 255)))
+  (chain
+    (have hml (= (le 0 (mod w 18446744073709551616)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hsl (= (le 0 (bshr (mod w 18446744073709551616) 40)) True)
+      (rewrite-with
+        (lemma ish_shr_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hml) lr lhs true ())) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (have hsr (= (le 0 (bshr w 40)) True)
+      (rewrite-with
+        (lemma ish_shr_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hsl) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hsr) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ibt_shr40)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hml) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ibt_shr40)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (have hidw
+      (=
+        w
+        (+
+          (* 18446744073709551616 (ediv w 18446744073709551616))
+          (mod w 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hidm
+      (=
+        (mod w 18446744073709551616)
+        (+
+          (* 1099511627776 (ediv (mod w 18446744073709551616) 1099511627776))
+          (mod (mod w 18446744073709551616) 1099511627776)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (mod w 18446744073709551616)) (inst d 1099511627776))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrl (= (le 0 (mod (mod w 18446744073709551616) 1099511627776)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrh
+      (=
+        (lt (mod (mod w 18446744073709551616) 1099511627776) 1099511627776)
+        True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdec
+      (=
+        w
+        (+
+          (*
+            1099511627776
+            (+
+              (* 16777216 (ediv w 18446744073709551616))
+              (ediv (mod w 18446744073709551616) 1099511627776)))
+          (mod (mod w 18446744073709551616) 1099511627776)))
+      (steps () (by arith (list (list 1 0 0 0 0 -1 -1) (list 1 0 0 0 0 1 1)))))
+    (have hq
+      (=
+        (ediv w 1099511627776)
+        (+
+          (* 16777216 (ediv w 18446744073709551616))
+          (ediv (mod w 18446744073709551616) 1099511627776)))
+      (rewrite-with
+        (lemma div_unique)
+        lr
+        lhs
+        ((inst d 1099511627776)
+         (inst
+           q
+           (+
+             (* 16777216 (ediv w 18446744073709551616))
+             (ediv (mod w 18446744073709551616) 1099511627776)))
+         (inst r (mod (mod w 18446744073709551616) 1099511627776)))
+        ((steps ((rewrite (premise hdec) lr lhs true ())) refl)
+         (steps ((rewrite (premise hrl) lr lhs true ())) refl)
+         (steps ((rewrite (premise hrh) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hq) lr rhs true ())))
+    (have hidq
+      (=
+        (ediv (mod w 18446744073709551616) 1099511627776)
+        (+
+          (* 256 (ediv (ediv (mod w 18446744073709551616) 1099511627776) 256))
+          (mod (ediv (mod w 18446744073709551616) 1099511627776) 256)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (ediv (mod w 18446744073709551616) 1099511627776))
+         (inst d 256))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hql
+      (=
+        (le 0 (mod (ediv (mod w 18446744073709551616) 1099511627776) 256))
+        True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hqh
+      (=
+        (lt (mod (ediv (mod w 18446744073709551616) 1099511627776) 256) 256)
+        True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdec2
+      (=
+        (+
+          (* 16777216 (ediv w 18446744073709551616))
+          (ediv (mod w 18446744073709551616) 1099511627776))
+        (+
+          (*
+            256
+            (+
+              (* 65536 (ediv w 18446744073709551616))
+              (ediv (ediv (mod w 18446744073709551616) 1099511627776) 256)))
+          (mod (ediv (mod w 18446744073709551616) 1099511627776) 256)))
+      (steps
+        ()
+        (by
+          arith
+          (list (list 1 0 0 0 0 0 0 0 0 0 0 -1) (list 1 0 0 0 0 0 0 0 0 0 0 1)))))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      rhs
+      ((inst
+         n
+         (+
+           (* 16777216 (ediv w 18446744073709551616))
+           (ediv (mod w 18446744073709551616) 1099511627776)))
+       (inst d 256)
+       (inst
+         q
+         (+
+           (* 65536 (ediv w 18446744073709551616))
+           (ediv (ediv (mod w 18446744073709551616) 1099511627776) 256)))
+       (inst r (mod (ediv (mod w 18446744073709551616) 1099511627776) 256)))
+      ((steps ((rewrite (premise hdec2) lr lhs true ())) refl)
+       (steps ((rewrite (premise hql) lr lhs true ())) refl)
+       (steps ((rewrite (premise hqh) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst n (ediv (mod w 18446744073709551616) 1099511627776))
+       (inst d 256)
+       (inst q (ediv (ediv (mod w 18446744073709551616) 1099511627776) 256))
+       (inst r (mod (ediv (mod w 18446744073709551616) 1099511627776) 256)))
+      ((steps ((rewrite (premise hidq) lr lhs true ())) refl)
+       (steps ((rewrite (premise hql) lr lhs true ())) refl)
+       (steps ((rewrite (premise hqh) lr lhs true ())) refl)))
+    refl))
+
+
+;; ---- byte-drop rung S=48 (template of ipf_bdrop56) -------------------------------
+
+(claim ipf_bdrop48
+  (goal ((w Int)) ((= (le 0 w) True))
+    (= (band (bshr (mod w 18446744073709551616) 48) 255) (band (bshr w 48) 255)))
+  (chain
+    (have hml (= (le 0 (mod w 18446744073709551616)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hsl (= (le 0 (bshr (mod w 18446744073709551616) 48)) True)
+      (rewrite-with
+        (lemma ish_shr_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hml) lr lhs true ())) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (have hsr (= (le 0 (bshr w 48)) True)
+      (rewrite-with
+        (lemma ish_shr_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hsl) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mask_byte)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hsr) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ibt_shr48)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hml) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ibt_shr48)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (have hidw
+      (=
+        w
+        (+
+          (* 18446744073709551616 (ediv w 18446744073709551616))
+          (mod w 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hidm
+      (=
+        (mod w 18446744073709551616)
+        (+
+          (*
+            281474976710656
+            (ediv (mod w 18446744073709551616) 281474976710656))
+          (mod (mod w 18446744073709551616) 281474976710656)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (mod w 18446744073709551616)) (inst d 281474976710656))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrl (= (le 0 (mod (mod w 18446744073709551616) 281474976710656)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrh
+      (=
+        (lt (mod (mod w 18446744073709551616) 281474976710656) 281474976710656)
+        True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdec
+      (=
+        w
+        (+
+          (*
+            281474976710656
+            (+
+              (* 65536 (ediv w 18446744073709551616))
+              (ediv (mod w 18446744073709551616) 281474976710656)))
+          (mod (mod w 18446744073709551616) 281474976710656)))
+      (steps () (by arith (list (list 1 0 0 0 0 -1 -1) (list 1 0 0 0 0 1 1)))))
+    (have hq
+      (=
+        (ediv w 281474976710656)
+        (+
+          (* 65536 (ediv w 18446744073709551616))
+          (ediv (mod w 18446744073709551616) 281474976710656)))
+      (rewrite-with
+        (lemma div_unique)
+        lr
+        lhs
+        ((inst d 281474976710656)
+         (inst
+           q
+           (+
+             (* 65536 (ediv w 18446744073709551616))
+             (ediv (mod w 18446744073709551616) 281474976710656)))
+         (inst r (mod (mod w 18446744073709551616) 281474976710656)))
+        ((steps ((rewrite (premise hdec) lr lhs true ())) refl)
+         (steps ((rewrite (premise hrl) lr lhs true ())) refl)
+         (steps ((rewrite (premise hrh) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hq) lr rhs true ())))
+    (have hidq
+      (=
+        (ediv (mod w 18446744073709551616) 281474976710656)
+        (+
+          (* 256 (ediv (ediv (mod w 18446744073709551616) 281474976710656) 256))
+          (mod (ediv (mod w 18446744073709551616) 281474976710656) 256)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (ediv (mod w 18446744073709551616) 281474976710656))
+         (inst d 256))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hql
+      (=
+        (le 0 (mod (ediv (mod w 18446744073709551616) 281474976710656) 256))
+        True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hqh
+      (=
+        (lt (mod (ediv (mod w 18446744073709551616) 281474976710656) 256) 256)
+        True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdec2
+      (=
+        (+
+          (* 65536 (ediv w 18446744073709551616))
+          (ediv (mod w 18446744073709551616) 281474976710656))
+        (+
+          (*
+            256
+            (+
+              (* 256 (ediv w 18446744073709551616))
+              (ediv (ediv (mod w 18446744073709551616) 281474976710656) 256)))
+          (mod (ediv (mod w 18446744073709551616) 281474976710656) 256)))
+      (steps
+        ()
+        (by
+          arith
+          (list (list 1 0 0 0 0 0 0 0 0 0 0 -1) (list 1 0 0 0 0 0 0 0 0 0 0 1)))))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      rhs
+      ((inst
+         n
+         (+
+           (* 65536 (ediv w 18446744073709551616))
+           (ediv (mod w 18446744073709551616) 281474976710656)))
+       (inst d 256)
+       (inst
+         q
+         (+
+           (* 256 (ediv w 18446744073709551616))
+           (ediv (ediv (mod w 18446744073709551616) 281474976710656) 256)))
+       (inst r (mod (ediv (mod w 18446744073709551616) 281474976710656) 256)))
+      ((steps ((rewrite (premise hdec2) lr lhs true ())) refl)
+       (steps ((rewrite (premise hql) lr lhs true ())) refl)
+       (steps ((rewrite (premise hqh) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst n (ediv (mod w 18446744073709551616) 281474976710656))
+       (inst d 256)
+       (inst q (ediv (ediv (mod w 18446744073709551616) 281474976710656) 256))
+       (inst r (mod (ediv (mod w 18446744073709551616) 281474976710656) 256)))
+      ((steps ((rewrite (premise hidq) lr lhs true ())) refl)
+       (steps ((rewrite (premise hql) lr lhs true ())) refl)
+       (steps ((rewrite (premise hqh) lr lhs true ())) refl)))
+    refl))
+
+;; ---- stage B: the finalizer pad body + effect twin + walk -------------------------
+;; ipf_body = ipd_body with ONE line changed: the bit length comes
+;; from local 5 (the U64 total argument), not from local 1 (which
+;; stays the pad-start address grain). Locals: 0=src, 1=n, 2=t,
+;; 3=z, 4=l, 5=tot.
+
+(fn ipf_body () (List IStmt)
+  (list
+    (ISet 2 (IBin U32 IAdd (ILoc 0) (ILoc 1)))
+    (ISet 3 (IConst 72))
+    (IWhile
+      (ILoc 3)
+      (list
+        (IStore (ILoc 2) (IConst 0))
+        (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+        (ISet 3 (IBin U32 ISub (ILoc 3) (IConst 1)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 0) (ILoc 1)))
+    (IStore (ILoc 2) (IConst 128))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (ISet 3 (IBin U32 ISub (IConst 55) (ILoc 1)))
+    (ISet 3 (IBin U32 IAnd (ILoc 3) (IConst 63)))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (ILoc 3)))
+    (ISet 4 (IBin U64 IMul (IConst 8) (ILoc 5)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 4) (IConst 56)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 4) (IConst 48)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 4) (IConst 40)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 4) (IConst 32)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 4) (IConst 24)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 4) (IConst 16)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 4) (IConst 8)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore (ILoc 2) (ITrunc U32 U8 (ITrunc U64 U32 (ILoc 4))))))
+
+;; the finalizer pad effect: identical ADDRESS tree to ipd_mem, the
+;; eight length-byte VALUES driven by tot instead of n
+(fn ipf_mem ((m Mem) (src Int) (n Int) (tot Int)) Mem
+  (mem_set
+    (mem_set
+      (mem_set
+        (mem_set
+          (mem_set
+            (mem_set
+              (mem_set
+                (mem_set
+                  (mem_set (pad_zmem m (+ src n) 72) (+ src n) 128)
+                  (ipd_ql src n)
+                  (ipd_b tot 56))
+                (+ (ipd_ql src n) 1)
+                (ipd_b tot 48))
+              (+ (+ (ipd_ql src n) 1) 1)
+              (ipd_b tot 40))
+            (+ (+ (+ (ipd_ql src n) 1) 1) 1)
+            (ipd_b tot 32))
+          (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1)
+          (ipd_b tot 24))
+        (+ (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 1)
+        (ipd_b tot 16))
+      (+ (+ (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 1) 1)
+      (ipd_b tot 8))
+    (+ (+ (+ (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 1) 1) 1)
+    (ipd_b7 tot)))
+
+(fn it_shfpad_fn () IFn
+  (MkIFn (list U32 U32 U32 U32 U64 U64) Nil (ipf_body) (ILoc 0) U32))
+
+;; ---- the 6-local zero-fill worker twins -------------------------------------------
+
+(claim ipf_zfill_pass
+  (goal ((s0 Int) (n0 Int) (p Int) (zc Int) (l0 Int) (l5 Int) (m Mem) (fl Nat))
+    ((= (le 0 p) True)
+     (= (le (+ p 1) 65536) True)
+     (= (le 1 zc) True)
+     (= (le zc 4294967296) True))
+    (=
+      (istmts (S^ 8 fl) 65536 (inline ipd_zbody) (list s0 n0 p zc l0 l5) m)
+      (Some (INorm (list s0 n0 (+ p 1) (- zc 1) l0 l5) (mem_set m p 0)))))
+  (chain
+    (have hlt (= (lt p 65536) True) (steps () (by arith (rows (goal 1) (1 1)))))
+    (have hp1 (= (mod (+ p 1) 4294967296) (+ p 1))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (0 1))))
+         (steps () (by arith (rows (goal 1) (1 1)))))
+        refl))
+    (have hz1 (= (mod (- zc 1) 4294967296) (- zc 1))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (2 1))))
+         (steps () (by arith (rows (goal 1) (3 1)))))
+        refl))
+    (steps
+      ((compute lhs (stop mem_set))
+       (rewrite (premise 0) lr lhs true ())
+       (compute lhs (stop mem_set))
+       (rewrite (premise hlt) lr lhs true ())
+       (compute lhs (stop mem_set))
+       (rewrite (premise hp1) lr lhs true ())
+       (compute lhs (stop mem_set))
+       (rewrite (premise hz1) lr lhs true ())
+       (compute lhs (stop mem_set))))
+    refl))
+
+;; the worker: k iterations from the loop head IS the zero fill
+(claim ipf_zfill_w
+  (goal ((s0 Int) (n0 Int) (p Int) (l0 Int) (l5 Int) (m Mem) (c Nat) (k Nat))
+    ((= (le 0 p) True) (= (le (+ p (int_of_nat k)) 65536) True))
+    (=
+      (iwhile
+        (S^ 12 (lg_fuel k c))
+        65536
+        (ILoc 3)
+        (inline ipd_zbody)
+        (list s0 n0 p (int_of_nat k) l0 l5)
+        m)
+      (Some (INorm (list s0 n0 (lg_advk p 1 k) 0 l0 l5) (pad_zmem m p k)))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr lhs true ())
+          (compute both (stop mem_set)))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (have hnn (= (le 0 (int_of_nat k2)) True)
+           (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+         (have hps (= (le (+ p (+ 1 (int_of_nat k2))) 65536) True)
+           (steps
+             ((rewrite (lemma int_of_nat_succ) rl lhs true ())
+              (rewrite (premise 1) lr lhs true ()))
+             refl))
+         (steps
+           ((unfold lg_fuel lhs)
+            (reduce lhs)
+            (unfold iwhile lhs)
+            (rewrite (lemma int_of_nat_succ) lr lhs true ())
+            (compute lhs (stop iwhile lg_fuel istmts mem_set pad_zmem lg_advk))))
+         (rewrite-with
+           (lemma lg_ne)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps
+           ((compute lhs (stop iwhile lg_fuel istmts mem_set pad_zmem lg_advk))))
+         (rewrite-with
+           (lemma ipf_zfill_pass)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps () (by arith (rows (goal 1) (hps 1) (hnn 1))))
+            (steps () (by arith (rows (goal 1) (hnn 1))))
+            (steps () (by arith (rows (goal 1) (hps 1) (0 1))))))
+         (steps
+           ((rewrite (lemma lg_sub) lr lhs true ())
+            (compute lhs (stop iwhile lg_fuel istmts mem_set pad_zmem lg_advk))))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (0 1))))
+            (steps () (by arith (rows (goal 1) (hps 1))))))
+         (steps
+           ((rewrite (lemma lg_advk_s) rl lhs true ())
+            (rewrite (lemma ipd_zmem_s) rl lhs true ())))
+         refl)))))
+
+;; ---- THE FPAD WALK (isha_pad_walk transplant) -------------------------------------
+(claim isha_fpad_walk
+  (goal ((src Int) (n Int) (x2 Int) (x3 Int) (x4 Int) (x5 Int) (m Mem) (d Nat))
+    ((= (le 0 src) True) (= (le 0 n) True) (= (le (+ (+ src n) 72) 65536) True))
+    (=
+      (istmts (S^ 120 d) 65536 (inline ipf_body) (list src n x2 x3 x4 x5) m)
+      (Some
+        (INorm
+          (list
+            src
+            n
+            (+ (+ (+ (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 1) 1) 1)
+            (ipd_zf n)
+            (ipd_l x5)
+            x5)
+          (ipf_mem m src n x5)))))
+  (chain
+    (have hsn (= (mod (+ src n) 4294967296) (+ src n))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (0 1) (1 1))))
+         (steps () (by arith (rows (goal 1) (2 1)))))
+        refl))
+    (steps
+      ((compute lhs (stop iwhile lg_fuel int_of_nat pad_zmem lg_advk mem_set))
+       (rewrite (premise hsn) lr lhs true ())))
+    (have hloc
+      (=
+        (list src n (+ src n) 72 x4 x5)
+        (list src n (+ src n) (int_of_nat 72) x4 x5))
+      (steps ((rewrite (lemma ish_i72p) lr rhs true ())) refl))
+    (steps ((rewrite (premise hloc) lr lhs true ())))
+    (have hfr (= (S^ 116 d) (S^ 12 (lg_fuel 72 (S^ 32 d))))
+      (steps ((compute both)) refl))
+    (steps ((rewrite (premise hfr) lr lhs true ())))
+    (rewrite-with
+      (lemma ipf_zfill_w)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1) (1 1))))
+       (steps
+         ((rewrite (lemma ish_i72p) lr lhs true ())
+          (rewrite (premise 2) lr lhs true ()))
+         refl)))
+    (steps
+      ((compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))
+       (rewrite (premise hsn) lr lhs true ())))
+    (have hb0 (= (le 0 (+ src n)) True)
+      (steps () (by arith (rows (goal 1) (0 1) (1 1)))))
+    (have hb1 (= (lt (+ src n) 65536) True)
+      (steps () (by arith (rows (goal 1) (2 1)))))
+    (steps
+      ((rewrite (premise hb0) lr lhs true ())
+       (compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))
+       (rewrite (premise hb1) lr lhs true ())
+       (compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))))
+    (have hb2 (= (mod (+ (+ src n) 1) 4294967296) (+ (+ src n) 1))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (0 1) (1 1))))
+         (steps () (by arith (rows (goal 1) (2 1)))))
+        refl))
+    (steps
+      ((rewrite (premise hb2) lr lhs true ())
+       (rewrite (lemma ipd_zf_def) rl lhs true ())))
+    (have hzflo (= (le 0 (ipd_zf n)) True)
+      (chain
+        (steps ((rewrite (lemma ipd_zf_def) lr lhs true ())))
+        (rewrite-with
+          (lemma band_lo)
+          lr
+          lhs
+          ()
+          ((rewrite-with
+             (lemma mod_lo)
+             lr
+             lhs
+             ()
+             ((steps ((compute lhs)) refl))
+             refl)
+           (steps ((compute lhs)) refl)))
+        refl))
+    (have hzfhi (= (le (ipd_zf n) 63) True)
+      (chain
+        (steps ((rewrite (lemma ipd_zf_def) lr lhs true ())))
+        (rewrite-with
+          (lemma band_le_r)
+          lr
+          lhs
+          ()
+          ((rewrite-with
+             (lemma mod_lo)
+             lr
+             lhs
+             ()
+             ((steps ((compute lhs)) refl))
+             refl)
+           (steps ((compute lhs)) refl)))
+        refl))
+    (have hb3
+      (=
+        (mod (+ (+ (+ src n) 1) (ipd_zf n)) 4294967296)
+        (+ (+ (+ src n) 1) (ipd_zf n)))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (0 1) (1 1) (hzflo 1))))
+         (steps () (by arith (rows (goal 1) (2 1) (hzfhi 1)))))
+        refl))
+    (steps
+      ((rewrite (premise hb3) lr lhs true ())
+       (rewrite (lemma ipd_ql_def) rl lhs true ())
+       (rewrite (lemma ipd_l_def) rl lhs true ())))
+    (have hqld (= (ipd_ql src n) (+ (+ (+ src n) 1) (ipd_zf n)))
+      (steps ((rewrite (lemma ipd_ql_def) lr lhs true ())) refl))
+    (have hqlo (= (le 0 (ipd_ql src n)) True)
+      (steps () (by arith (rows (goal 1) (hqld 1) (0 1) (1 1) (hzflo 1)))))
+    (have hqhi (= (le (ipd_ql src n) 65528) True)
+      (steps () (by arith (rows (goal 1) (hqld -1) (2 1) (hzfhi 1)))))
+    (have hg0lo (= (le 0 (ipd_ql src n)) True)
+      (steps () (by arith (rows (goal 1) (hqlo 1)))))
+    (have hg0hi (= (lt (ipd_ql src n) 65536) True)
+      (steps () (by arith (rows (goal 1) (hqhi 1)))))
+    (steps
+      ((rewrite (premise hg0lo) lr lhs true ())
+       (compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))
+       (rewrite (premise hg0hi) lr lhs true ())
+       (compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))))
+    (have ht1 (= (mod (+ (ipd_ql src n) 1) 4294967296) (+ (ipd_ql src n) 1))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (hqlo 1))))
+         (steps () (by arith (rows (goal 1) (hqhi 1)))))
+        refl))
+    (steps ((rewrite (premise ht1) lr lhs true ())))
+    (have hg1lo (= (le 0 (+ (ipd_ql src n) 1)) True)
+      (steps () (by arith (rows (goal 1) (hqlo 1)))))
+    (have hg1hi (= (lt (+ (ipd_ql src n) 1) 65536) True)
+      (steps () (by arith (rows (goal 1) (hqhi 1)))))
+    (steps
+      ((rewrite (premise hg1lo) lr lhs true ())
+       (compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))
+       (rewrite (premise hg1hi) lr lhs true ())
+       (compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))))
+    (have ht2
+      (= (mod (+ (+ (ipd_ql src n) 1) 1) 4294967296) (+ (+ (ipd_ql src n) 1) 1))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (hqlo 1))))
+         (steps () (by arith (rows (goal 1) (hqhi 1)))))
+        refl))
+    (steps ((rewrite (premise ht2) lr lhs true ())))
+    (have hg2lo (= (le 0 (+ (+ (ipd_ql src n) 1) 1)) True)
+      (steps () (by arith (rows (goal 1) (hqlo 1)))))
+    (have hg2hi (= (lt (+ (+ (ipd_ql src n) 1) 1) 65536) True)
+      (steps () (by arith (rows (goal 1) (hqhi 1)))))
+    (steps
+      ((rewrite (premise hg2lo) lr lhs true ())
+       (compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))
+       (rewrite (premise hg2hi) lr lhs true ())
+       (compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))))
+    (have ht3
+      (=
+        (mod (+ (+ (+ (ipd_ql src n) 1) 1) 1) 4294967296)
+        (+ (+ (+ (ipd_ql src n) 1) 1) 1))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (hqlo 1))))
+         (steps () (by arith (rows (goal 1) (hqhi 1)))))
+        refl))
+    (steps ((rewrite (premise ht3) lr lhs true ())))
+    (have hg3lo (= (le 0 (+ (+ (+ (ipd_ql src n) 1) 1) 1)) True)
+      (steps () (by arith (rows (goal 1) (hqlo 1)))))
+    (have hg3hi (= (lt (+ (+ (+ (ipd_ql src n) 1) 1) 1) 65536) True)
+      (steps () (by arith (rows (goal 1) (hqhi 1)))))
+    (steps
+      ((rewrite (premise hg3lo) lr lhs true ())
+       (compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))
+       (rewrite (premise hg3hi) lr lhs true ())
+       (compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))))
+    (have ht4
+      (=
+        (mod (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 4294967296)
+        (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (hqlo 1))))
+         (steps () (by arith (rows (goal 1) (hqhi 1)))))
+        refl))
+    (steps ((rewrite (premise ht4) lr lhs true ())))
+    (have hg4lo (= (le 0 (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1)) True)
+      (steps () (by arith (rows (goal 1) (hqlo 1)))))
+    (have hg4hi (= (lt (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 65536) True)
+      (steps () (by arith (rows (goal 1) (hqhi 1)))))
+    (steps
+      ((rewrite (premise hg4lo) lr lhs true ())
+       (compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))
+       (rewrite (premise hg4hi) lr lhs true ())
+       (compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))))
+    (have ht5
+      (=
+        (mod (+ (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 1) 4294967296)
+        (+ (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 1))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (hqlo 1))))
+         (steps () (by arith (rows (goal 1) (hqhi 1)))))
+        refl))
+    (steps ((rewrite (premise ht5) lr lhs true ())))
+    (have hg5lo (= (le 0 (+ (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 1)) True)
+      (steps () (by arith (rows (goal 1) (hqlo 1)))))
+    (have hg5hi (= (lt (+ (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 1) 65536) True)
+      (steps () (by arith (rows (goal 1) (hqhi 1)))))
+    (steps
+      ((rewrite (premise hg5lo) lr lhs true ())
+       (compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))
+       (rewrite (premise hg5hi) lr lhs true ())
+       (compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))))
+    (have ht6
+      (=
+        (mod (+ (+ (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 1) 1) 4294967296)
+        (+ (+ (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 1) 1))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (hqlo 1))))
+         (steps () (by arith (rows (goal 1) (hqhi 1)))))
+        refl))
+    (steps ((rewrite (premise ht6) lr lhs true ())))
+    (have hg6lo
+      (= (le 0 (+ (+ (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 1) 1)) True)
+      (steps () (by arith (rows (goal 1) (hqlo 1)))))
+    (have hg6hi
+      (= (lt (+ (+ (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 1) 1) 65536) True)
+      (steps () (by arith (rows (goal 1) (hqhi 1)))))
+    (steps
+      ((rewrite (premise hg6lo) lr lhs true ())
+       (compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))
+       (rewrite (premise hg6hi) lr lhs true ())
+       (compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))))
+    (have ht7
+      (=
+        (mod
+          (+ (+ (+ (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 1) 1) 1)
+          4294967296)
+        (+ (+ (+ (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 1) 1) 1))
+      (rewrite-with
+        (lemma ish_mid32)
+        lr
+        lhs
+        ()
+        ((steps () (by arith (rows (goal 1) (hqlo 1))))
+         (steps () (by arith (rows (goal 1) (hqhi 1)))))
+        refl))
+    (steps ((rewrite (premise ht7) lr lhs true ())))
+    (have hg7lo
+      (= (le 0 (+ (+ (+ (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 1) 1) 1)) True)
+      (steps () (by arith (rows (goal 1) (hqlo 1)))))
+    (have hg7hi
+      (=
+        (lt (+ (+ (+ (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 1) 1) 1) 65536)
+        True)
+      (steps () (by arith (rows (goal 1) (hqhi 1)))))
+    (steps
+      ((rewrite (premise hg7lo) lr lhs true ())
+       (compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))
+       (rewrite (premise hg7hi) lr lhs true ())
+       (compute
+         lhs
+         (stop iwhile int_of_nat pad_zmem lg_advk mem_set ipd_zf ipd_ql ipd_l
+           ipd_b ipd_b7))))
+    (steps
+      ((rewrite (lemma ipd_b_def) rl lhs true ())
+       (rewrite (lemma ipd_b7_def) rl lhs true ())
+       (unfold ipf_mem rhs)
+       (reduce rhs)))
+    refl))
+
+;; ---- stage C: THE FPAD READBACK (ish_pad_read transplant) -------------------------
+(claim ish_fpad_read
+  (goal ((m Mem) (src Int) (wn Nat) (wz Nat) (n Int))
+    ((= (le 0 src) True)
+     (= (le (+ (+ src (int_of_nat wn)) 72) 65536) True)
+     (= (int_of_nat wz) (mod (- 55 (int_of_nat wn)) 64))
+     (= (le 0 n) True)
+     (= (mod (int_of_nat wn) 64) (mod n 64)))
+    (=
+      (mem_read
+        (wn_add wn (wn_add 1 (wn_add wz 8)))
+        (ipf_mem m src (int_of_nat wn) (mod n 18446744073709551616))
+        src)
+      (sapp
+        (mem_read wn m src)
+        (Cons 128 (sapp (szeros (mod (- 55 n) 64)) (len_be (* 8 n)))))))
+  (chain
+    (have hnn (= (le 0 (int_of_nat wn)) True)
+      (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+    (have hwzlo (= (le 0 (int_of_nat wz)) True)
+      (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+    (have hzflo (= (le 0 (ipd_zf (int_of_nat wn))) True)
+      (chain
+        (steps ((rewrite (lemma ipd_zf_def) lr lhs true ())))
+        (rewrite-with
+          (lemma band_lo)
+          lr
+          lhs
+          ()
+          ((rewrite-with
+             (lemma mod_lo)
+             lr
+             lhs
+             ()
+             ((steps ((compute lhs)) refl))
+             refl)
+           (steps ((compute lhs)) refl)))
+        refl))
+    (have hqld
+      (=
+        (ipd_ql src (int_of_nat wn))
+        (+ (+ (+ src (int_of_nat wn)) 1) (ipd_zf (int_of_nat wn))))
+      (steps ((rewrite (lemma ipd_ql_def) lr lhs true ())) refl))
+    (have hzn (= (ipd_zf (int_of_nat wn)) (int_of_nat wz))
+      (steps
+        ((rewrite (lemma ipd_zf_def) lr lhs true ())
+         (rewrite (lemma ish_zf) lr lhs true ())
+         (rewrite (premise 2) rl lhs true ()))
+        refl))
+    (have hmh (= (lt (mod (- 55 (int_of_nat wn)) 64) 64) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hwzhi (= (le (int_of_nat wz) 63) True)
+      (steps () (by arith (rows (goal 1) (2 -1) (hmh 1)))))
+    (steps
+      ((unfold ipf_mem lhs)
+       (reduce lhs)
+       (rewrite (lemma ish_read_app) lr lhs true ())
+       (rewrite (lemma ish_read_app) lr lhs true ())
+       (rewrite (lemma ish_read_app) lr lhs true ())))
+    (have hi1
+      (=
+        (+ (+ src (int_of_nat wn)) (int_of_nat 1))
+        (+ (+ src (int_of_nat wn)) 1))
+      (steps ((rewrite (lemma ish_i1) lr lhs true ())) refl))
+    (steps ((rewrite (premise hi1) lr lhs true ())))
+    (rewrite-with
+      (lemma mem_read_set_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hqld 1) (hzflo 1))))))
+    (rewrite-with
+      (lemma mem_read_set_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hqld 1) (hzflo 1))))))
+    (rewrite-with
+      (lemma mem_read_set_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hqld 1) (hzflo 1))))))
+    (rewrite-with
+      (lemma mem_read_set_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hqld 1) (hzflo 1))))))
+    (rewrite-with
+      (lemma mem_read_set_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hqld 1) (hzflo 1))))))
+    (rewrite-with
+      (lemma mem_read_set_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hqld 1) (hzflo 1))))))
+    (rewrite-with
+      (lemma mem_read_set_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hqld 1) (hzflo 1))))))
+    (rewrite-with
+      (lemma mem_read_set_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hqld 1) (hzflo 1))))))
+    (rewrite-with
+      (lemma mem_read_set_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (rewrite-with
+      (lemma ish_read_zmem_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (steps ((rewrite (lemma ish_read1) lr lhs true ())))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (hqld 1) (hzflo 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (hqld 1) (hzflo 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (hqld 1) (hzflo 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (hqld 1) (hzflo 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (hqld 1) (hzflo 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (hqld 1) (hzflo 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (hqld 1) (hzflo 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (hqld 1) (hzflo 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_byte)
+      lr
+      lhs
+      ()
+      ((steps ((compute lhs)) refl) (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma mem_read_set_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hqld 1) (hzn 1))))))
+    (rewrite-with
+      (lemma mem_read_set_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hqld 1) (hzn 1))))))
+    (rewrite-with
+      (lemma mem_read_set_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hqld 1) (hzn 1))))))
+    (rewrite-with
+      (lemma mem_read_set_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hqld 1) (hzn 1))))))
+    (rewrite-with
+      (lemma mem_read_set_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hqld 1) (hzn 1))))))
+    (rewrite-with
+      (lemma mem_read_set_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hqld 1) (hzn 1))))))
+    (rewrite-with
+      (lemma mem_read_set_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hqld 1) (hzn 1))))))
+    (rewrite-with
+      (lemma mem_read_set_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hqld 1) (hzn 1))))))
+    (rewrite-with
+      (lemma mem_read_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (have hstep
+      (=
+        (pad_zmem m (+ src (int_of_nat wn)) 72)
+        (pad_zmem
+          (mem_set m (+ src (int_of_nat wn)) 0)
+          (+ (+ src (int_of_nat wn)) 1)
+          71))
+      (steps ((unfold pad_zmem lhs) (reduce lhs)) refl))
+    (steps ((rewrite (premise hstep) lr lhs true ())))
+    (rewrite-with
+      (lemma ish_zread_zeros)
+      lr
+      lhs
+      ()
+      ((steps
+         ((rewrite (lemma ish_i71p) lr lhs true ()))
+         (by arith (rows (goal 1) (hwzhi 1))))))
+    (have hql2
+      (=
+        (+ (+ (+ src (int_of_nat wn)) 1) (int_of_nat wz))
+        (ipd_ql src (int_of_nat wn)))
+      (steps
+        ((rewrite (premise hqld) lr rhs true ())
+         (rewrite (premise hzn) lr rhs true ()))
+        refl))
+    (steps
+      ((rewrite (premise hql2) lr lhs true ())
+       (rewrite (lemma ish_read8) lr lhs true ())))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_byte)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ipd_b_lo)
+         lr
+         lhs
+         ()
+         ((steps ((compute lhs)) refl))
+         refl)
+       (rewrite-with
+         (lemma ipd_b_hi)
+         lr
+         lhs
+         ()
+         ((steps ((compute lhs)) refl))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_byte)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ipd_b_lo)
+         lr
+         lhs
+         ()
+         ((steps ((compute lhs)) refl))
+         refl)
+       (rewrite-with
+         (lemma ipd_b_hi)
+         lr
+         lhs
+         ()
+         ((steps ((compute lhs)) refl))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_byte)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ipd_b_lo)
+         lr
+         lhs
+         ()
+         ((steps ((compute lhs)) refl))
+         refl)
+       (rewrite-with
+         (lemma ipd_b_hi)
+         lr
+         lhs
+         ()
+         ((steps ((compute lhs)) refl))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_byte)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ipd_b_lo)
+         lr
+         lhs
+         ()
+         ((steps ((compute lhs)) refl))
+         refl)
+       (rewrite-with
+         (lemma ipd_b_hi)
+         lr
+         lhs
+         ()
+         ((steps ((compute lhs)) refl))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_byte)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ipd_b_lo)
+         lr
+         lhs
+         ()
+         ((steps ((compute lhs)) refl))
+         refl)
+       (rewrite-with
+         (lemma ipd_b_hi)
+         lr
+         lhs
+         ()
+         ((steps ((compute lhs)) refl))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_byte)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ipd_b_lo)
+         lr
+         lhs
+         ()
+         ((steps ((compute lhs)) refl))
+         refl)
+       (rewrite-with
+         (lemma ipd_b_hi)
+         lr
+         lhs
+         ()
+         ((steps ((compute lhs)) refl))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_byte)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ipd_b_lo)
+         lr
+         lhs
+         ()
+         ((steps ((compute lhs)) refl))
+         refl)
+       (rewrite-with
+         (lemma ipd_b_hi)
+         lr
+         lhs
+         ()
+         ((steps ((compute lhs)) refl))
+         refl)))
+    (rewrite-with
+      (lemma get_set_byte)
+      lr
+      lhs
+      ()
+      ((rewrite-with (lemma ipd_b7_lo) lr lhs () () refl)
+       (rewrite-with (lemma ipd_b7_hi) lr lhs () () refl)))
+    (steps ((rewrite (premise 2) lr lhs true ())))
+    (have hzc (= (mod (- 55 (int_of_nat wn)) 64) (mod (- 55 n) 64))
+      (rewrite-with
+        (lemma ipf_zc)
+        lr
+        lhs
+        ((inst b n))
+        ((steps ((rewrite (premise 4) lr lhs true ())) refl))
+        refl))
+    (steps
+      ((rewrite (premise hzc) lr lhs true ())
+       (unfold len_be rhs)
+       (reduce rhs)
+       (rewrite (lemma ipd_b_def) lr lhs true ())
+       (rewrite (lemma ipd_b7_def) lr lhs true ())
+       (rewrite (lemma ipd_l_def) lr lhs true ())
+       (rewrite (lemma ipf_lm) lr lhs true ())))
+    (have hLl (= (le 0 (mod (* 8 n) 18446744073709551616)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (rewrite-with
+      (lemma ish_bb)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_shr_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise hLl) lr lhs true ())) refl)
+          (steps ((compute lhs)) refl))
+         refl)))
+    (rewrite-with
+      (lemma ish_bb)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_shr_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise hLl) lr lhs true ())) refl)
+          (steps ((compute lhs)) refl))
+         refl)))
+    (rewrite-with
+      (lemma ish_bb)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_shr_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise hLl) lr lhs true ())) refl)
+          (steps ((compute lhs)) refl))
+         refl)))
+    (rewrite-with
+      (lemma ish_bb)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_shr_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise hLl) lr lhs true ())) refl)
+          (steps ((compute lhs)) refl))
+         refl)))
+    (rewrite-with
+      (lemma ish_bb)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_shr_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise hLl) lr lhs true ())) refl)
+          (steps ((compute lhs)) refl))
+         refl)))
+    (rewrite-with
+      (lemma ish_bb)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_shr_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise hLl) lr lhs true ())) refl)
+          (steps ((compute lhs)) refl))
+         refl)))
+    (rewrite-with
+      (lemma ish_bb)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_shr_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise hLl) lr lhs true ())) refl)
+          (steps ((compute lhs)) refl))
+         refl)))
+    (rewrite-with
+      (lemma ish_bb)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hLl) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ipf_bdrop56)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (3 8))))))
+    (rewrite-with
+      (lemma ipf_bdrop48)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (3 8))))))
+    (rewrite-with
+      (lemma ipf_bdrop40)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (3 8))))))
+    (rewrite-with
+      (lemma ipf_bdrop32)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (3 8))))))
+    (rewrite-with
+      (lemma ipf_bdrop24)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (3 8))))))
+    (rewrite-with
+      (lemma ipf_bdrop16)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (3 8))))))
+    (rewrite-with
+      (lemma ipf_bdrop8)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (3 8))))))
+    (rewrite-with
+      (lemma ipf_bdrop0)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (3 8))))))
+    (steps ((compute both (stop mem_read mem_get szeros))))
+    refl))
+
+
+;; ---- fpad framing (see-through above the span) ------------------------------------
+
+(claim ish_fpad_hi
+  (goal ((m Mem) (src Int) (n Int) (tot Int) (a Int))
+    ((= (le (+ (+ src n) 72) a) True))
+    (= (mem_get (ipf_mem m src n tot) a) (mem_get m a)))
+  (chain
+    (have hzflo (= (le 0 (ipd_zf n)) True)
+      (chain
+        (steps ((rewrite (lemma ipd_zf_def) lr lhs true ())))
+        (rewrite-with
+          (lemma band_lo)
+          lr
+          lhs
+          ()
+          ((rewrite-with
+             (lemma mod_lo)
+             lr
+             lhs
+             ()
+             ((steps ((compute lhs)) refl))
+             refl)
+           (steps ((compute lhs)) refl)))
+        refl))
+    (have hzfhi (= (le (ipd_zf n) 63) True)
+      (chain
+        (steps ((rewrite (lemma ipd_zf_def) lr lhs true ())))
+        (rewrite-with
+          (lemma band_le_r)
+          lr
+          lhs
+          ()
+          ((rewrite-with
+             (lemma mod_lo)
+             lr
+             lhs
+             ()
+             ((steps ((compute lhs)) refl))
+             refl)
+           (steps ((compute lhs)) refl)))
+        refl))
+    (have hqld (= (ipd_ql src n) (+ (+ (+ src n) 1) (ipd_zf n)))
+      (steps ((rewrite (lemma ipd_ql_def) lr lhs true ())) refl))
+    (steps ((unfold ipf_mem lhs) (reduce lhs)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_gt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (hqld -1) (hzfhi 1) (0 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_gt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (hqld -1) (hzfhi 1) (0 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_gt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (hqld -1) (hzfhi 1) (0 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_gt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (hqld -1) (hzfhi 1) (0 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_gt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (hqld -1) (hzfhi 1) (0 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_gt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (hqld -1) (hzfhi 1) (0 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_gt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (hqld -1) (hzfhi 1) (0 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_gt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (hqld -1) (hzfhi 1) (0 1)))))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_gt)
+         lr
+         lhs
+         ()
+         ((steps () (by arith (rows (goal 1) (0 1)))))
+         refl)))
+    (rewrite-with
+      (lemma ish_zmem_hi)
+      lr
+      lhs
+      ()
+      ((steps
+         ((rewrite (lemma ish_i72p) lr lhs true ())
+          (rewrite (premise 0) lr lhs true ()))
+         refl)))
+    refl))
+
+;; one word read at or above the pad span's end is untouched
+(claim ish_wget_fpad_hi
+  (goal ((m Mem) (src Int) (n Int) (tot Int) (p Int))
+    ((= (le (+ (+ src n) 72) p) True))
+    (= (wget (ipf_mem m src n tot) p) (wget m p)))
+  (chain
+    (steps ((compute both (stop mem_get ipf_mem))))
+    (rewrite-with
+      (lemma ish_fpad_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ish_fpad_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ish_fpad_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ish_fpad_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    refl))
+
+;; a whole window at or above the pad span's end is untouched
+(claim ish_wlist_fpad_hi
+  (goal ((m Mem) (src Int) (n Int) (tot Int) (p Int) (j Nat))
+    ((= (le (+ (+ src n) 72) p) True))
+    (= (wlist (ipf_mem m src n tot) p j) (wlist m p j)))
+  (induct j
+    ((case Z (steps ((compute both (stop ipf_mem))) refl))
+     (case S
+       (j2)
+       (chain
+         (steps ((rewrite (lemma wlist_s) lr both true ())))
+         (rewrite-with
+           (lemma ish_wget_fpad_hi)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (0 1))))))
+         refl)))))
