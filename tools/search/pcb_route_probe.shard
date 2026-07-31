@@ -8,19 +8,28 @@
 ;;; alt 0 first): each net's grammar leads with its toward-goal moves
 ;;; (pcbp_move_order), which accelerates FOUND and cannot touch EMPTY.
 ;;; The outer
-;;; loop is the ratified LNS shape: greedy in queue order; on failure rip
-;;; the OLDEST routed net, requeue it at the back, retry the failed net
-;;; first; a rip cap bounds the loop.  Heuristic existence only: the
-;;; final assignment is certified by a full replay — every route re-walks
-;;; legally against the keepouts and the union of all cells is
-;;; duplicate-free (pairwise disjointness follows).
+;;; loop is the ratified LNS shape: greedy in queue order; on failure
+;;; the failed net's DEEPEST census convicts a victim — b@CELL rows map
+;;; to the routed net owning each cell (keepouts and the walk's own
+;;; self-avoidance cells belong to nobody), kill counts sum per net,
+;;; the heaviest blocker is ripped (w= on the RIP line; w=0 = nothing
+;;; attributed, rip-oldest fallback), requeued at the back, and the
+;;; failed net retries first; a rip cap bounds the loop.  Heuristic
+;;; existence only: the final assignment is certified by a full replay
+;;; — every route re-walks legally against the keepouts and the union
+;;; of all cells is duplicate-free (pairwise disjointness follows).
 ;;;
 ;;; The board (8x8, single keepout at (4,2)) and nets are chosen so the
-;;; naive order NEEDS one rip: F's shortest route (straight row 1) eats
-;;; cell (4,1) that R (the two-cell net (4,0)-(4,1)) must reach; after
-;;; the rip R takes its one-move route and F re-routes through row 3 at
-;;; length 9 (slack 4: row 0 is blocked by R, row 2 by the keepout).  D
-;;; is independent on the right edge.  Expected: RIPS-1 WIRE-12.
+;;; naive order NEEDS one rip AND the oldest net is the WRONG victim: A
+;;; (the decoy, (0,7)-(2,7) along the bottom edge) routes first and is
+;;; uninvolved; F's shortest route (straight row 1) then eats cell
+;;; (4,1) that R (the two-cell net (4,0)-(4,1)) must reach.  R's ladder
+;;; census names F's row-1 cells, so the rip convicts F — rip-oldest
+;;; would have burned a rip (and a re-route) on A first.  After the rip
+;;; R takes its one-move route and F re-routes through row 3 at length
+;;; 9 (slack 4: row 0 is blocked by R, row 2 by the keepout).  D is
+;;; independent on the right edge.  Expected: NETS-4 RIPS-1 WIRE-14
+;;; with RIP 9->14 w>0.
 ;;;
 ;;; SLACK ECONOMICS (measured, CI pipeline 182 full trace, on the
 ;;; WANDER-TREE model — pre-self-avoidance): a level explores a tree
@@ -250,9 +259,11 @@
 
 ;; ---- iterative deepening per net ------------------------------------------
 
+;; A failed ladder hands its DEEPEST call's census to the rip loop —
+;; the widest exploration carries the richest blocking attribution.
 (type PcbNetR
   (PcbNetErr (List Int))
-  (PcbNetNone)
+  (PcbNetNone SuCensus)
   (PcbNetRoute (List PMove) (List Int) Int))
 
 ;; The base of the per-level budget ramp; level ell runs at
@@ -366,13 +377,19 @@
                 (append_int " len=" (append_int (show_int len) "\n"))))))))
     w))
 
-(fn pcbp_log_rip ((start Int) (goal Int) (w World)) World
+;; w= is the census blocking weight that convicted the victim; w=0
+;; means no routed net owned any blocking cell — rip-oldest fallback.
+(fn pcbp_log_rip ((start Int) (goal Int) (wt Int) (w World)) World
   (write
     (append_int
       "RIP "
       (append_int
         (show_int start)
-        (append_int "->" (append_int (show_int goal) "\n"))))
+        (append_int
+          "->"
+          (append_int
+            (show_int goal)
+            (append_int " w=" (append_int (show_int wt) "\n"))))))
     w))
 
 (fn pcbp_deepen
@@ -383,10 +400,11 @@
    (d Int)
    (levels Int)
    (budget Int)
+   (last SuCensus)
    (w World))
   (Pair PcbNetR World)
   (measure levels)
-  (if (lt levels 1) (Pair (PcbNetNone) w)
+  (if (lt levels 1) (Pair (PcbNetNone last) w)
   (match (pcbp_find m occ start goal d budget)
     ((SuFindErr msg) (Pair (PcbNetErr msg) w))
     ((SuFindFound _ _ _ forks _ steps _ rep census)
@@ -404,10 +422,11 @@
        (+ d 2)
        (- levels 1)
        (* 2 budget)
+       census
        (pcbp_log_call start goal d budget "EMPTY" steps forks census w)))
     ((SuFindBudget _ _ _ forks _ steps _ _ census)
      (Pair
-       (PcbNetNone)
+       (PcbNetNone census)
        (pcbp_log_call start goal d budget "BUDGET-STOP" steps forks census w))))))
 
 ;; ---- the rip-up / re-route loop -------------------------------------------
@@ -445,6 +464,62 @@
 
 (fn pcbp_levels () Int 4)
 
+;; ---- census-directed victim selection -------------------------------------
+;; WalkBlocked census rows -> (cell, kills).  Self-avoidance kills
+;; attribute to the walk's OWN cells, which are unoccupied by
+;; construction and so never belong to a routed net — the ownership
+;; scan excludes them without any special case.
+(fn pcbp_census_blockers ((rows (List (Pair SuCensusKey Int))))
+  (List (Pair Int Int))
+  (measure (struct rows))
+  (match rows
+    (Nil Nil)
+    ((Cons (Pair k n) rest)
+     (match k
+       ((SuCkHead q f)
+        (if (qname_eq q (pcbp_model_q (quote WalkBlocked)))
+          (match f
+            ((Some c) (Cons (Pair c n) (pcbp_census_blockers rest)))
+            (None (pcbp_census_blockers rest)))
+          (pcbp_census_blockers rest)))
+       (_ (pcbp_census_blockers rest))))))
+
+(fn pcbp_cells_weight ((cells (List Int)) (blockers (List (Pair Int Int)))) Int
+  (measure (struct blockers))
+  (match blockers
+    (Nil 0)
+    ((Cons (Pair c n) rest)
+     (+ (if (pcb_mem c cells) n 0) (pcbp_cells_weight cells rest)))))
+
+;; Best = strictly-greater weight displaces, so the OLDEST net wins
+;; ties and a zero-weight scan leaves bestix at 0 (= rip-oldest
+;; fallback when the census attributes nothing to any routed net).
+(fn pcbp_best_victim_ix
+  ((rs (List PcbRouted))
+   (blockers (List (Pair Int Int)))
+   (ix Int)
+   (bestw Int)
+   (bestix Int))
+  (Pair Int Int)
+  (measure (struct rs))
+  (match rs
+    (Nil (Pair bestw bestix))
+    ((Cons (PcbRouted _ _ cells) rest)
+     (let ((wt (pcbp_cells_weight cells blockers)))
+       (if (lt bestw wt) (pcbp_best_victim_ix rest blockers (+ ix 1) wt ix)
+       (pcbp_best_victim_ix rest blockers (+ ix 1) bestw bestix))))))
+
+(fn pcbp_remove_ix ((rs (List PcbRouted)) (ix Int))
+  (Option (Pair PcbRouted (List PcbRouted)))
+  (measure (struct rs))
+  (match rs
+    (Nil None)
+    ((Cons h t)
+     (if (lt ix 1) (Some (Pair h t))
+     (match (pcbp_remove_ix t (- ix 1))
+       (None None)
+       ((Some (Pair v rest)) (Some (Pair v (Cons h rest)))))))))
+
 (fn pcbp_route_all
   ((m Module)
    (keep (List Int))
@@ -470,6 +545,7 @@
             (pcb_manhattan start goal)
             (pcbp_levels)
             (pcbp_budget0)
+            (su_census_empty)
             w)
           ((Pair (PcbNetErr msg) w2) (Pair (PcbAllErr msg) w2))
           ((Pair (PcbNetRoute moves cells d) w2)
@@ -481,21 +557,36 @@
              rips
              (- fuel 1)
              (pcbp_log_routed start goal d (pcbp_len_moves moves) w2)))
-          ((Pair (PcbNetNone) w2)
+          ((Pair (PcbNetNone census) w2)
            (match routed
              (Nil
                (Pair (PcbAllErr "infeasible: unroutable with empty board") w2))
-             ((Cons (PcbRouted oldest _ _) younger)
-              (match oldest
-                ((PcbNet ostart ogoal)
-                 (pcbp_route_all
-                   m
-                   keep
-                   (Cons net (pcbp_app_nets rest (Cons oldest Nil)))
-                   younger
-                   (+ rips 1)
-                   (- fuel 1)
-                   (pcbp_log_rip ostart ogoal w2))))))))))))))
+             ((Cons _ _)
+              (match census
+                ((SuCensus rows _)
+                 (match
+                   (pcbp_best_victim_ix
+                     routed
+                     (pcbp_census_blockers rows)
+                     0
+                     0
+                     0)
+                   ((Pair bw bix)
+                    (match (pcbp_remove_ix routed (if (lt 0 bw) bix 0))
+                      (None (Pair (PcbAllErr "victim index out of range") w2))
+                      ((Some (Pair victim remaining))
+                       (match victim
+                         ((PcbRouted vnet _ _)
+                          (match vnet
+                            ((PcbNet ostart ogoal)
+                             (pcbp_route_all
+                               m
+                               keep
+                               (Cons net (pcbp_app_nets rest (Cons vnet Nil)))
+                               remaining
+                               (+ rips 1)
+                               (- fuel 1)
+                               (pcbp_log_rip ostart ogoal bw w2))))))))))))))))))))))
 
 ;; ---- the certificate: full replay ----------------------------------------
 
@@ -526,12 +617,12 @@
 (fn pcbp_keepouts () (List Int) (list 20))
 
 (fn pcbp_nets () (List PcbNet)
-  (list (PcbNet 9 14) (PcbNet 4 12) (PcbNet 39 55)))
+  (list (PcbNet 56 58) (PcbNet 9 14) (PcbNet 4 12) (PcbNet 39 55)))
 
 (fn pcbp_report ((rips Int) (wire Int) (w World)) World
   (write
     (append_int
-      "PCB-ROUTE 8x8 KEEP-1 NETS-3 RIPS-"
+      "PCB-ROUTE 8x8 KEEP-1 NETS-4 RIPS-"
       (append_int
         (show_int rips)
         (append_int " WIRE-" (append_int (show_int wire) " CERT-DISJOINT-OK\n"))))
