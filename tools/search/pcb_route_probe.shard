@@ -52,8 +52,11 @@
 ;;; licenses the next level, a BUDGET give-up stops the net (the next
 ;;; level is strictly bigger; pipeline 182 burned 20M of its 35M steps
 ;;; in post-BUDGET levels).  Every engine call logs one line to the
-;;; World (net, depth, budget, outcome, steps, forks) so a hung run
-;;; leaves evidence in the artifact.
+;;; World (net, depth, budget, outcome, steps, forks, and the
+;;; refutation census — b@CELL rows attribute kills to blocking cells,
+;;; floor/off/end@CELL rows account for the pruning bulk) so a hung
+;;; run leaves evidence in the artifact and a failed ladder names its
+;;; blockers.
 ;;;
 ;;; The model module is ALSO loaded at runtime (resolve_closure +
 ;;; build_module_d on the file path below) because the su evaluator
@@ -191,7 +194,7 @@
       (hole 0))))
 
 (fn pcbp_want ((goal Int)) Expr
-  (Ctor (qn (quote Some)) (Cons (IntLit goal) Nil)))
+  (Ctor (pcbp_model_q (quote WalkAt)) (Cons (IntLit goal) Nil)))
 
 (fn pcbp_find
   ((m Module) (occ (List Int)) (start Int) (goal Int) (d Int) (budget Int))
@@ -262,6 +265,46 @@
     (Nil 0)
     ((Cons _ t) (+ 1 (pcbp_len_moves t)))))
 
+;; The census formatter: WalkBlocked rows carry the blocking cell
+;; (b@CELL:kills) — the raw material for conflict-directed rip victim
+;; selection; floor/off/end@CELL/fail rows account for the rest of the
+;; kill volume.
+(fn pcbp_ck_tag ((k SuCensusKey)) (List Int)
+  (match k
+    ((SuCkFail) "fail")
+    ((SuCkSym _) "sym")
+    ((SuCkInt c) (append_int "end@" (show_int c)))
+    ((SuCkHead q f)
+     (if (qname_eq q (pcbp_model_q (quote WalkBlocked)))
+       (match f
+         ((Some c) (append_int "b@" (show_int c)))
+         (None "b@?"))
+     (if (qname_eq q (pcbp_model_q (quote WalkFloor))) "floor"
+     (if (qname_eq q (pcbp_model_q (quote WalkOff))) "off"
+     "?"))))))
+
+(fn pcbp_census_rows_str ((rows (List (Pair SuCensusKey Int)))) (List Int)
+  (measure (struct rows))
+  (match rows
+    (Nil "")
+    ((Cons (Pair k n) rest)
+     (append_int
+       " "
+       (append_int
+         (pcbp_ck_tag k)
+         (append_int ":" (append_int (show_int n) (pcbp_census_rows_str rest))))))))
+
+(fn pcbp_census_str ((census SuCensus)) (List Int)
+  (match census
+    ((SuCensus rows spilled)
+     (append_int
+       " census["
+       (append_int
+         (pcbp_census_rows_str rows)
+         (if (lt 0 spilled)
+           (append_int " +" (append_int (show_int spilled) "]"))
+           "]"))))))
+
 ;; One streamed line per engine call: a hung run must leave evidence.
 (fn pcbp_log_call
   ((start Int)
@@ -271,6 +314,7 @@
    (tag (List Int))
    (steps Int)
    (forks Int)
+   (census SuCensus)
    (w World))
   World
   (write
@@ -300,7 +344,9 @@
                             (show_int steps)
                             (append_int
                               " forks="
-                              (append_int (show_int forks) "\n"))))))))))))))
+                              (append_int
+                                (show_int forks)
+                                (append_int (pcbp_census_str census) "\n")))))))))))))))
     w))
 
 (fn pcbp_log_routed ((start Int) (goal Int) (d Int) (len Int) (w World)) World
@@ -343,12 +389,13 @@
   (if (lt levels 1) (Pair (PcbNetNone) w)
   (match (pcbp_find m occ start goal d budget)
     ((SuFindErr msg) (Pair (PcbNetErr msg) w))
-    ((SuFindFound _ _ _ forks _ steps _ rep)
-     (let ((w2 (pcbp_log_call start goal d budget "FOUND" steps forks w)))
+    ((SuFindFound _ _ _ forks _ steps _ rep census)
+     (let
+       ((w2 (pcbp_log_call start goal d budget "FOUND" steps forks census w)))
        (match (pcbp_decode rep)
          (None (Pair (PcbNetErr "undecodable representative") w2))
          ((Some moves) (Pair (PcbNetRoute moves (pcb_cells start moves) d) w2)))))
-    ((SuFindEmpty _ _ _ forks _ steps _ _)
+    ((SuFindEmpty _ _ _ forks _ steps _ _ census)
      (pcbp_deepen
        m
        occ
@@ -357,11 +404,11 @@
        (+ d 2)
        (- levels 1)
        (* 2 budget)
-       (pcbp_log_call start goal d budget "EMPTY" steps forks w)))
-    ((SuFindBudget _ _ _ forks _ steps _ _)
+       (pcbp_log_call start goal d budget "EMPTY" steps forks census w)))
+    ((SuFindBudget _ _ _ forks _ steps _ _ census)
      (Pair
        (PcbNetNone)
-       (pcbp_log_call start goal d budget "BUDGET-STOP" steps forks w))))))
+       (pcbp_log_call start goal d budget "BUDGET-STOP" steps forks census w))))))
 
 ;; ---- the rip-up / re-route loop -------------------------------------------
 
@@ -464,8 +511,8 @@
     (Nil True)
     ((Cons (PcbRouted (PcbNet start goal) moves _) rest)
      (match (pcb_walk keep goal (pcbp_len_moves moves) start moves)
-       (None False)
-       ((Some c) (if (int_eq c goal) (pcbp_replay_ok keep rest) False))))))
+       ((WalkAt c) (if (int_eq c goal) (pcbp_replay_ok keep rest) False))
+       (_ False)))))
 
 (fn pcbp_wire ((rs (List PcbRouted))) Int
   (measure (struct rs))

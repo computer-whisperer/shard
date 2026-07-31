@@ -1254,11 +1254,125 @@
 
 ;; ---- test checking -----------------------------------------------------------
 
+;; THE REFUTATION CENSUS.  Kills are the find loop's dominant product,
+;; and until this rung each one surrendered only a count.  The census
+;; buckets a SHALLOW summary of the value that failed to match `want`,
+;; under the peek-don't-force law: the lazy comparison kills at the
+;; FIRST differing observation, so the census may read only what
+;; evaluation already forced — the mismatching head plus the first
+;; ctor field that is already an Int in the arena (chasing
+;; indirections, never entering a thunk).  A task that wants
+;; attribution encodes it into its refusal values (the PCB model's
+;; WalkBlocked cell is computed strictly before the refusal, so the
+;; peek finds it for free); payload-free refusal heads bucket into
+;; single rows, keeping high-volume admissible pruning cheap.
+;; Evaluation-level kills (matcher/guard/pattern failures — no value
+;; to observe) bucket as SuCkFail.  The row list is capped: overflow
+;; kills land in the spilled counter, never in a new row.  Census
+;; content is TELEMETRY for outer heuristic drivers (rip victim
+;; selection, exhaust attribution) — nothing soundness-bearing reads
+;; it.
+(type SuCensusKey
+  (SuCkFail)
+  (SuCkInt Int)
+  (SuCkSym Symbol)
+  (SuCkHead QName (Option Int)))
+
+(type SuCensus (SuCensus (List (Pair SuCensusKey Int)) Int))
+; capped rows (key, kill count), spilled kill count
+
+(fn su_census_cap () Int 16)
+
+(fn su_census_empty () SuCensus (SuCensus Nil 0))
+
+(fn sck_eq ((a SuCensusKey) (b SuCensusKey)) Bool
+  (match a
+    ((SuCkFail)
+     (match b
+       ((SuCkFail) True)
+       (_ False)))
+    ((SuCkInt x)
+     (match b
+       ((SuCkInt y) (int_eq x y))
+       (_ False)))
+    ((SuCkSym x)
+     (match b
+       ((SuCkSym y) (sym_eq x y))
+       (_ False)))
+    ((SuCkHead q f)
+     (match b
+       ((SuCkHead q2 f2)
+        (if (qname_eq q q2)
+          (match f
+            (None
+              (match f2
+                (None True)
+                (_ False)))
+            ((Some x)
+             (match f2
+               ((Some y) (int_eq x y))
+               (_ False))))
+          False))
+       (_ False)))))
+
+(fn su_census_rows_bump ((rows (List (Pair SuCensusKey Int))) (k SuCensusKey))
+  (Option (List (Pair SuCensusKey Int)))
+  (measure (struct rows))
+  (match rows
+    (Nil None)
+    ((Cons (Pair rk n) rest)
+     (if (sck_eq rk k) (Some (Cons (Pair rk (+ n 1)) rest))
+     (match (su_census_rows_bump rest k)
+       (None None)
+       ((Some rest2) (Some (Cons (Pair rk n) rest2))))))))
+
+(fn su_census_rows_len ((rows (List (Pair SuCensusKey Int)))) Int
+  (measure (struct rows))
+  (match rows
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (su_census_rows_len rest)))))
+
+(fn su_census_add ((c SuCensus) (k SuCensusKey)) SuCensus
+  (match c
+    ((SuCensus rows spilled)
+     (match (su_census_rows_bump rows k)
+       ((Some rows2) (SuCensus rows2 spilled))
+       (None
+         (if (lt (su_census_rows_len rows) (su_census_cap))
+           (SuCensus (Cons (Pair k 1) rows) spilled)
+           (SuCensus rows (+ spilled 1))))))))
+
+;; Peek an arena ref for an already-forced Int: chase indirections with
+;; bounded fuel, never evaluate a thunk.
+(fn su_ck_peek_int ((a SuA) (r Int) (fuel Int)) (Option Int)
+  (measure fuel)
+  (if (lt fuel 1) None
+  (match (sa_get a r)
+    ((Some (SuInt x)) (Some x))
+    ((Some (SuInd j)) (su_ck_peek_int a j (- fuel 1)))
+    (_ None))))
+
+(fn su_ck_first_int ((a SuA) (fields (List Int))) (Option Int)
+  (measure (struct fields))
+  (match fields
+    (Nil None)
+    ((Cons r rest)
+     (match (su_ck_peek_int a r 8)
+       ((Some x) (Some x))
+       (None (su_ck_first_int a rest))))))
+
+(fn su_ck_of_node ((a SuA) (n Node)) SuCensusKey
+  (match n
+    ((SuInt x) (SuCkInt x))
+    ((SuQuote x) (SuCkSym x))
+    ((SuCtor q fields) (SuCkHead q (su_ck_first_int a fields)))
+    (_ (SuCkFail))))
+
 (type SuT
   (SuTErr (List Int))
   (SuTOut)
   (SuTBlocked Int SuA)
-  (SuTFail SuA)
+  (SuTFail SuCensusKey SuA)
   (SuTPass SuA))
 
 ;; Generic value comparison for dynamic tasks.  `want` is an already-invoked
@@ -1282,7 +1396,7 @@
     ((SuRErr msg) (SuTErr msg))
     ((SuROut) (SuTOut))
     ((SuRBlocked h a2) (SuTBlocked h a2))
-    ((SuRFail a2) (SuTFail a2))
+    ((SuRFail a2) (SuTFail (SuCkFail) a2))
     ((SuRVal v a2)
      (match (sa_get a2 v)
        (None (SuTErr "superpose: dangling generic result"))
@@ -1290,19 +1404,20 @@
         (match want
           ((IntLit w)
            (match got
-             ((SuInt x) (if (int_eq x w) (SuTPass a2) (SuTFail a2)))
-             (_ (SuTFail a2))))
+             ((SuInt x) (if (int_eq x w) (SuTPass a2) (SuTFail (SuCkInt x) a2)))
+             (_ (SuTFail (su_ck_of_node a2 got) a2))))
           ((SymLit w)
            (match got
-             ((SuQuote x) (if (sym_eq x w) (SuTPass a2) (SuTFail a2)))
-             (_ (SuTFail a2))))
+             ((SuQuote x)
+              (if (sym_eq x w) (SuTPass a2) (SuTFail (SuCkSym x) a2)))
+             (_ (SuTFail (su_ck_of_node a2 got) a2))))
           ((Ctor wq wes)
            (match got
              ((SuCtor gq ges)
               (if (qname_eq gq wq)
                 (su_expect_exprs (- fuel 1) m candq body g asg a2 ges wes)
-                (SuTFail a2)))
-             (_ (SuTFail a2))))
+                (SuTFail (SuCkHead gq (su_ck_first_int a2 ges)) a2)))
+             (_ (SuTFail (su_ck_of_node a2 got) a2))))
           (_ (SuTErr "superpose: generic target is not a ground value")))))))))
 
 (fn su_expect_exprs
@@ -1322,16 +1437,16 @@
     (Nil
       (match want
         (Nil (SuTPass a))
-        ((Cons _ _) (SuTFail a))))
+        ((Cons _ _) (SuTFail (SuCkFail) a))))
     ((Cons r rest)
      (match want
-       (Nil (SuTFail a))
+       (Nil (SuTFail (SuCkFail) a))
        ((Cons w wrest)
         (match (su_expect_expr (- fuel 1) m candq body g asg a r w)
           ((SuTErr msg) (SuTErr msg))
           ((SuTOut) (SuTOut))
           ((SuTBlocked h a2) (SuTBlocked h a2))
-          ((SuTFail a2) (SuTFail a2))
+          ((SuTFail k a2) (SuTFail k a2))
           ((SuTPass a2)
            (su_expect_exprs (- fuel 1) m candq body g asg a2 rest wrest)))))))))
 
@@ -1355,7 +1470,7 @@
     ((SuRErr msg) (SuTErr msg))
     ((SuROut) (SuTOut))
     ((SuRBlocked h a2) (SuTBlocked h a2))
-    ((SuRFail a2) (SuTFail a2))
+    ((SuRFail a2) (SuTFail (SuCkFail) a2))
     ((SuRVal r a2) (su_expect_expr (- fuel 1) m candq body g asg a2 r want)))))
 
 ;; ---- the region loop -----------------------------------------------------------
@@ -1608,7 +1723,7 @@
                         regions
                         (+ forks 1)
                         sols))))))
-               ((SuTFail ar2)
+               ((SuTFail _ ar2)
                 (match (sk_region_count candidate (sug_raw g) region)
                   ((SkCErr msg) (SuSErr msg))
                   ((SkCOk n)
@@ -1755,15 +1870,15 @@
 
 (type SuFind
   (SuFindErr (List Int))
-  (SuFindBudget Int Int Int Int Int Int Int Int)
-  (SuFindEmpty Int Int Int Int Int Int Int Int)
-  (SuFindFound Int Int Int Int Int Int SkRegion Expr))
+  (SuFindBudget Int Int Int Int Int Int Int Int SuCensus)
+  (SuFindEmpty Int Int Int Int Int Int Int Int SuCensus)
+  (SuFindFound Int Int Int Int Int Int SkRegion Expr SuCensus))
 ; budget/empty: killed regions, constraint regions, terminal regions, ground
 ;               forks, relational splits, evaluator steps, arena nodes, arena
-;               expressions
+;               expressions, refutation census
 ; found:        killed regions, constraint regions, terminal regions, ground
 ;               forks, relational splits, evaluator steps, passing region,
-;               productive representative
+;               productive representative, refutation census (kills so far)
 
 (fn su_find_budget_report
   ((killed Int)
@@ -2007,7 +2122,8 @@
    (constrained Int)
    (regions Int)
    (forks Int)
-   (splits Int))
+   (splits Int)
+   (census SuCensus))
   SuFind
   (measure fuel)
   (if (lt fuel 1)
@@ -2019,7 +2135,8 @@
       splits
       (sa_steps ar)
       (sa_nodes ar)
-      (sa_exprs ar))
+      (sa_exprs ar)
+      census)
     (match jobs
       (Nil
         (SuFindEmpty
@@ -2030,7 +2147,8 @@
           splits
           (sa_steps ar)
           (sa_nodes ar)
-          (sa_exprs ar)))
+          (sa_exprs ar)
+          census))
       ((Cons region rest)
        (let ((asg (sk_region_choices region)))
          (match (ms_check_prepared_restricted 1000000 prepared region candidate)
@@ -2052,7 +2170,8 @@
               (+ constrained 1)
               (+ regions 1)
               forks
-              splits))
+              splits
+              census))
            (constraint_verdict
              (match (su_query (su_efuel) m candq body g asg ar query want)
                ((SuTErr msg) (SuFindErr msg))
@@ -2083,8 +2202,9 @@
                         constrained
                         regions
                         (+ forks 1)
-                        splits))))))
-               ((SuTFail ar2)
+                        splits
+                        census))))))
+               ((SuTFail k ar2)
                 (su_find_query_prepared
                   (- fuel 1)
                   m
@@ -2101,7 +2221,8 @@
                   constrained
                   (+ regions 1)
                   forks
-                  splits))
+                  splits
+                  (su_census_add census k)))
                ((SuTPass ar2)
                 (match constraint_verdict
                   ((MsClear)
@@ -2116,7 +2237,8 @@
                         splits
                         (sa_steps ar2)
                         region
-                        representative))))
+                        representative
+                        census))))
                   ((MsErr msg) (SuFindErr msg))
                   ((MsRedex _)
                    (SuFindErr "superpose: inconsistent residual verdict"))
@@ -2155,7 +2277,8 @@
                              (+ constrained redex_regions)
                              (+ regions redex_regions)
                              (+ forks partition_forks)
-                             (+ splits partition_splits)))
+                             (+ splits partition_splits)
+                             census))
                          ((Cons passing _)
                           (match (su_region_first candidate g passing)
                             ((SkEErr msg) (SuFindErr msg))
@@ -2168,7 +2291,8 @@
                                (+ splits partition_splits)
                                (sa_steps ar2)
                                passing
-                               representative))))))))))))))))))
+                               representative
+                               census))))))))))))))))))
 
 (fn su_find_query
   ((fuel Int)
@@ -2201,7 +2325,8 @@
        0
        0
        0
-       0))))
+       0
+       (su_census_empty)))))
 
 ;; Regular schema languages enter through the cardinality-free path. Separable
 ;; pressure is already compiled into typed schema states; residual theorem
@@ -2238,7 +2363,8 @@
        0
        0
        0
-       0))))
+       0
+       (su_census_empty)))))
 
 ;; Theorem-first entry for the find path — the same optional mode the counted
 ;; drive owns below, riding the count-free partitioner: settle the initial
@@ -2292,7 +2418,8 @@
             redex
             redex
             partition_forks
-            partition_splits)))))))
+            partition_splits
+            (su_census_empty))))))))
 
 (fn su_find_query_schema_ordered
   ((theorem_first Bool)

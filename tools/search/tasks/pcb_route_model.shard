@@ -7,7 +7,10 @@
 ;;; move list, so under the lazy engine an infeasible prefix dies without
 ;;; the next hole ever forking — an admissible lower bound expressed
 ;;; entirely in the observation, no engine feature.  Off-grid steps,
-;;; occupied cells, and budget exhaustion all refuse the same way.
+;;; occupied cells, and budget exhaustion each refuse with their OWN
+;;; head (PWalkR) so the engine's refutation census can attribute
+;;; kills; the goal check lives in the engine's want-match (want =
+;;; (WalkAt goal)), which kills wrong-end walks at the Int field.
 ;;;
 ;;; THE SELF-AVOIDING WALK is the second load-bearing design (added after
 ;;; the pipeline-182 wander-tree measurement): the recursion threads the
@@ -59,20 +62,28 @@
 (fn pcb_manhattan ((a Int) (b Int)) Int
   (+ (pcb_abs (- (pcb_x a) (pcb_x b))) (pcb_abs (- (pcb_y a) (pcb_y b)))))
 
+;; The walk's result vocabulary IS the refutation-census attribution
+;; channel: each refusal mode is its own head, and WalkBlocked carries
+;; the blocking cell — computed strictly BEFORE the refusal, so the
+;; engine's peek-don't-force census reads it without extra evaluation.
+;; WalkFloor and WalkOff stay payload-free deliberately: the
+;; admissible-pruning bulk buckets into single census rows.
+(type PWalkR (WalkAt Int) (WalkBlocked Int) (WalkOff) (WalkFloor))
+
 ;; Bound first, then demand: a prefix whose Manhattan floor exceeds the
-;; remaining budget returns None without forcing `moves`.  The recursion
+;; remaining budget refuses without forcing `moves`.  The recursion
 ;; threads the departed cell into occ — accepted walks are self-avoiding.
 (fn pcb_walk
   ((occ (List Int)) (goal Int) (budget Int) (c Int) (moves (List PMove)))
-  (Option Int)
+  PWalkR
   (measure (struct moves))
-  (if (lt budget (pcb_manhattan c goal)) None
+  (if (lt budget (pcb_manhattan c goal)) (WalkFloor)
   (match moves
-    (Nil (if (int_eq c goal) (Some c) None))
+    (Nil (WalkAt c))
     ((Cons m rest)
      (let ((c2 (pcb_step m c)))
-       (if (lt c2 0) None
-       (if (pcb_mem c2 occ) None
+       (if (lt c2 0) (WalkOff)
+       (if (pcb_mem c2 occ) (WalkBlocked c2)
        (pcb_walk (Cons c occ) goal (- budget 1) c2 rest))))))))
 
 ;; Visited cells of a route, start included (use on known-legal routes).
@@ -85,25 +96,27 @@
 ;; --- ground pins -----------------------------------------------------------
 
 (claim pcb_walk_open_pin
-  (goal () () (= (pcb_walk Nil 3 3 0 (list (MvE) (MvE) (MvE))) (Some 3)))
+  (goal () () (= (pcb_walk Nil 3 3 0 (list (MvE) (MvE) (MvE))) (WalkAt 3)))
   (steps ((compute both)) refl))
 
 (claim pcb_walk_blocked_pin
-  (goal () () (= (pcb_walk (list 1) 3 3 0 (list (MvE) (MvE) (MvE))) None))
+  (goal () ()
+    (= (pcb_walk (list 1) 3 3 0 (list (MvE) (MvE) (MvE))) (WalkBlocked 1)))
   (steps ((compute both)) refl))
 
 (claim pcb_walk_offgrid_pin
-  (goal () () (= (pcb_walk Nil 8 1 0 (list (MvN))) None))
+  (goal () () (= (pcb_walk Nil 8 1 0 (list (MvN))) (WalkOff)))
   (steps ((compute both)) refl))
 
 (claim pcb_walk_bound_pin
-  (goal () () (= (pcb_walk Nil 7 2 0 Nil) None))
+  (goal () () (= (pcb_walk Nil 7 2 0 Nil) (WalkFloor)))
   (steps ((compute both)) refl))
 
 ;; Revisit refusal: E then W steps back onto the start cell — under the
-;; wander-tree model this was (Some 0); self-avoidance refuses it.
+;; wander-tree model this reached the goal; self-avoidance refuses it,
+;; and the census sees the blocking cell.
 (claim pcb_walk_revisit_pin
-  (goal () () (= (pcb_walk Nil 0 2 0 (list (MvE) (MvW))) None))
+  (goal () () (= (pcb_walk Nil 0 2 0 (list (MvE) (MvW))) (WalkBlocked 0)))
   (steps ((compute both)) refl))
 
 (claim pcb_cells_pin
