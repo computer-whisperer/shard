@@ -3823,6 +3823,51 @@ compose cleanly because they act on different quantities: pruning
 shrinks the tree (EMPTY and FOUND), ordering only shortens the walk
 to the first solution (FOUND alone).
 
+**The refutation census (6110390 + 828216f) — kills carry attribution
+out of the engine (pipelines 196/198, 2026-07-30).**  The engine
+growth rung.  Before it, every killed region surrendered one count;
+now `SuTFail` carries a `SuCensusKey` — a SHALLOW summary of the
+value that failed to match `want` (mismatching head + first Int
+payload) — and the find loop aggregates keys into a capped multiset
+(16 rows + spilled counter) surfaced in all three SuFind arms.
+Telemetry only: nothing soundness-bearing reads it, the counted
+drive discards keys.  The model encodes attribution: `pcb_walk`
+returns `PWalkR` (WalkBlocked carries the blocking cell;
+WalkFloor/WalkOff payload-free so the pruning bulk buckets into
+single rows; the goal check moved to the engine's want-match, so
+wrong-end walks die at the Int field as end@CELL).  Second consumer
+per the hygiene ruling: typed_superpose exhaust reports append
+census-rows/spilled (swap deep-run attribution).  TWO MEASURED
+LESSONS: (1) the lazy comparison kills at the FIRST differing
+observation, so a census must not deep-force terminals — pipeline
+196 then showed the raw arena peek blind (every payload b@?): a
+refusal payload sits behind a REGION-DEPENDENT thunk whose forcing
+consulted hole choices, so the value lives in the choice-keyed memo,
+not the node.  The fix (828216f): bounded re-force (fuel 256)
+against the current arena, DISCARDING the advanced arena — memo hits
+replay in a few steps and the discard keeps the census strictly
+behavior-neutral (pipeline 198: every steps= value bit-identical to
+196; both pinned engine probes bit-identical locally).  (2)
+Self-avoidance kills attribute to the walk's OWN cells, which are
+unoccupied by construction and so never map to a routed net —
+ownership filtering excludes them with no special case.
+
+**Census-directed rip victim (620877f) — the driver rung, GREEN
+(pipeline 200, 2026-07-30).**  A failed net's DEEPEST census hands
+its b@CELL rows to the rip loop, which maps each blocking cell to
+the routed net owning it, sums kill counts per net, and rips the
+heaviest blocker (strictly-greater displaces → oldest wins ties;
+zero attribution → rip-oldest fallback; the RIP line prints the
+convicting weight).  The instance gained a decoy net A along the
+bottom edge, routed first, making the OLDEST net the WRONG victim
+for the first time.  The run played exactly as designed: R's ladder
+census named F's row-1 cells (b@11/12/13/14, summed weight 5 for F
+vs 0 for A and D), **RIP 9->14 w=5** convicted F directly where
+rip-oldest would have burned a rip and a re-route on A, and the demo
+ended **PCB-ROUTE 8x8 KEEP-1 NETS-4 RIPS-1 WIRE-14 CERT-DISJOINT-OK**
+in an 82s job.  The 2-cycle failure mode measured in pipeline 182 is
+now structurally answered: the loop rips what actually blocks.
+
 **Task-authoring gotchas banked while building the swap + PCB
 instruments:** te_import_ctx admits only bare item uses as candidate
 heads (in-file type decls are invisible — models live in sibling

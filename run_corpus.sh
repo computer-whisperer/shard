@@ -790,12 +790,15 @@ fi
 # over su_find_query_schema with the SELF-AVOIDING bounded-walk model
 # (Manhattan floor demanded before the move list = admissible pruning
 # through laziness; the walk threads its own cells into occupancy),
-# iterative deepening from the Manhattan floor, budget ramp 1000*2^level,
-# deepen-only-on-EMPTY.  Heuristic EXISTENCE only (replay certificate);
-# never a census pin.  Expected (measured CI pipeline 193, 2026-07-30,
-# ~1 min): F routes row 1, R's ladder refutes d=1..7, one rip, R len 1
-# + D len 2, F re-routes row 3 at d=9 (FOUND at 12,054 steps), ending
-# PCB-ROUTE 8x8 KEEP-1 NETS-3 RIPS-1 WIRE-12 CERT-DISJOINT-OK.
+# goal-directed move ordering, iterative deepening from the Manhattan
+# floor, budget ramp 1000*2^level, deepen-only-on-EMPTY, and the
+# REFUTATION CENSUS convicting the rip victim by blocking weight.
+# Heuristic EXISTENCE only (replay certificate); never a census pin.
+# Expected (measured CI pipeline 200, 2026-07-30, ~1.5 min): decoy A
+# routes the bottom edge, F routes row 1, R's ladder refutes d=1..7
+# with b@ rows naming F's cells, RIP 9->14 w=5 (census convicts F, NOT
+# the oldest A), R len 1 + D len 2, F re-routes row 3 at d=9, ending
+# PCB-ROUTE 8x8 KEEP-1 NETS-4 RIPS-1 WIRE-14 CERT-DISJOINT-OK.
 echo "=== search: PCB routing demo (rip-up/re-route) ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/pcb_route_probe.shard
