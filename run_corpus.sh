@@ -796,7 +796,8 @@ fi
 # the rip victim by blocking weight (an occupied pin short-circuits
 # to the same conviction).  Heuristic EXISTENCE only (tap-by-tap
 # replay certificate re-deriving all cells); never a census pin.
-# CONGESTED instance (designed 2026-07-31): 9 keepouts (2x4 component
+# CONGESTED instance (measured CI pipeline 215, 2026-07-31, ~3.5 min
+# job / ~177k steps total): 9 keepouts (2x4 component
 # block + corridor plug), 7 nets, rips that COMPOUND.  T's tap is
 # sandwiched (component W, net C's col-5 wall E, plug N): four EMPTY
 # levels, d=9 census discriminates TWO REAL blockers — C w=3 over the

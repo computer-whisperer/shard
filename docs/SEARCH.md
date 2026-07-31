@@ -3931,6 +3931,48 @@ Deferred by design: the whole-tree-as-one-query rung (a tree
 grammar instead of a move list) builds on the goal-set observation
 when per-query hardness is wanted.
 
+**The congested instance — compounding rips, two-real-blocker
+conviction (42c2b1b), GREEN (pipeline 215, 2026-07-31, job 637 at
+210s / ~177k steps).**  Pure instance design on landed machinery
+(only the rip-fuel constant 12→16 and the report string changed):
+9 keepouts (a 2×4 component block at cols 2-3 × rows 4-7 plus a
+corridor plug at (4,6)) and 7 nets — decoy A, corridor wall C
+(5,2)-(5,8), west strap S (1,8)-(1,9), 3-pin bus B (keeps tree-tap
++ mixed-parity paths in the pinned demo), filler D, sandwiched T
+(4,4)-(4,7), squatter E (5,1)-(5,3).  The trace played the designed
+story LINE FOR LINE, every census row at its hand-counted value:
+
+- **Rip 1 discriminates two REAL blockers.**  T's tap is walled
+  (component W, C's column E, plug N); four EMPTY levels; the d=9
+  census carries b@89:1 + b@101:2 (C, w=3) against b@97:1 (S strap,
+  w=1) — the strap's single kill is the one hand-enumerated prefix
+  [S,W,W,W].  RIP 29 w=3: the first conviction where the census
+  weighs real-vs-real rather than culprit-vs-decoy.  Hand-verified
+  by exhaustively enumerating the pocket's DFS prefixes — walls +
+  the admissible floor choke each level to a handful of forks
+  (d=9: 22 forks), which is what makes exact prediction feasible.
+- **Rip 2 exists only because of rip 1.**  T re-routes d=5 through
+  C's freed corridor; E's greedy d=2 route then squats C's freed
+  SEED cell 29; C's retry hits the occupied-pin short-circuit (RIP
+  17 w=1 with NO engine call — the synthesized census); E relocates
+  west at d=4 while C detours col 6 at d=8.  The displacement
+  cascade is the LNS dynamic the rip loop was built for, now pinned.
+- **Census-cap sighting (first live spill):** the d=9 census hit the
+  16-row cap with +7 spilled.  The conviction rows (97, 89, 101)
+  survived because kill rows surface in DFS-encounter order and the
+  owned kills come early; near the cap, weights can UNDERCOUNT — if
+  a future instance's conviction goes wrong, check spill first.
+- **Cost calibration, one prediction corrected:** forks stayed tiny
+  everywhere (2-22) but steps did not scale with forks — T's d=9
+  EMPTY cost 61,128 steps on 22 forks.  Per-fork evaluator cost
+  grows with depth × occupancy-list length (linear pcb_mem scans
+  over ~30 cells).  The congested run totals ~177k steps vs the
+  old single-conflict demo's ~74k: congestion is cheap in FORKS
+  (attribution keeps ladders shallow) but not free in steps.
+
+Final: **PCB-ROUTE 12x12 KEEP-9 NETS-7 RIPS-2 WIRE-29
+CERT-DISJOINT-OK** (WIRE = A2+C8+S1+B6+D3+T5+E4).
+
 **Task-authoring gotchas banked while building the swap + PCB
 instruments:** te_import_ctx admits only bare item uses as candidate
 heads (in-file type decls are invisible — models live in sibling
