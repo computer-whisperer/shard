@@ -3895,6 +3895,42 @@ census-directed ripping, (3) step budgets.  (4) best-first frontier
 stays HELD until a measured need — ordering + census left the demo's
 finds at ~15k steps.
 
+**The model scales — multi-pin nets on a parametric board (053cb28),
+GREEN (pipeline 208, 2026-07-31).**  USER STEER: "a single path
+trace is just too easy."  The board goes parametric (W×H threaded
+through step/manhattan/walk; instance 12×12) and nets become PIN
+LISTS: the first pin seeds the net's TREE, every later pin is a TAP
+routed to the goal set = any tree cell.  The walk checks set
+membership at the STEP — landing on a goal cell with moves remaining
+refuses (WalkCross, cell in the census; at minimal ladder depth no
+found route can cross, so the check is pure pruning), landing as the
+list ends is (WalkDone), the single ground want; pcb_dist_set
+(min-Manhattan to the set) keeps the floor admissible; loop-erasure
+completeness holds per tap.  TWO SOUNDNESS HOLES the direction
+change exposed, both closed BEFORE first fire: (a) taps route FROM
+the new pin, so a contested cell can be the START — which the step
+loop never inspects; pcb_walk_from refuses an occupied start as
+(WalkBlocked start), and a blocked SEED synthesizes the same census
+row driver-side; (b) +2 deepening is UNSOUND for mixed-parity goal
+sets (a tree spans both grid parities) — the ladder steps +1 unless
+every goal shares the start's parity.  The certificate got strictly
+stronger: replay rebuilds every tree tap by tap and RE-DERIVES all
+cells from the moves, never trusting search-side bookkeeping.
+MEASURED (pipeline 208, 72s job, line-for-line the designed story):
+the occupied-start conviction costs 82 steps and ZERO forks per
+ladder level (the walk refuses before the engine demands the hole —
+the cheapest possible attribution), RIP 13 w=1 convicts F; the
+3-pin T net routes trunk (d=5) then taps into the 6-cell tree at
+its floor (d=3, mixed parity handled); board-size calibration: F's
+slack-2 refutation 29,152 steps on 12×12 vs 37,984 on 8×8 —
+SLACK-BOUNDED, NOT BOARD-BOUNDED, the curve transfers; the slack-4
+find ~2× (28,917 vs 14,931 — more wandering room in DFS order
+before the row-3 route).  Final:
+**PCB-ROUTE 12x12 KEEP-1 NETS-5 RIPS-1 WIRE-22 CERT-DISJOINT-OK**.
+Deferred by design: the whole-tree-as-one-query rung (a tree
+grammar instead of a move list) builds on the goal-set observation
+when per-query hardness is wanted.
+
 **Task-authoring gotchas banked while building the swap + PCB
 instruments:** te_import_ctx admits only bare item uses as candidate
 heads (in-file type decls are invisible — models live in sibling

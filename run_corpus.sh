@@ -786,20 +786,21 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
-# PCB routing demo: the first heuristic-tier driver — rip-up/re-route LNS
-# over su_find_query_schema with the SELF-AVOIDING bounded-walk model
-# (Manhattan floor demanded before the move list = admissible pruning
-# through laziness; the walk threads its own cells into occupancy),
-# goal-directed move ordering, iterative deepening from the Manhattan
-# floor, give-up ramp 32000*2^level EVALUATOR STEPS (the step-cap
-# entry), deepen-only-on-EMPTY, and the REFUTATION CENSUS convicting
-# the rip victim by blocking weight.  Heuristic EXISTENCE only (replay
-# certificate); never a census pin.
-# Expected (measured CI pipeline 204, 2026-07-31, ~2 min): decoy A
-# routes the bottom edge, F routes row 1, R's ladder refutes d=1..7
-# with b@ rows naming F's cells, RIP 9->14 w=5 (census convicts F, NOT
-# the oldest A), R len 1 + D len 2, F re-routes row 3 at d=9, ending
-# PCB-ROUTE 8x8 KEEP-1 NETS-4 RIPS-1 WIRE-14 CERT-DISJOINT-OK.
+# PCB routing demo: the heuristic-tier driver, scaled to MULTI-PIN
+# nets on a parametric 12x12 board — each net's first pin seeds its
+# tree, later pins are TAPS routed to the goal set (any tree cell)
+# by su_find_query_schema_steps with the self-avoiding bounded-walk
+# model, nearest-goal move ordering, parity-aware iterative deepening
+# (+1 for mixed-parity trees), give-up ramp 32000*2^level EVALUATOR
+# STEPS, deepen-only-on-EMPTY, and the REFUTATION CENSUS convicting
+# the rip victim by blocking weight (an occupied pin short-circuits
+# to the same conviction).  Heuristic EXISTENCE only (tap-by-tap
+# replay certificate re-deriving all cells); never a census pin.
+# Expected (measured CI pipeline 208, 2026-07-31, ~1.2 min): decoy A,
+# F row 1, R's tap STARTS on F's cell (4 x 82-step forkless EMPTYs,
+# census b@16), RIP 13 w=1 convicts F, R len 1, T trunk 5 + tree tap
+# 3, D len 2, F re-routes row 3 at d=9 len 9, ending
+# PCB-ROUTE 12x12 KEEP-1 NETS-5 RIPS-1 WIRE-22 CERT-DISJOINT-OK.
 echo "=== search: PCB routing demo (rip-up/re-route) ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/pcb_route_probe.shard
