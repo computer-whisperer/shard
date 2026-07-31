@@ -791,10 +791,11 @@ fi
 # (Manhattan floor demanded before the move list = admissible pruning
 # through laziness; the walk threads its own cells into occupancy),
 # goal-directed move ordering, iterative deepening from the Manhattan
-# floor, budget ramp 1000*2^level, deepen-only-on-EMPTY, and the
-# REFUTATION CENSUS convicting the rip victim by blocking weight.
-# Heuristic EXISTENCE only (replay certificate); never a census pin.
-# Expected (measured CI pipeline 200, 2026-07-30, ~1.5 min): decoy A
+# floor, give-up ramp 32000*2^level EVALUATOR STEPS (the step-cap
+# entry), deepen-only-on-EMPTY, and the REFUTATION CENSUS convicting
+# the rip victim by blocking weight.  Heuristic EXISTENCE only (replay
+# certificate); never a census pin.
+# Expected (measured CI pipeline 204, 2026-07-31, ~2 min): decoy A
 # routes the bottom edge, F routes row 1, R's ladder refutes d=1..7
 # with b@ rows naming F's cells, RIP 9->14 w=5 (census convicts F, NOT
 # the oldest A), R len 1 + D len 2, F re-routes row 3 at d=9, ending

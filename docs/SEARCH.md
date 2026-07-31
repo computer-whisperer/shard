@@ -3868,6 +3868,33 @@ ended **PCB-ROUTE 8x8 KEEP-1 NETS-4 RIPS-1 WIRE-14 CERT-DISJOINT-OK**
 in an 82s job.  The 2-cycle failure mode measured in pipeline 182 is
 now structurally answered: the loop rips what actually blocks.
 
+**Step-denominated give-ups (98e673e) — the budget knob joins the
+measurement unit, GREEN (pipeline 204, 2026-07-31).**  The find
+loop's fuel counts DECISIONS, ~600× from evaluator steps at depth
+(pipeline 182: 16k decisions = 10.1M steps) — give-ups sized in it
+were guesswork.  `su_find_query_prepared` gains `step_cap` (0 =
+uncapped, existing entries unchanged; checked per region pop,
+overshoot bounded by su_efuel); `su_find_query_schema_steps` is the
+capped schema entry; the PCB ramp converts to 32000·2^level
+EVALUATOR STEPS, base sized so the tight rung (F's re-route d=7
+EMPTY, ~38k steps at level-1 cap 64k) completes — a give-up should
+only ever mean pathology, never a healthy refutation cut short.
+Validation: every steps= value in the 204 trace BIT-IDENTICAL to
+200, b= prints the step cap, same conviction (w=5) and final line.
+TWO PROOF-LAYER GOTCHAS RE-MEASURED: (1) factoring the fuel check
+behind a helper call makes the loop's measure obligations unsolvable
+— nonneg needs the bare `(lt fuel 1)` hypothesis visible, so the
+step-cap check sits as a SECOND guard under the untouched fuel
+guard; (2) prove's committed-sidecar staleness (known, still
+unresolved): a changed guard invalidates sidecar proofs but prove
+skips existing entries — delete-then-resolve.
+
+THE GROWTH SEQUENCE (user-approved 2026-07-30) IS COMPLETE through
+rung 3: (1) goal-directed ordering, (2) refutation census +
+census-directed ripping, (3) step budgets.  (4) best-first frontier
+stays HELD until a measured need — ordering + census left the demo's
+finds at ~15k steps.
+
 **Task-authoring gotchas banked while building the swap + PCB
 instruments:** te_import_ctx admits only bare item uses as candidate
 heads (in-file type decls are invisible — models live in sibling
