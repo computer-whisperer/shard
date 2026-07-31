@@ -1256,12 +1256,12 @@
 
 ;; THE REFUTATION CENSUS.  Kills are the find loop's dominant product,
 ;; and until this rung each one surrendered only a count.  The census
-;; buckets a SHALLOW summary of the value that failed to match `want`,
-;; under the peek-don't-force law: the lazy comparison kills at the
-;; FIRST differing observation, so the census may read only what
-;; evaluation already forced — the mismatching head plus the first
-;; ctor field that is already an Int in the arena (chasing
-;; indirections, never entering a thunk).  A task that wants
+;; buckets a SHALLOW summary of the value that failed to match `want`:
+;; the lazy comparison kills at the FIRST differing observation, so
+;; the census reads the mismatching head plus the first Int payload,
+;; recovered by a raw arena peek when the field is already forced or
+;; by the bounded DISCARDED-arena re-force below when it hides in the
+;; choice-keyed memo (see su_ck_force_int).  A task that wants
 ;; attribution encodes it into its refusal values (the PCB model's
 ;; WalkBlocked cell is computed strictly before the refusal, so the
 ;; peek finds it for free); payload-free refusal heads bucket into
@@ -1352,20 +1352,66 @@
     ((Some (SuInd j)) (su_ck_peek_int a j (- fuel 1)))
     (_ None))))
 
-(fn su_ck_first_int ((a SuA) (fields (List Int))) (Option Int)
+;; Bounded census force (measured necessary, CI pipeline 196: every
+;; blocked payload read b@? under the raw peek).  A refusal payload
+;; usually sits behind a REGION-DEPENDENT thunk: its forcing consulted
+;; hole choices, so the result lives in the choice-keyed memo and the
+;; node itself stays a thunk — invisible to sa_get.  Re-force with tiny
+;; fuel against the current arena and DISCARD the advanced arena: a
+;; memo hit replays in a few steps, the fuel cap cuts off an
+;; unmemoized field, and the discard keeps the census strictly
+;; behavior-neutral — steps, nodes, memo, and every pinned counter are
+;; untouched.
+(fn su_ck_force_int
+  ((m Module)
+   (candq QName)
+   (body Expr)
+   (g SuG)
+   (asg (List (Pair Int Int)))
+   (a SuA)
+   (r Int))
+  (Option Int)
+  (match (su_ck_peek_int a r 8)
+    ((Some x) (Some x))
+    (None
+      (match (su_whnf 256 m candq body g asg a r)
+        ((SuRVal v a2)
+         (match (sa_get a2 v)
+           ((Some (SuInt x)) (Some x))
+           (_ None)))
+        (_ None)))))
+
+(fn su_ck_first_int
+  ((m Module)
+   (candq QName)
+   (body Expr)
+   (g SuG)
+   (asg (List (Pair Int Int)))
+   (a SuA)
+   (fields (List Int)))
+  (Option Int)
   (measure (struct fields))
   (match fields
     (Nil None)
     ((Cons r rest)
-     (match (su_ck_peek_int a r 8)
+     (match (su_ck_force_int m candq body g asg a r)
        ((Some x) (Some x))
-       (None (su_ck_first_int a rest))))))
+       (None (su_ck_first_int m candq body g asg a rest))))))
 
-(fn su_ck_of_node ((a SuA) (n Node)) SuCensusKey
+(fn su_ck_of_node
+  ((m Module)
+   (candq QName)
+   (body Expr)
+   (g SuG)
+   (asg (List (Pair Int Int)))
+   (a SuA)
+   (n Node))
+  SuCensusKey
   (match n
     ((SuInt x) (SuCkInt x))
     ((SuQuote x) (SuCkSym x))
-    ((SuCtor q fields) (SuCkHead q (su_ck_first_int a fields)))
+    ((SuCtor q fields)
+     (SuCkHead q (su_ck_first_int m candq body g asg a fields)))
     (_ (SuCkFail))))
 
 (type SuT
@@ -1405,19 +1451,21 @@
           ((IntLit w)
            (match got
              ((SuInt x) (if (int_eq x w) (SuTPass a2) (SuTFail (SuCkInt x) a2)))
-             (_ (SuTFail (su_ck_of_node a2 got) a2))))
+             (_ (SuTFail (su_ck_of_node m candq body g asg a2 got) a2))))
           ((SymLit w)
            (match got
              ((SuQuote x)
               (if (sym_eq x w) (SuTPass a2) (SuTFail (SuCkSym x) a2)))
-             (_ (SuTFail (su_ck_of_node a2 got) a2))))
+             (_ (SuTFail (su_ck_of_node m candq body g asg a2 got) a2))))
           ((Ctor wq wes)
            (match got
              ((SuCtor gq ges)
               (if (qname_eq gq wq)
                 (su_expect_exprs (- fuel 1) m candq body g asg a2 ges wes)
-                (SuTFail (SuCkHead gq (su_ck_first_int a2 ges)) a2)))
-             (_ (SuTFail (su_ck_of_node a2 got) a2))))
+                (SuTFail
+                  (SuCkHead gq (su_ck_first_int m candq body g asg a2 ges))
+                  a2)))
+             (_ (SuTFail (su_ck_of_node m candq body g asg a2 got) a2))))
           (_ (SuTErr "superpose: generic target is not a ground value")))))))))
 
 (fn su_expect_exprs
