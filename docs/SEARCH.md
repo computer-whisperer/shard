@@ -3803,6 +3803,26 @@ pruning is the heuristic tier's first-class lever — a one-line model
 change moved the cost curve more than any budget policy could, and
 the engine needed nothing.
 
+**Goal-directed move ordering (eaa0554) — the branching heuristic,
+GREEN (pipeline 193, 2026-07-30).**  Verified engine fact: the find
+loop is a LIFO stack and `su_fork` pushes alternative 0 on top, so
+schema alternative order IS the DFS exploration order — a branching
+heuristic is a DRIVER-side grammar choice, zero engine change.
+`pcbp_move_order` builds each net's move alphabet with the
+toward-goal moves first (larger-|delta| axis leading) and the move
+opposite the primary axis last; static per net, since the grammar
+tracks remaining length, never the walk's cell.  MEASURED vs
+pipeline 191: every EMPTY line BIT-IDENTICAL (a refutation exhausts
+the tree in any order — the prediction and its self-check), every
+FOUND cheaper: F's slack-4 find 4.0× again (47,983 → 12,054 steps,
+forks 62 → 18), R 288 → 192, D 712 → 476, whole demo 98k → 61k
+steps, engine job 135s → 60s.  Cumulative from the wander-tree
+baseline (184): the slack-4 find is 27× cheaper (328,796 → 12,054),
+the demo 9× (550k → 61k), the job 5.4× (325s → 60s).  The two levers
+compose cleanly because they act on different quantities: pruning
+shrinks the tree (EMPTY and FOUND), ordering only shortens the walk
+to the first solution (FOUND alone).
+
 **Task-authoring gotchas banked while building the swap + PCB
 instruments:** te_import_ctx admits only bare item uses as candidate
 heads (in-file type decls are invisible — models live in sibling
