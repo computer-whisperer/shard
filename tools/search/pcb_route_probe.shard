@@ -3,7 +3,11 @@
 ;;; su_find_query_schema is the inner maze solver (one net against an
 ;;; occupancy list), iterative deepening supplies shortest-first, and the
 ;;; model's bounded walk (Manhattan floor checked before the move list is
-;;; demanded) gives admissible pruning through laziness alone.  The outer
+;;; demanded) gives admissible pruning through laziness alone.  Schema
+;;; alternative order is the DFS branching heuristic (su_fork explores
+;;; alt 0 first): each net's grammar leads with its toward-goal moves
+;;; (pcbp_move_order), which accelerates FOUND and cannot touch EMPTY.
+;;; The outer
 ;;; loop is the ratified LNS shape: greedy in queue order; on failure rip
 ;;; the OLDEST routed net, requeue it at the back, retry the failed net
 ;;; first; a rip cap bounds the loop.  Heuristic existence only: the
@@ -116,14 +120,32 @@
 (fn pcbp_move_alt ((name Symbol)) SkSchemaAlt
   (SkSchemaAlt (Ctor (pcbp_model_q name) Nil) Nil))
 
-(fn pcbp_move_ent ((id Int)) SkSchemaEnt
-  (SkSchemaEnt
-    id
-    (list
-      (pcbp_move_alt (quote MvN))
-      (pcbp_move_alt (quote MvE))
-      (pcbp_move_alt (quote MvS))
-      (pcbp_move_alt (quote MvW)))))
+;; Goal-directed alternative order: the find loop is a LIFO stack and
+;; su_fork pushes alternative 0 on top, so schema alt order IS the DFS
+;; exploration order.  Toward-goal moves lead (the larger-|delta| axis
+;; first), the move opposite the primary axis comes last.  Static per
+;; net — the grammar tracks only remaining length, never the walk's
+;; cell, so this is start->goal greedy, not per-step greedy.  Ordering
+;; cannot change EMPTY costs (a refutation exhausts the tree in any
+;; order); it only accelerates FOUND.
+(fn pcbp_move_order ((start Int) (goal Int)) (List Symbol)
+  (let ((dx (- (pcb_x goal) (pcb_x start))))
+    (let ((dy (- (pcb_y goal) (pcb_y start))))
+      (let ((tx (if (lt dx 0) (quote MvW) (quote MvE))))
+        (let ((ax (if (lt dx 0) (quote MvE) (quote MvW))))
+          (let ((ty (if (lt dy 0) (quote MvN) (quote MvS))))
+            (let ((ay (if (lt dy 0) (quote MvS) (quote MvN))))
+              (if (lt (pcb_abs dx) (pcb_abs dy)) (list ty tx ax ay)
+              (list tx ty ay ax)))))))))
+
+(fn pcbp_move_alts ((names (List Symbol))) (List SkSchemaAlt)
+  (measure (struct names))
+  (match names
+    (Nil Nil)
+    ((Cons h t) (Cons (pcbp_move_alt h) (pcbp_move_alts t)))))
+
+(fn pcbp_move_ent ((id Int) (order (List Symbol))) SkSchemaEnt
+  (SkSchemaEnt id (pcbp_move_alts order)))
 
 (fn pcbp_nil_alt () SkSchemaAlt (SkSchemaAlt (Ctor (qn (quote Nil)) Nil) Nil))
 
@@ -134,16 +156,16 @@
 
 ;; Entries ascending by id: list states 0..d (id = remaining length), the
 ;; move alphabet last at id d+1.
-(fn pcbp_ents_up ((i Int) (d Int)) (List SkSchemaEnt)
+(fn pcbp_ents_up ((i Int) (d Int) (order (List Symbol))) (List SkSchemaEnt)
   (measure (- (+ d 1) i))
-  (if (lt d i) (Cons (pcbp_move_ent (+ d 1)) Nil)
+  (if (lt d i) (Cons (pcbp_move_ent (+ d 1) order) Nil)
   (Cons
     (if (lt i 1) (SkSchemaEnt 0 (Cons (pcbp_nil_alt) Nil))
     (SkSchemaEnt i (list (pcbp_nil_alt) (pcbp_cons_alt (+ d 1) (- i 1)))))
-    (pcbp_ents_up (+ i 1) d))))
+    (pcbp_ents_up (+ i 1) d order))))
 
-(fn pcbp_grammar ((d Int)) SkSchemaGrammar
-  (SkSchemaGrammar d (pcbp_ents_up 0 d)))
+(fn pcbp_grammar ((d Int) (order (List Symbol))) SkSchemaGrammar
+  (SkSchemaGrammar d (pcbp_ents_up 0 d order)))
 
 ;; ---- query construction ---------------------------------------------------
 
@@ -179,7 +201,7 @@
     (ms_empty_plan)
     (pcbp_query occ goal d start)
     (pcbp_want goal)
-    (pcbp_grammar d)))
+    (pcbp_grammar d (pcbp_move_order start goal))))
 
 ;; ---- representative decoding ----------------------------------------------
 
