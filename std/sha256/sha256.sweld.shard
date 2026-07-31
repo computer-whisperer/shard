@@ -3575,3 +3575,142 @@
          ((rewrite (premise hxsl) lr lhs true ()))
          (by arith (rows (goal 1))))))
     refl))
+
+
+;; ==== M2: THE FINALIZER MACHINE GRAIN (STREAM.md 7.9) ==============================
+;; sha_fin at the x86 grain. Modules grow 6=gb_shfpad_x 7=gb_shhex_x
+;; 8=the finalizer glue; the glue reads the total (fn 3), pads in
+;; place via fn 6 (length bytes from R9 = the U64 total), folds the
+;; last 1-2 blocks via fn 1, and hexes H over the dead [0,64) window
+;; via fn 7 -- totr runs BEFORE hex because hex overwrites the live
+;; total cell. No spill: RSI/RDI carry p/src through the fpad call
+;; (its walk pins them), and after the fold everything is ground.
+
+;; the flat body, byte-copied from ipf_body (the (inline ...) carrier)
+(fn ssp_ibody () (List IStmt)
+  (list
+    (ISet 2 (IBin U32 IAdd (ILoc 0) (ILoc 1)))
+    (ISet 3 (IConst 72))
+    (IWhile
+      (ILoc 3)
+      (list
+        (IStore (ILoc 2) (IConst 0))
+        (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+        (ISet 3 (IBin U32 ISub (ILoc 3) (IConst 1)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 0) (ILoc 1)))
+    (IStore (ILoc 2) (IConst 128))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (ISet 3 (IBin U32 ISub (IConst 55) (ILoc 1)))
+    (ISet 3 (IBin U32 IAnd (ILoc 3) (IConst 63)))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (ILoc 3)))
+    (ISet 4 (IBin U64 IMul (IConst 8) (ILoc 5)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 4) (IConst 56)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 4) (IConst 48)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 4) (IConst 40)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 4) (IConst 32)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 4) (IConst 24)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 4) (IConst 16)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore
+      (ILoc 2)
+      (ITrunc U32 U8 (ITrunc U64 U32 (IBin U64 IShr (ILoc 4) (IConst 8)))))
+    (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+    (IStore (ILoc 2) (ITrunc U32 U8 (ITrunc U64 U32 (ILoc 4))))))
+
+;; the x86 out's chained spelling: the flat tail folds behind the
+;; rest fn; the bridge normalizes both spellings under a stopped
+;; istmts (shp_xchain's shape at the fpad body)
+(fn ssp_xchain () (List IStmt)
+  (Cons
+    (ISet 2 (IBin U32 IAdd (ILoc 0) (ILoc 1)))
+    (Cons
+      (ISet 3 (IConst 72))
+      (Cons
+        (IWhile
+          (ILoc 3)
+          (list
+            (IStore (ILoc 2) (IConst 0))
+            (ISet 2 (IBin U32 IAdd (ILoc 2) (IConst 1)))
+            (ISet 3 (IBin U32 ISub (ILoc 3) (IConst 1)))))
+        (gb_shfpad_r1_i)))))
+
+(claim ssp_xbridge
+  (goal ((ls (List Int)) (m Mem) (d Nat)) ()
+    (=
+      (istmts (S^ 120 d) 65536 (inline ssp_xchain) ls m)
+      (istmts (S^ 120 d) 65536 (inline ssp_ibody) ls m)))
+  (steps ((compute both (stop istmts))) refl))
+
+;; the sweld-grain fpad walk: gb_shfpad_x from the XCall-6 site regs
+;; lands ipf_mem; RSI/RDI carry n/src through (the glue's no-spill
+;; design rides this pin)
+(claim ssp_xfpad
+  (goal
+    ((src Int)
+     (n Int)
+     (tot Int)
+     (x2 Int)
+     (x3 Int)
+     (x4 Int)
+     (m Mem)
+     (c Nat)
+     (d Nat)
+     (restfs (List XFunc)))
+    ((= (le 0 src) True) (= (le 0 n) True) (= (le (+ (+ src n) 72) 65536) True))
+    (=
+      (xeval_seq
+        (S^ 89 c)
+        (MkXModule restfs 0 65536)
+        (gb_shfpad_x)
+        (MkRegs 0 x3 x2 0 0 n src x4 tot 0 0 0 0 0 0)
+        m)
+      (Some
+        (XNorm
+          (MkRegs
+            0
+            (ipd_zf n)
+            (+ (+ (+ (+ (+ (+ (+ (ipd_ql src n) 1) 1) 1) 1) 1) 1) 1)
+            0
+            0
+            n
+            src
+            (ipd_l tot)
+            tot
+            0
+            0
+            0
+            0
+            0
+            0)
+          (ipf_mem m src n tot)))))
+  (chain
+    (steps ((unfold gb_shfpad_x lhs)))
+    (rewrite-with (lemma imp_x_shfpad) lr lhs ((inst c2 (S^ 33 d))) ())
+    (steps ((rewrite (lemma ssp_xbridge) lr lhs true ())))
+    (rewrite-with
+      (lemma isha_fpad_walk)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)))
+    (steps ((compute lhs (stop ipf_mem ipd_zf ipd_ql ipd_l))))
+    refl))
