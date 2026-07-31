@@ -3777,6 +3777,32 @@ The demo is pinned in CORPUS_LONG (heuristic existence only, per the
 claim ladder).  The routing tier has its problem statement, its first
 working LNS driver, and its first cost model.
 
+**Self-avoiding walks (1d124ab) — the model-side pruning rung, GREEN
+(pipeline 191, 2026-07-30).**  The wander-tree curve above was
+dominated by walks revisiting their own cells, so the model's
+recursion now threads the departed cell into the occupancy: every
+accepted walk is a simple path, never-reverse is subsumed (the
+previous cell is the newest occ entry), branching ≤ 3.  Completeness
+at every ladder rung is preserved by loop erasure on a bipartite grid:
+erasing a loop from a legal walk yields a legal simple path with the
+same endpoints, the same PARITY (grid cycles are even), and a subset
+of its cells — so a depth-d EMPTY over simple paths refutes ALL walks
+of length ≤ d, and the shortest walk is already simple.  Pinned by
+`pcb_walk_revisit_pin` (E-then-W back onto the start: was `(Some 0)`,
+now `None`).  MEASURED, line-for-line against pipeline 184 (same
+instance, same budgets): per-slack-2 refutation growth fell from
+~×5–9 to ~×2.2–2.4 (R's ladder 449/1,724/3,787/8,600 steps at slack
+0/2/4/6, was 449/3,932/24,383/130,825 — the gain compounds with
+slack: 2.3× at slack 2, 6.4× at slack 4, 15.2× at slack 6); the
+slack-4 FIND fell 6.9× (328,796 → 47,983 steps, 356 → 62 forks); the
+whole demo 550k → 98k evaluator steps, engine job 325s → 135s.
+Slack-0 calls pay a small tax for the longer occupancy list (F d=5
+FOUND: 1,933 → 2,341 steps) — pcb_mem is linear and the walk's own
+cells now join the scan.  THE LAW THIS LANDS: observation-side
+pruning is the heuristic tier's first-class lever — a one-line model
+change moved the cost curve more than any budget policy could, and
+the engine needed nothing.
+
 **Task-authoring gotchas banked while building the swap + PCB
 instruments:** te_import_ctx admits only bare item uses as candidate
 heads (in-file type decls are invisible — models live in sibling

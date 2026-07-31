@@ -787,13 +787,14 @@ else
 fi
 
 # PCB routing demo: the first heuristic-tier driver — rip-up/re-route LNS
-# over su_find_query_schema with the bounded-walk model (Manhattan floor
-# demanded before the move list = admissible pruning through laziness),
+# over su_find_query_schema with the SELF-AVOIDING bounded-walk model
+# (Manhattan floor demanded before the move list = admissible pruning
+# through laziness; the walk threads its own cells into occupancy),
 # iterative deepening from the Manhattan floor, budget ramp 1000*2^level,
 # deepen-only-on-EMPTY.  Heuristic EXISTENCE only (replay certificate);
-# never a census pin.  Expected (measured CI pipeline 184, 2026-07-30,
-# ~5.5 min): F routes row 1, R's ladder refutes d=1..7, one rip, R len 1
-# + D len 2, F re-routes row 3 at d=9 (FOUND at 328,796 steps), ending
+# never a census pin.  Expected (measured CI pipeline 191, 2026-07-30,
+# ~2.3 min): F routes row 1, R's ladder refutes d=1..7, one rip, R len 1
+# + D len 2, F re-routes row 3 at d=9 (FOUND at 47,983 steps), ending
 # PCB-ROUTE 8x8 KEEP-1 NETS-3 RIPS-1 WIRE-12 CERT-DISJOINT-OK.
 echo "=== search: PCB routing demo (rip-up/re-route) ==="
 if [ -x bin/shard_eval ]; then
