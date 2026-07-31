@@ -54,6 +54,10 @@
 (use (:: models imp imp *))
 (import "../../models/imp/to_x86.shard")
 (use (:: models imp to_x86 *))
+(import "sha256.shard")
+(use (:: std sha256 sha256 *))
+(import "sha256.stream.shard")
+(use (:: std sha256 sha256.stream *))
 (import "sha256.imp.shard")
 (use (:: std sha256 sha256.imp *))
 (import "impgen_x86_out.shard")
@@ -1688,3 +1692,1886 @@
          both
          (stop mem_set mem_get ibt_v ibtw_mem icp_mem shx_mem lg_advk int_of_nat)))
       refl)))
+
+
+;; ==== THE READBACK (STREAM.md 7.9 M1, the artifact theorem) ================
+;;
+;; Premises = the window realizes st = (MkShaSt h pend n) in flat
+;; equations (K/H wlist, total cell ibt_v, pend right-aligned at
+;; [128-p,128), chunk at [128,128+r)) + the absorber's machine pins
+;; (kb/krem ghost Nats). Conclusions = the SAME equations at
+;; sha_step's components over sst_xabsorb's composed twin:
+;;   ssr_rb_k     K survives          ssr_rb_tot   total = n + |chunk|
+;;   ssr_rb_h     H = the spec fold   ssr_rb_pend  tail re-homed
+;;   ssr_rb_p     krem = the new invariant residue
+;; ssr_step_open pins sha_step to the three components; ssr_buf_split
+;; is the fold-input decomposition (the machine mirror of the list
+;; world's shc_blocks_prefix split); ssr_read_ext is the ONE spot two
+;; Nat spellings of a byte count meet (int_of_nat-value extensional).
+
+;; ---- 64k as a Nat: the fold window's byte count ---------------------------
+
+(fn ssr_bn ((k Nat)) Nat
+  (measure (struct k))
+  (match k
+    (Z Z)
+    ((S k2) (wn_add 64 (ssr_bn k2)))))
+
+(claim ssr_bn_s
+  (goal ((k Nat)) () (= (ssr_bn (S k)) (wn_add 64 (ssr_bn k))))
+  (steps ((unfold ssr_bn lhs) (reduce lhs)) refl))
+
+(claim ssr_bn_val
+  (goal ((k Nat)) () (= (int_of_nat (ssr_bn k)) (* 64 (int_of_nat k))))
+  (induct k
+    ((case Z
+       (chain
+         (have hbz (= (ssr_bn Z) Z)
+           (steps ((unfold ssr_bn lhs) (reduce lhs)) refl))
+         (steps
+           ((rewrite (premise hbz) lr lhs true ())
+            (rewrite (lemma int_of_nat_zero) lr both true ())
+            (compute rhs))
+           refl)))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((rewrite (lemma ssr_bn_s) lr lhs true ())
+            (rewrite (lemma ish_iw_add) lr lhs true ())
+            (rewrite (lemma ish_i64p) lr lhs true ())
+            (rewrite (lemma int_of_nat_succ) lr rhs true ())))
+         (rewrite-with (hyp 0) lr lhs () ())
+         (steps () (by arith (list (list 1) (list 1)))))))))
+
+;; ---- take/drop at the full length -----------------------------------------
+
+(claim ssr_stake_len
+  (goal ((xs (List Int))) () (= (stake (slen xs) xs) xs))
+  (induct xs
+    ((case Nil (steps ((compute both)) refl))
+     (case Cons
+       (h t)
+       (chain
+         (have hnn (= (le 0 (slen t)) True)
+           (steps ((rewrite (lemma shc_slen_nn) lr lhs true ())) refl))
+         (have hs (= (slen (Cons h t)) (+ 1 (slen t)))
+           (steps ((unfold slen lhs) (reduce lhs)) refl))
+         (have hg (= (le (slen (Cons h t)) 0) False)
+           (steps
+             ((rewrite (premise hs) lr lhs true ()))
+             (by arith (rows (goal 1) (hnn 1)))))
+         (have hd (= (- (slen (Cons h t)) 1) (slen t))
+           (steps
+             ((rewrite (premise hs) lr lhs true ()))
+             (by arith (list (list 1) (list 1)))))
+         (steps
+           ((unfold stake lhs)
+            (reduce lhs)
+            (rewrite (premise hg) lr lhs true ())
+            (reduce lhs)
+            (rewrite (premise hd) lr lhs true ())))
+         (rewrite-with (hyp 0) lr lhs () ())
+         refl)))))
+
+(claim ssr_sdrop_len
+  (goal ((xs (List Int))) () (= (sdrop (slen xs) xs) Nil))
+  (induct xs
+    ((case Nil (steps ((compute both)) refl))
+     (case Cons
+       (h t)
+       (chain
+         (have hnn (= (le 0 (slen t)) True)
+           (steps ((rewrite (lemma shc_slen_nn) lr lhs true ())) refl))
+         (have hs (= (slen (Cons h t)) (+ 1 (slen t)))
+           (steps ((unfold slen lhs) (reduce lhs)) refl))
+         (have hg (= (le (slen (Cons h t)) 0) False)
+           (steps
+             ((rewrite (premise hs) lr lhs true ()))
+             (by arith (rows (goal 1) (hnn 1)))))
+         (have hd (= (- (slen (Cons h t)) 1) (slen t))
+           (steps
+             ((rewrite (premise hs) lr lhs true ()))
+             (by arith (list (list 1) (list 1)))))
+         (steps
+           ((unfold sdrop lhs)
+            (reduce lhs)
+            (rewrite (premise hg) lr lhs true ())
+            (reduce lhs)
+            (rewrite (premise hd) lr lhs true ())))
+         (rewrite-with (hyp 0) lr lhs () ())
+         refl)))))
+
+;; ---- mem_read count extensionality: equal values, equal windows -----------
+;; the Nat-surgery choke point — the ONE place two different Nat
+;; spellings of the same byte count meet.
+
+(claim ssr_read_ext
+  (goal ((wa Nat) (wb Nat) (m Mem) (a Int))
+    ((= (int_of_nat wa) (int_of_nat wb)))
+    (= (mem_read wa m a) (mem_read wb m a)))
+  (induct wa
+    ((case Z
+       (case-on wb Nat
+         ((case Z (steps ((rewrite (hyp 0) lr rhs true ())) refl))
+          (case S
+            (b2)
+            (chain
+              (have hv (= (int_of_nat wb) 0)
+                (steps
+                  ((rewrite (premise 0) rl lhs true ())
+                   (rewrite (lemma int_of_nat_zero) lr lhs true ()))
+                  refl))
+              (have hsv (= (int_of_nat wb) (+ 1 (int_of_nat b2)))
+                (steps
+                  ((rewrite (hyp 0) lr lhs true ())
+                   (rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                  refl))
+              (have hnn (= (le 0 (int_of_nat b2)) True)
+                (steps
+                  ((rewrite (lemma int_of_nat_nonneg) lr lhs true ()))
+                  refl))
+              (have hff (= (le 1 0) True)
+                (steps () (by arith (rows (goal 1) (hv -1) (hsv 1) (hnn 1)))))
+              (have hx (= False True)
+                (steps
+                  ((rewrite (premise hff) rl rhs true ()) (compute rhs))
+                  refl))
+              (absurd (premise hx)))))))
+     (case S
+       (wa2)
+       (case-on wb Nat
+         ((case Z
+            (chain
+              (have hv (= (int_of_nat (S wa2)) 0)
+                (steps
+                  ((rewrite (premise 0) lr lhs true ())
+                   (rewrite (hyp 0) lr lhs true ())
+                   (rewrite (lemma int_of_nat_zero) lr lhs true ()))
+                  refl))
+              (have hsv (= (int_of_nat (S wa2)) (+ 1 (int_of_nat wa2)))
+                (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              (have hnn (= (le 0 (int_of_nat wa2)) True)
+                (steps
+                  ((rewrite (lemma int_of_nat_nonneg) lr lhs true ()))
+                  refl))
+              (have hff (= (le 1 0) True)
+                (steps () (by arith (rows (goal 1) (hv -1) (hsv 1) (hnn 1)))))
+              (have hx (= False True)
+                (steps
+                  ((rewrite (premise hff) rl rhs true ()) (compute rhs))
+                  refl))
+              (absurd (premise hx))))
+          (case S
+            (b2)
+            (chain
+              (have hL (= (int_of_nat (S wa2)) (+ 1 (int_of_nat wa2)))
+                (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              (have hR (= (int_of_nat wb) (+ 1 (int_of_nat b2)))
+                (steps
+                  ((rewrite (hyp 0) lr lhs true ())
+                   (rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                  refl))
+              (have heq (= (int_of_nat wa2) (int_of_nat b2))
+                (steps () (by arith (list (list 1 -1 1 -1) (list 1 1 -1 1)))))
+              (steps
+                ((rewrite (hyp 0) lr rhs true ())
+                 (rewrite (lemma mem_read_s) lr both true ())))
+              (rewrite-with
+                (hyp 1)
+                lr
+                lhs
+                ((inst wb b2))
+                ((steps ((rewrite (premise heq) lr lhs true ())) refl)))
+              refl))))))))
+
+;; ---- THE FOLD-INPUT BRIDGE: the machine fold IS sha_blocks over the
+;; window's bytes — the mirror of shc_blocks_prefix's list world
+
+(claim ssr_fold_read
+  (goal ((st H8) (m Mem) (src Int) (k Nat)) ()
+    (=
+      (shb_fold st m src k)
+      (sha_blocks st (mem_read (ssr_bn k) m src) (int_of_nat k))))
+  (induct k
+    ((case Z
+       (chain
+         (have hbz (= (ssr_bn Z) Z)
+           (steps ((unfold ssr_bn lhs) (reduce lhs)) refl))
+         (steps
+           ((rewrite (premise hbz) lr rhs true ())
+            (rewrite (lemma mem_read_z) lr rhs true ())
+            (rewrite (lemma int_of_nat_zero) lr rhs true ())))
+         (have hfz (= (shb_fold st m src Z) st)
+           (steps ((unfold shb_fold lhs) (reduce lhs)) refl))
+         (have hbn (= (sha_blocks st Nil 0) st) (steps ((compute lhs)) refl))
+         (steps
+           ((rewrite (premise hfz) lr lhs true ())
+            (rewrite (premise hbn) lr rhs true ()))
+           refl)))
+     (case S
+       (k2)
+       (chain
+         (have hnn (= (le 0 (int_of_nat k2)) True)
+           (steps ((rewrite (lemma int_of_nat_nonneg) lr lhs true ())) refl))
+         (have hi (= (int_of_nat (S k2)) (+ 1 (int_of_nat k2)))
+           (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+         (have hg (= (le (int_of_nat (S k2)) 0) False)
+           (steps
+             ((rewrite (premise hi) lr lhs true ()))
+             (by arith (rows (goal 1) (hnn 1)))))
+         (have hlen (= (slen (mem_read 64 m src)) 64)
+           (steps
+             ((rewrite (lemma ish_read_len) lr lhs true ())
+              (rewrite (lemma ish_i64p) lr lhs true ()))
+             refl))
+         (have hle64 (= (le 64 (slen (mem_read 64 m src))) True)
+           (steps ((rewrite (premise hlen) lr lhs true ()) (compute lhs)) refl))
+         (steps
+           ((rewrite (lemma shb_fold_s) lr lhs true ())
+            (rewrite (lemma ssr_bn_s) lr rhs true ())
+            (rewrite (lemma ish_read_app) lr rhs true ())
+            (rewrite (lemma ish_i64p) lr rhs true ())))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ((inst st (sha_block st (mem_read 64 m src))) (inst src (+ src 64)))
+           ())
+         (have hstep
+           (=
+             (sha_blocks
+               st
+               (sapp (mem_read 64 m src) (mem_read (ssr_bn k2) m (+ src 64)))
+               (int_of_nat (S k2)))
+             (sha_blocks
+               (sha_block
+                 st
+                 (stake
+                   64
+                   (sapp
+                     (mem_read 64 m src)
+                     (mem_read (ssr_bn k2) m (+ src 64)))))
+               (sdrop
+                 64
+                 (sapp (mem_read 64 m src) (mem_read (ssr_bn k2) m (+ src 64))))
+               (- (int_of_nat (S k2)) 1)))
+           (steps
+             ((unfold sha_blocks lhs)
+              (reduce lhs)
+              (rewrite (premise hg) lr lhs true ())
+              (reduce lhs))
+             refl))
+         (steps ((rewrite (premise hstep) lr rhs true ())))
+         (rewrite-with
+           (lemma shc_stake_pre)
+           lr
+           rhs
+           ()
+           ((steps ((compute lhs)) refl)
+            (steps ((rewrite (premise hle64) lr lhs true ())) refl)))
+         (rewrite-with
+           (lemma shc_sdrop_pre)
+           lr
+           rhs
+           ()
+           ((steps ((compute lhs)) refl)
+            (steps ((rewrite (premise hle64) lr lhs true ())) refl)))
+         (have hst
+           (=
+             (stake 64 (mem_read 64 m src))
+             (stake (slen (mem_read 64 m src)) (mem_read 64 m src)))
+           (steps ((rewrite (premise hlen) lr rhs true ())) refl))
+         (steps
+           ((rewrite (premise hst) lr rhs true ())
+            (rewrite (lemma ssr_stake_len) lr rhs true ())))
+         (have hsd
+           (=
+             (sdrop 64 (mem_read 64 m src))
+             (sdrop (slen (mem_read 64 m src)) (mem_read 64 m src)))
+           (steps ((rewrite (premise hlen) lr rhs true ())) refl))
+         (steps
+           ((rewrite (premise hsd) lr rhs true ())
+            (rewrite (lemma ssr_sdrop_len) lr rhs true ())
+            (compute rhs (stop sha_blocks sha_block mem_read int_of_nat ssr_bn))))
+         (have hf1 (= (- (int_of_nat (S k2)) 1) (int_of_nat k2))
+           (steps
+             ((rewrite (premise hi) lr lhs true ()))
+             (by arith (list (list 1) (list 1)))))
+         (steps ((rewrite (premise hf1) lr rhs true ())))
+         refl)))))
+
+;; ---- icp_mem framing + readback: the tail-copy twin's laws ----------------
+
+;; a get strictly below the copy's destination window sees through
+(claim ssr_get_icp_below
+  (goal ((m Mem) (q Int) (p Int) (a Int) (k Nat)) ((= (lt a q) True))
+    (= (mem_get (icp_mem m q p k) a) (mem_get m a)))
+  (induct k
+    ((case Z (steps ((rewrite (lemma icp_mem_z) lr lhs true ())) refl))
+     (case S
+       (k2)
+       (chain
+         (steps ((rewrite (lemma icp_mem_s) lr lhs true ())))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ((inst m (mem_set m q (mem_get m p)))
+            (inst q (+ q 1))
+            (inst p (+ p 1)))
+           ((steps () (by arith (rows (goal 1) (0 1))))))
+         (rewrite-with
+           (lemma get_set_other)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (0 1))))))
+         refl)))))
+
+;; THE COPY READBACK: the destination window reads as the source did
+;; (dest at or below source: the ascending walk never re-reads a
+;; written cell — the absorber's dst = csrc - r with r >= 1)
+(claim ssr_icp_read
+  (goal ((m Mem) (q Int) (p Int) (k Nat)) ((= (le q p) True))
+    (= (mem_read k (icp_mem m q p k) q) (mem_read k m p)))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma icp_mem_z) lr lhs true ())
+          (rewrite (lemma mem_read_z) lr both true ()))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((rewrite (lemma icp_mem_s) lr lhs true ())
+            (rewrite (lemma mem_read_s) lr both true ())))
+         (rewrite-with
+           (lemma ssr_get_icp_below)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1))))))
+         (steps ((rewrite (lemma get_set_get) lr lhs true ())))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ((inst m (mem_set m q (mem_get m p)))
+            (inst q (+ q 1))
+            (inst p (+ p 1)))
+           ((steps () (by arith (rows (goal 1) (0 1))))))
+         (rewrite-with
+           (lemma mem_read_set_below)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (0 1))))))
+         refl)))))
+
+;; ---- word/window framing below a store ------------------------------------
+
+;; a store strictly below a word is invisible to wget
+(claim ssr_wget_set_below
+  (goal ((m Mem) (p Int) (b Int) (v Int)) ((= (lt b p) True))
+    (= (wget (mem_set m b v) p) (wget m p)))
+  (chain
+    (steps ((compute both)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal -1) (0 1))))))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal -1) (0 1))))))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal -1) (0 1))))))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal -1) (0 1))))))
+    refl))
+
+;; a store strictly below a word window is invisible to wlist
+(claim ssr_wlist_set_below
+  (goal ((m Mem) (p Int) (b Int) (v Int) (k Nat)) ((= (lt b p) True))
+    (= (wlist (mem_set m b v) p k) (wlist m p k)))
+  (induct k
+    ((case Z (steps ((compute both)) refl))
+     (case S
+       (k2)
+       (chain
+         (steps ((rewrite (lemma wlist_s) lr both true ())))
+         (rewrite-with
+           (lemma ssr_wget_set_below)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (0 1))))))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (0 1))))))
+         refl)))))
+
+;; word windows wholly above the copy's destination see through
+(claim ssr_wlist_icp_above
+  (goal ((m Mem) (q Int) (p Int) (w Int) (j Nat) (k Nat))
+    ((= (le (+ q (int_of_nat k)) w) True))
+    (= (wlist (icp_mem m q p k) w j) (wlist m w j)))
+  (induct k
+    ((case Z (steps ((rewrite (lemma icp_mem_z) lr lhs true ())) refl))
+     (case S
+       (k2)
+       (chain
+         (have hi (= (int_of_nat (S k2)) (+ 1 (int_of_nat k2)))
+           (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+         (have hnn (= (le 0 (int_of_nat k2)) True)
+           (steps ((rewrite (lemma int_of_nat_nonneg) lr lhs true ())) refl))
+         (steps ((rewrite (lemma icp_mem_s) lr lhs true ())))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ((inst m (mem_set m q (mem_get m p)))
+            (inst q (+ q 1))
+            (inst p (+ p 1)))
+           ((steps () (by arith (rows (goal 1) (0 1) (hi 1))))))
+         (rewrite-with
+           (lemma ssr_wlist_set_below)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (0 1) (hi 1) (hnn 1))))))
+         refl)))))
+
+
+;; ---- see-through for the total-cell twin (8 ibtw sets at [0,8) + the
+;; three spill sets at 8/9/10): windows starting at or above 11 --------------
+
+(claim ssr_read_ibtw0_above
+  (goal ((m Mem) (wv Int) (w Nat) (a Int)) ((= (le 8 a) True))
+    (= (mem_read w (ibtw_mem m 0 wv) a) (mem_read w m a)))
+  (chain
+    (steps ((unfold ibtw_mem lhs)))
+    (rewrite-with
+      (lemma mem_read_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma mem_read_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma mem_read_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma mem_read_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma mem_read_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma mem_read_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma mem_read_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma mem_read_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    refl))
+
+(claim ssr_read_tw_above
+  (goal ((m Mem) (rv Int) (sv Int) (tv Int) (wv Int) (w Nat) (a Int))
+    ((= (le 11 a) True))
+    (=
+      (mem_read
+        w
+        (ibtw_mem (mem_set (mem_set (mem_set m 9 rv) 10 sv) 8 tv) 0 wv)
+        a)
+      (mem_read w m a)))
+  (chain
+    (rewrite-with
+      (lemma ssr_read_ibtw0_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma mem_read_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma mem_read_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma mem_read_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    refl))
+
+(claim ssr_wlist_ibtw0_above
+  (goal ((m Mem) (wv Int) (j Nat) (a Int)) ((= (le 8 a) True))
+    (= (wlist (ibtw_mem m 0 wv) a j) (wlist m a j)))
+  (chain
+    (steps ((unfold ibtw_mem lhs)))
+    (rewrite-with
+      (lemma ssr_wlist_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ssr_wlist_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ssr_wlist_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ssr_wlist_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ssr_wlist_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ssr_wlist_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ssr_wlist_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ssr_wlist_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    refl))
+
+(claim ssr_wlist_tw_above
+  (goal ((m Mem) (rv Int) (sv Int) (tv Int) (wv Int) (j Nat) (a Int))
+    ((= (le 11 a) True))
+    (=
+      (wlist
+        (ibtw_mem (mem_set (mem_set (mem_set m 9 rv) 10 sv) 8 tv) 0 wv)
+        a
+        j)
+      (wlist m a j)))
+  (chain
+    (rewrite-with
+      (lemma ssr_wlist_ibtw0_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ssr_wlist_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ssr_wlist_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ssr_wlist_set_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    refl))
+
+;; ---- the total cell through the copy and the fold -------------------------
+
+(claim ssr_ibtv_icp
+  (goal ((m Mem) (q Int) (p Int) (k Nat)) ((= (le 8 q) True))
+    (= (ibt_v (icp_mem m q p k) 0) (ibt_v m 0)))
+  (chain
+    (steps ((unfold ibt_v lhs) (unfold ibt_v rhs)))
+    (rewrite-with
+      (lemma ssr_get_icp_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ssr_get_icp_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ssr_get_icp_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ssr_get_icp_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ssr_get_icp_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ssr_get_icp_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ssr_get_icp_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ssr_get_icp_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    refl))
+
+(claim ssr_ibtv_shx
+  (goal ((m Mem) (src Int) (k Nat)) ()
+    (= (ibt_v (shx_mem m src k) 0) (ibt_v m 0)))
+  (chain
+    (steps ((unfold ibt_v lhs) (unfold ibt_v rhs)))
+    (rewrite-with
+      (lemma sst_get_shx_below)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl)))
+    (rewrite-with
+      (lemma sst_get_shx_below)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl)))
+    (rewrite-with
+      (lemma sst_get_shx_below)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl)))
+    (rewrite-with
+      (lemma sst_get_shx_below)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl)))
+    (rewrite-with
+      (lemma sst_get_shx_below)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl)))
+    (rewrite-with
+      (lemma sst_get_shx_below)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl)))
+    (rewrite-with
+      (lemma sst_get_shx_below)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl)))
+    (rewrite-with
+      (lemma sst_get_shx_below)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl)))
+    refl))
+
+;; ---- byte reads below the fold's frame see through shx_mem ----------------
+
+(claim ssr_read_shx_below
+  (goal ((m Mem) (src Int) (p Int) (w Nat) (k Nat))
+    ((= (le (+ p (int_of_nat w)) 64960) True))
+    (= (mem_read w (shx_mem m src k) p) (mem_read w m p)))
+  (induct k
+    ((case Z (steps ((rewrite (lemma shx_mem_z) lr lhs true ())) refl))
+     (case S
+       (k2)
+       (chain
+         (steps ((rewrite (lemma shx_mem_s) lr lhs true ())))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ((inst m (shw_mem (shx_spill m src (+ 1 (int_of_nat k2))) src 64960))
+            (inst src (+ src 64)))
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+         (rewrite-with
+           (lemma ish_read_shw_below)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+         (rewrite-with
+           (lemma shx_spill_read_below)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1) (0 1))))))
+         refl)))))
+
+;; ---- the K window survives the fold (shx_hread's interior, K leg) ---------
+
+(claim ssr_wlist_shx_k
+  (goal ((m Mem) (src Int) (k Nat)) ((= (wlist m 65216 64) (sha_k)))
+    (= (wlist (shx_mem m src k) 65216 64) (sha_k)))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma shx_mem_z) lr lhs true ())
+          (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (steps ((rewrite (lemma shx_mem_s) lr lhs true ())))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ((inst m (shw_mem (shx_spill m src (+ 1 (int_of_nat k2))) src 64960))
+            (inst src (+ src 64)))
+           ((chain
+              (have hk
+                (=
+                  (wlist
+                    (shw_mem (shx_spill m src (+ 1 (int_of_nat k2))) src 64960)
+                    65216
+                    64)
+                  (wlist
+                    (shw_mem (shx_spill m src (+ 1 (int_of_nat k2))) src 64960)
+                    (+ 64960 256)
+                    64))
+                (steps ((compute both (stop wlist shw_mem shx_spill))) refl))
+              (steps ((rewrite (premise hk) lr lhs true ())))
+              (rewrite-with
+                (lemma shw_out_k)
+                lr
+                lhs
+                ()
+                ((chain
+                   (steps ((compute lhs (stop wlist sha_k shx_spill))))
+                   (rewrite-with
+                     (lemma shx_spill_wlist_below)
+                     lr
+                     lhs
+                     ()
+                     ((chain
+                        (steps ((rewrite (lemma ish_i64p) lr lhs true ())))
+                        (steps () (by arith (rows (goal 1)))))))
+                   (steps ((rewrite (premise 0) lr lhs true ())) refl))))
+              refl)))
+         refl)))))
+
+;; ---- mod collapses: absorb an inner mod into a sum, and drop an
+;; outer 2^64 wrap under mod 64 (ibt_mm's species) ---------------------------
+
+(claim ssr_madd64
+  (goal ((n Int) (c Int)) ()
+    (=
+      (mod (+ (mod n 18446744073709551616) c) 18446744073709551616)
+      (mod (+ n c) 18446744073709551616)))
+  (chain
+    (have hidn
+      (=
+        n
+        (+
+          (* 18446744073709551616 (ediv n 18446744073709551616))
+          (mod n 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hids
+      (=
+        (+ n c)
+        (+
+          (* 18446744073709551616 (ediv (+ n c) 18446744073709551616))
+          (mod (+ n c) 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (+ n c)) (inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hlo (= (le 0 (mod (+ n c) 18446744073709551616)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hhi
+      (= (lt (mod (+ n c) 18446744073709551616) 18446744073709551616) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst
+         q
+         (- (ediv (+ n c) 18446744073709551616) (ediv n 18446744073709551616)))
+       (inst r (mod (+ n c) 18446744073709551616)))
+      ((steps () (by arith (list (list 1 1 -1 0 0) (list 1 -1 1 0 0))))
+       (steps ((rewrite (premise hlo) lr lhs true ())) refl)
+       (steps ((rewrite (premise hhi) lr lhs true ())) refl))
+      refl)))
+
+(claim ssr_madd6
+  (goal ((n Int) (c Int)) () (= (mod (+ (mod n 64) c) 64) (mod (+ n c) 64)))
+  (chain
+    (have hidn (= n (+ (* 64 (ediv n 64)) (mod n 64)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 64))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hids (= (+ n c) (+ (* 64 (ediv (+ n c) 64)) (mod (+ n c) 64)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (+ n c)) (inst d 64))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hlo (= (le 0 (mod (+ n c) 64)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hhi (= (lt (mod (+ n c) 64) 64) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst q (- (ediv (+ n c) 64) (ediv n 64))) (inst r (mod (+ n c) 64)))
+      ((steps () (by arith (list (list 1 1 -1 0 0) (list 1 -1 1 0 0))))
+       (steps ((rewrite (premise hlo) lr lhs true ())) refl)
+       (steps ((rewrite (premise hhi) lr lhs true ())) refl))
+      refl)))
+
+(claim ssr_mm64
+  (goal ((n Int)) () (= (mod (mod n 18446744073709551616) 64) (mod n 64)))
+  (chain
+    (have hidb
+      (=
+        n
+        (+
+          (* 18446744073709551616 (ediv n 18446744073709551616))
+          (mod n 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hrbl (= (le 0 (mod n 18446744073709551616)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hid6
+      (=
+        (mod n 18446744073709551616)
+        (+
+          (* 64 (ediv (mod n 18446744073709551616) 64))
+          (mod (mod n 18446744073709551616) 64)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 64))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hq6l (= (le 0 (mod (mod n 18446744073709551616) 64)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hq6h (= (lt (mod (mod n 18446744073709551616) 64) 64) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      rhs
+      ((inst
+         q
+         (+
+           (* 288230376151711744 (ediv n 18446744073709551616))
+           (ediv (mod n 18446744073709551616) 64)))
+       (inst r (mod (mod n 18446744073709551616) 64)))
+      ((steps () (by arith (list (list 1 -1 0 -1 0 0) (list 1 1 0 1 0 0))))
+       (steps ((rewrite (premise hq6l) lr lhs true ())) refl)
+       (steps ((rewrite (premise hq6h) lr lhs true ())) refl))
+      refl)))
+
+;; ---- THE READBACK (M1's artifact theorem, flat-equation form) -------------
+;; premises = the window realizes st = (MkShaSt h pend n) + the
+;; absorber's machine pins; conclusions = the same equations at
+;; sha_step's components over sst_xabsorb's composed twin.
+
+;; the step, opened to its three components (M4's assembly pin)
+(claim ssr_step_open
+  (goal ((h H8) (pend (List Int)) (n Int) (chunk (List Int))) ()
+    (=
+      (sha_step (MkShaSt h pend n) chunk)
+      (MkShaSt
+        (sha_blocks h (sapp pend chunk) (ediv (slen (sapp pend chunk)) 64))
+        (sdrop (* 64 (ediv (slen (sapp pend chunk)) 64)) (sapp pend chunk))
+        (+ n (slen chunk)))))
+  (steps ((compute both (stop sha_blocks sapp slen ediv sdrop))) refl))
+
+;; the pending+chunk buffer splits at the machine's block boundary:
+;; sapp pend chunk IS fold-input ++ new-tail, read from the window
+(claim ssr_buf_split
+  (goal
+    ((r Int)
+     (kb Nat)
+     (krem Nat)
+     (pn Nat)
+     (rn Nat)
+     (m Mem)
+     (n Int)
+     (h H8)
+     (pend (List Int))
+     (chunk (List Int)))
+    ((= (le 1 r) True)
+     (= (le r 4096) True)
+     (= (int_of_nat kb) (bshr (+ (band (ibt_v m 0) 63) r) 6))
+     (= (int_of_nat krem) (band (+ (band (ibt_v m 0) 63) r) 63))
+     (= (le 0 n) True)
+     (= (ibt_v m 0) (mod n 18446744073709551616))
+     (= (int_of_nat pn) (mod n 64))
+     (= (int_of_nat rn) r)
+     (= (mem_read pn m (- 128 (int_of_nat pn))) pend)
+     (= (mem_read rn m 128) chunk)
+     (= (wlist m 65216 64) (sha_k))
+     (= (wlist m 65472 8) (shw_hlist h)))
+    (=
+      (sapp pend chunk)
+      (sapp
+        (mem_read (ssr_bn kb) m (- 128 (int_of_nat pn)))
+        (mem_read krem m (- (+ 128 r) (int_of_nat krem))))))
+  (chain
+    (have hbv (= (band (ibt_v m 0) 63) (int_of_nat pn))
+      (chain
+        (steps ((rewrite (premise 5) lr lhs true ())))
+        (rewrite-with
+          (lemma sst_mask6)
+          lr
+          lhs
+          ()
+          ((rewrite-with
+             (lemma mod_lo)
+             lr
+             lhs
+             ()
+             ((steps ((compute both)) refl))
+             refl)))
+        (steps
+          ((rewrite (lemma ssr_mm64) lr lhs true ())
+           (rewrite (premise 6) rl lhs true ()))
+          refl)))
+    (have hpl (= (le 0 (int_of_nat pn)) True)
+      (steps ((rewrite (lemma int_of_nat_nonneg) lr lhs true ())) refl))
+    (have hpr0 (= (le 0 (+ (int_of_nat pn) r)) True)
+      (steps () (by arith (rows (goal 1) (hpl 1) (0 1)))))
+    (have hkb (= (int_of_nat kb) (ediv (+ (int_of_nat pn) r) 64))
+      (chain
+        (steps
+          ((rewrite (premise 2) lr lhs true ())
+           (rewrite (premise hbv) lr lhs true ())))
+        (rewrite-with
+          (lemma sst_shr6)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise hpr0) lr lhs true ())) refl)))
+        refl))
+    (have hkr (= (int_of_nat krem) (mod (+ (int_of_nat pn) r) 64))
+      (chain
+        (steps
+          ((rewrite (premise 3) lr lhs true ())
+           (rewrite (premise hbv) lr lhs true ())))
+        (rewrite-with
+          (lemma sst_mask6)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise hpr0) lr lhs true ())) refl)))
+        refl))
+    (have hidpr
+      (=
+        (+ (int_of_nat pn) r)
+        (+
+          (* 64 (ediv (+ (int_of_nat pn) r) 64))
+          (mod (+ (int_of_nat pn) r) 64)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 64))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hprk
+      (= (+ (int_of_nat pn) r) (+ (* 64 (int_of_nat kb)) (int_of_nat krem)))
+      (chain
+        (steps
+          ((rewrite (premise hkb) lr rhs true ())
+           (rewrite (premise hkr) lr rhs true ())))
+        (steps ((rewrite (premise hidpr) lr lhs true ())) refl)))
+    (have hsplit
+      (= (mem_read (wn_add pn rn) m (- 128 (int_of_nat pn))) (sapp pend chunk))
+      (chain
+        (steps ((rewrite (lemma ish_read_app) lr lhs true ())))
+        (have ha (= (+ (- 128 (int_of_nat pn)) (int_of_nat pn)) 128)
+          (steps () (by arith (list (list 1) (list 1)))))
+        (steps
+          ((rewrite (premise ha) lr lhs true ())
+           (rewrite (premise 8) lr lhs true ())
+           (rewrite (premise 9) lr lhs true ()))
+          refl)))
+    (have hcnt
+      (= (int_of_nat (wn_add pn rn)) (int_of_nat (wn_add (ssr_bn kb) krem)))
+      (chain
+        (steps
+          ((rewrite (lemma ish_iw_add) lr both true ())
+           (rewrite (lemma ssr_bn_val) lr rhs true ())
+           (rewrite (premise 7) lr lhs true ())
+           (rewrite (premise hkb) lr rhs true ())
+           (rewrite (premise hkr) lr rhs true ())))
+        (steps ((rewrite (premise hidpr) lr lhs true ())) refl)))
+    (have haddr
+      (=
+        (+ (- 128 (int_of_nat pn)) (int_of_nat (ssr_bn kb)))
+        (- (+ 128 r) (int_of_nat krem)))
+      (chain
+        (steps ((rewrite (lemma ssr_bn_val) lr lhs true ())))
+        (steps
+          ()
+          (by arith (list (rows (goal 1) (hprk 1)) (rows (goal 1) (hprk -1)))))))
+    (steps ((rewrite (premise hsplit) rl lhs true ())))
+    (rewrite-with
+      (lemma ssr_read_ext)
+      lr
+      lhs
+      ((inst wb (wn_add (ssr_bn kb) krem)))
+      ((steps ((rewrite (premise hcnt) lr lhs true ())) refl)))
+    (steps
+      ((rewrite (lemma ish_read_app) lr lhs true ())
+       (rewrite (premise haddr) lr lhs true ()))
+      refl)))
+
+;; the K window survives the absorber
+(claim ssr_rb_k
+  (goal
+    ((r Int)
+     (kb Nat)
+     (krem Nat)
+     (pn Nat)
+     (rn Nat)
+     (m Mem)
+     (n Int)
+     (h H8)
+     (pend (List Int))
+     (chunk (List Int)))
+    ((= (le 1 r) True)
+     (= (le r 4096) True)
+     (= (int_of_nat kb) (bshr (+ (band (ibt_v m 0) 63) r) 6))
+     (= (int_of_nat krem) (band (+ (band (ibt_v m 0) 63) r) 63))
+     (= (le 0 n) True)
+     (= (ibt_v m 0) (mod n 18446744073709551616))
+     (= (int_of_nat pn) (mod n 64))
+     (= (int_of_nat rn) r)
+     (= (mem_read pn m (- 128 (int_of_nat pn))) pend)
+     (= (mem_read rn m 128) chunk)
+     (= (wlist m 65216 64) (sha_k))
+     (= (wlist m 65472 8) (shw_hlist h)))
+    (=
+      (wlist
+        (icp_mem
+          (shx_mem
+            (ibtw_mem
+              (mem_set
+                (mem_set (mem_set m 9 r) 10 (bshr r 8))
+                8
+                (int_of_nat krem))
+              0
+              (mod (+ (ibt_v m 0) r) 18446744073709551616))
+            (- 128 (band (ibt_v m 0) 63))
+            kb)
+          (- 128 (int_of_nat krem))
+          (- (+ 128 r) (int_of_nat krem))
+          krem)
+        65216
+        64)
+      (sha_k)))
+  (chain
+    (rewrite-with
+      (lemma ssr_wlist_icp_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (rewrite-with
+      (lemma ssr_wlist_shx_k)
+      lr
+      lhs
+      ()
+      ((chain
+         (rewrite-with
+           (lemma ssr_wlist_tw_above)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1))))))
+         (steps ((rewrite (premise 10) lr lhs true ())) refl))))
+    refl))
+
+;; the total cell reads back as the bumped byte count (mod 2^64)
+(claim ssr_rb_tot
+  (goal
+    ((r Int)
+     (kb Nat)
+     (krem Nat)
+     (pn Nat)
+     (rn Nat)
+     (m Mem)
+     (n Int)
+     (h H8)
+     (pend (List Int))
+     (chunk (List Int)))
+    ((= (le 1 r) True)
+     (= (le r 4096) True)
+     (= (int_of_nat kb) (bshr (+ (band (ibt_v m 0) 63) r) 6))
+     (= (int_of_nat krem) (band (+ (band (ibt_v m 0) 63) r) 63))
+     (= (le 0 n) True)
+     (= (ibt_v m 0) (mod n 18446744073709551616))
+     (= (int_of_nat pn) (mod n 64))
+     (= (int_of_nat rn) r)
+     (= (mem_read pn m (- 128 (int_of_nat pn))) pend)
+     (= (mem_read rn m 128) chunk)
+     (= (wlist m 65216 64) (sha_k))
+     (= (wlist m 65472 8) (shw_hlist h)))
+    (=
+      (ibt_v
+        (icp_mem
+          (shx_mem
+            (ibtw_mem
+              (mem_set
+                (mem_set (mem_set m 9 r) 10 (bshr r 8))
+                8
+                (int_of_nat krem))
+              0
+              (mod (+ (ibt_v m 0) r) 18446744073709551616))
+            (- 128 (band (ibt_v m 0) 63))
+            kb)
+          (- 128 (int_of_nat krem))
+          (- (+ 128 r) (int_of_nat krem))
+          krem)
+        0)
+      (mod (+ n (slen chunk)) 18446744073709551616)))
+  (chain
+    (have hbv (= (band (ibt_v m 0) 63) (int_of_nat pn))
+      (chain
+        (steps ((rewrite (premise 5) lr lhs true ())))
+        (rewrite-with
+          (lemma sst_mask6)
+          lr
+          lhs
+          ()
+          ((rewrite-with
+             (lemma mod_lo)
+             lr
+             lhs
+             ()
+             ((steps ((compute both)) refl))
+             refl)))
+        (steps
+          ((rewrite (lemma ssr_mm64) lr lhs true ())
+           (rewrite (premise 6) rl lhs true ()))
+          refl)))
+    (have hpl (= (le 0 (int_of_nat pn)) True)
+      (steps ((rewrite (lemma int_of_nat_nonneg) lr lhs true ())) refl))
+    (have hpr0 (= (le 0 (+ (int_of_nat pn) r)) True)
+      (steps () (by arith (rows (goal 1) (hpl 1) (0 1)))))
+    (have hkr (= (int_of_nat krem) (mod (+ (int_of_nat pn) r) 64))
+      (chain
+        (steps
+          ((rewrite (premise 3) lr lhs true ())
+           (rewrite (premise hbv) lr lhs true ())))
+        (rewrite-with
+          (lemma sst_mask6)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise hpr0) lr lhs true ())) refl)))
+        refl))
+    (have hkrh (= (lt (int_of_nat krem) 64) True)
+      (chain
+        (steps ((rewrite (premise hkr) lr lhs true ())))
+        (rewrite-with
+          (lemma mod_hi)
+          lr
+          lhs
+          ()
+          ((steps ((compute both)) refl))
+          refl)))
+    (have hrs (= (slen chunk) r)
+      (steps
+        ((rewrite (premise 9) rl lhs true ())
+         (rewrite (lemma ish_read_len) lr lhs true ())
+         (rewrite (premise 7) lr lhs true ()))
+        refl))
+    (steps ((rewrite (premise hrs) lr rhs true ())))
+    (rewrite-with
+      (lemma ssr_ibtv_icp)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hkrh 1))))))
+    (steps ((rewrite (lemma ssr_ibtv_shx) lr lhs true ())))
+    (rewrite-with
+      (lemma ibt_rt8)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma mod_lo)
+         lr
+         lhs
+         ()
+         ((steps ((compute both)) refl))
+         refl)
+       (rewrite-with
+         (lemma mod_hi)
+         lr
+         lhs
+         ()
+         ((steps ((compute both)) refl))
+         refl)))
+    (steps
+      ((rewrite (premise 5) lr lhs true ())
+       (rewrite (lemma ssr_madd64) lr lhs true ()))
+      refl)))
+
+;; the machine's remainder count IS the new invariant residue
+(claim ssr_rb_p
+  (goal
+    ((r Int)
+     (kb Nat)
+     (krem Nat)
+     (pn Nat)
+     (rn Nat)
+     (m Mem)
+     (n Int)
+     (h H8)
+     (pend (List Int))
+     (chunk (List Int)))
+    ((= (le 1 r) True)
+     (= (le r 4096) True)
+     (= (int_of_nat kb) (bshr (+ (band (ibt_v m 0) 63) r) 6))
+     (= (int_of_nat krem) (band (+ (band (ibt_v m 0) 63) r) 63))
+     (= (le 0 n) True)
+     (= (ibt_v m 0) (mod n 18446744073709551616))
+     (= (int_of_nat pn) (mod n 64))
+     (= (int_of_nat rn) r)
+     (= (mem_read pn m (- 128 (int_of_nat pn))) pend)
+     (= (mem_read rn m 128) chunk)
+     (= (wlist m 65216 64) (sha_k))
+     (= (wlist m 65472 8) (shw_hlist h)))
+    (= (int_of_nat krem) (mod (+ n (slen chunk)) 64)))
+  (chain
+    (have hbv (= (band (ibt_v m 0) 63) (int_of_nat pn))
+      (chain
+        (steps ((rewrite (premise 5) lr lhs true ())))
+        (rewrite-with
+          (lemma sst_mask6)
+          lr
+          lhs
+          ()
+          ((rewrite-with
+             (lemma mod_lo)
+             lr
+             lhs
+             ()
+             ((steps ((compute both)) refl))
+             refl)))
+        (steps
+          ((rewrite (lemma ssr_mm64) lr lhs true ())
+           (rewrite (premise 6) rl lhs true ()))
+          refl)))
+    (have hpl (= (le 0 (int_of_nat pn)) True)
+      (steps ((rewrite (lemma int_of_nat_nonneg) lr lhs true ())) refl))
+    (have hpr0 (= (le 0 (+ (int_of_nat pn) r)) True)
+      (steps () (by arith (rows (goal 1) (hpl 1) (0 1)))))
+    (have hkr (= (int_of_nat krem) (mod (+ (int_of_nat pn) r) 64))
+      (chain
+        (steps
+          ((rewrite (premise 3) lr lhs true ())
+           (rewrite (premise hbv) lr lhs true ())))
+        (rewrite-with
+          (lemma sst_mask6)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise hpr0) lr lhs true ())) refl)))
+        refl))
+    (have hrs (= (slen chunk) r)
+      (steps
+        ((rewrite (premise 9) rl lhs true ())
+         (rewrite (lemma ish_read_len) lr lhs true ())
+         (rewrite (premise 7) lr lhs true ()))
+        refl))
+    (steps
+      ((rewrite (premise hrs) lr rhs true ())
+       (rewrite (premise hkr) lr lhs true ())
+       (rewrite (premise 6) lr lhs true ())
+       (rewrite (lemma ssr_madd6) lr lhs true ()))
+      refl)))
+
+;; the new pending tail sits re-homed at [128-krem, 128)
+(claim ssr_rb_pend
+  (goal
+    ((r Int)
+     (kb Nat)
+     (krem Nat)
+     (pn Nat)
+     (rn Nat)
+     (m Mem)
+     (n Int)
+     (h H8)
+     (pend (List Int))
+     (chunk (List Int)))
+    ((= (le 1 r) True)
+     (= (le r 4096) True)
+     (= (int_of_nat kb) (bshr (+ (band (ibt_v m 0) 63) r) 6))
+     (= (int_of_nat krem) (band (+ (band (ibt_v m 0) 63) r) 63))
+     (= (le 0 n) True)
+     (= (ibt_v m 0) (mod n 18446744073709551616))
+     (= (int_of_nat pn) (mod n 64))
+     (= (int_of_nat rn) r)
+     (= (mem_read pn m (- 128 (int_of_nat pn))) pend)
+     (= (mem_read rn m 128) chunk)
+     (= (wlist m 65216 64) (sha_k))
+     (= (wlist m 65472 8) (shw_hlist h)))
+    (=
+      (mem_read
+        krem
+        (icp_mem
+          (shx_mem
+            (ibtw_mem
+              (mem_set
+                (mem_set (mem_set m 9 r) 10 (bshr r 8))
+                8
+                (int_of_nat krem))
+              0
+              (mod (+ (ibt_v m 0) r) 18446744073709551616))
+            (- 128 (band (ibt_v m 0) 63))
+            kb)
+          (- 128 (int_of_nat krem))
+          (- (+ 128 r) (int_of_nat krem))
+          krem)
+        (- 128 (int_of_nat krem)))
+      (sdrop (* 64 (ediv (slen (sapp pend chunk)) 64)) (sapp pend chunk))))
+  (chain
+    (have hbv (= (band (ibt_v m 0) 63) (int_of_nat pn))
+      (chain
+        (steps ((rewrite (premise 5) lr lhs true ())))
+        (rewrite-with
+          (lemma sst_mask6)
+          lr
+          lhs
+          ()
+          ((rewrite-with
+             (lemma mod_lo)
+             lr
+             lhs
+             ()
+             ((steps ((compute both)) refl))
+             refl)))
+        (steps
+          ((rewrite (lemma ssr_mm64) lr lhs true ())
+           (rewrite (premise 6) rl lhs true ()))
+          refl)))
+    (have hpl (= (le 0 (int_of_nat pn)) True)
+      (steps ((rewrite (lemma int_of_nat_nonneg) lr lhs true ())) refl))
+    (have hpr0 (= (le 0 (+ (int_of_nat pn) r)) True)
+      (steps () (by arith (rows (goal 1) (hpl 1) (0 1)))))
+    (have hkb (= (int_of_nat kb) (ediv (+ (int_of_nat pn) r) 64))
+      (chain
+        (steps
+          ((rewrite (premise 2) lr lhs true ())
+           (rewrite (premise hbv) lr lhs true ())))
+        (rewrite-with
+          (lemma sst_shr6)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise hpr0) lr lhs true ())) refl)))
+        refl))
+    (have hkr (= (int_of_nat krem) (mod (+ (int_of_nat pn) r) 64))
+      (chain
+        (steps
+          ((rewrite (premise 3) lr lhs true ())
+           (rewrite (premise hbv) lr lhs true ())))
+        (rewrite-with
+          (lemma sst_mask6)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise hpr0) lr lhs true ())) refl)))
+        refl))
+    (have hkrh (= (lt (int_of_nat krem) 64) True)
+      (chain
+        (steps ((rewrite (premise hkr) lr lhs true ())))
+        (rewrite-with
+          (lemma mod_hi)
+          lr
+          lhs
+          ()
+          ((steps ((compute both)) refl))
+          refl)))
+    (have hknn (= (le 0 (int_of_nat kb)) True)
+      (steps ((rewrite (lemma int_of_nat_nonneg) lr lhs true ())) refl))
+    (have hrs (= (slen chunk) r)
+      (steps
+        ((rewrite (premise 9) rl lhs true ())
+         (rewrite (lemma ish_read_len) lr lhs true ())
+         (rewrite (premise 7) lr lhs true ()))
+        refl))
+    (have hps (= (slen pend) (int_of_nat pn))
+      (steps
+        ((rewrite (premise 8) rl lhs true ())
+         (rewrite (lemma ish_read_len) lr lhs true ()))
+        refl))
+    (have hbl (= (slen (sapp pend chunk)) (+ (int_of_nat pn) r))
+      (steps
+        ((rewrite (lemma shc_slen_sapp) lr lhs true ())
+         (rewrite (premise hps) lr lhs true ())
+         (rewrite (premise hrs) lr lhs true ()))
+        refl))
+    (have hk64 (= (ediv (slen (sapp pend chunk)) 64) (int_of_nat kb))
+      (steps
+        ((rewrite (premise hbl) lr lhs true ())
+         (rewrite (premise hkb) rl lhs true ()))
+        refl))
+    (have hxsl
+      (=
+        (slen (mem_read (ssr_bn kb) m (- 128 (int_of_nat pn))))
+        (* 64 (int_of_nat kb)))
+      (steps
+        ((rewrite (lemma ish_read_len) lr lhs true ())
+         (rewrite (lemma ssr_bn_val) lr lhs true ()))
+        refl))
+    (steps ((rewrite (premise hk64) lr rhs true ())))
+    (rewrite-with
+      (lemma ssr_buf_split)
+      lr
+      rhs
+      ((inst r r)
+       (inst kb kb)
+       (inst krem krem)
+       (inst pn pn)
+       (inst rn rn)
+       (inst m m)
+       (inst n n)
+       (inst h h))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)
+       (steps ((rewrite (premise 5) lr lhs true ())) refl)
+       (steps ((rewrite (premise 6) lr lhs true ())) refl)
+       (steps ((rewrite (premise 7) lr lhs true ())) refl)
+       (steps ((rewrite (premise 8) lr lhs true ())) refl)
+       (steps ((rewrite (premise 9) lr lhs true ())) refl)
+       (steps ((rewrite (premise 10) lr lhs true ())) refl)
+       (steps ((rewrite (premise 11) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shc_sdrop_pre)
+      lr
+      rhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hknn 64))))
+       (steps
+         ((rewrite (premise hxsl) lr lhs true ()))
+         (by arith (rows (goal 1))))))
+    (have hsdx
+      (=
+        (sdrop
+          (* 64 (int_of_nat kb))
+          (mem_read (ssr_bn kb) m (- 128 (int_of_nat pn))))
+        Nil)
+      (chain
+        (steps ((rewrite (premise hxsl) rl lhs true ())))
+        (steps ((rewrite (lemma ssr_sdrop_len) lr lhs true ())) refl)))
+    (steps
+      ((rewrite (premise hsdx) lr rhs true ()) (compute rhs (stop mem_read))))
+    (rewrite-with
+      (lemma ssr_icp_read)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1))))))
+    (rewrite-with
+      (lemma ssr_read_shx_below)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (1 1))))))
+    (rewrite-with
+      (lemma ssr_read_tw_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (0 1) (hkrh 1))))))
+    refl))
+
+;; THE H READBACK: the H window holds the spec fold of the whole
+;; pending+chunk buffer — sha_step's first component at machine grain
+(claim ssr_rb_h
+  (goal
+    ((r Int)
+     (kb Nat)
+     (krem Nat)
+     (pn Nat)
+     (rn Nat)
+     (m Mem)
+     (n Int)
+     (h H8)
+     (pend (List Int))
+     (chunk (List Int)))
+    ((= (le 1 r) True)
+     (= (le r 4096) True)
+     (= (int_of_nat kb) (bshr (+ (band (ibt_v m 0) 63) r) 6))
+     (= (int_of_nat krem) (band (+ (band (ibt_v m 0) 63) r) 63))
+     (= (le 0 n) True)
+     (= (ibt_v m 0) (mod n 18446744073709551616))
+     (= (int_of_nat pn) (mod n 64))
+     (= (int_of_nat rn) r)
+     (= (mem_read pn m (- 128 (int_of_nat pn))) pend)
+     (= (mem_read rn m 128) chunk)
+     (= (wlist m 65216 64) (sha_k))
+     (= (wlist m 65472 8) (shw_hlist h)))
+    (=
+      (wlist
+        (icp_mem
+          (shx_mem
+            (ibtw_mem
+              (mem_set
+                (mem_set (mem_set m 9 r) 10 (bshr r 8))
+                8
+                (int_of_nat krem))
+              0
+              (mod (+ (ibt_v m 0) r) 18446744073709551616))
+            (- 128 (band (ibt_v m 0) 63))
+            kb)
+          (- 128 (int_of_nat krem))
+          (- (+ 128 r) (int_of_nat krem))
+          krem)
+        65472
+        8)
+      (shw_hlist
+        (sha_blocks h (sapp pend chunk) (ediv (slen (sapp pend chunk)) 64)))))
+  (chain
+    (have hbv (= (band (ibt_v m 0) 63) (int_of_nat pn))
+      (chain
+        (steps ((rewrite (premise 5) lr lhs true ())))
+        (rewrite-with
+          (lemma sst_mask6)
+          lr
+          lhs
+          ()
+          ((rewrite-with
+             (lemma mod_lo)
+             lr
+             lhs
+             ()
+             ((steps ((compute both)) refl))
+             refl)))
+        (steps
+          ((rewrite (lemma ssr_mm64) lr lhs true ())
+           (rewrite (premise 6) rl lhs true ()))
+          refl)))
+    (have hpl (= (le 0 (int_of_nat pn)) True)
+      (steps ((rewrite (lemma int_of_nat_nonneg) lr lhs true ())) refl))
+    (have hph (= (lt (int_of_nat pn) 64) True)
+      (chain
+        (steps ((rewrite (premise 6) lr lhs true ())))
+        (rewrite-with
+          (lemma mod_hi)
+          lr
+          lhs
+          ()
+          ((steps ((compute both)) refl))
+          refl)))
+    (have hpr0 (= (le 0 (+ (int_of_nat pn) r)) True)
+      (steps () (by arith (rows (goal 1) (hpl 1) (0 1)))))
+    (have hkb (= (int_of_nat kb) (ediv (+ (int_of_nat pn) r) 64))
+      (chain
+        (steps
+          ((rewrite (premise 2) lr lhs true ())
+           (rewrite (premise hbv) lr lhs true ())))
+        (rewrite-with
+          (lemma sst_shr6)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise hpr0) lr lhs true ())) refl)))
+        refl))
+    (have hkr (= (int_of_nat krem) (mod (+ (int_of_nat pn) r) 64))
+      (chain
+        (steps
+          ((rewrite (premise 3) lr lhs true ())
+           (rewrite (premise hbv) lr lhs true ())))
+        (rewrite-with
+          (lemma sst_mask6)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise hpr0) lr lhs true ())) refl)))
+        refl))
+    (have hkrl (= (le 0 (int_of_nat krem)) True)
+      (steps ((rewrite (lemma int_of_nat_nonneg) lr lhs true ())) refl))
+    (have hknn (= (le 0 (int_of_nat kb)) True)
+      (steps ((rewrite (lemma int_of_nat_nonneg) lr lhs true ())) refl))
+    (have hidpr
+      (=
+        (+ (int_of_nat pn) r)
+        (+
+          (* 64 (ediv (+ (int_of_nat pn) r) 64))
+          (mod (+ (int_of_nat pn) r) 64)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 64))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hprk
+      (= (+ (int_of_nat pn) r) (+ (* 64 (int_of_nat kb)) (int_of_nat krem)))
+      (chain
+        (steps
+          ((rewrite (premise hkb) lr rhs true ())
+           (rewrite (premise hkr) lr rhs true ())))
+        (steps ((rewrite (premise hidpr) lr lhs true ())) refl)))
+    (have hrs (= (slen chunk) r)
+      (steps
+        ((rewrite (premise 9) rl lhs true ())
+         (rewrite (lemma ish_read_len) lr lhs true ())
+         (rewrite (premise 7) lr lhs true ()))
+        refl))
+    (have hps (= (slen pend) (int_of_nat pn))
+      (steps
+        ((rewrite (premise 8) rl lhs true ())
+         (rewrite (lemma ish_read_len) lr lhs true ()))
+        refl))
+    (have hbl (= (slen (sapp pend chunk)) (+ (int_of_nat pn) r))
+      (steps
+        ((rewrite (lemma shc_slen_sapp) lr lhs true ())
+         (rewrite (premise hps) lr lhs true ())
+         (rewrite (premise hrs) lr lhs true ()))
+        refl))
+    (have hk64 (= (ediv (slen (sapp pend chunk)) 64) (int_of_nat kb))
+      (steps
+        ((rewrite (premise hbl) lr lhs true ())
+         (rewrite (premise hkb) rl lhs true ()))
+        refl))
+    (have hxsl
+      (=
+        (slen (mem_read (ssr_bn kb) m (- 128 (int_of_nat pn))))
+        (* 64 (int_of_nat kb)))
+      (steps
+        ((rewrite (lemma ish_read_len) lr lhs true ())
+         (rewrite (lemma ssr_bn_val) lr lhs true ()))
+        refl))
+    (steps ((rewrite (premise hbv) lr lhs true ())))
+    (rewrite-with
+      (lemma ssr_wlist_icp_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1))))))
+    (rewrite-with
+      (lemma shx_hread)
+      lr
+      lhs
+      ((inst st h))
+      ((steps () (by arith (rows (goal 1) (hph 1))))
+       (steps () (by arith (rows (goal 1) (hprk 1) (1 1) (hkrl 1))))
+       (chain
+         (rewrite-with
+           (lemma ssr_wlist_tw_above)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1))))))
+         (steps ((rewrite (premise 10) lr lhs true ())) refl))
+       (chain
+         (rewrite-with
+           (lemma ssr_wlist_tw_above)
+           lr
+           lhs
+           ()
+           ((steps () (by arith (rows (goal 1))))))
+         (steps ((rewrite (premise 11) lr lhs true ())) refl))))
+    (steps ((rewrite (lemma ssr_fold_read) lr lhs true ())))
+    (rewrite-with
+      (lemma ssr_read_tw_above)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hph 1))))))
+    (steps ((rewrite (premise hk64) lr rhs true ())))
+    (rewrite-with
+      (lemma ssr_buf_split)
+      lr
+      rhs
+      ((inst r r)
+       (inst kb kb)
+       (inst krem krem)
+       (inst pn pn)
+       (inst rn rn)
+       (inst m m)
+       (inst n n)
+       (inst h h))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)
+       (steps ((rewrite (premise 5) lr lhs true ())) refl)
+       (steps ((rewrite (premise 6) lr lhs true ())) refl)
+       (steps ((rewrite (premise 7) lr lhs true ())) refl)
+       (steps ((rewrite (premise 8) lr lhs true ())) refl)
+       (steps ((rewrite (premise 9) lr lhs true ())) refl)
+       (steps ((rewrite (premise 10) lr lhs true ())) refl)
+       (steps ((rewrite (premise 11) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shc_blocks_prefix)
+      lr
+      rhs
+      ()
+      ((steps () (by arith (rows (goal 1) (hknn 1))))
+       (steps
+         ((rewrite (premise hxsl) lr lhs true ()))
+         (by arith (rows (goal 1))))))
+    refl))
