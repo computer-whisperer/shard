@@ -1916,6 +1916,19 @@
 ;; terminal regions rather than their members and stops at the first clear
 ;; passing region.
 
+;; The step-cap half of the find loop's give-up guard.  `fuel` counts
+;; DECISIONS (region pops) — measured ~600x from evaluator steps at
+;; depth (pipeline 182: 16k decisions = 10.1M steps), so sizing
+;; give-ups in it is guesswork.  `step_cap` denominates the give-up
+;; in EVALUATOR STEPS — the unit every cost curve is measured in;
+;; 0 = uncapped.  Checked per region pop, so a single query
+;; evaluation may overshoot the cap by at most su_efuel before the
+;; next check.  The fuel check stays a BARE (lt fuel 1) in the loop —
+;; the measure obligations need that hypothesis visible, not hidden
+;; behind a call.
+(fn su_step_cap_hit ((step_cap Int) (ar SuA)) Bool
+  (if (lt 0 step_cap) (le step_cap (sa_steps ar)) False))
+
 (type SuFind
   (SuFindErr (List Int))
   (SuFindBudget Int Int Int Int Int Int Int Int SuCensus)
@@ -2171,10 +2184,22 @@
    (regions Int)
    (forks Int)
    (splits Int)
-   (census SuCensus))
+   (census SuCensus)
+   (step_cap Int))
   SuFind
   (measure fuel)
   (if (lt fuel 1)
+    (SuFindBudget
+      killed
+      constrained
+      regions
+      forks
+      splits
+      (sa_steps ar)
+      (sa_nodes ar)
+      (sa_exprs ar)
+      census)
+  (if (su_step_cap_hit step_cap ar)
     (SuFindBudget
       killed
       constrained
@@ -2219,7 +2244,8 @@
               (+ regions 1)
               forks
               splits
-              census))
+              census
+              step_cap))
            (constraint_verdict
              (match (su_query (su_efuel) m candq body g asg ar query want)
                ((SuTErr msg) (SuFindErr msg))
@@ -2251,7 +2277,8 @@
                         regions
                         (+ forks 1)
                         splits
-                        census))))))
+                        census
+                        step_cap))))))
                ((SuTFail k ar2)
                 (su_find_query_prepared
                   (- fuel 1)
@@ -2270,7 +2297,8 @@
                   (+ regions 1)
                   forks
                   splits
-                  (su_census_add census k)))
+                  (su_census_add census k)
+                  step_cap))
                ((SuTPass ar2)
                 (match constraint_verdict
                   ((MsClear)
@@ -2326,7 +2354,8 @@
                              (+ regions redex_regions)
                              (+ forks partition_forks)
                              (+ splits partition_splits)
-                             census))
+                             census
+                             step_cap))
                          ((Cons passing _)
                           (match (su_region_first candidate g passing)
                             ((SkEErr msg) (SuFindErr msg))
@@ -2340,7 +2369,7 @@
                                (sa_steps ar2)
                                passing
                                representative
-                               census))))))))))))))))))
+                               census)))))))))))))))))))
 
 (fn su_find_query
   ((fuel Int)
@@ -2374,7 +2403,8 @@
        0
        0
        0
-       (su_census_empty)))))
+       (su_census_empty)
+       0))))
 
 ;; Regular schema languages enter through the cardinality-free path. Separable
 ;; pressure is already compiled into typed schema states; residual theorem
@@ -2412,7 +2442,47 @@
        0
        0
        0
-       (su_census_empty)))))
+       (su_census_empty)
+       0))))
+
+;; Step-denominated schema entry: identical to su_find_query_schema but
+;; the give-up ALSO fires at step_cap evaluator steps — the unit every
+;; cost curve is measured in; fuel stays as the decision backstop.
+(fn su_find_query_schema_steps
+  ((fuel Int)
+   (step_cap Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (candidate Expr)
+   (constraints MsPlan)
+   (query Expr)
+   (want Expr)
+   (grammar SkSchemaGrammar))
+  SuFind
+  (match (ms_prepare_schema 1000000 constraints grammar)
+    ((MsPrepareErr msg)
+     (SuFindErr (append_int "superpose: constraint preparation: " msg)))
+    ((MsPrepareOk prepared)
+     (su_find_query_prepared
+       fuel
+       m
+       candq
+       body
+       candidate
+       prepared
+       query
+       want
+       (sug_compile_schema grammar)
+       (sa_new)
+       (Cons (sk_empty_region) Nil)
+       0
+       0
+       0
+       0
+       0
+       (su_census_empty)
+       step_cap))))
 
 ;; Theorem-first entry for the find path — the same optional mode the counted
 ;; drive owns below, riding the count-free partitioner: settle the initial
@@ -2467,7 +2537,8 @@
             redex
             partition_forks
             partition_splits
-            (su_census_empty))))))))
+            (su_census_empty)
+            0)))))))
 
 (fn su_find_query_schema_ordered
   ((theorem_first Bool)

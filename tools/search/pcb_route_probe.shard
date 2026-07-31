@@ -53,11 +53,14 @@
 ;;; cheaper — the slack-4 find 4.0x again (47,983 -> 12,054 steps,
 ;;; forks 62 -> 18), demo 98k -> 61k steps, job 135s -> 60s.  Hence the
 ;;; three sizing rules baked in here: (1) the instance keeps the forced
-;;; detour at slack 4; (2) per-call budgets RAMP 1000*2^level — a
-;;; level's give-up is sized to its slack, never one oversized cap
-;;; (flat 500k = the ~67.6GB dev-box incident; flat 50k = the SAME
-;;; structure-bound plateau on CI pipeline 174, 8h timeout, artifact
-;;; lost); (3) the ladder deepens only on EMPTY — a true refutation
+;;; detour at slack 4; (2) per-call budgets RAMP 32000*2^level
+;;; EVALUATOR STEPS — the give-up is denominated in the unit the curve
+;;; is measured in (the knob was DECISIONS, ~600x from steps, until
+;;; the step cap landed), a level's give-up sized to its slack, never
+;;; one oversized cap (flat 500k decisions = the ~67.6GB dev-box
+;;; incident; flat 50k = the SAME structure-bound plateau on CI
+;;; pipeline 174, 8h timeout, artifact lost); (3) the ladder deepens
+;;; only on EMPTY — a true refutation
 ;;; licenses the next level, a BUDGET give-up stops the net (the next
 ;;; level is strictly bigger; pipeline 182 burned 20M of its 35M steps
 ;;; in post-BUDGET levels).  Every engine call logs one line to the
@@ -205,10 +208,14 @@
 (fn pcbp_want ((goal Int)) Expr
   (Ctor (pcbp_model_q (quote WalkAt)) (Cons (IntLit goal) Nil)))
 
+;; budget is EVALUATOR STEPS (rung 3): the give-up is denominated in
+;; the unit the slack curve is measured in.  The decision fuel is a
+;; fixed backstop, never the binding constraint.
 (fn pcbp_find
   ((m Module) (occ (List Int)) (start Int) (goal Int) (d Int) (budget Int))
   SuFind
-  (su_find_query_schema
+  (su_find_query_schema_steps
+    1000000
     budget
     m
     (pcbp_probe_q (quote candidate))
@@ -266,9 +273,15 @@
   (PcbNetNone SuCensus)
   (PcbNetRoute (List PMove) (List Int) Int))
 
-;; The base of the per-level budget ramp; level ell runs at
-;; (pcbp_budget0) * 2^ell steps.
-(fn pcbp_budget0 () Int 1000)
+;; The base of the per-level budget ramp; level ell gives up at
+;; (pcbp_budget0) * 2^ell EVALUATOR STEPS (fresh arena per call, so
+;; the cap is per engine call).  The ladder's own EMPTYs must
+;; COMPLETE under their caps: the tight rung is F's re-route d=7
+;; EMPTY at ~38k steps on level 1 (measured pipeline 200), so base
+;; 32k gives it cap 64k.  Resize from the trace if the instance
+;; grows; a give-up should only ever mean pathology, never a healthy
+;; refutation cut short.
+(fn pcbp_budget0 () Int 32000)
 
 (fn pcbp_len_moves ((moves (List PMove))) Int
   (measure (struct moves))
