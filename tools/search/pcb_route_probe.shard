@@ -28,18 +28,25 @@
 ;;; checks the union of keepouts and all derived cells duplicate-free
 ;;; (pairwise disjointness follows).
 ;;;
-;;; THE BOARD (12x12, single keepout at (4,2)): the verified one-rip
-;;; conflict translated up, plus a decoy and a 3-pin tree net.  A
-;;; (decoy, (0,11)-(2,11) bottom edge) routes first and is
-;;; uninvolved.  F ((1,1)-(6,1)) takes row 1, eating cell (4,1) that
-;;; R ((4,0) seed, (4,1) tap pin) needs — R's tap STARTS on the
-;;; contested cell, so its ladder refuses instantly with b@16 and the
-;;; census convicts F (rip-oldest would have burned a rip on A).
-;;; After the rip R routes len 1, T (pins (9,4)/(9,9)/(6,7)) routes
-;;; its trunk down col 9 and taps (6,7) into the trunk at (9,7), D
-;;; ((11,4)-(11,6)) routes col 11, and F re-routes through row 3 at
-;;; length 9 (slack 4: row 0 is blocked by R's seed, row 2 by the
-;;; keepout).  Expected: NETS-5 RIPS-1 WIRE-22 with RIP 13 w>0.
+;;; THE BOARD (12x12, CONGESTED): a 2x4 component keepout block at
+;;; cols 2-3 x rows 4-7 plus a corridor plug at (4,6) — 9 keepouts —
+;;; and SEVEN nets, designed so the rips COMPOUND: rip 2 exists only
+;;; because of rip 1.  A (decoy, (0,11)-(2,11)) routes first,
+;;; untouched.  C ((5,2)-(5,8)) walls col 5.  S ((1,8)-(1,9)) is a
+;;; west-edge strap — a SECOND REAL BLOCKER, reachable by exactly one
+;;; deepest-level prefix.  B ((9,1)/(9,6)/(9,7), 3-pin) keeps the
+;;; tree-tap + mixed-parity ladder paths exercised.  D ((11,0)-(11,3))
+;;; is col-11 filler.  T ((4,4) seed, (4,7) tap) is the sandwiched
+;;; net: component to the W, C to the E, plug to the N — all four
+;;; ladder levels EMPTY, and the d=9 census convicts C at w=3 OVER S
+;;; at w=1 (hand-enumerated: C blocks [E], [S,E], [S,S,E,N]; S blocks
+;;; only [S,W,W,W]) — census weight discriminating two REAL blockers,
+;;; not culprit-vs-decoy.  After RIP 29 w=3, T re-routes at d=5
+;;; through C's freed corridor.  Then the CASCADE: E ((5,1) seed,
+;;; (5,3) tap) greedily squats C's freed seed cell 29 en route; C's
+;;; retry hits the occupied-pin short-circuit (b@29), RIP 17 w=1, E
+;;; relocates west at d=4 while C detours col 6 at d=8.  Expected:
+;;; KEEP-9 NETS-7 RIPS-2 WIRE-29.
 ;;;
 ;;; SLACK ECONOMICS (8x8-era measurements, pipelines 182-204 — the
 ;;; laws transfer, the constants predate this 12x12 scale-up): a
@@ -340,11 +347,12 @@
 ;; The base of the per-level give-up ramp; level ell gives up at
 ;; (pcbp_budget0) * 2^ell EVALUATOR STEPS (fresh arena per call, so
 ;; the cap is per engine call).  The ladder's own EMPTYs must
-;; COMPLETE under their caps — the tight rung is F's re-route d=7
-;; EMPTY (~38k steps on the 8x8 board; the 12x12 corridor is
-;; slack-bounded, not board-bounded, so the scale is comparable).
-;; Resize from the trace if the instance grows; a give-up should only
-;; ever mean pathology, never a healthy refutation cut short.
+;; COMPLETE under their caps.  On the congested board every ladder is
+;; SHALLOW-POCKET (floor pruning plus walls choke each level to a
+;; handful of prefixes), so the caps carry ~10x headroom — sharp
+;; census attribution is what keeps congestion cheap.  Resize from
+;; the trace if the instance grows; a give-up should only ever mean
+;; pathology, never a healthy refutation cut short.
 (fn pcbp_budget0 () Int 32000)
 
 (fn pcbp_levels () Int 4)
@@ -830,27 +838,32 @@
 
 ;; ---- the board instance ---------------------------------------------------
 
-(fn pcbp_keepouts () (List Int) (list 28))
+;; The component block (cols 2-3 x rows 4-7) + the corridor plug (4,6).
+(fn pcbp_keepouts () (List Int) (list 50 51 62 63 74 75 86 87 76))
 
+;; Queue order IS routing order: A decoy, C corridor wall, S strap,
+;; B 3-pin bus, D filler, T the sandwiched net, E the squatter.
 (fn pcbp_nets () (List PcbNet)
   (list
     (PcbNet (list 132 134))
-    (PcbNet (list 13 18))
-    (PcbNet (list 4 16))
-    (PcbNet (list 57 117 90))
-    (PcbNet (list 59 83))))
+    (PcbNet (list 29 101))
+    (PcbNet (list 97 109))
+    (PcbNet (list 21 81 93))
+    (PcbNet (list 11 47))
+    (PcbNet (list 52 88))
+    (PcbNet (list 17 41))))
 
 (fn pcbp_report ((rips Int) (wire Int) (w World)) World
   (write
     (append_int
-      "PCB-ROUTE 12x12 KEEP-1 NETS-5 RIPS-"
+      "PCB-ROUTE 12x12 KEEP-9 NETS-7 RIPS-"
       (append_int
         (show_int rips)
         (append_int " WIRE-" (append_int (show_int wire) " CERT-DISJOINT-OK\n"))))
     w))
 
 (fn pcbp_run ((m Module) (w World)) World
-  (match (pcbp_route_all m (pcbp_keepouts) (pcbp_nets) Nil 0 12 w)
+  (match (pcbp_route_all m (pcbp_keepouts) (pcbp_nets) Nil 0 16 w)
     ((Pair (PcbAllErr msg) w2) (pcbp_fail msg w2))
     ((Pair (PcbAllOk routed rips) w2)
      (match (pcbp_replay_all (pcbp_keepouts) routed)

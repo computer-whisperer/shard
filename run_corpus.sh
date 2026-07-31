@@ -796,11 +796,15 @@ fi
 # the rip victim by blocking weight (an occupied pin short-circuits
 # to the same conviction).  Heuristic EXISTENCE only (tap-by-tap
 # replay certificate re-deriving all cells); never a census pin.
-# Expected (measured CI pipeline 208, 2026-07-31, ~1.2 min): decoy A,
-# F row 1, R's tap STARTS on F's cell (4 x 82-step forkless EMPTYs,
-# census b@16), RIP 13 w=1 convicts F, R len 1, T trunk 5 + tree tap
-# 3, D len 2, F re-routes row 3 at d=9 len 9, ending
-# PCB-ROUTE 12x12 KEEP-1 NETS-5 RIPS-1 WIRE-22 CERT-DISJOINT-OK.
+# CONGESTED instance (designed 2026-07-31): 9 keepouts (2x4 component
+# block + corridor plug), 7 nets, rips that COMPOUND.  T's tap is
+# sandwiched (component W, net C's col-5 wall E, plug N): four EMPTY
+# levels, d=9 census discriminates TWO REAL blockers — C w=3 over the
+# S strap w=1 — RIP 29; T re-routes d=5 through the freed corridor;
+# then E greedily squats C's freed seed 29, C's retry hits the
+# occupied-pin short-circuit, RIP 17 w=1, both relocate (C col 6 len
+# 8, E west len 4).  Expected ending:
+# PCB-ROUTE 12x12 KEEP-9 NETS-7 RIPS-2 WIRE-29 CERT-DISJOINT-OK.
 echo "=== search: PCB routing demo (rip-up/re-route) ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/pcb_route_probe.shard
