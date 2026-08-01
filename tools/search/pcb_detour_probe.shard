@@ -1,0 +1,117 @@
+;;; PCB detour instrument: the measured-need gate for the HELD
+;;; best-first frontier rung (growth item 4).  This is a MEASUREMENT,
+;;; not a demo: it prices DFS find-cost mislead on the geometry class
+;;; the frontier is claimed to fix, so the rung can be adjudicated on
+;;; a number instead of a prior.  Runtime is UNVALIDATED — it fires on
+;;; CI only:
+;;;   glab ci run -b more-search --variables ENGINE_RUN:1 \
+;;;     --variables ENGINE_RUN_TARGET:tools/search/pcb_detour_probe.shard
+;;;
+;;; THE TRAP (12x12): a concave obstacle FACING THE MOVE ORDER — a
+;;; C-shaped cave of 9 keepouts, bar x=7 y=2..6 plus arms (5,2)(6,2)
+;;; and (5,6)(6,6), interior x=5..6 y=3..5, mouth opening west.  One
+;;; net: seed (10,4), tap routed from (1,4) east, static order
+;;; [E,S,N,W].  The Manhattan floor is THROUGH-WALL, so it cannot see
+;;; that the cave is closed: E-first DFS dives into the mouth at every
+;;; ladder level and re-wanders the interior from every entry state.
+;;; (A single-gap straight wall was rejected on paper: after a wall
+;;; block the order's secondary move HUGS the wall straight to the
+;;; gap, and the find comes out cheap — concavity is what defeats
+;;; wall-following.)  Crossing x=7 is possible only at y<=1 or y>=7,
+;;; so the minimum route is exactly 15 (slack 6, around either arm):
+;;; d=9/11/13 are structurally EMPTY, d=15 FOUND (a south wall-hug —
+;;; S precedes N in the order).  Expected: KEEP-9 NETS-1 RIPS-0
+;;; WIRE-15 CERT-DISJOINT-OK.
+;;;
+;;; THE ADJUDICATION FRAME (why these numbers decide the rung): the
+;;; d=15 FOUND steps count is DFS's mislead price.  Counterfactual A
+;;; (best-first frontier + first-arrival cell dominance, the Lee/A*
+;;; pair): expansions are bounded by cells with f <= 15 — order ~70
+;;; on this board — an exponential-to-polynomial collapse.
+;;; Counterfactual B (frontier WITHOUT dominance): f-ordered
+;;; path-space still expands every admissible path prefix, roughly
+;;; the d=15 tree DFS pays anyway — ordering alone is NOT the win,
+;;; dominance is.  The EMPTY levels are order-independent and price
+;;; the ladder's re-expansion overhead (what a single frontier run
+;;; would not repeat).  Claim posture per the ladder: the find is
+;;; heuristic existence (replay-certified); the EMPTYs at 9/11/13
+;;; are exact refutations.
+;;;
+;;; RUN:  fires on CI via ENGINE_RUN (see above) — never locally.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/driver.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "../../meta/search")
+(import "superpose.shard")
+(import "pcb_route_probe.shard")
+(import "tasks/pcb_route_model.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel reader *))
+(use (:: kernel loader *))
+(use (:: kernel driver *))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: meta search *))
+(use (:: tools search superpose *))
+(use (:: tools search pcb_route_probe *))
+(use (:: tools search tasks pcb_route_model *))
+
+(fn pcbd_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "PCB-DETOUR FAIL " (append_int msg "\n")) w)))
+
+;; The cave: bar x=7 y=2..6, then the top arm (5,2)(6,2) and the
+;; bottom arm (5,6)(6,6).  Interior x=5..6 y=3..5, mouth open west.
+(fn pcbd_keepouts () (List Int) (list 31 43 55 67 79 29 30 77 78))
+
+;; Seed (10,4)=58 east of the bar; the tap routes FROM (1,4)=49
+;; eastward into the trap.
+(fn pcbd_nets () (List PcbNet) (list (PcbNet (list 58 49))))
+
+(fn pcbd_levels () Int 4)
+
+;; The instrument's give-up base: sized so the d=15 FOUND — the
+;; measurement itself — completes under its cap (256000 * 2^3) even
+;; if the mislead price lands at the high end of the paper estimate.
+(fn pcbd_budget0 () Int 256000)
+
+(fn pcbd_report ((rips Int) (wire Int) (w World)) World
+  (write
+    (append_int
+      "PCB-DETOUR 12x12 KEEP-9 NETS-1 RIPS-"
+      (append_int
+        (show_int rips)
+        (append_int " WIRE-" (append_int (show_int wire) " CERT-DISJOINT-OK\n"))))
+    w))
+
+(fn pcbd_run ((m Module) (w World)) World
+  (match
+    (pcbp_route_all
+      m
+      (pcbd_keepouts)
+      (pcbd_levels)
+      (pcbd_budget0)
+      (pcbd_nets)
+      Nil
+      0
+      4
+      w)
+    ((Pair (PcbAllErr msg) w2) (pcbd_fail msg w2))
+    ((Pair (PcbAllOk routed rips) w2)
+     (match (pcbp_replay_all (pcbd_keepouts) routed)
+       (None (pcbd_fail "certificate: replay rejected a tap" w2))
+       ((Some cells)
+        (if (pcbp_dup_free (pcbp_app_cells (pcbd_keepouts) cells))
+          (pcbd_report rips (pcbp_wire routed) w2)
+          (pcbd_fail "certificate: overlapping cells" w2)))))))
+
+(fn main ((w World)) World
+  (match (pcbp_load w)
+    ((Pair (PcbpLoadErr msg) w1) (pcbd_fail msg w1))
+    ((Pair (PcbpLoadOk m) w1) (pcbd_run m w1))))

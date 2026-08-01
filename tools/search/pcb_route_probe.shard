@@ -594,6 +594,8 @@
 (fn pcbp_route_net
   ((m Module)
    (occ (List Int))
+   (levels Int)
+   (budget0 Int)
    (pins (List Int))
    (tree (List Int))
    (taps (List (List PMove)))
@@ -603,29 +605,32 @@
   (match pins
     (Nil (Pair (PcbNetDone taps tree) w))
     ((Cons pin rest)
-     (if (pcb_mem pin tree) (pcbp_route_net m occ rest tree taps w)
-     (match
-       (pcbp_deepen
-         m
-         occ
-         pin
-         tree
-         (pcb_dist_set (pcbp_wd) pin tree)
-         (pcbp_ladder_step (pcbp_wd) pin tree)
-         (pcbp_levels)
-         (pcbp_budget0)
-         (su_census_empty)
-         w)
-       ((Pair (PcbNetErr msg) w2) (Pair (PcbNetBad msg) w2))
-       ((Pair (PcbNetNone census) w2) (Pair (PcbNetFailed census) w2))
-       ((Pair (PcbNetRoute moves cells d) w2)
-        (pcbp_route_net
-          m
-          occ
-          rest
-          (pcbp_app_cells (pcbp_drop_last cells) tree)
-          (pcbp_app_taps taps (Cons moves Nil))
-          (pcbp_log_routed pin d (pcbp_len_moves moves) w2))))))))
+     (if (pcb_mem pin tree)
+       (pcbp_route_net m occ levels budget0 rest tree taps w)
+       (match
+         (pcbp_deepen
+           m
+           occ
+           pin
+           tree
+           (pcb_dist_set (pcbp_wd) pin tree)
+           (pcbp_ladder_step (pcbp_wd) pin tree)
+           levels
+           budget0
+           (su_census_empty)
+           w)
+         ((Pair (PcbNetErr msg) w2) (Pair (PcbNetBad msg) w2))
+         ((Pair (PcbNetNone census) w2) (Pair (PcbNetFailed census) w2))
+         ((Pair (PcbNetRoute moves cells d) w2)
+          (pcbp_route_net
+            m
+            occ
+            levels
+            budget0
+            rest
+            (pcbp_app_cells (pcbp_drop_last cells) tree)
+            (pcbp_app_taps taps (Cons moves Nil))
+            (pcbp_log_routed pin d (pcbp_len_moves moves) w2))))))))
 
 ;; ---- census-directed victim selection -------------------------------------
 ;; WalkBlocked census rows -> (cell, kills).  Self-avoidance kills
@@ -695,6 +700,8 @@
 (fn pcbp_route_all
   ((m Module)
    (keep (List Int))
+   (levels Int)
+   (budget0 Int)
    (queue (List PcbNet))
    (routed (List PcbRouted))
    (rips Int)
@@ -714,12 +721,14 @@
            (let ((occ (pcbp_app_cells keep (pcbp_routed_cells routed))))
              (match
                (if (pcb_mem p0 occ) (Pair (PcbNetFailed (pcbp_pin_census p0)) w)
-               (pcbp_route_net m occ prest (Cons p0 Nil) Nil w))
+               (pcbp_route_net m occ levels budget0 prest (Cons p0 Nil) Nil w))
                ((Pair (PcbNetBad msg) w2) (Pair (PcbAllErr msg) w2))
                ((Pair (PcbNetDone taps tree) w2)
                 (pcbp_route_all
                   m
                   keep
+                  levels
+                  budget0
                   rest
                   (pcbp_app_routed routed (Cons (PcbRouted net taps tree) Nil))
                   rips
@@ -751,6 +760,8 @@
                                (pcbp_route_all
                                  m
                                  keep
+                                 levels
+                                 budget0
                                  (Cons net (pcbp_app_nets rest (Cons vnet Nil)))
                                  remaining
                                  (+ rips 1)
@@ -863,7 +874,17 @@
     w))
 
 (fn pcbp_run ((m Module) (w World)) World
-  (match (pcbp_route_all m (pcbp_keepouts) (pcbp_nets) Nil 0 16 w)
+  (match
+    (pcbp_route_all
+      m
+      (pcbp_keepouts)
+      (pcbp_levels)
+      (pcbp_budget0)
+      (pcbp_nets)
+      Nil
+      0
+      16
+      w)
     ((Pair (PcbAllErr msg) w2) (pcbp_fail msg w2))
     ((Pair (PcbAllOk routed rips) w2)
      (match (pcbp_replay_all (pcbp_keepouts) routed)
