@@ -152,6 +152,56 @@
     (Nil (Cons c Nil))
     ((Cons m rest) (Cons c (pcb_cells wd ht (pcb_step wd ht m c) rest)))))
 
+;; --- the A* score hook ------------------------------------------------------
+;; Evaluated by the engine's astar drive on each region's DECIDED move
+;; prefix (open holes cut to Nil): g = moves spent, h = the admissible
+;; min-Manhattan floor from the prefix's end cell, key = that end cell,
+;; the first-arrival dominance state.  A prefix the walk would refuse
+;; scores itself LAST and ABSTAINS from dominance (key None) — a dead
+;; prefix must never close a live state.  An EXACT GOAL ARRIVAL also
+;; abstains: under the cut a goal-ended open prefix renders identically
+;; to its own Nil-completion, and a key here would let the parent close
+;; the state its found-candidate child needs (terminal states carry no
+;; dominance value anyway).  Legality mirrors pcb_walk exactly:
+;; off-grid, goal-crossing, occupancy, self-avoidance.  The hook steers
+;; order and pruning only; the walk stays the sole arbiter.
+(type PScore (PScore Int Int (Option (List Int))))
+
+(fn pcb_score_bad () PScore (PScore 1000000 1000000 None))
+
+(fn pcb_score_go
+  ((wd Int)
+   (ht Int)
+   (occ (List Int))
+   (goals (List Int))
+   (c Int)
+   (n Int)
+   (moves (List PMove)))
+  PScore
+  (measure (struct moves))
+  (match moves
+    (Nil (PScore n (pcb_dist_set wd c goals) (Some (Cons c Nil))))
+    ((Cons m rest)
+     (let ((c2 (pcb_step wd ht m c)))
+       (if (lt c2 0) (pcb_score_bad)
+       (if (pcb_mem c2 goals)
+         (match rest
+           (Nil (PScore (+ n 1) 0 None))
+           ((Cons _ _) (pcb_score_bad)))
+       (if (pcb_mem c2 occ) (pcb_score_bad)
+       (pcb_score_go wd ht (Cons c occ) goals c2 (+ n 1) rest))))))))
+
+(fn pcb_score
+  ((wd Int)
+   (ht Int)
+   (occ (List Int))
+   (goals (List Int))
+   (start Int)
+   (moves (List PMove)))
+  PScore
+  (if (pcb_mem start occ) (pcb_score_bad)
+  (pcb_score_go wd ht occ goals start 0 moves)))
+
 ;; --- ground pins (8-wide board for arithmetic-by-hand) ---------------------
 
 (claim pcb_walk_done_pin
@@ -212,4 +262,23 @@
 
 (claim pcb_cells_pin
   (goal () () (= (pcb_cells 8 8 0 (list (MvE) (MvS))) (list 0 1 9)))
+  (steps ((compute both)) refl))
+
+;; Score pins: a live prefix scores (g, floor, Some end-cell); a prefix
+;; that crosses a goal mid-list is dead — worst f, dominance abstained.
+(claim pcb_score_pin
+  (goal () ()
+    (= (pcb_score 8 8 Nil (list 3) 0 (list (MvE))) (PScore 1 2 (Some (list 1)))))
+  (steps ((compute both)) refl))
+
+(claim pcb_score_cross_pin
+  (goal () ()
+    (=
+      (pcb_score 8 8 Nil (list 1) 0 (list (MvE) (MvE)))
+      (PScore 1000000 1000000 None)))
+  (steps ((compute both)) refl))
+
+;; Exact goal arrival: h = 0 and dominance ABSTAINED (key None).
+(claim pcb_score_goal_pin
+  (goal () () (= (pcb_score 8 8 Nil (list 1) 0 (list (MvE))) (PScore 1 0 None)))
   (steps ((compute both)) refl))

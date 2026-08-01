@@ -2484,6 +2484,685 @@
        (su_census_empty)
        step_cap))))
 
+;; ---- the A* drive: scored frontier + first-arrival dominance --------------
+;; A DRIVE POLICY over the existing components (the ratified heuristic-tier
+;; shape): the LIFO job stack becomes a deterministic min-heap and a closed
+;; set prunes re-arrivals at task-declared states.  The engine stays
+;; domain-blind — the task supplies a SCORE TEMPLATE expression whose holes
+;; are rendered like the candidate's (decided choices instantiate their
+;; alternative templates; every OPEN hole becomes the task's CUT expression),
+;; then evaluated hole-free in a FRESH DISCARDED arena (the census re-force
+;; discipline: strictly behavior-neutral to the search arena).  The hook
+;; returns (ctor g h key): f = g + h orders the frontier (f asc, then g
+;; DESC — deeper first among ties — then push sequence); key = Some cells
+;; joins first-arrival dominance, None abstains (dead prefixes MUST abstain
+;; or score themselves last — a poisoned closed set could shadow a live
+;; state).  The hook steers ORDER and PRUNING only: query/want evaluation
+;; remains the sole arbiter of found/killed, and a found witness still
+;; carries the only certificate (replay).  Dominated pops count into killed
+;; and surface as a synthesized `dominated` census row.  CLAIM POSTURE: an
+;; exhausted heap with dominated=0 is an exact EMPTY; with dominated>0 the
+;; entry returns SuFindBudget — an incomplete search must be unable to
+;; masquerade as an exact refutation (CHECKED dominance is the named
+;; follow-on that would upgrade it).  Hook evaluator steps accumulate and
+;; fold into the reported steps= so A/B cost comparisons stay honest.
+
+(type SuAsScore
+  (SuAsScoreErr (List Int))
+  (SuAsScoreOk Int Int (Option (List Int)) Int))
+; g, h, dominance key (None = abstain), hook evaluator steps
+
+(fn su_alt_at ((alts (List Expr)) (ix Int)) (Option Expr)
+  (measure (struct alts))
+  (match alts
+    (Nil None)
+    ((Cons a rest) (if (lt ix 1) (Some a) (su_alt_at rest (- ix 1))))))
+
+;; Render an expression against a region: decided holes instantiate their
+;; chosen alternative template (recursively), open holes become the cut.
+;; Applied to the score template itself, this inlines the decided prefix
+;; in one walk — no substitution pass.
+(fn su_cut_expr
+  ((fuel Int) (lang SkLang) (region SkRegion) (cutx Expr) (e Expr))
+  SkE
+  (measure fuel)
+  (if (lt fuel 1) (SkEErr "astar: cut-render fuel exhausted")
+  (match (hole_view e)
+    ((HVBad msg) (SkEErr msg))
+    ((HVHole hole_id)
+     (match (skr_choice hole_id region)
+       (None (SkEOk cutx))
+       ((Some chosen)
+        (match (skl_alts lang hole_id)
+          ((SkSchemaAltsErr msg) (SkEErr msg))
+          ((SkSchemaAltsOk alts)
+           (match (su_alt_at alts chosen)
+             (None (SkEErr "astar: chosen alternative out of range"))
+             ((Some alt) (su_cut_expr (- fuel 1) lang region cutx alt))))))))
+    ((HVNot)
+     (match e
+       ((Ctor q args)
+        (match (su_cut_list (- fuel 1) lang region cutx args)
+          ((SkELErr msg) (SkEErr msg))
+          ((SkELOk args2) (SkEOk (Ctor q args2)))))
+       ((Call q args)
+        (match (su_cut_list (- fuel 1) lang region cutx args)
+          ((SkELErr msg) (SkEErr msg))
+          ((SkELOk args2) (SkEOk (Call q args2)))))
+       ((Match scrut arms)
+        (match (su_cut_expr (- fuel 1) lang region cutx scrut)
+          ((SkEErr msg) (SkEErr msg))
+          ((SkEOk scrut2)
+           (match (su_cut_arms (- fuel 1) lang region cutx arms)
+             ((SkEAErr msg) (SkEErr msg))
+             ((SkEAOk arms2) (SkEOk (Match scrut2 arms2)))))))
+       ((Let binds body)
+        (match (su_cut_list (- fuel 1) lang region cutx binds)
+          ((SkELErr msg) (SkEErr msg))
+          ((SkELOk binds2)
+           (match (su_cut_expr (- fuel 1) lang region cutx body)
+             ((SkEErr msg) (SkEErr msg))
+             ((SkEOk body2) (SkEOk (Let binds2 body2)))))))
+       ((If cond yes no)
+        (match (su_cut_expr (- fuel 1) lang region cutx cond)
+          ((SkEErr msg) (SkEErr msg))
+          ((SkEOk cond2)
+           (match (su_cut_expr (- fuel 1) lang region cutx yes)
+             ((SkEErr msg) (SkEErr msg))
+             ((SkEOk yes2)
+              (match (su_cut_expr (- fuel 1) lang region cutx no)
+                ((SkEErr msg) (SkEErr msg))
+                ((SkEOk no2) (SkEOk (If cond2 yes2 no2)))))))))
+       (_ (SkEOk e)))))))
+
+(fn su_cut_list
+  ((fuel Int) (lang SkLang) (region SkRegion) (cutx Expr) (es (List Expr)))
+  SkEL
+  (measure fuel)
+  (if (lt fuel 1) (SkELErr "astar: cut-render list fuel exhausted")
+  (match es
+    (Nil (SkELOk Nil))
+    ((Cons head rest)
+     (match (su_cut_expr (- fuel 1) lang region cutx head)
+       ((SkEErr msg) (SkELErr msg))
+       ((SkEOk head2)
+        (match (su_cut_list (- fuel 1) lang region cutx rest)
+          ((SkELErr msg) (SkELErr msg))
+          ((SkELOk rest2) (SkELOk (Cons head2 rest2))))))))))
+
+(fn su_cut_arms
+  ((fuel Int) (lang SkLang) (region SkRegion) (cutx Expr) (arms (List Arm)))
+  SkEA
+  (measure fuel)
+  (if (lt fuel 1) (SkEAErr "astar: cut-render arms fuel exhausted")
+  (match arms
+    (Nil (SkEAOk Nil))
+    ((Cons (Arm pattern body) rest)
+     (match (su_cut_expr (- fuel 1) lang region cutx body)
+       ((SkEErr msg) (SkEAErr msg))
+       ((SkEOk body2)
+        (match (su_cut_arms (- fuel 1) lang region cutx rest)
+          ((SkEAErr msg) (SkEAErr msg))
+          ((SkEAOk rest2) (SkEAOk (Cons (Arm pattern body2) rest2))))))))))
+
+;; Structural decode of the hook value: any 3-field ctor (IntLit g,
+;; IntLit h, option-of-int-list by arity).  Ctor names never inspected —
+;; the model owns its vocabulary.
+(fn su_as_ints ((e Expr)) (Option (List Int))
+  (measure (struct e))
+  (match e
+    ((Ctor _ args)
+     (match args
+       (Nil (Some Nil))
+       ((Cons head tail_args)
+        (match tail_args
+          ((Cons tail more)
+           (match more
+             (Nil
+               (match head
+                 ((IntLit x)
+                  (match (su_as_ints tail)
+                    (None None)
+                    ((Some rest) (Some (Cons x rest)))))
+                 (_ None)))
+             (_ None)))
+          (_ None)))))
+    (_ None)))
+
+(fn su_as_key ((e Expr)) (Option (Option (List Int)))
+  (match e
+    ((Ctor _ args)
+     (match args
+       (Nil (Some None))
+       ((Cons lst more)
+        (match more
+          (Nil
+            (match (su_as_ints lst)
+              (None None)
+              ((Some ints) (Some (Some ints)))))
+          (_ None)))))
+    (_ None)))
+
+(fn su_as_dec ((e Expr)) (Option (Pair (Pair Int Int) (Option (List Int))))
+  (match e
+    ((Ctor _ args)
+     (match args
+       ((Cons ge rest1)
+        (match rest1
+          ((Cons he rest2)
+           (match rest2
+             ((Cons ke rest3)
+              (match rest3
+                (Nil
+                  (match ge
+                    ((IntLit gc)
+                     (match he
+                       ((IntLit hc)
+                        (match (su_as_key ke)
+                          (None None)
+                          ((Some key) (Some (Pair (Pair gc hc) key)))))
+                       (_ None)))
+                    (_ None)))
+                (_ None)))
+             (_ None)))
+          (_ None)))
+       (_ None)))
+    (_ None)))
+
+(fn su_as_score
+  ((m Module)
+   (candq QName)
+   (body Expr)
+   (g SuG)
+   (region SkRegion)
+   (score_t Expr)
+   (cutx Expr))
+  SuAsScore
+  (match (su_cut_expr 100000 (sug_lang g) region cutx score_t)
+    ((SkEErr msg) (SuAsScoreErr msg))
+    ((SkEOk rendered)
+     (match (su_eval (su_efuel) m candq body g Nil (sa_new) Nil rendered)
+       ((SuRErr msg) (SuAsScoreErr msg))
+       ((SuROut) (SuAsScoreErr "astar: score evaluation fuel exhausted"))
+       ((SuRBlocked _ _) (SuAsScoreErr "astar: score template left a hole"))
+       ((SuRFail _) (SuAsScoreErr "astar: score evaluation failed"))
+       ((SuRVal r a2)
+        (match (su_gexpr (su_efuel) m candq body g Nil a2 r)
+          ((SuGErr msg) (SuAsScoreErr msg))
+          ((SuGOut) (SuAsScoreErr "astar: score grounding fuel exhausted"))
+          ((SuGBlocked _ _) (SuAsScoreErr "astar: score grounding blocked"))
+          ((SuGFail _) (SuAsScoreErr "astar: score grounding failed"))
+          ((SuGOk ge a3)
+           (match (su_as_dec ge)
+             (None (SuAsScoreErr "astar: undecodable score value"))
+             ((Some (Pair (Pair gc hc) key))
+              (SuAsScoreOk gc hc key (sa_steps a3)))))))))))
+
+;; ---- the frontier: a fuel-bounded skew heap --------------------------------
+
+(type SuAsEnt (SuAsEnt Int Int Int (Option (List Int)) SkRegion))
+; f, g, push sequence, dominance key, region
+
+(type SuAsHeap (SuAsLeaf) (SuAsNode SuAsEnt SuAsHeap SuAsHeap))
+
+(fn su_as_before ((a SuAsEnt) (b SuAsEnt)) Bool
+  (match a
+    ((SuAsEnt fa ga qa _ _)
+     (match b
+       ((SuAsEnt fb gb qb _ _)
+        (if (lt fa fb) True
+        (if (lt fb fa) False
+        (if (lt gb ga) True
+        (if (lt ga gb) False
+        (lt qa qb))))))))))
+
+(fn su_as_merge ((fuel Int) (a SuAsHeap) (b SuAsHeap)) (Option SuAsHeap)
+  (measure fuel)
+  (if (lt fuel 1) None
+  (match a
+    ((SuAsLeaf) (Some b))
+    ((SuAsNode ea la ra)
+     (match b
+       ((SuAsLeaf) (Some a))
+       ((SuAsNode eb lb rb)
+        (if (su_as_before ea eb)
+          (match (su_as_merge (- fuel 1) ra b)
+            (None None)
+            ((Some m2) (Some (SuAsNode ea m2 la))))
+          (match (su_as_merge (- fuel 1) rb a)
+            (None None)
+            ((Some m2) (Some (SuAsNode eb m2 lb)))))))))))
+
+(fn su_ints_eq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        (_ False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (int_eq x y) (su_ints_eq xs ys) False))))))
+
+(fn su_as_closed_mem ((key (List Int)) (closed (List (List Int)))) Bool
+  (measure (struct closed))
+  (match closed
+    (Nil False)
+    ((Cons k rest) (if (su_ints_eq key k) True (su_as_closed_mem key rest)))))
+
+;; Closed-set consultation: (was_dominated, closed-after) — an abstaining
+;; key (None) neither checks nor inserts.
+(fn su_as_close_check ((key (Option (List Int))) (closed (List (List Int))))
+  (Pair Bool (List (List Int)))
+  (match key
+    (None (Pair False closed))
+    ((Some k)
+     (if (su_as_closed_mem k closed) (Pair True closed)
+     (Pair False (Cons k closed))))))
+
+(type SuAsPushR (SuAsPushErr (List Int)) (SuAsPushOk SuAsHeap Int Int))
+; heap, next sequence, accumulated hook steps
+
+(fn su_as_push_children
+  ((m Module)
+   (candq QName)
+   (body Expr)
+   (g SuG)
+   (score_t Expr)
+   (cutx Expr)
+   (children (List SkRegion))
+   (heap SuAsHeap)
+   (seq Int)
+   (hsteps Int))
+  SuAsPushR
+  (measure (struct children))
+  (match children
+    (Nil (SuAsPushOk heap seq hsteps))
+    ((Cons child rest)
+     (match (su_as_score m candq body g child score_t cutx)
+       ((SuAsScoreErr msg) (SuAsPushErr msg))
+       ((SuAsScoreOk gc hc key st)
+        (match
+          (su_as_merge
+            1000000
+            heap
+            (SuAsNode
+              (SuAsEnt (+ gc hc) gc seq key child)
+              (SuAsLeaf)
+              (SuAsLeaf)))
+          (None (SuAsPushErr "astar: heap merge fuel exhausted"))
+          ((Some heap2)
+           (su_as_push_children
+             m
+             candq
+             body
+             g
+             score_t
+             cutx
+             rest
+             heap2
+             (+ seq 1)
+             (+ hsteps st)))))))))
+
+;; ---- the A* loop -----------------------------------------------------------
+
+(fn su_astar_go
+  ((fuel Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (candidate Expr)
+   (prepared MsPrepared)
+   (query Expr)
+   (want Expr)
+   (g SuG)
+   (ar SuA)
+   (heap SuAsHeap)
+   (killed Int)
+   (constrained Int)
+   (regions Int)
+   (forks Int)
+   (splits Int)
+   (census SuCensus)
+   (step_cap Int)
+   (score_t Expr)
+   (cutx Expr)
+   (closed (List (List Int)))
+   (dominated Int)
+   (seq Int)
+   (hsteps Int))
+  SuFind
+  (measure fuel)
+  (if (lt fuel 1)
+    (SuFindBudget
+      killed
+      constrained
+      regions
+      forks
+      splits
+      (+ (sa_steps ar) hsteps)
+      (sa_nodes ar)
+      (sa_exprs ar)
+      census)
+  (if (su_step_cap_hit step_cap ar)
+    (SuFindBudget
+      killed
+      constrained
+      regions
+      forks
+      splits
+      (+ (sa_steps ar) hsteps)
+      (sa_nodes ar)
+      (sa_exprs ar)
+      census)
+    (match heap
+      ((SuAsLeaf)
+       (if (lt 0 dominated)
+         (SuFindBudget
+           killed
+           constrained
+           regions
+           forks
+           splits
+           (+ (sa_steps ar) hsteps)
+           (sa_nodes ar)
+           (sa_exprs ar)
+           census)
+         (SuFindEmpty
+           killed
+           constrained
+           regions
+           forks
+           splits
+           (+ (sa_steps ar) hsteps)
+           (sa_nodes ar)
+           (sa_exprs ar)
+           census)))
+      ((SuAsNode ent hl hr)
+       (match (su_as_merge 1000000 hl hr)
+         (None (SuFindErr "astar: heap merge fuel exhausted"))
+         ((Some rest)
+          (match ent
+            ((SuAsEnt _ _ _ key region)
+             (match (su_as_close_check key closed)
+               ((Pair dominated_now closed2)
+                (if dominated_now
+                  (su_astar_go
+                    (- fuel 1)
+                    m
+                    candq
+                    body
+                    candidate
+                    prepared
+                    query
+                    want
+                    g
+                    ar
+                    rest
+                    (+ killed 1)
+                    constrained
+                    (+ regions 1)
+                    forks
+                    splits
+                    (su_census_add census (SuCkSym (quote dominated)))
+                    step_cap
+                    score_t
+                    cutx
+                    closed2
+                    (+ dominated 1)
+                    seq
+                    hsteps)
+                  (let ((asg (sk_region_choices region)))
+                    (match
+                      (ms_check_prepared_restricted 1000000 prepared region
+                        candidate)
+                      ((MsErr msg) (SuFindErr msg))
+                      ((MsRedex _)
+                       (su_astar_go
+                         (- fuel 1)
+                         m
+                         candq
+                         body
+                         candidate
+                         prepared
+                         query
+                         want
+                         g
+                         ar
+                         rest
+                         killed
+                         (+ constrained 1)
+                         (+ regions 1)
+                         forks
+                         splits
+                         census
+                         step_cap
+                         score_t
+                         cutx
+                         closed2
+                         dominated
+                         seq
+                         hsteps))
+                      (constraint_verdict
+                        (match
+                          (su_query (su_efuel) m candq body g asg ar query want)
+                          ((SuTErr msg) (SuFindErr msg))
+                          ((SuTOut)
+                           (SuFindErr
+                             "superpose: generic evaluation fuel exhausted"))
+                          ((SuTBlocked h ar2)
+                           (match (sug_alts g h)
+                             (None
+                               (SuFindErr
+                                 "superpose: generic query blocked on unknown hole"))
+                             ((Some alts)
+                              (match
+                                (su_fork
+                                  g
+                                  alts
+                                  region
+                                  h
+                                  (- (alts_len alts) 1)
+                                  Nil)
+                                ((SuForkErr msg) (SuFindErr msg))
+                                ((SuForkOk children)
+                                 (match
+                                   (su_as_push_children m candq body g score_t
+                                     cutx children rest seq hsteps)
+                                   ((SuAsPushErr msg) (SuFindErr msg))
+                                   ((SuAsPushOk heap2 seq2 hsteps2)
+                                    (su_astar_go
+                                      (- fuel 1)
+                                      m
+                                      candq
+                                      body
+                                      candidate
+                                      prepared
+                                      query
+                                      want
+                                      g
+                                      ar2
+                                      heap2
+                                      killed
+                                      constrained
+                                      (+ regions 1)
+                                      (+ forks 1)
+                                      splits
+                                      census
+                                      step_cap
+                                      score_t
+                                      cutx
+                                      closed2
+                                      dominated
+                                      seq2
+                                      hsteps2))))))))
+                          ((SuTFail k ar2)
+                           (su_astar_go
+                             (- fuel 1)
+                             m
+                             candq
+                             body
+                             candidate
+                             prepared
+                             query
+                             want
+                             g
+                             ar2
+                             rest
+                             (+ killed 1)
+                             constrained
+                             (+ regions 1)
+                             forks
+                             splits
+                             (su_census_add census k)
+                             step_cap
+                             score_t
+                             cutx
+                             closed2
+                             dominated
+                             seq
+                             hsteps))
+                          ((SuTPass ar2)
+                           (match constraint_verdict
+                             ((MsClear)
+                              (match (su_region_first candidate g region)
+                                ((SkEErr msg) (SuFindErr msg))
+                                ((SkEOk representative)
+                                 (SuFindFound
+                                   killed
+                                   constrained
+                                   (+ regions 1)
+                                   forks
+                                   splits
+                                   (+ (sa_steps ar2) hsteps)
+                                   region
+                                   representative
+                                   census))))
+                             ((MsErr msg) (SuFindErr msg))
+                             ((MsRedex _)
+                              (SuFindErr
+                                "superpose: inconsistent residual verdict"))
+                             (_
+                               (match
+                                 (su_theory_partition
+                                   1000000
+                                   prepared
+                                   candidate
+                                   g
+                                   (Cons region Nil)
+                                   0
+                                   Nil
+                                   0
+                                   0)
+                                 ((SuTheoryPartitionErr msg) (SuFindErr msg))
+                                 ((SuTheoryPartitionOk redex_regions clear
+                                    partition_forks partition_splits)
+                                  (match clear
+                                    (Nil
+                                      (su_astar_go
+                                        (- fuel 1)
+                                        m
+                                        candq
+                                        body
+                                        candidate
+                                        prepared
+                                        query
+                                        want
+                                        g
+                                        ar2
+                                        rest
+                                        killed
+                                        (+ constrained redex_regions)
+                                        (+ regions redex_regions)
+                                        (+ forks partition_forks)
+                                        (+ splits partition_splits)
+                                        census
+                                        step_cap
+                                        score_t
+                                        cutx
+                                        closed2
+                                        dominated
+                                        seq
+                                        hsteps))
+                                    ((Cons passing _)
+                                     (match
+                                       (su_region_first candidate g passing)
+                                       ((SkEErr msg) (SuFindErr msg))
+                                       ((SkEOk representative)
+                                        (SuFindFound
+                                          killed
+                                          (+ constrained redex_regions)
+                                          (+ regions (+ redex_regions 1))
+                                          (+ forks partition_forks)
+                                          (+ splits partition_splits)
+                                          (+ (sa_steps ar2) hsteps)
+                                          passing
+                                          representative
+                                          census))))))))))))))))))))))))))
+
+;; The A*-drive schema entry: su_find_query_schema_steps plus the score
+;; template and the cut expression.  Find-mode ONLY by construction — the
+;; counted census drive never rides this loop.
+(fn su_find_query_schema_astar
+  ((fuel Int)
+   (step_cap Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (candidate Expr)
+   (constraints MsPlan)
+   (query Expr)
+   (want Expr)
+   (grammar SkSchemaGrammar)
+   (score_t Expr)
+   (cutx Expr))
+  SuFind
+  (match (ms_prepare_schema 1000000 constraints grammar)
+    ((MsPrepareErr msg)
+     (SuFindErr (append_int "superpose: constraint preparation: " msg)))
+    ((MsPrepareOk prepared)
+     (let ((g (sug_compile_schema grammar)))
+       (match
+         (su_as_push_children
+           m
+           candq
+           body
+           g
+           score_t
+           cutx
+           (Cons (sk_empty_region) Nil)
+           (SuAsLeaf)
+           0
+           0)
+         ((SuAsPushErr msg) (SuFindErr msg))
+         ((SuAsPushOk heap0 seq0 hsteps0)
+          (su_astar_go
+            fuel
+            m
+            candq
+            body
+            candidate
+            prepared
+            query
+            want
+            g
+            (sa_new)
+            heap0
+            0
+            0
+            0
+            0
+            0
+            (su_census_empty)
+            step_cap
+            score_t
+            cutx
+            Nil
+            0
+            seq0
+            hsteps0)))))))
+
 ;; Theorem-first entry for the find path — the same optional mode the counted
 ;; drive owns below, riding the count-free partitioner: settle the initial
 ;; orbit's cited redex regions (and relational pair splits) before the first

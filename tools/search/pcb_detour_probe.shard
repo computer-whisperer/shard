@@ -102,6 +102,144 @@
         (append_int " WIRE-" (append_int (show_int wire) " CERT-DISJOINT-OK\n"))))
     w))
 
+;; ---- the A/B arm: the same tap under the dominance-enabled A* drive -------
+;; ONE query at full depth replaces the whole deepening ladder: the
+;; admissible floor is the h of the score hook, so the first goal pop is
+;; shortest.  d is a CAP here (floor 9 + slack headroom 12), not a ladder
+;; rung — the grammar admits every list length <= d and f-order finds the
+;; minimum.  The census carries `sym` rows for dominated pops.  The found
+;; route replays against the keepouts exactly like the ladder's — the
+;; drive changes, the certificate does not.
+
+(fn pcbd_astar_dmax () Int 21)
+
+(fn pcbd_astar_cap () Int 16000000)
+
+;; The astar arm's grammar bakes the MOVE INTO the alternative (5 alts
+;; per list entry: Nil + one Cons per ordered move) so every open hole
+;; is a tail-list hole and the cut expression (Nil) is always
+;; type-correct in the score render.  The ladder grammar's separate
+;; move-alphabet hole would cut to a list where a PMove belongs.
+(fn pcbd_cons_alt ((name Symbol) (edge Int) (tail_id Int)) SkSchemaAlt
+  (SkSchemaAlt
+    (Ctor (qn (quote Cons)) (list (Ctor (pcbp_model_q name) Nil) (hole 0)))
+    (list (SkSchemaRef 0 edge tail_id))))
+
+;; Edges ascend across the entry's alternatives — the schema validator
+;; requires every edge unique within one entry.
+(fn pcbd_cons_alts ((names (List Symbol)) (edge Int) (tail_id Int))
+  (List SkSchemaAlt)
+  (measure (struct names))
+  (match names
+    (Nil Nil)
+    ((Cons h t)
+     (Cons (pcbd_cons_alt h edge tail_id) (pcbd_cons_alts t (+ edge 1) tail_id)))))
+
+(fn pcbd_ents ((i Int) (d Int) (order (List Symbol))) (List SkSchemaEnt)
+  (measure (- (+ d 1) i))
+  (if (lt d i) Nil
+  (Cons
+    (if (lt i 1) (SkSchemaEnt 0 (Cons (pcbp_nil_alt) Nil))
+    (SkSchemaEnt i (Cons (pcbp_nil_alt) (pcbd_cons_alts order 0 (- i 1)))))
+    (pcbd_ents (+ i 1) d order))))
+
+(fn pcbd_grammar ((d Int) (order (List Symbol))) SkSchemaGrammar
+  (SkSchemaGrammar d (pcbd_ents 0 d order)))
+
+(fn pcbd_score_t ((occ (List Int)) (goals (List Int)) (start Int)) Expr
+  (Call
+    (pcbp_model_q (quote pcb_score))
+    (list
+      (IntLit (pcbp_wd))
+      (IntLit (pcbp_ht))
+      (pcbp_int_list_expr occ)
+      (pcbp_int_list_expr goals)
+      (IntLit start)
+      (hole 0))))
+
+(fn pcbd_astar_report ((wire Int) (w World)) World
+  (write
+    (append_int
+      "PCB-ASTAR 12x12 WIRE-"
+      (append_int (show_int wire) " CERT-DISJOINT-OK\n"))
+    w))
+
+(fn pcbd_astar ((m Module) (w World)) World
+  (let ((occ (pcbd_keepouts)))
+    (let ((start 49))
+      (let ((goals (Cons 58 Nil)))
+        (match
+          (su_find_query_schema_astar
+            1000000
+            (pcbd_astar_cap)
+            m
+            (pcbp_probe_q (quote candidate))
+            (hole 0)
+            (hole 0)
+            (ms_empty_plan)
+            (pcbp_query occ goals (pcbd_astar_dmax) start)
+            (pcbp_want)
+            (pcbd_grammar (pcbd_astar_dmax) (pcbp_move_order start goals))
+            (pcbd_score_t occ goals start)
+            (Ctor (qn (quote Nil)) Nil))
+          ((SuFindErr msg) (pcbd_fail msg w))
+          ((SuFindEmpty _ _ _ forks _ steps _ _ census)
+           (pcbd_fail
+             "astar: no route on the open trap"
+             (pcbp_log_call
+               start
+               1
+               (pcbd_astar_dmax)
+               (pcbd_astar_cap)
+               "ASTAR-EMPTY"
+               steps
+               forks
+               census
+               w)))
+          ((SuFindBudget _ _ _ forks _ steps _ _ census)
+           (pcbd_fail
+             "astar: budget stop"
+             (pcbp_log_call
+               start
+               1
+               (pcbd_astar_dmax)
+               (pcbd_astar_cap)
+               "ASTAR-BUDGET"
+               steps
+               forks
+               census
+               w)))
+          ((SuFindFound _ _ _ forks _ steps _ rep census)
+           (let
+             ((w2
+                (pcbp_log_call
+                  start
+                  1
+                  (pcbd_astar_dmax)
+                  (pcbd_astar_cap)
+                  "ASTAR-FOUND"
+                  steps
+                  forks
+                  census
+                  w)))
+             (match (pcbp_decode rep)
+               (None (pcbd_fail "astar: undecodable representative" w2))
+               ((Some moves)
+                (let ((wire (pcbp_len_moves moves)))
+                  (match
+                    (pcbp_replay_net
+                      occ
+                      (Cons start Nil)
+                      (Cons moves Nil)
+                      (Cons 58 Nil))
+                    (None (pcbd_fail "astar: replay rejected the route" w2))
+                    ((Some cells)
+                     (if (pcbp_dup_free (pcbp_app_cells occ cells))
+                       (pcbd_astar_report
+                         wire
+                         (pcbp_log_routed start (pcbd_astar_dmax) wire w2))
+                       (pcbd_fail "astar: overlapping cells" w2))))))))))))))
+
 (fn pcbd_run ((m Module) (w World)) World
   (match
     (pcbp_route_all
@@ -120,7 +258,7 @@
        (None (pcbd_fail "certificate: replay rejected a tap" w2))
        ((Some cells)
         (if (pcbp_dup_free (pcbp_app_cells (pcbd_keepouts) cells))
-          (pcbd_report rips (pcbp_wire routed) w2)
+          (pcbd_astar m (pcbd_report rips (pcbp_wire routed) w2))
           (pcbd_fail "certificate: overlapping cells" w2)))))))
 
 (fn main ((w World)) World
