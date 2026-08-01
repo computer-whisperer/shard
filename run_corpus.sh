@@ -414,6 +414,8 @@ TARGETS=(
   tools/search/tasks/pcb_route_model.shard
   tools/search/pcb_route_probe.shard
   tools/search/pcb_detour_probe.shard
+  tools/search/tasks/pcb_time_model.shard
+  tools/search/pcb_time_probe.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
