@@ -840,6 +840,27 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
+# PCB COST demo (rung B): weighted moves (cmove=2, chold=5) on the
+# space-time model and MIN-COST CLAIMS.  Two-gap wall, objectives
+# DISAGREE: B's fastest route holds once behind A through the near gap
+# (makespan 7, cost 17), its cheapest takes 8 moves (cost 16, makespan
+# 8) — the Pareto pair.  Min-cost bounds are single EMPTYs at C-1
+# (cost bounds are monotone): A's refuses at the entry floor with ZERO
+# forks; B's runs on BOTH the exact ladder (no dominance, 34 forks)
+# and the checked-dominance astar entry (9 forks, 14 dominated — the
+# entry's first live EMPTY), cross-checked in-driver.  The cost
+# bound's census re-convicts A's transit (b@90/b@155), tick-resolved.
+# Measured CI pipeline 231, 2026-08-01, ~236s job.  Expected ending:
+# PCB-COST 8x8 KEEP-6 NETS-2 FAST-MAKESPAN-7 FAST-COST-17
+# CHEAP-COST-16 CHEAP-MAKESPAN-8 MINCOST-A-10 MINCOST-B-16
+# DOM-CHECKED-AGREE CERT-DISJOINT-OK.
+echo "=== search: PCB cost demo (weighted moves + min-cost claims) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/pcb_cost_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 # Pure Shard function-body pins. These retain the playground's full grammars
 # and exact solution floors while SUPERPOSE settles them by demanded holes.
 # The executable imports kernel/types for an independent representative gate,

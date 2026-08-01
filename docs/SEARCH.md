@@ -4180,6 +4180,118 @@ dominance for the bound's EMPTY side), then capacity/negotiated
 congestion and the global-objective LNS on that substrate; nearer
 term, a rip-in-time instance and the swap-conflict knob.
 
+**Rung B — weighted costs + min-cost claims (7ca9985), GREEN
+(pipeline 231, 2026-08-01, job 669 at 236s): the predicted story
+line for line, the report line character for character.**  The
+ratified next step after the time axis: real move prices, a
+MIN-COST claim with an exact bound side, and the checked-dominance
+upgrade that lets a dominance-pruned exhaust claim EMPTY.  This is
+the substrate the capacity/PathFinder rung and the global-objective
+LNS ride on.
+
+**The model (tools/search/tasks/pcb_cost_model.shard).**  Weighted
+pricing on the space-time walk: cmove per compass hop PLUS a
+per-cell toll on the cell entered, chold per hold; the walk carries
+a COST BUDGET in place of the tick budget, with the admissible cost
+floor cmove*manhattan checked at entry and the arrival step's own
+price checked before WalkDone (a tolled goal hop can overdraw a
+budget the floor accepted; mid-walk overdrafts need no check —
+cmove >= 1 makes the next entry floor positive against a negative
+remainder).  The toll list is the capacity seam: PathFinder-style
+negotiated congestion prices shared cells by inflating exactly this
+input (in the model now; its first live instance arrives with that
+rung).  Parameter requirements recorded: cmove >= 1, chold >= 1,
+tolls >= 0; tolls are paid on entry only.  The A* score hook: g =
+accumulated cost, h = cmove*manhattan — admissible AND CONSISTENT
+(a toward-move drops h by exactly cmove and costs at least cmove;
+holds and away-moves only raise f), so the first goal pop is the
+minimum-cost route within the depth cap.  KEY CLAIM ARITHMETIC: a
+depth cap dmax with cmin*(dmax+1) > B makes a budget-B enumeration
+exhaustive (longer routes cost more by arithmetic), and cost bounds
+are MONOTONE — so ONE EMPTY at C-1 is a complete min-cost bound for
+a cost-C witness, no ladder climb.  Zero engine changes on the
+model side; the walk/score are the third live consumers of the
+task-parametric drive.
+
+**The engine change — su_find_query_schema_astar_checked.**  A
+dom_exact flag threaded through su_astar_go; the ONE branch that
+changes is heap exhaustion: with the flag, a genuinely drained
+frontier returns SuFindEmpty even with dominated>0 (fuel and
+step-cap exits stay SuFindBudget in both entries; the plain entry
+passes False and reproduces old behavior exactly — time probe
+regression 111/0).  Calling the checked entry is an ASSERTION of
+the task's dominance-soundness pedigree, documented per model: for
+the cost walk, (1) continuation behavior factors through (cell,
+tick, remaining budget, suffix) and is MONOTONE in remaining
+budget; (2) under consistent h, the first pop at a (cell,tick) key
+carries minimal g (equal-f ties safe: a strictly cheaper arrival
+still queued behind an ancestor has strictly smaller f), i.e.
+maximal remainder — so every completion of a dominated arrival is a
+completion of the dominator, and pruning loses no route of cost
+<= B and no minimum.  Same epistemics as the model-side floor
+arguments backing ladder EMPTYs (documented hand argument + model
+claims), NOT a mechanized engine proof — and the instrument
+cross-checks it against the dominance-free arm.  Second consumer
+named at admission (hygiene rule): the cost-ordered x86 window
+search (g = instruction count, h = 0 trivially consistent,
+machine-state fingerprint keys), where a checked EMPTY is a
+proven-minimal-program claim — the superoptimizer-shaped payoff.
+
+**The instrument (tools/search/pcb_cost_probe.shard).**  The 8x8
+wall gains a SECOND gap — near (4,3) contested by A, far (4,6)
+free but two moves longer — and weights cmove=2, chold=5 make the
+OBJECTIVES DISAGREE: B's fastest route is the one-hold convoy
+through the near gap (makespan 7, cost 17), its cheapest is 8
+spatial moves (cost 16, makespan 8; parity kills 7-move arrivals,
+holds cost more than the detour).  The Pareto pair is the
+Tenstorrent-shaped tension (latency vs energy) on a 2-net toy.
+Measured (231; 48/0 + 141/0 checks, 16 instance pins hand-derived
+before first fire — including the DOMINATED TWIN [E,H]/[H,E], both
+live at st 163 g=7, hand-guaranteeing the checked arm exercises
+dominance):
+
+- **The fast arm re-runs the time story on the two-gap board:** B's
+  unit ladder EMPTY 3,733 / 11,324 / 59,100 steps (4/10/42 forks)
+  at d=4/5/6 with the transit convictions b@90 + b@155 at every
+  level, FOUND d=7 at 30,463 / 24 — cost re-derived 17.  (d=6 was
+  62,493 on the one-gap board at the same 42 forks — the shorter
+  keepout list trims steps.)
+- **The cost find:** one A* query on the cost score popped a
+  cost-16 len-8 route at 111,246 steps / 14 forks / 14 DOMINATED —
+  as many duplicate (cell,tick) arrivals merged as states expanded.
+  Both cost-16 families pinned legal at budget 16 exactly; either
+  is a valid witness (cost/len/holds are family-invariant).
+- **The bounds, three grades live:** A's EMPTY at 9 = 143 steps,
+  ZERO FORKS, census floor:1 — the entry floor refuses before the
+  move hole is demanded, the cheapest possible MIN bound.  B's
+  exact EMPTY at 15 (ladder grammar dmax 7, no dominance) = 47,206
+  / 34, and its census is the SAME conviction set as the makespan
+  d=6 EMPTY — the cost bound re-convicts A's transit,
+  tick-resolved.  B's CHECKED EMPTY at 15 = 61,807 / 9 forks / 14
+  dominated — the checked entry's FIRST LIVE EMPTY, agreeing with
+  the exact arm (the in-driver cross-check would fail the run
+  otherwise).  Witness costs are verified = bound+1 in-driver
+  before the claim prints.
+- **Honest reading:** the checked arm spent 3.8x fewer expansions
+  (9 vs 34) but 1.31x MORE steps than the exact ladder at this
+  scale — score-template render cost per pop, as on the time
+  instrument.  The rung's deliverable is the CLAIM MACHINERY (a
+  dominance-pruned exhaust returning a cross-checked exact bound),
+  not a speedup at toy slack; divergence pricing remains the
+  detour's 20.3x.  Where the checked EMPTY pays is where the
+  exact ladder is unaffordable — the detour-scale boards and the
+  x86 window minimality claims.
+
+Final, both claims verified in-driver:
+**PCB-COST 8x8 KEEP-6 NETS-2 FAST-MAKESPAN-7 FAST-COST-17
+CHEAP-COST-16 CHEAP-MAKESPAN-8 MINCOST-A-10 MINCOST-B-16
+DOM-CHECKED-AGREE CERT-DISJOINT-OK.**  Pinned in CORPUS_LONG
+(~236s job).  All MIN claims are per priority order (A fixed
+first); joint optimality is NOT claimed.  Named follow-ons: the
+capacity rung (negotiated congestion pricing the toll input,
+PathFinder-style) and the global-objective LNS on this substrate;
+nearer term, rip-in-time and the swap-conflict knob still stand.
+
 **Task-authoring gotchas banked while building the swap + PCB
 instruments:** te_import_ctx admits only bare item uses as candidate
 heads (in-file type decls are invisible — models live in sibling
