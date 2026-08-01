@@ -74,6 +74,18 @@
 
 ;; --- small utils ----------------------------------------------------------------
 
+
+;; the module window [gwlo, gwhi) as DISCOVERED from the IProg wrapper
+;; (ibase/imemsize); threads the whole walk under the historical name
+;; msz -- every threading position is untouched, only genuine bound
+;; uses read the fields
+(record GWin (gwlo Int) (gwhi Int))
+
+;; window doc: "LO HI" -- the two ground window arguments of an
+;; evaluator application, and the x86 module spelling
+(fn dwin ((w GWin)) Doc
+  (dcat3 (dint (gwlo_of w)) (DStr " ") (dint (gwhi_of w))))
+
 (fn ceq ((a (List Int)) (b (List Int))) Bool
   (measure (struct a))
   (match a
@@ -949,7 +961,7 @@
    (trans (List Int))
    (pin Symbol)
    (ff Int)
-   (msz Int)
+   (msz GWin)
    (ks Doc)
    (args Doc))
   Doc
@@ -962,8 +974,8 @@
       (DStr trans)
       (DStr " (")
       (dsym pin)
-      (DStr (if x86 ")))) 0 " ")))) "))
-      (dint msz)
+      (DStr ")))) ")
+      (if x86 (dwin msz) (dint (gwhi_of msz)))
       (DStr ") 0 (iband_args ")
       ks
       (DStr " ")
@@ -1014,7 +1026,7 @@
    (nparams Int)
    (ff Int)
    (gg Int)
-   (msz Int)
+   (msz GWin)
    (ks Doc)
    (bt BT))
   Doc
@@ -1120,18 +1132,20 @@
 ;; so no refinement claim exists to state)
 (type LWA (LWAGuards (List GSplit)) (LWABad (List Int)))
 
-(fn lws_addr ((va Expr) (msz Int)) LWA
+(fn lws_addr ((va Expr) (msz GWin)) LWA
   (match va
     ((IntLit n)
-     (if (if (le 0 n) (lt n msz) False) (LWAGuards Nil)
+     (if (if (le (gwlo_of msz) n) (lt n (gwhi_of msz)) False) (LWAGuards Nil)
      (LWABad "ground memory address out of bounds (the program traps)")))
     (_
       (LWAGuards
-        (Cons (GShared (sc2 (quote le) (IntLit 0) va)) (Cons (GMemHi va) Nil))))))
+        (Cons
+          (GShared (sc2 (quote le) (IntLit (gwlo_of msz)) va))
+          (Cons (GMemHi va) Nil))))))
 
 ;; the loop-body walk runs at RAW binders (the worker quantifies
 ;; arbitrary Int locals) with a symbolic memory
-(fn lw_exp ((x86 Bool) (msz Int) (e IExp) (st (List Expr)) (mem Expr)) LXR
+(fn lw_exp ((x86 Bool) (msz GWin) (e IExp) (st (List Expr)) (mem Expr)) LXR
   (measure (struct e))
   (match e
     ((IConst n) (LXOk (IntLit n) Nil))
@@ -1234,7 +1248,7 @@
 (fn lw_stmts
   ((fuel Int)
    (x86 Bool)
-   (msz Int)
+   (msz GWin)
    (ss (List IStmt))
    (st (List Expr))
    (mem Expr))
@@ -1330,7 +1344,7 @@
 (fn lw_tree
   ((fuel Int)
    (x86 Bool)
-   (msz Int)
+   (msz GWin)
    (ss (List IStmt))
    (st (List Expr))
    (mem Expr))
@@ -1443,7 +1457,7 @@
   ((wfuel Int)
    (sfuel Int)
    (x86 Bool)
-   (msz Int)
+   (msz GWin)
    (ss (List IStmt))
    (st (List Expr))
    (mem Expr)
@@ -1571,11 +1585,12 @@
 ;; PREMISES (named), never the hyps.
 
 ;; one in-scope split with its case order (0 = the guard, then 1..)
-(fn gsp_scrut ((g GSplit) (msz Int)) Doc
+(fn gsp_scrut ((g GSplit) (msz GWin)) Doc
   (match g
     ((GShared e) (pr_e e))
     ((GMemHi a)
-     (dconc (list (DStr "(lt ") (pr_e a) (DStr " ") (dint msz) (DStr ")"))))))
+     (dconc
+       (list (DStr "(lt ") (pr_e a) (DStr " ") (dint (gwhi_of msz)) (DStr ")"))))))
 
 ;; the machine's mem-hi have name for split position i
 (fn dl_hle ((i Int)) Doc (dcat3 (DStr "hle") (dint i) (DStr "")))
@@ -1585,7 +1600,8 @@
 ;; haves for the mem-hi splits in scope, at the stated polarity: the
 ;; lt fact lifted from its hyp (case hyps never join farkas rows),
 ;; then the machine spelling by an integer-tight keyed-rows cert
-(fn dl_memhaves ((gs (List (Pair GSplit Int))) (nhyps Int) (msz Int) (pol Bool))
+(fn dl_memhaves
+  ((gs (List (Pair GSplit Int))) (nhyps Int) (msz GWin) (pol Bool))
   Doc
   (measure (struct gs))
   (match gs
@@ -1609,7 +1625,7 @@
             (DStr " (= (le (+ ")
             (pr_e a)
             (DStr " 1) ")
-            (dint msz)
+            (dint (gwhi_of msz))
             (DStr (if pol ") True) " ") False) "))
             (DStr "(steps () (by arith (rows (goal 1) (")
             (dl_hlt i)
@@ -1693,7 +1709,7 @@
 (fn wk_trapg
   ((scope (List (Pair GSplit Int)))
    (failed (Pair GSplit Int))
-   (msz Int)
+   (msz GWin)
    (mstop Doc)
    (ipfx Doc))
   Doc
@@ -1719,7 +1735,7 @@
                   (DStr " (= (le (+ ")
                   (pr_e a)
                   (DStr " 1) ")
-                  (dint msz)
+                  (dint (gwhi_of msz))
                   (DStr ") False) (steps () (by arith (rows (goal 1) (")
                   (dl_hlt i)
                   (DStr "l 1)))) ) ")))))))
@@ -1738,7 +1754,7 @@
 (fn wk_trap
   ((scope (List (Pair GSplit Int)))
    (failed (Pair GSplit Int))
-   (msz Int)
+   (msz GWin)
    (mstop Doc))
   Doc
   (wk_trapg scope failed msz mstop (DStr "")))
@@ -1746,7 +1762,7 @@
 (fn wk_trapd
   ((scope (List (Pair GSplit Int)))
    (failed (Pair GSplit Int))
-   (msz Int)
+   (msz GWin)
    (mstop Doc))
   Doc
   (wk_trapg scope failed msz mstop (DStr "(unfold lg_fuel rhs) (reduce rhs) ")))
@@ -1764,7 +1780,7 @@
 ;; the step arm: the premise transports one iteration, the IH fires
 (fn wk_step
   ((scope (List (Pair GSplit Int)))
-   (msz Int)
+   (msz GWin)
    (bfuel Int)
    (conddoc Doc)
    (ibody Doc)
@@ -1782,7 +1798,7 @@
         (DStr "(have hnext (= (iwhile (S^ ")
         (dint bfuel)
         (DStr " (lg_fuel k2 0)) ")
-        (dint msz)
+        (dwin msz)
         (DStr " ")
         conddoc
         (DStr " (inline ")
@@ -1868,7 +1884,7 @@
 ;; not a trap); leaves absurd from their path scope (the death point).
 ;; scope carries the guard at order 0, i = the next case-on order.
 (fn wkbz
-  ((tr GTr) (scope (List (Pair GSplit Int))) (i Int) (msz Int) (mstop Doc))
+  ((tr GTr) (scope (List (Pair GSplit Int))) (i Int) (msz GWin) (mstop Doc))
   Doc
   (measure (struct tr))
   (match tr
@@ -1904,7 +1920,7 @@
    (scope (List (Pair GSplit Int)))
    (i Int)
    (deep Bool)
-   (msz Int)
+   (msz GWin)
    (bfl Int)
    (conddoc Doc)
    (ibody Doc)
@@ -2314,7 +2330,7 @@
    (trans (List Int))
    (x86 Bool)
    (wrapnm (List Int))
-   (msz Int)
+   (msz GWin)
    (pin Symbol)
    (ifn IFn)
    (gv Expr)
@@ -2406,7 +2422,7 @@
    (trans (List Int))
    (x86 Bool)
    (wrapnm (List Int))
-   (msz Int)
+   (msz GWin)
    (pin Symbol)
    (ifn IFn)
    (gi Int)
@@ -2481,7 +2497,7 @@
                             (DStr "(= (iwhile (S^ ")
                             (dint bfl)
                             (DStr " (lg_fuel k 0)) ")
-                            (dint msz)
+                            (dwin msz)
                             (DStr " ")
                             conddoc
                             (DStr " (inline gb_")
@@ -2501,8 +2517,8 @@
                               (DStr nm)
                               (DStr "_x)))) ")
                               postdoc
-                              (DStr ")) restfs) 0 ")
-                              (dint msz)
+                              (DStr ")) restfs) ")
+                              (dwin msz)
                               (DStr ")")))
                           (dconc
                             (list
@@ -2517,7 +2533,7 @@
                               (DStr "_w)))) ")
                               postdoc
                               (DStr ")) restfs) ")
-                              (dint msz)
+                              (dint (gwhi_of msz))
                               (DStr ")")))))
                       (entry (lp_banded (ikparams_of ifn) (- nl2 np))))
                      (let
@@ -2595,7 +2611,7 @@
                               (DStr "(iwhile (S^ ")
                               (dint bfl)
                               (DStr " (lg_fuel k 0)) ")
-                              (dint msz)
+                              (dwin msz)
                               (DStr " ")
                               conddoc
                               (DStr " (inline gb_")
@@ -2633,8 +2649,8 @@
                                 (DStr trans)
                                 (DStr " (")
                                 (dsym pin)
-                                (DStr (if x86 ")))) 0 " ")))) "))
-                                (dint msz)
+                                (DStr ")))) ")
+                                (if x86 (dwin msz) (dint (gwhi_of msz)))
                                 (DStr ") 0 (iband_args ")
                                 (d_kinds (ikparams_of ifn))
                                 (DStr " ")
@@ -2781,7 +2797,7 @@
 ;; (case hyps never join farkas rows), derive the machine spelling by
 ;; the integer-tight cert, then resolve the imp side by the hyp and
 ;; the machine side by the have
-(fn sq_mh ((i Int) (a Expr) (msz Int) (pol (List Int))) Doc
+(fn sq_mh ((i Int) (a Expr) (msz GWin) (pol (List Int))) Doc
   (dconc
     (list
       (DStr "(have hlt")
@@ -2789,7 +2805,7 @@
       (DStr " (= (lt ")
       (pr_e a)
       (DStr " ")
-      (dint msz)
+      (dint (gwhi_of msz))
       (DStr ") ")
       (DStr pol)
       (DStr ") (steps ((rewrite (hyp 0) lr lhs true ())) refl)) (have hle")
@@ -2797,7 +2813,7 @@
       (DStr " (= (le (+ ")
       (pr_e a)
       (DStr " 1) ")
-      (dint msz)
+      (dint (gwhi_of msz))
       (DStr ") ")
       (DStr pol)
       (DStr ") (steps () (by arith (rows (goal 1) (hlt")
@@ -2810,7 +2826,7 @@
 ;; the split spine: every False arm is a compute-closed trap leaf, the
 ;; final True leaf is refl (both sides fully ground under the resolved
 ;; guards)
-(fn sq_spine ((gs (List GSplit)) (i Int) (msz Int)) Doc
+(fn sq_spine ((gs (List GSplit)) (i Int) (msz GWin)) Doc
   (measure (struct gs))
   (match gs
     (Nil (DStr "refl"))
@@ -2832,7 +2848,7 @@
             (DStr "(case-on (lt ")
             (pr_e a)
             (DStr " ")
-            (dint msz)
+            (dint (gwhi_of msz))
             (DStr ") Bool ((case True (chain ")
             (sq_mh i a msz "True")
             (DStr " ")
@@ -2877,7 +2893,7 @@
 (fn sq_emit
   ((brpre (List Int))
    (x86 Bool)
-   (msz Int)
+   (msz GWin)
    (pin Symbol)
    (ifn IFn)
    (bodyE Expr)
@@ -2935,8 +2951,8 @@
                   (DStr (if x86 "xeval_seq (S^ " "eval_seq (S^ "))
                   (dint aa)
                   (DStr
-                    (if x86 " c) (MkXModule restfs 0 " " c) (MkWModule restfs "))
-                  (dint msz)
+                    (if x86 " c) (MkXModule restfs " " c) (MkWModule restfs "))
+                  (if x86 (dwin msz) (dint (gwhi_of msz)))
                   (DStr ") (inline gb_")
                   (DStr nm)
                   (DStr (if x86 "_x) " "_w) "))
@@ -2947,7 +2963,7 @@
                   (DStr "(istmts (S^ ")
                   (dint gg)
                   (DStr " c2) ")
-                  (dint msz)
+                  (dwin msz)
                   (DStr " (inline gb_")
                   (DStr nm)
                   (DStr "_i) ")
@@ -3022,7 +3038,7 @@
                                     pin
                                     "statement pin without an IProg wrapper"))))
                             ((Some wnm)
-                             (match (wrap_msz msrc wnm gv)
+                             (match (wrap_win msrc wnm gv)
                                (None
                                  (EErr
                                    "wrapper does not yield an IProg (internal)"))
@@ -3194,7 +3210,7 @@
     ((GTrB _ a b) (if (gt_decok gi a) (gt_decok gi b) False))))
 
 (fn lwb_walk
-  ((x86 Bool) (msz Int) (gi Int) (lbody (List IStmt)) (wst (List Expr)))
+  ((x86 Bool) (msz GWin) (gi Int) (lbody (List IStmt)) (wst (List Expr)))
   LWBR
   (match (lwb_split lbody)
     (None
@@ -3278,7 +3294,7 @@
 ;; locals -- exactly the sub-lemma's binders.
 (fn mxc_br
   ((x86 Bool)
-   (msz Int)
+   (msz GWin)
    (cnd IExp)
    (tb (List IStmt))
    (eb (List IStmt))
@@ -3337,7 +3353,7 @@
 ;; worker walk runs at fresh symbolic locals with the counter tied.
 (fn mxc_loop
   ((x86 Bool)
-   (msz Int)
+   (msz GWin)
    (gi Int)
    (kg Int)
    (lbody (List IStmt))
@@ -3390,7 +3406,7 @@
 (fn mxc_slice
   ((fuel Int)
    (x86 Bool)
-   (msz Int)
+   (msz GWin)
    (ss (List IStmt))
    (ssE (List Expr))
    (rs (List IStmt))
@@ -3841,7 +3857,7 @@
 ;; the segment-lemma split spine: sq_spine with the es_scont stop on
 ;; mid-path computes (trap leaves compute open so the adapter
 ;; dispatches)
-(fn mxc_mh ((i Int) (a Expr) (msz Int) (pol (List Int)) (mid Bool)) Doc
+(fn mxc_mh ((i Int) (a Expr) (msz GWin) (pol (List Int)) (mid Bool)) Doc
   (dconc
     (list
       (DStr "(have hlt")
@@ -3849,7 +3865,7 @@
       (DStr " (= (lt ")
       (pr_e a)
       (DStr " ")
-      (dint msz)
+      (dint (gwhi_of msz))
       (DStr ") ")
       (DStr pol)
       (DStr ") (steps ((rewrite (hyp 0) lr lhs true ())) refl)) (have hle")
@@ -3857,7 +3873,7 @@
       (DStr " (= (le (+ ")
       (pr_e a)
       (DStr " 1) ")
-      (dint msz)
+      (dint (gwhi_of msz))
       (DStr ") ")
       (DStr pol)
       (DStr ") (steps () (by arith (rows (goal 1) (hlt")
@@ -3868,7 +3884,7 @@
       (if mid (DStr ") lr lhs true ()) (compute both (stop es_scont))))")
       (DStr ") lr lhs true ()) (compute both)))")))))
 
-(fn mxc_spine ((t GTr) (i Int) (msz Int)) Doc
+(fn mxc_spine ((t GTr) (i Int) (msz GWin)) Doc
   (measure (struct t))
   (match t
     ((GTrL _ _) (DStr "refl"))
@@ -3893,7 +3909,7 @@
             (DStr "(case-on (lt ")
             (pr_e a)
             (DStr " ")
-            (dint msz)
+            (dint (gwhi_of msz))
             (DStr ") Bool ((case True (chain ")
             (mxc_mh i a msz "True" (gt_live k))
             (DStr " ")
@@ -3927,7 +3943,7 @@
   ((nm (List Int))
    (j Int)
    (nl Int)
-   (msz Int)
+   (msz GWin)
    (kista Int)
    (msl (List Expr))
    (gs (List GSplit)))
@@ -3944,17 +3960,17 @@
         "(rw (List Instr)) (st (List Int)) (m Mem) (f Nat) (g Nat) (restfs (List Func))) () (= (eval_seq (S^ ")
       (dint (ilen_e msl))
       (DStr " (S f)) (MkWModule restfs ")
-      (dint msz)
+      (dint (gwhi_of msz))
       (DStr ") ")
       (mxc_spn msl (DStr "rw"))
       (DStr " ")
       (d_argspine nl)
       (DStr " st m) (es_scont (S f) (MkWModule restfs ")
-      (dint msz)
+      (dint (gwhi_of msz))
       (DStr ") rw st (istmts (S^ ")
       (dint kista)
       (DStr " (S g)) ")
-      (dint msz)
+      (dwin msz)
       (DStr " (inline ")
       (mxc_snm nm j "_i")
       (DStr ") ")
@@ -4166,7 +4182,7 @@
 (fn mxc_lhead
   ((nm (List Int))
    (nl Int)
-   (msz Int)
+   (msz GWin)
    (gi Int)
    (kg Int)
    (d Int)
@@ -4250,7 +4266,7 @@
           (DStr " (S^ ")
           (dint si)
           (DStr " c2))) ")
-          (dint msz)
+          (dwin msz)
           (DStr " (ILoc ")
           (dint gi)
           (DStr ") (inline gb_")
@@ -4313,7 +4329,7 @@
    (mach (Pair Int (Pair Int Expr)))
    (nm (List Int))
    (nl Int)
-   (msz Int)
+   (msz GWin)
    (fm Int)
    (gm Int)
    (b Int)
@@ -4366,7 +4382,7 @@
              (DStr "(case-on (istmts (S^ ")
              (dint ki)
              (DStr " (S c2)) ")
-             (dint msz)
+             (dwin msz)
              (DStr " (inline ")
              (mxc_snm nm b "_i")
              (DStr ") ")
@@ -4415,7 +4431,7 @@
            (DStr ")) ()) (case-on (istmts (S^ ")
            (dint gm)
            (DStr " c2) ")
-           (dint msz)
+           (dwin msz)
            (DStr " (inline ")
            (mxc_snm nm b "_i")
            (DStr ") ")
@@ -4500,7 +4516,7 @@
    (brpre (List Int))
    (nm (List Int))
    (nl Int)
-   (msz Int)
+   (msz GWin)
    (fm Int)
    (gm Int)
    (b Int)
@@ -4567,7 +4583,7 @@
                 (DStr ") () (= (eval_seq (S^ ")
                 (dint fm)
                 (DStr " c) (MkWModule restfs ")
-                (dint msz)
+                (dint (gwhi_of msz))
                 (DStr ") ")
                 codew
                 (DStr " ")
@@ -4575,7 +4591,7 @@
                 (DStr " st m) (iw_sout st (istmts (S^ ")
                 (dint gm)
                 (DStr " c2) ")
-                (dint msz)
+                (dwin msz)
                 (DStr " ")
                 codei
                 (DStr " ")
@@ -4692,7 +4708,7 @@
 (fn mx_walk
   ((fuel Int)
    (x86 Bool)
-   (msz Int)
+   (msz GWin)
    (ss (List IStmt))
    (ssE (List Expr))
    (st (List Expr))
@@ -4891,7 +4907,7 @@
     ((Cons h t) (if (int_eq h k) True (mx_kseen t k)))))
 
 ;; the worker mem-hi have-pair at one polarity, worker stops
-(fn mxw_mh ((i Int) (a Expr) (msz Int) (pol (List Int)) (cs Doc)) Doc
+(fn mxw_mh ((i Int) (a Expr) (msz GWin) (pol (List Int)) (cs Doc)) Doc
   (dconc
     (list
       (DStr "(have hlt")
@@ -4899,7 +4915,7 @@
       (DStr " (= (lt ")
       (pr_e a)
       (DStr " ")
-      (dint msz)
+      (dint (gwhi_of msz))
       (DStr ") ")
       (DStr pol)
       (DStr ") (steps ((rewrite (hyp 0) lr lhs true ())) refl)) (have hle")
@@ -4907,7 +4923,7 @@
       (DStr " (= (le (+ ")
       (pr_e a)
       (DStr " 1) ")
-      (dint msz)
+      (dint (gwhi_of msz))
       (DStr ") ")
       (DStr pol)
       (DStr ") (steps () (by arith (rows (goal 1) (hlt")
@@ -4921,7 +4937,7 @@
 
 ;; the worker split spine: True arms continue at worker stops, False
 ;; arms close at (stop lg_fuel); the all-true tail follows
-(fn mxw_spine ((gs (List GSplit)) (i Int) (msz Int) (tail Doc)) Doc
+(fn mxw_spine ((gs (List GSplit)) (i Int) (msz GWin) (tail Doc)) Doc
   (measure (struct gs))
   (match gs
     (Nil tail)
@@ -4945,7 +4961,7 @@
             (DStr "(case-on (lt ")
             (pr_e a)
             (DStr " ")
-            (dint msz)
+            (dint (gwhi_of msz))
             (DStr ") Bool ((case True (chain ")
             (mxw_mh i a msz "True" (mx_wstop))
             (DStr " ")
@@ -4975,7 +4991,7 @@
 ;; closes with the all-true tail at its own accumulated depth -- the
 ;; per-leaf IH cite binds by matching (the back-edge state is the
 ;; join).
-(fn mxw_tspine ((tr GTr) (i Int) (dh Int) (msz Int) (widnm Doc)) Doc
+(fn mxw_tspine ((tr GTr) (i Int) (dh Int) (msz GWin) (widnm Doc)) Doc
   (measure (struct tr))
   (match tr
     ((GTrL _ _) (mxw_tail widnm dh))
@@ -4999,7 +5015,7 @@
             (DStr "(case-on (lt ")
             (pr_e a)
             (DStr " ")
-            (dint msz)
+            (dint (gwhi_of msz))
             (DStr ") Bool ((case True (chain ")
             (mxw_mh i a msz "True" (mx_wstop))
             (DStr " ")
@@ -5028,7 +5044,7 @@
 ;; since 3b-b): one tree-spine call rooted at the polarity fork.
 ;; p = the prefix split count; the arms continue at index p+1 and
 ;; depth p (the fork itself deepens to p+1).
-(fn mxw_brcase ((scrut Expr) (tgs GTr) (egs GTr) (p Int) (msz Int) (widnm Doc))
+(fn mxw_brcase ((scrut Expr) (tgs GTr) (egs GTr) (p Int) (msz GWin) (widnm Doc))
   Doc
   (mxw_tspine (GTrB scrut tgs egs) (+ p 1) p msz widnm))
 
@@ -5037,7 +5053,7 @@
   ((nm (List Int))
    (d Int)
    (nl Int)
-   (msz Int)
+   (msz GWin)
    (lp MxLp)
    (wlen Int)
    (wcodeE Expr))
@@ -5090,7 +5106,7 @@
                      ") ((= (lt (int_of_nat k) 4294967296) True)) (= (eval_loop (S^ ")
                    (dint aw)
                    (DStr " (lg_fuel k c)) (MkWModule restfs ")
-                   (dint msz)
+                   (dint (gwhi_of msz))
                    (DStr ") (inline gb_")
                    (DStr nm)
                    (DStr "_l")
@@ -5100,7 +5116,7 @@
                    (DStr " st m) (iw_out st (iwhile (S^ ")
                    (dint bw)
                    (DStr " (lg_fuel k c2)) ")
-                   (dint msz)
+                   (dwin msz)
                    (DStr " (ILoc ")
                    (dint gi)
                    (DStr ") (inline gb_")
@@ -5198,7 +5214,7 @@
    (machs (List (Pair Int (Pair Int Expr))))
    (nm (List Int))
    (nl Int)
-   (msz Int)
+   (msz GWin)
    (d Int))
   ERes
   (measure (struct evs))
@@ -5221,7 +5237,7 @@
 ;; the mixed-tier emission: wid twin, per-loop workers, the leg
 (fn sqm_emit
   ((brpre (List Int))
-   (msz Int)
+   (msz GWin)
    (pin Symbol)
    (ifn IFn)
    (bodyE Expr)
@@ -5326,7 +5342,7 @@
    (msls (List (List Expr)))
    (nm (List Int))
    (nl Int)
-   (msz Int)
+   (msz GWin)
    (b Int))
   ERes
   (measure (struct pcs))
@@ -5389,7 +5405,7 @@
   ((nm (List Int))
    (j Int)
    (nl Int)
-   (msz Int)
+   (msz GWin)
    (gsub Int)
    (msl (List Expr))
    (scrutE Expr)
@@ -5410,7 +5426,7 @@
           "(rw (List Instr)) (st (List Int)) (m Mem) (f Nat) (g Nat) (restfs (List Func))) () (= (eval_seq (S^ ")
         (dint kk)
         (DStr " (S f)) (MkWModule restfs ")
-        (dint msz)
+        (dint (gwhi_of msz))
         (DStr ") ")
         (mxc_spn msl (DStr "rw"))
         (DStr " ")
@@ -5418,11 +5434,11 @@
         (DStr " st m) (es_scont (S^ ")
         (dint (- kk 1))
         (DStr " (S f)) (MkWModule restfs ")
-        (dint msz)
+        (dint (gwhi_of msz))
         (DStr ") rw st (istmts (S^ ")
         (dint gsub)
         (DStr " (S g)) ")
-        (dint msz)
+        (dwin msz)
         (DStr " (inline ")
         (mxc_snm nm j "_i")
         (DStr ") ")
@@ -5607,7 +5623,7 @@
                                     pin
                                     "mixed pin without an IProg wrapper"))))
                             ((Some wnm)
-                             (match (wrap_msz msrc wnm gv)
+                             (match (wrap_win msrc wnm gv)
                                (None
                                  (EErr
                                    "wrapper does not yield an IProg (internal)"))
@@ -5947,7 +5963,7 @@
         (dconc (list (DStr "(Cons ") hd (DStr " ") (mxx_spn t tail) (DStr ")"))))))))
 
 ;; the worker split spine at x86 stops
-(fn mxxw_spine ((gs (List GSplit)) (i Int) (msz Int) (tail Doc)) Doc
+(fn mxxw_spine ((gs (List GSplit)) (i Int) (msz GWin) (tail Doc)) Doc
   (measure (struct gs))
   (match gs
     (Nil tail)
@@ -5971,7 +5987,7 @@
             (DStr "(case-on (lt ")
             (pr_e a)
             (DStr " ")
-            (dint msz)
+            (dint (gwhi_of msz))
             (DStr ") Bool ((case True (chain ")
             (mxw_mh i a msz "True" (mxx_wstop))
             (DStr " ")
@@ -5985,7 +6001,7 @@
 ;; -- ix_dwl descends nested XBlocks, so the seal covers every leaf's
 ;; dirt and the per-leaf IH cites bind by matching. The seal IS the
 ;; join.
-(fn mxxw_tspine ((tr GTr) (i Int) (dh Int) (msz Int) (widnm Doc)) Doc
+(fn mxxw_tspine ((tr GTr) (i Int) (dh Int) (msz GWin) (widnm Doc)) Doc
   (measure (struct tr))
   (match tr
     ((GTrL _ _) (mxw_tail widnm dh))
@@ -6009,7 +6025,7 @@
             (DStr "(case-on (lt ")
             (pr_e a)
             (DStr " ")
-            (dint msz)
+            (dint (gwhi_of msz))
             (DStr ") Bool ((case True (chain ")
             (mxw_mh i a msz "True" (mxx_wstop))
             (DStr " ")
@@ -6035,11 +6051,12 @@
          (DStr "))))"))))))
 
 ;; one counter-tied x86 worker: body-copy fns + the claim (probe shape)
-(fn mxxw_brcase ((scrut Expr) (tgs GTr) (egs GTr) (p Int) (msz Int) (widnm Doc))
+(fn mxxw_brcase
+  ((scrut Expr) (tgs GTr) (egs GTr) (p Int) (msz GWin) (widnm Doc))
   Doc
   (mxxw_tspine (GTrB scrut tgs egs) (+ p 1) p msz widnm))
 
-(fn mxxw_emit ((nm (List Int)) (d Int) (nl Int) (msz Int) (lp MxLp) (li MxXLi))
+(fn mxxw_emit ((nm (List Int)) (d Int) (nl Int) (msz GWin) (lp MxLp) (li MxXLi))
   ERes
   (match lp
     ((MkMxLp gi _ lbodyE lbody _ _ wsplits lbr _)
@@ -6113,8 +6130,8 @@
                         (DStr
                           ") ((= (lt (int_of_nat k) 4294967296) True)) (= (xeval_loop (S^ ")
                         (dint aw)
-                        (DStr " (lg_fuel k c)) (MkXModule restfs 0 ")
-                        (dint msz)
+                        (DStr " (lg_fuel k c)) (MkXModule restfs ")
+                        (dwin msz)
                         (DStr ") (inline gb_")
                         (DStr nm)
                         (DStr "_l")
@@ -6130,7 +6147,7 @@
                         (DStr " (iwhile (S^ ")
                         (dint bw)
                         (DStr " (lg_fuel k c2)) ")
-                        (dint msz)
+                        (dwin msz)
                         (DStr " (ILoc ")
                         (dint gi)
                         (DStr ") (inline gb_")
@@ -6173,7 +6190,7 @@
    (lis (List MxXLi))
    (nm (List Int))
    (nl Int)
-   (msz Int)
+   (msz GWin)
    (d Int))
   ERes
   (measure (struct evs))
@@ -6533,7 +6550,7 @@
 
 ;; the chain split spine: True arms continue at pst, False arms
 ;; conflate traps at lst
-(fn mxx_spine ((t GTr) (i Int) (msz Int) (pst Doc) (lst Doc) (tail Doc)) Doc
+(fn mxx_spine ((t GTr) (i Int) (msz GWin) (pst Doc) (lst Doc) (tail Doc)) Doc
   (measure (struct t))
   (match t
     ((GTrL _ _) tail)
@@ -6559,7 +6576,7 @@
             (DStr "(case-on (lt ")
             (pr_e a)
             (DStr " ")
-            (dint msz)
+            (dint (gwhi_of msz))
             (DStr ") Bool ((case True (chain ")
             (mxw_mh i a msz "True" pst)
             (DStr " ")
@@ -6667,7 +6684,7 @@
 ;; the sub-lemma split spine: mid computes brake at (stop xm_scont);
 ;; the final arm and the trap arms compute open, so both sides
 ;; converge on the braked-tail residue / the trap
-(fn mxxs_spine ((t GTr) (i Int) (msz Int)) Doc
+(fn mxxs_spine ((t GTr) (i Int) (msz GWin)) Doc
   (measure (struct t))
   (match t
     ((GTrL _ _) (DStr "refl"))
@@ -6692,7 +6709,7 @@
             (DStr "(case-on (lt ")
             (pr_e a)
             (DStr " ")
-            (dint msz)
+            (dint (gwhi_of msz))
             (DStr ") Bool ((case True (chain ")
             (mxw_mh
               i
@@ -6730,7 +6747,7 @@
   ((nm (List Int))
    (b Int)
    (nl Int)
-   (msz Int)
+   (msz GWin)
    (tn Int)
    (segs (List MxPc))
    (msls (List (Pair (List Expr) (List Expr))))
@@ -6776,8 +6793,8 @@
                         "(za Int) (zb Int) (zc Int) (rw (List XInstr)) (m Mem) (f Nat) (g Nat) (restfs (List XFunc))"))
                     (DStr ") () (= (xeval_seq (S^ ")
                     (dint (+ (ilen_e sl) (ilen_e zl)))
-                    (DStr " (S f)) (MkXModule restfs 0 ")
-                    (dint msz)
+                    (DStr " (S f)) (MkXModule restfs ")
+                    (dwin msz)
                     (DStr ") ")
                     (mxx_spn (st_app sl zl) (DStr "rw"))
                     (DStr " ")
@@ -6796,12 +6813,12 @@
                     (if db (DStr "0") (DStr "zb"))
                     (DStr " ")
                     (if dc (DStr "0") (DStr "zc"))
-                    (DStr " (S f) (MkXModule restfs 0 ")
-                    (dint msz)
+                    (DStr " (S f) (MkXModule restfs ")
+                    (dwin msz)
                     (DStr ") rw (istmts (S^ ")
                     (dint tn)
                     (DStr " (S g)) ")
-                    (dint msz)
+                    (dwin msz)
                     (DStr " (inline ")
                     cnm
                     (DStr ") ")
@@ -6827,7 +6844,7 @@
   ((nm (List Int))
    (b Int)
    (nl Int)
-   (msz Int)
+   (msz GWin)
    (tn Int)
    (gm Int)
    (cst Doc)
@@ -6882,7 +6899,7 @@
         (DStr ") lr lhs ((inst g c2)) ()) (case-on (istmts (S^ ")
         (dint tn)
         (DStr " (S c2)) ")
-        (dint msz)
+        (dwin msz)
         (DStr " (inline ")
         cnm
         (DStr ") ")
@@ -6924,7 +6941,7 @@
 ;; shared raw scrutinee; each arm rewrites into both sides, walks its
 ;; own region's guards (deduped per-REGION -- the IF-1c law), and
 ;; rides through the seal to the arm-independent xm_scont form
-(fn mxxbr_case ((scrut Expr) (tgs GTr) (egs GTr) (msz Int)) Doc
+(fn mxxbr_case ((scrut Expr) (tgs GTr) (egs GTr) (msz GWin)) Doc
   (mxxs_spine (GTrB scrut (gt_dedup Nil tgs) (gt_dedup Nil egs)) 1 msz))
 
 ;; one SEALED-BRANCH sub-lemma (IF-3a): the chunk fn + the open-tail
@@ -6939,7 +6956,7 @@
   ((nm (List Int))
    (b Int)
    (nl Int)
-   (msz Int)
+   (msz GWin)
    (st IStmt)
    (sE Expr)
    (scrut Expr)
@@ -6977,8 +6994,8 @@
                   "(za Int) (zb Int) (zc Int) (rw (List XInstr)) (m Mem) (f Nat) (g Nat) (restfs (List XFunc))"))
               (DStr ") () (= (xeval_seq (S^ ")
               (dint (+ t0 (ilen_e zl)))
-              (DStr " (S f)) (MkXModule restfs 0 ")
-              (dint msz)
+              (DStr " (S f)) (MkXModule restfs ")
+              (dwin msz)
               (DStr ") ")
               (mxx_spn (st_app sl zl) (DStr "rw"))
               (DStr " ")
@@ -6999,12 +7016,12 @@
               (if dc (DStr "0") (DStr "zc"))
               (DStr " (S^ ")
               (dint (- t0 1))
-              (DStr " (S f)) (MkXModule restfs 0 ")
-              (dint msz)
+              (DStr " (S f)) (MkXModule restfs ")
+              (dwin msz)
               (DStr ") rw (istmts (S^ ")
               (dint (gcost (Cons st Nil)))
               (DStr " (S g)) ")
-              (dint msz)
+              (dwin msz)
               (DStr " (inline ")
               cnm
               (DStr ") ")
@@ -7024,7 +7041,7 @@
   ((nm (List Int))
    (b Int)
    (nl Int)
-   (msz Int)
+   (msz GWin)
    (ts Int)
    (gm Int)
    (cst Doc)
@@ -7046,7 +7063,7 @@
         (DStr " c2))) ()) (case-on (istmts (S^ ")
         (dint gm)
         (DStr " c2) ")
-        (dint msz)
+        (dwin msz)
         (DStr " (inline ")
         cnm
         (DStr ") ")
@@ -7090,7 +7107,7 @@
 (fn mxx_lhead
   ((nm (List Int))
    (nl Int)
-   (msz Int)
+   (msz GWin)
    (gi Int)
    (kg Int)
    (d Int)
@@ -7167,7 +7184,7 @@
           (DStr " ")
           (mxx_tw si (DStr "c2"))
           (DStr ")) ")
-          (dint msz)
+          (dwin msz)
           (DStr " (ILoc ")
           (dint gi)
           (DStr ") (inline gb_")
@@ -7305,7 +7322,7 @@
    (i Int)
    (nm (List Int))
    (nl Int)
-   (msz Int)
+   (msz GWin)
    (gi Int)
    (kg Int)
    (d Int)
@@ -7394,7 +7411,7 @@
             (DStr "(case-on (lt ")
             (pr_e a)
             (DStr " ")
-            (dint msz)
+            (dint (gwhi_of msz))
             (DStr ") Bool ((case True (chain ")
             (mxw_mh i a msz "True" pst)
             (DStr " ")
@@ -7440,7 +7457,7 @@
 (fn mxx_bleg
   ((nm (List Int))
    (nl Int)
-   (msz Int)
+   (msz GWin)
    (parts (Pair (List IStmt) (Pair IStmt (List IStmt))))
    (olp (Option MxPc))
    (li (Option MxXLi))
@@ -7662,7 +7679,7 @@
    (brpre (List Int))
    (nm (List Int))
    (nl Int)
-   (msz Int)
+   (msz GWin)
    (fm Int)
    (gm Int)
    (b Int)
@@ -7743,8 +7760,8 @@
                       (DStr "")))
                   (DStr ") () (= (xeval_seq (S^ ")
                   (dint fm)
-                  (DStr " c) (MkXModule restfs 0 ")
-                  (dint msz)
+                  (DStr " c) (MkXModule restfs ")
+                  (dwin msz)
                   (DStr ") ")
                   codex
                   (DStr " ")
@@ -7752,7 +7769,7 @@
                   (DStr " m) (ix_sout (istmts (S^ ")
                   (dint gm)
                   (DStr " c2) ")
-                  (dint msz)
+                  (dwin msz)
                   (DStr " ")
                   codei
                   (DStr " ")
@@ -8124,7 +8141,7 @@
 ;; cut at chunk seals and loop exits, the boundary chain
 (fn sqx_emit
   ((brpre (List Int))
-   (msz Int)
+   (msz GWin)
    (pin Symbol)
    (ifn IFn)
    (bodyE Expr)
@@ -8245,9 +8262,10 @@
         (if (has_while tb) True (if (has_while eb) True (has_while t))))
        (_ (has_while t))))))
 
-;; the wrapper's declared memsize, discovered by RUNNING the wrapper
+;; the wrapper's declared window [ibase, imemsize), discovered by
+;; RUNNING the wrapper
 ;; on the pin value (never assumed)
-(fn wrap_msz ((msrc Module) (wrap Symbol) (gv Expr)) (Option Int)
+(fn wrap_win ((msrc Module) (wrap Symbol) (gv Expr)) (Option GWin)
   (match (invoke msrc wrap (Cons gv Nil))
     (None None)
     ((Some pv)
@@ -8255,7 +8273,13 @@
        (None None)
        ((Some pargs)
         (match pargs
-          ((Cons _ (Cons ms Nil)) (e_int ms))
+          ((Cons _ (Cons mb (Cons ms Nil)))
+           (match (e_int mb)
+             (None None)
+             ((Some b)
+              (match (e_int ms)
+                (None None)
+                ((Some m) (Some (MkGWin b m)))))))
           (_ None)))))))
 
 (fn gen_bridge
@@ -8263,7 +8287,7 @@
    (trans (List Int))
    (x86 Bool)
    (wrapnm (List Int))
-   (msz Int)
+   (msz GWin)
    (pin Symbol)
    (ifn IFn)
    (tv Expr))
@@ -8380,7 +8404,7 @@
                       (d_tie tiepre (pin_nm pin) (chars_of_sym trans) pin vdoc)
                       (d_note pin "loop pin without an IProg wrapper"))))
                 ((Some wnm)
-                 (match (wrap_msz msrc wnm gv)
+                 (match (wrap_win msrc wnm gv)
                    (None (EErr "wrapper does not yield an IProg (internal)"))
                    ((Some msz)
                     (match
@@ -8410,7 +8434,7 @@
                   (EOk
                     (d_tie tiepre (pin_nm pin) (chars_of_sym trans) pin vdoc)))
                 ((Some wnm)
-                 (match (wrap_msz msrc wnm gv)
+                 (match (wrap_win msrc wnm gv)
                    (None (EErr "wrapper does not yield an IProg (internal)"))
                    ((Some msz)
                     (match

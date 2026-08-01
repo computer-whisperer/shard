@@ -216,6 +216,21 @@ half out.
   65536 retires). The target leg realizes index → address as
   base + zero-extended offset — wasm linear memory literally is
   this, and the x86 leg gains the base-register convention.
+  *(Amended 2026-08-01, the M5 base threading — STREAM.md §7.9:
+  IProg declares the window as [ibase, imemsize) — both bounds
+  are program text, discovered by running the wrapper, never
+  assumed — and the evaluator guards every load/store against the
+  declared window (iexp/istmt/istmts/iwhile thread mlo msz; the
+  generated bridges' guard splits stay UNPREMISED because the
+  window is spelled identically on both sides of every split —
+  window equality between imp and the machine tiers is forced by
+  the v2 unpremised-bridge thesis, a premised low bound would
+  re-open every bridge statement). The landed realization is the
+  IDENTITY at the declared base: the program's own address
+  literals carry the base, the emitted image needs no relocation,
+  and the module window equals the mapped region (X86.md §51,
+  elf.shard W2). The base-register convention above remains the
+  named growth for base-portable programs; it did not land.)*
 - **The capability doctrine (replaces v1 width-parametricity).**
   imp kind semantics are target-independent; what varies per
   target is which kinds it supports, never what an op means. Each

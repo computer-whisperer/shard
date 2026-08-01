@@ -160,7 +160,7 @@
 ;; bytes (loads/stores trap outside it; 0 = no memory) — memsize is
 ;; the twin's declared parameter, bounded per target by that target's
 ;; capability set (§2a)
-(record IProg (ifns (List IFn)) (imemsize Int))
+(record IProg (ifns (List IFn)) (ibase Int) (imemsize Int))
 
 ;; --- fuel -----------------------------------------------------------------------
 
@@ -271,16 +271,16 @@
 
 ;; None = trap: out-of-range local, zero divisor, bad shift count,
 ;; out-of-bounds load
-(fn iexp ((e IExp) (lc (List Int)) (mem Mem) (msz Int)) (Option Int)
+(fn iexp ((e IExp) (lc (List Int)) (mem Mem) (mlo Int) (msz Int)) (Option Int)
   (measure (struct e))
   (match e
     ((IConst n) (Some n))
     ((ILoc i) (ilget lc i))
     ((IBin k o a b)
-     (match (iexp a lc mem msz)
+     (match (iexp a lc mem mlo msz)
        (None None)
        ((Some va)
-        (match (iexp b lc mem msz)
+        (match (iexp b lc mem mlo msz)
           (None None)
           ((Some vb) (iop_val k o va vb))))))
     ;; rotate-right within the kind's width, count taken mod width
@@ -303,10 +303,10 @@
     ;; and ground-collapses identically at every nonzero count
     ;; (V2-2c amendment; the wasm rotr legs mirror both amendments)
     ((IRotr k a c)
-     (match (iexp a lc mem msz)
+     (match (iexp a lc mem mlo msz)
        (None None)
        ((Some va)
-        (match (iexp c lc mem msz)
+        (match (iexp c lc mem mlo msz)
           (None None)
           ((Some vc)
            (let ((v (band va (- (ikmod k) 1))))
@@ -319,20 +319,20 @@
     ;; zero-extension of an in-band value is the identity at this
     ;; level — the node exists for kind bookkeeping and as the
     ;; translator's instruction point
-    ((IExt _ _ a) (iexp a lc mem msz))
+    ((IExt _ _ a) (iexp a lc mem mlo msz))
     ;; mask-narrowing is BAND-spelled like IRotr (the bit-op idiom —
     ;; the sha-class specs' own mask spelling, and the machines' trunc
     ;; emissions are And-masks, so trunc aligns syntactically at every
     ;; tier); arithmetic wrap (iop_val) stays the mod idiom
     ((ITrunc _ kt a)
-     (match (iexp a lc mem msz)
+     (match (iexp a lc mem mlo msz)
        (None None)
        ((Some va) (Some (band va (- (ikmod kt) 1))))))
     ((ILoad a)
-     (match (iexp a lc mem msz)
+     (match (iexp a lc mem mlo msz)
        (None None)
        ((Some ad)
-        (if (le 0 ad) (if (lt ad msz) (Some (mem_get mem ad)) None) None))))))
+        (if (le mlo ad) (if (lt ad msz) (Some (mem_get mem ad)) None) None))))))
 
 ;; --- statement evaluation (one fuel-countdown SCC) ------------------------------
 
@@ -344,7 +344,7 @@
 ;; iterations: istmts hands the same f2 to head and tail, and iwhile
 ;; burns one unit per re-entry.
 
-(fn istmt ((fuel Nat) (msz Int) (s IStmt) (lc (List Int)) (mem Mem))
+(fn istmt ((fuel Nat) (mlo Int) (msz Int) (s IStmt) (lc (List Int)) (mem Mem))
   (Option IOut)
   (measure (struct fuel))
   (match fuel
@@ -352,54 +352,61 @@
     ((S f2)
      (match s
        ((ISet i e)
-        (match (iexp e lc mem msz)
+        (match (iexp e lc mem mlo msz)
           (None (Some ITrap))
           ((Some v)
            (match (ilset lc i v)
              (None (Some ITrap))
              ((Some lc2) (Some (INorm lc2 mem)))))))
        ((IStore ae ve)
-        (match (iexp ae lc mem msz)
+        (match (iexp ae lc mem mlo msz)
           (None (Some ITrap))
           ((Some ad)
-           (if (le 0 ad)
+           (if (le mlo ad)
              (if (lt ad msz)
-               (match (iexp ve lc mem msz)
+               (match (iexp ve lc mem mlo msz)
                  (None (Some ITrap))
                  ((Some v) (Some (INorm lc (mem_set mem ad v)))))
                (Some ITrap))
              (Some ITrap)))))
        ((IIf c tb eb)
-        (match (iexp c lc mem msz)
+        (match (iexp c lc mem mlo msz)
           (None (Some ITrap))
           ((Some cv)
-           (if (int_eq cv 0) (istmts f2 msz eb lc mem)
-           (istmts f2 msz tb lc mem)))))
-       ((IWhile c b) (iwhile f2 msz c b lc mem))))))
+           (if (int_eq cv 0) (istmts f2 mlo msz eb lc mem)
+           (istmts f2 mlo msz tb lc mem)))))
+       ((IWhile c b) (iwhile f2 mlo msz c b lc mem))))))
 
 ;; the loop engine — a NAMED SCC member, not an inline arm, so loop
 ;; workers can state and cite loop-level equations against a folded
 ;; (iwhile …) term (the eval_loop precedent): induction recurses on
 ;; exactly this unit, one fuel per iteration.
 (fn iwhile
-  ((fuel Nat) (msz Int) (c IExp) (b (List IStmt)) (lc (List Int)) (mem Mem))
+  ((fuel Nat)
+   (mlo Int)
+   (msz Int)
+   (c IExp)
+   (b (List IStmt))
+   (lc (List Int))
+   (mem Mem))
   (Option IOut)
   (measure (struct fuel))
   (match fuel
     (Z None)
     ((S f2)
-     (match (iexp c lc mem msz)
+     (match (iexp c lc mem mlo msz)
        (None (Some ITrap))
        ((Some cv)
         (if (int_eq cv 0) (Some (INorm lc mem))
-        (match (istmts f2 msz b lc mem)
+        (match (istmts f2 mlo msz b lc mem)
           (None None)
           ((Some out)
            (match out
-             ((INorm lc2 mem2) (iwhile f2 msz c b lc2 mem2))
+             ((INorm lc2 mem2) (iwhile f2 mlo msz c b lc2 mem2))
              (ITrap (Some ITrap)))))))))))
 
-(fn istmts ((fuel Nat) (msz Int) (ss (List IStmt)) (lc (List Int)) (mem Mem))
+(fn istmts
+  ((fuel Nat) (mlo Int) (msz Int) (ss (List IStmt)) (lc (List Int)) (mem Mem))
   (Option IOut)
   (measure (struct fuel))
   (match fuel
@@ -408,11 +415,11 @@
      (match ss
        (Nil (Some (INorm lc mem)))
        ((Cons s t)
-        (match (istmt f2 msz s lc mem)
+        (match (istmt f2 mlo msz s lc mem)
           (None None)
           ((Some out)
            (match out
-             ((INorm lc2 mem2) (istmts f2 msz t lc2 mem2))
+             ((INorm lc2 mem2) (istmts f2 mlo msz t lc2 mem2))
              (ITrap (Some ITrap))))))))))
 
 ;; --- the big-step denotation (the composition boundary) -------------------------
@@ -430,6 +437,7 @@
        (match
          (istmts
            fuel
+           (ibase_of p)
            (imemsize_of p)
            (ibody_of f)
            (iapp
@@ -439,7 +447,8 @@
          (None None)
          ((Some out)
           (match out
-            ((INorm lc2 mem2) (iexp (iresult_of f) lc2 mem2 (imemsize_of p)))
+            ((INorm lc2 mem2)
+             (iexp (iresult_of f) lc2 mem2 (ibase_of p) (imemsize_of p)))
             (ITrap None))))
        None))))
 
@@ -455,6 +464,7 @@
        (match
          (istmts
            fuel
+           (ibase_of p)
            (imemsize_of p)
            (ibody_of f)
            (iapp
@@ -465,7 +475,7 @@
          ((Some out)
           (match out
             ((INorm lc2 mem2)
-             (match (iexp (iresult_of f) lc2 mem2 (imemsize_of p))
+             (match (iexp (iresult_of f) lc2 mem2 (ibase_of p) (imemsize_of p))
                (None None)
                ((Some v) (Some (Pair v mem2)))))
             (ITrap None))))
@@ -695,11 +705,13 @@
 ;; list at fuel S (S g) (the extra unit feeds the Nil tail) — lets
 ;; il_s1len fall out of il_slen one-directionally
 (claim il_s2s
-  (goal ((g Nat) (msz Int) (s IStmt) (lc (List Int)) (m Mem)) ()
-    (= (istmts (S (S g)) msz (Cons s Nil) lc m) (istmt (S g) msz s lc m)))
+  (goal ((g Nat) (mlo Int) (msz Int) (s IStmt) (lc (List Int)) (m Mem)) ()
+    (=
+      (istmts (S (S g)) mlo msz (Cons s Nil) lc m)
+      (istmt (S g) mlo msz s lc m)))
   (chain
     (steps ((compute lhs (stop istmt))))
-    (case-on (istmt (S g) msz s lc m) Option
+    (case-on (istmt (S g) mlo msz s lc m) Option
       ((case None
          (steps ((rewrite (hyp 0) lr both true ()) (compute both)) refl))
        (case Some
@@ -719,13 +731,21 @@
 ;; IWhile arm reach the loop's self-recursion through the strong
 ;; subterm-IH, and il_wlen fall out one-directionally
 (claim il_w2s
-  (goal ((g Nat) (msz Int) (c IExp) (b (List IStmt)) (lc (List Int)) (m Mem)) ()
+  (goal
+    ((g Nat)
+     (mlo Int)
+     (msz Int)
+     (c IExp)
+     (b (List IStmt))
+     (lc (List Int))
+     (m Mem))
+    ()
     (=
-      (istmts (S (S g)) msz (Cons (IWhile c b) Nil) lc m)
-      (iwhile g msz c b lc m)))
+      (istmts (S (S g)) mlo msz (Cons (IWhile c b) Nil) lc m)
+      (iwhile g mlo msz c b lc m)))
   (chain
     (steps ((compute lhs (stop iwhile))))
-    (case-on (iwhile g msz c b lc m) Option
+    (case-on (iwhile g mlo msz c b lc m) Option
       ((case None
          (steps ((rewrite (hyp 0) lr both true ()) (compute both)) refl))
        (case Some
@@ -746,8 +766,10 @@
 ;; which sits strictly below fuel = (S (S (S f4))) — no mutual lemma
 ;; cycle, no nested induction.
 (claim il_slen
-  (goal ((fuel Nat) (msz Int) (ss (List IStmt)) (lc (List Int)) (m Mem)) ()
-    (= (iolen (ilen lc) (istmts fuel msz ss lc m)) (ilen lc)))
+  (goal
+    ((fuel Nat) (mlo Int) (msz Int) (ss (List IStmt)) (lc (List Int)) (m Mem))
+    ()
+    (= (iolen (ilen lc) (istmts fuel mlo msz ss lc m)) (ilen lc)))
   (subterm-induct
     fuel
     (case-on fuel Nat
@@ -786,7 +808,7 @@
                                   ((rewrite (hyp 0) lr lhs true ())
                                    (unfold istmt lhs)
                                    (reduce lhs)))
-                                (case-on (iexp e lc m msz) Option
+                                (case-on (iexp e lc m mlo msz) Option
                                   ((case None
                                      (steps
                                        ((rewrite (hyp 0) lr lhs true ())
@@ -897,7 +919,7 @@
                                   ((rewrite (hyp 0) lr lhs true ())
                                    (unfold istmt lhs)
                                    (reduce lhs)))
-                                (case-on (iexp ae lc m msz) Option
+                                (case-on (iexp ae lc m mlo msz) Option
                                   ((case None
                                      (steps
                                        ((rewrite (hyp 0) lr lhs true ())
@@ -909,7 +931,7 @@
                                        (steps
                                          ((rewrite (hyp 0) lr lhs true ())
                                           (reduce lhs)))
-                                       (case-on (le 0 ad) Bool
+                                       (case-on (le mlo ad) Bool
                                          ((case True
                                             (chain
                                               (steps
@@ -931,7 +953,8 @@
                                                           true
                                                           ())
                                                         (reduce lhs)))
-                                                     (case-on (iexp ve lc m msz)
+                                                     (case-on
+                                                       (iexp ve lc m mlo msz)
                                                        Option
                                                        ((case None
                                                           (steps
@@ -995,7 +1018,7 @@
                                   ((rewrite (hyp 0) lr lhs true ())
                                    (unfold istmt lhs)
                                    (reduce lhs)))
-                                (case-on (iexp cnd lc m msz) Option
+                                (case-on (iexp cnd lc m mlo msz) Option
                                   ((case None
                                      (steps
                                        ((rewrite (hyp 0) lr lhs true ())
@@ -1018,7 +1041,8 @@
                                                    true
                                                    ())
                                                  (reduce lhs)))
-                                              (case-on (istmts f3 msz eb lc m)
+                                              (case-on
+                                                (istmts f3 mlo msz eb lc m)
                                                 Option
                                                 ((case None
                                                    (steps
@@ -1154,7 +1178,8 @@
                                                    true
                                                    ())
                                                  (reduce lhs)))
-                                              (case-on (istmts f3 msz tb lc m)
+                                              (case-on
+                                                (istmts f3 mlo msz tb lc m)
                                                 Option
                                                 ((case None
                                                    (steps
@@ -1314,7 +1339,7 @@
                                          ((rewrite (hyp 0) lr lhs true ())
                                           (unfold iwhile lhs)
                                           (reduce lhs)))
-                                       (case-on (iexp cw lc m msz) Option
+                                       (case-on (iexp cw lc m mlo msz) Option
                                          ((case None
                                             (steps
                                               ((rewrite (hyp 0) lr lhs true ())
@@ -1372,7 +1397,8 @@
                                                           ())
                                                         (reduce lhs)))
                                                      (case-on
-                                                       (istmts f4 msz bw lc m)
+                                                       (istmts f4 mlo msz bw lc
+                                                         m)
                                                        Option
                                                        ((case None
                                                           (steps
@@ -1507,6 +1533,7 @@
                                                                            lcb)
                                                                          (iwhile
                                                                            f4
+                                                                           mlo
                                                                            msz
                                                                            cw bw
                                                                            lcb
@@ -1551,8 +1578,9 @@
                                                                        refl))
                                                                    (case-on
                                                                      (iwhile f4
-                                                                       msz cw bw
-                                                                       lcb mb)
+                                                                       mlo msz
+                                                                       cw bw lcb
+                                                                       mb)
                                                                      Option
                                                                      ((case None
                                                                         (steps
@@ -1746,8 +1774,8 @@
 
 ;; single-statement corollary (via the il_s2s singleton wrapper)
 (claim il_s1len
-  (goal ((fuel Nat) (msz Int) (s IStmt) (lc (List Int)) (m Mem)) ()
-    (= (iolen (ilen lc) (istmt fuel msz s lc m)) (ilen lc)))
+  (goal ((fuel Nat) (mlo Int) (msz Int) (s IStmt) (lc (List Int)) (m Mem)) ()
+    (= (iolen (ilen lc) (istmt fuel mlo msz s lc m)) (ilen lc)))
   (case-on fuel Nat
     ((case Z (steps ((rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
      (case S
@@ -1761,9 +1789,16 @@
 ;; the loop corollary (via the il_w2s wrapper) — THE NAMED JOINT: the
 ;; x86 loop denotations' exit-locals arity fact (IMP.md §6a)
 (claim il_wlen
-  (goal ((fuel Nat) (msz Int) (c IExp) (b (List IStmt)) (lc (List Int)) (m Mem))
+  (goal
+    ((fuel Nat)
+     (mlo Int)
+     (msz Int)
+     (c IExp)
+     (b (List IStmt))
+     (lc (List Int))
+     (m Mem))
     ()
-    (= (iolen (ilen lc) (iwhile fuel msz c b lc m)) (ilen lc)))
+    (= (iolen (ilen lc) (iwhile fuel mlo msz c b lc m)) (ilen lc)))
   (chain
     (rewrite-with (lemma il_w2s) rl lhs () ())
     (rewrite-with (lemma il_slen) lr lhs () ())
@@ -1802,13 +1837,13 @@
        ((IWhile c b) False)))))
 
 ;; the continuation adapter: istmts' own dispatch over a prefix output
-(fn ist_cont ((f Nat) (msz Int) (b (List IStmt)) (r (Option IOut)))
+(fn ist_cont ((f Nat) (mlo Int) (msz Int) (b (List IStmt)) (r (Option IOut)))
   (Option IOut)
   (match r
     (None None)
     ((Some out)
      (match out
-       ((INorm lc2 m2) (istmts f msz b lc2 m2))
+       ((INorm lc2 m2) (istmts f mlo msz b lc2 m2))
        (ITrap (Some ITrap))))))
 
 (claim ist_seam
@@ -1817,13 +1852,19 @@
      (b (List IStmt))
      (f Nat)
      (g Nat)
+     (mlo Int)
      (msz Int)
      (lc (List Int))
      (m Mem))
     ((= (ist_flat a) True))
     (=
-      (istmts (lg_fuel (istn a) (S f)) msz (isapp a b) lc m)
-      (ist_cont (S f) msz b (istmts (lg_fuel (istn a) (S g)) msz a lc m))))
+      (istmts (lg_fuel (istn a) (S f)) mlo msz (isapp a b) lc m)
+      (ist_cont
+        (S f)
+        mlo
+        msz
+        b
+        (istmts (lg_fuel (istn a) (S g)) mlo msz a lc m))))
   (induct a
     ((case Nil
        (steps
@@ -1865,7 +1906,7 @@
                  (reduce lhs)
                  (unfold istmt rhs)
                  (reduce rhs)))
-              (case-on (iexp e lc m msz) Option
+              (case-on (iexp e lc m mlo msz) Option
                 ((case None
                    (steps
                      ((rewrite (hyp 0) lr both true ())
@@ -1940,7 +1981,7 @@
                  (reduce lhs)
                  (unfold istmt rhs)
                  (reduce rhs)))
-              (case-on (iexp ae lc m msz) Option
+              (case-on (iexp ae lc m mlo msz) Option
                 ((case None
                    (steps
                      ((rewrite (hyp 0) lr both true ())
@@ -1954,7 +1995,7 @@
                         (compute
                           both
                           (stop istmts lg_fuel istn isapp ist_cont iexp))))
-                     (case-on (le 0 ad) Bool
+                     (case-on (le mlo ad) Bool
                        ((case True
                           (chain
                             (steps
@@ -1971,7 +2012,7 @@
                                         both
                                         (stop istmts lg_fuel istn isapp ist_cont
                                           iexp))))
-                                   (case-on (iexp ve lc m msz) Option
+                                   (case-on (iexp ve lc m mlo msz) Option
                                      ((case None
                                         (steps
                                           ((rewrite (hyp 0) lr both true ())
@@ -2068,14 +2109,21 @@
 ;; tower matching. Loops keep their own machinery (the counter-tied
 ;; workers); branch pieces are the intended consumer.
 (claim ist_seam1
-  (goal ((s IStmt) (b (List IStmt)) (f Nat) (msz Int) (lc (List Int)) (m Mem))
+  (goal
+    ((s IStmt)
+     (b (List IStmt))
+     (f Nat)
+     (mlo Int)
+     (msz Int)
+     (lc (List Int))
+     (m Mem))
     ()
     (=
-      (istmts (S (S f)) msz (Cons s b) lc m)
-      (ist_cont (S f) msz b (istmts (S (S f)) msz (Cons s Nil) lc m))))
+      (istmts (S (S f)) mlo msz (Cons s b) lc m)
+      (ist_cont (S f) mlo msz b (istmts (S (S f)) mlo msz (Cons s Nil) lc m))))
   (chain
     (steps ((compute both (stop istmt ist_cont))))
-    (case-on (istmt (S f) msz s lc m) Option
+    (case-on (istmt (S f) mlo msz s lc m) Option
       ((case None
          (steps ((rewrite (hyp 0) lr both true ()) (compute both)) refl))
        (case Some
