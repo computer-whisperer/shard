@@ -816,6 +816,28 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
+# PCB SPACE-TIME demo (the time-axis rung): occupancy is time-indexed
+# (st = t*W*H + c), packets vanish on arrival, the move alphabet gains
+# a HOLD.  8x8 full wall with one gap, two nets — SPATIALLY UNROUTABLE
+# by construction (both wires would need the gap cell), routed in time:
+# A's unique d=5 route fixes the conflict schedule, B's ladder refutes
+# d=4/5 on geometry and d=6 on the time conflict (census convicts A's
+# TRANSIT space-time cells b@90/b@155), then finds d=7 with EXACTLY
+# ONE hold (parity-provable), convoying one cell behind A and crossing
+# A's goal cell after it vanishes.  The astar arm re-routes both nets
+# in one query each on (cell,tick) dominance keys (pure duplicate
+# detection in space-time).  Measured CI pipeline 228, 2026-08-01,
+# ~170s job: ladder B 110,616 steps / 80 forks over four levels, astar
+# B 89,489 / 15 forks / 17 dominated.  Expected ending, BOTH arms:
+# PCB-TIME 8x8 KEEP-7 NETS-2 MAKESPAN-7 TICKS-12 HOLDS-1
+# CERT-DISJOINT-OK (astar line prefixed PCB-TIME-ASTAR).
+echo "=== search: PCB space-time demo (holds + convoy) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/pcb_time_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 # Pure Shard function-body pins. These retain the playground's full grammars
 # and exact solution floors while SUPERPOSE settles them by demanded holes.
 # The executable imports kernel/types for an independent representative gate,

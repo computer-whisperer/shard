@@ -4086,6 +4086,100 @@ exhausts back to exact, is the named follow-on).
   target, not a pin (the ladder arm alone is ~48 min); whether the
   astar arm becomes a slim pinned demo is an open call.
 
+**The time axis opens — the space-time formulation (10634ab), GREEN
+(pipeline 228, 2026-08-01, job 663 at 170s).**  USER STEER: the
+intended end-problem is Tenstorrent-class — a grid of compute
+engines + configurable DMA over a NoC, optimized OVER TIME; the gap
+analysis named four axes (time, cost objectives, capacity sharing,
+placement coupling) and ratified time first.  The formulation landed
+with ZERO engine changes — the task-parametricity the A* drive
+promised, now proven by its second live consumer.
+
+**The model (tools/search/tasks/pcb_time_model.shard).**  Occupancy
+becomes SPACE-TIME CELLS st = t*(W*H) + c in a plain Int list — the
+entire Int-set machinery (pcb_mem, census payloads, ownership scans)
+transfers verbatim, and a census row now names WHERE and WHEN.
+PTMove gains TmH (hold); packets occupy one cell per tick and VANISH
+on arrival (transfer semantics — freed cells are what make
+time-sharing the point); keepouts stay purely spatial; conflicts are
+VERTEX-only (head-to-tail convoys legal, as on a streaming NoC).
+The walk checks blocked-BEFORE-goal — an arrival-slot conflict is
+real in time.  Two spatial results RETIRE soundly: self-avoidance
+(space-time revisits can be necessary; dropping the pruning needs no
+lemma — the schema enumerates all move lists outright, so EMPTY
+stays an exact conditional refutation with the loop-erasure argument
+simply gone) and parity deepening (a hold flips arrival parity;
+ladders step +1 unconditionally).  The admissible Manhattan floor
+SURVIVES (distance falls at most 1 per tick, 0 on holds).  V1 scope
+cuts, each a deliberate lean: vertex conflicts only (swap check = a
+follow-on knob), two-pin nets (multicast-in-time = a later rung),
+injection at tick 0 with leading holds occupying the source, unit
+packets (durations/flit-trains = where capacity rungs meet time).
+
+**The dominance payoff.**  For one net against fixed trajectories,
+(cell, tick) is the COMPLETE state — every arrival there has cost
+exactly t and an identical future — so the A* drive's first-arrival
+dominance becomes PURE DUPLICATE DETECTION: zero loss, the recorded
+prefix-commitment limit vanishes for this task, and per-net search
+collapses from exponential path-count to at most W*H*T states.
+Same-cell-different-tick arrivals correctly never dominate (earlier
+is not better until the corridor clears).  This is also the
+checked-dominance rung's cleanest venue: domination by state
+IDENTITY, not inequality.
+
+**The instrument (tools/search/pcb_time_probe.shard).**  8x8 board,
+FULL wall at x=4 with a single gap at (4,3), two west-east nets —
+an instance SPATIALLY UNROUTABLE BY CONSTRUCTION (both wires need
+the gap cell; the spatial demo would rip-cycle to FAIL) that routes
+once time is real.  A's d=5 route is UNIQUE, so its trajectory is
+hand-fixed (row 3, ticks 0..5) and B's conflict schedule is
+deterministic.  Measured (228, the predicted story line for line,
+32/0 + 111/0 checks, all pins hand-derived before first fire):
+
+- **Ladder arm:** B refutes d=4/5 on geometry (min 6 spatial moves
+  through the gap), d=6 on the TIME conflict — every length-6 route
+  needs the gap's only free west neighbor (3,3) at t=2, where A is
+  IN TRANSIT.  The census convicted A's transit sts b@90 = (2,3)@t1
+  and b@155 = (3,3)@t2 at every level (prediction refined: the
+  shallow-dying prefixes mint them per level, not only at d=6); no
+  spill (12 rows < 16 cap); wall rows tick-resolved.  d=7 FOUND len
+  7 with EXACTLY ONE hold — parity-provable in advance (6 spatial
+  moves minimum, 7 spatial breaks parity, 2 holds leave 5) — B
+  convoying ONE CELL BEHIND A down row 3 and crossing A's goal cell
+  at t=6, after A vanished.  EMPTY curve 3,937 / 11,957 / 62,493
+  steps (4/10/42 forks), FOUND 32,229 / 24.
+  **PCB-TIME 8x8 KEEP-7 NETS-2 MAKESPAN-7 TICKS-12 HOLDS-1
+  CERT-DISJOINT-OK.**
+- **Astar arm (one query per net, dmax 11, st keys):** A 22,102
+  steps / 6 forks / 0 dominated (predicted exactly); B 89,489 / 15
+  forks / 17 DOMINATED — more duplicate (cell,tick) arrivals merged
+  than states expanded, the dedup load real even at this scale.
+  Same report line.  B's query vs B's ladder: 1.24x steps, 5.3x
+  expansions; trivial A is CHEAPER on the ladder (score-template
+  render cost per pop at dmax 11).  At this instance's slack the
+  arms are near step-parity — the divergence pricing remains the
+  detour instrument's 20.3x; THIS instrument's deliverable is the
+  axis (spatial-infeasible instance routed, hold chosen by search,
+  convoy legal, time-resolved census).
+- **Cross-check:** the ladder's EMPTYs at 4/5/6 are EXACT (no
+  dominance in that arm), certifying min arrival 7 for this
+  priority order; the astar first goal pop agrees.  Joint
+  (priority-free) optimality is NOT claimed.
+- **Replay certificate strengthened for time:** both trajectories
+  re-walk against keepouts AND each other (arrival conflicts refuse
+  inside the walk), st union duplicate-free, everything re-derived
+  from moves.
+
+The demo is pinned in CORPUS_LONG (~170s job; heuristic existence
+only).  NO rip loop in v1 — this instance never rips; the
+rip-in-time rung wants an instance that needs one (census
+attribution already carries tick resolution, so conviction
+transfers).  Named follow-ons from the ratified sequencing: rung B =
+real costs + min-cost claims (weighted moves, MIN arm, checked
+dominance for the bound's EMPTY side), then capacity/negotiated
+congestion and the global-objective LNS on that substrate; nearer
+term, a rip-in-time instance and the swap-conflict knob.
+
 **Task-authoring gotchas banked while building the swap + PCB
 instruments:** te_import_ctx admits only bare item uses as candidate
 heads (in-file type decls are invisible — models live in sibling
