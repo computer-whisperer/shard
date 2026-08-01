@@ -4027,6 +4027,65 @@ Final: **PCB-DETOUR 12x12 KEEP-9 NETS-1 RIPS-0 WIRE-15
 CERT-DISJOINT-OK** — and the adjudication: the rung worth building
 is DOMINANCE-ENABLED best-first, not the bare frontier.
 
+**Dominance-enabled best-first — the A* drive (05701c6), GREEN A/B
+(pipeline 223, 2026-08-01, job 653 at 2849s): 20x steps, 52x
+expansions.**  The adjudicated rung, built as a DRIVE POLICY over
+existing components (the ratified heuristic-tier shape — no engine
+rebuild).  `su_find_query_schema_astar`: the LIFO job stack becomes
+a deterministic skew-heap frontier (f asc, then g DESC — deeper
+first among ties — then push sequence) with a first-arrival closed
+set.  The engine stays domain-blind: the task supplies a SCORE
+TEMPLATE expression rendered per region by `su_cut_expr` (decided
+choices instantiate their alternative templates recursively; every
+OPEN hole becomes the task's CUT expression — applied to the
+template itself, this inlines the decided prefix in one walk),
+evaluated hole-free in a FRESH DISCARDED arena (the census re-force
+discipline; hook steps fold into steps= so A/B cost stays honest)
+and decoded structurally as (ctor g h key).  key = Some cells joins
+first-arrival dominance, None abstains — dead prefixes must abstain
+or score last, so a poisoned key can never close a live state.
+TRUST POSTURE: the hook steers ORDER and PRUNING only; query/want
+evaluation stays the sole arbiter of found/killed and replay stays
+the only certificate.  Dominated pops count into killed and surface
+as a synthesized `dominated` census row; **exhaustion with
+dominated>0 returns SuFindBudget, never SuFindEmpty** — an
+incomplete search cannot masquerade as an exact refutation (CHECKED
+dominance, the per-domain soundness proof that upgrades pruned
+exhausts back to exact, is the named follow-on).
+
+- **Two design bugs caught on paper before first fire:** (a) the
+  ladder grammar's separate move-alphabet hole cuts to Nil = a list
+  where a PMove belongs — the astar arm's grammar bakes the move
+  INTO each alternative (5 alts per list entry; edges ascend, the
+  schema validator requires per-entry uniqueness), so every open
+  hole is a tail-list hole and the cut is always type-correct;
+  (b) a goal-ended OPEN prefix renders identically to its own
+  Nil-completion under the cut — a key there lets the parent close
+  the state its found-candidate child needs — so exact goal
+  arrivals ABSTAIN (terminal states carry no dominance value).
+- **MEASURED (223; the ladder arm re-ran BIT-IDENTICAL to 220 — the
+  regression self-check for the threading + engine additions):**
+  ASTAR-FOUND d=21 len 15 at **248,408 steps / 39 forks / 59
+  dominated** (census sym:59), route replay-certified, one query
+  replacing the whole 4-level ladder.  Ladder total 5,051,257 →
+  248,408 steps = **20.3x**; expansions 2,032 → 39 = **52x**; the
+  single query is cheaper than the ladder's final FOUND level alone
+  (277,155).  Expansions landed UNDER the hand-derived 66-cell Lee
+  bound — the goal pops mid-band, before the f<=15 shell exhausts.
+  Optimality of len 15 rides the hook's admissible h
+  (heuristic-tier property; the certificate is replay as ever).
+- **Second consumer (hygiene rule), NAMED at admission:**
+  cost-ordered program search — the x86 window tasks with score =
+  instruction count (h = 0 is admissible), dominance key = a
+  machine-state fingerprint; wiring deferred to the swap/x86
+  measurement slice.
+- **Known limit, recorded:** cell-keyed dominance under prefix
+  commitment can miss (the first-arrival prefix may block the only
+  continuation) — acceptable for heuristic existence; the LNS loop
+  treats it as any failed find.  The instrument stays a check
+  target, not a pin (the ladder arm alone is ~48 min); whether the
+  astar arm becomes a slim pinned demo is an open call.
+
 **Task-authoring gotchas banked while building the swap + PCB
 instruments:** te_import_ctx admits only bare item uses as candidate
 heads (in-file type decls are invisible — models live in sibling
