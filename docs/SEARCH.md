@@ -3973,6 +3973,60 @@ story LINE FOR LINE, every census row at its hand-counted value:
 Final: **PCB-ROUTE 12x12 KEEP-9 NETS-7 RIPS-2 WIRE-29
 CERT-DISJOINT-OK** (WIRE = A2+C8+S1+B6+D3+T5+E4).
 
+**The detour instrument — the frontier rung adjudicated on a
+measurement (7d83021 + c8ed545), GREEN (pipeline 220, 2026-07-31,
+job 647 at 2870s / ~5.05M steps).**  The HELD best-first frontier
+(growth item 4) gets its measured-need gate:
+tools/search/pcb_detour_probe.shard, a single-net instrument on a
+CONCAVE TRAP FACING THE MOVE ORDER — a C-shaped cave (bar x=7
+y=2..6, arms (5,2)(6,2)/(5,6)(6,6), mouth west), net (10,4) seeded,
+tap from (1,4) east under order [E,S,N,W]; the through-wall
+Manhattan floor cannot see the cave is closed; min route exactly 15
+(slack 6, around either arm).  A single-gap straight wall was
+rejected on paper: after a wall block the order's secondary move
+HUGS the wall to the gap — concavity defeats wall-following.
+Driver change: pcbp_route_all/pcbp_route_net thread levels+budget0
+as arguments (behavior-neutral; the congested demo passes the old
+constants).  Instrument NOT pinned (48-min job; instrument, not
+demo) — check target only.  Two-shot on CI per the standing law:
+pipeline 217 BUDGET-STOPped d=13 at a 1.024M cap (the paper cost
+estimate was ~20x low; measured ~1.9-2.6k steps/fork at depth) and
+the caps were resized once from that evidence (base 256k -> 4M).
+Measured (220, structural story line-for-line):
+
+- **EMPTY curve 14,031 -> 458,855 -> 4,301,216 steps (12 -> 238 ->
+  1,666 forks) at slack 0/2/4** — x33 then x9.4 per slack-2; the
+  census shows the trap working (b@53 mouth re-entry thrash, arm and
+  bar rows, deep spills).
+- **FOUND d=15 = 277,155 steps / 116 forks — CHEAP, the mechanism
+  prediction corrected.**  The instrument was designed to price
+  find-level mislead; measured, the cave SELF-LIMITS at the find
+  depth (slack spent entering leaves no wander room, exits are
+  floor-killed) and the south detour is order-aligned (S precedes
+  N).  The exponential is NOT at the find level: 94.5% of the run
+  is pre-find EMPTY refutation.
+- **Frontier WITHOUT dominance: NO WIN, measured.**  An f-ordered
+  path-space search expands the same admissible prefixes the EMPTY
+  levels do; the ladder's re-expansion overhead is only ~11% (the
+  d=13 tree is 90% of the EMPTY sum).  IDA*-style deepening is
+  already near-optimal in path-space — the bare frontier rung
+  should NOT be built.
+- **Frontier + first-arrival cell dominance (the Lee/A* pair): the
+  measured ~30-40x.**  66 cells with f <= 15 on this board
+  (hand-derived: west block 28, x=0 column 5, cave 6, arm flanks 4,
+  bar column 2, east side 21) vs 2,032 engine forks = ~31x in
+  expansions, ~38x in steps at measured per-fork cost — and
+  refutation collapses from path-count to cell-count.  This is
+  admission tier 3 (state dominance = hashprune's checked
+  successor) with a price tag: find-mode may take dominance
+  UNCHECKED (replay stays the only certificate), but the EMPTYs'
+  exact-refutation status needs the CHECKED form (per-domain
+  soundness proof; on the grid, the distance-field argument).
+
+Final: **PCB-DETOUR 12x12 KEEP-9 NETS-1 RIPS-0 WIRE-15
+CERT-DISJOINT-OK** — and the adjudication: the rung worth building
+is DOMINANCE-ENABLED best-first, not the bare frontier.
+
 **Task-authoring gotchas banked while building the swap + PCB
 instruments:** te_import_ctx admits only bare item uses as candidate
 heads (in-file type decls are invisible — models live in sibling
