@@ -2502,9 +2502,12 @@
 ;; carries the only certificate (replay).  Dominated pops count into killed
 ;; and surface as a synthesized `dominated` census row.  CLAIM POSTURE: an
 ;; exhausted heap with dominated=0 is an exact EMPTY; with dominated>0 the
-;; entry returns SuFindBudget — an incomplete search must be unable to
-;; masquerade as an exact refutation (CHECKED dominance is the named
-;; follow-on that would upgrade it).  Hook evaluator steps accumulate and
+;; plain entry returns SuFindBudget — an incomplete search must be unable
+;; to masquerade as an exact refutation.  The CHECKED entry
+;; (su_find_query_schema_astar_checked) is the upgrade: the caller asserts
+;; a documented per-model dominance-soundness argument and exhaustion
+;; returns SuFindEmpty even with dominated>0; fuel and step-cap exits stay
+;; SuFindBudget in both entries.  Hook evaluator steps accumulate and
 ;; fold into the reported steps= so A/B cost comparisons stay honest.
 
 (type SuAsScore
@@ -2831,7 +2834,8 @@
    (closed (List (List Int)))
    (dominated Int)
    (seq Int)
-   (hsteps Int))
+   (hsteps Int)
+   (dom_exact Bool))
   SuFind
   (measure fuel)
   (if (lt fuel 1)
@@ -2858,7 +2862,9 @@
       census)
     (match heap
       ((SuAsLeaf)
-       (if (lt 0 dominated)
+       ;; dom_exact = the caller's asserted dominance-soundness pedigree:
+       ;; a drained frontier is then a real exhaust even with dominated>0.
+       (if (if dom_exact False (lt 0 dominated))
          (SuFindBudget
            killed
            constrained
@@ -2912,7 +2918,8 @@
                     closed2
                     (+ dominated 1)
                     seq
-                    hsteps)
+                    hsteps
+                    dom_exact)
                   (let ((asg (sk_region_choices region)))
                     (match
                       (ms_check_prepared_restricted 1000000 prepared region
@@ -2943,7 +2950,8 @@
                          closed2
                          dominated
                          seq
-                         hsteps))
+                         hsteps
+                         dom_exact))
                       (constraint_verdict
                         (match
                           (su_query (su_efuel) m candq body g asg ar query want)
@@ -2996,7 +3004,8 @@
                                       closed2
                                       dominated
                                       seq2
-                                      hsteps2))))))))
+                                      hsteps2
+                                      dom_exact))))))))
                           ((SuTFail k ar2)
                            (su_astar_go
                              (- fuel 1)
@@ -3022,7 +3031,8 @@
                              closed2
                              dominated
                              seq
-                             hsteps))
+                             hsteps
+                             dom_exact))
                           ((SuTPass ar2)
                            (match constraint_verdict
                              ((MsClear)
@@ -3084,7 +3094,8 @@
                                         closed2
                                         dominated
                                         seq
-                                        hsteps))
+                                        hsteps
+                                        dom_exact))
                                     ((Cons passing _)
                                      (match
                                        (su_region_first candidate g passing)
@@ -3161,7 +3172,81 @@
             Nil
             0
             seq0
-            hsteps0)))))))
+            hsteps0
+            False)))))))
+
+;; The CHECKED-dominance A*-drive entry: the same drive, but a drained
+;; frontier returns SuFindEmpty even with dominated>0.  Calling it is an
+;; ASSERTION of the task's dominance-soundness pedigree — a documented
+;; per-model argument (dominance-key factoring of the query's observable
+;; behavior, monotonicity in any consumed budget, and min-g-first closure
+;; under a consistent h; pcb_cost_model's header carries the founding
+;; instance) — which makes the EMPTY an exact conditional refutation in
+;; the same sense the model-side floor makes ladder EMPTYs exact.  Fuel
+;; and step-cap exits still return SuFindBudget: only a genuinely drained
+;; frontier may claim exhaustion.  Second consumer named at admission:
+;; the cost-ordered x86 window search (g = instruction count, h = 0,
+;; machine-state fingerprint keys), where a checked EMPTY is a
+;; proven-minimal-program claim.
+(fn su_find_query_schema_astar_checked
+  ((fuel Int)
+   (step_cap Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (candidate Expr)
+   (constraints MsPlan)
+   (query Expr)
+   (want Expr)
+   (grammar SkSchemaGrammar)
+   (score_t Expr)
+   (cutx Expr))
+  SuFind
+  (match (ms_prepare_schema 1000000 constraints grammar)
+    ((MsPrepareErr msg)
+     (SuFindErr (append_int "superpose: constraint preparation: " msg)))
+    ((MsPrepareOk prepared)
+     (let ((g (sug_compile_schema grammar)))
+       (match
+         (su_as_push_children
+           m
+           candq
+           body
+           g
+           score_t
+           cutx
+           (Cons (sk_empty_region) Nil)
+           (SuAsLeaf)
+           0
+           0)
+         ((SuAsPushErr msg) (SuFindErr msg))
+         ((SuAsPushOk heap0 seq0 hsteps0)
+          (su_astar_go
+            fuel
+            m
+            candq
+            body
+            candidate
+            prepared
+            query
+            want
+            g
+            (sa_new)
+            heap0
+            0
+            0
+            0
+            0
+            0
+            (su_census_empty)
+            step_cap
+            score_t
+            cutx
+            Nil
+            0
+            seq0
+            hsteps0
+            True)))))))
 
 ;; Theorem-first entry for the find path — the same optional mode the counted
 ;; drive owns below, riding the count-free partitioner: settle the initial
