@@ -862,6 +862,29 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
+# PCB CAPACITY demo: negotiated congestion (PathFinder-style) pricing
+# the toll seam.  Nets route INDEPENDENTLY (no priority, no hard
+# occupancy, no victim selection) against the current toll list;
+# space-time conflicts inflate the conflicted CELLS' tolls (+2 = the
+# meeting-net count), pure history between rounds.  On rung B's
+# two-gap board both nets take near-gap optima and B rides A's
+# corridor at the same ticks (SHARE n=4 cells 27 28 29 30); one
+# pricing round later A stays (18 vs 24 — the goal toll is
+# unavoidable) and B diverts to the untolled far gap (16 < 18):
+# converged in 2 rounds, and the no-priority outcome lands exactly on
+# the per-priority minima rung B certified (driver asserts 10/16 =
+# bound+1; certificate replays with tolls STRIPPED).  Round forks
+# 6/0, 7/2-dom, 19/32-dom, 21/24-dom; ~316k engine steps.  Measured
+# CI pipeline 234, 2026-08-01, ~192s job.  Expected ending:
+# PCB-CAP 8x8 KEEP-6 NETS-2 ITERS-2 TOLLED-4 COST-A-10 COST-B-16
+# MAKESPAN-8 CERT-DISJOINT-OK.
+echo "=== search: PCB capacity demo (negotiated congestion) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/pcb_cap_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 # Pure Shard function-body pins. These retain the playground's full grammars
 # and exact solution floors while SUPERPOSE settles them by demanded holes.
 # The executable imports kernel/types for an independent representative gate,

@@ -4292,6 +4292,83 @@ capacity rung (negotiated congestion pricing the toll input,
 PathFinder-style) and the global-objective LNS on this substrate;
 nearer term, rip-in-time and the swap-conflict knob still stand.
 
+**The capacity rung — negotiated congestion (eab0e0c), GREEN
+(pipeline 234, 2026-08-01, job 675 at 192s): the negotiation story
+exact, the report line character for character.**  PathFinder's
+core idea transplanted onto the cost substrate, and the toll
+input's first live consumer: nets are routed INDEPENDENTLY — no
+priority order, no hard occupancy between nets, no victim
+selection — and conflicts are PRICED instead of forbidden.  Where
+the rip-up driver picks a victim by census conviction, negotiation
+lets the cost structure pick.  ZERO engine changes and ZERO model
+changes: the whole rung is one driver + instance probe
+(tools/search/pcb_cap_probe.shard), which also means the
+engine-addition hygiene rule (second consumer) is not triggered.
+
+**The loop** (driver-level, iteration fuel, mirrors the rip loop's
+shape): each round routes every net with one plain-astar cost
+query against the CURRENT toll list, occ = Nil — other nets are
+invisible except through prices (h = cmove*manhattan stays
+admissible and consistent under any nonnegative tolls, so the
+first goal pop is still the toll-inclusive minimum).  Conflicts
+are read off the trajectories at SPACE-TIME granularity — a
+shared st is a real conflict, the same cell at different ticks is
+legal time-sharing, not congestion — and every conflicted CELL's
+toll is inflated by the number of nets meeting there (+2 on the
+2-net board).  Pure history, updated between rounds; no
+present-sharing term.  Convergence = zero shared sts; the
+certificate is rung B's cross-occupied cost replay at budget =
+claimed cost exactly, with costs re-derived from moves and tolls
+STRIPPED — negotiation tolls are search scaffolding, never the
+instance.  Claim grade: heuristic existence only.
+
+**The instrument: rung B's two-gap board reused deliberately**, so
+the negotiated outcome is directly comparable to the certified
+minima.  Measured (234; 156/0 checks, 15 instance pins; every pop
+of rounds 1 and 2 hand-simulated in advance against the heap law —
+f asc, g DESC, earlier push seq first, children pushed in
+alternative order):
+
+- **Round 1 (tolls empty):** both nets take their unconstrained
+  optima and collide: A [E,E,E,E,E] cost 10 at 29,575 steps / 6
+  forks / 0 dominated, B [E,N,E,E,E,S] cost 12 at 39,112 / 7 / 2 —
+  fork AND dominated counts exactly as the pop simulation
+  predicted.  B rides A's row-3 corridor AT THE SAME TICKS: SHARE
+  n=4 cells[ 27 28 29 30 ] (sts 155/220/285/350, t2..t5), the
+  exact predicted conflict set — which also confirms the witness
+  identity (any other cost-12 member shares cell 26 too).  Each
+  cell's toll += 2.
+- **Round 2 (tolls 27/28/29/30 = 2): the prices discriminate by
+  alternative cost.**  A's near family is FORCED through all four
+  tolled cells (28's only free neighbors are 27 and 29; 30 is the
+  goal — the goal toll is unavoidable even on the far detour:
+  18 near vs 24 far) — A re-found [E,E,E,E,E] (true cost 10,
+  unchanged) at 103,883 / 19 forks / 32 dominated.  B's best near
+  dodge still pays 27/28/29 (18); the far gap pays nothing (16) —
+  B diverted to a len-8 cost-16 far route at 143,296 / 21 forks /
+  24 dominated (hand simulation said 20/22 — one expansion and two
+  duplicate pops adrift in the f=16 band; every claim-bearing beat
+  exact).  Zero shared sts: CONVERGED iters=2.
+- **The punchline the board reuse buys:** the NO-PRIORITY
+  negotiated outcome lands exactly on the per-priority minima rung
+  B certified — the driver asserts COST-A = 10 and COST-B = 16
+  (bound + 1) before printing, an instance consistency stamp, not
+  a new optimality claim.  A stayed because its detour is dear, B
+  moved because its detour is cheap, and nobody chose a victim.
+
+Final: **PCB-CAP 8x8 KEEP-6 NETS-2 ITERS-2 TOLLED-4 COST-A-10
+COST-B-16 MAKESPAN-8 CERT-DISJOINT-OK.**  Pinned in CORPUS_LONG
+(~192s job, ~316k engine steps).  Named follow-ons from this rung:
+the general N-net negotiation loop and a congested-class instance
+head-to-head vs the rip driver (price-directed vs census-directed
+conflict resolution on one board); SPACE-TIME tolls (keying PToll
+on st, letting negotiation separate nets in time, not just space —
+the spatial toll cannot express "contested at tick 3 only", so
+spatially-forced instances currently need the conflict to resolve
+spatially); a present-sharing term (Gauss-Seidel within a round).
+The global-objective LNS on this substrate remains the ratified
+next step.
+
 **Task-authoring gotchas banked while building the swap + PCB
 instruments:** te_import_ctx admits only bare item uses as candidate
 heads (in-file type decls are invisible — models live in sibling
