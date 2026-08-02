@@ -4992,3 +4992,104 @@ criteria (a), (b), (c) are all met.
 Non-goals, stated once: no prove-on-engine rewrite before the LS-law
 3 gate; no kernel/type-system growth; no repo-wide sidecar sweeps
 (LS-law 1).
+
+**LS4 — the reach ladder (opened 2026-08-02, user: option 3 — the
+LS-law 3 gate work). THE ATTRIBUTION CENSUS (measured 2026-08-02) +
+the rung design — design AWAITING RATIFICATION.**
+
+*The census method.* Every OPEN goal in the LS2 baseline that has a
+committed sidecar entry also has a committed PROOF TEXT — the shape
+the engine must learn is written down. The census crosses the LS2
+per-goal verdicts with the sidecar proofs and classifies each open
+proof by its proof-form features (citation / have-cut / induction
+/ case-on / div-facts / bare steering). One-time measurement,
+method recorded here; re-derivable from the baseline log + the
+sidecars.
+
+*An accounting correction to the LS2 record (surfaced, not silent):
+the "196 claim-keyed entries" conflated three populations.* Matching
+sidecar entry names against real benchmark goals gives 195, not 196
+— the extra key is the phantom "NAME" from kernel/reader's sidecar
+doc-comment, exactly the scoring artifact the LS2 record itself
+flags. And 13 of the 195 are the far-tier opaque-type entries —
+committed sidecars, but HAND-proven (the absorption's measured
+ladder refusals), so they were never ladder-won. Corrected
+accounting: **true ladder-won corpus = 182 entries, bare-moves
+floor = 120/182 (65.9%), open = 62; far tier = 13 + frnd_pos_wf,
+all open (unchanged).** The RULED gate re-reads against the honest
+denominator with its meaning intact: **90% of the ladder-won 182 =
+164 engine-closed (the engine must add 44 of the 62 open), plus at
+least one far-tier entry.** No re-litigation — same ruling, correct
+populations.
+
+*The census (75 open sidecar-backed goals = 62 ladder + 13 far).*
+
+| bucket | shape | ladder | far | total |
+|---|---|---|---|---|
+| D | induction / case-on (per-arm sub-proofs) | 36 | 1 | 37 |
+| C | have-cut cascades + citations (the lo/hi bound family: 12 of the 17 are *_lo/*_hi pairs over word/rng/mem/bytes) | 16 | 1 | 17 |
+| B | citation chains ± unfold (no cuts, no induction) | 4 | 10 | 14 |
+| F | div-facts gateway + farkas cert | 4 | 0 | 4 |
+| A | bare steering (unfold/premise-rewrite only) | 2 | 1 | 3 |
+
+*The design-shaping fact:* closing EVERYTHING outside bucket D
+yields 26 < 44 — **the gate is unreachable without induction/case
+search.** Conversely the far tier is citation-shaped (10 of 13 in
+bucket B: the opaque-type surface-lemma proofs), so the gate's
+far-tier leg plausibly falls to the earliest rung.
+
+*The rung ladder (each rung = engine growth measured against the
+benchmark; refusal telemetry names the next growth — the LS3
+discipline):*
+
+- **LS4-i — the theory-backed citation rung.** An engine proof-search
+  task: candidates = citation chains (rewrite-with lemma, direction,
+  side, occurrence, premise discharges) up to a depth budget,
+  interleaved with unfold/stop steering, terminal close by
+  compute/refl/arith — searched against a REAL theory, not
+  TheoryEmpty. Oracle = pg_check per candidate (in-search heuristic
+  signal; replay stays the only certificate — reach scores, writes
+  nothing). The reach harness grows an engine backend beside
+  reach_one (the seam its header reserved). div-facts joins the
+  citable move vocabulary (bucket F's measured need — proofgen
+  growth on measured refusal, LS-law 2's pattern). Targets: buckets
+  B + A + F (10 ladder goals) and the far tier's citation shapes —
+  the probable first far-tier close.
+- **LS4-ii — the cut rung.** Grow the space with have-cut synthesis
+  over a comparison schema (bounds on goal subterms — the lo/hi
+  family's shape), each cut discharged by the LS4-i machinery.
+  Targets bucket C (16 ladder).
+- **LS4-iii — the induction rung.** induct / case-on as branching
+  moves; each arm's subgoal re-enters the same search space. The
+  mandatory rung (the census fact) and the largest design surface —
+  its own design block before build, informed by LS4-i/ii telemetry.
+
+Gate measurement closes the ladder; the prove-on-engine rewrite
+decision then unblocks per LS-law 3. frnd_pos_wf stays the beyond-
+gate acceptance test (shard#18) — not gated on.
+
+*Fork LS4-A — the theory the engine searches against.*
+- *The target module's own import-closure theory — what check itself
+  replays against (LEAN).* Honest and curation-free: the engine
+  faces exactly prove's setting, and pool-size pressure becomes
+  measured census output (which pools exhaust, where cost
+  concentrates) instead of a hand-tuned inventory. Cost: large
+  pools make depth-k citation search expensive — bounded budgets +
+  CI-only deep runs absorb it, and pool-pruning can land later as
+  task POLICY if the census demands it.
+- *Per-file curated lemma pools (the span pilot's phase-2 shape).*
+  Cheap and immediate. Cost: curation is fixed-function policy in
+  the mechanism's seat — the pilot licensed it as TASK policy, but
+  the reach benchmark exists to measure the ENGINE, and a curated
+  benchmark measures the curator.
+
+*Fork LS4-B — rung order.*
+- *Citation first (LEAN).* Smallest new machinery (the pilot's
+  phase-2 enumeration, engine-ized with real theory), the probable
+  far-tier close, and the substrate the other rungs re-enter —
+  induction arms close by citation/compute, so LS4-i is sequencing,
+  not deferral.
+- *Induction first.* Attacks the mandatory bucket immediately.
+  Cost: its arms still need the citation substrate, so it front-
+  loads the largest design surface while blocked on the smaller
+  one's mechanics.
