@@ -4453,3 +4453,185 @@ helpers into match trees destroying rewrite patterns — use controlled
 (unfold F lhs)(reduce lhs) ×2 rounds; the Euclidean division surface
 name is `ediv` (pairs with `mod`); schema entry ids must be
 nonnegative and strictly ascending.
+
+
+## The lock-step arc — joint code+proof search over ISA models (opened 2026-08-02)
+
+STATUS: this section is the arc's ledger home (home ratified in
+conversation 2026-08-02); the rulings recorded below were made by the
+user 2026-08-02 unless dated otherwise. Development home: the
+more-search worktree (branch more-search). Cross-thread coordination
+per the thread-division agreement (memory file), as AMENDED by the
+certificate reframe below. Arc slices are numbered LS0… (this ledger
+already has an unrelated "Slice 0").
+
+**Mission (user, quote-grade).** "The main goal is advancing what
+shard can refine by open-ended search rather than what dedicated
+fixed-function lowering and proving machinery is designed to do. A
+pipeline for automatically compiling any shard application to any ISA
+model is the holy grail here, and I see this as a small step towards
+that problem." The lock-step framing: finding candidate refinements
+is one hard problem, finding candidate proofs is a second, and
+finding them TOGETHER ought to be slightly easier than one then the
+other — each side prunes the other. Side projects taken
+opportunistically; the main goal governs scope calls.
+
+**Trust posture (unchanged).** In-search proof signals are pruning
+heuristics; the replayed proof through the untrusted-proof path is
+the ONLY certificate. Nothing in this arc grows the trusted core.
+
+**Measured precedents the arc stands on:** theorem-first steering is
+proof-shaped pruning and was outcome-changing at 6.7x (swap_route,
+R5); the typed imp expression search found the first
+better-than-existing refinement (model-fragment spike, above);
+straight-line ISA piece theorems close by ONE compute-both (ISA.md
+§7); the A* cost drive with checked dominance turned exhaustion into
+proven-minimality machinery (the PCB cost rung); the census channel
+attributes refutations. Emission speaks the ratified conversion
+dialect (CERT.md §10) from birth.
+
+### LS-law 1 — the certificate reframe (RULED 2026-08-02; supersedes the fixed-point discipline)
+
+A committed proof sidecar stands on REPLAY: it goes through the full
+untrusted-proof path at check time, and that is the entirety of its
+validity. "The current tools/prove would emit something different"
+is provenance trivia, not staleness — sidecars aging relative to the
+solver is NOT a defect. The event that matters is a sidecar FAILING
+REPLAY (a kernel/checker change), and the check gate already owns
+that. Consequences, recorded as law:
+
+- Solver-reproduction is a test of the TOOL, scoped to its pinned
+  fixtures (the prove-regen corpus pin, 42af308: two fixtures
+  re-solved from scratch each corpus run, byte-identity demanded —
+  that gates tool health and determinism). It is NEVER a repo
+  invariant over committed sidecars.
+- The repo-wide fixed-point re-solve obligation after ladder changes
+  is RETIRED — and with it most of the prove single-owner-window
+  rationale in the thread-division agreement: a prove change is an
+  edit to one tool file plus its fixtures, coordinated like any other
+  shared file. (The 2026-08-02 absorption pass stands as one-time
+  cleanup of provenance CONFUSION — the #21-verification mystery
+  diff — not as invariant installation.)
+- REJECTED-because: byte-identical regen as a standing repo invariant
+  was considered and rejected — validity lives in replay, and the
+  invariant would tax every solver improvement with repo-wide churn,
+  blocking exactly the incidental prove rework this arc wants free.
+- Accepted residue: regenerating a file's sidecar re-renders the
+  whole machine-owned file, so a regen forced by one new claim churns
+  neighbors cosmetically. Replay is the referee.
+
+### LS-law 2 — the prove decomposition: the oracle kit, not the loop (Fork 2 CLOSED 2026-08-02)
+
+The standing ruling "tools/prove gets composed of parts — one part
+naturally lives in meta/" resolves to extracting the MINIMAL common
+piece. The deciding contrast, recorded: prove's solve loop is
+generate-and-test over a hand-curated finite candidate list — fixed
+cheapest-first order, first success wins, binary check_sequent as the
+only signal (plus one bespoke residual-reader, the case-on discovery
+rung) and NO exhaustion semantics: it can fail to find, never certify
+absence. The engine searches schema-defined open spaces with a cost
+drive, checked dominance, census attribution, and checked-EMPTY
+exhaustion that upgrades "didn't find" into a claim.
+REJECTED-because: lifting prove's loop/enumerators into meta/ would
+enshrine a lesser duplicate of the engine and sap the pressure to
+build proof search into the engine itself — the arc's mission.
+
+What graduates — **meta/solve, the oracle kit** (name = the one open
+confirm on this section):
+
+- the ATTEMPT KERNEL: sequent + module + candidate proof text →
+  checked verdict via check_sequent — in-process, World-free,
+  sidecar-free;
+- the TERMINAL CLOSER MOVES: refl / compute / simp / arith as
+  primitive proof moves;
+- the FARKAS CERT CLOSER: searched multiplier vectors over the
+  sequent slot table, kept CLOSED like an LP call — callers invoke
+  it, they never enumerate its steps.
+
+Explicitly NO enumeration policy and NO ladder ordering — the
+module header must say so (the meta/rewrite "mechanism, not policy"
+precedent). meta/lin (COMPUTED certs, the generator-side kit) stays a
+separate discipline; no merge — computed-because-the-generator-knows
+and searched-against-the-checker are different animals that happen to
+emit the same claim form.
+
+tools/prove KEEPS: its ladder as tool-private POLICY over the moves;
+the clever rungs (conditional citation rww_*, premise mining mn_*,
+induction/case assembly, case-on discovery disc_*); measure solving
+(ms_*); and the shell (auto-decl discovery, RunState file-order
+threading, sidecar render/persist). Behavior unchanged; the corpus
+pin gates the extraction as zero-delta at the tool level.
+
+### LS-law 3 — the convergence hypothesis and the reach benchmark
+
+Hypothesis (named, not committed): prove's clever rungs are
+hand-tuned instances of engine-general mechanisms — conditional
+citation and mining of theorem-plan steering, case-on discovery of
+refutation-attributed residual reading. As engine reach grows they
+retire one by one, until tools/prove is shell + policy over engine
+calls.
+
+The meter: **the sidecar corpus as benchmark.** Every goal the ladder
+ever won (the committed sidecars), PLUS the 13 opaque-type entries
+the 2026-08-02 absorption measured as beyond the ladder (get_set_* /
+cat_len / slice_len_exact / lookup_insert_eq / insert_shadow /
+str_valid / str_len_nonneg / blen_is_len / list_of_cat / gs_i /
+gso_i), PLUS frnd_pos_wf (shard#18: 2092 formatted lines, a 7-deep
+premised cascade — measured UNSOLVED (search exhausted) by the full
+ladder 2026-08-02). A harness feeds these goals to the engine and
+scores reach — pure instrumentation, ZERO coupling to prove.
+
+The gate: rewriting tools/prove on the engine is DEFERRED until the
+engine re-solves an agreed fraction of the ladder's corpus AND at
+least one goal the ladder cannot touch (the fraction is set when the
+harness exists and the baseline is measured — deliberately not now).
+REJECTED-because (rewrite-now, 2026-08-02): a production consumer
+exports stability pressure onto the exact surface this arc is about
+to bend (joint code+proof states in schema space), and the engine
+starts behind the tuned rungs, so the ladder would persist as
+fallback — two systems, now coupled. shard#18 RESTATED: the
+acceptance test is ENGINE reach — grow it until frnd_pos_wf falls;
+the benchmark is the progress meter.
+
+### The pilot (Fork 1 RULED 2026-08-02): x86 window minimality
+
+Wire the cost-ordered window search to the A* drive: candidates =
+instruction windows over the x86 model fragment; score = instruction
+count (h=0, admissible); dominance = checked machine-state
+fingerprints; per-candidate verification = piece theorems closed
+through meta/solve moves (straight-line pieces close by one
+compute-both); exhaustion at a budget level = checked-EMPTY, which is
+the proven-minimality claim for the window class. Deep runs fire on
+CI only (standing law). A design doc precedes any build — instance
+vocabulary, claim forms, corpus pinning, CI placement — presented for
+ratification as LS3 opens.
+
+### Side explorations + the slice ladder
+
+**Regalloc is SANCTIONED as a side exploration here** (user: the main
+thread ruled it out of Arc B's staging — it deserves its own arc —
+but kicking the problem around here first is fine). Fit note:
+regalloc is coloring-shaped, and census/exclusion coloring was the
+relational-split machinery's one demonstrated win shape.
+
+- **LS0 — the prove/impgen anneal: COMPLETE 2026-08-02.** Record:
+  shard#21 fixed 19527ac (the 5→7-arg apply_rewrite_with_env drift;
+  prove was executed nowhere = the blind-spot class); sidecar
+  absorption ec4a67c (7 files to fixed point; 13 opaque-type
+  refusals = the benchmark's near tier); the prove-regen corpus pin
+  42af308 (the corpus now EXECUTES prove; #21's class dies in CI);
+  impgen #22 fixed e22f179 (refuse-not-red on revisited symbolic
+  addresses; no safe-duplicate grain exists — the one-sweep law is
+  body-level). Single-owner window opened and closed same-day;
+  pipeline #250 green at e22f179.
+- **LS1 — extract meta/solve** (the oracle kit above). Code motion +
+  import rewiring, tool behavior unchanged, corpus pin green.
+  Ordinary same-file coordination (no special window, per LS-law 1).
+- **LS2 — the reach benchmark harness**: feed the sidecar corpus's
+  goals to the engine, measure the baseline, set the LS-law 3 gate
+  fraction. Instrumentation only.
+- **LS3 — the pilot**: design doc → ratification → build.
+
+Non-goals, stated once: no prove-on-engine rewrite before the LS-law
+3 gate; no kernel/type-system growth; no repo-wide sidecar sweeps
+(LS-law 1).
