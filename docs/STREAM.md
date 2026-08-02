@@ -712,8 +712,16 @@ number ("we can get to register allocations properly later" —
 user, 2026-08-01). The 6.1× scalar gap stands on record as a
 priced, attributed backend debt.
 
-## 8. B5 — the expert-leg design note (DRAFT 2026-08-02, awaiting
-## ratification)
+## 8. B5 — the expert-leg design note (RATIFIED 2026-08-02)
+
+**RATIFICATION (2026-08-02, user ruling, all four forks to their
+leans):** Fork A = SHA-NI first (AVX2/YMM = named door); Fork B =
+four dword lanes (this WRITES X86.md §6's deferred lane ruling —
+recorded there); Fork C = the parallel extended tier (widening
+Regs/XOut REJECTED on the survey's numbers — the corpse stands in
+8.5); Fork D = per-variant verdicts (cross-module equivalence
+REJECTED — welds the variants). The §8 body is law; the E-ladder
+executes in order, E1 next.
 
 **Mission.** The hand-pinned SHA-NI variant of the streaming bin,
 benchmarked vs OpenSSL/coreutils-as-shipped — the FIRST real
@@ -837,7 +845,8 @@ replacement.
   consumer is in sight, and what expert code needed from the
   backend (the regalloc-arc pricing the parity fork promised).
 
-### 8.5 Forks for ratification
+### 8.5 Forks (RULED 2026-08-02, all four to their leans — texts
+### kept with the rejected options' costs in place)
 
 - **Fork A — which tier first: SHA-NI or AVX2?** (a) SHA-NI: the
   comparison target's own fast path on this silicon (the 0.598 s
