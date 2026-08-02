@@ -4634,6 +4634,49 @@ relational-split machinery's one demonstrated win shape.
   fraction. Instrumentation only.
 - **LS3 — the pilot**: design doc → ratification → build.
 
+**LS2 RECORD (LANDED 2026-08-02).** The harness = tools/reach
+(run-mode): per claim/fulfills goal of each target file, five bounded
+attempts (the meta/proofgen moves + the farkas closer) against the
+EMPTY theory, verdict per goal
+(refl|compute|simp|arith0|farkas|OPEN|NOGOAL|PARSEFAIL), TOTAL per
+file. Fulfills goals are recovered from the target + same-module
+mod.req.shard (the dir-form mod.req/ expansion is not covered and
+reports NOGOAL). Instrumentation only — reads, attempts, writes
+nothing.
+
+The measured POLICY-FREE FLOOR (busy box, counts not timings), 20
+benchmark files, 368 goals: **164/368 (44.6%) close on bare moves**
+(133 compute + 19 farkas + 12 arith0; zero NOGOAL/PARSEFAIL).
+Restricted to the LADDER-WON corpus (the 196 claim-keyed sidecar
+entries): **120/196 (61.2%)** — the ladder's policy earns the other
+76 (unfold chains, lemma citations, induction, cond/mining). The far
+tier: **0/13 opaque-type entries** and **frnd_pos_wf OPEN** —
+measured, matching the absorption findings. Notable rows: std/word
+74/86 (the defining-equation fulfills tier is compute-dominated);
+std/float kit 1/68 (the float kit is almost entirely
+beyond bare moves). One scoring artifact: kernel/reader's sidecar
+doc-comment yields a phantom "NAME" key — score against real entry
+names only. CI: the reach moves-floor pin rides the default corpus
+tier (0/4 cond_mine + 5/16 auto_demo exact — a deliberate closer
+change updates the pin with it; anything else drifting it is a bug).
+
+**LS-law 3 gate fraction — the open fork this record poses (baseline
+now measured; self-contained per house form).** What engine reach
+unlocks the prove-on-engine rewrite? Context: bare moves are free —
+any engine backend inherits 61% of the ladder corpus by construction —
+so the gate must sit well above the floor to mean anything.
+- *90% of the ladder-won corpus + at least one far-tier entry (lean).*
+  Demands real search-side synthesis (the open 39% is exactly the
+  citation/induction/chain shapes) and the far-tier close proves
+  capability the ladder lacks. Cost: the rewrite starts before full
+  parity — acceptable because policy stays in the tool and the ladder
+  remains available as one policy during migration.
+- *100% parity + at least one far-tier entry.* The clean
+  strictly-dominates story. Cost: the last wins are quirky
+  rung-specific shapes (the div-facts arm, disc case-on discovery);
+  chasing the tail delays the rewrite for goals that stay served
+  either way.
+
 Non-goals, stated once: no prove-on-engine rewrite before the LS-law
 3 gate; no kernel/type-system growth; no repo-wide sidecar sweeps
 (LS-law 1).

@@ -519,6 +519,28 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
+# The reach moves-floor pin (lock-step arc LS2, SEARCH.md LS-law 3): the
+# benchmark harness executes end-to-end and the policy-free floor on the
+# two prove fixtures stays where it was measured (0/4 cond_mine, 5/16
+# auto_demo). A deliberate move/closer change updates these totals with
+# the change (regen-canon contract); anything else drifting them is a bug
+# in the oracle kit or the harness.
+echo "=== reach: moves-floor pin (LS2 harness gate) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/reach/reach.shard \
+      pins/proof/prove_cond_mine.shard pins/proof/auto_demo.shard \
+      > "$TMP/reach_pin.log" 2>&1
+  if grep -q "^TOTAL pins/proof/prove_cond_mine.shard 0/4$" "$TMP/reach_pin.log" \
+     && grep -q "^TOTAL pins/proof/auto_demo.shard 5/16$" "$TMP/reach_pin.log"; then
+    echo "REACH PIN OK (floor 0/4 + 5/16)"
+  else
+    echo "FAIL reach-pin (moves floor drifted)"
+    tail -8 "$TMP/reach_pin.log"
+  fi
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 # Nat-former RUN pin: ground construction/packing, view matching, deep
 # patterns under the RUN engine (ev). Output must be engine-independent.
 echo "=== nat: run probe ==="
