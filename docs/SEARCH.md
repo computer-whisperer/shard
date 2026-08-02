@@ -4536,8 +4536,10 @@ REJECTED-because: lifting prove's loop/enumerators into meta/ would
 enshrine a lesser duplicate of the engine and sap the pressure to
 build proof search into the engine itself — the arc's mission.
 
-What graduates — **meta/solve, the oracle kit** (name = the one open
-confirm on this section):
+What graduates — **meta/proofgen, the oracle kit** (name RULED
+2026-08-02; `meta/solve` REJECTED-because: it collides with the solve_*
+vocabulary that STAYS in prove, and proofgen rhymes with the imp/impgen
+vocabulary-vs-generator precedent):
 
 - the ATTEMPT KERNEL: sequent + module + candidate proof text →
   checked verdict via check_sequent — in-process, World-free,
@@ -4599,7 +4601,7 @@ Wire the cost-ordered window search to the A* drive: candidates =
 instruction windows over the x86 model fragment; score = instruction
 count (h=0, admissible); dominance = checked machine-state
 fingerprints; per-candidate verification = piece theorems closed
-through meta/solve moves (straight-line pieces close by one
+through meta/proofgen moves (straight-line pieces close by one
 compute-both); exhaustion at a budget level = checked-EMPTY, which is
 the proven-minimality claim for the window class. Deep runs fire on
 CI only (standing law). A design doc precedes any build — instance
@@ -4624,7 +4626,7 @@ relational-split machinery's one demonstrated win shape.
   addresses; no safe-duplicate grain exists — the one-sweep law is
   body-level). Single-owner window opened and closed same-day;
   pipeline #250 green at e22f179.
-- **LS1 — extract meta/solve** (the oracle kit above). Code motion +
+- **LS1 — extract meta/proofgen** (the oracle kit above). Code motion +
   import rewiring, tool behavior unchanged, corpus pin green.
   Ordinary same-file coordination (no special window, per LS-law 1).
 - **LS2 — the reach benchmark harness**: feed the sidecar corpus's
