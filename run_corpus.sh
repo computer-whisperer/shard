@@ -1012,6 +1012,25 @@ else
   echo "SKIPPED (needs clang + qemu-user + bin/shard_eval)"
 fi
 
+# sha256sum bin-level silicon differential (STREAM.md §7.9 M5 slice 4): emit
+# BOTH proven sha256sum ELFs fresh via the run-only write glue, assert
+# caplessness (getcap empty, RW window at 0x10000 = stock mmap_min_addr, no
+# vaddr-0 PT_LOAD), then drive the emitted binaries against coreutils —
+# the streaming bin PIPE-FED (short reads are the thing under test; the §51
+# file-redirect discipline is retired), the one-shot by file redirect with its
+# 64887/64888 cap boundary pinned on both sides. The "hardware conforms to
+# the model" trust leaf at whole-program grain, where the x86 leg above is
+# the same leaf per XFunc. Per-row OK/FAIL at column 0; nonzero exit adds a
+# synthetic FAIL row (see the wasm leg's note). The script self-fails (no
+# SKIP) on missing coreutils/getcap/readelf — its assertions must never
+# silently not happen.
+echo "=== sha256sum: capless silicon differential ==="
+if [ -x bin/shard_eval ]; then
+  bash examples/sha256sum/sha256sum_silicon_diff.sh 2>&1 || echo "FAIL sha256sum-silicon (exit $?)"
+else
+  echo "SKIPPED (needs bin/shard_eval)"
+fi
+
 echo "=== guard: absolute path ==="
 out=$("${CHECK_CMD[@]}" "$PWD/pins/proof/auto_demo.shard" 2>&1); code=$?
 if [ "$code" -eq 2 ] && grep -q "escapes the repo root" <<<"$out"; then
