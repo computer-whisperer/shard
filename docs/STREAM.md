@@ -219,6 +219,21 @@ needs a real consumer forcing its decisions:
   addition and land FIRST; the generator flip + regeneration +
   citation swaps land in one slice at the window's closing
   announcement.
+  **SLICE 1 LANDED (2026-08-02).** The inversion law grew into a
+  family — ilv_inv5/ilv_inv6 join ilinv_probe (same template as
+  ilv_inv12 at the pad arities; probe closure 101/0) — and the
+  four twins landed in xchain: xch_shpad_b1/xch_shfpad_b1 (seam
+  statements byte-identical to the cmp_x originals, guard-tree
+  proofs verbatim — the b13 precedent held: the pad seams carry
+  no exposure, the guard tree is the semantic floor) and
+  xch_shpad/xch_shfpad (walk statements over local program
+  copies, the xch_gx device; the 5/6-deep Cons exposures replaced
+  by ONE ilv_invN citation minting the reads, closing on the seam
+  twin by the generated leaf's own citation form). xchain closure
+  951/0 on the FIRST check — the conversion-dialect kit
+  transferred to new fns with zero iteration. What remains at the
+  window close: the flip, four regens, five citation swaps, the
+  D-number, THE RECORD.
 
 - **B5 — the expert leg: SHA-NI/SIMD hand-pinned variant vs
   OpenSSL.** This is the FIRST real non-canonical consumer — the
