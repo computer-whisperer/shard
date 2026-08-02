@@ -26,6 +26,17 @@ if [ -z "${EVAL:-}" ]; then
   fi
 fi
 [ ${#CHECK_CMD[@]} -eq 0 ] && CHECK_CMD=("$EVAL" run kernel/check.shard)
+
+# ── S2b image-differential leg (docs/STORAGE.md §8a): SHARD_IMAGES=1
+# routes every check in this run through the loader's image front door
+# (a +images token ahead of the target; check.shard strips it anywhere
+# in argv). Used by the CI corpus-images job (cold populate + warm hit,
+# both FAIL-projections diffed against the text baseline). NEVER the
+# default: the default corpus stays from-text — cache, never trust.
+if [ -n "${SHARD_IMAGES:-}" ]; then
+  mkdir -p .shard-cache/images
+  CHECK_CMD+=(+images)
+fi
 JOBS="${JOBS:-$(nproc)}"
 TARGETS=(
   examples/add_nat_zero.shard

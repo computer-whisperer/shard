@@ -40,10 +40,21 @@ fi
 
 [ $# -ge 1 ] || { echo "usage: bin/check FILE.shard [claim]" >&2; exit 2; }
 
+# ── S2b: the image front door (docs/STORAGE.md §8a). SHARD_IMAGES=1 turns
+# on the loader's parse-image cache: the engine gets a trailing +images
+# token (check.shard strips it anywhere in argv, so positional parsing is
+# unchanged in every mode) and the cache dir is ensured. Corpus/CI never
+# set this — cache, never trust; `rm -rf .shard-cache` is always safe.
+IMG_ARGS=()
+if [ -n "${SHARD_IMAGES:-}" ]; then
+  mkdir -p .shard-cache/images
+  IMG_ARGS=(+images)
+fi
+
 # More than one arg = an explicit kernel sub-mode (focus / admit / scope):
-# pass through untouched.
+# pass through untouched (plus the image token, stripped engine-side).
 if [ $# -gt 1 ]; then
-  exec "${CHECK_CMD[@]}" "$@"
+  exec "${CHECK_CMD[@]}" "$@" "${IMG_ARGS[@]}"
 fi
 
 # The loader takes repo-relative paths only; accept cwd-relative/absolute.
@@ -111,7 +122,7 @@ fi
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
-"${CHECK_CMD[@]}" "$FILE" >"$tmp" 2>&1
+"${CHECK_CMD[@]}" "$FILE" "${IMG_ARGS[@]}" >"$tmp" 2>&1
 code=$?
 cat "$tmp"
 if [ $code -eq 0 ] && [ -n "$cache_key" ] && grep -q ', 0 failed' "$tmp"; then
@@ -129,7 +140,7 @@ mapfile -t branching < <(
     "$tmp" | head -5)
 for claim in "${branching[@]}"; do
   echo
-  "${CHECK_CMD[@]}" "$FILE" "$claim" 2>&1 |
+  "${CHECK_CMD[@]}" "$FILE" "$claim" "${IMG_ARGS[@]}" 2>&1 |
     awk '/^── trace: /{f=1} f{print; if ($0=="──") exit}'
 done
 

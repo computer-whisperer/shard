@@ -14,8 +14,10 @@
 (import "stdlib.shard")  ; List / Option / Bool / Pair
 (import "term.shard")  ; append_int / show_int
 (import "reader.shard")  ; read_all / rev_i / SExpr
+(import "image.shard")  ; IMG1/IMG2 codec — the S2b image front door
 (use (:: kernel term *))
 (use (:: kernel reader *))
+(use (:: kernel image *))
 
 ;; The World: a sequencing token (a clock). Every effect is an extern that
 ;; threads it; the data dependency orders the effects. In a proof these are
@@ -270,6 +272,69 @@
                 (Cons 10 Nil))))))
       w)))
 
+;; ---------------------------------------------------------------------------
+;; THE IMAGE FRONT DOOR (S2b, docs/STORAGE.md §8a) — behind the +images
+;; flag (check.shard strips the token; bin/check appends it when
+;; SHARD_IMAGES=1). Per visited source the loader consults
+;; .shard-cache/images/<mangled-path>.img: a validated HIT hands the
+;; decoded forms to the parse-once field with NO read_all; any miss
+;; (absent, unreadable, malformed, stale) falls back to the text path
+;; and — when the parse succeeds — REWRITES the image. Validation is
+;; EXACT: the IMG2 container embeds the source's path and full bytes,
+;; and a hit requires byte-identity with what read_file just returned,
+;; so a stale or misfiled image costs a fallback, never a wrong closure
+;; (the residual exposure is silent payload corruption on disk, bounded
+;; by the trust posture: corpus/CI never pass the flag — CACHE, NEVER
+;; TRUST). write_file failures are ignored: a missing cache dir just
+;; means no warm next run.
+;; ---------------------------------------------------------------------------
+
+(fn img_cache_dir () (List Int) ".shard-cache/images/")
+
+;; '/' -> '!': the cache FILENAME is a convenience, never load-bearing —
+;; the embedded path/bytes are what validate a hit.
+(fn img_mangle ((p (List Int))) (List Int)
+  (measure (struct p))
+  (match p
+    (Nil Nil)
+    ((Cons c t) (Cons (if (int_eq c 47) 33 c) (img_mangle t)))))
+
+(fn img_file_of ((p (List Int))) (List Int)
+  (append_int (img_cache_dir) (append_int (img_mangle p) ".img")))
+
+;; a validated hit: container parses, embedded path AND source bytes are
+;; byte-identical with the just-read reality, payload decodes.
+(fn img_hit ((path (List Int)) (src (List Int)) (ibytes (List Int)))
+  (Option (List SExpr))
+  (match (img2_parts ibytes)
+    (None None)
+    ((Some (Pair ipath (Pair isrc payload)))
+     (if (int_list_eq ipath path)
+       (if (int_list_eq isrc src) (img_decode payload) None)
+       None))))
+
+;; the parse-once forms for a visited source: images OFF -> read_all;
+;; ON -> consult the cache, else parse and (on success) write back.
+(fn img_or_parse ((images Bool) (path (List Int)) (src (List Int)) (w World))
+  (Pair (Option (List SExpr)) World)
+  (if images
+    (let ((ipath (img_file_of path)))
+      (match (read_file ipath w)
+        ((Pair mi w1)
+         (match
+           (match mi
+             (None None)
+             ((Some ib) (img_hit path src ib)))
+           ((Some fs) (Pair (Some fs) w1))
+           (None
+             (match (read_all src)
+               (None (Pair None w1))
+               ((Some fs)
+                (match
+                  (write_file ipath (img2_build path src (img_encode fs)) w1)
+                  ((Pair _ w2) (Pair (Some fs) w2))))))))))
+    (Pair (read_all src) w)))
+
 ;; visit: escape-guard the RAW spelling first, then canonicalize (CHECK mode)
 ;; so the seen-list dedups on path IDENTITY — two relative spellings of one
 ;; file must be one visit, or every decl in it loads twice. RUN mode keeps the
@@ -285,16 +350,27 @@
 ;; budget; the `_go` cores carry (measure fuel).
 (fn visit_budget () Int 1000000000)
 
-(fn visit ((path0 (List Int)) (granted Bool) (run Bool) (st Closure)) Closure
-  (visit_go path0 granted run st (visit_budget)))
+(fn visit
+  ((path0 (List Int)) (granted Bool) (run Bool) (images Bool) (st Closure))
+  Closure
+  (visit_go path0 granted run images st (visit_budget)))
 
 (fn visit_imports
-  ((paths (List (Pair Bool (List Int)))) (granted Bool) (run Bool) (st Closure))
+  ((paths (List (Pair Bool (List Int))))
+   (granted Bool)
+   (run Bool)
+   (images Bool)
+   (st Closure))
   Closure
-  (visit_imports_go paths granted run st (visit_budget)))
+  (visit_imports_go paths granted run images st (visit_budget)))
 
 (fn visit_go
-  ((path0 (List Int)) (granted Bool) (run Bool) (st Closure) (fuel Int))
+  ((path0 (List Int))
+   (granted Bool)
+   (run Bool)
+   (images Bool)
+   (st Closure)
+   (fuel Int))
   Closure
   (measure
     fuel
@@ -321,6 +397,7 @@
                      p2
                      granted
                      run
+                     images
                      (Closure (Cons path seen) acc w1)
                      (- fuel 1)))
                   (None (Closure (Cons path seen) acc w1))))
@@ -328,32 +405,37 @@
                ;; PARSE ONCE: the closure walk is the single place bytes
                ;; become forms — the import scan consumes them here and the
                ;; SrcEntry carries them, so no downstream sweep re-parses
-               ;; (the forms field's invariant: forms ≡ read_all bytes).
-               (let ((mforms (read_all src)))
-                 (let
-                   ((imps
-                      (match mforms
-                        (None Nil)
-                        ((Some fs) (import_paths (dir_of path) fs run)))))
-                   (match (req_gate path run imps)
-                     ((Some bad)
-                      (Closure
-                        (Cons path seen)
-                        acc
-                        (refuse_req_import path bad w1)))
-                     (None
-                       (match
-                         (visit_imports_go
-                           imps
-                           granted
-                           run
-                           (Closure (Cons path seen) acc w1)
-                           (- fuel 1))
-                         ((Closure seen2 acc2 w2)
-                          (Closure
-                            seen2
-                            (append_src acc2 (SrcEntry path granted src mforms))
-                            w2))))))))))))))))))
+               ;; (the forms field's invariant: forms ≡ read_all bytes,
+               ;; which the front door's exact validation preserves).
+               (match (img_or_parse images path src w1)
+                 ((Pair mforms w1b)
+                  (let
+                    ((imps
+                       (match mforms
+                         (None Nil)
+                         ((Some fs) (import_paths (dir_of path) fs run)))))
+                    (match (req_gate path run imps)
+                      ((Some bad)
+                       (Closure
+                         (Cons path seen)
+                         acc
+                         (refuse_req_import path bad w1b)))
+                      (None
+                        (match
+                          (visit_imports_go
+                            imps
+                            granted
+                            run
+                            images
+                            (Closure (Cons path seen) acc w1b)
+                            (- fuel 1))
+                          ((Closure seen2 acc2 w2)
+                           (Closure
+                             seen2
+                             (append_src
+                               acc2
+                               (SrcEntry path granted src mforms))
+                             w2)))))))))))))))))))
 
 ;; A GRANTED file's imports load granted too (the inherited flag): a module
 ;; interface is trusted as a UNIT, and the req-scope files it pulls in
@@ -368,6 +450,7 @@
   ((paths (List (Pair Bool (List Int))))
    (granted Bool)
    (run Bool)
+   (images Bool)
    (st Closure)
    (fuel Int))
   Closure
@@ -385,7 +468,8 @@
        rest
        granted
        run
-       (visit_go p (if granted True g) run st (- fuel 1))
+       images
+       (visit_go p (if granted True g) run images st (- fuel 1))
        (- fuel 1))))))
 
 ;; The entry target itself is ungranted (its own claims are checked normally).
@@ -393,7 +477,13 @@
 ;; interfaces), True = RUN (impl bodies). See import_paths.
 (fn resolve_closure ((entry (List Int)) (run Bool) (w World))
   (Pair (List SrcEntry) World)
-  (match (visit entry False run (Closure Nil Nil w))
+  (resolve_closure_i entry run False w))
+
+;; resolve_closure with the image front door: images=True consults the
+;; cache per visited source (S2b; reached via check.shard's +images).
+(fn resolve_closure_i ((entry (List Int)) (run Bool) (images Bool) (w World))
+  (Pair (List SrcEntry) World)
+  (match (visit entry False run images (Closure Nil Nil w))
     ((Closure _ acc w2) (Pair acc w2))))
 
 ;; (untag_sources — the path/granted-tag stripper — lived here while the run

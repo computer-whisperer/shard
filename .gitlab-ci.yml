@@ -100,6 +100,8 @@ corpus:
       when: never
     - if: $CORPUS_LONG == "1"
       when: never
+    - if: $CORPUS_IMAGES == "1"
+      when: never
     - when: on_success
   needs:
     - engine
@@ -153,6 +155,48 @@ corpus-long:
     - if: $CORPUS_LONG == "1"
       when: on_success
     - when: never
+
+# The S2b image-differential corpus (docs/STORAGE.md §8a): the whole
+# corpus run TWICE with the loader's image front door on (SHARD_IMAGES=1
+# -> every check consults/populates .shard-cache/images/) — pass 1 COLD
+# (text parse + image write), pass 2 WARM (validated hits: decode, no
+# parse). Both passes' FAIL projections must equal the committed text
+# baseline — the "identical verdicts" half of the S2b gate ("identical
+# loaded structures" is S2a's corpus roundtrip + the container's exact
+# byte validation). Fire with:
+#   glab ci run -b main --variables CORPUS_IMAGES:1
+# (steps the default corpus aside, same pattern as corpus-long; same
+# no-job-level-variable rule — see the corpus-long NOTE above).
+corpus-images:
+  extends: corpus
+  interruptible: false
+  rules:
+    - if: $CORPUS_IMAGES == "1"
+      when: on_success
+    - when: never
+  script:
+    - echo "runner cores:" $(nproc) && (free -g || true)
+    - cargo build --release --manifest-path rust_bootstrap/Cargo.toml
+    - |
+      if [ ! -x bin/shard_check ] || [ "$(bin/engine_stamp.sh)" != "$(cat bin/shard_check.stamp 2>/dev/null)" ]; then
+        echo "engine stale or missing -- rebuilding (cache eviction fallback)"
+        bin/rebuild.sh check
+      fi
+    - SHARD_IMAGES=1 bash run_corpus.sh 2>&1 | tee corpus-img-cold.log
+    - SHARD_IMAGES=1 bash run_corpus.sh 2>&1 | tee corpus-img-warm.log
+    - |
+      sort fails-base.txt > fails-base-sorted.txt
+      awk '/^=== /{t=$2} /^(FAIL|TYPE!) /{print t ": " $2}' corpus-img-cold.log | sort > fails-img-cold.txt
+      diff fails-img-cold.txt fails-base-sorted.txt
+      awk '/^=== /{t=$2} /^(FAIL|TYPE!) /{print t ": " $2}' corpus-img-warm.log | sort > fails-img-warm.txt
+      diff fails-img-warm.txt fails-base-sorted.txt
+    - echo "IMAGE CORPUS == TEXT BASELINE (cold + warm)"
+  artifacts:
+    paths:
+      - corpus-img-cold.log
+      - corpus-img-warm.log
+    when: always
+    expire_in: 30 days
 
 # The template-free DME first-result probe (docs/PIO.md P5c-2),
 # variable-gated on any branch carrying the task (merged to main

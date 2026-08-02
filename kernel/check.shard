@@ -183,6 +183,19 @@
   (match c
     ((Counts p f a ad pn) (if (lt 0 f) 1 (if (lt 0 ad) 3 0)))))
 
+;; strip a recognized "+images" token anywhere in the arg list (bin/check
+;; appends it when SHARD_IMAGES=1; the loader's S2b image front door):
+;; flag = seen. Positional args keep their order, so target/focus parsing
+;; is unchanged in every mode.
+(fn split_images ((args (List (List Int)))) (Pair Bool (List (List Int)))
+  (measure (struct args))
+  (match args
+    (Nil (Pair False Nil))
+    ((Cons a rest)
+     (match (split_images rest)
+       ((Pair f as2)
+        (if (int_list_eq a "+images") (Pair True as2) (Pair f (Cons a as2))))))))
+
 ;; FOCUS arg (optional). `__all__` = check every claim (the normal run); a
 ;; specific name = FOCUS MODE — check only that claim (others admitted), and
 ;; trace it. arg1, if present, is that claim name; absent → __all__.
@@ -253,34 +266,49 @@
 ;; battery typo pointing at a missing file would silently pass.
 (fn main ((w World)) World
   (match (get_args w)
-    ((Pair args w1)
-     (match args
-       ((Cons target rest)
-        (if (int_list_eq target "admit")
-          ;; ADMIT MODE: definitional-admissibility report for arg1's closure
-          ;; (issue #1, Phase A). Pure diagnostics; exit 0.
-          (match rest
-            ((Cons atarget _)
-             (match (resolve_closure atarget False w1)
-               ((Pair srcs w2)
-                (match srcs
-                  (Nil
-                    (exit
-                      2
-                      (write
-                        (append_int
-                          "error: cannot read "
-                          (append_int atarget (nl)))
-                        w2)))
-                  (_ (exit 0 (write (admit_report srcs) w2)))))))
-            (_ (exit 2 (write "usage: check admit <file.shard>\n" w1))))
-          (if (int_list_eq target "scope")
-            ;; SCOPE MODE: report the resolver's decisions for arg1's file —
-            ;; use-line classifications and sig→def rebind verdicts. Pure
-            ;; diagnostics; exit 0.
-            (match rest
-              ((Cons starget _)
-               (match (resolve_closure starget False w1)
+    ((Pair args0 w1)
+     (match (split_images args0)
+       ((Pair images args)
+        (match args
+          ((Cons target rest)
+           (if (int_list_eq target "admit")
+             ;; ADMIT MODE: definitional-admissibility report for arg1's closure
+             ;; (issue #1, Phase A). Pure diagnostics; exit 0.
+             (match rest
+               ((Cons atarget _)
+                (match (resolve_closure atarget False w1)
+                  ((Pair srcs w2)
+                   (match srcs
+                     (Nil
+                       (exit
+                         2
+                         (write
+                           (append_int
+                             "error: cannot read "
+                             (append_int atarget (nl)))
+                           w2)))
+                     (_ (exit 0 (write (admit_report srcs) w2)))))))
+               (_ (exit 2 (write "usage: check admit <file.shard>\n" w1))))
+             (if (int_list_eq target "scope")
+               ;; SCOPE MODE: report the resolver's decisions for arg1's file —
+               ;; use-line classifications and sig→def rebind verdicts. Pure
+               ;; diagnostics; exit 0.
+               (match rest
+                 ((Cons starget _)
+                  (match (resolve_closure starget False w1)
+                    ((Pair srcs w2)
+                     (match srcs
+                       (Nil
+                         (exit
+                           2
+                           (write
+                             (append_int
+                               "error: cannot read "
+                               (append_int starget (nl)))
+                             w2)))
+                       (_ (exit 0 (write (scope_report srcs) w2)))))))
+                 (_ (exit 2 (write "usage: check scope <file.shard>\n" w1))))
+               (match (resolve_closure_i target False images w1)  ; False = CHECK mode → opaque module interfaces
                  ((Pair srcs w2)
                   (match srcs
                     (Nil
@@ -289,23 +317,10 @@
                         (write
                           (append_int
                             "error: cannot read "
-                            (append_int starget (nl)))
+                            (append_int target (nl)))
                           w2)))
-                    (_ (exit 0 (write (scope_report srcs) w2)))))))
-              (_ (exit 2 (write "usage: check scope <file.shard>\n" w1))))
-            (match (resolve_closure target False w1)  ; False = CHECK mode → opaque module interfaces
-              ((Pair srcs w2)
-               (match srcs
-                 (Nil
-                   (exit
-                     2
-                     (write
-                       (append_int
-                         "error: cannot read "
-                         (append_int target (nl)))
-                       w2)))
-                 (_
-                   (match (read_sidecars srcs w2)
-                     ((Pair sidecars w3)
-                      (run_and_report srcs sidecars (focus_of rest) w3))))))))))
-       (_ (exit 2 (write "usage: check <file.shard> [claim]\n" w1)))))))
+                    (_
+                      (match (read_sidecars srcs w2)
+                        ((Pair sidecars w3)
+                         (run_and_report srcs sidecars (focus_of rest) w3))))))))))
+          (_ (exit 2 (write "usage: check <file.shard> [claim]\n" w1)))))))))

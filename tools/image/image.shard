@@ -1,273 +1,33 @@
-;;; image.shard — the S2a binary module-image codec (docs/STORAGE.md §8a).
+;;; image.shard — the S2a roundtrip-gate DRIVER (docs/STORAGE.md §8a).
 ;;;
-;;; v1 covers the RAW-SEXPR layer: the context-free tree the reader
-;;; produces before any elaboration. Parsing depends on nothing
-;;; accumulated, so an SExpr image keys on file bytes + engine alone and
-;;; replaces every whole-source read_all sweep on the check path (the
-;;; ~10-13x re-parse measured in the §8a survey). The Module layer (keys
-;;; chained over the import prefix) comes after this layer's gate.
-;;;
-;;; FORMAT IMG1 (CANON.md §7 identity-bytes style; the encoder mirrors
-;;; tools/canon/hash.shard's hx_ser family and this file adds the tree's
-;;; first DECODER):
-;;;   image   = "IMG1;" int(count) sx*
-;;;   sx      = 0 int(n)                    SInt
-;;;           | 1 int(len) byte*            SSym (chars_of_sym bytes)
-;;;           | 2 int(len) byte*            SStr (raw content bytes)
-;;;           | 3 int(count) sx*            SList
-;;;   int     = '-'? digit+ ';'             sign + decimal digits
-;;; Counts prefix every list; payload bytes are raw (0..255, write_file
-;;; safe). CACHE, NEVER TRUST: images never enter the trust ledger; the
+;;; The codec itself lives in kernel/image.shard (it moved there when the
+;;; S2b front door landed — the loader consults images, and the kernel
+;;; cannot import tools). This tool remains the gate: per file, text-load
+;;; -> encode -> decode -> structural equality with the original, plus
+;;; determinism (re-encoding the decoded tree reproduces the bytes).
+;;; CACHE, NEVER TRUST: images never enter the trust ledger; the
 ;;; from-text corpus stays the soundness gate (STORAGE.md trust posture).
 ;;;
-;;; Accumulator discipline (the reader's own law, reader.shard): host
-;;; stack depth is the NESTING depth, never the sibling count — sibling
-;;; walks are tail-recursive over a reversed byte/tree accumulator.
-;;;
 ;;; RUN IT:   bin/shard_eval run tools/image/image.shard FILE.shard ...
-;;;   (per-file ROUNDTRIP verdict: text-load -> encode -> decode ->
-;;;    structural equality + re-encode byte equality; exit 0 = all green,
-;;;    1 = any FAIL, 2 = usage)
+;;;   (per-file ROUNDTRIP verdict; exit 0 = all green, 1 = any FAIL,
+;;;    2 = usage)
 ;;; CHECK IT: bin/shard_eval run kernel/check.shard tools/image/image.shard
 
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/term.shard")
 (import "../../kernel/reader.shard")
+(import "../../kernel/image.shard")
 (import "../../kernel/loader.shard")
 
 (use (:: kernel term *))
 (use (:: kernel reader *))
+(use (:: kernel image *))
 (use (:: kernel loader World))
 (use (:: kernel loader get_args))
 (use (:: kernel loader read_file))
 (use (:: kernel loader write))
 (use (:: kernel loader exit))
 (use (:: kernel loader int_list_eq))
-
-;; ---------------------------------------------------------------------------
-;; byte-list helpers
-;; ---------------------------------------------------------------------------
-
-;; forward append — SMALL chunks only (int digits, the magic header)
-(fn img_app ((a (List Int)) (b (List Int))) (List Int)
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (img_app t b)))))
-
-(fn img_len ((a (List Int))) Int
-  (measure (struct a))
-  (match a
-    (Nil 0)
-    ((Cons _ t) (+ 1 (img_len t)))))
-
-(fn img_rev ((a (List Int)) (acc (List Int))) (List Int)
-  (measure (struct a))
-  (match a
-    (Nil acc)
-    ((Cons h t) (img_rev t (Cons h acc)))))
-
-;; emit chunk cs onto the reversed-stream accumulator (tail-recursive):
-;; walking cs forward while consing leaves cs reversed on top of acc,
-;; which is exactly "cs appended to the stream built so far".
-(fn img_radd ((cs (List Int)) (acc (List Int))) (List Int)
-  (measure (struct cs))
-  (match cs
-    (Nil acc)
-    ((Cons h t) (img_radd t (Cons h acc)))))
-
-;; sign + decimal digits + ';' as a small forward chunk (hx_int style)
-(fn img_int_chunk ((n Int)) (List Int)
-  (if (lt n 0) (Cons 45 (img_app (show_int (- 0 n)) (Cons 59 Nil)))
-  (img_app (show_int n) (Cons 59 Nil))))
-
-(fn img_sx_len ((xs (List SExpr))) Int
-  (measure (struct xs))
-  (match xs
-    (Nil 0)
-    ((Cons _ t) (+ 1 (img_sx_len t)))))
-
-;; ---------------------------------------------------------------------------
-;; encoder — reversed-stream accumulator; depth = nesting only
-;; ---------------------------------------------------------------------------
-
-;; tag + count-prefixed raw payload bytes
-(fn img_renc_bytes ((tag Int) (bs (List Int)) (acc (List Int))) (List Int)
-  (img_radd bs (img_radd (Cons tag (img_int_chunk (img_len bs))) acc)))
-
-(fn img_renc_sx ((e SExpr) (acc (List Int))) (List Int)
-  (measure (struct e))
-  (match e
-    ((SInt n) (img_radd (Cons 0 (img_int_chunk n)) acc))
-    ((SSym s) (img_renc_bytes 1 (chars_of_sym s) acc))
-    ((SStr bs) (img_renc_bytes 2 bs acc))
-    ((SList xs)
-     (img_renc_sxs xs (img_radd (Cons 3 (img_int_chunk (img_sx_len xs))) acc)))))
-
-(fn img_renc_sxs ((xs (List SExpr)) (acc (List Int))) (List Int)
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (img_renc_sxs t (img_renc_sx h acc)))))
-
-(fn img_encode ((xs (List SExpr))) (List Int)
-  (img_rev
-    (img_renc_sxs
-      xs
-      (img_radd (img_app "IMG1;" (img_int_chunk (img_sx_len xs))) Nil))
-    Nil))
-
-;; ---------------------------------------------------------------------------
-;; decoder — fuel-bounded (read_expr_go's measure idiom); the tree's first
-;; ---------------------------------------------------------------------------
-
-;; digit run then ';' (any = at least one digit seen)
-(fn img_dec_nat ((bs (List Int)) (acc Int) (any Bool))
-  (Option (Pair Int (List Int)))
-  (measure (struct bs))
-  (match bs
-    (Nil None)
-    ((Cons c rest)
-     (if (int_eq c 59) (if any (Some (Pair acc rest)) None)
-     (if (lt c 48) None
-     (if (lt 57 c) None
-     (img_dec_nat rest (+ (* acc 10) (- c 48)) True)))))))
-
-(fn img_dec_int ((bs (List Int))) (Option (Pair Int (List Int)))
-  (match bs
-    (Nil None)
-    ((Cons c rest)
-     (if (int_eq c 45)
-       (match (img_dec_nat rest 0 False)
-         (None None)
-         ((Some (Pair n r)) (Some (Pair (- 0 n) r))))
-       (img_dec_nat (Cons c rest) 0 False)))))
-
-(fn img_take ((n Int) (bs (List Int)) (acc (List Int)))
-  (Option (Pair (List Int) (List Int)))
-  (measure (struct bs))
-  (if (lt n 1) (Some (Pair (img_rev acc Nil) bs))
-  (match bs
-    (Nil None)
-    ((Cons c rest) (img_take (- n 1) rest (Cons c acc))))))
-
-;; count-prefixed raw payload
-(fn img_dec_payload ((bs (List Int))) (Option (Pair (List Int) (List Int)))
-  (match (img_dec_int bs)
-    (None None)
-    ((Some (Pair n r)) (if (lt n 0) None (img_take n r Nil)))))
-
-(fn img_dec_sx ((bs (List Int)) (fuel Int)) (Option (Pair SExpr (List Int)))
-  (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
-  (if (lt fuel 1) None
-  (match bs
-    (Nil None)
-    ((Cons tag rest)
-     (if (int_eq tag 0)
-       (match (img_dec_int rest)
-         (None None)
-         ((Some (Pair n r)) (Some (Pair (SInt n) r))))
-     (if (int_eq tag 1)
-       (match (img_dec_payload rest)
-         (None None)
-         ((Some (Pair cs r)) (Some (Pair (SSym (sym_of_chars cs)) r))))
-     (if (int_eq tag 2)
-       (match (img_dec_payload rest)
-         (None None)
-         ((Some (Pair cs r)) (Some (Pair (SStr cs) r))))
-     (if (int_eq tag 3)
-       (match (img_dec_int rest)
-         (None None)
-         ((Some (Pair n r))
-          (if (lt n 0) None
-          (match (img_dec_sxs n r Nil (- fuel 1))
-            (None None)
-            ((Some (Pair xs r2)) (Some (Pair (SList xs) r2)))))))
-       None))))))))
-
-;; n siblings, accumulator style (depth = nesting via img_dec_sx only)
-(fn img_dec_sxs ((n Int) (bs (List Int)) (acc (List SExpr)) (fuel Int))
-  (Option (Pair (List SExpr) (List Int)))
-  (measure
-    fuel
-    (by arith (list 1 0))
-    (by arith (list 1 1))
-    (by arith (list 1 0))
-    (by arith (list 1 1)))
-  (if (lt fuel 1) None
-  (if (lt n 1) (Some (Pair (rev_sexpr acc Nil) bs))
-  (match (img_dec_sx bs (- fuel 1))
-    (None None)
-    ((Some (Pair e r)) (img_dec_sxs (- n 1) r (Cons e acc) (- fuel 1)))))))
-
-;; the magic prefix, or None
-(fn img_strip ((pre (List Int)) (bs (List Int))) (Option (List Int))
-  (measure (struct pre))
-  (match pre
-    (Nil (Some bs))
-    ((Cons p pt)
-     (match bs
-       (Nil None)
-       ((Cons c ct) (if (int_eq c p) (img_strip pt ct) None))))))
-
-;; whole image -> the file's SExpr list; trailing bytes = malformed.
-;; Fuel 2*(bytes+2): every decoder step consumes >=1 byte per <=2 ticks.
-(fn img_decode ((bs (List Int))) (Option (List SExpr))
-  (match (img_strip "IMG1;" bs)
-    (None None)
-    ((Some r)
-     (match (img_dec_int r)
-       (None None)
-       ((Some (Pair n r2))
-        (if (lt n 0) None
-        (match (img_dec_sxs n r2 Nil (* 2 (+ (img_len r2) 2)))
-          (None None)
-          ((Some (Pair xs tail))
-           (match tail
-             (Nil (Some xs))
-             (_ None))))))))))
-
-;; ---------------------------------------------------------------------------
-;; structural equality
-;; ---------------------------------------------------------------------------
-
-(fn img_sx_eq ((a SExpr) (b SExpr)) Bool
-  (measure (struct a))
-  (match a
-    ((SInt x)
-     (match b
-       ((SInt y) (int_eq x y))
-       (_ False)))
-    ((SSym s)
-     (match b
-       ((SSym s2) (sym_eq s s2))
-       (_ False)))
-    ((SStr xs)
-     (match b
-       ((SStr ys) (int_list_eq xs ys))
-       (_ False)))
-    ((SList xs)
-     (match b
-       ((SList ys) (img_sxs_eq xs ys))
-       (_ False)))))
-
-(fn img_sxs_eq ((xs (List SExpr)) (ys (List SExpr))) Bool
-  (measure (struct xs))
-  (match xs
-    (Nil
-      (match ys
-        (Nil True)
-        (_ False)))
-    ((Cons x xt)
-     (match ys
-       (Nil False)
-       ((Cons y yt) (if (img_sx_eq x y) (img_sxs_eq xt yt) False))))))
-
-;; ---------------------------------------------------------------------------
-;; the roundtrip gate (S2a, STORAGE.md §8a): text-load -> encode ->
-;; decode -> structural equality with the original, plus determinism
-;; (re-encoding the decoded tree reproduces the bytes exactly).
-;; ---------------------------------------------------------------------------
 
 (fn img_report ((verdict (List Int)) (path (List Int)) (w World)) World
   (write (img_app verdict (img_app "  " (img_app path "\n"))) w))
