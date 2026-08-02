@@ -499,3 +499,39 @@ below the W frame.
 - *Pick the benchmark cap now (~56 KiB).* Saves one regeneration
   later; costs tuning discussion before the walk shape even
   exists, on a number B4 will re-measure anyway.
+
+**B3 RECORD (2026-08-01; the machine leg lands — M0–M5 complete,
+the rung closes).** The ladder ran exactly as §7.9 laid it out:
+M0 80cdeba (the backward-branch-around-an-effect probe; its
+findings — fuel = depth, state below the read buffer, the
+structural ≥1-byte argument — carried M3/M4 as predicted), M1
+7423473 (the absorber + its readback), M2 2e0642e (the finalizer +
+readback), M3 9125b6c (the thin main; differential 25/25 first
+run), M4 2a261f0 (THE WELD — the SswOb package invariant through
+the loop induction; §7.3's D8 disjunction CLOSED: EOF ⇒ wrote
+`bytes_hex (sha256 (scat chunks))` ∨ read-error fail-stop ∨
+oracle-dry no-verdict), and M5 in five commits: a2a89df + ae1de80 +
+a1e85d7 the base-65536 relocation (window equality FORCED at every
+tier by shared bridge guards — the window became declared source;
+laws in the arc memory item 3o), 34fc196 emission + the CROSS-FILE
+BYTE-TIE (ssx_main_eof/err/dry restate all three D8 legs over the
+emitted module, teeth measured), b8ddc7a the stale one-shot emitter
+repaired, 9a5a7f9 the capless silicon leg joining the corpus (61
+rows, both bins vs coreutils; the streaming rows PIPE-FED — X86.md
+§51's file-redirect discipline retires, short reads are under
+test). The name ruling (2026-08-01): `(bin sha256sum)` = the
+streaming program; the capped demonstrator = `(bin
+sha256sum_oneshot)`. X86.md §52 is the x86-side record.
+
+**The verdict line (§7.5 form — a bare MET is never an artifact
+verdict):**
+
+    sha256sum: MET (artifact: unconditional)
+
+The artifact claims are UNCONDITIONAL in §7.5's sense — no except
+grammar, no cap condition: the disjunction covers every oracle
+behavior at every fuel. They are stated over the EMITTED module
+(the byte-tie), and the emitted binary is corpus-gated in CI on
+real silicon against coreutils. The one-shot's §50-era verdict (its
+cap leg a declared controlled failure) stands unchanged under its
+new name.
