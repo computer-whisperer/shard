@@ -312,20 +312,27 @@ pattern:
   SMALLER than source — comments drop — but the embedded
   exact-validation copy adds it back), so the warm path reads and
   cons-materializes 2.1x the bytes. The door loses on EVERY
-  measured profile at the SExpr layer. FORK (S2c's ruling, posed
-  2026-08-02): (a) default stays OFF — the door remains opt-in
+  measured profile at the SExpr layer.
+  **RULED (user, 2026-08-02): DEFAULT OFF.** The door stays opt-in
   behind SHARD_IMAGES=1, differential-guarded, kept as the
   validated container/door/differential infrastructure for the
   MODULE-LAYER image (the elaboration-replacing rung, survey
-  finding (ii)); (b) RETIRE the door (delete the loader hook,
-  keep parse-once + codec + tool gate) — saves ~100 loader lines,
-  loses tested infrastructure the Module rung would rebuild;
-  (c) default ON — no measured case, listed for completeness.
-  LEAN: (a). SCHEMA FREEZE (ratified to happen here): IMG1/IMG2
-  freeze as landed — the magic strings are the version gate; any
-  format change bumps the magic and old images self-invalidate to
-  misses. S2 CLOSES on this ruling + the corpus-images
-  differential verdict (pipeline #278).
+  finding (ii)). The user's stated flip condition: revisit
+  default-on if check times start climbing prohibitively.
+  REJECTED-because: retiring the door would save ~100 loader lines
+  but rebuild tested infrastructure at the Module rung; default ON
+  had no measured case. SCHEMA FROZEN (ratified at S2c): IMG1 +
+  IMG2 exactly as landed — the magic strings are the version gate;
+  any format change bumps the magic and old images self-invalidate
+  to misses.
+  **S2 CLOSED 2026-08-02.** Gate verdicts: the corpus-images
+  differential GREEN (pipeline #278 — cold AND warm image corpus
+  passes, FAIL-projections identical to the text baseline) and the
+  text corpus GREEN on the stack (#279). S2's delivered win =
+  slice 1's parse-once 2.05x on every check, unconditionally; the
+  codec + door + differential stand ready for the Module layer.
+  Next per §10 ordering / STREAM.md sequencing: B5; S3 arena stays
+  maybe-never.
 
 ## 8. S1 RECORD (2026-08-02; landed same-day as ratification)
 
