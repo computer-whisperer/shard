@@ -349,6 +349,7 @@ TARGETS=(
   std/sha256/sha256.weld.shard
   std/sha256/sha256.sweld.shard
   examples/sha256sum/sha256sum_stream_x86.shard
+  examples/sha256sum/sha256sum_stream_elf.shard
   pins/proof/sketch_pin.shard
   meta/sketch/mod.req.shard
   meta/invoke/prepared.shard
