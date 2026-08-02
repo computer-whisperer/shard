@@ -1,0 +1,275 @@
+;;; PCB detour instrument: the measured-need gate for the HELD
+;;; best-first frontier rung (growth item 4).  This is a MEASUREMENT,
+;;; not a demo: it prices DFS find-cost mislead on the geometry class
+;;; the frontier is claimed to fix, so the rung can be adjudicated on
+;;; a number instead of a prior.  Runtime is UNVALIDATED — it fires on
+;;; CI only:
+;;;   glab ci run -b more-search --variables ENGINE_RUN:1 \
+;;;     --variables ENGINE_RUN_TARGET:tools/search/pcb_detour_probe.shard
+;;;
+;;; THE TRAP (12x12): a concave obstacle FACING THE MOVE ORDER — a
+;;; C-shaped cave of 9 keepouts, bar x=7 y=2..6 plus arms (5,2)(6,2)
+;;; and (5,6)(6,6), interior x=5..6 y=3..5, mouth opening west.  One
+;;; net: seed (10,4), tap routed from (1,4) east, static order
+;;; [E,S,N,W].  The Manhattan floor is THROUGH-WALL, so it cannot see
+;;; that the cave is closed: E-first DFS dives into the mouth at every
+;;; ladder level and re-wanders the interior from every entry state.
+;;; (A single-gap straight wall was rejected on paper: after a wall
+;;; block the order's secondary move HUGS the wall straight to the
+;;; gap, and the find comes out cheap — concavity is what defeats
+;;; wall-following.)  Crossing x=7 is possible only at y<=1 or y>=7,
+;;; so the minimum route is exactly 15 (slack 6, around either arm):
+;;; d=9/11/13 are structurally EMPTY, d=15 FOUND (a south wall-hug —
+;;; S precedes N in the order).  Expected: KEEP-9 NETS-1 RIPS-0
+;;; WIRE-15 CERT-DISJOINT-OK.
+;;;
+;;; THE MEASUREMENT (pipeline 220, job 647, 2870s / ~5.05M steps —
+;;; structural story line-for-line, one mechanism prediction
+;;; corrected): EMPTY 14,031 / 458,855 / 4,301,216 steps (12 / 238 /
+;;; 1,666 forks) at slack 0/2/4, then FOUND d=15 at only 277,155 /
+;;; 116 — the find is CHEAP, against design intent: at the find
+;;; depth the cave SELF-LIMITS (slack spent entering leaves no
+;;; wander room; exits are floor-killed) and the south detour is
+;;; order-aligned (S precedes N).  The exponential lives in the
+;;; REFUTATION levels: 94.5% of the run is pre-find EMPTY cost.
+;;; THE ADJUDICATION THAT FALLS OUT: a frontier WITHOUT dominance
+;;; expands the same admissible path prefixes the EMPTY levels do —
+;;; the ladder's re-expansion overhead is only ~11% (the d=13 tree
+;;; is 90% of the EMPTY sum) — so the bare frontier buys nothing,
+;;; measured.  The Lee/A* pair (frontier + first-arrival cell
+;;; dominance) expands the 66 cells with f <= 15 on this board
+;;; (hand-derived) against 2,032 measured forks: ~31x in
+;;; expansions, ~38x in steps at the measured ~1.9-2.6k steps/fork
+;;; — and it collapses refutation from path-count to cell-count.
+;;; Claim posture per the ladder: the find is heuristic existence
+;;; (replay-certified); the EMPTYs at 9/11/13 are exact
+;;; refutations — which is what CHECKED dominance must preserve if
+;;; that rung lands (find-mode may take dominance unchecked).
+;;;
+;;; THE A/B VERDICT (pipeline 223, job 653 — ladder arm BIT-IDENTICAL
+;;; to 220, the regression self-check): the astar arm's ONE query at
+;;; d=21 replaces the whole ladder — ASTAR-FOUND len 15 at 248,408
+;;; steps / 39 forks / 59 dominated pops (census sym row).  20.3x the
+;;; ladder's total steps, 52x its expansions, and cheaper than the
+;;; ladder's final FOUND level alone (277,155).  Expansions landed
+;;; UNDER the 66-cell Lee bound: the goal pops mid-band.
+;;;
+;;; RUN:  fires on CI via ENGINE_RUN (see above) — never locally.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/driver.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "../../meta/search")
+(import "superpose.shard")
+(import "pcb_route_probe.shard")
+(import "tasks/pcb_route_model.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel reader *))
+(use (:: kernel loader *))
+(use (:: kernel driver *))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: meta search *))
+(use (:: tools search superpose *))
+(use (:: tools search pcb_route_probe *))
+(use (:: tools search tasks pcb_route_model *))
+
+(fn pcbd_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "PCB-DETOUR FAIL " (append_int msg "\n")) w)))
+
+;; The cave: bar x=7 y=2..6, then the top arm (5,2)(6,2) and the
+;; bottom arm (5,6)(6,6).  Interior x=5..6 y=3..5, mouth open west.
+(fn pcbd_keepouts () (List Int) (list 31 43 55 67 79 29 30 77 78))
+
+;; Seed (10,4)=58 east of the bar; the tap routes FROM (1,4)=49
+;; eastward into the trap.
+(fn pcbd_nets () (List PcbNet) (list (PcbNet (list 58 49))))
+
+(fn pcbd_levels () Int 4)
+
+;; The instrument's give-up base, re-sized from evidence (job 641,
+;; pipeline 217): the paper estimate was ~20x low — measured ~1.9k
+;; steps per fork at this depth (d=11 EMPTY = 458,855 steps on 238
+;; forks; d=13 BUDGET-STOPped at a 1.024M cap).  Base 4M puts d=13
+;; under a 16M cap at ~5-8x headroom and the d=15 FOUND — the
+;; measurement itself — under 32M.
+(fn pcbd_budget0 () Int 4000000)
+
+(fn pcbd_report ((rips Int) (wire Int) (w World)) World
+  (write
+    (append_int
+      "PCB-DETOUR 12x12 KEEP-9 NETS-1 RIPS-"
+      (append_int
+        (show_int rips)
+        (append_int " WIRE-" (append_int (show_int wire) " CERT-DISJOINT-OK\n"))))
+    w))
+
+;; ---- the A/B arm: the same tap under the dominance-enabled A* drive -------
+;; ONE query at full depth replaces the whole deepening ladder: the
+;; admissible floor is the h of the score hook, so the first goal pop is
+;; shortest.  d is a CAP here (floor 9 + slack headroom 12), not a ladder
+;; rung — the grammar admits every list length <= d and f-order finds the
+;; minimum.  The census carries `sym` rows for dominated pops.  The found
+;; route replays against the keepouts exactly like the ladder's — the
+;; drive changes, the certificate does not.
+
+(fn pcbd_astar_dmax () Int 21)
+
+(fn pcbd_astar_cap () Int 16000000)
+
+;; The astar arm's grammar bakes the MOVE INTO the alternative (5 alts
+;; per list entry: Nil + one Cons per ordered move) so every open hole
+;; is a tail-list hole and the cut expression (Nil) is always
+;; type-correct in the score render.  The ladder grammar's separate
+;; move-alphabet hole would cut to a list where a PMove belongs.
+(fn pcbd_cons_alt ((name Symbol) (edge Int) (tail_id Int)) SkSchemaAlt
+  (SkSchemaAlt
+    (Ctor (qn (quote Cons)) (list (Ctor (pcbp_model_q name) Nil) (hole 0)))
+    (list (SkSchemaRef 0 edge tail_id))))
+
+;; Edges ascend across the entry's alternatives — the schema validator
+;; requires every edge unique within one entry.
+(fn pcbd_cons_alts ((names (List Symbol)) (edge Int) (tail_id Int))
+  (List SkSchemaAlt)
+  (measure (struct names))
+  (match names
+    (Nil Nil)
+    ((Cons h t)
+     (Cons (pcbd_cons_alt h edge tail_id) (pcbd_cons_alts t (+ edge 1) tail_id)))))
+
+(fn pcbd_ents ((i Int) (d Int) (order (List Symbol))) (List SkSchemaEnt)
+  (measure (- (+ d 1) i))
+  (if (lt d i) Nil
+  (Cons
+    (if (lt i 1) (SkSchemaEnt 0 (Cons (pcbp_nil_alt) Nil))
+    (SkSchemaEnt i (Cons (pcbp_nil_alt) (pcbd_cons_alts order 0 (- i 1)))))
+    (pcbd_ents (+ i 1) d order))))
+
+(fn pcbd_grammar ((d Int) (order (List Symbol))) SkSchemaGrammar
+  (SkSchemaGrammar d (pcbd_ents 0 d order)))
+
+(fn pcbd_score_t ((occ (List Int)) (goals (List Int)) (start Int)) Expr
+  (Call
+    (pcbp_model_q (quote pcb_score))
+    (list
+      (IntLit (pcbp_wd))
+      (IntLit (pcbp_ht))
+      (pcbp_int_list_expr occ)
+      (pcbp_int_list_expr goals)
+      (IntLit start)
+      (hole 0))))
+
+(fn pcbd_astar_report ((wire Int) (w World)) World
+  (write
+    (append_int
+      "PCB-ASTAR 12x12 WIRE-"
+      (append_int (show_int wire) " CERT-DISJOINT-OK\n"))
+    w))
+
+(fn pcbd_astar ((m Module) (w World)) World
+  (let ((occ (pcbd_keepouts)))
+    (let ((start 49))
+      (let ((goals (Cons 58 Nil)))
+        (match
+          (su_find_query_schema_astar
+            1000000
+            (pcbd_astar_cap)
+            m
+            (pcbp_probe_q (quote candidate))
+            (hole 0)
+            (hole 0)
+            (ms_empty_plan)
+            (pcbp_query occ goals (pcbd_astar_dmax) start)
+            (pcbp_want)
+            (pcbd_grammar (pcbd_astar_dmax) (pcbp_move_order start goals))
+            (pcbd_score_t occ goals start)
+            (Ctor (qn (quote Nil)) Nil))
+          ((SuFindErr msg) (pcbd_fail msg w))
+          ((SuFindEmpty _ _ _ forks _ steps _ _ census)
+           (pcbd_fail
+             "astar: no route on the open trap"
+             (pcbp_log_call
+               start
+               1
+               (pcbd_astar_dmax)
+               (pcbd_astar_cap)
+               "ASTAR-EMPTY"
+               steps
+               forks
+               census
+               w)))
+          ((SuFindBudget _ _ _ forks _ steps _ _ census)
+           (pcbd_fail
+             "astar: budget stop"
+             (pcbp_log_call
+               start
+               1
+               (pcbd_astar_dmax)
+               (pcbd_astar_cap)
+               "ASTAR-BUDGET"
+               steps
+               forks
+               census
+               w)))
+          ((SuFindFound _ _ _ forks _ steps _ rep census)
+           (let
+             ((w2
+                (pcbp_log_call
+                  start
+                  1
+                  (pcbd_astar_dmax)
+                  (pcbd_astar_cap)
+                  "ASTAR-FOUND"
+                  steps
+                  forks
+                  census
+                  w)))
+             (match (pcbp_decode rep)
+               (None (pcbd_fail "astar: undecodable representative" w2))
+               ((Some moves)
+                (let ((wire (pcbp_len_moves moves)))
+                  (match
+                    (pcbp_replay_net
+                      occ
+                      (Cons start Nil)
+                      (Cons moves Nil)
+                      (Cons 58 Nil))
+                    (None (pcbd_fail "astar: replay rejected the route" w2))
+                    ((Some cells)
+                     (if (pcbp_dup_free (pcbp_app_cells occ cells))
+                       (pcbd_astar_report
+                         wire
+                         (pcbp_log_routed start (pcbd_astar_dmax) wire w2))
+                       (pcbd_fail "astar: overlapping cells" w2))))))))))))))
+
+(fn pcbd_run ((m Module) (w World)) World
+  (match
+    (pcbp_route_all
+      m
+      (pcbd_keepouts)
+      (pcbd_levels)
+      (pcbd_budget0)
+      (pcbd_nets)
+      Nil
+      0
+      4
+      w)
+    ((Pair (PcbAllErr msg) w2) (pcbd_fail msg w2))
+    ((Pair (PcbAllOk routed rips) w2)
+     (match (pcbp_replay_all (pcbd_keepouts) routed)
+       (None (pcbd_fail "certificate: replay rejected a tap" w2))
+       ((Some cells)
+        (if (pcbp_dup_free (pcbp_app_cells (pcbd_keepouts) cells))
+          (pcbd_astar m (pcbd_report rips (pcbp_wire routed) w2))
+          (pcbd_fail "certificate: overlapping cells" w2)))))))
+
+(fn main ((w World)) World
+  (match (pcbp_load w)
+    ((Pair (PcbpLoadErr msg) w1) (pcbd_fail msg w1))
+    ((Pair (PcbpLoadOk m) w1) (pcbd_run m w1))))

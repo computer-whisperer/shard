@@ -373,6 +373,11 @@ TARGETS=(
   tools/search/subsume.shard
   tools/search/imp_expr.shard
   tools/search/typed_grammar.shard
+  tools/search/typed_expr.shard
+  tools/search/typed_superpose.shard
+  tools/search/transition_mine.shard
+  tools/search/protocol_probe.shard
+  tools/search/arena_probe.shard
   tools/search/theorem_scope.shard
   tools/search/profile_census.shard
   tools/search/rewrite_probe.shard
@@ -411,6 +416,19 @@ TARGETS=(
   tools/search/tasks/pio_transition_window.shard
   tools/search/tasks/pio_dme_model.shard
   tools/search/tasks/pio_dme_free.shard
+  tools/search/tasks/swap_route_model.shard
+  tools/search/tasks/swap_route.shard
+  tools/search/tasks/swap_route5_model.shard
+  tools/search/tasks/swap_route5.shard
+  tools/search/tasks/pcb_route_model.shard
+  tools/search/pcb_route_probe.shard
+  tools/search/pcb_detour_probe.shard
+  tools/search/tasks/pcb_time_model.shard
+  tools/search/pcb_time_probe.shard
+  tools/search/tasks/pcb_cost_model.shard
+  tools/search/pcb_cost_probe.shard
+  tools/search/pcb_cap_probe.shard
+  tools/search/pcb_lns_probe.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -541,11 +559,25 @@ fi
 
 # General typed-grammar pins: first exercise an ISA-free Let template whose
 # body hole receives a new BVar, then drive the same reflected scope engine
-# over imp expressions and parametric Wasm instruction lists.  typed_expr is
-# an executable pin rather than a checker target because its independent
-# candidate gate imports kernel/types, whose tc_infer/tc_arms mutual-recursion
-# measure gap is a known pre-existing checker failure.  typed_superpose imports
-# the same independent gate and is executable-pinned for the same reason.
+# over imp expressions and parametric Wasm instruction lists.  typed_expr and
+# typed_superpose are ALSO check targets since 42902ae closed the
+# tc_infer/tc_arms measure gap that used to fail in their kernel/types
+# closure; the executable pins below remain the behavioral half.
+# Task-protocol scan pin: the hook table + structural refusal matrix
+# (unknown search_* fn, witness multiplicity, solo spine hook, flat
+# vocabulary under search_environment) — every rule pinned on synthetic
+# modules; every real task passes through the same scan via te_config.
+# Also the claim-ladder pins: every mode x witness cell of te_claim
+# (census / absence / first) and both te_screen_legal directions, refusal
+# messages byte-exact — the legality matrix te_load_task enforces for
+# every engine consuming the TeTask record.
+echo "=== search: task-protocol scan pin ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/protocol_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 echo "=== search: graduated meta rewrite profile pin ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/rewrite_probe.shard
@@ -593,6 +625,43 @@ if [ -x bin/shard_eval ]; then
   # exactly one two-member subtree of the eight generic ADT candidates is
   # theorem-redundant. Repeated-variable probes separately pin structural
   # equality across concrete, partial-grammar, prepared, and symbolic values.
+  # region_probe's second line pins the RELATION-AWARE region algebra (R1):
+  # the diagonal counts as ONE region (EQ-3/NE-6), the 3-clique closes by
+  # inclusion-exclusion (6), deep domains diagonalize (4/12) and tuple-ne
+  # descends (6), eq fixes its partner, a last closed-template ne pair
+  # becomes a forbid, split partitions 9=3+6, release restores by policy,
+  # and the v1 boundaries (iso/liveness/closure/cap/rank) refuse loudly.
+  # region_probe also pins the R3 entailment decision (sk_rels_decide):
+  # transitive eq reachability, singleton ne lifted across eq classes,
+  # vector ne entails nothing pointwise, unrelated stays Unknown.
+  # nonlinear_constraint_probe pins the PAIR-CARRYING verdicts (R2) and
+  # RELATION-AWARE evaluation (R3): the both-open equality reports
+  # MsBlockedPair 0/1 (direct and prepared), an eq/ne relational region
+  # DECIDES it (Redex/Clear — the split-child progress property), the exact
+  # equality partition consumes it TERMINALLY (EQ3+NE6 in 1+1 regions,
+  # 1 relational split, 0 ground forks), the non-isomorphic-domain door
+  # refusal falls back to ground (1+3/F2), a two-pair conjunction degrades
+  # its second pair and splits under each diagonal assignment (9+72/F4S3),
+  # a distinct guard over two open holes pairs through the conditioned
+  # verdict and is decided by eq/ne relation events, and the PREPARED plan
+  # partition now SPLITS the pair relationally (3+6 in 1+1 regions, S1;
+  # was the R2 degradation pin 3+3/F4) with the non-isomorphic plan case
+  # falling back to ground (1+3 in 1+2, F2S0).
+  # constraint_superpose_probe's DIAG-SPLIT line pins the DRIVE-level R3
+  # split: a nonlinear diagonal rule before a constant-pass query settles
+  # as FOUND 6 (the relational ne child, counted exactly) + KILLED 3 (the
+  # cited eq child) in 2 regions / 1 boundary, and the relational passing
+  # region yields an in-region first-walk representative.
+  # region_probe's third line pins the SCHEMA-side relational algebra (R4):
+  # relate/split doors over occurrence addresses (iso = schema-id equality),
+  # cross-schema refusal, and the graduated language-parametric first walk
+  # (eq propagates to Pair(A0,A0); ne separates to Pair(A0,A1); a deep
+  # fixed pair descends to the child-occurrence tuple and the backtracker
+  # resolves it).  constraint_superpose_probe's SCHEMA-DIAG-SPLIT line pins
+  # the same diagonal drive over a regular schema: the single-alternative
+  # root is transparent, the occurrence pair splits at the empty region
+  # (1 boundary), and the relational passing region's representative comes
+  # from the graduated walk.
   bin/shard_eval run tools/search/constraint_probe.shard
   bin/shard_eval run tools/search/nonlinear_constraint_probe.shard
   bin/shard_eval run tools/search/region_probe.shard
@@ -609,6 +678,16 @@ if [ -x bin/shard_eval ]; then
   # transition corpus before it can reach theorem classification.
   bin/shard_eval run tools/search/transition_affine_probe.shard
   bin/shard_eval run tools/search/constraint_superpose_probe.shard
+  # The minimal ROUTING-SHAPED consumer: graph coloring as one nonlinear
+  # diagonal rule per interference edge over per-variable register holes,
+  # constraint-dominated so every pair survives to the partition.  Pins:
+  # P4/3 census 24+57 in 4 regions / 3 relational splits; K3/3 census
+  # 6+21 in 4/3 (the drive twin of region_probe's CLIQUE-6); K6/6 FIND
+  # succeeds past the exact-counting cap (15 ne edges, one component) in
+  # 16 regions / 15 splits via count-free inhabitance screening, with the
+  # representative verified in-region; K4/3 FIND terminates EMPTY through
+  # the walk-refusal ground fallback.
+  bin/shard_eval run tools/search/coloring_probe.shard
   bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_observer_conjunctive.shard audit
 else
   echo "SKIPPED (no bin/shard_eval)"
@@ -704,6 +783,135 @@ fi
 echo "=== search: checked pio transition-window narrowing ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/pio_transition_window.shard audit
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Swap-network routing (R5): theorem-first FIND-mode synthesis under two
+# proven spine laws (nonlinear self-inverse cancel + disjoint-swap
+# ordering) — the live consumer of the find path's theorem-first entry,
+# the separated SPLITS counter, AND the skl_iso structural extension
+# (cross-depth leaf schema states relate; the first task with live
+# relational splits).  Expected: SPINE RULES 2; a green six-swap
+# canonical route (KILLED 59 CONSTRAINT 78 FORKS 174 SPLITS 6 STEPS 4542
+# at depth 7, measured 2026-07-28).
+echo "=== search: swap-network routing synthesis ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/swap_route.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# PCB routing demo: the heuristic-tier driver, scaled to MULTI-PIN
+# nets on a parametric 12x12 board — each net's first pin seeds its
+# tree, later pins are TAPS routed to the goal set (any tree cell)
+# by su_find_query_schema_steps with the self-avoiding bounded-walk
+# model, nearest-goal move ordering, parity-aware iterative deepening
+# (+1 for mixed-parity trees), give-up ramp 32000*2^level EVALUATOR
+# STEPS, deepen-only-on-EMPTY, and the REFUTATION CENSUS convicting
+# the rip victim by blocking weight (an occupied pin short-circuits
+# to the same conviction).  Heuristic EXISTENCE only (tap-by-tap
+# replay certificate re-deriving all cells); never a census pin.
+# CONGESTED instance (measured CI pipeline 215, 2026-07-31, ~3.5 min
+# job / ~177k steps total): 9 keepouts (2x4 component
+# block + corridor plug), 7 nets, rips that COMPOUND.  T's tap is
+# sandwiched (component W, net C's col-5 wall E, plug N): four EMPTY
+# levels, d=9 census discriminates TWO REAL blockers — C w=3 over the
+# S strap w=1 — RIP 29; T re-routes d=5 through the freed corridor;
+# then E greedily squats C's freed seed 29, C's retry hits the
+# occupied-pin short-circuit, RIP 17 w=1, both relocate (C col 6 len
+# 8, E west len 4).  Expected ending:
+# PCB-ROUTE 12x12 KEEP-9 NETS-7 RIPS-2 WIRE-29 CERT-DISJOINT-OK.
+echo "=== search: PCB routing demo (rip-up/re-route) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/pcb_route_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# PCB SPACE-TIME demo (the time-axis rung): occupancy is time-indexed
+# (st = t*W*H + c), packets vanish on arrival, the move alphabet gains
+# a HOLD.  8x8 full wall with one gap, two nets — SPATIALLY UNROUTABLE
+# by construction (both wires would need the gap cell), routed in time:
+# A's unique d=5 route fixes the conflict schedule, B's ladder refutes
+# d=4/5 on geometry and d=6 on the time conflict (census convicts A's
+# TRANSIT space-time cells b@90/b@155), then finds d=7 with EXACTLY
+# ONE hold (parity-provable), convoying one cell behind A and crossing
+# A's goal cell after it vanishes.  The astar arm re-routes both nets
+# in one query each on (cell,tick) dominance keys (pure duplicate
+# detection in space-time).  Measured CI pipeline 228, 2026-08-01,
+# ~170s job: ladder B 110,616 steps / 80 forks over four levels, astar
+# B 89,489 / 15 forks / 17 dominated.  Expected ending, BOTH arms:
+# PCB-TIME 8x8 KEEP-7 NETS-2 MAKESPAN-7 TICKS-12 HOLDS-1
+# CERT-DISJOINT-OK (astar line prefixed PCB-TIME-ASTAR).
+echo "=== search: PCB space-time demo (holds + convoy) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/pcb_time_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# PCB COST demo (rung B): weighted moves (cmove=2, chold=5) on the
+# space-time model and MIN-COST CLAIMS.  Two-gap wall, objectives
+# DISAGREE: B's fastest route holds once behind A through the near gap
+# (makespan 7, cost 17), its cheapest takes 8 moves (cost 16, makespan
+# 8) — the Pareto pair.  Min-cost bounds are single EMPTYs at C-1
+# (cost bounds are monotone): A's refuses at the entry floor with ZERO
+# forks; B's runs on BOTH the exact ladder (no dominance, 34 forks)
+# and the checked-dominance astar entry (9 forks, 14 dominated — the
+# entry's first live EMPTY), cross-checked in-driver.  The cost
+# bound's census re-convicts A's transit (b@90/b@155), tick-resolved.
+# Measured CI pipeline 231, 2026-08-01, ~236s job.  Expected ending:
+# PCB-COST 8x8 KEEP-6 NETS-2 FAST-MAKESPAN-7 FAST-COST-17
+# CHEAP-COST-16 CHEAP-MAKESPAN-8 MINCOST-A-10 MINCOST-B-16
+# DOM-CHECKED-AGREE CERT-DISJOINT-OK.
+echo "=== search: PCB cost demo (weighted moves + min-cost claims) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/pcb_cost_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# PCB CAPACITY demo: negotiated congestion (PathFinder-style) pricing
+# the toll seam.  Nets route INDEPENDENTLY (no priority, no hard
+# occupancy, no victim selection) against the current toll list;
+# space-time conflicts inflate the conflicted CELLS' tolls (+2 = the
+# meeting-net count), pure history between rounds.  On rung B's
+# two-gap board both nets take near-gap optima and B rides A's
+# corridor at the same ticks (SHARE n=4 cells 27 28 29 30); one
+# pricing round later A stays (18 vs 24 — the goal toll is
+# unavoidable) and B diverts to the untolled far gap (16 < 18):
+# converged in 2 rounds, and the no-priority outcome lands exactly on
+# the per-priority minima rung B certified (driver asserts 10/16 =
+# bound+1; certificate replays with tolls STRIPPED).  Round forks
+# 6/0, 7/2-dom, 19/32-dom, 21/24-dom; ~316k engine steps.  Measured
+# CI pipeline 234, 2026-08-01, ~192s job.  Expected ending:
+# PCB-CAP 8x8 KEEP-6 NETS-2 ITERS-2 TOLLED-4 COST-A-10 COST-B-16
+# MAKESPAN-8 CERT-DISJOINT-OK.
+echo "=== search: PCB capacity demo (negotiated congestion) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/pcb_cap_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# PCB LNS demo: global-objective destroy-and-repair over insertion
+# orders — the first driver where the TOTAL is the acceptance
+# criterion.  Zero-keepout cascade instance (A vertical crosses B at
+# 28@t3 and C at 36@t4, consecutive, so ONE +2 delay by A clears
+# both): A-before-B orders total 40 (two yields), B-before-A orders
+# 36 (one yield) = the paper joint optimum.  Greedy strict descent
+# from (A,B,C): one accepted swap to (B,A,C), re-swap and tie both
+# rejected, LOCAL-OPT.  All 12 inner A* queries pop-predicted EXACTLY
+# (forks/dominated); re-swap counters byte-identical to INIT (the
+# determinism self-check).  Driver asserts INIT=40/BEST=36; n-net
+# cross-replay certificate.  Measured CI pipeline 239, 2026-08-01,
+# ~371s job, ~599k engine steps.  Expected ending:
+# PCB-LNS 8x8 KEEP-0 NETS-3 INIT-40 BEST-36 ACCEPTED-1 REJECTED-2
+# LOCAL-OPT CERT-DISJOINT-OK.
+echo "=== search: PCB LNS demo (global-objective order descent) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/pcb_lns_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -894,16 +1102,32 @@ fi
 # named superpose; "narrow" is the bootstrap dialect's name): the
 # choices-map machine settles the rev spaces EXACTLY — d1: 108
 # candidates in 26 regions (8 forks), 1 found; d2: 7,788 in 443
-# regions (133 forks), 13 found. STEPS pins the consulted-choice-set
-# memo's leverage (pre-memo baselines: 896 / 29,008 — the memo halves
-# re-evaluation at d2 and compounds with depth). AGREE extends G3
-# three ways: found coverage == the enumerative solution count, every
-# enumerative solution lies in a found region, and every region
-# representative passes the kernel/evm battery. Any drift exits 1
-# inside the tool.
+# regions (133 forks), 13 found. The rev suite rides the GENERIC
+# query drive (slice-0 retirement of the legacy per-test battery;
+# settlement identical, STEPS re-pinned 623/12,651 -> 489/7,777 —
+# one interned battery query per drive replaces per-test input
+# re-thunking). STEPS still pins the consulted-choice-set memo's
+# leverage. AGREE extends G3 three ways: found coverage == the
+# enumerative solution count, every enumerative solution lies in a
+# found region, and every region representative passes the
+# kernel/evm battery. Any drift exits 1 inside the tool.
 echo "=== search: superposed executor (S4b) ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/superpose.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Arena memo-scoping pin (shard#19 ask 4, slice 0c): the release lever's
+# contract on the substrate directly — a hit replays the SAME node id at
+# zero steps; sa_forget_holes spares rows over untouched holes and forces
+# fresh-id re-evaluation (same ground value, row re-recorded) for ripped
+# ones; sa_forget_mm empties the table while region-independent
+# indirections keep replaying for free. The memo is agreement-keyed, so
+# every forget is verdict-neutral by construction; this pins it.
+echo "=== search: arena memo-scoping (forget) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/arena_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

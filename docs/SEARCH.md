@@ -3082,3 +3082,1374 @@ checked observer theorem relates two independent constructor positions, stays
 deferred, and kills a lazy constraint region before the engine returns a clear
 representative.  This is the residual-theorem counterpart of
 `typed_list_first.shard`'s formation-pressure and occurrence-independence pin.
+
+## Slice 0 — pre-arc refactors for the heuristic tier (2026-07-25, more-search branch)
+
+RATIFIED DIRECTION (user, 2026-07-25): the next arc adds HEURISTIC search
+engines (rip-up/re-route-class exploration, graded cost, region
+perturbation) beside the exact tier, on the measured PIO evidence that
+exhaustive settlement stops short of deep winners (~37.9k decisions, no
+DME). The trust posture is unchanged — heuristic engines are exploration
+policies; G4 stays the only certificate; the claim ladder (exact census /
+first-result existence / heuristic existence) types what each mode may
+pin. Before the arc: harden the seams the survey found soft. Landed:
+
+- **0a (three commits):** the pre-SkRegion cc_* counting path, the CcR
+  wrapper, the unread `memo` thread through all five drive entry points
+  (plus the g_counts layers feeding it in three consumers), and the dead
+  su_tpl/su_rep/su_member assignment-template family are DELETED; the
+  legacy per-test rev battery (su_expect/su_test/su_tests/su_drive) is
+  retired — su_run drives the pinned rev suite through the GENERIC query
+  path (settlement bit-identical both depths; STEPS re-pinned 623/12,651
+  -> 489/7,777). search_screen under first-result mode is now a loud
+  refusal (it was silently dropped).
+  SURVEY CORRECTIONS, recorded: (1) su_first_* is NOT a sk_region_first
+  duplicate — it is the newer root-directed, schema-aware representative
+  closure; its graduation into the region-algebra home belongs to the
+  relation-aware region slice. (2) There is no killed-region list to
+  release: long-run retention lives in the arena memo/node trie (rows
+  from killed regions are never evicted) and the DFS sibling frontier —
+  shard#19 updated; the release lever is a substrate-internal
+  sa_forget-style memo scoping op (slice 0c).
+- **0b-1:** the task-protocol hook scan. te_task_scan (typed_expr, wired
+  at te_config so every engine passes through it) owns the KNOWN-HOOK
+  table and the structural refusal matrix: unknown search_*-named fns,
+  witness multiplicity (previously priority-shadowed silently), solo
+  spine hooks, and flat vocabulary under search_environment all refuse
+  loudly. The search_ prefix is now RESERVED for protocol hooks; task
+  helpers renamed to task_* (10 files), 8 tasks shed vestigial flat
+  hooks (all pins unchanged — the hooks were unread). protocol_probe
+  pins the matrix; typed_expr and typed_superpose are ALSO check targets
+  now (42902ae closed the tc_infer gap that excluded them).
+
+- **0b-2:** the engine-internal task RECORD. te_load_task (typed_expr)
+  resolves EVERY protocol hook exactly once into the TeTask record —
+  protocol signatures, config, canon/observer/spine profiles, screen,
+  result mode, narrowing strategy, drive budget, invoked target and
+  witness — and derives the task's CLAIM-LADDER rung: TeClaim =
+  census / empty (exhaustive absence) / first (existence under budget);
+  the heuristic rung joins this enum later and can never feed census
+  pins or absence claims. The mode x hook legality matrix lives in the
+  loader (expect_empty⊗first, rank-witness⊗first, screen⊗first all
+  refuse at load, messages unchanged); the only engine-side legality
+  check left is typed_superpose's audit-flag⊗first (a CLI matter, now
+  refused BEFORE the drive instead of after it). Both engines consume
+  the record: typed_expr's driver chain collapsed onto it and the
+  census engine now LOUDLY REFUSES first-result tasks (claim-type
+  mismatch, previously a silent census); typed_superpose lost
+  ts_result_mode/ts_drive_fuel/ts_theorem_first (moved into the loader
+  as te_result_mode/te_drive_budget/te_narrowing_strategy + te_task_fuel)
+  plus its whole ts_with_* resolution chain, the DEAD pre-schema
+  first path (ts_find_space/ts_finish_first/ts_first_report — unreachable
+  since the schema drive landed) and its te_space_count duplicate
+  (~560 lines net). su_find_query stays in superpose.shard: it is a thin
+  adapter over the shared su_find_query_prepared core, completing the
+  drive/find x materialized/schema surface. transition_mine still rides
+  te_protocol+te_config only (no record fields it needs yet); it joins
+  the record when the heuristic hooks land, and is now a CHECK TARGET
+  like the other engines. protocol_probe pins the claim ladder
+  (every mode x witness cell + both screen-legality directions,
+  refusal messages byte-exact). Every settlement pin bit-identical
+  across the whole battery (census, audits, first-mode schema drives,
+  deep pio_dme).
+
+- **0c:** arena memo scoping — the release lever, plus the measurement
+  that RESIZED the problem. Ops (superpose substrate, drives untouched):
+  sa_forget_holes drops every row whose consulted-hole set touches a
+  ripped hole (the perturbation-loop companion); sa_forget_mm flushes
+  the whole table (an episode boundary); sa_mm_rows counts live rows
+  (report-boundary traversal). All are VERDICT-NEUTRAL BY CONSTRUCTION:
+  the memo is agreement-keyed, so a forgotten row can only cost a
+  re-forcing — arena_probe pins the full contract (same-id zero-step
+  hits, untouched-hole spare, fresh-id re-evaluation with re-record,
+  flush sparing region-independent indirections). Rows also shed their
+  stored consulted pair list (SuRow keeps key+result; the pair list is
+  zip(SuMe holes, key), reconstructed at probe time) — whole battery
+  bit-identical including STEPS.
+  THE MEASUREMENT (800-decision pio_dme_free, depth 12, reports
+  bit-identical old vs new): live-set peak 2.49 GB -> 2.30 GB (the row
+  diet's real share: ~7.5%), but peak RSS 27.1 GB -> 26.5 GB (~2%),
+  because RSS is HEAP EXTENT, not live data: ~326 GB allocation churn
+  across 54 GCs, extent ~11x live, live_peak == live_last (the live
+  set saturates). shard#19's ~12 MB/decision attribution to memo-row
+  payload is therefore CORRECTED on the issue: the 67.6 GB CI plateau
+  is allocator/GC extent policy in the NATIVE runtime (GC pacing /
+  extent return), main-worktree scope — substrate hygiene cannot move
+  it. The forget ops stand as the heuristic tier's episode/rip-up seam
+  (live-set hygiene for long heterogeneous runs), not as an RSS fix.
+
+SLICE 0 COMPLETE. The arc proper opens with RELATION-AWARE REGION
+STATE built at the meta/sketch region-algebra layer (engine-agnostic by
+construction), with PIO P5c-2 and the routing/regalloc task family as
+its measured consumers. Heuristic-tier hooks (cost, neighborhood, seed)
+join the TeTask record and te_hooks table when the first heuristic
+engine lands.
+
+## Arc opener — relation-aware region state (design RATIFIED 2026-07-25)
+
+> **Outcome (recorded 2026-07-28, USER ruling):** the find-mode
+> application of relational splits was REFUTED at scale and the trick
+> SET ASIDE — frozen at current scope, no further investment, find-mode
+> application closed permanently.  The census/exclusion win (the
+> coloring probe's 15 exact splits) stands, and theorem-first STEERING
+> emerged as the rung's real deliverable.  Full evidence and the ruling
+> in the R5 record below.  This block is kept as ratified history.
+
+The measured problem (this ledger's own boundary statement, and PIO
+P5c-2's gating line): relations between holes — repeated-variable
+equality in nonlinear rules, structural-distinctness guards — can only
+be applied by ground refinement today, so the diagonal of `lt x x`
+costs one region per value (the pinned EQ 3 + NE 6 is six regions and
+four forks for two facts), and relation-driven splits multiply the
+region frontier. The playground's cloned twin-grammar product is the
+recorded dead end (cloned hole identities fragmented memo reuse).
+
+**The design (user-ratified after review):**
+
+- **Representation:** `SkRegion` gains a third field, `(List SkRel)`,
+  with `SkRelEq`/`SkRelNe` over PARALLEL HOLE VECTORS (singleton
+  vectors = plain edges). Vector `ne` is tuple-difference — the form
+  that keeps the algebra CLOSED under propagation: when both endpoints
+  of a deep `ne` fix the same alternative, the event descends to the
+  sub-hole vector pair (a disjunction stays one event); `eq` descends
+  pointwise (a conjunction splits into edges). Edges are between holes
+  of the UNCHANGED grammar — no new hole identities, and relations
+  (like forbids) never enter consulted-choice memo keys.
+- **Exact counting or loud refusal, never approximation:** relation
+  events partition into connected components; unrelated holes keep the
+  ordinary product fold (masked to 1 at related closures). Per
+  component: contract `eq` by union-find — v1 requires INDEX-ALIGNED
+  DOMAIN ISOMORPHISM within a class (class count = the shared
+  restricted domain; non-isomorphic domains refuse; intersection
+  counting is the recorded extension) — then count `ne` by
+  INCLUSION–EXCLUSION over ne events (exact for arbitrary graphs,
+  2^events per component, explicit cap ~12 as a loud refusal).
+  Endpoints must be live through fixed chains and no endpoint may lie
+  inside another relation class's domain closure (drive-introduced
+  relations satisfy both by construction; refusals guard hand-built
+  regions). `rank`/`unrank` REFUSE relational regions in v1;
+  `member` is direct (cube check + relation evaluation), not via rank.
+- **Verdicts:** a new arm beside `MsBlocked` carries the blocked HOLE
+  PAIR when the residual obligation is exactly hole-vs-hole equality;
+  drives answer it with a RELATIONAL SPLIT (two children: ∧eq, ∧ne)
+  instead of per-value forks. Anything not expressible as a pair falls
+  back to ground refinement — soundness never depends on the new path.
+- **v1 vocabulary is structural eq/ne ONLY.** Affine relations over
+  literal-valued holes (the PIO delay-conservation quotient) are the
+  NAMED FOLLOW-ON rung — the SkRel enum and per-component counter
+  interface are designed for the extension; the P5c-2-cont measurement
+  runs the delay-normal WRAPPER grammar where the delay gauge is
+  declared away structurally and the firing relational pressure is the
+  nonlinear MovOp family (structural eq).
+- **Consumers (deviation from the ratified list, user-approved):**
+  measured on PIO P5c-2-cont plus the two EXISTING relational pins —
+  sort nonlinear (6851/1438/50450 + the d3 probe) and the x86
+  transition window (742/372/25312 semantic-first, 625/411/23267
+  theorem-first; its register-distinctness guards are regalloc-shaped
+  ne pressure). A REAL routing/regalloc task lands with the first
+  heuristic engine (it is that rung's benchmark); building a contrived
+  one now just to tick the admission box was rejected.
+- **su_first_*** graduates into the region-algebra home in this slice
+  (the 0a survey correction), relational-aware, shared by both drives.
+- **Heuristic seam:** the region release op (un-fix holes, keep/drop
+  relations by policy) pairs with 0c's sa_forget_holes as the
+  rip-up vocabulary. **TABOO = FORBIDDEN REGION (user ruling,
+  2026-07-25):** the heuristic tier's learned-nogood store is a list
+  of forbidden REGIONS (cube + relations) consulted by region overlap
+  — in/undetermined/out with no predicate evaluation — with the
+  relational region state as its representation language. Arbitrary
+  `Candidate -> Bool` predicates stay where search_screen sits
+  (closed-candidate audit acceleration): unproven, uncountable,
+  unintrospectable code is sound nowhere else. A learned taboo that
+  earns generality promotes into the exact tier through the existing
+  miner → schema → checked theorem pipeline. Not prioritized; lands
+  with the heuristic engine.
+
+Rungs: R1 meta/sketch vocabulary+count+ops+probe pins; R2 meta/search
+pair verdicts + relational partitions; R3 drive consumption + re-pins;
+R4 su_first_* graduation; R5 measured consumers (re-pins + the
+watchdogged P5c-2-cont deep run). Orientation of symmetric operands
+(which gauge twin a census prefers) remains a separate reviewed
+decision, out of scope here.
+
+### R1 — the relational region algebra (LANDED 2026-07-26)
+
+**What landed (meta/sketch).** `SkRel` (`SkRelEq`/`SkRelNe` over parallel
+hole vectors) and the three-field `SkRegion`; structural wf; the
+template-alignment walker (bijective sub-hole renaming — one walker
+serving the iso door, class counting, and descent); the by-index
+isomorphism door; three-valued pair evaluation (equal / differ /
+blocked / descend); fixpoint normalization (eq fixes its open partner;
+both-fixed deep pairs descend — eq pointwise, ne to the sub-vector as
+ONE tuple event; a last ne pair against a fixed CLOSED template
+converts to an ordinary forbid); the validated doors
+`sk_region_relate_eq`/`_ne`, the relational split
+(`sk_region_split_pair`), and the rip-up seam (`sk_region_release`,
+keep/drop relations by policy — sa_forget_holes' region-side partner).
+Exact counting: connected components over events; eq contraction by
+recursive class counting through aligned templates (restrictions
+intersect naturally at every depth); ne by inclusion–exclusion over ne
+events (`count(ne_e ∧ rest) = count(rest) − count(allEq_e ∧ rest)`,
+exact for arbitrary relation graphs); the unrelated product rides the
+ordinary fold with endpoint factors masked to 1. `member` is now
+DIRECT (the same first-match forward walk rank uses, without counts,
+plus expr_eq over bound subtrees) for cube and relational regions
+alike; `rank`/`unrank` refuse relational regions. The v1 boundaries
+all refuse loudly: non-isomorphic domains at the door, an endpoint not
+unconditionally live under the region's fixed chains, an endpoint
+inside another endpoint's domain closure (reachable only by hand-built
+regions — door-made relations cannot construct it), a component past
+the 12-ne-event cap.
+
+**Pinned (region_probe, second output line, all counts hand-computed
+first):** EQ-3 (the diagonal is ONE region), NE-6, CLIQUE-6 (3! by
+inclusion–exclusion, 2^3 terms), DEEP-4/12 (the (Atom | Wrap ·) domain
+diagonalizes: 4 = 1 + 3), DESCEND-6 (both sides fix Wrap: the ne event
+becomes the sub-pair tuple event, 9 − 3), PROPAGATE (choose h0=2 under
+eq fixes h1=2 and discharges the event), FORBID-2, SPLIT-3+6,
+RELEASE-6/9, and the five refusals. The relational first-productive
+representative backtracks over related holes only (the clique's
+greedy representative is pinned deterministic under the newest-first
+event order). Whole existing battery bit-identical: region_probe line
+1, the superpose rev pin (443/133/7,777 STEPS), the nonlinear/
+constraint probes, typed_superpose as a check target (323/0).
+
+**The prove blocker this rung surfaced (fixed on main, #20):** the 12
+new fuel-measured fns could not mint descent sidecars — tools/prove's
+whole SOLVE path was broken by a dangling
+`(use (:: kernel term chars_of_sym))` (a bare-item use aliasing a
+REDUCER PRIM through a module that never defined it), harmless until
+dfb8631 keyed the prim table by CORE identity, invisible to CI because
+check only replays. Fixed on main (02daf2f, cherry-picked here), the
+lethal class swept (prove's line was the only instance), and two
+follow-ups recorded on the issue: a loud refusal for bare-item uses of
+nonexistent exports, and a corpus pin that actually SOLVES something.
+
+### R2 — pair-carrying verdicts + relational partitions (LANDED 2026-07-26)
+
+**What landed (meta/search).** The three matcher result types gained the
+pair arm: `MsMatchBlockedPair` / `MsNMatchBlockedPair` /
+`MsBlockedPair`.  The MsMatch arm carries a CONTRACT: it may be produced
+only when the whole comparison is decided by exactly one hole-pair
+equality (left == right IFF the two subtrees agree).  That contract is
+enforced by the event lattice (`MsEqEvent` + `ms_eq_event_join`): the
+equality walkers (list/arms/Let) accumulate one blocked event, and a
+second DISTINCT event degrades a pair to its first hole — exactly the
+hole the pre-relational walkers reported, so every degradation point is
+bit-identical with the old behavior.  Only a repeat of the same
+unordered pair survives the join.  The pair is born in `ms_equal`'s
+both-open-heads case: the existing domain scan still runs first (an
+all-unequal product still decides No without a fork — the documented
+disjoint-shapes property), and only the mixed outcome upgrades from the
+outer hole to the exact pair.  A partner behind a fixed selection chain
+is left to the ordinary scan (sound, less sharp).
+
+`ms_equal_partition` consumes the pair TERMINALLY via
+`sk_region_split_pair`: the eq child goes whole to the equal list, the
+ne child to the unequal list, no re-evaluation — licensed by the IFF
+contract.  Any refusal (iso door, counting) falls back to the factored
+ground step (`mse_ground`); soundness never rides the new path.
+`MsEqPartitionOk` now carries ground forks and relational splits as
+separate counters.  At the verdict layer the pair is a BRANCHING HINT,
+not an IFF (msn short-circuits; rules and guards accumulate
+first-event-wins via `ms_event_first`), produced by the repeated-
+variable env comparison in `msn_match` and by `TrsDistinct` guards over
+two open holes, and carried through `ms_conditioned_root_language` /
+`ms_rules_root` / `ms_merge`.  Blocked-kind verdicts were never stored
+as stable facts, so relations never enter prepared facts by
+construction.  The alt-consensus scanners (spine/anywhere/equal-alts)
+degrade nested pairs to the outer hole as before.
+
+**R2 degradation discipline (R3's worklist).** The prepared plan
+partition (`ms_partition_prepared`) and the superpose drives GROUND
+pairs to their first hole: the prepared evaluator cannot see relations
+yet, so a relational split there would re-block on the same pair
+forever.  The flip points are grep-able: `ms_verdict_ground` (the
+compatibility door, used at su_theory_partition) plus the explicit
+`MsBlockedPair` degradation arms in mspp_partition_go and the two
+drive verdict matches in superpose.shard.  typed_superpose/typed_expr/
+pure_program treat a pair like Blocked on their error paths.
+
+**Pinned (nonlinear_constraint_probe, all counts hand-computed first):**
+the both-open equality verdict is `MsBlockedPair 0 1` direct AND
+prepared; the diagonal partition is EQ3+NE6 in **1+1 regions, 1
+relational split, 0 ground forks** (was 3+3 regions, 4 forks);
+non-isomorphic overlapping domains ({A0,A1} vs {A1,A2}) refuse at the
+door and ground-fall-back to 1+3/F2S0; the two-pair conjunction
+(Pair(h0,h2) vs Pair(h1,h3), four 3-atom holes) degrades its second
+pair, grounds h0 then h1, and splits each diagonal child relationally —
+9+72 in 3+6 regions, F4S3; a TrsDistinct guard over two open holes
+pairs through the conditioned verdict; and the PREPARED plan partition
+still grounds (3+3/F4 — the degradation pin R3 will deliberately
+re-pin).  Whole existing battery bit-identical: region_probe both
+lines, rev_deep d3 (390/143/3,969), the ground rev pin (108, 7788),
+constraint/guard/affine/int-order probes, typed_observer_conjunctive
+audit, typed_superpose as a check target (323/0).
+
+### R3 — relation-aware evaluation + drive consumption (LANDED 2026-07-26)
+
+**What landed.**  The evaluator can now SEE a region's relation events, so
+a relational split child makes progress instead of re-blocking on its own
+pair.  meta/sketch gained the entailment decision `sk_rels_decide`
+(`Eq`/`Ne`/`Unknown`): entailed equality is reachability over the
+pointwise edges of eq events (each eq event is a conjunction); a ne event
+entails a pair only when it is a SINGLETON (tuple-difference over two or
+more pairs is a disjunction), lifted across eq classes; everything else —
+including every vector ne — answers Unknown, the sound pre-relational
+behavior.  meta/search threads `(List SkRel)` beside the assignment
+through the whole verdict layer (equality walkers, nonlinear matcher,
+guards, rules/spine/anywhere scans, `ms_check_facts`), and `ms_equal`'s
+both-open-heads case consults the decision BEFORE the domain scan: an
+entailed answer holds for every region member, so the IFF contract
+carries it directly.  The region wrappers (`ms_check_region`,
+`ms_check_prepared_region`, `ms_check_prepared_restricted`) extract the
+region's rels; the bare-assignment entries (`ms_check`,
+`ms_check_prepared`, `ms_conditioned_root`, …) pass none and stay
+bit-identical.  The law that keeps memo reuse sound is now three-sided
+and holds BY CONSTRUCTION: the semantic evaluator sees only
+`sk_region_choices` (relations, like forbids, never reach
+consulted-choice memo keys), constraint verdicts are computed fresh per
+region (never memoized), and the prepare-time fact compilers evaluate
+with NO relations (facts must be reusable under every region).
+
+**Drive consumption.**  Both R2 degradation points flipped:
+`mspp_partition_go` answers a pair verdict with `sk_region_split_pair`
+and RE-QUEUES both children (the verdict pair is a hint, not an IFF —
+relation-aware re-evaluation decides the pair inside each child), and
+`su_theory_partition` does the same in the find/theorem path, with the
+factored `su_theory_ground` as the door/count-refusal fallback.
+`MsPlanPartitionOk` carries ground forks and relational splits
+separately (mirroring the equality partition); at the SuS drive boundary
+both fold into the existing branch-boundary counter.  The R2
+compatibility door `ms_verdict_ground` is DELETED — its only consumer
+was the flip site.  Progress terminates: every split adds the singleton
+edge that decides its own pair in both children, and a child made empty
+by later contradictory edges (a vector-ne violation the decision cannot
+see) counts to zero exactly and is dropped.  `su_region_rep` now rides
+`sk_region_first` instead of unrank-0 — identical on cube regions,
+defined on relational passing regions, so the representative/AGREE gates
+accept relational solutions.
+
+**Pinned (all counts hand-computed first, confirmed on the first run).**
+region_probe line 2 gained the decision pins
+(DECIDE-TRANS/NE-LIFT/VEC-UNKNOWN/REFL).  The nonlinear probe pins
+relation-aware checking end to end: an eq relational region drives the
+prepared verdict to the cited Redex and a ne region to Clear
+(REL-EQ-REDEX / REL-NE-CLEAR — the split-child progress property); the
+distinct guard is decided by eq/ne relation events (GUARD-REL-EQ/NE);
+the prepared plan partition now SPLITS the diagonal — 3+6 members in
+1+1 regions, 0 forks, 1 split (the R2 degradation pin was 3+3 in 3
+regions, F4) — and the non-isomorphic plan case falls back to ground
+(1+3 in 1+2, F2S0).  constraint_superpose_probe gained the DRIVE-level
+pin: a nonlinear diagonal rule before a constant-pass query settles as
+FOUND 6 + KILLED/CONSTRAINED 3 in 2 terminal regions and ONE branch
+boundary (the relational split), and the relational passing region
+yields an in-region first-walk representative (DIAG-SPLIT … REL-SOL-REP).
+
+**The measurement — the named census pins do NOT move.**  All three
+ratified consumers are BIT-IDENTICAL under R3: the depth-2 nonlinear
+sort census re-ran to exactly 6,851 regions / 1,438 forks / 50,450 steps
+(FOUND 4, constraint-killed 87,834,384); the x86 transition window
+(theorem-first) to exactly 625 / 411 / 23,267 with enumerative agreement;
+the PIO transition window to exactly 45 / 44 / 2,408 (verified against a
+fresh 653fa78 baseline run).  The arc opener's "expected to drop" prior
+is refuted for these task shapes, and the reason is structural: a drive
+split fires only when a PAIR VERDICT survives to a partition site, but
+in the sort census the semantic-first schedule demands the operand holes
+(forking them) before any pass-with-blocked-pair state arises, and the
+two window grammars pack the guarded operands inside whole-instruction
+alternatives, where nested pairs degrade to the outer-hole consensus by
+design.  The machinery is exercised and pinned at every level (matcher,
+partition, theorem path, drive, solutions) by the probes above; whether
+a MEASURED consumer benefits is a property of task shape — R5 should
+select for shapes whose pairs survive demand (theorem-first over
+operand-level holes, e.g. the delay-normal PIO wrapper's nonlinear MovOp
+family) rather than expect the existing pins to drop.
+
+**Battery.**  Everything else bit-identical: region_probe line 1, the
+superpose rev pin (443/133/7,777), rev_deep d3 (390/143/3,969), the
+pure benchmarks, guard/affine/int-order/constraint/spine/symbolic
+probes (the affine plan partition now also pins splits = 0), the
+typed audits (append/observer/imp/pio-square/dme-window), first-mode
+tasks, and the check targets (meta/sketch, meta/search 8/0, superpose
+33/0, typed_superpose 323/0, typed_expr 323/0, pure_program 33/0);
+new measure sidecars machine-minted by prove for the decision kit, the
+threaded SCCs, and the su_theory SCC.
+
+### R3b — find-mode goes count-free + the coloring shape pin (LANDED 2026-07-26)
+
+**Why (the reappraisal after R3's null census result).**  The question on
+the table was whether the relational tier still promises applicable gains
+on routing-style problems.  Two findings answer it.  FIRST, the P5c-2-cont
+wrapper shape-check: unlike the transition windows, the delay-normal
+wrapper grammar is NOT whole-instruction-packed — its slot zones route
+`PDFDrive`'s polarity (the MovOp) and hold, and `PDFJump`'s
+condition/target/balance, into their OWN sub-zones, so the nonlinear MovOp
+family can form hole pairs.  But the task is first-mode over REGULAR
+SCHEMAS (57 schemas at depth 12), and the R1 relational region algebra and
+split doors are flat-Grammar-only — so R4's schema-aware graduation is the
+GATING rung for the R5 deep run to exercise relations at all, not optional
+plumbing.  SECOND, the routing shape itself wins, measured below.
+
+**Find-mode is now count-free end to end.**  R3 had introduced exact
+child counting into `su_theory_partition`'s split screening — the one
+counting site in the otherwise cardinality-free find path, and the site
+where the inclusion–exclusion cap (~12 ne events/component) would silently
+degrade dense relational components to ground refinement exactly where
+relations matter most.  The screening now rides the first-productive walk
+(`su_child_alive`): a successful walk witnesses inhabitance directly with
+no cap; a walk failure is indistinguishable from genuine emptiness, so it
+routes to the ground fallback rather than dropping the child — soundness
+never rides the walk.  `su_region_first` bridges relational regions to the
+sketch-side walk (`sk_region_first` backtracks over related holes;
+`su_first_alt` is relation-blind until R4 graduates it), closing a latent
+representative bug: the SuG-side walk could have emitted a NON-MEMBER
+representative for a relational passing region.  Relational regions arise
+only on flat grammars today, so `sug_raw` is the real Grammar on that
+branch.  The census path deliberately keeps exact counting — census
+claims need the cardinalities, and a cap refusal there falls back to
+ground inside `mspp` as before.
+
+**The coloring probe (tools/search/coloring_probe.shard) — the minimal
+routing-shaped consumer, all pins hand-computed and confirmed on the
+first run.**  Graph coloring is the shape the tier is for: per-variable
+register holes, ONE nonlinear diagonal rule per interference edge
+(`Cfg(..x..x..)` — a proper coloring is a normal form), and a
+constraint-dominated drive, so every pair survives to the partition.
+Census: the P4 path (4 vars × 3 registers) settles 24 proper colorings +
+57 killed in FOUR terminal regions and THREE relational splits; the K3
+triangle settles 6 (= 3!) + 21 in 4/3 — the drive-level twin of
+region_probe's CLIQUE-6.  Terminal regions scale with EDGES, not with
+value tuples.  Find: K6 × 6 registers succeeds PAST the census cap (the
+all-ne leaf carries 15 ne edges in one component) in 16 regions / 15
+splits, with the representative verified in-region; K4 × 3 (uncolorable)
+terminates EMPTY through the walk-refusal ground fallback.  Verdict for
+the reappraisal: the design stands — the R3 null result was about task
+shape, and on the routing shape the relational schedule is the exact
+O(edges) decision tree.  Controls stay bit-identical: both first-mode
+typed tasks, the DIAG-SPLIT pin, the superpose rev pin (443/133/7,777),
+the x86 window (625/411/23,267, agreement OK), and the driver check
+targets (superpose 33/0, typed_superpose 323/0, pure_program 33/0).
+
+### R4 — the graduated first walk + the schema-side relational algebra (LANDED 2026-07-26)
+
+**Why this is the R5 gate.**  The P5c-2-cont consumer is first-mode over
+REGULAR SCHEMAS; until this rung, the relational region machinery
+(doors, normalization, the first walk) was materialized-Grammar-only, so
+the schema find drive could only ground its pairs.  R4 makes the
+relational algebra language-parametric and graduates superpose's
+`su_first_*` family into it.
+
+**The language interface (meta/sketch).**  `SkLang` (materialized
+Grammar | regular schema grammar) answers the three questions the
+relational machinery asks: a hole's instantiated alternatives
+(`skl_alts` — flat entry lookup / `sk_schema_alts_at`), endpoint
+isomorphism (`skl_iso` — the recursive flat walker / SCHEMA-ID EQUALITY,
+which holds by construction: two occurrences of one schema id
+instantiate index-aligned identical domains at every depth), and
+per-alternative productivity (`skl_alt_productive` over `SkLangProd`).
+The whole normalization SCC (`skr_pair_eval`, the eq/ne pair walkers,
+`skr_norm_rels`/`skr_norm_go`, the ne-singleton forbid conversion, the
+region-edit helpers) now takes the language; descent needs no
+schema-special code — aligning two instantiations of one template pairs
+the child occurrences positionally.  The doors and split gained `_lang`
+entries (`sk_region_relate_eq_lang`/`_ne_lang`/`sk_region_split_pair_lang`,
+`sk_region_norm_lang`); the materialized-Grammar names remain as
+validating wrappers, so every existing call site is untouched.
+Exact counting and rank/unrank stay materialized-Grammar-only —
+first-mode never counts.
+
+**The graduated walk.**  ONE demand-driven representative walk
+(`sk_region_first_lang`) replaces both the flat entries-walk
+(`skr_first_plain`/`skr_first_rel_*`, deleted) and superpose's
+`su_first_expr` family (deleted): recurse from the root, at each open
+hole take the first allowed PRODUCTIVE alternative and recurse into its
+instantiation — touching only the selected candidate's occurrences,
+which is exactly what a lazy schema language requires; relational
+regions normalize, then backtrack over related holes only.  Per-hole
+choices are traversal-order-independent, so flat representatives are
+bit-identical with both old walkers.  `su_region_first` is now a thin
+delegate over `sug_lang` (SuG retains its schema grammar, so the drives
+hand the doors their language directly), and `su_theory_partition`
+splits through `sk_region_split_pair_lang` — the schema find drive
+shares the whole R3 split path.  `su_fork` normalizes RELATIONAL
+children before pushing them (cube children skip at zero cost): fixing
+a relation endpoint propagates — the eq partner gets the same choice, a
+decided ne becomes a forbid, a contradiction is detected as Empty — so
+no job carries a stale undischarged event past a fixed endpoint.
+
+**Pinned.**  region_probe line 3 (REGION-PROBE-SCHEMA-REL): the eq door
+propagates through the first walk (Pair(A0,A0)), ne separates
+(Pair(A0,A1)), the split yields both children, a cross-schema relate
+refuses at the door, and a DEEP fixed pair descends to its
+child-occurrence tuple with the backtracker resolving it (the walk pins
+the descended event's normalized order: it equates (6,10) and separates
+(3,5) — a verified ne-region member).  constraint_superpose_probe's
+SCHEMA-DIAG-SPLIT line drives the same nonlinear diagonal over a
+regular schema end to end: the single-alternative root hole is
+TRANSPARENT (a one-member domain chases through `ms_select`), so the
+occurrence pair (1,2) splits at the empty region — CONSTRAINED 1
+(the eq child cited), 2 terminal regions, ONE boundary, and the
+relational passing region's representative Pair(A0,A1) from the
+graduated walk.  Whole battery bit-identical: region_probe lines 1-2,
+the coloring probe (K6 16R/S15 rides the graduated walk), DIAG-SPLIT,
+rev (443/133/7,777), rev_deep d3 (390/143/3,969), the x86 window
+(625/411/23,267, agreement OK), the PIO window (45/44), both
+first-mode typed tasks, guard/affine/int-order/constraint probes, and
+the check targets (meta/sketch, meta/search 8/0, superpose 33/0,
+typed_superpose 323/0, typed_expr 323/0, pure_program 33/0).
+
+### R5 — measured consumers: the deep-run A/B, the routing task, and the split verdict (COMPLETE 2026-07-28)
+
+R5 was scoped as "measured consumers (re-pins + the watchdogged
+P5c-2-cont deep run)".  What it actually measured, in order:
+
+**The PIO 12k A/B (CI job 509, pipeline 158, 2026-07-27).**  The
+deep-run law rode in from the PIO branch's two post-merge CI commits
+(cherry-picked d114044/54fc99b): retention saturates ~67.6 GB
+(67,639,812 kB byte-flat) around 6k decisions — FLAT RSS IS HEALTHY
+SEARCH, not a stall; per-decision cost ~quadratic (T_CI(n) ≈
+1.32e-6·n² min); a timed-out job is TOTAL LOSS (the engine reports
+only at exit).  History: job 346 = the old engine's 38k rung died at
+the 48h timeout; job 336 = old engine 12k, on-time 11,672s.  The R4
+engine's 12k rung came back BIT-IDENTICAL to job 336 on every counter
+(killed 8,191 / constraint-regions 0 / terminal 8,191 / forks 3,809 /
+steps 8,225,025 / nodes 5,048,430 / exprs 186) at +0.4% wall — the
+relational machinery costs ~0.4% when dormant, and the semantic-first
+null is confirmed at depth: constraint-regions 0 means the theorem
+layer never fires, so no blocked verdicts, no pairs, no splits.
+**NEVER re-fire 38k under semantic-first** (= job 346's 48h loss).
+
+**Theorem-first find scheduling (9ed1c2f) — and why PIO could not
+consume it.**  The find path SILENTLY DROPPED `task_theorem_first_of`
+(only the counted census drive consumed it); the fix adds
+`su_find_query_schema_theorem_first` (a count-free
+`su_theory_partition` prepass over the initial orbit) behind the
+`su_find_query_schema_ordered` dispatcher, threaded via `ts_first`.
+Probe-verified, smoke bit-identical on the False path.  Then the
+deeper discovery: pio_dme_free carries ZERO theorem rules BY
+DOCUMENTED DESIGN (window rewrites are unsound under absolute jump
+targets; the delay quotient is baked into the grammar normal form), so
+constraint-regions 0 is STRUCTURAL, not scheduling — a theorem-first
+12k run would be job 509 bit-for-bit and was NOT fired.  USER RULED
+(2026-07-27): build an actual routing problem instead of forcing the
+PIO branch to demo the additions.
+
+**The swap-network routing task (f1840cf) + the SPLITS counter
+(5914ee4).**  tools/search/tasks/swap_route{,_model}.shard: 4
+registers, adjacent transpositions Sw0/Sw1/Sw2, target = reversal
+(longest element of S4, 6 swaps minimum), find-mode + theorem_first at
+depth 7, two proven spine laws (nonlinear s.s cancellation ∀s;
+Sw2.Sw0→Sw0.Sw2 disjoint ordering), 15-claim model tower.  GREEN:
+FOUND the canonical 6-word s0s1s0s2s1s0.  A/B at depth 7:
+theorem-first 13/116/168/742 (killed/constrained/forks/steps) vs
+semantic-first 54/86/78/4,994 — the theorem layer prunes
+pre-evaluation at 6.7× fewer steps.  The SPLITS counter separates
+ground forks from relational splits on the find path (SuFind +
+SuTheoryPartitionOk; counted SuS keeps its combined fold
+deliberately); probe re-pins prove the attribution (coloring K6 =
+forks 0 / splits 15; schema-diag = SPLITS-1).
+
+**SPLITS-0 root cause and the skl_iso structural fix (b019bda).**  The
+first swap_route runs showed splits 0 under theorem-first.  Loud-tracer
+bisect: pair verdicts WERE produced at fixed-spine windows, but
+`sk_region_split_pair_lang` refused every one ("relation endpoints
+have non-isomorphic domains") and the silent ground fallback ate them.
+Real cause: schema interning keys on REMAINING DEPTH
+(`tg_task_state_eq` includes the depth), so a depth-independent leaf
+alphabet gets a fresh schema id per spine level, and skl_iso's
+schema-id-equality check refuses every cross-depth pair.  Fix
+(door-side, option B): on id mismatch, skl_iso falls back to
+STRUCTURAL state equality — identical alternative templates AND
+identical refs including targets — parity with the flat branch; spine
+states still correctly refuse.  First live splits: swap_route
+theorem-first 59/78/174/SPLITS 6/4,542 steps, same BEST;
+semantic-first bit-identical 54/86/78/0/4,994.  Splits are
+STRUCTURALLY theorem-first-only: passing regions have their demanded
+holes fixed, so no open pairs survive to the juncture under
+semantic-first.  Economics flag raised immediately: the coarser
+ne-children push work to the evaluator (742→4,542 steps vs the pure
+ground-fork theorem tree).
+
+**The k=4 scaling ladder (170aec4; CI job swap-route-deep; pipelines
+165/166/167 + 170, 2026-07-28).**  swap_route5{,_model}.shard: 5
+registers, reversal of S5 (10 swaps minimum), depth 11, cancellation +
+three ordering laws, 30 new claims; the model reuses swr_swap_head +
+invol via import.  Three arms: splits (more-search HEAD), ground forks
+only (branch swap-ground = HEAD + revert of b019bda — THROWAWAY
+baseline, never merge), semantic-first (SWAP_SCHED sed-deletes the
+narrowing hook).  Budget 5k: splits RED exhaust 4,285/9,157/8,358
+forks/SPLITS 10/326,459 steps ~56min; ground GREEN FOUND
+656/9,205/9,205/0/34,004 ~19min (descending-runs canonical word);
+semantic RED exhaust 1,276/2,467/1,257/0/141,015 ~5min.  Splits at
+budget 20k: GREEN, the SAME word as ground — 4,772/9,157/8,439/SPLITS
+STILL 10/358,082 steps ~55min.  **Final ladder verdict: identical
+outcome; splits need >5k budget where ground needs <5k; 10.5× steps,
+~2.9× wall; splits frozen at 10 across budgets 500/5k/20k — the
+mechanism contributes nothing productive in find mode, pure
+early-ne-child overhead.  The k-trend refutes the bigger-alphabet
+hypothesis (k=3: 6×; k=4: 10.5× and outcome-changing).**
+
+**USER RULING (2026-07-28).**  The relational-split trick is SET
+ASIDE: frozen at current scope, no further investment (no guarded
+relations), find-mode application closed permanently; its verdict on
+census/exclusion shapes is deferred to the routing tier.
+Theorem-first STEERING is the rung's deliverable — the schedule-level
+win (ground-fork theorem-first FOUND where semantic-first exhausted)
+is what the theorem layer was built for.  Not wasted: the arc's point
+is opening new optimization problems and adding navigation tricks;
+this one is banked.  Deferred cheap follow-up: a REFUSALS counter on
+the silent split-fallback edges.
+
+## The routing tier opens — the PCB demo slice (2026-07-28; FIRST GREEN RUN 2026-07-30)
+
+USER STEER: focus shifts to the root routing problem; a PCB routing
+demo is the problem statement.  Landed 40ab30a (+ CI fix eaefd3f,
+iteration 2 in 6c602cb):
+
+**The model (tools/search/tasks/pcb_route_model.shard).**  8×8 grid,
+cells y*8+x, single layer, occupancy as a cell list, PMove =
+MvN/E/S/W.  The load-bearing trick — new trick #1 of the tier — is the
+BOUNDED WALK: `pcb_walk` checks the Manhattan floor against remaining
+budget BEFORE demanding the move list, so the su engine gets
+admissible A*-style pruning purely through lazy observation, zero
+engine features.  No theorem laws BY DESIGN: interior path rewrites
+are unsound under occupancy (the same structural fact as
+pio_dme_free), so this instrument exercises the semantic/heuristic
+tier, not the theorem layer.
+
+**The driver (tools/search/pcb_route_probe.shard).**  Engine-as-
+library: probes call `su_find_query_schema` directly; the model module
+is ALSO loaded at runtime (resolve_closure + build_module_d +
+prelude_ctors) because the su evaluator resolves the query's pcb_walk
+call against a Module value.  Hand-built depth-bounded move-list
+schema grammar (entries ascending by id).  Iterative deepening from
+the Manhattan distance (+2 per level, 5 levels) supplies
+shortest-first; the outer loop is the ratified LNS shape — greedy in
+queue order, on failure rip the OLDEST routed net, requeue at the
+back, retry the failed net first, rip-cap fuel.  Certificate = full
+replay (every route re-walks legally against the keepouts) + a
+duplicate-free cell union.  CLAIM LADDER: heuristic existence only —
+never census pins, never absence claims.
+
+**The budget-economics law (measured in blood, twice).**  A refutation
+level explores a wander-tree EXPONENTIAL IN ITS SLACK (walks may
+revisit cells; the Manhattan bound prunes only against remaining
+budget) — size per-call budgets for the REFUTATIONS, not the finds.
+Iteration 1 (flat 500k budget) sat at the ~67.6GB retention plateau
+for six CPU-hours on the dev box before being killed — which also
+minted the standing rule that UNVALIDATED ENGINE-RUN CONFIGURATIONS
+FIRE ON CI, never the dev box (the generic ENGINE_RUN:1 job carries
+the RSS watchdog + artifact capture).  The first CI run (pipeline 174,
+flat 50k budget) reproduced the SAME plateau — it is structure-bound,
+not budget-bound — ate the full 8h job timeout without completing, and
+the pod kill lost the artifact.  Iteration 2 (6c602cb): the driver is
+World-threaded to stream one evidence line per engine call
+(net/depth/budget/outcome/steps/forks + ROUTED/RIP events); the flat
+budget became a ramp (1000·2^level, sizing each level's give-up to its
+slack); the CI job gained an internal watchdog-enforced deadline
+(ENGINE_RUN_SECS, default 7h) below the pod timeout so artifacts
+always upload.
+
+**The measured slack ladder (pipeline 182, the first complete trace).**
+Iteration 2 completed in ~6.9h and failed at the rip cap, delivering
+the tier's first empirical cost curve: at ~1.4k evaluator steps/sec,
+refuting slack 4 costs ~29k steps, slack 6 ~156k, slack 8 ~783k, and a
+slack-8 FIND is out of reach (>10M steps per BUDGET give-up; the
+su_find budget parameter counts DECISIONS, not evaluator steps —
+~600× apart at depth 13).  The trace also showed the rip loop's
+failure mode: F's length-13 detour (slack 8) unreachable → rip-oldest
+evicts R → F re-takes row 1 → R blocked → an exact 2-cycle burns the
+fuel.  And it measured a policy error: deepening past a BUDGET give-up
+burned 20M of the run's 35M steps (the next level is strictly bigger).
+
+**Iteration 3 (c267a2d) — sized from the curve, GREEN (pipeline 184,
+2026-07-30).**  The wall shrinks to a single keepout at (4,2) so F's
+forced detour is length 9 through row 3 (slack 4); levels 5→4 (worst
+refutation slack 6); the ladder deepens ONLY on EMPTY — a true
+refutation licenses the next level, a BUDGET give-up stops the net
+(the BUDGET-STOP arm).  The run landed in a 325s CI job, line-for-line
+the predicted story: F routes row 1 (d=5), R's ladder refutes d=1..7,
+ONE rip, R routes len 1 + D len 2, F re-routes row 3 at d=9 (FOUND at
+328,796 steps / 356 forks), certificate replay passes —
+**PCB-ROUTE 8x8 KEEP-1 NETS-3 RIPS-1 WIRE-12 CERT-DISJOINT-OK**.
+The demo is pinned in CORPUS_LONG (heuristic existence only, per the
+claim ladder).  The routing tier has its problem statement, its first
+working LNS driver, and its first cost model.
+
+**Self-avoiding walks (1d124ab) — the model-side pruning rung, GREEN
+(pipeline 191, 2026-07-30).**  The wander-tree curve above was
+dominated by walks revisiting their own cells, so the model's
+recursion now threads the departed cell into the occupancy: every
+accepted walk is a simple path, never-reverse is subsumed (the
+previous cell is the newest occ entry), branching ≤ 3.  Completeness
+at every ladder rung is preserved by loop erasure on a bipartite grid:
+erasing a loop from a legal walk yields a legal simple path with the
+same endpoints, the same PARITY (grid cycles are even), and a subset
+of its cells — so a depth-d EMPTY over simple paths refutes ALL walks
+of length ≤ d, and the shortest walk is already simple.  Pinned by
+`pcb_walk_revisit_pin` (E-then-W back onto the start: was `(Some 0)`,
+now `None`).  MEASURED, line-for-line against pipeline 184 (same
+instance, same budgets): per-slack-2 refutation growth fell from
+~×5–9 to ~×2.2–2.4 (R's ladder 449/1,724/3,787/8,600 steps at slack
+0/2/4/6, was 449/3,932/24,383/130,825 — the gain compounds with
+slack: 2.3× at slack 2, 6.4× at slack 4, 15.2× at slack 6); the
+slack-4 FIND fell 6.9× (328,796 → 47,983 steps, 356 → 62 forks); the
+whole demo 550k → 98k evaluator steps, engine job 325s → 135s.
+Slack-0 calls pay a small tax for the longer occupancy list (F d=5
+FOUND: 1,933 → 2,341 steps) — pcb_mem is linear and the walk's own
+cells now join the scan.  THE LAW THIS LANDS: observation-side
+pruning is the heuristic tier's first-class lever — a one-line model
+change moved the cost curve more than any budget policy could, and
+the engine needed nothing.
+
+**Goal-directed move ordering (eaa0554) — the branching heuristic,
+GREEN (pipeline 193, 2026-07-30).**  Verified engine fact: the find
+loop is a LIFO stack and `su_fork` pushes alternative 0 on top, so
+schema alternative order IS the DFS exploration order — a branching
+heuristic is a DRIVER-side grammar choice, zero engine change.
+`pcbp_move_order` builds each net's move alphabet with the
+toward-goal moves first (larger-|delta| axis leading) and the move
+opposite the primary axis last; static per net, since the grammar
+tracks remaining length, never the walk's cell.  MEASURED vs
+pipeline 191: every EMPTY line BIT-IDENTICAL (a refutation exhausts
+the tree in any order — the prediction and its self-check), every
+FOUND cheaper: F's slack-4 find 4.0× again (47,983 → 12,054 steps,
+forks 62 → 18), R 288 → 192, D 712 → 476, whole demo 98k → 61k
+steps, engine job 135s → 60s.  Cumulative from the wander-tree
+baseline (184): the slack-4 find is 27× cheaper (328,796 → 12,054),
+the demo 9× (550k → 61k), the job 5.4× (325s → 60s).  The two levers
+compose cleanly because they act on different quantities: pruning
+shrinks the tree (EMPTY and FOUND), ordering only shortens the walk
+to the first solution (FOUND alone).
+
+**The refutation census (6110390 + 828216f) — kills carry attribution
+out of the engine (pipelines 196/198, 2026-07-30).**  The engine
+growth rung.  Before it, every killed region surrendered one count;
+now `SuTFail` carries a `SuCensusKey` — a SHALLOW summary of the
+value that failed to match `want` (mismatching head + first Int
+payload) — and the find loop aggregates keys into a capped multiset
+(16 rows + spilled counter) surfaced in all three SuFind arms.
+Telemetry only: nothing soundness-bearing reads it, the counted
+drive discards keys.  The model encodes attribution: `pcb_walk`
+returns `PWalkR` (WalkBlocked carries the blocking cell;
+WalkFloor/WalkOff payload-free so the pruning bulk buckets into
+single rows; the goal check moved to the engine's want-match, so
+wrong-end walks die at the Int field as end@CELL).  Second consumer
+per the hygiene ruling: typed_superpose exhaust reports append
+census-rows/spilled (swap deep-run attribution).  TWO MEASURED
+LESSONS: (1) the lazy comparison kills at the FIRST differing
+observation, so a census must not deep-force terminals — pipeline
+196 then showed the raw arena peek blind (every payload b@?): a
+refusal payload sits behind a REGION-DEPENDENT thunk whose forcing
+consulted hole choices, so the value lives in the choice-keyed memo,
+not the node.  The fix (828216f): bounded re-force (fuel 256)
+against the current arena, DISCARDING the advanced arena — memo hits
+replay in a few steps and the discard keeps the census strictly
+behavior-neutral (pipeline 198: every steps= value bit-identical to
+196; both pinned engine probes bit-identical locally).  (2)
+Self-avoidance kills attribute to the walk's OWN cells, which are
+unoccupied by construction and so never map to a routed net —
+ownership filtering excludes them with no special case.
+
+**Census-directed rip victim (620877f) — the driver rung, GREEN
+(pipeline 200, 2026-07-30).**  A failed net's DEEPEST census hands
+its b@CELL rows to the rip loop, which maps each blocking cell to
+the routed net owning it, sums kill counts per net, and rips the
+heaviest blocker (strictly-greater displaces → oldest wins ties;
+zero attribution → rip-oldest fallback; the RIP line prints the
+convicting weight).  The instance gained a decoy net A along the
+bottom edge, routed first, making the OLDEST net the WRONG victim
+for the first time.  The run played exactly as designed: R's ladder
+census named F's row-1 cells (b@11/12/13/14, summed weight 5 for F
+vs 0 for A and D), **RIP 9->14 w=5** convicted F directly where
+rip-oldest would have burned a rip and a re-route on A, and the demo
+ended **PCB-ROUTE 8x8 KEEP-1 NETS-4 RIPS-1 WIRE-14 CERT-DISJOINT-OK**
+in an 82s job.  The 2-cycle failure mode measured in pipeline 182 is
+now structurally answered: the loop rips what actually blocks.
+
+**Step-denominated give-ups (98e673e) — the budget knob joins the
+measurement unit, GREEN (pipeline 204, 2026-07-31).**  The find
+loop's fuel counts DECISIONS, ~600× from evaluator steps at depth
+(pipeline 182: 16k decisions = 10.1M steps) — give-ups sized in it
+were guesswork.  `su_find_query_prepared` gains `step_cap` (0 =
+uncapped, existing entries unchanged; checked per region pop,
+overshoot bounded by su_efuel); `su_find_query_schema_steps` is the
+capped schema entry; the PCB ramp converts to 32000·2^level
+EVALUATOR STEPS, base sized so the tight rung (F's re-route d=7
+EMPTY, ~38k steps at level-1 cap 64k) completes — a give-up should
+only ever mean pathology, never a healthy refutation cut short.
+Validation: every steps= value in the 204 trace BIT-IDENTICAL to
+200, b= prints the step cap, same conviction (w=5) and final line.
+TWO PROOF-LAYER GOTCHAS RE-MEASURED: (1) factoring the fuel check
+behind a helper call makes the loop's measure obligations unsolvable
+— nonneg needs the bare `(lt fuel 1)` hypothesis visible, so the
+step-cap check sits as a SECOND guard under the untouched fuel
+guard; (2) prove's committed-sidecar staleness (known, still
+unresolved): a changed guard invalidates sidecar proofs but prove
+skips existing entries — delete-then-resolve.
+
+THE GROWTH SEQUENCE (user-approved 2026-07-30) IS COMPLETE through
+rung 3: (1) goal-directed ordering, (2) refutation census +
+census-directed ripping, (3) step budgets.  (4) best-first frontier
+stays HELD until a measured need — ordering + census left the demo's
+finds at ~15k steps.
+
+**The model scales — multi-pin nets on a parametric board (053cb28),
+GREEN (pipeline 208, 2026-07-31).**  USER STEER: "a single path
+trace is just too easy."  The board goes parametric (W×H threaded
+through step/manhattan/walk; instance 12×12) and nets become PIN
+LISTS: the first pin seeds the net's TREE, every later pin is a TAP
+routed to the goal set = any tree cell.  The walk checks set
+membership at the STEP — landing on a goal cell with moves remaining
+refuses (WalkCross, cell in the census; at minimal ladder depth no
+found route can cross, so the check is pure pruning), landing as the
+list ends is (WalkDone), the single ground want; pcb_dist_set
+(min-Manhattan to the set) keeps the floor admissible; loop-erasure
+completeness holds per tap.  TWO SOUNDNESS HOLES the direction
+change exposed, both closed BEFORE first fire: (a) taps route FROM
+the new pin, so a contested cell can be the START — which the step
+loop never inspects; pcb_walk_from refuses an occupied start as
+(WalkBlocked start), and a blocked SEED synthesizes the same census
+row driver-side; (b) +2 deepening is UNSOUND for mixed-parity goal
+sets (a tree spans both grid parities) — the ladder steps +1 unless
+every goal shares the start's parity.  The certificate got strictly
+stronger: replay rebuilds every tree tap by tap and RE-DERIVES all
+cells from the moves, never trusting search-side bookkeeping.
+MEASURED (pipeline 208, 72s job, line-for-line the designed story):
+the occupied-start conviction costs 82 steps and ZERO forks per
+ladder level (the walk refuses before the engine demands the hole —
+the cheapest possible attribution), RIP 13 w=1 convicts F; the
+3-pin T net routes trunk (d=5) then taps into the 6-cell tree at
+its floor (d=3, mixed parity handled); board-size calibration: F's
+slack-2 refutation 29,152 steps on 12×12 vs 37,984 on 8×8 —
+SLACK-BOUNDED, NOT BOARD-BOUNDED, the curve transfers; the slack-4
+find ~2× (28,917 vs 14,931 — more wandering room in DFS order
+before the row-3 route).  Final:
+**PCB-ROUTE 12x12 KEEP-1 NETS-5 RIPS-1 WIRE-22 CERT-DISJOINT-OK**.
+Deferred by design: the whole-tree-as-one-query rung (a tree
+grammar instead of a move list) builds on the goal-set observation
+when per-query hardness is wanted.
+
+**The congested instance — compounding rips, two-real-blocker
+conviction (42c2b1b), GREEN (pipeline 215, 2026-07-31, job 637 at
+210s / ~177k steps).**  Pure instance design on landed machinery
+(only the rip-fuel constant 12→16 and the report string changed):
+9 keepouts (a 2×4 component block at cols 2-3 × rows 4-7 plus a
+corridor plug at (4,6)) and 7 nets — decoy A, corridor wall C
+(5,2)-(5,8), west strap S (1,8)-(1,9), 3-pin bus B (keeps tree-tap
++ mixed-parity paths in the pinned demo), filler D, sandwiched T
+(4,4)-(4,7), squatter E (5,1)-(5,3).  The trace played the designed
+story LINE FOR LINE, every census row at its hand-counted value:
+
+- **Rip 1 discriminates two REAL blockers.**  T's tap is walled
+  (component W, C's column E, plug N); four EMPTY levels; the d=9
+  census carries b@89:1 + b@101:2 (C, w=3) against b@97:1 (S strap,
+  w=1) — the strap's single kill is the one hand-enumerated prefix
+  [S,W,W,W].  RIP 29 w=3: the first conviction where the census
+  weighs real-vs-real rather than culprit-vs-decoy.  Hand-verified
+  by exhaustively enumerating the pocket's DFS prefixes — walls +
+  the admissible floor choke each level to a handful of forks
+  (d=9: 22 forks), which is what makes exact prediction feasible.
+- **Rip 2 exists only because of rip 1.**  T re-routes d=5 through
+  C's freed corridor; E's greedy d=2 route then squats C's freed
+  SEED cell 29; C's retry hits the occupied-pin short-circuit (RIP
+  17 w=1 with NO engine call — the synthesized census); E relocates
+  west at d=4 while C detours col 6 at d=8.  The displacement
+  cascade is the LNS dynamic the rip loop was built for, now pinned.
+- **Census-cap sighting (first live spill):** the d=9 census hit the
+  16-row cap with +7 spilled.  The conviction rows (97, 89, 101)
+  survived because kill rows surface in DFS-encounter order and the
+  owned kills come early; near the cap, weights can UNDERCOUNT — if
+  a future instance's conviction goes wrong, check spill first.
+- **Cost calibration, one prediction corrected:** forks stayed tiny
+  everywhere (2-22) but steps did not scale with forks — T's d=9
+  EMPTY cost 61,128 steps on 22 forks.  Per-fork evaluator cost
+  grows with depth × occupancy-list length (linear pcb_mem scans
+  over ~30 cells).  The congested run totals ~177k steps vs the
+  old single-conflict demo's ~74k: congestion is cheap in FORKS
+  (attribution keeps ladders shallow) but not free in steps.
+
+Final: **PCB-ROUTE 12x12 KEEP-9 NETS-7 RIPS-2 WIRE-29
+CERT-DISJOINT-OK** (WIRE = A2+C8+S1+B6+D3+T5+E4).
+
+**The detour instrument — the frontier rung adjudicated on a
+measurement (7d83021 + c8ed545), GREEN (pipeline 220, 2026-07-31,
+job 647 at 2870s / ~5.05M steps).**  The HELD best-first frontier
+(growth item 4) gets its measured-need gate:
+tools/search/pcb_detour_probe.shard, a single-net instrument on a
+CONCAVE TRAP FACING THE MOVE ORDER — a C-shaped cave (bar x=7
+y=2..6, arms (5,2)(6,2)/(5,6)(6,6), mouth west), net (10,4) seeded,
+tap from (1,4) east under order [E,S,N,W]; the through-wall
+Manhattan floor cannot see the cave is closed; min route exactly 15
+(slack 6, around either arm).  A single-gap straight wall was
+rejected on paper: after a wall block the order's secondary move
+HUGS the wall to the gap — concavity defeats wall-following.
+Driver change: pcbp_route_all/pcbp_route_net thread levels+budget0
+as arguments (behavior-neutral; the congested demo passes the old
+constants).  Instrument NOT pinned (48-min job; instrument, not
+demo) — check target only.  Two-shot on CI per the standing law:
+pipeline 217 BUDGET-STOPped d=13 at a 1.024M cap (the paper cost
+estimate was ~20x low; measured ~1.9-2.6k steps/fork at depth) and
+the caps were resized once from that evidence (base 256k -> 4M).
+Measured (220, structural story line-for-line):
+
+- **EMPTY curve 14,031 -> 458,855 -> 4,301,216 steps (12 -> 238 ->
+  1,666 forks) at slack 0/2/4** — x33 then x9.4 per slack-2; the
+  census shows the trap working (b@53 mouth re-entry thrash, arm and
+  bar rows, deep spills).
+- **FOUND d=15 = 277,155 steps / 116 forks — CHEAP, the mechanism
+  prediction corrected.**  The instrument was designed to price
+  find-level mislead; measured, the cave SELF-LIMITS at the find
+  depth (slack spent entering leaves no wander room, exits are
+  floor-killed) and the south detour is order-aligned (S precedes
+  N).  The exponential is NOT at the find level: 94.5% of the run
+  is pre-find EMPTY refutation.
+- **Frontier WITHOUT dominance: NO WIN, measured.**  An f-ordered
+  path-space search expands the same admissible prefixes the EMPTY
+  levels do; the ladder's re-expansion overhead is only ~11% (the
+  d=13 tree is 90% of the EMPTY sum).  IDA*-style deepening is
+  already near-optimal in path-space — the bare frontier rung
+  should NOT be built.
+- **Frontier + first-arrival cell dominance (the Lee/A* pair): the
+  measured ~30-40x.**  66 cells with f <= 15 on this board
+  (hand-derived: west block 28, x=0 column 5, cave 6, arm flanks 4,
+  bar column 2, east side 21) vs 2,032 engine forks = ~31x in
+  expansions, ~38x in steps at measured per-fork cost — and
+  refutation collapses from path-count to cell-count.  This is
+  admission tier 3 (state dominance = hashprune's checked
+  successor) with a price tag: find-mode may take dominance
+  UNCHECKED (replay stays the only certificate), but the EMPTYs'
+  exact-refutation status needs the CHECKED form (per-domain
+  soundness proof; on the grid, the distance-field argument).
+
+Final: **PCB-DETOUR 12x12 KEEP-9 NETS-1 RIPS-0 WIRE-15
+CERT-DISJOINT-OK** — and the adjudication: the rung worth building
+is DOMINANCE-ENABLED best-first, not the bare frontier.
+
+**Dominance-enabled best-first — the A* drive (05701c6), GREEN A/B
+(pipeline 223, 2026-08-01, job 653 at 2849s): 20x steps, 52x
+expansions.**  The adjudicated rung, built as a DRIVE POLICY over
+existing components (the ratified heuristic-tier shape — no engine
+rebuild).  `su_find_query_schema_astar`: the LIFO job stack becomes
+a deterministic skew-heap frontier (f asc, then g DESC — deeper
+first among ties — then push sequence) with a first-arrival closed
+set.  The engine stays domain-blind: the task supplies a SCORE
+TEMPLATE expression rendered per region by `su_cut_expr` (decided
+choices instantiate their alternative templates recursively; every
+OPEN hole becomes the task's CUT expression — applied to the
+template itself, this inlines the decided prefix in one walk),
+evaluated hole-free in a FRESH DISCARDED arena (the census re-force
+discipline; hook steps fold into steps= so A/B cost stays honest)
+and decoded structurally as (ctor g h key).  key = Some cells joins
+first-arrival dominance, None abstains — dead prefixes must abstain
+or score last, so a poisoned key can never close a live state.
+TRUST POSTURE: the hook steers ORDER and PRUNING only; query/want
+evaluation stays the sole arbiter of found/killed and replay stays
+the only certificate.  Dominated pops count into killed and surface
+as a synthesized `dominated` census row; **exhaustion with
+dominated>0 returns SuFindBudget, never SuFindEmpty** — an
+incomplete search cannot masquerade as an exact refutation (CHECKED
+dominance, the per-domain soundness proof that upgrades pruned
+exhausts back to exact, is the named follow-on).
+
+- **Two design bugs caught on paper before first fire:** (a) the
+  ladder grammar's separate move-alphabet hole cuts to Nil = a list
+  where a PMove belongs — the astar arm's grammar bakes the move
+  INTO each alternative (5 alts per list entry; edges ascend, the
+  schema validator requires per-entry uniqueness), so every open
+  hole is a tail-list hole and the cut is always type-correct;
+  (b) a goal-ended OPEN prefix renders identically to its own
+  Nil-completion under the cut — a key there lets the parent close
+  the state its found-candidate child needs — so exact goal
+  arrivals ABSTAIN (terminal states carry no dominance value).
+- **MEASURED (223; the ladder arm re-ran BIT-IDENTICAL to 220 — the
+  regression self-check for the threading + engine additions):**
+  ASTAR-FOUND d=21 len 15 at **248,408 steps / 39 forks / 59
+  dominated** (census sym:59), route replay-certified, one query
+  replacing the whole 4-level ladder.  Ladder total 5,051,257 →
+  248,408 steps = **20.3x**; expansions 2,032 → 39 = **52x**; the
+  single query is cheaper than the ladder's final FOUND level alone
+  (277,155).  Expansions landed UNDER the hand-derived 66-cell Lee
+  bound — the goal pops mid-band, before the f<=15 shell exhausts.
+  Optimality of len 15 rides the hook's admissible h
+  (heuristic-tier property; the certificate is replay as ever).
+- **Second consumer (hygiene rule), NAMED at admission:**
+  cost-ordered program search — the x86 window tasks with score =
+  instruction count (h = 0 is admissible), dominance key = a
+  machine-state fingerprint; wiring deferred to the swap/x86
+  measurement slice.
+- **Known limit, recorded:** cell-keyed dominance under prefix
+  commitment can miss (the first-arrival prefix may block the only
+  continuation) — acceptable for heuristic existence; the LNS loop
+  treats it as any failed find.  The instrument stays a check
+  target, not a pin (the ladder arm alone is ~48 min); whether the
+  astar arm becomes a slim pinned demo is an open call.
+
+**The time axis opens — the space-time formulation (10634ab), GREEN
+(pipeline 228, 2026-08-01, job 663 at 170s).**  USER STEER: the
+intended end-problem is Tenstorrent-class — a grid of compute
+engines + configurable DMA over a NoC, optimized OVER TIME; the gap
+analysis named four axes (time, cost objectives, capacity sharing,
+placement coupling) and ratified time first.  The formulation landed
+with ZERO engine changes — the task-parametricity the A* drive
+promised, now proven by its second live consumer.
+
+**The model (tools/search/tasks/pcb_time_model.shard).**  Occupancy
+becomes SPACE-TIME CELLS st = t*(W*H) + c in a plain Int list — the
+entire Int-set machinery (pcb_mem, census payloads, ownership scans)
+transfers verbatim, and a census row now names WHERE and WHEN.
+PTMove gains TmH (hold); packets occupy one cell per tick and VANISH
+on arrival (transfer semantics — freed cells are what make
+time-sharing the point); keepouts stay purely spatial; conflicts are
+VERTEX-only (head-to-tail convoys legal, as on a streaming NoC).
+The walk checks blocked-BEFORE-goal — an arrival-slot conflict is
+real in time.  Two spatial results RETIRE soundly: self-avoidance
+(space-time revisits can be necessary; dropping the pruning needs no
+lemma — the schema enumerates all move lists outright, so EMPTY
+stays an exact conditional refutation with the loop-erasure argument
+simply gone) and parity deepening (a hold flips arrival parity;
+ladders step +1 unconditionally).  The admissible Manhattan floor
+SURVIVES (distance falls at most 1 per tick, 0 on holds).  V1 scope
+cuts, each a deliberate lean: vertex conflicts only (swap check = a
+follow-on knob), two-pin nets (multicast-in-time = a later rung),
+injection at tick 0 with leading holds occupying the source, unit
+packets (durations/flit-trains = where capacity rungs meet time).
+
+**The dominance payoff.**  For one net against fixed trajectories,
+(cell, tick) is the COMPLETE state — every arrival there has cost
+exactly t and an identical future — so the A* drive's first-arrival
+dominance becomes PURE DUPLICATE DETECTION: zero loss, the recorded
+prefix-commitment limit vanishes for this task, and per-net search
+collapses from exponential path-count to at most W*H*T states.
+Same-cell-different-tick arrivals correctly never dominate (earlier
+is not better until the corridor clears).  This is also the
+checked-dominance rung's cleanest venue: domination by state
+IDENTITY, not inequality.
+
+**The instrument (tools/search/pcb_time_probe.shard).**  8x8 board,
+FULL wall at x=4 with a single gap at (4,3), two west-east nets —
+an instance SPATIALLY UNROUTABLE BY CONSTRUCTION (both wires need
+the gap cell; the spatial demo would rip-cycle to FAIL) that routes
+once time is real.  A's d=5 route is UNIQUE, so its trajectory is
+hand-fixed (row 3, ticks 0..5) and B's conflict schedule is
+deterministic.  Measured (228, the predicted story line for line,
+32/0 + 111/0 checks, all pins hand-derived before first fire):
+
+- **Ladder arm:** B refutes d=4/5 on geometry (min 6 spatial moves
+  through the gap), d=6 on the TIME conflict — every length-6 route
+  needs the gap's only free west neighbor (3,3) at t=2, where A is
+  IN TRANSIT.  The census convicted A's transit sts b@90 = (2,3)@t1
+  and b@155 = (3,3)@t2 at every level (prediction refined: the
+  shallow-dying prefixes mint them per level, not only at d=6); no
+  spill (12 rows < 16 cap); wall rows tick-resolved.  d=7 FOUND len
+  7 with EXACTLY ONE hold — parity-provable in advance (6 spatial
+  moves minimum, 7 spatial breaks parity, 2 holds leave 5) — B
+  convoying ONE CELL BEHIND A down row 3 and crossing A's goal cell
+  at t=6, after A vanished.  EMPTY curve 3,937 / 11,957 / 62,493
+  steps (4/10/42 forks), FOUND 32,229 / 24.
+  **PCB-TIME 8x8 KEEP-7 NETS-2 MAKESPAN-7 TICKS-12 HOLDS-1
+  CERT-DISJOINT-OK.**
+- **Astar arm (one query per net, dmax 11, st keys):** A 22,102
+  steps / 6 forks / 0 dominated (predicted exactly); B 89,489 / 15
+  forks / 17 DOMINATED — more duplicate (cell,tick) arrivals merged
+  than states expanded, the dedup load real even at this scale.
+  Same report line.  B's query vs B's ladder: 1.24x steps, 5.3x
+  expansions; trivial A is CHEAPER on the ladder (score-template
+  render cost per pop at dmax 11).  At this instance's slack the
+  arms are near step-parity — the divergence pricing remains the
+  detour instrument's 20.3x; THIS instrument's deliverable is the
+  axis (spatial-infeasible instance routed, hold chosen by search,
+  convoy legal, time-resolved census).
+- **Cross-check:** the ladder's EMPTYs at 4/5/6 are EXACT (no
+  dominance in that arm), certifying min arrival 7 for this
+  priority order; the astar first goal pop agrees.  Joint
+  (priority-free) optimality is NOT claimed.
+- **Replay certificate strengthened for time:** both trajectories
+  re-walk against keepouts AND each other (arrival conflicts refuse
+  inside the walk), st union duplicate-free, everything re-derived
+  from moves.
+
+The demo is pinned in CORPUS_LONG (~170s job; heuristic existence
+only).  NO rip loop in v1 — this instance never rips; the
+rip-in-time rung wants an instance that needs one (census
+attribution already carries tick resolution, so conviction
+transfers).  Named follow-ons from the ratified sequencing: rung B =
+real costs + min-cost claims (weighted moves, MIN arm, checked
+dominance for the bound's EMPTY side), then capacity/negotiated
+congestion and the global-objective LNS on that substrate; nearer
+term, a rip-in-time instance and the swap-conflict knob.
+
+**Rung B — weighted costs + min-cost claims (7ca9985), GREEN
+(pipeline 231, 2026-08-01, job 669 at 236s): the predicted story
+line for line, the report line character for character.**  The
+ratified next step after the time axis: real move prices, a
+MIN-COST claim with an exact bound side, and the checked-dominance
+upgrade that lets a dominance-pruned exhaust claim EMPTY.  This is
+the substrate the capacity/PathFinder rung and the global-objective
+LNS ride on.
+
+**The model (tools/search/tasks/pcb_cost_model.shard).**  Weighted
+pricing on the space-time walk: cmove per compass hop PLUS a
+per-cell toll on the cell entered, chold per hold; the walk carries
+a COST BUDGET in place of the tick budget, with the admissible cost
+floor cmove*manhattan checked at entry and the arrival step's own
+price checked before WalkDone (a tolled goal hop can overdraw a
+budget the floor accepted; mid-walk overdrafts need no check —
+cmove >= 1 makes the next entry floor positive against a negative
+remainder).  The toll list is the capacity seam: PathFinder-style
+negotiated congestion prices shared cells by inflating exactly this
+input (in the model now; its first live instance arrives with that
+rung).  Parameter requirements recorded: cmove >= 1, chold >= 1,
+tolls >= 0; tolls are paid on entry only.  The A* score hook: g =
+accumulated cost, h = cmove*manhattan — admissible AND CONSISTENT
+(a toward-move drops h by exactly cmove and costs at least cmove;
+holds and away-moves only raise f), so the first goal pop is the
+minimum-cost route within the depth cap.  KEY CLAIM ARITHMETIC: a
+depth cap dmax with cmin*(dmax+1) > B makes a budget-B enumeration
+exhaustive (longer routes cost more by arithmetic), and cost bounds
+are MONOTONE — so ONE EMPTY at C-1 is a complete min-cost bound for
+a cost-C witness, no ladder climb.  Zero engine changes on the
+model side; the walk/score are the third live consumers of the
+task-parametric drive.
+
+**The engine change — su_find_query_schema_astar_checked.**  A
+dom_exact flag threaded through su_astar_go; the ONE branch that
+changes is heap exhaustion: with the flag, a genuinely drained
+frontier returns SuFindEmpty even with dominated>0 (fuel and
+step-cap exits stay SuFindBudget in both entries; the plain entry
+passes False and reproduces old behavior exactly — time probe
+regression 111/0).  Calling the checked entry is an ASSERTION of
+the task's dominance-soundness pedigree, documented per model: for
+the cost walk, (1) continuation behavior factors through (cell,
+tick, remaining budget, suffix) and is MONOTONE in remaining
+budget; (2) under consistent h, the first pop at a (cell,tick) key
+carries minimal g (equal-f ties safe: a strictly cheaper arrival
+still queued behind an ancestor has strictly smaller f), i.e.
+maximal remainder — so every completion of a dominated arrival is a
+completion of the dominator, and pruning loses no route of cost
+<= B and no minimum.  Same epistemics as the model-side floor
+arguments backing ladder EMPTYs (documented hand argument + model
+claims), NOT a mechanized engine proof — and the instrument
+cross-checks it against the dominance-free arm.  Second consumer
+named at admission (hygiene rule): the cost-ordered x86 window
+search (g = instruction count, h = 0 trivially consistent,
+machine-state fingerprint keys), where a checked EMPTY is a
+proven-minimal-program claim — the superoptimizer-shaped payoff.
+
+**The instrument (tools/search/pcb_cost_probe.shard).**  The 8x8
+wall gains a SECOND gap — near (4,3) contested by A, far (4,6)
+free but two moves longer — and weights cmove=2, chold=5 make the
+OBJECTIVES DISAGREE: B's fastest route is the one-hold convoy
+through the near gap (makespan 7, cost 17), its cheapest is 8
+spatial moves (cost 16, makespan 8; parity kills 7-move arrivals,
+holds cost more than the detour).  The Pareto pair is the
+Tenstorrent-shaped tension (latency vs energy) on a 2-net toy.
+Measured (231; 48/0 + 141/0 checks, 16 instance pins hand-derived
+before first fire — including the DOMINATED TWIN [E,H]/[H,E], both
+live at st 163 g=7, hand-guaranteeing the checked arm exercises
+dominance):
+
+- **The fast arm re-runs the time story on the two-gap board:** B's
+  unit ladder EMPTY 3,733 / 11,324 / 59,100 steps (4/10/42 forks)
+  at d=4/5/6 with the transit convictions b@90 + b@155 at every
+  level, FOUND d=7 at 30,463 / 24 — cost re-derived 17.  (d=6 was
+  62,493 on the one-gap board at the same 42 forks — the shorter
+  keepout list trims steps.)
+- **The cost find:** one A* query on the cost score popped a
+  cost-16 len-8 route at 111,246 steps / 14 forks / 14 DOMINATED —
+  as many duplicate (cell,tick) arrivals merged as states expanded.
+  Both cost-16 families pinned legal at budget 16 exactly; either
+  is a valid witness (cost/len/holds are family-invariant).
+- **The bounds, three grades live:** A's EMPTY at 9 = 143 steps,
+  ZERO FORKS, census floor:1 — the entry floor refuses before the
+  move hole is demanded, the cheapest possible MIN bound.  B's
+  exact EMPTY at 15 (ladder grammar dmax 7, no dominance) = 47,206
+  / 34, and its census is the SAME conviction set as the makespan
+  d=6 EMPTY — the cost bound re-convicts A's transit,
+  tick-resolved.  B's CHECKED EMPTY at 15 = 61,807 / 9 forks / 14
+  dominated — the checked entry's FIRST LIVE EMPTY, agreeing with
+  the exact arm (the in-driver cross-check would fail the run
+  otherwise).  Witness costs are verified = bound+1 in-driver
+  before the claim prints.
+- **Honest reading:** the checked arm spent 3.8x fewer expansions
+  (9 vs 34) but 1.31x MORE steps than the exact ladder at this
+  scale — score-template render cost per pop, as on the time
+  instrument.  The rung's deliverable is the CLAIM MACHINERY (a
+  dominance-pruned exhaust returning a cross-checked exact bound),
+  not a speedup at toy slack; divergence pricing remains the
+  detour's 20.3x.  Where the checked EMPTY pays is where the
+  exact ladder is unaffordable — the detour-scale boards and the
+  x86 window minimality claims.
+
+Final, both claims verified in-driver:
+**PCB-COST 8x8 KEEP-6 NETS-2 FAST-MAKESPAN-7 FAST-COST-17
+CHEAP-COST-16 CHEAP-MAKESPAN-8 MINCOST-A-10 MINCOST-B-16
+DOM-CHECKED-AGREE CERT-DISJOINT-OK.**  Pinned in CORPUS_LONG
+(~236s job).  All MIN claims are per priority order (A fixed
+first); joint optimality is NOT claimed.  Named follow-ons: the
+capacity rung (negotiated congestion pricing the toll input,
+PathFinder-style) and the global-objective LNS on this substrate;
+nearer term, rip-in-time and the swap-conflict knob still stand.
+
+**The capacity rung — negotiated congestion (eab0e0c), GREEN
+(pipeline 234, 2026-08-01, job 675 at 192s): the negotiation story
+exact, the report line character for character.**  PathFinder's
+core idea transplanted onto the cost substrate, and the toll
+input's first live consumer: nets are routed INDEPENDENTLY — no
+priority order, no hard occupancy between nets, no victim
+selection — and conflicts are PRICED instead of forbidden.  Where
+the rip-up driver picks a victim by census conviction, negotiation
+lets the cost structure pick.  ZERO engine changes and ZERO model
+changes: the whole rung is one driver + instance probe
+(tools/search/pcb_cap_probe.shard), which also means the
+engine-addition hygiene rule (second consumer) is not triggered.
+
+**The loop** (driver-level, iteration fuel, mirrors the rip loop's
+shape): each round routes every net with one plain-astar cost
+query against the CURRENT toll list, occ = Nil — other nets are
+invisible except through prices (h = cmove*manhattan stays
+admissible and consistent under any nonnegative tolls, so the
+first goal pop is still the toll-inclusive minimum).  Conflicts
+are read off the trajectories at SPACE-TIME granularity — a
+shared st is a real conflict, the same cell at different ticks is
+legal time-sharing, not congestion — and every conflicted CELL's
+toll is inflated by the number of nets meeting there (+2 on the
+2-net board).  Pure history, updated between rounds; no
+present-sharing term.  Convergence = zero shared sts; the
+certificate is rung B's cross-occupied cost replay at budget =
+claimed cost exactly, with costs re-derived from moves and tolls
+STRIPPED — negotiation tolls are search scaffolding, never the
+instance.  Claim grade: heuristic existence only.
+
+**The instrument: rung B's two-gap board reused deliberately**, so
+the negotiated outcome is directly comparable to the certified
+minima.  Measured (234; 156/0 checks, 15 instance pins; every pop
+of rounds 1 and 2 hand-simulated in advance against the heap law —
+f asc, g DESC, earlier push seq first, children pushed in
+alternative order):
+
+- **Round 1 (tolls empty):** both nets take their unconstrained
+  optima and collide: A [E,E,E,E,E] cost 10 at 29,575 steps / 6
+  forks / 0 dominated, B [E,N,E,E,E,S] cost 12 at 39,112 / 7 / 2 —
+  fork AND dominated counts exactly as the pop simulation
+  predicted.  B rides A's row-3 corridor AT THE SAME TICKS: SHARE
+  n=4 cells[ 27 28 29 30 ] (sts 155/220/285/350, t2..t5), the
+  exact predicted conflict set — which also confirms the witness
+  identity (any other cost-12 member shares cell 26 too).  Each
+  cell's toll += 2.
+- **Round 2 (tolls 27/28/29/30 = 2): the prices discriminate by
+  alternative cost.**  A's near family is FORCED through all four
+  tolled cells (28's only free neighbors are 27 and 29; 30 is the
+  goal — the goal toll is unavoidable even on the far detour:
+  18 near vs 24 far) — A re-found [E,E,E,E,E] (true cost 10,
+  unchanged) at 103,883 / 19 forks / 32 dominated.  B's best near
+  dodge still pays 27/28/29 (18); the far gap pays nothing (16) —
+  B diverted to a len-8 cost-16 far route at 143,296 / 21 forks /
+  24 dominated (hand simulation said 20/22 — one expansion and two
+  duplicate pops adrift in the f=16 band; every claim-bearing beat
+  exact).  Zero shared sts: CONVERGED iters=2.
+- **The punchline the board reuse buys:** the NO-PRIORITY
+  negotiated outcome lands exactly on the per-priority minima rung
+  B certified — the driver asserts COST-A = 10 and COST-B = 16
+  (bound + 1) before printing, an instance consistency stamp, not
+  a new optimality claim.  A stayed because its detour is dear, B
+  moved because its detour is cheap, and nobody chose a victim.
+
+Final: **PCB-CAP 8x8 KEEP-6 NETS-2 ITERS-2 TOLLED-4 COST-A-10
+COST-B-16 MAKESPAN-8 CERT-DISJOINT-OK.**  Pinned in CORPUS_LONG
+(~192s job, ~316k engine steps).  Named follow-ons from this rung:
+the general N-net negotiation loop and a congested-class instance
+head-to-head vs the rip driver (price-directed vs census-directed
+conflict resolution on one board); SPACE-TIME tolls (keying PToll
+on st, letting negotiation separate nets in time, not just space —
+the spatial toll cannot express "contested at tick 3 only", so
+spatially-forced instances currently need the conflict to resolve
+spatially); a present-sharing term (Gauss-Seidel within a round).
+The global-objective LNS on this substrate remains the ratified
+next step.
+
+**The global-objective LNS (2eb4d79), GREEN (pipeline 239,
+2026-08-01, job 685 at 371s): the trace line for line, and the pop
+simulation EXACT on all twelve inner queries.**  The ratified LNS
+shape's cost-driven successor: every prior driver is
+feasibility-first and order-taking (each net optimal given its
+predecessors, the total never consulted); this is the first driver
+on the substrate where the SUM is the acceptance criterion.  Zero
+engine changes, zero model changes; one probe
+(tools/search/pcb_lns_probe.shard).  It also delivers the banked
+astar-LNS migration: the LNS inner solver is the A* cost tap.
+
+**The loop.**  State = a priority order.  A move swaps an ADJACENT
+PAIR and re-routes the whole order with the A* cost solver under
+hard occupancy; accept iff the total TRUE cost strictly improves; a
+full sweep with no accept = LOCAL-OPT.  The pair swap is the
+smallest genuine neighborhood — ripping a single net and
+re-inserting it against everyone is a provable no-op (its old route
+stays feasible, and every cheaper route was already blocked by a
+predecessor, a subset of what it now faces).  Greedy strict descent
+is monotone: no cycling, no tabu store needed yet.
+
+**A finding, learned deriving the instance:** under vertex-only
+conflicts, every net with ANY free adjacent cell — including its
+own previous cell — can yield by a two-move wiggle, so the unit
+yield price is UNIVERSALLY min(chold, 2*cmove).  Asymmetric yield
+PRICES are impossible (the tunnel instance first sketched for this
+slice fails — the retreat-step wiggle is unblockable), and two-net
+order swaps therefore always tie.  Strict order gaps need
+asymmetric yield COUNTS — cascades.  (This is also why the two-gap
+board is order-tied at 26, checked on paper.)
+
+**The instrument: a ZERO-KEEPOUT cascade.**  Three straight nets,
+pure net-net interaction: A (4,0)->(4,5) vertical crosses B
+(1,3)->(6,3) at 28@t3 and C (0,4)->(6,4) at 36@t4, both
+equidistant.  A's two blockers are CONSECUTIVE on its path, so ONE
++2 delay by A clears both crossings (+4); any order routing A
+before B lets A commit and pushes TWO yields onto others (+8).
+All six order totals hand-derived (bases 32): A-before-B = 40,
+B-before-A = 36 — and 36 is the joint optimum on paper (A and B
+both want 28@t3, someone pays >= 4; 36 achieves exactly one
+yield).  The greedy-natural initial order (A,B,C) is globally
+wrong from the wrong end: the net that should absorb the delay is
+the one greedy sends first.  Measured (239; 156/0 checks, 14
+pins, every pop of all twelve queries simulated in advance):
+
+- **INIT (A,B,C) = 40:** A straight 20,249 steps / 6 forks / 0
+  dominated; B's row-2 dodge (cost 14) 53,696 / 8 / 3; C taxed to
+  16 — blocked at 36@t4 AND fenced by B's dodge at 30@t7 —
+  92,257 / 9 / 4.  Every count exactly as simulated.
+- **Swap ACCEPT -> (B,A,C) = 36:** B straight 6/0; A's one-delay
+  wiggle [S,S,E,W,S,S,S] (cost 14, taking 28@t5 and 36@t6) 8/3;
+  C rides FREE at 12, 7/0.
+- **Re-swap REJECT at 40** — re-run BYTE-IDENTICAL to INIT
+  (20,249 / 53,696 / 92,257): the determinism self-check,
+  predicted in the header.
+- **Tie REJECT: (B,C,A) = 36** — the strict gate refuses equal
+  totals; C second is cheaper (41,993 — smaller occupancy to
+  render) and A third finds the same one-delay witness class.
+- **LOCAL-OPT best=36**, INIT/BEST assertions and the n-net
+  cross-replay certificate (each net at budget = claimed cost
+  exactly against the union of the others, costs re-derived,
+  duplicate-free st union) all passed in-run.
+
+Final: **PCB-LNS 8x8 KEEP-0 NETS-3 INIT-40 BEST-36 ACCEPTED-1
+REJECTED-2 LOCAL-OPT CERT-DISJOINT-OK.**  Pinned in CORPUS_LONG
+(~371s job, ~599k engine steps).  LOCAL-OPT is local w.r.t. this
+neighborhood AND the heuristic inner routes; the joint-optimum
+argument is paper, not machine.  Named follow-ons: the JOINT
+product query (two nets' routes as one schema candidate — the
+exact-tier joint MIN bound that would upgrade the paper argument);
+larger destroy sets + annealing-style acceptance (the moment the
+tabu=forbidden-region ruling activates); a congested many-net
+instance where the descent takes several accepted moves; the
+weighted/lexicographic makespan-cost objective.
+
+**Task-authoring gotchas banked while building the swap + PCB
+instruments:** te_import_ctx admits only bare item uses as candidate
+heads (in-file type decls are invisible — models live in sibling
+modules); proof-DSL case-on refuses parametric type args like
+(List Int) — use induct, which also substitutes; compute inlines
+helpers into match trees destroying rewrite patterns — use controlled
+(unfold F lhs)(reduce lhs) ×2 rounds; the Euclidean division surface
+name is `ediv` (pairs with `mod`); schema entry ids must be
+nonnegative and strictly ascending.

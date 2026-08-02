@@ -1,0 +1,284 @@
+;;; PCB routing board model (the heuristic-tier problem statement): a
+;;; single-layer W x H grid (parametric — the instance picks the board),
+;;; cells addressed 0..W*H-1 as y*W+x, four rectilinear moves, occupancy
+;;; as a plain cell list (keepouts + already-routed nets).
+;;;
+;;; MULTI-PIN NETS scale the model past single path traces: a net's
+;;; first pin seeds its TREE, and each later pin routes to the GOAL SET
+;;; = any cell of the tree so far.  The walk checks set membership at
+;;; the STEP: landing on a goal cell with moves remaining refuses
+;;; (WalkCross — a route may touch its net's tree only at its end), and
+;;; landing with the move list exhausted is (WalkDone) — the single
+;;; ground value the engine's want-match accepts.  A 2-pin net is the
+;;; degenerate singleton-goal case.
+;;;
+;;; THE BOUNDED WALK is the load-bearing design: pcb_walk checks the
+;;; min-Manhattan floor to the goal set against the remaining move
+;;; budget BEFORE demanding the move list, so under the lazy engine an
+;;; infeasible prefix dies without the next hole ever forking — an
+;;; admissible lower bound expressed entirely in the observation, no
+;;; engine feature.  Off-grid steps, occupied cells, tree crossings,
+;;; and budget exhaustion each refuse with their OWN head (PWalkR) so
+;;; the engine's refutation census can attribute kills.
+;;;
+;;; THE SELF-AVOIDING WALK (measured pipeline 191: refutation growth
+;;; ~x5-9 -> ~x2.2-2.4 per slack-2): the recursion threads the departed
+;;; cell into the occupancy, so revisiting any earlier cell of the walk
+;;; refuses exactly like an occupied cell and every accepted walk is a
+;;; simple path.  No completeness is lost at any rung of the deepening
+;;; ladder: the grid is bipartite, so loop-erasing a legal walk yields a
+;;; legal simple path with the same endpoints, even-shorter length, and
+;;; a subset of its cells.  Never-reverse is subsumed, branching <= 3.
+;;;
+;;; THE OCCUPIED-START CHECK (pcb_walk_from): taps route FROM the new
+;;; pin toward the tree, so a contested cell can be the START — which
+;;; the step loop never inspects.  The entry wrapper refuses an
+;;; occupied start as (WalkBlocked start), keeping census attribution
+;;; exact when a routed net sits on a pin.
+;;;
+;;; No theorem laws, deliberately: interior path rewrites (N.E = E.N)
+;;; are unsound the moment occupancy makes the observation
+;;; position-sensitive.  The search rides lazy semantic killing per
+;;; tap; multi-net coupling belongs to the rip-up driver
+;;; (pcb_route_probe), not the exact engine.
+
+(import "../../../kernel/stdlib.shard")
+
+(use (:: core List))
+(use (:: core Nil))
+(use (:: core Cons))
+
+(type PMove (MvN) (MvE) (MvS) (MvW))
+
+(fn pcb_x ((wd Int) (c Int)) Int (mod c wd))
+
+(fn pcb_y ((wd Int) (c Int)) Int (ediv c wd))
+
+;; -1 = off the board; callers refuse negatives.
+(fn pcb_step ((wd Int) (ht Int) (m PMove) (c Int)) Int
+  (match m
+    ((MvN) (if (lt (pcb_y wd c) 1) (- 0 1) (- c wd)))
+    ((MvE) (if (lt (pcb_x wd c) (- wd 1)) (+ c 1) (- 0 1)))
+    ((MvS) (if (lt (pcb_y wd c) (- ht 1)) (+ c wd) (- 0 1)))
+    ((MvW) (if (lt (pcb_x wd c) 1) (- 0 1) (- c 1)))))
+
+(fn pcb_mem ((c Int) (occ (List Int))) Bool
+  (measure (struct occ))
+  (match occ
+    (Nil False)
+    ((Cons h t) (if (int_eq h c) True (pcb_mem c t)))))
+
+(fn pcb_abs ((n Int)) Int (if (lt n 0) (- 0 n) n))
+
+(fn pcb_manhattan ((wd Int) (a Int) (b Int)) Int
+  (+
+    (pcb_abs (- (pcb_x wd a) (pcb_x wd b)))
+    (pcb_abs (- (pcb_y wd a) (pcb_y wd b)))))
+
+;; Min Manhattan distance from c to any goal cell — the admissible
+;; floor for set-goal walks.  Empty set degenerates to 0 (no pruning),
+;; which is safe and unreachable in practice (a tree always has cells).
+(fn pcb_dist_set ((wd Int) (c Int) (goals (List Int))) Int
+  (measure (struct goals))
+  (match goals
+    (Nil 0)
+    ((Cons g rest)
+     (match rest
+       (Nil (pcb_manhattan wd c g))
+       ((Cons _ _)
+        (let ((d1 (pcb_manhattan wd c g)))
+          (let ((d2 (pcb_dist_set wd c rest))) (if (lt d1 d2) d1 d2))))))))
+
+;; The walk's result vocabulary IS the refutation-census attribution
+;; channel: WalkBlocked/WalkCross carry the offending cell (computed
+;; strictly BEFORE the refusal, so the engine's peek/bounded-force
+;; census reads it), WalkMiss carries the stranded end cell, and
+;; WalkFloor/WalkOff stay payload-free so the admissible-pruning bulk
+;; buckets into single census rows.  (WalkDone) is the ground want.
+(type PWalkR
+  (WalkDone)
+  (WalkMiss Int)
+  (WalkBlocked Int)
+  (WalkCross Int)
+  (WalkOff)
+  (WalkFloor))
+
+;; Bound first, then demand: a prefix whose min-Manhattan floor to the
+;; goal set exceeds the remaining budget refuses without forcing
+;; `moves`.  The recursion threads the departed cell into occ —
+;; accepted walks are self-avoiding.  Goal membership is checked at
+;; the STEP: a goal cell ends the walk iff the move list ends there.
+(fn pcb_walk
+  ((wd Int)
+   (ht Int)
+   (occ (List Int))
+   (goals (List Int))
+   (budget Int)
+   (c Int)
+   (moves (List PMove)))
+  PWalkR
+  (measure (struct moves))
+  (if (lt budget (pcb_dist_set wd c goals)) (WalkFloor)
+  (match moves
+    (Nil (WalkMiss c))
+    ((Cons m rest)
+     (let ((c2 (pcb_step wd ht m c)))
+       (if (lt c2 0) (WalkOff)
+       (if (pcb_mem c2 goals)
+         (match rest
+           (Nil (WalkDone))
+           ((Cons _ _) (WalkCross c2)))
+       (if (pcb_mem c2 occ) (WalkBlocked c2)
+       (pcb_walk wd ht (Cons c occ) goals (- budget 1) c2 rest)))))))))
+
+;; The query/replay entry: refuses an occupied START before walking —
+;; the step loop only ever inspects stepped-onto cells.
+(fn pcb_walk_from
+  ((wd Int)
+   (ht Int)
+   (occ (List Int))
+   (goals (List Int))
+   (budget Int)
+   (start Int)
+   (moves (List PMove)))
+  PWalkR
+  (if (pcb_mem start occ) (WalkBlocked start)
+  (pcb_walk wd ht occ goals budget start moves)))
+
+;; Visited cells of a route, start included (use on known-legal routes).
+(fn pcb_cells ((wd Int) (ht Int) (c Int) (moves (List PMove))) (List Int)
+  (measure (struct moves))
+  (match moves
+    (Nil (Cons c Nil))
+    ((Cons m rest) (Cons c (pcb_cells wd ht (pcb_step wd ht m c) rest)))))
+
+;; --- the A* score hook ------------------------------------------------------
+;; Evaluated by the engine's astar drive on each region's DECIDED move
+;; prefix (open holes cut to Nil): g = moves spent, h = the admissible
+;; min-Manhattan floor from the prefix's end cell, key = that end cell,
+;; the first-arrival dominance state.  A prefix the walk would refuse
+;; scores itself LAST and ABSTAINS from dominance (key None) — a dead
+;; prefix must never close a live state.  An EXACT GOAL ARRIVAL also
+;; abstains: under the cut a goal-ended open prefix renders identically
+;; to its own Nil-completion, and a key here would let the parent close
+;; the state its found-candidate child needs (terminal states carry no
+;; dominance value anyway).  Legality mirrors pcb_walk exactly:
+;; off-grid, goal-crossing, occupancy, self-avoidance.  The hook steers
+;; order and pruning only; the walk stays the sole arbiter.
+(type PScore (PScore Int Int (Option (List Int))))
+
+(fn pcb_score_bad () PScore (PScore 1000000 1000000 None))
+
+(fn pcb_score_go
+  ((wd Int)
+   (ht Int)
+   (occ (List Int))
+   (goals (List Int))
+   (c Int)
+   (n Int)
+   (moves (List PMove)))
+  PScore
+  (measure (struct moves))
+  (match moves
+    (Nil (PScore n (pcb_dist_set wd c goals) (Some (Cons c Nil))))
+    ((Cons m rest)
+     (let ((c2 (pcb_step wd ht m c)))
+       (if (lt c2 0) (pcb_score_bad)
+       (if (pcb_mem c2 goals)
+         (match rest
+           (Nil (PScore (+ n 1) 0 None))
+           ((Cons _ _) (pcb_score_bad)))
+       (if (pcb_mem c2 occ) (pcb_score_bad)
+       (pcb_score_go wd ht (Cons c occ) goals c2 (+ n 1) rest))))))))
+
+(fn pcb_score
+  ((wd Int)
+   (ht Int)
+   (occ (List Int))
+   (goals (List Int))
+   (start Int)
+   (moves (List PMove)))
+  PScore
+  (if (pcb_mem start occ) (pcb_score_bad)
+  (pcb_score_go wd ht occ goals start 0 moves)))
+
+;; --- ground pins (8-wide board for arithmetic-by-hand) ---------------------
+
+(claim pcb_walk_done_pin
+  (goal () ()
+    (= (pcb_walk_from 8 8 Nil (list 3) 3 0 (list (MvE) (MvE) (MvE))) (WalkDone)))
+  (steps ((compute both)) refl))
+
+;; A short list stranded with leftover budget: the floor passes, the
+;; list ends off the tree.
+(claim pcb_walk_miss_pin
+  (goal () ()
+    (= (pcb_walk_from 8 8 Nil (list 3) 3 0 (list (MvE))) (WalkMiss 1)))
+  (steps ((compute both)) refl))
+
+(claim pcb_walk_blocked_pin
+  (goal () ()
+    (=
+      (pcb_walk_from 8 8 (list 1) (list 3) 3 0 (list (MvE) (MvE) (MvE)))
+      (WalkBlocked 1)))
+  (steps ((compute both)) refl))
+
+(claim pcb_walk_start_blocked_pin
+  (goal () ()
+    (=
+      (pcb_walk_from 8 8 (list 0) (list 3) 3 0 (list (MvE) (MvE) (MvE)))
+      (WalkBlocked 0)))
+  (steps ((compute both)) refl))
+
+;; Crossing refusal: the walk lands on a goal cell with moves left.
+(claim pcb_walk_cross_pin
+  (goal () ()
+    (=
+      (pcb_walk_from 8 8 Nil (list 1) 3 0 (list (MvE) (MvE) (MvE)))
+      (WalkCross 1)))
+  (steps ((compute both)) refl))
+
+(claim pcb_walk_offgrid_pin
+  (goal () () (= (pcb_walk_from 8 8 Nil (list 8) 1 0 (list (MvN))) (WalkOff)))
+  (steps ((compute both)) refl))
+
+(claim pcb_walk_floor_pin
+  (goal () () (= (pcb_walk_from 8 8 Nil (list 7) 2 0 Nil) (WalkFloor)))
+  (steps ((compute both)) refl))
+
+;; Revisit refusal: E then W steps back onto the start cell —
+;; self-avoidance refuses it and the census sees the blocking cell.
+(claim pcb_walk_revisit_pin
+  (goal () ()
+    (=
+      (pcb_walk_from 8 8 Nil (list 8) 4 0 (list (MvE) (MvW) (MvS)))
+      (WalkBlocked 0)))
+  (steps ((compute both)) refl))
+
+;; Set floor: distance is the min over goals.
+(claim pcb_dist_set_pin
+  (goal () () (= (pcb_dist_set 8 0 (list 7 26 1)) 1))
+  (steps ((compute both)) refl))
+
+(claim pcb_cells_pin
+  (goal () () (= (pcb_cells 8 8 0 (list (MvE) (MvS))) (list 0 1 9)))
+  (steps ((compute both)) refl))
+
+;; Score pins: a live prefix scores (g, floor, Some end-cell); a prefix
+;; that crosses a goal mid-list is dead — worst f, dominance abstained.
+(claim pcb_score_pin
+  (goal () ()
+    (= (pcb_score 8 8 Nil (list 3) 0 (list (MvE))) (PScore 1 2 (Some (list 1)))))
+  (steps ((compute both)) refl))
+
+(claim pcb_score_cross_pin
+  (goal () ()
+    (=
+      (pcb_score 8 8 Nil (list 1) 0 (list (MvE) (MvE)))
+      (PScore 1000000 1000000 None)))
+  (steps ((compute both)) refl))
+
+;; Exact goal arrival: h = 0 and dominance ABSTAINED (key None).
+(claim pcb_score_goal_pin
+  (goal () () (= (pcb_score 8 8 Nil (list 1) 0 (list (MvE))) (PScore 1 0 None)))
+  (steps ((compute both)) refl))

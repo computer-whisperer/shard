@@ -1,0 +1,189 @@
+;;; Task-protocol scan pin: the hook table and structural refusal matrix.
+;;;
+;;; te_task_scan is the single load-time authority over what a task file may
+;;; name: an unknown search_* fn, a multiply-defined witness, a solo spine
+;;; hook, or flat vocabulary hooks under search_environment are loud
+;;; refusals, never silent no-ops. Synthetic modules exercise each rule
+;;; directly; every real corpus task additionally passes through the scan on
+;;; every engine run (te_config wires it), so the positive path is pinned by
+;;; the whole task suite.
+;;;
+;;; The claim-ladder pins exercise te_claim and te_screen_legal, the two
+;;; decision functions te_load_task uses for mode-against-hook legality:
+;;; every mode x witness cell of the ladder (census / absence / first) and
+;;; both screen-legality directions, refusal messages byte-exact.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "typed_expr.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader World))
+(use (:: kernel loader int_list_eq))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta invoke *))
+(use (:: tools search typed_expr *))
+
+(fn pp_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "PROTOCOL-PROBE FAIL " (append_int msg "\n")) w)))
+
+(fn pp_empty () Module (Module Nil Nil Nil (FnTrie None Nil) Nil))
+
+(fn pp_fd ((name Symbol)) FnDef
+  (FnDef (qn name) Nil (TCon (qn (quote Int)) Nil) (IntLit 0)))
+
+(fn pp_add ((m Module) (name Symbol)) (Option Module)
+  (extend_fn m (pp_fd name)))
+
+(fn pp_add2 ((m Module) (a Symbol) (b Symbol)) (Option Module)
+  (match (pp_add m a)
+    (None None)
+    ((Some m2) (pp_add m2 b))))
+
+(fn pp_expect_msg
+  ((label (List Int)) (got (Option (List Int))) (want (List Int)) (w World))
+  (Option World)
+  (match got
+    (None (Some (pp_fail (append_int label ": scan accepted") w)))
+    ((Some msg)
+     (if (int_list_eq msg want) None
+     (Some (pp_fail (append_int label ": wrong message: ") w))))))
+
+(fn pp_expect_ok ((label (List Int)) (got (Option (List Int))) (w World))
+  (Option World)
+  (match got
+    (None None)
+    ((Some _) (Some (pp_fail (append_int label ": unexpectedly refused") w)))))
+
+(fn pp_claim_err ((r TeClaimR)) (Option (List Int))
+  (match r
+    ((TeClaimErr msg) (Some msg))
+    ((TeClaimOk _) None)))
+
+(fn pp_claim_census () Bool
+  (match (te_claim (TeModeExhaustive) (TeWitnessValue (IntLit 0)))
+    ((TeClaimOk (TeClaimCensus)) True)
+    (_ False)))
+
+(fn pp_claim_empty () Bool
+  (match (te_claim (TeModeExhaustive) (TeWitnessEmpty))
+    ((TeClaimOk (TeClaimEmpty)) True)
+    (_ False)))
+
+(fn pp_claim_first () Bool
+  (match (te_claim (TeModeFirst) (TeWitnessValue (IntLit 0)))
+    ((TeClaimOk (TeClaimFirst)) True)
+    (_ False)))
+
+(fn pp_claims_screen ((w World)) World
+  (match
+    (pp_expect_msg
+      "first+screen"
+      (te_screen_legal (TeModeFirst) (TeScreenFd (pp_fd (quote search_screen))))
+      "search_screen requires exhaustive mode"
+      w)
+    ((Some w2) w2)
+    (None
+      (match
+        (pp_expect_ok
+          "exhaustive+screen"
+          (te_screen_legal
+            (TeModeExhaustive)
+            (TeScreenFd (pp_fd (quote search_screen))))
+          w)
+        ((Some w2) w2)
+        (None (write "CLAIM-LADDER CENSUS EMPTY FIRST RANK SCREEN OK\n" w))))))
+
+(fn pp_claims ((w World)) World
+  (if (pp_claim_census)
+    (if (pp_claim_empty)
+      (if (pp_claim_first)
+        (match
+          (pp_expect_msg
+            "first+rank"
+            (pp_claim_err (te_claim (TeModeFirst) (TeWitnessRank 0)))
+            "first result mode requires a value witness, not a rank witness"
+            w)
+          ((Some w2) w2)
+          (None
+            (match
+              (pp_expect_msg
+                "first+empty"
+                (pp_claim_err (te_claim (TeModeFirst) (TeWitnessEmpty)))
+                "search_expect_empty requires exhaustive mode"
+                w)
+              ((Some w2) w2)
+              (None (pp_claims_screen w)))))
+        (pp_fail "claim ladder: first" w))
+      (pp_fail "claim ladder: empty" w))
+    (pp_fail "claim ladder: census" w)))
+
+(fn pp_clean ((w World)) World
+  (match (pp_add2 (pp_empty) (quote search_probe) (quote search_target))
+    (None (pp_fail "clean: extend" w))
+    ((Some m2)
+     (match (pp_add2 m2 (quote search_depth) (quote search_witness))
+       (None (pp_fail "clean: extend 2" w))
+       ((Some m3)
+        (match (te_task_scan m3)
+          (None
+            (pp_claims
+              (write "PROTOCOL-SCAN UNKNOWN CONFLICT SPINE FLAT CLEAN OK\n" w)))
+          ((Some msg) (pp_fail (append_int "clean task refused: " msg) w))))))))
+
+(fn pp_flat ((w World)) World
+  (match (pp_add2 (pp_empty) (quote search_environment) (quote search_ints))
+    (None (pp_fail "flat: extend" w))
+    ((Some m)
+     (match
+       (pp_expect_msg
+         "env+flat"
+         (te_task_scan m)
+         "search_forms/search_ints/search_symbols are unread under search_environment; delete them"
+         w)
+       (None (pp_clean w))
+       ((Some w2) w2)))))
+
+(fn pp_spine ((w World)) World
+  (match (pp_add (pp_empty) (quote search_spine_context))
+    (None (pp_fail "spine: extend" w))
+    ((Some m)
+     (match
+       (pp_expect_msg
+         "solo spine"
+         (te_task_scan m)
+         "search_spine_context and search_spine_profile are mutually required"
+         w)
+       (None (pp_flat w))
+       ((Some w2) w2)))))
+
+(fn pp_conflict ((w World)) World
+  (match (pp_add2 (pp_empty) (quote search_witness) (quote search_expect_empty))
+    (None (pp_fail "conflict: extend" w))
+    ((Some m)
+     (match
+       (pp_expect_msg
+         "witness conflict"
+         (te_task_scan m)
+         "conflicting witness hooks: define exactly one of search_witness / search_witness_rank / search_expect_empty"
+         w)
+       (None (pp_spine w))
+       ((Some w2) w2)))))
+
+(fn pp_unknown ((w World)) World
+  (match (pp_add (pp_empty) (quote search_bogus))
+    (None (pp_fail "unknown: extend" w))
+    ((Some m)
+     (match
+       (pp_expect_msg
+         "unknown hook"
+         (te_task_scan m)
+         "unknown task hook: search_bogus"
+         w)
+       (None (pp_conflict w))
+       ((Some w2) w2)))))
+
+(fn main ((w World)) World (pp_unknown w))

@@ -94,6 +94,10 @@ corpus:
   rules:
     - if: $PIO_DEEP == "1"
       when: never
+    - if: $SWAP_DEEP == "1"
+      when: never
+    - if: $ENGINE_RUN == "1"
+      when: never
     - if: $CORPUS_LONG == "1"
       when: never
     - when: on_success
@@ -157,20 +161,202 @@ corpus-long:
 # gate for that pipeline).
 #
 # The task's committed drive budget (50) is the fast smoke value; this
-# job seds it to 38,000 — sized to the runner's 512Gi pod cap at the
-# measured ~11-12 MB/decision region retention (local calibration:
-# budget 6,000 peaked at 67.6 GB and exhausted with no passing region,
-# so the first winner lies deeper).  Projected peak ~400 GiB; an
-# in-script watchdog kills the engine below the pod limit so the log
-# survives OOM territory.  Green = a winner region in the log; red =
-# budget exhausted (informative — recalibrates the frontier, not a
-# regression).
-pio-dme-free:
+# job seds it to $PIO_BUDGET (default 38,000).  Measured shape (local
+# A/B 2026-07-17): the ~11-12 MB/decision retention SATURATES at
+# ~67.6 GB around 6k decisions — RSS is byte-flat from there on, and
+# flat RSS is HEALTHY search, not a stall.  Per-decision cost grows
+# with depth (~quadratic fit: 6,100 decisions = 18 min local; 38k
+# projected ~10-12 h local, more on these cores).  Override the budget
+# per-run to climb the validation ladder:
+#   glab ci run -b BRANCH --variables PIO_DEEP:1 --variables PIO_BUDGET:12000
+# Each on-time clean exit extends the validated frontier; a run far
+# past its prediction has BRACKETED a stuck decision — attach and dump
+# before killing.  Green = a winner region in the log; red = budget
+# exhausted (informative — recalibrates the frontier, not a
+# regression).  The watchdog cap stays at 490 GiB (512Gi pod tier);
+# nothing measured yet needs the 1.5T high-mem slot.
+#
+# TIMEOUT: no runner has maximum_timeout set (checked 2026-07-18), so
+# the job-level timeout is the only ceiling.  48h covers the 38k rung's
+# ~32h projection (T_CI(n) ~ 1.32e-6 n^2 min, two-point fit) with slack
+# for a worse-than-quadratic tail.  The margin is load-bearing: GitLab
+# uploads NO artifacts on a timed-out job, and the engine reports only
+# at exit — a timeout here means total loss of the run.
+# Generic engine-run job for probe-style programs (drivers, demos) whose
+# runtime is UNVALIDATED.  The standing rule: any new engine-run
+# configuration — new task, instance, budget, or driver — fires HERE
+# first (RSS watchdog + artifact capture); the dev box only runs
+# configurations already measured fast.  Founding case: the PCB routing
+# driver sat at the ~67.6GB retention plateau for six CPU-hours locally
+# because refutation levels cost exponential-in-slack.  Fire with:
+#   glab ci run -b BRANCH --variables ENGINE_RUN:1 \
+#     --variables ENGINE_RUN_TARGET:tools/search/pcb_route_probe.shard
+engine-run:
+  stage: gate
+  tags:
+    - high-cpu
+  image: docker.io/library/rust:latest
+  timeout: 8h
+  variables:
+    ENGINE_RUN_TARGET: "tools/search/pcb_route_probe.shard"
+    # Internal deadline BELOW the job timeout: a pod killed at the job
+    # timeout uploads NO artifacts (measured: pipeline 174 lost its log).
+    # The watchdog loop kills the engine at this age, so the script ends
+    # while artifacts can still upload.  Exit 124 = deadline hit.
+    ENGINE_RUN_SECS: "25200"
+  rules:
+    - if: $ENGINE_RUN == "1"
+      when: on_success
+    - when: never
+  cache:
+    key: shard-engine
+    paths:
+      - rust_bootstrap/target/
+      - bin/shard_check
+      - bin/shard_check.stamp
+      - bin/shard_eval
+      - bin/shard_eval.stamp
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq nodejs > /dev/null
+  script:
+    - cargo build --release --manifest-path rust_bootstrap/Cargo.toml
+    - |
+      if [ ! -x bin/shard_check ] || [ "$(bin/engine_stamp.sh)" != "$(cat bin/shard_check.stamp 2>/dev/null)" ]; then
+        echo "engine stale or missing -- rebuilding"
+        bin/rebuild.sh
+      else
+        echo "engine fresh (stamp match) -- rebuild skipped"
+      fi
+    - 'echo "target: ${ENGINE_RUN_TARGET}"'
+    - |
+      bin/shard_eval run "$ENGINE_RUN_TARGET" > engine_run.log 2>&1 &
+      ENG=$!
+      CAP_KB=$((490 * 1024 * 1024))
+      PEAK=0; TICK=0; DEADLINE=0
+      while kill -0 "$ENG" 2>/dev/null; do
+        RSS=$(awk '/VmRSS/{print $2}' /proc/$ENG/status 2>/dev/null)
+        [ "${RSS:-0}" -gt "$PEAK" ] && PEAK=$RSS
+        if [ "${RSS:-0}" -gt "$CAP_KB" ]; then
+          echo "WATCHDOG: RSS ${RSS} kB over ${CAP_KB} kB cap -- killing engine"
+          kill -9 "$ENG"
+          break
+        fi
+        if [ $((TICK * 30)) -ge "$ENGINE_RUN_SECS" ]; then
+          echo "WATCHDOG: internal deadline ${ENGINE_RUN_SECS}s hit -- killing engine"
+          DEADLINE=1
+          kill -9 "$ENG"
+          break
+        fi
+        TICK=$((TICK + 1))
+        if [ $((TICK % 10)) -eq 0 ]; then
+          echo "watchdog: RSS ${RSS:-0} kB (peak ${PEAK} kB)  log: $(tail -n 1 engine_run.log 2>/dev/null)"
+        fi
+        sleep 30
+      done
+      wait "$ENG"; STATUS=$?
+      [ "$DEADLINE" -eq 1 ] && STATUS=124
+      echo "ENGINE EXIT ${STATUS}  PEAK RSS ${PEAK} kB  (124 = internal deadline)"
+      cat engine_run.log
+      exit "$STATUS"
+  artifacts:
+    paths:
+      - engine_run.log
+    when: always
+    expire_in: 30 days
+
+# The swap-network split-economics ladder (R5 follow-on): the k=4 routing
+# task (swap_route5, depth 11, four-letter alphabet) under three arms —
+#   theorem-first WITH relational splits   (more-search HEAD)
+#   theorem-first with GROUND forks only   (branch swap-ground = HEAD with
+#                                           the skl_iso extension reverted)
+#   semantic-first                         (SWAP_SCHED:semantic_first —
+#                                           structurally split-free)
+# Fire per arm:
+#   glab ci run -b more-search --variables SWAP_DEEP:1 --variables SWAP_BUDGET:N
+#   glab ci run -b more-search --variables SWAP_DEEP:1 --variables SWAP_BUDGET:N \
+#     --variables SWAP_SCHED:semantic_first
+#   glab ci run -b swap-ground --variables SWAP_DEEP:1 --variables SWAP_BUDGET:N
+# Local calibration (2026-07-28, dev box): budget 500 = 3m54s wall,
+# prepass-dominated (9,586 terminal regions, splits 10 before the loop's
+# 500 decisions).  Climb SWAP_BUDGET rungs; the 24h timeout is a ceiling,
+# not a target — a timed-out job uploads NO artifacts (PIO lesson).
+swap-route-deep:
   stage: gate
   tags:
     - high-cpu
   image: docker.io/library/rust:latest
   timeout: 24h
+  variables:
+    SWAP_TASK: "tools/search/tasks/swap_route5.shard"
+    SWAP_BUDGET: "5000"
+    SWAP_SCHED: "theorem_first"
+  rules:
+    - if: $SWAP_DEEP == "1"
+      when: on_success
+    - when: never
+  cache:
+    key: shard-engine
+    paths:
+      - rust_bootstrap/target/
+      - bin/shard_check
+      - bin/shard_check.stamp
+      - bin/shard_eval
+      - bin/shard_eval.stamp
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq nodejs > /dev/null
+  script:
+    - cargo build --release --manifest-path rust_bootstrap/Cargo.toml
+    - |
+      if [ ! -x bin/shard_check ] || [ "$(bin/engine_stamp.sh)" != "$(cat bin/shard_check.stamp 2>/dev/null)" ]; then
+        echo "engine stale or missing -- rebuilding"
+        bin/rebuild.sh
+      else
+        echo "engine fresh (stamp match) -- rebuild skipped"
+      fi
+    - |
+      if [ "$SWAP_SCHED" = "semantic_first" ]; then
+        sed -i "/(fn search_narrowing_strategy () Symbol (quote theorem_first))/d" "$SWAP_TASK"
+        echo "schedule: semantic_first (hook removed)"
+      else
+        echo "schedule: theorem_first (committed hook)"
+      fi
+    - sed -i "s/(fn search_drive_budget () Int [0-9]*)/(fn search_drive_budget () Int ${SWAP_BUDGET})/" "$SWAP_TASK"
+    - grep -F "(fn search_drive_budget () Int ${SWAP_BUDGET})" "$SWAP_TASK"
+    - |
+      bin/shard_eval run tools/search/typed_superpose.shard "$SWAP_TASK" > swap_route_deep.log 2>&1 &
+      ENG=$!
+      CAP_KB=$((490 * 1024 * 1024))
+      PEAK=0; TICK=0
+      while kill -0 "$ENG" 2>/dev/null; do
+        RSS=$(awk '/VmRSS/{print $2}' /proc/$ENG/status 2>/dev/null)
+        [ "${RSS:-0}" -gt "$PEAK" ] && PEAK=$RSS
+        if [ "${RSS:-0}" -gt "$CAP_KB" ]; then
+          echo "WATCHDOG: RSS ${RSS} kB over ${CAP_KB} kB cap -- killing engine"
+          kill -9 "$ENG"
+          break
+        fi
+        TICK=$((TICK + 1))
+        if [ $((TICK % 10)) -eq 0 ]; then echo "watchdog: RSS ${RSS:-0} kB (peak ${PEAK} kB)"; fi
+        sleep 30
+      done
+      wait "$ENG"; STATUS=$?
+      echo "ENGINE EXIT ${STATUS}  PEAK RSS ${PEAK} kB"
+      cat swap_route_deep.log
+      exit "$STATUS"
+  artifacts:
+    paths:
+      - swap_route_deep.log
+    when: always
+    expire_in: 30 days
+
+pio-dme-free:
+  stage: gate
+  tags:
+    - high-cpu
+  image: docker.io/library/rust:latest
+  timeout: 48h
+  variables:
+    PIO_BUDGET: "38000"
   rules:
     - if: $PIO_DEEP == "1"
       when: on_success
@@ -194,8 +380,8 @@ pio-dme-free:
       else
         echo "engine fresh (stamp match) -- rebuild skipped"
       fi
-    - sed -i 's/(fn search_drive_budget () Int 50)/(fn search_drive_budget () Int 38000)/' tools/search/tasks/pio_dme_free.shard
-    - grep -F '(fn search_drive_budget () Int 38000)' tools/search/tasks/pio_dme_free.shard
+    - sed -i "s/(fn search_drive_budget () Int 50)/(fn search_drive_budget () Int ${PIO_BUDGET})/" tools/search/tasks/pio_dme_free.shard
+    - grep -F "(fn search_drive_budget () Int ${PIO_BUDGET})" tools/search/tasks/pio_dme_free.shard
     - |
       bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/pio_dme_free.shard > pio_dme_free.log 2>&1 &
       ENG=$!

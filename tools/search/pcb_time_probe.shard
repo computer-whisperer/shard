@@ -1,0 +1,646 @@
+;;; PCB space-time instrument: the time-axis rung's opening instance.
+;;; The point is the AXIS: an instance that is STRUCTURALLY
+;;; INFEASIBLE in the spatial formulation (both nets' wires would
+;;; need the same cell) routes cleanly once occupancy is
+;;; time-indexed, with a HOLD chosen by search.  Runtime is
+;;; UNVALIDATED — it fires on CI only:
+;;;   glab ci run -b more-search --variables ENGINE_RUN:1 \
+;;;     --variables ENGINE_RUN_TARGET:tools/search/pcb_time_probe.shard
+;;;
+;;; THE BOARD (8x8): a FULL vertical wall at x=4 with a single gap at
+;;; (4,3) — keepouts {4,12,20,36,44,52,60} — and two west-to-east
+;;; nets: A (1,3)->(6,3) and B (2,4)->(6,4).  Every west-east path
+;;; crosses cell 28, so the SPATIAL formulation is unroutable by
+;;; construction (two wires, one cell); in time the gap is SHARED.
+;;;
+;;; THE HAND-DERIVED STORY.  A routes first: its d=5 route is UNIQUE
+;;; ([E,E,E,E,E] — any deviation costs 2, holds cost spatial moves),
+;;; so A's trajectory is FIXED: sts 25,90,155,220,285,350 (row 3 at
+;;; ticks 0..5, gone after t=5).  B (floor 4) then ladders +1
+;;; unconditionally (holds break parity deepening):
+;;;   d=4  EMPTY — geometry: every legal walk crosses the gap, min
+;;;        3+3 spatial moves, so nothing of length <= 5 exists;
+;;;   d=5  EMPTY — same bound (a hold only spends a tick);
+;;;   d=6  EMPTY — the TIME conflict: a length-6 route is exactly 6
+;;;        spatial moves entering (3,3) at t=2 (the gap's only free
+;;;        west neighbor), where A is IN TRANSIT — the census names
+;;;        A's transit sts: b@155 = (3,3)@t2 (early, inside the
+;;;        E-subtree) and b@90 = (2,3)@t1 (the [N,...] subtree runs
+;;;        last, so this row may fall past the 16-row cap — the
+;;;        pipeline-215 encounter-order lesson, predicted this time);
+;;;   d=7  FOUND — EXACTLY ONE hold, provable: 7 ticks with 6 spatial
+;;;        moves minimum leaves one hold; 7 spatial moves has wrong
+;;;        parity; 2 holds leave only 5.  B then CONVOYS one cell
+;;;        behind A down row 3 (vertex conflicts only — head-to-tail
+;;;        streaming is legal) and may cross A's goal cell after A
+;;;        VANISHES.  e.g. [E,H,N,E,E,E,S]: sts 34,99,163,219,284,
+;;;        349,414,486 — every tick one cell behind A's 220,285,350.
+;;; Report: MAKESPAN-7 TICKS-12 HOLDS-1, both arms.
+;;;
+;;; THE A/B ARM: the same two nets under the A* drive, one query each
+;;; at dmax 11.  In space-time (cell,tick) is the COMPLETE state, so
+;;; first-arrival dominance is pure duplicate detection — zero loss,
+;;; no prefix-commitment miss — and refutation collapses to the state
+;;; count (<= 57 free cells x ticks).  h is admissible, so the first
+;;; goal pop is the MINIMUM ARRIVAL: the ladder's exact EMPTYs at
+;;; d=4/5/6 independently certify the astar minimum of 7 — the two
+;;; arms cross-check each other.  Expected: A trivial (~6 forks, 0
+;;; dominated), B a few dozen forks with dominated > 0 (duplicate
+;;; (cell,tick) arrivals merged).
+;;;
+;;; BUDGETS (paper, from the measured ~1.9-2.6k steps/fork at depth):
+;;; d=6 is the big EMPTY, ~100-400 forks under 5-way branching at
+;;; slack 2 => ~0.2-1M steps; ramp base 1M puts it under a 4M cap
+;;; with headroom, the d=7 FOUND under 8M, astar cap 8M.  A give-up
+;;; should only ever mean pathology.
+;;;
+;;; THE MEASUREMENT (pipeline 228, job 663, 2026-08-01, 170s — the
+;;; predicted story line for line, both report lines exact):
+;;; ladder A d=5 FOUND 3,949 steps / 10 forks; B EMPTY 3,937 / 11,957
+;;; / 62,493 steps (4 / 10 / 42 forks) at d=4/5/6 and FOUND d=7 at
+;;; 32,229 / 24 — len 7, HOLDS-1 as parity demanded.  The transit
+;;; convictions b@90 + b@155 surfaced at EVERY level (the prefixes
+;;; die shallow, so each ladder level mints them — prediction
+;;; refined: not a d=6-only phenomenon), the census never spilled
+;;; (12 rows at d=6 < the 16 cap; the encounter-order worry did not
+;;; materialize), and the wall rows came out tick-resolved (b@164/
+;;; 228/292/356 = (4,4) probed at t2..t5).  Astar arm: A one query
+;;; 22,102 / 6 forks / census[] (0 dominated, exactly as predicted);
+;;; B one query 89,489 / 15 forks / 17 DOMINATED — more duplicate
+;;; (cell,tick) arrivals were merged than states expanded.  B's one
+;;; query vs B's whole ladder: 1.24x steps, 5.3x expansions; on
+;;; trivial A the ladder wins (render cost per pop at dmax 11) — at
+;;; this scale the arms are near step-parity and the divergence
+;;; pricing stays the detour instrument's (20.3x); the axis story
+;;; (spatial-infeasible instance routed, hold chosen, convoy legal,
+;;; time-resolved census) is the deliverable here.  The ladder's
+;;; exact EMPTYs at 4/5/6 certify min arrival 7 for this priority
+;;; order; the astar minimum agrees — the arms cross-check.
+;;;
+;;; V1 SCOPE (per the ratified formulation): vertex conflicts only,
+;;; two-pin nets, all packets injected at tick 0 (leading holds
+;;; occupy the source), NO rip loop — this instance never rips; the
+;;; rip-in-time rung wants an instance that needs one.  Heuristic
+;;; existence only; certificate = full replay of both trajectories
+;;; against keepouts and each other + a duplicate-free st union.
+;;;
+;;; RUN:  fires on CI via ENGINE_RUN (see above) — never locally.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/driver.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "../../meta/search")
+(import "superpose.shard")
+(import "pcb_route_probe.shard")
+(import "tasks/pcb_route_model.shard")
+(import "tasks/pcb_time_model.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel reader *))
+(use (:: kernel loader *))
+(use (:: kernel driver *))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: meta search *))
+(use (:: tools search superpose *))
+(use (:: tools search pcb_route_probe *))
+(use (:: tools search tasks pcb_route_model *))
+(use (:: tools search tasks pcb_time_model *))
+
+;; ---- the board instance ---------------------------------------------------
+
+(fn pcbt_wd () Int 8)
+
+(fn pcbt_ht () Int 8)
+
+;; The wall x=4, y=0..7 except the gap (4,3)=28.
+(fn pcbt_keepouts () (List Int) (list 4 12 20 36 44 52 60))
+
+(fn pcbt_a_start () Int 25)
+
+(fn pcbt_a_goal () Int 30)
+
+(fn pcbt_b_start () Int 34)
+
+(fn pcbt_b_goal () Int 38)
+
+(fn pcbt_levels () Int 4)
+
+(fn pcbt_budget0 () Int 1000000)
+
+(fn pcbt_astar_dmax () Int 11)
+
+(fn pcbt_astar_cap () Int 8000000)
+
+(fn pcbt_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "PCB-TIME FAIL " (append_int msg "\n")) w)))
+
+;; ---- the model module, loaded for the su evaluator ------------------------
+
+(fn pcbt_model_file () (List Int) "tools/search/tasks/pcb_time_model.shard")
+
+(fn pcbt_model_path () (List Symbol)
+  (list (quote tools) (quote search) (quote tasks) (quote pcb_time_model)))
+
+(fn pcbt_model_q ((name Symbol)) QName (QName (pcbt_model_path) name))
+
+(fn pcbt_load ((w World)) (Pair PcbpLoadR World)
+  (match (resolve_closure (pcbt_model_file) False w)
+    ((Pair srcs w1)
+     (match srcs
+       (Nil (Pair (PcbpLoadErr "model closure is empty") w1))
+       (_ (Pair (pcbp_build srcs) w1))))))
+
+;; ---- goal-directed move order ---------------------------------------------
+
+;; Toward moves lead, the HOLD sits second-to-last (a hold burns one
+;; tick of slack, retreating burns two), the move opposite the
+;; primary axis last.  The dy=0 tie prefers NORTH so the vertical
+;; move that meets A's transit row is tried early — census encounter
+;; order, not geometry (ordering cannot change EMPTY costs).
+(fn pcbt_move_order ((start Int) (goal Int)) (List Symbol)
+  (let ((dx (- (pcb_x (pcbt_wd) goal) (pcb_x (pcbt_wd) start))))
+    (let ((dy (- (pcb_y (pcbt_wd) goal) (pcb_y (pcbt_wd) start))))
+      (let ((tx (if (lt dx 0) (quote TmW) (quote TmE))))
+        (let ((ax (if (lt dx 0) (quote TmE) (quote TmW))))
+          (let ((ty (if (lt 0 dy) (quote TmS) (quote TmN))))
+            (let ((ay (if (lt 0 dy) (quote TmN) (quote TmS))))
+              (if (lt (pcb_abs dx) (pcb_abs dy)) (list ty tx ax (quote TmH) ay)
+              (list tx ty ay (quote TmH) ax)))))))))
+
+;; ---- the ladder grammar (separate move-alphabet entry) --------------------
+
+(fn pcbt_move_alt ((name Symbol)) SkSchemaAlt
+  (SkSchemaAlt (Ctor (pcbt_model_q name) Nil) Nil))
+
+(fn pcbt_move_alts ((names (List Symbol))) (List SkSchemaAlt)
+  (measure (struct names))
+  (match names
+    (Nil Nil)
+    ((Cons h t) (Cons (pcbt_move_alt h) (pcbt_move_alts t)))))
+
+(fn pcbt_move_ent ((id Int) (order (List Symbol))) SkSchemaEnt
+  (SkSchemaEnt id (pcbt_move_alts order)))
+
+(fn pcbt_cons_tail_alt ((move_id Int) (tail_id Int)) SkSchemaAlt
+  (SkSchemaAlt
+    (Ctor (qn (quote Cons)) (list (hole 0) (hole 1)))
+    (list (SkSchemaRef 0 0 move_id) (SkSchemaRef 1 1 tail_id))))
+
+(fn pcbt_lents ((i Int) (d Int) (order (List Symbol))) (List SkSchemaEnt)
+  (measure (- (+ d 1) i))
+  (if (lt d i) (Cons (pcbt_move_ent (+ d 1) order) Nil)
+  (Cons
+    (if (lt i 1) (SkSchemaEnt 0 (Cons (pcbp_nil_alt) Nil))
+    (SkSchemaEnt i (list (pcbp_nil_alt) (pcbt_cons_tail_alt (+ d 1) (- i 1)))))
+    (pcbt_lents (+ i 1) d order))))
+
+(fn pcbt_grammar_l ((d Int) (order (List Symbol))) SkSchemaGrammar
+  (SkSchemaGrammar d (pcbt_lents 0 d order)))
+
+;; ---- the astar grammar (move baked into the alternative) ------------------
+;; Every open hole is a tail-list hole, so the score render's cut
+;; expression (Nil) is always type-correct.
+
+(fn pcbt_cons_alt ((name Symbol) (edge Int) (tail_id Int)) SkSchemaAlt
+  (SkSchemaAlt
+    (Ctor (qn (quote Cons)) (list (Ctor (pcbt_model_q name) Nil) (hole 0)))
+    (list (SkSchemaRef 0 edge tail_id))))
+
+(fn pcbt_cons_alts ((names (List Symbol)) (edge Int) (tail_id Int))
+  (List SkSchemaAlt)
+  (measure (struct names))
+  (match names
+    (Nil Nil)
+    ((Cons h t)
+     (Cons (pcbt_cons_alt h edge tail_id) (pcbt_cons_alts t (+ edge 1) tail_id)))))
+
+(fn pcbt_aents ((i Int) (d Int) (order (List Symbol))) (List SkSchemaEnt)
+  (measure (- (+ d 1) i))
+  (if (lt d i) Nil
+  (Cons
+    (if (lt i 1) (SkSchemaEnt 0 (Cons (pcbp_nil_alt) Nil))
+    (SkSchemaEnt i (Cons (pcbp_nil_alt) (pcbt_cons_alts order 0 (- i 1)))))
+    (pcbt_aents (+ i 1) d order))))
+
+(fn pcbt_grammar_a ((d Int) (order (List Symbol))) SkSchemaGrammar
+  (SkSchemaGrammar d (pcbt_aents 0 d order)))
+
+;; ---- query, want, score template ------------------------------------------
+
+(fn pcbt_query ((occ (List Int)) (goal Int) (d Int) (start Int)) Expr
+  (Call
+    (pcbt_model_q (quote pcbt_walk_from))
+    (list
+      (IntLit (pcbt_wd))
+      (IntLit (pcbt_ht))
+      (pcbp_int_list_expr occ)
+      (pcbp_int_list_expr (pcbt_keepouts))
+      (IntLit goal)
+      (IntLit d)
+      (IntLit start)
+      (hole 0))))
+
+(fn pcbt_score_t ((occ (List Int)) (goal Int) (start Int)) Expr
+  (Call
+    (pcbt_model_q (quote pcbt_score))
+    (list
+      (IntLit (pcbt_wd))
+      (IntLit (pcbt_ht))
+      (pcbp_int_list_expr occ)
+      (pcbp_int_list_expr (pcbt_keepouts))
+      (IntLit goal)
+      (IntLit start)
+      (hole 0))))
+
+;; ---- representative decoding ----------------------------------------------
+
+(fn pcbt_decode_move ((e Expr)) (Option PTMove)
+  (match e
+    ((Ctor q args)
+     (match args
+       ((Cons _ _) None)
+       (Nil
+         (if (qname_eq q (pcbt_model_q (quote TmN))) (Some (TmN))
+         (if (qname_eq q (pcbt_model_q (quote TmE))) (Some (TmE))
+         (if (qname_eq q (pcbt_model_q (quote TmS))) (Some (TmS))
+         (if (qname_eq q (pcbt_model_q (quote TmW))) (Some (TmW))
+         (if (qname_eq q (pcbt_model_q (quote TmH))) (Some (TmH))
+         None))))))))
+    (_ None)))
+
+(fn pcbt_decode ((e Expr)) (Option (List PTMove))
+  (measure (struct e))
+  (match e
+    ((Ctor q args)
+     (match args
+       (Nil (if (qname_eq q (qn (quote Nil))) (Some Nil) None))
+       ((Cons h rest0)
+        (match rest0
+          (Nil None)
+          ((Cons t rest1)
+           (match rest1
+             ((Cons _ _) None)
+             (Nil
+               (if (qname_eq q (qn (quote Cons)))
+                 (match (pcbt_decode_move h)
+                   (None None)
+                   ((Some mv)
+                    (match (pcbt_decode t)
+                      (None None)
+                      ((Some moves) (Some (Cons mv moves))))))
+                 None))))))))
+    (_ None)))
+
+;; ---- route helpers --------------------------------------------------------
+
+(fn pcbt_len_moves ((moves (List PTMove))) Int
+  (measure (struct moves))
+  (match moves
+    (Nil 0)
+    ((Cons _ t) (+ 1 (pcbt_len_moves t)))))
+
+(fn pcbt_holds ((moves (List PTMove))) Int
+  (measure (struct moves))
+  (match moves
+    (Nil 0)
+    ((Cons m t)
+     (+
+       (match m
+         ((TmH) 1)
+         (_ 0))
+       (pcbt_holds t)))))
+
+(fn pcbt_max2 ((a Int) (b Int)) Int (if (lt a b) b a))
+
+;; ---- the deepening ladder (+1 unconditionally) ----------------------------
+
+(type PtNetR (PtNetErr (List Int)) (PtNetStop) (PtNetRoute (List PTMove) Int))
+
+(fn pcbt_find
+  ((m Module) (occ (List Int)) (start Int) (goal Int) (d Int) (budget Int))
+  SuFind
+  (su_find_query_schema_steps
+    1000000
+    budget
+    m
+    (pcbp_probe_q (quote candidate))
+    (hole 0)
+    (hole 0)
+    (ms_empty_plan)
+    (pcbt_query occ goal d start)
+    (pcbp_want)
+    (pcbt_grammar_l d (pcbt_move_order start goal))))
+
+(fn pcbt_deepen
+  ((m Module)
+   (occ (List Int))
+   (start Int)
+   (goal Int)
+   (d Int)
+   (levels Int)
+   (budget Int)
+   (w World))
+  (Pair PtNetR World)
+  (measure levels)
+  (if (lt levels 1) (Pair (PtNetStop) w)
+  (match (pcbt_find m occ start goal d budget)
+    ((SuFindErr msg) (Pair (PtNetErr msg) w))
+    ((SuFindFound _ _ _ forks _ steps _ rep census)
+     (let ((w2 (pcbp_log_call start 1 d budget "FOUND" steps forks census w)))
+       (match (pcbt_decode rep)
+         (None (Pair (PtNetErr "undecodable representative") w2))
+         ((Some moves)
+          (Pair
+            (PtNetRoute moves d)
+            (pcbp_log_routed start d (pcbt_len_moves moves) w2))))))
+    ((SuFindEmpty _ _ _ forks _ steps _ _ census)
+     (pcbt_deepen
+       m
+       occ
+       start
+       goal
+       (+ d 1)
+       (- levels 1)
+       (* 2 budget)
+       (pcbp_log_call start 1 d budget "EMPTY" steps forks census w)))
+    ((SuFindBudget _ _ _ forks _ steps _ _ census)
+     (Pair
+       (PtNetStop)
+       (pcbp_log_call start 1 d budget "BUDGET-STOP" steps forks census w))))))
+
+(fn pcbt_route_one
+  ((m Module) (occ (List Int)) (start Int) (goal Int) (w World))
+  (Pair PtNetR World)
+  (pcbt_deepen
+    m
+    occ
+    start
+    goal
+    (pcb_manhattan (pcbt_wd) start goal)
+    (pcbt_levels)
+    (pcbt_budget0)
+    w))
+
+;; ---- the certificate: full replay -----------------------------------------
+;; Each trajectory replays against the keepouts AND the other net's
+;; trajectory (WalkDone required — arrival conflicts refuse inside
+;; the walk), then the st union must be duplicate-free.  Cells and
+;; ticks are re-derived from the moves; nothing search-side is
+;; trusted.
+
+(fn pcbt_cert ((ma (List PTMove)) (mb (List PTMove))) Bool
+  (let ((ta (pcbt_traj (pcbt_wd) (pcbt_ht) (pcbt_a_start) 0 ma)))
+    (let ((tb (pcbt_traj (pcbt_wd) (pcbt_ht) (pcbt_b_start) 0 mb)))
+      (match
+        (pcbt_walk_from
+          (pcbt_wd)
+          (pcbt_ht)
+          tb
+          (pcbt_keepouts)
+          (pcbt_a_goal)
+          (pcbt_len_moves ma)
+          (pcbt_a_start)
+          ma)
+        ((WalkDone)
+         (match
+           (pcbt_walk_from
+             (pcbt_wd)
+             (pcbt_ht)
+             ta
+             (pcbt_keepouts)
+             (pcbt_b_goal)
+             (pcbt_len_moves mb)
+             (pcbt_b_start)
+             mb)
+           ((WalkDone) (pcbp_dup_free (pcbp_app_cells ta tb)))
+           (_ False)))
+        (_ False)))))
+
+(fn pcbt_report
+  ((tag (List Int)) (ma (List PTMove)) (mb (List PTMove)) (w World))
+  World
+  (let ((la (pcbt_len_moves ma)))
+    (let ((lb (pcbt_len_moves mb)))
+      (write
+        (append_int
+          "PCB-TIME"
+          (append_int
+            tag
+            (append_int
+              " 8x8 KEEP-7 NETS-2 MAKESPAN-"
+              (append_int
+                (show_int (pcbt_max2 la lb))
+                (append_int
+                  " TICKS-"
+                  (append_int
+                    (show_int (+ la lb))
+                    (append_int
+                      " HOLDS-"
+                      (append_int
+                        (show_int (+ (pcbt_holds ma) (pcbt_holds mb)))
+                        " CERT-DISJOINT-OK\n"))))))))
+        w))))
+
+;; ---- the ladder arm -------------------------------------------------------
+
+(fn pcbt_ladder_arm ((m Module) (w World)) World
+  (match (pcbt_route_one m Nil (pcbt_a_start) (pcbt_a_goal) w)
+    ((Pair (PtNetErr msg) w2) (pcbt_fail msg w2))
+    ((Pair (PtNetStop) w2) (pcbt_fail "ladder: net A unrouted" w2))
+    ((Pair (PtNetRoute ma _) w2)
+     (match
+       (pcbt_route_one
+         m
+         (pcbt_traj (pcbt_wd) (pcbt_ht) (pcbt_a_start) 0 ma)
+         (pcbt_b_start)
+         (pcbt_b_goal)
+         w2)
+       ((Pair (PtNetErr msg) w3) (pcbt_fail msg w3))
+       ((Pair (PtNetStop) w3) (pcbt_fail "ladder: net B unrouted" w3))
+       ((Pair (PtNetRoute mb _) w3)
+        (if (pcbt_cert ma mb) (pcbt_report "" ma mb w3)
+        (pcbt_fail "ladder: certificate rejected" w3)))))))
+
+;; ---- the A* arm -----------------------------------------------------------
+
+(fn pcbt_astar_one
+  ((m Module) (occ (List Int)) (start Int) (goal Int) (w World))
+  (Pair (Option (List PTMove)) World)
+  (match
+    (su_find_query_schema_astar
+      1000000
+      (pcbt_astar_cap)
+      m
+      (pcbp_probe_q (quote candidate))
+      (hole 0)
+      (hole 0)
+      (ms_empty_plan)
+      (pcbt_query occ goal (pcbt_astar_dmax) start)
+      (pcbp_want)
+      (pcbt_grammar_a (pcbt_astar_dmax) (pcbt_move_order start goal))
+      (pcbt_score_t occ goal start)
+      (Ctor (qn (quote Nil)) Nil))
+    ((SuFindErr msg) (Pair None (write (append_int "ASTAR-ERR " msg) w)))
+    ((SuFindEmpty _ _ _ forks _ steps _ _ census)
+     (Pair
+       None
+       (pcbp_log_call
+         start
+         1
+         (pcbt_astar_dmax)
+         (pcbt_astar_cap)
+         "ASTAR-EMPTY"
+         steps
+         forks
+         census
+         w)))
+    ((SuFindBudget _ _ _ forks _ steps _ _ census)
+     (Pair
+       None
+       (pcbp_log_call
+         start
+         1
+         (pcbt_astar_dmax)
+         (pcbt_astar_cap)
+         "ASTAR-BUDGET"
+         steps
+         forks
+         census
+         w)))
+    ((SuFindFound _ _ _ forks _ steps _ rep census)
+     (let
+       ((w2
+          (pcbp_log_call
+            start
+            1
+            (pcbt_astar_dmax)
+            (pcbt_astar_cap)
+            "ASTAR-FOUND"
+            steps
+            forks
+            census
+            w)))
+       (match (pcbt_decode rep)
+         (None (Pair None (write "ASTAR-ERR undecodable representative\n" w2)))
+         ((Some moves)
+          (Pair
+            (Some moves)
+            (pcbp_log_routed start (pcbt_astar_dmax) (pcbt_len_moves moves) w2))))))))
+
+(fn pcbt_astar_arm ((m Module) (w World)) World
+  (match (pcbt_astar_one m Nil (pcbt_a_start) (pcbt_a_goal) w)
+    ((Pair None w2) (pcbt_fail "astar: net A unrouted" w2))
+    ((Pair (Some ma) w2)
+     (match
+       (pcbt_astar_one
+         m
+         (pcbt_traj (pcbt_wd) (pcbt_ht) (pcbt_a_start) 0 ma)
+         (pcbt_b_start)
+         (pcbt_b_goal)
+         w2)
+       ((Pair None w3) (pcbt_fail "astar: net B unrouted" w3))
+       ((Pair (Some mb) w3)
+        (if (pcbt_cert ma mb) (pcbt_report "-ASTAR" ma mb w3)
+        (pcbt_fail "astar: certificate rejected" w3)))))))
+
+(fn pcbt_run ((m Module) (w World)) World
+  (pcbt_astar_arm m (pcbt_ladder_arm m w)))
+
+(fn main ((w World)) World
+  (match (pcbt_load w)
+    ((Pair (PcbpLoadErr msg) w1) (pcbt_fail msg w1))
+    ((Pair (PcbpLoadOk m) w1) (pcbt_run m w1))))
+
+;; ---- instance pins (the hand-derived story, checked) ----------------------
+
+;; A's unique d=5 route is legal against the empty board.
+(claim pcbt_a_route_pin
+  (goal () ()
+    (=
+      (pcbt_walk_from
+        8
+        8
+        Nil
+        (pcbt_keepouts)
+        30
+        5
+        25
+        (list (TmE) (TmE) (TmE) (TmE) (TmE)))
+      (WalkDone)))
+  (steps ((compute both)) refl))
+
+;; A's fixed trajectory: row 3 at ticks 0..5.
+(claim pcbt_a_traj_pin
+  (goal () ()
+    (=
+      (pcbt_traj 8 8 25 0 (list (TmE) (TmE) (TmE) (TmE) (TmE)))
+      (list 25 90 155 220 285 350)))
+  (steps ((compute both)) refl))
+
+;; B's transit convictions against A's trajectory: the [N,...] subtree
+;; dies on (2,3)@t1 = st 90; the [E,N,...] subtree on (3,3)@t2 = st
+;; 155 — the census rows the d=6 EMPTY attributes to A.
+(claim pcbt_b_transit1_pin
+  (goal () ()
+    (=
+      (pcbt_walk_from
+        8
+        8
+        (list 25 90 155 220 285 350)
+        (pcbt_keepouts)
+        38
+        6
+        34
+        (list (TmN) (TmE) (TmE) (TmE) (TmE) (TmN)))
+      (WalkBlocked 90)))
+  (steps ((compute both)) refl))
+
+(claim pcbt_b_transit2_pin
+  (goal () ()
+    (=
+      (pcbt_walk_from
+        8
+        8
+        (list 25 90 155 220 285 350)
+        (pcbt_keepouts)
+        38
+        6
+        34
+        (list (TmE) (TmN) (TmE) (TmE) (TmE) (TmN)))
+      (WalkBlocked 155)))
+  (steps ((compute both)) refl))
+
+;; A length-7 one-hold route: hold at (3,4), enter row 3 one tick
+;; behind A, convoy through the gap, cross A's goal cell at t=6 —
+;; AFTER A vanished — and drop south to the pin.
+(claim pcbt_b_hold_route_pin
+  (goal () ()
+    (=
+      (pcbt_walk_from
+        8
+        8
+        (list 25 90 155 220 285 350)
+        (pcbt_keepouts)
+        38
+        7
+        34
+        (list (TmE) (TmH) (TmN) (TmE) (TmE) (TmE) (TmS)))
+      (WalkDone)))
+  (steps ((compute both)) refl))
+
+;; The two trajectories share no space-time cell.
+(claim pcbt_disjoint_pin
+  (goal () ()
+    (=
+      (pcbp_dup_free
+        (pcbp_app_cells
+          (pcbt_traj 8 8 25 0 (list (TmE) (TmE) (TmE) (TmE) (TmE)))
+          (pcbt_traj 8 8 34 0 (list (TmE) (TmH) (TmN) (TmE) (TmE) (TmE) (TmS)))))
+      True))
+  (steps ((compute both)) refl))

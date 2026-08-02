@@ -1,0 +1,378 @@
+;;; PCB weighted-cost space-time routing model (rung B of the routing
+;;; tier): moves get REAL COSTS on top of the time axis.  A route's
+;;; cost is the sum of its per-move prices — cmove per compass hop
+;;; PLUS a per-cell TOLL on the cell entered, chold per hold — and
+;;; the walk carries a COST BUDGET instead of a tick budget.  The
+;;; toll list is the capacity/PathFinder seam: negotiated congestion
+;;; prices shared cells by inflating exactly this input.  Tick
+;;; occupancy, keepouts, vertex conflicts, vanish-on-arrival and the
+;;; check order are pcb_time_model's, unchanged; the moves are PTMove.
+;;;
+;;; PARAMETER REQUIREMENTS (the soundness arithmetic below assumes
+;;; them; drivers must respect them): cmove >= 1, chold >= 1, every
+;;; toll >= 0.  Tolls are paid on ENTRY only — a hold re-occupies its
+;;; cell without re-paying (a toll prices the hop into a cell, not
+;;; the sitting; capacity pricing for holds is that rung's problem).
+;;;
+;;; THE COST FLOOR (admissible): any walk still d = manhattan away
+;;; must make at least d more compass moves, each costing at least
+;;; cmove (holds and tolls only ADD) — so remaining budget <
+;;; cmove * d refuses with nothing lost.  The floor is checked at
+;;; entry each step; the arrival step additionally checks its own
+;;; price (a tolled goal hop can overdraw a budget the floor
+;;; accepted).  A mid-walk overdraft needs no check of its own:
+;;; cmove >= 1 makes the NEXT entry floor strictly positive against
+;;; a negative remainder.  Consequence for claims: a WalkDone under
+;;; budget B certifies route cost <= B, and an exhaustive EMPTY at
+;;; budget B refutes EVERY route of cost <= B — provided the
+;;; enumeration's depth cap dmax satisfies cmin * (dmax + 1) > B
+;;; (cmin = the cheapest move price), since any longer route already
+;;; exceeds B by arithmetic.  Cost bounds are MONOTONE, so ONE such
+;;; EMPTY at B = C - 1 is a complete min-cost bound for a cost-C
+;;; witness — no ladder climb.
+;;;
+;;; THE A* SCORE HOOK: g = accumulated cost, h = cmove * manhattan
+;;; (admissible as above), key = the prefix end's space-time cell.
+;;; h is CONSISTENT: a toward-move drops h by exactly cmove and
+;;; costs at least cmove; a hold keeps h and costs chold >= 0; an
+;;; away-move raises h.  So f = g + h is non-decreasing child-ward
+;;; and the FIRST GOAL POP is the minimum-cost route within the
+;;; grammar's depth cap (heuristic-tier property; replay is the
+;;; certificate, and the driver owes the same cmin * (dmax + 1)
+;;; arithmetic before reading it as a minimum over all routes).
+;;;
+;;; THE CHECKED-DOMINANCE PEDIGREE (what licenses
+;;; su_find_query_schema_astar_checked's EMPTY on this model): the
+;;; walk's continuation behavior factors through (cell, tick,
+;;; remaining budget, suffix) — nothing else of the prefix is
+;;; consulted — and acceptance is MONOTONE in remaining budget.
+;;; Under consistent h, pop order is f order, so the first pop at a
+;;; (cell, tick) key carries the minimal g among arrivals there
+;;; (equal-f ties are safe: a strictly cheaper arrival still queued
+;;; behind an ancestor has strictly smaller f).  Minimal g = maximal
+;;; remainder, so every completion of a later (dominated) arrival is
+;;; a completion of the first — pruning it loses no route of cost
+;;; <= B and no minimum.  Same-cell-different-tick arrivals never
+;;; dominate, exactly as in the unit model.
+;;;
+;;; pcbc_cost_of re-derives a route's total cost from its moves for
+;;; the certificate side (never trust search-side arithmetic).  It is
+;;; total: an off-grid step contributes cmove and the scan continues
+;;; from the unmoved cell — meaningful on replayed-legal routes only.
+;;;
+;;; No theorem laws, same structural reason as the spatial and time
+;;; models: occupancy plus pricing makes observation position-, time-
+;;; and now price-sensitive; interior rewrites are unsound.
+
+(import "../../../kernel/stdlib.shard")
+(import "pcb_time_model.shard")
+
+(use (:: core List))
+(use (:: core Nil))
+(use (:: core Cons))
+(use (:: tools search tasks pcb_route_model *))
+(use (:: tools search tasks pcb_time_model *))
+
+;; A per-cell surcharge: (PToll cell price).
+(type PToll (PToll Int Int))
+
+(fn pcbc_toll ((tolls (List PToll)) (c Int)) Int
+  (measure (struct tolls))
+  (match tolls
+    (Nil 0)
+    ((Cons h rest)
+     (match h
+       ((PToll tc tv) (if (int_eq tc c) tv (pcbc_toll rest c)))))))
+
+;; The price of one move: a hold is chold; a compass hop is cmove
+;; plus the toll on the cell entered.
+(fn pcbc_mcost
+  ((tolls (List PToll)) (cmove Int) (chold Int) (m PTMove) (c2 Int))
+  Int
+  (match m
+    ((TmH) chold)
+    (_ (+ cmove (pcbc_toll tolls c2)))))
+
+;; Certificate-side total: re-derive a route's cost from its moves.
+(fn pcbc_cost_of
+  ((wd Int)
+   (ht Int)
+   (tolls (List PToll))
+   (cmove Int)
+   (chold Int)
+   (c Int)
+   (moves (List PTMove)))
+  Int
+  (measure (struct moves))
+  (match moves
+    (Nil 0)
+    ((Cons m rest)
+     (let ((c2 (pcbt_sp wd ht m c)))
+       (if (lt c2 0) (+ cmove (pcbc_cost_of wd ht tolls cmove chold c rest))
+       (+
+         (pcbc_mcost tolls cmove chold m c2)
+         (pcbc_cost_of wd ht tolls cmove chold c2 rest)))))))
+
+;; The bounded weighted walk.  cbud = remaining COST budget; check
+;; order is pcbt_walk's (floor, off, keepout, occupancy, then goal),
+;; with the cost floor at entry and the arrival step's own price
+;; checked before WalkDone.
+(fn pcbc_walk
+  ((wd Int)
+   (ht Int)
+   (occ (List Int))
+   (keeps (List Int))
+   (tolls (List PToll))
+   (goal Int)
+   (cmove Int)
+   (chold Int)
+   (cbud Int)
+   (c Int)
+   (t Int)
+   (moves (List PTMove)))
+  PWalkR
+  (measure (struct moves))
+  (if (lt cbud (* cmove (pcb_manhattan wd c goal))) (WalkFloor)
+  (match moves
+    (Nil (WalkMiss c))
+    ((Cons m rest)
+     (let ((c2 (pcbt_sp wd ht m c)))
+       (if (lt c2 0) (WalkOff)
+       (let ((t2 (+ t 1)))
+         (let ((st (pcbt_st wd ht t2 c2)))
+           (if (pcb_mem c2 keeps) (WalkBlocked st)
+           (if (pcb_mem st occ) (WalkBlocked st)
+           (let ((mc (pcbc_mcost tolls cmove chold m c2)))
+             (if (int_eq c2 goal)
+               (match rest
+                 (Nil (if (lt cbud mc) (WalkFloor) (WalkDone)))
+                 ((Cons _ _) (WalkCross c2)))
+               (pcbc_walk
+                 wd
+                 ht
+                 occ
+                 keeps
+                 tolls
+                 goal
+                 cmove
+                 chold
+                 (- cbud mc)
+                 c2
+                 t2
+                 rest)))))))))))))
+
+;; The query/replay entry: refuses a keepout or occupied start before
+;; walking (start st at tick 0 is the bare cell).
+(fn pcbc_walk_from
+  ((wd Int)
+   (ht Int)
+   (occ (List Int))
+   (keeps (List Int))
+   (tolls (List PToll))
+   (goal Int)
+   (cmove Int)
+   (chold Int)
+   (cbud Int)
+   (start Int)
+   (moves (List PTMove)))
+  PWalkR
+  (if (pcb_mem start keeps) (WalkBlocked start)
+  (if (pcb_mem start occ) (WalkBlocked start)
+  (pcbc_walk wd ht occ keeps tolls goal cmove chold cbud start 0 moves))))
+
+;; --- the A* score hook ------------------------------------------------------
+;; Legality and budget mirror pcbc_walk exactly; g accumulates cost,
+;; h is the admissible-and-consistent cost floor, the key is the end
+;; state's space-time cell.  Dead prefixes score bad (abstain); exact
+;; goal arrivals abstain with the total in g.
+
+(fn pcbc_score_go
+  ((wd Int)
+   (ht Int)
+   (occ (List Int))
+   (keeps (List Int))
+   (tolls (List PToll))
+   (goal Int)
+   (cmove Int)
+   (chold Int)
+   (cbud Int)
+   (gacc Int)
+   (c Int)
+   (t Int)
+   (moves (List PTMove)))
+  PScore
+  (measure (struct moves))
+  (if (lt cbud (* cmove (pcb_manhattan wd c goal))) (pcb_score_bad)
+  (match moves
+    (Nil
+      (PScore
+        gacc
+        (* cmove (pcb_manhattan wd c goal))
+        (Some (Cons (pcbt_st wd ht t c) Nil))))
+    ((Cons m rest)
+     (let ((c2 (pcbt_sp wd ht m c)))
+       (if (lt c2 0) (pcb_score_bad)
+       (let ((t2 (+ t 1)))
+         (let ((st (pcbt_st wd ht t2 c2)))
+           (if (pcb_mem c2 keeps) (pcb_score_bad)
+           (if (pcb_mem st occ) (pcb_score_bad)
+           (let ((mc (pcbc_mcost tolls cmove chold m c2)))
+             (if (int_eq c2 goal)
+               (match rest
+                 (Nil
+                   (if (lt cbud mc) (pcb_score_bad) (PScore (+ gacc mc) 0 None)))
+                 ((Cons _ _) (pcb_score_bad)))
+               (pcbc_score_go
+                 wd
+                 ht
+                 occ
+                 keeps
+                 tolls
+                 goal
+                 cmove
+                 chold
+                 (- cbud mc)
+                 (+ gacc mc)
+                 c2
+                 t2
+                 rest)))))))))))))
+
+(fn pcbc_score
+  ((wd Int)
+   (ht Int)
+   (occ (List Int))
+   (keeps (List Int))
+   (tolls (List PToll))
+   (goal Int)
+   (cmove Int)
+   (chold Int)
+   (cbud Int)
+   (start Int)
+   (moves (List PTMove)))
+  PScore
+  (if (pcb_mem start keeps) (pcb_score_bad)
+  (if (pcb_mem start occ) (pcb_score_bad)
+  (pcbc_score_go wd ht occ keeps tolls goal cmove chold cbud 0 start 0 moves))))
+
+;; --- ground pins (8-wide board, st = 64t + c; cmove 2, chold 5) ------------
+
+(claim pcbc_toll_hit_pin
+  (goal () () (= (pcbc_toll (list (PToll 5 3) (PToll 9 4)) 9) 4))
+  (steps ((compute both)) refl))
+
+(claim pcbc_toll_miss_pin
+  (goal () () (= (pcbc_toll (list (PToll 5 3)) 2) 0))
+  (steps ((compute both)) refl))
+
+;; Cost re-derivation: [E,E] from 0 over a toll at cell 2 = 2 + (2+7).
+(claim pcbc_cost_of_toll_pin
+  (goal () ()
+    (= (pcbc_cost_of 8 8 (list (PToll 2 7)) 2 5 0 (list (TmE) (TmE))) 11))
+  (steps ((compute both)) refl))
+
+(claim pcbc_cost_of_hold_pin
+  (goal () () (= (pcbc_cost_of 8 8 Nil 2 5 0 (list (TmE) (TmH) (TmE))) 9))
+  (steps ((compute both)) refl))
+
+;; Exact-budget acceptance: a cost-4 route under budget 4 lands.
+(claim pcbc_walk_exact_pin
+  (goal () ()
+    (= (pcbc_walk_from 8 8 Nil Nil Nil 2 2 5 4 0 (list (TmE) (TmE))) (WalkDone)))
+  (steps ((compute both)) refl))
+
+;; One unit less refuses at entry — the cost floor.
+(claim pcbc_walk_floor_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from 8 8 Nil Nil Nil 2 2 5 3 0 (list (TmE) (TmE)))
+      (WalkFloor)))
+  (steps ((compute both)) refl))
+
+;; A tolled ARRIVAL hop overdraws a budget the floor accepted: the
+;; arrival step checks its own price.
+(claim pcbc_walk_toll_arrival_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        Nil
+        Nil
+        (list (PToll 2 5))
+        2
+        2
+        5
+        4
+        0
+        (list (TmE) (TmE)))
+      (WalkFloor)))
+  (steps ((compute both)) refl))
+
+;; THE HOLD PRICE PAIR: holding burns budget without closing
+;; distance.  [H,E] to the neighbor costs 5+2: budget 3 dies on the
+;; post-hold floor, budget 7 lands exactly.
+(claim pcbc_walk_hold_floor_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from 8 8 Nil Nil Nil 1 2 5 3 0 (list (TmH) (TmE)))
+      (WalkFloor)))
+  (steps ((compute both)) refl))
+
+(claim pcbc_walk_hold_exact_pin
+  (goal () ()
+    (= (pcbc_walk_from 8 8 Nil Nil Nil 1 2 5 7 0 (list (TmH) (TmE))) (WalkDone)))
+  (steps ((compute both)) refl))
+
+;; Time-conflict attribution survives the pricing: the blocked cell
+;; still reports its space-time cell.
+(claim pcbc_walk_tblocked_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from 8 8 (list 65) Nil Nil 2 2 5 8 0 (list (TmE) (TmE)))
+      (WalkBlocked 65)))
+  (steps ((compute both)) refl))
+
+;; ...and holding until the corridor clears routes at hold price:
+;; cost 5+2+2 under budget 9 exactly.
+(claim pcbc_walk_hold_clears_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from 8 8 (list 65) Nil Nil 2 2 5 9 0 (list (TmH) (TmE) (TmE)))
+      (WalkDone)))
+  (steps ((compute both)) refl))
+
+;; Score pins: g accumulates cost, h = cmove * manhattan, the key is
+;; the end state's space-time cell; a hold advances the key's tick at
+;; hold price; goal arrivals abstain carrying the total.
+(claim pcbc_score_pin
+  (goal () ()
+    (=
+      (pcbc_score 8 8 Nil Nil Nil 3 2 5 100 0 (list (TmE)))
+      (PScore 2 4 (Some (list 65)))))
+  (steps ((compute both)) refl))
+
+(claim pcbc_score_hold_pin
+  (goal () ()
+    (=
+      (pcbc_score 8 8 Nil Nil Nil 3 2 5 100 0 (list (TmH)))
+      (PScore 5 6 (Some (list 64)))))
+  (steps ((compute both)) refl))
+
+(claim pcbc_score_toll_pin
+  (goal () ()
+    (=
+      (pcbc_score 8 8 Nil Nil (list (PToll 1 4)) 3 2 5 100 0 (list (TmE)))
+      (PScore 6 4 (Some (list 65)))))
+  (steps ((compute both)) refl))
+
+(claim pcbc_score_goal_pin
+  (goal () ()
+    (= (pcbc_score 8 8 Nil Nil Nil 1 2 5 100 0 (list (TmE))) (PScore 2 0 None)))
+  (steps ((compute both)) refl))
+
+(claim pcbc_score_budget_bad_pin
+  (goal () ()
+    (=
+      (pcbc_score 8 8 Nil Nil Nil 2 2 5 3 0 (list (TmE)))
+      (PScore 1000000 1000000 None)))
+  (steps ((compute both)) refl))

@@ -1,0 +1,927 @@
+;;; PCB cost instrument: rung B's opening instance — real move costs
+;;; and MIN-COST CLAIMS on the space-time model.  Runtime is
+;;; UNVALIDATED — it fires on CI only:
+;;;   glab ci run -b more-search --variables ENGINE_RUN:1 \
+;;;     --variables ENGINE_RUN_TARGET:tools/search/pcb_cost_probe.shard
+;;;
+;;; THE BOARD (8x8): the wall x=4 with TWO gaps — near (4,3)=28 and
+;;; far (4,6)=52 — keepouts {4,12,20,36,44,60}; nets A (1,3)->(6,3)
+;;; and B (2,4)->(6,4); weights cmove=2, chold=5 (buffering is
+;;; expensive on this fabric), tolls Nil (the toll input is the
+;;; capacity rung's seam; its first live instance arrives there).
+;;;
+;;; THE HAND-DERIVED STORY.  A routes first: d=5 unique straight
+;;; [E,E,E,E,E], trajectory sts 25,90,155,220,285,350, cost 10 = its
+;;; own admissible floor — so MINCOST-A-10 is certified by a single
+;;; EMPTY at budget 9 that refuses AT THE ENTRY FLOOR, before the
+;;; move hole is ever demanded (predict ZERO forks — the
+;;; occupied-start precedent, now for cost).  B then has exactly two
+;;; route families and the OBJECTIVES DISAGREE:
+;;;   FAST (min makespan): 6 spatial moves + ONE hold through the
+;;;        near gap, convoying one cell behind A — makespan 7, cost
+;;;        6*2 + 5 = 17.  Found by the unit-time ladder exactly as
+;;;        in the time instrument: EMPTY d=4 (wall b@164 = (4,4)@t2
+;;;        + transit b@90 + floor), EMPTY d=5, EMPTY d=6 (transit
+;;;        convictions b@90/b@155 at the tick), FOUND d=7 HOLDS-1
+;;;        (parity: 6 spatial moves minimum, 7 breaks parity).
+;;;   CHEAP (min cost): 8 spatial moves, no hold — cost 16 <= any
+;;;        hold route (6 moves + h holds = 12 + 5h; 7 spatial moves
+;;;        cannot arrive by parity; 8 moves = 16).  Two families
+;;;        exist: around the far gap ([S,S,E,E,E,N,N,E]) or
+;;;        backtracking one tick behind A through the near gap
+;;;        ([W,N,E,E,E,E,E,S]) — both cost 16, makespan 8.  The A*
+;;;        drive on the COST score (g = spent cost, h = 2*manhattan,
+;;;        st keys) pops a cost-16 route first: min cost, len 8,
+;;;        holds 0, whichever family wins the f-order.
+;;; So the Pareto pair the Tenstorrent-shaped tension wants: the
+;;; fastest route (makespan 7) costs 17, the cheapest route (cost
+;;; 16) takes makespan 8.  Unit-cost search cannot see the
+;;; difference; the cost objective provably picks the other route.
+;;;
+;;; THE MIN-COST CLAIM, three grades (cost bounds are MONOTONE, so
+;;; ONE EMPTY at C-1 bounds everything cheaper — no ladder climb):
+;;;   witness  — replay-certified route of cost C, cost RE-DERIVED
+;;;              from the moves by pcbc_cost_of (grade: heuristic
+;;;              existence, unconditional);
+;;;   bound, exact — su_find_query_schema_steps at budget C-1 over
+;;;              the depth-capped ladder grammar, NO dominance: dmax
+;;;              = (C-1)/cmin (A: 9/2 -> 4; B: 15/2 -> 7) makes the
+;;;              enumeration exhaustive by the cmin*(dmax+1) > C-1
+;;;              arithmetic (longer routes already cost more);
+;;;   bound, checked — the SAME query on the NEW
+;;;              su_find_query_schema_astar_checked entry: exhaust
+;;;              with dominated>0 returns EMPTY under the model's
+;;;              documented dominance pedigree (pcb_cost_model
+;;;              header).  The instrument CROSS-CHECKS the two
+;;;              grades: both must be EMPTY, or the run fails.
+;;; All claims are per priority order (A's trajectory fixed first,
+;;; injection at tick 0); joint optimality is NOT claimed.
+;;;
+;;; PREDICTIONS for B's bound at 15 (grammar dmax 7): the census
+;;; convicts A's TRANSIT under the COST bound — b@90 ([N,...] at
+;;; t1), b@155 ([E,N,...] at t2) — plus the wall row b@164 and
+;;; floor rows (both cost-16 families die on the cost floor two to
+;;; three steps in: far [S,S,..] at (2,6) with 11 < 12, near
+;;; [W,N,..] at (1,3) with 11 < 12).  The checked arm MUST see
+;;; dominated>0: [E,H] and [H,E] both reach (3,4)@t2 = st 163 live
+;;; at g=7 (the hand-guaranteed duplicate) — the first live use of
+;;; the checked entry's EMPTY.  A's bound at 9: zero forks (entry
+;;; floor).  The FAST ladder's EMPTYs at d=4/5/6 are exact and
+;;; certify min makespan 7 given A, as in the time instrument.
+;;;
+;;; Expected report (both claims verified in-driver before print):
+;;;   PCB-COST 8x8 KEEP-6 NETS-2 FAST-MAKESPAN-7 FAST-COST-17
+;;;   CHEAP-COST-16 CHEAP-MAKESPAN-8 MINCOST-A-10 MINCOST-B-16
+;;;   DOM-CHECKED-AGREE CERT-DISJOINT-OK        (one line)
+;;;
+;;; THE MEASUREMENT (pipeline 231, job 669, 2026-08-01, 236s — the
+;;; predicted story line for line, the report line character for
+;;; character): A d=5 FOUND 3,623 steps / 10 forks; B makespan
+;;; ladder EMPTY 3,733 / 11,324 / 59,100 steps (4 / 10 / 42 forks)
+;;; at d=4/5/6 — transit convictions b@90 + b@155 at every level,
+;;; the wall tick-resolved (b@164/228/292/236), the far-gap
+;;; families dying as floor and short-miss rows — then FOUND d=7 at
+;;; 30,463 / 24 (len 7, cost 17, the one-hold convoy).  The cost
+;;; find popped a cost-16 len-8 route at 111,246 steps / 14 forks /
+;;; 14 DOMINATED (as many duplicate (cell,tick) arrivals merged as
+;;; states expanded).  The bounds: A's EMPTY at 9 = 143 steps, ZERO
+;;; forks, census floor:1 — the entry-floor prediction exactly; B's
+;;; exact EMPTY at 15 = 47,206 / 34 with the SAME conviction census
+;;; as the makespan d=6 EMPTY (b@90/b@155 — the cost bound
+;;; re-convicts A's transit, tick-resolved); B's CHECKED EMPTY at
+;;; 15 = 61,807 / 9 forks / 14 dominated — the checked entry's
+;;; FIRST LIVE EMPTY, agreeing with the exact arm.  Reading,
+;;; recorded honestly: the checked arm spent 3.8x fewer expansions
+;;; (9 vs 34) but 1.31x more steps than the exact ladder at this
+;;; scale (score-template render cost per pop, as on the time
+;;; instrument) — the rung's deliverable is the CLAIM MACHINERY (a
+;;; dominance-pruned exhaust returning a cross-checked exact
+;;; bound), not a speedup at toy slack; divergence pricing remains
+;;; the detour instrument's 20.3x.
+;;;
+;;; CERTIFICATES: the fast pair replays on the unit-time walk, the
+;;; cheap pair on the COST walk at budget = the claimed cost exactly
+;;; (WalkDone certifies cost <= C; pcbc_cost_of re-derives = C), each
+;;; pair cross-occupied both directions + a duplicate-free st union.
+;;;
+;;; RUN: fires on CI via ENGINE_RUN (see above) — never locally.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/driver.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "../../meta/search")
+(import "superpose.shard")
+(import "pcb_route_probe.shard")
+(import "pcb_time_probe.shard")
+(import "tasks/pcb_route_model.shard")
+(import "tasks/pcb_time_model.shard")
+(import "tasks/pcb_cost_model.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel reader *))
+(use (:: kernel loader *))
+(use (:: kernel driver *))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: meta search *))
+(use (:: tools search superpose *))
+(use (:: tools search pcb_route_probe *))
+(use (:: tools search pcb_time_probe *))
+(use (:: tools search tasks pcb_route_model *))
+(use (:: tools search tasks pcb_time_model *))
+(use (:: tools search tasks pcb_cost_model *))
+
+;; ---- the board instance ---------------------------------------------------
+
+(fn pcbcp_wd () Int 8)
+
+(fn pcbcp_ht () Int 8)
+
+;; The wall x=4 minus the near gap (4,3)=28 and the far gap (4,6)=52.
+(fn pcbcp_keepouts () (List Int) (list 4 12 20 36 44 60))
+
+(fn pcbcp_a_start () Int 25)
+
+(fn pcbcp_a_goal () Int 30)
+
+(fn pcbcp_b_start () Int 34)
+
+(fn pcbcp_b_goal () Int 38)
+
+(fn pcbcp_cmove () Int 2)
+
+(fn pcbcp_chold () Int 5)
+
+(fn pcbcp_levels () Int 4)
+
+(fn pcbcp_budget0 () Int 1000000)
+
+(fn pcbcp_bound_cap () Int 4000000)
+
+(fn pcbcp_find_dmax () Int 9)
+
+(fn pcbcp_find_cap () Int 8000000)
+
+(fn pcbcp_free_bud () Int 1000000)
+
+;; Refute cost <= 9 for A (min 10) at dmax 9/2 -> 4; cost <= 15 for
+;; B (min 16) at dmax 15/2 -> 7.
+(fn pcbcp_a_bound () Int 9)
+
+(fn pcbcp_a_bound_d () Int 4)
+
+(fn pcbcp_b_bound () Int 15)
+
+(fn pcbcp_b_bound_d () Int 7)
+
+(fn pcbcp_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "PCB-COST FAIL " (append_int msg "\n")) w)))
+
+;; ---- the model module, loaded for the su evaluator ------------------------
+
+(fn pcbcp_model_file () (List Int) "tools/search/tasks/pcb_cost_model.shard")
+
+(fn pcbcp_model_path () (List Symbol)
+  (list (quote tools) (quote search) (quote tasks) (quote pcb_cost_model)))
+
+(fn pcbcp_model_q ((name Symbol)) QName (QName (pcbcp_model_path) name))
+
+(fn pcbcp_load ((w World)) (Pair PcbpLoadR World)
+  (match (resolve_closure (pcbcp_model_file) False w)
+    ((Pair srcs w1)
+     (match srcs
+       (Nil (Pair (PcbpLoadErr "model closure is empty") w1))
+       (_ (Pair (pcbp_build srcs) w1))))))
+
+;; ---- queries and score templates ------------------------------------------
+
+(fn pcbcp_nil_expr () Expr (Ctor (qn (quote Nil)) Nil))
+
+;; Unit-time query (the makespan objective) against THIS instance's
+;; keepouts; grammar, move order and decoding ride pcb_time_probe's.
+(fn pcbcp_time_query ((occ (List Int)) (goal Int) (d Int) (start Int)) Expr
+  (Call
+    (pcbt_model_q (quote pcbt_walk_from))
+    (list
+      (IntLit (pcbcp_wd))
+      (IntLit (pcbcp_ht))
+      (pcbp_int_list_expr occ)
+      (pcbp_int_list_expr (pcbcp_keepouts))
+      (IntLit goal)
+      (IntLit d)
+      (IntLit start)
+      (hole 0))))
+
+;; Weighted-cost query (the cost objective): cbud is the COST budget.
+(fn pcbcp_cost_query ((occ (List Int)) (goal Int) (cbud Int) (start Int)) Expr
+  (Call
+    (pcbcp_model_q (quote pcbc_walk_from))
+    (list
+      (IntLit (pcbcp_wd))
+      (IntLit (pcbcp_ht))
+      (pcbp_int_list_expr occ)
+      (pcbp_int_list_expr (pcbcp_keepouts))
+      (pcbcp_nil_expr)
+      (IntLit goal)
+      (IntLit (pcbcp_cmove))
+      (IntLit (pcbcp_chold))
+      (IntLit cbud)
+      (IntLit start)
+      (hole 0))))
+
+(fn pcbcp_score_t ((occ (List Int)) (goal Int) (cbud Int) (start Int)) Expr
+  (Call
+    (pcbcp_model_q (quote pcbc_score))
+    (list
+      (IntLit (pcbcp_wd))
+      (IntLit (pcbcp_ht))
+      (pcbp_int_list_expr occ)
+      (pcbp_int_list_expr (pcbcp_keepouts))
+      (pcbcp_nil_expr)
+      (IntLit goal)
+      (IntLit (pcbcp_cmove))
+      (IntLit (pcbcp_chold))
+      (IntLit cbud)
+      (IntLit start)
+      (hole 0))))
+
+;; ---- the makespan ladder (unit time, +1 deepening) ------------------------
+
+(fn pcbcp_tfind
+  ((m Module) (occ (List Int)) (start Int) (goal Int) (d Int) (budget Int))
+  SuFind
+  (su_find_query_schema_steps
+    1000000
+    budget
+    m
+    (pcbp_probe_q (quote candidate))
+    (hole 0)
+    (hole 0)
+    (ms_empty_plan)
+    (pcbcp_time_query occ goal d start)
+    (pcbp_want)
+    (pcbt_grammar_l d (pcbt_move_order start goal))))
+
+(fn pcbcp_tdeepen
+  ((m Module)
+   (occ (List Int))
+   (start Int)
+   (goal Int)
+   (d Int)
+   (levels Int)
+   (budget Int)
+   (w World))
+  (Pair PtNetR World)
+  (measure levels)
+  (if (lt levels 1) (Pair (PtNetStop) w)
+  (match (pcbcp_tfind m occ start goal d budget)
+    ((SuFindErr msg) (Pair (PtNetErr msg) w))
+    ((SuFindFound _ _ _ forks _ steps _ rep census)
+     (let ((w2 (pcbp_log_call start 1 d budget "FOUND" steps forks census w)))
+       (match (pcbt_decode rep)
+         (None (Pair (PtNetErr "undecodable representative") w2))
+         ((Some moves)
+          (Pair
+            (PtNetRoute moves d)
+            (pcbp_log_routed start d (pcbt_len_moves moves) w2))))))
+    ((SuFindEmpty _ _ _ forks _ steps _ _ census)
+     (pcbcp_tdeepen
+       m
+       occ
+       start
+       goal
+       (+ d 1)
+       (- levels 1)
+       (* 2 budget)
+       (pcbp_log_call start 1 d budget "EMPTY" steps forks census w)))
+    ((SuFindBudget _ _ _ forks _ steps _ _ census)
+     (Pair
+       (PtNetStop)
+       (pcbp_log_call start 1 d budget "BUDGET-STOP" steps forks census w))))))
+
+(fn pcbcp_troute ((m Module) (occ (List Int)) (start Int) (goal Int) (w World))
+  (Pair PtNetR World)
+  (pcbcp_tdeepen
+    m
+    occ
+    start
+    goal
+    (pcb_manhattan (pcbcp_wd) start goal)
+    (pcbcp_levels)
+    (pcbcp_budget0)
+    w))
+
+;; ---- the cost find (A* on the cost score, existing entry) -----------------
+
+(fn pcbcp_cost_find
+  ((m Module) (occ (List Int)) (start Int) (goal Int) (w World))
+  (Pair (Option (List PTMove)) World)
+  (match
+    (su_find_query_schema_astar
+      1000000
+      (pcbcp_find_cap)
+      m
+      (pcbp_probe_q (quote candidate))
+      (hole 0)
+      (hole 0)
+      (ms_empty_plan)
+      (pcbcp_cost_query occ goal (pcbcp_free_bud) start)
+      (pcbp_want)
+      (pcbt_grammar_a (pcbcp_find_dmax) (pcbt_move_order start goal))
+      (pcbcp_score_t occ goal (pcbcp_free_bud) start)
+      (pcbcp_nil_expr))
+    ((SuFindErr msg) (Pair None (write (append_int "ASTAR-ERR " msg) w)))
+    ((SuFindEmpty _ _ _ forks _ steps _ _ census)
+     (Pair
+       None
+       (pcbp_log_call
+         start
+         1
+         (pcbcp_find_dmax)
+         (pcbcp_find_cap)
+         "ASTAR-EMPTY"
+         steps
+         forks
+         census
+         w)))
+    ((SuFindBudget _ _ _ forks _ steps _ _ census)
+     (Pair
+       None
+       (pcbp_log_call
+         start
+         1
+         (pcbcp_find_dmax)
+         (pcbcp_find_cap)
+         "ASTAR-BUDGET"
+         steps
+         forks
+         census
+         w)))
+    ((SuFindFound _ _ _ forks _ steps _ rep census)
+     (let
+       ((w2
+          (pcbp_log_call
+            start
+            1
+            (pcbcp_find_dmax)
+            (pcbcp_find_cap)
+            "ASTAR-FOUND"
+            steps
+            forks
+            census
+            w)))
+       (match (pcbt_decode rep)
+         (None (Pair None (write "ASTAR-ERR undecodable representative\n" w2)))
+         ((Some moves)
+          (Pair
+            (Some moves)
+            (pcbp_log_routed start (pcbcp_find_dmax) (pcbt_len_moves moves) w2))))))))
+
+;; ---- the min-cost bounds --------------------------------------------------
+;; Exact grade: the depth-capped ladder grammar, no dominance.
+;; Checked grade: the NEW astar entry, EMPTY licensed by the model's
+;; dominance pedigree.  Each returns whether the bound HELD (EMPTY).
+
+(fn pcbcp_bound_exact
+  ((m Module)
+   (occ (List Int))
+   (start Int)
+   (goal Int)
+   (cbud Int)
+   (d Int)
+   (w World))
+  (Pair Bool World)
+  (match
+    (su_find_query_schema_steps
+      1000000
+      (pcbcp_bound_cap)
+      m
+      (pcbp_probe_q (quote candidate))
+      (hole 0)
+      (hole 0)
+      (ms_empty_plan)
+      (pcbcp_cost_query occ goal cbud start)
+      (pcbp_want)
+      (pcbt_grammar_l d (pcbt_move_order start goal)))
+    ((SuFindErr msg) (Pair False (write (append_int "BOUND-ERR " msg) w)))
+    ((SuFindEmpty _ _ _ forks _ steps _ _ census)
+     (Pair
+       True
+       (pcbp_log_call start 1 d cbud "BOUND-EMPTY" steps forks census w)))
+    ((SuFindFound _ _ _ forks _ steps _ _ census)
+     (Pair
+       False
+       (pcbp_log_call start 1 d cbud "BOUND-FOUND" steps forks census w)))
+    ((SuFindBudget _ _ _ forks _ steps _ _ census)
+     (Pair
+       False
+       (pcbp_log_call start 1 d cbud "BOUND-BUDGET" steps forks census w)))))
+
+(fn pcbcp_bound_checked
+  ((m Module)
+   (occ (List Int))
+   (start Int)
+   (goal Int)
+   (cbud Int)
+   (d Int)
+   (w World))
+  (Pair Bool World)
+  (match
+    (su_find_query_schema_astar_checked
+      1000000
+      (pcbcp_bound_cap)
+      m
+      (pcbp_probe_q (quote candidate))
+      (hole 0)
+      (hole 0)
+      (ms_empty_plan)
+      (pcbcp_cost_query occ goal cbud start)
+      (pcbp_want)
+      (pcbt_grammar_a d (pcbt_move_order start goal))
+      (pcbcp_score_t occ goal cbud start)
+      (pcbcp_nil_expr))
+    ((SuFindErr msg) (Pair False (write (append_int "BOUND-ERR " msg) w)))
+    ((SuFindEmpty _ _ _ forks _ steps _ _ census)
+     (Pair
+       True
+       (pcbp_log_call start 1 d cbud "BOUND-EMPTY-CHECKED" steps forks census w)))
+    ((SuFindFound _ _ _ forks _ steps _ _ census)
+     (Pair
+       False
+       (pcbp_log_call start 1 d cbud "BOUND-FOUND-CHECKED" steps forks census w)))
+    ((SuFindBudget _ _ _ forks _ steps _ _ census)
+     (Pair
+       False
+       (pcbp_log_call
+         start
+         1
+         d
+         cbud
+         "BOUND-BUDGET-CHECKED"
+         steps
+         forks
+         census
+         w)))))
+
+;; ---- certificates ---------------------------------------------------------
+;; Fast pair on the unit-time walk, cheap pair on the COST walk at
+;; budget = the claimed cost exactly (WalkDone certifies <= C and
+;; pcbc_cost_of re-derives = C); each pair cross-occupied both
+;; directions, then a duplicate-free st union.
+
+(fn pcbcp_cost_of ((start Int) (moves (List PTMove))) Int
+  (pcbc_cost_of
+    (pcbcp_wd)
+    (pcbcp_ht)
+    Nil
+    (pcbcp_cmove)
+    (pcbcp_chold)
+    start
+    moves))
+
+(fn pcbcp_cert_time ((ma (List PTMove)) (mb (List PTMove))) Bool
+  (let ((ta (pcbt_traj (pcbcp_wd) (pcbcp_ht) (pcbcp_a_start) 0 ma)))
+    (let ((tb (pcbt_traj (pcbcp_wd) (pcbcp_ht) (pcbcp_b_start) 0 mb)))
+      (match
+        (pcbt_walk_from
+          (pcbcp_wd)
+          (pcbcp_ht)
+          tb
+          (pcbcp_keepouts)
+          (pcbcp_a_goal)
+          (pcbt_len_moves ma)
+          (pcbcp_a_start)
+          ma)
+        ((WalkDone)
+         (match
+           (pcbt_walk_from
+             (pcbcp_wd)
+             (pcbcp_ht)
+             ta
+             (pcbcp_keepouts)
+             (pcbcp_b_goal)
+             (pcbt_len_moves mb)
+             (pcbcp_b_start)
+             mb)
+           ((WalkDone) (pcbp_dup_free (pcbp_app_cells ta tb)))
+           (_ False)))
+        (_ False)))))
+
+(fn pcbcp_cert_cost ((ma (List PTMove)) (ca Int) (mb (List PTMove)) (cb Int))
+  Bool
+  (let ((ta (pcbt_traj (pcbcp_wd) (pcbcp_ht) (pcbcp_a_start) 0 ma)))
+    (let ((tb (pcbt_traj (pcbcp_wd) (pcbcp_ht) (pcbcp_b_start) 0 mb)))
+      (if (int_eq (pcbcp_cost_of (pcbcp_a_start) ma) ca)
+        (if (int_eq (pcbcp_cost_of (pcbcp_b_start) mb) cb)
+          (match
+            (pcbc_walk_from
+              (pcbcp_wd)
+              (pcbcp_ht)
+              tb
+              (pcbcp_keepouts)
+              Nil
+              (pcbcp_a_goal)
+              (pcbcp_cmove)
+              (pcbcp_chold)
+              ca
+              (pcbcp_a_start)
+              ma)
+            ((WalkDone)
+             (match
+               (pcbc_walk_from
+                 (pcbcp_wd)
+                 (pcbcp_ht)
+                 ta
+                 (pcbcp_keepouts)
+                 Nil
+                 (pcbcp_b_goal)
+                 (pcbcp_cmove)
+                 (pcbcp_chold)
+                 cb
+                 (pcbcp_b_start)
+                 mb)
+               ((WalkDone) (pcbp_dup_free (pcbp_app_cells ta tb)))
+               (_ False)))
+            (_ False))
+          False)
+        False))))
+
+;; ---- the report -----------------------------------------------------------
+
+(fn pcbcp_report
+  ((ma (List PTMove)) (mbf (List PTMove)) (mbc (List PTMove)) (w World))
+  World
+  (write
+    (append_int
+      "PCB-COST 8x8 KEEP-6 NETS-2 FAST-MAKESPAN-"
+      (append_int
+        (show_int (pcbt_max2 (pcbt_len_moves ma) (pcbt_len_moves mbf)))
+        (append_int
+          " FAST-COST-"
+          (append_int
+            (show_int (pcbcp_cost_of (pcbcp_b_start) mbf))
+            (append_int
+              " CHEAP-COST-"
+              (append_int
+                (show_int (pcbcp_cost_of (pcbcp_b_start) mbc))
+                (append_int
+                  " CHEAP-MAKESPAN-"
+                  (append_int
+                    (show_int
+                      (pcbt_max2 (pcbt_len_moves ma) (pcbt_len_moves mbc)))
+                    (append_int
+                      " MINCOST-A-"
+                      (append_int
+                        (show_int (pcbcp_cost_of (pcbcp_a_start) ma))
+                        (append_int
+                          " MINCOST-B-"
+                          (append_int
+                            (show_int (pcbcp_cost_of (pcbcp_b_start) mbc))
+                            " DOM-CHECKED-AGREE CERT-DISJOINT-OK\n"))))))))))))
+    w))
+
+;; ---- the driver -----------------------------------------------------------
+;; Witness costs must land exactly one over their bound constants —
+;; a drifted instance fails loudly instead of printing a stale claim.
+
+(fn pcbcp_bounds_and_report
+  ((m Module)
+   (ma (List PTMove))
+   (mbf (List PTMove))
+   (mbc (List PTMove))
+   (ta (List Int))
+   (w World))
+  World
+  (match
+    (pcbcp_bound_exact
+      m
+      Nil
+      (pcbcp_a_start)
+      (pcbcp_a_goal)
+      (pcbcp_a_bound)
+      (pcbcp_a_bound_d)
+      w)
+    ((Pair False w2) (pcbcp_fail "A cost bound did not hold" w2))
+    ((Pair True w2)
+     (match
+       (pcbcp_bound_exact
+         m
+         ta
+         (pcbcp_b_start)
+         (pcbcp_b_goal)
+         (pcbcp_b_bound)
+         (pcbcp_b_bound_d)
+         w2)
+       ((Pair False w3) (pcbcp_fail "B cost bound did not hold" w3))
+       ((Pair True w3)
+        (match
+          (pcbcp_bound_checked
+            m
+            ta
+            (pcbcp_b_start)
+            (pcbcp_b_goal)
+            (pcbcp_b_bound)
+            (pcbcp_b_bound_d)
+            w3)
+          ((Pair False w4)
+           (pcbcp_fail "checked bound disagrees with exact bound" w4))
+          ((Pair True w4)
+           (if (pcbcp_cert_time ma mbf)
+             (if
+               (pcbcp_cert_cost
+                 ma
+                 (+ (pcbcp_a_bound) 1)
+                 mbc
+                 (+ (pcbcp_b_bound) 1))
+               (pcbcp_report ma mbf mbc w4)
+               (pcbcp_fail "cost certificate rejected" w4))
+             (pcbcp_fail "time certificate rejected" w4)))))))))
+
+(fn pcbcp_run ((m Module) (w World)) World
+  (match (pcbcp_troute m Nil (pcbcp_a_start) (pcbcp_a_goal) w)
+    ((Pair (PtNetErr msg) w1) (pcbcp_fail msg w1))
+    ((Pair (PtNetStop) w1) (pcbcp_fail "net A unrouted" w1))
+    ((Pair (PtNetRoute ma _) w1)
+     (let ((ta (pcbt_traj (pcbcp_wd) (pcbcp_ht) (pcbcp_a_start) 0 ma)))
+       (match (pcbcp_troute m ta (pcbcp_b_start) (pcbcp_b_goal) w1)
+         ((Pair (PtNetErr msg) w2) (pcbcp_fail msg w2))
+         ((Pair (PtNetStop) w2) (pcbcp_fail "net B fast unrouted" w2))
+         ((Pair (PtNetRoute mbf _) w2)
+          (match (pcbcp_cost_find m ta (pcbcp_b_start) (pcbcp_b_goal) w2)
+            ((Pair None w3) (pcbcp_fail "net B cost find failed" w3))
+            ((Pair (Some mbc) w3)
+             (if
+               (int_eq (pcbcp_cost_of (pcbcp_a_start) ma) (+ (pcbcp_a_bound) 1))
+               (if
+                 (int_eq
+                   (pcbcp_cost_of (pcbcp_b_start) mbc)
+                   (+ (pcbcp_b_bound) 1))
+                 (pcbcp_bounds_and_report m ma mbf mbc ta w3)
+                 (pcbcp_fail "B witness cost is not bound+1" w3))
+               (pcbcp_fail "A witness cost is not bound+1" w3))))))))))
+
+(fn main ((w World)) World
+  (match (pcbcp_load w)
+    ((Pair (PcbpLoadErr msg) w1) (pcbcp_fail msg w1))
+    ((Pair (PcbpLoadOk m) w1) (pcbcp_run m w1))))
+
+;; ---- instance pins (the hand-derived story, checked) ----------------------
+
+;; A's straight route at exactly its cost: budget 10 lands...
+(claim pcbcp_a_cost_route_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        Nil
+        (pcbcp_keepouts)
+        Nil
+        30
+        2
+        5
+        10
+        25
+        (list (TmE) (TmE) (TmE) (TmE) (TmE)))
+      (WalkDone)))
+  (steps ((compute both)) refl))
+
+;; ...and budget 9 refuses at the ENTRY floor — the whole MINCOST-A
+;; bound in one walk, before any hole is demanded.
+(claim pcbcp_a_bound_floor_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        Nil
+        (pcbcp_keepouts)
+        Nil
+        30
+        2
+        5
+        9
+        25
+        (list (TmE) (TmE) (TmE) (TmE) (TmE)))
+      (WalkFloor)))
+  (steps ((compute both)) refl))
+
+;; B's FAST route (makespan 7, one hold) is legal on the unit-time
+;; walk against A's trajectory and the two-gap keepouts...
+(claim pcbcp_b_fast_route_pin
+  (goal () ()
+    (=
+      (pcbt_walk_from
+        8
+        8
+        (list 25 90 155 220 285 350)
+        (pcbcp_keepouts)
+        38
+        7
+        34
+        (list (TmE) (TmH) (TmN) (TmE) (TmE) (TmE) (TmS)))
+      (WalkDone)))
+  (steps ((compute both)) refl))
+
+;; ...costs 17 (6 moves + one hold)...
+(claim pcbcp_b_fast_cost_pin
+  (goal () ()
+    (=
+      (pcbc_cost_of
+        8
+        8
+        Nil
+        2
+        5
+        34
+        (list (TmE) (TmH) (TmN) (TmE) (TmE) (TmE) (TmS)))
+      17))
+  (steps ((compute both)) refl))
+
+;; ...and dies on the COST floor under budget 15 (after E,H the
+;; remainder 6 cannot fund the 4-away floor 8).
+(claim pcbcp_b_fast_refused_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        (list 25 90 155 220 285 350)
+        (pcbcp_keepouts)
+        Nil
+        38
+        2
+        5
+        15
+        34
+        (list (TmE) (TmH) (TmN) (TmE) (TmE) (TmE) (TmS)))
+      (WalkFloor)))
+  (steps ((compute both)) refl))
+
+;; Both CHEAP families land at budget 16 exactly: around the far gap...
+(claim pcbcp_b_cheap_far_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        (list 25 90 155 220 285 350)
+        (pcbcp_keepouts)
+        Nil
+        38
+        2
+        5
+        16
+        34
+        (list (TmS) (TmS) (TmE) (TmE) (TmE) (TmN) (TmN) (TmE)))
+      (WalkDone)))
+  (steps ((compute both)) refl))
+
+;; ...and backtracking one tick behind A through the near gap.
+(claim pcbcp_b_cheap_near_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        (list 25 90 155 220 285 350)
+        (pcbcp_keepouts)
+        Nil
+        38
+        2
+        5
+        16
+        34
+        (list (TmW) (TmN) (TmE) (TmE) (TmE) (TmE) (TmE) (TmS)))
+      (WalkDone)))
+  (steps ((compute both)) refl))
+
+;; At budget 15 the far family dies on the cost floor two steps in
+;; ((2,6) is 6 away with only 11 left)...
+(claim pcbcp_b_cheap_refused_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        (list 25 90 155 220 285 350)
+        (pcbcp_keepouts)
+        Nil
+        38
+        2
+        5
+        15
+        34
+        (list (TmS) (TmS) (TmE) (TmE) (TmE) (TmN) (TmN) (TmE)))
+      (WalkFloor)))
+  (steps ((compute both)) refl))
+
+;; ...and the COST bound's census convicts A's TRANSIT, tick-resolved,
+;; exactly as the unit-time EMPTY did: [N,...] at (2,3)@t1...
+(claim pcbcp_b_transit1_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        (list 25 90 155 220 285 350)
+        (pcbcp_keepouts)
+        Nil
+        38
+        2
+        5
+        15
+        34
+        (list (TmN)))
+      (WalkBlocked 90)))
+  (steps ((compute both)) refl))
+
+;; ...[E,N,...] at (3,3)@t2.
+(claim pcbcp_b_transit2_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        (list 25 90 155 220 285 350)
+        (pcbcp_keepouts)
+        Nil
+        38
+        2
+        5
+        15
+        34
+        (list (TmE) (TmN)))
+      (WalkBlocked 155)))
+  (steps ((compute both)) refl))
+
+;; THE DOMINATED TWIN: [E,H] and [H,E] both end at (3,4)@t2 = st 163,
+;; live at g=7 under budget 15 — identical keys, so the checked
+;; bound's frontier MUST merge one (dominated>0 guaranteed by hand).
+(claim pcbcp_dom_twin1_pin
+  (goal () ()
+    (=
+      (pcbc_score
+        8
+        8
+        (list 25 90 155 220 285 350)
+        (pcbcp_keepouts)
+        Nil
+        38
+        2
+        5
+        15
+        34
+        (list (TmE) (TmH)))
+      (PScore 7 6 (Some (list 163)))))
+  (steps ((compute both)) refl))
+
+(claim pcbcp_dom_twin2_pin
+  (goal () ()
+    (=
+      (pcbc_score
+        8
+        8
+        (list 25 90 155 220 285 350)
+        (pcbcp_keepouts)
+        Nil
+        38
+        2
+        5
+        15
+        34
+        (list (TmH) (TmE)))
+      (PScore 7 6 (Some (list 163)))))
+  (steps ((compute both)) refl))
+
+;; The fast pair shares no space-time cell (the convoy, one behind).
+(claim pcbcp_disjoint_fast_pin
+  (goal () ()
+    (=
+      (pcbp_dup_free
+        (pcbp_app_cells
+          (pcbt_traj 8 8 25 0 (list (TmE) (TmE) (TmE) (TmE) (TmE)))
+          (pcbt_traj 8 8 34 0 (list (TmE) (TmH) (TmN) (TmE) (TmE) (TmE) (TmS)))))
+      True))
+  (steps ((compute both)) refl))
+
+;; So does the cheap pair (far family shown).
+(claim pcbcp_disjoint_cheap_pin
+  (goal () ()
+    (=
+      (pcbp_dup_free
+        (pcbp_app_cells
+          (pcbt_traj 8 8 25 0 (list (TmE) (TmE) (TmE) (TmE) (TmE)))
+          (pcbt_traj
+            8
+            8
+            34
+            0
+            (list (TmS) (TmS) (TmE) (TmE) (TmE) (TmN) (TmN) (TmE)))))
+      True))
+  (steps ((compute both)) refl))

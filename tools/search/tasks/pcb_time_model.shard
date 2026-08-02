@@ -1,0 +1,306 @@
+;;; PCB space-time routing model (the time-axis formulation): the
+;;; routing board gains a TICK axis.  A net's route is a move list
+;;; over {N,E,S,W,H} — H is a HOLD — executed from tick 0; the packet
+;;; occupies exactly one cell per tick and VANISHES on arrival
+;;; (transfer semantics: its cells free up afterward, so nets can
+;;; time-share a corridor — the whole point of the axis).  Occupancy
+;;; is a plain Int list of SPACE-TIME CELLS st = t*(W*H) + c: the
+;;; entire Int-set machinery (pcb_mem, census payloads, ownership
+;;; scans) transfers verbatim, and a census row now says not just
+;;; WHERE a walk was blocked but WHEN.  Keepouts stay a separate
+;;; purely-spatial list (forbidden at every tick).  Conflicts are
+;;; VERTEX conflicts only (same cell, same tick) — head-to-tail
+;;; convoys one cell apart are legal, as on a streaming NoC; the swap
+;;; check is a follow-on knob.  Nets are TWO-PIN (single goal cell);
+;;; multicast-in-time is a later rung.
+;;;
+;;; TWO SPATIAL-MODEL RESULTS RETIRE, soundly: (1) self-avoidance —
+;;; in space-time, revisiting a cell at a later tick can be NECESSARY
+;;; (step aside, let the other packet pass, come back), and dropping
+;;; the pruning needs no completeness lemma at all: the schema
+;;; enumerates every move list outright, so a depth-d EMPTY is an
+;;; exact conditional refutation with no loop-erasure argument.
+;;; (2) parity deepening — a hold changes arrival parity, so ladders
+;;; step +1 unconditionally.  The admissible floor SURVIVES: distance
+;;; falls by at most 1 per tick (0 on holds), so remaining budget <
+;;; Manhattan distance still refuses before demanding the move list.
+;;;
+;;; CHECK ORDER differs from the spatial walk, deliberately: blocked
+;;; BEFORE goal.  Arrival is a real conflict in time — another packet
+;;; transiting the goal cell at the arrival tick refuses the walk
+;;; (the spatial model checks goal first because a net's own tree is
+;;; never in its occupancy).
+;;;
+;;; THE DOMINANCE PAYOFF (why this model is the A* drive's cleanest
+;;; consumer): for one net against fixed trajectories, (cell, tick)
+;;; is the COMPLETE state — every path arriving there has cost
+;;; exactly t and an identical future — so first-arrival dominance
+;;; on st keys is pure duplicate detection, zero loss; the spatial
+;;; model's prefix-commitment miss vanishes.  Arrivals at the same
+;;; cell at DIFFERENT ticks are different states and correctly never
+;;; dominate each other (earlier is not better if the corridor has
+;;; not cleared).  The search space collapses from exponential
+;;; path-count to at most W*H*T states.
+;;;
+;;; No theorem laws, same structural reason as the spatial model:
+;;; interior rewrites are unsound once occupancy makes observation
+;;; position- (now position-and-time-) sensitive.
+
+(import "../../../kernel/stdlib.shard")
+(import "pcb_route_model.shard")
+
+(use (:: core List))
+(use (:: core Nil))
+(use (:: core Cons))
+(use (:: tools search tasks pcb_route_model *))
+
+(type PTMove (TmN) (TmE) (TmS) (TmW) (TmH))
+
+;; Spatial step: a hold stays put (never off-grid); the four compass
+;; moves delegate to the spatial model's stepper (-1 = off the board).
+(fn pcbt_sp ((wd Int) (ht Int) (m PTMove) (c Int)) Int
+  (match m
+    ((TmN) (pcb_step wd ht (MvN) c))
+    ((TmE) (pcb_step wd ht (MvE) c))
+    ((TmS) (pcb_step wd ht (MvS) c))
+    ((TmW) (pcb_step wd ht (MvW) c))
+    ((TmH) c)))
+
+;; The space-time cell: tick t at cell c.  At t=0 the encoding is the
+;; bare cell, so a spatial occupancy check at tick 0 is pcb_mem on c.
+(fn pcbt_st ((wd Int) (ht Int) (t Int) (c Int)) Int (+ (* t (* wd ht)) c))
+
+;; The bounded space-time walk.  budget = remaining ticks (horizon
+;; minus t); every move including a hold consumes one.  Result
+;; vocabulary is the spatial model's PWalkR — WalkBlocked carries the
+;; SPACE-TIME cell, so the census attributes kills to (cell, tick).
+(fn pcbt_walk
+  ((wd Int)
+   (ht Int)
+   (occ (List Int))
+   (keeps (List Int))
+   (goal Int)
+   (budget Int)
+   (c Int)
+   (t Int)
+   (moves (List PTMove)))
+  PWalkR
+  (measure (struct moves))
+  (if (lt budget (pcb_manhattan wd c goal)) (WalkFloor)
+  (match moves
+    (Nil (WalkMiss c))
+    ((Cons m rest)
+     (let ((c2 (pcbt_sp wd ht m c)))
+       (if (lt c2 0) (WalkOff)
+       (let ((t2 (+ t 1)))
+         (let ((st (pcbt_st wd ht t2 c2)))
+           (if (pcb_mem c2 keeps) (WalkBlocked st)
+           (if (pcb_mem st occ) (WalkBlocked st)
+           (if (int_eq c2 goal)
+             (match rest
+               (Nil (WalkDone))
+               ((Cons _ _) (WalkCross c2)))
+             (pcbt_walk wd ht occ keeps goal (- budget 1) c2 t2 rest))))))))))))
+
+;; The query/replay entry: refuses a keepout or occupied START (its
+;; st at tick 0 is the bare cell) before walking.
+(fn pcbt_walk_from
+  ((wd Int)
+   (ht Int)
+   (occ (List Int))
+   (keeps (List Int))
+   (goal Int)
+   (budget Int)
+   (start Int)
+   (moves (List PTMove)))
+  PWalkR
+  (if (pcb_mem start keeps) (WalkBlocked start)
+  (if (pcb_mem start occ) (WalkBlocked start)
+  (pcbt_walk wd ht occ keeps goal budget start 0 moves))))
+
+;; A route's space-time trajectory, start at tick t included (use on
+;; known-legal routes; mirrors pcb_cells).
+(fn pcbt_traj ((wd Int) (ht Int) (c Int) (t Int) (moves (List PTMove)))
+  (List Int)
+  (measure (struct moves))
+  (match moves
+    (Nil (Cons (pcbt_st wd ht t c) Nil))
+    ((Cons m rest)
+     (Cons
+       (pcbt_st wd ht t c)
+       (pcbt_traj wd ht (pcbt_sp wd ht m c) (+ t 1) rest)))))
+
+;; --- the A* score hook ------------------------------------------------------
+;; Same contract as the spatial hook (PScore reused): g = ticks spent,
+;; h = the admissible Manhattan floor, key = the END STATE's space-time
+;; cell — the pure-duplicate dominance state.  Dead prefixes score
+;; last and ABSTAIN; exact goal arrivals ABSTAIN (a goal-ended open
+;; prefix renders identically to its own Nil-completion under the
+;; cut, and terminal states carry no dominance value).  Legality
+;; mirrors pcbt_walk exactly, including blocked-before-goal.
+
+(fn pcbt_score_go
+  ((wd Int)
+   (ht Int)
+   (occ (List Int))
+   (keeps (List Int))
+   (goal Int)
+   (c Int)
+   (t Int)
+   (moves (List PTMove)))
+  PScore
+  (measure (struct moves))
+  (match moves
+    (Nil
+      (PScore t (pcb_manhattan wd c goal) (Some (Cons (pcbt_st wd ht t c) Nil))))
+    ((Cons m rest)
+     (let ((c2 (pcbt_sp wd ht m c)))
+       (if (lt c2 0) (pcb_score_bad)
+       (let ((t2 (+ t 1)))
+         (let ((st (pcbt_st wd ht t2 c2)))
+           (if (pcb_mem c2 keeps) (pcb_score_bad)
+           (if (pcb_mem st occ) (pcb_score_bad)
+           (if (int_eq c2 goal)
+             (match rest
+               (Nil (PScore t2 0 None))
+               ((Cons _ _) (pcb_score_bad)))
+             (pcbt_score_go wd ht occ keeps goal c2 t2 rest)))))))))))
+
+(fn pcbt_score
+  ((wd Int)
+   (ht Int)
+   (occ (List Int))
+   (keeps (List Int))
+   (goal Int)
+   (start Int)
+   (moves (List PTMove)))
+  PScore
+  (if (pcb_mem start keeps) (pcb_score_bad)
+  (if (pcb_mem start occ) (pcb_score_bad)
+  (pcbt_score_go wd ht occ keeps goal start 0 moves))))
+
+;; --- ground pins (8-wide board, W*H = 64, so st = 64t + c) -----------------
+
+(claim pcbt_walk_done_pin
+  (goal () ()
+    (= (pcbt_walk_from 8 8 Nil Nil 3 3 0 (list (TmE) (TmE) (TmE))) (WalkDone)))
+  (steps ((compute both)) refl))
+
+;; THE HOLD PIN PAIR — the axis in two lines.  Cell 1 is occupied at
+;; tick 1 only (st 65).  Marching straight hits it; holding one tick
+;; lets it clear and the same corridor routes.
+(claim pcbt_walk_tblocked_pin
+  (goal () ()
+    (=
+      (pcbt_walk_from 8 8 (list 65) Nil 2 2 0 (list (TmE) (TmE)))
+      (WalkBlocked 65)))
+  (steps ((compute both)) refl))
+
+(claim pcbt_walk_hold_pin
+  (goal () ()
+    (=
+      (pcbt_walk_from 8 8 (list 65) Nil 2 3 0 (list (TmH) (TmE) (TmE)))
+      (WalkDone)))
+  (steps ((compute both)) refl))
+
+;; Spatial revisits are LEGAL in space-time (E,W back onto the start,
+;; then E,E,E on) — the spatial model refuses this exact shape; here
+;; a walk never repeats a SPACE-TIME cell because t strictly
+;; increases, so there is nothing to avoid.
+(claim pcbt_walk_revisit_pin
+  (goal () ()
+    (=
+      (pcbt_walk_from 8 8 Nil Nil 3 5 0 (list (TmE) (TmW) (TmE) (TmE) (TmE)))
+      (WalkDone)))
+  (steps ((compute both)) refl))
+
+;; A keepout refuses at every tick; the census payload is still the
+;; space-time cell of the attempted step.
+(claim pcbt_walk_keep_pin
+  (goal () ()
+    (=
+      (pcbt_walk_from 8 8 Nil (list 1) 3 3 0 (list (TmE) (TmE) (TmE)))
+      (WalkBlocked 65)))
+  (steps ((compute both)) refl))
+
+(claim pcbt_walk_start_blocked_pin
+  (goal () ()
+    (=
+      (pcbt_walk_from 8 8 (list 0) Nil 3 3 0 (list (TmE) (TmE) (TmE)))
+      (WalkBlocked 0)))
+  (steps ((compute both)) refl))
+
+(claim pcbt_walk_start_keep_pin
+  (goal () ()
+    (=
+      (pcbt_walk_from 8 8 Nil (list 0) 3 3 0 (list (TmE) (TmE) (TmE)))
+      (WalkBlocked 0)))
+  (steps ((compute both)) refl))
+
+(claim pcbt_walk_floor_pin
+  (goal () () (= (pcbt_walk_from 8 8 Nil Nil 7 2 0 Nil) (WalkFloor)))
+  (steps ((compute both)) refl))
+
+;; Holds burn budget without closing distance — the floor stays
+;; admissible against them.
+(claim pcbt_walk_hold_floor_pin
+  (goal () () (= (pcbt_walk_from 8 8 Nil Nil 1 1 0 (list (TmH))) (WalkFloor)))
+  (steps ((compute both)) refl))
+
+(claim pcbt_walk_cross_pin
+  (goal () ()
+    (=
+      (pcbt_walk_from 8 8 Nil Nil 1 3 0 (list (TmE) (TmE) (TmE)))
+      (WalkCross 1)))
+  (steps ((compute both)) refl))
+
+(claim pcbt_walk_miss_pin
+  (goal () () (= (pcbt_walk_from 8 8 Nil Nil 3 3 0 (list (TmE))) (WalkMiss 1)))
+  (steps ((compute both)) refl))
+
+(claim pcbt_walk_offgrid_pin
+  (goal () () (= (pcbt_walk_from 8 8 Nil Nil 8 1 0 (list (TmN))) (WalkOff)))
+  (steps ((compute both)) refl))
+
+;; Blocked-before-goal: an arrival onto a cell another packet is
+;; transiting at that tick REFUSES — delivery needs the slot free.
+(claim pcbt_walk_arrival_blocked_pin
+  (goal () ()
+    (= (pcbt_walk_from 8 8 (list 65) Nil 1 1 0 (list (TmE))) (WalkBlocked 65)))
+  (steps ((compute both)) refl))
+
+(claim pcbt_traj_pin
+  (goal () ()
+    (= (pcbt_traj 8 8 0 0 (list (TmE) (TmH) (TmS))) (list 0 65 129 201)))
+  (steps ((compute both)) refl))
+
+;; Score pins: a live prefix keys on its space-time end state; a hold
+;; advances the key's tick without moving the cell (same cell,
+;; different tick = different dominance state).
+(claim pcbt_score_pin
+  (goal () ()
+    (= (pcbt_score 8 8 Nil Nil 3 0 (list (TmE))) (PScore 1 2 (Some (list 65)))))
+  (steps ((compute both)) refl))
+
+(claim pcbt_score_hold_pin
+  (goal () ()
+    (= (pcbt_score 8 8 Nil Nil 3 0 (list (TmH))) (PScore 1 3 (Some (list 64)))))
+  (steps ((compute both)) refl))
+
+(claim pcbt_score_goal_pin
+  (goal () () (= (pcbt_score 8 8 Nil Nil 1 0 (list (TmE))) (PScore 1 0 None)))
+  (steps ((compute both)) refl))
+
+(claim pcbt_score_tblocked_pin
+  (goal () ()
+    (=
+      (pcbt_score 8 8 (list 65) Nil 2 0 (list (TmE) (TmE)))
+      (PScore 1000000 1000000 None)))
+  (steps ((compute both)) refl))
+
+(claim pcbt_score_start_blocked_pin
+  (goal () ()
+    (=
+      (pcbt_score 8 8 (list 0) Nil 3 0 (list (TmE)))
+      (PScore 1000000 1000000 None)))
+  (steps ((compute both)) refl))

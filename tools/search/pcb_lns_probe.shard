@@ -1,0 +1,793 @@
+;;; PCB global-objective LNS instrument: destroy-and-repair over
+;;; insertion orders, TOTAL TRUE COST as the acceptance criterion —
+;;; the first driver on this substrate where the SUM is consulted.
+;;; Runtime is UNVALIDATED — it fires on CI only:
+;;;   glab ci run -b more-search --variables ENGINE_RUN:1 \
+;;;     --variables ENGINE_RUN_TARGET:tools/search/pcb_lns_probe.shard
+;;;
+;;; THE LOOP.  Every prior driver is feasibility-first and
+;;; order-taking: each net cost-optimal GIVEN its predecessors, the
+;;; total never consulted.  Here the state is a priority ORDER; a
+;;; move swaps an adjacent pair and re-routes the whole order with
+;;; the A* cost solver (hard occupancy, as in rung B); accept iff
+;;; the total strictly improves; a full sweep with no accept =
+;;; LOCAL-OPT.  The pair swap is the SMALLEST genuine neighborhood:
+;;; ripping a single net and re-inserting it against everyone is a
+;;; provable no-op (its old route stays feasible, and every cheaper
+;;; route was already blocked by a predecessor — a subset of what it
+;;; now faces).  Greedy strict descent is monotone, so no cycling
+;;; and no tabu store yet.  Zero engine changes, zero model changes.
+;;;
+;;; WHY THIS INSTANCE (a finding, learned deriving it): under
+;;; vertex-only conflicts every net with ANY free adjacent cell —
+;;; including its own previous cell — can yield by a two-move
+;;; wiggle, so the unit yield price is UNIVERSALLY min(chold,
+;;; 2*cmove) (= 4 here); asymmetric yield PRICES are impossible
+;;; (the tunnel instance first sketched for this slice fails: the
+;;; retreat-step wiggle is unblockable), and two-net order swaps
+;;; always tie.  Strict order gaps need asymmetric yield COUNTS —
+;;; CASCADES.  Hence: ZERO keepouts, three straight nets, pure
+;;; net-net interaction.  A (4,0)->(4,5) vertical crosses B
+;;; (1,3)->(6,3) at cell 28 tick 3 and C (0,4)->(6,4) at cell 36
+;;; tick 4 — both equidistant, both real.  A's two blockers are
+;;; CONSECUTIVE on its path, so ONE +2 delay by A clears both
+;;; crossings (+4 total); but any order routing A before B lets A
+;;; commit through 28@t3, and then B yields AND (A straight) C
+;;; yields too, or (A dodging C behind another net) A's wiggle
+;;; tramples B's whole corridor window — TWO yields either way.
+;;; Hand-derived totals over all six orders (bases 10+10+12 = 32):
+;;;   A-before-B orders — (A,B,C) (A,C,B) (C,A,B) — total 40 (+8);
+;;;   B-before-A orders — (B,A,C) (B,C,A) (C,B,A) — total 36 (+4).
+;;; 36 is the joint optimum on paper: A and B both want 28@t3, so
+;;; someone pays >= +4 (parity kills +1 arrivals; holds cost 5);
+;;; 36 achieves exactly one yield.  The greedy-natural initial
+;;; order (A,B,C) is globally wrong from the wrong end — the net
+;;; that should absorb the delay is the one greedy sends first.
+;;;
+;;; THE HAND-DERIVED TRACE (every pop of all 12 queries simulated
+;;; against the heap law: f asc, g DESC, earlier seq first; children
+;;; pushed in alternative order Nil then move order):
+;;;   EVAL 4,25,32 TOTAL=40 INIT — A straight [S*5] 6 forks/0 dom;
+;;;        B blocked at 28@t3, row-2 dodge [E,E,N,E,E,E,S] cost 14,
+;;;        8 forks/3 dom (the three f=10 Nil leftovers); C blocked
+;;;        at 36@t4 AND fenced by B's dodge at 30@t7, row-3 dodge
+;;;        [E,E,E,N,E,E,S,E] cost 16, 9 forks/4 dom.
+;;;   EVAL 25,4,32 TOTAL=36 ACCEPT — B straight [E*5] 6/0; A
+;;;        blocked at 28@t3, wiggles at (4,2): [S,S,E,W,S,S,S] cost
+;;;        14, 8 forks/3 dom, clearing BOTH crossings (28@t5,
+;;;        36@t6); C rides FREE: straight [E*6] cost 12, 7/0.
+;;;   EVAL 4,25,32 TOTAL=40 REJECT — the re-swap re-runs the INIT
+;;;        routing verbatim (determinism self-check).
+;;;   EVAL 25,32,4 TOTAL=36 REJECT — the strict gate refuses a tie
+;;;        (C second routes straight 7/0; A third dodges both
+;;;        crossings with the same one delay, 8/3).
+;;;   LOCAL-OPT best=36
+;;;   PCB-LNS 8x8 KEEP-0 NETS-3 INIT-40 BEST-36 ACCEPTED-1
+;;;   REJECTED-2 LOCAL-OPT CERT-DISJOINT-OK          (one line)
+;;; (Fork/dominated counts are exact predictions; the capacity rung
+;;; measured band-accounting drift of one-to-two pops on the larger
+;;; searches, so treat the witnesses and totals as the claim-bearing
+;;; beats.)
+;;;
+;;; THE MEASUREMENT (pipeline 239, job 685, 2026-08-01, 371s — the
+;;; trace line for line, and this time the pop simulation was EXACT
+;;; on all twelve queries): INIT A 20,249 steps / 6 forks / 0
+;;; dominated, B 53,696 / 8 / sym:3, C 92,257 / 9 / sym:4, TOTAL=40;
+;;; the accepted swap B 20,045 / 6 / 0, A 53,660 / 8 / sym:3, C
+;;; 58,534 / 7 / 0, TOTAL=36; the re-swap re-ran the INIT routing
+;;; with BYTE-IDENTICAL step counters (20,249 / 53,696 / 92,257 —
+;;; the determinism self-check predicted in the header), REJECT; the
+;;; tie order (B,C,A) = 36 strictly REJECTED (C second 41,993 / 7 /
+;;; 0 — cheaper against smaller occupancy — A third 72,063 / 8 /
+;;; sym:3, same one-delay witness class); LOCAL-OPT best=36, both
+;;; assertions and the n-net certificate passed in-run.  ~599k
+;;; engine steps across the twelve queries.
+;;;
+;;; CLAIM POSTURE: heuristic existence only.  LOCAL-OPT is local
+;;; w.r.t. THIS neighborhood AND the heuristic inner routes (astar
+;;; finds are not certified minima; the joint-optimum argument above
+;;; is paper, not machine).  The driver asserts INIT=40 and BEST=36
+;;; against the hand-derived constants before printing (drift fails
+;;; loudly); the certificate replays every net against the union of
+;;; the OTHERS' trajectories at budget = claimed cost exactly, costs
+;;; re-derived from moves, then a duplicate-free st union.  The
+;;; exact-tier answer to the same question — a joint two-net product
+;;; query with a real joint MIN bound — is the named follow-on rung.
+;;; This slice also delivers the banked astar-LNS migration: the
+;;; LNS inner solver is the A* cost tap.
+;;;
+;;; RUN: fires on CI via ENGINE_RUN (see above) — never locally.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/driver.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "../../meta/search")
+(import "superpose.shard")
+(import "pcb_route_probe.shard")
+(import "pcb_time_probe.shard")
+(import "pcb_cost_probe.shard")
+(import "tasks/pcb_route_model.shard")
+(import "tasks/pcb_time_model.shard")
+(import "tasks/pcb_cost_model.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel reader *))
+(use (:: kernel loader *))
+(use (:: kernel driver *))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: meta search *))
+(use (:: tools search superpose *))
+(use (:: tools search pcb_route_probe *))
+(use (:: tools search pcb_time_probe *))
+(use (:: tools search pcb_cost_probe *))
+(use (:: tools search tasks pcb_route_model *))
+(use (:: tools search tasks pcb_time_model *))
+(use (:: tools search tasks pcb_cost_model *))
+
+;; ---- the instance ---------------------------------------------------------
+;; Zero keepouts; the interaction is entirely net-net.  A vertical
+;; (4,0)->(4,5), B horizontal (1,3)->(6,3), C horizontal
+;; (0,4)->(6,4); crossings 28@t3 (A x B) and 36@t4 (A x C), both
+;; equidistant by construction.
+
+(type PLnNet (PLnNet Int Int))
+
+(fn pcblns_a () PLnNet (PLnNet 4 44))
+
+(fn pcblns_b () PLnNet (PLnNet 25 30))
+
+(fn pcblns_c () PLnNet (PLnNet 32 38))
+
+(fn pcblns_init_order () (List PLnNet) (list (pcblns_a) (pcblns_b) (pcblns_c)))
+
+(fn pcblns_init_total () Int 40)
+
+(fn pcblns_best_total () Int 36)
+
+(fn pcblns_cmove () Int 2)
+
+(fn pcblns_chold () Int 5)
+
+(fn pcblns_dmax () Int 9)
+
+(fn pcblns_cap () Int 8000000)
+
+(fn pcblns_free_bud () Int 1000000)
+
+;; Sweep fuel = candidate evaluations (4 needed; headroom x2).
+(fn pcblns_fuel () Int 8)
+
+(fn pcblns_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "PCB-LNS FAIL " (append_int msg "\n")) w)))
+
+;; ---- query and score (keepouts and tolls empty, baked) --------------------
+
+(fn pcblns_query ((occ (List Int)) (goal Int) (start Int)) Expr
+  (Call
+    (pcbcp_model_q (quote pcbc_walk_from))
+    (list
+      (IntLit 8)
+      (IntLit 8)
+      (pcbp_int_list_expr occ)
+      (pcbcp_nil_expr)
+      (pcbcp_nil_expr)
+      (IntLit goal)
+      (IntLit (pcblns_cmove))
+      (IntLit (pcblns_chold))
+      (IntLit (pcblns_free_bud))
+      (IntLit start)
+      (hole 0))))
+
+(fn pcblns_score_t ((occ (List Int)) (goal Int) (start Int)) Expr
+  (Call
+    (pcbcp_model_q (quote pcbc_score))
+    (list
+      (IntLit 8)
+      (IntLit 8)
+      (pcbp_int_list_expr occ)
+      (pcbcp_nil_expr)
+      (pcbcp_nil_expr)
+      (IntLit goal)
+      (IntLit (pcblns_cmove))
+      (IntLit (pcblns_chold))
+      (IntLit (pcblns_free_bud))
+      (IntLit start)
+      (hole 0))))
+
+;; ---- one inner route (plain astar entry: the LNS repair solver) -----------
+
+(fn pcblns_route ((m Module) (occ (List Int)) (start Int) (goal Int) (w World))
+  (Pair (Option (List PTMove)) World)
+  (match
+    (su_find_query_schema_astar
+      1000000
+      (pcblns_cap)
+      m
+      (pcbp_probe_q (quote candidate))
+      (hole 0)
+      (hole 0)
+      (ms_empty_plan)
+      (pcblns_query occ goal start)
+      (pcbp_want)
+      (pcbt_grammar_a (pcblns_dmax) (pcbt_move_order start goal))
+      (pcblns_score_t occ goal start)
+      (pcbcp_nil_expr))
+    ((SuFindErr msg) (Pair None (write (append_int "ASTAR-ERR " msg) w)))
+    ((SuFindEmpty _ _ _ forks _ steps _ _ census)
+     (Pair
+       None
+       (pcbp_log_call
+         start
+         1
+         (pcblns_dmax)
+         (pcblns_cap)
+         "ASTAR-EMPTY"
+         steps
+         forks
+         census
+         w)))
+    ((SuFindBudget _ _ _ forks _ steps _ _ census)
+     (Pair
+       None
+       (pcbp_log_call
+         start
+         1
+         (pcblns_dmax)
+         (pcblns_cap)
+         "ASTAR-BUDGET"
+         steps
+         forks
+         census
+         w)))
+    ((SuFindFound _ _ _ forks _ steps _ rep census)
+     (let
+       ((w2
+          (pcbp_log_call
+            start
+            1
+            (pcblns_dmax)
+            (pcblns_cap)
+            "ASTAR-FOUND"
+            steps
+            forks
+            census
+            w)))
+       (match (pcbt_decode rep)
+         (None (Pair None (write "ASTAR-ERR undecodable representative\n" w2)))
+         ((Some moves)
+          (Pair
+            (Some moves)
+            (pcbp_log_routed start (pcblns_dmax) (pcbt_len_moves moves) w2))))))))
+
+;; ---- routing a whole order ------------------------------------------------
+
+(type PLnRouted (PLnRouted PLnNet (List PTMove) (List Int) Int))
+; net, moves, trajectory, true cost
+
+(type PLnOrderR (PLnOrderFail) (PLnOrderOk (List PLnRouted) Int))
+
+(fn pcblns_app_routed ((a (List PLnRouted)) (b (List PLnRouted)))
+  (List PLnRouted)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (pcblns_app_routed t b)))))
+
+(fn pcblns_cost ((start Int) (moves (List PTMove))) Int
+  (pcbc_cost_of 8 8 Nil (pcblns_cmove) (pcblns_chold) start moves))
+
+(fn pcblns_route_order
+  ((m Module)
+   (queue (List PLnNet))
+   (occ (List Int))
+   (acc (List PLnRouted))
+   (total Int)
+   (w World))
+  (Pair PLnOrderR World)
+  (measure (struct queue))
+  (match queue
+    (Nil (Pair (PLnOrderOk acc total) w))
+    ((Cons net rest)
+     (match net
+       ((PLnNet start goal)
+        (match (pcblns_route m occ start goal w)
+          ((Pair None w1) (Pair (PLnOrderFail) w1))
+          ((Pair (Some moves) w1)
+           (let ((traj (pcbt_traj 8 8 start 0 moves)))
+             (let ((cost (pcblns_cost start moves)))
+               (pcblns_route_order
+                 m
+                 rest
+                 (pcbp_app_cells occ traj)
+                 (pcblns_app_routed
+                   acc
+                   (Cons (PLnRouted net moves traj cost) Nil))
+                 (+ total cost)
+                 w1))))))))))
+
+;; ---- order utilities ------------------------------------------------------
+
+(fn pcblns_swap_adj ((xs (List PLnNet)) (i Int)) (List PLnNet)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons x rest)
+     (if (lt 0 i) (Cons x (pcblns_swap_adj rest (- i 1)))
+     (match rest
+       (Nil (Cons x Nil))
+       ((Cons y rest2) (Cons y (Cons x rest2))))))))
+
+(fn pcblns_order_len ((xs (List PLnNet))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (pcblns_order_len t)))))
+
+(fn pcblns_seeds_str ((xs (List PLnNet))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil "")
+    ((Cons h t)
+     (match h
+       ((PLnNet start _)
+        (append_int
+          (show_int start)
+          (match t
+            (Nil "")
+            ((Cons _ _) (append_int "," (pcblns_seeds_str t))))))))))
+
+(fn pcblns_log_eval
+  ((order (List PLnNet)) (total Int) (tag (List Int)) (w World))
+  World
+  (write
+    (append_int
+      "EVAL "
+      (append_int
+        (pcblns_seeds_str order)
+        (append_int
+          " TOTAL="
+          (append_int (show_int total) (append_int " " (append_int tag "\n"))))))
+    w))
+
+;; ---- the sweep (greedy strict descent, restart on accept) -----------------
+
+(type PLnBest (PLnBest (List PLnNet) (List PLnRouted) Int))
+
+(type PLnSweepR (PLnSweepErr (List Int)) (PLnSweepDone PLnBest Int Int))
+; converged best, accepted count, rejected count
+
+(fn pcblns_sweep
+  ((m Module)
+   (best PLnBest)
+   (i Int)
+   (acc_n Int)
+   (rej_n Int)
+   (fuel Int)
+   (w World))
+  (Pair PLnSweepR World)
+  (measure fuel)
+  (if (lt fuel 1) (Pair (PLnSweepErr "sweep fuel exhausted") w)
+  (match best
+    ((PLnBest border brouted btotal)
+     (if (lt (- (pcblns_order_len border) 2) i)
+       (Pair (PLnSweepDone best acc_n rej_n) w)
+       (let ((cand (pcblns_swap_adj border i)))
+         (match (pcblns_route_order m cand Nil Nil 0 w)
+           ((Pair (PLnOrderFail) w1)
+            (pcblns_sweep
+              m
+              best
+              (+ i 1)
+              acc_n
+              (+ rej_n 1)
+              (- fuel 1)
+              (write "EVAL unroutable REJECT\n" w1)))
+           ((Pair (PLnOrderOk routed total) w1)
+            (if (lt total btotal)
+              (pcblns_sweep
+                m
+                (PLnBest cand routed total)
+                0
+                (+ acc_n 1)
+                rej_n
+                (- fuel 1)
+                (pcblns_log_eval cand total "ACCEPT" w1))
+              (pcblns_sweep
+                m
+                best
+                (+ i 1)
+                acc_n
+                (+ rej_n 1)
+                (- fuel 1)
+                (pcblns_log_eval cand total "REJECT" w1)))))))))))
+
+;; ---- the certificate: n-net cross replay ----------------------------------
+;; Every net re-walks at budget = its claimed cost EXACTLY against
+;; the union of the OTHERS' trajectories (stronger than the
+;; routing-time prefix check), cost re-derived from moves, then the
+;; full st union must be duplicate-free.
+
+(fn pcblns_others_cells ((rs (List PLnRouted)) (skip Int)) (List Int)
+  (measure (struct rs))
+  (match rs
+    (Nil Nil)
+    ((Cons (PLnRouted (PLnNet start _) _ traj _) rest)
+     (if (int_eq start skip) (pcblns_others_cells rest skip)
+     (pcbp_app_cells traj (pcblns_others_cells rest skip))))))
+
+(fn pcblns_all_cells ((rs (List PLnRouted))) (List Int)
+  (measure (struct rs))
+  (match rs
+    (Nil Nil)
+    ((Cons (PLnRouted _ _ traj _) rest)
+     (pcbp_app_cells traj (pcblns_all_cells rest)))))
+
+(fn pcblns_cert_one ((all (List PLnRouted)) (r PLnRouted)) Bool
+  (match r
+    ((PLnRouted (PLnNet start goal) moves _ cost)
+     (if (int_eq (pcblns_cost start moves) cost)
+       (match
+         (pcbc_walk_from
+           8
+           8
+           (pcblns_others_cells all start)
+           Nil
+           Nil
+           goal
+           (pcblns_cmove)
+           (pcblns_chold)
+           cost
+           start
+           moves)
+         ((WalkDone) True)
+         (_ False))
+       False))))
+
+(fn pcblns_cert_each ((all (List PLnRouted)) (rs (List PLnRouted))) Bool
+  (measure (struct rs))
+  (match rs
+    (Nil True)
+    ((Cons r rest)
+     (if (pcblns_cert_one all r) (pcblns_cert_each all rest) False))))
+
+(fn pcblns_cert ((rs (List PLnRouted))) Bool
+  (if (pcblns_cert_each rs rs) (pcbp_dup_free (pcblns_all_cells rs)) False))
+
+;; ---- the report -----------------------------------------------------------
+
+(fn pcblns_report
+  ((init_total Int) (best_total Int) (acc_n Int) (rej_n Int) (w World))
+  World
+  (write
+    (append_int
+      "PCB-LNS 8x8 KEEP-0 NETS-3 INIT-"
+      (append_int
+        (show_int init_total)
+        (append_int
+          " BEST-"
+          (append_int
+            (show_int best_total)
+            (append_int
+              " ACCEPTED-"
+              (append_int
+                (show_int acc_n)
+                (append_int
+                  " REJECTED-"
+                  (append_int (show_int rej_n) " LOCAL-OPT CERT-DISJOINT-OK\n"))))))))
+    w))
+
+;; ---- the driver -----------------------------------------------------------
+;; INIT and BEST totals must land on the hand-derived constants — a
+;; drifted instance fails loudly instead of printing a stale story.
+
+(fn pcblns_run ((m Module) (w World)) World
+  (match (pcblns_route_order m (pcblns_init_order) Nil Nil 0 w)
+    ((Pair (PLnOrderFail) w1) (pcblns_fail "initial order unroutable" w1))
+    ((Pair (PLnOrderOk routed0 total0) w1)
+     (let ((w2 (pcblns_log_eval (pcblns_init_order) total0 "INIT" w1)))
+       (if (int_eq total0 (pcblns_init_total))
+         (match
+           (pcblns_sweep
+             m
+             (PLnBest (pcblns_init_order) routed0 total0)
+             0
+             0
+             0
+             (pcblns_fuel)
+             w2)
+           ((Pair (PLnSweepErr msg) w3) (pcblns_fail msg w3))
+           ((Pair (PLnSweepDone best acc_n rej_n) w3)
+            (match best
+              ((PLnBest _ brouted btotal)
+               (let
+                 ((w4
+                    (write
+                      (append_int
+                        "LOCAL-OPT best="
+                        (append_int (show_int btotal) "\n"))
+                      w3)))
+                 (if (int_eq btotal (pcblns_best_total))
+                   (if (pcblns_cert brouted)
+                     (pcblns_report total0 btotal acc_n rej_n w4)
+                     (pcblns_fail "certificate rejected" w4))
+                   (pcblns_fail "best total is not the hand-derived optimum" w4)))))))
+         (pcblns_fail "initial total is not the hand-derived value" w2))))))
+
+(fn main ((w World)) World
+  (match (pcbcp_load w)
+    ((Pair (PcbpLoadErr msg) w1) (pcblns_fail msg w1))
+    ((Pair (PcbpLoadOk m) w1) (pcblns_run m w1))))
+
+;; ---- instance pins (the hand-derived story, checked) ----------------------
+
+;; The three unconstrained optima at exact budgets on the empty board.
+(claim pcblns_a_route_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        Nil
+        Nil
+        Nil
+        44
+        2
+        5
+        10
+        4
+        (list (TmS) (TmS) (TmS) (TmS) (TmS)))
+      (WalkDone)))
+  (steps ((compute both)) refl))
+
+(claim pcblns_b_route_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        Nil
+        Nil
+        Nil
+        30
+        2
+        5
+        10
+        25
+        (list (TmE) (TmE) (TmE) (TmE) (TmE)))
+      (WalkDone)))
+  (steps ((compute both)) refl))
+
+(claim pcblns_c_route_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        Nil
+        Nil
+        Nil
+        38
+        2
+        5
+        12
+        32
+        (list (TmE) (TmE) (TmE) (TmE) (TmE) (TmE)))
+      (WalkDone)))
+  (steps ((compute both)) refl))
+
+;; CROSSING 1: B's straight dies on A's transit at 28@t3 = st 220...
+(claim pcblns_x1_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        (pcbt_traj 8 8 4 0 (list (TmS) (TmS) (TmS) (TmS) (TmS)))
+        Nil
+        Nil
+        30
+        2
+        5
+        10
+        25
+        (list (TmE) (TmE) (TmE) (TmE) (TmE)))
+      (WalkBlocked 220)))
+  (steps ((compute both)) refl))
+
+;; ...CROSSING 2: C's straight dies on A's transit at 36@t4 = st 292.
+(claim pcblns_x2_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        (pcbt_traj 8 8 4 0 (list (TmS) (TmS) (TmS) (TmS) (TmS)))
+        Nil
+        Nil
+        38
+        2
+        5
+        12
+        32
+        (list (TmE) (TmE) (TmE) (TmE) (TmE) (TmE)))
+      (WalkBlocked 292)))
+  (steps ((compute both)) refl))
+
+;; B's row-2 dodge is legal at cost 14 exactly against A straight...
+(claim pcblns_b_dodge_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        (pcbt_traj 8 8 4 0 (list (TmS) (TmS) (TmS) (TmS) (TmS)))
+        Nil
+        Nil
+        30
+        2
+        5
+        14
+        25
+        (list (TmE) (TmE) (TmN) (TmE) (TmE) (TmE) (TmS)))
+      (WalkDone)))
+  (steps ((compute both)) refl))
+
+;; ...and refused one unit under (the cost floor).
+(claim pcblns_b_dodge_floor_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        (pcbt_traj 8 8 4 0 (list (TmS) (TmS) (TmS) (TmS) (TmS)))
+        Nil
+        Nil
+        30
+        2
+        5
+        13
+        25
+        (list (TmE) (TmE) (TmN) (TmE) (TmE) (TmE) (TmS)))
+      (WalkFloor)))
+  (steps ((compute both)) refl))
+
+;; THE DESIGN FACT: A's single +2 delay clears BOTH crossings — the
+;; wiggle route is legal at 14 against B straight AND C straight
+;; together (28 taken at t5, 36 at t6).
+(claim pcblns_a_delay_both_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        (pcbp_app_cells
+          (pcbt_traj 8 8 25 0 (list (TmE) (TmE) (TmE) (TmE) (TmE)))
+          (pcbt_traj 8 8 32 0 (list (TmE) (TmE) (TmE) (TmE) (TmE) (TmE))))
+        Nil
+        Nil
+        44
+        2
+        5
+        14
+        4
+        (list (TmS) (TmS) (TmE) (TmW) (TmS) (TmS) (TmS)))
+      (WalkDone)))
+  (steps ((compute both)) refl))
+
+;; THE CASCADE, freed side: C rides straight at 12 once A is delayed
+;; (order B,A,C — A's witness holds 36 at t6, not t4)...
+(claim pcblns_c_free_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        (pcbp_app_cells
+          (pcbt_traj 8 8 25 0 (list (TmE) (TmE) (TmE) (TmE) (TmE)))
+          (pcbt_traj 8 8 4 0 (list (TmS) (TmS) (TmE) (TmW) (TmS) (TmS) (TmS))))
+        Nil
+        Nil
+        38
+        2
+        5
+        12
+        32
+        (list (TmE) (TmE) (TmE) (TmE) (TmE) (TmE)))
+      (WalkDone)))
+  (steps ((compute both)) refl))
+
+;; ...and the taxed side: after on-time A and dodging B, C's row-3
+;; dodge costs 16 (through the cells B vacated, ending via 37 — the
+;; direct tail at 30@t7 is fenced by B's dodge).
+(claim pcblns_c_taxed_pin
+  (goal () ()
+    (=
+      (pcbc_walk_from
+        8
+        8
+        (pcbp_app_cells
+          (pcbt_traj 8 8 4 0 (list (TmS) (TmS) (TmS) (TmS) (TmS)))
+          (pcbt_traj 8 8 25 0 (list (TmE) (TmE) (TmN) (TmE) (TmE) (TmE) (TmS))))
+        Nil
+        Nil
+        38
+        2
+        5
+        16
+        32
+        (list (TmE) (TmE) (TmE) (TmN) (TmE) (TmE) (TmS) (TmE)))
+      (WalkDone)))
+  (steps ((compute both)) refl))
+
+;; Score pins: a live B prefix keys on its space-time end state
+;; against A's occupancy; the blocked continuation abstains.
+(claim pcblns_score_pin
+  (goal () ()
+    (=
+      (pcbc_score
+        8
+        8
+        (pcbt_traj 8 8 4 0 (list (TmS) (TmS) (TmS) (TmS) (TmS)))
+        Nil
+        Nil
+        30
+        2
+        5
+        1000000
+        25
+        (list (TmE) (TmE)))
+      (PScore 4 6 (Some (list 155)))))
+  (steps ((compute both)) refl))
+
+(claim pcblns_score_blocked_pin
+  (goal () ()
+    (=
+      (pcbc_score
+        8
+        8
+        (pcbt_traj 8 8 4 0 (list (TmS) (TmS) (TmS) (TmS) (TmS)))
+        Nil
+        Nil
+        30
+        2
+        5
+        1000000
+        25
+        (list (TmE) (TmE) (TmE)))
+      (PScore 1000000 1000000 None)))
+  (steps ((compute both)) refl))
+
+;; The swap utility: adjacent transposition at each index.
+(claim pcblns_swap0_pin
+  (goal () ()
+    (=
+      (pcblns_swap_adj (list (PLnNet 1 2) (PLnNet 3 4) (PLnNet 5 6)) 0)
+      (list (PLnNet 3 4) (PLnNet 1 2) (PLnNet 5 6))))
+  (steps ((compute both)) refl))
+
+(claim pcblns_swap1_pin
+  (goal () ()
+    (=
+      (pcblns_swap_adj (list (PLnNet 1 2) (PLnNet 3 4) (PLnNet 5 6)) 1)
+      (list (PLnNet 1 2) (PLnNet 5 6) (PLnNet 3 4))))
+  (steps ((compute both)) refl))
+
+;; The converged assignment's three trajectories share no space-time
+;; cell (B straight, A delayed, C straight).
+(claim pcblns_disjoint_pin
+  (goal () ()
+    (=
+      (pcbp_dup_free
+        (pcbp_app_cells
+          (pcbt_traj 8 8 25 0 (list (TmE) (TmE) (TmE) (TmE) (TmE)))
+          (pcbp_app_cells
+            (pcbt_traj 8 8 4 0 (list (TmS) (TmS) (TmE) (TmW) (TmS) (TmS) (TmS)))
+            (pcbt_traj 8 8 32 0 (list (TmE) (TmE) (TmE) (TmE) (TmE) (TmE))))))
+      True))
+  (steps ((compute both)) refl))

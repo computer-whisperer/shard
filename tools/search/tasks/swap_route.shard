@@ -1,0 +1,126 @@
+;;; Swap-network routing (R5): route the register file THROUGH the network.
+;;;
+;;; Four registers start as [0,1,2,3]; a program is a sequence of adjacent
+;;; transpositions (Sw0/Sw1/Sw2 swap positions 0-1/1-2/2-3); the target is
+;;; the full reversal [3,2,1,0] — the longest element of S4, minimally six
+;;; swaps.  First-result synthesis over the reflected (List Swp) grammar.
+;;;
+;;; This task is the measured consumer of the relation-aware search
+;;; machinery (R1-R4) on a problem whose theorem quotient is REAL and
+;;; SOUND: swap application is position-uniform, so the model's window
+;;; laws hold at every spine position — the exact license pio_dme_free's
+;;; header rules out for itself (absolute jump targets make window
+;;; rewrites unsound there, so its grammar bakes the quotient in and its
+;;; constraint plan is empty by design).  Here the plan carries:
+;;;   - swr_cancel_spine: s . s . rest  ==>  rest for EVERY swap s — a
+;;;     NONLINEAR window (the same variable twice), so deciding redex-ness
+;;;     over two open holes blocks on the PAIR and the theorem partition
+;;;     answers with a relational eq/ne split (R2/R3);
+;;;   - swr_order20_spine: Sw2 . Sw0  ==>  Sw0 . Sw2 — disjoint swaps
+;;;     commute; the descending spelling is the redex (ground window).
+;;; Scheduling is theorem-first: the checked redex orbit partitions before
+;;; the first semantic decision (the find path's ordered entry) — and that
+;;; schedule is the ONLY one on which relational splits can occur here: a
+;;; semantic-first partition juncture fires after a passing evaluation,
+;;; which has already fixed every demanded element hole, so no open pair
+;;; remains to split on (measured: semantic-first is split-free and
+;;; bit-identical with or without the iso extension).
+;;;
+;;; Measured at depth 7, budget 5000 (2026-07-28, after the skl_iso
+;;; structural extension let cross-depth leaf states relate):
+;;;   theorem-first   killed 59 constraint 78 forks 174 SPLITS 6
+;;;                   steps 4542 (~4.6s) — first real task with live
+;;;                   relational splits; eq children die as single
+;;;                   redex verdicts, ne children run on relationally
+;;;                   (the diagnosis history: splits were 0 because the
+;;;                   iso door refused cross-depth schema ids — interning
+;;;                   keys on remaining depth, so the depth-independent
+;;;                   Swp alphabet recurs under a fresh id per spine
+;;;                   level; before the fix the ground-fork fallback
+;;;                   silently absorbed every pair, at 13/116/168/742)
+;;;   semantic-first  killed 54 constraint 86 forks 78 splits 0
+;;;                   steps 4994 (~3.4s)
+;;; Both schedules find a canonical six-swap reduced word (the same BEST
+;;; under theorem-first before and after the fix).  On this 3-letter
+;;; alphabet the coarser ne children hand work back to the evaluator
+;;; (742 -> 4542 steps vs the pure ground-fork theorem tree); the split
+;;; economics are expected to invert as the alphabet grows — that
+;;; scaling measurement is the follow-on rung.
+;;;
+;;; RUN:
+;;;   bin/shard_eval run tools/search/typed_superpose.shard \
+;;;     tools/search/tasks/swap_route.shard
+
+(import "../../../kernel/stdlib.shard")
+(import "swap_route_model.shard")
+
+;; Candidate vocabulary: ONLY explicit bare item uses become candidate
+;; heads (te_import_ctx), so the list spine and the three swaps below ARE
+;; the declared alphabet; the model's functions and laws ride along as
+;; ordinary scope items without entering the grammar.
+(use (:: core List))
+(use (:: core Nil))
+(use (:: core Cons))
+(use (:: tools search tasks swap_route_model Swp))
+(use (:: tools search tasks swap_route_model Sw0))
+(use (:: tools search tasks swap_route_model Sw1))
+(use (:: tools search tasks swap_route_model Sw2))
+(use (:: tools search tasks swap_route_model swr_observe))
+(use (:: tools search tasks swap_route_model swr_plug))
+(use (:: tools search tasks swap_route_model swr_run_cancel_ctx))
+(use (:: tools search tasks swap_route_model swr_run_order20_ctx))
+
+(fn search_forms () (List Symbol) (list (quote ctor)))
+(fn search_ints () (List Int) Nil)
+(fn search_symbols () (List Symbol) Nil)
+(fn search_depth () Int 7)
+
+(fn search_result_mode () Symbol (quote first))
+(fn search_narrowing_strategy () Symbol (quote theorem_first))
+(fn search_drive_budget () Int 5000)
+
+(fn search_probe ((body (List Swp))) (Option (List Int))
+  (Some (swr_observe body)))
+
+(fn search_target () (List Int) (list 3 2 1 0))
+
+;; The reduced word s0 s1 s0 s2 s1 s0 for the longest element of S4.
+(fn search_witness () (List Swp) (list (Sw0) (Sw1) (Sw0) (Sw2) (Sw1) (Sw0)))
+
+;; --- the checked window laws (probe level, plug context) -------------------
+
+(claim swr_cancel_spine
+  (goal ((prefix (List Swp)) (tail (List Swp)) (s Swp)) ()
+    (=
+      (search_probe (swr_plug prefix (Cons s (Cons s tail))))
+      (search_probe (swr_plug prefix tail))))
+  (steps
+    ((unfold search_probe both)
+     (unfold swr_observe both)
+     (rewrite (lemma swr_run_cancel_ctx) lr lhs true ()))
+    refl))
+
+(claim swr_order20_spine
+  (goal ((prefix (List Swp)) (tail (List Swp))) ()
+    (=
+      (search_probe (swr_plug prefix (Cons (Sw2) (Cons (Sw0) tail))))
+      (search_probe (swr_plug prefix (Cons (Sw0) (Cons (Sw2) tail))))))
+  (steps
+    ((unfold search_probe both)
+     (unfold swr_observe both)
+     (rewrite (lemma swr_run_order20_ctx) lr lhs true ()))
+    refl))
+
+;; --- the checked hooks -----------------------------------------------------
+
+(fn search_observer_profile () (List Symbol) Nil)
+
+(fn search_spine_context () Symbol (quote swr_plug))
+
+(fn search_spine_profile () (List Symbol)
+  (list (quote swr_cancel_spine) (quote swr_order20_spine)))
+
+;; The witness routes the start file to the reversal on the real semantics.
+(claim swr_witness_pin
+  (goal () () (= (swr_observe (search_witness)) (search_target)))
+  (steps ((compute both)) refl))

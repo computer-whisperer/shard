@@ -316,9 +316,7 @@
 (type MsPlanR (MsPlanErr (List Int)) (MsPlanOk MsPlan))
 
 (fn ms_plan_spine
-  ((everywhere TrsProfile)
-   (root TrsRootProfile)
-   (spine TrsSpineProfile))
+  ((everywhere TrsProfile) (root TrsRootProfile) (spine TrsSpineProfile))
   MsPlanR
   (match (trs_profile (trs_profile_rules everywhere))
     ((TrsProfileErr msg) (MsPlanErr msg))
@@ -374,8 +372,7 @@
 
 (fn ms_plan_spine_rule_count ((plan MsPlan)) Int
   (match plan
-    ((MsPlan _ _ spine)
-     (ms_spine_rule_count (trs_spine_profile_rules spine)))))
+    ((MsPlan _ _ spine) (ms_spine_rule_count (trs_spine_profile_rules spine)))))
 
 (fn ms_spine_rule_count ((items (List TrsSpineRule))) Int
   (measure (struct items))
@@ -407,12 +404,11 @@
   (match asg
     (Nil -1)
     ((Cons (Pair id choice) rest)
-     (if (int_eq id hole_id)
-       (if (lt choice 0) (ms_choice rest hole_id) choice)
-       (ms_choice rest hole_id)))))
+     (if (int_eq id hole_id) (if (lt choice 0) (ms_choice rest hole_id) choice)
+     (ms_choice rest hole_id)))))
 
-(fn ms_choice_forbidden
-  ((asg (List (Pair Int Int))) (hole_id Int) (choice Int)) Bool
+(fn ms_choice_forbidden ((asg (List (Pair Int Int))) (hole_id Int) (choice Int))
+  Bool
   (measure (struct asg))
   (match asg
     (Nil False)
@@ -431,12 +427,11 @@
   (match pairs
     (Nil encoded)
     ((Cons (Pair hole_id choice) rest)
-     (ms_region_pairs
-       rest (Cons (Pair hole_id (ms_ban_code choice)) encoded)))))
+     (ms_region_pairs rest (Cons (Pair hole_id (ms_ban_code choice)) encoded)))))
 
 (fn ms_region_asg ((region SkRegion)) (List (Pair Int Int))
   (match region
-    ((SkRegion choices forbids) (ms_region_pairs forbids choices))))
+    ((SkRegion choices forbids _) (ms_region_pairs forbids choices))))
 
 (fn ms_alts_go ((entries (List GEnt)) (hole_id Int)) (Option (List Expr))
   (measure (struct entries))
@@ -453,9 +448,7 @@
 ;; language.  Exact counting and rank operations remain properties of a flat
 ;; `Grammar`; matching can also consume a regular schema without expanding all
 ;; of its structural occurrences first.
-(type MsLanguage
-  (MsLanguageGrammar Grammar)
-  (MsLanguageSchema SkSchemaGrammar))
+(type MsLanguage (MsLanguageGrammar Grammar) (MsLanguageSchema SkSchemaGrammar))
 
 (type MsLanguageAltsR
   (MsLanguageAltsErr (List Int))
@@ -471,7 +464,8 @@
   (match language
     ((MsLanguageGrammar grammar)
      (match (ms_alts grammar hole_id)
-       (None (MsLanguageAltsErr "constraint references an unknown grammar hole"))
+       (None
+         (MsLanguageAltsErr "constraint references an unknown grammar hole"))
        ((Some alts) (MsLanguageAltsOk alts))))
     ((MsLanguageSchema grammar)
      (match (sk_schema_alts_at grammar hole_id)
@@ -485,10 +479,7 @@
     ((Cons alt rest) (if (le index 0) (Some alt) (ms_alt_at rest (- index 1))))))
 
 (fn ms_allowed_alts
-  ((asg (List (Pair Int Int)))
-   (hole_id Int)
-   (index Int)
-   (alts (List Expr)))
+  ((asg (List (Pair Int Int))) (hole_id Int) (index Int) (alts (List Expr)))
   (List Expr)
   (measure (struct alts))
   (match alts
@@ -503,8 +494,7 @@
   (MsSelectOpen Int (List Expr))
   (MsSelectExpr Expr))
 
-(fn ms_select
-  ((grammar MsLanguage) (asg (List (Pair Int Int))) (hole_id Int))
+(fn ms_select ((grammar MsLanguage) (asg (List (Pair Int Int))) (hole_id Int))
   MsSelect
   (match (msl_alts grammar hole_id)
     ((MsLanguageAltsErr msg) (MsSelectErr msg))
@@ -515,18 +505,25 @@
            (Nil (MsSelectErr "constraint reached an empty restricted domain"))
            ((Cons only Nil) (MsSelectExpr only))
            (allowed (MsSelectOpen hole_id allowed)))
-         (if (ms_choice_forbidden asg hole_id choice)
-           (MsSelectErr "constraint fixed choice is also forbidden")
-           (match (ms_alt_at alts choice)
-             (None (MsSelectErr "constraint choice is outside grammar entry"))
-             ((Some selected) (MsSelectExpr selected)))))))))
+       (if (ms_choice_forbidden asg hole_id choice)
+         (MsSelectErr "constraint fixed choice is also forbidden")
+         (match (ms_alt_at alts choice)
+           (None (MsSelectErr "constraint choice is outside grammar entry"))
+           ((Some selected) (MsSelectExpr selected)))))))))
 
 ;; ---- partial left-linear pattern matching ---------------------------------
 
+;; `MsMatchBlockedPair h0 h1` is the relation-aware refinement of Blocked:
+;; it may be produced only when the whole comparison is decided by exactly
+;; one hole-pair equality — left == right holds IFF the two holes' subtrees
+;; agree.  That contract is what licenses the relational partitioner to
+;; consume both split children terminally (no re-evaluation).  Consumers
+;; that ground-refine may always degrade a pair to its first hole.
 (type MsMatch
   (MsMatchErr (List Int))
   (MsMatchNo)
   (MsMatchBlocked Int)
+  (MsMatchBlockedPair Int Int)
   (MsMatchYes))
 
 ;; A prepared fact is valid for the complete domain of one grammar hole.
@@ -580,6 +577,49 @@
     (None (MsMatchYes))
     ((Some hole_id) (MsMatchBlocked hole_id))))
 
+;; ---- blocked-event accumulation for equality obligations -------------------
+;;
+;; The equality walkers accumulate one blocked EVENT: a single hole, or the
+;; exact hole pair whose subtree agreement is the residual obligation.  A
+;; second distinct event destroys the pair contract (the residual becomes a
+;; conjunction), so joining degrades the pair to its first hole — exactly the
+;; hole the pre-relational walkers reported.  Only a repeat of the same
+;; unordered pair preserves it: the conjunction of one equality with itself.
+(type MsEqEvent (MsEqEvHole Int) (MsEqEvPair Int Int))
+
+(fn ms_eq_pair_same ((a0 Int) (a1 Int) (b0 Int) (b1 Int)) Bool
+  (if (if (int_eq a0 b0) (int_eq a1 b1) False) True
+  (if (int_eq a0 b1) (int_eq a1 b0)
+  False)))
+
+(fn ms_eq_event_join ((prior (Option MsEqEvent)) (event MsEqEvent))
+  (Option MsEqEvent)
+  (match prior
+    (None (Some event))
+    ((Some (MsEqEvHole h)) (Some (MsEqEvHole h)))
+    ((Some (MsEqEvPair h0 h1))
+     (match event
+       ((MsEqEvHole _) (Some (MsEqEvHole h0)))
+       ((MsEqEvPair g0 g1)
+        (if (ms_eq_pair_same h0 h1 g0 g1) (Some (MsEqEvPair h0 h1))
+        (Some (MsEqEvHole h0))))))))
+
+(fn ms_eq_done ((blocked (Option MsEqEvent))) MsMatch
+  (match blocked
+    (None (MsMatchYes))
+    ((Some (MsEqEvHole h)) (MsMatchBlocked h))
+    ((Some (MsEqEvPair h0 h1)) (MsMatchBlockedPair h0 h1))))
+
+;; Verdict-level accumulation keeps the FIRST event whole: no terminal
+;; consumption rides a verdict pair (it is a branching hint, not an IFF),
+;; and first-wins preserves the pre-relational first-blocked-hole order
+;; under degradation.
+(fn ms_event_first ((prior (Option MsEqEvent)) (event MsEqEvent))
+  (Option MsEqEvent)
+  (match prior
+    (None (Some event))
+    ((Some existing) (Some existing))))
+
 ;; Classify an unassigned hole without choosing an alternative.  Only a
 ;; unanimous result is promoted; a mixed or internally blocked domain still
 ;; demands the outer hole, preserving disjoint region accounting.
@@ -606,6 +646,7 @@
      (match (ms_match (- fuel 1) facts grammar asg pattern alt)
        ((MsMatchErr msg) (MsMatchErr msg))
        ((MsMatchBlocked _) (MsMatchBlocked hole_id))
+       ((MsMatchBlockedPair _ _) (MsMatchBlocked hole_id))
        ((MsMatchNo)
         (match agree
           ((MsMatchAgreeYes) (MsMatchBlocked hole_id))
@@ -740,6 +781,15 @@
              asg
              rest
              more
+             (ms_block_first blocked hole_id)))
+          ((MsMatchBlockedPair hole_id _)
+           (ms_match_list
+             (- fuel 1)
+             facts
+             grammar
+             asg
+             rest
+             more
              (ms_block_first blocked hole_id))))))))))
 
 ;; ---- equality-aware nonlinear matching -----------------------------------
@@ -759,21 +809,46 @@
     ((MsNBind prior value rest)
      (if (int_eq index prior) (Some value) (msn_get index rest)))))
 
+;; The nonlinear pair arm is a BRANCHING HINT, not an IFF: the walk
+;; short-circuits, so positions after the blocked one are unexamined.
+;; Splitting eq/ne on the pair is always exhaustive; deciding the child
+;; regions needs re-evaluation (relation-aware from R3).
 (type MsNMatch
   (MsNMatchErr (List Int))
   (MsNMatchNo)
   (MsNMatchBlocked Int)
+  (MsNMatchBlockedPair Int Int)
   (MsNMatchYes MsNEnv))
+
+;; Detect an OPEN hole at the head of the other side of an equality.  A
+;; partner behind a fixed selection chain is left to the ordinary domain
+;; scan (sound, merely less sharp); errors are also left to the scan,
+;; which re-raises them.
+(fn ms_equal_open_partner
+  ((grammar MsLanguage) (asg (List (Pair Int Int))) (term Expr))
+  (Option Int)
+  (match (hole_view term)
+    ((HVBad _) None)
+    ((HVNot) None)
+    ((HVHole hole_id)
+     (match (ms_select grammar asg hole_id)
+       ((MsSelectErr _) None)
+       ((MsSelectOpen partner _) (Some partner))
+       ((MsSelectExpr _) None)))))
 
 ;; Structural equality over partial terms.  Identical hole syntax is already
 ;; equal by sharing.  An open hole's complete alternative domain is inspected:
 ;; all-equal and all-unequal Cartesian products are stable facts, while a mixed
 ;; or internally blocked domain still asks for the outer choice.  Thus routed
 ;; domains with disjoint shapes do not fork merely to discover inequality.
+;; When BOTH heads are open holes the comparison IS the hole pair — the scan
+;; still decides all-equal / all-unequal domains without a fork, and only its
+;; mixed outcome upgrades from the outer hole to the exact pair.
 (fn ms_equal
   ((fuel Int)
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (left Expr)
    (right Expr))
   MsMatch
@@ -786,17 +861,42 @@
      (match (ms_select grammar asg hole_id)
        ((MsSelectErr msg) (MsMatchErr msg))
        ((MsSelectOpen blocked alts)
-        (ms_equal_alts
-          (- fuel 1)
-          grammar
-          asg
-          right
-          alts
-          blocked
-          True
-          (MsMatchAgreeStart)))
+        (match (ms_equal_open_partner grammar asg right)
+          (None
+            (ms_equal_alts
+              (- fuel 1)
+              grammar
+              asg
+              rels
+              right
+              alts
+              blocked
+              True
+              (MsMatchAgreeStart)))
+          ((Some partner)
+           ;; R3: the region's relation events answer the pair before any
+           ;; scan — an entailed decision holds for every region member,
+           ;; so the IFF contract carries it directly.
+           (match (sk_rels_decide rels blocked partner)
+             ((SkRelDecideEq) (MsMatchYes))
+             ((SkRelDecideNe) (MsMatchNo))
+             ((SkRelDecideUnknown)
+              (match
+                (ms_equal_alts
+                  (- fuel 1)
+                  grammar
+                  asg
+                  rels
+                  right
+                  alts
+                  blocked
+                  True
+                  (MsMatchAgreeStart))
+                ((MsMatchBlocked _) (MsMatchBlockedPair blocked partner))
+                ((MsMatchBlockedPair _ _) (MsMatchBlockedPair blocked partner))
+                (decided decided)))))))
        ((MsSelectExpr selected)
-        (ms_equal (- fuel 1) grammar asg selected right))))
+        (ms_equal (- fuel 1) grammar asg rels selected right))))
     ((HVNot)
      (match (hole_view right)
        ((HVBad msg) (MsMatchErr msg))
@@ -808,13 +908,14 @@
              (- fuel 1)
              grammar
              asg
+             rels
              left
              alts
              blocked
              False
              (MsMatchAgreeStart)))
           ((MsSelectExpr selected)
-           (ms_equal (- fuel 1) grammar asg left selected))))
+           (ms_equal (- fuel 1) grammar asg rels left selected))))
        ((HVNot)
         (match left
           ((FVar x)
@@ -829,50 +930,88 @@
            (match right
              ((Ctor q2 args2)
               (if (qname_eq q q2)
-                (ms_equal_list (- fuel 1) grammar asg args args2 None)
+                (ms_equal_list (- fuel 1) grammar asg rels args args2 None)
                 (MsMatchNo)))
              (_ (MsMatchNo))))
           ((Call q args)
            (match right
              ((Call q2 args2)
               (if (qname_eq q q2)
-                (ms_equal_list (- fuel 1) grammar asg args args2 None)
+                (ms_equal_list (- fuel 1) grammar asg rels args args2 None)
                 (MsMatchNo)))
              (_ (MsMatchNo))))
           ((If c t e)
            (match right
              ((If c2 t2 e2)
               (ms_equal_list
-                (- fuel 1) grammar asg (list c t e) (list c2 t2 e2) None))
+                (- fuel 1)
+                grammar
+                asg
+                rels
+                (list c t e)
+                (list c2 t2 e2)
+                None))
              (_ (MsMatchNo))))
           ((Match scrut arms)
            (match right
              ((Match scrut2 arms2)
-              (match (ms_equal (- fuel 1) grammar asg scrut scrut2)
+              (match (ms_equal (- fuel 1) grammar asg rels scrut scrut2)
                 ((MsMatchErr msg) (MsMatchErr msg))
                 ((MsMatchNo) (MsMatchNo))
                 ((MsMatchYes)
-                 (ms_equal_arms (- fuel 1) grammar asg arms arms2 None))
+                 (ms_equal_arms (- fuel 1) grammar asg rels arms arms2 None))
                 ((MsMatchBlocked hole_id)
                  (ms_equal_arms
-                   (- fuel 1) grammar asg arms arms2 (Some hole_id)))))
+                   (- fuel 1)
+                   grammar
+                   asg
+                   rels
+                   arms
+                   arms2
+                   (Some (MsEqEvHole hole_id))))
+                ((MsMatchBlockedPair h0 h1)
+                 (ms_equal_arms
+                   (- fuel 1)
+                   grammar
+                   asg
+                   rels
+                   arms
+                   arms2
+                   (Some (MsEqEvPair h0 h1))))))
              (_ (MsMatchNo))))
           ((Let bindings body)
            (match right
              ((Let bindings2 body2)
               (match
                 (ms_equal_list
-                  (- fuel 1) grammar asg bindings bindings2 None)
+                  (- fuel 1)
+                  grammar
+                  asg
+                  rels
+                  bindings
+                  bindings2
+                  None)
                 ((MsMatchErr msg) (MsMatchErr msg))
                 ((MsMatchNo) (MsMatchNo))
-                ((MsMatchYes)
-                 (ms_equal (- fuel 1) grammar asg body body2))
+                ((MsMatchYes) (ms_equal (- fuel 1) grammar asg rels body body2))
                 ((MsMatchBlocked hole_id)
-                 (match (ms_equal (- fuel 1) grammar asg body body2)
-                   ((MsMatchErr msg) (MsMatchErr msg))
-                   ((MsMatchNo) (MsMatchNo))
-                   ((MsMatchYes) (MsMatchBlocked hole_id))
-                   ((MsMatchBlocked _) (MsMatchBlocked hole_id))))))
+                 (ms_equal_let_body
+                   (- fuel 1)
+                   grammar
+                   asg
+                   rels
+                   body
+                   body2
+                   (MsEqEvHole hole_id)))
+                ((MsMatchBlockedPair h0 h1)
+                 (ms_equal_let_body
+                   (- fuel 1)
+                   grammar
+                   asg
+                   rels
+                   body
+                   body2
+                   (MsEqEvPair h0 h1)))))
              (_ (MsMatchNo))))
           ((IntLit n)
            (match right
@@ -883,6 +1022,29 @@
              ((SymLit t) (if (sym_eq s t) (MsMatchYes) (MsMatchNo)))
              (_ (MsMatchNo))))))))))))
 
+;; The Let body under an already-blocked bindings walk: the bindings event
+;; joins the body outcome, so a body No still refutes the whole equality
+;; and a second distinct event degrades the pair per the join contract.
+(fn ms_equal_let_body
+  ((fuel Int)
+   (grammar MsLanguage)
+   (asg (List (Pair Int Int)))
+   (rels (List SkRel))
+   (body Expr)
+   (body2 Expr)
+   (bindings_event MsEqEvent))
+  MsMatch
+  (measure fuel)
+  (if (lt fuel 1) (MsMatchErr "constraint equality-let fuel exhausted")
+  (match (ms_equal (- fuel 1) grammar asg rels body body2)
+    ((MsMatchErr msg) (MsMatchErr msg))
+    ((MsMatchNo) (MsMatchNo))
+    ((MsMatchYes) (ms_eq_done (Some bindings_event)))
+    ((MsMatchBlocked hole_id)
+     (ms_eq_done (ms_eq_event_join (Some bindings_event) (MsEqEvHole hole_id))))
+    ((MsMatchBlockedPair h0 h1)
+     (ms_eq_done (ms_eq_event_join (Some bindings_event) (MsEqEvPair h0 h1)))))))
+
 ;; Consensus over one open choice boundary.  `open_left` records which side
 ;; owns the alternatives so structural equality retains its ordinary order.
 ;; A nested block belongs to an alternative that has not yet been selected;
@@ -891,6 +1053,7 @@
   ((fuel Int)
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (fixed Expr)
    (alts (List Expr))
    (hole_id Int)
@@ -908,84 +1071,128 @@
         ((MsMatchAgreeYes) (MsMatchYes))))
     ((Cons alt rest)
      (match
-       (if open_left
-         (ms_equal (- fuel 1) grammar asg alt fixed)
-         (ms_equal (- fuel 1) grammar asg fixed alt))
+       (if open_left (ms_equal (- fuel 1) grammar asg rels alt fixed)
+       (ms_equal (- fuel 1) grammar asg rels fixed alt))
        ((MsMatchErr msg) (MsMatchErr msg))
        ((MsMatchBlocked _) (MsMatchBlocked hole_id))
+       ((MsMatchBlockedPair _ _) (MsMatchBlocked hole_id))
        ((MsMatchNo)
         (match agree
           ((MsMatchAgreeYes) (MsMatchBlocked hole_id))
           (_
             (ms_equal_alts
-              (- fuel 1) grammar asg fixed rest hole_id open_left
+              (- fuel 1)
+              grammar
+              asg
+              rels
+              fixed
+              rest
+              hole_id
+              open_left
               (MsMatchAgreeNo)))))
        ((MsMatchYes)
         (match agree
           ((MsMatchAgreeNo) (MsMatchBlocked hole_id))
           (_
             (ms_equal_alts
-              (- fuel 1) grammar asg fixed rest hole_id open_left
+              (- fuel 1)
+              grammar
+              asg
+              rels
+              fixed
+              rest
+              hole_id
+              open_left
               (MsMatchAgreeYes))))))))))
 
 (fn ms_equal_list
   ((fuel Int)
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (left (List Expr))
    (right (List Expr))
-   (blocked (Option Int)))
+   (blocked (Option MsEqEvent)))
   MsMatch
   (measure fuel)
   (if (lt fuel 1) (MsMatchErr "constraint equality-list fuel exhausted")
   (match left
     (Nil
-     (match right
-       (Nil (ms_match_done blocked))
-       ((Cons _ _) (MsMatchNo))))
+      (match right
+        (Nil (ms_eq_done blocked))
+        ((Cons _ _) (MsMatchNo))))
     ((Cons x xs)
      (match right
        (Nil (MsMatchNo))
        ((Cons y ys)
-        (match (ms_equal (- fuel 1) grammar asg x y)
+        (match (ms_equal (- fuel 1) grammar asg rels x y)
           ((MsMatchErr msg) (MsMatchErr msg))
           ((MsMatchNo) (MsMatchNo))
           ((MsMatchYes)
-           (ms_equal_list (- fuel 1) grammar asg xs ys blocked))
+           (ms_equal_list (- fuel 1) grammar asg rels xs ys blocked))
           ((MsMatchBlocked hole_id)
            (ms_equal_list
-             (- fuel 1) grammar asg xs ys
-             (ms_block_first blocked hole_id))))))))))
+             (- fuel 1)
+             grammar
+             asg
+             rels
+             xs
+             ys
+             (ms_eq_event_join blocked (MsEqEvHole hole_id))))
+          ((MsMatchBlockedPair h0 h1)
+           (ms_equal_list
+             (- fuel 1)
+             grammar
+             asg
+             rels
+             xs
+             ys
+             (ms_eq_event_join blocked (MsEqEvPair h0 h1)))))))))))
 
 (fn ms_equal_arms
   ((fuel Int)
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (left (List Arm))
    (right (List Arm))
-   (blocked (Option Int)))
+   (blocked (Option MsEqEvent)))
   MsMatch
   (measure fuel)
   (if (lt fuel 1) (MsMatchErr "constraint arm-equality fuel exhausted")
   (match left
     (Nil
-     (match right
-       (Nil (ms_match_done blocked))
-       ((Cons _ _) (MsMatchNo))))
+      (match right
+        (Nil (ms_eq_done blocked))
+        ((Cons _ _) (MsMatchNo))))
     ((Cons (Arm pat body) rest)
      (match right
        (Nil (MsMatchNo))
        ((Cons (Arm pat2 body2) more)
         (if (pat_eq pat pat2)
-          (match (ms_equal (- fuel 1) grammar asg body body2)
+          (match (ms_equal (- fuel 1) grammar asg rels body body2)
             ((MsMatchErr msg) (MsMatchErr msg))
             ((MsMatchNo) (MsMatchNo))
             ((MsMatchYes)
-             (ms_equal_arms (- fuel 1) grammar asg rest more blocked))
+             (ms_equal_arms (- fuel 1) grammar asg rels rest more blocked))
             ((MsMatchBlocked hole_id)
              (ms_equal_arms
-               (- fuel 1) grammar asg rest more
-               (ms_block_first blocked hole_id))))
+               (- fuel 1)
+               grammar
+               asg
+               rels
+               rest
+               more
+               (ms_eq_event_join blocked (MsEqEvHole hole_id))))
+            ((MsMatchBlockedPair h0 h1)
+             (ms_equal_arms
+               (- fuel 1)
+               grammar
+               asg
+               rels
+               rest
+               more
+               (ms_eq_event_join blocked (MsEqEvPair h0 h1)))))
           (MsMatchNo))))))))
 
 ;; ---- exact finite equality partitions -----------------------------------
@@ -1005,11 +1212,10 @@
   (measure (struct values))
   (match values
     (Nil False)
-    ((Cons head rest)
-     (if (int_eq value head) True (mse_int_mem value rest)))))
+    ((Cons head rest) (if (int_eq value head) True (mse_int_mem value rest)))))
 
-(fn mse_regions_append
-  ((left (List SkRegion)) (right (List SkRegion))) (List SkRegion)
+(fn mse_regions_append ((left (List SkRegion)) (right (List SkRegion)))
+  (List SkRegion)
   (measure (struct left))
   (match left
     (Nil right)
@@ -1018,7 +1224,7 @@
 (type MsEqChoicesR
   (MsEqChoicesErr (List Int))
   (MsEqChoicesOk (List Int) (List Int) (List SkRegion)))
-  ; stable equal choices, stable unequal choices, still-blocked fixed children
+; stable equal choices, stable unequal choices, still-blocked fixed children
 
 (fn mse_classify_choices
   ((fuel Int)
@@ -1042,36 +1248,101 @@
        ((SkRegionEditErr msg) (MsEqChoicesErr msg))
        ((SkRegionEditEmpty)
         (mse_classify_choices
-          fuel grammar space region left right hole_id (+ index 1) rest
-          equal unequal pending))
+          fuel
+          grammar
+          space
+          region
+          left
+          right
+          hole_id
+          (+ index 1)
+          rest
+          equal
+          unequal
+          pending))
        ((SkRegionEditOk child)
         (match (sk_region_count space grammar child)
           ((SkCErr msg) (MsEqChoicesErr msg))
           ((SkCOk count)
            (if (le count 0)
              (mse_classify_choices
-               fuel grammar space region left right hole_id (+ index 1) rest
-               equal unequal pending)
-           (match
-             (ms_equal
                fuel
-               (ms_language_grammar grammar)
-               (ms_region_asg child)
+               grammar
+               space
+               region
                left
-               right)
-             ((MsMatchErr msg) (MsEqChoicesErr msg))
-             ((MsMatchYes)
-              (mse_classify_choices
-                fuel grammar space region left right hole_id (+ index 1) rest
-                (Cons index equal) unequal pending))
-             ((MsMatchNo)
-              (mse_classify_choices
-                fuel grammar space region left right hole_id (+ index 1) rest
-                equal (Cons index unequal) pending))
-             ((MsMatchBlocked _)
-              (mse_classify_choices
-                fuel grammar space region left right hole_id (+ index 1) rest
-                equal unequal (Cons child pending))))))))))))
+               right
+               hole_id
+               (+ index 1)
+               rest
+               equal
+               unequal
+               pending)
+             (match
+               (ms_equal
+                 fuel
+                 (ms_language_grammar grammar)
+                 (ms_region_asg child)
+                 (sk_region_rels child)
+                 left
+                 right)
+               ((MsMatchErr msg) (MsEqChoicesErr msg))
+               ((MsMatchYes)
+                (mse_classify_choices
+                  fuel
+                  grammar
+                  space
+                  region
+                  left
+                  right
+                  hole_id
+                  (+ index 1)
+                  rest
+                  (Cons index equal)
+                  unequal
+                  pending))
+               ((MsMatchNo)
+                (mse_classify_choices
+                  fuel
+                  grammar
+                  space
+                  region
+                  left
+                  right
+                  hole_id
+                  (+ index 1)
+                  rest
+                  equal
+                  (Cons index unequal)
+                  pending))
+               ((MsMatchBlocked _)
+                (mse_classify_choices
+                  fuel
+                  grammar
+                  space
+                  region
+                  left
+                  right
+                  hole_id
+                  (+ index 1)
+                  rest
+                  equal
+                  unequal
+                  (Cons child pending)))
+               ((MsMatchBlockedPair _ _)
+                (mse_classify_choices
+                  fuel
+                  grammar
+                  space
+                  region
+                  left
+                  right
+                  hole_id
+                  (+ index 1)
+                  rest
+                  equal
+                  unequal
+                  (Cons child pending))))))))))))
 
 (type MsEqRestrictR
   (MsEqRestrictErr (List Int))
@@ -1091,14 +1362,18 @@
     (Nil (MsEqRestrictSome region))
     ((Cons _ rest)
      (if (mse_int_mem index keep)
-       (mse_restrict_choices_go
-         grammar region hole_id (+ index 1) rest keep)
+       (mse_restrict_choices_go grammar region hole_id (+ index 1) rest keep)
        (match (sk_region_forbid grammar region hole_id index)
          ((SkRegionEditErr msg) (MsEqRestrictErr msg))
          ((SkRegionEditEmpty) (MsEqRestrictNone))
          ((SkRegionEditOk restricted)
           (mse_restrict_choices_go
-            grammar restricted hole_id (+ index 1) rest keep)))))))
+            grammar
+            restricted
+            hole_id
+            (+ index 1)
+            rest
+            keep)))))))
 
 (fn mse_restrict_choices
   ((grammar Grammar)
@@ -1109,11 +1384,9 @@
   MsEqRestrictR
   (match keep
     (Nil (MsEqRestrictNone))
-    ((Cons _ _)
-     (mse_restrict_choices_go grammar region hole_id 0 alts keep))))
+    ((Cons _ _) (mse_restrict_choices_go grammar region hole_id 0 alts keep))))
 
-(fn mse_cons_region
-  ((restricted MsEqRestrictR) (regions (List SkRegion)))
+(fn mse_cons_region ((restricted MsEqRestrictR) (regions (List SkRegion)))
   (Pair (Option (List Int)) (List SkRegion))
   (match restricted
     ((MsEqRestrictErr msg) (Pair (Some msg) regions))
@@ -1122,8 +1395,87 @@
 
 (type MsEqPartitionR
   (MsEqPartitionErr (List Int))
-  (MsEqPartitionOk (List SkRegion) (List SkRegion) Int))
-  ; equal regions, unequal regions, relational split boundaries
+  (MsEqPartitionOk (List SkRegion) (List SkRegion) Int Int))
+; equal regions, unequal regions, ground fork boundaries, relational splits
+
+(fn mse_child_count ((space Expr) (grammar Grammar) (child (Option SkRegion)))
+  (Option Int)
+  (match child
+    (None (Some 0))
+    ((Some region)
+     (match (sk_region_count space grammar region)
+       ((SkCErr _) None)
+       ((SkCOk n) (Some n))))))
+
+(fn mse_push_counted
+  ((child (Option SkRegion)) (count Int) (regions (List SkRegion)))
+  (List SkRegion)
+  (match child
+    (None regions)
+    ((Some region) (if (le count 0) regions (Cons region regions)))))
+
+;; One ground refinement step: classify the blocked hole's choices, coalesce
+;; the decided classes, and re-queue the still-blocked fixed children.  This
+;; is both the ordinary Blocked answer and the fallback whenever the
+;; relational path refuses (door or count) — soundness never rides the pair.
+(fn mse_ground
+  ((fuel Int)
+   (grammar Grammar)
+   (space Expr)
+   (left Expr)
+   (right Expr)
+   (region SkRegion)
+   (hole_id Int)
+   (rest (List SkRegion))
+   (equal (List SkRegion))
+   (unequal (List SkRegion))
+   (forks Int)
+   (splits Int))
+  MsEqPartitionR
+  (measure fuel)
+  (if (lt fuel 1) (MsEqPartitionErr "equality partition fuel exhausted")
+  (match (ms_alts grammar hole_id)
+    (None (MsEqPartitionErr "equality partition references unknown hole"))
+    ((Some alts)
+     (match
+       (mse_classify_choices
+         (- fuel 1)
+         grammar
+         space
+         region
+         left
+         right
+         hole_id
+         0
+         alts
+         Nil
+         Nil
+         Nil)
+       ((MsEqChoicesErr msg) (MsEqPartitionErr msg))
+       ((MsEqChoicesOk equal_choices unequal_choices pending)
+        (match
+          (mse_cons_region
+            (mse_restrict_choices grammar region hole_id alts equal_choices)
+            equal)
+          ((Pair (Some msg) _) (MsEqPartitionErr msg))
+          ((Pair None equal2)
+           (match
+             (mse_cons_region
+               (mse_restrict_choices grammar region hole_id alts unequal_choices)
+               unequal)
+             ((Pair (Some msg) _) (MsEqPartitionErr msg))
+             ((Pair None unequal2)
+              (mse_partition_go
+                (- fuel 1)
+                grammar
+                space
+                left
+                right
+                (mse_regions_append pending rest)
+                equal2
+                unequal2
+                (+ forks 1)
+                splits)))))))))))
 
 (fn mse_partition_go
   ((fuel Int)
@@ -1134,69 +1486,140 @@
    (jobs (List SkRegion))
    (equal (List SkRegion))
    (unequal (List SkRegion))
-   (forks Int))
+   (forks Int)
+   (splits Int))
   MsEqPartitionR
   (measure fuel)
   (if (lt fuel 1) (MsEqPartitionErr "equality partition fuel exhausted")
   (match jobs
-    (Nil (MsEqPartitionOk equal unequal forks))
+    (Nil (MsEqPartitionOk equal unequal forks splits))
     ((Cons region rest)
      (match (sk_region_count space grammar region)
        ((SkCErr msg) (MsEqPartitionErr msg))
        ((SkCOk count)
         (if (le count 0)
           (mse_partition_go
-            (- fuel 1) grammar space left right rest equal unequal forks)
-        (match
-          (ms_equal
-            fuel
-            (ms_language_grammar grammar)
-            (ms_region_asg region)
+            (- fuel 1)
+            grammar
+            space
             left
-            right)
-          ((MsMatchErr msg) (MsEqPartitionErr msg))
-          ((MsMatchYes)
-           (mse_partition_go
-             (- fuel 1) grammar space left right rest
-             (Cons region equal) unequal forks))
-          ((MsMatchNo)
-           (mse_partition_go
-             (- fuel 1) grammar space left right rest
-             equal (Cons region unequal) forks))
-          ((MsMatchBlocked hole_id)
-           (match (ms_alts grammar hole_id)
-             (None (MsEqPartitionErr "equality partition references unknown hole"))
-             ((Some alts)
-              (match
-                (mse_classify_choices
-                  (- fuel 1) grammar space region left right hole_id 0 alts
-                  Nil Nil Nil)
-                ((MsEqChoicesErr msg) (MsEqPartitionErr msg))
-                ((MsEqChoicesOk equal_choices unequal_choices pending)
-                 (match
-                   (mse_cons_region
-                     (mse_restrict_choices
-                       grammar region hole_id alts equal_choices)
-                     equal)
-                   ((Pair (Some msg) _) (MsEqPartitionErr msg))
-                   ((Pair None equal2)
-                    (match
-                      (mse_cons_region
-                        (mse_restrict_choices
-                          grammar region hole_id alts unequal_choices)
-                        unequal)
-                      ((Pair (Some msg) _) (MsEqPartitionErr msg))
-                      ((Pair None unequal2)
-                       (mse_partition_go
+            right
+            rest
+            equal
+            unequal
+            forks
+            splits)
+          (match
+            (ms_equal
+              fuel
+              (ms_language_grammar grammar)
+              (ms_region_asg region)
+              (sk_region_rels region)
+              left
+              right)
+            ((MsMatchErr msg) (MsEqPartitionErr msg))
+            ((MsMatchYes)
+             (mse_partition_go
+               (- fuel 1)
+               grammar
+               space
+               left
+               right
+               rest
+               (Cons region equal)
+               unequal
+               forks
+               splits))
+            ((MsMatchNo)
+             (mse_partition_go
+               (- fuel 1)
+               grammar
+               space
+               left
+               right
+               rest
+               equal
+               (Cons region unequal)
+               forks
+               splits))
+            ((MsMatchBlocked hole_id)
+             (mse_ground
+               (- fuel 1)
+               grammar
+               space
+               left
+               right
+               region
+               hole_id
+               rest
+               equal
+               unequal
+               forks
+               splits))
+            ((MsMatchBlockedPair h0 h1)
+             ;; The pair arm's IFF contract makes both split children
+             ;; TERMINAL: every member of the eq child satisfies the
+             ;; equality, every member of the ne child refutes it.  The
+             ;; diagonal is one region now.
+             (match (sk_region_split_pair grammar region h0 h1)
+               ((SkRegionSplitErr _)
+                (mse_ground
+                  (- fuel 1)
+                  grammar
+                  space
+                  left
+                  right
+                  region
+                  h0
+                  rest
+                  equal
+                  unequal
+                  forks
+                  splits))
+               ((SkRegionSplitOk eq_child ne_child)
+                (match (mse_child_count space grammar eq_child)
+                  (None
+                    (mse_ground
+                      (- fuel 1)
+                      grammar
+                      space
+                      left
+                      right
+                      region
+                      h0
+                      rest
+                      equal
+                      unequal
+                      forks
+                      splits))
+                  ((Some eq_n)
+                   (match (mse_child_count space grammar ne_child)
+                     (None
+                       (mse_ground
                          (- fuel 1)
                          grammar
                          space
                          left
                          right
-                         (mse_regions_append pending rest)
-                         equal2
-                         unequal2
-                         (+ forks 1)))))))))))))))))))
+                         region
+                         h0
+                         rest
+                         equal
+                         unequal
+                         forks
+                         splits))
+                     ((Some ne_n)
+                      (mse_partition_go
+                        (- fuel 1)
+                        grammar
+                        space
+                        left
+                        right
+                        rest
+                        (mse_push_counted eq_child eq_n equal)
+                        (mse_push_counted ne_child ne_n unequal)
+                        forks
+                        (+ splits 1)))))))))))))))))
 
 (fn ms_equal_partition
   ((fuel Int)
@@ -1213,12 +1636,22 @@
        ((SkRegionWfErr msg) (MsEqPartitionErr msg))
        ((SkRegionWfOk)
         (mse_partition_go
-          fuel grammar space left right (Cons region Nil) Nil Nil 0))))))
+          fuel
+          grammar
+          space
+          left
+          right
+          (Cons region Nil)
+          Nil
+          Nil
+          0
+          0))))))
 
 (fn msn_match
   ((fuel Int)
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (pattern Expr)
    (candidate Expr)
    (env MsNEnv))
@@ -1230,61 +1663,67 @@
      (match (msn_get index env)
        (None (MsNMatchYes (MsNBind index candidate env)))
        ((Some prior)
-        (match (ms_equal (- fuel 1) grammar asg prior candidate)
+        (match (ms_equal (- fuel 1) grammar asg rels prior candidate)
           ((MsMatchErr msg) (MsNMatchErr msg))
           ((MsMatchNo) (MsNMatchNo))
           ((MsMatchBlocked hole_id) (MsNMatchBlocked hole_id))
+          ((MsMatchBlockedPair h0 h1) (MsNMatchBlockedPair h0 h1))
           ((MsMatchYes) (MsNMatchYes env))))))
     (_
-     (match (hole_view candidate)
-       ((HVBad msg) (MsNMatchErr msg))
-       ((HVHole hole_id)
-        (match (ms_select grammar asg hole_id)
-          ((MsSelectErr msg) (MsNMatchErr msg))
-          ((MsSelectOpen blocked _) (MsNMatchBlocked blocked))
-          ((MsSelectExpr selected)
-           (msn_match (- fuel 1) grammar asg pattern selected env))))
-       ((HVNot)
-        (match pattern
-          ((FVar _) (MsNMatchErr "constraint pattern contains FVar"))
-          ((BVar _) (MsNMatchErr "unreachable nonlinear BVar match"))
-          ((Ctor q args)
-           (match candidate
-             ((Ctor q2 args2)
-              (if (qname_eq q q2)
-                (msn_match_list (- fuel 1) grammar asg args args2 env)
-                (MsNMatchNo)))
-             (_ (MsNMatchNo))))
-          ((Call q args)
-           (match candidate
-             ((Call q2 args2)
-              (if (qname_eq q q2)
-                (msn_match_list (- fuel 1) grammar asg args args2 env)
-                (MsNMatchNo)))
-             (_ (MsNMatchNo))))
-          ((If c t e)
-           (match candidate
-             ((If c2 t2 e2)
-              (msn_match_list
-                (- fuel 1) grammar asg (list c t e) (list c2 t2 e2) env))
-             (_ (MsNMatchNo))))
-          ((Match _ _) (MsNMatchErr "constraint pattern contains Match"))
-          ((Let _ _) (MsNMatchErr "constraint pattern contains Let"))
-          ((IntLit n)
-           (match candidate
-             ((IntLit m)
-              (if (int_eq n m) (MsNMatchYes env) (MsNMatchNo)))
-             (_ (MsNMatchNo))))
-          ((SymLit s)
-           (match candidate
-             ((SymLit t)
-              (if (sym_eq s t) (MsNMatchYes env) (MsNMatchNo)))
-             (_ (MsNMatchNo)))))))))))
+      (match (hole_view candidate)
+        ((HVBad msg) (MsNMatchErr msg))
+        ((HVHole hole_id)
+         (match (ms_select grammar asg hole_id)
+           ((MsSelectErr msg) (MsNMatchErr msg))
+           ((MsSelectOpen blocked _) (MsNMatchBlocked blocked))
+           ((MsSelectExpr selected)
+            (msn_match (- fuel 1) grammar asg rels pattern selected env))))
+        ((HVNot)
+         (match pattern
+           ((FVar _) (MsNMatchErr "constraint pattern contains FVar"))
+           ((BVar _) (MsNMatchErr "unreachable nonlinear BVar match"))
+           ((Ctor q args)
+            (match candidate
+              ((Ctor q2 args2)
+               (if (qname_eq q q2)
+                 (msn_match_list (- fuel 1) grammar asg rels args args2 env)
+                 (MsNMatchNo)))
+              (_ (MsNMatchNo))))
+           ((Call q args)
+            (match candidate
+              ((Call q2 args2)
+               (if (qname_eq q q2)
+                 (msn_match_list (- fuel 1) grammar asg rels args args2 env)
+                 (MsNMatchNo)))
+              (_ (MsNMatchNo))))
+           ((If c t e)
+            (match candidate
+              ((If c2 t2 e2)
+               (msn_match_list
+                 (- fuel 1)
+                 grammar
+                 asg
+                 rels
+                 (list c t e)
+                 (list c2 t2 e2)
+                 env))
+              (_ (MsNMatchNo))))
+           ((Match _ _) (MsNMatchErr "constraint pattern contains Match"))
+           ((Let _ _) (MsNMatchErr "constraint pattern contains Let"))
+           ((IntLit n)
+            (match candidate
+              ((IntLit m) (if (int_eq n m) (MsNMatchYes env) (MsNMatchNo)))
+              (_ (MsNMatchNo))))
+           ((SymLit s)
+            (match candidate
+              ((SymLit t) (if (sym_eq s t) (MsNMatchYes env) (MsNMatchNo)))
+              (_ (MsNMatchNo)))))))))))
 
 (fn msn_match_list
   ((fuel Int)
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (patterns (List Expr))
    (candidates (List Expr))
    (env MsNEnv))
@@ -1293,24 +1732,38 @@
   (if (lt fuel 1) (MsNMatchErr "nonlinear constraint list fuel exhausted")
   (match patterns
     (Nil
-     (match candidates
-       (Nil (MsNMatchYes env))
-       ((Cons _ _) (MsNMatchNo))))
+      (match candidates
+        (Nil (MsNMatchYes env))
+        ((Cons _ _) (MsNMatchNo))))
     ((Cons pattern rest)
      (match candidates
        (Nil (MsNMatchNo))
        ((Cons candidate more)
-        (match (msn_match (- fuel 1) grammar asg pattern candidate env)
+        (match (msn_match (- fuel 1) grammar asg rels pattern candidate env)
           ((MsNMatchErr msg) (MsNMatchErr msg))
           ((MsNMatchNo) (MsNMatchNo))
           ((MsNMatchBlocked hole_id) (MsNMatchBlocked hole_id))
+          ((MsNMatchBlockedPair h0 h1) (MsNMatchBlockedPair h0 h1))
           ((MsNMatchYes env2)
-           (msn_match_list
-             (- fuel 1) grammar asg rest more env2)))))))))
+           (msn_match_list (- fuel 1) grammar asg rels rest more env2)))))))))
 
 ;; ---- region redex classification ------------------------------------------
 
-(type MsVerdict (MsErr (List Int)) (MsClear) (MsBlocked Int) (MsRedex QName))
+;; `MsBlockedPair h0 h1` names the exact hole pair whose eq/ne dichotomy is
+;; the blocked obligation's natural branching variable.  It is a HINT beside
+;; MsBlocked, never a promise about the split children's verdicts.
+(type MsVerdict
+  (MsErr (List Int))
+  (MsClear)
+  (MsBlocked Int)
+  (MsBlockedPair Int Int)
+  (MsRedex QName))
+
+(fn ms_verdict_done ((blocked (Option MsEqEvent))) MsVerdict
+  (match blocked
+    (None (MsClear))
+    ((Some (MsEqEvHole h)) (MsBlocked h))
+    ((Some (MsEqEvPair h0 h1)) (MsBlockedPair h0 h1))))
 
 ;; Stable whole-domain verdicts can be reused under every refinement of a
 ;; partial assignment.  Blocked is intentionally absent: it names a decision
@@ -1342,8 +1795,7 @@
 ;; authenticated constructor paths over the same grammar hole.  Spine-profile
 ;; validation makes rule names unique, so the checked citation is also the
 ;; stable cache key for its traversal domain.
-(type MsSpineVerdictFact
-  (MsSpineVerdictFact QName Int MsStableVerdict))
+(type MsSpineVerdictFact (MsSpineVerdictFact QName Int MsStableVerdict))
 
 (fn ms_spine_item_name ((item TrsSpineRule)) QName
   (match item
@@ -1378,24 +1830,27 @@
      (match right
        ((MsErr msg) (MsErr msg))
        ((MsRedex q) (MsRedex q))
-       (_ (MsBlocked hole_id))))))
+       (_ (MsBlocked hole_id))))
+    ((MsBlockedPair h0 h1)
+     (match right
+       ((MsErr msg) (MsErr msg))
+       ((MsRedex q) (MsRedex q))
+       (_ (MsBlockedPair h0 h1))))))
 
 (fn ms_rules_root
   ((fuel Int)
    (facts (List MsHoleFacts))
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (rules (List TrsRule))
    (candidate Expr)
-   (blocked (Option Int)))
+   (blocked (Option MsEqEvent)))
   MsVerdict
   (measure fuel)
   (if (lt fuel 1) (MsErr "constraint rule scan fuel exhausted")
   (match rules
-    (Nil
-      (match blocked
-        (None (MsClear))
-        ((Some hole_id) (MsBlocked hole_id))))
+    (Nil (ms_verdict_done blocked))
     ((Cons rule rest)
      (if (trs_rule_left_linear rule)
        (match
@@ -1403,16 +1858,35 @@
          ((MsMatchErr msg) (MsErr msg))
          ((MsMatchYes) (MsRedex (trs_rule_name rule)))
          ((MsMatchNo)
-          (ms_rules_root (- fuel 1) facts grammar asg rest candidate blocked))
+          (ms_rules_root
+            (- fuel 1)
+            facts
+            grammar
+            asg
+            rels
+            rest
+            candidate
+            blocked))
          ((MsMatchBlocked hole_id)
           (ms_rules_root
             (- fuel 1)
             facts
             grammar
             asg
+            rels
             rest
             candidate
-            (ms_block_first blocked hole_id))))
+            (ms_event_first blocked (MsEqEvHole hole_id))))
+         ((MsMatchBlockedPair h0 h1)
+          (ms_rules_root
+            (- fuel 1)
+            facts
+            grammar
+            asg
+            rels
+            rest
+            candidate
+            (ms_event_first blocked (MsEqEvPair h0 h1)))))
        ;; `ms_match` is the linear relaxation of this nonlinear lhs: every
        ;; BVar is a wildcard.  No is therefore conclusive, while Yes/Blocked
        ;; merely license the exact environment-aware matcher below.
@@ -1420,25 +1894,57 @@
          (ms_match (- fuel 1) facts grammar asg (trs_rule_lhs rule) candidate)
          ((MsMatchErr msg) (MsErr msg))
          ((MsMatchNo)
-          (ms_rules_root (- fuel 1) facts grammar asg rest candidate blocked))
+          (ms_rules_root
+            (- fuel 1)
+            facts
+            grammar
+            asg
+            rels
+            rest
+            candidate
+            blocked))
          (_
-          (match
-            (msn_match
-              (- fuel 1) grammar asg (trs_rule_lhs rule) candidate (MsNEmpty))
-            ((MsNMatchErr msg) (MsErr msg))
-            ((MsNMatchYes _) (MsRedex (trs_rule_name rule)))
-            ((MsNMatchNo)
-             (ms_rules_root
-               (- fuel 1) facts grammar asg rest candidate blocked))
-            ((MsNMatchBlocked hole_id)
-             (ms_rules_root
+           (match
+             (msn_match
                (- fuel 1)
-               facts
                grammar
                asg
-               rest
+               rels
+               (trs_rule_lhs rule)
                candidate
-               (ms_block_first blocked hole_id)))))))))))
+               (MsNEmpty))
+             ((MsNMatchErr msg) (MsErr msg))
+             ((MsNMatchYes _) (MsRedex (trs_rule_name rule)))
+             ((MsNMatchNo)
+              (ms_rules_root
+                (- fuel 1)
+                facts
+                grammar
+                asg
+                rels
+                rest
+                candidate
+                blocked))
+             ((MsNMatchBlocked hole_id)
+              (ms_rules_root
+                (- fuel 1)
+                facts
+                grammar
+                asg
+                rels
+                rest
+                candidate
+                (ms_event_first blocked (MsEqEvHole hole_id))))
+             ((MsNMatchBlockedPair h0 h1)
+              (ms_rules_root
+                (- fuel 1)
+                facts
+                grammar
+                asg
+                rels
+                rest
+                candidate
+                (ms_event_first blocked (MsEqEvPair h0 h1))))))))))))
 
 (type MsIntEval
   (MsIntEvalErr (List Int))
@@ -1450,10 +1956,7 @@
 ;; production is reported as the exact blocking hole so the region scheduler
 ;; can partition it without enumerating the surrounding program.
 (fn ms_int_term
-  ((fuel Int)
-   (grammar MsLanguage)
-   (asg (List (Pair Int Int)))
-   (term Expr))
+  ((fuel Int) (grammar MsLanguage) (asg (List (Pair Int Int))) (term Expr))
   MsIntEval
   (measure fuel)
   (if (lt fuel 1) (MsIntEvalErr "integer guard term fuel exhausted")
@@ -1463,8 +1966,7 @@
      (match (ms_select grammar asg hole_id)
        ((MsSelectErr msg) (MsIntEvalErr msg))
        ((MsSelectOpen blocked _) (MsIntEvalBlocked blocked))
-       ((MsSelectExpr selected)
-        (ms_int_term (- fuel 1) grammar asg selected))))
+       ((MsSelectExpr selected) (ms_int_term (- fuel 1) grammar asg selected))))
     ((HVNot)
      (match term
        ((IntLit value) (MsIntEvalOk value))
@@ -1493,8 +1995,7 @@
         (match (ms_int_expr (- fuel 1) grammar asg right env)
           ((MsIntEvalErr msg) (MsIntEvalErr msg))
           ((MsIntEvalBlocked hole_id) (MsIntEvalBlocked hole_id))
-          ((MsIntEvalOk right_value)
-           (MsIntEvalOk (+ left_value right_value)))))))
+          ((MsIntEvalOk right_value) (MsIntEvalOk (+ left_value right_value)))))))
     ((TrsIntSub left right)
      (match (ms_int_expr (- fuel 1) grammar asg left env)
        ((MsIntEvalErr msg) (MsIntEvalErr msg))
@@ -1503,13 +2004,13 @@
         (match (ms_int_expr (- fuel 1) grammar asg right env)
           ((MsIntEvalErr msg) (MsIntEvalErr msg))
           ((MsIntEvalBlocked hole_id) (MsIntEvalBlocked hole_id))
-          ((MsIntEvalOk right_value)
-           (MsIntEvalOk (- left_value right_value))))))))))
+          ((MsIntEvalOk right_value) (MsIntEvalOk (- left_value right_value))))))))))
 
 (fn ms_guard
   ((fuel Int)
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (guard TrsGuard)
    (env MsNEnv))
   MsMatch
@@ -1521,10 +2022,13 @@
         (match (msn_get right env)
           (None (MsMatchErr "distinct guard right variable is unbound"))
           ((Some right_value)
-           (match (ms_equal fuel grammar asg left_value right_value)
+           ;; The pair passes through the Yes/No inversion untouched: the
+           ;; guard's dichotomy is the same pair's, with the sides swapped.
+           (match (ms_equal fuel grammar asg rels left_value right_value)
              ((MsMatchErr msg) (MsMatchErr msg))
              ((MsMatchYes) (MsMatchNo))
              ((MsMatchBlocked hole_id) (MsMatchBlocked hole_id))
+             ((MsMatchBlockedPair h0 h1) (MsMatchBlockedPair h0 h1))
              ((MsMatchNo) (MsMatchYes))))))))
     ((TrsIntEq left right)
      (match (ms_int_expr fuel grammar asg left env)
@@ -1535,9 +2039,7 @@
           ((MsIntEvalErr msg) (MsMatchErr msg))
           ((MsIntEvalBlocked hole_id) (MsMatchBlocked hole_id))
           ((MsIntEvalOk right_value)
-           (if (int_eq left_value right_value)
-             (MsMatchYes)
-             (MsMatchNo)))))))
+           (if (int_eq left_value right_value) (MsMatchYes) (MsMatchNo)))))))
     ((TrsIntLe left right)
      (match (ms_int_expr fuel grammar asg left env)
        ((MsIntEvalErr msg) (MsMatchErr msg))
@@ -1547,14 +2049,13 @@
           ((MsIntEvalErr msg) (MsMatchErr msg))
           ((MsIntEvalBlocked hole_id) (MsMatchBlocked hole_id))
           ((MsIntEvalOk right_value)
-           (if (le left_value right_value)
-             (MsMatchYes)
-             (MsMatchNo)))))))))
+           (if (le left_value right_value) (MsMatchYes) (MsMatchNo)))))))))
 
 (fn ms_guards
   ((fuel Int)
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (guards (List TrsGuard))
    (env MsNEnv))
   MsMatch
@@ -1563,18 +2064,19 @@
   (match guards
     (Nil (MsMatchYes))
     ((Cons guard rest)
-     (match (ms_guard (- fuel 1) grammar asg guard env)
+     (match (ms_guard (- fuel 1) grammar asg rels guard env)
        ((MsMatchErr msg) (MsMatchErr msg))
        ((MsMatchNo) (MsMatchNo))
        ((MsMatchBlocked hole_id) (MsMatchBlocked hole_id))
-       ((MsMatchYes)
-        (ms_guards (- fuel 1) grammar asg rest env)))))))
+       ((MsMatchBlockedPair h0 h1) (MsMatchBlockedPair h0 h1))
+       ((MsMatchYes) (ms_guards (- fuel 1) grammar asg rels rest env)))))))
 
 (fn ms_conditioned_root_language
   ((fuel Int)
    (facts (List MsHoleFacts))
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (conditioned TrsConditionedRule)
    (candidate Expr))
   MsVerdict
@@ -1585,27 +2087,43 @@
      (match guards
        (Nil
          (ms_rules_root
-           (- fuel 1) facts grammar asg (Cons rule Nil) candidate None))
+           (- fuel 1)
+           facts
+           grammar
+           asg
+           rels
+           (Cons rule Nil)
+           candidate
+           None))
        ((Cons _ _)
         (match
           (ms_match (- fuel 1) facts grammar asg (trs_rule_lhs rule) candidate)
           ((MsMatchErr msg) (MsErr msg))
           ((MsMatchNo) (MsClear))
           (_
-           (match
-             (msn_match
-               (- fuel 1) grammar asg (trs_rule_lhs rule) candidate (MsNEmpty))
-             ((MsNMatchErr msg) (MsErr msg))
-             ((MsNMatchNo) (MsClear))
-             ((MsNMatchBlocked hole_id) (MsBlocked hole_id))
-             ((MsNMatchYes env)
-              (match (ms_guards (- fuel 1) grammar asg guards env)
-                ((MsMatchErr msg) (MsErr msg))
-                ((MsMatchNo) (MsClear))
-                ((MsMatchBlocked hole_id) (MsBlocked hole_id))
-                ((MsMatchYes) (MsRedex (trs_rule_name rule))))))))))))))
+            (match
+              (msn_match
+                (- fuel 1)
+                grammar
+                asg
+                rels
+                (trs_rule_lhs rule)
+                candidate
+                (MsNEmpty))
+              ((MsNMatchErr msg) (MsErr msg))
+              ((MsNMatchNo) (MsClear))
+              ((MsNMatchBlocked hole_id) (MsBlocked hole_id))
+              ((MsNMatchBlockedPair h0 h1) (MsBlockedPair h0 h1))
+              ((MsNMatchYes env)
+               (match (ms_guards (- fuel 1) grammar asg rels guards env)
+                 ((MsMatchErr msg) (MsErr msg))
+                 ((MsMatchNo) (MsClear))
+                 ((MsMatchBlocked hole_id) (MsBlocked hole_id))
+                 ((MsMatchBlockedPair h0 h1) (MsBlockedPair h0 h1))
+                 ((MsMatchYes) (MsRedex (trs_rule_name rule))))))))))))))
 
-;; Compatibility entry point for callers that operate on an exact grammar.
+;; Compatibility entry point for callers that operate on an exact grammar
+;; with a bare assignment (no region, hence no relation events).
 (fn ms_conditioned_root
   ((fuel Int)
    (facts (List MsHoleFacts))
@@ -1615,7 +2133,13 @@
    (candidate Expr))
   MsVerdict
   (ms_conditioned_root_language
-    fuel facts (ms_language_grammar grammar) asg conditioned candidate))
+    fuel
+    facts
+    (ms_language_grammar grammar)
+    asg
+    Nil
+    conditioned
+    candidate))
 
 (type MsNode
   (MsNodeErr (List Int))
@@ -1623,10 +2147,7 @@
   (MsNodeExpr Expr))
 
 (fn ms_node
-  ((fuel Int)
-   (grammar MsLanguage)
-   (asg (List (Pair Int Int)))
-   (candidate Expr))
+  ((fuel Int) (grammar MsLanguage) (asg (List (Pair Int Int))) (candidate Expr))
   MsNode
   (measure fuel)
   (if (lt fuel 1) (MsNodeErr "constraint node-view fuel exhausted")
@@ -1645,6 +2166,7 @@
    (root_facts (List MsVerdictFact))
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (rules (List TrsRule))
    (candidate Expr))
   MsVerdict
@@ -1654,9 +2176,17 @@
      (match (ms_verdict_fact root_facts hole_id)
        ((Some verdict) (ms_stable_verdict verdict))
        (None
-         (ms_rules_root (- fuel 1) facts grammar asg rules (hole hole_id) None))))
+         (ms_rules_root
+           (- fuel 1)
+           facts
+           grammar
+           asg
+           rels
+           rules
+           (hole hole_id)
+           None))))
     ((MsNodeExpr node)
-     (ms_rules_root (- fuel 1) facts grammar asg rules node None))))
+     (ms_rules_root (- fuel 1) facts grammar asg rels rules node None))))
 
 (type MsVerdictAgree
   (MsVerdictAgreeStart)
@@ -1677,6 +2207,7 @@
    (spine_facts (List MsSpineVerdictFact))
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (item TrsSpineRule)
    (alts (List Expr))
    (hole_id Int)
@@ -1693,16 +2224,24 @@
         ((MsVerdictAgreeRedex q) (MsRedex q))))
     ((Cons alt rest)
      (match
-       (ms_spine_item
-         (- fuel 1) facts spine_facts grammar asg item alt)
+       (ms_spine_item (- fuel 1) facts spine_facts grammar asg rels item alt)
        ((MsErr msg) (MsErr msg))
        ((MsBlocked _) (MsBlocked hole_id))
+       ((MsBlockedPair _ _) (MsBlocked hole_id))
        ((MsClear)
         (match agree
           ((MsVerdictAgreeRedex _) (MsBlocked hole_id))
           (_
             (ms_spine_item_alts
-              (- fuel 1) facts spine_facts grammar asg item rest hole_id
+              (- fuel 1)
+              facts
+              spine_facts
+              grammar
+              asg
+              rels
+              item
+              rest
+              hole_id
               (MsVerdictAgreeClear)))))
        ((MsRedex q)
         (match agree
@@ -1710,11 +2249,28 @@
           ((MsVerdictAgreeRedex prior)
            (if (qname_eq prior q)
              (ms_spine_item_alts
-               (- fuel 1) facts spine_facts grammar asg item rest hole_id agree)
+               (- fuel 1)
+               facts
+               spine_facts
+               grammar
+               asg
+               rels
+               item
+               rest
+               hole_id
+               agree)
              (MsBlocked hole_id)))
           ((MsVerdictAgreeStart)
            (ms_spine_item_alts
-             (- fuel 1) facts spine_facts grammar asg item rest hole_id
+             (- fuel 1)
+             facts
+             spine_facts
+             grammar
+             asg
+             rels
+             item
+             rest
+             hole_id
              (MsVerdictAgreeRedex q))))))))))
 
 (fn ms_spine_item
@@ -1723,6 +2279,7 @@
    (spine_facts (List MsSpineVerdictFact))
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (item TrsSpineRule)
    (candidate Expr))
   MsVerdict
@@ -1732,12 +2289,19 @@
     ((MsNodeErr msg) (MsErr msg))
     ((MsNodeOpen hole_id alts)
      (match
-       (ms_spine_verdict_fact
-         spine_facts (ms_spine_item_name item) hole_id)
+       (ms_spine_verdict_fact spine_facts (ms_spine_item_name item) hole_id)
        ((Some verdict) (ms_stable_verdict verdict))
        (None
          (ms_spine_item_alts
-           (- fuel 1) facts spine_facts grammar asg item alts hole_id
+           (- fuel 1)
+           facts
+           spine_facts
+           grammar
+           asg
+           rels
+           item
+           alts
+           hole_id
            (MsVerdictAgreeStart)))))
     ((MsNodeExpr node)
      (match item
@@ -1745,7 +2309,13 @@
         (let
           ((root
              (ms_conditioned_root_language
-               (- fuel 1) facts grammar asg conditioned node)))
+               (- fuel 1)
+               facts
+               grammar
+               asg
+               rels
+               conditioned
+               node)))
           (match root
             ((MsErr msg) (MsErr msg))
             ((MsRedex q) (MsRedex q))
@@ -1761,7 +2331,14 @@
                       (ms_merge
                         root
                         (ms_spine_item
-                          (- fuel 1) facts spine_facts grammar asg item tail))))
+                          (- fuel 1)
+                          facts
+                          spine_facts
+                          grammar
+                          asg
+                          rels
+                          item
+                          tail))))
                    root))
                 (_ root)))))))))))
 
@@ -1771,6 +2348,7 @@
    (spine_facts (List MsSpineVerdictFact))
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (items (List TrsSpineRule))
    (candidate Expr)
    (prior MsVerdict))
@@ -1785,13 +2363,28 @@
           (ms_merge
             prior
             (ms_spine_item
-              (- fuel 1) facts spine_facts grammar asg item candidate))))
+              (- fuel 1)
+              facts
+              spine_facts
+              grammar
+              asg
+              rels
+              item
+              candidate))))
        (match next
          ((MsErr msg) (MsErr msg))
          ((MsRedex q) (MsRedex q))
          (_
            (ms_spines
-             (- fuel 1) facts spine_facts grammar asg rest candidate next))))))))
+             (- fuel 1)
+             facts
+             spine_facts
+             grammar
+             asg
+             rels
+             rest
+             candidate
+             next))))))))
 
 ;; Whole-subtree consensus for an unassigned grammar hole.  Different redex
 ;; citations are kept blocked: every alternative is reducible, but `MsRedex q`
@@ -1802,6 +2395,7 @@
    (tree_facts (List MsVerdictFact))
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (rules (List TrsRule))
    (alts (List Expr))
    (hole_id Int)
@@ -1817,9 +2411,10 @@
         ((MsVerdictAgreeClear) (MsClear))
         ((MsVerdictAgreeRedex q) (MsRedex q))))
     ((Cons alt rest)
-     (match (ms_anywhere (- fuel 1) facts tree_facts grammar asg rules alt)
+     (match (ms_anywhere (- fuel 1) facts tree_facts grammar asg rels rules alt)
        ((MsErr msg) (MsErr msg))
        ((MsBlocked _) (MsBlocked hole_id))
+       ((MsBlockedPair _ _) (MsBlocked hole_id))
        ((MsClear)
         (match agree
           ((MsVerdictAgreeRedex _) (MsBlocked hole_id))
@@ -1830,6 +2425,7 @@
               tree_facts
               grammar
               asg
+              rels
               rules
               rest
               hole_id
@@ -1845,6 +2441,7 @@
                tree_facts
                grammar
                asg
+               rels
                rules
                rest
                hole_id
@@ -1857,6 +2454,7 @@
              tree_facts
              grammar
              asg
+             rels
              rules
              rest
              hole_id
@@ -1868,6 +2466,7 @@
    (tree_facts (List MsVerdictFact))
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (rules (List TrsRule))
    (candidate Expr))
   MsVerdict
@@ -1885,17 +2484,28 @@
            tree_facts
            grammar
            asg
+           rels
            rules
            alts
            hole_id
            (MsVerdictAgreeStart)))))
     ((MsNodeExpr node)
-     (let ((root (ms_rules_root (- fuel 1) facts grammar asg rules node None)))
+     (let
+       ((root (ms_rules_root (- fuel 1) facts grammar asg rels rules node None)))
        (match root
          ((MsErr msg) (MsErr msg))
          ((MsRedex q) (MsRedex q))
          (_
-           (ms_children (- fuel 1) facts tree_facts grammar asg rules node root))))))))
+           (ms_children
+             (- fuel 1)
+             facts
+             tree_facts
+             grammar
+             asg
+             rels
+             rules
+             node
+             root))))))))
 
 (fn ms_children
   ((fuel Int)
@@ -1903,6 +2513,7 @@
    (tree_facts (List MsVerdictFact))
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (rules (List TrsRule))
    (candidate Expr)
    (prior MsVerdict))
@@ -1911,9 +2522,27 @@
   (if (lt fuel 1) (MsErr "constraint child scan fuel exhausted")
   (match candidate
     ((Ctor _ args)
-     (ms_anywhere_list (- fuel 1) facts tree_facts grammar asg rules args prior))
+     (ms_anywhere_list
+       (- fuel 1)
+       facts
+       tree_facts
+       grammar
+       asg
+       rels
+       rules
+       args
+       prior))
     ((Call _ args)
-     (ms_anywhere_list (- fuel 1) facts tree_facts grammar asg rules args prior))
+     (ms_anywhere_list
+       (- fuel 1)
+       facts
+       tree_facts
+       grammar
+       asg
+       rels
+       rules
+       args
+       prior))
     ((If c t e)
      (ms_anywhere_list
        (- fuel 1)
@@ -1921,6 +2550,7 @@
        tree_facts
        grammar
        asg
+       rels
        rules
        (list c t e)
        prior))
@@ -1929,7 +2559,15 @@
        ((with_scrut
           (ms_merge
             prior
-            (ms_anywhere (- fuel 1) facts tree_facts grammar asg rules scrut))))
+            (ms_anywhere
+              (- fuel 1)
+              facts
+              tree_facts
+              grammar
+              asg
+              rels
+              rules
+              scrut))))
        (match with_scrut
          ((MsErr msg) (MsErr msg))
          ((MsRedex q) (MsRedex q))
@@ -1940,6 +2578,7 @@
              tree_facts
              grammar
              asg
+             rels
              rules
              arms
              with_scrut)))))
@@ -1952,6 +2591,7 @@
             tree_facts
             grammar
             asg
+            rels
             rules
             bindings
             prior)))
@@ -1961,7 +2601,15 @@
          (_
            (ms_merge
              with_bindings
-             (ms_anywhere (- fuel 1) facts tree_facts grammar asg rules body))))))
+             (ms_anywhere
+               (- fuel 1)
+               facts
+               tree_facts
+               grammar
+               asg
+               rels
+               rules
+               body))))))
     (_ prior))))
 
 (fn ms_anywhere_list
@@ -1970,6 +2618,7 @@
    (tree_facts (List MsVerdictFact))
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (rules (List TrsRule))
    (candidates (List Expr))
    (prior MsVerdict))
@@ -1989,6 +2638,7 @@
               tree_facts
               grammar
               asg
+              rels
               rules
               candidate))))
        (match next
@@ -2001,6 +2651,7 @@
              tree_facts
              grammar
              asg
+             rels
              rules
              rest
              next))))))))
@@ -2011,6 +2662,7 @@
    (tree_facts (List MsVerdictFact))
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (rules (List TrsRule))
    (arms (List Arm))
    (prior MsVerdict))
@@ -2024,7 +2676,15 @@
        ((next
           (ms_merge
             prior
-            (ms_anywhere (- fuel 1) facts tree_facts grammar asg rules body))))
+            (ms_anywhere
+              (- fuel 1)
+              facts
+              tree_facts
+              grammar
+              asg
+              rels
+              rules
+              body))))
        (match next
          ((MsErr msg) (MsErr msg))
          ((MsRedex q) (MsRedex q))
@@ -2035,6 +2695,7 @@
              tree_facts
              grammar
              asg
+             rels
              rules
              rest
              next))))))))
@@ -2113,6 +2774,8 @@
        ((MsMatchErr msg) (MsFactsErr msg))
        ((MsMatchBlocked _)
         (ms_compile_holes match_fuel grammar pattern rest facts))
+       ((MsMatchBlockedPair _ _)
+        (ms_compile_holes match_fuel grammar pattern rest facts))
        ((MsMatchNo)
         (ms_compile_holes
           match_fuel
@@ -2161,16 +2824,22 @@
     (Nil (MsVerdictFactsOk tree_facts))
     ((Cons (GEnt hole_id _) rest)
      (match
+       ;; Prepared facts are reused across every region, so compilation must
+       ;; consult no relation events: bare assignment, bare relations.
        (ms_anywhere
          fuel
          match_facts
          tree_facts
          grammar
          Nil
+         Nil
          rules
          (hole hole_id))
        ((MsErr msg) (MsVerdictFactsErr msg))
        ((MsBlocked _)
+        (ms_compile_anywhere_holes fuel match_facts grammar rules rest
+          tree_facts))
+       ((MsBlockedPair _ _)
         (ms_compile_anywhere_holes fuel match_facts grammar rules rest
           tree_facts))
        ((MsClear)
@@ -2209,10 +2878,13 @@
          root_facts
          grammar
          Nil
+         Nil
          rules
          (hole hole_id))
        ((MsErr msg) (MsVerdictFactsErr msg))
        ((MsBlocked _)
+        (ms_compile_root_holes fuel match_facts grammar rules rest root_facts))
+       ((MsBlockedPair _ _)
         (ms_compile_root_holes fuel match_facts grammar rules rest root_facts))
        ((MsClear)
         (ms_compile_root_holes
@@ -2249,11 +2921,19 @@
     ((Cons (GEnt hole_id _) rest)
      (match
        (ms_spine_item
-         fuel match_facts spine_facts grammar Nil item (hole hole_id))
+         fuel
+         match_facts
+         spine_facts
+         grammar
+         Nil
+         Nil
+         item
+         (hole hole_id))
        ((MsErr msg) (MsSpineVerdictFactsErr msg))
        ((MsBlocked _)
-        (ms_compile_spine_holes
-          fuel match_facts grammar item rest spine_facts))
+        (ms_compile_spine_holes fuel match_facts grammar item rest spine_facts))
+       ((MsBlockedPair _ _)
+        (ms_compile_spine_holes fuel match_facts grammar item rest spine_facts))
        ((MsClear)
         (ms_compile_spine_holes
           fuel
@@ -2292,12 +2972,10 @@
     (Nil (MsSpineVerdictFactsOk spine_facts))
     ((Cons item rest)
      (match
-       (ms_compile_spine_holes
-         fuel match_facts grammar item entries spine_facts)
+       (ms_compile_spine_holes fuel match_facts grammar item entries spine_facts)
        ((MsSpineVerdictFactsErr msg) (MsSpineVerdictFactsErr msg))
        ((MsSpineVerdictFactsOk more)
-        (ms_compile_spine_items
-          fuel match_facts grammar rest entries more))))))
+        (ms_compile_spine_items fuel match_facts grammar rest entries more))))))
 
 (type MsPrepared
   (MsPrepared
@@ -2390,16 +3068,24 @@
                      (match
                        (if (ms_rules_empty everywhere_rules)
                          (MsVerdictFactsOk Nil)
-                         (ms_compile_anywhere_holes match_fuel facts
+                         (ms_compile_anywhere_holes
+                           match_fuel
+                           facts
                            (ms_language_grammar grammar)
-                           everywhere_rules entries Nil))
+                           everywhere_rules
+                           entries
+                           Nil))
                        ((MsVerdictFactsErr msg) (MsPrepareErr msg))
                        ((MsVerdictFactsOk tree_facts)
                         (match
                           (if (ms_rules_empty root_rules) (MsVerdictFactsOk Nil)
-                          (ms_compile_root_holes match_fuel facts
+                          (ms_compile_root_holes
+                            match_fuel
+                            facts
                             (ms_language_grammar grammar)
-                            root_rules entries Nil))
+                            root_rules
+                            entries
+                            Nil))
                           ((MsVerdictFactsErr msg) (MsPrepareErr msg))
                           ((MsVerdictFactsOk root_facts)
                            (match
@@ -2423,7 +3109,9 @@
                                 (MsPrepared
                                   checked
                                   (ms_language_grammar grammar)
-                                  facts tree_facts root_facts
+                                  facts
+                                  tree_facts
+                                  root_facts
                                   spine_facts)))))))))))))))))))))
 
 ;; Schema preparation validates the same theorem profiles and regular
@@ -2431,8 +3119,8 @@
 ;; are an optimization: the matcher remains exact when it computes a verdict
 ;; from the demanded occurrence.  A later pass can intern stable facts by
 ;; schema state without changing this interface.
-(fn ms_prepare_schema
-  ((match_fuel Int) (plan MsPlan) (grammar SkSchemaGrammar)) MsPrepareR
+(fn ms_prepare_schema ((match_fuel Int) (plan MsPlan) (grammar SkSchemaGrammar))
+  MsPrepareR
   (match plan
     ((MsPlan everywhere root spine)
      (match (ms_plan_spine everywhere root spine)
@@ -2444,8 +3132,7 @@
            (if (lt match_fuel 1)
              (MsPrepareErr "constraint preparation fuel exhausted")
              (MsPrepareOk
-               (MsPrepared
-                 checked (ms_language_schema grammar) Nil Nil Nil Nil))))))))))
+               (MsPrepared checked (ms_language_schema grammar) Nil Nil Nil Nil))))))))))
 
 ;; ---- prepared and direct checking -----------------------------------------
 
@@ -2458,6 +3145,7 @@
    (plan MsPlan)
    (grammar MsLanguage)
    (asg (List (Pair Int Int)))
+   (rels (List SkRel))
    (candidate Expr))
   MsVerdict
   (measure fuel)
@@ -2477,6 +3165,7 @@
               tree_facts
               grammar
               asg
+              rels
               everywhere_rules
               candidate))))
          (match below
@@ -2491,6 +3180,7 @@
                     spine_facts
                     grammar
                     asg
+                    rels
                     spine_rules
                     candidate
                     below)))
@@ -2507,6 +3197,7 @@
                        root_facts
                        grammar
                        asg
+                       rels
                        root_rules
                        candidate))))))))))))))
 
@@ -2518,7 +3209,16 @@
    (candidate Expr))
   MsVerdict
   (ms_check_facts
-    fuel Nil Nil Nil Nil plan (ms_language_grammar grammar) asg candidate))
+    fuel
+    Nil
+    Nil
+    Nil
+    Nil
+    plan
+    (ms_language_grammar grammar)
+    asg
+    Nil
+    candidate))
 
 (fn ms_check_schema
   ((fuel Int)
@@ -2528,7 +3228,16 @@
    (candidate Expr))
   MsVerdict
   (ms_check_facts
-    fuel Nil Nil Nil Nil plan (ms_language_schema grammar) asg candidate))
+    fuel
+    Nil
+    Nil
+    Nil
+    Nil
+    plan
+    (ms_language_schema grammar)
+    asg
+    Nil
+    candidate))
 
 (fn ms_check_prepared
   ((fuel Int)
@@ -2538,13 +3247,14 @@
   MsVerdict
   (match prepared
     ((MsPrepared plan grammar facts tree_facts root_facts spine_facts)
-     (ms_check_facts
-       fuel facts tree_facts root_facts spine_facts
-       plan grammar asg candidate))))
+     (ms_check_facts fuel facts tree_facts root_facts spine_facts plan grammar
+       asg Nil candidate))))
 
 ;; Region-aware compatibility wrappers. Empty regions are removed by the
 ;; region scheduler; treating them as either Clear or Redex would make verdict
-;; accounting ambiguous, so the checker refuses them loudly.
+;; accounting ambiguous, so the checker refuses them loudly.  The region's
+;; relation events reach the matcher here — the relation-aware evaluation
+;; that lets a relational split child make progress.
 (fn ms_check_region
   ((fuel Int)
    (plan MsPlan)
@@ -2556,7 +3266,17 @@
     ((SkCErr msg) (MsErr msg))
     ((SkCOk count)
      (if (le count 0) (MsErr "constraint check received an empty region")
-     (ms_check fuel plan grammar (ms_region_asg region) candidate)))))
+     (ms_check_facts
+       fuel
+       Nil
+       Nil
+       Nil
+       Nil
+       plan
+       (ms_language_grammar grammar)
+       (ms_region_asg region)
+       (sk_region_rels region)
+       candidate)))))
 
 (fn ms_check_prepared_region
   ((fuel Int) (prepared MsPrepared) (region SkRegion) (candidate Expr))
@@ -2580,6 +3300,7 @@
              plan
              grammar
              (ms_region_asg region)
+             (sk_region_rels region)
              candidate)))))))))
 
 ;; A scheduler that preserves region inhabitance can avoid exact cardinality
@@ -2601,6 +3322,7 @@
        plan
        grammar
        (ms_region_asg region)
+       (sk_region_rels region)
        candidate))))
 
 ;; ---- prepared-plan partitions -------------------------------------------
@@ -2628,8 +3350,7 @@
          (MsCitedChoices prior choices)
          (mspp_add_cited_choice name choice rest))))))
 
-(fn mspp_cited_append
-  ((left (List MsCitedRegion)) (right (List MsCitedRegion)))
+(fn mspp_cited_append ((left (List MsCitedRegion)) (right (List MsCitedRegion)))
   (List MsCitedRegion)
   (measure (struct left))
   (match left
@@ -2638,11 +3359,8 @@
 
 (type MsPlanChoicesR
   (MsPlanChoicesErr (List Int))
-  (MsPlanChoicesOk
-    (List MsCitedChoices)
-    (List Int)
-    (List SkRegion)))
-  ; cited redex choices, stable clear choices, still-blocked fixed children
+  (MsPlanChoicesOk (List MsCitedChoices) (List Int) (List SkRegion)))
+; cited redex choices, stable clear choices, still-blocked fixed children
 
 (fn mspp_classify_choices
   ((fuel Int)
@@ -2665,31 +3383,88 @@
        ((SkRegionEditErr msg) (MsPlanChoicesErr msg))
        ((SkRegionEditEmpty)
         (mspp_classify_choices
-          fuel prepared grammar candidate region hole_id (+ index 1) rest
-          redex clear pending))
+          fuel
+          prepared
+          grammar
+          candidate
+          region
+          hole_id
+          (+ index 1)
+          rest
+          redex
+          clear
+          pending))
        ((SkRegionEditOk child)
         (match (sk_region_count candidate grammar child)
           ((SkCErr msg) (MsPlanChoicesErr msg))
           ((SkCOk count)
            (if (le count 0)
              (mspp_classify_choices
-               fuel prepared grammar candidate region hole_id (+ index 1) rest
-               redex clear pending)
-           (match
-             (ms_check_prepared_region fuel prepared child candidate)
-             ((MsErr msg) (MsPlanChoicesErr msg))
-             ((MsRedex name)
-              (mspp_classify_choices
-                fuel prepared grammar candidate region hole_id (+ index 1) rest
-                (mspp_add_cited_choice name index redex) clear pending))
-             ((MsClear)
-              (mspp_classify_choices
-                fuel prepared grammar candidate region hole_id (+ index 1) rest
-                redex (Cons index clear) pending))
-             ((MsBlocked _)
-              (mspp_classify_choices
-                fuel prepared grammar candidate region hole_id (+ index 1) rest
-                redex clear (Cons child pending))))))))))))
+               fuel
+               prepared
+               grammar
+               candidate
+               region
+               hole_id
+               (+ index 1)
+               rest
+               redex
+               clear
+               pending)
+             (match (ms_check_prepared_region fuel prepared child candidate)
+               ((MsErr msg) (MsPlanChoicesErr msg))
+               ((MsRedex name)
+                (mspp_classify_choices
+                  fuel
+                  prepared
+                  grammar
+                  candidate
+                  region
+                  hole_id
+                  (+ index 1)
+                  rest
+                  (mspp_add_cited_choice name index redex)
+                  clear
+                  pending))
+               ((MsClear)
+                (mspp_classify_choices
+                  fuel
+                  prepared
+                  grammar
+                  candidate
+                  region
+                  hole_id
+                  (+ index 1)
+                  rest
+                  redex
+                  (Cons index clear)
+                  pending))
+               ((MsBlocked _)
+                (mspp_classify_choices
+                  fuel
+                  prepared
+                  grammar
+                  candidate
+                  region
+                  hole_id
+                  (+ index 1)
+                  rest
+                  redex
+                  clear
+                  (Cons child pending)))
+               ((MsBlockedPair _ _)
+                (mspp_classify_choices
+                  fuel
+                  prepared
+                  grammar
+                  candidate
+                  region
+                  hole_id
+                  (+ index 1)
+                  rest
+                  redex
+                  clear
+                  (Cons child pending))))))))))))
 
 (type MsCitedBuildR
   (MsCitedBuildErr (List Int))
@@ -2713,13 +3488,82 @@
         (MsCitedBuildErr "cited choice class produced an empty region"))
        ((MsEqRestrictSome redex_region)
         (mspp_build_cited
-          grammar region hole_id alts rest
+          grammar
+          region
+          hole_id
+          alts
+          rest
           (Cons (MsCitedRegion name redex_region) acc)))))))
 
 (type MsPlanPartitionR
   (MsPlanPartitionErr (List Int))
-  (MsPlanPartitionOk (List MsCitedRegion) (List SkRegion) Int))
-  ; cited redex regions, clear regions, relational split boundaries
+  (MsPlanPartitionOk (List MsCitedRegion) (List SkRegion) Int Int))
+; cited redex regions, clear regions, ground fork boundaries, relational splits
+
+;; One ground refinement step over the prepared plan verdict: the ordinary
+;; Blocked answer, and the fallback whenever the relational split refuses
+;; (door or count) — soundness never rides the pair.
+(fn mspp_ground
+  ((fuel Int)
+   (prepared MsPrepared)
+   (grammar Grammar)
+   (candidate Expr)
+   (region SkRegion)
+   (hole_id Int)
+   (rest (List SkRegion))
+   (redex (List MsCitedRegion))
+   (clear (List SkRegion))
+   (forks Int)
+   (splits Int))
+  MsPlanPartitionR
+  (measure fuel)
+  (if (lt fuel 1) (MsPlanPartitionErr "plan partition fuel exhausted")
+  (match (ms_alts grammar hole_id)
+    (None (MsPlanPartitionErr "plan partition references unknown hole"))
+    ((Some alts)
+     (match
+       (mspp_classify_choices
+         (- fuel 1)
+         prepared
+         grammar
+         candidate
+         region
+         hole_id
+         0
+         alts
+         Nil
+         Nil
+         Nil)
+       ((MsPlanChoicesErr msg) (MsPlanPartitionErr msg))
+       ((MsPlanChoicesOk redex_choices clear_choices pending)
+        (match (mspp_build_cited grammar region hole_id alts redex_choices Nil)
+          ((MsCitedBuildErr msg) (MsPlanPartitionErr msg))
+          ((MsCitedBuildOk redex_here)
+           (match
+             (mse_restrict_choices grammar region hole_id alts clear_choices)
+             ((MsEqRestrictErr msg) (MsPlanPartitionErr msg))
+             ((MsEqRestrictNone)
+              (mspp_partition_go
+                (- fuel 1)
+                prepared
+                grammar
+                candidate
+                (mse_regions_append pending rest)
+                (mspp_cited_append redex_here redex)
+                clear
+                (+ forks 1)
+                splits))
+             ((MsEqRestrictSome clear_here)
+              (mspp_partition_go
+                (- fuel 1)
+                prepared
+                grammar
+                candidate
+                (mse_regions_append pending rest)
+                (mspp_cited_append redex_here redex)
+                (Cons clear_here clear)
+                (+ forks 1)
+                splits)))))))))))
 
 (fn mspp_partition_go
   ((fuel Int)
@@ -2729,83 +3573,131 @@
    (jobs (List SkRegion))
    (redex (List MsCitedRegion))
    (clear (List SkRegion))
-   (forks Int))
+   (forks Int)
+   (splits Int))
   MsPlanPartitionR
   (measure fuel)
   (if (lt fuel 1) (MsPlanPartitionErr "plan partition fuel exhausted")
   (match jobs
-    (Nil (MsPlanPartitionOk redex clear forks))
+    (Nil (MsPlanPartitionOk redex clear forks splits))
     ((Cons region rest)
      (match (sk_region_count candidate grammar region)
        ((SkCErr msg) (MsPlanPartitionErr msg))
        ((SkCOk count)
         (if (le count 0)
           (mspp_partition_go
-            (- fuel 1) prepared grammar candidate rest redex clear forks)
-        (match (ms_check_prepared_region fuel prepared region candidate)
-          ((MsErr msg) (MsPlanPartitionErr msg))
-          ((MsRedex name)
-           (mspp_partition_go
-             (- fuel 1) prepared grammar candidate rest
-             (Cons (MsCitedRegion name region) redex) clear forks))
-          ((MsClear)
-           (mspp_partition_go
-             (- fuel 1) prepared grammar candidate rest
-             redex (Cons region clear) forks))
-          ((MsBlocked hole_id)
-           (match (ms_alts grammar hole_id)
-             (None (MsPlanPartitionErr "plan partition references unknown hole"))
-             ((Some alts)
-              (match
-                (mspp_classify_choices
+            (- fuel 1)
+            prepared
+            grammar
+            candidate
+            rest
+            redex
+            clear
+            forks
+            splits)
+          (match (ms_check_prepared_region fuel prepared region candidate)
+            ((MsErr msg) (MsPlanPartitionErr msg))
+            ((MsRedex name)
+             (mspp_partition_go
+               (- fuel 1)
+               prepared
+               grammar
+               candidate
+               rest
+               (Cons (MsCitedRegion name region) redex)
+               clear
+               forks
+               splits))
+            ((MsClear)
+             (mspp_partition_go
+               (- fuel 1)
+               prepared
+               grammar
+               candidate
+               rest
+               redex
+               (Cons region clear)
+               forks
+               splits))
+            ((MsBlocked hole_id)
+             (mspp_ground
+               (- fuel 1)
+               prepared
+               grammar
+               candidate
+               region
+               hole_id
+               rest
+               redex
+               clear
+               forks
+               splits))
+            ((MsBlockedPair h0 h1)
+             ;; The verdict pair is a hint, not an IFF: split relationally
+             ;; and RE-EVALUATE both children.  Relation-aware checking
+             ;; answers the pair inside each child, so every split makes
+             ;; progress; refusals fall back to the ground step.
+             (match (sk_region_split_pair grammar region h0 h1)
+               ((SkRegionSplitErr _)
+                (mspp_ground
                   (- fuel 1)
                   prepared
                   grammar
                   candidate
                   region
-                  hole_id
-                  0
-                  alts
-                  Nil
-                  Nil
-                  Nil)
-                ((MsPlanChoicesErr msg) (MsPlanPartitionErr msg))
-                ((MsPlanChoicesOk redex_choices clear_choices pending)
-                 (match
-                   (mspp_build_cited
-                     grammar region hole_id alts redex_choices Nil)
-                   ((MsCitedBuildErr msg) (MsPlanPartitionErr msg))
-                   ((MsCitedBuildOk redex_here)
-                    (match
-                      (mse_restrict_choices
-                        grammar region hole_id alts clear_choices)
-                      ((MsEqRestrictErr msg) (MsPlanPartitionErr msg))
-                      ((MsEqRestrictNone)
-                       (mspp_partition_go
+                  h0
+                  rest
+                  redex
+                  clear
+                  forks
+                  splits))
+               ((SkRegionSplitOk eq_child ne_child)
+                (match (mse_child_count candidate grammar eq_child)
+                  (None
+                    (mspp_ground
+                      (- fuel 1)
+                      prepared
+                      grammar
+                      candidate
+                      region
+                      h0
+                      rest
+                      redex
+                      clear
+                      forks
+                      splits))
+                  ((Some eq_n)
+                   (match (mse_child_count candidate grammar ne_child)
+                     (None
+                       (mspp_ground
                          (- fuel 1)
                          prepared
                          grammar
                          candidate
-                         (mse_regions_append pending rest)
-                         (mspp_cited_append redex_here redex)
+                         region
+                         h0
+                         rest
+                         redex
                          clear
-                         (+ forks 1)))
-                      ((MsEqRestrictSome clear_here)
-                       (mspp_partition_go
-                         (- fuel 1)
-                         prepared
-                         grammar
-                         candidate
-                         (mse_regions_append pending rest)
-                         (mspp_cited_append redex_here redex)
-                         (Cons clear_here clear)
-                         (+ forks 1)))))))))))))))))))
+                         forks
+                         splits))
+                     ((Some ne_n)
+                      (mspp_partition_go
+                        (- fuel 1)
+                        prepared
+                        grammar
+                        candidate
+                        (mse_push_counted
+                          eq_child
+                          eq_n
+                          (mse_push_counted ne_child ne_n rest))
+                        redex
+                        clear
+                        forks
+                        (+ splits 1)))))))))))))))))
 
 (fn ms_partition_prepared
-  ((fuel Int)
-   (prepared MsPrepared)
-   (region SkRegion)
-   (candidate Expr))
+  ((fuel Int) (prepared MsPrepared) (region SkRegion) (candidate Expr))
   MsPlanPartitionR
   (match prepared
     ((MsPrepared _ grammar _ _ _ _)
@@ -2820,8 +3712,15 @@
              ((SkRegionWfErr msg) (MsPlanPartitionErr msg))
              ((SkRegionWfOk)
               (mspp_partition_go
-                fuel prepared flat candidate
-                (Cons region Nil) Nil Nil 0))))))))))
+                fuel
+                prepared
+                flat
+                candidate
+                (Cons region Nil)
+                Nil
+                Nil
+                0
+                0))))))))))
 
 ;; ---- contextual constructor-arm formation ---------------------------------
 ;;

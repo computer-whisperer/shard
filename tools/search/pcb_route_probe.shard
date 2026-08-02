@@ -1,0 +1,900 @@
+;;; PCB routing demo: the heuristic-tier driver, scaled past single
+;;; path traces.  Nets are MULTI-PIN: the first pin seeds the net's
+;;; tree and every later pin is a TAP routed to the goal set = any
+;;; cell of the tree so far (su_find_query_schema_steps is the inner
+;;; maze solver, one tap against an occupancy list).  Iterative
+;;; deepening supplies shortest-first per tap — stepping +2 for
+;;; singleton-parity goal sets and +1 for mixed-parity trees (a tree
+;;; spans both grid parities, so fixed-parity ladders are UNSOUND for
+;;; sets).  Schema alternative order is the DFS branching heuristic
+;;; (su_fork explores alt 0 first): each tap's grammar leads with the
+;;; moves toward the NEAREST tree cell.  The outer loop is the
+;;; ratified LNS shape: greedy in queue order; on failure the failed
+;;; net's DEEPEST census convicts a victim — b@CELL rows map to the
+;;; routed net owning each cell (keepouts and the walk's own
+;;; self-avoidance cells belong to nobody), kill counts sum per net,
+;;; the heaviest blocker is ripped (w= on the RIP line; w=0 = nothing
+;;; attributed, rip-oldest fallback), requeued at the back, and the
+;;; failed net retries first; a rip cap bounds the loop.  An OCCUPIED
+;;; PIN short-circuits: the seed/tap start sitting on a routed net is
+;;; itself the conviction (pcb_walk_from refuses the start; a blocked
+;;; seed synthesizes the same census row driver-side).
+;;;
+;;; Heuristic existence only: the final assignment is certified by a
+;;; FULL REPLAY that rebuilds every net's tree tap by tap against the
+;;; keepouts (WalkDone required per tap, crossings refused by the
+;;; walk itself) and re-derives all cells from the moves — the
+;;; certificate never trusts search-side cell bookkeeping — then
+;;; checks the union of keepouts and all derived cells duplicate-free
+;;; (pairwise disjointness follows).
+;;;
+;;; THE BOARD (12x12, CONGESTED): a 2x4 component keepout block at
+;;; cols 2-3 x rows 4-7 plus a corridor plug at (4,6) — 9 keepouts —
+;;; and SEVEN nets, designed so the rips COMPOUND: rip 2 exists only
+;;; because of rip 1.  A (decoy, (0,11)-(2,11)) routes first,
+;;; untouched.  C ((5,2)-(5,8)) walls col 5.  S ((1,8)-(1,9)) is a
+;;; west-edge strap — a SECOND REAL BLOCKER, reachable by exactly one
+;;; deepest-level prefix.  B ((9,1)/(9,6)/(9,7), 3-pin) keeps the
+;;; tree-tap + mixed-parity ladder paths exercised.  D ((11,0)-(11,3))
+;;; is col-11 filler.  T ((4,4) seed, (4,7) tap) is the sandwiched
+;;; net: component to the W, C to the E, plug to the N — all four
+;;; ladder levels EMPTY, and the d=9 census convicts C at w=3 OVER S
+;;; at w=1 (hand-enumerated: C blocks [E], [S,E], [S,S,E,N]; S blocks
+;;; only [S,W,W,W]) — census weight discriminating two REAL blockers,
+;;; not culprit-vs-decoy.  After RIP 29 w=3, T re-routes at d=5
+;;; through C's freed corridor.  Then the CASCADE: E ((5,1) seed,
+;;; (5,3) tap) greedily squats C's freed seed cell 29 en route; C's
+;;; retry hits the occupied-pin short-circuit (b@29), RIP 17 w=1, E
+;;; relocates west at d=4 while C detours col 6 at d=8.  Expected:
+;;; KEEP-9 NETS-7 RIPS-2 WIRE-29.
+;;;
+;;; SLACK ECONOMICS (8x8-era measurements, pipelines 182-204 — the
+;;; laws transfer, the constants predate this 12x12 scale-up): a
+;;; level explores a tree exponential in its SLACK (= depth minus the
+;;; Manhattan floor).  Self-avoidance cut per-slack-2 refutation
+;;; growth ~x5-9 -> ~x2.2-2.4; goal-directed ordering cut FOUND ~4x
+;;; and cannot touch EMPTY (order-independent — the A/B self-check).
+;;; The three sizing rules: (1) forced detours kept at slack 4; (2)
+;;; per-call give-ups RAMP 32000*2^level EVALUATOR STEPS (the
+;;; step-cap entry — the knob was decisions, ~600x from the measured
+;;; unit, until rung 3), sized so every healthy refutation COMPLETES
+;;; under its cap; (3) the ladder deepens only on EMPTY — a BUDGET
+;;; give-up stops the net (the next level is strictly bigger).  Every
+;;; engine call logs one line to the World (tap, depth, budget,
+;;; outcome, steps, forks, census) so a hung run leaves evidence in
+;;; the artifact and a failed ladder names its blockers.
+;;;
+;;; The model module is ALSO loaded at runtime (resolve_closure +
+;;; build_module_d on the file path below) because the su evaluator
+;;; resolves the query's pcb_walk_from call against a Module value.
+;;; Runtime path string — update it if the model file moves.
+;;;
+;;; RUN:  bin/shard_eval run tools/search/pcb_route_probe.shard
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/driver.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "../../meta/search")
+(import "superpose.shard")
+(import "tasks/pcb_route_model.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel reader *))
+(use (:: kernel loader *))
+(use (:: kernel driver *))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: meta search *))
+(use (:: tools search superpose *))
+(use (:: tools search tasks pcb_route_model *))
+
+;; ---- the board dimensions -------------------------------------------------
+
+(fn pcbp_wd () Int 12)
+
+(fn pcbp_ht () Int 12)
+
+(fn pcbp_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "PCB-ROUTE FAIL " (append_int msg "\n")) w)))
+
+;; ---- the model module, twice: imported above for direct calls, loaded
+;; ---- here for the su evaluator's query resolution ------------------------
+
+(fn pcbp_model_file () (List Int) "tools/search/tasks/pcb_route_model.shard")
+
+(fn pcbp_model_path () (List Symbol)
+  (list (quote tools) (quote search) (quote tasks) (quote pcb_route_model)))
+
+(fn pcbp_model_q ((name Symbol)) QName (QName (pcbp_model_path) name))
+
+(fn pcbp_probe_q ((name Symbol)) QName
+  (QName (list (quote tools) (quote search) (quote pcb_route_probe)) name))
+
+(type PcbpLoadR (PcbpLoadErr (List Int)) (PcbpLoadOk Module))
+
+(fn pcbp_build ((srcs (List SrcEntry))) PcbpLoadR
+  (match
+    (build_module_d
+      srcs
+      (Module Nil Nil Nil (FnTrie None Nil) Nil)
+      (prelude_ctors)
+      1)
+    ((BMFail msg) (PcbpLoadErr msg))
+    ((BMOk m) (PcbpLoadOk m))))
+
+(fn pcbp_load ((w World)) (Pair PcbpLoadR World)
+  (match (resolve_closure (pcbp_model_file) False w)
+    ((Pair srcs w1)
+     (match srcs
+       (Nil (Pair (PcbpLoadErr "model closure is empty") w1))
+       (_ (Pair (pcbp_build srcs) w1))))))
+
+;; ---- the depth-bounded move-list schema grammar ---------------------------
+
+(fn pcbp_move_alt ((name Symbol)) SkSchemaAlt
+  (SkSchemaAlt (Ctor (pcbp_model_q name) Nil) Nil))
+
+;; Goal-directed alternative order toward the NEAREST tree cell: the
+;; find loop is a LIFO stack and su_fork pushes alternative 0 on top,
+;; so schema alt order IS the DFS exploration order.  Toward moves
+;; lead (larger-|delta| axis first), the move opposite the primary
+;; axis comes last.  Static per tap — the grammar tracks only
+;; remaining length, never the walk's cell.  Ordering cannot change
+;; EMPTY costs; it only accelerates FOUND.
+(fn pcbp_nearest_go
+  ((wd Int) (start Int) (best Int) (bd Int) (goals (List Int)))
+  Int
+  (measure (struct goals))
+  (match goals
+    (Nil best)
+    ((Cons g rest)
+     (let ((d (pcb_manhattan wd start g)))
+       (if (lt d bd) (pcbp_nearest_go wd start g d rest)
+       (pcbp_nearest_go wd start best bd rest))))))
+
+(fn pcbp_nearest ((wd Int) (start Int) (goals (List Int))) Int
+  (match goals
+    (Nil start)
+    ((Cons g rest) (pcbp_nearest_go wd start g (pcb_manhattan wd start g) rest))))
+
+(fn pcbp_move_order ((start Int) (goals (List Int))) (List Symbol)
+  (let ((goal (pcbp_nearest (pcbp_wd) start goals)))
+    (let ((dx (- (pcb_x (pcbp_wd) goal) (pcb_x (pcbp_wd) start))))
+      (let ((dy (- (pcb_y (pcbp_wd) goal) (pcb_y (pcbp_wd) start))))
+        (let ((tx (if (lt dx 0) (quote MvW) (quote MvE))))
+          (let ((ax (if (lt dx 0) (quote MvE) (quote MvW))))
+            (let ((ty (if (lt dy 0) (quote MvN) (quote MvS))))
+              (let ((ay (if (lt dy 0) (quote MvS) (quote MvN))))
+                (if (lt (pcb_abs dx) (pcb_abs dy)) (list ty tx ax ay)
+                (list tx ty ay ax))))))))))
+
+(fn pcbp_move_alts ((names (List Symbol))) (List SkSchemaAlt)
+  (measure (struct names))
+  (match names
+    (Nil Nil)
+    ((Cons h t) (Cons (pcbp_move_alt h) (pcbp_move_alts t)))))
+
+(fn pcbp_move_ent ((id Int) (order (List Symbol))) SkSchemaEnt
+  (SkSchemaEnt id (pcbp_move_alts order)))
+
+(fn pcbp_nil_alt () SkSchemaAlt (SkSchemaAlt (Ctor (qn (quote Nil)) Nil) Nil))
+
+(fn pcbp_cons_alt ((move_id Int) (tail_id Int)) SkSchemaAlt
+  (SkSchemaAlt
+    (Ctor (qn (quote Cons)) (list (hole 0) (hole 1)))
+    (list (SkSchemaRef 0 0 move_id) (SkSchemaRef 1 1 tail_id))))
+
+;; Entries ascending by id: list states 0..d (id = remaining length), the
+;; move alphabet last at id d+1.
+(fn pcbp_ents_up ((i Int) (d Int) (order (List Symbol))) (List SkSchemaEnt)
+  (measure (- (+ d 1) i))
+  (if (lt d i) (Cons (pcbp_move_ent (+ d 1) order) Nil)
+  (Cons
+    (if (lt i 1) (SkSchemaEnt 0 (Cons (pcbp_nil_alt) Nil))
+    (SkSchemaEnt i (list (pcbp_nil_alt) (pcbp_cons_alt (+ d 1) (- i 1)))))
+    (pcbp_ents_up (+ i 1) d order))))
+
+(fn pcbp_grammar ((d Int) (order (List Symbol))) SkSchemaGrammar
+  (SkSchemaGrammar d (pcbp_ents_up 0 d order)))
+
+;; ---- query construction ---------------------------------------------------
+
+(fn pcbp_int_list_expr ((xs (List Int))) Expr
+  (measure (struct xs))
+  (match xs
+    (Nil (Ctor (qn (quote Nil)) Nil))
+    ((Cons h t)
+     (Ctor (qn (quote Cons)) (list (IntLit h) (pcbp_int_list_expr t))))))
+
+(fn pcbp_query ((occ (List Int)) (goals (List Int)) (d Int) (start Int)) Expr
+  (Call
+    (pcbp_model_q (quote pcb_walk_from))
+    (list
+      (IntLit (pcbp_wd))
+      (IntLit (pcbp_ht))
+      (pcbp_int_list_expr occ)
+      (pcbp_int_list_expr goals)
+      (IntLit d)
+      (IntLit start)
+      (hole 0))))
+
+(fn pcbp_want () Expr (Ctor (pcbp_model_q (quote WalkDone)) Nil))
+
+;; budget is EVALUATOR STEPS (rung 3): the give-up is denominated in
+;; the unit the slack curve is measured in.  The decision fuel is a
+;; fixed backstop, never the binding constraint.
+(fn pcbp_find
+  ((m Module)
+   (occ (List Int))
+   (start Int)
+   (goals (List Int))
+   (d Int)
+   (budget Int))
+  SuFind
+  (su_find_query_schema_steps
+    1000000
+    budget
+    m
+    (pcbp_probe_q (quote candidate))
+    (hole 0)
+    (hole 0)
+    (ms_empty_plan)
+    (pcbp_query occ goals d start)
+    (pcbp_want)
+    (pcbp_grammar d (pcbp_move_order start goals))))
+
+;; ---- representative decoding ----------------------------------------------
+
+(fn pcbp_decode_move ((e Expr)) (Option PMove)
+  (match e
+    ((Ctor q args)
+     (match args
+       ((Cons _ _) None)
+       (Nil
+         (if (qname_eq q (pcbp_model_q (quote MvN))) (Some (MvN))
+         (if (qname_eq q (pcbp_model_q (quote MvE))) (Some (MvE))
+         (if (qname_eq q (pcbp_model_q (quote MvS))) (Some (MvS))
+         (if (qname_eq q (pcbp_model_q (quote MvW))) (Some (MvW))
+         None)))))))
+    (_ None)))
+
+(fn pcbp_decode ((e Expr)) (Option (List PMove))
+  (measure (struct e))
+  (match e
+    ((Ctor q args)
+     (match args
+       (Nil (if (qname_eq q (qn (quote Nil))) (Some Nil) None))
+       ((Cons h rest0)
+        (match rest0
+          (Nil None)
+          ((Cons t rest1)
+           (match rest1
+             ((Cons _ _) None)
+             (Nil
+               (if (qname_eq q (qn (quote Cons)))
+                 (match (pcbp_decode_move h)
+                   (None None)
+                   ((Some mv)
+                    (match (pcbp_decode t)
+                      (None None)
+                      ((Some moves) (Some (Cons mv moves))))))
+                 None))))))))
+    (_ None)))
+
+;; ---- the refutation-census formatter --------------------------------------
+
+;; b@CELL = blocked by occupancy (the rip conviction rows), x@CELL =
+;; crossed the net's own tree, miss@CELL = stranded end, floor/off =
+;; payload-free pruning bulk.
+(fn pcbp_ck_tag ((k SuCensusKey)) (List Int)
+  (match k
+    ((SuCkFail) "fail")
+    ((SuCkSym _) "sym")
+    ((SuCkInt c) (append_int "i@" (show_int c)))
+    ((SuCkHead q f)
+     (if (qname_eq q (pcbp_model_q (quote WalkBlocked)))
+       (match f
+         ((Some c) (append_int "b@" (show_int c)))
+         (None "b@?"))
+     (if (qname_eq q (pcbp_model_q (quote WalkCross)))
+       (match f
+         ((Some c) (append_int "x@" (show_int c)))
+         (None "x@?"))
+     (if (qname_eq q (pcbp_model_q (quote WalkMiss)))
+       (match f
+         ((Some c) (append_int "miss@" (show_int c)))
+         (None "miss@?"))
+     (if (qname_eq q (pcbp_model_q (quote WalkFloor))) "floor"
+     (if (qname_eq q (pcbp_model_q (quote WalkOff))) "off"
+     "?"))))))))
+
+(fn pcbp_census_rows_str ((rows (List (Pair SuCensusKey Int)))) (List Int)
+  (measure (struct rows))
+  (match rows
+    (Nil "")
+    ((Cons (Pair k n) rest)
+     (append_int
+       " "
+       (append_int
+         (pcbp_ck_tag k)
+         (append_int ":" (append_int (show_int n) (pcbp_census_rows_str rest))))))))
+
+(fn pcbp_census_str ((census SuCensus)) (List Int)
+  (match census
+    ((SuCensus rows spilled)
+     (append_int
+       " census["
+       (append_int
+         (pcbp_census_rows_str rows)
+         (if (lt 0 spilled)
+           (append_int " +" (append_int (show_int spilled) "]"))
+           "]"))))))
+
+;; ---- iterative deepening per tap ------------------------------------------
+
+;; A failed ladder hands its DEEPEST call's census to the rip loop —
+;; the widest exploration carries the richest blocking attribution.
+(type PcbNetR
+  (PcbNetErr (List Int))
+  (PcbNetNone SuCensus)
+  (PcbNetRoute (List PMove) (List Int) Int))
+
+;; The base of the per-level give-up ramp; level ell gives up at
+;; (pcbp_budget0) * 2^ell EVALUATOR STEPS (fresh arena per call, so
+;; the cap is per engine call).  The ladder's own EMPTYs must
+;; COMPLETE under their caps.  On the congested board every ladder is
+;; SHALLOW-POCKET (floor pruning plus walls choke each level to a
+;; handful of prefixes), so the caps carry ~10x headroom — sharp
+;; census attribution is what keeps congestion cheap.  Resize from
+;; the trace if the instance grows; a give-up should only ever mean
+;; pathology, never a healthy refutation cut short.
+(fn pcbp_budget0 () Int 32000)
+
+(fn pcbp_levels () Int 4)
+
+(fn pcbp_len_moves ((moves (List PMove))) Int
+  (measure (struct moves))
+  (match moves
+    (Nil 0)
+    ((Cons _ t) (+ 1 (pcbp_len_moves t)))))
+
+(fn pcbp_len_ints ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (pcbp_len_ints t)))))
+
+;; +2 deepening is sound only when every goal shares the start's
+;; Manhattan parity (all walk lengths to the set share it); a tree
+;; spans both parities, so mixed sets step +1.
+(fn pcbp_par_uniform ((wd Int) (start Int) (p Int) (goals (List Int))) Bool
+  (measure (struct goals))
+  (match goals
+    (Nil True)
+    ((Cons g rest)
+     (if (int_eq (mod (pcb_manhattan wd start g) 2) p)
+       (pcbp_par_uniform wd start p rest)
+       False))))
+
+(fn pcbp_ladder_step ((wd Int) (start Int) (goals (List Int))) Int
+  (match goals
+    (Nil 1)
+    ((Cons g rest)
+     (if (pcbp_par_uniform wd start (mod (pcb_manhattan wd start g) 2) rest) 2
+     1))))
+
+;; One streamed line per engine call: a hung run must leave evidence.
+(fn pcbp_log_call
+  ((start Int)
+   (tree_n Int)
+   (d Int)
+   (budget Int)
+   (tag (List Int))
+   (steps Int)
+   (forks Int)
+   (census SuCensus)
+   (w World))
+  World
+  (write
+    (append_int
+      "TAP "
+      (append_int
+        (show_int start)
+        (append_int
+          "->#"
+          (append_int
+            (show_int tree_n)
+            (append_int
+              " d="
+              (append_int
+                (show_int d)
+                (append_int
+                  " b="
+                  (append_int
+                    (show_int budget)
+                    (append_int
+                      " "
+                      (append_int
+                        tag
+                        (append_int
+                          " steps="
+                          (append_int
+                            (show_int steps)
+                            (append_int
+                              " forks="
+                              (append_int
+                                (show_int forks)
+                                (append_int (pcbp_census_str census) "\n")))))))))))))))
+    w))
+
+(fn pcbp_log_routed ((start Int) (d Int) (len Int) (w World)) World
+  (write
+    (append_int
+      "ROUTED-TAP "
+      (append_int
+        (show_int start)
+        (append_int
+          " d="
+          (append_int
+            (show_int d)
+            (append_int " len=" (append_int (show_int len) "\n"))))))
+    w))
+
+;; w= is the census blocking weight that convicted the victim; w=0
+;; means no routed net owned any blocking cell — rip-oldest fallback.
+(fn pcbp_log_rip ((seed Int) (wt Int) (w World)) World
+  (write
+    (append_int
+      "RIP "
+      (append_int
+        (show_int seed)
+        (append_int " w=" (append_int (show_int wt) "\n"))))
+    w))
+
+(fn pcbp_deepen
+  ((m Module)
+   (occ (List Int))
+   (start Int)
+   (goals (List Int))
+   (d Int)
+   (step Int)
+   (levels Int)
+   (budget Int)
+   (last SuCensus)
+   (w World))
+  (Pair PcbNetR World)
+  (measure levels)
+  (if (lt levels 1) (Pair (PcbNetNone last) w)
+  (match (pcbp_find m occ start goals d budget)
+    ((SuFindErr msg) (Pair (PcbNetErr msg) w))
+    ((SuFindFound _ _ _ forks _ steps _ rep census)
+     (let
+       ((w2
+          (pcbp_log_call
+            start
+            (pcbp_len_ints goals)
+            d
+            budget
+            "FOUND"
+            steps
+            forks
+            census
+            w)))
+       (match (pcbp_decode rep)
+         (None (Pair (PcbNetErr "undecodable representative") w2))
+         ((Some moves)
+          (Pair
+            (PcbNetRoute moves (pcb_cells (pcbp_wd) (pcbp_ht) start moves) d)
+            w2)))))
+    ((SuFindEmpty _ _ _ forks _ steps _ _ census)
+     (pcbp_deepen
+       m
+       occ
+       start
+       goals
+       (+ d step)
+       step
+       (- levels 1)
+       (* 2 budget)
+       census
+       (pcbp_log_call
+         start
+         (pcbp_len_ints goals)
+         d
+         budget
+         "EMPTY"
+         steps
+         forks
+         census
+         w)))
+    ((SuFindBudget _ _ _ forks _ steps _ _ census)
+     (Pair
+       (PcbNetNone census)
+       (pcbp_log_call
+         start
+         (pcbp_len_ints goals)
+         d
+         budget
+         "BUDGET-STOP"
+         steps
+         forks
+         census
+         w))))))
+
+;; ---- net routing: seed + taps ---------------------------------------------
+
+(type PcbNet (PcbNet (List Int)))
+
+(type PcbRouted (PcbRouted PcbNet (List (List PMove)) (List Int)))
+
+(type PcbAllR (PcbAllErr (List Int)) (PcbAllOk (List PcbRouted) Int))
+
+(type PcbNetOutcome
+  (PcbNetFailed SuCensus)
+  (PcbNetDone (List (List PMove)) (List Int))
+  (PcbNetBad (List Int)))
+
+(fn pcbp_app_cells ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (pcbp_app_cells t b)))))
+
+(fn pcbp_app_nets ((a (List PcbNet)) (b (List PcbNet))) (List PcbNet)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (pcbp_app_nets t b)))))
+
+(fn pcbp_app_routed ((a (List PcbRouted)) (b (List PcbRouted))) (List PcbRouted)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (pcbp_app_routed t b)))))
+
+(fn pcbp_app_taps ((a (List (List PMove))) (b (List (List PMove))))
+  (List (List PMove))
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (pcbp_app_taps t b)))))
+
+(fn pcbp_routed_cells ((rs (List PcbRouted))) (List Int)
+  (measure (struct rs))
+  (match rs
+    (Nil Nil)
+    ((Cons (PcbRouted _ _ cells) rest)
+     (pcbp_app_cells cells (pcbp_routed_cells rest)))))
+
+;; Drop the junction (the tap path's final cell — already a tree cell).
+(fn pcbp_drop_last ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t)
+     (match t
+       (Nil Nil)
+       ((Cons _ _) (Cons h (pcbp_drop_last t)))))))
+
+;; A blocked PIN is its own conviction: synthesize the census row the
+;; walk would have produced.
+(fn pcbp_pin_census ((pin Int)) SuCensus
+  (SuCensus
+    (Cons (Pair (SuCkHead (pcbp_model_q (quote WalkBlocked)) (Some pin)) 1) Nil)
+    0))
+
+;; Route every remaining pin as a tap into the growing tree.  occ =
+;; keepouts + other nets; the OWN tree is the goal set, never
+;; occupancy (the walk's crossing check owns that boundary).
+(fn pcbp_route_net
+  ((m Module)
+   (occ (List Int))
+   (levels Int)
+   (budget0 Int)
+   (pins (List Int))
+   (tree (List Int))
+   (taps (List (List PMove)))
+   (w World))
+  (Pair PcbNetOutcome World)
+  (measure (struct pins))
+  (match pins
+    (Nil (Pair (PcbNetDone taps tree) w))
+    ((Cons pin rest)
+     (if (pcb_mem pin tree)
+       (pcbp_route_net m occ levels budget0 rest tree taps w)
+       (match
+         (pcbp_deepen
+           m
+           occ
+           pin
+           tree
+           (pcb_dist_set (pcbp_wd) pin tree)
+           (pcbp_ladder_step (pcbp_wd) pin tree)
+           levels
+           budget0
+           (su_census_empty)
+           w)
+         ((Pair (PcbNetErr msg) w2) (Pair (PcbNetBad msg) w2))
+         ((Pair (PcbNetNone census) w2) (Pair (PcbNetFailed census) w2))
+         ((Pair (PcbNetRoute moves cells d) w2)
+          (pcbp_route_net
+            m
+            occ
+            levels
+            budget0
+            rest
+            (pcbp_app_cells (pcbp_drop_last cells) tree)
+            (pcbp_app_taps taps (Cons moves Nil))
+            (pcbp_log_routed pin d (pcbp_len_moves moves) w2))))))))
+
+;; ---- census-directed victim selection -------------------------------------
+;; WalkBlocked census rows -> (cell, kills).  Self-avoidance kills
+;; attribute to the walk's OWN cells, which are unoccupied by
+;; construction and so never belong to a routed net — the ownership
+;; scan excludes them without any special case.
+(fn pcbp_census_blockers ((rows (List (Pair SuCensusKey Int))))
+  (List (Pair Int Int))
+  (measure (struct rows))
+  (match rows
+    (Nil Nil)
+    ((Cons (Pair k n) rest)
+     (match k
+       ((SuCkHead q f)
+        (if (qname_eq q (pcbp_model_q (quote WalkBlocked)))
+          (match f
+            ((Some c) (Cons (Pair c n) (pcbp_census_blockers rest)))
+            (None (pcbp_census_blockers rest)))
+          (pcbp_census_blockers rest)))
+       (_ (pcbp_census_blockers rest))))))
+
+(fn pcbp_cells_weight ((cells (List Int)) (blockers (List (Pair Int Int)))) Int
+  (measure (struct blockers))
+  (match blockers
+    (Nil 0)
+    ((Cons (Pair c n) rest)
+     (+ (if (pcb_mem c cells) n 0) (pcbp_cells_weight cells rest)))))
+
+;; Best = strictly-greater weight displaces, so the OLDEST net wins
+;; ties and a zero-weight scan leaves bestix at 0 (= rip-oldest
+;; fallback when the census attributes nothing to any routed net).
+(fn pcbp_best_victim_ix
+  ((rs (List PcbRouted))
+   (blockers (List (Pair Int Int)))
+   (ix Int)
+   (bestw Int)
+   (bestix Int))
+  (Pair Int Int)
+  (measure (struct rs))
+  (match rs
+    (Nil (Pair bestw bestix))
+    ((Cons (PcbRouted _ _ cells) rest)
+     (let ((wt (pcbp_cells_weight cells blockers)))
+       (if (lt bestw wt) (pcbp_best_victim_ix rest blockers (+ ix 1) wt ix)
+       (pcbp_best_victim_ix rest blockers (+ ix 1) bestw bestix))))))
+
+(fn pcbp_remove_ix ((rs (List PcbRouted)) (ix Int))
+  (Option (Pair PcbRouted (List PcbRouted)))
+  (measure (struct rs))
+  (match rs
+    (Nil None)
+    ((Cons h t)
+     (if (lt ix 1) (Some (Pair h t))
+     (match (pcbp_remove_ix t (- ix 1))
+       (None None)
+       ((Some (Pair v rest)) (Some (Pair v (Cons h rest)))))))))
+
+(fn pcbp_net_seed ((net PcbNet)) Int
+  (match net
+    ((PcbNet pins)
+     (match pins
+       (Nil (- 0 1))
+       ((Cons p0 _) p0)))))
+
+;; ---- the rip-up / re-route loop -------------------------------------------
+
+(fn pcbp_route_all
+  ((m Module)
+   (keep (List Int))
+   (levels Int)
+   (budget0 Int)
+   (queue (List PcbNet))
+   (routed (List PcbRouted))
+   (rips Int)
+   (fuel Int)
+   (w World))
+  (Pair PcbAllR World)
+  (measure fuel)
+  (if (lt fuel 1) (Pair (PcbAllErr "rip cap exceeded") w)
+  (match queue
+    (Nil (Pair (PcbAllOk routed rips) w))
+    ((Cons net rest)
+     (match net
+       ((PcbNet pins)
+        (match pins
+          (Nil (Pair (PcbAllErr "net with no pins") w))
+          ((Cons p0 prest)
+           (let ((occ (pcbp_app_cells keep (pcbp_routed_cells routed))))
+             (match
+               (if (pcb_mem p0 occ) (Pair (PcbNetFailed (pcbp_pin_census p0)) w)
+               (pcbp_route_net m occ levels budget0 prest (Cons p0 Nil) Nil w))
+               ((Pair (PcbNetBad msg) w2) (Pair (PcbAllErr msg) w2))
+               ((Pair (PcbNetDone taps tree) w2)
+                (pcbp_route_all
+                  m
+                  keep
+                  levels
+                  budget0
+                  rest
+                  (pcbp_app_routed routed (Cons (PcbRouted net taps tree) Nil))
+                  rips
+                  (- fuel 1)
+                  w2))
+               ((Pair (PcbNetFailed census) w2)
+                (match routed
+                  (Nil
+                    (Pair
+                      (PcbAllErr "infeasible: unroutable with empty board")
+                      w2))
+                  ((Cons _ _)
+                   (match census
+                     ((SuCensus rows _)
+                      (match
+                        (pcbp_best_victim_ix
+                          routed
+                          (pcbp_census_blockers rows)
+                          0
+                          0
+                          0)
+                        ((Pair bw bix)
+                         (match (pcbp_remove_ix routed (if (lt 0 bw) bix 0))
+                           (None
+                             (Pair (PcbAllErr "victim index out of range") w2))
+                           ((Some (Pair victim remaining))
+                            (match victim
+                              ((PcbRouted vnet _ _)
+                               (pcbp_route_all
+                                 m
+                                 keep
+                                 levels
+                                 budget0
+                                 (Cons net (pcbp_app_nets rest (Cons vnet Nil)))
+                                 remaining
+                                 (+ rips 1)
+                                 (- fuel 1)
+                                 (pcbp_log_rip (pcbp_net_seed vnet) bw w2)))))))))))))))))))))))
+
+;; ---- the certificate: full replay ----------------------------------------
+
+;; Rebuild a net's tree tap by tap against the keepouts only; every
+;; tap must come back (WalkDone) — crossings, blocks, and strandings
+;; all refuse inside the walk.  Cells are RE-DERIVED from the moves:
+;; the certificate never trusts search-side bookkeeping.  Pins
+;; already on the tree consume no tap (mirrors pcbp_route_net).
+(fn pcbp_replay_net
+  ((keep (List Int))
+   (pins (List Int))
+   (taps (List (List PMove)))
+   (tree (List Int)))
+  (Option (List Int))
+  (measure (struct pins))
+  (match pins
+    (Nil
+      (match taps
+        (Nil (Some tree))
+        ((Cons _ _) None)))
+    ((Cons pin rest)
+     (if (pcb_mem pin tree) (pcbp_replay_net keep rest taps tree)
+     (match taps
+       (Nil None)
+       ((Cons moves mrest)
+        (match
+          (pcb_walk_from
+            (pcbp_wd)
+            (pcbp_ht)
+            keep
+            tree
+            (pcbp_len_moves moves)
+            pin
+            moves)
+          ((WalkDone)
+           (pcbp_replay_net
+             keep
+             rest
+             mrest
+             (pcbp_app_cells
+               (pcbp_drop_last (pcb_cells (pcbp_wd) (pcbp_ht) pin moves))
+               tree)))
+          (_ None))))))))
+
+;; All nets' cells, re-derived by replay; None = any tap rejected.
+(fn pcbp_replay_all ((keep (List Int)) (rs (List PcbRouted)))
+  (Option (List Int))
+  (measure (struct rs))
+  (match rs
+    (Nil (Some Nil))
+    ((Cons (PcbRouted (PcbNet pins) taps _) rest)
+     (match pins
+       (Nil None)
+       ((Cons p0 prest)
+        (match (pcbp_replay_net keep prest taps (Cons p0 Nil))
+          (None None)
+          ((Some cells)
+           (match (pcbp_replay_all keep rest)
+             (None None)
+             ((Some more) (Some (pcbp_app_cells cells more)))))))))))
+
+(fn pcbp_dup_free ((xs (List Int))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil True)
+    ((Cons h t) (if (pcb_mem h t) False (pcbp_dup_free t)))))
+
+(fn pcbp_wire_taps ((taps (List (List PMove)))) Int
+  (measure (struct taps))
+  (match taps
+    (Nil 0)
+    ((Cons moves rest) (+ (pcbp_len_moves moves) (pcbp_wire_taps rest)))))
+
+(fn pcbp_wire ((rs (List PcbRouted))) Int
+  (measure (struct rs))
+  (match rs
+    (Nil 0)
+    ((Cons (PcbRouted _ taps _) rest)
+     (+ (pcbp_wire_taps taps) (pcbp_wire rest)))))
+
+;; ---- the board instance ---------------------------------------------------
+
+;; The component block (cols 2-3 x rows 4-7) + the corridor plug (4,6).
+(fn pcbp_keepouts () (List Int) (list 50 51 62 63 74 75 86 87 76))
+
+;; Queue order IS routing order: A decoy, C corridor wall, S strap,
+;; B 3-pin bus, D filler, T the sandwiched net, E the squatter.
+(fn pcbp_nets () (List PcbNet)
+  (list
+    (PcbNet (list 132 134))
+    (PcbNet (list 29 101))
+    (PcbNet (list 97 109))
+    (PcbNet (list 21 81 93))
+    (PcbNet (list 11 47))
+    (PcbNet (list 52 88))
+    (PcbNet (list 17 41))))
+
+(fn pcbp_report ((rips Int) (wire Int) (w World)) World
+  (write
+    (append_int
+      "PCB-ROUTE 12x12 KEEP-9 NETS-7 RIPS-"
+      (append_int
+        (show_int rips)
+        (append_int " WIRE-" (append_int (show_int wire) " CERT-DISJOINT-OK\n"))))
+    w))
+
+(fn pcbp_run ((m Module) (w World)) World
+  (match
+    (pcbp_route_all
+      m
+      (pcbp_keepouts)
+      (pcbp_levels)
+      (pcbp_budget0)
+      (pcbp_nets)
+      Nil
+      0
+      16
+      w)
+    ((Pair (PcbAllErr msg) w2) (pcbp_fail msg w2))
+    ((Pair (PcbAllOk routed rips) w2)
+     (match (pcbp_replay_all (pcbp_keepouts) routed)
+       (None (pcbp_fail "certificate: replay rejected a tap" w2))
+       ((Some cells)
+        (if (pcbp_dup_free (pcbp_app_cells (pcbp_keepouts) cells))
+          (pcbp_report rips (pcbp_wire routed) w2)
+          (pcbp_fail "certificate: overlapping cells" w2)))))))
+
+(fn main ((w World)) World
+  (match (pcbp_load w)
+    ((Pair (PcbpLoadErr msg) w1) (pcbp_fail msg w1))
+    ((Pair (PcbpLoadOk m) w1) (pcbp_run m w1))))
