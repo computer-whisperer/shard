@@ -197,3 +197,43 @@ No code moved. No schema frozen (S2's schema freezes at S2's
 ratification, on S1's numbers). No kernel or canon-owned file is
 touched before S3's own gated review. The note's ratification
 opens S1 only.
+
+## 8. S1 RECORD (2026-08-02; landed same-day as ratification)
+
+Mechanism (bin/check): key = engine stamp + sha256 over the
+target's transitive import closure — file imports, directory-module
+members recursively, and every member's `.auto.shard` sidecar
+(sidecars are check inputs; the prove-regen flow must invalidate).
+Only the stamp-fresh shard_check engine caches; EVAL-ladder runs
+never do. Success-only writes (`0 failed` verified in the output);
+unresolvable imports fail OPEN to a full check; certs live in
+`.shard-cache/check/` (gitignored, F2 as ruled); corpus/CI never
+consult the cache.
+
+Numbers. The standing exhibit (sha256.xcomp, the 2.38B-call
+154-line file): 11.29s cold → 0.103s warm — 109×, and the warm
+cost is pure closure hashing (~60 files). Invalidation on the
+three-edit benchmark is exact: an edit OUTSIDE the closure
+(models/riscv) leaves the cert valid; an impl edit INSIDE the
+closure (sha256.imp) forces the re-check; a SIDECAR edit
+(sha256.stream.auto.shard) forces the re-check. §9 (d) at module
+granularity: the re-checked set is exactly the dependency-forced
+set. What S1 does not touch, measured: the cold check still pays
+11.3s for 154 lines — the load floor, S2's charge, now the whole
+residual by construction.
+
+**F3 AMENDMENT (discovered building v1, surfaced to the user).**
+The ruled F3 lean said "module content hash + mod.req interface
+hashes" — github #7's premise that impl edits cannot affect
+consumers. That premise is FALSE in shard today: consumer proofs
+COMPUTE imported fn bodies (every fuel tower runs nat/mem ops;
+compute reaches through the surface), so impl bytes are genuine
+check inputs and interface-only keying would produce FALSE CACHE
+HITS. v1 therefore keys on whole content — over-invalidation only,
+never a wrong hit. The mod.req-granular refinement remains F3's
+growth rung with a new entry condition: it may key a consumer on an
+import's interface ONLY for imports whose members provably cannot
+enter the consumer's compute (opaque-surface modules), or after a
+mode-aware-resolution mechanism actually hides impl bodies. This is
+a scope finding, not a §3 DOWNGRADE: the skip delivers gate (d)
+regardless; interface granularity was a hit-rate refinement.

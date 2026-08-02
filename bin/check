@@ -50,12 +50,76 @@ fi
 FILE="$1"
 [ -f "$FILE" ] || FILE="$(realpath --relative-to=. "$OLDPWD/$1" 2>/dev/null || echo "$1")"
 
+# ── S1: the per-target check certificate (docs/STORAGE.md, RATIFIED
+# 2026-08-02) ──
+# Key = engine stamp + content sha256 of the target's transitive import
+# closure (file imports, directory-module members recursively, and every
+# member's .auto.shard sidecar — sidecars are check inputs). A matching
+# certificate from a previous GREEN check skips the run. Cache, never
+# trust: only success writes a cert; corpus/CI never consult this; the
+# key over-invalidates by construction (whole-content, not interface —
+# consumer proofs COMPUTE imported fn bodies, so impl edits are real
+# inputs; the mod.req-granular refinement is STORAGE.md F3's growth
+# rung). Only the stamp-fresh shard_check engine caches — EVAL ladder
+# runs are never cached. SHARD_CHECK_NOCACHE=1 bypasses.
+CACHE_DIR=.shard-cache/check
+cache_key=""
+if [ -z "${SHARD_CHECK_NOCACHE:-}" ] && [ "${CHECK_CMD[0]}" = "bin/shard_check" ]; then
+  cache_key="$(S1_ENGINE="$(cat bin/shard_check.stamp 2>/dev/null)" python3 - "$FILE" <<'PYEOF' 2>/dev/null
+import hashlib, os, sys
+seen = {}
+def add_file(p):
+    p = os.path.normpath(p)
+    if p in seen:
+        return
+    if not os.path.isfile(p):
+        raise SystemExit(1)  # unresolvable import: no cache
+    seen[p] = True
+    d = os.path.dirname(p)
+    for line in open(p, encoding='utf-8', errors='replace'):
+        if line.startswith('(import "'):
+            imp = line.split('"')[1]
+            q = os.path.normpath(os.path.join(d, imp))
+            if os.path.isdir(q):
+                for dirpath, _, files in os.walk(q):
+                    for f in sorted(files):
+                        if f.endswith('.shard'):
+                            add_file(os.path.join(dirpath, f))
+            else:
+                add_file(q)
+add_file(sys.argv[1])
+for p in list(seen):
+    if p.endswith('.shard') and not p.endswith('.auto.shard'):
+        a = p[:-6] + '.auto.shard'
+        if os.path.isfile(a):
+            seen[a] = True
+h = hashlib.sha256()
+h.update((os.environ.get('S1_ENGINE', '') + '\n').encode())
+for p in sorted(seen):
+    h.update(p.encode()); h.update(b'\0')
+    h.update(hashlib.sha256(open(p, 'rb').read()).digest())
+print(f"{h.hexdigest()} files={len(seen)}")
+PYEOF
+)" || cache_key=""
+fi
+if [ -n "$cache_key" ]; then
+  cert="$CACHE_DIR/$(printf '%s' "$FILE" | sha256sum | cut -c1-32).cert"
+  if [ -f "$cert" ] && [ "$(head -1 "$cert")" = "$cache_key" ]; then
+    echo "CACHED  $FILE — closure unchanged since last green check (S1 skip; SHARD_CHECK_NOCACHE=1 forces)"
+    exit 0
+  fi
+fi
+
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
 "${CHECK_CMD[@]}" "$FILE" >"$tmp" 2>&1
 code=$?
 cat "$tmp"
+if [ $code -eq 0 ] && [ -n "$cache_key" ] && grep -q ', 0 failed' "$tmp"; then
+  mkdir -p "$CACHE_DIR"
+  { echo "$cache_key"; echo "# target: $FILE"; } > "$cert"
+fi
 [ $code -eq 1 ] || exit $code
 
 # ── enrichment pass 1: auto-focus each failing branching claim ──
