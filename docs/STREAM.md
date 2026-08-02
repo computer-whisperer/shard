@@ -200,6 +200,25 @@ needs a real consumer forcing its decisions:
   in favor of this explicit rung. Claims on the table: the measured
   −19.3% calls / −34% live peak / −26% maxrss on every closure
   check, and ~40k generated lines leaving the committed repo.
+  **SCOPE RATIFIED (user, 2026-08-02) — the FULL redirection.**
+  Scoping found the out file carries THREE replay chains, not one:
+  shblock (13 boundaries, the priced ~40.6k) plus shpad and shfpad
+  (single-boundary, ~2.7k each), whose walk claims weld/sweld cite
+  — the B1 record never mentioned the pads. Ruled mechanism:
+  sha256.xchain.shard gains conversion-dialect twins for the two
+  pad chains (seam + walk each; the pads share the 12-slot window,
+  ilv_inv12 applies); weld/sweld/xconv/xpatch migrate citations to
+  the twins; then tools/impgen's mixed x86 tier drops the boundary
+  ladder emission UNCONDITIONALLY — no marker, no mode, the
+  deprecated form stops being emitted for every pin present and
+  future. REJECTED-because: the shblock-only alternative (input
+  marker, zero new proofs) kept two replay chains committed and
+  taught the generator a per-pin convention — the landing sentence
+  above stayed false under it. Staging around the thread-B anneal
+  window (impgen in its scope): the pad twins are a pure xchain
+  addition and land FIRST; the generator flip + regeneration +
+  citation swaps land in one slice at the window's closing
+  announcement.
 
 - **B5 — the expert leg: SHA-NI/SIMD hand-pinned variant vs
   OpenSSL.** This is the FIRST real non-canonical consumer — the
