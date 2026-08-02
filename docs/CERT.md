@@ -248,6 +248,19 @@ incremental behavior — plus task #62 and DC4; the standing exhibit
 is B1b's composition closure (2.38B calls / 4.17GB RSS to check a
 154-line file, STREAM.md B1b RECORD).
 
+**DRAFTED (2026-08-02): docs/STORAGE.md — awaiting ratification.**
+Three layers on one identity (CANON.md §7's content hash): L1 the
+per-module check certificate (kernel-free, gate (d)'s first
+number), L2 binary module images resolving DC4 into the canon
+serialization schema (kills the measured load floor), L3 the
+hash-consed arena carrying rung (e)'s mandate — deliberately last,
+possibly CLOSED-DORMANT if S1+S2 drain its pool. Fork D's number
+(the pricing memo's one missing measurement) landed via the B4b
+record: deletion credit −32.6% calls on the direct closure,
+swamping the extrapolated conversion cost. Note: "task #62" above
+is github issue #7 (per-module check certificates) — the number
+was stale at first writing.
+
 ## 8. Arc A — the pathfinder protocol (CLOSED: verdicts recorded,
 full-arc review COMPLETE 2026-07-26)
 
