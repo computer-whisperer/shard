@@ -255,6 +255,46 @@ pattern:
   miss or mismatch = text path. Gate: the image-vs-text
   DIFFERENTIAL over the corpus — identical verdicts and identical
   loaded structures.
+  **S2b RECORD — LANDED in two slices (2026-08-02, same-day).**
+  Slice 1 = PARSE-ONCE (8083473): SrcEntry grows a forms field
+  (`(Option (List SExpr))`, invariant forms ≡ read_all(bytes)),
+  parsed exactly once in the loader's visit_go; all ~13 whole-source
+  sweeps (build_module_d/r, parse_decls, use-scope, bins/libs/
+  own-externs/measure-clause/proof-seed/refined-return) consume the
+  field via _mf/_f siblings; byte entry points keep their signatures
+  for tool consumers. THE NUMBER: the S1 exhibit's cold check
+  11.29s → 5.50s (2.05x). Slice 2 = THE FRONT DOOR (f2246dc): the
+  codec moved to kernel/image.shard (tools/image stays as the gate
+  driver citing it) + the IMG2 container (`"IMG2;" len;path len;src
+  IMG1-payload`); visit_go consults
+  .shard-cache/images/<mangled-path>.img via resolve_closure_i;
+  bin/check translates SHARD_IMAGES=1 into a trailing +images argv
+  token that check.shard strips anywhere (NO getenv extern, zero
+  Rust/C changes). DESIGN STRENGTHENING vs this bullet's sketch: the
+  filename is a mangled PATH, not a content key — the container
+  embeds the source's path AND full bytes, and a hit requires
+  byte-identity with what read_file just returned. Exact validation
+  has no collision class at all and is CHEAPER in-shard than bignum
+  hashing; the filename becomes non-load-bearing. Gate state: local
+  battery green (cold populate; warm verdict BYTE-IDENTICAL to the
+  text run; stale source detected + image rewritten; corrupted image
+  healed byte-identically); the corpus differential is the
+  variable-gated corpus-images CI job (CORPUS_IMAGES:1 — cold +
+  warm passes, both FAIL-projections diffed vs the text baseline);
+  the "identical loaded structures" half is discharged by S2a's
+  654/654 roundtrip + the container's exact byte validation.
+  Residual exposure: silent payload corruption on disk, bounded by
+  cache-never-trust (corpus/CI never pass the flag).
+  **THE HONEST NUMBER (S2c's opening fact): warm-image 8.28s vs
+  parse-once text 5.50s on the exhibit — the SExpr-layer door
+  LOSES.** Parse-once removed the 13x multiplier, and after it one
+  parse is cheaper than the door's container read (~2.5x the source
+  bytes as cons cells) + exact compare + decode. S2c's expectation
+  re-sets accordingly: the default stays OFF at this layer; the
+  profitable rung is the MODULE-LAYER image (payload replaces
+  ELABORATION, not parse — survey finding (ii)'s chained keys),
+  which reuses this container, door, and differential unchanged.
+  S2's real measured win so far = slice 1's 2.05x.
 - **S2c — the number + the default.** B1b-exhibit warm-image
   measurement, hit rate over a real session, then the default-on
   ruling. S2's schema freezes HERE, not before.
