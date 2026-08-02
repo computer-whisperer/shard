@@ -4936,6 +4936,46 @@ EMPTY-AT-0 at 166,730 / 10 + 1,461 / 0, both CITE-closed) — the
 regression arm holds under the LS3b file generalization. LS3-ii is
 CLOSED; LS3-iii (pool growth on the two named refusals) is next.
 
+**LS3-iii RECORD (LANDED 2026-08-02 — pool growth on the two
+measured refusals; the ratified growth loop closing once).** The two
+laws LS3-ii's refusal telemetry named, now proven in
+models/x86/peephole.shard (ordinary shared-file work under LS-law 1;
+the file also received a separate pure-format canonicalization
+commit — it predated the formatted-repo sweep):
+
+- **xseq_movri_movrr_dead** — [mov d, imm; mov d, s] = [mov d, s]
+  under the reg_code disequality guard (the same decidable guard
+  vocabulary as the xor pair law). Proof: rget_rset_other +
+  rset_shadow, one have.
+- **xseq_mov32_byte_mask_absorbs** — [mov32 d, d; and d, 255] =
+  [and d, 255] premised only on nonneg (rget rs d). Proof: both
+  sides collapse to mod (rget rs d) 256 through the std/bits
+  mask/mod bridge (mask_word32, mask_byte) plus the new
+  **mod_word32_byte** — mod (mod a 2^32) 256 = mod a 256,
+  PREMISE-FREE, proved by mod_unique at the decomposition exhibited
+  from the two euclidean identities (q = ediv a 256 − 2^24·ediv a
+  2^32; the farkas cert (1 1 -1)/(1 -1 1) over the two
+  ediv_mod_id haves). Nested-mod collapse is x86 mask-seam glue for
+  now; promote to std/bits deliberately if a second consumer
+  appears.
+
+The pool (xspp_pool) grew to four; the citation-side plumbing was
+already generic — zero probe-machinery changes beyond the pool list
+and the model's two use lines (citations parse against the model's
+scope). The I1/I2 piece theorems land as hand pins in the mine probe
+(xsm_i1/i2_piece_pin — byte-for-byte the driver's constructed goals,
+corpus-checked citability), and the mine probe's expected report
+flips: I1/I2 IMPROVED PROOF-CITE-* — the summary becomes IMPROVED-2
+CANDIDATE-0 MINIMAL-4.
+
+Local validation: peephole closure 313/0 (all three laws green — the
+mod_unique farkas vectors closed first try); the phase-2 smoke now
+closes BOTH improvements at runtime (I1 →
+CITE-xseq_mov32_byte_mask_absorbs, I2 → CITE-xseq_movri_movrr_dead);
+the reach moves floor is UNCHANGED (0/4, 5/16 — pool growth is task
+policy, not a proofgen move, exactly as LS-law 2 prescribes). CI
+re-fire of the mine probe pending; the measured record lands here.
+
 Non-goals, stated once: no prove-on-engine rewrite before the LS-law
 3 gate; no kernel/type-system growth; no repo-wide sidecar sweeps
 (LS-law 1).

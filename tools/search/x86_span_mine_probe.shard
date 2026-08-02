@@ -21,13 +21,14 @@
 ;;; THE HAND-DERIVED STORY (expected lengths pinned in-driver; a drifted
 ;;; instance fails loudly instead of printing a stale claim):
 ;;;   I1 [mov32 RAX RAX; and RAX 255]  -> FOUND len 1 ([and RAX 255]:
-;;;      (x & 2^32-1) & 255 = x & 255), EMPTY at 0; phase 2 expected
-;;;      REFUSED (no mask law in the pool yet — the LS3-iii signal).
-;;;      File 3's low-32 parts exceed 255, so the bare truncation
-;;;      [mov32 RAX RAX] cannot fingerprint-alias the masked target.
+;;;      (x & 2^32-1) & 255 = x & 255), EMPTY at 0; ACCEPTED since
+;;;      LS3-iii: the piece theorem closes by citing
+;;;      xseq_mov32_byte_mask_absorbs (grown on this instance's
+;;;      measured LS3-ii refusal).  File 3's low-32 parts exceed 255,
+;;;      so the bare truncation cannot fingerprint-alias the target.
 ;;;   I2 [mov RAX 0; mov RAX R8]       -> FOUND len 1 ([mov RAX R8]:
-;;;      the constant store is dead), EMPTY at 0; phase 2 expected
-;;;      REFUSED (no dead-store law in the pool yet).
+;;;      the constant store is dead), EMPTY at 0; ACCEPTED since
+;;;      LS3-iii by citing xseq_movri_movrr_dead (same story).
 ;;;   I3 [xor RAX R15; mov R15 RAX]    -> MINIMAL at 2 (both registers
 ;;;      end equal to RAX^R15; no single instruction writes both).
 ;;;   I4 [add32 R12 1; mul32 R15 256]  -> MINIMAL at 2 (independent
@@ -39,18 +40,21 @@
 ;;;
 ;;; Expected report (one line per instance + the summary):
 ;;;   X86-SPAN-MINE I1 TARGET-LEN-2 FOUND-LEN-1 EMPTY-AT-0
-;;;     IMPROVE-CANDIDATE PROOF-REFUSED CERT-FP-OK
-;;;   X86-SPAN-MINE I2 ... as I1 ...
+;;;     IMPROVED PROOF-CITE-xseq_mov32_byte_mask_absorbs CERT-FP-OK
+;;;   X86-SPAN-MINE I2 TARGET-LEN-2 FOUND-LEN-1 EMPTY-AT-0
+;;;     IMPROVED PROOF-CITE-xseq_movri_movrr_dead CERT-FP-OK
 ;;;   X86-SPAN-MINE I3..I6 TARGET-LEN-n FOUND-LEN-n EMPTY-AT-(n-1)
 ;;;     MINIMAL CERT-FP-OK
-;;;   X86-SPAN-MINE LS3B OK IMPROVED-0 CANDIDATE-2 MINIMAL-4
+;;;   X86-SPAN-MINE LS3B OK IMPROVED-2 CANDIDATE-0 MINIMAL-4
 ;;;
-;;; The refusal telemetry is the slice's deliverable as much as the
-;;; minimality records: WHICH laws the pool lacks for real material is
-;;; exactly what LS3-iii grows on.
+;;; (LS3-ii's first fire measured both improvements as honest
+;;; PROOF-REFUSED under the two-lemma xor pool; LS3-iii grew the pool
+;;; with exactly the two refused laws — the ratified
+;;; growth-on-measured-refusals loop closing once.)
 
 (import "x86_span_probe.shard")
 (import "tasks/x86_span_instances.shard")
+(import "../../models/x86/peephole.shard")
 
 (use (:: kernel term *))
 (use (:: kernel module *))
@@ -63,6 +67,8 @@
 (use (:: tools search superpose *))
 (use (:: std mem Mem))
 (use (:: models x86 x86 *))
+(use (:: models x86 peephole xseq_movri_movrr_dead))
+(use (:: models x86 peephole xseq_mov32_byte_mask_absorbs))
 (use (:: tools search tasks x86_span_model *))
 (use (:: tools search tasks x86_span_instances *))
 (use (:: tools search x86_span_probe *))
@@ -350,3 +356,46 @@
   (match (xspp_load w)
     ((Pair (XsppLoadErr msg) w1) (xsm_fail msg w1))
     ((Pair (XsppLoadOk m srcs) w1) (exit 0 (xsm_run m srcs w1)))))
+
+;; ---- instance piece pins (the LS3-iii accepted improvements) --------------
+;; Byte-for-byte the theorems the driver constructs for I1/I2 — the
+;; corpus checks the goal schema and the grown pool's citability every
+;; run, exactly as the seed probe pins its xor instances.
+
+(claim xsm_i1_piece_pin
+  (goal ((f Nat) (m XModule) (tail (List XInstr)) (rs Regs) (mem Mem))
+    ((= (le 0 (rget rs RAX)) True))
+    (=
+      (xeval_seq
+        (S (S (S f)))
+        m
+        (Cons (XMovRR32 RAX RAX) (Cons (XBin XAnd RAX (SImm 255)) tail))
+        rs
+        mem)
+      (xeval_seq (S (S f)) m (Cons (XBin XAnd RAX (SImm 255)) tail) rs mem)))
+  (rewrite-with
+    (lemma xseq_mov32_byte_mask_absorbs)
+    lr
+    lhs
+    ()
+    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+    refl))
+
+(claim xsm_i2_piece_pin
+  (goal ((f Nat) (m XModule) (tail (List XInstr)) (rs Regs) (mem Mem))
+    ((= (le 0 (rget rs RAX)) True) (= (le 0 (rget rs R8)) True))
+    (=
+      (xeval_seq
+        (S (S (S f)))
+        m
+        (Cons (XMovRI RAX 0) (Cons (XMovRR RAX R8) tail))
+        rs
+        mem)
+      (xeval_seq (S (S f)) m (Cons (XMovRR RAX R8) tail) rs mem)))
+  (rewrite-with
+    (lemma xseq_movri_movrr_dead)
+    lr
+    lhs
+    ()
+    ((steps ((compute both)) refl))
+    refl))

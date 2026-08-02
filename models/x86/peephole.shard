@@ -7,9 +7,14 @@
 ;;; boundary would be false.
 
 (import "../../kernel/stdlib.shard")
+(import "../../kernel/facts.shard")
 (import "../../std/bits")
 (import "../../std/mem")
 (import "x86.shard")
+(use (:: kernel facts ediv_mod_id))
+(use (:: kernel facts mod_unique))
+(use (:: kernel facts mod_lo))
+(use (:: kernel facts mod_hi))
 (use (:: std bits *))
 (use (:: std mem Mem))
 (use (:: models x86 x86 *))
@@ -1708,4 +1713,164 @@
        (rewrite (premise hfirst) lr lhs true ())
        (rewrite (lemma rset_shadow) lr lhs true ())
        (rewrite (premise hright) lr rhs true ()))
+      refl)))
+
+;; Nested remainders collapse when the outer modulus divides the inner:
+;; mod_unique at the decomposition exhibited from the two euclidean
+;; identities (premise-free — the characterization needs no sign
+;; assumption).  The word32/byte instance is the mov32/byte-mask seam's
+;; arithmetic core.
+(claim mod_word32_byte
+  (goal ((a Int)) () (= (mod (mod a 4294967296) 256) (mod a 256)))
+  (chain
+    (have h32 (= a (+ (* 4294967296 (ediv a 4294967296)) (mod a 4294967296)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 4294967296))
+        ((steps ((compute both)) refl))
+        refl))
+    (have h256 (= a (+ (* 256 (ediv a 256)) (mod a 256)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 256))
+        ((steps ((compute both)) refl))
+        refl))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst q (- (ediv a 256) (* 16777216 (ediv a 4294967296))))
+       (inst r (mod a 256)))
+      ((by arith (list (list 1 1 -1) (list 1 -1 1)))
+       (rewrite-with
+         (lemma mod_lo)
+         lr
+         lhs
+         ()
+         ((steps ((compute both)) refl))
+         refl)
+       (rewrite-with
+         (lemma mod_hi)
+         lr
+         lhs
+         ()
+         ((steps ((compute both)) refl))
+         refl))
+      refl)))
+
+;; A constant store is DEAD under an immediately following register
+;; move onto the same destination: [mov d, imm; mov d, s] = [mov d, s]
+;; whenever s is a differently coded register (the same decidable guard
+;; vocabulary as the xor pair law).  The mined founding instance is
+;; sha256's shround epilogue ([mov RAX 0; mov RAX R8]).
+(claim xseq_movri_movrr_dead
+  (goal
+    ((f Nat)
+     (m XModule)
+     (tail (List XInstr))
+     (rs Regs)
+     (mem Mem)
+     (d Reg)
+     (s Reg)
+     (v Int))
+    ((= (int_eq (reg_code d) (reg_code s)) False))
+    (=
+      (xeval_seq
+        (S (S (S f)))
+        m
+        (Cons (XMovRI d v) (Cons (XMovRR d s) tail))
+        rs
+        mem)
+      (xeval_seq (S (S f)) m (Cons (XMovRR d s) tail) rs mem)))
+  (chain
+    (have hsrc (= (rget (rset rs d (wrap64 v)) s) (rget rs s))
+      (rewrite-with
+        (lemma rget_rset_other)
+        lr
+        lhs
+        ((inst written d) (inst read s))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (steps
+      ((unfold xeval_seq lhs)
+       (compute lhs (stop xeval_seq rget rset wrap64))
+       (unfold xeval_seq lhs)
+       (compute lhs (stop xeval_seq rget rset wrap64))
+       (unfold xeval_seq rhs)
+       (compute rhs (stop xeval_seq rget rset wrap64))
+       (rewrite (premise hsrc) lr lhs true ())
+       (rewrite (lemma rset_shadow) lr lhs true ()))
+      refl)))
+
+;; The 32-bit self-truncation is subsumed by a byte mask:
+;; [mov32 d, d; and d, 255] = [and d, 255].  Through the mask/mod
+;; bridge both sides are mod (rget rs d) 256 — the truncation drops
+;; out by mod_word32_byte.  The mined founding instance is sha256's
+;; shtotw byte extraction.
+(claim xseq_mov32_byte_mask_absorbs
+  (goal ((f Nat) (m XModule) (tail (List XInstr)) (rs Regs) (mem Mem) (d Reg))
+    ((= (le 0 (rget rs d)) True))
+    (=
+      (xeval_seq
+        (S (S (S f)))
+        m
+        (Cons (XMovRR32 d d) (Cons (XBin XAnd d (SImm 255)) tail))
+        rs
+        mem)
+      (xeval_seq (S (S f)) m (Cons (XBin XAnd d (SImm 255)) tail) rs mem)))
+  (chain
+    (have hm32 (= (band (rget rs d) 4294967295) (mod (rget rs d) 4294967296))
+      (rewrite-with
+        (lemma mask_word32)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hlo (= (le 0 (mod (rget rs d) 4294967296)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute both)) refl))
+        refl))
+    (have hb
+      (=
+        (band (mod (rget rs d) 4294967296) 255)
+        (mod (mod (rget rs d) 4294967296) 256))
+      (rewrite-with
+        (lemma mask_byte)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hlo) lr lhs true ())) refl))
+        refl))
+    (have hmm (= (mod (mod (rget rs d) 4294967296) 256) (mod (rget rs d) 256))
+      (steps ((rewrite (lemma mod_word32_byte) lr lhs true ())) refl))
+    (have hrhs (= (band (rget rs d) 255) (mod (rget rs d) 256))
+      (rewrite-with
+        (lemma mask_byte)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (steps
+      ((unfold xeval_seq lhs)
+       (compute lhs (stop xeval_seq rget rset band))
+       (unfold xeval_seq lhs)
+       (compute lhs (stop xeval_seq rget rset band))
+       (unfold xeval_seq rhs)
+       (compute rhs (stop xeval_seq rget rset band))
+       (rewrite (lemma rget_rset_same) lr lhs true ())
+       (rewrite (lemma rset_shadow) lr lhs true ())
+       (rewrite (premise hm32) lr lhs true ())
+       (rewrite (premise hb) lr lhs true ())
+       (rewrite (premise hmm) lr lhs true ())
+       (rewrite (premise hrhs) lr rhs true ()))
       refl)))
