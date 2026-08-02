@@ -4835,14 +4835,23 @@ header carries this as the ALIASING LAW, with pins: score_gh /
 score_keyed / score_abstain). Post-fix, the cap-2 PAIR find pops the
 winner at 20,438 steps / 1 fork.
 
-**The validated end-to-end run (local, post-fix — the exact
-predicted report):** PAIR TARGET-LEN-2 FOUND-LEN-0 EMPTY-VACUOUS
-PROOF-CITE-xseq_xor_pair_cancels CERT-FP-OK (20,438 steps / 1 fork);
-SELF TARGET-LEN-2 FOUND-LEN-1 EMPTY-AT-0
-PROOF-CITE-xseq_xor_self_absorbs CERT-FP-OK (find 193,915 steps / 10
-forks; the checked EMPTY at cap 0 = 1,843 steps / 0 forks); X86-SPAN
-LS3A OK. Step counts are census-grade only (busy box, no wall-clock
-claims); the official record is the CI re-fire's.
+**THE OFFICIAL RECORD (CI pipeline 268, 2026-08-02, ENGINE EXIT 0,
+peak RSS 2.43 GB, 216 s job — the exact predicted report, and
+step-count-identical to the local validation run, so the engine is
+deterministic on this task):**
+  X86-SPAN PAIR TARGET-LEN-2 FOUND-LEN-0 EMPTY-VACUOUS
+    PROOF-CITE-xseq_xor_pair_cancels CERT-FP-OK   (20,438 steps / 1
+    fork — the g=0 pop is the winner)
+  X86-SPAN SELF TARGET-LEN-2 FOUND-LEN-1 EMPTY-AT-0
+    PROOF-CITE-xseq_xor_self_absorbs CERT-FP-OK   (find 193,915
+    steps / 10 forks; the checked EMPTY at cap 0 = 1,843 steps / 0
+    forks)
+  X86-SPAN LS3A OK
+Both success criteria of the LS3a arm hold: seeds found AND closed
+end-to-end, with the proof telemetry landing in the CITATION tier
+(bare moves refuse both — the reach gradient measured on searched
+material). LS3-i is CLOSED; LS3-ii (the sha-mined real-material arm)
+is next per the fork ruling.
 
 Non-goals, stated once: no prove-on-engine rewrite before the LS-law
 3 gate; no kernel/type-system growth; no repo-wide sidecar sweeps
