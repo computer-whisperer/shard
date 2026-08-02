@@ -4973,8 +4973,21 @@ mod_unique farkas vectors closed first try); the phase-2 smoke now
 closes BOTH improvements at runtime (I1 →
 CITE-xseq_mov32_byte_mask_absorbs, I2 → CITE-xseq_movri_movrr_dead);
 the reach moves floor is UNCHANGED (0/4, 5/16 — pool growth is task
-policy, not a proofgen move, exactly as LS-law 2 prescribes). CI
-re-fire of the mine probe pending; the measured record lands here.
+policy, not a proofgen move, exactly as LS-law 2 prescribes).
+
+**THE OFFICIAL RECORD (CI pipeline 276, 2026-08-02, ENGINE EXIT 0,
+peak RSS 2.42 GB): X86-SPAN-MINE LS3B OK IMPROVED-2 CANDIDATE-0
+MINIMAL-4** — I1 IMPROVED PROOF-CITE-xseq_mov32_byte_mask_absorbs,
+I2 IMPROVED PROOF-CITE-xseq_movri_movrr_dead, I3-I6 MINIMAL, with
+every search step count IDENTICAL to the LS3-ii record (the search
+side untouched; only the proof side flipped — exactly the isolation
+the two-phase design promises). The pilot now has the full arc's
+thesis end-to-end on real material: search FOUND the rewrites,
+checked EMPTYs bound them, and the kernel-replayed piece theorems
+ACCEPT them — two proven improvements to the sha256 x86 leg's
+emitted code, earned by one turn of the measured-refusal growth
+loop. LS3-iii is CLOSED, and with it the LS3 pilot's success
+criteria (a), (b), (c) are all met.
 
 Non-goals, stated once: no prove-on-engine rewrite before the LS-law
 3 gate; no kernel/type-system growth; no repo-wide sidecar sweeps
