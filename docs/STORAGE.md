@@ -198,6 +198,28 @@ ratification, on S1's numbers). No kernel or canon-owned file is
 touched before S3's own gated review. The note's ratification
 opens S1 only.
 
+## 8a. S2 OPENED (2026-08-02, user ruling after the S1 record +
+retraction). Sub-slicing, recorded before build per the house
+pattern:
+
+- **S2a — the codec, standalone.** The image format (CANON.md §7
+  identity-bytes style: tag byte per ctor, count-prefixed lists,
+  sign+digits ints) + serializer/deserializer as a TOOL
+  (tools/image/), no loader contact. Gate: corpus-wide ROUNDTRIP —
+  every module text-load → serialize → deserialize → structural
+  equality with the original, plus codec determinism. The core AST
+  is small (Expr 9 ctors, Type 2, FnDef 1, Module 1) but the full
+  covered set (claims/proof scripts, typedefs, externs, tries)
+  gets inventoried before the schema freezes.
+- **S2b — the loader front door,** behind SHARD_IMAGES=1: the
+  driver consults .shard-cache/images/<content-key>.img per import;
+  miss or mismatch = text path. Gate: the image-vs-text
+  DIFFERENTIAL over the corpus — identical verdicts and identical
+  loaded structures.
+- **S2c — the number + the default.** B1b-exhibit warm-image
+  measurement, hit rate over a real session, then the default-on
+  ruling. S2's schema freezes HERE, not before.
+
 ## 8. S1 RECORD (2026-08-02; landed same-day as ratification)
 
 Mechanism (bin/check): key = engine stamp + sha256 over the
