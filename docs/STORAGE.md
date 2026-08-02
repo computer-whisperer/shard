@@ -298,6 +298,34 @@ pattern:
 - **S2c — the number + the default.** B1b-exhibit warm-image
   measurement, hit rate over a real session, then the default-on
   ruling. S2's schema freezes HERE, not before.
+  **S2c MEASUREMENTS BANKED (2026-08-02; ruling PENDING user).**
+  All against slice-1 parse-once text as the baseline, stamped
+  engines, S1 cert bypassed: (i) exhibit all-hit warm (27-file
+  closure, 34MB of source): text 5.50s vs image 8.28s (+50%);
+  (ii) the REAL-SESSION profile — the S1 cert already skips
+  unchanged targets, so images only ever fire on cert misses,
+  i.e. one edited member + the rest hits: 26/27 hits with exactly
+  the edited file rewritten (the mechanism is precise), text 5.69s
+  vs image 7.96s (+40%); (iii) small closure (std/list, 4 files):
+  19ms vs 21ms. Read amplification explains it: the closure's
+  images total 38MB beside 34MB of source (the payload itself is
+  SMALLER than source — comments drop — but the embedded
+  exact-validation copy adds it back), so the warm path reads and
+  cons-materializes 2.1x the bytes. The door loses on EVERY
+  measured profile at the SExpr layer. FORK (S2c's ruling, posed
+  2026-08-02): (a) default stays OFF — the door remains opt-in
+  behind SHARD_IMAGES=1, differential-guarded, kept as the
+  validated container/door/differential infrastructure for the
+  MODULE-LAYER image (the elaboration-replacing rung, survey
+  finding (ii)); (b) RETIRE the door (delete the loader hook,
+  keep parse-once + codec + tool gate) — saves ~100 loader lines,
+  loses tested infrastructure the Module rung would rebuild;
+  (c) default ON — no measured case, listed for completeness.
+  LEAN: (a). SCHEMA FREEZE (ratified to happen here): IMG1/IMG2
+  freeze as landed — the magic strings are the version gate; any
+  format change bumps the magic and old images self-invalidate to
+  misses. S2 CLOSES on this ruling + the corpus-images
+  differential verdict (pipeline #278).
 
 ## 8. S1 RECORD (2026-08-02; landed same-day as ratification)
 
