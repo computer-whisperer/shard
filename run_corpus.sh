@@ -418,6 +418,7 @@ TARGETS=(
   tools/search/pcb_time_probe.shard
   tools/search/tasks/pcb_cost_model.shard
   tools/search/pcb_cost_probe.shard
+  tools/search/pcb_cap_probe.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
