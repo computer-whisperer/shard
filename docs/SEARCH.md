@@ -4660,12 +4660,14 @@ names only. CI: the reach moves-floor pin rides the default corpus
 tier (0/4 cond_mine + 5/16 auto_demo exact — a deliberate closer
 change updates the pin with it; anything else drifting it is a bug).
 
-**LS-law 3 gate fraction — the open fork this record poses (baseline
-now measured; self-contained per house form).** What engine reach
-unlocks the prove-on-engine rewrite? Context: bare moves are free —
-any engine backend inherits 61% of the ladder corpus by construction —
-so the gate must sit well above the floor to mean anything.
-- *90% of the ladder-won corpus + at least one far-tier entry (lean).*
+**LS-law 3 gate fraction — RULED 2026-08-02: the lean adopted — 90%
+of the ladder-won corpus + at least one far-tier entry.** (Baseline
+context: bare moves are free — any engine backend inherits 61% of the
+ladder corpus by construction — so the gate sits well above the
+floor. The non-adopted option's cost text stands as the
+REJECTED-because record.)
+- *90% of the ladder-won corpus + at least one far-tier entry
+  (ADOPTED).*
   Demands real search-side synthesis (the open 39% is exactly the
   citation/induction/chain shapes) and the far-tier close proves
   capability the ladder lacks. Cost: the rewrite starts before full
@@ -4676,6 +4678,96 @@ so the gate must sit well above the floor to mean anything.
   rung-specific shapes (the div-facts arm, disc case-on discovery);
   chasing the tail delays the rewrite for goals that stay served
   either way.
+
+**LS3 DESIGN (drafted 2026-08-02 — FOR RATIFICATION, no build
+before approval).**
+
+*Naming.* The pilot's unit is a **SPAN** — a straight-line XInstr
+sequence (no XBlock/XLoop/XBr/XBrIf/XCall/XRet/XSyscall). "Window" is
+already load-bearing x86 vocabulary (X86.md §23: the MEMORY window
+[xmemlo, xmemhi)); reusing it for instruction sequences would collide
+with a ratified law's name.
+
+*Object and task shape (the imp_expr precedent).* A span task module
+supplies only: the instruction VOCABULARY (species subset × register
+subset × immediate universe), the TARGET span, the PROBE set (pinned
+input vectors: Regs × Mem smallcases), and a depth/length budget. The
+engine side stays generic — no task hands the engine its answer.
+
+*Drive wiring (the pre-admitted second consumer).* The cost rung
+admitted this exact consumer at su_find_query_schema_astar_checked's
+birth: g = span length, h = 0 (trivially consistent), dominance keys
+= the machine-state FINGERPRINT (final Regs+Mem behavior vector over
+the probe set, trap/exhaustion loud). Dominance-soundness pedigree,
+documented here per the hygiene rule: spans are straight-line and
+deterministic, so continuation behavior factors EXACTLY through the
+intermediate machine state — any completion of a dominated arrival is
+verbatim a completion of the dominator, and equal-fingerprint arrivals
+at greater-or-equal g lose nothing. (Cleaner than the PCB case: no
+budget monotonicity argument needed, the factoring is exact.)
+Expected ENGINE CHANGES: ZERO — walk + score + fingerprint are a new
+task-parametric consumer; any missing seam becomes its own announced
+slice, never an inline engine edit.
+
+*The two-phase verdict (the lock-step thesis in miniature).*
+In-search, fingerprint equality on the probe vectors FILTERS
+candidates — heuristic, untrusted, exactly the claim-ladder posture.
+Every surviving find must then close its PIECE THEOREM: an xeval_seq
+equality in the peephole form — tail-polymorphic, length-normalized
+fuel with the exact cost delta (same-fuel replacement at the
+exhaustion boundary is false — peephole.shard's header law), premises
+from the fixed schema v1 (nonneg registers, reg_code disequalities)
+— attempted through meta/proofgen moves plus a CITATION POOL seeded
+with the peephole laws (the xpp_import pin already proves the search
+tier can cite them). A find whose theorem does not close is REPORTED,
+never accepted — the proof side prunes the code side, which is the
+arc's thesis operating.
+
+*The claims.* A ruled find emits: (1) the equivalence theorem
+(kernel-replayed, the only certificate); (2) on checked EMPTY at
+every length below the winner: the PROVEN-MINIMALITY record — scoped
+honestly to the task's declared vocabulary, operand universe, and
+probe-respecting candidates, in the PCB claim grammar (bound = the
+EMPTY level, witness cost verified = bound+1 in-driver before the
+claim prints). Instance pins hand-derived before first fire; deep
+runs CI-only (standing law).
+
+*Seeds.* LS3a — the peephole REGRESSION seeds: the xor-pair-cancels /
+xor-self-absorbs shapes, already hand-proven; search must find AND
+close them (the imp_expr witness-gate pattern: a known-certified
+witness gates non-emptiness). LS3b — REAL MATERIAL: spans mined from
+std/sha256/impgen_x86_out.shard (species mix measured 2026-08-02:
+XStore8 711, XBin32-add 636, XBin32-sub 526, XMovRR 359, XLoad8 251,
+XBin32-mul 149 …) at modest scope (length 2-4, small register set) —
+a strictly-shorter proven-equivalent span, or its proven-minimality,
+is the pilot's payoff either way.
+
+*Success criteria.* (a) LS3a seeds found + closed end-to-end;
+(b) at least one LS3b span improved-or-proven-minimal under a checked
+EMPTY; (c) the proof-attempt telemetry (which spans close on bare
+moves vs need citations vs refuse) feeds the reach benchmark — LS3
+measures the same gradient the LS-law 3 gate is scored on.
+
+*Slices.* LS3-i: the span task engine + LS3a seeds, corpus-pinned.
+LS3-ii: LS3b real-material instances + the measured record here.
+LS3-iii (only if demanded by refusals): citation-pool/move growth —
+each landing measured against the reach baseline.
+
+**LS3 forks for ruling (self-contained):**
+- *Fork LS3-A — first-fire scope.* (1) LS3a regression seeds ONLY in
+  the first landing, LS3b as its own slice (LEAN: the witness-gate
+  discipline wants the regression arm green before real material —
+  and the PCB record shows first-fire pins are cheapest to derive on
+  known shapes). (2) Both arms in one slice: earlier payoff, but a
+  red LS3b instance would then block the whole landing.
+- *Fork LS3-B — the proof side of found spans.* (1) Attempt via
+  proofgen moves + the peephole citation pool, growing the pool/moves
+  only on measured refusals (LEAN — this IS the open-ended-search
+  mission; growth lands as ordinary shared-file work under LS-law 1).
+  (2) Emit proof text by per-species-pair templates (generator
+  style): predictable, but it is exactly the fixed-function machinery
+  the mission statement de-prioritizes, and its coverage would stop
+  at the template table.
 
 Non-goals, stated once: no prove-on-engine rewrite before the LS-law
 3 gate; no kernel/type-system growth; no repo-wide sidecar sweeps
