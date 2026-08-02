@@ -4811,9 +4811,38 @@ reach floor pins unchanged (0/4, 5/16); model + probe
 shardfmt-canonical. Trust posture: the pool's theory entries are
 admitted Proven on the corpus gate on peephole.shard, goals parsed
 from the loaded closure's own source bytes (stated in the probe
-header). The SEARCH run is unvalidated — first fire on CI via
-ENGINE_RUN (the standing law); the measured record lands here when it
-returns.
+header).
+
+**THE FIRST FIRE'S FINDING (CI pipeline 266, 2026-08-02 — the
+cut-render aliasing kill).** The first fire returned FIND-EMPTY on
+the PAIR seed (witness gate broken, 191,895 steps / 10 forks), and
+the census named the killer exactly: `h@False:45 sym:dominated:46` —
+45 + 46 = all 91 spans, with the WINNER among the dominated. The
+diagnosis (reproduced locally byte-for-byte, licensed by the CI
+measurement): the score render replaces open tail holes with the cut
+expression (Nil), so a partial region and its own Nil-completion
+render IDENTICALLY — the parent pops first, inserts the shared
+fingerprint key into the checked-dominance closed set, and the closed
+set then kills the actual winner as a duplicate arrival. pcb's score
+hook never hit this because its goal arrivals ABSTAIN (key None).
+The fix is the same discipline made goal-aware: xsp_score now takes
+the goal fingerprint and abstains on a match, so winners never enter
+the closed set; on NON-goal keys the parent/child aliasing is benign
+— the aliased Nil-child's complete fingerprint IS the closed key,
+which differs from the goal, so the kill is itself the refutation,
+and the extensions live on in the parent's other forks (the model
+header carries this as the ALIASING LAW, with pins: score_gh /
+score_keyed / score_abstain). Post-fix, the cap-2 PAIR find pops the
+winner at 20,438 steps / 1 fork.
+
+**The validated end-to-end run (local, post-fix — the exact
+predicted report):** PAIR TARGET-LEN-2 FOUND-LEN-0 EMPTY-VACUOUS
+PROOF-CITE-xseq_xor_pair_cancels CERT-FP-OK (20,438 steps / 1 fork);
+SELF TARGET-LEN-2 FOUND-LEN-1 EMPTY-AT-0
+PROOF-CITE-xseq_xor_self_absorbs CERT-FP-OK (find 193,915 steps / 10
+forks; the checked EMPTY at cap 0 = 1,843 steps / 0 forks); X86-SPAN
+LS3A OK. Step counts are census-grade only (busy box, no wall-clock
+claims); the official record is the CI re-fire's.
 
 Non-goals, stated once: no prove-on-engine rewrite before the LS-law
 3 gate; no kernel/type-system growth; no repo-wide sidecar sweeps

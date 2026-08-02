@@ -14,9 +14,19 @@
 ;;; outcome, so the fingerprint is fuel-invariant above span length + 1.
 ;;;
 ;;; THE A* SCORE HOOK: g = span length, h = 0 (trivially consistent), key
-;;; = the fingerprint.  f = g, so pop order is length order and the first
-;;; fingerprint-matching pop is a MINIMUM-LENGTH match within the task's
-;;; declared vocabulary and depth cap.
+;;; = the fingerprint — EXCEPT that a goal-matching fingerprint ABSTAINS
+;;; (key None, the pcb goal-arrival discipline).  f = g, so pop order is
+;;; length order and the first fingerprint-matching pop is a
+;;; MINIMUM-LENGTH match within the task's declared vocabulary and depth
+;;; cap.  The abstain is LOAD-BEARING (measured, CI pipeline 266 — the
+;;; first fire's finding): the score render replaces open tail holes
+;;; with the cut (Nil), so a partial region and its own Nil-completion
+;;; render IDENTICALLY — the parent pops first, inserts the shared key,
+;;; and the closed set then kills the actual winner as dominated.  On
+;;; NON-goal keys the same parent/child aliasing is benign: the aliased
+;;; Nil-child's complete fingerprint IS the closed key, which differs
+;;; from the goal, so the kill is itself the refutation, and the
+;;; extension candidates live on in the parent's other forks.
 ;;;
 ;;; THE CHECKED-DOMINANCE PEDIGREE (what licenses
 ;;; su_find_query_schema_astar_checked's EMPTY on this model): spans are
@@ -132,15 +142,24 @@
     ((Cons _ rest) (+ 1 (xsp_len rest)))))
 
 ;; The structurally decoded score hook (the engine never inspects the
-;; ctor name): g = length, h = 0, key = the fingerprint.
+;; ctor name): g = length, h = 0, key = the fingerprint — abstaining
+;; (None) when it matches the goal, per the header's aliasing law.
 (type XspScore (XspScore Int Int (Option (List Int))))
 
-(fn xsp_score ((fuel Nat) (body (List XInstr))) XspScore
-  (XspScore (xsp_len body) 0 (Some (xsp_fingerprint fuel body (xsp_files)))))
+(fn xsp_score_of ((n Int) (goalfp (List Int)) (fp (List Int))) XspScore
+  (XspScore n 0 (if (xsp_ints_eq fp goalfp) None (Some fp))))
+
+(fn xsp_score ((fuel Nat) (goalfp (List Int)) (body (List XInstr))) XspScore
+  (xsp_score_of (xsp_len body) goalfp (xsp_fingerprint fuel body (xsp_files))))
 
 (fn xsp_gh ((s XspScore)) (Pair Int Int)
   (match s
     ((XspScore g h _) (Pair g h))))
+
+(fn xsp_keyed ((s XspScore)) Bool
+  (match s
+    ((XspScore _ _ None) False)
+    ((XspScore _ _ (Some _)) True)))
 
 ;; ---- ground pins (the LS3a seed stories, hand-derived) --------------------
 
@@ -220,10 +239,32 @@
       True))
   (steps ((compute both)) refl))
 
-;; ...and the score carries g = length, h = 0.
+;; ...the score carries g = length, h = 0 and keys a non-matching
+;; fingerprint...
 (claim xsp_score_gh_pin
   (goal () ()
     (=
-      (xsp_gh (xsp_score (S (S (S (S Z)))) (list (XBin XXor RAX (SReg RDI)))))
+      (xsp_gh
+        (xsp_score
+          (S (S (S (S Z))))
+          (list 99)
+          (list (XBin XXor RAX (SReg RDI)))))
       (Pair 1 0)))
+  (steps ((compute both)) refl))
+
+(claim xsp_score_keyed_pin
+  (goal () () (= (xsp_keyed (xsp_score (S (S (S (S Z)))) (list 99) Nil)) True))
+  (steps ((compute both)) refl))
+
+;; ...and ABSTAINS on the goal-matching fingerprint (the aliasing law:
+;; without this the closed set kills the winner via its own parent's
+;; identical cut-render — measured on the first fire).
+(claim xsp_score_abstain_pin
+  (goal () ()
+    (=
+      (xsp_score
+        (S (S (S (S Z))))
+        (xsp_fingerprint (S (S (S (S Z)))) Nil (xsp_files))
+        Nil)
+      (XspScore 0 0 None)))
   (steps ((compute both)) refl))
