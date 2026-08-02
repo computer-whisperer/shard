@@ -28,6 +28,7 @@
 #include <setjmp.h>
 #include <signal.h>
 #include <sys/mman.h>
+#include <cpuid.h>
 
 #define DATA_BASE 0x40000000UL
 #define DATA_SIZE 0x10000UL
@@ -186,7 +187,7 @@ static void fmt_le_u64(uint64_t v, char *out) {
     sprintf(out + 2 * i, "%02x", (unsigned)((v >> (8 * i)) & 0xFF));
 }
 
-struct mod { char name[32]; void *code; };
+struct mod { char name[32]; void *code; int has_sha; };
 static struct mod mods[MAXMOD];
 static int nmods;
 
@@ -196,7 +197,32 @@ static void *find_mod(const char *name) {
   return NULL;
 }
 
-static int ok = 0, fail = 0, vrow = 0;
+static int mod_has_sha(const char *name) {
+  for (int i = 0; i < nmods; i++)
+    if (!strcmp(mods[i].name, name)) return mods[i].has_sha;
+  return 0;
+}
+
+/* does the byte buffer contain a SHA-NI instruction? The three species are
+ * NP 0F 38 CB/CC/CD /r (sha256rnds2/msg1/msg2 — no mandatory prefix byte).
+ * A false positive (the pattern inside an immediate) only skips a row
+ * conservatively; the modules here are deterministic compiler output. */
+static int bytes_have_sha(const uint8_t *b, size_t n) {
+  for (size_t i = 0; i + 2 < n; i++)
+    if (b[i] == 0x0F && b[i + 1] == 0x38 &&
+        (b[i + 2] == 0xCB || b[i + 2] == 0xCC || b[i + 2] == 0xCD))
+      return 1;
+  return 0;
+}
+
+/* SHA-NI on this CPU (CPUID leaf 7 subleaf 0, EBX bit 29)? Rows whose bytes
+ * include a SHA instruction SKIP (not FAIL) when it's absent — CI runners
+ * without the extension SIGILL on them, which is a machine limitation, not a
+ * model disagreement. X86_DIFF_FORCE_NO_SHA=1 forces the skip path so it is
+ * testable on SHA-capable silicon. */
+static int sha_ok;
+
+static int ok = 0, fail = 0, vrow = 0, skipped = 0;
 static void report(int good, const char *line, const char *detail) {
   if (good) ok++;
   else { fail++; printf("FAIL %s  [%s]\n", line, detail); }
@@ -206,6 +232,12 @@ int main(int argc, char **argv) {
   if (argc < 2) { fprintf(stderr, "usage: %s plan.txt\n", argv[0]); return 2; }
   FILE *f = fopen(argv[1], "r");
   if (!f) { perror("fopen"); return 2; }
+
+  unsigned ceax, cebx, cecx, cedx;
+  sha_ok = __get_cpuid_count(7, 0, &ceax, &cebx, &cecx, &cedx) &&
+           ((cebx >> 29) & 1);
+  const char *force = getenv("X86_DIFF_FORCE_NO_SHA");
+  if (force && !strcmp(force, "1")) sha_ok = 0;
 
   /* the data page at the model's absolute base */
   data_page = mmap((void *)DATA_BASE, DATA_SIZE, PROT_READ | PROT_WRITE,
@@ -242,6 +274,7 @@ int main(int argc, char **argv) {
       if (nmods < MAXMOD) {
         strncpy(mods[nmods].name, name, 31);
         mods[nmods].code = page;
+        mods[nmods].has_sha = bytes_have_sha(page, n);
         nmods++;
       }
     } else if (!strncmp(line, "XCASE ", 6)) {
@@ -361,6 +394,11 @@ int main(int argc, char **argv) {
       vrow++;
       char tag[96];
       snprintf(tag, sizeof tag, "XVCASE %s (row %d)", name, vrow);
+      if (!sha_ok && mod_has_sha(name)) {
+        skipped++;
+        printf("SKIP %s [no sha_ni on this cpu]\n", tag);
+        continue;
+      }
       void *code = find_mod(name);
       if (!code) { report(0, tag, "module unavailable"); continue; }
       memset(data_page, 0, DATA_SIZE);
@@ -416,6 +454,10 @@ int main(int argc, char **argv) {
     }
   }
   fclose(f);
-  printf("x86 silicon differential: %d agree, %d disagree\n", ok, fail);
+  if (skipped)
+    printf("x86 silicon differential: %d agree, %d disagree, %d skipped (no sha_ni)\n",
+           ok, fail, skipped);
+  else
+    printf("x86 silicon differential: %d agree, %d disagree\n", ok, fail);
   return fail;
 }

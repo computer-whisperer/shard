@@ -124,7 +124,14 @@ corpus:
         echo "engine stale or missing -- rebuilding (cache eviction fallback)"
         bin/rebuild.sh check
       fi
-    - bash run_corpus.sh 2>&1 | tee corpus.log
+    # The full stream goes to the artifact ONLY: teeing it to stdout ran the
+    # trace past GitLab's 4MB collection cap, which swallowed the gate's
+    # verdict on EVERY run — #289's failure was diagnosable only by pulling
+    # the corpus.log artifact. Stdout carries the tail, the FAIL/SKIP rows,
+    # and the baseline diff; the artifact keeps the whole log.
+    - bash run_corpus.sh > corpus.log 2>&1 || { tail -80 corpus.log; exit 1; }
+    - tail -30 corpus.log
+    - grep -n '^FAIL \|^TYPE! \|^SKIP ' corpus.log | head -80 || true
     - |
       awk '/^=== /{t=$2} /^(FAIL|TYPE!) /{print t ": " $2}' corpus.log | sort > fails-run.txt
       sort fails-base.txt > fails-base-sorted.txt
@@ -182,8 +189,10 @@ corpus-images:
         echo "engine stale or missing -- rebuilding (cache eviction fallback)"
         bin/rebuild.sh check
       fi
-    - SHARD_IMAGES=1 bash run_corpus.sh 2>&1 | tee corpus-img-cold.log
-    - SHARD_IMAGES=1 bash run_corpus.sh 2>&1 | tee corpus-img-warm.log
+    # Full streams to the artifacts only — see the corpus job's 4MB-cap note.
+    - SHARD_IMAGES=1 bash run_corpus.sh > corpus-img-cold.log 2>&1 || { tail -80 corpus-img-cold.log; exit 1; }
+    - SHARD_IMAGES=1 bash run_corpus.sh > corpus-img-warm.log 2>&1 || { tail -80 corpus-img-warm.log; exit 1; }
+    - tail -15 corpus-img-cold.log && tail -15 corpus-img-warm.log
     - |
       sort fails-base.txt > fails-base-sorted.txt
       awk '/^=== /{t=$2} /^(FAIL|TYPE!) /{print t ": " $2}' corpus-img-cold.log | sort > fails-img-cold.txt
