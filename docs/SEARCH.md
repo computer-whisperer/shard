@@ -4369,6 +4369,81 @@ spatially); a present-sharing term (Gauss-Seidel within a round).
 The global-objective LNS on this substrate remains the ratified
 next step.
 
+**The global-objective LNS (2eb4d79), GREEN (pipeline 239,
+2026-08-01, job 685 at 371s): the trace line for line, and the pop
+simulation EXACT on all twelve inner queries.**  The ratified LNS
+shape's cost-driven successor: every prior driver is
+feasibility-first and order-taking (each net optimal given its
+predecessors, the total never consulted); this is the first driver
+on the substrate where the SUM is the acceptance criterion.  Zero
+engine changes, zero model changes; one probe
+(tools/search/pcb_lns_probe.shard).  It also delivers the banked
+astar-LNS migration: the LNS inner solver is the A* cost tap.
+
+**The loop.**  State = a priority order.  A move swaps an ADJACENT
+PAIR and re-routes the whole order with the A* cost solver under
+hard occupancy; accept iff the total TRUE cost strictly improves; a
+full sweep with no accept = LOCAL-OPT.  The pair swap is the
+smallest genuine neighborhood — ripping a single net and
+re-inserting it against everyone is a provable no-op (its old route
+stays feasible, and every cheaper route was already blocked by a
+predecessor, a subset of what it now faces).  Greedy strict descent
+is monotone: no cycling, no tabu store needed yet.
+
+**A finding, learned deriving the instance:** under vertex-only
+conflicts, every net with ANY free adjacent cell — including its
+own previous cell — can yield by a two-move wiggle, so the unit
+yield price is UNIVERSALLY min(chold, 2*cmove).  Asymmetric yield
+PRICES are impossible (the tunnel instance first sketched for this
+slice fails — the retreat-step wiggle is unblockable), and two-net
+order swaps therefore always tie.  Strict order gaps need
+asymmetric yield COUNTS — cascades.  (This is also why the two-gap
+board is order-tied at 26, checked on paper.)
+
+**The instrument: a ZERO-KEEPOUT cascade.**  Three straight nets,
+pure net-net interaction: A (4,0)->(4,5) vertical crosses B
+(1,3)->(6,3) at 28@t3 and C (0,4)->(6,4) at 36@t4, both
+equidistant.  A's two blockers are CONSECUTIVE on its path, so ONE
++2 delay by A clears both crossings (+4); any order routing A
+before B lets A commit and pushes TWO yields onto others (+8).
+All six order totals hand-derived (bases 32): A-before-B = 40,
+B-before-A = 36 — and 36 is the joint optimum on paper (A and B
+both want 28@t3, someone pays >= 4; 36 achieves exactly one
+yield).  The greedy-natural initial order (A,B,C) is globally
+wrong from the wrong end: the net that should absorb the delay is
+the one greedy sends first.  Measured (239; 156/0 checks, 14
+pins, every pop of all twelve queries simulated in advance):
+
+- **INIT (A,B,C) = 40:** A straight 20,249 steps / 6 forks / 0
+  dominated; B's row-2 dodge (cost 14) 53,696 / 8 / 3; C taxed to
+  16 — blocked at 36@t4 AND fenced by B's dodge at 30@t7 —
+  92,257 / 9 / 4.  Every count exactly as simulated.
+- **Swap ACCEPT -> (B,A,C) = 36:** B straight 6/0; A's one-delay
+  wiggle [S,S,E,W,S,S,S] (cost 14, taking 28@t5 and 36@t6) 8/3;
+  C rides FREE at 12, 7/0.
+- **Re-swap REJECT at 40** — re-run BYTE-IDENTICAL to INIT
+  (20,249 / 53,696 / 92,257): the determinism self-check,
+  predicted in the header.
+- **Tie REJECT: (B,C,A) = 36** — the strict gate refuses equal
+  totals; C second is cheaper (41,993 — smaller occupancy to
+  render) and A third finds the same one-delay witness class.
+- **LOCAL-OPT best=36**, INIT/BEST assertions and the n-net
+  cross-replay certificate (each net at budget = claimed cost
+  exactly against the union of the others, costs re-derived,
+  duplicate-free st union) all passed in-run.
+
+Final: **PCB-LNS 8x8 KEEP-0 NETS-3 INIT-40 BEST-36 ACCEPTED-1
+REJECTED-2 LOCAL-OPT CERT-DISJOINT-OK.**  Pinned in CORPUS_LONG
+(~371s job, ~599k engine steps).  LOCAL-OPT is local w.r.t. this
+neighborhood AND the heuristic inner routes; the joint-optimum
+argument is paper, not machine.  Named follow-ons: the JOINT
+product query (two nets' routes as one schema candidate — the
+exact-tier joint MIN bound that would upgrade the paper argument);
+larger destroy sets + annealing-style acceptance (the moment the
+tabu=forbidden-region ruling activates); a congested many-net
+instance where the descent takes several accepted moves; the
+weighted/lexicographic makespan-cost objective.
+
 **Task-authoring gotchas banked while building the swap + PCB
 instruments:** te_import_ctx admits only bare item uses as candidate
 heads (in-file type decls are invisible — models live in sibling

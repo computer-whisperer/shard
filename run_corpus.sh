@@ -886,6 +886,27 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
+# PCB LNS demo: global-objective destroy-and-repair over insertion
+# orders — the first driver where the TOTAL is the acceptance
+# criterion.  Zero-keepout cascade instance (A vertical crosses B at
+# 28@t3 and C at 36@t4, consecutive, so ONE +2 delay by A clears
+# both): A-before-B orders total 40 (two yields), B-before-A orders
+# 36 (one yield) = the paper joint optimum.  Greedy strict descent
+# from (A,B,C): one accepted swap to (B,A,C), re-swap and tie both
+# rejected, LOCAL-OPT.  All 12 inner A* queries pop-predicted EXACTLY
+# (forks/dominated); re-swap counters byte-identical to INIT (the
+# determinism self-check).  Driver asserts INIT=40/BEST=36; n-net
+# cross-replay certificate.  Measured CI pipeline 239, 2026-08-01,
+# ~371s job, ~599k engine steps.  Expected ending:
+# PCB-LNS 8x8 KEEP-0 NETS-3 INIT-40 BEST-36 ACCEPTED-1 REJECTED-2
+# LOCAL-OPT CERT-DISJOINT-OK.
+echo "=== search: PCB LNS demo (global-objective order descent) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/pcb_lns_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 # Pure Shard function-body pins. These retain the playground's full grammars
 # and exact solution floors while SUPERPOSE settles them by demanded holes.
 # The executable imports kernel/types for an independent representative gate,
