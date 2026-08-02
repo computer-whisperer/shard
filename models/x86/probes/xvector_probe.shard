@@ -1,0 +1,892 @@
+;;; models/x86/probes/xvector_probe.shard — THE VECTOR TIER'S FIXTURE
+;;; (docs/STREAM.md §8, B5/E1's gate).
+;;;
+;;; Two obligations, pinned here:
+;;;
+;;; 1. THE SPECIES COMPUTE WHAT THE MODEL INTENDS. Ground pins for every
+;;;    arm of models/x86/vector.shard's xvinstr_leaf, with hand-computed
+;;;    lane values, plus the fences (the byte-flip mask, the dword-
+;;;    multiple alignment, the 16-byte window). These pin the model
+;;;    against ITSELF — they catch a transcription slip, not a
+;;;    misreading of the SDM. The silicon differential
+;;;    (models/x86/diff/) is what makes the semantics AUTHORITATIVE;
+;;;    docs/X86.md §32's platform-externs law is unchanged by this file.
+;;;
+;;; 2. THE EMBEDDING HOLDS ARM BY ARM. A body with no vector species
+;;;    steps identically in the extended tier with the XMM file carried
+;;;    through untouched:
+;;;
+;;;      (xveval_seq F m body rs xs mem) = (xvlift xs (xeval_seq F m body rs mem))
+;;;
+;;;    proven per CONTROL ARM at QUANTIFIED fuel, exactly as
+;;;    xadequacy_probe.shard does for the world layer (§32's sanctioned
+;;;    shape: the generic quantified-over-code theorem needs a 20-ctor
+;;;    mutual induction, so the fixture puts every arm on a compute path
+;;;    instead — any drift in the twin's mirrored recursion flips a pin).
+;;;    Both call dispatches are covered: the DELEGATE arm (a call-free,
+;;;    vector-free callee runs in the base tower) and the MIRROR arm (a
+;;;    callee that itself calls is walked in-tier, and its nested seam
+;;;    re-dispatches). The world floor gets the same treatment against
+;;;    models/x86/vworld.shard.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")
+(use (:: std mem *))
+(import "../x86.shard")
+(use (:: models x86 x86 *))
+(import "../../linux/kernel.shard")
+(use (:: models linux kernel *))
+(import "../world.shard")
+(use (:: models x86 world *))
+(import "../vector.shard")
+(use (:: models x86 vector *))
+(import "../vworld.shard")
+(use (:: models x86 vworld *))
+
+;; --- fixtures --------------------------------------------------------------------
+
+;; a window [0, 4096) so the 16-byte access at 64 is admitted and the one
+;; at 5000 is not
+(fn xv_m () XModule (MkXModule Nil 0 4096))
+
+;; rdi = 64 (the in-window address), rsi = 5000 (the out-of-window one)
+(fn xv_rs () Regs (with_rsi 5000 (with_rdi 64 (xregs0))))
+
+;; xmm0 = the two round constants rnds2 reads implicitly; xmm1/xmm2 the
+;; operand pair; xmm3 the canonical byte-flip mask; xmm4 a NON-mask value
+(fn xv_xs () Xmms
+  (with_xmm4
+    (MkXmm 1 2 3 4)
+    (with_xmm3
+      (vbswap_mask)
+      (with_xmm2
+        (MkXmm 16909060 84281096 151653132 219025168)
+        (with_xmm1
+          (MkXmm 287454020 1432778632 2578103244 3723427584)
+          (with_xmm0 (MkXmm 10 11 0 0) (xmms0)))))))
+
+;; the expected-result spelling: the instruction wrote xmm1 and touched
+;; nothing else
+(fn xv_w1 ((v Xmm)) Xmms (vset (xv_xs) XMM1 v))
+
+;; --- 1. the species, on ground lanes -----------------------------------------------
+
+(claim xv_mov
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVMov XMM1 XMM2) (xv_rs) (xv_xs) mem)
+      (Some
+        (XVNorm
+          (xv_rs)
+          (xv_w1 (MkXmm 16909060 84281096 151653132 219025168))
+          mem))))
+  (steps ((compute both)) refl))
+
+(claim xv_paddd
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVPaddd XMM1 XMM2) (xv_rs) (xv_xs) mem)
+      (Some
+        (XVNorm
+          (xv_rs)
+          (xv_w1 (MkXmm 304363080 1517059728 2729756376 3942452752))
+          mem))))
+  (steps ((compute both)) refl))
+
+;; pshufd with imm 0x1b = 27 reverses the lanes
+(claim xv_pshufd
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVPshufd XMM1 XMM2 27) (xv_rs) (xv_xs) mem)
+      (Some
+        (XVNorm
+          (xv_rs)
+          (xv_w1 (MkXmm 219025168 151653132 84281096 16909060))
+          mem))))
+  (steps ((compute both)) refl))
+
+;; pshufb by the canonical mask = per-lane byte reverse
+(claim xv_bswap
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVBswap32 XMM1 XMM3) (xv_rs) (xv_xs) mem)
+      (Some
+        (XVNorm
+          (xv_rs)
+          (xv_w1 (MkXmm 1144201745 2289526357 3434850969 16772829))
+          mem))))
+  (steps ((compute both)) refl))
+
+;; THE FENCE: any other mask value is not a modeled species — loud refusal
+(claim xv_bswap_fence
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVBswap32 XMM1 XMM4) (xv_rs) (xv_xs) mem)
+      (Some XVTrap)))
+  (steps ((compute both)) refl))
+
+(claim xv_palignr4
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVPalignr XMM1 XMM2 4) (xv_rs) (xv_xs) mem)
+      (Some
+        (XVNorm
+          (xv_rs)
+          (xv_w1 (MkXmm 84281096 151653132 219025168 287454020))
+          mem))))
+  (steps ((compute both)) refl))
+
+(claim xv_palignr8
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVPalignr XMM1 XMM2 8) (xv_rs) (xv_xs) mem)
+      (Some
+        (XVNorm
+          (xv_rs)
+          (xv_w1 (MkXmm 151653132 219025168 287454020 1432778632))
+          mem))))
+  (steps ((compute both)) refl))
+
+;; THE FENCE: byte-grain alignments and the shift-in-zero range trap
+(claim xv_palignr_fence_byte
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVPalignr XMM1 XMM2 2) (xv_rs) (xv_xs) mem)
+      (Some XVTrap)))
+  (steps ((compute both)) refl))
+
+(claim xv_palignr_fence_wide
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVPalignr XMM1 XMM2 16) (xv_rs) (xv_xs) mem)
+      (Some XVTrap)))
+  (steps ((compute both)) refl))
+
+(claim xv_punpckl
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVPunpckL XMM1 XMM2) (xv_rs) (xv_xs) mem)
+      (Some
+        (XVNorm
+          (xv_rs)
+          (xv_w1 (MkXmm 287454020 1432778632 16909060 84281096))
+          mem))))
+  (steps ((compute both)) refl))
+
+(claim xv_punpckh
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVPunpckH XMM1 XMM2) (xv_rs) (xv_xs) mem)
+      (Some
+        (XVNorm
+          (xv_rs)
+          (xv_w1 (MkXmm 2578103244 3723427584 151653132 219025168))
+          mem))))
+  (steps ((compute both)) refl))
+
+;; the schedule recurrences
+(claim xv_msg1
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVSha256Msg1 XMM1 XMM2) (xv_rs) (xv_xs) mem)
+      (Some
+        (XVNorm
+          (xv_rs)
+          (xv_w1 (MkXmm 2567326347 2052824044 1064366385 1725055782))
+          mem))))
+  (steps ((compute both)) refl))
+
+(claim xv_msg2
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVSha256Msg2 XMM1 XMM2) (xv_rs) (xv_xs) mem)
+      (Some
+        (XVNorm
+          (xv_rs)
+          (xv_w1 (MkXmm 1443363434 466598957 2618858505 126147697))
+          mem))))
+  (steps ((compute both)) refl))
+
+;; TWO ROUNDS of the compression, wk drawn from xmm0's low two lanes.
+;; NOTE THE OPERAND ROLES: the SOURCE (xmm2) carries ABEF and the DEST
+;; (xmm1) carries CDGH — these expectations are the SDM's, and the E1
+;; silicon differential is what settled them (the first drafting had the
+;; two halves exchanged and 9 rows disagreed).
+(claim xv_rnds2
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVSha256Rnds2 XMM1 XMM2) (xv_rs) (xv_xs) mem)
+      (Some
+        (XVNorm
+          (xv_rs)
+          (xv_w1 (MkXmm 1044815736 1695345744 4121533996 4271732077))
+          mem))))
+  (steps ((compute both)) refl))
+
+;; --- the 16-byte window (memory stays opaque; the CHECK is what computes) ----------
+
+(claim xv_load_in
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVLoad XMM1 (AReg RDI)) (xv_rs) (xv_xs) mem)
+      (Some (XVNorm (xv_rs) (xv_w1 (vload mem 64)) mem))))
+  (steps ((compute both)) refl))
+
+(claim xv_load_out
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVLoad XMM1 (AReg RSI)) (xv_rs) (xv_xs) mem)
+      (Some XVTrap)))
+  (steps ((compute both)) refl))
+
+(claim xv_store_in
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVStore (AReg RDI) XMM2) (xv_rs) (xv_xs) mem)
+      (Some
+        (XVNorm
+          (xv_rs)
+          (xv_xs)
+          (vstore mem 64 (MkXmm 16909060 84281096 151653132 219025168))))))
+  (steps ((compute both)) refl))
+
+(claim xv_store_out
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVStore (AReg RSI) XMM2) (xv_rs) (xv_xs) mem)
+      (Some XVTrap)))
+  (steps ((compute both)) refl))
+
+;; --- the SCALAR tier's fence: vector code has no meaning down there ------------------
+
+(claim xv_scalar_refuses
+  (goal ((mem Mem) (rs Regs) (c Nat)) ()
+    (=
+      (xeval_instr (S c) (xv_m) (XVec (XVPaddd XMM1 XMM2)) rs mem)
+      (Some XTrap)))
+  (steps ((compute both)) refl))
+
+;; --- 2. the embedding, arm by arm ----------------------------------------------------
+
+;; a one-function module around a body (window empty: the trap pin needs it)
+(fn xva_m ((body (List XInstr)) (restfs (List XFunc))) XModule
+  (MkXModule (Cons (MkXFunc 0 body) restfs) 0 0))
+
+;; two functions: caller at 0, callee at 1
+(fn xva_m2 ((body (List XInstr)) (callee (List XInstr))) XModule
+  (MkXModule (Cons (MkXFunc 0 body) (Cons (MkXFunc 0 callee) Nil)) 0 0))
+
+;; three: caller at 0, a calling callee at 1, its own callee at 2
+(fn xva_m3 ((body (List XInstr)) (mid (List XInstr)) (leaf (List XInstr)))
+  XModule
+  (MkXModule
+    (Cons (MkXFunc 0 body) (Cons (MkXFunc 0 mid) (Cons (MkXFunc 0 leaf) Nil)))
+    0
+    0))
+
+;; leaf sequencing + the delegation of every non-vector leaf
+(claim xva_leaf
+  (goal
+    ((a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (xs Xmms)
+     (mem Mem)
+     (c Nat)
+     (restfs (List XFunc)))
+    ()
+    (=
+      (xveval_seq
+        (S^ 6 c)
+        (xva_m (list (XMovRI RAX 5) (XMovRI RCX 6)) restfs)
+        (list (XMovRI RAX 5) (XMovRI RCX 6))
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        xs
+        mem)
+      (xvlift
+        xs
+        (xeval_seq
+          (S^ 6 c)
+          (xva_m (list (XMovRI RAX 5) (XMovRI RCX 6)) restfs)
+          (list (XMovRI RAX 5) (XMovRI RCX 6))
+          (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+          mem))))
+  (steps ((compute both)) refl))
+
+;; the trap map (a store outside the empty window: XTrap → XVTrap)
+(claim xva_trap
+  (goal
+    ((a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (xs Xmms)
+     (mem Mem)
+     (c Nat)
+     (restfs (List XFunc)))
+    ()
+    (=
+      (xveval_seq
+        (S^ 6 c)
+        (xva_m (list (XMovRI RDI 64) (XStore8 (AReg RDI) (SImm 7))) restfs)
+        (list (XMovRI RDI 64) (XStore8 (AReg RDI) (SImm 7)))
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        xs
+        mem)
+      (xvlift
+        xs
+        (xeval_seq
+          (S^ 6 c)
+          (xva_m (list (XMovRI RDI 64) (XStore8 (AReg RDI) (SImm 7))) restfs)
+          (list (XMovRI RDI 64) (XStore8 (AReg RDI) (SImm 7)))
+          (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+          mem))))
+  (steps ((compute both)) refl))
+
+;; block exit, both branch depths
+(claim xva_block
+  (goal
+    ((a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (xs Xmms)
+     (mem Mem)
+     (c Nat)
+     (restfs (List XFunc)))
+    ()
+    (=
+      (xveval_seq
+        (S^ 8 c)
+        (xva_m
+          (list
+            (XBlock (list (XBlock (list (XBr 1))) (XMovRI RAX 3)))
+            (XMovRI RCX 4))
+          restfs)
+        (list
+          (XBlock (list (XBlock (list (XBr 1))) (XMovRI RAX 3)))
+          (XMovRI RCX 4))
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        xs
+        mem)
+      (xvlift
+        xs
+        (xeval_seq
+          (S^ 8 c)
+          (xva_m
+            (list
+              (XBlock (list (XBlock (list (XBr 1))) (XMovRI RAX 3)))
+              (XMovRI RCX 4))
+            restfs)
+          (list
+            (XBlock (list (XBlock (list (XBr 1))) (XMovRI RAX 3)))
+            (XMovRI RCX 4))
+          (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+          mem))))
+  (steps ((compute both)) refl))
+
+;; the loop: three ground backedges, then the depth-1 exit
+(claim xva_loop
+  (goal
+    ((c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (xs Xmms)
+     (mem Mem)
+     (c Nat)
+     (restfs (List XFunc)))
+    ()
+    (=
+      (xveval_seq
+        (S^ 24 c)
+        (xva_m
+          (list
+            (XMovRI RAX 0)
+            (XBlock
+              (list
+                (XLoop
+                  (list
+                    (XBin XAdd RAX (SImm 1))
+                    (XBrIf (CLtU RAX (SImm 3)) 0)
+                    (XBr 1))))))
+          restfs)
+        (list
+          (XMovRI RAX 0)
+          (XBlock
+            (list
+              (XLoop
+                (list
+                  (XBin XAdd RAX (SImm 1))
+                  (XBrIf (CLtU RAX (SImm 3)) 0)
+                  (XBr 1))))))
+        (MkRegs 0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        xs
+        mem)
+      (xvlift
+        xs
+        (xeval_seq
+          (S^ 24 c)
+          (xva_m
+            (list
+              (XMovRI RAX 0)
+              (XBlock
+                (list
+                  (XLoop
+                    (list
+                      (XBin XAdd RAX (SImm 1))
+                      (XBrIf (CLtU RAX (SImm 3)) 0)
+                      (XBr 1))))))
+            restfs)
+          (list
+            (XMovRI RAX 0)
+            (XBlock
+              (list
+                (XLoop
+                  (list
+                    (XBin XAdd RAX (SImm 1))
+                    (XBrIf (CLtU RAX (SImm 3)) 0)
+                    (XBr 1))))))
+          (MkRegs 0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+          mem))))
+  (steps ((compute both)) refl))
+
+;; THE DELEGATE ARM: the callee neither calls nor holds vector code, so
+;; the base tower runs it and the XMM file rides past (this is the arm
+;; xvcall_bridge welds a landed scalar cert into)
+(claim xva_call_delegate
+  (goal
+    ((a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (xs Xmms)
+     (mem Mem)
+     (c Nat))
+    ()
+    (=
+      (xveval_seq
+        (S^ 8 c)
+        (xva_m2 (list (XCall 1) (XMovRI RCX 9)) (list (XMovRI RAX 8)))
+        (list (XCall 1) (XMovRI RCX 9))
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        xs
+        mem)
+      (xvlift
+        xs
+        (xeval_seq
+          (S^ 8 c)
+          (xva_m2 (list (XCall 1) (XMovRI RCX 9)) (list (XMovRI RAX 8)))
+          (list (XCall 1) (XMovRI RCX 9))
+          (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+          mem))))
+  (steps ((compute both)) refl))
+
+;; THE MIRROR ARM: the callee itself calls, so it is walked IN-TIER and
+;; its nested seam re-dispatches — the transitivity this tier keeps that
+;; world.shard's effect predicate does not
+(claim xva_call_mirror
+  (goal
+    ((a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (xs Xmms)
+     (mem Mem)
+     (c Nat))
+    ()
+    (=
+      (xveval_seq
+        (S^ 12 c)
+        (xva_m3
+          (list (XCall 1) (XMovRI RCX 9))
+          (list (XCall 2))
+          (list (XMovRI RAX 8)))
+        (list (XCall 1) (XMovRI RCX 9))
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        xs
+        mem)
+      (xvlift
+        xs
+        (xeval_seq
+          (S^ 12 c)
+          (xva_m3
+            (list (XCall 1) (XMovRI RCX 9))
+            (list (XCall 2))
+            (list (XMovRI RAX 8)))
+          (list (XCall 1) (XMovRI RCX 9))
+          (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+          mem))))
+  (steps ((compute both)) refl))
+
+;; the in-flight return, and the missing callee
+(claim xva_ret
+  (goal
+    ((a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (xs Xmms)
+     (mem Mem)
+     (c Nat))
+    ()
+    (=
+      (xveval_seq
+        (S^ 8 c)
+        (xva_m2 (list (XCall 1)) (list (XMovRI RAX 8) XRet (XMovRI RAX 9)))
+        (list (XCall 1))
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        xs
+        mem)
+      (xvlift
+        xs
+        (xeval_seq
+          (S^ 8 c)
+          (xva_m2 (list (XCall 1)) (list (XMovRI RAX 8) XRet (XMovRI RAX 9)))
+          (list (XCall 1))
+          (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+          mem))))
+  (steps ((compute both)) refl))
+
+(claim xva_badcall
+  (goal
+    ((a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (xs Xmms)
+     (mem Mem)
+     (c Nat))
+    ()
+    (=
+      (xveval_seq
+        (S^ 5 c)
+        (xva_m2 (list (XCall 7)) (list (XMovRI RAX 8)))
+        (list (XCall 7))
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        xs
+        mem)
+      (xvlift
+        xs
+        (xeval_seq
+          (S^ 5 c)
+          (xva_m2 (list (XCall 7)) (list (XMovRI RAX 8)))
+          (list (XCall 7))
+          (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+          mem))))
+  (steps ((compute both)) refl))
+
+;; --- 3. a MIXED walk: scalar and vector in one body ----------------------------------
+
+;; the point of the tier in one pin — scalar instructions move registers,
+;; the vector instruction moves lanes, and the two states thread past each
+;; other without interference
+(claim xv_mixed_walk
+  (goal ((mem Mem) (c Nat)) ()
+    (=
+      (xveval_seq
+        (S^ 8 c)
+        (MkXModule
+          (Cons
+            (MkXFunc
+              0
+              (list (XMovRI RAX 7) (XVec (XVPaddd XMM1 XMM2)) (XMovRI RCX 9)))
+            Nil)
+          0
+          4096)
+        (list (XMovRI RAX 7) (XVec (XVPaddd XMM1 XMM2)) (XMovRI RCX 9))
+        (xv_rs)
+        (xv_xs)
+        mem)
+      (Some
+        (XVNorm
+          (rset (rset (xv_rs) RAX 7) RCX 9)
+          (xv_w1 (MkXmm 304363080 1517059728 2729756376 3942452752))
+          mem))))
+  (steps ((compute both)) refl))
+
+;; --- 4. the world floor: the same embedding against models/x86/vworld.shard ----------
+
+(claim wva_leaf
+  (goal
+    ((a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (xs Xmms)
+     (mem Mem)
+     (w LxWorld)
+     (c Nat)
+     (restfs (List XFunc)))
+    ()
+    (=
+      (wveval_seq
+        (S^ 6 c)
+        (xva_m (list (XMovRI RAX 5) (XMovRI RCX 6)) restfs)
+        (list (XMovRI RAX 5) (XMovRI RCX 6))
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        xs
+        mem
+        w)
+      (wvlift
+        xs
+        (weval_seq
+          (S^ 6 c)
+          (xva_m (list (XMovRI RAX 5) (XMovRI RCX 6)) restfs)
+          (list (XMovRI RAX 5) (XMovRI RCX 6))
+          (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+          mem
+          w))))
+  (steps ((compute both)) refl))
+
+;; a real effect: write(1, 0, 0). The oracle stream is concrete at its
+;; head (the return plus the syscall instruction's rcx/r11 trash) so the
+;; kernel transition REDUCES — the symbolic-world spelling cannot be
+;; pinned by compute, which is why xadequacy_probe has no syscall pin.
+(fn xv_wr_body () (List XInstr)
+  (list (XMovRI RAX 1) (XMovRI RDI 1) (XMovRI RSI 0) (XMovRI RDX 0) XSyscall))
+
+;; the effect-point: the kernel transition is world.shard's, and the XMM
+;; file survives it (a Linux syscall preserves the vector registers)
+(claim wva_syscall
+  (goal
+    ((a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (xs Xmms)
+     (mem Mem)
+     (r Int)
+     (c1 Int)
+     (c2 Int)
+     (ws (List Int))
+     (c Nat)
+     (restfs (List XFunc)))
+    ()
+    (=
+      (wveval_seq
+        (S^ 12 c)
+        (xva_m (xv_wr_body) restfs)
+        (xv_wr_body)
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        xs
+        mem
+        (MkLxWorld (Cons r (Cons c1 (Cons c2 ws)))))
+      (wvlift
+        xs
+        (weval_seq
+          (S^ 12 c)
+          (xva_m (xv_wr_body) restfs)
+          (xv_wr_body)
+          (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+          mem
+          (MkLxWorld (Cons r (Cons c1 (Cons c2 ws))))))))
+  (steps ((compute both)) refl))
+
+;; the world floor's block/loop/call arms mirror too
+(claim wva_block
+  (goal
+    ((a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (xs Xmms)
+     (mem Mem)
+     (w LxWorld)
+     (c Nat)
+     (restfs (List XFunc)))
+    ()
+    (=
+      (wveval_seq
+        (S^ 8 c)
+        (xva_m
+          (list
+            (XBlock (list (XBlock (list (XBr 1))) (XMovRI RAX 3)))
+            (XMovRI RCX 4))
+          restfs)
+        (list
+          (XBlock (list (XBlock (list (XBr 1))) (XMovRI RAX 3)))
+          (XMovRI RCX 4))
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        xs
+        mem
+        w)
+      (wvlift
+        xs
+        (weval_seq
+          (S^ 8 c)
+          (xva_m
+            (list
+              (XBlock (list (XBlock (list (XBr 1))) (XMovRI RAX 3)))
+              (XMovRI RCX 4))
+            restfs)
+          (list
+            (XBlock (list (XBlock (list (XBr 1))) (XMovRI RAX 3)))
+            (XMovRI RCX 4))
+          (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+          mem
+          w))))
+  (steps ((compute both)) refl))
+
+(claim wva_call
+  (goal
+    ((a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (xs Xmms)
+     (mem Mem)
+     (w LxWorld)
+     (c Nat))
+    ()
+    (=
+      (wveval_seq
+        (S^ 8 c)
+        (xva_m2 (list (XCall 1) (XMovRI RCX 9)) (list (XMovRI RAX 8)))
+        (list (XCall 1) (XMovRI RCX 9))
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        xs
+        mem
+        w)
+      (wvlift
+        xs
+        (weval_seq
+          (S^ 8 c)
+          (xva_m2 (list (XCall 1) (XMovRI RCX 9)) (list (XMovRI RAX 8)))
+          (list (XCall 1) (XMovRI RCX 9))
+          (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+          mem
+          w))))
+  (steps ((compute both)) refl))

@@ -822,6 +822,29 @@ replacement.
   untouched; boundary-3 announcement in the thread log BEFORE
   landing (XInstr arm growth + new files; no existing type gains
   a field).
+- **E1 RECORD (LANDED 2026-08-02).** Gates met: silicon differential
+  **223/223 agree** (123 scalar unchanged + 100 new vector rows);
+  battery re-runs at its recorded numbers exactly (898 / 933 / 938 /
+  936 / 1103 / 1192 / 1313 / 1316) = the additivity proof; boundary-3
+  announced before landing. New: models/x86/vector.shard (638),
+  models/x86/vworld.shard (644), models/x86/probes/xvector_probe.shard
+  (676, corpus-registered) + the Opus half (encode.shard, bytetie,
+  the diff replayer's XMM trampoline). THREE CORRECTIONS to §8.2's
+  draft, all on measured evidence — the full record is X86.md §6:
+  (i) **the species enter through ONE wrapper ctor `(XVec XVInstr)`,
+  not twelve flat arms** — flat growth breaks every exhaustive
+  `case-on … XInstr` and takes the imp pricing cert's quadratic
+  dispatch table 19×19 → 31×31, and the ratified AVX2 door would levy
+  it again; (ii) **`xvec_i` answers True on XCall** (world.shard's
+  xfn_eff answers False and leans on an image-level walk, which leaves
+  a latent trap the B5 skeleton would walk straight into) so
+  transitivity is dynamic — every nested seam re-dispatches;
+  (iii) **`sha256rnds2`'s operands were exchanged in the drafted
+  semantics** and the differential caught it on the first run (9 rows,
+  all that instruction) — the SDM puts ABEF in the SOURCE and CDGH in
+  the DEST. §8.2's claim that no consumer needed editing was WRONG in
+  one place: the pricing cert took +1 case at each of 11 case-on sites
+  and thread B's x86_transition_window took a 3-line mechanical pad.
 - **E2 — the hand-pinned block article** (probe-first tradition).
   Gates: article green; block-grain silicon differential (the
   block fn on CPU vs spec vectors, gold + random rows, teeth via

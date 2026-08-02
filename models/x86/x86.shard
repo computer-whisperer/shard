@@ -272,6 +272,104 @@
     ((CLtU r s) (lt (rget rs r) (xsrc rs s)))
     ((CLeU r s) (le (rget rs r) (xsrc rs s)))))
 
+;; --- the XMM register NAMES (the vector tier's operands) -----------------------
+
+;; B5/E1 (docs/STREAM.md §8, docs/X86.md §6): only the NAMES live in this
+;; file — XInstr's vector species carry them as operands, and the scalar
+;; tier REFUSES those species loudly (the xeval_instr trap fence below).
+;; The register FILE (four dword lanes per register, the architectural
+;; sixteen) and the extended evaluator live in models/x86/vector.shard,
+;; the PARALLEL EXTENDED TIER — so Regs/XOut and every landed cert stay
+;; untouched (fork C's ruling; widening Regs measured as a repo-wide
+;; arity break).
+(type XmmReg
+  (XMM0)
+  (XMM1)
+  (XMM2)
+  (XMM3)
+  (XMM4)
+  (XMM5)
+  (XMM6)
+  (XMM7)
+  (XMM8)
+  (XMM9)
+  (XMM10)
+  (XMM11)
+  (XMM12)
+  (XMM13)
+  (XMM14)
+  (XMM15))
+
+;; stable finite discriminator (the reg_code twin): encoder and
+;; diagnostics vocabulary, and the complete table theorem-driven
+;; clients inspect for constructor distinctness.
+(fn xmm_code ((x XmmReg)) Int
+  (match x
+    (XMM0 0)
+    (XMM1 1)
+    (XMM2 2)
+    (XMM3 3)
+    (XMM4 4)
+    (XMM5 5)
+    (XMM6 6)
+    (XMM7 7)
+    (XMM8 8)
+    (XMM9 9)
+    (XMM10 10)
+    (XMM11 11)
+    (XMM12 12)
+    (XMM13 13)
+    (XMM14 14)
+    (XMM15 15)))
+
+;; --- the vector sub-vocabulary -------------------------------------------------
+
+;; The vector species live in their OWN type, entered from XInstr through
+;; the single (XVec …) arm below. Semantics: models/x86/vector.shard's
+;; xvinstr_leaf — THE one semantic table (the arms here are names only,
+;; and the scalar tier's XVec arm is a loud refusal).
+;;
+;; WHY A SUB-TYPE rather than twelve flat XInstr arms (E1's measured
+;; correction to §8.2's drafted spelling — the note records it): the
+;; repo's exhaustive `case-on … XInstr` proofs must cover EVERY ctor, and
+;; the imp validator's pricing cert carries a hand-written quadratic
+;; dispatch table over instruction pairs. Flat growth to 31 ctors takes
+;; that table from 19×19 to 31×31 and its case-on with it; growth through
+;; one wrapper takes it to 20×20. The saving is not the point — the DOOR
+;; is: fork A ratified AVX2/YMM as a named door, and under the flat
+;; spelling opening it would levy the same tax again, while here it is
+;; new XVInstr arms and XInstr never moves. Cost is one wrapper in
+;; program text.
+;;
+;; Species land at the generality the SHA-NI schedule exercises (the
+;; XRorI32 precedent); wider forms fence loudly in the extended tier.
+;;   XVLoad/XVStore: movdqu — 16-byte unaligned load/store, LE dword
+;;     assembly against the module window.
+;;   XVMov: movdqa xmm, xmm — whole-register copy.
+;;   XVPshufd: pshufd dst, src, imm8 — dword shuffle (src read whole).
+;;   XVBswap32 dst msk: pshufb dst, msk RESTRICTED to the byte-flip
+;;     mask — per-lane bswap32; any other mask VALUE traps (general
+;;     byte-grain pshufb is NOT modeled, STREAM.md §8.6's fence).
+;;   XVPaddd: lane-wise add mod 2^32.
+;;   XVPalignr: palignr dst, src, imm8 at DWORD multiples (0/4/8/12)
+;;     only — byte-grain alignments trap.
+;;   XVPunpckL/H: punpcklqdq / punpckhqdq — qword unpacks.
+;;   XVSha256Rnds2 dst src: two spec rounds, wk implicit in XMM0.
+;;   XVSha256Msg1/Msg2: the message-schedule recurrences.
+(type XVInstr
+  (XVLoad XmmReg Addr)
+  (XVStore Addr XmmReg)
+  (XVMov XmmReg XmmReg)
+  (XVPshufd XmmReg XmmReg Int)
+  (XVBswap32 XmmReg XmmReg)
+  (XVPaddd XmmReg XmmReg)
+  (XVPalignr XmmReg XmmReg Int)
+  (XVPunpckL XmmReg XmmReg)
+  (XVPunpckH XmmReg XmmReg)
+  (XVSha256Rnds2 XmmReg XmmReg)
+  (XVSha256Msg1 XmmReg XmmReg)
+  (XVSha256Msg2 XmmReg XmmReg))
+
 ;; --- the instruction set (x86_64 fragment, probe-sized) ------------------------
 
 (type XInstr
@@ -309,7 +407,11 @@
   (XBrIf Cond Int)
   (XCall Int)
   (XRet)
-  (XSyscall))
+  (XSyscall)
+  ;; the vector sub-vocabulary's single entry point (B5/E1, STREAM.md
+  ;; §8). One arm, so every exhaustive consumer of XInstr pays once and
+  ;; the AVX2 door opens for free.
+  (XVec XVInstr))
 
 ;; A function: SysV parameter count (<= 6 in v1 — the seventh argument needs
 ;; the data stack) and a body. The result is rax at completion; there is no
@@ -436,7 +538,13 @@
        ;; a dynamic failure — None stays exclusively fuel. The WORLD LAYER
        ;; (models/x86/world.shard, docs/X86.md §32) interprets this arm
        ;; instead: it applies the kernel-model transition and continues.
-       (XSyscall (Some XTrap))))))
+       (XSyscall (Some XTrap))
+       ;; the vector sub-vocabulary: the SCALAR tier refuses it LOUDLY —
+       ;; the semantics live in the extended tier (models/x86/vector.shard,
+       ;; xvinstr_leaf). A scalar-tier run of a body containing vector
+       ;; code cannot conclude Some (XNorm …), so no landed cert can
+       ;; silently absorb it (the trap fence, STREAM.md §8.2).
+       ((XVec v) (Some XTrap))))))
 
 ;; the call engine — a NAMED SCC member (composed proofs stop here and cite
 ;; the callee's cert). No frame construction: the callee runs on the

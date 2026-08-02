@@ -225,6 +225,7 @@ TARGETS=(
   models/x86/probes/xworld_probe.shard
   models/x86/probes/xadequacy_probe.shard
   models/x86/probes/xweff_probe.shard
+  models/x86/probes/xvector_probe.shard
   models/x86/probes/stdin_count_probe.shard
   examples/addw/addw_src.shard
   examples/sha256sum/sha256sum_src.shard

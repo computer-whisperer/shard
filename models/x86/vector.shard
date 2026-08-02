@@ -1,0 +1,679 @@
+;;; models/x86/vector.shard — THE VECTOR TIER (docs/STREAM.md §8, B5/E1;
+;;; docs/X86.md §6's opening).
+;;;
+;;; The PARALLEL EXTENDED TIER: XMM state and an evaluator twin that
+;;; threads it, sitting BESIDE the scalar model rather than inside it.
+;;; models/x86/x86.shard owns the instruction NAMES (the XVInstr
+;;; sub-vocabulary, XmmReg, and XInstr's single (XVec …) entry) and
+;;; refuses them loudly (its XVec arm is XTrap); this file owns their
+;;; SEMANTICS (xvinstr_leaf) and the machine that runs them. Nothing in
+;;; x86.shard changes shape: Regs, XOut, xeval_*, xrun_* and every
+;;; landed certificate stay exactly as they were — re-running the cert
+;;; battery unchanged IS the additivity proof (STREAM.md §8.2, fork C:
+;;; widening Regs was measured as a repo-wide arity break at 1033
+;;; positional sites, and is the recorded corpse).
+;;;
+;;; SHAPE DECISIONS (ratified 2026-08-02, STREAM.md §8.5):
+;;;   - An XMM value is FOUR DWORD LANES (fork B), each maintained in
+;;;     [0, 2^32) — lane 0 is the LOW dword, matching the silicon's
+;;;     little-endian numbering. SHA-NI semantics are dword-native, so
+;;;     the proofs land on the 32-bit spec functions with no lane
+;;;     surgery. General byte-grain shuffling is NOT modeled (§8.6's
+;;;     loud fence: XVBswap32 accepts exactly the byte-flip mask).
+;;;   - The lane helpers below (vm32/vrotr32/vch/vmaj/vbs0/vbs1/vss0/
+;;;     vss1) are RESPELLINGS, tree-identical to std/sha256's m32/
+;;;     rotr32/sha_ch/sha_maj/bsig0/bsig1/ssig0/ssig1 — the XRorI32
+;;;     precedent (x86.shard's rotate arm): identical trees make the
+;;;     article's instruction-to-spec statements align raw-symbolically
+;;;     with no premises. The model does NOT import std/sha256: a
+;;;     machine model must not depend on the library it is checked
+;;;     against, or the differential's trust story collapses.
+;;;   - Multi-byte memory goes through std/mem's load_le/store_le at
+;;;     the literal 4-width, so the substrate's framing and round-trip
+;;;     laws (ls4_id, store_le_get_below/above) apply verbatim.
+;;;
+;;; TRUST LOCUS (docs/X86.md §32's platform-externs law): the semantics
+;;; here are DRAFTED from the SDM and are AUTHORITATIVE ONLY once the
+;;; instruction-grain differential (models/x86/diff/) runs its vector
+;;; rows on silicon. The SDM is the drafting reference; the differential
+;;; is the authority. Any row that disagrees amends this file, not the
+;;; machine.
+;;;
+;;; THE EMBEDDING (STREAM.md §8.2's reuse keystone): a body with no
+;;; vector species steps identically under xveval_* with Xmms carried
+;;; through untouched — leaf arms DELEGATE to xeval_instr at the same
+;;; fuel (world.shard's proven pattern), and the call arm DELEGATES to
+;;; xeval_call for a callee the vector predicate clears, so an existing
+;;; regs-general cert welds straight in through xcall_bridge
+;;; (xvcall_bridge, end of file). Arm-by-arm agreement is pinned by the
+;;; fixture models/x86/probes/xvector_probe.shard, the sanctioned shape
+;;; (§32's adequacy precedent: a generic quantified-over-code theorem
+;;; needs a 31-constructor mutual induction; the fixture puts every
+;;; control arm on a compute path at quantified fuel instead).
+;;;
+;;; DEVIATION FROM world.shard's xeff_i, DELIBERATE: xvec_i answers TRUE
+;;; on XCall. The effect predicate answers False there and leans on the
+;;; emitter's image-level walk for transitivity — which leaves a latent
+;;; trap (a pure-looking callee that calls an effectful one delegates
+;;; into the pure tier and traps). The B5 skeleton walks exactly that
+;;; shape (the absorber calls the vector block fold), so here the
+;;; conservative answer is taken: a function containing ANY call is
+;;; evaluated IN-TIER, and each nested seam re-dispatches — transitivity
+;;; is dynamic, not a static walk. True is always SOUND (mirroring is
+;;; the definitional tier); it costs only the delegation weld, and only
+;;; for callees that themselves call.
+
+(import "../../kernel/stdlib.shard")
+(import "../../std/mem")
+(use (:: std mem *))
+(import "x86.shard")
+(use (:: models x86 x86 *))
+
+;; --- the register file ----------------------------------------------------------
+
+;; one XMM register: four dword lanes, lane 0 = low. Every write below
+;; lands in [0, 2^32) — the tier's standing invariant.
+(record Xmm (x0 Int) (x1 Int) (x2 Int) (x3 Int))
+
+(fn vzero () Xmm (MkXmm 0 0 0 0))
+
+;; the architectural sixteen.
+(record
+  Xmms
+  (xmm0 Xmm)
+  (xmm1 Xmm)
+  (xmm2 Xmm)
+  (xmm3 Xmm)
+  (xmm4 Xmm)
+  (xmm5 Xmm)
+  (xmm6 Xmm)
+  (xmm7 Xmm)
+  (xmm8 Xmm)
+  (xmm9 Xmm)
+  (xmm10 Xmm)
+  (xmm11 Xmm)
+  (xmm12 Xmm)
+  (xmm13 Xmm)
+  (xmm14 Xmm)
+  (xmm15 Xmm))
+
+;; the all-zero file. NOT what _start hands a process: silicon
+;; guarantees nothing about XMM at entry, so a bin's top statement
+;; QUANTIFIES the initial Xmms (the M3 junk-regs precedent). This is a
+;; probe/differential convenience only.
+(fn xmms0 () Xmms
+  (MkXmms
+    (vzero)
+    (vzero)
+    (vzero)
+    (vzero)
+    (vzero)
+    (vzero)
+    (vzero)
+    (vzero)
+    (vzero)
+    (vzero)
+    (vzero)
+    (vzero)
+    (vzero)
+    (vzero)
+    (vzero)
+    (vzero)))
+
+(fn vget ((xs Xmms) (r XmmReg)) Xmm
+  (match r
+    (XMM0 (xmm0_of xs))
+    (XMM1 (xmm1_of xs))
+    (XMM2 (xmm2_of xs))
+    (XMM3 (xmm3_of xs))
+    (XMM4 (xmm4_of xs))
+    (XMM5 (xmm5_of xs))
+    (XMM6 (xmm6_of xs))
+    (XMM7 (xmm7_of xs))
+    (XMM8 (xmm8_of xs))
+    (XMM9 (xmm9_of xs))
+    (XMM10 (xmm10_of xs))
+    (XMM11 (xmm11_of xs))
+    (XMM12 (xmm12_of xs))
+    (XMM13 (xmm13_of xs))
+    (XMM14 (xmm14_of xs))
+    (XMM15 (xmm15_of xs))))
+
+(fn vset ((xs Xmms) (r XmmReg) (v Xmm)) Xmms
+  (match r
+    (XMM0 (with_xmm0 v xs))
+    (XMM1 (with_xmm1 v xs))
+    (XMM2 (with_xmm2 v xs))
+    (XMM3 (with_xmm3 v xs))
+    (XMM4 (with_xmm4 v xs))
+    (XMM5 (with_xmm5 v xs))
+    (XMM6 (with_xmm6 v xs))
+    (XMM7 (with_xmm7 v xs))
+    (XMM8 (with_xmm8 v xs))
+    (XMM9 (with_xmm9 v xs))
+    (XMM10 (with_xmm10 v xs))
+    (XMM11 (with_xmm11 v xs))
+    (XMM12 (with_xmm12 v xs))
+    (XMM13 (with_xmm13 v xs))
+    (XMM14 (with_xmm14 v xs))
+    (XMM15 (with_xmm15 v xs))))
+
+;; --- lane arithmetic (respellings of the spec's 32-bit vocabulary) --------------
+
+;; mask to the 32-bit window (std/sha256's m32, tree-identical).
+(fn vm32 ((x Int)) Int (band x 4294967295))
+
+;; rotate right by k within 32 bits (std/sha256's rotr32, tree-identical:
+;; the operand is masked like the result — the native-rotate spelling).
+(fn vrotr32 ((x Int) (k Int)) Int
+  (vm32 (bor (bshr (vm32 x) k) (bshl (vm32 x) (- 32 k)))))
+
+;; Ch / Maj / the four sigmas (std/sha256's sha_ch / sha_maj / bsig0 /
+;; bsig1 / ssig0 / ssig1, tree-identical).
+(fn vch ((x Int) (y Int) (z Int)) Int
+  (bxor (band x y) (band (bxor x 4294967295) z)))
+
+(fn vmaj ((x Int) (y Int) (z Int)) Int
+  (bxor (band x y) (bxor (band x z) (band y z))))
+
+(fn vbs0 ((x Int)) Int
+  (bxor (vrotr32 x 2) (bxor (vrotr32 x 13) (vrotr32 x 22))))
+
+(fn vbs1 ((x Int)) Int
+  (bxor (vrotr32 x 6) (bxor (vrotr32 x 11) (vrotr32 x 25))))
+
+(fn vss0 ((x Int)) Int (bxor (vrotr32 x 7) (bxor (vrotr32 x 18) (bshr x 3))))
+
+(fn vss1 ((x Int)) Int (bxor (vrotr32 x 17) (bxor (vrotr32 x 19) (bshr x 10))))
+
+;; byte-reverse a dword (what the canonical pshufb mask does per lane).
+(fn vbsw32 ((v Int)) Int
+  (bor
+    (bshl (band v 255) 24)
+    (bor
+      (bshl (band (bshr v 8) 255) 16)
+      (bor (bshl (band (bshr v 16) 255) 8) (band (bshr v 24) 255)))))
+
+;; --- the species' value semantics ------------------------------------------------
+
+;; lane equality (Xmm values are compared only here — for the mask fence).
+(fn vxeq ((a Xmm) (b Xmm)) Bool
+  (if (int_eq (x0_of a) (x0_of b))
+    (if (int_eq (x1_of a) (x1_of b))
+      (if (int_eq (x2_of a) (x2_of b)) (int_eq (x3_of a) (x3_of b)) False)
+      False)
+    False))
+
+;; THE byte-flip mask: bytes 3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12 —
+;; the constant every SHA-NI implementation loads to big-endian-ify a
+;; 16-byte message chunk. XVBswap32 accepts THIS mask and traps on any
+;; other value: general byte-grain pshufb is out of scope (§8.6).
+(fn vbswap_mask () Xmm (MkXmm 66051 67438087 134810123 202182159))
+
+;; lane-wise add mod 2^32 (paddd).
+(fn vpaddd ((d Xmm) (s Xmm)) Xmm
+  (MkXmm
+    (vm32 (+ (x0_of d) (x0_of s)))
+    (vm32 (+ (x1_of d) (x1_of s)))
+    (vm32 (+ (x2_of d) (x2_of s)))
+    (vm32 (+ (x3_of d) (x3_of s)))))
+
+;; per-lane byte reverse (pshufb by the canonical mask).
+(fn vbswap ((d Xmm)) Xmm
+  (MkXmm
+    (vbsw32 (x0_of d))
+    (vbsw32 (x1_of d))
+    (vbsw32 (x2_of d))
+    (vbsw32 (x3_of d))))
+
+;; lane selector for the shuffle immediate.
+(fn vsel ((s Xmm) (k Int)) Int
+  (if (int_eq k 0) (x0_of s)
+  (if (int_eq k 1) (x1_of s)
+  (if (int_eq k 2) (x2_of s)
+  (x3_of s)))))
+
+;; pshufd dst, src, imm8: result lane i = src lane ((imm >> 2i) & 3).
+;; Bits above 7 are never consulted — the hardware's imm8 truncation.
+(fn vpshufd ((s Xmm) (im Int)) Xmm
+  (MkXmm
+    (vsel s (band im 3))
+    (vsel s (band (bshr im 2) 3))
+    (vsel s (band (bshr im 4) 3))
+    (vsel s (band (bshr im 6) 3))))
+
+;; palignr dst, src, imm8 at DWORD multiples: concatenate dst:src (dst
+;; high, src low) and take the 16 bytes starting imm bytes up. The arm
+;; below admits only imm in {0,4,8,12} — byte-grain alignments and the
+;; imm >= 16 shift-in-zero cases trap (species at consumer generality).
+(fn vpalignr ((d Xmm) (s Xmm) (k Int)) Xmm
+  (if (int_eq k 0) s
+  (if (int_eq k 4) (MkXmm (x1_of s) (x2_of s) (x3_of s) (x0_of d))
+  (if (int_eq k 8) (MkXmm (x2_of s) (x3_of s) (x0_of d) (x1_of d))
+  (MkXmm (x3_of s) (x0_of d) (x1_of d) (x2_of d))))))
+
+;; punpcklqdq / punpckhqdq: interleave the low / high qwords.
+(fn vpunpckl ((d Xmm) (s Xmm)) Xmm
+  (MkXmm (x0_of d) (x1_of d) (x0_of s) (x1_of s)))
+
+(fn vpunpckh ((d Xmm) (s Xmm)) Xmm
+  (MkXmm (x2_of d) (x3_of d) (x2_of s) (x3_of s)))
+
+;; --- the SHA extension's three instructions --------------------------------------
+;;
+;; The state lives in the PERMUTED two-register layout SHA-NI dictates:
+;; the "ABEF" register holds (F,E,B,A) in lanes 0..3 and the "CDGH"
+;; register holds (H,G,D,C). sha256rnds2 performs TWO rounds of the
+;; spec's compression with the round's (K + W) supplied in XMM0's low
+;; two lanes — which is why the article's obligation is exactly
+;; "rnds2 = two sha_rounds", not a fresh compression proof.
+
+;; the round's T1 (std/sha256's sha_round t1, with wk standing where the
+;; spec writes (+ k w) — the article discharges wk = m32(k + w)).
+(fn vt1 ((e Int) (f Int) (g Int) (h Int) (wk Int)) Int
+  (vm32 (+ h (+ (vbs1 e) (+ (vch e f g) wk)))))
+
+;; the round's new a and new e (sha_round's first and fifth outputs).
+(fn vrnd_a ((a Int) (b Int) (c Int) (e Int) (f Int) (g Int) (h Int) (wk Int))
+  Int
+  (vm32 (+ (vt1 e f g h wk) (+ (vbs0 a) (vmaj a b c)))))
+
+(fn vrnd_e ((d Int) (e Int) (f Int) (g Int) (h Int) (wk Int)) Int
+  (vm32 (+ d (vt1 e f g h wk))))
+
+;; SHA256RNDS2 xmm1, xmm2, <XMM0>. The parameters are named for the
+;; STATE HALVES they carry, not the operand positions, because the
+;; operand positions are counter-intuitive and drafting this from the
+;; operand names got it WRONG (caught by the silicon differential at
+;; E1 — 9 disagreeing rows, every one this instruction; the amendment
+;; is the trust locus working exactly as docs/X86.md §32 says it
+;; should). Per the SDM:
+;;   the SOURCE operand (xmm2) holds ABEF = (F,E,B,A) in lanes 0..3
+;;   the DEST operand (xmm1) holds CDGH = (H,G,D,C) in lanes 0..3
+;; and the new ABEF is written to the DEST. So xvinstr_leaf's arm calls
+;; this with the operands EXCHANGED — see the call site.
+;; wk lanes 0/1 = the two rounds' (K + W). Two rounds later the result
+;; is (F2,E2,B2,A2) = (E1, E2, A1, A2) in lanes 0..3.
+(fn vrnds2 ((abef Xmm) (cdgh Xmm) (wk Xmm)) Xmm
+  (let
+    ((a1
+       (vrnd_a
+         (x3_of abef)
+         (x2_of abef)
+         (x3_of cdgh)
+         (x1_of abef)
+         (x0_of abef)
+         (x1_of cdgh)
+         (x0_of cdgh)
+         (x0_of wk))))
+    (let
+      ((e1
+         (vrnd_e
+           (x2_of cdgh)
+           (x1_of abef)
+           (x0_of abef)
+           (x1_of cdgh)
+           (x0_of cdgh)
+           (x0_of wk))))
+      (let
+        ((a2
+           (vrnd_a
+             a1
+             (x3_of abef)
+             (x2_of abef)
+             e1
+             (x1_of abef)
+             (x0_of abef)
+             (x1_of cdgh)
+             (x1_of wk))))
+        (let
+          ((e2
+             (vrnd_e
+               (x3_of cdgh)
+               e1
+               (x1_of abef)
+               (x0_of abef)
+               (x1_of cdgh)
+               (x1_of wk))))
+          (MkXmm e1 e2 a1 a2))))))
+
+;; SHA256MSG1 dst, src: dst holds W[t-16..t-13] (lanes 0..3), src's low
+;; lane holds W[t-12]; each lane accumulates sigma0 of its successor.
+(fn vmsg1 ((d Xmm) (s Xmm)) Xmm
+  (MkXmm
+    (vm32 (+ (x0_of d) (vss0 (x1_of d))))
+    (vm32 (+ (x1_of d) (vss0 (x2_of d))))
+    (vm32 (+ (x2_of d) (vss0 (x3_of d))))
+    (vm32 (+ (x3_of d) (vss0 (x0_of s))))))
+
+;; SHA256MSG2 dst, src: src's high two lanes carry W[t-2] and W[t-1];
+;; the recurrence chains WITHIN the instruction (lanes 2 and 3 consume
+;; the lanes 0 and 1 just computed).
+(fn vmsg2 ((d Xmm) (s Xmm)) Xmm
+  (let ((w16 (vm32 (+ (x0_of d) (vss1 (x2_of s))))))
+    (let ((w17 (vm32 (+ (x1_of d) (vss1 (x3_of s))))))
+      (let ((w18 (vm32 (+ (x2_of d) (vss1 w16)))))
+        (let ((w19 (vm32 (+ (x3_of d) (vss1 w17))))) (MkXmm w16 w17 w18 w19))))))
+
+;; --- 16-byte memory moves (std/mem's load_le/store_le at width 4) ------------------
+
+;; the four lanes at [p, p+16), little-endian — movdqu's load.
+(fn vload ((mem Mem) (p Int)) Xmm
+  (MkXmm
+    (load_le (S (S (S (S Z)))) mem p)
+    (load_le (S (S (S (S Z)))) mem (+ p 4))
+    (load_le (S (S (S (S Z)))) mem (+ p 8))
+    (load_le (S (S (S (S Z)))) mem (+ p 12))))
+
+;; the same 16 bytes written back — movdqu's store. Lanes are in
+;; [0, 2^32) by the tier invariant, so ls4_id reads each back exactly.
+(fn vstore ((mem Mem) (p Int) (v Xmm)) Mem
+  (store_le
+    (S (S (S (S Z))))
+    (store_le
+      (S (S (S (S Z))))
+      (store_le
+        (S (S (S (S Z))))
+        (store_le (S (S (S (S Z)))) mem p (x0_of v))
+        (+ p 4)
+        (x1_of v))
+      (+ p 8)
+      (x2_of v))
+    (+ p 12)
+    (x3_of v)))
+
+;; --- the static vector predicate (the call arm's dispatch) --------------------------
+
+;; does this code mention a vector species — or REACH one? XCall answers
+;; True (the deliberate deviation documented in the header): a callee
+;; that calls anything is evaluated in-tier, so nested seams re-dispatch
+;; and transitivity is dynamic. Exhausted fuel answers True as well —
+;; the same conservative direction (mirror, never delegate).
+(fn xvec_i ((d Nat) (i XInstr)) Bool
+  (measure (struct d))
+  (match d
+    (Z True)
+    ((S d2)
+     (match i
+       ((XBlock body) (xvec_l d2 body))
+       ((XLoop body) (xvec_l d2 body))
+       ((XCall k) True)
+       ((XVec v) True)
+       (other False)))))
+
+(fn xvec_l ((d Nat) (is (List XInstr))) Bool
+  (measure (struct d))
+  (match d
+    (Z True)
+    ((S d2)
+     (match is
+       (Nil False)
+       ((Cons i rest) (if (xvec_i d2 i) True (xvec_l d2 rest)))))))
+
+(fn xvec_fn ((d Nat) (f XFunc)) Bool (xvec_l d (xbody_of f)))
+
+;; the dispatch's ground budget (world.shard's weff_budget twin: ground
+;; so the dispatch reduces at symbolic fuel, generous for every body —
+;; spine length + nesting rides well under it). Built by x86.shard's
+;; own xfnat rather than a local Nat recursion, so the tier adds no new
+;; measure obligation.
+(fn xvec_budget () Nat (xfnat 96))
+
+;; --- outcomes and the lift ----------------------------------------------------------
+
+(type XVOut
+  (XVNorm Regs Xmms Mem)
+  (XVBrk Int Regs Xmms Mem)
+  (XVRetO Regs Xmms Mem)
+  (XVTrap))
+
+(fn xvblock_exit ((out XVOut)) XVOut
+  (match out
+    ((XVNorm rs xs mem) (XVNorm rs xs mem))
+    ((XVBrk d rs xs mem)
+     (if (int_eq d 0) (XVNorm rs xs mem) (XVBrk (- d 1) rs xs mem)))
+    ((XVRetO rs xs mem) (XVRetO rs xs mem))
+    (XVTrap XVTrap)))
+
+;; THE EMBEDDING LIFT: what "the tiers agree" MEANS — same outcome, the
+;; XMM file carried through untouched. Every scalar leaf's arm and every
+;; delegated call site reduces to this applied to the base tower's term,
+;; which is what lets a landed scalar cert be cited verbatim.
+(fn xvlift ((xs Xmms) (o (Option XOut))) (Option XVOut)
+  (match o
+    (None None)
+    ((Some out)
+     (match out
+       ((XNorm rs mem) (Some (XVNorm rs xs mem)))
+       ((XBrk d rs mem) (Some (XVBrk d rs xs mem)))
+       ((XRetO rs mem) (Some (XVRetO rs xs mem)))
+       (XTrap (Some XVTrap))))))
+
+;; --- THE SEMANTIC TABLE (the whole vector sub-vocabulary, in one place) -------------
+
+;; Every vector species' meaning, and nothing else's. x86.shard names the
+;; species and refuses them; the encoder's tables are untrusted; the
+;; differential is the authority — but THIS is what all three are talking
+;; about. Effect-free and control-free by construction, so the world twin
+;; can delegate here untouched.
+;;
+;; Outcomes are the tier's (XVNorm / XVTrap): the window checks and the
+;; two operand fences (the byte-flip mask, the dword-multiple alignment)
+;; are the only ways a vector instruction fails.
+(fn xvinstr_leaf ((m XModule) (v XVInstr) (rs Regs) (xs Xmms) (mem Mem))
+  (Option XVOut)
+  (match v
+    ;; movdqu load: the window admits [p, p+16) or the access traps
+    ((XVLoad d a)
+     (let ((p (xaddr rs a)))
+       (if (le (xmemlo_of m) p)
+         (if (le (+ p 16) (xmemhi_of m))
+           (Some (XVNorm rs (vset xs d (vload mem p)) mem))
+           (Some XVTrap))
+         (Some XVTrap))))
+    ((XVStore a s)
+     (let ((p (xaddr rs a)))
+       (if (le (xmemlo_of m) p)
+         (if (le (+ p 16) (xmemhi_of m))
+           (Some (XVNorm rs xs (vstore mem p (vget xs s))))
+           (Some XVTrap))
+         (Some XVTrap))))
+    ((XVMov d s) (Some (XVNorm rs (vset xs d (vget xs s)) mem)))
+    ((XVPshufd d s im)
+     (Some (XVNorm rs (vset xs d (vpshufd (vget xs s) im)) mem)))
+    ;; pshufb RESTRICTED to the byte-flip mask: any other mask value is a
+    ;; species we do not model, and it refuses LOUDLY
+    ((XVBswap32 d s)
+     (if (vxeq (vget xs s) (vbswap_mask))
+       (Some (XVNorm rs (vset xs d (vbswap (vget xs d))) mem))
+       (Some XVTrap)))
+    ((XVPaddd d s)
+     (Some (XVNorm rs (vset xs d (vpaddd (vget xs d) (vget xs s))) mem)))
+    ;; palignr at dword multiples only
+    ((XVPalignr d s im)
+     (if (int_eq (mod im 4) 0)
+       (if (le 0 im)
+         (if (lt im 16)
+           (Some
+             (XVNorm rs (vset xs d (vpalignr (vget xs d) (vget xs s) im)) mem))
+           (Some XVTrap))
+         (Some XVTrap))
+       (Some XVTrap)))
+    ((XVPunpckL d s)
+     (Some (XVNorm rs (vset xs d (vpunpckl (vget xs d) (vget xs s))) mem)))
+    ((XVPunpckH d s)
+     (Some (XVNorm rs (vset xs d (vpunpckh (vget xs d) (vget xs s))) mem)))
+    ;; the implicit third operand is XMM0, always
+    ;; operands EXCHANGED on purpose: the SOURCE carries ABEF and the
+    ;; DEST carries CDGH (see vrnds2's note — the silicon differential
+    ;; ruled this at E1)
+    ((XVSha256Rnds2 d s)
+     (Some
+       (XVNorm
+         rs
+         (vset xs d (vrnds2 (vget xs s) (vget xs d) (vget xs XMM0)))
+         mem)))
+    ((XVSha256Msg1 d s)
+     (Some (XVNorm rs (vset xs d (vmsg1 (vget xs d) (vget xs s))) mem)))
+    ((XVSha256Msg2 d s)
+     (Some (XVNorm rs (vset xs d (vmsg2 (vget xs d) (vget xs s))) mem)))))
+
+;; --- the interpreter twin (one fuel-countdown SCC, mirroring the base) --------------
+
+;; Discipline copied from world.shard, for the same reason: the three
+;; code-carrying ctors recurse IN-TIER (their bodies may hold vector
+;; species); the ONE vector arm hands off to xvinstr_leaf; every other
+;; instruction DELEGATES to xeval_instr AT THE SAME FUEL, so for
+;; vector-free code the two towers agree arm-by-arm definitionally.
+(fn xveval_instr
+  ((fuel Nat) (m XModule) (i XInstr) (rs Regs) (xs Xmms) (mem Mem))
+  (Option XVOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match i
+       ((XBlock body)
+        (match (xveval_seq f2 m body rs xs mem)
+          (None None)
+          ((Some out) (Some (xvblock_exit out)))))
+       ((XLoop body) (xveval_loop f2 m body rs xs mem))
+       ((XCall k) (xveval_call f2 m k rs xs mem))
+       ;; the vector sub-vocabulary: ONE arm into the semantic table
+       ((XVec v) (xvinstr_leaf m v rs xs mem))
+       ;; every remaining instruction is the BASE TOWER's, at the same
+       ;; fuel, with the XMM file untouched (XSyscall included: the pure
+       ;; tier traps on it exactly as the base does)
+       (other (xvlift xs (xeval_instr fuel m i rs mem)))))))
+
+;; the call engine — the DELEGATION SEAM. A callee the vector predicate
+;; clears (no vector species, no calls of its own) is run by the BASE
+;; tower's xeval_call at the same fuel, so its landed regs-general cert
+;; welds in through xcall_bridge with the XMM file riding past
+;; untouched (xvcall_bridge below). Everything else mirrors in-tier.
+(fn xveval_call ((fuel Nat) (m XModule) (k Int) (rs Regs) (xs Xmms) (mem Mem))
+  (Option XVOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match (xfunc_at (xfuncs_of m) k)
+       (None (Some XVTrap))
+       ((Some f)
+        (if (xvec_fn (xvec_budget) f)
+          (match (xveval_seq f2 m (xbody_of f) rs xs mem)
+            (None None)
+            ((Some out)
+             (match out
+               ((XVNorm rs2 xs2 mem2) (Some (XVNorm rs2 xs2 mem2)))
+               ((XVRetO rs2 xs2 mem2) (Some (XVNorm rs2 xs2 mem2)))
+               ((XVBrk d rs2 xs2 mem2) (Some XVTrap))
+               (XVTrap (Some XVTrap)))))
+          (xvlift xs (xeval_call (S f2) m k rs mem))))))))
+
+(fn xveval_loop
+  ((fuel Nat) (m XModule) (body (List XInstr)) (rs Regs) (xs Xmms) (mem Mem))
+  (Option XVOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match (xveval_seq f2 m body rs xs mem)
+       (None None)
+       ((Some out)
+        (match out
+          ((XVNorm rs2 xs2 mem2) (Some (XVNorm rs2 xs2 mem2)))
+          ((XVBrk d rs2 xs2 mem2)
+           (if (int_eq d 0) (xveval_loop f2 m body rs2 xs2 mem2)
+           (Some (XVBrk (- d 1) rs2 xs2 mem2))))
+          ((XVRetO rs2 xs2 mem2) (Some (XVRetO rs2 xs2 mem2)))
+          (XVTrap (Some XVTrap))))))))
+
+(fn xveval_seq
+  ((fuel Nat) (m XModule) (is (List XInstr)) (rs Regs) (xs Xmms) (mem Mem))
+  (Option XVOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match is
+       (Nil (Some (XVNorm rs xs mem)))
+       ((Cons i rest)
+        (match (xveval_instr f2 m i rs xs mem)
+          (None None)
+          ((Some out)
+           (match out
+             ((XVNorm rs2 xs2 mem2) (xveval_seq f2 m rest rs2 xs2 mem2))
+             ((XVBrk d rs2 xs2 mem2) (Some (XVBrk d rs2 xs2 mem2)))
+             ((XVRetO rs2 xs2 mem2) (Some (XVRetO rs2 xs2 mem2)))
+             (XVTrap (Some XVTrap))))))))))
+
+;; --- the big-step denotation (the tier's composition boundary) ------------------------
+
+;; xrun_regs's twin: the FULL final machine state — registers, the XMM
+;; file, memory. E2's block-function cert is stated against this with
+;; every register field and the entry XMM file quantified, so the result
+;; reads off as the clobber set exactly as the scalar certs do.
+(fn xvrun_regs ((fuel Nat) (m XModule) (k Int) (rs Regs) (xs Xmms) (mem Mem))
+  (Option (Pair Regs (Pair Xmms Mem)))
+  (match (xfunc_at (xfuncs_of m) k)
+    (None None)
+    ((Some f)
+     (match (xveval_seq fuel m (xbody_of f) rs xs mem)
+       (None None)
+       ((Some out)
+        (match out
+          ((XVNorm rs2 xs2 mem2) (Some (Pair rs2 (Pair xs2 mem2))))
+          ((XVRetO rs2 xs2 mem2) (Some (Pair rs2 (Pair xs2 mem2))))
+          ((XVBrk d rs2 xs2 mem2) None)
+          (XVTrap None)))))))
+
+;; --- the call-composition keystone (the embedding's ONE citation) ---------------------
+
+;; xvcall_bridge: an in-body (XCall k) step in the VECTOR tier, where
+;; the callee is vector-free, completes exactly as the callee's
+;; xrun_regs on the caller's registers and memory — with the XMM file
+;; passed through untouched. Premise 1 is ground bookkeeping at any
+;; concrete call site (xvec_fn computes on a ground body); premise 2 is
+;; THE SLOT A LANDED SCALAR CERT FILLS, unchanged and uncited-elsewhere.
+;; This is what STREAM.md §8.2 means by "scalar walks lift by one
+;; citation": the composition equations of the streaming skeleton
+;; re-instantiate over a vector-bearing module by rewriting their call
+;; seams with this, not by re-proving the callees.
+(claim xvcall_bridge
+  (goal
+    ((f2 Nat)
+     (m XModule)
+     (k Int)
+     (f XFunc)
+     (rs Regs)
+     (xs Xmms)
+     (mem Mem)
+     (rs2 Regs)
+     (mem2 Mem))
+    ((= (xfunc_at (xfuncs_of m) k) (Some f))
+     (= (xvec_fn (xvec_budget) f) False)
+     (= (xrun_regs f2 m k rs mem) (Some (Pair rs2 mem2))))
+    (= (xveval_call (S f2) m k rs xs mem) (Some (XVNorm rs2 xs mem2))))
+  (chain
+    ;; the dispatch: resolve the callee, then hold xvec_fn folded so
+    ;; premise 1 can flip the branch (computing through it would strand
+    ;; the predicate on a symbolic body)
+    (steps
+      ((unfold xveval_call lhs)
+       (rewrite (premise 0) lr lhs true ())
+       (compute lhs (stop xeval_call xvec_fn xvec_budget))
+       (rewrite (premise 1) lr lhs true ())
+       (compute lhs (stop xeval_call))))
+    ;; the delegate arm is now literally (xvlift xs (xeval_call …)) —
+    ;; the base tower's own keystone finishes it, its two premises
+    ;; discharged by this claim's premises verbatim
+    (rewrite-with
+      (lemma xcall_bridge)
+      lr
+      lhs
+      ((inst f f) (inst rs2 rs2) (inst mem2 mem2))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    refl))

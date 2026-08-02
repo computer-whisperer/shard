@@ -1,0 +1,319 @@
+;;; models/x86/vworld.shard — the VECTOR TIER's WORLD LAYER (docs/
+;;; STREAM.md §8, B5/E1): models/x86/vector.shard composed with the
+;;; kernel model, exactly as models/x86/world.shard composes the scalar
+;;; machine.
+;;;
+;;; The tower now has four floors, each a strict extension of the one
+;;; below, and NONE of the lower three changed shape at E1:
+;;;
+;;;     xeval_*   (x86.shard)     registers, memory
+;;;     weval_*   (world.shard)   + world, trace          [scalar]
+;;;     xveval_*  (vector.shard)  + the XMM file          [pure]
+;;;     wveval_*  (this file)     + world, trace, XMM     [both]
+;;;
+;;; STRUCTURE — the same five arms world.shard has, for the same
+;;; reasons: the three code-carrying ctors recurse IN-TIER, XSyscall
+;;; applies the kernel transition and CONTINUES, and every remaining
+;;; instruction delegates DOWNWARD AT THE SAME FUEL. The delegate here
+;;; is the PURE VECTOR tier (xveval_instr), which is what makes the
+;;; twelve vector species' semantics live in exactly one place: this
+;;; file adds effects, never arithmetic.
+;;;
+;;; THE CALL ARM'S DISPATCH — world.shard's purity delegation (its W4c
+;;; lesson: without it, every pure callee is priced a twin bridge
+;;; lemma) with the transitivity hole CLOSED. world.shard delegates on
+;;; xfn_eff alone, which answers False on XCall, so a pure-LOOKING
+;;; callee that calls an effectful one delegates into a tier that
+;;; cannot express the effect and traps. Here the dispatch asks a
+;;; single, stronger question — xwv_fn: does the body contain a CALL or
+;;; an EFFECT-POINT? A body with neither runs entirely inside the pure
+;;; vector tier by construction (no seam can reach a syscall), so
+;;; delegating is sound with no image-level walk; anything else mirrors
+;;; in-tier, where each nested seam re-dispatches with the full
+;;; machinery. Exhausted budget answers True = mirror, always sound.
+;;;
+;;; THE COMPOSITION SHAPE THIS BUYS (STREAM.md §8.2's "re-compose, not
+;;; re-prove"): B5's hand-pinned block fold is a PURE, CALL-FREE, XMM-
+;;; bearing leaf. It therefore delegates out of this tier into
+;;; xveval_call, where its own conformance cert (stated against
+;;; xvrun_regs) welds in through wvcall_bridge — and the streaming
+;;; skeleton's composition equations re-instantiate at their call seams
+;;; by citing that in place of the scalar fold's bridge.
+
+(import "../../kernel/stdlib.shard")
+(import "../../std/mem")
+(use (:: std mem *))
+(import "x86.shard")
+(use (:: models x86 x86 *))
+(import "../linux/kernel.shard")
+(use (:: models linux kernel *))
+(import "world.shard")
+(use (:: models x86 world *))
+(import "vector.shard")
+(use (:: models x86 vector *))
+
+;; --- outcomes -----------------------------------------------------------------
+
+(type WVOut
+  (WVNorm Regs Xmms Mem LxWorld (List LxEvent))
+  (WVBrk Int Regs Xmms Mem LxWorld (List LxEvent))
+  (WVRetO Regs Xmms Mem LxWorld (List LxEvent))
+  (WVExit Int (List LxEvent))
+  (WVTrap))
+
+;; prepend already-produced events (world.shard's wapp is the transparent
+;; trace append — models compute, std/list's is opaque)
+(fn wvtr_pre ((tr (List LxEvent)) (out WVOut)) WVOut
+  (match out
+    ((WVNorm rs xs mem w tr2) (WVNorm rs xs mem w (wapp tr tr2)))
+    ((WVBrk d rs xs mem w tr2) (WVBrk d rs xs mem w (wapp tr tr2)))
+    ((WVRetO rs xs mem w tr2) (WVRetO rs xs mem w (wapp tr tr2)))
+    ((WVExit c tr2) (WVExit c (wapp tr tr2)))
+    (WVTrap WVTrap)))
+
+(fn wvblock_exit ((out WVOut)) WVOut
+  (match out
+    ((WVNorm rs xs mem w tr) (WVNorm rs xs mem w tr))
+    ((WVBrk d rs xs mem w tr)
+     (if (int_eq d 0) (WVNorm rs xs mem w tr) (WVBrk (- d 1) rs xs mem w tr)))
+    ((WVRetO rs xs mem w tr) (WVRetO rs xs mem w tr))
+    ((WVExit c tr) (WVExit c tr))
+    (WVTrap WVTrap)))
+
+;; --- the three lifts (each says "this floor agrees with the one below") --------
+
+;; from the SCALAR WORLD tier: the XMM file rides along untouched. This
+;; is the embedding statement's lift — what "a vector-free program runs
+;; the same here" means — and the XSyscall arm's, since a Linux syscall
+;; preserves the vector register file.
+(fn wvlift ((xs Xmms) (o (Option WOut))) (Option WVOut)
+  (match o
+    (None None)
+    ((Some out)
+     (match out
+       ((WNorm rs mem w tr) (Some (WVNorm rs xs mem w tr)))
+       ((WBrk d rs mem w tr) (Some (WVBrk d rs xs mem w tr)))
+       ((WRetO rs mem w tr) (Some (WVRetO rs xs mem w tr)))
+       ((WExit c tr) (Some (WVExit c tr)))
+       (WTrap (Some WVTrap))))))
+
+;; from the PURE VECTOR tier: the world is threaded through untouched
+;; and the trace is empty — pure code produces no events.
+(fn wvlift_p ((w LxWorld) (o (Option XVOut))) (Option WVOut)
+  (match o
+    (None None)
+    ((Some out)
+     (match out
+       ((XVNorm rs xs mem) (Some (WVNorm rs xs mem w Nil)))
+       ((XVBrk d rs xs mem) (Some (WVBrk d rs xs mem w Nil)))
+       ((XVRetO rs xs mem) (Some (WVRetO rs xs mem w Nil)))
+       (XVTrap (Some WVTrap))))))
+
+;; from the BASE tier: both extensions ride past untouched. Definitionally
+;; (wvlift_p w (xvlift xs o)); kept as one function so a landed scalar
+;; cert reaches this floor in a single rewrite.
+(fn wvlift_x ((xs Xmms) (w LxWorld) (o (Option XOut))) (Option WVOut)
+  (match o
+    (None None)
+    ((Some out)
+     (match out
+       ((XNorm rs mem) (Some (WVNorm rs xs mem w Nil)))
+       ((XBrk d rs mem) (Some (WVBrk d rs xs mem w Nil)))
+       ((XRetO rs mem) (Some (WVRetO rs xs mem w Nil)))
+       (XTrap (Some WVTrap))))))
+
+;; --- the dispatch predicate: does this body CALL or take an EFFECT? -----------
+
+;; Stronger than world.shard's xfn_eff by exactly one arm (XCall answers
+;; True), which is what closes its transitivity hole: a body neither
+;; calling nor syscalling cannot reach an effect-point at all, so the
+;; pure vector tier computes it exactly. Conservative on exhausted fuel.
+(fn xwv_i ((d Nat) (i XInstr)) Bool
+  (measure (struct d))
+  (match d
+    (Z True)
+    ((S d2)
+     (match i
+       (XSyscall True)
+       ((XCall k) True)
+       ((XBlock body) (xwv_l d2 body))
+       ((XLoop body) (xwv_l d2 body))
+       (other False)))))
+
+(fn xwv_l ((d Nat) (is (List XInstr))) Bool
+  (measure (struct d))
+  (match d
+    (Z True)
+    ((S d2)
+     (match is
+       (Nil False)
+       ((Cons i rest) (if (xwv_i d2 i) True (xwv_l d2 rest)))))))
+
+(fn xwv_fn ((d Nat) (f XFunc)) Bool (xwv_l d (xbody_of f)))
+
+;; ground budget (weff_budget's twin, built by x86.shard's proven xfnat)
+(fn xwv_budget () Nat (xfnat 96))
+
+;; --- the interpreter twin (one fuel-countdown SCC, world.shard's shape) -------
+
+(fn wveval_instr
+  ((fuel Nat) (m XModule) (i XInstr) (rs Regs) (xs Xmms) (mem Mem) (w LxWorld))
+  (Option WVOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match i
+       ((XBlock body)
+        (match (wveval_seq f2 m body rs xs mem w)
+          (None None)
+          ((Some out) (Some (wvblock_exit out)))))
+       ((XLoop body) (wveval_loop f2 m body rs xs mem w))
+       ((XCall k) (wveval_call f2 m k rs xs mem w))
+       ;; the effect-point: the kernel transition, the XMM file preserved
+       ;; (a Linux syscall clobbers rcx/r11 only — world.shard's binding
+       ;; owns that; the vector file survives)
+       (XSyscall (wvlift xs (wsyscall rs mem w)))
+       ;; everything else — the twelve vector species AND every scalar
+       ;; leaf — is the PURE VECTOR tier's, at the same fuel, with the
+       ;; world untouched and no events
+       (other (wvlift_p w (xveval_instr fuel m i rs xs mem)))))))
+
+(fn wveval_call
+  ((fuel Nat) (m XModule) (k Int) (rs Regs) (xs Xmms) (mem Mem) (w LxWorld))
+  (Option WVOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match (xfunc_at (xfuncs_of m) k)
+       (None (Some WVTrap))
+       ((Some f)
+        (if (xwv_fn (xwv_budget) f)
+          (match (wveval_seq f2 m (xbody_of f) rs xs mem w)
+            (None None)
+            ((Some out)
+             (match out
+               ((WVNorm rs2 xs2 mem2 w2 tr) (Some (WVNorm rs2 xs2 mem2 w2 tr)))
+               ((WVRetO rs2 xs2 mem2 w2 tr) (Some (WVNorm rs2 xs2 mem2 w2 tr)))
+               ((WVBrk d rs2 xs2 mem2 w2 tr) (Some WVTrap))
+               ((WVExit c tr) (Some (WVExit c tr)))
+               (WVTrap (Some WVTrap)))))
+          (wvlift_p w (xveval_call (S f2) m k rs xs mem))))))))
+
+(fn wveval_loop
+  ((fuel Nat)
+   (m XModule)
+   (body (List XInstr))
+   (rs Regs)
+   (xs Xmms)
+   (mem Mem)
+   (w LxWorld))
+  (Option WVOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match (wveval_seq f2 m body rs xs mem w)
+       (None None)
+       ((Some out)
+        (match out
+          ((WVNorm rs2 xs2 mem2 w2 tr) (Some (WVNorm rs2 xs2 mem2 w2 tr)))
+          ((WVBrk d rs2 xs2 mem2 w2 tr)
+           (if (int_eq d 0)
+             (match (wveval_loop f2 m body rs2 xs2 mem2 w2)
+               (None None)
+               ((Some out2) (Some (wvtr_pre tr out2))))
+             (Some (WVBrk (- d 1) rs2 xs2 mem2 w2 tr))))
+          ((WVRetO rs2 xs2 mem2 w2 tr) (Some (WVRetO rs2 xs2 mem2 w2 tr)))
+          ((WVExit c tr) (Some (WVExit c tr)))
+          (WVTrap (Some WVTrap))))))))
+
+(fn wveval_seq
+  ((fuel Nat)
+   (m XModule)
+   (is (List XInstr))
+   (rs Regs)
+   (xs Xmms)
+   (mem Mem)
+   (w LxWorld))
+  (Option WVOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match is
+       (Nil (Some (WVNorm rs xs mem w Nil)))
+       ((Cons i rest)
+        (match (wveval_instr f2 m i rs xs mem w)
+          (None None)
+          ((Some out)
+           (match out
+             ((WVNorm rs2 xs2 mem2 w2 tr)
+              (match (wveval_seq f2 m rest rs2 xs2 mem2 w2)
+                (None None)
+                ((Some out2) (Some (wvtr_pre tr out2)))))
+             ((WVBrk d rs2 xs2 mem2 w2 tr) (Some (WVBrk d rs2 xs2 mem2 w2 tr)))
+             ((WVRetO rs2 xs2 mem2 w2 tr) (Some (WVRetO rs2 xs2 mem2 w2 tr)))
+             ((WVExit c tr) (Some (WVExit c tr)))
+             (WVTrap (Some WVTrap))))))))))
+
+;; --- the bin-level denotation ---------------------------------------------------
+
+;; xrun_w's twin: fuel is NOT burned at the boundary, an in-flight branch
+;; or trap is None, and WVExit SURVIVES — a B5 variant bin's whole
+;; contract is one equation about it, with the ENTRY XMM FILE QUANTIFIED
+;; (silicon guarantees nothing about XMM at _start — the M3 junk-regs
+;; precedent, now covering the vector file).
+(fn xvrun_w
+  ((fuel Nat) (m XModule) (k Int) (rs Regs) (xs Xmms) (mem Mem) (w LxWorld))
+  (Option WVOut)
+  (match (xfunc_at (xfuncs_of m) k)
+    (None None)
+    ((Some f)
+     (match (wveval_seq fuel m (xbody_of f) rs xs mem w)
+       (None None)
+       ((Some out)
+        (match out
+          ((WVNorm rs2 xs2 mem2 w2 tr) (Some (WVNorm rs2 xs2 mem2 w2 tr)))
+          ((WVRetO rs2 xs2 mem2 w2 tr) (Some (WVNorm rs2 xs2 mem2 w2 tr)))
+          ((WVBrk d rs2 xs2 mem2 w2 tr) None)
+          ((WVExit c tr) (Some (WVExit c tr)))
+          (WVTrap None)))))))
+
+;; --- the call-composition keystone (this floor's) ---------------------------------
+
+;; wvcall_bridge: an in-body (XCall k) step in the WORLD VECTOR tier,
+;; where the callee neither calls nor syscalls, completes exactly as the
+;; PURE VECTOR tier's call on the same state — world untouched, trace
+;; empty. Premise 1 is ground bookkeeping at any concrete call site;
+;; premise 2 is the slot the callee's own pure cert fills. Composed with
+;; vector.shard's xvcall_bridge this reaches all the way down: a landed
+;; SCALAR cert welds into a world-vector caller through the two of them,
+;; which is the whole reuse claim of STREAM.md §8.2.
+(claim wvcall_bridge
+  (goal
+    ((f2 Nat)
+     (m XModule)
+     (k Int)
+     (f XFunc)
+     (rs Regs)
+     (xs Xmms)
+     (mem Mem)
+     (w LxWorld)
+     (rs2 Regs)
+     (xs2 Xmms)
+     (mem2 Mem))
+    ((= (xfunc_at (xfuncs_of m) k) (Some f))
+     (= (xwv_fn (xwv_budget) f) False)
+     (= (xveval_call (S f2) m k rs xs mem) (Some (XVNorm rs2 xs2 mem2))))
+    (= (wveval_call (S f2) m k rs xs mem w) (Some (WVNorm rs2 xs2 mem2 w Nil))))
+  (steps
+    ((unfold wveval_call lhs)
+     (rewrite (premise 0) lr lhs true ())
+     (compute lhs (stop xveval_call xwv_fn xwv_budget))
+     (rewrite (premise 1) lr lhs true ())
+     (compute lhs (stop xveval_call))
+     (rewrite (premise 2) lr lhs true ())
+     (compute lhs))
+    refl))

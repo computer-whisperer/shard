@@ -366,6 +366,145 @@
        None))
     (_ None)))
 
+;; --- the vector sub-vocabulary (B5/E1, docs/STREAM.md §8) --------------------
+;; The readback mirrors the MODEL's shape exactly: one key for the (XVec …)
+;; wrapper in rxinstr below, and ONE table here for the twelve species. AVX2
+;; species (fork A's named door) extend this table and rxinstr never moves —
+;; the same property that motivated the sub-type.
+
+(fn rxxmm ((s SExpr)) (Option XmmReg)
+  (match s
+    ((SSym x)
+     (if (sym_eq x (quote XMM0)) (Some XMM0)
+     (if (sym_eq x (quote XMM1)) (Some XMM1)
+     (if (sym_eq x (quote XMM2)) (Some XMM2)
+     (if (sym_eq x (quote XMM3)) (Some XMM3)
+     (if (sym_eq x (quote XMM4)) (Some XMM4)
+     (if (sym_eq x (quote XMM5)) (Some XMM5)
+     (if (sym_eq x (quote XMM6)) (Some XMM6)
+     (if (sym_eq x (quote XMM7)) (Some XMM7)
+     (if (sym_eq x (quote XMM8)) (Some XMM8)
+     (if (sym_eq x (quote XMM9)) (Some XMM9)
+     (if (sym_eq x (quote XMM10)) (Some XMM10)
+     (if (sym_eq x (quote XMM11)) (Some XMM11)
+     (if (sym_eq x (quote XMM12)) (Some XMM12)
+     (if (sym_eq x (quote XMM13)) (Some XMM13)
+     (if (sym_eq x (quote XMM14)) (Some XMM14)
+     (if (sym_eq x (quote XMM15)) (Some XMM15)
+     None)))))))))))))))))
+    (_ None)))
+
+;; the shared (dst, src) xmm operand pair — ten of the twelve species
+(fn rxvpair ((args (List SExpr))) (Option (Pair XmmReg XmmReg))
+  (match args
+    ((Cons d (Cons s Nil))
+     (match (rxxmm d)
+       (None None)
+       ((Some dd)
+        (match (rxxmm s)
+          (None None)
+          ((Some ss) (Some (Pair dd ss)))))))
+    (_ None)))
+
+;; the same, plus a trailing imm8 literal (pshufd's selector, palignr's offset)
+(fn rxvpairi ((args (List SExpr))) (Option (Pair (Pair XmmReg XmmReg) Int))
+  (match args
+    ((Cons d (Cons s (Cons (SInt k) Nil)))
+     (match (rxvpair (Cons d (Cons s Nil)))
+       (None None)
+       ((Some p) (Some (Pair p k)))))
+    (_ None)))
+
+(fn rxvinstr ((s SExpr)) (Option XVInstr)
+  (match s
+    ((SList (Cons h args))
+     (if (is_sym h (quote XVLoad))
+       (match args
+         ((Cons d (Cons a Nil))
+          (match (rxxmm d)
+            (None None)
+            ((Some dd)
+             (match (rxaddr a)
+               (None None)
+               ((Some aa) (Some (XVLoad dd aa)))))))
+         (_ None))
+     (if (is_sym h (quote XVStore))
+       (match args
+         ((Cons a (Cons s2 Nil))
+          (match (rxaddr a)
+            (None None)
+            ((Some aa)
+             (match (rxxmm s2)
+               (None None)
+               ((Some ss) (Some (XVStore aa ss)))))))
+         (_ None))
+     (if (is_sym h (quote XVMov))
+       (match (rxvpair args)
+         (None None)
+         ((Some p)
+          (match p
+            ((Pair d s2) (Some (XVMov d s2))))))
+     (if (is_sym h (quote XVPshufd))
+       (match (rxvpairi args)
+         (None None)
+         ((Some pi)
+          (match pi
+            ((Pair p k)
+             (match p
+               ((Pair d s2) (Some (XVPshufd d s2 k))))))))
+     (if (is_sym h (quote XVBswap32))
+       (match (rxvpair args)
+         (None None)
+         ((Some p)
+          (match p
+            ((Pair d s2) (Some (XVBswap32 d s2))))))
+     (if (is_sym h (quote XVPaddd))
+       (match (rxvpair args)
+         (None None)
+         ((Some p)
+          (match p
+            ((Pair d s2) (Some (XVPaddd d s2))))))
+     (if (is_sym h (quote XVPalignr))
+       (match (rxvpairi args)
+         (None None)
+         ((Some pi)
+          (match pi
+            ((Pair p k)
+             (match p
+               ((Pair d s2) (Some (XVPalignr d s2 k))))))))
+     (if (is_sym h (quote XVPunpckL))
+       (match (rxvpair args)
+         (None None)
+         ((Some p)
+          (match p
+            ((Pair d s2) (Some (XVPunpckL d s2))))))
+     (if (is_sym h (quote XVPunpckH))
+       (match (rxvpair args)
+         (None None)
+         ((Some p)
+          (match p
+            ((Pair d s2) (Some (XVPunpckH d s2))))))
+     (if (is_sym h (quote XVSha256Rnds2))
+       (match (rxvpair args)
+         (None None)
+         ((Some p)
+          (match p
+            ((Pair d s2) (Some (XVSha256Rnds2 d s2))))))
+     (if (is_sym h (quote XVSha256Msg1))
+       (match (rxvpair args)
+         (None None)
+         ((Some p)
+          (match p
+            ((Pair d s2) (Some (XVSha256Msg1 d s2))))))
+     (if (is_sym h (quote XVSha256Msg2))
+       (match (rxvpair args)
+         (None None)
+         ((Some p)
+          (match p
+            ((Pair d s2) (Some (XVSha256Msg2 d s2))))))
+       None)))))))))))))
+    (_ None)))
+
 ;; the fused Cond: zero tests (CEqz/CNz over a register) and the relational
 ;; trio (CEq/CLtU/CLeU, a dst register vs a Src) — the if fragment's.
 (fn rxcond ((s SExpr)) (Option Cond)
@@ -512,8 +651,17 @@
             (None (RXIErr "XDivU needs a register operand"))
             ((Some rr) (RXIOk (XDivU rr)))))
          (_ (RXIErr "XDivU needs a register operand")))
-       (RXIErr
-         "x86 instruction outside the reflector (extend per emitter slice)")))))))))))))
+       ;; the vector sub-vocabulary's single key: the species table is
+       ;; rxvinstr, so the AVX2 door costs this arm nothing (B5/E1)
+       (if (is_sym h (quote XVec))
+         (match args
+           ((Cons v Nil)
+            (match (rxvinstr v)
+              (None (RXIErr "unknown vector species (extend rxvinstr)"))
+              ((Some vv) (RXIOk (XVec vv)))))
+           (_ (RXIErr "XVec needs one vector instruction")))
+         (RXIErr
+           "x86 instruction outside the reflector (extend per emitter slice)"))))))))))))))
     ((SSym x)
      (if (sym_eq x (quote XRet)) (RXIOk XRet)
      (if (sym_eq x (quote XSyscall)) (RXIOk XSyscall)

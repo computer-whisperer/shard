@@ -10,6 +10,14 @@
 ;;;   XMOD <name> <hexcode>
 ;;;   XCASE <name> <argc> <a0> <a1> <a2> -> <exp>
 ;;;   XMEMCASE <name> <argc> <a0> <a1> <a2> READ <addr> <len> -> <exp> <outhex>
+;;;   XVCASE <name> <argc> <a0> <a1> <a2> XIN <xmmfile>
+;;;          SEED <addr> <hex|-> READ <addr> <len> -> <exp> <xmmfile|-> <outhex|->
+;;;
+;;; XVCASE is the VECTOR row (B5/E1; the block near the end of this file).
+;;; <xmmfile> is the whole architectural XMM state — sixteen registers, xmm0
+;;; first, each as its sixteen movdqu bytes — and its expectation comes from
+;;; the EXTENDED TIER (models/x86/vector.shard's xvrun_regs), never from
+;;; xcall_fn, which traps on every vector species by design.
 ;;;
 ;;; Memory addresses are REAL absolute addresses (DATA_BASE = 0x40000000): the
 ;;; model's Mem is a sparse (Map Int) so an absolute-address key is cheap, and
@@ -24,8 +32,10 @@
 (import "../../../kernel/stdlib.shard")
 (import "../x86.shard")
 (import "../encode.shard")
+(import "../vector.shard")
 (use (:: models x86 x86 *))
 (use (:: models x86 encode *))
+(use (:: models x86 vector *))
 (use (:: std mem *))
 
 (type World (World Int))
@@ -450,6 +460,528 @@
       (xcase nm (mreg f) (list 9223372036854775808) 12)
       (xcase nm (mreg f) (list 18446744073709551615) 12))))
 
+;; ============================================================================
+;; THE VECTOR TIER (docs/STREAM.md §8, B5/E1)
+;; ============================================================================
+;;
+;; Vector rows compute their expectation through the EXTENDED TIER
+;; (models/x86/vector.shard's xvrun_regs). They CANNOT go through xcall_fn:
+;; the scalar evaluator answers XTrap on every vector species by design (the
+;; loud-refusal fence), so a scalar-tier expectation would be "None" for every
+;; row and the differential would test nothing.
+;;
+;; The wire carries the WHOLE architectural XMM file in both directions —
+;; sixteen registers, each as its sixteen movdqu bytes (lane 0 first,
+;; little-endian within a lane). Comparing all sixteen registers, not just the
+;; instruction's destination, is what catches a dropped REX.R: an encoding
+;; that writes xmm9 where the model wrote xmm1 has the right VALUE in the
+;; wrong REGISTER, and only a whole-file comparison sees it.
+;;
+;;   XVCASE <name> <argc> <a0> <a1> <a2> XIN <512hex>
+;;          SEED <addr> <hex|-> READ <addr> <len> -> <rax|None> <512hex|-> <hex|->
+;;
+;; Two model refusals are deliberately NOT exercised as rows: a pshufb with a
+;; mask other than the byte-flip constant, and a palignr at a non-dword
+;; immediate. The model traps on both (STREAM.md §8.6's fences), but the
+;; silicon executes them happily — there is no fault for the trap leg to
+;; observe, so such a row would be a guaranteed FAIL of a CORRECT model. The
+;; fences are proof-side refusals, not machine behaviour.
+
+;; --- deterministic pseudo-random XMM files ----------------------------------
+;; A 64-bit LCG (Knuth's MMIX constants); the lane value is the HIGH 32 bits,
+;; because an LCG's low bits are weak and lane content is what these rows are
+;; about. Same seed -> same plan, every run.
+(fn nextr ((s Int)) Int
+  (mod (+ (* s 6364136223846793005) 1442695040888963407) 18446744073709551616))
+
+(fn lane ((s Int)) Int (mod (ediv s 4294967296) 4294967296))
+
+(fn rxmm ((s Int)) Xmm
+  (MkXmm
+    (lane (nextr s))
+    (lane (nextr (nextr s)))
+    (lane (nextr (nextr (nextr s))))
+    (lane (nextr (nextr (nextr (nextr s)))))))
+
+(fn skip4 ((s Int)) Int (nextr (nextr (nextr (nextr s)))))
+
+;; the architectural sixteen, in wire order (xmm0 first) — the spine both the
+;; generator and the serializer recurse on, so both measures are structural
+(fn xregs_all () (List XmmReg)
+  (list XMM0 XMM1 XMM2 XMM3 XMM4 XMM5 XMM6 XMM7 XMM8 XMM9 XMM10 XMM11 XMM12
+    XMM13 XMM14 XMM15))
+
+(fn fill_xmms ((xs Xmms) (rl (List XmmReg)) (s Int)) Xmms
+  (measure (struct rl))
+  (match rl
+    (Nil xs)
+    ((Cons r t) (fill_xmms (vset xs r (rxmm s)) t (skip4 s)))))
+
+;; the whole file from one seed — the entry state a bin's top statement
+;; universally quantifies (vector.shard's note), here made concrete
+(fn genx ((seed Int)) Xmms (fill_xmms (xmms0) (xregs_all) seed))
+
+;; the same, with the byte-flip constant planted in the two registers the
+;; pshufb rows use as masks (XVBswap32 traps on any other mask VALUE, so the
+;; entry state has to supply it — no species can materialize a constant)
+(fn genxm ((seed Int) (a XmmReg) (b XmmReg)) Xmms
+  (vset (vset (genx seed) a (vbswap_mask)) b (vbswap_mask)))
+
+;; --- the wire encoding of an XMM file ---------------------------------------
+
+(fn xmmbytes ((v Xmm)) (List Int)
+  (eap
+    (le4 (x0_of v))
+    (eap (le4 (x1_of v)) (eap (le4 (x2_of v)) (le4 (x3_of v))))))
+
+(fn xmmsb ((xs Xmms) (rl (List XmmReg))) (List Int)
+  (measure (struct rl))
+  (match rl
+    (Nil Nil)
+    ((Cons r t) (eap (xmmbytes (vget xs r)) (xmmsb xs t)))))
+
+(fn xfile ((xs Xmms)) (List Int) (hexs (xmmsb xs (xregs_all))))
+
+;; --- memory seeding ----------------------------------------------------------
+
+(fn seed_mem ((m Mem) (a Int) (bs (List Int))) Mem
+  (measure (struct bs))
+  (match bs
+    (Nil m)
+    ((Cons b t) (seed_mem (mem_set m a b) (+ a 1) t))))
+
+(fn is_nil ((bs (List Int))) Bool
+  (match bs
+    (Nil True)
+    ((Cons b t) False)))
+
+;; 64 pseudo-random data bytes: enough for a 16-byte load at any of the
+;; unaligned offsets the rows use, and enough SURROUNDING content that a
+;; store's exact 16-byte footprint is visible in the readback
+(fn seed64 () (List Int)
+  (eap
+    (xmmbytes (rxmm 101))
+    (eap
+      (xmmbytes (rxmm 202))
+      (eap (xmmbytes (rxmm 303)) (xmmbytes (rxmm 404))))))
+
+;; --- the vector plan line -----------------------------------------------------
+
+(fn xvtail ((r (Option (Pair Regs (Pair Xmms Mem)))) (addr Int) (len Int))
+  (List Int)
+  (match r
+    (None "None - -")
+    ((Some p)
+     (match p
+       ((Pair rs2 q)
+        (match q
+          ((Pair xs2 mem2)
+           (cat
+             (list
+               (hx (rax_of rs2))
+               " "
+               (xfile xs2)
+               " "
+               (if (le len 1) "-" (hexs (mem_read (xfnat len) mem2 addr))))))))))))
+
+(fn xvcase
+  ((nm (List Int))
+   (m XModule)
+   (k Int)
+   (args (List Int))
+   (xs Xmms)
+   (sa Int)
+   (sd (List Int))
+   (addr Int)
+   (len Int)
+   (fuel Int))
+  (List Int)
+  (let ((mem0 (seed_mem (mem_empty) sa sd)))
+    (match (xargs args)
+      (None (cat (list "XVCASE " nm " BADARGS\n")))
+      ((Some rs)
+       (cat
+         (list
+           "XVCASE "
+           nm
+           " "
+           (dec1 (argc args))
+           (argslots args)
+           " XIN "
+           (xfile xs)
+           " SEED "
+           (hx sa)
+           " "
+           (if (is_nil sd) "-" (hexs sd))
+           " READ "
+           (hx addr)
+           " "
+           (hx len)
+           " -> "
+           (xvtail (xvrun_regs (xfnat fuel) m k rs xs mem0) addr len)
+           "\n"))))))
+
+;; --- register-only families ----------------------------------------------------
+;;
+;; Four instructions per module, one per REX combination, with FOUR DISTINCT
+;; destinations that are nobody else's source — so the four are independent
+;; and a mismatch localizes to one combination:
+;;   (XMM1, XMM2)    no REX at all       (the prefix must be ELIDED, not 0x40)
+;;   (XMM9, XMM3)    REX.R (dst  >= 8)
+;;   (XMM4, XMM10)   REX.B (src  >= 8)
+;;   (XMM11, XMM12)  REX.R + REX.B
+
+(fn vf4 ((v1 XVInstr) (v2 XVInstr) (v3 XVInstr) (v4 XVInstr)) XFunc
+  (MkXFunc 0 (list (XVec v1) (XVec v2) (XVec v3) (XVec v4))))
+
+(fn vrows ((nm (List Int)) (f XFunc) (s1 Int) (s2 Int) (s3 Int)) (List Int)
+  (cat
+    (list
+      (mod_line nm f)
+      (xvcase nm (mreg f) 0 Nil (genx s1) 0 Nil 0 0 30)
+      (xvcase nm (mreg f) 0 Nil (genx s2) 0 Nil 0 0 30)
+      (xvcase nm (mreg f) 0 Nil (genx s3) 0 Nil 0 0 30))))
+
+;; the mask-bearing variant (pshufb's operand fence)
+(fn vrowsm
+  ((nm (List Int)) (f XFunc) (a XmmReg) (b XmmReg) (s1 Int) (s2 Int) (s3 Int))
+  (List Int)
+  (cat
+    (list
+      (mod_line nm f)
+      (xvcase nm (mreg f) 0 Nil (genxm s1 a b) 0 Nil 0 0 30)
+      (xvcase nm (mreg f) 0 Nil (genxm s2 a b) 0 Nil 0 0 30)
+      (xvcase nm (mreg f) 0 Nil (genxm s3 a b) 0 Nil 0 0 30))))
+
+;; a one-instruction module (the operand-aliasing rows, where chaining would
+;; hide which instruction disagreed)
+(fn vf1 ((v XVInstr)) XFunc (MkXFunc 0 (list (XVec v))))
+
+(fn vrows1 ((nm (List Int)) (f XFunc) (s1 Int) (s2 Int)) (List Int)
+  (cat
+    (list
+      (mod_line nm f)
+      (xvcase nm (mreg f) 0 Nil (genx s1) 0 Nil 0 0 12)
+      (xvcase nm (mreg f) 0 Nil (genx s2) 0 Nil 0 0 12))))
+
+;; --- the memory species --------------------------------------------------------
+;;
+;; movdqu's address comes in rdi. The base-register variants exercise every
+;; shape enc_mem can produce: a plain [reg], the [rbp]/[r13] mod=01 disp8 form
+;; (mod=00 rm=101 would be RIP-relative), and the [r12] SIB form — crossed with
+;; REX.R on the xmm and REX.B on the base.
+
+(fn vld_f ((x XmmReg)) XFunc (MkXFunc 1 (list (XVec (XVLoad x (AReg RDI))))))
+
+(fn vst_f ((x XmmReg)) XFunc (MkXFunc 1 (list (XVec (XVStore (AReg RDI) x)))))
+
+(fn vldb_f ((x XmmReg) (b Reg)) XFunc
+  (MkXFunc 1 (list (XMovRR b RDI) (XVec (XVLoad x (AReg b))))))
+
+(fn vstb_f ((x XmmReg) (b Reg)) XFunc
+  (MkXFunc 1 (list (XMovRR b RDI) (XVec (XVStore (AReg b) x)))))
+
+;; a load row: seeded data, the 16 bytes read into an xmm, memory unchanged
+;; (the readback proves the load had no side effect)
+(fn vldrow ((nm (List Int)) (f XFunc) (p Int) (s Int)) (List Int)
+  (xvcase nm (mmem f) 0 (list p) (genx s) 1073741824 (seed64) 1073741824 32 20))
+
+;; a store row: the 16 bytes land at p and NOTHING ELSE in the 48-byte window
+;; moves (the seeded surroundings are what make that visible)
+(fn vstrow ((nm (List Int)) (f XFunc) (p Int) (s Int)) (List Int)
+  (xvcase nm (mmem f) 0 (list p) (genx s) 1073741824 (seed64) 1073741824 48 20))
+
+;; --- the composite row ---------------------------------------------------------
+;;
+;; The closest thing to E2's block: every species in ONE straight-line body,
+;; through memory at both ends. The mask is LOADED from the data page (which is
+;; how the real schedule gets it), the message is byte-flipped, and the result
+;; is stored 32 bytes up.
+(fn vseq_f () XFunc
+  (MkXFunc
+    1
+    (list
+      (XVec (XVLoad XMM5 (AReg RDI)))
+      (XBin XAdd RDI (SImm 16))
+      (XVec (XVLoad XMM1 (AReg RDI)))
+      (XVec (XVBswap32 XMM1 XMM5))
+      (XVec (XVPshufd XMM2 XMM1 27))
+      (XVec (XVPaddd XMM2 XMM1))
+      (XVec (XVSha256Msg1 XMM3 XMM1))
+      (XVec (XVSha256Msg2 XMM3 XMM2))
+      (XVec (XVSha256Rnds2 XMM4 XMM3))
+      (XVec (XVPalignr XMM6 XMM1 8))
+      (XVec (XVPunpckL XMM7 XMM6))
+      (XVec (XVPunpckH XMM8 XMM7))
+      (XVec (XVMov XMM10 XMM8))
+      (XBin XAdd RDI (SImm 16))
+      (XVec (XVStore (AReg RDI) XMM10)))))
+
+;; the mask constant's own bytes, then sixteen message bytes
+(fn vseq_seed ((s Int)) (List Int)
+  (eap (xmmbytes (vbswap_mask)) (xmmbytes (rxmm s))))
+
+(fn vseqrow ((s Int)) (List Int)
+  (xvcase
+    "vseq"
+    (mmem (vseq_f))
+    0
+    (list 1073741824)
+    (genx s)
+    1073741824
+    (vseq_seed s)
+    1073741824
+    48
+    60))
+
+;; --- the vector plan block ------------------------------------------------------
+
+(fn vemit_reg () (List Int)
+  (cat
+    (list
+      (vrows
+        "vmov"
+        (vf4
+          (XVMov XMM1 XMM2)
+          (XVMov XMM9 XMM3)
+          (XVMov XMM4 XMM10)
+          (XVMov XMM11 XMM12))
+        1
+        2
+        3)
+      (vrows
+        "vpaddd"
+        (vf4
+          (XVPaddd XMM1 XMM2)
+          (XVPaddd XMM9 XMM3)
+          (XVPaddd XMM4 XMM10)
+          (XVPaddd XMM11 XMM12))
+        4
+        5
+        6)
+      (vrows
+        "vpunpckl"
+        (vf4
+          (XVPunpckL XMM1 XMM2)
+          (XVPunpckL XMM9 XMM3)
+          (XVPunpckL XMM4 XMM10)
+          (XVPunpckL XMM11 XMM12))
+        7
+        8
+        9)
+      (vrows
+        "vpunpckh"
+        (vf4
+          (XVPunpckH XMM1 XMM2)
+          (XVPunpckH XMM9 XMM3)
+          (XVPunpckH XMM4 XMM10)
+          (XVPunpckH XMM11 XMM12))
+        10
+        11
+        12)
+      (vrows
+        "vrnds2"
+        (vf4
+          (XVSha256Rnds2 XMM1 XMM2)
+          (XVSha256Rnds2 XMM9 XMM3)
+          (XVSha256Rnds2 XMM4 XMM10)
+          (XVSha256Rnds2 XMM11 XMM12))
+        13
+        14
+        15)
+      (vrows
+        "vmsg1"
+        (vf4
+          (XVSha256Msg1 XMM1 XMM2)
+          (XVSha256Msg1 XMM9 XMM3)
+          (XVSha256Msg1 XMM4 XMM10)
+          (XVSha256Msg1 XMM11 XMM12))
+        16
+        17
+        18)
+      (vrows
+        "vmsg2"
+        (vf4
+          (XVSha256Msg2 XMM1 XMM2)
+          (XVSha256Msg2 XMM9 XMM3)
+          (XVSha256Msg2 XMM4 XMM10)
+          (XVSha256Msg2 XMM11 XMM12))
+        19
+        20
+        21))))
+
+;; pshufd across eight selector patterns (identity 0xE4, full reverse 0x1B,
+;; broadcast 0x00 and 0xFF, the qword swap 0x4E, the pair swaps 0xB1 / 0x39 /
+;; 0x93) crossed with the REX combinations; palignr at each admitted dword
+;; immediate, twice over, so every immediate meets every REX combination
+(fn vemit_imm () (List Int)
+  (cat
+    (list
+      (vrows
+        "vpshufda"
+        (vf4
+          (XVPshufd XMM1 XMM2 0)
+          (XVPshufd XMM9 XMM3 27)
+          (XVPshufd XMM4 XMM10 228)
+          (XVPshufd XMM11 XMM12 78))
+        22
+        23
+        24)
+      (vrows
+        "vpshufdb"
+        (vf4
+          (XVPshufd XMM1 XMM2 177)
+          (XVPshufd XMM9 XMM3 57)
+          (XVPshufd XMM4 XMM10 255)
+          (XVPshufd XMM11 XMM12 147))
+        25
+        26
+        27)
+      (vrows
+        "vpalignra"
+        (vf4
+          (XVPalignr XMM1 XMM2 0)
+          (XVPalignr XMM9 XMM3 4)
+          (XVPalignr XMM4 XMM10 8)
+          (XVPalignr XMM11 XMM12 12))
+        28
+        29
+        30)
+      (vrows
+        "vpalignrb"
+        (vf4
+          (XVPalignr XMM1 XMM2 12)
+          (XVPalignr XMM9 XMM3 8)
+          (XVPalignr XMM4 XMM10 4)
+          (XVPalignr XMM11 XMM12 0))
+        31
+        32
+        33))))
+
+;; the byte-flip pshufb with the canonical mask, in both a low and a high
+;; mask register; plus the aliased form where the mask register IS the
+;; destination
+(fn vemit_bswap () (List Int)
+  (cat
+    (list
+      (vrowsm
+        "vbswap"
+        (vf4
+          (XVBswap32 XMM1 XMM5)
+          (XVBswap32 XMM9 XMM5)
+          (XVBswap32 XMM4 XMM13)
+          (XVBswap32 XMM11 XMM13))
+        XMM5
+        XMM13
+        34
+        35
+        36)
+      (mod_line "vbswapself" (vf1 (XVBswap32 XMM5 XMM5)))
+      (xvcase
+        "vbswapself"
+        (mreg (vf1 (XVBswap32 XMM5 XMM5)))
+        0
+        Nil
+        (genxm 37 XMM5 XMM13)
+        0
+        Nil
+        0
+        0
+        12)
+      (xvcase
+        "vbswapself"
+        (mreg (vf1 (XVBswap32 XMM5 XMM5)))
+        0
+        Nil
+        (genxm 38 XMM5 XMM13)
+        0
+        Nil
+        0
+        0
+        12))))
+
+;; operand aliasing: sha256rnds2's implicit XMM0 standing in for the explicit
+;; operands (dst, src, and both), and the whole vocabulary applied to a
+;; register as its own source
+(fn vemit_alias () (List Int)
+  (cat
+    (list
+      (vrows1 "vrnds2d0" (vf1 (XVSha256Rnds2 XMM0 XMM2)) 39 40)
+      (vrows1 "vrnds2s0" (vf1 (XVSha256Rnds2 XMM1 XMM0)) 41 42)
+      (vrows1 "vrnds2b0" (vf1 (XVSha256Rnds2 XMM0 XMM0)) 43 44)
+      (vrows1 "vmovself" (vf1 (XVMov XMM3 XMM3)) 45 46)
+      (vrows1 "vpadddself" (vf1 (XVPaddd XMM3 XMM3)) 47 48)
+      (vrows1 "vpunpcklself" (vf1 (XVPunpckL XMM3 XMM3)) 49 50)
+      (vrows1 "vpunpckhself" (vf1 (XVPunpckH XMM3 XMM3)) 51 52)
+      (vrows1 "vpshufdself" (vf1 (XVPshufd XMM3 XMM3 27)) 53 54)
+      (vrows1 "vpalignrself" (vf1 (XVPalignr XMM3 XMM3 4)) 55 56)
+      (vrows1 "vmsg1self" (vf1 (XVSha256Msg1 XMM3 XMM3)) 57 58)
+      (vrows1 "vmsg2self" (vf1 (XVSha256Msg2 XMM3 XMM3)) 59 60))))
+
+;; movdqu: aligned and every unaligned offset, each base-register shape, and
+;; the three trap legs — below the window, past it, and the SIXTEEN-BYTE
+;; EXTENT check (a base inside the window whose access runs off the end; the
+;; model refuses it and the page after the mapping makes the CPU fault)
+(fn vemit_mem () (List Int)
+  (cat
+    (list
+      (mod_line "vld1" (vld_f XMM1))
+      (vldrow "vld1" (vld_f XMM1) 1073741824 61)
+      (vldrow "vld1" (vld_f XMM1) 1073741825 62)
+      (vldrow "vld1" (vld_f XMM1) 1073741827 63)
+      (vldrow "vld1" (vld_f XMM1) 1073741831 64)
+      (vldrow "vld1" (vld_f XMM1) 1073741837 65)
+      (vldrow "vld1" (vld_f XMM1) 1073741840 66)
+      (vldrow "vld1" (vld_f XMM1) 1073741823 67)
+      (vldrow "vld1" (vld_f XMM1) 1074790400 68)
+      (vldrow "vld1" (vld_f XMM1) 1073807352 69)
+      (mod_line "vld9" (vld_f XMM9))
+      (vldrow "vld9" (vld_f XMM9) 1073741824 70)
+      (vldrow "vld9" (vld_f XMM9) 1073741829 71)
+      (mod_line "vldbp" (vldb_f XMM1 RBP))
+      (vldrow "vldbp" (vldb_f XMM1 RBP) 1073741824 72)
+      (vldrow "vldbp" (vldb_f XMM1 RBP) 1073741829 73)
+      (mod_line "vldr13" (vldb_f XMM9 R13))
+      (vldrow "vldr13" (vldb_f XMM9 R13) 1073741824 74)
+      (vldrow "vldr13" (vldb_f XMM9 R13) 1073741829 75)
+      (mod_line "vldr12" (vldb_f XMM2 R12))
+      (vldrow "vldr12" (vldb_f XMM2 R12) 1073741824 76)
+      (vldrow "vldr12" (vldb_f XMM2 R12) 1073741829 77)
+      (mod_line "vldr8" (vldb_f XMM10 R8))
+      (vldrow "vldr8" (vldb_f XMM10 R8) 1073741824 78)
+      (vldrow "vldr8" (vldb_f XMM10 R8) 1073741829 79)
+      (mod_line "vst1" (vst_f XMM1))
+      (vstrow "vst1" (vst_f XMM1) 1073741824 80)
+      (vstrow "vst1" (vst_f XMM1) 1073741825 81)
+      (vstrow "vst1" (vst_f XMM1) 1073741827 82)
+      (vstrow "vst1" (vst_f XMM1) 1073741831 83)
+      (vstrow "vst1" (vst_f XMM1) 1073741837 84)
+      (vstrow "vst1" (vst_f XMM1) 1073741840 85)
+      (vstrow "vst1" (vst_f XMM1) 1073741823 86)
+      (vstrow "vst1" (vst_f XMM1) 1074790400 87)
+      (vstrow "vst1" (vst_f XMM1) 1073807352 88)
+      (mod_line "vst9" (vst_f XMM9))
+      (vstrow "vst9" (vst_f XMM9) 1073741824 89)
+      (vstrow "vst9" (vst_f XMM9) 1073741829 90)
+      (mod_line "vstbp" (vstb_f XMM1 RBP))
+      (vstrow "vstbp" (vstb_f XMM1 RBP) 1073741824 91)
+      (vstrow "vstbp" (vstb_f XMM1 RBP) 1073741829 92)
+      (mod_line "vstr13" (vstb_f XMM9 R13))
+      (vstrow "vstr13" (vstb_f XMM9 R13) 1073741824 93)
+      (vstrow "vstr13" (vstb_f XMM9 R13) 1073741829 94)
+      (mod_line "vstr12" (vstb_f XMM2 R12))
+      (vstrow "vstr12" (vstb_f XMM2 R12) 1073741824 95)
+      (vstrow "vstr12" (vstb_f XMM2 R12) 1073741829 96)
+      (mod_line "vstr8" (vstb_f XMM10 R8))
+      (vstrow "vstr8" (vstb_f XMM10 R8) 1073741824 97)
+      (vstrow "vstr8" (vstb_f XMM10 R8) 1073741829 98)
+      (mod_line "vseq" (vseq_f))
+      (vseqrow 99)
+      (vseqrow 100))))
+
+(fn vemit () (List Int)
+  (cat (list (vemit_reg) (vemit_imm) (vemit_bswap) (vemit_alias) (vemit_mem))))
+
 ;; --- the plan ----------------------------------------------------------------
 ;; DATA_BASE = 0x40000000 = 1073741824; the trap address 0x40100000 =
 ;; 1074790400 is past the module's window [DATA_BASE, DATA_BASE+0x10000).
@@ -601,6 +1133,8 @@
       ;; r8–r15 (REX.B) leg: rotate in r11, plain + garbage-high through REX.B
       (mod_line "rorr11" (rorr11_f 1))
       (xcase "rorr11" (mreg (rorr11_f 1)) (list 2147483649) 20)
-      (xcase "rorr11" (mreg (rorr11_f 1)) (list 18446744069414584321) 20))))
+      (xcase "rorr11" (mreg (rorr11_f 1)) (list 18446744069414584321) 20)
+      ;; --- the vector tier (B5/E1) -----------------------------------------
+      (vemit))))
 
 (fn main ((w World)) World (exit 0 (write (emit) w)))

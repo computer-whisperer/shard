@@ -207,6 +207,86 @@
             (list 129 (+ 192 (+ (* 8 (bin_ri_ext o2)) (rlo nd)))))
           (le4 v))))))
 
+;; --- vector operand bytes (SSE2 / SSSE3 / SHA; docs/STREAM.md §8, B5/E1) ------
+;;
+;; Every species below is a LEGACY-SSE two-operand form: an optional mandatory
+;; prefix (0x66 for the packed-integer SSE forms, 0xF3 for movdqu; the three
+;; SHA instructions take NONE — they are NP-prefixed), then the REX byte if any
+;; operand reaches xmm8-15, then the opcode bytes, then ModRM. Prefix ORDER is
+;; load-bearing: the mandatory prefix precedes REX, which must be the last
+;; prefix before the opcode.
+;;
+;; All twelve use the RM direction — ModRM.reg = DESTINATION xmm (REX.R), r/m =
+;; the source xmm or the memory base (REX.B) — including movdqu's store form,
+;; where the "destination" of the encoding is the reg field (the xmm being
+;; stored) and the memory operand is r/m. REX.W is never set (it is meaningless
+;; for these opcodes) and REX.X is always 0 (enc_mem's only SIB is the
+;; index-none form for an r12 base), so rex32 builds exactly the right prefix,
+;; eliding it entirely when both operands are xmm0-7 / rax-rdi.
+
+(fn vhi ((x XmmReg)) Int (rhi (xmm_code x)))
+
+(fn vlo ((x XmmReg)) Int (rlo (xmm_code x)))
+
+;; xmm, xmm — mod=11, reg = dst, r/m = src
+(fn enc_vrr ((pfx (List Int)) (op (List Int)) (d XmmReg) (s XmmReg)) (List Int)
+  (eapp
+    pfx
+    (eapp
+      (rex32 (vhi d) (vhi s))
+      (eapp op (list (+ 192 (+ (* 8 (vlo d)) (vlo s))))))))
+
+;; xmm, xmm, imm8 — the trailing immediate (pshufd's selector, palignr's byte
+;; offset). The raw imm8 is emitted; the MODEL is what fences the admitted
+;; values (palignr's dword multiples, pshufd's full 8-bit domain).
+(fn enc_vrri ((pfx (List Int)) (op (List Int)) (d XmmReg) (s XmmReg) (im Int))
+  (List Int)
+  (eapp (enc_vrr pfx op d s) (list (mod im 256))))
+
+;; xmm, [base] — reg = the xmm (REX.R), r/m = the memory base (REX.B), the
+;; ModRM/SIB shape shared with the byte load/store (enc_mem).
+(fn enc_vrm ((pfx (List Int)) (op (List Int)) (x XmmReg) (a Addr)) (List Int)
+  (match a
+    ((AReg base)
+     (let ((nb (reg_num base)))
+       (eapp pfx (eapp (rex32 (vhi x) (rhi nb)) (eapp op (enc_mem (vlo x) nb))))))))
+
+;; THE VECTOR TABLE — the whole sub-vocabulary's bytes in one place, the
+;; encoder's twin of vector.shard's xvinstr_leaf. XInstr's dispatch sites
+;; reach it through the single (XVec …) arm, so AVX2 species (fork A's named
+;; door) land HERE and the scalar tables never move.
+;;
+;;   XVLoad   movdqu xmm, m128       F3 0F 6F /r
+;;   XVStore  movdqu m128, xmm       F3 0F 7F /r   (reg field = the xmm)
+;;   XVMov    movdqa xmm, xmm        66 0F 6F /r
+;;   XVPshufd pshufd xmm, xmm, ib    66 0F 70 /r ib
+;;   XVBswap32 pshufb xmm, xmm       66 0F 38 00 /r
+;;   XVPaddd  paddd xmm, xmm         66 0F FE /r
+;;   XVPalignr palignr xmm, xmm, ib  66 0F 3A 0F /r ib
+;;   XVPunpckL punpcklqdq xmm, xmm   66 0F 6C /r
+;;   XVPunpckH punpckhqdq xmm, xmm   66 0F 6D /r
+;;   XVSha256Rnds2 sha256rnds2       NP 0F 38 CB /r  (<XMM0> implicit)
+;;   XVSha256Msg1  sha256msg1        NP 0F 38 CC /r
+;;   XVSha256Msg2  sha256msg2        NP 0F 38 CD /r
+;;
+;; The three SHA forms take NO mandatory prefix (they are NP-encoded — a 66
+;; there would name a different instruction), which is why the prefix is a
+;; parameter rather than baked into the helpers.
+(fn enc_vinstr ((v XVInstr)) (List Int)
+  (match v
+    ((XVLoad d a) (enc_vrm (list 243) (list 15 111) d a))
+    ((XVStore a s) (enc_vrm (list 243) (list 15 127) s a))
+    ((XVMov d s) (enc_vrr (list 102) (list 15 111) d s))
+    ((XVPshufd d s im) (enc_vrri (list 102) (list 15 112) d s im))
+    ((XVBswap32 d s) (enc_vrr (list 102) (list 15 56 0) d s))
+    ((XVPaddd d s) (enc_vrr (list 102) (list 15 254) d s))
+    ((XVPalignr d s im) (enc_vrri (list 102) (list 15 58 15) d s im))
+    ((XVPunpckL d s) (enc_vrr (list 102) (list 15 108) d s))
+    ((XVPunpckH d s) (enc_vrr (list 102) (list 15 109) d s))
+    ((XVSha256Rnds2 d s) (enc_vrr Nil (list 15 56 203) d s))
+    ((XVSha256Msg1 d s) (enc_vrr Nil (list 15 56 204) d s))
+    ((XVSha256Msg2 d s) (enc_vrr Nil (list 15 56 205) d s))))
+
 (fn enc_simple ((i XInstr)) (List Int)
   (match i
     ((XMovRI r v)
@@ -294,6 +374,11 @@
     ;; syscall (0F 05): the two-byte system-call instruction, no operands, no
     ;; REX — nullary, so dispatch and size both flow through enc_simple.
     (XSyscall (list 15 5))
+    ;; the vector sub-vocabulary's single entry (B5/E1): one arm here, and
+    ;; xsz_instr / enc_instr reach it through their existing enc_simple
+    ;; catch-alls — vector species are straight-line, so neither needs the
+    ;; special handling the control-flow ctors get.
+    ((XVec v) (enc_vinstr v))
     (other Nil)))
 
 ;; --- ELF harness stub byte encoders (docs/X86.md §20) -------------------------
