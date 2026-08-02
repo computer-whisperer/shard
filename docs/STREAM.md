@@ -578,3 +578,64 @@ behavior at every fuel. They are stated over the EMITTED module
 real silicon against coreutils. The one-shot's §50-era verdict (its
 cap leg a declared controlled failure) stands unchanged under its
 new name.
+
+**B4 RECORD (2026-08-01; benchmark + attribution land, the rung
+closes).** Method: median-of-5, core-pinned, warm page cache,
+1 GiB input, quiet box (shard run spread 10.640–10.924 s; every
+other contender under 2%). This box's coreutils links libcrypto
+and dispatches to SHA-NI, so the honest scalar-class bar is
+coreutils under `OPENSSL_ia32cap=":~0x20000000"` (clears leaf-7
+EBX bit 29 — SHA-NI off, libcrypto's expert AVX/SSSE3 scalar
+path).
+
+    shard sha256sum (cap 61440)    10.649 s  (~96 MiB/s)
+    coreutils, SHA-NI masked        1.752 s  → gap 6.1x
+    coreutils as shipped (SHA-NI)   0.598 s  → gap 17.8x
+    openssl dgst -sha256            0.631 s  → gap 16.9x
+
+ATTRIBUTION (the gate's real requirement, measured with perf on
+64 MiB, cap-4096 build — the retune changes syscall count only):
+ours retires 195 instructions/byte at IPC 4.40 — core peak — vs
+28 instr/byte at IPC 4.05 for masked coreutils. Cross-check:
+195/4.40 cycles/byte at the box's 4.5 GHz predicts 9.85 ns/byte;
+the 1 GiB run measured 9.92. So the gap is ~100% backend
+instruction VOLUME (7.0× the instructions — the lowering's spill
+idiom, every IMP temp round-tripping through memory) and ~0%
+stall: nothing about the proof-facing IR's shape slows the
+machine down; the emitted program simply does seven times the
+work, fast. The syscall axis was priced separately: read floors
+measured 0.256 s/GiB at 4096-byte reads vs 0.127 at 64 KiB; the
+cap retune's wall effect was correspondingly small (0.686 →
+0.663 s best-of-3 on 64 MiB) because compute dominates at 6× —
+consistent with the volume attribution.
+
+**The §5 falsification gate reads NO.** "Dramatically slower for
+reasons inherent to the proof-facing IR" is refuted by the IPC
+evidence: this is the classic no-register-allocation tax of an
+immature backend, not an IR property.
+
+**The parity fork (awaits user ratification; §7.8 form).** The
+C-class identity demands parity-class, and 6.1× scalar is not
+it. Plain question: where does parity come from?
+
+- *(a) A register-allocation rung on the x86 backend.* Attacks
+  the 6.1× directly; every future artifact inherits the win.
+  Costs: the largest certified-lowering surface proposed since
+  the imp dialect — x86gen is FROZEN (IMP.md ruling), so this
+  reopens a ratified freeze mid-arc and builds a new proof
+  surface before B5.
+- *(b) Parity via B5/B6 — the hand-pinned SHA-NI leg + proven
+  dispatch.* The comparison target's own fast path on this
+  silicon IS SHA-NI; nobody ships scalar where SHA-NI exists.
+  The parity target becomes the B6 dispatch artifact vs
+  coreutils-as-shipped; the 6.1× stays on record as a priced,
+  attributed backend debt. Costs: every scalar-tier consumer
+  keeps paying it until a backend arc, priced then on B5's
+  hand-pinning evidence.
+
+Lean: (b). It is the path the comparison target itself takes, it
+keeps the arc on its ratified rungs, and §10's decision-bandwidth
+rule already assigns this arc's decision budget to B5's clause-1
+adjudication. A register-allocation arc is real future work — it
+should be priced by B5's evidence of what expert code needs from
+the backend, not opened on one number.
