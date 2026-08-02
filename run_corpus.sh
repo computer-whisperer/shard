@@ -489,6 +489,36 @@ else
   echo "SKIPPED (no bin/shard_eval or python3)"
 fi
 
+# Prove-regen pin (prove tool gate, lockstep-arc slice 0): tools/prove
+# re-run FROM SCRATCH on two fixture files must reproduce their committed
+# sidecars byte-identically.  This is the only place the corpus EXECUTES
+# prove, so kernel-seam signature drift (shard#21's class — the 7-arg
+# apply_rewrite_with_env drift crashed prove for 13 days unseen), ladder
+# regressions, and sidecar fixed-point drift all land HERE instead of in a
+# downstream session.  prove_cond_mine exercises the conditional-citation
+# + premise-mining rungs; auto_demo spans compute/induction/case-on/
+# lemma-citation/farkas/discovery — both solve in seconds, cheap enough
+# for the default tier.  Committed sidecars are restored unconditionally —
+# the tree stays clean even when the gate fails.
+echo "=== prove: regen fixture sidecars (run-mode tool gate) ==="
+if [ -x bin/shard_eval ]; then
+  for pf in pins/proof/prove_cond_mine pins/proof/auto_demo; do
+    cp "$pf.auto.shard" "$TMP/prove_gate.bak"
+    rm "$pf.auto.shard"
+    if bin/shard_eval run tools/prove/prove.shard "$pf.shard" \
+         > "$TMP/prove_gate.log" 2>&1 \
+       && diff -q "$pf.auto.shard" "$TMP/prove_gate.bak" >/dev/null 2>&1; then
+      echo "REGEN OK (byte-identical) $pf"
+    else
+      echo "FAIL prove-regen ($pf)"
+      tail -5 "$TMP/prove_gate.log"
+    fi
+    cp "$TMP/prove_gate.bak" "$pf.auto.shard"
+  done
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 # Nat-former RUN pin: ground construction/packing, view matching, deep
 # patterns under the RUN engine (ev). Output must be engine-independent.
 echo "=== nat: run probe ==="
