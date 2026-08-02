@@ -218,8 +218,10 @@
     (SkSchemaEnt i (Cons (xspp_nil_alt) (xspp_cons_alts ts 0 (- i 1)))))
     (xspp_ents (+ i 1) d ts))))
 
-(fn xspp_grammar ((d Int)) SkSchemaGrammar
-  (SkSchemaGrammar d (xspp_ents 0 d (xspp_templates))))
+(fn xspp_grammar_t ((d Int) (ts (List Expr))) SkSchemaGrammar
+  (SkSchemaGrammar d (xspp_ents 0 d ts)))
+
+(fn xspp_grammar ((d Int)) SkSchemaGrammar (xspp_grammar_t d (xspp_templates)))
 
 ;; ---- query, want, score template ------------------------------------------
 
@@ -258,44 +260,297 @@
 (fn xspp_fp ((cap Int) (body (List XInstr))) (List Int)
   (xsp_fingerprint (xspp_nat (+ cap 2)) body (xsp_files)))
 
+;; ---- the general species layer (LS3b mines real material) -----------------
+;; Straight-line memory-free species over the FULL register set:
+;; XBin/XBin32 (all six ops, SReg/SImm sources), XMovRR, XMovRR32,
+;; XMovRI, XRorI32, XShrI, XShlI, XShlI32.  Everything else (memory,
+;; control, XDivU) is out of the supported set and fails loudly (None).
+
+(fn xspp_regs_all () (List Reg)
+  (list RAX RCX RDX RBX RBP RSI RDI R8 R9 R10 R11 R12 R13 R14 R15))
+
+(fn xspp_bop_sym ((b XBop)) Symbol
+  (match b
+    (XAdd (quote XAdd))
+    (XSub (quote XSub))
+    (XMul (quote XMul))
+    (XAnd (quote XAnd))
+    (XOr (quote XOr))
+    (XXor (quote XXor))))
+
+(fn xspp_bop_code ((b XBop)) Int
+  (match b
+    (XAdd 0)
+    (XSub 1)
+    (XMul 2)
+    (XAnd 3)
+    (XOr 4)
+    (XXor 5)))
+
+(fn xspp_reg_expr_of ((r Reg)) Expr (Ctor (xspp_x86_q (xspp_reg_sym r)) Nil))
+
+(fn xspp_src_expr_of ((s Src)) Expr
+  (match s
+    ((SReg r) (Ctor (xspp_x86_q (quote SReg)) (list (xspp_reg_expr_of r))))
+    ((SImm v) (Ctor (xspp_x86_q (quote SImm)) (list (IntLit v))))))
+
+;; Native XInstr -> baked grammar template.  None = unsupported species.
+(fn xspp_instr_expr_of ((i XInstr)) (Option Expr)
+  (match i
+    ((XBin b d s)
+     (Some
+       (Ctor
+         (xspp_x86_q (quote XBin))
+         (list
+           (Ctor (xspp_x86_q (xspp_bop_sym b)) Nil)
+           (xspp_reg_expr_of d)
+           (xspp_src_expr_of s)))))
+    ((XBin32 b d s)
+     (Some
+       (Ctor
+         (xspp_x86_q (quote XBin32))
+         (list
+           (Ctor (xspp_x86_q (xspp_bop_sym b)) Nil)
+           (xspp_reg_expr_of d)
+           (xspp_src_expr_of s)))))
+    ((XMovRR d s)
+     (Some
+       (Ctor
+         (xspp_x86_q (quote XMovRR))
+         (list (xspp_reg_expr_of d) (xspp_reg_expr_of s)))))
+    ((XMovRR32 d s)
+     (Some
+       (Ctor
+         (xspp_x86_q (quote XMovRR32))
+         (list (xspp_reg_expr_of d) (xspp_reg_expr_of s)))))
+    ((XMovRI d v)
+     (Some
+       (Ctor (xspp_x86_q (quote XMovRI)) (list (xspp_reg_expr_of d) (IntLit v)))))
+    ((XRorI32 d k)
+     (Some
+       (Ctor
+         (xspp_x86_q (quote XRorI32))
+         (list (xspp_reg_expr_of d) (IntLit k)))))
+    ((XShrI d k)
+     (Some
+       (Ctor (xspp_x86_q (quote XShrI)) (list (xspp_reg_expr_of d) (IntLit k)))))
+    ((XShlI d k)
+     (Some
+       (Ctor (xspp_x86_q (quote XShlI)) (list (xspp_reg_expr_of d) (IntLit k)))))
+    ((XShlI32 d k)
+     (Some
+       (Ctor
+         (xspp_x86_q (quote XShlI32))
+         (list (xspp_reg_expr_of d) (IntLit k)))))
+    (_ None)))
+
+(fn xspp_src_eq ((a Src) (b Src)) Bool
+  (match a
+    ((SReg r1)
+     (match b
+       ((SReg r2) (int_eq (reg_code r1) (reg_code r2)))
+       (_ False)))
+    ((SImm v1)
+     (match b
+       ((SImm v2) (int_eq v1 v2))
+       (_ False)))))
+
+(fn xspp_reg_eq ((a Reg) (b Reg)) Bool (int_eq (reg_code a) (reg_code b)))
+
+(fn xspp_instr_eq ((a XInstr) (b XInstr)) Bool
+  (match a
+    ((XBin b1 d1 s1)
+     (match b
+       ((XBin b2 d2 s2)
+        (if (int_eq (xspp_bop_code b1) (xspp_bop_code b2))
+          (if (xspp_reg_eq d1 d2) (xspp_src_eq s1 s2) False)
+          False))
+       (_ False)))
+    ((XBin32 b1 d1 s1)
+     (match b
+       ((XBin32 b2 d2 s2)
+        (if (int_eq (xspp_bop_code b1) (xspp_bop_code b2))
+          (if (xspp_reg_eq d1 d2) (xspp_src_eq s1 s2) False)
+          False))
+       (_ False)))
+    ((XMovRR d1 s1)
+     (match b
+       ((XMovRR d2 s2) (if (xspp_reg_eq d1 d2) (xspp_reg_eq s1 s2) False))
+       (_ False)))
+    ((XMovRR32 d1 s1)
+     (match b
+       ((XMovRR32 d2 s2) (if (xspp_reg_eq d1 d2) (xspp_reg_eq s1 s2) False))
+       (_ False)))
+    ((XMovRI d1 v1)
+     (match b
+       ((XMovRI d2 v2) (if (xspp_reg_eq d1 d2) (int_eq v1 v2) False))
+       (_ False)))
+    ((XRorI32 d1 k1)
+     (match b
+       ((XRorI32 d2 k2) (if (xspp_reg_eq d1 d2) (int_eq k1 k2) False))
+       (_ False)))
+    ((XShrI d1 k1)
+     (match b
+       ((XShrI d2 k2) (if (xspp_reg_eq d1 d2) (int_eq k1 k2) False))
+       (_ False)))
+    ((XShlI d1 k1)
+     (match b
+       ((XShlI d2 k2) (if (xspp_reg_eq d1 d2) (int_eq k1 k2) False))
+       (_ False)))
+    ((XShlI32 d1 k1)
+     (match b
+       ((XShlI32 d2 k2) (if (xspp_reg_eq d1 d2) (int_eq k1 k2) False))
+       (_ False)))
+    (_ False)))
+
+(fn xspp_instr_in ((i XInstr) (is (List XInstr))) Bool
+  (measure (struct is))
+  (match is
+    (Nil False)
+    ((Cons h rest) (if (xspp_instr_eq i h) True (xspp_instr_in i rest)))))
+
+;; The target's own instruction ALPHABET, deduped in first-occurrence
+;; order — the honest v1 vocabulary for mined instances (minimality
+;; claims are scoped to exactly this set).
+(fn xspp_alphabet_go ((is (List XInstr)) (seen (List XInstr))) (List XInstr)
+  (measure (struct is))
+  (match is
+    (Nil Nil)
+    ((Cons i rest)
+     (if (xspp_instr_in i seen) (xspp_alphabet_go rest seen)
+     (Cons i (xspp_alphabet_go rest (Cons i seen)))))))
+
+(fn xspp_alphabet ((is (List XInstr))) (List XInstr) (xspp_alphabet_go is Nil))
+
+(fn xspp_alpha_templates ((is (List XInstr))) (Option (List Expr))
+  (measure (struct is))
+  (match is
+    (Nil (Some Nil))
+    ((Cons i rest)
+     (match (xspp_instr_expr_of i)
+       (None None)
+       ((Some e)
+        (match (xspp_alpha_templates rest)
+          (None None)
+          ((Some es) (Some (Cons e es)))))))))
+
 ;; ---- representative decoding ----------------------------------------------
+
+(fn xspp_dec_reg_go ((q QName) (rs (List Reg))) (Option Reg)
+  (measure (struct rs))
+  (match rs
+    (Nil None)
+    ((Cons r rest)
+     (if (qname_eq q (xspp_x86_q (xspp_reg_sym r))) (Some r)
+     (xspp_dec_reg_go q rest)))))
 
 (fn xspp_dec_reg ((e Expr)) (Option Reg)
   (match e
-    ((Ctor q args)
-     (match args
-       ((Cons _ _) None)
-       (Nil
-         (if (qname_eq q (xspp_x86_q (quote RAX))) (Some RAX)
-         (if (qname_eq q (xspp_x86_q (quote RDI))) (Some RDI)
-         (if (qname_eq q (xspp_x86_q (quote RSI))) (Some RSI)
-         None))))))
+    ((Ctor q Nil) (xspp_dec_reg_go q (xspp_regs_all)))
+    (_ None)))
+
+(fn xspp_dec_bop ((e Expr)) (Option XBop)
+  (match e
+    ((Ctor q Nil)
+     (if (qname_eq q (xspp_x86_q (quote XAdd))) (Some XAdd)
+     (if (qname_eq q (xspp_x86_q (quote XSub))) (Some XSub)
+     (if (qname_eq q (xspp_x86_q (quote XMul))) (Some XMul)
+     (if (qname_eq q (xspp_x86_q (quote XAnd))) (Some XAnd)
+     (if (qname_eq q (xspp_x86_q (quote XOr))) (Some XOr)
+     (if (qname_eq q (xspp_x86_q (quote XXor))) (Some XXor)
+     None)))))))
+    (_ None)))
+
+(fn xspp_dec_src ((e Expr)) (Option Src)
+  (match e
+    ((Ctor q (Cons a Nil))
+     (if (qname_eq q (xspp_x86_q (quote SReg)))
+       (match (xspp_dec_reg a)
+         (None None)
+         ((Some r) (Some (SReg r))))
+     (if (qname_eq q (xspp_x86_q (quote SImm)))
+       (match a
+         ((IntLit v) (Some (SImm v)))
+         (_ None))
+       None)))
+    (_ None)))
+
+(fn xspp_dec_rr ((args (List Expr))) (Option (Pair Reg Reg))
+  (match args
+    ((Cons de (Cons se Nil))
+     (match (xspp_dec_reg de)
+       (None None)
+       ((Some d)
+        (match (xspp_dec_reg se)
+          (None None)
+          ((Some s) (Some (Pair d s)))))))
+    (_ None)))
+
+(fn xspp_dec_ri ((args (List Expr))) (Option (Pair Reg Int))
+  (match args
+    ((Cons de (Cons ie Nil))
+     (match (xspp_dec_reg de)
+       (None None)
+       ((Some d)
+        (match ie
+          ((IntLit v) (Some (Pair d v)))
+          (_ None)))))
+    (_ None)))
+
+(fn xspp_dec_bds ((args (List Expr))) (Option (Pair XBop (Pair Reg Src)))
+  (match args
+    ((Cons ope (Cons de (Cons se Nil)))
+     (match (xspp_dec_bop ope)
+       (None None)
+       ((Some b)
+        (match (xspp_dec_reg de)
+          (None None)
+          ((Some d)
+           (match (xspp_dec_src se)
+             (None None)
+             ((Some s) (Some (Pair b (Pair d s))))))))))
     (_ None)))
 
 (fn xspp_dec_instr ((e Expr)) (Option XInstr)
   (match e
     ((Ctor q args)
      (if (qname_eq q (xspp_x86_q (quote XBin)))
-       (match args
-         ((Cons op (Cons de (Cons se Nil)))
-          (match op
-            ((Ctor opq Nil)
-             (if (qname_eq opq (xspp_x86_q (quote XXor)))
-               (match (xspp_dec_reg de)
-                 (None None)
-                 ((Some d)
-                  (match se
-                    ((Ctor sq (Cons re Nil))
-                     (if (qname_eq sq (xspp_x86_q (quote SReg)))
-                       (match (xspp_dec_reg re)
-                         (None None)
-                         ((Some s) (Some (XBin XXor d (SReg s)))))
-                       None))
-                    (_ None))))
-               None))
-            (_ None)))
-         (_ None))
-       None))
+       (match (xspp_dec_bds args)
+         (None None)
+         ((Some (Pair b (Pair d s))) (Some (XBin b d s))))
+     (if (qname_eq q (xspp_x86_q (quote XBin32)))
+       (match (xspp_dec_bds args)
+         (None None)
+         ((Some (Pair b (Pair d s))) (Some (XBin32 b d s))))
+     (if (qname_eq q (xspp_x86_q (quote XMovRR)))
+       (match (xspp_dec_rr args)
+         (None None)
+         ((Some (Pair d s)) (Some (XMovRR d s))))
+     (if (qname_eq q (xspp_x86_q (quote XMovRR32)))
+       (match (xspp_dec_rr args)
+         (None None)
+         ((Some (Pair d s)) (Some (XMovRR32 d s))))
+     (if (qname_eq q (xspp_x86_q (quote XMovRI)))
+       (match (xspp_dec_ri args)
+         (None None)
+         ((Some (Pair d v)) (Some (XMovRI d v))))
+     (if (qname_eq q (xspp_x86_q (quote XRorI32)))
+       (match (xspp_dec_ri args)
+         (None None)
+         ((Some (Pair d k)) (Some (XRorI32 d k))))
+     (if (qname_eq q (xspp_x86_q (quote XShrI)))
+       (match (xspp_dec_ri args)
+         (None None)
+         ((Some (Pair d k)) (Some (XShrI d k))))
+     (if (qname_eq q (xspp_x86_q (quote XShlI)))
+       (match (xspp_dec_ri args)
+         (None None)
+         ((Some (Pair d k)) (Some (XShlI d k))))
+     (if (qname_eq q (xspp_x86_q (quote XShlI32)))
+       (match (xspp_dec_ri args)
+         (None None)
+         ((Some (Pair d k)) (Some (XShlI32 d k))))
+       None))))))))))
     (_ None)))
 
 (fn xspp_decode ((e Expr)) (Option (List XInstr))
@@ -323,7 +578,8 @@
 
 ;; ---- the checked A* runs ---------------------------------------------------
 
-(fn xspp_run_astar ((m Module) (goalfp (List Int)) (cap Int)) SuFind
+(fn xspp_run_astar_t ((m Module) (goalfp (List Int)) (cap Int) (ts (List Expr)))
+  SuFind
   (su_find_query_schema_astar_checked
     1000000
     (xspp_step_cap)
@@ -334,9 +590,12 @@
     (ms_empty_plan)
     (xspp_query_t (+ cap 2) goalfp)
     (xspp_want)
-    (xspp_grammar cap)
+    (xspp_grammar_t cap ts)
     (xspp_score_t (+ cap 2) goalfp)
     (xspp_nil_expr)))
+
+(fn xspp_run_astar ((m Module) (goalfp (List Int)) (cap Int)) SuFind
+  (xspp_run_astar_t m goalfp cap (xspp_templates)))
 
 (fn xspp_log
   ((seed (List Int)) (verdict (List Int)) (steps Int) (forks Int) (w World))
@@ -381,16 +640,56 @@
     (R14 (quote R14))
     (R15 (quote R15))))
 
+(fn xspp_src_sx ((s Src)) SExpr
+  (match s
+    ((SReg r) (SList (list (SSym (quote SReg)) (SSym (xspp_reg_sym r)))))
+    ((SImm v) (SList (list (SSym (quote SImm)) (SInt v))))))
+
 (fn xspp_instr_sx ((i XInstr)) (Option SExpr)
   (match i
-    ((XBin XXor d (SReg s))
+    ((XBin b d s)
      (Some
        (SList
          (list
            (SSym (quote XBin))
-           (SSym (quote XXor))
+           (SSym (xspp_bop_sym b))
            (SSym (xspp_reg_sym d))
-           (SList (list (SSym (quote SReg)) (SSym (xspp_reg_sym s))))))))
+           (xspp_src_sx s)))))
+    ((XBin32 b d s)
+     (Some
+       (SList
+         (list
+           (SSym (quote XBin32))
+           (SSym (xspp_bop_sym b))
+           (SSym (xspp_reg_sym d))
+           (xspp_src_sx s)))))
+    ((XMovRR d s)
+     (Some
+       (SList
+         (list
+           (SSym (quote XMovRR))
+           (SSym (xspp_reg_sym d))
+           (SSym (xspp_reg_sym s))))))
+    ((XMovRR32 d s)
+     (Some
+       (SList
+         (list
+           (SSym (quote XMovRR32))
+           (SSym (xspp_reg_sym d))
+           (SSym (xspp_reg_sym s))))))
+    ((XMovRI d v)
+     (Some
+       (SList (list (SSym (quote XMovRI)) (SSym (xspp_reg_sym d)) (SInt v)))))
+    ((XRorI32 d k)
+     (Some
+       (SList (list (SSym (quote XRorI32)) (SSym (xspp_reg_sym d)) (SInt k)))))
+    ((XShrI d k)
+     (Some (SList (list (SSym (quote XShrI)) (SSym (xspp_reg_sym d)) (SInt k)))))
+    ((XShlI d k)
+     (Some (SList (list (SSym (quote XShlI)) (SSym (xspp_reg_sym d)) (SInt k)))))
+    ((XShlI32 d k)
+     (Some
+       (SList (list (SSym (quote XShlI32)) (SSym (xspp_reg_sym d)) (SInt k)))))
     (_ None)))
 
 (fn xspp_span_sx ((is (List XInstr))) (Option SExpr)
@@ -457,14 +756,29 @@
     ((Cons x rest)
      (if (int_eq (reg_code r) (reg_code x)) True (xspp_reg_in r rest)))))
 
+(fn xspp_src_regs ((s Src)) (List Reg)
+  (match s
+    ((SReg r) (Cons r Nil))
+    ((SImm _) Nil)))
+
 (fn xspp_operands_of ((is (List XInstr))) (List Reg)
   (measure (struct is))
   (match is
     (Nil Nil)
     ((Cons i rest)
-     (match i
-       ((XBin XXor d (SReg s)) (Cons d (Cons s (xspp_operands_of rest))))
-       (_ (xspp_operands_of rest))))))
+     (xspp_app_r
+       (match i
+         ((XBin _ d s) (Cons d (xspp_src_regs s)))
+         ((XBin32 _ d s) (Cons d (xspp_src_regs s)))
+         ((XMovRR d s) (list d s))
+         ((XMovRR32 d s) (list d s))
+         ((XMovRI d _) (list d))
+         ((XRorI32 d _) (list d))
+         ((XShrI d _) (list d))
+         ((XShlI d _) (list d))
+         ((XShlI32 d _) (list d))
+         (_ Nil))
+       (xspp_operands_of rest)))))
 
 (fn xspp_app_r ((a (List Reg)) (b (List Reg))) (List Reg)
   (measure (struct a))

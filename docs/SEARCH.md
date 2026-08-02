@@ -4853,6 +4853,62 @@ end-to-end, with the proof telemetry landing in the CITATION tier
 material). LS3-i is CLOSED; LS3-ii (the sha-mined real-material arm)
 is next per the fork ruling.
 
+**LS3-ii RECORD (LANDED 2026-08-02 — the real-material arm; first
+fire pending on CI).** Six instances mined from the generated
+std/sha256/impgen_x86_out.shard — the imp->x86 leg's actual output.
+Mining scope: maximal MEMORY-FREE straight-line runs (measured
+inventory: 54 maximal runs, lengths 2-58; full species mix XBin32
+1424 / XStore8 711 / XMovRR 359 / XLoad8 251 / XBin 231 / XMovRI 143
+/ XShrI 111 / XRorI32 40 / XMovRR32 32 + 40 control) at the ratified
+modest scope (length 2-3 here). Each instance searches over its OWN
+instruction alphabet — the honest v1 vocabulary: minimality is
+claimed over exactly the target's distinct instructions.
+
+The set (tools/search/tasks/x86_span_instances.shard; hand-derived
+expected minima pinned in-driver): I1 [mov32 RAX RAX; and RAX 255]
+tie_x_shtotw@3 — the 32-bit self-truncation is subsumed by the byte
+mask, expect FOUND len 1; I2 [mov RAX 0; mov RAX R8] tie_x_shround@30
+— the dead constant store, expect FOUND len 1; I3 [xor RAX R15; mov
+R15 RAX] @43, I4 [add32 R12 1; mul32 R15 256] @1, I6 [mov R15 R8;
+ror32 R15 25] @39 — expect MINIMAL at 2; I5 [add32 R15 RAX; add32
+R12 1; mul32 R15 256] @4 — expect MINIMAL at 3. PROVENANCE IS
+CORPUS-CHECKED (tools/search/x86_span_mine_pins.shard): each instance
+= a pinned slice of ix_sstmts(ibody_of(it_*_fn)) computed from the
+imp pipeline directly, while the artifact's own tie claims pin the
+same output as its stored lists — an impgen change that moves the
+material turns the pins red and forces a re-mine (the regen-canon
+contract for mined instances).
+
+Machinery grown for real material (all in the LS3a files, so the seed
+pins gate regressions): the probe's species layer generalized to the
+full memory-free straight-line set (XBin/XBin32 all ops + SImm
+sources, XMovRR/RR32/RI, XRorI32, XShrI/XShlI/XShlI32) across
+templates, decode, goal-SExpr, operands; per-target alphabet
+extraction; template-parametric grammar + checked-A* entry
+(xspp_run_astar_t); the model's probe files now give ALL FIFTEEN
+registers distinct nonzero values — file 3's low-32 parts exceed 255
+(v_i = 2^33(i+1) + 2^24(i+1) + (2i+3)), which is what keeps a bare
+32-bit truncation from fingerprint-aliasing a masked target (caught
+on paper during file design, before it could alias I1's find).
+
+Phase 2 on strictly-shorter winners runs against the SAME two-lemma
+peephole pool — expected verdict for I1/I2: honest PROOF-REFUSED
+(no mask or dead-store law exists yet). That refusal telemetry is a
+deliverable: per the ratified fork LS3-B, LS3-iii grows pool/moves on
+exactly these measured refusals. Refusals report as
+IMPROVE-CANDIDATE, never accepted, never fatal; a red witness gate,
+replay, expected-length pin, or EMPTY anomaly IS fatal. Expected
+summary line: X86-SPAN-MINE LS3B OK IMPROVED-0 CANDIDATE-2
+MINIMAL-4.
+
+Local validation: mine-probe closure 394/0; provenance pins 838/0;
+the new-species phase-2 smoke constructs and parses both improvement
+goals (verdict REFUSED, no PARSEFAIL); all five files
+shardfmt-canonical. First fire on CI via ENGINE_RUN (the standing
+law — new instances/vocabulary); the LS3a seed probe re-fires
+alongside to refresh its record under the all-live files. Measured
+records land here when they return.
+
 Non-goals, stated once: no prove-on-engine rewrite before the LS-law
 3 gate; no kernel/type-system growth; no repo-wide sidecar sweeps
 (LS-law 1).
