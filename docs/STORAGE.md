@@ -211,6 +211,28 @@ pattern:
   is small (Expr 9 ctors, Type 2, FnDef 1, Module 1) but the full
   covered set (claims/proof scripts, typedefs, externs, tries)
   gets inventoried before the schema freezes.
+  **LOAD-PATH SURVEY FINDINGS (2026-08-02, recorded before the
+  codec is written).** (i) The check path parses each file's bytes
+  ~10–13 TIMES: stage A (build_module_d, reader.shard:3879) plus
+  stage B's parse_decls/use_forms and seven more whole-source
+  read_all sweeps in driver.shard. A raw-SExpr image (FOUR ctors +
+  leaves) is CONTEXT-FREE — parsing depends on nothing accumulated
+  — and replaces every one of those sweeps; it is the first codec
+  layer. (ii) Per-file ELABORATION is context-dependent: the
+  per-file Module depends on the accumulated resolve env and ctor
+  set, so a Module-level image key must CHAIN over the import
+  prefix — key(k) = H(engine, bytes(k), key(prefix(k))) — bytes
+  alone would be unsound; this is the Merkle-by-reference shape
+  CANON.md §7 anticipated. (iii) FnTrie is a pure derived index
+  over the fn list (merge via trie_insert_many): REBUILT on load,
+  never serialized. (iv) The encoder precedent is
+  tools/canon/hash.shard's hx_ser_* family (tag-per-ctor,
+  sign+digits ints, encode-only) — the codec mirrors it and adds
+  the tree's first decoder. (v) Ctor budget: ~28 for
+  SExpr+core-Module; ~42 adding the decl layer; ~91 with parsed
+  proof scripts — proofs stay OUT of the v1 schema (they re-parse
+  per-claim from cached SExpr, and per-claim parse is not the
+  measured floor).
 - **S2b — the loader front door,** behind SHARD_IMAGES=1: the
   driver consults .shard-cache/images/<content-key>.img per import;
   miss or mismatch = text path. Gate: the image-vs-text
