@@ -524,6 +524,25 @@ below the W frame.
   later; costs tuning discussion before the walk shape even
   exists, on a number B4 will re-measure anyway.
 
+**Fork F retune LANDED (B4, 2026-08-01).** Cap = 61440 (15 pages),
+the largest 4096-multiple below the W frame — the measured free
+span is buffer@65664 → W@130496 = 64832 bytes, so the "~56 KiB"
+estimate above ran low. Exactly as priced: a pure regeneration,
+ZERO proof-step changes (the tight kb-cert's farkas multipliers
+are cap-invariant — the sum telescopes to −1 at any cap ≡ 0 mod
+64; every other site was translation-uniform slack), absorber-path
+fuel heads +896 (960 vs 64 blocks/iteration), entry claims S^705 →
+S^1601. One site outside the priced file list: the cap premise
+physically lives in std/sha256/sha256.sweld.shard's seven
+absorber/readback statements (`le r 4096` → `le r 61440`) — a
+caller cannot widen a premise, so the sweld article moves with the
+cap by construction. Silicon leg 61 → 67 rows (cap-cross rows
+re-bracketed at 61439/61440/61441/122880/122881; the old 4095–8193
+sizes stay as sub-cap short-read rows). All four closures
+re-verified green: sweld 1175/0, stream_src 43/0, stream_x86
+1296/0, the byte-tie 1299/0; check wall time unchanged despite the
+2.3× taller ground fuel towers.
+
 **B3 RECORD (2026-08-01; the machine leg lands — M0–M5 complete,
 the rung closes).** The ladder ran exactly as §7.9 laid it out:
 M0 80cdeba (the backward-branch-around-an-effect probe; its

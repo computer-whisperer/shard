@@ -26,10 +26,11 @@
 #     vm.mmap_min_addr. This is the property that lets the leg run in CI at all;
 #     the page-0 era needed setcap or a global sysctl and could not be gated.
 #   STREAMING BIN — PIPE-FED, always, because short reads are the thing under
-#     test: it loops read(≤4096) until EOF. Gold vectors, the 55..128 block
-#     strata, the 4096 read-cap crossings, byte-at-a-time and small-chunk
-#     writers, a prefix-stop refutation, bulk, a random sweep, and both
-#     read-error legs.
+#     test: it loops read(≤61440) until EOF. Gold vectors, the 55..128 block
+#     strata, the 61440 read-cap crossings (B4's retune of the 4096
+#     proving-rung cap, STREAM.md §7.9 Fork F), a sub-cap sweep at the old
+#     cap's boundaries, byte-at-a-time and small-chunk writers, a prefix-stop
+#     refutation, bulk, a random sweep, and both read-error legs.
 #   ONE-SHOT BIN — FILE REDIRECT, always, because it issues exactly ONE read at
 #     cap 64888 and a pipe may short-read it into a truncated digest. Its cap
 #     boundary is pinned on both sides: `XBrIf (CEq RSI (SImm 64888))` takes the
@@ -165,25 +166,35 @@ for n in 55 56 63 64 65 127 128; do
 done
 
 # ------------------------------------------------ streaming: cap crossings ---
-# 4096 is the model's per-read cap; these straddle it and its double.
-for n in 4095 4096 4097 8192 8193; do
+# 61440 is the model's per-read cap; these straddle it and its double.
+for n in 61439 61440 61441 122880 122881; do
   head -c "$n" /dev/urandom > "$TMP/c$n"
   scat "$TMP/c$n" "stream-capcross-${n}B"
 done
+# The OLD (4096) proving-rung cap's boundaries, kept as plain sub-cap rows:
+# every one of them now fits in a single read, so they exercise the
+# one-read-then-EOF shape rather than a crossing. c4097 / c8193 are also the
+# inputs the short-read and one-shot rows below replay.
+for n in 4095 4096 4097 8192 8193; do
+  head -c "$n" /dev/urandom > "$TMP/c$n"
+  scat "$TMP/c$n" "stream-subcap-${n}B"
+done
 
 # ------------------------------------------------- streaming: short reads ----
-# Every pipe read that returns fewer than the requested 4096 bytes is a short
-# read; these rows force many per run.
+# Every pipe read that returns fewer than the requested 61440 bytes is a short
+# read; these rows force many per run. (A pipe's own 64 KiB buffer means the
+# plain `cat` rows above are already short-read rows at this cap.)
 head -c 300 /dev/urandom > "$TMP/b300"
-spipe "$TMP/b300"  "dd if='$TMP/b300' bs=1 2>/dev/null"       "stream-shortread-dd-bs1-300B"
-spipe "$TMP/c4097" "dd if='$TMP/c4097' bs=1 2>/dev/null"      "stream-shortread-dd-bs1-across-cap-4097B"
-spipe "$TMP/c8193" "dd if='$TMP/c8193' bs=7 2>/dev/null"      "stream-shortread-dd-bs7-8193B"
-spipe "$TMP/c8193" "dd if='$TMP/c8193' bs=4095 2>/dev/null"   "stream-shortread-dd-bs4095-8193B"
+spipe "$TMP/b300"   "dd if='$TMP/b300' bs=1 2>/dev/null"        "stream-shortread-dd-bs1-300B"
+spipe "$TMP/c4097"  "dd if='$TMP/c4097' bs=1 2>/dev/null"       "stream-shortread-dd-bs1-4097B"
+spipe "$TMP/c8193"  "dd if='$TMP/c8193' bs=7 2>/dev/null"       "stream-shortread-dd-bs7-8193B"
+spipe "$TMP/c8193"  "dd if='$TMP/c8193' bs=4095 2>/dev/null"    "stream-shortread-dd-bs4095-8193B"
+spipe "$TMP/c61441" "dd if='$TMP/c61441' bs=4095 2>/dev/null"   "stream-shortread-dd-bs4095-across-cap-61441B"
 
 # PREFIX-STOP REFUTATION — the behavioural proof that the loop keeps reading
 # after a short read, needing no tracer (this box has no strace and `perf trace`
 # wants root). 40 bytes dripped with real gaps cannot be satisfied by one read
-# of the 4096-byte request, so a bin that stopped at the first short read would
+# of the 61440-byte request, so a bin that stopped at the first short read would
 # digest a PREFIX. Asserted both ways: equals the whole input, matches no
 # proper prefix.
 printf 'XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX' > "$TMP/drip40"
@@ -209,9 +220,12 @@ spipe "$TMP/m1" "dd if='$TMP/m1' bs=997 2>/dev/null" "stream-bulk-1MiB-in-997B-c
 # Shapes are seeded so a failing row is REPRODUCIBLE (same size/chunk next run);
 # the content is fresh /dev/urandom every run, which is what varies the digest.
 # Size and chunk are in the row name so a FAIL is diagnosable without a re-run.
+# The size bound is ~3x the read cap so the sweep keeps straddling it (it was
+# 20000 against the 4096 proving-rung cap); the chunk bound stays sub-cap,
+# which is what makes every write a short read.
 RANDOM=20260801
 for i in $(seq 1 20); do
-  sz=$(( (RANDOM * 32768 + RANDOM) % 20000 ))
+  sz=$(( (RANDOM * 32768 + RANDOM) % 200000 ))
   bs=$(( RANDOM % 4200 + 1 ))
   head -c "$sz" /dev/urandom > "$TMP/r"
   spipe "$TMP/r" "dd if='$TMP/r' bs=$bs 2>/dev/null" "stream-random size=$sz chunk=$bs"
