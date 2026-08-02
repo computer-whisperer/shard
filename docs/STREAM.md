@@ -711,3 +711,181 @@ what expert code needs from the backend, not opened on one
 number ("we can get to register allocations properly later" —
 user, 2026-08-01). The 6.1× scalar gap stands on record as a
 priced, attributed backend debt.
+
+## 8. B5 — the expert-leg design note (DRAFT 2026-08-02, awaiting
+## ratification)
+
+**Mission.** The hand-pinned SHA-NI variant of the streaming bin,
+benchmarked vs OpenSSL/coreutils-as-shipped — the FIRST real
+non-canonical consumer (CERT.md §4's named clause-1 trigger) and
+the artifact half of the ratified parity fork (b): B6's dispatch
+composes this variant with the scalar bin to chase the 17.8x
+as-shipped bar (0.598 s/GiB on the quiet box). The rung also
+answers §5's second downgrade gate in the affirmative or negative:
+can an expert SHA-NI schedule be expressed WITHOUT target
+semantics leaking into the high-level requirement?
+
+### 8.1 Ground (survey 2026-08-02)
+
+- models/x86 has ZERO vector state: Regs = 15 Int GPRs (no rsp),
+  XInstr = 19 constructors, xeval_instr = one exhaustive match.
+  X86.md §6 reserved the growth point ("an XMM/YMM file
+  absent-or-empty until used") and pinned the hazard: the op
+  vocabulary is FIVE tables wide (semantics / encoder / cert
+  readback / render / emitter conditions) — extend in step.
+- Widening Regs is a REPO-WIDE ARITY BREAK: 1033 MkRegs sites,
+  nearly all full 15-argument positional patterns in claim goals,
+  plus generated certs (vx86_acc_probe, 246k lines) and hard-coded
+  MkRegs string templates inside tools/x86gen. Measured, closed.
+- The world layer (weval_instr, xeff_i) carries (other …)
+  fallbacks — new PURE species need zero world-layer edits at the
+  scalar tier; models/imp/to_x86.shard's exhaustive ix_dwl never
+  sees vector arms (imp never emits them) — no edit, confirmed by
+  E1's structural scan. New CONSTRUCTORS are not the 965e349
+  arity hazard (existing arms untouched, no regen owed).
+- An instruction-grain silicon differential harness already
+  exists: models/x86/diff/ (spec-side vectors + C replayer).
+- The box has SHA-NI (Ryzen 9 5900X; the 0.598 s coreutils number
+  IS this path). Read-syscall floor at cap 61440 ≈ 0.13 s/GiB;
+  compression dominates.
+
+### 8.2 The vector tier (the architecture)
+
+XInstr GROWS the vector species (additive arms; scalar-tier
+xeval_instr arms for them = XTrap, the loud-refusal discipline —
+old programs' semantics untouched, no signature changes anywhere).
+A NEW FILE models/x86/vector.shard holds the tier:
+
+- **State**: (record Xmm (x0..x3 Int)) — four dword lanes, each in
+  [0, 2^32) — and (record Xmms (xmm0..xmm15 Xmm)), the
+  architectural sixteen. See fork B for the lane ruling.
+- **Evaluator**: a thin twin SCC xveval_instr/call/loop/seq
+  threading (Regs, Xmms, Mem) with new outcome types XVOut/WVOut;
+  scalar LEAF arms delegate to xeval_instr and carry Xmms
+  unchanged; compound forms recurse in-tier; a world twin mirrors
+  world.shard's effect arms. Existing XOut/WOut/xrun_*/weval_*
+  signatures are UNTOUCHED — every landed cert re-runs byte-
+  identical (the standing additivity proof).
+- **THE EMBEDDING THEOREM** (the reuse keystone, proven once per
+  tier): a body containing no vector arms steps identically under
+  xveval with Xmms unchanged. Scalar per-instruction walks lift by
+  ONE citation; the M-skeleton's composition equations
+  RE-INSTANTIATE over the B5 module at their xcall seams (the
+  _run species' free restfs tail) with the vector fold's walk
+  cited where the scalar fold's was — re-compose, not re-prove.
+- **Species** (≈10, at the generality the schedule exercises —
+  XRorI32 precedent; wider forms fence loudly): sha256rnds2,
+  sha256msg1, sha256msg2 + support: 16-byte unaligned load/store
+  (mem_read/mem_set at dword assembly), dword shuffle (pshufd
+  imm), the byte-swap shuffle (per-lane bswap32 — general
+  byte-grain pshufb is NOT modeled), dword add (paddd), align/
+  concat (palignr imm), qword unpacks (punpckl/hqdq).
+- **Entry state**: silicon guarantees nothing about XMM at _start
+  — the bin's top statement universally quantifies initial Xmms
+  (the M3 junk-regs precedent); the schedule writes before it
+  reads.
+- **Trust locus** (platform-externs law): the tier's semantics are
+  differential-gated at instruction grain — random Regs/Xmms/Mem
+  states, each species run on silicon vs the model (the
+  models/x86/diff harness grows vector rows; vector rows compare
+  against the EXTENDED tier). The SDM is the drafting reference;
+  the differential is the authority.
+
+### 8.3 The schedule and its proof
+
+The canonical SHA-NI block loop keeps state in the PERMUTED
+ABEF/CDGH two-register form; sha256rnds2 performs two spec rounds
+per issue (wk implicit in xmm0), msg1/msg2 compute the message-
+schedule recurrences. The article (std/sha256/sha256.shani.shard)
+proves: pack/unpack laws for the permutation, rnds2 = two rounds
+of the spec's compression at the permuted layout, msg1/msg2 = the
+schedule recurrence, and THE BLOCK WALK: the hand body folded k
+blocks = sha_blocks over mem_read — the same conclusion shape the
+scalar fold's walk lands, which is what makes the E3 swap a seam
+replacement.
+
+### 8.4 Rung ladder
+
+- **E1 — the vector tier lands.** Fable: x86.shard species arms +
+  trap fence + vector.shard (state, twin SCC, world twin,
+  embedding theorems). Opus-delegated: encode.shard arms, bytetie
+  readback keys, diff replayer + vector rows. Gates: instruction
+  differential green on silicon; existing cert battery re-runs
+  untouched; boundary-3 announcement in the thread log BEFORE
+  landing (XInstr arm growth + new files; no existing type gains
+  a field).
+- **E2 — the hand-pinned block article** (probe-first tradition).
+  Gates: article green; block-grain silicon differential (the
+  block fn on CPU vs spec vectors, gold + random rows, teeth via
+  perturbation).
+- **E3 — the variant bin** (lean name: sha256sum_shani; naming of
+  the eventual dispatch bin = B6's fork). Skeleton re-composition
+  + fold swap, emitted ELF (enc_winelf), byte-tie, capless silicon
+  pipe differential vs coreutils AND openssl, corpus registration
+  + run_corpus rows. Gates: THE B5 NUMBER on record (§5's gate);
+  the §7.5-form verdict for the variant (fork D's contract); the
+  expressibility gate answers here.
+- **E4 — clause-1 adjudication + B5 RECORD.** With the artifact in
+  hand (CERT.md §4: decided WHEN THE ARTIFACT EXISTS), the user
+  rules: grow the validator's disjunctive acceptance (clause 1 =
+  dst freedom w/ witness tag + soundness leg; touches the
+  validator libraries under models/imp/probes — boundary-3
+  announced) vs the hand theorem standing as the boundary
+  insertion (§4's R-a-b path). The rung's evidence obligations:
+  what witness grammar a clause-1 acceptance would need (register
+  choices, schedule, layout facts), whether a second non-canonical
+  consumer is in sight, and what expert code needed from the
+  backend (the regalloc-arc pricing the parity fork promised).
+
+### 8.5 Forks for ratification
+
+- **Fork A — which tier first: SHA-NI or AVX2?** (a) SHA-NI: the
+  comparison target's own fast path on this silicon (the 0.598 s
+  bar IS SHA-NI), the smallest model surface (~10 XMM species,
+  dword-native semantics tying directly to the 32-bit spec).
+  (b) AVX2: no SHA instructions — a vectorized scalar schedule;
+  single-stream gains are modest (AVX2 SHA wins by multi-buffer
+  interleaving, but one pipe has one stream), VEX + YMM roughly
+  double the model surface, and it cannot approach the bar this
+  box sets. LEAN: (a); AVX2/YMM stays a named door — the tier
+  mechanism (separate register file, twin SCC, embedding)
+  generalizes when a consumer arrives.
+- **Fork B — lane representation** (X86.md §6 explicitly deferred
+  this; the ruling lands there). (a) Xmm = four dword lanes:
+  every SHA-NI instruction's semantics is dword-native; proofs
+  land on the spec's 32-bit functions with no lane surgery;
+  byte-grain ops are simply not modeled until a consumer forces
+  the ruling wider. (b) Xmm = one Int in [0, 2^128): purer "a
+  register is one value", but every semantic arm then opens
+  div/mod 2^32 lane extraction — proof noise on every step; only
+  byte-grain ops get cheaper. LEAN: (a).
+- **Fork C — where vector state lives.** (a) The parallel extended
+  tier (§8.2): zero existing signatures touched, additivity
+  proven by re-running the battery, cost = the embedding theorem
+  + one thin twin SCC. (b) Widen Regs/XOut in place: dead on the
+  survey's numbers (1033 positional sites + generated certs +
+  x86gen templates = a repo-wide break for zero semantic gain).
+  LEAN: (a) — (b) is recorded as the corpse.
+- **Fork D — the dispatch-visible variant contract.** (a)
+  Per-variant verdicts: the SHA-NI bin carries its OWN §7.5-form
+  claim (same conclusion shape: writes sha256(everything)); B6's
+  dispatch proof case-splits on the feature test and cites each
+  variant's verdict; the requirement never mentions the target —
+  §5's expressibility gate is answered by construction. (b)
+  Cross-module equivalence: prove the SHA-NI module
+  observationally equal to the scalar module and inherit its
+  verdict — the hardest available theorem, and it WELDS the
+  variants (a scalar regen invalidates the SHA-NI proof).
+  LEAN: (a).
+
+### 8.6 Non-goals and fences
+
+AVX2/YMM/multi-buffer (named door); general byte-grain pshufb
+(fence, loud); CPUID/feature modeling (B6's opening move — B5's
+bin runs unconditionally on SHA-NI silicon, CI's runner permitting,
+else the row degrades loudly like the capless legs); x86gen
+emission of vector code (the freeze stands — this is the HAND leg;
+x86gen learns nothing); other hash families (§6 standing).
+Delegation: byte-emit, encodings, replayer C, and schedule byte
+transcription are Opus-delegated per the standing split; Fable
+owns semantics, laws, articles, docs.
