@@ -614,7 +614,7 @@ reasons inherent to the proof-facing IR" is refuted by the IPC
 evidence: this is the classic no-register-allocation tax of an
 immature backend, not an IR property.
 
-**The parity fork (awaits user ratification; §7.8 form).** The
+**The parity fork (RATIFIED (b), user, 2026-08-01).** The
 C-class identity demands parity-class, and 6.1× scalar is not
 it. Plain question: where does parity come from?
 
@@ -633,9 +633,10 @@ it. Plain question: where does parity come from?
   keeps paying it until a backend arc, priced then on B5's
   hand-pinning evidence.
 
-Lean: (b). It is the path the comparison target itself takes, it
-keeps the arc on its ratified rungs, and §10's decision-bandwidth
-rule already assigns this arc's decision budget to B5's clause-1
-adjudication. A register-allocation arc is real future work — it
-should be priced by B5's evidence of what expert code needs from
-the backend, not opened on one number.
+RATIFIED: (b) — parity comes from B5/B6; the register-allocation
+arc is real future work, REJECTED-for-now because it reopens the
+x86gen freeze mid-arc and should be priced by B5's evidence of
+what expert code needs from the backend, not opened on one
+number ("we can get to register allocations properly later" —
+user, 2026-08-01). The 6.1× scalar gap stands on record as a
+priced, attributed backend debt.
