@@ -233,6 +233,23 @@ pattern:
   proof scripts — proofs stay OUT of the v1 schema (they re-parse
   per-claim from cached SExpr, and per-claim parse is not the
   measured floor).
+  **S2a RECORD — SExpr layer LANDED (2026-08-02, same-day).**
+  tools/image/image.shard: format IMG1 (`"IMG1;" int(count) sx*`;
+  tags 0=SInt 1=SSym 2=SStr 3=SList; ints sign+digits+`;`;
+  count-prefixed lists; payload bytes raw). Encoder = reversed-
+  stream accumulator, decoder = fuel-bounded (read_expr_go's
+  measure idiom, the tree's first decoder); both obey the reader's
+  own stack law (depth = nesting, never sibling count). Checks 14/0.
+  GATE GREEN: 654/654 parseable tracked .shard files (sidecars
+  included) roundtrip text-load → encode → decode → structural
+  equality, AND re-encoding the decoded tree reproduces the bytes
+  (determinism). The 655th file is pins/lang/parse_rejects.shard,
+  the DELIBERATELY unparseable reject pin — no parse, no tree,
+  outside the gate's domain by its own wording. Scale spot: the
+  49k-line impgen_x86_out roundtrips in 8.5s interpreted (652KB
+  image; S2b's warm number is the one that prices). Next in S2a:
+  the core-Module ctor set on the same format, or fold that into
+  S2b if the front door lands SExpr-first — decided when S2b opens.
 - **S2b — the loader front door,** behind SHARD_IMAGES=1: the
   driver consults .shard-cache/images/<content-key>.img per import;
   miss or mismatch = text path. Gate: the image-vs-text
