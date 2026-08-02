@@ -93,6 +93,19 @@
           mem))))
   (steps ((compute both)) refl))
 
+;; the same species with a wrapping operand pair — pins vpaddd's
+;; per-lane mask, which the small-lane pin above never exceeds
+(claim xv_paddd_wrap
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVPaddd XMM1 XMM1) (xv_rs) (xv_xs) mem)
+      (Some
+        (XVNorm
+          (xv_rs)
+          (xv_w1 (MkXmm 574908040 2865557264 861239192 3151887872))
+          mem))))
+  (steps ((compute both)) refl))
+
 ;; pshufd with imm 0x1b = 27 reverses the lanes
 (claim xv_pshufd
   (goal ((mem Mem)) ()
@@ -144,6 +157,30 @@
         (XVNorm
           (xv_rs)
           (xv_w1 (MkXmm 151653132 219025168 287454020 1432778632))
+          mem))))
+  (steps ((compute both)) refl))
+
+;; the remaining dword alignments: k=0 passes src through, k=12 takes
+;; src's top lane then dst's low three
+(claim xv_palignr0
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVPalignr XMM1 XMM2 0) (xv_rs) (xv_xs) mem)
+      (Some
+        (XVNorm
+          (xv_rs)
+          (xv_w1 (MkXmm 16909060 84281096 151653132 219025168))
+          mem))))
+  (steps ((compute both)) refl))
+
+(claim xv_palignr12
+  (goal ((mem Mem)) ()
+    (=
+      (xvinstr_leaf (xv_m) (XVPalignr XMM1 XMM2 12) (xv_rs) (xv_xs) mem)
+      (Some
+        (XVNorm
+          (xv_rs)
+          (xv_w1 (MkXmm 219025168 287454020 1432778632 2578103244))
           mem))))
   (steps ((compute both)) refl))
 
@@ -693,6 +730,22 @@
           mem))))
   (steps ((compute both)) refl))
 
+;; a mirror-walked callee whose body BREAKS OUT (an XBr with no
+;; enclosing block): the XVBrk maps to XVTrap at the call arm — the
+;; vector twin of xeval_call's Brk fence
+(claim xva_brk_callee
+  (goal ((mem Mem) (c Nat)) ()
+    (=
+      (xveval_call
+        (S^ 6 c)
+        (xva_m2 (list (XCall 1)) (list (XVec (XVMov XMM1 XMM2)) (XBr 0)))
+        1
+        (xv_rs)
+        (xv_xs)
+        mem)
+      (Some XVTrap)))
+  (steps ((compute both)) refl))
+
 ;; --- 4. the world floor: the same embedding against models/x86/vworld.shard ----------
 
 (claim wva_leaf
@@ -885,6 +938,184 @@
         (weval_seq
           (S^ 8 c)
           (xva_m2 (list (XCall 1) (XMovRI RCX 9)) (list (XMovRI RAX 8)))
+          (list (XCall 1) (XMovRI RCX 9))
+          (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+          mem
+          w))))
+  (steps ((compute both)) refl))
+
+;; the loop backedge at the world floor: wvtr_pre's trace threading
+;; rides the mirrored recursion, so a slipped prepend here would flip
+;; this pin where the pure tier's xva_loop could not see it
+(claim wva_loop
+  (goal
+    ((c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (xs Xmms)
+     (mem Mem)
+     (w LxWorld)
+     (c Nat)
+     (restfs (List XFunc)))
+    ()
+    (=
+      (wveval_seq
+        (S^ 24 c)
+        (xva_m
+          (list
+            (XMovRI RAX 0)
+            (XBlock
+              (list
+                (XLoop
+                  (list
+                    (XBin XAdd RAX (SImm 1))
+                    (XBrIf (CLtU RAX (SImm 3)) 0)
+                    (XBr 1))))))
+          restfs)
+        (list
+          (XMovRI RAX 0)
+          (XBlock
+            (list
+              (XLoop
+                (list
+                  (XBin XAdd RAX (SImm 1))
+                  (XBrIf (CLtU RAX (SImm 3)) 0)
+                  (XBr 1))))))
+        (MkRegs 0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        xs
+        mem
+        w)
+      (wvlift
+        xs
+        (weval_seq
+          (S^ 24 c)
+          (xva_m
+            (list
+              (XMovRI RAX 0)
+              (XBlock
+                (list
+                  (XLoop
+                    (list
+                      (XBin XAdd RAX (SImm 1))
+                      (XBrIf (CLtU RAX (SImm 3)) 0)
+                      (XBr 1))))))
+            restfs)
+          (list
+            (XMovRI RAX 0)
+            (XBlock
+              (list
+                (XLoop
+                  (list
+                    (XBin XAdd RAX (SImm 1))
+                    (XBrIf (CLtU RAX (SImm 3)) 0)
+                    (XBr 1))))))
+          (MkRegs 0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+          mem
+          w))))
+  (steps ((compute both)) refl))
+
+;; the mirror CALL arm at the world floor: the callee itself syscalls,
+;; so wveval_call walks it in-tier and the nested effect point reduces
+;; at the concrete oracle head
+(claim wva_call_mirror
+  (goal
+    ((a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (xs Xmms)
+     (mem Mem)
+     (r Int)
+     (c1 Int)
+     (c2 Int)
+     (ws (List Int))
+     (c Nat))
+    ()
+    (=
+      (wveval_seq
+        (S^ 16 c)
+        (xva_m2 (list (XCall 1) (XMovRI RCX 9)) (xv_wr_body))
+        (list (XCall 1) (XMovRI RCX 9))
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        xs
+        mem
+        (MkLxWorld (Cons r (Cons c1 (Cons c2 ws)))))
+      (wvlift
+        xs
+        (weval_seq
+          (S^ 16 c)
+          (xva_m2 (list (XCall 1) (XMovRI RCX 9)) (xv_wr_body))
+          (list (XCall 1) (XMovRI RCX 9))
+          (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+          mem
+          (MkLxWorld (Cons r (Cons c1 (Cons c2 ws))))))))
+  (steps ((compute both)) refl))
+
+;; exit inside a callee: the WVExit outcome percolates through the call
+;; and seq arms and ends the whole walk (exit consumes no oracle draws,
+;; so the world stays symbolic)
+(claim wva_exit_callee
+  (goal
+    ((a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (si0 Int)
+     (di0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (xs Xmms)
+     (mem Mem)
+     (w LxWorld)
+     (c Nat))
+    ()
+    (=
+      (wveval_seq
+        (S^ 12 c)
+        (xva_m2
+          (list (XCall 1) (XMovRI RCX 9))
+          (list (XMovRI RAX 60) (XMovRI RDI 0) XSyscall))
+        (list (XCall 1) (XMovRI RCX 9))
+        (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
+        xs
+        mem
+        w)
+      (wvlift
+        xs
+        (weval_seq
+          (S^ 12 c)
+          (xva_m2
+            (list (XCall 1) (XMovRI RCX 9))
+            (list (XMovRI RAX 60) (XMovRI RDI 0) XSyscall))
           (list (XCall 1) (XMovRI RCX 9))
           (MkRegs a0 c0 d0 b0 p0 si0 di0 e8 e9 e10 e11 e12 e13 e14 e15)
           mem
