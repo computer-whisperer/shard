@@ -155,11 +155,9 @@
             (Pair True (append_int (append_int dir rel) (mod_req_dir_suffix)))
             (import_paths dir rest run)))))))))
 
-(fn imports_of ((dir (List Int)) (src (List Int)) (run Bool))
-  (List (Pair Bool (List Int)))
-  (match (read_all src)
-    (None Nil)
-    ((Some forms) (import_paths dir forms run))))
+;; (imports_of — the bytes→imports scan — dissolved into visit_go's
+;; parse-once step: the visit's single read_all now feeds BOTH the import
+;; walk and the SrcEntry forms field.)
 
 ;; append a tagged source at the END of the accumulator — so a file lands AFTER
 ;; the imports visited before it (post-order ⇒ deps first). With a module's
@@ -176,10 +174,10 @@
 ;; every QName module-path — lives in reader.shard with build_module_d, its
 ;; primary consumer; this file reaches it through the reader glob-use.)
 
-;; (SrcEntry — a resolved source's path + granted tag + bytes — is defined in
-;; reader.shard, a dependency of this file, so it is in scope here AND is parsed
-;; before loader/driver in the self-hosted reader's dependency-ordered ctor
-;; accumulation. See reader.shard.)
+;; (SrcEntry — a resolved source's path + granted tag + bytes + parse-once
+;; forms — is defined in reader.shard, a dependency of this file, so it is in
+;; scope here AND is parsed before loader/driver in the self-hosted reader's
+;; dependency-ordered ctor accumulation. See reader.shard.)
 
 ;; closure-resolution state: seen paths (cycle/dedup), accumulated SrcEntries
 ;; (in dependency order), World.
@@ -277,7 +275,7 @@
 ;; file must be one visit, or every decl in it loads twice. RUN mode keeps the
 ;; raw path (absolute app paths are legitimate there and canon would break
 ;; them).
-;; The closure walk reads files from the World (read_file / imports_of), so the
+;; The closure walk reads files from the World (read_file), so the
 ;; reachable set depends on the actual file system — there is no measure on the
 ;; pure arguments (like the reducer loops, the "input" is external). We fuel it
 ;; (issue #1). `seen` already bounds real runs to the finite import closure; the
@@ -327,26 +325,35 @@
                      (- fuel 1)))
                   (None (Closure (Cons path seen) acc w1))))
               ((Some src)
-               (let ((imps (imports_of (dir_of path) src run)))
-                 (match (req_gate path run imps)
-                   ((Some bad)
-                    (Closure
-                      (Cons path seen)
-                      acc
-                      (refuse_req_import path bad w1)))
-                   (None
-                     (match
-                       (visit_imports_go
-                         imps
-                         granted
-                         run
-                         (Closure (Cons path seen) acc w1)
-                         (- fuel 1))
-                       ((Closure seen2 acc2 w2)
-                        (Closure
-                          seen2
-                          (append_src acc2 (SrcEntry path granted src))
-                          w2)))))))))))))))))
+               ;; PARSE ONCE: the closure walk is the single place bytes
+               ;; become forms — the import scan consumes them here and the
+               ;; SrcEntry carries them, so no downstream sweep re-parses
+               ;; (the forms field's invariant: forms ≡ read_all bytes).
+               (let ((mforms (read_all src)))
+                 (let
+                   ((imps
+                      (match mforms
+                        (None Nil)
+                        ((Some fs) (import_paths (dir_of path) fs run)))))
+                   (match (req_gate path run imps)
+                     ((Some bad)
+                      (Closure
+                        (Cons path seen)
+                        acc
+                        (refuse_req_import path bad w1)))
+                     (None
+                       (match
+                         (visit_imports_go
+                           imps
+                           granted
+                           run
+                           (Closure (Cons path seen) acc w1)
+                           (- fuel 1))
+                         ((Closure seen2 acc2 w2)
+                          (Closure
+                            seen2
+                            (append_src acc2 (SrcEntry path granted src mforms))
+                            w2))))))))))))))))))
 
 ;; A GRANTED file's imports load granted too (the inherited flag): a module
 ;; interface is trusted as a UNIT, and the req-scope files it pulls in
@@ -417,7 +424,7 @@
   (measure (struct srcs))
   (match srcs
     (Nil (Pair Nil w))
-    ((Cons (SrcEntry path _ _) rest)
+    ((Cons (SrcEntry path _ _ _) rest)
      (match (read_file (auto_path_of path) w)
        ((Pair msc w1)
         (match (read_sidecars rest w1)

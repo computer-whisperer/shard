@@ -2452,23 +2452,36 @@
 (fn parse_module ((src (List Int)) (base_ctors (List Symbol))) (Option Module)
   (match (read_all src)
     (None None)
-    ((Some forms0)
-     (match (expand_records forms0)
+    ((Some forms0) (parse_module_f forms0 base_ctors))))
+
+;; parse_module over the SrcEntry forms field (parse-once): unparseable → None.
+(fn parse_module_mf ((mf (Option (List SExpr))) (base_ctors (List Symbol)))
+  (Option Module)
+  (match mf
+    (None None)
+    ((Some forms0) (parse_module_f forms0 base_ctors))))
+
+;; the pipeline after read_all, from ALREADY-PARSED forms — the parse-once
+;; entry: build_module_d/r land here so nothing re-lexes bytes the loader
+;; already parsed.
+(fn parse_module_f ((forms0 (List SExpr)) (base_ctors (List Symbol)))
+  (Option Module)
+  (match (expand_records forms0)
+    (None None)
+    ((Some forms1)
+     (match (expand_sugar forms1)
        (None None)
-       ((Some forms1)
-        (match (expand_sugar forms1)
+       ((Some forms)
+        (match (collect_types forms)
           (None None)
-          ((Some forms)
-           (match (collect_types forms)
+          ((Some tds)
+           (match
+             (collect_fns_externs
+               forms
+               (append_sym (typedef_ctors tds) base_ctors))
              (None None)
-             ((Some tds)
-              (match
-                (collect_fns_externs
-                  forms
-                  (append_sym (typedef_ctors tds) base_ctors))
-                (None None)
-                ((Some (Pair fns externs))
-                 (Some (Module tds fns externs (build_fn_trie fns) Nil)))))))))))))
+             ((Some (Pair fns externs))
+              (Some (Module tds fns externs (build_fn_trie fns) Nil)))))))))))
 
 ;; ---- whole-program module assembly ----------------------------------------
 ;; Build M (the module proofs reduce against) by folding `parse_module` over a
@@ -2558,7 +2571,14 @@
 ;; the loader to the resolver. Defined HERE (not in loader.shard, which uses it)
 ;; so the self-hosted reader — which accumulates ctors in dependency order —
 ;; sees it before parsing loader/driver and reader's own build_module_d.
-(type SrcEntry (SrcEntry (List Int) Bool (List Int)))
+;; A resolved source: path, granted tag, raw bytes, and the PARSE-ONCE forms
+;; field — `(read_all bytes)`, computed exactly once when the loader visits
+;; the file (or decoded from a validated image; the image container proves
+;; byte-identity, so the invariant holds either way): forms ≡ read_all(bytes).
+;; None = the file does not parse (the diagnosis path re-scans the bytes).
+;; Every construct site MUST maintain the invariant — a forms field that
+;; disagrees with the bytes would silently diverge every downstream sweep.
+(type SrcEntry (SrcEntry (List Int) Bool (List Int) (Option (List SExpr))))
 
 ;; ===========================================================================
 ;; QUALIFIED-IDENTITY RESOLUTION (Stage 2).
@@ -3286,13 +3306,24 @@
   (Option (List Decl))
   (match (read_all src)
     (None None)
-    ((Some forms0)
-     (match (expand_records forms0)
+    ((Some forms0) (parse_decls_f forms0 ctors granted))))
+
+;; parse_decls over the SrcEntry forms field (parse-once): unparseable → None.
+(fn parse_decls_mf
+  ((mf (Option (List SExpr))) (ctors (List Symbol)) (granted Bool))
+  (Option (List Decl))
+  (match mf
+    (None None)
+    ((Some forms0) (parse_decls_f forms0 ctors granted))))
+
+(fn parse_decls_f ((forms0 (List SExpr)) (ctors (List Symbol)) (granted Bool))
+  (Option (List Decl))
+  (match (expand_records forms0)
+    (None None)
+    ((Some forms1)
+     (match (expand_sugar forms1)
        (None None)
-       ((Some forms1)
-        (match (expand_sugar forms1)
-          (None None)
-          ((Some forms) (collect_decls forms ctors granted))))))))
+       ((Some forms) (collect_decls forms ctors granted))))))
 
 ;; ===========================================================================
 ;; PARSE-FAILURE DIAGNOSIS (failure path ONLY — costs nothing on success).
@@ -3656,6 +3687,12 @@
     (None Nil)
     ((Some forms) forms)))
 
+;; use_forms over the SrcEntry forms field (parse-once): unparseable → Nil.
+(fn forms_or_nil ((mf (Option (List SExpr)))) (List SExpr)
+  (match mf
+    (None Nil)
+    ((Some forms) forms)))
+
 ;; ===========================================================================
 ;; MODULE-PATH derivation — the loader-assigned, source-unforgeable identity
 ;; behind every QName module-path (a `(List Symbol)`, mirroring Rust's module
@@ -3882,12 +3919,12 @@
   (measure (struct srcs))
   (match srcs
     (Nil (BMOk acc))
-    ((Cons (SrcEntry path _ src) rest)
-     (match (parse_module src ctors)
+    ((Cons (SrcEntry path _ src mf) rest)
+     (match (parse_module_mf mf ctors)
        (None (BMFail (parse_diag src ctors k)))
        ((Some m)
         (let ((mp (module_path_of path)))
-          (match (use_scope_of (use_forms src) mp (module_resolve_env acc))
+          (match (use_scope_of (forms_or_nil mf) mp (module_resolve_env acc))
             ((Pair uitems ualiases)
              (let
                ((rm
@@ -3903,7 +3940,7 @@
                     ;; law claims must be citable like hand-written ones
                     ;; (None is unreachable: parse_module already succeeded)
                     (claim_items_go
-                      (match (expand_records (use_forms src))
+                      (match (expand_records (forms_or_nil mf))
                         (None Nil)
                         ((Some efs) efs))
                       mp))))
@@ -3928,12 +3965,12 @@
   (measure (struct srcs))
   (match srcs
     (Nil (Some acc))
-    ((Cons (SrcEntry path _ src) rest)
-     (match (parse_module src ctors)
+    ((Cons (SrcEntry path _ _ mf) rest)
+     (match (parse_module_mf mf ctors)
        (None None)
        ((Some m)
         (let ((mp (module_path_of path)))
-          (match (use_scope_of (use_forms src) mp (module_resolve_env acc))
+          (match (use_scope_of (forms_or_nil mf) mp (module_resolve_env acc))
             ((Pair uitems ualiases)
              (let
                ((rm

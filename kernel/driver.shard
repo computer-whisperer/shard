@@ -1011,6 +1011,18 @@
          (app_env (filter_modpath (module_resolve_env m) curmod) uitems)
          ualiases)))))
 
+;; file_rctx over the SrcEntry forms field (parse-once): the same context
+;; with no re-parse. Kernel callers land here; file_rctx above stays for
+;; byte-holding consumers (tools/prove, tools/search).
+(fn file_rctx_f ((m Module) (path (List Int)) (mf (Option (List SExpr)))) RCtx
+  (let ((curmod (module_path_of path)))
+    (match (use_scope_of (forms_or_nil mf) curmod (module_resolve_env m))
+      ((Pair uitems ualiases)
+       (RCtx
+         curmod
+         (app_env (filter_modpath (module_resolve_env m) curmod) uitems)
+         ualiases)))))
+
 ;; ---- axiom scope: library trees are THEOREM-ONLY ---------------------------
 ;; Axioms may be AUTHORED in exactly two places: kernel/ (the reviewed
 ;; core-math set, kernel/facts.shard) and app/bin trust scopes (I/O bolts,
@@ -1113,8 +1125,8 @@
   (measure (struct srcs))
   (match srcs
     (Nil st)
-    ((Cons (SrcEntry path granted src) rest)
-     (match (parse_decls src ctors granted)
+    ((Cons (SrcEntry path granted src mf) rest)
+     (match (parse_decls_mf mf ctors granted)
        (None
          (match st
            ((RunState th pend acc led)
@@ -1160,7 +1172,7 @@
                   (Nil True)
                   (_ False))
                 (run_decls
-                  (file_rctx m path src)
+                  (file_rctx_f m path mf)
                   (autos_of_src (sym_of_chars path) sidecars)
                   m
                   st
@@ -1221,9 +1233,9 @@
   (measure (struct srcs))
   (match srcs
     (Nil st)
-    ((Cons (SrcEntry path granted src) rest)
+    ((Cons (SrcEntry path granted _ mf) rest)
      (if (sym_eq (sym_of_chars path) tkey) st
-     (match (parse_decls src ctors granted)
+     (match (parse_decls_mf mf ctors granted)
        (None st)  ; malformed source: stop — the real pass reports it loudly
        ((Some ds)
         (theory_base_go
@@ -1231,7 +1243,7 @@
           rest
           ctors
           tkey
-          (theory_step (file_rctx m path src) m st ds))))))))
+          (theory_step (file_rctx_f m path mf) m st ds))))))))
 
 (fn theory_base_st
   ((m Module) (srcs (List SrcEntry)) (ctors (List Symbol)) (tkey Symbol))
@@ -1471,9 +1483,9 @@
   (measure (struct srcs))
   (match srcs
     (Nil Nil)
-    ((Cons (SrcEntry _ granted src) rest)
+    ((Cons (SrcEntry _ granted _ mf) rest)
      (if granted (own_externs_of_srcs rest)
-     (match (read_all src)
+     (match mf
        (None (own_externs_of_srcs rest))
        ((Some forms)
         (sym_concat (extern_names_of_forms forms) (own_externs_of_srcs rest))))))))
@@ -2432,8 +2444,8 @@
   (measure (struct srcs))
   (match srcs
     (Nil Nil)
-    ((Cons (SrcEntry path _ src) rest)
-     (match (read_all src)
+    ((Cons (SrcEntry path _ _ mf) rest)
+     (match mf
        (None (bins_of_srcs rest))
        ((Some forms)
         (bin_concat
@@ -2519,8 +2531,8 @@
   (measure (struct srcs))
   (match srcs
     (Nil Nil)
-    ((Cons (SrcEntry path _ src) rest)
-     (match (read_all src)
+    ((Cons (SrcEntry path _ _ mf) rest)
+     (match mf
        (None (libs_of_srcs rest))
        ((Some forms) (lib_concat (libs_of_forms forms) (libs_of_srcs rest)))))))
 
@@ -2791,7 +2803,7 @@
 (fn scope_report ((srcs (List SrcEntry))) (List Int)
   (match (sr_last srcs)
     (None (append_int "scope: empty closure" (sr_nl)))
-    ((Some (SrcEntry path _ src))
+    ((Some (SrcEntry path _ _ mf))
      (match
        (build_module_d
          (sr_init srcs)
@@ -2805,10 +2817,10 @@
        ((BMOk macc)
         (let ((curmod (module_path_of path)))
           (let ((env (module_resolve_env macc)))
-            (let ((forms (use_forms src)))
+            (let ((forms (forms_or_nil mf)))
               (match
-                (parse_module
-                  src
+                (parse_module_mf
+                  mf
                   (append_sym
                     (typedef_ctors (module_typedefs macc))
                     (prelude_ctors)))
@@ -2999,8 +3011,8 @@
   (measure (struct srcs))
   (match srcs
     (Nil acc)
-    ((Cons (SrcEntry path _ src) rest)
-     (match (read_all src)
+    ((Cons (SrcEntry path _ _ mf) rest)
+     (match mf
        (None (mc_clause_qns tr fns rest acc))
        ((Some forms)
         (mc_clause_qns
@@ -4700,8 +4712,8 @@
   (measure (struct srcs))
   (match srcs
     (Nil Nil)
-    ((Cons (SrcEntry path granted src) rest)
-     (match (read_all src)
+    ((Cons (SrcEntry path granted _ mf) rest)
+     (match mf
        (None (mc_files m sccs th rest sidecars))
        ((Some forms)
         (let ((mcls (mc_of_forms forms Nil)))
@@ -4714,7 +4726,7 @@
                     m
                     sccs
                     th
-                    (file_rctx m path src)
+                    (file_rctx_f m path mf)
                     (module_path_of path)
                     allmcls
                     allmcls
@@ -4821,8 +4833,8 @@
   (measure (struct srcs))
   (match srcs
     (Nil acc)
-    ((Cons (SrcEntry _ _ src) rest)
-     (match (read_all src)
+    ((Cons (SrcEntry _ _ _ mf) rest)
+     (match mf
        (None (mc_proof_seed fns rest acc))
        ((Some forms)
         (mc_proof_seed
@@ -5157,8 +5169,8 @@
   (measure (struct srcs))
   (match srcs
     (Nil Nil)
-    ((Cons (SrcEntry path _ src) rest)
-     (match (read_all src)
+    ((Cons (SrcEntry path _ _ mf) rest)
+     (match mf
        (None (rr_files m sccs th rest sidecars))
        ((Some forms)
         (oc_concat
@@ -5166,7 +5178,7 @@
             m
             sccs
             th
-            (file_rctx m path src)
+            (file_rctx_f m path mf)
             (module_path_of path)
             forms
             (rr_returns forms Nil)
