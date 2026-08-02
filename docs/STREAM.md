@@ -180,7 +180,26 @@ needs a real consumer forcing its decisions:
 
 - **B4 — benchmark: scalar vs coreutils sha256sum.** The C-class
   identity is the success criterion (parity-class, not "close for a
-  verified toolchain"). Measured on the CI-joinable binary.
+  verified toolchain"). Measured on the CI-joinable binary. Includes
+  Fork F's deferred half: the read cap retunes from the proving-rung
+  4096 as a REGENERATION (the M5 relocation's every-literal-shifts
+  mechanism, priced once, reused). The falsification gate needs
+  ATTRIBUTION, not just a number: "dramatically slower for reasons
+  inherent to the proof-facing IR" vs an immature backend — so the
+  record carries cycles-per-byte and what coreutils actually
+  dispatches to on the box, not wall clock alone.
+
+- **B4b — the cmp_ migration touch** (SLOTTED 2026-08-01, user
+  ruling at the B3-close progress review). Drop the cmp_ replay
+  family from the COMMITTED block closure — the variant
+  regeneration B1 already priced (a measurement artifact mechanism,
+  never a new emission mode), landing sha256.xchain.shard as the
+  closure's only block-chain dialect. R4 had tied this to "the next
+  block-chain touch"; the M5 base-65536 shift WAS such a touch and
+  the migration did not ride it, so the implicit trigger is RETIRED
+  in favor of this explicit rung. Claims on the table: the measured
+  −19.3% calls / −34% live peak / −26% maxrss on every closure
+  check, and ~40k generated lines leaving the committed repo.
 
 - **B5 — the expert leg: SHA-NI/SIMD hand-pinned variant vs
   OpenSSL.** This is the FIRST real non-canonical consumer — the
@@ -206,6 +225,11 @@ needs a real consumer forcing its decisions:
   parallel to B2+, gated-slice protocol, not part of this arc.
 - **Arc C's paper half may run alongside; the coverage arc
   unfreezes after B1's dialect exercise; Arc D last** (CERT.md §10).
+  AMENDED 2026-08-01 (B3-close progress review, user ruling): ONE
+  parallel design track at a time — §7's storage design note drafts
+  alongside B4; C-paper and the coverage arc's paper debts stay
+  QUEUED until B5 is underway (the decision-bandwidth rule: B5's
+  clause-1 adjudication wants that bandwidth).
 - Emit-layer changes (elf.shard, shims, SHA-NI emission) follow
   X86.md §32's platform-extern law: syscall-direct, zero C,
   differential-gated.

@@ -239,6 +239,15 @@ RECORD) and the B1 ratification formally OPENS this slice's design
 under the gated-slice protocol** — parallel to Arc B's B2+ rungs,
 not part of that arc.
 
+**DRAFTING SCHEDULED (2026-08-01, user ruling at the B3-close
+progress review): the design note drafts IN PARALLEL WITH Arc B's
+B4 rung** — paper phase only under the gated-slice protocol (no
+kernel or representation code moves on the draft alone). Its charge
+is the redirection's one unmeasured gate — §9 (d) local-edit
+incremental behavior — plus task #62 and DC4; the standing exhibit
+is B1b's composition closure (2.38B calls / 4.17GB RSS to check a
+154-line file, STREAM.md B1b RECORD).
+
 ## 8. Arc A — the pathfinder protocol (CLOSED: verdicts recorded,
 full-arc review COMPLETE 2026-07-26)
 
@@ -441,7 +450,10 @@ pure-conversion generator owes the conversion form of the segment
 step); branchy code and multi-fn remain unexercised; the committed
 block closure still contains the cmp_ family until a migration
 touch — the measurement's variant was a scratch artifact by
-ratified scope. Same-ruling consequences: DC3 CLOSED-DORMANT on the
+ratified scope (SLOTTED 2026-08-01: STREAM.md rung B4b — the
+"next block-chain touch" trigger misfired at the M5 relocation,
+which was such a touch, so the implicit trigger is retired for an
+explicit rung). Same-ruling consequences: DC3 CLOSED-DORMANT on the
 loop-seam evidence (§11); §7's design formally OPEN under its
 gated-slice protocol; the coverage arc UNFREEZES (§10's B1
 condition met).
@@ -487,7 +499,11 @@ point.
   paper half may run alongside, its runtime half queues behind I4
   behind the emission machinery; the coverage arc unfreezes after
   B's dialect exercise; Arc D last; PARALLEL.md drafts during the
-  coverage arc.
+  coverage arc. AMENDED 2026-08-01 (B3-close progress review): one
+  parallel design track at a time — §7's design note drafts
+  alongside B4; C-paper and the coverage paper debts stay QUEUED
+  until B5 is underway (B5's clause-1 adjudication is the next
+  large design decision and gets the bandwidth).
 
 ## 11. Decision points
 
