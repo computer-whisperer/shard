@@ -1,0 +1,229 @@
+;;; x86 straight-line SPAN task model (the lock-step arc's LS3 pilot;
+;;; SEARCH.md carries the ratified design).  A SPAN is a straight-line
+;;; XInstr sequence — no XBlock/XLoop/XBr/XBrIf/XCall/XRet/XSyscall.
+;;; ("Window" is X86.md §23's MEMORY window; this unit deliberately does
+;;; not reuse that name.)
+;;;
+;;; THE FINGERPRINT: run the span on each pinned probe file under a FIXED
+;;; caller-supplied fuel and serialize the complete outcome — a tag plus
+;;; ALL FIFTEEN registers (trap and exhaustion loud, distinct tags).  The
+;;; fuel is fixed (never derived from the span) so the su evaluator's
+;;; narrowing demands the span's holes SEMANTICALLY, instruction by
+;;; instruction, not structurally through a length computation; on a
+;;; terminating straight-line span any sufficient fuel yields the same
+;;; outcome, so the fingerprint is fuel-invariant above span length + 1.
+;;;
+;;; THE A* SCORE HOOK: g = span length, h = 0 (trivially consistent), key
+;;; = the fingerprint.  f = g, so pop order is length order and the first
+;;; fingerprint-matching pop is a MINIMUM-LENGTH match within the task's
+;;; declared vocabulary and depth cap.
+;;;
+;;; THE CHECKED-DOMINANCE PEDIGREE (what licenses
+;;; su_find_query_schema_astar_checked's EMPTY on this model): spans are
+;;; straight-line and deterministic, so a continuation's behavior factors
+;;; EXACTLY through the machine state after the prefix — equal keys give
+;;; every completion of a dominated arrival verbatim to the dominator,
+;;; and equal-key arrivals at greater-or-equal g lose nothing.  No budget
+;;; monotonicity argument is needed; the factoring is exact (cleaner than
+;;; the pcb_cost_model case).  THE VOCABULARY REQUIREMENT the pedigree
+;;; rides on: the regs-only key licenses dominance ONLY for MEMORY-FREE
+;;; vocabularies — no XStore8 (XLoad8 against the empty memory is
+;;; harmless but earns nothing).  A memory-touching task must extend the
+;;; key with a declared observation window first.  Control species are
+;;; excluded by the span definition itself.
+;;;
+;;; Heuristic tier throughout: fingerprint equality on probe vectors is
+;;; the FILTER, never the license.  Every surviving find must close its
+;;; piece theorem (the peephole xeval_seq form) through meta/proofgen,
+;;; and a checked EMPTY claims minimality only over fingerprint-matching
+;;; candidates in the declared vocabulary — the probe's claim grammar
+;;; says exactly that.
+;;;
+;;; The peephole import is load-bearing twice over: the probe parses its
+;;; piece-theorem goals and citation candidates against THIS file's
+;;; scope, so the pool lemmas must resolve here by name.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")
+(import "../../../models/x86/x86.shard")
+(import "../../../models/x86/peephole.shard")
+
+(use (:: core List))
+(use (:: core Nil))
+(use (:: core Cons))
+(use (:: std mem Mem))
+(use (:: std mem mem_empty))
+(use (:: models x86 x86 *))
+(use (:: models x86 peephole xseq_xor_pair_cancels))
+(use (:: models x86 peephole xseq_xor_self_absorbs))
+
+(fn xsp_module () XModule (MkXModule Nil 0 0))
+
+;; The probe register files: RAX/RDI/RSI live, the rest zero.  Files 2-4
+;; give every vocabulary register a nonzero, pairwise-distinct value, so
+;; no single XOR is identity on the whole set and zeroing a register is
+;; distinguishable from leaving it alone.
+(fn xsp_regs ((a Int) (b Int) (c Int)) Regs
+  (rset (rset (rset (xregs0) RAX a) RDI b) RSI c))
+
+(fn xsp_files () (List Regs)
+  (list
+    (xsp_regs 0 0 0)
+    (xsp_regs 1 2 4)
+    (xsp_regs 3 5 6)
+    (xsp_regs 170 85 255)))
+
+(fn xsp_regs_key ((rs Regs)) (List Int)
+  (match rs
+    ((MkRegs v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14)
+     (list v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14))))
+
+;; Outcome serialization, every case loud and distinct: 0 = normal,
+;; 1 = break, 2 = return, 3 = trap, 9 = fuel exhaustion.
+(fn xsp_out_key ((out (Option XOut))) (List Int)
+  (match out
+    (None (list 9))
+    ((Some o)
+     (match o
+       ((XNorm rs _) (Cons 0 (xsp_regs_key rs)))
+       ((XBrk d rs _) (Cons 1 (Cons d (xsp_regs_key rs))))
+       ((XRetO rs _) (Cons 2 (xsp_regs_key rs)))
+       ((XTrap) (list 3))))))
+
+(fn xsp_app ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (xsp_app t b)))))
+
+(fn xsp_fingerprint ((fuel Nat) (body (List XInstr)) (files (List Regs)))
+  (List Int)
+  (measure (struct files))
+  (match files
+    (Nil Nil)
+    ((Cons rs rest)
+     (xsp_app
+       (xsp_out_key (xeval_seq fuel (xsp_module) body rs (mem_empty)))
+       (xsp_fingerprint fuel body rest)))))
+
+(fn xsp_ints_eq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        (_ False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (int_eq x y) (xsp_ints_eq xs ys) False))))))
+
+;; The find query: does this span's fingerprint over the pinned files
+;; equal the goal fingerprint?  The elementwise comparison forces the
+;; fingerprint lazily, file by file, so a mismatching early file prunes
+;; before later files are ever run.
+(fn xsp_query ((fuel Nat) (goalfp (List Int)) (body (List XInstr))) Bool
+  (xsp_ints_eq (xsp_fingerprint fuel body (xsp_files)) goalfp))
+
+(fn xsp_len ((body (List XInstr))) Int
+  (measure (struct body))
+  (match body
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (xsp_len rest)))))
+
+;; The structurally decoded score hook (the engine never inspects the
+;; ctor name): g = length, h = 0, key = the fingerprint.
+(type XspScore (XspScore Int Int (Option (List Int))))
+
+(fn xsp_score ((fuel Nat) (body (List XInstr))) XspScore
+  (XspScore (xsp_len body) 0 (Some (xsp_fingerprint fuel body (xsp_files)))))
+
+(fn xsp_gh ((s XspScore)) (Pair Int Int)
+  (match s
+    ((XspScore g h _) (Pair g h))))
+
+;; ---- ground pins (the LS3a seed stories, hand-derived) --------------------
+
+;; The xor-pair target is identity: its fingerprint equals the empty
+;; span's...
+(claim xsp_pair_identity_pin
+  (goal () ()
+    (=
+      (xsp_ints_eq
+        (xsp_fingerprint
+          (S (S (S (S Z))))
+          (list (XBin XXor RAX (SReg RDI)) (XBin XXor RAX (SReg RDI)))
+          (xsp_files))
+        (xsp_fingerprint (S (S (S (S Z)))) Nil (xsp_files)))
+      True))
+  (steps ((compute both)) refl))
+
+;; ...and the xor-self target zeroes RAX: its fingerprint equals the
+;; single self-XOR's...
+(claim xsp_self_collapse_pin
+  (goal () ()
+    (=
+      (xsp_ints_eq
+        (xsp_fingerprint
+          (S (S (S (S Z))))
+          (list (XBin XXor RAX (SReg RDI)) (XBin XXor RAX (SReg RAX)))
+          (xsp_files))
+        (xsp_fingerprint
+          (S (S (S (S Z))))
+          (list (XBin XXor RAX (SReg RAX)))
+          (xsp_files)))
+      True))
+  (steps ((compute both)) refl))
+
+;; ...which the empty span does NOT match (files 2-4 hold RAX nonzero) —
+;; the checked EMPTY at depth 0 in one walk.
+(claim xsp_self_not_empty_pin
+  (goal () ()
+    (=
+      (xsp_ints_eq
+        (xsp_fingerprint (S (S (S (S Z)))) Nil (xsp_files))
+        (xsp_fingerprint
+          (S (S (S (S Z))))
+          (list (XBin XXor RAX (SReg RAX)))
+          (xsp_files)))
+      False))
+  (steps ((compute both)) refl))
+
+;; The fingerprint is fuel-invariant above span length + 1 (the fixed-
+;; fuel license, exhibited at the seed scale).
+(claim xsp_fuel_invariant_pin
+  (goal () ()
+    (=
+      (xsp_ints_eq
+        (xsp_fingerprint
+          (S (S (S Z)))
+          (list (XBin XXor RAX (SReg RDI)) (XBin XXor RAX (SReg RDI)))
+          (xsp_files))
+        (xsp_fingerprint
+          (S (S (S (S (S (S Z))))))
+          (list (XBin XXor RAX (SReg RDI)) (XBin XXor RAX (SReg RDI)))
+          (xsp_files)))
+      True))
+  (steps ((compute both)) refl))
+
+;; The query accepts the target's own fingerprint (the witness gate)...
+(claim xsp_query_witness_pin
+  (goal () ()
+    (=
+      (xsp_query
+        (S (S (S (S Z))))
+        (xsp_fingerprint
+          (S (S (S (S Z))))
+          (list (XBin XXor RAX (SReg RAX)))
+          (xsp_files))
+        (list (XBin XXor RAX (SReg RDI)) (XBin XXor RAX (SReg RAX))))
+      True))
+  (steps ((compute both)) refl))
+
+;; ...and the score carries g = length, h = 0.
+(claim xsp_score_gh_pin
+  (goal () ()
+    (=
+      (xsp_gh (xsp_score (S (S (S (S Z)))) (list (XBin XXor RAX (SReg RDI)))))
+      (Pair 1 0)))
+  (steps ((compute both)) refl))

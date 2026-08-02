@@ -1,0 +1,884 @@
+;;; x86 SPAN instrument — the lock-step arc's LS3-i first fire: joint
+;;; code+proof search over the x86 model at seed scale.  Runtime is
+;;; UNVALIDATED — it fires on CI only:
+;;;   glab ci run -b more-search --variables ENGINE_RUN:1 \
+;;;     --variables ENGINE_RUN_TARGET:tools/search/x86_span_probe.shard
+;;;
+;;; THE TASK (SEARCH.md, LS3 DESIGN — ratified 2026-08-02): given a
+;;; TARGET span, find a minimum-length span with the same machine-state
+;;; fingerprint over the model's pinned probe files, then make the find
+;;; stand as theorems: (1) the PIECE THEOREM — the peephole xeval_seq
+;;; form, tail-polymorphic, length-normalized fuel with the exact cost
+;;; delta, nonneg-register premises (schema v1) — closed through
+;;; meta/proofgen moves plus a CITATION POOL seeded with the peephole
+;;; laws; (2) on checked EMPTY below the winner's length: the
+;;; PROVEN-MINIMALITY record, scoped honestly to the declared vocabulary
+;;; and fingerprint-matching candidates.  A find whose piece theorem does
+;;; not close is REPORTED, never accepted — the proof side prunes the
+;;; code side, which is the arc's thesis operating.
+;;;
+;;; THE DRIVE: su_find_query_schema_astar_checked's pre-admitted second
+;;; consumer (named at the entry's own admission) — g = span length,
+;;; h = 0, dominance keys = the fingerprint; the pedigree lives in the
+;;; task model's header (exact continuation factoring, memory-free
+;;; vocabulary requirement).  Zero engine changes.
+;;;
+;;; LS3a VOCABULARY: register-register XOR over {RAX, RDI, RSI} — nine
+;;; instruction templates, spans up to length 2, the census scope the
+;;; peephole laws were mined from.
+;;;
+;;; THE HAND-DERIVED STORY (both seeds verified in-driver before print):
+;;;   PAIR: target [xor RAX RDI, xor RAX RDI] is identity, so the g=0
+;;;         pop (the empty span) matches immediately — FOUND len 0,
+;;;         minimality vacuous, piece theorem = the concrete instance of
+;;;         xseq_xor_pair_cancels (its reg_code disequality premise
+;;;         closes by compute, the two nonnegs map onto the goal's).
+;;;   SELF: target [xor RAX RDI, xor RAX RAX] zeroes RAX, which the
+;;;         empty span does not (files 2-4 hold RAX nonzero) — the g=0
+;;;         pop misses, the nine g=1 children contain exactly one match
+;;;         [xor RAX RAX] — FOUND len 1; checked EMPTY at cap 0 is the
+;;;         minimality record; piece theorem = the concrete instance of
+;;;         xseq_xor_self_absorbs (its xsrc premise discharges by
+;;;         backward-map-then-normalize — the pg_premise_compute move).
+;;;   Bare moves refuse both piece theorems (symbolic rs), so the proof
+;;;   telemetry reads CITE, not COMPUTE — the reach gradient's citation
+;;;   tier, measured here on searched material.  dominated>0 is NOT
+;;;   expected at seed scale (nine length-1 fingerprints are pairwise
+;;;   distinct on the files); the dominance merge earns its keep on
+;;;   LS3b material.
+;;;
+;;; Expected report:
+;;;   X86-SPAN PAIR TARGET-LEN-2 FOUND-LEN-0 EMPTY-VACUOUS
+;;;     PROOF-CITE-xseq_xor_pair_cancels CERT-FP-OK        (one line)
+;;;   X86-SPAN SELF TARGET-LEN-2 FOUND-LEN-1 EMPTY-AT-0
+;;;     PROOF-CITE-xseq_xor_self_absorbs CERT-FP-OK        (one line)
+;;;   X86-SPAN LS3A OK
+;;;
+;;; PHASE-2 TRUST POSTURE: the citation pool's theory entries are
+;;; admitted as Proven on the strength of the corpus gate on
+;;; models/x86/peephole.shard — their goals are parsed from the loaded
+;;; closure's own source bytes, never restated here.  The in-driver
+;;; pg_check verdict replays the candidate through the kernel's own
+;;; untrusted parse/check path; the two instance pins below are the same
+;;; theorems hand-written, so the corpus checks the goal schema and the
+;;; citability every run.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/proof.shard")
+(import "../../kernel/checker.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/driver.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "../../meta/search")
+(import "../../meta/proofgen")
+(import "superpose.shard")
+(import "../../std/mem")
+(import "../../models/x86/x86.shard")
+(import "../../models/x86/peephole.shard")
+(import "tasks/x86_span_model.shard")
+
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel proof Theory))
+(use (:: kernel proof TheoryEmpty))
+(use (:: kernel proof TheoryCons))
+(use (:: kernel proof Proven))
+(use (:: kernel proof Goal))
+(use (:: kernel checker Sequent))
+(use (:: kernel checker close_goal_for_storage))
+(use (:: kernel reader *))
+(use (:: kernel loader *))
+(use (:: kernel driver *))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: meta search *))
+(use (:: meta proofgen *))
+(use (:: tools search superpose *))
+(use (:: std mem Mem))
+(use (:: models x86 x86 *))
+(use (:: models x86 peephole xseq_xor_pair_cancels))
+(use (:: models x86 peephole xseq_xor_self_absorbs))
+(use (:: tools search tasks x86_span_model *))
+
+(fn xspp_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "X86-SPAN FAIL " (append_int msg "\n")) w)))
+
+;; ---- the model module, twice: imported above for direct calls, loaded
+;; ---- here for the su evaluator's query resolution -------------------------
+
+(fn xspp_model_file () (List Int) "tools/search/tasks/x86_span_model.shard")
+
+(fn xspp_model_path () (List Symbol)
+  (list (quote tools) (quote search) (quote tasks) (quote x86_span_model)))
+
+(fn xspp_model_q ((name Symbol)) QName (QName (xspp_model_path) name))
+
+(fn xspp_x86_q ((name Symbol)) QName
+  (QName (list (quote models) (quote x86) (quote x86)) name))
+
+(fn xspp_peep_path () (List Symbol)
+  (list (quote models) (quote x86) (quote peephole)))
+
+(fn xspp_peep_file () (List Int) "models/x86/peephole.shard")
+
+(fn xspp_probe_q ((name Symbol)) QName
+  (QName (list (quote tools) (quote search) (quote x86_span_probe)) name))
+
+(type XsppLoadR (XsppLoadErr (List Int)) (XsppLoadOk Module (List SrcEntry)))
+
+(fn xspp_build ((srcs (List SrcEntry))) XsppLoadR
+  (match
+    (build_module_d
+      srcs
+      (Module Nil Nil Nil (FnTrie None Nil) Nil)
+      (prelude_ctors)
+      1)
+    ((BMFail msg) (XsppLoadErr msg))
+    ((BMOk m) (XsppLoadOk m srcs))))
+
+(fn xspp_load ((w World)) (Pair XsppLoadR World)
+  (match (resolve_closure (xspp_model_file) False w)
+    ((Pair srcs w1)
+     (match srcs
+       (Nil (Pair (XsppLoadErr "model closure is empty") w1))
+       (_ (Pair (xspp_build srcs) w1))))))
+
+(fn xspp_src_of ((path (List Int)) (srcs (List SrcEntry))) (Option (List Int))
+  (measure (struct srcs))
+  (match srcs
+    (Nil None)
+    ((Cons (SrcEntry p _ s) rest)
+     (if (int_list_eq path p) (Some s) (xspp_src_of path rest)))))
+
+;; ---- the LS3a vocabulary and its baked-template grammar -------------------
+;; Every open hole is a tail-list hole (the instruction is baked into the
+;; alternative), so the score render's cut expression (Nil) is always
+;; type-correct — the pcbt_grammar_a discipline.
+
+(fn xspp_regs_v () (List Symbol) (list (quote RAX) (quote RDI) (quote RSI)))
+
+(fn xspp_reg_expr ((r Symbol)) Expr (Ctor (xspp_x86_q r) Nil))
+
+(fn xspp_instr_expr ((d Symbol) (s Symbol)) Expr
+  (Ctor
+    (xspp_x86_q (quote XBin))
+    (list
+      (Ctor (xspp_x86_q (quote XXor)) Nil)
+      (xspp_reg_expr d)
+      (Ctor (xspp_x86_q (quote SReg)) (list (xspp_reg_expr s))))))
+
+(fn xspp_pairs_s ((d Symbol) (ss (List Symbol))) (List Expr)
+  (measure (struct ss))
+  (match ss
+    (Nil Nil)
+    ((Cons s rest) (Cons (xspp_instr_expr d s) (xspp_pairs_s d rest)))))
+
+(fn xspp_app_e ((a (List Expr)) (b (List Expr))) (List Expr)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (xspp_app_e t b)))))
+
+(fn xspp_pairs ((ds (List Symbol)) (ss (List Symbol))) (List Expr)
+  (measure (struct ds))
+  (match ds
+    (Nil Nil)
+    ((Cons d rest) (xspp_app_e (xspp_pairs_s d ss) (xspp_pairs rest ss)))))
+
+(fn xspp_templates () (List Expr) (xspp_pairs (xspp_regs_v) (xspp_regs_v)))
+
+(fn xspp_nil_alt () SkSchemaAlt (SkSchemaAlt (Ctor (qn (quote Nil)) Nil) Nil))
+
+(fn xspp_cons_alt ((t Expr) (edge Int) (tail_id Int)) SkSchemaAlt
+  (SkSchemaAlt
+    (Ctor (qn (quote Cons)) (list t (hole 0)))
+    (list (SkSchemaRef 0 edge tail_id))))
+
+(fn xspp_cons_alts ((ts (List Expr)) (edge Int) (tail_id Int))
+  (List SkSchemaAlt)
+  (measure (struct ts))
+  (match ts
+    (Nil Nil)
+    ((Cons t rest)
+     (Cons
+       (xspp_cons_alt t edge tail_id)
+       (xspp_cons_alts rest (+ edge 1) tail_id)))))
+
+(fn xspp_ents ((i Int) (d Int) (ts (List Expr))) (List SkSchemaEnt)
+  (measure (- (+ d 1) i))
+  (if (lt d i) Nil
+  (Cons
+    (if (lt i 1) (SkSchemaEnt 0 (Cons (xspp_nil_alt) Nil))
+    (SkSchemaEnt i (Cons (xspp_nil_alt) (xspp_cons_alts ts 0 (- i 1)))))
+    (xspp_ents (+ i 1) d ts))))
+
+(fn xspp_grammar ((d Int)) SkSchemaGrammar
+  (SkSchemaGrammar d (xspp_ents 0 d (xspp_templates))))
+
+;; ---- query, want, score template ------------------------------------------
+
+(fn xspp_nat_expr ((k Int)) Expr
+  (measure k)
+  (if (lt k 1) (Ctor (qn (quote Z)) Nil)
+  (Ctor (qn (quote S)) (list (xspp_nat_expr (- k 1))))))
+
+(fn xspp_int_list_expr ((xs (List Int))) Expr
+  (measure (struct xs))
+  (match xs
+    (Nil (Ctor (qn (quote Nil)) Nil))
+    ((Cons h t)
+     (Ctor (qn (quote Cons)) (list (IntLit h) (xspp_int_list_expr t))))))
+
+(fn xspp_query_t ((fuelk Int) (goalfp (List Int))) Expr
+  (Call
+    (xspp_model_q (quote xsp_query))
+    (list (xspp_nat_expr fuelk) (xspp_int_list_expr goalfp) (hole 0))))
+
+(fn xspp_score_t ((fuelk Int)) Expr
+  (Call (xspp_model_q (quote xsp_score)) (list (xspp_nat_expr fuelk) (hole 0))))
+
+(fn xspp_want () Expr (Ctor (qn (quote True)) Nil))
+
+(fn xspp_nil_expr () Expr (Ctor (qn (quote Nil)) Nil))
+
+(fn xspp_step_cap () Int 8000000)
+
+;; ---- native fingerprints ---------------------------------------------------
+
+(fn xspp_nat ((k Int)) Nat (measure k) (if (lt k 1) Z (S (xspp_nat (- k 1)))))
+
+(fn xspp_fp ((cap Int) (body (List XInstr))) (List Int)
+  (xsp_fingerprint (xspp_nat (+ cap 2)) body (xsp_files)))
+
+;; ---- representative decoding ----------------------------------------------
+
+(fn xspp_dec_reg ((e Expr)) (Option Reg)
+  (match e
+    ((Ctor q args)
+     (match args
+       ((Cons _ _) None)
+       (Nil
+         (if (qname_eq q (xspp_x86_q (quote RAX))) (Some RAX)
+         (if (qname_eq q (xspp_x86_q (quote RDI))) (Some RDI)
+         (if (qname_eq q (xspp_x86_q (quote RSI))) (Some RSI)
+         None))))))
+    (_ None)))
+
+(fn xspp_dec_instr ((e Expr)) (Option XInstr)
+  (match e
+    ((Ctor q args)
+     (if (qname_eq q (xspp_x86_q (quote XBin)))
+       (match args
+         ((Cons op (Cons de (Cons se Nil)))
+          (match op
+            ((Ctor opq Nil)
+             (if (qname_eq opq (xspp_x86_q (quote XXor)))
+               (match (xspp_dec_reg de)
+                 (None None)
+                 ((Some d)
+                  (match se
+                    ((Ctor sq (Cons re Nil))
+                     (if (qname_eq sq (xspp_x86_q (quote SReg)))
+                       (match (xspp_dec_reg re)
+                         (None None)
+                         ((Some s) (Some (XBin XXor d (SReg s)))))
+                       None))
+                    (_ None))))
+               None))
+            (_ None)))
+         (_ None))
+       None))
+    (_ None)))
+
+(fn xspp_decode ((e Expr)) (Option (List XInstr))
+  (measure (struct e))
+  (match e
+    ((Ctor q args)
+     (match args
+       (Nil (if (qname_eq q (qn (quote Nil))) (Some Nil) None))
+       ((Cons h rest0)
+        (match rest0
+          (Nil None)
+          ((Cons t rest1)
+           (match rest1
+             ((Cons _ _) None)
+             (Nil
+               (if (qname_eq q (qn (quote Cons)))
+                 (match (xspp_dec_instr h)
+                   (None None)
+                   ((Some i)
+                    (match (xspp_decode t)
+                      (None None)
+                      ((Some is) (Some (Cons i is))))))
+                 None))))))))
+    (_ None)))
+
+;; ---- the checked A* runs ---------------------------------------------------
+
+(fn xspp_run_astar ((m Module) (goalfp (List Int)) (cap Int)) SuFind
+  (su_find_query_schema_astar_checked
+    1000000
+    (xspp_step_cap)
+    m
+    (xspp_probe_q (quote candidate))
+    (hole 0)
+    (hole 0)
+    (ms_empty_plan)
+    (xspp_query_t (+ cap 2) goalfp)
+    (xspp_want)
+    (xspp_grammar cap)
+    (xspp_score_t (+ cap 2))
+    (xspp_nil_expr)))
+
+(fn xspp_log
+  ((seed (List Int)) (verdict (List Int)) (steps Int) (forks Int) (w World))
+  World
+  (write
+    (append_int
+      "X86-SPAN LOG "
+      (append_int
+        seed
+        (append_int
+          " "
+          (append_int
+            verdict
+            (append_int
+              " STEPS-"
+              (append_int
+                (show_int steps)
+                (append_int " FORKS-" (append_int (show_int forks) "\n"))))))))
+    w))
+
+;; ---- phase 2: the piece-theorem goal (premise schema v1) ------------------
+;; Concrete instructions, symbolic f/m/tail/rs/mem, one nonneg premise per
+;; distinct register operand in first-occurrence order.  The goal text is
+;; parsed against the MODEL file's scope, so the instance pins at the
+;; bottom of this file are the same theorems the driver constructs.
+
+(fn xspp_reg_sym ((r Reg)) Symbol
+  (match r
+    (RAX (quote RAX))
+    (RCX (quote RCX))
+    (RDX (quote RDX))
+    (RBX (quote RBX))
+    (RBP (quote RBP))
+    (RSI (quote RSI))
+    (RDI (quote RDI))
+    (R8 (quote R8))
+    (R9 (quote R9))
+    (R10 (quote R10))
+    (R11 (quote R11))
+    (R12 (quote R12))
+    (R13 (quote R13))
+    (R14 (quote R14))
+    (R15 (quote R15))))
+
+(fn xspp_instr_sx ((i XInstr)) (Option SExpr)
+  (match i
+    ((XBin XXor d (SReg s))
+     (Some
+       (SList
+         (list
+           (SSym (quote XBin))
+           (SSym (quote XXor))
+           (SSym (xspp_reg_sym d))
+           (SList (list (SSym (quote SReg)) (SSym (xspp_reg_sym s))))))))
+    (_ None)))
+
+(fn xspp_span_sx ((is (List XInstr))) (Option SExpr)
+  (measure (struct is))
+  (match is
+    (Nil (Some (SSym (quote tail))))
+    ((Cons i rest)
+     (match (xspp_instr_sx i)
+       (None None)
+       ((Some isx)
+        (match (xspp_span_sx rest)
+          (None None)
+          ((Some rsx) (Some (SList (list (SSym (quote Cons)) isx rsx))))))))))
+
+(fn xspp_nat_sx ((k Int)) SExpr
+  (measure k)
+  (if (lt k 1) (SSym (quote f))
+  (SList (list (SSym (quote S)) (xspp_nat_sx (- k 1))))))
+
+(fn xspp_eval_sx ((len Int) (span SExpr)) SExpr
+  (SList
+    (list
+      (SSym (quote xeval_seq))
+      (xspp_nat_sx (+ len 1))
+      (SSym (quote m))
+      span
+      (SSym (quote rs))
+      (SSym (quote mem)))))
+
+(fn xspp_binders_sx () SExpr
+  (SList
+    (list
+      (SList (list (SSym (quote f)) (SSym (quote Nat))))
+      (SList (list (SSym (quote m)) (SSym (quote XModule))))
+      (SList
+        (list
+          (SSym (quote tail))
+          (SList (list (SSym (quote List)) (SSym (quote XInstr))))))
+      (SList (list (SSym (quote rs)) (SSym (quote Regs))))
+      (SList (list (SSym (quote mem)) (SSym (quote Mem)))))))
+
+(fn xspp_prem_sx ((r Reg)) SExpr
+  (SList
+    (list
+      (SSym (quote =))
+      (SList
+        (list
+          (SSym (quote le))
+          (SInt 0)
+          (SList
+            (list (SSym (quote rget)) (SSym (quote rs)) (SSym (xspp_reg_sym r))))))
+      (SSym (quote True)))))
+
+(fn xspp_prems_sx ((rs (List Reg))) (List SExpr)
+  (measure (struct rs))
+  (match rs
+    (Nil Nil)
+    ((Cons r rest) (Cons (xspp_prem_sx r) (xspp_prems_sx rest)))))
+
+(fn xspp_reg_in ((r Reg) (rs (List Reg))) Bool
+  (measure (struct rs))
+  (match rs
+    (Nil False)
+    ((Cons x rest)
+     (if (int_eq (reg_code r) (reg_code x)) True (xspp_reg_in r rest)))))
+
+(fn xspp_operands_of ((is (List XInstr))) (List Reg)
+  (measure (struct is))
+  (match is
+    (Nil Nil)
+    ((Cons i rest)
+     (match i
+       ((XBin XXor d (SReg s)) (Cons d (Cons s (xspp_operands_of rest))))
+       (_ (xspp_operands_of rest))))))
+
+(fn xspp_app_r ((a (List Reg)) (b (List Reg))) (List Reg)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (xspp_app_r t b)))))
+
+(fn xspp_dedup_go ((rs (List Reg)) (seen (List Reg))) (List Reg)
+  (measure (struct rs))
+  (match rs
+    (Nil Nil)
+    ((Cons r rest)
+     (if (xspp_reg_in r seen) (xspp_dedup_go rest seen)
+     (Cons r (xspp_dedup_go rest (Cons r seen)))))))
+
+(fn xspp_goal_regs ((t (List XInstr)) (r (List XInstr))) (List Reg)
+  (xspp_dedup_go (xspp_app_r (xspp_operands_of t) (xspp_operands_of r)) Nil))
+
+(fn xspp_nregs ((rs (List Reg))) Int
+  (measure (struct rs))
+  (match rs
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (xspp_nregs rest)))))
+
+(fn xspp_goal_sx ((t (List XInstr)) (r (List XInstr))) (Option SExpr)
+  (match (xspp_span_sx t)
+    (None None)
+    ((Some tsx)
+     (match (xspp_span_sx r)
+       (None None)
+       ((Some rsx)
+        (Some
+          (SList
+            (list
+              (SSym (quote goal))
+              (xspp_binders_sx)
+              (SList (xspp_prems_sx (xspp_goal_regs t r)))
+              (SList
+                (list
+                  (SSym (quote =))
+                  (xspp_eval_sx (xsp_len t) tsx)
+                  (xspp_eval_sx (xsp_len r) rsx)))))))))))
+
+;; ---- phase 2: the citation pool -------------------------------------------
+;; Theory entries admitted as Proven on the corpus gate on peephole.shard;
+;; goals parsed from the closure's own source bytes.
+
+(fn xspp_pool () (List Symbol)
+  (list (quote xseq_xor_pair_cancels) (quote xseq_xor_self_absorbs)))
+
+(fn xspp_claim_goal ((name Symbol) (fs (List SExpr))) (Option SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil None)
+    ((Cons f rest)
+     (match f
+       ((SList (Cons (SSym h) (Cons (SSym n) (Cons goalS _))))
+        (if (sym_eq h (quote claim))
+          (if (sym_eq n name) (Some goalS) (xspp_claim_goal name rest))
+          (xspp_claim_goal name rest)))
+       (_ (xspp_claim_goal name rest))))))
+
+(fn xspp_goal_prems ((g Goal)) Int
+  (match g
+    ((Goal _ prems _) (eq_count prems))))
+
+(fn xspp_pool_build
+  ((m Module) (prctx RCtx) (names (List Symbol)) (fs (List SExpr)))
+  (Option (Pair Theory (List (Pair Symbol Int))))
+  (measure (struct names))
+  (match names
+    (Nil (Some (Pair (TheoryEmpty) Nil)))
+    ((Cons nm rest)
+     (match (xspp_claim_goal nm fs)
+       (None None)
+       ((Some gs)
+        (match (parse_goal_r m prctx gs)
+          (None None)
+          ((Some g)
+           (match (xspp_pool_build m prctx rest fs)
+             (None None)
+             ((Some (Pair th ks))
+              (Some
+                (Pair
+                  (TheoryCons
+                    (Proven
+                      (QName (xspp_peep_path) nm)
+                      (close_goal_for_storage g))
+                    th)
+                  (Cons (Pair nm (xspp_goal_prems g)) ks))))))))))))
+
+;; ---- phase 2: discharge-assignment enumeration ----------------------------
+;; Options per lemma-premise slot against n goal premises: map onto goal
+;; premise i, close by compute, or backward-map-then-normalize
+;; (pg_premise_compute — the xsrc-shaped defined-head case).
+;; Bounded: (2n+1)^k candidates, k <= 3, n <= 2 at LS3a scale.
+
+(fn xspp_opts_p ((i Int) (n Int)) (List (List Int))
+  (measure (- n i))
+  (if (lt i n) (Cons (pg_premise i) (xspp_opts_p (+ i 1) n)) Nil))
+
+(fn xspp_opts_cp ((i Int) (n Int)) (List (List Int))
+  (measure (- n i))
+  (if (lt i n) (Cons (pg_premise_compute i) (xspp_opts_cp (+ i 1) n)) Nil))
+
+(fn xspp_opts ((n Int)) (List (List Int))
+  (append_cands (xspp_opts_p 0 n) (Cons (pg_compute) (xspp_opts_cp 0 n))))
+
+(fn xspp_app_a ((a (List (List (List Int)))) (b (List (List (List Int)))))
+  (List (List (List Int)))
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (xspp_app_a t b)))))
+
+(fn xspp_cross_opt ((o (List Int)) (rests (List (List (List Int)))))
+  (List (List (List Int)))
+  (measure (struct rests))
+  (match rests
+    (Nil Nil)
+    ((Cons r more) (Cons (Cons o r) (xspp_cross_opt o more)))))
+
+(fn xspp_assigns_go ((os (List (List Int))) (rests (List (List (List Int)))))
+  (List (List (List Int)))
+  (measure (struct os))
+  (match os
+    (Nil Nil)
+    ((Cons o more)
+     (xspp_app_a (xspp_cross_opt o rests) (xspp_assigns_go more rests)))))
+
+(fn xspp_assigns ((k Int) (opts (List (List Int)))) (List (List (List Int)))
+  (measure k)
+  (if (lt k 1) (Cons Nil Nil)
+  (xspp_assigns_go opts (xspp_assigns (- k 1) opts))))
+
+(fn xspp_try_assigns
+  ((m Module)
+   (rctx RCtx)
+   (th Theory)
+   (seq Sequent)
+   (lemma (List Int))
+   (assigns (List (List (List Int)))))
+  Bool
+  (measure (struct assigns))
+  (match assigns
+    (Nil False)
+    ((Cons a rest)
+     (if (pg_check m rctx th seq (pg_cite lemma a)) True
+     (xspp_try_assigns m rctx th seq lemma rest)))))
+
+(fn xspp_try_pool
+  ((m Module)
+   (rctx RCtx)
+   (th Theory)
+   (seq Sequent)
+   (pool (List (Pair Symbol Int)))
+   (n Int))
+  (Option (List Int))
+  (measure (struct pool))
+  (match pool
+    (Nil None)
+    ((Cons (Pair nm k) rest)
+     (if
+       (xspp_try_assigns
+         m
+         rctx
+         th
+         seq
+         (chars_of_sym nm)
+         (xspp_assigns k (xspp_opts n)))
+       (Some (append_int "CITE-" (chars_of_sym nm)))
+       (xspp_try_pool m rctx th seq rest n)))))
+
+;; Bare moves first (the reach telemetry order), then the citation pool.
+(fn xspp_attempt
+  ((m Module)
+   (rctx RCtx)
+   (th Theory)
+   (seq Sequent)
+   (pool (List (Pair Symbol Int)))
+   (n Int))
+  (List Int)
+  (if (pg_check m rctx th seq (pg_refl)) "REFL"
+  (if (pg_check m rctx th seq (pg_compute)) "COMPUTE"
+  (if (pg_check m rctx th seq (pg_simp)) "SIMP"
+  (if (pg_check m rctx th seq (pg_arith0)) "ARITH0"
+  (match (xspp_try_pool m rctx th seq pool n)
+    ((Some tag) tag)
+    (None "REFUSED")))))))
+
+;; ---- the seeds -------------------------------------------------------------
+
+(type XsppSeed (XsppSeed (List Int) (List XInstr) Int))
+; label, target span, expected minimum length
+
+(fn xspp_seed_pair () XsppSeed
+  (XsppSeed
+    "PAIR"
+    (list (XBin XXor RAX (SReg RDI)) (XBin XXor RAX (SReg RDI)))
+    0))
+
+(fn xspp_seed_self () XsppSeed
+  (XsppSeed
+    "SELF"
+    (list (XBin XXor RAX (SReg RDI)) (XBin XXor RAX (SReg RAX)))
+    1))
+
+;; ---- the per-seed driver ---------------------------------------------------
+;; Order of verification (each failure loud): the checked find must land
+;; FOUND; the representative must decode; its fingerprint must replay
+;; equal to the target's NATIVELY (never trust search-side equality); its
+;; length must equal the hand-derived minimum; the checked EMPTY below
+;; the winner must hold (vacuous at length 0); the piece theorem must
+;; close.  Only then does the report line print.
+
+(fn xspp_seed_empty
+  ((m Module) (seed_l (List Int)) (goalfp (List Int)) (found_len Int) (w World))
+  (Pair (Option (List Int)) World)
+  (if (lt found_len 1) (Pair (Some "EMPTY-VACUOUS") w)
+  (match (xspp_run_astar m goalfp (- found_len 1))
+    ((SuFindErr msg) (Pair None (write (append_int "EMPTY-ERR " msg) w)))
+    ((SuFindEmpty _ _ _ forks _ steps _ _ _)
+     (Pair
+       (Some (append_int "EMPTY-AT-" (show_int (- found_len 1))))
+       (xspp_log seed_l "BOUND-EMPTY" steps forks w)))
+    ((SuFindFound _ _ _ forks _ steps _ _ _)
+     (Pair None (xspp_log seed_l "BOUND-FOUND" steps forks w)))
+    ((SuFindBudget _ _ _ forks _ steps _ _ _)
+     (Pair None (xspp_log seed_l "BOUND-BUDGET" steps forks w))))))
+
+(fn xspp_report
+  ((seed_l (List Int))
+   (tlen Int)
+   (flen Int)
+   (etag (List Int))
+   (ptag (List Int))
+   (w World))
+  World
+  (write
+    (append_int
+      "X86-SPAN "
+      (append_int
+        seed_l
+        (append_int
+          " TARGET-LEN-"
+          (append_int
+            (show_int tlen)
+            (append_int
+              " FOUND-LEN-"
+              (append_int
+                (show_int flen)
+                (append_int
+                  " "
+                  (append_int
+                    etag
+                    (append_int " PROOF-" (append_int ptag " CERT-FP-OK\n"))))))))))
+    w))
+
+(fn xspp_run_seed
+  ((m Module)
+   (rctx RCtx)
+   (th Theory)
+   (pool (List (Pair Symbol Int)))
+   (seed XsppSeed)
+   (w World))
+  (Pair Bool World)
+  (match seed
+    ((XsppSeed seed_l target want_len)
+     (let ((tlen (xsp_len target)))
+       (let ((goalfp (xspp_fp tlen target)))
+         (match (xspp_run_astar m goalfp tlen)
+           ((SuFindErr msg) (Pair False (write (append_int "FIND-ERR " msg) w)))
+           ((SuFindEmpty _ _ _ forks _ steps _ _ _)
+            (Pair
+              False
+              (xspp_log seed_l "FIND-EMPTY (witness gate broken)" steps forks w)))
+           ((SuFindBudget _ _ _ forks _ steps _ _ _)
+            (Pair False (xspp_log seed_l "FIND-BUDGET" steps forks w)))
+           ((SuFindFound _ _ _ forks _ steps _ rep _)
+            (let ((w2 (xspp_log seed_l "FOUND" steps forks w)))
+              (match (xspp_decode rep)
+                (None (Pair False (write "undecodable representative\n" w2)))
+                ((Some found)
+                 (if (xsp_ints_eq (xspp_fp tlen found) goalfp)
+                   (if (int_eq (xsp_len found) want_len)
+                     (match (xspp_seed_empty m seed_l goalfp (xsp_len found) w2)
+                       ((Pair None w3) (Pair False w3))
+                       ((Pair (Some etag) w3)
+                        (match (xspp_goal_sx target found)
+                          (None
+                            (Pair False (write "goal construction failed\n" w3)))
+                          ((Some gsx)
+                           (match (parse_goal_r m rctx gsx)
+                             (None
+                               (Pair False (write "goal did not parse\n" w3)))
+                             ((Some g)
+                              (match
+                                (xspp_attempt
+                                  m
+                                  rctx
+                                  th
+                                  (lift_sequent g)
+                                  pool
+                                  (xspp_nregs (xspp_goal_regs target found)))
+                                (tag
+                                  (if (int_list_eq tag "REFUSED")
+                                    (Pair
+                                      False
+                                      (write "piece theorem refused\n" w3))
+                                    (Pair
+                                      True
+                                      (xspp_report
+                                        seed_l
+                                        tlen
+                                        (xsp_len found)
+                                        etag
+                                        tag
+                                        w3)))))))))))
+                     (Pair False (write "found length is not the minimum\n" w2)))
+                   (Pair False (write "fingerprint replay mismatch\n" w2)))))))))))))
+
+;; ---- main ------------------------------------------------------------------
+
+(fn xspp_run ((m Module) (srcs (List SrcEntry)) (w World)) World
+  (match (xspp_src_of (xspp_model_file) srcs)
+    (None (xspp_fail "cannot read the model source" w))
+    ((Some msrc)
+     (match (xspp_src_of (xspp_peep_file) srcs)
+       (None (xspp_fail "cannot read the peephole source" w))
+       ((Some psrc)
+        (match (read_all psrc)
+          (None (xspp_fail "peephole source does not lex" w))
+          ((Some pforms)
+           (let ((rctx (file_rctx m (xspp_model_file) msrc)))
+             (match
+               (xspp_pool_build
+                 m
+                 (file_rctx m (xspp_peep_file) psrc)
+                 (xspp_pool)
+                 pforms)
+               (None (xspp_fail "citation pool construction failed" w))
+               ((Some (Pair th pool))
+                (match (xspp_run_seed m rctx th pool (xspp_seed_pair) w)
+                  ((Pair False w2) (xspp_fail "PAIR seed" w2))
+                  ((Pair True w2)
+                   (match (xspp_run_seed m rctx th pool (xspp_seed_self) w2)
+                     ((Pair False w3) (xspp_fail "SELF seed" w3))
+                     ((Pair True w3) (write "X86-SPAN LS3A OK\n" w3)))))))))))))))
+
+(fn main ((w World)) World
+  (match (xspp_load w)
+    ((Pair (XsppLoadErr msg) w1) (xspp_fail msg w1))
+    ((Pair (XsppLoadOk m srcs) w1) (exit 0 (xspp_run m srcs w1)))))
+
+;; ---- instance pins (the hand-derived piece theorems, checked) -------------
+;; These are byte-for-byte the theorems the driver constructs for the two
+;; seeds — the goal schema v1 and the pool's citability, corpus-checked.
+;; The PAIR instance: the lemma's reg_code disequality closes by compute,
+;; the two nonnegs map onto the goal's premises in order.
+
+(claim xspp_pair_piece_pin
+  (goal ((f Nat) (m XModule) (tail (List XInstr)) (rs Regs) (mem Mem))
+    ((= (le 0 (rget rs RAX)) True) (= (le 0 (rget rs RDI)) True))
+    (=
+      (xeval_seq
+        (S (S (S f)))
+        m
+        (Cons (XBin XXor RAX (SReg RDI)) (Cons (XBin XXor RAX (SReg RDI)) tail))
+        rs
+        mem)
+      (xeval_seq (S f) m tail rs mem)))
+  (rewrite-with
+    (lemma xseq_xor_pair_cancels)
+    lr
+    lhs
+    ()
+    ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+     (steps ((rewrite (premise 1) lr lhs true ())) refl)
+     (steps ((compute both)) refl))
+    refl))
+
+;; The SELF instance: the lemma's xsrc premise maps backward onto the
+;; goal's second premise, then both sides compute to a common normal
+;; form — the pg_premise_compute discharge shape (a forward compute
+;; over-reduces rget past the premise's spelling).
+(claim xspp_self_piece_pin
+  (goal ((f Nat) (m XModule) (tail (List XInstr)) (rs Regs) (mem Mem))
+    ((= (le 0 (rget rs RAX)) True) (= (le 0 (rget rs RDI)) True))
+    (=
+      (xeval_seq
+        (S (S (S f)))
+        m
+        (Cons (XBin XXor RAX (SReg RDI)) (Cons (XBin XXor RAX (SReg RAX)) tail))
+        rs
+        mem)
+      (xeval_seq (S (S f)) m (Cons (XBin XXor RAX (SReg RAX)) tail) rs mem)))
+  (rewrite-with
+    (lemma xseq_xor_self_absorbs)
+    lr
+    lhs
+    ()
+    ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+     (steps ((rewrite (premise 1) rl rhs true ()) (compute both)) refl))
+    refl))
+
+;; Decoder round trip on a hand-built representative (the Expr literal
+;; lives in the function body, never in a claim goal).
+(fn xspp_decode_pin_ok () Bool
+  (match
+    (xspp_decode
+      (Ctor
+        (qn (quote Cons))
+        (list
+          (xspp_instr_expr (quote RAX) (quote RDI))
+          (Ctor (qn (quote Nil)) Nil))))
+    ((Some (Cons (XBin XXor RAX (SReg RDI)) Nil)) True)
+    (_ False)))
+
+(claim xspp_decode_roundtrip_pin
+  (goal () () (= (xspp_decode_pin_ok) True))
+  (steps ((compute both)) refl))

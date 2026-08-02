@@ -4679,8 +4679,8 @@ REJECTED-because record.)
   chasing the tail delays the rewrite for goals that stay served
   either way.
 
-**LS3 DESIGN (drafted 2026-08-02 — FOR RATIFICATION, no build
-before approval).**
+**LS3 DESIGN (drafted 2026-08-02; RATIFIED AS DRAFTED 2026-08-02,
+both fork leans adopted — build opened as LS3-i).**
 
 *Naming.* The pilot's unit is a **SPAN** — a straight-line XInstr
 sequence (no XBlock/XLoop/XBr/XBrIf/XCall/XRet/XSyscall). "Window" is
@@ -4753,21 +4753,67 @@ LS3-ii: LS3b real-material instances + the measured record here.
 LS3-iii (only if demanded by refusals): citation-pool/move growth —
 each landing measured against the reach baseline.
 
-**LS3 forks for ruling (self-contained):**
-- *Fork LS3-A — first-fire scope.* (1) LS3a regression seeds ONLY in
-  the first landing, LS3b as its own slice (LEAN: the witness-gate
+**LS3 forks — RULED 2026-08-02, both leans adopted:**
+- *Fork LS3-A — first-fire scope.* (1) ADOPTED: LS3a regression seeds
+  ONLY in the first landing, LS3b as its own slice (the witness-gate
   discipline wants the regression arm green before real material —
   and the PCB record shows first-fire pins are cheapest to derive on
-  known shapes). (2) Both arms in one slice: earlier payoff, but a
-  red LS3b instance would then block the whole landing.
-- *Fork LS3-B — the proof side of found spans.* (1) Attempt via
-  proofgen moves + the peephole citation pool, growing the pool/moves
-  only on measured refusals (LEAN — this IS the open-ended-search
+  known shapes). (2) REJECTED-because: both arms in one slice pays
+  off earlier, but a red LS3b instance would then block the whole
+  landing.
+- *Fork LS3-B — the proof side of found spans.* (1) ADOPTED: attempt
+  via proofgen moves + the peephole citation pool, growing the
+  pool/moves only on measured refusals (this IS the open-ended-search
   mission; growth lands as ordinary shared-file work under LS-law 1).
-  (2) Emit proof text by per-species-pair templates (generator
-  style): predictable, but it is exactly the fixed-function machinery
-  the mission statement de-prioritizes, and its coverage would stop
-  at the template table.
+  (2) REJECTED-because: proof text from per-species-pair templates
+  (generator style) is predictable, but it is exactly the
+  fixed-function machinery the mission statement de-prioritizes, and
+  its coverage would stop at the template table.
+
+**LS3-i RECORD (LANDED 2026-08-02 — the span task engine + the LS3a
+seeds; first fire pending on CI).** The task model =
+tools/search/tasks/x86_span_model.shard: fingerprint = outcome tag +
+ALL FIFTEEN registers per probe file (trap/exhaustion loud), under a
+FIXED caller-supplied fuel — deriving fuel from the span would force
+the candidate's spine structurally and defeat semantic narrowing;
+XspScore g = length / h = 0 / key = fingerprint (structurally
+decoded, the model owns its vocabulary); the checked-dominance
+pedigree and its MEMORY-FREE VOCABULARY requirement live in the
+model's header. The driver = tools/search/x86_span_probe.shard: nine
+baked XOR templates over {RAX, RDI, RSI} (tail-only holes, so the
+score render's Nil cut stays type-correct — the pcbt_grammar_a
+discipline), checked A* find at cap = target length (the target
+itself is the witness gate), checked EMPTY below the winner, and the
+phase-2 piece theorem constructed as goal TEXT (schema v1: concrete
+instructions, symbolic f/m/tail/rs/mem, one nonneg premise per
+distinct register operand in first-occurrence order), parsed against
+the model file's own scope, attempted through bare moves then pg_cite
+over the pool {xseq_xor_pair_cancels, xseq_xor_self_absorbs} with
+discharge-assignment enumeration ((2n+1)^k candidates, first hit
+wins). meta/proofgen grew the CITATION CLOSER — pg_cite +
+pg_premise / pg_premise_compute / pg_texts_sp — moves, not policy;
+the pool and the enumeration live in the probe (LS-law 2 held).
+
+MEASURED lesson banked at the pin: a forward (compute both) premise
+discharge OVER-REDUCES — it unfolds rget into a stuck match on
+symbolic rs, after which the goal premise no longer matches. The
+generic fix is pg_premise_compute: rewrite the goal's premise
+BACKWARD into the True side (rl rhs), then compute BOTH sides to the
+common normal form — absorbs defined-head mismatches (the xsrc case)
+with no stop list.
+
+Local validation (all green 2026-08-02): probe closure 392/0 incl.
+both hand-derived piece pins (byte-for-byte the theorems the driver
+constructs); the phase-2 smoke closes both seeds' theorems by
+citation at runtime (PAIR → CITE-xseq_xor_pair_cancels, SELF →
+CITE-xseq_xor_self_absorbs); prove fixtures regen byte-identical;
+reach floor pins unchanged (0/4, 5/16); model + probe
+shardfmt-canonical. Trust posture: the pool's theory entries are
+admitted Proven on the corpus gate on peephole.shard, goals parsed
+from the loaded closure's own source bytes (stated in the probe
+header). The SEARCH run is unvalidated — first fire on CI via
+ENGINE_RUN (the standing law); the measured record lands here when it
+returns.
 
 Non-goals, stated once: no prove-on-engine rewrite before the LS-law
 3 gate; no kernel/type-system growth; no repo-wide sidecar sweeps
