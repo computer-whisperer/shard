@@ -453,7 +453,11 @@ touch — the measurement's variant was a scratch artifact by
 ratified scope (SLOTTED 2026-08-01: STREAM.md rung B4b — the
 "next block-chain touch" trigger misfired at the M5 relocation,
 which was such a touch, so the implicit trigger is retired for an
-explicit rung). Same-ruling consequences: DC3 CLOSED-DORMANT on the
+explicit rung. LANDED 2026-08-02, the B4b RECORD: the full
+three-chain redirection — the replay ladder left the committed
+closure AND the generator, xchain is the only block-chain
+dialect, −61k generated lines, the −19.3% pricing exceeded at
+−32.6% calls on the direct closure). Same-ruling consequences: DC3 CLOSED-DORMANT on the
 loop-seam evidence (§11); §7's design formally OPEN under its
 gated-slice protocol; the coverage arc UNFREEZES (§10's B1
 condition met).

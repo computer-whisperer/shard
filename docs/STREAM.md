@@ -235,6 +235,43 @@ needs a real consumer forcing its decisions:
   window close: the flip, four regens, five citation swaps, the
   D-number, THE RECORD.
 
+  **B4b RECORD (2026-08-02; slice 2 lands — the rung CLOSES).**
+  Sequenced behind the thread-B anneal merge (6d830de brings
+  e22f179's gated impgen), so the flip regenerated with the
+  repaired tool. The flip: mxx_lems threads one structural Bool —
+  ec, "emit the boundary-chain claims" — false exactly when the
+  pin has boundaries (nlg ≥ 2). Suppressed: the cmp_x_ ladder
+  claims and their b=0 walks. Still emitted: the sqs_x_ seg
+  sub-lemmas (the terms the conversion seams cite), rest/wid/
+  worker vocabulary, ties, and the single walk of any 0-boundary
+  pin (shhex keeps imp_x_shhex — a walk without a chain is a
+  bridge, not the deprecated form). Scope proof: regenerated
+  under the flipped tool, impgen_wasm_out and the scalar/loop x86
+  fixtures are BYTE-IDENTICAL; only the three mixed-content x86
+  fixtures and the sha out change. The deletion: impgen_x86_out
+  100,016 → 49,173 lines (18 claims: the three chains + walks);
+  fixtures mixed 4,440→1,778, if 7,471→2,184, ifl 4,350→2,039
+  (21 claims, zero external citations — verified by repo scan);
+  net −61k committed generated lines. Five citation swaps, all
+  statement-neutral (the xchain local program copies verified
+  byte-identical to the generated defs before swapping): weld →
+  xch_shblock + xch_shpad, sweld → xch_shfpad, xconv/xpatch →
+  xch_b13. Gates: 11-closure check battery ALL GREEN first run
+  (out 898/0, xchain 933/0, xconv 938/0, xpatch 936/0, weld
+  1103/0, sweld 1192/0, stream articles 1313/0 + 1316/0 — the
+  byte-tie holds over the shrunk out file, fixtures 442/432/423);
+  the FULL build driver: 80 products, all gates green. THE
+  D-NUMBER (idle-core stash pair, SHARD_STATS, whole closures):
+  impgen_x86_out 1,130.2M → 761.5M calls (−32.6%), live peak
+  430.3 → 241.0 MB (−44.0%), maxrss 1.72 → 1.16 GB (−32.6%);
+  xchain −28.7% / −36.2% / −31.4%; weld and sweld — which now
+  IMPORT xchain and check the conversion twins instead — still
+  net −5.8%/−5.5% calls and −13.4%/−13.5% live peak. The B1
+  pricing (−19.3% calls) is EXCEEDED on the direct closures. The
+  landing sentence is now literal: sha256.xchain.shard is the
+  closure's only block-chain dialect, and the generator can no
+  longer emit the replay form anywhere.
+
 - **B5 — the expert leg: SHA-NI/SIMD hand-pinned variant vs
   OpenSSL.** This is the FIRST real non-canonical consumer — the
   named trigger for clause 1 of the validator's clause architecture
