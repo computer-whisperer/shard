@@ -248,7 +248,7 @@ incremental behavior — plus task #62 and DC4; the standing exhibit
 is B1b's composition closure (2.38B calls / 4.17GB RSS to check a
 154-line file, STREAM.md B1b RECORD).
 
-**DRAFTED (2026-08-02): docs/STORAGE.md — awaiting ratification.**
+**RATIFIED (2026-08-02, user — the three forks ruled at their leans): docs/STORAGE.md is law; S1 (the per-module skip) is the OPEN slice.**
 Three layers on one identity (CANON.md §7's content hash): L1 the
 per-module check certificate (kernel-free, gate (d)'s first
 number), L2 binary module images resolving DC4 into the canon

@@ -1,8 +1,10 @@
 # STORAGE.md — the storage & incremental slice: arena, images, and the per-module skip
 
-Status: DRAFT for ratification (2026-08-02). This is CERT.md §7's
-design note, drafted under the gated-slice protocol's paper phase —
-no kernel or representation code moves on this draft. Charge
+Status: RATIFIED 2026-08-02 (user; all three §6 forks ruled at
+their leans same-day: F1 = the S1→S2→S3 ladder, F2 = uncommitted
+local cache, F3 = module-hash + mod.req-interface v1). This is
+CERT.md §7's design note under the gated-slice protocol. S1 is the
+OPEN slice; S2/S3 open only on the prior slice's gate numbers. Charge
 (CERT.md §7, DRAFTING SCHEDULED 2026-08-01): the redirection's one
 unmeasured gate — §9 (d) local-edit incremental behavior — plus the
 per-module check cache (github #7; CERT.md cites it as "task #62",
@@ -162,7 +164,7 @@ shipped), module images (S2), and, if S3 wants persistent arenas
 later, arena segments. No second format is ever designed. The
 digest stays a parameter behind hx_digest.
 
-## 6. Open forks (for ratification; lean stated)
+## 6. Forks (RATIFIED 2026-08-02 at the leans, user ruling)
 
 - **F1 — slice order.** (a) S1→S2→S3 as above (LEAN: each slice
   prices the next, kernel-free first, the deepest commitment last
