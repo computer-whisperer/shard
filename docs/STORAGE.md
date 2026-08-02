@@ -222,18 +222,28 @@ set. What S1 does not touch, measured: the cold check still pays
 11.3s for 154 lines — the load floor, S2's charge, now the whole
 residual by construction.
 
-**F3 AMENDMENT (discovered building v1, surfaced to the user).**
-The ruled F3 lean said "module content hash + mod.req interface
-hashes" — github #7's premise that impl edits cannot affect
-consumers. That premise is FALSE in shard today: consumer proofs
-COMPUTE imported fn bodies (every fuel tower runs nat/mem ops;
-compute reaches through the surface), so impl bytes are genuine
-check inputs and interface-only keying would produce FALSE CACHE
-HITS. v1 therefore keys on whole content — over-invalidation only,
-never a wrong hit. The mod.req-granular refinement remains F3's
-growth rung with a new entry condition: it may key a consumer on an
-import's interface ONLY for imports whose members provably cannot
-enter the consumer's compute (opaque-surface modules), or after a
-mode-aware-resolution mechanism actually hides impl bodies. This is
-a scope finding, not a §3 DOWNGRADE: the skip delivers gate (d)
-regardless; interface granularity was a hit-rate refinement.
+**F3 AMENDMENT — RETRACTED same-day (user yellow flag; the
+correction is the record).** The first S1 landing claimed consumer
+proofs compute imported fn bodies, concluding interface keying
+would false-hit. That claim was WRONG — an inference from usage
+patterns instead of a measurement, and the user's flag caught it.
+Both probes are now on record: (1) in a consumer context
+`(compute both)` on an opaque directory member (`pow2 3`) STICKS —
+the body is invisible, the claim fails; (2) with the impl file
+SYNTACTICALLY DESTROYED (`((((` appended to bits.shard) a
+consumer's check is byte-identical — consumer-mode resolution
+never reads member files at all; the surface (mod.req: sigs +
+requirements, admitted at the boundary) is the entire consumer
+input. The cases behind the wrong claim were FILE imports
+(std/nat.shard, the sha sibling files), where the whole file IS
+the surface by design — no discipline was ever pierced. NOTHING
+BROKE; the design point is enforced and airtight. Consequence:
+ruled F3 stands EXACTLY as ratified, stronger than github #7's
+sketch dared claim — for a directory import the sound key is the
+mod.req content (+ its transitive surface) alone; impl edits
+cannot even cause consumer load failures. v1's walker is
+CORRECTED to this (directory import → hash mod.req.shard +
+recurse its imports; member files and their sidecars excluded);
+file imports key on file content, which is correct and
+unavoidable there. The retracted text's practical harm was
+over-invalidation only — no wrong hit was ever possible.
