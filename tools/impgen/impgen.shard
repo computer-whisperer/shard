@@ -1122,6 +1122,39 @@
     (Nil b)
     ((Cons h t) (Cons h (gs_app t b)))))
 
+;; split identity (dedup key): same variant, same scrutinee tree. The
+;; dedup's premise — an all-occurrence rewrite at the first split
+;; resolves every later duplicate — is FALSE whenever a guard's
+;; duplicate materializes after that rewrite fires, which the
+;; progressively-materializing walk makes true for every measured
+;; revisit shape (shard#22: cross-statement AND same-statement RMWs
+;; both emit red bridges). The honest scope is item 3g's law — a pin
+;; body sweeps each symbolic address ONCE — so lw_stmts refuses ANY
+;; duplicate in the collected splits (gs_has_dup below) and the pin
+;; lands tie+note instead of a red bridge.
+(fn gs_eq ((a GSplit) (b GSplit)) Bool
+  (match a
+    ((GShared e1)
+     (match b
+       ((GShared e2) (expr_eq e1 e2))
+       ((GMemHi _) False)))
+    ((GMemHi e1)
+     (match b
+       ((GShared _) False)
+       ((GMemHi e2) (expr_eq e1 e2))))))
+
+(fn gs_seen ((seen (List GSplit)) (g GSplit)) Bool
+  (measure (struct seen))
+  (match seen
+    (Nil False)
+    ((Cons h t) (if (gs_eq h g) True (gs_seen t g)))))
+
+(fn gs_has_dup ((gs (List GSplit))) Bool
+  (measure (struct gs))
+  (match gs
+    (Nil False)
+    ((Cons h t) (if (gs_seen t h) True (gs_has_dup t)))))
+
 ;; loop-walk expression result: value + splits (evaluation order)
 (type LXR (LXOk Expr (List GSplit)) (LXRf (List Int)))
 
@@ -1273,7 +1306,11 @@
              ((Some st2)
               (match (lw_stmts (- fuel 1) x86 msz t st2 mem)
                 ((LSRf m) (LSRf m))
-                ((LSOk gt st3 mem3) (LSOk (gs_app gs gt) st3 mem3))))))))
+                ((LSOk gt st3 mem3)
+                 (if (gs_has_dup (gs_app gs gt))
+                   (LSRf
+                     "revisited symbolic address (one sweep per address; shard#22, named growth)")
+                   (LSOk (gs_app gs gt) st3 mem3)))))))))
        ((IStore ae ve)
         (match (lw_exp x86 msz ae st mem)
           ((LXRf m) (LSRf m))
@@ -1296,7 +1333,10 @@
                        (Cons mem (Cons va (Cons vv Nil)))))
                    ((LSRf m) (LSRf m))
                    ((LSOk gt st3 mem3)
-                    (LSOk (gs_app ga (gs_app gp (gs_app gv gt))) st3 mem3))))))))))
+                    (if (gs_has_dup (gs_app ga (gs_app gp (gs_app gv gt))))
+                      (LSRf
+                        "revisited symbolic address (one sweep per address; shard#22, named growth)")
+                      (LSOk (gs_app ga (gs_app gp (gs_app gv gt))) st3 mem3)))))))))))
        ((IIf _ _ _)
         (LSRf
           "second or nested branch in a loop body (one top-level branch; named growth)"))
@@ -2754,26 +2794,8 @@
        a)))
     (_ a)))
 
-;; split identity (dedup key): same variant, same scrutinee tree. An
-;; all-occurrence rewrite resolves every duplicate of a scrutinee at
-;; its first split, so later duplicates are dropped, not re-split.
-(fn gs_eq ((a GSplit) (b GSplit)) Bool
-  (match a
-    ((GShared e1)
-     (match b
-       ((GShared e2) (expr_eq e1 e2))
-       ((GMemHi _) False)))
-    ((GMemHi e1)
-     (match b
-       ((GShared _) False)
-       ((GMemHi e2) (expr_eq e1 e2))))))
-
-(fn gs_seen ((seen (List GSplit)) (g GSplit)) Bool
-  (measure (struct seen))
-  (match seen
-    (Nil False)
-    ((Cons h t) (if (gs_eq h g) True (gs_seen t g)))))
-
+;; (gs_eq / gs_seen live beside the GSplit type — the #22 revisit gate
+;; in lw_stmts needs them before this point.)
 (fn gs_dedup ((seen (List GSplit)) (gs (List GSplit))) (List GSplit)
   (measure (struct gs))
   (match gs
