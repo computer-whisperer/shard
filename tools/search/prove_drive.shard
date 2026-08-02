@@ -1,0 +1,605 @@
+;;; prove_drive — the engine's proof-native drive (lock-step arc LS4-i,
+;;; SEARCH.md LS4). Breadth-first search over SEQUENT states: moves are
+;;; kernel proof steps applied through the checker's own apply_step /
+;;; div_facts_checked (exact successors, native speed), closers are the
+;;; policy-free floor moves, and the winner is re-checked as ONE assembled
+;;; Proof from the ORIGINAL sequent before the drive reports it — the
+;;; in-search states are heuristic guidance, check_sequent on the full
+;;; assembly is the only certificate (claim-ladder law).
+;;;
+;;; THE DRIVE'S PEDIGREE (checked dominance, the su_as discipline): edge
+;;; costs are uniform (g = chain length) and h = 0, so breadth-first IS
+;;; the A* drive; the dominance key is an EXACT state factoring — the
+;;; rendered goal equation plus the div-facts history (premises and params
+;;; are a function of the base sequent + that history; hyps never change:
+;;; no branching moves live here). Two nodes with equal keys have equal
+;;; completion sets, and min-depth-first closure keeps the shorter node,
+;;; so a drained frontier at the depth cap is an exact refutation: NO
+;;; move-chain within the caps closes the goal over this alphabet. Budget
+;;; exits (pop cap) report PfBudget — only a drained frontier claims
+;;; PfEmpty. The span pilot's cut-render aliasing law does not bite:
+;;; closable nodes RETURN before their key is ever inserted, and keys are
+;;; computed from full states, not cut-rendered candidates.
+;;;
+;;; MECHANISM, NOT POLICY (LS-law 2): the move alphabet is derived from
+;;; the STATE and the THEORY — every unpremised theory entry is a rewrite
+;;; move (no curation; premised entries are excluded by the kernel's own
+;;; Rewrite semantics, which refuses them), unfold moves come from the
+;;; goal equation's call heads, premise rewrites from the sequent's own
+;;; premises, div-facts moves from the equation's literal-divisor
+;;; ediv/mod sites. Budgets (depth cap, pop cap, div cap) are the
+;;; CALLER's. Lemma citations are kernel-level (Lemma QNAME against the
+;;; theory) — surface-scope citability (use lines) is an emit-time
+;;; concern, out of scope until the prove-on-engine rewrite.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/proof.shard")
+(import "../../kernel/checker.shard")
+(import "../../kernel/trace.shard")
+(import "../../kernel/reader.shard")
+(import "../../meta/proofgen")
+
+(use (:: kernel term Expr))
+(use (:: kernel term FVar))
+(use (:: kernel term BVar))
+(use (:: kernel term Ctor))
+(use (:: kernel term Call))
+(use (:: kernel term Match))
+(use (:: kernel term Let))
+(use (:: kernel term If))
+(use (:: kernel term IntLit))
+(use (:: kernel term SymLit))
+(use (:: kernel term Arm))
+(use (:: kernel term QName))
+(use (:: kernel term qname_eq))
+(use (:: kernel term qn))
+(use (:: kernel term expr_eq))
+(use (:: kernel term append_int))
+(use (:: kernel module Module))
+(use (:: kernel proof Theory))
+(use (:: kernel proof TheoryEmpty))
+(use (:: kernel proof TheoryCons))
+(use (:: kernel proof TheoryEntry))
+(use (:: kernel proof Proven))
+(use (:: kernel proof Axiom))
+(use (:: kernel proof Goal))
+(use (:: kernel proof Param))
+(use (:: kernel proof Equation))
+(use (:: kernel proof Proof))
+(use (:: kernel proof Refl))
+(use (:: kernel proof Steps))
+(use (:: kernel proof DivFacts))
+(use (:: kernel proof Step))
+(use (:: kernel proof Unfold))
+(use (:: kernel proof Simp))
+(use (:: kernel proof Compute))
+(use (:: kernel proof Rewrite))
+(use (:: kernel proof EqRef))
+(use (:: kernel proof Lemma))
+(use (:: kernel proof Premise))
+(use (:: kernel proof Dir))
+(use (:: kernel proof Lr))
+(use (:: kernel proof Rl))
+(use (:: kernel proof Side))
+(use (:: kernel proof Lhs))
+(use (:: kernel proof Rhs))
+(use (:: kernel proof Both))
+(use (:: kernel proof Occ))
+(use (:: kernel proof OccAll))
+(use (:: kernel checker Sequent))
+(use (:: kernel checker check_sequent))
+(use (:: kernel checker apply_step))
+(use (:: kernel checker div_facts_checked))
+(use (:: kernel checker append_eqs))
+(use (:: kernel trace render_eq))
+(use (:: kernel reader RCtx))
+(use (:: meta proofgen *))
+
+;; ---------------------------------------------------------------------------
+;; Moves: a non-branching kernel Step, or a div-facts premise injection.
+;; ---------------------------------------------------------------------------
+
+(type PfMove (PfStep Step) (PfDiv Expr Int Symbol))
+
+(fn pf_apply ((m Module) (th Theory) (seq Sequent) (mv PfMove)) (Option Sequent)
+  (match mv
+    ((PfStep s) (apply_step m th seq s))
+    ((PfDiv n d q)
+     (match seq
+       ((Sequent params hyps premises goal_eq)
+        (match (div_facts_checked m params n d q)
+          (None None)
+          ((Some (Pair params2 facts))
+           (Some (Sequent params2 hyps (append_eqs premises facts) goal_eq)))))))))
+
+;; ---------------------------------------------------------------------------
+;; Alphabet derivation. Every piece is a function of the theory or the
+;; current sequent — nothing is hand-curated.
+;; ---------------------------------------------------------------------------
+
+;; unpremised theory entries (the kernel's Rewrite refuses premised ones).
+(fn pf_lemmas ((th Theory)) (List QName)
+  (measure (struct th))
+  (match th
+    ((TheoryEmpty) Nil)
+    ((TheoryCons entry rest)
+     (match entry
+       ((Proven q g)
+        (match g
+          ((Goal _ Nil _) (Cons q (pf_lemmas rest)))
+          (_ (pf_lemmas rest))))
+       ((Axiom q g)
+        (match g
+          ((Goal _ Nil _) (Cons q (pf_lemmas rest)))
+          (_ (pf_lemmas rest))))))))
+
+(fn pf_qn_mem ((q QName) (qs (List QName))) Bool
+  (measure (struct qs))
+  (match qs
+    (Nil False)
+    ((Cons h t) (if (qname_eq q h) True (pf_qn_mem q t)))))
+
+(fn pf_qn_add ((q QName) (qs (List QName))) (List QName)
+  (if (pf_qn_mem q qs) qs (Cons q qs)))
+
+;; call heads of an expression (unfold targets), deduplicated.
+(fn pf_heads_e ((e Expr) (acc (List QName))) (List QName)
+  (measure (struct e))
+  (match e
+    ((Ctor _ args) (pf_heads_es args acc))
+    ((Call q args) (pf_heads_es args (pf_qn_add q acc)))
+    ((Match sc arms) (pf_heads_arms arms (pf_heads_e sc acc)))
+    ((Let binds body) (pf_heads_e body (pf_heads_es binds acc)))
+    ((If c t f) (pf_heads_e f (pf_heads_e t (pf_heads_e c acc))))
+    (_ acc)))
+
+(fn pf_heads_es ((es (List Expr)) (acc (List QName))) (List QName)
+  (measure (struct es))
+  (match es
+    (Nil acc)
+    ((Cons e rest) (pf_heads_es rest (pf_heads_e e acc)))))
+
+(fn pf_heads_arms ((arms (List Arm)) (acc (List QName))) (List QName)
+  (measure (struct arms))
+  (match arms
+    (Nil acc)
+    ((Cons (Arm _ body) rest) (pf_heads_arms rest (pf_heads_e body acc)))))
+
+;; ediv/mod sites with a positive literal divisor (div-facts targets).
+(fn pf_div_mem ((n Expr) (d Int) (sites (List (Pair Expr Int)))) Bool
+  (measure (struct sites))
+  (match sites
+    (Nil False)
+    ((Cons (Pair n2 d2) rest)
+     (if (if (int_eq d d2) (expr_eq n n2) False) True (pf_div_mem n d rest)))))
+
+(fn pf_div_head ((q QName)) Bool
+  (if (qname_eq q (qn (quote ediv))) True (qname_eq q (qn (quote mod)))))
+
+(fn pf_divsites_e ((e Expr) (acc (List (Pair Expr Int)))) (List (Pair Expr Int))
+  (measure (struct e))
+  (match e
+    ((Ctor _ args) (pf_divsites_es args acc))
+    ((Call q args)
+     (match args
+       ((Cons n (Cons (IntLit d) Nil))
+        (pf_divsites_es
+          args
+          (if (if (pf_div_head q) (lt 0 d) False)
+            (if (pf_div_mem n d acc) acc (Cons (Pair n d) acc))
+            acc)))
+       (_ (pf_divsites_es args acc))))
+    ((Match sc arms) (pf_divsites_arms arms (pf_divsites_e sc acc)))
+    ((Let binds body) (pf_divsites_e body (pf_divsites_es binds acc)))
+    ((If c t f) (pf_divsites_e f (pf_divsites_e t (pf_divsites_e c acc))))
+    (_ acc)))
+
+(fn pf_divsites_es ((es (List Expr)) (acc (List (Pair Expr Int))))
+  (List (Pair Expr Int))
+  (measure (struct es))
+  (match es
+    (Nil acc)
+    ((Cons e rest) (pf_divsites_es rest (pf_divsites_e e acc)))))
+
+(fn pf_divsites_arms ((arms (List Arm)) (acc (List (Pair Expr Int))))
+  (List (Pair Expr Int))
+  (measure (struct arms))
+  (match arms
+    (Nil acc)
+    ((Cons (Arm _ body) rest) (pf_divsites_arms rest (pf_divsites_e body acc)))))
+
+;; ---------------------------------------------------------------------------
+;; Move-list assembly per node (deterministic order; cheap classes first).
+;; ---------------------------------------------------------------------------
+
+(fn pf_rw_moves ((er EqRef)) (List PfMove)
+  (Cons
+    (PfStep (Rewrite er (Lr) (Lhs) (OccAll) Nil))
+    (Cons
+      (PfStep (Rewrite er (Rl) (Lhs) (OccAll) Nil))
+      (Cons
+        (PfStep (Rewrite er (Lr) (Rhs) (OccAll) Nil))
+        (Cons (PfStep (Rewrite er (Rl) (Rhs) (OccAll) Nil)) Nil)))))
+
+(fn pf_append ((a (List PfMove)) (b (List PfMove))) (List PfMove)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (pf_append t b)))))
+
+(fn pf_premise_moves ((k Int)) (List PfMove)
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt 0 k)
+    (pf_append (pf_rw_moves (Premise (- k 1))) (pf_premise_moves (- k 1)))
+    Nil))
+
+(fn pf_unfold_moves ((qs (List QName))) (List PfMove)
+  (measure (struct qs))
+  (match qs
+    (Nil Nil)
+    ((Cons q rest)
+     (Cons
+       (PfStep (Unfold q (Lhs)))
+       (Cons (PfStep (Unfold q (Rhs))) (pf_unfold_moves rest))))))
+
+(fn pf_lemma_moves ((qs (List QName))) (List PfMove)
+  (measure (struct qs))
+  (match qs
+    (Nil Nil)
+    ((Cons q rest) (pf_append (pf_rw_moves (Lemma q)) (pf_lemma_moves rest)))))
+
+(fn pf_div_moves ((sites (List (Pair Expr Int)))) (List PfMove)
+  (measure (struct sites))
+  (match sites
+    (Nil Nil)
+    ((Cons (Pair n d) rest) (Cons (PfDiv n d (quote pfdq)) (pf_div_moves rest)))))
+
+(fn pf_eq_count ((es (List Equation))) Int
+  (measure (struct es))
+  (match es
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (pf_eq_count rest)))))
+
+(fn pf_moves ((lemmas (List QName)) (seq Sequent) (divs_left Int)) (List PfMove)
+  (match seq
+    ((Sequent _ _ premises (Equation l r))
+     (pf_append
+       (pf_premise_moves (pf_eq_count premises))
+       (pf_append
+         (pf_unfold_moves (pf_heads_e r (pf_heads_e l Nil)))
+         (pf_append
+           (Cons (PfStep (Simp (Lhs) Nil)) (Cons (PfStep (Simp (Rhs) Nil)) Nil))
+           (pf_append
+             (pf_lemma_moves lemmas)
+             (if (lt 0 divs_left)
+               (pf_div_moves (pf_divsites_e r (pf_divsites_e l Nil)))
+               Nil))))))))
+
+;; ---------------------------------------------------------------------------
+;; Dominance keys: mix-hash prefix + rendered goal equation + the div
+;; history bytes (an exact state factoring — see the header).
+;; ---------------------------------------------------------------------------
+
+(fn pf_mix_go ((bytes (List Int)) (h Int)) Int
+  (measure (struct bytes))
+  (match bytes
+    (Nil h)
+    ((Cons c rest) (pf_mix_go rest (mod (+ (* h 31) c) 1000000007)))))
+
+(fn pf_key ((seq Sequent) (divbytes (List Int))) (List Int)
+  (match seq
+    ((Sequent _ _ _ eq)
+     (match (append_int (render_eq eq) (Cons 124 divbytes))
+       (bytes (Cons (pf_mix_go bytes 7) bytes))))))
+
+(fn pf_ints_eq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        (_ False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (int_eq x y) (pf_ints_eq xs ys) False))))))
+
+(fn pf_closed_mem ((key (List Int)) (closed (List (List Int)))) Bool
+  (measure (struct closed))
+  (match closed
+    (Nil False)
+    ((Cons k rest) (if (pf_ints_eq key k) True (pf_closed_mem key rest)))))
+
+;; ---------------------------------------------------------------------------
+;; Closers: the policy-free floor moves, natively. Order mirrors
+;; tools/reach's floor (refl / compute / simp / arith0 / farkas).
+;; ---------------------------------------------------------------------------
+
+(fn pf_close_step ((m Module) (th Theory) (seq Sequent) (s Step)) (Option Proof)
+  (match (apply_step m th seq s)
+    (None None)
+    ((Some (Sequent _ _ _ (Equation l r)))
+     (if (expr_eq l r) (Some (Steps (Cons s Nil) (Refl))) None))))
+
+(fn pf_close ((pm Module) (rctx RCtx) (m Module) (th Theory) (seq Sequent))
+  (Option Proof)
+  (match seq
+    ((Sequent _ _ _ (Equation l r))
+     (if (expr_eq l r) (Some (Refl))
+     (match (pf_close_step m th seq (Compute (Both) Nil))
+       ((Some p) (Some p))
+       (None
+         (match (pf_close_step m th seq (Simp (Both) Nil))
+           ((Some p) (Some p))
+           (None
+             (match (parse_cand pm rctx (pg_arith0))
+               ((Some p0)
+                (if (check_sequent m th seq p0) (Some p0)
+                (pf_close_farkas pm rctx m th seq)))
+               (None (pf_close_farkas pm rctx m th seq)))))))))))
+
+(fn pf_close_farkas
+  ((pm Module) (rctx RCtx) (m Module) (th Theory) (seq Sequent))
+  (Option Proof)
+  (match (farkas_solve seq)
+    (None None)
+    ((Some txt)
+     (match (parse_cand pm rctx txt)
+       (None None)
+       ((Some p) (if (check_sequent m th seq p) (Some p) None))))))
+
+;; ---------------------------------------------------------------------------
+;; Winner assembly: fold the move chain back into one Proof (consecutive
+;; steps coalesce into a single Steps block; div-facts nest).
+;; ---------------------------------------------------------------------------
+
+(fn pf_prepend_step ((s Step) (p Proof)) Proof
+  (match p
+    ((Steps ss k) (Steps (Cons s ss) k))
+    (_ (Steps (Cons s Nil) p))))
+
+(fn pf_assemble ((moves (List PfMove)) (closer Proof)) Proof
+  (measure (struct moves))
+  (match moves
+    (Nil closer)
+    ((Cons (PfStep s) rest) (pf_prepend_step s (pf_assemble rest closer)))
+    ((Cons (PfDiv n d q) rest) (DivFacts n d q (pf_assemble rest closer)))))
+
+(fn pf_rev_moves ((a (List PfMove)) (acc (List PfMove))) (List PfMove)
+  (measure (struct a))
+  (match a
+    (Nil acc)
+    ((Cons h t) (pf_rev_moves t (Cons h acc)))))
+
+;; ---------------------------------------------------------------------------
+;; The drive. Nodes carry their move chain REVERSED (cons-shared), the
+;; exact sequent, remaining div budget, and the div-history key bytes.
+;; ---------------------------------------------------------------------------
+
+(type PfNode (PfNode (List PfMove) Sequent Int (List Int)))
+
+(type PfFind
+  (PfFound (List PfMove) Proof Int Int Int)  ; moves (forward), full proof, popped, applies, dominated
+  (PfEmpty Int Int Int Int)  ; DRAINED at depth: no chain of ANY length closes (popped, applies, dominated follow)
+  (PfDepthCap Int Int Int)  ; depth cap hit, frontier alive: no chain ≤ cap closes (popped, applies, dominated)
+  (PfBudget Int Int Int)  ; pop cap hit: NOT a refutation (popped, applies, dominated)
+  (PfWitnessFail Int Int Int))  ; assembled winner failed the full check — drive bug, LOUD
+
+;; expansion of one node's move list: extend closed set + next layer.
+(type PfExp (PfExp (List (List Int)) (List PfNode) Int Int))
+; closed, next-layer acc (order-reversed), applies, dominated
+
+(fn pf_expand
+  ((m Module)
+   (th Theory)
+   (node PfNode)
+   (mvs (List PfMove))
+   (closed (List (List Int)))
+   (nxt (List PfNode))
+   (applies Int)
+   (dominated Int))
+  PfExp
+  (measure (struct mvs))
+  (match mvs
+    (Nil (PfExp closed nxt applies dominated))
+    ((Cons mv rest)
+     (match node
+       ((PfNode moves seq divs_left divbytes)
+        (match (pf_apply m th seq mv)
+          (None (pf_expand m th node rest closed nxt (+ applies 1) dominated))
+          ((Some seq2)
+           (match
+             (match mv
+               ((PfDiv n d _)
+                (append_int
+                  divbytes
+                  (Cons 59 (append_int (render_eq (Equation n (IntLit d))) Nil))))
+               (_ divbytes))
+             (divbytes2
+               (match (pf_key seq2 divbytes2)
+                 (key
+                   (if (pf_closed_mem key closed)
+                     (pf_expand
+                       m
+                       th
+                       node
+                       rest
+                       closed
+                       nxt
+                       (+ applies 1)
+                       (+ dominated 1))
+                     (pf_expand
+                       m
+                       th
+                       node
+                       rest
+                       (Cons key closed)
+                       (Cons
+                         (PfNode
+                           (Cons mv moves)
+                           seq2
+                           (match mv
+                             ((PfDiv _ _ _) (- divs_left 1))
+                             (_ divs_left))
+                           divbytes2)
+                         nxt)
+                       (+ applies 1)
+                       dominated)))))))))))))
+
+;; one layer: pop nodes in order; close / budget-exit / expand.
+(type PfLayerR
+  (PfLDone PfFind)
+  (PfLCont (List (List Int)) (List PfNode) Int Int Int))
+; closed, next layer (reversed), popped, applies, dominated
+
+(fn pf_layer
+  ((pm Module)
+   (rctx RCtx)
+   (m Module)
+   (th Theory)
+   (lemmas (List QName))
+   (seq0 Sequent)
+   (nodes (List PfNode))
+   (closed (List (List Int)))
+   (nxt (List PfNode))
+   (popped Int)
+   (applies Int)
+   (dominated Int)
+   (pop_cap Int))
+  PfLayerR
+  (measure (struct nodes))
+  (match nodes
+    (Nil (PfLCont closed nxt popped applies dominated))
+    ((Cons node rest)
+     (if (lt pop_cap (+ popped 1)) (PfLDone (PfBudget popped applies dominated))
+     (match node
+       ((PfNode moves seq divs_left _)
+        (match (pf_close pm rctx m th seq)
+          ((Some closer)
+           (match (pf_rev_moves moves Nil)
+             (fwd
+               (match (pf_assemble fwd closer)
+                 (full
+                   (if (check_sequent m th seq0 full)
+                     (PfLDone (PfFound fwd full (+ popped 1) applies dominated))
+                     (PfLDone (PfWitnessFail (+ popped 1) applies dominated))))))))
+          (None
+            (match
+              (pf_expand
+                m
+                th
+                node
+                (pf_moves lemmas seq divs_left)
+                closed
+                nxt
+                applies
+                dominated)
+              ((PfExp closed2 nxt2 applies2 dominated2)
+               (pf_layer
+                 pm
+                 rctx
+                 m
+                 th
+                 lemmas
+                 seq0
+                 rest
+                 closed2
+                 nxt2
+                 (+ popped 1)
+                 applies2
+                 dominated2
+                 pop_cap)))))))))))
+
+(fn pf_rev_nodes ((a (List PfNode)) (acc (List PfNode))) (List PfNode)
+  (measure (struct a))
+  (match a
+    (Nil acc)
+    ((Cons h t) (pf_rev_nodes t (Cons h acc)))))
+
+(fn pf_depth_go
+  ((pm Module)
+   (rctx RCtx)
+   (m Module)
+   (th Theory)
+   (lemmas (List QName))
+   (seq0 Sequent)
+   (layer (List PfNode))
+   (closed (List (List Int)))
+   (depth Int)
+   (remaining Int)
+   (popped Int)
+   (applies Int)
+   (dominated Int)
+   (pop_cap Int))
+  PfFind
+  (measure remaining (by arith (list 1 0)) (by arith (list 1 1)))
+  (match layer
+    (Nil (PfEmpty depth popped applies dominated))
+    (_
+      (match
+        (pf_layer pm rctx m th lemmas seq0 layer closed Nil popped applies
+          dominated pop_cap)
+        ((PfLDone find) find)
+        ((PfLCont closed2 nxt popped2 applies2 dominated2)
+         (if (lt 0 remaining)
+           (pf_depth_go
+             pm
+             rctx
+             m
+             th
+             lemmas
+             seq0
+             (pf_rev_nodes nxt Nil)
+             closed2
+             (+ depth 1)
+             (- remaining 1)
+             popped2
+             applies2
+             dominated2
+             pop_cap)
+           (match nxt
+             (Nil (PfEmpty (+ depth 1) popped2 applies2 dominated2))
+             (_ (PfDepthCap popped2 applies2 dominated2)))))))))
+
+;; ---------------------------------------------------------------------------
+;; Entry. depth_cap bounds chain LENGTH; pop_cap bounds total node pops;
+;; max_divs bounds div-facts injections per chain.
+;; ---------------------------------------------------------------------------
+
+(fn pf_drive
+  ((pm Module)
+   (rctx RCtx)
+   (m Module)
+   (th Theory)
+   (seq0 Sequent)
+   (depth_cap Int)
+   (pop_cap Int)
+   (max_divs Int))
+  PfFind
+  (match (pf_lemmas th)
+    (lemmas
+      (match (PfNode Nil seq0 max_divs Nil)
+        (root
+          (pf_depth_go
+            pm
+            rctx
+            m
+            th
+            lemmas
+            seq0
+            (Cons root Nil)
+            (Cons (pf_key seq0 Nil) Nil)
+            0
+            depth_cap
+            0
+            0
+            0
+            pop_cap))))))
+
+(fn pf_moves_len ((mvs (List PfMove))) Int
+  (measure (struct mvs))
+  (match mvs
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (pf_moves_len rest)))))

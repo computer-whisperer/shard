@@ -4995,7 +4995,8 @@ Non-goals, stated once: no prove-on-engine rewrite before the LS-law
 
 **LS4 — the reach ladder (opened 2026-08-02, user: option 3 — the
 LS-law 3 gate work). THE ATTRIBUTION CENSUS (measured 2026-08-02) +
-the rung design — design AWAITING RATIFICATION.**
+the rung design — RATIFIED 2026-08-02, both fork leans adopted
+(user: "agreed on both leans"); the build opened as LS4-i.**
 
 *The census method.* Every OPEN goal in the LS2 baseline that has a
 committed sidecar entry also has a committed PROOF TEXT — the shape
@@ -5068,9 +5069,11 @@ Gate measurement closes the ladder; the prove-on-engine rewrite
 decision then unblocks per LS-law 3. frnd_pos_wf stays the beyond-
 gate acceptance test (shard#18) — not gated on.
 
-*Fork LS4-A — the theory the engine searches against.*
+*Fork LS4-A — the theory the engine searches against (RULED
+2026-08-02: the lean ADOPTED; the alternative's cost text stands as
+the REJECTED-because record).*
 - *The target module's own import-closure theory — what check itself
-  replays against (LEAN).* Honest and curation-free: the engine
+  replays against (ADOPTED).* Honest and curation-free: the engine
   faces exactly prove's setting, and pool-size pressure becomes
   measured census output (which pools exhaust, where cost
   concentrates) instead of a hand-tuned inventory. Cost: large
@@ -5083,8 +5086,8 @@ gate acceptance test (shard#18) — not gated on.
   the reach benchmark exists to measure the ENGINE, and a curated
   benchmark measures the curator.
 
-*Fork LS4-B — rung order.*
-- *Citation first (LEAN).* Smallest new machinery (the pilot's
+*Fork LS4-B — rung order (RULED 2026-08-02: the lean ADOPTED).*
+- *Citation first (ADOPTED).* Smallest new machinery (the pilot's
   phase-2 enumeration, engine-ized with real theory), the probable
   far-tier close, and the substrate the other rungs re-enter —
   induction arms close by citation/compute, so LS4-i is sequencing,
@@ -5093,3 +5096,62 @@ gate acceptance test (shard#18) — not gated on.
   Cost: its arms still need the citation substrate, so it front-
   loads the largest design surface while blocked on the smaller
   one's mechanics.
+
+**LS4-i BUILD (landed 2026-08-02).** The architectural finding that
+shaped it: the su schema drive evaluates score hooks through the
+engine's REFLECTED evaluator over Expr-encoded data — pushing the
+checker through that seam would mean Expr-encoding whole Modules and
+interpreting the rewrite machinery per node. The honest direction is
+the reverse: **the engine grew a proof-native drive** —
+tools/search/prove_drive.shard, a sibling engine file with the same
+discipline (uniform-cost A* ≡ breadth-first at h=0, checked dominance
+on EXACT state keys, census-grade counters, the EMPTY/budget verdict
+split) and NATIVE successors: the checker's own apply_step and
+div_facts_checked are the move semantics, so in-search states are
+exact kernel sequents at native speed. Winner acceptance = the full
+assembled Proof re-checked by check_sequent from the ORIGINAL sequent
+(the claim-ladder law; in-search states are guidance only).
+
+- *Moves (all state/theory-derived, LS-law 2 honored):* Rewrite over
+  every UNPREMISED theory entry (the kernel's Rewrite semantics
+  itself excludes premised ones — RewriteWith discharge search is
+  LS4-ii) × {lr,rl} × {lhs,rhs} at occ all; Unfold over the goal
+  equation's call heads × side; premise rewrites over the sequent's
+  own premises; Simp per side; div-facts injection at the equation's
+  literal-divisor ediv/mod sites (≤ max_divs per chain). Closers per
+  node = the floor moves natively (refl / compute-both / simp-both /
+  arith0 / the farkas cert closer).
+- *Dominance:* key = mix-hash + rendered goal equation + div history
+  — an exact factoring (premises/params are functions of base + div
+  history; hyps never change: no branching moves in this rung).
+  Closable nodes return before key insertion, so the span pilot's
+  cut-render aliasing law cannot bite. A drained frontier is an
+  exact refutation over the alphabet (OPEN-drained); a depth-cap
+  exit with a live frontier is the bounded refutation
+  (OPEN-depthcap); pop-cap exits are OPEN-budget, never refutations.
+- *The reach backend* (the seam reach's header reserved): per goal,
+  floor moves first (tags unchanged), then the drive against the
+  goal's REAL in-file theory — theory_base_st + decls_split +
+  theory_step, prove's own recovery pattern, per the ruled Fork
+  LS4-A. Lemma citations are kernel-level QNames against the theory;
+  surface-scope citability (use lines) is an emit-time concern
+  deferred to the prove-on-engine rewrite. tools/reach/
+  bench_engine.shard = the self-contained 20-file benchmark runner
+  for the CI engine-run job. Budgets (census-grade constants, stated
+  with the record): depth cap 6, pop cap 4000, div cap 1.
+- *Local validation:* all three files check green (closure 73/0);
+  the floor pin is byte-identical (0/4 cond_mine, 5/16 auto_demo);
+  entry-resolution probe confirms the two-mains import pattern
+  (p26 scratch, untracked). Two bounded smokes: std/map — floor 2/5
+  → engine 4/5, **lookup_insert_eq engine-d3-p7 = a FAR-TIER entry
+  closed by the drive**, lookup_insert_neq engine-d3-p11 (bucket A),
+  insert_shadow OPEN-depthcap-p59 (bucket D, refused exactly as the
+  census predicts); std/div — floor 0/5 → engine 3/5, mod_10_lo /
+  mod_10_hi engine-d1-p2 (the div-facts move + farkas closer, bucket
+  F's shape), plus ediv_mod_10_id engine-d2-p5 (not sidecar-backed —
+  a bonus), div_lt / div_nonneg honest depth-cap refutations.
+
+The official record = the CI benchmark fire (ENGINE_RUN_TARGET
+tools/reach/bench_engine.shard), scored against the corrected
+baseline: floor 120/182 ladder + 0/13 far; the gate needs 164/182 +
+≥1 far-tier.
