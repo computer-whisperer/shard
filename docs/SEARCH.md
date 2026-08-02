@@ -4904,10 +4904,37 @@ MINIMAL-4.
 Local validation: mine-probe closure 394/0; provenance pins 838/0;
 the new-species phase-2 smoke constructs and parses both improvement
 goals (verdict REFUSED, no PARSEFAIL); all five files
-shardfmt-canonical. First fire on CI via ENGINE_RUN (the standing
-law — new instances/vocabulary); the LS3a seed probe re-fires
-alongside to refresh its record under the all-live files. Measured
-records land here when they return.
+shardfmt-canonical.
+
+**THE OFFICIAL RECORD (CI pipeline 271, 2026-08-02, ENGINE EXIT 0,
+peak RSS 2.49 GB, 176 s — every hand-derived prediction exact):**
+  I1 TARGET-LEN-2 FOUND-LEN-1 EMPTY-AT-0 IMPROVE-CANDIDATE
+     PROOF-REFUSED  (find 19,383 steps / 3 forks; EMPTY 2,067 / 0)
+  I2 TARGET-LEN-2 FOUND-LEN-1 EMPTY-AT-0 IMPROVE-CANDIDATE
+     PROOF-REFUSED  (16,932 / 3; 1,462 / 0)
+  I3 TARGET-LEN-2 FOUND-LEN-2 EMPTY-AT-1 MINIMAL  (16,507 / 3;
+     6,212 / 1)
+  I4 TARGET-LEN-2 FOUND-LEN-2 EMPTY-AT-1 MINIMAL  (17,710 / 3;
+     5,909 / 1)
+  I5 TARGET-LEN-3 FOUND-LEN-3 EMPTY-AT-2 MINIMAL  (84,691 / 11;
+     29,152 / 4)
+  I6 TARGET-LEN-2 FOUND-LEN-2 EMPTY-AT-1 MINIMAL  (17,711 / 3;
+     7,076 / 1)
+  X86-SPAN-MINE LS3B OK IMPROVED-0 CANDIDATE-2 MINIMAL-4
+What this says: the engine FOUND both real improvements in the
+sha256 leg's emitted code (the subsumed truncation, the dead
+constant store) and PROVED four workhorse shapes minimal over their
+own alphabets under checked EMPTYs; the two improvements stand as
+candidates because the two-lemma pool honestly refuses their piece
+theorems — the measured refusal telemetry LS3-iii grows on (a mask
+law and a dead-store law are the named gaps). The pilot's success
+criterion (b) is met by the four minimality records; criterion (c)
+by the refusal telemetry. Alongside, the LS3a seed probe re-fired
+green under the all-live files (pipeline 272, EXIT 0, peak 2.09 GB:
+PAIR FOUND-LEN-0 at 17,174 steps / 1 fork, SELF FOUND-LEN-1 +
+EMPTY-AT-0 at 166,730 / 10 + 1,461 / 0, both CITE-closed) — the
+regression arm holds under the LS3b file generalization. LS3-ii is
+CLOSED; LS3-iii (pool growth on the two named refusals) is next.
 
 Non-goals, stated once: no prove-on-engine rewrite before the LS-law
 3 gate; no kernel/type-system growth; no repo-wide sidecar sweeps
