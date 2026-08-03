@@ -5151,7 +5151,36 @@ assembled Proof re-checked by check_sequent from the ORIGINAL sequent
   F's shape), plus ediv_mod_10_id engine-d2-p5 (not sidecar-backed —
   a bonus), div_lt / div_nonneg honest depth-cap refutations.
 
-The official record = the CI benchmark fire (ENGINE_RUN_TARGET
+**First fire (CI 288, 2026-08-02) — killed by the 7h deadline
+watchdog with an EMPTY log: the budget was measured in the wrong
+unit.** Diagnosis chain, all measured: (a) a local streaming probe
+(p27 scratch) proved World writes STREAM to a redirected log — so the
+empty artifact means the run never completed even the FIRST benchmark
+file (wasm_rev; reach writes one block per file); (b) a staged cost
+probe on wasm_rev's rev_loop_worker (p28 scratch) measured setup +
+floor as seconds and the drive at **~400 applies per pop** (the
+alphabet width on wasm-class goals) and ~650-1000 applies/sec in the
+early regime — and per-pop cost DEGRADES superlinearly as sequents
+and the closed set grow, which is what turned pops=4000 into
+hours-per-goal on big material. The pop cap bounds the frontier, not
+the WORK: per-pop work = alphabet width × expression size, wildly
+non-comparable across theories. The resize (landed with this
+record): **an APPLY CAP — total successor applications per goal, the
+uniform work budget — at 50,000** (finds cost hundreds-to-thousands
+of applies in every smoke: map a84/a224, div ~2k; sink-class
+refusals bound near a minute), applies joins every engine tag
+(-aN, census-grade), and the benchmark list is reordered CHEAP-FIRST
+so a killed run still yields every completed file (writes stream).
+Smoke verdicts under the cap are IDENTICAL (map 4/5, div 3/5; the
+div depthcap refutations complete at ~20k applies — still exact).
+The pop cap (4000) stays as the frontier guard; the deadline for
+refires is set explicitly (the user's CI calibration 2026-08-02:
+long runs are safe, the failure mode is order-of-magnitude runaway —
+prefer raising ENGINE_RUN_SECS over squeezing budgets when the
+measurement wants the full run).
+
+The official record = the CI benchmark refire (ENGINE_RUN_TARGET
 tools/reach/bench_engine.shard), scored against the corrected
 baseline: floor 120/182 ladder + 0/13 far; the gate needs 164/182 +
-≥1 far-tier.
+≥1 far-tier. OPEN-budget rows are attempts the work cap cut — they
+claim nothing and are re-runnable at a higher cap by ruling.
