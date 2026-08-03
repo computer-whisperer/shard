@@ -950,14 +950,46 @@ replacement.
   must be spelled OPEN (MkRegs / MkXmms over variables) — over an
   abstract record every read is a stuck projection and the address gates
   never resolve, the same law the value half learned on Xmm.
-  REMAINING for the walk: the prologue law (premises = the mask value,
-  the two state-home reads as MkXmm literals so the article's pack laws
-  fire, and the src window bounds + three pointer-bump wrap collapses)
-  and the epilogue law (the feedback, the unpack shuffles and the two
-  stores, concluded as eb_hmem over shn_unpack), then the composition —
-  sixteen rewrites bridging to shn_block through the article's existing
-  shn_g4_def..shn_g15_def ladder, and an Xmm eta law for the pack of an
-  unpack.
+  (The walk's remaining pieces landed same day — next bullet.)
+- **E2b MACHINE HALF, SLICE B part 2 (2026-08-03) — THE BLOCK WALK
+  (eb_walk, summit first-check; probe 806/0 in ~2.5 s; differential
+  re-run 8/8).** The hand body's 207 instructions, walked at xveval
+  grain from ANY entry register/XMM file, compute EXACTLY the article's
+  shn_block on the loaded state and the four byte-flipped message
+  groups, concluded at the eb_hmem store shape with the full final
+  file spelled (the clobber map). Premises = THE ONE SEAM: the mask
+  home read, the two state-home reads as MkXmm literals, the two src
+  window bounds, the sixteen K-group reads. Pieces: the epilogue law
+  (feedback paddds folded, the unpack shuffles COMPUTED THROUGH to
+  MkXmm-of-projections — vsel cracks a shuffle over any argument, so
+  the store trees meet shn_unpack's computed shape by syntax); the
+  prologue law (state reads as FREE Xmm values, pack chains kept
+  FOLDED; three mod_unique q=0 wrap collapses + eight farkas gate
+  discharges in an alternating stall/rewrite walk); a ShnRs eta law
+  by case-on (the plan's "Xmm eta" — the actual seam is MkShnRs of
+  the previous qround's two projections, collapsed 15×); eb_s16/
+  eb_f1/eb_f2 naming the article's nest + feedback registers (def
+  lemmas cited rl fold the walked towers into them — the summit
+  stays readable); eb_block_split (shn_block = shn_unpack of the two
+  names). The composition is ~70 pure rewrites and two computes:
+  pack laws fire AT COMPOSITION TIME on the literal-instantiated
+  folded chains, each stanza rewrite is chased by its g_def rl fold
+  + K-premise + eta. TWO corrections to part 1's plan, both
+  load-bearing: (1) COMPUTE CANNOT RE-DESCEND INTO A STUCK CONTEXT —
+  a premise rewrite that plants a redex inside the frozen tail
+  (match on the free instruction tail) leaves it unreduced forever;
+  everything downstream of the last stall must stay a folded
+  APPLICATION and be adjusted by REWRITING only. Corollary: content
+  BEFORE the last stall re-normalizes when the walk resumes (the
+  mask register unfolds to its literal), so the boundary sits at the
+  last stall, not at the walk's start. (2) The byte tie to
+  shn_block_b is NOT the walk's business: eb_walk concludes over
+  (vbswap (vload mem src+16i)) groups; the group->bytes tie is the
+  differential's ground rows today and E3's seam symbolically.
+  REMAINING for E2b: transplant body + laws into
+  std/sha256/sha256.shani.shard under shn_ names (corpus
+  registration, fmt/canon gates), then E2c — the block-grain silicon
+  differential (Opus-delegated).
 - **E3 — the variant bin** (lean name: sha256sum_shani; naming of
   the eventual dispatch bin = B6's fork). Skeleton re-composition
   + fold swap, emitted ELF (enc_winelf), byte-tie, capless silicon
