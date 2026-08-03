@@ -239,80 +239,138 @@
 ;; computed just-in-time, paddd feedback, unpacked back to H8. Register
 ;; allocation is E2b's business — this is the pure dataflow the machine
 ;; walk ties to.
+;; the schedule chain as named fns: each names its shared subterms, so the
+;; block body stays a SINGLE let and no independent adjacent lets arise --
+;; C3-canonical without parallel lets (which this module's ground pins
+;; forbid, per sha_round's reverse-resolution note). shn_gN = the (16+N)th
+;; schedule group; g4..g15 feed the last twelve qround issues.
+(fn shn_g4 ((g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) Xmm (shn_sstep g0 g1 g2 g3))
+
+(fn shn_g5 ((g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) Xmm
+  (shn_sstep g1 g2 g3 (shn_g4 g0 g1 g2 g3)))
+
+(fn shn_g6 ((g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) Xmm
+  (shn_sstep g2 g3 (shn_g4 g0 g1 g2 g3) (shn_g5 g0 g1 g2 g3)))
+
+(fn shn_g7 ((g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) Xmm
+  (shn_sstep g3 (shn_g4 g0 g1 g2 g3) (shn_g5 g0 g1 g2 g3) (shn_g6 g0 g1 g2 g3)))
+
+(fn shn_g8 ((g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) Xmm
+  (shn_sstep
+    (shn_g4 g0 g1 g2 g3)
+    (shn_g5 g0 g1 g2 g3)
+    (shn_g6 g0 g1 g2 g3)
+    (shn_g7 g0 g1 g2 g3)))
+
+(fn shn_g9 ((g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) Xmm
+  (shn_sstep
+    (shn_g5 g0 g1 g2 g3)
+    (shn_g6 g0 g1 g2 g3)
+    (shn_g7 g0 g1 g2 g3)
+    (shn_g8 g0 g1 g2 g3)))
+
+(fn shn_g10 ((g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) Xmm
+  (shn_sstep
+    (shn_g6 g0 g1 g2 g3)
+    (shn_g7 g0 g1 g2 g3)
+    (shn_g8 g0 g1 g2 g3)
+    (shn_g9 g0 g1 g2 g3)))
+
+(fn shn_g11 ((g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) Xmm
+  (shn_sstep
+    (shn_g7 g0 g1 g2 g3)
+    (shn_g8 g0 g1 g2 g3)
+    (shn_g9 g0 g1 g2 g3)
+    (shn_g10 g0 g1 g2 g3)))
+
+(fn shn_g12 ((g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) Xmm
+  (shn_sstep
+    (shn_g8 g0 g1 g2 g3)
+    (shn_g9 g0 g1 g2 g3)
+    (shn_g10 g0 g1 g2 g3)
+    (shn_g11 g0 g1 g2 g3)))
+
+(fn shn_g13 ((g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) Xmm
+  (shn_sstep
+    (shn_g9 g0 g1 g2 g3)
+    (shn_g10 g0 g1 g2 g3)
+    (shn_g11 g0 g1 g2 g3)
+    (shn_g12 g0 g1 g2 g3)))
+
+(fn shn_g14 ((g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) Xmm
+  (shn_sstep
+    (shn_g10 g0 g1 g2 g3)
+    (shn_g11 g0 g1 g2 g3)
+    (shn_g12 g0 g1 g2 g3)
+    (shn_g13 g0 g1 g2 g3)))
+
+(fn shn_g15 ((g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) Xmm
+  (shn_sstep
+    (shn_g11 g0 g1 g2 g3)
+    (shn_g12 g0 g1 g2 g3)
+    (shn_g13 g0 g1 g2 g3)
+    (shn_g14 g0 g1 g2 g3)))
+
+;; the canonical block dataflow: 16 qround issues over the named schedule
+;; chain, paddd feedback, unpacked back to H8. Register allocation is
+;; E2b's business -- this is the pure dataflow the machine walk ties to.
 (fn shn_block ((st H8) (g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) H8
-  (let ((s0 (MkShnRs (shn_pk_abef st) (shn_pk_cdgh st))))
-    (let ((s1 (shn_qround s0 g0 (shn_kg 0))))
-      (let ((g4 (shn_sstep g0 g1 g2 g3)))
-        (let ((s2 (shn_qround s1 g1 (shn_kg 1))))
-          (let ((g5 (shn_sstep g1 g2 g3 g4)))
-            (let ((s3 (shn_qround s2 g2 (shn_kg 2))))
-              (let ((g6 (shn_sstep g2 g3 g4 g5)))
-                (let ((s4 (shn_qround s3 g3 (shn_kg 3))))
-                  (let ((g7 (shn_sstep g3 g4 g5 g6)))
-                    (let ((s5 (shn_qround s4 g4 (shn_kg 4))))
-                      (let ((g8 (shn_sstep g4 g5 g6 g7)))
-                        (let ((s6 (shn_qround s5 g5 (shn_kg 5))))
-                          (let ((g9 (shn_sstep g5 g6 g7 g8)))
-                            (let ((s7 (shn_qround s6 g6 (shn_kg 6))))
-                              (let ((g10 (shn_sstep g6 g7 g8 g9)))
-                                (let ((s8 (shn_qround s7 g7 (shn_kg 7))))
-                                  (let ((g11 (shn_sstep g7 g8 g9 g10)))
-                                    (let ((s9 (shn_qround s8 g8 (shn_kg 8))))
-                                      (let ((g12 (shn_sstep g8 g9 g10 g11)))
-                                        (let
-                                          ((s10 (shn_qround s9 g9 (shn_kg 9))))
-                                          (let
-                                            ((g13 (shn_sstep g9 g10 g11 g12)))
-                                            (let
-                                              ((s11
-                                                 (shn_qround
-                                                   s10
-                                                   g10
-                                                   (shn_kg 10))))
-                                              (let
-                                                ((g14
-                                                   (shn_sstep g10 g11 g12 g13)))
-                                                (let
-                                                  ((s12
-                                                     (shn_qround
-                                                       s11
-                                                       g11
-                                                       (shn_kg 11))))
-                                                  (let
-                                                    ((g15
-                                                       (shn_sstep g11 g12 g13
-                                                         g14)))
-                                                    (let
-                                                      ((s13
-                                                         (shn_qround
-                                                           s12
-                                                           g12
-                                                           (shn_kg 12))))
-                                                      (let
-                                                        ((s14
-                                                           (shn_qround
-                                                             s13
-                                                             g13
-                                                             (shn_kg 13))))
-                                                        (let
-                                                          ((s15
-                                                             (shn_qround
-                                                               s14
-                                                               g14
-                                                               (shn_kg 14))))
-                                                          (let
-                                                            ((s16
-                                                               (shn_qround
-                                                                 s15
-                                                                 g15
-                                                                 (shn_kg 15))))
-                                                            (shn_unpack
-                                                              (vpaddd
-                                                                (rabef_of s16)
-                                                                (rabef_of s0))
-                                                              (vpaddd
-                                                                (rcdgh_of s16)
-                                                                (rcdgh_of s0)))))))))))))))))))))))))))))))))
+  (let
+    ((s16
+       (shn_qround
+         (shn_qround
+           (shn_qround
+             (shn_qround
+               (shn_qround
+                 (shn_qround
+                   (shn_qround
+                     (shn_qround
+                       (shn_qround
+                         (shn_qround
+                           (shn_qround
+                             (shn_qround
+                               (shn_qround
+                                 (shn_qround
+                                   (shn_qround
+                                     (shn_qround
+                                       (MkShnRs
+                                         (shn_pk_abef st)
+                                         (shn_pk_cdgh st))
+                                       g0
+                                       (shn_kg 0))
+                                     g1
+                                     (shn_kg 1))
+                                   g2
+                                   (shn_kg 2))
+                                 g3
+                                 (shn_kg 3))
+                               (shn_g4 g0 g1 g2 g3)
+                               (shn_kg 4))
+                             (shn_g5 g0 g1 g2 g3)
+                             (shn_kg 5))
+                           (shn_g6 g0 g1 g2 g3)
+                           (shn_kg 6))
+                         (shn_g7 g0 g1 g2 g3)
+                         (shn_kg 7))
+                       (shn_g8 g0 g1 g2 g3)
+                       (shn_kg 8))
+                     (shn_g9 g0 g1 g2 g3)
+                     (shn_kg 9))
+                   (shn_g10 g0 g1 g2 g3)
+                   (shn_kg 10))
+                 (shn_g11 g0 g1 g2 g3)
+                 (shn_kg 11))
+               (shn_g12 g0 g1 g2 g3)
+               (shn_kg 12))
+             (shn_g13 g0 g1 g2 g3)
+             (shn_kg 13))
+           (shn_g14 g0 g1 g2 g3)
+           (shn_kg 14))
+         (shn_g15 g0 g1 g2 g3)
+         (shn_kg 15))))
+    (shn_unpack
+      (vpaddd (rabef_of s16) (shn_pk_abef st))
+      (vpaddd (rcdgh_of s16) (shn_pk_cdgh st)))))
 
 ;; the block over a raw 64-byte block.
 (fn shn_block_b ((st H8) (b (List Int))) H8
