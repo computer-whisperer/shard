@@ -1,0 +1,2568 @@
+;;; std/sha256/sha256.shani.shard -- THE SHA-NI BLOCK ARTICLE (Arc B rung
+;;; B5, slice E2 -- docs/STREAM.md par. 8.3/8.4; the E1 tier it rides on is
+;;; models/x86/vector.shard, record in docs/X86.md par. 6).
+;;;
+;;; This file proves the canonical SHA-NI block computation AT THE VALUE
+;;; LEVEL against std/sha256's spec, in the tier's own vocabulary:
+;;;
+;;;   - PACK/UNPACK: the permuted two-register state layout SHA-NI
+;;;     dictates (ABEF register = (F,E,B,A) in lanes 0..3, CDGH =
+;;;     (H,G,D,C)) is landed and inverted by pshufd/palignr/punpck
+;;;     shuffle sequences (pblendw-free -- the tier models only the
+;;;     species the hand body needs), proven symbolically.
+;;;   - THE TWO-ROUNDS LAW shn_rnds2: sha256rnds2 at the packed layout
+;;;     IS two rounds of the spec's compression, with the two rounds'
+;;;     masked K+W in the wk register's low lanes (upper lanes junk).
+;;;     Its companion shn_slide: after two rounds the new CDGH register
+;;;     is the old ABEF register VERBATIM -- why the canonical loop
+;;;     alternates rnds2 destinations with zero move instructions.
+;;;   - THE SCHEDULE LAW shn_sched_group: one msg1/palignr/paddd/msg2
+;;;     step over four word groups computes the next four schedule
+;;;     words of sched_ext's recurrence (shn_wnext is tree-identical to
+;;;     sched_ext's Cons value), lanes 2/3 chaining on lanes 0/1 inside
+;;;     the instruction exactly as the spec recurs.
+;;;   - THE REFERENCE BLOCK shn_block_b: the canonical 16-issue dataflow
+;;;     with just-in-time schedule updates and paddd feedback, pinned
+;;;     ground-equal to sha_block on "abc", the empty-pad block, and
+;;;     chained over the two-block NIST vector. This is the dataflow the
+;;;     machine walk (E2b, this file's next slice) ties the hand body
+;;;     to, and the reference the block-grain silicon differential
+;;;     replays.
+;;;
+;;; Proof architecture: the lane vocabulary is respelled tree-identical
+;;; on both sides (the shn_*_v alignment family closes by one compute
+;;; each), so the ONLY semantic seam is the wk mask -- the instruction
+;;; carries m32(K+W) where the spec adds K+W raw. shn_madd32 (the
+;;; unconditional additive mod collapse) + shn_absorb4 (at vt1's exact
+;;; shape) cross it; everything else is wiring. The nonneg range ladder
+;;; (pw rungs, ground-shift rotate bounds, helper bounds) discharges the
+;;; mask/mod bridge's premises; laws carry component-nonneg premises
+;;; only, which consumers meet from lane invariants (every lane is
+;;; masked by construction).
+;;;
+;;; Trust: the instruction-grain silicon differential
+;;; (models/x86/diff/) is the authority on the tier's semantics per
+;;; docs/X86.md par. 32; this article is pure spec-to-model mathematics on
+;;; top of it. The sha256rnds2 operand story (SDM: ABEF in SRC, CDGH in
+;;; DEST; caught on silicon at E1) is recorded at the semantic fn.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/facts.shard")
+(use (:: kernel facts *))
+(import "../../std/bits")
+(use (:: std bits *))
+(import "sha256.shard")
+(use (:: std sha256 sha256 *))
+(import "../../models/x86/vector.shard")
+(use (:: models x86 vector *))
+
+;; ---- pack/unpack ------------------------------------------------------------------
+
+(fn shn_pk_abef ((st H8)) Xmm
+  (match st
+    ((mk_h8 a b c d e f g h) (MkXmm f e b a))))
+
+(fn shn_pk_cdgh ((st H8)) Xmm
+  (match st
+    ((mk_h8 a b c d e f g h) (MkXmm h g d c))))
+
+(fn shn_unpack ((abef Xmm) (cdgh Xmm)) H8
+  (mk_h8
+    (x3_of abef)
+    (x2_of abef)
+    (x3_of cdgh)
+    (x2_of cdgh)
+    (x1_of abef)
+    (x0_of abef)
+    (x1_of cdgh)
+    (x0_of cdgh)))
+
+;; unpack inverts pack (symbolic).
+(claim shnp_roundtrip
+  (goal ((a Int) (b Int) (c Int) (d Int) (e Int) (f Int) (g Int) (h Int)) ()
+    (=
+      (shn_unpack
+        (shn_pk_abef (mk_h8 a b c d e f g h))
+        (shn_pk_cdgh (mk_h8 a b c d e f g h)))
+      (mk_h8 a b c d e f g h)))
+  (steps ((compute both)) refl))
+
+;; the state-LOAD shuffles: from the linear dword layout T0=(a,b,c,d),
+;; T1=(e,f,g,h) (as vload delivers the H window), the sequence
+;;   t0' = pshufd T0 0xB1 ; t1' = pshufd T1 0x1B
+;;   abef = palignr t0' t1' 8 ; cdgh = punpcklqdq t1' (pshufd t0' 0x0E)
+;; lands the packed pair (symbolic).
+(claim shnp_pack_abef
+  (goal ((a Int) (b Int) (c Int) (d Int) (e Int) (f Int) (g Int) (h Int)) ()
+    (=
+      (vpalignr (vpshufd (MkXmm a b c d) 177) (vpshufd (MkXmm e f g h) 27) 8)
+      (shn_pk_abef (mk_h8 a b c d e f g h))))
+  (steps ((compute both)) refl))
+
+(claim shnp_pack_cdgh
+  (goal ((a Int) (b Int) (c Int) (d Int) (e Int) (f Int) (g Int) (h Int)) ()
+    (=
+      (vpunpckl
+        (vpshufd (MkXmm e f g h) 27)
+        (vpshufd (vpshufd (MkXmm a b c d) 177) 14))
+      (shn_pk_cdgh (mk_h8 a b c d e f g h))))
+  (steps ((compute both)) refl))
+
+;; the state-STORE shuffles: from packed abef/cdgh back to the linear
+;; layout (symbolic).
+(claim shnp_unpack_lo
+  (goal ((a Int) (b Int) (c Int) (d Int) (e Int) (f Int) (g Int) (h Int)) ()
+    (=
+      (vpunpckl
+        (vpshufd (shn_pk_abef (mk_h8 a b c d e f g h)) 27)
+        (vpshufd (shn_pk_cdgh (mk_h8 a b c d e f g h)) 27))
+      (MkXmm a b c d)))
+  (steps ((compute both)) refl))
+
+(claim shnp_unpack_hi
+  (goal ((a Int) (b Int) (c Int) (d Int) (e Int) (f Int) (g Int) (h Int)) ()
+    (=
+      (vpunpckh
+        (vpshufd (shn_pk_abef (mk_h8 a b c d e f g h)) 27)
+        (vpshufd (shn_pk_cdgh (mk_h8 a b c d e f g h)) 27))
+      (MkXmm e f g h)))
+  (steps ((compute both)) refl))
+
+;; ---- ground fixtures --------------------------------------------------------------
+
+;; the "abc" block and its schedule.
+(fn shn_blk () (List Int) (stake 64 (sha_pad "abc")))
+
+;; word group i of a BLOCK's sixteen message words (i in 0..3).
+(fn shn_wg ((b (List Int)) (i Int)) Xmm
+  (MkXmm
+    (snth (* 4 i) (words16 b 16))
+    (snth (+ (* 4 i) 1) (words16 b 16))
+    (snth (+ (* 4 i) 2) (words16 b 16))
+    (snth (+ (* 4 i) 3) (words16 b 16))))
+
+;; word group i of the abc block's FULL 64-word schedule (i in 0..15).
+(fn shn_mg ((i Int)) Xmm
+  (MkXmm
+    (snth (* 4 i) (sha_sched (shn_blk)))
+    (snth (+ (* 4 i) 1) (sha_sched (shn_blk)))
+    (snth (+ (* 4 i) 2) (sha_sched (shn_blk)))
+    (snth (+ (* 4 i) 3) (sha_sched (shn_blk)))))
+
+;; K group i (i in 0..15).
+(fn shn_kg ((i Int)) Xmm
+  (MkXmm
+    (snth (* 4 i) (sha_k))
+    (snth (+ (* 4 i) 1) (sha_k))
+    (snth (+ (* 4 i) 2) (sha_k))
+    (snth (+ (* 4 i) 3) (sha_k))))
+
+;; ---- rnds2 = two rounds (ground) --------------------------------------------------
+
+;; wk lanes 0/1 = the two rounds' masked K+W; upper lanes junk (57/91).
+(claim shnp_rnds2
+  (goal () ()
+    (=
+      (vrnds2
+        (shn_pk_abef (sha_h0))
+        (shn_pk_cdgh (sha_h0))
+        (MkXmm
+          (vm32 (+ (snth 0 (sha_k)) (snth 0 (sha_sched (shn_blk)))))
+          (vm32 (+ (snth 1 (sha_k)) (snth 1 (sha_sched (shn_blk)))))
+          57
+          91))
+      (shn_pk_abef
+        (sha_round
+          (sha_round (sha_h0) (snth 0 (sha_k)) (snth 0 (sha_sched (shn_blk))))
+          (snth 1 (sha_k))
+          (snth 1 (sha_sched (shn_blk)))))))
+  (steps ((compute both)) refl))
+
+;; THE SLIDE LAW (ground): two rounds later the new CDGH register is the
+;; old ABEF register verbatim (a,b,e,f slide into c,d,g,h) — why the
+;; canonical loop alternates rnds2 destinations with zero moves.
+(claim shnp_slide
+  (goal () ()
+    (=
+      (shn_pk_cdgh
+        (sha_round
+          (sha_round (sha_h0) (snth 0 (sha_k)) (snth 0 (sha_sched (shn_blk))))
+          (snth 1 (sha_k))
+          (snth 1 (sha_sched (shn_blk)))))
+      (shn_pk_abef (sha_h0))))
+  (steps ((compute both)) refl))
+
+;; ---- the schedule step (ground) ---------------------------------------------------
+
+;; msg2(paddd(msg1(g0,g1), palignr(g3,g2,4)), g3) = the next word group.
+(claim shnp_sched
+  (goal () ()
+    (=
+      (vmsg2
+        (vpaddd
+          (vmsg1 (shn_mg 0) (shn_mg 1))
+          (vpalignr (shn_mg 3) (shn_mg 2) 4))
+        (shn_mg 3))
+      (shn_mg 4)))
+  (steps ((compute both)) refl))
+
+;; and the NEXT step, exercising computed (not message) inputs.
+(claim shnp_sched2
+  (goal () ()
+    (=
+      (vmsg2
+        (vpaddd
+          (vmsg1 (shn_mg 1) (shn_mg 2))
+          (vpalignr (shn_mg 4) (shn_mg 3) 4))
+        (shn_mg 4))
+      (shn_mg 5)))
+  (steps ((compute both)) refl))
+
+;; ---- the block ---------------------------------------------------------------------
+
+(record ShnRs (rabef Xmm) (rcdgh Xmm))
+
+;; one 4-round group: wk = paddd(msg-group, K-group); two rnds2 issues,
+;; the second consuming wk's high lanes via pshufd 0x0E. The register
+;; alternation is the slide law: after each issue the old ABEF is the
+;; new CDGH.
+(fn shn_qround ((s ShnRs) (m Xmm) (kg Xmm)) ShnRs
+  (let ((wk (vpaddd m kg)))
+    (let ((a1 (vrnds2 (rabef_of s) (rcdgh_of s) wk)))
+      (MkShnRs (vrnds2 a1 (rabef_of s) (vpshufd wk 14)) a1))))
+
+;; one schedule step at group grain.
+(fn shn_sstep ((g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) Xmm
+  (vmsg2 (vpaddd (vmsg1 g0 g1) (vpalignr g3 g2 4)) g3))
+
+;; the canonical block dataflow: 16 issues, schedule groups g4..g15
+;; computed just-in-time, paddd feedback, unpacked back to H8. Register
+;; allocation is E2b's business — this is the pure dataflow the machine
+;; walk ties to.
+(fn shn_block ((st H8) (g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) H8
+  (let ((s0 (MkShnRs (shn_pk_abef st) (shn_pk_cdgh st))))
+    (let ((s1 (shn_qround s0 g0 (shn_kg 0))))
+      (let ((g4 (shn_sstep g0 g1 g2 g3)))
+        (let ((s2 (shn_qround s1 g1 (shn_kg 1))))
+          (let ((g5 (shn_sstep g1 g2 g3 g4)))
+            (let ((s3 (shn_qround s2 g2 (shn_kg 2))))
+              (let ((g6 (shn_sstep g2 g3 g4 g5)))
+                (let ((s4 (shn_qround s3 g3 (shn_kg 3))))
+                  (let ((g7 (shn_sstep g3 g4 g5 g6)))
+                    (let ((s5 (shn_qround s4 g4 (shn_kg 4))))
+                      (let ((g8 (shn_sstep g4 g5 g6 g7)))
+                        (let ((s6 (shn_qround s5 g5 (shn_kg 5))))
+                          (let ((g9 (shn_sstep g5 g6 g7 g8)))
+                            (let ((s7 (shn_qround s6 g6 (shn_kg 6))))
+                              (let ((g10 (shn_sstep g6 g7 g8 g9)))
+                                (let ((s8 (shn_qround s7 g7 (shn_kg 7))))
+                                  (let ((g11 (shn_sstep g7 g8 g9 g10)))
+                                    (let ((s9 (shn_qround s8 g8 (shn_kg 8))))
+                                      (let ((g12 (shn_sstep g8 g9 g10 g11)))
+                                        (let
+                                          ((s10 (shn_qround s9 g9 (shn_kg 9))))
+                                          (let
+                                            ((g13 (shn_sstep g9 g10 g11 g12)))
+                                            (let
+                                              ((s11
+                                                 (shn_qround
+                                                   s10
+                                                   g10
+                                                   (shn_kg 10))))
+                                              (let
+                                                ((g14
+                                                   (shn_sstep g10 g11 g12 g13)))
+                                                (let
+                                                  ((s12
+                                                     (shn_qround
+                                                       s11
+                                                       g11
+                                                       (shn_kg 11))))
+                                                  (let
+                                                    ((g15
+                                                       (shn_sstep g11 g12 g13
+                                                         g14)))
+                                                    (let
+                                                      ((s13
+                                                         (shn_qround
+                                                           s12
+                                                           g12
+                                                           (shn_kg 12))))
+                                                      (let
+                                                        ((s14
+                                                           (shn_qround
+                                                             s13
+                                                             g13
+                                                             (shn_kg 13))))
+                                                        (let
+                                                          ((s15
+                                                             (shn_qround
+                                                               s14
+                                                               g14
+                                                               (shn_kg 14))))
+                                                          (let
+                                                            ((s16
+                                                               (shn_qround
+                                                                 s15
+                                                                 g15
+                                                                 (shn_kg 15))))
+                                                            (shn_unpack
+                                                              (vpaddd
+                                                                (rabef_of s16)
+                                                                (rabef_of s0))
+                                                              (vpaddd
+                                                                (rcdgh_of s16)
+                                                                (rcdgh_of s0)))))))))))))))))))))))))))))))))
+
+;; the block over a raw 64-byte block.
+(fn shn_block_b ((st H8) (b (List Int))) H8
+  (shn_block st (shn_wg b 0) (shn_wg b 1) (shn_wg b 2) (shn_wg b 3)))
+
+;; THE BLOCK PIN: the canonical dataflow = the spec's block on "abc".
+(claim shnp_block
+  (goal () ()
+    (= (shn_block_b (sha_h0) (shn_blk)) (sha_block (sha_h0) (shn_blk))))
+  (steps ((compute both)) refl))
+
+;; a second vector — the empty message's pure-padding block.
+(claim shnp_block_empty
+  (goal () ()
+    (=
+      (shn_block_b (sha_h0) (stake 64 (sha_pad Nil)))
+      (sha_block (sha_h0) (stake 64 (sha_pad Nil)))))
+  (steps ((compute both)) refl))
+
+;; chained feedback — the two-block NIST vector, folded by hand twice.
+(fn shn_v2 () (List Int)
+  (sha_pad "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))
+
+(claim shnp_two_blocks
+  (goal () ()
+    (=
+      (shn_block_b
+        (shn_block_b (sha_h0) (stake 64 (shn_v2)))
+        (stake 64 (sdrop 64 (shn_v2))))
+      (sha_blocks (sha_h0) (shn_v2) 2)))
+  (steps ((compute both)) refl))
+
+;; ==== SYMBOLIC TRANCHE 1 — the article's seam kit ==================================
+
+;; ---- alignment: the v-respellings ARE the spec functions (tree-identity
+;; as theorems — one compute closes each) ---------------------------------------------
+
+(claim shn_m32_v
+  (goal ((x Int)) () (= (m32 x) (vm32 x)))
+  (steps ((compute both)) refl))
+
+(claim shn_rotr_v
+  (goal ((x Int) (k Int)) () (= (rotr32 x k) (vrotr32 x k)))
+  (steps ((compute both)) refl))
+
+(claim shn_ch_v
+  (goal ((x Int) (y Int) (z Int)) () (= (sha_ch x y z) (vch x y z)))
+  (steps ((compute both)) refl))
+
+(claim shn_maj_v
+  (goal ((x Int) (y Int) (z Int)) () (= (sha_maj x y z) (vmaj x y z)))
+  (steps ((compute both)) refl))
+
+(claim shn_bs0_v
+  (goal ((x Int)) () (= (bsig0 x) (vbs0 x)))
+  (steps ((compute both)) refl))
+
+(claim shn_bs1_v
+  (goal ((x Int)) () (= (bsig1 x) (vbs1 x)))
+  (steps ((compute both)) refl))
+
+(claim shn_ss0_v
+  (goal ((x Int)) () (= (ssig0 x) (vss0 x)))
+  (steps ((compute both)) refl))
+
+(claim shn_ss1_v
+  (goal ((x Int)) () (= (ssig1 x) (vss1 x)))
+  (steps ((compute both)) refl))
+
+;; ---- the vm32/mod bridge ----------------------------------------------------------
+
+(claim shn_vm32_mod
+  (goal ((x Int)) ((= (le 0 x) True)) (= (vm32 x) (mod x 4294967296)))
+  (chain
+    (steps ((unfold vm32 lhs)))
+    (rewrite-with
+      (lemma mask_word32)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    refl))
+
+;; ---- the additive mod collapse (unconditional; ipf_lm's template) -----------------
+
+(claim shn_madd32
+  (goal ((x Int) (y Int)) ()
+    (= (mod (+ x (mod y 4294967296)) 4294967296) (mod (+ x y) 4294967296)))
+  (chain
+    (have hid (= y (+ (* 4294967296 (ediv y 4294967296)) (mod y 4294967296)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n y) (inst d 4294967296))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hid2
+      (=
+        (+ x (mod y 4294967296))
+        (+
+          (* 4294967296 (ediv (+ x (mod y 4294967296)) 4294967296))
+          (mod (+ x (mod y 4294967296)) 4294967296)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (+ x (mod y 4294967296))) (inst d 4294967296))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hml (= (le 0 (mod (+ x (mod y 4294967296)) 4294967296)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hmh (= (lt (mod (+ x (mod y 4294967296)) 4294967296) 4294967296) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdec
+      (=
+        (+ x y)
+        (+
+          (*
+            4294967296
+            (+ (ediv y 4294967296) (ediv (+ x (mod y 4294967296)) 4294967296)))
+          (mod (+ x (mod y 4294967296)) 4294967296)))
+      (steps () (by arith (list (list 1 -1 -1) (list 1 1 1)))))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      rhs
+      ((inst n (+ x y))
+       (inst d 4294967296)
+       (inst
+         q
+         (+ (ediv y 4294967296) (ediv (+ x (mod y 4294967296)) 4294967296)))
+       (inst r (mod (+ x (mod y 4294967296)) 4294967296)))
+      ((steps ((rewrite (premise hdec) lr lhs true ())) refl)
+       (steps ((rewrite (premise hml) lr lhs true ())) refl)
+       (steps ((rewrite (premise hmh) lr lhs true ())) refl)))
+    refl))
+
+;; ---- absorption at vt1's exact shape ----------------------------------------------
+;; vm32 (p + (q + (r + vm32 s))) = vm32 (p + (q + (r + s))) — the ONE
+;; seam between vrnds2's wk-as-lane-value and the spec's raw (k + w).
+
+(claim shn_absorb4
+  (goal ((p Int) (q Int) (r Int) (s Int))
+    ((= (le 0 p) True) (= (le 0 q) True) (= (le 0 r) True) (= (le 0 s) True))
+    (= (vm32 (+ p (+ q (+ r (vm32 s))))) (vm32 (+ p (+ q (+ r s))))))
+  (chain
+    (have hs0 (= (le 0 (vm32 s)) True)
+      (chain
+        (steps ((unfold vm32 lhs)))
+        (rewrite-with
+          (lemma band_lo)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        refl))
+    (have ha1 (= (le 0 (+ p (+ q (+ r (vm32 s))))) True)
+      (steps () (by arith (list 1 1 1 1 0 1))))
+    (have ha2 (= (le 0 (+ p (+ q (+ r s)))) True)
+      (steps () (by arith (list 1 1 1 1 1))))
+    (rewrite-with
+      (lemma shn_vm32_mod)
+      lr
+      lhs
+      ((inst x (+ p (+ q (+ r (vm32 s))))))
+      ((steps ((rewrite (premise ha1) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shn_vm32_mod)
+      lr
+      lhs
+      ((inst x s))
+      ((steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shn_vm32_mod)
+      lr
+      rhs
+      ((inst x (+ p (+ q (+ r s)))))
+      ((steps ((rewrite (premise ha2) lr lhs true ())) refl)))
+    (have hra
+      (=
+        (+ p (+ q (+ r (mod s 4294967296))))
+        (+ (+ p (+ q r)) (mod s 4294967296)))
+      (steps () (by arith (list (list 1) (list 1)))))
+    (have hrb (= (+ p (+ q (+ r s))) (+ (+ p (+ q r)) s))
+      (steps () (by arith (list (list 1) (list 1)))))
+    (steps
+      ((rewrite (premise hra) lr lhs true ())
+       (rewrite (premise hrb) lr rhs true ())))
+    (rewrite-with
+      (lemma shn_madd32)
+      lr
+      lhs
+      ((inst x (+ p (+ q r))) (inst y s))
+      ())
+    refl))
+
+;; ---- THE SLIDE LAW, symbolic ------------------------------------------------------
+;; After two rounds the new CDGH register is the old ABEF register
+;; verbatim — a,b,e,f ride through into c,d,g,h untouched, so the
+;; projection discards every masked tree and refl closes.
+
+(claim shn_slide
+  (goal
+    ((a Int)
+     (b Int)
+     (c Int)
+     (d Int)
+     (e Int)
+     (f Int)
+     (g Int)
+     (h Int)
+     (k0 Int)
+     (w0 Int)
+     (k1 Int)
+     (w1 Int))
+    ()
+    (=
+      (shn_pk_cdgh (sha_round (sha_round (mk_h8 a b c d e f g h) k0 w0) k1 w1))
+      (shn_pk_abef (mk_h8 a b c d e f g h))))
+  (steps ((compute both)) refl))
+
+;; ---- the round law (premised form — the range ladder will discharge
+;; the helper-nonneg premises internally in the article's final form) ---------------
+;; sha_round IS one vrnd_a/vrnd_e pair at the masked wk lane value.
+
+(claim shn_round_p
+  (goal
+    ((a Int)
+     (b Int)
+     (c Int)
+     (d Int)
+     (e Int)
+     (f Int)
+     (g Int)
+     (h Int)
+     (k Int)
+     (w Int))
+    ((= (le 0 h) True)
+     (= (le 0 (vbs1 e)) True)
+     (= (le 0 (vch e f g)) True)
+     (= (le 0 (+ k w)) True))
+    (=
+      (sha_round (mk_h8 a b c d e f g h) k w)
+      (mk_h8
+        (vrnd_a a b c e f g h (vm32 (+ k w)))
+        a
+        b
+        c
+        (vrnd_e d e f g h (vm32 (+ k w)))
+        e
+        f
+        g)))
+  (chain
+    (steps
+      ((compute lhs (stop m32 bsig0 bsig1 sha_ch sha_maj))
+       (compute rhs (stop vm32 vbs0 vbs1 vch vmaj))))
+    (rewrite-with (lemma shn_m32_v) lr lhs () ())
+    (rewrite-with (lemma shn_m32_v) lr lhs () ())
+    (rewrite-with (lemma shn_m32_v) lr lhs () ())
+    (rewrite-with (lemma shn_m32_v) lr lhs () ())
+    (rewrite-with (lemma shn_bs1_v) lr lhs () ())
+    (rewrite-with (lemma shn_bs1_v) lr lhs () ())
+    (rewrite-with (lemma shn_ch_v) lr lhs () ())
+    (rewrite-with (lemma shn_ch_v) lr lhs () ())
+    (rewrite-with (lemma shn_bs0_v) lr lhs () ())
+    (rewrite-with (lemma shn_maj_v) lr lhs () ())
+    (rewrite-with
+      (lemma shn_absorb4)
+      lr
+      rhs
+      ((inst p h) (inst q (vbs1 e)) (inst r (vch e f g)) (inst s (+ k w)))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shn_absorb4)
+      lr
+      rhs
+      ((inst p h) (inst q (vbs1 e)) (inst r (vch e f g)) (inst s (+ k w)))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    refl))
+
+;; ---- range ladder, rung 0: the mask is nonneg -------------------------------------
+
+(claim shn_vm32_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (vm32 x)) True))
+  (chain
+    (steps ((unfold vm32 lhs)))
+    (rewrite-with
+      (lemma band_lo)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    refl))
+
+;; ---- range ladder, rung 1: literal pow2 values (weaning ladder off
+;; pow2_z/pow2_s -- pow2 is opaque at the std/bits surface; pw8/pw16
+;; template from std/sha256/sha256.imp.shard) ---------------------------------------
+
+(claim shn_pw1
+  (goal () () (= (pow2 1) 2))
+  (chain
+    (have h1 (= 1 (+ 0 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h1) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma pow2_z) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw2
+  (goal () () (= (pow2 2) 4))
+  (chain
+    (have h2 (= 2 (+ 1 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h2) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw1) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw3
+  (goal () () (= (pow2 3) 8))
+  (chain
+    (have h3 (= 3 (+ 2 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h3) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw2) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw4
+  (goal () () (= (pow2 4) 16))
+  (chain
+    (have h4 (= 4 (+ 3 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h4) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw3) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw5
+  (goal () () (= (pow2 5) 32))
+  (chain
+    (have h5 (= 5 (+ 4 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h5) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw4) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw6
+  (goal () () (= (pow2 6) 64))
+  (chain
+    (have h6 (= 6 (+ 5 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h6) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw5) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw7
+  (goal () () (= (pow2 7) 128))
+  (chain
+    (have h7 (= 7 (+ 6 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h7) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw6) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw8
+  (goal () () (= (pow2 8) 256))
+  (chain
+    (have h8 (= 8 (+ 7 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h8) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw7) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw9
+  (goal () () (= (pow2 9) 512))
+  (chain
+    (have h9 (= 9 (+ 8 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h9) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw8) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw10
+  (goal () () (= (pow2 10) 1024))
+  (chain
+    (have h10 (= 10 (+ 9 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h10) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw9) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw11
+  (goal () () (= (pow2 11) 2048))
+  (chain
+    (have h11 (= 11 (+ 10 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h11) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw10) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw12
+  (goal () () (= (pow2 12) 4096))
+  (chain
+    (have h12 (= 12 (+ 11 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h12) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw11) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw13
+  (goal () () (= (pow2 13) 8192))
+  (chain
+    (have h13 (= 13 (+ 12 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h13) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw12) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw14
+  (goal () () (= (pow2 14) 16384))
+  (chain
+    (have h14 (= 14 (+ 13 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h14) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw13) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw15
+  (goal () () (= (pow2 15) 32768))
+  (chain
+    (have h15 (= 15 (+ 14 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h15) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw14) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw16
+  (goal () () (= (pow2 16) 65536))
+  (chain
+    (have h16 (= 16 (+ 15 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h16) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw15) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw17
+  (goal () () (= (pow2 17) 131072))
+  (chain
+    (have h17 (= 17 (+ 16 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h17) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw16) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw18
+  (goal () () (= (pow2 18) 262144))
+  (chain
+    (have h18 (= 18 (+ 17 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h18) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw17) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw19
+  (goal () () (= (pow2 19) 524288))
+  (chain
+    (have h19 (= 19 (+ 18 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h19) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw18) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw20
+  (goal () () (= (pow2 20) 1048576))
+  (chain
+    (have h20 (= 20 (+ 19 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h20) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw19) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw21
+  (goal () () (= (pow2 21) 2097152))
+  (chain
+    (have h21 (= 21 (+ 20 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h21) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw20) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw22
+  (goal () () (= (pow2 22) 4194304))
+  (chain
+    (have h22 (= 22 (+ 21 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h22) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw21) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw23
+  (goal () () (= (pow2 23) 8388608))
+  (chain
+    (have h23 (= 23 (+ 22 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h23) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw22) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw24
+  (goal () () (= (pow2 24) 16777216))
+  (chain
+    (have h24 (= 24 (+ 23 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h24) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw23) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw25
+  (goal () () (= (pow2 25) 33554432))
+  (chain
+    (have h25 (= 25 (+ 24 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h25) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw24) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw26
+  (goal () () (= (pow2 26) 67108864))
+  (chain
+    (have h26 (= 26 (+ 25 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h26) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw25) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw27
+  (goal () () (= (pow2 27) 134217728))
+  (chain
+    (have h27 (= 27 (+ 26 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h27) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw26) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw28
+  (goal () () (= (pow2 28) 268435456))
+  (chain
+    (have h28 (= 28 (+ 27 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h28) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw27) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw29
+  (goal () () (= (pow2 29) 536870912))
+  (chain
+    (have h29 (= 29 (+ 28 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h29) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw28) lr lhs true ()) (compute both)) refl)))
+
+(claim shn_pw30
+  (goal () () (= (pow2 30) 1073741824))
+  (chain
+    (have h30 (= 30 (+ 29 1)) (steps ((compute both)) refl))
+    (steps ((rewrite (premise h30) lr lhs true ())))
+    (rewrite-with (lemma pow2_s) lr lhs () ((steps ((compute both)) refl)))
+    (steps ((rewrite (lemma shn_pw29) lr lhs true ()) (compute both)) refl)))
+
+;; ---- range ladder, rung 2: the ground-shift rotate is nonneg ----------------------
+;; Exemplar at k=2 (shr 2 / shl 30); the other rotate widths template
+;; from this shape.
+
+(claim shn_rotr2_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (vrotr32 x 2)) True))
+  (chain
+    (have hm (= (le 0 (vm32 x)) True)
+      (rewrite-with
+        (lemma shn_vm32_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (steps ((unfold vrotr32 lhs) (compute lhs (stop vm32 bshr bshl bor))))
+    (have hs (= (bshr (vm32 x) 2) (ediv (vm32 x) 4))
+      (chain
+        (rewrite-with
+          (lemma shr_pow2)
+          lr
+          lhs
+          ((inst k 2))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw2) lr lhs true ())))
+        refl))
+    (have hl (= (bshl (vm32 x) 30) (* (vm32 x) 1073741824))
+      (chain
+        (rewrite-with
+          (lemma shl_pow2)
+          lr
+          lhs
+          ((inst k 30))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw30) lr lhs true ())))
+        refl))
+    (have hid (= (vm32 x) (+ (* 4 (ediv (vm32 x) 4)) (mod (vm32 x) 4)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 4))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hmh (= (lt (mod (vm32 x) 4) 4) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdlo (= (le 0 (ediv (vm32 x) 4)) True)
+      (steps () (by arith (list 4 0 1 0 0 -1 1))))
+    (have hslo (= (le 0 (* (vm32 x) 1073741824)) True)
+      (steps () (by arith (list 1 0 1073741824 0 0 0 0))))
+    (steps
+      ((rewrite (premise hs) lr lhs true ())
+       (rewrite (premise hl) lr lhs true ())))
+    (have hor (= (le 0 (bor (ediv (vm32 x) 4) (* (vm32 x) 1073741824))) True)
+      (rewrite-with
+        (lemma bor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hdlo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hslo) lr lhs true ())) refl))
+        refl))
+    (rewrite-with
+      (lemma shn_vm32_mod)
+      lr
+      lhs
+      ((inst x (bor (ediv (vm32 x) 4) (* (vm32 x) 1073741824))))
+      ((steps ((rewrite (premise hor) lr lhs true ())) refl)))
+    (rewrite-with (lemma mod_lo) lr lhs () ((steps ((compute lhs)) refl)))
+    refl))
+
+(claim shn_rotr6_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (vrotr32 x 6)) True))
+  (chain
+    (have hm (= (le 0 (vm32 x)) True)
+      (rewrite-with
+        (lemma shn_vm32_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (steps ((unfold vrotr32 lhs) (compute lhs (stop vm32 bshr bshl bor))))
+    (have hs (= (bshr (vm32 x) 6) (ediv (vm32 x) 64))
+      (chain
+        (rewrite-with
+          (lemma shr_pow2)
+          lr
+          lhs
+          ((inst k 6))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw6) lr lhs true ())))
+        refl))
+    (have hl (= (bshl (vm32 x) 26) (* (vm32 x) 67108864))
+      (chain
+        (rewrite-with
+          (lemma shl_pow2)
+          lr
+          lhs
+          ((inst k 26))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw26) lr lhs true ())))
+        refl))
+    (have hid (= (vm32 x) (+ (* 64 (ediv (vm32 x) 64)) (mod (vm32 x) 64)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 64))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hmh (= (lt (mod (vm32 x) 64) 64) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdlo (= (le 0 (ediv (vm32 x) 64)) True)
+      (steps () (by arith (list 64 0 1 0 0 -1 1))))
+    (have hslo (= (le 0 (* (vm32 x) 67108864)) True)
+      (steps () (by arith (list 1 0 67108864 0 0 0 0))))
+    (steps
+      ((rewrite (premise hs) lr lhs true ())
+       (rewrite (premise hl) lr lhs true ())))
+    (have hor (= (le 0 (bor (ediv (vm32 x) 64) (* (vm32 x) 67108864))) True)
+      (rewrite-with
+        (lemma bor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hdlo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hslo) lr lhs true ())) refl))
+        refl))
+    (rewrite-with
+      (lemma shn_vm32_mod)
+      lr
+      lhs
+      ((inst x (bor (ediv (vm32 x) 64) (* (vm32 x) 67108864))))
+      ((steps ((rewrite (premise hor) lr lhs true ())) refl)))
+    (rewrite-with (lemma mod_lo) lr lhs () ((steps ((compute lhs)) refl)))
+    refl))
+
+(claim shn_rotr7_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (vrotr32 x 7)) True))
+  (chain
+    (have hm (= (le 0 (vm32 x)) True)
+      (rewrite-with
+        (lemma shn_vm32_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (steps ((unfold vrotr32 lhs) (compute lhs (stop vm32 bshr bshl bor))))
+    (have hs (= (bshr (vm32 x) 7) (ediv (vm32 x) 128))
+      (chain
+        (rewrite-with
+          (lemma shr_pow2)
+          lr
+          lhs
+          ((inst k 7))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw7) lr lhs true ())))
+        refl))
+    (have hl (= (bshl (vm32 x) 25) (* (vm32 x) 33554432))
+      (chain
+        (rewrite-with
+          (lemma shl_pow2)
+          lr
+          lhs
+          ((inst k 25))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw25) lr lhs true ())))
+        refl))
+    (have hid (= (vm32 x) (+ (* 128 (ediv (vm32 x) 128)) (mod (vm32 x) 128)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 128))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hmh (= (lt (mod (vm32 x) 128) 128) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdlo (= (le 0 (ediv (vm32 x) 128)) True)
+      (steps () (by arith (list 128 0 1 0 0 -1 1))))
+    (have hslo (= (le 0 (* (vm32 x) 33554432)) True)
+      (steps () (by arith (list 1 0 33554432 0 0 0 0))))
+    (steps
+      ((rewrite (premise hs) lr lhs true ())
+       (rewrite (premise hl) lr lhs true ())))
+    (have hor (= (le 0 (bor (ediv (vm32 x) 128) (* (vm32 x) 33554432))) True)
+      (rewrite-with
+        (lemma bor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hdlo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hslo) lr lhs true ())) refl))
+        refl))
+    (rewrite-with
+      (lemma shn_vm32_mod)
+      lr
+      lhs
+      ((inst x (bor (ediv (vm32 x) 128) (* (vm32 x) 33554432))))
+      ((steps ((rewrite (premise hor) lr lhs true ())) refl)))
+    (rewrite-with (lemma mod_lo) lr lhs () ((steps ((compute lhs)) refl)))
+    refl))
+
+(claim shn_rotr11_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (vrotr32 x 11)) True))
+  (chain
+    (have hm (= (le 0 (vm32 x)) True)
+      (rewrite-with
+        (lemma shn_vm32_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (steps ((unfold vrotr32 lhs) (compute lhs (stop vm32 bshr bshl bor))))
+    (have hs (= (bshr (vm32 x) 11) (ediv (vm32 x) 2048))
+      (chain
+        (rewrite-with
+          (lemma shr_pow2)
+          lr
+          lhs
+          ((inst k 11))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw11) lr lhs true ())))
+        refl))
+    (have hl (= (bshl (vm32 x) 21) (* (vm32 x) 2097152))
+      (chain
+        (rewrite-with
+          (lemma shl_pow2)
+          lr
+          lhs
+          ((inst k 21))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw21) lr lhs true ())))
+        refl))
+    (have hid (= (vm32 x) (+ (* 2048 (ediv (vm32 x) 2048)) (mod (vm32 x) 2048)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 2048))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hmh (= (lt (mod (vm32 x) 2048) 2048) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdlo (= (le 0 (ediv (vm32 x) 2048)) True)
+      (steps () (by arith (list 2048 0 1 0 0 -1 1))))
+    (have hslo (= (le 0 (* (vm32 x) 2097152)) True)
+      (steps () (by arith (list 1 0 2097152 0 0 0 0))))
+    (steps
+      ((rewrite (premise hs) lr lhs true ())
+       (rewrite (premise hl) lr lhs true ())))
+    (have hor (= (le 0 (bor (ediv (vm32 x) 2048) (* (vm32 x) 2097152))) True)
+      (rewrite-with
+        (lemma bor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hdlo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hslo) lr lhs true ())) refl))
+        refl))
+    (rewrite-with
+      (lemma shn_vm32_mod)
+      lr
+      lhs
+      ((inst x (bor (ediv (vm32 x) 2048) (* (vm32 x) 2097152))))
+      ((steps ((rewrite (premise hor) lr lhs true ())) refl)))
+    (rewrite-with (lemma mod_lo) lr lhs () ((steps ((compute lhs)) refl)))
+    refl))
+
+(claim shn_rotr13_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (vrotr32 x 13)) True))
+  (chain
+    (have hm (= (le 0 (vm32 x)) True)
+      (rewrite-with
+        (lemma shn_vm32_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (steps ((unfold vrotr32 lhs) (compute lhs (stop vm32 bshr bshl bor))))
+    (have hs (= (bshr (vm32 x) 13) (ediv (vm32 x) 8192))
+      (chain
+        (rewrite-with
+          (lemma shr_pow2)
+          lr
+          lhs
+          ((inst k 13))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw13) lr lhs true ())))
+        refl))
+    (have hl (= (bshl (vm32 x) 19) (* (vm32 x) 524288))
+      (chain
+        (rewrite-with
+          (lemma shl_pow2)
+          lr
+          lhs
+          ((inst k 19))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw19) lr lhs true ())))
+        refl))
+    (have hid (= (vm32 x) (+ (* 8192 (ediv (vm32 x) 8192)) (mod (vm32 x) 8192)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 8192))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hmh (= (lt (mod (vm32 x) 8192) 8192) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdlo (= (le 0 (ediv (vm32 x) 8192)) True)
+      (steps () (by arith (list 8192 0 1 0 0 -1 1))))
+    (have hslo (= (le 0 (* (vm32 x) 524288)) True)
+      (steps () (by arith (list 1 0 524288 0 0 0 0))))
+    (steps
+      ((rewrite (premise hs) lr lhs true ())
+       (rewrite (premise hl) lr lhs true ())))
+    (have hor (= (le 0 (bor (ediv (vm32 x) 8192) (* (vm32 x) 524288))) True)
+      (rewrite-with
+        (lemma bor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hdlo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hslo) lr lhs true ())) refl))
+        refl))
+    (rewrite-with
+      (lemma shn_vm32_mod)
+      lr
+      lhs
+      ((inst x (bor (ediv (vm32 x) 8192) (* (vm32 x) 524288))))
+      ((steps ((rewrite (premise hor) lr lhs true ())) refl)))
+    (rewrite-with (lemma mod_lo) lr lhs () ((steps ((compute lhs)) refl)))
+    refl))
+
+(claim shn_rotr17_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (vrotr32 x 17)) True))
+  (chain
+    (have hm (= (le 0 (vm32 x)) True)
+      (rewrite-with
+        (lemma shn_vm32_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (steps ((unfold vrotr32 lhs) (compute lhs (stop vm32 bshr bshl bor))))
+    (have hs (= (bshr (vm32 x) 17) (ediv (vm32 x) 131072))
+      (chain
+        (rewrite-with
+          (lemma shr_pow2)
+          lr
+          lhs
+          ((inst k 17))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw17) lr lhs true ())))
+        refl))
+    (have hl (= (bshl (vm32 x) 15) (* (vm32 x) 32768))
+      (chain
+        (rewrite-with
+          (lemma shl_pow2)
+          lr
+          lhs
+          ((inst k 15))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw15) lr lhs true ())))
+        refl))
+    (have hid
+      (= (vm32 x) (+ (* 131072 (ediv (vm32 x) 131072)) (mod (vm32 x) 131072)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 131072))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hmh (= (lt (mod (vm32 x) 131072) 131072) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdlo (= (le 0 (ediv (vm32 x) 131072)) True)
+      (steps () (by arith (list 131072 0 1 0 0 -1 1))))
+    (have hslo (= (le 0 (* (vm32 x) 32768)) True)
+      (steps () (by arith (list 1 0 32768 0 0 0 0))))
+    (steps
+      ((rewrite (premise hs) lr lhs true ())
+       (rewrite (premise hl) lr lhs true ())))
+    (have hor (= (le 0 (bor (ediv (vm32 x) 131072) (* (vm32 x) 32768))) True)
+      (rewrite-with
+        (lemma bor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hdlo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hslo) lr lhs true ())) refl))
+        refl))
+    (rewrite-with
+      (lemma shn_vm32_mod)
+      lr
+      lhs
+      ((inst x (bor (ediv (vm32 x) 131072) (* (vm32 x) 32768))))
+      ((steps ((rewrite (premise hor) lr lhs true ())) refl)))
+    (rewrite-with (lemma mod_lo) lr lhs () ((steps ((compute lhs)) refl)))
+    refl))
+
+(claim shn_rotr18_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (vrotr32 x 18)) True))
+  (chain
+    (have hm (= (le 0 (vm32 x)) True)
+      (rewrite-with
+        (lemma shn_vm32_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (steps ((unfold vrotr32 lhs) (compute lhs (stop vm32 bshr bshl bor))))
+    (have hs (= (bshr (vm32 x) 18) (ediv (vm32 x) 262144))
+      (chain
+        (rewrite-with
+          (lemma shr_pow2)
+          lr
+          lhs
+          ((inst k 18))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw18) lr lhs true ())))
+        refl))
+    (have hl (= (bshl (vm32 x) 14) (* (vm32 x) 16384))
+      (chain
+        (rewrite-with
+          (lemma shl_pow2)
+          lr
+          lhs
+          ((inst k 14))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw14) lr lhs true ())))
+        refl))
+    (have hid
+      (= (vm32 x) (+ (* 262144 (ediv (vm32 x) 262144)) (mod (vm32 x) 262144)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 262144))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hmh (= (lt (mod (vm32 x) 262144) 262144) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdlo (= (le 0 (ediv (vm32 x) 262144)) True)
+      (steps () (by arith (list 262144 0 1 0 0 -1 1))))
+    (have hslo (= (le 0 (* (vm32 x) 16384)) True)
+      (steps () (by arith (list 1 0 16384 0 0 0 0))))
+    (steps
+      ((rewrite (premise hs) lr lhs true ())
+       (rewrite (premise hl) lr lhs true ())))
+    (have hor (= (le 0 (bor (ediv (vm32 x) 262144) (* (vm32 x) 16384))) True)
+      (rewrite-with
+        (lemma bor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hdlo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hslo) lr lhs true ())) refl))
+        refl))
+    (rewrite-with
+      (lemma shn_vm32_mod)
+      lr
+      lhs
+      ((inst x (bor (ediv (vm32 x) 262144) (* (vm32 x) 16384))))
+      ((steps ((rewrite (premise hor) lr lhs true ())) refl)))
+    (rewrite-with (lemma mod_lo) lr lhs () ((steps ((compute lhs)) refl)))
+    refl))
+
+(claim shn_rotr19_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (vrotr32 x 19)) True))
+  (chain
+    (have hm (= (le 0 (vm32 x)) True)
+      (rewrite-with
+        (lemma shn_vm32_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (steps ((unfold vrotr32 lhs) (compute lhs (stop vm32 bshr bshl bor))))
+    (have hs (= (bshr (vm32 x) 19) (ediv (vm32 x) 524288))
+      (chain
+        (rewrite-with
+          (lemma shr_pow2)
+          lr
+          lhs
+          ((inst k 19))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw19) lr lhs true ())))
+        refl))
+    (have hl (= (bshl (vm32 x) 13) (* (vm32 x) 8192))
+      (chain
+        (rewrite-with
+          (lemma shl_pow2)
+          lr
+          lhs
+          ((inst k 13))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw13) lr lhs true ())))
+        refl))
+    (have hid
+      (= (vm32 x) (+ (* 524288 (ediv (vm32 x) 524288)) (mod (vm32 x) 524288)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 524288))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hmh (= (lt (mod (vm32 x) 524288) 524288) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdlo (= (le 0 (ediv (vm32 x) 524288)) True)
+      (steps () (by arith (list 524288 0 1 0 0 -1 1))))
+    (have hslo (= (le 0 (* (vm32 x) 8192)) True)
+      (steps () (by arith (list 1 0 8192 0 0 0 0))))
+    (steps
+      ((rewrite (premise hs) lr lhs true ())
+       (rewrite (premise hl) lr lhs true ())))
+    (have hor (= (le 0 (bor (ediv (vm32 x) 524288) (* (vm32 x) 8192))) True)
+      (rewrite-with
+        (lemma bor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hdlo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hslo) lr lhs true ())) refl))
+        refl))
+    (rewrite-with
+      (lemma shn_vm32_mod)
+      lr
+      lhs
+      ((inst x (bor (ediv (vm32 x) 524288) (* (vm32 x) 8192))))
+      ((steps ((rewrite (premise hor) lr lhs true ())) refl)))
+    (rewrite-with (lemma mod_lo) lr lhs () ((steps ((compute lhs)) refl)))
+    refl))
+
+(claim shn_rotr22_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (vrotr32 x 22)) True))
+  (chain
+    (have hm (= (le 0 (vm32 x)) True)
+      (rewrite-with
+        (lemma shn_vm32_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (steps ((unfold vrotr32 lhs) (compute lhs (stop vm32 bshr bshl bor))))
+    (have hs (= (bshr (vm32 x) 22) (ediv (vm32 x) 4194304))
+      (chain
+        (rewrite-with
+          (lemma shr_pow2)
+          lr
+          lhs
+          ((inst k 22))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw22) lr lhs true ())))
+        refl))
+    (have hl (= (bshl (vm32 x) 10) (* (vm32 x) 1024))
+      (chain
+        (rewrite-with
+          (lemma shl_pow2)
+          lr
+          lhs
+          ((inst k 10))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw10) lr lhs true ())))
+        refl))
+    (have hid
+      (=
+        (vm32 x)
+        (+ (* 4194304 (ediv (vm32 x) 4194304)) (mod (vm32 x) 4194304)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 4194304))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hmh (= (lt (mod (vm32 x) 4194304) 4194304) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdlo (= (le 0 (ediv (vm32 x) 4194304)) True)
+      (steps () (by arith (list 4194304 0 1 0 0 -1 1))))
+    (have hslo (= (le 0 (* (vm32 x) 1024)) True)
+      (steps () (by arith (list 1 0 1024 0 0 0 0))))
+    (steps
+      ((rewrite (premise hs) lr lhs true ())
+       (rewrite (premise hl) lr lhs true ())))
+    (have hor (= (le 0 (bor (ediv (vm32 x) 4194304) (* (vm32 x) 1024))) True)
+      (rewrite-with
+        (lemma bor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hdlo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hslo) lr lhs true ())) refl))
+        refl))
+    (rewrite-with
+      (lemma shn_vm32_mod)
+      lr
+      lhs
+      ((inst x (bor (ediv (vm32 x) 4194304) (* (vm32 x) 1024))))
+      ((steps ((rewrite (premise hor) lr lhs true ())) refl)))
+    (rewrite-with (lemma mod_lo) lr lhs () ((steps ((compute lhs)) refl)))
+    refl))
+
+(claim shn_rotr25_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (vrotr32 x 25)) True))
+  (chain
+    (have hm (= (le 0 (vm32 x)) True)
+      (rewrite-with
+        (lemma shn_vm32_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (steps ((unfold vrotr32 lhs) (compute lhs (stop vm32 bshr bshl bor))))
+    (have hs (= (bshr (vm32 x) 25) (ediv (vm32 x) 33554432))
+      (chain
+        (rewrite-with
+          (lemma shr_pow2)
+          lr
+          lhs
+          ((inst k 25))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw25) lr lhs true ())))
+        refl))
+    (have hl (= (bshl (vm32 x) 7) (* (vm32 x) 128))
+      (chain
+        (rewrite-with
+          (lemma shl_pow2)
+          lr
+          lhs
+          ((inst k 7))
+          ((steps ((rewrite (premise hm) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw7) lr lhs true ())))
+        refl))
+    (have hid
+      (=
+        (vm32 x)
+        (+ (* 33554432 (ediv (vm32 x) 33554432)) (mod (vm32 x) 33554432)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 33554432))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hmh (= (lt (mod (vm32 x) 33554432) 33554432) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdlo (= (le 0 (ediv (vm32 x) 33554432)) True)
+      (steps () (by arith (list 33554432 0 1 0 0 -1 1))))
+    (have hslo (= (le 0 (* (vm32 x) 128)) True)
+      (steps () (by arith (list 1 0 128 0 0 0 0))))
+    (steps
+      ((rewrite (premise hs) lr lhs true ())
+       (rewrite (premise hl) lr lhs true ())))
+    (have hor (= (le 0 (bor (ediv (vm32 x) 33554432) (* (vm32 x) 128))) True)
+      (rewrite-with
+        (lemma bor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hdlo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hslo) lr lhs true ())) refl))
+        refl))
+    (rewrite-with
+      (lemma shn_vm32_mod)
+      lr
+      lhs
+      ((inst x (bor (ediv (vm32 x) 33554432) (* (vm32 x) 128))))
+      ((steps ((rewrite (premise hor) lr lhs true ())) refl)))
+    (rewrite-with (lemma mod_lo) lr lhs () ((steps ((compute lhs)) refl)))
+    refl))
+
+(claim shn_shr3_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 3)) True))
+  (chain
+    (have hs (= (bshr x 3) (ediv x 8))
+      (chain
+        (rewrite-with
+          (lemma shr_pow2)
+          lr
+          lhs
+          ((inst k 3))
+          ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw3) lr lhs true ())))
+        refl))
+    (have hid (= x (+ (* 8 (ediv x 8)) (mod x 8)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 8))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hmh (= (lt (mod x 8) 8) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdlo (= (le 0 (ediv x 8)) True)
+      (steps () (by arith (list 8 1 0 -1 1))))
+    (steps
+      ((rewrite (premise hs) lr lhs true ())
+       (rewrite (premise hdlo) lr lhs true ())))
+    refl))
+
+(claim shn_shr10_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 10)) True))
+  (chain
+    (have hs (= (bshr x 10) (ediv x 1024))
+      (chain
+        (rewrite-with
+          (lemma shr_pow2)
+          lr
+          lhs
+          ((inst k 10))
+          ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+           (steps ((compute lhs)) refl)))
+        (steps ((rewrite (lemma shn_pw10) lr lhs true ())))
+        refl))
+    (have hid (= x (+ (* 1024 (ediv x 1024)) (mod x 1024)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 1024))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hmh (= (lt (mod x 1024) 1024) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hdlo (= (le 0 (ediv x 1024)) True)
+      (steps () (by arith (list 1024 1 0 -1 1))))
+    (steps
+      ((rewrite (premise hs) lr lhs true ())
+       (rewrite (premise hdlo) lr lhs true ())))
+    refl))
+
+;; ---- range ladder, rung 3: the sha helpers are nonneg -----------------------------
+
+(claim shn_ch_lo
+  (goal ((x Int) (y Int) (z Int))
+    ((= (le 0 x) True) (= (le 0 y) True) (= (le 0 z) True))
+    (= (le 0 (vch x y z)) True))
+  (chain
+    (have h1 (= (le 0 (band x y)) True)
+      (rewrite-with
+        (lemma band_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have h2 (= (le 0 (bxor x 4294967295)) True)
+      (rewrite-with
+        (lemma bxor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (have h3 (= (le 0 (band (bxor x 4294967295) z)) True)
+      (rewrite-with
+        (lemma band_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise h2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (steps ((unfold vch lhs)))
+    (rewrite-with
+      (lemma bxor_lo)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise h1) lr lhs true ())) refl)
+       (steps ((rewrite (premise h3) lr lhs true ())) refl)))
+    refl))
+
+(claim shn_maj_lo
+  (goal ((x Int) (y Int) (z Int))
+    ((= (le 0 x) True) (= (le 0 y) True) (= (le 0 z) True))
+    (= (le 0 (vmaj x y z)) True))
+  (chain
+    (have h1 (= (le 0 (band x y)) True)
+      (rewrite-with
+        (lemma band_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have h2 (= (le 0 (band x z)) True)
+      (rewrite-with
+        (lemma band_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (have h3 (= (le 0 (band y z)) True)
+      (rewrite-with
+        (lemma band_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (have h4 (= (le 0 (bxor (band x z) (band y z))) True)
+      (rewrite-with
+        (lemma bxor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise h2) lr lhs true ())) refl)
+         (steps ((rewrite (premise h3) lr lhs true ())) refl))
+        refl))
+    (steps ((unfold vmaj lhs)))
+    (rewrite-with
+      (lemma bxor_lo)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise h1) lr lhs true ())) refl)
+       (steps ((rewrite (premise h4) lr lhs true ())) refl)))
+    refl))
+
+(claim shn_bs0_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (vbs0 x)) True))
+  (chain
+    (have h1 (= (le 0 (vrotr32 x 2)) True)
+      (rewrite-with
+        (lemma shn_rotr2_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h2 (= (le 0 (vrotr32 x 13)) True)
+      (rewrite-with
+        (lemma shn_rotr13_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h3 (= (le 0 (vrotr32 x 22)) True)
+      (rewrite-with
+        (lemma shn_rotr22_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h4 (= (le 0 (bxor (vrotr32 x 13) (vrotr32 x 22))) True)
+      (rewrite-with
+        (lemma bxor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise h2) lr lhs true ())) refl)
+         (steps ((rewrite (premise h3) lr lhs true ())) refl))
+        refl))
+    (steps ((unfold vbs0 lhs)))
+    (rewrite-with
+      (lemma bxor_lo)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise h1) lr lhs true ())) refl)
+       (steps ((rewrite (premise h4) lr lhs true ())) refl)))
+    refl))
+
+(claim shn_bs1_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (vbs1 x)) True))
+  (chain
+    (have h1 (= (le 0 (vrotr32 x 6)) True)
+      (rewrite-with
+        (lemma shn_rotr6_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h2 (= (le 0 (vrotr32 x 11)) True)
+      (rewrite-with
+        (lemma shn_rotr11_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h3 (= (le 0 (vrotr32 x 25)) True)
+      (rewrite-with
+        (lemma shn_rotr25_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h4 (= (le 0 (bxor (vrotr32 x 11) (vrotr32 x 25))) True)
+      (rewrite-with
+        (lemma bxor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise h2) lr lhs true ())) refl)
+         (steps ((rewrite (premise h3) lr lhs true ())) refl))
+        refl))
+    (steps ((unfold vbs1 lhs)))
+    (rewrite-with
+      (lemma bxor_lo)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise h1) lr lhs true ())) refl)
+       (steps ((rewrite (premise h4) lr lhs true ())) refl)))
+    refl))
+
+(claim shn_ss0_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (vss0 x)) True))
+  (chain
+    (have h1 (= (le 0 (vrotr32 x 7)) True)
+      (rewrite-with
+        (lemma shn_rotr7_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h2 (= (le 0 (vrotr32 x 18)) True)
+      (rewrite-with
+        (lemma shn_rotr18_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h3 (= (le 0 (bshr x 3)) True)
+      (rewrite-with
+        (lemma shn_shr3_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h4 (= (le 0 (bxor (vrotr32 x 18) (bshr x 3))) True)
+      (rewrite-with
+        (lemma bxor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise h2) lr lhs true ())) refl)
+         (steps ((rewrite (premise h3) lr lhs true ())) refl))
+        refl))
+    (steps ((unfold vss0 lhs)))
+    (rewrite-with
+      (lemma bxor_lo)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise h1) lr lhs true ())) refl)
+       (steps ((rewrite (premise h4) lr lhs true ())) refl)))
+    refl))
+
+(claim shn_ss1_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (vss1 x)) True))
+  (chain
+    (have h1 (= (le 0 (vrotr32 x 17)) True)
+      (rewrite-with
+        (lemma shn_rotr17_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h2 (= (le 0 (vrotr32 x 19)) True)
+      (rewrite-with
+        (lemma shn_rotr19_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h3 (= (le 0 (bshr x 10)) True)
+      (rewrite-with
+        (lemma shn_shr10_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h4 (= (le 0 (bxor (vrotr32 x 19) (bshr x 10))) True)
+      (rewrite-with
+        (lemma bxor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise h2) lr lhs true ())) refl)
+         (steps ((rewrite (premise h3) lr lhs true ())) refl))
+        refl))
+    (steps ((unfold vss1 lhs)))
+    (rewrite-with
+      (lemma bxor_lo)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise h1) lr lhs true ())) refl)
+       (steps ((rewrite (premise h4) lr lhs true ())) refl)))
+    refl))
+
+;; ---- range ladder, rung 4: the round pieces are nonneg ----------------------------
+
+(claim shn_t1_lo
+  (goal ((e Int) (f Int) (g Int) (h Int) (wk Int))
+    ((= (le 0 e) True)
+     (= (le 0 f) True)
+     (= (le 0 g) True)
+     (= (le 0 h) True)
+     (= (le 0 wk) True))
+    (= (le 0 (vt1 e f g h wk)) True))
+  (chain
+    (have h1 (= (le 0 (vbs1 e)) True)
+      (rewrite-with
+        (lemma shn_bs1_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h2 (= (le 0 (vch e f g)) True)
+      (rewrite-with
+        (lemma shn_ch_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (have h3 (= (le 0 (+ h (+ (vbs1 e) (+ (vch e f g) wk)))) True)
+      (steps () (by arith (list 1 0 0 0 1 1 1 1))))
+    (steps ((unfold vt1 lhs)))
+    (rewrite-with
+      (lemma shn_vm32_lo)
+      lr
+      lhs
+      ((inst x (+ h (+ (vbs1 e) (+ (vch e f g) wk)))))
+      ((steps ((rewrite (premise h3) lr lhs true ())) refl)))
+    refl))
+
+(claim shn_rnd_a_lo
+  (goal ((a Int) (b Int) (c Int) (e Int) (f Int) (g Int) (h Int) (wk Int))
+    ((= (le 0 a) True)
+     (= (le 0 b) True)
+     (= (le 0 c) True)
+     (= (le 0 e) True)
+     (= (le 0 f) True)
+     (= (le 0 g) True)
+     (= (le 0 h) True)
+     (= (le 0 wk) True))
+    (= (le 0 (vrnd_a a b c e f g h wk)) True))
+  (chain
+    (have h1 (= (le 0 (vt1 e f g h wk)) True)
+      (rewrite-with
+        (lemma shn_t1_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+         (steps ((rewrite (premise 4) lr lhs true ())) refl)
+         (steps ((rewrite (premise 5) lr lhs true ())) refl)
+         (steps ((rewrite (premise 6) lr lhs true ())) refl)
+         (steps ((rewrite (premise 7) lr lhs true ())) refl))
+        refl))
+    (have h2 (= (le 0 (vbs0 a)) True)
+      (rewrite-with
+        (lemma shn_bs0_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h3 (= (le 0 (vmaj a b c)) True)
+      (rewrite-with
+        (lemma shn_maj_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (have h4 (= (le 0 (+ (vt1 e f g h wk) (+ (vbs0 a) (vmaj a b c)))) True)
+      (steps () (by arith (list 1 0 0 0 0 0 0 0 0 1 1 1))))
+    (steps ((unfold vrnd_a lhs)))
+    (rewrite-with
+      (lemma shn_vm32_lo)
+      lr
+      lhs
+      ((inst x (+ (vt1 e f g h wk) (+ (vbs0 a) (vmaj a b c)))))
+      ((steps ((rewrite (premise h4) lr lhs true ())) refl)))
+    refl))
+
+(claim shn_rnd_e_lo
+  (goal ((d Int) (e Int) (f Int) (g Int) (h Int) (wk Int))
+    ((= (le 0 d) True)
+     (= (le 0 e) True)
+     (= (le 0 f) True)
+     (= (le 0 g) True)
+     (= (le 0 h) True)
+     (= (le 0 wk) True))
+    (= (le 0 (vrnd_e d e f g h wk)) True))
+  (chain
+    (have h1 (= (le 0 (vt1 e f g h wk)) True)
+      (rewrite-with
+        (lemma shn_t1_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 3) lr lhs true ())) refl)
+         (steps ((rewrite (premise 4) lr lhs true ())) refl)
+         (steps ((rewrite (premise 5) lr lhs true ())) refl))
+        refl))
+    (have h2 (= (le 0 (+ d (vt1 e f g h wk))) True)
+      (steps () (by arith (list 1 1 0 0 0 0 0 1))))
+    (steps ((unfold vrnd_e lhs)))
+    (rewrite-with
+      (lemma shn_vm32_lo)
+      lr
+      lhs
+      ((inst x (+ d (vt1 e f g h wk))))
+      ((steps ((rewrite (premise h2) lr lhs true ())) refl)))
+    refl))
+
+;; ---- the round law, component premises only ---------------------------------------
+
+(claim shn_round
+  (goal
+    ((a Int)
+     (b Int)
+     (c Int)
+     (d Int)
+     (e Int)
+     (f Int)
+     (g Int)
+     (h Int)
+     (k Int)
+     (w Int))
+    ((= (le 0 a) True)
+     (= (le 0 b) True)
+     (= (le 0 c) True)
+     (= (le 0 d) True)
+     (= (le 0 e) True)
+     (= (le 0 f) True)
+     (= (le 0 g) True)
+     (= (le 0 h) True)
+     (= (le 0 k) True)
+     (= (le 0 w) True))
+    (=
+      (sha_round (mk_h8 a b c d e f g h) k w)
+      (mk_h8
+        (vrnd_a a b c e f g h (vm32 (+ k w)))
+        a
+        b
+        c
+        (vrnd_e d e f g h (vm32 (+ k w)))
+        e
+        f
+        g)))
+  (chain
+    (have h1 (= (le 0 (vbs1 e)) True)
+      (rewrite-with
+        (lemma shn_bs1_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 4) lr lhs true ())) refl))
+        refl))
+    (have h2 (= (le 0 (vch e f g)) True)
+      (rewrite-with
+        (lemma shn_ch_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 4) lr lhs true ())) refl)
+         (steps ((rewrite (premise 5) lr lhs true ())) refl)
+         (steps ((rewrite (premise 6) lr lhs true ())) refl))
+        refl))
+    (have h3 (= (le 0 (+ k w)) True)
+      (steps () (by arith (list 1 0 0 0 0 0 0 0 0 1 1))))
+    (rewrite-with
+      (lemma shn_round_p)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 7) lr lhs true ())) refl)
+       (steps ((rewrite (premise h1) lr lhs true ())) refl)
+       (steps ((rewrite (premise h2) lr lhs true ())) refl)
+       (steps ((rewrite (premise h3) lr lhs true ())) refl)))
+    refl))
+
+;; ---- THE TWO-ROUNDS LAW -----------------------------------------------------------
+;; sha256rnds2 at the packed ABEF/CDGH layout IS two rounds of the
+;; spec's compression, with the two rounds' masked K+W in the wk
+;; register's low lanes (upper lanes arbitrary junk).
+
+(claim shn_rnds2
+  (goal
+    ((a Int)
+     (b Int)
+     (c Int)
+     (d Int)
+     (e Int)
+     (f Int)
+     (g Int)
+     (h Int)
+     (k0 Int)
+     (w0 Int)
+     (k1 Int)
+     (w1 Int)
+     (z0 Int)
+     (z1 Int))
+    ((= (le 0 a) True)
+     (= (le 0 b) True)
+     (= (le 0 c) True)
+     (= (le 0 d) True)
+     (= (le 0 e) True)
+     (= (le 0 f) True)
+     (= (le 0 g) True)
+     (= (le 0 h) True)
+     (= (le 0 k0) True)
+     (= (le 0 w0) True)
+     (= (le 0 k1) True)
+     (= (le 0 w1) True))
+    (=
+      (vrnds2
+        (shn_pk_abef (mk_h8 a b c d e f g h))
+        (shn_pk_cdgh (mk_h8 a b c d e f g h))
+        (MkXmm (vm32 (+ k0 w0)) (vm32 (+ k1 w1)) z0 z1))
+      (shn_pk_abef (sha_round (sha_round (mk_h8 a b c d e f g h) k0 w0) k1 w1))))
+  (chain
+    (have hkw0 (= (le 0 (+ k0 w0)) True)
+      (steps () (by arith (list 1 0 0 0 0 0 0 0 0 1 1))))
+    (have hkw1 (= (le 0 (+ k1 w1)) True)
+      (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 1 1))))
+    (have hwk0 (= (le 0 (vm32 (+ k0 w0))) True)
+      (rewrite-with
+        (lemma shn_vm32_lo)
+        lr
+        lhs
+        ((inst x (+ k0 w0)))
+        ((steps ((rewrite (premise hkw0) lr lhs true ())) refl))
+        refl))
+    (have hA1 (= (le 0 (vrnd_a a b c e f g h (vm32 (+ k0 w0)))) True)
+      (rewrite-with
+        (lemma shn_rnd_a_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 4) lr lhs true ())) refl)
+         (steps ((rewrite (premise 5) lr lhs true ())) refl)
+         (steps ((rewrite (premise 6) lr lhs true ())) refl)
+         (steps ((rewrite (premise 7) lr lhs true ())) refl)
+         (steps ((rewrite (premise hwk0) lr lhs true ())) refl))
+        refl))
+    (have hE1 (= (le 0 (vrnd_e d e f g h (vm32 (+ k0 w0)))) True)
+      (rewrite-with
+        (lemma shn_rnd_e_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+         (steps ((rewrite (premise 4) lr lhs true ())) refl)
+         (steps ((rewrite (premise 5) lr lhs true ())) refl)
+         (steps ((rewrite (premise 6) lr lhs true ())) refl)
+         (steps ((rewrite (premise 7) lr lhs true ())) refl)
+         (steps ((rewrite (premise hwk0) lr lhs true ())) refl))
+        refl))
+    (rewrite-with
+      (lemma shn_round)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)
+       (steps ((rewrite (premise 5) lr lhs true ())) refl)
+       (steps ((rewrite (premise 6) lr lhs true ())) refl)
+       (steps ((rewrite (premise 7) lr lhs true ())) refl)
+       (steps ((rewrite (premise 8) lr lhs true ())) refl)
+       (steps ((rewrite (premise 9) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shn_round)
+      lr
+      rhs
+      ()
+      ((steps ((rewrite (premise hA1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise hE1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)
+       (steps ((rewrite (premise 5) lr lhs true ())) refl)
+       (steps ((rewrite (premise 6) lr lhs true ())) refl)
+       (steps ((rewrite (premise 10) lr lhs true ())) refl)
+       (steps ((rewrite (premise 11) lr lhs true ())) refl)))
+    (steps
+      ((compute lhs (stop vrnd_a vrnd_e vm32))
+       (compute rhs (stop vrnd_a vrnd_e vm32))))
+    refl))
+
+;; ---- THE SCHEDULE LAW -------------------------------------------------------------
+;; sched_ext's word recurrence, spelled as a value fn in the v-vocabulary
+;; (tree-identical to the spec's Cons value at snth 1/6/14/15).
+
+(fn shn_wnext ((wm16 Int) (wm15 Int) (wm7 Int) (wm2 Int)) Int
+  (vm32 (+ (vss1 wm2) (+ wm7 (+ (vss0 wm15) wm16)))))
+
+(claim shn_wnext_lo
+  (goal ((p Int) (q Int) (r Int) (s Int))
+    ((= (le 0 p) True) (= (le 0 q) True) (= (le 0 r) True) (= (le 0 s) True))
+    (= (le 0 (shn_wnext p q r s)) True))
+  (chain
+    (have hs0 (= (le 0 (vss0 q)) True)
+      (rewrite-with
+        (lemma shn_ss0_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hs1 (= (le 0 (vss1 s)) True)
+      (rewrite-with
+        (lemma shn_ss1_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 3) lr lhs true ())) refl))
+        refl))
+    (have ha (= (le 0 (+ (vss1 s) (+ r (+ (vss0 q) p)))) True)
+      (steps () (by arith (list 1 1 0 1 0 1 1))))
+    (steps ((unfold shn_wnext lhs)))
+    (rewrite-with
+      (lemma shn_vm32_lo)
+      lr
+      lhs
+      ((inst x (+ (vss1 s) (+ r (+ (vss0 q) p)))))
+      ((steps ((rewrite (premise ha) lr lhs true ())) refl)))
+    refl))
+
+;; the per-lane collapse: the msg1 -> paddd -> msg2 mask tower over one
+;; lane equals the recurrence value.
+(claim shn_lane
+  (goal ((p Int) (q Int) (r Int) (s Int))
+    ((= (le 0 p) True) (= (le 0 q) True) (= (le 0 r) True) (= (le 0 s) True))
+    (=
+      (vm32 (+ (vm32 (+ (vm32 (+ p (vss0 q))) r)) (vss1 s)))
+      (shn_wnext p q r s)))
+  (chain
+    (have hs0 (= (le 0 (vss0 q)) True)
+      (rewrite-with
+        (lemma shn_ss0_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hs1 (= (le 0 (vss1 s)) True)
+      (rewrite-with
+        (lemma shn_ss1_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 3) lr lhs true ())) refl))
+        refl))
+    (have ha1 (= (le 0 (+ p (vss0 q))) True)
+      (steps () (by arith (list 1 1 0 0 0 1))))
+    (have hA (= (le 0 (vm32 (+ p (vss0 q)))) True)
+      (rewrite-with
+        (lemma shn_vm32_lo)
+        lr
+        lhs
+        ((inst x (+ p (vss0 q))))
+        ((steps ((rewrite (premise ha1) lr lhs true ())) refl))
+        refl))
+    (have ha2 (= (le 0 (+ (vm32 (+ p (vss0 q))) r)) True)
+      (steps () (by arith (list 1 0 0 1 0 0 0 0 1))))
+    (have hB (= (le 0 (vm32 (+ (vm32 (+ p (vss0 q))) r))) True)
+      (rewrite-with
+        (lemma shn_vm32_lo)
+        lr
+        lhs
+        ((inst x (+ (vm32 (+ p (vss0 q))) r)))
+        ((steps ((rewrite (premise ha2) lr lhs true ())) refl))
+        refl))
+    (have ha3 (= (le 0 (+ (vm32 (+ (vm32 (+ p (vss0 q))) r)) (vss1 s))) True)
+      (steps () (by arith (list 1 0 0 0 0 0 1 0 0 0 1))))
+    (rewrite-with
+      (lemma shn_vm32_mod)
+      lr
+      lhs
+      ((inst x (+ (vm32 (+ (vm32 (+ p (vss0 q))) r)) (vss1 s))))
+      ((steps ((rewrite (premise ha3) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shn_vm32_mod)
+      lr
+      lhs
+      ((inst x (+ (vm32 (+ p (vss0 q))) r)))
+      ((steps ((rewrite (premise ha2) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shn_vm32_mod)
+      lr
+      lhs
+      ((inst x (+ p (vss0 q))))
+      ((steps ((rewrite (premise ha1) lr lhs true ())) refl)))
+    (have hc1
+      (=
+        (+ (mod (+ (mod (+ p (vss0 q)) 4294967296) r) 4294967296) (vss1 s))
+        (+ (vss1 s) (mod (+ (mod (+ p (vss0 q)) 4294967296) r) 4294967296)))
+      (steps () (by arith (list (list 1) (list 1)))))
+    (steps ((rewrite (premise hc1) lr lhs true ())))
+    (rewrite-with
+      (lemma shn_madd32)
+      lr
+      lhs
+      ((inst x (vss1 s)) (inst y (+ (mod (+ p (vss0 q)) 4294967296) r)))
+      ())
+    (have hc2
+      (=
+        (+ (vss1 s) (+ (mod (+ p (vss0 q)) 4294967296) r))
+        (+ (+ (vss1 s) r) (mod (+ p (vss0 q)) 4294967296)))
+      (steps () (by arith (list (list 1) (list 1)))))
+    (steps ((rewrite (premise hc2) lr lhs true ())))
+    (rewrite-with
+      (lemma shn_madd32)
+      lr
+      lhs
+      ((inst x (+ (vss1 s) r)) (inst y (+ p (vss0 q))))
+      ())
+    (steps ((unfold shn_wnext rhs)))
+    (have ha4 (= (le 0 (+ (vss1 s) (+ r (+ (vss0 q) p)))) True)
+      (steps () (by arith (list 1 1 0 1 0 1 1))))
+    (rewrite-with
+      (lemma shn_vm32_mod)
+      lr
+      rhs
+      ((inst x (+ (vss1 s) (+ r (+ (vss0 q) p)))))
+      ((steps ((rewrite (premise ha4) lr lhs true ())) refl)))
+    (have hc3
+      (= (+ (+ (vss1 s) r) (+ p (vss0 q))) (+ (vss1 s) (+ r (+ (vss0 q) p))))
+      (steps () (by arith (list (list 1) (list 1)))))
+    (steps ((rewrite (premise hc3) lr lhs true ())))
+    refl))
+
+;; THE GROUP LAW: one msg1/palignr/paddd/msg2 schedule step over four
+;; word groups computes the next four schedule words — lanes 2 and 3
+;; chain on the lanes 0 and 1 just computed, exactly as sched_ext does.
+(claim shn_sched_group
+  (goal
+    ((w0 Int)
+     (w1 Int)
+     (w2 Int)
+     (w3 Int)
+     (w4 Int)
+     (w5 Int)
+     (w6 Int)
+     (w7 Int)
+     (w8 Int)
+     (w9 Int)
+     (w10 Int)
+     (w11 Int)
+     (w12 Int)
+     (w13 Int)
+     (w14 Int)
+     (w15 Int))
+    ((= (le 0 w0) True)
+     (= (le 0 w1) True)
+     (= (le 0 w2) True)
+     (= (le 0 w3) True)
+     (= (le 0 w4) True)
+     (= (le 0 w5) True)
+     (= (le 0 w6) True)
+     (= (le 0 w7) True)
+     (= (le 0 w8) True)
+     (= (le 0 w9) True)
+     (= (le 0 w10) True)
+     (= (le 0 w11) True)
+     (= (le 0 w12) True)
+     (= (le 0 w13) True)
+     (= (le 0 w14) True)
+     (= (le 0 w15) True))
+    (=
+      (shn_sstep
+        (MkXmm w0 w1 w2 w3)
+        (MkXmm w4 w5 w6 w7)
+        (MkXmm w8 w9 w10 w11)
+        (MkXmm w12 w13 w14 w15))
+      (MkXmm
+        (shn_wnext w0 w1 w9 w14)
+        (shn_wnext w1 w2 w10 w15)
+        (shn_wnext w2 w3 w11 (shn_wnext w0 w1 w9 w14))
+        (shn_wnext w3 w4 w12 (shn_wnext w1 w2 w10 w15)))))
+  (chain
+    (have hw16 (= (le 0 (shn_wnext w0 w1 w9 w14)) True)
+      (rewrite-with
+        (lemma shn_wnext_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 9) lr lhs true ())) refl)
+         (steps ((rewrite (premise 14) lr lhs true ())) refl))
+        refl))
+    (have hw17 (= (le 0 (shn_wnext w1 w2 w10 w15)) True)
+      (rewrite-with
+        (lemma shn_wnext_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 10) lr lhs true ())) refl)
+         (steps ((rewrite (premise 15) lr lhs true ())) refl))
+        refl))
+    (steps ((compute lhs (stop vss0 vss1 vm32))))
+    (rewrite-with
+      (lemma shn_lane)
+      lr
+      lhs
+      ((inst p w0) (inst q w1) (inst r w9) (inst s w14))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 9) lr lhs true ())) refl)
+       (steps ((rewrite (premise 14) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shn_lane)
+      lr
+      lhs
+      ((inst p w0) (inst q w1) (inst r w9) (inst s w14))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 9) lr lhs true ())) refl)
+       (steps ((rewrite (premise 14) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shn_lane)
+      lr
+      lhs
+      ((inst p w1) (inst q w2) (inst r w10) (inst s w15))
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 10) lr lhs true ())) refl)
+       (steps ((rewrite (premise 15) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shn_lane)
+      lr
+      lhs
+      ((inst p w1) (inst q w2) (inst r w10) (inst s w15))
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 10) lr lhs true ())) refl)
+       (steps ((rewrite (premise 15) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shn_lane)
+      lr
+      lhs
+      ((inst p w2) (inst q w3) (inst r w11) (inst s (shn_wnext w0 w1 w9 w14)))
+      ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)
+       (steps ((rewrite (premise 11) lr lhs true ())) refl)
+       (steps ((rewrite (premise hw16) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma shn_lane)
+      lr
+      lhs
+      ((inst p w3) (inst q w4) (inst r w12) (inst s (shn_wnext w1 w2 w10 w15)))
+      ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)
+       (steps ((rewrite (premise 12) lr lhs true ())) refl)
+       (steps ((rewrite (premise hw17) lr lhs true ())) refl)))
+    refl))

@@ -360,6 +360,7 @@ TARGETS=(
   std/sha256/impgen_x86_out.shard
   std/sha256/sha256.weld.shard
   std/sha256/sha256.sweld.shard
+  std/sha256/sha256.shani.shard
   examples/sha256sum/sha256sum_stream_x86.shard
   examples/sha256sum/sha256sum_stream_elf.shard
   pins/proof/sketch_pin.shard

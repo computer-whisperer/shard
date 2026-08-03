@@ -849,6 +849,26 @@ replacement.
   Gates: article green; block-grain silicon differential (the
   block fn on CPU vs spec vectors, gold + random rows, teeth via
   perturbation).
+- **E2a RECORD (LANDED 2026-08-02) — the value tier of the article.**
+  std/sha256/sha256.shani.shard (742/0, corpus-registered), every
+  claim first-check green after probe-first development (e2_probe
+  .shard, untracked root): pack/unpack shuffle laws SYMBOLIC
+  (pblendw-free — palignr 8 + punpcklqdq route); **shn_rnds2 = THE
+  TWO-ROUNDS LAW** (sha256rnds2 at the packed layout = two spec
+  rounds, component-nonneg premises only) + shn_slide (new CDGH =
+  old ABEF verbatim, pure compute); **shn_sched_group = THE
+  SCHEDULE LAW** (one msg1/palignr/paddd/msg2 step = the next four
+  sched_ext words, in-instruction chaining matching the spec's
+  recursion); shn_block_b = the reference dataflow, ground-pinned
+  to sha_block on three vectors incl. chained feedback. Proof
+  architecture: tree-identity alignment family (one compute each)
+  reduces the whole article to ONE semantic seam — the wk mask —
+  crossed by shn_madd32 (unconditional mod collapse) + shn_absorb4;
+  a nonneg range ladder (pow2 literal rungs 1..30, ground-shift
+  rotate bounds, helper bounds) feeds the mask/mod bridge.
+  REMAINING for E2: the hand body + THE BLOCK WALK at machine
+  grain (E2b, ties to shn_block_b), the block-grain silicon
+  differential w/ perturbation teeth (E2c, Opus-delegated).
 - **E3 — the variant bin** (lean name: sha256sum_shani; naming of
   the eventual dispatch bin = B6's fork). Skeleton re-composition
   + fold swap, emitted ELF (enc_winelf), byte-tie, capless silicon
