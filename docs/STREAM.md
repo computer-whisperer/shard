@@ -929,11 +929,35 @@ replacement.
   primitives stopped CORE-DUMPS at ~168 s. The schedule chain's term
   grows tetranacci (|g_n| ~ 1.93^n) with no sharing, so the walk cannot
   be one compute — every schedule group and every round state must be
-  folded behind a variable (premise-tied), exactly as the value half's
-  fold-and-induct fix did one level up. Slice B's architecture fork
-  (fully-unrolled body + a reusable qround-stanza lemma applied 16
-  times, vs. a 4-iteration loop body + one induction) is posed with
-  costs in the arc memory; the stanza lemma is common to both.
+  folded behind the article's own functions, never expanded. So the body
+  is now written AS STANZA FUNCTIONS — a prologue, sixteen qrounds and
+  an epilogue, each taking the rest of the instruction stream and
+  consing its own instructions on front (207 instructions, K addresses
+  ground per stanza so no pointer state is threaded; the differential
+  re-ran 8/8 on the restructure).
+- **E2b MACHINE HALF, SLICE B part 1 (2026-08-03) — THE STANZA LAWS.**
+  Sixteen walk laws, one per qround, ALL first-check green (798/0, 3 s):
+  each walks its stanza's twelve (or seven, for the schedule-free last
+  four) instructions at a FREE fuel tail and a FREE instruction tail, so
+  the laws chain by rewriting and the walk is never run past a stanza's
+  end. Every value a stanza produces stays FOLDED behind the article's
+  own functions — the round state as shn_qround's two projections, the
+  schedule step as shn_sstep — which is exactly what keeps the
+  tetranacci growth out of the terms. TWO MECHANICS, both load-bearing:
+  the fuel tower is one deeper than the instruction count (xveval_instr
+  destructures one more level than xveval_seq spends, so a
+  twelve-instruction stanza is stated S^13 f -> S f); and BOTH records
+  must be spelled OPEN (MkRegs / MkXmms over variables) — over an
+  abstract record every read is a stuck projection and the address gates
+  never resolve, the same law the value half learned on Xmm.
+  REMAINING for the walk: the prologue law (premises = the mask value,
+  the two state-home reads as MkXmm literals so the article's pack laws
+  fire, and the src window bounds + three pointer-bump wrap collapses)
+  and the epilogue law (the feedback, the unpack shuffles and the two
+  stores, concluded as eb_hmem over shn_unpack), then the composition —
+  sixteen rewrites bridging to shn_block through the article's existing
+  shn_g4_def..shn_g15_def ladder, and an Xmm eta law for the pack of an
+  unpack.
 - **E3 — the variant bin** (lean name: sha256sum_shani; naming of
   the eventual dispatch bin = B6's fork). Skeleton re-composition
   + fold swap, emitted ELF (enc_winelf), byte-tie, capless silicon
