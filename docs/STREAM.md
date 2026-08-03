@@ -866,9 +866,37 @@ replacement.
   crossed by shn_madd32 (unconditional mod collapse) + shn_absorb4;
   a nonneg range ladder (pow2 literal rungs 1..30, ground-shift
   rotate bounds, helper bounds) feeds the mask/mod bridge.
-  REMAINING for E2: the hand body + THE BLOCK WALK at machine
-  grain (E2b, ties to shn_block_b), the block-grain silicon
-  differential w/ perturbation teeth (E2c, Opus-delegated).
+  REMAINING at E2a's landing (see the E2b record below): the hand
+  body + THE BLOCK WALK at machine grain (E2b, ties to
+  shn_block_b), the block-grain silicon differential w/
+  perturbation teeth (E2c, Opus-delegated).
+- **E2b RECORD (VALUE HALF LANDED 2026-08-02) — THE WORD-GRAIN
+  BLOCK THEOREM.** shn_blockw (sha256.shani.shard, article now
+  782/0 in ~3 s): `shn_block st g0..g3 = h8_add st (sha_rounds st
+  (sha_k) (shn_w64 g0..g3))` under state-los + input-group xlos
+  premises — one SHA-NI block dataflow IS the spec's 64-round walk
+  over the schedule-word projections (shn_w64 = lane projections of
+  the named shn_g4..g15 chain, everything folded); the fact E3's
+  fold swap cites. Probe-first (e2b_probe.shard, untracked root,
+  superseded by the article). THE PERFORMANCE LESSON: the 16-step
+  unrolled rewrite-the-qround-law walk was >14 min INTRACTABLE
+  (each step restates the growing tower — O(n²) explicit nests; an
+  abstract-16-var refactor measured WORSE, free vars keep stuck
+  projections alive). The fix = the scalar ish_srounds_los pattern
+  one level up: **shn_qwalk** (qround folded over k/msg group lists
+  in lockstep) + **shn_qwalk_thm** by ONE induction (step =
+  shn_qround_law_v — the qround law at VARIABLE k group, its case
+  split + blnth triples proven once; nonneg invariants ride
+  slo/gso list folds with hd/tl inversion lemmas) — >14 min → 3 s.
+  The article's 16-issue nest bridges to the fold by ONE stopped
+  compute; the ground k side collapses to (sha_k) by pure compute.
+  Checker gotchas on record in the arc memory: compute unfolds a
+  variable-applied projection into a stuck match (always stop
+  x*_of; collapse ctor-applied projections by targeted
+  unfold+reduce haves); rewrite-with rewrites the FIRST occurrence
+  only (the feedback's two arms = two citations).
+  REMAINING for E2: the hand body + THE BLOCK WALK at xveval
+  grain (machine half of E2b); E2c differential (Opus-delegated).
 - **E3 — the variant bin** (lean name: sha256sum_shani; naming of
   the eventual dispatch bin = B6's fork). Skeleton re-composition
   + fold swap, emitted ELF (enc_winelf), byte-tie, capless silicon
