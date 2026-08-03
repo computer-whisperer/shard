@@ -897,6 +897,43 @@ replacement.
   only (the feedback's two arms = two citations).
   REMAINING for E2: the hand body + THE BLOCK WALK at xveval
   grain (machine half of E2b); E2c differential (Opus-delegated).
+- **E2b MACHINE HALF, SLICE A (2026-08-03) — THE HAND BODY, ground-
+  validated.** e2bm_probe.shard (untracked scratch, teach precedent):
+  eb_body = 208 XVec/scalar instructions, one SHA-NI block start to
+  finish — the state pack shuffles (shnp_pack_abef/cdgh's trees), 16
+  qround issues each `XMM0 <- W_j; paddd XMM0,K; rnds2 CDGH,ABEF;
+  pshufd XMM0,0x0E; rnds2 ABEF,CDGH`, the twelve just-in-time schedule
+  steps (shn_sstep's tree), the paddd feedback and the unpack + store.
+  REGISTER ALLOCATION FROZEN (the probe header is the record): XMM0 wk,
+  XMM1 ABEF / XMM2 CDGH (roles never swap — the slide law), XMM3..XMM6
+  the rotating message window (W_j in XMM(3 + j mod 4)), XMM7 schedule
+  temp, XMM8 the byte-flip mask resident, XMM9/XMM10 the entry state
+  saved for the feedback, XMM11 the K load + shuffle temp; RDI = src,
+  R10 home scratch, R11 the K pointer.
+  GROUND VALIDATION = e2bm_run.shard, a RUN-MODE differential (check
+  mode cannot pin a machine run: std/mem's Mem is opaque, the M1 law),
+  machine leg vs shn_block_b: **8/8 rows PASS**, first semantic try —
+  abc, empty-pad, ascending bytes, distinct bytes at a computed state,
+  all-0xFF, all-0xFF at the all-max state (wrap stress), the NIST
+  two-block vector CHAINED through the memory state home, and a framing
+  row (mask, block bytes and an unwritten cell untouched). Teeth: K base
+  +4 and a swapped rnds2 operand pair each collapse it to 1/8; a
+  palignr immediate 4 -> 8 leaves 5/8 — the survivors are the
+  degenerate blocks, which is why the distinctive-byte rows exist.
+  ONE correction, in the harness not the body: **xveval_seq spends fuel
+  PER INSTRUCTION**, so a 208-instruction body needs ~210 (the harness
+  carries 512), and a differential's failure fallback must poison its
+  compare window — reading back the entry state made an under-fueled
+  run look like a body that stored its input.
+  MEASURED FOR SLICE B: expanding shn_block symbolically with the
+  primitives stopped CORE-DUMPS at ~168 s. The schedule chain's term
+  grows tetranacci (|g_n| ~ 1.93^n) with no sharing, so the walk cannot
+  be one compute — every schedule group and every round state must be
+  folded behind a variable (premise-tied), exactly as the value half's
+  fold-and-induct fix did one level up. Slice B's architecture fork
+  (fully-unrolled body + a reusable qround-stanza lemma applied 16
+  times, vs. a 4-iteration loop body + one induction) is posed with
+  costs in the arc memory; the stanza lemma is common to both.
 - **E3 — the variant bin** (lean name: sha256sum_shani; naming of
   the eventual dispatch bin = B6's fork). Skeleton re-composition
   + fold swap, emitted ELF (enc_winelf), byte-tie, capless silicon
