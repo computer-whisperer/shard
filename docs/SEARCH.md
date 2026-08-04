@@ -5222,3 +5222,34 @@ sha256.stream / word / kernel/reader / wasm_rev, then float kit LAST
 measure-keyed only: no ladder members, no far tier), so a watchdog
 cut there costs only far-horizon telemetry. The official gate read =
 this head record + the tail's ladder tally.
+
+**THE OFFICIAL RECORD (CI 299 head + CI 302 tail, 2026-08-03/04;
+tail watchdog cut exactly float kit — all 19 gate-relevant files
+complete). LS4-i CLOSED.**
+
+- **Ladder: 142/182 (78.0%)** — the engine added 22 ladder closes
+  over the 120 floor (65.9%). The gate needs 164 (90%): 22 to go.
+- **Far tier: 6/13 closed — the gate's far-tier leg is MET** (needs
+  ≥1): blen_is_len, cat_len, get_set, gs_i, lookup_insert_eq,
+  str_len_nonneg.
+- **37 engine closes total** (22 ladder + 6 far + 9 sidecar-unbacked
+  bonuses, incl. len_word_bytes at the full d6 depth cap and
+  shc_ediv64_ub in the stream module). Notable: word's ENTIRE lo/hi
+  made-bound family (u8/u16/u32 ×2) fell at d2 ~8 pops each — the
+  div-facts move + farkas closer absorbed what the ladder does with
+  have-cascades citing premised mod_lo/mod_hi.
+- **Bucket verdicts (census-open populations): F 4/4, A 2/3 (str_valid
+  far refused), B 8/14, C 13/17, D 1/37.** Every find ≤ 50k applies,
+  most ≤ 5k; refusals: 61 budget / 20 depthcap / 19 drained.
+- **The residue names the path (the census's arithmetic, now
+  measured):** the 40 open ladder goals = 35 induction-shaped (D) +
+  2 B (of_list_id, get_set_get) + 3 C. LS4-ii's premised-citation
+  machinery can contribute AT MOST ~5 gate points — **the gate
+  hinges on LS4-iii: ≥17 of the 35 open D goals must fall.**
+  Surfaced for ruling at the next slice boundary: fold LS4-ii's
+  RewriteWith/discharge machinery INTO the induction rung (it is the
+  arms' discharge substrate) rather than running it as its own
+  gate-measured slice.
+- Float kit stays unmeasured this round (zero gate goals; the far
+  horizon toward frnd_pos_wf/#18 — a cheaper dedicated fire by
+  ruling if wanted).
