@@ -5184,3 +5184,41 @@ tools/reach/bench_engine.shard), scored against the corrected
 baseline: floor 120/182 ladder + 0/13 far; the gate needs 164/182 +
 ≥1 far-tier. OPEN-budget rows are attempts the work cap cut — they
 claim nothing and are re-runnable at a higher cap by ruling.
+
+**Second fire (CI 298): lost to the 8h JOB timeout** — the fire-time
+ENGINE_RUN_SECS:43200 override sat ABOVE the job's timeout, so the
+internal watchdog (whose purpose is ending the script while artifacts
+can still upload) never fired; GitLab uploads nothing on a job
+timeout. Pairing rule now in the yml (9130bc2, engine-run timeout →
+24h): overrides keep ENGINE_RUN_SECS under the job timeout minus
+upload slack.
+
+**THE HEAD RECORD (CI 299, 2026-08-03, watchdog-safe: the 12h
+internal deadline fired as designed and the partial artifact landed;
+15 of 20 files complete, cheap-first order + streaming writes = every
+completed file scoreable).** Headline: **the gate's far-tier leg is
+satisfied SIX times over** — blen_is_len, cat_len, get_set, gs_i,
+lookup_insert_eq, str_len_nonneg, all post-#16 opaque-type entries
+the ladder measurably cannot touch, closed by theory-backed chains
+(gs_i: a FIVE-move chain, 121 pops / 14,057 applies; cat_len: d3, 91
+pops / 42,212 applies). **30 engine closes** on the 15 files: 16
+ladder + 6 far + 8 sidecar-unbacked bonuses (incl. len_word_bytes at
+the full depth cap d6, 190 pops). Bucket verdicts vs the census's
+in-log populations: **F 4/4 (complete — div-facts + farkas exactly as
+designed), A 2/3, B 8/14, C 7/11, D 1/25** — the D near-zero confirms
+the census's induction-mandatory arithmetic precisely (the one D
+close, add_zero_right, found a citation chain its sidecar's induction
+never needed). cond_probe (the conditional-citation probe) closed at
+d2 by an alternative unpremised route. Ladder tally on the 15 files:
+68/96 seen closed. Refusals: 35 OPEN-budget (the 50k work cap — the
+re-runnable tranche), 18 depthcap, 17 drained (exact refutations).
+Cost telemetry: 163 goals in 12h ≈ the degraded-regime apply cost
+dominating; the pop-cap→apply-cap unit change held (every find ≤
+50k applies, most ≤ 5k).
+
+**The tail (fired as tools/reach/bench_engine_tail.shard):**
+sha256.stream / word / kernel/reader / wasm_rev, then float kit LAST
+— kit contributes ZERO gate-relevant goals (float.auto is
+measure-keyed only: no ladder members, no far tier), so a watchdog
+cut there costs only far-horizon telemetry. The official gate read =
+this head record + the tail's ladder tally.
