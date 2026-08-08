@@ -1128,6 +1128,69 @@ replacement.
   the loop walk (shb_xloop's mirror at xveval_loop grain, XVBrk 0
   exit shape, lgv fuel tower) + the run form (sst_xfold_run's twin
   at xvrun_regs); B-iii the tie.
+- **E3 SLICE B-ii LANDED (2026-08-08) — THE FOLD WALK, machine leg
+  complete.** e3b_probe.shard extended to **877/0 (~2.5 s)**; the
+  differential re-runs 7/7. Five tranches, in landing order: (1) the
+  loop tail AMENDED — R10/R11 re-zeroed PER ITERATION (two movs; the
+  M3 discipline applied inside the loop so the invariant register
+  file is uniform across k=0 and k>=1 — without this the loop
+  conclusion forks on k). (2) THE MODULE-GENERAL STANZA LAWS:
+  e3a_probe's 18 laws regenerated as snw_law_pro/q0..q15/epi over a
+  QUANTIFIED function list (MkXModule fs 65536 131072) — the walk
+  touches the module only through xmemlo_of/xmemhi_of, which reduce
+  on the constructor with fs free, so all 18 proofs landed VERBATIM
+  first check; ONE law block now serves the probe module, the loop
+  walk, and slice C's variant module. Plus snw_law_gate (the
+  not-taken brif as a free-tail law: both sides reduce to the same
+  stuck match on the abstract tail). (3) THE SEPARATION KIT (none
+  existed at the vector tier): snw_llb (load_le4 strictly below a
+  store_le4 — FOLDED-FORM statement, proof peels to bytes via
+  load_le_s/z and frames with store_le_get_below, so no refold is
+  ever needed), snw_vlb (vload below vstore, 16 crossings; gotcha:
+  unfold vstore FOUR times — unfold hits one occurrence per call),
+  snw_hb2 (below the H-store pair), snw_fmem_frame (below the whole
+  fold, induction on k) — statements stay folded exactly like the
+  walk's stop-set discipline, so patterns always match. (4) THE
+  FOLD DESCRIPTORS, shx_mem's mirrors: snw_hst (H readback as
+  x?_of-projections of the folded vloads), snw_blk (shn_block of
+  the readback over the four bswap'd groups), snw_fmem / snw_fxs /
+  snw_xstep (+ _z/_s defining claims; snw_xstep = the summit's
+  final file transcribed as a function of (xs, m, src)), and
+  snw_xs_eta (Xmms eta, case-on). (5) **snw_xloop + snw_xrun**, the
+  slice's summits. THE ETA MOVE (the design discovery that made the
+  walk small): the ha..hh state premises are GONE — the chain
+  instantiates law_pro's sA/sC as MkXmm-ETA forms of the FOLDED H
+  reads ((x0_of (vload m 131008)) ...), so the read obligations
+  close refl-by-compute, the chain's state terms equal snw_hst's
+  spelling BY SYNTAX (the descriptor close is refl), the IH needs
+  no giant insts, and NO read-back lemma is needed anywhere —
+  ls4_id + the m32 range ladder defer wholly to B-iii. snw_xloop
+  (fuel S^230(lg_fuel k c), premises mask/lo/hi + 16 K): Z computes
+  after int_of_nat_zero (int_of_nat is OPAQUE — rewrite BEFORE any
+  compute or the packed literal blocks the law); S case = gate law,
+  the summit's 62-rewrite stanza chain with K premises shifted -2,
+  one compute-with-stops through the tail (wrap64 haves mirror
+  shb_xloop: hsub/hwk/hw0a/hw0), s16/f1/f2 rl folds, IH (19 side
+  goals: 17 below-reads x two snw_vlb strips with LITERAL-arith
+  obligations that close by compute, 2 bounds by farkas), close =
+  advk_s/fmem_s/fxs_s + block_split + symmetric computes. Fuel law:
+  the loop recursion re-enters at the LOOP PEEL's own f2, so the
+  base constant is slack-insensitive (any depth >= the body's ~215)
+  and lg_fuel's +1/iteration IS the loop peel. snw_xrun
+  (S^236(lg_fuel k c); zero-cell read = premise 19): stated over the
+  PARTIALLY-QUANTIFIED module (Cons f0 (Cons (MkXFunc 2 (snw_wrap))
+  restfs)) — slice C instantiates the variant bin's module directly;
+  proof = spine compute, the loop lemma (19 premise-verbatim
+  obligations), exit-ladder compute, then the XMM-zero collapse:
+  snw_xs_eta rl (explicit inst) -> COMPUTE (the vset match chains
+  dispatch on the literal) -> snw_fmem_frame (7-arg, all 16 sites)
+  -> premise 19 -> compute, refl. ⚠ TWO fuel/walk laws worth blood:
+  (a) spine depth counts ONE PEEL PER CONS BEFORE the instr eval
+  (the run spine is 6, not 5 — movrr, movri, block-Cons, block
+  peel, loop-Cons, loop peel); (b) rewrite CANNOT reach sites
+  inside stuck match ARM BODIES (bound vars) — eta-then-COMPUTE
+  first, so the sites surface into constructor position. REMAINING:
+  B-iii the group->bytes tie (per the recorded map).
 - **E4 — clause-1 adjudication + B5 RECORD.** With the artifact in
   hand (CERT.md §4: decided WHEN THE ARTIFACT EXISTS), the user
   rules: grow the validator's disjunctive acceptance (clause 1 =
