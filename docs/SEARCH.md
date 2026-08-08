@@ -5273,8 +5273,9 @@ a rung that cannot move the gate. The ladder is now LS4-i (CLOSED) →
 LS4-iii (the fold rung, design block before build per the original
 ratification).
 
-**LS4-iii DESIGN (drafted 2026-08-08; forks LS4-C/LS4-D OPEN —
-awaiting ruling before build).** Evidence base: the 35 open D-bucket
+**LS4-iii DESIGN (drafted 2026-08-08; forks LS4-C/LS4-D RULED same
+day — user: "That looks good, let's dig in" — both leans ADOPTED;
+the build opened).** Evidence base: the 35 open D-bucket
 sidecar proofs, read in full.
 
 *The measured shape of the population:*
@@ -5346,7 +5347,7 @@ certificate law unchanged.
 All three generate ZERO moves when hyps = Nil, so base-goal drives
 (every LS4-i path, the pin) are byte-identical in behavior.
 
-*Fork LS4-C — where branching lives (LEAN: (a)).*
+*Fork LS4-C — where branching lives (RULED 2026-08-08: (a) ADOPTED).*
 - *(a) Root-alternative orchestrator.* Branching tried only at the
   root of each (sub-)search; arms are fresh recursive drives.
   Preserves the frozen frontier/key machinery; matches 35/35
@@ -5358,8 +5359,8 @@ All three generate ZERO moves when hyps = Nil, so base-goal drives
   exact-state key law and dominance machinery need a redesign; a
   large build against zero measured demand.
 
-*Fork LS4-D — how much folded citation machinery in build 1 (LEAN:
-(a)).*
+*Fork LS4-D — how much folded citation machinery in build 1 (RULED
+2026-08-08: (a) ADOPTED; (b) later on measured refusal).*
 - *(a) Instance tier only* (M1+M2+M3). Covers every citation shape
   appearing in the 35-goal population; word's premised mod_lo/mod_hi
   shapes are already absorbed natively (LS4-i measured).
