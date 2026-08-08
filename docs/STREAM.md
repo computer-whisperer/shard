@@ -1091,6 +1091,43 @@ replacement.
   route (wvcall_bridge) needs the budget raised past the leaf's
   length; one-literal vworld.shard edit, gated by the E1 probe
   re-check + a thread-log announcement, deferred to slice C.
+- **E3 SLICE B-i LANDED (2026-08-08) — THE FOLD LEAF, ground-
+  validated.** e3b_probe.shard (untracked root): snw_wrap = the
+  variant fn 1's body (arity 2, sst_xfold_run's exact boundary):
+  wrapper [RDX := RSI (count); RSI := 0], XBlock[XLoop[brif (CEqz
+  RDX) 1; the rebased hand body STANZA-COMPOSED AT THE LIVE TAIL
+  (add RDI 16 / sub RDX 1 / br 0 — shnw_body is the same nesting
+  closed at Nil, so the free-tail stanza laws re-compose against
+  it)]], exit ladder [R12 := RDI (the advanced cursor); RDI := 0;
+  R10 := 130512; SIXTEEN XVLoads zero the WHOLE XMM file from the
+  dead-zero cell (no pxor species — a never-written cell in the
+  dead W frame is the zero source, ONE vload-zero premise at the
+  seam); R10/R11 := 0]. RDX survives the body (its scalar footprint
+  is RDI/R10/R11 only) so the loop needs NO spills — the scalar
+  fold's spill cells stay dead. Exit contract = every GPR zero
+  except R12 = src+64k, XMM file ground-zero (the M3 re-zero
+  discipline extended — downstream twin walks carry a ground file).
+  Differential e3b_run.shard **7/7 FIRST SEMANTIC RUN**: k=0/1/2/3
+  (NIST two-block chained BY THE FOLD; 3-block stride) + the exit
+  register row + the XMM-zero row (junk RDX=77/R12=55/XMM=9s
+  entries prove the contract bites) + framing (mask, block bytes,
+  unwritten cell, dead spill cells, zero-source). Teeth on the
+  fresh glue: stride 16→8 collapses to 4/7 (k=0/1 survive, exactly
+  as predicted); dropping XMM15's zero-load fails r6 alone (6/7).
+  THE TIE ARCHITECTURE (measured during design, B-iii's map):
+  sha_block = h8_add + sha_rounds over sha_sched; shn_blockw lands
+  the same form over shn_w64; so the tie = shn_w64(bswap'd loads)
+  = sha_sched(mem_read 64) — 16 seed lanes (word_be vs
+  vbswap-of-LE-assembly, per-lane) + the extension via 12
+  shn_sched_group citations + srev_acc plumbing; xlos premises from
+  vload/vbswap byte-assembly bounds; the walk-side per-iteration
+  state premise needs shn_los-of-sha_block (m32 range). The value
+  leg's shape: vfold = shb_fold's byte-list mirror over shn_block_b
+  (stake/sdrop chaining) — the differential's spec side. REMAINING:
+  B-ii the per-iteration walk (the summit chain at the live tail) +
+  the loop walk (shb_xloop's mirror at xveval_loop grain, XVBrk 0
+  exit shape, lgv fuel tower) + the run form (sst_xfold_run's twin
+  at xvrun_regs); B-iii the tie.
 - **E4 — clause-1 adjudication + B5 RECORD.** With the artifact in
   hand (CERT.md §4: decided WHEN THE ARTIFACT EXISTS), the user
   rules: grow the validator's disjunctive acceptance (clause 1 =
