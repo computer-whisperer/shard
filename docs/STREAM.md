@@ -1051,6 +1051,46 @@ replacement.
   + run_corpus rows. Gates: THE B5 NUMBER on record (§5's gate);
   the §7.5-form verdict for the variant (fork D's contract); the
   expressibility gate answers here.
+- **E3 SLICE LADDER (ratified in-session 2026-08-08, leans adopted):**
+  A = the rebase probe (the machine tranche regenerated at the
+  streaming layout); B = the fold leaf (fused call-free loop fn +
+  THE FOLD WALK, incl. the symbolic group->bytes tie E2b deferred
+  here); C = the skeleton twin at wveval grain (sha256sum_shani_x86,
+  embedding lifts + the fold seam via wvcall_bridge); D = ELF +
+  byte-tie + pipe differential vs coreutils AND openssl; E = THE B5
+  NUMBER (B4's method) + the fork-D verdict + records. Micro-forks
+  ruled to their leans: fn 0 dead-kept (index stability); fn 1 = the
+  fused SHA-NI fold leaf (vworld's ruled shape); mask home @130496
+  (the dead W base — SHA-NI keeps the schedule in registers), K/H at
+  the skeleton's own homes 130752/131008 (byte-identical content
+  layout, so the absorber/finalizer readback equations hold
+  unchanged); init wrapper fn 13 extended to write the mask; the
+  variant bin = (bin sha256sum_shani ...) over the same spec entry
+  sst_main (fork D's per-variant contract).
+- **E3 SLICE A LANDED (2026-08-08) — THE REBASE PROBE.** The
+  article's whole machine tranche (shn_pro..shn_walk, 2739 lines)
+  regenerated at THE STREAMING LAYOUT under shnw_ names
+  (e3a_probe.shard, untracked root): **830/0 FIRST CHECK in ~2.6 s
+  with ZERO proof-step changes** — three ordered token maps only
+  (48 names shn_X -> shnw_X word-bounded; the address map 256->
+  130496, 512+16i -> 130752+16i, 768/784/800 -> 131008/131024/
+  131040, 65536->131072; the base fixes (le 0 ..) -> (le 65536 ..)
+  on the five src lower-bound sites + the module former's base).
+  WHY it could be pure regeneration: every farkas gate discharge in
+  the tranche is an index-and-multiplier row citation — (rows (goal
+  1) (N 1)), no ground constants in any cert row — so the discharges
+  are invariant under the address map; the mod_unique wrap collapses
+  keep q=0 (addresses stay tiny vs 2^64). Ground validation
+  e3a_run.shard (e2bm_run mapped the same way; fuel 512 and mod-256
+  byte generators deliberately NOT mapped): **8/8 first run**;
+  K-home tooth (group 0 displaced +4) collapses to 1/8 with only
+  framing surviving — e2bm's exact tooth signature — and reverts to
+  8/8. MEASURED for slice C: vworld's purity dispatch spends budget
+  PER LIST ELEMENT (xwv_l), so xwv_budget=96 exhausts on the ~220-
+  instruction leaf and answers True = MIRROR — the designed delegate
+  route (wvcall_bridge) needs the budget raised past the leaf's
+  length; one-literal vworld.shard edit, gated by the E1 probe
+  re-check + a thread-log announcement, deferred to slice C.
 - **E4 — clause-1 adjudication + B5 RECORD.** With the artifact in
   hand (CERT.md §4: decided WHEN THE ARTIFACT EXISTS), the user
   rules: grow the validator's disjunctive acceptance (clause 1 =
