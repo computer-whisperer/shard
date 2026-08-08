@@ -5056,14 +5056,19 @@ discipline):*
   growth on measured refusal, LS-law 2's pattern). Targets: buckets
   B + A + F (10 ladder goals) and the far tier's citation shapes —
   the probable first far-tier close.
-- **LS4-ii — the cut rung.** Grow the space with have-cut synthesis
-  over a comparison schema (bounds on goal subterms — the lo/hi
-  family's shape), each cut discharged by the LS4-i machinery.
-  Targets bucket C (16 ladder).
-- **LS4-iii — the induction rung.** induct / case-on as branching
-  moves; each arm's subgoal re-enters the same search space. The
+- **LS4-ii — the cut rung (DISSOLVED 2026-08-08 by ruling — folded
+  INTO LS4-iii; the fold ruling sits below the LS4-i record).** As
+  originally ratified: have-cut synthesis over a comparison schema,
+  each cut discharged by the LS4-i machinery, targeting bucket C
+  (16 ladder). The LS4-i measurement mooted it as a standalone
+  slice: div-facts + farkas closed 13/17 of C natively, leaving
+  ≤5 gate points in its whole target population.
+- **LS4-iii — the induction rung (now also the fold's landing
+  seat).** induct / case-on as branching moves; each arm's subgoal
+  re-enters the same search space, and LS4-ii's premised-citation
+  and discharge machinery lands HERE as the arms' substrate. The
   mandatory rung (the census fact) and the largest design surface —
-  its own design block before build, informed by LS4-i/ii telemetry.
+  its own design block before build, informed by LS4-i telemetry.
 
 Gate measurement closes the ladder; the prove-on-engine rewrite
 decision then unblocks per LS-law 3. frnd_pos_wf stays the beyond-
@@ -5253,3 +5258,17 @@ complete). LS4-i CLOSED.**
 - Float kit stays unmeasured this round (zero gate goals; the far
   horizon toward frnd_pos_wf/#18 — a cheaper dedicated fire by
   ruling if wanted).
+
+**THE FOLD RULING (2026-08-08, user: "The fold sounds reasonable, we
+can rework the ratified ordering with the new information").** LS4-ii
+is DISSOLVED as a standalone gate-measured slice; its
+RewriteWith/premised-citation and discharge machinery folds INTO
+LS4-iii as the induction arms' substrate. The rework's ground: the
+LS4-i measurement showed LS4-ii's whole target population is worth
+≤5 gate points (C 13/17 already closed; B's premised residue = 2),
+while the gate needs 22 and 35 of the 40 open ladder goals are
+induction-shaped. REJECTED-because (the standalone slice): it kept
+the one-rung-one-measurement cadence but spent a benchmark round on
+a rung that cannot move the gate. The ladder is now LS4-i (CLOSED) →
+LS4-iii (the fold rung, design block before build per the original
+ratification).
