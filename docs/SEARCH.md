@@ -5272,3 +5272,105 @@ the one-rung-one-measurement cadence but spent a benchmark round on
 a rung that cannot move the gate. The ladder is now LS4-i (CLOSED) →
 LS4-iii (the fold rung, design block before build per the original
 ratification).
+
+**LS4-iii DESIGN (drafted 2026-08-08; forks LS4-C/LS4-D OPEN —
+awaiting ruling before build).** Evidence base: the 35 open D-bucket
+sidecar proofs, read in full.
+
+*The measured shape of the population:*
+- **All 35 proofs branch AT THE ROOT** — 26 `(induct VAR)` on a goal
+  param, 9 `(case-on SCRUT Bool)`. Zero proofs take rewrite steps
+  before the branching move. subterm-induct / wf-induct: ZERO uses.
+- **8/35 re-branch inside arms** (nested induct/case-on; deepest =
+  utf8_lead_le with 10 branch nodes, case-on chains over if-guard
+  conditions `(le n 0)`, `(le 128 c0)`, `(le c0 191)`). Arms must
+  re-enter the FULL space including branching — at their own roots.
+- **Every arm body is LS4-i material** — unfold/reduce/simp/rewrite
+  chains closed by refl or arith — PLUS the hyp vocabulary:
+  `(rewrite (hyp k) …)` (the IH or the case equation), and
+  have-cuts whose equation is an INSTANCE of the IH or of an
+  unpremised lemma, discharged by one rewrite/rewrite-with + refl,
+  then cited by the arith closer. word's wrap goals' rewrite-with
+  mod_lo/mod_hi cascades are the exact shape LS4-i's
+  div-facts+farkas absorbed natively in the made-bound family.
+- **The checker already exposes the arm seam non-recursively**
+  (kernel/checker.shard): `induct_case_subgoal` /
+  `caseon_case_subgoal` build ONE arm's sub-sequent (IH attached as
+  hyps by `build_ihs`), out of the check_sequent SCC — callable
+  natively, the LS4-i pattern (the checker's own functions, no
+  reflection). Setup is reproducible: find_param → type_head →
+  lookup_typedef (zero-ctor refusal stands) → zip_pairs;
+  tc_scrut_targs + inst_ctor_fields for case-on.
+- **The IH's shape decides the citation tier** (`build_ih`): with no
+  surviving ∀-params it is `(Goal Nil Nil eq)` — plain-rewrite
+  citable; with surviving params (take_le's n) it is a GENERALIZED
+  Goal needing rewrite-with instantiation — the folded LS4-ii
+  machinery's real content.
+- **farkas_solve reads PREMISES only** (1–6, meta/proofgen) — hyps
+  are invisible to the closer. The ladder's own bridge is the
+  have-cut: `(have <ih-instance> (… (rewrite (hyp k) …)) refl)`
+  puts the instance in the premise slot arith cites.
+
+*The architecture (fork LS4-C's lean): branching ABOVE the drive,
+not inside it.* A pf_branch orchestrator wraps pf_drive: try the
+linear drive first (LS4-i behavior, unchanged); on refusal,
+enumerate branch candidates at the ROOT — induct over ctor-headed
+goal params, case-on over guard conditions harvested from the goal
+equation's 1-step-unfolded call heads (+ comparisons already in the
+goal) — build arm sub-sequents via the checker's own builders, and
+recurse per arm (branch budget bounds total branch nodes). Each arm
+is a FRESH drive invocation: hyps are constant within it, so the
+exact-state-factoring key law holds per invocation with hyps
+excluded from keys, exactly as today. AND semantics: an arm's
+refusal kills the candidate; the goal's verdict = best over
+candidates (conservative: PfBudget unless all candidates drained).
+Budgets stay in APPLIES, shared: arms consume the goal's one
+apply_cap sequentially. Assembly: per-arm PfFound proofs →
+`(Case cname names pf)` → `(Induct var cases)` / `(CaseOn scrut ty
+cases)`; acceptance = check_sequent on the ORIGINAL sequent — the
+certificate law unchanged.
+
+*The linear drive grows the arm vocabulary (the fold's landing):*
+- **M1 hyp-rewrite**: `(Rewrite (Hyp k) dir side)` over UNPREMISED
+  no-param hyps — the mirror of the premise-rewrite family.
+- **M2 hyp-bridge**: a have move injecting an unpremised hyp's
+  equation as a premise (discharge = one hyp-rewrite + refl, built
+  and verified at move-generation time) — farkas then sees the IH.
+  A new history segment joins the key bytes, the PfDiv mechanism.
+- **M3 instance-cut**: synthesize IH/lemma INSTANCES by unifying the
+  cited equation against goal subterms (take_le's
+  `(take (- n 1) c1)` picks the instantiation); have + rewrite-with
+  (hyp) / rewrite (lemma) discharge; the instance lands as a
+  premise. M2 = M3 at the identity instance — kept as the cheap
+  tier.
+All three generate ZERO moves when hyps = Nil, so base-goal drives
+(every LS4-i path, the pin) are byte-identical in behavior.
+
+*Fork LS4-C — where branching lives (LEAN: (a)).*
+- *(a) Root-alternative orchestrator.* Branching tried only at the
+  root of each (sub-)search; arms are fresh recursive drives.
+  Preserves the frozen frontier/key machinery; matches 35/35
+  measured proofs (and the ladder itself only roots inductions —
+  parity is root-only regardless). Cost: cannot find
+  steps-then-induct proofs — a shape with zero measured demand.
+- *(b) Branching as frontier moves (AND/OR in one frontier).*
+  Strictly more general. Cost: hyps join the search state — the
+  exact-state key law and dominance machinery need a redesign; a
+  large build against zero measured demand.
+
+*Fork LS4-D — how much folded citation machinery in build 1 (LEAN:
+(a)).*
+- *(a) Instance tier only* (M1+M2+M3). Covers every citation shape
+  appearing in the 35-goal population; word's premised mod_lo/mod_hi
+  shapes are already absorbed natively (LS4-i measured).
+- *(b) Also premised-LEMMA rewrite-with enumeration* (the original
+  LS4-ii headliner: theory-wide premised citations with searched
+  discharges). Cost lands exactly where LS4-i measured pool-width
+  pain, for ≤2 reachable goals (B's of_list_id/get_set_get — outside
+  the D population the gate hinges on). Later on measured refusal
+  (LS-law 2's pattern) unless ruled otherwise.
+
+*Measurement:* the same 20-file benchmark, cheap-first, same
+census-grade budgets; tags grow branch-node counts
+(engine-bB-dK-pN-aM). Gate read vs the LS4-i record: ladder needs
+164/182 (22 more; ≥17 must come from D), far-tier leg re-confirmed.
