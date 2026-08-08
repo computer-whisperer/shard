@@ -228,6 +228,56 @@ static void report(int good, const char *line, const char *detail) {
   else { fail++; printf("FAIL %s  [%s]\n", line, detail); }
 }
 
+/* --- the un-blinding rows (XVNCASE; docs/STREAM.md §8.4, B5/E2c) ------------
+ *
+ * A NEGATIVE row is an XVCASE whose module is a PERTURBED twin of the module
+ * under test, carrying the CLEAN module's expectation: it passes when the
+ * hardware DISAGREES. One perturbation ("tooth") owns one module name and
+ * spans several rows, and a tooth is not required to bite every row — E2b
+ * slice A measured that a schedule-immediate perturbation is invisible on
+ * degenerate blocks whose lanes are uniform. So the gate is per TOOTH: the
+ * perturbation must change the answer on AT LEAST ONE row, and the per-tooth
+ * tally is printed either way. A tooth that bites nothing is a differential
+ * that is BLIND to that error class, which is a loud FAIL.
+ *
+ * This makes un-blinding a property the differential re-establishes on every
+ * run, rather than a number measured once by hand and quoted in a header. */
+#define MAXTOOTH 64
+struct tooth { char name[32]; int n, bit, skipped; };
+static struct tooth teeth[MAXTOOTH];
+static int nteeth;
+
+static struct tooth *tooth_for(const char *name) {
+  for (int i = 0; i < nteeth; i++)
+    if (!strcmp(teeth[i].name, name)) return &teeth[i];
+  if (nteeth >= MAXTOOTH) return NULL;
+  memset(&teeth[nteeth], 0, sizeof teeth[nteeth]);
+  snprintf(teeth[nteeth].name, sizeof teeth[nteeth].name, "%s", name);
+  return &teeth[nteeth++];
+}
+
+static void tooth_verdicts(void) {
+  for (int i = 0; i < nteeth; i++) {
+    struct tooth *t = &teeth[i];
+    char tag[96], detail[160];
+    snprintf(tag, sizeof tag, "TOOTH %.31s", t->name);
+    if (t->n == 0) {
+      printf("SKIP %s [no sha_ni on this cpu] (%d rows)\n", tag, t->skipped);
+      continue;
+    }
+    if (t->bit == 0) {
+      snprintf(detail, sizeof detail,
+               "perturbation reproduced the reference on all %d rows -- the "
+               "differential is BLIND to this error class",
+               t->n);
+      report(0, tag, detail);
+    } else {
+      ok++;
+      printf("%s: bit %d/%d rows\n", tag, t->bit, t->n);
+    }
+  }
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) { fprintf(stderr, "usage: %s plan.txt\n", argv[0]); return 2; }
   FILE *f = fopen(argv[1], "r");
@@ -375,15 +425,17 @@ int main(int argc, char **argv) {
       } else {
         report(!strcmp(exp, "None"), line, "hardware faulted");
       }
-    } else if (!strncmp(line, "XVCASE ", 7)) {
+    } else if (!strncmp(line, "XVCASE ", 7) || !strncmp(line, "XVNCASE ", 8)) {
       /* the vector row (docs/STREAM.md §8): GPR args + the whole XMM file in,
        * the whole XMM file (plus rax and an optional memory window) out. The
        * model's expectation comes from the EXTENDED tier (xvrun_regs) — the
-       * scalar evaluator traps on every vector species by design. */
+       * scalar evaluator traps on every vector species by design.
+       * XVNCASE is the same row scored INVERTED (see tooth_verdicts above). */
+      int neg = line[2] == 'N';
       char name[32], a0[24], a1[24], a2[24], xinhex[544], seedaddr[24];
       char seedhex[4096], addr[24], len[24], exp[24], xexp[544], outhex[4096];
       int ac;
-      if (sscanf(line + 7,
+      if (sscanf(line + (neg ? 8 : 7),
                  "%31s %d %23s %23s %23s XIN %543s SEED %23s %4095s READ %23s "
                  "%23s -> %23s %543s %4095s",
                  name, &ac, a0, a1, a2, xinhex, seedaddr, seedhex, addr, len,
@@ -391,11 +443,17 @@ int main(int argc, char **argv) {
         report(0, line, "unparseable");
         continue;
       }
+      /* volatile: `th` is live across the sigsetjmp below and read again on
+       * the fault path, so it must not live in a register longjmp restores */
+      struct tooth *volatile th = neg ? tooth_for(name) : NULL;
+      if (neg && !th) { report(0, line, "too many tooth modules"); continue; }
       vrow++;
       char tag[96];
-      snprintf(tag, sizeof tag, "XVCASE %s (row %d)", name, vrow);
+      snprintf(tag, sizeof tag, "%s %s (row %d)", neg ? "XVNCASE" : "XVCASE",
+               name, vrow);
       if (!sha_ok && mod_has_sha(name)) {
         skipped++;
+        if (neg) th->skipped++;
         printf("SKIP %s [no sha_ni on this cpu]\n", tag);
         continue;
       }
@@ -438,6 +496,7 @@ int main(int argc, char **argv) {
         if (ln == 0) strcpy(rb, "-");
         int good = !strcmp(gothex, exp) && !strcmp(xgot, xexp) &&
                    !strcmp(rb, outhex);
+        if (neg) { th->n++; if (!good) th->bit++; continue; }
         char detail[10240];
         if (good) snprintf(detail, sizeof detail, "agree");
         else {
@@ -449,11 +508,15 @@ int main(int argc, char **argv) {
         }
         report(good, tag, detail);
       } else {
+        /* a perturbed body that FAULTS has plainly not reproduced the
+         * reference — that is a bite, not an agreement */
+        if (neg) { th->n++; th->bit++; continue; }
         report(!strcmp(exp, "None"), tag, "hardware faulted");
       }
     }
   }
   fclose(f);
+  tooth_verdicts();
   if (skipped)
     printf("x86 silicon differential: %d agree, %d disagree, %d skipped (no sha_ni)\n",
            ok, fail, skipped);

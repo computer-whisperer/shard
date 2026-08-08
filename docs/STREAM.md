@@ -1003,9 +1003,47 @@ replacement.
   article (harness fns inlined, pointed at shn_m/shn_hmem; probe
   import dropped) and re-ran 8/8 — the differential exercises the
   article's copy. e2bm_probe.shard = FROZEN HISTORY (header note;
-  nothing imports it). REMAINING for E2b: E2c — the block-grain
-  silicon differential (Opus-delegated: gold + random rows +
-  perturbation teeth against the emitted bytes).
+  nothing imports it). (E2c landed same day — next bullet.)
+- **E2c LANDED (2026-08-08) — THE BLOCK-GRAIN SILICON DIFFERENTIAL
+  (Opus-delegated; 57/57 positive rows first semantic run, five teeth
+  all biting, E1 leg unregressed 223/0).** The article's shn_body
+  emitted as real machine code and EXECUTED (models/x86/diff/
+  shani_diff_run.shard = the plan emitter, shani_diff.sh = the
+  end-to-end leg, x86_diff.c = the same E1 replayer +67 lines):
+  stored state compared against the VALUE tier's shn_block_b, the
+  whole XMM file against the vector-tier walk — model==silicon at
+  block grain, the loop E2a/E2b left open. Rows: 8 gold + 48 random
+  (state x block x entry XMM file, deterministic LCG — plan
+  byte-identical run to run) + the NIST two-block CHAINED row
+  (feedback through the memory home; the chained module composes the
+  article's own stanzas twice, add rdi,16 between — the prologue
+  advances RDI by 48). Memory is compared over [0,2000) of the
+  pre-zeroed page, so framing (mask home, block bytes, unwritten
+  cells) is implicit in every row. UN-BLINDING IS NOW A GATE, not a
+  measurement: new plan row kind XVNCASE (XVCASE inverted — PASS =
+  silicon disagrees) carries five perturbed twins re-scored EVERY
+  run, replayer tallies per tooth, every tooth must bite >= 1 row:
+  K-base+4 8/8, qround-0 rnds2 swap 8/8, palignr imm 4->8 4/8 (the
+  four survivors are exactly slice A's degenerate uniform-lane
+  blocks), byte-grain opcode CB->CD 8/8, byte-grain REX.R 8/8 — the
+  SDM operand-order convention (E1's rnds2 correction) confirmed by
+  silicon at block grain. THE RELOCATION LAW (E3-relevant):
+  vm.mmap_min_addr=65536 makes the body's ground homes unmappable, so
+  the plan rewrites every XMovRI immediate by +DATA_BASE and pins the
+  rewrite with an enc-identity first line (enc(sr_reloc 0 body) ==
+  enc(body) byte-for-byte; FAIL path tested) — E3's image places the
+  homes at real addresses by regeneration, and the mechanical-reloc
+  seam is now exercised and known-good. Harness self-tests (poisoned
+  expectations, reverted): both legs proven load-bearing. CI: corpus
+  leg after the E1 leg (run_corpus.sh), CPUID gate -> loud SKIP +
+  exit 0 (#289's posture), SKIPs COLLAPSED to one line per module so
+  the corpus FAIL/SKIP projection can't be flooded blind, verdict
+  line unconditional. Gates: plan file 806/0, fmt + canon clean.
+  Checker gotchas from the leg: ediv-descent and counting-up measures
+  from the scratch runner's helpers are NOT corpus-clean (flat dec4 +
+  countdown recursion instead); canon C8(a) — a nullary-ctor match
+  arm must not use the scrutinee variable in its body. E2 (a+b+c) IS
+  NOW CLOSED; the rung's remaining ladder = E3 (variant bin) then E4.
 - **E3 — the variant bin** (lean name: sha256sum_shani; naming of
   the eventual dispatch bin = B6's fork). Skeleton re-composition
   + fold swap, emitted ELF (enc_winelf), byte-tie, capless silicon

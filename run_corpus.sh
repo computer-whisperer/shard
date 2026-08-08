@@ -361,6 +361,7 @@ TARGETS=(
   std/sha256/sha256.weld.shard
   std/sha256/sha256.sweld.shard
   std/sha256/sha256.shani.shard
+  models/x86/diff/shani_diff_run.shard
   examples/sha256sum/sha256sum_stream_x86.shard
   examples/sha256sum/sha256sum_stream_elf.shard
   pins/proof/sketch_pin.shard
@@ -1260,6 +1261,24 @@ fi
 echo "=== x86: silicon differential ==="
 if command -v cc >/dev/null && [ -x bin/shard_eval ]; then
   bash models/x86/diff/x86_diff.sh 2>&1 || echo "FAIL x86-differential (exit $?)"
+else
+  echo "SKIPPED (needs cc + bin/shard_eval)"
+fi
+
+# SHA-NI BLOCK-GRAIN silicon differential (STREAM.md §8.4, B5/E2c): the same
+# trust leaf as the leg above, one rung up — the sha256.shani article's HAND
+# BODY (shn_body, 207 straight-line XVec instructions) emitted as real machine
+# code and executed, with the stored state compared against the article's
+# VALUE tier (shn_block_b, itself ground-pinned to the spec at E2a) and the
+# whole XMM file against the vector-tier walk. Carries its own un-blinding:
+# five perturbed twins that must NOT reproduce the reference (XVNCASE rows,
+# tallied per tooth). Rows SKIP loudly on a CPU without sha_ni — the CI runner
+# is such a box, so this leg is adjudicated on SHA-capable silicon (X86.md §6's
+# capability posture). Per-mismatch FAIL lines gate via the CI projection;
+# nonzero exit adds a synthetic FAIL row (see the wasm leg's note).
+echo "=== x86: sha-ni block differential ==="
+if command -v cc >/dev/null && [ -x bin/shard_eval ]; then
+  bash models/x86/diff/shani_diff.sh 2>&1 || echo "FAIL shani-block-differential (exit $?)"
 else
   echo "SKIPPED (needs cc + bin/shard_eval)"
 fi

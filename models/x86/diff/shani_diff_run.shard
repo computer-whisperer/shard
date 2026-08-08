@@ -1,0 +1,624 @@
+;;; models/x86/diff/shani_diff_run.shard — model side of THE BLOCK-GRAIN
+;;; SILICON DIFFERENTIAL (docs/STREAM.md §8.4, rung B5/E2c). The engine side
+;;; is the CPU: models/x86/diff/x86_diff.c mmaps this plan's module bytes into
+;;; an executable page and CALLS them, comparing the hardware's XMM file and
+;;; memory against the expectations below. Run it with shani_diff.sh.
+;;;
+;;; WHAT IS UNDER TEST: std/sha256/sha256.shani.shard's HAND BODY — shn_pro /
+;;; shn_q0..q15 / shn_epi composed as shn_body, one SHA-NI block as 207
+;;; straight-line XVec instructions. E2b proved the MODEL walk of that body
+;;; equals the article's shn_block (shn_walk) and a run-mode model differential
+;;; pinned it 8/8 against shn_block_b. What was never validated is the EMITTED
+;;; BYTES on real silicon. That is this file.
+;;;
+;;; THE TWO LEGS OF EVERY ROW. A row's expectation is deliberately split so a
+;;; pass is evidence about two independent things:
+;;;   * the MEMORY expectation comes from shn_block_b — the article's VALUE
+;;;     tier, ground-pinned to the spec's sha_block at E2a — computed with no
+;;;     reference to the machine tier at all. So the silicon's stored state is
+;;;     compared against the SPEC's answer, not against the model of the
+;;;     machine that produced it.
+;;;   * the XMM-FILE expectation comes from the model walk (xvrun_regs over
+;;;     the vector tier). All sixteen registers are compared, which is what
+;;;     catches an encoding that puts the right value in the wrong register
+;;;     (E1's dropped-REX.R argument) and pins the body's clobber map.
+;;;
+;;; THE FRAMING IS IN EVERY ROW, not a separate one. The seeded region is the
+;;; whole home window [256,1088) — mask, K table, state home, the unwritten
+;;; gaps, the block bytes — and the READ-BACK region is wider still, [0,2000)
+;;; of the (pre-zeroed) data page. The expectation is that region with ONLY
+;;; [768,800) differing from what went in, so a stray store anywhere in it —
+;;; into the mask, the K table, the message, a gap, or the zeros on either side
+;;; of the homes — fails the row. (2000 bytes is the replayer's readback
+;;; ceiling; writes above it are covered by the walk theorem, not by this row.)
+;;;
+;;; RELOCATION (the one deviation from a byte-exact replay of the article's
+;;; body — recorded, and mechanically pinned below). The body's homes are
+;;; GROUND ADDRESSES in [0,65536): mask@256, K@[512,768), H@[768,800),
+;;; block@1024. Linux will not map a page there — vm.mmap_min_addr is 65536 on
+;;; this box and on any stock kernel — so the differential runs the body
+;;; RELOCATED to the harness data page at 0x40000000 (the same base every
+;;; other row in models/x86/diff uses). The relocation is one mechanical
+;;; rewrite, sr_reloc: every (XMovRI r n) becomes (XMovRI r (n + base)) and
+;;; NOTHING else changes — which is exactly the move the article's own header
+;;; anticipates ("the E3 image relocates by regeneration"). sr_reloc 0 is
+;;; therefore the identity, and the plan's first line PINS that: the encoded
+;;; bytes of (sr_reloc 0 (shn_body)) are compared to the encoded bytes of
+;;; (shn_body), so a rewriter that dropped, reordered or retyped an
+;;; instruction cannot hide.
+;;;
+;;; THE TEETH (un-blinding, XVNCASE rows). Five perturbations of the body,
+;;; each applied ALONE, each carrying the CLEAN expectation: a tooth row PASSES
+;;; when the hardware DISAGREES. The replayer tallies per tooth and fails a
+;;; tooth that bit no row at all — so the differential proves its own
+;;; sensitivity on every run instead of in a one-off measurement.
+;;;   T1 kbase   every K-table address +4 (the K base 512 -> 516)
+;;;   T2 rnds2   qround 0's first sha256rnds2 operands EXCHANGED
+;;;   T3 palign  the first schedule palignr's immediate 4 -> 8
+;;;   T4 opbyte  BYTE GRAIN: the first sha256rnds2 opcode byte CB -> CD
+;;;              (it becomes sha256msg2 — same length, legal, executes)
+;;;   T5 rexbyte BYTE GRAIN: the first REX.R-bearing movdqa's REX 0x44 -> 0x40
+;;;              (it writes xmm1 where the body wrote xmm9 — the clobber-map
+;;;              tooth the whole-XMM-file comparison exists for)
+;;; A tooth is NOT required to bite every row: E2b slice A measured that the
+;;; palignr immediate is invisible on DEGENERATE blocks (all-0xFF uniform
+;;; lanes, near-zero pad tails) where imm 4 and imm 8 compute the same value.
+;;; That is why the distinctive-byte and random rows exist, and why the gate is
+;;; per tooth ("bit at least one row"), with the per-tooth tally printed.
+;;;
+;;; CAPABILITY: every module here contains SHA-NI opcodes, so on a CPU without
+;;; sha_ni the replayer SKIPS every row loudly (x86_diff.c's CPUID gate, the
+;;; #289 repair) — the CI runner has no sha_ni.
+;;;
+;;; RUN IT:  bash models/x86/diff/shani_diff.sh
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")
+(import "../../../std/sha256/sha256.shard")
+(import "../../../std/sha256/sha256.shani.shard")
+(import "../x86.shard")
+(import "../encode.shard")
+(import "../vector.shard")
+(use (:: std mem *))
+(use (:: std sha256 sha256 *))
+(use (:: std sha256 sha256.shani *))
+(use (:: models x86 x86 *))
+(use (:: models x86 encode *))
+(use (:: models x86 vector *))
+
+(type World (World Int))
+
+(extern write ((bytes (List Int)) (w World)) World)
+
+(extern exit ((code Int) (w World)) World)
+
+;; --- text plumbing (x86_diff_run.shard's, verbatim) ---------------------------
+
+(fn eap ((xs (List Int)) (ys (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (eap t ys)))))
+
+(fn cat ((xss (List (List Int)))) (List Int)
+  (measure (struct xss))
+  (match xss
+    (Nil Nil)
+    ((Cons h t) (eap h (cat t)))))
+
+(fn hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
+
+(fn hexs ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b t)
+     (Cons (hexd (ediv (mod b 256) 16)) (Cons (hexd (mod b 16)) (hexs t))))))
+
+(fn hx ((v Int)) (List Int) (hexs (le8 v)))
+
+;; fixed-width four-digit decimal (the header comment's byte counts). Flat, like
+;; models/wasm/encode.shard's dec3f — a divide-by-ten recursion would owe a
+;; descent proof for a comment line. Four digits is enough by construction: a
+;; module has to fit the replayer's single 4096-byte code page.
+(fn dec4 ((n Int)) (List Int)
+  (list
+    (+ 48 (mod (ediv n 1000) 10))
+    (+ 48 (mod (ediv n 100) 10))
+    (+ 48 (mod (ediv n 10) 10))
+    (+ 48 (mod n 10))))
+
+;; --- the data page (the harness maps ONE page, MAP_FIXED, at this base) -------
+
+(fn sr_base () Int 1073741824)
+
+(fn sr_top () Int 1073807360)
+
+;; the seeded/read-back home window, as page-absolute addresses
+(fn sr_win () Int (+ (sr_base) 256))
+
+;; --- THE RELOCATION -----------------------------------------------------------
+;;
+;; Every address the body names is an XMovRI immediate; nothing else in the
+;; instruction stream carries one (the vector species address through (AReg r)
+;; and RDI advances by a register add). So relocating the body to the harness
+;; page is exactly "add base to every XMovRI immediate".
+
+(fn sr_shift ((base Int) (i XInstr)) XInstr
+  (match i
+    ((XMovRI r n) (XMovRI r (+ n base)))
+    (other i)))
+
+(fn sr_reloc ((base Int) (is (List XInstr))) (List XInstr)
+  (measure (struct is))
+  (match is
+    (Nil Nil)
+    ((Cons i t) (Cons (sr_shift base i) (sr_reloc base t)))))
+
+;; --- the modules --------------------------------------------------------------
+
+(fn sr_fn ((is (List XInstr))) XFunc (MkXFunc 1 (sr_reloc (sr_base) is)))
+
+(fn sr_mod ((is (List XInstr))) XModule
+  (MkXModule (Cons (sr_fn is) Nil) (sr_base) (sr_top)))
+
+;; the clean body: the article's shn_body, relocated.
+(fn sr_body () (List XInstr) (shn_body))
+
+;; the CHAINED body: the article's own stanzas composed twice, with the src
+;; pointer stepped past the 48 bytes the first pass consumed (the prologue
+;; advances RDI three times) so the second pass reads the NEXT 64-byte block.
+;; The state feedback goes THROUGH MEMORY: the second pass re-loads the H home
+;; the first pass stored. Nothing here re-implements the body — shn_epi's
+;; continuation argument is what makes the composition the article's.
+(fn sr_body2 () (List XInstr)
+  (shn_pro
+    (shn_q0
+      (shn_q1
+        (shn_q2
+          (shn_q3
+            (shn_q4
+              (shn_q5
+                (shn_q6
+                  (shn_q7
+                    (shn_q8
+                      (shn_q9
+                        (shn_q10
+                          (shn_q11
+                            (shn_q12
+                              (shn_q13
+                                (shn_q14
+                                  (shn_q15
+                                    (shn_epi
+                                      (Cons
+                                        (XBin XAdd RDI (SImm 16))
+                                        (shn_body)))))))))))))))))))))
+
+;; --- the teeth (instruction grain) --------------------------------------------
+
+;; T1: the whole K table's base moved four bytes up (every XMovRI into R11 is
+;; a K-group address; every other XMovRI is a mask/state home).
+(fn sr_kshift ((base Int) (i XInstr)) XInstr
+  (match i
+    ((XMovRI r n)
+     (match r
+       (R11 (XMovRI R11 (+ n (+ base 4))))
+       (other2 (XMovRI r (+ n base)))))
+    (other i)))
+
+(fn sr_reloc_k ((base Int) (is (List XInstr))) (List XInstr)
+  (measure (struct is))
+  (match is
+    (Nil Nil)
+    ((Cons i t) (Cons (sr_kshift base i) (sr_reloc_k base t)))))
+
+(fn sr_fn_t1 () XFunc (MkXFunc 1 (sr_reloc_k (sr_base) (sr_body))))
+
+;; T2: the FIRST sha256rnds2's two operands exchanged (E1 measured that the SDM
+;; puts ABEF in the SOURCE and CDGH in the DEST — this is that mistake).
+(fn sr_swap1 ((is (List XInstr))) (List XInstr)
+  (measure (struct is))
+  (match is
+    (Nil Nil)
+    ((Cons i t)
+     (match i
+       ((XVec v)
+        (match v
+          ((XVSha256Rnds2 d s) (Cons (XVec (XVSha256Rnds2 s d)) t))
+          (other2 (Cons i (sr_swap1 t)))))
+       (other (Cons i (sr_swap1 t)))))))
+
+;; T3: the FIRST schedule palignr's immediate 4 -> 8. (The pack shuffle in the
+;; prologue is a palignr at imm 8 already, so the tooth keys on the imm.)
+(fn sr_palign1 ((is (List XInstr))) (List XInstr)
+  (measure (struct is))
+  (match is
+    (Nil Nil)
+    ((Cons i t)
+     (match i
+       ((XVec v)
+        (match v
+          ((XVPalignr d s im)
+           (if (int_eq im 4) (Cons (XVec (XVPalignr d s 8)) t)
+           (Cons i (sr_palign1 t))))
+          (other2 (Cons i (sr_palign1 t)))))
+       (other (Cons i (sr_palign1 t)))))))
+
+;; --- the teeth (byte grain) ---------------------------------------------------
+;;
+;; A byte tooth patches the EMITTED bytes, which is the grain this rung is
+;; about. Both patches keep the instruction LENGTH and stay legal encodings, so
+;; the stream never desynchronizes and the CPU executes the perturbed body to
+;; completion — a tooth that only ever SIGILLs would prove much less.
+
+;; does bs start with the pattern p?
+(fn sr_pre ((p (List Int)) (bs (List Int))) Bool
+  (measure (struct p))
+  (match p
+    (Nil True)
+    ((Cons x t)
+     (match bs
+       (Nil False)
+       ((Cons y t2) (if (int_eq x y) (sr_pre t t2) False))))))
+
+;; replace the byte at index k
+(fn sr_put ((k Int) (v Int) (bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b t) (if (lt k 1) (Cons v t) (Cons b (sr_put (- k 1) v t))))))
+
+;; at the FIRST occurrence of p, replace the byte at relative index k with v
+(fn sr_patch ((p (List Int)) (k Int) (v Int) (bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b t) (if (sr_pre p bs) (sr_put k v bs) (Cons b (sr_patch p k v t))))))
+
+;; the clean module's bytes, and the two byte-patched twins
+(fn sr_bytes ((is (List XInstr))) (List Int) (enc_func (sr_fn is)))
+
+;; T4: the first sha256rnds2 (NP 0F 38 CB /r) becomes sha256msg2 (… CD /r)
+(fn sr_bytes_t4 () (List Int)
+  (sr_patch (list 15 56 203) 2 205 (sr_bytes (sr_body))))
+
+;; T5: the first REX.R-bearing movdqa (66 44 0F 6F /r — the entry-ABEF save
+;; into xmm9) loses REX.R, so it writes xmm1 instead
+(fn sr_bytes_t5 () (List Int)
+  (sr_patch (list 102 68 15 111) 1 64 (sr_bytes (sr_body))))
+
+;; --- the relocation identity pin ----------------------------------------------
+
+(fn sr_beq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        ((Cons y t2) False)))
+    ((Cons x t)
+     (match b
+       (Nil False)
+       ((Cons y t2) (if (int_eq x y) (sr_beq t t2) False))))))
+
+(fn sr_len ((bs (List Int))) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons b t) (+ 1 (sr_len t)))))
+
+;; sr_reloc at base 0 must be the identity ON THE EMITTED BYTES: this is what
+;; licenses reading a green run of the relocated body as a statement about the
+;; article's body. A FAIL line here is projected by the CI gate.
+(fn sr_pin () (List Int)
+  (if
+    (sr_beq
+      (enc_func (MkXFunc 1 (sr_reloc 0 (shn_body))))
+      (enc_func (MkXFunc 1 (shn_body))))
+    (cat
+      (list
+        "# shani plan: reloc-identity OK ("
+        (dec4 (sr_len (sr_bytes (sr_body))))
+        " body bytes, "
+        (dec4 (sr_len (sr_bytes (sr_body2))))
+        " chained)\n"))
+    "FAIL shani-reloc-identity [sr_reloc 0 changed the article body's encoded bytes]\n"))
+
+;; --- deterministic pseudo-randomness (x86_diff_run.shard's LCG) ---------------
+
+(fn nextr ((s Int)) Int
+  (mod (+ (* s 6364136223846793005) 1442695040888963407) 18446744073709551616))
+
+(fn lane ((s Int)) Int (mod (ediv s 4294967296) 4294967296))
+
+(fn adv ((k Int) (s Int)) Int
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt k 1) s (adv (- k 1) (nextr s))))
+
+(fn rxmm ((s Int)) Xmm
+  (MkXmm (lane (adv 1 s)) (lane (adv 2 s)) (lane (adv 3 s)) (lane (adv 4 s))))
+
+(fn skip4 ((s Int)) Int (adv 4 s))
+
+(fn xregs_all () (List XmmReg)
+  (list XMM0 XMM1 XMM2 XMM3 XMM4 XMM5 XMM6 XMM7 XMM8 XMM9 XMM10 XMM11 XMM12
+    XMM13 XMM14 XMM15))
+
+(fn fill_xmms ((xs Xmms) (rl (List XmmReg)) (s Int)) Xmms
+  (measure (struct rl))
+  (match rl
+    (Nil xs)
+    ((Cons r t) (fill_xmms (vset xs r (rxmm s)) t (skip4 s)))))
+
+;; the whole entry XMM file from one seed. The body's walk quantifies the entry
+;; file, so junk everywhere is the honest entry state — and xmm12..15, which
+;; the body never touches, must come back UNCHANGED.
+(fn genx ((seed Int)) Xmms (fill_xmms (xmms0) (xregs_all) seed))
+
+;; n pseudo-random bytes
+(fn rbytes ((n Int) (s Int)) (List Int)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) Nil (Cons (mod (lane (adv 1 s)) 256) (rbytes (- n 1) (nextr s)))))
+
+;; a pseudo-random chaining state
+(fn rh8 ((s Int)) H8
+  (mk_h8
+    (lane (adv 1 s))
+    (lane (adv 2 s))
+    (lane (adv 3 s))
+    (lane (adv 4 s))
+    (lane (adv 5 s))
+    (lane (adv 6 s))
+    (lane (adv 7 s))
+    (lane (adv 8 s))))
+
+;; --- the XMM file on the wire -------------------------------------------------
+
+(fn xmmbytes ((v Xmm)) (List Int)
+  (eap
+    (le4 (x0_of v))
+    (eap (le4 (x1_of v)) (eap (le4 (x2_of v)) (le4 (x3_of v))))))
+
+(fn xmmsb ((xs Xmms) (rl (List XmmReg))) (List Int)
+  (measure (struct rl))
+  (match rl
+    (Nil Nil)
+    ((Cons r t) (eap (xmmbytes (vget xs r)) (xmmsb xs t)))))
+
+(fn xfile ((xs Xmms)) (List Int) (hexs (xmmsb xs (xregs_all))))
+
+;; --- the home window: the seed, and what must come back -----------------------
+
+(fn zeros ((n Int)) (List Int)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) Nil (Cons 0 (zeros (- n 1)))))
+
+;; the K table's 256 bytes: group i at 512+16i, LE dwords (what XVLoad hands
+;; back as shn_kg i)
+(fn ktab_go ((n Int) (i Int)) (List Int)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) Nil (eap (xmmbytes (shn_kg i)) (ktab_go (- n 1) (+ i 1)))))
+
+(fn ktab () (List Int) (ktab_go 16 0))
+
+;; the state home's 32 bytes: linear dwords a..d then e..h (shn_hmem's layout)
+(fn hbytes ((st H8)) (List Int)
+  (eap
+    (xmmbytes (MkXmm (shn_ha st) (shn_hb st) (shn_hc st) (shn_hd st)))
+    (xmmbytes (MkXmm (shn_he st) (shn_hf st) (shn_hg st) (shn_hh st)))))
+
+;; the whole home region [256,1088) — mask, the 240-byte gap, the K table, the
+;; state home, the 224-byte gap, the block. `hs` is what sits in the state home
+;; and `bs` the message bytes; a SEED passes the entry state, a WANT passes
+;; shn_block_b's answer, and everything else is identical between them.
+(fn window ((hs (List Int)) (bs (List Int))) (List Int)
+  (cat (list (xmmbytes (vbswap_mask)) (zeros 240) (ktab) hs (zeros 224) bs)))
+
+;; The READ window is WIDER than the seeded one: [0,2000) of the data page,
+;; which the replayer zeroes before every row. So a want is the home region
+;; framed by the untouched zeros on both sides — 256 bytes BELOW the mask home
+;; and the rest of the page above the block — and a stray store anywhere in
+;; that span fails the row, not only one inside the homes. (2000 bytes is the
+;; replayer's readback ceiling: its hex buffer takes 4000 characters.)
+(fn sr_rlen () Int 2000)
+
+(fn frame ((wd (List Int))) (List Int)
+  (cat (list (zeros 256) wd (zeros (- (- (sr_rlen) 256) (sr_len wd))))))
+
+;; --- the model legs -----------------------------------------------------------
+
+;; the model's Mem, seeded exactly as the harness seeds the data page
+(fn seed_mem ((m Mem) (a Int) (bs (List Int))) Mem
+  (measure (struct bs))
+  (match bs
+    (Nil m)
+    ((Cons b t) (seed_mem (mem_set m a b) (+ a 1) t))))
+
+;; the XMM-file leg: the vector tier walked over the relocated body. A None
+;; (out of fuel, or a model trap) yields a token that can match NEITHER a value
+;; NOR the fault leg's "None", so a broken harness fails loudly instead of
+;; scoring itself green.
+(fn xleg ((o (Option (Pair Regs (Pair Xmms Mem)))) (which Int)) (List Int)
+  (match o
+    (None (if (lt which 1) "WALKFAILED" "-"))
+    ((Some pr)
+     (match pr
+       ((Pair rs2 pxm)
+        (match pxm
+          ((Pair xs2 m2) (if (lt which 1) (hx (rax_of rs2)) (xfile xs2)))))))))
+
+(fn sr_walk ((m XModule) (src Int) (xs Xmms) (sd (List Int)) (fuel Int))
+  (Option (Pair Regs (Pair Xmms Mem)))
+  (xvrun_regs
+    (xfnat fuel)
+    m
+    0
+    (with_rdi src (xregs0))
+    xs
+    (seed_mem (mem_empty) (sr_win) sd)))
+
+;; --- the plan lines -----------------------------------------------------------
+
+(fn mod_line ((nm (List Int)) (f XFunc)) (List Int)
+  (cat (list "XMOD " nm " " (hexs (enc_func f)) "\n")))
+
+(fn mod_line_b ((nm (List Int)) (bs (List Int))) (List Int)
+  (cat (list "XMOD " nm " " (hexs bs) "\n")))
+
+;; everything on a row line after the module name: the arguments, the entry XMM
+;; file, the seeded window, the read-back window, and the two expectations.
+(fn payload
+  ((src Int) (xs Xmms) (sd (List Int)) (wd (List Int)) (fuel Int) (m XModule))
+  (List Int)
+  (let ((o (sr_walk m src xs sd fuel)))
+    (cat
+      (list
+        " 1 "
+        (hx src)
+        " "
+        (hx 0)
+        " "
+        (hx 0)
+        " XIN "
+        (xfile xs)
+        " SEED "
+        (hx (sr_win))
+        " "
+        (hexs sd)
+        " READ "
+        (hx (sr_base))
+        " "
+        (hx (sr_rlen))
+        " -> "
+        (xleg o 0)
+        " "
+        (xleg o 1)
+        " "
+        (hexs wd)
+        "\n"))))
+
+;; a gold/random row, plus the same row re-aimed at each tooth module: the
+;; expectation is computed ONCE and the teeth reuse it, which is the whole
+;; point — a tooth must fail to reproduce the CLEAN answer.
+(fn row_with_teeth
+  ((src Int) (xs Xmms) (sd (List Int)) (wd (List Int)) (fuel Int))
+  (List Int)
+  (let ((p (payload src xs sd wd fuel (sr_mod (sr_body)))))
+    (cat
+      (list
+        "XVCASE shnblk"
+        p
+        "XVNCASE shnT1kbase"
+        p
+        "XVNCASE shnT2rnds2"
+        p
+        "XVNCASE shnT3palign"
+        p
+        "XVNCASE shnT4opbyte"
+        p
+        "XVNCASE shnT5rexbyte"
+        p))))
+
+(fn row ((src Int) (xs Xmms) (sd (List Int)) (wd (List Int)) (fuel Int))
+  (List Int)
+  (cat (list "XVCASE shnblk" (payload src xs sd wd fuel (sr_mod (sr_body))))))
+
+;; one single-block row over state st and block bs
+(fn brow ((st H8) (bs (List Int)) (seed Int)) (List Int)
+  (row
+    (+ (sr_base) 1024)
+    (genx seed)
+    (window (hbytes st) bs)
+    (frame (window (hbytes (shn_block_b st bs)) bs))
+    512))
+
+;; the same, with the five tooth rows attached
+(fn browt ((st H8) (bs (List Int)) (seed Int)) (List Int)
+  (row_with_teeth
+    (+ (sr_base) 1024)
+    (genx seed)
+    (window (hbytes st) bs)
+    (frame (window (hbytes (shn_block_b st bs)) bs))
+    512))
+
+;; the two-block chained row: one call, the body run twice, the state fed back
+;; THROUGH the memory home between the passes
+(fn crow ((bs (List Int)) (seed Int)) (List Int)
+  (cat
+    (list
+      "XVCASE shnchain"
+      (payload
+        (+ (sr_base) 1024)
+        (genx seed)
+        (window (hbytes (sha_h0)) bs)
+        (frame
+          (window
+            (hbytes
+              (shn_block_b (shn_block_b (sha_h0) (stake 64 bs)) (sdrop 64 bs)))
+            bs))
+        1024
+        (sr_mod (sr_body2))))))
+
+;; --- block-byte generators ----------------------------------------------------
+
+(fn brange ((n Int) (base Int)) (List Int)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) Nil (Cons (mod base 256) (brange (- n 1) (+ base 1)))))
+
+(fn brep ((n Int) (v Int)) (List Int)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) Nil (Cons v (brep (- n 1) v))))
+
+;; a computed non-initial state (the abc block's output — a real chain value)
+(fn sr_s1 () H8 (shn_block_b (sha_h0) (shn_blk)))
+
+(fn sr_smax () H8
+  (mk_h8 4294967295 4294967295 4294967295 4294967295 4294967295 4294967295
+    4294967295 4294967295))
+
+;; --- the random sweep ---------------------------------------------------------
+;;
+;; Random states x random blocks x a random entry XMM file, all from one LCG so
+;; the plan is byte-identical run to run (checked: two emits, one sha256).
+;; Forty-eight of them, against E1's 223: the body is STRAIGHT-LINE — no
+;; branch, no loop, no data-dependent path — so rows past the first few buy
+;; lane entropy, not new paths, and the discriminating power lives in the
+;; teeth. The whole plan emits in ~8 s, which is what keeps it a corpus row.
+
+(fn rsweep ((n Int) (s Int)) (List Int)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) Nil
+  (eap
+    (brow (rh8 s) (rbytes 64 (adv 9 s)) (adv 77 s))
+    (rsweep (- n 1) (adv 91 s)))))
+
+;; --- the plan -----------------------------------------------------------------
+
+(fn gold () (List Int)
+  (cat
+    (list
+      (browt (sha_h0) (shn_blk) 11)
+      (browt (sha_h0) (stake 64 (sha_pad Nil)) 22)
+      (browt (sha_h0) (brange 64 0) 33)
+      (browt (sr_s1) (brange 64 100) 44)
+      (browt (sr_s1) (brep 64 255) 55)
+      (browt (sr_smax) (brep 64 255) 66)
+      (browt (sr_s1) (brange 64 200) 77)
+      (browt (rh8 909) (rbytes 64 4242) 88))))
+
+(fn plan () (List Int)
+  (cat
+    (list
+      (sr_pin)
+      (mod_line "shnblk" (sr_fn (sr_body)))
+      (mod_line "shnchain" (sr_fn (sr_body2)))
+      (mod_line "shnT1kbase" (sr_fn_t1))
+      (mod_line "shnT2rnds2" (sr_fn (sr_swap1 (sr_body))))
+      (mod_line "shnT3palign" (sr_fn (sr_palign1 (sr_body))))
+      (mod_line_b "shnT4opbyte" (sr_bytes_t4))
+      (mod_line_b "shnT5rexbyte" (sr_bytes_t5))
+      (gold)
+      (crow (shn_v2) 99)
+      (rsweep 48 20260803))))
+
+(fn main ((w World)) World (exit 0 (write (plan) w)))
