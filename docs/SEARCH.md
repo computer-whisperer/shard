@@ -5434,7 +5434,16 @@ it, each a measured lesson:
   the 20-file run cannot fit one 24h job — bench_engine (12
   light-theory files, where D concentrates) + bench_engine2
   (bytes/mem/sha256) + bench_engine_tail (stream/word/reader/
-  wasm_rev/kit), fired as three PARALLEL engine-run pipelines, each
-  under the pairing rule. Tags: engine-bB-aM for branched closes,
-  OPEN-branch-aM for exhausted candidates (never a refutation);
-  OPEN-drained now additionally requires ZERO branch candidates.
+  wasm_rev/kit), each under the pairing rule. Tags: engine-bB-aM
+  for branched closes, OPEN-branch-aM for exhausted candidates
+  (never a refutation); OPEN-drained now additionally requires ZERO
+  branch candidates.
+- **⚠ THE SEQUENTIAL-FIRE LAW (measured 2026-08-08, CI 313+314+315):
+  engine-run fires go ONE AT A TIME, never parallel.** The first
+  three-way fire ran all three on the same runner node; all three
+  pods were cluster-killed the same second at ~3h ("system failure",
+  pod Failed — node exhaustion; the engine-run class's measured
+  memory retention × 3 concurrent). A POD KILL LANDS NO ARTIFACTS —
+  unlike the internal watchdog exit the pairing rule protects — so
+  ~9 pod-hours streamed to nowhere. LS4-i's single 12h+ fires were
+  fine on the same infra. Refire: sequential, cheap-first.
