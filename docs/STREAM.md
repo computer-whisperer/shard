@@ -986,10 +986,26 @@ replacement.
   shn_block_b is NOT the walk's business: eb_walk concludes over
   (vbswap (vload mem src+16i)) groups; the group->bytes tie is the
   differential's ground rows today and E3's seam symbolically.
-  REMAINING for E2b: transplant body + laws into
-  std/sha256/sha256.shani.shard under shn_ names (corpus
-  registration, fmt/canon gates), then E2c — the block-grain silicon
-  differential (Opus-delegated).
+  (Transplanted to the article — next bullet.)
+- **E2b TRANSPLANT (2026-08-08) — the machine tranche lands in the
+  article.** The hand body (shn_pro/shn_q0..15/shn_epi/shn_body),
+  shn_m, shn_hmem, and every law through THE BLOCK WALK summit
+  (now shn_walk) moved from the probe into
+  std/sha256/sha256.shani.shard as the "E2b MACHINE TIER" tranche —
+  a PURE PREFIX SWAP (s/eb_/shn_/, s/ebx_/shn_/; zero collisions),
+  so the probe's green transfers verbatim. The article gained the
+  std/mem and models/x86/x86.shard imports (Mem, XInstr/Regs/fuel;
+  vector.shard alone was the value tier's surface). Gates: article
+  806/0 in ~2.4 s; shardfmt canonical (the tranche needed one
+  reformat pass — the probe was never fmt'd); the C3 canon stage-2
+  sweep's per-file form (focus-mode load + grep CANON) at ZERO
+  advisories. e2bm_run.shard is now SELF-CONTAINED against the
+  article (harness fns inlined, pointed at shn_m/shn_hmem; probe
+  import dropped) and re-ran 8/8 — the differential exercises the
+  article's copy. e2bm_probe.shard = FROZEN HISTORY (header note;
+  nothing imports it). REMAINING for E2b: E2c — the block-grain
+  silicon differential (Opus-delegated: gold + random rows +
+  perturbation teeth against the emitted bytes).
 - **E3 — the variant bin** (lean name: sha256sum_shani; naming of
   the eventual dispatch bin = B6's fork). Skeleton re-composition
   + fold swap, emitted ELF (enc_winelf), byte-tie, capless silicon
