@@ -5375,3 +5375,66 @@ All three generate ZERO moves when hyps = Nil, so base-goal drives
 census-grade budgets; tags grow branch-node counts
 (engine-bB-dK-pN-aM). Gate read vs the LS4-i record: ladder needs
 164/182 (22 more; ≥17 must come from D), far-tier leg re-confirmed.
+
+**LS4-iii BUILD (landed 2026-08-08; probe-validated, the benchmark
+fires next).** The design held; the probes reshaped three pieces of
+it, each a measured lesson:
+
+- **The machinery, as designed:** prove_drive grew the hyp tier —
+  `(Rewrite (Hyp k) …)` moves over unpremised hyps and PfHyp (a Have
+  cut of a hyp INSTANCE, identity or matched, discharged by ONE
+  hyp-rewrite + refl, self-verified at apply time via tc_check_cut +
+  discharge replay; a new key-history segment at separator 38, the
+  PfDiv mechanism). prove_branch is the orchestrator: one
+  fuel-measured task machine (PbTryGoal / PbTryCands / PbTryArms —
+  no mutual SCC), arm sub-sequents built by the CHECKER'S OWN
+  induct_case_subgoal / caseon_case_subgoal, arms as fresh drive
+  invocations, candidates = induct over ctor-headed params then
+  case-on over Bool guards harvested from one-step unfolds. Field
+  names are gen_fresh AT BUILD and STORED in the Case — replay
+  rebuilds subgoals from the stored names (Nil names would re-fresh
+  at replay and break field-mentioning cuts). PbLin returns the root
+  linear verdict VERBATIM when no branching applies — unbranched
+  goals report exactly as LS4-i.
+- **Probe lesson 1 — THE IH-COVERAGE EXCLUSION (p30/p31, take_le):**
+  an arm's induct candidates on a RECURSIVE FIELD of an enclosing
+  induct re-derive the IH's own statement with strictly less to work
+  with; the wasted subtree measured >150k applies on take_le.
+  Measured license: 0/35 population proofs re-induct an IH-covered
+  field (every nested induct targets a different variable).
+  Exclusions accumulate down arms by name.
+- **Probe lesson 2 — THE LEMMA-INSTANCE FARKAS ASSIST (p31, the
+  take_le True leaf):** after full simp the leaf goal is
+  `(le 0 (+ 1 (len c1)))` — closable ONLY by a len_nonneg instance
+  the goal does not contain as a subterm; NO move in the linear
+  alphabet can express it at any budget (a real vocabulary gap, the
+  census's utf8 have-lemma pattern). Fix on the CLOSER side, the
+  div-facts philosophy: when plain farkas fails inside an arm (hyps
+  non-Nil — base drives never pay, LS4-i parity), synthesize
+  instances of le/lt-headed unpremised theory lemmas by the hyp
+  tier's subterm matching and retry farkas with ONE instance added;
+  the winner assembles as a self-discharging Have. The frontier
+  never grows.
+- **Probe lesson 3 — arm budgets:** the False (IH-citing) leaf's
+  find measured 31.4k applies — a 25k arm cap LOSES it; the refusal
+  tax that motivated a smaller cap was cured at the source by
+  lessons 1+2, not by squeezing. Final budgets: depth 6 root / 8
+  arm, pops 4000, linear cap 50k root AND arm, divs 1, haves 2 per
+  chain, fuel 400, pool 600k per goal (the deepest measured tree,
+  utf8_lead_le's 10 branch nodes, ≈ 9 internal 50k refusals + leaf
+  finds).
+- **Probe record (p30, local capped scopes):** auto_demo
+  add_n_zero b1-a68 / add_comm b1-a20479 / beq_sym b3-a943 (nested)
+  / max_idem b1-a225 (case-on via unfold harvest); std/list
+  take_zero b1-a50524 / append_assoc b1-a53448 / take_le
+  b2-a139261 (induct + nested case-on + M3 instance + assist). All
+  branched closes passed the root check_sequent; zero witness
+  fails.
+- **The benchmark's three-way split:** with the bigger per-goal pool
+  the 20-file run cannot fit one 24h job — bench_engine (12
+  light-theory files, where D concentrates) + bench_engine2
+  (bytes/mem/sha256) + bench_engine_tail (stream/word/reader/
+  wasm_rev/kit), fired as three PARALLEL engine-run pipelines, each
+  under the pairing rule. Tags: engine-bB-aM for branched closes,
+  OPEN-branch-aM for exhausted candidates (never a refutation);
+  OPEN-drained now additionally requires ZERO branch candidates.

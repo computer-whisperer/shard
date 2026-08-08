@@ -1,0 +1,624 @@
+;;; prove_branch — the branching orchestrator above prove_drive (lock-step
+;;; arc LS4-iii, SEARCH.md; fork LS4-C(a) RULED 2026-08-08). Branching
+;;; lives ABOVE the linear drive, never inside its frontier: every
+;;; (sub)goal first gets the linear drive verbatim, and only a refusal
+;;; opens ROOT branch candidates — induct over ctor-headed goal params,
+;;; case-on over Bool guard conditions harvested from the goal equation
+;;; and its one-step unfold expansions (all state/theory-derived, LS-law
+;;; 2). Each arm's sub-sequent is built by the CHECKER'S OWN builders
+;;; (induct_case_subgoal / caseon_case_subgoal — the same functions the
+;;; replay runs), searched as a FRESH drive invocation (hyps constant per
+;;; invocation, so prove_drive's exact-state key law holds unchanged),
+;;; and may itself branch at its own root. AND semantics: an arm refusal
+;;; kills the candidate and moves to the next.
+;;;
+;;; The evidence base (the 35 open D-bucket sidecar proofs, read in
+;;; full): 35/35 branch at the root — 26 induct on a goal param, 9
+;;; case-on over Bool guards; 8/35 re-branch inside arms; zero take a
+;;; rewrite step before branching; zero use subterm-induct.
+;;;
+;;; THE IH-COVERAGE EXCLUSION (dominance-argued, measured): an arm never
+;;; offers PbInduct on a RECURSIVE FIELD of an enclosing induct arm —
+;;; the IH hyp already states the goal at exactly that variable, so
+;;; re-inducting it re-derives the hyp's content with strictly less to
+;;; work with. Measured: 0/35 population proofs re-induct an IH-covered
+;;; field (every nested induct targets a DIFFERENT variable), and the
+;;; p30 probe measured the wasted subtree at >150k applies on take_le.
+;;; Exclusions accumulate down nested arms (by name; an inner induct
+;;; removes only its own var, so outer names stay stable).
+;;;
+;;; FIELD NAMES ARE STORED, NEVER REGENERATED: arm field names come from
+;;; gen_fresh at build time and are written into the Case — the replay
+;;; rebuilds subgoals from the STORED names (Nil names would gen_fresh
+;;; AGAIN at replay, breaking any hyp-instance cut that mentions a
+;;; field). Stability comes from storage.
+;;;
+;;; BUDGETS: the caller's, two-tier. `pool` is the goal's total apply
+;;; budget, threaded exactly through every drive invocation (each gets
+;;; apply_cap = min(lin_cap, pool-left)); `fuel` is a generous
+;;; orchestration-step bound that makes the task machine's recursion a
+;;; plain decreasing-Int measure — the pool is the real work bound.
+;;; Certificate law unchanged: the assembled Induct/CaseOn proof is
+;;; accepted only by check_sequent from the ORIGINAL sequent; arms were
+;;; each self-checked by their own drive on the arm sequent first.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/types.shard")
+(import "../../kernel/proof.shard")
+(import "../../kernel/checker.shard")
+(import "../../kernel/trace.shard")
+(import "../../kernel/reader.shard")
+(import "../../meta/proofgen")
+(import "prove_drive.shard")
+
+(use (:: kernel term Expr))
+(use (:: kernel term Ctor))
+(use (:: kernel term Call))
+(use (:: kernel term Match))
+(use (:: kernel term Let))
+(use (:: kernel term If))
+(use (:: kernel term Arm))
+(use (:: kernel term QName))
+(use (:: kernel term qn))
+(use (:: kernel term expr_eq))
+(use (:: kernel module Module))
+(use (:: kernel module Type))
+(use (:: kernel module TypeDef))
+(use (:: kernel module CtorDef))
+(use (:: kernel module type_head))
+(use (:: kernel module lookup_typedef))
+(use (:: kernel module zip_pairs))
+(use (:: kernel module type_eq))
+(use (:: kernel module type_subst_list))
+(use (:: kernel types tc_scrut_targs))
+(use (:: kernel proof Theory))
+(use (:: kernel proof Goal))
+(use (:: kernel proof Param))
+(use (:: kernel proof Equation))
+(use (:: kernel proof Proof))
+(use (:: kernel proof Refl))
+(use (:: kernel proof Steps))
+(use (:: kernel proof DivFacts))
+(use (:: kernel proof Have))
+(use (:: kernel proof Induct))
+(use (:: kernel proof CaseOn))
+(use (:: kernel proof Case))
+(use (:: kernel proof Step))
+(use (:: kernel proof Unfold))
+(use (:: kernel proof Side))
+(use (:: kernel proof Lhs))
+(use (:: kernel proof Rhs))
+(use (:: kernel checker Sequent))
+(use (:: kernel checker check_sequent))
+(use (:: kernel checker apply_step))
+(use (:: kernel checker seq_params))
+(use (:: kernel checker find_param))
+(use (:: kernel checker induct_case_subgoal))
+(use (:: kernel checker caseon_case_subgoal))
+(use (:: kernel checker inst_ctor_fields))
+(use (:: kernel reader RCtx))
+(use (:: tools search prove_drive *))
+
+;; ---------------------------------------------------------------------------
+;; Candidates and arms.
+;; ---------------------------------------------------------------------------
+
+(type PbCand (PbInduct Symbol) (PbCase Expr QName))
+
+(type PbArm (PbArm QName (List Symbol) Sequent (List Symbol)))
+; ctor, STORED field names, the arm sub-sequent, the arm's induct
+; exclusions (parent's + this arm's IH-covered recursive fields)
+
+;; the task machine's instruction set (one fuel-measured function, no
+;; mutual SCC): try a goal linearly-then-branching (excl = IH-covered
+;; vars, never induct candidates); try candidates in order; prove a
+;; candidate's arms in order (carrying finished cases and the remaining
+;; candidates for backtracking).
+(type PbTask
+  (PbTryGoal Sequent (List Symbol))
+  (PbTryCands Sequent (List Symbol) (List PbCand))
+  (PbTryArms
+    Sequent
+    (List Symbol)
+    PbCand
+    (List PbArm)
+    (List Case)
+    (List PbCand)))
+
+(type PbOut (PbOut (Option Proof) Int))  ; proof if closed, applies spent
+
+(type PbFind
+  (PbLin PfFind)  ; root linear verdict verbatim (found, or refusal with no candidates)
+  (PbProof Proof Int Int)  ; branched close: branch-node count, total applies
+  (PbFail Int)  ; candidates tried, none closed (total applies) — NOT a refutation
+  (PbWitness Int))  ; assembled winner failed the root check — orchestrator bug, LOUD
+
+(fn pb_min ((a Int) (b Int)) Int (if (lt a b) a b))
+
+;; ---------------------------------------------------------------------------
+;; Case-on harvest: If scrutinees of the goal equation and of each
+;; one-step unfold expansion (word's wrap guards live behind one unfold).
+;; ---------------------------------------------------------------------------
+
+(fn pb_expr_mem ((e Expr) (es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil False)
+    ((Cons h rest) (if (expr_eq e h) True (pb_expr_mem e rest)))))
+
+(fn pb_ifconds_e ((e Expr) (acc (List Expr))) (List Expr)
+  (measure (struct e))
+  (match e
+    ((Ctor _ args) (pb_ifconds_es args acc))
+    ((Call _ args) (pb_ifconds_es args acc))
+    ((Match sc arms) (pb_ifconds_arms arms (pb_ifconds_e sc acc)))
+    ((Let binds body) (pb_ifconds_e body (pb_ifconds_es binds acc)))
+    ((If c t f)
+     (pb_ifconds_e
+       f
+       (pb_ifconds_e
+         t
+         (pb_ifconds_e c (if (pb_expr_mem c acc) acc (Cons c acc))))))
+    (_ acc)))
+
+(fn pb_ifconds_es ((es (List Expr)) (acc (List Expr))) (List Expr)
+  (measure (struct es))
+  (match es
+    (Nil acc)
+    ((Cons e rest) (pb_ifconds_es rest (pb_ifconds_e e acc)))))
+
+(fn pb_ifconds_arms ((arms (List Arm)) (acc (List Expr))) (List Expr)
+  (measure (struct arms))
+  (match arms
+    (Nil acc)
+    ((Cons (Arm _ body) rest) (pb_ifconds_arms rest (pb_ifconds_e body acc)))))
+
+(fn pb_side_conds
+  ((m Module) (th Theory) (seq Sequent) (s Step) (acc (List Expr)))
+  (List Expr)
+  (match (apply_step m th seq s)
+    (None acc)
+    ((Some (Sequent _ _ _ (Equation l2 r2)))
+     (pb_ifconds_e r2 (pb_ifconds_e l2 acc)))))
+
+(fn pb_unfold_conds
+  ((m Module) (th Theory) (seq Sequent) (qs (List QName)) (acc (List Expr)))
+  (List Expr)
+  (measure (struct qs))
+  (match qs
+    (Nil acc)
+    ((Cons q rest)
+     (pb_unfold_conds
+       m
+       th
+       seq
+       rest
+       (pb_side_conds
+         m
+         th
+         seq
+         (Unfold q (Rhs))
+         (pb_side_conds m th seq (Unfold q (Lhs)) acc))))))
+
+(fn pb_harvest ((m Module) (th Theory) (seq Sequent)) (List Expr)
+  (match seq
+    ((Sequent _ _ _ (Equation l r))
+     (pb_unfold_conds
+       m
+       th
+       seq
+       (pf_heads_e r (pf_heads_e l Nil))
+       (pb_ifconds_e r (pb_ifconds_e l Nil))))))
+
+;; ---------------------------------------------------------------------------
+;; Candidate enumeration: induct over ctor-headed params (param order —
+;; the measured 26/35), then case-on over harvested Bool guards.
+;; ---------------------------------------------------------------------------
+
+(fn pb_sym_mem ((v Symbol) (vs (List Symbol))) Bool
+  (measure (struct vs))
+  (match vs
+    (Nil False)
+    ((Cons h rest) (if (sym_eq v h) True (pb_sym_mem v rest)))))
+
+(fn pb_induct_cands ((m Module) (ps (List Param)) (excl (List Symbol)))
+  (List PbCand)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons (Param name ty) rest)
+     (if (pb_sym_mem name excl) (pb_induct_cands m rest excl)
+     (match (type_head ty)
+       (None (pb_induct_cands m rest excl))
+       ((Some (Pair tname _))
+        (match (lookup_typedef tname m)
+          (None (pb_induct_cands m rest excl))
+          ((Some (TypeDef _ _ ctors _))
+           (match ctors
+             (Nil (pb_induct_cands m rest excl))
+             (_ (Cons (PbInduct name) (pb_induct_cands m rest excl))))))))))))
+
+(fn pb_case_cands ((conds (List Expr))) (List PbCand)
+  (measure (struct conds))
+  (match conds
+    (Nil Nil)
+    ((Cons c rest) (Cons (PbCase c (qn (quote Bool))) (pb_case_cands rest)))))
+
+(fn pb_append_cands ((a (List PbCand)) (b (List PbCand))) (List PbCand)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (pb_append_cands t b)))))
+
+(fn pb_cands ((m Module) (th Theory) (seq Sequent) (excl (List Symbol)))
+  (List PbCand)
+  (pb_append_cands
+    (pb_induct_cands m (seq_params seq) excl)
+    (pb_case_cands (pb_harvest m th seq))))
+
+;; ---------------------------------------------------------------------------
+;; Arm construction via the checker's own builders.
+;; ---------------------------------------------------------------------------
+
+(fn pb_names_for ((fts (List Type))) (List Symbol)
+  (measure (struct fts))
+  (match fts
+    (Nil Nil)
+    ((Cons _ rest) (Cons (gen_fresh) (pb_names_for rest)))))
+
+;; recursive-field names: those whose CONCRETE type equals the inducted
+;; var's — exactly the fields build_ihs makes an IH for.
+(fn pb_rec_fields
+  ((vt Type) (names (List Symbol)) (cfts (List Type)) (acc (List Symbol)))
+  (List Symbol)
+  (measure (struct names))
+  (match names
+    (Nil acc)
+    ((Cons n nrest)
+     (match cfts
+       (Nil acc)
+       ((Cons cft crest)
+        (pb_rec_fields vt nrest crest (if (type_eq vt cft) (Cons n acc) acc)))))))
+
+(fn pb_induct_arms
+  ((seq Sequent)
+   (var Symbol)
+   (vt Type)
+   (tenv (List (Pair Symbol Type)))
+   (ctors (List CtorDef))
+   (excl (List Symbol)))
+  (Option (List PbArm))
+  (measure (struct ctors))
+  (match ctors
+    (Nil (Some Nil))
+    ((Cons (CtorDef cname ftypes) rest)
+     (match (pb_names_for ftypes)
+       (names
+         (match (induct_case_subgoal seq var vt tenv cname ftypes names)
+           (None None)
+           ((Some sg)
+            (match (pb_induct_arms seq var vt tenv rest excl)
+              (None None)
+              ((Some tail)
+               (Some
+                 (Cons
+                   (PbArm
+                     cname
+                     names
+                     sg
+                     (pb_rec_fields vt names (type_subst_list tenv ftypes) excl))
+                   tail)))))))))))
+
+(fn pb_case_arms
+  ((seq Sequent) (scrut Expr) (ictors (List CtorDef)) (excl (List Symbol)))
+  (Option (List PbArm))
+  (measure (struct ictors))
+  (match ictors
+    (Nil (Some Nil))
+    ((Cons (CtorDef cname ftypes) rest)
+     (match (pb_names_for ftypes)
+       (names
+         (match (caseon_case_subgoal seq scrut cname ftypes names)
+           (None None)
+           ((Some sg)
+            (match (pb_case_arms seq scrut rest excl)
+              (None None)
+              ((Some tail) (Some (Cons (PbArm cname names sg excl) tail)))))))))))
+
+(fn pb_build_arms ((m Module) (seq Sequent) (c PbCand) (excl (List Symbol)))
+  (Option (List PbArm))
+  (match c
+    ((PbInduct var)
+     (match (find_param var (seq_params seq))
+       (None None)
+       ((Some (Param _ var_type))
+        (match (type_head var_type)
+          (None None)
+          ((Some (Pair tname targs))
+           (match (lookup_typedef tname m)
+             (None None)
+             ((Some (TypeDef _ tparams ctors _))
+              (match ctors
+                (Nil None)
+                (_
+                  (pb_induct_arms
+                    seq
+                    var
+                    var_type
+                    (zip_pairs tparams targs)
+                    ctors
+                    excl))))))))))
+    ((PbCase scrut ty)
+     (match (lookup_typedef ty m)
+       (None None)
+       ((Some (TypeDef _ tparams ctors _))
+        (match ctors
+          (Nil None)
+          (_
+            (match (tc_scrut_targs m (seq_params seq) scrut ty tparams)
+              (None None)
+              ((Some targs)
+               (pb_case_arms
+                 seq
+                 scrut
+                 (inst_ctor_fields (zip_pairs tparams targs) ctors)
+                 excl))))))))))
+
+(fn pb_rev_cases ((a (List Case)) (acc (List Case))) (List Case)
+  (measure (struct a))
+  (match a
+    (Nil acc)
+    ((Cons h t) (pb_rev_cases t (Cons h acc)))))
+
+(fn pb_assemble_cand ((c PbCand) (cases (List Case))) Proof
+  (match c
+    ((PbInduct var) (Induct var cases))
+    ((PbCase scrut ty) (CaseOn scrut ty cases))))
+
+;; branch nodes (Induct/CaseOn) in an assembled proof, for the tag.
+(fn pb_count_branches ((p Proof)) Int
+  (measure (struct p))
+  (match p
+    ((Steps _ k) (pb_count_branches k))
+    ((Have _ pe pr) (+ (pb_count_branches pe) (pb_count_branches pr)))
+    ((DivFacts _ _ _ pr) (pb_count_branches pr))
+    ((Induct _ cases) (+ 1 (pb_cb_cases cases)))
+    ((CaseOn _ _ cases) (+ 1 (pb_cb_cases cases)))
+    (_ 0)))
+
+(fn pb_cb_cases ((cases (List Case))) Int
+  (measure (struct cases))
+  (match cases
+    (Nil 0)
+    ((Cons (Case _ _ pf) rest) (+ (pb_count_branches pf) (pb_cb_cases rest)))))
+
+;; ---------------------------------------------------------------------------
+;; The task machine. Every recursive call burns one fuel (the measure);
+;; the pool is threaded exactly and bounds the real work.
+;; ---------------------------------------------------------------------------
+
+(fn pb_run
+  ((pm Module)
+   (rctx RCtx)
+   (m Module)
+   (th Theory)
+   (depth Int)
+   (pops Int)
+   (lin_cap Int)
+   (divs Int)
+   (haves Int)
+   (task PbTask)
+   (fuel Int)
+   (pool Int))
+  PbOut
+  (measure
+    fuel
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (lt 0 fuel)
+    (if (lt 0 pool)
+      (match task
+        ((PbTryGoal seq excl)
+         (match
+           (pf_drive
+             pm
+             rctx
+             m
+             th
+             seq
+             depth
+             pops
+             (pb_min lin_cap pool)
+             divs
+             haves)
+           (find
+             (match find
+               ((PfFound _ full _ applies _) (PbOut (Some full) applies))
+               (_
+                 (match (pf_find_applies find)
+                   (spent
+                     (match (pb_cands m th seq excl)
+                       (Nil (PbOut None spent))
+                       (cands
+                         (match
+                           (pb_run
+                             pm
+                             rctx
+                             m
+                             th
+                             depth
+                             pops
+                             lin_cap
+                             divs
+                             haves
+                             (PbTryCands seq excl cands)
+                             (- fuel 1)
+                             (- pool spent))
+                           ((PbOut popt spent2) (PbOut popt (+ spent spent2)))))))))))))
+        ((PbTryCands seq excl cands)
+         (match cands
+           (Nil (PbOut None 0))
+           ((Cons c rest)
+            (match (pb_build_arms m seq c excl)
+              (None
+                (pb_run
+                  pm
+                  rctx
+                  m
+                  th
+                  depth
+                  pops
+                  lin_cap
+                  divs
+                  haves
+                  (PbTryCands seq excl rest)
+                  (- fuel 1)
+                  pool))
+              ((Some arms)
+               (pb_run
+                 pm
+                 rctx
+                 m
+                 th
+                 depth
+                 pops
+                 lin_cap
+                 divs
+                 haves
+                 (PbTryArms seq excl c arms Nil rest)
+                 (- fuel 1)
+                 pool))))))
+        ((PbTryArms seq excl cand pending done rest_cands)
+         (match pending
+           (Nil
+             (PbOut (Some (pb_assemble_cand cand (pb_rev_cases done Nil))) 0))
+           ((Cons (PbArm cname names asq aexcl) more)
+            (match
+              (pb_run
+                pm
+                rctx
+                m
+                th
+                depth
+                pops
+                lin_cap
+                divs
+                haves
+                (PbTryGoal asq aexcl)
+                (- fuel 1)
+                pool)
+              ((PbOut popt spent)
+               (match popt
+                 (None
+                   (match
+                     (pb_run
+                       pm
+                       rctx
+                       m
+                       th
+                       depth
+                       pops
+                       lin_cap
+                       divs
+                       haves
+                       (PbTryCands seq excl rest_cands)
+                       (- fuel 1)
+                       (- pool spent))
+                     ((PbOut p2 s2) (PbOut p2 (+ spent s2)))))
+                 ((Some ap)
+                  (match
+                    (pb_run
+                      pm
+                      rctx
+                      m
+                      th
+                      depth
+                      pops
+                      lin_cap
+                      divs
+                      haves
+                      (PbTryArms
+                        seq
+                        excl
+                        cand
+                        more
+                        (Cons (Case cname names ap) done)
+                        rest_cands)
+                      (- fuel 1)
+                      (- pool spent))
+                    ((PbOut p2 s2) (PbOut p2 (+ spent s2))))))))))))
+      (PbOut None 0))
+    (PbOut None 0)))
+
+;; ---------------------------------------------------------------------------
+;; Entry. The root linear drive runs at `depth` (LS4-i parity where the
+;; refusal cost lives); arm drives run at `depth_arm` (arm chains in the
+;; measured population run a little longer than root chains). On a root
+;; linear find — or a refusal with zero branch candidates — the linear
+;; verdict is returned VERBATIM (PbLin), so unbranched goals report
+;; exactly as LS4-i did.
+;; ---------------------------------------------------------------------------
+
+(fn pb_prove
+  ((pm Module)
+   (rctx RCtx)
+   (m Module)
+   (th Theory)
+   (seq0 Sequent)
+   (depth Int)
+   (depth_arm Int)
+   (pops Int)
+   (lin_cap Int)
+   (lin_cap_arm Int)
+   (divs Int)
+   (haves Int)
+   (fuel Int)
+   (pool Int))
+  PbFind
+  (match
+    (pf_drive pm rctx m th seq0 depth pops (pb_min lin_cap pool) divs haves)
+    (find
+      (match find
+        ((PfFound _ _ _ _ _) (PbLin find))
+        (_
+          (match (pf_find_applies find)
+            (spent
+              (match (pb_cands m th seq0 Nil)
+                (Nil (PbLin find))
+                (cands
+                  (match
+                    (pb_run
+                      pm
+                      rctx
+                      m
+                      th
+                      depth_arm
+                      pops
+                      lin_cap_arm
+                      divs
+                      haves
+                      (PbTryCands seq0 Nil cands)
+                      fuel
+                      (- pool spent))
+                    ((PbOut popt spent2)
+                     (match popt
+                       (None (PbFail (+ spent spent2)))
+                       ((Some proof)
+                        (if (check_sequent m th seq0 proof)
+                          (PbProof
+                            proof
+                            (pb_count_branches proof)
+                            (+ spent spent2))
+                          (PbWitness (+ spent spent2))))))))))))))))

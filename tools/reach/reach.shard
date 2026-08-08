@@ -28,6 +28,7 @@
 (import "../../kernel/driver.shard")
 (import "../../meta/proofgen")
 (import "../search/prove_drive.shard")
+(import "../search/prove_branch.shard")
 
 (use (:: kernel loader resolve_closure))
 (use (:: kernel loader World))
@@ -67,6 +68,7 @@
 (use (:: kernel driver rs_theory))
 (use (:: meta proofgen *))
 (use (:: tools search prove_drive *))
+(use (:: tools search prove_branch *))
 
 (fn nl () (List Int) (Cons 10 Nil))
 
@@ -261,23 +263,29 @@
     ((Cons t rest) (reach_all rest (reach_target t w)))))
 
 ;; ---------------------------------------------------------------------------
-;; The ENGINE backend (lock-step arc LS4-i — the seam the header reserved).
-;; Per goal: the floor moves first (same five bounded attempts, same tags);
-;; an OPEN goal then goes to the proof-native drive (tools/search/
-;; prove_drive) against the goal's REAL in-file theory — the import
-;; closure's entries plus every target-file decl BEFORE the goal, walked
-;; exactly as check itself walks them (theory_base_st + decls_split +
-;; theory_step, prove's recovery pattern). Engine tags:
-;;   engine-dK-pN        closed by a K-move chain after N pops (the full
-;;                       assembled proof re-checked from the original
-;;                       sequent — the acceptance gate)
-;;   OPEN-drained-dK-pN  frontier DRAINED at depth K: no chain over the
-;;                       alphabet closes (exact, dominance-checked)
-;;   OPEN-depthcap-pN    no chain <= the depth cap closes (exact); deeper
-;;                       chains unexplored
-;;   OPEN-budget-pN      pop cap hit — not a refutation
-;;   ENGINE-WITNESS-FAIL the drive's assembled winner failed the full
-;;                       check: a drive bug, loud, never counted closed
+;; The ENGINE backend (lock-step arc LS4-i; LS4-iii grew the branch
+;; orchestrator). Per goal: the floor moves first (same five bounded
+;; attempts, same tags); an OPEN goal then goes to pb_prove (tools/
+;; search/prove_branch) — the linear proof-native drive first, and on a
+;; linear refusal ROOT branch candidates (induct / case-on), each arm a
+;; fresh drive re-entry — against the goal's REAL in-file theory: the
+;; import closure's entries plus every target-file decl BEFORE the goal,
+;; walked exactly as check itself walks them (theory_base_st +
+;; decls_split + theory_step, prove's recovery pattern). Engine tags:
+;;   engine-dK-pN-aM     closed by a LINEAR K-move chain (full assembled
+;;                       proof re-checked from the original sequent)
+;;   engine-bB-aM        closed by a BRANCHED proof: B induct/case-on
+;;                       nodes, M applies across the whole orchestration
+;;                       (root check_sequent = the acceptance gate)
+;;   OPEN-drained-dK-…   linear frontier DRAINED at depth K and ZERO
+;;                       branch candidates: exact refutation over the
+;;                       alphabet
+;;   OPEN-depthcap-…     as LS4-i, zero branch candidates
+;;   OPEN-budget-…       linear pop/apply budget hit, zero candidates
+;;   OPEN-branch-aM      branch candidates tried, none closed (M applies
+;;                       total) — never a refutation
+;;   ENGINE-WITNESS-FAIL an assembled winner failed the full check: a
+;;                       drive/orchestrator bug, loud, never counted
 ;; Budgets are census-grade constants below; the official record states
 ;; them with the run.
 
@@ -297,6 +305,29 @@
 (fn rch_e_applies () Int 50000)
 
 (fn rch_e_divs () Int 1)
+
+;; LS4-iii branch budgets. depth_arm: arm drives search a little deeper
+;; than the root (the measured arm chains run longer; root depth stays 6
+;; for LS4-i refusal-cost parity). haves: hyp-instance cuts per chain.
+;; fuel: the orchestration-step bound (the pool is the real work bound).
+;; pool: the goal's TOTAL apply budget across the root linear attempt
+;; and every arm drive — sized so the deepest measured tree
+;; (utf8_lead_le, 10 branch nodes: ~9 internal-node linear refusals at
+;; 50k + leaf finds) fits with margin.
+(fn rch_e_depth_arm () Int 8)
+
+;; arm drives keep the root's linear cap: p31 measured take_le's
+;; IH-citing arm find at 31.4k applies — a 25k arm cap LOSES it. The
+;; refusal tax that motivated a smaller cap was cured at the source by
+;; the IH-coverage exclusion + the lemma-instance farkas assist, not by
+;; squeezing the cap.
+(fn rch_e_applies_arm () Int 50000)
+
+(fn rch_e_haves () Int 2)
+
+(fn rch_e_fuel () Int 400)
+
+(fn rch_e_pool () Int 600000)
 
 ;; granted flag of a source entry (prove's pattern).
 (fn granted_of ((path (List Int)) (srcs (List SrcEntry))) Bool
@@ -350,21 +381,36 @@
   (match (decls_split tds name)
     ((Pair before _) (rs_theory (theory_step rctx m base before)))))
 
+(fn rch_show_pb ((find PbFind)) (List Int)
+  (match find
+    ((PbLin f) (rch_show_find f))
+    ((PbProof _ branches applies)
+     (append_int
+       "engine-b"
+       (append_int (show_int branches) (append_int "-a" (show_int applies)))))
+    ((PbFail applies) (append_int "OPEN-branch-a" (show_int applies)))
+    ((PbWitness _) "ENGINE-WITNESS-FAIL")))
+
 (fn rch_engine_one ((m Module) (rctx RCtx) (th Theory) (seq Sequent)) (List Int)
   (match (reach_one m rctx seq)
     (floor_tag
       (if (is_closed floor_tag) floor_tag
-      (rch_show_find
-        (pf_drive
+      (rch_show_pb
+        (pb_prove
           m
           rctx
           m
           th
           seq
           (rch_e_depth)
+          (rch_e_depth_arm)
           (rch_e_pops)
           (rch_e_applies)
-          (rch_e_divs)))))))
+          (rch_e_applies_arm)
+          (rch_e_divs)
+          (rch_e_haves)
+          (rch_e_fuel)
+          (rch_e_pool)))))))
 
 (fn reach_goals_engine
   ((m Module)

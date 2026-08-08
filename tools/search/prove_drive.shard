@@ -10,9 +10,10 @@
 ;;; THE DRIVE'S PEDIGREE (checked dominance, the su_as discipline): edge
 ;;; costs are uniform (g = chain length) and h = 0, so breadth-first IS
 ;;; the A* drive; the dominance key is an EXACT state factoring — the
-;;; rendered goal equation plus the div-facts history (premises and params
-;;; are a function of the base sequent + that history; hyps never change:
-;;; no branching moves live here). Two nodes with equal keys have equal
+;;; rendered goal equation plus the premise-injection history (div-facts
+;;; entries and hyp-instance cuts; premises and params are a function of
+;;; the base sequent + that history; hyps never change: branching moves
+;;; live ABOVE this drive, in prove_branch). Two nodes with equal keys have equal
 ;;; completion sets, and min-depth-first closure keeps the shorter node,
 ;;; so a drained frontier at the depth cap is an exact refutation: NO
 ;;; move-chain within the caps closes the goal over this alphabet. Budget
@@ -27,14 +28,32 @@
 ;;; Rewrite semantics, which refuses them), unfold moves come from the
 ;;; goal equation's call heads, premise rewrites from the sequent's own
 ;;; premises, div-facts moves from the equation's literal-divisor
-;;; ediv/mod sites. Budgets (depth cap, pop cap, div cap) are the
-;;; CALLER's. Lemma citations are kernel-level (Lemma QNAME against the
-;;; theory) — surface-scope citability (use lines) is an emit-time
+;;; ediv/mod sites. Budgets (depth cap, pop cap, div cap, have cap) are
+;;; the CALLER's. Lemma citations are kernel-level (Lemma QNAME against
+;;; the theory) — surface-scope citability (use lines) is an emit-time
 ;;; concern, out of scope until the prove-on-engine rewrite.
+;;;
+;;; THE HYP TIER (LS4-iii's fold — SEARCH.md fork LS4-D(a)): inside a
+;;; branch arm the sequent carries hyps (the IH, the case equation). The
+;;; drive cites them with the same kernel machinery it uses for lemmas:
+;;; plain Rewrite over unpremised hyps (the kernel's pattern-variable
+;;; Rewrite instantiates cited ∀-binders by matching), and PfHyp — a
+;;; Have cut whose equation is an INSTANCE of hyp k, discharged by ONE
+;;; hyp-rewrite + refl (the ladder's own bridge idiom, verbatim). The
+;;; instance is found by matching the opened hyp equation's call
+;;; subpatterns against the goal equation's call subterms (state-derived,
+;;; no curation); the identity instance is the param-free case. The cut
+;;; is SELF-VERIFYING at apply time: tc_check_cut gates the equation and
+;;; the discharge is replayed through apply_step before the move is
+;;; admitted — an admitted PfHyp cannot witness-fail. farkas reads
+;;; premises only, so the bridge is what lets the closer see the IH.
+;;; All hyp-tier generators return Nil at hyps = Nil: base-goal drives
+;;; are move-for-move identical to the LS4-i engine.
 
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/term.shard")
 (import "../../kernel/module.shard")
+(import "../../kernel/types.shard")
 (import "../../kernel/proof.shard")
 (import "../../kernel/checker.shard")
 (import "../../kernel/trace.shard")
@@ -76,9 +95,11 @@
 (use (:: kernel proof Simp))
 (use (:: kernel proof Compute))
 (use (:: kernel proof Rewrite))
+(use (:: kernel proof Have))
 (use (:: kernel proof EqRef))
 (use (:: kernel proof Lemma))
 (use (:: kernel proof Premise))
+(use (:: kernel proof Hyp))
 (use (:: kernel proof Dir))
 (use (:: kernel proof Lr))
 (use (:: kernel proof Rl))
@@ -88,20 +109,35 @@
 (use (:: kernel proof Both))
 (use (:: kernel proof Occ))
 (use (:: kernel proof OccAll))
+(use (:: kernel term Env))
+(use (:: kernel term Empty))
+(use (:: kernel term Bind))
+(use (:: kernel term reverse_exprs))
+(use (:: kernel types tc_check_cut))
 (use (:: kernel checker Sequent))
 (use (:: kernel checker check_sequent))
 (use (:: kernel checker apply_step))
 (use (:: kernel checker div_facts_checked))
 (use (:: kernel checker append_eqs))
+(use (:: kernel checker expr_match))
+(use (:: kernel checker subst_eq))
+(use (:: kernel checker open_eq_with))
+(use (:: kernel checker split_params_by_insts))
 (use (:: kernel trace render_eq))
 (use (:: kernel reader RCtx))
 (use (:: meta proofgen *))
 
 ;; ---------------------------------------------------------------------------
-;; Moves: a non-branching kernel Step, or a div-facts premise injection.
+;; Moves: a non-branching kernel Step, a div-facts premise injection, or a
+;; hyp-instance cut (PfHyp k inst_eq — the fold's citation tier; see the
+;; header). PfHyp is SELF-VERIFYING in pf_apply: the cut equation must
+;; pass tc_check_cut and its one-rewrite discharge must replay through
+;; apply_step to a refl-closable equation before the move is admitted.
 ;; ---------------------------------------------------------------------------
 
-(type PfMove (PfStep Step) (PfDiv Expr Int Symbol))
+(type PfMove (PfStep Step) (PfDiv Expr Int Symbol) (PfHyp Int Equation))
+
+(fn pf_hyp_discharge ((k Int)) Step (Rewrite (Hyp k) (Lr) (Lhs) (OccAll) Nil))
 
 (fn pf_apply ((m Module) (th Theory) (seq Sequent) (mv PfMove)) (Option Sequent)
   (match mv
@@ -112,7 +148,29 @@
         (match (div_facts_checked m params n d q)
           (None None)
           ((Some (Pair params2 facts))
-           (Some (Sequent params2 hyps (append_eqs premises facts) goal_eq)))))))))
+           (Some (Sequent params2 hyps (append_eqs premises facts) goal_eq)))))))
+    ((PfHyp k inst_eq)
+     (match seq
+       ((Sequent params hyps premises goal_eq)
+        (match (tc_check_cut m params inst_eq)
+          ((Some _) None)  ; ill-typed cut — the checker's Have gate would refuse
+          (None
+            (match
+              (apply_step
+                m
+                th
+                (Sequent params hyps premises inst_eq)
+                (pf_hyp_discharge k))
+              (None None)
+              ((Some (Sequent _ _ _ (Equation l r)))
+               (if (expr_eq l r)
+                 (Some
+                   (Sequent
+                     params
+                     hyps
+                     (append_eqs premises (Cons inst_eq Nil))
+                     goal_eq))
+                 None))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Alphabet derivation. Every piece is a function of the theory or the
@@ -211,6 +269,190 @@
     ((Cons (Arm _ body) rest) (pf_divsites_arms rest (pf_divsites_e body acc)))))
 
 ;; ---------------------------------------------------------------------------
+;; The hyp tier (see the header). M1: plain Rewrite over unpremised hyps.
+;; M2/M3: PfHyp instance cuts — the identity instance for param-free hyps,
+;; matched instances for generalized ones (open the hyp equation's binders
+;; as pattern vars, match its call subpatterns that mention EVERY pattern
+;; var against the goal equation's call subterms, substitute the env).
+;; ---------------------------------------------------------------------------
+
+(fn pf_hyp_rw_moves ((hyps (List Goal)) (k Int)) (List PfMove)
+  (measure (struct hyps))
+  (match hyps
+    (Nil Nil)
+    ((Cons g rest)
+     (match g
+       ((Goal _ Nil _)
+        (pf_append (pf_rw_moves (Hyp k)) (pf_hyp_rw_moves rest (+ k 1))))
+       (_ (pf_hyp_rw_moves rest (+ k 1)))))))
+
+;; all Call subterms of an expression (the full exprs, outermost included).
+(fn pf_calls_e ((e Expr) (acc (List Expr))) (List Expr)
+  (measure (struct e))
+  (match e
+    ((Ctor _ args) (pf_calls_es args acc))
+    ((Call q args) (pf_calls_es args (Cons (Call q args) acc)))
+    ((Match sc arms) (pf_calls_arms arms (pf_calls_e sc acc)))
+    ((Let binds body) (pf_calls_e body (pf_calls_es binds acc)))
+    ((If c t f) (pf_calls_e f (pf_calls_e t (pf_calls_e c acc))))
+    (_ acc)))
+
+(fn pf_calls_es ((es (List Expr)) (acc (List Expr))) (List Expr)
+  (measure (struct es))
+  (match es
+    (Nil acc)
+    ((Cons e rest) (pf_calls_es rest (pf_calls_e e acc)))))
+
+(fn pf_calls_arms ((arms (List Arm)) (acc (List Expr))) (List Expr)
+  (measure (struct arms))
+  (match arms
+    (Nil acc)
+    ((Cons (Arm _ body) rest) (pf_calls_arms rest (pf_calls_e body acc)))))
+
+(fn pf_sym_in_e ((v Symbol) (e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((FVar x) (sym_eq v x))
+    ((Ctor _ args) (pf_sym_in_es v args))
+    ((Call _ args) (pf_sym_in_es v args))
+    ((Match sc arms) (if (pf_sym_in_e v sc) True (pf_sym_in_arms v arms)))
+    ((Let binds body) (if (pf_sym_in_es v binds) True (pf_sym_in_e v body)))
+    ((If c t f)
+     (if (pf_sym_in_e v c) True (if (pf_sym_in_e v t) True (pf_sym_in_e v f))))
+    (_ False)))
+
+(fn pf_sym_in_es ((v Symbol) (es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil False)
+    ((Cons e rest) (if (pf_sym_in_e v e) True (pf_sym_in_es v rest)))))
+
+(fn pf_sym_in_arms ((v Symbol) (arms (List Arm))) Bool
+  (measure (struct arms))
+  (match arms
+    (Nil False)
+    ((Cons (Arm _ body) rest)
+     (if (pf_sym_in_e v body) True (pf_sym_in_arms v rest)))))
+
+(fn pf_syms_all_in ((vs (List Symbol)) (e Expr)) Bool
+  (measure (struct vs))
+  (match vs
+    (Nil True)
+    ((Cons v rest) (if (pf_sym_in_e v e) (pf_syms_all_in rest e) False))))
+
+;; patterns worth matching: call subterms mentioning EVERY pattern var (a
+;; complete match env is required — partial instances are not equations).
+(fn pf_inst_pats ((pvs (List Symbol)) (calls (List Expr))) (List Expr)
+  (measure (struct calls))
+  (match calls
+    (Nil Nil)
+    ((Cons c rest)
+     (if (pf_syms_all_in pvs c) (Cons c (pf_inst_pats pvs rest))
+     (pf_inst_pats pvs rest)))))
+
+(fn pf_eq_render_mem ((eq Equation) (seen (List (List Int)))) Bool
+  (measure (struct seen))
+  (match seen
+    (Nil False)
+    ((Cons s rest)
+     (if (pf_ints_eq (render_eq eq) s) True (pf_eq_render_mem eq rest)))))
+
+(fn pf_call_head ((e Expr)) (Option QName)
+  (match e
+    ((Call q _) (Some q))
+    (_ None)))
+
+;; one pattern against every goal call subterm; successful complete
+;; matches yield instance equations (deduped by rendered form).
+(fn pf_inst_one
+  ((k Int)
+   (pvs (List Symbol))
+   (opened Equation)
+   (pat Expr)
+   (targets (List Expr))
+   (seen (List (List Int)))
+   (acc (List PfMove)))
+  (Pair (List (List Int)) (List PfMove))
+  (measure (struct targets))
+  (match targets
+    (Nil (Pair seen acc))
+    ((Cons tgt rest)
+     (match (pf_call_head pat)
+       (None (Pair seen acc))
+       ((Some pq)
+        (match (pf_call_head tgt)
+          (None (pf_inst_one k pvs opened pat rest seen acc))
+          ((Some tq)
+           (if (qname_eq pq tq)
+             (match (expr_match pvs pat tgt (Empty))
+               (None (pf_inst_one k pvs opened pat rest seen acc))
+               ((Some env)
+                (match (subst_eq env opened)
+                  (inst
+                    (if (pf_eq_render_mem inst seen)
+                      (pf_inst_one k pvs opened pat rest seen acc)
+                      (pf_inst_one
+                        k
+                        pvs
+                        opened
+                        pat
+                        rest
+                        (Cons (render_eq inst) seen)
+                        (Cons (PfHyp k inst) acc)))))))
+             (pf_inst_one k pvs opened pat rest seen acc)))))))))
+
+(fn pf_inst_go
+  ((k Int)
+   (pvs (List Symbol))
+   (opened Equation)
+   (pats (List Expr))
+   (targets (List Expr))
+   (seen (List (List Int)))
+   (acc (List PfMove)))
+  (List PfMove)
+  (measure (struct pats))
+  (match pats
+    (Nil acc)
+    ((Cons pat rest)
+     (match (pf_inst_one k pvs opened pat targets seen acc)
+       ((Pair seen2 acc2) (pf_inst_go k pvs opened rest targets seen2 acc2))))))
+
+(fn pf_hyp_insts
+  ((k Int) (hparams (List Param)) (heq Equation) (goal_eq Equation))
+  (List PfMove)
+  (match (split_params_by_insts hparams Nil)
+    ((Pair openings pvs)
+     (match (open_eq_with (reverse_exprs openings) heq)
+       (opened
+         (match opened
+           ((Equation hl hr)
+            (match goal_eq
+              ((Equation gl gr)
+               (pf_inst_go
+                 k
+                 pvs
+                 opened
+                 (pf_inst_pats pvs (pf_calls_e hr (pf_calls_e hl Nil)))
+                 (pf_calls_e gr (pf_calls_e gl Nil))
+                 Nil
+                 Nil))))))))))
+
+(fn pf_hyp_have_moves ((hyps (List Goal)) (k Int) (goal_eq Equation))
+  (List PfMove)
+  (measure (struct hyps))
+  (match hyps
+    (Nil Nil)
+    ((Cons g rest)
+     (pf_append
+       (match g
+         ((Goal hp Nil heq)
+          (match hp
+            (Nil (Cons (PfHyp k heq) Nil))  ; the identity bridge
+            (_ (pf_hyp_insts k hp heq goal_eq))))
+         (_ Nil))  ; premised hyp — out of the tier (fork LS4-D(b))
+       (pf_hyp_have_moves rest (+ k 1) goal_eq)))))
+
+;; ---------------------------------------------------------------------------
 ;; Move-list assembly per node (deterministic order; cheap classes first).
 ;; ---------------------------------------------------------------------------
 
@@ -262,9 +504,11 @@
     (Nil 0)
     ((Cons _ rest) (+ 1 (pf_eq_count rest)))))
 
-(fn pf_moves ((lemmas (List QName)) (seq Sequent) (divs_left Int)) (List PfMove)
+(fn pf_moves
+  ((lemmas (List QName)) (seq Sequent) (divs_left Int) (haves_left Int))
+  (List PfMove)
   (match seq
-    ((Sequent _ _ premises (Equation l r))
+    ((Sequent _ hyps premises (Equation l r))
      (pf_append
        (pf_premise_moves (pf_eq_count premises))
        (pf_append
@@ -272,10 +516,15 @@
          (pf_append
            (Cons (PfStep (Simp (Lhs) Nil)) (Cons (PfStep (Simp (Rhs) Nil)) Nil))
            (pf_append
-             (pf_lemma_moves lemmas)
-             (if (lt 0 divs_left)
-               (pf_div_moves (pf_divsites_e r (pf_divsites_e l Nil)))
-               Nil))))))))
+             (pf_hyp_rw_moves hyps 0)
+             (pf_append
+               (pf_lemma_moves lemmas)
+               (pf_append
+                 (if (lt 0 divs_left)
+                   (pf_div_moves (pf_divsites_e r (pf_divsites_e l Nil)))
+                   Nil)
+                 (if (lt 0 haves_left) (pf_hyp_have_moves hyps 0 (Equation l r))
+                 Nil))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Dominance keys: mix-hash prefix + rendered goal equation + the div
@@ -323,7 +572,13 @@
     ((Some (Sequent _ _ _ (Equation l r)))
      (if (expr_eq l r) (Some (Steps (Cons s Nil) (Refl))) None))))
 
-(fn pf_close ((pm Module) (rctx RCtx) (m Module) (th Theory) (seq Sequent))
+(fn pf_close
+  ((pm Module)
+   (rctx RCtx)
+   (m Module)
+   (th Theory)
+   (cmp_lemmas (List (Pair QName Goal)))
+   (seq Sequent))
   (Option Proof)
   (match seq
     ((Sequent _ _ _ (Equation l r))
@@ -337,18 +592,233 @@
              (match (parse_cand pm rctx (pg_arith0))
                ((Some p0)
                 (if (check_sequent m th seq p0) (Some p0)
-                (pf_close_farkas pm rctx m th seq)))
-               (None (pf_close_farkas pm rctx m th seq)))))))))))
+                (pf_close_farkas pm rctx m th cmp_lemmas seq)))
+               (None (pf_close_farkas pm rctx m th cmp_lemmas seq)))))))))))
 
 (fn pf_close_farkas
-  ((pm Module) (rctx RCtx) (m Module) (th Theory) (seq Sequent))
+  ((pm Module)
+   (rctx RCtx)
+   (m Module)
+   (th Theory)
+   (cmp_lemmas (List (Pair QName Goal)))
+   (seq Sequent))
   (Option Proof)
   (match (farkas_solve seq)
-    (None None)
     ((Some txt)
      (match (parse_cand pm rctx txt)
-       (None None)
-       ((Some p) (if (check_sequent m th seq p) (Some p) None))))))
+       (None (pf_close_assist pm rctx m th cmp_lemmas seq))
+       ((Some p)
+        (if (check_sequent m th seq p) (Some p)
+        (pf_close_assist pm rctx m th cmp_lemmas seq)))))
+    (None (pf_close_assist pm rctx m th cmp_lemmas seq))))
+
+;; ---------------------------------------------------------------------------
+;; THE LEMMA-INSTANCE FARKAS ASSIST (LS4-iii; the census's utf8 pattern —
+;; `(have (= (le 0 (ilen c1)) True) (rewrite-with (lemma ilen_nonneg) …)
+;; (by arith …))`). When plain farkas fails INSIDE A BRANCH ARM (hyps
+;; non-Nil — base-goal drives never pay this, LS4-i parity), synthesize
+;; instances of comparison-headed unpremised theory lemmas by the same
+;; subterm matching the hyp tier uses, and retry farkas with ONE instance
+;; added as a premise. The winner assembles as (Have inst (Steps
+;; [(Rewrite (Lemma q) …)] Refl) farkas-proof) — self-verified here by
+;; tc_check_cut + discharge replay + the full check_sequent, the PfHyp
+;; discipline. Closer-side only: the frontier never grows.
+;; ---------------------------------------------------------------------------
+
+(fn pf_cmp_head ((q QName)) Bool
+  (if (qname_eq q (qn (quote le))) True (qname_eq q (qn (quote lt)))))
+
+;; unpremised theory entries whose equation lhs is le/lt-headed — the
+;; farkas-consumable lemma pool, computed once per drive.
+(fn pf_cmp_goal ((g Goal)) Bool
+  (match g
+    ((Goal _ Nil (Equation gl _))
+     (match gl
+       ((Call q _) (pf_cmp_head q))
+       (_ False)))
+    (_ False)))
+
+(fn pf_cmp_lemmas ((th Theory)) (List (Pair QName Goal))
+  (measure (struct th))
+  (match th
+    ((TheoryEmpty) Nil)
+    ((TheoryCons entry rest)
+     (match entry
+       ((Proven q g)
+        (if (pf_cmp_goal g) (Cons (Pair q g) (pf_cmp_lemmas rest))
+        (pf_cmp_lemmas rest)))
+       ((Axiom q g)
+        (if (pf_cmp_goal g) (Cons (Pair q g) (pf_cmp_lemmas rest))
+        (pf_cmp_lemmas rest)))))))
+
+;; instance equations of one opened lemma eq against the goal's call
+;; subterms (complete envs only, deduped by rendered form) — the hyp
+;; tier's synthesis, producing bare equations.
+(fn pf_ainst_one
+  ((pvs (List Symbol))
+   (opened Equation)
+   (pat Expr)
+   (targets (List Expr))
+   (seen (List (List Int)))
+   (acc (List Equation)))
+  (Pair (List (List Int)) (List Equation))
+  (measure (struct targets))
+  (match targets
+    (Nil (Pair seen acc))
+    ((Cons tgt rest)
+     (match (pf_call_head pat)
+       (None (Pair seen acc))
+       ((Some pq)
+        (match (pf_call_head tgt)
+          (None (pf_ainst_one pvs opened pat rest seen acc))
+          ((Some tq)
+           (if (qname_eq pq tq)
+             (match (expr_match pvs pat tgt (Empty))
+               (None (pf_ainst_one pvs opened pat rest seen acc))
+               ((Some env)
+                (match (subst_eq env opened)
+                  (inst
+                    (if (pf_eq_render_mem inst seen)
+                      (pf_ainst_one pvs opened pat rest seen acc)
+                      (pf_ainst_one
+                        pvs
+                        opened
+                        pat
+                        rest
+                        (Cons (render_eq inst) seen)
+                        (Cons inst acc)))))))
+             (pf_ainst_one pvs opened pat rest seen acc)))))))))
+
+(fn pf_ainst_go
+  ((pvs (List Symbol))
+   (opened Equation)
+   (pats (List Expr))
+   (targets (List Expr))
+   (seen (List (List Int)))
+   (acc (List Equation)))
+  (List Equation)
+  (measure (struct pats))
+  (match pats
+    (Nil acc)
+    ((Cons pat rest)
+     (match (pf_ainst_one pvs opened pat targets seen acc)
+       ((Pair seen2 acc2) (pf_ainst_go pvs opened rest targets seen2 acc2))))))
+
+(fn pf_lemma_insts ((g Goal) (targets (List Expr))) (List Equation)
+  (match g
+    ((Goal hp Nil heq)
+     (match hp
+       (Nil (Cons heq Nil))
+       (_
+         (match (split_params_by_insts hp Nil)
+           ((Pair openings pvs)
+            (match (open_eq_with (reverse_exprs openings) heq)
+              (opened
+                (match opened
+                  ((Equation hl hr)
+                   (pf_ainst_go
+                     pvs
+                     opened
+                     (pf_inst_pats pvs (pf_calls_e hr (pf_calls_e hl Nil)))
+                     targets
+                     Nil
+                     Nil))))))))))
+    (_ Nil)))
+
+;; try farkas with one lemma instance appended; the winner wraps in a
+;; self-discharging Have and is re-checked in full.
+(fn pf_assist_try
+  ((pm Module)
+   (rctx RCtx)
+   (m Module)
+   (th Theory)
+   (seq Sequent)
+   (q QName)
+   (insts (List Equation)))
+  (Option Proof)
+  (measure (struct insts))
+  (match insts
+    (Nil None)
+    ((Cons inst rest)
+     (match seq
+       ((Sequent params hyps premises goal_eq)
+        (match (tc_check_cut m params inst)
+          ((Some _) (pf_assist_try pm rctx m th seq q rest))
+          (None
+            (match
+              (apply_step
+                m
+                th
+                (Sequent params hyps premises inst)
+                (Rewrite (Lemma q) (Lr) (Lhs) (OccAll) Nil))
+              (None (pf_assist_try pm rctx m th seq q rest))
+              ((Some (Sequent _ _ _ (Equation dl dr)))
+               (if (expr_eq dl dr)
+                 (match
+                   (Sequent
+                     params
+                     hyps
+                     (append_eqs premises (Cons inst Nil))
+                     goal_eq)
+                   (seq2
+                     (match (farkas_solve seq2)
+                       (None (pf_assist_try pm rctx m th seq q rest))
+                       ((Some txt)
+                        (match (parse_cand pm rctx txt)
+                          (None (pf_assist_try pm rctx m th seq q rest))
+                          ((Some p)
+                           (match
+                             (Have
+                               inst
+                               (Steps
+                                 (Cons
+                                   (Rewrite (Lemma q) (Lr) (Lhs) (OccAll) Nil)
+                                   Nil)
+                                 (Refl))
+                               p)
+                             (full
+                               (if (check_sequent m th seq full) (Some full)
+                               (pf_assist_try pm rctx m th seq q rest))))))))))
+                 (pf_assist_try pm rctx m th seq q rest)))))))))))
+
+(fn pf_close_assist_go
+  ((pm Module)
+   (rctx RCtx)
+   (m Module)
+   (th Theory)
+   (cmp_lemmas (List (Pair QName Goal)))
+   (seq Sequent)
+   (targets (List Expr)))
+  (Option Proof)
+  (measure (struct cmp_lemmas))
+  (match cmp_lemmas
+    (Nil None)
+    ((Cons (Pair q g) rest)
+     (match (pf_assist_try pm rctx m th seq q (pf_lemma_insts g targets))
+       ((Some p) (Some p))
+       (None (pf_close_assist_go pm rctx m th rest seq targets))))))
+
+(fn pf_close_assist
+  ((pm Module)
+   (rctx RCtx)
+   (m Module)
+   (th Theory)
+   (cmp_lemmas (List (Pair QName Goal)))
+   (seq Sequent))
+  (Option Proof)
+  (match seq
+    ((Sequent _ hyps _ (Equation l r))
+     (match hyps
+       (Nil None)  ; base-goal drives never pay the assist (LS4-i parity)
+       (_
+         (pf_close_assist_go
+           pm
+           rctx
+           m
+           th
+           cmp_lemmas
+           seq
+           (pf_calls_e r (pf_calls_e l Nil))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Winner assembly: fold the move chain back into one Proof (consecutive
@@ -365,7 +835,12 @@
   (match moves
     (Nil closer)
     ((Cons (PfStep s) rest) (pf_prepend_step s (pf_assemble rest closer)))
-    ((Cons (PfDiv n d q) rest) (DivFacts n d q (pf_assemble rest closer)))))
+    ((Cons (PfDiv n d q) rest) (DivFacts n d q (pf_assemble rest closer)))
+    ((Cons (PfHyp k inst_eq) rest)
+     (Have
+       inst_eq
+       (Steps (Cons (pf_hyp_discharge k) Nil) (Refl))
+       (pf_assemble rest closer)))))
 
 (fn pf_rev_moves ((a (List PfMove)) (acc (List PfMove))) (List PfMove)
   (measure (struct a))
@@ -375,10 +850,11 @@
 
 ;; ---------------------------------------------------------------------------
 ;; The drive. Nodes carry their move chain REVERSED (cons-shared), the
-;; exact sequent, remaining div budget, and the div-history key bytes.
+;; exact sequent, remaining div + have budgets, and the premise-injection
+;; history key bytes (div entries at separator 59, hyp cuts at 38).
 ;; ---------------------------------------------------------------------------
 
-(type PfNode (PfNode (List PfMove) Sequent Int (List Int)))
+(type PfNode (PfNode (List PfMove) Sequent Int Int (List Int)))
 
 (type PfFind
   (PfFound (List PfMove) Proof Int Int Int)  ; moves (forward), full proof, popped, applies, dominated
@@ -406,7 +882,7 @@
     (Nil (PfExp closed nxt applies dominated))
     ((Cons mv rest)
      (match node
-       ((PfNode moves seq divs_left divbytes)
+       ((PfNode moves seq divs_left haves_left histbytes)
         (match (pf_apply m th seq mv)
           (None (pf_expand m th node rest closed nxt (+ applies 1) dominated))
           ((Some seq2)
@@ -414,11 +890,15 @@
              (match mv
                ((PfDiv n d _)
                 (append_int
-                  divbytes
+                  histbytes
                   (Cons 59 (append_int (render_eq (Equation n (IntLit d))) Nil))))
-               (_ divbytes))
-             (divbytes2
-               (match (pf_key seq2 divbytes2)
+               ((PfHyp _ inst_eq)
+                (append_int
+                  histbytes
+                  (Cons 38 (append_int (render_eq inst_eq) Nil))))
+               (_ histbytes))
+             (histbytes2
+               (match (pf_key seq2 histbytes2)
                  (key
                    (if (pf_closed_mem key closed)
                      (pf_expand
@@ -443,7 +923,10 @@
                            (match mv
                              ((PfDiv _ _ _) (- divs_left 1))
                              (_ divs_left))
-                           divbytes2)
+                           (match mv
+                             ((PfHyp _ _) (- haves_left 1))
+                             (_ haves_left))
+                           histbytes2)
                          nxt)
                        (+ applies 1)
                        dominated)))))))))))))
@@ -460,6 +943,7 @@
    (m Module)
    (th Theory)
    (lemmas (List QName))
+   (cmp_lemmas (List (Pair QName Goal)))
    (seq0 Sequent)
    (nodes (List PfNode))
    (closed (List (List Int)))
@@ -477,8 +961,8 @@
      (if (if (lt pop_cap (+ popped 1)) True (lt apply_cap applies))
        (PfLDone (PfBudget popped applies dominated))
        (match node
-         ((PfNode moves seq divs_left _)
-          (match (pf_close pm rctx m th seq)
+         ((PfNode moves seq divs_left haves_left _)
+          (match (pf_close pm rctx m th cmp_lemmas seq)
             ((Some closer)
              (match (pf_rev_moves moves Nil)
                (fwd
@@ -494,7 +978,7 @@
                   m
                   th
                   node
-                  (pf_moves lemmas seq divs_left)
+                  (pf_moves lemmas seq divs_left haves_left)
                   closed
                   nxt
                   applies
@@ -506,6 +990,7 @@
                    m
                    th
                    lemmas
+                   cmp_lemmas
                    seq0
                    rest
                    closed2
@@ -528,6 +1013,7 @@
    (m Module)
    (th Theory)
    (lemmas (List QName))
+   (cmp_lemmas (List (Pair QName Goal)))
    (seq0 Sequent)
    (layer (List PfNode))
    (closed (List (List Int)))
@@ -544,8 +1030,8 @@
     (Nil (PfEmpty depth popped applies dominated))
     (_
       (match
-        (pf_layer pm rctx m th lemmas seq0 layer closed Nil popped applies
-          dominated pop_cap apply_cap)
+        (pf_layer pm rctx m th lemmas cmp_lemmas seq0 layer closed Nil popped
+          applies dominated pop_cap apply_cap)
         ((PfLDone find) find)
         ((PfLCont closed2 nxt popped2 applies2 dominated2)
          (if (lt 0 remaining)
@@ -555,6 +1041,7 @@
              m
              th
              lemmas
+             cmp_lemmas
              seq0
              (pf_rev_nodes nxt Nil)
              closed2
@@ -573,7 +1060,8 @@
 ;; Entry. depth_cap bounds chain LENGTH; pop_cap bounds total node pops;
 ;; apply_cap bounds total successor applications (the uniform WORK budget —
 ;; pops are not comparable across theories, applies nearly are); max_divs
-;; bounds div-facts injections per chain.
+;; bounds div-facts injections per chain; max_haves bounds hyp-instance
+;; cuts per chain (both are inert on hyp-free base goals).
 ;; ---------------------------------------------------------------------------
 
 (fn pf_drive
@@ -585,11 +1073,12 @@
    (depth_cap Int)
    (pop_cap Int)
    (apply_cap Int)
-   (max_divs Int))
+   (max_divs Int)
+   (max_haves Int))
   PfFind
   (match (pf_lemmas th)
     (lemmas
-      (match (PfNode Nil seq0 max_divs Nil)
+      (match (PfNode Nil seq0 max_divs max_haves Nil)
         (root
           (pf_depth_go
             pm
@@ -597,6 +1086,9 @@
             m
             th
             lemmas
+            (match seq0
+              ((Sequent _ Nil _ _) Nil)  ; base goal: the assist never fires
+              (_ (pf_cmp_lemmas th)))
             seq0
             (Cons root Nil)
             (Cons (pf_key seq0 Nil) Nil)
@@ -613,3 +1105,12 @@
   (match mvs
     (Nil 0)
     ((Cons _ rest) (+ 1 (pf_moves_len rest)))))
+
+;; applies spent by a finished drive, for callers that thread a work pool.
+(fn pf_find_applies ((find PfFind)) Int
+  (match find
+    ((PfFound _ _ _ applies _) applies)
+    ((PfEmpty _ _ applies _) applies)
+    ((PfDepthCap _ applies _) applies)
+    ((PfBudget _ applies _) applies)
+    ((PfWitnessFail _ applies _) applies)))
