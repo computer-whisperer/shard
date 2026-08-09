@@ -1248,6 +1248,51 @@ replacement.
   snw_xrun re-derives; awaiting the user's ruling before amending
   the leaf. REMAINING: slice C per the ladder (+ the endianness
   ruling).
+- **E3 SLICE C OPENED (2026-08-08) — endianness RATIFIED + EXECUTED
+  at the leaf; THE FOLD SEAM STACK; the budget dial.** The user
+  ratified the recorded lean ("proceed with the lean"). Landed, in
+  order: (1) THE H CONVERSIONS — snw_wrap amended (e3b_probe,
+  untracked): entry [load mask into XMM2 from 130496, load both H
+  groups 131008/131024 into XMM0/XMM1, XVBswap32 each, store back,
+  re-zero R10/R11] before the loop, the mirror conversion after the
+  loop before the XMM-zero ladder; the H window stays BIG-endian at
+  every boundary the absorber/finalizer see, the loop body sees LE.
+  fn snw_hbsw = the conversion's memory descriptor (load-both-then-
+  store-both, so both loads read the entry memory). (2) THE SEQ-GRAIN
+  REFACTOR + SEAM STACK, all module-quantified over (Cons f0 (Cons
+  (MkXFunc 2 (snw_wrap)) restfs)): snw_xseq = the whole wrapper walk
+  at xveval_seq grain, fuel S^248(lg_fuel k c) (18 pre-loop peels +
+  the loop's 230; conclusion mem = snw_hbsw(snw_fmem(snw_hbsw m) src
+  k)); snw_xrun / snw_xcall = the xvrun_regs / xveval_call
+  projections (xcall at S(S^248 ...): the xvec_fn mirror dispatch
+  discharged by a ground-scan have); **snw_wcall = THE FOLD SEAM**:
+  wveval_call completes as the pure walk with the world untouched and
+  the trace empty, via wvcall_bridge (premise 1 = the ground budget
+  scan, premise 2 = snw_xcall; f/rs2/xs2/mem2 are dangling pivots —
+  explicit insts). Slice C's absorber/finalizer twins cite snw_wcall
+  at their XCall-1 sites. Probe 1819/0 (~16 s); differential
+  e3b_run 7/7 with the harness flipped to the REAL boundary (H
+  written BE via eb_hbe, mwin un-bswaps on read; K stays LE) and a
+  convention tooth (LE-written H fails exactly the 4 H rows).
+  (3) **xwv_budget 96 -> 512 LANDED 1f17224** (models/x86/vworld
+  .shard, the one-literal delegate dial; xwv_l spends one unit per
+  list element so 96 exhausted on the ~250-instr leaf and answered
+  True = MIRROR, silently defeating wvcall_bridge's premise; ground-
+  checked False at 512; gates vworld 644/0 + xvector_probe 683/0 +
+  fmt + canon-count unchanged; thread-log announced; xvec_budget and
+  weff_budget stay 96 — their conservative-True direction is correct
+  for their dispatches). Proof-engine findings: the premise/eta
+  rewrite DOES reach if-branch copies (the arm-body fence is about
+  BINDER-carrying match arms) — both bswap fences of a conversion
+  clear in ONE rewrite round; but content frozen behind a stall does
+  NOT re-normalize when later exposed, so the exit conversion needs
+  the eta at ALL SITES (7-arg true) — first-site eta leaves the
+  frozen lane nests on raw snw_fxs. REMAINING (slice C): the variant
+  module former + fn 13 extension (mask bytes + K->LE conversion +
+  XMM-file ground-zero for loop-head uniformity) + init ground
+  differential; the wveval-grain skeleton twin tower (absorber/
+  finalizer/main/invariant/main_eof) instantiating snw_wcall; the
+  article transplant; the bin form.
 - **E4 — clause-1 adjudication + B5 RECORD.** With the artifact in
   hand (CERT.md §4: decided WHEN THE ARTIFACT EXISTS), the user
   rules: grow the validator's disjunctive acceptance (clause 1 =
