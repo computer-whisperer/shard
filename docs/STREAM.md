@@ -1436,6 +1436,57 @@ replacement.
   citing snw_blocks_read where the skeleton cited ssr_fold_read —
   seals Done = bytes_hex (sha256 (scat chunks))), the article
   transplant, the bin form.
+- **E3 SLICE C: THE WELD TIER — THE SEALED DONE LEG (2026-08-09,
+  e3c_probe 2057/0 full acceptance ~18 s, differential 7/7).** The
+  variant bin's value half is complete: vsw_main_eof states that from
+  the ELF stub's all-zero registers, ANY initial XMM file, a zero
+  total cell, and the zero cell at 130512, for EVERY oracle behavior
+  at every sufficient fuel the bin reads until EOF, writes
+  bytes_hex (sha256 (scat (ssw_chunks its))), and exits 0 — the same
+  Done-leg form as the skeleton's ssw_main_eof, over the SHA-NI
+  module. Design (the chunk's three ideas): (1) THE PACKAGE PLUG —
+  vsw_obs reuses SswOb/ssw_spec/ssw_pk_* with the K slot filled by
+  the CONSTANT (sha_k) on the observation side too: the variant's K
+  window is LE (the BE observation is FALSE) and nothing at the value
+  tier reads it — the vector fold bakes its K constants and the
+  machine tier's 18-cell invariant already fed the XMM file — so the
+  K premise is DROPPED from every readback twin (the sweld rb pack's
+  index 10; old 11 renumbers to 10, flat positional farkas certs lose
+  slot 7). (2) THE H OBSERVATION over the sandwich
+  snw_hbsw∘snw_fmem∘snw_hbsw (which replaces shx_mem): vsw_wbg =
+  vbsw32(wget) = load_le (the CONVERSE of e3b's snw_wgb, same
+  snw_bsw skeleton with the byte roles transposed) makes the double
+  swap collapse WITHOUT an involution lemma — vsw_vlhb0/1 (vload
+  over hbsw = vbswap of the base vload, via snw_vlb + snw_vls with
+  snw_wg_lo/vsw_wg_hi lane bounds), then vsw_hobs (wlist of the
+  swapped window = shw_hlist (snw_hst mf)) and vsw_hent (snw_hst
+  over hbsw = the H8 the wlist premise names, vim_nth peels + case-on
+  mk_h8). vsw_hread = hobs + snw_blocks_read + hent + read-below:
+  the e3b summit composes into the article's exact rb_h shape;
+  vsw_out_read = shw_hex_read over it (the weld's hex seal is
+  GENERAL — shx_out_read's shape transplants with the K row deleted).
+  (3) TRANSPLANTS carry the rest: vsw_buf_split/rb_tot/rb_p/rb_pend
+  (sweld texts; the only proof-hop swaps are ssr_ibtv_shx →
+  vsw_ibtv_sw and ssr_read_shx_below → vsw_read_sw_below over the
+  vsm_ghbsw/gfmem byte kit), vsw_step/vsw_inv (article texts minus
+  the four K-side haves; hr0's positional cert loses one slot),
+  vsw_fin_read (ssr_fin_read with the shx_out_read+ssr_fold_read
+  pair collapsed to ONE vsw_out_read cite), vsw_main_eof (ssw_main_eof
+  with the machine cite → vsm_main_eof + the zero-cell row, hbase
+  over vki_mem via vsw_ibtv_vki + vsw_wl_vki — the mask/K-ladder
+  see-through at byte and wlist grain, vim_kf16..1 rl + vsm_gvs/
+  vsw_wlvs hops, closing at ikh_h_read). Every claim passed first
+  check or with one mechanical fix; the two real cycles: reduce does
+  NOT open x?_of projections without explicit unfolds (snw_vbs's own
+  proof pattern), and dropped premises shift POSITIONAL flat certs
+  (slot tables diagnose; keyed rows ride free). New imports:
+  models/wasm/loopkit precedent extended — e3c now also imports
+  sha256.stream (shc_ closure) + the selective (use (:: std sha256
+  sha256)) beside the glob (the B3 shadowing lesson, again).
+  REMAINING (slice C): the article transplant (examples/sha256sum
+  sibling, imports re-rooted, sfm-tie-style carrier ties, corpus
+  registration) and the (bin sha256sum_shani …) form; then slices
+  D/E per §8.4.
 - **E4 — clause-1 adjudication + B5 RECORD.** With the artifact in
   hand (CERT.md §4: decided WHEN THE ARTIFACT EXISTS), the user
   rules: grow the validator's disjunctive acceptance (clause 1 =
