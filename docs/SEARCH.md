@@ -5438,12 +5438,15 @@ it, each a measured lesson:
   for branched closes, OPEN-branch-aM for exhausted candidates
   (never a refutation); OPEN-drained now additionally requires ZERO
   branch candidates.
-- **⚠ THE SEQUENTIAL-FIRE LAW (measured 2026-08-08, CI 313+314+315):
-  engine-run fires go ONE AT A TIME, never parallel.** The first
-  three-way fire ran all three on the same runner node; all three
-  pods were cluster-killed the same second at ~3h ("system failure",
-  pod Failed — node exhaustion; the engine-run class's measured
-  memory retention × 3 concurrent). A POD KILL LANDS NO ARTIFACTS —
-  unlike the internal watchdog exit the pairing rule protects — so
-  ~9 pod-hours streamed to nowhere. LS4-i's single 12h+ fires were
-  fine on the same infra. Refire: sequential, cheap-first.
+- **CI 313+314+315 lost to a HOST CRASH (the sequential-fire ruling
+  REVERSED same day — user).** The first three-way fire died at ~3h:
+  node c-srv3-k8s went NotReady and all three pods were killed the
+  same second. My memory-contention conjecture did NOT survive the
+  facts: the host carries 2.7TB of RAM (user), and concurrent
+  storage work crashed the VM — the fires were collateral, not
+  cause. Parallel engine-run fires are GREEN-LIT (user 2026-08-08);
+  refires = CI 317 + 320 + 321. The durable lesson is narrower: a
+  POD-LEVEL KILL LANDS NO ARTIFACTS — only the internal watchdog
+  exit uploads partials — so long fires remain exposed to
+  infrastructure loss, and per-file streaming only pays off if the
+  pod dies through the watchdog path.
