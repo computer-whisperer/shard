@@ -412,17 +412,32 @@
           (rch_e_fuel)
           (rch_e_pool)))))))
 
+;; drop the first n goals — the continuation-fire mechanism: a watchdog
+;; cut's partial log tells you exactly how many goals landed; the next
+;; fire skips them.
+(fn rch_drop_goals ((n Int) (gs (List (Pair Symbol (Option SExpr)))))
+  (List (Pair Symbol (Option SExpr)))
+  (measure (struct gs))
+  (match gs
+    (Nil Nil)
+    ((Cons g rest) (if (int_eq n 0) gs (rch_drop_goals (- n 1) rest)))))
+
+;; per-goal streaming: each REACH line is written the moment its goal
+;; resolves, so a watchdog cut loses only the goal in flight. The old
+;; per-file write lost 20h of complete results when CI 320/323 were cut
+;; inside mem/sha256.stream.
 (fn reach_goals_engine
   ((m Module)
    (rctx RCtx)
    (target (List Int))
    (base RunState)
    (tds (List Decl))
-   (gs (List (Pair Symbol (Option SExpr)))))
-  (Pair (List Int) (Pair Int Int))
+   (gs (List (Pair Symbol (Option SExpr))))
+   (w World))
+  (Pair (Pair Int Int) World)
   (measure (struct gs))
   (match gs
-    (Nil (Pair Nil (Pair 0 0)))
+    (Nil (Pair (Pair 0 0) w))
     ((Cons (Pair name mgoal) rest)
      (match
        (match mgoal
@@ -437,21 +452,26 @@
                (rch_theory_at m rctx base tds name)
                (lift_sequent g))))))
        (tag
-         (match (reach_goals_engine m rctx target base tds rest)
-           ((Pair lines (Pair closed total))
-            (Pair
-              (append_int
-                "REACH "
-                (append_int
-                  target
-                  (append_int
-                    " "
-                    (append_int
-                      (chars_of_sym name)
-                      (append_int " " (append_int tag (append_int (nl) lines)))))))
-              (Pair (if (is_closed_e tag) (+ closed 1) closed) (+ total 1))))))))))
+         (match
+           (write
+             (append_int
+               "REACH "
+               (append_int
+                 target
+                 (append_int
+                   " "
+                   (append_int
+                     (chars_of_sym name)
+                     (append_int " " (append_int tag (nl)))))))
+             w)
+           (w2
+             (match (reach_goals_engine m rctx target base tds rest w2)
+               ((Pair (Pair closed total) w3)
+                (Pair
+                  (Pair (if (is_closed_e tag) (+ closed 1) closed) (+ total 1))
+                  w3))))))))))
 
-(fn reach_target_engine ((target (List Int)) (w World)) World
+(fn reach_target_engine_skip ((target (List Int)) (skip Int) (w World)) World
   (match (resolve_closure target False w)
     ((Pair srcs w2)
      (match (src_of target srcs)
@@ -494,33 +514,47 @@
                          target
                          (theory_base_st m srcs ctors (sym_of_chars target))
                          tds
-                         (append_goals
-                           (opt_goals (claim_goals forms))
-                           (fulfills_goals
-                             forms
-                             (append_sexprs forms (iface_forms target srcs)))))
-                       ((Pair lines (Pair closed total))
+                         (rch_drop_goals
+                           skip
+                           (append_goals
+                             (opt_goals (claim_goals forms))
+                             (fulfills_goals
+                               forms
+                               (append_sexprs forms (iface_forms target srcs)))))
+                         w2)
+                       ((Pair (Pair closed total) w3)
                         (write
                           (append_int
-                            lines
+                            "TOTAL "
                             (append_int
-                              "TOTAL "
+                              target
                               (append_int
-                                target
+                                " "
                                 (append_int
-                                  " "
+                                  (show_int closed)
                                   (append_int
-                                    (show_int closed)
-                                    (append_int
-                                      "/"
-                                      (append_int (show_int total) (nl))))))))
-                          w2))))))))))))))))
+                                    "/"
+                                    (append_int (show_int total) (nl)))))))
+                          w3))))))))))))))))
+
+(fn reach_target_engine ((target (List Int)) (w World)) World
+  (reach_target_engine_skip target 0 w))
 
 (fn reach_all_engine ((targets (List (List Int))) (w World)) World
   (measure (struct targets))
   (match targets
     (Nil w)
     ((Cons t rest) (reach_all_engine rest (reach_target_engine t w)))))
+
+;; continuation fires: each entry pairs a target with the number of
+;; leading goals to skip (= REACH lines already landed for that file).
+(fn reach_all_engine_skip ((targets (List (Pair (List Int) Int))) (w World))
+  World
+  (measure (struct targets))
+  (match targets
+    (Nil w)
+    ((Cons (Pair t skip) rest)
+     (reach_all_engine_skip rest (reach_target_engine_skip t skip w)))))
 
 (fn main ((w World)) World
   (match (get_args w)
