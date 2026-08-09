@@ -1344,6 +1344,55 @@ replacement.
   invariant/main_eof citing snw_wcall at XCall-1 sites and vin_wcall
   at XCall-13; the zero-cell premise rides the invariant); the
   article transplant; the bin form.
+- **E3 SLICE C: THE TWIN TOWER, HALF 1 — CALLEE LADDERS + THE
+  ABSORBER/FINALIZER TWINS (2026-08-09, e3c_probe 1894/0).** The
+  wveval-grain twins of the skeleton's two big callees, both walks
+  PASSING FIRST CHECK on the transplant design. (1) THE CALLEE
+  LADDERS (vin_x14/xv14/wv14 pattern, one 3-lemma ladder per scalar
+  callee): vtr (totr, S^42), vtw (totw, S^50), vcp (copy, S^35 over
+  lg_fuel k), vfp (fpad, S^90), vhx (hex, S^80) — each = xrun_regs
+  over the variant module citing the landed sweld/weld walk cert
+  (sst_xtotr0/sst_xtotw0/ssc_xcopy/ssp_xfpad/shh_xhex), lifted
+  through xvcall_bridge then wvcall_bridge with the XMM file riding
+  (STREAM.md §8.2's two-bridge reuse claim, now exercised five more
+  times). e3c_probe grew imports: loopkit (lg_fuel lives there — use
+  is NOT transitive) + sweld. (2) SEE-THROUGH KIT: vsm_gvs/ghmem/
+  ghbsw/gfmem (byte reads below the fold's H-home stores — the
+  variant's post-fold spill reloads see through snw_hbsw∘snw_fmem∘
+  snw_hbsw where the skeleton saw through shx_mem), vsm_vhbsw +
+  vsm_vibtw + vsm_vipf (vload-grain: below the H conversions, above
+  ibtw_mem, above ipf_mem — the vim_vsa unfold-reassembly template
+  with store_le_get_below/ish_fpad_hi hops). (3) THE ABSORBER TWIN
+  vsm_abs_wseq/wcall: sst_xabsorb's 30 value haves TRANSPLANTED
+  VERBATIM (they are tier-independent — hw0..hcd3), hg8/hg10/hg9
+  re-derived over the sandwich, 18 new fold-site premise haves
+  (mask/zero/16 K over the spilled+ibtw memory via vsm_vibtw + 3x
+  vim_vsa); the mirror walk freezes each XCall behind stopped
+  wveval_call and resolves sites by ONE ladder rewrite each; the
+  fold site cites snw_wcall (e3b's seam) DIRECTLY — premises
+  discharged from the entry-memory premises; fuel = S^283(lg_fuel kb
+  (S^49 (lg_fuel krem c))), copy site aligned by sst_push50 +
+  sst_lgf_comm + NEW vsm_push249 rl (the push-out/commute/push-in
+  kit at the variant's constants). Premises = sst_xabsorb's 4 + the
+  18 vector-cell equations at entry m; exit = scalar exit regs +
+  GROUND-ZERO XMM file + icp∘(snw_hbsw∘snw_fmem∘snw_hbsw)∘ibtw
+  ∘spills memory + trace Nil. (4) THE FINALIZER TWIN vsm_fin_wseq/
+  wcall: sst_xfinal's 12 haves transplanted, fold premises over
+  ipf_mem via vsm_vipf (the (65664-pn)+pn+72 obligation cancels to a
+  goal-only farkas row), hex bounds ground; fuel = S^266(lg_fuel kf
+  c) — NO mid-pad: the only lg_fuel-shaped cert is the fold, the
+  ground-tower hex cert absorbs the tail as its free c. Both
+  packagings = scan-True have + delegate to the walk (vin_wcall
+  pattern; ⚠ lg_fuel MUST be in the packaging computes' stop lists
+  or the tower opens into match trees and the walk cite misses).
+  REMAINING (slice C): the loop tier — ground-fuel piece packagings
+  (vsm_absg/fing_wcall via the ssm_lg_pad slab at 284+49+960+63+16 =
+  S^1372 and 267+2+16 = S^285), shim mirrors at wveval, iteration
+  pieces/walks/entry equations mirroring the article's ssm_ tier
+  (article importable for the SsmIt/take/fill/wnat/lg_pad value
+  substrate), the vector-premise preservation lemma (one generic
+  vload see-through over vsm_step's layers), the weld twins, the
+  article transplant, the bin form.
 - **E4 — clause-1 adjudication + B5 RECORD.** With the artifact in
   hand (CERT.md §4: decided WHEN THE ARTIFACT EXISTS), the user
   rules: grow the validator's disjunctive acceptance (clause 1 =
