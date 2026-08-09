@@ -1293,6 +1293,57 @@ replacement.
   differential; the wveval-grain skeleton twin tower (absorber/
   finalizer/main/invariant/main_eof) instantiating snw_wcall; the
   article transplant; the bin form.
+- **E3 SLICE C: VARIANT MODULE + THE INIT-WALK TWIN (2026-08-08,
+  e3c_probe 1867/0; differential e3c_run 7/7).** Two chunks. (1) THE
+  VARIANT MODULE (e3c_probe/e3c_run, untracked root): vfm_m = the
+  skeleton's fifteen slots with fn 1 = (MkXFunc 2 (snw_wrap)) and
+  fn 13 = vfm_init (XCall 14, the 16 mask store-immediates at 130496,
+  K->LE via 16x vload/XVBswap32/vstore, the XMM-file ground-zero from
+  the dead cell 130512, RDI := 0); differential 7/7 FIRST SEMANTIC
+  RUN incl. i7 = the init->fold composition row (init, "abc" block,
+  fold leaf k=1, un-bswapped H = the chained value leg); teeth:
+  K-conversion no-op'd fails exactly i2+i7, a corrupted mask byte
+  trips the XVBswap32 fence loud. (2) THE INIT-WALK TWIN — fn 13's
+  cert at wveval grain. **Both dispatch budgets -> 1024 (afce8bd)**:
+  gb_shinit_x is 577 flat instructions and the call ladder needs both
+  scans to COMPLETE on it (xwv_i answers True on XCall by design, so
+  fn 13 MIRRORS at world grain and its XCall-14 site delegates
+  through the bridges; the skeleton's 1-instr-wrapper trick cannot
+  help at this tier). The ladder: vin_x14 (xrun_regs at the 14-slot-
+  quantified module = ONE shi_xinit cite, inst d Z) -> vin_xv14
+  (xvcall_bridge) -> vin_wv14 (wvcall_bridge) — a landed scalar cert
+  welds into a world-vector caller through two citations, §8.2's
+  reuse claim EXERCISED. THE WALK vin_wseq (S^586 c, 57 steps):
+  descriptors vim_msk (the raw mask nest) + vim_kn n i (the K
+  conversion through group i-1; each level references level i-1
+  TWICE, so the naive walk term is 2^16 — the walk STOPS vxeq so
+  every stanza sticks at its mask fence, and each stick refolds the
+  raw store level into the compact descriptor via the ground fold
+  equations vim_kf1..16, keeping the term LINEAR); exit needs NO eta
+  (a vset chain over a LITERAL MkXmms ctor self-collapses under
+  compute — e3b's eta pain was symbolic-base-specific); conclusion =
+  WVNorm all-zero regs, all-zero XMM file, vki_mem m, w, Nil, one
+  premise (vload m 130512 = MkXmm 0 0 0 0). vin_wcall (S^587 c) = the
+  form the main-loop twin cites. CONSUMERS over vki_mem: vim_mthru
+  (mask), vim_zthru (zero cell), vim_kread0..15 (vload = shn_kg i:
+  descend via kf-rl + snw_vlb/vim_vsta hops, snw_vbs to wget grain,
+  content by vim_nth extraction from the landed ikh_k_read — no K
+  constants respelled). New kit: vim_vsa/vim_lla/vim_vsta (the
+  above-direction separation lemmas; store_le_get_above existed
+  unused), vim_gikh (ssw_get_ikh transplant), vim_mload, vim_zfin.
+  ENGINE FINDINGS (each cost a cycle): compute DOES normalize args
+  under a stopped head (refines the 3h law — the vim_kf alignment
+  haves were unnecessary); int_eq-False Farkas certs take G = -1
+  (the equation slot's SIGN picks the refutation direction — the
+  slot table says so explicitly); int_of_nat in an arith obligation
+  must be rewritten away via int_of_nat_succ/zero BEFORE the cert
+  (compute PACKS the Nat and strands the opaque app); a vector-over-
+  vector separation lemma needs 16 byte-grain hops (4 lanes x 4
+  layers — snw_vlb precedent held). REMAINING (slice C): the
+  wveval-grain skeleton twin tower (absorber/finalizer/main/
+  invariant/main_eof citing snw_wcall at XCall-1 sites and vin_wcall
+  at XCall-13; the zero-cell premise rides the invariant); the
+  article transplant; the bin form.
 - **E4 — clause-1 adjudication + B5 RECORD.** With the artifact in
   hand (CERT.md §4: decided WHEN THE ARTIFACT EXISTS), the user
   rules: grow the validator's disjunctive acceptance (clause 1 =
