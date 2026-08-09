@@ -1393,6 +1393,49 @@ replacement.
   substrate), the vector-premise preservation lemma (one generic
   vload see-through over vsm_step's layers), the weld twins, the
   article transplant, the bin form.
+- **E3 SLICE C: THE TWIN TOWER, HALF 2 — THE MACHINE TIER COMPLETE
+  (2026-08-09, e3c_probe 2028/0, differential e3c_run 7/7).** The
+  variant bin's whole machine-tier contract now stands at xvrun_w
+  fn 9: vsm_main_eof/err/dry are the skeleton's three entry
+  equations at the world-vector grain, with the digest write's
+  payload = lx_read of the finalizer transform over
+  (vsm_mem (vki_mem m0) its). The road (every stage first-check or
+  one mechanical fix): (1) ground-fuel packagings vsm_absg_wcall
+  (S^1372 g) / vsm_fing_wcall (S^285 g) — ssm_lg_pad slab at the
+  variant constants (284+49+960+63+16; 267+2+16), bound-derivation
+  haves transplanted from the article's ssm_abs_wcall (hshr respelled
+  via sst_shr6 — shr_pow2 is a std/bits name the probe doesn't
+  import); (2) shim mirrors vsm_read/readeof/write/exit_wcall at
+  (S^ 4 g) — syscalls preserve the vector file (wvlift), the XMM
+  lanes ride every shim; ⚠ lx_take must NOT be stopped in the
+  readeof mirror (the zero-byte take computes); (3) vsm_pre (ssm_pre
+  needs a WVOut twin), vsm_vfill/vsm_vicp (vload above lx_fill/
+  icp_mem — ssw_fill_above + the get_set hop with an
+  int_of_nat_nonneg farkas row), vsm_step/vsm_mem (the variant
+  transform at wnat-exhibited ghosts), and vsm_vstep_thru — ONE
+  generic preservation lemma (130496<=p, p+16<=131008) carrying all
+  18 vector-cell equations across an iteration's seven write layers;
+  (4) iteration pieces vsm_iter_data/err/eof at head S^1385 (the
+  absorber site lands at S^1372 exactly; ssm_krem/kb/kf_coh are
+  tier-independent and REUSED from the imported article; the fill
+  discharge composes ssw_msk_len — NOT ssw_slen_msk, which is
+  slen-typed); (5) walks vsm_walk_eof/err/dry — the article's
+  induction shape with 18 preservation haves per Cons case
+  discharging the IH's vector premises at (vsm_step m0 it); (6)
+  entry equations at S^1390 citing vin_wcall at the XCall-13 site —
+  the ONLY pristine-memory premise is the zero cell at 130512 (ELF
+  zero-fill), and the walks' vector premises land via the LANDED
+  vim_mthru/vim_zthru/vim_kread0..15 consumers over vki_mem, closing
+  the loop the init-walk twin opened. ⚠ ENGINE LAW (cost one cycle):
+  the module term must spell the LOOP BODY EXPANDED everywhere — a
+  folded (vfm_loop) app inside slot 9 gets opened by any walk
+  compute and then no cert's folded-module pattern matches (the
+  article's inline-everything convention exists for this reason);
+  other slots' folded body apps are fine because every compute stops
+  them. REMAINING (slice C): the weld twins (vsw_step/inv/main_eof
+  citing snw_blocks_read where the skeleton cited ssr_fold_read —
+  seals Done = bytes_hex (sha256 (scat chunks))), the article
+  transplant, the bin form.
 - **E4 — clause-1 adjudication + B5 RECORD.** With the artifact in
   hand (CERT.md §4: decided WHEN THE ARTIFACT EXISTS), the user
   rules: grow the validator's disjunctive acceptance (clause 1 =
