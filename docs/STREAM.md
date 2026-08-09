@@ -1191,6 +1191,63 @@ replacement.
   inside stuck match ARM BODIES (bound vars) — eta-then-COMPUTE
   first, so the sites surface into constructor position. REMAINING:
   B-iii the group->bytes tie (per the recorded map).
+- **E3 SLICE B-iii LANDED (2026-08-08) — THE GROUP->BYTES TIE, slice B
+  complete.** e3b_probe.shard extended to **1810/0 (~16 s; the probe
+  now imports imp/weld/sweld — whole-closure checks)**; differential
+  re-runs 7/7. THE SUMMIT: snw_tie — `snw_hst (snw_fmem m src k) =
+  shb_fold (snw_hst m) m src k` with ONE premise (src + 64k <= 130496)
+  — the machine fold's H readback IS the spec fold; and snw_blocks_read
+  = snw_tie + **ssr_fold_read CITED VERBATIM** (the sweld's
+  fold-input bridge composes unchanged — the B-i design gate MET).
+  Six tranches: (1) the DISJOINT-OR facts std/bits never had
+  (snw_bor0r, snw_borsh at symbolic k via wf-induct on the bits.shard
+  skeletons, literal instances bor8/16/24, the pow2 literal ladder
+  snw_pw1..24); (2) THE BYTE-SWAP CORE snw_bsw (vbsw32 of a LE
+  4-byte assembly = word_be reversed) via div_unique/mod_unique
+  uniqueness-as-computation + the disjoint-or collapses, lifted to
+  snw_wgb (vbsw32 . load_le4 = wget) and snw_vbs (vbswap . vload =
+  MkXmm of wgets); (3) THE SCHEDULE WALK: snw_wni (the sched_ext
+  step's m32 spelling IS shn_wnext — premise-free, ssig=vss are
+  def-identical), snw_ext4 (free-tail 4-step sched_ext law), snw_gstep
+  (the eta'd group law over ABSTRACT Xmms) + 4 per-lane recompression
+  laws, then snw_sched16: shn_w64 over the four wget-MkXmm groups =
+  sha_sched (mem_read 64 m src), PREMISE-FREE — 12 rounds of
+  ext4-then-lane-recompress keep every atom a 7-node x?_of(shn_gN …)
+  projection, so the exponential wnext nest NEVER materializes; (4)
+  the slo (elementwise-nonneg) pipeline over mem_read/words16/
+  sched_ext/srev_acc/sha_sched riding imp's slo kit + ish_srounds_los
+  — the m32/los range ladder the map predicted; (5) snw_blockm — THE
+  PER-BLOCK TIE: shn_block st (4 bswap'd vloads) = sha_block st
+  (mem_read 64 m src) with only the state-los premise — plus snw_l32m
+  (every lane of a sha_block result is in [0,2^32)); (6) the probe
+  kit: snw_vls (vload∘vstore round trip via ls4_id + 6 ordered
+  snw_llb frames), snw_hrt (the H-home round trip through
+  shnw_hmem), snw_fold_frame (shb_fold ignores the H stores), and
+  the summit induction (IH -> blkw -> hrt -> fold_frame ->
+  shb_fold_s). ⚠ Laws worth blood: (a) plain `rewrite … true ()` is
+  ALL-SITES but 6-arg rewrite-with is FIRST-SITE — the 7-arg
+  `rewrite-with L dir side true (insts) (obls)` spelling is the
+  all-sites form (the lane laws NEED it: raw wnext atoms sit both at
+  spine slots and nested inside later atoms); (b) occurrence
+  selectors are (at K), K 0-BASED, in the 4th slot; (c) `compute`
+  PACKS ground Nats (breaks (S …)-spelled patterns — load_le/ls4_id):
+  unfold-then-REDUCE instead (ι never packs); (d) equality-shaped
+  arith goals need the two-direction cert (list (rows …) (rows …));
+  (e) `pow2` is opaque outside bits.shard (pow2_z/pow2_s chains or
+  the snw_pw ladder); (f) chain items are right-folded continuations
+  — a chain may not END in a non-continuation form and 1-item chains
+  are malformed. **THE ENDIANNESS FINDING (slice-C ratification
+  fork, measured this session):** the skeleton's K/H windows are
+  BIG-ENDIAN (ikh_wstmts writes MSB at the low address; the sweld
+  invariant reads via wget = word_be) but the leaf's vload/vstore
+  are LE — byte-identical K/H content does NOT satisfy the leaf as
+  built. Lean recorded in the arc memory: variant init writes K LE
+  (fn 13 is already being amended for the mask) + the WRAPPER
+  converts H at entry/exit (vload+vbswap+vstore, outside the loop)
+  so B-ii's loop walk and B-iii's tie survive untouched and only
+  snw_xrun re-derives; awaiting the user's ruling before amending
+  the leaf. REMAINING: slice C per the ladder (+ the endianness
+  ruling).
 - **E4 — clause-1 adjudication + B5 RECORD.** With the artifact in
   hand (CERT.md §4: decided WHEN THE ARTIFACT EXISTS), the user
   rules: grow the validator's disjunctive acceptance (clause 1 =
