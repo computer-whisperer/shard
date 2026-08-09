@@ -5490,7 +5490,12 @@ it, each a measured lesson:
     file). Fire configs: bench_mem (mem alone) + bench_stream
     (stream alone) + bench_rest (sha256/reader/wasm_rev/word/kit,
     cheap-first); bench_engine2 + bench_engine_tail DELETED
-    (superseded). Refires = CI 333 (mem) + 334 (stream) + 335
-    (rest), SECS 79200 (22h — the 20h+4h-slack pairing was exactly
-    what mem missed by; ~1.5h pod-setup margin stays under the 24h
-    ceiling).
+    (superseded). SECS 79200 (22h — the 20h+4h-slack pairing was
+    exactly what mem missed by; ~1.5h pod-setup margin stays under
+    the 24h ceiling). First refire round (CI 333/334/335) was
+    auto-canceled by the ledger push while `waiting_for_resource` —
+    **the auto-cancel law is BROADER than "queued": a push kills
+    every not-yet-RUNNING pipeline on the ref. Operational order:
+    finish ALL pushes, then fire; hold subsequent pushes until the
+    fires reach running.** Refires = CI 337 (mem) + 338 (stream) +
+    339 (rest).
