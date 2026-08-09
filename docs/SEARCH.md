@@ -5450,3 +5450,47 @@ it, each a measured lesson:
   exit uploads partials — so long fires remain exposed to
   infrastructure loss, and per-file streaming only pays off if the
   pod dies through the watchdog path.
+- **INTERIM RESULTS (2026-08-09; official record pends the heavy
+  refires).** A push auto-canceled still-QUEUED 321 (running fires
+  survive pushes); the tail refired as 323.
+  - **CI 317 (fire 1, the 12 light files; 20h watchdog cut before
+    file 12): +20 closes over LS4-i on its slice, ZERO regressions.
+    18 of the 20 are ladder members and ALL 18 are D-bucket — the
+    gate's ≥17-from-D leg is MET by this fire alone.** Running
+    ladder tally 142+18 = 160/182 (gate 164). Wins include the
+    whole std/list induction family (take_le b2-a139261, drop_le
+    b2-a134996, append_assoc b1-a53448, rev_rev b1-a66953 …), all
+    seven auto_demo induction goals, adq13_leaf b2-a294,
+    int_of_nat_nonneg b1-a1160, ilen_nonneg b1-a424. Base-drive
+    parity HELD at benchmark scale: every goal the fold can't touch
+    reports a byte-identical tag to LS4-i. Still open: utf8_lead_le
+    / utf8_cont_le / take_len / drop_len drain the full 600k pool
+    (OPEN-branch-a600k); str_valid + the div pair refuse exactly as
+    before (linear-shaped).
+  - **CI 331 (fire 1b, imp_mix make-up, bench_engine1b, 2h):
+    identical closes to LS4-i (2/3, tags byte-identical);
+    searched_mix_wasm now branches and drains (OPEN-branch-a600416,
+    was OPEN-budget).**
+  - **CI 320 (bytes/mem/sha256, 20h): bytes.shard only — 0 gain / 0
+    loss (7 branch attempts died candidates-exhausted at 100k-600k;
+    list_of_cat hit the pool). The remaining ~18h sat inside mem (21
+    opens) without completing it. CI 323 (tail, 20h): ZERO bytes —
+    the full run sat inside sha256.stream (19 opens, the heaviest
+    theory), RSS flat at 67.8GB.** Post-mortem: the three-way split
+    was calibrated on LS4-i per-goal costs; LS4-iii's pool is up to
+    12x the work per open goal (measured ~2h for ONE 600k drain on
+    imp_mix's theory), and reach_target_engine's per-FILE write
+    threw away every finished goal on both cuts.
+  - **The refire topology (50f7a7c, harness only — engine semantics
+    and budgets untouched; smoke = adq13 lines byte-identical to CI
+    317):** reach_goals_engine now STREAMS each REACH line as its
+    goal resolves (a watchdog cut loses only the goal in flight);
+    rch_drop_goals + reach_target_engine_skip + reach_all_engine_skip
+    = continuation fires (skip = REACH lines already landed for the
+    file). Fire configs: bench_mem (mem alone) + bench_stream
+    (stream alone) + bench_rest (sha256/reader/wasm_rev/word/kit,
+    cheap-first); bench_engine2 + bench_engine_tail DELETED
+    (superseded). Refires = CI 333 (mem) + 334 (stream) + 335
+    (rest), SECS 79200 (22h — the 20h+4h-slack pairing was exactly
+    what mem missed by; ~1.5h pod-setup margin stays under the 24h
+    ceiling).
