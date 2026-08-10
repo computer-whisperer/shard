@@ -5499,3 +5499,24 @@ it, each a measured lesson:
     finish ALL pushes, then fire; hold subsequent pushes until the
     fires reach running.** Refires = CI 337 (mem) + 338 (stream) +
     339 (rest).
+  - **CI 337 (mem, clean exit): all 45 goals measured, 0 gain / 0
+    loss — parity on all 24 closes (far pair get_set + gs_i
+    re-confirmed). Most of mem's 21 opens now die
+    candidates-exhausted (OPEN-branch 94k-250k): the fold finds
+    branch candidates but the arms need div/mod reasoning through
+    the opaque mem surface, not structural induction.**
+  - **CI 338 (stream): +6, 0 lost — the whole shc_ chunk-list
+    family (slen_nn, slen_sapp, sapp_nil, sapp_assoc, sdrop0,
+    stake0) closes engine-b1, ALL SIX LADDER D MEMBERS. Running
+    ladder 160+6 = 166 ≥ 164 — THE GATE LINE IS CROSSED, pending
+    the official full-corpus record (CI 339 + the stream tail).
+    The far tier is now fully seen across combined logs: 6/13
+    closed, far leg re-confirmed.** The fire ended not by watchdog
+    but `rt trap: heap exhausted` after 24 of 30 goals (the
+    runtime's heap ceiling — matching CI 323's flat 67.8GB RSS):
+    the engine retains across goals on the giant theory. Streaming
+    banked all 24; the six heavy correspondence goals
+    (blocks_split/blocks_prefix/step_abs/fin_abs/stream_gen/
+    sha_stream_corresponds) refire fresh-heap as CI 349
+    (bench_stream2, the skip machinery's first use — skip 24
+    verified against goal order).
