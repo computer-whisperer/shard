@@ -286,7 +286,10 @@ needs a real consumer forcing its decisions:
 
 - **B6 — proven feature dispatch.** CPUID/feature detection selects
   only certified variants; the dispatch proof composes the B4/B5
-  artifacts under one bin contract.
+  artifacts under one bin contract. **OPEN 2026-08-10 — §9 = the
+  ratified rung design** (R1 chip answer rides the oracle, R2 the
+  dispatch bin takes the plain name, R3 linking meta-theorems, R4
+  the two-step CPUID probe).
 
 ## 4. Sequencing rules
 
@@ -1695,3 +1698,104 @@ x86gen learns nothing); other hash families (§6 standing).
 Delegation: byte-emit, encodings, replayer C, and schedule byte
 transcription are Opus-delegated per the standing split; Fable
 owns semantics, laws, articles, docs.
+
+## 9. B6 — proven feature dispatch (rung design RATIFIED 2026-08-10)
+
+One bin whose entry asks the chip and jumps: CPUID selects between
+the scalar streaming artifact (B1–B4's) and the SHA-NI artifact (B5's)
+inside ONE module, under the SAME `(bin … (entry sst_main) …)`
+contract the variants already share. The requirement never mentions
+chips or targets; the dispatch proof case-splits on the feature
+answer and cites each family's §7.5 verdict — fork D(a)'s machinery,
+landed. Arc B closes at this rung's number.
+
+### 9.1 Rulings (2026-08-10, all four to their leans — rejected
+### options' costs kept in place)
+
+- **R1 — the chip answer rides the existing oracle.** The new XCpuid
+  world-layer arm consumes FOUR ints from lxans (the eax/ebx/ecx/edx
+  results, 32-bit masked — the syscall arm's rcx/r11 junk-draw
+  discipline extended to the four output registers), emits NO trace
+  event; theorems quantify over the draws and case-split on the
+  feature bits; the variant verdicts instantiate at the rest-of-list
+  world; the D8 dry leg covers exhaustion (lx_step's convention:
+  short answers refuse). Zero signature changes. REJECTED — a chip
+  field on LxWorld: cleaner-looking separation at the cost of every
+  MkLxWorld literal in the tree (measured: 136 occurrences across 19
+  files — every world-grain article breaks) plus a shared-surface
+  signature walk; the soundness story (quantified environment
+  answer) is identical either way.
+- **R2 — the dispatch bin takes the plain name.** The B6 artifact
+  ships as `sha256sum`; the scalar streaming bin renames to
+  `sha256sum_scalar`, with the rename recorded at every verdict that
+  names it (the B4 RECORD, §7.5, X86.md §52, CI rows). The
+  user-facing artifact carries the tool's name — it is what the
+  parity claim compares against. REJECTED — a qualified name
+  (sha256sum_fat / _dispatch): zero record churn, but the flagship's
+  best artifact wears a qualifier forever while the plain name sits
+  on the second-best bin.
+- **R3 — variant theorems transfer by linking meta-theorems.** Two
+  generic theorems over the eval tower, proven once: EXTENSION —
+  appending fns to a module preserves every walk that never calls
+  past the old length (the unshifted family transfers) — and SHIFT —
+  uniformly mapping (XCall k) → (XCall (k+d)) over a family placed
+  at offset d preserves walks (the other family transfers). Every
+  future multi-variant bin reuses them. The scalar family's entry
+  equations live at xrun_w; how they cross into the world-vector
+  tier the merged run lives at is slice B's embedding check.
+  REJECTED — re-proving one family over the merged literal: the E2b
+  transplant class of work, re-paid at every future composition,
+  with the theorems welded to one layout.
+- **R4 — the stub does the real dispatcher's two-step.** CPUID leaf
+  0 first (max basic leaf ≥ 7), then leaf 7 subleaf 0, EBX bit 29 —
+  what coreutils and openssl both do, because pre-2013 silicon
+  answers out-of-range leaves with the highest basic leaf's data and
+  bit 29 is then garbage: a leaf-7-only artifact could jump to SHA
+  instructions on a chip without them. The theorem is proven either
+  way (it quantifies over all draws); the two-step makes the
+  ARTIFACT honest on old silicon. Cost: one more XCpuid, one
+  compare, one case leg (maxleaf < 7 → scalar).
+
+### 9.2 The slice ladder
+
+- **A — CPUID enters the model.** XCpuid arm on XInstr: the BASE
+  tier refuses loudly (Some XTrap — the XSyscall/XVec precedent; the
+  pure VECTOR tier inherits the trap through its base delegation),
+  the world scalar tier draws four and writes eax/ebx/ecx/edx
+  (wcpuid, wsyscall's sibling), the world vector tier mirrors
+  through wvlift with the XMM file untouched, and BOTH effect
+  predicates (xeff_i, xwv_i) answer True — the never-under-report
+  invariant. Structural walk over every XInstr consumer +
+  thread-B announcement (the case-on pad in
+  tools/search/tasks/x86_transition_window.shard is built for
+  exactly this growth). Encoder arm (0F A2) + silicon pinning =
+  Opus-delegated. Battery additivity re-run.
+- **B — the linking theorems** (R3's objects) + the world-grain
+  embedding check for the scalar family's crossing.
+- **C — the dispatch article.** Merged module literal (one family
+  unchanged, one shifted by the R3 layout, dispatch main last); the
+  R4 stub body — CPUID leaf 0, CPUID leaf 7, re-zero the four
+  clobbered registers (both variant theorems enter from all-zero
+  registers), XCall the chosen entry; the exit-propagation call
+  lemma (WExit passes straight through the call arm — neither
+  variant main returns); entry equations = the D8 disjunction whose
+  proof case-splits on the draws and cites each family's transferred
+  verdict; the third (bin …) form over sst_main, with R2's renames.
+- **D — bytes + differential.** Tie file by mechanical extraction
+  (the slice-D generator pattern), write file (Opus), and the
+  dispatch differential: runs EVERYWHERE, no SKIP — the CI runner
+  exercises the scalar path, a sha_ni box the SHA-NI path, digests
+  double-oracled on both.
+- **E — the B6 number + records.** Expected ≈ B5's 0.676 s/GiB (the
+  stub is nanoseconds); the headline = the ratified parity fork (b)
+  like-for-like at last: our dispatching artifact vs
+  coreutils-as-shipped. Verdict + the record here + the X86.md
+  section. ARC B CLOSES.
+
+Slice-level items deliberately left open: the exact merged layout
+(which family shifts — cost-symmetric under R3); how the bin
+requirement's oracle bookkeeping spells the chip prefix ahead of the
+read answers; and the emitted-file collision — examples/sha256sum/
+sha256sum is today the ONE-SHOT's emitted path, so slice D re-homes
+that emission (to match its bin name, sha256sum_oneshot) before the
+dispatch artifact claims the plain path.
