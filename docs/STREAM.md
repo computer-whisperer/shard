@@ -1558,6 +1558,53 @@ replacement.
   run_corpus.sh gained the differential block after the scalar
   leg. NEXT: slice E — THE B5 NUMBER (B4's method) + the fork-D
   §7.5 verdict + records; then E4 (user rules).
+- **E3 SLICE E (2026-08-09) — THE B5 NUMBER + THE FORK-D VERDICT.
+  E3 CLOSES.** Method = B4's exactly (median-of-5, core-pinned,
+  warm page cache, 1 GiB, quiet box), all five contenders
+  re-measured fresh (B4's baselines reproduce within noise):
+
+      shard sha256sum_shani           0.676 s  (~1.5 GiB/s)
+      coreutils as shipped (SHA-NI)   0.600 s  → gap 1.13×
+      openssl dgst -sha256            0.646 s  → gap 1.05×
+      coreutils, SHA-NI masked        1.738 s  → 2.6× in OUR favor
+      shard sha256sum (scalar twin)  10.485 s  → 15.5× internal
+
+  **THE B5 NUMBER: 1.13× coreutils-as-shipped, 1.05× openssl** —
+  parity-class with the box's own expert SHA-NI paths, and the
+  proven bin BEATS libcrypto's expert scalar path by 2.6×. B4's
+  17.8×-vs-shipped gap closes to 1.13×. ATTRIBUTION (B4's gate
+  protocol, perf on 64 MiB + 1 GiB): ours 3.35 instr/byte at IPC
+  1.47; coreutils 2.69 at IPC 1.31 — BOTH latency-bound on the
+  sha256rnds2 dependency chain (contrast the scalar bins' IPC
+  4.0+), so our +25% instruction volume (the scalar glue: absorber
+  bookkeeping, the spill idiom) costs only +9% cycles — it hides
+  in the rnds2 latency shadow. The fold leaf IS the budget: 208
+  instructions per 64-byte block = 3.25 of the 3.35 instr/byte;
+  the byte-copy loop touches only sub-block tails. The cross-check
+  closes exactly: 1 GiB wall 0.693 s = 0.558 s user (2.24
+  cycles/byte at 4.31 GHz effective) + 0.131 s sys, which is B4's
+  priced read floor (0.127 s/GiB at 64 KiB; our cap 61440).
+  Nothing unexplained. Backend-debt reading for E4's pricing: the
+  scalar 6.1× tax was instruction VOLUME at core-peak IPC; at the
+  vector tier the same lowering idiom is 25% volume that vanishes
+  into instruction-latency shadow — hand-pinning evidence that
+  regalloc's win concentrates where IPC is high.
+  **THE VERDICT (fork D(a)'s contract):**
+
+      sha256sum_shani: MET (artifact: unconditional)
+
+  Same claim form as the skeleton's (§7.5: no given, no except —
+  the D8 disjunction covers every oracle behavior at every fuel,
+  over an ARBITRARY initial XMM file), stated over the EMITTED
+  module (slice D's byte-tie), corpus-gated on silicon behind the
+  loud CPUID gate. TWO bins over ONE spec entry sst_main; the
+  requirement never mentions the target — **§5's expressibility
+  gate is answered by construction**, and with B4's IR gate both
+  §5 silicon downgrades now read NO. B6's dispatch proof will
+  case-split on the feature test and cite each variant's verdict.
+  §5's B5 wall-clock-on-record obligation: met (this table).
+  X86.md §53 is the x86-side record. E3 CLOSED (slices A-E all
+  landed); B5's remaining ladder = E4 alone (user rules).
 - **E4 — clause-1 adjudication + B5 RECORD.** With the artifact in
   hand (CERT.md §4: decided WHEN THE ARTIFACT EXISTS), the user
   rules: grow the validator's disjunctive acceptance (clause 1 =
