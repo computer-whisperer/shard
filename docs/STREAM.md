@@ -1517,6 +1517,47 @@ replacement.
   byte-tie, capless silicon pipe differential vs coreutils AND
   openssl — byte-emit legs Opus-delegated) then slice E (THE B5
   NUMBER + the fork-D verdict + records); E4 after (user rules).
+- **E3 SLICE D LANDED (2026-08-09) — ELF + BYTE-TIE + THE SILICON
+  PIPE DIFFERENTIAL.** The variant is now a SHIPPED CAPLESS BINARY
+  adjudicated on silicon. (1) THE TIE ARTICLE examples/sha256sum/
+  sha256sum_shani_elf.shard (corpus-registered, closure 2067/0 =
+  the article's 2064 + 3 ties, FIRST CHECK): vsx_xfuncs = the entry
+  claims' OWN module literal, extracted mechanically from the
+  article's goals (loop body already expanded per the engine law,
+  carriers folded), so each tie — vsx_main_eof/err/dry, the whole
+  D8 disjunction at world-vector grain over (MkXModule (vsx_xfuncs)
+  65536 131072) — closes by ONE unfold + the article citation, no
+  compute at all (the scalar twin needed its stop-list compute
+  because its ssx_xfuncs respelled carriers; extraction is the
+  cheaper tie). Teeth measured: shim-slot 10/11 swap and leaf arity
+  2->3 each turn vsx_main_eof RED. Bytes = enc_image_ord/
+  img_offs_ord/enc_winelf at [65536,131072), entry slot 9. The
+  loader's zero-fill now realizes TWO premises (total cell 65536
+  AND the zero source cell 130512); the XMM file is quantified
+  ARBITRARY (fn 13 ground-zeroes it in-image), so enc_winelf's
+  glue is unchanged — no vector zeroing exists anywhere. (2) The
+  run-only write glue sha256sum_shani_write.shard (check-green
+  2081/0, NEVER a target — separation-of-duty as the twin). (3)
+  THE DIFFERENTIAL sha256sum_shani_diff.sh (Opus-delegated per the
+  standing split): CPUID-gates FIRST with shani_diff.sh's
+  loud-SKIP wording (exit 0, "nothing adjudicated"; the CI runner
+  has no sha_ni so the SKIP line is CI's expected output;
+  SHANI_DIFF_FORCE_NO_SHA=1 exercises the path) — the ONLY skip;
+  missing coreutils/openssl/getcap/readelf still FAILs. DOUBLE
+  ORACLE per the ratified slice text: every digest row passes only
+  when bin == coreutils == openssl, oracle-vs-oracle disagreement
+  gets its OWN FAIL text (and the header records the caveat:
+  openssl may dispatch to the same SHA silicon, so oracle 2 is
+  independent software, not hardware — the hardware leaf stays
+  coreutils' path). RESULT on this box (AMD 5900X, sha_ni): **56
+  OK / 0 FAIL, exit 0**, twice; ELF = 10467 bytes; the product
+  carries sha256rnds2 x32 + sha256msg1/msg2 x12 each (the scalar
+  twin has ZERO of all three — the leg cannot vacuously test
+  scalar code); abc cross-check: shani == scalar twin == both
+  oracles, both bins write exactly 64 bytes, no newline.
+  run_corpus.sh gained the differential block after the scalar
+  leg. NEXT: slice E — THE B5 NUMBER (B4's method) + the fork-D
+  §7.5 verdict + records; then E4 (user rules).
 - **E4 — clause-1 adjudication + B5 RECORD.** With the artifact in
   hand (CERT.md §4: decided WHEN THE ARTIFACT EXISTS), the user
   rules: grow the validator's disjunctive acceptance (clause 1 =
