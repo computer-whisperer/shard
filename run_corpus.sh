@@ -369,6 +369,7 @@ TARGETS=(
   examples/sha256sum/sha256sum_stream_elf.shard
   examples/sha256sum/sha256sum_shani_elf.shard
   models/x86/link.shard
+  examples/sha256sum/sha256sum_dispatch_x86.shard
   pins/proof/sketch_pin.shard
   meta/sketch/mod.req.shard
   meta/invoke/prepared.shard

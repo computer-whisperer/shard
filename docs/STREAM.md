@@ -644,11 +644,16 @@ rows, both bins vs coreutils; the streaming rows PIPE-FED — X86.md
 test). The name ruling (2026-08-01): `(bin sha256sum)` = the
 streaming program; the capped demonstrator = `(bin
 sha256sum_oneshot)`. X86.md §52 is the x86-side record.
+*[B6 R2 rename, 2026-08-10: the streaming scalar bin is now `(bin
+sha256sum_scalar)`; the plain name belongs to the B6 dispatching
+artifact. This verdict stands unchanged under the new name.]*
 
 **The verdict line (§7.5 form — a bare MET is never an artifact
 verdict):**
 
-    sha256sum: MET (artifact: unconditional)
+    sha256sum_scalar: MET (artifact: unconditional)
+    [stood as `sha256sum: MET (artifact: unconditional)` from
+     2026-08-01 until the B6 R2 rename, 2026-08-10]
 
 The artifact claims are UNCONDITIONAL in §7.5's sense — no except
 grammar, no cap condition: the disjunction covers every oracle
@@ -669,6 +674,8 @@ path).
 
     shard sha256sum (cap 61440)    10.649 s  (~96 MiB/s)
     coreutils, SHA-NI masked        1.752 s  → gap 6.1x
+    [the shard row's bin = today's sha256sum_scalar — B6 R2
+     rename, 2026-08-10]
     coreutils as shipped (SHA-NI)   0.598 s  → gap 17.8x
     openssl dgst -sha256            0.631 s  → gap 16.9x
 
@@ -1880,3 +1887,71 @@ dispatch artifact claims the plain path.
   binders: loop re-entry, seq tail); SHIFT's call arm is the
   four-lemma lookup chain at_nonneg → at_skip → at_app → at_sh.
   Full check 0.3 s; corpus row after sha256sum_shani_elf.
+- **Slice C LANDED 2026-08-10 — the dispatch article:
+  `examples/sha256sum/sha256sum_dispatch_x86.shard` (2124/0,
+  corpus-registered) + the third `(bin sha256sum …)` over sst_main +
+  the R2 renames.** The open slice-level items, decided: the SHA-NI
+  family SHIFTS (scalar keeps 0-14 and its landed indices; SHA-NI
+  moves to 15-29, entry 24 = 9+15; dispatch main = fn 30), and the
+  chip answers ride as a QUANTIFIED Cons prefix ahead of the variant
+  answer list, with each D8 leg split into TWO claims by the max-leaf
+  gate — `_lo` (4 draws, premise `(lt (mod c0 2^32) 7) = True`,
+  scalar always: old silicon consumes ONE cpuid) and `_hi` (8 draws,
+  premise False, the proof case-splitting on
+  `(int_eq (band (bshr (mod c5 2^32) 29) 1) 0)` — EBX bit 29 of the
+  leaf-7 draw-set). One claim per maxleaf case is forced, not
+  stylistic: the second draw-set's cells sit BETWEEN the first and
+  the variant answers, so no single world spelling makes both
+  consumption depths an instance of `ssm_ws its TAIL`. Six claims
+  total, `dsm_main_{eof,err,dry}_{lo,hi}`, every branch delivering
+  the SAME canonical RHS (eof: `WVExit 0` with
+  `bytes_hex (sha256 (scat (ssw_chunks its)))`; err: `WVExit 1`
+  after LxReadErr; dry: None) — the parity design's whole point at
+  the bin boundary. Chip-short answer lists refuse through wcpuid
+  exactly as mid-read exhaustion refuses through lx_step (B3's D8
+  closure convention; noted in the article header).
+  THE MECHANICS OF RECORD:
+  - **The exit-propagation call lemma DISSOLVED.** Restating the six
+    variant verdicts at BODY grain (weval_seq/wveval_seq over the
+    original modules — sdb_*/vdb_*) turned out to be MINUS-ONE-UNFOLD
+    REPLAYS of the landed proofs: the run wrapper maps WExit to
+    itself and None to None, so every RHS and every proof step after
+    the wrapper unfold carries over VERBATIM (all eight restatements
+    passed first shot). With body-grain facts in hand the call arm
+    just computes — no wrapper inversion anywhere, and the dry leg
+    (None does NOT invert through the wrapper: body-walk None, WVBrk,
+    WVTrap all map to it) needs no special treatment. This also
+    settled the deferred run-grain embedding seam: the crossing
+    happens at (XQS body) via xlk_embw (None rides), never at the
+    wrapper.
+  - **The transfer ladder**: sdw_* cross the scalar body facts
+    world→wv with the XMM file quantified; sdt_*/vdt_* land both
+    families on the merged module via xlk_extwv / xlk_shwv (the
+    shifted query respelled by one xlk_shq unfold). Every linking
+    premise is refl-grade or computes on the ground lists — the
+    slice-B consumer API held exactly as recorded.
+  - **Fuel**: N = 1610 calibrated (deliberately-failing probe claims
+    with ground draws; read the stalled call's decimal fuel from the
+    trace — but measure the CONCRETE MkXFunc body-walk term, NOT the
+    pending-arm `(xbody_of @0)` towers, which cost one wrong
+    recalibration). Scalar legs arrive at exactly
+    S^1601 (ssm_fuel its f); the SHA-NI leg sits at S^1593 and its
+    verdict wants S^1390 — the 203-unit slack rides through the
+    verdict's quantified f as `(dsm_pad (S^203 Z) f)` with
+    dsm_fuel_pad commuting the pad through ssm_fuel (std/nat's
+    add_nat is OPAQUE by module discipline — the article defines its
+    own transparent pad).
+  - **Proof-law reruns**: L9 struck twice (xfuncs_of and xbody_of
+    both stall on ctor-with-stuck-field in guard position — window
+    haves / unfold-the-accessor both times); the wvlift value
+    delivery must close by unfold+reduce, NOT compute (compute chews
+    into ssm_tr/sha256's symbolic normal form past the folded RHS
+    spelling).
+  - **R2 executed**: `(bin sha256sum_scalar)` renamed in
+    sha256sum_stream_src.shard; rename annotations at the B3 RECORD
+    verdict line, the B4 RECORD benchmark row, X86.md §52. CI-row
+    renames ride slice D with the emission re-homing, per the ladder.
+  Remaining for slice D: tie + write files (Opus), the emitted-path
+  collision (one-shot emission re-homes to sha256sum_oneshot before
+  the dispatch artifact claims examples/sha256sum/sha256sum), the
+  everywhere-runs differential.
