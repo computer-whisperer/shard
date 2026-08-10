@@ -367,6 +367,7 @@ TARGETS=(
   std/sha256/sha256.snweld.shard
   examples/sha256sum/sha256sum_shani_x86.shard
   examples/sha256sum/sha256sum_stream_elf.shard
+  examples/sha256sum/sha256sum_shani_elf.shard
   pins/proof/sketch_pin.shard
   meta/sketch/mod.req.shard
   meta/invoke/prepared.shard
@@ -1316,6 +1317,25 @@ fi
 echo "=== sha256sum: capless silicon differential ==="
 if [ -x bin/shard_eval ]; then
   bash examples/sha256sum/sha256sum_silicon_diff.sh 2>&1 || echo "FAIL sha256sum-silicon (exit $?)"
+else
+  echo "SKIPPED (needs bin/shard_eval)"
+fi
+
+# sha256sum SHA-NI variant bin-level silicon differential (STREAM.md §8.4 E3
+# slice D): the same leaf as the leg above, for the variant that computes the
+# digest through the CPU's sha256rnds2/sha256msg1/sha256msg2 units. Emits the
+# proven SHA-NI ELF fresh via its run-only write glue, asserts caplessness, and
+# drives it PIPE-FED against a DOUBLE ORACLE — coreutils sha256sum AND openssl
+# dgst — with oracle-vs-oracle disagreement given its own FAIL text. Running the
+# product needs the sha_ni CPU flag, so the script CPUID-GATES ITSELF and prints
+# one loud SKIP line (exit 0) on a runner without it; the CI runner is such a
+# box, so the skip line is the EXPECTED output there and this leg is adjudicated
+# on SHA-capable silicon. That gate is its only skip: missing
+# coreutils/openssl/getcap/readelf is still a FAIL. Per-row OK/FAIL at column 0;
+# nonzero exit adds a synthetic FAIL row (see the wasm leg's note).
+echo "=== sha256sum shani: capless silicon differential ==="
+if [ -x bin/shard_eval ]; then
+  bash examples/sha256sum/sha256sum_shani_diff.sh 2>&1 || echo "FAIL sha256sum-shani-silicon (exit $?)"
 else
   echo "SKIPPED (needs bin/shard_eval)"
 fi
