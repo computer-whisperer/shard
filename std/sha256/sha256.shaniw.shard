@@ -1,0 +1,2785 @@
+;;; sha256.shaniw.shard — THE SHA-NI MACHINE TRANCHE AT THE STREAMING
+;;; LAYOUT (Arc B rung B5, E3 slice A — docs/STREAM.md §8.4; landed
+;;; from e3a_probe 2026-08-09).
+;;;
+;;; The E2b machine tranche (sha256.shani.shard, shn_pro..shn_walk)
+;;; regenerated at THE STREAMING BIN'S LAYOUT under shnw_ names
+;;; ("shani at the window"): window [0,65536) -> [65536,131072),
+;;; mask@256 -> 130496 (the dead W frame's base — SHA-NI keeps the
+;;; schedule in registers, so W is free), K@[512,768) -> [130752,131008)
+;;; (the skeleton's own K home — byte-identical content layout),
+;;; H@[768,800) -> [131008,131040) (the skeleton's H home — the
+;;; absorber/finalizer readback equations hold unchanged).
+;;;
+;;; MECHANICALLY REGENERATED from the sha256.shani tranche text by
+;;; three ordered token maps (E2b-transplant precedent, one level up):
+;;;   1. the 48 machine-tranche names shn_X -> shnw_X (word-boundary;
+;;;      value-tier citations shn_qround/shn_kg/... stay);
+;;;   2. the address map 256->130496, 512+16i -> 130752+16i,
+;;;      768->131008, 784->131024, 800->131040, 65536->131072;
+;;;   3. the base fixes: src lower-bound premises (le 0 ..) ->
+;;;      (le 65536 ..) and the module former's base 0 -> 65536.
+;;; NO proof steps changed: every farkas gate discharge is an
+;;; index-and-multiplier row citation — (rows (goal 1) (N 1)) — with
+;;; no ground constants, so the discharges are invariant under the map.
+;;; The checker adjudicates the whole regeneration. Ground validation
+;;; was e3a_run.shard (the e2bm_run differential at this layout, 8/8).
+;;; Consumed by sha256.snweld.shard (the fold leaf composes these
+;;; stanza summits against its live loop tail).
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/facts.shard")
+(use (:: kernel facts *))
+(import "../../std/bits")
+(use (:: std bits *))
+(import "../../std/mem")
+(use (:: std mem *))
+(import "sha256.shard")
+(use (:: std sha256 sha256 *))
+(import "../../models/x86/x86.shard")
+(use (:: models x86 x86 *))
+(import "../../models/x86/vector.shard")
+(use (:: models x86 vector *))
+(import "sha256.shani.shard")
+(use (:: std sha256 sha256.shani *))
+
+;; E2b MACHINE TIER -- THE HAND BODY AND THE BLOCK WALK
+;; ===================================================================
+;; One SHA-NI block as a straight-line XVec instruction sequence, and
+;; THE BLOCK WALK (shnw_walk): walking it through the vector-tier
+;; machine (xveval_seq) from ANY entry register and XMM file computes
+;; shn_block on the loaded state and byte-flipped message groups.
+;; Landed from the E2b machine-half probe (docs/STREAM.md 8.4; summit
+;; first-check 2026-08-03). NO ground pins in this tranche: std/mem's
+;; Mem is OPAQUE in check mode (mem_get of a mem_set tree stays stuck
+;; -- the recorded M1 law), so ground machine runs live in the
+;; run-mode differential (E2b slice A's 8 rows; the block-grain
+;; silicon differential is E2c).
+;;
+;; REGISTER ALLOCATION (the E2b decision the body freezes):
+;;   XMM0  = wk (sha256rnds2's implicit third operand)
+;;   XMM1  = ABEF   XMM2 = CDGH   (roles NEVER swap: rnds2 C,A then
+;;           pshufd wk 0x0E then rnds2 A,C -- the slide law's alternation)
+;;   XMM3..XMM6 = the rotating four-group message window (W_j lives in
+;;           XMM(3 + j mod 4); the sched step overwrites g_j with g_{j+4})
+;;   XMM7  = sched temp (mov g3; palignr g2 4)
+;;   XMM8  = the byte-flip mask, resident (XVBswap32's fence)
+;;   XMM9/XMM10 = entry ABEF/CDGH saved for the paddd feedback
+;;   XMM11 = K-group load target + pack/unpack shuffle temp
+;;   scalar: RDI = src (the 64-byte block, caller's argument),
+;;           R10 = home pointer scratch, R11 = K-table pointer
+;; THE STREAMING-LAYOUT HOMES (the E3a rebase of the article's teaching homes):
+;;   mask@130496, K table@[130752,131008) (16 groups, shn_kg i at 130752+16i),
+;;   H@[131008,131040) (linear dword layout: a..d then e..h), block at RDI (the caller's in-window pointer).
+
+;; ---- the hand body -----------------------------------------------------------------
+
+;; the prologue: mask resident, the state home packed to ABEF/CDGH and
+;; saved for the feedback, the four message groups loaded and byte-flipped.
+(fn shnw_pro ((rest (List XInstr))) (List XInstr)
+  (Cons
+    (XMovRI R10 130496)
+    (Cons
+      (XVec (XVLoad XMM8 (AReg R10)))
+      (Cons
+        (XMovRI R10 131008)
+        (Cons
+          (XVec (XVLoad XMM1 (AReg R10)))
+          (Cons
+            (XMovRI R10 131024)
+            (Cons
+              (XVec (XVLoad XMM2 (AReg R10)))
+              (Cons
+                (XVec (XVPshufd XMM1 XMM1 177))
+                (Cons
+                  (XVec (XVPshufd XMM2 XMM2 27))
+                  (Cons
+                    (XVec (XVPshufd XMM11 XMM1 14))
+                    (Cons
+                      (XVec (XVPalignr XMM1 XMM2 8))
+                      (Cons
+                        (XVec (XVPunpckL XMM2 XMM11))
+                        (Cons
+                          (XVec (XVMov XMM9 XMM1))
+                          (Cons
+                            (XVec (XVMov XMM10 XMM2))
+                            (Cons
+                              (XVec (XVLoad XMM3 (AReg RDI)))
+                              (Cons
+                                (XBin XAdd RDI (SImm 16))
+                                (Cons
+                                  (XVec (XVLoad XMM4 (AReg RDI)))
+                                  (Cons
+                                    (XBin XAdd RDI (SImm 16))
+                                    (Cons
+                                      (XVec (XVLoad XMM5 (AReg RDI)))
+                                      (Cons
+                                        (XBin XAdd RDI (SImm 16))
+                                        (Cons
+                                          (XVec (XVLoad XMM6 (AReg RDI)))
+                                          (Cons
+                                            (XVec (XVBswap32 XMM3 XMM8))
+                                            (Cons
+                                              (XVec (XVBswap32 XMM4 XMM8))
+                                              (Cons
+                                                (XVec (XVBswap32 XMM5 XMM8))
+                                                (Cons
+                                                  (XVec (XVBswap32 XMM6 XMM8))
+                                                  rest)))))))))))))))))))))))))
+
+;; qround 0 (with the just-in-time schedule step): wk = W_0 + K_0 in XMM0, two rnds2 issues
+;; around a pshufd of wk's high half.
+;; The schedule step overwrites XMM3 (holding W_0) with W_4.
+(fn shnw_q0 ((rest (List XInstr))) (List XInstr)
+  (Cons
+    (XMovRI R11 130752)
+    (Cons
+      (XVec (XVLoad XMM11 (AReg R11)))
+      (Cons
+        (XVec (XVMov XMM0 XMM3))
+        (Cons
+          (XVec (XVPaddd XMM0 XMM11))
+          (Cons
+            (XVec (XVMov XMM7 XMM6))
+            (Cons
+              (XVec (XVPalignr XMM7 XMM5 4))
+              (Cons
+                (XVec (XVSha256Msg1 XMM3 XMM4))
+                (Cons
+                  (XVec (XVPaddd XMM3 XMM7))
+                  (Cons
+                    (XVec (XVSha256Msg2 XMM3 XMM6))
+                    (Cons
+                      (XVec (XVSha256Rnds2 XMM2 XMM1))
+                      (Cons
+                        (XVec (XVPshufd XMM0 XMM0 14))
+                        (Cons (XVec (XVSha256Rnds2 XMM1 XMM2)) rest)))))))))))))
+
+;; qround 1 (with the just-in-time schedule step): wk = W_1 + K_1 in XMM0, two rnds2 issues
+;; around a pshufd of wk's high half.
+;; The schedule step overwrites XMM4 (holding W_1) with W_5.
+(fn shnw_q1 ((rest (List XInstr))) (List XInstr)
+  (Cons
+    (XMovRI R11 130768)
+    (Cons
+      (XVec (XVLoad XMM11 (AReg R11)))
+      (Cons
+        (XVec (XVMov XMM0 XMM4))
+        (Cons
+          (XVec (XVPaddd XMM0 XMM11))
+          (Cons
+            (XVec (XVMov XMM7 XMM3))
+            (Cons
+              (XVec (XVPalignr XMM7 XMM6 4))
+              (Cons
+                (XVec (XVSha256Msg1 XMM4 XMM5))
+                (Cons
+                  (XVec (XVPaddd XMM4 XMM7))
+                  (Cons
+                    (XVec (XVSha256Msg2 XMM4 XMM3))
+                    (Cons
+                      (XVec (XVSha256Rnds2 XMM2 XMM1))
+                      (Cons
+                        (XVec (XVPshufd XMM0 XMM0 14))
+                        (Cons (XVec (XVSha256Rnds2 XMM1 XMM2)) rest)))))))))))))
+
+;; qround 2 (with the just-in-time schedule step): wk = W_2 + K_2 in XMM0, two rnds2 issues
+;; around a pshufd of wk's high half.
+;; The schedule step overwrites XMM5 (holding W_2) with W_6.
+(fn shnw_q2 ((rest (List XInstr))) (List XInstr)
+  (Cons
+    (XMovRI R11 130784)
+    (Cons
+      (XVec (XVLoad XMM11 (AReg R11)))
+      (Cons
+        (XVec (XVMov XMM0 XMM5))
+        (Cons
+          (XVec (XVPaddd XMM0 XMM11))
+          (Cons
+            (XVec (XVMov XMM7 XMM4))
+            (Cons
+              (XVec (XVPalignr XMM7 XMM3 4))
+              (Cons
+                (XVec (XVSha256Msg1 XMM5 XMM6))
+                (Cons
+                  (XVec (XVPaddd XMM5 XMM7))
+                  (Cons
+                    (XVec (XVSha256Msg2 XMM5 XMM4))
+                    (Cons
+                      (XVec (XVSha256Rnds2 XMM2 XMM1))
+                      (Cons
+                        (XVec (XVPshufd XMM0 XMM0 14))
+                        (Cons (XVec (XVSha256Rnds2 XMM1 XMM2)) rest)))))))))))))
+
+;; qround 3 (with the just-in-time schedule step): wk = W_3 + K_3 in XMM0, two rnds2 issues
+;; around a pshufd of wk's high half.
+;; The schedule step overwrites XMM6 (holding W_3) with W_7.
+(fn shnw_q3 ((rest (List XInstr))) (List XInstr)
+  (Cons
+    (XMovRI R11 130800)
+    (Cons
+      (XVec (XVLoad XMM11 (AReg R11)))
+      (Cons
+        (XVec (XVMov XMM0 XMM6))
+        (Cons
+          (XVec (XVPaddd XMM0 XMM11))
+          (Cons
+            (XVec (XVMov XMM7 XMM5))
+            (Cons
+              (XVec (XVPalignr XMM7 XMM4 4))
+              (Cons
+                (XVec (XVSha256Msg1 XMM6 XMM3))
+                (Cons
+                  (XVec (XVPaddd XMM6 XMM7))
+                  (Cons
+                    (XVec (XVSha256Msg2 XMM6 XMM5))
+                    (Cons
+                      (XVec (XVSha256Rnds2 XMM2 XMM1))
+                      (Cons
+                        (XVec (XVPshufd XMM0 XMM0 14))
+                        (Cons (XVec (XVSha256Rnds2 XMM1 XMM2)) rest)))))))))))))
+
+;; qround 4 (with the just-in-time schedule step): wk = W_4 + K_4 in XMM0, two rnds2 issues
+;; around a pshufd of wk's high half.
+;; The schedule step overwrites XMM3 (holding W_4) with W_8.
+(fn shnw_q4 ((rest (List XInstr))) (List XInstr)
+  (Cons
+    (XMovRI R11 130816)
+    (Cons
+      (XVec (XVLoad XMM11 (AReg R11)))
+      (Cons
+        (XVec (XVMov XMM0 XMM3))
+        (Cons
+          (XVec (XVPaddd XMM0 XMM11))
+          (Cons
+            (XVec (XVMov XMM7 XMM6))
+            (Cons
+              (XVec (XVPalignr XMM7 XMM5 4))
+              (Cons
+                (XVec (XVSha256Msg1 XMM3 XMM4))
+                (Cons
+                  (XVec (XVPaddd XMM3 XMM7))
+                  (Cons
+                    (XVec (XVSha256Msg2 XMM3 XMM6))
+                    (Cons
+                      (XVec (XVSha256Rnds2 XMM2 XMM1))
+                      (Cons
+                        (XVec (XVPshufd XMM0 XMM0 14))
+                        (Cons (XVec (XVSha256Rnds2 XMM1 XMM2)) rest)))))))))))))
+
+;; qround 5 (with the just-in-time schedule step): wk = W_5 + K_5 in XMM0, two rnds2 issues
+;; around a pshufd of wk's high half.
+;; The schedule step overwrites XMM4 (holding W_5) with W_9.
+(fn shnw_q5 ((rest (List XInstr))) (List XInstr)
+  (Cons
+    (XMovRI R11 130832)
+    (Cons
+      (XVec (XVLoad XMM11 (AReg R11)))
+      (Cons
+        (XVec (XVMov XMM0 XMM4))
+        (Cons
+          (XVec (XVPaddd XMM0 XMM11))
+          (Cons
+            (XVec (XVMov XMM7 XMM3))
+            (Cons
+              (XVec (XVPalignr XMM7 XMM6 4))
+              (Cons
+                (XVec (XVSha256Msg1 XMM4 XMM5))
+                (Cons
+                  (XVec (XVPaddd XMM4 XMM7))
+                  (Cons
+                    (XVec (XVSha256Msg2 XMM4 XMM3))
+                    (Cons
+                      (XVec (XVSha256Rnds2 XMM2 XMM1))
+                      (Cons
+                        (XVec (XVPshufd XMM0 XMM0 14))
+                        (Cons (XVec (XVSha256Rnds2 XMM1 XMM2)) rest)))))))))))))
+
+;; qround 6 (with the just-in-time schedule step): wk = W_6 + K_6 in XMM0, two rnds2 issues
+;; around a pshufd of wk's high half.
+;; The schedule step overwrites XMM5 (holding W_6) with W_10.
+(fn shnw_q6 ((rest (List XInstr))) (List XInstr)
+  (Cons
+    (XMovRI R11 130848)
+    (Cons
+      (XVec (XVLoad XMM11 (AReg R11)))
+      (Cons
+        (XVec (XVMov XMM0 XMM5))
+        (Cons
+          (XVec (XVPaddd XMM0 XMM11))
+          (Cons
+            (XVec (XVMov XMM7 XMM4))
+            (Cons
+              (XVec (XVPalignr XMM7 XMM3 4))
+              (Cons
+                (XVec (XVSha256Msg1 XMM5 XMM6))
+                (Cons
+                  (XVec (XVPaddd XMM5 XMM7))
+                  (Cons
+                    (XVec (XVSha256Msg2 XMM5 XMM4))
+                    (Cons
+                      (XVec (XVSha256Rnds2 XMM2 XMM1))
+                      (Cons
+                        (XVec (XVPshufd XMM0 XMM0 14))
+                        (Cons (XVec (XVSha256Rnds2 XMM1 XMM2)) rest)))))))))))))
+
+;; qround 7 (with the just-in-time schedule step): wk = W_7 + K_7 in XMM0, two rnds2 issues
+;; around a pshufd of wk's high half.
+;; The schedule step overwrites XMM6 (holding W_7) with W_11.
+(fn shnw_q7 ((rest (List XInstr))) (List XInstr)
+  (Cons
+    (XMovRI R11 130864)
+    (Cons
+      (XVec (XVLoad XMM11 (AReg R11)))
+      (Cons
+        (XVec (XVMov XMM0 XMM6))
+        (Cons
+          (XVec (XVPaddd XMM0 XMM11))
+          (Cons
+            (XVec (XVMov XMM7 XMM5))
+            (Cons
+              (XVec (XVPalignr XMM7 XMM4 4))
+              (Cons
+                (XVec (XVSha256Msg1 XMM6 XMM3))
+                (Cons
+                  (XVec (XVPaddd XMM6 XMM7))
+                  (Cons
+                    (XVec (XVSha256Msg2 XMM6 XMM5))
+                    (Cons
+                      (XVec (XVSha256Rnds2 XMM2 XMM1))
+                      (Cons
+                        (XVec (XVPshufd XMM0 XMM0 14))
+                        (Cons (XVec (XVSha256Rnds2 XMM1 XMM2)) rest)))))))))))))
+
+;; qround 8 (with the just-in-time schedule step): wk = W_8 + K_8 in XMM0, two rnds2 issues
+;; around a pshufd of wk's high half.
+;; The schedule step overwrites XMM3 (holding W_8) with W_12.
+(fn shnw_q8 ((rest (List XInstr))) (List XInstr)
+  (Cons
+    (XMovRI R11 130880)
+    (Cons
+      (XVec (XVLoad XMM11 (AReg R11)))
+      (Cons
+        (XVec (XVMov XMM0 XMM3))
+        (Cons
+          (XVec (XVPaddd XMM0 XMM11))
+          (Cons
+            (XVec (XVMov XMM7 XMM6))
+            (Cons
+              (XVec (XVPalignr XMM7 XMM5 4))
+              (Cons
+                (XVec (XVSha256Msg1 XMM3 XMM4))
+                (Cons
+                  (XVec (XVPaddd XMM3 XMM7))
+                  (Cons
+                    (XVec (XVSha256Msg2 XMM3 XMM6))
+                    (Cons
+                      (XVec (XVSha256Rnds2 XMM2 XMM1))
+                      (Cons
+                        (XVec (XVPshufd XMM0 XMM0 14))
+                        (Cons (XVec (XVSha256Rnds2 XMM1 XMM2)) rest)))))))))))))
+
+;; qround 9 (with the just-in-time schedule step): wk = W_9 + K_9 in XMM0, two rnds2 issues
+;; around a pshufd of wk's high half.
+;; The schedule step overwrites XMM4 (holding W_9) with W_13.
+(fn shnw_q9 ((rest (List XInstr))) (List XInstr)
+  (Cons
+    (XMovRI R11 130896)
+    (Cons
+      (XVec (XVLoad XMM11 (AReg R11)))
+      (Cons
+        (XVec (XVMov XMM0 XMM4))
+        (Cons
+          (XVec (XVPaddd XMM0 XMM11))
+          (Cons
+            (XVec (XVMov XMM7 XMM3))
+            (Cons
+              (XVec (XVPalignr XMM7 XMM6 4))
+              (Cons
+                (XVec (XVSha256Msg1 XMM4 XMM5))
+                (Cons
+                  (XVec (XVPaddd XMM4 XMM7))
+                  (Cons
+                    (XVec (XVSha256Msg2 XMM4 XMM3))
+                    (Cons
+                      (XVec (XVSha256Rnds2 XMM2 XMM1))
+                      (Cons
+                        (XVec (XVPshufd XMM0 XMM0 14))
+                        (Cons (XVec (XVSha256Rnds2 XMM1 XMM2)) rest)))))))))))))
+
+;; qround 10 (with the just-in-time schedule step): wk = W_10 + K_10 in XMM0, two rnds2 issues
+;; around a pshufd of wk's high half.
+;; The schedule step overwrites XMM5 (holding W_10) with W_14.
+(fn shnw_q10 ((rest (List XInstr))) (List XInstr)
+  (Cons
+    (XMovRI R11 130912)
+    (Cons
+      (XVec (XVLoad XMM11 (AReg R11)))
+      (Cons
+        (XVec (XVMov XMM0 XMM5))
+        (Cons
+          (XVec (XVPaddd XMM0 XMM11))
+          (Cons
+            (XVec (XVMov XMM7 XMM4))
+            (Cons
+              (XVec (XVPalignr XMM7 XMM3 4))
+              (Cons
+                (XVec (XVSha256Msg1 XMM5 XMM6))
+                (Cons
+                  (XVec (XVPaddd XMM5 XMM7))
+                  (Cons
+                    (XVec (XVSha256Msg2 XMM5 XMM4))
+                    (Cons
+                      (XVec (XVSha256Rnds2 XMM2 XMM1))
+                      (Cons
+                        (XVec (XVPshufd XMM0 XMM0 14))
+                        (Cons (XVec (XVSha256Rnds2 XMM1 XMM2)) rest)))))))))))))
+
+;; qround 11 (with the just-in-time schedule step): wk = W_11 + K_11 in XMM0, two rnds2 issues
+;; around a pshufd of wk's high half.
+;; The schedule step overwrites XMM6 (holding W_11) with W_15.
+(fn shnw_q11 ((rest (List XInstr))) (List XInstr)
+  (Cons
+    (XMovRI R11 130928)
+    (Cons
+      (XVec (XVLoad XMM11 (AReg R11)))
+      (Cons
+        (XVec (XVMov XMM0 XMM6))
+        (Cons
+          (XVec (XVPaddd XMM0 XMM11))
+          (Cons
+            (XVec (XVMov XMM7 XMM5))
+            (Cons
+              (XVec (XVPalignr XMM7 XMM4 4))
+              (Cons
+                (XVec (XVSha256Msg1 XMM6 XMM3))
+                (Cons
+                  (XVec (XVPaddd XMM6 XMM7))
+                  (Cons
+                    (XVec (XVSha256Msg2 XMM6 XMM5))
+                    (Cons
+                      (XVec (XVSha256Rnds2 XMM2 XMM1))
+                      (Cons
+                        (XVec (XVPshufd XMM0 XMM0 14))
+                        (Cons (XVec (XVSha256Rnds2 XMM1 XMM2)) rest)))))))))))))
+
+;; qround 12 (schedule-free (the last four)): wk = W_12 + K_12 in XMM0, two rnds2 issues
+;; around a pshufd of wk's high half.
+(fn shnw_q12 ((rest (List XInstr))) (List XInstr)
+  (Cons
+    (XMovRI R11 130944)
+    (Cons
+      (XVec (XVLoad XMM11 (AReg R11)))
+      (Cons
+        (XVec (XVMov XMM0 XMM3))
+        (Cons
+          (XVec (XVPaddd XMM0 XMM11))
+          (Cons
+            (XVec (XVSha256Rnds2 XMM2 XMM1))
+            (Cons
+              (XVec (XVPshufd XMM0 XMM0 14))
+              (Cons (XVec (XVSha256Rnds2 XMM1 XMM2)) rest))))))))
+
+;; qround 13 (schedule-free (the last four)): wk = W_13 + K_13 in XMM0, two rnds2 issues
+;; around a pshufd of wk's high half.
+(fn shnw_q13 ((rest (List XInstr))) (List XInstr)
+  (Cons
+    (XMovRI R11 130960)
+    (Cons
+      (XVec (XVLoad XMM11 (AReg R11)))
+      (Cons
+        (XVec (XVMov XMM0 XMM4))
+        (Cons
+          (XVec (XVPaddd XMM0 XMM11))
+          (Cons
+            (XVec (XVSha256Rnds2 XMM2 XMM1))
+            (Cons
+              (XVec (XVPshufd XMM0 XMM0 14))
+              (Cons (XVec (XVSha256Rnds2 XMM1 XMM2)) rest))))))))
+
+;; qround 14 (schedule-free (the last four)): wk = W_14 + K_14 in XMM0, two rnds2 issues
+;; around a pshufd of wk's high half.
+(fn shnw_q14 ((rest (List XInstr))) (List XInstr)
+  (Cons
+    (XMovRI R11 130976)
+    (Cons
+      (XVec (XVLoad XMM11 (AReg R11)))
+      (Cons
+        (XVec (XVMov XMM0 XMM5))
+        (Cons
+          (XVec (XVPaddd XMM0 XMM11))
+          (Cons
+            (XVec (XVSha256Rnds2 XMM2 XMM1))
+            (Cons
+              (XVec (XVPshufd XMM0 XMM0 14))
+              (Cons (XVec (XVSha256Rnds2 XMM1 XMM2)) rest))))))))
+
+;; qround 15 (schedule-free (the last four)): wk = W_15 + K_15 in XMM0, two rnds2 issues
+;; around a pshufd of wk's high half.
+(fn shnw_q15 ((rest (List XInstr))) (List XInstr)
+  (Cons
+    (XMovRI R11 130992)
+    (Cons
+      (XVec (XVLoad XMM11 (AReg R11)))
+      (Cons
+        (XVec (XVMov XMM0 XMM6))
+        (Cons
+          (XVec (XVPaddd XMM0 XMM11))
+          (Cons
+            (XVec (XVSha256Rnds2 XMM2 XMM1))
+            (Cons
+              (XVec (XVPshufd XMM0 XMM0 14))
+              (Cons (XVec (XVSha256Rnds2 XMM1 XMM2)) rest))))))))
+
+;; the epilogue: paddd feedback against the saved entry state, the unpack
+;; shuffles, and the two stores back to the state home.
+(fn shnw_epi ((rest (List XInstr))) (List XInstr)
+  (Cons
+    (XVec (XVPaddd XMM1 XMM9))
+    (Cons
+      (XVec (XVPaddd XMM2 XMM10))
+      (Cons
+        (XVec (XVPshufd XMM1 XMM1 27))
+        (Cons
+          (XVec (XVPshufd XMM2 XMM2 27))
+          (Cons
+            (XVec (XVMov XMM11 XMM1))
+            (Cons
+              (XVec (XVPunpckL XMM1 XMM2))
+              (Cons
+                (XVec (XVPunpckH XMM11 XMM2))
+                (Cons
+                  (XMovRI R10 131008)
+                  (Cons
+                    (XVec (XVStore (AReg R10) XMM1))
+                    (Cons
+                      (XMovRI R10 131024)
+                      (Cons (XVec (XVStore (AReg R10) XMM11)) rest))))))))))))
+
+;; the whole body: the stanzas composed, each Cons'ing onto the next.
+(fn shnw_body () (List XInstr)
+  (shnw_pro
+    (shnw_q0
+      (shnw_q1
+        (shnw_q2
+          (shnw_q3
+            (shnw_q4
+              (shnw_q5
+                (shnw_q6
+                  (shnw_q7
+                    (shnw_q8
+                      (shnw_q9
+                        (shnw_q10
+                          (shnw_q11
+                            (shnw_q12
+                              (shnw_q13 (shnw_q14 (shnw_q15 (shnw_epi Nil)))))))))))))))))))
+
+;; the one-function module: the body at index 0, window [65536,131072).
+(fn shnw_m () XModule
+  (MkXModule (Cons (MkXFunc 0 (shnw_body)) Nil) 65536 131072))
+
+;; the state home: linear dword layout, a..d at 131008, e..h at 131024.
+(fn shnw_hmem ((m Mem) (st H8)) Mem
+  (vstore
+    (vstore m 131008 (MkXmm (shn_ha st) (shn_hb st) (shn_hc st) (shn_hd st)))
+    131024
+    (MkXmm (shn_he st) (shn_hf st) (shn_hg st) (shn_hh st))))
+
+;; ---- THE STANZA LAWS ---------------------------------------------------------------
+;;
+;; One law per qround stanza: its twelve (or seven) instructions walked at a
+;; FREE fuel tail and a FREE instruction tail, so the laws chain by rewriting
+;; without ever running the walk past the stanza's end. Everything a stanza
+;; produces stays FOLDED behind the article's own functions -- shn_qround's
+;; two projections and shn_sstep -- which is the whole point: letting those
+;; trees expand is the measured tetranacci blow-up (a symbolic shn_block
+;; compute core-dumps at ~168 s).
+;;
+;; Both records are spelled OPEN (MkRegs / MkXmms over variables): an abstract
+;; record leaves every read a stuck projection, and the address gates then
+;; never resolve.
+
+;; qround 0: the schedule step folds to shn_sstep; the round state folds to shn_qround's two projections.
+(claim shnw_law_q0
+  (goal
+    ((f Nat)
+     (rest (List XInstr))
+     (mem Mem)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm))
+    ()
+    (=
+      (xveval_seq
+        (S (S (S (S (S (S (S (S (S (S (S (S (S f)))))))))))))
+        (shnw_m)
+        (shnw_q0 rest)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (xveval_seq
+        (S f)
+        (shnw_m)
+        rest
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 130752 a11 a12 a13 a14)
+        (MkXmms
+          (vpshufd (vpaddd v3 (vload mem 130752)) 14)
+          (rabef_of (shn_qround (MkShnRs v1 v2) v3 (vload mem 130752)))
+          (rcdgh_of (shn_qround (MkShnRs v1 v2) v3 (vload mem 130752)))
+          (shn_sstep v3 v4 v5 v6)
+          v4
+          v5
+          v6
+          (vpalignr v6 v5 4)
+          v8
+          v9
+          v10
+          (vload mem 130752)
+          v12
+          v13
+          v14
+          v15)
+        mem)))
+  (steps
+    ((compute lhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2))
+     (compute rhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2)))
+    refl))
+
+;; qround 1: the schedule step folds to shn_sstep; the round state folds to shn_qround's two projections.
+(claim shnw_law_q1
+  (goal
+    ((f Nat)
+     (rest (List XInstr))
+     (mem Mem)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm))
+    ()
+    (=
+      (xveval_seq
+        (S (S (S (S (S (S (S (S (S (S (S (S (S f)))))))))))))
+        (shnw_m)
+        (shnw_q1 rest)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (xveval_seq
+        (S f)
+        (shnw_m)
+        rest
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 130768 a11 a12 a13 a14)
+        (MkXmms
+          (vpshufd (vpaddd v4 (vload mem 130768)) 14)
+          (rabef_of (shn_qround (MkShnRs v1 v2) v4 (vload mem 130768)))
+          (rcdgh_of (shn_qround (MkShnRs v1 v2) v4 (vload mem 130768)))
+          v3
+          (shn_sstep v4 v5 v6 v3)
+          v5
+          v6
+          (vpalignr v3 v6 4)
+          v8
+          v9
+          v10
+          (vload mem 130768)
+          v12
+          v13
+          v14
+          v15)
+        mem)))
+  (steps
+    ((compute lhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2))
+     (compute rhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2)))
+    refl))
+
+;; qround 2: the schedule step folds to shn_sstep; the round state folds to shn_qround's two projections.
+(claim shnw_law_q2
+  (goal
+    ((f Nat)
+     (rest (List XInstr))
+     (mem Mem)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm))
+    ()
+    (=
+      (xveval_seq
+        (S (S (S (S (S (S (S (S (S (S (S (S (S f)))))))))))))
+        (shnw_m)
+        (shnw_q2 rest)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (xveval_seq
+        (S f)
+        (shnw_m)
+        rest
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 130784 a11 a12 a13 a14)
+        (MkXmms
+          (vpshufd (vpaddd v5 (vload mem 130784)) 14)
+          (rabef_of (shn_qround (MkShnRs v1 v2) v5 (vload mem 130784)))
+          (rcdgh_of (shn_qround (MkShnRs v1 v2) v5 (vload mem 130784)))
+          v3
+          v4
+          (shn_sstep v5 v6 v3 v4)
+          v6
+          (vpalignr v4 v3 4)
+          v8
+          v9
+          v10
+          (vload mem 130784)
+          v12
+          v13
+          v14
+          v15)
+        mem)))
+  (steps
+    ((compute lhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2))
+     (compute rhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2)))
+    refl))
+
+;; qround 3: the schedule step folds to shn_sstep; the round state folds to shn_qround's two projections.
+(claim shnw_law_q3
+  (goal
+    ((f Nat)
+     (rest (List XInstr))
+     (mem Mem)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm))
+    ()
+    (=
+      (xveval_seq
+        (S (S (S (S (S (S (S (S (S (S (S (S (S f)))))))))))))
+        (shnw_m)
+        (shnw_q3 rest)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (xveval_seq
+        (S f)
+        (shnw_m)
+        rest
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 130800 a11 a12 a13 a14)
+        (MkXmms
+          (vpshufd (vpaddd v6 (vload mem 130800)) 14)
+          (rabef_of (shn_qround (MkShnRs v1 v2) v6 (vload mem 130800)))
+          (rcdgh_of (shn_qround (MkShnRs v1 v2) v6 (vload mem 130800)))
+          v3
+          v4
+          v5
+          (shn_sstep v6 v3 v4 v5)
+          (vpalignr v5 v4 4)
+          v8
+          v9
+          v10
+          (vload mem 130800)
+          v12
+          v13
+          v14
+          v15)
+        mem)))
+  (steps
+    ((compute lhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2))
+     (compute rhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2)))
+    refl))
+
+;; qround 4: the schedule step folds to shn_sstep; the round state folds to shn_qround's two projections.
+(claim shnw_law_q4
+  (goal
+    ((f Nat)
+     (rest (List XInstr))
+     (mem Mem)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm))
+    ()
+    (=
+      (xveval_seq
+        (S (S (S (S (S (S (S (S (S (S (S (S (S f)))))))))))))
+        (shnw_m)
+        (shnw_q4 rest)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (xveval_seq
+        (S f)
+        (shnw_m)
+        rest
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 130816 a11 a12 a13 a14)
+        (MkXmms
+          (vpshufd (vpaddd v3 (vload mem 130816)) 14)
+          (rabef_of (shn_qround (MkShnRs v1 v2) v3 (vload mem 130816)))
+          (rcdgh_of (shn_qround (MkShnRs v1 v2) v3 (vload mem 130816)))
+          (shn_sstep v3 v4 v5 v6)
+          v4
+          v5
+          v6
+          (vpalignr v6 v5 4)
+          v8
+          v9
+          v10
+          (vload mem 130816)
+          v12
+          v13
+          v14
+          v15)
+        mem)))
+  (steps
+    ((compute lhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2))
+     (compute rhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2)))
+    refl))
+
+;; qround 5: the schedule step folds to shn_sstep; the round state folds to shn_qround's two projections.
+(claim shnw_law_q5
+  (goal
+    ((f Nat)
+     (rest (List XInstr))
+     (mem Mem)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm))
+    ()
+    (=
+      (xveval_seq
+        (S (S (S (S (S (S (S (S (S (S (S (S (S f)))))))))))))
+        (shnw_m)
+        (shnw_q5 rest)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (xveval_seq
+        (S f)
+        (shnw_m)
+        rest
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 130832 a11 a12 a13 a14)
+        (MkXmms
+          (vpshufd (vpaddd v4 (vload mem 130832)) 14)
+          (rabef_of (shn_qround (MkShnRs v1 v2) v4 (vload mem 130832)))
+          (rcdgh_of (shn_qround (MkShnRs v1 v2) v4 (vload mem 130832)))
+          v3
+          (shn_sstep v4 v5 v6 v3)
+          v5
+          v6
+          (vpalignr v3 v6 4)
+          v8
+          v9
+          v10
+          (vload mem 130832)
+          v12
+          v13
+          v14
+          v15)
+        mem)))
+  (steps
+    ((compute lhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2))
+     (compute rhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2)))
+    refl))
+
+;; qround 6: the schedule step folds to shn_sstep; the round state folds to shn_qround's two projections.
+(claim shnw_law_q6
+  (goal
+    ((f Nat)
+     (rest (List XInstr))
+     (mem Mem)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm))
+    ()
+    (=
+      (xveval_seq
+        (S (S (S (S (S (S (S (S (S (S (S (S (S f)))))))))))))
+        (shnw_m)
+        (shnw_q6 rest)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (xveval_seq
+        (S f)
+        (shnw_m)
+        rest
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 130848 a11 a12 a13 a14)
+        (MkXmms
+          (vpshufd (vpaddd v5 (vload mem 130848)) 14)
+          (rabef_of (shn_qround (MkShnRs v1 v2) v5 (vload mem 130848)))
+          (rcdgh_of (shn_qround (MkShnRs v1 v2) v5 (vload mem 130848)))
+          v3
+          v4
+          (shn_sstep v5 v6 v3 v4)
+          v6
+          (vpalignr v4 v3 4)
+          v8
+          v9
+          v10
+          (vload mem 130848)
+          v12
+          v13
+          v14
+          v15)
+        mem)))
+  (steps
+    ((compute lhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2))
+     (compute rhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2)))
+    refl))
+
+;; qround 7: the schedule step folds to shn_sstep; the round state folds to shn_qround's two projections.
+(claim shnw_law_q7
+  (goal
+    ((f Nat)
+     (rest (List XInstr))
+     (mem Mem)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm))
+    ()
+    (=
+      (xveval_seq
+        (S (S (S (S (S (S (S (S (S (S (S (S (S f)))))))))))))
+        (shnw_m)
+        (shnw_q7 rest)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (xveval_seq
+        (S f)
+        (shnw_m)
+        rest
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 130864 a11 a12 a13 a14)
+        (MkXmms
+          (vpshufd (vpaddd v6 (vload mem 130864)) 14)
+          (rabef_of (shn_qround (MkShnRs v1 v2) v6 (vload mem 130864)))
+          (rcdgh_of (shn_qround (MkShnRs v1 v2) v6 (vload mem 130864)))
+          v3
+          v4
+          v5
+          (shn_sstep v6 v3 v4 v5)
+          (vpalignr v5 v4 4)
+          v8
+          v9
+          v10
+          (vload mem 130864)
+          v12
+          v13
+          v14
+          v15)
+        mem)))
+  (steps
+    ((compute lhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2))
+     (compute rhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2)))
+    refl))
+
+;; qround 8: the schedule step folds to shn_sstep; the round state folds to shn_qround's two projections.
+(claim shnw_law_q8
+  (goal
+    ((f Nat)
+     (rest (List XInstr))
+     (mem Mem)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm))
+    ()
+    (=
+      (xveval_seq
+        (S (S (S (S (S (S (S (S (S (S (S (S (S f)))))))))))))
+        (shnw_m)
+        (shnw_q8 rest)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (xveval_seq
+        (S f)
+        (shnw_m)
+        rest
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 130880 a11 a12 a13 a14)
+        (MkXmms
+          (vpshufd (vpaddd v3 (vload mem 130880)) 14)
+          (rabef_of (shn_qround (MkShnRs v1 v2) v3 (vload mem 130880)))
+          (rcdgh_of (shn_qround (MkShnRs v1 v2) v3 (vload mem 130880)))
+          (shn_sstep v3 v4 v5 v6)
+          v4
+          v5
+          v6
+          (vpalignr v6 v5 4)
+          v8
+          v9
+          v10
+          (vload mem 130880)
+          v12
+          v13
+          v14
+          v15)
+        mem)))
+  (steps
+    ((compute lhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2))
+     (compute rhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2)))
+    refl))
+
+;; qround 9: the schedule step folds to shn_sstep; the round state folds to shn_qround's two projections.
+(claim shnw_law_q9
+  (goal
+    ((f Nat)
+     (rest (List XInstr))
+     (mem Mem)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm))
+    ()
+    (=
+      (xveval_seq
+        (S (S (S (S (S (S (S (S (S (S (S (S (S f)))))))))))))
+        (shnw_m)
+        (shnw_q9 rest)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (xveval_seq
+        (S f)
+        (shnw_m)
+        rest
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 130896 a11 a12 a13 a14)
+        (MkXmms
+          (vpshufd (vpaddd v4 (vload mem 130896)) 14)
+          (rabef_of (shn_qround (MkShnRs v1 v2) v4 (vload mem 130896)))
+          (rcdgh_of (shn_qround (MkShnRs v1 v2) v4 (vload mem 130896)))
+          v3
+          (shn_sstep v4 v5 v6 v3)
+          v5
+          v6
+          (vpalignr v3 v6 4)
+          v8
+          v9
+          v10
+          (vload mem 130896)
+          v12
+          v13
+          v14
+          v15)
+        mem)))
+  (steps
+    ((compute lhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2))
+     (compute rhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2)))
+    refl))
+
+;; qround 10: the schedule step folds to shn_sstep; the round state folds to shn_qround's two projections.
+(claim shnw_law_q10
+  (goal
+    ((f Nat)
+     (rest (List XInstr))
+     (mem Mem)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm))
+    ()
+    (=
+      (xveval_seq
+        (S (S (S (S (S (S (S (S (S (S (S (S (S f)))))))))))))
+        (shnw_m)
+        (shnw_q10 rest)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (xveval_seq
+        (S f)
+        (shnw_m)
+        rest
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 130912 a11 a12 a13 a14)
+        (MkXmms
+          (vpshufd (vpaddd v5 (vload mem 130912)) 14)
+          (rabef_of (shn_qround (MkShnRs v1 v2) v5 (vload mem 130912)))
+          (rcdgh_of (shn_qround (MkShnRs v1 v2) v5 (vload mem 130912)))
+          v3
+          v4
+          (shn_sstep v5 v6 v3 v4)
+          v6
+          (vpalignr v4 v3 4)
+          v8
+          v9
+          v10
+          (vload mem 130912)
+          v12
+          v13
+          v14
+          v15)
+        mem)))
+  (steps
+    ((compute lhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2))
+     (compute rhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2)))
+    refl))
+
+;; qround 11: the schedule step folds to shn_sstep; the round state folds to shn_qround's two projections.
+(claim shnw_law_q11
+  (goal
+    ((f Nat)
+     (rest (List XInstr))
+     (mem Mem)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm))
+    ()
+    (=
+      (xveval_seq
+        (S (S (S (S (S (S (S (S (S (S (S (S (S f)))))))))))))
+        (shnw_m)
+        (shnw_q11 rest)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (xveval_seq
+        (S f)
+        (shnw_m)
+        rest
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 130928 a11 a12 a13 a14)
+        (MkXmms
+          (vpshufd (vpaddd v6 (vload mem 130928)) 14)
+          (rabef_of (shn_qround (MkShnRs v1 v2) v6 (vload mem 130928)))
+          (rcdgh_of (shn_qround (MkShnRs v1 v2) v6 (vload mem 130928)))
+          v3
+          v4
+          v5
+          (shn_sstep v6 v3 v4 v5)
+          (vpalignr v5 v4 4)
+          v8
+          v9
+          v10
+          (vload mem 130928)
+          v12
+          v13
+          v14
+          v15)
+        mem)))
+  (steps
+    ((compute lhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2))
+     (compute rhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2)))
+    refl))
+
+;; qround 12: no schedule step (the last four); the round state folds to shn_qround's two projections.
+(claim shnw_law_q12
+  (goal
+    ((f Nat)
+     (rest (List XInstr))
+     (mem Mem)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm))
+    ()
+    (=
+      (xveval_seq
+        (S (S (S (S (S (S (S (S f))))))))
+        (shnw_m)
+        (shnw_q12 rest)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (xveval_seq
+        (S f)
+        (shnw_m)
+        rest
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 130944 a11 a12 a13 a14)
+        (MkXmms
+          (vpshufd (vpaddd v3 (vload mem 130944)) 14)
+          (rabef_of (shn_qround (MkShnRs v1 v2) v3 (vload mem 130944)))
+          (rcdgh_of (shn_qround (MkShnRs v1 v2) v3 (vload mem 130944)))
+          v3
+          v4
+          v5
+          v6
+          v7
+          v8
+          v9
+          v10
+          (vload mem 130944)
+          v12
+          v13
+          v14
+          v15)
+        mem)))
+  (steps
+    ((compute lhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2))
+     (compute rhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2)))
+    refl))
+
+;; qround 13: no schedule step (the last four); the round state folds to shn_qround's two projections.
+(claim shnw_law_q13
+  (goal
+    ((f Nat)
+     (rest (List XInstr))
+     (mem Mem)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm))
+    ()
+    (=
+      (xveval_seq
+        (S (S (S (S (S (S (S (S f))))))))
+        (shnw_m)
+        (shnw_q13 rest)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (xveval_seq
+        (S f)
+        (shnw_m)
+        rest
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 130960 a11 a12 a13 a14)
+        (MkXmms
+          (vpshufd (vpaddd v4 (vload mem 130960)) 14)
+          (rabef_of (shn_qround (MkShnRs v1 v2) v4 (vload mem 130960)))
+          (rcdgh_of (shn_qround (MkShnRs v1 v2) v4 (vload mem 130960)))
+          v3
+          v4
+          v5
+          v6
+          v7
+          v8
+          v9
+          v10
+          (vload mem 130960)
+          v12
+          v13
+          v14
+          v15)
+        mem)))
+  (steps
+    ((compute lhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2))
+     (compute rhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2)))
+    refl))
+
+;; qround 14: no schedule step (the last four); the round state folds to shn_qround's two projections.
+(claim shnw_law_q14
+  (goal
+    ((f Nat)
+     (rest (List XInstr))
+     (mem Mem)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm))
+    ()
+    (=
+      (xveval_seq
+        (S (S (S (S (S (S (S (S f))))))))
+        (shnw_m)
+        (shnw_q14 rest)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (xveval_seq
+        (S f)
+        (shnw_m)
+        rest
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 130976 a11 a12 a13 a14)
+        (MkXmms
+          (vpshufd (vpaddd v5 (vload mem 130976)) 14)
+          (rabef_of (shn_qround (MkShnRs v1 v2) v5 (vload mem 130976)))
+          (rcdgh_of (shn_qround (MkShnRs v1 v2) v5 (vload mem 130976)))
+          v3
+          v4
+          v5
+          v6
+          v7
+          v8
+          v9
+          v10
+          (vload mem 130976)
+          v12
+          v13
+          v14
+          v15)
+        mem)))
+  (steps
+    ((compute lhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2))
+     (compute rhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2)))
+    refl))
+
+;; qround 15: no schedule step (the last four); the round state folds to shn_qround's two projections.
+(claim shnw_law_q15
+  (goal
+    ((f Nat)
+     (rest (List XInstr))
+     (mem Mem)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm))
+    ()
+    (=
+      (xveval_seq
+        (S (S (S (S (S (S (S (S f))))))))
+        (shnw_m)
+        (shnw_q15 rest)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (xveval_seq
+        (S f)
+        (shnw_m)
+        rest
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 130992 a11 a12 a13 a14)
+        (MkXmms
+          (vpshufd (vpaddd v6 (vload mem 130992)) 14)
+          (rabef_of (shn_qround (MkShnRs v1 v2) v6 (vload mem 130992)))
+          (rcdgh_of (shn_qround (MkShnRs v1 v2) v6 (vload mem 130992)))
+          v3
+          v4
+          v5
+          v6
+          v7
+          v8
+          v9
+          v10
+          (vload mem 130992)
+          v12
+          v13
+          v14
+          v15)
+        mem)))
+  (steps
+    ((compute lhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2))
+     (compute rhs (stop vload vpaddd vrnds2 vpshufd vpalignr vmsg1 vmsg2)))
+    refl))
+
+;; ---- THE BOUNDARY LAWS -------------------------------------------------------------
+
+;; the ShnRs eta law: rebuilding a round state from its two projections is
+;; the identity. The composition needs it because each stanza law hands the
+;; next one PROJECTIONS of the previous qround where the article's nest
+;; passes the qround record itself.
+(claim shnw_rs_eta
+  (goal ((s ShnRs)) () (= (MkShnRs (rabef_of s) (rcdgh_of s)) s))
+  (case-on s ShnRs
+    ((case MkShnRs
+       (pa pc)
+       (steps ((rewrite (hyp 0) lr both true ()) (compute both)) refl)))))
+
+;; the epilogue walked: the two feedback paddds stay FOLDED; the pshufd-27
+;; and punpck shuffles COMPUTE THROUGH to MkXmm-of-projections (vsel cracks
+;; a shuffle over any argument), which is exactly the shape the article's
+;; shn_unpack computes to — so the composition's store trees meet by
+;; syntax. Ground store gates resolve by compute; no premises.
+(claim shnw_law_epi
+  (goal
+    ((f Nat)
+     (rest (List XInstr))
+     (mem Mem)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm))
+    ()
+    (=
+      (xveval_seq
+        (S (S (S (S (S (S (S (S (S (S (S (S f))))))))))))
+        (shnw_m)
+        (shnw_epi rest)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (xveval_seq
+        (S f)
+        (shnw_m)
+        rest
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 131024 a10 a11 a12 a13 a14)
+        (MkXmms
+          v0
+          (MkXmm
+            (x3_of (vpaddd v1 v9))
+            (x2_of (vpaddd v1 v9))
+            (x3_of (vpaddd v2 v10))
+            (x2_of (vpaddd v2 v10)))
+          (MkXmm
+            (x3_of (vpaddd v2 v10))
+            (x2_of (vpaddd v2 v10))
+            (x1_of (vpaddd v2 v10))
+            (x0_of (vpaddd v2 v10)))
+          v3
+          v4
+          v5
+          v6
+          v7
+          v8
+          v9
+          v10
+          (MkXmm
+            (x1_of (vpaddd v1 v9))
+            (x0_of (vpaddd v1 v9))
+            (x1_of (vpaddd v2 v10))
+            (x0_of (vpaddd v2 v10)))
+          v12
+          v13
+          v14
+          v15)
+        (vstore
+          (vstore
+            mem
+            131008
+            (MkXmm
+              (x3_of (vpaddd v1 v9))
+              (x2_of (vpaddd v1 v9))
+              (x3_of (vpaddd v2 v10))
+              (x2_of (vpaddd v2 v10))))
+          131024
+          (MkXmm
+            (x1_of (vpaddd v1 v9))
+            (x0_of (vpaddd v1 v9))
+            (x1_of (vpaddd v2 v10))
+            (x0_of (vpaddd v2 v10)))))))
+  (steps
+    ((compute lhs (stop vload vstore vpaddd))
+     (compute rhs (stop vload vstore vpaddd)))
+    refl))
+
+;; the prologue walked. Premises are THE SEAM: the mask home read, the two
+;; state-home reads (as FREE Xmm values sA/sC -- the pack chains stay
+;; FOLDED applications, so at composition time, with literal reads, the
+;; article's shnp_pack_abef/cdgh laws fire on them BY REWRITING; computing
+;; the chains here would strand match-residues inside the stuck tail,
+;; where no later compute can descend), and the src window bounds. The
+;; three pointer bumps collapse via mod_unique at q=0; the eight load
+;; gates discharge by farkas from the two bound premises.
+(claim shnw_law_pro
+  (goal
+    ((f Nat)
+     (rest (List XInstr))
+     (mem Mem)
+     (sA Xmm)
+     (sC Xmm)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm))
+    ((= (vload mem 130496) (vbswap_mask))
+     (= (vload mem 131008) sA)
+     (= (vload mem 131024) sC)
+     (= (le 65536 a6) True)
+     (= (le (+ a6 64) 131072) True))
+    (=
+      (xveval_seq
+        (S
+          (S
+            (S
+              (S
+                (S
+                  (S
+                    (S
+                      (S
+                        (S
+                          (S
+                            (S
+                              (S
+                                (S
+                                  (S
+                                    (S
+                                      (S (S (S (S (S (S (S (S (S (S f)))))))))))))))))))))))))
+        (shnw_m)
+        (shnw_pro rest)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (xveval_seq
+        (S f)
+        (shnw_m)
+        rest
+        (MkRegs
+          a0
+          a1
+          a2
+          a3
+          a4
+          a5
+          (+ (+ (+ a6 16) 16) 16)
+          a7
+          a8
+          131024
+          a10
+          a11
+          a12
+          a13
+          a14)
+        (MkXmms
+          v0
+          (vpalignr (vpshufd sA 177) (vpshufd sC 27) 8)
+          (vpunpckl (vpshufd sC 27) (vpshufd (vpshufd sA 177) 14))
+          (vbswap (vload mem a6))
+          (vbswap (vload mem (+ a6 16)))
+          (vbswap (vload mem (+ (+ a6 16) 16)))
+          (vbswap (vload mem (+ (+ (+ a6 16) 16) 16)))
+          v7
+          (MkXmm 66051 67438087 134810123 202182159)
+          (vpalignr (vpshufd sA 177) (vpshufd sC 27) 8)
+          (vpunpckl (vpshufd sC 27) (vpshufd (vpshufd sA 177) 14))
+          (vpshufd (vpshufd sA 177) 14)
+          v12
+          v13
+          v14
+          v15)
+        mem)))
+  (chain
+    (have hw1 (= (mod (+ a6 16) 18446744073709551616) (+ a6 16))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q 0) (inst r (+ a6 16)))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps () (by arith (rows (goal 1) (3 1))))
+         (steps () (by arith (rows (goal 1) (4 1)))))
+        refl))
+    (have hw2 (= (mod (+ (+ a6 16) 16) 18446744073709551616) (+ (+ a6 16) 16))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q 0) (inst r (+ (+ a6 16) 16)))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps () (by arith (rows (goal 1) (3 1))))
+         (steps () (by arith (rows (goal 1) (4 1)))))
+        refl))
+    (have hw3
+      (=
+        (mod (+ (+ (+ a6 16) 16) 16) 18446744073709551616)
+        (+ (+ (+ a6 16) 16) 16))
+      (rewrite-with
+        (lemma mod_unique)
+        lr
+        lhs
+        ((inst q 0) (inst r (+ (+ (+ a6 16) 16) 16)))
+        ((steps () (by arith (list (list 1) (list 1))))
+         (steps () (by arith (rows (goal 1) (3 1))))
+         (steps () (by arith (rows (goal 1) (4 1)))))
+        refl))
+    (have hg1 (= (le (+ a6 16) 131072) True)
+      (steps () (by arith (rows (goal 1) (4 1)))))
+    (have hg2 (= (le 65536 (+ a6 16)) True)
+      (steps () (by arith (rows (goal 1) (3 1)))))
+    (have hg3 (= (le (+ (+ a6 16) 16) 131072) True)
+      (steps () (by arith (rows (goal 1) (4 1)))))
+    (have hg4 (= (le 65536 (+ (+ a6 16) 16)) True)
+      (steps () (by arith (rows (goal 1) (3 1)))))
+    (have hg5 (= (le (+ (+ (+ a6 16) 16) 16) 131072) True)
+      (steps () (by arith (rows (goal 1) (4 1)))))
+    (have hg6 (= (le 65536 (+ (+ (+ a6 16) 16) 16)) True)
+      (steps () (by arith (rows (goal 1) (3 1)))))
+    (have hg7 (= (le (+ (+ (+ (+ a6 16) 16) 16) 16) 131072) True)
+      (steps () (by arith (rows (goal 1) (4 1)))))
+    (steps
+      ((compute lhs (stop vload vbswap vpshufd vpalignr vpunpckl))
+       (rewrite (premise 3) lr lhs true ())
+       (compute lhs (stop vload vbswap vpshufd vpalignr vpunpckl))
+       (rewrite (premise hg1) lr lhs true ())
+       (compute lhs (stop vload vbswap vpshufd vpalignr vpunpckl))
+       (rewrite (premise hw1) lr lhs true ())
+       (rewrite (premise hg2) lr lhs true ())
+       (compute lhs (stop vload vbswap vpshufd vpalignr vpunpckl))
+       (rewrite (premise hg3) lr lhs true ())
+       (compute lhs (stop vload vbswap vpshufd vpalignr vpunpckl))
+       (rewrite (premise hw2) lr lhs true ())
+       (rewrite (premise hg4) lr lhs true ())
+       (compute lhs (stop vload vbswap vpshufd vpalignr vpunpckl))
+       (rewrite (premise hg5) lr lhs true ())
+       (compute lhs (stop vload vbswap vpshufd vpalignr vpunpckl))
+       (rewrite (premise hw3) lr lhs true ())
+       (rewrite (premise hg6) lr lhs true ())
+       (compute lhs (stop vload vbswap vpshufd vpalignr vpunpckl))
+       (rewrite (premise hg7) lr lhs true ())
+       (compute lhs (stop vload vbswap vpshufd vpalignr vpunpckl))
+       (rewrite (premise 0) lr lhs true ())
+       (compute lhs (stop vload vbswap vpshufd vpalignr vpunpckl))
+       (rewrite (premise 1) lr lhs true ())
+       (rewrite (premise 2) lr lhs true ())
+       (compute rhs (stop vload vbswap vpshufd vpalignr vpunpckl))))
+    refl))
+
+;; ---- THE SUMMIT'S NAMES ------------------------------------------------------------
+;; shnw_s16 names the article's sixteen-qround nest (shn_block's let body);
+;; shnw_f1/shnw_f2 name the two feedback registers. The composition folds the
+;; walked towers INTO these names (def lemmas cited rl), so the summit's
+;; statement and its final-file clobber map stay readable.
+
+(fn shnw_s16 ((st H8) (g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) ShnRs
+  (shn_qround
+    (shn_qround
+      (shn_qround
+        (shn_qround
+          (shn_qround
+            (shn_qround
+              (shn_qround
+                (shn_qround
+                  (shn_qround
+                    (shn_qround
+                      (shn_qround
+                        (shn_qround
+                          (shn_qround
+                            (shn_qround
+                              (shn_qround
+                                (shn_qround
+                                  (MkShnRs (shn_pk_abef st) (shn_pk_cdgh st))
+                                  g0
+                                  (shn_kg 0))
+                                g1
+                                (shn_kg 1))
+                              g2
+                              (shn_kg 2))
+                            g3
+                            (shn_kg 3))
+                          (shn_g4 g0 g1 g2 g3)
+                          (shn_kg 4))
+                        (shn_g5 g0 g1 g2 g3)
+                        (shn_kg 5))
+                      (shn_g6 g0 g1 g2 g3)
+                      (shn_kg 6))
+                    (shn_g7 g0 g1 g2 g3)
+                    (shn_kg 7))
+                  (shn_g8 g0 g1 g2 g3)
+                  (shn_kg 8))
+                (shn_g9 g0 g1 g2 g3)
+                (shn_kg 9))
+              (shn_g10 g0 g1 g2 g3)
+              (shn_kg 10))
+            (shn_g11 g0 g1 g2 g3)
+            (shn_kg 11))
+          (shn_g12 g0 g1 g2 g3)
+          (shn_kg 12))
+        (shn_g13 g0 g1 g2 g3)
+        (shn_kg 13))
+      (shn_g14 g0 g1 g2 g3)
+      (shn_kg 14))
+    (shn_g15 g0 g1 g2 g3)
+    (shn_kg 15)))
+
+(fn shnw_f1 ((st H8) (g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) Xmm
+  (vpaddd (rabef_of (shnw_s16 st g0 g1 g2 g3)) (shn_pk_abef st)))
+
+(fn shnw_f2 ((st H8) (g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) Xmm
+  (vpaddd (rcdgh_of (shnw_s16 st g0 g1 g2 g3)) (shn_pk_cdgh st)))
+
+(claim shnw_s16_def
+  (goal ((st H8) (g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) ()
+    (=
+      (shnw_s16 st g0 g1 g2 g3)
+      (shn_qround
+        (shn_qround
+          (shn_qround
+            (shn_qround
+              (shn_qround
+                (shn_qround
+                  (shn_qround
+                    (shn_qround
+                      (shn_qround
+                        (shn_qround
+                          (shn_qround
+                            (shn_qround
+                              (shn_qround
+                                (shn_qround
+                                  (shn_qround
+                                    (shn_qround
+                                      (MkShnRs
+                                        (shn_pk_abef st)
+                                        (shn_pk_cdgh st))
+                                      g0
+                                      (shn_kg 0))
+                                    g1
+                                    (shn_kg 1))
+                                  g2
+                                  (shn_kg 2))
+                                g3
+                                (shn_kg 3))
+                              (shn_g4 g0 g1 g2 g3)
+                              (shn_kg 4))
+                            (shn_g5 g0 g1 g2 g3)
+                            (shn_kg 5))
+                          (shn_g6 g0 g1 g2 g3)
+                          (shn_kg 6))
+                        (shn_g7 g0 g1 g2 g3)
+                        (shn_kg 7))
+                      (shn_g8 g0 g1 g2 g3)
+                      (shn_kg 8))
+                    (shn_g9 g0 g1 g2 g3)
+                    (shn_kg 9))
+                  (shn_g10 g0 g1 g2 g3)
+                  (shn_kg 10))
+                (shn_g11 g0 g1 g2 g3)
+                (shn_kg 11))
+              (shn_g12 g0 g1 g2 g3)
+              (shn_kg 12))
+            (shn_g13 g0 g1 g2 g3)
+            (shn_kg 13))
+          (shn_g14 g0 g1 g2 g3)
+          (shn_kg 14))
+        (shn_g15 g0 g1 g2 g3)
+        (shn_kg 15))))
+  (steps ((unfold shnw_s16 lhs)) refl))
+
+(claim shnw_f1_def
+  (goal ((st H8) (g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) ()
+    (=
+      (shnw_f1 st g0 g1 g2 g3)
+      (vpaddd (rabef_of (shnw_s16 st g0 g1 g2 g3)) (shn_pk_abef st))))
+  (steps ((unfold shnw_f1 lhs)) refl))
+
+(claim shnw_f2_def
+  (goal ((st H8) (g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) ()
+    (=
+      (shnw_f2 st g0 g1 g2 g3)
+      (vpaddd (rcdgh_of (shnw_s16 st g0 g1 g2 g3)) (shn_pk_cdgh st))))
+  (steps ((unfold shnw_f2 lhs)) refl))
+
+;; the split: shn_block IS shn_unpack of the two named feedback registers.
+(claim shnw_block_split
+  (goal ((st H8) (g0 Xmm) (g1 Xmm) (g2 Xmm) (g3 Xmm)) ()
+    (=
+      (shn_block st g0 g1 g2 g3)
+      (shn_unpack (shnw_f1 st g0 g1 g2 g3) (shnw_f2 st g0 g1 g2 g3))))
+  (steps
+    ((compute
+       lhs
+       (stop shn_qround shn_kg shn_g4 shn_g5 shn_g6 shn_g7 shn_g8 shn_g9 shn_g10
+         shn_g11 shn_g12 shn_g13 shn_g14 shn_g15 shn_pk_abef shn_pk_cdgh vpaddd
+         x0_of x1_of x2_of x3_of rabef_of rcdgh_of))
+     (compute
+       rhs
+       (stop shn_qround shn_kg shn_g4 shn_g5 shn_g6 shn_g7 shn_g8 shn_g9 shn_g10
+         shn_g11 shn_g12 shn_g13 shn_g14 shn_g15 shn_pk_abef shn_pk_cdgh vpaddd
+         x0_of x1_of x2_of x3_of rabef_of rcdgh_of)))
+    refl))
+
+;; ---- THE BLOCK WALK ----------------------------------------------------------------
+;; The summit: shnw_body's 207 instructions, walked at xveval grain from any
+;; entry file over any memory meeting the seam, compute EXACTLY the
+;; article's shn_block on the loaded state and the four byte-flipped
+;; message groups -- concluded at the shnw_hmem store shape, with the final
+;; register file and XMM file spelled in full (the clobber map). Premises
+;; are the ONE seam: the mask home, the two state-home reads, the src
+;; window bounds, and the sixteen K-group reads.
+(claim shnw_walk
+  (goal
+    ((f Nat)
+     (mem Mem)
+     (a0 Int)
+     (a1 Int)
+     (a2 Int)
+     (a3 Int)
+     (a4 Int)
+     (a5 Int)
+     (a6 Int)
+     (a7 Int)
+     (a8 Int)
+     (a9 Int)
+     (a10 Int)
+     (a11 Int)
+     (a12 Int)
+     (a13 Int)
+     (a14 Int)
+     (v0 Xmm)
+     (v1 Xmm)
+     (v2 Xmm)
+     (v3 Xmm)
+     (v4 Xmm)
+     (v5 Xmm)
+     (v6 Xmm)
+     (v7 Xmm)
+     (v8 Xmm)
+     (v9 Xmm)
+     (v10 Xmm)
+     (v11 Xmm)
+     (v12 Xmm)
+     (v13 Xmm)
+     (v14 Xmm)
+     (v15 Xmm)
+     (ha Int)
+     (hb Int)
+     (hc Int)
+     (hd Int)
+     (he Int)
+     (hf Int)
+     (hg Int)
+     (hh Int))
+    ((= (vload mem 130496) (vbswap_mask))
+     (= (vload mem 131008) (MkXmm ha hb hc hd))
+     (= (vload mem 131024) (MkXmm he hf hg hh))
+     (= (le 65536 a6) True)
+     (= (le (+ a6 64) 131072) True)
+     (= (vload mem 130752) (shn_kg 0))
+     (= (vload mem 130768) (shn_kg 1))
+     (= (vload mem 130784) (shn_kg 2))
+     (= (vload mem 130800) (shn_kg 3))
+     (= (vload mem 130816) (shn_kg 4))
+     (= (vload mem 130832) (shn_kg 5))
+     (= (vload mem 130848) (shn_kg 6))
+     (= (vload mem 130864) (shn_kg 7))
+     (= (vload mem 130880) (shn_kg 8))
+     (= (vload mem 130896) (shn_kg 9))
+     (= (vload mem 130912) (shn_kg 10))
+     (= (vload mem 130928) (shn_kg 11))
+     (= (vload mem 130944) (shn_kg 12))
+     (= (vload mem 130960) (shn_kg 13))
+     (= (vload mem 130976) (shn_kg 14))
+     (= (vload mem 130992) (shn_kg 15)))
+    (=
+      (xveval_seq
+        (S
+          (S
+            (S
+              (S
+                (S
+                  (S
+                    (S
+                      (S
+                        (S
+                          (S
+                            (S
+                              (S
+                                (S
+                                  (S
+                                    (S
+                                      (S
+                                        (S
+                                          (S
+                                            (S
+                                              (S
+                                                (S
+                                                  (S
+                                                    (S
+                                                      (S
+                                                        (S
+                                                          (S
+                                                            (S
+                                                              (S
+                                                                (S
+                                                                  (S
+                                                                    (S
+                                                                      (S
+                                                                        (S
+                                                                          (S
+                                                                            (S
+                                                                              (S
+                                                                                (S
+                                                                                  (S
+                                                                                    (S
+                                                                                      (S
+                                                                                        (S
+                                                                                          (S
+                                                                                            (S
+                                                                                              (S
+                                                                                                (S
+                                                                                                  (S
+                                                                                                    (S
+                                                                                                      (S
+                                                                                                        (S
+                                                                                                          (S
+                                                                                                            (S
+                                                                                                              (S
+                                                                                                                (S
+                                                                                                                  (S
+                                                                                                                    (S
+                                                                                                                      (S
+                                                                                                                        (S
+                                                                                                                          (S
+                                                                                                                            (S
+                                                                                                                              (S
+                                                                                                                                (S
+                                                                                                                                  (S
+                                                                                                                                    (S
+                                                                                                                                      (S
+                                                                                                                                        (S
+                                                                                                                                          (S
+                                                                                                                                            (S
+                                                                                                                                              (S
+                                                                                                                                                (S
+                                                                                                                                                  (S
+                                                                                                                                                    (S
+                                                                                                                                                      (S
+                                                                                                                                                        (S
+                                                                                                                                                          (S
+                                                                                                                                                            (S
+                                                                                                                                                              (S
+                                                                                                                                                                (S
+                                                                                                                                                                  (S
+                                                                                                                                                                    (S
+                                                                                                                                                                      (S
+                                                                                                                                                                        (S
+                                                                                                                                                                          (S
+                                                                                                                                                                            (S
+                                                                                                                                                                              (S
+                                                                                                                                                                                (S
+                                                                                                                                                                                  (S
+                                                                                                                                                                                    (S
+                                                                                                                                                                                      (S
+                                                                                                                                                                                        (S
+                                                                                                                                                                                          (S
+                                                                                                                                                                                            (S
+                                                                                                                                                                                              (S
+                                                                                                                                                                                                (S
+                                                                                                                                                                                                  (S
+                                                                                                                                                                                                    (S
+                                                                                                                                                                                                      (S
+                                                                                                                                                                                                        (S
+                                                                                                                                                                                                          (S
+                                                                                                                                                                                                            (S
+                                                                                                                                                                                                              (S
+                                                                                                                                                                                                                (S
+                                                                                                                                                                                                                  (S
+                                                                                                                                                                                                                    (S
+                                                                                                                                                                                                                      (S
+                                                                                                                                                                                                                        (S
+                                                                                                                                                                                                                          (S
+                                                                                                                                                                                                                            (S
+                                                                                                                                                                                                                              (S
+                                                                                                                                                                                                                                (S
+                                                                                                                                                                                                                                  (S
+                                                                                                                                                                                                                                    (S
+                                                                                                                                                                                                                                      (S
+                                                                                                                                                                                                                                        (S
+                                                                                                                                                                                                                                          (S
+                                                                                                                                                                                                                                            (S
+                                                                                                                                                                                                                                              (S
+                                                                                                                                                                                                                                                (S
+                                                                                                                                                                                                                                                  (S
+                                                                                                                                                                                                                                                    (S
+                                                                                                                                                                                                                                                      (S
+                                                                                                                                                                                                                                                        (S
+                                                                                                                                                                                                                                                          (S
+                                                                                                                                                                                                                                                            (S
+                                                                                                                                                                                                                                                              (S
+                                                                                                                                                                                                                                                                (S
+                                                                                                                                                                                                                                                                  (S
+                                                                                                                                                                                                                                                                    (S
+                                                                                                                                                                                                                                                                      (S
+                                                                                                                                                                                                                                                                        (S
+                                                                                                                                                                                                                                                                          (S
+                                                                                                                                                                                                                                                                            (S
+                                                                                                                                                                                                                                                                              (S
+                                                                                                                                                                                                                                                                                (S
+                                                                                                                                                                                                                                                                                  (S
+                                                                                                                                                                                                                                                                                    (S
+                                                                                                                                                                                                                                                                                      (S
+                                                                                                                                                                                                                                                                                        (S
+                                                                                                                                                                                                                                                                                          (S
+                                                                                                                                                                                                                                                                                            (S
+                                                                                                                                                                                                                                                                                              (S
+                                                                                                                                                                                                                                                                                                (S
+                                                                                                                                                                                                                                                                                                  (S
+                                                                                                                                                                                                                                                                                                    (S
+                                                                                                                                                                                                                                                                                                      (S
+                                                                                                                                                                                                                                                                                                        (S
+                                                                                                                                                                                                                                                                                                          (S
+                                                                                                                                                                                                                                                                                                            (S
+                                                                                                                                                                                                                                                                                                              (S
+                                                                                                                                                                                                                                                                                                                (S
+                                                                                                                                                                                                                                                                                                                  (S
+                                                                                                                                                                                                                                                                                                                    (S
+                                                                                                                                                                                                                                                                                                                      (S
+                                                                                                                                                                                                                                                                                                                        (S
+                                                                                                                                                                                                                                                                                                                          (S
+                                                                                                                                                                                                                                                                                                                            (S
+                                                                                                                                                                                                                                                                                                                              (S
+                                                                                                                                                                                                                                                                                                                                (S
+                                                                                                                                                                                                                                                                                                                                  (S
+                                                                                                                                                                                                                                                                                                                                    (S
+                                                                                                                                                                                                                                                                                                                                      (S
+                                                                                                                                                                                                                                                                                                                                        (S
+                                                                                                                                                                                                                                                                                                                                          (S
+                                                                                                                                                                                                                                                                                                                                            (S
+                                                                                                                                                                                                                                                                                                                                              (S
+                                                                                                                                                                                                                                                                                                                                                (S
+                                                                                                                                                                                                                                                                                                                                                  (S
+                                                                                                                                                                                                                                                                                                                                                    (S
+                                                                                                                                                                                                                                                                                                                                                      (S
+                                                                                                                                                                                                                                                                                                                                                        (S
+                                                                                                                                                                                                                                                                                                                                                          (S
+                                                                                                                                                                                                                                                                                                                                                            (S
+                                                                                                                                                                                                                                                                                                                                                              (S
+                                                                                                                                                                                                                                                                                                                                                                (S
+                                                                                                                                                                                                                                                                                                                                                                  (S
+                                                                                                                                                                                                                                                                                                                                                                    (S
+                                                                                                                                                                                                                                                                                                                                                                      (S
+                                                                                                                                                                                                                                                                                                                                                                        (S
+                                                                                                                                                                                                                                                                                                                                                                          (S
+                                                                                                                                                                                                                                                                                                                                                                            (S
+                                                                                                                                                                                                                                                                                                                                                                              (S
+                                                                                                                                                                                                                                                                                                                                                                                (S
+                                                                                                                                                                                                                                                                                                                                                                                  (S
+                                                                                                                                                                                                                                                                                                                                                                                    (S
+                                                                                                                                                                                                                                                                                                                                                                                      (S
+                                                                                                                                                                                                                                                                                                                                                                                        (S
+                                                                                                                                                                                                                                                                                                                                                                                          (S
+                                                                                                                                                                                                                                                                                                                                                                                            (S
+                                                                                                                                                                                                                                                                                                                                                                                              (S
+                                                                                                                                                                                                                                                                                                                                                                                                (S
+                                                                                                                                                                                                                                                                                                                                                                                                  (S
+                                                                                                                                                                                                                                                                                                                                                                                                    (S
+                                                                                                                                                                                                                                                                                                                                                                                                      (S
+                                                                                                                                                                                                                                                                                                                                                                                                        (S
+                                                                                                                                                                                                                                                                                                                                                                                                          (S
+                                                                                                                                                                                                                                                                                                                                                                                                            (S
+                                                                                                                                                                                                                                                                                                                                                                                                              (S
+                                                                                                                                                                                                                                                                                                                                                                                                                (S
+                                                                                                                                                                                                                                                                                                                                                                                                                  (S
+                                                                                                                                                                                                                                                                                                                                                                                                                    (S
+                                                                                                                                                                                                                                                                                                                                                                                                                      (S
+                                                                                                                                                                                                                                                                                                                                                                                                                        (S
+                                                                                                                                                                                                                                                                                                                                                                                                                          (S
+                                                                                                                                                                                                                                                                                                                                                                                                                            (S
+                                                                                                                                                                                                                                                                                                                                                                                                                              (S
+                                                                                                                                                                                                                                                                                                                                                                                                                                (S
+                                                                                                                                                                                                                                                                                                                                                                                                                                  (S
+                                                                                                                                                                                                                                                                                                                                                                                                                                    (S
+                                                                                                                                                                                                                                                                                                                                                                                                                                      (S
+                                                                                                                                                                                                                                                                                                                                                                                                                                        f))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+        (shnw_m)
+        (shnw_body)
+        (MkRegs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+        (MkXmms v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15)
+        mem)
+      (Some
+        (XVNorm
+          (MkRegs
+            a0
+            a1
+            a2
+            a3
+            a4
+            a5
+            (+ (+ (+ a6 16) 16) 16)
+            a7
+            a8
+            131024
+            130992
+            a11
+            a12
+            a13
+            a14)
+          (MkXmms
+            (vpshufd
+              (vpaddd
+                (shn_g15
+                  (vbswap (vload mem a6))
+                  (vbswap (vload mem (+ a6 16)))
+                  (vbswap (vload mem (+ (+ a6 16) 16)))
+                  (vbswap (vload mem (+ (+ (+ a6 16) 16) 16))))
+                (shn_kg 15))
+              14)
+            (MkXmm
+              (x3_of
+                (shnw_f1
+                  (mk_h8 ha hb hc hd he hf hg hh)
+                  (vbswap (vload mem a6))
+                  (vbswap (vload mem (+ a6 16)))
+                  (vbswap (vload mem (+ (+ a6 16) 16)))
+                  (vbswap (vload mem (+ (+ (+ a6 16) 16) 16)))))
+              (x2_of
+                (shnw_f1
+                  (mk_h8 ha hb hc hd he hf hg hh)
+                  (vbswap (vload mem a6))
+                  (vbswap (vload mem (+ a6 16)))
+                  (vbswap (vload mem (+ (+ a6 16) 16)))
+                  (vbswap (vload mem (+ (+ (+ a6 16) 16) 16)))))
+              (x3_of
+                (shnw_f2
+                  (mk_h8 ha hb hc hd he hf hg hh)
+                  (vbswap (vload mem a6))
+                  (vbswap (vload mem (+ a6 16)))
+                  (vbswap (vload mem (+ (+ a6 16) 16)))
+                  (vbswap (vload mem (+ (+ (+ a6 16) 16) 16)))))
+              (x2_of
+                (shnw_f2
+                  (mk_h8 ha hb hc hd he hf hg hh)
+                  (vbswap (vload mem a6))
+                  (vbswap (vload mem (+ a6 16)))
+                  (vbswap (vload mem (+ (+ a6 16) 16)))
+                  (vbswap (vload mem (+ (+ (+ a6 16) 16) 16))))))
+            (MkXmm
+              (x3_of
+                (shnw_f2
+                  (mk_h8 ha hb hc hd he hf hg hh)
+                  (vbswap (vload mem a6))
+                  (vbswap (vload mem (+ a6 16)))
+                  (vbswap (vload mem (+ (+ a6 16) 16)))
+                  (vbswap (vload mem (+ (+ (+ a6 16) 16) 16)))))
+              (x2_of
+                (shnw_f2
+                  (mk_h8 ha hb hc hd he hf hg hh)
+                  (vbswap (vload mem a6))
+                  (vbswap (vload mem (+ a6 16)))
+                  (vbswap (vload mem (+ (+ a6 16) 16)))
+                  (vbswap (vload mem (+ (+ (+ a6 16) 16) 16)))))
+              (x1_of
+                (shnw_f2
+                  (mk_h8 ha hb hc hd he hf hg hh)
+                  (vbswap (vload mem a6))
+                  (vbswap (vload mem (+ a6 16)))
+                  (vbswap (vload mem (+ (+ a6 16) 16)))
+                  (vbswap (vload mem (+ (+ (+ a6 16) 16) 16)))))
+              (x0_of
+                (shnw_f2
+                  (mk_h8 ha hb hc hd he hf hg hh)
+                  (vbswap (vload mem a6))
+                  (vbswap (vload mem (+ a6 16)))
+                  (vbswap (vload mem (+ (+ a6 16) 16)))
+                  (vbswap (vload mem (+ (+ (+ a6 16) 16) 16))))))
+            (shn_g12
+              (vbswap (vload mem a6))
+              (vbswap (vload mem (+ a6 16)))
+              (vbswap (vload mem (+ (+ a6 16) 16)))
+              (vbswap (vload mem (+ (+ (+ a6 16) 16) 16))))
+            (shn_g13
+              (vbswap (vload mem a6))
+              (vbswap (vload mem (+ a6 16)))
+              (vbswap (vload mem (+ (+ a6 16) 16)))
+              (vbswap (vload mem (+ (+ (+ a6 16) 16) 16))))
+            (shn_g14
+              (vbswap (vload mem a6))
+              (vbswap (vload mem (+ a6 16)))
+              (vbswap (vload mem (+ (+ a6 16) 16)))
+              (vbswap (vload mem (+ (+ (+ a6 16) 16) 16))))
+            (shn_g15
+              (vbswap (vload mem a6))
+              (vbswap (vload mem (+ a6 16)))
+              (vbswap (vload mem (+ (+ a6 16) 16)))
+              (vbswap (vload mem (+ (+ (+ a6 16) 16) 16))))
+            (vpalignr
+              (shn_g14
+                (vbswap (vload mem a6))
+                (vbswap (vload mem (+ a6 16)))
+                (vbswap (vload mem (+ (+ a6 16) 16)))
+                (vbswap (vload mem (+ (+ (+ a6 16) 16) 16))))
+              (shn_g13
+                (vbswap (vload mem a6))
+                (vbswap (vload mem (+ a6 16)))
+                (vbswap (vload mem (+ (+ a6 16) 16)))
+                (vbswap (vload mem (+ (+ (+ a6 16) 16) 16))))
+              4)
+            (MkXmm 66051 67438087 134810123 202182159)
+            (shn_pk_abef (mk_h8 ha hb hc hd he hf hg hh))
+            (shn_pk_cdgh (mk_h8 ha hb hc hd he hf hg hh))
+            (MkXmm
+              (x1_of
+                (shnw_f1
+                  (mk_h8 ha hb hc hd he hf hg hh)
+                  (vbswap (vload mem a6))
+                  (vbswap (vload mem (+ a6 16)))
+                  (vbswap (vload mem (+ (+ a6 16) 16)))
+                  (vbswap (vload mem (+ (+ (+ a6 16) 16) 16)))))
+              (x0_of
+                (shnw_f1
+                  (mk_h8 ha hb hc hd he hf hg hh)
+                  (vbswap (vload mem a6))
+                  (vbswap (vload mem (+ a6 16)))
+                  (vbswap (vload mem (+ (+ a6 16) 16)))
+                  (vbswap (vload mem (+ (+ (+ a6 16) 16) 16)))))
+              (x1_of
+                (shnw_f2
+                  (mk_h8 ha hb hc hd he hf hg hh)
+                  (vbswap (vload mem a6))
+                  (vbswap (vload mem (+ a6 16)))
+                  (vbswap (vload mem (+ (+ a6 16) 16)))
+                  (vbswap (vload mem (+ (+ (+ a6 16) 16) 16)))))
+              (x0_of
+                (shnw_f2
+                  (mk_h8 ha hb hc hd he hf hg hh)
+                  (vbswap (vload mem a6))
+                  (vbswap (vload mem (+ a6 16)))
+                  (vbswap (vload mem (+ (+ a6 16) 16)))
+                  (vbswap (vload mem (+ (+ (+ a6 16) 16) 16))))))
+            v12
+            v13
+            v14
+            v15)
+          (shnw_hmem
+            mem
+            (shn_block
+              (mk_h8 ha hb hc hd he hf hg hh)
+              (vbswap (vload mem a6))
+              (vbswap (vload mem (+ a6 16)))
+              (vbswap (vload mem (+ (+ a6 16) 16)))
+              (vbswap (vload mem (+ (+ (+ a6 16) 16) 16)))))))))
+  (chain
+    (steps ((unfold shnw_body lhs)))
+    (rewrite-with
+      (lemma shnw_law_pro)
+      lr
+      lhs
+      ((inst sA (MkXmm ha hb hc hd)) (inst sC (MkXmm he hf hg hh)))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)))
+    (steps
+      ((rewrite (lemma shnp_pack_abef) lr lhs true ())
+       (rewrite (lemma shnp_pack_cdgh) lr lhs true ())
+       (rewrite (lemma shnw_law_q0) lr lhs true ())
+       (rewrite (lemma shn_g4_def) rl lhs true ())
+       (rewrite (premise 5) lr lhs true ())
+       (rewrite (lemma shnw_law_q1) lr lhs true ())
+       (rewrite (lemma shnw_rs_eta) lr lhs true ())
+       (rewrite (lemma shn_g5_def) rl lhs true ())
+       (rewrite (premise 6) lr lhs true ())
+       (rewrite (lemma shnw_law_q2) lr lhs true ())
+       (rewrite (lemma shnw_rs_eta) lr lhs true ())
+       (rewrite (lemma shn_g6_def) rl lhs true ())
+       (rewrite (premise 7) lr lhs true ())
+       (rewrite (lemma shnw_law_q3) lr lhs true ())
+       (rewrite (lemma shnw_rs_eta) lr lhs true ())
+       (rewrite (lemma shn_g7_def) rl lhs true ())
+       (rewrite (premise 8) lr lhs true ())
+       (rewrite (lemma shnw_law_q4) lr lhs true ())
+       (rewrite (lemma shnw_rs_eta) lr lhs true ())
+       (rewrite (lemma shn_g8_def) rl lhs true ())
+       (rewrite (premise 9) lr lhs true ())
+       (rewrite (lemma shnw_law_q5) lr lhs true ())
+       (rewrite (lemma shnw_rs_eta) lr lhs true ())
+       (rewrite (lemma shn_g9_def) rl lhs true ())
+       (rewrite (premise 10) lr lhs true ())
+       (rewrite (lemma shnw_law_q6) lr lhs true ())
+       (rewrite (lemma shnw_rs_eta) lr lhs true ())
+       (rewrite (lemma shn_g10_def) rl lhs true ())
+       (rewrite (premise 11) lr lhs true ())
+       (rewrite (lemma shnw_law_q7) lr lhs true ())
+       (rewrite (lemma shnw_rs_eta) lr lhs true ())
+       (rewrite (lemma shn_g11_def) rl lhs true ())
+       (rewrite (premise 12) lr lhs true ())
+       (rewrite (lemma shnw_law_q8) lr lhs true ())
+       (rewrite (lemma shnw_rs_eta) lr lhs true ())
+       (rewrite (lemma shn_g12_def) rl lhs true ())
+       (rewrite (premise 13) lr lhs true ())
+       (rewrite (lemma shnw_law_q9) lr lhs true ())
+       (rewrite (lemma shnw_rs_eta) lr lhs true ())
+       (rewrite (lemma shn_g13_def) rl lhs true ())
+       (rewrite (premise 14) lr lhs true ())
+       (rewrite (lemma shnw_law_q10) lr lhs true ())
+       (rewrite (lemma shnw_rs_eta) lr lhs true ())
+       (rewrite (lemma shn_g14_def) rl lhs true ())
+       (rewrite (premise 15) lr lhs true ())
+       (rewrite (lemma shnw_law_q11) lr lhs true ())
+       (rewrite (lemma shnw_rs_eta) lr lhs true ())
+       (rewrite (lemma shn_g15_def) rl lhs true ())
+       (rewrite (premise 16) lr lhs true ())
+       (rewrite (lemma shnw_law_q12) lr lhs true ())
+       (rewrite (lemma shnw_rs_eta) lr lhs true ())
+       (rewrite (premise 17) lr lhs true ())
+       (rewrite (lemma shnw_law_q13) lr lhs true ())
+       (rewrite (lemma shnw_rs_eta) lr lhs true ())
+       (rewrite (premise 18) lr lhs true ())
+       (rewrite (lemma shnw_law_q14) lr lhs true ())
+       (rewrite (lemma shnw_rs_eta) lr lhs true ())
+       (rewrite (premise 19) lr lhs true ())
+       (rewrite (lemma shnw_law_q15) lr lhs true ())
+       (rewrite (lemma shnw_rs_eta) lr lhs true ())
+       (rewrite (premise 20) lr lhs true ())
+       (rewrite (lemma shnw_law_epi) lr lhs true ())
+       (compute
+         lhs
+         (stop vload vstore vbswap vpaddd vpshufd vpalignr vpunpckl vpunpckh
+           shn_qround shn_kg shn_g4 shn_g5 shn_g6 shn_g7 shn_g8 shn_g9 shn_g10
+           shn_g11 shn_g12 shn_g13 shn_g14 shn_g15 shn_pk_abef shn_pk_cdgh
+           shnw_s16 shnw_f1 shnw_f2 x0_of x1_of x2_of x3_of rabef_of rcdgh_of))
+       (rewrite (lemma shnw_s16_def) rl lhs true ())
+       (rewrite (lemma shnw_f1_def) rl lhs true ())
+       (rewrite (lemma shnw_f2_def) rl lhs true ())
+       (rewrite (lemma shnw_block_split) lr rhs true ())
+       (compute
+         rhs
+         (stop vload vstore vbswap vpaddd vpshufd vpalignr vpunpckl vpunpckh
+           shn_qround shn_kg shn_g4 shn_g5 shn_g6 shn_g7 shn_g8 shn_g9 shn_g10
+           shn_g11 shn_g12 shn_g13 shn_g14 shn_g15 shn_pk_abef shn_pk_cdgh
+           shnw_s16 shnw_f1 shnw_f2 x0_of x1_of x2_of x3_of rabef_of rcdgh_of))))
+    refl))

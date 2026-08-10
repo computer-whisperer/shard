@@ -363,6 +363,9 @@ TARGETS=(
   std/sha256/sha256.shani.shard
   models/x86/diff/shani_diff_run.shard
   examples/sha256sum/sha256sum_stream_x86.shard
+  std/sha256/sha256.shaniw.shard
+  std/sha256/sha256.snweld.shard
+  examples/sha256sum/sha256sum_shani_x86.shard
   examples/sha256sum/sha256sum_stream_elf.shard
   pins/proof/sketch_pin.shard
   meta/sketch/mod.req.shard
