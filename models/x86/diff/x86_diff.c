@@ -6,6 +6,11 @@
  * against the model's expectation. Any mismatch is a FAIL; exit code = number
  * of failing lines (0 = agreement).
  *
+ * XCPUIDCASE is the one row kind whose expectation is NOT the model's: the
+ * chip's identity is the ENVIRONMENT's answer (the pure tier traps on XCpuid
+ * exactly as it does on XSyscall), so the reference is the C compiler's own
+ * __get_cpuid_count intrinsic — see the identity-point block below.
+ *
  * Dev-side only — this exercises the "the CPU conforms to the model" trust
  * leaf; nothing here is in-logic. A model None (trap) is scored as agreement
  * exactly when the hardware faults (SIGSEGV/SIGILL/SIGFPE) — the trap leg.
@@ -146,6 +151,72 @@ __asm__(".text\n"
 
 static uint8_t xin_buf[256] __attribute__((aligned(16)));
 static uint8_t xout_buf[256] __attribute__((aligned(16)));
+
+/* --- the identity-point leg (docs/STREAM.md §9.2, B6/A: cpuid) --------------
+ *
+ * CPUID answers in FOUR registers at once, and one of them is rbx — which is
+ * callee-saved under SysV, so C cannot let a called blob keep it. call_code
+ * above returns rax only. cpuid_trampoline is the same shape as
+ * xv_trampoline: spill everything the model treats as scratch, establish a
+ * fully determined entry state, call the emitted bytes, and copy the four
+ * 32-bit answers out BEFORE any of rax/rbx/rcx/rdx is reused.
+ *
+ *   void cpuid_trampoline(void *code, uint64_t a0, uint64_t a1, uint32_t *out);
+ *
+ * a0/a1 arrive in the model's rdi/rsi (the plan's module moves them into
+ * eax/ecx itself — the leaf/subleaf setup is model-emitted, not ours), and
+ * out[0..3] receive eax, ebx, ecx, edx. The four registers are ZEROED before
+ * the call so a body that does not execute a cpuid has a determined answer:
+ * that is what makes the un-blinding tooth row reproducible. code and out
+ * ride on the STACK across the call, since every GPR is fair game. */
+extern void cpuid_trampoline(void *code, uint64_t a0, uint64_t a1,
+                             uint32_t *out);
+
+__asm__(".text\n"
+        ".globl cpuid_trampoline\n"
+        ".type  cpuid_trampoline,@function\n"
+        "cpuid_trampoline:\n"
+        "  push %rbp\n"
+        "  push %rbx\n"
+        "  push %r12\n"
+        "  push %r13\n"
+        "  push %r14\n"
+        "  push %r15\n"
+        "  push %rcx\n"     /* out  -> 16(%rsp) after the sub below */
+        "  push %rdi\n"     /* code ->  8(%rsp) */
+        "  sub  $8, %rsp\n" /* rsp %% 16 == 0 at the call (SysV) */
+        "  mov  %rsi, %rdi\n" /* the model's arg registers: rdi/rsi */
+        "  mov  %rdx, %rsi\n"
+        "  xor  %eax, %eax\n"
+        "  xor  %ebx, %ebx\n"
+        "  xor  %ecx, %ecx\n"
+        "  xor  %edx, %edx\n"
+        "  call *8(%rsp)\n"
+        /* rax/rbx/rcx/rdx ARE the answer — rdi is the only safe scratch */
+        "  mov  16(%rsp), %rdi\n"
+        "  mov  %eax,  0(%rdi)\n"
+        "  mov  %ebx,  4(%rdi)\n"
+        "  mov  %ecx,  8(%rdi)\n"
+        "  mov  %edx, 12(%rdi)\n"
+        "  add  $8, %rsp\n"
+        "  pop  %rdi\n"
+        "  pop  %rcx\n"
+        "  pop  %r15\n"
+        "  pop  %r14\n"
+        "  pop  %r13\n"
+        "  pop  %r12\n"
+        "  pop  %rbx\n"
+        "  pop  %rbp\n"
+        "  ret\n"
+        ".size cpuid_trampoline,.-cpuid_trampoline\n");
+
+/* written by the trampoline across a sigsetjmp, so not a local */
+static uint32_t cpuid_out[4];
+
+/* rows whose leaf this CPU does not answer at all (pre-2013 silicon and
+ * leaf 7): the intrinsic refuses, so there is no reference to compare
+ * against and the row skips rather than lying in either direction. */
+static int cpuid_unsup = 0;
 
 /* even-length lowercase hex -> bytes; 0 = malformed or too long */
 static int hex_bytes(const char *h, uint8_t *out, size_t maxn, size_t *n) {
@@ -513,10 +584,63 @@ int main(int argc, char **argv) {
         if (neg) { th->n++; th->bit++; continue; }
         report(!strcmp(exp, "None"), tag, "hardware faulted");
       }
+    } else if (!strncmp(line, "XCPUIDCASE ", 11) ||
+               !strncmp(line, "XCPUIDNCASE ", 12)) {
+      /* the identity-point row (docs/STREAM.md §9.2, B6/A). The reference is
+       * NOT the model — the pure tier traps on XCpuid, and the chip's answer
+       * is the environment's — but the C compiler's __get_cpuid_count for the
+       * SAME leaf/subleaf. Agreement between the emitted bytes and the
+       * intrinsic is what says those bytes decode as CPUID; nothing else the
+       * encoder can emit produces all four of those answers. No feature gate:
+       * every x86-64 CPU has the instruction, only the answers vary.
+       * XCPUIDNCASE is the same row scored INVERTED (see tooth_verdicts). */
+      int neg = line[6] == 'N';
+      char name[32], a0[24], a1[24], a2[24], lf[24], sl[24];
+      int ac;
+      if (sscanf(line + (neg ? 12 : 11), "%31s %d %23s %23s %23s LEAF %23s %23s",
+                 name, &ac, a0, a1, a2, lf, sl) != 7) {
+        report(0, line, "unparseable");
+        continue;
+      }
+      unsigned leaf = (unsigned)parse_le_u64(lf);
+      unsigned subl = (unsigned)parse_le_u64(sl);
+      unsigned wa, wb, wc, wd;
+      if (!__get_cpuid_count(leaf, subl, &wa, &wb, &wc, &wd)) {
+        cpuid_unsup++;
+        printf("SKIP %s [cpuid leaf 0x%x unsupported on this cpu]\n", line, leaf);
+        continue;
+      }
+      /* volatile: live across the sigsetjmp and read again on the fault path */
+      struct tooth *volatile th = neg ? tooth_for(name) : NULL;
+      if (neg && !th) { report(0, line, "too many tooth modules"); continue; }
+      void *code = find_mod(name);
+      if (!code) { report(0, line, "module unavailable"); continue; }
+      memset(cpuid_out, 0, sizeof cpuid_out);
+      faulted = 0;
+      if (sigsetjmp(fault_env, 1) == 0) {
+        cpuid_trampoline(code, parse_le_u64(a0), parse_le_u64(a1), cpuid_out);
+        int good = cpuid_out[0] == wa && cpuid_out[1] == wb &&
+                   cpuid_out[2] == wc && cpuid_out[3] == wd;
+        if (neg) { th->n++; if (!good) th->bit++; continue; }
+        char detail[256];
+        snprintf(detail, sizeof detail,
+                 "eax %08x ebx %08x ecx %08x edx %08x want %08x %08x %08x %08x",
+                 cpuid_out[0], cpuid_out[1], cpuid_out[2], cpuid_out[3], wa, wb,
+                 wc, wd);
+        report(good, line, detail);
+      } else {
+        /* bytes that are not a valid instruction SIGILL here — plainly not a
+         * cpuid, and for a perturbed body plainly not the reference either */
+        if (neg) { th->n++; th->bit++; continue; }
+        report(0, line, "hardware faulted");
+      }
     }
   }
   fclose(f);
   tooth_verdicts();
+  if (cpuid_unsup)
+    printf("x86 cpuid leg: %d row(s) skipped (leaf unsupported on this cpu)\n",
+           cpuid_unsup);
   if (skipped)
     printf("x86 silicon differential: %d agree, %d disagree, %d skipped (no sha_ni)\n",
            ok, fail, skipped);

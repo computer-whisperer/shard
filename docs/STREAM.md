@@ -1799,3 +1799,36 @@ read answers; and the emitted-file collision — examples/sha256sum/
 sha256sum is today the ONE-SHOT's emitted path, so slice D re-homes
 that emission (to match its bin name, sha256sum_oneshot) before the
 dispatch artifact claims the plain path.
+
+### 9.3 Slice records
+
+- **Slice A LANDED 2026-08-10 — CPUID enters the model.** `(XCpuid)`
+  sits between XSyscall and XVec; the base tier traps (the pure
+  vector tier inherits through its base delegation, no arm needed);
+  `wcpuid` (world.shard, wsyscall's sibling) draws four →
+  eax/ebx/ecx/edx each `mod 2^32` (silicon zero-extends CPUID's
+  dwords), NO trace event, short answer list refuses; vworld mirrors
+  through wvlift; xeff_i AND xwv_i answer True. THE STRUCTURAL WALK,
+  measured: outside the model files exactly TWO consumers paid —
+  models/imp/probes/vx86_acc_probe.shard (11 `(XCpuid False)` arms:
+  vx_regi + the pair table enumerate ctors with NO catch-all — the
+  alphabet stays a conscious decision; plus 12 case-on pads) and
+  tools/search/tasks/x86_transition_window.shard (1 pad + a use
+  line: the file imports ctors ONE BY ONE — a new ctor needs its
+  `(use …)` before any case can name it). THE PAD RULE: copy the
+  local `(case XSyscall …)` donor and rename the token — XCpuid is
+  nullary like XSyscall and every predicate the pads reduce treats
+  both alike. Encoder (Opus): ONE arm `(XCpuid (list 15 162))` —
+  xsz_instr/enc_instr reach nullary ctors through enc_simple
+  catch-alls, so size cannot disagree with emission. Silicon pin
+  (Opus): six CPUID plan rows (leaves 0, 1, 7/0, 7/1, 8000_0000,
+  8000_0001; leaf setup = the model's own XMovRR32 instructions) +
+  the `cpuidno` inverted tooth in the UNGATED leg — replayer
+  trampoline (cpuid clobbers callee-saved rbx) vs
+  __get_cpuid_count; x86_diff 230/0 (was 223/0, delta exactly the
+  new rows); negative control (opcode flipped to 0F A3): six loud
+  hardware-fault FAILs, reverted; sha-ni leg untouched, 62/0.
+  Gates: x86/world/vworld/vector + probes + encode 303/0 + diff_run
+  638/0 green; deep smoke std/sha256/sha256.snweld.shard 1819/0
+  (the heaviest wvcall_bridge consumer — landed world-grain certs
+  replay untouched); all touched files shardfmt-canonical.

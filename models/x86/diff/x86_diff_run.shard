@@ -19,6 +19,13 @@
 ;;;          shani_diff_run.shard) ride on it; the replayer tallies bites per
 ;;;          tooth name and gates on every tooth biting >= 1 row.
 ;;;
+;;;   XCPUIDCASE <name> <argc> <a0> <a1> <a2> LEAF <leaf> <subleaf>
+;;;   XCPUIDNCASE — the same row, INVERTED (the identity-point's tooth)
+;;;
+;;; XCPUIDCASE is the identity-point row (B6/A, STREAM.md §9.2) and the one
+;;; row kind carrying NO model expectation — see the block near the end of
+;;; this file for why, and what it pins instead.
+;;;
 ;;; XVCASE is the VECTOR row (B5/E1; the block near the end of this file).
 ;;; <xmmfile> is the whole architectural XMM state — sixteen registers, xmm0
 ;;; first, each as its sixteen movdqu bytes — and its expectation comes from
@@ -988,6 +995,81 @@
 (fn vemit () (List Int)
   (cat (list (vemit_reg) (vemit_imm) (vemit_bswap) (vemit_alias) (vemit_mem))))
 
+;; ============================================================================
+;; THE IDENTITY-POINT (docs/STREAM.md §9.2, B6/A: cpuid)
+;; ============================================================================
+;;
+;; XCpuid cannot ride the value battery. The PURE tier refuses it (x86.shard
+;; answers Some XTrap, the XSyscall precedent), so xcall_fn would say None on
+;; every row while the silicon answers happily — a guaranteed FAIL of a
+;; CORRECT model, the same shape as the pshufb/palignr fences above. And
+;; there is nothing better to put in its place: the chip's answer is the
+;; ENVIRONMENT's, which is exactly why the world tier draws it from the
+;; oracle (R1). XSyscall has no battery row for the same reason.
+;;
+;; What IS pinnable is the ENCODING, and that is what this block pins. The
+;; module is entirely model-emitted — two XMovRR32 lifting the SysV args into
+;; eax/ecx, then XCpuid — and the replayer compares all four output registers
+;; against the C compiler's own __get_cpuid_count for the same leaf/subleaf.
+;; Self-consistency between the emitted bytes and the intrinsic is the claim:
+;; nothing else in the encoder's vocabulary produces those four answers.
+;;
+;; The SIZE needs no row: xsz_instr has no XCpuid arm, it reaches the bytes
+;; through the same enc_simple catch-all XSyscall uses, so width and emission
+;; cannot disagree by construction.
+;;
+;; NO GATE. Every x86-64 CPU executes cpuid — only the ANSWERS vary by chip —
+;; so unlike the sha_ni legs this one adjudicates on every runner, CI's
+;; included. A leaf this particular chip does not answer is the one soft
+;; spot, and the replayer SKIPs those rows (the intrinsic refuses them).
+
+;; cpuid(leaf in rdi, subleaf in rsi): eax/ebx/ecx/edx are the chip's answer
+(fn cpuid_f () XFunc
+  (MkXFunc 2 (list (XMovRR32 RAX RDI) (XMovRR32 RCX RSI) XCpuid)))
+
+;; THE TOOTH: the same body with the cpuid REMOVED, carrying the same
+;; reference and scored inverted. The trampoline zeroes all four registers
+;; before the call, so this body answers (leaf, 0, subleaf, 0) — which is not
+;; any chip's leaf-0 or leaf-1 answer. If it ever agreed, the rows above
+;; would be pinning nothing, and the replayer says so as a FAIL.
+(fn cpuid_no_f () XFunc
+  (MkXFunc 2 (list (XMovRR32 RAX RDI) (XMovRR32 RCX RSI))))
+
+(fn cpuidrow ((kind (List Int)) (nm (List Int)) (leaf Int) (sub Int)) (List Int)
+  (cat
+    (list
+      kind
+      " "
+      nm
+      " "
+      (dec1 (argc (list leaf sub)))
+      (argslots (list leaf sub))
+      " LEAF "
+      (hx leaf)
+      " "
+      (hx sub)
+      "\n")))
+
+;; Leaves 0 (vendor string + max basic leaf) and 1 (the feature word) are on
+;; every x86-64 CPU ever made; 0x80000000 / 0x80000001 are the extended pair
+;; x86-64 itself is defined by. Leaf 7 subleaf 0 is the word the B6 dispatch
+;; will actually read (EBX bit 29 = sha_ni) and subleaf 1 its sibling — the
+;; two differ on any chip reporting a nonzero max subleaf, which is what
+;; makes the SECOND mov (ecx) load-bearing rather than decorative.
+(fn cpuemit () (List Int)
+  (cat
+    (list
+      (mod_line "cpuid" (cpuid_f))
+      (cpuidrow "XCPUIDCASE" "cpuid" 0 0)
+      (cpuidrow "XCPUIDCASE" "cpuid" 1 0)
+      (cpuidrow "XCPUIDCASE" "cpuid" 7 0)
+      (cpuidrow "XCPUIDCASE" "cpuid" 7 1)
+      (cpuidrow "XCPUIDCASE" "cpuid" 2147483648 0)
+      (cpuidrow "XCPUIDCASE" "cpuid" 2147483649 0)
+      (mod_line "cpuidno" (cpuid_no_f))
+      (cpuidrow "XCPUIDNCASE" "cpuidno" 0 0)
+      (cpuidrow "XCPUIDNCASE" "cpuidno" 1 0))))
+
 ;; --- the plan ----------------------------------------------------------------
 ;; DATA_BASE = 0x40000000 = 1073741824; the trap address 0x40100000 =
 ;; 1074790400 is past the module's window [DATA_BASE, DATA_BASE+0x10000).
@@ -1141,6 +1223,8 @@
       (xcase "rorr11" (mreg (rorr11_f 1)) (list 2147483649) 20)
       (xcase "rorr11" (mreg (rorr11_f 1)) (list 18446744069414584321) 20)
       ;; --- the vector tier (B5/E1) -----------------------------------------
-      (vemit))))
+      (vemit)
+      ;; --- the identity-point (B6/A) ---------------------------------------
+      (cpuemit))))
 
 (fn main ((w World)) World (exit 0 (write (emit) w)))
