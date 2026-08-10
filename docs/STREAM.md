@@ -1832,3 +1832,51 @@ dispatch artifact claims the plain path.
   638/0 green; deep smoke std/sha256/sha256.snweld.shard 1819/0
   (the heaviest wvcall_bridge consumer — landed world-grain certs
   replay untouched); all touched files shardfmt-canonical.
+- **Slice B LANDED 2026-08-10 — the linking layer:
+  `models/x86/link.shard` (674/0, corpus-registered).** ONE article,
+  three theorem families over a query-sum encoding of the four-fn
+  eval SCC (`XQ`: instr / call / loop-walk / seq — one claim per
+  theorem, induct fuel, every other binder generalized):
+  - **The embedding tower** — `xlk_embx` (base→vector), `xlk_embp`
+    (vector→world-vector), `xlk_adeq` (base→world, static-scan
+    premised — forced by the 96/1024 budget disagreement), and
+    `xlk_embw` (world→world-vector, THE CROSSING for the scalar
+    family's entry equations). Premise = the SEMANTIC ok
+    discriminator of the lower walk (None rides, only the trap is
+    excluded) — no static vector-freedom scan needed.
+  - **EXTENSION** — `xlk_extx/extv/extwv`: appending functions to a
+    module preserves every walk whose code and reachable family
+    RESOLVE in the base family. The calls-below predicate is spelled
+    as call-RESOLUTION (`xlk_cb*`: XCall k resolves ⟺ `xfunc_at`
+    answers Some) — resolution IS the in-range fact, so the lemma
+    layer is arithmetic-free; the only farkas lemmas are the
+    prefix-skip index fact (`xlk_at_skip`) and resolution⇒nonneg
+    (`xlk_at_nonneg`).
+  - **SHIFT** — `xlk_shx/shv/shwv`: uniformly mapping (XCall k) →
+    (XCall (k+d)) over a family placed at offset d = len pre (m2 =
+    pre ++ shifted family ++ post, same window) preserves walks:
+    `xlq_T fuel m2 (xlk_shq d q) = xlq_T fuel m1 q`. The dispatch
+    scans ignore the shift (`xlk_scv_sh`/`xlk_scw_sh` + fn-level
+    corollaries — both scans judge XCall by CONSTRUCTOR, never by
+    index).
+  Both families stratify downward exactly like the embedding tower:
+  each upper tier cites the tier its call arm delegates to, at
+  (S f2) — extwv→extv→extx, shwv→shv→shx. Denotation corollaries
+  `xlk_extrun`/`xlk_shrun` transfer both families to `xvrun_w`, the
+  wv-tier bin boundary slice C's dispatch article composes at (the
+  shifted entry runs at index k+d). The run-grain form of the
+  EMBEDDING crossing (xrun_w equations → xvrun_w) stays a slice-C
+  item as ratified (WExit inverts through the wrapper; the None/dry
+  leg needs a seq-grain fact — decide there).
+  Mechanics of record: mutual STRUCTURAL recursion over
+  XInstr/List XInstr (the encoder's xsz precedent) carries both the
+  resolve predicate and the shifter; the six main claims are
+  generator-emitted (session scratchpad, gen_ext.py/gen_shift.py —
+  the probes are the source, b6b4/b6b6/b6b7/b6b8 untracked at
+  root, now STALE relative to the landed article); EXTENSION's
+  non-call arms close by α-equality after scrutinee alignment
+  (rewrite the continuation-equality have into the shared
+  scrutinee, fork-first only where continuations sit under match
+  binders: loop re-entry, seq tail); SHIFT's call arm is the
+  four-lemma lookup chain at_nonneg → at_skip → at_app → at_sh.
+  Full check 0.3 s; corpus row after sha256sum_shani_elf.
