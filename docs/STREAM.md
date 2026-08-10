@@ -1487,6 +1487,36 @@ replacement.
   sibling, imports re-rooted, sfm-tie-style carrier ties, corpus
   registration) and the (bin sha256sum_shani …) form; then slices
   D/E per §8.4.
+- **E3 SLICE C LANDED (2026-08-09, e9d543c) — THE PROBE CHAIN AS
+  THREE ARTICLES + THE BIN FORM. SLICE C COMPLETE.** The landing
+  split (user-ratified: three siblings mirroring the probe chain,
+  each surface independently consumable): (1)
+  std/sha256/sha256.shaniw.shard = the rebased machine tranche
+  (e3a's shnw_ content, 830/0) — B6's dispatch rung can cite the
+  streaming-layout block walk without the weld; (2)
+  std/sha256/sha256.snweld.shard = the SHA-NI streaming weld (e3b's
+  snw_ content: leaf, stanza laws, walks, tie, the wveval fold seam
+  snw_wcall; 1819/0) — sweld's analog one register file up; (3)
+  examples/sha256sum/sha256sum_shani_x86.shard = the variant bin's
+  machine+weld article (e3c's vfm_/vin_/vim_/vsm_/vsw_ content;
+  2064/0 = the probe's 2057 + SEVEN vfm_*_tie carrier ties pinning
+  the body copies to the skeleton article's sfm_/ssm_ originals —
+  cross-file drift fails AT THE TIE, sfm-tie precedent). Sibling
+  imports by basename, cross-tree by ../../ (sweld's style); use
+  paths are path-derived ((:: std sha256 sha256.shaniw) etc.).
+  (bin sha256sum_shani (entry sst_main) …) lands in
+  sha256sum_stream_src.shard beside the skeleton's bin over the SAME
+  spec entry (fork D's per-variant contract as ratified — two bins,
+  one spec, verdicts per variant; the checker accepts the pair).
+  Corpus rows: the three files registered after the skeleton article
+  in run_corpus.sh (dependency order tranche -> weld -> bin article);
+  all three shardfmt-canonical; local canon stage-2 sweep CLEAN. The
+  e3a/e3b/e3c probes at the repo root remain untracked scratch and
+  are STALE as of this landing (m1r precedent — the articles are the
+  source of truth). NEXT: slice D (ELF emission via enc_winelf,
+  byte-tie, capless silicon pipe differential vs coreutils AND
+  openssl — byte-emit legs Opus-delegated) then slice E (THE B5
+  NUMBER + the fork-D verdict + records); E4 after (user rules).
 - **E4 — clause-1 adjudication + B5 RECORD.** With the artifact in
   hand (CERT.md §4: decided WHEN THE ARTIFACT EXISTS), the user
   rules: grow the validator's disjunctive acceptance (clause 1 =
