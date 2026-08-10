@@ -278,6 +278,11 @@ needs a real consumer forcing its decisions:
   (CERT.md §4): decide build-clause-1 vs hand-prove-the-leg when
   the artifact exists. Rung-design forks: SHA-NI vs AVX2 tier
   first; the dispatch-visible variant contract.
+  **CLOSED 2026-08-09** — E1–E3 landed (§8.4: THE B5 NUMBER =
+  1.13× coreutils-as-shipped; verdict `sha256sum_shani: MET
+  (artifact: unconditional)`); E4 DISSOLVED by the clause-1
+  re-founding (CERT.md §4: the adjudication was mis-posed — the
+  hand leg was never awaiting admission).
 
 - **B6 — proven feature dispatch.** CPUID/feature detection selects
   only certified variants; the dispatch proof composes the B4/B5
@@ -1605,17 +1610,37 @@ replacement.
   §5's B5 wall-clock-on-record obligation: met (this table).
   X86.md §53 is the x86-side record. E3 CLOSED (slices A-E all
   landed); B5's remaining ladder = E4 alone (user rules).
-- **E4 — clause-1 adjudication + B5 RECORD.** With the artifact in
-  hand (CERT.md §4: decided WHEN THE ARTIFACT EXISTS), the user
-  rules: grow the validator's disjunctive acceptance (clause 1 =
-  dst freedom w/ witness tag + soundness leg; touches the
-  validator libraries under models/imp/probes — boundary-3
-  announced) vs the hand theorem standing as the boundary
-  insertion (§4's R-a-b path). The rung's evidence obligations:
-  what witness grammar a clause-1 acceptance would need (register
-  choices, schedule, layout facts), whether a second non-canonical
-  consumer is in sight, and what expert code needed from the
-  backend (the regalloc-arc pricing the parity fork promised).
+- **E4 CLOSED BY DISSOLUTION (user ruling 2026-08-09) — B5
+  CLOSES.** As drafted, E4 was the clause-1 adjudication: with the
+  artifact in hand, rule "grow the validator's disjunctive
+  acceptance (clause 1 = dst freedom w/ witness tag + soundness
+  leg; validator libraries under models/imp/probes)" vs "the hand
+  theorem standing as the boundary insertion (CERT.md §4's R-a-b
+  path)." THE RULING: the question was MIS-POSED — it treated hand
+  proof as awaiting admission into "the system," when hand
+  refinement proofs are the ground layer the methodology started
+  on and the validator is the economy wing for the generated
+  corner; validation is a proof STRATEGY (valid_P computed
+  in-proof + valid_P_sound cited), never a second trust mechanism.
+  B5 itself is the demonstration: the variant bin landed through
+  the uniform (bin …) contract — no dispensation, no waiting — and
+  the facets already interleave at fn granularity (the hand module
+  carries generated gb_* bodies; the hand walks cite generated
+  walk certs through the callee ladders). CERT.md §4 carries the
+  law amendment: **clause 1 RE-FOUNDED as a NAMED ECONOMY DOOR,
+  opened by a SECOND expert consumer** (a witness grammar from a
+  sample of one = the vx_sa corpse's shape), not by this leg's
+  existence. The rung's evidence obligations are BANKED in the
+  slice E record: the witness grammar a clause-1 acceptance would
+  need (register roles, schedule interleave, layout facts — frozen
+  in the articles), the second-consumer answer (none concrete: B6
+  composes proven pieces, AVX2 is a consumerless named door), and
+  the backend pricing (regalloc's win concentrates at the
+  high-IPC scalar tier; the expert vector leg needed NOTHING from
+  the backend — the x86gen freeze never strained). **B5 CLOSED**
+  (E1 vector tier, E2 block article, E3 variant bin, E4
+  dissolved). Arc B's remaining ladder = B6 (§3): proven feature
+  dispatch, whose §8.6 opening move is CPUID/feature modeling.
 
 ### 8.5 Forks (RULED 2026-08-02, all four to their leans — texts
 ### kept with the rejected options' costs in place)

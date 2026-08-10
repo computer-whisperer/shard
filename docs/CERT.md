@@ -170,6 +170,37 @@ independent information, and soundness never touches it; kept to
 hold the (src, dst, witness) shape open. DC1 is MOOT at this tier;
 delete-or-grow is decided when clause 1 arrives.
 
+**Clause-1 re-founding (user ruling 2026-08-09; the named consumer
+in hand).** The clause-architecture sentence above framed dst
+freedom as "triggered by the FIRST real non-canonical consumer,"
+with the hand theorem as a boundary insertion awaiting adjudication
+(STREAM.md's E4). That framing had the dependency INVERTED, and the
+consumer's arrival demonstrated it: Arc B's SHA-NI variant bin
+landed through the uniform `(bin …)` contract — kernel-checked
+theorems, no dispensation, verdict `sha256sum_shani: MET (artifact:
+unconditional)` — before any adjudication happened, because hand
+refinement proofs are the GROUND LAYER this methodology started on
+and never left. The validator is the economy wing built so the
+GENERATED corner is affordable (§1's measured problem), and
+validation is a proof STRATEGY — `valid_P` computed inside a
+kernel-checked proof citing `valid_P_sound` — never a second trust
+mechanism beside proof. One system, two facets; the house
+properties above always said so ("hand and automatic paths compose
+by the same refinement-transitivity theorem"), and the facets
+already interleave at function granularity (the hand SHA-NI module
+carries generated `gb_*` bodies; its hand walks cite generated walk
+certs through the callee ladders). CONSEQUENCE: **clause 1 is
+RE-FOUNDED as a NAMED ECONOMY DOOR, not an admission mechanism** —
+it opens when a SECOND expert consumer makes the witness grammar's
+generality real; a grammar designed from a sample of one is the
+vx_sa corpse's shape (silent under-approximation). Until then the
+hand-article path is the priced, repeatable route for expert legs
+(STREAM.md §8.4 slices A–E measured it). REJECTED-because, on
+record: "build clause 1 now on the SHA-NI witness evidence" died on
+(i) the sample-of-one grammar risk, (ii) no second expert consumer
+in sight (B6 composes already-proven pieces; AVX2 is a consumerless
+named door), (iii) the hand path's measured, falling cost.
+
 The historical blocker to generic simulation arguments was the v1
 untyped machine; the v2 crystallized kinds made alignment
 program-independent BY TYPE, which is what makes the generic
@@ -520,15 +551,20 @@ point.
   parallel design track at a time — §7's design note drafts
   alongside B4; C-paper and the coverage paper debts stay QUEUED
   until B5 is underway (B5's clause-1 adjudication is the next
-  large design decision and gets the bandwidth).
+  large design decision and gets the bandwidth). NOTE 2026-08-09:
+  B5 CLOSED (its clause-1 question dissolved — §4's re-founding),
+  so the queue condition is spent; C-paper and the coverage paper
+  debts are eligible again, still one design track at a time.
 
 ## 11. Decision points
 
 - **DC1 — witness grammar granularity per pass**: MOOT at the
   canonical-lowering tier (full-arc review 2026-07-26): witness v0
-  is an arity placeholder (§4); delete-or-grow is decided when
-  clause 1 of the §4 clause architecture arrives with a real
-  non-canonical consumer.
+  is an arity placeholder (§4). AMENDED 2026-08-09: clause 1 was
+  RE-FOUNDED as a named economy door (§4's re-founding — B5's hand
+  leg landed through the uniform contract and needed no clause);
+  delete-or-grow is decided if/when a SECOND expert consumer opens
+  that door.
 - **DC2 — `change`/`exact-conv` surface spelling**: DECIDED — FROZEN
   at the full-arc review 2026-07-26 with the §3 boundaries recorded
   (gensym-IH citation, gated-Occ counting, per-site stop sets). Step: `(change SIDE OCC TERM)` /
