@@ -5512,11 +5512,20 @@ it, each a measured lesson:
     the official full-corpus record (CI 339 + the stream tail).
     The far tier is now fully seen across combined logs: 6/13
     closed, far leg re-confirmed.** The fire ended not by watchdog
-    but `rt trap: heap exhausted` after 24 of 30 goals (the
-    runtime's heap ceiling — matching CI 323's flat 67.8GB RSS):
-    the engine retains across goals on the giant theory. Streaming
-    banked all 24; the six heavy correspondence goals
-    (blocks_split/blocks_prefix/step_abs/fin_abs/stream_gen/
-    sha_stream_corresponds) refire fresh-heap as CI 349
+    but `rt trap: heap exhausted` after 24 of 30 goals. Streaming
+    banked all 24; the tail refired fresh-heap as CI 349
     (bench_stream2, the skip machinery's first use — skip 24
     verified against goal order).
+  - **CI 349 (stream tail, fresh heap): trapped `rt trap: heap
+    exhausted` after 6.4h with ZERO lines — the cross-goal
+    retention diagnosis is REFUTED: shc_blocks_split ALONE
+    exhausts the runtime heap at census budgets (CI 338's trap was
+    mid-goal-25 on a warm heap, 349's on a cold one; also the
+    likely mechanic behind CI 323's flat 67.8GB RSS). CI 353
+    (bench_rest2) continues wasm_rev skip 14 + word + kit; CI 35x
+    (bench_stream3, skip 25) probes whether the remaining five
+    correspondence goals are measurable or the family blows the
+    same way. If the family is unmeasurable at census budgets, the
+    record types those goals ENGINE-HEAP refusals (they were all
+    OPEN-budget in LS4-i — no ladder close at stake; the gate line
+    stands at 166 without them).**
