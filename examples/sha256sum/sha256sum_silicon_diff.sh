@@ -1,10 +1,20 @@
 #!/usr/bin/env bash
-# examples/sha256sum/sha256sum_silicon_diff.sh — THE SILICON LEG for both
-# sha256sum bins (docs/STREAM.md §7.9 M5 slice 4). The proofs say what the
-# machine module does; this says the CPU agrees, by running the emitted ELFs
-# against coreutils on real input. The "hardware conforms to the model" trust
-# leaf for a whole program, where models/x86/diff/x86_diff.sh is the same leaf
-# per XFunc. Dev-and-CI side; nothing here is in-logic.
+# examples/sha256sum/sha256sum_silicon_diff.sh — THE SILICON LEG for the SCALAR
+# streaming bin and the ONE-SHOT demonstrator (docs/STREAM.md §7.9 M5 slice 4).
+# The proofs say what the machine module does; this says the CPU agrees, by
+# running the emitted ELFs against coreutils on real input. The "hardware
+# conforms to the model" trust leaf for a whole program, where
+# models/x86/diff/x86_diff.sh is the same leaf per XFunc. Dev-and-CI side;
+# nothing here is in-logic.
+#
+# ⚠ RENAMED LABELS 2026-08-10 (B6 slice D, docs/STREAM.md §9.2). This leg used
+# to call itself `sha256sum-silicon` and drove a product emitted at the
+# unqualified path examples/sha256sum/sha256sum. Both names now belong to the
+# CPUID-DISPATCH artifact (ruling R2, examples/sha256sum/sha256sum_dispatch_diff.sh):
+# the one-shot product moved to examples/sha256sum/sha256sum_oneshot and this
+# leg is `sha256sum-scalar-oneshot-silicon`. The unqualified name labels the
+# dispatch bin and nothing else. The scalar streaming product's path
+# (examples/sha256sum/sha256sum_stream) never collided and did not move.
 #
 # RUN FROM THE REPO ROOT (run_corpus.sh's differential legs all do):
 #   bash examples/sha256sum/sha256sum_silicon_diff.sh
@@ -56,7 +66,7 @@ cleanup() {
   local code=$?
   [ -n "$TMP" ] && rm -rf "$TMP"
   if [ "$finished" -eq 0 ]; then
-    printf 'FAIL sha256sum-silicon: aborted before completion (exit %s) — rows above stand\n' "$code"
+    printf 'FAIL sha256sum-scalar-oneshot-silicon: aborted before completion (exit %s) — rows above stand\n' "$code"
     exit 1
   fi
   exit "$rc"
@@ -83,7 +93,7 @@ ok "preflight: repo root, coreutils sha256sum, getcap, readelf, engine"
 TMP=$(mktemp -d) || die "preflight: mktemp failed"
 
 STREAM=examples/sha256sum/sha256sum_stream
-ONESHOT=examples/sha256sum/sha256sum
+ONESHOT=examples/sha256sum/sha256sum_oneshot
 
 # ------------------------------------------------------------------- emit ----
 emit() { # $1 = write script, $2 = product, $3 = row label

@@ -1955,3 +1955,60 @@ dispatch artifact claims the plain path.
   collision (one-shot emission re-homes to sha256sum_oneshot before
   the dispatch artifact claims examples/sha256sum/sha256sum), the
   everywhere-runs differential.
+- **Slice D LANDED 2026-08-10 — BYTES + THE EVERYWHERE-DIFFERENTIAL.**
+  The dispatch bin is a SHIPPED CAPLESS BINARY that adjudicates on
+  EVERY box. (0) THE RE-HOMING, first per the ladder: the one-shot
+  emission moves examples/sha256sum/sha256sum →
+  sha256sum_oneshot (write-glue path + elf header +
+  silicon_diff.sh's ONESHOT + labels); the scalar/one-shot CI leg is
+  renamed `sha256sum-scalar-oneshot-silicon` with a dated
+  annotation; no other repo file pointed the plain path at the
+  one-shot, so the plain path now belongs to the dispatch artifact
+  exactly as R2 rules. (1) THE TIE ARTICLE examples/sha256sum/
+  sha256sum_dispatch_elf.shard (corpus-registered, closure 2130/0 =
+  the article's 2124 + 6 ties, FIRST CHECK): dsx_xfuncs = the entry
+  claims' OWN module term — the COMPOSED spelling
+  (xlk_app SCALAR15 (xlk_app (xlk_shfns 15 SHANI15) (Cons STUB
+  Nil))), extracted verbatim by a single-pass paren-matcher from
+  dsm_main_eof_lo and verified byte-identical across all six claims,
+  NOT flattened: xlk_app/xlk_shfns are ordinary computable fns the
+  encoder evaluates at emission time. Each tie dsx_main_{eof,err,
+  dry}_{lo,hi} closes by ONE unfold + the article citation (empty
+  inst list, premises discharged by index) — the extraction-is-the-
+  cheaper-tie law holds at six claims as it did at three. Bytes =
+  enc_image_ord/img_offs_ord/enc_winelf at [65536,131072), ENTRY
+  SLOT 30; the loader zero-fill realizes the SAME two premise cells
+  as the shani twin (the dispatch claims carry the UNION of both
+  variants' premises; identical window, enc_winelf glue unchanged;
+  XMM file quantified arbitrary, no vector zeroing exists). TEETH
+  measured: swapping the stub's adjacent re-zero pair (XMovRI RBX 0)
+  /(XMovRI RCX 0) and the shifted-entry off-by-one (XCall 24)→
+  (XCall 23) each turn ALL SIX ties RED (2124/6); reverted, green.
+  (2) The run-only write glue sha256sum_dispatch_write.shard
+  (check-green 2144/0, NEVER a target) writes the plain path. (3)
+  THE DIFFERENTIAL sha256sum_dispatch_diff.sh (Opus-delegated per
+  the standing split): RUNS EVERYWHERE, NO SKIP — missing
+  coreutils/openssl/getcap/readelf/objdump/dd all FAIL; the cpuid
+  probe only REPORTS which arm this box's silicon takes; the
+  BOTH-FAMILIES DISASSEMBLY TEETH assert on every box that the
+  image carries sha256rnds2 ×32 + sha256msg1 ×12 + sha256msg2 ×12 +
+  cpuid EXACTLY ×2 (count-exact; disasm starts at the entry file
+  offset computed from the headers, not a pinned constant) — the
+  leg can never vacuously pass on scalar-only silicon; DOUBLE
+  ORACLE per row with oracle-vs-oracle disagreement its own FAIL;
+  cross-rows against the freshly-emitted scalar twin
+  (unconditional) and shani twin (sha_ni-gated, labelled extra
+  evidence never a gate — the shani twin would SIGILL without the
+  flag). RESULT on this box (5900X, sha_ni): **65 OK / 0 FAIL,
+  exit 0**, three runs; ELF = 18974 bytes; path line "sha-ni".
+  WHICH-HALF-RAN evidence (out-of-band, deliberately not a script
+  row): 256 MiB timed through all three bins — dispatch 0.169 s ≈
+  shani twin 0.167 s, 16.7× the scalar twin's 2.818 s: the stub
+  reaches fn 24, not merely the right digest. Regressions: the
+  re-homed scalar/one-shot leg 67/0, the shani leg 56/0; CI's
+  runner (no sha_ni) adjudicates the scalar arm of the SAME
+  binary — the ratified everywhere contract. NEXT: slice E — THE
+  B6 NUMBER (expect ≈ B5's 0.676 s/GiB; the stub is nanoseconds) +
+  the like-for-like headline (our dispatching artifact vs
+  coreutils-as-shipped) + verdict + records + the X86.md section.
+  ARC B CLOSES.

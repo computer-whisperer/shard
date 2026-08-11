@@ -370,6 +370,7 @@ TARGETS=(
   examples/sha256sum/sha256sum_shani_elf.shard
   models/x86/link.shard
   examples/sha256sum/sha256sum_dispatch_x86.shard
+  examples/sha256sum/sha256sum_dispatch_elf.shard
   pins/proof/sketch_pin.shard
   meta/sketch/mod.req.shard
   meta/invoke/prepared.shard
@@ -1304,21 +1305,27 @@ else
   echo "SKIPPED (needs clang + qemu-user + bin/shard_eval)"
 fi
 
-# sha256sum bin-level silicon differential (STREAM.md §7.9 M5 slice 4): emit
-# BOTH proven sha256sum ELFs fresh via the run-only write glue, assert
-# caplessness (getcap empty, RW window at 0x10000 = stock mmap_min_addr, no
-# vaddr-0 PT_LOAD), then drive the emitted binaries against coreutils —
-# the streaming bin PIPE-FED (short reads are the thing under test; the §51
-# file-redirect discipline is retired), the one-shot by file redirect with its
-# 64887/64888 cap boundary pinned on both sides. The "hardware conforms to
-# the model" trust leaf at whole-program grain, where the x86 leg above is
+# sha256sum SCALAR + ONE-SHOT bin-level silicon differential (STREAM.md §7.9 M5
+# slice 4): emit BOTH of those proven sha256sum ELFs fresh via the run-only
+# write glue, assert caplessness (getcap empty, RW window at 0x10000 = stock
+# mmap_min_addr, no vaddr-0 PT_LOAD), then drive the emitted binaries against
+# coreutils — the streaming bin PIPE-FED (short reads are the thing under test;
+# the §51 file-redirect discipline is retired), the one-shot by file redirect
+# with its 64887/64888 cap boundary pinned on both sides. The "hardware conforms
+# to the model" trust leaf at whole-program grain, where the x86 leg above is
 # the same leaf per XFunc. Per-row OK/FAIL at column 0; nonzero exit adds a
 # synthetic FAIL row (see the wasm leg's note). The script self-fails (no
 # SKIP) on missing coreutils/getcap/readelf — its assertions must never
 # silently not happen.
-echo "=== sha256sum: capless silicon differential ==="
+# ⚠ RENAMED 2026-08-10 (B6 slice D): this leg was `sha256sum-silicon` and its
+# one-shot product sat at the unqualified path examples/sha256sum/sha256sum.
+# Under ruling R2 both belong to the dispatch bin (third block below), so the
+# leg is `sha256sum-scalar-oneshot-silicon` and the product is
+# examples/sha256sum/sha256sum_oneshot.
+echo "=== sha256sum scalar+one-shot: capless silicon differential ==="
 if [ -x bin/shard_eval ]; then
-  bash examples/sha256sum/sha256sum_silicon_diff.sh 2>&1 || echo "FAIL sha256sum-silicon (exit $?)"
+  bash examples/sha256sum/sha256sum_silicon_diff.sh 2>&1 \
+    || echo "FAIL sha256sum-scalar-oneshot-silicon (exit $?)"
 else
   echo "SKIPPED (needs bin/shard_eval)"
 fi
@@ -1338,6 +1345,32 @@ fi
 echo "=== sha256sum shani: capless silicon differential ==="
 if [ -x bin/shard_eval ]; then
   bash examples/sha256sum/sha256sum_shani_diff.sh 2>&1 || echo "FAIL sha256sum-shani-silicon (exit $?)"
+else
+  echo "SKIPPED (needs bin/shard_eval)"
+fi
+
+# sha256sum CPUID-DISPATCH bin-level silicon differential (STREAM.md §9.2, rung
+# B6 slice D): the same leaf again, for the R2 plain-name artifact — the ONE
+# binary that carries both proven variants (scalar fns 0-14, SHA-NI fns 15-29)
+# and picks between them with its own two-step CPUID stub at fn 30. Emits the
+# proven merged ELF fresh via its run-only write glue, asserts caplessness,
+# asserts by DISASSEMBLY that both families are in the image on every box
+# (sha256rnds2 x32 / sha256msg1 x12 / sha256msg2 x12 / cpuid x2, count-exact),
+# then drives it PIPE-FED against the DOUBLE ORACLE — coreutils sha256sum AND
+# openssl dgst — with oracle-vs-oracle disagreement given its own FAIL text.
+# ⚠ THIS LEG RUNS EVERYWHERE AND HAS NO SKIP, unlike the SHA-NI leg above: the
+# product adjudicates on any chip because the stub calls the half that chip can
+# execute (a runner without sha_ni exercises the scalar arm = the proofs'
+# dsm/dsx `_lo`-and-bit-clear case; SHA-capable silicon exercises the SHA-NI
+# arm), and the digests are double-oracled either way. The cpuid probe inside
+# the script only REPORTS which arm this box took. Missing
+# coreutils/openssl/getcap/readelf/objdump is a FAIL, as everywhere else.
+# Per-row OK/FAIL at column 0; nonzero exit adds a synthetic FAIL row (see the
+# wasm leg's note).
+echo "=== sha256sum dispatch: capless silicon differential (runs everywhere) ==="
+if [ -x bin/shard_eval ]; then
+  bash examples/sha256sum/sha256sum_dispatch_diff.sh 2>&1 \
+    || echo "FAIL sha256sum-dispatch-silicon (exit $?)"
 else
   echo "SKIPPED (needs bin/shard_eval)"
 fi
