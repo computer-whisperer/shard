@@ -290,6 +290,11 @@ needs a real consumer forcing its decisions:
   ratified rung design** (R1 chip answer rides the oracle, R2 the
   dispatch bin takes the plain name, R3 linking meta-theorems, R4
   the two-step CPUID probe).
+  **CLOSED 2026-08-11** — slices A–E landed (§9.3: THE B6 NUMBER =
+  0.626 s/GiB, **1.08× coreutils-as-shipped, like-for-like at
+  last**; verdict `sha256sum: MET (artifact: unconditional)`; the
+  stub measured at +10 retired instructions per process). **ARC B
+  CLOSES** — B0–B6 all closed.
 
 ## 4. Sequencing rules
 
@@ -2012,3 +2017,54 @@ dispatch artifact claims the plain path.
   the like-for-like headline (our dispatching artifact vs
   coreutils-as-shipped) + verdict + records + the X86.md section.
   ARC B CLOSES.
+- **Slice E (2026-08-11) — THE B6 NUMBER + THE VERDICT. B6 CLOSES;
+  ARC B CLOSES.** Method = B4's exactly (median-of-5, core-pinned,
+  warm page cache, 1 GiB, quiet box; the two vector-tier bins at
+  median-of-9 after ambience widened their first spread), every
+  contender re-measured fresh; E3's baselines reproduce with the
+  whole table shifted ~3–8% faster (box clocks), ratios intact:
+
+      shard sha256sum (THE DISPATCH BIN)   0.626 s  (~1.6 GiB/s)
+      shard sha256sum_shani (twin)         0.625 s  → stub Δ ≈ 0
+      coreutils as shipped (SHA-NI)        0.581 s  → gap 1.08×
+      openssl dgst -sha256                 0.618 s  → gap 1.01×
+      coreutils, SHA-NI masked             1.695 s  → 2.7× in OUR favor
+      shard sha256sum_scalar (twin)       10.362 s  → 16.6× internal
+
+  **THE B6 NUMBER: 0.626 s/GiB — 1.08× coreutils-as-shipped, and
+  the ratified parity fork (b) headline is LIKE-FOR-LIKE AT LAST:
+  both artifacts are feature-dispatching binaries running their
+  own two-step CPUID; ours carries the proofs.** 1.01× openssl —
+  parity within 1% — and 2.7× FASTER than libcrypto's SHA-masked
+  expert scalar path. THE STUB IS FREE, measured three ways: perf
+  retired-instruction delta on 1 GiB = EXACTLY +10 instructions
+  (3,594,108,826 vs 3,594,108,816 — the two-step, once per
+  process) at cycles within 0.05%; empty-input process medians
+  identical; wall medians 1 ms apart. The scalar ARM's numbers:
+  OPENSSL_ia32cap cannot touch our bin (it executes the real
+  CPUID — the env masks libcrypto's dispatcher, not the silicon),
+  so the arm's wall number of record is the scalar twin's row
+  (the SAME code at the SAME indices, EXTENSION-transferred
+  verbatim) and its silicon adjudication is CI's: pipeline 357 on
+  the slice-D commit ran the everywhere-differential green on the
+  no-sha_ni runner (dispatch rows all OK, shani cross-rows
+  correctly absent, FAIL-set = the standing negative controls) —
+  BOTH arms of the one binary adjudicated on real silicon.
+  **THE VERDICT (fork D(a)'s contract, the composed form):**
+
+      sha256sum: MET (artifact: unconditional)
+
+  Same §7.5 claim form as both variants — no given, no except —
+  now additionally quantified over THE CHIP: the D8 disjunction
+  covers every oracle behavior at every fuel, over an arbitrary
+  initial XMM file and EVERY chip answer (the maxleaf<7 old-
+  silicon leg included), stated over the EMITTED merged module
+  (slice D's byte-tie), adjudicated with NO SKIP on every box.
+  The requirement never mentions chips or targets: THREE bins
+  over ONE spec entry sst_main, §5's expressibility gate answered
+  by construction a third time. X86.md §54 is the x86-side
+  record. **B6 CLOSED (slices A–E all landed). ARC B CLOSES:
+  B0–B6 complete — the flagship program is conventional (plain
+  name, capless ELF, feature dispatch, coreutils-shaped I/O),
+  fast (1.08× the box's own expert artifact), and proven
+  unconditionally at the bin boundary.**
