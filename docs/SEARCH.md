@@ -5529,3 +5529,15 @@ it, each a measured lesson:
     record types those goals ENGINE-HEAP refusals (they were all
     OPEN-budget in LS4-i — no ladder close at stake; the gate line
     stands at 166 without them).**
+  - **CI 356 (skip 25): trapped identically — `rt trap: heap
+    exhausted`, 5.9h, zero lines. THE FAMILY IS TYPED: two members
+    (shc_blocks_split, shc_blocks_prefix) independently exhaust the
+    runtime heap at census budgets on fresh heaps; the remaining
+    four (step_abs, fin_abs, stream_gen, sha_stream_corresponds)
+    are the same correspondence shape, heavier. No further stream
+    fires — sha256.stream enters the record 24/30 measured (+6
+    ladder D, 0 lost) + 6 ENGINE-HEAP refusals. The heap ceiling on
+    a single 600k-pool branch search over the machine-tier theory
+    is an ENGINE limitation, not a search-policy refutation — a
+    future rung (heap growth, per-arm eviction, or process-per-goal
+    harness isolation) owns it.**
