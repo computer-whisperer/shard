@@ -5541,3 +5541,44 @@ it, each a measured lesson:
     is an ENGINE limitation, not a search-policy refutation — a
     future rung (heap growth, per-arm eviction, or process-per-goal
     harness isolation) owns it.**
+
+**THE LS4-iii RECORD (official, 2026-08-11) — LS4-iii CLOSED, THE
+LS4 REACH GATE IS MET.**
+
+- **Ladder: 172/182 — gate 164 CLEARED with +8 margin** (LS4-i
+  baseline 142; +30 ladder closes, ZERO losses anywhere). All 182
+  ladder members measured. **Far leg: 6/13 closed (needs ≥1) — MET**
+  (the same six as LS4-i: blen_is_len, cat_len, get_set, gs_i,
+  lookup_insert_eq, str_len_nonneg). **D leg: 31 of the 37
+  census-open induction-shaped goals closed — the ≥17 requirement
+  nearly doubled.**
+- **Corpus totals: 297 goals across 20 files** (kit measured for the
+  first time, +1 linear close fpow2_le0). Tag census: 163 floor / 38
+  linear-engine / 33 branched-engine closes; 43 OPEN-branch / 20
+  other refusals; six stream correspondence goals = ENGINE-HEAP
+  refusals (non-ladder; twin fresh-heap witnesses CI 349+356).
+  **Every branched close in the corpus is a NEW close over LS4-i —
+  the fold contributed exactly its design target and nothing
+  regressed: base-drive parity held byte-identical on all ~200
+  untouched goals.**
+- **34 gains total (30 ladder + drop_shortens, rev_rev, fpow2_le0,
+  size_sexpr_list_nonneg): the std/list family (take_le b2-a139261 =
+  the assist's flagship, drop_le b2, append_assoc, rev_rev …), all
+  seven auto_demo inductions, the stream shc_ chunk-list family (six
+  b1), the word wrap family (i8/i16/i32 hi+lo, six b1 at 61k-78k —
+  precisely what LS4-i's 50k lin cap refused), adq13_leaf,
+  int_of_nat_nonneg, ilen_nonneg, reader's size_sexpr_list_nonneg.**
+- **What still refuses, typed:** mem's opaque-surface family
+  (OPEN-branch 94k-250k — arms need div/mod reasoning through the
+  mem abstraction, not structural induction); the deep utf8 pair +
+  take_len/drop_len (full 600k pool drains — deeper composite
+  shapes); bytes' seven candidates-exhausted; str_valid + div pair
+  (linear-shaped as ever); the ENGINE-HEAP six.
+- **Fire ledger:** CI 317 (light, +20) / 331 (imp_mix, parity) / 320
+  (bytes, 0/0) / 337 (mem, 0/0 clean) / 338 (stream 24/30, +6) / 339
+  (sha256+reader+wasm_rev partial, +1) / 353 (wasm_rev tail + word
+  86/86 + kit cut, +7) / 349+356 (heap-trap witnesses). Everything
+  under census-grade budgets, identical across fires.
+- **Surfaced for the slice boundary (user decision, per the interim
+  ruling): the gate is met — LS-law 3's prove-on-engine rewrite
+  decision is now live.**
