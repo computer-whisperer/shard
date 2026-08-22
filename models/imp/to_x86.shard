@@ -976,19 +976,22 @@
 (fn ixf_reload10 ((nl Int) (d Int)) (List XInstr)
   (ix_app (ixf_slot (+ nl d)) (list (XMem (XMLoad64 R10 (AReg R10))))))
 
-;; the binary op on R10 (left) and RAX (right), result into RAX
-(fn ixf_bop ((k IKind) (o XBop)) (List XInstr)
+;; the binary op on R10 (left) and RAX (right), result into RAX. U8 is
+;; REFUSED (the base tier's vxg_bnu8 line, re-found at A-2): a 64-bit add
+;; / sub / mul / shl of two bytes is not the byte-wrapped result imp's
+;; iop_val gives, and no emitted program computes at U8 (bytes are loaded,
+;; extended, and stored — never added)
+(fn ixf_bop ((k IKind) (o XBop)) (Option (List XInstr))
   (match k
-    (U32 (list (XBin32 o R10 (SReg RAX)) (XMovRR RAX R10)))
-    (U64 (list (XBin o R10 (SReg RAX)) (XMovRR RAX R10)))
-    (U8 (list (XBin o R10 (SReg RAX)) (XMovRR RAX R10)))))
+    (U32 (Some (list (XBin32 o R10 (SReg RAX)) (XMovRR RAX R10))))
+    (U64 (Some (list (XBin o R10 (SReg RAX)) (XMovRR RAX R10))))
+    (U8 None)))
 
 ;; a comparison of R10 (left) with RAX (right) materialized as 0/1 in RAX
 (fn ixf_cmp ((c Cond)) (List XInstr)
   (list
     (XMovRI R11 0)
-    (XBlock
-      (list (XBlock (list (XBrIf c 0) (XBr 1))) (XMovRI R11 1)))
+    (XBlock (list (XBlock (list (XBrIf c 0) (XBr 1))) (XMovRI R11 1)))
     (XMovRR RAX R11)))
 
 ;; unsigned division of R10 (dividend) by RAX (divisor): RAX := quotient,
@@ -1012,13 +1015,10 @@
             (match (ixf_exp nl d a)
               (None None)
               ((Some ia)
-               (Some
-                 (ix_app
-                   ia
-                   (match k
-                     (U32 (list (XShlI32 RAX c)))
-                     (U64 (list (XShlI RAX c)))
-                     (U8 (list (XShlI RAX c)))))))))
+               (match k
+                 (U32 (Some (ix_app ia (list (XShlI32 RAX c)))))
+                 (U64 (Some (ix_app ia (list (XShlI RAX c)))))
+                 (U8 None)))))
            (_ None)))
        (IShr
          (match b
@@ -1034,29 +1034,29 @@
             (match (ixf_exp nl (+ d 1) b)
               (None None)
               ((Some ib)
-               (Some
-                 (ix_app
-                   ia
-                   (ix_app
-                     (ixf_spill nl d)
-                     (ix_app
-                       ib
-                       (ix_app
-                         (ixf_reload10 nl d)
-                         (match o
-                           (IAdd (ixf_bop k XAdd))
-                           (ISub (ixf_bop k XSub))
-                           (IMul (ixf_bop k XMul))
-                           (IAnd (ixf_bop k XAnd))
-                           (IOr (ixf_bop k XOr))
-                           (IXor (ixf_bop k XXor))
-                           (IDiv (ixf_div))
-                           (IRem (ix_app (ixf_div) (list (XMovRR RAX RDX))))
-                           (IEq (ixf_cmp (CEq R10 (SReg RAX))))
-                           (ILt (ixf_cmp (CLtU R10 (SReg RAX))))
-                           (ILe (ixf_cmp (CLeU R10 (SReg RAX))))
-                           (IShl Nil)
-                           (IShr Nil))))))))))))))
+               (match
+                 (match o
+                   (IAdd (ixf_bop k XAdd))
+                   (ISub (ixf_bop k XSub))
+                   (IMul (ixf_bop k XMul))
+                   (IAnd (ixf_bop k XAnd))
+                   (IOr (ixf_bop k XOr))
+                   (IXor (ixf_bop k XXor))
+                   (IDiv (Some (ixf_div)))
+                   (IRem (Some (ix_app (ixf_div) (list (XMovRR RAX RDX)))))
+                   (IEq (Some (ixf_cmp (CEq R10 (SReg RAX)))))
+                   (ILt (Some (ixf_cmp (CLtU R10 (SReg RAX)))))
+                   (ILe (Some (ixf_cmp (CLeU R10 (SReg RAX)))))
+                   (IShl None)
+                   (IShr None))
+                 (None None)
+                 ((Some iop)
+                  (Some
+                    (ix_app
+                      ia
+                      (ix_app
+                        (ixf_spill nl d)
+                        (ix_app ib (ix_app (ixf_reload10 nl d) iop))))))))))))))
     ((IRotr k a c)
      (match k
        (U32
@@ -1114,7 +1114,8 @@
        (match s
          ((IpSet _ e) (ixf_dep e))
          ((IpStore a v) (+ 1 (imax2 (ixf_dep a) (ixf_dep v))))
-         ((IpIf c tb eb) (imax2 (ixf_dep c) (imax2 (ixf_sdep tb) (ixf_sdep eb))))
+         ((IpIf c tb eb)
+          (imax2 (ixf_dep c) (imax2 (ixf_sdep tb) (ixf_sdep eb))))
          ((IpWhile c b) (imax2 (ixf_dep c) (ixf_sdep b)))
          ((IpCall _ _ args) (ixf_deps args))
          ((IpLoadW _ a) (ixf_dep a))
@@ -1124,7 +1125,8 @@
        (ixf_sdep t)))))
 
 ;; the arguments of a call into the callee's frame at FP + own + 8j
-(fn ixf_args ((nl Int) (own Int) (j Int) (args (List IExp))) (Option (List XInstr))
+(fn ixf_args ((nl Int) (own Int) (j Int) (args (List IExp)))
+  (Option (List XInstr))
   (measure (struct args))
   (match args
     (Nil (Some Nil))
@@ -1195,7 +1197,9 @@
                           (XBlock
                             (Cons
                               (XBlock
-                                (Cons (XBrIf (CNz RAX) 0) (ix_app ieb (list (XBr 1)))))
+                                (Cons
+                                  (XBrIf (CNz RAX) 0)
+                                  (ix_app ieb (list (XBr 1)))))
                               itb))
                           it))))))))))
           ((IpWhile c b)
@@ -1212,7 +1216,9 @@
                          (XLoop
                            (ix_app
                              ic
-                             (Cons (XBrIf (CEqz RAX) 1) (ix_app ib (list (XBr 0))))))))
+                             (Cons
+                               (XBrIf (CEqz RAX) 1)
+                               (ix_app ib (list (XBr 0))))))))
                      it)))))))
           ((IpCall i k args)
            (match (ixf_args nl own 0 args)
@@ -1272,7 +1278,9 @@
 (fn ixf_zero ((from Int) (nl Int)) (List XInstr)
   (measure (- nl from) (by arith (list 1 0)) (by arith (list 1 1)))
   (if (lt from nl)
-    (ix_app (list (XMovRI RAX 0)) (ix_app (ixf_st from) (ixf_zero (+ from 1) nl)))
+    (ix_app
+      (list (XMovRI RAX 0))
+      (ix_app (ixf_st from) (ixf_zero (+ from 1) nl)))
     Nil))
 
 ;; the frame size in bytes of an IpFn: locals + spill slots + one
@@ -1287,7 +1295,8 @@
 ;; `lt d dmax` test and its d + 1, in that order)
 (fn ixf_enter ((dmax Int) (fail_ix Int)) (List XInstr)
   (list
-    (XBlock (list (XBrIf (CLtU R14 (SImm dmax)) 0) (XMovRI RDI 72) (XCall fail_ix)))
+    (XBlock
+      (list (XBrIf (CLtU R14 (SImm dmax)) 0) (XMovRI RDI 72) (XCall fail_ix)))
     (XBin XAdd R14 (SImm 1))))
 
 ;; the depth epilogue: R14 -= 1 (RAX, the result, untouched)

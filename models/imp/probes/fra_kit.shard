@@ -1503,3 +1503,1549 @@
            ((steps ((rewrite (premise 0) lr lhs true ())) refl)
             (steps ((rewrite (premise hnext) lr lhs true ())) refl)))
          refl)))))
+
+;; ===================================================================================
+;; A-2: THE EXPRESSION TIER'S VOCABULARY (docs/COVERAGE.md §11.1)
+;; ===================================================================================
+
+;; --- outcomes --------------------------------------------------------------------
+
+;; the register file of a normal outcome (xregs0 elsewhere — never read there)
+(fn xo_regs ((r (Option XOut))) Regs
+  (match r
+    (None (xregs0))
+    ((Some out)
+     (match out
+       ((XNorm rs _) rs)
+       (_ (xregs0))))))
+
+;; THE EXPRESSION OUTCOME: v in RAX, the entry file's registers where the
+;; emission never writes, and the run's OWN values in the scratch it does
+;; write (RDX R10 R11) — spelled as projections of the run itself, so the
+;; conclusion names no garbage and needs no witness
+(fn fe_out ((v Int) (rs Regs) (r (Option XOut)) (mem Mem)) (Option XOut)
+  (Some
+    (XNorm
+      (MkRegs
+        v
+        (rcx_of rs)
+        (rdx_of (xo_regs r))
+        (rbx_of rs)
+        (rbp_of rs)
+        (rsi_of rs)
+        (rdi_of rs)
+        (r8_of rs)
+        (r9_of rs)
+        (r10_of (xo_regs r))
+        (r11_of (xo_regs r))
+        (r12_of rs)
+        (r13_of rs)
+        (r14_of rs)
+        (r15_of rs))
+      mem)))
+
+;; --- patch lists -----------------------------------------------------------------
+
+(fn fp_app ((a (List FPatch)) (b (List FPatch))) (List FPatch)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (fp_app t b)))))
+
+(claim fp_app_assoc
+  (goal ((a (List FPatch)) (b (List FPatch)) (c (List FPatch))) ()
+    (= (fp_app (fp_app a b) c) (fp_app a (fp_app b c))))
+  (induct a
+    ((case Nil
+       (steps
+         ((unfold fp_app lhs)
+          (reduce lhs)
+          (unfold fp_app lhs)
+          (reduce lhs)
+          (unfold fp_app rhs)
+          (reduce rhs)
+          (unfold fp_app rhs)
+          (reduce rhs))
+         refl))
+     (case Cons
+       (h t)
+       (steps
+         ((unfold fp_app lhs)
+          (reduce lhs)
+          (unfold fp_app lhs)
+          (reduce lhs)
+          (unfold fp_app rhs)
+          (reduce rhs)
+          (rewrite (hyp ih) lr lhs true ()))
+         refl)))))
+
+;; --- the locals relation -----------------------------------------------------------
+
+(fn opt_int_eq ((o (Option Int)) (h Int)) Bool
+  (match o
+    (None False)
+    ((Some w) (int_eq w h))))
+
+;; local j of lc is the newest word at slot fp + 8j, in band
+(fn fr_locs ((fp Int) (lc (List Int)) (ps (List FPatch))) Bool
+  (measure (struct lc))
+  (match lc
+    (Nil True)
+    ((Cons h t)
+     (if (opt_int_eq (fp_wordv ps fp) h)
+       (if (le 0 h)
+         (if (lt h 18446744073709551616) (fr_locs (+ fp 8) t ps) False)
+         False)
+       False))))
+
+;; --- the spill trace (the twin) -----------------------------------------------------
+
+;; the frame patches ixf_exp's emission writes, newest first: one word per
+;; general binary node (the left operand's value at slot nl + d), nothing
+;; else
+(fn fe_tr
+  ((fp Int)
+   (nl Int)
+   (d Int)
+   (e IExp)
+   (lc (List Int))
+   (mem Mem)
+   (mlo Int)
+   (msz Int))
+  (List FPatch)
+  (measure (struct e))
+  (match e
+    ((IConst _) Nil)
+    ((ILoc _) Nil)
+    ((IBin k o a b)
+     (match o
+       (IShl (fe_tr fp nl d a lc mem mlo msz))
+       (IShr (fe_tr fp nl d a lc mem mlo msz))
+       (_
+         (match (iexp a lc mem mlo msz)
+           (None Nil)
+           ((Some va)
+            (fp_app
+              (fe_tr fp nl (+ d 1) b lc mem mlo msz)
+              (Cons
+                (FWord (+ fp (* 8 (+ nl d))) va)
+                (fe_tr fp nl d a lc mem mlo msz))))))))
+    ((IRotr _ a _) (fe_tr fp nl d a lc mem mlo msz))
+    ((IExt _ _ a) (fe_tr fp nl d a lc mem mlo msz))
+    ((ITrunc _ _ a) (fe_tr fp nl d a lc mem mlo msz))
+    ((ILoad a) (fe_tr fp nl d a lc mem mlo msz))))
+
+;; --- the emission's length and cost ---------------------------------------------------
+
+;; the op block's length (the general binary arm's tail)
+(fn ixf_oplen ((o IOp)) Int
+  (match o
+    (IAdd 2)
+    (ISub 2)
+    (IMul 2)
+    (IDiv 4)
+    (IRem 5)
+    (IAnd 2)
+    (IOr 2)
+    (IXor 2)
+    (IShl 0)
+    (IShr 0)
+    (IEq 3)
+    (ILt 3)
+    (ILe 3)))
+
+;; the length of ixf_exp's emission (on the shapes it accepts)
+(fn ixf_elen ((e IExp)) Int
+  (measure (struct e))
+  (match e
+    ((IConst _) 1)
+    ((ILoc _) 3)
+    ((IBin k o a b)
+     (match o
+       (IShl (+ (ixf_elen a) 1))
+       (IShr (+ (ixf_elen a) 1))
+       (_ (+ (ixf_elen a) (+ 3 (+ (ixf_elen b) (+ 3 (ixf_oplen o))))))))
+    ((IRotr _ a _) (+ (ixf_elen a) 1))
+    ((IExt _ _ a) (ixf_elen a))
+    ((ITrunc _ kt a)
+     (match kt
+       (U64 (ixf_elen a))
+       (U32 (+ (ixf_elen a) 1))
+       (U8 (+ (ixf_elen a) 1))))
+    ((ILoad a) (+ (ixf_elen a) 1))))
+
+;; the tower height the emission needs: its length plus the comparison
+;; blocks' nesting (the deepest instruction sits four levels under the
+;; block that holds it)
+(fn ixf_ecost ((e IExp)) Int (+ (ixf_elen e) 4))
+
+;; constants in the machine's band (A1's vx_cb line)
+(fn ixf_cb ((e IExp)) Bool
+  (measure (struct e))
+  (match e
+    ((IConst n) (if (le 0 n) (lt n 18446744073709551616) False))
+    ((ILoc _) True)
+    ((IBin _ _ a b) (if (ixf_cb a) (ixf_cb b) False))
+    ((IRotr _ a c) (if (ixf_cb a) (ixf_cb c) False))
+    ((IExt _ _ a) (ixf_cb a))
+    ((ITrunc _ _ a) (ixf_cb a))
+    ((ILoad a) (ixf_cb a))))
+
+;; --- the laws ---------------------------------------------------------------------
+
+(claim xil_app
+  (goal ((a (List XInstr)) (b (List XInstr))) ()
+    (= (xil (ix_app a b)) (+ (xil a) (xil b))))
+  (induct a
+    ((case Nil
+       (steps
+         ((unfold ix_app lhs) (reduce lhs) (unfold xil rhs) (reduce rhs))
+         (by arith (list (list 1) (list 1)))))
+     (case Cons
+       (h t)
+       (steps
+         ((unfold ix_app lhs)
+          (reduce lhs)
+          (unfold xil lhs)
+          (reduce lhs)
+          (rewrite (hyp ih) lr lhs true ())
+          (unfold xil rhs)
+          (reduce rhs))
+         (by arith (list (list 1) (list 1))))))))
+
+;; the slot of local j (fp + 8j) is 8-aligned whenever fp is
+(claim al_shift
+  (goal ((slo Int) (fp Int) (k Int)) ((= (int_eq (mod (- fp slo) 8) 0) True))
+    (= (int_eq (mod (- (+ fp (* 8 k)) slo) 8) 0) True))
+  (div-facts
+    (- fp slo)
+    8
+    q
+    (div-facts
+      (- (+ fp (* 8 k)) slo)
+      8
+      q2
+      (have hlo (= (le 0 (- (+ k q) q2)) True)
+        (by arith (list 8 -1 -1 0 0 0 1 1 0 0))
+        (have hhi (= (le (- (+ k q) q2) 0) True)
+          (by arith (list 8 1 1 0 0 0 -1 0 1 0 0))
+          (by
+            arith
+            (list
+              (list 1 -1 -1 0 0 0 1 0 0 0 0 8)
+              (list 1 1 1 0 0 0 -1 0 0 0 8 0))))))))
+
+;; the relation at a cons: the four facts, each by the unfold idiom
+(claim fr_locs_unf
+  (goal ((fp Int) (h Int) (t (List Int)) (ps (List FPatch))) ()
+    (=
+      (fr_locs fp (Cons h t) ps)
+      (if (opt_int_eq (fp_wordv ps fp) h)
+        (if (le 0 h)
+          (if (lt h 18446744073709551616) (fr_locs (+ fp 8) t ps) False)
+          False)
+        False)))
+  (steps ((unfold fr_locs lhs) (reduce lhs)) refl))
+
+(claim fr_locs_head
+  (goal ((fp Int) (h Int) (t (List Int)) (ps (List FPatch)))
+    ((= (fr_locs fp (Cons h t) ps) True))
+    (= (opt_int_eq (fp_wordv ps fp) h) True))
+  (case-on (opt_int_eq (fp_wordv ps fp) h) Bool
+    ((case True (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+     (case False
+       (chain
+         (have ho (= (opt_int_eq (fp_wordv ps fp) h) False)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (have hff (= False True)
+           (steps
+             ((rewrite (premise 0) rl rhs true ())
+              (rewrite (lemma fr_locs_unf) lr rhs true ())
+              (rewrite (premise ho) lr rhs true ())
+              (reduce rhs))
+             refl))
+         (absurd (premise hff)))))))
+
+(claim fr_locs_lo
+  (goal ((fp Int) (h Int) (t (List Int)) (ps (List FPatch)))
+    ((= (fr_locs fp (Cons h t) ps) True))
+    (= (le 0 h) True))
+  (chain
+    (have hh (= (opt_int_eq (fp_wordv ps fp) h) True)
+      (rewrite-with
+        (lemma fr_locs_head)
+        lr
+        lhs
+        ((inst t t))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (case-on (le 0 h) Bool
+      ((case True (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+       (case False
+         (chain
+           (have hl (= (le 0 h) False)
+             (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           (have hff (= False True)
+             (steps
+               ((rewrite (premise 0) rl rhs true ())
+                (rewrite (lemma fr_locs_unf) lr rhs true ())
+                (rewrite (premise hh) lr rhs true ())
+                (rewrite (premise hl) lr rhs true ())
+                (reduce rhs))
+               refl))
+           (absurd (premise hff))))))))
+
+(claim fr_locs_hi
+  (goal ((fp Int) (h Int) (t (List Int)) (ps (List FPatch)))
+    ((= (fr_locs fp (Cons h t) ps) True))
+    (= (lt h 18446744073709551616) True))
+  (chain
+    (have hh (= (opt_int_eq (fp_wordv ps fp) h) True)
+      (rewrite-with
+        (lemma fr_locs_head)
+        lr
+        lhs
+        ((inst t t))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hl (= (le 0 h) True)
+      (rewrite-with
+        (lemma fr_locs_lo)
+        lr
+        lhs
+        ((inst t t) (inst fp fp) (inst ps ps))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (case-on (lt h 18446744073709551616) Bool
+      ((case True (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+       (case False
+         (chain
+           (have hb (= (lt h 18446744073709551616) False)
+             (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           (have hff (= False True)
+             (steps
+               ((rewrite (premise 0) rl rhs true ())
+                (rewrite (lemma fr_locs_unf) lr rhs true ())
+                (rewrite (premise hh) lr rhs true ())
+                (rewrite (premise hl) lr rhs true ())
+                (rewrite (premise hb) lr rhs true ())
+                (reduce rhs))
+               refl))
+           (absurd (premise hff))))))))
+
+(claim fr_locs_tail
+  (goal ((fp Int) (h Int) (t (List Int)) (ps (List FPatch)))
+    ((= (fr_locs fp (Cons h t) ps) True))
+    (= (fr_locs (+ fp 8) t ps) True))
+  (chain
+    (have hh (= (opt_int_eq (fp_wordv ps fp) h) True)
+      (rewrite-with
+        (lemma fr_locs_head)
+        lr
+        lhs
+        ((inst t t))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hl (= (le 0 h) True)
+      (rewrite-with
+        (lemma fr_locs_lo)
+        lr
+        lhs
+        ((inst t t) (inst fp fp) (inst ps ps))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hb (= (lt h 18446744073709551616) True)
+      (rewrite-with
+        (lemma fr_locs_hi)
+        lr
+        lhs
+        ((inst t t) (inst fp fp) (inst ps ps))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (steps
+      ((rewrite (premise 0) rl rhs true ())
+       (rewrite (lemma fr_locs_unf) lr rhs true ())
+       (rewrite (premise hh) lr rhs true ())
+       (rewrite (premise hl) lr rhs true ())
+       (rewrite (premise hb) lr rhs true ())
+       (reduce rhs))
+      refl)))
+
+;; the newest word at a local's slot is the local's value
+(claim fr_head_w
+  (goal ((fp Int) (h Int) (t (List Int)) (ps (List FPatch)))
+    ((= (fr_locs fp (Cons h t) ps) True))
+    (= (fp_wordv ps fp) (Some h)))
+  (chain
+    (have hh (= (opt_int_eq (fp_wordv ps fp) h) True)
+      (rewrite-with
+        (lemma fr_locs_head)
+        lr
+        lhs
+        ((inst t t))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (case-on (fp_wordv ps fp) Option
+      ((case None
+         (chain
+           (have hw (= (fp_wordv ps fp) None)
+             (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           (have hff (= False True)
+             (steps
+               ((rewrite (premise hh) rl rhs true ())
+                (rewrite (premise hw) lr rhs true ())
+                (unfold opt_int_eq rhs)
+                (reduce rhs))
+               refl))
+           (absurd (premise hff))))
+       (case Some
+         (w)
+         (chain
+           (have hw (= (fp_wordv ps fp) (Some w))
+             (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           (have hwh (= (int_eq w h) True)
+             (steps
+               ((rewrite (premise hh) rl rhs true ())
+                (rewrite (premise hw) lr rhs true ())
+                (unfold opt_int_eq rhs)
+                (reduce rhs))
+               refl))
+           (have hweq (= w h)
+             (by arith (list (list 1 0 0 0 -1) (list 1 0 0 0 1))))
+           (steps
+             ((rewrite (premise hw) lr lhs true ())
+              (rewrite (premise hweq) lr lhs true ()))
+             refl)))))))
+
+;; reading local i through the relation: the newest word at its slot, in band
+(claim fr_get_w
+  (goal ((fp Int) (lc (List Int)) (ps (List FPatch)) (i Int) (v Int))
+    ((= (fr_locs fp lc ps) True) (= (ilget lc i) (Some v)))
+    (= (fp_wordv ps (+ fp (* 8 i))) (Some v)))
+  (induct lc
+    ((case Nil
+       (chain
+         (have hn (= None (Some v))
+           (steps
+             ((rewrite (premise 1) rl rhs true ())
+              (unfold ilget rhs)
+              (reduce rhs))
+             refl))
+         (absurd (premise hn))))
+     (case Cons
+       (h t)
+       (chain
+         (have hgu
+           (= (ilget (Cons h t) i) (if (int_eq i 0) (Some h) (ilget t (- i 1))))
+           (steps ((unfold ilget lhs) (reduce lhs)) refl))
+         (case-on (int_eq i 0) Bool
+           ((case True
+              (chain
+                (have hi0 (= (int_eq i 0) True)
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (have hsome (= (Some h) (Some v))
+                  (steps
+                    ((rewrite (premise 1) rl rhs true ())
+                     (rewrite (premise hgu) lr rhs true ())
+                     (rewrite (premise hi0) lr rhs true ())
+                     (reduce rhs))
+                    refl))
+                (inject (premise hsome) (hhv))
+                (have hslot (= (+ fp (* 8 i)) fp)
+                  (by arith (list (list 1 0 0 0 -8 0 0) (list 1 0 0 0 8 0 0))))
+                (have hw (= (fp_wordv ps fp) (Some h))
+                  (rewrite-with
+                    (lemma fr_head_w)
+                    lr
+                    lhs
+                    ((inst t t) (inst h h))
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                    refl))
+                (steps
+                  ((rewrite (premise hslot) lr lhs true ())
+                   (rewrite (premise hw) lr lhs true ())
+                   (rewrite (premise hhv) lr lhs true ()))
+                  refl)))
+            (case False
+              (chain
+                (have hi0 (= (int_eq i 0) False)
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (have hrest (= (fr_locs (+ fp 8) t ps) True)
+                  (rewrite-with
+                    (lemma fr_locs_tail)
+                    lr
+                    lhs
+                    ((inst h h))
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                    refl))
+                (have hgt (= (ilget t (- i 1)) (Some v))
+                  (steps
+                    ((rewrite (premise 1) rl rhs true ())
+                     (rewrite (premise hgu) lr rhs true ())
+                     (rewrite (premise hi0) lr rhs true ())
+                     (reduce rhs))
+                    refl))
+                (have hslot (= (+ fp (* 8 i)) (+ (+ fp 8) (* 8 (- i 1))))
+                  (by arith (list (list 1 0 0 0 0 0 0) (list 1 0 0 0 0 0 0))))
+                (steps ((rewrite (premise hslot) lr lhs true ())))
+                (rewrite-with
+                  (hyp ih)
+                  lr
+                  lhs
+                  ((inst v v))
+                  ((steps ((rewrite (premise hrest) lr lhs true ())) refl)
+                   (steps ((rewrite (premise hgt) lr lhs true ())) refl)))
+                refl)))))))))
+
+(claim fr_get_lo
+  (goal ((fp Int) (lc (List Int)) (ps (List FPatch)) (i Int) (v Int))
+    ((= (fr_locs fp lc ps) True) (= (ilget lc i) (Some v)))
+    (= (le 0 v) True))
+  (induct lc
+    ((case Nil
+       (chain
+         (have hn (= None (Some v))
+           (steps
+             ((rewrite (premise 1) rl rhs true ())
+              (unfold ilget rhs)
+              (reduce rhs))
+             refl))
+         (absurd (premise hn))))
+     (case Cons
+       (h t)
+       (chain
+         (have hgu
+           (= (ilget (Cons h t) i) (if (int_eq i 0) (Some h) (ilget t (- i 1))))
+           (steps ((unfold ilget lhs) (reduce lhs)) refl))
+         (case-on (int_eq i 0) Bool
+           ((case True
+              (chain
+                (have hi0 (= (int_eq i 0) True)
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (have hsome (= (Some h) (Some v))
+                  (steps
+                    ((rewrite (premise 1) rl rhs true ())
+                     (rewrite (premise hgu) lr rhs true ())
+                     (rewrite (premise hi0) lr rhs true ())
+                     (reduce rhs))
+                    refl))
+                (inject (premise hsome) (hhv))
+                (have hl (= (le 0 h) True)
+                  (rewrite-with
+                    (lemma fr_locs_lo)
+                    lr
+                    lhs
+                    ((inst t t) (inst fp fp) (inst ps ps))
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                    refl))
+                (steps
+                  ((rewrite (premise hhv) rl lhs true ())
+                   (rewrite (premise hl) lr lhs true ()))
+                  refl)))
+            (case False
+              (chain
+                (have hi0 (= (int_eq i 0) False)
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (have hrest (= (fr_locs (+ fp 8) t ps) True)
+                  (rewrite-with
+                    (lemma fr_locs_tail)
+                    lr
+                    lhs
+                    ((inst h h))
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                    refl))
+                (have hgt (= (ilget t (- i 1)) (Some v))
+                  (steps
+                    ((rewrite (premise 1) rl rhs true ())
+                     (rewrite (premise hgu) lr rhs true ())
+                     (rewrite (premise hi0) lr rhs true ())
+                     (reduce rhs))
+                    refl))
+                (rewrite-with
+                  (hyp ih)
+                  lr
+                  lhs
+                  ((inst fp (+ fp 8)) (inst ps ps) (inst i (- i 1)))
+                  ((steps ((rewrite (premise hrest) lr lhs true ())) refl)
+                   (steps ((rewrite (premise hgt) lr lhs true ())) refl)))
+                refl)))))))))
+
+(claim fr_get_hi
+  (goal ((fp Int) (lc (List Int)) (ps (List FPatch)) (i Int) (v Int))
+    ((= (fr_locs fp lc ps) True) (= (ilget lc i) (Some v)))
+    (= (lt v 18446744073709551616) True))
+  (induct lc
+    ((case Nil
+       (chain
+         (have hn (= None (Some v))
+           (steps
+             ((rewrite (premise 1) rl rhs true ())
+              (unfold ilget rhs)
+              (reduce rhs))
+             refl))
+         (absurd (premise hn))))
+     (case Cons
+       (h t)
+       (chain
+         (have hgu
+           (= (ilget (Cons h t) i) (if (int_eq i 0) (Some h) (ilget t (- i 1))))
+           (steps ((unfold ilget lhs) (reduce lhs)) refl))
+         (case-on (int_eq i 0) Bool
+           ((case True
+              (chain
+                (have hi0 (= (int_eq i 0) True)
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (have hsome (= (Some h) (Some v))
+                  (steps
+                    ((rewrite (premise 1) rl rhs true ())
+                     (rewrite (premise hgu) lr rhs true ())
+                     (rewrite (premise hi0) lr rhs true ())
+                     (reduce rhs))
+                    refl))
+                (inject (premise hsome) (hhv))
+                (have hb (= (lt h 18446744073709551616) True)
+                  (rewrite-with
+                    (lemma fr_locs_hi)
+                    lr
+                    lhs
+                    ((inst t t) (inst fp fp) (inst ps ps))
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                    refl))
+                (steps
+                  ((rewrite (premise hhv) rl lhs true ())
+                   (rewrite (premise hb) lr lhs true ()))
+                  refl)))
+            (case False
+              (chain
+                (have hi0 (= (int_eq i 0) False)
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (have hrest (= (fr_locs (+ fp 8) t ps) True)
+                  (rewrite-with
+                    (lemma fr_locs_tail)
+                    lr
+                    lhs
+                    ((inst h h))
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                    refl))
+                (have hgt (= (ilget t (- i 1)) (Some v))
+                  (steps
+                    ((rewrite (premise 1) rl rhs true ())
+                     (rewrite (premise hgu) lr rhs true ())
+                     (rewrite (premise hi0) lr rhs true ())
+                     (reduce rhs))
+                    refl))
+                (rewrite-with
+                  (hyp ih)
+                  lr
+                  lhs
+                  ((inst fp (+ fp 8)) (inst ps ps) (inst i (- i 1)))
+                  ((steps ((rewrite (premise hrest) lr lhs true ())) refl)
+                   (steps ((rewrite (premise hgt) lr lhs true ())) refl)))
+                refl)))))))))
+
+;; a word patch at or past the locals' slots leaves the relation alone
+(claim fr_locs_skip
+  (goal ((fp Int) (lc (List Int)) (ps (List FPatch)) (a Int) (w Int))
+    ((= (fr_locs fp lc ps) True) (= (le (+ fp (* 8 (ilen lc))) a) True))
+    (= (fr_locs fp lc (Cons (FWord a w) ps)) True))
+  (induct lc
+    ((case Nil (steps ((unfold fr_locs lhs) (reduce lhs)) refl))
+     (case Cons
+       (h t)
+       (chain
+         (have hlen (= (ilen (Cons h t)) (+ 1 (ilen t)))
+           (steps ((unfold ilen lhs) (reduce lhs)) refl))
+         (have hnn (= (le 0 (ilen t)) True)
+           (rewrite-with (lemma ilen_nonneg) lr lhs () () refl))
+         (have hne (= (int_eq a fp) False) (by arith (list -1 0 1 8 8)))
+         (have hnext (= (le (+ (+ fp 8) (* 8 (ilen t))) a) True)
+           (by arith (list 1 0 1 8 0 0)))
+         (have hh (= (fp_wordv ps fp) (Some h))
+           (rewrite-with
+             (lemma fr_head_w)
+             lr
+             lhs
+             ((inst t t) (inst h h))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have hl (= (le 0 h) True)
+           (rewrite-with
+             (lemma fr_locs_lo)
+             lr
+             lhs
+             ((inst t t) (inst fp fp) (inst ps ps))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have hb (= (lt h 18446744073709551616) True)
+           (rewrite-with
+             (lemma fr_locs_hi)
+             lr
+             lhs
+             ((inst t t) (inst fp fp) (inst ps ps))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have hrest (= (fr_locs (+ fp 8) t ps) True)
+           (rewrite-with
+             (lemma fr_locs_tail)
+             lr
+             lhs
+             ((inst h h))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((rewrite (lemma fr_locs_unf) lr lhs true ())
+            (unfold fp_wordv lhs)
+            (reduce lhs)
+            (rewrite (premise hne) lr lhs true ())
+            (reduce lhs)
+            (rewrite (premise hh) lr lhs true ())
+            (unfold opt_int_eq lhs)
+            (reduce lhs)
+            (rewrite (lemma int_eq_refl) lr lhs true ())
+            (reduce lhs)
+            (rewrite (premise hl) lr lhs true ())
+            (reduce lhs)
+            (rewrite (premise hb) lr lhs true ())
+            (reduce lhs)))
+         (rewrite-with
+           (hyp ih)
+           lr
+           lhs
+           ((inst a a) (inst w w))
+           ((steps ((rewrite (premise hrest) lr lhs true ())) refl)
+            (steps ((rewrite (premise hnext) lr lhs true ())) refl)))
+         refl)))))
+
+;; --- multi-peel towers (for the straight-line block lemmas) ------------------------
+
+(claim xt_peel2
+  (goal ((c Int) (g Nat)) ((= (le 2 c) True))
+    (= (xt c g) (S (S (xt (- c 2) g)))))
+  (chain
+    (have h1 (= (lt 0 c) True) (by arith (list 1 1)))
+    (have h2 (= (lt 0 (- c 1)) True) (by arith (list 1 1 0)))
+    (have ha (= (- (- c 1) 1) (- c 2))
+      (by arith (list (list 1 0 0 0) (list 1 0 0 0))))
+    (rewrite-with
+      (lemma xt_peel)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise h1) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma xt_peel)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise h2) lr lhs true ())) refl)))
+    (steps ((rewrite (premise ha) lr lhs true ())) refl)))
+
+(claim xt_peel3
+  (goal ((c Int) (g Nat)) ((= (le 3 c) True))
+    (= (xt c g) (S (S (S (xt (- c 3) g))))))
+  (chain
+    (have h1 (= (le 2 c) True) (by arith (list 1 1)))
+    (have h2 (= (lt 0 (- c 2)) True) (by arith (list 1 1 0)))
+    (have ha (= (- (- c 2) 1) (- c 3))
+      (by arith (list (list 1 0 0 0) (list 1 0 0 0))))
+    (rewrite-with
+      (lemma xt_peel2)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise h1) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma xt_peel)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise h2) lr lhs true ())) refl)))
+    (steps ((rewrite (premise ha) lr lhs true ())) refl)))
+
+(claim xt_peel4
+  (goal ((c Int) (g Nat)) ((= (le 4 c) True))
+    (= (xt c g) (S (S (S (S (xt (- c 4) g)))))))
+  (chain
+    (have h1 (= (le 3 c) True) (by arith (list 1 1)))
+    (have h2 (= (lt 0 (- c 3)) True) (by arith (list 1 1 0)))
+    (have ha (= (- (- c 3) 1) (- c 4))
+      (by arith (list (list 1 0 0 0) (list 1 0 0 0))))
+    (rewrite-with
+      (lemma xt_peel3)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise h1) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma xt_peel)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise h2) lr lhs true ())) refl)))
+    (steps ((rewrite (premise ha) lr lhs true ())) refl)))
+
+;; --- the emission's length ------------------------------------------------------------
+
+;; ground block lengths
+(claim xil_slot
+  (goal ((i Int)) () (= (xil (ixf_slot i)) 2))
+  (steps ((compute lhs)) refl))
+
+(claim xil_ld
+  (goal ((i Int)) () (= (xil (ixf_ld i)) 3))
+  (steps ((compute lhs)) refl))
+
+(claim xil_st
+  (goal ((i Int)) () (= (xil (ixf_st i)) 3))
+  (steps ((compute lhs)) refl))
+
+;; --- THE FRAME STORE: ixf_st i from a literal file --------------------------------------
+
+;; [FP + 8i] := RAX, R10 := FP + 8i, everything else carried; the slot lies in
+;; the window and below 2^64 (the address arithmetic never wraps)
+(claim fe_st_run
+  (goal
+    ((i Int)
+     (c Int)
+     (g Nat)
+     (m XModule)
+     (xm Mem)
+     (a0 Int)
+     (rcx Int)
+     (dx Int)
+     (rbx Int)
+     (rbp Int)
+     (rsi Int)
+     (di Int)
+     (r8 Int)
+     (r9 Int)
+     (s10 Int)
+     (s11 Int)
+     (r12 Int)
+     (r13 Int)
+     (dep Int)
+     (fp Int))
+    ((= (le 4 c) True)
+     (= (le 0 i) True)
+     (= (le 0 fp) True)
+     (= (lt (+ (+ fp (* 8 i)) 8) 18446744073709551616) True)
+     (= (le (xmemlo_of m) (+ fp (* 8 i))) True)
+     (= (le (+ (+ fp (* 8 i)) 8) (xmemhi_of m)) True))
+    (=
+      (xeval_seq
+        (xt c g)
+        m
+        (ixf_st i)
+        (MkRegs a0 rcx dx rbx rbp rsi di r8 r9 s10 s11 r12 r13 dep fp)
+        xm)
+      (Some
+        (XNorm
+          (MkRegs
+            a0
+            rcx
+            dx
+            rbx
+            rbp
+            rsi
+            di
+            r8
+            r9
+            (+ fp (* 8 i))
+            s11
+            r12
+            r13
+            dep
+            fp)
+          (store_le (xw8) xm (+ fp (* 8 i)) a0)))))
+  (chain
+    (have hl1 (= (le 0 (* 8 i)) True) (by arith (list 1 0 8 0 0 0 0)))
+    (have hh1 (= (lt (* 8 i) 18446744073709551616) True)
+      (by arith (list 1 0 0 1 1 0 0 0)))
+    (have hl2 (= (le 0 (+ fp (* 8 i))) True)
+      (by arith (list 1 0 8 1 0 0 0 0 0)))
+    (have hh2 (= (lt (+ fp (* 8 i)) 18446744073709551616) True)
+      (by arith (list 1 0 0 0 1 0 0 0 0 0)))
+    (have hw1 (= (wrap64 (* 8 i)) (* 8 i))
+      (chain
+        (steps ((unfold wrap64 lhs)))
+        (rewrite-with
+          (lemma wrap64_id)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise hl1) lr lhs true ())) refl)
+           (steps ((rewrite (premise hh1) lr lhs true ())) refl)))
+        refl))
+    (have hw2 (= (wrap64 (+ fp (* 8 i))) (+ fp (* 8 i)))
+      (chain
+        (steps ((unfold wrap64 lhs)))
+        (rewrite-with
+          (lemma wrap64_id)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise hl2) lr lhs true ())) refl)
+           (steps ((rewrite (premise hh2) lr lhs true ())) refl)))
+        refl))
+    (rewrite-with
+      (lemma xt_peel4)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps
+      ((compute lhs (stop xt xw8 store_le wrap64 xmemlo_of xmemhi_of))
+       (rewrite (premise hw1) lr lhs true ())
+       (rewrite (premise hw2) lr lhs true ())
+       (rewrite (premise 4) lr lhs true ())
+       (rewrite (premise 5) lr lhs true ())
+       (reduce lhs)
+       (compute lhs (stop xt xw8 store_le wrap64 xmemlo_of xmemhi_of)))
+      refl)))
+
+(claim xt_peel8
+  (goal ((c Int) (g Nat)) ((= (le 8 c) True))
+    (= (xt c g) (S (S (S (S (S (S (S (S (xt (- c 8) g)))))))))))
+  (chain
+    (have h1 (= (le 4 c) True) (by arith (list 1 1)))
+    (have h2 (= (le 4 (- c 4)) True) (by arith (list 1 1 0)))
+    (have ha (= (- (- c 4) 4) (- c 8))
+      (by arith (list (list 1 0 0 0) (list 1 0 0 0))))
+    (rewrite-with
+      (lemma xt_peel4)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise h1) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma xt_peel4)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise h2) lr lhs true ())) refl)))
+    (steps ((rewrite (premise ha) lr lhs true ())) refl)))
+
+;; --- THE FRAME LOAD: ixf_ld i --------------------------------------------------------
+
+;; RAX := [FP + 8i], R10 := FP + 8i
+(claim fe_ld_run
+  (goal
+    ((i Int)
+     (c Int)
+     (g Nat)
+     (m XModule)
+     (xm Mem)
+     (a0 Int)
+     (rcx Int)
+     (dx Int)
+     (rbx Int)
+     (rbp Int)
+     (rsi Int)
+     (di Int)
+     (r8 Int)
+     (r9 Int)
+     (s10 Int)
+     (s11 Int)
+     (r12 Int)
+     (r13 Int)
+     (dep Int)
+     (fp Int))
+    ((= (le 4 c) True)
+     (= (le 0 i) True)
+     (= (le 0 fp) True)
+     (= (lt (+ (+ fp (* 8 i)) 8) 18446744073709551616) True)
+     (= (le (xmemlo_of m) (+ fp (* 8 i))) True)
+     (= (le (+ (+ fp (* 8 i)) 8) (xmemhi_of m)) True))
+    (=
+      (xeval_seq
+        (xt c g)
+        m
+        (ixf_ld i)
+        (MkRegs a0 rcx dx rbx rbp rsi di r8 r9 s10 s11 r12 r13 dep fp)
+        xm)
+      (Some
+        (XNorm
+          (MkRegs
+            (load_le (xw8) xm (+ fp (* 8 i)))
+            rcx
+            dx
+            rbx
+            rbp
+            rsi
+            di
+            r8
+            r9
+            (+ fp (* 8 i))
+            s11
+            r12
+            r13
+            dep
+            fp)
+          xm))))
+  (chain
+    (have hl1 (= (le 0 (* 8 i)) True) (by arith (list 1 0 8 0 0 0 0)))
+    (have hh1 (= (lt (* 8 i) 18446744073709551616) True)
+      (by arith (list 1 0 0 1 1 0 0 0)))
+    (have hl2 (= (le 0 (+ fp (* 8 i))) True)
+      (by arith (list 1 0 8 1 0 0 0 0 0)))
+    (have hh2 (= (lt (+ fp (* 8 i)) 18446744073709551616) True)
+      (by arith (list 1 0 0 0 1 0 0 0 0 0)))
+    (have hw1 (= (wrap64 (* 8 i)) (* 8 i))
+      (chain
+        (steps ((unfold wrap64 lhs)))
+        (rewrite-with
+          (lemma wrap64_id)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise hl1) lr lhs true ())) refl)
+           (steps ((rewrite (premise hh1) lr lhs true ())) refl)))
+        refl))
+    (have hw2 (= (wrap64 (+ fp (* 8 i))) (+ fp (* 8 i)))
+      (chain
+        (steps ((unfold wrap64 lhs)))
+        (rewrite-with
+          (lemma wrap64_id)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise hl2) lr lhs true ())) refl)
+           (steps ((rewrite (premise hh2) lr lhs true ())) refl)))
+        refl))
+    (rewrite-with
+      (lemma xt_peel4)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps
+      ((compute lhs (stop xt xw8 load_le wrap64 xmemlo_of xmemhi_of))
+       (rewrite (premise hw1) lr lhs true ())
+       (rewrite (premise hw2) lr lhs true ())
+       (rewrite (premise 4) lr lhs true ())
+       (rewrite (premise 5) lr lhs true ())
+       (reduce lhs)
+       (compute lhs (stop xt xw8 load_le wrap64 xmemlo_of xmemhi_of)))
+      refl)))
+
+;; --- THE RELOAD: ixf_reload10 nl d ------------------------------------------------------
+
+;; R10 := [FP + 8(nl + d)]
+(claim fe_rl_run
+  (goal
+    ((nl Int)
+     (d Int)
+     (c Int)
+     (g Nat)
+     (m XModule)
+     (xm Mem)
+     (a0 Int)
+     (rcx Int)
+     (dx Int)
+     (rbx Int)
+     (rbp Int)
+     (rsi Int)
+     (di Int)
+     (r8 Int)
+     (r9 Int)
+     (s10 Int)
+     (s11 Int)
+     (r12 Int)
+     (r13 Int)
+     (dep Int)
+     (fp Int))
+    ((= (le 4 c) True)
+     (= (le 0 (+ nl d)) True)
+     (= (le 0 fp) True)
+     (= (lt (+ (+ fp (* 8 (+ nl d))) 8) 18446744073709551616) True)
+     (= (le (xmemlo_of m) (+ fp (* 8 (+ nl d)))) True)
+     (= (le (+ (+ fp (* 8 (+ nl d))) 8) (xmemhi_of m)) True))
+    (=
+      (xeval_seq
+        (xt c g)
+        m
+        (ixf_reload10 nl d)
+        (MkRegs a0 rcx dx rbx rbp rsi di r8 r9 s10 s11 r12 r13 dep fp)
+        xm)
+      (Some
+        (XNorm
+          (MkRegs
+            a0
+            rcx
+            dx
+            rbx
+            rbp
+            rsi
+            di
+            r8
+            r9
+            (load_le (xw8) xm (+ fp (* 8 (+ nl d))))
+            s11
+            r12
+            r13
+            dep
+            fp)
+          xm))))
+  (chain
+    (have hl1 (= (le 0 (* 8 (+ nl d))) True) (by arith (list 1 0 8 0 0 0 0)))
+    (have hh1 (= (lt (* 8 (+ nl d)) 18446744073709551616) True)
+      (by arith (list 1 0 0 1 1 0 0 0)))
+    (have hl2 (= (le 0 (+ fp (* 8 (+ nl d)))) True)
+      (by arith (list 1 0 8 1 0 0 0 0 0)))
+    (have hh2 (= (lt (+ fp (* 8 (+ nl d))) 18446744073709551616) True)
+      (by arith (list 1 0 0 0 1 0 0 0 0 0)))
+    (have hw1 (= (wrap64 (* 8 (+ nl d))) (* 8 (+ nl d)))
+      (chain
+        (steps ((unfold wrap64 lhs)))
+        (rewrite-with
+          (lemma wrap64_id)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise hl1) lr lhs true ())) refl)
+           (steps ((rewrite (premise hh1) lr lhs true ())) refl)))
+        refl))
+    (have hw2 (= (wrap64 (+ fp (* 8 (+ nl d)))) (+ fp (* 8 (+ nl d))))
+      (chain
+        (steps ((unfold wrap64 lhs)))
+        (rewrite-with
+          (lemma wrap64_id)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise hl2) lr lhs true ())) refl)
+           (steps ((rewrite (premise hh2) lr lhs true ())) refl)))
+        refl))
+    (rewrite-with
+      (lemma xt_peel4)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps
+      ((compute lhs (stop xt xw8 load_le wrap64 xmemlo_of xmemhi_of))
+       (rewrite (premise hw1) lr lhs true ())
+       (rewrite (premise hw2) lr lhs true ())
+       (rewrite (premise 4) lr lhs true ())
+       (rewrite (premise 5) lr lhs true ())
+       (reduce lhs)
+       (compute lhs (stop xt xw8 load_le wrap64 xmemlo_of xmemhi_of)))
+      refl)))
+
+;; --- THE BINARY OP BLOCKS: RAX := R10 op RAX (R10 too) -------------------------------------
+
+(claim fe_bop64_run
+  (goal
+    ((o XBop)
+     (c Int)
+     (g Nat)
+     (m XModule)
+     (xm Mem)
+     (a0 Int)
+     (rcx Int)
+     (dx Int)
+     (rbx Int)
+     (rbp Int)
+     (rsi Int)
+     (di Int)
+     (r8 Int)
+     (r9 Int)
+     (s10 Int)
+     (s11 Int)
+     (r12 Int)
+     (r13 Int)
+     (dep Int)
+     (fp Int))
+    ((= (le 3 c) True))
+    (=
+      (xeval_seq
+        (xt c g)
+        m
+        (list (XBin o R10 (SReg RAX)) (XMovRR RAX R10))
+        (MkRegs a0 rcx dx rbx rbp rsi di r8 r9 s10 s11 r12 r13 dep fp)
+        xm)
+      (Some
+        (XNorm
+          (MkRegs
+            (xbop_val o s10 a0)
+            rcx
+            dx
+            rbx
+            rbp
+            rsi
+            di
+            r8
+            r9
+            (xbop_val o s10 a0)
+            s11
+            r12
+            r13
+            dep
+            fp)
+          xm))))
+  (chain
+    (rewrite-with
+      (lemma xt_peel3)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((compute lhs (stop xt xbop_val))) refl)))
+
+(claim fe_bop32_run
+  (goal
+    ((o XBop)
+     (c Int)
+     (g Nat)
+     (m XModule)
+     (xm Mem)
+     (a0 Int)
+     (rcx Int)
+     (dx Int)
+     (rbx Int)
+     (rbp Int)
+     (rsi Int)
+     (di Int)
+     (r8 Int)
+     (r9 Int)
+     (s10 Int)
+     (s11 Int)
+     (r12 Int)
+     (r13 Int)
+     (dep Int)
+     (fp Int))
+    ((= (le 3 c) True))
+    (=
+      (xeval_seq
+        (xt c g)
+        m
+        (list (XBin32 o R10 (SReg RAX)) (XMovRR RAX R10))
+        (MkRegs a0 rcx dx rbx rbp rsi di r8 r9 s10 s11 r12 r13 dep fp)
+        xm)
+      (Some
+        (XNorm
+          (MkRegs
+            (xbop32_val o s10 a0)
+            rcx
+            dx
+            rbx
+            rbp
+            rsi
+            di
+            r8
+            r9
+            (xbop32_val o s10 a0)
+            s11
+            r12
+            r13
+            dep
+            fp)
+          xm))))
+  (chain
+    (rewrite-with
+      (lemma xt_peel3)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((compute lhs (stop xt xbop32_val))) refl)))
+
+;; --- THE COMPARISON BLOCK: RAX := R11 := 1 if the condition holds, else 0 ------------------
+
+(claim fe_cmp_run
+  (goal
+    ((cd Cond)
+     (c Int)
+     (g Nat)
+     (m XModule)
+     (xm Mem)
+     (a0 Int)
+     (rcx Int)
+     (dx Int)
+     (rbx Int)
+     (rbp Int)
+     (rsi Int)
+     (di Int)
+     (r8 Int)
+     (r9 Int)
+     (s10 Int)
+     (s11 Int)
+     (r12 Int)
+     (r13 Int)
+     (dep Int)
+     (fp Int))
+    ((= (le 8 c) True))
+    (=
+      (xeval_seq
+        (xt c g)
+        m
+        (ixf_cmp cd)
+        (MkRegs a0 rcx dx rbx rbp rsi di r8 r9 s10 s11 r12 r13 dep fp)
+        xm)
+      (Some
+        (XNorm
+          (MkRegs
+            (if
+              (xcond
+                (MkRegs a0 rcx dx rbx rbp rsi di r8 r9 s10 0 r12 r13 dep fp)
+                cd)
+              1
+              0)
+            rcx
+            dx
+            rbx
+            rbp
+            rsi
+            di
+            r8
+            r9
+            s10
+            (if
+              (xcond
+                (MkRegs a0 rcx dx rbx rbp rsi di r8 r9 s10 0 r12 r13 dep fp)
+                cd)
+              1
+              0)
+            r12
+            r13
+            dep
+            fp)
+          xm))))
+  (chain
+    (rewrite-with
+      (lemma xt_peel8)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((compute lhs (stop xt xcond))))
+    (case-on
+      (xcond (MkRegs a0 rcx dx rbx rbp rsi di r8 r9 s10 0 r12 r13 dep fp) cd)
+      Bool
+      ((case True
+         (steps
+           ((rewrite (hyp 0) lr both true ())
+            (compute lhs (stop xt))
+            (reduce rhs))
+           refl))
+       (case False
+         (steps
+           ((rewrite (hyp 0) lr both true ())
+            (compute lhs (stop xt))
+            (reduce rhs))
+           refl))))))
+
+;; --- the product-order kit (std/rat's gcd.shard, ported: that module's
+;; closure is far too heavy to import for three lemmas) ----------------------------
+
+;; a*b = (a-1)*b + b
+(claim mul_split_l
+  (goal ((a Int) (b Int)) () (= (* a b) (+ (* (- a 1) b) b)))
+  (chain
+    (have h2 (= a (+ (- a 1) 1)) (steps () (by arith (list (list 1) (list 1)))))
+    (have h3 (= (* b (- a 1)) (* (- a 1) b))
+      (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+    (have h4 (= (* b 1) b)
+      (steps
+        ((rewrite (lemma mul_comm) lr lhs true ()))
+        (by arith (list (list 1 0 0 0) (list 1 0 0 0)))))
+    (steps
+      ((rewrite (premise h2) lr lhs true ())
+       (rewrite (lemma mul_comm) lr lhs true ())
+       (rewrite (lemma mul_dist) lr lhs true ())
+       (rewrite (premise h3) lr lhs true ())
+       (rewrite (premise h4) lr lhs true ()))
+      refl)))
+
+;; 0 <= a, 0 <= b  |-  0 <= a*b
+(claim mul_nonneg
+  (goal ((a Int) (b Int)) ((= (le 0 a) True) (= (le 0 b) True))
+    (= (le 0 (* a b)) True))
+  (wf-induct a
+    (case-on (le a 0) Bool
+      ((case True
+         (fin-split a (premise 0) (hyp True) ((case 0 (by arith (list 1 0 0))))))
+       (case False
+         (chain
+           (have ha1 (= (le a 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hih (= (le 0 (* (- a 1) b)) True)
+             (rewrite-with
+               (hyp 1)
+               lr
+               lhs
+               ()
+               ((by arith (list 1 0 0 1))
+                (by arith (list 1 0 1 0))
+                (by arith (list 1 0 0 1))
+                (by arith (list 1 0 0 0)))
+               refl))
+           (have hsp (= (* a b) (+ (* (- a 1) b) b))
+             (steps ((rewrite (lemma mul_split_l) lr lhs true ())) refl))
+           (by arith (list 1 0 1 0 1 1))))))))
+
+;; 0 <= x, 1 <= y  |-  x <= x*y
+(claim le_mul_r
+  (goal ((x Int) (y Int)) ((= (le 0 x) True) (= (le 1 y) True))
+    (= (le x (* x y)) True))
+  (chain
+    (have hn (= (le 0 (* x (- y 1))) True)
+      (rewrite-with
+        (lemma mul_nonneg)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (by arith (list 1 0 1)))
+        refl))
+    (have hy (= y (+ (- y 1) 1))
+      (steps () (by arith (list (list 1 0 0) (list 1 0 0)))))
+    (have hd (= (* x (+ (- y 1) 1)) (+ (* x (- y 1)) (* x 1)))
+      (steps ((rewrite (lemma mul_dist) lr lhs true ())) refl))
+    (steps
+      ((rewrite (premise hy) lr lhs true ())
+       (rewrite (premise hd) lr lhs true ()))
+      (by arith (list 1 0 0 1 0 0)))))
+
+;; 0 <= a, 1 <= b  |-  ediv a b <= a  (the quotient never exceeds the
+;; dividend; the kernel's euclidean identity at the symbolic divisor + the
+;; product-order step)
+(claim ediv_le_self
+  (goal ((a Int) (b Int)) ((= (le 0 a) True) (= (le 1 b) True))
+    (= (le (ediv a b) a) True))
+  (chain
+    (have hpos (= (lt 0 b) True) (by arith (list 1 0 1)))
+    (have hid (= a (+ (* b (ediv a b)) (mod a b)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n a) (inst d b))
+        ((steps ((rewrite (premise hpos) lr lhs true ())) refl))
+        refl))
+    (have hr (= (le 0 (mod a b)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ((inst n a) (inst d b))
+        ((steps ((rewrite (premise hpos) lr lhs true ())) refl))
+        refl))
+    (case-on (le (ediv a b) 0) Bool
+      ((case True
+         (chain
+           (have hq (= (le (ediv a b) 0) True)
+             (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           (by arith (list 1 1 0 0 0 0 1))))
+       (case False
+         (chain
+           (have hq (= (le (ediv a b) 0) False)
+             (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           (have hq0 (= (le 0 (ediv a b)) True) (by arith (list 1 0 0 0 0 0 1)))
+           (have hm (= (le (ediv a b) (* (ediv a b) b)) True)
+             (rewrite-with
+               (lemma le_mul_r)
+               lr
+               lhs
+               ((inst x (ediv a b)) (inst y b))
+               ((steps ((rewrite (premise hq0) lr lhs true ())) refl)
+                (steps ((rewrite (premise 1) lr lhs true ())) refl))
+               refl))
+           (have hc (= (* (ediv a b) b) (* b (ediv a b)))
+             (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+           (by arith (list 1 0 0 0 1 1 0 0 1 -1))))))))
+
+;; --- THE DIVISION BLOCK: ixf_div ----------------------------------------------------------
+
+;; RAX := R10 / RAX, RDX := R10 mod RAX, R11 := the divisor; the divisor is
+;; positive and the dividend in band (the quotient check can never fail)
+(claim fe_div_run
+  (goal
+    ((c Int)
+     (g Nat)
+     (m XModule)
+     (xm Mem)
+     (a0 Int)
+     (rcx Int)
+     (dx Int)
+     (rbx Int)
+     (rbp Int)
+     (rsi Int)
+     (di Int)
+     (r8 Int)
+     (r9 Int)
+     (s10 Int)
+     (s11 Int)
+     (r12 Int)
+     (r13 Int)
+     (dep Int)
+     (fp Int))
+    ((= (le 5 c) True)
+     (= (le 1 a0) True)
+     (= (le 0 s10) True)
+     (= (lt s10 18446744073709551616) True))
+    (=
+      (xeval_seq
+        (xt c g)
+        m
+        (ixf_div)
+        (MkRegs a0 rcx dx rbx rbp rsi di r8 r9 s10 s11 r12 r13 dep fp)
+        xm)
+      (Some
+        (XNorm
+          (MkRegs
+            (ediv s10 a0)
+            rcx
+            (mod s10 a0)
+            rbx
+            rbp
+            rsi
+            di
+            r8
+            r9
+            s10
+            a0
+            r12
+            r13
+            dep
+            fp)
+          xm))))
+  (chain
+    (have hc (= (le 4 c) True) (by arith (list 1 1 0 0 0)))
+    (have hnz (= (int_eq a0 0) False) (by arith (list -1 0 1 0 0 0)))
+    (have hz (= (+ 0 s10) s10)
+      (by arith (list (list 1 0 0 0 0 0 0) (list 1 0 0 0 0 0 0))))
+    (have hq (= (le (ediv s10 a0) s10) True)
+      (rewrite-with
+        (lemma ediv_le_self)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hlt (= (lt (ediv s10 a0) 18446744073709551616) True)
+      (by arith (list 1 0 0 0 1 0 0 0 1)))
+    (rewrite-with
+      (lemma xt_peel4)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hc) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma xt_peel)
+      lr
+      lhs
+      ()
+      ((by arith (list 1 1 0 0 0 0 0 0 0 0))))
+    (steps
+      ((compute lhs (stop xt))
+       (rewrite (premise hnz) lr lhs true ())
+       (reduce lhs)
+       (compute lhs (stop xt))
+       (rewrite (premise hz) lr lhs true ())
+       (rewrite (premise hlt) lr lhs true ())
+       (reduce lhs)
+       (compute lhs (stop xt))
+       (rewrite (premise hz) lr lhs true ()))
+      refl)))
