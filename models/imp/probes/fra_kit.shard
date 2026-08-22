@@ -1,0 +1,1505 @@
+;;; models/imp/probes/fra_kit.shard — THEOREM A, slice A-1: THE KIT
+;;; (docs/COVERAGE.md §11.1). The proof-facing vocabulary every later slice
+;;; of the frame-tier simulation (imp call tier ⊑ x86 frame tier,
+;;; models/imp/to_x86.shard's ixf_*) is stated in, with its once-proven
+;;; laws:
+;;;
+;;;   the TOWER      xt c f = S^c f for an Int height c (0 or less = f):
+;;;                  every lemma is stated "for all heights c ≥ its cost",
+;;;                  so a nested point re-enters the IH at the height that
+;;;                  remains — linear side conditions only; kf K f = the
+;;;                  x86 fuel for imp fuel f (K towers per imp unit).
+;;;   the SEAM       xseq_app: running an appended prefix at a tower = the
+;;;                  continuation of the rest at the tower minus the
+;;;                  prefix's length, applied to the prefix's own run — the
+;;;                  GENERAL seam, no purity premise (same fuel both sides).
+;;;   the PATCHES    FPatch: the frame tier's memory effects as ONE ordered
+;;;                  list (newest at the head; CERT.md §5's base+patch
+;;;                  vocabulary at width 8): x86 memory = fp_mem mem0 psx
+;;;                  STRUCTURALLY (every XMStore64 / XStore8 is one patch
+;;;                  prepended), imp's memory = the same base under the
+;;;                  patches that lie below the frame region (fbelow), and
+;;;                  a local is fp_wordv's read-through at its slot. The
+;;;                  DISCIPLINE fp_disc: frame patches are words at slots
+;;;                  8-aligned to the region's base, program patches lie
+;;;                  entirely below it — what makes every frame read a hit
+;;;                  or a disjoint skip (fp_read / fp_below_*).
+;;;   the PROJECTION xo_fr zeroes the scratch registers (RAX RDX RDI R10
+;;;                  R11) of a machine outcome — A1's idiom for "the rest
+;;;                  is garbage".
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../kernel/facts.shard")
+(import "../../../std/mem")
+(import "../../../std/nat")
+(import "../../../std/order")
+(import "../imp.shard")
+(import "../../x86/x86.shard")
+(import "../to_x86.shard")
+(use (:: kernel facts *))
+(use (:: std mem *))
+(use (:: std nat *))
+(use (:: std order *))
+(use (:: models imp imp *))
+(use (:: models x86 x86 *))
+(use (:: models imp to_x86 *))
+
+;; --- the tower --------------------------------------------------------------------
+
+;; S^c f for an Int height (c ≤ 0 gives f)
+(fn xt ((c Int) (f Nat)) Nat
+  (measure c (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt 0 c) (S (xt (- c 1) f)) f))
+
+;; the x86 fuel for imp fuel f: K tower units per imp unit
+(fn kf ((k Int) (f Nat)) Nat
+  (measure (struct f))
+  (match f
+    (Z Z)
+    ((S f2) (xt k (kf k f2)))))
+
+(claim xt_peel
+  (goal ((c Int) (f Nat)) ((= (lt 0 c) True)) (= (xt c f) (S (xt (- c 1) f))))
+  (steps
+    ((unfold xt lhs) (rewrite (premise 0) lr lhs true ()) (reduce lhs))
+    refl))
+
+(claim xt_stop
+  (goal ((c Int) (f Nat)) ((= (lt 0 c) False)) (= (xt c f) f))
+  (steps
+    ((unfold xt lhs) (rewrite (premise 0) lr lhs true ()) (reduce lhs))
+    refl))
+
+(claim kf_s
+  (goal ((k Int) (f Nat)) () (= (kf k (S f)) (xt k (kf k f))))
+  (steps ((unfold kf lhs) (reduce lhs)) refl))
+
+;; --- the seam ---------------------------------------------------------------------
+
+;; instruction-list length as an Int
+(fn xil ((is (List XInstr))) Int
+  (measure (struct is))
+  (match is
+    (Nil 0)
+    ((Cons _ t) (+ 1 (xil t)))))
+
+;; the continuation: xeval_seq's own dispatch over a prefix outcome
+(fn xcont ((f Nat) (m XModule) (b (List XInstr)) (r (Option XOut)))
+  (Option XOut)
+  (match r
+    (None None)
+    ((Some out)
+     (match out
+       ((XNorm rs mem) (xeval_seq f m b rs mem))
+       (_ (Some out))))))
+
+;; --- the projection ---------------------------------------------------------------
+
+(fn fr_regs ((rs Regs)) Regs
+  (with_rax 0 (with_rdx 0 (with_rdi 0 (with_r10 0 (with_r11 0 rs))))))
+
+(fn xo_fr ((r (Option XOut))) (Option XOut)
+  (match r
+    (None None)
+    ((Some out)
+     (match out
+       ((XNorm rs mem) (Some (XNorm (fr_regs rs) mem)))
+       (_ (Some out))))))
+
+;; --- the patches ------------------------------------------------------------------
+
+;; one memory effect: an 8-byte word or a byte, at an address
+(type FPatch (FWord Int Int) (FByte Int Int))
+
+;; apply: the oldest patch first (recursion first), so the head is the
+;; outermost store — exactly the shape a machine run leaves
+(fn fp_mem ((m Mem) (ps (List FPatch))) Mem
+  (measure (struct ps))
+  (match ps
+    (Nil m)
+    ((Cons p rest)
+     (match p
+       ((FWord a v) (store_le (xw8) (fp_mem m rest) a v))
+       ((FByte a v) (mem_set (fp_mem m rest) a v))))))
+
+;; the newest word patch at exactly a
+(fn fp_wordv ((ps (List FPatch)) (a Int)) (Option Int)
+  (measure (struct ps))
+  (match ps
+    (Nil None)
+    ((Cons p rest)
+     (match p
+       ((FWord b v) (if (int_eq b a) (Some v) (fp_wordv rest a)))
+       ((FByte _ _) (fp_wordv rest a))))))
+
+;; the patches that lie entirely below slo (the program's own memory)
+(fn fbelow ((slo Int) (ps (List FPatch))) (List FPatch)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons p rest)
+     (match p
+       ((FWord a v)
+        (if (le (+ a 8) slo) (Cons p (fbelow slo rest)) (fbelow slo rest)))
+       ((FByte a v)
+        (if (lt a slo) (Cons p (fbelow slo rest)) (fbelow slo rest)))))))
+
+;; THE DISCIPLINE: every word patch lies entirely below slo or sits at a
+;; slot 8-aligned to slo; every byte patch lies below slo
+(fn fp_disc ((slo Int) (ps (List FPatch))) Bool
+  (measure (struct ps))
+  (match ps
+    (Nil True)
+    ((Cons p rest)
+     (match p
+       ((FWord a v)
+        (if
+          (if (le (+ a 8) slo) True
+          (if (le slo a) (int_eq (mod (- a slo) 8) 0)
+          False))
+          (fp_disc slo rest)
+          False))
+       ((FByte a v) (if (lt a slo) (fp_disc slo rest) False))))))
+
+;; --- the fbelow laws (program patches survive, frame patches vanish) --------------
+
+(claim fbelow_w_lo
+  (goal ((slo Int) (a Int) (v Int) (ps (List FPatch)))
+    ((= (le (+ a 8) slo) True))
+    (= (fbelow slo (Cons (FWord a v) ps)) (Cons (FWord a v) (fbelow slo ps))))
+  (steps
+    ((unfold fbelow lhs)
+     (reduce lhs)
+     (rewrite (premise 0) lr lhs true ())
+     (reduce lhs))
+    refl))
+
+(claim fbelow_w_hi
+  (goal ((slo Int) (a Int) (v Int) (ps (List FPatch)))
+    ((= (le (+ a 8) slo) False))
+    (= (fbelow slo (Cons (FWord a v) ps)) (fbelow slo ps)))
+  (steps
+    ((unfold fbelow lhs)
+     (reduce lhs)
+     (rewrite (premise 0) lr lhs true ())
+     (reduce lhs))
+    refl))
+
+(claim fbelow_b_lo
+  (goal ((slo Int) (a Int) (v Int) (ps (List FPatch))) ((= (lt a slo) True))
+    (= (fbelow slo (Cons (FByte a v) ps)) (Cons (FByte a v) (fbelow slo ps))))
+  (steps
+    ((unfold fbelow lhs)
+     (reduce lhs)
+     (rewrite (premise 0) lr lhs true ())
+     (reduce lhs))
+    refl))
+
+;; --- the discipline under a prepended patch --------------------------------------
+
+(claim fp_disc_w_lo
+  (goal ((slo Int) (a Int) (v Int) (ps (List FPatch)))
+    ((= (le (+ a 8) slo) True) (= (fp_disc slo ps) True))
+    (= (fp_disc slo (Cons (FWord a v) ps)) True))
+  (steps
+    ((unfold fp_disc lhs)
+     (reduce lhs)
+     (rewrite (premise 0) lr lhs true ())
+     (reduce lhs)
+     (rewrite (premise 1) lr lhs true ()))
+    refl))
+
+(claim fp_disc_w_slot
+  (goal ((slo Int) (a Int) (v Int) (ps (List FPatch)))
+    ((= (le (+ a 8) slo) False)
+     (= (le slo a) True)
+     (= (int_eq (mod (- a slo) 8) 0) True)
+     (= (fp_disc slo ps) True))
+    (= (fp_disc slo (Cons (FWord a v) ps)) True))
+  (steps
+    ((unfold fp_disc lhs)
+     (reduce lhs)
+     (rewrite (premise 0) lr lhs true ())
+     (reduce lhs)
+     (rewrite (premise 1) lr lhs true ())
+     (reduce lhs)
+     (rewrite (premise 2) lr lhs true ())
+     (reduce lhs)
+     (rewrite (premise 3) lr lhs true ()))
+    refl))
+
+(claim fp_disc_b
+  (goal ((slo Int) (a Int) (v Int) (ps (List FPatch)))
+    ((= (lt a slo) True) (= (fp_disc slo ps) True))
+    (= (fp_disc slo (Cons (FByte a v) ps)) True))
+  (steps
+    ((unfold fp_disc lhs)
+     (reduce lhs)
+     (rewrite (premise 0) lr lhs true ())
+     (reduce lhs)
+     (rewrite (premise 1) lr lhs true ()))
+    refl))
+
+;; --- the seam ---------------------------------------------------------------------
+
+(claim xil_nonneg
+  (goal ((is (List XInstr))) () (= (le 0 (xil is)) True))
+  (induct is
+    ((case Nil (steps ((compute lhs)) refl))
+     (case Cons
+       (h t)
+       (have (= (le 0 (xil t)) True)
+         (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+         (steps ((unfold xil lhs) (reduce lhs)) (by arith (list 1 1))))))))
+
+;; THE GENERAL SEAM: running an appended prefix at tower c = the continuation
+;; of the rest at tower c − |a|, applied to the prefix's own run at tower c
+;; (the prefix ignores the excess). No purity premise: the same fuel flows
+;; through both sides, so it is an exact equality for ANY prefix — blocks,
+;; calls and loops included.
+(claim xseq_app
+  (goal
+    ((a (List XInstr))
+     (b (List XInstr))
+     (c Int)
+     (f Nat)
+     (m XModule)
+     (rs Regs)
+     (mem Mem))
+    ((= (le (xil a) c) True))
+    (=
+      (xeval_seq (xt c f) m (ix_app a b) rs mem)
+      (xcont (xt (- c (xil a)) f) m b (xeval_seq (xt c f) m a rs mem))))
+  (induct a
+    ((case Nil
+       (chain
+         (have h0 (= (- c (xil Nil)) c)
+           (steps
+             ((unfold xil lhs) (reduce lhs))
+             (by arith (list (list 1 0) (list 1 0)))))
+         (steps
+           ((rewrite (premise h0) lr rhs true ())
+            (unfold ix_app lhs)
+            (reduce lhs)))
+         (case-on (lt 0 c) Bool
+           ((case True
+              (chain
+                (have hp (= (lt 0 c) True)
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (have hpeel (= (xt c f) (S (xt (- c 1) f)))
+                  (rewrite-with
+                    (lemma xt_peel)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise hp) lr lhs true ())) refl))
+                    refl))
+                (have hn
+                  (=
+                    (xeval_seq (S (xt (- c 1) f)) m Nil rs mem)
+                    (Some (XNorm rs mem)))
+                  (steps ((unfold xeval_seq lhs) (reduce lhs)) refl))
+                (steps
+                  ((rewrite (premise hpeel) lr both true ())
+                   (rewrite (premise hn) lr rhs true ())
+                   (unfold xcont rhs)
+                   (reduce rhs))
+                  refl)))
+            (case False
+              (chain
+                (have hp (= (lt 0 c) False)
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (have hstop (= (xt c f) f)
+                  (rewrite-with
+                    (lemma xt_stop)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise hp) lr lhs true ())) refl))
+                    refl))
+                (steps ((rewrite (premise hstop) lr both true ())))
+                (case-on f Nat
+                  ((case Z
+                     (chain
+                       (have hz (= f Z)
+                         (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                       (have hn (= (xeval_seq Z m Nil rs mem) None)
+                         (steps ((unfold xeval_seq lhs) (reduce lhs)) refl))
+                       (steps
+                         ((rewrite (premise hz) lr both true ())
+                          (rewrite (premise hn) lr rhs true ())
+                          (unfold xcont rhs)
+                          (reduce rhs)
+                          (unfold xeval_seq lhs)
+                          (reduce lhs))
+                         refl)))
+                   (case S
+                     (f2)
+                     (chain
+                       (have hs (= f (S f2))
+                         (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                       (have hn
+                         (=
+                           (xeval_seq (S f2) m Nil rs mem)
+                           (Some (XNorm rs mem)))
+                         (steps ((unfold xeval_seq lhs) (reduce lhs)) refl))
+                       (steps
+                         ((rewrite (premise hs) lr both true ())
+                          (rewrite (premise hn) lr rhs true ())
+                          (unfold xcont rhs)
+                          (reduce rhs))
+                         refl)))))))))))
+     (case Cons
+       (i rest)
+       (chain
+         (have hlen (= (xil (Cons i rest)) (+ 1 (xil rest)))
+           (steps ((unfold xil lhs) (reduce lhs)) refl))
+         (have hnn (= (le 0 (xil rest)) True)
+           (rewrite-with (lemma xil_nonneg) lr lhs () () refl))
+         (have hp (= (lt 0 c) True) (by arith (list 1 1 1 1)))
+         (have hle (= (le (xil rest) (- c 1)) True) (by arith (list 1 1 1 0 0)))
+         (have harith (= (- (- c 1) (xil rest)) (- c (xil (Cons i rest))))
+           (by arith (list (list 1 0 -1 0 0 0) (list 1 0 1 0 0 0))))
+         (have hpeel (= (xt c f) (S (xt (- c 1) f)))
+           (rewrite-with
+             (lemma xt_peel)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise hp) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((rewrite (premise hpeel) lr both true ())
+            (unfold ix_app lhs)
+            (reduce lhs)))
+         (case-on (xeval_instr (xt (- c 1) f) m i rs mem) Option
+           ((case None
+              (chain
+                (have hi (= (xeval_instr (xt (- c 1) f) m i rs mem) None)
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (steps
+                  ((unfold xeval_seq lhs)
+                   (reduce lhs)
+                   (rewrite (premise hi) lr lhs true ())
+                   (reduce lhs)
+                   (unfold xeval_seq rhs)
+                   (reduce rhs)
+                   (rewrite (premise hi) lr rhs true ())
+                   (reduce rhs)
+                   (unfold xcont rhs)
+                   (reduce rhs))
+                  refl)))
+            (case Some
+              (out)
+              (chain
+                (have hi (= (xeval_instr (xt (- c 1) f) m i rs mem) (Some out))
+                  (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                (steps
+                  ((unfold xeval_seq lhs)
+                   (reduce lhs)
+                   (rewrite (premise hi) lr lhs true ())
+                   (reduce lhs)
+                   (unfold xeval_seq rhs)
+                   (reduce rhs)
+                   (rewrite (premise hi) lr rhs true ())
+                   (reduce rhs)))
+                (case-on out XOut
+                  ((case XNorm
+                     (rs2 mem2)
+                     (chain
+                       (have ho (= out (XNorm rs2 mem2))
+                         (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                       (steps
+                         ((rewrite (premise ho) lr both true ())
+                          (reduce lhs)
+                          (reduce rhs)))
+                       (rewrite-with
+                         (hyp ih)
+                         lr
+                         lhs
+                         ()
+                         ((steps ((rewrite (premise hle) lr lhs true ())) refl)))
+                       (steps
+                         ((rewrite (premise harith) lr lhs true ())
+                          (unfold xcont rhs)
+                          (reduce rhs)
+                          (unfold xcont lhs)
+                          (reduce lhs))
+                         refl)))
+                   (case XBrk
+                     (d rs2 mem2)
+                     (chain
+                       (have ho (= out (XBrk d rs2 mem2))
+                         (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                       (steps
+                         ((rewrite (premise ho) lr both true ())
+                          (reduce lhs)
+                          (reduce rhs)
+                          (unfold xcont rhs)
+                          (reduce rhs))
+                         refl)))
+                   (case XRetO
+                     (rs2 mem2)
+                     (chain
+                       (have ho (= out (XRetO rs2 mem2))
+                         (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                       (steps
+                         ((rewrite (premise ho) lr both true ())
+                          (reduce lhs)
+                          (reduce rhs)
+                          (unfold xcont rhs)
+                          (reduce rhs))
+                         refl)))
+                   (case XTrap
+                     (chain
+                       (have ho (= out XTrap)
+                         (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                       (steps
+                         ((rewrite (premise ho) lr both true ())
+                          (reduce lhs)
+                          (reduce rhs)
+                          (unfold xcont rhs)
+                          (reduce rhs))
+                         refl))))))))))))))
+
+;; --- the slot arithmetic ------------------------------------------------------------
+
+;; the word width as an Int (int_of_nat is opaque: walk the tower by its
+;; exported successor/zero laws)
+(claim w8_int
+  (goal () () (= (int_of_nat (xw8)) 8))
+  (steps
+    ((unfold xw8 lhs)
+     (rewrite (lemma int_of_nat_succ) lr lhs true ())
+     (rewrite (lemma int_of_nat_succ) lr lhs true ())
+     (rewrite (lemma int_of_nat_succ) lr lhs true ())
+     (rewrite (lemma int_of_nat_succ) lr lhs true ())
+     (rewrite (lemma int_of_nat_succ) lr lhs true ())
+     (rewrite (lemma int_of_nat_succ) lr lhs true ())
+     (rewrite (lemma int_of_nat_succ) lr lhs true ())
+     (rewrite (lemma int_of_nat_succ) lr lhs true ())
+     (rewrite (lemma int_of_nat_zero) lr lhs true ()))
+    (by arith (list (list 1) (list 1)))))
+
+;; two slots 8-aligned to slo, b strictly below a: b's word ends at or before
+;; a. The integer step (8·(qa − qb) ≥ 1 ⟹ qa − qb ≥ 1) is the cut hd — a
+;; rational Farkas cannot take it in one combination
+(claim al_lt
+  (goal ((slo Int) (a Int) (b Int))
+    ((= (int_eq (mod (- a slo) 8) 0) True)
+     (= (int_eq (mod (- b slo) 8) 0) True)
+     (= (lt b a) True))
+    (= (le (+ b 8) a) True))
+  (div-facts
+    (- a slo)
+    8
+    qa
+    (div-facts
+      (- b slo)
+      8
+      qb
+      (have hd (= (le 1 (- qa qb)) True)
+        (by arith (list 8 -1 1 1 -1 0 0 0 1 0 0 0))
+        (by arith (list 1 1 -1 0 1 0 0 0 -1 0 0 0 8))))))
+
+;; --- the read laws ------------------------------------------------------------------
+
+;; the tower spelling of the width
+(claim xw8_tower
+  (goal () () (= (xw8) (S (S (S (S (S (S (S (S Z))))))))))
+  (steps ((unfold xw8 lhs)) refl))
+
+;; THE FRAME READ: under the discipline, a word read at an aligned slot at
+;; or above slo is the newest word patch at that slot — every other patch
+;; is a disjoint skip (a program patch lies wholly below slo ≤ a; another
+;; slot is 8 away by al_lt)
+(claim fp_read
+  (goal ((m Mem) (ps (List FPatch)) (slo Int) (a Int) (v Int))
+    ((= (fp_disc slo ps) True)
+     (= (le slo a) True)
+     (= (int_eq (mod (- a slo) 8) 0) True)
+     (= (fp_wordv ps a) (Some v))
+     (= (le 0 v) True)
+     (= (lt v 18446744073709551616) True))
+    (= (load_le (xw8) (fp_mem m ps) a) v))
+  (induct ps
+    ((case Nil
+       (chain
+         (have hn (= None (Some v))
+           (steps
+             ((rewrite (premise 3) rl rhs true ())
+              (unfold fp_wordv rhs)
+              (reduce rhs))
+             refl))
+         (absurd (premise hn))))
+     (case Cons
+       (p rest)
+       (case-on p FPatch
+         ((case FWord
+            (b w)
+            (chain
+              (have hp (= p (FWord b w))
+                (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+              (have hdisc (= (fp_disc slo (Cons (FWord b w) rest)) True)
+                (steps
+                  ((rewrite (premise hp) rl lhs true ())
+                   (rewrite (premise 0) lr lhs true ()))
+                  refl))
+              (have hwv (= (fp_wordv (Cons (FWord b w) rest) a) (Some v))
+                (steps
+                  ((rewrite (premise hp) rl lhs true ())
+                   (rewrite (premise 3) lr lhs true ()))
+                  refl))
+              (have hdu
+                (=
+                  (fp_disc slo (Cons (FWord b w) rest))
+                  (if
+                    (if (le (+ b 8) slo) True
+                    (if (le slo b) (int_eq (mod (- b slo) 8) 0)
+                    False))
+                    (fp_disc slo rest)
+                    False))
+                (steps ((unfold fp_disc lhs) (reduce lhs)) refl))
+              (have hwu
+                (=
+                  (fp_wordv (Cons (FWord b w) rest) a)
+                  (if (int_eq b a) (Some w) (fp_wordv rest a)))
+                (steps ((unfold fp_wordv lhs) (reduce lhs)) refl))
+              (have hif
+                (=
+                  (if
+                    (if (le (+ b 8) slo) True
+                    (if (le slo b) (int_eq (mod (- b slo) 8) 0)
+                    False))
+                    (fp_disc slo rest)
+                    False)
+                  True)
+                (steps
+                  ((rewrite (premise hdu) rl lhs true ())
+                   (rewrite (premise hdisc) lr lhs true ()))
+                  refl))
+              (steps
+                ((rewrite (premise hp) lr both true ())
+                 (unfold fp_mem lhs)
+                 (reduce lhs)))
+              (case-on (int_eq b a) Bool
+                ((case True
+                   (chain
+                     (have hba (= (int_eq b a) True)
+                       (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                     (have heq (= b a)
+                       (by
+                         arith
+                         (list
+                           (list 1 0 0 0 0 0 0 0 0 0 0 0 0 -1)
+                           (list 1 0 0 0 0 0 0 0 0 0 0 0 0 1))))
+                     (have hsome (= (Some w) (Some v))
+                       (steps
+                         ((rewrite (premise hwv) rl rhs true ())
+                          (rewrite (premise hwu) lr rhs true ())
+                          (rewrite (premise hba) lr rhs true ())
+                          (reduce rhs))
+                         refl))
+                     (inject (premise hsome) (hwveq))
+                     (steps
+                       ((rewrite (premise heq) lr lhs true ())
+                        (rewrite (premise hwveq) lr lhs true ())
+                        (rewrite (lemma xw8_tower) lr lhs true ())))
+                     (rewrite-with
+                       (lemma ls8_id)
+                       lr
+                       lhs
+                       ()
+                       ((steps ((rewrite (premise 4) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 5) lr lhs true ())) refl)))
+                     refl))
+                 (case False
+                   (chain
+                     (have hba (= (int_eq b a) False)
+                       (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                     (have hrestv (= (fp_wordv rest a) (Some v))
+                       (steps
+                         ((rewrite (premise hwv) rl rhs true ())
+                          (rewrite (premise hwu) lr rhs true ())
+                          (rewrite (premise hba) lr rhs true ())
+                          (reduce rhs))
+                         refl))
+                     (case-on (le (+ b 8) slo) Bool
+                       ((case True
+                          (chain
+                            (have hblo (= (le (+ b 8) slo) True)
+                              (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                            (have hrest (= (fp_disc slo rest) True)
+                              (steps
+                                ((rewrite (premise hif) rl rhs true ())
+                                 (rewrite (premise hblo) lr rhs true ())
+                                 (reduce rhs))
+                                refl))
+                            (have hab (= (le (+ b (int_of_nat (xw8))) a) True)
+                              (steps
+                                ((rewrite (lemma w8_int) lr lhs true ()))
+                                (by
+                                  arith
+                                  (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 1 0))))
+                            (rewrite-with
+                              (lemma load_le_store_le_above)
+                              lr
+                              lhs
+                              ()
+                              ((steps
+                                 ((rewrite (premise hab) lr lhs true ()))
+                                 refl)))
+                            (rewrite-with
+                              (hyp ih)
+                              lr
+                              lhs
+                              ((inst slo slo) (inst v v))
+                              ((steps
+                                 ((rewrite (premise hrest) lr lhs true ()))
+                                 refl)
+                               (steps
+                                 ((rewrite (premise 1) lr lhs true ()))
+                                 refl)
+                               (steps
+                                 ((rewrite (premise 2) lr lhs true ()))
+                                 refl)
+                               (steps
+                                 ((rewrite (premise hrestv) lr lhs true ()))
+                                 refl)
+                               (steps
+                                 ((rewrite (premise 4) lr lhs true ()))
+                                 refl)
+                               (steps
+                                 ((rewrite (premise 5) lr lhs true ()))
+                                 refl)))
+                            refl))
+                        (case False
+                          (chain
+                            (have hbhi (= (le (+ b 8) slo) False)
+                              (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                            (have hif3
+                              (=
+                                (if
+                                  (if (le slo b) (int_eq (mod (- b slo) 8) 0)
+                                  False)
+                                  (fp_disc slo rest)
+                                  False)
+                                True)
+                              (steps
+                                ((rewrite (premise hif) rl rhs true ())
+                                 (rewrite (premise hbhi) lr rhs true ())
+                                 (reduce rhs))
+                                refl))
+                            (case-on (le slo b) Bool
+                              ((case False
+                                 (chain
+                                   (have hsb (= (le slo b) False)
+                                     (steps
+                                       ((rewrite (hyp 0) lr lhs true ()))
+                                       refl))
+                                   (have hff (= False True)
+                                     (steps
+                                       ((rewrite (premise hif3) rl rhs true ())
+                                        (rewrite (premise hsb) lr rhs true ())
+                                        (reduce rhs))
+                                       refl))
+                                   (absurd (premise hff))))
+                               (case True
+                                 (chain
+                                   (have hsb (= (le slo b) True)
+                                     (steps
+                                       ((rewrite (hyp 0) lr lhs true ()))
+                                       refl))
+                                   (case-on (int_eq (mod (- b slo) 8) 0) Bool
+                                     ((case False
+                                        (chain
+                                          (have hbal
+                                            (=
+                                              (int_eq (mod (- b slo) 8) 0)
+                                              False)
+                                            (steps
+                                              ((rewrite (hyp 0) lr lhs true ()))
+                                              refl))
+                                          (have hff (= False True)
+                                            (steps
+                                              ((rewrite
+                                                 (premise hif3)
+                                                 rl
+                                                 rhs
+                                                 true
+                                                 ())
+                                               (rewrite
+                                                 (premise hsb)
+                                                 lr
+                                                 rhs
+                                                 true
+                                                 ())
+                                               (rewrite
+                                                 (premise hbal)
+                                                 lr
+                                                 rhs
+                                                 true
+                                                 ())
+                                               (reduce rhs))
+                                              refl))
+                                          (absurd (premise hff))))
+                                      (case True
+                                        (chain
+                                          (have hbal
+                                            (=
+                                              (int_eq (mod (- b slo) 8) 0)
+                                              True)
+                                            (steps
+                                              ((rewrite (hyp 0) lr lhs true ()))
+                                              refl))
+                                          (have hrest
+                                            (= (fp_disc slo rest) True)
+                                            (steps
+                                              ((rewrite
+                                                 (premise hif3)
+                                                 rl
+                                                 rhs
+                                                 true
+                                                 ())
+                                               (rewrite
+                                                 (premise hsb)
+                                                 lr
+                                                 rhs
+                                                 true
+                                                 ())
+                                               (rewrite
+                                                 (premise hbal)
+                                                 lr
+                                                 rhs
+                                                 true
+                                                 ())
+                                               (reduce rhs))
+                                              refl))
+                                          (case-on (lt b a) Bool
+                                            ((case True
+                                               (chain
+                                                 (have hlt (= (lt b a) True)
+                                                   (steps
+                                                     ((rewrite
+                                                        (hyp 0)
+                                                        lr
+                                                        lhs
+                                                        true
+                                                        ()))
+                                                     refl))
+                                                 (have hb8
+                                                   (= (le (+ b 8) a) True)
+                                                   (rewrite-with
+                                                     (lemma al_lt)
+                                                     lr
+                                                     lhs
+                                                     ((inst slo slo))
+                                                     ((steps
+                                                        ((rewrite
+                                                           (premise 2)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ()))
+                                                        refl)
+                                                      (steps
+                                                        ((rewrite
+                                                           (premise hbal)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ()))
+                                                        refl)
+                                                      (steps
+                                                        ((rewrite
+                                                           (premise hlt)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ()))
+                                                        refl))
+                                                     refl))
+                                                 (have hab
+                                                   (=
+                                                     (le
+                                                       (+ b (int_of_nat (xw8)))
+                                                       a)
+                                                     True)
+                                                   (steps
+                                                     ((rewrite
+                                                        (lemma w8_int)
+                                                        lr
+                                                        lhs
+                                                        true
+                                                        ())
+                                                      (rewrite
+                                                        (premise hb8)
+                                                        lr
+                                                        lhs
+                                                        true
+                                                        ()))
+                                                     refl))
+                                                 (rewrite-with
+                                                   (lemma load_le_store_le_above)
+                                                   lr
+                                                   lhs
+                                                   ()
+                                                   ((steps
+                                                      ((rewrite
+                                                         (premise hab)
+                                                         lr
+                                                         lhs
+                                                         true
+                                                         ()))
+                                                      refl)))
+                                                 (rewrite-with
+                                                   (hyp ih)
+                                                   lr
+                                                   lhs
+                                                   ((inst slo slo) (inst v v))
+                                                   ((steps
+                                                      ((rewrite
+                                                         (premise hrest)
+                                                         lr
+                                                         lhs
+                                                         true
+                                                         ()))
+                                                      refl)
+                                                    (steps
+                                                      ((rewrite
+                                                         (premise 1)
+                                                         lr
+                                                         lhs
+                                                         true
+                                                         ()))
+                                                      refl)
+                                                    (steps
+                                                      ((rewrite
+                                                         (premise 2)
+                                                         lr
+                                                         lhs
+                                                         true
+                                                         ()))
+                                                      refl)
+                                                    (steps
+                                                      ((rewrite
+                                                         (premise hrestv)
+                                                         lr
+                                                         lhs
+                                                         true
+                                                         ()))
+                                                      refl)
+                                                    (steps
+                                                      ((rewrite
+                                                         (premise 4)
+                                                         lr
+                                                         lhs
+                                                         true
+                                                         ()))
+                                                      refl)
+                                                    (steps
+                                                      ((rewrite
+                                                         (premise 5)
+                                                         lr
+                                                         lhs
+                                                         true
+                                                         ()))
+                                                      refl)))
+                                                 refl))
+                                             (case False
+                                               (chain
+                                                 (have hnlt (= (lt b a) False)
+                                                   (steps
+                                                     ((rewrite
+                                                        (hyp 0)
+                                                        lr
+                                                        lhs
+                                                        true
+                                                        ()))
+                                                     refl))
+                                                 (case-on (lt a b) Bool
+                                                   ((case True
+                                                      (chain
+                                                        (have hlt
+                                                          (= (lt a b) True)
+                                                          (steps
+                                                            ((rewrite
+                                                               (hyp 0)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ()))
+                                                            refl))
+                                                        (have ha8
+                                                          (=
+                                                            (le (+ a 8) b)
+                                                            True)
+                                                          (rewrite-with
+                                                            (lemma al_lt)
+                                                            lr
+                                                            lhs
+                                                            ((inst slo slo))
+                                                            ((steps
+                                                               ((rewrite
+                                                                  (premise hbal)
+                                                                  lr
+                                                                  lhs
+                                                                  true
+                                                                  ()))
+                                                               refl)
+                                                             (steps
+                                                               ((rewrite
+                                                                  (premise 2)
+                                                                  lr
+                                                                  lhs
+                                                                  true
+                                                                  ()))
+                                                               refl)
+                                                             (steps
+                                                               ((rewrite
+                                                                  (premise hlt)
+                                                                  lr
+                                                                  lhs
+                                                                  true
+                                                                  ()))
+                                                               refl))
+                                                            refl))
+                                                        (have hab
+                                                          (=
+                                                            (le
+                                                              (+
+                                                                a
+                                                                (int_of_nat
+                                                                  (xw8)))
+                                                              b)
+                                                            True)
+                                                          (steps
+                                                            ((rewrite
+                                                               (lemma w8_int)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ())
+                                                             (rewrite
+                                                               (premise ha8)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ()))
+                                                            refl))
+                                                        (rewrite-with
+                                                          (lemma
+                                                            load_le_store_le_below)
+                                                          lr
+                                                          lhs
+                                                          ()
+                                                          ((steps
+                                                             ((rewrite
+                                                                (premise hab)
+                                                                lr
+                                                                lhs
+                                                                true
+                                                                ()))
+                                                             refl)))
+                                                        (rewrite-with
+                                                          (hyp ih)
+                                                          lr
+                                                          lhs
+                                                          ((inst slo slo)
+                                                           (inst v v))
+                                                          ((steps
+                                                             ((rewrite
+                                                                (premise hrest)
+                                                                lr
+                                                                lhs
+                                                                true
+                                                                ()))
+                                                             refl)
+                                                           (steps
+                                                             ((rewrite
+                                                                (premise 1)
+                                                                lr
+                                                                lhs
+                                                                true
+                                                                ()))
+                                                             refl)
+                                                           (steps
+                                                             ((rewrite
+                                                                (premise 2)
+                                                                lr
+                                                                lhs
+                                                                true
+                                                                ()))
+                                                             refl)
+                                                           (steps
+                                                             ((rewrite
+                                                                (premise hrestv)
+                                                                lr
+                                                                lhs
+                                                                true
+                                                                ()))
+                                                             refl)
+                                                           (steps
+                                                             ((rewrite
+                                                                (premise 4)
+                                                                lr
+                                                                lhs
+                                                                true
+                                                                ()))
+                                                             refl)
+                                                           (steps
+                                                             ((rewrite
+                                                                (premise 5)
+                                                                lr
+                                                                lhs
+                                                                true
+                                                                ()))
+                                                             refl)))
+                                                        refl))
+                                                    (case False
+                                                      (chain
+                                                        (have hnlt2
+                                                          (= (lt a b) False)
+                                                          (steps
+                                                            ((rewrite
+                                                               (hyp 0)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ()))
+                                                            refl))
+                                                        (have heq (= b a)
+                                                          (by
+                                                            arith
+                                                            (list
+                                                              (list 1 0 0 0 0 0
+                                                                0 0 0 0 0 0 0 0
+                                                                0 0 0 0 0 0 0 1)
+                                                              (list 1 0 0 0 0 0
+                                                                0 0 0 0 0 0 0 0
+                                                                0 0 0 0 0 0 1 0))))
+                                                        (have hff (= True False)
+                                                          (steps
+                                                            ((rewrite
+                                                               (premise hba)
+                                                               rl
+                                                               rhs
+                                                               true
+                                                               ())
+                                                             (rewrite
+                                                               (premise heq)
+                                                               lr
+                                                               rhs
+                                                               true
+                                                               ())
+                                                             (rewrite
+                                                               (lemma
+                                                                 int_eq_refl)
+                                                               lr
+                                                               rhs
+                                                               true
+                                                               ()))
+                                                            refl))
+                                                        (absurd (premise hff))))))))))))))))))))))))))))
+          (case FByte
+            (b w)
+            (chain
+              (have hp (= p (FByte b w))
+                (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+              (have hdisc (= (fp_disc slo (Cons (FByte b w) rest)) True)
+                (steps
+                  ((rewrite (premise hp) rl lhs true ())
+                   (rewrite (premise 0) lr lhs true ()))
+                  refl))
+              (have hwv (= (fp_wordv (Cons (FByte b w) rest) a) (Some v))
+                (steps
+                  ((rewrite (premise hp) rl lhs true ())
+                   (rewrite (premise 3) lr lhs true ()))
+                  refl))
+              (have hdu
+                (=
+                  (fp_disc slo (Cons (FByte b w) rest))
+                  (if (lt b slo) (fp_disc slo rest) False))
+                (steps ((unfold fp_disc lhs) (reduce lhs)) refl))
+              (have hrestv (= (fp_wordv rest a) (Some v))
+                (steps
+                  ((rewrite (premise hwv) rl rhs true ())
+                   (unfold fp_wordv rhs)
+                   (reduce rhs))
+                  refl))
+              (have hif (= (if (lt b slo) (fp_disc slo rest) False) True)
+                (steps
+                  ((rewrite (premise hdu) rl lhs true ())
+                   (rewrite (premise hdisc) lr lhs true ()))
+                  refl))
+              (steps
+                ((rewrite (premise hp) lr both true ())
+                 (unfold fp_mem lhs)
+                 (reduce lhs)))
+              (case-on (lt b slo) Bool
+                ((case False
+                   (chain
+                     (have hbs (= (lt b slo) False)
+                       (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                     (have hff (= False True)
+                       (steps
+                         ((rewrite (premise hif) rl rhs true ())
+                          (rewrite (premise hbs) lr rhs true ())
+                          (reduce rhs))
+                         refl))
+                     (absurd (premise hff))))
+                 (case True
+                   (chain
+                     (have hbs (= (lt b slo) True)
+                       (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                     (have hrest (= (fp_disc slo rest) True)
+                       (steps
+                         ((rewrite (premise hif) rl rhs true ())
+                          (rewrite (premise hbs) lr rhs true ())
+                          (reduce rhs))
+                         refl))
+                     (have hba (= (lt b a) True)
+                       (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 1 0)))
+                     (rewrite-with
+                       (lemma load_le_set_above)
+                       lr
+                       lhs
+                       ()
+                       ((steps ((rewrite (premise hba) lr lhs true ())) refl)))
+                     (rewrite-with
+                       (hyp ih)
+                       lr
+                       lhs
+                       ((inst slo slo) (inst v v))
+                       ((steps ((rewrite (premise hrest) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 1) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 2) lr lhs true ())) refl)
+                        (steps ((rewrite (premise hrestv) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 4) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 5) lr lhs true ())) refl)))
+                     refl))))))))))))
+
+;; BELOW THE CUT, bytes: a read below slo sees only the program's patches —
+;; the frame patches (words at or above slo) are disjoint skips, the kept
+;; patches are the same stores on both sides (store_le_get_congr /
+;; get_set carry the agreement through)
+(claim fp_below_b
+  (goal ((m Mem) (ps (List FPatch)) (slo Int) (a Int))
+    ((= (fp_disc slo ps) True) (= (lt a slo) True))
+    (= (mem_get (fp_mem m ps) a) (mem_get (fp_mem m (fbelow slo ps)) a)))
+  (induct ps
+    ((case Nil (steps ((unfold fbelow rhs) (reduce rhs)) refl))
+     (case Cons
+       (p rest)
+       (case-on p FPatch
+         ((case FWord
+            (b w)
+            (chain
+              (have hp (= p (FWord b w))
+                (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+              (have hdisc (= (fp_disc slo (Cons (FWord b w) rest)) True)
+                (steps
+                  ((rewrite (premise hp) rl lhs true ())
+                   (rewrite (premise 0) lr lhs true ()))
+                  refl))
+              (have hdu
+                (=
+                  (fp_disc slo (Cons (FWord b w) rest))
+                  (if
+                    (if (le (+ b 8) slo) True
+                    (if (le slo b) (int_eq (mod (- b slo) 8) 0)
+                    False))
+                    (fp_disc slo rest)
+                    False))
+                (steps ((unfold fp_disc lhs) (reduce lhs)) refl))
+              (have hif
+                (=
+                  (if
+                    (if (le (+ b 8) slo) True
+                    (if (le slo b) (int_eq (mod (- b slo) 8) 0)
+                    False))
+                    (fp_disc slo rest)
+                    False)
+                  True)
+                (steps
+                  ((rewrite (premise hdu) rl lhs true ())
+                   (rewrite (premise hdisc) lr lhs true ()))
+                  refl))
+              (steps ((rewrite (premise hp) lr both true ())))
+              (case-on (le (+ b 8) slo) Bool
+                ((case True
+                   (chain
+                     (have hblo (= (le (+ b 8) slo) True)
+                       (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                     (have hrest (= (fp_disc slo rest) True)
+                       (steps
+                         ((rewrite (premise hif) rl rhs true ())
+                          (rewrite (premise hblo) lr rhs true ())
+                          (reduce rhs))
+                         refl))
+                     (rewrite-with
+                       (lemma fbelow_w_lo)
+                       lr
+                       rhs
+                       ()
+                       ((steps ((rewrite (premise hblo) lr lhs true ())) refl)))
+                     (steps
+                       ((unfold fp_mem lhs)
+                        (reduce lhs)
+                        (unfold fp_mem rhs)
+                        (reduce rhs)))
+                     (rewrite-with
+                       (lemma store_le_get_congr)
+                       lr
+                       lhs
+                       ((inst m2 (fp_mem m (fbelow slo rest))))
+                       ((rewrite-with
+                          (hyp ih)
+                          lr
+                          lhs
+                          ((inst slo slo))
+                          ((steps
+                             ((rewrite (premise hrest) lr lhs true ()))
+                             refl)
+                           (steps ((rewrite (premise 1) lr lhs true ())) refl))
+                          refl)))
+                     refl))
+                 (case False
+                   (chain
+                     (have hbhi (= (le (+ b 8) slo) False)
+                       (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                     (have hif3
+                       (=
+                         (if (if (le slo b) (int_eq (mod (- b slo) 8) 0) False)
+                           (fp_disc slo rest)
+                           False)
+                         True)
+                       (steps
+                         ((rewrite (premise hif) rl rhs true ())
+                          (rewrite (premise hbhi) lr rhs true ())
+                          (reduce rhs))
+                         refl))
+                     (case-on (le slo b) Bool
+                       ((case False
+                          (chain
+                            (have hsb (= (le slo b) False)
+                              (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                            (have hff (= False True)
+                              (steps
+                                ((rewrite (premise hif3) rl rhs true ())
+                                 (rewrite (premise hsb) lr rhs true ())
+                                 (reduce rhs))
+                                refl))
+                            (absurd (premise hff))))
+                        (case True
+                          (chain
+                            (have hsb (= (le slo b) True)
+                              (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                            (case-on (int_eq (mod (- b slo) 8) 0) Bool
+                              ((case False
+                                 (chain
+                                   (have hbal
+                                     (= (int_eq (mod (- b slo) 8) 0) False)
+                                     (steps
+                                       ((rewrite (hyp 0) lr lhs true ()))
+                                       refl))
+                                   (have hff (= False True)
+                                     (steps
+                                       ((rewrite (premise hif3) rl rhs true ())
+                                        (rewrite (premise hsb) lr rhs true ())
+                                        (rewrite (premise hbal) lr rhs true ())
+                                        (reduce rhs))
+                                       refl))
+                                   (absurd (premise hff))))
+                               (case True
+                                 (chain
+                                   (have hbal
+                                     (= (int_eq (mod (- b slo) 8) 0) True)
+                                     (steps
+                                       ((rewrite (hyp 0) lr lhs true ()))
+                                       refl))
+                                   (have hrest (= (fp_disc slo rest) True)
+                                     (steps
+                                       ((rewrite (premise hif3) rl rhs true ())
+                                        (rewrite (premise hsb) lr rhs true ())
+                                        (rewrite (premise hbal) lr rhs true ())
+                                        (reduce rhs))
+                                       refl))
+                                   (have hab (= (lt a b) True)
+                                     (by arith (list 1 0 1 0 0 0 0 0 0 1 0 0)))
+                                   (rewrite-with
+                                     (lemma fbelow_w_hi)
+                                     lr
+                                     rhs
+                                     ()
+                                     ((steps
+                                        ((rewrite (premise hbhi) lr lhs true ()))
+                                        refl)))
+                                   (steps ((unfold fp_mem lhs) (reduce lhs)))
+                                   (rewrite-with
+                                     (lemma store_le_get_below)
+                                     lr
+                                     lhs
+                                     ()
+                                     ((steps
+                                        ((rewrite (premise hab) lr lhs true ()))
+                                        refl)))
+                                   (rewrite-with
+                                     (hyp ih)
+                                     lr
+                                     lhs
+                                     ((inst slo slo))
+                                     ((steps
+                                        ((rewrite
+                                           (premise hrest)
+                                           lr
+                                           lhs
+                                           true
+                                           ()))
+                                        refl)
+                                      (steps
+                                        ((rewrite (premise 1) lr lhs true ()))
+                                        refl)))
+                                   refl))))))))))))))
+          (case FByte
+            (b w)
+            (chain
+              (have hp (= p (FByte b w))
+                (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+              (have hdisc (= (fp_disc slo (Cons (FByte b w) rest)) True)
+                (steps
+                  ((rewrite (premise hp) rl lhs true ())
+                   (rewrite (premise 0) lr lhs true ()))
+                  refl))
+              (have hdu
+                (=
+                  (fp_disc slo (Cons (FByte b w) rest))
+                  (if (lt b slo) (fp_disc slo rest) False))
+                (steps ((unfold fp_disc lhs) (reduce lhs)) refl))
+              (have hif (= (if (lt b slo) (fp_disc slo rest) False) True)
+                (steps
+                  ((rewrite (premise hdu) rl lhs true ())
+                   (rewrite (premise hdisc) lr lhs true ()))
+                  refl))
+              (steps ((rewrite (premise hp) lr both true ())))
+              (case-on (lt b slo) Bool
+                ((case False
+                   (chain
+                     (have hbs (= (lt b slo) False)
+                       (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                     (have hff (= False True)
+                       (steps
+                         ((rewrite (premise hif) rl rhs true ())
+                          (rewrite (premise hbs) lr rhs true ())
+                          (reduce rhs))
+                         refl))
+                     (absurd (premise hff))))
+                 (case True
+                   (chain
+                     (have hbs (= (lt b slo) True)
+                       (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                     (have hrest (= (fp_disc slo rest) True)
+                       (steps
+                         ((rewrite (premise hif) rl rhs true ())
+                          (rewrite (premise hbs) lr rhs true ())
+                          (reduce rhs))
+                         refl))
+                     (rewrite-with
+                       (lemma fbelow_b_lo)
+                       lr
+                       rhs
+                       ()
+                       ((steps ((rewrite (premise hbs) lr lhs true ())) refl)))
+                     (steps
+                       ((unfold fp_mem lhs)
+                        (reduce lhs)
+                        (unfold fp_mem rhs)
+                        (reduce rhs)))
+                     (case-on (int_eq a b) Bool
+                       ((case True
+                          (chain
+                            (have hab (= (int_eq a b) True)
+                              (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                            (have heq (= a b)
+                              (by
+                                arith
+                                (list
+                                  (list 1 0 0 0 0 0 0 0 0 -1)
+                                  (list 1 0 0 0 0 0 0 0 0 1))))
+                            (steps
+                              ((rewrite (premise heq) lr both true ())
+                               (rewrite (lemma get_set) lr lhs true ())
+                               (rewrite (lemma get_set) lr rhs true ()))
+                              refl)))
+                        (case False
+                          (chain
+                            (have hab (= (int_eq a b) False)
+                              (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                            (rewrite-with
+                              (lemma get_set_other)
+                              lr
+                              lhs
+                              ()
+                              ((steps
+                                 ((rewrite (premise hab) lr lhs true ()))
+                                 refl)))
+                            (rewrite-with
+                              (lemma get_set_other)
+                              lr
+                              rhs
+                              ()
+                              ((steps
+                                 ((rewrite (premise hab) lr lhs true ()))
+                                 refl)))
+                            (rewrite-with
+                              (hyp ih)
+                              lr
+                              lhs
+                              ((inst slo slo))
+                              ((steps
+                                 ((rewrite (premise hrest) lr lhs true ()))
+                                 refl)
+                               (steps
+                                 ((rewrite (premise 1) lr lhs true ()))
+                                 refl)))
+                            refl))))))))))))))))
+
+;; BELOW THE CUT, words at any width: the byte law at every position
+(claim fp_below_lw
+  (goal ((w Nat) (m Mem) (ps (List FPatch)) (slo Int) (a Int))
+    ((= (fp_disc slo ps) True) (= (le (+ a (int_of_nat w)) slo) True))
+    (= (load_le w (fp_mem m ps) a) (load_le w (fp_mem m (fbelow slo ps)) a)))
+  (induct w
+    ((case Z
+       (steps
+         ((rewrite (lemma load_le_z) lr lhs true ())
+          (rewrite (lemma load_le_z) lr rhs true ()))
+         refl))
+     (case S
+       (w2)
+       (chain
+         (have hsucc (= (int_of_nat (S w2)) (+ 1 (int_of_nat w2)))
+           (rewrite-with (lemma int_of_nat_succ) lr lhs () () refl))
+         (have hnn (= (le 0 (int_of_nat w2)) True)
+           (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+         (have hlt (= (lt a slo) True) (by arith (list 1 0 1 1 1)))
+         (have hnext (= (le (+ (+ a 1) (int_of_nat w2)) slo) True)
+           (by arith (list 1 0 1 1 0)))
+         (steps
+           ((rewrite (lemma load_le_s) lr lhs true ())
+            (rewrite (lemma load_le_s) lr rhs true ())))
+         (rewrite-with
+           (lemma fp_below_b)
+           lr
+           lhs
+           ((inst slo slo))
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps ((rewrite (premise hlt) lr lhs true ())) refl)))
+         (rewrite-with
+           (hyp ih)
+           lr
+           lhs
+           ((inst slo slo))
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps ((rewrite (premise hnext) lr lhs true ())) refl)))
+         refl)))))

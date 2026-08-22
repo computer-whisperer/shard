@@ -910,3 +910,36 @@ explicit `R14 := 0` is belt-and-braces today — kept, because the frame
 tier's convention makes R14 = 0 the driver's obligation, not the
 loader's. Owed, unchanged: the lift law, `ls8_id`, the world-tier
 exit-code clause (C6).
+
+**A-1 — THE KIT (2026-08-22).** models/imp/probes/fra_kit.shard (1505
+lines formatted, 513/0) + std/mem growth (89/0): the vocabulary of
+§11.1 with its once-proven laws. std/mem: `ls8_id` (the 64-bit round
+trip — owed since C2a; ls4_id's ladder at eight bytes through `mbid7`
+and `neq_lo4…7`), the four word-grain framing laws
+`load_le_store_le_below/above` and `load_le_set_below/above` (generic
+in both widths, induct on the read width), and `store_le_get_congr`
+(a store's byte depends only on the base's byte — the law that
+compares patch lists below a cut without byte-index arithmetic); the
+two byte framing fulfills now cite internal twins `sgb`/`sga`
+(std/bytes' precedent). The kit: the Int-height tower `xt c f` with
+`xt_peel`/`xt_stop` and `kf K f` (`kf_s`); **the GENERAL SEAM
+`xseq_app`** — `xeval_seq (xt c f) (a ++ b) = xcont (xt (c − |a|) f) b
+(xeval_seq (xt c f) a)` for every prefix (no purity premise: the same
+fuel flows through both sides; A1's `vxg_seam` needed `vx_regis`
+because it let the prefix run at a DIFFERENT tower); the projection
+`xo_fr`; the patch grammar `FPatch` (word/byte), `fp_mem` (apply,
+oldest first), `fp_wordv` (the newest word at a slot), `fbelow` (the
+program's patches), the discipline `fp_disc`, and the laws: **`fp_read`**
+(a frame read under the discipline is the newest word at its slot;
+every other patch is a disjoint skip — `al_lt`, the slot lemma, needs
+an INTEGER CUT: 8·(qa − qb) ≥ 1 ⟹ qa − qb ≥ 1, taken as a `have`
+whose tight negation the Farkas engine refutes at multiplier 8 — a
+one-step combination cannot), **`fp_below_b` / `fp_below_lw`** (below
+the cut, bytes and words at any width see only the program's patches),
+the `fbelow` and `fp_disc` cons laws. Iteration log (the pricing
+datum): every proof closed on its FIRST structural attempt; the
+iterations were four Farkas certificates (the engine's slot table in
+the trace names every row — read it, never guess), two dangling pivots
+(`(inst slo slo) (inst v v)` on IH cites whose conclusion does not
+mention them), one rewrite side, two paren counts. Nothing here is
+program-specific; A-2 states the expression lemma in this vocabulary.
