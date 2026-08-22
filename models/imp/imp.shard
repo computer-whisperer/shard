@@ -653,7 +653,8 @@
   (IpCall Int Int (List IExp))  ; local[i] := fn k (args) — args banded on entry
   (IpLoadW Int IExp)  ; local[i] := the LE64 word at a U32 address (kind U64)
   (IpStoreW IExp IExp)  ; the LE64 word at addr := value (addr U32, value U64)
-  (IpFail IFam))  ; the reasoned fail leg: the run ends here, for this reason
+  (IpFail IFam)  ; the reasoned fail leg: the run ends here, for this reason
+  (IpUnreach))  ; unreachable code (a spec match no arm covers): a dynamic trap
 
 (record
   IpFn
@@ -672,7 +673,11 @@
 ;; or failed for a reason
 (type IpRet (IpRv Int Mem) (IpRtrap) (IpRfailed IFam))
 
-;; the word width as the structural Nat std/mem's LE view takes
+;; the word width as the structural Nat std/mem's LE view takes — spelled
+;; as the TOWER on purpose (canon C6 would pack it): a proof that rewrites
+;; through load_le_s / store_le_s needs the S-spelling, and compute packs
+;; ground Nats, so consumers fence iw8 out of the compute and open it by
+;; unfold + reduce (ipcall_probe's ipc_loadw_empty is the worked example)
 (fn iw8 () Nat (S (S (S (S (S (S (S (S Z)))))))))
 
 ;; evaluate an argument list (pure; None = some argument trapped)
@@ -781,7 +786,8 @@
                  ((Some v) (Some (IpNorm lc (store_le (iw8) mem ad v)))))
                (Some IpTrap))
              (Some IpTrap)))))
-       ((IpFail fam) (Some (IpFailed fam)))))))
+       ((IpFail fam) (Some (IpFailed fam)))
+       (IpUnreach (Some IpTrap))))))
 
 ;; the loop engine — a NAMED SCC member (the iwhile precedent)
 (fn ipwhile
@@ -807,8 +813,7 @@
           ((Some out)
            (match out
              ((IpNorm lc2 mem2) (ipwhile f2 fs mlo msz c b lc2 mem2))
-             (IpTrap (Some IpTrap))
-             ((IpFailed fam) (Some (IpFailed fam))))))))))))
+             (_ (Some out)))))))))))
 
 (fn ipstmts
   ((fuel Nat)
@@ -831,8 +836,7 @@
           ((Some out)
            (match out
              ((IpNorm lc2 mem2) (ipstmts f2 fs mlo msz t lc2 mem2))
-             (IpTrap (Some IpTrap))
-             ((IpFailed fam) (Some (IpFailed fam)))))))))))
+             (_ (Some out))))))))))
 
 ;; the call: fn k of the table on args (banded to its parameter kinds),
 ;; a fresh frame (args then zeroed extras), the CALLER'S memory in and
@@ -974,7 +978,8 @@
             (None False)
             ((Some ki) (if (ikeq ki U64) (ikchk env ae U32) False))))
          ((IpStoreW ae ve) (if (ikchk env ae U32) (ikchk env ve U64) False))
-         ((IpFail _) True))
+         ((IpFail _) True)
+         (IpUnreach True))
        (ipwk_stmts env fs t)
        False))))
 

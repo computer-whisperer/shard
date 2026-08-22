@@ -561,3 +561,64 @@ tests first failed on it): every slot of a live cell holds a valid
 word — the runtime never null-checks, so an uninitialized 0 reads as
 a reference to index 0. impc's constructor emission fills every slot
 before the cell can be observed; the C2b invariant states it.
+
+**C1b — the x86 memory sub-vocabulary lands (2026-08-22; Opus-delegated
+byte parts, b216dfc).** `(XMem XMInstr)` with `XMLoad64 Reg Addr` /
+`XMStore64 Addr Reg` (register source only: `mov r/m64, imm32`
+sign-extends, no honest 64-bit immediate twin), semantics in the scalar
+tier (`xminstr_leaf`, XLoad8's shape at an 8-byte span, `xw8` = imp's
+`iw8` tower), the world/vector tiers delegating through their
+catch-alls. Structural walk: link.shard's 12 XInstr inductions (two
+needed a species split — `xlk_extx`/`xlk_shx` compute the window guard
+in place, so the flat mirror's rewrites could not fire under the
+binder), vx86_acc_probe 11 case-on pads + 11 dispatch-table arms, the
+transition-window pad, bytetie's readback species. Encoder REX.W 8B/89
+through the existing `enc_mem`; **silicon differential 250/0** (was
+230/0), with two rows worth keeping: an address inside the window whose
+8-byte span is not (model traps, CPU faults at the page boundary —
+agreed) and a byte-order pin (store 0x8877…11, read back 11…88). Open
+(not a gate): nothing pins the tier DELEGATION itself in a probe — the
+world/vector catch-alls carry it. Finding: `bin/check` does not flag a
+non-exhaustive `match` (a missing arm goes stuck), so a green check is
+not evidence a ctor census is complete — the census was done by reading.
+
+**C3a — impc v0 + THE FIRST ORACLE (2026-08-22).** tools/impc/impc.shard
+(159/0): spec → call-tier imp over the runtime. The scheme as landed
+(the file header is the record): immediates = two's-complement words
+(i63 ints 2n+1, nullary ctors 2·tag+1, Bool 1/3); compound ctors =
+runtime cells filled slot by slot; locals = one U64 per binder and per
+sub-expression (no allocation, #25); ownership = borrowed params and
+pattern binders, owned temporaries and let-binders, with an IMMEDIATE
+state so literals/arithmetic/nullary ctors generate no count traffic
+(own-position consumers inc a borrowed reference; borrow-position
+consumers dec an owned temporary after use); `+ − *` with the band check
+→ `IpFail FOverflow` (add/sub by the sign-xor test on the doubled words,
+mul through unsigned magnitudes with the divide-back wrap check and the
+2^62 bound); `lt`/`le` by the xor-2^63 bias, `int_eq` direct; match =
+per-arm ok flag through nested tag/field tests (fields loaded into
+fresh locals = borrowed binders), no arm left → `IpUnreach`; calls =
+IpCall into the table (runtime fns 0–3, then the module's own fns in
+definition order); every fn's prologue bumps the depth cell `[rb+16]`
+and fails stack at the bound (100000), the epilogue restores it. Product
+= a shard file (NAME_ipfn values, NAME_ix indexes, SRC_iprog = rt_prog
+over the table), `impc SRC OUT.raw` then shardfmt, the impgen
+convention. **The micro-flagship** tools/impc/fixtures/micro.shard (13
+fns: len/app/wsum/perim/second/sumto/rev_go/pick/find_neg/mod_free/
+shapes/perims + id; 15 wrappers) compiles to a 1922-line product (36
+runtime count calls) and **the run-mode differential micro_run.shard
+agrees on all 15 wrappers + the gate (16/16)** — spec evaluated by the
+engine vs iprun over the product — the first oracle of the generic
+path, before any certificate exists; corpus rows: check × 4, the regen
+byte-tie `impc_micro_regen`, the differential `impc_micro_run`.
+Findings: (i) `(use (:: kernel term chars_of_sym))` aliases a reducer
+PRIM to a nonexistent definition and every call through it goes stuck
+(term.shard's own warning; cost an hour) — spell prims bare; (ii)
+negative literals must be emitted as WORDS or the wk gate rejects the
+product (caught by the gate row, not by the behavioral rows — the
+machine's U64 ops wrap either way); (iii) run-mode "stuck" surfaces
+only at the extern boundary as a malformed byte list — stage the writes
+to bisect. NOT YET (C3's second half): the generated per-fn certificates
+(P7) — nothing is proven about the product beyond the differential; the
+x86 leg of the product (C1c: to_x86 over IpStmt with the caller-save
+convention, impgen's arms) is also still owed; v0 refuses ediv/mod/bit
+ops, symbols, externs, and packs no static data (P8).

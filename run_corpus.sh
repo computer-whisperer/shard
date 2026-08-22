@@ -180,6 +180,10 @@ TARGETS=(
   models/imp/probes/ipcall_probe.shard
   models/imp/rt.shard
   models/imp/probes/rt_run.shard
+  tools/impc/impc.shard
+  tools/impc/fixtures/micro.shard
+  tools/impc/fixtures/micro_ipc_out.shard
+  tools/impc/fixtures/micro_run.shard
   tools/impgen/fixtures/imp_scalar.shard
   models/imp/to_wasm.shard
   models/imp/probes/imp_wasm_bridge.shard
@@ -1353,6 +1357,13 @@ fi
 # synthetic FAIL row (see the wasm leg's note).
 echo "=== imp: the runtime (run-mode probe, COVERAGE.md C2a) ==="
 pin_run imp_rt_run bin/shard_eval run models/imp/probes/rt_run.shard
+
+# impc (COVERAGE.md C3a): regenerate the micro-flagship's product and byte-compare
+# it against the committed file (the regen contract), then the run-mode
+# differential of every wrapper (spec vs compiled-through-iprun)
+echo "=== impc: the micro-flagship (regen tie + differential, COVERAGE.md C3a) ==="
+pin_run impc_micro_regen bash -c 'bin/shard_eval run tools/impc/impc.shard tools/impc/fixtures/micro.shard tools/impc/fixtures/micro_ipc_out.raw && bin/shard_eval run tools/shardfmt/shardfmt.shard tools/impc/fixtures/micro_ipc_out.raw | cmp - tools/impc/fixtures/micro_ipc_out.shard'
+pin_run impc_micro_run bin/shard_eval run tools/impc/fixtures/micro_run.shard
 
 echo "=== x86: silicon differential ==="
 if command -v cc >/dev/null && [ -x bin/shard_eval ]; then

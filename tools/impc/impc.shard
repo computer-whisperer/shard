@@ -1,0 +1,891 @@
+;;; tools/impc/impc.shard — THE UNIFORM-REPRESENTATION COMPILER, v0:
+;;; first-order shard (the kernel's Expr, loaded through meta/invoke) →
+;;; call-tier imp (docs/IMP.md §2b) over the runtime of models/imp/rt.shard
+;;; (docs/COVERAGE.md P1–P5, P7; rung C3). impgen takes the product from
+;;; imp to the ISA; this tool never sees a machine.
+;;;
+;;; THE SCHEME (COVERAGE.md P2/P3/P4/P5, the C3 record):
+;;;   values    one U64 word per value: an Int is the immediate 2n+1 (i63,
+;;;             two's complement in the word), a nullary constructor the
+;;;             immediate 2·tag+1 (tag = the constructor's index in its
+;;;             type), a compound constructor a reference (even) to a cell
+;;;             [header | slot_0 … slot_{arity-1}] the runtime allocated;
+;;;             Bool is the nullary pair False=1 True=3
+;;;   locals    every parameter and every sub-expression result gets its
+;;;             own U64 local (no register allocation — #25); BVar i reads
+;;;             the local its binder owns
+;;;   ownership borrowed parameters, owned temporaries, owned let-binders:
+;;;             a parameter or pattern binder is a BORROWED view (its owner
+;;;             keeps it alive for the call / the arm); a constructor or
+;;;             call result is OWNED (count 1, ours); a let-binder owns its
+;;;             value. Own-position consumers (constructor fields, the fn
+;;;             result, a let's RHS) inc a borrowed value first; borrow-
+;;;             position consumers (call arguments, scrutinees, operands)
+;;;             use it as is, and an OWNED temporary used there is dec'd
+;;;             after its consumer — "inc at duplication, dec at last use"
+;;;             without a liveness pass (the cancellations are rung 5's)
+;;;   arithmetic + − * on immediates with the band check → Fail overflow;
+;;;             lt/le by the xor-2^63 bias over the unsigned compares;
+;;;             int_eq direct; the rest (division, bit ops) is C3b growth
+;;;   match     each arm computes an ok flag through nested tests (tag
+;;;             compare, field loads into fresh locals, sub-patterns), the
+;;;             arm body runs under ok; no arm left → IpUnreach
+;;;   calls     IpCall to the fn's table index (runtime first, then the
+;;;             module's fns in definition order); every fn's prologue
+;;;             bumps the depth cell [rb+16] and fails stack past the bound
+;;;   externs   refused in v0 (the standard World module is P6, rung C4)
+;;;
+;;; RUN IT:  bin/shard_eval run tools/impc/impc.shard SRC OUT.raw
+;;;          then shardfmt OUT.raw -> the committed product (a sibling of
+;;;          SRC): one nullary fn per compiled fn (NAME_ipfn), the index
+;;;          table (NAME_ix), and SRCBASE_iprog = rt_prog over the table.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../meta/doc")
+(import "../../meta/invoke")
+(import "../../models/imp/imp.shard")
+(import "../../models/imp/rt.shard")
+
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader write_file))
+(use (:: kernel loader exit))
+(use (:: kernel term Expr))
+(use (:: kernel term FVar))
+(use (:: kernel term BVar))
+(use (:: kernel term Ctor))
+(use (:: kernel term Call))
+(use (:: kernel term Match))
+(use (:: kernel term Let))
+(use (:: kernel term If))
+(use (:: kernel term IntLit))
+(use (:: kernel term SymLit))
+(use (:: kernel term Arm))
+(use (:: kernel term Pat))
+(use (:: kernel term PVar))
+(use (:: kernel term PCtor))
+(use (:: kernel term PInt))
+(use (:: kernel term PSym))
+(use (:: kernel term QName))
+(use (:: kernel term qn_name))
+(use (:: kernel term qn_mod))
+(use (:: kernel term qname_eq))
+(use (:: kernel term sym_path_eq))
+(use (:: kernel term core_named))
+(use (:: kernel term append_int))
+(use (:: kernel term show_int))
+(use (:: kernel module Module))
+(use (:: kernel module FnDef))
+(use (:: kernel module TypeDef))
+(use (:: kernel module CtorDef))
+(use (:: kernel module Type))
+(use (:: meta doc *))
+(use (:: meta invoke *))
+(use (:: models imp imp *))
+(use (:: models imp rt *))
+
+;; --- small utils ----------------------------------------------------------------
+
+(fn cat ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (cat t b)))))
+
+(fn sapp ((a (List IpStmt)) (b (List IpStmt))) (List IpStmt)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (sapp t b)))))
+
+(fn nth_int ((xs (List Int)) (i Int)) (Option Int)
+  (measure (struct xs))
+  (match xs
+    (Nil None)
+    ((Cons h t) (if (int_eq i 0) (Some h) (nth_int t (- i 1))))))
+
+(fn ilen ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (ilen t)))))
+
+(fn rev_ints ((xs (List Int)) (acc (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_ints t (Cons h acc)))))
+
+(fn u64s ((k Int)) (List IKind)
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt k 1) Nil (Cons U64 (u64s (- k 1)))))
+
+;; the immediate of an Int as the U64 WORD (two's complement) / the Bool words
+(fn imm ((n Int)) Int (mod (+ (* 2 n) 1) 18446744073709551616))
+
+(fn w_false () Int 1)
+
+(fn w_true () Int 3)
+
+(fn i63_lo () Int -4611686018427387904)
+
+(fn i63_hi () Int 4611686018427387904)
+
+(fn two63 () Int 9223372036854775808)
+
+(fn two62 () Int 4611686018427387904)
+
+;; --- the context ----------------------------------------------------------------
+
+;; module, fn table (qname → imp index), runtime base, depth bound
+(type Ctx (Ctx Module (List (Pair QName Int)) Int Int))
+
+(fn ctx_m ((c Ctx)) Module
+  (match c
+    ((Ctx m _ _ _) m)))
+
+(fn ctx_rb ((c Ctx)) Int
+  (match c
+    ((Ctx _ _ rb _) rb)))
+
+(fn ctx_depth ((c Ctx)) Int
+  (match c
+    ((Ctx _ _ _ d) d)))
+
+(fn ctx_fix ((c Ctx) (q QName)) (Option Int)
+  (match c
+    ((Ctx _ tab _ _) (tab_find tab q))))
+
+(fn tab_find ((tab (List (Pair QName Int))) (q QName)) (Option Int)
+  (measure (struct tab))
+  (match tab
+    (Nil None)
+    ((Cons p rest)
+     (match p
+       ((Pair q2 k) (if (qname_eq q q2) (Some k) (tab_find rest q)))))))
+
+;; constructor info: (tag, arity) from the module's typedefs
+(fn ctors_find ((cs (List CtorDef)) (q QName) (i Int)) (Option (Pair Int Int))
+  (measure (struct cs))
+  (match cs
+    (Nil None)
+    ((Cons c rest)
+     (match c
+       ((CtorDef q2 fts)
+        (if (qname_eq q q2) (Some (Pair i (tys_len fts))) (ctors_find rest q (+ i 1))))))))
+
+(fn tys_len ((ts (List Type))) Int
+  (measure (struct ts))
+  (match ts
+    (Nil 0)
+    ((Cons _ t) (+ 1 (tys_len t)))))
+
+(fn tds_find ((tds (List TypeDef)) (q QName)) (Option (Pair Int Int))
+  (measure (struct tds))
+  (match tds
+    (Nil None)
+    ((Cons td rest)
+     (match td
+       ((TypeDef _ _ cs _)
+        (match (ctors_find cs q 0)
+          ((Some r) (Some r))
+          (None (tds_find rest q))))))))
+
+(fn ctor_info ((c Ctx) (q QName)) (Option (Pair Int Int))
+  (match (ctx_m c)
+    ((Module tds _ _ _ _) (tds_find tds q))))
+
+;; --- compiled pieces ------------------------------------------------------------
+
+;; how a compiled value is held: an IMMEDIATE (no count exists — literals,
+;; arithmetic, nullary constructors), a BORROWED reference (a parameter or
+;; pattern binder: its owner keeps it alive), or an OWNED reference (a
+;; constructor or call result: count 1, ours to store or release)
+(type Own (OImm) (OBor) (OOwn))
+
+(fn is_owned ((o Own)) Bool
+  (match o
+    (OImm False)
+    (OBor False)
+    (OOwn True)))
+
+;; statements, result local, how it is held, next free local — or a refusal
+(type CR (CROk (List IpStmt) Int Own Int) (CRErr (List Int)))
+
+;; a list of compiled operands: statements, (local, held) per operand, next
+(type CRs (CRsOk (List IpStmt) (List (Pair Int Own)) Int) (CRsErr (List Int)))
+
+;; a compiled pattern: the ok-computing statements (under which the binders'
+;; locals are assigned), the binders in traversal order, next
+(type CP (CPOk (List IpStmt) (List Int) Int) (CPErr (List Int)))
+
+;; the runtime calls
+(fn s_inc ((scratch Int) (v Int)) IpStmt (IpCall scratch (rt_inc_ix) (list (rl v))))
+
+(fn s_dec ((scratch Int) (v Int)) IpStmt (IpCall scratch (rt_dec_ix) (list (rl v))))
+
+;; dec every OWNED operand after its borrow-position consumer; each dec
+;; writes a fresh scratch local
+(fn decs ((ops (List (Pair Int Own))) (nx Int)) (Pair (List IpStmt) Int)
+  (measure (struct ops))
+  (match ops
+    (Nil (Pair Nil nx))
+    ((Cons p rest)
+     (match p
+       ((Pair l o)
+        (match (decs rest (if (is_owned o) (+ nx 1) nx))
+          ((Pair ss nx2) (Pair (if (is_owned o) (Cons (s_dec nx l) ss) ss) nx2))))))))
+
+;; make the value in local l OWNED: inc a borrowed reference; immediates and
+;; owned references need nothing
+(fn own ((l Int) (o Own) (nx Int)) (Pair (List IpStmt) Int)
+  (match o
+    (OImm (Pair Nil nx))
+    (OBor (Pair (list (s_inc nx l)) (+ nx 1)))
+    (OOwn (Pair Nil nx))))
+
+;; --- the arithmetic on immediates -------------------------------------------------
+
+;; + : t := a + (b − 1); overflow ⇔ the top bit of (a ^ t) & ((b−1) ^ t)
+(fn arith_add ((a Int) (b Int) (nx Int)) CR
+  (let ((bm (+ nx 0)) (t (+ nx 1)) (ov (+ nx 2)))
+    (CROk
+      (list
+        (IpSet bm (rsub (rl b) (rk 1)))
+        (IpSet t (radd (rl a) (rl bm)))
+        (IpSet ov (rshr (rand (rxor (rl a) (rl t)) (rxor (rl bm) (rl t))) (rk 63)))
+        (IpIf (req (rl ov) (rk 0)) Nil (list (IpFail FOverflow))))
+      t
+      OImm
+      (+ nx 3))))
+
+;; − : t := a − (b − 1); overflow ⇔ the top bit of (a ^ (b−1)) & (a ^ t)
+(fn arith_sub ((a Int) (b Int) (nx Int)) CR
+  (let ((bm (+ nx 0)) (t (+ nx 1)) (ov (+ nx 2)))
+    (CROk
+      (list
+        (IpSet bm (rsub (rl b) (rk 1)))
+        (IpSet t (rsub (rl a) (rl bm)))
+        (IpSet ov (rshr (rand (rxor (rl a) (rl bm)) (rxor (rl a) (rl t))) (rk 63)))
+        (IpIf (req (rl ov) (rk 0)) Nil (list (IpFail FOverflow))))
+      t
+      OImm
+      (+ nx 3))))
+
+;; arithmetic shift right by one: the value from the immediate
+(fn sra1 ((w IExp)) IExp (ror (rshr w (rk 1)) (rand w (rk (two63)))))
+
+;; * : x·y on the decoded values through unsigned magnitudes; overflow ⇔
+;; the unsigned product wrapped (q / |x| ≠ |y|) or |x|·|y| ≥ 2^62
+(fn arith_mul ((a Int) (b Int) (nx Int)) CR
+  (let
+    ((x (+ nx 0))
+     (y (+ nx 1))
+     (sx (+ nx 2))
+     (sy (+ nx 3))
+     (ax (+ nx 4))
+     (ay (+ nx 5))
+     (q (+ nx 6))
+     (r (+ nx 7))
+     (t (+ nx 8)))
+    (CROk
+      (list
+        (IpSet x (sra1 (rl a)))
+        (IpSet y (sra1 (rl b)))
+        (IpSet sx (rshr (rl x) (rk 63)))
+        (IpSet sy (rshr (rl y) (rk 63)))
+        (IpIf (req (rl sx) (rk 0)) (list (IpSet ax (rl x))) (list (IpSet ax (rsub (rk 0) (rl x)))))
+        (IpIf (req (rl sy) (rk 0)) (list (IpSet ay (rl y))) (list (IpSet ay (rsub (rk 0) (rl y)))))
+        (IpSet q (rmul (rl ax) (rl ay)))
+        (IpIf
+          (req (rl ax) (rk 0))
+          Nil
+          (list (IpIf (req (rdiv (rl q) (rl ax)) (rl ay)) Nil (list (IpFail FOverflow)))))
+        (IpIf (rlt (rl q) (rk (two62))) Nil (list (IpFail FOverflow)))
+        (IpIf
+          (req (rxor (rl sx) (rl sy)) (rk 0))
+          (list (IpSet r (rl q)))
+          (list (IpSet r (rsub (rk 0) (rl q)))))
+        (IpSet t (radd (rmul (rl r) (rk 2)) (rk 1))))
+      t
+      OImm
+      (+ nx 9))))
+
+;; signed compare through the bias; the result is a Bool word
+(fn arith_cmp ((op IOp) (biased Bool) (a Int) (b Int) (nx Int)) CR
+  (let ((ba (+ nx 0)) (bb (+ nx 1)) (c (+ nx 2)) (t (+ nx 3)))
+    (CROk
+      (list
+        (IpSet ba (if biased (rxor (rl a) (rk (two63))) (rl a)))
+        (IpSet bb (if biased (rxor (rl b) (rk (two63))) (rl b)))
+        (IpSet c (IBin U64 op (rl ba) (rl bb)))
+        (IpSet t (radd (rmul (rl c) (rk 2)) (rk 1))))
+      t
+      OImm
+      (+ nx 4))))
+
+(fn prim_of ((q QName) (a Int) (b Int) (nx Int)) CR
+  (if (core_named q (quote +)) (arith_add a b nx)
+  (if (core_named q (quote -)) (arith_sub a b nx)
+  (if (core_named q (quote *)) (arith_mul a b nx)
+  (if (core_named q (quote lt)) (arith_cmp ILt True a b nx)
+  (if (core_named q (quote le)) (arith_cmp ILe True a b nx)
+  (if (core_named q (quote int_eq)) (arith_cmp IEq False a b nx)
+  (CRErr (cat "primitive not lowered in v0: " (chars_of_sym (qn_name q)))))))))))
+
+(fn is_prim ((q QName)) Bool
+  (if (core_named q (quote +)) True
+  (if (core_named q (quote -)) True
+  (if (core_named q (quote *)) True
+  (if (core_named q (quote lt)) True
+  (if (core_named q (quote le)) True
+  (if (core_named q (quote int_eq)) True
+  (if (core_named q (quote ediv)) True
+  (if (core_named q (quote mod)) True
+  (if (core_named q (quote /)) True
+  (if (core_named q (quote tmod)) True
+  (if (core_named q (quote band)) True
+  (if (core_named q (quote bor)) True
+  (if (core_named q (quote bxor)) True
+  (if (core_named q (quote bshl)) True
+  (if (core_named q (quote bshr)) True False))))))))))))))))
+
+;; --- helpers over compiled operands ------------------------------------------------
+
+(fn op_exps ((ops (List (Pair Int Own)))) (List IExp)
+  (measure (struct ops))
+  (match ops
+    (Nil Nil)
+    ((Cons p rest)
+     (match p
+       ((Pair l _) (Cons (rl l) (op_exps rest)))))))
+
+(fn op_locals ((ops (List (Pair Int Own)))) (List Int)
+  (measure (struct ops))
+  (match ops
+    (Nil Nil)
+    ((Cons p rest)
+     (match p
+       ((Pair l _) (Cons l (op_locals rest)))))))
+
+(fn owned_all ((ls (List Int))) (List (Pair Int Own))
+  (measure (struct ls))
+  (match ls
+    (Nil Nil)
+    ((Cons l rest) (Cons (Pair l OOwn) (owned_all rest)))))
+
+;; make every operand owned (the let-binders)
+(fn own_all ((ops (List (Pair Int Own))) (nx Int)) (Pair (List IpStmt) Int)
+  (measure (struct ops))
+  (match ops
+    (Nil (Pair Nil nx))
+    ((Cons p rest)
+     (match p
+       ((Pair l o)
+        (match (own l o nx)
+          ((Pair ss nx2)
+           (match (own_all rest nx2)
+             ((Pair rss nx3) (Pair (sapp ss rss) nx3))))))))))
+
+;; store the operands into the fresh cell's slots, owning each
+(fn fill_slots ((p Int) (ops (List (Pair Int Own))) (i Int) (nx Int))
+  (Pair (List IpStmt) Int)
+  (measure (struct ops))
+  (match ops
+    (Nil (Pair Nil nx))
+    ((Cons op rest)
+     (match op
+       ((Pair l o)
+        (match (own l o nx)
+          ((Pair oss nx2)
+           (match (fill_slots p rest (+ i 1) nx2)
+             ((Pair rss nx3)
+              (Pair (sapp oss (Cons (rsto p (+ 8 (* 8 i)) (rl l)) rss)) nx3))))))))))
+
+;; a compiled branch: make its value owned and land it in r (outside the
+;; SCC — applied to ic_e's result, never calling it)
+(fn branch_land ((cr CR) (r Int)) CR
+  (match cr
+    ((CRErr m) (CRErr m))
+    ((CROk ss l o nx2)
+     (match (own l o nx2)
+       ((Pair oss nx3) (CROk (sapp ss (sapp oss (list (IpSet r (rl l))))) r OOwn nx3))))))
+
+;; --- the expression compiler (one structural SCC) --------------------------------
+
+;; env: BVar i → the local of binder i (innermost first)
+(fn ic_e ((c Ctx) (env (List Int)) (nx Int) (e Expr)) CR
+  (measure (struct e))
+  (match e
+    ((BVar i)
+     (match (nth_int env i)
+       (None (CRErr "unbound BVar"))
+       ((Some l) (CROk Nil l OBor nx))))
+    ((IntLit n)
+     (if (lt n (i63_lo)) (CRErr "integer literal below the i63 band")
+     (if (lt n (i63_hi)) (CROk (list (IpSet nx (rk (imm n)))) nx OImm (+ nx 1))
+     (CRErr "integer literal above the i63 band"))))
+    ((Ctor q args)
+     (match (ctor_info c q)
+       (None (CRErr (cat "unknown constructor " (chars_of_sym (qn_name q)))))
+       ((Some ta)
+        (match ta
+          ((Pair tag arity)
+           (if (int_eq arity 0)
+             (CROk (list (IpSet nx (rk (imm tag)))) nx OImm (+ nx 1))
+             (match (ic_es c env nx args)
+               ((CRsErr m) (CRErr m))
+               ((CRsOk ss ops nx2)
+                (let ((p nx2))
+                  (match (fill_slots p ops 0 (+ nx2 1))
+                    ((Pair fss nx3)
+                     (CROk
+                       (sapp
+                         ss
+                         (Cons (IpCall p (rt_alloc_ix) (list (rk tag) (rk arity))) fss))
+                       p
+                       OOwn
+                       nx3))))))))))))
+    ((Call q args)
+     (if (is_prim q)
+       (match (ic_es c env nx args)
+         ((CRsErr m) (CRErr m))
+         ((CRsOk ss ops nx2)
+          (match ops
+            ((Cons (Pair a _) (Cons (Pair b _) Nil))
+             (match (prim_of q a b nx2)
+               ((CRErr m) (CRErr m))
+               ((CROk ps t o nx3) (CROk (sapp ss ps) t o nx3))))
+            (_ (CRErr "primitive arity (v0 lowers the binary prims)")))))
+       (match (ctx_fix c q)
+         (None
+           (CRErr (cat "call outside the compiled table: " (chars_of_sym (qn_name q)))))
+         ((Some k)
+          (match (ic_es c env nx args)
+            ((CRsErr m) (CRErr m))
+            ((CRsOk ss ops nx2)
+             (let ((t nx2))
+               (match (decs ops (+ nx2 1))
+                 ((Pair dss nx3)
+                  (CROk
+                    (sapp ss (Cons (IpCall t k (op_exps ops)) dss))
+                    t
+                    OOwn
+                    nx3))))))))))
+    ((If cnd th el)
+     (match (ic_e c env nx cnd)
+       ((CRErr m) (CRErr m))
+       ((CROk cs cl co nx2)
+        (let ((r nx2))
+          (match (branch_land (ic_e c env (+ nx2 1) th) r)
+            ((CRErr m) (CRErr m))
+            ((CROk ts _ _ nx3)
+             (match (branch_land (ic_e c env nx3 el) r)
+               ((CRErr m) (CRErr m))
+               ((CROk es _ _ nx4)
+                (match (decs (list (Pair cl co)) nx4)
+                  ((Pair dss nx5)
+                   (CROk
+                     (sapp cs (Cons (IpIf (req (rl cl) (rk (w_true))) ts es) dss))
+                     r
+                     OOwn
+                     nx5)))))))))))
+    ((Let bs body)
+     (match (ic_es c env nx bs)
+       ((CRsErr m) (CRErr m))
+       ((CRsOk ss ops nx2)
+        (match (own_all ops nx2)
+          ((Pair oss nx3)
+           (let ((ls (op_locals ops)))
+             (match (ic_e c (cat (rev_ints ls Nil) env) nx3 body)
+               ((CRErr m) (CRErr m))
+               ((CROk bss bl bo nx4)
+                (match (own bl bo nx4)
+                  ((Pair wss nx5)
+                   (match (decs (owned_all ls) nx5)
+                     ((Pair dss nx6)
+                      (CROk (sapp ss (sapp oss (sapp bss (sapp wss dss)))) bl OOwn nx6)))))))))))))
+    ((Match s arms)
+     (match (ic_e c env nx s)
+       ((CRErr m) (CRErr m))
+       ((CROk ss sl so nx2)
+        (let ((r nx2))
+          (match (ic_arms c env (+ nx2 1) arms sl r)
+            ((CRErr m) (CRErr m))
+            ((CROk ass _ _ nx3)
+             (match (decs (list (Pair sl so)) nx3)
+               ((Pair dss nx4) (CROk (sapp ss (sapp ass dss)) r OOwn nx4)))))))))
+    ((FVar _) (CRErr "free variable"))
+    ((SymLit _) (CRErr "symbol literal (v0)"))))
+
+(fn ic_es ((c Ctx) (env (List Int)) (nx Int) (es (List Expr))) CRs
+  (measure (struct es))
+  (match es
+    (Nil (CRsOk Nil Nil nx))
+    ((Cons e rest)
+     (match (ic_e c env nx e)
+       ((CRErr m) (CRsErr m))
+       ((CROk ss l o nx2)
+        (match (ic_es c env nx2 rest)
+          ((CRsErr m) (CRsErr m))
+          ((CRsOk rss ops nx3) (CRsOk (sapp ss rss) (Cons (Pair l o) ops) nx3))))))))
+
+;; arms: ok := 1; pattern tests (clearing ok); under ok the body lands in r;
+;; else the remaining arms; none left → unreachable
+(fn ic_arms ((c Ctx) (env (List Int)) (nx Int) (arms (List Arm)) (sl Int) (r Int)) CR
+  (measure (struct arms))
+  (match arms
+    (Nil (CROk (list IpUnreach) r OOwn nx))
+    ((Cons arm rest)
+     (match arm
+       ((Arm p body)
+        (let ((ok nx))
+          (match (ic_pat c (+ nx 1) p sl ok)
+            ((CPErr m) (CRErr m))
+            ((CPOk pss binders nx2)
+             (match (branch_land (ic_e c (cat (rev_ints binders Nil) env) nx2 body) r)
+               ((CRErr m) (CRErr m))
+               ((CROk bss _ _ nx3)
+                (match (ic_arms c env nx3 rest sl r)
+                  ((CRErr m) (CRErr m))
+                  ((CROk rss _ _ nx4)
+                   (CROk
+                     (Cons
+                       (IpSet ok (rk 1))
+                       (sapp pss (list (IpIf (req (rl ok) (rk 1)) bss rss))))
+                     r
+                     OOwn
+                     nx4)))))))))))))
+
+;; a pattern against the value in local v; binders are the locals holding
+;; the matched sub-values (borrowed views); failure clears ok
+(fn ic_pat ((c Ctx) (nx Int) (p Pat) (v Int) (ok Int)) CP
+  (measure (struct p))
+  (match p
+    (PVar (CPOk Nil (list v) nx))
+    ((PInt n)
+     (CPOk (list (IpIf (req (rl v) (rk (imm n))) Nil (list (IpSet ok (rk 0))))) Nil nx))
+    ((PSym _) (CPErr "symbol pattern (v0)"))
+    ((PCtor q ps)
+     (match (ctor_info c q)
+       (None (CPErr (cat "unknown constructor in pattern " (chars_of_sym (qn_name q)))))
+       ((Some ta)
+        (match ta
+          ((Pair tag arity)
+           (if (int_eq arity 0)
+             (CPOk
+               (list (IpIf (req (rl v) (rk (imm tag))) Nil (list (IpSet ok (rk 0)))))
+               Nil
+               nx)
+             (let ((h nx))
+               (match (ic_pats c (+ nx 1) ps v 0 ok)
+                 ((CPErr m) (CPErr m))
+                 ((CPOk fss binders nx2)
+                  (CPOk
+                    (list
+                      (IpIf
+                        (risref (rl v))
+                        (list
+                          (rldo h v 0)
+                          (IpIf
+                            (req (rand (rshr (rl h) (rk 32)) (rk 65535)) (rk tag))
+                            fss
+                            (list (IpSet ok (rk 0)))))
+                        (list (IpSet ok (rk 0)))))
+                    binders
+                    nx2))))))))))))
+
+;; the fields of the cell in v, from slot i
+(fn ic_pats ((c Ctx) (nx Int) (ps (List Pat)) (v Int) (i Int) (ok Int)) CP
+  (measure (struct ps))
+  (match ps
+    (Nil (CPOk Nil Nil nx))
+    ((Cons p rest)
+     (let ((f nx))
+       (match (ic_pat c (+ nx 1) p f ok)
+         ((CPErr m) (CPErr m))
+         ((CPOk pss b1 nx2)
+          (match (ic_pats c nx2 rest v (+ i 1) ok)
+            ((CPErr m) (CPErr m))
+            ((CPOk rss b2 nx3)
+             (CPOk
+               (Cons
+                 (rldo f v (+ 8 (* 8 i)))
+                 (sapp pss (list (IpIf (req (rl ok) (rk 1)) rss Nil))))
+               (cat b1 b2)
+               nx3)))))))))
+
+;; --- a function --------------------------------------------------------------------
+
+;; params are locals 0..n−1 with BVar 0 = the LAST parameter; the body's
+;; result is made owned; the prologue bumps the depth cell and fails stack
+;; past the bound, the epilogue restores it
+(fn param_env ((n Int)) (List Int)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) Nil (Cons (- n 1) (param_env (- n 1)))))
+
+(type FR (FROk IpFn) (FRErr (List Int)))
+
+(fn ic_fn ((c Ctx) (fd FnDef)) FR
+  (match fd
+    ((FnDef q pts _ body)
+     (let ((n (tys_len pts)))
+       (let ((d n))
+         (match (ic_e c (param_env n) (+ n 1) body)
+           ((CRErr m) (FRErr (cat (chars_of_sym (qn_name q)) (cat ": " m))))
+           ((CROk ss l o nx)
+            (match (own l o nx)
+              ((Pair oss nx2)
+               (FROk
+                 (MkIpFn
+                   (u64s n)
+                   (u64s (- nx2 n))
+                   (Cons
+                     (rldw d (rk (+ (ctx_rb c) 16)))
+                     (Cons
+                       (IpIf
+                         (rlt (rl d) (rk (ctx_depth c)))
+                         (list (rstw (rk (+ (ctx_rb c) 16)) (radd (rl d) (rk 1))))
+                         (list (IpFail FStack)))
+                       (sapp ss (sapp oss (list (rstw (rk (+ (ctx_rb c) 16)) (rl d)))))))
+                   (rl l)
+                   U64)))))))))))
+
+;; --- the printer (the product's text) ------------------------------------------------
+
+(fn pk ((k IKind)) Doc
+  (match k
+    (U8 (DStr "U8"))
+    (U32 (DStr "U32"))
+    (U64 (DStr "U64"))))
+
+(fn pop ((o IOp)) Doc
+  (match o
+    (IAdd (DStr "IAdd"))
+    (ISub (DStr "ISub"))
+    (IMul (DStr "IMul"))
+    (IDiv (DStr "IDiv"))
+    (IRem (DStr "IRem"))
+    (IAnd (DStr "IAnd"))
+    (IOr (DStr "IOr"))
+    (IXor (DStr "IXor"))
+    (IShl (DStr "IShl"))
+    (IShr (DStr "IShr"))
+    (IEq (DStr "IEq"))
+    (ILt (DStr "ILt"))
+    (ILe (DStr "ILe"))))
+
+(fn pfam ((f IFam)) Doc
+  (match f
+    (FOverflow (DStr "FOverflow"))
+    (FOom (DStr "FOom"))
+    (FStack (DStr "FStack"))))
+
+(fn pe ((e IExp)) Doc
+  (measure (struct e))
+  (match e
+    ((IConst n) (dconc (list (DStr "(IConst ") (dint n) (DStr ")"))))
+    ((ILoc i) (dconc (list (DStr "(ILoc ") (dint i) (DStr ")"))))
+    ((IBin k o a b)
+     (dconc (list (DStr "(IBin ") (pk k) (sp) (pop o) (sp) (pe a) (sp) (pe b) (DStr ")"))))
+    ((IRotr k a b) (dconc (list (DStr "(IRotr ") (pk k) (sp) (pe a) (sp) (pe b) (DStr ")"))))
+    ((IExt kf kt a) (dconc (list (DStr "(IExt ") (pk kf) (sp) (pk kt) (sp) (pe a) (DStr ")"))))
+    ((ITrunc kf kt a)
+     (dconc (list (DStr "(ITrunc ") (pk kf) (sp) (pk kt) (sp) (pe a) (DStr ")"))))
+    ((ILoad a) (dconc (list (DStr "(ILoad ") (pe a) (DStr ")"))))))
+
+(fn pes ((es (List IExp))) Doc
+  (measure (struct es))
+  (match es
+    (Nil (DStr ""))
+    ((Cons e rest) (dconc (list (sp) (pe e) (pes rest))))))
+
+(fn ps ((s IpStmt)) Doc
+  (measure (struct s))
+  (match s
+    ((IpSet i e) (dconc (list (DStr "(IpSet ") (dint i) (sp) (pe e) (DStr ")"))))
+    ((IpStore a v) (dconc (list (DStr "(IpStore ") (pe a) (sp) (pe v) (DStr ")"))))
+    ((IpIf c t el)
+     (dconc (list (DStr "(IpIf ") (pe c) (sp) (pss t) (sp) (pss el) (DStr ")"))))
+    ((IpWhile c b) (dconc (list (DStr "(IpWhile ") (pe c) (sp) (pss b) (DStr ")"))))
+    ((IpCall i k args)
+     (dconc (list (DStr "(IpCall ") (dint i) (sp) (dint k) (DStr " (list") (pes args) (DStr "))"))))
+    ((IpLoadW i a) (dconc (list (DStr "(IpLoadW ") (dint i) (sp) (pe a) (DStr ")"))))
+    ((IpStoreW a v) (dconc (list (DStr "(IpStoreW ") (pe a) (sp) (pe v) (DStr ")"))))
+    ((IpFail f) (dconc (list (DStr "(IpFail ") (pfam f) (DStr ")"))))
+    (IpUnreach (DStr "IpUnreach"))))
+
+(fn pss ((ss (List IpStmt))) Doc
+  (measure (struct ss))
+  (match ss
+    (Nil (DStr "Nil"))
+    ((Cons s rest) (dconc (list (DStr "(list ") (ps s) (pss_tail rest) (DStr ")"))))))
+
+(fn pss_tail ((ss (List IpStmt))) Doc
+  (measure (struct ss))
+  (match ss
+    (Nil (DStr ""))
+    ((Cons s rest) (dconc (list (sp) (ps s) (pss_tail rest))))))
+
+(fn pks_tail ((ks (List IKind))) Doc
+  (measure (struct ks))
+  (match ks
+    (Nil (DStr ""))
+    ((Cons k rest) (dconc (list (sp) (pk k) (pks_tail rest))))))
+
+(fn pks ((ks (List IKind))) Doc
+  (match ks
+    (Nil (DStr "Nil"))
+    ((Cons k rest) (dconc (list (DStr "(list ") (pk k) (pks_tail rest) (DStr ")"))))))
+
+(fn pfn ((name (List Int)) (f IpFn)) Doc
+  (dconc
+    (list
+      (DStr "(fn ")
+      (DStr name)
+      (DStr "_ipfn () IpFn (MkIpFn ")
+      (pks (ipparams_of f))
+      (sp)
+      (pks (ipextra_of f))
+      (sp)
+      (pss (ipbody_of f))
+      (sp)
+      (pe (ipresult_of f))
+      (sp)
+      (pk (iprkind_of f))
+      (DStr "))")
+      (DStr (nl))
+      (DStr (nl)))))
+
+;; --- the driver --------------------------------------------------------------------
+
+(fn ic_fail ((msg (List Int)) (w World)) World
+  (exit 2 (write (cat "impc: " (cat msg (nl))) w)))
+
+;; the module's own fns: those whose qualified module path is the source's
+(fn own_fns ((fs (List FnDef)) (mp (List Symbol))) (List FnDef)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons f rest)
+     (match f
+       ((FnDef q _ _ _)
+        (if (sym_path_eq (qn_mod q) mp) (Cons f (own_fns rest mp)) (own_fns rest mp)))))))
+
+(fn mk_table ((fs (List FnDef)) (k Int)) (List (Pair QName Int))
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons f rest)
+     (match f
+       ((FnDef q _ _ _) (Cons (Pair q k) (mk_table rest (+ k 1))))))))
+
+(type PR (PROk Doc Doc Doc) (PRErr (List Int)))
+
+;; compile every fn: the fn docs, the index docs, the table literal
+(fn ic_all ((c Ctx) (fs (List FnDef)) (k Int) (base (List Int))) PR
+  (measure (struct fs))
+  (match fs
+    (Nil (PROk (DStr "") (DStr "") (DStr "")))
+    ((Cons f rest)
+     (match f
+       ((FnDef q _ _ _)
+        (match (ic_fn c f)
+          ((FRErr m) (PRErr m))
+          ((FROk ipf)
+           (match (ic_all c rest (+ k 1) base)
+             ((PRErr m) (PRErr m))
+             ((PROk fd ixd tab)
+              (let ((nm (chars_of_sym (qn_name q))))
+                (PROk
+                  (DCat (pfn nm ipf) fd)
+                  (DCat
+                    (dconc
+                      (list
+                        (DStr "(fn ")
+                        (DStr nm)
+                        (DStr "_ix () Int ")
+                        (dint k)
+                        (DStr ")")
+                        (DStr (nl))
+                        (DStr (nl))))
+                    ixd)
+                  (DCat (dconc (list (sp) (DStr "(") (DStr nm) (DStr "_ipfn)"))) tab))))))))))))
+
+;; the module path of the source: from the first fn the loader attributed
+;; to it is fragile; instead read it off the FnDef list's LAST entries? No —
+;; the loader merges imports FIRST, so the root file's fns come last: the
+;; module path of the last FnDef is the root's.
+(fn last_mod ((fs (List FnDef)) (acc (List Symbol))) (List Symbol)
+  (measure (struct fs))
+  (match fs
+    (Nil acc)
+    ((Cons f rest)
+     (match f
+       ((FnDef q _ _ _) (last_mod rest (qn_mod q)))))))
+
+(fn rt_base () Int 0)
+
+(fn depth_bound () Int 100000)
+
+(fn dline ((cs (List Int))) Doc (DCat (DStr cs) (DStr (nl))))
+
+;; the product's header: the generation stamp and the imports
+(fn hdr_doc ((src (List Int)) (out (List Int))) Doc
+  (dconc
+    (list
+      (dline (cat ";;; GENERATED by tools/impc/impc.shard from " (cat src " -- do not edit; regenerate.")))
+      (dline ";;; the call-tier imp product (docs/IMP.md 2b) over the runtime models/imp/rt.shard,")
+      (dline (cat ";;; at runtime base " (cat (show_int (rt_base)) (cat ", depth bound " (cat (show_int (depth_bound)) ".")))))
+      (DStr (nl))
+      (DCat (dimport (cat (updots out) "kernel/stdlib.shard")) (DStr (nl)))
+      (DCat (dimport (cat (updots out) "std/mem")) (DStr (nl)))
+      (DCat (dimport (cat (updots out) "models/imp/imp.shard")) (DStr (nl)))
+      (DCat (dimport (cat (updots out) "models/imp/rt.shard")) (DStr (nl)))
+      (dline "(use (:: std mem *))")
+      (dline "(use (:: models imp imp *))")
+      (dline "(use (:: models imp rt *))")
+      (DStr (nl)))))
+
+;; the program fn: SRCBASE_iprog over the table
+(fn prog_doc ((src (List Int)) (tab Doc)) Doc
+  (dconc
+    (list
+      (DStr "(fn ")
+      (DStr (until_dot (basename_go src Nil)))
+      (DStr "_iprog ((base Int) (memsize Int)) IpProg (rt_prog ")
+      (dint (rt_base))
+      (DStr " (list")
+      tab
+      (DStr ") base memsize))")
+      (DStr (nl)))))
+
+(fn ic_emit ((src (List Int)) (out (List Int)) (w World)) World
+  (match (load_run_module src w)
+    ((Pair None w1) (ic_fail (cat "cannot load " src) w1))
+    ((Pair (Some m) w1)
+     (match m
+       ((Module _ fs _ _ _)
+        (let ((mine (own_fns fs (last_mod fs Nil))))
+          (let ((c (Ctx m (mk_table mine (rt_count (rt_base))) (rt_base) (depth_bound))))
+            (match (ic_all c mine (rt_count (rt_base)) (basename_go out Nil))
+              ((PRErr msg) (ic_fail msg w1))
+              ((PROk fd ixd tab)
+               (match
+                 (write_file
+                   out
+                   (doc_flat (dconc (list (hdr_doc src out) fd ixd (prog_doc src tab))) Nil)
+                   w1)
+                 ((Pair ok w2)
+                  (if ok (exit 0 w2) (ic_fail (cat "cannot write " out) w2)))))))))))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons src (Cons out Nil)) (ic_emit src out w1))
+       (_ (ic_fail "usage: impc SRC OUT.raw" w1))))))

@@ -1,0 +1,115 @@
+;;; tools/impc/fixtures/micro_run.shard — the RUN-MODE DIFFERENTIAL of the
+;;; micro-flagship (docs/COVERAGE.md C3): every t_* wrapper of micro.shard
+;;; is evaluated twice — natively by the engine (the spec's own meaning)
+;;; and through iprun on impc's product micro_ipc_out.shard over the
+;;; runtime — and the two Ints must agree. The first oracle of the
+;;; generic path: it runs before any certificate exists and stays as the
+;;; regression pin after. Prints PASS/FAIL per wrapper, exits 1 on any
+;;; mismatch; corpus-pinned with pin_run.
+;;;
+;;; Run: bin/shard_eval run tools/impc/fixtures/micro_run.shard
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../kernel/term.shard")
+(use (:: kernel term show_int))
+(import "../../../std/mem")
+(use (:: std mem *))
+(import "../../../models/imp/imp.shard")
+(use (:: models imp imp *))
+(import "../../../models/imp/rt.shard")
+(use (:: models imp rt *))
+(import "micro.shard")
+(use (:: tools impc fixtures micro *))
+(import "micro_ipc_out.shard")
+(use (:: tools impc fixtures micro_ipc_out *))
+
+(type World (World Int))
+
+(extern write ((bytes (List Int)) (w World)) World)
+
+(extern exit ((code Int) (w World)) World)
+
+;; the program over the window [0, 65536); the heap after the runtime header
+(fn prog () IpProg (micro_iprog 0 65536))
+
+(fn fuel () Nat (ifnat 400000))
+
+;; decode an immediate word to its Int (two's complement in the word)
+(fn decode ((v Int)) Int
+  (if (lt v 9223372036854775808) (ediv (- v 1) 2)
+  (ediv (- (- v 18446744073709551616) 1) 2)))
+
+;; run fn k after rt_init: the value, or -1 fuel / -2 trap / -11 -12 -13 the families
+(fn run_k ((k Int)) Int
+  (match (iprun (fuel) (prog) (rt_init_ix) (list 152 65536) (mem_empty))
+    (None -1)
+    ((Some r0)
+     (match r0
+       ((IpRv _ m1)
+        (match (iprun (fuel) (prog) k Nil m1)
+          (None -1)
+          ((Some r)
+           (match r
+             ((IpRv v _) (decode v))
+             (IpRtrap -2)
+             ((IpRfailed fam)
+              (match fam
+                (FOverflow -11)
+                (FOom -12)
+                (FStack -13)))))))
+       (IpRtrap -2)
+       ((IpRfailed _) -3)))))
+
+(fn cat ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (cat t b)))))
+
+(type T (T (List Int) Int Int))
+
+(fn tests () (List T)
+  (list
+    (T "len" (t_len) (run_k (t_len_ix)))
+    (T "len0" (t_len0) (run_k (t_len0_ix)))
+    (T "app" (t_app) (run_k (t_app_ix)))
+    (T "perim" (t_perim) (run_k (t_perim_ix)))
+    (T "second" (t_second) (run_k (t_second_ix)))
+    (T "second_short" (t_second_short) (run_k (t_second_short_ix)))
+    (T "sumto" (t_sumto) (run_k (t_sumto_ix)))
+    (T "rev" (t_rev) (run_k (t_rev_ix)))
+    (T "pick" (t_pick) (run_k (t_pick_ix)))
+    (T "find" (t_find) (run_k (t_find_ix)))
+    (T "find_none" (t_find_none) (run_k (t_find_none_ix)))
+    (T "shapes" (t_shapes) (run_k (t_shapes_ix)))
+    (T "arith" (t_arith) (run_k (t_arith_ix)))
+    (T "cmp" (t_cmp) (run_k (t_cmp_ix)))
+    (T "let" (t_let) (run_k (t_let_ix)))
+    (T "wk" 1 (if (ipwk_prog (prog)) 1 0))))
+
+(fn report ((ts (List T)) (fails Int) (w World)) World
+  (measure (struct ts))
+  (match ts
+    (Nil
+      (exit
+        (if (int_eq fails 0) 0 1)
+        (write (cat "FAIL rows: " (cat (show_int fails) "\n")) w)))
+    ((Cons t rest)
+     (match t
+       ((T name want got)
+        (if (int_eq want got)
+          (report rest fails (write (cat "PASS impc " (cat name "\n")) w))
+          (report
+            rest
+            (+ fails 1)
+            (write
+              (cat
+                "FAIL impc "
+                (cat
+                  name
+                  (cat
+                    ": spec "
+                    (cat (show_int want) (cat " compiled " (cat (show_int got) "\n"))))))
+              w))))))))
+
+(fn main ((w World)) World (report (tests) 0 w))

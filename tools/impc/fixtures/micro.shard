@@ -1,0 +1,128 @@
+;;; tools/impc/fixtures/micro.shard — the cons/match/free MICRO-FLAGSHIP
+;;; (docs/COVERAGE.md C3): the smallest set of first-order fns that
+;;; crosses the whole generic gap once — list length and append, a match
+;;; over a three-constructor ADT with a nested pattern, a non-tail
+;;; recursion, an Int-measure recursion, a tail recursion, an Option
+;;; match, and arithmetic with comparisons. The wrapper fns t_* take no
+;;; arguments and return Ints so the run-mode differential
+;;; (micro_run.shard) can compare the compiled product against the
+;;; spec's own evaluation of the same wrapper without marshalling
+;;; heap values across the boundary.
+
+(import "../../../kernel/stdlib.shard")
+
+(type Shape (Dot) (Seg Int) (Tri Int Int Int))
+
+(fn len ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (len t)))))
+
+(fn app ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (app t b)))))
+
+;; a positional checksum: distinguishes orderings
+(fn wsum_go ((xs (List Int)) (w Int) (acc Int)) Int
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (wsum_go t (+ w 1) (+ acc (* w h))))))
+
+(fn wsum ((xs (List Int))) Int (wsum_go xs 1 0))
+
+(fn perim ((s Shape)) Int
+  (match s
+    (Dot 0)
+    ((Seg n) n)
+    ((Tri a b c) (+ a (+ b c)))))
+
+;; a nested pattern: the head of the tail
+(fn second ((xs (List Int))) Int
+  (match xs
+    ((Cons _ (Cons y _)) y)
+    (_ -1)))
+
+;; non-tail recursion on an Int measure
+(fn sumto ((n Int)) Int
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le n 0) 0 (+ n (sumto (- n 1)))))
+
+(fn rev_go ((xs (List Int)) (acc (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_go t (Cons h acc)))))
+
+(fn pick ((o (Option Int)) (d Int)) Int
+  (match o
+    (None d)
+    ((Some v) v)))
+
+(fn find_neg ((xs (List Int))) (Option Int)
+  (measure (struct xs))
+  (match xs
+    (Nil None)
+    ((Cons h t) (if (lt h 0) (Some h) (find_neg t)))))
+
+;; n mod 3 without a division primitive (v0 of impc lowers + - * and the
+;; comparisons only)
+(fn mod_free ((n Int)) Int
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 3) n (mod_free (- n 3))))
+
+(fn shapes ((n Int)) (List Shape)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le n 0) Nil
+  (Cons (if (int_eq (mod_free n) 0) Dot (if (int_eq (mod_free n) 1) (Seg n) (Tri n n n)))
+    (shapes (- n 1)))))
+
+(fn perims ((ss (List Shape))) Int
+  (measure (struct ss))
+  (match ss
+    (Nil 0)
+    ((Cons s t) (+ (perim s) (perims t)))))
+
+;; --- the wrappers the differential runs --------------------------------------
+
+(fn t_len () Int (len (list 1 2 3 4 5)))
+
+(fn t_len0 () Int (len Nil))
+
+(fn t_app () Int (wsum (app (list 1 2) (list 3 4 5))))
+
+(fn t_perim () Int (+ (perim Dot) (+ (perim (Seg 7)) (perim (Tri 1 2 3)))))
+
+(fn t_second () Int (second (list 10 20 30)))
+
+(fn t_second_short () Int (second (list 10)))
+
+(fn t_sumto () Int (sumto 100))
+
+(fn t_rev () Int (wsum (rev_go (list 1 2 3 4) Nil)))
+
+(fn t_pick () Int (+ (pick (Some 5) 9) (pick None 9)))
+
+(fn t_find () Int (pick (find_neg (list 3 1 -4 1 -5)) 0))
+
+(fn t_find_none () Int (pick (find_neg (list 3 1 4)) 0))
+
+(fn t_shapes () Int (perims (shapes 10)))
+
+;; operands pass through `id` so the arithmetic is not ground at the source
+;; (canon C1 would fold it) and the compiled primitives actually run
+(fn id ((x Int)) Int x)
+
+(fn t_arith () Int (- (* (id 6) (id 7)) (+ (id 1) (* (id -3) (id -3)))))
+
+(fn t_cmp () Int
+  (+
+    (if (lt (id -5) (id 3)) 1 0)
+    (+
+      (if (le (id 3) (id 3)) 10 0)
+      (+ (if (lt (id 3) (id -5)) 100 0) (if (int_eq (id 4) (id 4)) 1000 0)))))
+
+(fn t_let () Int (let ((a 3) (b 4)) (+ (* a a) (* b b))))
