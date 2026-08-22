@@ -538,3 +538,26 @@ out of the compute and opens it by unfold + reduce. Owed: `ls8_id` in
 std/mem (C2); the lift law (C3). Re-slotted within C1: the open/close
 shims move to C5/C6 prep (they are consumed only by shardfmt's
 `read_file`; calc needs stdin/stdout/exit, which exist).
+
+**C2a — the runtime's code lands (2026-08-22; C1b runs in parallel on
+the x86 side).** models/imp/rt.shard: the spelling kit (rk/rl/ra/radd/…
+/rldw/rldo/rstw/rsto, risref, rcount/rarity, rfree_at — shared with
+impc), the table `rt_fns rb` = rt_init / rt_alloc / rt_inc / rt_dec as
+IpFn values parameterized by the runtime base, `rt_prog` (table ++
+program). Representation and layout fixed as the file header records
+(CD7 resolved): header = count + tag·2^32 + arity·2^48; immediates
+odd, references even U32 indexes; immortal = count ≥ 2^31; a dead
+cell's count field carries the free worklist link; free lists per
+arity < 16 at [rb+24+8k], arity ≥ 16 bump-only (a leak, never a wrong
+answer); rt_dec releases children through an ITERATIVE worklist, no
+recursion. Probe: models/imp/probes/rt_run.shard — a RUN-MODE driver
+(17 tests: placement, header, reuse, inc/dec, the three-cell cascade
+and its LIFO reuse order, a shared child surviving its parent, oom,
+immortal, immediates, the large class, the gate) pinned with
+`pin_run imp_rt_run`; run mode because std/mem's word view is opaque
+in check mode and the runtime's control flow depends on loaded values
+— the theorems are C2b's. **Invariant surfaced by the probe** (two
+tests first failed on it): every slot of a live cell holds a valid
+word — the runtime never null-checks, so an uninitialized 0 reads as
+a reference to index 0. impc's constructor emission fills every slot
+before the cell can be observed; the C2b invariant states it.

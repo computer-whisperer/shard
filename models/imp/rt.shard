@@ -1,0 +1,263 @@
+;;; models/imp/rt.shard — THE RUNTIME of the generic path at imp
+;;; (docs/COVERAGE.md P2/P4/P8, rung C2): the checked allocator and the
+;;; precise reference counting that every compiled program links, as
+;;; call-tier imp code (IpFn values — docs/IMP.md §2b), hand-written
+;;; ONCE and program-independent. tools/impc emits calls into this table
+;;; at every constructor, reference duplication, and last use.
+;;;
+;;; THE REPRESENTATION (P2). A slot is a U64 word holding either an
+;;; IMMEDIATE (low bit 1: an i63 integer 2n+1, or a nullary constructor
+;;; 2·tag+1 — the slot's TYPE says which) or a REFERENCE (low bit 0: the
+;;; U32 index of a cell in the window). A cell is a HEADER word followed
+;;; by `arity` slots:
+;;;
+;;;     header = count + tag·2^32 + arity·2^48      (count:32 tag:16 arity:16)
+;;;
+;;; The runtime never consults a type: count ops test the low bit, free
+;;; reads the arity from the header. Counts in [1, 2^31) are live;
+;;; counts ≥ 2^31 are IMMORTAL (static data, P8 — inc/dec leave them);
+;;; count 0 marks a DEAD cell, and while a dead cell waits on the free
+;;; worklist its count field holds the worklist link (indexes fit in 32
+;;; bits, and dead cells are reachable from nothing else).
+;;;
+;;; THE LAYOUT (P4), relative to the runtime base rb (a U32 index the
+;;; program chooses inside its window):
+;;;     [rb+0]        heap top (the bump pointer)
+;;;     [rb+8]        heap end (exclusive)
+;;;     [rb+16]       reserved (the data stack's pointer lives here at C3)
+;;;     [rb+24+8k]    free-list head for arity k, k in [0,16); 0 = empty
+;;;     rb+152        the header's size; rt_init takes the heap bounds
+;;; Cells of arity ≥ 16 are bump-allocated and never recycled (v1: a
+;;; leak, never a wrong answer — recorded in C2's record).
+;;;
+;;; THE FUNCTIONS (the table rt_fns, indexes rt_*_ix):
+;;;     rt_init  (lo hi)    -> 0      top := lo, end := hi, free heads := 0
+;;;     rt_alloc (tag n)    -> p      a fresh cell of arity n with count 1,
+;;;                                   from free[n] else the bump; Fail oom
+;;;                                   when the heap is exhausted
+;;;     rt_inc   (v)        -> 0      a reference's count + 1 (immediates,
+;;;                                   immortals untouched)
+;;;     rt_dec   (v)        -> 0      count − 1; at zero the cell dies and
+;;;                                   its children are released through an
+;;;                                   ITERATIVE worklist (no recursion, so
+;;;                                   freeing a long list costs no depth),
+;;;                                   each dead cell returning to free[arity]
+;;; Every fn takes and returns U64 words; addresses are narrowed to U32
+;;; at the access (the well-kinded gate's discipline). The once-proven
+;;; theorems over this table — the managed-graph invariant and the
+;;; alloc/store/free framing laws — are C2's second half.
+
+(import "../../kernel/stdlib.shard")
+(import "../../std/mem")
+(use (:: std mem *))
+(import "imp.shard")
+(use (:: models imp imp *))
+
+;; --- the spelling kit (shared with tools/impc) ----------------------------------
+
+;; U64 constant / local / narrow-to-address
+(fn rk ((n Int)) IExp (IConst n))
+
+(fn rl ((i Int)) IExp (ILoc i))
+
+(fn ra ((e IExp)) IExp (ITrunc U64 U32 e))
+
+(fn radd ((a IExp) (b IExp)) IExp (IBin U64 IAdd a b))
+
+(fn rsub ((a IExp) (b IExp)) IExp (IBin U64 ISub a b))
+
+(fn rmul ((a IExp) (b IExp)) IExp (IBin U64 IMul a b))
+
+(fn rand ((a IExp) (b IExp)) IExp (IBin U64 IAnd a b))
+
+(fn rshr ((a IExp) (b IExp)) IExp (IBin U64 IShr a b))
+
+(fn req ((a IExp) (b IExp)) IExp (IBin U64 IEq a b))
+
+(fn rlt ((a IExp) (b IExp)) IExp (IBin U64 ILt a b))
+
+(fn rle ((a IExp) (b IExp)) IExp (IBin U64 ILe a b))
+
+;; local i := the word at (U64 address expression e) / at (local p + off)
+(fn rldw ((i Int) (e IExp)) IpStmt (IpLoadW i (ra e)))
+
+(fn rldo ((i Int) (p Int) (off Int)) IpStmt (IpLoadW i (ra (radd (rl p) (rk off)))))
+
+;; the word at e := v / at (local p + off) := v
+(fn rstw ((e IExp) (v IExp)) IpStmt (IpStoreW (ra e) v))
+
+(fn rsto ((p Int) (off Int) (v IExp)) IpStmt (IpStoreW (ra (radd (rl p) (rk off))) v))
+
+;; low bit 0: the word is a reference
+(fn risref ((e IExp)) IExp (req (rand e (rk 1)) (rk 0)))
+
+;; the header's fields
+(fn rcount ((h IExp)) IExp (rand h (rk 4294967295)))
+
+(fn rarity ((h IExp)) IExp (rshr h (rk 48)))
+
+(fn rimmortal () Int 2147483648)
+
+;; the free-list head's address for arity n (a U64 expression)
+(fn rfree_at ((rb Int) (n IExp)) IExp (radd (rk (+ rb 24)) (rmul n (rk 8))))
+
+(fn rt_hdr_size () Int 152)
+
+;; --- the table ------------------------------------------------------------------
+
+(fn rt_init_ix () Int 0)
+
+(fn rt_alloc_ix () Int 1)
+
+(fn rt_inc_ix () Int 2)
+
+(fn rt_dec_ix () Int 3)
+
+(fn rt_zero_heads ((rb Int) (k Int)) (List IpStmt)
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt k 1) Nil
+  (Cons (rstw (rk (+ rb (+ 24 (* 8 (- k 1))))) (rk 0)) (rt_zero_heads rb (- k 1)))))
+
+;; rt_init (lo hi): top := lo, end := hi, every free head := 0
+(fn rt_init_fn ((rb Int)) IpFn
+  (MkIpFn
+    (list U64 U64)
+    Nil
+    (Cons
+      (rstw (rk rb) (rl 0))
+      (Cons (rstw (rk (+ rb 8)) (rl 1)) (rt_zero_heads rb 16)))
+    (rk 0)
+    U64))
+
+;; rt_alloc (tag n): locals 0 tag, 1 n; extras 2 p, 3 top, 4 size, 5 end, 6 next
+(fn rt_alloc_fn ((rb Int)) IpFn
+  (MkIpFn
+    (list U64 U64)
+    (list U64 U64 U64 U64 U64)
+    (list
+      ;; p := free[n] (arity ≥ 16: no free list)
+      (IpIf (rlt (rl 1) (rk 16)) (list (rldw 2 (rfree_at rb (rl 1)))) (list (IpSet 2 (rk 0))))
+      (IpIf
+        (req (rl 2) (rk 0))
+        ;; bump: size = 8 + 8n; top + size ≤ end else Fail oom
+        (list
+          (rldw 3 (rk rb))
+          (rldw 5 (rk (+ rb 8)))
+          (IpSet 4 (radd (rk 8) (rmul (rl 1) (rk 8))))
+          (IpIf
+            (rle (radd (rl 3) (rl 4)) (rl 5))
+            (list (rstw (rk rb) (radd (rl 3) (rl 4))) (IpSet 2 (rl 3)))
+            (list (IpFail FOom))))
+        ;; pop: free[n] := the link in the dead cell's first slot
+        (list (rldo 6 2 8) (rstw (rfree_at rb (rl 1)) (rl 6))))
+      ;; the header: count 1, tag, arity
+      (rsto
+        2
+        0
+        (radd
+          (rk 1)
+          (radd (rmul (rl 0) (rk 4294967296)) (rmul (rl 1) (rk 281474976710656))))))
+    (rl 2)
+    U64))
+
+;; rt_inc (v): locals 0 v; extras 1 h, 2 c
+(fn rt_inc_fn ((rb Int)) IpFn
+  (MkIpFn
+    (list U64)
+    (list U64 U64)
+    (list
+      (IpIf
+        (risref (rl 0))
+        (list
+          (rldo 1 0 0)
+          (IpSet 2 (rcount (rl 1)))
+          (IpIf
+            (rlt (rl 2) (rk (rimmortal)))
+            (list (rsto 0 0 (radd (rl 1) (rk 1))))
+            Nil))
+        Nil))
+    (rk 0)
+    U64))
+
+;; rt_dec (v): locals 0 v; extras 1 h, 2 c, 3 wl, 4 cur, 5 n, 6 i, 7 child,
+;; 8 ch, 9 cc, 10 head
+(fn rt_dec_fn ((rb Int)) IpFn
+  (MkIpFn
+    (list U64)
+    (list U64 U64 U64 U64 U64 U64 U64 U64 U64 U64)
+    (list
+      (IpIf
+        (risref (rl 0))
+        (list
+          (rldo 1 0 0)
+          (IpSet 2 (rcount (rl 1)))
+          (IpIf
+            (rlt (rl 2) (rk (rimmortal)))
+            (list
+              (IpIf
+                (rlt (rk 1) (rl 2))
+                ;; shared: count − 1
+                (list (rsto 0 0 (rsub (rl 1) (rk 1))))
+                ;; last reference: the cell dies — worklist = [v], link 0
+                (list
+                  (IpSet 3 (rl 0))
+                  (rsto 0 0 (rsub (rl 1) (rl 2)))
+                  (IpWhile
+                    (rlt (rk 0) (rl 3))
+                    (list
+                      (IpSet 4 (rl 3))
+                      (rldo 1 4 0)
+                      (IpSet 3 (rcount (rl 1)))
+                      (IpSet 5 (rarity (rl 1)))
+                      (IpSet 6 (rk 0))
+                      ;; release the children: shared ones lose a count,
+                      ;; dying ones join the worklist (never recurse)
+                      (IpWhile
+                        (rlt (rl 6) (rl 5))
+                        (list
+                          (rldw 7 (radd (rl 4) (radd (rk 8) (rmul (rl 6) (rk 8)))))
+                          (IpIf
+                            (risref (rl 7))
+                            (list
+                              (rldo 8 7 0)
+                              (IpSet 9 (rcount (rl 8)))
+                              (IpIf
+                                (rlt (rl 9) (rk (rimmortal)))
+                                (list
+                                  (IpIf
+                                    (rlt (rk 1) (rl 9))
+                                    (list (rsto 7 0 (rsub (rl 8) (rk 1))))
+                                    (list
+                                      (rsto 7 0 (radd (rsub (rl 8) (rl 9)) (rl 3)))
+                                      (IpSet 3 (rl 7)))))
+                                Nil))
+                            Nil)
+                          (IpSet 6 (radd (rl 6) (rk 1)))))
+                      ;; the dead cell returns to its free list
+                      (IpIf
+                        (rlt (rl 5) (rk 16))
+                        (list
+                          (rldw 10 (rfree_at rb (rl 5)))
+                          (rsto 4 8 (rl 10))
+                          (rstw (rfree_at rb (rl 5)) (rl 4)))
+                        Nil))))))
+            Nil))
+        Nil))
+    (rk 0)
+    U64))
+
+;; the table, in index order
+(fn rt_fns ((rb Int)) (List IpFn)
+  (list (rt_init_fn rb) (rt_alloc_fn rb) (rt_inc_fn rb) (rt_dec_fn rb)))
+
+(fn rt_count ((rb Int)) Int 4)
+
+(fn rt_app ((a (List IpFn)) (b (List IpFn))) (List IpFn)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (rt_app t b)))))
+
+;; a program = the runtime table followed by the program's own fns
+(fn rt_prog ((rb Int) (fs (List IpFn)) (base Int) (memsize Int)) IpProg
+  (MkIpProg (rt_app (rt_fns rb) fs) base memsize))

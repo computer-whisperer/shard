@@ -1,0 +1,293 @@
+;;; models/imp/probes/rt_run.shard — the RUN-MODE probe of the imp runtime
+;;; (models/imp/rt.shard; docs/COVERAGE.md C2a): allocation, reuse,
+;;; counting, the iterative cascade, immortals, immediates, the large
+;;; class, and Fail oom — executed through iprun on std/mem's functional
+;;; implementation (run mode links the impl; check mode cannot evaluate
+;;; through the opaque word view, which is why this is a driver and not
+;;; a claim file). Prints PASS/FAIL per test, exits 1 on any failure;
+;;; corpus-pinned with pin_run. The theorems over the runtime are C2b.
+;;;
+;;; Run: bin/shard_eval run models/imp/probes/rt_run.shard
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../kernel/term.shard")
+(use (:: kernel term show_int))
+(import "../../../std/mem")
+(use (:: std mem *))
+(import "../imp.shard")
+(use (:: models imp imp *))
+(import "../rt.shard")
+(use (:: models imp rt *))
+
+(type World (World Int))
+
+(extern write ((bytes (List Int)) (w World)) World)
+
+(extern exit ((code Int) (w World)) World)
+
+;; --- the harness ----------------------------------------------------------------
+
+;; the test fn sits right after the runtime table
+(fn tix () Int 4)
+
+(fn tprog ((f IpFn)) IpProg (rt_prog 0 (list f) 0 4096))
+
+;; the result as one Int: value, or -1 fuel / -2 trap / -11 -12 -13 the families
+(fn rv ((r (Option IpRet))) Int
+  (match r
+    (None -1)
+    ((Some x)
+     (match x
+       ((IpRv v _) v)
+       (IpRtrap -2)
+       ((IpRfailed fam)
+        (match fam
+          (FOverflow -11)
+          (FOom -12)
+          (FStack -13)))))))
+
+(fn run1 ((f IpFn)) Int (rv (iprun (ifnat 20000) (tprog f) (tix) Nil (mem_empty))))
+
+;; call helpers: init / alloc / inc / dec into local i
+(fn tinit ((lo Int) (hi Int)) IpStmt (IpCall 0 (rt_init_ix) (list (rk lo) (rk hi))))
+
+(fn talloc ((i Int) (tag Int) (n Int)) IpStmt
+  (IpCall i (rt_alloc_ix) (list (rk tag) (rk n))))
+
+(fn tinc ((scratch Int) (v IExp)) IpStmt (IpCall scratch (rt_inc_ix) (list v)))
+
+(fn tdec ((scratch Int) (v IExp)) IpStmt (IpCall scratch (rt_dec_ix) (list v)))
+
+(fn izk ((k Int)) (List IKind)
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt k 1) Nil (Cons U64 (izk (- k 1)))))
+
+;; fill the n slots of the cell in local p with the immediate 1: the
+;; runtime's invariant is that every slot of a live cell holds a valid
+;; word (an immediate or a live reference) — a test that frees a cell
+;; must first make it one (an uninitialized 0 reads as a reference to
+;; index 0)
+(fn tfill ((p Int) (n Int)) (List IpStmt)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) Nil (Cons (rsto p (* 8 n) (rk 1)) (tfill p (- n 1)))))
+
+;; a test fn: no params, k U64 extras, body, result local r
+(fn tfn ((k Int) (body (List IpStmt)) (r Int)) IpFn
+  (MkIpFn Nil (izk k) body (rl r) U64))
+
+(fn rt_app_stmts ((a (List IpStmt)) (b (List IpStmt))) (List IpStmt)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (rt_app_stmts t b)))))
+
+(fn cat ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (cat t b)))))
+
+;; --- the tests ------------------------------------------------------------------
+
+;; the first cell sits at the heap's start
+(fn t_alloc1 () IpFn (tfn 2 (list (tinit 152 4096) (talloc 0 5 2)) 0))
+
+;; the second cell follows the first (8 + 2·8 = 24 bytes)
+(fn t_alloc2 () IpFn
+  (tfn 2 (list (tinit 152 4096) (talloc 0 5 2) (talloc 1 7 1)) 1))
+
+;; the header: count 1, tag 5, arity 2
+(fn t_hdr () IpFn
+  (tfn 2 (list (tinit 152 4096) (talloc 0 5 2) (rldo 1 0 0)) 1))
+
+;; a freed cell is reused by the next allocation of its arity …
+(fn t_reuse () IpFn
+  (tfn
+    3
+    (rt_app_stmts
+      (list (tinit 152 4096) (talloc 0 5 2))
+      (rt_app_stmts (tfill 0 2) (list (tdec 2 (rl 0)) (talloc 1 5 2))))
+    1))
+
+;; … and the bump pointer did not move for it
+(fn t_reuse_top () IpFn
+  (tfn
+    3
+    (rt_app_stmts
+      (list (tinit 152 4096) (talloc 0 5 2))
+      (rt_app_stmts
+        (tfill 0 2)
+        (list (tdec 2 (rl 0)) (talloc 1 5 2) (rldw 2 (rk 0)))))
+    2))
+
+;; inc then dec leaves the cell live with count 1 …
+(fn t_inc_dec () IpFn
+  (tfn
+    3
+    (rt_app_stmts
+      (list (tinit 152 4096) (talloc 0 5 2))
+      (rt_app_stmts
+        (tfill 0 2)
+        (list (tinc 2 (rl 0)) (tdec 2 (rl 0)) (rldo 1 0 0))))
+    1))
+
+;; … and free[2] empty
+(fn t_inc_dec_free () IpFn
+  (tfn
+    3
+    (rt_app_stmts
+      (list (tinit 152 4096) (talloc 0 5 2))
+      (rt_app_stmts
+        (tfill 0 2)
+        (list (tinc 2 (rl 0)) (tdec 2 (rl 0)) (rldw 1 (rk 40)))))
+    1))
+
+;; a three-cell list a -> b -> c (immediates 3 5 7, Nil = 1); dec a frees all
+;; three through the worklist: free[2]'s head is the last cell pushed (c) …
+(fn t_cascade_body () (List IpStmt)
+  (list
+    (tinit 152 4096)
+    (talloc 0 1 2)
+    (talloc 1 1 2)
+    (talloc 2 1 2)
+    (rsto 0 8 (rk 3))
+    (rsto 0 16 (rl 1))
+    (rsto 1 8 (rk 5))
+    (rsto 1 16 (rl 2))
+    (rsto 2 8 (rk 7))
+    (rsto 2 16 (rk 1))
+    (tdec 3 (rl 0))))
+
+(fn t_cascade () IpFn
+  (tfn 5 (rt_app_stmts (t_cascade_body) (list (rldw 4 (rk 40)))) 4))
+
+;; … three allocations then hand back c, b, a in that order (a = 152 last) …
+(fn t_cascade_chain () IpFn
+  (tfn
+    7
+    (rt_app_stmts
+      (t_cascade_body)
+      (list (talloc 4 1 2) (talloc 5 1 2) (talloc 6 1 2)))
+    6))
+
+;; … and a fourth bumps past the three (152 + 3·24 = 224)
+(fn t_cascade_bump () IpFn
+  (tfn
+    8
+    (rt_app_stmts
+      (t_cascade_body)
+      (list (talloc 4 1 2) (talloc 5 1 2) (talloc 6 1 2) (talloc 7 1 2)))
+    7))
+
+;; a shared child survives its parent: a -> b with b also held elsewhere
+;; (count 2); dec a kills a only, b's count drops to 1 …
+(fn t_shared () IpFn
+  (tfn
+    4
+    (list
+      (tinit 152 4096)
+      (talloc 0 1 2)
+      (talloc 1 1 1)
+      (rsto 0 8 (rl 1))
+      (rsto 0 16 (rk 1))
+      (tinc 2 (rl 1))
+      (tdec 2 (rl 0))
+      (rldo 3 1 0))
+    3))
+
+;; … and free[1] stays empty
+(fn t_shared_free () IpFn
+  (tfn
+    4
+    (list
+      (tinit 152 4096)
+      (talloc 0 1 2)
+      (talloc 1 1 1)
+      (rsto 0 8 (rl 1))
+      (rsto 0 16 (rk 1))
+      (tinc 2 (rl 1))
+      (tdec 2 (rl 0))
+      (rldw 3 (rk 32)))
+    3))
+
+;; the heap end is honoured: 24 bytes do not fit in [152, 170)
+(fn t_oom () IpFn (tfn 1 (list (tinit 152 170) (talloc 0 5 2)) 0))
+
+;; an immortal cell ignores dec
+(fn t_immortal () IpFn
+  (tfn
+    3
+    (rt_app_stmts
+      (list (tinit 152 4096) (talloc 0 5 2) (rsto 0 0 (rk 562973575741440)))
+      (rt_app_stmts
+        (tfill 0 2)
+        (list (tdec 2 (rl 0)) (tdec 2 (rl 0)) (rldo 1 0 0))))
+    1))
+
+;; immediates are not references: inc/dec of 3 touch nothing, no trap
+(fn t_imm () IpFn
+  (tfn 2 (list (tinit 152 4096) (tinc 1 (rk 3)) (tdec 1 (rk 3))) 1))
+
+;; arity 16 has no free list: freed, then bump-allocated again past it
+;; (152 + 8 + 16·8 = 288)
+(fn t_large () IpFn
+  (tfn
+    3
+    (rt_app_stmts
+      (list (tinit 152 4096) (talloc 0 9 16))
+      (rt_app_stmts (tfill 0 16) (list (tdec 2 (rl 0)) (talloc 1 9 16))))
+    1))
+
+;; the call tier's gate accepts the runtime table
+(fn t_wk () Bool (ipwk_prog (tprog (t_alloc1))))
+
+;; --- the report -----------------------------------------------------------------
+
+(type T (T (List Int) Int Int))
+
+(fn tests () (List T)
+  (list
+    (T "alloc1" 152 (run1 (t_alloc1)))
+    (T "alloc2" 176 (run1 (t_alloc2)))
+    (T "hdr" 562971428257793 (run1 (t_hdr)))
+    (T "reuse" 152 (run1 (t_reuse)))
+    (T "reuse_top" 176 (run1 (t_reuse_top)))
+    (T "inc_dec" 562971428257793 (run1 (t_inc_dec)))
+    (T "inc_dec_free" 0 (run1 (t_inc_dec_free)))
+    (T "cascade" 200 (run1 (t_cascade)))
+    (T "cascade_chain" 152 (run1 (t_cascade_chain)))
+    (T "cascade_bump" 224 (run1 (t_cascade_bump)))
+    (T "shared" 281479271677953 (run1 (t_shared)))
+    (T "shared_free" 0 (run1 (t_shared_free)))
+    (T "oom" -12 (run1 (t_oom)))
+    (T "immortal" 562973575741440 (run1 (t_immortal)))
+    (T "imm" 0 (run1 (t_imm)))
+    (T "large" 288 (run1 (t_large)))
+    (T "wk" 1 (if (t_wk) 1 0))))
+
+(fn report ((ts (List T)) (fails Int) (w World)) World
+  (measure (struct ts))
+  (match ts
+    (Nil
+      (exit
+        (if (int_eq fails 0) 0 1)
+        (write (cat "FAIL rows: " (cat (show_int fails) "\n")) w)))
+    ((Cons t rest)
+     (match t
+       ((T name want got)
+        (if (int_eq want got)
+          (report rest fails (write (cat "PASS rt " (cat name "\n")) w))
+          (report
+            rest
+            (+ fails 1)
+            (write
+              (cat
+                "FAIL rt "
+                (cat
+                  name
+                  (cat
+                    ": got "
+                    (cat (show_int got) (cat " want " (cat (show_int want) "\n"))))))
+              w))))))))
+
+(fn main ((w World)) World (report (tests) 0 w))

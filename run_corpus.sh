@@ -178,6 +178,8 @@ TARGETS=(
   models/imp/imp.shard
   models/imp/probes/imp_probe.shard
   models/imp/probes/ipcall_probe.shard
+  models/imp/rt.shard
+  models/imp/probes/rt_run.shard
   tools/impgen/fixtures/imp_scalar.shard
   models/imp/to_wasm.shard
   models/imp/probes/imp_wasm_bridge.shard
@@ -1349,6 +1351,9 @@ fi
 # against the model. The "CPU conforms to the model" trust leaf. Full output;
 # per-mismatch FAIL lines gate via the CI projection, nonzero exit adds a
 # synthetic FAIL row (see the wasm leg's note).
+echo "=== imp: the runtime (run-mode probe, COVERAGE.md C2a) ==="
+pin_run imp_rt_run bin/shard_eval run models/imp/probes/rt_run.shard
+
 echo "=== x86: silicon differential ==="
 if command -v cc >/dev/null && [ -x bin/shard_eval ]; then
   bash models/x86/diff/x86_diff.sh 2>&1 || echo "FAIL x86-differential (exit $?)"
