@@ -1,6 +1,6 @@
 # COVERAGE.md — the coverage arc: the generic path, shardfmt as the flagship
 
-> **STATUS (2026-08-22): OPENER — DRAFT FOR RATIFICATION.** Issue #23 is the goal; this ledger is its first deliverable. Two rulings already taken by the user on 2026-08-22 and written in as law below: **≈0 hand-lowering is a GATE, not an aspiration (§3)**, and **per-fn inductions are the certificate-shape lean (§4 P7)**. Every other pin carries a lean and its rejected alternative and is ratified with this ledger. Nothing emits before ratification (CERT.md §10). The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`).
+> **STATUS (2026-08-22): RATIFIED — ARC OPEN (C0 done, C1 in progress).** User ratification 2026-08-22 ("Read through the doc and your report — looks good to me. Call it ratified and let's begin."). Issue #23 is the goal; this ledger is its law. Two rulings already taken by the user on 2026-08-22 and written in as law below: **≈0 hand-lowering is a GATE, not an aspiration (§3)**, and **per-fn inductions are the certificate-shape lean (§4 P7)**. Every other pin carries a lean and its rejected alternative and is ratified with this ledger. Nothing emits before ratification (CERT.md §10). The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`).
 
 Charter sources: docs/OVERVIEW.md §10 (the 2026-08-22 reset ruling),
 docs/IMP.md §6 (the 2026-07-12 redirection — the uniform-representation
@@ -506,3 +506,6 @@ the next rung — if:
 
 (Appended per rung: what landed, commits, measured numbers, what was
 found that the pins did not predict.)
+
+**C0 — RATIFIED 2026-08-22** (user, on the drafted ledger d997209 and
+its report, without amendment). §3 is a gate; P1–P11 are law; C1 opens.
