@@ -1280,3 +1280,363 @@ def step_lemmas_binary():
 
 if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "binary":
     sys.stdout.write(step_lemmas_binary())
+
+# ---------------- fe_sound: THE EXPRESSION LEMMA (the induction citing the step lemmas) ----------------
+
+PINS6 = "(inst nl nl) (inst d d) (inst lc lc) (inst mlo mlo) (inst slo slo) (inst v v)"
+def PINSV(vv): return f"(inst nl nl) (inst d d) (inst lc lc) (inst mlo mlo) (inst slo slo) (inst v {vv})"
+def D(k): return f"(steps ((rewrite (premise {k}) lr lhs true ())) refl)"
+P05 = " ".join(D(i) for i in range(6))
+MA_a = f"(fp_mem mem0 (fp_app (fe_tr fp nl d a lc {IM} mlo slo) psx))"
+IHA = f"(= {RUN('ia')} (fe_out va {RS} {RUN('ia')} {MA_a}))"
+
+def respell(e_new, ctor_eqs):
+    """haves hp0 hp1 hp3 hp4 hp5: the common premises re-spelled at e_new, via the captured ctor
+    equations (rewritten RL first) then the premise"""
+    rl = "".join(f" (rewrite (premise {h}) rl lhs true ())" for h in ctor_eqs)
+    return f"""  (have hp0 (= (ixf_exp nl d {e_new}) (Some ie)) (steps ({rl[1:]} (rewrite (premise 0) lr lhs true ())) refl))
+  (have hp1 (= (iexp {e_new} lc {IM} mlo slo) (Some v)) (steps ({rl[1:]} (rewrite (premise 1) lr lhs true ())) refl))
+  (have hp3 (= (ixf_cb {e_new}) True) (steps ({rl[1:]} (rewrite (premise 3) lr lhs true ())) refl))
+  (have hp4 (= (le (+ fp (* 8 (+ nl (+ d (ixf_dep {e_new}))))) (xmemhi_of m)) True) (steps ({rl[1:]} (rewrite (premise 4) lr lhs true ())) refl))
+  (have hp5 (= (le (ixf_ecost {e_new}) c) True) (steps ({rl[1:]} (rewrite (premise 5) lr lhs true ())) refl))"""
+
+def absurd_ie(hp, rewrites):
+    items=[f"(rewrite (premise {hp}) rl rhs true ())","(unfold ixf_exp rhs)","(reduce rhs)"]
+    for r in rewrites: items += [r, "(reduce rhs)"]
+    return f"""(chain
+  (have hn (= None (Some ie)) (steps ({' '.join(items)}) refl))
+  (absurd (premise hn)))"""
+
+def absurd_v(hp, rewrites):
+    items=[f"(rewrite (premise {hp}) rl rhs true ())","(unfold iexp rhs)","(reduce rhs)"]
+    for r in rewrites: items += [r, "(reduce rhs)"]
+    return f"""(chain
+  (have hn (= None (Some v)) (steps ({' '.join(items)}) refl))
+  (absurd (premise hn)))"""
+
+def unary_path(step, e, k_len, pins_extra, cb_have, dep_have, sl):
+    """inside: hp0..hp5 respelled, ha/hva to be case-split here"""
+    RA="(rewrite (premise ha) lr rhs true ())"
+    RV="(rewrite (premise hva) lr rhs true ())"
+    sl2 = Slots(sl.names + ["ha","hva","hcb","hdep","hmax","hp4a","hcost"])
+    costrhs = f"(+ (+ (ixf_elen a) {k_len}) 5)" if k_len else "(+ (ixf_elen a) 5)"
+    return f"""(case-on (ixf_exp nl d a) Option
+  ((case None (chain {cap('ha','(= (ixf_exp nl d a) None)')} {absurd_ie('hp0',[RA])}))
+   (case Some (ia)
+     (chain
+       {cap('ha','(= (ixf_exp nl d a) (Some ia))')}
+       (case-on (iexp a lc {IM} mlo slo) Option
+         ((case None (chain {cap('hva',f'(= (iexp a lc {IM} mlo slo) None)')} {absurd_v('hp1',[RV])}))
+          (case Some (va)
+            (chain
+              {cap('hva',f'(= (iexp a lc {IM} mlo slo) (Some va))')}
+              {cb_have}
+              {dep_have}
+              (have hmax (= (le (ixf_dep a) (imax2 (ixf_dep a) (ixf_dep (IConst cc)))) True) (rewrite-with (lemma imax2_ge_l) lr lhs ((inst b (ixf_dep (IConst cc)))) () refl))
+              (have hp4a (= (le (+ fp (* 8 (+ nl (+ d (ixf_dep a))))) (xmemhi_of m)) True) (by arith {sl2.cert({'hp4':1,'hdep':8,'hmax':8})}))
+              (have hcost (= (ixf_ecost {e}) {costrhs}) (steps ((unfold ixf_ecost lhs) (unfold ixf_elen lhs) (reduce lhs)) refl))
+              (have hp5a (= (le (ixf_ecost a) c) True) (steps ((unfold ixf_ecost lhs)) (by arith {sl2.cert({'hp5':1,'hcost':1})})))
+              (have hih {IHA} (rewrite-with (hyp ih) lr lhs ({PINSV('va')}) ({D('ha')} {D('hva')} {D('2')} {D('hcb')} {D('hp4a')} {D('hp5a')}) refl))
+              (rewrite-with (lemma {step}) lr lhs ((inst a a) (inst ia ia) (inst va va) {pins_extra} {PINS6}) ({D('hp0')} {D('hp1')} {D('2')} {D('hp3')} {D('hp4')} {D('hp5')} {D('ha')} {D('hva')} {D('hih')}))
+              refl))))))))"""
+
+def unary_path_plain(step, e, k_len, pins_extra, cb_have, dep_have_text, sl, dep_is_sub=True):
+    """for ITrunc/ILoad/IExt-like: ixf_dep e = ixf_dep a (no imax2)"""
+    RA="(rewrite (premise ha) lr rhs true ())"
+    RV="(rewrite (premise hva) lr rhs true ())"
+    sl2 = Slots(sl.names + ["ha","hva","hcb","hdep","hcost"])
+    costrhs = f"(+ (+ (ixf_elen a) {k_len}) 5)" if k_len else "(+ (ixf_elen a) 5)"
+    return f"""(case-on (ixf_exp nl d a) Option
+  ((case None (chain {cap('ha','(= (ixf_exp nl d a) None)')} {absurd_ie('hp0',[RA])}))
+   (case Some (ia)
+     (chain
+       {cap('ha','(= (ixf_exp nl d a) (Some ia))')}
+       (case-on (iexp a lc {IM} mlo slo) Option
+         ((case None (chain {cap('hva',f'(= (iexp a lc {IM} mlo slo) None)')} {absurd_v('hp1',[RV])}))
+          (case Some (va)
+            (chain
+              {cap('hva',f'(= (iexp a lc {IM} mlo slo) (Some va))')}
+              {cb_have}
+              {dep_have_text}
+              (have hcost (= (ixf_ecost {e}) {costrhs}) (steps ((unfold ixf_ecost lhs) (unfold ixf_elen lhs) (reduce lhs)) refl))
+              (have hp4a (= (le (+ fp (* 8 (+ nl (+ d (ixf_dep a))))) (xmemhi_of m)) True) (steps ((rewrite (premise hdep) rl lhs true ()) (rewrite (premise hp4) lr lhs true ())) refl))
+              (have hp5a (= (le (ixf_ecost a) c) True) (steps ((unfold ixf_ecost lhs)) (by arith {Slots(sl2.names+['hp4a']).cert({'hp5':1,'hcost':1})})))
+              (have hih {IHA} (rewrite-with (hyp ih) lr lhs ({PINSV('va')}) ({D('ha')} {D('hva')} {D('2')} {D('hcb')} {D('hp4a')} {D('hp5a')}) refl))
+              (rewrite-with (lemma {step}) lr lhs ((inst a a) (inst ia ia) (inst va va) {pins_extra} {PINS6}) ({D('hp0')} {D('hp1')} {D('2')} {D('hp3')} {D('hp4')} {D('hp5')} {D('ha')} {D('hva')} {D('hih')}))
+              refl))))))))"""
+
+def bin_path(step, e, K, OP, pins_extra, sl):
+    RA="(rewrite (premise ha) lr rhs true ())"; RB="(rewrite (premise hb) lr rhs true ())"
+    RVA="(rewrite (premise hva) lr rhs true ())"; RVB="(rewrite (premise hvb) lr rhs true ())"
+    names = list(sl.names) + ["ha","hb","hva","hvb"]
+    s2 = Slots(names)
+    lines=[]
+    def add(line, nm):
+        lines.append(line); s2.add(nm)
+    for nm in ["hdisc","hlocs","hxlo","hmlo","hslo","hal","hnl","hd0","hslo0","hhi"]:
+        add(ctx_have(nm), nm)
+    add("              (have hnn (= (le 0 (ilen lc)) True) (rewrite-with (lemma ilen_nonneg) lr lhs () () refl))","hnn")
+    add("              (have hdepa (= (le 0 (ixf_dep a)) True) (rewrite-with (lemma ixf_dep_nonneg) lr lhs () () refl))","hdepa")
+    add("              (have hdepb (= (le 0 (ixf_dep b)) True) (rewrite-with (lemma ixf_dep_nonneg) lr lhs () () refl))","hdepb")
+    add(f"              (have hdepe (= (ixf_dep {e}) (+ 1 (imax2 (ixf_dep a) (ixf_dep b)))) (steps ((unfold ixf_dep lhs) (reduce lhs)) refl))","hdepe")
+    add("              (have hmaxa (= (le (ixf_dep a) (imax2 (ixf_dep a) (ixf_dep b))) True) (rewrite-with (lemma imax2_ge_l) lr lhs ((inst b (ixf_dep b))) () refl))","hmaxa")
+    add("              (have hmaxb (= (le (ixf_dep b) (imax2 (ixf_dep a) (ixf_dep b))) True) (rewrite-with (lemma imax2_ge_r) lr lhs ((inst a (ixf_dep a))) () refl))","hmaxb")
+    add(f"              (have hcba (= (ixf_cb a) True) (rewrite-with (lemma cb_bin_a) lr lhs ((inst k {K}) (inst o {OP}) (inst b b)) ({D('hp3')}) refl))","hcba")
+    add(f"              (have hcbb (= (ixf_cb b) True) (rewrite-with (lemma cb_bin_b) lr lhs ((inst k {K}) (inst o {OP}) (inst a a)) ({D('hp3')}) refl))","hcbb")
+    add(f"              (have hnd0 (= (le 0 (+ nl d)) True) (by arith {s2.cert({'hnl':1,'hnn':1,'hd0':1})}))","hnd0")
+    add(f"              (have hsa (= (le slo {ADDRB}) True) (by arith {s2.cert({'hslo':1,'hnl':8,'hnn':8,'hd0':8})}))","hsa")
+    add(f"              (have hali (= (int_eq (mod (- {ADDRB} slo) 8) 0) True) (rewrite-with (lemma al_shift) lr lhs ((inst k (+ nl d))) ({D('hal')}) refl))","hali")
+    add(f"              (have hlo8 (= (le (+ {ADDRB} 8) slo) False) (by arith {s2.cert({'hslo':1,'hnl':8,'hnn':8,'hd0':8})}))","hlo8")
+    add(f"              (have hdisca (= (fp_disc slo (fp_app {TA_} psx)) True) (rewrite-with (lemma fe_tr_disc) lr lhs ((inst e a)) ({D('hdisc')} {D('hslo')} {D('hal')} {D('hnd0')}) refl))","hdisca")
+    add(f"              (have hdisc2 (= (fp_disc slo {PSX2}) True) (rewrite-with (lemma fp_disc_w_slot) lr lhs () ({D('hlo8')} {D('hsa')} {D('hali')} {D('hdisca')}) refl))","hdisc2")
+    add(f"              (have hlocsa (= (fr_locs fp lc (fp_app {TA_} psx)) True) (rewrite-with (lemma fe_tr_locs) lr lhs ((inst e a)) ({D('hlocs')} {D('hnl')} {D('hd0')}) refl))","hlocsa")
+    add(f"              (have hpast (= (le (+ fp (* 8 (ilen lc))) {ADDRB}) True) (by arith {s2.cert({'hnl':8,'hd0':8})}))","hpast")
+    add(f"              (have hlocs2 (= (fr_locs fp lc {PSX2}) True) (rewrite-with (lemma fr_locs_skip) lr lhs () ({D('hlocsa')} {D('hpast')}) refl))","hlocs2")
+    add(f"              (have hd1 (= (le 0 (+ d 1)) True) (by arith {s2.cert({'hd0':1})}))","hd1")
+    add(f"              (have hctx2 (= (fe_ctx m mlo slo fp nl (+ d 1) lc {PSX2}) True) (rewrite-with (lemma ctx_intro) lr lhs () ({D('hdisc2')} {D('hlocs2')} {D('hxlo')} {D('hmlo')} {D('hslo')} {D('hal')} {D('hnl')} {D('hd1')} {D('hslo0')} {D('hhi')}) refl))","hctx2")
+    add(f"              (have hfb (= (fbelow slo {PSX2}) (fbelow slo psx)) (chain (rewrite-with (lemma fbelow_w_hi) lr lhs () ({D('hlo8')})) (rewrite-with (lemma fe_tr_below) lr lhs ((inst e a)) ({D('hslo')} {D('hnd0')})) refl))","hfb")
+    add(f"              (have hp4a (= (le (+ fp (* 8 (+ nl (+ d (ixf_dep a))))) (xmemhi_of m)) True) (by arith {s2.cert({'hp4':1,'hdepe':8,'hmaxa':8})}))","hp4a")
+    add(f"              (have hp4b (= (le (+ fp (* 8 (+ nl (+ (+ d 1) (ixf_dep b))))) (xmemhi_of m)) True) (by arith {s2.cert({'hp4':1,'hdepe':8,'hmaxb':8})}))","hp4b")
+    add("              (have hlena (= (xil ia) (ixf_elen a)) (rewrite-with (lemma fe_len) lr lhs ((inst nl nl) (inst d d) (inst e a)) ((steps ((rewrite (premise ha) lr lhs true ())) refl)) refl))","hlena")
+    add("              (have hlb0 (= (le 0 (ixf_elen b)) True) (rewrite-with (lemma ixf_elen_nonneg) lr lhs () () refl))","hlb0")
+    oplen = OPLEN[OP]
+    add(f"              (have hcost (= (ixf_ecost {e}) (+ (+ (ixf_elen a) (+ 3 (+ (ixf_elen b) {3+oplen}))) 5)) (steps ((unfold ixf_ecost lhs) (unfold ixf_elen lhs) (reduce lhs) (unfold ixf_oplen lhs) (reduce lhs) (compute lhs (stop ixf_elen))) refl))","hcost")
+    add(f"              (have hp5a (= (le (ixf_ecost a) c) True) (steps ((unfold ixf_ecost lhs)) (by arith {s2.cert({'hp5':1,'hcost':1,'hlb0':1})})))","hp5a")
+    add(f"              (have hp5b (= (le (ixf_ecost b) (- (- c (xil ia)) 3)) True) (steps ((unfold ixf_ecost lhs)) (by arith {s2.cert({'hp5':1,'hcost':1,'hlena':-1})})))","hp5b")
+    add(f"              (have hvb2 (= (iexp b lc (fp_mem mem0 (fbelow slo {PSX2})) mlo slo) (Some vb)) (steps ((rewrite (premise hfb) lr lhs true ()) (rewrite (premise hvb) lr lhs true ())) refl))","hvb2")
+    add(f"              (have hiha {IHA} (rewrite-with (hyp ih) lr lhs ({PINSV('va')}) ({D('ha')} {D('hva')} {D('2')} {D('hcba')} {D('hp4a')} {D('hp5a')}) refl))","hiha")
+    IHB = f"(= {RUNB()} (fe_out vb {RS2()} {RUNB()} {MB}))"
+    add(f"              (have hihb {IHB} (rewrite-with (hyp ih1) lr lhs ((inst nl nl) (inst d (+ d 1)) (inst lc lc) (inst mlo mlo) (inst slo slo) (inst v vb)) ({D('hb')} {D('hvb2')} {D('hctx2')} {D('hcbb')} {D('hp4b')} {D('hp5b')}) refl))","hihb")
+    body = "\n".join(lines)
+    return f"""(case-on (ixf_exp nl d a) Option
+  ((case None (chain {cap('ha','(= (ixf_exp nl d a) None)')} {absurd_ie('hp0',[RA])}))
+   (case Some (ia)
+     (chain
+       {cap('ha','(= (ixf_exp nl d a) (Some ia))')}
+       (case-on (ixf_exp nl (+ d 1) b) Option
+         ((case None (chain {cap('hb','(= (ixf_exp nl (+ d 1) b) None)')} {absurd_ie('hp0',[RA,RB])}))
+          (case Some (ib)
+            (chain
+              {cap('hb','(= (ixf_exp nl (+ d 1) b) (Some ib))')}
+              (case-on (iexp a lc {IM} mlo slo) Option
+                ((case None (chain {cap('hva',f'(= (iexp a lc {IM} mlo slo) None)')} {absurd_v('hp1',[RVA])}))
+                 (case Some (va)
+                   (chain
+                     {cap('hva',f'(= (iexp a lc {IM} mlo slo) (Some va))')}
+                     (case-on (iexp b lc {IM} mlo slo) Option
+                       ((case None (chain {cap('hvb',f'(= (iexp b lc {IM} mlo slo) None)')} {absurd_v('hp1',[RVA,RVB])}))
+                        (case Some (vb)
+                          (chain
+                            {cap('hvb',f'(= (iexp b lc {IM} mlo slo) (Some vb))')}
+{body}
+                            (rewrite-with (lemma {step}) lr lhs ((inst a a) (inst b b) (inst ia ia) (inst va va) (inst ib ib) (inst vb vb) {pins_extra} {PINS6}) ({D('hp0')} {D('hp1')} {D('2')} {D('hp3')} {D('hp4')} {D('hp5')} {D('ha')} {D('hva')} {D('hiha')} {D('hb')} {D('hvb')} {D('hihb')}))
+                            refl))))))))))))))))"""
+
+OPLEN = {"IAdd":2,"ISub":2,"IMul":2,"IDiv":4,"IRem":5,"IAnd":2,"IOr":2,"IXor":2,"IEq":3,"ILt":3,"ILe":3}
+
+def absurd_k_bin(hp):
+    """ixf_exp (IBin K OP a b) = None: after the a/b sub-emissions the bop is refused"""
+    RA="(rewrite (premise ha) lr rhs true ())"; RB="(rewrite (premise hb) lr rhs true ())"
+    return f"""(case-on (ixf_exp nl d a) Option
+  ((case None (chain {cap('ha','(= (ixf_exp nl d a) None)')} {absurd_ie(hp,[RA])}))
+   (case Some (ia)
+     (chain
+       {cap('ha','(= (ixf_exp nl d a) (Some ia))')}
+       (case-on (ixf_exp nl (+ d 1) b) Option
+         ((case None (chain {cap('hb','(= (ixf_exp nl (+ d 1) b) None)')} {absurd_ie(hp,[RA,RB])}))
+          (case Some (ib)
+            (chain
+              {cap('hb','(= (ixf_exp nl (+ d 1) b) (Some ib))')}
+              {absurd_ie(hp,[RA,RB,'(unfold ixf_bop rhs)'])}))))))))"""
+
+def fe_sound():
+    base = Slots(["p0","p1","p2","p3","p4","p5"])
+    # ---- IConst / ILoc / IExt
+    iconst = f"(rewrite-with (lemma fe_step_const) lr lhs ((inst n n) {PINS6}) ({P05}) refl)"
+    iloc = f"(rewrite-with (lemma fe_step_loc) lr lhs ((inst i i) {PINS6}) ({P05}) refl)"
+    iext = f"""(chain
+  (have hp0 (= (ixf_exp nl d a) (Some ie)) (steps ((rewrite (premise 0) rl rhs true ()) (unfold ixf_exp rhs) (reduce rhs)) refl))
+  (have hp1 (= (iexp a lc {IM} mlo slo) (Some v)) (steps ((rewrite (premise 1) rl rhs true ()) (unfold iexp rhs) (reduce rhs)) refl))
+  (have hcb (= (ixf_cb a) True) (rewrite-with (lemma cb_ext) lr lhs ((inst k1 k1) (inst k2 k2)) ({D('3')}) refl))
+  (have hdep (= (ixf_dep (IExt k1 k2 a)) (ixf_dep a)) (steps ((unfold ixf_dep lhs) (reduce lhs)) refl))
+  (have hp4 (= (le (+ fp (* 8 (+ nl (+ d (ixf_dep a))))) (xmemhi_of m)) True) (steps ((rewrite (premise hdep) rl lhs true ()) (rewrite (premise 4) lr lhs true ())) refl))
+  (have hcost (= (ixf_ecost (IExt k1 k2 a)) (ixf_ecost a)) (steps ((unfold ixf_ecost lhs) (unfold ixf_elen lhs) (reduce lhs) (unfold ixf_ecost rhs)) refl))
+  (have hp5 (= (le (ixf_ecost a) c) True) (steps ((rewrite (premise hcost) rl lhs true ()) (rewrite (premise 5) lr lhs true ())) refl))
+  (have hih (= {RUN('ie')} (fe_out v {RS} {RUN('ie')} {MA_a})) (rewrite-with (hyp ih) lr lhs ({PINS6}) ({D('hp0')} {D('hp1')} {D('2')} {D('hcb')} {D('hp4')} {D('hp5')}) refl))
+  (rewrite-with (lemma fe_step_ext) lr lhs ((inst k1 k1) (inst k2 k2) (inst a a) {PINS6}) ({P05} {D('hih')}))
+  refl)"""
+    # ---- ITrunc
+    def trunc_arm(kind, step, k_len):
+        e=f"(ITrunc k1 {kind} a)"
+        sl = Slots(base.names + ["hk","hp0","hp1","hp3","hp4","hp5"])
+        cb = f"(have hcb (= (ixf_cb a) True) (rewrite-with (lemma cb_trunc) lr lhs ((inst k1 k1) (inst kt {kind})) ({D('hp3')}) refl))"
+        dep = f"(have hdep (= (ixf_dep {e}) (ixf_dep a)) (steps ((unfold ixf_dep lhs) (reduce lhs)) refl))"
+        return f"""(case {kind}
+  (chain
+    {cap('hk', f'(= kt {kind})')}
+    (steps ((rewrite (premise hk) lr both true ())))
+{respell(e, ['hk'])}
+    {unary_path_plain(step, e, k_len, '(inst k1 k1)', cb, dep, sl)}))"""
+    itrunc = f"""(case-on kt IKind
+  ({trunc_arm('U8','fe_step_trunc8',1)}
+   {trunc_arm('U32','fe_step_trunc32',1)}
+   {trunc_arm('U64','fe_step_trunc64',0)}))"""
+    # ---- ILoad
+    sl = Slots(base.names + ["hp0","hp1","hp3","hp4","hp5"])
+    iload = f"""(chain
+{respell('(ILoad a)', [])}
+  {unary_path_plain('fe_step_load', '(ILoad a)', 1, '', f"(have hcb (= (ixf_cb a) True) (rewrite-with (lemma cb_load) lr lhs () ({D('hp3')}) refl))", "(have hdep (= (ixf_dep (ILoad a)) (ixf_dep a)) (steps ((unfold ixf_dep lhs) (reduce lhs)) refl))", sl)})"""
+    # ---- IRotr
+    def rotr_absurd_k(kind):
+        return f"""(case {kind}
+  (chain
+    {cap('hk', f'(= k {kind})')}
+    (have hp0 (= (ixf_exp nl d (IRotr {kind} a cx)) (Some ie)) (steps ((rewrite (premise hk) rl lhs true ()) (rewrite (premise 0) lr lhs true ())) refl))
+    {absurd_ie('hp0',[])}))"""
+    def rotr_c_absurd(ctor, binders):
+        return f"""(case {ctor}{(' (' + binders + ')') if binders else ''}
+  (chain
+    {cap('hcc', f'(= cx ({ctor} {binders}))')}
+    (have hp0 (= (ixf_exp nl d (IRotr U32 a ({ctor} {binders}))) (Some ie)) (steps ((rewrite (premise hcc) rl lhs true ()) (rewrite (premise hk) rl lhs true ()) (rewrite (premise 0) lr lhs true ())) refl))
+    {absurd_ie('hp0',[])}))"""
+    others = "\n   ".join([rotr_c_absurd("ILoc","j"), rotr_c_absurd("IBin","k2 o2 a2 b2"), rotr_c_absurd("IRotr","k2 a2 c2"),
+                          rotr_c_absurd("IExt","k2 k3 a2"), rotr_c_absurd("ITrunc","k2 k3 a2"), rotr_c_absurd("ILoad","a2")])
+    e_rot = "(IRotr U32 a (IConst cc))"
+    sl = Slots(base.names + ["hk","hcc","hp0","hp1","hp3","hp4","hp5"])
+    cb_rot = f"(have hcb (= (ixf_cb a) True) (rewrite-with (lemma cb_rotr_a) lr lhs ((inst k U32) (inst c (IConst cc))) ({D('hp3')}) refl))"
+    dep_rot = f"(have hdep (= (ixf_dep {e_rot}) (+ 1 (imax2 (ixf_dep a) (ixf_dep (IConst cc))))) (steps ((unfold ixf_dep lhs) (reduce lhs)) refl))"
+    irotr = f"""(case-on k IKind
+  ({rotr_absurd_k('U8')}
+   (case U32
+     (chain
+       {cap('hk','(= k U32)')}
+       (steps ((rewrite (premise hk) lr both true ())))
+       (case-on cx IExp
+         ((case IConst
+            (cc)
+            (chain
+              {cap('hcc','(= cx (IConst cc))')}
+              (steps ((rewrite (premise hcc) lr both true ())))
+{respell(e_rot, ['hcc','hk'])}
+              {unary_path('fe_step_rotr32', e_rot, 1, '(inst cc cc)', cb_rot, dep_rot, sl)}))
+          {others}))))
+   {rotr_absurd_k('U64')}))"""
+    # ---- IBin
+    def shift_absurd_b(op, ctor, binders):
+        return f"""(case {ctor}{(' (' + binders + ')') if binders else ''}
+  (chain
+    {cap('hbc', f'(= b ({ctor} {binders}))')}
+    (have hp0 (= (ixf_exp nl d (IBin k {op} a ({ctor} {binders}))) (Some ie)) (steps ((rewrite (premise hbc) rl lhs true ()) (rewrite (premise ho) rl lhs true ()) (rewrite (premise 0) lr lhs true ())) refl))
+    {absurd_ie('hp0',[])}))"""
+    def shift_arm(op):
+        oth = "\n   ".join([shift_absurd_b(op,"ILoc","j"), shift_absurd_b(op,"IBin","k2 o2 a2 b2"), shift_absurd_b(op,"IRotr","k2 a2 c2"),
+                            shift_absurd_b(op,"IExt","k2 k3 a2"), shift_absurd_b(op,"ITrunc","k2 k3 a2"), shift_absurd_b(op,"ILoad","a2")])
+        if op == "IShl":
+            def kl(kind, step):
+                e=f"(IBin {kind} IShl a (IConst cc))"
+                sl = Slots(base.names + ["ho","hbc","hk","hp0","hp1","hp3","hp4","hp5"])
+                cb = f"(have hcb (= (ixf_cb a) True) (rewrite-with (lemma cb_bin_a) lr lhs ((inst k {kind}) (inst o IShl) (inst b (IConst cc))) ({D('hp3')}) refl))"
+                dep = f"(have hdep (= (ixf_dep {e}) (+ 1 (imax2 (ixf_dep a) (ixf_dep (IConst cc))))) (steps ((unfold ixf_dep lhs) (reduce lhs)) refl))"
+                return f"""(case {kind}
+  (chain
+    {cap('hk', f'(= k {kind})')}
+    (steps ((rewrite (premise hk) lr both true ())))
+{respell(e, ['hk','hbc','ho'])}
+    {unary_path(step, e, 1, '(inst cc cc)', cb, dep, sl)}))"""
+            def k8():
+                return f"""(case U8
+  (chain
+    {cap('hk','(= k U8)')}
+    (have hp0 (= (ixf_exp nl d (IBin U8 IShl a (IConst cc))) (Some ie)) (steps ((rewrite (premise hk) rl lhs true ()) (rewrite (premise hbc) rl lhs true ()) (rewrite (premise ho) rl lhs true ()) (rewrite (premise 0) lr lhs true ())) refl))
+    (case-on (ixf_exp nl d a) Option
+      ((case None (chain {cap('ha','(= (ixf_exp nl d a) None)')} {absurd_ie('hp0',['(rewrite (premise ha) lr rhs true ())'])}))
+       (case Some (ia) (chain {cap('ha','(= (ixf_exp nl d a) (Some ia))')} {absurd_ie('hp0',['(rewrite (premise ha) lr rhs true ())'])}))))))"""
+            const = f"""(case IConst
+  (cc)
+  (chain
+    {cap('hbc','(= b (IConst cc))')}
+    (steps ((rewrite (premise hbc) lr both true ())))
+    (case-on k IKind
+      ({k8()}
+       {kl('U32','fe_step_shl32')}
+       {kl('U64','fe_step_shl64')}))))"""
+        else:
+            e="(IBin k IShr a (IConst cc))"
+            sl = Slots(base.names + ["ho","hbc","hp0","hp1","hp3","hp4","hp5"])
+            cb = f"(have hcb (= (ixf_cb a) True) (rewrite-with (lemma cb_bin_a) lr lhs ((inst k k) (inst o IShr) (inst b (IConst cc))) ({D('hp3')}) refl))"
+            dep = f"(have hdep (= (ixf_dep {e}) (+ 1 (imax2 (ixf_dep a) (ixf_dep (IConst cc))))) (steps ((unfold ixf_dep lhs) (reduce lhs)) refl))"
+            const = f"""(case IConst
+  (cc)
+  (chain
+    {cap('hbc','(= b (IConst cc))')}
+    (steps ((rewrite (premise hbc) lr both true ())))
+{respell(e, ['hbc','ho'])}
+    {unary_path('fe_step_shr', e, 1, '(inst k k) (inst cc cc)', cb, dep, sl)}))"""
+        return f"""(chain
+  {cap('ho', f'(= o {op})')}
+  (steps ((rewrite (premise ho) lr both true ())))
+  (case-on b IExp
+    ({const}
+     {oth})))"""
+    def general_arm(op):
+        kinds = {"IAdd":["U32","U64"],"ISub":["U32","U64"],"IMul":["U32","U64"],"IAnd":["U64"],"IOr":["U64"],"IXor":["U64"]}.get(op)
+        if kinds is None:  # kind-generic: div rem eq lt le
+            e=f"(IBin k {op} a b)"
+            step = {"IDiv":"fe_step_div","IRem":"fe_step_rem","IEq":"fe_step_eq","ILt":"fe_step_lt","ILe":"fe_step_le"}[op]
+            sl = Slots(base.names + ["ho","hp0","hp1","hp3","hp4","hp5"])
+            return f"""(chain
+  {cap('ho', f'(= o {op})')}
+  (steps ((rewrite (premise ho) lr both true ())))
+{respell(e, ['ho'])}
+  {bin_path(step, e, 'k', op, '(inst k k)', sl)})"""
+        arms=[]
+        for kind in ["U8","U32","U64"]:
+            e=f"(IBin {kind} {op} a b)"
+            if kind in kinds:
+                step=f"fe_step_{op.lower()[1:]}{kind[1:]}"
+                sl = Slots(base.names + ["ho","hk","hp0","hp1","hp3","hp4","hp5"])
+                arms.append(f"""(case {kind}
+  (chain
+    {cap('hk', f'(= k {kind})')}
+    (steps ((rewrite (premise hk) lr both true ())))
+{respell(e, ['hk','ho'])}
+    {bin_path(step, e, kind, op, '', sl)}))""")
+            else:
+                arms.append(f"""(case {kind}
+  (chain
+    {cap('hk', f'(= k {kind})')}
+    (have hp0 (= (ixf_exp nl d {e}) (Some ie)) (steps ((rewrite (premise hk) rl lhs true ()) (rewrite (premise ho) rl lhs true ()) (rewrite (premise 0) lr lhs true ())) refl))
+    {absurd_k_bin('hp0')}))""")
+        return f"""(chain
+  {cap('ho', f'(= o {op})')}
+  (steps ((rewrite (premise ho) lr both true ())))
+  (case-on k IKind
+    ({chr(10).join('     '+a for a in arms)[5:]})))"""
+    arms=[]
+    for op in OPS:
+        if op in ("IShl","IShr"): arms.append(f"(case {op} {shift_arm(op)})")
+        else: arms.append(f"(case {op} {general_arm(op)})")
+    ibin = "(case-on o IOp\n  (" + "\n   ".join(arms) + "))"
+    global _sound_pieces
+    _sound_pieces = dict(iconst=iconst, iloc=iloc, iext=iext, itrunc=itrunc, iload=iload, irotr=irotr, ibin=ibin, **{"arm_"+a.split()[1]: a for a in arms})
+    return f""";; THE EXPRESSION LEMMA (generated by gen_fra.py fe_sound — REGENERATE, never hand-patch):
+;; every accepted expression's emission simulates imp's value, at any tower at or
+;; above its cost, leaving RAX = the value, the frame's locals intact, the spill
+;; trace as the twin says, and the scratch as the run's own
+(claim fe_sound
+  (goal
+    ((e IExp) {GOALVARS})
+    ({common_premises('e')[1:]})
+{conclusion('e')}
+  (induct e
+    ((case IConst (n) {iconst})
+     (case ILoc (i) {iloc})
+     (case IBin (k o a b) {ibin})
+     (case IRotr (k a cx) {irotr})
+     (case IExt (k1 k2 a) {iext})
+     (case ITrunc (k1 kt a) {itrunc})
+     (case ILoad (a) {iload}))))
+"""
+
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "sound":
+    sys.stdout.write(fe_sound())
