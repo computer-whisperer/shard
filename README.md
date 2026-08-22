@@ -306,15 +306,15 @@ authority for its area:
 
 ## Live arcs
 
-- **The prune arc (2026-08, issue #24)** — spring cleaning before the
-  new project: tree and branches, the issue tracker as the single
-  backlog, ledger status banners, corpus cost.
+- **The prune arc (2026-08, issue #24) — CLOSED 2026-08-22**: tree and
+  branches, the issue tracker as the single backlog, ledger status
+  banners, corpus cost instrumentation (the long pole is debt #37).
 - **THE GOAL — the coverage arc (issue #23)**: `tools/shardfmt` shipped
   as a proven native binary through the GENERIC path (spec → imp by the
   uniform-representation compiler → x86 by tools/impgen), with the
   repo's own fmt gate running that binary; `examples/calc` is rung 1.
-  Opens when the prune arc closes; [docs/IMP.md](docs/IMP.md) §6 is its
-  charter and [docs/OVERVIEW.md](docs/OVERVIEW.md) §10 the ruling.
+  The next arc to open; [docs/IMP.md](docs/IMP.md) §6 is its charter
+  and [docs/OVERVIEW.md](docs/OVERVIEW.md) §10 the ruling.
 - **Closed, for orientation**: Arc A — the certificate architecture
   ([CERT.md](docs/CERT.md)); Arc B — the streaming bin
   ([STREAM.md](docs/STREAM.md): `(bin sha256sum)` at 1.08× coreutils-
@@ -356,5 +356,5 @@ total is generated certificate text and validation articles) over a
 ~3.1k-line disposable Rust bootstrap. The proof corpus, the std
 interfaces, the wasm / x86 / RISC-V models and lowering pipelines, the
 trust-ledger machinery, the proof-search engine, and the streaming-bin
-flagship are live and CI-gated; the current front is the prune arc,
-then the coverage arc (see Live arcs).
+flagship are live and CI-gated; the prune arc closed 2026-08-22 and
+the current front is the coverage arc (see Live arcs).
