@@ -11,9 +11,20 @@
 # reduced mod 256. Exit status is a byte, so this is the wrapper's Int mod 256:
 # t_second_short = -1 arrives as 255, t_find = -4 as 252.
 #
-# One row per wrapper plus one REFUSAL row (index 29 = `id`, a real fn of the
-# module but not a wrapper — the emitter must decline it with exit 2). Exit 0 =
-# every row PASS, 1 = any row FAIL.
+# One row per wrapper, plus the STACK-FAMILY row, plus one REFUSAL row (index
+# 29 = `id`, a real fn of the module but not a wrapper — the emitter must
+# decline it with exit 2). Exit 0 = every row PASS, 1 = any row FAIL.
+#
+# THE STACK-FAMILY ROW (index 33 = `t_deep`, docs/COVERAGE.md slice A-0) is the
+# fail leg end to end: the call depth is the MODEL's — micro_iprog carries a
+# budget of 1000 (`ipdepth`) and `ipcall` fails `FStack` at it — the frame tier
+# MIRRORS it in R14 (every prologue fails unless R14 < 1000, the trampoline
+# zeroes it), and the failure leaves through the exit shim with RDI = 70 +
+# family. So the wrapper, which recurses 5000 deep, must give PROCESS EXIT
+# STATUS 72 on silicon — NOT the spec's 12502500 mod 256 = 228 that the
+# emitter's EXPECT line still names. A ROWS entry may therefore carry an
+# optional THIRD field, the expected-status override, and that row compares
+# against it instead of EXPECT.
 #
 # The ELFs land in tools/impc/fixtures/micro_elf/*.bin — gitignored by the
 # repo's `*.bin` rule; nothing here is tracked.
@@ -29,7 +40,8 @@ mkdir -p "$OUTDIR"
 
 fails=0
 
-# name index  — the table indexes are micro_ipc_out.shard's NAME_ix values
+# name index [want]  — the table indexes are micro_ipc_out.shard's NAME_ix
+# values; the optional third field overrides the emitter's EXPECT line
 ROWS=(
   "len 17"
   "len0 18"
@@ -46,11 +58,12 @@ ROWS=(
   "arith 30"
   "cmp 31"
   "let 32"
+  "deep 33 72"
 )
 
 for row in "${ROWS[@]}"; do
   set -- $row
-  name=$1; ix=$2
+  name=$1; ix=$2; override=${3:-}
   elf="$OUTDIR/t_$name.bin"
   rm -f "$elf"
   out=$("${EVAL[@]}" run "$SRC" "$ix" "$elf" 2>&1)
@@ -66,13 +79,18 @@ for row in "${ROWS[@]}"; do
     fails=$((fails + 1))
     continue
   fi
+  why=""
+  if [ -n "$override" ]; then
+    why=" (override of EXPECT $want)"
+    want=$override
+  fi
   chmod +x "$elf"
   "./$elf"
   got=$?
   if [ "$got" = "$want" ]; then
-    echo "PASS silicon $name: exit $got want $want"
+    echo "PASS silicon $name: exit $got want $want$why"
   else
-    echo "FAIL silicon $name: exit $got want $want"
+    echo "FAIL silicon $name: exit $got want $want$why"
     fails=$((fails + 1))
   fi
 done

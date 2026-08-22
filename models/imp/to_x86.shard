@@ -930,17 +930,21 @@
 ;;   R15 = FP, the current frame base (a window index). Local i of the
 ;;   running fn is the 8-byte word at [FP + 8i]; expression temporaries
 ;;   spill to [FP + 8(nlocals + d)] at spill depth d; the frame is
-;;   8·(nlocals + maxdepth + 1) bytes. RAX carries every expression
-;;   result, R10/R11/RDX are the operation scratch. No other register is
-;;   read or written by generated code, so nothing needs saving across a
-;;   call: the CALLEE owns the whole scratch file, the CALLER owns its
-;;   frame, and FP is restored by the caller's own size.
+;;   8·(nlocals + maxdepth + 1) bytes. R14 = the CALL DEPTH, the mirror of
+;;   ipcall's d: every fn's prologue fails the stack family (RDI := 72)
+;;   unless R14 < the program's budget, then bumps R14; the epilogue
+;;   drops it. RAX carries every expression result, R10/R11/RDX are the
+;;   operation scratch. No other register is read or written by
+;;   generated code, so nothing needs saving across a call: the CALLEE
+;;   owns the whole scratch file, the CALLER owns its frame, and FP is
+;;   restored by the caller's own size.
 ;;   A call: the caller writes the arguments into the callee's frame
 ;;   (at FP + own_size + 8j), bumps FP by its own size, XCalls, drops FP
 ;;   back, stores RAX into the destination local. The callee's prologue
 ;;   zeroes its extra locals (imp's izeros). The result of a fn is RAX at
 ;;   its body's end; xparams is 0 for every fn (arguments never travel
-;;   in registers — a driver pre-writes the entry frame).
+;;   in registers — a driver pre-writes the entry frame at R15 = the
+;;   program's ipstack with R14 = 0).
 ;;   Fail: RDI := 70 + family, XCall the exit shim appended as the last
 ;;   image fn (the pure model tier traps there — XSyscall refuses — the
 ;;   world tier exits). Unreachable: a word load at an address no window
@@ -1279,8 +1283,19 @@
       (+ (ikn (ipparams_of f)) (ikn (ipextra_of f)))
       (+ 1 (imax2 (ixf_sdep (ipbody_of f)) (ixf_dep (ipresult_of f)))))))
 
-;; a fn: prologue zeroes the extras, the body, the result into RAX
-(fn ixf_fn ((fail_ix Int) (f IpFn)) (Option XFunc)
+;; the depth prologue: fail stack unless R14 < dmax, then R14 += 1 (ipcall's
+;; `lt d dmax` test and its d + 1, in that order)
+(fn ixf_enter ((dmax Int) (fail_ix Int)) (List XInstr)
+  (list
+    (XBlock (list (XBrIf (CLtU R14 (SImm dmax)) 0) (XMovRI RDI 72) (XCall fail_ix)))
+    (XBin XAdd R14 (SImm 1))))
+
+;; the depth epilogue: R14 -= 1 (RAX, the result, untouched)
+(fn ixf_leave () (List XInstr) (list (XBin XSub R14 (SImm 1))))
+
+;; a fn: the depth prologue, zero the extras, the body, the result into
+;; RAX, the depth epilogue
+(fn ixf_fn ((dmax Int) (fail_ix Int) (f IpFn)) (Option XFunc)
   (let ((np (ikn (ipparams_of f))))
     (let ((nl (+ np (ikn (ipextra_of f)))))
       (match (ixf_stmts nl (ixf_own f) fail_ix (ipbody_of f))
@@ -1288,19 +1303,32 @@
         ((Some ib)
          (match (ixf_exp nl 0 (ipresult_of f))
            (None None)
-           ((Some ir) (Some (MkXFunc 0 (ix_app (ixf_zero np nl) (ix_app ib ir)))))))))))
+           ((Some ir)
+            (Some
+              (MkXFunc
+                0
+                (ix_app
+                  (ixf_enter dmax fail_ix)
+                  (ix_app (ixf_zero np nl) (ix_app ib (ix_app ir (ixf_leave))))))))))))))
 
-(fn ixf_fns ((fail_ix Int) (fs (List IpFn))) (Option (List XFunc))
+(fn ixf_fns ((dmax Int) (fail_ix Int) (fs (List IpFn))) (Option (List XFunc))
   (measure (struct fs))
   (match fs
     (Nil (Some Nil))
     ((Cons f t)
-     (match (ixf_fn fail_ix f)
+     (match (ixf_fn dmax fail_ix f)
        (None None)
        ((Some xf)
-        (match (ixf_fns fail_ix t)
+        (match (ixf_fns dmax fail_ix t)
           (None None)
           ((Some xt) (Some (Cons xf xt)))))))))
+
+;; the largest frame in the table — the frame region holds ipdepth of them
+(fn ixf_maxown ((fs (List IpFn))) Int
+  (measure (struct fs))
+  (match fs
+    (Nil 0)
+    ((Cons f t) (imax2 (ixf_own f) (ixf_maxown t)))))
 
 (fn ixf_count ((fs (List IpFn))) Int
   (measure (struct fs))
@@ -1314,17 +1342,32 @@
     (Nil b)
     ((Cons h t) (Cons h (xf_app t b)))))
 
-;; THE PROGRAM: the call tier's gate first, then every fn in table order,
-;; then the exit shim as the last image fn (the Fail target); the window
-;; is the program's own
+;; THE CARVE GATE: the frame region [ipstack, ipmemsize) sits inside the
+;; window above the imp-visible part, and holds ipdepth frames of the
+;; largest size — so a run within the depth budget never stores outside
+;; the window (Theorem A's frames-fit premise, decided here, once)
+(fn ixf_carve_ok ((p IpProg)) Bool
+  (if (le (ipbase_of p) (ipstack_of p))
+    (if (le 0 (ipdepth_of p))
+      (le
+        (+ (ipstack_of p) (* (ipdepth_of p) (ixf_maxown (ipfns_of p))))
+        (ipmemsize_of p))
+      False)
+    False))
+
+;; THE PROGRAM: the call tier's gate and the carve gate first, then every
+;; fn in table order, then the exit shim as the last image fn (the Fail
+;; target); the window is the program's own
 (fn ixf_prog ((p IpProg)) (Option XModule)
   (if (ipwk_prog p)
-    (match (ixf_fns (ixf_count (ipfns_of p)) (ipfns_of p))
-      (None None)
-      ((Some xfs)
-       (Some
-         (MkXModule
-           (xf_app xfs (list (MkXFunc 0 (list (XMovRI RAX 60) XSyscall))))
-           (ipbase_of p)
-           (ipmemsize_of p)))))
+    (if (ixf_carve_ok p)
+      (match (ixf_fns (ipdepth_of p) (ixf_count (ipfns_of p)) (ipfns_of p))
+        (None None)
+        ((Some xfs)
+         (Some
+           (MkXModule
+             (xf_app xfs (list (MkXFunc 0 (list (XMovRI RAX 60) XSyscall))))
+             (ipbase_of p)
+             (ipmemsize_of p)))))
+      None)
     None))

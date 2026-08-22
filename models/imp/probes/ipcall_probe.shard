@@ -33,7 +33,7 @@
   (MkIpFn (list U32) (list U32) (list (IpCall 1 1 (list (ILoc 0)))) (ILoc 1) U32))
 
 (fn ipc_add1_prog () IpProg
-  (MkIpProg (list (ipc_caller_fn) (ipc_add1_fn)) 0 64))
+  (MkIpProg (list (ipc_caller_fn) (ipc_add1_fn)) 0 64 64 8))
 
 ;; fn 0: (n) -> if n = 0 then 1 else n * fact (n - 1)   [self-call, depth]
 (fn ipc_fact_fn () IpFn
@@ -50,7 +50,7 @@
     (ILoc 2)
     U32))
 
-(fn ipc_fact_prog () IpProg (MkIpProg (list (ipc_fact_fn)) 0 64))
+(fn ipc_fact_prog () IpProg (MkIpProg (list (ipc_fact_fn)) 0 64 64 8))
 
 ;; fn 1: () -> store byte 9 at 5, result 0;  fn 0: () -> call 1, then load 5
 ;; [memory threads through the call]
@@ -65,7 +65,7 @@
     (IExt U8 U32 (ILoad (IConst 5)))
     U32))
 
-(fn ipc_mem_prog () IpProg (MkIpProg (list (ipc_peek_fn) (ipc_poke_fn)) 0 64))
+(fn ipc_mem_prog () IpProg (MkIpProg (list (ipc_peek_fn) (ipc_poke_fn)) 0 64 64 8))
 
 ;; fn 1: () -> store a byte, then FAIL overflow;  fn 0: () -> call 1
 ;; [the fail leg propagates out of the callee; the store before it is
@@ -83,20 +83,20 @@
   (MkIpFn Nil (list U32) (list (IpCall 0 1 Nil)) (ILoc 0) U32))
 
 (fn ipc_fail_prog () IpProg
-  (MkIpProg (list (ipc_failcall_fn) (ipc_failer_fn)) 0 64))
+  (MkIpProg (list (ipc_failcall_fn) (ipc_failer_fn)) 0 64 64 8))
 
 ;; fn 0: () -> call 7 ()   [no such fn]
 (fn ipc_badidx_fn () IpFn
   (MkIpFn Nil (list U32) (list (IpCall 0 7 Nil)) (ILoc 0) U32))
 
-(fn ipc_badidx_prog () IpProg (MkIpProg (list (ipc_badidx_fn)) 0 64))
+(fn ipc_badidx_prog () IpProg (MkIpProg (list (ipc_badidx_fn)) 0 64 64 8))
 
 ;; fn 0: () -> call 1 ()   [fn 1 takes one argument]
 (fn ipc_arity_fn () IpFn
   (MkIpFn Nil (list U32) (list (IpCall 0 1 Nil)) (ILoc 0) U32))
 
 (fn ipc_arity_prog () IpProg
-  (MkIpProg (list (ipc_arity_fn) (ipc_add1_fn)) 0 64))
+  (MkIpProg (list (ipc_arity_fn) (ipc_add1_fn)) 0 64 64 8))
 
 ;; word ops: store the word at 8 (result 0); load the word at 8 into a
 ;; U64 local; the out-of-window corners at both ends
@@ -120,7 +120,7 @@
 (fn ipc_loadw_lo_fn () IpFn
   (MkIpFn Nil (list U64) (list (IpLoadW 0 (IConst 4))) (ILoc 0) U64))
 
-(fn ipc1 ((f IpFn)) IpProg (MkIpProg (list f) 0 64))
+(fn ipc1 ((f IpFn)) IpProg (MkIpProg (list f) 0 64 64 8))
 
 ;; --- the probes: calls -----------------------------------------------------------
 
@@ -149,6 +149,34 @@
 ;; depth rides the fuel: five nested calls do not fit in 12 units
 (claim ipc_fact_fuel
   (goal () () (= (iprun (ifnat 12) (ipc_fact_prog) 0 (list 5) (mem_empty)) None))
+  (steps ((compute both)) refl))
+
+;; THE DEPTH BUDGET (COVERAGE.md A-0): fact 5 nests six calls (5 … 0), the
+;; entry call at depth 0 and fact 0's body at depth 6 — a budget of 6 admits
+;; it, a budget of 5 fails the stack family at the deepest call (and the
+;; fail is the CALL'S: it surfaces through every caller as IpRfailed)
+(fn ipc_fact_prog_d ((dmax Int)) IpProg (MkIpProg (list (ipc_fact_fn)) 0 64 64 dmax))
+
+(claim ipc_fact_depth_ok
+  (goal () ()
+    (=
+      (iprun (ifnat 60) (ipc_fact_prog_d 6) 0 (list 5) (mem_empty))
+      (Some (IpRv 120 (mem_empty)))))
+  (steps ((compute both)) refl))
+
+(claim ipc_fact_depth_fail
+  (goal () ()
+    (=
+      (iprun (ifnat 60) (ipc_fact_prog_d 5) 0 (list 5) (mem_empty))
+      (Some (IpRfailed FStack))))
+  (steps ((compute both)) refl))
+
+;; budget 0: even the entry call is refused
+(claim ipc_depth_zero
+  (goal () ()
+    (=
+      (iprun (ifnat 60) (ipc_fact_prog_d 0) 0 (list 5) (mem_empty))
+      (Some (IpRfailed FStack))))
   (steps ((compute both)) refl))
 
 ;; memory threads through the call: the callee's store is the caller's load
@@ -262,7 +290,7 @@
     (=
       (iprun
         (ifnat 10)
-        (MkIpProg (list (ipc_loadw_lo_fn)) 8 64)
+        (MkIpProg (list (ipc_loadw_lo_fn)) 8 64 64 8)
         0
         Nil
         (mem_empty))
@@ -301,7 +329,7 @@
 (claim ipc_wk_words
   (goal () ()
     (=
-      (ipwk_prog (MkIpProg (list (ipc_storew_fn) (ipc_loadw_fn)) 0 64))
+      (ipwk_prog (MkIpProg (list (ipc_storew_fn) (ipc_loadw_fn)) 0 64 64 8))
       True))
   (steps ((compute both)) refl))
 
@@ -322,7 +350,7 @@
 (claim ipc_wk_rkind
   (goal () ()
     (=
-      (ipwk_prog (MkIpProg (list (ipcw_rkind_fn) (ipc_add1_fn)) 0 64))
+      (ipwk_prog (MkIpProg (list (ipcw_rkind_fn) (ipc_add1_fn)) 0 64 64 8))
       False))
   (steps ((compute both)) refl))
 
@@ -333,7 +361,7 @@
 (claim ipc_wk_akind
   (goal () ()
     (=
-      (ipwk_prog (MkIpProg (list (ipcw_akind_fn) (ipc_add1_fn)) 0 64))
+      (ipwk_prog (MkIpProg (list (ipcw_akind_fn) (ipc_add1_fn)) 0 64 64 8))
       False))
   (steps ((compute both)) refl))
 

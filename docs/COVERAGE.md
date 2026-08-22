@@ -239,6 +239,15 @@ later dissolution for bounded programs. Self-tail-recursion lowers to
 other call, mutual tail calls included, is a real call in v1.
 REJECTED — stack primitives in the imp machine: machine growth for
 what window stores already say, and a second framing vocabulary.
+AMENDED at A-0 (2026-08-22): the stack FAMILY's depth check is the
+MODEL's, not generated code's — `IpProg` carries the budget
+`ipdepth`, `ipcall` fails `FStack` at it, and the frame tier mirrors
+the count in R14; impc's v0 counter (the `[rb+16]` cell, "depth
+counter = fuel made real") is retired, and the frame region's
+sufficiency (`ipstack + ipdepth · maxframe ≤ ipmemsize`) is decided
+once by `ixf_prog`'s carve gate. Why: a generic machine theorem must
+bound the dynamic call depth to know the frames fit, and imp's fuel
+cannot (it also bounds loop iterations and list lengths) — see §11.
 
 **P6 — The standard World and the extern realization.** A standard
 module — LEAN name `std/world` — declares once what every bin today
@@ -504,7 +513,7 @@ the next rung — if:
   with #37's numbers.
 - **CD7 — the header word layout and the immortal count value.** C2.
 
-## 11. The certificate phase — design note (2026-08-22, DRAFT for the user's decision)
+## 11. The certificate phase — design note (2026-08-22; ORDER RATIFIED the same day: A → C2b → B)
 
 With C1a–C3a landed the generic path RUNS end to end at the model
 (spec → imp → x86, three-way differential 15/15) and nothing is yet
@@ -576,7 +585,8 @@ per-construct laws and the ownership discipline (borrowed in, owned
 out) as the invariant threaded through calls. The engine (#27) is
 measured as the closer of the skeleton's leaves here.
 
-**Order (the decision).** Lean: **A first, then C2b, then B.** A is
+**Order — RATIFIED 2026-08-22 (user: "A -> C2b -> B sounds good").**
+Lean, as adopted: **A first, then C2b, then B.** A is
 self-contained at the machine layer (framing only, no heap semantics),
 has A1 as its template, and closes C3's "certified at the machine"
 gate; its library growth (width-8 framing in std/mem, region
@@ -589,6 +599,106 @@ because its foundation (C2b) is the deepest proof of the arc and the
 machine leg would sit unproven meanwhile; revisit if A's fuel algebra
 stalls. Either way, nothing here changes a pin: P7's lean stands for B,
 and A is the validator form CERT.md §4 already ratified.
+
+
+### 11.1 Theorem A as stated at A-0 (2026-08-22) — what the draft did not predict
+
+Stating the theorem precisely, against the landed code, moved three
+things out of the draft's premises and into the MODEL, and fixed the
+proof's two vocabularies. Recorded here because each is a decision
+(with its corpse), and the slices below are cut along them.
+
+**(1) Disjointness is the window's, for free.** The draft premised "a
+memory whose stack region is disjoint from every address the program
+reads or writes". No footprint instrument is needed: `IpProg` now
+carries `ipstack`, and `iprun` evaluates at the window
+`[ipbase, ipstack)` — the frame region `[ipstack, ipmemsize)` is
+INVISIBLE to imp (a word op there is an imp trap), so a run that
+returns a value never touched it, and the x86 module (window
+`[ipbase, ipmemsize)`) keeps its frames there. Consequence: imp TRAPS
+are outside the theorem (imp traps where x86 would not); the clauses
+are `IpRv` and `IpRfailed` only — exactly the outcomes Theorem B
+produces, so nothing is lost at the composition.
+
+**(2) The depth budget is the model's.** The theorem must know the
+frames FIT the region, i.e. bound the dynamic call depth; imp's fuel
+cannot (it also bounds loop iterations and statement-list length, so
+"fp + fuel · maxframe ≤ hi" is unusable for any real run), and a
+generic theorem cannot see a counter impc happens to emit. So:
+`ipdepth` in `IpProg`, the SCC threads (dmax, d), `ipcall` fails
+`FStack` at the budget and runs the body at d + 1; the frame tier
+mirrors d in R14 (prologue: fail unless R14 < dmax, then R14 += 1;
+epilogue R14 −= 1); `ixf_prog` gates the carve once
+(`ipstack + ipdepth · ixf_maxown ≤ ipmemsize`). impc's own counter is
+deleted (29 prologues gone from the micro product, 1922 → 1669
+lines). THE FINDING THAT FORCED IT: impc v0's bound was 100000 while
+the ELF's frame region is 512 KiB ≈ 2600–3500 frames — a
+4000-deep recursion would have faulted the process (SIGSEGV) instead
+of exiting 72; the proof design exposed a real bug before a line of
+proof was written. The `t_deep` wrapper (sumto 5000 at budget 1000)
+now pins the fail leg end to end: imp −13, x86 model trap, silicon
+exit status 72. REJECTED-because: the unbounded-window layering
+(prove functional correctness in a model with xmemhi = ∞, "the stack
+fits" as a separate resource theorem) — it moves the same unproven
+gap to the bin, where it is least visible.
+
+**(3) The x86 memory needs a WITNESS, so the proof has a twin.** The
+conclusion "x86 memory agrees with imp's off the stack region and
+holds the caller's locals" is an existential over the frame contents;
+equations have no ∃. Skolemize it: an imp-side TWIN evaluator
+`ipt_*` (proof-facing, A2's status) returns the imp outcome AND the
+list of frame patches the frame tier writes (locals sets, spills,
+arguments, the callee's zeroing). With A2's base+patch vocabulary
+(CERT.md §5): x86 memory at every point = `xp_mem mem0 psx`
+STRUCTURALLY — every XMStore64 / XStore8 is one patch prepended,
+refl-grade — imp memory = `xp_mem mem0 (fbelow ipstack psx)` (the same
+stores in the same order, the frame ones filtered), and the locals
+relation is a computable read-through on the patch list at
+`[fp + 8i]`. Register garbage (RAX/RDX/RDI/R10/R11) is projected
+away by `xo_fr`, A1's projection idiom. REJECTED-because: per-address
+observational conclusions (∀a) cannot be carried as the induction's
+premise; a patch-level twin of the x86 machine would be a second
+semantic authority.
+
+**(4) Fuel: towers over `kf K f`, "for all heights", no monotonicity.**
+x86 burns fuel per instruction position and per nesting level, imp per
+statement position — a per-program ratio K (`ixf_kok K p`: every
+statement's emission cost ≤ K, computed). x86 fuel is
+`lg_fuel c (kf K f)` with `kf K (S f2) = lg_fuel K (kf K f2)`: S-headed
+whenever imp's fuel is, so the induction on imp fuel peels both. Every
+lemma is stated for ALL heights c ≥ (its cost), so a nested point
+re-enters the IH at the height that remains — linear side conditions
+only, no Nat inequalities, no fuel-monotonicity lemma. The seam is the
+GENERAL one (no purity premise: the same fuel on both sides is an
+exact equality). The multiplicative K is the re-opening point for
+Runs/RunsWithin (#35) if the towers get heavy.
+
+**(5) One induction.** A request type `IptReq` (stmt / while / stmts /
+call) and a dispatcher give the four engines ONE claim and one IH;
+each engine's case is a lemma cited from it.
+
+**The slices (each a corpus row, CI behind it):**
+- **A-0 — the model amendments** (this record; landed): `ipstack`,
+  `ipdepth`, R14, the carve gate, impc without the counter, `t_deep`.
+- **A-1 — the kit**: the frame-patch grammar (`FPatch`: word/byte at
+  width 8 → `store_le (xw8)` / `mem_set`), apply / read-through /
+  footprint laws (`ls8_id` and the width-8 below/above framing in
+  std/mem — owed since C2a), `lg_fuel` peel + additivity, the general
+  seam with its continuation adapter, `xo_fr`, `kf`, `ixf_kok`.
+- **A-2 — the expression lemma**: `ixf_exp` sound — RAX := the value,
+  spills = patches above the locals, R14/R15 preserved; induction on
+  e over the seven constructors and the op table.
+- **A-3 — straight-line statements**: IpSet / IpStore / IpLoadW /
+  IpStoreW / IpFail / IpUnreach against the twin.
+- **A-4 — control**: IpIf / IpWhile and the dispatcher induction.
+- **A-5 — calls**: arguments as patches into the callee's frame, the
+  frame-disjointness lemma (the callee writes only at ≥ fp + own and
+  below ipstack), the depth mirror, the fn-level lemma.
+- **A-6 — the theorem**: `valid_frame p xm := (ixf_prog p) = (Some xm)`
+  and its soundness at `iprun` / `xrun_fn`; the micro-flagship's
+  instance by citation (no replay) as the corpus row; the world-tier
+  clause (RDI = 70 + family at the exit shim → process status) noted
+  as C6's composition.
 
 ## 10. Rung records
 
@@ -764,3 +874,39 @@ encoder, and the loader. Registered as `impc_micro_silicon`.
 drivers printed `FAIL rows: 0`, and the CI FAIL-set awk matches any line
 beginning `FAIL ` — the probe itself was 17/17. Renamed to `rows failed:
 N` in every driver; a driver's summary must never start with FAIL/TYPE!.
+
+**A-0 — THE CERTIFICATE PHASE OPENS: the model amendments (2026-08-22;
+order A → C2b → B ratified by the user the same day).** Stating
+Theorem A against the landed code (§11.1) moved three things into the
+MODEL before any proof: (i) `IpProg.ipstack` — `iprun` now evaluates at
+the window `[ipbase, ipstack)`, so the frame region is invisible to imp
+and the disjointness premise is free; (ii) `IpProg.ipdepth` — the
+call-depth budget is the model's: the SCC threads (dmax, d), `ipcall`
+fails `FStack` at the budget and runs the body at d + 1, the frame tier
+mirrors the count in R14 (`ixf_enter` / `ixf_leave`), and `ixf_prog`
+gates the carve once (`ixf_carve_ok`: base ≤ stack, 0 ≤ depth,
+stack + depth · `ixf_maxown` ≤ memsize); impc's own counter and its
+`[rb+16]` traffic are DELETED (`ctx_depth`, `depth_bound` gone; the
+product's `_iprog` takes `(base memsize stack depth)`; the micro
+product regenerates at 1669 lines, was 1922); (iii) nothing else — the
+twin, the fuel towers and the projection are proof-facing vocabulary
+for A-1. Signature change walked (the thread-division law): the four
+SCC members, `MkIpProg` (5 fields), `rt_prog`, the probe's 11 program
+spellings, the three drivers, the ELF emitter. Evidence: ipcall_probe
++3 claims (fact 5 at budget 6 = 120, at budget 5 = `IpRfailed FStack`,
+budget 0 refuses the entry call) 235/0; rt_run 17/17; **the new
+`t_deep` wrapper (sumto 5000 at budget 1000): imp −13, x86 model trap,
+silicon EXIT STATUS 72 — the stack family pinned end to end** (the
+fail leg had never been exercised past imp before); the other 15
+wrappers unchanged on all three legs (micro_run 17/17, micro_x86_run
+16/16, micro_silicon 17/17 incl. the refusal row). **THE BUG THE
+DESIGN EXPOSED:** impc v0's depth bound was 100000 against a 512 KiB
+frame region (≈ 2600–3500 frames of the micro product's sizes) — a
+few-thousand-deep recursion would have faulted the process (SIGSEGV)
+instead of exiting 72; no differential could have seen it (nothing
+recursed that deep). Observation (Opus, from the disassembly):
+`enc_winelf`'s `_start` glue already zeroes r12–r15, so the trampoline's
+explicit `R14 := 0` is belt-and-braces today — kept, because the frame
+tier's convention makes R14 = 0 the driver's obligation, not the
+loader's. Owed, unchanged: the lift law, `ls8_id`, the world-tier
+exit-code clause (C6).

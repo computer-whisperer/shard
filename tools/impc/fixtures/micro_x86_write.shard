@@ -6,15 +6,22 @@
 ;;;
 ;;; THE ARTICLE. The module is exactly the one the model-level differential
 ;;; tools/impc/fixtures/micro_x86_run.shard runs — `(ixf_prog (micro_iprog
-;;; 65536 1114112))` — plus ONE synthesized TRAMPOLINE fn APPENDED AFTER the
-;;; exit shim, so every existing table index (the runtime's 0-3, the module's
-;;; 4-32, the shim's 33) is untouched and the `XCall` targets the frame tier
-;;; already emitted stay correct. The trampoline is what the ELF's `_start`
-;;; glue enters, and it is the driver the frame tier's convention demands
-;;; (to_x86.shard's FRAME TIER header: "xparams is 0 for every fn — a driver
-;;; pre-writes the entry frame"):
+;;; 65536 1114112 589824 1000))` — plus ONE synthesized TRAMPOLINE fn
+;;; APPENDED AFTER the exit shim, so every existing table index (the
+;;; runtime's 0-3, the module's 4-33, the shim's 34) is untouched and the
+;;; `XCall` targets the frame tier already emitted stay correct. The
+;;; trampoline is what the ELF's `_start` glue enters, and it is the driver
+;;; the frame tier's convention demands (to_x86.shard's FRAME TIER header:
+;;; "xparams is 0 for every fn — a driver pre-writes the entry frame at
+;;; R15 = the program's ipstack with R14 = 0"):
 ;;;
 ;;;   R15 := 589824            the entry frame pointer = micro_x86_run's stack_lo
+;;;   R14 := 0                 the CALL DEPTH — the frame tier mirrors the
+;;;                            MODEL's budget (slice A-0): every prologue
+;;;                            fails the stack family unless R14 < the
+;;;                            program's ipdepth, which is 1000 here, so the
+;;;                            counter is set explicitly and never inherits
+;;;                            whatever the loader left in R14
 ;;;   [R15]   := 65688         rt_init's argument 0 (heap_lo), frame-passed
 ;;;   [R15+8] := 589824        rt_init's argument 1 (heap_hi), frame-passed
 ;;;   call 0                   rt_init — the runtime header at [65536, 65688)
@@ -28,14 +35,21 @@
 ;;;   call <shim>              the exit shim ixf_prog appends (mov rax,60;
 ;;;                            syscall) — RDI is the code
 ;;;
+;;; The fail leg reaches the same shim from inside the tier: a failing
+;;; prologue sets RDI := 70 + family and XCalls it, so a stack-family run
+;;; leaves the process with exit status 72 and never returns to the
+;;; trampoline.
+;;;
 ;;; The address literals are NOT duplicated from the container: the window
 ;;; handed to `enc_winelf` is read back off the module's own `MkXModule`
 ;;; bounds (the staleness lesson recorded in examples/sha256sum/sha256sum_elf.shard
 ;;; — a hand-copied layout constant that duplicates a model constant is a
-;;; landmine). Only the frame carve (heap_lo/heap_hi/stack_lo) is repeated
-;;; from micro_x86_run.shard, because it is the DRIVER's choice on both sides
-;;; and not yet a product parameter (C1c-1's note: "driver-chosen, not yet a
-;;; product parameter").
+;;; landmine). The carve numbers are repeated from micro_x86_run.shard
+;;; because both drivers choose the same one: since slice A-0 the stack base
+;;; and the depth budget are PRODUCT PARAMETERS (micro_iprog takes them and
+;;; ixf_carve_ok gates the frame region against them), while heap_lo/heap_hi
+;;; stay the driver's own — they are rt_init's two arguments, frame-passed
+;;; by the trampoline above.
 ;;;
 ;;; UNTRUSTED PLUMBING, no proofs — this file is the oracle's harness, not a
 ;;; certificate. A wrong byte fails LOUDLY at the loader or at the exit-code
@@ -48,7 +62,11 @@
 ;;;   K       the wrapper's TABLE INDEX, e.g. 17 = (t_len_ix)
 ;;;   OUTPATH where the ELF bytes go (repo-relative)
 ;;; Prints `EXPECT <n>` where n = the spec wrapper's Int mod 256 in [0,256) —
-;;; the process exit status the ELF must produce — and exits 0.
+;;; the process exit status the ELF must produce — and exits 0. ONE wrapper
+;;; does not honour it: K = 33 = (t_deep_ix), the stack-family row, recurses
+;;; 5000 deep under the budget of 1000, so its ELF exits 72 (the fail leg
+;;; above) rather than the spec's 12502500 mod 256 = 228 — micro_silicon.sh
+;;; carries that override.
 ;;; Exit 2 = a K no wrapper owns (or a malformed command line); exit 3 = the
 ;;; translation or the write failed.
 ;;;
@@ -91,7 +109,10 @@
 
 (fn stack_lo () Int 589824)
 
-(fn prog () IpProg (micro_iprog 65536 (win_hi)))
+;; depth budget 1000: a thousand frames of the largest size fit the region
+(fn depth () Int 1000)
+
+(fn prog () IpProg (micro_iprog 65536 (win_hi) (stack_lo) (depth)))
 
 ;; --- the trampoline ----------------------------------------------------------
 
@@ -101,11 +122,13 @@
     (Nil 0)
     ((Cons _ t) (+ 1 (xflen t)))))
 
-;; the ELF entry: pre-write rt_init's frame, run the runtime, run the wrapper,
-;; decode the immediate into RDI, exit through the shim
+;; the ELF entry: zero the depth counter, pre-write rt_init's frame, run the
+;; runtime, run the wrapper, decode the immediate into RDI, exit through the
+;; shim
 (fn tramp ((k Int) (shim Int)) (List XInstr)
   (list
     (XMovRI R15 (stack_lo))
+    (XMovRI R14 0)
     (XMovRR R10 R15)
     (XMovRI RAX (heap_lo))
     (XMem (XMStore64 (AReg R10) RAX))
@@ -152,7 +175,8 @@
   (if (int_eq k (t_arith_ix)) (Some (t_arith))
   (if (int_eq k (t_cmp_ix)) (Some (t_cmp))
   (if (int_eq k (t_let_ix)) (Some (t_let))
-  None))))))))))))))))
+  (if (int_eq k (t_deep_ix)) (Some (t_deep))
+  None)))))))))))))))))
 
 ;; --- the driver --------------------------------------------------------------
 

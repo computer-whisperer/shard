@@ -330,6 +330,16 @@ applied to syntax:
   accept/reject line). The width-8 round-trip law (`ls8_id`) is
   std/mem growth owed at C2.
 
+- **The resource parameters (COVERAGE.md A-0, 2026-08-22).** `IpProg`
+  carries `ipstack` — where the imp-visible window ENDS: `iprun`
+  evaluates at `[ipbase, ipstack)`, the machine leg keeps its frames
+  in `[ipstack, ipmemsize)`, so a run that returns a value never
+  touched the frame region — and `ipdepth`, the call-depth budget:
+  the SCC threads (dmax, d), `ipcall` fails `FStack` at d = dmax and
+  runs the body at d + 1 (the entry call is at 0). The depth is the
+  MODEL's so that a generic machine theorem can bound the frames a
+  run needs; generated code carries no counter.
+
 What did NOT change: every base-tier definition, every existing
 certificate, impgen's emission. Named growth behind consumers: the
 lift law (C3), mutual tail calls, the conditional artifact form.

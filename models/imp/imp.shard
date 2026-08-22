@@ -664,7 +664,21 @@
   (ipresult IExp)
   (iprkind IKind))
 
-(record IpProg (ipfns (List IpFn)) (ipbase Int) (ipmemsize Int))
+;; a program: the table, the window [ipbase, ipmemsize), and the two
+;; resource parameters the bin chooses (COVERAGE.md A-0): ipstack = where
+;; the imp-visible memory ENDS and the machine's frame region begins —
+;; iprun evaluates at the window [ipbase, ipstack), so a run that returns
+;; a value never touched the frame region (the disjointness Theorem A
+;; needs, for free); ipdepth = the call-depth budget — the deepest nesting
+;; of calls a run may reach before the stack family fails (the model owns
+;; the count; the machine leg mirrors it in a register)
+(record
+  IpProg
+  (ipfns (List IpFn))
+  (ipbase Int)
+  (ipmemsize Int)
+  (ipstack Int)
+  (ipdepth Int))
 
 ;; a statement's outcome: forward, trapped, or failed for a reason
 (type IpOut (IpNorm (List Int) Mem) (IpTrap) (IpFailed IFam))
@@ -703,15 +717,18 @@
 ;; The SCC: every member burns one fuel unit on entry; None = fuel
 ;; exhausted and nothing else (traps are IpTrap, fails are IpFailed).
 ;; Fuel bounds depth (calls nest through ipcall), loop iterations, and
-;; statement-list length exactly as the base tier's does. The fn table
-;; and the window bounds are threaded explicitly (the base tier's
-;; mlo/msz discipline) so claims never project a symbolic program.
+;; statement-list length exactly as the base tier's does. The fn table,
+;; the window bounds, the depth budget dmax and the CURRENT depth d are
+;; threaded explicitly (the base tier's mlo/msz discipline) so claims
+;; never project a symbolic program; only ipcall reads dmax/d.
 
 (fn ipstmt
   ((fuel Nat)
    (fs (List IpFn))
    (mlo Int)
    (msz Int)
+   (dmax Int)
+   (d Int)
    (s IpStmt)
    (lc (List Int))
    (mem Mem))
@@ -743,9 +760,9 @@
         (match (iexp c lc mem mlo msz)
           (None (Some IpTrap))
           ((Some cv)
-           (if (int_eq cv 0) (ipstmts f2 fs mlo msz eb lc mem)
-           (ipstmts f2 fs mlo msz tb lc mem)))))
-       ((IpWhile c b) (ipwhile f2 fs mlo msz c b lc mem))
+           (if (int_eq cv 0) (ipstmts f2 fs mlo msz dmax d eb lc mem)
+           (ipstmts f2 fs mlo msz dmax d tb lc mem)))))
+       ((IpWhile c b) (ipwhile f2 fs mlo msz dmax d c b lc mem))
        ;; the call: arguments are pure reads of the caller's state; the
        ;; callee runs on the caller's memory and hands it back with the
        ;; result; a trap or fail inside the callee is the caller's
@@ -753,7 +770,7 @@
         (match (ipexps args lc mem mlo msz)
           (None (Some IpTrap))
           ((Some vs)
-           (match (ipcall f2 fs mlo msz k vs mem)
+           (match (ipcall f2 fs mlo msz dmax d k vs mem)
              (None None)
              ((Some r)
               (match r
@@ -795,6 +812,8 @@
    (fs (List IpFn))
    (mlo Int)
    (msz Int)
+   (dmax Int)
+   (d Int)
    (c IExp)
    (b (List IpStmt))
    (lc (List Int))
@@ -808,11 +827,11 @@
        (None (Some IpTrap))
        ((Some cv)
         (if (int_eq cv 0) (Some (IpNorm lc mem))
-        (match (ipstmts f2 fs mlo msz b lc mem)
+        (match (ipstmts f2 fs mlo msz dmax d b lc mem)
           (None None)
           ((Some out)
            (match out
-             ((IpNorm lc2 mem2) (ipwhile f2 fs mlo msz c b lc2 mem2))
+             ((IpNorm lc2 mem2) (ipwhile f2 fs mlo msz dmax d c b lc2 mem2))
              (_ (Some out)))))))))))
 
 (fn ipstmts
@@ -820,6 +839,8 @@
    (fs (List IpFn))
    (mlo Int)
    (msz Int)
+   (dmax Int)
+   (d Int)
    (ss (List IpStmt))
    (lc (List Int))
    (mem Mem))
@@ -831,23 +852,29 @@
      (match ss
        (Nil (Some (IpNorm lc mem)))
        ((Cons s t)
-        (match (ipstmt f2 fs mlo msz s lc mem)
+        (match (ipstmt f2 fs mlo msz dmax d s lc mem)
           (None None)
           ((Some out)
            (match out
-             ((IpNorm lc2 mem2) (ipstmts f2 fs mlo msz t lc2 mem2))
+             ((IpNorm lc2 mem2) (ipstmts f2 fs mlo msz dmax d t lc2 mem2))
              (_ (Some out))))))))))
 
 ;; the call: fn k of the table on args (banded to its parameter kinds),
 ;; a fresh frame (args then zeroed extras), the CALLER'S memory in and
 ;; the callee's memory out with the result. Bad index and wrong arity
 ;; are dynamic traps here (the well-kinded gate excludes both
-;; statically); a trap or fail inside the body is the call's.
+;; statically); a trap or fail inside the body is the call's. THE DEPTH
+;; BUDGET: the call is at depth d (the entry call at 0); at d = dmax it
+;; FAILS the stack family instead of running, else the body runs at
+;; d + 1 — so a run that returns a value nested calls at most dmax deep,
+;; the bound the machine leg's frame region is sized by (ixf_prog's gate).
 (fn ipcall
   ((fuel Nat)
    (fs (List IpFn))
    (mlo Int)
    (msz Int)
+   (dmax Int)
+   (d Int)
    (k Int)
    (args (List Int))
    (mem Mem))
@@ -860,33 +887,48 @@
        (None (Some IpRtrap))
        ((Some f)
         (if (int_eq (ilen args) (ikn (ipparams_of f)))
-          (match
-            (ipstmts
-              f2
-              fs
-              mlo
-              msz
-              (ipbody_of f)
-              (iapp
-                (iband_args (ipparams_of f) args)
-                (izeros (ikn (ipextra_of f))))
-              mem)
-            (None None)
-            ((Some out)
-             (match out
-               ((IpNorm lc2 mem2)
-                (match (iexp (ipresult_of f) lc2 mem2 mlo msz)
-                  (None (Some IpRtrap))
-                  ((Some v) (Some (IpRv v mem2)))))
-               (IpTrap (Some IpRtrap))
-               ((IpFailed fam) (Some (IpRfailed fam))))))
+          (if (lt d dmax)
+            (match
+              (ipstmts
+                f2
+                fs
+                mlo
+                msz
+                dmax
+                (+ d 1)
+                (ipbody_of f)
+                (iapp
+                  (iband_args (ipparams_of f) args)
+                  (izeros (ikn (ipextra_of f))))
+                mem)
+              (None None)
+              ((Some out)
+               (match out
+                 ((IpNorm lc2 mem2)
+                  (match (iexp (ipresult_of f) lc2 mem2 mlo msz)
+                    (None (Some IpRtrap))
+                    ((Some v) (Some (IpRv v mem2)))))
+                 (IpTrap (Some IpRtrap))
+                 ((IpFailed fam) (Some (IpRfailed fam))))))
+            (Some (IpRfailed FStack)))
           (Some IpRtrap)))))))
 
 ;; the program-level denotation: fn k of p on args from memory mem0 —
-;; the composition boundary the generated per-fn theorems are stated at
+;; the composition boundary the generated per-fn theorems are stated at.
+;; The window is [ipbase, ipstack) — the imp-visible part of the
+;; program's memory — and the entry call is at depth 0.
 (fn iprun ((fuel Nat) (p IpProg) (k Int) (args (List Int)) (mem0 Mem))
   (Option IpRet)
-  (ipcall fuel (ipfns_of p) (ipbase_of p) (ipmemsize_of p) k args mem0))
+  (ipcall
+    fuel
+    (ipfns_of p)
+    (ipbase_of p)
+    (ipstack_of p)
+    (ipdepth_of p)
+    0
+    k
+    args
+    mem0))
 
 ;; --- the lift: base-tier programs are call-tier programs -----------------------
 
@@ -918,8 +960,10 @@
     (Nil Nil)
     ((Cons f t) (Cons (ip_of_fn f) (ip_of_fns t)))))
 
+;; a lifted program sees its whole window (no frame region) and nests no
+;; calls: depth budget 1 = the entry call alone
 (fn ip_of_prog ((p IProg)) IpProg
-  (MkIpProg (ip_of_fns (ifns_of p)) (ibase_of p) (imemsize_of p)))
+  (MkIpProg (ip_of_fns (ifns_of p)) (ibase_of p) (imemsize_of p) (imemsize_of p) 1))
 
 ;; --- the call tier's well-kinded gate --------------------------------------------
 
