@@ -61,6 +61,11 @@
 ;;; the persisted entries. A solver bug can cost coverage, never soundness —
 ;;; the sidecar goes through the full untrusted-proof path at check time.
 ;;;
+;;; The goal-closing PRIMITIVES — candidate parse+check (pg_check), the
+;;; terminal closer moves, and the farkas cert search — live in
+;;; meta/proofgen (the oracle kit); this tool supplies the POLICY over
+;;; them: ladders, orderings, rungs, and the sidecar pipeline.
+
 ;;; The sidecar file is MACHINE-OWNED: a rewrite re-renders kept entries
 ;;; from their parsed form (comments in it are not preserved). An existing
 ;;; sidecar that does not lex is refused, never clobbered.
@@ -84,6 +89,7 @@
 (import "../../kernel/checker.shard")  ; check_sequent / build_induct_subgoal
 (import "../../kernel/reader.shard")  ; read_all / SExpr / RCtx / build_module_d
 (import "../../meta/format")  ; fmt — canonicalize the rendered sidecar
+(import "../../meta/proofgen")  ; the goal-closing oracle kit (LS-law 2)
 
 ;; the explicit library surface this app consumes (STRICT-mode scoping).
 (use (:: kernel loader resolve_closure))
@@ -97,6 +103,7 @@
 (use (:: kernel loader write_file))
 (use (:: kernel loader exit))
 (use (:: meta format fmt))  ; sidecar canonicalizer (fmt_or_raw)
+(use (:: meta proofgen *))  ; pg_check(_in), closer moves, farkas_solve/cands, parse_cand
 (use (:: kernel reader SrcEntry))
 (use (:: kernel reader SExpr))
 (use (:: kernel reader SInt))
@@ -417,9 +424,7 @@
 ;; the cheap inner loop: parse the candidate, check it directly against the
 ;; decl's sequent and prebuilt theory. No whole-file pass per attempt.
 (fn try_cand ((s Slv) (th Theory) (seq Sequent) (cand (List Int))) Bool
-  (match (parse_cand (slv_m s) (slv_rctx s) cand)
-    (None False)
-    ((Some p) (check_sequent (slv_m s) th seq p))))
+  (pg_check (slv_m s) (slv_rctx s) th seq cand))
 
 (fn try_ladder ((s Slv) (th Theory) (seq Sequent) (cands (List (List Int))))
   (Option (List Int))
@@ -438,9 +443,7 @@
 ;; which parses with `m` then checks with `m2`.
 (fn try_cand_m ((s Slv) (cm Module) (th Theory) (seq Sequent) (cand (List Int)))
   Bool
-  (match (parse_cand (slv_m s) (slv_rctx s) cand)
-    (None False)
-    ((Some p) (check_sequent cm th seq p))))
+  (pg_check_in (slv_m s) (slv_rctx s) cm th seq cand))
 
 (fn try_ladder_m
   ((s Slv) (cm Module) (th Theory) (seq Sequent) (cands (List (List Int))))
@@ -512,10 +515,6 @@
 
 ;; heads are read off the SEQUENT under solve (not the surface goal), so
 ;; nested levels generate from their own case subgoal.
-(fn seq_equation ((seq Sequent)) Equation
-  (match seq
-    ((Sequent _ _ _ e) e)))
-
 ;; both sides' heads together — the relevance key for lemma selection.
 (fn seq_qheads ((seq Sequent) (m Module)) (List QName)
   (match (seq_equation seq)
@@ -528,12 +527,6 @@
      (Pair
        (head_names (heads_of l (fn_trie_of m) Nil))
        (head_names (heads_of r (fn_trie_of m) Nil))))))
-
-(fn append_cands ((a (List (List Int))) (b (List (List Int)))) (List (List Int))
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (append_cands t b)))))
 
 ;; ---- case-candidate generation ----------------------------------------------
 ;; A case candidate is (steps PREFIX TERMINAL). PREFIX = an unfold/reduce
@@ -805,12 +798,6 @@
         (append_cands
           (list "(by arith (list))")
           (with_terminal pfxs "(by arith (list))"))))))
-
-;; parse one candidate's bytes to a native Proof (against the file's scope).
-(fn parse_cand ((m Module) (rctx RCtx) (bytes (List Int))) (Option Proof)
-  (match (read_all bytes)
-    ((Some (Cons f Nil)) (parse_proof_r m rctx f))
-    (_ None)))
 
 ;; close one case subgoal with the first candidate that checks; a ladder
 ;; exhausted with hints REMAINING synthesizes the next hint's structure on
@@ -1586,215 +1573,6 @@
 (fn disc_solve ((s Slv) (th Theory) (seq Sequent)) (Option (List Int))
   (disc_walk_pool s th seq (disc_pool s th seq) 24))
 
-;; ---- farkas certificate search ---------------------------------------------
-;; (by arith …) closes ENTAILMENTS (premised linear-int goals). FINDING the
-;; multipliers is exactly the untrusted proposer's job: the solver tests
-;; candidate vectors DIRECTLY against the kernel's own farkas math
-;; (farkas_finish / farkas_refute — coverage only, never soundness; a winner
-;; still replays through the full untrusted parse/check path), enumerated in
-;; order of total |weight| so the first hit is a minimal certificate. The
-;; sign discipline comes from the kernel's own constraint classes: an
-;; inequality premise takes nonneg multipliers only, an equality premise
-;; either sign, an uninterpretable premise only 0 — so the signed space
-;; stays small. Goal shapes (mirroring farkas_check's dispatch):
-;;   (lt|le)=True / int_eq=False  → single-sided  (list G M0 … Mk)
-;;   int_eq=True / plain L = R    → two-sided     (list (list …) (list …))
-;;     — two INDEPENDENT refutations (¬(a<=b), ¬(b<=a)), searched separately.
-
-;; slot sign-class: 1 = nonneg-only, 2 = any-sign, 0 = zero-only.
-(fn fkv_pclasses ((prems (List Equation))) (List Int)
-  (measure (struct prems))
-  (match prems
-    (Nil Nil)
-    ((Cons p rest)
-     (Cons
-       (match (premise_to_constraint p)
-         (None 0)
-         ((Some (Pair _ needs_nonneg)) (if needs_nonneg 1 2)))
-       (fkv_pclasses rest)))))
-
-;; the signed values of magnitude m a slot of class c may take.
-(fn fkv_vals ((c Int) (m Int)) (List Int)
-  (if (int_eq m 0) (Cons 0 Nil)
-  (if (int_eq c 0) Nil
-  (if (int_eq c 1) (Cons m Nil)
-  (Cons m (Cons (- 0 m) Nil))))))
-
-(fn fkv_cons_each ((v Int) (tails (List (List Int)))) (List (List Int))
-  (measure (struct tails))
-  (match tails
-    (Nil Nil)
-    ((Cons t rest) (Cons (Cons v t) (fkv_cons_each v rest)))))
-
-(fn fkv_cross ((vs (List Int)) (tails (List (List Int)))) (List (List Int))
-  (measure (struct vs))
-  (match vs
-    (Nil Nil)
-    ((Cons v more)
-     (append_cands (fkv_cons_each v tails) (fkv_cross more tails)))))
-
-;; all multiplier vectors over `slots` with total magnitude EXACTLY s
-;; (mutually recursive with fkv_slot, which walks one slot's magnitudes).
-(fn fkv_enum ((slots (List Int)) (s Int)) (List (List Int))
-  (match slots
-    (Nil (if (int_eq s 0) (Cons Nil Nil) Nil))
-    ((Cons c rest) (fkv_slot c 0 s rest))))
-
-(fn fkv_slot ((c Int) (m Int) (s Int) (rest (List Int))) (List (List Int))
-  (if (lt s m) Nil
-  (append_cands
-    (fkv_cross (fkv_vals c m) (fkv_enum rest (- s m)))
-    (fkv_slot c (+ m 1) s rest))))
-
-;; first vector whose single-sided combination contradicts (v = (G M0 …)).
-(fn fk_hit_single
-  ((prems (List Equation))
-   (ng (List (Pair Int (Option Expr))))
-   (vecs (List (List Int))))
-  (Option (List Int))
-  (measure (struct vecs))
-  (match vecs
-    (Nil None)
-    ((Cons v rest)
-     (match v
-       ((Cons g ms)
-        (if (farkas_finish prems ms ng g) (Some v)
-        (fk_hit_single prems ng rest)))
-       (_ (fk_hit_single prems ng rest))))))
-
-;; first vector farkas_refute accepts (a two-sided cert's half).
-(fn fk_hit_refute
-  ((prems (List Equation))
-   (ng (List (Pair Int (Option Expr))))
-   (vecs (List (List Int))))
-  (Option (List Int))
-  (measure (struct vecs))
-  (match vecs
-    (Nil None)
-    ((Cons v rest)
-     (if (farkas_refute prems v ng) (Some v) (fk_hit_refute prems ng rest)))))
-
-(fn fk_scan_single
-  ((prems (List Equation))
-   (ng (List (Pair Int (Option Expr))))
-   (slots (List Int))
-   (s Int)
-   (smax Int))
-  (Option (List Int))
-  (if (lt smax s) None
-  (match (fk_hit_single prems ng (fkv_enum slots s))
-    ((Some v) (Some v))
-    (None (fk_scan_single prems ng slots (+ s 1) smax)))))
-
-(fn fk_scan_refute
-  ((prems (List Equation))
-   (ng (List (Pair Int (Option Expr))))
-   (slots (List Int))
-   (s Int)
-   (smax Int))
-  (Option (List Int))
-  (if (lt smax s) None
-  (match (fk_hit_refute prems ng (fkv_enum slots s))
-    ((Some v) (Some v))
-    (None (fk_scan_refute prems ng slots (+ s 1) smax)))))
-
-;; weight cap, scaled down as premises (slots) grow — the vector count at a
-;; given total weight is combinatorial in the slot count.
-(fn fk_smax ((p Int)) Int (if (lt p 3) 8 (if (lt p 5) 6 4)))
-
-(fn fk_show_vec ((v (List Int))) (List Int)
-  (measure (struct v))  ; "1 -1 2"
-  (match v
-    (Nil Nil)
-    ((Cons x rest)
-     (match rest
-       (Nil (show_int x))
-       (_ (append_int (show_int x) (Cons 32 (fk_show_vec rest))))))))
-
-;; single-sided: G's sign regime comes from the negated goal's class.
-(fn fk_single
-  ((prems (List Equation)) (goal Equation) (slots_p (List Int)) (p Int))
-  (Option (List Int))
-  (match (neg_goal_poly goal)
-    (None None)
-    ((Some (Pair ng needs_nonneg))
-     (match
-       (fk_scan_single
-         prems
-         ng
-         (Cons (if needs_nonneg 1 2) slots_p)
-         1
-         (fk_smax p))
-       (None None)
-       ((Some v)
-        (Some (append_int "(by arith (list " (append_int (fk_show_vec v) "))"))))))))
-
-;; two-sided: refute ¬(a<=b) and ¬(b<=a) independently; both must close.
-(fn fk_two_sided
-  ((prems (List Equation)) (a Expr) (b Expr) (slots_p (List Int)) (p Int))
-  (Option (List Int))
-  (match
-    (fk_scan_refute
-      prems
-      (poly_minus1 (poly_sub a b))
-      (Cons 1 slots_p)
-      1
-      (fk_smax p))
-    (None None)
-    ((Some le_v)
-     (match
-       (fk_scan_refute
-         prems
-         (poly_minus1 (poly_sub b a))
-         (Cons 1 slots_p)
-         1
-         (fk_smax p))
-       (None None)
-       ((Some ge_v)
-        (Some
-          (append_int
-            "(by arith (list (list "
-            (append_int
-              (fk_show_vec le_v)
-              (append_int ") (list " (append_int (fk_show_vec ge_v) ")))"))))))))))
-
-(fn eq_count ((es (List Equation))) Int
-  (measure (struct es))
-  (match es
-    (Nil 0)
-    ((Cons _ rest) (+ 1 (eq_count rest)))))
-
-(fn seq_premises ((seq Sequent)) (List Equation)
-  (match seq
-    ((Sequent _ _ prems _) prems)))
-
-;; goal-shape dispatch (mirrors farkas_check): pick single- or two-sided
-;; search. Only premised sequents (the tautology backends cover the rest).
-(fn farkas_solve ((seq Sequent)) (Option (List Int))
-  (let ((prems (seq_premises seq)))
-    (let ((p (eq_count prems)))
-      (if (lt p 1) None
-      (if (lt 6 p) None
-      (match (seq_equation seq)
-        ((Equation lhs rhs)
-         (let ((slots_p (fkv_pclasses prems)))
-           (match lhs
-             ((Call f args)
-              (match args
-                ((Cons a (Cons b Nil))
-                 (if (farkas_is_eq_true_goal f rhs)
-                   (fk_two_sided prems a b slots_p p)
-                 (if (farkas_is_single_goal f rhs)
-                   (fk_single prems (Equation lhs rhs) slots_p p)
-                   (fk_two_sided prems lhs rhs slots_p p))))
-                (_ (fk_two_sided prems lhs rhs slots_p p))))
-             (_ (fk_two_sided prems lhs rhs slots_p p)))))))))))
-
-(fn farkas_cands ((seq Sequent)) (List (List Int))
-  (match (farkas_solve seq)
-    (None Nil)
-    ((Some c) (Cons c Nil))))
-
 ;; ---- conditional-citation synthesis (premised lemmas via rewrite-with) ------
 ;; The kernel's own RewriteWith machinery, driven at solve time: open the
 ;; cited lemma's binders fresh (split_params_by_insts with no insts), probe
@@ -1822,11 +1600,7 @@
 ;; closed-form closers for premise subgoals; per-premise farkas certs are
 ;; appended by solve_premise.
 (fn mini_ladder () (List (List Int))
-  (list
-    "refl"
-    "(steps ((compute both)) refl)"
-    "(steps ((simp both)) refl)"
-    "(by arith (list))"))
+  (list (pg_refl) (pg_compute) (pg_simp) (pg_arith0)))
 
 (fn solve_premise ((s Slv) (th Theory) (pseq Sequent)) (Option (List Int))
   (try_ladder s th pseq (append_cands (mini_ladder) (farkas_cands pseq))))

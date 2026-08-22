@@ -1,0 +1,569 @@
+;;; reach — the engine-reach benchmark harness (SEARCH.md, the lock-step
+;;; arc, slice LS2 / LS-law 3). Feeds a file's CLAIM goals to a
+;;; goal-closing backend and reports a per-goal verdict:
+;;;
+;;;   REACH <file> <claim> refl|compute|simp|arith0|farkas|OPEN|PARSEFAIL
+;;;   TOTAL <file> <closed>/<total>
+;;;
+;;; The v1 backend is the POLICY-FREE FLOOR: the bare meta/proofgen moves
+;;; (refl / compute-both / simp-both / empty arith / the farkas cert
+;;; search) against the EMPTY theory — no ladder, no lemma citations, no
+;;; rungs. What this closes is what ANY search policy gets for free from the
+;;; oracle kit alone; the gap up to the committed sidecars is exactly the
+;;; reach the ladder's policy (and, per LS-law 3, eventually the engine)
+;;; must supply. An engine backend slots in beside reach_one when joint
+;;; search learns to close goals (LS3+).
+;;;
+;;; Instrumentation only: reads and attempts; writes nothing, persists
+;;; nothing, never touches sidecars. Attempts are bounded (at most five
+;;; check_sequent calls per goal), so a run costs bin/check-class time.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/proof.shard")
+(import "../../kernel/checker.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/driver.shard")
+(import "../../meta/proofgen")
+(import "../search/prove_drive.shard")
+(import "../search/prove_branch.shard")
+
+(use (:: kernel loader resolve_closure))
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: kernel loader int_list_eq))
+(use (:: kernel loader dir_of))
+(use (:: kernel term append_int))
+(use (:: kernel term show_int))
+(use (:: kernel module Module))
+(use (:: kernel module FnTrie))
+(use (:: kernel proof Theory))
+(use (:: kernel proof TheoryEmpty))
+(use (:: kernel checker Sequent))
+(use (:: kernel reader SrcEntry))
+(use (:: kernel reader SExpr))
+(use (:: kernel reader SSym))
+(use (:: kernel reader SList))
+(use (:: kernel reader RCtx))
+(use (:: kernel reader read_all))
+(use (:: kernel reader build_module_d))
+(use (:: kernel reader BMOk))
+(use (:: kernel reader BMFail))
+(use (:: kernel driver parse_goal_r))
+(use (:: kernel driver file_rctx))
+(use (:: kernel driver prelude_ctors))
+(use (:: kernel driver lift_sequent))
+(use (:: kernel reader Decl))
+(use (:: kernel reader parse_decls))
+(use (:: kernel reader typedef_ctors))
+(use (:: kernel reader module_typedefs))
+(use (:: kernel driver RunState))
+(use (:: kernel driver theory_base_st))
+(use (:: kernel driver theory_step))
+(use (:: kernel driver decls_split))
+(use (:: kernel driver rs_theory))
+(use (:: meta proofgen *))
+(use (:: tools search prove_drive *))
+(use (:: tools search prove_branch *))
+
+(fn nl () (List Int) (Cons 10 Nil))
+
+(fn src_of ((path (List Int)) (srcs (List SrcEntry))) (Option (List Int))
+  (measure (struct srcs))
+  (match srcs
+    (Nil None)
+    ((Cons (SrcEntry p _ s) rest)
+     (if (int_list_eq path p) (Some s) (src_of path rest)))))
+
+;; every (claim NAME GOAL …) in file order — auto or inline-proved alike:
+;; the benchmark asks what a backend can close, not what the file needed.
+(fn claim_goals ((fs (List SExpr))) (List (Pair Symbol SExpr))
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons f rest)
+     (match f
+       ((SList (Cons (SSym h) (Cons (SSym name) (Cons goalS _))))
+        (if (sym_eq h (quote claim)) (Cons (Pair name goalS) (claim_goals rest))
+        (claim_goals rest)))
+       (_ (claim_goals rest))))))
+
+;; a fulfills' goal lives in its requirement — in the target file or the
+;; same-module mod.req.shard (prove's recovery pattern; the dir-form
+;; mod.req/ expansion is not covered — those report NOGOAL).
+(fn req_goal_of ((name Symbol) (forms (List SExpr))) (Option SExpr)
+  (measure (struct forms))
+  (match forms
+    (Nil None)
+    ((Cons f rest)
+     (match f
+       ((SList (Cons (SSym h) (Cons (SSym n) (Cons goalS Nil))))
+        (if (sym_eq h (quote requirement))
+          (if (sym_eq n name) (Some goalS) (req_goal_of name rest))
+          (req_goal_of name rest)))
+       (_ (req_goal_of name rest))))))
+
+(fn append_sexprs ((a (List SExpr)) (b (List SExpr))) (List SExpr)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (append_sexprs t b)))))
+
+(fn iface_forms ((target (List Int)) (srcs (List SrcEntry))) (List SExpr)
+  (match (dir_of target)
+    (Nil Nil)
+    (d
+      (match (src_of (append_int d "mod.req.shard") srcs)
+        (None Nil)
+        ((Some bytes)
+         (match (read_all bytes)
+           (None Nil)
+           ((Some fs) fs)))))))
+
+;; fulfills decls, goal recovered from gfs (target forms + interface forms);
+;; unrecoverable ones keep a (name, None)-style marker via the SSym NOGOAL
+;; sentinel handled in reach_goals.
+(fn fulfills_goals ((fs (List SExpr)) (gfs (List SExpr)))
+  (List (Pair Symbol (Option SExpr)))
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons f rest)
+     (match f
+       ((SList (Cons (SSym h) (Cons (SSym name) _)))
+        (if (sym_eq h (quote fulfills))
+          (Cons (Pair name (req_goal_of name gfs)) (fulfills_goals rest gfs))
+          (fulfills_goals rest gfs)))
+       (_ (fulfills_goals rest gfs))))))
+
+(fn opt_goals ((gs (List (Pair Symbol SExpr))))
+  (List (Pair Symbol (Option SExpr)))
+  (measure (struct gs))
+  (match gs
+    (Nil Nil)
+    ((Cons (Pair n g) rest) (Cons (Pair n (Some g)) (opt_goals rest)))))
+
+(fn append_goals
+  ((a (List (Pair Symbol (Option SExpr))))
+   (b (List (Pair Symbol (Option SExpr)))))
+  (List (Pair Symbol (Option SExpr)))
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (append_goals t b)))))
+
+;; one goal, five bounded attempts, first close wins. The move ORDER here
+;; is report labeling, not search policy — each attempt is independent.
+(fn reach_one ((m Module) (rctx RCtx) (seq Sequent)) (List Int)
+  (if (pg_check m rctx (TheoryEmpty) seq (pg_refl)) "refl"
+  (if (pg_check m rctx (TheoryEmpty) seq (pg_compute)) "compute"
+  (if (pg_check m rctx (TheoryEmpty) seq (pg_simp)) "simp"
+  (if (pg_check m rctx (TheoryEmpty) seq (pg_arith0)) "arith0"
+  (match (farkas_cands seq)
+    (Nil "OPEN")
+    ((Cons c _) (if (pg_check m rctx (TheoryEmpty) seq c) "farkas" "OPEN"))))))))
+
+(fn is_closed ((tag (List Int))) Bool
+  (if (int_list_eq tag "OPEN") False
+  (if (int_list_eq tag "PARSEFAIL") False
+  (if (int_list_eq tag "NOGOAL") False
+  True))))
+
+(fn reach_goals
+  ((m Module)
+   (rctx RCtx)
+   (target (List Int))
+   (gs (List (Pair Symbol (Option SExpr)))))
+  (Pair (List Int) (Pair Int Int))
+  (measure (struct gs))
+  (match gs
+    (Nil (Pair Nil (Pair 0 0)))
+    ((Cons (Pair name mgoal) rest)
+     (match
+       (match mgoal
+         (None "NOGOAL")
+         ((Some goalS)
+          (match (parse_goal_r m rctx goalS)
+            (None "PARSEFAIL")
+            ((Some g) (reach_one m rctx (lift_sequent g))))))
+       (tag
+         (match (reach_goals m rctx target rest)
+           ((Pair lines (Pair closed total))
+            (Pair
+              (append_int
+                "REACH "
+                (append_int
+                  target
+                  (append_int
+                    " "
+                    (append_int
+                      (chars_of_sym name)
+                      (append_int " " (append_int tag (append_int (nl) lines)))))))
+              (Pair (if (is_closed tag) (+ closed 1) closed) (+ total 1))))))))))
+
+(fn reach_target ((target (List Int)) (w World)) World
+  (match (resolve_closure target False w)
+    ((Pair srcs w2)
+     (match (src_of target srcs)
+       (None
+         (write (append_int "SKIP (cannot read) " (append_int target (nl))) w2))
+       ((Some tsrc)
+        (match (read_all tsrc)
+          (None
+            (write
+              (append_int "SKIP (does not lex) " (append_int target (nl)))
+              w2))
+          ((Some forms)
+           (match
+             (build_module_d
+               srcs
+               (Module Nil Nil Nil (FnTrie None Nil) Nil)
+               (prelude_ctors)
+               1)
+             ((BMFail _)
+              (write
+                (append_int
+                  "SKIP (module build fails) "
+                  (append_int target (nl)))
+                w2))
+             ((BMOk m)
+              (match
+                (reach_goals
+                  m
+                  (file_rctx m target tsrc)
+                  target
+                  (append_goals
+                    (opt_goals (claim_goals forms))
+                    (fulfills_goals
+                      forms
+                      (append_sexprs forms (iface_forms target srcs)))))
+                ((Pair lines (Pair closed total))
+                 (write
+                   (append_int
+                     lines
+                     (append_int
+                       "TOTAL "
+                       (append_int
+                         target
+                         (append_int
+                           " "
+                           (append_int
+                             (show_int closed)
+                             (append_int "/" (append_int (show_int total) (nl))))))))
+                   w2))))))))))))
+
+(fn reach_all ((targets (List (List Int))) (w World)) World
+  (measure (struct targets))
+  (match targets
+    (Nil w)
+    ((Cons t rest) (reach_all rest (reach_target t w)))))
+
+;; ---------------------------------------------------------------------------
+;; The ENGINE backend (lock-step arc LS4-i; LS4-iii grew the branch
+;; orchestrator). Per goal: the floor moves first (same five bounded
+;; attempts, same tags); an OPEN goal then goes to pb_prove (tools/
+;; search/prove_branch) — the linear proof-native drive first, and on a
+;; linear refusal ROOT branch candidates (induct / case-on), each arm a
+;; fresh drive re-entry — against the goal's REAL in-file theory: the
+;; import closure's entries plus every target-file decl BEFORE the goal,
+;; walked exactly as check itself walks them (theory_base_st +
+;; decls_split + theory_step, prove's recovery pattern). Engine tags:
+;;   engine-dK-pN-aM     closed by a LINEAR K-move chain (full assembled
+;;                       proof re-checked from the original sequent)
+;;   engine-bB-aM        closed by a BRANCHED proof: B induct/case-on
+;;                       nodes, M applies across the whole orchestration
+;;                       (root check_sequent = the acceptance gate)
+;;   OPEN-drained-dK-…   linear frontier DRAINED at depth K and ZERO
+;;                       branch candidates: exact refutation over the
+;;                       alphabet
+;;   OPEN-depthcap-…     as LS4-i, zero branch candidates
+;;   OPEN-budget-…       linear pop/apply budget hit, zero candidates
+;;   OPEN-branch-aM      branch candidates tried, none closed (M applies
+;;                       total) — never a refutation
+;;   ENGINE-WITNESS-FAIL an assembled winner failed the full check: a
+;;                       drive/orchestrator bug, loud, never counted
+;; Budgets are census-grade constants below; the official record states
+;; them with the run.
+
+(fn rch_e_depth () Int 6)
+
+(fn rch_e_pops () Int 4000)
+
+;; the uniform WORK budget: total successor applications per goal. Pops
+;; are not comparable across theories (per-pop work = alphabet width ×
+;; expression size, and per-pop cost DEGRADES as sequents and the closed
+;; set grow); applies nearly are. Sized from the wasm_rev calibration
+;; (p28, 2026-08-03) after CI 288 ran the old pop-only budget into the
+;; 7h watchdog inside the FIRST benchmark file: ~400 applies/pop
+;; alphabet width, ~650-1000 applies/sec early-regime — 50k bounds a
+;; sink-class refusal near a minute while finds (hundreds-to-thousands
+;; of applies in every smoke) are untouched.
+(fn rch_e_applies () Int 50000)
+
+(fn rch_e_divs () Int 1)
+
+;; LS4-iii branch budgets. depth_arm: arm drives search a little deeper
+;; than the root (the measured arm chains run longer; root depth stays 6
+;; for LS4-i refusal-cost parity). haves: hyp-instance cuts per chain.
+;; fuel: the orchestration-step bound (the pool is the real work bound).
+;; pool: the goal's TOTAL apply budget across the root linear attempt
+;; and every arm drive — sized so the deepest measured tree
+;; (utf8_lead_le, 10 branch nodes: ~9 internal-node linear refusals at
+;; 50k + leaf finds) fits with margin.
+(fn rch_e_depth_arm () Int 8)
+
+;; arm drives keep the root's linear cap: p31 measured take_le's
+;; IH-citing arm find at 31.4k applies — a 25k arm cap LOSES it. The
+;; refusal tax that motivated a smaller cap was cured at the source by
+;; the IH-coverage exclusion + the lemma-instance farkas assist, not by
+;; squeezing the cap.
+(fn rch_e_applies_arm () Int 50000)
+
+(fn rch_e_haves () Int 2)
+
+(fn rch_e_fuel () Int 400)
+
+(fn rch_e_pool () Int 600000)
+
+;; granted flag of a source entry (prove's pattern).
+(fn granted_of ((path (List Int)) (srcs (List SrcEntry))) Bool
+  (measure (struct srcs))
+  (match srcs
+    (Nil False)
+    ((Cons (SrcEntry p g _) rest)
+     (if (int_list_eq path p) g (granted_of path rest)))))
+
+(fn rch_pa ((popped Int) (applies Int)) (List Int)
+  (append_int
+    "-p"
+    (append_int (show_int popped) (append_int "-a" (show_int applies)))))
+
+(fn rch_show_find ((find PfFind)) (List Int)
+  (match find
+    ((PfFound mvs _ popped applies _)
+     (append_int
+       "engine-d"
+       (append_int (show_int (pf_moves_len mvs)) (rch_pa popped applies))))
+    ((PfEmpty d popped applies _)
+     (append_int
+       "OPEN-drained-d"
+       (append_int (show_int d) (rch_pa popped applies))))
+    ((PfDepthCap popped applies _)
+     (append_int "OPEN-depthcap" (rch_pa popped applies)))
+    ((PfBudget popped applies _)
+     (append_int "OPEN-budget" (rch_pa popped applies)))
+    ((PfWitnessFail _ _ _) "ENGINE-WITNESS-FAIL")))
+
+(fn rch_prefix ((p (List Int)) (s (List Int))) Bool
+  (measure (struct p))
+  (match p
+    (Nil True)
+    ((Cons c prest)
+     (match s
+       (Nil False)
+       ((Cons d srest) (if (int_eq c d) (rch_prefix prest srest) False))))))
+
+(fn is_closed_e ((tag (List Int))) Bool
+  (if (rch_prefix "OPEN" tag) False
+  (if (int_list_eq tag "PARSEFAIL") False
+  (if (int_list_eq tag "NOGOAL") False
+  (if (int_list_eq tag "ENGINE-WITNESS-FAIL") False
+  True)))))
+
+;; the goal's in-file theory: base closure + target decls strictly before it.
+(fn rch_theory_at
+  ((m Module) (rctx RCtx) (base RunState) (tds (List Decl)) (name Symbol))
+  Theory
+  (match (decls_split tds name)
+    ((Pair before _) (rs_theory (theory_step rctx m base before)))))
+
+(fn rch_show_pb ((find PbFind)) (List Int)
+  (match find
+    ((PbLin f) (rch_show_find f))
+    ((PbProof _ branches applies)
+     (append_int
+       "engine-b"
+       (append_int (show_int branches) (append_int "-a" (show_int applies)))))
+    ((PbFail applies) (append_int "OPEN-branch-a" (show_int applies)))
+    ((PbWitness _) "ENGINE-WITNESS-FAIL")))
+
+(fn rch_engine_one ((m Module) (rctx RCtx) (th Theory) (seq Sequent)) (List Int)
+  (match (reach_one m rctx seq)
+    (floor_tag
+      (if (is_closed floor_tag) floor_tag
+      (rch_show_pb
+        (pb_prove
+          m
+          rctx
+          m
+          th
+          seq
+          (rch_e_depth)
+          (rch_e_depth_arm)
+          (rch_e_pops)
+          (rch_e_applies)
+          (rch_e_applies_arm)
+          (rch_e_divs)
+          (rch_e_haves)
+          (rch_e_fuel)
+          (rch_e_pool)))))))
+
+;; drop the first n goals — the continuation-fire mechanism: a watchdog
+;; cut's partial log tells you exactly how many goals landed; the next
+;; fire skips them.
+(fn rch_drop_goals ((n Int) (gs (List (Pair Symbol (Option SExpr)))))
+  (List (Pair Symbol (Option SExpr)))
+  (measure (struct gs))
+  (match gs
+    (Nil Nil)
+    ((Cons g rest) (if (int_eq n 0) gs (rch_drop_goals (- n 1) rest)))))
+
+;; per-goal streaming: each REACH line is written the moment its goal
+;; resolves, so a watchdog cut loses only the goal in flight. The old
+;; per-file write lost 20h of complete results when CI 320/323 were cut
+;; inside mem/sha256.stream.
+(fn reach_goals_engine
+  ((m Module)
+   (rctx RCtx)
+   (target (List Int))
+   (base RunState)
+   (tds (List Decl))
+   (gs (List (Pair Symbol (Option SExpr))))
+   (w World))
+  (Pair (Pair Int Int) World)
+  (measure (struct gs))
+  (match gs
+    (Nil (Pair (Pair 0 0) w))
+    ((Cons (Pair name mgoal) rest)
+     (match
+       (match mgoal
+         (None "NOGOAL")
+         ((Some goalS)
+          (match (parse_goal_r m rctx goalS)
+            (None "PARSEFAIL")
+            ((Some g)
+             (rch_engine_one
+               m
+               rctx
+               (rch_theory_at m rctx base tds name)
+               (lift_sequent g))))))
+       (tag
+         (match
+           (write
+             (append_int
+               "REACH "
+               (append_int
+                 target
+                 (append_int
+                   " "
+                   (append_int
+                     (chars_of_sym name)
+                     (append_int " " (append_int tag (nl)))))))
+             w)
+           (w2
+             (match (reach_goals_engine m rctx target base tds rest w2)
+               ((Pair (Pair closed total) w3)
+                (Pair
+                  (Pair (if (is_closed_e tag) (+ closed 1) closed) (+ total 1))
+                  w3))))))))))
+
+(fn reach_target_engine_skip ((target (List Int)) (skip Int) (w World)) World
+  (match (resolve_closure target False w)
+    ((Pair srcs w2)
+     (match (src_of target srcs)
+       (None
+         (write (append_int "SKIP (cannot read) " (append_int target (nl))) w2))
+       ((Some tsrc)
+        (match (read_all tsrc)
+          (None
+            (write
+              (append_int "SKIP (does not lex) " (append_int target (nl)))
+              w2))
+          ((Some forms)
+           (match
+             (build_module_d
+               srcs
+               (Module Nil Nil Nil (FnTrie None Nil) Nil)
+               (prelude_ctors)
+               1)
+             ((BMFail _)
+              (write
+                (append_int
+                  "SKIP (module build fails) "
+                  (append_int target (nl)))
+                w2))
+             ((BMOk m)
+              (match (typedef_ctors (module_typedefs m))
+                (ctors
+                  (match (parse_decls tsrc ctors (granted_of target srcs))
+                    (None
+                      (write
+                        (append_int
+                          "SKIP (decl phase) "
+                          (append_int target (nl)))
+                        w2))
+                    ((Some tds)
+                     (match
+                       (reach_goals_engine
+                         m
+                         (file_rctx m target tsrc)
+                         target
+                         (theory_base_st m srcs ctors (sym_of_chars target))
+                         tds
+                         (rch_drop_goals
+                           skip
+                           (append_goals
+                             (opt_goals (claim_goals forms))
+                             (fulfills_goals
+                               forms
+                               (append_sexprs forms (iface_forms target srcs)))))
+                         w2)
+                       ((Pair (Pair closed total) w3)
+                        (write
+                          (append_int
+                            "TOTAL "
+                            (append_int
+                              target
+                              (append_int
+                                " "
+                                (append_int
+                                  (show_int closed)
+                                  (append_int
+                                    "/"
+                                    (append_int (show_int total) (nl)))))))
+                          w3))))))))))))))))
+
+(fn reach_target_engine ((target (List Int)) (w World)) World
+  (reach_target_engine_skip target 0 w))
+
+(fn reach_all_engine ((targets (List (List Int))) (w World)) World
+  (measure (struct targets))
+  (match targets
+    (Nil w)
+    ((Cons t rest) (reach_all_engine rest (reach_target_engine t w)))))
+
+;; continuation fires: each entry pairs a target with the number of
+;; leading goals to skip (= REACH lines already landed for that file).
+(fn reach_all_engine_skip ((targets (List (Pair (List Int) Int))) (w World))
+  World
+  (measure (struct targets))
+  (match targets
+    (Nil w)
+    ((Cons (Pair t skip) rest)
+     (reach_all_engine_skip rest (reach_target_engine_skip t skip w)))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       (Nil (exit 2 (write "usage: reach [--engine] <file.shard> ...\n" w1)))
+       ((Cons a rest)
+        (if (int_list_eq a "--engine")
+          (match rest
+            (Nil (exit 2 (write "usage: reach --engine <file.shard> ...\n" w1)))
+            (ts (exit 0 (reach_all_engine ts w1))))
+          (exit 0 (reach_all (Cons a rest) w1))))))))

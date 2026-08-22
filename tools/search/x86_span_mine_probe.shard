@@ -1,0 +1,401 @@
+;;; x86 SPAN mine instrument — LS3-ii, the real-material arm (SEARCH.md,
+;;; the lock-step arc; fork LS3-A's second slice).  Runtime is
+;;; UNVALIDATED — it fires on CI only:
+;;;   glab ci run -b more-search --variables ENGINE_RUN:1 \
+;;;     --variables ENGINE_RUN_TARGET:tools/search/x86_span_mine_probe.shard
+;;;
+;;; THE TASK: the six mined instances of
+;;; tools/search/tasks/x86_span_instances.shard (provenance
+;;; corpus-checked by x86_span_mine_pins.shard), each searched over its
+;;; OWN instruction alphabet — the honest v1 vocabulary: minimality is
+;;; claimed over exactly the target's distinct instructions.  Per
+;;; instance: checked A* find at cap = target length (the target itself
+;;; is the witness gate), native fingerprint replay of the winner,
+;;; checked EMPTY one below the winner (the minimality record), and for
+;;; strictly-shorter winners the phase-2 piece theorem through the
+;;; proofgen moves + the peephole citation pool.  A find whose theorem
+;;; does not close is REPORTED as a candidate, never accepted — per the
+;;; ratified fork LS3-B, the pool grows on MEASURED refusals (LS3-iii),
+;;; not here.
+;;;
+;;; THE HAND-DERIVED STORY (expected lengths pinned in-driver; a drifted
+;;; instance fails loudly instead of printing a stale claim):
+;;;   I1 [mov32 RAX RAX; and RAX 255]  -> FOUND len 1 ([and RAX 255]:
+;;;      (x & 2^32-1) & 255 = x & 255), EMPTY at 0; ACCEPTED since
+;;;      LS3-iii: the piece theorem closes by citing
+;;;      xseq_mov32_byte_mask_absorbs (grown on this instance's
+;;;      measured LS3-ii refusal).  File 3's low-32 parts exceed 255,
+;;;      so the bare truncation cannot fingerprint-alias the target.
+;;;   I2 [mov RAX 0; mov RAX R8]       -> FOUND len 1 ([mov RAX R8]:
+;;;      the constant store is dead), EMPTY at 0; ACCEPTED since
+;;;      LS3-iii by citing xseq_movri_movrr_dead (same story).
+;;;   I3 [xor RAX R15; mov R15 RAX]    -> MINIMAL at 2 (both registers
+;;;      end equal to RAX^R15; no single instruction writes both).
+;;;   I4 [add32 R12 1; mul32 R15 256]  -> MINIMAL at 2 (independent
+;;;      effects on two registers).
+;;;   I5 [add32 R15 RAX; add32 R12 1; mul32 R15 256] -> MINIMAL at 3
+;;;      (three effects; no two-instruction cover in its alphabet).
+;;;   I6 [mov R15 R8; ror32 R15 25]    -> MINIMAL at 2 (no
+;;;      rotate-from-source instruction exists).
+;;;
+;;; Expected report (one line per instance + the summary):
+;;;   X86-SPAN-MINE I1 TARGET-LEN-2 FOUND-LEN-1 EMPTY-AT-0
+;;;     IMPROVED PROOF-CITE-xseq_mov32_byte_mask_absorbs CERT-FP-OK
+;;;   X86-SPAN-MINE I2 TARGET-LEN-2 FOUND-LEN-1 EMPTY-AT-0
+;;;     IMPROVED PROOF-CITE-xseq_movri_movrr_dead CERT-FP-OK
+;;;   X86-SPAN-MINE I3..I6 TARGET-LEN-n FOUND-LEN-n EMPTY-AT-(n-1)
+;;;     MINIMAL CERT-FP-OK
+;;;   X86-SPAN-MINE LS3B OK IMPROVED-2 CANDIDATE-0 MINIMAL-4
+;;;
+;;; (LS3-ii's first fire measured both improvements as honest
+;;; PROOF-REFUSED under the two-lemma xor pool; LS3-iii grew the pool
+;;; with exactly the two refused laws — the ratified
+;;; growth-on-measured-refusals loop closing once.)
+
+(import "x86_span_probe.shard")
+(import "tasks/x86_span_instances.shard")
+(import "../../models/x86/peephole.shard")
+
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel proof Theory))
+(use (:: kernel checker Sequent))
+(use (:: kernel reader *))
+(use (:: kernel loader *))
+(use (:: kernel driver *))
+(use (:: meta proofgen *))
+(use (:: tools search superpose *))
+(use (:: std mem Mem))
+(use (:: models x86 x86 *))
+(use (:: models x86 peephole xseq_movri_movrr_dead))
+(use (:: models x86 peephole xseq_mov32_byte_mask_absorbs))
+(use (:: tools search tasks x86_span_model *))
+(use (:: tools search tasks x86_span_instances *))
+(use (:: tools search x86_span_probe *))
+
+(fn xsm_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "X86-SPAN-MINE FAIL " (append_int msg "\n")) w)))
+
+(type XsmInst (XsmInst (List Int) (List XInstr) Int))
+; label, target span, hand-derived expected minimum length
+
+(fn xsm_instances () (List XsmInst)
+  (list
+    (XsmInst "I1" (xsi_1) 1)
+    (XsmInst "I2" (xsi_2) 1)
+    (XsmInst "I3" (xsi_3) 2)
+    (XsmInst "I4" (xsi_4) 2)
+    (XsmInst "I5" (xsi_5) 3)
+    (XsmInst "I6" (xsi_6) 2)))
+
+;; Verdict counters: improved / candidate (refused) / minimal.
+(type XsmCounts (XsmCounts Int Int Int))
+
+(fn xsm_report
+  ((label (List Int)) (tlen Int) (flen Int) (verdict (List Int)) (w World))
+  World
+  (write
+    (append_int
+      "X86-SPAN-MINE "
+      (append_int
+        label
+        (append_int
+          " TARGET-LEN-"
+          (append_int
+            (show_int tlen)
+            (append_int
+              " FOUND-LEN-"
+              (append_int
+                (show_int flen)
+                (append_int
+                  " EMPTY-AT-"
+                  (append_int
+                    (show_int (- flen 1))
+                    (append_int " " (append_int verdict " CERT-FP-OK\n"))))))))))
+    w))
+
+;; The phase-2 attempt on a strictly-shorter winner; returns the
+;; verdict text + updated counts.  Refusal is REPORTED, never fatal.
+(fn xsm_phase2
+  ((m Module)
+   (rctx RCtx)
+   (th Theory)
+   (pool (List (Pair Symbol Int)))
+   (target (List XInstr))
+   (found (List XInstr))
+   (counts XsmCounts))
+  (Pair (List Int) XsmCounts)
+  (match counts
+    ((XsmCounts imp cand mini)
+     (match (xspp_goal_sx target found)
+       (None
+         (Pair "IMPROVE-CANDIDATE PROOF-NOGOAL" (XsmCounts imp (+ cand 1) mini)))
+       ((Some gsx)
+        (match (parse_goal_r m rctx gsx)
+          (None
+            (Pair
+              "IMPROVE-CANDIDATE PROOF-PARSEFAIL"
+              (XsmCounts imp (+ cand 1) mini)))
+          ((Some g)
+           (match
+             (xspp_attempt
+               m
+               rctx
+               th
+               (lift_sequent g)
+               pool
+               (xspp_nregs (xspp_goal_regs target found)))
+             (tag
+               (if (int_list_eq tag "REFUSED")
+                 (Pair
+                   "IMPROVE-CANDIDATE PROOF-REFUSED"
+                   (XsmCounts imp (+ cand 1) mini))
+                 (Pair
+                   (append_int "IMPROVED PROOF-" tag)
+                   (XsmCounts (+ imp 1) cand mini))))))))))))
+
+(fn xsm_verdict
+  ((m Module)
+   (rctx RCtx)
+   (th Theory)
+   (pool (List (Pair Symbol Int)))
+   (label (List Int))
+   (target (List XInstr))
+   (found (List XInstr))
+   (counts XsmCounts)
+   (w World))
+  (Pair (Option XsmCounts) World)
+  (let ((tlen (xsp_len target)))
+    (let ((flen (xsp_len found)))
+      (if (lt flen tlen)
+        (match (xsm_phase2 m rctx th pool target found counts)
+          ((Pair verdict counts2)
+           (Pair (Some counts2) (xsm_report label tlen flen verdict w))))
+        (match counts
+          ((XsmCounts imp cand mini)
+           (Pair
+             (Some (XsmCounts imp cand (+ mini 1)))
+             (xsm_report label tlen flen "MINIMAL" w))))))))
+
+;; One instance: alphabet -> witness-gated find -> decode -> native
+;; replay -> expected-length pin -> checked EMPTY below the winner ->
+;; verdict.  Every stage but the phase-2 proof is fatal on failure.
+(fn xsm_empty_then_verdict
+  ((m Module)
+   (rctx RCtx)
+   (th Theory)
+   (pool (List (Pair Symbol Int)))
+   (label (List Int))
+   (target (List XInstr))
+   (found (List XInstr))
+   (goalfp (List Int))
+   (ts (List Expr))
+   (counts XsmCounts)
+   (w World))
+  (Pair (Option XsmCounts) World)
+  (match (xspp_run_astar_t m goalfp (- (xsp_len found) 1) ts)
+    ((SuFindEmpty _ _ _ eforks _ esteps _ _ _)
+     (xsm_verdict
+       m
+       rctx
+       th
+       pool
+       label
+       target
+       found
+       counts
+       (xspp_log label "BOUND-EMPTY" esteps eforks w)))
+    ((SuFindFound _ _ _ eforks _ esteps _ _ _)
+     (Pair None (xspp_log label "BOUND-FOUND (order anomaly)" esteps eforks w)))
+    ((SuFindBudget _ _ _ eforks _ esteps _ _ _)
+     (Pair None (xspp_log label "BOUND-BUDGET" esteps eforks w)))
+    ((SuFindErr msg)
+     (Pair None (write (append_int label (append_int " BOUND-ERR " msg)) w)))))
+
+(fn xsm_found
+  ((m Module)
+   (rctx RCtx)
+   (th Theory)
+   (pool (List (Pair Symbol Int)))
+   (label (List Int))
+   (target (List XInstr))
+   (want_len Int)
+   (goalfp (List Int))
+   (ts (List Expr))
+   (rep Expr)
+   (counts XsmCounts)
+   (w World))
+  (Pair (Option XsmCounts) World)
+  (match (xspp_decode rep)
+    (None
+      (Pair None (write (append_int label " undecodable representative\n") w)))
+    ((Some found)
+     (if (xsp_ints_eq (xspp_fp (xsp_len target) found) goalfp)
+       (if (int_eq (xsp_len found) want_len)
+         (xsm_empty_then_verdict m rctx th pool label target found goalfp ts
+           counts w)
+         (Pair
+           None
+           (write
+             (append_int
+               label
+               " found length is not the hand-derived minimum\n")
+             w)))
+       (Pair None (write (append_int label " fingerprint replay mismatch\n") w))))))
+
+(fn xsm_one
+  ((m Module)
+   (rctx RCtx)
+   (th Theory)
+   (pool (List (Pair Symbol Int)))
+   (inst XsmInst)
+   (counts XsmCounts)
+   (w World))
+  (Pair (Option XsmCounts) World)
+  (match inst
+    ((XsmInst label target want_len)
+     (match (xspp_alpha_templates (xspp_alphabet target))
+       (None (Pair None (write (append_int label " unsupported species\n") w)))
+       ((Some ts)
+        (match
+          (xspp_run_astar_t
+            m
+            (xspp_fp (xsp_len target) target)
+            (xsp_len target)
+            ts)
+          ((SuFindErr msg)
+           (Pair
+             None
+             (write (append_int label (append_int " FIND-ERR " msg)) w)))
+          ((SuFindEmpty _ _ _ forks _ steps _ _ _)
+           (Pair
+             None
+             (xspp_log label "FIND-EMPTY (witness gate broken)" steps forks w)))
+          ((SuFindBudget _ _ _ forks _ steps _ _ _)
+           (Pair None (xspp_log label "FIND-BUDGET" steps forks w)))
+          ((SuFindFound _ _ _ forks _ steps _ rep _)
+           (xsm_found
+             m
+             rctx
+             th
+             pool
+             label
+             target
+             want_len
+             (xspp_fp (xsp_len target) target)
+             ts
+             rep
+             counts
+             (xspp_log label "FOUND" steps forks w)))))))))
+
+(fn xsm_fold
+  ((m Module)
+   (rctx RCtx)
+   (th Theory)
+   (pool (List (Pair Symbol Int)))
+   (insts (List XsmInst))
+   (counts XsmCounts)
+   (w World))
+  (Pair (Option XsmCounts) World)
+  (measure (struct insts))
+  (match insts
+    (Nil (Pair (Some counts) w))
+    ((Cons inst rest)
+     (match (xsm_one m rctx th pool inst counts w)
+       ((Pair None w2) (Pair None w2))
+       ((Pair (Some counts2) w2) (xsm_fold m rctx th pool rest counts2 w2))))))
+
+(fn xsm_summary ((counts XsmCounts) (w World)) World
+  (match counts
+    ((XsmCounts imp cand mini)
+     (write
+       (append_int
+         "X86-SPAN-MINE LS3B OK IMPROVED-"
+         (append_int
+           (show_int imp)
+           (append_int
+             " CANDIDATE-"
+             (append_int
+               (show_int cand)
+               (append_int " MINIMAL-" (append_int (show_int mini) "\n"))))))
+       w))))
+
+(fn xsm_stage2 ((m Module) (msrc (List Int)) (psrc (List Int)) (w World)) World
+  (match (read_all psrc)
+    (None (xsm_fail "peephole source does not lex" w))
+    ((Some pforms)
+     (match
+       (xspp_pool_build
+         m
+         (file_rctx m (xspp_peep_file) psrc)
+         (xspp_pool)
+         pforms)
+       (None (xsm_fail "citation pool construction failed" w))
+       ((Some (Pair th pool))
+        (match
+          (xsm_fold
+            m
+            (file_rctx m (xspp_model_file) msrc)
+            th
+            pool
+            (xsm_instances)
+            (XsmCounts 0 0 0)
+            w)
+          ((Pair None w2) (xsm_fail "instance failed" w2))
+          ((Pair (Some counts) w2) (xsm_summary counts w2))))))))
+
+(fn xsm_run ((m Module) (srcs (List SrcEntry)) (w World)) World
+  (match (xspp_src_of (xspp_model_file) srcs)
+    (None (xsm_fail "cannot read the model source" w))
+    ((Some msrc)
+     (match (xspp_src_of (xspp_peep_file) srcs)
+       (None (xsm_fail "cannot read the peephole source" w))
+       ((Some psrc) (xsm_stage2 m msrc psrc w))))))
+
+(fn main ((w World)) World
+  (match (xspp_load w)
+    ((Pair (XsppLoadErr msg) w1) (xsm_fail msg w1))
+    ((Pair (XsppLoadOk m srcs) w1) (exit 0 (xsm_run m srcs w1)))))
+
+;; ---- instance piece pins (the LS3-iii accepted improvements) --------------
+;; Byte-for-byte the theorems the driver constructs for I1/I2 — the
+;; corpus checks the goal schema and the grown pool's citability every
+;; run, exactly as the seed probe pins its xor instances.
+
+(claim xsm_i1_piece_pin
+  (goal ((f Nat) (m XModule) (tail (List XInstr)) (rs Regs) (mem Mem))
+    ((= (le 0 (rget rs RAX)) True))
+    (=
+      (xeval_seq
+        (S (S (S f)))
+        m
+        (Cons (XMovRR32 RAX RAX) (Cons (XBin XAnd RAX (SImm 255)) tail))
+        rs
+        mem)
+      (xeval_seq (S (S f)) m (Cons (XBin XAnd RAX (SImm 255)) tail) rs mem)))
+  (rewrite-with
+    (lemma xseq_mov32_byte_mask_absorbs)
+    lr
+    lhs
+    ()
+    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+    refl))
+
+(claim xsm_i2_piece_pin
+  (goal ((f Nat) (m XModule) (tail (List XInstr)) (rs Regs) (mem Mem))
+    ((= (le 0 (rget rs RAX)) True) (= (le 0 (rget rs R8)) True))
+    (=
+      (xeval_seq
+        (S (S (S f)))
+        m
+        (Cons (XMovRI RAX 0) (Cons (XMovRR RAX R8) tail))
+        rs
+        mem)
+      (xeval_seq (S (S f)) m (Cons (XMovRR RAX R8) tail) rs mem)))
+  (rewrite-with
+    (lemma xseq_movri_movrr_dead)
+    lr
+    lhs
+    ()
+    ((steps ((compute both)) refl))
+    refl))
