@@ -1753,3 +1753,183 @@ def stmt_set():
 """
 if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "stmt":
     sys.stdout.write(stmt_set())
+
+def stmt_loadw():
+    e="(IpLoadW i ae)"
+    ADDR="(+ fp (* 8 i))"
+    TE=f"(fe_tr fp nl 0 ae lc {IM} mlo slo)"
+    ME=f"(fp_mem mem0 (fp_app {TE} psx))"
+    RUNE=RUN('ie')
+    VAL=f"(load_le (iw8) {IM} ad)"
+    sl=Slots(["p0","p1","p2","p3","p4","p5","p6","p7","hie","hsome","his","hv","hg0","hg1","hset","hn1","hn2","hlc","hmem"])
+    def c(m,G=1): return sl.cert(m,G)
+    lines=[]
+    for nm in ["hdisc","hlocs","hxlo","hmlo","hslo","hal","hnl","hd0","hslo0","hhi"]:
+        lines.append(ctx_have(nm, "0")); sl.add(nm)
+    lines.append("    (have hnn (= (le 0 (ilen lc)) True) (rewrite-with (lemma ilen_nonneg) lr lhs () () refl))"); sl.add("hnn")
+    lines.append("    (have hdep (= (le 0 (ixf_dep ae)) True) (rewrite-with (lemma ixf_dep_nonneg) lr lhs () () refl))"); sl.add("hdep")
+    lines.append(f"    (have hi0 (= (le 0 i) True) (rewrite-with (lemma ilset_lo) lr lhs ((inst ls lc) (inst v {VAL}) (inst ls2 lcs)) ((steps ((rewrite (premise hset) lr lhs true ())) refl)) refl))"); sl.add("hi0")
+    lines.append(f"    (have hii (= (lt i (ilen lc)) True) (rewrite-with (lemma ilset_hi) lr lhs ((inst v {VAL}) (inst ls2 lcs)) ((steps ((rewrite (premise hset) lr lhs true ())) refl)) refl))"); sl.add("hii")
+    lines.append(f"    (have hxl (= (xmemlo_of m) mlo) (by arith {sl.cert2({'hxlo':-1},{'hxlo':1})}))"); sl.add("hxl")
+    lines.append(f"    (have hfp0 (= (le 0 fp) True) (by arith {c({'hslo':1,'hslo0':1})}))"); sl.add("hfp0")
+    lines.append(f"    (have hwlo (= (le (xmemlo_of m) {ADDR}) True) (steps ((rewrite (premise hxl) lr lhs true ())) (by arith {c({'hmlo':1,'hslo':1,'hi0':8})})))"); sl.add("hwlo")
+    lines.append(f"    (have hwhi (= (le (+ {ADDR} 8) (xmemhi_of m)) True) (by arith {c({'p4':1,'hii':8,'hnl':8,'hdep':8})}))"); sl.add("hwhi")
+    lines.append(f"    (have hsm (= (lt (+ {ADDR} 8) 18446744073709551616) True) (by arith {c({'hwhi':1,'hhi':1})}))"); sl.add("hsm")
+    lines.append(f"    (have hp4 (= (le (+ fp (* 8 (+ nl (+ 0 (ixf_dep ae))))) (xmemhi_of m)) True) (by arith {c({'p4':1})}))"); sl.add("hp4")
+    lines.append(f"    (have hp5 (= (le (ixf_ecost ae) c) True) (by arith {c({'p5':1})}))"); sl.add("hp5")
+    lines.append(f"    (have hexp (= {RUNE} (fe_out ad {RS} {RUNE} {ME})) (rewrite-with (lemma fe_sound) lr lhs ((inst e ae) (inst nl nl) (inst d 0) (inst lc lc) (inst mlo mlo) (inst slo slo) (inst v ad)) ((steps ((rewrite (premise hie) lr lhs true ())) refl) (steps ((rewrite (premise hv) lr lhs true ())) refl) (steps ((rewrite (premise 2) lr lhs true ())) refl) (steps ((rewrite (premise 3) lr lhs true ())) refl) (steps ((rewrite (premise hp4) lr lhs true ())) refl) (steps ((rewrite (premise hp5) lr lhs true ())) refl)) refl))"); sl.add("hexp")
+    lines.append("    (have hlen (= (xil ie) (ixf_elen ae)) (rewrite-with (lemma fe_len) lr lhs ((inst nl nl) (inst d 0) (inst e ae)) ((steps ((rewrite (premise hie) lr lhs true ())) refl)) refl))"); sl.add("hlen")
+    lines.append("    (have hcost (= (ixf_ecost ae) (+ (ixf_elen ae) 5)) (steps ((unfold ixf_ecost lhs)) refl))"); sl.add("hcost")
+    lines.append(f"    (have hle (= (le (xil ie) c) True) (by arith {c({'p5':1,'hlen':-1,'hcost':1})}))"); sl.add("hle")
+    lines.append(f"    (have hld1 (= (lt 0 (- c (xil ie))) True) (by arith {c({'p5':1,'hlen':-1,'hcost':1})}))"); sl.add("hld1")
+    lines.append("    (have hxs (= (xil (ixf_st i)) 3) (steps ((compute lhs)) refl))"); sl.add("hxs")
+    lines.append(f"    (have hst3 (= (le 3 (- (- c (xil ie)) 1)) True) (by arith {c({'p5':1,'hlen':-1,'hcost':1})}))"); sl.add("hst3")
+    lines.append(f"    (have hst4 (= (le 4 (- (- c (xil ie)) 1)) True) (by arith {c({'p5':1,'hlen':-1,'hcost':1})}))"); sl.add("hst4")
+    lines.append(f"    (have hnil (= (lt 0 (- (- (- c (xil ie)) 1) 3)) True) (by arith {c({'p5':1,'hlen':-1,'hcost':1})}))"); sl.add("hnil")
+    # the load's window guards and the value bridge
+    lines.append(f"    (have hglo (= (le (xmemlo_of m) ad) True) (steps ((rewrite (premise hxl) lr lhs true ())) (by arith {c({'hg0':1})})))"); sl.add("hglo")
+    lines.append(f"    (have hghi (= (le (+ ad 8) (xmemhi_of m)) True) (by arith {c({'hg1':1,'hslo':1,'p4':1,'hnl':8,'hnn':8,'hdep':8})}))"); sl.add("hghi")
+    lines.append(f"    (have hnd0 (= (le 0 (+ nl 0)) True) (by arith {c({'hnl':1,'hnn':1})}))"); sl.add("hnd0")
+    lines.append(f"    (have hdisca (= (fp_disc slo (fp_app {TE} psx)) True) (rewrite-with (lemma fe_tr_disc) lr lhs ((inst e ae)) ((steps ((rewrite (premise hdisc) lr lhs true ())) refl) (steps ((rewrite (premise hslo) lr lhs true ())) refl) (steps ((rewrite (premise hal) lr lhs true ())) refl) (steps ((rewrite (premise hnd0) lr lhs true ())) refl)) refl))"); sl.add("hdisca")
+    lines.append("    (have hw8i (= (int_of_nat (xw8)) 8) (rewrite-with (lemma w8_int) lr lhs () () refl))"); sl.add("hw8i")
+    lines.append(f"    (have hbelow (= (le (+ ad (int_of_nat (xw8))) slo) True) (steps ((rewrite (premise hw8i) lr lhs true ())) (by arith {c({'hg1':1})})))"); sl.add("hbelow")
+    lines.append("    (have hiw (= (xw8) (iw8)) (steps ((compute both)) refl))"); sl.add("hiw")
+    lines.append(f"""    (have hld (= (load_le (xw8) {ME} ad) {VAL})
+      (chain
+        (rewrite-with (lemma fp_below_lw) lr lhs ((inst slo slo)) ((steps ((rewrite (premise hdisca) lr lhs true ())) refl) (steps ((rewrite (premise hbelow) lr lhs true ())) refl)))
+        (rewrite-with (lemma fe_tr_below) lr lhs ((inst e ae)) ((steps ((rewrite (premise hslo) lr lhs true ())) refl) (steps ((rewrite (premise hnd0) lr lhs true ())) refl)))
+        (steps ((rewrite (premise hiw) lr lhs true ())) refl)))"""); sl.add("hld")
+    acc_rs = "".join(f" (rewrite (lemma {f}_of_mk) lr lhs true ())" for f in ["rcx","rbx","rbp","rsi","rdi","r8","r9","r12","r13","r14","r15"])
+    RSF=f"(MkRegs {VAL} rcx (rdx_of (xo_regs {RUNE})) rbx rbp rsi di r8 r9 {ADDR} (r11_of (xo_regs {RUNE})) r12 r13 dep fp)"
+    MF=f"(fp_mem mem0 (Cons (FWord {ADDR} {VAL}) (fp_app {TE} psx)))"
+    lines.append(f"""    (have hrun (= {SRUN('is')} (Some (XNorm {RSF} {MF})))
+      (chain
+        (steps ((rewrite (premise his) rl lhs true ())))
+        (rewrite-with (lemma xseq_app) lr lhs () ((steps ((rewrite (premise hle) lr lhs true ())) refl)))
+        (steps ((rewrite (premise hexp) lr lhs true ()) (unfold fe_out lhs) (reduce lhs) (unfold xcont lhs) (reduce lhs){acc_rs}))
+        (rewrite-with (lemma xt_peel) lr lhs () ((steps ((rewrite (premise hld1) lr lhs true ())) refl)))
+        (steps ((unfold xeval_seq lhs) (reduce lhs) (unfold xeval_instr lhs) (reduce lhs) (compute lhs {STOPS_L}) (rewrite (premise hglo) lr lhs true ()) (reduce lhs) (compute lhs {STOPS_L}) (rewrite (premise hghi) lr lhs true ()) (reduce lhs) (compute lhs {STOPS_L}) (rewrite (premise hld) lr lhs true ())))
+        (rewrite-with (lemma xseq_app) lr lhs () ((steps ((rewrite (premise hxs) lr lhs true ()) (rewrite (premise hst3) lr lhs true ())) refl)))
+        (steps ((rewrite (premise hxs) lr lhs true ())))
+        (rewrite-with (lemma fe_st_run) lr lhs () ((steps ((rewrite (premise hst4) lr lhs true ())) refl) (steps ((rewrite (premise hi0) lr lhs true ())) refl) (steps ((rewrite (premise hfp0) lr lhs true ())) refl) (steps ((rewrite (premise hsm) lr lhs true ())) refl) (steps ((rewrite (premise hwlo) lr lhs true ())) refl) (steps ((rewrite (premise hwhi) lr lhs true ())) refl)))
+        (steps ((rewrite (lemma fp_mem_cons_w) lr lhs true ()) (unfold xcont lhs) (reduce lhs)))
+        (rewrite-with (lemma xt_peel) lr lhs () ((steps ((rewrite (premise hnil) lr lhs true ())) refl)))
+        (steps ((unfold xeval_seq lhs) (reduce lhs)) refl)))"""); sl.add("hrun")
+    acc = "\n".join(f"       (rewrite (lemma {f}_of_mk) lr rhs true ())" for f in ACC15)
+    body="\n".join(lines)
+    RG0="(rewrite (premise hg0) lr rhs true ())"; RG1="(rewrite (premise hg1) lr rhs true ())"
+    def absn(rws):
+        items=["(rewrite (premise 1) rl rhs true ())","(unfold ipstmt rhs)","(reduce rhs)","(rewrite (premise hv) lr rhs true ())","(reduce rhs)"]
+        for r in rws: items+=[r,"(reduce rhs)"]
+        return f"""(chain
+           (have hn (= (Some IpTrap) (Some (IpNorm lc2 mem2))) (steps ({' '.join(items)}) refl))
+           (inject (premise hn) (hx))
+           (absurd (premise hx)))"""
+    return f"""(claim fs_step_loadw
+  (goal
+    ((i Int) (ae IExp) (ie (List XInstr)) (ad Int) {SGOALVARS})
+    ((= (ixf_stmts nl own fail_ix (Cons {e} Nil)) (Some is))
+     (= {IMPST(e)} (Some (IpNorm lc2 mem2)))
+     (= (fe_ctx m mlo slo fp nl 0 lc psx) True)
+     (= (ixf_cb ae) True)
+     (= (le (+ fp (* 8 (+ nl (ixf_dep ae)))) (xmemhi_of m)) True)
+     (= (le (+ (ixf_ecost ae) 5) c) True)
+     (= (ixf_exp nl 0 ae) (Some ie))
+     (= (iexp ae lc {IM} mlo slo) (Some ad)))
+    (= {SRUN('is')} (fs_out {RS} {SRUN('is')} {MTW(e)})))
+  (chain
+    (have hie (= (ixf_exp nl 0 ae) (Some ie)) (steps ((rewrite (premise 6) lr lhs true ())) refl))
+    (have hsome (= (Some (ix_app ie (Cons (XMem (XMLoad64 RAX (AReg RAX))) (ix_app (ixf_st i) Nil)))) (Some is))
+      (steps ((rewrite (premise 0) rl rhs true ()) (unfold ixf_stmts rhs) (reduce rhs) (unfold ixf_stmts rhs) (reduce rhs) (rewrite (premise hie) lr rhs true ()) (reduce rhs)) refl))
+    (inject (premise hsome) (his))
+    (have hv (= (iexp ae lc {IM} mlo slo) (Some ad)) (steps ((rewrite (premise 7) lr lhs true ())) refl))
+    (case-on (le mlo ad) Bool
+      ((case False (chain {cap('hg0','(= (le mlo ad) False)')} {absn([RG0])}))
+       (case True
+         (chain
+           {cap('hg0','(= (le mlo ad) True)')}
+           (case-on (le (+ ad 8) slo) Bool
+             ((case False (chain {cap('hg1','(= (le (+ ad 8) slo) False)')} {absn([RG0,RG1])}))
+              (case True
+                (chain
+                  {cap('hg1','(= (le (+ ad 8) slo) True)')}
+                  (case-on (ilset lc i {VAL}) Option
+                    ((case None
+                       (chain
+                         (have hset (= (ilset lc i {VAL}) None) (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                         {absn([RG0,RG1,'(rewrite (premise hset) lr rhs true ())'])}))
+                     (case Some
+                       (lcs)
+                       (chain
+                         (have hset (= (ilset lc i {VAL}) (Some lcs)) (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                         (have hn1 (= (Some (IpNorm lcs {IM})) (Some (IpNorm lc2 mem2)))
+                           (steps ((rewrite (premise 1) rl rhs true ()) (unfold ipstmt rhs) (reduce rhs) (rewrite (premise hv) lr rhs true ()) (reduce rhs) {RG0} (reduce rhs) {RG1} (reduce rhs) (rewrite (premise hset) lr rhs true ()) (reduce rhs)) refl))
+                         (inject (premise hn1) (hn2))
+                         (inject (premise hn2) (hlc hmem))
+{body}
+                         (steps
+                           ((rewrite (premise hrun) lr both true ())
+                            (rewrite (lemma fs_out_of_norm) lr rhs true ())
+{acc}
+                            (unfold ips_tr rhs)
+                            (reduce rhs)
+                            (rewrite (premise hv) lr rhs true ())
+                            (reduce rhs)
+                            (unfold fp_app rhs)
+                            (reduce rhs))
+                           refl)))))))))))))))
+"""
+
+def stmt_fail():
+    return f"""(claim fs_step_fail
+  (goal
+    ((fam IFam) (nl Int) (own Int) (fail_ix Int) (is (List XInstr)) (c Int) (g Nat) (m XModule) (rs Regs) (xm Mem))
+    ((= (ixf_stmts nl own fail_ix (Cons (IpFail fam) Nil)) (Some is))
+     (= (xfunc_at (xfuncs_of m) fail_ix) (Some (MkXFunc 0 (list (XMovRI RAX 60) XSyscall))))
+     (= (le 8 c) True))
+    (= (xeval_seq (xt c g) m is rs xm) (Some XTrap)))
+  (chain
+    (have hsome (= (Some (Cons (XMovRI RDI (match fam (FOverflow 70) (FOom 71) (FStack 72))) (Cons (XCall fail_ix) Nil))) (Some is))
+      (steps ((rewrite (premise 0) rl rhs true ()) (unfold ixf_stmts rhs) (reduce rhs) (unfold ixf_stmts rhs) (reduce rhs)) refl))
+    (inject (premise hsome) (his))
+    (rewrite-with (lemma xt_peel8) lr lhs () ((steps ((rewrite (premise 2) lr lhs true ())) refl)))
+    (steps
+      ((rewrite (premise his) rl lhs true ())
+       (compute lhs (stop xt xfunc_at xfuncs_of))
+       (rewrite (premise 1) lr lhs true ())
+       (compute lhs (stop xt)))
+      refl)))
+"""
+
+def stmt_unreach():
+    ADDR = "18446744073709547520"
+    RSL = "(MkRegs a0 rcx dx rbx rbp rsi di r8 r9 s10 s11 r12 r13 dep fp)"
+    def arm(tv, extra):
+        core = ["(rewrite (premise his) rl lhs true ())",
+                "(compute lhs (stop xt xmemlo_of xmemhi_of wrap64))",
+                "(rewrite (premise hw) lr lhs true ())",
+                "(rewrite (premise hlo) lr lhs true ())",
+                "(reduce lhs)",
+                "(compute lhs (stop xt xmemlo_of xmemhi_of))"] + extra
+        return ("(case " + tv + " (chain "
+                + "(have hlo (= (le (xmemlo_of m) " + ADDR + ") " + tv + ") (steps ((rewrite (hyp 0) lr lhs true ())) refl)) "
+                + "(steps (" + " ".join(core) + ") refl)))")
+    true_extra = ["(rewrite (premise hghi) lr lhs true ())","(reduce lhs)","(compute lhs (stop xt xmemlo_of xmemhi_of))"]
+    out = []
+    out.append("(claim fs_step_unreach")
+    out.append("  (goal")
+    out.append("    ((nl Int) (own Int) (fail_ix Int) (is (List XInstr)) (c Int) (g Nat) (m XModule) (mlo Int) (xm Mem) (a0 Int) (rcx Int) (dx Int) (rbx Int) (rbp Int) (rsi Int) (di Int) (r8 Int) (r9 Int) (s10 Int) (s11 Int) (r12 Int) (r13 Int) (dep Int) (fp Int))")
+    out.append("    ((= (ixf_stmts nl own fail_ix (Cons IpUnreach Nil)) (Some is)) (= (int_eq (xmemlo_of m) mlo) True) (= (le 0 mlo) True) (= (le (xmemhi_of m) 4294967296) True) (= (le 4 c) True))")
+    out.append("    (= (xeval_seq (xt c g) m is " + RSL + " xm) (Some XTrap)))")
+    out.append("  (chain")
+    out.append("    (have hsome (= (Some (Cons (XMovRI RAX " + ADDR + ") (Cons (XMem (XMLoad64 RAX (AReg RAX))) Nil))) (Some is)) (steps ((rewrite (premise 0) rl rhs true ()) (unfold ixf_stmts rhs) (reduce rhs) (unfold ixf_stmts rhs) (reduce rhs)) refl))")
+    out.append("    (inject (premise hsome) (his))")
+    out.append("    (have hghi (= (le 18446744073709547528 (xmemhi_of m)) False) (by arith (list 1 0 0 0 1 0 0 0)))")
+    out.append("    (have hw (= (wrap64 " + ADDR + ") " + ADDR + ") (chain (steps ((unfold wrap64 lhs))) (rewrite-with (lemma wrap64_id) lr lhs () ((by arith (list)) (by arith (list)))) refl))")
+    out.append("    (rewrite-with (lemma xt_peel4) lr lhs () ((steps ((rewrite (premise 4) lr lhs true ())) refl)))")
+    out.append("    (case-on (le (xmemlo_of m) " + ADDR + ") Bool")
+    out.append("      (" + arm("False", []) + " " + arm("True", true_extra) + "))))")
+    return "\n".join(out) + "\n\n"
+def step_lemmas_stmt():
+    # stmt_loadw / stmt_storew / stmt_store are A-3 part 2 (the word-load block lemma is owed)
+    return "\n".join([stmt_set(), stmt_fail(), stmt_unreach()])
