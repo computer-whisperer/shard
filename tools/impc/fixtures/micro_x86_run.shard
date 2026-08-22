@@ -1,0 +1,157 @@
+;;; tools/impc/fixtures/micro_x86_run.shard — the MODEL-LEVEL DIFFERENTIAL
+;;; of the frame tier (docs/COVERAGE.md C1c): every t_* wrapper of
+;;; micro.shard evaluated three ways — natively (the spec), through iprun
+;;; on impc's product (the call tier), and through the x86 model on the
+;;; frame tier's translation of that product (ixf_prog) — all three Ints
+;;; must agree. The imp ⊑ x86 oracle at the model, before any certificate
+;;; and before silicon. Prints PASS/FAIL per wrapper, exits 1 on any
+;;; mismatch; corpus-pinned with pin_run.
+;;;
+;;; Run: bin/shard_eval run tools/impc/fixtures/micro_x86_run.shard
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../kernel/term.shard")
+(use (:: kernel term show_int))
+(import "../../../std/mem")
+(use (:: std mem *))
+(import "../../../models/imp/imp.shard")
+(use (:: models imp imp *))
+(import "../../../models/imp/rt.shard")
+(use (:: models imp rt *))
+(import "../../../models/x86/x86.shard")
+(use (:: models x86 x86 *))
+(import "../../../models/imp/to_x86.shard")
+(use (:: models imp to_x86 *))
+(import "micro.shard")
+(use (:: tools impc fixtures micro *))
+(import "micro_ipc_out.shard")
+(use (:: tools impc fixtures micro_ipc_out *))
+
+(type World (World Int))
+
+(extern write ((bytes (List Int)) (w World)) World)
+
+(extern exit ((code Int) (w World)) World)
+
+;; the window [65536, 65536 + 2^20): runtime header at 65536, heap after it
+;; up to 65536 + 2^19, frames from there
+(fn win_hi () Int 1114112)
+
+(fn heap_lo () Int 65688)
+
+(fn heap_hi () Int 589824)
+
+(fn stack_lo () Int 589824)
+
+(fn prog () IpProg (micro_iprog 65536 (win_hi)))
+
+(fn fuel () Nat (ifnat 4000000))
+
+(fn decode ((v Int)) Int
+  (if (lt v 9223372036854775808) (ediv (- v 1) 2)
+  (ediv (- (- v 18446744073709551616) 1) 2)))
+
+;; --- the imp leg ------------------------------------------------------------------
+
+(fn run_imp ((k Int)) Int
+  (match (iprun (fuel) (prog) (rt_init_ix) (list (heap_lo) (heap_hi)) (mem_empty))
+    (None -1)
+    ((Some r0)
+     (match r0
+       ((IpRv _ m1)
+        (match (iprun (fuel) (prog) k Nil m1)
+          (None -1)
+          ((Some r)
+           (match r
+             ((IpRv v _) (decode v))
+             (IpRtrap -2)
+             ((IpRfailed fam)
+              (match fam
+                (FOverflow -11)
+                (FOom -12)
+                (FStack -13)))))))
+       (IpRtrap -2)
+       ((IpRfailed _) -3)))))
+
+;; --- the x86 leg ------------------------------------------------------------------
+
+;; the entry register file: FP = the stack base, everything else zero
+(fn entry_regs () Regs (rset (xregs0) R15 (stack_lo)))
+
+;; rt_init's arguments pre-written into the entry frame
+(fn init_mem () Mem
+  (store_le (xw8) (store_le (xw8) (mem_empty) (stack_lo) (heap_lo)) (+ (stack_lo) 8) (heap_hi)))
+
+(fn run_x86 ((k Int)) Int
+  (match (ixf_prog (prog))
+    (None -21)
+    ((Some xm)
+     (match (xrun_fn (fuel) xm (rt_init_ix) (entry_regs) (init_mem))
+       (None -22)
+       ((Some p0)
+        (match p0
+          ((Pair _ m1)
+           (match (xrun_fn (fuel) xm k (entry_regs) m1)
+             (None -23)
+             ((Some p)
+              (match p
+                ((Pair v _) (decode v))))))))))))
+
+;; --- the report -------------------------------------------------------------------
+
+(fn cat ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (cat t b)))))
+
+(type T (T (List Int) Int Int Int))
+
+(fn tests () (List T)
+  (list
+    (T "len" (t_len) (run_imp (t_len_ix)) (run_x86 (t_len_ix)))
+    (T "len0" (t_len0) (run_imp (t_len0_ix)) (run_x86 (t_len0_ix)))
+    (T "app" (t_app) (run_imp (t_app_ix)) (run_x86 (t_app_ix)))
+    (T "perim" (t_perim) (run_imp (t_perim_ix)) (run_x86 (t_perim_ix)))
+    (T "second" (t_second) (run_imp (t_second_ix)) (run_x86 (t_second_ix)))
+    (T "second_short" (t_second_short) (run_imp (t_second_short_ix)) (run_x86 (t_second_short_ix)))
+    (T "sumto" (t_sumto) (run_imp (t_sumto_ix)) (run_x86 (t_sumto_ix)))
+    (T "rev" (t_rev) (run_imp (t_rev_ix)) (run_x86 (t_rev_ix)))
+    (T "pick" (t_pick) (run_imp (t_pick_ix)) (run_x86 (t_pick_ix)))
+    (T "find" (t_find) (run_imp (t_find_ix)) (run_x86 (t_find_ix)))
+    (T "find_none" (t_find_none) (run_imp (t_find_none_ix)) (run_x86 (t_find_none_ix)))
+    (T "shapes" (t_shapes) (run_imp (t_shapes_ix)) (run_x86 (t_shapes_ix)))
+    (T "arith" (t_arith) (run_imp (t_arith_ix)) (run_x86 (t_arith_ix)))
+    (T "cmp" (t_cmp) (run_imp (t_cmp_ix)) (run_x86 (t_cmp_ix)))
+    (T "let" (t_let) (run_imp (t_let_ix)) (run_x86 (t_let_ix)))))
+
+(fn report ((ts (List T)) (fails Int) (w World)) World
+  (measure (struct ts))
+  (match ts
+    (Nil
+      (exit
+        (if (int_eq fails 0) 0 1)
+        (write (cat "FAIL rows: " (cat (show_int fails) "\n")) w)))
+    ((Cons t rest)
+     (match t
+       ((T name want imp x86)
+        (if (if (int_eq want imp) (int_eq want x86) False)
+          (report rest fails (write (cat "PASS frame " (cat name "\n")) w))
+          (report
+            rest
+            (+ fails 1)
+            (write
+              (cat
+                "FAIL frame "
+                (cat
+                  name
+                  (cat
+                    ": spec "
+                    (cat
+                      (show_int want)
+                      (cat
+                        " imp "
+                        (cat (show_int imp) (cat " x86 " (cat (show_int x86) "\n"))))))))
+              w))))))))
+
+(fn main ((w World)) World (report (tests) 0 w))

@@ -622,3 +622,37 @@ to bisect. NOT YET (C3's second half): the generated per-fn certificates
 x86 leg of the product (C1c: to_x86 over IpStmt with the caller-save
 convention, impgen's arms) is also still owed; v0 refuses ediv/mod/bit
 ops, symbols, externs, and packs no static data (P8).
+
+**C1c-1 — THE FRAME TIER: the x86 leg of the call tier, at the model
+(2026-08-22).** models/imp/to_x86.shard grows an additive section
+(`ixf_*`, 448/0): locals live in MEMORY — R15 is the frame pointer, local
+i is the word at [FP+8i], expression temporaries spill to slots past the
+locals, RAX/R10/R11/RDX are the only scratch; a call writes the
+arguments into the callee's frame, bumps FP by the caller's own size,
+XCalls, drops FP back (the callee owns the whole scratch file, so
+nothing is saved across calls — P5's caller-save convention
+degenerates to "nothing live in registers"); the callee's prologue
+zeroes its extras; `xparams` is 0 everywhere (arguments never travel in
+registers — a driver pre-writes the entry frame); Fail = RDI := 70 +
+family, XCall the exit shim appended as the last image fn; Unreach = a
+word load no window reaches. Comparisons materialize 0/1 through the
+fused-branch blocks; `IDiv`/`IRem` through RDX:RAX; shifts only at
+constant counts (impc emits nothing else). `ixf_prog : IpProg → Option
+XModule` gates on `ipwk_prog` first. REJECTED-because (recorded): reuse
+the base tier's register-home statement tier — it admits ≤12 locals and
+impc's products exceed that (len: 16), and every call would need
+save/restore of the live home file anyway; the memory-locals tier has
+ONE alignment relation for every statement and is what #25 later
+prices against. Cost recorded: every local access is three instructions
+because `Addr` carries no displacement — `(ADisp Reg Int)` is the named
+door. **The three-way differential** tools/impc/fixtures/micro_x86_run.shard
+(spec natively / iprun on the product / the x86 model on ixf_prog's
+translation) **agrees on all 15 wrappers** (`impc_micro_x86_run`), first
+run. impc's runtime base moved to 65536 (stock vm.mmap_min_addr) so one
+product serves the model and the ELF; the window is [65536, 65536+2^20)
+with the heap at +152 and frames from +2^19 (driver-chosen, not yet a
+product parameter — P4's address policy leaves the carve to the bin).
+Owed: C1c-2 the silicon leg (ELF + runner, Opus-delegated), C1c-3 the
+imp ⊑ x86 certificates for this tier (impgen's arms in the ratified
+dialect — with one uniform relation the validator shape of CERT.md §4 is
+the candidate).
