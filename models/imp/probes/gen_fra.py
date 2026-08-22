@@ -754,3 +754,290 @@ if __name__ == "__main__":
         splice()
     else:
         sys.stdout.write(emit({"fe_len": "fe_len", "twin": "twin_laws", "fe_band": "fe_band"}[arg]))
+
+# ---------------- the expression lemma's STEP LEMMAS (unary-tail family) ----------------
+# One lemma per constructor; the sub-run's IH is an explicit premise. Slot bookkeeping for
+# Farkas certs is done by a Slots tracker (premises then haves in order).
+
+RS = "(MkRegs a0 rcx dx rbx rbp rsi di r8 r9 s10 s11 r12 r13 dep fp)"
+XM = "(fp_mem mem0 psx)"
+IM = "(fp_mem mem0 (fbelow slo psx))"
+def RUN(ie): return f"(xeval_seq (xt c g) m {ie} {RS} {XM})"
+def MA(sub="a"): return f"(fp_mem mem0 (fp_app (fe_tr fp nl d {sub} lc {IM} mlo slo) psx))"
+def ME(e): return f"(fp_mem mem0 (fp_app (fe_tr fp nl d {e} lc {IM} mlo slo) psx))"
+GOALVARS = ("(nl Int) (d Int) (ie (List XInstr)) (lc (List Int)) (mem0 Mem) (psx (List FPatch)) "
+            "(mlo Int) (slo Int) (v Int) (c Int) (g Nat) (m XModule) (fp Int) (dep Int) "
+            "(a0 Int) (rcx Int) (dx Int) (rbx Int) (rbp Int) (rsi Int) (di Int) (r8 Int) (r9 Int) "
+            "(s10 Int) (s11 Int) (r12 Int) (r13 Int)")
+ACC14 = ["rcx","rdx","rbx","rbp","rsi","rdi","r8","r9","r10","r11","r12","r13","r14","r15"]
+STOPS_L = "(stop xt xo_regs xeval_seq fp_mem fbelow fe_tr fp_app rdx_of r10_of r11_of xil xmemlo_of xmemhi_of)"
+
+class Slots:
+    def __init__(self, premises):
+        self.names = list(premises)   # index i -> slot i+1
+    def add(self, name): self.names.append(name)
+    def cert(self, m, G=1):
+        l = [0]*(len(self.names)+1); l[0]=G
+        for k,v in m.items():
+            l[self.names.index(k)+1] = v
+        return "(list " + " ".join(str(x) for x in l) + ")"
+    def cert2(self, le, ge):
+        return "(list " + self.cert(le) + " " + self.cert(ge) + ")"
+
+def common_premises(e):
+    return f"""((= (ixf_exp nl d {e}) (Some ie))
+     (= (iexp {e} lc {IM} mlo slo) (Some v))
+     (= (fe_ctx m mlo slo fp nl d lc psx) True)
+     (= (ixf_cb {e}) True)
+     (= (le (+ fp (* 8 (+ nl (+ d (ixf_dep {e}))))) (xmemhi_of m)) True)
+     (= (le (ixf_ecost {e}) c) True)"""
+
+def ih_premises(sub="a", iesub="ia", vsub="va"):
+    return f"""     (= (ixf_exp nl d {sub}) (Some {iesub}))
+     (= (iexp {sub} lc {IM} mlo slo) (Some {vsub}))
+     (= {RUN(iesub)} (fe_out {vsub} {RS} {RUN(iesub)} {MA(sub)}))"""
+
+def conclusion(e):
+    return f"""    (=
+      {RUN('ie')}
+      (fe_out v {RS} {RUN('ie')} {ME(e)})))"""
+
+def hrun_rhs(rax, mem, sub_run, extra_fields=None):
+    """the re-spelled run: RAX := rax, the scratch as projections of the sub-run"""
+    f = extra_fields or {}
+    fields = dict(rdx=f"(rdx_of (xo_regs {sub_run}))", r10=f"(r10_of (xo_regs {sub_run}))", r11=f"(r11_of (xo_regs {sub_run}))")
+    fields.update(f)
+    return (f"(Some (XNorm (MkRegs {rax} rcx {fields['rdx']} rbx rbp rsi di r8 r9 {fields['r10']} {fields['r11']} r12 r13 dep fp) {mem}))")
+
+def tail_steps(n_instr, tail_extra=None):
+    """unfold/reduce choreography for n straight-line tail instructions then Nil;
+    tail_extra = rewrites inserted after the FIRST instruction's compute (window guards etc.)"""
+    items=[]
+    for i in range(n_instr):
+        items += ["(unfold xeval_seq lhs)","(reduce lhs)","(unfold xeval_instr lhs)","(reduce lhs)",f"(compute lhs {STOPS_L})"]
+        if i == 0 and tail_extra: items += tail_extra
+        items += ["(reduce lhs)"]
+    items += ["(unfold xeval_seq lhs)","(reduce lhs)",f"(compute lhs {STOPS_L})"]
+    return items
+
+def closing(extra_rhs_rewrites):
+    acc = "\n".join(f"       (rewrite (lemma {f}_of_mk) lr rhs true ())" for f in ACC14)
+    ex = "\n".join("       "+r for r in extra_rhs_rewrites)
+    return f"""    (steps
+      ((rewrite (premise hrun) lr both true ())
+{ex}
+       (rewrite (lemma fe_out_of_norm) lr rhs true ())
+{acc}
+       (unfold fe_tr rhs)
+       (reduce rhs))
+      refl)"""
+
+def step_unary(name, e, binders, tail_list, n_tail, k_len, imp_value, imp_cases, x_rax, rax_rewrites, extra_haves_fn, extra_rhs_rewrites, extra_premises="", extra_goal_vars="", extra_unfolds=None, tail_extra=None):
+    """
+    e: the ctor term; binders: goal binders for its fields; tail_list: the emitted tail as spelled
+    (a (list …) or Nil); n_tail: instruction count; k_len: elen e = elen a + k_len;
+    imp_value: the Some-payload the reducer yields for iexp e (after imp_cases' rewrites);
+    imp_cases: list of (guard, name) case splits on the imp side (False arm absurd);
+    x_rax: RAX as the x86 leaves it after the tail (spelled as compute leaves it, before rax_rewrites);
+    rax_rewrites: rewrites (lr lhs) turning x_rax into the form matching imp_value's rewrite;
+    extra_haves_fn(slots) -> list of have-text lines appended before hrun (may add slots).
+    """
+    premises = ["p0","p1","p2","p3","p4","p5","p6","p7","p8"]
+    sl = Slots(premises)
+    out=[]
+    out.append(f"""(claim {name}
+  (goal
+    ({binders} (ia (List XInstr)) (va Int) {GOALVARS}{extra_goal_vars})
+    ({common_premises(e)[1:]}
+{ih_premises()}{extra_premises})
+{conclusion(e)}
+  (chain""")
+    # hsome: the emission
+    out.append(f"""    (have hsome (= (Some (ix_app ia {tail_list})) (Some ie))
+      (steps ((rewrite (premise 0) rl rhs true ()) (unfold ixf_exp rhs) (reduce rhs) (rewrite (premise 6) lr rhs true ()) (reduce rhs)) refl))
+    (inject (premise hsome) (hie))""")
+    sl.add("hsome"); sl.add("hie")
+    # imp-side case splits
+    case_rw = list(extra_unfolds or [])
+    for guard, nm in imp_cases:
+        # each split: (case-on GUARD Bool ((case False absurd) (case True continue…))) — we open the True arm and continue the chain inside
+        out.append(f"""    (case-on {guard} Bool
+      ((case False
+         (chain
+           {cap(nm, f'(= {guard} False)')}
+           (have hn (= None (Some v))
+             (steps ((rewrite (premise 1) rl rhs true ()) (unfold iexp rhs) (reduce rhs) (rewrite (premise 7) lr rhs true ()) (reduce rhs){''.join(' '+r for r in case_rw)} (rewrite (premise {nm}) lr rhs true ()) (reduce rhs)) refl))
+           (absurd (premise hn))))
+       (case True
+         (chain
+           {cap(nm, f'(= {guard} True)')}""")
+        sl.add(nm)
+        case_rw.append(f"(rewrite (premise {nm}) lr rhs true ()) (reduce rhs)")
+    # hv: the value
+    out.append(f"""    (have hv (= (Some {imp_value}) (Some v))
+      (steps ((rewrite (premise 1) rl rhs true ()) (unfold iexp rhs) (reduce rhs) (rewrite (premise 7) lr rhs true ()) (reduce rhs){''.join(' '+r for r in case_rw)}) refl))
+    (inject (premise hv) (hvv))""")
+    sl.add("hv"); sl.add("hvv")
+    # lengths and towers
+    costrhs = f"(+ (+ (ixf_elen a) {k_len}) 5)" if k_len else "(+ (ixf_elen a) 5)"
+    out.append(f"""    (have hlen (= (xil ia) (ixf_elen a))
+      (rewrite-with (lemma fe_len) lr lhs ((inst nl nl) (inst d d) (inst e a)) ((steps ((rewrite (premise 6) lr lhs true ())) refl)) refl))
+    (have hcost (= (ixf_ecost {e}) {costrhs})
+      (steps ((unfold ixf_ecost lhs) (unfold ixf_elen lhs) (reduce lhs)) refl))""")
+    sl.add("hlen"); sl.add("hcost")
+    out.append(f"    (have hle (= (le (xil ia) c) True) (by arith {sl.cert({'p5':1,'hlen':-1,'hcost':1})}))")
+    sl.add("hle")
+    npeel = n_tail + 1
+    hcN_goal = "(lt 0 (- c (xil ia)))" if npeel == 1 else f"(le {npeel} (- c (xil ia)))"
+    out.append(f"    (have hcN (= {hcN_goal} True) (by arith {sl.cert({'p5':1,'hlen':-1,'hcost':1})}))")
+    sl.add("hcN")
+    # extra haves (value alignment facts etc.)
+    for line in extra_haves_fn(sl):
+        out.append(line)
+    peel = {1:"xt_peel",2:"xt_peel2",3:"xt_peel3",4:"xt_peel4",8:"xt_peel8"}[npeel]
+    rr = "".join(f" {r}" for r in rax_rewrites)
+    out.append(f"""    (have hrun (= {RUN('ie')} {hrun_rhs(x_rax, MA('a'), RUN('ia'))})
+      (chain
+        (steps ((rewrite (premise hie) rl lhs true ())))
+        (rewrite-with (lemma xseq_app) lr lhs () ((steps ((rewrite (premise hle) lr lhs true ())) refl)))
+        (steps ((rewrite (premise 8) lr lhs true ()) (unfold fe_out lhs) (reduce lhs) (unfold xcont lhs) (reduce lhs)))
+        (rewrite-with (lemma {peel}) lr lhs () ((steps ((rewrite (premise hcN) lr lhs true ())) refl)))
+        (steps ({' '.join(tail_steps(n_tail, tail_extra))}{rr}) refl)))""")
+    sl.add("hrun")
+    out.append(closing(extra_rhs_rewrites))
+    # close the chain and the case-on True arms
+    closers = ")" * (1 + 4*len(imp_cases))  # chain + per case: True-arm chain, case True, arm list, case-on
+    out.append(closers + ")")
+    return "\n".join(out) + "\n"
+
+def steps_trunc(kind):
+    if kind == "U32":
+        return step_unary("fe_step_trunc32_g", "(ITrunc k1 U32 a)", "(k1 IKind) (a IExp)", "(list (XMovRR32 RAX RAX))", 1, 1,
+            "(band va (- (ikmod U32) 1))", [], "(band va 4294967295)", [],
+            lambda sl: ["    (have hmask (= (- (ikmod U32) 1) 4294967295) (steps ((compute lhs)) refl))"] or sl.add("hmask"),
+            ["(rewrite (premise hvv) rl rhs true ())", "(rewrite (premise hmask) lr rhs true ())"])
+    if kind == "U8":
+        return step_unary("fe_step_trunc8", "(ITrunc k1 U8 a)", "(k1 IKind) (a IExp)", "(list (XBin XAnd RAX (SImm 255)))", 1, 1,
+            "(band va (- (ikmod U8) 1))", [], "(band va 255)", [],
+            lambda sl: ["    (have hmask (= (- (ikmod U8) 1) 255) (steps ((compute lhs)) refl))"] or sl.add("hmask"),
+            ["(rewrite (premise hvv) rl rhs true ())", "(rewrite (premise hmask) lr rhs true ())"])
+    # U64: the tail is empty; v = band va (2^64 - 1) = va (mask_word64 + wrap64_id on the in-band va)
+    def extra(sl):
+        lines = [
+            "    (have hlocs (= (fr_locs fp lc psx) True) (rewrite-with (lemma ctx_locs) lr lhs ((inst m m) (inst mlo mlo) (inst slo slo) (inst nl nl) (inst d d)) ((steps ((rewrite (premise 2) lr lhs true ())) refl)) refl))",
+            "    (have hcb (= (ixf_cb a) True) (rewrite-with (lemma cb_trunc) lr lhs ((inst k1 k1) (inst kt U64)) ((steps ((rewrite (premise 3) lr lhs true ())) refl)) refl))",
+            f"    (have hba (= (fe_inband va) True) (rewrite-with (lemma fe_band) lr lhs ((inst lc lc) (inst mem {IM}) (inst mlo mlo) (inst msz slo) (inst fp fp) (inst psx psx) (inst e a)) ((steps ((rewrite (premise 7) lr lhs true ())) refl) (steps ((rewrite (premise hlocs) lr lhs true ())) refl) (steps ((rewrite (premise hcb) lr lhs true ())) refl)) refl))",
+            "    (have hal (= (le 0 va) True) (rewrite-with (lemma inband_lo) lr lhs () ((steps ((rewrite (premise hba) lr lhs true ())) refl)) refl))",
+            "    (have hah (= (lt va 18446744073709551616) True) (rewrite-with (lemma inband_hi) lr lhs () ((steps ((rewrite (premise hba) lr lhs true ())) refl)) refl))",
+            "    (have hmask (= (- (ikmod U64) 1) 18446744073709551615) (steps ((compute lhs)) refl))",
+            "    (have hmw (= (band va 18446744073709551615) va) (chain (rewrite-with (lemma mask_word64) lr lhs () ((steps ((rewrite (premise hal) lr lhs true ())) refl))) (rewrite-with (lemma wrap64_id) lr lhs () ((steps ((rewrite (premise hal) lr lhs true ())) refl) (steps ((rewrite (premise hah) lr lhs true ())) refl))) refl))",
+        ]
+        for n in ["hlocs","hcb","hba","hal","hah","hmask","hmw"]: sl.add(n)
+        return lines
+    return step_unary("fe_step_trunc64", "(ITrunc k1 U64 a)", "(k1 IKind) (a IExp)", "Nil", 0, 0,
+        "(band va (- (ikmod U64) 1))", [], "va", [], extra,
+        ["(rewrite (premise hvv) rl rhs true ())", "(rewrite (premise hmask) lr rhs true ())", "(rewrite (premise hmw) lr rhs true ())"])
+
+def step_lemmas_unary():
+    return "\n".join([steps_trunc("U8"), steps_trunc("U64")])
+
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "unary":
+    sys.stdout.write(step_lemmas_unary())
+
+
+CTX_INSTS = {
+ "hdisc": "((inst m m) (inst mlo mlo) (inst fp fp) (inst nl nl) (inst d d) (inst lc lc))",
+ "hlocs": "((inst m m) (inst mlo mlo) (inst slo slo) (inst nl nl) (inst d d))",
+ "hxlo":  "((inst slo slo) (inst fp fp) (inst nl nl) (inst d d) (inst lc lc) (inst psx psx))",
+ "hmlo":  "((inst m m) (inst fp fp) (inst nl nl) (inst d d) (inst lc lc) (inst psx psx))",
+ "hslo":  "((inst m m) (inst mlo mlo) (inst nl nl) (inst d d) (inst lc lc) (inst psx psx))",
+ "hal":   "((inst m m) (inst mlo mlo) (inst nl nl) (inst d d) (inst lc lc) (inst psx psx))",
+ "hnl":   "((inst m m) (inst mlo mlo) (inst slo slo) (inst fp fp) (inst d d) (inst psx psx))",
+ "hd0":   "((inst m m) (inst mlo mlo) (inst slo slo) (inst fp fp) (inst nl nl) (inst lc lc) (inst psx psx))",
+ "hslo0": "((inst m m) (inst mlo mlo) (inst fp fp) (inst nl nl) (inst d d) (inst lc lc) (inst psx psx))",
+ "hhi":   "((inst mlo mlo) (inst slo slo) (inst fp fp) (inst nl nl) (inst d d) (inst lc lc) (inst psx psx))",
+}
+CTX_LEMMA = {"hdisc":"ctx_disc","hlocs":"ctx_locs","hxlo":"ctx_lo","hmlo":"ctx_mlo","hslo":"ctx_slo","hal":"ctx_al","hnl":"ctx_nl","hd0":"ctx_d","hslo0":"ctx_slo0","hhi":"ctx_hi"}
+CTX_FACT = {"hdisc":"(fp_disc slo psx)","hlocs":"(fr_locs fp lc psx)","hxlo":"(int_eq (xmemlo_of m) mlo)","hmlo":"(le mlo slo)","hslo":"(le slo fp)","hal":"(int_eq (mod (- fp slo) 8) 0)","hnl":"(le (ilen lc) nl)","hd0":"(le 0 d)","hslo0":"(le 0 slo)","hhi":"(le (xmemhi_of m) 4294967296)"}
+def ctx_have(nm):
+    return f"    (have {nm} (= {CTX_FACT[nm]} True) (rewrite-with (lemma {CTX_LEMMA[nm]}) lr lhs {CTX_INSTS[nm]} ((steps ((rewrite (premise 2) lr lhs true ())) refl)) refl))"
+
+def steps_shift(kind_or_shr):
+    if kind_or_shr == "shl64":
+        def extra(sl):
+            lines=["    (have hw (= (ikw U64) 64) (steps ((compute lhs)) refl))"]; sl.add("hw")
+            lines.append(f"    (have hlt (= (lt cc 64) True) (by arith {sl.cert({'hs1':1,'hw':-1})}))"); sl.add("hlt")
+            lines.append("    (have hm64 (= (mod cc 64) cc) (rewrite-with (lemma mod64_id) lr lhs () ((steps ((rewrite (premise hs0) lr lhs true ())) refl) (steps ((rewrite (premise hlt) lr lhs true ())) refl)) refl))"); sl.add("hm64")
+            lines.append("    (have hk (= (ikmod U64) 18446744073709551616) (steps ((compute lhs)) refl))"); sl.add("hk")
+            return lines
+        return step_unary("fe_step_shl64", "(IBin U64 IShl a (IConst cc))", "(a IExp) (cc Int)", "(list (XShlI RAX cc))", 1, 1,
+            "(mod (bshl va cc) (ikmod U64))", [("(le 0 cc)","hs0"),("(lt cc (ikw U64))","hs1")],
+            "(mod (bshl va cc) 18446744073709551616)", ["(rewrite (premise hm64) lr lhs true ())"], extra,
+            ["(rewrite (premise hvv) rl rhs true ())","(rewrite (premise hk) lr rhs true ())"],
+            extra_unfolds=["(unfold iexp rhs)","(reduce rhs)","(unfold iop_val rhs)","(reduce rhs)"])
+    if kind_or_shr == "shl32":
+        def extra(sl):
+            lines=["    (have hw (= (ikw U32) 32) (steps ((compute lhs)) refl))"]; sl.add("hw")
+            lines.append(f"    (have hlt (= (lt cc 32) True) (by arith {sl.cert({'hs1':1,'hw':-1})}))"); sl.add("hlt")
+            lines.append("    (have hm32 (= (mod cc 32) cc) (rewrite-with (lemma mod32_id) lr lhs () ((steps ((rewrite (premise hs0) lr lhs true ())) refl) (steps ((rewrite (premise hlt) lr lhs true ())) refl)) refl))"); sl.add("hm32")
+            lines.append("    (have hk (= (ikmod U32) 4294967296) (steps ((compute lhs)) refl))"); sl.add("hk")
+            return lines
+        return step_unary("fe_step_shl32", "(IBin U32 IShl a (IConst cc))", "(a IExp) (cc Int)", "(list (XShlI32 RAX cc))", 1, 1,
+            "(mod (bshl va cc) (ikmod U32))", [("(le 0 cc)","hs0"),("(lt cc (ikw U32))","hs1")],
+            "(mod (bshl va cc) 4294967296)", ["(rewrite (premise hm32) lr lhs true ())"], extra,
+            ["(rewrite (premise hvv) rl rhs true ())","(rewrite (premise hk) lr rhs true ())"],
+            extra_unfolds=["(unfold iexp rhs)","(reduce rhs)","(unfold iop_val rhs)","(reduce rhs)"])
+    # shr at any kind
+    def extra(sl):
+        lines=["    (have hw (= (le (ikw k) 64) True) (rewrite-with (lemma ikw_le64) lr lhs () () refl))"]; sl.add("hw")
+        lines.append(f"    (have hlt (= (lt cc 64) True) (by arith {sl.cert({'hs1':1,'hw':1})}))"); sl.add("hlt")
+        lines.append("    (have hm64 (= (mod cc 64) cc) (rewrite-with (lemma mod64_id) lr lhs () ((steps ((rewrite (premise hs0) lr lhs true ())) refl) (steps ((rewrite (premise hlt) lr lhs true ())) refl)) refl))"); sl.add("hm64")
+        return lines
+    return step_unary("fe_step_shr", "(IBin k IShr a (IConst cc))", "(k IKind) (a IExp) (cc Int)", "(list (XShrI RAX cc))", 1, 1,
+        "(bshr va cc)", [("(le 0 cc)","hs0"),("(lt cc (ikw k))","hs1")],
+        "(bshr va cc)", ["(rewrite (premise hm64) lr lhs true ())"], extra,
+        ["(rewrite (premise hvv) rl rhs true ())"],
+        extra_unfolds=["(unfold iexp rhs)","(reduce rhs)","(unfold iop_val rhs)","(reduce rhs)"])
+
+def steps_rotr():
+    V1="(band va (- (ikmod U32) 1))"
+    imp=f"(band (bor (bshr {V1} (mod cc (ikw U32))) (bshl {V1} (mod (- (ikw U32) (mod cc (ikw U32))) (ikw U32)))) (- (ikmod U32) 1))"
+    x="(band (bor (bshr (band va 4294967295) (mod cc 32)) (bshl (band va 4294967295) (mod (- 32 (mod cc 32)) 32))) 4294967295)"
+    def extra(sl):
+        lines=["    (have hw (= (ikw U32) 32) (steps ((compute lhs)) refl))"]; sl.add("hw")
+        lines.append("    (have hmask (= (- (ikmod U32) 1) 4294967295) (steps ((compute lhs)) refl))"); sl.add("hmask")
+        return lines
+    return step_unary("fe_step_rotr32", "(IRotr U32 a (IConst cc))", "(a IExp) (cc Int)", "(list (XRorI32 RAX cc))", 1, 1,
+        imp, [], x, [], extra,
+        ["(rewrite (premise hvv) rl rhs true ())","(rewrite (premise hw) lr rhs true ())","(rewrite (premise hmask) lr rhs true ())"],
+        extra_unfolds=["(unfold iexp rhs)","(reduce rhs)"])
+
+def steps_load():
+    TA="(fe_tr fp nl d a lc (fp_mem mem0 (fbelow slo psx)) mlo slo)"
+    MAa=f"(fp_mem mem0 (fp_app {TA} psx))"
+    def extra(sl):
+        lines=[]
+        for nm in ["hdisc","hxlo","hmlo","hslo","hal","hnl","hd0"]:
+            lines.append(ctx_have(nm)); sl.add(nm)
+        lines.append("    (have hnn (= (le 0 (ilen lc)) True) (rewrite-with (lemma ilen_nonneg) lr lhs () () refl))"); sl.add("hnn")
+        lines.append("    (have hdep (= (le 0 (ixf_dep a)) True) (rewrite-with (lemma ixf_dep_nonneg) lr lhs () () refl))"); sl.add("hdep")
+        lines.append("    (have hdepl (= (ixf_dep (ILoad a)) (ixf_dep a)) (steps ((unfold ixf_dep lhs) (reduce lhs)) refl))"); sl.add("hdepl")
+        lines.append(f"    (have hxl (= (xmemlo_of m) mlo) (by arith {sl.cert2({'hxlo':-1},{'hxlo':1})}))"); sl.add("hxl")
+        lines.append(f"    (have hwlo (= (le (xmemlo_of m) va) True) (steps ((rewrite (premise hxl) lr lhs true ())) (by arith {sl.cert({'hl0':1})})))"); sl.add("hwlo")
+        lines.append(f"    (have hwhi (= (le (+ va 1) (xmemhi_of m)) True) (by arith {sl.cert({'p4':1,'hdepl':8,'hdep':8,'hnl':8,'hnn':8,'hd0':8,'hslo':1,'hl1':1})}))"); sl.add("hwhi")
+        lines.append(f"    (have hnd0 (= (le 0 (+ nl d)) True) (by arith {sl.cert({'hnl':1,'hnn':1,'hd0':1})}))"); sl.add("hnd0")
+        lines.append(f"    (have hdisca (= (fp_disc slo (fp_app {TA} psx)) True) (rewrite-with (lemma fe_tr_disc) lr lhs ((inst e a)) ((steps ((rewrite (premise hdisc) lr lhs true ())) refl) (steps ((rewrite (premise hslo) lr lhs true ())) refl) (steps ((rewrite (premise hal) lr lhs true ())) refl) (steps ((rewrite (premise hnd0) lr lhs true ())) refl)) refl))"); sl.add("hdisca")
+        lines.append(f"""    (have hget (= (mem_get {MAa} va) (mem_get (fp_mem mem0 (fbelow slo psx)) va))
+      (chain
+        (rewrite-with (lemma fp_below_b) lr lhs ((inst slo slo)) ((steps ((rewrite (premise hdisca) lr lhs true ())) refl) (steps ((rewrite (premise hl1) lr lhs true ())) refl)))
+        (rewrite-with (lemma fe_tr_below) lr lhs ((inst e a)) ((steps ((rewrite (premise hslo) lr lhs true ())) refl) (steps ((rewrite (premise hnd0) lr lhs true ())) refl)))
+        refl))"""); sl.add("hget")
+        return lines
+    return step_unary("fe_step_load", "(ILoad a)", "(a IExp)", "(list (XLoad8 RAX (AReg RAX)))", 1, 1,
+        "(mem_get (fp_mem mem0 (fbelow slo psx)) va)", [("(le mlo va)","hl0"),("(lt va slo)","hl1")],
+        "(mem_get (fp_mem mem0 (fbelow slo psx)) va)", ["(rewrite (premise hget) lr lhs true ())"], extra,
+        ["(rewrite (premise hvv) rl rhs true ())"],
+        tail_extra=[f"(compute lhs {STOPS_L})","(rewrite (premise hwlo) lr lhs true ())","(reduce lhs)",f"(compute lhs {STOPS_L})","(rewrite (premise hwhi) lr lhs true ())","(reduce lhs)"])
+
+def step_lemmas_unary():
+    return "\n".join([steps_trunc("U8"), steps_trunc("U64"), steps_shift("shl64"), steps_shift("shl32"), steps_shift("shr"), steps_rotr(), steps_load()])
