@@ -370,6 +370,34 @@
   (XVSha256Msg1 XmmReg XmmReg)
   (XVSha256Msg2 XmmReg XmmReg))
 
+;; --- the memory sub-vocabulary --------------------------------------------------
+
+;; The 64-bit word forms live in their OWN type, entered from XInstr through
+;; the single (XMem …) arm below — the (XVec XVInstr) pattern exactly (see
+;; the WHY A SUB-TYPE note above: every exhaustive consumer of XInstr pays
+;; ONE arm now, and the further memory forms this door opens — 16/32-bit
+;; spans, displacement addressing, the sign-extending loads — cost the
+;; consumers nothing).
+;;
+;; Unlike the vector sub-vocabulary these are PURE and SCALAR: the semantics
+;; are right here in the scalar tier (xminstr_leaf below), not in an extended
+;; tier, so every tower above delegates to them through its existing leaf
+;; catch-all with no world effect and no oracle draw.
+;;
+;;   XMLoad64 d a: mov r64, [base] — d := the 8-byte little-endian word at
+;;     the address (std/mem's load_le at width 8, the vocabulary imp's
+;;     IpLoadW already speaks).
+;;   XMStore64 a s: mov [base], r64 — the 8-byte little-endian word at the
+;;     address := the register. NO immediate source (XStore8's SImm form has
+;;     no 64-bit twin: mov r/m64, imm32 sign-extends, a different value law),
+;;     so the operand is a Reg, not a Src.
+;;
+;; Both fence the WHOLE 8-byte span against the module window: [p, p+8) must
+;; sit inside [xmemlo, xmemhi) or the instruction traps. Alignment is NOT
+;; required (x86 word accesses are unaligned-tolerant), and the span check is
+;; the only guard — the same shape XLoad8/XStore8 use at width 1.
+(type XMInstr (XMLoad64 Reg Addr) (XMStore64 Addr Reg))
+
 ;; --- the instruction set (x86_64 fragment, probe-sized) ------------------------
 
 (type XInstr
@@ -415,7 +443,12 @@
   ;; the vector sub-vocabulary's single entry point (B5/E1, STREAM.md
   ;; §8). One arm, so every exhaustive consumer of XInstr pays once and
   ;; the AVX2 door opens for free.
-  (XVec XVInstr))
+  (XVec XVInstr)
+  ;; the memory sub-vocabulary's single entry point (C1b, COVERAGE.md §4
+  ;; P5): 64-bit word load/store today, the wider memory door tomorrow.
+  ;; PURE — no world effect, no oracle draw; the scalar tier below owns
+  ;; the semantics.
+  (XMem XMInstr))
 
 ;; A function: SysV parameter count (<= 6 in v1 — the seventh argument needs
 ;; the data stack) and a body. The result is rax at completion; there is no
@@ -448,6 +481,37 @@
     ((XBrk d rs mem) (if (int_eq d 0) (XNorm rs mem) (XBrk (- d 1) rs mem)))
     ((XRetO rs mem) (XRetO rs mem))
     (XTrap XTrap)))
+
+;; --- the memory sub-vocabulary's semantics (C1b) --------------------------------
+
+;; the word width as a Nat TOWER, not a packed literal: ground `compute`
+;; packs Nats, and a proof that must rewrite through std/mem's load_le_s /
+;; store_le_s needs the S-spelling to unfold against. imp's iw8 is the same
+;; constant on the imp side (models/imp/imp.shard) — the two towers are what
+;; make the word-op bridges refl-grade.
+(fn xw8 () Nat (S (S (S (S (S (S (S (S Z)))))))))
+
+;; THE MEMORY TABLE — the whole sub-vocabulary's semantics in one place, the
+;; twin of vector.shard's xvinstr_leaf except that it lives HERE, because
+;; these forms are pure scalar code the base tier can execute. Each arm is
+;; XLoad8/XStore8's shape at an 8-byte span: address, window guard on
+;; [p, p+8), then std/mem's little-endian word view.
+(fn xminstr_leaf ((m XModule) (mi XMInstr) (rs Regs) (mem Mem)) (Option XOut)
+  (match mi
+    ((XMLoad64 d a)
+     (let ((p (xaddr rs a)))
+       (if (le (xmemlo_of m) p)
+         (if (le (+ p 8) (xmemhi_of m))
+           (Some (XNorm (rset rs d (load_le (xw8) mem p)) mem))
+           (Some XTrap))
+         (Some XTrap))))
+    ((XMStore64 a s)
+     (let ((p (xaddr rs a)))
+       (if (le (xmemlo_of m) p)
+         (if (le (+ p 8) (xmemhi_of m))
+           (Some (XNorm rs (store_le (xw8) mem p (rget rs s))))
+           (Some XTrap))
+         (Some XTrap))))))
 
 ;; --- the interpreter (one fuel-countdown SCC) ----------------------------------
 
@@ -551,7 +615,10 @@
        ;; xvinstr_leaf). A scalar-tier run of a body containing vector
        ;; code cannot conclude Some (XNorm …), so no landed cert can
        ;; silently absorb it (the trap fence, STREAM.md §8.2).
-       ((XVec v) (Some XTrap))))))
+       ((XVec v) (Some XTrap))
+       ;; the memory sub-vocabulary: PURE, so unlike XVec the scalar tier
+       ;; EXECUTES it — one delegation to the table above (C1b).
+       ((XMem mi) (xminstr_leaf m mi rs mem))))))
 
 ;; the call engine — a NAMED SCC member (composed proofs stop here and cite
 ;; the callee's cert). No frame construction: the callee runs on the

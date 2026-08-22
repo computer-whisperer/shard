@@ -22,6 +22,10 @@
 ;;;   XCPUIDCASE <name> <argc> <a0> <a1> <a2> LEAF <leaf> <subleaf>
 ;;;   XCPUIDNCASE — the same row, INVERTED (the identity-point's tooth)
 ;;;
+;;; The 64-bit word forms (XMem/XMLoad64/XMStore64, C1b) need no new row
+;;; kind: they ride XMEMCASE like the byte forms — see the block near the
+;;; end of this file for what their rows pin.
+;;;
 ;;; XCPUIDCASE is the identity-point row (B6/A, STREAM.md §9.2) and the one
 ;;; row kind carrying NO model expectation — see the block near the end of
 ;;; this file for why, and what it pins instead.
@@ -1070,6 +1074,218 @@
       (cpuidrow "XCPUIDNCASE" "cpuidno" 0 0)
       (cpuidrow "XCPUIDNCASE" "cpuidno" 1 0))))
 
+
+;; ============================================================================
+;; THE 64-BIT WORD FORMS (C1b: XMem / XMLoad64 / XMStore64)
+;; ============================================================================
+;;
+;; These ride the ordinary XMEMCASE battery — unlike the vector and
+;; identity-point blocks there is no fence and no oracle, so the model's own
+;; expectation is the reference. Two things are under test that the byte
+;; forms cannot reach:
+;;
+;;   BYTE ORDER. The readback prints the 8 stored bytes in address order, so
+;;   a row storing 0x8877665544332211 pins std/mem's load_le/store_le against
+;;   the silicon's little-endian word: the expectation reads 1122334455667788
+;;   and any big-endian slip in the model shows as a whole-row mismatch. The
+;;   value's eight bytes are pairwise distinct and its top bit is set, so a
+;;   byte swap, a truncation, or a sign-extension all show.
+;;
+;;   THE 8-BYTE SPAN GUARD. The window fence is [p, p+8) rather than
+;;   [p, p+1), so an address INSIDE the window can still trap. The
+;;   "wstore"/"wload" edge rows sit at hi-8 (the last legal word, model and
+;;   silicon both fine) and hi-1 (legal address, span leaves the mapping —
+;;   the model traps and the CPU faults on the page boundary). The two
+;;   familiar corners, below the window and far past it, ride along.
+;;
+;; The register legs cover the ModRM/SIB shapes the encoder's enc_mem picks:
+;; a plain base (rdi/rsi), the rbp-r13 base that needs mod=01 disp8=0, and
+;; the rsp-r12 base that needs a SIB byte — each with a high register (REX.R
+;; and REX.B both set) as the value operand.
+
+;; f(p, v) = the 64-bit word at [p] := v, return v (rdi base, rsi value)
+(fn wstore_f () XFunc
+  (MkXFunc 2 (list (XMem (XMStore64 (AReg RDI) RSI)) (XMovRR RAX RSI))))
+
+;; f(p, v) = store v at [p], then LOAD it back into rax — the round trip in
+;; one module, so the returned value pins the load and the readback pins the
+;; stored bytes
+(fn wload_f () XFunc
+  (MkXFunc
+    2
+    (list (XMem (XMStore64 (AReg RDI) RSI)) (XMem (XMLoad64 RAX (AReg RDI))))))
+
+;; the r13 base (mod=01 disp8=0) with r11 as the value: REX.R and REX.B both
+(fn wstore13_f () XFunc
+  (MkXFunc
+    2
+    (list
+      (XMovRR R13 RDI)
+      (XMovRR R11 RSI)
+      (XMem (XMStore64 (AReg R13) R11))
+      (XMovRR RAX R11))))
+
+;; the r12 base (SIB byte) with r11 as the destination of the load
+(fn wload12_f () XFunc
+  (MkXFunc
+    2
+    (list
+      (XMem (XMStore64 (AReg RDI) RSI))
+      (XMovRR R12 RDI)
+      (XMem (XMLoad64 R11 (AReg R12)))
+      (XMovRR RAX R11))))
+
+(fn wemit () (List Int)
+  (cat
+    (list
+      (mod_line "wstore" (wstore_f))
+      ;; the byte-order witness: eight distinct bytes, top bit set
+      (xmemcase
+        "wstore"
+        (mmem (wstore_f))
+        (list 1073741824 9833440827789222417)
+        1073741824
+        8
+        12)
+      ;; a MISALIGNED address (base + 3): x86 word accesses do not require
+      ;; alignment and the model does not check it
+      (xmemcase
+        "wstore"
+        (mmem (wstore_f))
+        (list 1073741827 72623859790382856)
+        1073741827
+        8
+        12)
+      ;; all-ones and zero, and a 16-byte readback around a mid-window word
+      ;; so the store's exact 8-byte footprint is visible
+      (xmemcase
+        "wstore"
+        (mmem (wstore_f))
+        (list 1073741840 18446744073709551615)
+        1073741832
+        16
+        12)
+      (xmemcase "wstore" (mmem (wstore_f)) (list 1073741824 0) 1073741824 8 12)
+      ;; the LAST legal word: p + 8 = hi exactly, so the span fits
+      (xmemcase
+        "wstore"
+        (mmem (wstore_f))
+        (list 1073807352 9833440827789222417)
+        1073807352
+        8
+        12)
+      ;; THE SPAN CORNER: the address is inside the window but the span is
+      ;; not — the model traps and the CPU faults crossing the page
+      (xmemcase
+        "wstore"
+        (mmem (wstore_f))
+        (list 1073807359 9833440827789222417)
+        1073807359
+        8
+        12)
+      ;; the two familiar corners: below the window, and far past it
+      (xmemcase
+        "wstore"
+        (mmem (wstore_f))
+        (list 1073741823 9833440827789222417)
+        1073741823
+        8
+        12)
+      (xmemcase
+        "wstore"
+        (mmem (wstore_f))
+        (list 1074790400 9833440827789222417)
+        1074790400
+        8
+        12)
+      (mod_line "wload" (wload_f))
+      (xmemcase
+        "wload"
+        (mmem (wload_f))
+        (list 1073741824 9833440827789222417)
+        1073741824
+        8
+        12)
+      (xmemcase
+        "wload"
+        (mmem (wload_f))
+        (list 1073741827 72623859790382856)
+        1073741827
+        8
+        12)
+      (xmemcase
+        "wload"
+        (mmem (wload_f))
+        (list 1073741832 18446744073709551615)
+        1073741832
+        8
+        12)
+      (xmemcase
+        "wload"
+        (mmem (wload_f))
+        (list 1073807352 9833440827789222417)
+        1073807352
+        8
+        12)
+      (xmemcase
+        "wload"
+        (mmem (wload_f))
+        (list 1073807359 9833440827789222417)
+        1073807359
+        8
+        12)
+      (xmemcase
+        "wload"
+        (mmem (wload_f))
+        (list 1073741823 9833440827789222417)
+        1073741823
+        8
+        12)
+      (mod_line "wstore13" (wstore13_f))
+      (xmemcase
+        "wstore13"
+        (mmem (wstore13_f))
+        (list 1073741824 9833440827789222417)
+        1073741824
+        8
+        20)
+      (xmemcase
+        "wstore13"
+        (mmem (wstore13_f))
+        (list 1073741827 72623859790382856)
+        1073741827
+        8
+        20)
+      (xmemcase
+        "wstore13"
+        (mmem (wstore13_f))
+        (list 1074790400 9833440827789222417)
+        1074790400
+        8
+        20)
+      (mod_line "wload12" (wload12_f))
+      (xmemcase
+        "wload12"
+        (mmem (wload12_f))
+        (list 1073741824 9833440827789222417)
+        1073741824
+        8
+        20)
+      (xmemcase
+        "wload12"
+        (mmem (wload12_f))
+        (list 1073741840 72623859790382856)
+        1073741840
+        8
+        20)
+      (xmemcase
+        "wload12"
+        (mmem (wload12_f))
+        (list 1073807359 9833440827789222417)
+        1073807359
+        8
+        20))))
+
 ;; --- the plan ----------------------------------------------------------------
 ;; DATA_BASE = 0x40000000 = 1073741824; the trap address 0x40100000 =
 ;; 1074790400 is past the module's window [DATA_BASE, DATA_BASE+0x10000).
@@ -1225,6 +1441,8 @@
       ;; --- the vector tier (B5/E1) -----------------------------------------
       (vemit)
       ;; --- the identity-point (B6/A) ---------------------------------------
-      (cpuemit))))
+      (cpuemit)
+      ;; --- the 64-bit word forms (C1b) -------------------------------------
+      (wemit))))
 
 (fn main ((w World)) World (exit 0 (write (emit) w)))

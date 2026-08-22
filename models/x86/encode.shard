@@ -31,7 +31,8 @@
 ;;;     model wraps the immediate to [0,2^64). They agree for |imm| < 2^31
 ;;;     (all probe immediates); a wider immediate needs a scratch-register
 ;;;     materialization (a named growth path), not handled here.
-;;;   - Byte store/load only (XStore8/XLoad8): wide ops are X86.md §5 growth.
+;;;   - Byte load/store (XLoad8/XStore8) and the 64-bit word forms
+;;;     (XMem/XMLoad64/XMStore64); 16/32-bit spans are X86.md §5 growth.
 
 (import "x86.shard")
 (use (:: models x86 x86 *))
@@ -384,7 +385,42 @@
     ;; catch-alls — vector species are straight-line, so neither needs the
     ;; special handling the control-flow ctors get.
     ((XVec v) (enc_vinstr v))
+    ;; the memory sub-vocabulary's single entry (C1b): one arm here, and
+    ;; xsz_instr / enc_instr reach it through their existing enc_simple
+    ;; catch-alls — the word forms are straight-line like the byte ones.
+    ((XMem mi) (enc_minstr mi))
     (other Nil)))
+
+;; THE MEMORY TABLE — the 64-bit word forms' bytes, the encoder's twin of
+;; x86.shard's xminstr_leaf. Both are the plain `mov` opcode pair at REX.W,
+;; reg = the register operand and r/m = the memory base, so they share
+;; enc_mem's ModRM/SIB shape with the byte load/store (rsp/r12 take a SIB
+;; byte, rbp/r13 take mod=01 disp8=0) and differ from them only in opcode
+;; and in carrying REX.W:
+;;
+;;   XMLoad64  mov r64, [base]   REX.W 8B /r   (reg = dst)
+;;   XMStore64 mov [base], r64   REX.W 89 /r   (reg = src)
+;;
+;; (objdump: 48 8b 08 / 48 89 08 for rax base and rcx; 48 8b 4d 00 and
+;; 49 8b 0c 24 for the rbp and r12 corners.)
+(fn enc_minstr ((mi XMInstr)) (List Int)
+  (match mi
+    ((XMLoad64 d a)
+     (match a
+       ((AReg base)
+        (let ((nd (reg_num d)))
+          (let ((nb (reg_num base)))
+            (eapp
+              (list (+ 72 (+ (* 4 (rhi nd)) (rhi nb))) 139)
+              (enc_mem (rlo nd) nb)))))))
+    ((XMStore64 a s)
+     (match a
+       ((AReg base)
+        (let ((ns (reg_num s)))
+          (let ((nb (reg_num base)))
+            (eapp
+              (list (+ 72 (+ (* 4 (rhi ns)) (rhi nb))) 137)
+              (enc_mem (rlo ns) nb)))))))))
 
 ;; --- ELF harness stub byte encoders (docs/X86.md §20) -------------------------
 ;;
