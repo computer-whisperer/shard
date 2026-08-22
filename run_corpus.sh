@@ -177,6 +177,7 @@ TARGETS=(
   pins/lang/record_basic.shard
   models/imp/imp.shard
   models/imp/probes/imp_probe.shard
+  models/imp/probes/ipcall_probe.shard
   tools/impgen/fixtures/imp_scalar.shard
   models/imp/to_wasm.shard
   models/imp/probes/imp_wasm_bridge.shard

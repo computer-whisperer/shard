@@ -1,0 +1,359 @@
+;;; models/imp/probes/ipcall_probe.shard — the ONE-TIME machine-validation
+;;; probe for the imp CALL TIER (docs/COVERAGE.md C1; docs/IMP.md §2b):
+;;; ground claims checking that IpStmt / ipcall / iprun mean what we
+;;; intended before generated certificates rest on them — the
+;;; imp_probe idiom (a DEVELOPMENT INSTRUMENT, corpus-pinned so the
+;;; machine's meaning cannot drift silently; not a build gate).
+;;;
+;;; What is probed: a call through the table (value + fresh frame),
+;;; recursion (depth rides the fuel), memory threading through a call,
+;;; the reasoned fail leg propagating out of a callee, the honesty
+;;; corners (bad index, wrong arity, fuel out), the word ops' wiring
+;;; (guards at the window, the LE view at width 8 — wiring only: the
+;;; width-8 round-trip law is std/mem growth owed at C2), the lift of
+;;; a base-tier program, and the call tier's well-kinded gate.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../std/mem")
+(use (:: std mem *))
+(import "../imp.shard")
+(use (:: models imp imp *))
+(import "imp_probe.shard")  ; the base tier's programs, for the lift probe
+(use (:: models imp probes imp_probe ip_arith_fn))
+(use (:: models imp probes imp_probe ip1))
+
+;; --- probe programs -------------------------------------------------------------
+
+;; fn 1: (x) -> x + 1
+(fn ipc_add1_fn () IpFn
+  (MkIpFn (list U32) Nil Nil (IBin U32 IAdd (ILoc 0) (IConst 1)) U32))
+
+;; fn 0: (x) -> call 1 (x)   [IpCall, the result landing in an extra local]
+(fn ipc_caller_fn () IpFn
+  (MkIpFn (list U32) (list U32) (list (IpCall 1 1 (list (ILoc 0)))) (ILoc 1) U32))
+
+(fn ipc_add1_prog () IpProg
+  (MkIpProg (list (ipc_caller_fn) (ipc_add1_fn)) 0 64))
+
+;; fn 0: (n) -> if n = 0 then 1 else n * fact (n - 1)   [self-call, depth]
+(fn ipc_fact_fn () IpFn
+  (MkIpFn
+    (list U32)
+    (list U32 U32)
+    (list
+      (IpIf
+        (IBin U32 IEq (ILoc 0) (IConst 0))
+        (list (IpSet 2 (IConst 1)))
+        (list
+          (IpCall 1 0 (list (IBin U32 ISub (ILoc 0) (IConst 1))))
+          (IpSet 2 (IBin U32 IMul (ILoc 0) (ILoc 1))))))
+    (ILoc 2)
+    U32))
+
+(fn ipc_fact_prog () IpProg (MkIpProg (list (ipc_fact_fn)) 0 64))
+
+;; fn 1: () -> store byte 9 at 5, result 0;  fn 0: () -> call 1, then load 5
+;; [memory threads through the call]
+(fn ipc_poke_fn () IpFn
+  (MkIpFn Nil Nil (list (IpStore (IConst 5) (IConst 9))) (IConst 0) U32))
+
+(fn ipc_peek_fn () IpFn
+  (MkIpFn
+    Nil
+    (list U32)
+    (list (IpCall 0 1 Nil))
+    (IExt U8 U32 (ILoad (IConst 5)))
+    U32))
+
+(fn ipc_mem_prog () IpProg (MkIpProg (list (ipc_peek_fn) (ipc_poke_fn)) 0 64))
+
+;; fn 1: () -> store a byte, then FAIL overflow;  fn 0: () -> call 1
+;; [the fail leg propagates out of the callee; the store before it is
+;; not observable at this grain — the effect prefix is D8's business at
+;; the extern boundary]
+(fn ipc_failer_fn () IpFn
+  (MkIpFn
+    Nil
+    Nil
+    (list (IpStore (IConst 5) (IConst 9)) (IpFail FOverflow))
+    (IConst 0)
+    U32))
+
+(fn ipc_failcall_fn () IpFn
+  (MkIpFn Nil (list U32) (list (IpCall 0 1 Nil)) (ILoc 0) U32))
+
+(fn ipc_fail_prog () IpProg
+  (MkIpProg (list (ipc_failcall_fn) (ipc_failer_fn)) 0 64))
+
+;; fn 0: () -> call 7 ()   [no such fn]
+(fn ipc_badidx_fn () IpFn
+  (MkIpFn Nil (list U32) (list (IpCall 0 7 Nil)) (ILoc 0) U32))
+
+(fn ipc_badidx_prog () IpProg (MkIpProg (list (ipc_badidx_fn)) 0 64))
+
+;; fn 0: () -> call 1 ()   [fn 1 takes one argument]
+(fn ipc_arity_fn () IpFn
+  (MkIpFn Nil (list U32) (list (IpCall 0 1 Nil)) (ILoc 0) U32))
+
+(fn ipc_arity_prog () IpProg
+  (MkIpProg (list (ipc_arity_fn) (ipc_add1_fn)) 0 64))
+
+;; word ops: store the word at 8 (result 0); load the word at 8 into a
+;; U64 local; the out-of-window corners at both ends
+(fn ipc_storew_fn () IpFn
+  (MkIpFn
+    Nil
+    Nil
+    (list (IpStoreW (IConst 8) (IConst 1234605616436508552)))
+    (IConst 0)
+    U32))
+
+(fn ipc_storew_oob_fn () IpFn
+  (MkIpFn Nil Nil (list (IpStoreW (IConst 60) (IConst 1))) (IConst 0) U32))
+
+(fn ipc_loadw_fn () IpFn
+  (MkIpFn Nil (list U64) (list (IpLoadW 0 (IConst 8))) (ILoc 0) U64))
+
+(fn ipc_loadw_oob_fn () IpFn
+  (MkIpFn Nil (list U64) (list (IpLoadW 0 (IConst 57))) (ILoc 0) U64))
+
+(fn ipc_loadw_lo_fn () IpFn
+  (MkIpFn Nil (list U64) (list (IpLoadW 0 (IConst 4))) (ILoc 0) U64))
+
+(fn ipc1 ((f IpFn)) IpProg (MkIpProg (list f) 0 64))
+
+;; --- the probes: calls -----------------------------------------------------------
+
+(claim ipc_call
+  (goal () ()
+    (=
+      (iprun (ifnat 10) (ipc_add1_prog) 0 (list 7) (mem_empty))
+      (Some (IpRv 8 (mem_empty)))))
+  (steps ((compute both)) refl))
+
+;; the callee's frame is fresh: its parameter is banded on entry
+(claim ipc_call_band
+  (goal () ()
+    (=
+      (iprun (ifnat 10) (ipc_add1_prog) 0 (list 4294967295) (mem_empty))
+      (Some (IpRv 0 (mem_empty)))))
+  (steps ((compute both)) refl))
+
+(claim ipc_fact
+  (goal () ()
+    (=
+      (iprun (ifnat 60) (ipc_fact_prog) 0 (list 5) (mem_empty))
+      (Some (IpRv 120 (mem_empty)))))
+  (steps ((compute both)) refl))
+
+;; depth rides the fuel: five nested calls do not fit in 12 units
+(claim ipc_fact_fuel
+  (goal () () (= (iprun (ifnat 12) (ipc_fact_prog) 0 (list 5) (mem_empty)) None))
+  (steps ((compute both)) refl))
+
+;; memory threads through the call: the callee's store is the caller's load
+(claim ipc_mem
+  (goal () ()
+    (=
+      (iprun (ifnat 20) (ipc_mem_prog) 0 Nil (mem_empty))
+      (Some (IpRv 9 (mem_set (mem_empty) 5 9)))))
+  (chain
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma get_set_byte)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl) (steps ((compute both)) refl)))
+    refl))
+
+;; --- the probes: the fail leg and the honesty corners -----------------------------
+
+(claim ipc_fail
+  (goal () ()
+    (=
+      (iprun (ifnat 20) (ipc_fail_prog) 0 Nil (mem_empty))
+      (Some (IpRfailed FOverflow))))
+  (steps ((compute both)) refl))
+
+(claim ipc_badidx
+  (goal () ()
+    (= (iprun (ifnat 20) (ipc_badidx_prog) 0 Nil (mem_empty)) (Some IpRtrap)))
+  (steps ((compute both)) refl))
+
+(claim ipc_arity
+  (goal () ()
+    (= (iprun (ifnat 20) (ipc_arity_prog) 0 Nil (mem_empty)) (Some IpRtrap)))
+  (steps ((compute both)) refl))
+
+(claim ipc_fuel
+  (goal () () (= (iprun Z (ipc_add1_prog) 0 (list 7) (mem_empty)) None))
+  (steps ((compute both)) refl))
+
+(claim ipc_entry_badidx
+  (goal () ()
+    (= (iprun (ifnat 20) (ipc_add1_prog) 5 (list 7) (mem_empty)) (Some IpRtrap)))
+  (steps ((compute both)) refl))
+
+;; --- the probes: word ops (wiring) -------------------------------------------------
+
+;; the store lands as std/mem's width-8 LE store at the address
+(claim ipc_storew
+  (goal () ()
+    (=
+      (iprun (ifnat 10) (ipc1 (ipc_storew_fn)) 0 Nil (mem_empty))
+      (Some (IpRv 0 (store_le (iw8) (mem_empty) 8 1234605616436508552)))))
+  (steps ((compute both)) refl))
+
+;; 60 + 8 > 64: the span must sit inside the window
+(claim ipc_storew_oob
+  (goal () ()
+    (=
+      (iprun (ifnat 10) (ipc1 (ipc_storew_oob_fn)) 0 Nil (mem_empty))
+      (Some IpRtrap)))
+  (steps ((compute both)) refl))
+
+;; the load is std/mem's width-8 LE load at the address
+(claim ipc_loadw
+  (goal () ()
+    (=
+      (iprun (ifnat 10) (ipc1 (ipc_loadw_fn)) 0 Nil (mem_empty))
+      (Some (IpRv (load_le (iw8) (mem_empty) 8) (mem_empty)))))
+  (steps ((compute both)) refl))
+
+;; ... and of the empty memory it reads 0 (the defining equations, one
+;; byte per level, closed by get_empty). The width must stay a TOWER for
+;; load_le_s to match: compute packs ground Nats, so iw8 is fenced out
+;; of the compute and opened by unfold + reduce (the ι-only reducer
+;; keeps the S-spelling)
+(claim ipc_loadw_empty
+  (goal () ()
+    (=
+      (iprun (ifnat 10) (ipc1 (ipc_loadw_fn)) 0 Nil (mem_empty))
+      (Some (IpRv 0 (mem_empty)))))
+  (steps
+    ((compute lhs (stop iw8))
+     (unfold iw8 lhs)
+     (reduce lhs)
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_z) lr lhs true ())
+     (rewrite (lemma get_empty) lr lhs true ())
+     (compute both))
+    refl))
+
+;; 57 + 8 > 64
+(claim ipc_loadw_oob
+  (goal () ()
+    (=
+      (iprun (ifnat 10) (ipc1 (ipc_loadw_oob_fn)) 0 Nil (mem_empty))
+      (Some IpRtrap)))
+  (steps ((compute both)) refl))
+
+;; below the window base (base 8 here)
+(claim ipc_loadw_lo
+  (goal () ()
+    (=
+      (iprun
+        (ifnat 10)
+        (MkIpProg (list (ipc_loadw_lo_fn)) 8 64)
+        0
+        Nil
+        (mem_empty))
+      (Some IpRtrap)))
+  (steps ((compute both)) refl))
+
+;; --- the probes: the lift ------------------------------------------------------------
+
+;; a base-tier program runs identically through the call tier
+;; (imp_probe's ipb_arith: 3 11 -> 14)
+(claim ipc_lift_arith
+  (goal () ()
+    (=
+      (iprun (ifnat 10) (ip_of_prog (ip1 (ip_arith_fn))) 0 (list 3 11) (mem_empty))
+      (Some (IpRv 14 (mem_empty)))))
+  (steps ((compute both)) refl))
+
+;; --- the probes: the well-kinded gate ---------------------------------------------------
+
+(claim ipc_wk_add1
+  (goal () () (= (ipwk_prog (ipc_add1_prog)) True))
+  (steps ((compute both)) refl))
+
+(claim ipc_wk_fact
+  (goal () () (= (ipwk_prog (ipc_fact_prog)) True))
+  (steps ((compute both)) refl))
+
+(claim ipc_wk_mem
+  (goal () () (= (ipwk_prog (ipc_mem_prog)) True))
+  (steps ((compute both)) refl))
+
+(claim ipc_wk_fail
+  (goal () () (= (ipwk_prog (ipc_fail_prog)) True))
+  (steps ((compute both)) refl))
+
+(claim ipc_wk_words
+  (goal () ()
+    (=
+      (ipwk_prog (MkIpProg (list (ipc_storew_fn) (ipc_loadw_fn)) 0 64))
+      True))
+  (steps ((compute both)) refl))
+
+;; rejected: a call into a missing fn
+(claim ipc_wk_badidx
+  (goal () () (= (ipwk_prog (ipc_badidx_prog)) False))
+  (steps ((compute both)) refl))
+
+;; rejected: a call with the wrong arity
+(claim ipc_wk_arity
+  (goal () () (= (ipwk_prog (ipc_arity_prog)) False))
+  (steps ((compute both)) refl))
+
+;; rejected: the call's result kind (U32) differs from the target local's (U8)
+(fn ipcw_rkind_fn () IpFn
+  (MkIpFn (list U32) (list U8) (list (IpCall 1 1 (list (ILoc 0)))) (ILoc 0) U32))
+
+(claim ipc_wk_rkind
+  (goal () ()
+    (=
+      (ipwk_prog (MkIpProg (list (ipcw_rkind_fn) (ipc_add1_fn)) 0 64))
+      False))
+  (steps ((compute both)) refl))
+
+;; rejected: an argument at the wrong kind (U64 local passed to a U32 parameter)
+(fn ipcw_akind_fn () IpFn
+  (MkIpFn (list U64) (list U32) (list (IpCall 1 1 (list (ILoc 0)))) (ILoc 1) U32))
+
+(claim ipc_wk_akind
+  (goal () ()
+    (=
+      (ipwk_prog (MkIpProg (list (ipcw_akind_fn) (ipc_add1_fn)) 0 64))
+      False))
+  (steps ((compute both)) refl))
+
+;; rejected: a word load into a U32 local
+(fn ipcw_loadw_fn () IpFn
+  (MkIpFn Nil (list U32) (list (IpLoadW 0 (IConst 8))) (ILoc 0) U32))
+
+(claim ipc_wk_loadw
+  (goal () () (= (ipwk_prog (ipc1 (ipcw_loadw_fn))) False))
+  (steps ((compute both)) refl))
+
+;; rejected: a word store of a U32 value
+(fn ipcw_storew_fn () IpFn
+  (MkIpFn
+    (list U32)
+    Nil
+    (list (IpStoreW (IConst 8) (ILoc 0)))
+    (IConst 0)
+    U32))
+
+(claim ipc_wk_storew
+  (goal () () (= (ipwk_prog (ipc1 (ipcw_storew_fn))) False))
+  (steps ((compute both)) refl))

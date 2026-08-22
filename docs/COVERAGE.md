@@ -213,9 +213,11 @@ allocator in spec shard and compiling it with impc: elegant, and the
 named lowsrc-absorption door, but it makes impc's first consumer its
 own runtime.
 
-**P5 — Calls and the data stack.** imp grows `ICall` (an expression:
-callee index, argument expressions; one result slot) with the frame
-semantics `icall` already has — a fresh locals frame per call. The
+**P5 — Calls and the data stack.** imp grows a call — AMENDED at C1a
+(2026-08-22): a STATEMENT `(IpCall i k args)` in a mirror statement
+tier over the unchanged expression language, not an expression; see
+IMP.md §2b and the C1a record — with the frame semantics `icall`
+already has: a fresh locals frame per call. The
 x86 leg rides the structured `XCall`/`XRet` the model already owns
 (X86.md §3.3: the control stack is private, never addressable) and
 the §10 callee-cert form (clobber sets in the cert, `xcall_bridge`
@@ -509,3 +511,30 @@ found that the pins did not predict.)
 
 **C0 — RATIFIED 2026-08-22** (user, on the drafted ledger d997209 and
 its report, without amendment). §3 is a gate; P1–P11 are law; C1 opens.
+
+**C1a — the call tier lands (2026-08-22).** models/imp/imp.shard
++383 lines (145/0): `IFam`, `IpStmt` (the four base forms mirrored +
+`IpCall` / `IpLoadW` / `IpStoreW` / `IpFail`), `IpFn` / `IpProg`, the
+SCC `ipstmt` / `ipwhile` / `ipstmts` / `ipcall` + `iprun`, the lift
+`ip_of_*`, the gate `ipwk_prog`; probe
+models/imp/probes/ipcall_probe.shard (34 claims, corpus-registered).
+IMP.md §2b is the machine record. **The finding that shaped it:** the
+plan was to extend `IExp` / `IStmt` / `IOut`; the consumer census
+showed the base constructor sets are load-bearing — `case-on … IOut`
+trees in impgen's emitted certs and the blueprints, exhaustive
+`match`es and inductions over `IExp` / `IStmt` in the 247k-line
+vx86_acc_probe (emitted by scratchpad tooling that no longer exists)
+— so any new constructor would have meant hand-patching emitted
+proofs. REJECTED-because recorded here: extension = a structural walk
+through ~500k certificate lines with no regenerator. The mirror tier
+costs ~130 lines of duplicated evaluator and one lift law (owed at
+C3); everything existing is untouched, and the C1 gate "frozen oracle
+outs regenerate byte-identically" holds trivially. Consequences: P5's
+call is a statement (expressions stay pure and fuel-free); word loads
+are statements too (`IpLoadW i addr`), which is what x86 emits anyway
+(mov r64, [addr]). Gotcha for generated proofs: `compute` packs ground
+Nats, so a claim that must rewrite through `load_le_s` fences `iw8`
+out of the compute and opens it by unfold + reduce. Owed: `ls8_id` in
+std/mem (C2); the lift law (C3). Re-slotted within C1: the open/close
+shims move to C5/C6 prep (they are consumed only by shardfmt's
+`read_file`; calc needs stdin/stdout/exit, which exist).

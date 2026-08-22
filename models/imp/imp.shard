@@ -37,11 +37,19 @@
 ;;;     rotate counts are uniform mod-width on both machines and stay
 ;;;     masked). Wrapping is the total default; checked-op variants
 ;;;     arrive with MEMORY.md D8's reasoned Fail value.
-;;;   - calls: NOT in v1 statements — the I0 fragment classes never
-;;;     call. The call layer arrives with the calls-in-loops class.
-;;;     Call-boundary args are BANDED to their parameter kinds on
-;;;     entry: a machine register IS its width, so an out-of-band
-;;;     argument is unrepresentable there, and the model mirrors
+;;;   - calls: NOT in the base statement tier — the I0 fragment classes
+;;;     never call. THE CALL TIER (COVERAGE.md C1, 2026-08-22; the
+;;;     section after the well-kinded gate) is a MIRROR statement type
+;;;     IpStmt over the SAME expressions, with calls, word-grain
+;;;     memory, and the reasoned fail leg, evaluated by its own
+;;;     program-threaded SCC (ipstmt/ipwhile/ipstmts/ipcall) into its
+;;;     own outcome type. The base tier below is FROZEN by its
+;;;     consumers (the hand and generated certificate corpus inducts
+;;;     over IExp/IStmt/IOut); the call tier is additive, and base
+;;;     fns lift into it by ip_of_fn. Call-boundary args are BANDED
+;;;     to their parameter kinds on entry at both tiers: a machine
+;;;     register IS its width, so an out-of-band argument is
+;;;     unrepresentable there, and the model mirrors
 ;;;     unrepresentability as banding, not as an error.
 ;;;
 ;;; The WELL-KINDED GATE (wk_fn, bottom of file) is the membership
@@ -610,6 +618,381 @@
   (if (iwk_stmts (ikapp (ikparams_of f) (ikextra_of f)) (ibody_of f))
     (ikchk (ikapp (ikparams_of f) (ikextra_of f)) (iresult_of f) (irkind_of f))
     False))
+
+;; --- the call tier (COVERAGE.md C1, 2026-08-22) ------------------------------
+;;
+;; The generic path's programs CALL: tools/impc emits fns that call
+;; other fns, read and write whole words, and fail for a declared
+;; reason. The base tier above (IStmt / istmts / IOut) is frozen by
+;; its consumers — the certificate corpus inducts and cases over its
+;; constructor sets — so the call tier is a MIRROR statement type over
+;; the UNCHANGED expression language IExp, with its own
+;; program-threaded evaluator SCC and its own outcome types (the x86
+;; model's tiering idiom: base tier / world tier). Expressions stay
+;; pure and fuel-free (iexp serves both tiers); a call is a STATEMENT
+;; (local := fn k (args)), so memory threads through the statement
+;; engine exactly as before and the call's fuel unit is the SCC's.
+;; Base-tier fns lift into the call tier by ip_of_fn (the identity on
+;; the shared constructors); the lift law (ipcall over a lifted
+;; program = icall) is owed at the first composition (COVERAGE.md C3).
+;; Word ops speak std/mem's little-endian view at width 8 (load_le /
+;; store_le — the vocabulary the x86 model's 64-bit forms will share),
+;; guarded against the declared window like the byte ops.
+
+;; the declared fail families (MEMORY.md D8; COVERAGE.md P9) — the
+;; closed v1 set; a program fails for exactly one of these reasons
+(type IFam (FOverflow) (FOom) (FStack))
+
+;; the call tier's statements: the four base forms mirrored, then
+;; call / word load / word store / fail
+(type IpStmt
+  (IpSet Int IExp)  ; local[i] := e (at local i's declared kind)
+  (IpStore IExp IExp)  ; mem[addr] := byte value (addr U32, value U8)
+  (IpIf IExp (List IpStmt) (List IpStmt))  ; 0 = False branch
+  (IpWhile IExp (List IpStmt))  ; loop while cond ≠ 0
+  (IpCall Int Int (List IExp))  ; local[i] := fn k (args) — args banded on entry
+  (IpLoadW Int IExp)  ; local[i] := the LE64 word at a U32 address (kind U64)
+  (IpStoreW IExp IExp)  ; the LE64 word at addr := value (addr U32, value U64)
+  (IpFail IFam))  ; the reasoned fail leg: the run ends here, for this reason
+
+(record
+  IpFn
+  (ipparams (List IKind))
+  (ipextra (List IKind))
+  (ipbody (List IpStmt))
+  (ipresult IExp)
+  (iprkind IKind))
+
+(record IpProg (ipfns (List IpFn)) (ipbase Int) (ipmemsize Int))
+
+;; a statement's outcome: forward, trapped, or failed for a reason
+(type IpOut (IpNorm (List Int) Mem) (IpTrap) (IpFailed IFam))
+
+;; a call's outcome: the result value with the memory it left, trapped,
+;; or failed for a reason
+(type IpRet (IpRv Int Mem) (IpRtrap) (IpRfailed IFam))
+
+;; the word width as the structural Nat std/mem's LE view takes
+(fn iw8 () Nat (S (S (S (S (S (S (S (S Z)))))))))
+
+;; evaluate an argument list (pure; None = some argument trapped)
+(fn ipexps ((es (List IExp)) (lc (List Int)) (mem Mem) (mlo Int) (msz Int))
+  (Option (List Int))
+  (measure (struct es))
+  (match es
+    (Nil (Some Nil))
+    ((Cons e t)
+     (match (iexp e lc mem mlo msz)
+       (None None)
+       ((Some v)
+        (match (ipexps t lc mem mlo msz)
+          (None None)
+          ((Some vs) (Some (Cons v vs)))))))))
+
+(fn ipfn_at ((fs (List IpFn)) (i Int)) (Option IpFn)
+  (measure (struct fs))
+  (match fs
+    (Nil None)
+    ((Cons f t) (if (int_eq i 0) (Some f) (ipfn_at t (- i 1))))))
+
+;; The SCC: every member burns one fuel unit on entry; None = fuel
+;; exhausted and nothing else (traps are IpTrap, fails are IpFailed).
+;; Fuel bounds depth (calls nest through ipcall), loop iterations, and
+;; statement-list length exactly as the base tier's does. The fn table
+;; and the window bounds are threaded explicitly (the base tier's
+;; mlo/msz discipline) so claims never project a symbolic program.
+
+(fn ipstmt
+  ((fuel Nat)
+   (fs (List IpFn))
+   (mlo Int)
+   (msz Int)
+   (s IpStmt)
+   (lc (List Int))
+   (mem Mem))
+  (Option IpOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match s
+       ((IpSet i e)
+        (match (iexp e lc mem mlo msz)
+          (None (Some IpTrap))
+          ((Some v)
+           (match (ilset lc i v)
+             (None (Some IpTrap))
+             ((Some lc2) (Some (IpNorm lc2 mem)))))))
+       ((IpStore ae ve)
+        (match (iexp ae lc mem mlo msz)
+          (None (Some IpTrap))
+          ((Some ad)
+           (if (le mlo ad)
+             (if (lt ad msz)
+               (match (iexp ve lc mem mlo msz)
+                 (None (Some IpTrap))
+                 ((Some v) (Some (IpNorm lc (mem_set mem ad v)))))
+               (Some IpTrap))
+             (Some IpTrap)))))
+       ((IpIf c tb eb)
+        (match (iexp c lc mem mlo msz)
+          (None (Some IpTrap))
+          ((Some cv)
+           (if (int_eq cv 0) (ipstmts f2 fs mlo msz eb lc mem)
+           (ipstmts f2 fs mlo msz tb lc mem)))))
+       ((IpWhile c b) (ipwhile f2 fs mlo msz c b lc mem))
+       ;; the call: arguments are pure reads of the caller's state; the
+       ;; callee runs on the caller's memory and hands it back with the
+       ;; result; a trap or fail inside the callee is the caller's
+       ((IpCall i k args)
+        (match (ipexps args lc mem mlo msz)
+          (None (Some IpTrap))
+          ((Some vs)
+           (match (ipcall f2 fs mlo msz k vs mem)
+             (None None)
+             ((Some r)
+              (match r
+                ((IpRv v mem2)
+                 (match (ilset lc i v)
+                   (None (Some IpTrap))
+                   ((Some lc2) (Some (IpNorm lc2 mem2)))))
+                (IpRtrap (Some IpTrap))
+                ((IpRfailed fam) (Some (IpFailed fam)))))))))
+       ;; word ops: the whole 8-byte span must sit inside the window
+       ((IpLoadW i ae)
+        (match (iexp ae lc mem mlo msz)
+          (None (Some IpTrap))
+          ((Some ad)
+           (if (le mlo ad)
+             (if (le (+ ad 8) msz)
+               (match (ilset lc i (load_le (iw8) mem ad))
+                 (None (Some IpTrap))
+                 ((Some lc2) (Some (IpNorm lc2 mem))))
+               (Some IpTrap))
+             (Some IpTrap)))))
+       ((IpStoreW ae ve)
+        (match (iexp ae lc mem mlo msz)
+          (None (Some IpTrap))
+          ((Some ad)
+           (if (le mlo ad)
+             (if (le (+ ad 8) msz)
+               (match (iexp ve lc mem mlo msz)
+                 (None (Some IpTrap))
+                 ((Some v) (Some (IpNorm lc (store_le (iw8) mem ad v)))))
+               (Some IpTrap))
+             (Some IpTrap)))))
+       ((IpFail fam) (Some (IpFailed fam)))))))
+
+;; the loop engine — a NAMED SCC member (the iwhile precedent)
+(fn ipwhile
+  ((fuel Nat)
+   (fs (List IpFn))
+   (mlo Int)
+   (msz Int)
+   (c IExp)
+   (b (List IpStmt))
+   (lc (List Int))
+   (mem Mem))
+  (Option IpOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match (iexp c lc mem mlo msz)
+       (None (Some IpTrap))
+       ((Some cv)
+        (if (int_eq cv 0) (Some (IpNorm lc mem))
+        (match (ipstmts f2 fs mlo msz b lc mem)
+          (None None)
+          ((Some out)
+           (match out
+             ((IpNorm lc2 mem2) (ipwhile f2 fs mlo msz c b lc2 mem2))
+             (IpTrap (Some IpTrap))
+             ((IpFailed fam) (Some (IpFailed fam))))))))))))
+
+(fn ipstmts
+  ((fuel Nat)
+   (fs (List IpFn))
+   (mlo Int)
+   (msz Int)
+   (ss (List IpStmt))
+   (lc (List Int))
+   (mem Mem))
+  (Option IpOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match ss
+       (Nil (Some (IpNorm lc mem)))
+       ((Cons s t)
+        (match (ipstmt f2 fs mlo msz s lc mem)
+          (None None)
+          ((Some out)
+           (match out
+             ((IpNorm lc2 mem2) (ipstmts f2 fs mlo msz t lc2 mem2))
+             (IpTrap (Some IpTrap))
+             ((IpFailed fam) (Some (IpFailed fam)))))))))))
+
+;; the call: fn k of the table on args (banded to its parameter kinds),
+;; a fresh frame (args then zeroed extras), the CALLER'S memory in and
+;; the callee's memory out with the result. Bad index and wrong arity
+;; are dynamic traps here (the well-kinded gate excludes both
+;; statically); a trap or fail inside the body is the call's.
+(fn ipcall
+  ((fuel Nat)
+   (fs (List IpFn))
+   (mlo Int)
+   (msz Int)
+   (k Int)
+   (args (List Int))
+   (mem Mem))
+  (Option IpRet)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match (ipfn_at fs k)
+       (None (Some IpRtrap))
+       ((Some f)
+        (if (int_eq (ilen args) (ikn (ipparams_of f)))
+          (match
+            (ipstmts
+              f2
+              fs
+              mlo
+              msz
+              (ipbody_of f)
+              (iapp
+                (iband_args (ipparams_of f) args)
+                (izeros (ikn (ipextra_of f))))
+              mem)
+            (None None)
+            ((Some out)
+             (match out
+               ((IpNorm lc2 mem2)
+                (match (iexp (ipresult_of f) lc2 mem2 mlo msz)
+                  (None (Some IpRtrap))
+                  ((Some v) (Some (IpRv v mem2)))))
+               (IpTrap (Some IpRtrap))
+               ((IpFailed fam) (Some (IpRfailed fam))))))
+          (Some IpRtrap)))))))
+
+;; the program-level denotation: fn k of p on args from memory mem0 —
+;; the composition boundary the generated per-fn theorems are stated at
+(fn iprun ((fuel Nat) (p IpProg) (k Int) (args (List Int)) (mem0 Mem))
+  (Option IpRet)
+  (ipcall fuel (ipfns_of p) (ipbase_of p) (ipmemsize_of p) k args mem0))
+
+;; --- the lift: base-tier programs are call-tier programs -----------------------
+
+(fn ip_of_stmt ((s IStmt)) IpStmt
+  (measure (struct s))
+  (match s
+    ((ISet i e) (IpSet i e))
+    ((IStore ae ve) (IpStore ae ve))
+    ((IIf c tb eb) (IpIf c (ip_of_stmts tb) (ip_of_stmts eb)))
+    ((IWhile c b) (IpWhile c (ip_of_stmts b)))))
+
+(fn ip_of_stmts ((ss (List IStmt))) (List IpStmt)
+  (measure (struct ss))
+  (match ss
+    (Nil Nil)
+    ((Cons s t) (Cons (ip_of_stmt s) (ip_of_stmts t)))))
+
+(fn ip_of_fn ((f IFn)) IpFn
+  (MkIpFn
+    (ikparams_of f)
+    (ikextra_of f)
+    (ip_of_stmts (ibody_of f))
+    (iresult_of f)
+    (irkind_of f)))
+
+(fn ip_of_fns ((fs (List IFn))) (List IpFn)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons f t) (Cons (ip_of_fn f) (ip_of_fns t)))))
+
+(fn ip_of_prog ((p IProg)) IpProg
+  (MkIpProg (ip_of_fns (ifns_of p)) (ibase_of p) (imemsize_of p)))
+
+;; --- the call tier's well-kinded gate --------------------------------------------
+
+;; every argument checks at its parameter kind, arities equal
+(fn ipwk_args ((env (List IKind)) (ks (List IKind)) (es (List IExp))) Bool
+  (measure (struct ks))
+  (match ks
+    (Nil
+      (match es
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons k kt)
+     (match es
+       (Nil False)
+       ((Cons e et) (if (ikchk env e k) (ipwk_args env kt et) False))))))
+
+;; the base rules mirrored, plus: a call's target local carries the
+;; callee's result kind and its arguments the callee's parameter
+;; kinds; a word load lands in a U64 local from a U32 address; a word
+;; store takes a U32 address and a U64 value; fail is always well-kinded
+(fn ipwk_stmts ((env (List IKind)) (fs (List IpFn)) (ss (List IpStmt))) Bool
+  (measure (struct ss))
+  (match ss
+    (Nil True)
+    ((Cons s t)
+     (if
+       (match s
+         ((IpSet i e)
+          (match (ikat env i)
+            (None False)
+            ((Some k) (ikchk env e k))))
+         ((IpStore ae ve) (if (ikchk env ae U32) (ikchk env ve U8) False))
+         ((IpIf c tb eb)
+          (match (iksyn env c)
+            (None False)
+            ((Some ck)
+             (if (ikchk env c ck)
+               (if (ipwk_stmts env fs tb) (ipwk_stmts env fs eb) False)
+               False))))
+         ((IpWhile c b)
+          (match (iksyn env c)
+            (None False)
+            ((Some ck) (if (ikchk env c ck) (ipwk_stmts env fs b) False))))
+         ((IpCall i k args)
+          (match (ikat env i)
+            (None False)
+            ((Some ki)
+             (match (ipfn_at fs k)
+               (None False)
+               ((Some f)
+                (if (ikeq ki (iprkind_of f))
+                  (ipwk_args env (ipparams_of f) args)
+                  False))))))
+         ((IpLoadW i ae)
+          (match (ikat env i)
+            (None False)
+            ((Some ki) (if (ikeq ki U64) (ikchk env ae U32) False))))
+         ((IpStoreW ae ve) (if (ikchk env ae U32) (ikchk env ve U64) False))
+         ((IpFail _) True))
+       (ipwk_stmts env fs t)
+       False))))
+
+(fn ipwk_fn ((fs (List IpFn)) (f IpFn)) Bool
+  (if
+    (ipwk_stmts (ikapp (ipparams_of f) (ipextra_of f)) fs (ipbody_of f))
+    (ikchk (ikapp (ipparams_of f) (ipextra_of f)) (ipresult_of f) (iprkind_of f))
+    False))
+
+(fn ipwk_fns ((fs (List IpFn)) (todo (List IpFn))) Bool
+  (measure (struct todo))
+  (match todo
+    (Nil True)
+    ((Cons f t) (if (ipwk_fn fs f) (ipwk_fns fs t) False))))
+
+;; THE MEMBERSHIP PREDICATE for the call tier: every fn of the program
+;; checks against the program's own table
+(fn ipwk_prog ((p IpProg)) Bool (ipwk_fns (ipfns_of p) (ipfns_of p)))
 
 ;; --- the length-preservation family (IMP.md §6a, the il_wlen joint) -------------
 

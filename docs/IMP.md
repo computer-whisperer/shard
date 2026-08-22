@@ -286,6 +286,55 @@ half out.
   opening pin, not resolved here.
 
 
+## 2b. The call tier — calls, words, and the fail leg (COVERAGE.md C1, 2026-08-22)
+
+The generic path's programs call. The base machine above never did,
+and it cannot grow: its constructor sets (IExp / IStmt / IOut) are
+load-bearing for the certificate corpus — hand welds, generated outs,
+and the 247k-line vx86_acc_probe induct and case over them, and the
+last of those was emitted by tooling that no longer exists. So the
+call tier is ADDITIVE, the x86 model's base-tier / world-tier idiom
+applied to syntax:
+
+- **`IpStmt`** mirrors the four base statements over the UNCHANGED
+  expression language and adds `(IpCall i k args)` — local i := fn k
+  applied to pure argument expressions, banded on entry —
+  `(IpLoadW i addr)` / `(IpStoreW addr v)` — std/mem's little-endian
+  word view at width 8 (`load_le` / `store_le` over the `iw8` tower),
+  the whole span guarded inside the declared window — and
+  `(IpFail fam)`, the reasoned fail leg over the closed family set
+  `IFam = FOverflow | FOom | FStack` (MEMORY.md D8). A call is a
+  STATEMENT so that expressions stay pure and fuel-free (`iexp` serves
+  both tiers) and memory threads through the statement engine
+  unchanged.
+- **`IpFn` / `IpProg`** mirror `IFn` / `IProg`; the evaluator is its
+  own SCC `ipstmt` / `ipwhile` / `ipstmts` / `ipcall` on the fuel
+  measure, with the fn table and the window threaded explicitly (the
+  base tier's mlo/msz discipline — claims never project a symbolic
+  program), into its own outcomes `IpOut` (norm / trap / failed) and
+  `IpRet` (value+memory / trap / failed). `ipcall` burns one unit per
+  call, so fuel bounds depth; `iprun` is the program-level denotation
+  the generated per-fn theorems are stated at (COVERAGE.md P7).
+- **The lift** `ip_of_fn` / `ip_of_prog` embeds base-tier programs
+  (the identity on the shared constructors); the lift law — `iprun`
+  over a lifted program agrees with `icall` — is owed at the first
+  composition (COVERAGE.md C3).
+- **The gate** `ipwk_prog`: the base rules plus a call's target local
+  at the callee's result kind and its arguments at the callee's
+  parameter kinds, word loads into U64 locals from U32 addresses,
+  word stores of U64 values, fail always well-kinded.
+- **Probe**: models/imp/probes/ipcall_probe.shard (34 claims — calls,
+  recursion depth on the fuel, memory through a call, the fail leg
+  out of a callee, bad index / arity / fuel honesty, word-op wiring
+  and window guards, the lift on imp_probe's program, the gate's
+  accept/reject line). The width-8 round-trip law (`ls8_id`) is
+  std/mem growth owed at C2.
+
+What did NOT change: every base-tier definition, every existing
+certificate, impgen's emission. Named growth behind consumers: the
+lift law (C3), mutual tail calls, the conditional artifact form.
+
+
 ## 3. The trust story
 
 Nothing new, by construction:
