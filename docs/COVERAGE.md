@@ -504,6 +504,92 @@ the next rung — if:
   with #37's numbers.
 - **CD7 — the header word layout and the immortal count value.** C2.
 
+## 11. The certificate phase — design note (2026-08-22, DRAFT for the user's decision)
+
+With C1a–C3a landed the generic path RUNS end to end at the model
+(spec → imp → x86, three-way differential 15/15) and nothing is yet
+PROVEN about it beyond those differentials. The arc's remaining
+substance is two simulation theorems and the library they stand on.
+This note fixes their shapes so the decision is about order and cost,
+not about what is being built.
+
+**Theorem A — imp ⊑ x86 at the frame tier (C1c-3).** The frame tier
+has ONE alignment relation for every statement, which is exactly what
+makes CERT.md §4's validator form stateable at statement grain (the
+"mem-capable validator statement tier" STREAM.md §6 named as a door —
+this is its demand): acceptance is recompile-equality,
+`valid_frame p xm := (ixf_prog p) = (Some xm)`, witness = unit (A1's
+arity placeholder), and the soundness theorem, proven ONCE over every
+well-kinded IpProg, says: for every fn k, arguments, and memory M whose
+stack region is disjoint from every address the program reads or
+writes outside its frames, the x86 run from a register file with
+R15 = fp and the arguments pre-written into the frame at fp returns
+RAX = v and a memory agreeing with imp's outside the stack region
+whenever `iprun` returns `IpRv v`, traps whenever imp traps, and
+reaches the exit shim with RDI = 70+family whenever imp fails. The
+state relation is `rs.R15 = fp ∧ frame(XM, fp, nl) = lc ∧ XM ≡ M off
+the stack region`; the proof is an induction over the call tier's
+fuel SCC with one lemma per IpStmt constructor and one per IExp
+constructor, each a framing argument over std/mem's word view. What
+is NEW relative to A1's expression validator: memory (word-level
+framing at width 8 — `ls8_id` and the store/load disjointness laws are
+std/mem growth, owed since C2a), calls (the callee's frame sits above
+the caller's by `own`, so the caller's frame is preserved by the
+callee's stores — the frame-disjointness lemma), and the fuel algebra
+(A1 rode `lg_fuel` towers over instruction counts; the frame tier's
+per-statement instruction counts are static but path-dependent, so
+the theorem is stated at "sufficient fuel" with a cost function
+`ixf_cost` per statement — the place Runs/RunsWithin (#35) was designed
+for, and the first thing to re-open if the towers get heavy).
+Per-program cost after this theorem: ONE `exact-conv` of the soundness
+theorem at `p`, plus one compute of `ixf_prog p` — tools/impgen emits
+nothing for this leg; the product's x86 module is a computed value.
+This replaces "impgen's walk grown by the new arms" (P7's text) for
+the frame tier. REJECTED-because: per-program generated walk certs
+(impgen's current family) re-derive the same simulation per statement
+instance; with a uniform relation there is nothing program-specific
+left to walk, and the replay-era volume (188k lines for sha) is the
+measured cost of that shape.
+
+**Theorem B — spec ⊑ imp (C3b, the P7 per-fn inductions) over the
+runtime laws (C2b).** Per type T a READBACK `rb_T : Mem → word → Option
+T` derived from the TypeDef (immediates decode; a reference reads its
+header's tag and recurses into the slots), fuel-bounded on memory
+(acyclicity of the managed graph is what makes a bound exist — the
+C2b invariant). The heap invariant `hinv M` := every live cell's slots
+hold valid words, counts ≥ 1 on reachable cells, the free lists and
+the bump pointer well-formed, the static region immortal. The once-
+proven laws (C2b): `rt_alloc` returns a fresh cell disjoint from every
+live one and preserves every readback (patch-footprint framing in the
+base+patch vocabulary, CERT.md §5); filling a fresh cell's slots then
+reading it back is the constructor; `rt_inc` preserves every readback;
+`rt_dec` on an owned reference preserves every readback reachable from
+anything else (the release theorem — the hard one: the iterative
+worklist must be shown to free exactly the unreachable cells); the
+depth cell is ghost to readbacks. Then the per-fn theorem impc emits
+for each source fn f: `hinv M ∧ rb_args M args = Some as ⟹ iprun fuel P
+f_ix args M = Some (IpRv v M') ∧ hinv M' ∧ rb_T M' v = Some (f as) ∧
+every readback of a borrowed argument survives into M' ∨ IpRfailed
+fam` — an induction along f's own measure (the TOTALITY obligations
+supply the decrease), with the body's statements discharged by the
+per-construct laws and the ownership discipline (borrowed in, owned
+out) as the invariant threaded through calls. The engine (#27) is
+measured as the closer of the skeleton's leaves here.
+
+**Order (the decision).** Lean: **A first, then C2b, then B.** A is
+self-contained at the machine layer (framing only, no heap semantics),
+has A1 as its template, and closes C3's "certified at the machine"
+gate; its library growth (width-8 framing in std/mem, region
+disjointness) is exactly what B's heap laws reuse. Cost guess: A ≈ the
+A1 expression tier's effort doubled (statements + calls + memory); C2b
+≈ A again (the release theorem dominates); B's per-fn family is
+generated text whose size the C3 gates measure. Alternative: B first
+(the arc's novel claim, the thing no one has shown) — rejected-for-now
+because its foundation (C2b) is the deepest proof of the arc and the
+machine leg would sit unproven meanwhile; revisit if A's fuel algebra
+stalls. Either way, nothing here changes a pin: P7's lean stands for B,
+and A is the validator form CERT.md §4 already ratified.
+
 ## 10. Rung records
 
 (Appended per rung: what landed, commits, measured numbers, what was
