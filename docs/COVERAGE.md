@@ -742,3 +742,25 @@ Owed: C1c-2 the silicon leg (ELF + runner, Opus-delegated), C1c-3 the
 imp ⊑ x86 certificates for this tier (impgen's arms in the ratified
 dialect — with one uniform relation the validator shape of CERT.md §4 is
 the candidate).
+
+**C1c-2 — ON SILICON (2026-08-22; Opus-delegated).** tools/impc/fixtures/
+micro_x86_write.shard (462/0) packages `ixf_prog` of the product plus a
+trampoline appended AFTER the exit shim (indexes untouched): R15 := the
+stack base, rt_init's two arguments pre-written into the entry frame,
+`call rt_init`, `call K`, `shr rax,1` → RDI (one logical shift IS the
+i63 decode for the exit byte: −1 → 255, −4 → 252), `call exit-shim`;
+`enc_image` entry-first, `enc_winelf` at the module's own bounds (base
+65536, size 2^20). tools/impc/fixtures/micro_silicon.sh builds one ELF
+per wrapper, runs it, compares the process exit status with the spec's
+value mod 256 — **15/15 on the 5900X, first run, no encoder refusal, no
+fault**; a 16th row pins the emitter's refusal of a non-wrapper index.
+The 15 ELFs (74559 B each) differ in exactly two bytes — the `call K`
+rel32 — a free structural check that the wrapper index is the only
+selector. Honesty note: the exit status is one byte, so this oracle
+distinguishes values only mod 256 — the model-level differential
+(C1c-1) carries the full Ints; the silicon leg carries the bytes, the
+encoder, and the loader. Registered as `impc_micro_silicon`.
+**Finding (CI):** pipeline 398 went red on a summary line: the run-mode
+drivers printed `FAIL rows: 0`, and the CI FAIL-set awk matches any line
+beginning `FAIL ` — the probe itself was 17/17. Renamed to `rows failed:
+N` in every driver; a driver's summary must never start with FAIL/TYPE!.

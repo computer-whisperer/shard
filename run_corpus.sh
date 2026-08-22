@@ -1367,6 +1367,8 @@ pin_run impc_micro_regen bash -c 'bin/shard_eval run tools/impc/impc.shard tools
 pin_run impc_micro_run bin/shard_eval run tools/impc/fixtures/micro_run.shard
 # the frame tier (C1c): the same wrappers through the x86 MODEL on ixf_prog's translation
 pin_run impc_micro_x86_run bin/shard_eval run tools/impc/fixtures/micro_x86_run.shard
+# the silicon leg (C1c-2): one static ELF per wrapper through enc_winelf, exit status vs the spec mod 256
+pin_run impc_micro_silicon tools/impc/fixtures/micro_silicon.sh
 
 echo "=== x86: silicon differential ==="
 if command -v cc >/dev/null && [ -x bin/shard_eval ]; then

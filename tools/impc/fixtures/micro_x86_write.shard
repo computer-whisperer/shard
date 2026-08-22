@@ -1,0 +1,201 @@
+;;; tools/impc/fixtures/micro_x86_write.shard — THE SILICON LEG of the frame
+;;; tier (docs/COVERAGE.md C1c-2). Emits ONE static Linux ELF per t_* wrapper
+;;; of tools/impc/fixtures/micro.shard: the generic path's first compiled
+;;; program actually executed by a CPU, its exit status compared against the
+;;; spec's own value of the same wrapper.
+;;;
+;;; THE ARTICLE. The module is exactly the one the model-level differential
+;;; tools/impc/fixtures/micro_x86_run.shard runs — `(ixf_prog (micro_iprog
+;;; 65536 1114112))` — plus ONE synthesized TRAMPOLINE fn APPENDED AFTER the
+;;; exit shim, so every existing table index (the runtime's 0-3, the module's
+;;; 4-32, the shim's 33) is untouched and the `XCall` targets the frame tier
+;;; already emitted stay correct. The trampoline is what the ELF's `_start`
+;;; glue enters, and it is the driver the frame tier's convention demands
+;;; (to_x86.shard's FRAME TIER header: "xparams is 0 for every fn — a driver
+;;; pre-writes the entry frame"):
+;;;
+;;;   R15 := 589824            the entry frame pointer = micro_x86_run's stack_lo
+;;;   [R15]   := 65688         rt_init's argument 0 (heap_lo), frame-passed
+;;;   [R15+8] := 589824        rt_init's argument 1 (heap_hi), frame-passed
+;;;   call 0                   rt_init — the runtime header at [65536, 65688)
+;;;   call K                   the wrapper; its Int result lands in RAX
+;;;   RDI := RAX >> 1          the immediate decode: an i63 Int is 2n+1, so a
+;;;                            logical shift right by one puts n's two's-
+;;;                            complement low byte in DIL — and the kernel's
+;;;                            exit status IS that low byte, so a negative
+;;;                            wrapper (t_second_short = -1, t_find = -4)
+;;;                            arrives as 255 / 252 with no extra work
+;;;   call <shim>              the exit shim ixf_prog appends (mov rax,60;
+;;;                            syscall) — RDI is the code
+;;;
+;;; The address literals are NOT duplicated from the container: the window
+;;; handed to `enc_winelf` is read back off the module's own `MkXModule`
+;;; bounds (the staleness lesson recorded in examples/sha256sum/sha256sum_elf.shard
+;;; — a hand-copied layout constant that duplicates a model constant is a
+;;; landmine). Only the frame carve (heap_lo/heap_hi/stack_lo) is repeated
+;;; from micro_x86_run.shard, because it is the DRIVER's choice on both sides
+;;; and not yet a product parameter (C1c-1's note: "driver-chosen, not yet a
+;;; product parameter").
+;;;
+;;; UNTRUSTED PLUMBING, no proofs — this file is the oracle's harness, not a
+;;; certificate. A wrong byte fails LOUDLY at the loader or at the exit-code
+;;; comparison, never in a proof.
+;;;
+;;; ⚠ NEVER A CORPUS TARGET (the sha256sum_write.shard precedent): it is a
+;;; run-only World program whose whole job is a side effect.
+;;;
+;;; Run:  bin/shard_eval run tools/impc/fixtures/micro_x86_write.shard K OUTPATH
+;;;   K       the wrapper's TABLE INDEX, e.g. 17 = (t_len_ix)
+;;;   OUTPATH where the ELF bytes go (repo-relative)
+;;; Prints `EXPECT <n>` where n = the spec wrapper's Int mod 256 in [0,256) —
+;;; the process exit status the ELF must produce — and exits 0.
+;;; Exit 2 = a K no wrapper owns (or a malformed command line); exit 3 = the
+;;; translation or the write failed.
+;;;
+;;; Driven by tools/impc/fixtures/micro_silicon.sh.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../kernel/loader.shard")
+(import "../../../kernel/term.shard")
+(import "../../../models/imp/imp.shard")
+(import "../../../models/imp/rt.shard")
+(import "../../../models/x86/x86.shard")
+(import "../../../models/x86/encode.shard")
+(import "../../../models/x86/elf.shard")
+(import "../../../models/imp/to_x86.shard")
+(import "micro.shard")
+(import "micro_ipc_out.shard")
+
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader write_file))
+(use (:: kernel loader exit))
+(use (:: kernel term show_int))
+(use (:: models imp imp *))
+(use (:: models imp rt *))
+(use (:: models x86 x86 *))
+(use (:: models imp to_x86 *))
+(use (:: models x86 encode enc_image))
+(use (:: models x86 elf enc_winelf))
+(use (:: tools impc fixtures micro *))
+(use (:: tools impc fixtures micro_ipc_out *))
+
+;; --- the window and the frame carve (micro_x86_run.shard's numbers) ----------
+
+(fn win_hi () Int 1114112)
+
+(fn heap_lo () Int 65688)
+
+(fn heap_hi () Int 589824)
+
+(fn stack_lo () Int 589824)
+
+(fn prog () IpProg (micro_iprog 65536 (win_hi)))
+
+;; --- the trampoline ----------------------------------------------------------
+
+(fn xflen ((fs (List XFunc))) Int
+  (measure (struct fs))
+  (match fs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (xflen t)))))
+
+;; the ELF entry: pre-write rt_init's frame, run the runtime, run the wrapper,
+;; decode the immediate into RDI, exit through the shim
+(fn tramp ((k Int) (shim Int)) (List XInstr)
+  (list
+    (XMovRI R15 (stack_lo))
+    (XMovRR R10 R15)
+    (XMovRI RAX (heap_lo))
+    (XMem (XMStore64 (AReg R10) RAX))
+    (XMovRR R10 R15)
+    (XBin XAdd R10 (SImm 8))
+    (XMovRI RAX (heap_hi))
+    (XMem (XMStore64 (AReg R10) RAX))
+    (XCall (rt_init_ix))
+    (XCall k)
+    (XShrI RAX 1)
+    (XMovRR RDI RAX)
+    (XCall shim)))
+
+;; the whole static ELF for wrapper index k; Nil = the tier refused
+(fn elf_for ((k Int)) (List Int)
+  (match (ixf_prog (prog))
+    (None Nil)
+    ((Some xm)
+     (let ((shim (ixf_count (ipfns_of (prog)))))
+       (let ((fs (xf_app (xfuncs_of xm) (list (MkXFunc 0 (tramp k shim))))))
+         (if (int_eq (xflen fs) (+ shim 2))
+           (enc_winelf
+             (enc_image fs (+ shim 1))
+             0
+             (xmemlo_of xm)
+             (- (xmemhi_of xm) (xmemlo_of xm)))
+           Nil))))))
+
+;; --- the spec side: K -> the wrapper's own value -----------------------------
+
+(fn expect_of ((k Int)) (Option Int)
+  (if (int_eq k (t_len_ix)) (Some (t_len))
+  (if (int_eq k (t_len0_ix)) (Some (t_len0))
+  (if (int_eq k (t_app_ix)) (Some (t_app))
+  (if (int_eq k (t_perim_ix)) (Some (t_perim))
+  (if (int_eq k (t_second_ix)) (Some (t_second))
+  (if (int_eq k (t_second_short_ix)) (Some (t_second_short))
+  (if (int_eq k (t_sumto_ix)) (Some (t_sumto))
+  (if (int_eq k (t_rev_ix)) (Some (t_rev))
+  (if (int_eq k (t_pick_ix)) (Some (t_pick))
+  (if (int_eq k (t_find_ix)) (Some (t_find))
+  (if (int_eq k (t_find_none_ix)) (Some (t_find_none))
+  (if (int_eq k (t_shapes_ix)) (Some (t_shapes))
+  (if (int_eq k (t_arith_ix)) (Some (t_arith))
+  (if (int_eq k (t_cmp_ix)) (Some (t_cmp))
+  (if (int_eq k (t_let_ix)) (Some (t_let))
+  None))))))))))))))))
+
+;; --- the driver --------------------------------------------------------------
+
+(fn mcat ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (mcat t b)))))
+
+(fn matoi_go ((bs (List Int)) (acc Int) (seen Bool)) (Option Int)
+  (measure (struct bs))
+  (match bs
+    (Nil (if seen (Some acc) None))
+    ((Cons b t)
+     (if (le 48 b) (if (le b 57) (matoi_go t (+ (* acc 10) (- b 48)) True) None)
+     None))))
+
+(fn matoi ((bs (List Int))) (Option Int) (matoi_go bs 0 False))
+
+(fn die ((msg (List Int)) (code Int) (w World)) World
+  (exit code (write (mcat msg "\n") w)))
+
+(fn emit ((k Int) (out (List Int)) (w World)) World
+  (match (expect_of k)
+    (None (die "micro_x86_write: no wrapper owns that index" 2 w))
+    ((Some want)
+     (match (elf_for k)
+       (Nil (die "micro_x86_write: the frame tier refused this program" 3 w))
+       ((Cons b0 bs)
+        (match (write_file out (Cons b0 bs) w)
+          ((Pair ok w2)
+           (if ok
+             (exit
+               0
+               (write (mcat "EXPECT " (mcat (show_int (mod want 256)) "\n")) w2))
+             (die "micro_x86_write: write_file failed" 3 w2)))))))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons ka (Cons out Nil))
+        (match (matoi ka)
+          (None (die "usage: micro_x86_write K OUTPATH" 2 w1))
+          ((Some k) (emit k out w1))))
+       (_ (die "usage: micro_x86_write K OUTPATH" 2 w1))))))
