@@ -103,9 +103,16 @@ def bop_arm(op, xop):
     u8 = f"""(chain
   {cap('hk', '(= k U8)')}
   {absurd_none('hp', [ha, hb, '(rewrite (premise hk) lr rhs true ())', '(unfold ixf_bop rhs)'])})"""
+    # the U32 bitwise trio is refused by the frame tier (A-2): its U32 arm is an absurd too
+    if op in ("IAnd", "IOr", "IXor"):
+        u32 = f"""(chain
+  {cap('hk', '(= k U32)')}
+  {absurd_none('hp', [ha, hb, '(rewrite (premise hk) lr rhs true ())', '(unfold ixf_bop rhs)'])})"""
+    else:
+        u32 = kleaf('U32', 'XBin32')
     return f"""(case-on k IKind
   ((case U8 {u8})
-   (case U32 {kleaf('U32', 'XBin32')})
+   (case U32 {u32})
    (case U64 {kleaf('U64', 'XBin')})))"""
 
 def plain_arm(opterm):
