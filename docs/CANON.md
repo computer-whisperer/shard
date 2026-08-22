@@ -1,6 +1,8 @@
 shard canonicalization — CANON.md
 =================================
 
+> **STATUS (reset 2026-08-22): LAW.** the canonical dialect — rules, census, content addressing. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
+
 > Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
 
 STATUS: RATIFIED (user review completed 2026-07-10) — §1–§10 stand as

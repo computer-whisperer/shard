@@ -1,5 +1,7 @@
 # Totality — the measure-descent admissibility system
 
+> **STATUS (reset 2026-08-22): LAW.** the measure-descent admissibility system, built and corpus-pinned. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
+
 > Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
 
 > Status legend: **[BUILT]** in the kernel and exercised by the corpus ·

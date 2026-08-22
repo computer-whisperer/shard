@@ -1,5 +1,7 @@
 # CERT.md — the certificate architecture: conversion, sharing, validators
 
+> **STATUS (reset 2026-08-22): LAW.** certificate representation — conversion forms, validators, storage; Arc A CLOSED 2026-07-26. §10's post-Arc-A ORDERING is RETIRED by the reset; its two standing laws (no new replay-cert families; generators born speaking the ratified dialect) STAND. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
+
 STATUS: direction RATIFIED 2026-07-18 at the three-way design review
 (Christian + Fable + codex; the full correspondence is archived at
 docs/archive/DESIGN-REVIEW-2026-07-18.md — this ledger is its
@@ -531,6 +533,8 @@ further generator learns the old dialect. That is the arc's whole
 point.
 
 ## 10. Standing consequences while Arc A runs
+
+> **RETIRED 2026-08-22 (the reset).** The post-Arc-A ORDERING below (B → §7 → C-paper → coverage → D) is no longer the authority: Arc B closed 2026-08-11, §7's S1/S2 landed 2026-08-02, and the user retired the design review's sequencing in favour of one goal — the coverage arc as #23 (shardfmt through the generic path, examples/calc = rung 1), opening after the 2026-08 prune arc (#24). The two LAWS in this section stand: no new replay-cert families anywhere; coverage emission born speaking the ratified dialect (final ratification 2026-07-28, §8).
 
 - **No new replay-cert families anywhere.** impgen/wasmgen/x86gen
   are FROZEN as oracle/regression sources; existing outs regenerate

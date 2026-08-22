@@ -1,5 +1,7 @@
 # shard — design intent
 
+> **STATUS (reset 2026-08-22): LAW.** design intent; §10 records the 2026-08-22 reset — the 2026-07-18 design review's ordering is retired and ONE goal (#23) governs. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
+
 > Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
 
 This is the "why" behind the project, in full. The README is the front door;
@@ -424,6 +426,50 @@ Flagged so we don't paint ourselves into a corner:
   dependency surface) is the axis the long-term vision lives or dies on.
 
 
+## 10. State of the project — the 2026-08-22 reset
+
+Recorded once, here, so the ledgers' "next arc" pointers can be read as
+history. Where things stand after Arcs A and B:
+
+- **What is demonstrated.** One real program goes from spec to a
+  proven, conventional, competitive Linux binary: `(bin sha256sum)` —
+  streaming, capless, CPUID-dispatching, 1.08× coreutils-as-shipped,
+  its proof trace tied to the emitted bytes (STREAM.md §9, X86.md
+  §54). The certificate architecture that makes such artifacts
+  affordable is landed law (CERT.md, STORAGE.md). The proof-search
+  engine re-solves 172/182 of the hand-proof corpus (SEARCH.md).
+- **What is not.** The GENERIC path — spec → imp by generator → x86 by
+  generator — covers straight-line, loop, and branch code only, and
+  pays a 6.1× no-register-allocation tax. It has never seen a
+  constructor, a `match`, a real call, or a heap cell. The flagship's
+  fast path is hand-authored. That is the gap between the C-class
+  identity this document claims and what is shown.
+- **The design review is retired as an authority.** The 2026-07-18
+  three-way review was a falsification exercise; every gate it named
+  that could be tested has been measured and read NO (CERT.md §9,
+  STREAM.md B4–B6). What it left behind was an ordering, and the
+  ordering encoded July's question. Its standing laws (no new
+  replay-cert families; generators born speaking the ratified
+  dialect) remain in CERT.md §10.
+- **One goal replaces it (issue #23):** `tools/shardfmt` — a tool this
+  repository runs on every rebuild — shipped as a proven native binary
+  through the generic path, with the fmt gate running that binary.
+  `examples/calc` is rung 1. The oracle is already built and cannot be
+  fooled (byte-identical output over the whole corpus); the work it
+  forces is exactly the overdue coverage frontier (IMP.md §6 — the
+  uniform-representation compiler, MEMORY.md rung 4's counted heap,
+  the `except` clause, calls/stack); and the search engine becomes its
+  proof automation. Register allocation is a rung inside it (#25).
+- **Before it, the prune arc (issue #24):** tree and branches, the
+  issue tracker as the single backlog (labels `arc:coverage` /
+  `parked` / `debt`, every parked item carrying a wake condition),
+  status banners on every ledger, corpus cost instrumentation.
+
+The ruling's principle, stated once: pick one practical goal and push
+for it; re-adjudicate banked decisions when the goal touches them, not
+in the abstract.
+
+
 ## See also
 
 - `../README.md` — front door, quick start, the full documentation map.
@@ -434,10 +480,13 @@ Flagged so we don't paint ourselves into a corner:
   `REFINEMENT.md` — structural invariants as types.
 - `BOUNDARIES.md` — modeling external systems (extern + axiom; the direct-style
   World/extern I/O the `eval` runner realizes).
-- `ISA.md` / `LOWERING.md` / `IMP.md` / `X86.md` / `CANON.md` /
-  `MEMORY.md` / `SEARCH.md` — the arc ledgers: targets-as-libraries, the
+- `ISA.md` / `LOWERING.md` / `IMP.md` / `X86.md` / `RISCV.md` / `CANON.md` /
+  `MEMORY.md` / `CERT.md` / `STORAGE.md` / `STREAM.md` / `SEARCH.md` /
+  `FLOATS.md` / `BUILD.md` — the arc ledgers: targets-as-libraries, the
   lowering form, the neutral imperative dialect (the common lowering
-  step), the x86 rung, the canonical dialect, memory/representation,
-  program search.
+  step), the x86 and RISC-V targets, the canonical dialect,
+  memory/representation, the certificate architecture and its storage
+  slice, the streaming bin (Arc B), program search + the proof engine,
+  floats, the build story.
 - `REVISIT.md` — the design-decision ledger: every choice and when to revisit.
 - `archive/TRANSFER.md` — the v1→v2 handoff: premise, lessons, what changed.

@@ -1,5 +1,7 @@
 # Narrow shard
 
+> **STATUS (reset 2026-08-22): LAW.** the normative spec of narrow shard — what runs today. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
+
 > Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
 
 > The language is **shard**. This document specifies **narrow shard** —

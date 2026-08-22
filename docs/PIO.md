@@ -1,5 +1,7 @@
 # PIO — the RP2350 state-machine ISA model, and PIO-search
 
+> **STATUS (reset 2026-08-22): CLOSED RECORD.** the PIO arc, merged; the engine-observability asks are #19. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
+
 > Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
 
 > Status legend: **[BUILT]** landed and exercised by the corpus · **[DECIDED]**

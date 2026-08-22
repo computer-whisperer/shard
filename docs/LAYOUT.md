@@ -1,5 +1,7 @@
 # LAYOUT.md — repository layout: the placement rule and the move map
 
+> **STATUS (reset 2026-08-22): LAW.** the placement rule and the path map, unchanged since ratification 2026-07-18. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
+
 Status: RATIFIED 2026-07-18 (the repo reorganization, slices 0–4).
 This is the decoder for every path in the tree — and for every
 *historical* path in the ledgers, which deliberately keep their

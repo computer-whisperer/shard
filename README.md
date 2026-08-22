@@ -287,13 +287,15 @@ authority for its area:
 | [ISA.md](docs/ISA.md) | machine models as libraries; target architecture |
 | [LOWERING.md](docs/LOWERING.md) | the lowering-form paradigm: statements, certs, gates |
 | [CERT.md](docs/CERT.md) | the certificate architecture: conversion, sharing, validators |
+| [STORAGE.md](docs/STORAGE.md) | the storage + incremental slice: cert cache, module images, arena |
+| [STREAM.md](docs/STREAM.md) | Arc B: the streaming bin — `(bin sha256sum)` made conventional and fast (closed) |
 | [IMP.md](docs/IMP.md) | the neutral imperative dialect: spec ⊑ imp ⊑ wasm/x86 |
 | [X86.md](docs/X86.md) | the x86-64 target: emitter → bin ladder → World on silicon |
 | [CANON.md](docs/CANON.md) | the canonical dialect: rules, census, content addressing |
 | [TCB.md](docs/TCB.md) | the trust story: exactly what is trusted, and why |
 | [MEMORY.md](docs/MEMORY.md) | representation + memory management (draft) |
 | [BUILD.md](docs/BUILD.md) | the build layer: products, profiles, PIN/DERIVE/SYNTHESIZE |
-| [SEARCH.md](docs/SEARCH.md) | program search over shard terms (arc complete, merged) |
+| [SEARCH.md](docs/SEARCH.md) | program search + the lock-step proof engine (arcs complete, on main) |
 | [FLOATS.md](docs/FLOATS.md) | rationals + parametric floats: the value-level numeric core |
 | [PIO.md](docs/PIO.md) | the RP2350 PIO ISA model + program search |
 | [RISCV.md](docs/RISCV.md) | the RISC-V third target: one model, both widths |
@@ -304,20 +306,21 @@ authority for its area:
 
 ## Live arcs
 
-- **The compile story** — how anyone actually compiles shard: one
-  declarative surface over a pin-or-derive tower, from "one decl to
-  ELF, zero configuration" to "every stage hand-spelled, same gates."
-  The next ledger to be drafted.
-- **Memory and representation** — [docs/MEMORY.md](docs/MEMORY.md):
-  the tower of cancellation theorems; flagships are sha256→x86 with
-  zero heap and the evaluator's aggregate half.
-- **The flagship lowering** — compile `kernel/eval.shard` itself and
-  retire the temporary native chain (LOWERING.md §7).
-- **Program search** — [docs/SEARCH.md](docs/SEARCH.md): sketches,
-  dialect grammars, and proof-rendered synthesis, developing in a
-  parallel worktree.
-- **The canon flywheel** — census → rule → re-measure
-  ([docs/CANON.md](docs/CANON.md) §13 onward).
+- **The prune arc (2026-08, issue #24)** — spring cleaning before the
+  new project: tree and branches, the issue tracker as the single
+  backlog, ledger status banners, corpus cost.
+- **THE GOAL — the coverage arc (issue #23)**: `tools/shardfmt` shipped
+  as a proven native binary through the GENERIC path (spec → imp by the
+  uniform-representation compiler → x86 by tools/impgen), with the
+  repo's own fmt gate running that binary; `examples/calc` is rung 1.
+  Opens when the prune arc closes; [docs/IMP.md](docs/IMP.md) §6 is its
+  charter and [docs/OVERVIEW.md](docs/OVERVIEW.md) §10 the ruling.
+- **Closed, for orientation**: Arc A — the certificate architecture
+  ([CERT.md](docs/CERT.md)); Arc B — the streaming bin
+  ([STREAM.md](docs/STREAM.md): `(bin sha256sum)` at 1.08× coreutils-
+  as-shipped with proven CPUID dispatch); the lock-step search arc
+  ([SEARCH.md](docs/SEARCH.md), merged to main). Everything banked from
+  them is an issue: labels `arc:coverage` / `parked` / `debt`.
 
 ## Conventions
 
@@ -348,8 +351,10 @@ authority for its area:
 
 ## Status
 
-~141k lines of tracked shard (kernel: ~26k) over a ~3k-line disposable
-Rust bootstrap. The proof corpus, the std interfaces, the wasm and x86
-lowering pipelines, and the trust ledger machinery are live and gated;
-the current work fronts are the compile story, memory/representation,
-and the eval.shard flagship (see Live arcs).
+~945k lines of tracked shard (kernel: ~28k; more than half of the
+total is generated certificate text and validation articles) over a
+~3.1k-line disposable Rust bootstrap. The proof corpus, the std
+interfaces, the wasm / x86 / RISC-V models and lowering pipelines, the
+trust-ledger machinery, the proof-search engine, and the streaming-bin
+flagship are live and CI-gated; the current front is the prune arc,
+then the coverage arc (see Live arcs).

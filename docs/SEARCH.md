@@ -1,6 +1,8 @@
 shard program search — SEARCH.md
 =================================
 
+> **STATUS (reset 2026-08-22): RECORD + LAW.** the meta-search and more-search arcs are CLOSED; the lock-step section ("The lock-step arc", near the end) is the engine's law, merged to main 2026-08-22; LS-law 3's decision is re-scoped as #27. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
+
 > Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
 
 STATUS: RATIFIED (user review 2026-07-11) — the scope ledger for the
@@ -5582,3 +5584,7 @@ LS4 REACH GATE IS MET.**
 - **Surfaced for the slice boundary (user decision, per the interim
   ruling): the gate is met — LS-law 3's prove-on-engine rewrite
   decision is now live.**
+- **2026-08-22 (the reset): RE-SCOPED as #27** — no standalone rewrite
+  of tools/prove; the engine becomes the coverage arc's (#23) proof
+  automation, its reach measured on the generated obligation families.
+  The arc merged to main 8bf4b2d (+ fixup 5031db8) the same day.

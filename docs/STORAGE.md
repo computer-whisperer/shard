@@ -1,5 +1,7 @@
 # STORAGE.md — the storage & incremental slice: arena, images, and the per-module skip
 
+> **STATUS (reset 2026-08-22): LAW.** S1 (the cert cache) + S2 (parse-once; image door default OFF) LANDED 2026-08-02; S3 is parked as #33, the Module-layer image as #34. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
+
 Status: RATIFIED 2026-08-02 (user; all three §6 forks ruled at
 their leans same-day: F1 = the S1→S2→S3 ladder, F2 = uncommitted
 local cache, F3 = module-hash + mod.req-interface v1). This is
@@ -333,6 +335,8 @@ pattern:
   codec + door + differential stand ready for the Module layer.
   Next per §10 ordering / STREAM.md sequencing: B5; S3 arena stays
   maybe-never.
+  (2026-08-22: B5 closed 2026-08-09; S3 = #33 parked; the Module-layer
+  image = #34 parked; CERT.md §10's ordering retired by the reset.)
 
 ## 8. S1 RECORD (2026-08-02; landed same-day as ratification)
 

@@ -1,6 +1,8 @@
 shard builds — BUILD.md
 =======================
 
+> **STATUS (reset 2026-08-22): LAW.** the build story — slices 1–10 landed; rung 3 (profiles) waits on a consumer. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
+
 > Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
 
 STATUS: DRAFT (2026-07-11) — the scope ledger for the build story: how

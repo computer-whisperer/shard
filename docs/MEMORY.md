@@ -1,6 +1,8 @@
 shard memory — MEMORY.md
 ========================
 
+> **STATUS (reset 2026-08-22): LAW (DRAFT-marked).** representation + memory management; rung 4 (the counted heap) is the goal's runtime (#23, #9); D8's deferred spellings are #26. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
+
 > Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
 
 STATUS: DRAFT (2026-07-11; application-story revision same day — the
@@ -444,6 +446,8 @@ as measured per-decl upgrades. The full-gap pathfinder milestone:
 examples/calc as a proven (bin …) on silicon through the generic
 path (strings, lists, ADTs, recursion — the key types crossing the
 entire gap).
+
+> **2026-08-22 (the reset):** this is now THE GOAL — #23 (shardfmt as a proven native bin through the generic path; calc = rung 1); the counted heap is its runtime (#9) and D8's deferred spellings (the `except` clause, the conditional form) are #26.
 
 1. **Scalars (`register`).** The ratified LOWERING.md §7 item 9 plan:
    kernel-inner refined u8/u32/u64; fit obligations discharged from

@@ -1,7 +1,9 @@
 # STREAM.md — Arc B: the streaming bin (the bin story generalized)
 
+> **STATUS (reset 2026-08-22): CLOSED RECORD.** Arc B complete 2026-08-11 (B0–B6); the §7 laws (stream contract, observation relation, claim forms, Runs v1) and the §8/§9 consumer APIs remain law. AVX2 door = #31, regalloc = #25, except clause = #26, Runs v2 = #35. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
+
 STATUS: RATIFIED 2026-07-26 (user ruling; drafted by Fable the same
-day). Arc B is the ratified successor to the certificate pathfinder
+day). **ARC B CLOSED 2026-08-11 — B0–B6 all landed (§3 ladder; §9.3 slice E = the verdict and THE B6 NUMBER).** Arc B is the ratified successor to the certificate pathfinder
 arc (CERT.md §8 R4, §10: "Arc B opens next, rung 1 = the
 replacement-basis measurement"). Charter sources: the design review's
 Arc B section and the D8-closer delta

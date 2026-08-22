@@ -1,6 +1,8 @@
 shard floats — FLOATS.md
 ========================
 
+> **STATUS (reset 2026-08-22): LAW.** rationals + parametric floats (R0–R3b landed); the ML-numerics arc (§15) is parked as #29. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
+
 > Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
 
 STATUS: RATIFIED (2026-07-12, user read + sign-off; drafted

@@ -1,6 +1,8 @@
 shard imp — IMP.md
 ==================
 
+> **STATUS (reset 2026-08-22): LAW.** the neutral imperative dialect and impgen; §6's coverage redirection is the charter of the goal (#23); §9's 'Arc A next' pointer is history. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
+
 > Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
 
 STATUS: RATIFIED (2026-07-12; drafted 2026-07-11; §2a typed-machine
@@ -3414,6 +3416,8 @@ ratified a redirection that governs this ledger's NEXT pointer:
 **docs/CERT.md is now the law for certificate representation**, and
 Arc A (its pathfinder protocol, CERT.md §8) is the next arc — before
 any new emission tier, coverage family, or lowering rung.
+
+> **AMENDED 2026-08-22 (the reset).** Arc A closed 2026-07-26 and the dialect was ratified FINAL 2026-07-28 (CERT.md §8), so the design-only freeze below is LIFTED: the coverage arc — §6's redirection, the uniform-representation compiler over imp with the counted heap as its runtime, examples/calc as rung 1, shardfmt as the flagship — is THE GOAL (#23), opening after the 2026-08 prune arc (#24). Its paper debts (calls/stack, signed kinds, address policy, heap patch/framing algebra, the cons/match/free micro-flagship) close in the opener ledger, ratified before anything emits.
 
 Standing consequences here:
 
