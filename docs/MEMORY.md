@@ -447,7 +447,7 @@ examples/calc as a proven (bin …) on silicon through the generic
 path (strings, lists, ADTs, recursion — the key types crossing the
 entire gap).
 
-> **2026-08-22 (the reset):** this is now THE GOAL — #23 (shardfmt as a proven native bin through the generic path; calc = rung 1); the counted heap is its runtime (#9) and D8's deferred spellings (the `except` clause, the conditional form) are #26.
+> **2026-08-22 (the reset):** this is now THE GOAL — #23 (shardfmt as a proven native bin through the generic path; calc = rung 1); the counted heap is its runtime (#9) and D8's deferred spellings (the `except` clause, the conditional form) are #26. **Opener ledger: docs/COVERAGE.md (2026-08-22) — rung 4 is its P4 (allocator + counting as once-proven imp code, framing in the base+patch vocabulary), D6/D2 resolve at its P2, D8's spellings at its P9.**
 
 1. **Scalars (`register`).** The ratified LOWERING.md §7 item 9 plan:
    kernel-inner refined u8/u32/u64; fit obligations discharged from

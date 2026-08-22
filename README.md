@@ -289,6 +289,7 @@ authority for its area:
 | [CERT.md](docs/CERT.md) | the certificate architecture: conversion, sharing, validators |
 | [STORAGE.md](docs/STORAGE.md) | the storage + incremental slice: cert cache, module images, arena |
 | [STREAM.md](docs/STREAM.md) | Arc B: the streaming bin — `(bin sha256sum)` made conventional and fast (closed) |
+| [COVERAGE.md](docs/COVERAGE.md) | the coverage arc: the generic path spec → imp → x86, shardfmt as the flagship (opener, for ratification) |
 | [IMP.md](docs/IMP.md) | the neutral imperative dialect: spec ⊑ imp ⊑ wasm/x86 |
 | [X86.md](docs/X86.md) | the x86-64 target: emitter → bin ladder → World on silicon |
 | [CANON.md](docs/CANON.md) | the canonical dialect: rules, census, content addressing |
@@ -313,8 +314,10 @@ authority for its area:
   as a proven native binary through the GENERIC path (spec → imp by the
   uniform-representation compiler → x86 by tools/impgen), with the
   repo's own fmt gate running that binary; `examples/calc` is rung 1.
-  The next arc to open; [docs/IMP.md](docs/IMP.md) §6 is its charter
-  and [docs/OVERVIEW.md](docs/OVERVIEW.md) §10 the ruling.
+  **Opener ledger drafted 2026-08-22 — [docs/COVERAGE.md](docs/COVERAGE.md)**
+  (pins, rung ladder C0–C6, the author-residue gate); awaiting
+  ratification. [docs/IMP.md](docs/IMP.md) §6 is its charter and
+  [docs/OVERVIEW.md](docs/OVERVIEW.md) §10 the ruling.
 - **Closed, for orientation**: Arc A — the certificate architecture
   ([CERT.md](docs/CERT.md)); Arc B — the streaming bin
   ([STREAM.md](docs/STREAM.md): `(bin sha256sum)` at 1.08× coreutils-

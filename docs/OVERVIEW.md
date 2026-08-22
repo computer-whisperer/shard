@@ -460,6 +460,8 @@ history. Where things stand after Arcs A and B:
   uniform-representation compiler, MEMORY.md rung 4's counted heap,
   the `except` clause, calls/stack); and the search engine becomes its
   proof automation. Register allocation is a rung inside it (#25).
+  Its opener ledger is `COVERAGE.md` (drafted 2026-08-22: the author-
+  residue gate, the opening pins, rungs C0–C6).
 - **Before it, the prune arc (issue #24, closed 2026-08-22):** tree and branches, the
   issue tracker as the single backlog (labels `arc:coverage` /
   `parked` / `debt`, every parked item carrying a wake condition),

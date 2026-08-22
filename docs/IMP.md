@@ -3417,7 +3417,7 @@ ratified a redirection that governs this ledger's NEXT pointer:
 Arc A (its pathfinder protocol, CERT.md §8) is the next arc — before
 any new emission tier, coverage family, or lowering rung.
 
-> **AMENDED 2026-08-22 (the reset).** Arc A closed 2026-07-26 and the dialect was ratified FINAL 2026-07-28 (CERT.md §8), so the design-only freeze below is LIFTED: the coverage arc — §6's redirection, the uniform-representation compiler over imp with the counted heap as its runtime, examples/calc as rung 1, shardfmt as the flagship — is THE GOAL (#23), opening after the 2026-08 prune arc (#24). Its paper debts (calls/stack, signed kinds, address policy, heap patch/framing algebra, the cons/match/free micro-flagship) close in the opener ledger, ratified before anything emits.
+> **AMENDED 2026-08-22 (the reset).** Arc A closed 2026-07-26 and the dialect was ratified FINAL 2026-07-28 (CERT.md §8), so the design-only freeze below is LIFTED: the coverage arc — §6's redirection, the uniform-representation compiler over imp with the counted heap as its runtime, examples/calc as rung 1, shardfmt as the flagship — is THE GOAL (#23), opening after the 2026-08 prune arc (#24). Its paper debts (calls/stack, signed kinds, address policy, heap patch/framing algebra, the cons/match/free micro-flagship) close in the opener ledger, ratified before anything emits. **The opener ledger is docs/COVERAGE.md (drafted 2026-08-22): §4 closes the four debts as pins P3/P5/P4/P4, C3 is the micro-flagship.**
 
 Standing consequences here:
 

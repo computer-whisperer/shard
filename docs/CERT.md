@@ -534,7 +534,7 @@ point.
 
 ## 10. Standing consequences while Arc A runs
 
-> **RETIRED 2026-08-22 (the reset).** The post-Arc-A ORDERING below (B → §7 → C-paper → coverage → D) is no longer the authority: Arc B closed 2026-08-11, §7's S1/S2 landed 2026-08-02, and the user retired the design review's sequencing in favour of one goal — the coverage arc as #23 (shardfmt through the generic path, examples/calc = rung 1), opening after the 2026-08 prune arc (#24). The two LAWS in this section stand: no new replay-cert families anywhere; coverage emission born speaking the ratified dialect (final ratification 2026-07-28, §8).
+> **RETIRED 2026-08-22 (the reset).** The post-Arc-A ORDERING below (B → §7 → C-paper → coverage → D) is no longer the authority: Arc B closed 2026-08-11, §7's S1/S2 landed 2026-08-02, and the user retired the design review's sequencing in favour of one goal — the coverage arc as #23 (shardfmt through the generic path, examples/calc = rung 1), opening after the 2026-08 prune arc (#24). The two LAWS in this section stand: no new replay-cert families anywhere; coverage emission born speaking the ratified dialect (final ratification 2026-07-28, §8). The coverage arc's opener ledger is docs/COVERAGE.md (2026-08-22); its P7 fixes the generated certificate shape (per-fn inductions in the conversion dialect) under these laws.
 
 - **No new replay-cert families anywhere.** impgen/wasmgen/x86gen
   are FROZEN as oracle/regression sources; existing outs regenerate
