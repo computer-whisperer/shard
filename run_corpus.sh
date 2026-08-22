@@ -27,6 +27,27 @@ if [ -z "${EVAL:-}" ]; then
 fi
 [ ${#CHECK_CMD[@]} -eq 0 ] && CHECK_CMD=("$EVAL" run kernel/check.shard)
 
+# ── run-mode pin gating (prune arc P4, 2026-08-22): the search drivers
+# spell failure as "SUPERPOSED-SEARCH FAIL …" / "AUDIT FAIL …", which the
+# CI FAIL-set awk (^FAIL |^TYPE! ) never matched — so a failed search pin
+# was invisible to the gate. pin_run turns a nonzero driver exit into a
+# FAIL row the gate sees. NAME = the task (or driver) basename. SCOPE
+# (2026-08-22): the task drivers typed_superpose / typed_expr / imp_expr,
+# whose exit codes were verified (0 on GATES OK, 1 on any FAIL); the other
+# run-mode probes keep their own grep-shaped gates until a CI log shows
+# their exit codes are clean (then extend).
+pin_run() { # NAME CMD...
+  local name=$1; shift
+  if "$@"; then :; else echo "FAIL pin-$name (exit $?)"; fi
+}
+# pin_note: the informational twin for the other run-mode probes — records
+# the driver's exit code as a PIN-EXIT row (never FAIL) so one CI log shows
+# which probes exit clean; those get promoted to pin_run afterwards.
+pin_note() { # NAME CMD...
+  local name=$1; shift
+  "$@"; echo "PIN-EXIT $name $?"
+}
+
 # ── S2b image-differential leg (docs/STORAGE.md §8a): SHARD_IMAGES=1
 # routes every check in this run through the loader's image front door
 # (a +images token ahead of the target; check.shard strips it anywhere
@@ -38,6 +59,11 @@ if [ -n "${SHARD_IMAGES:-}" ]; then
   CHECK_CMD+=(+images)
 fi
 JOBS="${JOBS:-$(nproc)}"
+# ── wall-time instrumentation (prune arc P4, 2026-08-22): the parallel
+# target phase hides its long pole, so every target records its own
+# seconds and the log ends with a sorted top-20 plus phase totals. Lines
+# never start with FAIL/TYPE!/SKIP, so the CI FAIL-set diff ignores them.
+T_SCRIPT0=${EPOCHSECONDS:-$(date +%s)}
 TARGETS=(
   examples/add_nat_zero.shard
   pins/lang/nat_prim.shard
@@ -419,6 +445,9 @@ TARGETS=(
   tools/search/tasks/typed_append_value.shard
   tools/search/tasks/observer_model.shard
   tools/search/tasks/typed_observer_value.shard
+  tools/search/tasks/typed_expect_empty.shard
+  tools/search/tasks/typed_list_first.shard
+  tools/search/tasks/typed_observer_conjunctive_first.shard
   tools/search/tasks/typed_observer_conjunctive.shard
   tools/search/gen/imp_add1_refinement.shard
   tools/search/gen/imp_mix_refinement.shard
@@ -454,16 +483,25 @@ TARGETS=(
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
+T_TARGETS0=${EPOCHSECONDS:-$(date +%s)}
 for i in "${!TARGETS[@]}"; do
   while (( $(jobs -rp | wc -l) >= JOBS )); do wait -n; done
   {
     echo "=== ${TARGETS[$i]} ==="
+    t0=${EPOCHREALTIME:-$(date +%s)}
     "${CHECK_CMD[@]}" "${TARGETS[$i]}" 2>&1
+    awk -v a="$t0" -v b="${EPOCHREALTIME:-$(date +%s)}" -v f="${TARGETS[$i]}" \
+      'BEGIN { printf "%.1f %s\n", b - a, f }' > "$TMP/$i.secs"
   } > "$TMP/$i" &
 done
 wait
 
 for i in "${!TARGETS[@]}"; do cat "$TMP/$i"; done
+T_TARGETS=$(( ${EPOCHSECONDS:-$(date +%s)} - T_TARGETS0 ))
+T_REST0=${EPOCHSECONDS:-$(date +%s)}
+
+echo "=== corpus: per-target wall seconds, top 20 (target phase ${T_TARGETS}s at JOBS=$JOBS) ==="
+cat "$TMP"/*.secs | sort -rn | head -20
 
 # Scope-mode pin: the resolver-decision report (use-line classification +
 # rebind verdicts) for the snake v3 impl — the item-vs-alias and rebind
@@ -625,7 +663,7 @@ if [ "${CORPUS_LONG:-0}" = "1" ]; then
 # spec-to-wasm proof is a check target above.
 echo "=== search: typed imp expression pin ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/imp_expr.shard tools/search/tasks/imp_add1.shard
+  pin_run imp_add1 bin/shard_eval run tools/search/imp_expr.shard tools/search/tasks/imp_add1.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -646,14 +684,14 @@ fi
 # every engine consuming the TeTask record.
 echo "=== search: task-protocol scan pin ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/protocol_probe.shard
+  pin_note protocol_probe bin/shard_eval run tools/search/protocol_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
 echo "=== search: graduated meta rewrite profile pin ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/rewrite_probe.shard
+  pin_note rewrite_probe bin/shard_eval run tools/search/rewrite_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -665,7 +703,7 @@ if [ -x bin/shard_eval ]; then
   # the harder depth-3 prefixes (59295 -> 94), exhaustively auditing the selected
   # endpoint. The identical generic profile also rewrites symbolic neutrals and
   # re-enters on nested calls produced by a theorem RHS.
-  bin/shard_eval run tools/search/theorem_scope_probe.shard
+  pin_note theorem_scope_probe bin/shard_eval run tools/search/theorem_scope_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -675,7 +713,7 @@ if [ -x bin/shard_eval ]; then
   # Four checked append requirements quotient 210,066,388,900 raw depth-5
   # expressions to 63 normal forms before narrowing; the audit enumerates only
   # that filtered rank space and agrees on its unique target.
-  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_append_value.shard audit
+  pin_run typed_append_value bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_append_value.shard audit
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -685,7 +723,7 @@ if [ -x bin/shard_eval ]; then
   # The checked law equates observations rather than candidate values. It
   # removes Leaf(Noise 1) only at the candidate root: Wrap(Leaf(Noise 1))
   # remains in the three-member quotient because congruence was not proved.
-  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_observer_value.shard audit
+  pin_run typed_observer_value bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_observer_value.shard audit
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -735,22 +773,22 @@ if [ -x bin/shard_eval ]; then
   # root is transparent, the occurrence pair splits at the empty region
   # (1 boundary), and the relational passing region's representative comes
   # from the graduated walk.
-  bin/shard_eval run tools/search/constraint_probe.shard
-  bin/shard_eval run tools/search/nonlinear_constraint_probe.shard
-  bin/shard_eval run tools/search/region_probe.shard
-  bin/shard_eval run tools/search/nonlinear_symbolic_probe.shard
+  pin_note constraint_probe bin/shard_eval run tools/search/constraint_probe.shard
+  pin_note nonlinear_constraint_probe bin/shard_eval run tools/search/nonlinear_constraint_probe.shard
+  pin_note region_probe bin/shard_eval run tools/search/region_probe.shard
+  pin_note nonlinear_symbolic_probe bin/shard_eval run tools/search/nonlinear_symbolic_probe.shard
   # Contextual sequence pressure keeps its checked traversal, conditional
   # guard, prepared-cache, and mined-schema contraction boundaries generic.
-  bin/shard_eval run tools/search/spine_probe.shard
-  bin/shard_eval run tools/search/guard_probe.shard
-  bin/shard_eval run tools/search/affine_guard_probe.shard
-  bin/shard_eval run tools/search/int_order_guard_probe.shard
-  bin/shard_eval run tools/search/antiunify_probe.shard
+  pin_note spine_probe bin/shard_eval run tools/search/spine_probe.shard
+  pin_note guard_probe bin/shard_eval run tools/search/guard_probe.shard
+  pin_note affine_guard_probe bin/shard_eval run tools/search/affine_guard_probe.shard
+  pin_note int_order_guard_probe bin/shard_eval run tools/search/int_order_guard_probe.shard
+  pin_note antiunify_probe bin/shard_eval run tools/search/antiunify_probe.shard
   # Empirical affine families are inferred from orbit support and each is
   # replayed independently; a two-support coincidence must fail on the full
   # transition corpus before it can reach theorem classification.
-  bin/shard_eval run tools/search/transition_affine_probe.shard
-  bin/shard_eval run tools/search/constraint_superpose_probe.shard
+  pin_note transition_affine_probe bin/shard_eval run tools/search/transition_affine_probe.shard
+  pin_note constraint_superpose_probe bin/shard_eval run tools/search/constraint_superpose_probe.shard
   # The minimal ROUTING-SHAPED consumer: graph coloring as one nonlinear
   # diagonal rule per interference edge over per-variable register holes,
   # constraint-dominated so every pair survives to the partition.  Pins:
@@ -760,15 +798,15 @@ if [ -x bin/shard_eval ]; then
   # 16 regions / 15 splits via count-free inhabitance screening, with the
   # representative verified in-region; K4/3 FIND terminates EMPTY through
   # the walk-refusal ground fallback.
-  bin/shard_eval run tools/search/coloring_probe.shard
-  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_observer_conjunctive.shard audit
+  pin_note coloring_probe bin/shard_eval run tools/search/coloring_probe.shard
+  pin_run typed_observer_conjunctive bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_observer_conjunctive.shard audit
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
 echo "=== search: general typed-rule binder pin ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/typed_rule_probe.shard
+  pin_note typed_rule_probe bin/shard_eval run tools/search/typed_rule_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -777,21 +815,21 @@ echo "=== search: general typed imp scope pin ==="
 if [ -x bin/shard_eval ]; then
   # The audit proves the narrowing regions agree with all 114 enumerated
   # members while keeping enumeration visibly separate from the search path.
-  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_imp_add1.shard audit
+  pin_run typed_imp_add1 bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_imp_add1.shard audit
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
 echo "=== search: general typed Wasm scope pin ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/typed_expr.shard tools/search/tasks/typed_wasm_add1.shard
+  pin_run typed_wasm_add1 bin/shard_eval run tools/search/typed_expr.shard tools/search/tasks/typed_wasm_add1.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
 echo "=== search: native Shard call/if scope pin ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/typed_expr.shard tools/search/tasks/typed_shard_call.shard
+  pin_run typed_shard_call bin/shard_eval run tools/search/typed_expr.shard tools/search/tasks/typed_shard_call.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -801,16 +839,46 @@ fi
 # addition-only sample site; the second restores the source's complete
 # add/sub/mul/div switch and uses the generic routed task environment.  Both
 # are searched by demanded-hole superposition against the complete probe.
+echo "=== search: exhaustive-absence pin (typed_expect_empty) ==="
+if [ -x bin/shard_eval ]; then
+  # No witness exists over the two-atom language; completing the census IS
+  # the witness (WITNESS EXPECTED EMPTY, AUDIT … SOLUTIONS 0). Orphaned since
+  # aae17c7 (2026-07-16); registered by the 2026-08 prune arc.
+  pin_run typed_expect_empty bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_expect_empty.shard audit
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+echo "=== search: regular-schema first-result pin (typed_list_first) ==="
+if [ -x bin/shard_eval ]; then
+  # Bit lists of length <= 2 interned as a lazy regular schema; the first
+  # result is the (0 1) witness — SEARCH.md's formation-pressure /
+  # occurrence-independence pin. Orphaned since 0539572; registered 2026-08-22.
+  pin_run typed_list_first bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_list_first.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+echo "=== search: conjunctive observer first-result pin (typed_observer_conjunctive_first) ==="
+if [ -x bin/shard_eval ]; then
+  # The checked observer theorem couples two ctor positions (nonseparable);
+  # first-result search partitions it against lazy occurrences — SEARCH.md's
+  # residual-theorem counterpart of typed_list_first. Registered 2026-08-22.
+  pin_run typed_observer_conjunctive_first bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_observer_conjunctive_first.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 echo "=== search: typed x86 calculator pin ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_x86_calculator.shard
+  pin_run typed_x86_calculator bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_x86_calculator.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
 echo "=== search: typed x86 four-operation calculator pin ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_x86_calculator4.shard
+  pin_run typed_x86_calculator4 bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_x86_calculator4.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -821,7 +889,7 @@ fi
 # audit exhaustively compares the resulting lazy narrowing with enumeration.
 echo "=== search: checked x86 transition-window narrowing ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/x86_transition_window.shard audit
+  pin_run x86_transition_window bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/x86_transition_window.shard audit
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -832,7 +900,7 @@ fi
 # twin), BEST = WITNESS 61.
 echo "=== search: typed pio square-wave pin ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_pio_square.shard
+  pin_run typed_pio_square bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_pio_square.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -843,7 +911,7 @@ fi
 # the transplanted reference at WITNESS 854.  (~2m40s single-thread.)
 echo "=== search: typed pio dme pin ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_pio_dme.shard
+  pin_run typed_pio_dme bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_pio_dme.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -855,7 +923,7 @@ fi
 # ENUMERATIVE AGREEMENT OK ACCEPTED 1067 CONSTRAINED 44.
 echo "=== search: checked pio transition-window narrowing ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/pio_transition_window.shard audit
+  pin_run pio_transition_window bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/pio_transition_window.shard audit
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -870,7 +938,7 @@ fi
 # at depth 7, measured 2026-07-28).
 echo "=== search: swap-network routing synthesis ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/swap_route.shard
+  pin_run swap_route bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/swap_route.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -897,7 +965,7 @@ fi
 # PCB-ROUTE 12x12 KEEP-9 NETS-7 RIPS-2 WIRE-29 CERT-DISJOINT-OK.
 echo "=== search: PCB routing demo (rip-up/re-route) ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/pcb_route_probe.shard
+  pin_note pcb_route_probe bin/shard_eval run tools/search/pcb_route_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -919,7 +987,7 @@ fi
 # CERT-DISJOINT-OK (astar line prefixed PCB-TIME-ASTAR).
 echo "=== search: PCB space-time demo (holds + convoy) ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/pcb_time_probe.shard
+  pin_note pcb_time_probe bin/shard_eval run tools/search/pcb_time_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -940,7 +1008,7 @@ fi
 # DOM-CHECKED-AGREE CERT-DISJOINT-OK.
 echo "=== search: PCB cost demo (weighted moves + min-cost claims) ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/pcb_cost_probe.shard
+  pin_note pcb_cost_probe bin/shard_eval run tools/search/pcb_cost_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -963,7 +1031,7 @@ fi
 # MAKESPAN-8 CERT-DISJOINT-OK.
 echo "=== search: PCB capacity demo (negotiated congestion) ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/pcb_cap_probe.shard
+  pin_note pcb_cap_probe bin/shard_eval run tools/search/pcb_cap_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -984,7 +1052,7 @@ fi
 # LOCAL-OPT CERT-DISJOINT-OK.
 echo "=== search: PCB LNS demo (global-objective order descent) ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/pcb_lns_probe.shard
+  pin_note pcb_lns_probe bin/shard_eval run tools/search/pcb_lns_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -996,7 +1064,7 @@ fi
 # tc_infer/tc_arms mutual-recursion measure gap is closed.
 echo "=== search: pure Shard function-body benchmarks ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/pure_bench.shard
+  pin_note pure_bench bin/shard_eval run tools/search/pure_bench.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -1006,7 +1074,7 @@ fi
 # making the much longer complete interpreter run a routine corpus cost.
 echo "=== search: pure Shard checked-formation depth-3 probe ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/pure_deep.shard probe 3 5000
+  pin_note pure_deep bin/shard_eval run tools/search/pure_deep.shard probe 3 5000
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -1017,10 +1085,10 @@ fi
 # those mechanisms with sort and pin both exact quotients cheaply.
 echo "=== search: generic match-context formation ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/context_formation_probe.shard
-  bin/shard_eval run tools/search/pure_deep.shard context-probe 2 1
-  bin/shard_eval run tools/search/pure_deep.shard order-probe 2 1
-  bin/shard_eval run tools/search/pure_deep.shard nonlinear-probe 2 1
+  pin_note context_formation_probe bin/shard_eval run tools/search/context_formation_probe.shard
+  pin_note pure_deep bin/shard_eval run tools/search/pure_deep.shard context-probe 2 1
+  pin_note pure_deep bin/shard_eval run tools/search/pure_deep.shard order-probe 2 1
+  pin_note pure_deep bin/shard_eval run tools/search/pure_deep.shard nonlinear-probe 2 1
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -1033,9 +1101,9 @@ fi
 # the categorical decision structure, not host-language throughput.
 echo "=== search: checked append-canonical rev d3-d4 ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/rev_deep.shard 3
-  bin/shard_eval run tools/search/rev_deep.shard 4
-  bin/shard_eval run tools/search/rev_deep.shard context 4
+  pin_note rev_deep bin/shard_eval run tools/search/rev_deep.shard 3
+  pin_note rev_deep bin/shard_eval run tools/search/rev_deep.shard 4
+  pin_note rev_deep bin/shard_eval run tools/search/rev_deep.shard context 4
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -1049,7 +1117,7 @@ fi
 # corpus diff (re-pin deliberately, with the change).
 echo "=== search: ground rev pin ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/search.shard
+  pin_note search bin/shard_eval run tools/search/search.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -1064,7 +1132,7 @@ fi
 # change.
 echo "=== search: canonicality census (G1+G2) ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/census.shard
+  pin_note census bin/shard_eval run tools/search/census.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -1081,7 +1149,7 @@ fi
 # deliberately with the change.
 echo "=== search: catalog census (G5) ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/catalog.shard
+  pin_note catalog bin/shard_eval run tools/search/catalog.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -1094,7 +1162,7 @@ fi
 # the newer kernel ledger (whose full-canon rev/id endpoint is 2/4).
 echo "=== search: catalog pressure (playground R1 transfer) ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/catalog_pressure.shard
+  pin_note catalog_pressure bin/shard_eval run tools/search/catalog_pressure.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -1132,7 +1200,7 @@ fi
 # kernel-checked on every sweep; `laws bracket` re-pins.
 echo "=== search: laws oracle (S4a+S5, G3) ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/laws.shard
+  pin_note laws bin/shard_eval run tools/search/laws.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -1152,9 +1220,9 @@ fi
 # hundreds of these proofs while leaving ordinary G3 tests green.
 echo "=== search: behavior-collision proof census ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/laws.shard mine 1
-  bin/shard_eval run tools/search/laws.shard mine 2
-  bin/shard_eval run tools/search/laws.shard range 2 295
+  pin_note laws bin/shard_eval run tools/search/laws.shard mine 1
+  pin_note laws bin/shard_eval run tools/search/laws.shard mine 2
+  pin_note laws bin/shard_eval run tools/search/laws.shard range 2 295
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -1166,7 +1234,7 @@ fi
 # REGEN — the full artifact including rendered proofs).
 echo "=== search: render round-trip (D11) ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/render_gate.shard
+  pin_note render_gate bin/shard_eval run tools/search/render_gate.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -1186,7 +1254,7 @@ fi
 # kernel/evm battery. Any drift exits 1 inside the tool.
 echo "=== search: superposed executor (S4b) ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/superpose.shard
+  pin_note superpose bin/shard_eval run tools/search/superpose.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -1200,7 +1268,7 @@ fi
 # every forget is verdict-neutral by construction; this pins it.
 echo "=== search: arena memo-scoping (forget) ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/arena_probe.shard
+  pin_note arena_probe bin/shard_eval run tools/search/arena_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -1223,7 +1291,7 @@ fi
 # output and shows in the corpus diff: investigate before re-pinning.
 echo "=== search: false-equivalence hunter ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/hunt.shard
+  pin_note hunt bin/shard_eval run tools/search/hunt.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -1242,7 +1310,7 @@ fi
 # — evidence for the canon arc, which owns the ledger.
 echo "=== search: canon-subsumption census ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/subsume.shard
+  pin_note subsume bin/shard_eval run tools/search/subsume.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -1638,3 +1706,7 @@ if command -v cargo >/dev/null; then
 else
   echo "SKIPPED (no cargo)"
 fi
+
+echo "=== corpus: phase wall seconds ==="
+T_NOW=${EPOCHSECONDS:-$(date +%s)}
+echo "targets ${T_TARGETS}s  rest $(( T_NOW - T_REST0 ))s  total $(( T_NOW - T_SCRIPT0 ))s"
