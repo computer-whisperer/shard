@@ -1091,3 +1091,50 @@ Owed: A-3 part 3 (lifts the store/word-op fence), A-5 (calls: args as
 patches at fp + own + 8j, frame disjointness, the R14 mirror, `ixf_kok`
 over fn bodies), A-6 (`valid_frame` + `iprun`/`xrun_fn`, the promotion of
 fra_kit out of probes/).
+
+**A-3 — PART 3 LANDS: THE MEMORY STATEMENTS (2026-08-23).**
+fra_kit.shard 741/0 (116769 lines formatted; 726/0 at A-4). `IpStore` / `IpLoadW` /
+`IpStoreW` are lifted from the fence — `ixf_a4s` now refuses only the
+call (A-5). Three hand BLOCK LEMMAS over an explicit S-tower, the
+`fe_st_run` shape: `fe_ldw_run` (RAX := [RAX]), `fe_stw_run` ([R10] :=
+RAX, the word), `fe_stb_run` ([R10] := RAX, the byte) — `xt_peel2`, one
+`compute` with the two window guards rewritten, `compute` again. The
+`unfold xminstr_leaf cannot reach a match-arm body` gate part 2 fought is
+not on this path at all: with the fuel a constructor tower, `compute`
+runs the interpreter THROUGH `xminstr_leaf` with no unfold, exactly as
+`fe_st_run` / `fe_rl_run` already did for the frame slot. Step lemmas by
+`gen_fra.py stmt` (the block now carries its banner and is spliced like
+the others; `splice` prepends a banner an emitter omits — the twin-laws
+banner had been lost that way once): `fs_step_loadw` (fe_sound →
+`fe_ldw_run` → `fp_below_lw` through the twin: the word below the cut
+read from the machine's memory IS imp's → `fe_st_run`), `fs_step_store`
+/ `fs_step_storew` (ONE generator: the binary choreography of A-2 with
+`fe_sound` cited for both operands, the context at d = 1 rebuilt by
+`ctx_intro` as fe_sound's own IBin arm does, the reload's `fp_read`, then
+ONE patch below the cut — `fp_mem_cons_b` / `fp_mem_cons_w`). The twin
+needed nothing new: `ips_tr` spelled the three arms at part 1, and the
+patch laws (`fbelow_b_lo` / `fbelow_w_lo`, `fp_disc_b` / `fp_disc_w_lo`,
+`fr_locs_b` / `fr_locs_skip_lo`, `fp_below_lw`, `ldw_lo` / `ldw_hi`) were
+all in the kit since A-1. `gen_fra4.py`: eight extractions
+(`scb_{store,storew}_{a,v}`, `scb_loadw_a`, `sdep_{store,storew,loadw}`),
+the engine decompositions `arm_store` / `arm_loadw` shared by the three
+dispatcher inductions, T1/T2 leaves (T2's set leaf generalized to
+`set_like` — the word load is a slot store of the loaded word, in band
+by `ldw_lo/hi`), the `ipt_sound` arms, the `slen_cost` arms. Every claim
+closed on its first structural check except the two store lemmas, which
+failed once on an unresolved citation: `add_zero_r` is std/mem's
+INTERNAL lemma (not in its mod.req), so the kit has its own `add0` — the
+spill slot is spelled `(+ nl 0)` by `ixf_spill nl 0` and `nl` by
+`ips_tr`, reconciled by one rewrite on the machine side. No translator
+change. A finding worth recording: the machine's memory guard is WEAKER
+than imp's (the x86 fence is the module window [xmemlo, xmemhi), imp's
+the program window [mlo, slo)); the theorem never sees the gap because
+an imp trap is outside it (§11.1 (1)), and on the normal leg imp's
+guards imply the machine's — the window facts of `fe_ctx` are exactly
+what the step lemma spends. Gotchas: a `(rewrite (lemma X) …)` citation
+resolves against the file and the `use`d modules' mod.req SURFACES, not
+their internals; `unfold fp_app rhs` is unsafe when the RHS's register
+file carries a sub-run whose memory contains an earlier `fp_app`
+(outermost-first picks THAT one and leaves a stuck match) — state the
+unfolding as an equation have over the patch list alone; `(compute
+both)` closes `(xw8) = (iw8)`. Owed: A-5 (calls), A-6 (the theorem).
