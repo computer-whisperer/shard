@@ -1257,3 +1257,122 @@ claim variable (`r` → `rt`). Named doors unchanged: KIND SOUNDNESS
 (a well-kinded arg's value lies in its kind's band) lifts `ixf_p64`'s
 U64-params refusal; A-6 (the theorem: `ipt_sound` at the program's
 entry, the table premises established once from the carve) is next.
+
+**A-6 — THE THEOREM: DESIGN (2026-08-23; written before the first
+edit, the ground truth for the slice).** The program tier: `ipt_sound`
+cited ONCE at the program's entry — the request `(IqCall k)` at dep 0,
+own 0, fp = slo = ipstack, lc = the entry argument values — with every
+premise established from `(ixf_prog p) = (Some xm)` (valid_frame IS
+this equation; no wrapper predicate), the imp run, and the computable
+side premises. Prefix `fra_` = the program tier's lemmas in fra_kit.
+
+TRANSLATOR (one change): `ixf_carve_ok` grows the three SCALAR WINDOW
+BOUNDS — `0 ≤ ipbase`, `ipmemsize ≤ 2^32` (fe_ctx's addressing bound),
+`ipdepth + 1 < 2^64` (premise 15, the unsigned CLtU) — the gate owns
+every scalar window/depth fact (A-0's precedent; without the third the
+derivation is NONLINEAR: mul_nonneg through the entry fn's own ≥ 8).
+Output-identical for every `ixf_prog` consumer in the tree (micro:
+base 65536, memsize 1114112, depth+1 = 1001 — all pass; fra_kit never
+mentions the gate today, so no proof breaks).
+
+THE PREMISE LEDGER (ipt_sound's 20 at the entry): 0/3/5/11 compute
+(IqCall emits Nil, body Nil, `ixt_fr` call = le 0 0); 1 = the iprun
+premise re-spelled (iprun unfolds to ipcall at dep 0, `ipt_run
+(IqCall k)` = ipout_of_ret ∘ ipcall, the entry patches' fbelow
+vanishes); 2 = fe_ctx (scalar clauses from the gate; fr_locs/fp_disc
+from the arg-patch laws below); 4 from the arity (extracted from the
+run) + `ixf_own g ≥ 8·np` + `ixf_maxown_at` + the carve; 6/18/19 stay
+THE THEOREM'S computable premises (`1 ≤ K`, `ixf_fnsok`, `ixf_fnskok
+K` — the KIND-SOUNDNESS door subsumes 18 later; the ratio is
+genuinely per-application data); 7/8 from `0 ≤ c`; 9 = the shim — NEW
+induction `ixf_shim_at`: under the table premise, `xfunc_at (xf_app
+xfs tl) (ixf_count fs) = xfunc_at tl 0`; 10/13/14/15 from the gate;
+12 = THE ROOM INVARIANT IS THE CARVE GATE VERBATIM at fp = slo,
+own = 0, dep = 0 (the design's checksum); 16/17 by inject on
+ixf_prog's match tree.
+
+THE STATEMENT — general form, then the entry corollary. General:
+premises valid_frame, the run at `(fp_mem mem0 (fbelow slo psx))`,
+`fe_ctx xm (ipbase_of p) slo slo (ilen args) 0 args psx`, and the
+computable four; conclusion at `xrun_fn (xt c (kf K f)) xm k rs0
+(fp_mem mem0 psx)` with rs0 = MkRegs over 13 scratch binders, R14 0,
+R15 slo. Proof: cite ipt_sound at c := c + 1 (xt_peel, an add-sub
+have), then bridge `xeval_call (S g)` → `xrun_fn g` — NEW lemmas
+`xrf_norm`/`xrf_trap` (case xeval_seq's five outcomes; both need
+`xfunc_at = Some`, extracted from the run via ipfn_at + `ixf_tbl_at`
++ a NEW xf_some lemma). The clauses: `fra_sound_v` (RAX = v, machine
+memory = `fp_mem mem0 (fp_app TW psx)`, TW the entry twin — the
+witness spelled, §11.1(3)); `fra_sound_mem` (imp's memf = the fbelow
+view — ipt_mem cited); `fra_sound_ctx` (`fe_ctx … Nil (fp_app TW
+psx)` — ipt_ctx + post_call_ctx: THE CHAINING CLAUSE, the next
+call's premise 2); `fra_sound_fail` (xeval_call = Some XTrap) and
+`fra_sound_fail_none` (xrun_fn = None — the pure tier cannot tell
+the shim from a trap, A-0's record). Entry corollary at psx :=
+`fa_words slo args` (NEW value-level arg patches; laws: fr_locs
+given the band, fp_disc by 8-alignment, fbelow vanishes → the run
+premise at mem0 itself) — the bin boundary's exact shape
+(micro_x86_run's init_mem is this term). Entry extractions carry no
+∃: opt-defaulting predicates (A-1(4)'s idiom) shared across the five
+clauses — the run forces S-fuel, `ipfn_at` Some, the arity.
+
+THE INSTANCE (the citation demo): micro, INSIDE fra_kit (importing
+micro.shard + micro_ipc_out.shard — probes importing tools fixtures
+is precedented by imp_x86_bridge). Cross-file CLAIM citation is NOT
+available (a citation resolves against the file + used modules'
+mod.req; models have no mod.req) — PROMOTING the theorem to a
+citable surface is a NAMED DOOR the composition phase (C2b, B) will
+need. Shape: the PREMISED instance — xm/v/memf universally bound,
+pinned by the ixf_prog/iprun premises; every COMPUTABLE premise
+discharged by compute against the real product (the gate, fnsok,
+fnskok at a literal K, the entry args' band); run values stay the
+differential row's business (no run literals in certs). Optionally
+one chained wrapper through fra_sound_ctx.
+
+**A-6 — THE THEOREM: LANDS (2026-08-23). THEOREM A IS COMPLETE
+(A-0 … A-6 all landed).** fra_kit.shard **905/0** (856 at A-5; +49),
+**fra_micro.shard NEW** (the corpus row: 908/0 over its closure),
+to_x86.shard 470/0 with the widened carve gate, the three-way micro
+differential 16/16, and splice → shardfmt still a byte-level fixpoint
+with the A-6 hand section appended (its `;; ====` banner is the
+generators' block terminator). Departures from the design record:
+(i) CROSS-FILE CLAIM CITATION EXISTS for plain file imports — fra_kit
+already cites imp.shard's `ilen_nonneg`; only directory-module imports
+resolve through a mod.req. So the instance lives in its own probe
+(models/imp/probes/fra_micro.shard imports fra_kit.shard and
+micro_ipc_out.shard and cites the theorems directly), and the
+PROMOTION door the design flagged is not needed: the composition
+phase (C2b, B) can import fra_kit the same way. (ii) The statement
+layer is wider than the design's five clauses: the GENERAL theorems
+`fra_sound_v/mem/ctx/band/fail/fail_none` (any psx under fe_ctx —
+`fra_sound_ctx` is THE CHAINING CLAUSE) plus the ENTRY corollaries
+`fra_entry_ctx/base/v/fail_none/mem/ctxout/band` at the `fae_words`
+patch shape (micro_x86_run's init_mem term), plus `ctx_renl` (fe_ctx
+at a different locals bound — nl appears only in the arity clause) so
+a chained call re-enters at its own arity. (iii) The instance is
+PREMISED and STRONGER than designed: `fra_micro_wrap` covers ANY
+wrapper called after init (k2 universally bound — one claim for all
+fifteen value rows), `fra_micro_deep` the fail shape (machine None,
+C6's exit-72 clause pending), `fra_micro_v` the entry call; the
+computable premises (ixf_fnsok, ixf_fnskok at K = 1000, the gate, the
+args' band) compute against the real product in ~1 s of check mode.
+(iv) The no-∃ machinery is the A-1(4) idiom at Option: extractors
+xfns_or/ipfn_or/xf_or with ok-predicates and `_get` lemmas — every
+witness is an extractor value, and the main theorems contain NO
+case-on at all (each refutation lives inside its own small
+extraction lemma: fra_wk/carve, the six scalar gate facts, fra_mod/
+funcs/lo/hi/shim/fns_ok, fra_iprun/at_ok/arity/p4/xat). (v) fra_p4's
+nonlinear step went as designed: mul_comm + mul_dist respell the
+(dmax+1)·maxown atom, mul_nonneg supplies the dmax·maxown ≥ 0 row.
+PROOF-DSL FACTS (new): a chain must not carry a bare `refl` after a
+rewrite-with that has its own terminal — one closer per chain; bare
+`(compute lhs)` folds ground prims that `reduce` leaves stuck
+((le 0 0), (mod 0 8), (int_eq 0 0)); a two-sided `(int_eq X X) = True`
+goal takes `(list (G …) (G …))`; a citation's match binds ONLY the
+conclusion-side variables of the cited side — every other binder,
+even one spelled identically in the consumer, is a dangling pivot to
+pin with an inst. CORPUS COST: fra_micro's row re-checks fra_kit's
+closure — the existing pattern for probes over models (the bridge
+probes re-check to_x86 the same way); #37 owns the strategy if this
+compounds. NEXT = C2b (runtime theorems: the managed-graph invariant
+and framing in the base+patch vocabulary) per the ratified order
+A → C2b → B.
