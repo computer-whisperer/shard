@@ -1116,24 +1116,27 @@
     (Nil 0)
     ((Cons e t) (imax2 (ixf_dep e) (ixf_deps t)))))
 
+;; the spill depth of a statement list / of one statement — a mutual pair
+;; with the per-statement part NAMED (the proof tier's extractions unfold
+;; one layer at a time and never spell a match term)
 (fn ixf_sdep ((ss (List IpStmt))) Int
   (measure (struct ss))
   (match ss
     (Nil 0)
-    ((Cons s t)
-     (imax2
-       (match s
-         ((IpSet _ e) (ixf_dep e))
-         ((IpStore a v) (+ 1 (imax2 (ixf_dep a) (ixf_dep v))))
-         ((IpIf c tb eb)
-          (imax2 (ixf_dep c) (imax2 (ixf_sdep tb) (ixf_sdep eb))))
-         ((IpWhile c b) (imax2 (ixf_dep c) (ixf_sdep b)))
-         ((IpCall _ _ args) (ixf_deps args))
-         ((IpLoadW _ a) (ixf_dep a))
-         ((IpStoreW a v) (+ 1 (imax2 (ixf_dep a) (ixf_dep v))))
-         ((IpFail _) 0)
-         (IpUnreach 0))
-       (ixf_sdep t)))))
+    ((Cons s t) (imax2 (ixf_sdeps s) (ixf_sdep t)))))
+
+(fn ixf_sdeps ((s IpStmt)) Int
+  (measure (struct s))
+  (match s
+    ((IpSet _ e) (ixf_dep e))
+    ((IpStore a v) (+ 1 (imax2 (ixf_dep a) (ixf_dep v))))
+    ((IpIf c tb eb) (imax2 (ixf_dep c) (imax2 (ixf_sdep tb) (ixf_sdep eb))))
+    ((IpWhile c b) (imax2 (ixf_dep c) (ixf_sdep b)))
+    ((IpCall _ _ args) (ixf_deps args))
+    ((IpLoadW _ a) (ixf_dep a))
+    ((IpStoreW a v) (+ 1 (imax2 (ixf_dep a) (ixf_dep v))))
+    ((IpFail _) 0)
+    (IpUnreach 0)))
 
 ;; the arguments of a call into the callee's frame at FP + own + 8j
 (fn ixf_args ((nl Int) (own Int) (j Int) (args (List IExp)))
@@ -1159,7 +1162,24 @@
                  irest))))))))))
 
 ;; the statement compiler: nl locals, own = the frame size in bytes,
-;; fail_ix = the exit shim's image index
+;; fail_ix = the exit shim's image index. THE BLOCK DISCIPLINE (Theorem A,
+;; A-4): a nested statement list (a loop body, an else branch) is entered
+;; through its own XBlock rather than spliced into the enclosing sequence.
+;; The encoder emits nothing for a block (a label), so the bytes are the
+;; same; what changes is the FUEL accounting the simulation proof reads:
+;; xeval_seq hands one fuel unit per position, so a spliced list would
+;; put the instruction after it at "position + the list's length" — a
+;; quantity bounded only by the imp fuel tower, not by any local cost —
+;; while a block body runs at its block's own fuel and the instruction
+;; after the block at the block's position. With it every statement's
+;; emission length is local (a block counts one), the general seam is
+;; only ever applied at statement granularity, and the per-program fuel
+;; ratio K is a maximum over statement costs (docs/COVERAGE.md §11.1 (4)).
+;; The then branch needs no block: it is already the tail of the cons
+;; after the inner block, which runs at that position's fuel.
+;; the statement compiler is a mutual pair — one statement's emission, and the
+;; list as the head's emission appended to the tail's (so the proof tier's
+;; "a list runs its head then its tail" is the definition, not a lemma)
 (fn ixf_stmts ((nl Int) (own Int) (fail_ix Int) (ss (List IpStmt)))
   (Option (List XInstr))
   (measure (struct ss))
@@ -1169,121 +1189,116 @@
      (match (ixf_stmts nl own fail_ix t)
        (None None)
        ((Some it)
-        (match s
-          ((IpSet i e)
-           (match (ixf_exp nl 0 e)
-             (None None)
-             ((Some ie) (Some (ix_app ie (ix_app (ixf_st i) it))))))
-          ((IpStore ae ve)
-           (match (ixf_exp nl 0 ae)
-             (None None)
-             ((Some ia)
-              (match (ixf_exp nl 1 ve)
-                (None None)
-                ((Some iv)
-                 (Some
-                   (ix_app
-                     ia
-                     (ix_app
-                       (ixf_spill nl 0)
-                       (ix_app
-                         iv
-                         (ix_app
-                           (ixf_reload10 nl 0)
-                           (Cons (XStore8 (AReg R10) (SReg RAX)) it)))))))))))
-          ((IpIf c tb eb)
-           (match (ixf_exp nl 0 c)
-             (None None)
-             ((Some ic)
-              (match (ixf_stmts nl own fail_ix tb)
-                (None None)
-                ((Some itb)
-                 (match (ixf_stmts nl own fail_ix eb)
-                   (None None)
-                   ((Some ieb)
-                    (Some
-                      (ix_app
-                        ic
-                        (Cons
-                          (XBlock
-                            (Cons
-                              (XBlock
-                                (Cons
-                                  (XBrIf (CNz RAX) 0)
-                                  (ix_app ieb (list (XBr 1)))))
-                              itb))
-                          it))))))))))
-          ((IpWhile c b)
-           (match (ixf_exp nl 0 c)
-             (None None)
-             ((Some ic)
-              (match (ixf_stmts nl own fail_ix b)
-                (None None)
-                ((Some ib)
-                 (Some
-                   (Cons
-                     (XBlock
-                       (list
-                         (XLoop
-                           (ix_app
-                             ic
-                             (Cons
-                               (XBrIf (CEqz RAX) 1)
-                               (ix_app ib (list (XBr 0))))))))
-                     it)))))))
-          ((IpCall i k args)
-           (match (ixf_args nl own 0 args)
-             (None None)
-             ((Some iargs)
-              (Some
-                (ix_app
-                  iargs
-                  (ix_app
-                    (list
-                      (XBin XAdd R15 (SImm own))
-                      (XCall k)
-                      (XBin XSub R15 (SImm own)))
-                    (ix_app (ixf_st i) it)))))))
-          ((IpLoadW i ae)
-           (match (ixf_exp nl 0 ae)
-             (None None)
-             ((Some ia)
-              (Some
-                (ix_app
-                  ia
-                  (Cons (XMem (XMLoad64 RAX (AReg RAX))) (ix_app (ixf_st i) it)))))))
-          ((IpStoreW ae ve)
-           (match (ixf_exp nl 0 ae)
-             (None None)
-             ((Some ia)
-              (match (ixf_exp nl 1 ve)
-                (None None)
-                ((Some iv)
-                 (Some
-                   (ix_app
-                     ia
-                     (ix_app
-                       (ixf_spill nl 0)
-                       (ix_app
-                         iv
-                         (ix_app
-                           (ixf_reload10 nl 0)
-                           (Cons (XMem (XMStore64 (AReg R10) RAX)) it)))))))))))
-          ((IpFail fam)
+        (match (ixf_stmt nl own fail_ix s)
+          (None None)
+          ((Some is) (Some (ix_app is it)))))))))
+
+(fn ixf_stmt ((nl Int) (own Int) (fail_ix Int) (s IpStmt))
+  (Option (List XInstr))
+  (measure (struct s))
+  (match s
+    ((IpSet i e)
+     (match (ixf_exp nl 0 e)
+       (None None)
+       ((Some ie) (Some (ix_app ie (ixf_st i))))))
+    ((IpStore ae ve)
+     (match (ixf_exp nl 0 ae)
+       (None None)
+       ((Some ia)
+        (match (ixf_exp nl 1 ve)
+          (None None)
+          ((Some iv)
            (Some
-             (Cons
-               (XMovRI
-                 RDI
-                 (match fam
-                   (FOverflow 70)
-                   (FOom 71)
-                   (FStack 72)))
-               (Cons (XCall fail_ix) it))))
-          (IpUnreach
-            (Some
-              (Cons
-                (XMovRI RAX 18446744073709547520)
-                (Cons (XMem (XMLoad64 RAX (AReg RAX))) it))))))))))
+             (ix_app
+               ia
+               (ix_app
+                 (ixf_spill nl 0)
+                 (ix_app
+                   iv
+                   (ix_app
+                     (ixf_reload10 nl 0)
+                     (list (XStore8 (AReg R10) (SReg RAX)))))))))))))
+    ((IpIf c tb eb)
+     (match (ixf_exp nl 0 c)
+       (None None)
+       ((Some ic)
+        (match (ixf_stmts nl own fail_ix tb)
+          (None None)
+          ((Some itb)
+           (match (ixf_stmts nl own fail_ix eb)
+             (None None)
+             ((Some ieb)
+              (Some
+                (ix_app
+                  ic
+                  (list
+                    (XBlock
+                      (Cons
+                        (XBlock (list (XBrIf (CNz RAX) 0) (XBlock ieb) (XBr 1)))
+                        itb))))))))))))
+    ((IpWhile c b)
+     (match (ixf_exp nl 0 c)
+       (None None)
+       ((Some ic)
+        (match (ixf_stmts nl own fail_ix b)
+          (None None)
+          ((Some ib)
+           (Some
+             (list
+               (XBlock
+                 (list
+                   (XLoop
+                     (ix_app ic (list (XBrIf (CEqz RAX) 1) (XBlock ib) (XBr 0)))))))))))))
+    ((IpCall i k args)
+     (match (ixf_args nl own 0 args)
+       (None None)
+       ((Some iargs)
+        (Some
+          (ix_app
+            iargs
+            (ix_app
+              (list
+                (XBin XAdd R15 (SImm own))
+                (XCall k)
+                (XBin XSub R15 (SImm own)))
+              (ixf_st i)))))))
+    ((IpLoadW i ae)
+     (match (ixf_exp nl 0 ae)
+       (None None)
+       ((Some ia)
+        (Some (ix_app ia (Cons (XMem (XMLoad64 RAX (AReg RAX))) (ixf_st i)))))))
+    ((IpStoreW ae ve)
+     (match (ixf_exp nl 0 ae)
+       (None None)
+       ((Some ia)
+        (match (ixf_exp nl 1 ve)
+          (None None)
+          ((Some iv)
+           (Some
+             (ix_app
+               ia
+               (ix_app
+                 (ixf_spill nl 0)
+                 (ix_app
+                   iv
+                   (ix_app
+                     (ixf_reload10 nl 0)
+                     (list (XMem (XMStore64 (AReg R10) RAX)))))))))))))
+    ((IpFail fam)
+     (Some
+       (list
+         (XMovRI
+           RDI
+           (match fam
+             (FOverflow 70)
+             (FOom 71)
+             (FStack 72)))
+         (XCall fail_ix))))
+    (IpUnreach
+      (Some
+        (list
+          (XMovRI RAX 18446744073709547520)
+          (XMem (XMLoad64 RAX (AReg RAX))))))))
 
 ;; zero the extra locals [from, nl)
 (fn ixf_zero ((from Int) (nl Int)) (List XInstr)
