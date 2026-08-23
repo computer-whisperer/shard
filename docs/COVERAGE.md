@@ -1138,3 +1138,122 @@ file carries a sub-run whose memory contains an earlier `fp_app`
 (outermost-first picks THAT one and leaves a stuck match) — state the
 unfolding as an equation have over the patch list alone; `(compute
 both)` closes `(xw8) = (iw8)`. Owed: A-5 (calls), A-6 (the theorem).
+
+**A-5 — THE CALL: DESIGN (2026-08-23; written before the first edit, the
+ground truth for the slice).** Theorem A's last statement form. The
+statement `(IpCall i k args)` compiles to `iargs ++ [R15 += own; XCall k;
+R15 −= own] ++ ixf_st i`, the callee to `enter ++ zero ++ [XBlock ib] ++
+ir ++ leave` (see the translator changes). The proof follows §11.1's
+design: the call engine is the FOURTH request `(IqCall k)` — its imp side
+is `ipcall f … k lc mem` (the request's locals ARE the argument values,
+so `fe_ctx`'s `fr_locs fp lc psx` says "the args sit in the callee's
+frame at fp"), its machine side `xeval_call`, its expected outcome
+`fe_out v` (RAX = the result, R14/R15 carried, the scratch as the run's
+own), its cost 0 and body `Nil` (every per-fn fact comes from the TABLE
+premises instead). At a call statement at imp fuel S f2 the callee runs
+`ipcall f2`, the IqCall IH at f2; inside the callee at S f3 the body runs
+`ipstmts f3`, the IqStmts IH at f3 — the one induction absorbs both
+levels with no off-by-one, which is why the call is a request and not
+an inline decomposition. The caller instantiates the IqCall IH at
+fp := fp + own, lc := the arg values, nl := their count, own := 0 (the
+callee's frame facts are the callee's business, derived from the table).
+
+TRANSLATOR (models/imp/to_x86.shard; bytes identical for every program
+the corpus compiles): (i) `ixf_fn` puts the body in its own `XBlock` —
+the block discipline at fn level, for the same reason as A-4's: the
+result expression after the body needs LOCAL fuel, and a spliced body
+would leave it "position + |body|"; (ii) `ixf_fn` REFUSES a fn with a
+non-U64 parameter (`ixf_p64`): `ipcall` bands the args to their kinds on
+entry (`iband_args`, `mod v (ikmod k)`) while the machine stores the raw
+word — they agree exactly at U64 (the identity on a banded value).
+Every compiled program has U64 params (rt.shard's four fns, impc's
+`u64s`); the only non-U64 params live in ipcall_probe (imp-only). The
+named door: kind soundness (a well-kinded arg's value lies in its kind's
+band) would lift the restriction and is a separate induction. (iii) THE
+CARVE GATE RESERVES ONE MORE FRAME: `ipstack + (ipdepth + 1) · maxown ≤
+ipmemsize`. THE BUG THE PROOF FOUND: the args are stored into the
+callee's frame BEFORE the depth check in the callee's prologue, so a
+call at depth = ipdepth writes `8·nargs` bytes above the last budgeted
+frame; with the old gate those stores can fall outside the window, and
+the x86 model TRAPS where imp fails `FStack` (the silicon: a fault
+instead of exit 72). One frame of slack closes it (the micro drivers'
+512 KiB / depth 1000 have room).
+
+THE TWIN grows `own` (the SCC `ipt_stmt/ipt_while/ipt_stmts/ipt_tr` take
+it after `nl`: the arg patches live at fp + own + 8j) and a fourth member
+`ipt_call` (zero patches `fz_tr`, the body's twin at the callee's frame,
+the result's spill trace — newest first; `Nil` off the normal leg); the
+statement twin's IpCall arm is `(FWord (fp + 8i) v) :: ipt_call … ++
+ipt_args …` with `ipt_args` the structural arg twin (each arg's spills
+then its slot word). New patch vocabulary: `fp_wmin slo lo ps` (every
+word patch is a program patch or sits at ≥ lo — THE FRAME-DISJOINTNESS
+predicate), `fp_away ps a` (no word patch at a), `fe_tr_max` (the fifth
+generated twin law: the spills lie below fp + 8(nl + d + dep e)) — the
+arg slot lemma needs both a min and a max bound because the later args'
+spills sit BELOW the earlier slots while their stores sit above.
+
+THE PREMISES (appended; indices 0–11 unchanged, the fence premise 9 goes
+vacuous this slice and is deleted in the follow-up): `ixt_fr r nl own
+(ixf_maxown fs)` (the frame bundle: 8(nl + 1 + sdep body) ≤ own, own ≡ 0
+mod 8, own ≤ maxown — True for a call request), THE ROOM INVARIANT
+`fp + own + (dmax + 1 − dep) · maxown ≤ xmemhi` (uniform across requests
+because the call request's own is 0: the callee's frame is the
+(dep+1)-th), `0 ≤ dep`, `dep ≤ dmax`, `dmax < 2^64` (the unsigned CLtU
+and the R14 increment), the TABLE `ixf_fns dmax fail_ix fs = Some xfs`
+and `xfuncs_of m = xfs ++ [shim]`, and the per-fn predicates `ixf_fnsok
+fs` (U64 params, constants in band, the result's band) and `ixf_fnskok
+K fs` (fn cost `ixf_fcost` ≤ K, the body's statement costs ≤ K). A FOURTH
+dispatcher instance `ipt_min` (imp-side): the twin's patches satisfy
+`fp_wmin slo fp` — the callee writes only at ≥ fp + own, so the caller's
+locals survive (`fr_locs_app_wmin`). Order: ipt_mem → ipt_min → ipt_ctx
+→ ipt_sound.
+
+THE LEMMAS (hand, explicit S-towers where straight-line): the call-site
+blocks (`fc_addfp/subfp/call/argst_run`), the callee blocks (`fc_enter_ok/
+enter_fail/zero1/leave/body_blk_run`), the ZERO lemma `fz_sound` (wf-induct
+on nl − from) with the twin's laws, the ARG lemma `fa_sound` (induction
+on args: `fe_sound` at each arg, then the slot store, the context
+re-established via `fr_locs_skip` + `al_shift_own`) with `ipt_args`'s
+laws (`fa_below/disc/locs/wmin/slots`), the table laws (`ixf_tbl_at`,
+`ixf_maxown_at`, `fnsok_at`), `iband_id`, and the STEP LEMMAS: call site
+`fs_step_call` / `fs_step_call_fail`, callee `fc_step_norm` /
+`fc_step_fail` / `fc_step_stack` — every sub-run's simulation an
+explicit premise, the twins abstracted as patch-list variables so the
+step lemmas never spell `ipt_*`.
+
+**A-5 — THE CALL: LANDS (2026-08-23).** fra_kit.shard **856/0** (741 at
+A-3 part 3; +115), to_x86.shard 470/0, the impc micro differential
+fixture rows failed: 0, and the splice → shardfmt cycle is a byte-level
+fixpoint for every generated block (gen_fra.py: fe_len twin trmax
+fe_band unary binary sound stmt; gen_fra4.py: extract t1 t15 t2 ctl
+slen t3 — t15 is new). Departures from the design record, none
+structural: (i) THE FENCE DIED THIS SLICE, not in a follow-up —
+`ixf_a4`/`ixf_a4s` are deleted, `ipt_sound`'s premise list is the
+design's 20 with no vacuous slot; there is no fence anywhere in the
+file. (ii) `ixt_lc` became **`ixt_post`**: the call request's outcome
+carries the RESULT, not a locals frame, so the context law's post-state
+is per-request — for `IqCall` it exports `fe_ctx … Nil ps ∧ fe_inband
+(ihd lc2)` (the band is what the caller's `fr_locs_set` needs for the
+write-back), for the others `fe_ctx … lc2 ps` as before; extraction
+lemmas `post_call_ctx` / `post_call_band`. (iii) The caller cites the
+IqCall IH at own := 0 in `ipt_sound` but at own := own in `ipt_ctx`
+(the twin term under `ixt_post` mentions the caller's own); `ixt_fr
+(IqCall _) = (le 0 own)` discharges either way. The LAST BUG was not a
+proof gap but a lemma's: `fs_step_call_fail` carried a vestigial
+`ilset` premise copied from the normal-leg shape — undischargeable on
+the fail path (no write-back happens) and unused by its own proof.
+Removing a premise is SURGERY: every flat Farkas list in the body
+carries one slot per scope item, so the dead premise's index (11: goal
+negation at 0, premise j at j+1) had to be deleted from all 17 lists,
+not merely left zero. What else the slice taught the DSL user: lemma
+citations resolve in FILE ORDER (`fe_tr_max` needed its own generated
+block after the laws it cites); two-sided eq certs are `(list LE GE)`
+with G multiplying L−R−1 on the LE side; a wf-induct IH's measure
+binder is fresh and unnamed — cite `(hyp 1)` with NO insts and spell
+the index so the measure appears in the conclusion (`(- nl n)`), with
+the ordering discharges after the premises; `(int_eq X Y) = False`
+goals take a negated row X = Y; a case-on binder must not shadow a
+claim variable (`r` → `rt`). Named doors unchanged: KIND SOUNDNESS
+(a well-kinded arg's value lies in its kind's band) lifts `ixf_p64`'s
+U64-params refusal; A-6 (the theorem: `ipt_sound` at the program's
+entry, the table premises established once from the carve) is next.

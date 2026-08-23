@@ -1328,23 +1328,44 @@
 ;; the depth epilogue: R14 -= 1 (RAX, the result, untouched)
 (fn ixf_leave () (List XInstr) (list (XBin XSub R14 (SImm 1))))
 
-;; a fn: the depth prologue, zero the extras, the body, the result into
-;; RAX, the depth epilogue
+;; every parameter is U64 — THE A-5 GATE: ipcall bands the arguments to their
+;; kinds on entry (iband_args) while the caller's emission stores the raw
+;; word into the callee's frame; the two agree exactly at U64 (the identity
+;; on a banded value). Every compiled program has U64 params (rt.shard,
+;; impc's products); kind soundness (a well-kinded argument's value lies in
+;; its kind's band) is the named door that would lift this.
+(fn ixf_p64 ((ks (List IKind))) Bool
+  (measure (struct ks))
+  (match ks
+    (Nil True)
+    ((Cons k t)
+     (match k
+       (U64 (ixf_p64 t))
+       (_ False)))))
+
+;; a fn: the depth prologue, zero the extras, the body IN ITS OWN BLOCK (the
+;; block discipline at fn level — Theorem A, A-5: the result expression after
+;; the body needs local fuel, and a spliced body would leave it at "position
+;; + the body's length"), the result into RAX, the depth epilogue
 (fn ixf_fn ((dmax Int) (fail_ix Int) (f IpFn)) (Option XFunc)
-  (let ((np (ikn (ipparams_of f))))
-    (let ((nl (+ np (ikn (ipextra_of f)))))
-      (match (ixf_stmts nl (ixf_own f) fail_ix (ipbody_of f))
-        (None None)
-        ((Some ib)
-         (match (ixf_exp nl 0 (ipresult_of f))
-           (None None)
-           ((Some ir)
-            (Some
-              (MkXFunc
-                0
-                (ix_app
-                  (ixf_enter dmax fail_ix)
-                  (ix_app (ixf_zero np nl) (ix_app ib (ix_app ir (ixf_leave))))))))))))))
+  (if (ixf_p64 (ipparams_of f))
+    (let ((np (ikn (ipparams_of f))))
+      (let ((nl (+ np (ikn (ipextra_of f)))))
+        (match (ixf_stmts nl (ixf_own f) fail_ix (ipbody_of f))
+          (None None)
+          ((Some ib)
+           (match (ixf_exp nl 0 (ipresult_of f))
+             (None None)
+             ((Some ir)
+              (Some
+                (MkXFunc
+                  0
+                  (ix_app
+                    (ixf_enter dmax fail_ix)
+                    (ix_app
+                      (ixf_zero np nl)
+                      (Cons (XBlock ib) (ix_app ir (ixf_leave)))))))))))))
+    None))
 
 (fn ixf_fns ((dmax Int) (fail_ix Int) (fs (List IpFn))) (Option (List XFunc))
   (measure (struct fs))
@@ -1378,14 +1399,18 @@
     ((Cons h t) (Cons h (xf_app t b)))))
 
 ;; THE CARVE GATE: the frame region [ipstack, ipmemsize) sits inside the
-;; window above the imp-visible part, and holds ipdepth frames of the
+;; window above the imp-visible part, and holds ipdepth + 1 frames of the
 ;; largest size — so a run within the depth budget never stores outside
-;; the window (Theorem A's frames-fit premise, decided here, once)
+;; the window (Theorem A's frames-fit premise, decided here, once). The
+;; +1 (A-5): a call at the budget's edge stores its ARGUMENTS into the
+;; callee's frame before the callee's prologue refuses the depth, so one
+;; frame above the last budgeted one must still lie inside the window —
+;; without it the x86 model traps on the store where imp fails FStack.
 (fn ixf_carve_ok ((p IpProg)) Bool
   (if (le (ipbase_of p) (ipstack_of p))
     (if (le 0 (ipdepth_of p))
       (le
-        (+ (ipstack_of p) (* (ipdepth_of p) (ixf_maxown (ipfns_of p))))
+        (+ (ipstack_of p) (* (+ (ipdepth_of p) 1) (ixf_maxown (ipfns_of p))))
         (ipmemsize_of p))
       False)
     False))

@@ -367,7 +367,10 @@ TB = "(fe_tr fp nl (+ d 1) b lc mem mlo msz)"
 
 def twin_claim(name, goal, nil_leaf, unary_leaf, bin_leaf):
     """nil_leaf/unary_leaf/bin_leaf: proof text after the goal's fe_tr has been unfolded+reduced
-    (unary: goal mentions (fe_tr fp nl d a …); bin: goal mentions (fp_app TB (Cons (FWord ADDR va) TA)))"""
+    (unary: goal mentions (fe_tr fp nl d a …); bin: goal mentions (fp_app TB (Cons (FWord ADDR va) TA)));
+    unary_leaf may be a function (E, B2) -> text of the constructor form E and its second operand B2 (or None)"""
+    def UL(E, B2): return unary_leaf(E, B2) if callable(unary_leaf) else unary_leaf
+    def BL(op): return bin_leaf(op) if callable(bin_leaf) else bin_leaf
     def ibin():
         arms=[]
         for op in OPS:
@@ -375,7 +378,7 @@ def twin_claim(name, goal, nil_leaf, unary_leaf, bin_leaf):
                 body=f"""(chain
   {cap('ho', f'(= o {op})')}
   (steps ((rewrite (premise ho) lr both true ()) (unfold fe_tr lhs) (reduce lhs)))
-  {unary_leaf})"""
+  {UL(f'(IBin k {op} a b)', 'b')})"""
             else:
                 body=f"""(chain
   {cap('ho', f'(= o {op})')}
@@ -391,7 +394,7 @@ def twin_claim(name, goal, nil_leaf, unary_leaf, bin_leaf):
        (chain
          {cap('hva', '(= (iexp a lc mem mlo msz) (Some va))')}
          (steps ((rewrite (premise hva) lr lhs true ()) (reduce lhs)))
-         {bin_leaf})))))"""
+         {BL(op)})))))"""
             arms.append(f"(case {op} {body})")
         return "(case-on o IOp\n  (" + "\n   ".join(arms) + "))"
     unary_pre = "(chain (steps ((unfold fe_tr lhs) (reduce lhs))) {leaf})"
@@ -401,10 +404,10 @@ def twin_claim(name, goal, nil_leaf, unary_leaf, bin_leaf):
     ((case IConst (n) (chain (steps ((unfold fe_tr lhs) (reduce lhs))) {nil_leaf}))
      (case ILoc (i) (chain (steps ((unfold fe_tr lhs) (reduce lhs))) {nil_leaf}))
      (case IBin (k o a b) {ibin()})
-     (case IRotr (k a c) {unary_pre.format(leaf=unary_leaf)})
-     (case IExt (k1 k2 a) {unary_pre.format(leaf=unary_leaf)})
-     (case ITrunc (k1 kt a) {unary_pre.format(leaf=unary_leaf)})
-     (case ILoad (a) {unary_pre.format(leaf=unary_leaf)}))))
+     (case IRotr (k a c) {unary_pre.format(leaf=UL('(IRotr k a c)', 'c'))})
+     (case IExt (k1 k2 a) {unary_pre.format(leaf=UL('(IExt k1 k2 a)', None))})
+     (case ITrunc (k1 kt a) {unary_pre.format(leaf=UL('(ITrunc k1 kt a)', None))})
+     (case ILoad (a) {unary_pre.format(leaf=UL('(ILoad a)', None))}))))
 """
 
 def fe_tr_disc():
@@ -526,6 +529,68 @@ def fe_tr_min():
      (steps ((rewrite (premise hmc) lr lhs true ())) refl)))
   refl)"""
     return twin_claim("fe_tr_min", goal, nil_leaf, unary_leaf, bin_leaf)
+
+def fe_tr_max():
+    """the spill trace's UPPER bound (A-5): every spill ends at or below fp + 8(nl + d + dep e) —
+    with fe_tr_min, the argument slots at fp + own + 8j (own >= 8(nl + 1 + dep)) are never a spill"""
+    def HI(E): return f"(+ fp (* 8 (+ nl (+ d (ixf_dep {E})))))"
+    goal = f"""(goal
+    ((e IExp) (fp Int) (nl Int) (d Int) (lc (List Int)) (mem Mem) (mlo Int) (msz Int))
+    ()
+    (= (fp_max (fe_tr fp nl d e lc mem mlo msz) {HI('e')}) True))"""
+    nil_leaf = "(steps ((unfold fp_max lhs) (reduce lhs)) refl)"
+    def unary_leaf(E, B2):
+        if B2 is None:
+            hdl = f"(have hdl (= (ixf_dep {E}) (ixf_dep a)) (steps ((unfold ixf_dep lhs) (reduce lhs)) refl))"
+            cert = "(list 1 0 8)"
+        else:
+            hdl = f"""(have hdl (= (ixf_dep {E}) (+ 1 (imax2 (ixf_dep a) (ixf_dep {B2})))) (steps ((unfold ixf_dep lhs) (reduce lhs)) refl))
+  (have hm (= (le (ixf_dep a) (imax2 (ixf_dep a) (ixf_dep {B2}))) True) (rewrite-with (lemma imax2_ge_l) lr lhs () () refl))"""
+            cert = "(list 1 0 0 8 8)" if E.startswith("(IBin") else "(list 1 0 8 8)"   # the shift arms carry the `ho` slot
+        return f"""(chain
+  (have hma (= (fp_max (fe_tr fp nl d a lc mem mlo msz) {HI('a')}) True) (rewrite-with (hyp ih) lr lhs () () refl))
+  {hdl}
+  (have hle (= (le {HI('a')} {HI(E)}) True) (by arith {cert}))
+  (rewrite-with (lemma fp_max_weaken) lr lhs ((inst hi {HI('a')}))
+    ((steps ((rewrite (premise hma) lr lhs true ())) refl)
+     (steps ((rewrite (premise hle) lr lhs true ())) refl)))
+  refl)"""
+    HIb = "(+ fp (* 8 (+ nl (+ (+ d 1) (ixf_dep b)))))"
+    HIX = "(+ fp (* 8 (+ nl (+ d (+ 1 (imax2 (ixf_dep a) (ixf_dep b)))))))"
+    # slots in the bin leaf: ho hva | hmb hma hdep hga hgb hda hleb hmb2 hlea hma2 hself hmc
+    def bin_leaf(op): return f"""(chain
+  (have hmb (= (fp_max {TB} {HIb}) True) (rewrite-with (hyp ih1) lr lhs () () refl))
+  (have hma (= (fp_max {TA} {HI('a')}) True) (rewrite-with (hyp ih) lr lhs () () refl))
+  (have hdep (= (ixf_dep (IBin k {op} a b)) (+ 1 (imax2 (ixf_dep a) (ixf_dep b)))) (steps ((unfold ixf_dep lhs) (reduce lhs)) refl))
+  (have hga (= (le (ixf_dep a) (imax2 (ixf_dep a) (ixf_dep b))) True) (rewrite-with (lemma imax2_ge_l) lr lhs () () refl))
+  (have hgb (= (le (ixf_dep b) (imax2 (ixf_dep a) (ixf_dep b))) True) (rewrite-with (lemma imax2_ge_r) lr lhs () () refl))
+  (have hda (= (le 0 (ixf_dep a)) True) (rewrite-with (lemma ixf_dep_nonneg) lr lhs () () refl))
+  (have hleb (= (le {HIb} {HIX}) True) (by arith (list 1 0 0 0 0 0 0 8 0)))
+  (have hmb2 (= (fp_max {TB} {HIX}) True)
+    (rewrite-with (lemma fp_max_weaken) lr lhs ((inst hi {HIb}))
+      ((steps ((rewrite (premise hmb) lr lhs true ())) refl)
+       (steps ((rewrite (premise hleb) lr lhs true ())) refl))
+      refl))
+  (have hlea (= (le {HI('a')} {HIX}) True) (by arith (list 1 0 0 0 0 0 8 0 0)))
+  (have hma2 (= (fp_max {TA} {HIX}) True)
+    (rewrite-with (lemma fp_max_weaken) lr lhs ((inst hi {HI('a')}))
+      ((steps ((rewrite (premise hma) lr lhs true ())) refl)
+       (steps ((rewrite (premise hlea) lr lhs true ())) refl))
+      refl))
+  (have hself (= (le (+ {ADDR} 8) {HIX}) True) (by arith (list 1 0 0 0 0 0 8 0 8)))
+  (have hmc (= (fp_max (Cons (FWord {ADDR} va) {TA}) {HIX}) True)
+    (steps
+      ((rewrite (lemma fp_max_unf_w) lr lhs true ())
+       (rewrite (premise hself) lr lhs true ())
+       (reduce lhs)
+       (rewrite (premise hma2) lr lhs true ()))
+      refl))
+  (steps ((rewrite (premise hdep) lr lhs true ())))
+  (rewrite-with (lemma fp_max_app) lr lhs ()
+    ((steps ((rewrite (premise hmb2) lr lhs true ())) refl)
+     (steps ((rewrite (premise hmc) lr lhs true ())) refl)))
+  refl)"""
+    return twin_claim("fe_tr_max", goal, nil_leaf, unary_leaf, bin_leaf)
 
 def twin_laws():
     return "\n".join([fe_tr_disc(), fe_tr_locs(), fe_tr_below(), fe_tr_min()])
@@ -737,6 +802,8 @@ BANNERS = {
     "binary": (";; --- STEP lemmas, binary family (generated by gen_fra.py binary — REGENERATE, never hand-patch) ---", "step_lemmas_binary"),
     "sound": (";; THE EXPRESSION LEMMA (generated by gen_fra.py fe_sound — REGENERATE, never hand-patch):", "fe_sound"),
     "stmt": (";; --- STEP lemmas, statements (generated by gen_fra.py stmt — REGENERATE, never hand-patch) ---", "step_lemmas_stmt"),
+    # A-5: the fifth twin law lives AFTER the imax2 / ixf_dep_nonneg / fp_max laws it cites (citations resolve in file order)
+    "trmax": (";; --- the twin's fifth law: the spill bound fe_tr_max (generated by gen_fra.py trmax — REGENERATE, never hand-patch) ---", "fe_tr_max"),
 }
 
 def emit(which):
