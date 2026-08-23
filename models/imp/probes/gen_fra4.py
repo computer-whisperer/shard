@@ -180,20 +180,20 @@ def SUBS(hs): return "".join(f" (rewrite (premise {h}) lr rhs true ())" for h in
 # case-on leaves the scrutinee VARIABLE in the goal and premises (the fact is hyp 0): every
 # re-spelling of premise 0 / a side premise substitutes the captured ctor equations (hr, hst, hss)
 
-def absurd_run(engine, rewrites, lhs, subst):
-    """premise 0 (the run = OUTN) against what the engine actually returns"""
+def absurd_run(engine, rewrites, lhs, subst, runp=0, pre=""):
+    """the run premise (index runp; = OUTN) against what the engine actually returns"""
     rw = "".join(f" {r} (reduce rhs)" for r in rewrites)
     body = f"""(have hn (= {lhs} {OUTN})
-  (steps ((rewrite (premise 0) rl rhs true ()){SUBS(subst)} (unfold ipt_run rhs) (reduce rhs) (unfold {engine} rhs) (reduce rhs){rw}) refl))"""
+  (steps ({pre}(rewrite (premise {runp}) rl rhs true ()){SUBS(subst)} (unfold ipt_run rhs) (reduce rhs) (unfold {engine} rhs) (reduce rhs){rw}) refl))"""
     if lhs == "None":
         return f"(chain {body} (absurd (premise hn)))"
     return f"(chain {body} (inject (premise hn) (hx)) (absurd (premise hx)))"
 
-def run_fact(engine, name, lhs, rewrites, subst):
-    """have NAME (= LHS OUTN) by unfolding premise 0 through the engine and the given facts"""
+def run_fact(engine, name, lhs, rewrites, subst, runp=0, pre=""):
+    """have NAME (= LHS OUTN) by unfolding the run premise through the engine and the given facts"""
     rw = "".join(f" {r} (reduce rhs)" for r in rewrites)
     return f"""(have {name} (= {lhs} {OUTN})
-  (steps ((rewrite (premise 0) rl rhs true ()){SUBS(subst)} (unfold ipt_run rhs) (reduce rhs) (unfold {engine} rhs) (reduce rhs){rw}) refl))"""
+  (steps ({pre}(rewrite (premise {runp}) rl rhs true ()){SUBS(subst)} (unfold ipt_run rhs) (reduce rhs) (unfold {engine} rhs) (reduce rhs){rw}) refl))"""
 
 RV = lambda h: f"(rewrite (premise {h}) lr rhs true ())"
 SS = ['hr', 'hst']   # the statement arms' substitution
@@ -206,19 +206,20 @@ def S_(sl, *names):
     for n in names: s2.add(n)
     return s2
 
-def arm_set(leaf, sl):
+def arm_set(leaf, sl, subst=None, runp=0, pre=""):
     """IqStmt (IpSet i e): hv (iexp = Some v), hset (ilset = Some lcs), hlc (lcs = lc2), hmem (IM = mem2)"""
+    subst = subst or SS
     return f"""(case-on (iexp e lc {IM} mlo slo) Option
-  ((case None (chain {cap('hv', f'(= (iexp e lc {IM} mlo slo) None)')} {absurd_run('ipstmt', [RV('hv')], '(Some IpTrap)', SS)}))
+  ((case None (chain {cap('hv', f'(= (iexp e lc {IM} mlo slo) None)')} {absurd_run('ipstmt', [RV('hv')], '(Some IpTrap)', subst, runp, pre)}))
    (case Some (v)
      (chain
        {cap('hv', f'(= (iexp e lc {IM} mlo slo) (Some v))')}
        (case-on (ilset lc i v) Option
-         ((case None (chain {cap('hset', '(= (ilset lc i v) None)')} {absurd_run('ipstmt', [RV('hv'), RV('hset')], '(Some IpTrap)', SS)}))
+         ((case None (chain {cap('hset', '(= (ilset lc i v) None)')} {absurd_run('ipstmt', [RV('hv'), RV('hset')], '(Some IpTrap)', subst, runp, pre)}))
           (case Some (lcs)
             (chain
               {cap('hset', '(= (ilset lc i v) (Some lcs))')}
-              {run_fact('ipstmt', 'hn1', f'(Some (IpNorm lcs {IM}))', [RV('hv'), RV('hset')], SS)}
+              {run_fact('ipstmt', 'hn1', f'(Some (IpNorm lcs {IM}))', [RV('hv'), RV('hset')], subst, runp, pre)}
               (inject (premise hn1) (hn2))
               (inject (premise hn2) (hlc hmem))
 {leaf(S_(sl, 'hv', 'hset', 'hn1', 'hn2', 'hlc', 'hmem'))}))))))))"""
@@ -1470,7 +1471,7 @@ def m_arm_set(sl):
             B = Arm(S_(A.sl, 'hie'), I)
             def leaf(sl2):
                 C = Arm(sl2, I + "          ")
-                C.have('himp', f"(= {ST('(S f2)', S, 'lc', IM)} (Some (IpNorm lc2 mem2)))", f"(steps ((rewrite (premise 1) rl rhs true ()){SUBS(sub)} (unfold ipt_run rhs) (reduce rhs)) refl)")
+                C.have('himp', f"(= {ST('(S f2)', S, 'lc', IM)} (Some (IpNorm lc2 mem2)))", f"(steps ((rewrite (premise ho) rl rhs true ()) (rewrite (premise 1) rl rhs true ()){SUBS(SS)} (unfold ipt_run rhs) (reduce rhs)) refl)")
                 C.have('hcbe', "(= (ixf_cb e) True)", f"(rewrite-with (lemma scb_set_e) lr lhs ((inst i i) (inst t Nil)) ({D('hscb')}) refl)")
                 C.have('hsde', "(= (le (ixf_dep e) (ixf_sdep (Cons (IpSet i e) Nil))) True)", "(rewrite-with (lemma sdep_set_e) lr lhs ((inst t Nil)) () refl)")
                 C.arith('hdepe', "(= (le (+ fp (* 8 (+ nl (ixf_dep e)))) (xmemhi_of m)) True)", {'hsd': 1, 'hsde': 8})
@@ -1479,7 +1480,7 @@ def m_arm_set(sl):
                 C.add(None, f"(rewrite-with (lemma fs_step_set) lr lhs ({pins}) ({D('hem')} {D('himp')} {D(2)} {D('hcbe')} {D('hdepe')} {D('hcs')} {D('hie')} {D('hv')}))")
                 C.add(None, "(steps ((unfold ixt_run rhs) (reduce rhs) (unfold ixt_expect rhs) (reduce rhs) (unfold ipt_tr rhs) (reduce rhs) (unfold ipt_stmt rhs) (reduce rhs)) refl)")
                 return C.text()
-            B.add(None, arm_set(leaf, B.sl, sub))
+            B.add(None, arm_set(leaf, B.sl, SS, 1, "(rewrite (premise ho) rl rhs true ()) "))
             return B.text()
         A.add(None, case_opt("(ixf_exp nl 0 e)", "ie", m_absurd_emit(A, None, "ixf_stmt", [RV('hie')]), some))
         return A.text()
@@ -1499,7 +1500,7 @@ def arm_set_abs(sl, subst):
     OUTF = "(Some (IpFailed fam))"
     def ab(rewrites, lhs):
         rw = "".join(f" {r} (reduce rhs)" for r in rewrites)
-        return f"(chain (have hn (= {lhs} {OUTF}) (steps ((rewrite (premise 1) rl rhs true ()){SUBS(subst)} (unfold ipt_run rhs) (reduce rhs) (unfold ipstmt rhs) (reduce rhs){rw}) refl)) (inject (premise hn) (hx)) (absurd (premise hx)))"
+        return f"(chain (have hn (= {lhs} {OUTF}) (steps ((rewrite (premise ho) rl rhs true ()) (rewrite (premise 1) rl rhs true ()){SUBS(SS)} (unfold ipt_run rhs) (reduce rhs) (unfold ipstmt rhs) (reduce rhs){rw}) refl)) (inject (premise hn) (hx)) (absurd (premise hx)))"
     return f"""(case-on (iexp e lc {IM} mlo slo) Option
   ((case None (chain {cap('hv', f'(= (iexp e lc {IM} mlo slo) None)')} {ab([RV('hv')], '(Some IpTrap)')}))
    (case Some (v)
@@ -1537,8 +1538,8 @@ def m_arm_if(sl):
                     F.arith('hecost', f"(= (le (ixf_ecost ce) {CK}) True)", {'hcs': 1, 'p6': 1})
                     RUNc = f"(xeval_seq (xt {CK} {KF2}) m ic {RS} {XM})"
                     F.have('hsim', f"(= {RUNc} (fe_out cv {RS} {RUNc} {Mc}))", f"(rewrite-with (lemma fe_sound) lr lhs ((inst e ce) (inst nl nl) (inst d 0) (inst lc lc) (inst mlo mlo) (inst slo slo) (inst v cv)) ({D('hic')} {D('hcv')} {D(2)} {D('hcbc')} {D('hdepc')} {D('hecost')}) refl)")
-                    F.arith('hc6', f"(= (le (+ (xil ic) 6) {CK}) True)", {'hcs': 1, 'hlen': 1, 'hec': 1, 'p6': 1})
-                    F.arith('hc8', f"(= (le (+ (xil ic) 8) {CK}) True)", {'hcs': 1, 'hlen': 1, 'hec': 1, 'p6': 1})
+                    F.arith('hc6', f"(= (le (+ (xil ic) 6) {CK}) True)", {'hcs': 1, 'hlen': -1, 'hec': 1, 'p6': 1})
+                    F.arith('hc8', f"(= (le (+ (xil ic) 8) {CK}) True)", {'hcs': 1, 'hlen': -1, 'hec': 1, 'p6': 1})
                     F.arith('hc0', f"(= (le 0 {CK}) True)", {'p8': 1, 'p6': 1})
                     rsc = RSC(RUNc)
                     def branch(flag, ss, iss, ext, cc, step):
@@ -1549,7 +1550,7 @@ def m_arm_if(sl):
                         G.arith('hsdt', f"(= (le (+ fp (* 8 (+ nl (ixf_sdep {ss})))) (xmemhi_of m)) True)", {'hsd': 1, 'hsdb': 8})
                         G.have('hkb', f"(= (ixf_skok K {ss}) True)", f"(rewrite-with (lemma skok_if_{ext}) lr lhs ((inst ce ce) (inst tb tb) (inst eb eb) (inst t Nil)) ({D('hkok')}) refl)")
                         G.have('hab', f"(= (ixf_a4 {ss}) True)", f"(rewrite-with (lemma a4_if_{ext}) lr lhs ((inst ce ce) (inst tb tb) (inst eb eb) (inst t Nil)) ({D('ha4')}) refl)")
-                        G.arith('hcb0', f"(= (le 0 {cc}) True)", {'hcs': 1, 'hlen': 1, 'hec': 1, 'p6': 1})
+                        G.arith('hcb0', f"(= (le 0 {cc}) True)", {'hcs': 1, 'hlen': -1, 'hec': 1, 'p6': 1})
                         ds = [emit_d('h' + iss), f"(steps ((rewrite (premise hfb) lr lhs true ()) (unfold ipt_run lhs) (reduce lhs) (rewrite (premise hbr) lr lhs true ())) refl)", D('hctx1'), body_d('hcbb'), body_d('hsdt'), body_d('hkb'), D(6),
                               f"(steps ((unfold ixt_cost lhs) (reduce lhs) (rewrite (premise hcb0) lr lhs true ())) refl)", D('hcb0'), body_d('hab'), D(10), D(11)]
                         m_ih(G, 'hih', f"(IqStmts {ss})", cc, iss, rsc, PSX1c, 'lc', 'out', ds)
@@ -1760,8 +1761,8 @@ def m_arm_qwhile(sl):
                 for n in ['hdisca', 'hlocsa', 'hfb', 'hctx1']: F.sl.add(n)
                 RUNc = f"(xeval_seq (xt (- {CK} 1) {KF2}) m ic {RS} {XM})"
                 F.have('hsim', f"(= {RUNc} (fe_out cv {RS} {RUNc} {Mc}))", f"(rewrite-with (lemma fe_sound) lr lhs ((inst e ce) (inst nl nl) (inst d 0) (inst lc lc) (inst mlo mlo) (inst slo slo) (inst v cv)) ({D('hic')} {D('hcv')} {D(2)} {D('hcbc')} {D('hdepc')} {D('hecost')}) refl)")
-                F.arith('hc3', f"(= (le (+ (xil ic) 3) {CK}) True)", {'hcs': 1, 'hlen': 1, 'hec': 1, 'p6': 1})
-                F.arith('hc5', f"(= (le (+ (xil ic) 5) {CK}) True)", {'hcs': 1, 'hlen': 1, 'hec': 1, 'p6': 1})
+                F.arith('hc3', f"(= (le (+ (xil ic) 3) {CK}) True)", {'hcs': 1, 'hlen': -1, 'hec': 1, 'p6': 1})
+                F.arith('hc5', f"(= (le (+ (xil ic) 5) {CK}) True)", {'hcs': 1, 'hlen': -1, 'hec': 1, 'p6': 1})
                 rsc = RSC(RUNc)
                 basepins = "(inst ce ce) (inst b b) (inst ic ic) (inst ib ib) (inst cv cv) (inst out out) (inst nl nl) (inst own own) (inst fail_ix fail_ix) (inst lc lc) (inst mlo mlo) (inst slo slo) (inst f f2) (inst fs fs) (inst dmax dmax)"
                 def exit_():
@@ -1779,7 +1780,7 @@ def m_arm_qwhile(sl):
                     G.arith('hsdt', "(= (le (+ fp (* 8 (+ nl (ixf_sdep b)))) (xmemhi_of m)) True)", {'hsd': 1, 'hsdb': 8})
                     G.have('hkb', "(= (ixf_skok K b) True)", f"(rewrite-with (lemma skok_while_b) lr lhs ((inst ce ce) (inst b b) (inst t Nil)) ({D('hkok')}) refl)")
                     G.have('hab', "(= (ixf_a4 b) True)", f"(rewrite-with (lemma a4_while_b) lr lhs ((inst ce ce) (inst b b) (inst t Nil)) ({D('ha4')}) refl)")
-                    G.arith('hcb0', f"(= (le 0 {cc}) True)", {'hcs': 1, 'hlen': 1, 'hec': 1, 'p6': 1})
+                    G.arith('hcb0', f"(= (le 0 {cc}) True)", {'hcs': 1, 'hlen': -1, 'hec': 1, 'p6': 1})
                     G.arith('hcw0', f"(= (le 0 (- {CK} 1)) True)", {'hcs': 1, 'hel': 1, 'hec': 1, 'p6': 1})
                     G.arith('hwc', f"(= (le (+ (ixf_ecost ce) 1) (- {CK} 1)) True)", {'hcs': 1, 'p6': 1})
                     def body_ih(H, out, hb):
@@ -1902,14 +1903,14 @@ def t3():
               {gsub(['hr'])}
               (case-on s IpStmt
                 ({stmt_arm('IpSet', 'i e', '(IpSet i e)', m_arm_set, slS, ['ixf_scost'])}
-                 {stmt_arm('IpStore', 'ae ve', '(IpStore ae ve)', fenced, slS, [])}
+                 {stmt_arm('IpStore', 'ae ve', '(IpStore ae ve)', fenced, slS, ['ixf_scost'])}
                  {stmt_arm('IpIf', 'ce tb eb', '(IpIf ce tb eb)', m_arm_if, slS, ['ixf_scost'])}
                  {stmt_arm('IpWhile', 'ce b', '(IpWhile ce b)', m_arm_while, slS, ['ixf_scost'])}
-                 {stmt_arm('IpCall', 'i k args', '(IpCall i k args)', fenced, slS, [])}
-                 {stmt_arm('IpLoadW', 'i ae', '(IpLoadW i ae)', fenced, slS, [])}
-                 {stmt_arm('IpStoreW', 'ae ve', '(IpStoreW ae ve)', fenced, slS, [])}
+                 {stmt_arm('IpCall', 'i k args', '(IpCall i k args)', fenced, slS, ['ixf_scost'])}
+                 {stmt_arm('IpLoadW', 'i ae', '(IpLoadW i ae)', fenced, slS, ['ixf_scost'])}
+                 {stmt_arm('IpStoreW', 'ae ve', '(IpStoreW ae ve)', fenced, slS, ['ixf_scost'])}
                  {stmt_arm('IpFail', 'fam', '(IpFail fam)', m_arm_fail, slS, ['ixf_scost'])}
-                 {stmt_arm('IpUnreach', '', 'IpUnreach', m_arm_unreach, slS, [])}))))
+                 {stmt_arm('IpUnreach', '', 'IpUnreach', m_arm_unreach, slS, ['ixf_scost'])}))))
           (case IqStmts (ss)
             (chain
               {cap('hr', '(= r (IqStmts ss))')}

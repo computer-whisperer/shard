@@ -994,3 +994,100 @@ literal divisor; an induction binder must not shadow a claim variable.
 Owed to A-3: the statement tier over this (`IpSet`'s store of RAX into
 a local = `fr_locs` growth; `IpStore`/`IpLoadW`/`IpStoreW` = below-the-cut
 patches; `IpFail`/`IpUnreach` = the trap clauses).
+
+**A-3 — STRAIGHT-LINE STATEMENTS, parts 1–2 (2026-08-22; commits
+7133737, fb80053).** fra_kit.shard 664/0. The statement vocabulary —
+`fs_out` (every scratch register incl. RAX as the run's own), `ips_tr`
+(the straight-line statement twin: the slot word on top of the
+expression spills), `fl_set`/`fr_locs_set` (the locals relation under a
+set), `ilset_some/lo/hi`, `int_eq_eq` — and three step lemmas generated
+by gen_fra.py's `stmt` mode: `fs_step_set` (`fe_sound` → `fe_st_run` →
+`fs_out`), `fs_step_fail` (RDI := 70 + family, XCall the exit shim — Some
+XTrap in the pure tier), `fs_step_unreach` (the word load no window
+reaches traps either way; case-split on the low guard). Part 3 —
+`IpStore` / `IpLoadW` / `IpStoreW` — is OWED: the inline attempt fought
+the `unfold xminstr_leaf cannot reach a match-arm body` gate; they want
+once-proven word-load/store block lemmas (`fe_ldw_run`/`fe_stw_run`, the
+`fe_st_run` shape) first.
+
+**A-4 — CONTROL LANDS (2026-08-23; commits 4372773 + this).**
+models/imp/probes/fra_kit.shard 726/0 (102743 lines formatted, of which
+39610 are gen_fra4.py's) + models/imp/probes/gen_fra4.py (the A-4 emitter,
+importing gen_fra.py). THE THEOREM OF THE SLICE, `ipt_sound` — §11.1(5)'s
+ONE induction: a request `r` (a statement, a statement list, or a while
+request — the loop body under `xeval_loop`, since the engine re-enters on
+exactly that list) that the frame tier accepts (`ixt_emit r = Some is`),
+at imp fuel `f` and at EVERY x86 tower `xt c (kf K f)` with `c` at or
+above the request's own cost and `K` bounding every statement cost in
+the tree (`ixf_skok K (ixt_body r)`, `1 ≤ K`), from a context file
+(`fe_ctx`, R14 = dep, R15 = fp, constants in band, the spill depth within
+the window), runs to `ixt_expect r out RS RUN MEM'`: a NORMAL imp outcome
+is `fs_out`/`fw_out` over the twin's memory (`ipt_tr`: the statement
+patches newest-first, outcomes stay `ipstmt`'s own), a FAILED outcome is
+`Some XTrap` (the exit shim), a TRAPPED outcome is the run itself (imp
+traps are outside the theorem, §11.1(1)). Under the A-4 FENCE `ixf_a4`:
+no call (A-5), no byte store / word op (A-3 part 3) — the induction's
+arms for those are refusals, lifted by regenerating.
+
+Structure (all generated, every claim closed on its first structural
+check; the iterations were Farkas slot counts, binder pins, paren
+counts, and the two DSL facts below): the side-predicate EXTRACTIONS
+(25: `a4/scb/skok` × tail/head/if_t/if_e/while_b + the expression parts +
+`skok_cost`, `sdep_*` as `imax2` inequalities); THE TWIN LAWS `ipt_mem`
+(imp's memory after a normal run = the base under the twin's patches
+below `slo`) and `ipt_ctx` (`fe_ctx` preserved at the post-state) — the
+first two instances of the dispatcher induction, imp-side only; nine
+x86 BLOCK LEMMAS over an explicit S-tower (if then/else × norm/trap,
+loop-rest exit/norm/trap, loop-statement brk/trap — the block/loop
+choreography proven once, outcome-specific so no wrapper function has
+to mirror the interpreter's match shape); nine control STEP LEMMAS
+(`fs_step_nil/cons/cons_fail/if_t/if_e/while`, `fw_step_exit/iter/
+iter_fail`) generic in the imp outcome through `ixt_expect`, the
+sub-runs' simulations as premises — the A-2 recipe at statement
+granularity; `slen_cost` (emission length ≤ statement cost); and the
+induction itself (673 generated lines before formatting): each arm
+decomposes the engine's run, derives the sub-requests' premises (sides
+by extraction, the post-state by the twin laws, heights by arithmetic),
+re-enters the IH at `xt (c + K) (kf K f2)` through `kf_s` + `xt_add`,
+and cites the step lemma.
+
+**Three findings that moved into the TRANSLATOR** (to_x86.shard,
+output-identical: differential 16/16, silicon 17/17, micro_elf
+byte-identical): (1) THE BLOCK DISCIPLINE — a nested statement list (a
+loop body, an else branch) enters through its own `XBlock`. The encoder
+emits nothing for a block, but `xeval_seq` hands one fuel unit per
+POSITION, so a spliced list would put the instruction after it at
+"position + the list's length", a quantity bounded only by the imp fuel
+tower — exactly the Nat-inequality swamp §11.1(4) rejected; a block body
+runs at its block's own fuel and the instruction after the block at the
+block's position, so every statement's emission length is LOCAL (a
+block counts one), the general seam is applied at statement granularity
+only, and the per-program ratio `K` is a maximum over statement costs
+(`ixf_scost`: ecost + 4 for a set, + 3 for an if, + 4 for a while, 8 for
+a fail). The then branch needs no block (it is already the tail of the
+cons after the inner block). (2) `ixf_stmts` became the mutual pair
+`ixf_stmt`/`ixf_stmts` — "a list runs its head's emission then its
+tail's" is now the definition, not a nine-arm lemma. (3) `ixf_sdep`
+became `ixf_sdep`/`ixf_sdeps`; likewise every list predicate of the
+proof tier is a mutual pair with the per-statement part NAMED, so an
+extraction unfolds one layer and never spells a match term. Also found:
+`fs_step_unreach` is not a clause of the theorem (IpUnreach is an imp
+trap — outside); it stays as the machine-behavior record.
+
+**Proof-DSL facts (canonical, new this slice):** `case-on` on a VARIABLE
+does not substitute — the fact is `hyp 0` and every re-spelling of a
+premise must rewrite the captured constructor equation (and an
+outcome variable must be folded BACK, `rl`, before the premise whose
+right side names it); every `have` and every `inject` product along the
+path is a Farkas slot, in chain order — certs come from a tracker, never
+by hand; `reduce` does not enter the branches of a stuck `if` (fold an
+inner literal `if` by `if_f`/`if_ff`); claim premises are cited by
+index, haves by name; a lemma binder the goal pattern leaves dangling
+needs an `inst`; `(int_eq 1 0) = False` negates to an EQUATION and is
+refuted with G = −1; `wf-induct`'s IH carries the ordering premises
+after the claim's own; `shardfmt` must follow every splice (the
+generators emit one-liners — 102k lines formatted from ~64k emitted).
+Owed: A-3 part 3 (lifts the store/word-op fence), A-5 (calls: args as
+patches at fp + own + 8j, frame disjointness, the R14 mirror, `ixf_kok`
+over fn bodies), A-6 (`valid_frame` + `iprun`/`xrun_fn`, the promotion of
+fra_kit out of probes/).
