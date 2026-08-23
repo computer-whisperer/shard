@@ -16,9 +16,12 @@
 ;;; The runtime never consults a type: count ops test the low bit, free
 ;;; reads the arity from the header. Counts in [1, 2^31) are live;
 ;;; counts ≥ 2^31 are IMMORTAL (static data, P8 — inc/dec leave them);
-;;; count 0 marks a DEAD cell, and while a dead cell waits on the free
-;;; worklist its count field holds the worklist link (indexes fit in 32
-;;; bits, and dead cells are reachable from nothing else).
+;;; count 0 marks a DEAD cell. A dying cell's links live in its HEADER
+;;; word — on the release worklist the count field holds the link with
+;;; tag/arity preserved (the worklist still reads the arity); on a free
+;;; list the whole header word IS the link (nothing reads a free cell's
+;;; fields, and alloc's pop rewrites the header in full). Links fit: cell
+;;; indexes are 32-bit, and dead cells are reachable from nothing else.
 ;;;
 ;;; THE LAYOUT (P4), relative to the runtime base rb (a U32 index the
 ;;; program chooses inside its window):
@@ -158,8 +161,8 @@
             (rle (radd (rl 3) (rl 4)) (rl 5))
             (list (rstw (rk rb) (radd (rl 3) (rl 4))) (IpSet 2 (rl 3)))
             (list (IpFail FOom))))
-        ;; pop: free[n] := the link in the dead cell's first slot
-        (list (rldo 6 2 8) (rstw (rfree_at rb (rl 1)) (rl 6))))
+        ;; pop: free[n] := the link in the dead cell's header word
+        (list (rldo 6 2 0) (rstw (rfree_at rb (rl 1)) (rl 6))))
       ;; the header: count 1, tag, arity
       (rsto
         2
@@ -243,12 +246,15 @@
                                 Nil))
                             Nil)
                           (IpSet 6 (radd (rl 6) (rk 1)))))
-                      ;; the dead cell returns to its free list
+                      ;; the dead cell returns to its free list — the link
+                      ;; is the WHOLE HEADER WORD (an arity-0 cell has no
+                      ;; slot; nothing reads a free cell's tag or arity,
+                      ;; and alloc's pop rewrites the header in full)
                       (IpIf
                         (rlt (rl 5) (rk 16))
                         (list
                           (rldw 10 (rfree_at rb (rl 5)))
-                          (rsto 4 8 (rl 10))
+                          (rsto 4 0 (rl 10))
                           (rstw (rfree_at rb (rl 5)) (rl 4)))
                         Nil))))))
             Nil))

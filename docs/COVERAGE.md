@@ -1376,3 +1376,153 @@ probes re-check to_x86 the same way); #37 owns the strategy if this
 compounds. NEXT = C2b (runtime theorems: the managed-graph invariant
 and framing in the base+patch vocabulary) per the ratified order
 A → C2b → B.
+
+**C2b-0 — THE RUNTIME-THEOREM TIER OPENS: the design (2026-08-23;
+order A → C2b → B ratified 2026-08-22).** §11's sketch ("the
+managed-graph invariant and framing") designed against the landed
+code — rt.shard, impc's emission, the A-family's idioms — before any
+proof. One bug moves out of the runtime, two sharpenings move out of
+the sketch's wording, and the slices are cut.
+
+**THE BUG FOUND STATING IT (the A-0 tradition: the design exposes
+what no differential exercised).** rt.shard's header comment says a
+dead cell's COUNT FIELD carries the free-list link; the code linked
+through SLOT 0 (`rsto 4 8` at rt_dec's push, `rldo 6 2 8` at
+rt_alloc's pop). An arity-0 cell HAS no slot 0 — [a+8] is the NEXT
+cell's memory, so freeing an arity-0 cell smashes its neighbor's
+header. Verified at runtime before the fix (scratch driver: a =
+alloc(5,0) at 152, b = alloc(6,1) at 160, fill b, dec a, read b's
+header → 0, want 281500748356609; the reuse leg corrupts
+identically). No differential saw it because impc never allocates
+arity 0 — nullary ctors are immediates (2·tag+1). THE FIX: free-list
+links live in the HEADER WORD, whole word ([cur+0] at the push,
+[p+0] at the pop) — the discipline the release worklist already uses
+(count-field links with tag/arity preserved, because the worklist
+still reads the arity; the free list reads nothing and alloc's pop
+rewrites the header in full, so its link is the whole word). Uniform
+at every arity, no API change. Two pinned rows join rt_run (t_zero,
+t_zero_reuse: the neighbor's header survives an arity-0 free and the
+reuse of the freed cell).
+
+**WHAT B CONSUMES (read off impc's emission — the design's ground).**
+Every memory fact a per-fn theorem holds is the heap's: locals are
+engine state, the frame region is invisible to imp (A-0), and impc
+touches memory ONLY through runtime calls, constructor fills, and
+field loads. So the EXPORTED vocabulary is a ghost heap, not raw
+memory, and no law B cites mentions a patch list. The verified fill
+discipline (ic_e's Ctor arm + fill_slots + own): sub-expressions
+land first; then IpCall rt_alloc; then per slot at most one rt_inc
+(a BORROWED operand's, never the fresh cell's own address) and one
+IpStoreW into the fresh cell. So while a RAW cell is open the only
+runtime entry that can run is rt_inc on a non-raw argument, and the
+alloc/dec laws may premise raw = None. Statics: impc emits none
+today; the ghost carries immortals anyway (rt handles them,
+t_immortal pins them; static emission is P8's later story).
+
+**THE GHOST (the vocabulary of every exported law).**
+- `HCell`: addr, count, tag, arity, slots. The live heap H = List
+  HCell, NEWEST FIRST — list position is BIRTH RANK, and ACYCLICITY
+  IS THE LIST ORDER: a slot reference points only to an OLDER cell.
+  Rank is not address (free-list reuse recycles addresses; a
+  recycled cell re-enters at its new birth position) — which is why
+  the invariant carries an order the bytes don't.
+- The ghost state G: H, the sixteen free lists (addr lists), top,
+  end, and at most ONE raw cell (addr, tag, arity, filled prefix) —
+  the single-raw discipline above.
+- The roots R: a multiset (List Int) of the references the program
+  holds. B threads it — its locals' ownership map IS R.
+- `heap_rep M rb G`: the bytes mean the ghost — [rb] = top,
+  [rb+8] = end, [rb+16] = 0 (THE GHOST DEPTH CELL: written once by
+  init, read by nobody — §11's "ghost to readbacks" clause is this
+  row), [rb+24+8k] = free head k with chains linked through header
+  words, each live cell's header = count + tag·2^32 + arity·2^48
+  and slots at addr+8+8i, extents 8-aligned and pairwise disjoint
+  inside [rb+152, top), top ≤ end.
+- `hinv G R`: EXACT COUNTS — every live non-immortal cell's count =
+  R(addr) + inbound slot references from live cells and the raw
+  fill prefix — plus slot VALIDITY (odd immediate, or a reference
+  to an OLDER live cell or an immortal), counts ≥ 1, the immortal
+  band (≥ 2^31) exempt from exactness, free-listed extents disjoint
+  from live ones and class-matched, the header bands (tag, arity
+  < 2^16).
+- THE PRECISION THEOREM (the pure crown): hinv ⟹ live = reachable
+  from R ∪ immortals. Counting IS liveness — MEMORY.md §3's claim
+  becomes a theorem. Proof shape: a live cell's count ≥ 1 forces a
+  root or an inbound edge; induct along birth rank (acyclicity is
+  the list order, so the induction is structural).
+
+**THE LAWS (at the ipcall grain over rt_prog's table — table lemmas
+pin ipfn_at (rt_app (rt_fns rb) fs') at 0..3 generically — in STRONG
+total-correctness form).** Fuel: a cost function per law (rtc_init/
+alloc/inc constants; rtc_dec a ghost measure, coarse Σ(2 + arity))
+with the premise `le (rtc_*) (int_of_nat fuel)` (std/nat's bridge);
+conclusion: the call RETURNS Some (IpRv r M') (or the oom fail) with
+heap_rep', hinv', the ghost transition, and the REGION FRAMING law
+(mem_get M' a = mem_get M a outside [rb, end)) — the C4/I-O seam.
+REJECTED-because, the premised-on-Some form (Theorem A's shape):
+B's conclusion is TOTALITY — it must PRODUCE runs — so a premised
+law would need a separate sufficiency pass plus fuel monotonicity;
+one total-correctness induction serves both, and the fuel premise
+stays Farkas-shaped through int_of_nat.
+- `rth_init` (premising lo ≥ rb + 152): the empty ghost.
+- `rth_alloc`: raw := Some (popped free[n] class-matched, else the
+  bump under the carve check), count 1 = exactly the returned root;
+  the FOom leg exactly when free[n] is empty and top + 8 + 8n > end.
+- the FILL law (an ENGINE law about IpStoreW under heap_rep, not an
+  rt call): a valid word into the raw cell's next slot; an OWNED
+  reference transfers out of R (exactness balances). The SEAL is
+  ghost-only: fully filled raw → live at the newest rank.
+- the READ laws (heap_rep extraction): header and slot loads of
+  live cells return the ghost values — B's scrutinee and fields.
+- `rth_inc`: R + {v}; immediate and immortal legs are ghost-heap
+  identity; the 2^31 boundary SATURATES — a count reaching the
+  immortal band freezes the cell immortal forever, a sound LEAK
+  (exactness exempts it from then on) recorded as the law's shape,
+  not an error. Stated with raw CARRIED (the fill window runs incs).
+- `rth_dec` — THE RELEASE THEOREM (the arc's deepest): R − {v}; the
+  ghost transition `gh_dec` is a PURE worklist mirror of the code's,
+  terminating along birth rank (a dying cell's children are older),
+  and its characterization is proven ONCE, engine-free: gh_dec
+  removes EXACTLY the cells unreachable from (R − {v}) ∪ immortals,
+  surviving cells keep their bytes, freed extents join the matching
+  free class, hinv is restored. The engine leg then shows rt_dec's
+  two nested loops IMPLEMENT gh_dec (loop invariants marry the
+  concrete worklist — count-field links — to the ghost's).
+
+**DEPARTURES FROM §11's SKETCH, surfaced.** (i) "preserves every
+readback" is delivered GHOST-LEVEL: surviving cells unchanged plus
+reachability preserved. rb_T stays Theorem B's per-type instrument;
+its preservation is a B-side corollary (a readback reads only
+reachable cells). (ii) The FPatch base+patch vocabulary (CERT.md
+§5's "separation library in this vocabulary from day one") is NOT
+imported: no exported law needs a patch list (B holds no memory fact
+beyond heap_rep — the window IS the heap), the internal choreography
+uses std/mem's framing laws directly, and keeping fra_kit out of the
+closure keeps every future B product's CI cost down (#37). The door
+stays open: if C4's I/O framing wants patch-footprint statements,
+the region framing law restates in FPatch terms then. A deliberate
+narrowing of a ratified note's expectation — flagged in the gate
+report, not silent.
+
+**RESIDENCE.** models/imp/probes/rth_kit.shard — imports kernel,
+std/mem, std/nat, imp.shard, rt.shard ONLY (not fra_kit, not
+to_x86): C2b's closure is machine-free, and B's per-program certs
+import rth_kit and fra_kit as SEPARATE closures. Generators: hand
+first; a gen_rth.py under the gen_fra splice/banner/shardfmt/
+byte-fixpoint contract the moment step-lemma repetition emerges
+(expected at the alloc slice).
+
+**THE SLICES.** C2b-0: this record; the free-link fix, the two
+pinned rows, the differential re-runs. C2b-1 THE KIT: ghost types,
+heap_rep/hinv, extraction lemmas, the Nat bridge, the engine
+stepping style proven end-to-end on rt_init — rth_init LANDS as the
+template. C2b-2 THE PURE THEORY (engine-free): reachability, the
+precision theorem, gh_dec with termination and the exact-free
+characterization. C2b-3 rt_alloc + fill/seal/read (the constructor
+story complete). C2b-4 rt_inc. C2b-5 rt_dec (the engine leg; the
+release theorem assembled). C2b-6 the instance: rt_run's scenarios
+re-derived FROM the laws in check mode, the corpus row, the ledger
+close. Acceptance per slice: targeted checks green locally, CI FAIL
+set == baseline at each commit, rt_run green throughout. Out of
+scope, named: readbacks (B), the machine side (A, done), World I/O
+(C4), reuse/uniqueness (MEMORY.md §5's rung, a later arc).
