@@ -1689,3 +1689,38 @@ C2b-0's departure (i).  Part 2b closes C2b-2.  COMMITS: 2b-i the
 vocabulary + count/membership toolkit; 2b-ii gh_slots_inv; 2b-iii
 gh_wl_inv + entry + hinv_dec + dec_sub + the ledger close.  CI gate
 each.
+
+**C2b-2 (part 2b) — THE RELEASE THEOREM'S HEART LANDS (2026-08-23/24;
+rth_kit closure 563/0, splice→shardfmt byte-fixpoint).**  `hinv_dec`
+— hinv rb g r ∧ graw = None ∧ memb r v ⟹ hinv rb (gh_dec g v)
+(irem r v) — and `dec_sub` — every surviving cell keeps its
+addr/tag/arity/SLOTS under `hsubq`, counts may only fall — both peel
+off `hinv_dec_full`, one pipeline.  THE PROOF WENT THROUGH AS
+DESIGNED, with two structural upgrades surfaced in flight: (i) THE
+ROOT DROP IS REASSOCIATION — `wex_rdrop` moves the dropped root into
+the walked suffix, so the ENTRY has a slot-release's shape and all
+five gh_dec legs (odd/miss vacuous by alignment/hhas; immortal =
+ghost identity, the sound leak's pure face; shared = one hdecc;
+dying = the cascade) reuse the same transformation family, and
+`wex_pop` shows popping the worklist is the same reassociation on the
+other side; (ii) the slot-walk master carries a THIRD conserved
+clause — per-address wa-counts (`wa_move_cin`: a dying cell's address
+changes columns, exactly once) — which hands the loop level the unit
+of domination slack the free-push (`winv_push` via msub_ins +
+msub_w2f + eall_fp) re-spends.  MASTERS: `gh_slots_inv` (structural
+on the suffix; skip/imm/decc/move step lemmas; |cells|+|wl| conserved)
+and `gh_wl_inv` (wf-induct on the budget; the fuel exit is
+Farkas-vacuous; winv_pop → gh_slots_inv → winv_push per iteration).
+EXIT: `winv_hinv` re-derives e_disj/e_brk from eall membership +
+msub-domination + ed_nodup exactly as the design record promised —
+separation was never threaded.  COMMITS 398e5c1 (count spine), d016d6a
+(separation toolkit), 165abd3 (clause machinery), 6dbc1b0
+(transformations), 3ea5275+7aa2e95 (the T-collision gate fix — a probe
+type named T broke std/order's generic-binder claim in rth_run's
+closure, issue #38 — plus canon catch-up), 38dfb1f (slot-walk master),
+and this one (loop master + entry/exit + the laws).  The
+EXACT-FREE CHARACTERIZATION stands as designed: "no leak" =
+hinv_reach AT the result (already proven, B cites it); "nothing live
+freed" = the B-side readback corollary.  C2b-2 IS COMPLETE.  NEXT =
+C2b-3: rt_alloc's law + the FILL/SEAL/READ laws (the constructor
+story), then C2b-4 rt_inc, C2b-5 the engine leg, C2b-6 the instance.
