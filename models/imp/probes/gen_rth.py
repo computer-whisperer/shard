@@ -463,6 +463,27 @@ def extract_pred_block():
         "(eall (Cons (Pair a n) t) ys)",
         ["(emem ys a n)", "(eall t ys)"],
         ["ea_hd", "ea_tl"]))
+    out.extend(_extract_claims(
+        "wexact",
+        "(all (List HCell)) (c HCell) (rest (List HCell)) (r (List Int)) (wl (List HCell)) (ws (List Int))",
+        "(wexact all (Cons c rest) r wl ws)",
+        ["(if (le 2147483648 (hcount_of c)) True\n       (int_eq\n         (hcount_of c)\n         (+\n           (count_in r (haddr_of c))\n           (+\n             (inbound_cells all (haddr_of c))\n             (+\n               (inbound_cells wl (haddr_of c))\n               (count_in ws (haddr_of c)))))))",
+         "(wexact all rest r wl ws)"],
+        ["we_hd", "we_tl"]))
+    out.extend(_extract_claims(
+        "imm_at",
+        "(c HCell) (rest (List HCell)) (w Int)",
+        "(imm_at (Cons c rest) w)",
+        ["(if (int_eq (haddr_of c) w) (le 2147483648 (hcount_of c)) True)",
+         "(imm_at rest w)"],
+        ["ia_hd", "ia_tl"]))
+    out.extend(_extract_claims(
+        "nimm_at",
+        "(c HCell) (rest (List HCell)) (w Int)",
+        "(nimm_at (Cons c rest) w)",
+        ["(if (int_eq (haddr_of c) w)\n       (andb (lt 1 (hcount_of c)) (lt (hcount_of c) 2147483648))\n       True)",
+         "(nimm_at rest w)"],
+        ["na_hd", "na_tl"]))
     out.append(";; hinv, clause by clause")
     out.extend(_extract_claims(
         "hinv",
