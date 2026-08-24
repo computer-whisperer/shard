@@ -484,6 +484,18 @@ def extract_pred_block():
         ["(if (int_eq (haddr_of c) w)\n       (andb (lt 1 (hcount_of c)) (lt (hcount_of c) 2147483648))\n       True)",
          "(nimm_at rest w)"],
         ["na_hd", "na_tl"]))
+    out.extend(_extract_claims(
+        "winv",
+        "(cs0 (List HCell)) (es0 (List (Pair Int Int))) (r (List Int)) (cells (List HCell)) (fls (List (List Int))) (wl (List HCell)) (ws (List Int))",
+        "(winv cs0 es0 r cells fls wl ws)",
+        ["(wexact cells cells r wl ws)",
+         "(cells_ok cells)",
+         "(roots_ok r (haddrs cells))",
+         "(eall (wext cells fls wl) es0)",
+         "(msub (wa cells fls wl) (e_addrs es0))",
+         "(hsubq cells cs0)",
+         "(aligned8 (haddrs cells))"],
+        ["wi_ex", "wi_co", "wi_ro", "wi_ea", "wi_ms", "wi_sq", "wi_al"]))
     out.append(";; hinv, clause by clause")
     out.extend(_extract_claims(
         "hinv",
