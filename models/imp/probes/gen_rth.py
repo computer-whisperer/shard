@@ -457,6 +457,12 @@ def extract_pred_block():
         "(msub (Cons x t) ys)",
         ["(le (+ 1 (count_in t x)) (count_in ys x))", "(msub t ys)"],
         ["ms_hd", "ms_tl"]))
+    out.extend(_extract_claims(
+        "eall",
+        "(a Int) (n Int) (t (List (Pair Int Int))) (ys (List (Pair Int Int)))",
+        "(eall (Cons (Pair a n) t) ys)",
+        ["(emem ys a n)", "(eall t ys)"],
+        ["ea_hd", "ea_tl"]))
     out.append(";; hinv, clause by clause")
     out.extend(_extract_claims(
         "hinv",
