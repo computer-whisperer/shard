@@ -25,6 +25,8 @@
 ;;; rt.shard ONLY (machine-free; fra_kit stays a separate closure).
 
 (import "../../../kernel/stdlib.shard")
+(import "../../../kernel/facts.shard")
+(use (:: kernel facts *))
 (import "../../../std/mem")
 (use (:: std mem *))
 (import "../../../std/nat")
@@ -480,6 +482,57 @@
        refl))
     refl))
 
+;; --- the conjunction spine --------------------------------------------------------
+;; Every chain predicate below is a right-nested andb, so one lemma pair
+;; peels any clause out (fra_kit's fe_ctx idiom).
+
+(fn andb ((a Bool) (b Bool)) Bool (if a b False))
+
+(claim andb_l
+  (goal ((a Bool) (b Bool)) ((= (andb a b) True)) (= a True))
+  (case-on a Bool
+    ((case True (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+     (case False
+       (chain
+         (have hf (= True False)
+           (steps
+             ((rewrite (premise 0) rl lhs true ())
+              (unfold andb lhs)
+              (rewrite (hyp 0) lr lhs true ())
+              (reduce lhs))
+             refl))
+         (absurd (premise hf)))))))
+
+(claim andb_r
+  (goal ((a Bool) (b Bool)) ((= (andb a b) True)) (= b True))
+  (chain
+    (have ha (= a True)
+      (rewrite-with
+        (lemma andb_l)
+        lr
+        lhs
+        ((inst b b))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hab (= (andb a b) b)
+      (steps
+        ((unfold andb lhs)
+         (rewrite (premise ha) lr lhs true ())
+         (reduce lhs))
+        refl))
+    (steps
+      ((rewrite (premise hab) rl lhs true ())
+       (rewrite (premise 0) lr lhs true ()))
+      refl)))
+
+(claim andb_intro
+  (goal ((a Bool) (b Bool)) ((= a True) (= b True)) (= (andb a b) True))
+  (steps
+    ((rewrite (premise 0) lr lhs true ())
+     (rewrite (premise 1) lr lhs true ())
+     (compute lhs))
+    refl))
+
 ;; --- heap_rep: the bytes mean the ghost -------------------------------------------
 
 ;; a live cell's header word
@@ -497,18 +550,18 @@
   (match ws
     (Nil True)
     ((Cons w rest)
-     (if (int_eq (load_le (iw8) m a) w) (hslots_rep m (+ a 8) rest) False))))
+     (andb (int_eq (load_le (iw8) m a) w) (hslots_rep m (+ a 8) rest)))))
 
 (fn hcell_rep ((m Mem) (c HCell)) Bool
-  (if (int_eq (load_le (iw8) m (haddr_of c)) (hword c))
-    (hslots_rep m (+ (haddr_of c) 8) (hslots_of c))
-    False))
+  (andb
+    (int_eq (load_le (iw8) m (haddr_of c)) (hword c))
+    (hslots_rep m (+ (haddr_of c) 8) (hslots_of c))))
 
 (fn hcells_rep ((m Mem) (cs (List HCell))) Bool
   (measure (struct cs))
   (match cs
     (Nil True)
-    ((Cons c rest) (if (hcell_rep m c) (hcells_rep m rest) False))))
+    ((Cons c rest) (andb (hcell_rep m c) (hcells_rep m rest)))))
 
 ;; a free chain's next link (0 terminates)
 (fn hhead ((as (List Int))) Int
@@ -523,35 +576,27 @@
   (match as
     (Nil True)
     ((Cons a rest)
-     (if (int_eq (load_le (iw8) m a) (hhead rest)) (hchain_rep m rest) False))))
+     (andb (int_eq (load_le (iw8) m a) (hhead rest)) (hchain_rep m rest)))))
 
 (fn hfree_rep ((m Mem) (rb Int) (k Int) (fls (List (List Int)))) Bool
   (measure (struct fls))
   (match fls
     (Nil True)
     ((Cons fl rest)
-     (if (int_eq (load_le (iw8) m (+ rb (+ 24 (* 8 k)))) (hhead fl))
-       (if (hchain_rep m fl) (hfree_rep m rb (+ k 1) rest) False)
-       False))))
+     (andb
+       (int_eq (load_le (iw8) m (+ rb (+ 24 (* 8 k)))) (hhead fl))
+       (andb (hchain_rep m fl) (hfree_rep m rb (+ k 1) rest))))))
 
 (fn hraw_rep ((m Mem) (r (Option HRaw))) Bool
   (match r
     (None True)
     ((Some rc)
-     (if (int_eq (load_le (iw8) m (raddr_of rc)) (rword rc))
-       (hslots_rep m (+ (raddr_of rc) 8) (rfill_of rc))
-       False))))
+     (andb
+       (int_eq (load_le (iw8) m (raddr_of rc)) (rword rc))
+       (hslots_rep m (+ (raddr_of rc) 8) (rfill_of rc))))))
 
 (fn heap_rep ((m Mem) (rb Int) (g GHeap)) Bool
-  (if (int_eq (load_le (iw8) m rb) (gtop_of g))
-    (if (int_eq (load_le (iw8) m (+ rb 8)) (gend_of g))
-      (if (int_eq (load_le (iw8) m (+ rb 16)) 0)
-        (if (hfree_rep m rb 0 (gfree_of g))
-          (if (hcells_rep m (gcells_of g)) (hraw_rep m (graw_of g)) False)
-          False)
-        False)
-      False)
-    False))
+  (andb (int_eq (load_le (iw8) m rb) (gtop_of g)) (andb (int_eq (load_le (iw8) m (+ rb 8)) (gend_of g)) (andb (int_eq (load_le (iw8) m (+ rb 16)) 0) (andb (hfree_rep m rb 0 (gfree_of g)) (andb (hcells_rep m (gcells_of g)) (hraw_rep m (graw_of g))))))))
 
 ;; --- hinv: the pure well-formedness -----------------------------------------------
 
@@ -596,7 +641,7 @@
   (measure (struct ws))
   (match ws
     (Nil True)
-    ((Cons w rest) (if (slot_ok w older) (slots_ok rest older) False))))
+    ((Cons w rest) (andb (slot_ok w older) (slots_ok rest older)))))
 
 ;; per-cell structural facts, newest first: valid slots against the tail,
 ;; arity = slot count, the header bands, count >= 1
@@ -605,21 +650,7 @@
   (match cs
     (Nil True)
     ((Cons c rest)
-     (if (slots_ok (hslots_of c) (haddrs rest))
-       (if (int_eq (ilen (hslots_of c)) (harity_of c))
-         (if (le 1 (hcount_of c))
-           (if (lt (hcount_of c) 4294967296)
-             (if (le 0 (htag_of c))
-               (if (lt (htag_of c) 65536)
-                 (if (le 0 (harity_of c))
-                   (if (lt (harity_of c) 65536) (cells_ok rest) False)
-                   False)
-                 False)
-               False)
-             False)
-           False)
-         False)
-       False))))
+     (andb (slots_ok (hslots_of c) (haddrs rest)) (andb (int_eq (ilen (hslots_of c)) (harity_of c)) (andb (le 1 (hcount_of c)) (andb (lt (hcount_of c) 4294967296) (andb (le 0 (htag_of c)) (andb (lt (htag_of c) 65536) (andb (le 0 (harity_of c)) (andb (lt (harity_of c) 65536) (cells_ok rest))))))))))))
 
 ;; EXACT COUNTS: a live non-immortal cell's count is precisely the roots
 ;; plus the inbound slot references plus the raw fill's references; the
@@ -631,22 +662,21 @@
   (match cs
     (Nil True)
     ((Cons c rest)
-     (if
+     (andb
        (if (le 2147483648 (hcount_of c)) True
        (int_eq
          (hcount_of c)
          (+
            (count_in r (haddr_of c))
            (+ (inbound_cells all (haddr_of c)) (raw_refs raw (haddr_of c))))))
-       (counts_ok all rest r raw)
-       False))))
+       (counts_ok all rest r raw)))))
 
 ;; every root references a live cell
 (fn roots_ok ((r (List Int)) (as (List Int))) Bool
   (measure (struct r))
   (match r
     (Nil True)
-    ((Cons x t) (if (memb as x) (roots_ok t as) False))))
+    ((Cons x t) (andb (memb as x) (roots_ok t as)))))
 
 ;; --- the extents: separation ------------------------------------------------------
 ;; every footprint (live cells, free cells, the raw cell) as (addr, arity)
@@ -696,7 +726,7 @@
     (Nil True)
     ((Cons e rest)
      (match e
-       ((Pair b k) (if (e_disj2 a n b k) (e_disj1 a n rest) False))))))
+       ((Pair b k) (andb (e_disj2 a n b k) (e_disj1 a n rest)))))))
 
 (fn e_disj ((es (List (Pair Int Int)))) Bool
   (measure (struct es))
@@ -704,7 +734,7 @@
     (Nil True)
     ((Cons e rest)
      (match e
-       ((Pair a n) (if (e_disj1 a n rest) (e_disj rest) False))))))
+       ((Pair a n) (andb (e_disj1 a n rest) (e_disj rest)))))))
 
 ;; every extent inside [lo, top), 8-aligned, with a sane arity
 (fn e_brk ((es (List (Pair Int Int))) (lo Int) (top Int)) Bool
@@ -714,12 +744,7 @@
     ((Cons e rest)
      (match e
        ((Pair a n)
-        (if (le lo a)
-          (if (le (+ a (+ 8 (* 8 n))) top)
-            (if (int_eq (mod a 8) 0) (if (le 0 n) (e_brk rest lo top) False)
-            False)
-            False)
-          False))))))
+        (andb (le lo a) (andb (le (+ a (+ 8 (* 8 n))) top) (andb (int_eq (mod a 8) 0) (andb (le 0 n) (e_brk rest lo top))))))))))
 
 ;; the raw cell, when open: bands, arity-bounded fill, valid fill words
 ;; against the LIVE cells (everything live is older than raw)
@@ -727,42 +752,10 @@
   (match r
     (None True)
     ((Some rc)
-     (if (slots_ok (rfill_of rc) (haddrs cs))
-       (if (le (ilen (rfill_of rc)) (rarity_of rc))
-         (if (le 0 (rtag_of rc))
-           (if (lt (rtag_of rc) 65536)
-             (if (le 0 (rarity_of rc)) (lt (rarity_of rc) 65536) False)
-             False)
-           False)
-         False)
-       False))))
+     (andb (slots_ok (rfill_of rc) (haddrs cs)) (andb (le (ilen (rfill_of rc)) (rarity_of rc)) (andb (le 0 (rtag_of rc)) (andb (lt (rtag_of rc) 65536) (andb (le 0 (rarity_of rc)) (lt (rarity_of rc) 65536)))))))))
 
 (fn hinv ((rb Int) (g GHeap) (r (List Int))) Bool
-  (if (le 0 rb)
-    (if (le (+ rb 152) (glo_of g))
-      (if (le (glo_of g) (gtop_of g))
-        (if (le (gtop_of g) (gend_of g))
-          (if (le (gend_of g) 4294967296)
-            (if (int_eq (mod (glo_of g) 8) 0)
-              (if (int_eq (mod (gtop_of g) 8) 0)
-                (if (e_disj (ext_all g))
-                  (if (e_brk (ext_all g) (glo_of g) (gtop_of g))
-                    (if (cells_ok (gcells_of g))
-                      (if (counts_ok (gcells_of g) (gcells_of g) r (graw_of g))
-                        (if (roots_ok r (haddrs (gcells_of g)))
-                          (raw_ok (graw_of g) (gcells_of g))
-                          False)
-                        False)
-                      False)
-                    False)
-                  False)
-                False)
-              False)
-            False)
-          False)
-        False)
-      False)
-    False))
+  (andb (le 0 rb) (andb (le (+ rb 152) (glo_of g)) (andb (le (glo_of g) (gtop_of g)) (andb (le (gtop_of g) (gend_of g)) (andb (le (gend_of g) 4294967296) (andb (int_eq (mod (glo_of g) 8) 0) (andb (int_eq (mod (gtop_of g) 8) 0) (andb (e_disj (ext_all g)) (andb (e_brk (ext_all g) (glo_of g) (gtop_of g)) (andb (cells_ok (gcells_of g)) (andb (counts_ok (gcells_of g) (gcells_of g) r (graw_of g)) (andb (roots_ok r (haddrs (gcells_of g))) (raw_ok (graw_of g) (gcells_of g)))))))))))))))
 
 ;; --- reading through m_zh ---------------------------------------------------------
 ;; The zero-heads block stores at rb+24 .. rb+24+8(k-1).  Three laws
@@ -1005,11 +998,6 @@
     (have hll (= (le lo lo) True) (by arith (list 1 0 0 0 0 0)))
     (steps
       ((compute lhs)
-       (rewrite (lemma gcells_of_def) lr lhs true ())
-       (rewrite (lemma glo_of_def) lr lhs true ())
-       (rewrite (lemma gtop_of_def) lr lhs true ())
-       (rewrite (lemma gend_of_def) lr lhs true ())
-       (rewrite (lemma graw_of_def) lr lhs true ())
        (rewrite (premise 0) lr lhs true ())
        (rewrite (premise 1) lr lhs true ())
        (rewrite (premise hll) lr lhs true ())
@@ -1335,7 +1323,8 @@
         ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0))
          (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0)))
         refl))
-    (have hl0 (= (le mlo rb) True) (by arith (list 1 1 0 0 0 0 0 0 0 0 0 0 0)))
+    (have hl0 (= (le mlo rb) True)
+      (by arith (list 1 1 0 0 0 0 0 0 0 0 0 0 0)))
     (have hh0 (= (le (+ rb 8) msz) True)
       (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0)))
     (have hb1 (= (band (+ rb 8) 4294967295) (+ rb 8))
@@ -1402,330 +1391,176 @@
     (have hl5 (= (le mlo (+ rb 128)) True)
       (by arith (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hh5 (= (le (+ (+ rb 128) 8) msz) True)
-      (by
-        arith
-        (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hb6 (= (band (+ rb 120) 4294967295) (+ rb 120))
       (rewrite-with
         (lemma bandu32_id)
         lr
         lhs
         ()
-        ((by
-           arith
-           (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
-         (by
-           arith
-           (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+        ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
+         (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
         refl))
     (have hl6 (= (le mlo (+ rb 120)) True)
-      (by
-        arith
-        (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hh6 (= (le (+ (+ rb 120) 8) msz) True)
-      (by
-        arith
-        (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hb7 (= (band (+ rb 112) 4294967295) (+ rb 112))
       (rewrite-with
         (lemma bandu32_id)
         lr
         lhs
         ()
-        ((by
-           arith
-           (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0))
-         (by
-           arith
-           (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0)))
+        ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
+         (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
         refl))
     (have hl7 (= (le mlo (+ rb 112)) True)
-      (by
-        arith
-        (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0)))
+      (by arith (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hh7 (= (le (+ (+ rb 112) 8) msz) True)
-      (by
-        arith
-        (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0)))
+      (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hb8 (= (band (+ rb 104) 4294967295) (+ rb 104))
       (rewrite-with
         (lemma bandu32_id)
         lr
         lhs
         ()
-        ((by
-           arith
-           (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0))
-         (by
-           arith
-           (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0)))
+        ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
+         (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
         refl))
     (have hl8 (= (le mlo (+ rb 104)) True)
-      (by
-        arith
-        (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0)))
+      (by arith (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hh8 (= (le (+ (+ rb 104) 8) msz) True)
-      (by
-        arith
-        (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0)))
+      (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hb9 (= (band (+ rb 96) 4294967295) (+ rb 96))
       (rewrite-with
         (lemma bandu32_id)
         lr
         lhs
         ()
-        ((by
-           arith
-           (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0))
-         (by
-           arith
-           (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0)))
+        ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
+         (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
         refl))
     (have hl9 (= (le mlo (+ rb 96)) True)
-      (by
-        arith
-        (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0)))
+      (by arith (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hh9 (= (le (+ (+ rb 96) 8) msz) True)
-      (by
-        arith
-        (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0)))
+      (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hb10 (= (band (+ rb 88) 4294967295) (+ rb 88))
       (rewrite-with
         (lemma bandu32_id)
         lr
         lhs
         ()
-        ((by
-           arith
-           (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0 0 0 0))
-         (by
-           arith
-           (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0 0 0 0)))
+        ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
+         (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
         refl))
     (have hl10 (= (le mlo (+ rb 88)) True)
-      (by
-        arith
-        (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hh10 (= (le (+ (+ rb 88) 8) msz) True)
-      (by
-        arith
-        (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hb11 (= (band (+ rb 80) 4294967295) (+ rb 80))
       (rewrite-with
         (lemma bandu32_id)
         lr
         lhs
         ()
-        ((by
-           arith
-           (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0 0 0 0 0 0 0))
-         (by
-           arith
-           (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0 0 0 0 0 0 0)))
+        ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
+         (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
         refl))
     (have hl11 (= (le mlo (+ rb 80)) True)
-      (by
-        arith
-        (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hh11 (= (le (+ (+ rb 80) 8) msz) True)
-      (by
-        arith
-        (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hb12 (= (band (+ rb 72) 4294967295) (+ rb 72))
       (rewrite-with
         (lemma bandu32_id)
         lr
         lhs
         ()
-        ((by
-           arith
-           (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
-         (by
-           arith
-           (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+        ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
+         (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
         refl))
     (have hl12 (= (le mlo (+ rb 72)) True)
-      (by
-        arith
-        (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hh12 (= (le (+ (+ rb 72) 8) msz) True)
-      (by
-        arith
-        (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hb13 (= (band (+ rb 64) 4294967295) (+ rb 64))
       (rewrite-with
         (lemma bandu32_id)
         lr
         lhs
         ()
-        ((by
-           arith
-           (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
-         (by
-           arith
-           (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+        ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
+         (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
         refl))
     (have hl13 (= (le mlo (+ rb 64)) True)
-      (by
-        arith
-        (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hh13 (= (le (+ (+ rb 64) 8) msz) True)
-      (by
-        arith
-        (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hb14 (= (band (+ rb 56) 4294967295) (+ rb 56))
       (rewrite-with
         (lemma bandu32_id)
         lr
         lhs
         ()
-        ((by
-           arith
-           (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
-         (by
-           arith
-           (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+        ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
+         (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
         refl))
     (have hl14 (= (le mlo (+ rb 56)) True)
-      (by
-        arith
-        (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hh14 (= (le (+ (+ rb 56) 8) msz) True)
-      (by
-        arith
-        (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hb15 (= (band (+ rb 48) 4294967295) (+ rb 48))
       (rewrite-with
         (lemma bandu32_id)
         lr
         lhs
         ()
-        ((by
-           arith
-           (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
-         (by
-           arith
-           (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+        ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
+         (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
         refl))
     (have hl15 (= (le mlo (+ rb 48)) True)
-      (by
-        arith
-        (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hh15 (= (le (+ (+ rb 48) 8) msz) True)
-      (by
-        arith
-        (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hb16 (= (band (+ rb 40) 4294967295) (+ rb 40))
       (rewrite-with
         (lemma bandu32_id)
         lr
         lhs
         ()
-        ((by
-           arith
-           (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
-         (by
-           arith
-           (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+        ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
+         (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
         refl))
     (have hl16 (= (le mlo (+ rb 40)) True)
-      (by
-        arith
-        (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hh16 (= (le (+ (+ rb 40) 8) msz) True)
-      (by
-        arith
-        (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hb17 (= (band (+ rb 32) 4294967295) (+ rb 32))
       (rewrite-with
         (lemma bandu32_id)
         lr
         lhs
         ()
-        ((by
-           arith
-           (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
-         (by
-           arith
-           (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+        ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
+         (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
         refl))
     (have hl17 (= (le mlo (+ rb 32)) True)
-      (by
-        arith
-        (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hh17 (= (le (+ (+ rb 32) 8) msz) True)
-      (by
-        arith
-        (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hb18 (= (band (+ rb 24) 4294967295) (+ rb 24))
       (rewrite-with
         (lemma bandu32_id)
         lr
         lhs
         ()
-        ((by
-           arith
-           (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
-         (by
-           arith
-           (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-             0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+        ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
+         (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
         refl))
     (have hl18 (= (le mlo (+ rb 24)) True)
-      (by
-        arith
-        (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (have hh18 (= (le (+ (+ rb 24) 8) msz) True)
-      (by
-        arith
-        (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
-          0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+      (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
     (steps
       ((compute lhs (stop iw8))
        (rewrite (premise 8) lr lhs true ())
@@ -1857,72 +1692,29 @@
     ((= (le 0 lo) True) (= (lt lo 18446744073709551616) True))
     (= (load_le (iw8) (m_init m rb lo hi) rb) lo))
   (chain
-    (have hz
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          rb)
-        (load_le
-          (iw8)
-          (store_le
-            (iw8)
-            (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-            (+ rb 16)
-            0)
-          rb))
-      (rewrite-with (lemma m_zh_below) lr lhs () ((by arith (list 1 0 0))) refl))
-    (have h16
-      (=
-        (load_le
-          (iw8)
-          (store_le
-            (iw8)
-            (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-            (+ rb 16)
-            0)
-          rb)
-        (load_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) rb))
-      (rewrite-with
-        (lemma ldw_below)
-        lr
-        lhs
-        ()
+    (have hz (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) rb) (load_le (iw8) (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb))
+      (rewrite-with (lemma m_zh_below) lr lhs ()
+        ((by arith (list 1 0 0)))
+        refl))
+    (have h16 (= (load_le (iw8) (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb) (load_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) rb))
+      (rewrite-with (lemma ldw_below) lr lhs ()
         ((by arith (list 1 0 0 0)))
         refl))
-    (have h8
-      (=
-        (load_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) rb)
-        (load_le (iw8) (store_le (iw8) m rb lo) rb))
-      (rewrite-with
-        (lemma ldw_below)
-        lr
-        lhs
-        ()
+    (have h8 (= (load_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) rb) (load_le (iw8) (store_le (iw8) m rb lo) rb))
+      (rewrite-with (lemma ldw_below) lr lhs ()
         ((by arith (list 1 0 0 0 0)))
         refl))
     (have h0 (= (load_le (iw8) (store_le (iw8) m rb lo) rb) lo)
-      (rewrite-with
-        (lemma ls8w)
-        lr
-        lhs
-        ()
-        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
-         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+      (rewrite-with (lemma ls8w) lr lhs ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hz) lr lhs true ())
        (rewrite (premise h16) lr lhs true ())
        (rewrite (premise h8) lr lhs true ())
-       (rewrite (premise h0) lr lhs true ()))
+       (rewrite (premise h0) lr lhs true ())
+       )
       refl)))
 
 (claim m_init_rd_end
@@ -1930,631 +1722,332 @@
     ((= (le 0 hi) True) (= (lt hi 18446744073709551616) True))
     (= (load_le (iw8) (m_init m rb lo hi) (+ rb 8)) hi))
   (chain
-    (have hz
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          (+ rb 8))
-        (load_le
-          (iw8)
-          (store_le
-            (iw8)
-            (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-            (+ rb 16)
-            0)
-          (+ rb 8)))
-      (rewrite-with (lemma m_zh_below) lr lhs () ((by arith (list 1 0 0))) refl))
-    (have h16
-      (=
-        (load_le
-          (iw8)
-          (store_le
-            (iw8)
-            (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-            (+ rb 16)
-            0)
-          (+ rb 8))
-        (load_le
-          (iw8)
-          (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-          (+ rb 8)))
-      (rewrite-with
-        (lemma ldw_below)
-        lr
-        lhs
-        ()
+    (have hz (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) (+ rb 8)) (load_le (iw8) (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) (+ rb 8)))
+      (rewrite-with (lemma m_zh_below) lr lhs ()
+        ((by arith (list 1 0 0)))
+        refl))
+    (have h16 (= (load_le (iw8) (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) (+ rb 8)) (load_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 8)))
+      (rewrite-with (lemma ldw_below) lr lhs ()
         ((by arith (list 1 0 0 0)))
         refl))
-    (have h8
-      (=
-        (load_le
-          (iw8)
-          (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-          (+ rb 8))
-        hi)
-      (rewrite-with
-        (lemma ls8w)
-        lr
-        lhs
-        ()
-        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
-         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+    (have h8 (= (load_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 8)) hi)
+      (rewrite-with (lemma ls8w) lr lhs ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hz) lr lhs true ())
        (rewrite (premise h16) lr lhs true ())
-       (rewrite (premise h8) lr lhs true ()))
+       (rewrite (premise h8) lr lhs true ())
+       )
       refl)))
 
 (claim m_init_rd_dep
-  (goal ((m Mem) (rb Int) (lo Int) (hi Int)) ()
+  (goal ((m Mem) (rb Int) (lo Int) (hi Int))
+    ()
     (= (load_le (iw8) (m_init m rb lo hi) (+ rb 16)) 0))
   (chain
-    (have hz
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          (+ rb 16))
-        (load_le
-          (iw8)
-          (store_le
-            (iw8)
-            (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-            (+ rb 16)
-            0)
-          (+ rb 16)))
-      (rewrite-with (lemma m_zh_below) lr lhs () ((by arith (list 1))) refl))
-    (have h16
-      (=
-        (load_le
-          (iw8)
-          (store_le
-            (iw8)
-            (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-            (+ rb 16)
-            0)
-          (+ rb 16))
-        0)
-      (rewrite-with
-        (lemma ls8w)
-        lr
-        lhs
-        ()
+    (have hz (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) (+ rb 16)) (load_le (iw8) (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) (+ rb 16)))
+      (rewrite-with (lemma m_zh_below) lr lhs ()
+        ((by arith (list 1)))
+        refl))
+    (have h16 (= (load_le (iw8) (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) (+ rb 16)) 0)
+      (rewrite-with (lemma ls8w) lr lhs ()
         ((steps ((compute lhs)) refl) (steps ((compute lhs)) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hz) lr lhs true ())
-       (rewrite (premise h16) lr lhs true ()))
+       (rewrite (premise h16) lr lhs true ())
+       )
       refl)))
 
 (claim m_init_rd_h0
-  (goal ((m Mem) (rb Int) (lo Int) (hi Int)) ()
+  (goal ((m Mem) (rb Int) (lo Int) (hi Int))
+    ()
     (= (load_le (iw8) (m_init m rb lo hi) (+ rb 24)) 0))
   (chain
-    (have hq (= (+ rb 24) (+ rb (+ 24 (* 8 0)))) (steps ((compute rhs)) refl))
-    (have hh
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          (+ rb (+ 24 (* 8 0))))
-        0)
-      (rewrite-with
-        (lemma m_zh_head)
-        lr
-        lhs
-        ()
+    (have hq (= (+ rb 24) (+ rb (+ 24 (* 8 0))))
+      (steps ((compute rhs)) refl))
+    (have hh (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) (+ rb (+ 24 (* 8 0)))) 0)
+      (rewrite-with (lemma m_zh_head) lr lhs ()
         ((steps ((compute lhs)) refl) (steps ((compute lhs)) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hq) lr lhs true ())
-       (rewrite (premise hh) lr lhs true ()))
+       (rewrite (premise hh) lr lhs true ())
+       )
       refl)))
 
 (claim m_init_rd_h1
-  (goal ((m Mem) (rb Int) (lo Int) (hi Int)) ()
+  (goal ((m Mem) (rb Int) (lo Int) (hi Int))
+    ()
     (= (load_le (iw8) (m_init m rb lo hi) (+ rb 32)) 0))
   (chain
-    (have hq (= (+ rb 32) (+ rb (+ 24 (* 8 1)))) (steps ((compute rhs)) refl))
-    (have hh
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          (+ rb (+ 24 (* 8 1))))
-        0)
-      (rewrite-with
-        (lemma m_zh_head)
-        lr
-        lhs
-        ()
+    (have hq (= (+ rb 32) (+ rb (+ 24 (* 8 1))))
+      (steps ((compute rhs)) refl))
+    (have hh (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) (+ rb (+ 24 (* 8 1)))) 0)
+      (rewrite-with (lemma m_zh_head) lr lhs ()
         ((steps ((compute lhs)) refl) (steps ((compute lhs)) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hq) lr lhs true ())
-       (rewrite (premise hh) lr lhs true ()))
+       (rewrite (premise hh) lr lhs true ())
+       )
       refl)))
 
 (claim m_init_rd_h2
-  (goal ((m Mem) (rb Int) (lo Int) (hi Int)) ()
+  (goal ((m Mem) (rb Int) (lo Int) (hi Int))
+    ()
     (= (load_le (iw8) (m_init m rb lo hi) (+ rb 40)) 0))
   (chain
-    (have hq (= (+ rb 40) (+ rb (+ 24 (* 8 2)))) (steps ((compute rhs)) refl))
-    (have hh
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          (+ rb (+ 24 (* 8 2))))
-        0)
-      (rewrite-with
-        (lemma m_zh_head)
-        lr
-        lhs
-        ()
+    (have hq (= (+ rb 40) (+ rb (+ 24 (* 8 2))))
+      (steps ((compute rhs)) refl))
+    (have hh (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) (+ rb (+ 24 (* 8 2)))) 0)
+      (rewrite-with (lemma m_zh_head) lr lhs ()
         ((steps ((compute lhs)) refl) (steps ((compute lhs)) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hq) lr lhs true ())
-       (rewrite (premise hh) lr lhs true ()))
+       (rewrite (premise hh) lr lhs true ())
+       )
       refl)))
 
 (claim m_init_rd_h3
-  (goal ((m Mem) (rb Int) (lo Int) (hi Int)) ()
+  (goal ((m Mem) (rb Int) (lo Int) (hi Int))
+    ()
     (= (load_le (iw8) (m_init m rb lo hi) (+ rb 48)) 0))
   (chain
-    (have hq (= (+ rb 48) (+ rb (+ 24 (* 8 3)))) (steps ((compute rhs)) refl))
-    (have hh
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          (+ rb (+ 24 (* 8 3))))
-        0)
-      (rewrite-with
-        (lemma m_zh_head)
-        lr
-        lhs
-        ()
+    (have hq (= (+ rb 48) (+ rb (+ 24 (* 8 3))))
+      (steps ((compute rhs)) refl))
+    (have hh (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) (+ rb (+ 24 (* 8 3)))) 0)
+      (rewrite-with (lemma m_zh_head) lr lhs ()
         ((steps ((compute lhs)) refl) (steps ((compute lhs)) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hq) lr lhs true ())
-       (rewrite (premise hh) lr lhs true ()))
+       (rewrite (premise hh) lr lhs true ())
+       )
       refl)))
 
 (claim m_init_rd_h4
-  (goal ((m Mem) (rb Int) (lo Int) (hi Int)) ()
+  (goal ((m Mem) (rb Int) (lo Int) (hi Int))
+    ()
     (= (load_le (iw8) (m_init m rb lo hi) (+ rb 56)) 0))
   (chain
-    (have hq (= (+ rb 56) (+ rb (+ 24 (* 8 4)))) (steps ((compute rhs)) refl))
-    (have hh
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          (+ rb (+ 24 (* 8 4))))
-        0)
-      (rewrite-with
-        (lemma m_zh_head)
-        lr
-        lhs
-        ()
+    (have hq (= (+ rb 56) (+ rb (+ 24 (* 8 4))))
+      (steps ((compute rhs)) refl))
+    (have hh (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) (+ rb (+ 24 (* 8 4)))) 0)
+      (rewrite-with (lemma m_zh_head) lr lhs ()
         ((steps ((compute lhs)) refl) (steps ((compute lhs)) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hq) lr lhs true ())
-       (rewrite (premise hh) lr lhs true ()))
+       (rewrite (premise hh) lr lhs true ())
+       )
       refl)))
 
 (claim m_init_rd_h5
-  (goal ((m Mem) (rb Int) (lo Int) (hi Int)) ()
+  (goal ((m Mem) (rb Int) (lo Int) (hi Int))
+    ()
     (= (load_le (iw8) (m_init m rb lo hi) (+ rb 64)) 0))
   (chain
-    (have hq (= (+ rb 64) (+ rb (+ 24 (* 8 5)))) (steps ((compute rhs)) refl))
-    (have hh
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          (+ rb (+ 24 (* 8 5))))
-        0)
-      (rewrite-with
-        (lemma m_zh_head)
-        lr
-        lhs
-        ()
+    (have hq (= (+ rb 64) (+ rb (+ 24 (* 8 5))))
+      (steps ((compute rhs)) refl))
+    (have hh (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) (+ rb (+ 24 (* 8 5)))) 0)
+      (rewrite-with (lemma m_zh_head) lr lhs ()
         ((steps ((compute lhs)) refl) (steps ((compute lhs)) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hq) lr lhs true ())
-       (rewrite (premise hh) lr lhs true ()))
+       (rewrite (premise hh) lr lhs true ())
+       )
       refl)))
 
 (claim m_init_rd_h6
-  (goal ((m Mem) (rb Int) (lo Int) (hi Int)) ()
+  (goal ((m Mem) (rb Int) (lo Int) (hi Int))
+    ()
     (= (load_le (iw8) (m_init m rb lo hi) (+ rb 72)) 0))
   (chain
-    (have hq (= (+ rb 72) (+ rb (+ 24 (* 8 6)))) (steps ((compute rhs)) refl))
-    (have hh
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          (+ rb (+ 24 (* 8 6))))
-        0)
-      (rewrite-with
-        (lemma m_zh_head)
-        lr
-        lhs
-        ()
+    (have hq (= (+ rb 72) (+ rb (+ 24 (* 8 6))))
+      (steps ((compute rhs)) refl))
+    (have hh (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) (+ rb (+ 24 (* 8 6)))) 0)
+      (rewrite-with (lemma m_zh_head) lr lhs ()
         ((steps ((compute lhs)) refl) (steps ((compute lhs)) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hq) lr lhs true ())
-       (rewrite (premise hh) lr lhs true ()))
+       (rewrite (premise hh) lr lhs true ())
+       )
       refl)))
 
 (claim m_init_rd_h7
-  (goal ((m Mem) (rb Int) (lo Int) (hi Int)) ()
+  (goal ((m Mem) (rb Int) (lo Int) (hi Int))
+    ()
     (= (load_le (iw8) (m_init m rb lo hi) (+ rb 80)) 0))
   (chain
-    (have hq (= (+ rb 80) (+ rb (+ 24 (* 8 7)))) (steps ((compute rhs)) refl))
-    (have hh
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          (+ rb (+ 24 (* 8 7))))
-        0)
-      (rewrite-with
-        (lemma m_zh_head)
-        lr
-        lhs
-        ()
+    (have hq (= (+ rb 80) (+ rb (+ 24 (* 8 7))))
+      (steps ((compute rhs)) refl))
+    (have hh (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) (+ rb (+ 24 (* 8 7)))) 0)
+      (rewrite-with (lemma m_zh_head) lr lhs ()
         ((steps ((compute lhs)) refl) (steps ((compute lhs)) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hq) lr lhs true ())
-       (rewrite (premise hh) lr lhs true ()))
+       (rewrite (premise hh) lr lhs true ())
+       )
       refl)))
 
 (claim m_init_rd_h8
-  (goal ((m Mem) (rb Int) (lo Int) (hi Int)) ()
+  (goal ((m Mem) (rb Int) (lo Int) (hi Int))
+    ()
     (= (load_le (iw8) (m_init m rb lo hi) (+ rb 88)) 0))
   (chain
-    (have hq (= (+ rb 88) (+ rb (+ 24 (* 8 8)))) (steps ((compute rhs)) refl))
-    (have hh
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          (+ rb (+ 24 (* 8 8))))
-        0)
-      (rewrite-with
-        (lemma m_zh_head)
-        lr
-        lhs
-        ()
+    (have hq (= (+ rb 88) (+ rb (+ 24 (* 8 8))))
+      (steps ((compute rhs)) refl))
+    (have hh (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) (+ rb (+ 24 (* 8 8)))) 0)
+      (rewrite-with (lemma m_zh_head) lr lhs ()
         ((steps ((compute lhs)) refl) (steps ((compute lhs)) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hq) lr lhs true ())
-       (rewrite (premise hh) lr lhs true ()))
+       (rewrite (premise hh) lr lhs true ())
+       )
       refl)))
 
 (claim m_init_rd_h9
-  (goal ((m Mem) (rb Int) (lo Int) (hi Int)) ()
+  (goal ((m Mem) (rb Int) (lo Int) (hi Int))
+    ()
     (= (load_le (iw8) (m_init m rb lo hi) (+ rb 96)) 0))
   (chain
-    (have hq (= (+ rb 96) (+ rb (+ 24 (* 8 9)))) (steps ((compute rhs)) refl))
-    (have hh
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          (+ rb (+ 24 (* 8 9))))
-        0)
-      (rewrite-with
-        (lemma m_zh_head)
-        lr
-        lhs
-        ()
+    (have hq (= (+ rb 96) (+ rb (+ 24 (* 8 9))))
+      (steps ((compute rhs)) refl))
+    (have hh (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) (+ rb (+ 24 (* 8 9)))) 0)
+      (rewrite-with (lemma m_zh_head) lr lhs ()
         ((steps ((compute lhs)) refl) (steps ((compute lhs)) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hq) lr lhs true ())
-       (rewrite (premise hh) lr lhs true ()))
+       (rewrite (premise hh) lr lhs true ())
+       )
       refl)))
 
 (claim m_init_rd_h10
-  (goal ((m Mem) (rb Int) (lo Int) (hi Int)) ()
+  (goal ((m Mem) (rb Int) (lo Int) (hi Int))
+    ()
     (= (load_le (iw8) (m_init m rb lo hi) (+ rb 104)) 0))
   (chain
-    (have hq (= (+ rb 104) (+ rb (+ 24 (* 8 10)))) (steps ((compute rhs)) refl))
-    (have hh
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          (+ rb (+ 24 (* 8 10))))
-        0)
-      (rewrite-with
-        (lemma m_zh_head)
-        lr
-        lhs
-        ()
+    (have hq (= (+ rb 104) (+ rb (+ 24 (* 8 10))))
+      (steps ((compute rhs)) refl))
+    (have hh (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) (+ rb (+ 24 (* 8 10)))) 0)
+      (rewrite-with (lemma m_zh_head) lr lhs ()
         ((steps ((compute lhs)) refl) (steps ((compute lhs)) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hq) lr lhs true ())
-       (rewrite (premise hh) lr lhs true ()))
+       (rewrite (premise hh) lr lhs true ())
+       )
       refl)))
 
 (claim m_init_rd_h11
-  (goal ((m Mem) (rb Int) (lo Int) (hi Int)) ()
+  (goal ((m Mem) (rb Int) (lo Int) (hi Int))
+    ()
     (= (load_le (iw8) (m_init m rb lo hi) (+ rb 112)) 0))
   (chain
-    (have hq (= (+ rb 112) (+ rb (+ 24 (* 8 11)))) (steps ((compute rhs)) refl))
-    (have hh
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          (+ rb (+ 24 (* 8 11))))
-        0)
-      (rewrite-with
-        (lemma m_zh_head)
-        lr
-        lhs
-        ()
+    (have hq (= (+ rb 112) (+ rb (+ 24 (* 8 11))))
+      (steps ((compute rhs)) refl))
+    (have hh (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) (+ rb (+ 24 (* 8 11)))) 0)
+      (rewrite-with (lemma m_zh_head) lr lhs ()
         ((steps ((compute lhs)) refl) (steps ((compute lhs)) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hq) lr lhs true ())
-       (rewrite (premise hh) lr lhs true ()))
+       (rewrite (premise hh) lr lhs true ())
+       )
       refl)))
 
 (claim m_init_rd_h12
-  (goal ((m Mem) (rb Int) (lo Int) (hi Int)) ()
+  (goal ((m Mem) (rb Int) (lo Int) (hi Int))
+    ()
     (= (load_le (iw8) (m_init m rb lo hi) (+ rb 120)) 0))
   (chain
-    (have hq (= (+ rb 120) (+ rb (+ 24 (* 8 12)))) (steps ((compute rhs)) refl))
-    (have hh
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          (+ rb (+ 24 (* 8 12))))
-        0)
-      (rewrite-with
-        (lemma m_zh_head)
-        lr
-        lhs
-        ()
+    (have hq (= (+ rb 120) (+ rb (+ 24 (* 8 12))))
+      (steps ((compute rhs)) refl))
+    (have hh (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) (+ rb (+ 24 (* 8 12)))) 0)
+      (rewrite-with (lemma m_zh_head) lr lhs ()
         ((steps ((compute lhs)) refl) (steps ((compute lhs)) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hq) lr lhs true ())
-       (rewrite (premise hh) lr lhs true ()))
+       (rewrite (premise hh) lr lhs true ())
+       )
       refl)))
 
 (claim m_init_rd_h13
-  (goal ((m Mem) (rb Int) (lo Int) (hi Int)) ()
+  (goal ((m Mem) (rb Int) (lo Int) (hi Int))
+    ()
     (= (load_le (iw8) (m_init m rb lo hi) (+ rb 128)) 0))
   (chain
-    (have hq (= (+ rb 128) (+ rb (+ 24 (* 8 13)))) (steps ((compute rhs)) refl))
-    (have hh
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          (+ rb (+ 24 (* 8 13))))
-        0)
-      (rewrite-with
-        (lemma m_zh_head)
-        lr
-        lhs
-        ()
+    (have hq (= (+ rb 128) (+ rb (+ 24 (* 8 13))))
+      (steps ((compute rhs)) refl))
+    (have hh (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) (+ rb (+ 24 (* 8 13)))) 0)
+      (rewrite-with (lemma m_zh_head) lr lhs ()
         ((steps ((compute lhs)) refl) (steps ((compute lhs)) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hq) lr lhs true ())
-       (rewrite (premise hh) lr lhs true ()))
+       (rewrite (premise hh) lr lhs true ())
+       )
       refl)))
 
 (claim m_init_rd_h14
-  (goal ((m Mem) (rb Int) (lo Int) (hi Int)) ()
+  (goal ((m Mem) (rb Int) (lo Int) (hi Int))
+    ()
     (= (load_le (iw8) (m_init m rb lo hi) (+ rb 136)) 0))
   (chain
-    (have hq (= (+ rb 136) (+ rb (+ 24 (* 8 14)))) (steps ((compute rhs)) refl))
-    (have hh
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          (+ rb (+ 24 (* 8 14))))
-        0)
-      (rewrite-with
-        (lemma m_zh_head)
-        lr
-        lhs
-        ()
+    (have hq (= (+ rb 136) (+ rb (+ 24 (* 8 14))))
+      (steps ((compute rhs)) refl))
+    (have hh (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) (+ rb (+ 24 (* 8 14)))) 0)
+      (rewrite-with (lemma m_zh_head) lr lhs ()
         ((steps ((compute lhs)) refl) (steps ((compute lhs)) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hq) lr lhs true ())
-       (rewrite (premise hh) lr lhs true ()))
+       (rewrite (premise hh) lr lhs true ())
+       )
       refl)))
 
 (claim m_init_rd_h15
-  (goal ((m Mem) (rb Int) (lo Int) (hi Int)) ()
+  (goal ((m Mem) (rb Int) (lo Int) (hi Int))
+    ()
     (= (load_le (iw8) (m_init m rb lo hi) (+ rb 144)) 0))
   (chain
-    (have hq (= (+ rb 144) (+ rb (+ 24 (* 8 15)))) (steps ((compute rhs)) refl))
-    (have hh
-      (=
-        (load_le
-          (iw8)
-          (m_zh
-            (store_le
-              (iw8)
-              (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi)
-              (+ rb 16)
-              0)
-            rb
-            16)
-          (+ rb (+ 24 (* 8 15))))
-        0)
-      (rewrite-with
-        (lemma m_zh_head)
-        lr
-        lhs
-        ()
+    (have hq (= (+ rb 144) (+ rb (+ 24 (* 8 15))))
+      (steps ((compute rhs)) refl))
+    (have hh (= (load_le (iw8) (m_zh (store_le (iw8) (store_le (iw8) (store_le (iw8) m rb lo) (+ rb 8) hi) (+ rb 16) 0) rb 16) (+ rb (+ 24 (* 8 15)))) 0)
+      (rewrite-with (lemma m_zh_head) lr lhs ()
         ((steps ((compute lhs)) refl) (steps ((compute lhs)) refl))
         refl))
     (steps
       ((unfold m_init lhs)
        (rewrite (premise hq) lr lhs true ())
-       (rewrite (premise hh) lr lhs true ()))
+       (rewrite (premise hh) lr lhs true ())
+       )
       refl)))
 
 ;; the init bytes mean the empty ghost
@@ -2571,20 +2064,12 @@
     (have hqhi (= (int_eq hi hi) True)
       (by arith (list (list 1 0 0 0 0 0) (list 1 0 0 0 0 0))))
     (have hrt (= (load_le (iw8) (m_init m rb lo hi) rb) lo)
-      (rewrite-with
-        (lemma m_init_rd_top)
-        lr
-        lhs
-        ()
+      (rewrite-with (lemma m_init_rd_top) lr lhs ()
         ((steps ((rewrite (premise 0) lr lhs true ())) refl)
          (steps ((rewrite (premise 1) lr lhs true ())) refl))
         refl))
     (have hre (= (load_le (iw8) (m_init m rb lo hi) (+ rb 8)) hi)
-      (rewrite-with
-        (lemma m_init_rd_end)
-        lr
-        lhs
-        ()
+      (rewrite-with (lemma m_init_rd_end) lr lhs ()
         ((steps ((rewrite (premise 2) lr lhs true ())) refl)
          (steps ((rewrite (premise 3) lr lhs true ())) refl))
         refl))
@@ -2624,10 +2109,6 @@
       (rewrite-with (lemma m_init_rd_h15) lr lhs () () refl))
     (steps
       ((compute lhs (stop iw8 m_init))
-       (rewrite (lemma gend_of_def) lr lhs true ())
-       (rewrite (lemma gfree_of_def) lr lhs true ())
-       (rewrite (lemma gcells_of_def) lr lhs true ())
-       (rewrite (lemma graw_of_def) lr lhs true ())
        (rewrite (premise hrt) lr lhs true ())
        (rewrite (premise hqlo) lr lhs true ())
        (reduce lhs)
@@ -2669,5 +2150,704 @@
        (rewrite (premise hh14) lr lhs true ())
        (compute lhs (stop iw8 m_init))
        (rewrite (premise hh15) lr lhs true ())
-       (compute lhs (stop iw8 m_init)))
+       (compute lhs (stop iw8 m_init))
+       )
       refl)))
+
+;; --- the pure theory: reachability ------------------------------------------------
+;; C2b-2 (the design record's slices).  Reachability over the ghost:
+;; roots ∪ immortals seed the frontier; one newest-first pass suffices
+;; because acyclicity is the list order (a cell can only be referenced
+;; by NEWER cells, which the pass has already visited).
+
+;; the reference words of a slot list (references are even)
+(fn slot_refs ((ws (List Int))) (List Int)
+  (measure (struct ws))
+  (match ws
+    (Nil Nil)
+    ((Cons w t)
+     (if (int_eq (mod w 2) 1) (slot_refs t) (Cons w (slot_refs t))))))
+
+;; the immortal cells' addresses
+(fn imm_addrs ((cs (List HCell))) (List Int)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons c t)
+     (if (le 2147483648 (hcount_of c))
+       (Cons (haddr_of c) (imm_addrs t))
+       (imm_addrs t)))))
+
+;; the frontier after the newest-first pass: a frontiered cell donates
+;; its slot references
+(fn gh_reach ((cs (List HCell)) (fr (List Int))) (List Int)
+  (measure (struct cs))
+  (match cs
+    (Nil fr)
+    ((Cons c rest)
+     (if (memb fr (haddr_of c))
+       (gh_reach rest (iapp (slot_refs (hslots_of c)) fr))
+       (gh_reach rest fr)))))
+
+;; xs ⊆ ys, memb-wise
+(fn all_in ((xs (List Int)) (ys (List Int))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil True)
+    ((Cons x t) (andb (memb ys x) (all_in t ys)))))
+
+;; THE WALK INVARIANT: every non-immortal cell of cs whose count exceeds
+;; its inbound references FROM cs ITSELF (i.e. every externally
+;; supported cell) is already frontiered.  Exactness makes the theorem's
+;; entry instance of this: external support = a root.
+(fn p_cov ((all (List HCell)) (cs (List HCell)) (fr (List Int))) Bool
+  (measure (struct cs))
+  (match cs
+    (Nil True)
+    ((Cons c rest)
+     (andb
+       (if
+         (if (le 2147483648 (hcount_of c)) False
+         (lt (inbound_cells all (haddr_of c)) (hcount_of c)))
+         (memb fr (haddr_of c))
+         True)
+       (p_cov all rest fr)))))
+
+;; --- the list lemmas --------------------------------------------------------------
+
+(claim memb_iapp_l
+  (goal ((a (List Int)) (b (List Int)) (x Int))
+    ((= (memb a x) True))
+    (= (memb (iapp a b) x) True))
+  (induct a
+    ((case Nil
+       (chain
+         (have hf (= False True)
+           (steps
+             ((rewrite (premise 0) rl rhs true ())
+              (unfold memb rhs)
+              (reduce rhs))
+             refl))
+         (absurd (premise hf))))
+     (case Cons
+       (h t)
+       (chain
+         (steps
+           ((unfold iapp lhs)
+            (reduce lhs)
+            (unfold memb lhs)
+            (reduce lhs)))
+         (case-on (int_eq h x) Bool
+           ((case True
+              (steps ((rewrite (hyp True) lr lhs true ()) (reduce lhs)) refl))
+            (case False
+              (chain
+                (have hmt (= (memb t x) True)
+                  (steps
+                    ((rewrite (premise 0) rl rhs true ())
+                     (unfold memb rhs)
+                     (reduce rhs)
+                     (rewrite (hyp False) lr rhs true ())
+                     (reduce rhs))
+                    refl))
+                (have hih (= (memb (iapp t b) x) True)
+                  (rewrite-with
+                    (hyp 1)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise hmt) lr lhs true ())) refl))
+                    refl))
+                (steps
+                  ((rewrite (hyp False) lr lhs true ())
+                   (reduce lhs)
+                   (rewrite (premise hih) lr lhs true ()))
+                  refl))))))))))
+
+(claim memb_iapp_r
+  (goal ((a (List Int)) (b (List Int)) (x Int))
+    ((= (memb b x) True))
+    (= (memb (iapp a b) x) True))
+  (induct a
+    ((case Nil
+       (steps
+         ((unfold iapp lhs) (reduce lhs) (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case Cons
+       (h t)
+       (chain
+         (have hih (= (memb (iapp t b) x) True)
+           (rewrite-with
+             (hyp 0)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((unfold iapp lhs)
+            (reduce lhs)
+            (unfold memb lhs)
+            (reduce lhs))
+           (case-on (int_eq h x) Bool
+             ((case True
+                (steps ((rewrite (hyp True) lr lhs true ()) (reduce lhs)) refl))
+              (case False
+                (steps
+                  ((rewrite (hyp False) lr lhs true ())
+                   (reduce lhs)
+                   (rewrite (premise hih) lr lhs true ()))
+                  refl))))))))))
+
+;; the two-sided equality behind an int_eq fact (fra_kit's int_eq_eq)
+(claim int_eq_eq
+  (goal ((a Int) (b Int)) ((= (int_eq a b) True)) (= a b))
+  (by arith (list (list 1 -1) (list 1 1))))
+
+;; a positive occurrence count is membership, and conversely
+(claim cin_pos_memb
+  (goal ((xs (List Int)) (x Int))
+    ((= (le 1 (count_in xs x)) True))
+    (= (memb xs x) True))
+  (induct xs
+    ((case Nil
+       (chain
+         (have hz (= (le 1 0) True)
+           (steps
+             ((rewrite (premise 0) rl rhs true ())
+              (unfold count_in rhs)
+              (reduce rhs))
+             refl))
+         (absurd (premise hz))))
+     (case Cons
+       (h t)
+       (case-on (int_eq h x) Bool
+         ((case True
+            (steps
+              ((unfold memb lhs)
+               (reduce lhs)
+               (rewrite (hyp True) lr lhs true ())
+               (reduce lhs))
+              refl))
+          (case False
+            (chain
+              (have hct (= (le 1 (count_in t x)) True)
+                (steps
+                  ((rewrite (premise 0) rl rhs true ())
+                   (unfold count_in rhs)
+                   (reduce rhs)
+                   (rewrite (hyp False) lr rhs true ())
+                   (reduce rhs))
+                  refl))
+              (have hih (= (memb t x) True)
+                (rewrite-with
+                  (hyp 1)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (premise hct) lr lhs true ())) refl))
+                  refl))
+              (steps
+                ((unfold memb lhs)
+                 (reduce lhs)
+                 (rewrite (hyp False) lr lhs true ())
+                 (reduce lhs)
+                 (rewrite (premise hih) lr lhs true ()))
+                refl)))))))))
+
+;; a non-member occurs zero times
+(claim nmemb_cin
+  (goal ((xs (List Int)) (x Int))
+    ((= (memb xs x) False))
+    (= (count_in xs x) 0))
+  (induct xs
+    ((case Nil (steps ((unfold count_in lhs) (reduce lhs)) refl))
+     (case Cons
+       (h t)
+       (case-on (int_eq h x) Bool
+         ((case True
+            (chain
+              (have hf (= True False)
+                (steps
+                  ((rewrite (premise 0) rl rhs true ())
+                   (unfold memb rhs)
+                   (reduce rhs)
+                   (rewrite (hyp True) lr rhs true ())
+                   (reduce rhs))
+                  refl))
+              (absurd (premise hf))))
+          (case False
+            (chain
+              (have hmt (= (memb t x) False)
+                (steps
+                  ((rewrite (premise 0) rl rhs true ())
+                   (unfold memb rhs)
+                   (reduce rhs)
+                   (rewrite (hyp False) lr rhs true ())
+                   (reduce rhs))
+                  refl))
+              (have hih (= (count_in t x) 0)
+                (rewrite-with
+                  (hyp 1)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (premise hmt) lr lhs true ())) refl))
+                  refl))
+              (steps
+                ((unfold count_in lhs)
+                 (reduce lhs)
+                 (rewrite (hyp False) lr lhs true ())
+                 (reduce lhs)
+                 (rewrite (premise hih) lr lhs true ()))
+                refl)))))))))
+
+;; the frontier only grows through the pass
+(claim gh_reach_mono
+  (goal ((cs (List HCell)) (fr (List Int)) (x Int))
+    ((= (memb fr x) True))
+    (= (memb (gh_reach cs fr) x) True))
+  (induct cs
+    ((case Nil
+       (steps
+         ((unfold gh_reach lhs) (reduce lhs) (rewrite (premise 0) lr lhs true ()))
+         refl))
+     (case Cons
+       (c rest)
+       (chain
+         (steps ((unfold gh_reach lhs) (reduce lhs)))
+         (case-on (memb fr (haddr_of c)) Bool
+           ((case True
+              (chain
+                (have hfr (= (memb (iapp (slot_refs (hslots_of c)) fr) x) True)
+                  (rewrite-with
+                    (lemma memb_iapp_r)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                    refl))
+                (have hih
+                  (= (memb (gh_reach rest (iapp (slot_refs (hslots_of c)) fr)) x)
+                    True)
+                  (rewrite-with
+                    (hyp 1)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise hfr) lr lhs true ())) refl))
+                    refl))
+                (steps
+                  ((rewrite (hyp True) lr lhs true ())
+                   (reduce lhs)
+                   (rewrite (premise hih) lr lhs true ()))
+                  refl)))
+            (case False
+              (chain
+                (have hih (= (memb (gh_reach rest fr) x) True)
+                  (rewrite-with
+                    (hyp 1)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                    refl))
+                (steps
+                  ((rewrite (hyp False) lr lhs true ())
+                   (reduce lhs)
+                   (rewrite (premise hih) lr lhs true ()))
+                  refl))))))))))
+
+;; pointwise use of an inclusion
+(claim all_in_memb
+  (goal ((xs (List Int)) (ys (List Int)) (x Int))
+    ((= (all_in xs ys) True) (= (memb xs x) True))
+    (= (memb ys x) True))
+  (induct xs
+    ((case Nil
+       (chain
+         (have hf (= False True)
+           (steps
+             ((rewrite (premise 1) rl rhs true ())
+              (unfold memb rhs)
+              (reduce rhs))
+             refl))
+         (absurd (premise hf))))
+     (case Cons
+       (h t)
+       (chain
+         (have hmh (= (memb ys h) True)
+           (case-on (memb ys h) Bool
+             ((case True
+                (steps ((rewrite (hyp True) lr lhs true ())) refl))
+              (case False
+                (chain
+                  (have hf (= True False)
+                    (steps
+                      ((rewrite (premise 0) rl lhs true ())
+                       (unfold all_in lhs)
+                       (reduce lhs)
+                       (rewrite (hyp False) lr lhs true ())
+                       (unfold andb lhs)
+                       (reduce lhs))
+                      refl))
+                  (absurd (premise hf)))))))
+         (have hat (= (all_in t ys) True)
+           (steps
+             ((rewrite (premise 0) rl rhs true ())
+              (unfold all_in rhs)
+              (reduce rhs)
+              (rewrite (premise hmh) lr rhs true ())
+              (unfold andb rhs)
+              (reduce rhs))
+             refl))
+         (case-on (int_eq h x) Bool
+           ((case True
+              (chain
+                (have hei (= (int_eq h x) True)
+                  (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                (have hxh (= h x)
+                  (by arith (list (list 1 0 0 0 0 -1) (list 1 0 0 0 0 1))))
+                (steps
+                  ((rewrite (premise hxh) rl lhs true ())
+                   (rewrite (premise hmh) lr lhs true ()))
+                  refl)))
+            (case False
+              (chain
+                (have hmt (= (memb t x) True)
+                  (steps
+                    ((rewrite (premise 1) rl rhs true ())
+                     (unfold memb rhs)
+                     (reduce rhs)
+                     (rewrite (hyp False) lr rhs true ())
+                     (reduce rhs))
+                    refl))
+                (have hih (= (memb ys x) True)
+                  (rewrite-with
+                    (hyp 1)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise hat) lr lhs true ())) refl)
+                     (steps ((rewrite (premise hmt) lr lhs true ())) refl))
+                    refl))
+                (steps ((rewrite (premise hih) lr lhs true ())) refl))))))))))
+
+;; --- alignment and parity ---------------------------------------------------------
+;; Cell addresses are 8-aligned (e_brk), hence even, hence never equal to
+;; an odd immediate and never dropped by slot_refs' filter.
+
+;; 8 | a  ⟹  2 | a (mod_unique at the witness 4q)
+(claim mod8_even
+  (goal ((a Int)) ((= (int_eq (mod a 8) 0) True))
+    (= (int_eq (mod a 2) 0) True))
+  (div-facts
+    a
+    8
+    q
+    (chain
+      (have hm8 (= (mod a 8) 0)
+        (by arith (list (list 1 -1 0 0 0 0) (list 1 1 0 0 0 0))))
+      (have heq (= a (+ (* 2 (* 4 q)) 0))
+        (by arith (list (list 1 0 -1 0 0 0 -1) (list 1 0 1 0 0 0 1))))
+      (have hm2 (= (mod a 2) 0)
+        (rewrite-with
+          (lemma mod_unique)
+          lr
+          lhs
+          ((inst r 0) (inst q (* 4 q)))
+          ((steps ((rewrite (premise heq) rl rhs true ())) refl)
+           (steps ((compute lhs)) refl)
+           (steps ((compute lhs)) refl))
+          refl))
+      (steps ((rewrite (premise hm2) lr lhs true ()) (compute lhs)) refl))))
+
+;; the extent addresses
+(fn e_addrs ((es (List (Pair Int Int)))) (List Int)
+  (measure (struct es))
+  (match es
+    (Nil Nil)
+    ((Cons e rest)
+     (match e
+       ((Pair a n) (Cons a (e_addrs rest)))))))
+
+;; every listed address 8-aligned
+(fn aligned8 ((xs (List Int))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil True)
+    ((Cons x t) (andb (int_eq (mod x 8) 0) (aligned8 t)))))
+
+;; e_brk's alignment clauses, collected
+(claim ebrk_aligned
+  (goal ((es (List (Pair Int Int))) (lo Int) (top Int))
+    ((= (e_brk es lo top) True))
+    (= (aligned8 (e_addrs es)) True))
+  (induct es
+    ((case Nil (steps ((compute lhs)) refl))
+     (case Cons
+       (e rest)
+       (case-on e Pair
+         ((case Pair
+            (a n)
+            (chain
+              (have hb
+                (=
+                  (andb
+                    (le lo a)
+                    (andb
+                      (le (+ a (+ 8 (* 8 n))) top)
+                      (andb
+                        (int_eq (mod a 8) 0)
+                        (andb (le 0 n) (e_brk rest lo top)))))
+                  True)
+                (steps
+                  ((rewrite (premise 0) rl rhs true ())
+                   (rewrite (hyp 0) lr rhs true ())
+                   (unfold e_brk rhs)
+                   (reduce rhs))
+                  refl))
+              (have h1
+                (=
+                  (andb
+                    (le (+ a (+ 8 (* 8 n))) top)
+                    (andb
+                      (int_eq (mod a 8) 0)
+                      (andb (le 0 n) (e_brk rest lo top))))
+                  True)
+                (rewrite-with
+                  (lemma andb_r)
+                  lr
+                  lhs
+                  ((inst a (le lo a)))
+                  ((steps ((rewrite (premise hb) lr lhs true ())) refl))
+                  refl))
+              (have h2
+                (=
+                  (andb
+                    (int_eq (mod a 8) 0)
+                    (andb (le 0 n) (e_brk rest lo top)))
+                  True)
+                (rewrite-with
+                  (lemma andb_r)
+                  lr
+                  lhs
+                  ((inst a (le (+ a (+ 8 (* 8 n))) top)))
+                  ((steps ((rewrite (premise h1) lr lhs true ())) refl))
+                  refl))
+              (have hal (= (int_eq (mod a 8) 0) True)
+                (rewrite-with
+                  (lemma andb_l)
+                  lr
+                  lhs
+                  ((inst b (andb (le 0 n) (e_brk rest lo top))))
+                  ((steps ((rewrite (premise h2) lr lhs true ())) refl))
+                  refl))
+              (have h3 (= (andb (le 0 n) (e_brk rest lo top)) True)
+                (rewrite-with
+                  (lemma andb_r)
+                  lr
+                  lhs
+                  ((inst a (int_eq (mod a 8) 0)))
+                  ((steps ((rewrite (premise h2) lr lhs true ())) refl))
+                  refl))
+              (have htl (= (e_brk rest lo top) True)
+                (rewrite-with
+                  (lemma andb_r)
+                  lr
+                  lhs
+                  ((inst a (le 0 n)))
+                  ((steps ((rewrite (premise h3) lr lhs true ())) refl))
+                  refl))
+              (have hih (= (aligned8 (e_addrs rest)) True)
+                (rewrite-with
+                  (hyp 1)
+                  lr
+                  lhs
+                  ((inst lo lo) (inst top top))
+                  ((steps ((rewrite (premise htl) lr lhs true ())) refl))
+                  refl))
+              (steps
+                ((rewrite (hyp 0) lr lhs true ())
+                 (unfold e_addrs lhs)
+                 (reduce lhs)
+                 (unfold aligned8 lhs)
+                 (reduce lhs)
+                 (rewrite (premise hal) lr lhs true ())
+                 (rewrite (premise hih) lr lhs true ())
+                 (unfold andb lhs)
+                 (reduce lhs))
+                refl)))))))))
+
+;; hexts' addresses are the cells'
+(claim hexts_eaddrs
+  (goal ((cs (List HCell))) () (= (e_addrs (hexts cs)) (haddrs cs)))
+  (induct cs
+    ((case Nil (steps ((compute both)) refl))
+     (case Cons
+       (c rest)
+       (chain
+         (have hih (= (e_addrs (hexts rest)) (haddrs rest))
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+         (steps
+           ((unfold hexts lhs)
+            (reduce lhs)
+            (unfold e_addrs lhs)
+            (reduce lhs)
+            (rewrite (premise hih) lr lhs true ())
+            (unfold haddrs rhs)
+            (reduce rhs))
+           refl))))))
+
+;; pointwise use of aligned8
+(claim aligned_memb
+  (goal ((xs (List Int)) (x Int))
+    ((= (aligned8 xs) True) (= (memb xs x) True))
+    (= (int_eq (mod x 8) 0) True))
+  (induct xs
+    ((case Nil
+       (chain
+         (have hf (= False True)
+           (steps
+             ((rewrite (premise 1) rl rhs true ())
+              (unfold memb rhs)
+              (reduce rhs))
+             refl))
+         (absurd (premise hf))))
+     (case Cons
+       (h t)
+       (chain
+         (have hah (= (int_eq (mod h 8) 0) True)
+           (rewrite-with
+             (lemma andb_l)
+             lr
+             lhs
+             ((inst b (aligned8 t)))
+             ((steps
+                ((rewrite (premise 0) rl rhs true ())
+                 (unfold aligned8 rhs)
+                 (reduce rhs))
+                refl))
+             refl))
+         (have hat (= (aligned8 t) True)
+           (rewrite-with
+             (lemma andb_r)
+             lr
+             lhs
+             ((inst a (int_eq (mod h 8) 0)))
+             ((steps
+                ((rewrite (premise 0) rl rhs true ())
+                 (unfold aligned8 rhs)
+                 (reduce rhs))
+                refl))
+             refl))
+         (case-on (int_eq h x) Bool
+           ((case True
+              (chain
+                (have hei (= (int_eq h x) True)
+                  (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                (have hxh (= h x)
+                  (by arith (list (list 1 0 0 0 0 -1) (list 1 0 0 0 0 1))))
+                (steps
+                  ((rewrite (premise hxh) rl lhs true ())
+                   (rewrite (premise hah) lr lhs true ()))
+                  refl)))
+            (case False
+              (chain
+                (have hmt (= (memb t x) True)
+                  (steps
+                    ((rewrite (premise 1) rl rhs true ())
+                     (unfold memb rhs)
+                     (reduce rhs)
+                     (rewrite (hyp False) lr rhs true ())
+                     (reduce rhs))
+                    refl))
+                (have hih (= (int_eq (mod x 8) 0) True)
+                  (rewrite-with
+                    (hyp 1)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise hat) lr lhs true ())) refl)
+                     (steps ((rewrite (premise hmt) lr lhs true ())) refl))
+                    refl))
+                (steps ((rewrite (premise hih) lr lhs true ())) refl))))))))))
+
+;; an even member survives slot_refs' odd filter
+(claim sr_memb
+  (goal ((ws (List Int)) (x Int))
+    ((= (memb ws x) True) (= (int_eq (mod x 2) 0) True))
+    (= (memb (slot_refs ws) x) True))
+  (induct ws
+    ((case Nil
+       (chain
+         (have hf (= False True)
+           (steps
+             ((rewrite (premise 0) rl rhs true ())
+              (unfold memb rhs)
+              (reduce rhs))
+             refl))
+         (absurd (premise hf))))
+     (case Cons
+       (w t)
+       (case-on (int_eq w x) Bool
+         ((case True
+            (chain
+              (have hei (= (int_eq w x) True)
+                (steps ((rewrite (hyp True) lr lhs true ())) refl))
+              (have hwx (= w x)
+                (by arith (list (list 1 0 0 -1) (list 1 0 0 1))))
+              (have hwodd (= (int_eq (mod w 2) 1) False)
+                (steps
+                  ((rewrite (premise hwx) lr lhs true ()))
+                  (by arith (list 1 0 -1 0 0))))
+              (steps
+                ((unfold slot_refs lhs)
+                 (reduce lhs)
+                 (rewrite (premise hwodd) lr lhs true ())
+                 (reduce lhs)
+                 (unfold memb lhs)
+                 (reduce lhs)
+                 (rewrite (premise hei) lr lhs true ())
+                 (reduce lhs))
+                refl)))
+          (case False
+            (chain
+              (have hmt (= (memb t x) True)
+                (steps
+                  ((rewrite (premise 0) rl rhs true ())
+                   (unfold memb rhs)
+                   (reduce rhs)
+                   (rewrite (hyp False) lr rhs true ())
+                   (reduce rhs))
+                  refl))
+              (have hih (= (memb (slot_refs t) x) True)
+                (rewrite-with
+                  (hyp 1)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (premise hmt) lr lhs true ())) refl)
+                   (steps ((rewrite (premise 1) lr lhs true ())) refl))
+                  refl))
+              (case-on (int_eq (mod w 2) 1) Bool
+                ((case True
+                   (steps
+                     ((unfold slot_refs lhs)
+                      (reduce lhs)
+                      (rewrite (hyp True) lr lhs true ())
+                      (reduce lhs)
+                      (rewrite (premise hih) lr lhs true ()))
+                     refl))
+                 (case False
+                   (steps
+                     ((unfold slot_refs lhs)
+                      (reduce lhs)
+                      (rewrite (hyp False) lr lhs true ())
+                      (reduce lhs)
+                      (unfold memb lhs)
+                      (reduce lhs)
+                      (rewrite (hyp 1) lr lhs true ())
+                      (reduce lhs)
+                      (rewrite (premise hih) lr lhs true ()))
+                     refl))))))))))))
