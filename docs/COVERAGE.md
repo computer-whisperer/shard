@@ -1630,3 +1630,62 @@ drop): 4/4 — the mirror's discovery order, LIFO worklist and
 free-chain push order are pinned byte-for-byte against the real
 memory before any preservation proof.  NEXT: hinv preservation
 through gh_dec (the release theorem's heart) + survivor framing.
+
+**C2b-2 (part 2b) — DESIGN: hinv_dec, the preservation of hinv
+through the cascade (2026-08-23; written before the first edit).**
+THE THEOREM: `hinv rb g r` ∧ `graw g = None` ∧ `memb r v` ⟹
+`hinv rb (gh_dec g v) (rrem r v)` (rrem = drop the first occurrence),
+plus `dec_sub` — every surviving cell keeps its addr/tag/arity/SLOTS
+with count ≤ (`hsubq`, an ordered-subsequence check; note the sketch's
+"survivors keep their bytes" holds for STRUCTURE — a shared child's
+count byte drops, and the engine leg re-establishes heap_rep from the
+ghost, not by framing).  Five legs by gh_dec's shape: odd v and
+hfind-None are VACUOUS (a root is a live address: 8-aligned hence
+even, and present); immortal v is ghost identity (the exemption
+absorbs the dropped root — the sound leak's pure face); shared v is
+one `hdecc` (both sides of v's exactness equation drop by 1, no other
+equation moves); dying v is the cascade.
+THE WALK INVARIANT `winv` (one andb bundle over the mid-state
+(cells, fls, wl, ws) with fixed context cs0/es0 = ext_all g/r' —
+extractions generated): (1) `wexact` — every non-immortal cell's
+count = roots + inbound from cells + inbound from wl's undischarged
+slots + occurrences in ws, the slot suffix currently being released
+(the gh_wl level is ws = Nil; POPPING IS REASSOCIATION: cur leaving
+wl turns its inb term into the entry ws term, exactly); (2) cells_ok;
+(3) roots_ok; (4) `eall` — every mid-state extent is an es0 MEMBER;
+(5) `msub` — the mid-state address multiset is COUNT-DOMINATED by
+es0's addresses; (6) hsubq vs cs0; (7) aligned8 (haddrs cells).
+THE ZERO-SUPPORT ARGUMENT (the engine): a cell moves to the worklist
+only at count exactly 1 while a reference to it is being released, so
+its exactness equation forces every other support term to 0 — no
+root, no live slot, no worklist slot, no unwalked occurrence names it
+again — which is precisely why removal preserves cells_ok (nothing
+cited it), roots_ok (no root holds it), and the survivors' equations
+(its own slots move with it into wl's inbound term).
+SEPARATION IS NOT THREADED: e_disj/e_brk are RE-DERIVED at exit from
+the STATIC es0 facts via the membership toolkit — eb_memb/ed_memb2
+extract per-member and per-pair facts from es0, ed_intro/eb_intro
+rebuild over the final list, needing only (4) eall and nodup of the
+final addresses, which (5) delivers through msub_anodup (msub xs A0 ∧
+anodup A0 → anodup xs; anodup A0 once from e_disj+e_brk via
+ed_nodup).  msub is the permutation-stable carrier: moves are count
+algebra (cin_iapp, msub_ins, one walk lemma per move shape — cells→wl
+at hrem/Cons, wl→free at fls_push with fp_cin), where positional
+nodup would fight every permutation.
+TWO MASTER INDUCTIONS: `gh_slots_inv` (structural on ws; five cases —
+odd skip, find-None skip, immortal skip, shared hdecc, dying move —
+concluding winv at ws = Nil AND |cells|+|wl| CONSERVED) and
+`gh_wl_inv` (wf-induct on the budget k with `le (|cells|+|wl|+1) k`:
+the fuel exit is Farkas-vacuous, each iteration drops the sum by
+exactly 1 — cur leaves, gh_slots conserves).  Conclusions through
+pair projections (gsc/gsw, gwc/gwf).  Entry = ONE c2w move from
+(cells0, fls, no wl) + the reflexivity lemmas; exit rebuilds hinv's
+13 clauses (scalars carry — with_gcells/with_gfree touch nothing
+else; counts_ok = wexact at Nil/Nil).
+THE EXACT-FREE CHARACTERIZATION IS A COROLLARY, NOT A NEW INDUCTION:
+"no leak" = hinv_reach AT g' (already proven — cite at B); "nothing
+live was freed" = the B-side readback-preservation corollary per
+C2b-0's departure (i).  Part 2b closes C2b-2.  COMMITS: 2b-i the
+vocabulary + count/membership toolkit; 2b-ii gh_slots_inv; 2b-iii
+gh_wl_inv + entry + hinv_dec + dec_sub + the ledger close.  CI gate
+each.

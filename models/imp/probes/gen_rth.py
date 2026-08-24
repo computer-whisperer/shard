@@ -444,6 +444,19 @@ def extract_pred_block():
         "(all_in (Cons x t) ys)",
         ["(memb ys x)", "(all_in t ys)"],
         ["ai_hd", "ai_tl"]))
+    out.append(";; anodup / msub (the release toolkit's carriers)")
+    out.extend(_extract_claims(
+        "anodup",
+        "(x Int) (t (List Int))",
+        "(anodup (Cons x t))",
+        ["(int_eq (count_in t x) 0)", "(anodup t)"],
+        ["an_hd", "an_tl"]))
+    out.extend(_extract_claims(
+        "msub",
+        "(x Int) (t (List Int)) (ys (List Int))",
+        "(msub (Cons x t) ys)",
+        ["(le (+ 1 (count_in t x)) (count_in ys x))", "(msub t ys)"],
+        ["ms_hd", "ms_tl"]))
     out.append(";; hinv, clause by clause")
     out.extend(_extract_claims(
         "hinv",
