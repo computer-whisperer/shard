@@ -1577,3 +1577,38 @@ after its banner (recovered by rebuild; the file was untracked).
 COMMIT THE HAND SKELETON BEFORE THE FIRST SPLICE. NEXT = C2b-2 (the
 pure theory: reachability, the precision theorem, gh_dec +
 termination + the exact-free characterization — engine-free).
+
+**C2b-2 (part 1) — THE PRECISION THEOREM LANDS (2026-08-23; rth_kit
+419/0, 9901 lines formatted, splice→shardfmt byte-fixpoint).**
+COUNTING IS LIVENESS is now a checked theorem: `gh_precision` — under
+valid cells, the exact-count cover, immortal seeding and separated
+extents, EVERY live cell is in the frontier `gh_reach` computes — and
+`hinv_reach`, the corollary Theorem B will cite: hinv with no raw cell
+open puts every live cell in reach of roots ∪ immortals. THE PROOF
+SHAPE (the design record's induction went through as designed): one
+STRUCTURAL induction, newest-first, with the walk invariant `p_cov`
+("every cell whose count exceeds its inbound-from-the-walk references
+is already frontiered"); the head cell can have NO inbound reference
+at all — acyclicity is the list order (`inb_zero` via `slots_nmemb_cin`:
+valid slots are odd or older, and separation (`edisj1_nmemb`) makes the
+head's address unique, 8-alignment (`mod8_even` via kernel mod_unique
+at witness 4q — NO parity Farkas needed) keeps it off the odd side) —
+so its count forces a root or an immortal seed; `p_cov_step` re-covers
+the tail once the head's slot references join the frontier (a cell
+losing its last in-walk supporter was supported by the head, whose
+slots now frontier it). Exactness enters ONLY at the entry instance
+(`exact_cov`). MACHINERY LANDED: the andb respell of every chain
+predicate (fe_ctx's extraction idiom; strict-arg compute evaluates all
+clauses up front) + the GENERATED extraction family (gen_rth `extract`:
+~50 per-clause peels for cells_ok/counts_ok/p_cov/e_brk/e_disj*/
+roots_ok/slots_ok/aligned8/all_in/hinv/heap_rep — landed green on the
+first splice), the reachability vocabulary (slot_refs/imm_addrs/
+gh_reach/all_in/p_cov), and the list library (memb/count_in/iapp
+bridges, self-inclusion, prefix extraction through fexts_app).
+PROOF-DSL FACTS (new): `induct` SUBSTITUTES into premises (no ctor
+equation hyp; the IH is hyp 0 at chain level and shifts under case-on);
+an int_eq premise IS a linear Farkas row (int_eq_eq's shape), and a
+False-int_eq goal's G row is the equality with sign picking direction;
+div-facts rows appear as slots in EVERY table under it. NEXT: C2b-2
+part 2 — gh_dec, the pure release worklist (code-order, |cells|+|wl|
+measure), its hinv preservation, and the survivor framing.
