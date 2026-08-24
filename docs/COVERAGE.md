@@ -1724,3 +1724,6 @@ hinv_reach AT the result (already proven, B cites it); "nothing live
 freed" = the B-side readback corollary.  C2b-2 IS COMPLETE.  NEXT =
 C2b-3: rt_alloc's law + the FILL/SEAL/READ laws (the constructor
 story), then C2b-4 rt_inc, C2b-5 the engine leg, C2b-6 the instance.
+GATES (2026-08-24): pipelines 429 (7aa2e95, the fix + canon), 430
+(38dfb1f, the slot-walk master), 431 (de92589, the landing) all
+GREEN, CORPUS == BASELINE — part 2b's acceptance is met end to end.
