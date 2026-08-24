@@ -1526,3 +1526,54 @@ close. Acceptance per slice: targeted checks green locally, CI FAIL
 set == baseline at each commit, rt_run green throughout. Out of
 scope, named: readbacks (B), the machine side (A, done), World I/O
 (C4), reuse/uniqueness (MEMORY.md §5's rung, a later arc).
+
+**C2b-1 — THE KIT LANDS (2026-08-23): rth_kit.shard 338/0, rt_init's
+law complete in pieces.** models/imp/probes/rth_kit.shard (2231 lines
+formatted) + models/imp/probes/gen_rth.py (the generator, splice
+contract as gen_fra's). What stands: (i) THE NAT-FUEL BRIDGE —
+npred/nS/ntl with `nat_open` (a positive int_of_nat budget forces S),
+`int_npred`, and `nat_peel` (a budget of k opens k LITERAL successors:
+one rewrite, then the engine computes through the tower) — every law's
+fuel premise is a Farkas-shaped `le rtc (int_of_nat fuel)`; (ii) the
+GHOST types (HCell/HRaw/GHeap; gh_init) and the memory-effect terms
+(m_zh, m_init) — engine claims conclude in named effect terms, pure
+lemmas carry the ghost across them; (iii) the TABLE lemmas rt_at_init/
+alloc/inc/dec at a symbolic program tail; (iv) the BAND COLLAPSES
+modu32/64_id (fra_kit's mod64_id shape) and bandu32/64_id (std/bits'
+mask_word32/64 bridge — iexp's ITrunc narrows via `band`, NOT mod);
+(v) THE STEPPING TEMPLATE rth_step1 and the generated ENGINE LEG
+`rth_init_run`: at tower fuel 21 the init call RETURNS
+Some (IpRv 0 (m_init m rb lo hi)) — landed on the FIRST generated
+attempt; (vi) the (iw8) word view (iw8_int, ls8w, ldw_below/above) and
+byte twins (sga8); (vii) the FULL heap_rep and hinv definitional
+layers (all future slices' vocabulary: exact counts, birth-rank
+acyclicity, extent separation, free chains through HEADER-word links);
+(viii) the m_zh read laws (below/above/head words; getb/geta bytes) —
+three wf-inducts replace per-read skip chains; (ix) rt_init's law:
+`rth_init_run` + `hr_init` (the bytes mean the empty ghost) +
+`hinv_init` (the empty ghost is well-formed at no roots) +
+`m_init_fr_lo/hi` (byte framing outside [rb, rb+152)). EXPORT SHAPE
+departure: the law stands as NAMED PIECES, not one bundled claim —
+B cites run/rep/inv/framing separately; bundle when a consumer wants
+one door. GHOST refinement: the heap bracket lives in the ghost (glo
+field), so hinv is transportable without re-premising rb relations.
+Splice → shardfmt byte-fixpoint verified; corpus row registered.
+PROOF-DSL FACTS (new, canonical): case-on is `(case-on EXPR Type
+((case Ctor (binders) PROOF) …))` and a case hyp is NOT a Farkas slot
+until a have rewrites it into a premise; a wf-induct IH is POSITIONAL
+(`@0/@1`) — inst cannot name its binders, so bind them by rewriting
+the fuller side (rl on rhs), and nested case-ons shift its hyp index;
+IH-citation obligation tables hold claim premises + cut case-hyps
+ONLY, while have-discharge tables also hold prior haves; compute folds
+a REACHABLE record accessor but leaves one under a stuck if — rewrite
+_of_def only for accessors compute left visible; `(stop a b)` takes
+several names; rewrite-with is a proof form, never a steps step;
+ipstmts fuel is DEPTH-shared (one S serves the last statement and the
+Nil arm), so rt_init's 19-statement body needs exactly 21. GENERATOR
+LAW RE-LEARNED (gen_fra's bea6925, now in gen_rth from birth): a
+spliced block ends at the NEXT `;; --- ` section header — without
+that terminator the first re-splice swallowed every hand section
+after its banner (recovered by rebuild; the file was untracked).
+COMMIT THE HAND SKELETON BEFORE THE FIRST SPLICE. NEXT = C2b-2 (the
+pure theory: reachability, the precision theorem, gh_dec +
+termination + the exact-free characterization — engine-free).
