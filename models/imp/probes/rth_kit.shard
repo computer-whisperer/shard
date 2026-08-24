@@ -9899,3 +9899,104 @@
        (steps ((rewrite (premise hdisj) lr lhs true ())) refl)
        (steps ((rewrite (premise hbrk) lr lhs true ())) refl))
       refl)))
+
+;; --- the pure release: gh_dec -----------------------------------------------------
+;; The ghost mirror of rt_dec's cascade, in the CODE's discovery order
+;; (heap_rep pins the free chains byte-for-byte, so the mirror must free
+;; in the same order): pop the newest worklist entry, walk its slots
+;; left to right (a dying child moves from the cells to the worklist
+;; front — the code's LIFO link), then the popped cell joins its free
+;; class.  The loop takes an Int budget (the |cells|+|wl| descent is a
+;; theorem, not a syntactic measure); the exported gh_dec runs it at
+;; |cells| + 1, which the laws prove sufficient.
+
+(fn hlen ((cs (List HCell))) Int
+  (measure (struct cs))
+  (match cs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (hlen t)))))
+
+(fn hfind ((cs (List HCell)) (a Int)) (Option HCell)
+  (measure (struct cs))
+  (match cs
+    (Nil None)
+    ((Cons c rest)
+     (if (int_eq (haddr_of c) a) (Some c) (hfind rest a)))))
+
+;; count - 1 at the first cell with address a
+(fn hdecc ((cs (List HCell)) (a Int)) (List HCell)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons c rest)
+     (if (int_eq (haddr_of c) a)
+       (Cons (with_hcount (- (hcount_of c) 1) c) rest)
+       (Cons c (hdecc rest a))))))
+
+;; remove the first cell with address a
+(fn hrem ((cs (List HCell)) (a Int)) (List HCell)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons c rest)
+     (if (int_eq (haddr_of c) a) rest (Cons c (hrem rest a))))))
+
+;; one dying cell's slots, left to right: shared children lose a count,
+;; dying children move from the cells to the worklist front
+(fn gh_slots ((ws (List Int)) (cells (List HCell)) (wl (List HCell)))
+  (Pair (List HCell) (List HCell))
+  (measure (struct ws))
+  (match ws
+    (Nil (Pair cells wl))
+    ((Cons w rest)
+     (if (int_eq (mod w 2) 1) (gh_slots rest cells wl)
+     (match (hfind cells w)
+       (None (gh_slots rest cells wl))
+       ((Some d)
+        (if (le 2147483648 (hcount_of d)) (gh_slots rest cells wl)
+        (if (lt 1 (hcount_of d)) (gh_slots rest (hdecc cells w) wl)
+        (gh_slots rest (hrem cells w) (Cons d wl))))))))))
+
+;; push address a onto free class k
+(fn fls_push ((fls (List (List Int))) (k Int) (a Int)) (List (List Int))
+  (measure (struct fls))
+  (match fls
+    (Nil Nil)
+    ((Cons f rest)
+     (if (int_eq k 0) (Cons (Cons a f) rest) (Cons f (fls_push rest (- k 1) a))))))
+
+;; the release loop at an explicit budget
+(fn gh_wl
+  ((k Int) (cells (List HCell)) (fls (List (List Int))) (wl (List HCell)))
+  (Pair (List HCell) (List (List Int)))
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt k 1) (Pair cells fls)
+  (match wl
+    ((Nil) (Pair cells fls))
+    ((Cons cur rest)
+     (match (gh_slots (hslots_of cur) cells rest)
+       ((Pair cells2 wl2)
+        (gh_wl
+          (- k 1)
+          cells2
+          (if (lt (harity_of cur) 16)
+            (fls_push fls (harity_of cur) (haddr_of cur))
+            fls)
+          wl2)))))))
+
+;; THE GHOST RELEASE: drop one root reference to v
+(fn gh_dec ((g GHeap) (v Int)) GHeap
+  (if (int_eq (mod v 2) 1) g
+  (match (hfind (gcells_of g) v)
+    (None g)
+    ((Some c)
+     (if (le 2147483648 (hcount_of c)) g
+     (if (lt 1 (hcount_of c)) (with_gcells (hdecc (gcells_of g) v) g)
+     (match
+       (gh_wl
+         (+ (hlen (gcells_of g)) 1)
+         (hrem (gcells_of g) v)
+         (gfree_of g)
+         (Cons c Nil))
+       ((Pair cells2 fls2)
+        (with_gcells cells2 (with_gfree fls2 g))))))))))

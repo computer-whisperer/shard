@@ -1,0 +1,185 @@
+;;; models/imp/probes/rth_run.shard — the RUN-MODE differential of the
+;;; ghost heap (rth_kit.shard; docs/COVERAGE.md C2b-2): build small
+;;; heaps through the real runtime (iprun over rt.shard), spell the
+;;; expected GHOST state by hand, and check `heap_rep` computes True —
+;;; then release through rt_dec AND gh_dec and check the bytes still
+;;; mean the ghost.  This pins the mirror's discovery order (the LIFO
+;;; worklist, the free-chain push order) against the real memory before
+;;; the preservation theorems are ground out.  Run mode because
+;;; std/mem's word view is opaque in check mode.
+;;;
+;;; Run: bin/shard_eval run models/imp/probes/rth_run.shard
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../kernel/term.shard")
+(use (:: kernel term show_int))
+(import "../../../std/mem")
+(use (:: std mem *))
+(import "../imp.shard")
+(use (:: models imp imp *))
+(import "../rt.shard")
+(use (:: models imp rt *))
+(import "rth_kit.shard")
+(use (:: models imp probes rth_kit *))
+
+(type World (World Int))
+
+(extern write ((bytes (List Int)) (w World)) World)
+
+(extern exit ((code Int) (w World)) World)
+
+;; --- the harness (rt_run's, with the memory kept) ---------------------------------
+
+(fn tix () Int 4)
+
+(fn tprog ((f IpFn)) IpProg (rt_prog 0 (list f) 0 4096 4096 8))
+
+(fn izk ((k Int)) (List IKind)
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt k 1) Nil (Cons U64 (izk (- k 1)))))
+
+(fn tfn ((k Int) (body (List IpStmt)) (r Int)) IpFn
+  (MkIpFn Nil (izk k) body (rl r) U64))
+
+;; run and hand back the final memory (None on any non-value outcome)
+(fn runm ((f IpFn)) (Option Mem)
+  (match (iprun (ifnat 20000) (tprog f) (tix) Nil (mem_empty))
+    (None None)
+    ((Some x)
+     (match x
+       ((IpRv _ m) (Some m))
+       (IpRtrap None)
+       ((IpRfailed _) None)))))
+
+(fn tinit ((lo Int) (hi Int)) IpStmt (IpCall 0 (rt_init_ix) (list (rk lo) (rk hi))))
+
+(fn talloc ((i Int) (tag Int) (n Int)) IpStmt
+  (IpCall i (rt_alloc_ix) (list (rk tag) (rk n))))
+
+(fn tinc ((scratch Int) (v IExp)) IpStmt (IpCall scratch (rt_inc_ix) (list v)))
+
+(fn tdec ((scratch Int) (v IExp)) IpStmt (IpCall scratch (rt_dec_ix) (list v)))
+
+;; 1 when the run's memory means the ghost, 0/-1 otherwise
+(fn trep ((f IpFn) (g GHeap)) Int
+  (match (runm f)
+    (None -1)
+    ((Some m) (if (heap_rep m 0 g) 1 0))))
+
+;; --- scenario 1: the chain c -> b -> a, then dec c cascades all three -------------
+
+(fn s1_build () (List IpStmt)
+  (list
+    (tinit 152 4096)
+    (talloc 0 5 1)
+    (rsto 0 8 (rk 1))
+    (talloc 1 6 1)
+    (rsto 1 8 (rl 0))
+    (talloc 2 7 1)
+    (rsto 2 8 (rl 1))))
+
+(fn s1_fn () IpFn (tfn 4 (s1_build) 2))
+
+(fn s1_dec_fn () IpFn
+  (tfn 4 (rt_app_stmts (s1_build) (list (tdec 3 (rl 2)))) 2))
+
+(fn rt_app_stmts ((a (List IpStmt)) (b (List IpStmt))) (List IpStmt)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (rt_app_stmts t b)))))
+
+(fn s1_g0 () GHeap
+  (MkGHeap
+    (list
+      (MkHCell 184 1 7 1 (Cons 168 Nil))
+      (MkHCell 168 1 6 1 (Cons 152 Nil))
+      (MkHCell 152 1 5 1 (Cons 1 Nil)))
+    (gfree0)
+    152
+    200
+    4096
+    None))
+
+(fn s1_g1 () GHeap (gh_dec (s1_g0) 184))
+
+;; --- scenario 2: a shared child survives its parent's death -----------------------
+
+(fn s2_build () (List IpStmt)
+  (list
+    (tinit 152 4096)
+    (talloc 0 3 1)
+    (rsto 0 8 (rk 1))
+    (tinc 3 (rl 0))
+    (talloc 1 4 1)
+    (rsto 1 8 (rl 0))
+    (talloc 2 8 1)
+    (rsto 2 8 (rl 0))))
+
+(fn s2_dec_fn () IpFn
+  (tfn 4 (rt_app_stmts (s2_build) (list (tdec 3 (rl 1)))) 2))
+
+(fn s2_g0 () GHeap
+  (MkGHeap
+    (list
+      (MkHCell 184 1 8 1 (Cons 152 Nil))
+      (MkHCell 168 1 4 1 (Cons 152 Nil))
+      (MkHCell 152 2 3 1 (Cons 1 Nil)))
+    (gfree0)
+    152
+    200
+    4096
+    None))
+
+(fn s2_g1 () GHeap (gh_dec (s2_g0) 168))
+
+;; --- scenario 3: dec a SHARED reference only drops the count ----------------------
+
+(fn s3_dec_fn () IpFn
+  (tfn 4 (rt_app_stmts (s2_build) (list (tdec 3 (rl 0)))) 2))
+
+(fn s3_g1 () GHeap (gh_dec (s2_g0) 152))
+
+;; --- the report -------------------------------------------------------------------
+
+(type T (T (List Int) Int Int))
+
+(fn tests () (List T)
+  (list
+    (T "chain build" 1 (trep (s1_fn) (s1_g0)))
+    (T "chain cascade" 1 (trep (s1_dec_fn) (s1_g1)))
+    (T "shared build+dec parent" 1 (trep (s2_dec_fn) (s2_g1)))
+    (T "shared dec child count" 1 (trep (s3_dec_fn) (s3_g1)))))
+
+(fn cat ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (cat t b)))))
+
+(fn report ((ts (List T)) (fails Int) (w World)) World
+  (measure (struct ts))
+  (match ts
+    (Nil
+      (exit
+        (if (int_eq fails 0) 0 1)
+        (write (cat "rows failed: " (cat (show_int fails) "\n")) w)))
+    ((Cons t rest)
+     (match t
+       ((T name want got)
+        (if (int_eq want got)
+          (report rest fails (write (cat "PASS rth " (cat name "\n")) w))
+          (report
+            rest
+            (+ fails 1)
+            (write
+              (cat
+                "FAIL rth "
+                (cat
+                  name
+                  (cat
+                    ": got "
+                    (cat (show_int got) (cat " want " (cat (show_int want) "\n"))))))
+              w))))))))
+
+(fn main ((w World)) World (report (tests) 0 w))

@@ -193,6 +193,7 @@ TARGETS=(
   models/imp/probes/fra_kit.shard
   models/imp/probes/fra_micro.shard
   models/imp/probes/rth_kit.shard
+  models/imp/probes/rth_run.shard
   tools/impgen/fixtures/imp_loop.shard
   models/imp/probes/imp_wasm_loop_bridge.shard
   models/imp/probes/imp_x86_loop_bridge.shard
@@ -1361,6 +1362,7 @@ fi
 # synthetic FAIL row (see the wasm leg's note).
 echo "=== imp: the runtime (run-mode probe, COVERAGE.md C2a) ==="
 pin_run imp_rt_run bin/shard_eval run models/imp/probes/rt_run.shard
+pin_run imp_rth_run bin/shard_eval run models/imp/probes/rth_run.shard
 
 # impc (COVERAGE.md C3a): regenerate the micro-flagship's product and byte-compare
 # it against the committed file (the regen contract), then the run-mode

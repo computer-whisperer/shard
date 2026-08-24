@@ -1612,3 +1612,21 @@ False-int_eq goal's G row is the equality with sign picking direction;
 div-facts rows appear as slots in EVERY table under it. NEXT: C2b-2
 part 2 — gh_dec, the pure release worklist (code-order, |cells|+|wl|
 measure), its hinv preservation, and the survivor framing.
+
+**C2b-2 (part 2a) — gh_dec DEFINED AND BYTE-VALIDATED (2026-08-23).**
+The pure release: `gh_slots` (one dying cell's slots, left to right —
+shared children lose a count via `hdecc`, dying children move from the
+cells to the worklist FRONT, the code's LIFO link) and `gh_wl` (pop,
+process, then the popped cell joins its free class via `fls_push`) at
+an explicit Int BUDGET — the |cells|+|wl| descent is a theorem, not a
+syntactic measure, so the loop takes fuel and `gh_dec` runs it at
+|cells|+1 (the imp world's own style; sufficiency is the laws'
+business).  models/imp/probes/rth_run.shard (NEW corpus row,
+pin_run imp_rth_run): the RUN-MODE DIFFERENTIAL — small heaps built
+through the real runtime, the expected ghost spelled by hand,
+`heap_rep` checked computable-True BEFORE and AFTER rt_dec/gh_dec
+(the chain cascade c→b→a, the shared-child survival, the shared-count
+drop): 4/4 — the mirror's discovery order, LIFO worklist and
+free-chain push order are pinned byte-for-byte against the real
+memory before any preservation proof.  NEXT: hinv preservation
+through gh_dec (the release theorem's heart) + survivor framing.
