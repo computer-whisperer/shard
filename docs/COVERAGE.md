@@ -2042,3 +2042,64 @@ rth_inc_run, rth_run scenario 5 (inc a live cell then check heap_rep
 against gh_inc; inc an immediate = the same bytes; the saturated leg
 is proven only — 2^31 incs do not run), the LANDS record. Out of
 scope, named: rt_dec's legs (C2b-5), readbacks of the count (B).
+
+**C2b-4 — LANDS (2026-08-27): rt_inc's law, three parts.** Commits:
+00203fc (the design record), 5985773 (part i), cd0ca92 (part ii), and
+this one (part iii). rth_kit.shard 421 claims, closure 739/0;
+splice→shardfmt a byte-fixpoint at every part; rth_run 8/8 (new rows
+"inc ref", "inc imm" — scenario 5); rt_run 5/5. WHAT STANDS, as
+designed: the exported laws `rth_inc_run` (heap_rep, hinv, slot_ok v
+(haddrs cells), 0 ≤ v < 2^64, mlo ≤ rb, gend ≤ msz, lt d dmax →
+`ipcall (nS 12 (ntl 12 fuel)) … 2 (Cons v Nil) m = Some (IpRv 0 (m_inc
+m g v))`), `hr_inc` (heap_rep ∧ hinv → heap_rep (m_inc m g v) rb
+(gh_inc g v), NO premise on v), `hinv_inc` (hinv ∧ slot_ok → hinv rb
+(gh_inc g v) (rinc r v)), with `hinv_inc_ref`, `gh_inc_imm`/`m_inc_imm`
+beneath; the vocabulary hincc / gh_inc / m_inc / rinc / cbands /
+live_ok exactly as the record spelled it. THE DURABLE PRODUCTS:
+`hcells_rep_incc` (the header-store rep lemma — C2b-5's decrement
+store is its mirror), the `live_ok` bundle (`live_facts`, lv_* peels)
+and `cbands` (cb_* peels) with `hword_count` / `hword_lo` / `hword_hi`,
+`band1_mod2`, `hraw_rep_fr1` (a store disjoint from rexts keeps
+hraw_rep, raw open or not), `hfind_memb`, `counts_ok_incc` /
+`counts_ok_incc_nm` / `counts_ok_cons_imm`, the hincc algebra
+(haddrs/hexts/inb/cells_ok_hincc, raw_ok_hincc). GENERATED: the
+extract block gained the cbands and live_ok peels; the new `inc` block
+(gen_rth.py inc: rth_inc_imm_run / rth_inc_ref_run / rth_inc_sat_run)
+— the ref leg was learned by hand (passing on its second run, one
+dangling `g`), then generated; the three generated legs and the
+assembly passed first time. DEPARTURES: none in the laws' shapes.
+Noted: araw_facts is not cited (live_ok owns the raw disjointness from
+the live side, as the record said); `counts_ok_incc` needs NO
+non-immortality premise (a cell crossing into the band under +1 stays
+exempt — the record's guess, held); the saturated leg is proven, not
+run (2^31 incs); the 12-tower serves rt_inc unchanged (inert
+successors). PROOF-DSL FACTS (new, canonical): a Farkas `rows` cert
+sums `expr ≥ 0` rows — `(le a b)` reads b − a ≥ 0, a False `(le a b)`
+reads a − b − 1 ≥ 0, an equation reads L − R = 0 with a coefficient of
+EITHER sign — against the negated goal, to a negative constant: an
+equation row's coefficient is whichever sign cancels the goal's
+variable (the fill_imm `(hee -1)` precedent, now the rule), and a
+false arithmetic fact (`(le 1 0) = True`, for absurd) is proven with
+(goal 1) while the have rows carry the contradiction; `unfold F lhs`
+opens the FIRST occurrence of F — when the target is the second
+(`(counts_ok (hincc all v) (hincc (Cons c rest) v) …)`), state the
+reduced form as a have and rewrite; `compute` is call-by-value: a
+stuck prim's arguments stay (`(band v (- (pow2 1) 1))`), and an
+OPAQUE imported fn stays stuck — std/bits' `pow2` is opaque outside
+its module (its theory is pow2_z / pow2_s: derive `(pow2 1) = 2`
+through them; `(compute lhs)` does reduce `(pow2 (+ 0 1))`'s ARGUMENT);
+`case-on X Option` takes the bare type name; a `case-on` keeps the
+scrutinee symbolic in the goal (hyp 0 = the equation) where `induct`
+instantiates it; hyp indices count from the innermost scope (inside
+one nested case-on the IH is `(hyp 1)`); a rewrite whose replacement
+contains the variable it replaces (`c` → `(hfget (Cons c rest) v)`)
+was avoided, untested — derive such facts in the other direction.
+Scratch tools this slice: lint.py (shape lint: have = 4, rewrite-with
+= 7, steps = 3, case-on = 4, a chain's closer), goal.py, sx.py,
+stuck.py, ci_watch2.sh (`pipelines?sha=` needs the FULL sha).
+NEXT = C2b-5: rt_dec's engine leg — the two nested loops implement
+gh_wl; the loop invariant marries the count-field-linked worklist to
+the ghost's; live_ok + hcells_rep_incc's mirror serve each child
+header store, band1_mod2 / hword_count the tests. GATES: pending —
+pipelines 438 (5985773, part i), 439 (cd0ca92, part ii), and part
+iii's; recorded below when green.
