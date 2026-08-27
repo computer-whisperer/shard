@@ -568,6 +568,23 @@ def extract_pred_block():
          "(le 0 (rarity_of rc))",
          "(lt (rarity_of rc) 65536)"],
         ["rk_slots", "rk_len", "rk_tag0", "rk_taghi", "rk_ar0", "rk_arhi"]))
+    out.append(";; the pop leg's fact bundle")
+    out.extend(_extract_claims(
+        "apop_ok",
+        "(g GHeap) (tag Int) (n Int) (p Int) (rest (List Int))",
+        "(apop_ok g tag n p rest)",
+        ["(le (glo_of g) p)",
+         "(le (+ p (+ 8 (* 8 n))) (gtop_of g))",
+         "(int_eq (mod p 8) 0)",
+         "(int_eq (count_in (haddrs (gcells_of g)) p) 0)",
+         "(int_eq (count_in (faddrs (fl_set (gfree_of g) n rest)) p) 0)",
+         "(eall (ext_all (gh_alloc_pop g tag n)) (ext_all g))",
+         "(anodup (e_addrs (ext_all (gh_alloc_pop g tag n))))",
+         "(emem (ext_all g) p n)",
+         "(eall (fexts (fl_set (gfree_of g) n rest) 0) (ext_all g))",
+         "(eall (hexts (gcells_of g)) (ext_all g))"],
+        ["ap_lo", "ap_hi", "ap_al", "ap_hc0", "ap_fc0", "ap_eall", "ap_an",
+         "ap_mem", "ap_efree", "ap_ecells"]))
     out.append(";; heap_rep, clause by clause")
     out.extend(_extract_claims(
         "heap_rep",
