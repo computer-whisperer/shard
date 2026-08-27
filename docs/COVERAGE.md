@@ -1936,3 +1936,6 @@ Farkas `rows` cert names haves and premise INDICES, and a case-hyp is
 a slot only after a have restates it. NEXT = C2b-4: rt_inc's law
 (R + {v}; immediate/immortal legs ghost-identity; the 2^31 saturation
 as the sound leak; stated with raw CARRIED — araw_facts is its bundle).
+GATES (2026-08-27): pipelines 433 (97d545a, part i), 434 (6c1d639, part
+ii), 435 (8c986fd, part iii), 436 (1f45d33, part iv) all GREEN, CORPUS
+== BASELINE — C2b-3's acceptance is met end to end.
