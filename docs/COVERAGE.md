@@ -2103,3 +2103,6 @@ the ghost's; live_ok + hcells_rep_incc's mirror serve each child
 header store, band1_mod2 / hword_count the tests. GATES: pending —
 pipelines 438 (5985773, part i), 439 (cd0ca92, part ii), and part
 iii's; recorded below when green.
+GATES (2026-08-27): pipelines 438 (5985773, part i), 439 (cd0ca92,
+part ii), 440 (6bee27e, part iii) all GREEN, CORPUS == BASELINE —
+C2b-4's acceptance is met end to end.
