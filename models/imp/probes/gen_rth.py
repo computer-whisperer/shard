@@ -516,6 +516,58 @@ def extract_pred_block():
          "(raw_ok (graw_of g) (gcells_of g))"],
         ["hi_rb0", "hi_hdr", "hi_lot", "hi_te", "hi_e32", "hi_alo", "hi_atop",
          "hi_disj", "hi_brk", "hi_cells", "hi_cnts", "hi_roots", "hi_raw"]))
+    out.append(";; the representation conjuncts (the frame toolkit's peels)")
+    out.extend(_extract_claims(
+        "hslots_rep",
+        "(m Mem) (a Int) (w Int) (rest (List Int))",
+        "(hslots_rep m a (Cons w rest))",
+        ["(int_eq (load_le (iw8) m a) w)", "(hslots_rep m (+ a 8) rest)"],
+        ["hs_hd", "hs_tl"]))
+    out.extend(_extract_claims(
+        "hcell_rep",
+        "(m Mem) (c HCell)",
+        "(hcell_rep m c)",
+        ["(int_eq (load_le (iw8) m (haddr_of c)) (hword c))",
+         "(hslots_rep m (+ (haddr_of c) 8) (hslots_of c))"],
+        ["hc_hdr", "hc_slots"]))
+    out.extend(_extract_claims(
+        "hcells_rep",
+        "(m Mem) (c HCell) (rest (List HCell))",
+        "(hcells_rep m (Cons c rest))",
+        ["(hcell_rep m c)", "(hcells_rep m rest)"],
+        ["hcs_hd", "hcs_tl"]))
+    out.extend(_extract_claims(
+        "hchain_rep",
+        "(m Mem) (a Int) (rest (List Int))",
+        "(hchain_rep m (Cons a rest))",
+        ["(int_eq (load_le (iw8) m a) (hhead rest))", "(hchain_rep m rest)"],
+        ["hch_hd", "hch_tl"]))
+    out.extend(_extract_claims(
+        "hfree_rep",
+        "(m Mem) (rb Int) (k Int) (fl (List Int)) (rest (List (List Int)))",
+        "(hfree_rep m rb k (Cons fl rest))",
+        ["(int_eq (load_le (iw8) m (+ rb (+ 24 (* 8 k)))) (hhead fl))",
+         "(hchain_rep m fl)",
+         "(hfree_rep m rb (+ k 1) rest)"],
+        ["hf_hd", "hf_chain", "hf_tl"]))
+    out.extend(_extract_claims(
+        "hraw_rep",
+        "(m Mem) (rc HRaw)",
+        "(hraw_rep m (Some rc))",
+        ["(int_eq (load_le (iw8) m (raddr_of rc)) (rword rc))",
+         "(hslots_rep m (+ (raddr_of rc) 8) (rfill_of rc))"],
+        ["hrw_hdr", "hrw_slots"]))
+    out.extend(_extract_claims(
+        "raw_ok",
+        "(rc HRaw) (cs (List HCell))",
+        "(raw_ok (Some rc) cs)",
+        ["(slots_ok (rfill_of rc) (haddrs cs))",
+         "(le (ilen (rfill_of rc)) (rarity_of rc))",
+         "(le 0 (rtag_of rc))",
+         "(lt (rtag_of rc) 65536)",
+         "(le 0 (rarity_of rc))",
+         "(lt (rarity_of rc) 65536)"],
+        ["rk_slots", "rk_len", "rk_tag0", "rk_taghi", "rk_ar0", "rk_arhi"]))
     out.append(";; heap_rep, clause by clause")
     out.extend(_extract_claims(
         "heap_rep",
@@ -524,10 +576,11 @@ def extract_pred_block():
         ["(int_eq (load_le (iw8) m rb) (gtop_of g))",
          "(int_eq (load_le (iw8) m (+ rb 8)) (gend_of g))",
          "(int_eq (load_le (iw8) m (+ rb 16)) 0)",
+         "(int_eq (fllen (gfree_of g)) 16)",
          "(hfree_rep m rb 0 (gfree_of g))",
          "(hcells_rep m (gcells_of g))",
          "(hraw_rep m (graw_of g))"],
-        ["hrx_top", "hrx_end", "hrx_dep", "hrx_free", "hrx_cells", "hrx_raw"]))
+        ["hrx_top", "hrx_end", "hrx_dep", "hrx_fl16", "hrx_free", "hrx_cells", "hrx_raw"]))
     return "\n".join(out)
 
 
