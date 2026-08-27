@@ -1939,3 +1939,106 @@ as the sound leak; stated with raw CARRIED — araw_facts is its bundle).
 GATES (2026-08-27): pipelines 433 (97d545a, part i), 434 (6c1d639, part
 ii), 435 (8c986fd, part iii), 436 (1f45d33, part iv) all GREEN, CORPUS
 == BASELINE — C2b-3's acceptance is met end to end.
+
+**C2b-4 — DESIGN RECORD (2026-08-27; written before the first edit):
+rt_inc's law.** WHAT THE LAW SAYS. Calling rt_inc (v) on a heap whose
+bytes mean ghost g (heap_rep), well-formed at roots r (hinv), with the
+raw cell CARRIED (open or not — the fill window runs incs on borrowed
+operands), where v is a VALID WORD against the live cells (`slot_ok v
+(haddrs cells)`: an odd immediate or a live address), always RETURNS 0
+and leaves memory `m_inc m g v` whose bytes mean `gh_inc g v`, and the
+program now OWNS one more reference: well-formedness holds at roots
+`rinc r v` (= r for an immediate, `Cons v r` for a reference). Three
+legs, in the code's case order: IMMEDIATE (v odd): nothing moves, ghost
+and memory identity. REFERENCE below the band (the cell at v has count
+< 2^31): the header word at v becomes hword + 1 — the ghost cell's
+count grows by one (`hincc`), exactness balances against the new root.
+SATURATED (count ≥ 2^31): nothing moves, ghost identity, yet the roots
+STILL gain v — sound because counts_ok exempts the immortal band: a
+cell whose count reaches 2^31 is frozen immortal forever, a deliberate
+LEAK recorded as the law's shape, not an error (the release theorem
+never frees it; nothing dangles).
+
+WHY THESE PREMISES. `slot_ok` is the vocabulary hinv already speaks
+for "a word the program may hold": a root is live (roots_ok →
+slot_ok_memb), a slot word is slot_ok by cells_ok — so B derives the
+premise from hinv at every impc-emitted `rt_inc` without a new
+notion. The band premise on v (0 ≤ v < 2^64) is the engine's own
+local invariant. No premise on graw: the raw cell is carried, and the
+one store lands at a LIVE address, disjoint from the raw extent by
+hinv's e_disj — the bundle below carries that disjointness from the
+live cell's side, so araw_facts is NOT cited (a narrowing of C2b-3's
+"araw_facts is its bundle" line: the live cell's bundle owns both
+directions).
+
+VOCABULARY (engine-free). `hincc cs a` (the FIRST cell at a gains one
+count — hdecc's mirror); `gh_inc g v` (odd → g; hfind None → g;
+immortal → g; else with_gcells (hincc cells v)); `m_inc m g v` (the
+same dispatch over memory: the one store `[v] := hword c + 1`, else
+m); `rinc r v` (odd → r; else Cons v r). `cbands c` (a cell's six
+header bands: 1 ≤ count < 2^32, 0 ≤ tag < 2^16, 0 ≤ arity < 2^16 —
+what cells_ok says per cell, as a predicate B and the legs can peel)
+and `hword_count` (band (hword c) 0xFFFFFFFF = hcount_of c under
+cbands: mask_word32 + mod_unique at q = tag + arity·2^16), `hword_lo`/
+`hword_hi` (0 ≤ hword c < 2^64), `band1_mod2` (band v 1 = mod v 2 —
+mask_pow2 at k = 1: the parity test every runtime entry runs, C2b-5
+reuses it). THE BUNDLE `live_ok g v` (live_facts proves it under hinv
++ memb; lv_* peel it): the cell's bracket lo ≤ v, v + 8 + 8·arity ≤
+top, alignment, count_in (haddrs cells) v ≤ 1 (ed_nodup: addresses
+are unique), e_disj (hexts cells), e_disj1 v arity (fexts fls 0) and
+e_disj1 v arity (rexts raw) (ed1_intro from the ext_all address
+count: a live address is in no free class and is not the raw), and
+cbands (hfget cells v). C2b-5's cascade touches a live cell per
+decrement — the same bundle serves every child header store.
+
+THE DURABLE PRODUCT: `hcells_rep_incc` — a store of `hword (hfget cs v)
++ 1` at the live address v keeps hcells_rep for `hincc cs v`: the
+cell at v (first match) re-reads its new header (ls8w) with its slots
+framed (hslots_rep_fr at b + 8 ≤ v + 8), every other cell framed by
+hcell_rep_fr through e_disj (hexts cs) — ed_hd for the tail when the
+head is the cell, ed1_memb + ed2_sym for the head when the cell is in
+the tail. Stated with the stored word as a free w and `w = hword
+(hfget cs v) + 1` a premise, so the induction carries one w. The
+hincc algebra beside it mirrors hdecc's: haddrs_hincc, hexts_hincc,
+inb_hincc, cells_ok_hincc (count < 2^31 → count + 1 < 2^32). The
+counts: `counts_ok_incc` (counts_ok all cs r raw ∧ count_in (haddrs
+cs) v ≤ 1 → counts_ok (hincc all v) (hincc cs v) (Cons v r) raw — the
+cell at v grows with the root, no other equation mentions v,
+immortal cells stay exempt either way — no non-immortality premise)
+and `counts_ok_cons_imm` (imm_at cs v → the roots may gain v freely).
+`hfind_memb` (memb → hfind cs v = Some (hfget cs v)) bridges gh_inc's
+match to the READ laws' hfget.
+
+THE LAWS. `hr_inc`: heap_rep m rb g ∧ hinv rb g r → heap_rep (m_inc m
+g v) rb (gh_inc g v) — NO premise on v (identity legs are identity).
+`hinv_inc_ref`: hinv ∧ memb (haddrs cells) v → hinv rb (gh_inc g v)
+(Cons v r) (the immortal leg via hinv_same + counts_ok_cons_imm +
+imm_at_intro; the live leg clause by clause through the hincc
+algebra). `gh_inc_imm`/`m_inc_imm`: odd v → identity. `hinv_inc`:
+hinv ∧ slot_ok v (haddrs cells) → hinv rb (gh_inc g v) (rinc r v) —
+THE export, one law over the same premise as the engine's. ENGINE:
+three generated legs (gen_rth.py `inc` block, the alloc recipe):
+`rth_inc_imm_run` (odd v → Some (IpRv 0 m)), `rth_inc_ref_run`
+(memb ∧ count < 2^31 → Some (IpRv 0 (store_le (iw8) m v (+ (hword
+(hfget cells v)) 1)))), `rth_inc_sat_run` (memb ∧ 2^31 ≤ count → Some
+(IpRv 0 m)); the hand assembly `rth_inc_run`: heap_rep, hinv, slot_ok
+v, 0 ≤ v < 2^64, mlo ≤ rb, gend ≤ msz, lt d dmax → `ipcall (nS 12
+(ntl 12 fuel)) (rt_app (rt_fns rb) fs) mlo msz dmax d 2 (Cons v Nil)
+m = Some (IpRv 0 (m_inc m g v))` — the 12-tower (C2b-3's fuel law:
+one tower serves all legs; extra successors are inert). The legs
+read the header through hr_rd_hdr, extract the count through
+hword_count, collapse the ITrunc/mod bands from live_ok's bracket
+(v < 2^32 by hinv's gend ≤ 2^32), and discharge the window guards
+mlo ≤ v, v + 8 ≤ msz from the bracket.
+
+THE PARTS (each: targeted focus checks green, full rth_kit closure,
+splice→shardfmt byte-fixpoint, rth_run/rt_run green, commit to main,
+CI FAIL set == baseline). (i) VOCABULARY + BUNDLES: the four
+definitions, cbands/live_ok with generated peels, the bit lemmas,
+hfind_memb, live_facts, the hincc algebra. (ii) THE PURE LAWS:
+hcells_rep_incc, counts_ok_incc/cons_imm, hr_inc, hinv_inc_ref,
+hinv_inc, the imm identities. (iii) THE ENGINE: the `inc` block,
+rth_inc_run, rth_run scenario 5 (inc a live cell then check heap_rep
+against gh_inc; inc an immediate = the same bytes; the saturated leg
+is proven only — 2^31 incs do not run), the LANDS record. Out of
+scope, named: rt_dec's legs (C2b-5), readbacks of the count (B).
