@@ -1727,3 +1727,145 @@ story), then C2b-4 rt_inc, C2b-5 the engine leg, C2b-6 the instance.
 GATES (2026-08-24): pipelines 429 (7aa2e95, the fix + canon), 430
 (38dfb1f, the slot-walk master), 431 (de92589, the landing) all
 GREEN, CORPUS == BASELINE — part 2b's acceptance is met end to end.
+
+**C2b-3 — DESIGN RECORD (2026-08-27; written before the first edit):
+rt_alloc's law + the constructor window's FILL / SEAL / READ laws.**
+WHAT THE LAWS SAY, in one paragraph each. ALLOC: calling rt_alloc
+(tag, n) on a heap whose bytes mean ghost g (heap_rep), that is
+well-formed at roots r (hinv), with NO raw cell open, either RETURNS
+an address p and leaves memory `m_alloc m rb g tag n` whose bytes
+mean `gh_alloc g tag n` — the same live cells, the same roots, and
+ONE raw cell (p, tag, n, empty fill) — or FAILS the oom family
+exactly when the class-n free list is empty (or n ≥ 16) and
+top + 8 + 8n > end. The address comes from class n's free list when
+it has one (the POP leg: the class loses its head, the bump pointer
+stands), else from the bump pointer (the BUMP leg: top advances by
+8 + 8n). FILL: storing a valid word w into the raw cell's NEXT slot
+(the fill has i < n entries; the store lands at p + 8 + 8i) keeps
+the bytes meaning the ghost whose fill grew by w; well-formedness
+survives with the roots unchanged for an immediate w, and with ONE
+occurrence of w removed from the roots for a reference w (the
+reference's ownership moves from a local into the cell — exactness
+balances by construction). SEAL (ghost-only, no bytes move): a
+fully-filled raw cell becomes the NEWEST live cell with count 1 —
+well-formedness needs the program to hold p as a root EXACTLY ONCE
+(count_in r p = 1: the address rt_alloc returned, owned by one
+local). READ: a live cell's header word and slot words read back as
+the ghost's `hword` and `inth (hslots c) i` — B's scrutinees and
+fields.
+
+WHY THESE PREMISES ARE THE RIGHT ONES (read off impc's emission,
+C2b-0): the constructor window is `IpCall rt_alloc; per slot at most
+one rt_inc on a BORROWED operand then one IpStoreW into the fresh
+cell`; nothing else runs while raw is open, so alloc premises
+raw = None, fill premises raw = Some, the seal is where B closes the
+window, and rt_inc (C2b-4) is the one runtime entry stated with raw
+CARRIED. The fill's "w in band" premise (0 ≤ w < 2^64) is the
+engine's own invariant on locals; the reference case premises
+`memb r w` because impc's rt_inc put that root there (a borrowed
+operand is inc'd first, so the stored occurrence is an OWNED one).
+
+VOCABULARY (all new, engine-free): `fl_at fls n` (the n-th class,
+Nil past the end), `fl_set fls n fl`, `fllen fls`; `hdr_word tag n`
+(= 1 + tag·2^32 + n·2^48 = rword of any raw cell with that tag and
+arity); the memory effects `m_apop m rb n link p tag` (head[n] :=
+link; [p] := header) and `m_abump m rb top n tag` ([rb] := top+8+8n;
+[top] := header) and the leg-dispatching `m_alloc m rb g tag n`; the
+ghost transitions `gh_alloc_pop g tag n`, `gh_alloc_bump g tag n`,
+`gh_fits g n` (top + 8 + 8n ≤ end), `gh_alloc_ok g n` (a class hit,
+or fits), `gh_alloc g tag n` (the CODE's case order: n < 16 and a
+non-empty class → pop; else bump), `gh_araddr g` (the raw address);
+`gh_seal g`; `inth ws i`; the outcome term `alloc_out m rb g tag n`
+(Some (IpRv (gh_araddr (gh_alloc …)) (m_alloc …)) when ok, else
+Some (IpRfailed FOom)) — so the exported engine law is ONE equation
+`ipcall … = alloc_out …` and B splits on gh_alloc_ok once.
+
+heap_rep GAINS A CLAUSE: `int_eq (fllen (gfree_of g)) 16` — the
+ghost's free classes are exactly the layout's sixteen heads. Why in
+heap_rep and not hinv: it is a REP fact (which head word means which
+class); hinv's release theorem is untouched; hr_init computes it
+(gfree0 has sixteen), hr_alloc/hr_dec carry it (fl_set/fls_push
+preserve fllen). Without it the pop leg's read of head[n] is
+unconstrained for a short class list. The hrx_* peels regenerate
+with one more clause.
+
+THE FRAME TOOLKIT — the slice's real product, reused by C2b-4 (one
+header store) and C2b-5 (the cascade's stores): a word store at b
+leaves a representation conjunct intact when b's 8-byte span is
+disjoint from every extent that conjunct reads. `hslots_rep_fr`
+(the run of slots at a, length ℓ: b+8 ≤ a or a+8ℓ ≤ b),
+`hcell_rep_fr` (e_disj2 b nb addr arity, arity = slot count from
+cells_ok), `hcells_rep_fr` (e_disj1 b nb (hexts cs) + cells_ok),
+`hchain_rep_fr` (e_disj1 b nb (fexts1 fl k)), `hfree_rep_fr`
+(e_disj1 b nb (fexts fls k) + the store off the head block: b+8 ≤
+rb+24+8k or rb+24+8(k+fllen) ≤ b), `hraw_rep_fr`. The e_disj1 facts
+come from three suppliers: `ebrk_ed1_below` (a word ending at or
+below lo misses every extent — the head block's stores),
+`ebrk_ed1_above` (a word at or above top misses every extent — the
+bump's header store), and the existing `ed1_intro` (an extent that
+is a MEMBER of a disjoint family and whose address occurs nowhere in
+a sub-family misses that sub-family — the pop's header store and
+the fill's slot store, sharpened by `ed1_inner`: a word inside
+extent (p, n) misses whatever (p, n) misses).
+
+SEPARATION AFTER THE TRANSITION, by the release theorem's route: the
+pop and the seal are PERMUTATIONS of ext_all (an extent moves from
+the free family to the raw slot, or from the raw slot to the head of
+the live family), so e_disj/e_brk come from `ed_intro`/`eb_intro`
+over `eall` + `anodup` via `msub_anodup` — the new transport lemma
+`msub_f2w` mirrors msub_w2f in the pop direction (a head leaves the
+free part for the raw/worklist part) and `fexts_flset_eall` /
+`fexts_flat_emem` give the membership side. The bump APPENDS a fresh
+extent (top, n) beyond every old one: `ed_snoc`/`ed1_snoc` (a
+disjoint family stays disjoint when the appended extent starts at or
+past top, e_brk's upper bound), `eb_mono` (e_brk is monotone in top)
+and `eb_snoc`. `fa_assoc`/`fa_nil` normalise fexts_app so ext_all's
+nested apps read as `old ++ [new]`.
+
+COUNTS ACROSS THE WINDOW: `counts_ok_rawnil` (an empty fill counts
+like no raw cell), `counts_ok_fill_imm` (an odd word joins the fill:
+no cell's inbound changes — addresses are even), `counts_ok_fill_ref`
+(a reference joins the fill and leaves the roots: per cell the sum
+is unchanged, cin_irem_eq/ne + cin_iapp), `counts_ok_seal` (the
+sealed cell's count 1 = its one root: p is no live address (anodup
+of ext_all's addresses), so no live slot and none of its own slots
+reference it — slots_nmemb_cin/inb_zero; every older cell's sum is
+the same terms regrouped).
+
+ENGINE LEGS: five (pop; bump at n < 16 with an empty class; bump at
+n ≥ 16; oom in both bump shapes), each the rth_init_run recipe —
+compute to the stuck guard, collapse the band (bandu32_id/modu64_id
+haves), discharge the window guards (Farkas from mlo ≤ rb, end ≤
+msz, and the extent bounds), rewrite the IpIf condition's Bool fact,
+compute on — plus heap_rep READS at the stuck loads: head[n] =
+hhead (fl_at fls n) (`hfree_rd`, needing fllen = 16), [p] = hhead
+rest (hchain_rep's head clause), [rb] = top, [rb+8] = end (hrx_top/
+hrx_end). Hand-write the pop leg first; the moment the second leg
+repeats the recipe, the `alloc` block of gen_rth.py takes over (a
+per-leg op script: load/store/cond/call-exit). Fuel: the pop leg
+needs 5 successors, the bump legs 7 (nested IpIf) — rtc_alloc = 7,
+one tower for all legs. The window premise set: mlo ≤ rb,
+gend g ≤ msz, 0 ≤ tag < 2^16, 0 ≤ n < 2^16, lt d dmax (0 ≤ rb and
+rb + 152 ≤ 2^32 are hinv's).
+
+EXPORT (named pieces, the C2b-1 shape): `rth_alloc_run` (the one
+engine equation), `hr_alloc`, `hinv_alloc`, `gh_alloc_cells`/
+`gh_alloc_raw` (the transition's projections), `m_alloc_fr_lo/hi`
+(bytes outside [rb, end) untouched — the C4 seam); `hr_fill`,
+`hinv_fill_imm`, `hinv_fill_ref`; `hr_seal`, `hinv_seal`; `hr_rd_hdr`,
+`hr_rd_slot`. The fill's ENGINE step (IpStoreW at `ITrunc (ILoc p +
+IConst off)`) is B's generic stepping, not a runtime law — B's
+generator steps it and cites hr_fill/hinv_fill at the resulting
+store term (rth_step1 is the template). Header-FIELD extraction
+(tag/arity/count from hword — B's match on a scrutinee) is a NAMED
+DOOR for B-0, opened when impc's match emission is read.
+
+SLICES (each: rth_kit closure green locally, splice→shardfmt
+byte-fixpoint, CI FAIL set == baseline, rth_run/rt_run green):
+3-i vocabulary + the heap_rep clause + the frame toolkit + the
+separation transports; 3-ii the pure alloc laws (hinv_apop/abump,
+hr_apop/abump, the combined hinv_alloc/hr_alloc, framing); 3-iii the
+engine legs (hand pop → generator) + rth_alloc_run; 3-iv FILL, SEAL,
+READ + the LANDS record. rth_run gains a scenario per leg (pop,
+bump, oom-shape) checking heap_rep of the real bytes against
+gh_alloc — the differential BEFORE the theorems, as C2b-2 did.
