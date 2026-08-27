@@ -585,6 +585,22 @@ def extract_pred_block():
          "(eall (hexts (gcells_of g)) (ext_all g))"],
         ["ap_lo", "ap_hi", "ap_al", "ap_hc0", "ap_fc0", "ap_eall", "ap_an",
          "ap_mem", "ap_efree", "ap_ecells"]))
+    out.append(";; the raw cell's fact bundle")
+    out.extend(_extract_claims(
+        "araw_ok",
+        "(g GHeap) (p Int) (tag Int) (n Int) (fill (List Int))",
+        "(araw_ok g p tag n fill)",
+        ["(le (glo_of g) p)",
+         "(le (+ p (+ 8 (* 8 n))) (gtop_of g))",
+         "(int_eq (mod p 8) 0)",
+         "(int_eq (count_in (haddrs (gcells_of g)) p) 0)",
+         "(int_eq (count_in (faddrs (gfree_of g)) p) 0)",
+         "(emem (ext_all g) p n)",
+         "(eall (hexts (gcells_of g)) (ext_all g))",
+         "(eall (fexts (gfree_of g) 0) (ext_all g))",
+         "(e_disj1 p n (hexts (gcells_of g)))",
+         "(e_disj1 p n (fexts (gfree_of g) 0))"],
+        ["ar_lo", "ar_hi", "ar_al", "ar_hc0", "ar_fc0", "ar_mem", "ar_ecells", "ar_efree", "ar_d1c", "ar_d1f"]))
     out.append(";; heap_rep, clause by clause")
     out.extend(_extract_claims(
         "heap_rep",

@@ -1869,3 +1869,70 @@ engine legs (hand pop → generator) + rth_alloc_run; 3-iv FILL, SEAL,
 READ + the LANDS record. rth_run gains a scenario per leg (pop,
 bump, oom-shape) checking heap_rep of the real bytes against
 gh_alloc — the differential BEFORE the theorems, as C2b-2 did.
+
+**C2b-3 — THE CONSTRUCTOR STORY LANDS (2026-08-27; rth_kit 698/0 from
+563/0, 42084 lines formatted, splice→shardfmt byte-fixpoint at every
+commit; rth_run 6/6, rt_run 19/19).** Four commits: 97d545a (part i —
+the frame toolkit + separation transports; heap_rep pins fllen = 16),
+6c1d639 (part ii — the pure alloc laws), 8c986fd (part iii — the alloc
+engine legs + rth_alloc_run), and this one (part iv — FILL / SEAL /
+READ). WHAT STANDS, in the design record's order:
+- ALLOC. `rth_alloc_run`: `ipcall … rt_alloc(tag, n) = alloc_out m rb g
+  tag n` — ONE engine equation; B splits on `gh_alloc_ok`. Behind it
+  five generated legs (gen_rth.py's `alloc` block: pop; bump at n < 16
+  with an empty class; bump at n ≥ 16; oom in both shapes) and the
+  three `alloc_out` shape lemmas. The pure side: `hinv_alloc` and
+  `hr_alloc` (dispatching over the code's case order to hinv_apop /
+  hinv_abump / hr_apop / hr_abump), the projections `gh_alloc_cells` /
+  `gh_alloc_raw`, and the byte framing `m_alloc_fr_lo/hi`.
+- FILL. `hr_fill` (the slot store at p + 8 + 8i keeps every other
+  word's meaning — the frame toolkit over `ed1_inner`), `hinv_fill_imm`
+  (an odd word joins the fill, roots stand), `hinv_fill_ref` (an owned
+  reference joins the fill and leaves the roots: `counts_ok_fill_ref`
+  balances count_in (irem r w) against count_in (fill ++ [w])).
+- SEAL. `hr_seal` (no bytes move: the raw cell's representation IS the
+  newest live cell's — `hword_seal`), `hinv_seal` (count 1 = the one
+  root, premised `count_in r p = 1`; the raw extent moves to the front
+  of ext_all — ed_intro/eb_intro over `eall` + `anodup`, the latter by
+  `msub_del` off the old family).
+- READ. `hr_rd_hdr` / `hr_rd_slot`: a live cell's header word and slot
+  i read as `hword (hfget cells a)` / `inth (hslots c) i`
+  (`hcells_rd_hdr/slot` + `hslots_rep_nth`).
+THE TWO BUNDLES, each a predicate with generated peels and one proof:
+`apop_ok` (10 clauses, `apop_facts`) for the popped head and `araw_ok`
+(10 clauses, `araw_facts`) for the open raw cell — bracket, alignment,
+"at no live or free address" (anodup of ext_all's addresses, the count
+decomposition), membership, and the two sub-families the extent
+misses (`ed1_intro`). Every alloc/fill/seal law cites a bundle; C2b-4
+and C2b-5 will too. THE FRAME TOOLKIT (part i) is the slice's durable
+product: `hslots_rep_fr`, `hcell_rep_fr`, `hcells_rep_fr`,
+`hchain_rep_fr`, `hfree_rep_fr` (head block below or above the store),
+`hraw_rep_fr`, fed by `ebrk_ed1_below` / `ebrk_ed1_above` / `ed1_intro`
+/ `ed1_inner`; plus `hfree_rep_sethead` (the head store), `hfree_rd` /
+`hfree_chain` (the engine's reads through hfree_rep).
+DEPARTURES FROM THE DESIGN RECORD, recorded: (i) FUEL — rtc_alloc is
+12, not 7: `ipstmts`' continuation runs at the DECREMENTED fuel, so each
+statement of a list costs a level and a nested IpIf's body pays again;
+the pop leg needs 7, the bump legs 12, one tower serves all (extra
+successors are inert). (ii) heap_rep's `fllen = 16` clause landed as
+designed; the hrx_* peels regenerated. (iii) The fill/seal laws take
+the raw cell DESTRUCTURED (`graw_of g = Some (MkHRaw p tag n fill)`)
+rather than as an opaque rc — B's generator names the four fields
+anyway. GENERATED BLOCKS now: init, minit, extract (cells_ok, counts_ok,
+p_cov, e_brk, e_disj1/e_disj, roots_ok, slots_ok, aligned8, all_in,
+anodup, msub, eall, wexact, imm_at, nimm_at, winv, the six
+representation conjuncts, apop_ok, araw_ok, hinv, heap_rep), alloc.
+PROOF-DSL FACTS (new, canonical): `compute` opens a stuck match and
+does NOT descend into a stopped fn's arguments — fence record accessors
+(`(stop … hhead gtop_of gend_of)`) or rewrite them explicitly; `compute`
+unfolds `andb` unless stopped (`(stop … andb)` keeps a peelable chain);
+a rewrite over a lemma applies at EVERY occurrence in one pass (a
+second int_eq_refl finds nothing; iapp_assoc rl hits both sides of an
+msub — restate the helper in the associated form); a citation's
+binders unbound by the LHS match are dangling even when the
+conclusion's RHS mentions them; a claim cited before its definition
+is "unresolved" — appended sections stay in dependency order; a
+Farkas `rows` cert names haves and premise INDICES, and a case-hyp is
+a slot only after a have restates it. NEXT = C2b-4: rt_inc's law
+(R + {v}; immediate/immortal legs ghost-identity; the 2^31 saturation
+as the sound leak; stated with raw CARRIED — araw_facts is its bundle).
