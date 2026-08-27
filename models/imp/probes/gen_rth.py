@@ -601,6 +601,32 @@ def extract_pred_block():
          "(e_disj1 p n (hexts (gcells_of g)))",
          "(e_disj1 p n (fexts (gfree_of g) 0))"],
         ["ar_lo", "ar_hi", "ar_al", "ar_hc0", "ar_fc0", "ar_mem", "ar_ecells", "ar_efree", "ar_d1c", "ar_d1f"]))
+    out.append(";; a cell's header bands (C2b-4)")
+    out.extend(_extract_claims(
+        "cbands",
+        "(c HCell)",
+        "(cbands c)",
+        ["(le 1 (hcount_of c))",
+         "(lt (hcount_of c) 4294967296)",
+         "(le 0 (htag_of c))",
+         "(lt (htag_of c) 65536)",
+         "(le 0 (harity_of c))",
+         "(lt (harity_of c) 65536)"],
+        ["cb_cnt1", "cb_cnthi", "cb_tag0", "cb_taghi", "cb_ar0", "cb_arhi"]))
+    out.append(";; the live cell's fact bundle (C2b-4)")
+    out.extend(_extract_claims(
+        "live_ok",
+        "(g GHeap) (v Int)",
+        "(live_ok g v)",
+        ["(le (glo_of g) v)",
+         "(le (+ v (+ 8 (* 8 (harity_of (hfget (gcells_of g) v))))) (gtop_of g))",
+         "(int_eq (mod v 8) 0)",
+         "(le (count_in (haddrs (gcells_of g)) v) 1)",
+         "(e_disj (hexts (gcells_of g)))",
+         "(e_disj1 v (harity_of (hfget (gcells_of g) v)) (fexts (gfree_of g) 0))",
+         "(e_disj1 v (harity_of (hfget (gcells_of g) v)) (rexts (graw_of g)))",
+         "(cbands (hfget (gcells_of g) v))"],
+        ["lv_lo", "lv_hi", "lv_al", "lv_cin1", "lv_disj", "lv_d1f", "lv_d1r", "lv_bands"]))
     out.append(";; heap_rep, clause by clause")
     out.extend(_extract_claims(
         "heap_rep",
