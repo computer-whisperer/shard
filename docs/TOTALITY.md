@@ -389,6 +389,17 @@ Migration:
   directly (the subterm check is syntactic, type-agnostic; only *numeric*
   measures stay monomorphic), so `std/list`/`std/map`'s poly recursive
   fns carry verified structural clauses — no monomorphization needed.
+  **Amendment 2026-09-02 — numeric measures on polymorphic fns are REFUSED,
+  not skipped.** The gate's verdict was the substring `" FAIL"` over the
+  rendered block, and the walk's other halts (`SKIP (type-parametric fn …)`,
+  `UNSUPPORTED site …`, `SKIP (could not read param names)`) contained no
+  such token: a type-parametric fn with a non-decreasing numeric measure
+  was admitted, and `liar 0 = liar 0 + 1` checked on both engines. The gate
+  is now FAIL-CLOSED (`mc_any_fail`: the verdict word after the key must be
+  `OK`; `SKIP` is renamed `UNVERIFIED`), pinned by
+  `pins/trust/measure_skip_rejects.shard`. §311's rule — an unresolvable
+  head must emit an obligation or refuse, never skip — now holds for every
+  halt of the walk, not only the head resolver.
 - **Non-structural SCCs** — the reducer fuel loops, `tc_walk`, `check_sequent`'s
   own SCC, the AST-size mutual SCCs (`render_term`), and the corpus's three
   count-up / drop / parse-suffix fns (`render_row`, `split_rows`, `parse_tail`)

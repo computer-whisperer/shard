@@ -1,0 +1,48 @@
+;;; measure_skip_rejects.shard — SOUNDNESS REGRESSION TEST (2026-09-02).
+;;;
+;;; The totality gate's verdict discriminator. mc_outcome renders one
+;;; "MEASURED <key> <VERDICT>…" line per declared (measure …) clause and the
+;;; gate refuses the closure when a clause is not verified. Until 2026-09-02
+;;; "not verified" was the substring " FAIL" — and the walk has OTHER ways to
+;;; stop short of a verdict: a type-parametric fn with a NUMERIC measure (v1
+;;; numeric measures are monomorphic), a measure argument that mentions a
+;;; pattern binder ("UNSUPPORTED site"), unreadable param names. Each of those
+;;; rendered a SKIP / UNSUPPORTED line, contained no " FAIL", and PASSED the
+;;; gate with its clause unverified — so the fn below, whose measure never
+;;; decreases, was admitted to the logic, and `liar_eq` (the issue-#1 shape,
+;;; liar 0 = liar 0 + 1) CHECKED, exit 0, on both engines. The monomorphic
+;;; twin was refused all along (FAIL site 0 decrease); only the type
+;;; parameter opened the door.
+;;;
+;;; The fix (kernel/driver.shard mc_any_fail): the gate is FAIL-CLOSED — the
+;;; verdict word after the key must be OK; FAIL, UNSUPPORTED and UNVERIFIED
+;;; (the renamed SKIP) all refuse. A verdict the gate does not recognise must
+;;; refuse, never admit.
+;;;
+;;; Expected: "2 passed, 1 failed" — liar_eq still checks (unfold is the
+;;; defining equation; that is exactly why admission must be gated) and the
+;;; closure fails __totality__. `plen` pins what the gate must NOT cost: a
+;;; polymorphic fn with a STRUCTURAL clause is verified as before. If a future
+;;; change re-opens the hole this file flips to "2 passed, 0 failed" and the
+;;; corpus FAIL-set diff catches it.
+
+(import "../../kernel/stdlib.shard")
+
+;; the exploit's carrier: type-parametric, numeric measure, no descent.
+(fn (liar T) ((xs (List T)) (n Int)) Int (measure n) (+ (liar xs n) 1))
+
+;; the inconsistent equation its defining equation mints (issue #1's shape).
+(claim liar_eq
+  (goal () () (= (liar (Nil) 0) (+ (liar (Nil) 0) 1)))
+  (steps ((unfold liar lhs)) refl))
+
+;; control: a polymorphic fn with a structural clause stays verified.
+(fn (plen T) ((xs (List T))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (plen t)))))
+
+(claim plen_nil
+  (goal () () (= (plen (Nil)) 0))
+  (steps ((unfold plen lhs) (reduce lhs)) refl))

@@ -63,6 +63,7 @@ TARGETS=(
   pins/lang/nat_absurd_rejects.shard
   pins/trust/axiom_kind_rejects.shard
   pins/trust/axiom_untagged_rejects.shard
+  pins/trust/measure_skip_rejects.shard
   kernel/facts.shard
   # THE KERNEL ITSELF. Checking a target checks its whole IMPORT CLOSURE's
   # claims plus the type/totality gates over the merged module, so these two

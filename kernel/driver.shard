@@ -4155,7 +4155,8 @@
       (let ((alln (mc_app_syms tbn pnames)))
         (if (mc_pure msr2 alln Nil)
           (match (mc_ext_pform pForm tbs)
-            (None (SiteHalt (mc_line key "SKIP (could not read param names)")))
+            (None
+              (SiteHalt (mc_line key "UNVERIFIED (could not read param names)")))
             ((Some pForm2)
              (match (mc_keep_hyps hyps alln Nil)
                ((Pair khyps ndrop)
@@ -4327,13 +4328,14 @@
             (None
               (mc_line
                 (qn_key_chars q)
-                "SKIP (fn not found at the file's module path — rebind?)"))
+                "UNVERIFIED (fn not found at the file's module path — rebind?)"))
             ((Some fd)
              (match fd
                ((FnDef rq _ _ _)
                 (let ((key (qn_key_chars rq)))
                   (match (mc_pnames pForm)
-                    (None (mc_line key "SKIP (could not read param names)"))
+                    (None
+                      (mc_line key "UNVERIFIED (could not read param names)"))
                     ((Some pnames)
                      ;; SCC keyed by the fn's REAL qname (rq), so a rebound fn's
                      ;; SCC is found. Needed by the walk (sibling recognition)
@@ -4350,7 +4352,7 @@
                            ((Cons _ _)
                             (mc_line
                               key
-                              "SKIP (type-parametric fn — v1 numeric measures are monomorphic)"))
+                              "UNVERIFIED (type-parametric fn — v1 numeric measures are monomorphic)"))
                            (Nil
                              (match
                                (mc_walk
@@ -4758,11 +4760,38 @@
     (Nil False)
     ((Cons _ ht) (mc_has_sub ht needle)))))
 
-;; True iff some MEASURED line in the rendered block reports a FAIL verdict.
-;; Every failure line is "MEASURED <key> FAIL…"; keys are space-free QName
-;; renderings, so the token " FAIL" appears ONLY as a verdict word (never inside
-;; a key), making this an exact discriminator against OK / SKIP lines.
-(fn mc_any_fail ((lines (List Int))) Bool (mc_has_sub lines " FAIL"))
+;; the list after the first space (Nil if none).
+(fn mc_after_sp ((hay (List Int))) (List Int)
+  (measure (struct hay))
+  (match hay
+    (Nil Nil)
+    ((Cons c rest) (if (int_eq c 32) rest (mc_after_sp rest)))))
+
+;; A MEASURED line is "MEASURED <key> <VERDICT>…" — keys are space-free QName
+;; renderings, so the verdict word is the token after the SECOND space. The
+;; gate is FAIL-CLOSED: the only accepting verdict is OK. Until 2026-09-02 the
+;; discriminator was the substring " FAIL", and every other non-OK outcome the
+;; walk can halt on — then spelled "SKIP (type-parametric fn …)", "UNSUPPORTED
+;; site …", "SKIP (could not read param names)" — passed the gate with its clause
+;; UNVERIFIED: a type-parametric fn with a numeric measure that never
+;; decreases was admitted to the logic (pins/trust/measure_skip_rejects.shard
+;; is the pin). A verdict the gate does not recognise must refuse, never admit.
+(fn mc_line_ok ((line (List Int))) Bool
+  (mc_prefix "OK" (mc_after_sp (mc_after_sp line))))
+
+;; True iff some MEASURED line in the rendered block carries a verdict other
+;; than OK. `bol` = at the beginning of a line (the block's lines are joined by
+;; sr_nl; detail lines are indented and never start with MEASURED).
+(fn mc_nok_go ((hay (List Int)) (bol Bool)) Bool
+  (measure (struct hay))
+  (match hay
+    (Nil False)
+    ((Cons c rest)
+     (if (if bol (mc_prefix "MEASURED " hay) False)
+       (if (mc_line_ok hay) (mc_nok_go rest False) True)
+       (mc_nok_go rest (int_eq c 10))))))
+
+(fn mc_any_fail ((lines (List Int))) Bool (mc_nok_go lines True))
 
 ;; ---- proof-ADMISSION accounting (issue #1, Phase D) ------------------------
 ;; The totality gate refuses non-terminating fns that are ADMITTED TO THE PROOF
@@ -4874,7 +4903,8 @@
 ;; a HARD gate: a closure FAILS the run when either
 ;;   (a) a recursive SCC that is ADMITTED TO THE PROOF SYSTEM declares no
 ;;       (measure …) clause — mc_unannot_go ∩ mc_filter_admitted, or
-;;   (b) a declared clause is not verified              — a FAIL in the block.
+;;   (b) a declared clause is not verified              — any verdict but OK in
+;;       the block (FAIL, UNSUPPORTED, UNVERIFIED — fail-closed, mc_any_fail).
 ;; "Admitted" = reached by a proof through the call graph (see mc_proof_seed);
 ;; a recursive fn no proof reduces (the interpreter, the offline solver) is a
 ;; program, not a proof component, and does not move the gate. Each (a) is one
