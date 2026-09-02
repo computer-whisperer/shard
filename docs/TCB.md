@@ -157,6 +157,13 @@ checker) re-establishes a fresh engine by construction and by gate:
    MULTIPLICITY — a leg lost in one file and gained in another under the
    same name would pass CI and fail this local check.
 
+   The corpus is TIERED (2026-09-02; `run_corpus.sh`'s header): DEFAULT
+   per commit, `CORPUS_CLOSED=1` for the closed arcs' frozen gates,
+   `CORPUS_LONG=1` for the engine pins. A kernel edit is gated by DEFAULT
+   on every commit and by CLOSED before any baseline change; CLOSED
+   targets carry no baseline rows by invariant, so a default run's diff
+   is exact for the rows it can see.
+
    Engine-suspicious changes additionally re-run the corpus on the
    Rust authority and require byte-identical verdicts across engines
    (the discipline that caught the parallel-let miscompile and

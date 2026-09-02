@@ -5,6 +5,27 @@
 # buffered and emitted in list order, so output stays byte-diffable with any
 # serial run.
 set -u
+# ── corpus TIERS (2026-09-02 spring cleaning, item 2) ───────────────────────
+# DEFAULT = the live core, per commit: kernel, std base, meta, models/imp +
+#           models/x86 (the live model and its silicon leg), the generic path,
+#           the search engine's law pins, the apps.
+# CLOSED  = the closed arcs' frozen gates, CORPUS_CLOSED=1 (CI job
+#           corpus-closed; also folded into corpus-long): the floats/rat tower
+#           (the 15-min long pole, github #37), Arc B's sha256 articles + the
+#           link layer + its three bin-level silicon legs + the sha-ni block
+#           leg, the wasm leg (models/wasm + its V8 differential + impgen's
+#           wasm fixtures + the weld regen), RISC-V (+ its qemu leg), PIO (+
+#           its vector regen). Every gate is KEPT; it fires on demand and
+#           before any baseline change, not per commit.
+# LONG    = the engine-run pins, CORPUS_LONG=1 (unchanged, below).
+# INVARIANT: CLOSED targets carry NO fails-base.txt rows (verified 2026-09-02:
+# the baseline's families are pins/*, tools/lowcheck, std/axiom_scope_rejects,
+# examples/natview_rejects, examples/modules_demo). A rejects pin added under
+# a CLOSED family must move to DEFAULT or ship with a CLOSED-tier run — a
+# default run would otherwise report its row as MISSING and the diff fails,
+# which is the safe direction.
+# CORPUS_LIST=1 prints the tier membership and exits 0 (the local dry run).
+CLOSED=${CORPUS_CLOSED:-0}
 # Engine selection, fastest fresh option first (see gate_sweep.sh):
 # direct-compiled bin/shard_check (stamp-fresh only) > bin/shard_eval
 # interpreting kernel/check.shard > Rust interpreter. EVAL env overrides with
@@ -79,21 +100,6 @@ TARGETS=(
   kernel/check.shard
   kernel/eval.shard
   std/bits/bits.shard
-  std/rat/mod.req/gcd.shard
-  std/rat/rat.shard
-  examples/rat_demo.shard
-  std/float/mod.req/float.shard
-  std/float/mod.req/kit.shard
-  std/float/mod.req/pack.shard
-  std/float/mod.req/grs.shard
-  std/float/mod.req/ops2.shard
-  std/float/mod.req/wf.shard
-  std/float/mod.req/dec.shard
-  std/float/mod.req/hex.shard
-  examples/float_val_compute.shard
-  std/f32/f32.shard
-  std/f64/f64.shard
-  examples/float_surface_demo.shard
   examples/bits_demo.shard
   std/axiom_scope_rejects.shard
   examples/ledger_dep/ledger_dep.shard
@@ -202,12 +208,9 @@ TARGETS=(
   models/imp/probes/vx86_oracle_probe.shard
   models/imp/probes/ipatch_probe.shard
   models/imp/probes/ilinv_probe.shard
-  tools/impgen/fixtures/impgen_wasm_out.shard
   tools/impgen/fixtures/impgen_x86_out.shard
-  tools/impgen/fixtures/impgen_wasm_loop_out.shard
   tools/impgen/fixtures/impgen_x86_loop_out.shard
   tools/impgen/fixtures/imp_mixed.shard
-  tools/impgen/fixtures/impgen_wasm_mixed_out.shard
   tools/impgen/fixtures/impgen_x86_mixed_out.shard
   tools/impgen/blueprints/iwg_probe.shard
   tools/impgen/blueprints/sqw_probe.shard
@@ -216,28 +219,15 @@ TARGETS=(
   tools/impgen/blueprints/sqm2_probe.shard
   tools/impgen/blueprints/sqmc_probe.shard
   tools/impgen/blueprints/sqxc_probe.shard
-  examples/weld_probe.shard
   tools/impgen/blueprints/sqbw_probe.shard
   tools/impgen/blueprints/sqbx_probe.shard
   tools/impgen/blueprints/sqblw_probe.shard
   tools/impgen/blueprints/sqblx_probe.shard
   tools/impgen/blueprints/sqbsx_probe.shard
   tools/impgen/fixtures/imp_if.shard
-  tools/impgen/fixtures/impgen_wasm_if_out.shard
   tools/impgen/fixtures/impgen_x86_if_out.shard
   tools/impgen/fixtures/imp_ifl.shard
-  tools/impgen/fixtures/impgen_wasm_ifl_out.shard
   tools/impgen/fixtures/impgen_x86_ifl_out.shard
-  models/wasm/wasm.shard
-  models/wasm/encode.shard
-  models/wasm/probes/wasm_smoke.shard
-  models/wasm/probes/wasm_pieces.shard
-  models/wasm/probes/wasm_weld.shard
-  models/wasm/probes/wasm_weld_out.shard
-  models/wasm/diff/wasm_diff_run.shard
-  models/wasm/probes/wasm_rev.shard
-  models/wasm/probes/wasm_copy.shard
-  models/wasm/probes/lowered_form.shard
   pins/lang/w64_probe.shard
   models/x86/x86.shard
   models/x86/encode.shard
@@ -260,9 +250,6 @@ TARGETS=(
   models/x86/probes/xvector_probe.shard
   models/x86/probes/stdin_count_probe.shard
   examples/addw/addw_src.shard
-  examples/sha256sum/sha256sum_src.shard
-  examples/sha256sum/sha256sum_x86_out.shard
-  examples/sha256sum/sha256sum_elf.shard
   models/x86/probes/stdin_echo_probe.shard
   examples/addw/addw_x86_out.shard
   models/x86/probes/xitoa_probe.shard
@@ -277,7 +264,6 @@ TARGETS=(
   models/x86/probes/xid_probe.shard
   tools/lowbuild/fixtures/bytesum_src.shard
   tools/lowbuild/fixtures/bytesum_x86_out.shard
-  models/wasm/probes/libmod_probe.shard
   tools/lowcheck/fixtures/lib_form.shard
   tools/lowcheck/fixtures/lib_form_rejects.shard
   tools/lowbuild/fixtures/purelib_src.shard
@@ -289,23 +275,12 @@ TARGETS=(
   tools/lowbuild/fixtures/arglen_x86_out.shard
   tools/lowbuild/fixtures/echoarg_src.shard
   tools/lowbuild/fixtures/echoarg_x86_out.shard
-  models/riscv/riscv.shard
-  models/riscv/probes/riscv_smoke.shard
-  models/riscv/encode.shard
-  models/riscv/diff/riscv_diff_run.shard
-  models/riscv/loopkit.shard
-  models/riscv/probes/riscv_pieces.shard
   tools/lowbuild/fixtures/upcase_src.shard
   tools/lowbuild/fixtures/upcase_x86_out.shard
   tools/lowbuild/fixtures/parse_src.shard
   tools/lowbuild/fixtures/parse_x86_out.shard
   pins/trust/bin_entry_rejects.shard
   models/x86/diff/x86_diff_run.shard
-  models/wasm/probes/rep_probe.shard
-  models/wasm/probes/lowfrag_probe.shard
-  models/wasm/probes/divfrag_probe.shard
-  models/wasm/probes/bitfrag_probe.shard
-  models/wasm/probes/wordfrag_probe.shard
   tools/lowcheck/fixtures/lowcheck_rejects.shard
   pins/lang/record_rejects.shard
   pins/lang/record_sugar_rejects.shard
@@ -369,7 +344,6 @@ TARGETS=(
   std/nat.shard
   std/order.shard
   std/rng/rng.shard
-  std/rng/rng.wasm.shard
   std/bytes/bytes.shard
   std/str/utf8.shard
   std/str/str.shard
@@ -380,29 +354,6 @@ TARGETS=(
   std/word/word.shard
   std/nat/nat.shard
   std/sha256/sha256.shard
-  std/sha256/sha256.imp.shard
-  std/sha256/sha256.patch.shard
-  std/sha256/sha256.xpatch.shard
-  std/sha256/sha256.xconv.shard
-  std/sha256/sha256.xchain.shard
-  std/sha256/sha256.xcomp.shard
-  std/sha256/sha256.stream.shard
-  examples/sha256sum/sha256sum_stream_src.shard
-  std/sha256/impgen_wasm_out.shard
-  std/sha256/impgen_x86_out.shard
-  std/sha256/sha256.weld.shard
-  std/sha256/sha256.sweld.shard
-  std/sha256/sha256.shani.shard
-  models/x86/diff/shani_diff_run.shard
-  examples/sha256sum/sha256sum_stream_x86.shard
-  std/sha256/sha256.shaniw.shard
-  std/sha256/sha256.snweld.shard
-  examples/sha256sum/sha256sum_shani_x86.shard
-  examples/sha256sum/sha256sum_stream_elf.shard
-  examples/sha256sum/sha256sum_shani_elf.shard
-  models/x86/link.shard
-  examples/sha256sum/sha256sum_dispatch_x86.shard
-  examples/sha256sum/sha256sum_dispatch_elf.shard
   pins/proof/sketch_pin.shard
   meta/sketch/mod.req.shard
   meta/invoke/prepared.shard
@@ -459,11 +410,6 @@ TARGETS=(
   tools/search/gen/imp_mix_refinement.shard
   tools/search/gen/x86_calculator_refinement.shard
   tools/search/gen/x86_calculator4_refinement.shard
-  models/pio/pio.shard
-  models/pio/encode.shard
-  models/pio/probes/pio_smoke.shard
-  models/pio/diff/pio_vecrun.shard
-  models/pio/diff/pio_vecgate.shard
   tools/search/tasks/typed_pio_square.shard
   tools/search/gen/pio_square_refinement.shard
   tools/search/tasks/typed_pio_dme.shard
@@ -486,6 +432,90 @@ TARGETS=(
   tools/search/pcb_cap_probe.shard
   tools/search/pcb_lns_probe.shard
 )
+CLOSED_TARGETS=(
+  std/rat/mod.req/gcd.shard
+  std/rat/rat.shard
+  examples/rat_demo.shard
+  std/float/mod.req/float.shard
+  std/float/mod.req/kit.shard
+  std/float/mod.req/pack.shard
+  std/float/mod.req/grs.shard
+  std/float/mod.req/ops2.shard
+  std/float/mod.req/wf.shard
+  std/float/mod.req/dec.shard
+  std/float/mod.req/hex.shard
+  examples/float_val_compute.shard
+  std/f32/f32.shard
+  std/f64/f64.shard
+  examples/float_surface_demo.shard
+  tools/impgen/fixtures/impgen_wasm_out.shard
+  tools/impgen/fixtures/impgen_wasm_loop_out.shard
+  tools/impgen/fixtures/impgen_wasm_mixed_out.shard
+  examples/weld_probe.shard
+  tools/impgen/fixtures/impgen_wasm_if_out.shard
+  tools/impgen/fixtures/impgen_wasm_ifl_out.shard
+  models/wasm/wasm.shard
+  models/wasm/encode.shard
+  models/wasm/probes/wasm_smoke.shard
+  models/wasm/probes/wasm_pieces.shard
+  models/wasm/probes/wasm_weld.shard
+  models/wasm/probes/wasm_weld_out.shard
+  models/wasm/diff/wasm_diff_run.shard
+  models/wasm/probes/wasm_rev.shard
+  models/wasm/probes/wasm_copy.shard
+  models/wasm/probes/lowered_form.shard
+  examples/sha256sum/sha256sum_src.shard
+  examples/sha256sum/sha256sum_x86_out.shard
+  examples/sha256sum/sha256sum_elf.shard
+  models/wasm/probes/libmod_probe.shard
+  models/riscv/riscv.shard
+  models/riscv/probes/riscv_smoke.shard
+  models/riscv/encode.shard
+  models/riscv/diff/riscv_diff_run.shard
+  models/riscv/loopkit.shard
+  models/riscv/probes/riscv_pieces.shard
+  models/wasm/probes/rep_probe.shard
+  models/wasm/probes/lowfrag_probe.shard
+  models/wasm/probes/divfrag_probe.shard
+  models/wasm/probes/bitfrag_probe.shard
+  models/wasm/probes/wordfrag_probe.shard
+  std/rng/rng.wasm.shard
+  std/sha256/sha256.imp.shard
+  std/sha256/sha256.patch.shard
+  std/sha256/sha256.xpatch.shard
+  std/sha256/sha256.xconv.shard
+  std/sha256/sha256.xchain.shard
+  std/sha256/sha256.xcomp.shard
+  std/sha256/sha256.stream.shard
+  examples/sha256sum/sha256sum_stream_src.shard
+  std/sha256/impgen_wasm_out.shard
+  std/sha256/impgen_x86_out.shard
+  std/sha256/sha256.weld.shard
+  std/sha256/sha256.sweld.shard
+  std/sha256/sha256.shani.shard
+  models/x86/diff/shani_diff_run.shard
+  examples/sha256sum/sha256sum_stream_x86.shard
+  std/sha256/sha256.shaniw.shard
+  std/sha256/sha256.snweld.shard
+  examples/sha256sum/sha256sum_shani_x86.shard
+  examples/sha256sum/sha256sum_stream_elf.shard
+  examples/sha256sum/sha256sum_shani_elf.shard
+  models/x86/link.shard
+  examples/sha256sum/sha256sum_dispatch_x86.shard
+  examples/sha256sum/sha256sum_dispatch_elf.shard
+  models/pio/pio.shard
+  models/pio/encode.shard
+  models/pio/probes/pio_smoke.shard
+  models/pio/diff/pio_vecrun.shard
+  models/pio/diff/pio_vecgate.shard
+)
+N_DEFAULT=${#TARGETS[@]}
+if [ "$CLOSED" = 1 ]; then TARGETS+=("${CLOSED_TARGETS[@]}"); fi
+if [ "${CORPUS_LIST:-0}" = 1 ]; then
+  echo "corpus tiers: DEFAULT $N_DEFAULT targets; CLOSED ${#CLOSED_TARGETS[@]} targets (CORPUS_CLOSED=$CLOSED); LONG engine pins (CORPUS_LONG=${CORPUS_LONG:-0})"
+  printf '  closed: %s\n' "${CLOSED_TARGETS[@]}"
+  exit 0
+fi
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
@@ -524,6 +554,7 @@ echo "=== scope: snake_game_3/game ==="
 # what the compile script emits from the CURRENT pieces (drift in either
 # direction fails; the certificate's citations already fail loudly on
 # structural drift, this catches the silent kind).
+if [ "$CLOSED" = 1 ]; then
 echo "=== weld: regen wasm_weld_out ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run models/wasm/probes/wasm_weld.shard > "$TMP/weld.raw" 2>/dev/null
@@ -536,11 +567,15 @@ if [ -x bin/shard_eval ]; then
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
+else
+  echo "=== weld: SKIPPED (CORPUS_CLOSED=0 — closed tier) ==="
+fi
 
 # PIO vector-data regen pin: the committed generated data file must be
 # byte-identical to gen_vectors.py's output re-formatted (docs/PIO.md §6 —
 # the gate claim already fails loudly on semantic drift; this catches
 # silent drift of the data itself).
+if [ "$CLOSED" = 1 ]; then
 echo "=== pio: regen pio_vectors_data ==="
 if [ -x bin/shard_eval ] && command -v python3 >/dev/null; then
   python3 tools/piovec/gen_vectors.py > "$TMP/piovec.raw" 2>/dev/null
@@ -552,6 +587,9 @@ if [ -x bin/shard_eval ] && command -v python3 >/dev/null; then
   fi
 else
   echo "SKIPPED (no bin/shard_eval or python3)"
+fi
+else
+  echo "=== pio: SKIPPED (CORPUS_CLOSED=0 — closed tier) ==="
 fi
 
 # Prove-regen pin (prove tool gate, lockstep-arc slice 0): tools/prove
@@ -1348,11 +1386,15 @@ fi
 # legs). The `||` arm turns a nonzero exit (crash or disagreement count)
 # into a synthetic FAIL row, so a differ that DIES is as loud as one that
 # differs.
+if [ "$CLOSED" = 1 ]; then
 echo "=== wasm: engine differential ==="
 if command -v node >/dev/null && [ -x bin/shard_eval ]; then
   bash models/wasm/diff/wasm_diff.sh 2>&1 || echo "FAIL wasm-differential (exit $?)"
 else
   echo "SKIPPED (needs node + bin/shard_eval)"
+fi
+else
+  echo "=== wasm: SKIPPED (CORPUS_CLOSED=0 — closed tier) ==="
 fi
 
 # Silicon differential (the x86_64 arc's Probe B): flatten each XFunc to real
@@ -1394,11 +1436,15 @@ fi
 # is such a box, so this leg is adjudicated on SHA-capable silicon (X86.md §6's
 # capability posture). Per-mismatch FAIL lines gate via the CI projection;
 # nonzero exit adds a synthetic FAIL row (see the wasm leg's note).
+if [ "$CLOSED" = 1 ]; then
 echo "=== x86: sha-ni block differential ==="
 if command -v cc >/dev/null && [ -x bin/shard_eval ]; then
   bash models/x86/diff/shani_diff.sh 2>&1 || echo "FAIL shani-block-differential (exit $?)"
 else
   echo "SKIPPED (needs cc + bin/shard_eval)"
+fi
+else
+  echo "=== x86-shani: SKIPPED (CORPUS_CLOSED=0 — closed tier) ==="
 fi
 
 # RISC-V engine differential (the RISC-V arc's G2): encode each RvFunc to real
@@ -1409,11 +1455,15 @@ fi
 # on this box). Full output; per-mismatch FAIL lines gate via the CI
 # projection, nonzero exit adds a synthetic FAIL row (see the wasm leg's note).
 # riscv_diff.sh self-guards (SKIP exit 0) when clang/qemu-user/rust-lld absent.
+if [ "$CLOSED" = 1 ]; then
 echo "=== riscv: engine differential ==="
 if command -v clang >/dev/null && command -v qemu-riscv64 >/dev/null && [ -x bin/shard_eval ]; then
   bash models/riscv/diff/riscv_diff.sh 2>&1 || echo "FAIL riscv-differential (exit $?)"
 else
   echo "SKIPPED (needs clang + qemu-user + bin/shard_eval)"
+fi
+else
+  echo "=== riscv: SKIPPED (CORPUS_CLOSED=0 — closed tier) ==="
 fi
 
 # sha256sum SCALAR + ONE-SHOT bin-level silicon differential (STREAM.md §7.9 M5
@@ -1433,12 +1483,16 @@ fi
 # Under ruling R2 both belong to the dispatch bin (third block below), so the
 # leg is `sha256sum-scalar-oneshot-silicon` and the product is
 # examples/sha256sum/sha256sum_oneshot.
+if [ "$CLOSED" = 1 ]; then
 echo "=== sha256sum scalar+one-shot: capless silicon differential ==="
 if [ -x bin/shard_eval ]; then
   bash examples/sha256sum/sha256sum_silicon_diff.sh 2>&1 \
     || echo "FAIL sha256sum-scalar-oneshot-silicon (exit $?)"
 else
   echo "SKIPPED (needs bin/shard_eval)"
+fi
+else
+  echo "=== sha256sum-scalar-oneshot: SKIPPED (CORPUS_CLOSED=0 — closed tier) ==="
 fi
 
 # sha256sum SHA-NI variant bin-level silicon differential (STREAM.md §8.4 E3
@@ -1453,11 +1507,15 @@ fi
 # on SHA-capable silicon. That gate is its only skip: missing
 # coreutils/openssl/getcap/readelf is still a FAIL. Per-row OK/FAIL at column 0;
 # nonzero exit adds a synthetic FAIL row (see the wasm leg's note).
+if [ "$CLOSED" = 1 ]; then
 echo "=== sha256sum shani: capless silicon differential ==="
 if [ -x bin/shard_eval ]; then
   bash examples/sha256sum/sha256sum_shani_diff.sh 2>&1 || echo "FAIL sha256sum-shani-silicon (exit $?)"
 else
   echo "SKIPPED (needs bin/shard_eval)"
+fi
+else
+  echo "=== sha256sum-shani: SKIPPED (CORPUS_CLOSED=0 — closed tier) ==="
 fi
 
 # sha256sum CPUID-DISPATCH bin-level silicon differential (STREAM.md §9.2, rung
@@ -1478,12 +1536,16 @@ fi
 # coreutils/openssl/getcap/readelf/objdump is a FAIL, as everywhere else.
 # Per-row OK/FAIL at column 0; nonzero exit adds a synthetic FAIL row (see the
 # wasm leg's note).
+if [ "$CLOSED" = 1 ]; then
 echo "=== sha256sum dispatch: capless silicon differential (runs everywhere) ==="
 if [ -x bin/shard_eval ]; then
   bash examples/sha256sum/sha256sum_dispatch_diff.sh 2>&1 \
     || echo "FAIL sha256sum-dispatch-silicon (exit $?)"
 else
   echo "SKIPPED (needs bin/shard_eval)"
+fi
+else
+  echo "=== sha256sum-dispatch: SKIPPED (CORPUS_CLOSED=0 — closed tier) ==="
 fi
 
 echo "=== guard: absolute path ==="

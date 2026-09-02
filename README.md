@@ -228,6 +228,11 @@ bin/shard_check examples/mem_reverse.shard  # same output, much faster
 `./run_corpus.sh` runs the whole pinned corpus in parallel. **It is a
 diff tool**: it exits 0 even with failing targets — gate changes by
 diffing its FAIL set against the current baseline, never by exit code.
+The corpus is tiered (the header of `run_corpus.sh`): DEFAULT runs per
+commit; `CORPUS_CLOSED=1` adds the closed arcs' frozen gates (floats,
+Arc B's sha256 articles and silicon legs, the wasm leg, RISC-V, PIO);
+`CORPUS_LONG=1` adds the engine-run pins. `CORPUS_LIST=1` prints the
+membership without running anything.
 Sources are kept canonical with the proven formatter
 (`bin/shard_eval run tools/shardfmt/shardfmt.shard FILE`); the
 formatter's gate guarantees it cannot change what a file parses to.
