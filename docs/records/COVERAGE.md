@@ -1,0 +1,1410 @@
+# COVERAGE.md — RECORDS (moved out of docs/COVERAGE.md on 2026-09-02)
+
+> **STATUS: RECORD.** Dated rung/slice records split out of [../COVERAGE.md](../COVERAGE.md) so the LAW ledger stays readable in one sitting. Section numbers are exactly as they were in docs/COVERAGE.md; a citation `COVERAGE.md §N` for a section listed here resolves to this file. Nothing here is normative unless the law ledger says so; any "NEXT" pointer is history.
+
+## 10. Rung records
+
+(Appended per rung: what landed, commits, measured numbers, what was
+found that the pins did not predict.)
+
+**C0 — RATIFIED 2026-08-22** (user, on the drafted ledger d997209 and
+its report, without amendment). §3 is a gate; P1–P11 are law; C1 opens.
+
+**C1a — the call tier lands (2026-08-22).** models/imp/imp.shard
++383 lines (145/0): `IFam`, `IpStmt` (the four base forms mirrored +
+`IpCall` / `IpLoadW` / `IpStoreW` / `IpFail`), `IpFn` / `IpProg`, the
+SCC `ipstmt` / `ipwhile` / `ipstmts` / `ipcall` + `iprun`, the lift
+`ip_of_*`, the gate `ipwk_prog`; probe
+models/imp/probes/ipcall_probe.shard (34 claims, corpus-registered).
+IMP.md §2b is the machine record. **The finding that shaped it:** the
+plan was to extend `IExp` / `IStmt` / `IOut`; the consumer census
+showed the base constructor sets are load-bearing — `case-on … IOut`
+trees in impgen's emitted certs and the blueprints, exhaustive
+`match`es and inductions over `IExp` / `IStmt` in the 247k-line
+vx86_acc_probe (emitted by scratchpad tooling that no longer exists)
+— so any new constructor would have meant hand-patching emitted
+proofs. REJECTED-because recorded here: extension = a structural walk
+through ~500k certificate lines with no regenerator. The mirror tier
+costs ~130 lines of duplicated evaluator and one lift law (owed at
+C3); everything existing is untouched, and the C1 gate "frozen oracle
+outs regenerate byte-identically" holds trivially. Consequences: P5's
+call is a statement (expressions stay pure and fuel-free); word loads
+are statements too (`IpLoadW i addr`), which is what x86 emits anyway
+(mov r64, [addr]). Gotcha for generated proofs: `compute` packs ground
+Nats, so a claim that must rewrite through `load_le_s` fences `iw8`
+out of the compute and opens it by unfold + reduce. Owed: `ls8_id` in
+std/mem (C2); the lift law (C3). Re-slotted within C1: the open/close
+shims move to C5/C6 prep (they are consumed only by shardfmt's
+`read_file`; calc needs stdin/stdout/exit, which exist).
+
+**C2a — the runtime's code lands (2026-08-22; C1b runs in parallel on
+the x86 side).** models/imp/rt.shard: the spelling kit (rk/rl/ra/radd/…
+/rldw/rldo/rstw/rsto, risref, rcount/rarity, rfree_at — shared with
+impc), the table `rt_fns rb` = rt_init / rt_alloc / rt_inc / rt_dec as
+IpFn values parameterized by the runtime base, `rt_prog` (table ++
+program). Representation and layout fixed as the file header records
+(CD7 resolved): header = count + tag·2^32 + arity·2^48; immediates
+odd, references even U32 indexes; immortal = count ≥ 2^31; a dead
+cell's count field carries the free worklist link; free lists per
+arity < 16 at [rb+24+8k], arity ≥ 16 bump-only (a leak, never a wrong
+answer); rt_dec releases children through an ITERATIVE worklist, no
+recursion. Probe: models/imp/probes/rt_run.shard — a RUN-MODE driver
+(17 tests: placement, header, reuse, inc/dec, the three-cell cascade
+and its LIFO reuse order, a shared child surviving its parent, oom,
+immortal, immediates, the large class, the gate) pinned with
+`pin_run imp_rt_run`; run mode because std/mem's word view is opaque
+in check mode and the runtime's control flow depends on loaded values
+— the theorems are C2b's. **Invariant surfaced by the probe** (two
+tests first failed on it): every slot of a live cell holds a valid
+word — the runtime never null-checks, so an uninitialized 0 reads as
+a reference to index 0. impc's constructor emission fills every slot
+before the cell can be observed; the C2b invariant states it.
+
+**C1b — the x86 memory sub-vocabulary lands (2026-08-22; Opus-delegated
+byte parts, b216dfc).** `(XMem XMInstr)` with `XMLoad64 Reg Addr` /
+`XMStore64 Addr Reg` (register source only: `mov r/m64, imm32`
+sign-extends, no honest 64-bit immediate twin), semantics in the scalar
+tier (`xminstr_leaf`, XLoad8's shape at an 8-byte span, `xw8` = imp's
+`iw8` tower), the world/vector tiers delegating through their
+catch-alls. Structural walk: link.shard's 12 XInstr inductions (two
+needed a species split — `xlk_extx`/`xlk_shx` compute the window guard
+in place, so the flat mirror's rewrites could not fire under the
+binder), vx86_acc_probe 11 case-on pads + 11 dispatch-table arms, the
+transition-window pad, bytetie's readback species. Encoder REX.W 8B/89
+through the existing `enc_mem`; **silicon differential 250/0** (was
+230/0), with two rows worth keeping: an address inside the window whose
+8-byte span is not (model traps, CPU faults at the page boundary —
+agreed) and a byte-order pin (store 0x8877…11, read back 11…88). Open
+(not a gate): nothing pins the tier DELEGATION itself in a probe — the
+world/vector catch-alls carry it. Finding: `bin/check` does not flag a
+non-exhaustive `match` (a missing arm goes stuck), so a green check is
+not evidence a ctor census is complete — the census was done by reading.
+
+**C3a — impc v0 + THE FIRST ORACLE (2026-08-22).** tools/impc/impc.shard
+(159/0): spec → call-tier imp over the runtime. The scheme as landed
+(the file header is the record): immediates = two's-complement words
+(i63 ints 2n+1, nullary ctors 2·tag+1, Bool 1/3); compound ctors =
+runtime cells filled slot by slot; locals = one U64 per binder and per
+sub-expression (no allocation, #25); ownership = borrowed params and
+pattern binders, owned temporaries and let-binders, with an IMMEDIATE
+state so literals/arithmetic/nullary ctors generate no count traffic
+(own-position consumers inc a borrowed reference; borrow-position
+consumers dec an owned temporary after use); `+ − *` with the band check
+→ `IpFail FOverflow` (add/sub by the sign-xor test on the doubled words,
+mul through unsigned magnitudes with the divide-back wrap check and the
+2^62 bound); `lt`/`le` by the xor-2^63 bias, `int_eq` direct; match =
+per-arm ok flag through nested tag/field tests (fields loaded into
+fresh locals = borrowed binders), no arm left → `IpUnreach`; calls =
+IpCall into the table (runtime fns 0–3, then the module's own fns in
+definition order); every fn's prologue bumps the depth cell `[rb+16]`
+and fails stack at the bound (100000), the epilogue restores it. Product
+= a shard file (NAME_ipfn values, NAME_ix indexes, SRC_iprog = rt_prog
+over the table), `impc SRC OUT.raw` then shardfmt, the impgen
+convention. **The micro-flagship** tools/impc/fixtures/micro.shard (13
+fns: len/app/wsum/perim/second/sumto/rev_go/pick/find_neg/mod_free/
+shapes/perims + id; 15 wrappers) compiles to a 1922-line product (36
+runtime count calls) and **the run-mode differential micro_run.shard
+agrees on all 15 wrappers + the gate (16/16)** — spec evaluated by the
+engine vs iprun over the product — the first oracle of the generic
+path, before any certificate exists; corpus rows: check × 4, the regen
+byte-tie `impc_micro_regen`, the differential `impc_micro_run`.
+Findings: (i) `(use (:: kernel term chars_of_sym))` aliases a reducer
+PRIM to a nonexistent definition and every call through it goes stuck
+(term.shard's own warning; cost an hour) — spell prims bare; (ii)
+negative literals must be emitted as WORDS or the wk gate rejects the
+product (caught by the gate row, not by the behavioral rows — the
+machine's U64 ops wrap either way); (iii) run-mode "stuck" surfaces
+only at the extern boundary as a malformed byte list — stage the writes
+to bisect. NOT YET (C3's second half): the generated per-fn certificates
+(P7) — nothing is proven about the product beyond the differential; the
+x86 leg of the product (C1c: to_x86 over IpStmt with the caller-save
+convention, impgen's arms) is also still owed; v0 refuses ediv/mod/bit
+ops, symbols, externs, and packs no static data (P8).
+
+**C1c-1 — THE FRAME TIER: the x86 leg of the call tier, at the model
+(2026-08-22).** models/imp/to_x86.shard grows an additive section
+(`ixf_*`, 448/0): locals live in MEMORY — R15 is the frame pointer, local
+i is the word at [FP+8i], expression temporaries spill to slots past the
+locals, RAX/R10/R11/RDX are the only scratch; a call writes the
+arguments into the callee's frame, bumps FP by the caller's own size,
+XCalls, drops FP back (the callee owns the whole scratch file, so
+nothing is saved across calls — P5's caller-save convention
+degenerates to "nothing live in registers"); the callee's prologue
+zeroes its extras; `xparams` is 0 everywhere (arguments never travel in
+registers — a driver pre-writes the entry frame); Fail = RDI := 70 +
+family, XCall the exit shim appended as the last image fn; Unreach = a
+word load no window reaches. Comparisons materialize 0/1 through the
+fused-branch blocks; `IDiv`/`IRem` through RDX:RAX; shifts only at
+constant counts (impc emits nothing else). `ixf_prog : IpProg → Option
+XModule` gates on `ipwk_prog` first. REJECTED-because (recorded): reuse
+the base tier's register-home statement tier — it admits ≤12 locals and
+impc's products exceed that (len: 16), and every call would need
+save/restore of the live home file anyway; the memory-locals tier has
+ONE alignment relation for every statement and is what #25 later
+prices against. Cost recorded: every local access is three instructions
+because `Addr` carries no displacement — `(ADisp Reg Int)` is the named
+door. **The three-way differential** tools/impc/fixtures/micro_x86_run.shard
+(spec natively / iprun on the product / the x86 model on ixf_prog's
+translation) **agrees on all 15 wrappers** (`impc_micro_x86_run`), first
+run. impc's runtime base moved to 65536 (stock vm.mmap_min_addr) so one
+product serves the model and the ELF; the window is [65536, 65536+2^20)
+with the heap at +152 and frames from +2^19 (driver-chosen, not yet a
+product parameter — P4's address policy leaves the carve to the bin).
+Owed: C1c-2 the silicon leg (ELF + runner, Opus-delegated), C1c-3 the
+imp ⊑ x86 certificates for this tier (impgen's arms in the ratified
+dialect — with one uniform relation the validator shape of CERT.md §4 is
+the candidate).
+
+**C1c-2 — ON SILICON (2026-08-22; Opus-delegated).** tools/impc/fixtures/
+micro_x86_write.shard (462/0) packages `ixf_prog` of the product plus a
+trampoline appended AFTER the exit shim (indexes untouched): R15 := the
+stack base, rt_init's two arguments pre-written into the entry frame,
+`call rt_init`, `call K`, `shr rax,1` → RDI (one logical shift IS the
+i63 decode for the exit byte: −1 → 255, −4 → 252), `call exit-shim`;
+`enc_image` entry-first, `enc_winelf` at the module's own bounds (base
+65536, size 2^20). tools/impc/fixtures/micro_silicon.sh builds one ELF
+per wrapper, runs it, compares the process exit status with the spec's
+value mod 256 — **15/15 on the 5900X, first run, no encoder refusal, no
+fault**; a 16th row pins the emitter's refusal of a non-wrapper index.
+The 15 ELFs (74559 B each) differ in exactly two bytes — the `call K`
+rel32 — a free structural check that the wrapper index is the only
+selector. Honesty note: the exit status is one byte, so this oracle
+distinguishes values only mod 256 — the model-level differential
+(C1c-1) carries the full Ints; the silicon leg carries the bytes, the
+encoder, and the loader. Registered as `impc_micro_silicon`.
+**Finding (CI):** pipeline 398 went red on a summary line: the run-mode
+drivers printed `FAIL rows: 0`, and the CI FAIL-set awk matches any line
+beginning `FAIL ` — the probe itself was 17/17. Renamed to `rows failed:
+N` in every driver; a driver's summary must never start with FAIL/TYPE!.
+
+**A-0 — THE CERTIFICATE PHASE OPENS: the model amendments (2026-08-22;
+order A → C2b → B ratified by the user the same day).** Stating
+Theorem A against the landed code (§11.1) moved three things into the
+MODEL before any proof: (i) `IpProg.ipstack` — `iprun` now evaluates at
+the window `[ipbase, ipstack)`, so the frame region is invisible to imp
+and the disjointness premise is free; (ii) `IpProg.ipdepth` — the
+call-depth budget is the model's: the SCC threads (dmax, d), `ipcall`
+fails `FStack` at the budget and runs the body at d + 1, the frame tier
+mirrors the count in R14 (`ixf_enter` / `ixf_leave`), and `ixf_prog`
+gates the carve once (`ixf_carve_ok`: base ≤ stack, 0 ≤ depth,
+stack + depth · `ixf_maxown` ≤ memsize); impc's own counter and its
+`[rb+16]` traffic are DELETED (`ctx_depth`, `depth_bound` gone; the
+product's `_iprog` takes `(base memsize stack depth)`; the micro
+product regenerates at 1669 lines, was 1922); (iii) nothing else — the
+twin, the fuel towers and the projection are proof-facing vocabulary
+for A-1. Signature change walked (the thread-division law): the four
+SCC members, `MkIpProg` (5 fields), `rt_prog`, the probe's 11 program
+spellings, the three drivers, the ELF emitter. Evidence: ipcall_probe
++3 claims (fact 5 at budget 6 = 120, at budget 5 = `IpRfailed FStack`,
+budget 0 refuses the entry call) 235/0; rt_run 17/17; **the new
+`t_deep` wrapper (sumto 5000 at budget 1000): imp −13, x86 model trap,
+silicon EXIT STATUS 72 — the stack family pinned end to end** (the
+fail leg had never been exercised past imp before); the other 15
+wrappers unchanged on all three legs (micro_run 17/17, micro_x86_run
+16/16, micro_silicon 17/17 incl. the refusal row). **THE BUG THE
+DESIGN EXPOSED:** impc v0's depth bound was 100000 against a 512 KiB
+frame region (≈ 2600–3500 frames of the micro product's sizes) — a
+few-thousand-deep recursion would have faulted the process (SIGSEGV)
+instead of exiting 72; no differential could have seen it (nothing
+recursed that deep). Observation (Opus, from the disassembly):
+`enc_winelf`'s `_start` glue already zeroes r12–r15, so the trampoline's
+explicit `R14 := 0` is belt-and-braces today — kept, because the frame
+tier's convention makes R14 = 0 the driver's obligation, not the
+loader's. Owed, unchanged: the lift law, `ls8_id`, the world-tier
+exit-code clause (C6).
+
+**A-1 — THE KIT (2026-08-22).** models/imp/probes/fra_kit.shard (1505
+lines formatted, 513/0) + std/mem growth (89/0): the vocabulary of
+§11.1 with its once-proven laws. std/mem: `ls8_id` (the 64-bit round
+trip — owed since C2a; ls4_id's ladder at eight bytes through `mbid7`
+and `neq_lo4…7`), the four word-grain framing laws
+`load_le_store_le_below/above` and `load_le_set_below/above` (generic
+in both widths, induct on the read width), and `store_le_get_congr`
+(a store's byte depends only on the base's byte — the law that
+compares patch lists below a cut without byte-index arithmetic); the
+two byte framing fulfills now cite internal twins `sgb`/`sga`
+(std/bytes' precedent). The kit: the Int-height tower `xt c f` with
+`xt_peel`/`xt_stop` and `kf K f` (`kf_s`); **the GENERAL SEAM
+`xseq_app`** — `xeval_seq (xt c f) (a ++ b) = xcont (xt (c − |a|) f) b
+(xeval_seq (xt c f) a)` for every prefix (no purity premise: the same
+fuel flows through both sides; A1's `vxg_seam` needed `vx_regis`
+because it let the prefix run at a DIFFERENT tower); the projection
+`xo_fr`; the patch grammar `FPatch` (word/byte), `fp_mem` (apply,
+oldest first), `fp_wordv` (the newest word at a slot), `fbelow` (the
+program's patches), the discipline `fp_disc`, and the laws: **`fp_read`**
+(a frame read under the discipline is the newest word at its slot;
+every other patch is a disjoint skip — `al_lt`, the slot lemma, needs
+an INTEGER CUT: 8·(qa − qb) ≥ 1 ⟹ qa − qb ≥ 1, taken as a `have`
+whose tight negation the Farkas engine refutes at multiplier 8 — a
+one-step combination cannot), **`fp_below_b` / `fp_below_lw`** (below
+the cut, bytes and words at any width see only the program's patches),
+the `fbelow` and `fp_disc` cons laws. Iteration log (the pricing
+datum): every proof closed on its FIRST structural attempt; the
+iterations were four Farkas certificates (the engine's slot table in
+the trace names every row — read it, never guess), two dangling pivots
+(`(inst slo slo) (inst v v)` on IH cites whose conclusion does not
+mention them), one rewrite side, two paren counts. Nothing here is
+program-specific; A-2 states the expression lemma in this vocabulary.
+
+**A-2 — THE EXPRESSION LEMMA (2026-08-22).** models/imp/probes/fra_kit.shard
+(652/0) + models/imp/probes/gen_fra.py. `fe_sound`: for every
+expression `ixf_exp` accepts, at every tower at or above `ixf_ecost e`,
+from any register file with R15 = fp and R14 = dep over a patch list
+under the discipline with the locals read-through (`fe_ctx`), the
+emission's run equals `fe_out v RS RUN M'` — RAX = imp's value, the
+non-scratch registers carried, the scratch (RDX R10 R11) spelled as
+projections of the run itself (no witness), and the memory
+`fp_mem mem0 (fp_app (fe_tr … e …) psx)`: the spill-trace twin's patches
+on top of the entry list. Structure: one STEP LEMMA per constructor
+shape (25: const, loc, ext, trunc×3, shl×2, shr, rotr32, load, six
+64-bit ops, three 32-bit ops, div, rem, eq/lt/le) with the sub-runs'
+induction hypotheses as explicit premises — each checkable alone — and
+the induction `fe_sound` that case-splits the emission exactly as
+`ixf_exp` does (refused shapes close by `None ≠ Some`), derives the
+sub-run hypotheses from the IHs (a at the entry file, b at the
+post-spill file over `psx2 = FWord addr va :: Ta ++ psx`, with
+`fe_ctx` rebuilt at d + 1 through `ctx_intro`), and cites the step
+lemma. Supporting laws landed on the way: `fe_len` (emission length =
+`ixf_elen`), `fe_band` (every imp value in [0, 2^64) under banded
+locals + constants-in-band — the spilled word's `ls8_id` needs it), the
+twin's laws `fe_tr_disc/locs/below/min`, the seven straight-line block
+lemmas, `ixf_dep/elen/oplen_nonneg`, the product-order kit
+(`mul_nonneg`/`le_mul_r` ported; `ediv_nonneg`/`ediv_le_self` from the
+kernel's euclidean axioms), `pow2_32/64` in std/bits, the 15 register
+accessor laws + `fe_out_of_norm` (the closing never EVALUATES an
+accessor: evaluation opens it on the opaque sub-run file).
+**Two translator findings:** the frame tier now REFUSES U8 binary ops
+(a 64-bit add of bytes ≠ imp's byte wrap) and the U32 BITWISE trio (the
+32-bit forms mask, imp's band/bor/bxor at U32 do not — agreement would
+need a per-kind operand band) — neither is emitted by impc or the
+runtime (products are U64; U32 = the address ITrunc), so the generic
+path loses nothing; differential 16/16 unchanged. **The pricing datum**
+(this is what #27's engine would replace): fra_kit.shard = 36k lines,
+of which ~24k are generated by gen_fra.py (in-tree, banner-marked,
+`splice`-regenerable; the 2026-07-12 ruling's prescribed form; #18
+commented). Every generated claim closed on its FIRST structural
+check; the iterations were certificate multipliers (read off the
+checker's slot table), paren counts in the generator, `(inst …)` pins
+for pivots, and the compute stop-set discipline. Hand-written: the
+kit's laws, the block lemmas, four step lemmas (the templates). Gotchas
+recorded in memory: compute stops are one form `(stop a b c)`; compute
+does not enter a stuck `if`'s branches; `unfold` is single-occurrence
+outermost-first (re-spell a nested target as an equation have instead);
+`rewrite` is all-occurrence and side-restricted, rewrite-with one
+occurrence; a premised lemma needs rewrite-with; `div-facts` needs a
+literal divisor; an induction binder must not shadow a claim variable.
+Owed to A-3: the statement tier over this (`IpSet`'s store of RAX into
+a local = `fr_locs` growth; `IpStore`/`IpLoadW`/`IpStoreW` = below-the-cut
+patches; `IpFail`/`IpUnreach` = the trap clauses).
+
+**A-3 — STRAIGHT-LINE STATEMENTS, parts 1–2 (2026-08-22; commits
+7133737, fb80053).** fra_kit.shard 664/0. The statement vocabulary —
+`fs_out` (every scratch register incl. RAX as the run's own), `ips_tr`
+(the straight-line statement twin: the slot word on top of the
+expression spills), `fl_set`/`fr_locs_set` (the locals relation under a
+set), `ilset_some/lo/hi`, `int_eq_eq` — and three step lemmas generated
+by gen_fra.py's `stmt` mode: `fs_step_set` (`fe_sound` → `fe_st_run` →
+`fs_out`), `fs_step_fail` (RDI := 70 + family, XCall the exit shim — Some
+XTrap in the pure tier), `fs_step_unreach` (the word load no window
+reaches traps either way; case-split on the low guard). Part 3 —
+`IpStore` / `IpLoadW` / `IpStoreW` — is OWED: the inline attempt fought
+the `unfold xminstr_leaf cannot reach a match-arm body` gate; they want
+once-proven word-load/store block lemmas (`fe_ldw_run`/`fe_stw_run`, the
+`fe_st_run` shape) first.
+
+**A-4 — CONTROL LANDS (2026-08-23; commits 4372773 + this).**
+models/imp/probes/fra_kit.shard 726/0 (102743 lines formatted, of which
+39610 are gen_fra4.py's) + models/imp/probes/gen_fra4.py (the A-4 emitter,
+importing gen_fra.py). THE THEOREM OF THE SLICE, `ipt_sound` — §11.1(5)'s
+ONE induction: a request `r` (a statement, a statement list, or a while
+request — the loop body under `xeval_loop`, since the engine re-enters on
+exactly that list) that the frame tier accepts (`ixt_emit r = Some is`),
+at imp fuel `f` and at EVERY x86 tower `xt c (kf K f)` with `c` at or
+above the request's own cost and `K` bounding every statement cost in
+the tree (`ixf_skok K (ixt_body r)`, `1 ≤ K`), from a context file
+(`fe_ctx`, R14 = dep, R15 = fp, constants in band, the spill depth within
+the window), runs to `ixt_expect r out RS RUN MEM'`: a NORMAL imp outcome
+is `fs_out`/`fw_out` over the twin's memory (`ipt_tr`: the statement
+patches newest-first, outcomes stay `ipstmt`'s own), a FAILED outcome is
+`Some XTrap` (the exit shim), a TRAPPED outcome is the run itself (imp
+traps are outside the theorem, §11.1(1)). Under the A-4 FENCE `ixf_a4`:
+no call (A-5), no byte store / word op (A-3 part 3) — the induction's
+arms for those are refusals, lifted by regenerating.
+
+Structure (all generated, every claim closed on its first structural
+check; the iterations were Farkas slot counts, binder pins, paren
+counts, and the two DSL facts below): the side-predicate EXTRACTIONS
+(25: `a4/scb/skok` × tail/head/if_t/if_e/while_b + the expression parts +
+`skok_cost`, `sdep_*` as `imax2` inequalities); THE TWIN LAWS `ipt_mem`
+(imp's memory after a normal run = the base under the twin's patches
+below `slo`) and `ipt_ctx` (`fe_ctx` preserved at the post-state) — the
+first two instances of the dispatcher induction, imp-side only; nine
+x86 BLOCK LEMMAS over an explicit S-tower (if then/else × norm/trap,
+loop-rest exit/norm/trap, loop-statement brk/trap — the block/loop
+choreography proven once, outcome-specific so no wrapper function has
+to mirror the interpreter's match shape); nine control STEP LEMMAS
+(`fs_step_nil/cons/cons_fail/if_t/if_e/while`, `fw_step_exit/iter/
+iter_fail`) generic in the imp outcome through `ixt_expect`, the
+sub-runs' simulations as premises — the A-2 recipe at statement
+granularity; `slen_cost` (emission length ≤ statement cost); and the
+induction itself (673 generated lines before formatting): each arm
+decomposes the engine's run, derives the sub-requests' premises (sides
+by extraction, the post-state by the twin laws, heights by arithmetic),
+re-enters the IH at `xt (c + K) (kf K f2)` through `kf_s` + `xt_add`,
+and cites the step lemma.
+
+**Three findings that moved into the TRANSLATOR** (to_x86.shard,
+output-identical: differential 16/16, silicon 17/17, micro_elf
+byte-identical): (1) THE BLOCK DISCIPLINE — a nested statement list (a
+loop body, an else branch) enters through its own `XBlock`. The encoder
+emits nothing for a block, but `xeval_seq` hands one fuel unit per
+POSITION, so a spliced list would put the instruction after it at
+"position + the list's length", a quantity bounded only by the imp fuel
+tower — exactly the Nat-inequality swamp §11.1(4) rejected; a block body
+runs at its block's own fuel and the instruction after the block at the
+block's position, so every statement's emission length is LOCAL (a
+block counts one), the general seam is applied at statement granularity
+only, and the per-program ratio `K` is a maximum over statement costs
+(`ixf_scost`: ecost + 4 for a set, + 3 for an if, + 4 for a while, 8 for
+a fail). The then branch needs no block (it is already the tail of the
+cons after the inner block). (2) `ixf_stmts` became the mutual pair
+`ixf_stmt`/`ixf_stmts` — "a list runs its head's emission then its
+tail's" is now the definition, not a nine-arm lemma. (3) `ixf_sdep`
+became `ixf_sdep`/`ixf_sdeps`; likewise every list predicate of the
+proof tier is a mutual pair with the per-statement part NAMED, so an
+extraction unfolds one layer and never spells a match term. Also found:
+`fs_step_unreach` is not a clause of the theorem (IpUnreach is an imp
+trap — outside); it stays as the machine-behavior record.
+
+**Proof-DSL facts (canonical, new this slice):** `case-on` on a VARIABLE
+does not substitute — the fact is `hyp 0` and every re-spelling of a
+premise must rewrite the captured constructor equation (and an
+outcome variable must be folded BACK, `rl`, before the premise whose
+right side names it); every `have` and every `inject` product along the
+path is a Farkas slot, in chain order — certs come from a tracker, never
+by hand; `reduce` does not enter the branches of a stuck `if` (fold an
+inner literal `if` by `if_f`/`if_ff`); claim premises are cited by
+index, haves by name; a lemma binder the goal pattern leaves dangling
+needs an `inst`; `(int_eq 1 0) = False` negates to an EQUATION and is
+refuted with G = −1; `wf-induct`'s IH carries the ordering premises
+after the claim's own; `shardfmt` must follow every splice (the
+generators emit one-liners — 102k lines formatted from ~64k emitted).
+Owed: A-3 part 3 (lifts the store/word-op fence), A-5 (calls: args as
+patches at fp + own + 8j, frame disjointness, the R14 mirror, `ixf_kok`
+over fn bodies), A-6 (`valid_frame` + `iprun`/`xrun_fn`, the promotion of
+fra_kit out of probes/).
+
+**A-3 — PART 3 LANDS: THE MEMORY STATEMENTS (2026-08-23).**
+fra_kit.shard 741/0 (116769 lines formatted; 726/0 at A-4). `IpStore` / `IpLoadW` /
+`IpStoreW` are lifted from the fence — `ixf_a4s` now refuses only the
+call (A-5). Three hand BLOCK LEMMAS over an explicit S-tower, the
+`fe_st_run` shape: `fe_ldw_run` (RAX := [RAX]), `fe_stw_run` ([R10] :=
+RAX, the word), `fe_stb_run` ([R10] := RAX, the byte) — `xt_peel2`, one
+`compute` with the two window guards rewritten, `compute` again. The
+`unfold xminstr_leaf cannot reach a match-arm body` gate part 2 fought is
+not on this path at all: with the fuel a constructor tower, `compute`
+runs the interpreter THROUGH `xminstr_leaf` with no unfold, exactly as
+`fe_st_run` / `fe_rl_run` already did for the frame slot. Step lemmas by
+`gen_fra.py stmt` (the block now carries its banner and is spliced like
+the others; `splice` prepends a banner an emitter omits — the twin-laws
+banner had been lost that way once): `fs_step_loadw` (fe_sound →
+`fe_ldw_run` → `fp_below_lw` through the twin: the word below the cut
+read from the machine's memory IS imp's → `fe_st_run`), `fs_step_store`
+/ `fs_step_storew` (ONE generator: the binary choreography of A-2 with
+`fe_sound` cited for both operands, the context at d = 1 rebuilt by
+`ctx_intro` as fe_sound's own IBin arm does, the reload's `fp_read`, then
+ONE patch below the cut — `fp_mem_cons_b` / `fp_mem_cons_w`). The twin
+needed nothing new: `ips_tr` spelled the three arms at part 1, and the
+patch laws (`fbelow_b_lo` / `fbelow_w_lo`, `fp_disc_b` / `fp_disc_w_lo`,
+`fr_locs_b` / `fr_locs_skip_lo`, `fp_below_lw`, `ldw_lo` / `ldw_hi`) were
+all in the kit since A-1. `gen_fra4.py`: eight extractions
+(`scb_{store,storew}_{a,v}`, `scb_loadw_a`, `sdep_{store,storew,loadw}`),
+the engine decompositions `arm_store` / `arm_loadw` shared by the three
+dispatcher inductions, T1/T2 leaves (T2's set leaf generalized to
+`set_like` — the word load is a slot store of the loaded word, in band
+by `ldw_lo/hi`), the `ipt_sound` arms, the `slen_cost` arms. Every claim
+closed on its first structural check except the two store lemmas, which
+failed once on an unresolved citation: `add_zero_r` is std/mem's
+INTERNAL lemma (not in its mod.req), so the kit has its own `add0` — the
+spill slot is spelled `(+ nl 0)` by `ixf_spill nl 0` and `nl` by
+`ips_tr`, reconciled by one rewrite on the machine side. No translator
+change. A finding worth recording: the machine's memory guard is WEAKER
+than imp's (the x86 fence is the module window [xmemlo, xmemhi), imp's
+the program window [mlo, slo)); the theorem never sees the gap because
+an imp trap is outside it (§11.1 (1)), and on the normal leg imp's
+guards imply the machine's — the window facts of `fe_ctx` are exactly
+what the step lemma spends. Gotchas: a `(rewrite (lemma X) …)` citation
+resolves against the file and the `use`d modules' mod.req SURFACES, not
+their internals; `unfold fp_app rhs` is unsafe when the RHS's register
+file carries a sub-run whose memory contains an earlier `fp_app`
+(outermost-first picks THAT one and leaves a stuck match) — state the
+unfolding as an equation have over the patch list alone; `(compute
+both)` closes `(xw8) = (iw8)`. Owed: A-5 (calls), A-6 (the theorem).
+
+**A-5 — THE CALL: DESIGN (2026-08-23; written before the first edit, the
+ground truth for the slice).** Theorem A's last statement form. The
+statement `(IpCall i k args)` compiles to `iargs ++ [R15 += own; XCall k;
+R15 −= own] ++ ixf_st i`, the callee to `enter ++ zero ++ [XBlock ib] ++
+ir ++ leave` (see the translator changes). The proof follows §11.1's
+design: the call engine is the FOURTH request `(IqCall k)` — its imp side
+is `ipcall f … k lc mem` (the request's locals ARE the argument values,
+so `fe_ctx`'s `fr_locs fp lc psx` says "the args sit in the callee's
+frame at fp"), its machine side `xeval_call`, its expected outcome
+`fe_out v` (RAX = the result, R14/R15 carried, the scratch as the run's
+own), its cost 0 and body `Nil` (every per-fn fact comes from the TABLE
+premises instead). At a call statement at imp fuel S f2 the callee runs
+`ipcall f2`, the IqCall IH at f2; inside the callee at S f3 the body runs
+`ipstmts f3`, the IqStmts IH at f3 — the one induction absorbs both
+levels with no off-by-one, which is why the call is a request and not
+an inline decomposition. The caller instantiates the IqCall IH at
+fp := fp + own, lc := the arg values, nl := their count, own := 0 (the
+callee's frame facts are the callee's business, derived from the table).
+
+TRANSLATOR (models/imp/to_x86.shard; bytes identical for every program
+the corpus compiles): (i) `ixf_fn` puts the body in its own `XBlock` —
+the block discipline at fn level, for the same reason as A-4's: the
+result expression after the body needs LOCAL fuel, and a spliced body
+would leave it "position + |body|"; (ii) `ixf_fn` REFUSES a fn with a
+non-U64 parameter (`ixf_p64`): `ipcall` bands the args to their kinds on
+entry (`iband_args`, `mod v (ikmod k)`) while the machine stores the raw
+word — they agree exactly at U64 (the identity on a banded value).
+Every compiled program has U64 params (rt.shard's four fns, impc's
+`u64s`); the only non-U64 params live in ipcall_probe (imp-only). The
+named door: kind soundness (a well-kinded arg's value lies in its kind's
+band) would lift the restriction and is a separate induction. (iii) THE
+CARVE GATE RESERVES ONE MORE FRAME: `ipstack + (ipdepth + 1) · maxown ≤
+ipmemsize`. THE BUG THE PROOF FOUND: the args are stored into the
+callee's frame BEFORE the depth check in the callee's prologue, so a
+call at depth = ipdepth writes `8·nargs` bytes above the last budgeted
+frame; with the old gate those stores can fall outside the window, and
+the x86 model TRAPS where imp fails `FStack` (the silicon: a fault
+instead of exit 72). One frame of slack closes it (the micro drivers'
+512 KiB / depth 1000 have room).
+
+THE TWIN grows `own` (the SCC `ipt_stmt/ipt_while/ipt_stmts/ipt_tr` take
+it after `nl`: the arg patches live at fp + own + 8j) and a fourth member
+`ipt_call` (zero patches `fz_tr`, the body's twin at the callee's frame,
+the result's spill trace — newest first; `Nil` off the normal leg); the
+statement twin's IpCall arm is `(FWord (fp + 8i) v) :: ipt_call … ++
+ipt_args …` with `ipt_args` the structural arg twin (each arg's spills
+then its slot word). New patch vocabulary: `fp_wmin slo lo ps` (every
+word patch is a program patch or sits at ≥ lo — THE FRAME-DISJOINTNESS
+predicate), `fp_away ps a` (no word patch at a), `fe_tr_max` (the fifth
+generated twin law: the spills lie below fp + 8(nl + d + dep e)) — the
+arg slot lemma needs both a min and a max bound because the later args'
+spills sit BELOW the earlier slots while their stores sit above.
+
+THE PREMISES (appended; indices 0–11 unchanged, the fence premise 9 goes
+vacuous this slice and is deleted in the follow-up): `ixt_fr r nl own
+(ixf_maxown fs)` (the frame bundle: 8(nl + 1 + sdep body) ≤ own, own ≡ 0
+mod 8, own ≤ maxown — True for a call request), THE ROOM INVARIANT
+`fp + own + (dmax + 1 − dep) · maxown ≤ xmemhi` (uniform across requests
+because the call request's own is 0: the callee's frame is the
+(dep+1)-th), `0 ≤ dep`, `dep ≤ dmax`, `dmax < 2^64` (the unsigned CLtU
+and the R14 increment), the TABLE `ixf_fns dmax fail_ix fs = Some xfs`
+and `xfuncs_of m = xfs ++ [shim]`, and the per-fn predicates `ixf_fnsok
+fs` (U64 params, constants in band, the result's band) and `ixf_fnskok
+K fs` (fn cost `ixf_fcost` ≤ K, the body's statement costs ≤ K). A FOURTH
+dispatcher instance `ipt_min` (imp-side): the twin's patches satisfy
+`fp_wmin slo fp` — the callee writes only at ≥ fp + own, so the caller's
+locals survive (`fr_locs_app_wmin`). Order: ipt_mem → ipt_min → ipt_ctx
+→ ipt_sound.
+
+THE LEMMAS (hand, explicit S-towers where straight-line): the call-site
+blocks (`fc_addfp/subfp/call/argst_run`), the callee blocks (`fc_enter_ok/
+enter_fail/zero1/leave/body_blk_run`), the ZERO lemma `fz_sound` (wf-induct
+on nl − from) with the twin's laws, the ARG lemma `fa_sound` (induction
+on args: `fe_sound` at each arg, then the slot store, the context
+re-established via `fr_locs_skip` + `al_shift_own`) with `ipt_args`'s
+laws (`fa_below/disc/locs/wmin/slots`), the table laws (`ixf_tbl_at`,
+`ixf_maxown_at`, `fnsok_at`), `iband_id`, and the STEP LEMMAS: call site
+`fs_step_call` / `fs_step_call_fail`, callee `fc_step_norm` /
+`fc_step_fail` / `fc_step_stack` — every sub-run's simulation an
+explicit premise, the twins abstracted as patch-list variables so the
+step lemmas never spell `ipt_*`.
+
+**A-5 — THE CALL: LANDS (2026-08-23).** fra_kit.shard **856/0** (741 at
+A-3 part 3; +115), to_x86.shard 470/0, the impc micro differential
+fixture rows failed: 0, and the splice → shardfmt cycle is a byte-level
+fixpoint for every generated block (gen_fra.py: fe_len twin trmax
+fe_band unary binary sound stmt; gen_fra4.py: extract t1 t15 t2 ctl
+slen t3 — t15 is new). Departures from the design record, none
+structural: (i) THE FENCE DIED THIS SLICE, not in a follow-up —
+`ixf_a4`/`ixf_a4s` are deleted, `ipt_sound`'s premise list is the
+design's 20 with no vacuous slot; there is no fence anywhere in the
+file. (ii) `ixt_lc` became **`ixt_post`**: the call request's outcome
+carries the RESULT, not a locals frame, so the context law's post-state
+is per-request — for `IqCall` it exports `fe_ctx … Nil ps ∧ fe_inband
+(ihd lc2)` (the band is what the caller's `fr_locs_set` needs for the
+write-back), for the others `fe_ctx … lc2 ps` as before; extraction
+lemmas `post_call_ctx` / `post_call_band`. (iii) The caller cites the
+IqCall IH at own := 0 in `ipt_sound` but at own := own in `ipt_ctx`
+(the twin term under `ixt_post` mentions the caller's own); `ixt_fr
+(IqCall _) = (le 0 own)` discharges either way. The LAST BUG was not a
+proof gap but a lemma's: `fs_step_call_fail` carried a vestigial
+`ilset` premise copied from the normal-leg shape — undischargeable on
+the fail path (no write-back happens) and unused by its own proof.
+Removing a premise is SURGERY: every flat Farkas list in the body
+carries one slot per scope item, so the dead premise's index (11: goal
+negation at 0, premise j at j+1) had to be deleted from all 17 lists,
+not merely left zero. What else the slice taught the DSL user: lemma
+citations resolve in FILE ORDER (`fe_tr_max` needed its own generated
+block after the laws it cites); two-sided eq certs are `(list LE GE)`
+with G multiplying L−R−1 on the LE side; a wf-induct IH's measure
+binder is fresh and unnamed — cite `(hyp 1)` with NO insts and spell
+the index so the measure appears in the conclusion (`(- nl n)`), with
+the ordering discharges after the premises; `(int_eq X Y) = False`
+goals take a negated row X = Y; a case-on binder must not shadow a
+claim variable (`r` → `rt`). Named doors unchanged: KIND SOUNDNESS
+(a well-kinded arg's value lies in its kind's band) lifts `ixf_p64`'s
+U64-params refusal; A-6 (the theorem: `ipt_sound` at the program's
+entry, the table premises established once from the carve) is next.
+
+**A-6 — THE THEOREM: DESIGN (2026-08-23; written before the first
+edit, the ground truth for the slice).** The program tier: `ipt_sound`
+cited ONCE at the program's entry — the request `(IqCall k)` at dep 0,
+own 0, fp = slo = ipstack, lc = the entry argument values — with every
+premise established from `(ixf_prog p) = (Some xm)` (valid_frame IS
+this equation; no wrapper predicate), the imp run, and the computable
+side premises. Prefix `fra_` = the program tier's lemmas in fra_kit.
+
+TRANSLATOR (one change): `ixf_carve_ok` grows the three SCALAR WINDOW
+BOUNDS — `0 ≤ ipbase`, `ipmemsize ≤ 2^32` (fe_ctx's addressing bound),
+`ipdepth + 1 < 2^64` (premise 15, the unsigned CLtU) — the gate owns
+every scalar window/depth fact (A-0's precedent; without the third the
+derivation is NONLINEAR: mul_nonneg through the entry fn's own ≥ 8).
+Output-identical for every `ixf_prog` consumer in the tree (micro:
+base 65536, memsize 1114112, depth+1 = 1001 — all pass; fra_kit never
+mentions the gate today, so no proof breaks).
+
+THE PREMISE LEDGER (ipt_sound's 20 at the entry): 0/3/5/11 compute
+(IqCall emits Nil, body Nil, `ixt_fr` call = le 0 0); 1 = the iprun
+premise re-spelled (iprun unfolds to ipcall at dep 0, `ipt_run
+(IqCall k)` = ipout_of_ret ∘ ipcall, the entry patches' fbelow
+vanishes); 2 = fe_ctx (scalar clauses from the gate; fr_locs/fp_disc
+from the arg-patch laws below); 4 from the arity (extracted from the
+run) + `ixf_own g ≥ 8·np` + `ixf_maxown_at` + the carve; 6/18/19 stay
+THE THEOREM'S computable premises (`1 ≤ K`, `ixf_fnsok`, `ixf_fnskok
+K` — the KIND-SOUNDNESS door subsumes 18 later; the ratio is
+genuinely per-application data); 7/8 from `0 ≤ c`; 9 = the shim — NEW
+induction `ixf_shim_at`: under the table premise, `xfunc_at (xf_app
+xfs tl) (ixf_count fs) = xfunc_at tl 0`; 10/13/14/15 from the gate;
+12 = THE ROOM INVARIANT IS THE CARVE GATE VERBATIM at fp = slo,
+own = 0, dep = 0 (the design's checksum); 16/17 by inject on
+ixf_prog's match tree.
+
+THE STATEMENT — general form, then the entry corollary. General:
+premises valid_frame, the run at `(fp_mem mem0 (fbelow slo psx))`,
+`fe_ctx xm (ipbase_of p) slo slo (ilen args) 0 args psx`, and the
+computable four; conclusion at `xrun_fn (xt c (kf K f)) xm k rs0
+(fp_mem mem0 psx)` with rs0 = MkRegs over 13 scratch binders, R14 0,
+R15 slo. Proof: cite ipt_sound at c := c + 1 (xt_peel, an add-sub
+have), then bridge `xeval_call (S g)` → `xrun_fn g` — NEW lemmas
+`xrf_norm`/`xrf_trap` (case xeval_seq's five outcomes; both need
+`xfunc_at = Some`, extracted from the run via ipfn_at + `ixf_tbl_at`
++ a NEW xf_some lemma). The clauses: `fra_sound_v` (RAX = v, machine
+memory = `fp_mem mem0 (fp_app TW psx)`, TW the entry twin — the
+witness spelled, §11.1(3)); `fra_sound_mem` (imp's memf = the fbelow
+view — ipt_mem cited); `fra_sound_ctx` (`fe_ctx … Nil (fp_app TW
+psx)` — ipt_ctx + post_call_ctx: THE CHAINING CLAUSE, the next
+call's premise 2); `fra_sound_fail` (xeval_call = Some XTrap) and
+`fra_sound_fail_none` (xrun_fn = None — the pure tier cannot tell
+the shim from a trap, A-0's record). Entry corollary at psx :=
+`fa_words slo args` (NEW value-level arg patches; laws: fr_locs
+given the band, fp_disc by 8-alignment, fbelow vanishes → the run
+premise at mem0 itself) — the bin boundary's exact shape
+(micro_x86_run's init_mem is this term). Entry extractions carry no
+∃: opt-defaulting predicates (A-1(4)'s idiom) shared across the five
+clauses — the run forces S-fuel, `ipfn_at` Some, the arity.
+
+THE INSTANCE (the citation demo): micro, INSIDE fra_kit (importing
+micro.shard + micro_ipc_out.shard — probes importing tools fixtures
+is precedented by imp_x86_bridge). Cross-file CLAIM citation is NOT
+available (a citation resolves against the file + used modules'
+mod.req; models have no mod.req) — PROMOTING the theorem to a
+citable surface is a NAMED DOOR the composition phase (C2b, B) will
+need. Shape: the PREMISED instance — xm/v/memf universally bound,
+pinned by the ixf_prog/iprun premises; every COMPUTABLE premise
+discharged by compute against the real product (the gate, fnsok,
+fnskok at a literal K, the entry args' band); run values stay the
+differential row's business (no run literals in certs). Optionally
+one chained wrapper through fra_sound_ctx.
+
+**A-6 — THE THEOREM: LANDS (2026-08-23). THEOREM A IS COMPLETE
+(A-0 … A-6 all landed).** fra_kit.shard **905/0** (856 at A-5; +49),
+**fra_micro.shard NEW** (the corpus row: 908/0 over its closure),
+to_x86.shard 470/0 with the widened carve gate, the three-way micro
+differential 16/16, and splice → shardfmt still a byte-level fixpoint
+with the A-6 hand section appended (its `;; ====` banner is the
+generators' block terminator). Departures from the design record:
+(i) CROSS-FILE CLAIM CITATION EXISTS for plain file imports — fra_kit
+already cites imp.shard's `ilen_nonneg`; only directory-module imports
+resolve through a mod.req. So the instance lives in its own probe
+(models/imp/probes/fra_micro.shard imports fra_kit.shard and
+micro_ipc_out.shard and cites the theorems directly), and the
+PROMOTION door the design flagged is not needed: the composition
+phase (C2b, B) can import fra_kit the same way. (ii) The statement
+layer is wider than the design's five clauses: the GENERAL theorems
+`fra_sound_v/mem/ctx/band/fail/fail_none` (any psx under fe_ctx —
+`fra_sound_ctx` is THE CHAINING CLAUSE) plus the ENTRY corollaries
+`fra_entry_ctx/base/v/fail_none/mem/ctxout/band` at the `fae_words`
+patch shape (micro_x86_run's init_mem term), plus `ctx_renl` (fe_ctx
+at a different locals bound — nl appears only in the arity clause) so
+a chained call re-enters at its own arity. (iii) The instance is
+PREMISED and STRONGER than designed: `fra_micro_wrap` covers ANY
+wrapper called after init (k2 universally bound — one claim for all
+fifteen value rows), `fra_micro_deep` the fail shape (machine None,
+C6's exit-72 clause pending), `fra_micro_v` the entry call; the
+computable premises (ixf_fnsok, ixf_fnskok at K = 1000, the gate, the
+args' band) compute against the real product in ~1 s of check mode.
+(iv) The no-∃ machinery is the A-1(4) idiom at Option: extractors
+xfns_or/ipfn_or/xf_or with ok-predicates and `_get` lemmas — every
+witness is an extractor value, and the main theorems contain NO
+case-on at all (each refutation lives inside its own small
+extraction lemma: fra_wk/carve, the six scalar gate facts, fra_mod/
+funcs/lo/hi/shim/fns_ok, fra_iprun/at_ok/arity/p4/xat). (v) fra_p4's
+nonlinear step went as designed: mul_comm + mul_dist respell the
+(dmax+1)·maxown atom, mul_nonneg supplies the dmax·maxown ≥ 0 row.
+PROOF-DSL FACTS (new): a chain must not carry a bare `refl` after a
+rewrite-with that has its own terminal — one closer per chain; bare
+`(compute lhs)` folds ground prims that `reduce` leaves stuck
+((le 0 0), (mod 0 8), (int_eq 0 0)); a two-sided `(int_eq X X) = True`
+goal takes `(list (G …) (G …))`; a citation's match binds ONLY the
+conclusion-side variables of the cited side — every other binder,
+even one spelled identically in the consumer, is a dangling pivot to
+pin with an inst. CORPUS COST: fra_micro's row re-checks fra_kit's
+closure — the existing pattern for probes over models (the bridge
+probes re-check to_x86 the same way); #37 owns the strategy if this
+compounds. NEXT = C2b (runtime theorems: the managed-graph invariant
+and framing in the base+patch vocabulary) per the ratified order
+A → C2b → B.
+
+**C2b-0 — THE RUNTIME-THEOREM TIER OPENS: the design (2026-08-23;
+order A → C2b → B ratified 2026-08-22).** §11's sketch ("the
+managed-graph invariant and framing") designed against the landed
+code — rt.shard, impc's emission, the A-family's idioms — before any
+proof. One bug moves out of the runtime, two sharpenings move out of
+the sketch's wording, and the slices are cut.
+
+**THE BUG FOUND STATING IT (the A-0 tradition: the design exposes
+what no differential exercised).** rt.shard's header comment says a
+dead cell's COUNT FIELD carries the free-list link; the code linked
+through SLOT 0 (`rsto 4 8` at rt_dec's push, `rldo 6 2 8` at
+rt_alloc's pop). An arity-0 cell HAS no slot 0 — [a+8] is the NEXT
+cell's memory, so freeing an arity-0 cell smashes its neighbor's
+header. Verified at runtime before the fix (scratch driver: a =
+alloc(5,0) at 152, b = alloc(6,1) at 160, fill b, dec a, read b's
+header → 0, want 281500748356609; the reuse leg corrupts
+identically). No differential saw it because impc never allocates
+arity 0 — nullary ctors are immediates (2·tag+1). THE FIX: free-list
+links live in the HEADER WORD, whole word ([cur+0] at the push,
+[p+0] at the pop) — the discipline the release worklist already uses
+(count-field links with tag/arity preserved, because the worklist
+still reads the arity; the free list reads nothing and alloc's pop
+rewrites the header in full, so its link is the whole word). Uniform
+at every arity, no API change. Two pinned rows join rt_run (t_zero,
+t_zero_reuse: the neighbor's header survives an arity-0 free and the
+reuse of the freed cell).
+
+**WHAT B CONSUMES (read off impc's emission — the design's ground).**
+Every memory fact a per-fn theorem holds is the heap's: locals are
+engine state, the frame region is invisible to imp (A-0), and impc
+touches memory ONLY through runtime calls, constructor fills, and
+field loads. So the EXPORTED vocabulary is a ghost heap, not raw
+memory, and no law B cites mentions a patch list. The verified fill
+discipline (ic_e's Ctor arm + fill_slots + own): sub-expressions
+land first; then IpCall rt_alloc; then per slot at most one rt_inc
+(a BORROWED operand's, never the fresh cell's own address) and one
+IpStoreW into the fresh cell. So while a RAW cell is open the only
+runtime entry that can run is rt_inc on a non-raw argument, and the
+alloc/dec laws may premise raw = None. Statics: impc emits none
+today; the ghost carries immortals anyway (rt handles them,
+t_immortal pins them; static emission is P8's later story).
+
+**THE GHOST (the vocabulary of every exported law).**
+- `HCell`: addr, count, tag, arity, slots. The live heap H = List
+  HCell, NEWEST FIRST — list position is BIRTH RANK, and ACYCLICITY
+  IS THE LIST ORDER: a slot reference points only to an OLDER cell.
+  Rank is not address (free-list reuse recycles addresses; a
+  recycled cell re-enters at its new birth position) — which is why
+  the invariant carries an order the bytes don't.
+- The ghost state G: H, the sixteen free lists (addr lists), top,
+  end, and at most ONE raw cell (addr, tag, arity, filled prefix) —
+  the single-raw discipline above.
+- The roots R: a multiset (List Int) of the references the program
+  holds. B threads it — its locals' ownership map IS R.
+- `heap_rep M rb G`: the bytes mean the ghost — [rb] = top,
+  [rb+8] = end, [rb+16] = 0 (THE GHOST DEPTH CELL: written once by
+  init, read by nobody — §11's "ghost to readbacks" clause is this
+  row), [rb+24+8k] = free head k with chains linked through header
+  words, each live cell's header = count + tag·2^32 + arity·2^48
+  and slots at addr+8+8i, extents 8-aligned and pairwise disjoint
+  inside [rb+152, top), top ≤ end.
+- `hinv G R`: EXACT COUNTS — every live non-immortal cell's count =
+  R(addr) + inbound slot references from live cells and the raw
+  fill prefix — plus slot VALIDITY (odd immediate, or a reference
+  to an OLDER live cell or an immortal), counts ≥ 1, the immortal
+  band (≥ 2^31) exempt from exactness, free-listed extents disjoint
+  from live ones and class-matched, the header bands (tag, arity
+  < 2^16).
+- THE PRECISION THEOREM (the pure crown): hinv ⟹ live = reachable
+  from R ∪ immortals. Counting IS liveness — MEMORY.md §3's claim
+  becomes a theorem. Proof shape: a live cell's count ≥ 1 forces a
+  root or an inbound edge; induct along birth rank (acyclicity is
+  the list order, so the induction is structural).
+
+**THE LAWS (at the ipcall grain over rt_prog's table — table lemmas
+pin ipfn_at (rt_app (rt_fns rb) fs') at 0..3 generically — in STRONG
+total-correctness form).** Fuel: a cost function per law (rtc_init/
+alloc/inc constants; rtc_dec a ghost measure, coarse Σ(2 + arity))
+with the premise `le (rtc_*) (int_of_nat fuel)` (std/nat's bridge);
+conclusion: the call RETURNS Some (IpRv r M') (or the oom fail) with
+heap_rep', hinv', the ghost transition, and the REGION FRAMING law
+(mem_get M' a = mem_get M a outside [rb, end)) — the C4/I-O seam.
+REJECTED-because, the premised-on-Some form (Theorem A's shape):
+B's conclusion is TOTALITY — it must PRODUCE runs — so a premised
+law would need a separate sufficiency pass plus fuel monotonicity;
+one total-correctness induction serves both, and the fuel premise
+stays Farkas-shaped through int_of_nat.
+- `rth_init` (premising lo ≥ rb + 152): the empty ghost.
+- `rth_alloc`: raw := Some (popped free[n] class-matched, else the
+  bump under the carve check), count 1 = exactly the returned root;
+  the FOom leg exactly when free[n] is empty and top + 8 + 8n > end.
+- the FILL law (an ENGINE law about IpStoreW under heap_rep, not an
+  rt call): a valid word into the raw cell's next slot; an OWNED
+  reference transfers out of R (exactness balances). The SEAL is
+  ghost-only: fully filled raw → live at the newest rank.
+- the READ laws (heap_rep extraction): header and slot loads of
+  live cells return the ghost values — B's scrutinee and fields.
+- `rth_inc`: R + {v}; immediate and immortal legs are ghost-heap
+  identity; the 2^31 boundary SATURATES — a count reaching the
+  immortal band freezes the cell immortal forever, a sound LEAK
+  (exactness exempts it from then on) recorded as the law's shape,
+  not an error. Stated with raw CARRIED (the fill window runs incs).
+- `rth_dec` — THE RELEASE THEOREM (the arc's deepest): R − {v}; the
+  ghost transition `gh_dec` is a PURE worklist mirror of the code's,
+  terminating along birth rank (a dying cell's children are older),
+  and its characterization is proven ONCE, engine-free: gh_dec
+  removes EXACTLY the cells unreachable from (R − {v}) ∪ immortals,
+  surviving cells keep their bytes, freed extents join the matching
+  free class, hinv is restored. The engine leg then shows rt_dec's
+  two nested loops IMPLEMENT gh_dec (loop invariants marry the
+  concrete worklist — count-field links — to the ghost's).
+
+**DEPARTURES FROM §11's SKETCH, surfaced.** (i) "preserves every
+readback" is delivered GHOST-LEVEL: surviving cells unchanged plus
+reachability preserved. rb_T stays Theorem B's per-type instrument;
+its preservation is a B-side corollary (a readback reads only
+reachable cells). (ii) The FPatch base+patch vocabulary (CERT.md
+§5's "separation library in this vocabulary from day one") is NOT
+imported: no exported law needs a patch list (B holds no memory fact
+beyond heap_rep — the window IS the heap), the internal choreography
+uses std/mem's framing laws directly, and keeping fra_kit out of the
+closure keeps every future B product's CI cost down (#37). The door
+stays open: if C4's I/O framing wants patch-footprint statements,
+the region framing law restates in FPatch terms then. A deliberate
+narrowing of a ratified note's expectation — flagged in the gate
+report, not silent.
+
+**RESIDENCE.** models/imp/probes/rth_kit.shard — imports kernel,
+std/mem, std/nat, imp.shard, rt.shard ONLY (not fra_kit, not
+to_x86): C2b's closure is machine-free, and B's per-program certs
+import rth_kit and fra_kit as SEPARATE closures. Generators: hand
+first; a gen_rth.py under the gen_fra splice/banner/shardfmt/
+byte-fixpoint contract the moment step-lemma repetition emerges
+(expected at the alloc slice).
+
+**THE SLICES.** C2b-0: this record; the free-link fix, the two
+pinned rows, the differential re-runs. C2b-1 THE KIT: ghost types,
+heap_rep/hinv, extraction lemmas, the Nat bridge, the engine
+stepping style proven end-to-end on rt_init — rth_init LANDS as the
+template. C2b-2 THE PURE THEORY (engine-free): reachability, the
+precision theorem, gh_dec with termination and the exact-free
+characterization. C2b-3 rt_alloc + fill/seal/read (the constructor
+story complete). C2b-4 rt_inc. C2b-5 rt_dec (the engine leg; the
+release theorem assembled). C2b-6 the instance: rt_run's scenarios
+re-derived FROM the laws in check mode, the corpus row, the ledger
+close. Acceptance per slice: targeted checks green locally, CI FAIL
+set == baseline at each commit, rt_run green throughout. Out of
+scope, named: readbacks (B), the machine side (A, done), World I/O
+(C4), reuse/uniqueness (MEMORY.md §5's rung, a later arc).
+
+**C2b-1 — THE KIT LANDS (2026-08-23): rth_kit.shard 338/0, rt_init's
+law complete in pieces.** models/imp/probes/rth_kit.shard (2231 lines
+formatted) + models/imp/probes/gen_rth.py (the generator, splice
+contract as gen_fra's). What stands: (i) THE NAT-FUEL BRIDGE —
+npred/nS/ntl with `nat_open` (a positive int_of_nat budget forces S),
+`int_npred`, and `nat_peel` (a budget of k opens k LITERAL successors:
+one rewrite, then the engine computes through the tower) — every law's
+fuel premise is a Farkas-shaped `le rtc (int_of_nat fuel)`; (ii) the
+GHOST types (HCell/HRaw/GHeap; gh_init) and the memory-effect terms
+(m_zh, m_init) — engine claims conclude in named effect terms, pure
+lemmas carry the ghost across them; (iii) the TABLE lemmas rt_at_init/
+alloc/inc/dec at a symbolic program tail; (iv) the BAND COLLAPSES
+modu32/64_id (fra_kit's mod64_id shape) and bandu32/64_id (std/bits'
+mask_word32/64 bridge — iexp's ITrunc narrows via `band`, NOT mod);
+(v) THE STEPPING TEMPLATE rth_step1 and the generated ENGINE LEG
+`rth_init_run`: at tower fuel 21 the init call RETURNS
+Some (IpRv 0 (m_init m rb lo hi)) — landed on the FIRST generated
+attempt; (vi) the (iw8) word view (iw8_int, ls8w, ldw_below/above) and
+byte twins (sga8); (vii) the FULL heap_rep and hinv definitional
+layers (all future slices' vocabulary: exact counts, birth-rank
+acyclicity, extent separation, free chains through HEADER-word links);
+(viii) the m_zh read laws (below/above/head words; getb/geta bytes) —
+three wf-inducts replace per-read skip chains; (ix) rt_init's law:
+`rth_init_run` + `hr_init` (the bytes mean the empty ghost) +
+`hinv_init` (the empty ghost is well-formed at no roots) +
+`m_init_fr_lo/hi` (byte framing outside [rb, rb+152)). EXPORT SHAPE
+departure: the law stands as NAMED PIECES, not one bundled claim —
+B cites run/rep/inv/framing separately; bundle when a consumer wants
+one door. GHOST refinement: the heap bracket lives in the ghost (glo
+field), so hinv is transportable without re-premising rb relations.
+Splice → shardfmt byte-fixpoint verified; corpus row registered.
+PROOF-DSL FACTS (new, canonical): case-on is `(case-on EXPR Type
+((case Ctor (binders) PROOF) …))` and a case hyp is NOT a Farkas slot
+until a have rewrites it into a premise; a wf-induct IH is POSITIONAL
+(`@0/@1`) — inst cannot name its binders, so bind them by rewriting
+the fuller side (rl on rhs), and nested case-ons shift its hyp index;
+IH-citation obligation tables hold claim premises + cut case-hyps
+ONLY, while have-discharge tables also hold prior haves; compute folds
+a REACHABLE record accessor but leaves one under a stuck if — rewrite
+_of_def only for accessors compute left visible; `(stop a b)` takes
+several names; rewrite-with is a proof form, never a steps step;
+ipstmts fuel is DEPTH-shared (one S serves the last statement and the
+Nil arm), so rt_init's 19-statement body needs exactly 21. GENERATOR
+LAW RE-LEARNED (gen_fra's bea6925, now in gen_rth from birth): a
+spliced block ends at the NEXT `;; --- ` section header — without
+that terminator the first re-splice swallowed every hand section
+after its banner (recovered by rebuild; the file was untracked).
+COMMIT THE HAND SKELETON BEFORE THE FIRST SPLICE. NEXT = C2b-2 (the
+pure theory: reachability, the precision theorem, gh_dec +
+termination + the exact-free characterization — engine-free).
+
+**C2b-2 (part 1) — THE PRECISION THEOREM LANDS (2026-08-23; rth_kit
+419/0, 9901 lines formatted, splice→shardfmt byte-fixpoint).**
+COUNTING IS LIVENESS is now a checked theorem: `gh_precision` — under
+valid cells, the exact-count cover, immortal seeding and separated
+extents, EVERY live cell is in the frontier `gh_reach` computes — and
+`hinv_reach`, the corollary Theorem B will cite: hinv with no raw cell
+open puts every live cell in reach of roots ∪ immortals. THE PROOF
+SHAPE (the design record's induction went through as designed): one
+STRUCTURAL induction, newest-first, with the walk invariant `p_cov`
+("every cell whose count exceeds its inbound-from-the-walk references
+is already frontiered"); the head cell can have NO inbound reference
+at all — acyclicity is the list order (`inb_zero` via `slots_nmemb_cin`:
+valid slots are odd or older, and separation (`edisj1_nmemb`) makes the
+head's address unique, 8-alignment (`mod8_even` via kernel mod_unique
+at witness 4q — NO parity Farkas needed) keeps it off the odd side) —
+so its count forces a root or an immortal seed; `p_cov_step` re-covers
+the tail once the head's slot references join the frontier (a cell
+losing its last in-walk supporter was supported by the head, whose
+slots now frontier it). Exactness enters ONLY at the entry instance
+(`exact_cov`). MACHINERY LANDED: the andb respell of every chain
+predicate (fe_ctx's extraction idiom; strict-arg compute evaluates all
+clauses up front) + the GENERATED extraction family (gen_rth `extract`:
+~50 per-clause peels for cells_ok/counts_ok/p_cov/e_brk/e_disj*/
+roots_ok/slots_ok/aligned8/all_in/hinv/heap_rep — landed green on the
+first splice), the reachability vocabulary (slot_refs/imm_addrs/
+gh_reach/all_in/p_cov), and the list library (memb/count_in/iapp
+bridges, self-inclusion, prefix extraction through fexts_app).
+PROOF-DSL FACTS (new): `induct` SUBSTITUTES into premises (no ctor
+equation hyp; the IH is hyp 0 at chain level and shifts under case-on);
+an int_eq premise IS a linear Farkas row (int_eq_eq's shape), and a
+False-int_eq goal's G row is the equality with sign picking direction;
+div-facts rows appear as slots in EVERY table under it. NEXT: C2b-2
+part 2 — gh_dec, the pure release worklist (code-order, |cells|+|wl|
+measure), its hinv preservation, and the survivor framing.
+
+**C2b-2 (part 2a) — gh_dec DEFINED AND BYTE-VALIDATED (2026-08-23).**
+The pure release: `gh_slots` (one dying cell's slots, left to right —
+shared children lose a count via `hdecc`, dying children move from the
+cells to the worklist FRONT, the code's LIFO link) and `gh_wl` (pop,
+process, then the popped cell joins its free class via `fls_push`) at
+an explicit Int BUDGET — the |cells|+|wl| descent is a theorem, not a
+syntactic measure, so the loop takes fuel and `gh_dec` runs it at
+|cells|+1 (the imp world's own style; sufficiency is the laws'
+business).  models/imp/probes/rth_run.shard (NEW corpus row,
+pin_run imp_rth_run): the RUN-MODE DIFFERENTIAL — small heaps built
+through the real runtime, the expected ghost spelled by hand,
+`heap_rep` checked computable-True BEFORE and AFTER rt_dec/gh_dec
+(the chain cascade c→b→a, the shared-child survival, the shared-count
+drop): 4/4 — the mirror's discovery order, LIFO worklist and
+free-chain push order are pinned byte-for-byte against the real
+memory before any preservation proof.  NEXT: hinv preservation
+through gh_dec (the release theorem's heart) + survivor framing.
+
+**C2b-2 (part 2b) — DESIGN: hinv_dec, the preservation of hinv
+through the cascade (2026-08-23; written before the first edit).**
+THE THEOREM: `hinv rb g r` ∧ `graw g = None` ∧ `memb r v` ⟹
+`hinv rb (gh_dec g v) (rrem r v)` (rrem = drop the first occurrence),
+plus `dec_sub` — every surviving cell keeps its addr/tag/arity/SLOTS
+with count ≤ (`hsubq`, an ordered-subsequence check; note the sketch's
+"survivors keep their bytes" holds for STRUCTURE — a shared child's
+count byte drops, and the engine leg re-establishes heap_rep from the
+ghost, not by framing).  Five legs by gh_dec's shape: odd v and
+hfind-None are VACUOUS (a root is a live address: 8-aligned hence
+even, and present); immortal v is ghost identity (the exemption
+absorbs the dropped root — the sound leak's pure face); shared v is
+one `hdecc` (both sides of v's exactness equation drop by 1, no other
+equation moves); dying v is the cascade.
+THE WALK INVARIANT `winv` (one andb bundle over the mid-state
+(cells, fls, wl, ws) with fixed context cs0/es0 = ext_all g/r' —
+extractions generated): (1) `wexact` — every non-immortal cell's
+count = roots + inbound from cells + inbound from wl's undischarged
+slots + occurrences in ws, the slot suffix currently being released
+(the gh_wl level is ws = Nil; POPPING IS REASSOCIATION: cur leaving
+wl turns its inb term into the entry ws term, exactly); (2) cells_ok;
+(3) roots_ok; (4) `eall` — every mid-state extent is an es0 MEMBER;
+(5) `msub` — the mid-state address multiset is COUNT-DOMINATED by
+es0's addresses; (6) hsubq vs cs0; (7) aligned8 (haddrs cells).
+THE ZERO-SUPPORT ARGUMENT (the engine): a cell moves to the worklist
+only at count exactly 1 while a reference to it is being released, so
+its exactness equation forces every other support term to 0 — no
+root, no live slot, no worklist slot, no unwalked occurrence names it
+again — which is precisely why removal preserves cells_ok (nothing
+cited it), roots_ok (no root holds it), and the survivors' equations
+(its own slots move with it into wl's inbound term).
+SEPARATION IS NOT THREADED: e_disj/e_brk are RE-DERIVED at exit from
+the STATIC es0 facts via the membership toolkit — eb_memb/ed_memb2
+extract per-member and per-pair facts from es0, ed_intro/eb_intro
+rebuild over the final list, needing only (4) eall and nodup of the
+final addresses, which (5) delivers through msub_anodup (msub xs A0 ∧
+anodup A0 → anodup xs; anodup A0 once from e_disj+e_brk via
+ed_nodup).  msub is the permutation-stable carrier: moves are count
+algebra (cin_iapp, msub_ins, one walk lemma per move shape — cells→wl
+at hrem/Cons, wl→free at fls_push with fp_cin), where positional
+nodup would fight every permutation.
+TWO MASTER INDUCTIONS: `gh_slots_inv` (structural on ws; five cases —
+odd skip, find-None skip, immortal skip, shared hdecc, dying move —
+concluding winv at ws = Nil AND |cells|+|wl| CONSERVED) and
+`gh_wl_inv` (wf-induct on the budget k with `le (|cells|+|wl|+1) k`:
+the fuel exit is Farkas-vacuous, each iteration drops the sum by
+exactly 1 — cur leaves, gh_slots conserves).  Conclusions through
+pair projections (gsc/gsw, gwc/gwf).  Entry = ONE c2w move from
+(cells0, fls, no wl) + the reflexivity lemmas; exit rebuilds hinv's
+13 clauses (scalars carry — with_gcells/with_gfree touch nothing
+else; counts_ok = wexact at Nil/Nil).
+THE EXACT-FREE CHARACTERIZATION IS A COROLLARY, NOT A NEW INDUCTION:
+"no leak" = hinv_reach AT g' (already proven — cite at B); "nothing
+live was freed" = the B-side readback-preservation corollary per
+C2b-0's departure (i).  Part 2b closes C2b-2.  COMMITS: 2b-i the
+vocabulary + count/membership toolkit; 2b-ii gh_slots_inv; 2b-iii
+gh_wl_inv + entry + hinv_dec + dec_sub + the ledger close.  CI gate
+each.
+
+**C2b-2 (part 2b) — THE RELEASE THEOREM'S HEART LANDS (2026-08-23/24;
+rth_kit closure 563/0, splice→shardfmt byte-fixpoint).**  `hinv_dec`
+— hinv rb g r ∧ graw = None ∧ memb r v ⟹ hinv rb (gh_dec g v)
+(irem r v) — and `dec_sub` — every surviving cell keeps its
+addr/tag/arity/SLOTS under `hsubq`, counts may only fall — both peel
+off `hinv_dec_full`, one pipeline.  THE PROOF WENT THROUGH AS
+DESIGNED, with two structural upgrades surfaced in flight: (i) THE
+ROOT DROP IS REASSOCIATION — `wex_rdrop` moves the dropped root into
+the walked suffix, so the ENTRY has a slot-release's shape and all
+five gh_dec legs (odd/miss vacuous by alignment/hhas; immortal =
+ghost identity, the sound leak's pure face; shared = one hdecc;
+dying = the cascade) reuse the same transformation family, and
+`wex_pop` shows popping the worklist is the same reassociation on the
+other side; (ii) the slot-walk master carries a THIRD conserved
+clause — per-address wa-counts (`wa_move_cin`: a dying cell's address
+changes columns, exactly once) — which hands the loop level the unit
+of domination slack the free-push (`winv_push` via msub_ins +
+msub_w2f + eall_fp) re-spends.  MASTERS: `gh_slots_inv` (structural
+on the suffix; skip/imm/decc/move step lemmas; |cells|+|wl| conserved)
+and `gh_wl_inv` (wf-induct on the budget; the fuel exit is
+Farkas-vacuous; winv_pop → gh_slots_inv → winv_push per iteration).
+EXIT: `winv_hinv` re-derives e_disj/e_brk from eall membership +
+msub-domination + ed_nodup exactly as the design record promised —
+separation was never threaded.  COMMITS 398e5c1 (count spine), d016d6a
+(separation toolkit), 165abd3 (clause machinery), 6dbc1b0
+(transformations), 3ea5275+7aa2e95 (the T-collision gate fix — a probe
+type named T broke std/order's generic-binder claim in rth_run's
+closure, issue #38 — plus canon catch-up), 38dfb1f (slot-walk master),
+and this one (loop master + entry/exit + the laws).  The
+EXACT-FREE CHARACTERIZATION stands as designed: "no leak" =
+hinv_reach AT the result (already proven, B cites it); "nothing live
+freed" = the B-side readback corollary.  C2b-2 IS COMPLETE.  NEXT =
+C2b-3: rt_alloc's law + the FILL/SEAL/READ laws (the constructor
+story), then C2b-4 rt_inc, C2b-5 the engine leg, C2b-6 the instance.
+GATES (2026-08-24): pipelines 429 (7aa2e95, the fix + canon), 430
+(38dfb1f, the slot-walk master), 431 (de92589, the landing) all
+GREEN, CORPUS == BASELINE — part 2b's acceptance is met end to end.
+
+**C2b-3 — DESIGN RECORD (2026-08-27; written before the first edit):
+rt_alloc's law + the constructor window's FILL / SEAL / READ laws.**
+WHAT THE LAWS SAY, in one paragraph each. ALLOC: calling rt_alloc
+(tag, n) on a heap whose bytes mean ghost g (heap_rep), that is
+well-formed at roots r (hinv), with NO raw cell open, either RETURNS
+an address p and leaves memory `m_alloc m rb g tag n` whose bytes
+mean `gh_alloc g tag n` — the same live cells, the same roots, and
+ONE raw cell (p, tag, n, empty fill) — or FAILS the oom family
+exactly when the class-n free list is empty (or n ≥ 16) and
+top + 8 + 8n > end. The address comes from class n's free list when
+it has one (the POP leg: the class loses its head, the bump pointer
+stands), else from the bump pointer (the BUMP leg: top advances by
+8 + 8n). FILL: storing a valid word w into the raw cell's NEXT slot
+(the fill has i < n entries; the store lands at p + 8 + 8i) keeps
+the bytes meaning the ghost whose fill grew by w; well-formedness
+survives with the roots unchanged for an immediate w, and with ONE
+occurrence of w removed from the roots for a reference w (the
+reference's ownership moves from a local into the cell — exactness
+balances by construction). SEAL (ghost-only, no bytes move): a
+fully-filled raw cell becomes the NEWEST live cell with count 1 —
+well-formedness needs the program to hold p as a root EXACTLY ONCE
+(count_in r p = 1: the address rt_alloc returned, owned by one
+local). READ: a live cell's header word and slot words read back as
+the ghost's `hword` and `inth (hslots c) i` — B's scrutinees and
+fields.
+
+WHY THESE PREMISES ARE THE RIGHT ONES (read off impc's emission,
+C2b-0): the constructor window is `IpCall rt_alloc; per slot at most
+one rt_inc on a BORROWED operand then one IpStoreW into the fresh
+cell`; nothing else runs while raw is open, so alloc premises
+raw = None, fill premises raw = Some, the seal is where B closes the
+window, and rt_inc (C2b-4) is the one runtime entry stated with raw
+CARRIED. The fill's "w in band" premise (0 ≤ w < 2^64) is the
+engine's own invariant on locals; the reference case premises
+`memb r w` because impc's rt_inc put that root there (a borrowed
+operand is inc'd first, so the stored occurrence is an OWNED one).
+
+VOCABULARY (all new, engine-free): `fl_at fls n` (the n-th class,
+Nil past the end), `fl_set fls n fl`, `fllen fls`; `hdr_word tag n`
+(= 1 + tag·2^32 + n·2^48 = rword of any raw cell with that tag and
+arity); the memory effects `m_apop m rb n link p tag` (head[n] :=
+link; [p] := header) and `m_abump m rb top n tag` ([rb] := top+8+8n;
+[top] := header) and the leg-dispatching `m_alloc m rb g tag n`; the
+ghost transitions `gh_alloc_pop g tag n`, `gh_alloc_bump g tag n`,
+`gh_fits g n` (top + 8 + 8n ≤ end), `gh_alloc_ok g n` (a class hit,
+or fits), `gh_alloc g tag n` (the CODE's case order: n < 16 and a
+non-empty class → pop; else bump), `gh_araddr g` (the raw address);
+`gh_seal g`; `inth ws i`; the outcome term `alloc_out m rb g tag n`
+(Some (IpRv (gh_araddr (gh_alloc …)) (m_alloc …)) when ok, else
+Some (IpRfailed FOom)) — so the exported engine law is ONE equation
+`ipcall … = alloc_out …` and B splits on gh_alloc_ok once.
+
+heap_rep GAINS A CLAUSE: `int_eq (fllen (gfree_of g)) 16` — the
+ghost's free classes are exactly the layout's sixteen heads. Why in
+heap_rep and not hinv: it is a REP fact (which head word means which
+class); hinv's release theorem is untouched; hr_init computes it
+(gfree0 has sixteen), hr_alloc/hr_dec carry it (fl_set/fls_push
+preserve fllen). Without it the pop leg's read of head[n] is
+unconstrained for a short class list. The hrx_* peels regenerate
+with one more clause.
+
+THE FRAME TOOLKIT — the slice's real product, reused by C2b-4 (one
+header store) and C2b-5 (the cascade's stores): a word store at b
+leaves a representation conjunct intact when b's 8-byte span is
+disjoint from every extent that conjunct reads. `hslots_rep_fr`
+(the run of slots at a, length ℓ: b+8 ≤ a or a+8ℓ ≤ b),
+`hcell_rep_fr` (e_disj2 b nb addr arity, arity = slot count from
+cells_ok), `hcells_rep_fr` (e_disj1 b nb (hexts cs) + cells_ok),
+`hchain_rep_fr` (e_disj1 b nb (fexts1 fl k)), `hfree_rep_fr`
+(e_disj1 b nb (fexts fls k) + the store off the head block: b+8 ≤
+rb+24+8k or rb+24+8(k+fllen) ≤ b), `hraw_rep_fr`. The e_disj1 facts
+come from three suppliers: `ebrk_ed1_below` (a word ending at or
+below lo misses every extent — the head block's stores),
+`ebrk_ed1_above` (a word at or above top misses every extent — the
+bump's header store), and the existing `ed1_intro` (an extent that
+is a MEMBER of a disjoint family and whose address occurs nowhere in
+a sub-family misses that sub-family — the pop's header store and
+the fill's slot store, sharpened by `ed1_inner`: a word inside
+extent (p, n) misses whatever (p, n) misses).
+
+SEPARATION AFTER THE TRANSITION, by the release theorem's route: the
+pop and the seal are PERMUTATIONS of ext_all (an extent moves from
+the free family to the raw slot, or from the raw slot to the head of
+the live family), so e_disj/e_brk come from `ed_intro`/`eb_intro`
+over `eall` + `anodup` via `msub_anodup` — the new transport lemma
+`msub_f2w` mirrors msub_w2f in the pop direction (a head leaves the
+free part for the raw/worklist part) and `fexts_flset_eall` /
+`fexts_flat_emem` give the membership side. The bump APPENDS a fresh
+extent (top, n) beyond every old one: `ed_snoc`/`ed1_snoc` (a
+disjoint family stays disjoint when the appended extent starts at or
+past top, e_brk's upper bound), `eb_mono` (e_brk is monotone in top)
+and `eb_snoc`. `fa_assoc`/`fa_nil` normalise fexts_app so ext_all's
+nested apps read as `old ++ [new]`.
+
+COUNTS ACROSS THE WINDOW: `counts_ok_rawnil` (an empty fill counts
+like no raw cell), `counts_ok_fill_imm` (an odd word joins the fill:
+no cell's inbound changes — addresses are even), `counts_ok_fill_ref`
+(a reference joins the fill and leaves the roots: per cell the sum
+is unchanged, cin_irem_eq/ne + cin_iapp), `counts_ok_seal` (the
+sealed cell's count 1 = its one root: p is no live address (anodup
+of ext_all's addresses), so no live slot and none of its own slots
+reference it — slots_nmemb_cin/inb_zero; every older cell's sum is
+the same terms regrouped).
+
+ENGINE LEGS: five (pop; bump at n < 16 with an empty class; bump at
+n ≥ 16; oom in both bump shapes), each the rth_init_run recipe —
+compute to the stuck guard, collapse the band (bandu32_id/modu64_id
+haves), discharge the window guards (Farkas from mlo ≤ rb, end ≤
+msz, and the extent bounds), rewrite the IpIf condition's Bool fact,
+compute on — plus heap_rep READS at the stuck loads: head[n] =
+hhead (fl_at fls n) (`hfree_rd`, needing fllen = 16), [p] = hhead
+rest (hchain_rep's head clause), [rb] = top, [rb+8] = end (hrx_top/
+hrx_end). Hand-write the pop leg first; the moment the second leg
+repeats the recipe, the `alloc` block of gen_rth.py takes over (a
+per-leg op script: load/store/cond/call-exit). Fuel: the pop leg
+needs 5 successors, the bump legs 7 (nested IpIf) — rtc_alloc = 7,
+one tower for all legs. The window premise set: mlo ≤ rb,
+gend g ≤ msz, 0 ≤ tag < 2^16, 0 ≤ n < 2^16, lt d dmax (0 ≤ rb and
+rb + 152 ≤ 2^32 are hinv's).
+
+EXPORT (named pieces, the C2b-1 shape): `rth_alloc_run` (the one
+engine equation), `hr_alloc`, `hinv_alloc`, `gh_alloc_cells`/
+`gh_alloc_raw` (the transition's projections), `m_alloc_fr_lo/hi`
+(bytes outside [rb, end) untouched — the C4 seam); `hr_fill`,
+`hinv_fill_imm`, `hinv_fill_ref`; `hr_seal`, `hinv_seal`; `hr_rd_hdr`,
+`hr_rd_slot`. The fill's ENGINE step (IpStoreW at `ITrunc (ILoc p +
+IConst off)`) is B's generic stepping, not a runtime law — B's
+generator steps it and cites hr_fill/hinv_fill at the resulting
+store term (rth_step1 is the template). Header-FIELD extraction
+(tag/arity/count from hword — B's match on a scrutinee) is a NAMED
+DOOR for B-0, opened when impc's match emission is read.
+
+SLICES (each: rth_kit closure green locally, splice→shardfmt
+byte-fixpoint, CI FAIL set == baseline, rth_run/rt_run green):
+3-i vocabulary + the heap_rep clause + the frame toolkit + the
+separation transports; 3-ii the pure alloc laws (hinv_apop/abump,
+hr_apop/abump, the combined hinv_alloc/hr_alloc, framing); 3-iii the
+engine legs (hand pop → generator) + rth_alloc_run; 3-iv FILL, SEAL,
+READ + the LANDS record. rth_run gains a scenario per leg (pop,
+bump, oom-shape) checking heap_rep of the real bytes against
+gh_alloc — the differential BEFORE the theorems, as C2b-2 did.
+
+**C2b-3 — THE CONSTRUCTOR STORY LANDS (2026-08-27; rth_kit 698/0 from
+563/0, 42084 lines formatted, splice→shardfmt byte-fixpoint at every
+commit; rth_run 6/6, rt_run 19/19).** Four commits: 97d545a (part i —
+the frame toolkit + separation transports; heap_rep pins fllen = 16),
+6c1d639 (part ii — the pure alloc laws), 8c986fd (part iii — the alloc
+engine legs + rth_alloc_run), and this one (part iv — FILL / SEAL /
+READ). WHAT STANDS, in the design record's order:
+- ALLOC. `rth_alloc_run`: `ipcall … rt_alloc(tag, n) = alloc_out m rb g
+  tag n` — ONE engine equation; B splits on `gh_alloc_ok`. Behind it
+  five generated legs (gen_rth.py's `alloc` block: pop; bump at n < 16
+  with an empty class; bump at n ≥ 16; oom in both shapes) and the
+  three `alloc_out` shape lemmas. The pure side: `hinv_alloc` and
+  `hr_alloc` (dispatching over the code's case order to hinv_apop /
+  hinv_abump / hr_apop / hr_abump), the projections `gh_alloc_cells` /
+  `gh_alloc_raw`, and the byte framing `m_alloc_fr_lo/hi`.
+- FILL. `hr_fill` (the slot store at p + 8 + 8i keeps every other
+  word's meaning — the frame toolkit over `ed1_inner`), `hinv_fill_imm`
+  (an odd word joins the fill, roots stand), `hinv_fill_ref` (an owned
+  reference joins the fill and leaves the roots: `counts_ok_fill_ref`
+  balances count_in (irem r w) against count_in (fill ++ [w])).
+- SEAL. `hr_seal` (no bytes move: the raw cell's representation IS the
+  newest live cell's — `hword_seal`), `hinv_seal` (count 1 = the one
+  root, premised `count_in r p = 1`; the raw extent moves to the front
+  of ext_all — ed_intro/eb_intro over `eall` + `anodup`, the latter by
+  `msub_del` off the old family).
+- READ. `hr_rd_hdr` / `hr_rd_slot`: a live cell's header word and slot
+  i read as `hword (hfget cells a)` / `inth (hslots c) i`
+  (`hcells_rd_hdr/slot` + `hslots_rep_nth`).
+THE TWO BUNDLES, each a predicate with generated peels and one proof:
+`apop_ok` (10 clauses, `apop_facts`) for the popped head and `araw_ok`
+(10 clauses, `araw_facts`) for the open raw cell — bracket, alignment,
+"at no live or free address" (anodup of ext_all's addresses, the count
+decomposition), membership, and the two sub-families the extent
+misses (`ed1_intro`). Every alloc/fill/seal law cites a bundle; C2b-4
+and C2b-5 will too. THE FRAME TOOLKIT (part i) is the slice's durable
+product: `hslots_rep_fr`, `hcell_rep_fr`, `hcells_rep_fr`,
+`hchain_rep_fr`, `hfree_rep_fr` (head block below or above the store),
+`hraw_rep_fr`, fed by `ebrk_ed1_below` / `ebrk_ed1_above` / `ed1_intro`
+/ `ed1_inner`; plus `hfree_rep_sethead` (the head store), `hfree_rd` /
+`hfree_chain` (the engine's reads through hfree_rep).
+DEPARTURES FROM THE DESIGN RECORD, recorded: (i) FUEL — rtc_alloc is
+12, not 7: `ipstmts`' continuation runs at the DECREMENTED fuel, so each
+statement of a list costs a level and a nested IpIf's body pays again;
+the pop leg needs 7, the bump legs 12, one tower serves all (extra
+successors are inert). (ii) heap_rep's `fllen = 16` clause landed as
+designed; the hrx_* peels regenerated. (iii) The fill/seal laws take
+the raw cell DESTRUCTURED (`graw_of g = Some (MkHRaw p tag n fill)`)
+rather than as an opaque rc — B's generator names the four fields
+anyway. GENERATED BLOCKS now: init, minit, extract (cells_ok, counts_ok,
+p_cov, e_brk, e_disj1/e_disj, roots_ok, slots_ok, aligned8, all_in,
+anodup, msub, eall, wexact, imm_at, nimm_at, winv, the six
+representation conjuncts, apop_ok, araw_ok, hinv, heap_rep), alloc.
+PROOF-DSL FACTS (new, canonical): `compute` opens a stuck match and
+does NOT descend into a stopped fn's arguments — fence record accessors
+(`(stop … hhead gtop_of gend_of)`) or rewrite them explicitly; `compute`
+unfolds `andb` unless stopped (`(stop … andb)` keeps a peelable chain);
+a rewrite over a lemma applies at EVERY occurrence in one pass (a
+second int_eq_refl finds nothing; iapp_assoc rl hits both sides of an
+msub — restate the helper in the associated form); a citation's
+binders unbound by the LHS match are dangling even when the
+conclusion's RHS mentions them; a claim cited before its definition
+is "unresolved" — appended sections stay in dependency order; a
+Farkas `rows` cert names haves and premise INDICES, and a case-hyp is
+a slot only after a have restates it. NEXT = C2b-4: rt_inc's law
+(R + {v}; immediate/immortal legs ghost-identity; the 2^31 saturation
+as the sound leak; stated with raw CARRIED — araw_facts is its bundle).
+GATES (2026-08-27): pipelines 433 (97d545a, part i), 434 (6c1d639, part
+ii), 435 (8c986fd, part iii), 436 (1f45d33, part iv) all GREEN, CORPUS
+== BASELINE — C2b-3's acceptance is met end to end.
+
+**C2b-4 — DESIGN RECORD (2026-08-27; written before the first edit):
+rt_inc's law.** WHAT THE LAW SAYS. Calling rt_inc (v) on a heap whose
+bytes mean ghost g (heap_rep), well-formed at roots r (hinv), with the
+raw cell CARRIED (open or not — the fill window runs incs on borrowed
+operands), where v is a VALID WORD against the live cells (`slot_ok v
+(haddrs cells)`: an odd immediate or a live address), always RETURNS 0
+and leaves memory `m_inc m g v` whose bytes mean `gh_inc g v`, and the
+program now OWNS one more reference: well-formedness holds at roots
+`rinc r v` (= r for an immediate, `Cons v r` for a reference). Three
+legs, in the code's case order: IMMEDIATE (v odd): nothing moves, ghost
+and memory identity. REFERENCE below the band (the cell at v has count
+< 2^31): the header word at v becomes hword + 1 — the ghost cell's
+count grows by one (`hincc`), exactness balances against the new root.
+SATURATED (count ≥ 2^31): nothing moves, ghost identity, yet the roots
+STILL gain v — sound because counts_ok exempts the immortal band: a
+cell whose count reaches 2^31 is frozen immortal forever, a deliberate
+LEAK recorded as the law's shape, not an error (the release theorem
+never frees it; nothing dangles).
+
+WHY THESE PREMISES. `slot_ok` is the vocabulary hinv already speaks
+for "a word the program may hold": a root is live (roots_ok →
+slot_ok_memb), a slot word is slot_ok by cells_ok — so B derives the
+premise from hinv at every impc-emitted `rt_inc` without a new
+notion. The band premise on v (0 ≤ v < 2^64) is the engine's own
+local invariant. No premise on graw: the raw cell is carried, and the
+one store lands at a LIVE address, disjoint from the raw extent by
+hinv's e_disj — the bundle below carries that disjointness from the
+live cell's side, so araw_facts is NOT cited (a narrowing of C2b-3's
+"araw_facts is its bundle" line: the live cell's bundle owns both
+directions).
+
+VOCABULARY (engine-free). `hincc cs a` (the FIRST cell at a gains one
+count — hdecc's mirror); `gh_inc g v` (odd → g; hfind None → g;
+immortal → g; else with_gcells (hincc cells v)); `m_inc m g v` (the
+same dispatch over memory: the one store `[v] := hword c + 1`, else
+m); `rinc r v` (odd → r; else Cons v r). `cbands c` (a cell's six
+header bands: 1 ≤ count < 2^32, 0 ≤ tag < 2^16, 0 ≤ arity < 2^16 —
+what cells_ok says per cell, as a predicate B and the legs can peel)
+and `hword_count` (band (hword c) 0xFFFFFFFF = hcount_of c under
+cbands: mask_word32 + mod_unique at q = tag + arity·2^16), `hword_lo`/
+`hword_hi` (0 ≤ hword c < 2^64), `band1_mod2` (band v 1 = mod v 2 —
+mask_pow2 at k = 1: the parity test every runtime entry runs, C2b-5
+reuses it). THE BUNDLE `live_ok g v` (live_facts proves it under hinv
++ memb; lv_* peel it): the cell's bracket lo ≤ v, v + 8 + 8·arity ≤
+top, alignment, count_in (haddrs cells) v ≤ 1 (ed_nodup: addresses
+are unique), e_disj (hexts cells), e_disj1 v arity (fexts fls 0) and
+e_disj1 v arity (rexts raw) (ed1_intro from the ext_all address
+count: a live address is in no free class and is not the raw), and
+cbands (hfget cells v). C2b-5's cascade touches a live cell per
+decrement — the same bundle serves every child header store.
+
+THE DURABLE PRODUCT: `hcells_rep_incc` — a store of `hword (hfget cs v)
++ 1` at the live address v keeps hcells_rep for `hincc cs v`: the
+cell at v (first match) re-reads its new header (ls8w) with its slots
+framed (hslots_rep_fr at b + 8 ≤ v + 8), every other cell framed by
+hcell_rep_fr through e_disj (hexts cs) — ed_hd for the tail when the
+head is the cell, ed1_memb + ed2_sym for the head when the cell is in
+the tail. Stated with the stored word as a free w and `w = hword
+(hfget cs v) + 1` a premise, so the induction carries one w. The
+hincc algebra beside it mirrors hdecc's: haddrs_hincc, hexts_hincc,
+inb_hincc, cells_ok_hincc (count < 2^31 → count + 1 < 2^32). The
+counts: `counts_ok_incc` (counts_ok all cs r raw ∧ count_in (haddrs
+cs) v ≤ 1 → counts_ok (hincc all v) (hincc cs v) (Cons v r) raw — the
+cell at v grows with the root, no other equation mentions v,
+immortal cells stay exempt either way — no non-immortality premise)
+and `counts_ok_cons_imm` (imm_at cs v → the roots may gain v freely).
+`hfind_memb` (memb → hfind cs v = Some (hfget cs v)) bridges gh_inc's
+match to the READ laws' hfget.
+
+THE LAWS. `hr_inc`: heap_rep m rb g ∧ hinv rb g r → heap_rep (m_inc m
+g v) rb (gh_inc g v) — NO premise on v (identity legs are identity).
+`hinv_inc_ref`: hinv ∧ memb (haddrs cells) v → hinv rb (gh_inc g v)
+(Cons v r) (the immortal leg via hinv_same + counts_ok_cons_imm +
+imm_at_intro; the live leg clause by clause through the hincc
+algebra). `gh_inc_imm`/`m_inc_imm`: odd v → identity. `hinv_inc`:
+hinv ∧ slot_ok v (haddrs cells) → hinv rb (gh_inc g v) (rinc r v) —
+THE export, one law over the same premise as the engine's. ENGINE:
+three generated legs (gen_rth.py `inc` block, the alloc recipe):
+`rth_inc_imm_run` (odd v → Some (IpRv 0 m)), `rth_inc_ref_run`
+(memb ∧ count < 2^31 → Some (IpRv 0 (store_le (iw8) m v (+ (hword
+(hfget cells v)) 1)))), `rth_inc_sat_run` (memb ∧ 2^31 ≤ count → Some
+(IpRv 0 m)); the hand assembly `rth_inc_run`: heap_rep, hinv, slot_ok
+v, 0 ≤ v < 2^64, mlo ≤ rb, gend ≤ msz, lt d dmax → `ipcall (nS 12
+(ntl 12 fuel)) (rt_app (rt_fns rb) fs) mlo msz dmax d 2 (Cons v Nil)
+m = Some (IpRv 0 (m_inc m g v))` — the 12-tower (C2b-3's fuel law:
+one tower serves all legs; extra successors are inert). The legs
+read the header through hr_rd_hdr, extract the count through
+hword_count, collapse the ITrunc/mod bands from live_ok's bracket
+(v < 2^32 by hinv's gend ≤ 2^32), and discharge the window guards
+mlo ≤ v, v + 8 ≤ msz from the bracket.
+
+THE PARTS (each: targeted focus checks green, full rth_kit closure,
+splice→shardfmt byte-fixpoint, rth_run/rt_run green, commit to main,
+CI FAIL set == baseline). (i) VOCABULARY + BUNDLES: the four
+definitions, cbands/live_ok with generated peels, the bit lemmas,
+hfind_memb, live_facts, the hincc algebra. (ii) THE PURE LAWS:
+hcells_rep_incc, counts_ok_incc/cons_imm, hr_inc, hinv_inc_ref,
+hinv_inc, the imm identities. (iii) THE ENGINE: the `inc` block,
+rth_inc_run, rth_run scenario 5 (inc a live cell then check heap_rep
+against gh_inc; inc an immediate = the same bytes; the saturated leg
+is proven only — 2^31 incs do not run), the LANDS record. Out of
+scope, named: rt_dec's legs (C2b-5), readbacks of the count (B).
+
+**C2b-4 — LANDS (2026-08-27): rt_inc's law, three parts.** Commits:
+00203fc (the design record), 5985773 (part i), cd0ca92 (part ii), and
+this one (part iii). rth_kit.shard 421 claims, closure 739/0;
+splice→shardfmt a byte-fixpoint at every part; rth_run 8/8 (new rows
+"inc ref", "inc imm" — scenario 5); rt_run 5/5. WHAT STANDS, as
+designed: the exported laws `rth_inc_run` (heap_rep, hinv, slot_ok v
+(haddrs cells), 0 ≤ v < 2^64, mlo ≤ rb, gend ≤ msz, lt d dmax →
+`ipcall (nS 12 (ntl 12 fuel)) … 2 (Cons v Nil) m = Some (IpRv 0 (m_inc
+m g v))`), `hr_inc` (heap_rep ∧ hinv → heap_rep (m_inc m g v) rb
+(gh_inc g v), NO premise on v), `hinv_inc` (hinv ∧ slot_ok → hinv rb
+(gh_inc g v) (rinc r v)), with `hinv_inc_ref`, `gh_inc_imm`/`m_inc_imm`
+beneath; the vocabulary hincc / gh_inc / m_inc / rinc / cbands /
+live_ok exactly as the record spelled it. THE DURABLE PRODUCTS:
+`hcells_rep_incc` (the header-store rep lemma — C2b-5's decrement
+store is its mirror), the `live_ok` bundle (`live_facts`, lv_* peels)
+and `cbands` (cb_* peels) with `hword_count` / `hword_lo` / `hword_hi`,
+`band1_mod2`, `hraw_rep_fr1` (a store disjoint from rexts keeps
+hraw_rep, raw open or not), `hfind_memb`, `counts_ok_incc` /
+`counts_ok_incc_nm` / `counts_ok_cons_imm`, the hincc algebra
+(haddrs/hexts/inb/cells_ok_hincc, raw_ok_hincc). GENERATED: the
+extract block gained the cbands and live_ok peels; the new `inc` block
+(gen_rth.py inc: rth_inc_imm_run / rth_inc_ref_run / rth_inc_sat_run)
+— the ref leg was learned by hand (passing on its second run, one
+dangling `g`), then generated; the three generated legs and the
+assembly passed first time. DEPARTURES: none in the laws' shapes.
+Noted: araw_facts is not cited (live_ok owns the raw disjointness from
+the live side, as the record said); `counts_ok_incc` needs NO
+non-immortality premise (a cell crossing into the band under +1 stays
+exempt — the record's guess, held); the saturated leg is proven, not
+run (2^31 incs); the 12-tower serves rt_inc unchanged (inert
+successors). PROOF-DSL FACTS (new, canonical): a Farkas `rows` cert
+sums `expr ≥ 0` rows — `(le a b)` reads b − a ≥ 0, a False `(le a b)`
+reads a − b − 1 ≥ 0, an equation reads L − R = 0 with a coefficient of
+EITHER sign — against the negated goal, to a negative constant: an
+equation row's coefficient is whichever sign cancels the goal's
+variable (the fill_imm `(hee -1)` precedent, now the rule), and a
+false arithmetic fact (`(le 1 0) = True`, for absurd) is proven with
+(goal 1) while the have rows carry the contradiction; `unfold F lhs`
+opens the FIRST occurrence of F — when the target is the second
+(`(counts_ok (hincc all v) (hincc (Cons c rest) v) …)`), state the
+reduced form as a have and rewrite; `compute` is call-by-value: a
+stuck prim's arguments stay (`(band v (- (pow2 1) 1))`), and an
+OPAQUE imported fn stays stuck — std/bits' `pow2` is opaque outside
+its module (its theory is pow2_z / pow2_s: derive `(pow2 1) = 2`
+through them; `(compute lhs)` does reduce `(pow2 (+ 0 1))`'s ARGUMENT);
+`case-on X Option` takes the bare type name; a `case-on` keeps the
+scrutinee symbolic in the goal (hyp 0 = the equation) where `induct`
+instantiates it; hyp indices count from the innermost scope (inside
+one nested case-on the IH is `(hyp 1)`); a rewrite whose replacement
+contains the variable it replaces (`c` → `(hfget (Cons c rest) v)`)
+was avoided, untested — derive such facts in the other direction.
+Scratch tools this slice: lint.py (shape lint: have = 4, rewrite-with
+= 7, steps = 3, case-on = 4, a chain's closer), goal.py, sx.py,
+stuck.py, ci_watch2.sh (`pipelines?sha=` needs the FULL sha).
+NEXT = C2b-5: rt_dec's engine leg — the two nested loops implement
+gh_wl; the loop invariant marries the count-field-linked worklist to
+the ghost's; live_ok + hcells_rep_incc's mirror serve each child
+header store, band1_mod2 / hword_count the tests. GATES: pending —
+pipelines 438 (5985773, part i), 439 (cd0ca92, part ii), and part
+iii's; recorded below when green.
+GATES (2026-08-27): pipelines 438 (5985773, part i), 439 (cd0ca92,
+part ii), 440 (6bee27e, part iii) all GREEN, CORPUS == BASELINE —
+C2b-4's acceptance is met end to end.

@@ -77,3 +77,11 @@ slices landed — history is not respelled. Reading an old path in
 X86.md, IMP.md, LOWERING.md, BUILD.md, or the archive means: consult
 the move map above. Live documents (README, this file) and live code
 comments track the current tree.
+
+**The records split (2026-09-02).** Each law ledger keeps only its
+normative sections; its dated rung/slice records moved verbatim to
+`docs/records/NAME.md` with section numbers unchanged, and the law file
+keeps a one-paragraph stub under the first moved heading. A citation
+`NAME.md §N` therefore names the same section it always did — open
+`docs/records/NAME.md` when the law file's stub says the section moved.
+New records go to `docs/records/`, not back into the law file.

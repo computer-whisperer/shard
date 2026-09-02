@@ -289,7 +289,7 @@ authority for its area:
 | [CERT.md](docs/CERT.md) | the certificate architecture: conversion, sharing, validators |
 | [STORAGE.md](docs/STORAGE.md) | the storage + incremental slice: cert cache, module images, arena |
 | [STREAM.md](docs/STREAM.md) | Arc B: the streaming bin — `(bin sha256sum)` made conventional and fast (closed) |
-| [COVERAGE.md](docs/COVERAGE.md) | the coverage arc: the generic path spec → imp → x86, shardfmt as the flagship (opener, for ratification) |
+| [COVERAGE.md](docs/COVERAGE.md) | the coverage arc: the generic path spec → imp → x86, shardfmt as the flagship (ratified 2026-08-22; Theorem A + runtime laws C2b-1..4 landed) |
 | [IMP.md](docs/IMP.md) | the neutral imperative dialect: spec ⊑ imp ⊑ wasm/x86 |
 | [X86.md](docs/X86.md) | the x86-64 target: emitter → bin ladder → World on silicon |
 | [CANON.md](docs/CANON.md) | the canonical dialect: rules, census, content addressing |
@@ -301,6 +301,7 @@ authority for its area:
 | [PIO.md](docs/PIO.md) | the RP2350 PIO ISA model + program search |
 | [RISCV.md](docs/RISCV.md) | the RISC-V third target: one model, both widths |
 | [REVISIT.md](docs/REVISIT.md) | the design-decision ledger: choice + revisit-when |
+| [records/](docs/records/) | the dated rung/slice RECORDS split out of the law ledgers (2026-09-02); `X.md §N` for a moved section resolves to `records/X.md` |
 | [archive/M3-V1-VS-V2.md](docs/archive/M3-V1-VS-V2.md) | v1 vs v2 proof-effort comparison (history) |
 | [archive/TRANSFER.md](docs/archive/TRANSFER.md) | the founding premise and v1→v2 mandate |
 | [archive/DESIGN-REVIEW-2026-07-18.md](docs/archive/DESIGN-REVIEW-2026-07-18.md) | the three-way design review at the sha-on-silicon milestone |
