@@ -472,7 +472,7 @@ still enumerates the advisory AdFlag / AdUnresolved set (out of TCB).
   **trie↔fns consistency bridge** required by the data-weighted SCCs
   (`tj_visit`/`tj_neis`, `loader/visit`, and `mc_reaches`) — these saturate a
   visited-set over the FnTrie and need a nested-trie / enumeration lemma the flat
-  worklist measures (`led_close`/`call_close`) did not; **reducer fuel** for the
+  worklist measure (`edges_close`, once `led_close`/`call_close`) did not; **reducer fuel** for the
   genuinely-partial loops (`run_expr`/`compute_expr_loop`/`simp_expr_loop`/
   `simp_iota_expr`/`ceval`), a Timeout return-type change per §2; cross-module
   pre-elaborated measures (§7).
@@ -480,8 +480,9 @@ still enumerates the advisory AdFlag / AdUnresolved set (out of TCB).
 ## 11. Where the code lives
 
 - `kernel/driver.shard` — the gate: `mc_check_fn` and the `mc_*` family
-  (site walk, obligation construction, stratified citation, `led_close` /
-  `call_close` data-weighted worklist measures); the structural verifier
+  (site walk, obligation construction, stratified citation, the `edges_close`
+  data-weighted worklist measure — one closure over an edge list, projected
+  from the trust ledger and from the run-mode call graph); the structural verifier
   `mc_check_struct` + `mc_struct_*` (numeric-vs-struct dispatch on the measure
   head in `mc_check_fn`).
 - `kernel/admit.shard` — the offline classifier: Tarjan (`ad_sccs`), the

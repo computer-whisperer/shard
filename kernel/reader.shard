@@ -13,10 +13,9 @@
 ;;; SCOPE: full proof-file front-end. Expressions: the applicative core +
 ;;; `if` / `match` / `let` (scope-threaded de Bruijn) / `list` / `quote`
 ;;; (incl. the `'X` reader macro) / string-literal sugar / the `ty` / `tv`
-;;; type-builder sugars. Files: `parse_module` (types/fns/externs) and
-;;; `parse_claims` (the `(claim NAME GOAL PROOF)` forms). All validated
-;;; byte-for-byte against src/load.rs via `check parse-check` / `module-check`
-;;; / `claims-check`. Remaining: assembling these into the checker driver.
+;;; type-builder sugars. Files: `parse_module_f` (types/fns/externs/claims,
+;;; from forms the loader already read); kernel/driver.shard assembles these
+;;; into the checker and the corpus gates them.
 ;;;
 ;;; Needs the char↔symbol bridge primitives (src/prim.rs):
 ;;;   sym_of_chars : (List Int) -> Symbol
@@ -260,13 +259,6 @@
 
 (fn list_sugar ((es (List Expr))) Expr
   (list_sugar_go (rev_expr_l es Nil) (Ctor (qn (quote Nil)) Nil)))
-
-;; Index of `x` in the scope (0 = front = innermost), or None.
-(fn find_idx ((x Symbol) (xs (List Symbol)) (k Int)) (Option Int)
-  (measure (struct xs))
-  (match xs
-    (Nil None)
-    ((Cons h t) (if (sym_eq x h) (Some k) (find_idx x t (+ k 1))))))
 
 (fn append_sym ((xs (List Symbol)) (ys (List Symbol))) (List Symbol)
   (measure (struct xs))
@@ -993,7 +985,7 @@
     ((SInt n) (Some (IntLit n)))
     ((SStr cs) (Some (str_sugar cs)))
     ((SSym name)
-     (match (find_idx name scope 0)
+     (match (find_index_sym name scope 0)
        ((Some i) (Some (BVar i)))  ; local binding → de Bruijn index
        (None
          (if (sym_mem name ctors) (Some (Ctor (qn name) Nil))  ; bare nullary ctor
@@ -1578,7 +1570,7 @@
 ;;   (record NAME (ctor CTOR)? (FIELD TYPE)+)
 ;;
 ;; is loader-level SUGAR: it expands at the s-expr level — after read_all,
-;; before the collector passes, in BOTH parse_module and parse_decls, so
+;; before the collector passes, in BOTH parse_module_f and parse_decls_f, so
 ;; check and run see identical declarations — into the positional
 ;; single-ctor (type NAME (CTOR T…)), one FIELD_of accessor and one
 ;; with_FIELD updater per field (value-first: (with_score v g)). The kernel
@@ -2449,12 +2441,7 @@
        ((Some fs2) (ch_sxs fs2))))))
 
 ;; ---- module entry point ---------------------------------------------------
-(fn parse_module ((src (List Int)) (base_ctors (List Symbol))) (Option Module)
-  (match (read_all src)
-    (None None)
-    ((Some forms0) (parse_module_f forms0 base_ctors))))
-
-;; parse_module over the SrcEntry forms field (parse-once): unparseable → None.
+;; parse_module_f over the SrcEntry forms field (parse-once): unparseable → None.
 (fn parse_module_mf ((mf (Option (List SExpr))) (base_ctors (List Symbol)))
   (Option Module)
   (match mf
@@ -2484,7 +2471,7 @@
               (Some (Module tds fns externs (build_fn_trie fns) Nil)))))))))))
 
 ;; ---- whole-program module assembly ----------------------------------------
-;; Build M (the module proofs reduce against) by folding `parse_module` over a
+;; Build M (the module proofs reduce against) by folding `parse_module_f` over a
 ;; list of sources in DEPENDENCY ORDER (a file's imports come before it),
 ;; threading the accumulating ctor set so each file's fn bodies resolve ctors
 ;; declared in its dependencies, and concatenating the decls onto `acc` (which
@@ -2583,7 +2570,7 @@
 ;; ===========================================================================
 ;; QUALIFIED-IDENTITY RESOLUTION (Stage 2).
 ;;
-;; `parse_module` tags every identity `core` (via `qn`). This pass rewrites each
+;; `parse_module_f` tags every identity `core` (via `qn`). This pass rewrites each
 ;; module's QName heads — definitions AND references — with their real
 ;; module-path, by RESOLUTION precedence `local > import > core`:
 ;;   - a name DEFINED in this module  → this module's path
@@ -2864,19 +2851,12 @@
        (Nil False)
        ((Cons y ys) (if (sym_eq x y) (path_prefix_sym xs ys) False))))))
 
-(fn path_init_sym ((p (List Symbol))) (List Symbol)
-  (measure (struct p))
-  (match p
-    (Nil Nil)
-    ((Cons _ Nil) Nil)
-    ((Cons h t) (Cons h (path_init_sym t)))))
-
 ;; P (the sig's module) is within the dir module of MODPATH (the def's file):
 ;; P is the directory interface (a prefix — the mod.req case) or a sibling
 ;; file of the same directory.
 (fn supplies_scope_ok ((p (List Symbol)) (modpath (List Symbol))) Bool
   (if (path_prefix_sym p modpath) True
-  (sym_path_eq (path_init_sym p) (path_init_sym modpath))))
+  (sym_path_eq (drop_last_sym p) (drop_last_sym modpath))))
 
 (fn uitem_path ((n Symbol) (items (List (Pair Symbol (List Symbol)))))
   (Option (List Symbol))
@@ -2956,19 +2936,13 @@
             (rebind_type_names rest uitems sig_tds modpath))
           (rebind_type_names rest uitems sig_tds modpath)))))))
 
-(fn sym_in_list ((n Symbol) (ns (List Symbol))) Bool
-  (measure (struct ns))
-  (match ns
-    (Nil False)
-    ((Cons h t) (if (sym_eq n h) True (sym_in_list n t)))))
-
 (fn env_drop_names ((env (List (Pair Symbol (List Symbol)))) (ns (List Symbol)))
   (List (Pair Symbol (List Symbol)))
   (measure (struct env))
   (match env
     (Nil Nil)
     ((Cons (Pair n p) rest)
-     (if (sym_in_list n ns) (env_drop_names rest ns)
+     (if (sym_mem n ns) (env_drop_names rest ns)
      (Cons (Pair n p) (env_drop_names rest ns))))))
 
 ;; Qualify a freshly-parsed (all-`core`) module at `modpath`. STRICT bare-name
@@ -3338,22 +3312,6 @@
 ;; filename until paths are threaded through resolve_closure.
 ;; ===========================================================================
 
-(fn pd_app ((a (List Int)) (b (List Int))) (List Int)
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (pd_app t b)))))
-
-(fn pd_nat ((n Int)) (List Int)
-  ;; measure n; recurses on (ediv n 10) (== / on the nonneg line/index domain).
-  ;; div-facts names the quotient so farkas closes the descent.
-  (measure
-    n
-    (div-facts n 10 q (by arith (list 10 9 1 1 0 -10)))
-    (div-facts n 10 q (by arith (list 10 1 -1 0 1 10))))
-  (if (lt n 10) (Cons (+ 48 n) Nil)
-  (pd_app (pd_nat (ediv n 10)) (Cons (+ 48 (mod n 10)) Nil))))
-
 (type PDiag
   (PDOk)  ; lexically balanced
   (PDStray Int)  ; ')' at top level, at line N
@@ -3418,12 +3376,14 @@
      (match (take_atom (skip_ws rest))
        ((Pair h r2)
         (match (skip_ws r2)
-          (Nil (pd_app "(" (pd_app h " ...)")))
+          (Nil (append_int "(" (append_int h " ...)")))
           ((Cons c2 r3)
-           (if (int_eq c2 40) (pd_app "(" (pd_app h " ...)"))
+           (if (int_eq c2 40) (append_int "(" (append_int h " ...)"))
            (match (take_atom (Cons c2 r3))
              ((Pair nm _)
-              (pd_app "(" (pd_app h (pd_app " " (pd_app nm " ...)"))))))))))))))
+              (append_int
+                "("
+                (append_int h (append_int " " (append_int nm " ...)"))))))))))))))
 
 ;; the types of a file that DO parse — the best-available ctor set for
 ;; diagnosing fn bodies even when some other declaration is broken.
@@ -3496,14 +3456,17 @@
 (fn pd_render_form ((f SExpr)) (List Int)
   (match f
     ((SList (Cons (SSym h) (Cons (SSym nm) _)))
-     (pd_app
+     (append_int
        "("
-       (pd_app (chars_of_sym h) (pd_app " " (pd_app (chars_of_sym nm) " ...)")))))
-    ((SList (Cons (SSym h) _)) (pd_app "(" (pd_app (chars_of_sym h) " ...)")))
+       (append_int
+         (chars_of_sym h)
+         (append_int " " (append_int (chars_of_sym nm) " ...)")))))
+    ((SList (Cons (SSym h) _))
+     (append_int "(" (append_int (chars_of_sym h) " ...)")))
     (_ "<non-list form>")))
 
 (fn pd_src_tag ((k Int)) (List Int)
-  (pd_app " [source " (pd_app (pd_nat k) " of the import closure]")))
+  (append_int " [source " (append_int (show_nat k) " of the import closure]")))
 
 ;; name the first form whose (S^ …)/(inline …)/(chain …) sugar is malformed —
 ;; the decl heads all parse, so pd_bad_decl walks past these. The inline table
@@ -3533,43 +3496,47 @@
 (fn parse_diag ((src (List Int)) (base_ctors (List Symbol)) (k Int)) (List Int)
   (match (pd_scan src 1 0 0 Nil)
     ((PDStray line)
-     (pd_app "unexpected ')' at line " (pd_app (pd_nat line) (pd_src_tag k))))
+     (append_int
+       "unexpected ')' at line "
+       (append_int (show_nat line) (pd_src_tag k))))
     ((PDUnclosed fline fsuf missing)
-     (pd_app
+     (append_int
        "unclosed form "
-       (pd_app
+       (append_int
          (pd_head fsuf)
-         (pd_app
+         (append_int
            " at line "
-           (pd_app
-             (pd_nat fline)
-             (pd_app
+           (append_int
+             (show_nat fline)
+             (append_int
                " -- missing "
-               (pd_app (pd_nat missing) (pd_app " ')'" (pd_src_tag k)))))))))
+               (append_int
+                 (show_nat missing)
+                 (append_int " ')'" (pd_src_tag k)))))))))
     ((PDBadStr line)
-     (pd_app
+     (append_int
        "unterminated string opened at line "
-       (pd_app (pd_nat line) (pd_src_tag k))))
+       (append_int (show_nat line) (pd_src_tag k))))
     (PDOk
       (match (read_all src)
-        (None (pd_app "unreadable source" (pd_src_tag k)))
+        (None (append_int "unreadable source" (pd_src_tag k)))
         ((Some forms)
          (match
            (pd_bad_decl
              forms
              (append_sym (typedef_ctors (pd_types_ok forms)) base_ctors))
            ((Some f)
-            (pd_app
+            (append_int
               "malformed declaration "
-              (pd_app (pd_render_form f) (pd_src_tag k))))
+              (append_int (pd_render_form f) (pd_src_tag k))))
            (None
              (match (pd_bad_sugar (pd_sugar_tab forms) forms)
                ((Some f)
-                (pd_app
+                (append_int
                   "malformed (S^ …)/(inline …)/(chain …) sugar in "
-                  (pd_app (pd_render_form f) (pd_src_tag k))))
+                  (append_int (pd_render_form f) (pd_src_tag k))))
                (None
-                 (pd_app
+                 (append_int
                    "module assembly failed (unknown cause)"
                    (pd_src_tag k)))))))))))
 
@@ -3938,7 +3905,7 @@
                       m)
                     ;; scan the EXPANDED forms — a (record …)'s generated
                     ;; law claims must be citable like hand-written ones
-                    ;; (None is unreachable: parse_module already succeeded)
+                    ;; (None is unreachable: parse_module_f already succeeded)
                     (claim_items_go
                       (match (expand_records (forms_or_nil mf))
                         (None Nil)

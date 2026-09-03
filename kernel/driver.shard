@@ -1290,12 +1290,6 @@
     (Nil 0)
     ((Cons n rest) (+ (if (req_met n binmp th) 1 0) (count_met rest binmp th)))))
 
-(fn len_syms ((names (List Symbol))) Int
-  (measure (struct names))
-  (match names
-    (Nil 0)
-    ((Cons _ rest) (+ 1 (len_syms rest)))))
-
 (fn unmet_fails ((names (List Symbol)) (binmp (List Symbol)) (th Theory))
   (List ClaimOutcome)
   (measure (struct names))
@@ -1493,121 +1487,133 @@
 ;; ---- the trust ledger: citation closure, call graph, rendered block --------
 ;; The driver accumulated a LedgerEntry per ADMITTED decl (see RunState).
 ;; Here each bin closes its `requires` over the citation DAG and its entry fn
-;; over the run-mode call graph, and renders the result. The own-axiom set the
-;; trusts check consumes is derived from the SAME ledger (kind = operational /
-;; bridging / untagged) — the old raw-form text re-scan is gone.
+;; over the run-mode call graph — BOTH via edges_close, ONE worklist closure
+;; over an edge list (name -> successors); led_edges / call_edges project the
+;; ledger and the fn list onto that shape — and renders the result. The
+;; own-axiom set the trusts check consumes is derived from the SAME ledger
+;; (kind = operational / bridging / untagged) — the old raw-form text re-scan
+;; is gone.
 
-(fn led_lookup ((name Symbol) (led (List LedgerEntry))) (Option LedgerEntry)
-  (measure (struct led))
-  (match led
+(fn edges_lookup ((name Symbol) (edges (List (Pair Symbol (List Symbol)))))
+  (Option (Pair Symbol (List Symbol)))
+  (measure (struct edges))
+  (match edges
     (Nil None)
-    ((Cons (LedgerEntry n k cs) rest)
-     (if (sym_eq n name) (Some (LedgerEntry n k cs)) (led_lookup name rest)))))
+    ((Cons (Pair n cs) rest)
+     (if (sym_eq n name) (Some (Pair n cs)) (edges_lookup name rest)))))
 
-;; ---- termination measure for led_close (data-weighted; issue #1) -----------
-;; led_close is a worklist fixpoint: it pops a name and, if unvisited, either
-;; marks it (None arm) or marks it AND pushes its citations (Some arm — so work
-;; can GROW). It terminates because `visited` saturates toward the ledger's
-;; keys. The measure is  led_pending(led, visited) + sym_len(work), where
-;; led_pending weights each UNVISITED key by (1 + |its citations|) — that
-;; data-dependent weight exactly absorbs the unbounded work-growth at the Some
-;; arm (work gains cs, pending drops by 1 + |cs|). The facts cited by the
-;; measure live just below led_close; none reaches led_close in the call graph,
-;; so stratified citation admits them as same-closure claims.
+;; ---- termination measure for edges_close (data-weighted; issue #1) ---------
+;; edges_close is a worklist fixpoint: it pops a name and, if unvisited, either
+;; marks it (None arm) or marks it AND pushes its successors (Some arm — so
+;; work can GROW). It terminates because `visited` saturates toward the edge
+;; list's keys. The measure is  edges_pending(edges, visited) + sym_len(work),
+;; where edges_pending weights each UNVISITED key by (1 + |its successors|) —
+;; that data-dependent weight exactly absorbs the unbounded work-growth at the
+;; Some arm (work gains cs, pending drops by 1 + |cs|). The facts cited by the
+;; measure live just below edges_close; none reaches edges_close in the call
+;; graph, so stratified citation admits them as same-closure claims.
 (fn sym_len ((xs (List Symbol))) Int
   (measure (struct xs))
   (match xs
     (Nil 0)
     ((Cons _ t) (+ 1 (sym_len t)))))
 
-(fn led_pending ((led (List LedgerEntry)) (visited (List Symbol))) Int
-  (measure (struct led))
-  (match led
+(fn edges_pending
+  ((edges (List (Pair Symbol (List Symbol)))) (visited (List Symbol)))
+  Int
+  (measure (struct edges))
+  (match edges
     (Nil 0)
-    ((Cons (LedgerEntry n _ cs) rest)
-     (if (sym_in n visited) (led_pending rest visited)
-     (+ (+ 1 (sym_len cs)) (led_pending rest visited))))))
+    ((Cons (Pair n cs) rest)
+     (if (sym_in n visited) (edges_pending rest visited)
+     (+ (+ 1 (sym_len cs)) (edges_pending rest visited))))))
 
-;; the citation list of a lookup result (Nil for a miss). Stating
-;; led_pending_drop over this accessor lets its proof reduce directly under the
-;; matched ctor — no constructor-injectivity step needed.
-(fn le_cites ((e (Option LedgerEntry))) (List Symbol)
+;; the successor list of a lookup result (Nil for a miss). Stating
+;; edges_pending_drop over this accessor lets its proof reduce directly under
+;; the matched ctor — no constructor-injectivity step needed.
+(fn ed_succs ((e (Option (Pair Symbol (List Symbol))))) (List Symbol)
   (match e
     (None Nil)
-    ((Some (LedgerEntry _ _ cs)) cs)))
+    ((Some (Pair _ cs)) cs)))
 
-(fn led_is_some ((e (Option LedgerEntry))) Bool
+(fn ed_is_some ((e (Option (Pair Symbol (List Symbol))))) Bool
   (match e
     (None False)
     ((Some _) True)))
 
-;; transitive closure over the citation DAG: every name reachable from `work`.
-;; A name with no ledger entry (an unmet requirement — the run already fails)
-;; stays in `visited` as a leaf.
-(fn led_close
-  ((work (List Symbol)) (visited (List Symbol)) (led (List LedgerEntry)))
+;; transitive closure over an edge list: every name reachable from `work`.
+;; A name with no edge entry (an unmet requirement; a prim / extern / sig in
+;; the call graph) stays in `visited` as a leaf.
+(fn edges_close
+  ((work (List Symbol))
+   (visited (List Symbol))
+   (edges (List (Pair Symbol (List Symbol)))))
   (List Symbol)
   (measure
-    (+ (led_pending led visited) (sym_len work))
-    ;; site 0: (sym_in n visited)=True, recurse (rest, visited, led)
+    (+ (edges_pending edges visited) (sym_len work))
+    ;; site 0: (sym_in n visited)=True, recurse (rest, visited, edges)
     (steps
       ((rewrite (premise 0) lr lhs true ())
        (rewrite (lemma sym_len_cons) lr lhs true ()))
       (by arith (list 1 0 0)))
-    (have (= (le 0 (led_pending led visited)) True)
+    (have (= (le 0 (edges_pending edges visited)) True)
       (rewrite-with
-        (lemma led_pending_nonneg)
+        (lemma edges_pending_nonneg)
         lr
         lhs
-        ((inst led led) (inst visited visited))
+        ((inst edges edges) (inst visited visited))
         ()
         refl)
       (have (= (le 0 (sym_len rest)) True)
         (rewrite-with (lemma sym_len_nonneg) lr lhs ((inst xs rest)) () refl)
         (by arith (list 1 0 0 1 1))))
-    ;; site 1: None arm, recurse (rest, Cons n visited, led)
+    ;; site 1: None arm, recurse (rest, Cons n visited, edges)
     (have
-      (= (le (led_pending led (Cons n visited)) (led_pending led visited)) True)
+      (=
+        (le
+          (edges_pending edges (Cons n visited))
+          (edges_pending edges visited))
+        True)
       (rewrite-with
-        (lemma led_pending_mono)
+        (lemma edges_pending_mono)
         lr
         lhs
-        ((inst led led) (inst x n) (inst vis visited))
+        ((inst edges edges) (inst x n) (inst vis visited))
         ()
         refl)
       (steps
         ((rewrite (premise 0) lr lhs true ())
          (rewrite (lemma sym_len_cons) lr lhs true ()))
         (by arith (list 1 0 0 0 1))))
-    (have (= (le 0 (led_pending led (Cons n visited))) True)
+    (have (= (le 0 (edges_pending edges (Cons n visited))) True)
       (rewrite-with
-        (lemma led_pending_nonneg)
+        (lemma edges_pending_nonneg)
         lr
         lhs
-        ((inst led led) (inst visited (Cons n visited)))
+        ((inst edges edges) (inst visited (Cons n visited)))
         ()
         refl)
       (have (= (le 0 (sym_len rest)) True)
         (rewrite-with (lemma sym_len_nonneg) lr lhs ((inst xs rest)) () refl)
         (by arith (list 1 0 0 0 1 1))))
-    ;; site 2: Some arm, recurse (sym_concat cs rest, Cons n visited, led)
-    (have (= (le_cites (led_lookup n led)) cs)
+    ;; site 2: Some arm, recurse (sym_concat cs rest, Cons n visited, edges)
+    (have (= (ed_succs (edges_lookup n edges)) cs)
       (steps ((rewrite (premise 2) lr lhs true ()) (simp lhs)) refl)
-      (have (= (led_is_some (led_lookup n led)) True)
+      (have (= (ed_is_some (edges_lookup n edges)) True)
         (steps ((rewrite (premise 2) lr lhs true ()) (simp lhs)) refl)
         (have
           (=
             (le
-              (+ (+ 1 (sym_len cs)) (led_pending led (Cons n visited)))
-              (led_pending led visited))
+              (+ (+ 1 (sym_len cs)) (edges_pending edges (Cons n visited)))
+              (edges_pending edges visited))
             True)
           (steps
             ((rewrite (premise 3) rl lhs true ()))
             (rewrite-with
-              (lemma led_pending_drop)
+              (lemma edges_pending_drop)
               lr
               lhs
-              ((inst n n) (inst visited visited) (inst led led))
+              ((inst n n) (inst visited visited) (inst edges edges))
               ((steps ((rewrite (premise 4) lr lhs true ())) refl)
                (steps ((rewrite (premise 1) lr lhs true ())) refl))
               refl))
@@ -1616,12 +1622,12 @@
              (rewrite (lemma sym_len_cons) lr lhs true ())
              (rewrite (lemma sym_len_concat) lr lhs true ()))
             (by arith (list 1 0 0 0 0 0 1))))))
-    (have (= (le 0 (led_pending led (Cons n visited))) True)
+    (have (= (le 0 (edges_pending edges (Cons n visited))) True)
       (rewrite-with
-        (lemma led_pending_nonneg)
+        (lemma edges_pending_nonneg)
         lr
         lhs
-        ((inst led led) (inst visited (Cons n visited)))
+        ((inst edges edges) (inst visited (Cons n visited)))
         ()
         refl)
       (have (= (le 0 (sym_len (sym_concat cs rest))) True)
@@ -1636,14 +1642,14 @@
   (match work
     (Nil visited)
     ((Cons n rest)
-     (if (sym_in n visited) (led_close rest visited led)
-     (match (led_lookup n led)
-       (None (led_close rest (Cons n visited) led))
-       ((Some (LedgerEntry ln lk cs))
-        (led_close (sym_concat cs rest) (Cons n visited) led)))))))
+     (if (sym_in n visited) (edges_close rest visited edges)
+     (match (edges_lookup n edges)
+       (None (edges_close rest (Cons n visited) edges))
+       ((Some (Pair ln cs))
+        (edges_close (sym_concat cs rest) (Cons n visited) edges)))))))
 
-;; ---- totality support for led_close (cited by its measure) -----------------
-;; None of these reaches led_close in the call graph, so stratified citation
+;; ---- totality support for edges_close (cited by its measure) ---------------
+;; None of these reaches edges_close in the call graph, so stratified citation
 ;; admits them as same-closure facts.
 (claim sym_len_nil (goal () () (= (sym_len Nil) 0)) (steps ((simp lhs)) refl))
 
@@ -1683,17 +1689,17 @@
           (rewrite (lemma sym_len_cons) lr rhs true ()))
          (by arith (list)))))))
 
-;; 0 <= led_pending led visited.
-(claim led_pending_nonneg
-  (goal ((led (List LedgerEntry)) (visited (List Symbol))) ()
-    (= (le 0 (led_pending led visited)) True))
-  (induct led
+;; 0 <= edges_pending edges visited.
+(claim edges_pending_nonneg
+  (goal ((edges (List (Pair Symbol (List Symbol)))) (visited (List Symbol))) ()
+    (= (le 0 (edges_pending edges visited)) True))
+  (induct edges
     ((case Nil (steps ((simp lhs)) refl))
      (case Cons
        (hd rest)
-       (case-on hd LedgerEntry
-         ((case LedgerEntry
-            (m k d)
+       (case-on hd Pair
+         ((case Pair
+            (m d)
             (case-on (sym_in m visited) Bool
               ((case True
                  (steps
@@ -1704,7 +1710,7 @@
                     (rewrite (hyp 2) lr lhs true ()))
                    refl))
                (case False
-                 (have (= (le 0 (led_pending rest visited)) True)
+                 (have (= (le 0 (edges_pending rest visited)) True)
                    (steps ((rewrite (hyp 2) lr lhs true ())) refl)
                    (have (= (le 0 (sym_len d)) True)
                      (rewrite-with
@@ -1722,19 +1728,21 @@
                        (by arith (list 1 1 1)))))))))))))))
 
 ;; adding x to visited never increases pending.
-(claim led_pending_mono
-  (goal ((led (List LedgerEntry)) (x Symbol) (vis (List Symbol))) ()
-    (= (le (led_pending led (Cons x vis)) (led_pending led vis)) True))
-  (induct led
+(claim edges_pending_mono
+  (goal
+    ((edges (List (Pair Symbol (List Symbol)))) (x Symbol) (vis (List Symbol)))
+    ()
+    (= (le (edges_pending edges (Cons x vis)) (edges_pending edges vis)) True))
+  (induct edges
     ((case Nil (steps ((simp lhs)) refl))
      (case Cons
        (hd rest)
-       (case-on hd LedgerEntry
-         ((case LedgerEntry
-            (m k d)
+       (case-on hd Pair
+         ((case Pair
+            (m d)
             (have
               (=
-                (le (led_pending rest (Cons x vis)) (led_pending rest vis))
+                (le (edges_pending rest (Cons x vis)) (edges_pending rest vis))
                 True)
               (steps ((rewrite (hyp 1) lr lhs true ())) refl)
               (have (= (le 0 (sym_len d)) True)
@@ -1783,38 +1791,41 @@
                              (simp lhs))
                             (by arith (list 1 1 0))))))))))))))))))
 
-;; the productive step (n is an unvisited key) drops pending by >= 1 + |cites|.
-(claim led_pending_drop
-  (goal ((n Symbol) (visited (List Symbol)) (led (List LedgerEntry)))
-    ((= (led_is_some (led_lookup n led)) True) (= (sym_in n visited) False))
+;; the productive step (n is an unvisited key) drops pending by >= 1 + |succs|.
+(claim edges_pending_drop
+  (goal
+    ((n Symbol)
+     (visited (List Symbol))
+     (edges (List (Pair Symbol (List Symbol)))))
+    ((= (ed_is_some (edges_lookup n edges)) True) (= (sym_in n visited) False))
     (=
       (le
         (+
-          (+ 1 (sym_len (le_cites (led_lookup n led))))
-          (led_pending led (Cons n visited)))
-        (led_pending led visited))
+          (+ 1 (sym_len (ed_succs (edges_lookup n edges))))
+          (edges_pending edges (Cons n visited)))
+        (edges_pending edges visited))
       True))
-  (induct led
+  (induct edges
     ((case Nil (absurd (premise 0)))
      (case Cons
        (hd rest)
-       (case-on hd LedgerEntry
-         ((case LedgerEntry
-            (m k d)
+       (case-on hd Pair
+         ((case Pair
+            (m d)
             (case-on (sym_eq m n) Bool
               ((case True
                  (have (= m n) (by arith (list))
                    (have
                      (=
                        (le
-                         (led_pending rest (Cons n visited))
-                         (led_pending rest visited))
+                         (edges_pending rest (Cons n visited))
+                         (edges_pending rest visited))
                        True)
                      (rewrite-with
-                       (lemma led_pending_mono)
+                       (lemma edges_pending_mono)
                        lr
                        lhs
-                       ((inst led rest) (inst x n) (inst vis visited))
+                       ((inst edges rest) (inst x n) (inst vis visited))
                        ()
                        refl)
                      (steps
@@ -1827,14 +1838,14 @@
                         (simp lhs))
                        (by arith (list 1 0 0 0 1))))))
                (case False
-                 (have (= (led_lookup n rest) (led_lookup n (Cons hd rest)))
+                 (have (= (edges_lookup n rest) (edges_lookup n (Cons hd rest)))
                    (steps
                      ((rewrite (hyp 1) lr rhs true ())
                       (simp rhs)
                       (rewrite (hyp 0) lr rhs true ())
                       (simp rhs))
                      refl)
-                   (have (= (led_is_some (led_lookup n rest)) True)
+                   (have (= (ed_is_some (edges_lookup n rest)) True)
                      (steps
                        ((rewrite (premise 2) lr lhs true ())
                         (rewrite (premise 0) lr lhs true ()))
@@ -1843,9 +1854,9 @@
                        (=
                          (le
                            (+
-                             (+ 1 (sym_len (le_cites (led_lookup n rest))))
-                             (led_pending rest (Cons n visited)))
-                           (led_pending rest visited))
+                             (+ 1 (sym_len (ed_succs (edges_lookup n rest))))
+                             (edges_pending rest (Cons n visited)))
+                           (edges_pending rest visited))
                          True)
                        (rewrite-with
                          (hyp 2)
@@ -1874,6 +1885,23 @@
                                (rewrite (hyp 0) lr lhs true ())
                                (simp lhs))
                               (by arith (list 1 0 0 0 0 1)))))))))))))))))))
+
+
+;; the citation DAG as an edge list: ledger key -> its citations.
+(fn led_edges ((led (List LedgerEntry))) (List (Pair Symbol (List Symbol)))
+  (measure (struct led))
+  (match led
+    (Nil Nil)
+    ((Cons (LedgerEntry n _ cs) rest) (Cons (Pair n cs) (led_edges rest)))))
+
+;; the ledger entry of a name (first match) — the kind-reading consumers
+;; (led_filter, led_ax_item) still need the full entry, not just its edge.
+(fn led_lookup ((name Symbol) (led (List LedgerEntry))) (Option LedgerEntry)
+  (measure (struct led))
+  (match led
+    (Nil None)
+    ((Cons (LedgerEntry n k cs) rest)
+     (if (sym_eq n name) (Some (LedgerEntry n k cs)) (led_lookup name rest)))))
 
 ;; the names among `names` whose ledger kind is one of `kinds`.
 (fn led_filter
@@ -1932,341 +1960,15 @@
     ((Cons (Arm _ body) rest)
      (sym_concat (calls_of_expr body) (calls_of_arms rest)))))
 
-;; ---- termination measure for call_close (data-weighted; issue #1) ----------
-;; call_close is the run-mode twin of led_close: a worklist fixpoint that pops a
-;; name and, on an unvisited FN, marks it AND pushes the calls in its body (so
-;; work can GROW). The measure is the SAME shape as led_close's,
-;;   call_pending(fns, visited) + sym_len(work),
-;; with call_pending weighting each UNVISITED fn by (1 + |calls in its body|) —
-;; the data weight that absorbs the work-growth at the Some arm (work gains the
-;; body's calls, pending drops by 1 + |those calls|). call_close now takes the
-;; fn LIST directly (it only ever destructured `fns` out of the Module); that
-;; keeps the measure a clean parallel to led_close's bare-list form. The cited
-;; facts live just below; none reaches call_close in the call graph, so
-;; stratified citation admits them as same-closure claims.
-(fn call_pending_fns ((fns (List FnDef)) (visited (List Symbol))) Int
+;; the run-mode call graph as an edge list: fn name -> the calls in its body.
+;; Narrow is FIRST-ORDER, so a callee is always a Call by name and closure over
+;; these edges is exact; prims / externs / sigs have no entry and are leaves.
+(fn call_edges ((fns (List FnDef))) (List (Pair Symbol (List Symbol)))
   (measure (struct fns))
   (match fns
-    (Nil 0)
+    (Nil Nil)
     ((Cons (FnDef q _ _ body) rest)
-     (if (sym_in (qn_name q) visited) (call_pending_fns rest visited)
-     (+ (+ 1 (sym_len (calls_of_expr body))) (call_pending_fns rest visited))))))
-
-;; the call list of a lookup result (Nil for a miss). Stating call_pending_drop
-;; over this accessor lets its proof reduce directly under the matched ctor — no
-;; constructor-injectivity step needed (cf. le_cites for led_close).
-(fn cl_calls ((e (Option FnDef))) (List Symbol)
-  (match e
-    (None Nil)
-    ((Some (FnDef _ _ _ body)) (calls_of_expr body))))
-
-(fn cl_is_some ((e (Option FnDef))) Bool
-  (match e
-    (None False)
-    ((Some _) True)))
-
-(fn call_close ((work (List Symbol)) (visited (List Symbol)) (fns (List FnDef)))
-  (List Symbol)
-  (measure
-    (+ (call_pending_fns fns visited) (sym_len work))
-    ;; site 0: (sym_in n visited)=True, recurse (rest, visited, fns)
-    (steps
-      ((rewrite (premise 0) lr lhs true ())
-       (rewrite (lemma sym_len_cons) lr lhs true ()))
-      (by arith (list 1 0 0)))
-    (have (= (le 0 (call_pending_fns fns visited)) True)
-      (rewrite-with
-        (lemma call_pending_nonneg)
-        lr
-        lhs
-        ((inst fns fns) (inst visited visited))
-        ()
-        refl)
-      (have (= (le 0 (sym_len rest)) True)
-        (rewrite-with (lemma sym_len_nonneg) lr lhs ((inst xs rest)) () refl)
-        (by arith (list 1 0 0 1 1))))
-    ;; site 1: None arm, recurse (rest, Cons n visited, fns)
-    (have
-      (=
-        (le
-          (call_pending_fns fns (Cons n visited))
-          (call_pending_fns fns visited))
-        True)
-      (rewrite-with
-        (lemma call_pending_mono)
-        lr
-        lhs
-        ((inst fns fns) (inst x n) (inst vis visited))
-        ()
-        refl)
-      (steps
-        ((rewrite (premise 0) lr lhs true ())
-         (rewrite (lemma sym_len_cons) lr lhs true ()))
-        (by arith (list 1 0 0 0 1))))
-    (have (= (le 0 (call_pending_fns fns (Cons n visited))) True)
-      (rewrite-with
-        (lemma call_pending_nonneg)
-        lr
-        lhs
-        ((inst fns fns) (inst visited (Cons n visited)))
-        ()
-        refl)
-      (have (= (le 0 (sym_len rest)) True)
-        (rewrite-with (lemma sym_len_nonneg) lr lhs ((inst xs rest)) () refl)
-        (by arith (list 1 0 0 0 1 1))))
-    ;; site 2: Some arm, recurse (sym_concat (calls_of_expr body) rest, Cons n visited, fns)
-    (have (= (cl_calls (find_fn_named n fns)) (calls_of_expr body))
-      (steps ((rewrite (premise 2) lr lhs true ()) (simp lhs)) refl)
-      (have (= (cl_is_some (find_fn_named n fns)) True)
-        (steps ((rewrite (premise 2) lr lhs true ()) (simp lhs)) refl)
-        (have
-          (=
-            (le
-              (+
-                (+ 1 (sym_len (calls_of_expr body)))
-                (call_pending_fns fns (Cons n visited)))
-              (call_pending_fns fns visited))
-            True)
-          (steps
-            ((rewrite (premise 3) rl lhs true ()))
-            (rewrite-with
-              (lemma call_pending_drop)
-              lr
-              lhs
-              ((inst n n) (inst visited visited) (inst fns fns))
-              ((steps ((rewrite (premise 4) lr lhs true ())) refl)
-               (steps ((rewrite (premise 1) lr lhs true ())) refl))
-              refl))
-          (steps
-            ((rewrite (premise 0) lr lhs true ())
-             (rewrite (lemma sym_len_cons) lr lhs true ())
-             (rewrite (lemma sym_len_concat) lr lhs true ()))
-            (by arith (list 1 0 0 0 0 0 1))))))
-    (have (= (le 0 (call_pending_fns fns (Cons n visited))) True)
-      (rewrite-with
-        (lemma call_pending_nonneg)
-        lr
-        lhs
-        ((inst fns fns) (inst visited (Cons n visited)))
-        ()
-        refl)
-      (have (= (le 0 (sym_len (sym_concat (calls_of_expr body) rest))) True)
-        (rewrite-with
-          (lemma sym_len_nonneg)
-          lr
-          lhs
-          ((inst xs (sym_concat (calls_of_expr body) rest)))
-          ()
-          refl)
-        (by arith (list 1 0 0 0 1 1)))))
-  (match work
-    (Nil visited)
-    ((Cons n rest)
-     (if (sym_in n visited) (call_close rest visited fns)
-     (match (find_fn_named n fns)
-       (None (call_close rest (Cons n visited) fns))  ; prim / extern / sig
-       ((Some (FnDef fq fp fr body))
-        (call_close (sym_concat (calls_of_expr body) rest) (Cons n visited) fns)))))))
-
-;; ---- totality support for call_close (cited by its measure) ----------------
-;; Parallel to led_close's lemmas; sym_len + sym_len_{nil,cons,nonneg,concat}
-;; are shared (defined above for led_close). None reaches call_close in the
-;; call graph, so stratified citation admits them as same-closure facts.
-
-;; 0 <= call_pending_fns fns visited.
-(claim call_pending_nonneg
-  (goal ((fns (List FnDef)) (visited (List Symbol))) ()
-    (= (le 0 (call_pending_fns fns visited)) True))
-  (induct fns
-    ((case Nil (steps ((simp lhs)) refl))
-     (case Cons
-       (hd rest)
-       (case-on hd FnDef
-         ((case FnDef
-            (q fp fr fb)
-            (case-on (sym_in (qn_name q) visited) Bool
-              ((case True
-                 (steps
-                   ((rewrite (hyp 1) lr lhs true ())
-                    (simp lhs)
-                    (rewrite (hyp 0) lr lhs true ())
-                    (simp lhs)
-                    (rewrite (hyp 2) lr lhs true ()))
-                   refl))
-               (case False
-                 (have (= (le 0 (call_pending_fns rest visited)) True)
-                   (steps ((rewrite (hyp 2) lr lhs true ())) refl)
-                   (have (= (le 0 (sym_len (calls_of_expr fb))) True)
-                     (rewrite-with
-                       (lemma sym_len_nonneg)
-                       lr
-                       lhs
-                       ((inst xs (calls_of_expr fb)))
-                       ()
-                       refl)
-                     (steps
-                       ((rewrite (hyp 1) lr lhs true ())
-                        (simp lhs)
-                        (rewrite (hyp 0) lr lhs true ())
-                        (simp lhs))
-                       (by arith (list 1 1 1)))))))))))))))
-
-;; adding x to visited never increases pending.
-(claim call_pending_mono
-  (goal ((fns (List FnDef)) (x Symbol) (vis (List Symbol))) ()
-    (= (le (call_pending_fns fns (Cons x vis)) (call_pending_fns fns vis)) True))
-  (induct fns
-    ((case Nil (steps ((simp lhs)) refl))
-     (case Cons
-       (hd rest)
-       (case-on hd FnDef
-         ((case FnDef
-            (q fp fr fb)
-            (have
-              (=
-                (le
-                  (call_pending_fns rest (Cons x vis))
-                  (call_pending_fns rest vis))
-                True)
-              (steps ((rewrite (hyp 1) lr lhs true ())) refl)
-              (have (= (le 0 (sym_len (calls_of_expr fb))) True)
-                (rewrite-with
-                  (lemma sym_len_nonneg)
-                  lr
-                  lhs
-                  ((inst xs (calls_of_expr fb)))
-                  ()
-                  refl)
-                (case-on (sym_eq (qn_name q) x) Bool
-                  ((case True
-                     (case-on (sym_in (qn_name q) vis) Bool
-                       ((case True
-                          (steps
-                            ((rewrite (hyp 2) lr lhs true ())
-                             (simp lhs)
-                             (rewrite (hyp 1) lr lhs true ())
-                             (rewrite (hyp 0) lr lhs true ())
-                             (simp lhs))
-                            (by arith (list 1 1 0))))
-                        (case False
-                          (steps
-                            ((rewrite (hyp 2) lr lhs true ())
-                             (simp lhs)
-                             (rewrite (hyp 1) lr lhs true ())
-                             (rewrite (hyp 0) lr lhs true ())
-                             (simp lhs))
-                            (by arith (list 1 1 1)))))))
-                   (case False
-                     (case-on (sym_in (qn_name q) vis) Bool
-                       ((case True
-                          (steps
-                            ((rewrite (hyp 2) lr lhs true ())
-                             (simp lhs)
-                             (rewrite (hyp 1) lr lhs true ())
-                             (rewrite (hyp 0) lr lhs true ())
-                             (simp lhs))
-                            (by arith (list 1 1 0))))
-                        (case False
-                          (steps
-                            ((rewrite (hyp 2) lr lhs true ())
-                             (simp lhs)
-                             (rewrite (hyp 1) lr lhs true ())
-                             (rewrite (hyp 0) lr lhs true ())
-                             (simp lhs))
-                            (by arith (list 1 1 0))))))))))))))))))
-
-;; the productive step (n is an unvisited fn) drops pending by >= 1 + |calls|.
-(claim call_pending_drop
-  (goal ((n Symbol) (visited (List Symbol)) (fns (List FnDef)))
-    ((= (cl_is_some (find_fn_named n fns)) True) (= (sym_in n visited) False))
-    (=
-      (le
-        (+
-          (+ 1 (sym_len (cl_calls (find_fn_named n fns))))
-          (call_pending_fns fns (Cons n visited)))
-        (call_pending_fns fns visited))
-      True))
-  (induct fns
-    ((case Nil (absurd (premise 0)))
-     (case Cons
-       (hd rest)
-       (case-on hd FnDef
-         ((case FnDef
-            (q fp fr fb)
-            (case-on (sym_eq (qn_name q) n) Bool
-              ((case True
-                 (have (= (qn_name q) n) (by arith (list))
-                   (have
-                     (=
-                       (le
-                         (call_pending_fns rest (Cons n visited))
-                         (call_pending_fns rest visited))
-                       True)
-                     (rewrite-with
-                       (lemma call_pending_mono)
-                       lr
-                       lhs
-                       ((inst fns rest) (inst x n) (inst vis visited))
-                       ()
-                       refl)
-                     (steps
-                       ((rewrite (hyp 1) lr lhs true ())
-                        (simp lhs)
-                        (rewrite (hyp 0) lr lhs true ())
-                        (simp lhs)
-                        (rewrite (premise 2) lr lhs true ())
-                        (rewrite (premise 1) lr lhs true ())
-                        (simp lhs))
-                       (by arith (list 1 0 0 0 1))))))
-               (case False
-                 (have
-                   (= (find_fn_named n rest) (find_fn_named n (Cons hd rest)))
-                   (steps
-                     ((rewrite (hyp 1) lr rhs true ())
-                      (simp rhs)
-                      (rewrite (hyp 0) lr rhs true ())
-                      (simp rhs))
-                     refl)
-                   (have (= (cl_is_some (find_fn_named n rest)) True)
-                     (steps
-                       ((rewrite (premise 2) lr lhs true ())
-                        (rewrite (premise 0) lr lhs true ()))
-                       refl)
-                     (have
-                       (=
-                         (le
-                           (+
-                             (+ 1 (sym_len (cl_calls (find_fn_named n rest))))
-                             (call_pending_fns rest (Cons n visited)))
-                           (call_pending_fns rest visited))
-                         True)
-                       (rewrite-with
-                         (hyp 2)
-                         lr
-                         lhs
-                         ((inst n n) (inst visited visited))
-                         ((steps ((rewrite (premise 3) lr lhs true ())) refl)
-                          (steps ((rewrite (premise 1) lr lhs true ())) refl))
-                         refl)
-                       (case-on (sym_in (qn_name q) visited) Bool
-                         ((case True
-                            (steps
-                              ((rewrite (hyp 2) lr lhs true ())
-                               (simp lhs)
-                               (rewrite (hyp 1) lr lhs true ())
-                               (simp lhs)
-                               (rewrite (hyp 0) lr lhs true ())
-                               (simp lhs))
-                              (by arith (list 1 0 0 0 0 1))))
-                          (case False
-                            (steps
-                              ((rewrite (hyp 2) lr lhs true ())
-                               (simp lhs)
-                               (rewrite (hyp 1) lr lhs true ())
-                               (simp lhs)
-                               (rewrite (hyp 0) lr lhs true ())
-                               (simp lhs))
-                              (by arith (list 1 0 0 0 0 1)))))))))))))))))))
+     (Cons (Pair (qn_name q) (calls_of_expr body)) (call_edges rest)))))
 
 (fn syms_inter ((xs (List Symbol)) (ys (List Symbol))) (List Symbol)
   (measure (struct xs))
@@ -2328,11 +2030,12 @@
   (List Int)
   (match b
     ((Bin name entry externs trusts requires)
-     (let ((reach (led_close requires Nil led)))
+     (let ((reach (edges_close requires Nil (led_edges led))))
        (let
          ((calls
             (match m
-              ((Module _ fns _ _ _) (call_close (Cons entry Nil) Nil fns)))))
+              ((Module _ fns _ _ _)
+               (edges_close (Cons entry Nil) Nil (call_edges fns))))))
          (append_int
            "LEDGER "
            (append_int
@@ -2360,7 +2063,7 @@
                          (led_line
                            "lemmas (proven, interior)"
                            (show_nat
-                             (len_syms
+                             (sym_len
                                (led_filter
                                  reach
                                  led
@@ -2388,7 +2091,7 @@
   (match b
     ((Bin name entry externs trusts requires)
      (oc_concat
-       (Cons (COBin name (len_syms requires) (count_met requires binmp th)) Nil)
+       (Cons (COBin name (sym_len requires) (count_met requires binmp th)) Nil)
        (oc_concat
          (Cons (COLedger (ledger_block b led own_ext m)) Nil)
          (oc_concat
@@ -2501,7 +2204,7 @@
   (match l
     ((Lib name exports acc)
      (oc_concat
-       (Cons (COLib name (len_syms exports) (count_impl exports m)) Nil)
+       (Cons (COLib name (sym_len exports) (count_impl exports m)) Nil)
        (oc_concat (exports_check exports m) (accepts_check acc exports))))))
 
 (fn lib_reports ((ls (List Lib)) (m Module)) (List ClaimOutcome)
@@ -3108,12 +2811,6 @@
     (List SExpr)
     QName))
 
-(fn mc_sym_member ((s Symbol) (xs (List Symbol))) Bool
-  (measure (struct xs))
-  (match xs
-    (Nil False)
-    ((Cons h t) (if (sym_eq h s) True (mc_sym_member s t)))))
-
 (fn mc_is_lower ((s Symbol)) Bool
   (match (chars_of_sym s)
     (Nil False)
@@ -3153,8 +2850,7 @@
 ;; inside an argument shows its binders as unknown atoms and is refused
 ;; conservatively.
 (fn mc_pure_atom ((s Symbol) (pnames (List Symbol)) (bnds (List Symbol))) Bool
-  (if (mc_is_lower s) (if (mc_sym_member s bnds) False (mc_sym_member s pnames))
-  True))
+  (if (mc_is_lower s) (if (sym_in s bnds) False (sym_in s pnames)) True))
 
 (fn mc_pure ((e SExpr) (pnames (List Symbol)) (bnds (List Symbol))) Bool
   (measure (struct e))
@@ -3258,12 +2954,6 @@
   (match a
     (Nil b)
     ((Cons h t) (Cons h (mc_app_tbs t b)))))
-
-(fn mc_app_syms ((a (List Symbol)) (b (List Symbol))) (List Symbol)
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (mc_app_syms t b)))))
 
 (fn mc_pat_has_wild ((p SExpr)) Bool
   (measure (struct p))
@@ -4152,7 +3842,7 @@
   MSiteRes
   (let ((tbn (mc_tb_names tbs Nil)))
     (if (mc_tbs_fresh tbn pnames)
-      (let ((alln (mc_app_syms tbn pnames)))
+      (let ((alln (sym_concat tbn pnames)))
         (if (mc_pure msr2 alln Nil)
           (match (mc_ext_pform pForm tbs)
             (None
@@ -4247,8 +3937,8 @@
   (match names
     (Nil True)
     ((Cons n rest)
-     (if (mc_sym_member n pnames) False
-     (if (mc_sym_member n rest) False
+     (if (sym_in n pnames) False
+     (if (sym_in n rest) False
      (mc_tbs_fresh rest pnames))))))
 
 ;; tbs is innermost-first; the fold reverses, so the appended binder params
@@ -4277,16 +3967,7 @@
 ;; param name → type env from the looked-up FnDef (order matches pForm).
 (fn mc_fd_penv ((ns (List Symbol)) (fd FnDef)) (List (Pair Symbol Type))
   (match fd
-    ((FnDef _ ptys _ _) (mc_penv_zip ns ptys))))
-
-(fn mc_penv_zip ((ns (List Symbol)) (tys (List Type))) (List (Pair Symbol Type))
-  (measure (struct ns))
-  (match ns
-    (Nil Nil)
-    ((Cons n nrest)
-     (match tys
-       (Nil Nil)
-       ((Cons ty trest) (Cons (Pair n ty) (mc_penv_zip nrest trest)))))))
+    ((FnDef _ ptys _ _) (zip_pairs ns ptys))))
 
 ;; a bare numeric `(measure E)` clause (no inline proofs) means every recursive
 ;; site takes its decrease + nonneg proof from the sidecar: synthesize the `auto`
@@ -4560,7 +4241,7 @@
               ((Pair khyps _) (mc_ob_emit name i pForm khyps msr2 msr tail)))
             (let ((tbn (mc_tb_names tbs Nil)))
               (if (mc_tbs_fresh tbn pnames)
-                (let ((alln (mc_app_syms tbn pnames)))
+                (let ((alln (sym_concat tbn pnames)))
                   (if (mc_pure msr2 alln Nil)
                     (match (mc_ext_pform pForm tbs)
                       (None tail)
@@ -5020,13 +4701,6 @@
             (_ (rr_returns rest acc)))  ; malformed → no proof; fn COFails below
           (rr_returns rest acc)))))))
 
-(fn rr_proof_for ((name Symbol) (rs (List (Pair Symbol SExpr)))) (Option SExpr)
-  (measure (struct rs))
-  (match rs
-    (Nil None)
-    ((Cons (Pair n p) rest)
-     (if (sym_eq n name) (Some p) (rr_proof_for name rest)))))
-
 ;; the call args of the obligation: one (SSym pname) per param binder of pForm.
 (fn rr_arg_syms ((binders (List SExpr))) (List SExpr)
   (measure (struct binders))
@@ -5127,7 +4801,7 @@
    (rmap (List (Pair Symbol SExpr)))
    (autos (List (Pair Symbol SExpr))))
   (List ClaimOutcome)
-  (match (rr_proof_for name rmap)
+  (match (auto_lookup name rmap)
     (None (Cons (COFail name (rr_missing_msg name) Nil) Nil))
     ((Some proofS)
      (let ((m2 (rr_deref m (mc_scc_of (qn_at modpath name) sccs))))

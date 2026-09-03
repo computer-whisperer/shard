@@ -65,12 +65,6 @@
 ;; Small string / list helpers (tc_-prefixed; see header).
 ;; ---------------------------------------------------------------------------
 
-(fn tc_app ((xs (List Int)) (ys (List Int))) (List Int)
-  (measure (struct xs))
-  (match xs
-    (Nil ys)
-    ((Cons h t) (Cons h (tc_app t ys)))))
-
 (fn tc_nat ((n Int)) (List Int)  ; n >= 0
   ;; measure n; recurses on (ediv n 10) (== / on the nonneg index domain).
   ;; div-facts names the quotient so farkas closes the descent.
@@ -79,7 +73,7 @@
     (div-facts n 10 q (by arith (list 10 9 1 1 0 -10)))
     (div-facts n 10 q (by arith (list 10 1 -1 0 1 10))))
   (if (lt n 10) (Cons (+ 48 n) Nil)
-  (tc_app (tc_nat (ediv n 10)) (Cons (+ 48 (mod n 10)) Nil))))
+  (append_int (tc_nat (ediv n 10)) (Cons (+ 48 (mod n 10)) Nil))))
 
 (fn tc_sym_in ((x Symbol) (xs (List Symbol))) Bool
   (measure (struct xs))
@@ -127,15 +121,18 @@
      (match args
        (Nil (chars_of_sym (qn_name c)))
        (_
-         (tc_app
+         (append_int
            "("
-           (tc_app (chars_of_sym (qn_name c)) (tc_app (tc_render_tys args) ")"))))))))
+           (append_int
+             (chars_of_sym (qn_name c))
+             (append_int (tc_render_tys args) ")"))))))))
 
 (fn tc_render_tys ((ts (List Type))) (List Int)
   (measure (struct ts))  ; " a b c"
   (match ts
     (Nil Nil)
-    ((Cons h t) (tc_app " " (tc_app (tc_render_ty h) (tc_render_tys t))))))
+    ((Cons h t)
+     (append_int " " (append_int (tc_render_ty h) (tc_render_tys t))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Metavariables + unification.
@@ -301,13 +298,13 @@
 (fn tc_mismatch ((what (List Int)) (a Type) (b Type) (tc Tc)) (List Int)
   (match tc
     ((Tc _ s)
-     (tc_app
+     (append_int
        what
-       (tc_app
+       (append_int
          ": "
-         (tc_app
+         (append_int
            (tc_render_ty (tc_resolve a s))
-           (tc_app " vs " (tc_render_ty (tc_resolve b s)))))))))
+           (append_int " vs " (tc_render_ty (tc_resolve b s)))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Type-scheme instantiation: each named tvar gets a fresh meta.
@@ -430,11 +427,11 @@
     ((FVar x)
      (match (tc_find_fparam x fenv)
        ((Some t) (TcOk tc t))
-       (None (TcErr (tc_app "unbound variable: " (chars_of_sym x))))))
+       (None (TcErr (append_int "unbound variable: " (chars_of_sym x))))))
     ((Ctor c args)
      (match (tc_find_ctor c (tc_tds m))
        (None
-         (TcErr (tc_app "unknown constructor: " (chars_of_sym (qn_name c)))))
+         (TcErr (append_int "unknown constructor: " (chars_of_sym (qn_name c)))))
        ((Some (Pair (TypeDef tname tparams _ _) (CtorDef _ fields)))
         (match (tc_freshen tparams tc)
           ((Freshened inst metas tc1)
@@ -474,7 +471,7 @@
                    (match (typedef_refine rname m)
                      (None
                        (TcErr
-                         (tc_app
+                         (append_int
                            "refine_val: not a refined type: "
                            (chars_of_sym (qn_name rname)))))
                      ((Some (Pair base _)) (TcOk tc1 base))))))))))
@@ -499,7 +496,7 @@
             (match (typedef_refine rname m)
               (None
                 (TcErr
-                  (tc_app
+                  (append_int
                     "refine_try: not a refined type: "
                     (chars_of_sym (qn_name rname)))))
               ((Some (Pair base _))
@@ -519,7 +516,8 @@
            ;; index) get a shot — a user fn of the same name shadows them
            ;; here exactly as it shadows at runtime (trie-first dispatch).
            (None
-             (TcErr (tc_app "unknown function: " (chars_of_sym (qn_name f)))))
+             (TcErr
+               (append_int "unknown function: " (chars_of_sym (qn_name f)))))
            ((Some (Pair ptypes ret))
             (match (tc_freshen (tc_collect_tvars (Cons ret ptypes) Nil) tc)
               ((Freshened inst _ tc1)
@@ -635,12 +633,12 @@
         (Nil (TcsOk tc))
         (_
           (TcsErr
-            (tc_app "too few arguments to: " (chars_of_sym (qn_name site)))))))
+            (append_int "too few arguments to: " (chars_of_sym (qn_name site)))))))
     ((Cons a arest)
      (match ptypes
        (Nil
          (TcsErr
-           (tc_app "too many arguments to: " (chars_of_sym (qn_name site)))))
+           (append_int "too many arguments to: " (chars_of_sym (qn_name site)))))
        ((Cons p prest)
         (match (tc_infer m tc fenv env a)
           ((TcErr msg) (TcsErr msg))
@@ -651,9 +649,9 @@
                  (tc_check_args m tc1 fenv env arest prest site (+ i 1))
                  (TcsErr
                    (tc_mismatch
-                     (tc_app
+                     (append_int
                        (chars_of_sym (qn_name site))
-                       (tc_app " arg " (tc_nat i)))
+                       (append_int " arg " (tc_nat i)))
                      at
                      p
                      tc1))))
@@ -757,7 +755,7 @@
      (match (tc_find_ctor c (tc_tds m))
        (None
          (TBErr
-           (tc_app
+           (append_int
              "unknown constructor in pattern: "
              (chars_of_sym (qn_name c)))))
        ((Some (Pair (TypeDef tname tparams _ _) (CtorDef _ fields)))
@@ -767,7 +765,7 @@
              (None
                (TBErr
                  (tc_mismatch
-                   (tc_app "pattern " (chars_of_sym (qn_name c)))
+                   (append_int "pattern " (chars_of_sym (qn_name c)))
                    t
                    (TCon tname metas)
                    tc1)))
@@ -788,12 +786,16 @@
         (Nil (TBOk tc acc))
         (_
           (TBErr
-            (tc_app "too few fields in pattern: " (chars_of_sym (qn_name site)))))))
+            (append_int
+              "too few fields in pattern: "
+              (chars_of_sym (qn_name site)))))))
     ((Cons p prest)
      (match ts
        (Nil
          (TBErr
-           (tc_app "too many fields in pattern: " (chars_of_sym (qn_name site)))))
+           (append_int
+             "too many fields in pattern: "
+             (chars_of_sym (qn_name site)))))
        ((Cons t trest)
         (match (tc_pat m tc t p acc)
           ((TBErr msg) (TBErr msg))
@@ -828,22 +830,22 @@
     ((TVar x)
      (if anytv None
      (if (tc_sym_in x allowed) None
-     (Some (tc_app "unknown type variable: " (chars_of_sym x))))))
+     (Some (append_int "unknown type variable: " (chars_of_sym x))))))
     ((TCon c args)
      (if (tc_is_prim_ty c)
        (match args
          (Nil None)
          (_
            (Some
-             (tc_app
+             (append_int
                "primitive type takes no arguments: "
                (chars_of_sym (qn_name c))))))
        (match (find_typedef c (tc_tds m))
-         (None (Some (tc_app "unknown type: " (chars_of_sym (qn_name c)))))
+         (None (Some (append_int "unknown type: " (chars_of_sym (qn_name c)))))
          ((Some (TypeDef _ tparams _ _))
           (if (int_eq (tc_len_tys args) (tc_len_syms tparams))
             (tc_tys_wf m allowed anytv args)
-            (Some (tc_app "wrong type arity: " (chars_of_sym (qn_name c)))))))))))
+            (Some (append_int "wrong type arity: " (chars_of_sym (qn_name c)))))))))))
 
 (fn tc_tys_wf ((m Module) (allowed (List Symbol)) (anytv Bool) (ts (List Type)))
   (Option (List Int))
@@ -862,7 +864,7 @@
 ;; `name` is a display name (Symbol): a binder name, or a decl's local name
 ;; (decl callers pass (qn_name …)). Kept Symbol so both caller classes share it.
 (fn tc_label ((kind (List Int)) (name Symbol) (msg (List Int))) (List Int)
-  (tc_app kind (tc_app (chars_of_sym name) (tc_app ": " msg))))
+  (append_int kind (append_int (chars_of_sym name) (append_int ": " msg))))
 
 ;; a refined type's predicate must be a fn (BASE) -> Bool (the subset-type
 ;; meaning + refine-fact's soundness depend on it; also PRED must be total —
@@ -884,13 +886,13 @@
          (match (tc_fn_sig pred m)
            (None
              (Some
-               (tc_app
+               (append_int
                  "refine predicate not found: "
                  (chars_of_sym (qn_name pred)))))
            ((Some (Pair ptypes ret))
             (if (tc_refine_sig_ok ptypes ret base) None
             (Some
-              (tc_app
+              (append_int
                 "refine predicate must be (BASE) -> Bool: "
                 (chars_of_sym (qn_name pred))))))))))))
 
@@ -1023,7 +1025,7 @@
           ((TcOk tc2 rt)
            (match (tc_unify lt2 rt tc2)
              (None
-               (TcsErr (tc_mismatch (tc_app what " lhs vs rhs") lt2 rt tc2)))
+               (TcsErr (tc_mismatch (append_int what " lhs vs rhs") lt2 rt tc2)))
              ((Some tc3) (TcsOk tc3))))))))))
 
 (fn tc_check_eqs
@@ -1038,7 +1040,7 @@
   (match eqs
     (Nil (TcsOk tc))
     ((Cons eq rest)
-     (match (tc_check_eq m tc fenv env eq (tc_app "premise " (tc_nat i)))
+     (match (tc_check_eq m tc fenv env eq (append_int "premise " (tc_nat i)))
        ((TcsErr msg) (TcsErr msg))
        ((TcsOk tc1) (tc_check_eqs m tc1 fenv env rest (+ i 1)))))))
 
@@ -1217,9 +1219,9 @@
           ;; even when a divergent trace misattributes the step.
           ((TTErr msg)
            (Some
-             (tc_app
-               (tc_app "citation: binder '" (chars_of_sym pname))
-               (tc_app "' " msg))))
+             (append_int
+               (append_int "citation: binder '" (chars_of_sym pname))
+               (append_int "' " msg))))
           ((TTOk term)
            (match (tc_infer m tc sparams Nil term)
              ((TcErr msg) (Some msg))
@@ -1231,7 +1233,7 @@
                       env)
                     (Some
                       (tc_mismatch
-                        (tc_app "citation binder " (chars_of_sym pname))
+                        (append_int "citation binder " (chars_of_sym pname))
                         t
                         (type_subst inst pty)
                         tc1))))
