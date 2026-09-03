@@ -25,6 +25,7 @@
 (import "../../kernel/reader.shard")  ; SExpr / read_all / elaborate / parse_type
 (import "../../kernel/proof_reader.shard")  ; parse_goal / parse_proof / goal_tparams
 (import "../../kernel/desugar.shard")  ; ds_proof / DsRes — the REAL desugar pass
+(import "../../kernel/loader.shard")  ; int_list_eq / starts_with
 (use (:: kernel stdlib *))
 (use (:: kernel term *))
 (use (:: kernel module *))
@@ -32,6 +33,8 @@
 (use (:: kernel reader *))
 (use (:: kernel proof_reader *))
 (use (:: kernel desugar *))
+(use (:: kernel loader int_list_eq))
+(use (:: kernel loader starts_with))
 
 ;; ===========================================================================
 ;; the generic byte/suggestion kit (shared with explain.shard, which imports
@@ -43,18 +46,6 @@
   (match xs
     (Nil 0)
     ((Cons _ r) (+ 1 (ex_len r)))))
-
-(fn ex_eq ((a (List Int)) (b (List Int))) Bool
-  (measure (struct a))
-  (match a
-    (Nil
-      (match b
-        (Nil True)
-        (_ False)))
-    ((Cons x ar)
-     (match b
-       (Nil False)
-       ((Cons y br) (if (int_eq x y) (ex_eq ar br) False))))))
 
 (fn ex_drop ((n Int) (xs (List Int))) (List Int)
   (measure (struct xs))
@@ -88,22 +79,13 @@
 ;; suffix after the first occurrence of `pat`, if any.
 (fn ex_find ((pat (List Int)) (xs (List Int))) (Option (List Int))
   (measure (struct xs))
-  (if (starts_with_x pat xs) (Some (ex_drop (ex_len pat) xs))
+  (if (starts_with pat xs) (Some (ex_drop (ex_len pat) xs))
   (match xs
     (Nil None)
     ((Cons _ r) (ex_find pat r)))))
 
 ;; loader.shard has starts_with; this module does not import loader, so the
 ;; kit carries its own spelling (explain.shard uses this one everywhere).
-(fn starts_with_x ((pre (List Int)) (xs (List Int))) Bool
-  (measure (struct pre))
-  (match pre
-    (Nil True)
-    ((Cons p pr)
-     (match xs
-       (Nil False)
-       ((Cons x xr) (if (int_eq p x) (starts_with_x pr xr) False))))))
-
 (fn ex_until_sp ((xs (List Int))) (List Int)
   (measure (struct xs))
   (match xs
@@ -126,7 +108,7 @@
   (measure (struct xs))
   (match xs
     (Nil False)
-    ((Cons h r) (if (ex_eq n h) True (ex_has_name n r)))))
+    ((Cons h r) (if (int_list_eq n h) True (ex_has_name n r)))))
 
 (fn ex_dedup_ll ((xs (List (List Int))) (seen (List (List Int))))
   (List (List Int))
@@ -203,8 +185,8 @@
 ;; else Levenshtein, admitted at d <= 2 and d < len (never suggest a name
 ;; sharing no structure). None = not a candidate.
 (fn ex_score ((n (List Int)) (c (List Int))) (Option Int)
-  (if (ex_eq n c) None
-  (if (ex_eq (ex_sortc n) (ex_sortc c)) (Some 0)
+  (if (int_list_eq n c) None
+  (if (int_list_eq (ex_sortc n) (ex_sortc c)) (Some 0)
   (let ((d (ex_lev n c)))
     (if (le d 2) (if (lt d (ex_len n)) (Some d) None) None)))))
 
@@ -369,6 +351,7 @@
     "have"
     "div-facts"
     "rewrite-with"
+    "exact-conv"
     "refine-fact"
     "inject"
     "refl"
@@ -376,7 +359,7 @@
     "below"))
 
 (fn pd_step_heads () (List (List Int))
-  (list "unfold" "rewrite" "compute" "simp" "reduce" "inspect"))
+  (list "unfold" "rewrite" "compute" "simp" "change" "reduce" "inspect"))
 
 (fn pd_is_head ((h Symbol) (pool (List (List Int)))) Bool
   (ex_has_name (chars_of_sym h) pool))
@@ -702,6 +685,57 @@
           head
           " takes (SIDE) or (SIDE (stop FN ...)) — wrong number of arguments")))))
 
+;; a standalone (stop FN ...) tail (change / exact-conv's optional last
+;; argument) — the kernel's p_stop_list: an empty (stop) is refused, as in
+;; pd_side_stops.
+(fn pd_stop_list ((stopS SExpr) (path (List Int))) PdR
+  (match stopS
+    ((SList (Cons (SSym sh) names))
+     (if (sym_eq sh (quote stop))
+       (match names
+         (Nil
+           (PdFail
+             path
+             "(stop) with no names would silently be the unfenced form — name the stop fns or drop it"))
+         (_ PdOk))
+       (PdFail
+         path
+         (append_int
+           "the trailing argument must be (stop FN ...)"
+           (pd_got stopS)))))
+    (_
+      (PdFail
+        path
+        (append_int
+          "the trailing argument must be (stop FN ...)"
+          (pd_got stopS))))))
+
+;; (change SIDE OCC TERM) | (change SIDE OCC TERM (stop FN ...)) — the
+;; kernel's p_change_step; OCC = the rewrite spelling (true / false / (at K)).
+(fn pd_change_step ((args (List SExpr)) (ctx PdCtx) (path (List Int))) PdR
+  (match args
+    ((Cons sideS (Cons occS (Cons termS Nil)))
+     (match (pd_side sideS path "side")
+       ((PdFail p m) (PdFail p m))
+       (PdOk
+         (match (pd_occ occS path)
+           ((PdFail p m) (PdFail p m))
+           (PdOk (pd_term termS ctx path "change target"))))))
+    ((Cons sideS (Cons occS (Cons termS (Cons stopS Nil))))
+     (match (pd_side sideS path "side")
+       ((PdFail p m) (PdFail p m))
+       (PdOk
+         (match (pd_occ occS path)
+           ((PdFail p m) (PdFail p m))
+           (PdOk
+             (match (pd_term termS ctx path "change target")
+               ((PdFail p m) (PdFail p m))
+               (PdOk (pd_stop_list stopS path))))))))
+    (_
+      (PdFail
+        path
+        "change takes (change SIDE OCC TERM) or (change SIDE OCC TERM (stop FN ...)) — wrong number of arguments"))))
+
 (fn pd_step_form ((h Symbol) (args (List SExpr)) (ctx PdCtx) (path (List Int)))
   PdR
   (if (sym_eq h (quote unfold))
@@ -743,6 +777,7 @@
           "rewrite takes (rewrite EQREF DIR SIDE OCC (INST ...)) — wrong number of arguments (OCC = true / false / (at K))")))
   (if (sym_eq h (quote compute)) (pd_side_stops args ctx path "compute")
   (if (sym_eq h (quote simp)) (pd_side_stops args ctx path "simp")
+  (if (sym_eq h (quote change)) (pd_change_step args ctx path)
   (if (sym_eq h (quote reduce))
     (match args
       ((Cons sideS Nil) (pd_side sideS path "side"))
@@ -760,7 +795,7 @@
           (pd_trunc (chars_of_sym h))
           (if (pd_is_head h (pd_proof_heads))
             " — this is a PROOF form, not a step; it belongs after the step list, as the continuation"
-            (ex_sugg_str (chars_of_sym h) (pd_step_heads)))))))))))))
+            (ex_sugg_str (chars_of_sym h) (pd_step_heads))))))))))))))
 
 (fn pd_steps ((ss (List SExpr)) (ctx PdCtx) (path (List Int)) (i Int)) PdR
   (measure (struct ss))
@@ -1016,6 +1051,7 @@
              path
              "div-facts takes (div-facts TERM D QNAME PROOF) — wrong number of arguments")))
      (if (sym_eq h (quote rewrite-with)) (pd_rewrite_with args ctx path)
+     (if (sym_eq h (quote exact-conv)) (pd_exact_conv args ctx path)
      (if (sym_eq h (quote refine-fact))
        (match args
          ((Cons (SSym _) (Cons exprS (Cons subS Nil)))
@@ -1071,7 +1107,7 @@
              (pd_trunc (chars_of_sym h))
              (if (pd_is_head h (pd_step_heads))
                " — this is a STEP; steps go inside (steps (STEP ...) CONTINUATION)"
-               (ex_sugg_str (chars_of_sym h) (pd_proof_heads)))))))))))))))))))))))
+               (ex_sugg_str (chars_of_sym h) (pd_proof_heads))))))))))))))))))))))))
     ((SList (Cons badhead _))
      (PdFail
        path
@@ -1177,6 +1213,67 @@
       (PdFail
         path
         "rewrite-with takes 6 or 7 arguments — (rewrite-with EQREF DIR SIDE [OCC] (INST ...) (PROOF ...) CONTINUATION)"))))
+
+;; exact-conv, 3-arg or 4-arg (trailing (stop FN ...)) spelling — a CLOSING
+;; form, no continuation (the kernel's p_exact_conv).
+(fn pd_exact_conv ((args (List SExpr)) (ctx PdCtx) (path (List Int))) PdR
+  (measure (struct args))
+  (match args
+    ((Cons refS (Cons instsS (Cons subsS Nil)))
+     (match (pd_eqref refS ctx (pd_at path "exact-conv citation"))
+       ((PdFail p m) (PdFail p m))
+       (PdOk
+         (match instsS
+           ((SList instL)
+            (match (pd_insts instL ctx path 1)
+              ((PdFail p m) (PdFail p m))
+              (PdOk
+                (match subsS
+                  ((SList subL)
+                   (pd_proofs subL ctx (pd_at path "exact-conv obligation") 1))
+                  (_
+                    (PdFail
+                      path
+                      (append_int
+                        "the obligation slot must be a list of proofs — () when the cited lemma has no premises"
+                        (pd_got subsS))))))))
+           (_
+             (PdFail
+               path
+               (append_int
+                 "the instantiation slot must be a list — () when empty"
+                 (pd_got instsS))))))))
+    ((Cons refS (Cons instsS (Cons subsS (Cons stopS Nil))))
+     (match (pd_eqref refS ctx (pd_at path "exact-conv citation"))
+       ((PdFail p m) (PdFail p m))
+       (PdOk
+         (match instsS
+           ((SList instL)
+            (match (pd_insts instL ctx path 1)
+              ((PdFail p m) (PdFail p m))
+              (PdOk
+                (match subsS
+                  ((SList subL)
+                   (match
+                     (pd_proofs subL ctx (pd_at path "exact-conv obligation") 1)
+                     ((PdFail p m) (PdFail p m))
+                     (PdOk (pd_stop_list stopS path))))
+                  (_
+                    (PdFail
+                      path
+                      (append_int
+                        "the obligation slot must be a list of proofs — () when the cited lemma has no premises"
+                        (pd_got subsS))))))))
+           (_
+             (PdFail
+               path
+               (append_int
+                 "the instantiation slot must be a list — () when empty"
+                 (pd_got instsS))))))))
+    (_
+      (PdFail
+        path
+        "exact-conv takes 3 or 4 arguments — (exact-conv EQREF (INST ...) (PROOF ...) [(stop FN ...)])"))))
 
 (fn pd_proofs ((ss (List SExpr)) (ctx PdCtx) (path (List Int)) (i Int)) PdR
   (measure (struct ss))

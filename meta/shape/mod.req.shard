@@ -34,23 +34,20 @@
 (use (:: kernel term QName))
 (use (:: kernel term qn_name))
 (use (:: kernel term core_named))
+(use (:: kernel term qname_eq))
 (use (:: kernel module FnDef))
 (use (:: meta doc *))
 (use (:: meta spell *))
-;; ---- source-op classification (the fragment vocabulary, target-independent) -------
+;; ---- source-op classification (the shared fragment vocabulary) ------------------
 ;;
-;; which CORE ops the pure fragment speaks, by kind: WRAP ops claim a
-;; premise pair + a wrap_id citation per node; DIV ops ride the staged
-;; walk behind the divisor guard (§6y); BITWISE ops are transparent
-;; prims (§6z — no premise, no event); COND ops fuse into the branch
-;; vocabulary (§6v). Each back end renders these to its own opcodes
-;; (BAdd/BDivU/… in wasmgen; XAdd/CEq/… in x86gen).
-
-(fn is_wrap_op ((q QName)) Bool
-  (if (core_named q (quote +)) True
-  (if (core_named q (quote -)) True
-  (core_named q (quote *)))))
-
+;; the two CORE-op classes the shape kit and the back ends share: DIV
+;; ops ride the staged walk behind the divisor guard (§6y — has_div
+;; below is the dispatch scan); BITWISE ops are transparent prims (§6z
+;; — no premise, no event; nodes_e and x86gen both classify by
+;; is_bit_op). The wrap (+ - *) and cond (int_eq lt le) vocabularies
+;; are matched inline by each back end against its own opcodes
+;; (BAdd/BDivU/… in wasmgen; XAdd/CEq/… in x86gen) — no shared
+;; classifier here.
 (fn is_div_op ((q QName)) Bool
   (if (core_named q (quote ediv)) True (core_named q (quote mod))))
 
@@ -58,13 +55,6 @@
   (if (core_named q (quote band)) True
   (if (core_named q (quote bor)) True
   (core_named q (quote bxor)))))
-
-(fn is_cond_op ((q QName)) Bool
-  (if (core_named q (quote int_eq)) True
-  (if (core_named q (quote lt)) True
-  (core_named q (quote le)))))
-
-
 ;; ---- fragment dispatch scans ---------------------------------------------------
 
 ;; does the raw body mention ediv/mod anywhere? Div fns take the STAGED
@@ -251,13 +241,6 @@
 ;; value is the spec fn. EVERY advancing accum needs a twin (NAME_t<i>)
 ;; plus the counter twin (NAME_kf) — early exit leaves none of them a
 ;; closed form.
-
-(fn qn_eq ((a QName) (b QName)) Bool
-  (match a
-    ((QName am an)
-     (match b
-       ((QName bm bn) (if (sym_eq an bn) (sym_list_eq am bm) False))))))
-
 ;; the store value: an accum read, a u32 literal, a byte read at an
 ;; advancing accum, or that byte RANGE-SHIFTED (docs/X86.md §28, probe
 ;; examples/xtransform_probe.shard) — the read-modify-write shape
@@ -346,13 +329,6 @@
   (match e
     ((BVar b) (int_eq b (+ n 2)))
     (_ False)))
-
-(fn bool_at ((bs (List Bool)) (i Int)) Bool
-  (measure (struct bs))
-  (match bs
-    (Nil False)
-    ((Cons h t) (if (int_eq i 0) h (bool_at t (- i 1))))))
-
 ;; one accumulator update: itself, (+ itself C), or (- itself 1) —
 ;; increments take any positive literal stride (+1 = LSInc, C >= 2 =
 ;; LSIncK); decrements stay stride 1
@@ -645,7 +621,7 @@
 (fn lp_sarm ((sb Expr) (q QName) (n Int) (reg (List CInfo))) LRec
   (match sb
     ((Call q2 args)
-     (if (qn_eq q2 q)
+     (if (qname_eq q2 q)
        (match args
          ((Cons w rest)
           (match (lp_updk rest n 0)
@@ -884,7 +860,7 @@
 (fn li_sarm ((sb Expr) (q QName) (n Int) (r Int)) LIRec
   (match sb
     ((Call q2 args)
-     (if (qn_eq q2 q)
+     (if (qname_eq q2 q)
        (match args
          ((Cons marg rest)
           (if (lp_is_mem_arg marg n)
@@ -977,7 +953,7 @@
             (if (int_eq tb (- (+ n 1) r))
               (match els
                 ((Call q2 args)
-                 (if (qn_eq q2 q)
+                 (if (qname_eq q2 q)
                    (match args
                      ((Cons marg rest)
                       (if (lp_is_mem_arg marg n)
@@ -1082,7 +1058,7 @@
         (if (int_eq z 0)
           (match thn
             ((Call q2 args)
-             (if (qn_eq q2 q)
+             (if (qname_eq q2 q)
                (match args
                  ((Cons marg rest)
                   (if (lp_is_mem_arg marg n)

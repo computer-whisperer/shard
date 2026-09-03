@@ -309,6 +309,8 @@ TARGETS=(
   tools/canon/canon.shard
   tools/canon/census.shard
   tools/canon/hash.shard
+  tools/explain/proofdiag.shard
+  tools/explain/explain.shard
   pins/proof/hash_pin.shard
   tools/digest/digest.shard
   tools/digest/fixtures/sample.shard
@@ -1425,6 +1427,13 @@ pin_run impc_micro_silicon tools/impc/fixtures/micro_silicon.sh
 echo "=== digest: the read-surface tool (tier pins) ==="
 pin_run digest_t1 bash -c 'bin/shard_eval run tools/digest/digest.shard tools/digest/fixtures/sample.shard 1 | cmp -s - tools/digest/fixtures/sample_d1_out.shard'
 pin_run digest_t2 bash -c 'bin/shard_eval run tools/digest/digest.shard tools/digest/fixtures/sample.shard 2 | cmp -s - tools/digest/fixtures/sample_d2_out.shard'
+
+# explain's proof-DSL mirror (tools/explain/proofdiag.shard) vs the kernel's
+# parse_proof: --pin parses every claim of a pin file through BOTH and counts
+# accept/reject disagreements — a new proof form or step the kernel learns
+# and the mirror does not is a drift alarm HERE, not a stale diagnosis later.
+pin_run explain_pin_conv bash -c 'bin/shard_eval run tools/explain/explain.shard --pin pins/proof/conv_probe.shard | grep -q " 0 mismatch(es)"'
+pin_run explain_pin_conv_rejects bash -c 'bin/shard_eval run tools/explain/explain.shard --pin pins/proof/conv_rejects.shard | grep -q " 0 mismatch(es)"'
 
 echo "=== x86: silicon differential ==="
 if command -v cc >/dev/null && [ -x bin/shard_eval ]; then

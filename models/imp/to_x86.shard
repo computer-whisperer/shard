@@ -1,68 +1,66 @@
-;;; models/imp/to_x86.shard — the imp → x86_64 TRANSLATOR (docs/IMP.md
-;;; rung I1c; reworked kind-directed at V2, §2a): pure value-level
-;;; lowering from the neutral machine to x86 instruction values. The
-;;; second ISA leg — the one other place that imports both models.
-;;; Ordinary shard; the certs that gate its outputs live with the
-;;; twins (generate-and-check: nothing here is trusted, every
-;;; translated program is proven).
+;;; models/imp/to_x86.shard — the imp → x86_64 TRANSLATOR: pure value-level
+;;; lowering from the neutral machine to x86 instruction values (the second
+;;; ISA leg; the one other place importing both models). Ordinary shard,
+;;; generate-and-check: nothing here is trusted; every translated program is
+;;; proven by certs kept with it.
 ;;;
-;;; THE V2 CONTRACT (the to_wasm mirror): translation is gated on the
-;;; well-kinded predicate (imp2x_fn checks wk_fn first), then
-;;; KIND-DIRECTED instruction selection with a program-independent
-;;; alignment. This target's capability set is {U8, U32, U64} — all
-;;; three kinds are native:
-;;;   - U64 arith/shifts ride the 64-bit forms (their wrap64 IS imp's
-;;;     op-result wrap at U64);
-;;;   - U32 arith rides the 32-bit operand forms (XBin32/XShlI32 —
-;;;     results zero-extend, so U32 is maskless-native; their mod-2^32
-;;;     IS imp's op-result wrap at U32);
-;;;   - bitwise ops and shr ride the 64-bit forms AT EVERY KIND
-;;;     (band-closed / cannot grow on in-band values — the model
-;;;     semantics are syntactically imp's exact ops);
-;;;   - IExt is a no-op (values are zero-extended already; 8→32, 8→64
-;;;     and 32→64 alike); ITrunc→U8 is the And-255 mask and
-;;;     ITrunc U64→U32 is the zero-extending XMovRR32 — both
-;;;     band-spelled on both sides.
-;;; The per-instance bridge certs are UNPREMISED (the wasm-leg
-;;; discipline: the bridge statement feeds xcall_fn through
-;;; iband_args, exactly what icall does internally) — including the
-;;; U32 rotation since V2-6: IRotr emits the native XRorI32, whose
-;;; semantics spell imp's exact banded-operand tree (the V2-2b
-;;; composition through R11 retired with the scoped non-refl it
-;;; carried; the operand-band amendment made the trees identical at
-;;; every register value).
+;;; START AT THE FRAME TIER (the ";; THE FRAME TIER" banner, ~line 921; entry
+;;; ixf_prog : IpProg -> Option XModule, per-fn ixf_fn): the x86 leg of the
+;;; CALL TIER (IpStmt/IpFn/IpProg, docs/IMP.md §2b), the programs tools/impc
+;;; emits over the runtime — the generic path's live translator
+;;; (docs/COVERAGE.md C1c). The convention:
+;;;   - locals live in MEMORY, registers are scratch. R15 = FP (frame base, a
+;;;     window index); local i = the word at [FP + 8i]; temporaries spill at
+;;;     [FP + 8(nlocals + d)]; frame size = 8·(nlocals + maxdepth + 1). RAX =
+;;;     every result; R10/R11/RDX = op scratch; no other register is touched.
+;;;   - R14 = call depth (ipcall's d): the prologue fails the stack family
+;;;     (RDI := 72) unless R14 < the budget, then bumps it, and zeroes the
+;;;     fn's extra locals (imp's izeros); the epilogue drops.
+;;;   - a call: the caller writes args into the callee's frame at FP +
+;;;     own_size + 8j, bumps FP by its size, XCalls, drops FP, stores RAX.
+;;;     Nothing is saved across a call (callee owns the scratch file, caller
+;;;     its frame). xparams = 0 everywhere; a driver pre-writes the entry
+;;;     frame at R15 = ipstack, R14 = 0.
+;;;   - Fail: RDI := 70 + family, XCall the exit shim appended as the last
+;;;     image fn (model tier traps at XSyscall, world tier exits). Unreachable
+;;;     = a word load no window reaches (trap / fault).
+;;; The simplest uniform realization (one alignment relation, no residues or
+;;; seals) and the slowest (three instructions per local access: Addr has no
+;;; displacement; #25's allocation rung and the displacement door price the
+;;; upgrades).
 ;;;
-;;; The register machine keeps the v1 PATTERN tier: imp locals map to
-;;; homes (SysV args rdi rsi rdx rcx r8 r9 for locals 0-5, then the
-;;; callee-saved rbx rbp r12 r13 r14 r15 for body locals 6-11 — the
-;;; §2a ix_home 6→12 growth; params stay <= 6, the SysV boundary),
-;;; statements compile to the x86gen in-place shapes, and result
-;;; expressions compile left-spine into RAX with one R10
-;;; right-compound level. RAX doubles as the load scratch; no imp
-;;; local ever maps to RAX, R10, or R11.
-;;;
-;;; The control encodings are the SELF-CONTAINED label structures of
-;;; the wasm leg, with x86's fused conditions (no comparison
-;;; materialization — Cond is what jcc sees):
-;;;   (IIf c thn els)  -> XBlock( XBlock( XBrIf ⟦c⟧ 0  ⟦els⟧ XBr 1 )
-;;;                       ⟦thn⟧ )
-;;;   (IWhile (ILoc i) b) -> Z(⟦b⟧)  XBlock( XLoop( XBrIf (CEqz home_i) 1
+;;; EVERYTHING ABOVE THE BANNER is the BASE TIER (docs/IMP.md rung I1c,
+;;; kind-directed since V2 §2a): imp2x_fn over a single IFn. FROZEN — the
+;;; oracle source tools/impgen loads through meta/invoke and runs on pin
+;;; values to spell its certificates; the frame tier is additive and touches
+;;; nothing here. Gated on wk_fn, then KIND-DIRECTED selection with a
+;;; program-independent alignment; {U8, U32, U64} all native — U64
+;;; arith/shifts on the 64-bit forms (wrap64 IS imp's U64 wrap), U32 arith on
+;;; XBin32/XShlI32 (zero-extending, maskless; mod 2^32 IS imp's U32 wrap),
+;;; bitwise ops and shr on the 64-bit forms at EVERY kind (band-closed), IExt
+;;; a no-op, ITrunc→U8 = And-255, ITrunc U64→U32 = XMovRR32. Bridge certs are
+;;; UNPREMISED (wasm-leg discipline: the bridge feeds xcall_fn through
+;;; iband_args, as icall does), U32 IRotr included since V2-6 (native XRorI32
+;;; spells imp's exact banded-operand tree; the V2-2b R11 composition and its
+;;; scoped non-refl retired). The v1 PATTERN register machine: locals map to
+;;; homes (SysV rdi rsi rdx rcx r8 r9 for 0-5, callee-saved rbx rbp r12 r13
+;;; r14 r15 for 6-11 — the §2a ix_home 6→12 growth; params ≤ 6); statements
+;;; take x86gen's in-place shapes; results go left-spine into RAX with one R10
+;;; right-compound level; RAX doubles as load scratch; no local maps to
+;;; RAX/R10/R11. Control = the wasm leg's self-contained label structures with
+;;; x86's fused conditions (Cond is what jcc sees):
+;;;   (IIf c thn els)  -> XBlock( XBlock( XBrIf ⟦c⟧ 0 ⟦els⟧ XBr 1 ) ⟦thn⟧ )
+;;;   (IWhile (ILoc i) b) -> Z(⟦b⟧) XBlock( XLoop( XBrIf (CEqz home_i) 1
 ;;;                          ⟦b⟧ Z(⟦b⟧) XBr 0 ) )
-;;; where Z(is) zeroes each scratch register (RAX, R10, R11) that is
-;;; WRITTEN anywhere in is — THE ZERO-SCRATCH LOOP-BOUNDARY INVARIANT
-;;; (V2-5): scratch is 0 at every loop boundary (entry, back-edge,
-;;; exit), so the loop-exit register file is exactly (xargs locals)
-;;; and generated loop workers state entry/exit scratch as literal 0 —
-;;; residues resolve by construction (the I2c-2b zero-in/zero-out
-;;; lesson, translator-side); no closed residue form (the xlg_last
-;;; selector) is ever needed. Scratch-free bodies emit no zeroing
-;;; (fill/dblq byte-stable). Dead-store elimination is a perf rung.
-;;; Refusal is loud by construction (None = no artifact): division
-;;; (the XDivU compound needs the rdx:rax preamble — named growth),
-;;; the U64 rotation (the 32-bit composition's algebra does not scale
-;;; to the width that IS the register; wasm carries it natively — the
-;;; rotate asymmetry, pinned from both sides at V2-2c), comparison
-;;; ops in value position (fused conditions only), while conditions
+;;; Z(is) zeroes each scratch register WRITTEN in is — THE ZERO-SCRATCH
+;;; LOOP-BOUNDARY INVARIANT (V2-5): scratch is 0 at entry, back-edge and exit,
+;;; so the loop-exit register file is exactly (xargs locals) and loop workers
+;;; state scratch as literal 0 (residues resolve by construction, the I2c-2b
+;;; lesson; no xlg_last residue form); scratch-free bodies emit no zeroing
+;;; (fill/dblq byte-stable); dead-store elimination is a perf rung. Refusal is
+;;; loud (None = no artifact): division (XDivU needs the rdx:rax preamble —
+;;; named growth), U64 rotation (the rotate asymmetry, pinned V2-2c; wasm
+;;; carries it natively), comparison ops in value position, while conditions
 ;;; other than a bare local, deeper right-compounds.
 
 (import "../../kernel/stdlib.shard")
@@ -956,8 +954,6 @@
 ;; allocation rung and the displacement door price the upgrades on
 ;; generated output).
 ;; ===========================================================================
-
-(fn ixf_fp () Reg R15)
 
 ;; R10 := FP + 8i
 (fn ixf_slot ((i Int)) (List XInstr)

@@ -734,9 +734,10 @@ distinct register operand in first-occurrence order), parsed against
 the model file's own scope, attempted through bare moves then pg_cite
 over the pool {xseq_xor_pair_cancels, xseq_xor_self_absorbs} with
 discharge-assignment enumeration ((2n+1)^k candidates, first hit
-wins). meta/proofgen grew the CITATION CLOSER — pg_cite +
-pg_premise / pg_premise_compute / pg_texts_sp — moves, not policy;
-the pool and the enumeration live in the probe (LS-law 2 held).
+wins). meta/proofgen grew the CITATION CLOSER — pg_premise /
+pg_premise_compute / pg_texts_sp (the pg_cite rewrite-with renderer
+was retired as dead on 2026-09-02) — moves, not policy; the pool and
+the enumeration live in the probe (LS-law 2 held).
 
 MEASURED lesson banked at the pin: a forward (compute both) premise
 discharge OVER-REDUCES — it unfolds rget into a stuck match on

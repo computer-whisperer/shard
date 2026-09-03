@@ -55,6 +55,7 @@
 (use (:: kernel loader write))
 (use (:: kernel loader write_file))
 (use (:: kernel loader exit))
+(use (:: kernel reader module_path_of))
 (use (:: kernel term Expr))
 (use (:: kernel term FVar))
 (use (:: kernel term BVar))
@@ -91,12 +92,6 @@
 
 ;; --- small utils ----------------------------------------------------------------
 
-(fn cat ((a (List Int)) (b (List Int))) (List Int)
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (cat t b)))))
-
 (fn sapp ((a (List IpStmt)) (b (List IpStmt))) (List IpStmt)
   (measure (struct a))
   (match a
@@ -108,12 +103,6 @@
   (match xs
     (Nil None)
     ((Cons h t) (if (int_eq i 0) (Some h) (nth_int t (- i 1))))))
-
-(fn ilen ((xs (List Int))) Int
-  (measure (struct xs))
-  (match xs
-    (Nil 0)
-    ((Cons _ t) (+ 1 (ilen t)))))
 
 (fn rev_ints ((xs (List Int)) (acc (List Int))) (List Int)
   (measure (struct xs))
@@ -127,8 +116,6 @@
 
 ;; the immediate of an Int as the U64 WORD (two's complement) / the Bool words
 (fn imm ((n Int)) Int (mod (+ (* 2 n) 1) 18446744073709551616))
-
-(fn w_false () Int 1)
 
 (fn w_true () Int 3)
 
@@ -148,10 +135,6 @@
 (fn ctx_m ((c Ctx)) Module
   (match c
     ((Ctx m _ _) m)))
-
-(fn ctx_rb ((c Ctx)) Int
-  (match c
-    ((Ctx _ _ rb) rb)))
 
 (fn ctx_fix ((c Ctx) (q QName)) (Option Int)
   (match c
@@ -173,7 +156,8 @@
     ((Cons c rest)
      (match c
        ((CtorDef q2 fts)
-        (if (qname_eq q q2) (Some (Pair i (tys_len fts))) (ctors_find rest q (+ i 1))))))))
+        (if (qname_eq q q2) (Some (Pair i (tys_len fts)))
+        (ctors_find rest q (+ i 1))))))))
 
 (fn tys_len ((ts (List Type))) Int
   (measure (struct ts))
@@ -221,9 +205,11 @@
 (type CP (CPOk (List IpStmt) (List Int) Int) (CPErr (List Int)))
 
 ;; the runtime calls
-(fn s_inc ((scratch Int) (v Int)) IpStmt (IpCall scratch (rt_inc_ix) (list (rl v))))
+(fn s_inc ((scratch Int) (v Int)) IpStmt
+  (IpCall scratch (rt_inc_ix) (list (rl v))))
 
-(fn s_dec ((scratch Int) (v Int)) IpStmt (IpCall scratch (rt_dec_ix) (list (rl v))))
+(fn s_dec ((scratch Int) (v Int)) IpStmt
+  (IpCall scratch (rt_dec_ix) (list (rl v))))
 
 ;; dec every OWNED operand after its borrow-position consumer; each dec
 ;; writes a fresh scratch local
@@ -254,7 +240,9 @@
       (list
         (IpSet bm (rsub (rl b) (rk 1)))
         (IpSet t (radd (rl a) (rl bm)))
-        (IpSet ov (rshr (rand (rxor (rl a) (rl t)) (rxor (rl bm) (rl t))) (rk 63)))
+        (IpSet
+          ov
+          (rshr (rand (rxor (rl a) (rl t)) (rxor (rl bm) (rl t))) (rk 63)))
         (IpIf (req (rl ov) (rk 0)) Nil (list (IpFail FOverflow))))
       t
       OImm
@@ -267,7 +255,9 @@
       (list
         (IpSet bm (rsub (rl b) (rk 1)))
         (IpSet t (rsub (rl a) (rl bm)))
-        (IpSet ov (rshr (rand (rxor (rl a) (rl bm)) (rxor (rl a) (rl t))) (rk 63)))
+        (IpSet
+          ov
+          (rshr (rand (rxor (rl a) (rl bm)) (rxor (rl a) (rl t))) (rk 63)))
         (IpIf (req (rl ov) (rk 0)) Nil (list (IpFail FOverflow))))
       t
       OImm
@@ -295,13 +285,23 @@
         (IpSet y (sra1 (rl b)))
         (IpSet sx (rshr (rl x) (rk 63)))
         (IpSet sy (rshr (rl y) (rk 63)))
-        (IpIf (req (rl sx) (rk 0)) (list (IpSet ax (rl x))) (list (IpSet ax (rsub (rk 0) (rl x)))))
-        (IpIf (req (rl sy) (rk 0)) (list (IpSet ay (rl y))) (list (IpSet ay (rsub (rk 0) (rl y)))))
+        (IpIf
+          (req (rl sx) (rk 0))
+          (list (IpSet ax (rl x)))
+          (list (IpSet ax (rsub (rk 0) (rl x)))))
+        (IpIf
+          (req (rl sy) (rk 0))
+          (list (IpSet ay (rl y)))
+          (list (IpSet ay (rsub (rk 0) (rl y)))))
         (IpSet q (rmul (rl ax) (rl ay)))
         (IpIf
           (req (rl ax) (rk 0))
           Nil
-          (list (IpIf (req (rdiv (rl q) (rl ax)) (rl ay)) Nil (list (IpFail FOverflow)))))
+          (list
+            (IpIf
+              (req (rdiv (rl q) (rl ax)) (rl ay))
+              Nil
+              (list (IpFail FOverflow)))))
         (IpIf (rlt (rl q) (rk (two62))) Nil (list (IpFail FOverflow)))
         (IpIf
           (req (rxor (rl sx) (rl sy)) (rk 0))
@@ -332,7 +332,8 @@
   (if (core_named q (quote lt)) (arith_cmp ILt True a b nx)
   (if (core_named q (quote le)) (arith_cmp ILe True a b nx)
   (if (core_named q (quote int_eq)) (arith_cmp IEq False a b nx)
-  (CRErr (cat "primitive not lowered in v0: " (chars_of_sym (qn_name q)))))))))))
+  (CRErr
+    (append_int "primitive not lowered in v0: " (chars_of_sym (qn_name q)))))))))))
 
 (fn is_prim ((q QName)) Bool
   (if (core_named q (quote +)) True
@@ -349,7 +350,8 @@
   (if (core_named q (quote bor)) True
   (if (core_named q (quote bxor)) True
   (if (core_named q (quote bshl)) True
-  (if (core_named q (quote bshr)) True False))))))))))))))))
+  (if (core_named q (quote bshr)) True
+  False))))))))))))))))
 
 ;; --- helpers over compiled operands ------------------------------------------------
 
@@ -410,7 +412,8 @@
     ((CRErr m) (CRErr m))
     ((CROk ss l o nx2)
      (match (own l o nx2)
-       ((Pair oss nx3) (CROk (sapp ss (sapp oss (list (IpSet r (rl l))))) r OOwn nx3))))))
+       ((Pair oss nx3)
+        (CROk (sapp ss (sapp oss (list (IpSet r (rl l))))) r OOwn nx3))))))
 
 ;; --- the expression compiler (one structural SCC) --------------------------------
 
@@ -428,7 +431,8 @@
      (CRErr "integer literal above the i63 band"))))
     ((Ctor q args)
      (match (ctor_info c q)
-       (None (CRErr (cat "unknown constructor " (chars_of_sym (qn_name q)))))
+       (None
+         (CRErr (append_int "unknown constructor " (chars_of_sym (qn_name q)))))
        ((Some ta)
         (match ta
           ((Pair tag arity)
@@ -443,7 +447,9 @@
                      (CROk
                        (sapp
                          ss
-                         (Cons (IpCall p (rt_alloc_ix) (list (rk tag) (rk arity))) fss))
+                         (Cons
+                           (IpCall p (rt_alloc_ix) (list (rk tag) (rk arity)))
+                           fss))
                        p
                        OOwn
                        nx3))))))))))))
@@ -460,7 +466,10 @@
             (_ (CRErr "primitive arity (v0 lowers the binary prims)")))))
        (match (ctx_fix c q)
          (None
-           (CRErr (cat "call outside the compiled table: " (chars_of_sym (qn_name q)))))
+           (CRErr
+             (append_int
+               "call outside the compiled table: "
+               (chars_of_sym (qn_name q)))))
          ((Some k)
           (match (ic_es c env nx args)
             ((CRsErr m) (CRErr m))
@@ -487,7 +496,9 @@
                 (match (decs (list (Pair cl co)) nx4)
                   ((Pair dss nx5)
                    (CROk
-                     (sapp cs (Cons (IpIf (req (rl cl) (rk (w_true))) ts es) dss))
+                     (sapp
+                       cs
+                       (Cons (IpIf (req (rl cl) (rk (w_true))) ts es) dss))
                      r
                      OOwn
                      nx5)))))))))))
@@ -498,14 +509,18 @@
         (match (own_all ops nx2)
           ((Pair oss nx3)
            (let ((ls (op_locals ops)))
-             (match (ic_e c (cat (rev_ints ls Nil) env) nx3 body)
+             (match (ic_e c (append_int (rev_ints ls Nil) env) nx3 body)
                ((CRErr m) (CRErr m))
                ((CROk bss bl bo nx4)
                 (match (own bl bo nx4)
                   ((Pair wss nx5)
                    (match (decs (owned_all ls) nx5)
                      ((Pair dss nx6)
-                      (CROk (sapp ss (sapp oss (sapp bss (sapp wss dss)))) bl OOwn nx6)))))))))))))
+                      (CROk
+                        (sapp ss (sapp oss (sapp bss (sapp wss dss))))
+                        bl
+                        OOwn
+                        nx6)))))))))))))
     ((Match s arms)
      (match (ic_e c env nx s)
        ((CRErr m) (CRErr m))
@@ -533,7 +548,9 @@
 
 ;; arms: ok := 1; pattern tests (clearing ok); under ok the body lands in r;
 ;; else the remaining arms; none left → unreachable
-(fn ic_arms ((c Ctx) (env (List Int)) (nx Int) (arms (List Arm)) (sl Int) (r Int)) CR
+(fn ic_arms
+  ((c Ctx) (env (List Int)) (nx Int) (arms (List Arm)) (sl Int) (r Int))
+  CR
   (measure (struct arms))
   (match arms
     (Nil (CROk (list IpUnreach) r OOwn nx))
@@ -544,7 +561,10 @@
           (match (ic_pat c (+ nx 1) p sl ok)
             ((CPErr m) (CRErr m))
             ((CPOk pss binders nx2)
-             (match (branch_land (ic_e c (cat (rev_ints binders Nil) env) nx2 body) r)
+             (match
+               (branch_land
+                 (ic_e c (append_int (rev_ints binders Nil) env) nx2 body)
+                 r)
                ((CRErr m) (CRErr m))
                ((CROk bss _ _ nx3)
                 (match (ic_arms c env nx3 rest sl r)
@@ -565,17 +585,25 @@
   (match p
     (PVar (CPOk Nil (list v) nx))
     ((PInt n)
-     (CPOk (list (IpIf (req (rl v) (rk (imm n))) Nil (list (IpSet ok (rk 0))))) Nil nx))
+     (CPOk
+       (list (IpIf (req (rl v) (rk (imm n))) Nil (list (IpSet ok (rk 0)))))
+       Nil
+       nx))
     ((PSym _) (CPErr "symbol pattern (v0)"))
     ((PCtor q ps)
      (match (ctor_info c q)
-       (None (CPErr (cat "unknown constructor in pattern " (chars_of_sym (qn_name q)))))
+       (None
+         (CPErr
+           (append_int
+             "unknown constructor in pattern "
+             (chars_of_sym (qn_name q)))))
        ((Some ta)
         (match ta
           ((Pair tag arity)
            (if (int_eq arity 0)
              (CPOk
-               (list (IpIf (req (rl v) (rk (imm tag))) Nil (list (IpSet ok (rk 0)))))
+               (list
+                 (IpIf (req (rl v) (rk (imm tag))) Nil (list (IpSet ok (rk 0)))))
                Nil
                nx)
              (let ((h nx))
@@ -589,7 +617,9 @@
                         (list
                           (rldo h v 0)
                           (IpIf
-                            (req (rand (rshr (rl h) (rk 32)) (rk 65535)) (rk tag))
+                            (req
+                              (rand (rshr (rl h) (rk 32)) (rk 65535))
+                              (rk tag))
                             fss
                             (list (IpSet ok (rk 0)))))
                         (list (IpSet ok (rk 0)))))
@@ -613,7 +643,7 @@
                (Cons
                  (rldo f v (+ 8 (* 8 i)))
                  (sapp pss (list (IpIf (req (rl ok) (rk 1)) rss Nil))))
-               (cat b1 b2)
+               (append_int b1 b2)
                nx3)))))))))
 
 ;; --- a function --------------------------------------------------------------------
@@ -634,7 +664,8 @@
      (let ((n (tys_len pts)))
        (let ((d n))
          (match (ic_e c (param_env n) (+ n 1) body)
-           ((CRErr m) (FRErr (cat (chars_of_sym (qn_name q)) (cat ": " m))))
+           ((CRErr m)
+            (FRErr (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
            ((CROk ss l o nx)
             (match (own l o nx)
               ((Pair oss nx2)
@@ -677,11 +708,24 @@
     ((IConst n) (dconc (list (DStr "(IConst ") (dint n) (DStr ")"))))
     ((ILoc i) (dconc (list (DStr "(ILoc ") (dint i) (DStr ")"))))
     ((IBin k o a b)
-     (dconc (list (DStr "(IBin ") (pk k) (sp) (pop o) (sp) (pe a) (sp) (pe b) (DStr ")"))))
-    ((IRotr k a b) (dconc (list (DStr "(IRotr ") (pk k) (sp) (pe a) (sp) (pe b) (DStr ")"))))
-    ((IExt kf kt a) (dconc (list (DStr "(IExt ") (pk kf) (sp) (pk kt) (sp) (pe a) (DStr ")"))))
+     (dconc
+       (list
+         (DStr "(IBin ")
+         (pk k)
+         (sp)
+         (pop o)
+         (sp)
+         (pe a)
+         (sp)
+         (pe b)
+         (DStr ")"))))
+    ((IRotr k a b)
+     (dconc (list (DStr "(IRotr ") (pk k) (sp) (pe a) (sp) (pe b) (DStr ")"))))
+    ((IExt kf kt a)
+     (dconc (list (DStr "(IExt ") (pk kf) (sp) (pk kt) (sp) (pe a) (DStr ")"))))
     ((ITrunc kf kt a)
-     (dconc (list (DStr "(ITrunc ") (pk kf) (sp) (pk kt) (sp) (pe a) (DStr ")"))))
+     (dconc
+       (list (DStr "(ITrunc ") (pk kf) (sp) (pk kt) (sp) (pe a) (DStr ")"))))
     ((ILoad a) (dconc (list (DStr "(ILoad ") (pe a) (DStr ")"))))))
 
 (fn pes ((es (List IExp))) Doc
@@ -693,15 +737,28 @@
 (fn ps ((s IpStmt)) Doc
   (measure (struct s))
   (match s
-    ((IpSet i e) (dconc (list (DStr "(IpSet ") (dint i) (sp) (pe e) (DStr ")"))))
-    ((IpStore a v) (dconc (list (DStr "(IpStore ") (pe a) (sp) (pe v) (DStr ")"))))
+    ((IpSet i e)
+     (dconc (list (DStr "(IpSet ") (dint i) (sp) (pe e) (DStr ")"))))
+    ((IpStore a v)
+     (dconc (list (DStr "(IpStore ") (pe a) (sp) (pe v) (DStr ")"))))
     ((IpIf c t el)
      (dconc (list (DStr "(IpIf ") (pe c) (sp) (pss t) (sp) (pss el) (DStr ")"))))
-    ((IpWhile c b) (dconc (list (DStr "(IpWhile ") (pe c) (sp) (pss b) (DStr ")"))))
+    ((IpWhile c b)
+     (dconc (list (DStr "(IpWhile ") (pe c) (sp) (pss b) (DStr ")"))))
     ((IpCall i k args)
-     (dconc (list (DStr "(IpCall ") (dint i) (sp) (dint k) (DStr " (list") (pes args) (DStr "))"))))
-    ((IpLoadW i a) (dconc (list (DStr "(IpLoadW ") (dint i) (sp) (pe a) (DStr ")"))))
-    ((IpStoreW a v) (dconc (list (DStr "(IpStoreW ") (pe a) (sp) (pe v) (DStr ")"))))
+     (dconc
+       (list
+         (DStr "(IpCall ")
+         (dint i)
+         (sp)
+         (dint k)
+         (DStr " (list")
+         (pes args)
+         (DStr "))"))))
+    ((IpLoadW i a)
+     (dconc (list (DStr "(IpLoadW ") (dint i) (sp) (pe a) (DStr ")"))))
+    ((IpStoreW a v)
+     (dconc (list (DStr "(IpStoreW ") (pe a) (sp) (pe v) (DStr ")"))))
     ((IpFail f) (dconc (list (DStr "(IpFail ") (pfam f) (DStr ")"))))
     (IpUnreach (DStr "IpUnreach"))))
 
@@ -709,7 +766,8 @@
   (measure (struct ss))
   (match ss
     (Nil (DStr "Nil"))
-    ((Cons s rest) (dconc (list (DStr "(list ") (ps s) (pss_tail rest) (DStr ")"))))))
+    ((Cons s rest)
+     (dconc (list (DStr "(list ") (ps s) (pss_tail rest) (DStr ")"))))))
 
 (fn pss_tail ((ss (List IpStmt))) Doc
   (measure (struct ss))
@@ -726,7 +784,8 @@
 (fn pks ((ks (List IKind))) Doc
   (match ks
     (Nil (DStr "Nil"))
-    ((Cons k rest) (dconc (list (DStr "(list ") (pk k) (pks_tail rest) (DStr ")"))))))
+    ((Cons k rest)
+     (dconc (list (DStr "(list ") (pk k) (pks_tail rest) (DStr ")"))))))
 
 (fn pfn ((name (List Int)) (f IpFn)) Doc
   (dconc
@@ -750,7 +809,7 @@
 ;; --- the driver --------------------------------------------------------------------
 
 (fn ic_fail ((msg (List Int)) (w World)) World
-  (exit 2 (write (cat "impc: " (cat msg (nl))) w)))
+  (exit 2 (write (append_int "impc: " (append_int msg (nl))) w)))
 
 ;; the module's own fns: those whose qualified module path is the source's
 (fn own_fns ((fs (List FnDef)) (mp (List Symbol))) (List FnDef)
@@ -760,7 +819,8 @@
     ((Cons f rest)
      (match f
        ((FnDef q _ _ _)
-        (if (sym_path_eq (qn_mod q) mp) (Cons f (own_fns rest mp)) (own_fns rest mp)))))))
+        (if (sym_path_eq (qn_mod q) mp) (Cons f (own_fns rest mp))
+        (own_fns rest mp)))))))
 
 (fn mk_table ((fs (List FnDef)) (k Int)) (List (Pair QName Int))
   (measure (struct fs))
@@ -800,19 +860,9 @@
                         (DStr (nl))
                         (DStr (nl))))
                     ixd)
-                  (DCat (dconc (list (sp) (DStr "(") (DStr nm) (DStr "_ipfn)"))) tab))))))))))))
-
-;; the module path of the source: from the first fn the loader attributed
-;; to it is fragile; instead read it off the FnDef list's LAST entries? No —
-;; the loader merges imports FIRST, so the root file's fns come last: the
-;; module path of the last FnDef is the root's.
-(fn last_mod ((fs (List FnDef)) (acc (List Symbol))) (List Symbol)
-  (measure (struct fs))
-  (match fs
-    (Nil acc)
-    ((Cons f rest)
-     (match f
-       ((FnDef q _ _ _) (last_mod rest (qn_mod q)))))))
+                  (DCat
+                    (dconc (list (sp) (DStr "(") (DStr nm) (DStr "_ipfn)")))
+                    tab))))))))))))
 
 ;; the runtime base = the window base: 65536, stock vm.mmap_min_addr, so the
 ;; window the product declares is the window an ELF can map with no privilege
@@ -825,14 +875,27 @@
 (fn hdr_doc ((src (List Int)) (out (List Int))) Doc
   (dconc
     (list
-      (dline (cat ";;; GENERATED by tools/impc/impc.shard from " (cat src " -- do not edit; regenerate.")))
-      (dline ";;; the call-tier imp product (docs/IMP.md 2b) over the runtime models/imp/rt.shard,")
-      (dline (cat ";;; at runtime base " (cat (show_int (rt_base)) ".")))
+      (dline
+        (append_int
+          ";;; GENERATED by tools/impc/impc.shard from "
+          (append_int src " -- do not edit; regenerate.")))
+      (dline
+        ";;; the call-tier imp product (docs/IMP.md 2b) over the runtime models/imp/rt.shard,")
+      (dline
+        (append_int
+          ";;; at runtime base "
+          (append_int (show_int (rt_base)) ".")))
       (DStr (nl))
-      (DCat (dimport (cat (updots out) "kernel/stdlib.shard")) (DStr (nl)))
-      (DCat (dimport (cat (updots out) "std/mem")) (DStr (nl)))
-      (DCat (dimport (cat (updots out) "models/imp/imp.shard")) (DStr (nl)))
-      (DCat (dimport (cat (updots out) "models/imp/rt.shard")) (DStr (nl)))
+      (DCat
+        (dimport (append_int (updots out) "kernel/stdlib.shard"))
+        (DStr (nl)))
+      (DCat (dimport (append_int (updots out) "std/mem")) (DStr (nl)))
+      (DCat
+        (dimport (append_int (updots out) "models/imp/imp.shard"))
+        (DStr (nl)))
+      (DCat
+        (dimport (append_int (updots out) "models/imp/rt.shard"))
+        (DStr (nl)))
       (dline "(use (:: std mem *))")
       (dline "(use (:: models imp imp *))")
       (dline "(use (:: models imp rt *))")
@@ -845,7 +908,8 @@
     (list
       (DStr "(fn ")
       (DStr (until_dot (basename_go src Nil)))
-      (DStr "_iprog ((base Int) (memsize Int) (stack Int) (depth Int)) IpProg (rt_prog ")
+      (DStr
+        "_iprog ((base Int) (memsize Int) (stack Int) (depth Int)) IpProg (rt_prog ")
       (dint (rt_base))
       (DStr " (list")
       tab
@@ -854,11 +918,11 @@
 
 (fn ic_emit ((src (List Int)) (out (List Int)) (w World)) World
   (match (load_run_module src w)
-    ((Pair None w1) (ic_fail (cat "cannot load " src) w1))
+    ((Pair None w1) (ic_fail (append_int "cannot load " src) w1))
     ((Pair (Some m) w1)
      (match m
        ((Module _ fs _ _ _)
-        (let ((mine (own_fns fs (last_mod fs Nil))))
+        (let ((mine (own_fns fs (module_path_of src))))
           (let ((c (Ctx m (mk_table mine (rt_count (rt_base))) (rt_base))))
             (match (ic_all c mine (rt_count (rt_base)) (basename_go out Nil))
               ((PRErr msg) (ic_fail msg w1))
@@ -866,10 +930,13 @@
                (match
                  (write_file
                    out
-                   (doc_flat (dconc (list (hdr_doc src out) fd ixd (prog_doc src tab))) Nil)
+                   (doc_flat
+                     (dconc (list (hdr_doc src out) fd ixd (prog_doc src tab)))
+                     Nil)
                    w1)
                  ((Pair ok w2)
-                  (if ok (exit 0 w2) (ic_fail (cat "cannot write " out) w2)))))))))))))
+                  (if ok (exit 0 w2)
+                  (ic_fail (append_int "cannot write " out) w2)))))))))))))
 
 (fn main ((w World)) World
   (match (get_args w)

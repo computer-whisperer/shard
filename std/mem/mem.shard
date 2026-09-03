@@ -17,11 +17,13 @@
 (import "../../kernel/facts.shard")  ; mod_lo / mod_hi — the masking range facts
 (import "../nat")  ; int_of_nat + its lemmas — the LE framing bounds
 (import "../order")  ; lt/le bridge lemmas for the framing inductions
+(import "../div")  ; mod_small — the in-range remainder identity
 (import "mod.req.shard")  ; our interface — opaque type + sig fns + obligations
 (use (:: std map *))
 (use (:: kernel facts *))
 (use (:: std nat *))
 (use (:: std order *))
+(use (:: std div mod_small))
 (use (:: std mem *))  ; impl-proof: rebind the opaque type + sig fns to our defs
 
 ;; --- representation + private helpers ---------------------------------------
@@ -65,64 +67,20 @@
     (Z m)
     ((S w2) (store_le w2 (mem_set m a v) (+ a 1) (ediv v 256)))))
 
-;; --- defining-equation + surface twins (impl proofs cite THESE — a
-;; same-module requirement name is not citable from its own impl, so the
-;; laws the proofs below lean on get internal twins, as in std/bytes) -------
-
-(claim ld_z (goal ((m Mem) (a Int)) () (= (load_le Z m a) 0)) auto)
-
-(claim ld_s
-  (goal ((w Nat) (m Mem) (a Int)) ()
-    (= (load_le (S w) m a) (+ (mem_get m a) (* 256 (load_le w m (+ a 1))))))
-  auto)
-
-(claim st_z (goal ((m Mem) (a Int) (v Int)) () (= (store_le Z m a v) m)) auto)
-
-(claim st_s
-  (goal ((w Nat) (m Mem) (a Int) (v Int)) ()
-    (= (store_le (S w) m a v) (store_le w (mem_set m a v) (+ a 1) (ediv v 256))))
-  auto)
-
-(claim gs_i
-  (goal ((m Mem) (a Int) (v Int)) ()
-    (= (mem_get (mem_set m a v) a) (mod v 256)))
-  auto)
-
-(claim gso_i
-  (goal ((m Mem) (a Int) (b Int) (v Int)) ((= (int_eq b a) False))
-    (= (mem_get (mem_set m a v) b) (mem_get m b)))
-  auto)
-
 ;; --- internal lemmas ---------------------------------------------------------
 
-;; in-range mod is the identity: 0<=h<256 |- mod h 256 = h. div-facts names the
-;; quotient q; rational farkas only pins q to (-1,1), so fin-split supplies the
-;; integrality (q in {-1,0,1}; +-1 are contradictory, q=0 gives h = mod h 256).
-;; (Same proof as std/bytes' mod_byte_id — the divisor and certs are identical.)
+;; in-range mod is the identity: 0<=h<256 |- mod h 256 = h — std/div's
+;; mod_small at the byte divisor (the same instance std/bytes carries).
 (claim mod_byte_id
   (goal ((h Int)) ((= (le 0 h) True) (= (lt h 256) True)) (= (mod h 256) h))
-  (div-facts
-    h
-    256
-    q
-    (have qlo (= (le -1 q) True)
-      (by arith (list 256 1 0 -1 0 1 0))
-      (have qhi (= (le q 1) True)
-        (by arith (list 256 0 1 1 1 0 0))
-        (fin-split
-          q
-          (premise qlo)
-          (premise qhi)
-          ((case -1
-             (by
-               arith
-               (list (list 0 1 0 -1 0 1 0 0 0) (list 0 1 0 -1 0 1 0 0 0))))
-           (case 0
-             (by
-               arith
-               (list (list 1 0 0 1 0 0 0 0 0) (list 1 0 0 -1 0 0 0 0 0))))
-           (case 1
-             (by arith (list (list 0 0 1 1 1 0 0 0 0) (list 0 0 1 1 1 0 0 0 0))))))))))
+  (rewrite-with
+    (lemma mod_small)
+    lr
+    lhs
+    ((inst d 256))
+    ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+     (steps ((rewrite (premise 1) lr lhs true ())) refl))
+    refl))
 
 ;; --- discharge the interface's requirements ---------------------------------
 
@@ -143,13 +101,65 @@
 
 (fulfills get_hi auto)
 
-(fulfills get_set auto)
+;; get_set / get_set_other by hand: peel the bodies to the map, then
+;; lookup_insert_eq / lookup_insert_neq decide the cell. (Written out here
+;; because every later proof cites these two by name.)
+(fulfills get_set
+  (steps
+    ((unfold mem_get lhs)
+     (unfold mem_set lhs)
+     (unfold raw_get lhs)
+     (simp lhs)
+     (rewrite (lemma lookup_insert_eq) lr lhs true ())
+     (simp lhs))
+    refl))
 
-(fulfills get_set_byte auto)
+(fulfills get_set_other
+  (steps
+    ((unfold mem_get lhs) (unfold mem_set lhs) (unfold raw_get lhs) (simp lhs))
+    (rewrite-with
+      (lemma lookup_insert_neq)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+      (steps ((unfold mem_get rhs) (unfold raw_get rhs) (simp both)) refl))))
 
-(fulfills get_set_get auto)
+(fulfills get_set_byte
+  (steps
+    ((rewrite (lemma get_set) lr lhs true ()))
+    (rewrite-with
+      (lemma mod_byte_id)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl))
+      refl)))
 
-(fulfills get_set_other auto)
+(fulfills get_set_get
+  (steps
+    ((rewrite (lemma get_set) lr lhs true ()) (unfold mem_get both))
+    (rewrite-with
+      (lemma mod_byte_id)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma mod_lo)
+         lr
+         lhs
+         ()
+         ((steps ((compute both)) refl))
+         refl)
+       (rewrite-with
+         (lemma mod_hi)
+         lr
+         lhs
+         ()
+         ((steps ((compute both)) refl))
+         refl))
+      refl)))
 
 ;; --- LE-layer internal lemmas ------------------------------------------------
 
@@ -207,41 +217,12 @@
   (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (ediv x 256)) True))
   (div-facts x 256 q (by arith (list 256 1 -1 0 1 256))))
 
-;; quotient shrink at the three wasm literals: x < 256K |- ediv x 256 < K.
-(claim shrink_32
-  (goal ((x Int)) ((= (lt x 4294967296) True))
-    (= (lt (ediv x 256) 16777216) True))
-  (div-facts x 256 q (by arith (list 256 1 1 1 0 -256))))
-
-(claim shrink_24
-  (goal ((x Int)) ((= (lt x 16777216) True)) (= (lt (ediv x 256) 65536) True))
-  (div-facts x 256 q (by arith (list 256 1 1 1 0 -256))))
-
-(claim shrink_16
-  (goal ((x Int)) ((= (lt x 65536) True)) (= (lt (ediv x 256) 256) True))
-  (div-facts x 256 q (by arith (list 256 1 1 1 0 -256))))
-
-;; the four more levels the 64-bit word needs (COVERAGE.md A-1): same cert,
-;; the multipliers never mention the bound
-
-(claim shrink_64
-  (goal ((x Int)) ((= (lt x 18446744073709551616) True))
-    (= (lt (ediv x 256) 72057594037927936) True))
-  (div-facts x 256 q (by arith (list 256 1 1 1 0 -256))))
-
-(claim shrink_56
-  (goal ((x Int)) ((= (lt x 72057594037927936) True))
-    (= (lt (ediv x 256) 281474976710656) True))
-  (div-facts x 256 q (by arith (list 256 1 1 1 0 -256))))
-
-(claim shrink_48
-  (goal ((x Int)) ((= (lt x 281474976710656) True))
-    (= (lt (ediv x 256) 1099511627776) True))
-  (div-facts x 256 q (by arith (list 256 1 1 1 0 -256))))
-
-(claim shrink_40
-  (goal ((x Int)) ((= (lt x 1099511627776) True))
-    (= (lt (ediv x 256) 4294967296) True))
+;; quotient shrink, symbolic: x < 256*k |- ediv x 256 < k. The cert never
+;; mentions the bound, so ONE lemma serves every level of the byte towers
+;; (the call sites pin k to the literal and compute the premise's product).
+(claim ediv_shrink
+  (goal ((x Int) (k Int)) ((= (lt x (* 256 k)) True))
+    (= (lt (ediv x 256) k) True))
   (div-facts x 256 q (by arith (list 256 1 1 1 0 -256))))
 
 ;; the framing induction's IH-precondition step: a+(1+K) <= b |- (a+1)+K <= b.
@@ -294,11 +275,11 @@
       refl)
     (have hhi (= (lt (ediv x 256) 256) True)
       (rewrite-with
-        (lemma shrink_16)
+        (lemma ediv_shrink)
         lr
         lhs
-        ()
-        ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+        ((inst k 256))
+        ((steps ((compute lhs) (rewrite (premise 1) lr lhs true ())) refl))
         refl)
       (rewrite-with
         (lemma mod_byte_id)
@@ -340,27 +321,31 @@
           refl)
         (have h1hi (= (lt (ediv x 256) 16777216) True)
           (rewrite-with
-            (lemma shrink_32)
+            (lemma ediv_shrink)
             lr
             lhs
-            ()
-            ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+            ((inst k 16777216))
+            ((steps ((compute lhs) (rewrite (premise 1) lr lhs true ())) refl))
             refl)
           (have h2hi (= (lt (ediv (ediv x 256) 256) 65536) True)
             (rewrite-with
-              (lemma shrink_24)
+              (lemma ediv_shrink)
               lr
               lhs
-              ()
-              ((steps ((rewrite (premise h1hi) lr lhs true ())) refl))
+              ((inst k 65536))
+              ((steps
+                 ((compute lhs) (rewrite (premise h1hi) lr lhs true ()))
+                 refl))
               refl)
             (have h3hi (= (lt (ediv (ediv (ediv x 256) 256) 256) 256) True)
               (rewrite-with
-                (lemma shrink_16)
+                (lemma ediv_shrink)
                 lr
                 lhs
-                ()
-                ((steps ((rewrite (premise h2hi) lr lhs true ())) refl))
+                ((inst k 256))
+                ((steps
+                   ((compute lhs) (rewrite (premise h2hi) lr lhs true ()))
+                   refl))
                 refl)
               (rewrite-with
                 (lemma mod_byte_id)
@@ -460,31 +445,38 @@
                   refl)
                 (have h1hi (= (lt (ediv x 256) 72057594037927936) True)
                   (rewrite-with
-                    (lemma shrink_64)
+                    (lemma ediv_shrink)
                     lr
                     lhs
-                    ()
-                    ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                    ((inst k 72057594037927936))
+                    ((steps
+                       ((compute lhs) (rewrite (premise 1) lr lhs true ()))
+                       refl))
                     refl)
                   (have h2hi
                     (= (lt (ediv (ediv x 256) 256) 281474976710656) True)
                     (rewrite-with
-                      (lemma shrink_56)
+                      (lemma ediv_shrink)
                       lr
                       lhs
-                      ()
-                      ((steps ((rewrite (premise h1hi) lr lhs true ())) refl))
+                      ((inst k 281474976710656))
+                      ((steps
+                         ((compute lhs) (rewrite (premise h1hi) lr lhs true ()))
+                         refl))
                       refl)
                     (have h3hi
                       (=
                         (lt (ediv (ediv (ediv x 256) 256) 256) 1099511627776)
                         True)
                       (rewrite-with
-                        (lemma shrink_48)
+                        (lemma ediv_shrink)
                         lr
                         lhs
-                        ()
-                        ((steps ((rewrite (premise h2hi) lr lhs true ())) refl))
+                        ((inst k 1099511627776))
+                        ((steps
+                           ((compute lhs)
+                            (rewrite (premise h2hi) lr lhs true ()))
+                           refl))
                         refl)
                       (have h4hi
                         (=
@@ -493,12 +485,13 @@
                             4294967296)
                           True)
                         (rewrite-with
-                          (lemma shrink_40)
+                          (lemma ediv_shrink)
                           lr
                           lhs
-                          ()
+                          ((inst k 4294967296))
                           ((steps
-                             ((rewrite (premise h3hi) lr lhs true ()))
+                             ((compute lhs)
+                              (rewrite (premise h3hi) lr lhs true ()))
                              refl))
                           refl)
                         (have h5hi
@@ -510,12 +503,13 @@
                               16777216)
                             True)
                           (rewrite-with
-                            (lemma shrink_32)
+                            (lemma ediv_shrink)
                             lr
                             lhs
-                            ()
+                            ((inst k 16777216))
                             ((steps
-                               ((rewrite (premise h4hi) lr lhs true ()))
+                               ((compute lhs)
+                                (rewrite (premise h4hi) lr lhs true ()))
                                refl))
                             refl)
                           (have h6hi
@@ -531,12 +525,13 @@
                                 65536)
                               True)
                             (rewrite-with
-                              (lemma shrink_24)
+                              (lemma ediv_shrink)
                               lr
                               lhs
-                              ()
+                              ((inst k 65536))
                               ((steps
-                                 ((rewrite (premise h5hi) lr lhs true ()))
+                                 ((compute lhs)
+                                  (rewrite (premise h5hi) lr lhs true ()))
                                  refl))
                               refl)
                             (have h7hi
@@ -554,12 +549,13 @@
                                   256)
                                 True)
                               (rewrite-with
-                                (lemma shrink_16)
+                                (lemma ediv_shrink)
                                 lr
                                 lhs
-                                ()
+                                ((inst k 256))
                                 ((steps
-                                   ((rewrite (premise h6hi) lr lhs true ()))
+                                   ((compute lhs)
+                                    (rewrite (premise h6hi) lr lhs true ()))
                                    refl))
                                 refl)
                               (rewrite-with
@@ -587,17 +583,15 @@
 
 ;; below-range framing: induction on the width; each step skips the byte
 ;; store via get_set_other (b<a gives b!=a) and hands the IH the shifted
-;; bound b < a+1.
-;; internal twins of the two byte framing laws (cited by the word-grain
-;; laws below — a same-module requirement is not citable from its own impl)
-(claim sgb
-  (goal ((w Nat) (m Mem) (a Int) (v Int) (b Int)) ((= (lt b a) True))
-    (= (mem_get (store_le w m a v) b) (mem_get m b)))
+;; bound b < a+1. (The word-grain laws below cite these two fulfilled
+;; requirements by name — a fulfilled requirement is citable from its own
+;; impl once its fulfills has been checked.)
+(fulfills store_le_get_below
   (induct w
-    ((case Z (steps ((rewrite (lemma st_z) lr lhs true ())) refl))
+    ((case Z (steps ((rewrite (lemma store_le_z) lr lhs true ())) refl))
      (case S
        (steps
-         ((rewrite (lemma st_s) lr lhs true ()))
+         ((rewrite (lemma store_le_s) lr lhs true ()))
          (rewrite-with
            (hyp ih)
            lr
@@ -611,7 +605,7 @@
               ((steps ((rewrite (premise 0) lr lhs true ())) refl))
               refl))
            (rewrite-with
-             (lemma gso_i)
+             (lemma get_set_other)
              lr
              lhs
              ()
@@ -627,16 +621,13 @@
 ;; above-range framing: same induction; the IH bound steps by above_step and
 ;; the byte skip's disequality comes from above_neq (w2 is a pivot — premises
 ;; only — so it is Inst-pinned at the cite).
-(claim sga
-  (goal ((w Nat) (m Mem) (a Int) (v Int) (b Int))
-    ((= (le (+ a (int_of_nat w)) b) True))
-    (= (mem_get (store_le w m a v) b) (mem_get m b)))
+(fulfills store_le_get_above
   (induct w
-    ((case Z (steps ((rewrite (lemma st_z) lr lhs true ())) refl))
+    ((case Z (steps ((rewrite (lemma store_le_z) lr lhs true ())) refl))
      (case S
        (w2)
        (steps
-         ((rewrite (lemma st_s) lr lhs true ()))
+         ((rewrite (lemma store_le_s) lr lhs true ()))
          (rewrite-with
            (hyp ih)
            lr
@@ -651,7 +642,7 @@
                (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
               refl))
            (rewrite-with
-             (lemma gso_i)
+             (lemma get_set_other)
              lr
              lhs
              ()
@@ -666,24 +657,6 @@
                 refl))
              refl)))))))
 
-(fulfills store_le_get_below
-  (rewrite-with
-    (lemma sgb)
-    lr
-    lhs
-    ()
-    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
-    refl))
-
-(fulfills store_le_get_above
-  (rewrite-with
-    (lemma sga)
-    lr
-    lhs
-    ()
-    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
-    refl))
-
 ;; --- word-grain framing (COVERAGE.md A-1): induct on the read width, the
 ;; head byte skips the store by the byte law, the tail by the IH one
 ;; address up (above_step / le_succ_r / lt_succ_from_lt move the bound)
@@ -692,16 +665,16 @@
   (induct w
     ((case Z
        (steps
-         ((rewrite (lemma ld_z) lr lhs true ())
-          (rewrite (lemma ld_z) lr rhs true ()))
+         ((rewrite (lemma load_le_z) lr lhs true ())
+          (rewrite (lemma load_le_z) lr rhs true ()))
          refl))
      (case S
        (w2)
        (steps
-         ((rewrite (lemma ld_s) lr lhs true ())
-          (rewrite (lemma ld_s) lr rhs true ()))
+         ((rewrite (lemma load_le_s) lr lhs true ())
+          (rewrite (lemma load_le_s) lr rhs true ()))
          (rewrite-with
-           (lemma sgb)
+           (lemma store_le_get_below)
            lr
            lhs
            ()
@@ -733,16 +706,16 @@
   (induct w
     ((case Z
        (steps
-         ((rewrite (lemma ld_z) lr lhs true ())
-          (rewrite (lemma ld_z) lr rhs true ()))
+         ((rewrite (lemma load_le_z) lr lhs true ())
+          (rewrite (lemma load_le_z) lr rhs true ()))
          refl))
      (case S
        (w2)
        (steps
-         ((rewrite (lemma ld_s) lr lhs true ())
-          (rewrite (lemma ld_s) lr rhs true ()))
+         ((rewrite (lemma load_le_s) lr lhs true ())
+          (rewrite (lemma load_le_s) lr rhs true ()))
          (rewrite-with
-           (lemma sga)
+           (lemma store_le_get_above)
            lr
            lhs
            ()
@@ -765,16 +738,16 @@
   (induct w
     ((case Z
        (steps
-         ((rewrite (lemma ld_z) lr lhs true ())
-          (rewrite (lemma ld_z) lr rhs true ()))
+         ((rewrite (lemma load_le_z) lr lhs true ())
+          (rewrite (lemma load_le_z) lr rhs true ()))
          refl))
      (case S
        (w2)
        (steps
-         ((rewrite (lemma ld_s) lr lhs true ())
-          (rewrite (lemma ld_s) lr rhs true ()))
+         ((rewrite (lemma load_le_s) lr lhs true ())
+          (rewrite (lemma load_le_s) lr rhs true ()))
          (rewrite-with
-           (lemma gso_i)
+           (lemma get_set_other)
            lr
            lhs
            ()
@@ -814,16 +787,16 @@
   (induct w
     ((case Z
        (steps
-         ((rewrite (lemma ld_z) lr lhs true ())
-          (rewrite (lemma ld_z) lr rhs true ()))
+         ((rewrite (lemma load_le_z) lr lhs true ())
+          (rewrite (lemma load_le_z) lr rhs true ()))
          refl))
      (case S
        (w2)
        (steps
-         ((rewrite (lemma ld_s) lr lhs true ())
-          (rewrite (lemma ld_s) lr rhs true ()))
+         ((rewrite (lemma load_le_s) lr lhs true ())
+          (rewrite (lemma load_le_s) lr rhs true ()))
          (rewrite-with
-           (lemma gso_i)
+           (lemma get_set_other)
            lr
            lhs
            ()
@@ -849,22 +822,22 @@
              refl)))))))
 
 ;; the congruence (COVERAGE.md A-1): induct on w; the head store at b is
-;; read at a either as the stored byte (gs_i, both sides) or through to the
-;; bases (gso_i, then the premise), and the IH carries the agreement up
+;; read at a either as the stored byte (get_set, both sides) or through to
+;; the bases (get_set_other, then the premise), and the IH carries the agreement up
 (fulfills store_le_get_congr
   (induct w
     ((case Z
        (steps
-         ((rewrite (lemma st_z) lr lhs true ())
-          (rewrite (lemma st_z) lr rhs true ())
+         ((rewrite (lemma store_le_z) lr lhs true ())
+          (rewrite (lemma store_le_z) lr rhs true ())
           (rewrite (premise 0) lr lhs true ()))
          refl))
      (case S
        (w2)
        (chain
          (steps
-           ((rewrite (lemma st_s) lr lhs true ())
-            (rewrite (lemma st_s) lr rhs true ())))
+           ((rewrite (lemma store_le_s) lr lhs true ())
+            (rewrite (lemma store_le_s) lr rhs true ())))
          (rewrite-with
            (hyp ih)
            lr
@@ -879,21 +852,21 @@
                      (by arith (list (list 1 0 -1) (list 1 0 1))))
                    (steps
                      ((rewrite (premise heq) lr both true ())
-                      (rewrite (lemma gs_i) lr lhs true ())
-                      (rewrite (lemma gs_i) lr rhs true ()))
+                      (rewrite (lemma get_set) lr lhs true ())
+                      (rewrite (lemma get_set) lr rhs true ()))
                      refl)))
                (case False
                  (chain
                    (have hab (= (int_eq a b) False)
                      (steps ((rewrite (hyp 0) lr lhs true ())) refl))
                    (rewrite-with
-                     (lemma gso_i)
+                     (lemma get_set_other)
                      lr
                      lhs
                      ()
                      ((steps ((rewrite (premise hab) lr lhs true ())) refl)))
                    (rewrite-with
-                     (lemma gso_i)
+                     (lemma get_set_other)
                      lr
                      rhs
                      ()
@@ -905,13 +878,13 @@
 ;; (get_set), and the in-range mod identity finishes.
 (fulfills ls1_id
   (steps
-    ((rewrite (lemma st_s) lr lhs true ())
-     (rewrite (lemma st_z) lr lhs true ())
-     (rewrite (lemma ld_s) lr lhs true ())
-     (rewrite (lemma ld_z) lr lhs true ())
+    ((rewrite (lemma store_le_s) lr lhs true ())
+     (rewrite (lemma store_le_z) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_z) lr lhs true ())
      (rewrite (lemma mul_zero_r) lr lhs true ())
      (rewrite (lemma add_zero_r) lr lhs true ())
-     (rewrite (lemma gs_i) lr lhs true ()))
+     (rewrite (lemma get_set) lr lhs true ()))
     (rewrite-with
       (lemma mod_byte_id)
       lr
@@ -926,15 +899,15 @@
 ;; the raw quotient (mbid1), then peel the low site and split_id recomposes.
 (fulfills ls2_id
   (steps
-    ((rewrite (lemma st_s) lr lhs true ())
-     (rewrite (lemma st_s) lr lhs true ())
-     (rewrite (lemma st_z) lr lhs true ())
-     (rewrite (lemma ld_s) lr lhs true ())
-     (rewrite (lemma ld_s) lr lhs true ())
-     (rewrite (lemma ld_z) lr lhs true ())
+    ((rewrite (lemma store_le_s) lr lhs true ())
+     (rewrite (lemma store_le_s) lr lhs true ())
+     (rewrite (lemma store_le_z) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_z) lr lhs true ())
      (rewrite (lemma mul_zero_r) lr lhs true ())
      (rewrite (lemma add_zero_r) lr lhs true ())
-     (rewrite (lemma gs_i) lr lhs true ()))
+     (rewrite (lemma get_set) lr lhs true ()))
     (rewrite-with
       (lemma mbid1)
       lr
@@ -943,13 +916,13 @@
       ((steps ((rewrite (premise 0) lr lhs true ())) refl)
        (steps ((rewrite (premise 1) lr lhs true ())) refl))
       (rewrite-with
-        (lemma gso_i)
+        (lemma get_set_other)
         lr
         lhs
         ()
         ((steps ((rewrite (lemma neq_lo1) lr lhs true ())) refl))
         (steps
-          ((rewrite (lemma gs_i) lr lhs true ())
+          ((rewrite (lemma get_set) lr lhs true ())
            (rewrite (lemma split_id) lr lhs true ()))
           refl)))))
 
@@ -958,19 +931,19 @@
 ;; the top quotient, split_id recomposes level by level.
 (fulfills ls4_id
   (steps
-    ((rewrite (lemma st_s) lr lhs true ())
-     (rewrite (lemma st_s) lr lhs true ())
-     (rewrite (lemma st_s) lr lhs true ())
-     (rewrite (lemma st_s) lr lhs true ())
-     (rewrite (lemma st_z) lr lhs true ())
-     (rewrite (lemma ld_s) lr lhs true ())
-     (rewrite (lemma ld_s) lr lhs true ())
-     (rewrite (lemma ld_s) lr lhs true ())
-     (rewrite (lemma ld_s) lr lhs true ())
-     (rewrite (lemma ld_z) lr lhs true ())
+    ((rewrite (lemma store_le_s) lr lhs true ())
+     (rewrite (lemma store_le_s) lr lhs true ())
+     (rewrite (lemma store_le_s) lr lhs true ())
+     (rewrite (lemma store_le_s) lr lhs true ())
+     (rewrite (lemma store_le_z) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_z) lr lhs true ())
      (rewrite (lemma mul_zero_r) lr lhs true ())
      (rewrite (lemma add_zero_r) lr lhs true ())
-     (rewrite (lemma gs_i) lr lhs true ()))
+     (rewrite (lemma get_set) lr lhs true ()))
     (rewrite-with
       (lemma mbid3)
       lr
@@ -979,47 +952,47 @@
       ((steps ((rewrite (premise 0) lr lhs true ())) refl)
        (steps ((rewrite (premise 1) lr lhs true ())) refl))
       (rewrite-with
-        (lemma gso_i)
+        (lemma get_set_other)
         lr
         lhs
         ()
         ((steps ((rewrite (lemma neq_lo3) lr lhs true ())) refl))
         (rewrite-with
-          (lemma gso_i)
+          (lemma get_set_other)
           lr
           lhs
           ()
           ((steps ((rewrite (lemma neq_lo2) lr lhs true ())) refl))
           (rewrite-with
-            (lemma gso_i)
+            (lemma get_set_other)
             lr
             lhs
             ()
             ((steps ((rewrite (lemma neq_lo1) lr lhs true ())) refl))
             (steps
-              ((rewrite (lemma gs_i) lr lhs true ()))
+              ((rewrite (lemma get_set) lr lhs true ()))
               (rewrite-with
-                (lemma gso_i)
+                (lemma get_set_other)
                 lr
                 lhs
                 ()
                 ((steps ((rewrite (lemma neq_lo2) lr lhs true ())) refl))
                 (rewrite-with
-                  (lemma gso_i)
+                  (lemma get_set_other)
                   lr
                   lhs
                   ()
                   ((steps ((rewrite (lemma neq_lo1) lr lhs true ())) refl))
                   (steps
-                    ((rewrite (lemma gs_i) lr lhs true ()))
+                    ((rewrite (lemma get_set) lr lhs true ()))
                     (rewrite-with
-                      (lemma gso_i)
+                      (lemma get_set_other)
                       lr
                       lhs
                       ()
                       ((steps ((rewrite (lemma neq_lo1) lr lhs true ())) refl))
                       (steps
-                        ((rewrite (lemma gs_i) lr lhs true ())
+                        ((rewrite (lemma get_set) lr lhs true ())
                          (rewrite (lemma split_id) lr lhs true ())
                          (rewrite (lemma split_id) lr lhs true ())
                          (rewrite (lemma split_id) lr lhs true ()))
@@ -1030,7 +1003,7 @@
 ;; mem_read = the abstraction function for aggregate rep relations (mod.req's
 ;; last section; graduated from the §6p-§6r probes' br_read). The framing
 ;; proofs are the probes' window lemma (bc_swin) made surface law: induction
-;; on the width, the head byte skips the store via gso_i, the IH takes the
+;; on the width, the head byte skips the store via get_set_other, the IH takes the
 ;; shifted bound.
 
 (fn mem_read ((w Nat) (m Mem) (a Int)) (List Int)
@@ -1044,27 +1017,27 @@
 ;; neq_lo7 … neq_lo1, split_id recomposes seven times
 (fulfills ls8_id
   (steps
-    ((rewrite (lemma st_s) lr lhs true ())
-     (rewrite (lemma st_s) lr lhs true ())
-     (rewrite (lemma st_s) lr lhs true ())
-     (rewrite (lemma st_s) lr lhs true ())
-     (rewrite (lemma st_s) lr lhs true ())
-     (rewrite (lemma st_s) lr lhs true ())
-     (rewrite (lemma st_s) lr lhs true ())
-     (rewrite (lemma st_s) lr lhs true ())
-     (rewrite (lemma st_z) lr lhs true ())
-     (rewrite (lemma ld_s) lr lhs true ())
-     (rewrite (lemma ld_s) lr lhs true ())
-     (rewrite (lemma ld_s) lr lhs true ())
-     (rewrite (lemma ld_s) lr lhs true ())
-     (rewrite (lemma ld_s) lr lhs true ())
-     (rewrite (lemma ld_s) lr lhs true ())
-     (rewrite (lemma ld_s) lr lhs true ())
-     (rewrite (lemma ld_s) lr lhs true ())
-     (rewrite (lemma ld_z) lr lhs true ())
+    ((rewrite (lemma store_le_s) lr lhs true ())
+     (rewrite (lemma store_le_s) lr lhs true ())
+     (rewrite (lemma store_le_s) lr lhs true ())
+     (rewrite (lemma store_le_s) lr lhs true ())
+     (rewrite (lemma store_le_s) lr lhs true ())
+     (rewrite (lemma store_le_s) lr lhs true ())
+     (rewrite (lemma store_le_s) lr lhs true ())
+     (rewrite (lemma store_le_s) lr lhs true ())
+     (rewrite (lemma store_le_z) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_z) lr lhs true ())
      (rewrite (lemma mul_zero_r) lr lhs true ())
      (rewrite (lemma add_zero_r) lr lhs true ())
-     (rewrite (lemma gs_i) lr lhs true ()))
+     (rewrite (lemma get_set) lr lhs true ()))
     (rewrite-with
       (lemma mbid7)
       lr
@@ -1073,57 +1046,57 @@
       ((steps ((rewrite (premise 0) lr lhs true ())) refl)
        (steps ((rewrite (premise 1) lr lhs true ())) refl))
       (rewrite-with
-        (lemma gso_i)
+        (lemma get_set_other)
         lr
         lhs
         ()
         ((steps ((rewrite (lemma neq_lo7) lr lhs true ())) refl))
         (rewrite-with
-          (lemma gso_i)
+          (lemma get_set_other)
           lr
           lhs
           ()
           ((steps ((rewrite (lemma neq_lo6) lr lhs true ())) refl))
           (rewrite-with
-            (lemma gso_i)
+            (lemma get_set_other)
             lr
             lhs
             ()
             ((steps ((rewrite (lemma neq_lo5) lr lhs true ())) refl))
             (rewrite-with
-              (lemma gso_i)
+              (lemma get_set_other)
               lr
               lhs
               ()
               ((steps ((rewrite (lemma neq_lo4) lr lhs true ())) refl))
               (rewrite-with
-                (lemma gso_i)
+                (lemma get_set_other)
                 lr
                 lhs
                 ()
                 ((steps ((rewrite (lemma neq_lo3) lr lhs true ())) refl))
                 (rewrite-with
-                  (lemma gso_i)
+                  (lemma get_set_other)
                   lr
                   lhs
                   ()
                   ((steps ((rewrite (lemma neq_lo2) lr lhs true ())) refl))
                   (rewrite-with
-                    (lemma gso_i)
+                    (lemma get_set_other)
                     lr
                     lhs
                     ()
                     ((steps ((rewrite (lemma neq_lo1) lr lhs true ())) refl))
                     (steps
-                      ((rewrite (lemma gs_i) lr lhs true ()))
+                      ((rewrite (lemma get_set) lr lhs true ()))
                       (rewrite-with
-                        (lemma gso_i)
+                        (lemma get_set_other)
                         lr
                         lhs
                         ()
                         ((steps ((rewrite (lemma neq_lo6) lr lhs true ())) refl))
                         (rewrite-with
-                          (lemma gso_i)
+                          (lemma get_set_other)
                           lr
                           lhs
                           ()
@@ -1131,7 +1104,7 @@
                              ((rewrite (lemma neq_lo5) lr lhs true ()))
                              refl))
                           (rewrite-with
-                            (lemma gso_i)
+                            (lemma get_set_other)
                             lr
                             lhs
                             ()
@@ -1139,7 +1112,7 @@
                                ((rewrite (lemma neq_lo4) lr lhs true ()))
                                refl))
                             (rewrite-with
-                              (lemma gso_i)
+                              (lemma get_set_other)
                               lr
                               lhs
                               ()
@@ -1147,7 +1120,7 @@
                                  ((rewrite (lemma neq_lo3) lr lhs true ()))
                                  refl))
                               (rewrite-with
-                                (lemma gso_i)
+                                (lemma get_set_other)
                                 lr
                                 lhs
                                 ()
@@ -1155,7 +1128,7 @@
                                    ((rewrite (lemma neq_lo2) lr lhs true ()))
                                    refl))
                                 (rewrite-with
-                                  (lemma gso_i)
+                                  (lemma get_set_other)
                                   lr
                                   lhs
                                   ()
@@ -1163,9 +1136,9 @@
                                      ((rewrite (lemma neq_lo1) lr lhs true ()))
                                      refl))
                                   (steps
-                                    ((rewrite (lemma gs_i) lr lhs true ()))
+                                    ((rewrite (lemma get_set) lr lhs true ()))
                                     (rewrite-with
-                                      (lemma gso_i)
+                                      (lemma get_set_other)
                                       lr
                                       lhs
                                       ()
@@ -1178,7 +1151,7 @@
                                             ()))
                                          refl))
                                       (rewrite-with
-                                        (lemma gso_i)
+                                        (lemma get_set_other)
                                         lr
                                         lhs
                                         ()
@@ -1191,7 +1164,7 @@
                                               ()))
                                            refl))
                                         (rewrite-with
-                                          (lemma gso_i)
+                                          (lemma get_set_other)
                                           lr
                                           lhs
                                           ()
@@ -1204,7 +1177,7 @@
                                                 ()))
                                              refl))
                                           (rewrite-with
-                                            (lemma gso_i)
+                                            (lemma get_set_other)
                                             lr
                                             lhs
                                             ()
@@ -1217,7 +1190,7 @@
                                                   ()))
                                                refl))
                                             (rewrite-with
-                                              (lemma gso_i)
+                                              (lemma get_set_other)
                                               lr
                                               lhs
                                               ()
@@ -1231,13 +1204,13 @@
                                                  refl))
                                               (steps
                                                 ((rewrite
-                                                   (lemma gs_i)
+                                                   (lemma get_set)
                                                    lr
                                                    lhs
                                                    true
                                                    ()))
                                                 (rewrite-with
-                                                  (lemma gso_i)
+                                                  (lemma get_set_other)
                                                   lr
                                                   lhs
                                                   ()
@@ -1250,7 +1223,7 @@
                                                         ()))
                                                      refl))
                                                   (rewrite-with
-                                                    (lemma gso_i)
+                                                    (lemma get_set_other)
                                                     lr
                                                     lhs
                                                     ()
@@ -1263,7 +1236,7 @@
                                                           ()))
                                                        refl))
                                                     (rewrite-with
-                                                      (lemma gso_i)
+                                                      (lemma get_set_other)
                                                       lr
                                                       lhs
                                                       ()
@@ -1276,7 +1249,7 @@
                                                             ()))
                                                          refl))
                                                       (rewrite-with
-                                                        (lemma gso_i)
+                                                        (lemma get_set_other)
                                                         lr
                                                         lhs
                                                         ()
@@ -1290,13 +1263,13 @@
                                                            refl))
                                                         (steps
                                                           ((rewrite
-                                                             (lemma gs_i)
+                                                             (lemma get_set)
                                                              lr
                                                              lhs
                                                              true
                                                              ()))
                                                           (rewrite-with
-                                                            (lemma gso_i)
+                                                            (lemma get_set_other)
                                                             lr
                                                             lhs
                                                             ()
@@ -1309,7 +1282,8 @@
                                                                   ()))
                                                                refl))
                                                             (rewrite-with
-                                                              (lemma gso_i)
+                                                              (lemma
+                                                                get_set_other)
                                                               lr
                                                               lhs
                                                               ()
@@ -1323,7 +1297,8 @@
                                                                     ()))
                                                                  refl))
                                                               (rewrite-with
-                                                                (lemma gso_i)
+                                                                (lemma
+                                                                  get_set_other)
                                                                 lr
                                                                 lhs
                                                                 ()
@@ -1338,13 +1313,15 @@
                                                                    refl))
                                                                 (steps
                                                                   ((rewrite
-                                                                     (lemma gs_i)
+                                                                     (lemma
+                                                                       get_set)
                                                                      lr
                                                                      lhs
                                                                      true
                                                                      ()))
                                                                   (rewrite-with
-                                                                    (lemma gso_i)
+                                                                    (lemma
+                                                                      get_set_other)
                                                                     lr
                                                                     lhs
                                                                     ()
@@ -1359,7 +1336,7 @@
                                                                        refl))
                                                                     (rewrite-with
                                                                       (lemma
-                                                                        gso_i)
+                                                                        get_set_other)
                                                                       lr
                                                                       lhs
                                                                       ()
@@ -1375,14 +1352,14 @@
                                                                       (steps
                                                                         ((rewrite
                                                                            (lemma
-                                                                             gs_i)
+                                                                             get_set)
                                                                            lr
                                                                            lhs
                                                                            true
                                                                            ()))
                                                                         (rewrite-with
                                                                           (lemma
-                                                                            gso_i)
+                                                                            get_set_other)
                                                                           lr
                                                                           lhs
                                                                           ()
@@ -1398,7 +1375,7 @@
                                                                           (steps
                                                                             ((rewrite
                                                                                (lemma
-                                                                                 gs_i)
+                                                                                 get_set)
                                                                                lr
                                                                                lhs
                                                                                true
@@ -1454,14 +1431,6 @@
                                                                                ()))
                                                                             refl))))))))))))))))))))))))))))))))))))))
 
-;; defining-equation twins.
-(claim mr_z (goal ((m Mem) (a Int)) () (= (mem_read Z m a) Nil)) auto)
-
-(claim mr_s
-  (goal ((w Nat) (m Mem) (a Int)) ()
-    (= (mem_read (S w) m a) (Cons (mem_get m a) (mem_read w m (+ a 1)))))
-  auto)
-
 ;; a window starting at a with 1+j more bytes below b cannot start AT b —
 ;; the above law's head-byte disequality (read-addr-first orientation;
 ;; lt_implies_neq_flip covers the below law's).
@@ -1470,12 +1439,6 @@
     ((= (le (+ a (+ 1 j)) b) True) (= (le 0 j) True))
     (= (int_eq a b) False))
   (by arith (list 1 1 1)))
-
-;; a + (1+j) <= b  entails  (a+1) + j <= b — the above law's IH bound.
-(claim mr_step
-  (goal ((a Int) (j Int) (b Int)) ((= (le (+ a (+ 1 j)) b) True))
-    (= (le (+ (+ a 1) j) b) True))
-  (by arith (list 1 1)))
 
 ;; --- discharge the readback interface obligations ------------------------------
 
@@ -1489,14 +1452,14 @@
   (induct w
     ((case Z
        (steps
-         ((rewrite (lemma mr_z) lr lhs true ())
-          (rewrite (lemma mr_z) lr rhs true ()))
+         ((rewrite (lemma mem_read_z) lr lhs true ())
+          (rewrite (lemma mem_read_z) lr rhs true ()))
          refl))
      (case S
        (chain
-         (steps ((rewrite (lemma mr_s) lr lhs true ())))
+         (steps ((rewrite (lemma mem_read_s) lr lhs true ())))
          (rewrite-with
-           (lemma gso_i)
+           (lemma get_set_other)
            lr
            lhs
            ()
@@ -1519,25 +1482,25 @@
               ()
               ((steps ((rewrite (premise 0) lr lhs true ())) refl))
               refl)))
-         (steps ((rewrite (lemma mr_s) lr rhs true ())))
+         (steps ((rewrite (lemma mem_read_s) lr rhs true ())))
          refl)))))
 
 ;; above-range framing: the probes' bc_swin shape — head-byte disequality by
 ;; mr_neq_above (j Inst-pinned; the successor spelling discharged by
-;; int_of_nat_succ RL), IH bound by mr_step.
+;; int_of_nat_succ RL), IH bound by std/order's le_succ_shift.
 (fulfills mem_read_set_above
   (induct w
     ((case Z
        (steps
-         ((rewrite (lemma mr_z) lr lhs true ())
-          (rewrite (lemma mr_z) lr rhs true ()))
+         ((rewrite (lemma mem_read_z) lr lhs true ())
+          (rewrite (lemma mem_read_z) lr rhs true ()))
          refl))
      (case S
        (w2)
        (chain
-         (steps ((rewrite (lemma mr_s) lr lhs true ())))
+         (steps ((rewrite (lemma mem_read_s) lr lhs true ())))
          (rewrite-with
-           (lemma gso_i)
+           (lemma get_set_other)
            lr
            lhs
            ()
@@ -1558,7 +1521,7 @@
            lhs
            ()
            ((rewrite-with
-              (lemma mr_step)
+              (lemma le_succ_shift)
               lr
               lhs
               ()
@@ -1567,5 +1530,5 @@
                   (rewrite (premise 0) lr lhs true ()))
                  refl))
               refl)))
-         (steps ((rewrite (lemma mr_s) lr rhs true ())))
+         (steps ((rewrite (lemma mem_read_s) lr rhs true ())))
          refl)))))
