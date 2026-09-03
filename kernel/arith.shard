@@ -74,8 +74,7 @@
   (List (Pair Int (Option Expr)))
   (measure (struct args))
   (match args
-    ((Cons a (Cons b Nil))
-     (lia_concat (lia_collect a sign) (lia_collect b sign)))
+    ((Cons a (Cons b Nil)) (app (lia_collect a sign) (lia_collect b sign)))
     (_ (lia_atom (Call (qn (quote +)) args) sign))))  ; malformed; treat opaque
 
 ;; (- a b): collect a with sign, b with -sign.
@@ -84,7 +83,7 @@
   (measure (struct args))
   (match args
     ((Cons a (Cons b Nil))
-     (lia_concat (lia_collect a sign) (lia_collect b (- 0 sign))))
+     (app (lia_collect a sign) (lia_collect b (- 0 sign))))
     (_ (lia_atom (Call (qn (quote -)) args) sign))))
 
 ;; (* k e) or (* e k) — k must be an IntLit (linearity).
@@ -105,42 +104,24 @@
     (Nil Nil)
     ((Cons (Pair c a) rest) (Cons (Pair (* k c) a) (lia_scale k rest)))))
 
-(fn lia_concat
-  ((a (List (Pair Int (Option Expr)))) (b (List (Pair Int (Option Expr)))))
-  (List (Pair Int (Option Expr)))
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (lia_concat t b)))))
-
-;; length of a monomial list — the termination measure for lia_canonical
-;; (which recurses on the strictly-shorter suffix lia_split_atom returns).
-;; A kernel-local list facility: the kernel has no polymorphic len, and this
-;; list type (List (Pair Int (Option Expr))) has none yet.
-(fn lia_plen ((p (List (Pair Int (Option Expr))))) Int
-  (measure (struct p))
-  (match p
-    (Nil 0)
-    ((Cons h t) (+ 1 (lia_plen t)))))
-
 ;; ---------------------------------------------------------------------------
 ;; Canonicalization: merge like terms, drop zero coefficients.
 ;; ---------------------------------------------------------------------------
 
-;; measure: lia_plen p. The recursion is on rest_no_a, the suffix the inner
+;; measure: len p. The recursion is on rest_no_a, the suffix the inner
 ;; split returns; premise 0 = the outer arm eq (p = Cons (Pair c a) rest),
 ;; premise 1 = the inner arm eq (lia_split_atom a rest = Pair total rest_no_a).
 ;; decrease: bridge rest_no_a back to (lsa_rest (lia_split_atom a rest)) via
-;; premise 1, bound it by (lia_plen rest) with lia_split_atom_le, then p's
-;; length is 1 + that (lia_plen_cons) so the suffix is strictly shorter.
-;; nonneg: lia_plen_nonneg.
+;; premise 1, bound it by (len rest) with lia_split_atom_le, then p's
+;; length is 1 + that (len_cons) so the suffix is strictly shorter.
+;; nonneg: len_nonneg.
 (fn lia_canonical ((p (List (Pair Int (Option Expr)))))
   (List (Pair Int (Option Expr)))
   (measure
-    (lia_plen p)
+    (len p)
     (have (= rest_no_a (lsa_rest (lia_split_atom a rest)))
       (steps ((rewrite (premise 1) lr rhs true ()) (simp rhs)) refl)
-      (have (= (le (lia_plen rest_no_a) (lia_plen rest)) True)
+      (have (= (le (len rest_no_a) (len rest)) True)
         (steps
           ((rewrite (premise 2) lr lhs true ()))
           (rewrite-with
@@ -152,9 +133,9 @@
             refl))
         (steps
           ((rewrite (premise 0) lr lhs true ())
-           (rewrite (lemma lia_plen_cons) lr lhs true ()))
+           (rewrite (lemma len_cons) lr lhs true ()))
           (by arith (list 1 0 0 0 1)))))
-    (rewrite-with (lemma lia_plen_nonneg) lr lhs ((inst p rest_no_a)) () refl))
+    (rewrite-with (lemma len_nonneg) lr lhs ((inst xs rest_no_a)) () refl))
   (match p
     (Nil Nil)
     ((Cons (Pair c a) rest)
@@ -190,7 +171,7 @@
 
 ;; ---- totality support for lia_canonical (cited by its measure) -------------
 ;; lia_canonical recurses on the suffix lia_split_atom returns; these are the
-;; kernel-local facts its (measure (lia_plen p) …) cites. None of them reaches
+;; kernel-local facts its (measure (len p) …) cites. None of them reaches
 ;; lia_canonical in the call graph, so stratified citation admits them.
 
 ;; the suffix component of a split result.
@@ -199,32 +180,6 @@
   (match pr
     ((Pair _ r) r)))
 
-;; lia_plen's defining equations.
-(claim lia_plen_nil (goal () () (= (lia_plen Nil) 0)) (steps ((simp lhs)) refl))
-
-(claim lia_plen_cons
-  (goal ((h (Pair Int (Option Expr))) (t (List (Pair Int (Option Expr))))) ()
-    (= (lia_plen (Cons h t)) (+ 1 (lia_plen t))))
-  (steps ((simp lhs)) refl))
-
-;; 0 <= lia_plen p. Induction; the step bumps the IH's lower bound (farkas).
-(claim lia_plen_nonneg
-  (goal ((p (List (Pair Int (Option Expr))))) () (= (le 0 (lia_plen p)) True))
-  (induct p
-    ((case Nil
-       (steps
-         ((rewrite (lemma lia_plen_nil) lr lhs true ()))
-         (by arith (list 1))))
-     (case Cons
-       (h t)
-       ;; materialize the IH as a premise (farkas does not read induct IHs as
-       ;; slots), then bump it past the leading +1.
-       (have (= (le 0 (lia_plen t)) True)
-         (steps ((rewrite (hyp 0) lr lhs true ())) refl)
-         (steps
-           ((rewrite (lemma lia_plen_cons) lr lhs true ()))
-           (by arith (list 1 1))))))))
-
 ;; lia_split_atom's leftover never grows the list: len (suffix) <= len input.
 ;; Induction on q; the Cons step destructures the head pair, cases the inner
 ;; recursive split, bridges the IH through the split equation, then cases the
@@ -232,7 +187,7 @@
 ;; each branch from the bridged IH bound.
 (claim lia_split_atom_le
   (goal ((a (Option Expr)) (q (List (Pair Int (Option Expr))))) ()
-    (= (le (lia_plen (lsa_rest (lia_split_atom a q))) (lia_plen q)) True))
+    (= (le (len (lsa_rest (lia_split_atom a q))) (len q)) True))
   (induct q
     ((case Nil (steps ((unfold lia_split_atom lhs) (simp lhs)) refl))
      (case Cons
@@ -249,7 +204,7 @@
                  (have (= others (lsa_rest (lia_split_atom a rest)))
                    (steps ((rewrite (hyp 0) lr rhs true ()) (simp rhs)) refl)
                    ;; premise 0 = the line above
-                   (have (= (le (lia_plen others) (lia_plen rest)) True)
+                   (have (= (le (len others) (len rest)) True)
                      (steps
                        ((rewrite (premise 0) lr lhs true ()))
                        (rewrite-with (hyp 2) lr lhs ((inst a a)) () refl))
@@ -286,7 +241,7 @@
 ;; ---------------------------------------------------------------------------
 
 (fn lia_decide ((lhs Expr) (rhs Expr)) Bool
-  (let ((diff (lia_concat (lia_collect lhs 1) (lia_collect rhs (- 0 1)))))
+  (let ((diff (app (lia_collect lhs 1) (lia_collect rhs (- 0 1)))))
     (lia_all_zero (lia_canonical diff))))
 
 ;; ===========================================================================
@@ -333,7 +288,7 @@
 (fn ord_check_diff ((a Expr) (b Expr) (threshold Int)) Bool
   (match
     (lia_const_value
-      (lia_canonical (lia_concat (lia_collect b 1) (lia_collect a (- 0 1)))))
+      (lia_canonical (app (lia_collect b 1) (lia_collect a (- 0 1)))))
     ((Some c) (le threshold c))  ; concrete: c >= threshold
     (None False)))  ; variables remain
 
@@ -530,7 +485,7 @@
 
 ;; b - a, as a polynomial.
 (fn poly_sub ((b Expr) (a Expr)) (List (Pair Int (Option Expr)))
-  (lia_concat (lia_collect b 1) (lia_collect a (- 0 1))))
+  (app (lia_collect b 1) (lia_collect a (- 0 1))))
 
 ;; p - 1 (prepend a -1 constant monomial; canonical merges later).
 (fn poly_minus1 ((p (List (Pair Int (Option Expr)))))
@@ -650,8 +605,8 @@
           ((Some (Pair poly needs_nonneg))
            (if needs_nonneg
              (if (lt m 0) None  ; GUARD 1: neg mult on inequality
-             (farkas_combine prest mrest (lia_concat (lia_scale m poly) acc)))
-             (farkas_combine prest mrest (lia_concat (lia_scale m poly) acc)))))))))))
+             (farkas_combine prest mrest (app (lia_scale m poly) acc)))
+             (farkas_combine prest mrest (app (lia_scale m poly) acc)))))))))))
 
 ;; GUARD 2: the canonicalized combination is a lone constant c < 0.
 (fn farkas_contradiction ((p (List (Pair Int (Option Expr))))) Bool

@@ -27,7 +27,7 @@
 ;;; The conditional stages (both driven by the checker's OWN RewriteWith
 ;;; machinery, so what search finds is what replay re-derives):
 ;;;   - CONDITIONAL CITATION: rewrite the goal with a PREMISED lemma —
-;;;     probe the match with apply_rewrite_with_env, require every binder
+;;;     probe the match with apply_rewrite_with_occ, require every binder
 ;;;     bound (no pivots yet), discharge each instantiated premise with a
 ;;;     mini ladder, close the rewritten goal (refl / arith / a farkas
 ;;;     cert on the post-rewrite sequent). Candidates carry no insts; the
@@ -90,6 +90,7 @@
 (import "../../kernel/reader.shard")  ; read_all / SExpr / RCtx / build_module_d
 (import "../../meta/format")  ; fmt — canonicalize the rendered sidecar
 (import "../../meta/proofgen")  ; the goal-closing oracle kit (LS-law 2)
+(import "../../std/list")  ; append / len / rev (polymorphic list algebra)
 
 ;; the explicit library surface this app consumes (STRICT-mode scoping).
 (use (:: kernel loader resolve_closure))
@@ -149,7 +150,7 @@
 (use (:: kernel checker build_induct_subgoal))
 (use (:: kernel checker build_case_on_subgoal))
 (use (:: kernel checker inst_ctor_fields))
-(use (:: kernel checker apply_rewrite_with_env))  ; the RewriteWith matcher (env out)
+(use (:: kernel checker apply_rewrite_with_occ))  ; the RewriteWith matcher (env out)
 (use (:: kernel checker split_params_by_insts))  ; open cited binders fresh
 (use (:: kernel checker open_eq_with))
 (use (:: kernel checker open_eqs_with))
@@ -199,6 +200,7 @@
 (use (:: kernel proof Side))
 (use (:: kernel proof Lhs))
 (use (:: kernel proof Rhs))
+(use (:: kernel proof OccFirst))
 (use (:: kernel term Expr))
 (use (:: kernel term Call))
 (use (:: kernel term Ctor))
@@ -220,6 +222,9 @@
 (use (:: kernel term qn_name))
 (use (:: kernel term append_int))
 (use (:: kernel term show_int))
+(use (:: std list append))
+(use (:: std list len))
+(use (:: std list rev))
 
 (fn nl () (List Int) (Cons 10 Nil))  ; "\n"
 
@@ -560,12 +565,7 @@
 
 ;; ordered unfold chains over one side's heads: empty, every single, every
 ;; ordered pair (repeats allowed — nested recursion unfolds one fn twice).
-(fn append_chains ((a (List (List (List Int)))) (b (List (List (List Int)))))
-  (List (List (List Int)))
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (append_chains t b)))))
+
 
 (fn chain_singles ((hs (List (List Int)))) (List (List (List Int)))
   (measure (struct hs))
@@ -585,11 +585,10 @@
   (measure (struct hs))
   (match hs
     (Nil Nil)
-    ((Cons f rest)
-     (append_chains (chain_pairs_with f all) (chain_pairs rest all)))))
+    ((Cons f rest) (append (chain_pairs_with f all) (chain_pairs rest all)))))
 
 (fn chains2 ((hs (List (List Int)))) (List (List (List Int)))
-  (Cons Nil (append_chains (chain_singles hs) (chain_pairs hs hs))))
+  (Cons Nil (append (chain_singles hs) (chain_pairs hs hs))))
 
 ;; one side's chain as steps: (unfold F side) (reduce side) per link.
 (fn chain_steps ((names (List (List Int))) (side (List Int))) (List (List Int))
@@ -689,7 +688,7 @@
   (measure (struct tails))
   (match tails
     (Nil Nil)
-    ((Cons t rest) (Cons (append_cands base t) (cons_all base rest)))))
+    ((Cons t rest) (Cons (append base t) (cons_all base rest)))))
 
 ;; each IH tail followed by each lemma step.
 (fn cross_tails ((ihts (List (List (List Int)))) (lsteps (List (List Int))))
@@ -698,9 +697,7 @@
   (match ihts
     (Nil Nil)
     ((Cons t rest)
-     (append_chains
-       (cons_all t (singleton_tails lsteps))
-       (cross_tails rest lsteps)))))
+     (append (cons_all t (singleton_tails lsteps)) (cross_tails rest lsteps)))))
 
 ;; `ihts` = the IH tails in play: (ih_tails) inside an induction case, Nil at
 ;; the flat level — a top-level sequent has no hypotheses, so (hyp …) tails
@@ -710,13 +707,13 @@
    (ihts (List (List (List Int))))
    (lsteps (List (List Int))))
   (List (List (List Int)))
-  (append_chains
+  (append
     (match base
       (Nil Nil)
       (_ (Cons base Nil)))
-    (append_chains
+    (append
       (cons_all base ihts)
-      (append_chains
+      (append
         (cons_all base (singleton_tails lsteps))
         (cons_all base (cross_tails ihts lsteps))))))
 
@@ -730,9 +727,9 @@
   (match rcs
     (Nil Nil)
     ((Cons rc rest)
-     (append_chains
+     (append
        (tail_variants
-         (append_cands (chain_steps lc "lhs") (chain_steps rc "rhs"))
+         (append (chain_steps lc "lhs") (chain_steps rc "rhs"))
          ihts
          lsteps)
        (prefixes_loop_r lc rest ihts lsteps)))))
@@ -747,7 +744,7 @@
   (match lcs
     (Nil Nil)
     ((Cons lc rest)
-     (append_chains
+     (append
        (prefixes_loop_r lc rcs ihts lsteps)
        (prefixes_loop rest rcs ihts lsteps)))))
 
@@ -759,7 +756,7 @@
    (ihts (List (List (List Int))))
    (lsteps (List (List Int))))
   (List (List (List Int)))
-  (append_chains
+  (append
     (prefixes_loop (chains2 lheads) (chains2 rheads) ihts lsteps)
     (tail_variants (list "(simp both)") ihts lsteps)))
 
@@ -780,11 +777,11 @@
    (lsteps (List (List Int))))
   (List (List Int))
   (let ((pfxs (all_prefixes lheads rheads ihts lsteps)))
-    (append_cands
+    (append
       (list "refl" "(steps ((compute both)) refl)" "(steps ((simp both)) refl)")
-      (append_cands
+      (append
         (with_terminal pfxs "refl")
-        (append_cands
+        (append
           (list "(by arith (list))")
           (with_terminal pfxs "(by arith (list))"))))))
 
@@ -920,7 +917,7 @@
 (fn induct_case_cands ((s Slv) (th Theory) (seq Sequent)) (List (List Int))
   (match (seq_side_heads seq (slv_m s))
     ((Pair lh rh)
-     (append_cands
+     (append
        (case_ladder
          lh
          rh
@@ -1143,7 +1140,7 @@
 (fn caseon_cands ((s Slv) (th Theory) (seq Sequent)) (List (List Int))
   (match (seq_side_heads seq (slv_m s))
     ((Pair lh rh)
-     (append_cands
+     (append
        (case_ladder
          lh
          rh
@@ -1190,7 +1187,7 @@
 ;; variants plus simp twins (reduce picks arms but never δ-unfolds — a
 ;; call-headed scrutinee like (lft (Some x)) needs simp to open).
 (fn disc_case_tails () (List (List (List Int)))
-  (append_chains
+  (append
     (caseon_tails)
     (list
       (list (st_rw_hyp 0 "lhs") (st_simp "lhs"))
@@ -1208,7 +1205,7 @@
   (match bases
     (Nil Nil)
     ((Cons b rest)
-     (append_chains (tail_variants b hts Nil) (disc_prefixes_b rest hts)))))
+     (append (tail_variants b hts Nil) (disc_prefixes_b rest hts)))))
 
 (fn disc_branch_cands ((branch Sequent)) (List (List Int))
   (let
@@ -1216,28 +1213,22 @@
        (disc_prefixes_b
          (disc_case_tails)
          (disc_hyp_tails (quant_hyp_idxs (seq_hyps branch) 0)))))
-    (append_cands
+    (append
       (list "refl" "(steps ((compute both)) refl)" "(steps ((simp both)) refl)")
-      (append_cands
+      (append
         (with_terminal pfxs "refl")
-        (append_cands
-          (with_terminal pfxs "(by arith (list))")
-          (farkas_cands branch))))))
+        (append (with_terminal pfxs "(by arith (list))") (farkas_cands branch))))))
 
 ;; ---- the frontier scan -------------------------------------------------------
 ;; Stuck cores of a stuck scrutinee/condition, innermost-first: a call's
 ;; call-headed args are better split candidates than the call itself
 ;; ((lft (ev_i …)) is stuck BECAUSE (ev_i …) is).
-(fn disc_app_e ((a (List Expr)) (b (List Expr))) (List Expr)
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (disc_app_e t b)))))
+
 
 (fn disc_cores ((e Expr)) (List Expr)
   (measure (struct e))
   (match e
-    ((Call _ args) (disc_app_e (disc_cores_args args) (Cons e Nil)))
+    ((Call _ args) (append (disc_cores_args args) (Cons e Nil)))
     (_ (Cons e Nil))))
 
 (fn disc_cores_args ((args (List Expr))) (List Expr)
@@ -1246,7 +1237,7 @@
     (Nil Nil)
     ((Cons a rest)
      (match a
-       ((Call _ _) (disc_app_e (disc_cores a) (disc_cores_args rest)))
+       ((Call _ _) (append (disc_cores a) (disc_cores_args rest)))
        (_ (disc_cores_args rest))))))
 
 ;; candidate = (core, came-from-If-condition) — the tag types Bool cores
@@ -1457,9 +1448,7 @@
   (match bases
     (Nil Nil)
     ((Cons b rest)
-     (append_chains
-       (cons_all b (singleton_tails lsteps))
-       (disc_lemma_ext rest lsteps)))))
+     (append (cons_all b (singleton_tails lsteps)) (disc_lemma_ext rest lsteps)))))
 
 (fn disc_pool ((s Slv) (th Theory) (seq Sequent)) (List (List (List Int)))
   (match (seq_side_heads seq (slv_m s))
@@ -1470,12 +1459,12 @@
             Nil
             (Cons
               (list (st_simp "both"))
-              (append_chains
+              (append
                 (disc_hyp_bases (closed_hyp_idxs (seq_hyps seq) 0))
-                (append_chains
+                (append
                   (disc_unfold_bases lh "lhs")
                   (disc_unfold_bases rh "rhs")))))))
-       (append_chains
+       (append
          bases
          (disc_lemma_ext
            bases
@@ -1565,7 +1554,7 @@
 ;; ---- conditional-citation synthesis (premised lemmas via rewrite-with) ------
 ;; The kernel's own RewriteWith machinery, driven at solve time: open the
 ;; cited lemma's binders fresh (split_params_by_insts with no insts), probe
-;; the match with apply_rewrite_with_env (a cheap native reject), require the
+;; the match with apply_rewrite_with_occ (a cheap native reject), require the
 ;; match to bind EVERY binder (pivots are out of scope — an unbound binder
 ;; gen-freshes at replay and can never resolve), discharge each instantiated
 ;; premise with a mini ladder in the parent context (exactly the sub-sequent
@@ -1592,7 +1581,7 @@
   (list (pg_refl) (pg_compute) (pg_simp) (pg_arith0)))
 
 (fn solve_premise ((s Slv) (th Theory) (pseq Sequent)) (Option (List Int))
-  (try_ladder s th pseq (append_cands (mini_ladder) (farkas_cands pseq))))
+  (try_ladder s th pseq (append (mini_ladder) (farkas_cands pseq))))
 
 ;; one sub-proof text per instantiated cited premise, in citation order.
 (fn solve_premises
@@ -1682,13 +1671,14 @@
    (sidetxt (List Int)))
   (Option (List Int))
   (match
-    (apply_rewrite_with_env
+    (apply_rewrite_with_occ
       (slv_m s)
       (seq_params seq)
       pat_vars
       oeq
       dir
       side
+      (OccFirst)
       (seq_equation seq))
     (None None)
     ((Some (Pair env new_eq))
@@ -1706,9 +1696,7 @@
                dirtxt
                sidetxt
                ptexts
-               (append_cands
-                 (mini_ladder)
-                 (farkas_cands (Sequent ps hs pr new_eq))))))))
+               (append (mini_ladder) (farkas_cands (Sequent ps hs pr new_eq))))))))
        None))))
 
 (fn rww_try_lemma ((s Slv) (th Theory) (seq Sequent) (q QName) (lg Goal))
@@ -2225,12 +2213,6 @@
   (let ((cand (mn_render facts inner)))
     (if (try_cand s th seq cand) (Some cand) None)))
 
-(fn rev_facts ((xs (List MnFact)) (acc (List MnFact))) (List MnFact)
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (rev_facts t (Cons h acc)))))
-
 ;; grow the mined-fact set MONOTONICALLY until farkas closes or the budget
 ;; or pool dries: an added premise never hurts (slot 0 ignores it), so
 ;; accumulation loses nothing where a fixed pair-pick would guess wrong.
@@ -2253,7 +2235,7 @@
     ((Some f)
      (let ((ext2 (mn_extend ext f)) (facts2 (Cons f facts_rev)))
        (match (farkas_solve ext2)
-         ((Some inner) (mn_wrap_cand s th seq0 (rev_facts facts2 Nil) inner))
+         ((Some inner) (mn_wrap_cand s th seq0 (rev facts2) inner))
          (None (mn_grow s th seq0 ext2 facts2 atoms lems (- k 1)))))))))
 
 ;; ---- hypothesis promotion ----------------------------------------------------
@@ -2321,14 +2303,6 @@
         (None None)
         ((Some inner) (mn_wrap_cand s th seq hf inner))))))
 
-(fn append_pool
-  ((a (List (Pair (List Int) Goal))) (b (List (Pair (List Int) Goal))))
-  (List (Pair (List Int) Goal))
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (append_pool t b)))))
-
 (fn mn_solve ((s Slv) (th Theory) (seq Sequent)) (Option (List Int))
   (let ((gatoms (mn_atoms seq)))
     (let ((hf (hp_facts (seq_hyps seq) (seq_params seq) gatoms 0)))
@@ -2343,9 +2317,9 @@
                   th
                   seq
                   ext0
-                  (rev_facts hf Nil)
+                  (rev hf)
                   atoms
-                  (append_pool
+                  (append
                     (mn_hyps (seq_hyps seq) aheads 0)
                     (mn_lemmas th aheads 8))
                   6)))))))))
@@ -2360,7 +2334,7 @@
 ;; the equation is skipped; the assembled whole still re-verifies.
 
 (fn term_solve ((s Slv) (th Theory) (seq Sequent)) (Option (List Int))
-  (match (try_ladder s th seq (append_cands (mini_ladder) (farkas_cands seq)))
+  (match (try_ladder s th seq (append (mini_ladder) (farkas_cands seq)))
     ((Some c) (Some c))
     (None
       (match (cond_solve s th seq)
@@ -2423,12 +2397,6 @@
     (Nil Nil)
     ((Cons _ rest) (Cons (st_rw_prem j "lhs") (rw_units_prems rest (+ j 1))))))
 
-(fn rev_steps ((xs (List (List Int))) (acc (List (List Int)))) (List (List Int))
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (rev_steps t (Cons h acc)))))
-
 (fn pfx_unfold_rw ((lheads (List (List Int))) (u (List Int)))
   (List (List (List Int)))
   (measure (struct lheads))
@@ -2445,7 +2413,7 @@
     ((Cons u rest)
      (Cons
        (list u (st_simp "lhs"))
-       (append_chains (pfx_unfold_rw lheads u) (pfx_single_set lheads rest))))))
+       (append (pfx_unfold_rw lheads u) (pfx_single_set lheads rest))))))
 
 (fn pfx_all_unfold ((lheads (List (List Int))) (rws (List (List Int))))
   (List (List (List Int)))
@@ -2454,7 +2422,7 @@
     (Nil Nil)
     ((Cons f rest)
      (Cons
-       (Cons (st_unfold f "lhs") (append_cands rws (list (st_simp "lhs"))))
+       (Cons (st_unfold f "lhs") (append rws (list (st_simp "lhs"))))
        (pfx_all_unfold rest rws)))))
 
 (fn pfx_all_set ((lheads (List (List Int))) (units (List (List Int))))
@@ -2463,9 +2431,7 @@
     (Nil Nil)
     ((Cons _ Nil) Nil)
     (_
-      (Cons
-        (append_cands units (list (st_simp "lhs")))
-        (pfx_all_unfold lheads units)))))
+      (Cons (append units (list (st_simp "lhs"))) (pfx_all_unfold lheads units)))))
 
 ;; descending interleaved chain: simp, then (rw UNIT)(simp) with the closed
 ;; hyps OUTERMOST-FIRST (highest index first, premises after) — a nested
@@ -2511,15 +2477,15 @@
      (let
        ((hu (rw_units_hyps (closed_hyp_idxs (seq_hyps subgoal) 0)))
         (pu (rw_units_prems (seq_premises subgoal) 0)))
-       (let ((units (append_cands hu pu)))
+       (let ((units (append hu pu)))
          (Cons
            (list (st_simp "both"))
-           (append_chains
+           (append
              (pfx_unfold_simp lh)
-             (append_chains
+             (append
                (pfx_single_set lh units)
-               (append_chains
-                 (pfx_desc_set lh (append_cands (rev_steps hu Nil) pu))
+               (append
+                 (pfx_desc_set lh (append (rev hu) pu))
                  (pfx_all_set lh units))))))))))
 
 ;; the flat (no-induction) candidate set for a goal: the same generated
@@ -2634,9 +2600,9 @@
           s
           th
           seq
-          (append_cands
+          (append
             (flat_cands s th seq)
-            (append_cands (divfacts_cands goalS) (farkas_cands seq))))
+            (append (divfacts_cands goalS) (farkas_cands seq))))
         ((Some c)
          (if (attempt s name c) (Some c) (induct_or_disc s th name seq)))
         (None
@@ -3008,7 +2974,7 @@
   (match lemmas
     (Nil Nil)
     ((Cons (Pair sizefn nonneg) rest)
-     (append_cands
+     (append
        (ms_cands_for subs prems rewrites sizefn nonneg cf)
        (ms_cands_multi subs prems rewrites rest cf)))))
 
@@ -3038,13 +3004,6 @@
     (Nil Nil)
     ((Cons h t)
      (if (sym_member h rem) (ms_minus t rem) (Cons h (ms_minus t rem))))))
-
-(fn ms_app_subs ((a (List (List Symbol))) (b (List (List Symbol))))
-  (List (List Symbol))
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (ms_app_subs t b)))))
 
 ;; ─── nested-decrease family ──────────────────────────────────────────────────
 ;; A member that recurses on a binder nested TWO levels into its scrutinee (e.g.
@@ -3110,12 +3069,6 @@
 ;; another — the trigger for the nested family.
 (fn ms_has_nesting ((prems (List SExpr))) Bool
   (ms_any_in (ms_lhs_vars prems) (ms_subterms prems Nil)))
-
-(fn ms_len ((xs (List Symbol))) Int
-  (measure (struct xs))
-  (match xs
-    (Nil 0)
-    ((Cons _ t) (+ 1 (ms_len t)))))
 
 ;; a LEAF ctor (SSym/SInt/SStr) carries a non-SExpr payload (a Symbol / Int /
 ;; char list). Atoms bound under one can't take a size fn, and the rewrite turns
@@ -3198,14 +3151,7 @@
 ;; way to give each leaf one size fn. The right assignment matches each leaf's
 ;; type; the rest produce ill-typed haves that fail to verify (and the gate
 ;; re-checks the winner regardless).
-(fn ms_app_assigns
-  ((a (List (List (Pair Symbol (Pair (List Int) (List Int))))))
-   (b (List (List (Pair Symbol (Pair (List Int) (List Int)))))))
-  (List (List (Pair Symbol (Pair (List Int) (List Int)))))
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (ms_app_assigns t b)))))
+
 
 (fn ms_prepend
   ((l Symbol)
@@ -3225,8 +3171,7 @@
   (measure (struct pairs))
   (match pairs
     (Nil Nil)
-    ((Cons p pr)
-     (ms_app_assigns (ms_prepend l p restA) (ms_distribute l pr restA)))))
+    ((Cons p pr) (append (ms_prepend l p restA) (ms_distribute l pr restA)))))
 
 (fn ms_assign
   ((leaves (List Symbol)) (pairs (List (Pair (List Int) (List Int)))))
@@ -3279,7 +3224,7 @@
               (ms_measure_args aSide Nil))
             (ms_nonsized prems Nil))
           (leaves
-            (if (lt 3 (ms_len leaves)) Nil
+            (if (lt 3 (len leaves)) Nil
             (Cons
               (ms_taut_build rws)
               (ms_mixed_all (ms_assign leaves (ms_all_nonnegs th)) prems rws cf)))))))
@@ -3307,7 +3252,7 @@
           ;;     `by farkas`. cf = the measure's lex multiplier M (1 if bare).
           (let
             ((subs
-               (ms_app_subs
+               (append
                  (ms_singletons (ms_dedup (ms_subterms prems Nil) Nil))
                  (Cons
                    (ms_minus
@@ -3326,7 +3271,7 @@
                      Nil))))
              (rws (ms_rewrites_g prems 0 (ms_vars aSide (ms_vars bSide Nil))))
              (cf (show_int (ms_mult aSide))))
-            (append_cands
+            (append
               (Cons
                 (ms_taut_build rws)
                 (ms_cands_multi subs prems rws (ms_all_nonnegs th) cf))
@@ -3335,7 +3280,7 @@
             ;; NONNEG: (le 0 measure) — bSide = measure; one have over its own arg.
             (match aSide
               ((SInt 0)
-               (append_cands
+               (append
                  (match (ms_base_call bSide)
                    (None Nil)
                    ((Some baseCall)
@@ -3417,9 +3362,9 @@
     cm
     cth
     seq
-    (append_cands
+    (append
       (flat_cands s cth seq)
-      (append_cands (farkas_cands seq) (measure_cands s cth seq goalS)))))
+      (append (farkas_cands seq) (measure_cands s cth seq goalS)))))
 
 ;; `th` is the theory as it stands just before the decl — handed down from
 ;; the RunState solve_all threads through the run.
@@ -3671,12 +3616,6 @@
     ((Cons (Pair k g) rest)
      (Cons (AutoDecl k Nil (Some g)) (obs_to_decls rest)))))
 
-(fn append_decls ((a (List AutoDecl)) (b (List AutoDecl))) (List AutoDecl)
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (append_decls t b)))))
-
 ;; build the target's module once, then enumerate its bare-measure obligations.
 (fn measure_decls
   ((target (List Int)) (srcs (List SrcEntry)) (forms (List SExpr)))
@@ -3707,12 +3646,6 @@
            (None Nil)
            ((Some fs) fs)))))))
 
-(fn append_sexprs ((a (List SExpr)) (b (List SExpr))) (List SExpr)
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (append_sexprs t b)))))
-
 ;; dispatch once args / closure / sidecar / target-forms are in hand.
 (fn run_with
   ((target (List Int))
@@ -3724,8 +3657,8 @@
    (w World))
   World
   (match
-    (append_decls
-      (auto_decls forms (append_sexprs forms (iface_forms target srcs)))
+    (append
+      (auto_decls forms (append forms (iface_forms target srcs)))
       (measure_decls target srcs forms))
     (ds
       (match mclaim

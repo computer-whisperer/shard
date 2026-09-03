@@ -3,7 +3,7 @@
 ;;; This is the UNTRUSTED diagnostic layer that explains a FAILED claim: it
 ;;; renders the goal/premises and walks the non-branching spine of a Proof
 ;;; (Steps, RewriteWith), replaying each level via the kernel's OWN fns
-;;; (apply_step / resolve_eq / apply_rewrite_with_env / dbg_*_subgoal /
+;;; (apply_step / resolve_eq / apply_rewrite_with_occ / dbg_*_subgoal /
 ;;; check_sequent) and rendering the sequent equation at every depth, so a
 ;;; deep nested failure is visible instead of just the outer finisher's entry
 ;;; state. It adds NO trusted code — only orchestration + rendering.
@@ -1687,6 +1687,35 @@
       (append_int
         (render_term scrut)
         (append_int " = " (append_int (chars_of_sym (qn_name cname)) tag))))))
+
+;; tracer-only glue (lives here, not in the checker: the checker never
+;; rebuilds a case subgoal from a Case's names — do_case_on builds its own).
+;; The SAME pipeline as do_case_on — gate via tc_scrut_targs, instantiate
+;; the ctor field types with the scrutinee's resolved type args, build via
+;; build_case_on_subgoal — so the tracer's rebuilt subgoal is the checker's
+;; subgoal. (The raw-field shortcut this replaced handed parametric splits
+;; TVar-typed field params, and every type gate BELOW the arm then
+;; spuriously rejected — the bogus "REJECTED by the TYPE GATE" verdicts.)
+(fn dbg_caseon_subgoal
+  ((m Module)
+   (seq Sequent)
+   (scrut Expr)
+   (ty QName)
+   (cname QName)
+   (names (List Symbol)))
+  (Option Sequent)
+  (match (lookup_typedef ty m)
+    (None None)
+    ((Some (TypeDef _ tparams ctors _))
+     (match (tc_scrut_targs m (seq_params seq) scrut ty tparams)
+       (None None)
+       ((Some targs)
+        (match
+          (find_ctor_fields
+            cname
+            (inst_ctor_fields (zip_pairs tparams targs) ctors))
+          (None None)
+          ((Some fts) (Some (build_case_on_subgoal seq scrut cname names fts)))))))))
 
 ;; CaseOn case tracing. Iterates the CASES (IN the SCC) and descends into each
 ;; sub-proof; the lone trace_proof edge is on the structurally-matched `pf`, so

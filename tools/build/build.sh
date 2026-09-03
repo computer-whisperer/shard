@@ -42,7 +42,14 @@ while :; do
     b=$(basename "$cap")
     printf '%s\n' "$tag $cap $args" >> "$TMP/g${b%%.*}.orders"
   done < "$TMP/orders.txt"
+  # fan-out cap: every product group is a parallel subshell; the sha256
+  # products' canon/fmt orders peak at 10-30 GB each, so an unbounded
+  # fan-out is an OOM hazard on any box. BUILD_JOBS bounds the concurrency.
+  JOBS=${BUILD_JOBS:-$(( $(nproc) / 2 ))}; [ "$JOBS" -ge 1 ] || JOBS=1
+  running=0
   for g in "$TMP"/g*.orders; do
+    if [ "$running" -ge "$JOBS" ]; then wait -n; running=$((running-1)); fi
+    running=$((running+1))
     (
       while read -r tag cap args; do
         newargs=()

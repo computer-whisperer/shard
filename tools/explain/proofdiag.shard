@@ -26,6 +26,13 @@
 (import "../../kernel/proof_reader.shard")  ; parse_goal / parse_proof / goal_tparams
 (import "../../kernel/desugar.shard")  ; ds_proof / DsRes — the REAL desugar pass
 (import "../../kernel/loader.shard")  ; int_list_eq / starts_with
+(import "../../std/list")  ; append / len / take / drop (polymorphic list algebra)
+;; std list names come FIRST: an earlier `use` wins, and the kernel term glob
+;; below carries a monomorphic (List Expr) `len` that would shadow std's.
+(use (:: std list append))
+(use (:: std list len))
+(use (:: std list take))
+(use (:: std list drop))
 (use (:: kernel stdlib *))
 (use (:: kernel term *))
 (use (:: kernel module *))
@@ -40,24 +47,6 @@
 ;; the generic byte/suggestion kit (shared with explain.shard, which imports
 ;; this module)
 ;; ===========================================================================
-
-(fn ex_len ((xs (List Int))) Int
-  (measure (struct xs))
-  (match xs
-    (Nil 0)
-    ((Cons _ r) (+ 1 (ex_len r)))))
-
-(fn ex_drop ((n Int) (xs (List Int))) (List Int)
-  (measure (struct xs))
-  (match xs
-    (Nil Nil)
-    ((Cons _ r) (if (le n 0) xs (ex_drop (- n 1) r)))))
-
-(fn append_ll ((a (List (List Int))) (b (List (List Int)))) (List (List Int))
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (append_ll t b)))))
 
 (fn ex_rev_ll ((xs (List (List Int))) (acc (List (List Int)))) (List (List Int))
   (measure (struct xs))
@@ -79,7 +68,7 @@
 ;; suffix after the first occurrence of `pat`, if any.
 (fn ex_find ((pat (List Int)) (xs (List Int))) (Option (List Int))
   (measure (struct xs))
-  (if (starts_with pat xs) (Some (ex_drop (ex_len pat) xs))
+  (if (starts_with pat xs) (Some (drop (len pat) xs))
   (match xs
     (Nil None)
     ((Cons _ r) (ex_find pat r)))))
@@ -187,8 +176,7 @@
 (fn ex_score ((n (List Int)) (c (List Int))) (Option Int)
   (if (int_list_eq n c) None
   (if (int_list_eq (ex_sortc n) (ex_sortc c)) (Some 0)
-  (let ((d (ex_lev n c)))
-    (if (le d 2) (if (lt d (ex_len n)) (Some d) None) None)))))
+  (let ((d (ex_lev n c))) (if (le d 2) (if (lt d (len n)) (Some d) None) None)))))
 
 (fn ex_cands ((n (List Int)) (pool (List (List Int))))
   (List (Pair Int (List Int)))
@@ -248,14 +236,8 @@
 ;; source file is where the author reads it in full)
 ;; ===========================================================================
 
-(fn pd_take ((n Int) (xs (List Int))) (List Int)
-  (measure (struct xs))
-  (match xs
-    (Nil Nil)
-    ((Cons c r) (if (le n 0) Nil (Cons c (pd_take (- n 1) r))))))
-
 (fn pd_trunc ((bs (List Int))) (List Int)
-  (if (le (ex_len bs) 64) bs (append_int (pd_take 61 bs) "...")))
+  (if (le (len bs) 64) bs (append_int (take 61 bs) "...")))
 
 (fn pd_show ((s SExpr)) (List Int)
   (measure (struct s))
@@ -582,7 +564,7 @@
   (measure (struct xs))
   (match xs
     (Nil Nil)
-    ((Cons h r) (append_ll (pd_bad_caps h ctx) (pd_bad_caps_l r ctx)))))
+    ((Cons h r) (append (pd_bad_caps h ctx) (pd_bad_caps_l r ctx)))))
 
 (fn pd_caps_note ((bads (List (List Int))) (ctx PdCtx)) (List Int)
   (match bads
@@ -1486,12 +1468,6 @@
     (Nil acc)
     ((Cons (Param n _) r) (pd_param_names r (Cons (chars_of_sym n) acc)))))
 
-(fn pd_eqs_len ((es (List Equation))) Int
-  (measure (struct es))
-  (match es
-    (Nil 0)
-    ((Cons _ t) (+ 1 (pd_eqs_len t)))))
-
 ;; the type-name SYMBOL list (Int/Symbol + typedef names) for goal_tparams —
 ;; the same composition as driver.shard's module_type_names.
 (fn pd_tsyms_of ((m Module)) (List Symbol)
@@ -1557,8 +1533,7 @@
         (pd_goal goalS (pd_ctx_of m None) (pd_tsyms_of m) "goal")))
     ((Some g)
      (if (pd_is_auto proofS) Nil
-     (match
-       (ds_proof m (pd_g_params g) Nil (pd_eqs_len (pd_g_prems g)) Nil proofS)
+     (match (ds_proof m (pd_g_params g) Nil (len (pd_g_prems g)) Nil proofS)
        ((DsErr _) Nil)  ; the kernel already printed the desugar message
        ((DsOk s2)
         (pd_fail_lines name (pd_proof s2 (pd_ctx_of m (Some g)) "proof"))))))))
@@ -1580,7 +1555,7 @@
 
 ;; the kernel-parse twin for the --pin mode: does parse_proof accept s2?
 (fn pd_kernel_accepts ((m Module) (g Goal) (proofS SExpr)) (Option Bool)
-  (match (ds_proof m (pd_g_params g) Nil (pd_eqs_len (pd_g_prems g)) Nil proofS)
+  (match (ds_proof m (pd_g_params g) Nil (len (pd_g_prems g)) Nil proofS)
     ((DsErr _) None)
     ((DsOk s2)
      (match
@@ -1592,7 +1567,7 @@
        ((Some _) (Some True))))))
 
 (fn pd_mirror_accepts ((m Module) (g Goal) (proofS SExpr)) (Option Bool)
-  (match (ds_proof m (pd_g_params g) Nil (pd_eqs_len (pd_g_prems g)) Nil proofS)
+  (match (ds_proof m (pd_g_params g) Nil (len (pd_g_prems g)) Nil proofS)
     ((DsErr _) None)
     ((DsOk s2)
      (match (pd_proof s2 (pd_ctx_of m (Some g)) "proof")
@@ -1600,7 +1575,7 @@
        ((PdFail _ _) (Some False))))))
 
 (fn pd_mirror_msg ((m Module) (g Goal) (proofS SExpr)) (List Int)
-  (match (ds_proof m (pd_g_params g) Nil (pd_eqs_len (pd_g_prems g)) Nil proofS)
+  (match (ds_proof m (pd_g_params g) Nil (len (pd_g_prems g)) Nil proofS)
     ((DsErr e) e)
     ((DsOk s2)
      (match (pd_proof s2 (pd_ctx_of m (Some g)) "proof")

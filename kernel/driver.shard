@@ -56,6 +56,37 @@
 (fn module_type_names ((m Module)) (List Symbol)
   (Cons (quote Int) (Cons (quote Symbol) (typedef_names (module_typedefs m)))))
 
+;; The type names IN SCOPE for one file's goals and proofs (issue #38). A
+;; goal binder's bare type name is a type constructor only when the file's
+;; OWN resolution context (locals > use-items > core, file_rctx) maps it to
+;; a declared typedef; otherwise it is a GENERIC type variable of the goal
+;; (parse_type's TVar), the same meaning in every importing closure. The
+;; unfiltered module_type_names is the MERGED closure's names, so under it a
+;; claim like kernel/term's `len_cons` over `(h T)` flipped from generic to
+;; "unknown type: T" whenever an unrelated importer declared its own
+;; `(type T …)` — the QName-shadowing family, on type names. Int/Symbol stay
+;; unconditional exactly as before (their identity is checked downstream by
+;; tc_is_prim_ty on the RESOLVED qname).
+(fn scope_type_names ((m Module) (gctx RCtx)) (List Symbol)
+  (Cons
+    (quote Int)
+    (Cons
+      (quote Symbol)
+      (scope_type_names_go
+        (typedef_names (module_typedefs m))
+        (module_typedefs m)
+        gctx))))
+
+(fn scope_type_names_go ((ns (List Symbol)) (tds (List TypeDef)) (gctx RCtx))
+  (List Symbol)
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons n rest)
+     (match (find_typedef (rhead (qn n) gctx) tds)
+       ((Some _) (Cons n (scope_type_names_go rest tds gctx)))
+       (None (scope_type_names_go rest tds gctx))))))
+
 (fn lift_sequent ((g Goal)) Sequent
   (match g
     ((Goal params premises eq) (Sequent params Nil premises eq))))
@@ -66,15 +97,9 @@
 
 ;; The goal's own premise count — the named-have desugarer's base index
 ;; (haves append AFTER the goal premises).
-(fn eqs_len ((es (List Equation))) Int
-  (measure (struct es))
-  (match es
-    (Nil 0)
-    ((Cons _ t) (+ 1 (eqs_len t)))))
-
 (fn goal_premise_count ((g Goal)) Int
   (match g
-    ((Goal ps prems eq) (eqs_len prems))))
+    ((Goal ps prems eq) (len prems))))
 
 ;; ===========================================================================
 ;; QUALIFIED-IDENTITY RESOLUTION for proof-DSL goals/proofs (Stage 2).
@@ -241,12 +266,12 @@
 ;; re-qualify its module references to match M. The single seam every claim,
 ;; axiom, and requirement flows through.
 (fn parse_goal_r ((m Module) (gctx RCtx) (s SExpr)) (Option Goal)
-  (match (parse_goal s (module_ctors m) (module_type_names m))
+  (match (parse_goal s (module_ctors m) (scope_type_names m gctx))
     (None None)
     ((Some g) (Some (resolve_goal gctx g)))))
 
 (fn parse_proof_r ((m Module) (gctx RCtx) (s SExpr)) (Option Proof)
-  (match (parse_proof s (module_ctors m) (module_type_names m))
+  (match (parse_proof s (module_ctors m) (scope_type_names m gctx))
     (None None)
     ((Some p) (Some (resolve_proof gctx p)))))
 
@@ -327,49 +352,48 @@
   (measure (struct ss))
   (match ss
     (Nil Nil)
-    ((Cons s rest) (sym_concat (cop_step s) (cop_steps rest)))))
+    ((Cons s rest) (app (cop_step s) (cop_steps rest)))))
 
 (fn cites_of_proof ((p Proof)) (List Symbol)
   (measure (struct p))
   (match p
     ((Refl) Nil)
     ((Admit) Nil)
-    ((Steps ss k) (sym_concat (cop_steps ss) (cites_of_proof k)))
+    ((Steps ss k) (app (cop_steps ss) (cites_of_proof k)))
     ((Induct _ cs) (cop_cases cs))
     ((CaseOn _ _ cs) (cop_cases cs))
     ((WfInduct _ k) (cites_of_proof k))
     ((SubtermInduct _ k) (cites_of_proof k))
     ((Below) Nil)
     ((RewriteWith er _ _ _ _ subs k)
-     (sym_concat (cop_er er) (sym_concat (cop_proofs subs) (cites_of_proof k))))
+     (app (cop_er er) (app (cop_proofs subs) (cites_of_proof k))))
     ((Absurd er) (cop_er er))
     ((ByTheory _ _) Nil)
     ((FinSplit _ lo hi fcs)
-     (sym_concat (cop_er lo) (sym_concat (cop_er hi) (cop_fincases fcs))))
-    ((Have _ pf k) (sym_concat (cites_of_proof pf) (cites_of_proof k)))
+     (app (cop_er lo) (app (cop_er hi) (cop_fincases fcs))))
+    ((Have _ pf k) (app (cites_of_proof pf) (cites_of_proof k)))
     ((DivFacts _ _ _ k) (cites_of_proof k))
     ((RefineFact _ _ k) (cites_of_proof k))
-    ((Inject er _ k) (sym_concat (cop_er er) (cites_of_proof k)))
-    ((ExactConv er _ subs _) (sym_concat (cop_er er) (cop_proofs subs)))))
+    ((Inject er _ k) (app (cop_er er) (cites_of_proof k)))
+    ((ExactConv er _ subs _) (app (cop_er er) (cop_proofs subs)))))
 
 (fn cop_proofs ((ps (List Proof))) (List Symbol)
   (measure (struct ps))
   (match ps
     (Nil Nil)
-    ((Cons p rest) (sym_concat (cites_of_proof p) (cop_proofs rest)))))
+    ((Cons p rest) (app (cites_of_proof p) (cop_proofs rest)))))
 
 (fn cop_cases ((cs (List Case))) (List Symbol)
   (measure (struct cs))
   (match cs
     (Nil Nil)
-    ((Cons (Case _ _ p) rest) (sym_concat (cites_of_proof p) (cop_cases rest)))))
+    ((Cons (Case _ _ p) rest) (app (cites_of_proof p) (cop_cases rest)))))
 
 (fn cop_fincases ((fcs (List FinCase))) (List Symbol)
   (measure (struct fcs))
   (match fcs
     (Nil Nil)
-    ((Cons (FinCase _ p) rest)
-     (sym_concat (cites_of_proof p) (cop_fincases rest)))))
+    ((Cons (FinCase _ p) rest) (app (cites_of_proof p) (cop_fincases rest)))))
 
 ;; Does the (desugared) proof contain an (admit) anywhere? Decides ADMIT-vs-
 ;; PASS reporting: an admitted proof is ACCEPTED by check_sequent but must
@@ -505,13 +529,6 @@
 (fn want_trace ((name Symbol) (target Symbol)) Bool
   (if (sym_eq target (quote all)) True (sym_eq name target)))
 
-(fn rev_outcomes ((xs (List ClaimOutcome)) (acc (List ClaimOutcome)))
-  (List ClaimOutcome)
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (rev_outcomes t (Cons h acc)))))
-
 ;; The whole-module sweep (typedefs, externs/sigs, fn bodies) as outcomes.
 (fn type_fail_outcomes ((ws (List (Pair Symbol (List Int)))))
   (List ClaimOutcome)
@@ -589,11 +606,10 @@
          ((Some forms) (autos_of_forms forms)))
        (autos_of_src pathkey rest)))))
 
+;; alias of the kit's assoc_sym over the sidecar table — kept by name for its
+;; citer outside the kernel (tools/prove: (use (:: kernel driver auto_lookup))).
 (fn auto_lookup ((n Symbol) (autos (List (Pair Symbol SExpr)))) (Option SExpr)
-  (measure (struct autos))
-  (match autos
-    (Nil None)
-    ((Cons (Pair k p) rest) (if (sym_eq k n) (Some p) (auto_lookup n rest)))))
+  (assoc_sym n autos))
 
 (fn auto_missing_msg ((name Symbol)) (List Int)
   (append_int
@@ -617,7 +633,7 @@
    (autos (List (Pair Symbol SExpr)))
    (g Goal))
   PrfRes
-  (match (if (is_auto_proof raw) (auto_lookup name autos) (Some raw))
+  (match (if (is_auto_proof raw) (assoc_sym name autos) (Some raw))
     (None (PrfErr (auto_missing_msg name)))
     ((Some prfS)
      (match (ds_proof m (goal_params g) Nil (goal_premise_count g) Nil prfS)
@@ -1008,7 +1024,7 @@
       ((Pair uitems ualiases)
        (RCtx
          curmod
-         (app_env (filter_modpath (module_resolve_env m) curmod) uitems)
+         (app (filter_modpath (module_resolve_env m) curmod) uitems)
          ualiases)))))
 
 ;; file_rctx over the SrcEntry forms field (parse-once): the same context
@@ -1020,7 +1036,7 @@
       ((Pair uitems ualiases)
        (RCtx
          curmod
-         (app_env (filter_modpath (module_resolve_env m) curmod) uitems)
+         (app (filter_modpath (module_resolve_env m) curmod) uitems)
          ualiases)))))
 
 ;; ---- axiom scope: library trees are THEOREM-ONLY ---------------------------
@@ -1301,25 +1317,6 @@
        (COFail n "UNMET: listed in a (bin requires) but never fulfilled" Nil)
        (unmet_fails rest binmp th))))))
 
-(fn oc_concat ((a (List ClaimOutcome)) (b (List ClaimOutcome)))
-  (List ClaimOutcome)
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (oc_concat t b)))))
-
-(fn sym_in ((x Symbol) (xs (List Symbol))) Bool
-  (measure (struct xs))
-  (match xs
-    (Nil False)
-    ((Cons h t) (if (sym_eq x h) True (sym_in x t)))))
-
-(fn sym_concat ((a (List Symbol)) (b (List Symbol))) (List Symbol)
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (sym_concat t b)))))
-
 ;; ---- entry: the named fn must exist (with a body); TWO admitted shapes ------
 ;; The WORLD-LEADING contract (docs/X86.md §44, user-ratified 2026-07-09,
 ;; generalizing the original (World) -> World I/O contract as its
@@ -1399,7 +1396,7 @@
   (match own
     (Nil Nil)
     ((Cons a rest)
-     (if (sym_in a trusts) (missing_trust rest trusts)
+     (if (mem_sym a trusts) (missing_trust rest trusts)
      (Cons
        (COFail
          a
@@ -1413,7 +1410,7 @@
   (match trusts
     (Nil Nil)
     ((Cons t rest)
-     (if (sym_in t own) (phantom_trust rest own)
+     (if (mem_sym t own) (phantom_trust rest own)
      (Cons
        (COFail
          t
@@ -1423,7 +1420,7 @@
 
 (fn trusts_check ((trusts (List Symbol)) (own (List Symbol)))
   (List ClaimOutcome)
-  (oc_concat (missing_trust own trusts) (phantom_trust trusts own)))
+  (app (missing_trust own trusts) (phantom_trust trusts own)))
 
 ;; ---- externs: must EQUAL the module's declared extern surface --------------
 ;; Real externs come from `(extern …)` forms — NOT the Module's ExternDef list,
@@ -1434,7 +1431,7 @@
   (match decl
     (Nil Nil)
     ((Cons e rest)
-     (if (sym_in e listed) (missing_extern rest listed)
+     (if (mem_sym e listed) (missing_extern rest listed)
      (Cons
        (COFail
          e
@@ -1448,14 +1445,14 @@
   (match listed
     (Nil Nil)
     ((Cons e rest)
-     (if (sym_in e decl) (phantom_extern rest decl)
+     (if (mem_sym e decl) (phantom_extern rest decl)
      (Cons
        (COFail e "externs: not a declared extern of this module" Nil)
        (phantom_extern rest decl))))))
 
 (fn externs_check ((listed (List Symbol)) (decl (List Symbol)))
   (List ClaimOutcome)
-  (oc_concat (missing_extern decl listed) (phantom_extern listed decl)))
+  (app (missing_extern decl listed) (phantom_extern listed decl)))
 
 ;; the module's OWN extern decls = `(extern …)` in its ungranted sources.
 (fn extern_decl_name ((f SExpr)) (Option Symbol)
@@ -1482,7 +1479,7 @@
      (match mf
        (None (own_externs_of_srcs rest))
        ((Some forms)
-        (sym_concat (extern_names_of_forms forms) (own_externs_of_srcs rest))))))))
+        (app (extern_names_of_forms forms) (own_externs_of_srcs rest))))))))
 
 ;; ---- the trust ledger: citation closure, call graph, rendered block --------
 ;; The driver accumulated a LedgerEntry per ADMITTED decl (see RunState).
@@ -1506,18 +1503,13 @@
 ;; edges_close is a worklist fixpoint: it pops a name and, if unvisited, either
 ;; marks it (None arm) or marks it AND pushes its successors (Some arm — so
 ;; work can GROW). It terminates because `visited` saturates toward the edge
-;; list's keys. The measure is  edges_pending(edges, visited) + sym_len(work),
+;; list's keys. The measure is  edges_pending(edges, visited) + len(work),
 ;; where edges_pending weights each UNVISITED key by (1 + |its successors|) —
 ;; that data-dependent weight exactly absorbs the unbounded work-growth at the
-;; Some arm (work gains cs, pending drops by 1 + |cs|). The facts cited by the
-;; measure live just below edges_close; none reaches edges_close in the call
-;; graph, so stratified citation admits them as same-closure claims.
-(fn sym_len ((xs (List Symbol))) Int
-  (measure (struct xs))
-  (match xs
-    (Nil 0)
-    ((Cons _ t) (+ 1 (sym_len t)))))
-
+;; Some arm (work gains cs, pending drops by 1 + |cs|). len is term.shard's kit
+;; len (its len_cons / len_nonneg / len_app are cited); the edges_pending facts
+;; the measure cites live just below edges_close, and none reaches edges_close
+;; in the call graph, so stratified citation admits them as same-closure claims.
 (fn edges_pending
   ((edges (List (Pair Symbol (List Symbol)))) (visited (List Symbol)))
   Int
@@ -1525,8 +1517,8 @@
   (match edges
     (Nil 0)
     ((Cons (Pair n cs) rest)
-     (if (sym_in n visited) (edges_pending rest visited)
-     (+ (+ 1 (sym_len cs)) (edges_pending rest visited))))))
+     (if (mem_sym n visited) (edges_pending rest visited)
+     (+ (+ 1 (len cs)) (edges_pending rest visited))))))
 
 ;; the successor list of a lookup result (Nil for a miss). Stating
 ;; edges_pending_drop over this accessor lets its proof reduce directly under
@@ -1550,11 +1542,11 @@
    (edges (List (Pair Symbol (List Symbol)))))
   (List Symbol)
   (measure
-    (+ (edges_pending edges visited) (sym_len work))
-    ;; site 0: (sym_in n visited)=True, recurse (rest, visited, edges)
+    (+ (edges_pending edges visited) (len work))
+    ;; site 0: (mem_sym n visited)=True, recurse (rest, visited, edges)
     (steps
       ((rewrite (premise 0) lr lhs true ())
-       (rewrite (lemma sym_len_cons) lr lhs true ()))
+       (rewrite (lemma len_cons) lr lhs true ()))
       (by arith (list 1 0 0)))
     (have (= (le 0 (edges_pending edges visited)) True)
       (rewrite-with
@@ -1564,8 +1556,8 @@
         ((inst edges edges) (inst visited visited))
         ()
         refl)
-      (have (= (le 0 (sym_len rest)) True)
-        (rewrite-with (lemma sym_len_nonneg) lr lhs ((inst xs rest)) () refl)
+      (have (= (le 0 (len rest)) True)
+        (rewrite-with (lemma len_nonneg) lr lhs ((inst xs rest)) () refl)
         (by arith (list 1 0 0 1 1))))
     ;; site 1: None arm, recurse (rest, Cons n visited, edges)
     (have
@@ -1583,7 +1575,7 @@
         refl)
       (steps
         ((rewrite (premise 0) lr lhs true ())
-         (rewrite (lemma sym_len_cons) lr lhs true ()))
+         (rewrite (lemma len_cons) lr lhs true ()))
         (by arith (list 1 0 0 0 1))))
     (have (= (le 0 (edges_pending edges (Cons n visited))) True)
       (rewrite-with
@@ -1593,10 +1585,10 @@
         ((inst edges edges) (inst visited (Cons n visited)))
         ()
         refl)
-      (have (= (le 0 (sym_len rest)) True)
-        (rewrite-with (lemma sym_len_nonneg) lr lhs ((inst xs rest)) () refl)
+      (have (= (le 0 (len rest)) True)
+        (rewrite-with (lemma len_nonneg) lr lhs ((inst xs rest)) () refl)
         (by arith (list 1 0 0 0 1 1))))
-    ;; site 2: Some arm, recurse (sym_concat cs rest, Cons n visited, edges)
+    ;; site 2: Some arm, recurse (app cs rest, Cons n visited, edges)
     (have (= (ed_succs (edges_lookup n edges)) cs)
       (steps ((rewrite (premise 2) lr lhs true ()) (simp lhs)) refl)
       (have (= (ed_is_some (edges_lookup n edges)) True)
@@ -1604,7 +1596,7 @@
         (have
           (=
             (le
-              (+ (+ 1 (sym_len cs)) (edges_pending edges (Cons n visited)))
+              (+ (+ 1 (len cs)) (edges_pending edges (Cons n visited)))
               (edges_pending edges visited))
             True)
           (steps
@@ -1619,8 +1611,8 @@
               refl))
           (steps
             ((rewrite (premise 0) lr lhs true ())
-             (rewrite (lemma sym_len_cons) lr lhs true ())
-             (rewrite (lemma sym_len_concat) lr lhs true ()))
+             (rewrite (lemma len_cons) lr lhs true ())
+             (rewrite (lemma len_app) lr lhs true ()))
             (by arith (list 1 0 0 0 0 0 1))))))
     (have (= (le 0 (edges_pending edges (Cons n visited))) True)
       (rewrite-with
@@ -1630,64 +1622,26 @@
         ((inst edges edges) (inst visited (Cons n visited)))
         ()
         refl)
-      (have (= (le 0 (sym_len (sym_concat cs rest))) True)
+      (have (= (le 0 (len (app cs rest))) True)
         (rewrite-with
-          (lemma sym_len_nonneg)
+          (lemma len_nonneg)
           lr
           lhs
-          ((inst xs (sym_concat cs rest)))
+          ((inst xs (app cs rest)))
           ()
           refl)
         (by arith (list 1 0 0 0 1 1)))))
   (match work
     (Nil visited)
     ((Cons n rest)
-     (if (sym_in n visited) (edges_close rest visited edges)
+     (if (mem_sym n visited) (edges_close rest visited edges)
      (match (edges_lookup n edges)
        (None (edges_close rest (Cons n visited) edges))
-       ((Some (Pair ln cs))
-        (edges_close (sym_concat cs rest) (Cons n visited) edges)))))))
+       ((Some (Pair ln cs)) (edges_close (app cs rest) (Cons n visited) edges)))))))
 
 ;; ---- totality support for edges_close (cited by its measure) ---------------
 ;; None of these reaches edges_close in the call graph, so stratified citation
 ;; admits them as same-closure facts.
-(claim sym_len_nil (goal () () (= (sym_len Nil) 0)) (steps ((simp lhs)) refl))
-
-(claim sym_len_cons
-  (goal ((h Symbol) (t (List Symbol))) ()
-    (= (sym_len (Cons h t)) (+ 1 (sym_len t))))
-  (steps ((simp lhs)) refl))
-
-(claim sym_len_nonneg
-  (goal ((xs (List Symbol))) () (= (le 0 (sym_len xs)) True))
-  (induct xs
-    ((case Nil
-       (steps
-         ((rewrite (lemma sym_len_nil) lr lhs true ()))
-         (by arith (list 1))))
-     (case Cons
-       (h t)
-       (have (= (le 0 (sym_len t)) True)
-         (steps ((rewrite (hyp 0) lr lhs true ())) refl)
-         (steps
-           ((rewrite (lemma sym_len_cons) lr lhs true ()))
-           (by arith (list 1 1))))))))
-
-(claim sym_len_concat
-  (goal ((a (List Symbol)) (b (List Symbol))) ()
-    (= (sym_len (sym_concat a b)) (+ (sym_len a) (sym_len b))))
-  (induct a
-    ((case Nil
-       (steps
-         ((simp lhs) (rewrite (lemma sym_len_nil) lr rhs true ()))
-         (by arith (list))))
-     (case Cons
-       (h t)
-       (steps
-         ((simp lhs)
-          (rewrite (hyp 0) lr lhs true ())
-          (rewrite (lemma sym_len_cons) lr rhs true ()))
-         (by arith (list)))))))
 
 ;; 0 <= edges_pending edges visited.
 (claim edges_pending_nonneg
@@ -1700,7 +1654,7 @@
        (case-on hd Pair
          ((case Pair
             (m d)
-            (case-on (sym_in m visited) Bool
+            (case-on (mem_sym m visited) Bool
               ((case True
                  (steps
                    ((rewrite (hyp 1) lr lhs true ())
@@ -1712,9 +1666,9 @@
                (case False
                  (have (= (le 0 (edges_pending rest visited)) True)
                    (steps ((rewrite (hyp 2) lr lhs true ())) refl)
-                   (have (= (le 0 (sym_len d)) True)
+                   (have (= (le 0 (len d)) True)
                      (rewrite-with
-                       (lemma sym_len_nonneg)
+                       (lemma len_nonneg)
                        lr
                        lhs
                        ((inst xs d))
@@ -1745,17 +1699,11 @@
                 (le (edges_pending rest (Cons x vis)) (edges_pending rest vis))
                 True)
               (steps ((rewrite (hyp 1) lr lhs true ())) refl)
-              (have (= (le 0 (sym_len d)) True)
-                (rewrite-with
-                  (lemma sym_len_nonneg)
-                  lr
-                  lhs
-                  ((inst xs d))
-                  ()
-                  refl)
+              (have (= (le 0 (len d)) True)
+                (rewrite-with (lemma len_nonneg) lr lhs ((inst xs d)) () refl)
                 (case-on (sym_eq m x) Bool
                   ((case True
-                     (case-on (sym_in m vis) Bool
+                     (case-on (mem_sym m vis) Bool
                        ((case True
                           (steps
                             ((rewrite (hyp 2) lr lhs true ())
@@ -1773,7 +1721,7 @@
                              (simp lhs))
                             (by arith (list 1 1 1)))))))
                    (case False
-                     (case-on (sym_in m vis) Bool
+                     (case-on (mem_sym m vis) Bool
                        ((case True
                           (steps
                             ((rewrite (hyp 2) lr lhs true ())
@@ -1797,11 +1745,11 @@
     ((n Symbol)
      (visited (List Symbol))
      (edges (List (Pair Symbol (List Symbol)))))
-    ((= (ed_is_some (edges_lookup n edges)) True) (= (sym_in n visited) False))
+    ((= (ed_is_some (edges_lookup n edges)) True) (= (mem_sym n visited) False))
     (=
       (le
         (+
-          (+ 1 (sym_len (ed_succs (edges_lookup n edges))))
+          (+ 1 (len (ed_succs (edges_lookup n edges))))
           (edges_pending edges (Cons n visited)))
         (edges_pending edges visited))
       True))
@@ -1854,7 +1802,7 @@
                        (=
                          (le
                            (+
-                             (+ 1 (sym_len (ed_succs (edges_lookup n rest))))
+                             (+ 1 (len (ed_succs (edges_lookup n rest))))
                              (edges_pending rest (Cons n visited)))
                            (edges_pending rest visited))
                          True)
@@ -1866,7 +1814,7 @@
                          ((steps ((rewrite (premise 3) lr lhs true ())) refl)
                           (steps ((rewrite (premise 1) lr lhs true ())) refl))
                          refl)
-                       (case-on (sym_in m visited) Bool
+                       (case-on (mem_sym m visited) Bool
                          ((case True
                             (steps
                               ((rewrite (hyp 2) lr lhs true ())
@@ -1914,7 +1862,7 @@
      (match (led_lookup n led)
        (None (led_filter rest led kinds))
        ((Some (LedgerEntry _ k _))
-        (if (sym_in k kinds) (Cons n (led_filter rest led kinds))
+        (if (mem_sym k kinds) (Cons n (led_filter rest led kinds))
         (led_filter rest led kinds)))))))
 
 (fn own_ax_kinds () (List Symbol)
@@ -1927,7 +1875,7 @@
   (match led
     (Nil Nil)
     ((Cons (LedgerEntry n k _) rest)
-     (if (sym_in k (own_ax_kinds)) (Cons n (led_own_axioms rest))
+     (if (mem_sym k (own_ax_kinds)) (Cons n (led_own_axioms rest))
      (led_own_axioms rest)))))
 
 ;; ---- run-mode call-graph closure. Narrow is FIRST-ORDER (no fn values; a
@@ -1939,26 +1887,23 @@
   (match e
     ((Call f args) (Cons (qn_name f) (calls_of_list args)))
     ((Ctor _ args) (calls_of_list args))
-    ((Match s arms) (sym_concat (calls_of_expr s) (calls_of_arms arms)))
-    ((Let bs body) (sym_concat (calls_of_list bs) (calls_of_expr body)))
+    ((Match s arms) (app (calls_of_expr s) (calls_of_arms arms)))
+    ((Let bs body) (app (calls_of_list bs) (calls_of_expr body)))
     ((If c t e2)
-     (sym_concat
-       (calls_of_expr c)
-       (sym_concat (calls_of_expr t) (calls_of_expr e2))))
+     (app (calls_of_expr c) (app (calls_of_expr t) (calls_of_expr e2))))
     (_ Nil)))
 
 (fn calls_of_list ((es (List Expr))) (List Symbol)
   (measure (struct es))
   (match es
     (Nil Nil)
-    ((Cons h t) (sym_concat (calls_of_expr h) (calls_of_list t)))))
+    ((Cons h t) (app (calls_of_expr h) (calls_of_list t)))))
 
 (fn calls_of_arms ((arms (List Arm))) (List Symbol)
   (measure (struct arms))
   (match arms
     (Nil Nil)
-    ((Cons (Arm _ body) rest)
-     (sym_concat (calls_of_expr body) (calls_of_arms rest)))))
+    ((Cons (Arm _ body) rest) (app (calls_of_expr body) (calls_of_arms rest)))))
 
 ;; the run-mode call graph as an edge list: fn name -> the calls in its body.
 ;; Narrow is FIRST-ORDER, so a callee is always a Call by name and closure over
@@ -1974,13 +1919,15 @@
   (measure (struct xs))
   (match xs
     (Nil Nil)
-    ((Cons h t) (if (sym_in h ys) (Cons h (syms_inter t ys)) (syms_inter t ys)))))
+    ((Cons h t)
+     (if (mem_sym h ys) (Cons h (syms_inter t ys)) (syms_inter t ys)))))
 
 (fn syms_minus ((xs (List Symbol)) (ys (List Symbol))) (List Symbol)
   (measure (struct xs))
   (match xs
     (Nil Nil)
-    ((Cons h t) (if (sym_in h ys) (syms_minus t ys) (Cons h (syms_minus t ys))))))
+    ((Cons h t)
+     (if (mem_sym h ys) (syms_minus t ys) (Cons h (syms_minus t ys))))))
 
 ;; ---- ledger rendering -------------------------------------------------------
 (fn led_nl () (List Int) (Cons 10 Nil))
@@ -2063,7 +2010,7 @@
                          (led_line
                            "lemmas (proven, interior)"
                            (show_nat
-                             (sym_len
+                             (len
                                (led_filter
                                  reach
                                  led
@@ -2090,15 +2037,15 @@
   (List ClaimOutcome)
   (match b
     ((Bin name entry externs trusts requires)
-     (oc_concat
-       (Cons (COBin name (sym_len requires) (count_met requires binmp th)) Nil)
-       (oc_concat
+     (app
+       (Cons (COBin name (len requires) (count_met requires binmp th)) Nil)
+       (app
          (Cons (COLedger (ledger_block b led own_ext m)) Nil)
-         (oc_concat
+         (app
            (entry_check entry m)
-           (oc_concat
+           (app
              (trusts_check trusts (led_own_axioms led))
-             (oc_concat
+             (app
                (externs_check externs own_ext)
                (unmet_fails requires binmp th)))))))))
 
@@ -2113,17 +2060,9 @@
   (match bins
     (Nil Nil)
     ((Cons (Pair mp b) rest)
-     (oc_concat
+     (app
        (bin_report b mp th m led own_ext)
        (bin_reports rest th m led own_ext)))))
-
-(fn bin_concat
-  ((a (List (Pair (List Symbol) Bin))) (b (List (Pair (List Symbol) Bin))))
-  (List (Pair (List Symbol) Bin))
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (bin_concat t b)))))
 
 (fn bins_with_mp ((mp (List Symbol)) (bs (List Bin)))
   (List (Pair (List Symbol) Bin))
@@ -2151,7 +2090,7 @@
      (match mf
        (None (bins_of_srcs rest))
        ((Some forms)
-        (bin_concat
+        (app
           (bins_with_mp (module_path_of path) (bins_of_forms forms))
           (bins_of_srcs rest)))))))
 
@@ -2195,7 +2134,7 @@
   (match acc
     (Nil Nil)
     ((Cons (Pair n _) rest)
-     (if (sym_in n exports) (accepts_check rest exports)
+     (if (mem_sym n exports) (accepts_check rest exports)
      (Cons
        (COFail n "lib accepts: not an export of this lib" Nil)
        (accepts_check rest exports))))))
@@ -2203,21 +2142,15 @@
 (fn lib_report ((l Lib) (m Module)) (List ClaimOutcome)
   (match l
     ((Lib name exports acc)
-     (oc_concat
-       (Cons (COLib name (sym_len exports) (count_impl exports m)) Nil)
-       (oc_concat (exports_check exports m) (accepts_check acc exports))))))
+     (app
+       (Cons (COLib name (len exports) (count_impl exports m)) Nil)
+       (app (exports_check exports m) (accepts_check acc exports))))))
 
 (fn lib_reports ((ls (List Lib)) (m Module)) (List ClaimOutcome)
   (measure (struct ls))
   (match ls
     (Nil Nil)
-    ((Cons l rest) (oc_concat (lib_report l m) (lib_reports rest m)))))
-
-(fn lib_concat ((a (List Lib)) (b (List Lib))) (List Lib)
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (lib_concat t b)))))
+    ((Cons l rest) (app (lib_report l m) (lib_reports rest m)))))
 
 (fn libs_of_forms ((forms (List SExpr))) (List Lib)
   (measure (struct forms))
@@ -2237,7 +2170,7 @@
     ((Cons (SrcEntry path _ _ mf) rest)
      (match mf
        (None (libs_of_srcs rest))
-       ((Some forms) (lib_concat (libs_of_forms forms) (libs_of_srcs rest)))))))
+       ((Some forms) (app (libs_of_forms forms) (libs_of_srcs rest)))))))
 
 ;; Production entry point: returns the per-claim/axiom outcomes (source order)
 ;; for the whole file list, checked against m from the empty theory, followed
@@ -2252,12 +2185,6 @@
     (Nil Nil)
     ((Cons (PendReq q _) rest)
      (Cons (COPending (qn_name q)) (pending_outcomes rest)))))
-
-(fn rev_pend ((xs (List PendReq)) (acc (List PendReq))) (List PendReq)
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (rev_pend t (Cons h acc)))))
 
 (fn check_production
   ((m Module)
@@ -2278,15 +2205,15 @@
       focus
       1)
     ((RunState th pend acc led)
-     (oc_concat
-       (rev_outcomes acc Nil)
-       (oc_concat
-         (pending_outcomes (rev_pend pend Nil))
-         (oc_concat
+     (app
+       (rev_onto acc Nil)
+       (app
+         (pending_outcomes (rev_onto pend Nil))
+         (app
            (bin_reports (bins_of_srcs srcs) th m led (own_externs_of_srcs srcs))
-           (oc_concat
+           (app
              (lib_reports (libs_of_srcs srcs) m)
-             (oc_concat
+             (app
                (mc_outcome m srcs sidecars th focus)
                (rr_outcome m srcs sidecars th focus)))))))))
 
@@ -2322,13 +2249,6 @@
 ;; (unresolved citation; unfold no-match on a bare name that LOOKS right).
 ;; ===========================================================================
 
-(fn sr_init ((srcs (List SrcEntry))) (List SrcEntry)
-  (measure (struct srcs))
-  (match srcs
-    (Nil Nil)
-    ((Cons _ Nil) Nil)
-    ((Cons h t) (Cons h (sr_init t)))))
-
 (fn sr_last ((srcs (List SrcEntry))) (Option SrcEntry)
   (measure (struct srcs))
   (match srcs
@@ -2340,12 +2260,6 @@
 
 (fn render_modpath ((segs (List Symbol))) (List Int)
   (append_int "(::" (append_int (render_qn_segs segs) ")")))
-
-(fn sr_count ((env (List (Pair Symbol (List Symbol))))) Int
-  (measure (struct env))
-  (match env
-    (Nil 0)
-    ((Cons _ t) (+ 1 (sr_count t)))))
 
 (fn sr_or_none ((b (List Int))) (List Int)
   (match b
@@ -2367,12 +2281,11 @@
            (append_int
              " *  ->  "
              (append_int
-               (show_nat (sr_count (filter_modpath env globmod)))
+               (show_nat (len (filter_modpath env globmod)))
                (append_int " item(s)" (sr_nl))))))))
     ((Some (UseItem rawq bound))
      (let ((resolved (resolve_qpath (qn_mod rawq) (qn_name rawq) curmod Nil)))
-       (let
-         ((modid (append_sym (qn_mod resolved) (Cons (qn_name resolved) Nil))))
+       (let ((modid (app (qn_mod resolved) (Cons (qn_name resolved) Nil))))
          (if (item_in_env (qn_name resolved) (qn_mod resolved) env)
            (append_int
              "  ITEM   "
@@ -2424,7 +2337,7 @@
     (Nil Nil)
     ((Cons n rest)
      (append_int
-       (match (uitem_path n uitems)
+       (match (assoc_sym n uitems)
          (None Nil)
          ((Some pp)
           (if (sig_at n pp exts)
@@ -2469,7 +2382,7 @@
     (Nil Nil)
     ((Cons n rest)
      (append_int
-       (match (uitem_path n uitems)
+       (match (assoc_sym n uitems)
          (None Nil)
          ((Some pp)
           (if (sig_type_at n pp tds)
@@ -2509,7 +2422,7 @@
     ((Some (SrcEntry path _ _ mf))
      (match
        (build_module_d
-         (sr_init srcs)
+         (init srcs)
          (Module Nil Nil Nil (FnTrie None Nil) Nil)
          (prelude_ctors)
          1)
@@ -2524,9 +2437,7 @@
               (match
                 (parse_module_mf
                   mf
-                  (append_sym
-                    (typedef_ctors (module_typedefs macc))
-                    (prelude_ctors)))
+                  (app (typedef_ctors (module_typedefs macc)) (prelude_ctors)))
                 (None (append_int "scope: target failed to parse" (sr_nl)))
                 ((Some pm)
                  (match pm
@@ -2724,12 +2635,6 @@
           rest
           (mc_clause_qns_of tr fns path (mc_of_forms forms Nil) acc)))))))
 
-(fn mc_qn_in ((q QName) (qs (List QName))) Bool
-  (measure (struct qs))
-  (match qs
-    (Nil False)
-    ((Cons h t) (if (qname_eq q h) True (mc_qn_in q t)))))
-
 ;; members of ONE scc carrying no clause (caller has gated on recursive).
 (fn mc_scc_missing ((scc (List QName)) (annot (List QName)) (acc (List QName)))
   (List QName)
@@ -2737,7 +2642,7 @@
   (match scc
     (Nil acc)
     ((Cons q rest)
-     (if (mc_qn_in q annot) (mc_scc_missing rest annot acc)
+     (if (mem_qn q annot) (mc_scc_missing rest annot acc)
      (mc_scc_missing rest annot (Cons q acc))))))
 
 (fn mc_unannot_go
@@ -2850,7 +2755,7 @@
 ;; inside an argument shows its binders as unknown atoms and is refused
 ;; conservatively.
 (fn mc_pure_atom ((s Symbol) (pnames (List Symbol)) (bnds (List Symbol))) Bool
-  (if (mc_is_lower s) (if (sym_in s bnds) False (sym_in s pnames)) True))
+  (if (mc_is_lower s) (if (mem_sym s bnds) False (mem_sym s pnames)) True))
 
 (fn mc_pure ((e SExpr) (pnames (List Symbol)) (bnds (List Symbol))) Bool
   (measure (struct e))
@@ -2948,13 +2853,6 @@
 ;; return type; anything else leaves the arm untyped (the B2 behavior, which
 ;; is refusal-only and therefore sound).
 
-(fn mc_app_tbs ((a (List (Pair Symbol Type))) (b (List (Pair Symbol Type))))
-  (List (Pair Symbol Type))
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (mc_app_tbs t b)))))
-
 (fn mc_pat_has_wild ((p SExpr)) Bool
   (measure (struct p))
   (match p
@@ -2970,12 +2868,6 @@
   (match ps
     (Nil False)
     ((Cons p rest) (if (mc_pat_has_wild p) True (mc_pats_have_wild rest)))))
-
-(fn mc_env_ty ((env (List (Pair Symbol Type))) (x Symbol)) (Option Type)
-  (measure (struct env))
-  (match env
-    (Nil None)
-    ((Cons (Pair n ty) rest) (if (sym_eq n x) (Some ty) (mc_env_ty rest x)))))
 
 (fn mc_ty_ground ((t Type)) Bool
   (measure (struct t))
@@ -3023,7 +2915,7 @@
   ((m Module) (modpath (List Symbol)) (env (List (Pair Symbol Type))) (e SExpr))
   (Option Type)
   (match e
-    ((SSym x) (mc_env_ty env x))
+    ((SSym x) (assoc_sym x env))
     ((SList items)
      (match items
        ((Cons (SSym h) _)
@@ -3121,7 +3013,7 @@
           ((Some a)
            (match (mc_pats_tenv m prest trest)
              (None None)
-             ((Some b) (Some (mc_app_tbs a b)))))))))))
+             ((Some b) (Some (app a b)))))))))))
 
 ;; native Type → source form. Resolved (path-carrying) names render as the
 ;; literal (:: …) path form, which parse_type reads back to the same QName —
@@ -3240,7 +3132,7 @@
     (if (mc_pat_has_wild pat) (mc_walk cx bnds2 tbs hyps body st)
     (match cx
       ((MCtx m modpath _ penv _)
-       (match (mc_synth m modpath (mc_app_tbs tbs penv) scrut)
+       (match (mc_synth m modpath (app tbs penv) scrut)
          (None (mc_walk cx bnds2 tbs hyps body st))
          ((Some sty)
           (match (mc_pat_tenv m pat sty)
@@ -3249,7 +3141,7 @@
              (mc_walk
                cx
                bnds2
-               (mc_app_tbs newtbs tbs)
+               (app newtbs tbs)
                (Cons (mc_eq_s scrut pat) hyps)
                body
                st))))))))))
@@ -3430,20 +3322,12 @@
       (Cons
         pForm
         (Cons
-          (SList (reverse_sx hyps))
+          (SList (rev hyps))
           (Cons
             (mc_eq_s
               (SList (Cons (SSym rel) (Cons a (Cons b Nil))))
               (SSym (quote True)))
             Nil))))))
-
-(fn reverse_sx ((xs (List SExpr))) (List SExpr) (reverse_sx_go xs Nil))
-
-(fn reverse_sx_go ((xs (List SExpr)) (acc (List SExpr))) (List SExpr)
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (reverse_sx_go t (Cons h acc)))))
 
 ;; ---- checking one obligation through the claim pipeline -------------------
 
@@ -3480,7 +3364,7 @@
     ((Cons fd rest)
      (match fd
        ((FnDef q _ _ _)
-        (if (ad_qn_member q scc) (mc_fns_minus rest scc)
+        (if (mem_qn q scc) (mc_fns_minus rest scc)
         (Cons fd (mc_fns_minus rest scc))))))))
 
 (fn mc_opaque ((m Module) (scc (List QName))) Module
@@ -3493,7 +3377,7 @@
   (measure (struct sccs))
   (match sccs
     (Nil (Cons q Nil))
-    ((Cons scc rest) (if (ad_qn_member q scc) scc (mc_scc_of q rest)))))
+    ((Cons scc rest) (if (mem_qn q scc) scc (mc_scc_of q rest)))))
 
 ;; ---- per-fn driver ---------------------------------------------------------
 
@@ -3842,7 +3726,7 @@
   MSiteRes
   (let ((tbn (mc_tb_names tbs Nil)))
     (if (mc_tbs_fresh tbn pnames)
-      (let ((alln (sym_concat tbn pnames)))
+      (let ((alln (app tbn pnames)))
         (if (mc_pure msr2 alln Nil)
           (match (mc_ext_pform pForm tbs)
             (None
@@ -3937,8 +3821,8 @@
   (match names
     (Nil True)
     ((Cons n rest)
-     (if (sym_in n pnames) False
-     (if (sym_in n rest) False
+     (if (mem_sym n pnames) False
+     (if (mem_sym n rest) False
      (mc_tbs_fresh rest pnames))))))
 
 ;; tbs is innermost-first; the fold reverses, so the appended binder params
@@ -3953,21 +3837,15 @@
        rest
        (Cons (SList (Cons (SSym n) (Cons (mc_ty_form ty) Nil))) acc)))))
 
-(fn mc_app_forms ((a (List SExpr)) (b (List SExpr))) (List SExpr)
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (mc_app_forms t b)))))
-
 (fn mc_ext_pform ((pForm SExpr) (tbs (List (Pair Symbol Type)))) (Option SExpr)
   (match pForm
-    ((SList ps) (Some (SList (mc_app_forms ps (mc_tb_param_forms tbs Nil)))))
+    ((SList ps) (Some (SList (app ps (mc_tb_param_forms tbs Nil)))))
     (_ None)))
 
 ;; param name → type env from the looked-up FnDef (order matches pForm).
 (fn mc_fd_penv ((ns (List Symbol)) (fd FnDef)) (List (Pair Symbol Type))
   (match fd
-    ((FnDef _ ptys _ _) (zip_pairs ns ptys))))
+    ((FnDef _ ptys _ _) (zip ns ptys))))
 
 ;; a bare numeric `(measure E)` clause (no inline proofs) means every recursive
 ;; site takes its decrease + nonneg proof from the sidecar: synthesize the `auto`
@@ -4049,7 +3927,7 @@
                                  body
                                  (Pair 0 Nil))
                                ((Pair _ rsites)
-                                (let ((sites (mc_rev_sites rsites Nil)))
+                                (let ((sites (rev_onto rsites Nil)))
                                   (match sites
                                     (Nil
                                       (mc_line
@@ -4073,12 +3951,6 @@
                                         0
                                         mcls
                                         autos)))))))))))))))))))))))
-
-(fn mc_rev_sites ((xs (List MSiteS)) (acc (List MSiteS))) (List MSiteS)
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (mc_rev_sites t (Cons h acc)))))
 
 ;; ---- citable theory for measure obligations (STRATIFIED CITATION) ----------
 ;; A measure obligation proving fn F (its SCC = `scc`) total may cite a fact L
@@ -4150,8 +4022,8 @@
   (match work
     (Nil False)
     ((Cons q rest)
-     (if (ad_qn_member q scc) True
-     (if (ad_qn_member q seen) (mc_reaches_go tr rest seen scc (- fuel 1))
+     (if (mem_qn q scc) True
+     (if (mem_qn q seen) (mc_reaches_go tr rest seen scc (- fuel 1))
      (match (trie_lookup q tr)
        (None (mc_reaches_go tr rest (Cons q seen) scc (- fuel 1)))
        ((Some (FnDef _ _ _ body))
@@ -4241,7 +4113,7 @@
               ((Pair khyps _) (mc_ob_emit name i pForm khyps msr2 msr tail)))
             (let ((tbn (mc_tb_names tbs Nil)))
               (if (mc_tbs_fresh tbn pnames)
-                (let ((alln (sym_concat tbn pnames)))
+                (let ((alln (app tbn pnames)))
                   (if (mc_pure msr2 alln Nil)
                     (match (mc_ext_pform pForm tbs)
                       (None tail)
@@ -4316,7 +4188,7 @@
                          pForm
                          pnames
                          msr
-                         (mc_rev_sites rsites Nil)
+                         (rev_onto rsites Nil)
                          mcls))))))))))))))))
 
 ;; a clause whose proofs must be GENERATED: numeric (non-struct) and bare (no
@@ -4329,13 +4201,6 @@
        (Nil (if (mc_is_struct msr) False True))
        (_ False)))))
 
-(fn mc_pair_app ((a (List (Pair Symbol SExpr))) (b (List (Pair Symbol SExpr))))
-  (List (Pair Symbol SExpr))
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (mc_pair_app t b)))))
-
 (fn mc_file_obligations
   ((m Module)
    (sccs (List (List QName)))
@@ -4347,7 +4212,7 @@
   (match todo
     (Nil Nil)
     ((Cons mcl rest)
-     (mc_pair_app
+     (app
        (if (mc_is_bare_numeric mcl) (mc_obligations_for m sccs modpath mcl all)
        Nil)
        (mc_file_obligations m sccs modpath rest all)))))
@@ -4359,7 +4224,7 @@
 (fn mc_obligations_of_forms
   ((m Module) (forms (List SExpr)) (modpath (List Symbol)))
   (List (Pair Symbol SExpr))
-  (let ((all (mc_rev_mcls (mc_of_forms forms Nil) Nil)))
+  (let ((all (rev_onto (mc_of_forms forms Nil) Nil)))
     (mc_file_obligations m (ad_sccs m) modpath all all)))
 
 ;; ---- the section entry ------------------------------------------------------
@@ -4403,7 +4268,7 @@
           (match mcls
             (Nil (mc_files m sccs th rest sidecars))
             (_
-              (let ((allmcls (mc_rev_mcls mcls Nil)))
+              (let ((allmcls (rev_onto mcls Nil)))
                 (append_int
                   (mc_mcls
                     m
@@ -4415,12 +4280,6 @@
                     allmcls
                     (autos_of_src (sym_of_chars path) sidecars))
                   (mc_files m sccs th rest sidecars)))))))))))
-
-(fn mc_rev_mcls ((xs (List MCl)) (acc (List MCl))) (List MCl)
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (mc_rev_mcls t (Cons h acc)))))
 
 ;; ---- failure detection for the enforcement flip (issue #1, Phase D) ---------
 ;; needle is a contiguous prefix of hay.
@@ -4615,7 +4474,7 @@
                   (mc_proof_seed fns srcs Nil)
                   (mc_unannot_go tr sccs (mc_clause_qns tr fns srcs Nil) Nil)
                   Nil)))
-             (oc_concat
+             (app
                (match lines
                  (Nil Nil)
                  (_
@@ -4625,7 +4484,7 @@
                          "---- measure obligations ----"
                          (append_int (sr_nl) lines)))
                      Nil)))
-               (oc_concat
+               (app
                  (mc_residual_cofails missing)
                  (if (mc_any_fail lines)
                    (Cons
@@ -4774,7 +4633,7 @@
     (Nil Nil)
     ((Cons (FnDef q pts ret body) rest)
      (Cons
-       (if (ad_qn_member q scc) (FnDef q pts (tc_fn_body_ret m ret) body)
+       (if (mem_qn q scc) (FnDef q pts (tc_fn_body_ret m ret) body)
        (FnDef q pts ret body))
        (rr_deref_fns m scc rest)))))
 
@@ -4801,7 +4660,7 @@
    (rmap (List (Pair Symbol SExpr)))
    (autos (List (Pair Symbol SExpr))))
   (List ClaimOutcome)
-  (match (auto_lookup name rmap)
+  (match (assoc_sym name rmap)
     (None (Cons (COFail name (rr_missing_msg name) Nil) Nil))
     ((Some proofS)
      (let ((m2 (rr_deref m (mc_scc_of (qn_at modpath name) sccs))))
@@ -4859,7 +4718,7 @@
   (match forms
     (Nil Nil)
     ((Cons f rest)
-     (oc_concat
+     (app
        (rr_of_form m sccs th gctx modpath f rmap autos)
        (rr_of_forms m sccs th gctx modpath rest rmap autos)))))
 
@@ -4877,7 +4736,7 @@
      (match mf
        (None (rr_files m sccs th rest sidecars))
        ((Some forms)
-        (oc_concat
+        (app
           (rr_of_forms
             m
             sccs
@@ -4916,7 +4775,7 @@
     ((BMOk m)
      ;; the type sweep over the assembled module (typedefs, externs/sigs, fn
      ;; bodies) runs first; its findings are HARD COTypeFail outcomes.
-     (oc_concat
+     (app
        (type_fail_outcomes (type_report m))
        (check_production
          m

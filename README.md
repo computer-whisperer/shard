@@ -230,7 +230,7 @@ diff tool**: it exits 0 even with failing targets — gate changes by
 diffing its FAIL set against the current baseline, never by exit code.
 The corpus is tiered (the header of `run_corpus.sh`): DEFAULT runs per
 commit; `CORPUS_CLOSED=1` adds the closed arcs' frozen gates (floats,
-Arc B's sha256 articles and silicon legs, the wasm leg, RISC-V, PIO);
+Arc B's sha256 articles, build products and silicon legs, the wasm leg, RISC-V, PIO);
 `CORPUS_LONG=1` adds the engine-run pins. `CORPUS_LIST=1` prints the
 membership without running anything.
 Sources are kept canonical with the proven formatter

@@ -363,7 +363,7 @@ point.
   at the full-arc review 2026-07-26 with the §3 boundaries recorded
   (gensym-IH citation, gated-Occ counting, per-site stop sets). Step: `(change SIDE OCC TERM)` /
   `(change SIDE OCC TERM (stop F …))`, OCC in the rewrite spelling
-  (`true` all / `false` first / `(at K)`); `change` FOLDS — it
+  (`true` all / `false` first = `(at 0)`, one walk / `(at K)`); `change` FOLDS — it
   replaces occurrences of the term's normal form (under the stop set)
   by the term itself, so matching stays syntactic against the NF and a
   bare-literal NF rides the sort-gated literal walk. Closing form:

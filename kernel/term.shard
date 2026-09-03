@@ -167,22 +167,151 @@
     ((Cons p rest) (+ (pat_arity p) (pats_arity rest)))))
 
 ;; ---------------------------------------------------------------------------
-;; List-of-Expr helpers, specialized. In the full language these
-;; collapse to polymorphic `len` / `nth_opt`; here narrow eats the
-;; duplication (see REVISIT.md — Erased polymorphism in narrow).
+;; The polymorphic list kit — the ONE home of the kernel's shared list
+;; helpers (ruling 2026-09-02). Every kernel module globs this file, so a
+;; module never re-derives append/len/reverse/member/assoc for its own
+;; element type; the kernel stays std-free (std/list is a consumer-facing
+;; algebra, not a kernel dependency). Structural on the first list arg, so
+;; each is total by (measure (struct xs)); type parameters erase at runtime.
+;; Equality is per-type, so `mem_*` / `assoc_*` come in a Symbol / Int / QName
+;; flavour each. Names are the plain guessable ones (`app`, not `append`, so a
+;; file that also globs std/list sees no clash on the append side).
 ;; ---------------------------------------------------------------------------
 
-(fn len ((es (List Expr))) Int
-  (measure (struct es))
-  (match es
+;; (app xs ys) = xs ++ ys.
+(fn (app T) ((xs (List T)) (ys (List T))) (List T)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (app t ys)))))
+
+;; Int-valued length (serves directly as a WfInduct measure; see len_nonneg).
+(fn (len T) ((xs (List T))) Int
+  (measure (struct xs))
+  (match xs
     (Nil 0)
     ((Cons _ t) (+ 1 (len t)))))
 
-(fn nth_opt ((es (List Expr)) (k Int)) (Option Expr)
-  (measure (struct es))
-  (match es
+;; accumulator reverse: (rev_onto xs acc) = (reverse xs) ++ acc. Every call is
+;; a tail call — the shape the host interpreter needs at file scale (the
+;; parse-path O(bytes) ceiling; see intlist_to_expr below).
+(fn (rev_onto T) ((xs (List T)) (acc (List T))) (List T)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_onto t (Cons h acc)))))
+
+(fn (rev T) ((xs (List T))) (List T) (rev_onto xs Nil))
+
+;; k-th element (0-based), None past the end or for k < 0.
+(fn (nth T) ((xs (List T)) (k Int)) (Option T)
+  (measure (struct xs))
+  (match xs
     (Nil None)
-    ((Cons h t) (if (int_eq k 0) (Some h) (nth_opt t (- k 1))))))
+    ((Cons h t) (if (int_eq k 0) (Some h) (nth t (- k 1))))))
+
+;; all but the last element (Nil for Nil).
+(fn (init T) ((xs (List T))) (List T)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons _ Nil) Nil)
+    ((Cons h t) (Cons h (init t)))))
+
+;; append one element at the end.
+(fn (snoc T) ((xs (List T)) (x T)) (List T)
+  (measure (struct xs))
+  (match xs
+    (Nil (Cons x Nil))
+    ((Cons h t) (Cons h (snoc t x)))))
+
+;; pairwise zip, truncated to the shorter list.
+(fn (zip A B) ((xs (List A)) (ys (List B))) (List (Pair A B))
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons x xt)
+     (match ys
+       (Nil Nil)
+       ((Cons y yt) (Cons (Pair x y) (zip xt yt)))))))
+
+;; membership, one per element equality.
+(fn mem_sym ((x Symbol) (xs (List Symbol))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (sym_eq x h) True (mem_sym x t)))))
+
+(fn mem_int ((x Int) (xs (List Int))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (int_eq x h) True (mem_int x t)))))
+
+(fn mem_qn ((x QName) (xs (List QName))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (qname_eq x h) True (mem_qn x t)))))
+
+;; association-list lookup (first match wins), one per key equality.
+(fn (assoc_sym V) ((k Symbol) (kvs (List (Pair Symbol V)))) (Option V)
+  (measure (struct kvs))
+  (match kvs
+    (Nil None)
+    ((Cons (Pair k2 v) rest) (if (sym_eq k k2) (Some v) (assoc_sym k rest)))))
+
+(fn (assoc_int V) ((k Int) (kvs (List (Pair Int V)))) (Option V)
+  (measure (struct kvs))
+  (match kvs
+    (Nil None)
+    ((Cons (Pair k2 v) rest) (if (int_eq k k2) (Some v) (assoc_int k rest)))))
+
+;; ---- len's algebra, stated ONCE polymorphically ----------------------------
+;; The facts a data-weighted (measure (len xs) …) cites: the defining
+;; equations, nonneg (WfInduct's measure>=0 obligation), and additivity over
+;; app. T is free in the binders — instantiated at the citation site.
+
+(claim len_nil (goal () () (= (len Nil) 0)) (steps ((simp lhs)) refl))
+
+(claim len_cons
+  (goal ((h T) (t (List T))) () (= (len (Cons h t)) (+ 1 (len t))))
+  (steps ((simp lhs)) refl))
+
+;; 0 <= len xs. Induction; the step materializes the IH as a premise (farkas
+;; does not read induct IHs as slots), then bumps it past the +1.
+(claim len_nonneg
+  (goal ((xs (List T))) () (= (le 0 (len xs)) True))
+  (induct xs
+    ((case Nil
+       (steps ((rewrite (lemma len_nil) lr lhs true ())) (by arith (list 1))))
+     (case Cons
+       (h t)
+       (have (= (le 0 (len t)) True)
+         (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+         (steps
+           ((rewrite (lemma len_cons) lr lhs true ()))
+           (by arith (list 1 1))))))))
+
+;; len (app a b) = len a + len b.
+(claim len_app
+  (goal ((a (List T)) (b (List T))) () (= (len (app a b)) (+ (len a) (len b))))
+  (induct a
+    ((case Nil
+       (steps
+         ((simp lhs) (rewrite (lemma len_nil) lr rhs true ()))
+         (by arith (list))))
+     (case Cons
+       (h t)
+       (steps
+         ((simp lhs)
+          (rewrite (hyp 0) lr lhs true ())
+          (rewrite (lemma len_cons) lr rhs true ()))
+         (by arith (list)))))))
+
+;; legacy name for (nth xs k) — cited outside the kernel (meta/antiunify,
+;; meta/search); kept as a one-line alias.
+(fn nth_opt ((es (List Expr)) (k Int)) (Option Expr) (nth es k))
 
 ;; ---------------------------------------------------------------------------
 ;; shift: bump every free BVar (index >= cutoff) in e by `by`.
@@ -265,23 +394,21 @@
 (fn open_many ((bindings (List Expr)) (e Expr)) Expr
   (open_many_at 0 bindings e))
 
-;; reverse a (List Expr). A core reducer helper — apply_fn opens a body with
-;; the call's args reversed (reduce.shard's apply path: (open_many (reverse_exprs
-;; args) body)). Lives here with open_many, not in the proof checker.
-(fn reverse_exprs ((xs (List Expr))) (List Expr) (reverse_exprs_acc xs Nil))
+;; reverse a (List Expr) — the reducer's apply path opens a body with the
+;; call's args reversed ((open_many (reverse_exprs args) body)). Aliases of the
+;; kit's rev / rev_onto, kept by name for their citers (checker, trace,
+;; tools/prove).
+(fn reverse_exprs ((xs (List Expr))) (List Expr) (rev xs))
 
 (fn reverse_exprs_acc ((xs (List Expr)) (acc (List Expr))) (List Expr)
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (reverse_exprs_acc t (Cons h acc)))))
+  (rev_onto xs acc))
 
 (fn open_many_at ((depth Int) (bindings (List Expr)) (e Expr)) Expr
   (measure (struct e))
   (match e
     ((BVar k)
      (if (lt k depth) e  ; bound inside e — keep
-     (match (nth_opt bindings (- k depth))
+     (match (nth bindings (- k depth))
        ((Some v) (shift depth 0 v))  ; value placed under `depth` binders
        (None (BVar (- k (len bindings)))))))  ; outer binder, shifted by the opening
     ((FVar _) e)
@@ -340,7 +467,7 @@
        (None e)))
     ((BVar k)
      (if (lt k depth) e  ; bound inside e
-     (BVar (+ k (len_sym names)))))  ; outer BVar — shift up
+     (BVar (+ k (len names)))))  ; outer BVar — shift up
     ((Ctor cn args) (Ctor cn (close_many_list depth names args)))
     ((Call f args) (Call f (close_many_list depth names args)))
     ((Match s arms)
@@ -375,19 +502,12 @@
        (Arm p (close_many_at (+ depth (pat_arity p)) names body))
        (close_many_arms depth names rest)))))
 
-;; List-of-Symbol helpers, specialized (no polymorphism in narrow).
-
+;; index of a Symbol in a list (k = the index of the first element).
 (fn find_index_sym ((x Symbol) (xs (List Symbol)) (k Int)) (Option Int)
   (measure (struct xs))
   (match xs
     (Nil None)
     ((Cons h t) (if (sym_eq x h) (Some k) (find_index_sym x t (+ k 1))))))
-
-(fn len_sym ((xs (List Symbol))) Int
-  (measure (struct xs))
-  (match xs
-    (Nil 0)
-    ((Cons _ t) (+ 1 (len_sym t)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Structural equality on Expr / Arm / Pat. Used by Refl and by anywhere

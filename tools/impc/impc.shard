@@ -49,6 +49,7 @@
 (import "../../meta/invoke")
 (import "../../models/imp/imp.shard")
 (import "../../models/imp/rt.shard")
+(import "../../std/list")  ; append / len / rev (polymorphic list algebra)
 
 (use (:: kernel loader World))
 (use (:: kernel loader get_args))
@@ -89,26 +90,17 @@
 (use (:: meta invoke *))
 (use (:: models imp imp *))
 (use (:: models imp rt *))
+(use (:: std list append))
+(use (:: std list len))
+(use (:: std list rev))
 
 ;; --- small utils ----------------------------------------------------------------
-
-(fn sapp ((a (List IpStmt)) (b (List IpStmt))) (List IpStmt)
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (sapp t b)))))
 
 (fn nth_int ((xs (List Int)) (i Int)) (Option Int)
   (measure (struct xs))
   (match xs
     (Nil None)
     ((Cons h t) (if (int_eq i 0) (Some h) (nth_int t (- i 1))))))
-
-(fn rev_ints ((xs (List Int)) (acc (List Int))) (List Int)
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (rev_ints t (Cons h acc)))))
 
 (fn u64s ((k Int)) (List IKind)
   (measure k (by arith (list 1 0)) (by arith (list 1 1)))
@@ -156,14 +148,8 @@
     ((Cons c rest)
      (match c
        ((CtorDef q2 fts)
-        (if (qname_eq q q2) (Some (Pair i (tys_len fts)))
+        (if (qname_eq q q2) (Some (Pair i (len fts)))
         (ctors_find rest q (+ i 1))))))))
-
-(fn tys_len ((ts (List Type))) Int
-  (measure (struct ts))
-  (match ts
-    (Nil 0)
-    ((Cons _ t) (+ 1 (tys_len t)))))
 
 (fn tds_find ((tds (List TypeDef)) (q QName)) (Option (Pair Int Int))
   (measure (struct tds))
@@ -388,7 +374,7 @@
         (match (own l o nx)
           ((Pair ss nx2)
            (match (own_all rest nx2)
-             ((Pair rss nx3) (Pair (sapp ss rss) nx3))))))))))
+             ((Pair rss nx3) (Pair (append ss rss) nx3))))))))))
 
 ;; store the operands into the fresh cell's slots, owning each
 (fn fill_slots ((p Int) (ops (List (Pair Int Own))) (i Int) (nx Int))
@@ -403,7 +389,7 @@
           ((Pair oss nx2)
            (match (fill_slots p rest (+ i 1) nx2)
              ((Pair rss nx3)
-              (Pair (sapp oss (Cons (rsto p (+ 8 (* 8 i)) (rl l)) rss)) nx3))))))))))
+              (Pair (append oss (Cons (rsto p (+ 8 (* 8 i)) (rl l)) rss)) nx3))))))))))
 
 ;; a compiled branch: make its value owned and land it in r (outside the
 ;; SCC — applied to ic_e's result, never calling it)
@@ -413,7 +399,7 @@
     ((CROk ss l o nx2)
      (match (own l o nx2)
        ((Pair oss nx3)
-        (CROk (sapp ss (sapp oss (list (IpSet r (rl l))))) r OOwn nx3))))))
+        (CROk (append ss (append oss (list (IpSet r (rl l))))) r OOwn nx3))))))
 
 ;; --- the expression compiler (one structural SCC) --------------------------------
 
@@ -445,7 +431,7 @@
                   (match (fill_slots p ops 0 (+ nx2 1))
                     ((Pair fss nx3)
                      (CROk
-                       (sapp
+                       (append
                          ss
                          (Cons
                            (IpCall p (rt_alloc_ix) (list (rk tag) (rk arity)))
@@ -462,7 +448,7 @@
             ((Cons (Pair a _) (Cons (Pair b _) Nil))
              (match (prim_of q a b nx2)
                ((CRErr m) (CRErr m))
-               ((CROk ps t o nx3) (CROk (sapp ss ps) t o nx3))))
+               ((CROk ps t o nx3) (CROk (append ss ps) t o nx3))))
             (_ (CRErr "primitive arity (v0 lowers the binary prims)")))))
        (match (ctx_fix c q)
          (None
@@ -478,7 +464,7 @@
                (match (decs ops (+ nx2 1))
                  ((Pair dss nx3)
                   (CROk
-                    (sapp ss (Cons (IpCall t k (op_exps ops)) dss))
+                    (append ss (Cons (IpCall t k (op_exps ops)) dss))
                     t
                     OOwn
                     nx3))))))))))
@@ -496,7 +482,7 @@
                 (match (decs (list (Pair cl co)) nx4)
                   ((Pair dss nx5)
                    (CROk
-                     (sapp
+                     (append
                        cs
                        (Cons (IpIf (req (rl cl) (rk (w_true))) ts es) dss))
                      r
@@ -509,7 +495,7 @@
         (match (own_all ops nx2)
           ((Pair oss nx3)
            (let ((ls (op_locals ops)))
-             (match (ic_e c (append_int (rev_ints ls Nil) env) nx3 body)
+             (match (ic_e c (append_int (rev ls) env) nx3 body)
                ((CRErr m) (CRErr m))
                ((CROk bss bl bo nx4)
                 (match (own bl bo nx4)
@@ -517,7 +503,7 @@
                    (match (decs (owned_all ls) nx5)
                      ((Pair dss nx6)
                       (CROk
-                        (sapp ss (sapp oss (sapp bss (sapp wss dss))))
+                        (append ss (append oss (append bss (append wss dss))))
                         bl
                         OOwn
                         nx6)))))))))))))
@@ -530,7 +516,7 @@
             ((CRErr m) (CRErr m))
             ((CROk ass _ _ nx3)
              (match (decs (list (Pair sl so)) nx3)
-               ((Pair dss nx4) (CROk (sapp ss (sapp ass dss)) r OOwn nx4)))))))))
+               ((Pair dss nx4) (CROk (append ss (append ass dss)) r OOwn nx4)))))))))
     ((FVar _) (CRErr "free variable"))
     ((SymLit _) (CRErr "symbol literal (v0)"))))
 
@@ -544,7 +530,8 @@
        ((CROk ss l o nx2)
         (match (ic_es c env nx2 rest)
           ((CRsErr m) (CRsErr m))
-          ((CRsOk rss ops nx3) (CRsOk (sapp ss rss) (Cons (Pair l o) ops) nx3))))))))
+          ((CRsOk rss ops nx3)
+           (CRsOk (append ss rss) (Cons (Pair l o) ops) nx3))))))))
 
 ;; arms: ok := 1; pattern tests (clearing ok); under ok the body lands in r;
 ;; else the remaining arms; none left → unreachable
@@ -562,9 +549,7 @@
             ((CPErr m) (CRErr m))
             ((CPOk pss binders nx2)
              (match
-               (branch_land
-                 (ic_e c (append_int (rev_ints binders Nil) env) nx2 body)
-                 r)
+               (branch_land (ic_e c (append_int (rev binders) env) nx2 body) r)
                ((CRErr m) (CRErr m))
                ((CROk bss _ _ nx3)
                 (match (ic_arms c env nx3 rest sl r)
@@ -573,7 +558,7 @@
                    (CROk
                      (Cons
                        (IpSet ok (rk 1))
-                       (sapp pss (list (IpIf (req (rl ok) (rk 1)) bss rss))))
+                       (append pss (list (IpIf (req (rl ok) (rk 1)) bss rss))))
                      r
                      OOwn
                      nx4)))))))))))))
@@ -642,7 +627,7 @@
              (CPOk
                (Cons
                  (rldo f v (+ 8 (* 8 i)))
-                 (sapp pss (list (IpIf (req (rl ok) (rk 1)) rss Nil))))
+                 (append pss (list (IpIf (req (rl ok) (rk 1)) rss Nil))))
                (append_int b1 b2)
                nx3)))))))))
 
@@ -661,7 +646,7 @@
 (fn ic_fn ((c Ctx) (fd FnDef)) FR
   (match fd
     ((FnDef q pts _ body)
-     (let ((n (tys_len pts)))
+     (let ((n (len pts)))
        (let ((d n))
          (match (ic_e c (param_env n) (+ n 1) body)
            ((CRErr m)
@@ -670,7 +655,7 @@
             (match (own l o nx)
               ((Pair oss nx2)
                (FROk
-                 (MkIpFn (u64s n) (u64s (- nx2 n)) (sapp ss oss) (rl l) U64)))))))))))
+                 (MkIpFn (u64s n) (u64s (- nx2 n)) (append ss oss) (rl l) U64)))))))))))
 
 ;; --- the printer (the product's text) ------------------------------------------------
 

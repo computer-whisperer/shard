@@ -39,6 +39,11 @@
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/term.shard")
 (import "../../kernel/module.shard")
+(import "../../std/list")  ; len / rev (polymorphic list algebra)
+;; std list names come FIRST: an earlier `use` wins, and the kernel term glob
+;; below carries a monomorphic (List Expr) `len` that would shadow std's.
+(use (:: std list len))
+(use (:: std list rev))
 (use (:: kernel term *))
 (use (:: kernel module Type))
 (use (:: kernel module TCon))
@@ -397,12 +402,6 @@
             (_ (TrsDiscInspectErr "finite discriminator is not unary")))
           (TrsDiscInspectErr "finite discriminator lookup changed QName")))))))
 
-(fn trs_len_types ((ts (List Type))) Int
-  (measure (struct ts))
-  (match ts
-    (Nil 0)
-    ((Cons _ rest) (+ 1 (trs_len_types rest)))))
-
 (fn trs_type_at ((types (List Type)) (index Int)) (Option Type)
   (measure (struct types))
   (match types
@@ -414,7 +413,7 @@
 
 ;; Rule BVars are locally nameless: BVar 0 names the last declared parameter.
 (fn trs_rule_var_type ((types (List Type)) (index Int)) (Option Type)
-  (trs_type_at types (- (- (trs_len_types types) 1) index)))
+  (trs_type_at types (- (- (len types) 1) index)))
 
 ;; ---- rule validation --------------------------------------------------------
 
@@ -498,7 +497,7 @@
     (_ True)))
 
 (fn trs_rule ((name QName) (types (List Type)) (lhs Expr) (rhs Expr)) TrsRuleR
-  (let ((arity (trs_len_types types)))
+  (let ((arity (len types)))
     (if (trs_rooted lhs)
       (if (expr_eq lhs rhs) (TrsRuleErr "rewrite rule is reflexive")
       (match (trs_lhs_vars lhs arity Nil)
@@ -520,7 +519,7 @@
     ((TrsIntLit _) None)
     ((TrsIntVar index)
      (if (lt index 0) (Some "integer guard variable index is negative")
-     (if (le (trs_len_types types) index)
+     (if (le (len types) index)
        (Some "integer guard variable index is out of range")
      (if (trs_int_mem index lhsvars)
        (match (trs_rule_var_type types index)
@@ -559,7 +558,7 @@
   (match guards
     (Nil None)
     ((Cons (TrsDistinct _ left right) rest)
-     (match (trs_distinct_guard_wf left right (trs_len_types types) lhsvars)
+     (match (trs_distinct_guard_wf left right (len types) lhsvars)
        ((Some msg) (Some msg))
        (None (trs_guards_wf rest types lhsvars))))
     ((Cons (TrsIntEq left right) rest)
@@ -584,7 +583,7 @@
      (match (trs_rule name types lhs rhs)
        ((TrsRuleErr msg) (TrsConditionedRuleErr msg))
        ((TrsRuleOk checked)
-        (match (trs_lhs_vars lhs (trs_len_types types) Nil)
+        (match (trs_lhs_vars lhs (len types) Nil)
           ((TrsVarsErr msg) (TrsConditionedRuleErr msg))
           ((TrsVarsOk lhsvars)
            (match (trs_guards_wf guards types lhsvars)
@@ -601,7 +600,7 @@
 (fn trs_profile_go ((pending (List TrsRule)) (seen (List TrsRule))) TrsProfileR
   (measure (struct pending))
   (match pending
-    (Nil (TrsProfileOk (TrsProfile (trs_rules_reverse seen Nil))))
+    (Nil (TrsProfileOk (TrsProfile (rev seen))))
     ((Cons r rest)
      ;; TrsRule is transparent meta vocabulary. Re-run individual validation
      ;; at the profile boundary before preserving its reviewed order.
@@ -613,12 +612,6 @@
            (if (trs_rule_name_mem name seen)
              (TrsProfileErr "duplicate rewrite rule name")
              (trs_profile_go rest (Cons checked seen))))))))))
-
-(fn trs_rules_reverse ((rs (List TrsRule)) (acc (List TrsRule))) (List TrsRule)
-  (measure (struct rs))
-  (match rs
-    (Nil acc)
-    ((Cons r rest) (trs_rules_reverse rest (Cons r acc)))))
 
 (fn trs_profile ((rules (List TrsRule))) TrsProfileR (trs_profile_go rules Nil))
 
@@ -636,21 +629,12 @@
      (if (qname_eq q (trs_rule_name rule)) True
      (trs_spine_rule_name_mem q rest)))))
 
-(fn trs_spine_rules_reverse
-  ((items (List TrsSpineRule)) (acc (List TrsSpineRule)))
-  (List TrsSpineRule)
-  (measure (struct items))
-  (match items
-    (Nil acc)
-    ((Cons item rest) (trs_spine_rules_reverse rest (Cons item acc)))))
-
 (fn trs_spine_profile_go
   ((pending (List TrsSpineRule)) (seen (List TrsSpineRule)))
   TrsSpineProfileR
   (measure (struct pending))
   (match pending
-    (Nil
-      (TrsSpineProfileOk (TrsSpineProfile (trs_spine_rules_reverse seen Nil))))
+    (Nil (TrsSpineProfileOk (TrsSpineProfile (rev seen))))
     ((Cons (TrsSpineRule spine conditioned) rest)
      (match spine
        ((TrsSpine context ctor child)
@@ -754,12 +738,6 @@
   (TrsIntShape Int)
   (TrsSymShape Symbol))
 
-(fn trs_expr_len ((es (List Expr))) Int
-  (measure (struct es))
-  (match es
-    (Nil 0)
-    ((Cons _ rest) (+ 1 (trs_expr_len rest)))))
-
 (fn trs_shape_eq ((a TrsShape) (b TrsShape)) Bool
   (match a
     ((TrsCtorShape aq an)
@@ -795,8 +773,8 @@
 
 (fn trs_expr_shape ((e Expr)) (Option TrsShape)
   (match e
-    ((Ctor q args) (Some (TrsCtorShape q (trs_expr_len args))))
-    ((Call q args) (Some (TrsCallShape q (trs_expr_len args))))
+    ((Ctor q args) (Some (TrsCtorShape q (len args))))
+    ((Call q args) (Some (TrsCallShape q (len args))))
     ((If _ _ _) (Some (TrsIfShape)))
     ((IntLit n) (Some (TrsIntShape n)))
     ((SymLit s) (Some (TrsSymShape s)))
@@ -884,18 +862,11 @@
           (TrsFormOneErr
             "formation rule has repeated-variable equality constraint")))))))
 
-(fn trs_form_reverse ((clauses (List TrsFormClause)) (acc (List TrsFormClause)))
-  (List TrsFormClause)
-  (measure (struct clauses))
-  (match clauses
-    (Nil acc)
-    ((Cons clause rest) (trs_form_reverse rest (Cons clause acc)))))
-
 (fn trs_formation_go ((rules (List TrsRule)) (rev_clauses (List TrsFormClause)))
   TrsFormationR
   (measure (struct rules))
   (match rules
-    (Nil (TrsFormationOk (TrsFormation (trs_form_reverse rev_clauses Nil))))
+    (Nil (TrsFormationOk (TrsFormation (rev rev_clauses))))
     ((Cons rule rest)
      (match (trs_formation_rule rule)
        ((TrsFormOneErr msg) (TrsFormationErr msg))
@@ -925,8 +896,8 @@
   (match rules
     (Nil
       (TrsProfileFormation
-        (TrsFormation (trs_form_reverse rev_clauses Nil))
-        (TrsProfile (trs_rules_reverse rev_residual Nil))))
+        (TrsFormation (rev rev_clauses))
+        (TrsProfile (rev rev_residual))))
     ((Cons rule rest)
      (match (trs_formation_rule rule)
        ((TrsFormOneErr _)

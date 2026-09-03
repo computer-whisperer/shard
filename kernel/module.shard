@@ -74,14 +74,15 @@
 ;; FnTrie: build / insert / lookup. Callees precede callers (no forward refs).
 ;; ---------------------------------------------------------------------------
 
-;; find the child subtrie reached by char `c`, if any.
-(fn trie_child ((c Int) (cs (List (Pair Int FnTrie)))) (Option FnTrie)
-  (measure (struct cs))
-  (match cs
-    (Nil None)
-    ((Cons (Pair k t) rest) (if (int_eq k c) (Some t) (trie_child c rest)))))
-
 ;; replace (or append) the child keyed by `c` with `sub`.
+;; the child subtrie reached by char `c`, if any. An alias of the kit's
+;; assoc_int with a GROUND return type: the measure gate's binder-typer (driver
+;; mc_synth) types a match scrutinee only through a callee whose declared return
+;; type has no type variables, and trie_insert_chars's measure needs the `sub`
+;; it binds from this call typed.
+(fn trie_child ((c Int) (cs (List (Pair Int FnTrie)))) (Option FnTrie)
+  (assoc_int c cs))
+
 (fn child_set ((c Int) (sub FnTrie) (cs (List (Pair Int FnTrie))))
   (List (Pair Int FnTrie))
   (measure (struct cs))
@@ -147,15 +148,10 @@
 ;; tail of cs. Neither argument alone decreases at both sites, so the measure
 ;; is the lexicographic combination  2*(len cs) + leafbit(t):  site (1) keeps
 ;; len cs and drops leafbit 1→0 (−1); site (2) drops len cs by one (−2) while
-;; leafbit rises by at most one (net ≤ −1). Both helpers are kernel-local; the
-;; facts cited by the measure (below trie_insert_chars) reach neither
-;; trie_insert_chars in the call graph, so stratified citation admits them.
-(fn tic_len ((cs (List Int))) Int
-  (measure (struct cs))
-  (match cs
-    (Nil 0)
-    ((Cons _ t) (+ 1 (tic_len t)))))
-
+;; leafbit rises by at most one (net ≤ −1). len is term.shard's kit len (its
+;; len_cons / len_nonneg are cited); tic_leafbit and the facts cited about it
+;; (below trie_insert_chars) reach neither trie_insert_chars in the call graph,
+;; so stratified citation admits them.
 (fn tic_leafbit ((t FnTrie)) Int
   (match t
     ((FnLeaf _ _) 1)
@@ -167,7 +163,7 @@
 ;; first explodes it one level (recursively, while the two names share chars).
 (fn trie_insert_chars ((cs (List Int)) (fd FnDef) (t FnTrie)) FnTrie
   (measure
-    (+ (* 2 (tic_len cs)) (tic_leafbit t))
+    (+ (* 2 (len cs)) (tic_leafbit t))
     ;; site 0 (FnLeaf arm): cs unchanged, t = (FnLeaf suffix old) → branch.
     ;; decrease: leafbit(leaf_split …)=0 (tic_split_branch) < leafbit t =1.
     (steps
@@ -176,8 +172,8 @@
        (rewrite (lemma tic_leafbit_fnleaf) lr lhs true ()))
       (by arith (list 1 0 0)))
     ;; nonneg: 0 <= 2*(len cs) + 0.
-    (have (= (le 0 (tic_len cs)) True)
-      (rewrite-with (lemma tic_len_nonneg) lr lhs ((inst xs cs)) () refl)
+    (have (= (le 0 (len cs)) True)
+      (rewrite-with (lemma len_nonneg) lr lhs ((inst xs cs)) () refl)
       (steps
         ((rewrite (lemma tic_split_branch) lr lhs true ()))
         (by arith (list 1 0 0 2))))
@@ -190,11 +186,11 @@
         ((rewrite (premise 0) lr lhs true ())
          (rewrite (premise 1) lr lhs true ())
          (rewrite (lemma tic_leafbit_fntrie) lr lhs true ())
-         (rewrite (lemma tic_len_cons) lr lhs true ()))
+         (rewrite (lemma len_cons) lr lhs true ()))
         (by arith (list 1 0 0 0 1))))
     ;; nonneg: 0 <= 2*(len rest) + leafbit sub.
-    (have (= (le 0 (tic_len rest)) True)
-      (rewrite-with (lemma tic_len_nonneg) lr lhs ((inst xs rest)) () refl)
+    (have (= (le 0 (len rest)) True)
+      (rewrite-with (lemma len_nonneg) lr lhs ((inst xs rest)) () refl)
       (have (= (le 0 (tic_leafbit sub)) True)
         (rewrite-with (lemma tic_leafbit_ge0) lr lhs ((inst tt sub)) () refl)
         (by arith (list 1 0 0 0 2 1)))))
@@ -217,30 +213,6 @@
 ;; ---- totality support for trie_insert_chars (cited by its measure) ---------
 ;; None of these reaches trie_insert_chars in the call graph, so stratified
 ;; citation admits them as same-closure facts.
-
-;; tic_len's defining equations.
-(claim tic_len_nil (goal () () (= (tic_len Nil) 0)) (steps ((simp lhs)) refl))
-
-(claim tic_len_cons
-  (goal ((h Int) (t (List Int))) () (= (tic_len (Cons h t)) (+ 1 (tic_len t))))
-  (steps ((simp lhs)) refl))
-
-;; 0 <= tic_len xs. Induction; the step materializes the IH as a premise
-;; (farkas does not read induct IHs as slots), then bumps it past the +1.
-(claim tic_len_nonneg
-  (goal ((xs (List Int))) () (= (le 0 (tic_len xs)) True))
-  (induct xs
-    ((case Nil
-       (steps
-         ((rewrite (lemma tic_len_nil) lr lhs true ()))
-         (by arith (list 1))))
-     (case Cons
-       (h t)
-       (have (= (le 0 (tic_len t)) True)
-         (steps ((rewrite (hyp 0) lr lhs true ())) refl)
-         (steps
-           ((rewrite (lemma tic_len_cons) lr lhs true ()))
-           (by arith (list 1 1))))))))
 
 ;; tic_leafbit's defining equations.
 (claim tic_leafbit_fnleaf
@@ -428,7 +400,7 @@
   (measure (struct t))
   (match t
     ((TVar x)
-     (match (assoc_sym_type x env)
+     (match (assoc_sym x env)
        ((Some t2) t2)
        (None t)))
     ((TCon c args) (TCon c (type_subst_list env args)))))
@@ -440,17 +412,11 @@
     (Nil Nil)
     ((Cons h t) (Cons (type_subst env h) (type_subst_list env t)))))
 
+;; aliases of the kit's assoc_sym / zip at the (Symbol, Type) instance — kept by
+;; name for their citers outside this file (checker, trace, tools/prove,
+;; tools/search).
 (fn assoc_sym_type ((x Symbol) (env (List (Pair Symbol Type)))) (Option Type)
-  (measure (struct env))
-  (match env
-    (Nil None)
-    ((Cons (Pair k v) rest) (if (sym_eq x k) (Some v) (assoc_sym_type x rest)))))
+  (assoc_sym x env))
 
 (fn zip_pairs ((xs (List Symbol)) (ys (List Type))) (List (Pair Symbol Type))
-  (measure (struct xs))
-  (match xs
-    (Nil Nil)
-    ((Cons x xrest)
-     (match ys
-       (Nil Nil)
-       ((Cons y yrest) (Cons (Pair x y) (zip_pairs xrest yrest)))))))
+  (zip xs ys))

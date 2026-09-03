@@ -1,0 +1,43 @@
+;;; tvar_scope.shard — issue-#38 regression pin: a claim's binder types
+;;; resolve in the claim's OWN module scope.
+;;;
+;;; tvar_scope_lib's `hd_or_cons` binds `(h T)` with `T` undeclared there —
+;;; a generic type variable. This importer declares its own `(type T …)`.
+;;; Before the fix the goal parser took the type names of the whole MERGED
+;;; closure (driver.shard's module_type_names), so the importer's `T` turned
+;;; the library's binder into a type constructor that resolves to nothing in
+;;; the library's scope: `TYPE! hd_or_cons — binder h: unknown type: T`.
+;;; A claim's checkability changed with names an unrelated importer declared
+;;; (the QName-shadowing family, on type names). Now parse_goal_r filters the
+;;; names through the file's own resolution context (scope_type_names): a
+;;; name that resolves to no typedef there is generic, in every closure.
+;;;
+;;; Expected: hd_or_cons PASSES in this closure; the local `T` is concrete
+;;; here (own_t_concrete types only if `v : T` is this module's typedef); the
+;;; generic lemma instantiates at Int and at this module's T alike; and a
+;;; genuinely unknown type constructor in a binder (bogus_applied) is still a
+;;; hard TYPE! failure — its fails-base.txt row is part of the pin.
+(import "../../kernel/stdlib.shard")
+(import "tvar_scope_lib.shard")
+(use (:: pins lang tvar_scope_lib hd_or))
+(use (:: pins lang tvar_scope_lib hd_or_cons))
+
+(type T (T Int Int))
+
+(fn tfst ((v T)) Int
+  (match v
+    ((T a _) a)))
+
+(claim own_t_concrete (goal ((v T)) () (= (tfst v) (tfst v))) refl)
+
+(claim hd_or_at_int
+  (goal ((d Int) (h Int) (t (List Int))) () (= (hd_or d (Cons h t)) h))
+  (steps ((rewrite (lemma hd_or_cons) lr lhs true ())) refl))
+
+(claim hd_or_at_own_t
+  (goal ((d T) (h T) (t (List T))) () (= (hd_or d (Cons h t)) h))
+  (steps ((rewrite (lemma hd_or_cons) lr lhs true ())) refl))
+
+;; NEGATIVE twin: an applied type whose head is declared nowhere is a type
+;; constructor (never a variable) and must still fail the type gate.
+(claim bogus_applied (goal ((x (Bogus Int))) () (= x x)) refl)

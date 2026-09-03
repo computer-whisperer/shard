@@ -116,6 +116,7 @@ TARGETS=(
   pins/lang/shadow_rejects.shard
   pins/lang/finsplit_shadow_rejects.shard
   pins/lang/prim_shadow_rejects.shard
+  pins/lang/tvar_scope.shard
   pins/proof/finsplit_test.shard
   pins/proof/have_test.shard
   pins/proof/inject_basic.shard
@@ -124,6 +125,8 @@ TARGETS=(
   pins/proof/rewrite_at_rejects.shard
   pins/proof/sort_gate.shard
   pins/proof/sort_gate_rejects.shard
+  pins/proof/sort_gate_count.shard
+  pins/proof/rewrite_first_arms.shard
   pins/proof/conv_probe.shard
   pins/proof/conv_rejects.shard
   pins/proof/cert_rows.shard
@@ -437,6 +440,7 @@ TARGETS=(
   tools/search/pcb_lns_probe.shard
 )
 CLOSED_TARGETS=(
+  tools/build/build_products_closed.shard
   std/rat/mod.req/gcd.shard
   std/rat/rat.shard
   examples/rat_demo.shard
@@ -1579,7 +1583,9 @@ fi
 # / KERNEL / BYTETIE (cert↔binary) / ENGINE (V8; the x86 build's engine
 # is the CPU itself) — run end to end. Summary
 # line only; any gate failure changes it and fails the corpus diff.
-for LB in "tools/build/build.sh tools/build/build_products.shard"; do
+LB_LISTS=("tools/build/build.sh tools/build/build_products.shard")
+if [ "$CLOSED" = 1 ]; then LB_LISTS+=("tools/build/build.sh tools/build/build_products_closed.shard"); fi
+for LB in "${LB_LISTS[@]}"; do
   echo "=== lowering: $LB ==="
   if [ -n "${SKIP_LOWERING:-}" ]; then
     echo "SKIPPED (SKIP_LOWERING set -- the driver ran separately this cycle)"
@@ -1587,7 +1593,7 @@ for LB in "tools/build/build.sh tools/build/build_products.shard"; do
     if bash $LB > "$TMP/lb.out" 2>&1; then
       tail -1 "$TMP/lb.out"
     else
-      echo "BUILD FAILED"
+      echo "FAIL build-products (build.sh nonzero; a gate or an order failed)"
       tail -20 "$TMP/lb.out"
     fi
   else

@@ -36,6 +36,7 @@
 (import "../../kernel/loader.shard")
 (import "../../kernel/term.shard")
 (import "../../meta/format")
+(import "../../std/list")  ; take / drop (polymorphic list algebra)
 
 (use (:: kernel loader World))
 (use (:: kernel loader get_args))
@@ -47,6 +48,8 @@
 (use (:: kernel reader SrcEntry))
 (use (:: kernel term show_int))
 (use (:: kernel term append_int))
+(use (:: std list take))
+(use (:: std list drop))
 (use (:: meta format *))
 
 ;; ---------------------------------------------------------------------------
@@ -71,18 +74,6 @@
   (match items
     ((Cons (CAtom a) _) (Some a))
     (_ None)))
-
-(fn dg_take ((ns (List CNode)) (n Int)) (List CNode)
-  (measure (struct ns))
-  (match ns
-    (Nil Nil)
-    ((Cons h t) (if (le n 0) Nil (Cons h (dg_take t (- n 1)))))))
-
-(fn dg_drop ((ns (List CNode)) (n Int)) (List CNode)
-  (measure (struct ns))
-  (match ns
-    (Nil Nil)
-    ((Cons h t) (if (le n 0) (Cons h t) (dg_drop t (- n 1))))))
 
 (fn dg_init ((ns (List CNode))) (List CNode)
   (measure (struct ns))
@@ -112,8 +103,8 @@
 ;; (fn HEAD PARAMS RET BODY [measure]) -> (sig fn HEAD PARAMS RET)  ; body N
 (fn dg_fn ((items (List CNode))) (List CNode)
   (Cons
-    (CList (Cons (CAtom "sig") (dg_take items 4)))
-    (Cons (dg_trailer "body" (dg_drop items 4)) Nil)))
+    (CList (Cons (CAtom "sig") (take 4 items)))
+    (Cons (dg_trailer "body" (drop 4 items)) Nil)))
 
 ;; (claim NAME (goal …) PROOF) -> (claim NAME (goal …))  ; proof N
 (fn dg_claim ((items (List CNode))) (List CNode)
@@ -121,9 +112,7 @@
 
 ;; (fulfills NAME PROOF) / (returns NAME PROOF) -> (HEAD NAME)  ; proof N
 (fn dg_named ((items (List CNode))) (List CNode)
-  (Cons
-    (CList (dg_take items 2))
-    (Cons (dg_trailer "proof" (dg_drop items 2)) Nil)))
+  (Cons (CList (take 2 items)) (Cons (dg_trailer "proof" (drop 2 items)) Nil)))
 
 (fn dg_form ((items (List CNode))) (List CNode)
   (match (dg_head items)
@@ -134,13 +123,6 @@
      (if (int_list_eq h "fulfills") (dg_named items)
      (if (int_list_eq h "returns") (dg_named items)
      (Cons (CList items) Nil))))))))
-
-;; push xs onto a reversed accumulator
-(fn dg_rev_onto ((xs (List CNode)) (acc (List CNode))) (List CNode)
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (dg_rev_onto t (Cons h acc)))))
 
 ;; ---------------------------------------------------------------------------
 ;; the walk over top-level nodes. `hdr` is True until the first form: header
@@ -156,7 +138,7 @@
     ((Cons n t)
      (match n
        ((CList items0)
-        (dg_walk t tier False (dg_rev_onto (dg_form (dg_items items0)) acc)))
+        (dg_walk t tier False (rev_n (dg_form (dg_items items0)) acc)))
        ((CQuote _) (dg_walk t tier False (Cons n acc)))
        ((CAtom _) (dg_walk t tier False (Cons n acc)))
        ((CStr _) (dg_walk t tier False (Cons n acc)))
@@ -165,14 +147,8 @@
          (if (if hdr True (int_eq tier 2)) (dg_walk t tier hdr (Cons n acc))
          (dg_walk t tier hdr acc)))))))
 
-(fn dg_rev ((xs (List CNode)) (acc (List CNode))) (List CNode)
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (dg_rev t (Cons h acc)))))
-
 (fn digest ((nodes (List CNode)) (tier Int)) (List Int)
-  (pp_top (dg_rev (dg_walk nodes tier True Nil) Nil)))
+  (pp_top (rev_n (dg_walk nodes tier True Nil) Nil)))
 
 ;; ---------------------------------------------------------------------------
 ;; CLOSURE MODE: every resolved source, banner + digest, in loader order

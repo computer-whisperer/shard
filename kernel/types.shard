@@ -26,9 +26,10 @@
 ;;; the type env is innermost-first — BVar 0 = LAST fn param = LAST let
 ;;; binding = RIGHTMOST pattern var.
 ;;;
-;;; Helpers are tc_-prefixed: module assembly keeps the FIRST fn of a
-;;; given name, so sharing names with trace/driver helpers would
-;;; silently shadow. All-new names make the file order-independent.
+;;; Helpers are tc_-prefixed — a convention from before QName namespacing
+;;; (module assembly then kept the FIRST fn of a given name). The shared
+;;; list helpers (app/len/nth/mem_sym/rev_onto/assoc_sym/zip) come from
+;;; term.shard's polymorphic kit.
 
 ;; imports — the kernel files this module uses (dependency-tracked)
 (import "stdlib.shard")
@@ -74,36 +75,6 @@
     (div-facts n 10 q (by arith (list 10 1 -1 0 1 10))))
   (if (lt n 10) (Cons (+ 48 n) Nil)
   (append_int (tc_nat (ediv n 10)) (Cons (+ 48 (mod n 10)) Nil))))
-
-(fn tc_sym_in ((x Symbol) (xs (List Symbol))) Bool
-  (measure (struct xs))
-  (match xs
-    (Nil False)
-    ((Cons h t) (if (sym_eq x h) True (tc_sym_in x t)))))
-
-(fn tc_nth_ty ((ts (List Type)) (k Int)) (Option Type)
-  (measure (struct ts))
-  (match ts
-    (Nil None)
-    ((Cons h t) (if (int_eq k 0) (Some h) (tc_nth_ty t (- k 1))))))
-
-(fn tc_app_tys ((xs (List Type)) (ys (List Type))) (List Type)
-  (measure (struct xs))
-  (match xs
-    (Nil ys)
-    ((Cons h t) (Cons h (tc_app_tys t ys)))))
-
-(fn tc_len_tys ((ts (List Type))) Int
-  (measure (struct ts))
-  (match ts
-    (Nil 0)
-    ((Cons _ t) (+ 1 (tc_len_tys t)))))
-
-(fn tc_len_syms ((xs (List Symbol))) Int
-  (measure (struct xs))
-  (match xs
-    (Nil 0)
-    ((Cons _ t) (+ 1 (tc_len_syms t)))))
 
 (fn tc_tds ((m Module)) (List TypeDef)
   (match m
@@ -167,24 +138,18 @@
 ;; branches are biased toward rejection (resolve→under-resolved, occurs→True,
 ;; unify→None), keeping the checker sound-incomplete.
 
-(fn tc_subst_len ((s (List (Pair Symbol Type)))) Int
-  (measure (struct s))
-  (match s
-    (Nil 0)
-    ((Cons _ rest) (+ 1 (tc_subst_len rest)))))
-
 (fn tc_budget () Int 1000000000)
 
 ;; head-walk: resolve a bound meta to its binding (recursively at the head).
 (fn tc_walk ((t Type) (s (List (Pair Symbol Type)))) Type
-  (tc_walk_go t s (tc_subst_len s)))
+  (tc_walk_go t s (len s)))
 
 (fn tc_walk_go ((t Type) (s (List (Pair Symbol Type))) (fuel Int)) Type
   (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
   (if (lt fuel 1) t
   (match t
     ((TVar x)
-     (match (assoc_sym_type x s)
+     (match (assoc_sym x s)
        ((Some t2) (tc_walk_go t2 s (- fuel 1)))
        (None t)))
     (_ t))))
@@ -331,7 +296,7 @@
 (fn tc_collect_tvars1 ((t Type) (acc (List Symbol))) (List Symbol)
   (measure (struct t))
   (match t
-    ((TVar x) (if (tc_sym_in x acc) acc (Cons x acc)))
+    ((TVar x) (if (mem_sym x acc) acc (Cons x acc)))
     ((TCon _ args) (tc_collect_tvars args acc))))
 
 ;; ---------------------------------------------------------------------------
@@ -367,7 +332,7 @@
 ;; the native primitive signatures (mirrors prim.rs / reduce.shard's table).
 (fn tc_builtin_sig ((f Symbol)) (Option (Pair (List Type) Type))
   (if
-    (tc_sym_in
+    (mem_sym
       f
       (list
         (quote +)
@@ -383,7 +348,7 @@
         (quote bshl)
         (quote bshr)))
     (Some (Pair (list (tc_t_int) (tc_t_int)) (tc_t_int)))
-    (if (tc_sym_in f (list (quote int_eq) (quote lt) (quote le)))
+    (if (mem_sym f (list (quote int_eq) (quote lt) (quote le)))
       (Some (Pair (list (tc_t_int) (tc_t_int)) (tc_t_bool)))
     (if (sym_eq f (quote sym_eq))
       (Some (Pair (list (tc_t_sym) (tc_t_sym)) (tc_t_bool)))
@@ -417,7 +382,7 @@
     ((IntLit _) (TcOk tc (tc_t_int)))
     ((SymLit _) (TcOk tc (tc_t_sym)))
     ((BVar k)
-     (match (tc_nth_ty env k)
+     (match (nth env k)
        ((Some t) (TcOk tc t))
        (None (TcErr "unbound BVar (binder structure bug)"))))
     ;; a free variable: a goal's ∀-bound param (parse_goal leaves them as
@@ -582,7 +547,7 @@
            (match (tc_arms_infer m tc2 fenv env st arms Nil)
              ((TBErr msg) (TcErr msg))
              ((TBOk tc3 bts_rev)
-              (let ((bts (tc_rev_tys bts_rev Nil)))
+              (let ((bts (rev_onto bts_rev Nil)))
                 (match (tc_arms_join arms bts rty False tc3)
                   ((TcsErr msg) (TcErr msg))
                   ((TcsOk tc4)
@@ -593,7 +558,7 @@
      (match (tc_infer_rhss m tc fenv env bs Nil)
        ((TBErr msg) (TcErr msg))
        ;; rhss collected with prepend → innermost-first (BVar 0 = last binding)
-       ((TBOk tc1 binds) (tc_infer m tc1 fenv (tc_app_tys binds env) body))))))
+       ((TBOk tc1 binds) (tc_infer m tc1 fenv (app binds env) body))))))
 
 ;; the Nat-literal VIEW — the typing twin of reduce.shard's match_nat_view
 ;; (core identity): a NONNEG IntLit IS a ground Nat value — the kernel's own
@@ -698,7 +663,7 @@
      (match (tc_pat m tc st p Nil)
        ((TBErr msg) (TBErr msg))
        ((TBOk tc1 binds)
-        (match (tc_infer m tc1 fenv (tc_app_tys binds env) body)
+        (match (tc_infer m tc1 fenv (app binds env) body)
           ((TcErr msg) (TBErr msg))
           ((TcOk tc2 bt) (tc_arms_infer m tc2 fenv env st rest (Cons bt acc)))))))))
 
@@ -829,7 +794,7 @@
   (match t
     ((TVar x)
      (if anytv None
-     (if (tc_sym_in x allowed) None
+     (if (mem_sym x allowed) None
      (Some (append_int "unknown type variable: " (chars_of_sym x))))))
     ((TCon c args)
      (if (tc_is_prim_ty c)
@@ -843,9 +808,8 @@
        (match (find_typedef c (tc_tds m))
          (None (Some (append_int "unknown type: " (chars_of_sym (qn_name c)))))
          ((Some (TypeDef _ tparams _ _))
-          (if (int_eq (tc_len_tys args) (tc_len_syms tparams))
-            (tc_tys_wf m allowed anytv args)
-            (Some (append_int "wrong type arity: " (chars_of_sym (qn_name c)))))))))))
+          (if (int_eq (len args) (len tparams)) (tc_tys_wf m allowed anytv args)
+          (Some (append_int "wrong type arity: " (chars_of_sym (qn_name c)))))))))))
 
 (fn tc_tys_wf ((m Module) (allowed (List Symbol)) (anytv Bool) (ts (List Type)))
   (Option (List Int))
@@ -946,7 +910,7 @@
      (match (tc_tys_wf m Nil True (Cons ret ptypes))
        ((Some msg) (Some (tc_label "fn " (qn_name name) msg)))
        (None
-         (match (tc_infer m (Tc 0 Nil) Nil (tc_rev_tys ptypes Nil) body)
+         (match (tc_infer m (Tc 0 Nil) Nil (rev_onto ptypes Nil) body)
            ((TcErr msg) (Some (tc_label "fn " (qn_name name) msg)))
            ((TcOk tc bt)
             (match (tc_unify bt (tc_fn_body_ret m ret) tc)
@@ -964,12 +928,6 @@
                     (qn_name name)
                     (tc_mismatch "body vs declared return" bt ret tc)))))
               ((Some _) None)))))))))
-
-(fn tc_rev_tys ((ts (List Type)) (acc (List Type))) (List Type)
-  (measure (struct ts))
-  (match ts
-    (Nil acc)
-    ((Cons h t) (tc_rev_tys t (Cons h acc)))))
 
 ;; a goal: binder types well-formed (free TVars allowed — they're the
 ;; claim's rigid type variables), then premises and the equation each
@@ -1092,20 +1050,12 @@
        (None (tc_sweep_fns m rest))
        ((Some msg) (Cons (Pair (tc_fd_name fd) msg) (tc_sweep_fns m rest)))))))
 
-(fn tc_warn_concat
-  ((a (List (Pair Symbol (List Int)))) (b (List (Pair Symbol (List Int)))))
-  (List (Pair Symbol (List Int)))
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (tc_warn_concat t b)))))
-
 (fn type_report ((m Module)) (List (Pair Symbol (List Int)))
   (match m
     ((Module tds fns exts _ _)
-     (tc_warn_concat
+     (app
        (tc_sweep_tds m tds)
-       (tc_warn_concat (tc_sweep_exts m exts) (tc_sweep_fns m fns))))))
+       (app (tc_sweep_exts m exts) (tc_sweep_fns m fns))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Mid-proof entries. Proof steps that INTRODUCE terms (a have's cut
@@ -1168,7 +1118,7 @@
 (fn tc_site_term ((o Expr) (pat_vars (List Symbol)) (env Env)) TcTerm
   (match o
     ((FVar f)
-     (if (tc_sym_in f pat_vars)
+     (if (mem_sym f pat_vars)
        (match (lookup f env)
          ((Some v) (TTOk v))
          (None

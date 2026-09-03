@@ -39,17 +39,9 @@
 (type RItems (RIOk (List SExpr) (List Int)) (RIErr))
 
 ;; ---- small list/char helpers ----------------------------------------------
-(fn rev_i ((xs (List Int)) (acc (List Int))) (List Int)
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (rev_i t (Cons h acc)))))
-
-(fn sym_mem ((x Symbol) (xs (List Symbol))) Bool
-  (measure (struct xs))
-  (match xs
-    (Nil False)
-    ((Cons h t) (if (sym_eq x h) True (sym_mem x t)))))
+;; alias of the kit's rev_onto at (List Int) — kept by name for its citers outside
+;; the kernel (meta/format, tools/explain).
+(fn rev_i ((xs (List Int)) (acc (List Int))) (List Int) (rev_onto xs acc))
 
 (fn is_ws ((c Int)) Bool
   (if (int_eq c 32) True  ; space
@@ -101,9 +93,9 @@
 (fn take_atom_go ((cs (List Int)) (acc (List Int))) (Pair (List Int) (List Int))
   (measure (struct cs))
   (match cs
-    (Nil (Pair (rev_i acc Nil) Nil))
+    (Nil (Pair (rev_onto acc Nil) Nil))
     ((Cons c rest)
-     (if (is_delim c) (Pair (rev_i acc Nil) cs)
+     (if (is_delim c) (Pair (rev_onto acc Nil) cs)
      (take_atom_go rest (Cons c acc))))))
 
 (fn take_atom ((cs (List Int))) (Pair (List Int) (List Int))
@@ -178,12 +170,6 @@
        (match (take_atom (Cons c rest))
          ((Pair atom rest2) (REOk (classify_atom atom) rest2)))))))))))
 
-(fn rev_sexpr ((xs (List SExpr)) (acc (List SExpr))) (List SExpr)
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (rev_sexpr t (Cons h acc)))))
-
 ;; Read s-expressions until the matching ')'. Accumulator style: the host
 ;; stack depth is the NESTING depth (via read_expr), never the sibling count.
 (fn read_items_go ((cs0 (List Int)) (acc (List SExpr)) (fuel Int)) RItems
@@ -198,7 +184,7 @@
     (Nil RIErr)  ; unterminated list
     ((Cons c rest)
      (if (int_eq c 41)  ; ')' → done
-       (RIOk (rev_sexpr acc Nil) rest)
+       (RIOk (rev_onto acc Nil) rest)
        (match (read_expr_go (Cons c rest) (- fuel 1))
          (REErr RIErr)
          ((REOk head rest2) (read_items_go rest2 (Cons head acc) (- fuel 1)))))))))
@@ -211,7 +197,7 @@
     (Nil REErr)  ; unterminated string
     ((Cons c rest)
      (if (int_eq c 34)  ; closing '"'
-       (REOk (SStr (rev_i acc Nil)) rest)
+       (REOk (SStr (rev_onto acc Nil)) rest)
      (if (int_eq c 92)  ; '\' escape
        (match rest
          (Nil REErr)
@@ -244,12 +230,6 @@
 
 ;; (list E1 E2 …) → (Cons E1 (Cons E2 … Nil)). Accumulator style: reverse,
 ;; then fold the object list innermost-first — every call a tail call.
-(fn rev_expr_l ((xs (List Expr)) (acc (List Expr))) (List Expr)
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (rev_expr_l t (Cons h acc)))))
-
 (fn list_sugar_go ((res (List Expr)) (acc Expr)) Expr
   (measure (struct res))
   (match res
@@ -258,13 +238,7 @@
      (list_sugar_go t (Ctor (qn (quote Cons)) (Cons h (Cons acc Nil)))))))
 
 (fn list_sugar ((es (List Expr))) Expr
-  (list_sugar_go (rev_expr_l es Nil) (Ctor (qn (quote Nil)) Nil)))
-
-(fn append_sym ((xs (List Symbol)) (ys (List Symbol))) (List Symbol)
-  (measure (struct xs))
-  (match xs
-    (Nil ys)
-    ((Cons h t) (Cons h (append_sym t ys)))))
+  (list_sugar_go (rev_onto es Nil) (Ctor (qn (quote Nil)) Nil)))
 
 ;; ===========================================================================
 ;; QUALIFIED-PATH FORM  (Stage 2.5)  —  `(:: SEG … NAME)`
@@ -324,16 +298,9 @@
     (Nil Nil)
     ((Cons s _) (Cons s Nil))))
 
-(fn drop_last_sym ((p (List Symbol))) (List Symbol)
-  (measure (struct p))
-  (match p
-    (Nil Nil)
-    ((Cons _ Nil) Nil)
-    ((Cons h t) (Cons h (drop_last_sym t)))))
-
 (fn drop_last_n ((p (List Symbol)) (n Int)) (List Symbol)
   (measure n (by arith (list 1 0)) (by arith (list 1 1)))
-  (if (le n 0) p (drop_last_n (drop_last_sym p) (- n 1))))
+  (if (le n 0) p (drop_last_n (init p) (- n 1))))
 
 (fn count_supers ((segs (List Symbol)) (k Int)) Int
   (measure (struct segs))
@@ -346,14 +313,6 @@
   (match segs
     (Nil Nil)
     ((Cons s t) (if (sym_eq s (quote super)) (drop_supers t) segs))))
-
-;; assoc lookup over a name→module-path table (first match wins).
-(fn assoc_sym ((k Symbol) (tbl (List (Pair Symbol (List Symbol)))))
-  (Option (List Symbol))
-  (measure (struct tbl))
-  (match tbl
-    (Nil None)
-    ((Cons (Pair n p) rest) (if (sym_eq k n) (Some p) (assoc_sym k rest)))))
 
 ;; Re-root a raw segment list (the WHOLE list is a module path — no trailing
 ;; item name) against `curmod` and the use-bound module `aliases` (Stage 2.5b):
@@ -370,14 +329,12 @@
   (match segs
     (Nil curmod)  ; `(:: *)` alone → glob the current module
     ((Cons s0 rest)
-     (if (sym_eq s0 (quote self)) (append_sym curmod rest)
-     (if (sym_eq s0 (quote crate)) (append_sym (first_seg curmod) rest)
+     (if (sym_eq s0 (quote self)) (app curmod rest)
+     (if (sym_eq s0 (quote crate)) (app (first_seg curmod) rest)
      (if (sym_eq s0 (quote super))
-       (append_sym
-         (drop_last_n curmod (count_supers segs 0))
-         (drop_supers segs))
+       (app (drop_last_n curmod (count_supers segs 0)) (drop_supers segs))
        (match (assoc_sym s0 aliases)
-         ((Some base) (append_sym base rest))  ; use-bound module alias
+         ((Some base) (app base rest))  ; use-bound module alias
          (None segs))))))))  ; absolute crate-rooted
 
 ;; A `(:: MOD … NAME)` head: re-root the MOD path, keep NAME as the local name.
@@ -390,12 +347,10 @@
   (QName (resolve_full_modpath rawpath curmod aliases) name))
 
 ;; Push binder names (in source order) onto the scope: the LAST name ends
-;; up at the front, so it becomes BVar 0 (cf. LANGUAGE.md §7).
+;; up at the front, so it becomes BVar 0 (cf. LANGUAGE.md §7). The kit's
+;; rev_onto under the name the binder convention is documented by.
 (fn push_scope ((names (List Symbol)) (scope (List Symbol))) (List Symbol)
-  (measure (struct names))
-  (match names
-    (Nil scope)
-    ((Cons n rest) (push_scope rest (Cons n scope)))))
+  (rev_onto names scope))
 
 ;; first char in A-Z — the ctor-name convention the pattern grammar leans on
 (fn sym_capitalized ((s Symbol)) Bool
@@ -427,7 +382,7 @@
         ((rewrite (lemma size_sexpr_list_nil) lr lhs true ()))
         (by arith (list 1 0 0 0 0 1))))
     ;; site 2 — (elab_pats rest ctors). guards: ::=False, quote=False,
-    ;; (sym_mem h ctors)=True → 6 premises total.
+    ;; (mem_sym h ctors)=True → 6 premises total.
     (steps
       ((rewrite (premise 0) lr lhs true ())
        (rewrite (lemma size_sexpr_slist) lr lhs true ())
@@ -458,7 +413,7 @@
     ((SInt n) (Some (Pair (PInt n) Nil)))
     ((SStr _) None)  ; strings aren't narrow patterns
     ((SSym name)
-     (if (sym_mem name ctors)
+     (if (mem_sym name ctors)
        (Some (Pair (PCtor (qn name) Nil) Nil))  ; bare 0-ary ctor pattern
        ;; a CAPITALIZED bare symbol that names no visible ctor is refused, not
        ;; bound: silently binding it is the ctor-capture footgun (an unimported
@@ -474,7 +429,7 @@
           ((SSym h)
            (if (sym_eq h (coloncolon_sym)) (elab_qpat rest Nil ctors)  ; (:: … Ctor)
            (if (sym_eq h (quote quote)) (elab_psym rest)  ; (quote SYM) → PSym
-           (if (sym_mem h ctors)
+           (if (mem_sym h ctors)
              (match (elab_pats rest ctors)
                (None None)
                ((Some (Pair ps names)) (Some (Pair (PCtor (qn h) ps) names))))
@@ -491,7 +446,7 @@
   (measure
     (+ 1 (+ (size_sexpr_list segs) (size_sexpr_list subs)))
     ;; site 1 — (elab_pats subs ctors). subs is a PARAM; both premises (qpath
-    ;; result, sym_mem guard) drop (q untyped). decrease needs segs >= 0.
+    ;; result, mem_sym guard) drop (q untyped). decrease needs segs >= 0.
     (have (= (le 0 (size_sexpr_list segs)) True)
       (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
       (by arith (list 1 1)))
@@ -499,7 +454,7 @@
   (match (qpath_qname segs)
     (None None)
     ((Some q)
-     (if (sym_mem (qn_name q) ctors)
+     (if (mem_sym (qn_name q) ctors)
        (match (elab_pats subs ctors)
          (None None)
          ((Some (Pair ps names)) (Some (Pair (PCtor q ps) names))))
@@ -539,7 +494,7 @@
        ((Some (Pair p pn))
         (match (elab_pats t ctors)
           (None None)
-          ((Some (Pair ps tn)) (Some (Pair (Cons p ps) (append_sym pn tn))))))))))
+          ((Some (Pair ps tn)) (Some (Pair (Cons p ps) (app pn tn))))))))))
 
 ;; ---- compound expression forms ----
 (fn elaborate_list
@@ -867,7 +822,7 @@
   (measure
     (+ 1 (+ (size_sexpr_list segs) (size_sexpr_list valargs)))
     ;; site 1 — (elaborate_list valargs). valargs a PARAM; both premises (qpath
-    ;; result, sym_mem guard) drop (q untyped). decrease needs segs >= 0.
+    ;; result, mem_sym guard) drop (q untyped). decrease needs segs >= 0.
     (have (= (le 0 (size_sexpr_list segs)) True)
       (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
       (by arith (list 1 1)))
@@ -878,7 +833,7 @@
      (match (elaborate_list valargs ctors scope)
        (None None)
        ((Some eargs)
-        (if (sym_mem (qn_name q) ctors) (Some (Ctor q eargs))
+        (if (mem_sym (qn_name q) ctors) (Some (Ctor q eargs))
         (Some (Call q eargs))))))))
 
 ;; (refine_try R EXPR): the decidable downcast into a refined type R. R is
@@ -949,7 +904,7 @@
     (None None)
     ((Some eargs)
      (if (sym_eq h (quote refine_try)) (elab_refine_try eargs)
-     (if (sym_mem h ctors) (Some (Ctor (qn h) eargs))
+     (if (mem_sym h ctors) (Some (Ctor (qn h) eargs))
      (Some (Call (qn h) eargs)))))))))))))))  ; ctor set decides Ctor vs Call
 
 (fn elaborate ((s SExpr) (ctors (List Symbol)) (scope (List Symbol)))
@@ -988,7 +943,7 @@
      (match (find_index_sym name scope 0)
        ((Some i) (Some (BVar i)))  ; local binding → de Bruijn index
        (None
-         (if (sym_mem name ctors) (Some (Ctor (qn name) Nil))  ; bare nullary ctor
+         (if (mem_sym name ctors) (Some (Ctor (qn name) Nil))  ; bare nullary ctor
          (Some (FVar name))))))  ; free variable
     ((SList items)
      (match items
@@ -1022,7 +977,7 @@
   (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
   (if (lt fuel 1) None
   (match (skip_ws src)
-    (Nil (Some (rev_sexpr acc Nil)))
+    (Nil (Some (rev_onto acc Nil)))
     ((Cons c rest0)
      (match (read_expr (Cons c rest0))
        (REErr None)
@@ -1208,7 +1163,7 @@
         (by arith (list 1 0 0 0 0 1 1)))))
   (match s
     ((SSym name)
-     (if (sym_mem name tparams) (Some (TVar name))  ; a type parameter in scope
+     (if (mem_sym name tparams) (Some (TVar name))  ; a type parameter in scope
      (Some (TCon (qn name) Nil))))  ; 0-ary type constructor
     ;; A numeric LITERAL TYPE — the width index of (Word W S). Encoded as
     ;; a TCon whose name is the canonical decimal symbol: unification and
@@ -1510,7 +1465,7 @@
   (match tds
     (Nil Nil)
     ((Cons (TypeDef _ _ cds _) rest)
-     (append_sym (ctordef_names cds) (typedef_ctors rest)))))
+     (app (ctordef_names cds) (typedef_ctors rest)))))
 
 ;; The TYPE names a module declares — the proof-DSL reader uses these to tell a
 ;; concrete 0-ary type constructor (in `type_names`) from a goal type variable.
@@ -1602,18 +1557,6 @@
     (Nil Nil)
     ((Cons n t) (Cons (SSym n) (rx_ssyms t)))))
 
-(fn rx_len ((ns (List Symbol))) Int
-  (measure (struct ns))
-  (match ns
-    (Nil 0)
-    ((Cons _ t) (+ 1 (rx_len t)))))
-
-(fn rx_app_sx ((a (List SExpr)) (b (List SExpr))) (List SExpr)
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (rx_app_sx t b)))))
-
 ;; A binder name distinct from every field name: candidates base, base0,
 ;; base00, … — with F fields at most F candidates are taken, so the first
 ;; F+1 contain a free one (fuel = F+1 at the call site).
@@ -1625,12 +1568,12 @@
   Symbol
   (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
   (if (le fuel 0) (sym_of_chars (append_int base (rx_zeros k)))
-  (if (sym_mem (sym_of_chars (append_int base (rx_zeros k))) avoid)
+  (if (mem_sym (sym_of_chars (append_int base (rx_zeros k))) avoid)
     (rx_fresh_go base avoid (+ k 1) (- fuel 1))
     (sym_of_chars (append_int base (rx_zeros k))))))
 
 (fn rx_fresh ((base (List Int)) (avoid (List Symbol))) Symbol
-  (rx_fresh_go base avoid 0 (+ (rx_len avoid) 1)))
+  (rx_fresh_go base avoid 0 (+ (len avoid) 1)))
 
 ;; the (FIELD TYPE) entries; None on malformed entries, duplicate names, or
 ;; a field named `ctor` (reserved for the override entry)
@@ -1642,7 +1585,7 @@
     ((Cons e rest)
      (match e
        ((SList (Cons (SSym n) (Cons ty Nil)))
-        (if (sym_mem n seen) None
+        (if (mem_sym n seen) None
         (if (sym_eq n (quote ctor)) None
         (match (rx_fields_of rest (Cons n seen))
           (None None)
@@ -2004,9 +1947,9 @@
     ((Cons (Pair n ty) t)
      (match rd
        ((RecDef nm c allfs)
-        (rx_app_sx
+        (app
           (rx_def_laws rd vvar n ty)
-          (rx_app_sx
+          (app
             (rx_select_laws_go rd rvar vvar n ty allfs)
             (Cons
               (rx_updupd_law rd rvar vvar uvar n ty)
@@ -2015,9 +1958,7 @@
 (fn rx_laws ((rd RecDef) (rvar Symbol) (vvar Symbol) (uvar Symbol)) (List SExpr)
   (match rd
     ((RecDef name ctor fs)
-     (rx_app_sx
-       (rx_field_laws rd rvar vvar uvar fs)
-       (Cons (rx_eta_law rd rvar) Nil)))))
+     (app (rx_field_laws rd rvar vvar uvar fs) (Cons (rx_eta_law rd rvar) Nil)))))
 
 ;; one record's full expansion, in declaration order: type, accessors,
 ;; updaters, the law family
@@ -2029,11 +1970,9 @@
          (let ((uvar (rx_fresh "u" (rx_names fs))))
            (Cons
              (rx_type_form rd)
-             (rx_app_sx
+             (app
                (rx_accessors rd rvar fs)
-               (rx_app_sx
-                 (rx_updaters rd rvar vvar fs)
-                 (rx_laws rd rvar vvar uvar))))))))))
+               (app (rx_updaters rd rvar vvar fs) (rx_laws rd rvar vvar uvar))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; (make …) / (with …) — the construction and update sugar.
@@ -2080,20 +2019,8 @@
   (match es
     (Nil True)
     ((Cons (SList (Cons (SSym n) (Cons _ Nil))) rest)
-     (if (sym_mem n seen) False (rx_entryish rest (Cons n seen))))
+     (if (mem_sym n seen) False (rx_entryish rest (Cons n seen))))
     ((Cons _ _) False)))
-
-(fn rx_lookup ((n Symbol) (ps (List (Pair Symbol SExpr)))) (Option SExpr)
-  (measure (struct ps))
-  (match ps
-    (Nil None)
-    ((Cons (Pair pn v) t) (if (sym_eq pn n) (Some v) (rx_lookup n t)))))
-
-(fn rx_pair_len ((ps (List (Pair Symbol SExpr)))) Int
-  (measure (struct ps))
-  (match ps
-    (Nil 0)
-    ((Cons _ t) (+ 1 (rx_pair_len t)))))
 
 ;; ctor args in FIELD order from the (already rewritten) entries; None if a
 ;; field is missing (the exactly-once check is the caller's length guard +
@@ -2105,7 +2032,7 @@
   (match fs
     (Nil (Some Nil))
     ((Cons (Pair n _) t)
-     (match (rx_lookup n es)
+     (match (assoc_sym n es)
        (None None)
        ((Some v)
         (match (rx_make_args t es)
@@ -2170,7 +2097,7 @@
                   (match (rw_entries tab args)
                     (None None)
                     ((Some es)
-                     (if (int_eq (rx_pair_len es) (rx_len (rx_names fs)))
+                     (if (int_eq (len es) (len (rx_names fs)))
                        (match (rx_make_args fs es)
                          (None None)
                          ((Some vs) (Some (rx_ctor_app ctor vs))))
@@ -2224,7 +2151,7 @@
          ((Some rd)
           (match (rx_pass tab rest)
             (None None)
-            ((Some tail) (Some (rx_app_sx (rx_expand rd) tail))))))
+            ((Some tail) (Some (app (rx_expand rd) tail))))))
        (match (rw_sx tab f)
          (None None)
          ((Some f2)
@@ -2333,12 +2260,6 @@
         (il_table rest)))
        (_ (il_table rest))))))
 
-(fn il_lookup ((tab (List (Pair Symbol SExpr))) (n Symbol)) (Option SExpr)
-  (measure (struct tab))
-  (match tab
-    (Nil None)
-    ((Cons (Pair k v) t) (if (sym_eq k n) (Some v) (il_lookup t n)))))
-
 (fn il_sx ((tab (List (Pair Symbol SExpr))) (s SExpr)) (Option SExpr)
   (measure (struct s))
   (match s
@@ -2347,7 +2268,7 @@
        ((Cons (SSym h) rest)
         (if (sym_eq h (quote inline))
           (match rest
-            ((Cons (SSym name) Nil) (il_lookup tab name))
+            ((Cons (SSym name) Nil) (assoc_sym name tab))
             (_ None))
           (match (il_sxs tab items)
             (None None)
@@ -2371,13 +2292,6 @@
           (None None)
           ((Some t2) (Some (Cons h2 t2)))))))))
 
-;; append the folded continuation as the LAST argument of a chain item
-(fn ch_snoc ((its (List SExpr)) (cont SExpr)) (List SExpr)
-  (measure (struct its))
-  (match its
-    (Nil (Cons cont Nil))
-    ((Cons h t) (Cons h (ch_snoc t cont)))))
-
 ;; right-fold the (already-walked) chain items: the last item closes, every
 ;; earlier item gains the folded rest as its final argument. Empty chain or
 ;; a non-list item is malformed.
@@ -2391,7 +2305,7 @@
        (None None)
        ((Some cont)
         (match item
-          ((SList its) (Some (SList (ch_snoc its cont))))
+          ((SList its) (Some (SList (snoc its cont))))
           (_ None)))))))
 
 (fn ch_sx ((s SExpr)) (Option SExpr)
@@ -2463,9 +2377,7 @@
           (None None)
           ((Some tds)
            (match
-             (collect_fns_externs
-               forms
-               (append_sym (typedef_ctors tds) base_ctors))
+             (collect_fns_externs forms (app (typedef_ctors tds) base_ctors))
              (None None)
              ((Some (Pair fns externs))
               (Some (Module tds fns externs (build_fn_trie fns) Nil)))))))))))
@@ -2478,35 +2390,19 @@
 ;; the caller seeds with the kernel's own types). Mirrors the Rust loader's
 ;; merge_module + dependency-order base — but parsed entirely by this reader.
 
-(fn app_typedefs ((a (List TypeDef)) (b (List TypeDef))) (List TypeDef)
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (app_typedefs t b)))))
-(fn app_fndefs ((a (List FnDef)) (b (List FnDef))) (List FnDef)
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (app_fndefs t b)))))
-(fn app_externdefs ((a (List ExternDef)) (b (List ExternDef))) (List ExternDef)
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (app_externdefs t b)))))
-
 (fn merge_modules ((a Module) (b Module)) Module
   (match a
     ((Module at af ax atr _)
      (match b
        ((Module bt bf bx _ _)
         ;; insert b's fns into a's trie (O(|bf|), no full rebuild); af keeps
-        ;; priority on a name clash, matching app_fndefs af bf + keep-first.
+        ;; priority on a name clash, matching app af bf + keep-first.
         (Module
-          (app_typedefs at bt)
-          (app_fndefs af bf)
-          (app_externdefs ax bx)
+          (app at bt)
+          (app af bf)
+          (app ax bx)
           (trie_insert_many bf atr)
-          (app_env (module_claims a) (module_claims b))))))))
+          (app (module_claims a) (module_claims b))))))))
 
 (fn module_typedefs ((m Module)) (List TypeDef)
   (match m
@@ -2624,15 +2520,6 @@
     (qn_at (env_lookup (qn_name q) (rc_env env)) (qn_name q))
     (resolve_qpath (qn_mod q) (qn_name q) (rc_mod env) (rc_aliases env))))
 
-(fn app_env
-  ((a (List (Pair Symbol (List Symbol))))
-   (b (List (Pair Symbol (List Symbol)))))
-  (List (Pair Symbol (List Symbol)))
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (app_env t b)))))
-
 ;; --- the import env: every name an accumulated module exports → its path -----
 (fn fndef_names ((fds (List FnDef))) (List Symbol)
   (measure (struct fds))
@@ -2651,7 +2538,7 @@
   (match tds
     (Nil Nil)
     ((Cons (TypeDef n _ cds _) r)
-     (Cons (Pair (qn_name n) (qn_mod n)) (app_env (cd_env cds) (td_env r))))))
+     (Cons (Pair (qn_name n) (qn_mod n)) (app (cd_env cds) (td_env r))))))
 
 (fn cd_env ((cds (List CtorDef))) (List (Pair Symbol (List Symbol)))
   (measure (struct cds))
@@ -2675,7 +2562,7 @@
 (fn module_resolve_env ((m Module)) (List (Pair Symbol (List Symbol)))
   (match m
     ((Module tds fns exts _ cs)
-     (app_env (td_env tds) (app_env (fn_env fns) (app_env (ext_env exts) cs))))))
+     (app (td_env tds) (app (fn_env fns) (app (ext_env exts) cs))))))
 
 ;; Keep only the entries whose module-path is `p` — used to recover ONE file's
 ;; local env from the merged module (defs at `p`), for strict goal resolution
@@ -2703,11 +2590,11 @@
   (match m
     ((Module tds fns exts _ _)
      (names_to_env
-       (append_sym
+       (app
          (typedef_names tds)
-         (append_sym
+         (app
            (typedef_ctors tds)
-           (append_sym (fndef_names fns) (externdef_names exts))))
+           (app (fndef_names fns) (externdef_names exts))))
        modpath))))
 
 ;; --- the tree-walk rewriters ------------------------------------------------
@@ -2855,15 +2742,7 @@
 ;; P is the directory interface (a prefix — the mod.req case) or a sibling
 ;; file of the same directory.
 (fn supplies_scope_ok ((p (List Symbol)) (modpath (List Symbol))) Bool
-  (if (path_prefix_sym p modpath) True
-  (sym_path_eq (drop_last_sym p) (drop_last_sym modpath))))
-
-(fn uitem_path ((n Symbol) (items (List (Pair Symbol (List Symbol)))))
-  (Option (List Symbol))
-  (measure (struct items))
-  (match items
-    (Nil None)
-    ((Cons (Pair in p) rest) (if (sym_eq n in) (Some p) (uitem_path n rest)))))
+  (if (path_prefix_sym p modpath) True (sym_path_eq (init p) (init modpath))))
 
 (fn sig_at ((n Symbol) (p (List Symbol)) (exts (List ExternDef))) Bool
   (measure (struct exts))
@@ -2885,7 +2764,7 @@
   (match fnames
     (Nil Nil)
     ((Cons n rest)
-     (match (uitem_path n uitems)
+     (match (assoc_sym n uitems)
        (None (rebind_names rest uitems sig_exts modpath))
        ((Some p)
         (if (sig_at n p sig_exts)
@@ -2927,7 +2806,7 @@
   (match tnames
     (Nil Nil)
     ((Cons n rest)
-     (match (uitem_path n uitems)
+     (match (assoc_sym n uitems)
        (None (rebind_type_names rest uitems sig_tds modpath))
        ((Some p)
         (if (sig_type_at n p sig_tds)
@@ -2942,7 +2821,7 @@
   (match env
     (Nil Nil)
     ((Cons (Pair n p) rest)
-     (if (sym_mem n ns) (env_drop_names rest ns)
+     (if (mem_sym n ns) (env_drop_names rest ns)
      (Cons (Pair n p) (env_drop_names rest ns))))))
 
 ;; Qualify a freshly-parsed (all-`core`) module at `modpath`. STRICT bare-name
@@ -2967,14 +2846,14 @@
     ((Module tds fns exts _ _)
      (let
        ((rb
-          (append_sym
+          (app
             (rebind_names (fndef_names fns) use_items sig_exts modpath)
             (rebind_type_names (typedef_names tds) use_items sig_tds modpath))))
        (let
          ((env
             (RCtx
               modpath
-              (app_env (env_drop_names (local_env m modpath) rb) use_items)
+              (app (env_drop_names (local_env m modpath) rb) use_items)
               use_aliases)))
          (let ((rfns (resolve_fndefs env fns)))
            (Module
@@ -3524,7 +3403,7 @@
          (match
            (pd_bad_decl
              forms
-             (append_sym (typedef_ctors (pd_types_ok forms)) base_ctors))
+             (app (typedef_ctors (pd_types_ok forms)) base_ctors))
            ((Some f)
             (append_int
               "malformed declaration "
@@ -3634,13 +3513,11 @@
         (let ((globmod (resolve_full_modpath segs curmod Nil)))
           (match (use_scope_of rest curmod env)
             ((Pair items aliases)
-             (Pair (app_env (filter_modpath env globmod) items) aliases)))))
+             (Pair (app (filter_modpath env globmod) items) aliases)))))
        ((Some (UseItem rawq bound))
         (let
           ((resolved (resolve_qpath (qn_mod rawq) (qn_name rawq) curmod Nil)))
-          (let
-            ((modid
-               (append_sym (qn_mod resolved) (Cons (qn_name resolved) Nil))))
+          (let ((modid (app (qn_mod resolved) (Cons (qn_name resolved) Nil))))
             (match (use_scope_of rest curmod env)
               ((Pair items aliases)
                (if (item_in_env (qn_name resolved) (qn_mod resolved) env)
@@ -3692,10 +3569,10 @@
 
 ;; rp is the path REVERSED; drop the interface or .shard suffix, still reversed.
 (fn strip_path_suffix ((rp (List Int))) (List Int)
-  (match (strip_prefix (rev_i (mod_req_suffix) Nil) rp)
+  (match (strip_prefix (rev_onto (mod_req_suffix) Nil) rp)
     ((Some d) d)
     (None
-      (match (strip_prefix (rev_i ".shard" Nil) rp)
+      (match (strip_prefix (rev_onto ".shard" Nil) rp)
         ((Some f) f)
         (None rp)))))
 
@@ -3703,9 +3580,9 @@
 (fn path_segs ((xs (List Int)) (cur (List Int))) (List (List Int))
   (measure (struct xs))
   (match xs
-    (Nil (Cons (rev_i cur Nil) Nil))
+    (Nil (Cons (rev_onto cur Nil) Nil))
     ((Cons c t)
-     (if (int_eq c 47) (Cons (rev_i cur Nil) (path_segs t Nil))
+     (if (int_eq c 47) (Cons (rev_onto cur Nil) (path_segs t Nil))
      (path_segs t (Cons c cur))))))
 
 (fn segs_to_syms ((ss (List (List Int)))) (List Symbol)
@@ -3713,12 +3590,6 @@
   (match ss
     (Nil Nil)
     ((Cons s rest) (Cons (sym_of_chars s) (segs_to_syms rest)))))
-
-(fn rev_sym ((xs (List Symbol)) (acc (List Symbol))) (List Symbol)
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (rev_sym t (Cons h acc)))))
 
 ;; the `.` and `..` path segments (built from char 46 — `(quote .)` is not a
 ;; lexable symbol token).
@@ -3738,7 +3609,7 @@
 (fn canon_go ((ss (List Symbol)) (acc (List Symbol))) (List Symbol)
   (measure (struct ss))
   (match ss
-    (Nil (rev_sym acc Nil))
+    (Nil (rev_onto acc Nil))
     ((Cons s t) (canon_go t (canon_push s acc)))))
 
 ;; Does the path climb ABOVE the invocation root? Module identity
@@ -3785,17 +3656,11 @@
 ;; — an absolute RUN path would lose its leading '/'. A `..` with nothing to
 ;; pop is dropped, but the loader refuses escaping paths before canon ever
 ;; sees one (path_escapes above).
-(fn rev_segs ((ss (List (List Int))) (acc (List (List Int)))) (List (List Int))
-  (measure (struct ss))
-  (match ss
-    (Nil acc)
-    ((Cons h t) (rev_segs t (Cons h acc)))))
-
 (fn canon_segs ((ss (List (List Int))) (acc (List (List Int))))
   (List (List Int))
   (measure (struct ss))
   (match ss
-    (Nil (rev_segs acc Nil))
+    (Nil (rev_onto acc Nil))
     ((Cons s rest)
      (match s
        (Nil (canon_segs rest acc))
@@ -3872,7 +3737,9 @@
        (drop_req_dir_segs
          (canon_go
            (segs_to_syms
-             (path_segs (rev_i (strip_path_suffix (rev_i path Nil)) Nil) Nil))
+             (path_segs
+               (rev_onto (strip_path_suffix (rev_onto path Nil)) Nil)
+               Nil))
            Nil))))
     (if (is_core_path segs) (qn_core) segs)))
 
@@ -3914,7 +3781,7 @@
                (build_module_d
                  rest
                  (merge_modules acc rm)
-                 (append_sym (typedef_ctors (module_typedefs rm)) ctors)
+                 (app (typedef_ctors (module_typedefs rm)) ctors)
                  (+ k 1)))))))))))
 
 ;; build_module for RUN mode: the same per-file qualified resolution as
@@ -3943,7 +3810,7 @@
                ((rm
                   (resolve_module
                     mp
-                    (app_env uitems (module_resolve_env acc))
+                    (app uitems (module_resolve_env acc))
                     ualiases
                     (module_externdefs acc)
                     (module_typedefs acc)
@@ -3951,4 +3818,4 @@
                (build_module_r
                  rest
                  (merge_modules acc rm)
-                 (append_sym (typedef_ctors (module_typedefs rm)) ctors)))))))))))
+                 (app (typedef_ctors (module_typedefs rm)) ctors)))))))))))
