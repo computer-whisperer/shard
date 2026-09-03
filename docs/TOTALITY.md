@@ -99,7 +99,7 @@ verifies the declaration; it never discovers one. Two clause forms:
   to "is this term a subterm of that one," far smaller and more auditable than
   "search all positions for a consistent descending designation across a mutual
   SCC." The verifier (`mc_check_struct` + the `mc_struct_*` family,
-  kernel/driver.shard) **reuses admit's subterm classification**
+  kernel/measure.shard) **reuses admit's subterm classification**
   (`ad_fn_sites`/`ad_cls_at`) but supplies the *declared* designation instead of
   searching for one — the search (`ad_fix`/`ad_pick`/`ad_self_find`) stays
   advisory and out of the TCB. Mutual SCCs need no new syntax: each member
@@ -125,7 +125,7 @@ trivial list recursion.)
 
 ## 5. The single-fn numeric gate [BUILT]
 
-The driver is `mc_check_fn` (kernel/driver.shard). For a fn `F` with
+The driver is `mc_check_fn` (kernel/measure.shard). For a fn `F` with
 `(measure E proofs…)` (parsed into `MCl`):
 
 1. **SCC** of `F` from Tarjan (`ad_sccs`), looked up with `mc_scc_of`.
@@ -352,7 +352,7 @@ There is **no auto-recognition exemption** — `admit` stays advisory/offline
 (§3). A structural SCC satisfies the predicate via its verified `(struct …)`
 declarations (§4); a non-structural SCC via its numeric `(measure E proofs…)`.
 
-`mc_outcome` (kernel/driver.shard) now emits a **hard `COFail`** — failing the
+`mc_outcome` (kernel/measure.shard) now emits a **hard `COFail`** — failing the
 run (exit 1) — when a checked closure either
 
 - **(a)** has an **admitted** recursive SCC declaring **no** `(measure …)`
@@ -479,12 +479,16 @@ still enumerates the advisory AdFlag / AdUnresolved set (out of TCB).
 
 ## 11. Where the code lives
 
-- `kernel/driver.shard` — the gate: `mc_check_fn` and the `mc_*` family
-  (site walk, obligation construction, stratified citation, the `edges_close`
-  data-weighted worklist measure — one closure over an edge list, projected
-  from the trust ledger and from the run-mode call graph); the structural verifier
-  `mc_check_struct` + `mc_struct_*` (numeric-vs-struct dispatch on the measure
-  head in `mc_check_fn`).
+- `kernel/measure.shard` — the gate: `mc_check_fn` and the `mc_*` family
+  (site walk, obligation construction, stratified citation); the structural
+  verifier `mc_check_struct` + `mc_struct_*` (numeric-vs-struct dispatch on
+  the measure head in `mc_check_fn`). Every obligation runs through
+  `kernel/claims.shard`'s per-claim pipeline, the same path an authored claim
+  takes.
+- `kernel/driver.shard` — `edges_close`, the data-weighted worklist measure
+  (one closure over an edge list, projected from the trust ledger and from
+  the run-mode call graph): the kernel's own worked example of a numeric
+  measure over list data.
 - `kernel/admit.shard` — the offline classifier: Tarjan (`ad_sccs`), the
   structural/mutual recognition (`ad_pick` / `ad_verify`), the report renderer.
   Its subterm *classification* (`ad_cls` / `ad_pat_sts` / `ad_fn_sites` /

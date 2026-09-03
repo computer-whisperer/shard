@@ -2753,7 +2753,32 @@
        (if (sym_path_eq (qn_mod q) p) True (sig_at n p rest))
        (sig_at n p rest)))))
 
-;; the fn-def names of this file that SUPPLY a previously-loaded sig.
+;; The rebind VERDICT for one CANDIDATE — a name this file defines whose use
+;; item maps it to path pp. The decision is made here, once, as a value:
+;; rebind_names / rebind_type_names filter on it and the scope report
+;; (driver.shard) renders it, so the report can never drift from the rule it
+;; describes. (A name with no use item is never a candidate — the explicit
+;; use line is what makes a rebind intentional.)
+;;   RbFires    a loaded sig sits at pp AND pp is within this file's
+;;              directory module — the local binding is dropped
+;;   RbNoSig    no loaded sig of that name at pp — nothing to supply
+;;   RbOutside  a sig is there but pp is another module's — surface
+;;              discipline forbids grafting a body onto it
+(type RbV (RbFires) (RbNoSig) (RbOutside))
+
+;; the fn verdict: "a loaded sig" = a (sig fn n) among the loaded externdefs.
+(fn rebind_verdict
+  ((n Symbol)
+   (pp (List Symbol))
+   (exts (List ExternDef))
+   (modpath (List Symbol)))
+  RbV
+  (if (sig_at n pp exts)
+    (if (supplies_scope_ok pp modpath) (RbFires) (RbOutside))
+    (RbNoSig)))
+
+;; the fn-def names of this file that SUPPLY a previously-loaded sig: the
+;; candidates whose verdict is RbFires.
 (fn rebind_names
   ((fnames (List Symbol))
    (uitems (List (Pair Symbol (List Symbol))))
@@ -2767,11 +2792,9 @@
      (match (assoc_sym n uitems)
        (None (rebind_names rest uitems sig_exts modpath))
        ((Some p)
-        (if (sig_at n p sig_exts)
-          (if (supplies_scope_ok p modpath)
-            (Cons n (rebind_names rest uitems sig_exts modpath))
-            (rebind_names rest uitems sig_exts modpath))
-          (rebind_names rest uitems sig_exts modpath)))))))
+        (match (rebind_verdict n p sig_exts modpath)
+          ((RbFires) (Cons n (rebind_names rest uitems sig_exts modpath)))
+          (_ (rebind_names rest uitems sig_exts modpath))))))))
 
 ;; a SIG TYPE (ctorless typedef — the `(sig type …)` form) named n at path p.
 (fn sig_type_at ((n Symbol) (p (List Symbol)) (tds (List TypeDef))) Bool
@@ -2786,6 +2809,15 @@
            (_ (sig_type_at n p rest)))
          (sig_type_at n p rest))
        (sig_type_at n p rest)))))
+
+;; the type verdict — rebind_verdict's mirror over the loaded typedefs,
+;; where "a loaded sig" = a ctorless (sig type n) at pp.
+(fn rebind_type_verdict
+  ((n Symbol) (pp (List Symbol)) (tds (List TypeDef)) (modpath (List Symbol)))
+  RbV
+  (if (sig_type_at n pp tds)
+    (if (supplies_scope_ok pp modpath) (RbFires) (RbOutside))
+    (RbNoSig)))
 
 ;; the TYPE names of this file that SUPPLY a previously-loaded sig type —
 ;; the type-level mirror of rebind_names: when a use-item maps a local full
@@ -2809,11 +2841,9 @@
      (match (assoc_sym n uitems)
        (None (rebind_type_names rest uitems sig_tds modpath))
        ((Some p)
-        (if (sig_type_at n p sig_tds)
-          (if (supplies_scope_ok p modpath)
-            (Cons n (rebind_type_names rest uitems sig_tds modpath))
-            (rebind_type_names rest uitems sig_tds modpath))
-          (rebind_type_names rest uitems sig_tds modpath)))))))
+        (match (rebind_type_verdict n p sig_tds modpath)
+          ((RbFires) (Cons n (rebind_type_names rest uitems sig_tds modpath)))
+          (_ (rebind_type_names rest uitems sig_tds modpath))))))))
 
 (fn env_drop_names ((env (List (Pair Symbol (List Symbol)))) (ns (List Symbol)))
   (List (Pair Symbol (List Symbol)))
@@ -3494,10 +3524,48 @@
        None))
     (_ None)))
 
-;; Fold a module's top-level forms into (item-env, alias-env). `curmod` roots
-;; relative use-paths; `env` (name→path of all loaded defs) decides module-vs-item
-;; and supplies a globbed module's item names. Use-paths do NOT chain through
-;; other use-aliases (resolve_* given an empty alias env).
+;; The CLASSIFICATION of one use line — the resolver's decision as a value.
+;; use_scope_of folds these into the scope envs and the scope report
+;; (driver.shard) renders them; neither re-derives the rule, so the report
+;; says exactly what the resolver did. The bound name is the bare NAME (or
+;; the `as` alias) the line brings into scope.
+;;   UCItem     bound → the loaded item (a def NAMED it at exactly that path)
+;;   UCAlias    bound → a loaded module identity (for `(:: bound …)` paths)
+;;   UCGlob     the resolved module path + every loaded item of it
+;;   UCUnbound  the fallback: nothing loaded at name+path, so the name is
+;;              bound as an item anyway — a later citation reports it
+;;              unresolved (the report's `[WARN: …]` case)
+(type UseClass
+  (UCItem Symbol QName)
+  (UCAlias Symbol (List Symbol))
+  (UCGlob (List Symbol) (List (Pair Symbol (List Symbol))))
+  (UCUnbound Symbol QName))
+
+;; Classify one top-level form; None for anything but a well-formed use line.
+;; `curmod` roots relative use-paths; `env` (name→path of all loaded defs)
+;; decides item-vs-module-alias (item wins — see item_in_env) and supplies a
+;; globbed module's items. Use-paths do NOT chain through other use-aliases
+;; (resolve_* given an empty alias env).
+(fn use_class
+  ((f SExpr) (curmod (List Symbol)) (env (List (Pair Symbol (List Symbol)))))
+  (Option UseClass)
+  (match (parse_use_form f)
+    (None None)
+    ((Some (UseGlob segs))
+     (let ((globmod (resolve_full_modpath segs curmod Nil)))
+       (Some (UCGlob globmod (filter_modpath env globmod)))))
+    ((Some (UseItem rawq bound))
+     (let ((resolved (resolve_qpath (qn_mod rawq) (qn_name rawq) curmod Nil)))
+       (let ((modid (app (qn_mod resolved) (Cons (qn_name resolved) Nil))))
+         (if (item_in_env (qn_name resolved) (qn_mod resolved) env)
+           (Some (UCItem bound resolved))
+         (if (modpath_in_env modid env) (Some (UCAlias bound modid))
+         (Some (UCUnbound bound resolved)))))))))
+
+;; Fold a module's top-level forms into (item-env, alias-env) by use_class:
+;; an item (bound or unbound) binds bound→module-path in the item env, an
+;; alias binds bound→module identity in the alias env, a glob prepends the
+;; module's items.
 (fn use_scope_of
   ((forms (List SExpr))
    (curmod (List Symbol))
@@ -3507,24 +3575,17 @@
   (match forms
     (Nil (Pair Nil Nil))
     ((Cons f rest)
-     (match (parse_use_form f)
-       (None (use_scope_of rest curmod env))
-       ((Some (UseGlob segs))
-        (let ((globmod (resolve_full_modpath segs curmod Nil)))
-          (match (use_scope_of rest curmod env)
-            ((Pair items aliases)
-             (Pair (app (filter_modpath env globmod) items) aliases)))))
-       ((Some (UseItem rawq bound))
-        (let
-          ((resolved (resolve_qpath (qn_mod rawq) (qn_name rawq) curmod Nil)))
-          (let ((modid (app (qn_mod resolved) (Cons (qn_name resolved) Nil))))
-            (match (use_scope_of rest curmod env)
-              ((Pair items aliases)
-               (if (item_in_env (qn_name resolved) (qn_mod resolved) env)
-                 (Pair (Cons (Pair bound (qn_mod resolved)) items) aliases)
-               (if (modpath_in_env modid env)
-                 (Pair items (Cons (Pair bound modid) aliases))
-                 (Pair (Cons (Pair bound (qn_mod resolved)) items) aliases))))))))))))
+     (match (use_scope_of rest curmod env)
+       ((Pair items aliases)
+        (match (use_class f curmod env)
+          (None (Pair items aliases))
+          ((Some (UCGlob _ gitems)) (Pair (app gitems items) aliases))
+          ((Some (UCItem bound q))
+           (Pair (Cons (Pair bound (qn_mod q)) items) aliases))
+          ((Some (UCAlias bound modid))
+           (Pair items (Cons (Pair bound modid) aliases)))
+          ((Some (UCUnbound bound q))
+           (Pair (Cons (Pair bound (qn_mod q)) items) aliases))))))))
 
 (fn use_forms ((src (List Int))) (List SExpr)
   (match (read_all src)

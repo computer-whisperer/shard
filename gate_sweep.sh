@@ -55,6 +55,8 @@ TARGETS=(
   kernel/reader.shard
   kernel/loader.shard
   kernel/trace.shard
+  kernel/claims.shard
+  kernel/measure.shard
   kernel/driver.shard
   kernel/check.shard
   kernel/evm.shard

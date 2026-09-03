@@ -117,9 +117,10 @@
 ;; value — so ground naturals are machine ints, never unary trees. A
 ;; symbolic (S x) never packs (the proof-facing tower spelling, ordinary
 ;; stuck ctor), and a negative-literal arg never packs (ill-typed garbage
-;; stays stuck). ONLY the evaluation-grade reducers pack — `step` (ground
-;; execution) and `ceval` (Compute). The PROOF-FACING normalizers (step_iota
-;; / step_smart / step_head) deliberately do NOT: they have never rewritten
+;; stays stuck). ONLY the evaluation-grade reducers pack — `step` at
+;; eval=True (ground execution) and `ceval` (Compute). The PROOF-FACING
+;; normalizers (step_iota / `step` at eval=False, the Simp grade /
+;; step_head) deliberately do NOT: they have never rewritten
 ;; constructor structure, and a goal whose Z packs to 0 under Reduce/Simp
 ;; stops matching the claim-spelled IH and every Z/S-spelled lemma statement
 ;; (the std/mem rdump_snoc regression — a Simp packed the induct case's Z
@@ -149,20 +150,73 @@
 ;;
 ;; Strategy is leftmost-outermost: try a head reduction first; if the
 ;; head can't reduce, descend into subterms and step the first reducible
-;; one. Primitives are NOT applied here — calls to symbols with no FnDef
-;; are returned as stuck and the Rust runtime intercepts them at the
-;; outer evaluator level (see REVISIT.md — Primitive call protocol).
+;; one. Primitive calls (a CORE-named head with all-value args) fire
+;; through try_step_prim; any other call with no FnDef is stuck.
+;;
+;; ONE FAMILY, TWO GRADES. step / step_call / step_args_in_call /
+;; step_match / resolve_arms / step_list carry two knobs (this used to be
+;; two copied families, step_* and step_smart_*, differing only in them):
+;;
+;;   (stops (List QName)) — the STOP fence: a call whose head is in
+;;     `stops` never fires (no δ-unfold, no primitive step, no downcast);
+;;     it stays folded while its args still reduce. Fewer reductions is
+;;     always sound — the same argument as compute's stop set in
+;;     ceval_call. Callers with no fence pass Nil.
+;;
+;;   (eval Bool) — the GRADE. True = EVALUATION-GRADE (run_expr: ground
+;;     execution of apps); False = PROOF-FACING (simp_expr_loop: the Simp
+;;     tactic). The grade governs exactly three things. Every one of them
+;;     is a fewer-reductions choice on the proof path and NEVER a soundness
+;;     condition: both grades take only definitional-equality steps of the
+;;     one reduction relation, so either normal form equals the input.
+;;
+;;     1. THE δ GATE (step_call). eval=False unfolds a user-fn call ONLY
+;;        when `step_head` can reduce the would-be unfolded body AT THE
+;;        HEAD in one move (a Match whose value-headed scrutinee fires an
+;;        arm, an If on True/False, a Let, a primitive with all-value
+;;        args); eval=True unfolds unconditionally. WHY: a call whose body
+;;        would immediately stick on a non-value Match scrutinee (e.g.
+;;        `(append xs Nil)` with xs an FVar) must stay folded under Simp
+;;        so the IH-shaped subterm stays exposed for Rewrite — the
+;;        per-ctor-arm helper-lemma tax (v1, and v2 pre-slice-30's
+;;        append_nil_step etc.) collapses to one Simp step — and the gate
+;;        bounds pathological re-substitution. It is an EXPOSURE /
+;;        TERMINATION HEURISTIC (necessary, not sufficient, for Simp to
+;;        halt on recursive fns), never a soundness condition. Why
+;;        step_head and not full `step` as the gate: full step recurses
+;;        through Match scrutinees into Calls, so `(append (append (Cons …)
+;;        ys) zs)` would gate-pass on its OUTER body and unfold too
+;;        eagerly; head-only commits only when the body reduces DIRECTLY.
+;;        Ground execution wants every unfolding (a user predicate guarding
+;;        control flow must reduce fully), hence eval=True is ungated.
+;;        See REVISIT — "Simp guarding (gated δ + list-memo)".
+;;
+;;     2. NAT PACKING (the Ctor arm). eval=True packs a ground Z / (S n)
+;;        to its IntLit via nat_pack; eval=False never rewrites constructor
+;;        structure. WHY: a goal whose Z packs to 0 under Simp stops
+;;        matching the claim-spelled induct-case IH and every Z/S-spelled
+;;        lemma statement (the std/mem rdump_snoc regression). Pinned by
+;;        examples/nat_prim.shard nat_iota_no_pack / nat_simp_no_pack; see
+;;        nat_pack's comment.
+;;
+;;     3. THE core refine_try INTERCEPT (step_call, ahead of the trie).
+;;        eval=True reduces `(refine_try (Ctor R Nil) e)` to the decidable
+;;        downcast (refine_try_step); eval=False leaves it an ordinary
+;;        stuck call whose args still reduce. The intercept is
+;;        evaluation-only: step_call (at eval=True) and ceval_call are its
+;;        two sites — docs/REFINEMENT.md, the CORE-QUALIFIED intercept
+;;        site table.
 ;;
 ;; Reduction does NOT descend into Match arm bodies (they are under
 ;; binders), into FVar/BVar (irreducible), or into Let RHSs separately
 ;; (Let is reduced at the head by opening into the body).
 ;; ---------------------------------------------------------------------------
 
-(fn step ((m Module) (e Expr)) (Option Expr)
+(fn step ((m Module) (stops (List QName)) (eval Bool) (e Expr)) (Option Expr)
   (measure (* 2 (size e)))
   (match e
-    ((Call f args) (step_call m f args))
-    ((Match s arms) (step_match m s arms))
+    ((Call f args) (step_call m stops eval f args))
+    ((Match s arms) (step_match m stops eval s arms))
     ;; ζ: bs is stored in SOURCE order (elab_let) but the body's BVar 0 is
     ;; the LAST binding (push_scope, the parameter convention) — open with
     ;; the list reversed, exactly like apply_fn reverses call args.
@@ -175,14 +229,16 @@
        ((Ctor (QName _ (quote True)) Nil) (Some t))
        ((Ctor (QName _ (quote False)) Nil) (Some el))
        (_
-         (match (step m c)
+         (match (step m stops eval c)
            ((Some c2) (Some (If c2 t el)))
            (None None)))))
+    ;; Grade knob 2: a ground Z/S packs to its literal at eval=True ONLY —
+    ;; the proof-facing grade must keep ctor spellings (see nat_pack).
     ((Ctor c args)
-     (match (nat_pack c args)
-       ((Some e2) (Some e2))  ; ground Z/S packs to its literal
+     (match (if eval (nat_pack c args) None)
+       ((Some e2) (Some e2))
        (None
-         (match (step_list m args)
+         (match (step_list m stops eval args)
            ((Some args2) (Some (Ctor c args2)))
            (None None)))))
     ((FVar _) None)
@@ -210,11 +266,13 @@
             (Ctor (qn (quote None)) Nil))))))
     (_ None)))
 
-;; step_call: unfold user-fn application if possible; otherwise try
-;; the primitive table; otherwise step an argument. Stuck calls
-;; (unknown name AND not a primitive AND no reducible arg) return None.
-;; CORE refine_try is reserved (handled before trie lookup, like refine_val
-;; in prim_apply) — see refine_try_step.
+;; step_call: unfold user-fn application if possible (at eval=False only
+;; when the δ gate passes — see step's header); otherwise try the
+;; primitive table; otherwise step an argument. Stuck calls (unknown name
+;; AND not a primitive AND no reducible arg) return None. A head in
+;; `stops` never fires at all. CORE refine_try is reserved (handled before
+;; trie lookup, like refine_val in prim_apply, but at eval=True ONLY —
+;; grade knob 3) — see refine_try_step.
 ;;
 ;; The core_named gate is LOAD-BEARING, not decoration. This intercept runs
 ;; BEFORE the trie, which breaks the trie-first shadowing contract every
@@ -231,20 +289,38 @@
 ;; The primitive dispatch happens at the data level — the kernel is
 ;; reducing a Call VALUE, not invoking a function. See REVISIT —
 ;; "Primitives reachable from the kernel's reducer".
-(fn step_call ((m Module) (f QName) (args (List Expr))) (Option Expr)
+(fn step_call
+  ((m Module) (stops (List QName)) (eval Bool) (f QName) (args (List Expr)))
+  (Option Expr)
   (measure (+ (* 2 (size_list args)) 2))
-  (if (core_named f (quote refine_try)) (refine_try_step m args)
-  (match m
-    ((Module _ _ _ trie _)
-     (match (trie_lookup f trie)
-       ((Some fd)
-        (match (apply_fn fd args)
-          ((Some e2) (Some e2))
-          (None (step_args_in_call m f args))))
-       (None
-         (match (try_step_prim f args)
-           ((Some e2) (Some e2))
-           (None (step_args_in_call m f args)))))))))
+  ;; STOP fence: a stopped head never fires (no δ-unfold, no primitive
+  ;; step, no downcast) — the call stays folded while its args still
+  ;; reduce. Same fewer-reductions soundness as compute's stop set.
+  (if (mem_qn f stops)
+    (step_args_in_call m stops eval f args)
+    ;; Grade knob 3: the core refine_try intercept, evaluation-grade only.
+    (if (if eval (core_named f (quote refine_try)) False)
+      (refine_try_step m args)
+      (match m
+        ((Module _ _ _ trie _)
+         (match (trie_lookup f trie)
+           ((Some fd)
+            (match (apply_fn fd args)
+              (None (step_args_in_call m stops eval f args))  ; arity mismatch
+              ((Some body)
+               ;; Grade knob 1: the δ gate. Ground execution commits every
+               ;; unfolding; the proof-facing grade commits only when the
+               ;; body takes a head step (step_head's one-step lookahead).
+               (if eval (Some body)
+               (match (step_head body)
+                 ((Some _) (Some body))  ; gate passes — commit
+                 (None (step_args_in_call m stops eval f args)))))))
+           (None
+             ;; Not a user fn — try the primitive table; primitives have no
+             ;; gate (they always reduce when arg shapes match).
+             (match (try_step_prim f args)
+               ((Some e2) (Some e2))
+               (None (step_args_in_call m stops eval f args))))))))))
 
 ;; try_step_prim: the DISPATCH entry point every reducer reaches the prim
 ;; table through — a Call value whose qname is a CORE identity and whose args
@@ -1018,9 +1094,11 @@
        (None False)
        ((Some r) (utf8_ok r))))))
 
-(fn step_args_in_call ((m Module) (f QName) (args (List Expr))) (Option Expr)
+(fn step_args_in_call
+  ((m Module) (stops (List QName)) (eval Bool) (f QName) (args (List Expr)))
+  (Option Expr)
   (measure (+ (* 2 (size_list args)) 1))
-  (match (step_list m args)
+  (match (step_list m stops eval args)
     ((Some args2) (Some (Call f args2)))
     (None None)))
 
@@ -1044,25 +1122,32 @@
 ;; step_match: if scrut is value-headed, try arms; otherwise step scrut.
 ;; ArmStuck (a deep pattern needs a not-yet-reduced position) means reduce
 ;; the scrutinee further and retry — NOT fall through to a later arm.
-(fn step_match ((m Module) (s Expr) (arms (List Arm))) (Option Expr)
+(fn step_match
+  ((m Module) (stops (List QName)) (eval Bool) (s Expr) (arms (List Arm)))
+  (Option Expr)
   (measure (+ (* 2 (size s)) 2))
   (match s
-    ((Ctor _ _) (resolve_arms m s arms))
-    ((IntLit _) (resolve_arms m s arms))
-    ((SymLit _) (resolve_arms m s arms))
+    ((Ctor _ _) (resolve_arms m stops eval s arms))
+    ((IntLit _) (resolve_arms m stops eval s arms))
+    ((SymLit _) (resolve_arms m stops eval s arms))
     (_
-      (match (step m s)
+      (match (step m stops eval s)
         ((Some s2) (Some (Match s2 arms)))
         (None None)))))
 
-;; Resolve a value-headed match for the full reducer `step`.
-(fn resolve_arms ((m Module) (s Expr) (arms (List Arm))) (Option Expr)
+;; Resolve a value-headed match for `step`. On ArmStuck it reduces the
+;; scrutinee with `step` at the SAME grade, so under Simp a symbolic
+;; sub-position stays put (step returns None) while a forceable one
+;; reduces — and no wrong arm is ever fired.
+(fn resolve_arms
+  ((m Module) (stops (List QName)) (eval Bool) (s Expr) (arms (List Arm)))
+  (Option Expr)
   (measure (+ (* 2 (size s)) 1))
   (match (try_match_arms arms s)
     ((ArmFired e2) (Some e2))
     ((ArmNone) None)  ; all arms clash — stuck (non-exhaustive)
     ((ArmStuck)
-     (match (step m s)  ; reduce a sub-position deeper, then retry
+     (match (step m stops eval s)  ; reduce a sub-position deeper, then retry
        ((Some s2) (Some (Match s2 arms)))
        (None None)))))  ; symbolic — leave the match unreduced
 
@@ -1234,15 +1319,16 @@
 
 ;; step_list: try to step the first reducible expression in es, left to
 ;; right. Returns the new list if some step succeeded, else None.
-(fn step_list ((m Module) (es (List Expr))) (Option (List Expr))
+(fn step_list ((m Module) (stops (List QName)) (eval Bool) (es (List Expr)))
+  (Option (List Expr))
   (measure (* 2 (size_list es)))
   (match es
     (Nil None)
     ((Cons h t)
-     (match (step m h)
+     (match (step m stops eval h)
        ((Some h2) (Some (Cons h2 t)))
        (None
-         (match (step_list m t)
+         (match (step_list m stops eval t)
            ((Some t2) (Some (Cons h t2)))
            (None None)))))))
 
@@ -1256,7 +1342,8 @@
 ;;   - everything else → None (including user-fn Calls — head_step
 ;;     does NOT unfold those)
 ;;
-;; This is the gate for step_smart's δ-step. Cheap, non-recursive,
+;; This is the δ gate of `step` at eval=False (the Simp grade — see
+;; step's header, grade knob 1). Cheap, non-recursive,
 ;; mechanically obvious. Distinguished from `step` (which recurses
 ;; into scrutinees / args) and `step_iota` (which descends into Ctor
 ;; / Call args but doesn't fire primitives).
@@ -1272,8 +1359,9 @@
        ((Ctor (QName _ (quote False)) Nil) (Some el))
        (_ None)))
     ((Call f args) (try_step_prim f args))
-    ;; NOTE: no nat_pack — step_head is step_smart's gate; the gate must not
-    ;; promise a head step the smart reducer won't take.
+    ;; NOTE: no nat_pack — step_head gates the proof-facing (eval=False)
+    ;; `step`, which never packs; the gate must not promise a head step
+    ;; that grade won't take.
     (_ None)))
 
 ;; head_match: the gate's one-step lookahead. The match fires AT THE HEAD
@@ -1295,147 +1383,19 @@
     ((ArmNone) None)))
 
 ;; ---------------------------------------------------------------------------
-;; step_smart: ι plus *gated* δ. Wired into `simp_expr` so the kernel's
-;; full reducer is no longer naively unfolding-on-demand.
-;;
-;; The gate, for a user-fn Call: compute the would-be unfolded body
-;; (via apply_fn), then check whether `step_head` can take a one-step
-;; reduction on it AT THE HEAD. If yes — commit the unfolding; if no
-;; — leave the Call stuck and try to step its args.
-;;
-;; What this buys: a Call whose unfolded body would immediately stick
-;; on a non-value Match scrutinee (e.g. `(append xs Nil)` where `xs`
-;; is FVar) is NOT unfolded. The IH-shaped subterm stays exposed for
-;; Rewrite. The per-ctor-arm helper-lemma tax v1 paid (and the v2
-;; pre-slice-30 author paid via append_nil_step etc.) collapses to
-;; one Simp step. Primitives at the head still always reduce.
-;;
-;; Why step_head (not full step): full step recurses through Match
-;; scrutinees into Calls, so `(append (append (Cons …) ys) zs)`
-;; would gate-pass on its outer body (Match scrut is a Call that
-;; itself steps), unfolding too eagerly. step_head's "head-only"
-;; semantics keeps unfolding precise — only commit when the body
-;; will reduce DIRECTLY.
-;;
-;; See REVISIT — "Simp guarding (gated δ + list-memo)".
-;; ---------------------------------------------------------------------------
-
-(fn step_smart ((m Module) (stops (List QName)) (e Expr)) (Option Expr)
-  (measure (* 2 (size e)))
-  (match e
-    ((Call f args) (step_smart_call m stops f args))
-    ((Match s arms) (step_smart_match m stops s arms))
-    ((Let bs body) (Some (open_many (reverse_exprs bs) body)))  ; ζ (last binding = BVar 0)
-    ((If c t el)
-     (match c
-       ((Ctor (QName _ (quote True)) Nil) (Some t))
-       ((Ctor (QName _ (quote False)) Nil) (Some el))
-       (_
-         (match (step_smart m stops c)
-           ((Some c2) (Some (If c2 t el)))
-           (None None)))))
-    ;; NOTE: no nat_pack — step_smart drives Simp, a proof-facing normalizer;
-    ;; ctor spellings must survive it (see nat_pack's comment).
-    ((Ctor c args)
-     (match (step_smart_list m stops args)
-       ((Some args2) (Some (Ctor c args2)))
-       (None None)))
-    ((FVar _) None)
-    ((BVar _) None)
-    ((IntLit _) None)
-    ((SymLit _) None)))
-
-(fn step_smart_call
-  ((m Module) (stops (List QName)) (f QName) (args (List Expr)))
-  (Option Expr)
-  (measure (+ (* 2 (size_list args)) 2))
-  ;; STOP fence: a stopped head never fires (no δ-unfold, no primitive
-  ;; step) — the call stays folded while its args still reduce. Same
-  ;; fewer-reductions soundness as compute's stop set (ceval_call).
-  (if (mem_qn f stops) (step_smart_args_in_call m stops f args)
-  (match m
-    ((Module _ _ _ trie _)
-     (match (trie_lookup f trie)
-       ((Some fd)
-        ;; User fn — apply with gate.
-        (match (apply_fn fd args)
-          (None (step_smart_args_in_call m stops f args))  ; arity mismatch
-          ((Some body)
-           ;; Gate: head-only one-step lookahead.
-           (match (step_head body)
-             ((Some _) (Some body))  ; gate passes — commit
-             (None (step_smart_args_in_call m stops f args))))))
-       (None
-         ;; Not a user fn — try primitive table; primitives have no
-         ;; gate (they always reduce when arg shapes match).
-         (match (try_step_prim f args)
-           ((Some e2) (Some e2))
-           (None (step_smart_args_in_call m stops f args)))))))))
-
-(fn step_smart_args_in_call
-  ((m Module) (stops (List QName)) (f QName) (args (List Expr)))
-  (Option Expr)
-  (measure (+ (* 2 (size_list args)) 1))
-  (match (step_smart_list m stops args)
-    ((Some args2) (Some (Call f args2)))
-    (None None)))
-
-(fn step_smart_match
-  ((m Module) (stops (List QName)) (s Expr) (arms (List Arm)))
-  (Option Expr)
-  (measure (+ (* 2 (size s)) 2))
-  (match s
-    ((Ctor _ _) (resolve_arms_smart m stops s arms))
-    ((IntLit _) (resolve_arms_smart m stops s arms))
-    ((SymLit _) (resolve_arms_smart m stops s arms))
-    (_
-      (match (step_smart m stops s)
-        ((Some s2) (Some (Match s2 arms)))
-        (None None)))))
-
-;; Resolve a value-headed match for the gated reducer. On ArmStuck it
-;; reduces the scrutinee with step_smart (gated), so a symbolic sub-
-;; position stays put (step_smart returns None) while a forceable one
-;; reduces — and no wrong arm is ever fired.
-(fn resolve_arms_smart
-  ((m Module) (stops (List QName)) (s Expr) (arms (List Arm)))
-  (Option Expr)
-  (measure (+ (* 2 (size s)) 1))
-  (match (try_match_arms arms s)
-    ((ArmFired e2) (Some e2))
-    ((ArmNone) None)
-    ((ArmStuck)
-     (match (step_smart m stops s)
-       ((Some s2) (Some (Match s2 arms)))
-       (None None)))))
-
-(fn step_smart_list ((m Module) (stops (List QName)) (es (List Expr)))
-  (Option (List Expr))
-  (measure (* 2 (size_list es)))
-  (match es
-    (Nil None)
-    ((Cons h t)
-     (match (step_smart m stops h)
-       ((Some h2) (Some (Cons h2 t)))
-       (None
-         (match (step_smart_list m stops t)
-           ((Some t2) (Some (Cons h t2)))
-           (None None)))))))
-
-;; ---------------------------------------------------------------------------
 ;; Memoization for simp_expr's fixed-point loop.
 ;;
 ;; The memo maps inputs to their normal forms. Each top-level
 ;; reduction step checks the memo first; on a hit, return the cached
-;; NF without re-running step_smart. On miss, step + recurse + record.
+;; NF without re-running step. On miss, step + recurse + record.
 ;;
 ;; This is the v1 lesson — "any reducer that re-traverses substituted
 ;; subterms needs sharing/memoization from the start" (TRANSFER.md).
 ;;
-;; Scope: only the OUTER simp_expr loop is memoized. step_smart's
+;; Scope: only the OUTER simp_expr loop is memoized. step's
 ;; internal recursion (into Ctor/Call args, Match scrutinees, etc.)
 ;; does NOT thread the memo — the narrow language has no monadic
-;; do-notation, so threading would multiply every step_smart_* fn's
+;; do-notation, so threading would multiply every step_* fn's
 ;; signature. The outer memo catches "the same Expr appears multiple
 ;; times as a top-level reducer target" (LHS/RHS sharing, repeated
 ;; subterms after substitution). Finer-grained memoization is a v3
@@ -1453,7 +1413,7 @@
     (Nil None)
     ((Cons (Pair k v) rest) (if (expr_eq k e) (Some v) (memo_lookup rest e)))))
 
-;; Fuelled (totality, issue #1): step_smart is structural/total but driving it
+;; Fuelled (totality, issue #1): step is structural/total but driving it
 ;; to a fixed point has no structural decrease, so the loop recurses on
 ;; `(measure fuel)`. The kept premises at the recursive site are the fuel guard
 ;; (= (lt fuel 1) False) and the inert memo equation (= (memo_lookup memo e)
@@ -1471,7 +1431,7 @@
   (match (memo_lookup memo e)
     ((Some e_nf) (Pair e_nf memo))
     (None
-      (match (step_smart m stops e)
+      (match (step m stops False e)  ; proof-facing grade (see step's header)
         (None
           ;; e is already normal — record it as its own NF.
           (Pair e (Cons (Pair e e) memo)))
@@ -1479,7 +1439,8 @@
          (match (simp_expr_loop m stops memo e2 (- fuel 1))
            ((Pair e_nf memo2) (Pair e_nf (Cons (Pair e e_nf) memo2))))))))))
 
-;; simp_stop_expr: drive `step_smart` to fixed point with memoization,
+;; simp_stop_expr: drive `step` (eval=False, the proof-facing grade) to
+;; fixed point with memoization,
 ;; under a STOP fence — calls to the named fns never fire (args still
 ;; reduce). The fence is per-invocation, so the memo (also per-invocation)
 ;; never leaks a fenced NF into an unfenced Simp or vice versa.
@@ -1497,8 +1458,9 @@
 ;; run_expr — the GROUND-EXECUTION reducer for running shard APPS (eval.shard's
 ;; run_app / eval_run), as opposed to the small-step simp_expr_loop (the Simp
 ;; tactic) and ceval (the Compute tactic), which normalize goal subterms in a
-;; proof. run_expr drives the UNGATED `step` (not the gated step_smart), so a
-;; ground term whose control flow is guarded by a user predicate reduces fully.
+;; proof. run_expr drives `step` at eval=True (ungated δ, Nat packing, the
+;; refine_try intercept — not the proof-facing grade Simp uses), so a ground
+;; term whose control flow is guarded by a user predicate reduces fully.
 ;;
 ;; Two differences from simp_expr_loop, both deliberate:
 ;;   - NO MEMO. simp_expr_loop memoizes every intermediate term in an
@@ -1528,14 +1490,15 @@
 ;; soundness condition: run_expr's totality holds for ANY fuel.
 ;;
 ;; SOUNDNESS is identical to Simp's: every `step` is a definitional-equality
-;; reduction (the operational semantics that step_smart is a gated subset of),
+;; reduction (the operational semantics of which the proof-facing grade is a
+;; gated subset),
 ;; so the normal form is equal to the input. The gate was only ever a
 ;; termination heuristic, never a soundness condition.
 ;; ---------------------------------------------------------------------------
 (fn run_expr ((m Module) (e Expr) (fuel Int)) Expr
   (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
   (if (lt fuel 1) e
-  (match (step m e)
+  (match (step m Nil True e)  ; evaluation grade (see step's header)
     (None e)
     ((Some e2) (run_expr m e2 (- fuel 1))))))
 

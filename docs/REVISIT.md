@@ -376,7 +376,9 @@ is where to start when planning v3.
     `step_iota` — Match firing, If dispatch, Let opening, descend
     into Ctor/Call args. NEVER unfolds a Call (user fn or primitive).
   - `Simp side` is ι + *gated* δ: drives `simp_expr` (now backed
-    by `step_smart` + a list-based memo). A user-fn Call only
+    by `step` at eval=False — the proof-facing grade of the one
+    step family; run_expr uses eval=True — + a list-based memo).
+    A user-fn Call only
     unfolds if `step_head` would take a one-step reduction on the
     unfolded body — i.e., the body's head is a Match with a
     value-headed scrutinee, an If with True/False condition, a
@@ -424,16 +426,16 @@ is where to start when planning v3.
   appends one entry and scans all prior entries. Acceptable at v2's
   proof-obligation scale; will not survive larger reductions.
 - **Scope:** only the OUTER simp_expr loop is memoized.
-  `step_smart`'s internal recursion (Ctor args, Match scrutinees,
-  step_smart_list) does NOT thread the memo — narrow has no
-  monadic bind, so threading would multiply every step_smart_* fn's
+  `step`'s internal recursion (Ctor args, Match scrutinees,
+  step_list) does NOT thread the memo — narrow has no
+  monadic bind, so threading would multiply every step_* fn's
   signature. The outer memo catches "same Expr appears multiple
   times as a top-level reducer target."
 - **Revisit when:** structurally-shared / content-addressed Expr
   storage exists (hash-cons via Symbol interning extended to
   whole-Expr fingerprints, or a Rust-side hash-map primitive). At
   that point both the memo data structure and the granularity (full
-  step_smart recursion, not just the outer loop) should be revisited
+  step recursion, not just the outer loop) should be revisited
   together.
 
 ### LCF helper-lemma discipline — RESOLVED (slice 29 → slice 30)

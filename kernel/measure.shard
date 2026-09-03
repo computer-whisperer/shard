@@ -1,0 +1,2292 @@
+;;; measure.shard — the OBLIGATION GATES: termination measures and refined
+;;; returns, checked as synthetic claims.
+;;;
+;;; Two generators live here, both feeding claims.shard's pipeline (parse_goal_r
+;;; → tc_check_goal → parse_proof_auto → check_sequent), so the only new
+;;; trusted surface is the goal each one builds:
+;;;   - MEASURE CLAUSES (mc_*): a fn's `(measure E P…)` clause yields one
+;;;     decrease + nonnegativity obligation per recursive call site, checked
+;;;     against the module WITHOUT the fn's SCC and the GRANTED theory only
+;;;     (docs/TOTALITY.md). mc_outcome is the enforced gate; mc_residual_report
+;;;     is the advisory listing admit mode prints.
+;;;   - REFINED RETURNS (rr_*): a fn returning `(refine BASE PRED)` must
+;;;     discharge `(returns f PROOF)`; rr_outcome is the enforced gate
+;;;     (docs/REFINEMENT.md). It reuses the measure kit's SCC and opaque-module
+;;;     machinery.
+;;; driver.shard's check_production appends both gates' outcomes to the run.
+;;; tools/prove cites mc_obligations_of_forms / mc_scc_of / mc_opaque /
+;;; mc_theory_for_scc to solve obligations offline through the same kit.
+
+(import "stdlib.shard")
+(import "term.shard")
+(import "module.shard")
+(import "proof.shard")
+(import "checker.shard")
+(import "reader.shard")
+(import "types.shard")  ; tc_check_goal, tc_fn_body_ret
+(import "admit.shard")  ; SCC / call-site classification (issue #1)
+(import "claims.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel proof *))
+(use (:: kernel checker *))
+(use (:: kernel reader *))
+(use (:: kernel types *))
+(use (:: kernel admit *))
+(use (:: kernel claims *))
+
+
+;; ===========================================================================
+;; MEASURE CLAUSES (issue #1, Phase B — report-only). A 6-element fn form
+;;   (fn NAME PARAMS RET (measure E P…) BODY)
+;; declares an Int measure E over the params, plus ONE INLINE PROOF PAIR per
+;; recursive call site. Site order = pre-order body walk (a call is recorded
+;; before its argument subterms are walked); per site the pair is
+;;   decrease:      hyps ⊢ (= (lt E[params:=args] E) True)
+;;   nonnegativity: hyps ⊢ (= (le 0 E[params:=args]) True)
+;; where hyps are the site's path conditions, outermost first — v1 collects
+;; `if` polarities ((= COND True/False)) and CLOSED match arms (no binders,
+;; no `_`) as scrutinee equations ((= SCRUT PATTERN)). A site under pattern
+;; or let BINDERS is UNSUPPORTED in v1 (reported; its obligations cannot be
+;; stated over the params alone until the case-instantiation machinery of
+;; Phase B2 lands). Wildcard-only arms walk on without a hyp.
+;;
+;; The obligation goals are built as goal SEXPRS and run through the SAME
+;; pipeline as ordinary claims (parse_goal_r → tc_check_goal → proof parse →
+;; desugar → check_sequent) — the only new trusted surface is this
+;; generator. Two deliberate restrictions keep the check circularity-free:
+;; proofs are checked against M-MINUS-SCC (the fn's whole SCC removed from
+;; the module, so the definitions under admission are OPAQUE to their own
+;; termination proofs) and the GRANTED theory only (the axioms and
+;; requirements of granted sources — exactly what check mode itself
+;; assumes; never this run's own claims, which are still unchecked when
+;; the admission pass runs). Failure direction is
+;; sound: a wrongly-generated obligation can only refuse, never admit.
+;; ===========================================================================
+
+;; one extracted clause: name, type params, params form, measure E,
+;; inline proofs, body form.
+(type MCl (MCl Symbol (List Symbol) SExpr SExpr (List SExpr) SExpr))
+
+(fn mc_of_forms ((forms (List SExpr)) (acc (List MCl))) (List MCl)
+  (measure (struct forms))
+  (match forms
+    (Nil acc)
+    ((Cons f rest)
+     (match (form_head f)
+       (None (mc_of_forms rest acc))
+       ((Some h)
+        (if (sym_eq h (quote fn))
+          (match (form_tail f)
+            ((Cons
+               nameForm
+               (Cons pForm (Cons _ (Cons clauseForm (Cons bodyForm Nil)))))
+             (match (form_head clauseForm)
+               (None (mc_of_forms rest acc))
+               ((Some ch)
+                (if (sym_eq ch (quote measure))
+                  (match (parse_head nameForm)
+                    (None (mc_of_forms rest acc))
+                    ((Some (Pair name tparams))
+                     (match (form_tail clauseForm)
+                       (Nil (mc_of_forms rest acc))  ; (measure) — malformed; parse gate rejects elsewhere
+                       ((Cons msr proofs)
+                        (mc_of_forms
+                          rest
+                          (Cons
+                            (MCl name tparams pForm msr proofs bodyForm)
+                            acc))))))
+                  (mc_of_forms rest acc)))))
+            (_ (mc_of_forms rest acc)))
+          (mc_of_forms rest acc)))))))
+
+;; ---- unannotated-recursive-SCC enumerator (issue #1, the Phase-D flip prereq)
+;; mc_outcome verifies the fns that DECLARE a measure clause; it cannot see a
+;; recursive SCC that declares NONE. This pass closes that gap for the flip: it
+;; walks every SCC (ad_sccs) and, for each RECURSIVE one (ad_scc_verdict is not
+;; AdNonRec), reports any member carrying no (measure …) clause. Identity matches
+;; the gate exactly — a clause's QName is (QName (module_path_of path) name), the
+;; same key mc_check_fn uses for trie_lookup / mc_scc_of. Report-only today (it
+;; rides the `admit` diagnostic, leaving the normal check/corpus output byte-
+;; unchanged); the enforcement flip turns a non-empty result into a COFail.
+;; NOTE: a type-parametric member is exempt at flip time (mc_check_fn SKIPs poly
+;; fns — the monomorphic-only v1 limit); the kernel closure has no poly fns so
+;; the report needs no exemption today.
+
+;; Resolve a clause's fn to its REAL qname — mirrors mc_check_fn: a same-module
+;; fn keys in the modpath trie; a REBOUND opaque sig fn lives at its interface
+;; qname (the trie misses) → unique short-name fallback. Without this the
+;; residual keys a rebound clause at the file-path qname, never matches the SCC's
+;; (rebound) qname, and falsely reports the fn as unannotated. Fail-safe: an
+;; unresolvable name keeps the file-path qname (at worst a spurious residual
+;; line, never a missed non-terminating fn).
+(fn mc_resolve_qn ((tr FnTrie) (fns (List FnDef)) (q QName) (name Symbol)) QName
+  (match (trie_lookup q tr)
+    ((Some (FnDef rq _ _ _)) rq)
+    (None
+      (match (mc_uniq_short fns name)
+        ((Some (FnDef rq _ _ _)) rq)
+        (None q)))))
+
+;; QNames of every measure-clause-bearing fn in one source (rebind-resolved).
+(fn mc_clause_qns_of
+  ((tr FnTrie)
+   (fns (List FnDef))
+   (path (List Int))
+   (mcls (List MCl))
+   (acc (List QName)))
+  (List QName)
+  (measure (struct mcls))
+  (match mcls
+    (Nil acc)
+    ((Cons (MCl name _ _ _ _ _) rest)
+     (mc_clause_qns_of
+       tr
+       fns
+       path
+       rest
+       (Cons (mc_resolve_qn tr fns (QName (module_path_of path) name) name) acc)))))
+
+;; QNames of every measure-clause-bearing fn across the closure's sources.
+(fn mc_clause_qns
+  ((tr FnTrie) (fns (List FnDef)) (srcs (List SrcEntry)) (acc (List QName)))
+  (List QName)
+  (measure (struct srcs))
+  (match srcs
+    (Nil acc)
+    ((Cons (SrcEntry path _ _ mf) rest)
+     (match mf
+       (None (mc_clause_qns tr fns rest acc))
+       ((Some forms)
+        (mc_clause_qns
+          tr
+          fns
+          rest
+          (mc_clause_qns_of tr fns path (mc_of_forms forms Nil) acc)))))))
+
+;; members of ONE scc carrying no clause (caller has gated on recursive).
+(fn mc_scc_missing ((scc (List QName)) (annot (List QName)) (acc (List QName)))
+  (List QName)
+  (measure (struct scc))
+  (match scc
+    (Nil acc)
+    ((Cons q rest)
+     (if (mem_qn q annot) (mc_scc_missing rest annot acc)
+     (mc_scc_missing rest annot (Cons q acc))))))
+
+(fn mc_unannot_go
+  ((tr FnTrie)
+   (sccs (List (List QName)))
+   (annot (List QName))
+   (acc (List QName)))
+  (List QName)
+  (measure (struct sccs))
+  (match sccs
+    (Nil acc)
+    ((Cons scc rest)
+     (match (ad_scc_verdict tr scc)
+       ((AdNonRec) (mc_unannot_go tr rest annot acc))
+       (_ (mc_unannot_go tr rest annot (mc_scc_missing scc annot acc)))))))
+
+(fn mc_unannot_lines ((qs (List QName))) (List Int)
+  (measure (struct qs))
+  (match qs
+    (Nil Nil)
+    ((Cons q rest)
+     (append_int
+       "UNANNOTATED-REC "
+       (append_int
+         (qn_key_chars q)
+         (append_int (sr_nl) (mc_unannot_lines rest)))))))
+
+;; the residual section: recursive-SCC members declaring no measure clause.
+;; Cross-references ad_sccs against the clause-bearing QName set — the half the
+;; measure-BLIND admit scan above cannot compute.
+(fn mc_residual_report
+  ((m Module) (sccs (List (List QName))) (srcs (List SrcEntry)))
+  (List Int)
+  (match m
+    ((Module _ fns _ tr _)
+     (let
+       ((missing (mc_unannot_go tr sccs (mc_clause_qns tr fns srcs Nil) Nil)))
+       (append_int
+         (sr_nl)
+         (append_int
+           "---- recursive SCCs lacking a measure clause ----"
+           (append_int
+             (sr_nl)
+             (match missing
+               (Nil "(none — every recursive SCC declares a measure clause)")
+               (_ (mc_unannot_lines missing))))))))))
+
+;; ---- the site walker (SOURCE level) ---------------------------------------
+
+;; one recursive call site: index, pattern/let binders in scope at the
+;; site, path-condition hyps (OUTERMOST FIRST), args.
+;;
+;; B2: a site under binders is no longer wholesale-unsupported. At
+;; obligation time the substituted measure must be PARAM-PURE (every
+;; variable a param, none shadowed by a binder) — else the site is
+;; UNSUPPORTED — and binder-mentioning hyps are DROPPED (sound: fewer
+;; premises only strengthens the obligation; the drop count is reported
+;; on failures so a missing premise is diagnosable). Binder-typed goals
+;; (for measures that descend through the data itself, e.g. (len t))
+;; arrive with the lemma/theory support they need — Phase C.
+;; a recursive (in-SCC) call site: pre-order index, in-scope binders, typed
+;; binders, accumulated path-condition hyps, the call's arg forms, and the
+;; CALLEE's QName (which SCC member is called — self or a sibling). The callee
+;; identity selects whose measure goes on the LHS of the decrease obligation.
+(type MSiteS
+  (MSiteS
+    Int
+    (List Symbol)
+    (List (Pair Symbol Type))
+    (List SExpr)
+    (List SExpr)
+    QName))
+
+(fn mc_is_lower ((s Symbol)) Bool
+  (match (chars_of_sym s)
+    (Nil False)
+    ((Cons c _) (if (le 97 c) (le c 122) False))))
+
+;; variables of a pattern: lowercase atoms (wildcard `_` binds nothing).
+(fn mc_pat_binders ((p SExpr) (acc (List Symbol))) (List Symbol)
+  (measure (struct p))
+  (match p
+    ((SSym s) (if (mc_is_lower s) (Cons s acc) acc))
+    ((SList items) (mc_pats_binders items acc))
+    (_ acc)))
+
+(fn mc_pats_binders ((ps (List SExpr)) (acc (List Symbol))) (List Symbol)
+  (measure (struct ps))
+  (match ps
+    (Nil acc)
+    ((Cons p rest) (mc_pats_binders rest (mc_pat_binders p acc)))))
+
+;; let-bound names from a ((x e) …) bindings form.
+(fn mc_let_binders ((binds SExpr) (acc (List Symbol))) (List Symbol)
+  (match binds
+    ((SList bs) (mc_let_binders_go bs acc))
+    (_ acc)))
+
+(fn mc_let_binders_go ((bs (List SExpr)) (acc (List Symbol))) (List Symbol)
+  (measure (struct bs))
+  (match bs
+    (Nil acc)
+    ((Cons (SList (Cons (SSym x) _)) rest)
+     (mc_let_binders_go rest (Cons x acc)))
+    ((Cons _ rest) (mc_let_binders_go rest acc))))
+
+;; param-purity: every VARIABLE (lowercase atom outside head position)
+;; is a param and not shadowed by an in-scope binder. (:: …) qualified
+;; names and (quote …) literals are pure as wholes; an inner match/let
+;; inside an argument shows its binders as unknown atoms and is refused
+;; conservatively.
+(fn mc_pure_atom ((s Symbol) (pnames (List Symbol)) (bnds (List Symbol))) Bool
+  (if (mc_is_lower s) (if (mem_sym s bnds) False (mem_sym s pnames)) True))
+
+(fn mc_pure ((e SExpr) (pnames (List Symbol)) (bnds (List Symbol))) Bool
+  (measure (struct e))
+  (match e
+    ((SSym s) (mc_pure_atom s pnames bnds))
+    ((SList items)
+     (match items
+       (Nil True)
+       ((Cons h rest)
+        (match h
+          ((SSym hs)
+           (if (sym_eq hs (quote ::)) True
+           (if (sym_eq hs (quote quote)) True
+           (mc_pure_list rest pnames bnds))))
+          ((SList _)
+           (if (mc_pure h pnames bnds) (mc_pure_list rest pnames bnds) False))
+          (_ (mc_pure_list rest pnames bnds))))))
+    (_ True)))
+
+(fn mc_pure_list ((es (List SExpr)) (pnames (List Symbol)) (bnds (List Symbol)))
+  Bool
+  (measure (struct es))
+  (match es
+    (Nil True)
+    ((Cons e rest)
+     (if (mc_pure e pnames bnds) (mc_pure_list rest pnames bnds) False))))
+
+;; split hyps into (kept, dropped-count): binder-dependent hyps go.
+(fn mc_keep_hyps
+  ((hyps (List SExpr)) (pnames (List Symbol)) (bnds (List Symbol)))
+  (Pair (List SExpr) Int)
+  (measure (struct hyps))
+  (match hyps
+    (Nil (Pair Nil 0))
+    ((Cons h rest)
+     (match (mc_keep_hyps rest pnames bnds)
+       ((Pair ks n)
+        (if (mc_pure h pnames bnds) (Pair (Cons h ks) n) (Pair ks (+ n 1))))))))
+
+;; pattern scan: 0 = closed (usable as an expression), 1 = wildcards only
+;; (no hyp, but no capture either), 2 = binds names.
+(fn mc_pat_scan ((p SExpr)) Int
+  (measure (struct p))
+  (match p
+    ((SSym s)
+     (match (chars_of_sym s)
+       (Nil 0)
+       ((Cons c _)
+        (if (int_eq c 95) 1  ; '_'
+        (if (le 97 c) (if (le c 122) 2 0)
+        0)))))
+    ((SList items) (mc_pats_scan items))
+    (_ 0)))
+
+(fn mc_pats_scan ((ps (List SExpr))) Int
+  (measure (struct ps))
+  (match ps
+    (Nil 0)
+    ((Cons p rest)
+     (let ((a (mc_pat_scan p)))
+       (let ((b (mc_pats_scan rest))) (if (lt a b) b a))))))
+
+;; (= LHS RHS) as a goal-premise sexpr.
+(fn mc_eq_s ((l SExpr) (r SExpr)) SExpr
+  (SList (Cons (SSym (quote =)) (Cons l (Cons r Nil)))))
+
+(fn mc_hyp ((cond SExpr) (pol Symbol)) SExpr (mc_eq_s cond (SSym pol)))
+
+;; is this call head the measured fn? Bare name, or a (:: … name)
+;; qualified head (so a qualified self-call cannot dodge its obligation).
+(fn mc_head_is ((f Symbol) (h SExpr)) Bool
+  (match h
+    ((SSym s) (sym_eq s f))
+    ((SList items)
+     (match items
+       ((Cons (SSym qq) rest)
+        (if (sym_eq qq (quote ::)) (mc_last_is f rest) False))
+       (_ False)))
+    (_ False)))
+
+(fn mc_last_is ((f Symbol) (items (List SExpr))) Bool
+  (measure (struct items))
+  (match items
+    (Nil False)
+    ((Cons (SSym s) Nil) (sym_eq s f))
+    ((Cons _ rest) (mc_last_is f rest))))
+
+;; ---- binder typing (Phase C case instantiation) -----------------------------
+;; A binder-ful arm whose scrutinee TYPE synthesizes lets its binders enter
+;; scope TYPED, and the arm equation (= SCRUT PAT) becomes a recorded path
+;; condition (PAT read as the ctor expression over its binders). Sites whose
+;; measure substitution references those binders then state their obligations
+;; over the fn params PLUS the typed binders. Synthesis v1 is deliberately
+;; small — a param/binder name or a bare same-module call with a ground
+;; return type; anything else leaves the arm untyped (the B2 behavior, which
+;; is refusal-only and therefore sound).
+
+(fn mc_pat_has_wild ((p SExpr)) Bool
+  (measure (struct p))
+  (match p
+    ((SSym s)
+     (match (chars_of_sym s)
+       ((Cons c _) (int_eq c 95))
+       (Nil False)))
+    ((SList items) (mc_pats_have_wild items))
+    (_ False)))
+
+(fn mc_pats_have_wild ((ps (List SExpr))) Bool
+  (measure (struct ps))
+  (match ps
+    (Nil False)
+    ((Cons p rest) (if (mc_pat_has_wild p) True (mc_pats_have_wild rest)))))
+
+(fn mc_ty_ground ((t Type)) Bool
+  (measure (struct t))
+  (match t
+    ((TVar _) False)
+    ((TCon _ args) (mc_tys_ground args))))
+
+(fn mc_tys_ground ((ts (List Type))) Bool
+  (measure (struct ts))
+  (match ts
+    (Nil True)
+    ((Cons h t) (if (mc_ty_ground h) (mc_tys_ground t) False))))
+
+;; a fn's return type, if it is GROUND (no type variables) — the only case the
+;; binder-typer can use, since an obligation goal must be fully typed.
+(fn mc_fd_ground_ret ((fd FnDef)) (Option Type)
+  (match fd
+    ((FnDef _ _ ret _) (if (mc_ty_ground ret) (Some ret) None))))
+
+;; the fns in `fns` whose SHORT name is `h`. Homonyms across the merged import
+;; closure (build_module concatenates every file's fns) show here as more than
+;; one entry.
+(fn mc_short_matches ((fns (List FnDef)) (h Symbol)) (List FnDef)
+  (measure (struct fns))
+  (match fns
+    (Nil Nil)
+    ((Cons fd rest)
+     (match fd
+       ((FnDef q _ _ _)
+        (if (sym_eq (qn_name q) h) (Cons fd (mc_short_matches rest h))
+        (mc_short_matches rest h)))))))
+
+;; the UNIQUE fn of short name `h`, if exactly one exists. Used by mc_synth to
+;; resolve an IMPORTED call scrutinee (whose qname is NOT modpath-local, so the
+;; trie lookup below misses). Soundness is fail-safe: if `h` is a homonym (≥2
+;; matches) or a miss, we return None and the arm stays untyped (the B2 refusal
+;; behavior). And a WRONG synthesis can never falsely admit — it would make the
+;; obligation goal ill-typed, so the site is rejected, not accepted.
+(fn mc_uniq_short ((fns (List FnDef)) (h Symbol)) (Option FnDef)
+  (match (mc_short_matches fns h)
+    ((Cons fd Nil) (Some fd))
+    (_ None)))
+
+(fn mc_synth
+  ((m Module) (modpath (List Symbol)) (env (List (Pair Symbol Type))) (e SExpr))
+  (Option Type)
+  (match e
+    ((SSym x) (assoc_sym x env))
+    ((SList items)
+     (match items
+       ((Cons (SSym h) _)
+        (if (mc_is_lower h)
+          (match m
+            ((Module _ fns _ tr _)
+             ;; same-module fns resolve exactly via the modpath-keyed trie; an
+             ;; imported call misses there and falls back to a unique short-name
+             ;; scan over the merged fns list.
+             (match (trie_lookup (QName modpath h) tr)
+               ((Some fd) (mc_fd_ground_ret fd))
+               (None
+                 (match (mc_uniq_short fns h)
+                   ((Some fd) (mc_fd_ground_ret fd))
+                   (None None))))))
+          None))
+       (_ None)))
+    (_ None)))
+
+(fn mc_td_find ((tds (List TypeDef)) (q QName)) (Option TypeDef)
+  (measure (struct tds))
+  (match tds
+    (Nil None)
+    ((Cons td rest)
+     (match td
+       ((TypeDef tq _ _ _) (if (qname_eq tq q) (Some td) (mc_td_find rest q)))))))
+
+(fn mc_ctor_find ((cds (List CtorDef)) (c Symbol)) (Option CtorDef)
+  (measure (struct cds))
+  (match cds
+    (Nil None)
+    ((Cons cd rest)
+     (match cd
+       ((CtorDef cq _)
+        (if (sym_eq (qn_name cq) c) (Some cd) (mc_ctor_find rest c)))))))
+
+(fn mc_tp_zip ((tps (List Symbol)) (targs (List Type)))
+  (Option (List (Pair Symbol Type)))
+  (measure (struct tps))
+  (match tps
+    (Nil
+      (match targs
+        (Nil (Some Nil))
+        (_ None)))
+    ((Cons p prest)
+     (match targs
+       (Nil None)
+       ((Cons a arest)
+        (match (mc_tp_zip prest arest)
+          (None None)
+          ((Some env) (Some (Cons (Pair p a) env)))))))))
+
+;; pattern binders with their types under scrutinee type TY.
+(fn mc_pat_tenv ((m Module) (pat SExpr) (ty Type))
+  (Option (List (Pair Symbol Type)))
+  (measure (struct pat))
+  (match pat
+    ((SSym s) (if (mc_is_lower s) (Some (Cons (Pair s ty) Nil)) (Some Nil)))
+    ((SInt _) (Some Nil))
+    ((SList (Cons (SSym c) ps))
+     (if (sym_eq c (quote quote)) (Some Nil)
+     (match ty
+       ((TVar _) None)
+       ((TCon q targs)
+        (match (mc_td_find (module_typedefs m) q)
+          (None None)
+          ((Some td)
+           (match td
+             ((TypeDef _ tps ctors _)
+              (match (mc_ctor_find ctors c)
+                (None None)
+                ((Some cd)
+                 (match cd
+                   ((CtorDef _ ftys)
+                    (match (mc_tp_zip tps targs)
+                      (None None)
+                      ((Some tenv)
+                       (mc_pats_tenv m ps (type_subst_list tenv ftys))))))))))))))))
+    (_ None)))
+
+(fn mc_pats_tenv ((m Module) (ps (List SExpr)) (tys (List Type)))
+  (Option (List (Pair Symbol Type)))
+  (measure (struct ps))
+  (match ps
+    (Nil
+      (match tys
+        (Nil (Some Nil))
+        (_ None)))
+    ((Cons p prest)
+     (match tys
+       (Nil None)
+       ((Cons ty trest)
+        (match (mc_pat_tenv m p ty)
+          (None None)
+          ((Some a)
+           (match (mc_pats_tenv m prest trest)
+             (None None)
+             ((Some b) (Some (app a b)))))))))))
+
+;; native Type → source form. Resolved (path-carrying) names render as the
+;; literal (:: …) path form, which parse_type reads back to the same QName —
+;; round-trip identity by construction, and a bad render can only REFUSE at
+;; the goal's parse/type gate.
+(fn mc_ty_form ((ty Type)) SExpr
+  (measure (struct ty))
+  (match ty
+    ((TVar s) (SSym s))
+    ((TCon q args)
+     (let ((head (mc_qn_form q)))
+       (match args
+         (Nil head)
+         (_ (SList (Cons head (mc_ty_forms args)))))))))
+
+(fn mc_ty_forms ((ts (List Type))) (List SExpr)
+  (measure (struct ts))
+  (match ts
+    (Nil Nil)
+    ((Cons h t) (Cons (mc_ty_form h) (mc_ty_forms t)))))
+
+(fn mc_qn_form ((q QName)) SExpr
+  (match q
+    ((QName path name)
+     (match path
+       (Nil (SSym name))
+       (_ (SList (Cons (SSym (quote ::)) (mc_seg_forms path name))))))))
+
+(fn mc_seg_forms ((path (List Symbol)) (name Symbol)) (List SExpr)
+  (measure (struct path))
+  (match path
+    (Nil (Cons (SSym name) Nil))
+    ((Cons h t) (Cons (SSym h) (mc_seg_forms t name)))))
+
+;; walker context: the module + file module path (for scrutinee-type
+;; synthesis), the measured fn's name, and the param type env.
+;; the walk context: module, the fn's module path, the fn's own name, its
+;; param type env, and the fn's SCC (the QNames of all mutual-recursion
+;; members — used to recognize in-SCC calls, self and sibling alike).
+(type MCtx
+  (MCtx Module (List Symbol) Symbol (List (Pair Symbol Type)) (List QName)))
+
+(fn mcx_scc ((cx MCtx)) (List QName)
+  (match cx
+    ((MCtx _ _ _ _ scc) scc)))
+
+;; the SCC member whose short name heads `h`, if any (self or sibling). v1 is
+;; same-module: SCC members share one module, so their short names are unique
+;; and a short-name match is unambiguous. Cross-module SCCs (import cycles,
+;; forbidden today) will need use-scope QName resolution here — see
+;; docs/TOTALITY.md §7.
+(fn mc_head_member ((h SExpr) (scc (List QName))) (Option QName)
+  (measure (struct scc))
+  (match scc
+    (Nil None)
+    ((Cons q rest)
+     (if (mc_head_is (qn_name q) h) (Some q) (mc_head_member h rest)))))
+
+(fn mc_walk_list
+  ((cx MCtx)
+   (bnds (List Symbol))
+   (tbs (List (Pair Symbol Type)))
+   (hyps (List SExpr))
+   (es (List SExpr))
+   (st (Pair Int (List MSiteS))))
+  (Pair Int (List MSiteS))
+  (measure (size_sexpr_list es))
+  (match es
+    (Nil st)
+    ((Cons e rest)
+     (mc_walk_list cx bnds tbs hyps rest (mc_walk cx bnds tbs hyps e st)))))
+
+(fn mc_walk_arms
+  ((cx MCtx)
+   (bnds (List Symbol))
+   (tbs (List (Pair Symbol Type)))
+   (hyps (List SExpr))
+   (scrut SExpr)
+   (arms (List SExpr))
+   (st (Pair Int (List MSiteS))))
+  (Pair Int (List MSiteS))
+  (measure (size_sexpr_list arms))
+  (match arms
+    (Nil st)
+    ((Cons arm rest)
+     (match arm
+       ((SList (Cons pat (Cons body Nil)))
+        (let ((sc (mc_pat_scan pat)))
+          (mc_walk_arms
+            cx
+            bnds
+            tbs
+            hyps
+            scrut
+            rest
+            (if (int_eq sc 0)
+              (mc_walk cx bnds tbs (Cons (mc_eq_s scrut pat) hyps) body st)
+            (if (int_eq sc 1) (mc_walk cx bnds tbs hyps body st)
+            (mc_binder_arm cx bnds tbs hyps scrut pat body st))))))
+       (_ (mc_walk_arms cx bnds tbs hyps scrut rest st))))))
+
+;; a binder-ful arm: typed when the scrutinee synthesizes, the pattern has
+;; no wildcards, and every binder gets a type — else the B2 untyped walk.
+(fn mc_binder_arm
+  ((cx MCtx)
+   (bnds (List Symbol))
+   (tbs (List (Pair Symbol Type)))
+   (hyps (List SExpr))
+   (scrut SExpr)
+   (pat SExpr)
+   (body SExpr)
+   (st (Pair Int (List MSiteS))))
+  (Pair Int (List MSiteS))
+  (measure (+ 1 (+ (size_sexpr pat) (size_sexpr body))))
+  (let ((bnds2 (mc_pat_binders pat bnds)))
+    (if (mc_pat_has_wild pat) (mc_walk cx bnds2 tbs hyps body st)
+    (match cx
+      ((MCtx m modpath _ penv _)
+       (match (mc_synth m modpath (app tbs penv) scrut)
+         (None (mc_walk cx bnds2 tbs hyps body st))
+         ((Some sty)
+          (match (mc_pat_tenv m pat sty)
+            (None (mc_walk cx bnds2 tbs hyps body st))
+            ((Some newtbs)
+             (mc_walk
+               cx
+               bnds2
+               (app newtbs tbs)
+               (Cons (mc_eq_s scrut pat) hyps)
+               body
+               st))))))))))
+
+(fn mc_let_rhss
+  ((cx MCtx)
+   (bnds (List Symbol))
+   (tbs (List (Pair Symbol Type)))
+   (hyps (List SExpr))
+   (binds SExpr)
+   (st (Pair Int (List MSiteS))))
+  (Pair Int (List MSiteS))
+  (measure (size_sexpr binds))
+  (match binds
+    ((SList bs) (mc_let_rhss_go cx bnds tbs hyps bs st))
+    (_ st)))
+
+(fn mc_let_rhss_go
+  ((cx MCtx)
+   (bnds (List Symbol))
+   (tbs (List (Pair Symbol Type)))
+   (hyps (List SExpr))
+   (bs (List SExpr))
+   (st (Pair Int (List MSiteS))))
+  (Pair Int (List MSiteS))
+  (measure (size_sexpr_list bs))
+  (match bs
+    (Nil st)
+    ((Cons b rest)
+     (match b
+       ;; `nm` (the binding name) is named, not `_`, so the measure gate emits the
+       ;; structural premise b=(SList (Cons nm (Cons rhs Nil))) that links rhs to
+       ;; bs — a wildcard there would drop it and leave the decrease unprovable.
+       ((SList (Cons nm (Cons rhs Nil)))
+        (mc_let_rhss_go cx bnds tbs hyps rest (mc_walk cx bnds tbs hyps rhs st)))
+       (_ (mc_let_rhss_go cx bnds tbs hyps rest st))))))
+
+(fn mc_walk
+  ((cx MCtx)
+   (bnds (List Symbol))
+   (tbs (List (Pair Symbol Type)))
+   (hyps (List SExpr))
+   (e SExpr)
+   (st (Pair Int (List MSiteS))))
+  (Pair Int (List MSiteS))
+  (measure (size_sexpr e))
+  (match e
+    ((SList items)
+     (match items
+       ((Cons h rest)
+        (match (mc_head_member h (mcx_scc cx))
+          ;; an in-SCC call (self or sibling): record (pre-order) WITH the
+          ;; callee QName, then walk the args.
+          ((Some callee)
+           (match st
+             ((Pair i acc)
+              (mc_walk_list
+                cx
+                bnds
+                tbs
+                hyps
+                rest
+                (Pair (+ i 1) (Cons (MSiteS i bnds tbs hyps rest callee) acc))))))
+          (None
+            (match h
+              ((SSym hs)
+               (if (sym_eq hs (quote if))
+                 (match rest
+                   ((Cons c (Cons t (Cons el Nil)))
+                    (mc_walk
+                      cx
+                      bnds
+                      tbs
+                      (Cons (mc_hyp c (quote False)) hyps)
+                      el
+                      (mc_walk
+                        cx
+                        bnds
+                        tbs
+                        (Cons (mc_hyp c (quote True)) hyps)
+                        t
+                        (mc_walk cx bnds tbs hyps c st))))
+                   (_ (mc_walk_list cx bnds tbs hyps rest st)))
+               (if (sym_eq hs (quote match))
+                 (match rest
+                   ((Cons scrut arms)
+                    (mc_walk_arms
+                      cx
+                      bnds
+                      tbs
+                      hyps
+                      scrut
+                      arms
+                      (mc_walk cx bnds tbs hyps scrut st)))
+                   (_ st))
+               (if (sym_eq hs (quote let))
+                 (match rest
+                   ((Cons binds bodyrest)
+                    (mc_walk_list
+                      cx
+                      (mc_let_binders binds bnds)
+                      tbs
+                      hyps
+                      bodyrest
+                      (mc_let_rhss cx bnds tbs hyps binds st)))
+                   (_ st))
+                 (mc_walk_list cx bnds tbs hyps rest st)))))
+              (_ (mc_walk_list cx bnds tbs hyps items st))))))
+       (Nil st)))
+    (_ st)))
+
+;; ---- obligation goal construction ------------------------------------------
+
+;; param names from the params form ((x T) (y T2) …).
+(fn mc_pnames ((pForm SExpr)) (Option (List Symbol))
+  (match pForm
+    ((SList ps) (mc_pnames_go ps))
+    (_ None)))
+
+(fn mc_pnames_go ((ps (List SExpr))) (Option (List Symbol))
+  (measure (struct ps))
+  (match ps
+    (Nil (Some Nil))
+    ((Cons (SList (Cons (SSym x) _)) rest)
+     (match (mc_pnames_go rest)
+       (None None)
+       ((Some xs) (Some (Cons x xs)))))
+    (_ None)))
+
+;; capture-naive substitution: every (SSym x) with x in sub is replaced.
+;; Sound here because the substituted result must then pass mc_pure —
+;; any captured/binder-referencing occurrence makes the site UNSUPPORTED
+;; before an obligation is ever stated.
+(fn mc_subst ((sub (List (Pair Symbol SExpr))) (e SExpr)) SExpr
+  (measure (struct e))
+  (match e
+    ((SSym s) (mc_subst_lookup sub s e))
+    ((SList items) (SList (mc_subst_list sub items)))
+    (_ e)))
+
+(fn mc_subst_lookup ((sub (List (Pair Symbol SExpr))) (s Symbol) (orig SExpr))
+  SExpr
+  (measure (struct sub))
+  (match sub
+    (Nil orig)
+    ((Cons (Pair x v) rest) (if (sym_eq x s) v (mc_subst_lookup rest s orig)))))
+
+(fn mc_subst_list ((sub (List (Pair Symbol SExpr))) (es (List SExpr)))
+  (List SExpr)
+  (measure (struct es))
+  (match es
+    (Nil Nil)
+    ((Cons e rest) (Cons (mc_subst sub e) (mc_subst_list sub rest)))))
+
+(fn mc_zip ((xs (List Symbol)) (es (List SExpr)))
+  (Option (List (Pair Symbol SExpr)))
+  (measure (struct xs))
+  (match xs
+    (Nil
+      (match es
+        (Nil (Some Nil))
+        (_ None)))
+    ((Cons x xr)
+     (match es
+       (Nil None)
+       ((Cons e er)
+        (match (mc_zip xr er)
+          (None None)
+          ((Some ps) (Some (Cons (Pair x e) ps)))))))))
+
+;; (goal PARAMS (HYPS…) (= (REL A B) True))
+(fn mc_goal_s
+  ((pForm SExpr) (hyps (List SExpr)) (rel Symbol) (a SExpr) (b SExpr))
+  SExpr
+  (SList
+    (Cons
+      (SSym (quote goal))
+      (Cons
+        pForm
+        (Cons
+          (SList (rev hyps))
+          (Cons
+            (mc_eq_s
+              (SList (Cons (SSym rel) (Cons a (Cons b Nil))))
+              (SSym (quote True)))
+            Nil))))))
+
+;; ---- checking one obligation through the claim pipeline -------------------
+
+;; None = passed; Some reason = failed.
+(fn mc_check_one
+  ((m Module)
+   (m2 Module)
+   (th Theory)
+   (gctx RCtx)
+   (gname Symbol)
+   (gs SExpr)
+   (ps SExpr)
+   (autos (List (Pair Symbol SExpr))))
+  (Option (List Int))
+  (match (parse_goal_r m gctx gs)
+    (None (Some "could not parse the generated obligation goal"))
+    ((Some g)
+     (match (tc_check_goal m g)
+       ((Some msg) (Some msg))
+       (None
+         (match (parse_proof_auto m gctx gname ps autos g)
+           ((PrfErr emsg) (Some emsg))
+           ((PrfOk p)
+            (if (check_sequent m2 th (lift_sequent g) p) None
+            (Some "obligation proof rejected")))))))))
+
+;; M with an SCC made opaque: those fns are dropped from the fn list and
+;; the trie is rebuilt, so the definitions under admission are stuck terms
+;; to their own termination proofs (the circularity guard).
+(fn mc_fns_minus ((fns (List FnDef)) (scc (List QName))) (List FnDef)
+  (measure (struct fns))
+  (match fns
+    (Nil Nil)
+    ((Cons fd rest)
+     (match fd
+       ((FnDef q _ _ _)
+        (if (mem_qn q scc) (mc_fns_minus rest scc)
+        (Cons fd (mc_fns_minus rest scc))))))))
+
+(fn mc_opaque ((m Module) (scc (List QName))) Module
+  (match m
+    ((Module tds fns exts _ items)
+     (let ((fns2 (mc_fns_minus fns scc)))
+       (Module tds fns2 exts (build_fn_trie fns2) items)))))
+
+(fn mc_scc_of ((q QName) (sccs (List (List QName)))) (List QName)
+  (measure (struct sccs))
+  (match sccs
+    (Nil (Cons q Nil))
+    ((Cons scc rest) (if (mem_qn q scc) scc (mc_scc_of q rest)))))
+
+;; ---- per-fn driver ---------------------------------------------------------
+
+(fn mc_show_i ((i Int)) (List Int) (show_nat i))
+
+(fn mc_line ((key (List Int)) (msg (List Int))) (List Int)
+  (append_int
+    "MEASURED "
+    (append_int key (append_int " " (append_int msg (sr_nl))))))
+
+;; appended to a site's failure when binder-dependent hyps were dropped —
+;; the missing premise may be exactly the dropped one.
+(fn mc_drop_note ((key (List Int)) (ndrop Int)) (List Int)
+  (if (lt 0 ndrop)
+    (append_int
+      "    note: "
+      (append_int
+        (mc_show_i ndrop)
+        (append_int
+          " binder-dependent hyp(s) were dropped from this obligation"
+          (sr_nl))))
+    Nil))
+
+;; a failed obligation: the MEASURED line plus the indented reason.
+(fn mc_fail_line ((key (List Int)) (i Int) (kind (List Int)) (why (List Int)))
+  (List Int)
+  (append_int
+    (mc_line key (append_int "FAIL site " (append_int (mc_show_i i) kind)))
+    (append_int "    " (append_int why (sr_nl)))))
+
+;; the synthetic sidecar key for one site's proof: `<fn>#<site>#<kind>`, where
+;; kind is "decrease" or "nonneg". `#` is not a reader delimiter (is_delim), so
+;; this round-trips as a single symbol in a (proof-for NAME PROOF) sidecar
+;; entry — no change to the sidecar format, which is keyed by claim NAME. A bare
+;; `(measure E)` clause makes each site's proof the `auto` token; auto_lookup
+;; then matches this key against the file's <file>.auto.shard entries.
+(fn mc_site_key ((fname Symbol) (i Int) (kind (List Int))) Symbol
+  (sym_of_chars
+    (append_int
+      (chars_of_sym fname)
+      (append_int "#" (append_int (mc_show_i i) (append_int "#" kind))))))
+
+;; check one site's decrease + nonnegativity pair. None = both pass. `autos` is
+;; the file's sidecar entries: an `auto` proof on a bare measure clause resolves
+;; through it by the per-site synthetic key.
+(fn mc_site_pair
+  ((m Module)
+   (m2 Module)
+   (th Theory)
+   (gctx RCtx)
+   (fname Symbol)
+   (key (List Int))
+   (pForm SExpr)
+   (hyps (List SExpr))
+   (msr2 SExpr)
+   (msr SExpr)
+   (i Int)
+   (p1 SExpr)
+   (p2 SExpr)
+   (autos (List (Pair Symbol SExpr))))
+  (Option (List Int))
+  (match
+    (mc_check_one
+      m
+      m2
+      th
+      gctx
+      (mc_site_key fname i "decrease")
+      (mc_goal_s pForm hyps (quote lt) msr2 msr)
+      p1
+      autos)
+    ((Some why) (Some (mc_fail_line key i " decrease:" why)))
+    (None
+      (match
+        (mc_check_one
+          m
+          m2
+          th
+          gctx
+          (mc_site_key fname i "nonneg")
+          (mc_goal_s pForm hyps (quote le) (SInt 0) msr2)
+          p2
+          autos)
+        ((Some why) (Some (mc_fail_line key i " nonneg:" why)))
+        (None None)))))
+
+;; the MCl of the named fn among `mcls` (this file's measure clauses).
+(fn mc_mcl_find ((name Symbol) (mcls (List MCl))) (Option MCl)
+  (measure (struct mcls))
+  (match mcls
+    (Nil None)
+    ((Cons mcl rest)
+     (match mcl
+       ((MCl n _ _ _ _ _)
+        (if (sym_eq n name) (Some mcl) (mc_mcl_find name rest)))))))
+
+;; the CALLEE's (param names, measure expr) for an in-SCC call. A site's
+;; decrease obligation is  callee_measure[args] < caller_measure[params]  —
+;; the LHS comes from here, so the args must zip against the callee's params
+;; and substitute into the callee's measure (self-calls fall out as callee =
+;; caller). None = the SCC member has no measure clause (incompletely
+;; annotated SCC — see docs/TOTALITY.md §8).
+(fn mc_callee_measure ((callee QName) (mcls (List MCl)))
+  (Option (Pair (List Symbol) SExpr))
+  (match (mc_mcl_find (qn_name callee) mcls)
+    (None None)
+    ((Some (MCl _ _ cpForm cmsr _ _))
+     (match (mc_pnames cpForm)
+       (None None)
+       ((Some cpnames) (Some (Pair cpnames cmsr)))))))
+
+;; ---- structural measures: (measure (struct ARG)) --------------------------
+;; Verify-don't-search (docs/TOTALITY.md §4): the author DECLARES the descending
+;; parameter; the gate verifies that every recursive call passes, at the
+;; CALLEE's declared position, a strict subterm rooted at THIS member's declared
+;; position. No proof, no path conditions — a strict subterm is unconditionally
+;; smaller on every branch, and every site must pass, so the structural notion
+;; is path-insensitive (unlike the numeric gate's mc_walk, which must collect
+;; path conditions). Reuses admit.shard's subterm CLASSIFICATION
+;; (ad_fn_sites / ad_cls_at) over the elaborated body; the SEARCH admit uses to
+;; *discover* a designation (ad_fix / ad_pick / ad_self_find) stays advisory and
+;; out of the trust path.
+
+;; head test for the numeric-vs-structural dispatch in mc_check_fn.
+(fn mc_is_struct ((msr SExpr)) Bool
+  (match (form_head msr)
+    (None False)
+    ((Some h) (sym_eq h (quote struct)))))
+
+;; the 0-based index of NAME among the parameter names (source order, first = 0
+;; — the same convention ad_env0/ad_cls_at use for the subterm root index).
+(fn mc_name_index ((name Symbol) (names (List Symbol)) (i Int)) (Option Int)
+  (measure (struct names))
+  (match names
+    (Nil None)
+    ((Cons h t) (if (sym_eq h name) (Some i) (mc_name_index name t (+ i 1))))))
+
+;; the declared descending index from a (struct ARG) clause, or None if msr is
+;; not a well-formed struct clause naming a parameter. The head re-check keeps a
+;; numeric measure like (size e) from being misread as (struct e).
+(fn mc_struct_pos ((msr SExpr) (pnames (List Symbol))) (Option Int)
+  (match (form_head msr)
+    (None None)
+    ((Some h)
+     (if (sym_eq h (quote struct))
+       (match (form_tail msr)
+         ((Cons (SSym arg) Nil) (mc_name_index arg pnames 0))
+         (_ None))
+       None))))
+
+;; the CALLEE's declared descending index, from its own (struct …) clause.
+;; None = the callee carries no struct clause (an incompletely / mixed-annotated
+;; SCC) — structural descent across the SCC is then unverifiable and the site
+;; must FAIL, never silently pass.
+(fn mc_callee_struct_pos ((callee QName) (mcls (List MCl))) (Option Int)
+  (match (mc_mcl_find (qn_name callee) mcls)
+    (None None)
+    ((Some (MCl _ _ cpForm cmsr _ _))
+     (match (mc_pnames cpForm)
+       (None None)
+       ((Some cpnames) (mc_struct_pos cmsr cpnames))))))
+
+(fn mc_struct_fail ((key (List Int)) (callee QName) (why (List Int))) (List Int)
+  (mc_line
+    key
+    (append_int
+      "FAIL: call to "
+      (append_int (chars_of_sym (qn_name callee)) why))))
+
+;; verify each recursive site: at the callee's declared position the argument
+;; must be a strict subterm (AStrict) rooted at THIS member's declared index pi.
+(fn mc_struct_sites
+  ((key (List Int)) (sites (List MSite)) (pi Int) (mcls (List MCl)) (nok Int))
+  (List Int)
+  (measure (struct sites))
+  (match sites
+    (Nil
+      (mc_line key (append_int "OK (" (append_int (mc_show_i nok) " site(s))"))))
+    ((Cons (MSite _ callee args) rest)
+     (match (mc_callee_struct_pos callee mcls)
+       (None (mc_struct_fail key callee " has no (struct …) clause"))
+       ((Some pj)
+        (match (ad_cls_at args pj)
+          ((AStrict p)
+           (if (int_eq p pi) (mc_struct_sites key rest pi mcls (+ nok 1))
+           (mc_struct_fail
+             key
+             callee
+             " — argument is a subterm of a parameter other than the one declared")))
+          ((ASame _)
+           (mc_struct_fail
+             key
+             callee
+             " — argument is the parameter itself, not a strict subterm"))
+          ((AOther)
+           (mc_struct_fail
+             key
+             callee
+             " — argument is not a subterm of the declared parameter"))))))))
+
+;; the structural verifier entry: resolve THIS member's declared index, gather
+;; its recursive sites (admit's elaborated-Expr walk), verify each.
+(fn mc_check_struct
+  ((key (List Int))
+   (fd FnDef)
+   (scc (List QName))
+   (pnames (List Symbol))
+   (msr SExpr)
+   (mcls (List MCl)))
+  (List Int)
+  (match (mc_struct_pos msr pnames)
+    (None
+      (mc_line key "FAIL: malformed (struct ARG) — ARG must name a parameter"))
+    ((Some pi)
+     (let ((sites (ad_fn_sites scc fd)))
+       (match sites
+         (Nil (mc_line key "OK (no recursive call sites)"))
+         (_ (mc_struct_sites key sites pi mcls 0)))))))
+
+;; walk the sites pairing each SUPPORTED site with its proof pair.
+;; per-site outcome: SiteHalt stops the whole loop with one line (a setup error
+;; — no measure / arity / unsupported / missing proofs — that the old recursive
+;; form returned without a continuation); SiteGo carries this site's output, the
+;; remaining proofs, and the running nok for the next iteration.
+(type MSiteRes (SiteHalt (List Int)) (SiteGo (List Int) (List SExpr) Int))
+
+;; The site loop. STRUCTURAL on `sites`: each iteration consumes one site (the
+;; per-site work is the non-recursive mc_one_site) and recurses on the tail. The
+;; recursion used to live in the pass-through forwarders mc_site_go/mc_typed_site
+;; (they carried the already-shrunk tail and called back with it unchanged — no
+;; structural drop on that edge); relocating it here makes every edge a strict
+;; subterm step ⇒ a plain (struct sites) measure, no lex offsets.
+(fn mc_check_sites
+  ((m Module)
+   (m2 Module)
+   (th Theory)
+   (gctx RCtx)
+   (fname Symbol)
+   (key (List Int))
+   (pForm SExpr)
+   (pnames (List Symbol))
+   (msr SExpr)
+   (sites (List MSiteS))
+   (proofs (List SExpr))
+   (nok Int)
+   (mcls (List MCl))
+   (autos (List (Pair Symbol SExpr))))
+  (List Int)
+  (measure (struct sites))
+  (match sites
+    (Nil
+      (match proofs
+        (Nil
+          (mc_line
+            key
+            (append_int "OK (" (append_int (mc_show_i nok) " site(s))"))))
+        (_ (mc_line key "FAIL: leftover proofs after the last site"))))
+    ((Cons site rest)
+     (match
+       (mc_one_site m m2 th gctx fname key pForm pnames msr site proofs nok mcls
+         autos)
+       ((SiteHalt line) line)
+       ((SiteGo out prest nok2)
+        (append_int
+          out
+          (mc_check_sites m m2 th gctx fname key pForm pnames msr rest prest
+            nok2 mcls autos)))))))
+
+;; one site's setup: resolve the callee measure, substitute the call args, then
+;; take the pure-measure path (goal over params) or the typed-binder path. The
+;; tail (mc_one_site_pair) checks the inline proof pair. Non-recursive — the loop
+;; lives in mc_check_sites.
+(fn mc_one_site
+  ((m Module)
+   (m2 Module)
+   (th Theory)
+   (gctx RCtx)
+   (fname Symbol)
+   (key (List Int))
+   (pForm SExpr)
+   (pnames (List Symbol))
+   (msr SExpr)
+   (site MSiteS)
+   (proofs (List SExpr))
+   (nok Int)
+   (mcls (List MCl))
+   (autos (List (Pair Symbol SExpr))))
+  MSiteRes
+  (match site
+    ((MSiteS i bnds tbs hyps args callee)
+     (match (mc_callee_measure callee mcls)
+       (None
+         (SiteHalt
+           (mc_line
+             key
+             (append_int
+               "FAIL site "
+               (append_int
+                 (mc_show_i i)
+                 (append_int
+                   ": SCC member "
+                   (append_int
+                     (chars_of_sym (qn_name callee))
+                     " has no measure clause")))))))
+       ((Some (Pair cpnames cmsr))
+        (match (mc_zip cpnames args)
+          (None
+            (SiteHalt
+              (mc_line
+                key
+                (append_int
+                  "FAIL site "
+                  (append_int (mc_show_i i) ": arity mismatch at the call")))))
+          ((Some sub)
+           (let ((msr2 (mc_subst sub cmsr)))
+             (if (mc_pure msr2 pnames bnds)
+               (match (mc_keep_hyps hyps pnames bnds)
+                 ((Pair khyps ndrop)
+                  (mc_one_site_pair m m2 th gctx fname key pForm khyps ndrop
+                    msr2 msr i proofs nok autos)))
+               (mc_one_site_typed m m2 th gctx fname key pForm pnames msr i tbs
+                 hyps msr2 proofs nok autos))))))))))
+
+;; the typed-binder path: the measure substitution references pattern
+;; binders, so the obligation is stated over the fn params PLUS the typed
+;; binders in scope (hyps mentioning an UNTYPED binder still drop, with
+;; the note). Binder names must be fresh against the params — a shadowing
+;; pattern would alias two distinct values in one goal.
+(fn mc_one_site_typed
+  ((m Module)
+   (m2 Module)
+   (th Theory)
+   (gctx RCtx)
+   (fname Symbol)
+   (key (List Int))
+   (pForm SExpr)
+   (pnames (List Symbol))
+   (msr SExpr)
+   (i Int)
+   (tbs (List (Pair Symbol Type)))
+   (hyps (List SExpr))
+   (msr2 SExpr)
+   (proofs (List SExpr))
+   (nok Int)
+   (autos (List (Pair Symbol SExpr))))
+  MSiteRes
+  (let ((tbn (mc_tb_names tbs Nil)))
+    (if (mc_tbs_fresh tbn pnames)
+      (let ((alln (app tbn pnames)))
+        (if (mc_pure msr2 alln Nil)
+          (match (mc_ext_pform pForm tbs)
+            (None
+              (SiteHalt (mc_line key "UNVERIFIED (could not read param names)")))
+            ((Some pForm2)
+             (match (mc_keep_hyps hyps alln Nil)
+               ((Pair khyps ndrop)
+                (mc_one_site_pair m m2 th gctx fname key pForm2 khyps ndrop msr2
+                  msr i proofs nok autos)))))
+          (SiteHalt
+            (mc_line
+              key
+              (append_int
+                "UNSUPPORTED site "
+                (append_int
+                  (mc_show_i i)
+                  " (measure argument references pattern/let binders)"))))))
+      (SiteHalt
+        (mc_line
+          key
+          (append_int
+            "UNSUPPORTED site "
+            (append_int (mc_show_i i) " (a pattern binder shadows a parameter)")))))))
+
+;; pair the site's two inline proofs (decrease, nonneg) against pFormX —
+;; the fn's params, possibly extended with typed binders — then continue.
+;; pair the site's two inline proofs (decrease, nonneg) against pFormX — the
+;; fn's params, possibly extended with typed binders. Non-recursive: returns a
+;; SiteGo carrying this site's output (a bad-cert message + drop note, or empty)
+;; the remaining proofs, and the updated nok; mc_check_sites drives the loop.
+;; A missing proof pair halts (the old form returned the line with no recurse).
+(fn mc_one_site_pair
+  ((m Module)
+   (m2 Module)
+   (th Theory)
+   (gctx RCtx)
+   (fname Symbol)
+   (key (List Int))
+   (pFormX SExpr)
+   (khyps (List SExpr))
+   (ndrop Int)
+   (msr2 SExpr)
+   (msr SExpr)
+   (i Int)
+   (proofs (List SExpr))
+   (nok Int)
+   (autos (List (Pair Symbol SExpr))))
+  MSiteRes
+  (match proofs
+    (Nil
+      (SiteHalt
+        (mc_line
+          key
+          (append_int
+            "FAIL site "
+            (append_int
+              (mc_show_i i)
+              ": no proofs left (need decrease + nonneg)")))))
+    ((Cons p1 prest1)
+     (match prest1
+       (Nil
+         (SiteHalt
+           (mc_line
+             key
+             (append_int
+               "FAIL site "
+               (append_int
+                 (mc_show_i i)
+                 ": only one proof left (need decrease + nonneg)")))))
+       ((Cons p2 prest)
+        (match
+          (mc_site_pair m m2 th gctx fname key pFormX khyps msr2 msr i p1 p2
+            autos)
+          ;; CONTINUE past a failing site (collect every FAIL, not just the
+          ;; first) — invisible when all sites pass (nok = total, output
+          ;; byte-identical to before), but surfaces all slot/cert errors in a
+          ;; single run during development.
+          ((Some bad)
+           (SiteGo (append_int bad (mc_drop_note key ndrop)) prest nok))
+          (None (SiteGo Nil prest (+ nok 1)))))))))
+
+;; typed-binder goal-param plumbing.
+(fn mc_tb_names ((tbs (List (Pair Symbol Type))) (acc (List Symbol)))
+  (List Symbol)
+  (measure (struct tbs))
+  (match tbs
+    (Nil acc)
+    ((Cons (Pair n _) rest) (mc_tb_names rest (Cons n acc)))))
+
+(fn mc_tbs_fresh ((names (List Symbol)) (pnames (List Symbol))) Bool
+  (measure (struct names))
+  (match names
+    (Nil True)
+    ((Cons n rest)
+     (if (mem_sym n pnames) False
+     (if (mem_sym n rest) False
+     (mc_tbs_fresh rest pnames))))))
+
+;; tbs is innermost-first; the fold reverses, so the appended binder params
+;; read outermost-first after the fn's own params.
+(fn mc_tb_param_forms ((tbs (List (Pair Symbol Type))) (acc (List SExpr)))
+  (List SExpr)
+  (measure (struct tbs))
+  (match tbs
+    (Nil acc)
+    ((Cons (Pair n ty) rest)
+     (mc_tb_param_forms
+       rest
+       (Cons (SList (Cons (SSym n) (Cons (mc_ty_form ty) Nil))) acc)))))
+
+(fn mc_ext_pform ((pForm SExpr) (tbs (List (Pair Symbol Type)))) (Option SExpr)
+  (match pForm
+    ((SList ps) (Some (SList (app ps (mc_tb_param_forms tbs Nil)))))
+    (_ None)))
+
+;; param name → type env from the looked-up FnDef (order matches pForm).
+(fn mc_fd_penv ((ns (List Symbol)) (fd FnDef)) (List (Pair Symbol Type))
+  (match fd
+    ((FnDef _ ptys _ _) (zip ns ptys))))
+
+;; a bare numeric `(measure E)` clause (no inline proofs) means every recursive
+;; site takes its decrease + nonneg proof from the sidecar: synthesize the `auto`
+;; token twice per site (decrease, nonneg), in site order. mc_site_pair then
+;; resolves each by its per-site synthetic key (mc_site_key). When the author
+;; DID write inline proofs, mc_check_fn keeps them verbatim — back-compatible.
+(fn mc_auto_proofs ((sites (List MSiteS))) (List SExpr)
+  (measure (struct sites))
+  (match sites
+    (Nil Nil)
+    ((Cons _ rest)
+     (Cons (SSym (quote auto)) (Cons (SSym (quote auto)) (mc_auto_proofs rest))))))
+
+(fn mc_check_fn
+  ((m Module)
+   (sccs (List (List QName)))
+   (th Theory)
+   (gctx RCtx)
+   (modpath (List Symbol))
+   (mcl MCl)
+   (mcls (List MCl))
+   (autos (List (Pair Symbol SExpr))))
+  (List Int)
+  (match mcl
+    ((MCl name tparams pForm msr proofs body)
+     (match m
+       ((Module _ fns _ tr _)
+        (let ((q (QName modpath name)))
+          ;; Resolve the fn the clause names. A same-module fn keys exactly in
+          ;; the modpath trie; a REBOUND opaque sig fn (std/list, std/bytes, …)
+          ;; lives at its INTERFACE qname, not the file's module path, so the
+          ;; trie misses — fall back to a unique short-name scan (mc_synth's
+          ;; rebind idiom). The fd's own qname (rq) is then the gate identity:
+          ;; trie/SCC keys + the display line all use rq, never the file path.
+          (match
+            (match (trie_lookup q tr)
+              ((Some fd) (Some fd))
+              (None (mc_uniq_short fns name)))
+            (None
+              (mc_line
+                (qn_key_chars q)
+                "UNVERIFIED (fn not found at the file's module path — rebind?)"))
+            ((Some fd)
+             (match fd
+               ((FnDef rq _ _ _)
+                (let ((key (qn_key_chars rq)))
+                  (match (mc_pnames pForm)
+                    (None
+                      (mc_line key "UNVERIFIED (could not read param names)"))
+                    ((Some pnames)
+                     ;; SCC keyed by the fn's REAL qname (rq), so a rebound fn's
+                     ;; SCC is found. Needed by the walk (sibling recognition)
+                     ;; AND opacity/citation, so compute it first.
+                     (let ((scc (mc_scc_of rq sccs)))
+                       (if (mc_is_struct msr)
+                         ;; Structural descent is a SYNTACTIC strict-subterm
+                         ;; check, independent of the element TYPE — so it
+                         ;; verifies POLYMORPHIC fns (std/list append/len/…)
+                         ;; exactly as monomorphic ones. Only NUMERIC measures
+                         ;; (farkas needs typed goals) stay monomorphic-only.
+                         (mc_check_struct key fd scc pnames msr mcls)
+                         (match tparams
+                           ((Cons _ _)
+                            (mc_line
+                              key
+                              "UNVERIFIED (type-parametric fn — v1 numeric measures are monomorphic)"))
+                           (Nil
+                             (match
+                               (mc_walk
+                                 (MCtx
+                                   m
+                                   modpath
+                                   name
+                                   (mc_fd_penv pnames fd)
+                                   scc)
+                                 Nil
+                                 Nil
+                                 Nil
+                                 body
+                                 (Pair 0 Nil))
+                               ((Pair _ rsites)
+                                (let ((sites (rev_onto rsites Nil)))
+                                  (match sites
+                                    (Nil
+                                      (mc_line
+                                        key
+                                        "OK (no recursive call sites)"))
+                                    (_
+                                      (mc_check_sites
+                                        m
+                                        (mc_opaque m scc)
+                                        (mc_theory_for_scc tr scc th)
+                                        gctx
+                                        name
+                                        key
+                                        pForm
+                                        pnames
+                                        msr
+                                        sites
+                                        (match proofs
+                                          (Nil (mc_auto_proofs sites))
+                                          (_ proofs))
+                                        0
+                                        mcls
+                                        autos)))))))))))))))))))))))
+
+;; ---- citable theory for measure obligations (STRATIFIED CITATION) ----------
+;; A measure obligation proving fn F (its SCC = `scc`) total may cite a fact L
+;; iff L's STATEMENT cannot reach any member of `scc` through the call graph —
+;; i.e. L does not depend, directly or transitively, on the very fn(s) being
+;; shown total. That is the acyclicity rule: an unproven lemma may not prove
+;; itself, directly or indirectly.
+;;
+;; This unifies the two old citation sources. Granted-module requirements live
+;; upstream and structurally cannot reach F, so they pass automatically; same-
+;; closure claims pass exactly when they are downstream of F. The pool is the
+;; run's accumulated theory (granted axioms + this run's PASSED claims — run_decls
+;; folds both in as Axiom/Proven), filtered here per F. This supersedes the old
+;; granted-only filter AND the blanket same-closure ban: the call-graph test is
+;; the precise, order-independent statement of both.
+
+;; the resolvable callee QNames mentioned in a stored goal's statement
+;; (premises + conclusion). Prims/externs don't resolve and are excluded.
+(fn mc_eq_calls ((tr FnTrie) (eq Equation) (acc (List QName))) (List QName)
+  (match eq
+    ((Equation l r) (ad_calls_e tr l (ad_calls_e tr r acc)))))
+
+(fn mc_eqs_calls ((tr FnTrie) (eqs (List Equation)) (acc (List QName)))
+  (List QName)
+  (measure (struct eqs))
+  (match eqs
+    (Nil acc)
+    ((Cons e rest) (mc_eqs_calls tr rest (mc_eq_calls tr e acc)))))
+
+(fn mc_goal_calls ((tr FnTrie) (g Goal) (acc (List QName))) (List QName)
+  (match g
+    ((Goal _ prems concl) (mc_eqs_calls tr prems (mc_eq_calls tr concl acc)))))
+
+;; True iff some fn transitively reachable from `work` (following fn bodies via
+;; the full module trie) is a member of `scc`. `seen` bounds the walk to the
+;; finite call graph — each fn is expanded at most once, so the walk halts after
+;; at most |work| + (total call-graph edges) steps. That bound is data-weighted
+;; over the trie (its honest measure needs the trie<->fns consistency bridge —
+;; deferred); for totality (issue #1) we instead fuel the walk. The recursion is
+;; non-structural (the expand arm GROWS work with the body's calls). Public
+;; wrapper seeds a generous budget; the `_go` core carries (measure fuel).
+;; Give-up returns True (conservative: "reaches scc" => the theory entry is NOT
+;; citable for this scc => sound, just over-restrictive — a proof could fail to
+;; find a lemma and be rejected, never falsely admitted). The budget exceeds any
+;; real call graph, so give-up is dead on well-formed input.
+(fn mc_reach_budget () Int 1000000000)
+
+(fn mc_reaches
+  ((tr FnTrie) (work (List QName)) (seen (List QName)) (scc (List QName)))
+  Bool
+  (mc_reaches_go tr work seen scc (mc_reach_budget)))
+
+(fn mc_reaches_go
+  ((tr FnTrie)
+   (work (List QName))
+   (seen (List QName))
+   (scc (List QName))
+   (fuel Int))
+  Bool
+  (measure
+    fuel
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (lt fuel 1) True
+  (match work
+    (Nil False)
+    ((Cons q rest)
+     (if (mem_qn q scc) True
+     (if (mem_qn q seen) (mc_reaches_go tr rest seen scc (- fuel 1))
+     (match (trie_lookup q tr)
+       (None (mc_reaches_go tr rest (Cons q seen) scc (- fuel 1)))
+       ((Some (FnDef _ _ _ body))
+        (mc_reaches_go
+          tr
+          (ad_calls_e tr body rest)
+          (Cons q seen)
+          scc
+          (- fuel 1))))))))))
+
+;; a theory entry is citable for `scc` iff its statement can't reach `scc`.
+(fn mc_entry_safe ((tr FnTrie) (scc (List QName)) (entry TheoryEntry)) Bool
+  (match entry
+    ((Proven _ g)
+     (if (mc_reaches tr (mc_goal_calls tr g Nil) Nil scc) False True))
+    ((Axiom _ g)
+     (if (mc_reaches tr (mc_goal_calls tr g Nil) Nil scc) False True))))
+
+;; filter the run's full theory down to what F's SCC may soundly cite.
+(fn mc_theory_for_scc ((tr FnTrie) (scc (List QName)) (th Theory)) Theory
+  (measure (struct th))
+  (match th
+    (TheoryEmpty TheoryEmpty)
+    ((TheoryCons entry rest)
+     (let ((kept (mc_theory_for_scc tr scc rest)))
+       (if (mc_entry_safe tr scc entry) (TheoryCons entry kept) kept)))))
+
+;; ---- GENERATOR SUPPORT: emit measure obligations (NOT in the check path) ----
+;; tools/prove uses these to DISCOVER what a bare `(measure E)` clause must
+;; prove, so the offline solver can search each obligation and persist the cert
+;; keyed by mc_site_key. The derivation MIRRORS mc_check_fn / mc_check_sites /
+;; mc_one_site / mc_one_site_typed exactly — same mc_walk sites, same callee-measure substitution,
+;; same mc_keep_hyps / typed-binder handling, same mc_goal_s — so a generated
+;; proof is searched against the IDENTICAL obligation the gate later checks. The
+;; checker never calls these, and a derivation mismatch could only make the gate
+;; REJECT the cert (never falsely accept it), so this stays out of the TCB.
+;; Each supported site yields two entries: <fn>#<i>#decrease and #nonneg.
+;; Unsupported / no-measure / arity-mismatch sites emit nothing (the gate
+;; reports them; there is no cert to generate).
+
+;; the two goal obligations for one site, consed onto `tail`.
+(fn mc_ob_emit
+  ((name Symbol)
+   (i Int)
+   (pFormX SExpr)
+   (khyps (List SExpr))
+   (msr2 SExpr)
+   (msr SExpr)
+   (tail (List (Pair Symbol SExpr))))
+  (List (Pair Symbol SExpr))
+  (Cons
+    (Pair
+      (mc_site_key name i "decrease")
+      (mc_goal_s pFormX khyps (quote lt) msr2 msr))
+    (Cons
+      (Pair
+        (mc_site_key name i "nonneg")
+        (mc_goal_s pFormX khyps (quote le) (SInt 0) msr2))
+      tail)))
+
+;; one site: derive (pFormX, khyps, msr2) the same two ways mc_check_sites does
+;; (simple param-pure path / typed-binder path), then emit; or pass `tail`
+;; through unchanged when the site is unsupported.
+(fn mc_ob_site_join
+  ((name Symbol)
+   (pForm SExpr)
+   (pnames (List Symbol))
+   (msr SExpr)
+   (i Int)
+   (bnds (List Symbol))
+   (tbs (List (Pair Symbol Type)))
+   (hyps (List SExpr))
+   (args (List SExpr))
+   (callee QName)
+   (mcls (List MCl))
+   (tail (List (Pair Symbol SExpr))))
+  (List (Pair Symbol SExpr))
+  (match (mc_callee_measure callee mcls)
+    (None tail)
+    ((Some (Pair cpnames cmsr))
+     (match (mc_zip cpnames args)
+       (None tail)
+       ((Some sub)
+        (let ((msr2 (mc_subst sub cmsr)))
+          (if (mc_pure msr2 pnames bnds)
+            (match (mc_keep_hyps hyps pnames bnds)
+              ((Pair khyps _) (mc_ob_emit name i pForm khyps msr2 msr tail)))
+            (let ((tbn (mc_tb_names tbs Nil)))
+              (if (mc_tbs_fresh tbn pnames)
+                (let ((alln (app tbn pnames)))
+                  (if (mc_pure msr2 alln Nil)
+                    (match (mc_ext_pform pForm tbs)
+                      (None tail)
+                      ((Some pForm2)
+                       (match (mc_keep_hyps hyps alln Nil)
+                         ((Pair khyps _)
+                          (mc_ob_emit name i pForm2 khyps msr2 msr tail)))))
+                    tail))
+                tail)))))))))
+
+(fn mc_ob_sites
+  ((name Symbol)
+   (pForm SExpr)
+   (pnames (List Symbol))
+   (msr SExpr)
+   (sites (List MSiteS))
+   (mcls (List MCl)))
+  (List (Pair Symbol SExpr))
+  (measure (struct sites))
+  (match sites
+    (Nil Nil)
+    ((Cons (MSiteS i bnds tbs hyps args callee) rest)
+     (mc_ob_site_join
+       name
+       pForm
+       pnames
+       msr
+       i
+       bnds
+       tbs
+       hyps
+       args
+       callee
+       mcls
+       (mc_ob_sites name pForm pnames msr rest mcls)))))
+
+;; the obligations for one clause; Nil for struct / type-parametric / not-found
+;; / unreadable clauses (nothing to generate).
+(fn mc_obligations_for
+  ((m Module)
+   (sccs (List (List QName)))
+   (modpath (List Symbol))
+   (mcl MCl)
+   (mcls (List MCl)))
+  (List (Pair Symbol SExpr))
+  (match mcl
+    ((MCl name tparams pForm msr proofs body)
+     (match tparams
+       ((Cons _ _) Nil)
+       (Nil
+         (if (mc_is_struct msr) Nil
+         (match m
+           ((Module _ _ _ tr _)
+            (match (trie_lookup (QName modpath name) tr)
+              (None Nil)
+              ((Some fd)
+               (match (mc_pnames pForm)
+                 (None Nil)
+                 ((Some pnames)
+                  (let ((scc (mc_scc_of (QName modpath name) sccs)))
+                    (match
+                      (mc_walk
+                        (MCtx m modpath name (mc_fd_penv pnames fd) scc)
+                        Nil
+                        Nil
+                        Nil
+                        body
+                        (Pair 0 Nil))
+                      ((Pair _ rsites)
+                       (mc_ob_sites
+                         name
+                         pForm
+                         pnames
+                         msr
+                         (rev_onto rsites Nil)
+                         mcls))))))))))))))))
+
+;; a clause whose proofs must be GENERATED: numeric (non-struct) and bare (no
+;; inline proofs). Inline-proof clauses are left alone (the gate uses their
+;; proofs, never the sidecar), and struct clauses carry no numeric proofs.
+(fn mc_is_bare_numeric ((mcl MCl)) Bool
+  (match mcl
+    ((MCl _ _ _ msr proofs _)
+     (match proofs
+       (Nil (if (mc_is_struct msr) False True))
+       (_ False)))))
+
+(fn mc_file_obligations
+  ((m Module)
+   (sccs (List (List QName)))
+   (modpath (List Symbol))
+   (todo (List MCl))
+   (all (List MCl)))
+  (List (Pair Symbol SExpr))
+  (measure (struct todo))
+  (match todo
+    (Nil Nil)
+    ((Cons mcl rest)
+     (app
+       (if (mc_is_bare_numeric mcl) (mc_obligations_for m sccs modpath mcl all)
+       Nil)
+       (mc_file_obligations m sccs modpath rest all)))))
+
+;; generator entry: every (site-key, goal) obligation a file's BARE numeric
+;; measure clauses must prove, given the file's already-built module `m`, its
+;; source forms, and its module path. tools/prove turns each into an AutoDecl
+;; and searches it; the cert is keyed by mc_site_key so the gate replays it.
+(fn mc_obligations_of_forms
+  ((m Module) (forms (List SExpr)) (modpath (List Symbol)))
+  (List (Pair Symbol SExpr))
+  (let ((all (rev_onto (mc_of_forms forms Nil) Nil)))
+    (mc_file_obligations m (ad_sccs m) modpath all all)))
+
+;; ---- the section entry ------------------------------------------------------
+
+;; `todo` is the iteration cursor; `all` is the file's full clause list, passed
+;; unchanged to every fn as its SCC sibling table (a member's measure obligation
+;; needs its siblings' measures — see mc_callee_measure).
+(fn mc_mcls
+  ((m Module)
+   (sccs (List (List QName)))
+   (th Theory)
+   (gctx RCtx)
+   (modpath (List Symbol))
+   (todo (List MCl))
+   (all (List MCl))
+   (autos (List (Pair Symbol SExpr))))
+  (List Int)
+  (measure (struct todo))
+  (match todo
+    (Nil Nil)
+    ((Cons mcl rest)
+     (append_int
+       (mc_check_fn m sccs th gctx modpath mcl all autos)
+       (mc_mcls m sccs th gctx modpath rest all autos)))))
+
+(fn mc_files
+  ((m Module)
+   (sccs (List (List QName)))
+   (th Theory)
+   (srcs (List SrcEntry))
+   (sidecars (List (Pair Symbol (List Int)))))
+  (List Int)
+  (measure (struct srcs))
+  (match srcs
+    (Nil Nil)
+    ((Cons (SrcEntry path granted _ mf) rest)
+     (match mf
+       (None (mc_files m sccs th rest sidecars))
+       ((Some forms)
+        (let ((mcls (mc_of_forms forms Nil)))
+          (match mcls
+            (Nil (mc_files m sccs th rest sidecars))
+            (_
+              (let ((allmcls (rev_onto mcls Nil)))
+                (append_int
+                  (mc_mcls
+                    m
+                    sccs
+                    th
+                    (file_rctx_f m path mf)
+                    (module_path_of path)
+                    allmcls
+                    allmcls
+                    (autos_of_src (sym_of_chars path) sidecars))
+                  (mc_files m sccs th rest sidecars)))))))))))
+
+;; ---- failure detection for the enforcement flip (issue #1, Phase D) ---------
+;; needle is a contiguous prefix of hay.
+(fn mc_prefix ((needle (List Int)) (hay (List Int))) Bool
+  (measure (struct needle))
+  (match needle
+    (Nil True)
+    ((Cons n nt)
+     (match hay
+       (Nil False)
+       ((Cons h ht) (if (int_eq n h) (mc_prefix nt ht) False))))))
+
+;; needle occurs as a contiguous substring of hay.
+(fn mc_has_sub ((hay (List Int)) (needle (List Int))) Bool
+  (measure (struct hay))
+  (if (mc_prefix needle hay) True
+  (match hay
+    (Nil False)
+    ((Cons _ ht) (mc_has_sub ht needle)))))
+
+;; the list after the first space (Nil if none).
+(fn mc_after_sp ((hay (List Int))) (List Int)
+  (measure (struct hay))
+  (match hay
+    (Nil Nil)
+    ((Cons c rest) (if (int_eq c 32) rest (mc_after_sp rest)))))
+
+;; A MEASURED line is "MEASURED <key> <VERDICT>…" — keys are space-free QName
+;; renderings, so the verdict word is the token after the SECOND space. The
+;; gate is FAIL-CLOSED: the only accepting verdict is OK. Until 2026-09-02 the
+;; discriminator was the substring " FAIL", and every other non-OK outcome the
+;; walk can halt on — then spelled "SKIP (type-parametric fn …)", "UNSUPPORTED
+;; site …", "SKIP (could not read param names)" — passed the gate with its clause
+;; UNVERIFIED: a type-parametric fn with a numeric measure that never
+;; decreases was admitted to the logic (pins/trust/measure_skip_rejects.shard
+;; is the pin). A verdict the gate does not recognise must refuse, never admit.
+(fn mc_line_ok ((line (List Int))) Bool
+  (mc_prefix "OK" (mc_after_sp (mc_after_sp line))))
+
+;; True iff some MEASURED line in the rendered block carries a verdict other
+;; than OK. `bol` = at the beginning of a line (the block's lines are joined by
+;; sr_nl; detail lines are indented and never start with MEASURED).
+(fn mc_nok_go ((hay (List Int)) (bol Bool)) Bool
+  (measure (struct hay))
+  (match hay
+    (Nil False)
+    ((Cons c rest)
+     (if (if bol (mc_prefix "MEASURED " hay) False)
+       (if (mc_line_ok hay) (mc_nok_go rest False) True)
+       (mc_nok_go rest (int_eq c 10))))))
+
+(fn mc_any_fail ((lines (List Int))) Bool (mc_nok_go lines True))
+
+;; ---- proof-ADMISSION accounting (issue #1, Phase D) ------------------------
+;; The totality gate refuses non-terminating fns that are ADMITTED TO THE PROOF
+;; SYSTEM — used as a component of a proof — not every recursive fn that merely
+;; exists in a loaded file. A fn is admitted when a proof REACHES it through the
+;; call graph: an `unfold`/`reduce`/`compute` step uses its defining equation, so
+;; its non-totality would be unsound. A closure with no proofs admits nothing —
+;; the interpreter (ev) and the offline solver (prove) are programs, not proof
+;; components, and stay un-gated though genuinely partial.
+;;
+;; The seed is every fn NAMED ANYWHERE in a proof-bearing form (claim / fulfills
+;; / requirement / returns / axiom) — goal AND proof body, so a fn pulled into
+;; reduction by a `have` / `case-on` / `unfold` operand (not just the goal's
+;; fns) is caught. Symbols naming no fn drop out (mc_uniq_short). This is an
+;; OVER-approximation by construction: a spurious seed only over-restricts (asks
+;; a measure of a fn no proof truly reduced) — it can never admit a non-total fn.
+;; The advisory admit report (mc_residual_report) is unchanged: it still lists
+;; ALL unannotated recursive SCCs; only the ENFORCED gate is admission-scoped.
+
+;; every SSym appearing anywhere in an SExpr.
+(fn mc_form_syms ((s SExpr) (acc (List Symbol))) (List Symbol)
+  (measure (struct s))
+  (match s
+    ((SSym x) (Cons x acc))
+    ((SList items) (mc_form_syms_list items acc))
+    (_ acc)))
+
+(fn mc_form_syms_list ((items (List SExpr)) (acc (List Symbol))) (List Symbol)
+  (measure (struct items))
+  (match items
+    (Nil acc)
+    ((Cons it rest) (mc_form_syms_list rest (mc_form_syms it acc)))))
+
+;; symbols → fn QNames (a symbol naming no fn drops out), accumulated.
+(fn mc_syms_to_fns ((fns (List FnDef)) (syms (List Symbol)) (acc (List QName)))
+  (List QName)
+  (measure (struct syms))
+  (match syms
+    (Nil acc)
+    ((Cons s rest)
+     (match (mc_uniq_short fns s)
+       ((Some (FnDef rq _ _ _)) (mc_syms_to_fns fns rest (Cons rq acc)))
+       (None (mc_syms_to_fns fns rest acc))))))
+
+;; a proof-bearing top-level form: its named fns seed the admission walk.
+(fn mc_is_proof_form ((h Symbol)) Bool
+  (if (sym_eq h (quote claim)) True
+  (if (sym_eq h (quote fulfills)) True
+  (if (sym_eq h (quote requirement)) True
+  (if (sym_eq h (quote returns)) True
+  (if (sym_eq h (quote axiom)) True
+  False))))))
+
+(fn mc_seed_of_forms ((forms (List SExpr)) (acc (List Symbol))) (List Symbol)
+  (measure (struct forms))
+  (match forms
+    (Nil acc)
+    ((Cons f rest)
+     (match (form_head f)
+       (None (mc_seed_of_forms rest acc))
+       ((Some h)
+        (if (mc_is_proof_form h) (mc_seed_of_forms rest (mc_form_syms f acc))
+        (mc_seed_of_forms rest acc)))))))
+
+;; the closure's proof-admission seed: fn QNames named in any proof form.
+(fn mc_proof_seed ((fns (List FnDef)) (srcs (List SrcEntry)) (acc (List QName)))
+  (List QName)
+  (measure (struct srcs))
+  (match srcs
+    (Nil acc)
+    ((Cons (SrcEntry _ _ _ mf) rest)
+     (match mf
+       (None (mc_proof_seed fns rest acc))
+       ((Some forms)
+        (mc_proof_seed
+          fns
+          rest
+          (mc_syms_to_fns fns (mc_seed_of_forms forms Nil) acc)))))))
+
+;; keep only the unannotated members a proof actually reaches (admitted). For a
+;; mutual SCC, reaching one member reaches the rest through the cycle, so each
+;; member is tested against the seed independently with no loss.
+(fn mc_filter_admitted
+  ((tr FnTrie) (seed (List QName)) (qs (List QName)) (acc (List QName)))
+  (List QName)
+  (measure (struct qs))
+  (match qs
+    (Nil acc)
+    ((Cons q rest)
+     (if (mc_reaches tr seed Nil (Cons q Nil))
+       (mc_filter_admitted tr seed rest (Cons q acc))
+       (mc_filter_admitted tr seed rest acc)))))
+
+;; one hard COFail per recursive-SCC member that declares no (measure …) clause.
+(fn mc_residual_cofails ((qs (List QName))) (List ClaimOutcome)
+  (measure (struct qs))
+  (match qs
+    (Nil Nil)
+    ((Cons q rest)
+     (Cons
+       (COFail
+         (sym_of_chars (qn_key_chars q))
+         "non-terminating: recursive SCC declares no (measure …) clause"
+         Nil)
+       (mc_residual_cofails rest)))))
+
+;; MEASURE OBLIGATIONS in the normal check pass (issue #1, Phase D — ENFORCED).
+;; Emits the informative COLedger block as before, but the totality gate is now
+;; a HARD gate: a closure FAILS the run when either
+;;   (a) a recursive SCC that is ADMITTED TO THE PROOF SYSTEM declares no
+;;       (measure …) clause — mc_unannot_go ∩ mc_filter_admitted, or
+;;   (b) a declared clause is not verified              — any verdict but OK in
+;;       the block (FAIL, UNSUPPORTED, UNVERIFIED — fail-closed, mc_any_fail).
+;; "Admitted" = reached by a proof through the call graph (see mc_proof_seed);
+;; a recursive fn no proof reduces (the interpreter, the offline solver) is a
+;; program, not a proof component, and does not move the gate. Each (a) is one
+;; COFail naming the unannotated fn; (b) is one COFail pointing at the block. A
+;; measure-free / fully-verified closure is byte-unchanged (no COFail, same
+;; COLedger), so only genuinely non-terminating proof components move.
+;; `th` is the run's accumulated theory (granted axioms + this run's passed
+;; claims); mc_check_fn filters it per fn under the stratified-citation rule.
+;; Skipped under focus mode (totality is a whole-closure property, and focus
+;; admits unproven claims that must not seed measure citations).
+(fn mc_outcome
+  ((m Module)
+   (srcs (List SrcEntry))
+   (sidecars (List (Pair Symbol (List Int))))
+   (th Theory)
+   (focus Symbol))
+  (List ClaimOutcome)
+  (if (sym_eq focus (quote __all__))
+    (match m
+      ((Module _ fns _ tr _)
+       (let ((sccs (ad_sccs m)))
+         (let ((lines (mc_files m sccs th srcs sidecars)))
+           (let
+             ((missing
+                (mc_filter_admitted
+                  tr
+                  (mc_proof_seed fns srcs Nil)
+                  (mc_unannot_go tr sccs (mc_clause_qns tr fns srcs Nil) Nil)
+                  Nil)))
+             (app
+               (match lines
+                 (Nil Nil)
+                 (_
+                   (Cons
+                     (COLedger
+                       (append_int
+                         "---- measure obligations ----"
+                         (append_int (sr_nl) lines)))
+                     Nil)))
+               (app
+                 (mc_residual_cofails missing)
+                 (if (mc_any_fail lines)
+                   (Cons
+                     (COFail
+                       (quote __totality__)
+                       "a declared (measure …) obligation was not verified — see the measure obligations block above"
+                       Nil)
+                     Nil)
+                   Nil))))))))
+    Nil))
+
+;; ===========================================================================
+;; REFINED-RETURN OBLIGATIONS (refinement types, slice 2 — ENFORCED).
+;; A fn `(fn f PARAMS R BODY)` whose return type R = (refine BASE PRED) is
+;; admitted with an ordinary BASE-typed body (tc_fn_body_ret relaxes the
+;; body↔return unification in types.shard). That relaxation is ONLY sound if
+;; every such fn discharges
+;;     ∀PARAMS, (= (PRED (refine_val (f PARAMS))) True)
+;; — the proof that f's result really lands in R. The proof is supplied by a
+;; SEPARATE top-level form `(returns f PROOF)` (not a fn clause, so a recursive
+;; refined-return fn keeps its (measure …) clause unchanged). This gate emits a
+;; HARD COFail when the obligation is missing or its proof is rejected; it is
+;; silent on success, so a closure with no refined-return fn is byte-unchanged.
+;;
+;; SOUNDNESS — why EVERY fn in the closure is checked (not just the targets):
+;; refine-fact (slice 1) will inject (= (PRED (refine_val E)) True) for ANY E
+;; whose inferred head is R, in ANY file. So an UNCHECKED refined-return fn g in
+;; an imported file would let a consumer assume g's invariant for free. The gate
+;; therefore walks all srcs, exactly as mc_files does for measure obligations.
+;; The obligation is consumed but never re-published into the theory (its name is
+;; the synthetic `f#returns`), so it can cite freely without circularity.
+;; The proof is checked against the FULL module m (m2 = m) so it can unfold f.
+;; See docs/REFINEMENT.md.
+;; ===========================================================================
+
+;; the declared return type of fn q, if q names a fn in m.
+(fn rr_fn_ret ((m Module) (q QName)) (Option Type)
+  (match m
+    ((Module _ _ _ trie _)
+     (match (trie_lookup q trie)
+       (None None)
+       ((Some fd)
+        (match fd
+          ((FnDef _ _ ret _) (Some ret))))))))
+
+;; the predicate QName of fn q's return type, if that return is refined; else
+;; None (not a fn, or an ordinary return).
+(fn rr_pred_of ((m Module) (q QName)) (Option QName)
+  (match (rr_fn_ret m q)
+    (None None)
+    ((Some ret)
+     (match (type_head ret)
+       (None None)
+       ((Some (Pair rname _))
+        (match (typedef_refine rname m)
+          (None None)
+          ((Some (Pair _ pred)) (Some pred))))))))
+
+;; collect the file's (returns NAME PROOF) forms into a name→proof table.
+(fn rr_returns ((forms (List SExpr)) (acc (List (Pair Symbol SExpr))))
+  (List (Pair Symbol SExpr))
+  (measure (struct forms))
+  (match forms
+    (Nil acc)
+    ((Cons f rest)
+     (match (form_head f)
+       (None (rr_returns rest acc))
+       ((Some h)
+        (if (sym_eq h (quote returns))
+          (match (form_tail f)
+            ((Cons (SSym name) (Cons proofS Nil))
+             (rr_returns rest (Cons (Pair name proofS) acc)))
+            (_ (rr_returns rest acc)))  ; malformed → no proof; fn COFails below
+          (rr_returns rest acc)))))))
+
+;; the call args of the obligation: one (SSym pname) per param binder of pForm.
+(fn rr_arg_syms ((binders (List SExpr))) (List SExpr)
+  (measure (struct binders))
+  (match binders
+    (Nil Nil)
+    ((Cons b rest)
+     (match b
+       ((SList (Cons headS _)) (Cons headS (rr_arg_syms rest)))
+       (_ (rr_arg_syms rest))))))
+
+(fn rr_args ((pForm SExpr)) (List SExpr)
+  (match pForm
+    ((SList binders) (rr_arg_syms binders))
+    (_ Nil)))
+
+;; the obligation goal sexpr: (goal PARAMS () (= (PRED (refine_val (f args))) True)).
+;; PRED and f are written as exact (:: …) qnames so resolution cannot pick a
+;; homonym (an unsound predicate substitution).
+;; the obligation goal: (goal PARAMS () (= (PRED (self args)) True)). No
+;; refine_val: this goal is checked against a module where `self`'s SCC is
+;; DE-REFINED (return R → BASE; see rr_check), so (self args) : BASE and PRED
+;; applies directly. The de-refinement is what makes refine-fact unable to fire
+;; on `self` or a mutually-recursive sibling — closing the circularity by which
+;; a refined-return obligation could otherwise prove ITSELF.
+(fn rr_goal_s ((pForm SExpr) (pred QName) (self QName) (args (List SExpr)))
+  SExpr
+  (SList
+    (Cons
+      (SSym (quote goal))
+      (Cons
+        pForm
+        (Cons
+          (SList Nil)
+          (Cons
+            (mc_eq_s
+              (SList
+                (Cons
+                  (mc_qn_form pred)
+                  (Cons (SList (Cons (mc_qn_form self) args)) Nil)))
+              (SSym (quote True)))
+            Nil))))))
+
+;; the synthetic claim name for f's obligation: `f#returns` (# is not a reader
+;; delimiter, so this is one symbol — and it never collides with a real claim).
+(fn rr_gname ((name Symbol)) Symbol
+  (sym_of_chars (append_int (chars_of_sym name) "#returns")))
+
+(fn rr_missing_msg ((name Symbol)) (List Int)
+  (append_int
+    "refined return: fn "
+    (append_int
+      (chars_of_sym name)
+      " has a refined return type but no (returns …) proof — its refinement invariant is unproven")))
+
+(fn rr_fail_msg ((name Symbol) (why (List Int))) (List Int)
+  (append_int
+    "refined return: fn "
+    (append_int (chars_of_sym name) (append_int ": " why))))
+
+;; ---- SCC de-refinement: the circularity guard --------------------------------
+;; When checking f's refined-return obligation, every fn in f's recursive SCC has
+;; its return type R lowered to BASE (tc_fn_body_ret does the R→BASE map). The fn
+;; BODIES are untouched, so the proof can still unfold them; only the declared
+;; return type changes, so a call (g args) to an SCC member types as BASE and
+;; refine-fact — which keys off the head being a refined type — cannot grant its
+;; invariant. This is the analogue of the measure gate's mc_opaque (which removes
+;; the SCC) for an obligation whose goal must still MENTION the fn.
+(fn rr_deref_fns ((m Module) (scc (List QName)) (fns (List FnDef))) (List FnDef)
+  (measure (struct fns))
+  (match fns
+    (Nil Nil)
+    ((Cons (FnDef q pts ret body) rest)
+     (Cons
+       (if (mem_qn q scc) (FnDef q pts (tc_fn_body_ret m ret) body)
+       (FnDef q pts ret body))
+       (rr_deref_fns m scc rest)))))
+
+(fn rr_deref ((m Module) (scc (List QName))) Module
+  (match m
+    ((Module tds fns exts _ items)
+     (let ((fns2 (rr_deref_fns m scc fns)))
+       (Module tds fns2 exts (build_fn_trie fns2) items)))))
+
+;; check one refined-return fn `name` (params pForm, predicate pred, in module
+;; path `modpath`). Nil on success; one COFail on missing/failing proof. The
+;; obligation is checked against m DE-REFINED over name's SCC (`sccs` = the run's
+;; precomputed SCCs), so the proof cannot assume name's own refinement nor a
+;; mutually-recursive sibling's — it must establish the invariant honestly.
+(fn rr_check
+  ((m Module)
+   (sccs (List (List QName)))
+   (th Theory)
+   (gctx RCtx)
+   (modpath (List Symbol))
+   (name Symbol)
+   (pForm SExpr)
+   (pred QName)
+   (rmap (List (Pair Symbol SExpr)))
+   (autos (List (Pair Symbol SExpr))))
+  (List ClaimOutcome)
+  (match (assoc_sym name rmap)
+    (None (Cons (COFail name (rr_missing_msg name) Nil) Nil))
+    ((Some proofS)
+     (let ((m2 (rr_deref m (mc_scc_of (qn_at modpath name) sccs))))
+       (match
+         (mc_check_one
+           m2
+           m2
+           th
+           gctx
+           (rr_gname name)
+           (rr_goal_s pForm pred (qn_at modpath name) (rr_args pForm))
+           proofS
+           autos)
+         (None Nil)
+         ((Some why) (Cons (COFail name (rr_fail_msg name why) Nil) Nil)))))))
+
+;; one form: if it is a fn with a refined return, check its obligation.
+(fn rr_of_form
+  ((m Module)
+   (sccs (List (List QName)))
+   (th Theory)
+   (gctx RCtx)
+   (modpath (List Symbol))
+   (f SExpr)
+   (rmap (List (Pair Symbol SExpr)))
+   (autos (List (Pair Symbol SExpr))))
+  (List ClaimOutcome)
+  (match (form_head f)
+    (None Nil)
+    ((Some h)
+     (if (sym_eq h (quote fn))
+       (match (form_tail f)
+         ((Cons nameForm (Cons pForm _))
+          (match (parse_head nameForm)
+            (None Nil)
+            ((Some (Pair name _))
+             (match (rr_pred_of m (qn_at modpath name))
+               (None Nil)
+               ((Some pred)
+                (rr_check m sccs th gctx modpath name pForm pred rmap autos))))))
+         (_ Nil))
+       Nil))))
+
+(fn rr_of_forms
+  ((m Module)
+   (sccs (List (List QName)))
+   (th Theory)
+   (gctx RCtx)
+   (modpath (List Symbol))
+   (forms (List SExpr))
+   (rmap (List (Pair Symbol SExpr)))
+   (autos (List (Pair Symbol SExpr))))
+  (List ClaimOutcome)
+  (measure (struct forms))
+  (match forms
+    (Nil Nil)
+    ((Cons f rest)
+     (app
+       (rr_of_form m sccs th gctx modpath f rmap autos)
+       (rr_of_forms m sccs th gctx modpath rest rmap autos)))))
+
+(fn rr_files
+  ((m Module)
+   (sccs (List (List QName)))
+   (th Theory)
+   (srcs (List SrcEntry))
+   (sidecars (List (Pair Symbol (List Int)))))
+  (List ClaimOutcome)
+  (measure (struct srcs))
+  (match srcs
+    (Nil Nil)
+    ((Cons (SrcEntry path _ _ mf) rest)
+     (match mf
+       (None (rr_files m sccs th rest sidecars))
+       ((Some forms)
+        (app
+          (rr_of_forms
+            m
+            sccs
+            th
+            (file_rctx_f m path mf)
+            (module_path_of path)
+            forms
+            (rr_returns forms Nil)
+            (autos_of_src (sym_of_chars path) sidecars))
+          (rr_files m sccs th rest sidecars)))))))
+
+;; the section entry: HARD COFails for unproven refined returns, closure-wide.
+;; Skipped under focus mode (focus admits unproven claims that must not seed the
+;; obligation's citable theory, and the property is whole-closure). The SCC set
+;; is computed ONCE here and threaded down for the per-fn de-refinement.
+(fn rr_outcome
+  ((m Module)
+   (srcs (List SrcEntry))
+   (sidecars (List (Pair Symbol (List Int))))
+   (th Theory)
+   (focus Symbol))
+  (List ClaimOutcome)
+  (if (sym_eq focus (quote __all__)) (rr_files m (ad_sccs m) th srcs sidecars)
+  Nil))

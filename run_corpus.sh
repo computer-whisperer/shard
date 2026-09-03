@@ -1432,6 +1432,16 @@ echo "=== digest: the read-surface tool (tier pins) ==="
 pin_run digest_t1 bash -c 'bin/shard_eval run tools/digest/digest.shard tools/digest/fixtures/sample.shard 1 | cmp -s - tools/digest/fixtures/sample_d1_out.shard'
 pin_run digest_t2 bash -c 'bin/shard_eval run tools/digest/digest.shard tools/digest/fixtures/sample.shard 2 | cmp -s - tools/digest/fixtures/sample_d2_out.shard'
 
+# ── tracer BYTE PIN (slimming arc, 2026-09-03). pins/proof/tracer_demo.shard
+# exercised the tracer's failure diagnostics, but only its PASS/FAIL line was
+# gated — the trace block's bytes ARE the tracer's contract (descent shape,
+# context dump, obligation replay). One focused run per claim, cmp'd against
+# the recorded shape in pins/proof/tracer_demo_out/. Re-record deliberately
+# when the tracer's output is meant to change; never to make a run green.
+for c in cond_lemma t_have_broken t_oblig_broken t_absurd_weak t_hyp_idx t_oblig_fine t_unfold_arm t_nested_caseon; do
+  pin_run "trace_$c" bash -c '"$0" "$@" 2>&1 | cmp -s - "pins/proof/tracer_demo_out/'"$c"'.txt"' "${CHECK_CMD[@]}" pins/proof/tracer_demo.shard "$c"
+done
+
 # explain's proof-DSL mirror (tools/explain/proofdiag.shard) vs the kernel's
 # parse_proof: --pin parses every claim of a pin file through BOTH and counts
 # accept/reject disagreements — a new proof form or step the kernel learns

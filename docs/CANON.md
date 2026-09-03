@@ -694,7 +694,8 @@ The three step kinds, in the license's own terms:
   pinned occurrence IS the fold's argument — C1/C6 at empty pins);
 - **gated unfolds under pins**: a user-fn call unfolds ONLY when the
   unfolded body immediately head-fires under the pins — exactly
-  step_smart's δ gate, evaluated with pins. This is the family the
+  `step`'s δ gate at eval=False (the Simp grade), evaluated with pins.
+  This is the family the
   census measured as the bulk: `(f t)` in an arm where t ≡ Nil is
   `(f Nil)`, a decided call; spelling the call is spelling a redex.
 
@@ -709,8 +710,8 @@ now closed under evaluation as well as rebuilding.
 
 TERMINATION: steps consume pin ctor-layers (finite, lexical) or fold
 ground redexes (measure-decreasing); δ is gated on immediate
-head-fire, the same discipline that keeps step_smart from chasing
-recursion. The rewriter's obligation is a contextual normal form per
+head-fire, the same discipline that keeps Simp's `step` (eval=False)
+from chasing recursion. The rewriter's obligation is a contextual normal form per
 arm; the recognizer's is one boolean per body (does ANY subterm
 step).
 

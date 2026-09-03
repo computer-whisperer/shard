@@ -459,7 +459,7 @@ Almost entirely shard kernel (the Rust side is an evaluator/loader only):
 - `kernel/proof_reader.shard` — parse `(refine-fact EXPR)`.
 - `kernel/checker.shard` — `do_refine_fact`: build the `(= (PRED (refine_val
   EXPR)) True)` premise and continue.
-- `kernel/driver.shard` — [BUILT] `rr_outcome`: the ENFORCED refined-return gate
+- `kernel/measure.shard` — [BUILT] `rr_outcome`: the ENFORCED refined-return gate
   (mirrors the `mc_outcome` measure path — walks all srcs, builds each obligation
   goal, emits a HARD `COFail` on missing/rejected proof). `rr_deref` de-refines
   the fn's SCC (return `R → BASE`) and the obligation is checked against THAT

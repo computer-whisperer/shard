@@ -1,0 +1,411 @@
+;;; claims.shard — the per-claim pipeline layer, shared by the checker driver
+;;; and the obligation gates.
+;;;
+;;; Everything a claim needs BETWEEN its source form and check_sequent:
+;;;   - the file-scope resolution context (file_rctx / file_rctx_f) and the
+;;;     type-name set a goal is parsed against (scope_type_names, issue #38);
+;;;   - Stage-2 qualified-identity resolution of a parsed Goal/Proof against
+;;;     the module it was authored in (resolve_*, parse_goal_r, parse_proof_r);
+;;;   - the `auto` proof indirection through `<file>.auto.shard` sidecars
+;;;     (parse_proof_auto);
+;;;   - ClaimOutcome, the outcome vocabulary every consumer renders.
+;;;
+;;; driver.shard runs the file loop and acceptance over this layer;
+;;; measure.shard builds synthetic obligations (termination measures,
+;;; refined returns) and pushes them through the SAME functions, so a
+;;; generated obligation can never take a different path than an authored
+;;; claim. Nothing here decides admission.
+
+(import "stdlib.shard")
+(import "term.shard")
+(import "module.shard")
+(import "proof.shard")
+(import "checker.shard")  ; Sequent
+(import "desugar.shard")  ; ds_proof: named citations → positional
+(import "reader.shard")
+(import "proof_reader.shard")  ; native proof-DSL → Goal/Proof
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel proof *))
+(use (:: kernel checker *))
+(use (:: kernel desugar *))
+(use (:: kernel reader *))
+(use (:: kernel proof_reader *))
+
+;; The ctor + type-name sets a proof-DSL claim is parsed against. ctors lets
+;; `elaborate` tell a value constructor from an FVar in an object snippet;
+;; type_names lets the goal reader tell a concrete 0-ary type from a type
+;; variable. Int and Symbol are primitive type constructors with no TypeDef, so
+;; they're prepended explicitly.
+(fn module_ctors ((m Module)) (List Symbol) (typedef_ctors (module_typedefs m)))
+
+;; The type names IN SCOPE for one file's goals and proofs (issue #38). A
+;; goal binder's bare type name is a type constructor only when the file's
+;; OWN resolution context (locals > use-items > core, file_rctx) maps it to
+;; a declared typedef; otherwise it is a GENERIC type variable of the goal
+;; (parse_type's TVar), the same meaning in every importing closure. The
+;; MERGED closure's full typedef-name list is the wrong set: under it a
+;; claim like kernel/term's `len_cons` over `(h T)` flipped from generic to
+;; "unknown type: T" whenever an unrelated importer declared its own
+;; `(type T …)` — the QName-shadowing family, on type names. Int/Symbol stay
+;; unconditional exactly as before (their identity is checked downstream by
+;; tc_is_prim_ty on the RESOLVED qname).
+(fn scope_type_names ((m Module) (gctx RCtx)) (List Symbol)
+  (Cons
+    (quote Int)
+    (Cons
+      (quote Symbol)
+      (scope_type_names_go
+        (typedef_names (module_typedefs m))
+        (module_typedefs m)
+        gctx))))
+
+(fn scope_type_names_go ((ns (List Symbol)) (tds (List TypeDef)) (gctx RCtx))
+  (List Symbol)
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons n rest)
+     (match (find_typedef (rhead (qn n) gctx) tds)
+       ((Some _) (Cons n (scope_type_names_go rest tds gctx)))
+       (None (scope_type_names_go rest tds gctx))))))
+
+(fn lift_sequent ((g Goal)) Sequent
+  (match g
+    ((Goal params premises eq) (Sequent params Nil premises eq))))
+
+(fn goal_params ((g Goal)) (List Param)
+  (match g
+    ((Goal ps prems eq) ps)))
+
+;; The goal's own premise count — the named-have desugarer's base index
+;; (haves append AFTER the goal premises).
+(fn goal_premise_count ((g Goal)) Int
+  (match g
+    ((Goal ps prems eq) (len prems))))
+
+;; ===========================================================================
+;; QUALIFIED-IDENTITY RESOLUTION for proof-DSL goals/proofs (Stage 2).
+;;
+;; proof_reader parses goals/proofs with everything tagged `core` (`qn`). The
+;; module M they reason about now carries real module-paths (build_module_d's
+;; resolver), so a goal's `Nat` / `True` / `int_of_nat` must be re-qualified to
+;; MATCH M, or every find_typedef/find_ctor/fn-sig lookup (which compares by
+;; qname_eq) fails. We resolve the embedded Expr/Type/Pat references (and the
+;; module entities a proof STEP names — the fn it Unfolds, the type it CaseOns,
+;; the ctor of each Case) against `module_resolve_env m`, reusing the reader's
+;; tree-walkers. EqRef CITATIONS (Lemma names) are deliberately left at `core`:
+;; the Theory keys claim names there too, so they still match — qualified
+;; citations are Stage 4. (resolve_expr/_type/_pat/rhead live in reader.shard;
+;; these proof-structure walkers live here, where proof.shard's types exist.)
+;; ===========================================================================
+
+(fn resolve_param ((env RCtx) (p Param)) Param
+  (match p
+    ((Param n t) (Param n (resolve_type env t)))))
+
+(fn resolve_params ((env RCtx) (ps (List Param))) (List Param)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons h t) (Cons (resolve_param env h) (resolve_params env t)))))
+
+(fn resolve_equation ((env RCtx) (eq Equation)) Equation
+  (match eq
+    ((Equation a b) (Equation (resolve_expr env a) (resolve_expr env b)))))
+
+(fn resolve_equations ((env RCtx) (eqs (List Equation))) (List Equation)
+  (measure (struct eqs))
+  (match eqs
+    (Nil Nil)
+    ((Cons h t) (Cons (resolve_equation env h) (resolve_equations env t)))))
+
+(fn resolve_goal ((env RCtx) (g Goal)) Goal
+  (match g
+    ((Goal ps prems concl)
+     (Goal
+       (resolve_params env ps)
+       (resolve_equations env prems)
+       (resolve_equation env concl)))))
+
+(fn resolve_inst ((env RCtx) (i Inst)) Inst
+  (match i
+    ((Inst n e) (Inst n (resolve_expr env e)))))
+
+(fn resolve_insts ((env RCtx) (is (List Inst))) (List Inst)
+  (measure (struct is))
+  (match is
+    (Nil Nil)
+    ((Cons h t) (Cons (resolve_inst env h) (resolve_insts env t)))))
+
+;; Stage 4: a bare (lemma n) cite resolves through the SAME env discipline as
+;; every other name (local > use-items; claims are module items), and the
+;; (:: ...) form re-roots like any head. Unresolved stays core -> nothing is
+;; admitted at core anymore, so a dangling cite fails its claim LOUDLY.
+(fn resolve_eqref ((env RCtx) (er EqRef)) EqRef
+  (match er
+    ((Lemma q) (Lemma (rhead q env)))
+    (_ er)))
+
+(fn resolve_qnames ((env RCtx) (qs (List QName))) (List QName)
+  (measure (struct qs))
+  (match qs
+    (Nil Nil)
+    ((Cons h t) (Cons (rhead h env) (resolve_qnames env t)))))
+
+(fn resolve_step ((env RCtx) (st Step)) Step
+  (match st
+    ((Unfold f side) (Unfold (rhead f env) side))
+    ((Reduce side) st)
+    ((Simp side stops) (Simp side (resolve_qnames env stops)))
+    ((Compute side stops) (Compute side (resolve_qnames env stops)))
+    ((Inspect) st)
+    ((Rewrite eqref dir side occ insts)
+     (Rewrite (resolve_eqref env eqref) dir side occ (resolve_insts env insts)))
+    ((Change side occ compact stops)
+     (Change side occ (resolve_expr env compact) (resolve_qnames env stops)))))
+
+(fn resolve_steps ((env RCtx) (sts (List Step))) (List Step)
+  (measure (struct sts))
+  (match sts
+    (Nil Nil)
+    ((Cons h t) (Cons (resolve_step env h) (resolve_steps env t)))))
+
+(fn resolve_proof ((env RCtx) (p Proof)) Proof
+  (measure (struct p))
+  (match p
+    ((Refl) p)
+    ((Admit) p)
+    ((Steps steps pf) (Steps (resolve_steps env steps) (resolve_proof env pf)))
+    ((Induct v cases) (Induct v (resolve_cases env cases)))
+    ((CaseOn e ty cases)
+     (CaseOn (resolve_expr env e) (rhead ty env) (resolve_cases env cases)))
+    ((WfInduct measure pf)
+     (WfInduct (resolve_expr env measure) (resolve_proof env pf)))
+    ((SubtermInduct v pf) (SubtermInduct v (resolve_proof env pf)))
+    ((Below) p)
+    ((RewriteWith eqref dir side occ insts subs pf)
+     (RewriteWith
+       (resolve_eqref env eqref)
+       dir
+       side
+       occ
+       (resolve_insts env insts)
+       (resolve_proofs env subs)
+       (resolve_proof env pf)))
+    ((Absurd eqref) (Absurd (resolve_eqref env eqref)))
+    ;; ByTheory's Cert payload is theory-PRIVATE narrow data (e.g. farkas's
+    ;; (List Int) multipliers), not object terms with module references — it is
+    ;; matched as a narrow list by the backends, so resolving it as an Expr
+    ;; would corrupt it. Leave it untouched.
+    ((ByTheory th cert) p)
+    ((FinSplit v lo hi fcs) (FinSplit v lo hi (resolve_fincases env fcs)))
+    ((Have eq pf cont)
+     (Have
+       (resolve_equation env eq)
+       (resolve_proof env pf)
+       (resolve_proof env cont)))
+    ((DivFacts e d q pf)
+     (DivFacts (resolve_expr env e) d q (resolve_proof env pf)))
+    ((RefineFact r ev pf)
+     (RefineFact (rhead r env) (resolve_expr env ev) (resolve_proof env pf)))
+    ((Inject er n pf) (Inject (resolve_eqref env er) n (resolve_proof env pf)))
+    ((ExactConv er is subs stops)
+     (ExactConv
+       (resolve_eqref env er)
+       (resolve_insts env is)
+       (resolve_proofs env subs)
+       (resolve_qnames env stops)))))
+
+(fn resolve_proofs ((env RCtx) (ps (List Proof))) (List Proof)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons h t) (Cons (resolve_proof env h) (resolve_proofs env t)))))
+
+(fn resolve_case ((env RCtx) (c Case)) Case
+  (measure (struct c))
+  (match c
+    ((Case ctor names pf) (Case (rhead ctor env) names (resolve_proof env pf)))))
+
+(fn resolve_cases ((env RCtx) (cs (List Case))) (List Case)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons h t) (Cons (resolve_case env h) (resolve_cases env t)))))
+
+(fn resolve_fincase ((env RCtx) (fc FinCase)) FinCase
+  (measure (struct fc))
+  (match fc
+    ((FinCase k pf) (FinCase k (resolve_proof env pf)))))
+
+(fn resolve_fincases ((env RCtx) (fcs (List FinCase))) (List FinCase)
+  (measure (struct fcs))
+  (match fcs
+    (Nil Nil)
+    ((Cons h t) (Cons (resolve_fincase env h) (resolve_fincases env t)))))
+
+;; parse-then-resolve: parse a goal/proof against M's ctor+type sets, then
+;; re-qualify its module references to match M. The single seam every claim,
+;; axiom, and requirement flows through.
+(fn parse_goal_r ((m Module) (gctx RCtx) (s SExpr)) (Option Goal)
+  (match (parse_goal s (module_ctors m) (scope_type_names m gctx))
+    (None None)
+    ((Some g) (Some (resolve_goal gctx g)))))
+
+(fn parse_proof_r ((m Module) (gctx RCtx) (s SExpr)) (Option Proof)
+  (match (parse_proof s (module_ctors m) (scope_type_names m gctx))
+    (None None)
+    ((Some p) (Some (resolve_proof gctx p)))))
+
+;; ===========================================================================
+;; Production entry: per-claim outcomes in source order. This is the loop the
+;; default `check` routes through (the Rust harness reports each outcome as a
+;; PASS/FAIL/AXIOM line). Claims and axioms are processed interleaved as
+;; written (parse_decls), threading the theory across the WHOLE file list
+;; (imports first, then targets) so every citation — same-file, imported, or
+;; axiom — resolves.
+;; ===========================================================================
+
+;; Each outcome carries a `trace` field: the `--trace` block for the claim, or
+;; empty (Nil) when this claim isn't the trace target. The Rust harness prints
+;; the block (if any) before the PASS/FAIL line.
+(type ClaimOutcome
+  (COPass Symbol (List Int))  ; name, trace-block
+  (COFail Symbol (List Int) (List Int))  ; name, diagnostic detail, trace-block
+  (COAxiom Symbol)  ; an axiom admitted without proof
+  (COAdmit Symbol (List Int))  ; (admit) in proof — UNSOUND, exit 3; + trace-block
+  (COPending Symbol)  ; a requirement stated but never fulfilled in this closure
+  (COBin Symbol Int Int)  ; a bin acceptance summary: name, required, met
+  (COLib Symbol Int Int)  ; a lib acceptance summary: name, exports declared, implemented
+  ;; COTypeFail: a type error from types.shard — a HARD failure. The decl is
+  ;; rejected: an ill-typed axiom is not admitted, an ill-typed requirement is
+  ;; not seeded, an ill-typed claim is not proof-checked. (The theory backends
+  ;; are only sound for well-typed terms; see types.shard's header.)
+  (COTypeFail Symbol (List Int))
+  ;; COLedger: a bin's trust-ledger block, pre-rendered. Informative — it
+  ;; bumps no counts; the acceptance-failing checks (trusts/externs/unmet)
+  ;; stay separate COFail outcomes.
+  (COLedger (List Int))
+  ;; COCanon: the stage-1 canonicalization advisory (CANON.md §3) — the
+  ;; target module's C1-C6 violations, pre-rendered, one CANON line each.
+  ;; Informative like COLedger: bumps no counts, changes no exit code.
+  (COCanon (List Int)))
+
+;; The whole-module sweep (typedefs, externs/sigs, fn bodies) as outcomes.
+(fn type_fail_outcomes ((ws (List (Pair Symbol (List Int)))))
+  (List ClaimOutcome)
+  (measure (struct ws))
+  (match ws
+    (Nil Nil)
+    ((Cons (Pair name msg) rest)
+     (Cons (COTypeFail name msg) (type_fail_outcomes rest)))))
+
+;; ---------------------------------------------------------------------------
+;; `auto` proof indirection. A claim/fulfills whose proof is the bare symbol
+;; `auto` — or `(auto …)`, the tail reserved as SOLVER hints, ignored here —
+;; takes its real proof from the file's sidecar `<file>.auto.shard`:
+;; (proof-for NAME PROOF) forms generated offline by proof-search tooling
+;; (read_sidecars, loader.shard). The checker only ever REPLAYS a sidecar
+;; proof deterministically; it NEVER searches. A sidecar is untrusted input:
+;; the spliced s-expr goes through the same parse / desugar / check_sequent
+;; path as an inline proof, so a wrong or stale entry simply fails.
+;; ---------------------------------------------------------------------------
+(fn is_auto_proof ((s SExpr)) Bool
+  (match s
+    ((SSym h) (sym_eq h (quote auto)))
+    ((SList (Cons (SSym h) _)) (sym_eq h (quote auto)))
+    (_ False)))
+
+;; (proof-for NAME PROOF) forms → (name → proof-sexpr); other forms are
+;; ignored (a malformed entry surfaces as its claim's missing-entry failure).
+(fn autos_of_forms ((forms (List SExpr))) (List (Pair Symbol SExpr))
+  (measure (struct forms))
+  (match forms
+    (Nil Nil)
+    ((Cons f rest)
+     (match f
+       ((SList (Cons (SSym h) (Cons (SSym name) (Cons proofS Nil))))
+        (if (sym_eq h (quote proof-for))
+          (Cons (Pair name proofS) (autos_of_forms rest))
+          (autos_of_forms rest)))
+       (_ (autos_of_forms rest))))))
+
+;; this source's sidecar entries: find its path key, lex the sidecar bytes.
+(fn autos_of_src ((pathkey Symbol) (sidecars (List (Pair Symbol (List Int)))))
+  (List (Pair Symbol SExpr))
+  (measure (struct sidecars))
+  (match sidecars
+    (Nil Nil)
+    ((Cons (Pair k bytes) rest)
+     (if (sym_eq k pathkey)
+       (match (read_all bytes)
+         (None Nil)
+         ((Some forms) (autos_of_forms forms)))
+       (autos_of_src pathkey rest)))))
+
+;; alias of the kit's assoc_sym over the sidecar table — kept by name for its
+;; citer outside the kernel (tools/prove: (use (:: kernel claims auto_lookup))).
+(fn auto_lookup ((n Symbol) (autos (List (Pair Symbol SExpr)))) (Option SExpr)
+  (assoc_sym n autos))
+
+(fn auto_missing_msg ((name Symbol)) (List Int)
+  (append_int
+    "auto proof: no (proof-for "
+    (append_int
+      (chars_of_sym name)
+      " ...) entry in this file's .auto.shard sidecar (generate it with the proof solver)")))
+
+;; Parse a decl's EFFECTIVE proof — inline as written, or spliced from the
+;; sidecar for `auto`. Named citations are desugared to positional form at
+;; the s-expr level (ds_proof, desugar.shard) against the goal's params and
+;; premise count, so the parsed Proof is ready for check_sequent directly.
+;; The failure modes carry distinct messages.
+(type PrfRes (PrfOk Proof) (PrfErr (List Int)))
+
+(fn parse_proof_auto
+  ((m Module)
+   (gctx RCtx)
+   (name Symbol)
+   (raw SExpr)
+   (autos (List (Pair Symbol SExpr)))
+   (g Goal))
+  PrfRes
+  (match (if (is_auto_proof raw) (assoc_sym name autos) (Some raw))
+    (None (PrfErr (auto_missing_msg name)))
+    ((Some prfS)
+     (match (ds_proof m (goal_params g) Nil (goal_premise_count g) Nil prfS)
+       ((DsErr e) (PrfErr e))
+       ((DsOk prfS2)
+        (match (parse_proof_r m gctx prfS2)
+          (None (PrfErr "could not parse proof (proof DSL)"))
+          ((Some p) (PrfOk p))))))))
+
+;; A file's resolution context (STRICT, Stage 2.5c): real curmod, its OWN
+;; locals (the merged module's defs at curmod), and its use-scope — NO glob.
+;; Precedence local > use-items > core (env_lookup default). Shared by
+;; run_srcs and by library consumers that parse goals/proofs against a file's
+;; scope (tools/prove resolves a hinted claim's goal through this).
+(fn file_rctx ((m Module) (path (List Int)) (src (List Int))) RCtx
+  (let ((curmod (module_path_of path)))
+    (match (use_scope_of (use_forms src) curmod (module_resolve_env m))
+      ((Pair uitems ualiases)
+       (RCtx
+         curmod
+         (app (filter_modpath (module_resolve_env m) curmod) uitems)
+         ualiases)))))
+
+;; file_rctx over the SrcEntry forms field (parse-once): the same context
+;; with no re-parse. Kernel callers land here; file_rctx above stays for
+;; byte-holding consumers (tools/prove, tools/search).
+(fn file_rctx_f ((m Module) (path (List Int)) (mf (Option (List SExpr)))) RCtx
+  (let ((curmod (module_path_of path)))
+    (match (use_scope_of (forms_or_nil mf) curmod (module_resolve_env m))
+      ((Pair uitems ualiases)
+       (RCtx
+         curmod
+         (app (filter_modpath (module_resolve_env m) curmod) uitems)
+         ualiases)))))
+
+;; the newline every report renderer appends (scope/admit/ledger/measure)
+(fn sr_nl () (List Int) (Cons 10 Nil))
