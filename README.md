@@ -236,6 +236,11 @@ membership without running anything.
 Sources are kept canonical with the proven formatter
 (`bin/shard_eval run tools/shardfmt/shardfmt.shard FILE`); the
 formatter's gate guarantees it cannot change what a file parses to.
+`tools/digest` prints a file's stratified read surface — every fn as
+its signature, every claim as its goal, proofs and bodies elided with
+size trailers — at tier 1 (signatures) or tier 2 (plus every doc
+comment), and `closure` mode digests a whole import closure in loader
+order (`bin/shard_eval run tools/digest/digest.shard FILE [1|2] [closure]`).
 
 ## Repository layout
 
@@ -253,7 +258,8 @@ models/          ; machine + OS models as ordinary proven libraries:
                  ;   each with probes/ (validation articles) and diff/
                  ;   (engine differentials)
 tools/           ; untrusted toolchain: prove (auto-prover), shardfmt,
-                 ;   canon, wasmgen/x86gen/impgen/wordgen (generators),
+                 ;   digest (the stratified read surface), canon,
+                 ;   wasmgen/x86gen/impgen/wordgen (generators),
                  ;   lowcheck/bytetie/lowbuild (the gates), build (the
                  ;   product driver + build_products.shard), bench, plus
                  ;   the temporary native chain (lower/codegen/low);

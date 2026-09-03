@@ -1,0 +1,249 @@
+;;; tools/digest/digest.shard — THE DIGEST: a .shard file's stratified read
+;;; surface, derived mechanically. The requirements-first idea (mod.req.shard
+;;; = the module's compressed review surface) applied to ANY file, including
+;;; the flat kernel/model/tool files that have no interface of their own:
+;;; every fn collapses to its `(sig fn NAME PARAMS RET)`, every claim keeps
+;;; its goal and drops its proof, every fulfills/returns keeps its name, and
+;;; everything else (types, sigs, requirements, axioms, externs, imports, use
+;;; lines, records, bin/lib forms) passes through whole. Each elision leaves
+;;; a size trailer (`; body N` / `; proof N`, N = CST nodes dropped) so the
+;;; weight of what was hidden stays visible.
+;;;
+;;; TIERS (the second argument):
+;;;   1  header comments + the surface forms — the signature map
+;;;   2  tier 1 + every own-line comment between forms (section banners,
+;;;      per-definition doc blocks) — the design map (default)
+;;;
+;;; Output goes through meta/format's printer (pp_top), so a digest is
+;;; shardfmt-canonical text: comments preserved byte-for-byte, forms laid out
+;;; by the same fit-or-break rules as the source. Nothing here is trusted and
+;;; nothing here reasons: the digest is a VIEW for readers (LLM or human),
+;;; never an input to a check.
+;;;
+;;; CLOSURE MODE (third argument `closure`): digest every source in FILE's
+;;; resolved import closure, in dependency order (the loader's own order —
+;;; a file's imports come before it), each under a `;;; ==== path` banner.
+;;; One stream = the map of everything a check of FILE would load.
+;;;
+;;; RUN IT:   bin/shard_eval run tools/digest/digest.shard FILE [1|2] [closure]
+;;;           (digest on stdout; exit 0 emitted, 2 bad input/usage,
+;;;            3 the file does not parse as a CST; in closure mode an
+;;;            unparseable source gets a `;;; (does not parse)` line)
+;;; CHECK IT: bin/shard_eval run kernel/check.shard tools/digest/digest.shard
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/term.shard")
+(import "../../meta/format")
+
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader read_file))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: kernel loader int_list_eq))
+(use (:: kernel loader resolve_closure))
+(use (:: kernel reader SrcEntry))
+(use (:: kernel term show_int))
+(use (:: kernel term append_int))
+(use (:: meta format *))
+
+;; ---------------------------------------------------------------------------
+;; CST helpers: layout nodes vs semantic items
+;; ---------------------------------------------------------------------------
+
+(fn dg_is_layout ((n CNode)) Bool
+  (match n
+    ((CComment _) True)
+    ((CTrail _) True)
+    (CBlank True)
+    (_ False)))
+
+;; the semantic items of a form (layout nodes dropped, one level)
+(fn dg_items ((ns (List CNode))) (List CNode)
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons h t) (if (dg_is_layout h) (dg_items t) (Cons h (dg_items t))))))
+
+(fn dg_head ((items (List CNode))) (Option (List Int))
+  (match items
+    ((Cons (CAtom a) _) (Some a))
+    (_ None)))
+
+(fn dg_take ((ns (List CNode)) (n Int)) (List CNode)
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons h t) (if (le n 0) Nil (Cons h (dg_take t (- n 1)))))))
+
+(fn dg_drop ((ns (List CNode)) (n Int)) (List CNode)
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons h t) (if (le n 0) (Cons h t) (dg_drop t (- n 1))))))
+
+(fn dg_init ((ns (List CNode))) (List CNode)
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons _ Nil) Nil)
+    ((Cons h t) (Cons h (dg_init t)))))
+
+(fn dg_last ((ns (List CNode))) (List CNode)
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons h Nil) (Cons h Nil))
+    ((Cons _ t) (dg_last t))))
+
+;; the size trailer: an own-line comment naming what was elided
+(fn dg_trailer ((label (List Int)) (dropped (List CNode))) CNode
+  (CTrail
+    (append_int
+      "; "
+      (append_int label (append_int " " (show_int (lz dropped)))))))
+
+;; ---------------------------------------------------------------------------
+;; one top-level form -> its digest nodes (the form, then maybe a trailer)
+;; ---------------------------------------------------------------------------
+
+;; (fn HEAD PARAMS RET BODY [measure]) -> (sig fn HEAD PARAMS RET)  ; body N
+(fn dg_fn ((items (List CNode))) (List CNode)
+  (Cons
+    (CList (Cons (CAtom "sig") (dg_take items 4)))
+    (Cons (dg_trailer "body" (dg_drop items 4)) Nil)))
+
+;; (claim NAME (goal …) PROOF) -> (claim NAME (goal …))  ; proof N
+(fn dg_claim ((items (List CNode))) (List CNode)
+  (Cons (CList (dg_init items)) (Cons (dg_trailer "proof" (dg_last items)) Nil)))
+
+;; (fulfills NAME PROOF) / (returns NAME PROOF) -> (HEAD NAME)  ; proof N
+(fn dg_named ((items (List CNode))) (List CNode)
+  (Cons
+    (CList (dg_take items 2))
+    (Cons (dg_trailer "proof" (dg_drop items 2)) Nil)))
+
+(fn dg_form ((items (List CNode))) (List CNode)
+  (match (dg_head items)
+    (None (Cons (CList items) Nil))
+    ((Some h)
+     (if (int_list_eq h "fn") (dg_fn items)
+     (if (int_list_eq h "claim") (dg_claim items)
+     (if (int_list_eq h "fulfills") (dg_named items)
+     (if (int_list_eq h "returns") (dg_named items)
+     (Cons (CList items) Nil))))))))
+
+;; push xs onto a reversed accumulator
+(fn dg_rev_onto ((xs (List CNode)) (acc (List CNode))) (List CNode)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (dg_rev_onto t (Cons h acc)))))
+
+;; ---------------------------------------------------------------------------
+;; the walk over top-level nodes. `hdr` is True until the first form: header
+;; comments always pass; between forms, own-line comments and blanks pass
+;; only at tier 2. A trailing comment rides its form at both tiers.
+;; ---------------------------------------------------------------------------
+
+(fn dg_walk ((ns (List CNode)) (tier Int) (hdr Bool) (acc (List CNode)))
+  (List CNode)
+  (measure (struct ns))
+  (match ns
+    (Nil acc)
+    ((Cons n t)
+     (match n
+       ((CList items0)
+        (dg_walk t tier False (dg_rev_onto (dg_form (dg_items items0)) acc)))
+       ((CQuote _) (dg_walk t tier False (Cons n acc)))
+       ((CAtom _) (dg_walk t tier False (Cons n acc)))
+       ((CStr _) (dg_walk t tier False (Cons n acc)))
+       ((CTrail _) (dg_walk t tier hdr (Cons n acc)))
+       (_
+         (if (if hdr True (int_eq tier 2)) (dg_walk t tier hdr (Cons n acc))
+         (dg_walk t tier hdr acc)))))))
+
+(fn dg_rev ((xs (List CNode)) (acc (List CNode))) (List CNode)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (dg_rev t (Cons h acc)))))
+
+(fn digest ((nodes (List CNode)) (tier Int)) (List Int)
+  (pp_top (dg_rev (dg_walk nodes tier True Nil) Nil)))
+
+;; ---------------------------------------------------------------------------
+;; CLOSURE MODE: every resolved source, banner + digest, in loader order
+;; ---------------------------------------------------------------------------
+
+(fn dg_banner ((path (List Int))) (List Int)
+  (append_int ";;; ==== " (append_int path (Cons 10 Nil))))
+
+(fn dg_one ((path (List Int)) (bytes (List Int)) (tier Int)) (List Int)
+  (append_int
+    (dg_banner path)
+    (match (cst_read bytes)
+      (None ";;; (does not parse)\n")
+      ((Some nodes) (digest nodes tier)))))
+
+(fn dg_closure ((srcs (List SrcEntry)) (tier Int) (acc (List (List Int))))
+  (List (List Int))
+  (measure (struct srcs))
+  (match srcs
+    (Nil acc)
+    ((Cons (SrcEntry path _ bytes _) rest)
+     (dg_closure rest tier (Cons (dg_one path bytes tier) acc)))))
+
+;; join the reversed chunk list, a blank line between sources
+(fn dg_join ((chunks (List (List Int))) (acc (List Int))) (List Int)
+  (measure (struct chunks))
+  (match chunks
+    (Nil acc)
+    ((Cons c rest) (dg_join rest (append_int c (Cons 10 acc))))))
+
+;; ---------------------------------------------------------------------------
+;; MAIN
+;; ---------------------------------------------------------------------------
+
+(fn dg_run ((path (List Int)) (tier Int) (w World)) World
+  (match (read_file path w)
+    ((Pair r w2)
+     (match r
+       (None (exit 2 (write "digest: cannot read file\n" w2)))
+       ((Some src)
+        (match (cst_read src)
+          (None (exit 3 (write "digest: file does not parse\n" w2)))
+          ((Some nodes) (exit 0 (write (digest nodes tier) w2)))))))))
+
+(fn dg_run_closure ((path (List Int)) (tier Int) (w World)) World
+  (match (resolve_closure path False w)
+    ((Pair srcs w2)
+     (match srcs
+       (Nil (exit 2 (write "digest: cannot resolve file\n" w2)))
+       (_ (exit 0 (write (dg_join (dg_closure srcs tier Nil) Nil) w2)))))))
+
+(fn dg_usage ((w World)) World
+  (exit 2 (write "usage: digest <file.shard> [1|2] [closure]\n" w)))
+
+(fn dg_tier ((t (List Int))) (Option Int)
+  (if (int_list_eq t "1") (Some 1) (if (int_list_eq t "2") (Some 2) None)))
+
+(fn dg_dispatch ((target (List Int)) (t (List Int)) (closure Bool) (w World))
+  World
+  (match (dg_tier t)
+    (None (dg_usage w))
+    ((Some tier)
+     (if closure (dg_run_closure target tier w) (dg_run target tier w)))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons target Nil) (dg_run target 2 w1))
+       ((Cons target (Cons t Nil)) (dg_dispatch target t False w1))
+       ((Cons target (Cons t (Cons c Nil)))
+        (if (int_list_eq c "closure") (dg_dispatch target t True w1)
+        (dg_usage w1)))
+       (_ (dg_usage w1))))))

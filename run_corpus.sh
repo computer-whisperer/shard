@@ -310,6 +310,8 @@ TARGETS=(
   tools/canon/census.shard
   tools/canon/hash.shard
   pins/proof/hash_pin.shard
+  tools/digest/digest.shard
+  tools/digest/fixtures/sample.shard
   pins/proof/parlet_pin.shard
   examples/render_model.shard
   examples/modules_demo/consumer.shard
@@ -1417,6 +1419,12 @@ pin_run impc_micro_run bin/shard_eval run tools/impc/fixtures/micro_run.shard
 pin_run impc_micro_x86_run bin/shard_eval run tools/impc/fixtures/micro_x86_run.shard
 # the silicon leg (C1c-2): one static ELF per wrapper through enc_winelf, exit status vs the spec mod 256
 pin_run impc_micro_silicon tools/impc/fixtures/micro_silicon.sh
+
+# digest (the stratified read surface): both tiers of the fixture re-derive
+# byte-identically to the committed outs (the regen contract)
+echo "=== digest: the read-surface tool (tier pins) ==="
+pin_run digest_t1 bash -c 'bin/shard_eval run tools/digest/digest.shard tools/digest/fixtures/sample.shard 1 | cmp -s - tools/digest/fixtures/sample_d1_out.shard'
+pin_run digest_t2 bash -c 'bin/shard_eval run tools/digest/digest.shard tools/digest/fixtures/sample.shard 2 | cmp -s - tools/digest/fixtures/sample_d2_out.shard'
 
 echo "=== x86: silicon differential ==="
 if command -v cc >/dev/null && [ -x bin/shard_eval ]; then
