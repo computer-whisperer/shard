@@ -1811,13 +1811,16 @@ fi
 # conformance vs the object table, Word/Bytes revocation guards, kernel
 # loading, induct/match plumbing). It was manual-only and rotted silently
 # for weeks (repaired 2026-07-03); this pin keeps it in every corpus run.
-# Summary line only — a failure changes it and fails the corpus diff.
+# Summary line only. The failure line MUST spell `FAIL …` at column 0: the
+# gate's awk projects ^(FAIL|TYPE!) rows only, and the old `CARGO FAILED`
+# spelling hid two real breaks (2026-09-04: the step arity change of batch 4
+# and the checker split of batch 7) behind CORPUS == BASELINE.
 echo "=== rust_bootstrap: cargo test ==="
 if command -v cargo >/dev/null; then
   if cargo test --release --manifest-path rust_bootstrap/Cargo.toml -q > "$TMP/cargo.out" 2>&1; then
     echo "CARGO OK"
   else
-    echo "CARGO FAILED"
+    echo "FAIL cargo-test (rust_bootstrap suite nonzero -- the FAIL prefix is what the corpus gate's awk sees)"
     tail -30 "$TMP/cargo.out"
   fi
 else

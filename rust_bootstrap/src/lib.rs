@@ -35,6 +35,10 @@ pub fn load_kernel_from<P: AsRef<std::path::Path>>(
         p("expr_size.shard"),
         p("types.shard"),
         p("reduce.shard"),
+        p("proof_size.shard"),
+        p("sequent.shard"),   // the checker tower (2026-09-04 split):
+        p("rewriter.shard"),  //   state → rewriting / leaf rules → checker
+        p("tactics.shard"),
         p("checker.shard"),
         p("arith.shard"),
     ])
@@ -729,7 +733,7 @@ mod tests {
     #[test]
     fn step_if_true_fires() {
         let m = load_kernel();
-        let call = "(step (Module (Nil) (Nil) (Nil)) \
+        let call = "(step (Module (Nil) (Nil) (Nil)) (Nil) False \
                           (If (Ctor (QName (Cons (quote core) (Nil)) (quote True)) (Nil)) (IntLit 1) (IntLit 2)))";
         let e = load::expr_from_str(call, &m).expect("parses");
         let r = eval::eval(&m, &e).expect("evals");
@@ -740,7 +744,7 @@ mod tests {
     #[test]
     fn step_if_false_fires() {
         let m = load_kernel();
-        let call = "(step (Module (Nil) (Nil) (Nil)) \
+        let call = "(step (Module (Nil) (Nil) (Nil)) (Nil) False \
                           (If (Ctor (QName (Cons (quote core) (Nil)) (quote False)) (Nil)) (IntLit 1) (IntLit 2)))";
         let e = load::expr_from_str(call, &m).expect("parses");
         let r = eval::eval(&m, &e).expect("evals");
@@ -753,7 +757,7 @@ mod tests {
     #[test]
     fn step_if_stuck_on_fvar() {
         let m = load_kernel();
-        let call = "(step (Module (Nil) (Nil) (Nil)) \
+        let call = "(step (Module (Nil) (Nil) (Nil)) (Nil) False \
                           (If (FVar (quote x)) (IntLit 1) (IntLit 2)))";
         let e = load::expr_from_str(call, &m).expect("parses");
         let r = eval::eval(&m, &e).expect("evals");
