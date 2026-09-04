@@ -28,6 +28,11 @@ meaning, not the subsystem that happened to birth it:
   regressions), `pins/lang/` (language/loader semantics),
   `pins/trust/` (trust-boundary refusals). These are corpus law: the
   kernel's behavior may not drift from them silently.
+- **A module's own computed-law pin lives IN the module**, as an
+  impl-space sibling (`meta/sketch/sketch_pin.shard`): its claims
+  `compute` the module's real bodies, so it imports the impl file —
+  which no file OUTSIDE the module may do (a consumer sees only
+  `mod.req.shard`'s signatures and lemmas, docs/LANGUAGE.md §2).
 - **`examples/` holds genuine programs and demonstrations** — things a
   reader would open to learn shard, not working parts of some
   subsystem's ladder. Bin programs (add, addw, sha256sum), feature

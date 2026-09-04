@@ -16,7 +16,9 @@ off the path, see §8).
 ## 1. Mission
 
 Ship `tools/shardfmt` as a proven native Linux binary through the
-GENERIC path — spec → models/imp by a compiler → x86 by tools/impgen —
+GENERIC path — spec → models/imp by a compiler → x86 as the frame-tier
+theorem's computed `ixf_prog` value (Theorem A; tools/impgen emits nothing
+for that leg) —
 and switch `bin/rebuild.sh`'s fmt gate from `shard_eval run` to that
 binary. `examples/calc` is rung 1.
 

@@ -361,12 +361,12 @@ TARGETS=(
   std/word/word.shard
   std/nat/nat.shard
   std/sha256/sha256.shard
-  pins/proof/sketch_pin.shard
-  meta/sketch/mod.req.shard
+  meta/sketch/sketch_pin.shard
+  meta/sketch/sketch.shard
   meta/invoke/prepared.shard
   meta/census/mod.req.shard
-  meta/rewrite/mod.req.shard
-  meta/search/mod.req.shard
+  meta/rewrite/rewrite.shard
+  meta/search/search.shard
   tools/search/rev_obj.shard
   tools/search/tasks/pure_program_obj.shard
   tools/search/rev.shard
@@ -376,6 +376,7 @@ TARGETS=(
   tools/search/catalog_pressure.shard
   tools/search/sym.shard
   tools/search/frontier.shard
+  tools/search/laws.shard
   examples/spell_pin.shard
   tools/search/render_gate.shard
   tools/search/gen/rev_synth.shard

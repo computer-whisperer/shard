@@ -324,7 +324,8 @@ authority for its area:
   banners, corpus cost instrumentation (the long pole is debt #37).
 - **THE GOAL — the coverage arc (issue #23)**: `tools/shardfmt` shipped
   as a proven native binary through the GENERIC path (spec → imp by the
-  uniform-representation compiler → x86 by tools/impgen), with the
+  uniform-representation compiler → x86 as Theorem A's computed
+  `ixf_prog` value; tools/impgen emits nothing for that leg), with the
   repo's own fmt gate running that binary; `examples/calc` is rung 1.
   **Opener ledger drafted 2026-08-22 — [docs/COVERAGE.md](docs/COVERAGE.md)**
   (pins, rung ladder C0–C6, the author-residue gate); awaiting

@@ -26,6 +26,7 @@
 (import "../../kernel/proof_reader.shard")  ; parse_goal / parse_proof / goal_tparams
 (import "../../kernel/desugar.shard")  ; ds_proof / DsRes — the REAL desugar pass
 (import "../../kernel/loader.shard")  ; int_list_eq / starts_with
+(import "../../kernel/claims.shard")  ; scope_type_names / file_rctx_f — the per-file goal scope (issue #38)
 (import "../../std/list")  ; append / len / take / drop (polymorphic list algebra)
 ;; std list names come FIRST: an earlier `use` wins, and the kernel term glob
 ;; below carries a monomorphic (List Expr) `len` that would shadow std's.
@@ -42,6 +43,11 @@
 (use (:: kernel desugar *))
 (use (:: kernel loader int_list_eq))
 (use (:: kernel loader starts_with))
+(use (:: kernel claims scope_type_names))
+(use (:: kernel claims file_rctx_f))
+(use (:: kernel claims module_ctors))
+(use (:: kernel claims goal_params))
+(use (:: kernel claims goal_premise_count))
 
 ;; ===========================================================================
 ;; the generic byte/suggestion kit (shared with explain.shard, which imports
@@ -1427,10 +1433,16 @@
           (pd_got s))))))
 
 ;; ===========================================================================
-;; context assembly from the built Module (mirrors kernel/claims.shard's tiny
-;; accessors: module_ctors / goal_params / goal_premise_count — redefined
-;; locally before claims.shard existed as a separate layer; importing it is
-;; now the cheaper option, see scope_type_names for the type-name set)
+;; context assembly from the built Module. The goal-scope layer is the
+;; kernel's own (kernel/claims.shard, imported): module_ctors / goal_params /
+;; goal_premise_count are its accessors, and the type-name set a goal's
+;; binders are parsed against is scope_type_names over the DIAGNOSED FILE's
+;; resolution context (file_rctx_f; issue #38 — a binder's bare type name is
+;; a type constructor only when that file can see the typedef, otherwise a
+;; generic type variable). Every kernel-parse twin and pd_goal call below
+;; takes that set, never the merged closure's typedef names. The char pools
+;; of pd_ctx_of (ctor / type / fn / lemma names over the merged Module) are
+;; proofdiag's own did-you-mean material and stay merged.
 ;; ===========================================================================
 
 (fn pd_syms_chars ((ss (List Symbol)) (acc (List (List Int)))) (List (List Int))
@@ -1468,13 +1480,15 @@
     (Nil acc)
     ((Cons (Param n _) r) (pd_param_names r (Cons (chars_of_sym n) acc)))))
 
-;; the type-name SYMBOL list (Int/Symbol + typedef names) for goal_tparams —
-;; the MERGED closure's names (the pre-#38 composition; the kernel's goal
-;; parser now uses claims.shard's scope_type_names, filtered by file scope).
-(fn pd_tsyms_of ((m Module)) (List Symbol)
-  (match m
-    ((Module tds _ _ _ _)
-     (Cons (quote Int) (Cons (quote Symbol) (typedef_names tds))))))
+;; the diagnosed file's resolution context, built ONCE per file by the
+;; caller (explain.shard) from the closure's SrcEntry for PATH — its
+;; parse-once forms feed file_rctx_f. A path not in the closure gets the
+;; form-less context (curmod + core only).
+(fn pd_file_rctx ((m Module) (srcs (List SrcEntry)) (path (List Int))) RCtx
+  (match srcs
+    (Nil (file_rctx_f m path None))
+    ((Cons (SrcEntry p _ _ mf) r)
+     (if (int_list_eq p path) (file_rctx_f m path mf) (pd_file_rctx m r path)))))
 
 (fn pd_ctx_of ((m Module) (g (Option Goal))) PdCtx
   (match m
@@ -1518,57 +1532,42 @@
 ;; goal params + premise count read from the RAW goal form (binder names and
 ;; premise list length only — enough for ds_proof when parse_goal succeeds
 ;; upstream of us).
-(fn pd_diag_proof ((m Module) (name (List Int)) (goalS SExpr) (proofS SExpr))
+(fn pd_diag_proof
+  ((m Module) (rctx RCtx) (name (List Int)) (goalS SExpr) (proofS SExpr))
   (List (List Int))
-  (match
-    (parse_goal
-      goalS
-      (typedef_ctors (pd_m_tds m))
-      (Cons (quote Int) (Cons (quote Symbol) (typedef_names (pd_m_tds m)))))
+  (match (parse_goal goalS (module_ctors m) (scope_type_names m rctx))
     (None
       ;; the goal itself is broken — diagnose it instead (the kernel report
       ;; said "could not parse proof" only when the goal parsed, so this
       ;; branch serves the goal-failure findings).
       (pd_fail_lines
         name
-        (pd_goal goalS (pd_ctx_of m None) (pd_tsyms_of m) "goal")))
+        (pd_goal goalS (pd_ctx_of m None) (scope_type_names m rctx) "goal")))
     ((Some g)
      (if (pd_is_auto proofS) Nil
-     (match (ds_proof m (pd_g_params g) Nil (len (pd_g_prems g)) Nil proofS)
+     (match (ds_proof m (goal_params g) Nil (goal_premise_count g) Nil proofS)
        ((DsErr _) Nil)  ; the kernel already printed the desugar message
        ((DsOk s2)
         (pd_fail_lines name (pd_proof s2 (pd_ctx_of m (Some g)) "proof"))))))))
 
-(fn pd_diag_goal ((m Module) (name (List Int)) (goalS SExpr)) (List (List Int))
-  (pd_fail_lines name (pd_goal goalS (pd_ctx_of m None) (pd_tsyms_of m) "goal")))
-
-(fn pd_m_tds ((m Module)) (List TypeDef)
-  (match m
-    ((Module tds _ _ _ _) tds)))
-
-(fn pd_g_params ((g Goal)) (List Param)
-  (match g
-    ((Goal ps _ _) ps)))
-
-(fn pd_g_prems ((g Goal)) (List Equation)
-  (match g
-    ((Goal _ prems _) prems)))
+(fn pd_diag_goal ((m Module) (rctx RCtx) (name (List Int)) (goalS SExpr))
+  (List (List Int))
+  (pd_fail_lines
+    name
+    (pd_goal goalS (pd_ctx_of m None) (scope_type_names m rctx) "goal")))
 
 ;; the kernel-parse twin for the --pin mode: does parse_proof accept s2?
-(fn pd_kernel_accepts ((m Module) (g Goal) (proofS SExpr)) (Option Bool)
-  (match (ds_proof m (pd_g_params g) Nil (len (pd_g_prems g)) Nil proofS)
+(fn pd_kernel_accepts ((m Module) (rctx RCtx) (g Goal) (proofS SExpr))
+  (Option Bool)
+  (match (ds_proof m (goal_params g) Nil (goal_premise_count g) Nil proofS)
     ((DsErr _) None)
     ((DsOk s2)
-     (match
-       (parse_proof
-         s2
-         (typedef_ctors (pd_m_tds m))
-         (Cons (quote Int) (Cons (quote Symbol) (typedef_names (pd_m_tds m)))))
+     (match (parse_proof s2 (module_ctors m) (scope_type_names m rctx))
        (None (Some False))
        ((Some _) (Some True))))))
 
 (fn pd_mirror_accepts ((m Module) (g Goal) (proofS SExpr)) (Option Bool)
-  (match (ds_proof m (pd_g_params g) Nil (len (pd_g_prems g)) Nil proofS)
+  (match (ds_proof m (goal_params g) Nil (goal_premise_count g) Nil proofS)
     ((DsErr _) None)
     ((DsOk s2)
      (match (pd_proof s2 (pd_ctx_of m (Some g)) "proof")
@@ -1576,7 +1575,7 @@
        ((PdFail _ _) (Some False))))))
 
 (fn pd_mirror_msg ((m Module) (g Goal) (proofS SExpr)) (List Int)
-  (match (ds_proof m (pd_g_params g) Nil (len (pd_g_prems g)) Nil proofS)
+  (match (ds_proof m (goal_params g) Nil (goal_premise_count g) Nil proofS)
     ((DsErr e) e)
     ((DsOk s2)
      (match (pd_proof s2 (pd_ctx_of m (Some g)) "proof")
@@ -1593,7 +1592,12 @@
 (fn pd_bool_eq ((a Bool) (b Bool)) Bool (if a b (if b False True)))
 
 (fn pd_pin_go
-  ((m Module) (forms (List SExpr)) (n Int) (k Int) (acc (List (List Int))))
+  ((m Module)
+   (rctx RCtx)
+   (forms (List SExpr))
+   (n Int)
+   (k Int)
+   (acc (List (List Int))))
   (Pair Int (List (List Int)))
   (measure (struct forms))
   (match forms
@@ -1616,19 +1620,20 @@
        ((SList
           (Cons (SSym h) (Cons (SSym name) (Cons goalS (Cons proofS Nil)))))
         (if (sym_eq h (quote claim))
-          (if (pd_is_auto proofS) (pd_pin_go m rest n k acc)
-          (match (parse_goal goalS (typedef_ctors (pd_m_tds m)) (pd_tsyms_of m))
-            (None (pd_pin_go m rest n k acc))
+          (if (pd_is_auto proofS) (pd_pin_go m rctx rest n k acc)
+          (match (parse_goal goalS (module_ctors m) (scope_type_names m rctx))
+            (None (pd_pin_go m rctx rest n k acc))
             ((Some g)
-             (match (pd_kernel_accepts m g proofS)
-               (None (pd_pin_go m rest n k acc))
+             (match (pd_kernel_accepts m rctx g proofS)
+               (None (pd_pin_go m rctx rest n k acc))
                ((Some kb)
                 (match (pd_mirror_accepts m g proofS)
-                  (None (pd_pin_go m rest n k acc))
+                  (None (pd_pin_go m rctx rest n k acc))
                   ((Some mb)
-                   (if (pd_bool_eq kb mb) (pd_pin_go m rest (+ n 1) k acc)
+                   (if (pd_bool_eq kb mb) (pd_pin_go m rctx rest (+ n 1) k acc)
                    (pd_pin_go
                      m
+                     rctx
                      rest
                      (+ n 1)
                      (+ k 1)
@@ -1647,8 +1652,9 @@
                              (chars_of_sym name)
                              ": mirror accepts a kernel-refused proof (mirror out of date)")))
                        acc))))))))))
-          (pd_pin_go m rest n k acc)))
-       (_ (pd_pin_go m rest n k acc))))))
+          (pd_pin_go m rctx rest n k acc)))
+       (_ (pd_pin_go m rctx rest n k acc))))))
 
-(fn pd_pin_forms ((m Module) (forms (List SExpr))) (Pair Int (List (List Int)))
-  (pd_pin_go m forms 0 0 Nil))
+(fn pd_pin_forms ((m Module) (rctx RCtx) (forms (List SExpr)))
+  (Pair Int (List (List Int)))
+  (pd_pin_go m rctx forms 0 0 Nil))
