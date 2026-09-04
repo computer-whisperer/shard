@@ -226,7 +226,8 @@ neutral imperative dialect to a machine target — spec ⊑ imp ⊑ wasm/x86, wi
 the memory story attached once at imp (`IMP.md`, `MEMORY.md`; §3).
 
 **Self-hosting status.** The front-end has moved into shard: the s-expression
-reader and module parser (`kernel/reader.shard`) are validated byte-for-byte
+reader and module parser (the tower `kernel/sexpr.shard` → `expand.shard` →
+`reader.shard` → `resolve.shard`) are validated byte-for-byte
 against the Rust loader, and an environment-machine evaluator makes them fast
 enough to use. Every driver — `check`, `run`, and `eval` — now parses
 user/target code through this shard reader (`build_module` / `parse_expr`); the

@@ -1,0 +1,855 @@
+;;; expand.shard — SExpr → SExpr SUGAR EXPANSION, below elaboration.
+;;;
+;;; Loader-level rewrites applied to a file's forms before any elaboration,
+;;; so check and run see identical forms and the kernel never sees the sugar
+;;; heads:
+;;;   (record NAME …)      → the product type + FIELD_of / with_FIELD accessors
+;;;                          + the LAW FAMILY (one claim per algebraic fact,
+;;;                          each with a machine proof) + (make …) / (with …)
+;;;   (S^ N X) / (inline NAME)  → statement-literal expansion (il_table)
+;;; Both parse funnels (resolve.shard's parse_module_f, reader.shard's lib /
+;;; diagnosis paths) call expand_records then expand_sugar.
+;;; Tower: sexpr.shard ← expand.shard (this) ← reader.shard ← resolve.shard.
+
+(import "stdlib.shard")
+(import "term.shard")
+(import "module.shard")
+(import "sexpr.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel sexpr *))
+
+;; ===========================================================================
+;; (record …) EXPANSION — named-field products (issue #3). The form
+;;
+;;   (record NAME (ctor CTOR)? (FIELD TYPE)+)
+;;
+;; is loader-level SUGAR: it expands at the s-expr level — after read_all,
+;; before the collector passes, in BOTH parse_module_f and parse_decls_f, so
+;; check and run see identical declarations — into the positional
+;; single-ctor (type NAME (CTOR T…)), one FIELD_of accessor and one
+;; with_FIELD updater per field (value-first: (with_score v g)). The kernel
+;; never sees a record form and the Rust TCB is untouched: load.rs rejects
+;; the head, so kernel files stay hand-positional and a record-using file
+;; loads only through this reader. CTOR defaults to MkNAME; a leading
+;; (ctor GS) entry overrides it, and `ctor` is therefore reserved — it
+;; cannot name a field. Duplicate field names are refused (None → the
+;; standard parse-failure path names the form).
+;; ===========================================================================
+
+(type RecDef (RecDef Symbol Symbol (List (Pair Symbol SExpr))))  ; name ctor fields
+
+(fn rx_names ((fs (List (Pair Symbol SExpr)))) (List Symbol)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (Pair n _) t) (Cons n (rx_names t)))))
+
+(fn rx_ftypes ((fs (List (Pair Symbol SExpr)))) (List SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (Pair _ ty) t) (Cons ty (rx_ftypes t)))))
+
+(fn rx_ssyms ((ns (List Symbol))) (List SExpr)
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons n t) (Cons (SSym n) (rx_ssyms t)))))
+
+;; A binder name distinct from every field name: candidates base, base0,
+;; base00, … — with F fields at most F candidates are taken, so the first
+;; F+1 contain a free one (fuel = F+1 at the call site).
+(fn rx_zeros ((k Int)) (List Int)
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le k 0) Nil (Cons 48 (rx_zeros (- k 1)))))
+
+(fn rx_fresh_go ((base (List Int)) (avoid (List Symbol)) (k Int) (fuel Int))
+  Symbol
+  (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le fuel 0) (sym_of_chars (append_int base (rx_zeros k)))
+  (if (mem_sym (sym_of_chars (append_int base (rx_zeros k))) avoid)
+    (rx_fresh_go base avoid (+ k 1) (- fuel 1))
+    (sym_of_chars (append_int base (rx_zeros k))))))
+
+(fn rx_fresh ((base (List Int)) (avoid (List Symbol))) Symbol
+  (rx_fresh_go base avoid 0 (+ (len avoid) 1)))
+
+;; the (FIELD TYPE) entries; None on malformed entries, duplicate names, or
+;; a field named `ctor` (reserved for the override entry)
+(fn rx_fields_of ((es (List SExpr)) (seen (List Symbol)))
+  (Option (List (Pair Symbol SExpr)))
+  (measure (struct es))
+  (match es
+    (Nil (Some Nil))
+    ((Cons e rest)
+     (match e
+       ((SList (Cons (SSym n) (Cons ty Nil)))
+        (if (mem_sym n seen) None
+        (if (sym_eq n (quote ctor)) None
+        (match (rx_fields_of rest (Cons n seen))
+          (None None)
+          ((Some fs) (Some (Cons (Pair n ty) fs)))))))
+       (_ None)))))
+
+(fn rx_default_ctor ((name Symbol)) Symbol
+  (sym_of_chars (append_int "Mk" (chars_of_sym name))))
+
+(fn rx_acc_name ((fld Symbol)) Symbol
+  (sym_of_chars (append_int (chars_of_sym fld) "_of")))
+
+(fn rx_upd_name ((fld Symbol)) Symbol
+  (sym_of_chars (append_int "with_" (chars_of_sym fld))))
+
+(fn rx_is_record ((f SExpr)) Bool
+  (match f
+    ((SList (Cons (SSym h) _)) (sym_eq h (quote record)))
+    (_ False)))
+
+;; parse the form; at least one field required
+(fn rx_of_form ((f SExpr)) (Option RecDef)
+  (match f
+    ((SList (Cons _ (Cons (SSym name) entries)))
+     (match entries
+       ((Cons (SList (Cons (SSym ch) (Cons (SSym cn) Nil))) rest)
+        (if (sym_eq ch (quote ctor))
+          (match (rx_fields_of rest Nil)
+            (None None)
+            ((Some Nil) None)
+            ((Some fs) (Some (RecDef name cn fs))))
+          (match (rx_fields_of entries Nil)
+            (None None)
+            ((Some Nil) None)
+            ((Some fs) (Some (RecDef name (rx_default_ctor name) fs))))))
+       (_
+         (match (rx_fields_of entries Nil)
+           (None None)
+           ((Some Nil) None)
+           ((Some fs) (Some (RecDef name (rx_default_ctor name) fs)))))))
+    (_ None)))
+
+;; (CTOR a0 … an) — ctor application / match pattern
+(fn rx_ctor_app ((ctor Symbol) (args (List SExpr))) SExpr
+  (SList (Cons (SSym ctor) args)))
+
+;; (type NAME (CTOR T0 … Tn))
+(fn rx_type_form ((rd RecDef)) SExpr
+  (match rd
+    ((RecDef name ctor fs)
+     (SList
+       (Cons
+         (SSym (quote type))
+         (Cons (SSym name) (Cons (rx_ctor_app ctor (rx_ftypes fs)) Nil)))))))
+
+;; (match RVAR ((CTOR f0 … fn) RESULT))
+(fn rx_match_form
+  ((rvar Symbol) (ctor Symbol) (binders (List Symbol)) (result SExpr))
+  SExpr
+  (SList
+    (Cons
+      (SSym (quote match))
+      (Cons
+        (SSym rvar)
+        (Cons
+          (SList (Cons (rx_ctor_app ctor (rx_ssyms binders)) (Cons result Nil)))
+          Nil)))))
+
+;; (fn FNAME PARAMS RET BODY)
+(fn rx_fn_form ((fname Symbol) (params (List SExpr)) (ret SExpr) (body SExpr))
+  SExpr
+  (SList
+    (Cons
+      (SSym (quote fn))
+      (Cons (SSym fname) (Cons (SList params) (Cons ret (Cons body Nil)))))))
+
+;; (RVAR NAME) / (VVAR TY) — a typed parameter
+(fn rx_param ((v Symbol) (ty SExpr)) SExpr
+  (SList (Cons (SSym v) (Cons ty Nil))))
+
+;; accessor: (fn FLD_of ((r NAME)) FTY (match r ((CTOR fields…) FLD)))
+(fn rx_accessor ((rd RecDef) (rvar Symbol) (fld Symbol) (fty SExpr)) SExpr
+  (match rd
+    ((RecDef name ctor fs)
+     (rx_fn_form
+       (rx_acc_name fld)
+       (Cons (rx_param rvar (SSym name)) Nil)
+       fty
+       (rx_match_form rvar ctor (rx_names fs) (SSym fld))))))
+
+;; the CTOR argument list with FLD's slot replaced by VVAR
+(fn rx_upd_args ((fs (List (Pair Symbol SExpr))) (fld Symbol) (vvar Symbol))
+  (List SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (Pair n _) t)
+     (Cons (if (sym_eq n fld) (SSym vvar) (SSym n)) (rx_upd_args t fld vvar)))))
+
+;; updater: (fn with_FLD ((v FTY) (r NAME)) NAME
+;;            (match r ((CTOR fields…) (CTOR … v …))))
+(fn rx_updater
+  ((rd RecDef) (rvar Symbol) (vvar Symbol) (fld Symbol) (fty SExpr))
+  SExpr
+  (match rd
+    ((RecDef name ctor fs)
+     (rx_fn_form
+       (rx_upd_name fld)
+       (Cons (rx_param vvar fty) (Cons (rx_param rvar (SSym name)) Nil))
+       (SSym name)
+       (rx_match_form
+         rvar
+         ctor
+         (rx_names fs)
+         (rx_ctor_app ctor (rx_upd_args fs fld vvar)))))))
+
+(fn rx_accessors ((rd RecDef) (rvar Symbol) (fs (List (Pair Symbol SExpr))))
+  (List SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (Pair n ty) t)
+     (Cons (rx_accessor rd rvar n ty) (rx_accessors rd rvar t)))))
+
+(fn rx_updaters
+  ((rd RecDef) (rvar Symbol) (vvar Symbol) (fs (List (Pair Symbol SExpr))))
+  (List SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (Pair n ty) t)
+     (Cons (rx_updater rd rvar vvar n ty) (rx_updaters rd rvar vvar t)))))
+
+;; ---------------------------------------------------------------------------
+;; The LAW FAMILY — one claim per algebraic fact about the generated fns,
+;; each with a machine proof (single-ctor case-on + hyp-rewrite + compute).
+;; Names are mechanical so an author can cite without looking them up:
+;;   FIELD_of_def           (= (FIELD_of (CTOR f…)) FIELD)
+;;   with_FIELD_def         (= (with_FIELD v (CTOR f…)) (CTOR …v…))
+;;   F_of_with_F            select-over-update, same field   (= … v)
+;;   G_of_with_F            select-over-update, cross        (= … (G_of r))
+;;   with_F_with_F          update-over-update, same field
+;;   NAME_eta               reconstruction (the case-on replacement)
+;; Eager n²+3n+1 claims per record — tiny compute proofs; the run pays
+;; nothing (claims are check-only; run's collect_fns_externs skips them).
+;; ---------------------------------------------------------------------------
+
+(fn rx_eqf ((l SExpr) (r SExpr)) SExpr
+  (SList (Cons (SSym (quote =)) (Cons l (Cons r Nil)))))
+
+(fn rx_goal_form ((params (List SExpr)) (concl SExpr)) SExpr
+  (SList
+    (Cons
+      (SSym (quote goal))
+      (Cons (SList params) (Cons (SList Nil) (Cons concl Nil))))))
+
+(fn rx_claim_form ((name Symbol) (goal SExpr) (proof SExpr)) SExpr
+  (SList
+    (Cons (SSym (quote claim)) (Cons (SSym name) (Cons goal (Cons proof Nil))))))
+
+(fn rx_join ((a Symbol) (b Symbol)) Symbol
+  (sym_of_chars (append_int (chars_of_sym a) (append_int "_" (chars_of_sym b)))))
+
+;; (steps ((rewrite (hyp 0) lr both true ()) (compute both)) refl)
+(fn rx_hyp_compute_steps () SExpr
+  (SList
+    (Cons
+      (SSym (quote steps))
+      (Cons
+        (SList
+          (Cons
+            (SList
+              (Cons
+                (SSym (quote rewrite))
+                (Cons
+                  (SList (Cons (SSym (quote hyp)) (Cons (SInt 0) Nil)))
+                  (Cons
+                    (SSym (quote lr))
+                    (Cons
+                      (SSym (quote both))
+                      (Cons (SSym (quote true)) (Cons (SList Nil) Nil)))))))
+            (Cons
+              (SList
+                (Cons (SSym (quote compute)) (Cons (SSym (quote both)) Nil)))
+              Nil)))
+        (Cons (SSym (quote refl)) Nil)))))
+
+;; (steps ((compute both)) refl)
+(fn rx_compute_steps () SExpr
+  (SList
+    (Cons
+      (SSym (quote steps))
+      (Cons
+        (SList
+          (Cons
+            (SList (Cons (SSym (quote compute)) (Cons (SSym (quote both)) Nil)))
+            Nil))
+        (Cons (SSym (quote refl)) Nil)))))
+
+;; (case-on RVAR NAME ((case CTOR (fields…) STEPS)))
+(fn rx_caseon_proof ((rd RecDef) (rvar Symbol)) SExpr
+  (match rd
+    ((RecDef name ctor fs)
+     (SList
+       (Cons
+         (SSym (quote case-on))
+         (Cons
+           (SSym rvar)
+           (Cons
+             (SSym name)
+             (Cons
+               (SList
+                 (Cons
+                   (SList
+                     (Cons
+                       (SSym (quote case))
+                       (Cons
+                         (SSym ctor)
+                         (Cons
+                           (SList (rx_ssyms (rx_names fs)))
+                           (Cons (rx_hyp_compute_steps) Nil)))))
+                   Nil))
+               Nil))))))))
+
+;; the field names as typed goal params ((f0 T0) … (fn Tn))
+(fn rx_field_params ((fs (List (Pair Symbol SExpr)))) (List SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (Pair n ty) t) (Cons (rx_param n ty) (rx_field_params t)))))
+
+;; FIELD_of_def + with_FIELD_def for one field
+(fn rx_def_laws ((rd RecDef) (vvar Symbol) (fld Symbol) (fty SExpr))
+  (List SExpr)
+  (match rd
+    ((RecDef name ctor fs)
+     (Cons
+       (rx_claim_form
+         (rx_join (rx_acc_name fld) (quote def))
+         (rx_goal_form
+           (rx_field_params fs)
+           (rx_eqf
+             (rx_ctor_app
+               (rx_acc_name fld)
+               (Cons (rx_ctor_app ctor (rx_ssyms (rx_names fs))) Nil))
+             (SSym fld)))
+         (rx_compute_steps))
+       (Cons
+         (rx_claim_form
+           (rx_join (rx_upd_name fld) (quote def))
+           (rx_goal_form
+             (Cons (rx_param vvar fty) (rx_field_params fs))
+             (rx_eqf
+               (rx_ctor_app
+                 (rx_upd_name fld)
+                 (Cons
+                   (SSym vvar)
+                   (Cons (rx_ctor_app ctor (rx_ssyms (rx_names fs))) Nil)))
+               (rx_ctor_app ctor (rx_upd_args fs fld vvar))))
+           (rx_compute_steps))
+         Nil)))))
+
+;; F_of_with_F (same) and G_of_with_F (cross, for every other field G)
+(fn rx_select_laws_go
+  ((rd RecDef)
+   (rvar Symbol)
+   (vvar Symbol)
+   (fld Symbol)
+   (fty SExpr)
+   (gs (List (Pair Symbol SExpr))))
+  (List SExpr)
+  (measure (struct gs))
+  (match gs
+    (Nil Nil)
+    ((Cons (Pair g _) t)
+     (match rd
+       ((RecDef name ctor fs)
+        (Cons
+          (rx_claim_form
+            (rx_join (rx_acc_name g) (rx_upd_name fld))
+            (rx_goal_form
+              (Cons (rx_param vvar fty) (Cons (rx_param rvar (SSym name)) Nil))
+              (rx_eqf
+                (rx_ctor_app
+                  (rx_acc_name g)
+                  (Cons
+                    (rx_ctor_app
+                      (rx_upd_name fld)
+                      (Cons (SSym vvar) (Cons (SSym rvar) Nil)))
+                    Nil))
+                (if (sym_eq g fld) (SSym vvar)
+                (rx_ctor_app (rx_acc_name g) (Cons (SSym rvar) Nil)))))
+            (rx_caseon_proof rd rvar))
+          (rx_select_laws_go rd rvar vvar fld fty t)))))))
+
+;; with_F_with_F — the same-field update-over-update collapse
+(fn rx_updupd_law
+  ((rd RecDef)
+   (rvar Symbol)
+   (vvar Symbol)
+   (uvar Symbol)
+   (fld Symbol)
+   (fty SExpr))
+  SExpr
+  (match rd
+    ((RecDef name ctor fs)
+     (rx_claim_form
+       (rx_join (rx_upd_name fld) (rx_upd_name fld))
+       (rx_goal_form
+         (Cons
+           (rx_param vvar fty)
+           (Cons (rx_param uvar fty) (Cons (rx_param rvar (SSym name)) Nil)))
+         (rx_eqf
+           (rx_ctor_app
+             (rx_upd_name fld)
+             (Cons
+               (SSym vvar)
+               (Cons
+                 (rx_ctor_app
+                   (rx_upd_name fld)
+                   (Cons (SSym uvar) (Cons (SSym rvar) Nil)))
+                 Nil)))
+           (rx_ctor_app
+             (rx_upd_name fld)
+             (Cons (SSym vvar) (Cons (SSym rvar) Nil)))))
+       (rx_caseon_proof rd rvar)))))
+
+;; (CTOR (f0_of r) … (fn_of r)) — the eta right-hand side
+(fn rx_eta_args ((fs (List (Pair Symbol SExpr))) (rvar Symbol)) (List SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (Pair n _) t)
+     (Cons
+       (rx_ctor_app (rx_acc_name n) (Cons (SSym rvar) Nil))
+       (rx_eta_args t rvar)))))
+
+(fn rx_eta_law ((rd RecDef) (rvar Symbol)) SExpr
+  (match rd
+    ((RecDef name ctor fs)
+     (rx_claim_form
+       (rx_join name (quote eta))
+       (rx_goal_form
+         (Cons (rx_param rvar (SSym name)) Nil)
+         (rx_eqf (SSym rvar) (rx_ctor_app ctor (rx_eta_args fs rvar))))
+       (rx_caseon_proof rd rvar)))))
+
+;; all per-field laws: defs + the select grid + update-over-update
+(fn rx_field_laws
+  ((rd RecDef)
+   (rvar Symbol)
+   (vvar Symbol)
+   (uvar Symbol)
+   (fs (List (Pair Symbol SExpr))))
+  (List SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (Pair n ty) t)
+     (match rd
+       ((RecDef nm c allfs)
+        (app
+          (rx_def_laws rd vvar n ty)
+          (app
+            (rx_select_laws_go rd rvar vvar n ty allfs)
+            (Cons
+              (rx_updupd_law rd rvar vvar uvar n ty)
+              (rx_field_laws rd rvar vvar uvar t)))))))))
+
+(fn rx_laws ((rd RecDef) (rvar Symbol) (vvar Symbol) (uvar Symbol)) (List SExpr)
+  (match rd
+    ((RecDef name ctor fs)
+     (app (rx_field_laws rd rvar vvar uvar fs) (Cons (rx_eta_law rd rvar) Nil)))))
+
+;; one record's full expansion, in declaration order: type, accessors,
+;; updaters, the law family
+(fn rx_expand ((rd RecDef)) (List SExpr)
+  (match rd
+    ((RecDef name ctor fs)
+     (let ((rvar (rx_fresh "r" (rx_names fs))))
+       (let ((vvar (rx_fresh "v" (rx_names fs))))
+         (let ((uvar (rx_fresh "u" (rx_names fs))))
+           (Cons
+             (rx_type_form rd)
+             (app
+               (rx_accessors rd rvar fs)
+               (app (rx_updaters rd rvar vvar fs) (rx_laws rd rvar vvar uvar))))))))))
+
+;; ---------------------------------------------------------------------------
+;; (make …) / (with …) — the construction and update sugar.
+;;
+;;   (make R (FIELD V)…)   → (CTOR V0 … Vn)      named, order-free; ALL
+;;                                               fields required exactly once
+;;   (with E (FIELD V)…)   → (with_FIELDn Vn (… (with_FIELD0 V0 E)))
+;;
+;; `with` is PURELY syntactic — it only manufactures updater names, so it
+;; needs no record table and works on records defined in other files (the
+;; with_FIELD fns resolve through normal scope). `make` needs the field
+;; ORDER, so it resolves against the records of the CURRENT file only (v1);
+;; a (make R …) whose R is not a record here is left untouched and fails
+;; loudly downstream as an unknown function. Both rewrites walk every form
+;; in the file (bodies, goals, proofs) and rewrite nested values first.
+;; Malformed sugar — unknown/missing/duplicate fields — refuses the file.
+;; ---------------------------------------------------------------------------
+
+(fn rx_find ((n Symbol) (tab (List RecDef))) (Option RecDef)
+  (measure (struct tab))
+  (match tab
+    (Nil None)
+    ((Cons (RecDef nm c fs) t)
+     (if (sym_eq nm n) (Some (RecDef nm c fs)) (rx_find n t)))))
+
+;; the record table of THIS file — every (record …) form, validated
+(fn rx_table ((forms (List SExpr))) (Option (List RecDef))
+  (measure (struct forms))
+  (match forms
+    (Nil (Some Nil))
+    ((Cons f rest)
+     (if (rx_is_record f)
+       (match (rx_of_form f)
+         (None None)
+         ((Some rd)
+          (match (rx_table rest)
+            (None None)
+            ((Some t) (Some (Cons rd t))))))
+       (rx_table rest)))))
+
+;; do these forms all look like (FIELD V) entries with distinct fields?
+(fn rx_entryish ((es (List SExpr)) (seen (List Symbol))) Bool
+  (measure (struct es))
+  (match es
+    (Nil True)
+    ((Cons (SList (Cons (SSym n) (Cons _ Nil))) rest)
+     (if (mem_sym n seen) False (rx_entryish rest (Cons n seen))))
+    ((Cons _ _) False)))
+
+;; ctor args in FIELD order from the (already rewritten) entries; None if a
+;; field is missing (the exactly-once check is the caller's length guard +
+;; rx_entryish's dup refusal)
+(fn rx_make_args
+  ((fs (List (Pair Symbol SExpr))) (es (List (Pair Symbol SExpr))))
+  (Option (List SExpr))
+  (measure (struct fs))
+  (match fs
+    (Nil (Some Nil))
+    ((Cons (Pair n _) t)
+     (match (assoc_sym n es)
+       (None None)
+       ((Some v)
+        (match (rx_make_args t es)
+          (None None)
+          ((Some vs) (Some (Cons v vs)))))))))
+
+;; (with_FIELDn Vn (… (with_FIELD0 V0 E))) — entries applied left to right,
+;; so a later update is outermost
+(fn rx_with_chain ((e SExpr) (es (List (Pair Symbol SExpr)))) SExpr
+  (measure (struct es))
+  (match es
+    (Nil e)
+    ((Cons (Pair n v) t)
+     (rx_with_chain
+       (SList (Cons (SSym (rx_upd_name n)) (Cons v (Cons e Nil))))
+       t))))
+
+;; the tree walk: rewrite nested values first, then assemble. rw_sx /
+;; rw_sxs / rw_entries form one structural SCC (the size_sexpr shape).
+(fn rw_entries ((tab (List RecDef)) (es (List SExpr)))
+  (Option (List (Pair Symbol SExpr)))
+  (measure (struct es))
+  (match es
+    (Nil (Some Nil))
+    ((Cons (SList (Cons (SSym n) (Cons v Nil))) rest)
+     (match (rw_sx tab v)
+       (None None)
+       ((Some v2)
+        (match (rw_entries tab rest)
+          (None None)
+          ((Some t) (Some (Cons (Pair n v2) t)))))))
+    ((Cons _ _) None)))
+
+(fn rw_sxs ((tab (List RecDef)) (ss (List SExpr))) (Option (List SExpr))
+  (measure (struct ss))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons h t)
+     (match (rw_sx tab h)
+       (None None)
+       ((Some h2)
+        (match (rw_sxs tab t)
+          (None None)
+          ((Some t2) (Some (Cons h2 t2)))))))))
+
+;; The dispatch destructures INLINE (never through a helper's result):
+;; the struct-measure gate tracks only pattern-bound subterms, so every
+;; SCC-internal call (rw_sx / rw_sxs / rw_entries) must receive a binder
+;; from s's own pattern chain. Non-sugar shapes descend generically.
+(fn rw_sx ((tab (List RecDef)) (s SExpr)) (Option SExpr)
+  (measure (struct s))
+  (match s
+    ((SList items)
+     (match items
+       ((Cons (SSym h) (Cons first args))
+        (if (sym_eq h (quote make))
+          (match first
+            ((SSym rname)
+             (match (rx_find rname tab)
+               ((Some (RecDef nm ctor fs))
+                (if (rx_entryish args Nil)
+                  (match (rw_entries tab args)
+                    (None None)
+                    ((Some es)
+                     (if (int_eq (len es) (len (rx_names fs)))
+                       (match (rx_make_args fs es)
+                         (None None)
+                         ((Some vs) (Some (rx_ctor_app ctor vs))))
+                       None)))
+                  None))
+               (None
+                 (match (rw_sxs tab items)
+                   (None None)
+                   ((Some its) (Some (SList its)))))))
+            (_
+              (match (rw_sxs tab items)
+                (None None)
+                ((Some its) (Some (SList its))))))
+        (if (sym_eq h (quote with))
+          (match args
+            ((Cons e0 rest0)
+             (if (rx_entryish args Nil)
+               (match (rw_sx tab first)
+                 (None None)
+                 ((Some e2)
+                  (match (rw_entries tab args)
+                    (None None)
+                    ((Some es) (Some (rx_with_chain e2 es))))))
+               (match (rw_sxs tab items)
+                 (None None)
+                 ((Some its) (Some (SList its))))))
+            (Nil
+              (match (rw_sxs tab items)
+                (None None)
+                ((Some its) (Some (SList its))))))
+          (match (rw_sxs tab items)
+            (None None)
+            ((Some its) (Some (SList its)))))))
+       (_
+         (match (rw_sxs tab items)
+           (None None)
+           ((Some its) (Some (SList its)))))))
+    (_ (Some s))))
+
+;; the pass: splice each (record …) form's expansion in place and rewrite
+;; the sugar everywhere else; None on a malformed record form or malformed
+;; sugar (the file then takes the standard parse-failure path)
+(fn rx_pass ((tab (List RecDef)) (forms (List SExpr))) (Option (List SExpr))
+  (measure (struct forms))
+  (match forms
+    (Nil (Some Nil))
+    ((Cons f rest)
+     (if (rx_is_record f)
+       (match (rx_of_form f)
+         (None None)  ; unreachable — rx_table validated already
+         ((Some rd)
+          (match (rx_pass tab rest)
+            (None None)
+            ((Some tail) (Some (app (rx_expand rd) tail))))))
+       (match (rw_sx tab f)
+         (None None)
+         ((Some f2)
+          (match (rx_pass tab rest)
+            (None None)
+            ((Some tail) (Some (Cons f2 tail))))))))))
+
+(fn expand_records ((forms (List SExpr))) (Option (List SExpr))
+  (match (rx_table forms)
+    (None None)
+    ((Some tab) (rx_pass tab forms))))
+
+;; ===========================================================================
+;; (S^ N X) / (inline NAME) EXPANSION — statement-literal sugar. Loader-level,
+;; expanded at the s-expr level right after (record …) in both parse funnels,
+;; so check and run see identical forms and the kernel never sees the heads
+;; (load.rs rejects them; kernel files stay hand-spelled).
+;;
+;;   (S^ N X)      N a nonnegative integer literal — N nested (S …) around X.
+;;                 Deep fuel towers ((S (S … (pf_rev k c)))) without hand-
+;;                 balancing 27 parens; X is walked first, so sugar nests.
+;;   (inline NAME) NAME a NULLARY (fn NAME () T BODY) in the SAME file —
+;;                 BODY pasted verbatim (post-S^-expansion). The "claim
+;;                 statements must spell bodies as literals, never nullary
+;;                 calls" discipline made mechanical: the fn stays the single
+;;                 source of truth and every claim spelling rides it. The
+;;                 paste is purely syntactic — a body that is not a ground
+;;                 ctor term fails downstream exactly like the equivalent
+;;                 hand-paste — and a pasted body is NOT re-walked, so
+;;                 (inline …) does not nest.
+;;   (chain F1 … FINAL)  flat spelling for continuation-nested proofs.
+;;                 Every continuation-taking proof form (steps, rewrite-with,
+;;                 have, div-facts, refine-fact) takes its continuation as
+;;                 its LAST argument; chain right-folds — each Fi (written
+;;                 WITHOUT that argument) gets the folded rest of the chain
+;;                 appended, and FINAL (a complete proof) closes. The fold is
+;;                 HEAD-AGNOSTIC — no per-form table, so future continuation
+;;                 forms ride for free — which also means a non-continuation
+;;                 form in item position simply gains a bogus last argument
+;;                 and fails at the proof parser. Items are walked before the
+;;                 fold, so chains nest (a rewrite-with premise sub-proof may
+;;                 itself be a chain).
+;;
+;; All three heads are RESERVED: a form headed S^/inline/chain that does not
+;; match its shape — an unknown or non-nullary inline fn, a chain with fewer
+;; than two items, a non-list chain item — is None → the standard
+;; parse-failure path. The two-item minimum is load-bearing: a binder pair
+;; named chain ((fn ((chain T)) …), (let ((chain E)) …)) looks exactly like
+;; a 1-item chain at this level, and must refuse loudly, never fold.
+;; ===========================================================================
+
+;; n nested (S …) around x
+(fn tw_tower ((n Int) (x SExpr)) SExpr
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le n 0) x
+  (SList (Cons (SSym (quote S)) (Cons (tw_tower (- n 1) x) Nil)))))
+
+(fn tw_sx ((s SExpr)) (Option SExpr)
+  (measure (struct s))
+  (match s
+    ((SList items)
+     (match items
+       ((Cons (SSym h) rest)
+        (if (sym_eq h (quote S^))
+          (match rest
+            ((Cons (SInt n) (Cons x Nil))
+             (if (lt n 0) None
+             (match (tw_sx x)
+               (None None)
+               ((Some x2) (Some (tw_tower n x2))))))
+            (_ None))
+          (match (tw_sxs items)
+            (None None)
+            ((Some its) (Some (SList its))))))
+       (_
+         (match (tw_sxs items)
+           (None None)
+           ((Some its) (Some (SList its)))))))
+    (_ (Some s))))
+
+(fn tw_sxs ((ss (List SExpr))) (Option (List SExpr))
+  (measure (struct ss))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons h t)
+     (match (tw_sx h)
+       (None None)
+       ((Some h2)
+        (match (tw_sxs t)
+          (None None)
+          ((Some t2) (Some (Cons h2 t2)))))))))
+
+;; the file's nullary fn bodies — built from the POST-tower forms, so pasted
+;; bodies arrive S^-expanded
+(fn il_table ((forms (List SExpr))) (List (Pair Symbol SExpr))
+  (measure (struct forms))
+  (match forms
+    (Nil Nil)
+    ((Cons f rest)
+     (match f
+       ((SList
+          (Cons
+            (SSym h)
+            (Cons (SSym name) (Cons (SList Nil) (Cons _ (Cons body Nil))))))
+        (if (sym_eq h (quote fn)) (Cons (Pair name body) (il_table rest))
+        (il_table rest)))
+       (_ (il_table rest))))))
+
+(fn il_sx ((tab (List (Pair Symbol SExpr))) (s SExpr)) (Option SExpr)
+  (measure (struct s))
+  (match s
+    ((SList items)
+     (match items
+       ((Cons (SSym h) rest)
+        (if (sym_eq h (quote inline))
+          (match rest
+            ((Cons (SSym name) Nil) (assoc_sym name tab))
+            (_ None))
+          (match (il_sxs tab items)
+            (None None)
+            ((Some its) (Some (SList its))))))
+       (_
+         (match (il_sxs tab items)
+           (None None)
+           ((Some its) (Some (SList its)))))))
+    (_ (Some s))))
+
+(fn il_sxs ((tab (List (Pair Symbol SExpr))) (ss (List SExpr)))
+  (Option (List SExpr))
+  (measure (struct ss))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons h t)
+     (match (il_sx tab h)
+       (None None)
+       ((Some h2)
+        (match (il_sxs tab t)
+          (None None)
+          ((Some t2) (Some (Cons h2 t2)))))))))
+
+;; right-fold the (already-walked) chain items: the last item closes, every
+;; earlier item gains the folded rest as its final argument. Empty chain or
+;; a non-list item is malformed.
+(fn ch_fold ((items (List SExpr))) (Option SExpr)
+  (measure (struct items))
+  (match items
+    (Nil None)
+    ((Cons final Nil) (Some final))
+    ((Cons item rest)
+     (match (ch_fold rest)
+       (None None)
+       ((Some cont)
+        (match item
+          ((SList its) (Some (SList (snoc its cont))))
+          (_ None)))))))
+
+(fn ch_sx ((s SExpr)) (Option SExpr)
+  (measure (struct s))
+  (match s
+    ((SList items)
+     (match items
+       ((Cons (SSym h) rest)
+        (if (sym_eq h (quote chain))
+          ;; a chain needs at least TWO items — a 1-item "(chain X)" is
+          ;; indistinguishable from a binder pair named chain ((fn ((chain
+          ;; T)) …) / (let ((chain E)) …)); folding it would SILENTLY
+          ;; rewrite the binder. Refusing keeps every collision loud.
+          (match rest
+            ((Cons _ (Cons _ _))
+             (match (ch_sxs rest)
+               (None None)
+               ((Some rs) (ch_fold rs))))
+            (_ None))
+          (match (ch_sxs items)
+            (None None)
+            ((Some its) (Some (SList its))))))
+       (_
+         (match (ch_sxs items)
+           (None None)
+           ((Some its) (Some (SList its)))))))
+    (_ (Some s))))
+
+(fn ch_sxs ((ss (List SExpr))) (Option (List SExpr))
+  (measure (struct ss))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons h t)
+     (match (ch_sx h)
+       (None None)
+       ((Some h2)
+        (match (ch_sxs t)
+          (None None)
+          ((Some t2) (Some (Cons h2 t2)))))))))
+
+(fn expand_sugar ((forms (List SExpr))) (Option (List SExpr))
+  (match (tw_sxs forms)
+    (None None)
+    ((Some fs)
+     (match (il_sxs (il_table fs) fs)
+       (None None)
+       ((Some fs2) (ch_sxs fs2))))))

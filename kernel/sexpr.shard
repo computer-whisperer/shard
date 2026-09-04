@@ -1,0 +1,339 @@
+;;; sexpr.shard — the s-expression READER: text → SExpr (pure syntax).
+;;;
+;;; `read_top : text -> (Option SExpr)` reads one paren tree from a (List Int)
+;;; of UTF-8 bytes (as read_file delivers it); `read_all` (reader.shard) folds
+;;; it over a whole file. This file owns the syntax tree (SExpr, the SList /
+;;; SSym / SInt / SStr ctors, the RErr/ROk read results), whitespace and
+;;; comment skipping, atoms (ints, symbols, strings, the `'X` quote macro),
+;;; the reader proper, the string/list literal sugar builders, and
+;;; `size_sexpr` — the structural size every SExpr-walking (measure …) clause
+;;; in the layers above descends on (issue #1), with its algebra proven here.
+;;;
+;;; The front-end tower (each file imports the ones below):
+;;;   sexpr.shard    text → SExpr                       (this file)
+;;;   expand.shard   SExpr → SExpr   sugar expansion    ((record …), (S^ …), (inline …))
+;;;   reader.shard   SExpr → Expr / TypeDef / FnDef …   elaboration + module parsing
+;;;   resolve.shard  files → Module                     assembly, qualified identity, scope
+;;;
+;;; Needs the char↔symbol bridge primitives (src/prim.rs): sym_of_chars.
+;;; Runs under NATIVE eval (a tool, not proof-faithful machinery); its OUTPUT
+;;; AST is what gets evaluated under the bootstrapped reducer.
+
+(import "stdlib.shard")
+(import "term.shard")
+(import "module.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+
+;; ---- syntax tree + reader results -----------------------------------------
+;; imports — the kernel files this module uses (dependency-tracked)
+
+(type SExpr (SInt Int) (SSym Symbol) (SStr (List Int)) (SList (List SExpr)))
+
+;; read_expr's result: one SExpr + the unconsumed input, or an error.
+(type RExpr (REOk SExpr (List Int)) (REErr))
+
+;; read_items' result: a sequence of SExprs (a list's contents) + rest.
+(type RItems (RIOk (List SExpr) (List Int)) (RIErr))
+
+;; ---- small list/char helpers ----------------------------------------------
+;; alias of the kit's rev_onto at (List Int) — kept by name for its citers outside
+;; the kernel (meta/format, tools/explain).
+(fn rev_i ((xs (List Int)) (acc (List Int))) (List Int) (rev_onto xs acc))
+
+(fn is_ws ((c Int)) Bool
+  (if (int_eq c 32) True  ; space
+  (if (int_eq c 9) True  ; tab
+  (if (int_eq c 10) True  ; newline
+  (if (int_eq c 13) True  ; carriage return
+  False)))))
+
+;; A delimiter ends an atom: whitespace, parens, quote, comment, or EOF.
+(fn is_delim ((c Int)) Bool
+  (if (is_ws c) True
+  (if (int_eq c 40) True  ; (
+  (if (int_eq c 41) True  ; )
+  (if (int_eq c 34) True  ; "
+  (if (int_eq c 59) True  ; ;
+  (if (int_eq c 39) True  ; ' (quote — a delimiter, and a reader macro)
+  False)))))))
+
+(fn is_digit ((c Int)) Bool (if (le 48 c) (le c 57) False))  ; '0'..'9'
+
+;; ---- whitespace / comments ------------------------------------------------
+;; skip_ws / skip_ws_comment: a MUTUAL STRUCTURAL pair (both recurse on the
+;; Cons-tail), so the gate auto-recognizes termination (AdMutual) with no
+;; measure clause. Replaces the old skip_ws+skip_line, where skip_ws had a
+;; non-structural site (skip_ws (skip_line rest)) — skip_line's output is a
+;; computed suffix the gate cannot see shrink. Comment-skipping is folded in:
+;; on ';' we enter skip_ws_comment, consume to the newline (inclusive), then
+;; resume skip_ws on the tail — byte-identical to the old skip_line behavior.
+(fn skip_ws ((cs (List Int))) (List Int)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons c rest)
+     (if (is_ws c) (skip_ws rest)
+     (if (int_eq c 59) (skip_ws_comment rest)  ; ';' comment to EOL
+     cs)))))
+
+(fn skip_ws_comment ((cs (List Int))) (List Int)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons c rest) (if (int_eq c 10) (skip_ws rest) (skip_ws_comment rest)))))
+
+;; ---- atoms ----------------------------------------------------------------
+;; Collect characters up to (not including) the next delimiter. Accumulator
+;; style (reversed + rev_i) so the host stack stays flat on long atoms — the
+;; reader's list-builders are all written this way; see the term.shard
+;; conversion comment for why the (Cons c (recurse …)) shape is a stack bomb.
+(fn take_atom_go ((cs (List Int)) (acc (List Int))) (Pair (List Int) (List Int))
+  (measure (struct cs))
+  (match cs
+    (Nil (Pair (rev_onto acc Nil) Nil))
+    ((Cons c rest)
+     (if (is_delim c) (Pair (rev_onto acc Nil) cs)
+     (take_atom_go rest (Cons c acc))))))
+
+(fn take_atom ((cs (List Int))) (Pair (List Int) (List Int))
+  (take_atom_go cs Nil))
+
+(fn digits_val ((cs (List Int)) (acc Int)) Int
+  (measure (struct cs))
+  (match cs
+    (Nil acc)
+    ((Cons c rest) (digits_val rest (+ (* acc 10) (- c 48))))))
+
+;; True iff the list is nonempty and every char is a digit.
+(fn all_digits_ne ((cs (List Int))) Bool
+  (match cs
+    (Nil False)
+    ((Cons c rest) (if (is_digit c) (all_digits_tail rest) False))))
+
+(fn all_digits_tail ((cs (List Int))) Bool
+  (measure (struct cs))  ; empty ok
+  (match cs
+    (Nil True)
+    ((Cons c rest) (if (is_digit c) (all_digits_tail rest) False))))
+
+;; Classify a nonempty atom: an integer (optional leading '-') or a symbol.
+(fn classify_atom ((cs (List Int))) SExpr
+  (match cs
+    (Nil (SSym (sym_of_chars Nil)))  ; unreachable (atom is nonempty)
+    ((Cons c rest)
+     (if (int_eq c 45)  ; '-'
+       (if (all_digits_ne rest) (SInt (- 0 (digits_val rest 0)))
+       (SSym (sym_of_chars cs)))
+     (if (all_digits_ne cs) (SInt (digits_val cs 0))
+     (SSym (sym_of_chars cs)))))))
+
+;; ---- the reader proper ----------------------------------------------------
+;; Read exactly one s-expression, returning it and the unconsumed input.
+;; Fuel for the input-consuming reader recursion. read_expr ⟷ read_items_go
+;; form a mutual SCC over the *unconsumed* input — the recursion is on the
+;; tail read_expr returns, not a structural subterm, so this is fuel rather
+;; than a structural measure (cf. tc_walk). A give-up on exhaustion yields a
+;; parse error (conservative/sound); the budget (1e9) dwarfs any real source,
+;; so the give-up is dead code on well-formed input.
+(fn read_budget () Int 1000000000)
+
+(fn read_expr ((cs0 (List Int))) RExpr (read_expr_go cs0 (read_budget)))
+
+(fn read_expr_go ((cs0 (List Int)) (fuel Int)) RExpr
+  (measure
+    fuel
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (lt fuel 1) REErr
+  (match (skip_ws cs0)
+    (Nil REErr)
+    ((Cons c rest)
+     (if (int_eq c 40)  ; '(' → list
+       (match (read_items_go rest Nil (- fuel 1))
+         (RIErr REErr)
+         ((RIOk items rest2) (REOk (SList items) rest2)))
+     (if (int_eq c 41)  ; ')' → unbalanced
+       REErr
+     (if (int_eq c 34)  ; '"' → string
+       (read_string rest Nil)
+     (if (int_eq c 39)  ; '\'' → quote reader macro: 'X ≡ (quote X)
+       (match (read_expr_go rest (- fuel 1))
+         (REErr REErr)
+         ((REOk s rest2)
+          (REOk (SList (Cons (SSym (quote quote)) (Cons s Nil))) rest2)))
+       ;; else: an atom. Re-attach c by classifying from (Cons c rest).
+       (match (take_atom (Cons c rest))
+         ((Pair atom rest2) (REOk (classify_atom atom) rest2)))))))))))
+
+;; Read s-expressions until the matching ')'. Accumulator style: the host
+;; stack depth is the NESTING depth (via read_expr), never the sibling count.
+(fn read_items_go ((cs0 (List Int)) (acc (List SExpr)) (fuel Int)) RItems
+  (measure
+    fuel
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (lt fuel 1) RIErr
+  (match (skip_ws cs0)
+    (Nil RIErr)  ; unterminated list
+    ((Cons c rest)
+     (if (int_eq c 41)  ; ')' → done
+       (RIOk (rev_onto acc Nil) rest)
+       (match (read_expr_go (Cons c rest) (- fuel 1))
+         (REErr RIErr)
+         ((REOk head rest2) (read_items_go rest2 (Cons head acc) (- fuel 1)))))))))
+
+;; Read a string body (the opening '"' already consumed). `acc` holds the
+;; decoded characters in reverse.
+(fn read_string ((cs (List Int)) (acc (List Int))) RExpr
+  (measure (struct cs))
+  (match cs
+    (Nil REErr)  ; unterminated string
+    ((Cons c rest)
+     (if (int_eq c 34)  ; closing '"'
+       (REOk (SStr (rev_onto acc Nil)) rest)
+     (if (int_eq c 92)  ; '\' escape
+       (match rest
+         (Nil REErr)
+         ((Cons e rest2) (read_string rest2 (Cons (unescape e) acc))))
+       (read_string rest (Cons c acc)))))))
+
+(fn unescape ((c Int)) Int
+  (if (int_eq c 110) 10  ; \n
+  (if (int_eq c 116) 9  ; \t
+  (if (int_eq c 114) 13  ; \r
+  c))))  ; \" \\ … → the literal char
+
+;; Read one expression and require the rest to be whitespace/comments only.
+(fn read_top ((src (List Int))) (Option SExpr)
+  (match (read_expr src)
+    (REErr None)
+    ((REOk s rest)
+     (match (skip_ws rest)
+       (Nil (Some s))
+       (_ None)))))  ; trailing junk → reject
+
+;; ---- elaboration: SExpr → object Expr -------------------------------------
+;; `elaborate` threads `scope : (List Symbol)`, the binder stack with the
+;; INNERMOST binder at the FRONT (= BVar 0) — mirroring src/load.rs's
+;; LoadCtx so the de Bruijn indices match the Rust loader exactly.
+
+;; "abc" → (Cons 97 (Cons 98 (Cons 99 Nil))) — the String≡(List Int) sugar.
+;; Exactly term.shard's accumulator-style conversion.
+(fn str_sugar ((cs (List Int))) Expr (intlist_to_expr cs))
+
+;; (list E1 E2 …) → (Cons E1 (Cons E2 … Nil)). Accumulator style: reverse,
+;; then fold the object list innermost-first — every call a tail call.
+(fn list_sugar_go ((res (List Expr)) (acc Expr)) Expr
+  (measure (struct res))
+  (match res
+    (Nil acc)
+    ((Cons h t)
+     (list_sugar_go t (Ctor (qn (quote Cons)) (Cons h (Cons acc Nil)))))))
+
+(fn list_sugar ((es (List Expr))) Expr
+  (list_sugar_go (rev_onto es Nil) (Ctor (qn (quote Nil)) Nil)))
+
+;; ---- AST size over SExpr (issue #1; shared by the SExpr-walker measures) ----
+;; size_sexpr / size_sexpr_list are a structural mutual pair (AdMutual — no
+;; clause needed). They are the numeric measure driving the (measure …) clauses
+;; on qtype/parse_type/parse_types below (a 3-member AdUnresolved SCC: parse_type
+;; passes a sublist to qtype which passes it on to parse_types — no single
+;; descending structural track). One recursive ctor (SList), so the nonneg proof
+;; is one inline list-induction. Developed in examples/sexpr_measure.shard.
+(fn size_sexpr ((s SExpr)) Int
+  (measure (struct s))
+  (match s
+    ((SInt _) 1)
+    ((SSym _) 1)
+    ((SStr _) 1)
+    ((SList items) (+ 1 (size_sexpr_list items)))))
+
+(fn size_sexpr_list ((ss (List SExpr))) Int
+  (measure (struct ss))
+  (match ss
+    (Nil 0)
+    ((Cons h t) (+ 1 (+ (size_sexpr h) (size_sexpr_list t))))))
+
+;; defining equations (one structural unfold each)
+(claim size_sexpr_slist
+  (goal ((items (List SExpr))) ()
+    (= (size_sexpr (SList items)) (+ 1 (size_sexpr_list items))))
+  (steps ((simp lhs)) refl))
+
+(claim size_sexpr_ssym
+  (goal ((y Symbol)) () (= (size_sexpr (SSym y)) 1))
+  (steps ((simp lhs)) refl))
+
+(claim size_sexpr_list_nil
+  (goal () () (= (size_sexpr_list Nil) 0))
+  (steps ((simp lhs)) refl))
+
+(claim size_sexpr_list_cons
+  (goal ((h SExpr) (t (List SExpr))) ()
+    (=
+      (size_sexpr_list (Cons h t))
+      (+ 1 (+ (size_sexpr h) (size_sexpr_list t)))))
+  (steps ((simp lhs)) refl))
+
+;; nonneg pair: size_sexpr_nonneg by subterm-induction (the SList case proves
+;; 0 <= size_sexpr_list items inline, each head's bound from the strong IH via
+;; (below)); size_sexpr_list_nonneg an ordinary spine induct citing it one-way.
+(claim size_sexpr_nonneg
+  (goal ((s SExpr)) () (= (le 0 (size_sexpr s)) True))
+  (subterm-induct
+    s
+    (case-on s SExpr
+      ((case SInt
+         (n)
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case SSym
+         (y)
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case SStr
+         (cs)
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case SList
+         (items)
+         (have (= (le 0 (size_sexpr_list items)) True)
+           (induct items
+             ((case Nil
+                (steps
+                  ((rewrite (lemma size_sexpr_list_nil) lr lhs true ()))
+                  (by arith (list 1))))
+              (case Cons
+                (a rest)
+                (have (= (le 0 (size_sexpr a)) True)
+                  (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+                  (have (= (le 0 (size_sexpr_list rest)) True)
+                    (rewrite-with (hyp 2) lr lhs ((inst s s)) () refl)
+                    (steps
+                      ((rewrite (lemma size_sexpr_list_cons) lr lhs true ()))
+                      (by arith (list 1 1 1))))))))
+           (steps
+             ((rewrite (hyp 0) lr lhs true ())
+              (rewrite (lemma size_sexpr_slist) lr lhs true ()))
+             (by arith (list 1 1)))))))))
+
+(claim size_sexpr_list_nonneg
+  (goal ((ks (List SExpr))) () (= (le 0 (size_sexpr_list ks)) True))
+  (induct ks
+    ((case Nil
+       (steps
+         ((rewrite (lemma size_sexpr_list_nil) lr lhs true ()))
+         (by arith (list 1))))
+     (case Cons
+       (h t)
+       (have (= (le 0 (size_sexpr h)) True)
+         (rewrite-with (lemma size_sexpr_nonneg) lr lhs () () refl)
+         (have (= (le 0 (size_sexpr_list t)) True)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (steps
+             ((rewrite (lemma size_sexpr_list_cons) lr lhs true ()))
+             (by arith (list 1 1 1)))))))))
+
+;; A qualified-path type: `(:: SEG … NAME)` (0-ary; `segs` is the path, no type

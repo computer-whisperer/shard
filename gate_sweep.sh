@@ -52,7 +52,10 @@ TARGETS=(
   kernel/checker.shard
   kernel/desugar.shard
   kernel/proof_reader.shard
+  kernel/sexpr.shard
+  kernel/expand.shard
   kernel/reader.shard
+  kernel/resolve.shard
   kernel/loader.shard
   kernel/trace.shard
   kernel/claims.shard
