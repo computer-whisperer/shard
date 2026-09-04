@@ -1,0 +1,489 @@
+;;; sequent.shard — the proof-time STATE and its algebra.
+;;;
+;;; `Sequent` = opened ∀-vars (as FVars) + in-scope hypotheses + the goal's
+;;; own premises + the current lhs = rhs. Everything here is bookkeeping the
+;;; checker's rules share: resolving an EqRef to a Goal (resolve_eq),
+;;; head_clash, substitution of FVars into equations/goals, closing and
+;;; opening equations, Param / inst helpers, open_goal (Goal → Sequent),
+;;; find_case, and the named-field destructuring Induct / CaseOn use.
+;;; No rule lives here — a function in this file never decides a proof.
+;;;
+;;; The checker tower (each file imports the ones below):
+;;;   sequent.shard   the state                              (this file)
+;;;   rewriter.shard  pattern-variable rewriting, rewrite_nth, the
+;;;                   literal-sort gate, apply_rewrite, change / exact-conv
+;;;   tactics.shard   the NON-BRANCHING rule leaves: div_facts, refine_fact,
+;;;                   inject, wf / subterm subgoal builders, below
+;;;   checker.shard   check_sequent — the dispatch and every rule that
+;;;                   recurses into it (steps, premise proofs, case-on,
+;;;                   fin-split, induct); docs/CERT.md is the law
+
+(import "stdlib.shard")
+(import "term.shard")
+(import "expr_size.shard")  ; size / size_list / size_arm(s) — rewrite_all measure
+(import "module.shard")
+(import "proof.shard")
+(import "proof_size.shard")  ; proof_size / case_list_size — the SCC measure
+(import "reduce.shard")
+(import "arith.shard")
+(import "types.shard")  ; mid-proof type gates (have / wf-measure / citations)
+(use (:: kernel term *))
+(use (:: kernel expr_size *))
+(use (:: kernel module *))
+(use (:: kernel proof *))
+(use (:: kernel proof_size *))
+(use (:: kernel reduce *))
+(use (:: kernel arith *))
+(use (:: kernel types *))
+
+;; ---------------------------------------------------------------------------
+;; Sequent: the proof-time state. (Param is defined in proof.shard; an
+;; opened ∀-var carries the same shape as a Goal's bound var.)
+;; ---------------------------------------------------------------------------
+
+
+(type Sequent
+  (Sequent
+    (List Param)  ; bound vars opened as FVars
+    (List Goal)  ; in-scope hypotheses (∀-eqs)
+    (List Equation)  ; goal's own premises
+    Equation))  ; current lhs = rhs
+
+;; ---------------------------------------------------------------------------
+;; List nth helpers, specialized. In the full language these are one
+;; polymorphic `nth`; narrow eats the duplication.
+;; ---------------------------------------------------------------------------
+
+(fn nth_goal ((gs (List Goal)) (k Int)) (Option Goal)
+  (measure (struct gs))
+  (match gs
+    (Nil None)
+    ((Cons h t) (if (int_eq k 0) (Some h) (nth_goal t (- k 1))))))
+
+(fn nth_eq ((es (List Equation)) (k Int)) (Option Equation)
+  (measure (struct es))
+  (match es
+    (Nil None)
+    ((Cons h t) (if (int_eq k 0) (Some h) (nth_eq t (- k 1))))))
+
+(fn lookup_lemma ((name QName) (th Theory)) (Option Goal)
+  (measure (struct th))
+  (match th
+    ((TheoryEmpty) None)
+    ((TheoryCons entry rest)
+     (match entry
+       ((Proven n g) (if (qname_eq name n) (Some g) (lookup_lemma name rest)))
+       ((Axiom n g) (if (qname_eq name n) (Some g) (lookup_lemma name rest)))))))
+
+;; ---------------------------------------------------------------------------
+;; resolve_eq: turn an EqRef into a Goal (which may carry vars and
+;; premises). Premises are promoted to vacuous-quantified Goals so all
+;; three cases share a shape.
+;; ---------------------------------------------------------------------------
+
+(fn resolve_eq ((er EqRef) (seq Sequent) (th Theory)) (Option Goal)
+  (match seq
+    ((Sequent _ hyps premises _)
+     (match er
+       ((Hyp k) (nth_goal hyps k))
+       ((Premise k)
+        (match (nth_eq premises k)
+          ((Some eq) (Some (Goal Nil Nil eq)))
+          (None None)))
+       ((Lemma n) (lookup_lemma n th))))))
+
+;; ---------------------------------------------------------------------------
+;; head_clash: True iff `a` and `b` must be distinct because their
+;; outermost structure can't unify under any binding. Used by Absurd
+;; to detect contradictory equations after simp.
+;;
+;; Distinct ctors / distinct IntLits / distinct SymLits, OR a
+;; cross-variant value-type mismatch (Ctor vs SymLit, etc.) — these
+;; all clash. FVar / BVar / stuck Call / stuck Match / Let / If on
+;; either side means "we can't decide" — return False.
+;;
+;; Ctor-vs-IntLit is the ONE mixed pair that is not a blanket clash: the
+;; kernel Nat former is LITERAL-BACKED, so it goes through nat_lit_clash.
+;; ---------------------------------------------------------------------------
+
+;; nat_lit_clash: decide a ctor-headed term against a literal, instead of
+;; assuming they are distinct.
+;;
+;; A ground Z/S tower and its packed nonneg literal are the SAME value
+;; (reduce.shard nat_pack; tc_nat_lit_view is the typing twin; the literal-sort
+;; gate's ls_of_expr already knows it), and the PROOF-FACING normalizers
+;; deliberately do NOT pack — so `simp`, which is what Absurd normalizes with,
+;; can leave one side spelled (S Z) and the other spelled 1. A blanket
+;; Ctor-vs-IntLit "clash" is then a LIE, and Absurd turns it into any goal at
+;; all: (= 0 1) checked with no axiom, no shadowing and no admit.
+;;
+;; Decided structurally on the ctor side, straight off the packing definition
+;; (Z = 0, (S e) = e + 1):
+;;   Z      vs n : clash iff n /= 0
+;;   (S e)  vs n : recurse — (S e) = n iff e = n-1
+;;   IntLit m    : an already-packed sub-tower; clash iff m /= n
+;;   any OTHER ctor vs a literal: a genuine cross-sort clash. Only CORE Nat is
+;;     literal-backed, so a user's own shadowing Z/S is a different identity
+;;     and still clashes — the core_named discipline, same as everywhere else.
+;;   symbolic tail (FVar/BVar/stuck Call/…): undecided.
+;;
+;; The recursion needs NO typing assumption: it never asks whether e is a
+;; well-typed Nat, so (S x) vs 0 simply goes undecided rather than leaning on
+;; "a Nat is nonneg" (match_nat_view makes the same conservative choice —
+;; negative literals are MStuck there, not MNo). Ground cases still all decide:
+;; (S Z) vs 0 walks to Z vs -1 and clashes.
+(fn nat_lit_clash ((c Expr) (n Int)) Bool
+  (measure (struct c))
+  (match c
+    ((Ctor q args)
+     (if (core_named q (quote Z)) (if (int_eq n 0) False True)
+     (if (core_named q (quote S))
+       (match args
+         ((Cons e Nil) (nat_lit_clash e (- n 1)))
+         (_ False))  ; arity garbage — the typer rules it out; stay undecided
+       True)))  ; a non-Nat ctor is never a literal
+    ((IntLit m) (if (int_eq m n) False True))
+    (_ False)))
+
+(fn head_clash ((a Expr) (b Expr)) Bool
+  (match a
+    ((Ctor na _)
+     (match b
+       ((Ctor nb _) (if (qname_eq na nb) False True))
+       ((IntLit nb) (nat_lit_clash a nb))
+       ((SymLit _) True)
+       (_ False)))
+    ((IntLit na)
+     (match b
+       ((IntLit nb) (if (int_eq na nb) False True))
+       ((Ctor _ _) (nat_lit_clash b na))
+       ((SymLit _) True)
+       (_ False)))
+    ((SymLit na)
+     (match b
+       ((SymLit nb) (if (sym_eq na nb) False True))
+       ((Ctor _ _) True)
+       ((IntLit _) True)
+       (_ False)))
+    (_ False)))
+
+;; sym_member: True iff x is in xs.
+(fn sym_member ((x Symbol) (xs (List Symbol))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (sym_eq x h) True (sym_member x t)))))
+;; ---------------------------------------------------------------------------
+;; Equation / Goal substitution. FVar-based; the hyp's own bound vars
+;; (BVars in its body) are untouched, so no shadowing concerns —
+;; locally-nameless dissolves v1's "unless they shadow var" check.
+;; ---------------------------------------------------------------------------
+
+(fn subst_eq ((env Env) (eq Equation)) Equation
+  (match eq
+    ((Equation l r) (Equation (subst env l) (subst env r)))))
+
+(fn subst_eqs ((env Env) (eqs (List Equation))) (List Equation)
+  (measure (struct eqs))
+  (match eqs
+    (Nil Nil)
+    ((Cons e rest) (Cons (subst_eq env e) (subst_eqs env rest)))))
+
+(fn subst_goal ((env Env) (g Goal)) Goal
+  (match g
+    ((Goal params premises eq)
+     (Goal params (subst_eqs env premises) (subst_eq env eq)))))
+
+(fn subst_goals ((env Env) (gs (List Goal))) (List Goal)
+  (measure (struct gs))
+  (match gs
+    (Nil Nil)
+    ((Cons g rest) (Cons (subst_goal env g) (subst_goals env rest)))))
+
+;; ---------------------------------------------------------------------------
+;; Equation closing (close_many lifted to Equation and lists thereof).
+;; ---------------------------------------------------------------------------
+
+(fn close_eq ((names (List Symbol)) (eq Equation)) Equation
+  (match eq
+    ((Equation l r) (Equation (close_many names l) (close_many names r)))))
+
+(fn close_eqs ((names (List Symbol)) (eqs (List Equation))) (List Equation)
+  (measure (struct eqs))
+  (match eqs
+    (Nil Nil)
+    ((Cons e rest) (Cons (close_eq names e) (close_eqs names rest)))))
+
+;; ---------------------------------------------------------------------------
+;; close_goal_for_storage: convert a Goal that was authored / proved with
+;; param-name FVars in its eq + premises into the canonical BVar-closed
+;; form that the kernel uses for stored lemmas. The Sequent-form (open
+;; FVars) is convenient for top-level proof steps (Induct, Rewrite by
+;; name); the Theory-form (closed BVars) is what citations open back to
+;; fresh FVars. This helper bridges the two.
+;;
+;; Innermost-first convention: BVar 0 = last param. Hence reverse_syms
+;; on (param_names params) before close_many: close_many treats the
+;; FIRST name in its list as BVar 0.
+;; ---------------------------------------------------------------------------
+
+(fn close_goal_for_storage ((g Goal)) Goal
+  (match g
+    ((Goal params premises eq)
+     (let ((names (reverse_syms (param_names params))))
+       (Goal params (close_eqs names premises) (close_eq names eq))))))
+
+;; ---------------------------------------------------------------------------
+;; Equation opening (open_many lifted to Equation and lists thereof).
+;; ---------------------------------------------------------------------------
+
+(fn open_eq_with ((bindings (List Expr)) (eq Equation)) Equation
+  (match eq
+    ((Equation l r) (Equation (open_many bindings l) (open_many bindings r)))))
+
+(fn open_eqs_with ((bindings (List Expr)) (eqs (List Equation))) (List Equation)
+  (measure (struct eqs))
+  (match eqs
+    (Nil Nil)
+    ((Cons e rest)
+     (Cons (open_eq_with bindings e) (open_eqs_with bindings rest)))))
+
+;; ---------------------------------------------------------------------------
+;; Param / List helpers.
+;; ---------------------------------------------------------------------------
+
+(fn find_param ((name Symbol) (ps (List Param))) (Option Param)
+  (measure (struct ps))
+  (match ps
+    (Nil None)
+    ((Cons p rest)
+     (match p
+       ((Param x _) (if (sym_eq x name) (Some p) (find_param name rest)))))))
+
+(fn remove_param ((name Symbol) (ps (List Param))) (List Param)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons p rest)
+     (match p
+       ((Param x _) (if (sym_eq x name) rest (Cons p (remove_param name rest))))))))
+
+(fn param_names ((ps (List Param))) (List Symbol)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons (Param x _) rest) (Cons x (param_names rest)))))
+
+(fn params_to_fvar_exprs ((ps (List Param))) (List Expr)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons (Param x _) rest) (Cons (FVar x) (params_to_fvar_exprs rest)))))
+
+(fn append_params ((xs (List Param)) (ys (List Param))) (List Param)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (append_params t ys)))))
+
+(fn append_goals ((xs (List Goal)) (ys (List Goal))) (List Goal)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (append_goals t ys)))))
+
+(fn append_eqs ((xs (List Equation)) (ys (List Equation))) (List Equation)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (append_eqs t ys)))))
+
+(fn reverse_syms ((xs (List Symbol))) (List Symbol) (reverse_syms_acc xs Nil))
+
+(fn reverse_syms_acc ((xs (List Symbol)) (acc (List Symbol))) (List Symbol)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (reverse_syms_acc t (Cons h acc)))))
+
+;; reverse_exprs / reverse_exprs_acc moved to term.shard (a core reducer helper,
+;; used by reduce.shard's apply path; check.shard still calls it, term loads first).
+
+;; Generate fresh Params, one per type.
+(fn mk_fresh_params ((types (List Type))) (List Param)
+  (measure (struct types))
+  (match types
+    (Nil Nil)
+    ((Cons t rest) (Cons (Param (gen_fresh) t) (mk_fresh_params rest)))))
+
+;; Generate one fresh Symbol per Param. Used by the Rewrite arm to
+;; open the cited equation's ∀-binders to fresh FVars; the names
+;; double as the pat_vars list passed to expr_match.
+(fn fresh_syms_for_params ((ps (List Param))) (List Symbol)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons _ rest) (Cons (gen_fresh) (fresh_syms_for_params rest)))))
+
+;; Convert a list of Symbols to FVar Expr values, preserving order.
+(fn syms_to_fvars ((ss (List Symbol))) (List Expr)
+  (measure (struct ss))
+  (match ss
+    (Nil Nil)
+    ((Cons s rest) (Cons (FVar s) (syms_to_fvars rest)))))
+
+;; ---------------------------------------------------------------------------
+;; Inst-processing helpers (slice 32).
+;;
+;; An `Inst NAME EXPR` pre-instantiates one of a cited Goal's ∀-vars
+;; before the conclusion pattern match runs. Unblocks citations where
+;; the LHS pattern can't infer some ∀-binder (e.g., a "pivot" var that
+;; appears only on the RHS, or any binder the match would leave free).
+;;
+;; The Rewrite / RewriteWith arms use `split_params_by_insts` to walk
+;; the cited Goal's Params in introduction order; for each Param, the
+;; binding is either:
+;;   - the user-supplied Inst value (if an Inst names this Param), or
+;;   - a fresh FVar (otherwise — these names become pat_vars for the
+;;     ordinary capture-matching path).
+;;
+;; Validation: `all_insts_named` rejects Insts that name a Param not
+;; present in the cited Goal. Duplicates within Insts are first-match-
+;; wins via `find_inst`; later duplicates are silently ignored.
+;; ---------------------------------------------------------------------------
+
+(fn find_inst ((name Symbol) (insts (List Inst))) (Option Expr)
+  (measure (struct insts))
+  (match insts
+    (Nil None)
+    ((Cons (Inst iname ival) rest)
+     (if (sym_eq iname name) (Some ival) (find_inst name rest)))))
+
+(fn all_insts_named ((insts (List Inst)) (cited_params (List Param))) Bool
+  (measure (struct insts))
+  (match insts
+    (Nil True)
+    ((Cons (Inst iname _) rest)
+     (match (find_param iname cited_params)
+       (None False)
+       ((Some _) (all_insts_named rest cited_params))))))
+
+;; Returns (openings, pat_var_names). openings is in INTRODUCTION
+;; ORDER — caller reverses before passing to open_many. pat_var_names
+;; contains only the fresh-FVar names; Insts-bound params contribute
+;; no pat_var (their binders are already pinned, not captured).
+(fn split_params_by_insts ((cited_params (List Param)) (insts (List Inst)))
+  (Pair (List Expr) (List Symbol))
+  (measure (struct cited_params))
+  (match cited_params
+    (Nil (Pair Nil Nil))
+    ((Cons (Param pname _) rest)
+     (match (split_params_by_insts rest insts)
+       ((Pair rest_openings rest_pvs)
+        (match (find_inst pname insts)
+          ((Some val) (Pair (Cons val rest_openings) rest_pvs))
+          (None
+            (let ((fresh (gen_fresh)))
+              (Pair (Cons (FVar fresh) rest_openings) (Cons fresh rest_pvs))))))))))
+
+;; ---------------------------------------------------------------------------
+;; open_goal: enter a Goal as a Sequent. Display names are used directly
+;; as the initial FVar names — a closed Goal has no prior FVars to
+;; collide with. Body BVars get opened to FVars in innermost-first
+;; order (BVar 0 = last Param in display order).
+;; ---------------------------------------------------------------------------
+
+(fn open_goal ((g Goal)) Sequent
+  (match g
+    ((Goal params premises eq)
+     (let ((fvars (reverse_exprs (params_to_fvar_exprs params))))
+       (Sequent
+         params
+         Nil
+         (open_eqs_with fvars premises)
+         (open_eq_with fvars eq))))))
+
+;; ---------------------------------------------------------------------------
+;; find_case: look up the Proof for a given ctor branch.
+;; ---------------------------------------------------------------------------
+
+;; Returns the matching case's (author field-names, sub-proof). A Nil names
+;; list means "generate fresh field names" (the surface 2-arg case form).
+(fn find_case ((ctor_name QName) (cases (List Case)))
+  (Option (Pair (List Symbol) Proof))
+  (measure (struct cases))
+  (match cases
+    (Nil None)
+    ((Cons (Case cn names pf) rest)
+     (if (qname_eq cn ctor_name) (Some (Pair names pf))
+     (find_case ctor_name rest)))))
+
+;; Field types of a named ctor — the cases-iterating proof loops look the ctor
+;; up by the case's own name (structural on ctors).
+(fn find_ctor_fields ((cname QName) (ctors (List CtorDef))) (Option (List Type))
+  (measure (struct ctors))
+  (match ctors
+    (Nil None)
+    ((Cons (CtorDef cn fts) rest)
+     (if (qname_eq cn cname) (Some fts) (find_ctor_fields cname rest)))))
+
+;; ---------------------------------------------------------------------------
+;; Named-field destructuring (Induct / CaseOn). When a case supplies field
+;; names, build the field Params from them instead of gen_fresh — so the
+;; author can reference (and case-split on) a constructor field, e.g. the
+;; head of an inducted list. Soundness rests on `field_names_ok`: the names
+;; must match the ctor's arity, be pairwise distinct, and avoid capturing any
+;; surviving sequent param.
+;; ---------------------------------------------------------------------------
+
+;; Field Params from names (one per type). Nil names ⇒ all gen_fresh.
+(fn mk_field_params ((names (List Symbol)) (types (List Type))) (List Param)
+  (match names
+    (Nil (mk_fresh_params types))
+    ((Cons _ _) (zip_field_params names types))))
+
+(fn zip_field_params ((names (List Symbol)) (types (List Type))) (List Param)
+  (measure (struct names))
+  (match names
+    (Nil Nil)
+    ((Cons n nrest)
+     (match types
+       (Nil Nil)  ; length guarded by field_names_ok
+       ((Cons t trest) (Cons (Param n t) (zip_field_params nrest trest)))))))
+
+(fn same_length_st ((names (List Symbol)) (types (List Type))) Bool
+  (measure (struct names))
+  (match names
+    (Nil
+      (match types
+        (Nil True)
+        (_ False)))
+    ((Cons _ nr)
+     (match types
+       (Nil False)
+       ((Cons _ tr) (same_length_st nr tr))))))
+
+(fn distinct_syms ((names (List Symbol))) Bool
+  (measure (struct names))
+  (match names
+    (Nil True)
+    ((Cons n rest) (if (sym_member n rest) False (distinct_syms rest)))))
+
+(fn disjoint_syms ((names (List Symbol)) (taken (List Symbol))) Bool
+  (measure (struct names))
+  (match names
+    (Nil True)
+    ((Cons n rest) (if (sym_member n taken) False (disjoint_syms rest taken)))))
+
+;; Validate author-provided field names. Nil ⇒ no names supplied ⇒ OK (fresh).
+;; Otherwise: arity match, pairwise distinct, and disjoint from `taken` (the
+;; surviving param names) so the new field FVars cannot capture an in-scope var.
+(fn field_names_ok
+  ((names (List Symbol)) (types (List Type)) (taken (List Symbol)))
+  Bool
+  (match names
+    (Nil True)
+    ((Cons _ _)
+     (if (same_length_st names types)
+       (if (distinct_syms names) (disjoint_syms names taken) False)
+       False))))

@@ -49,6 +49,9 @@ TARGETS=(
   kernel/reduce.shard
   kernel/types.shard
   kernel/arith.shard
+  kernel/sequent.shard
+  kernel/rewriter.shard
+  kernel/tactics.shard
   kernel/checker.shard
   kernel/desugar.shard
   kernel/proof_reader.shard

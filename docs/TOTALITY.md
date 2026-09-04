@@ -498,7 +498,8 @@ still enumerates the advisory AdFlag / AdUnresolved set (out of TCB).
   that byte-spliced `(measure (struct ARG))` clauses during the Phase-D
   migration; its output was advisory (the gate re-verifies every committed
   clause). Removed once the migration completed.
-- `kernel/checker.shard` — `do_subterm_induct` / `build_subterm_subgoal`
+- `kernel/checker.shard` (dispatch) + `kernel/tactics.shard` (the builders) —
+  `do_subterm_induct` / `build_subterm_subgoal`
   (subterm induction, §6.1) and `do_below` / `expr_proper_subterm` (the ⊰
   discharge); the `Proof` ctors `SubtermInduct` / `Below` live in
   `kernel/proof.shard`, parsed in `kernel/proof_reader.shard`.

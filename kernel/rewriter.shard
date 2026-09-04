@@ -1,0 +1,954 @@
+;;; rewriter.shard — REWRITING under the checker: the pattern-variable
+;;; rewriter, exact-site rewriting (rewrite_nth / the occurrence selector),
+;;; the literal-sort gate, apply_rewrite (flip by Dir, then rewrite), and the
+;;; conversion forms (change / exact-conv, docs/CERT.md §3).
+;;; Pure Expr → Expr work over a Sequent; nothing here recurses into
+;;; check_sequent. Tower: sequent.shard ← rewriter.shard (this) ← checker.shard.
+
+(import "stdlib.shard")
+(import "term.shard")
+(import "expr_size.shard")  ; size / size_list / size_arm(s) — rewrite_all measure
+(import "module.shard")
+(import "proof.shard")
+(import "proof_size.shard")  ; proof_size / case_list_size — the SCC measure
+(import "reduce.shard")
+(import "arith.shard")
+(import "types.shard")  ; mid-proof type gates (have / wf-measure / citations)
+(import "sequent.shard")
+(use (:: kernel term *))
+(use (:: kernel expr_size *))
+(use (:: kernel module *))
+(use (:: kernel proof *))
+(use (:: kernel proof_size *))
+(use (:: kernel reduce *))
+(use (:: kernel arith *))
+(use (:: kernel types *))
+(use (:: kernel sequent *))
+
+;; ---------------------------------------------------------------------------
+;; Pattern-variable rewriting on Expr values. The cited equation can
+;; have ∀-bound vars; they're opened to fresh FVars before matching,
+;; and listed in `pat_vars` so expr_match knows to treat them as
+;; capture variables rather than literal FVars.
+;;
+;; rewrite_all walks the whole tree top-down left-to-right replacing
+;; every non-overlapping match (does NOT recurse into a replacement
+;; so cycles like (x = (f x)) are bounded); returns Some if at least
+;; one match was found, None if no match anywhere. rewrite_nth walks
+;; the same order and replaces exactly the K-th site; `first` is K = 0.
+;;
+;; Both descend into Match ARM BODIES when both pattern and replacement
+;; are BVar-free (always true for cited sequent equations — they bind
+;; via FVars) AND the replacement introduces no binder of its own, which
+;; together are shift-free and capture-free across the arm binders. Let
+;; bodies remain binder-blind — depth-aware rewriting there still pending.
+;; ---------------------------------------------------------------------------
+
+
+;; expr_match: structural match of `pat` against `cand`, treating
+;; FVars whose name is in `pat_vars` as CAPTURE variables. Other
+;; FVars must match literally (same name). Returns Some env on
+;; successful match — env binds each captured pat_var to the
+;; matched Expr. Repeated occurrences of the same pat_var must
+;; match consistently (the second sighting checks expr_eq against
+;; the first binding).
+;;
+;; v2 limitation: no descent under Match arm bodies / Let bodies.
+;; A pattern that contains a Match or Let just fails to match.
+(fn expr_match ((pat_vars (List Symbol)) (pat Expr) (cand Expr) (env Env))
+  (Option Env)
+  (measure (struct pat))
+  (match pat
+    ((FVar x)
+     (if (sym_member x pat_vars)
+       (match (lookup x env)
+         ((Some v) (if (expr_eq v cand) (Some env) None))
+         (None (Some (Bind x cand env))))
+       (match cand
+         ((FVar y) (if (sym_eq x y) (Some env) None))
+         (_ None))))
+    ((BVar k)
+     (match cand
+       ((BVar j) (if (int_eq k j) (Some env) None))
+       (_ None)))
+    ((Ctor c args)
+     (match cand
+       ((Ctor c2 args2)
+        (if (qname_eq c c2) (expr_match_list pat_vars args args2 env) None))
+       (_ None)))
+    ((Call f args)
+     (match cand
+       ((Call f2 args2)
+        (if (qname_eq f f2) (expr_match_list pat_vars args args2 env) None))
+       (_ None)))
+    ((If c t el)
+     (match cand
+       ((If c2 t2 el2)
+        (match (expr_match pat_vars c c2 env)
+          ((Some env1)
+           (match (expr_match pat_vars t t2 env1)
+             ((Some env2) (expr_match pat_vars el el2 env2))
+             (None None)))
+          (None None)))
+       (_ None)))
+    ((IntLit n)
+     (match cand
+       ((IntLit m) (if (int_eq n m) (Some env) None))
+       (_ None)))
+    ((SymLit s)
+     (match cand
+       ((SymLit t) (if (sym_eq s t) (Some env) None))
+       (_ None)))
+    (_ None)))  ;; Match/Let in pat: not yet
+
+(fn expr_match_list
+  ((pat_vars (List Symbol)) (ps (List Expr)) (cs (List Expr)) (env Env))
+  (Option Env)
+  (measure (struct ps))
+  (match ps
+    (Nil
+      (match cs
+        (Nil (Some env))
+        (_ None)))
+    ((Cons p prest)
+     (match cs
+       (Nil None)
+       ((Cons c crest)
+        (match (expr_match pat_vars p c env)
+          ((Some env2) (expr_match_list pat_vars prest crest env2))
+          (None None)))))))
+
+;; ---------------------------------------------------------------------------
+;; Rewriter (pattern-variable aware). When pat_vars is Nil, expr_match
+;; reduces to expr_eq and rewrite_all/nth behave as the old ground
+;; rewriters did. The successful-match arm of each top-level case
+;; substitutes the captured env into the replacement.
+;; ---------------------------------------------------------------------------
+
+;; (The env-discarding first-match walkers were DELETED when the citation
+;; type gate landed — every caller needs the match env — and the env-
+;; carrying first walker was then FOLDED into rewrite_nth: `first` IS
+;; `(at 0)`, one preorder walk, no separate first-site walker. rewrite_all
+;; carries the env of EVERY site for the same reason — each site is its
+;; own instantiation of the cited lemma.)
+
+;; (List Env) concat, for combining multi-site env collections.
+(fn envs_concat ((a (List Env)) (b (List Env))) (List Env)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (envs_concat t b)))))
+
+(fn rewrite_all
+  ((m Module)
+   (pat_vars (List Symbol))
+   (pat Expr)
+   (repl Expr)
+   (want LSort)
+   (cur LSort)
+   (e Expr))
+  (Option (Pair (List Env) Expr))
+  (measure (size e))  ; structural descent into e (proofs in checker.auto.shard)
+  (match (site_match pat_vars pat want cur e)
+    ;; don't recurse into repl
+    ((Some env) (Some (Pair (Cons env Nil) (subst env repl))))
+    (None
+      (match e
+        ((Ctor c args)
+         (match (arg_sorts_ctor m want c)
+           ((Pair df ts)
+            (match (rewrite_all_list m pat_vars pat repl want df ts args)
+              ((Some (Pair envs args2)) (Some (Pair envs (Ctor c args2))))
+              (None None)))))
+        ((Call f args)
+         (match (arg_sorts_call m want f)
+           ((Pair df ts)
+            (match (rewrite_all_list m pat_vars pat repl want df ts args)
+              ((Some (Pair envs args2)) (Some (Pair envs (Call f args2))))
+              (None None)))))
+        ((If c t el) (rewrite_all_if m pat_vars pat repl want cur c t el))
+        ;; Match: scrutinee, and — when pattern AND replacement are BVar-free
+        ;; AND the replacement introduces no binder (arm_descent_ok) — the
+        ;; arm BODIES too. The scrutinee's sort is unknown (LAny); an arm
+        ;; body sits at the Match's own position (cur).
+        ;; Cited goal equations bind via FVars (a sequent equation never
+        ;; contains a loose BVar), so the BVar-free half is satisfied by every
+        ;; premise/hyp/lemma citation; it is belt-and-braces against any future
+        ;; caller. Without the descent, guards reified INTO arm bodies (ceval's
+        ;; open_many_arms residuals — e.g. a stuck if-chain inside an
+        ;; opt_pair_eq arm) are unreachable by rewriting, which blocks
+        ;; compute/rewrite alternation on stuck terms.
+        ;;
+        ;; SOUNDNESS. A BVar-free pattern mentions no de Bruijn index, so
+        ;; crossing an arm's pattern binders needs no shift; a pat_var-matched
+        ;; piece (which MAY contain arm-bound BVars) is placed back at the same
+        ;; DEPTH it came from, so nothing is captured. That last step is what
+        ;; needs `no_binders repl`: subst (term.shard) does not shift, so if the
+        ;; replacement carries a Let or Match of its own, a pat_var occurrence
+        ;; under it lands one binder DEEPER than its site and the piece's BVars
+        ;; are re-bound by the replacement's binder. Measured, before this
+        ;; guard: cite `∀y. (Node y) = (let ((z 0)) (Node y))` into the residual
+        ;; arm `((Node n) (Node @0))` and @0 comes back bound by z — the arm's
+        ;; field silently becomes 0, and (f t) = (g t) closes by refl for two
+        ;; functions that differ. Nothing but the citation TYPE GATE (which
+        ;; rejects the loose BVar in the capture env, three layers up in
+        ;; check_sequent) stood between that and 0 = 1. The gate still stands;
+        ;; this guard makes the argument local and complete.
+        ((Match scrut arms)
+         (let
+           ((s2 (rewrite_all m pat_vars pat repl want (LAny) scrut))
+            (a2
+              (if (arm_descent_ok pat repl)
+                (rewrite_all_arms m pat_vars pat repl want cur arms)
+                None)))
+           (match s2
+             ((Some (Pair es scrut2))
+              (match a2
+                ((Some (Pair es2 arms2))
+                 (Some (Pair (envs_concat es es2) (Match scrut2 arms2))))
+                (None (Some (Pair es (Match scrut2 arms))))))
+             (None
+               (match a2
+                 ((Some (Pair es2 arms2)) (Some (Pair es2 (Match scrut arms2))))
+                 (None None))))))
+        (_ None)))))
+
+;; No loose-or-bound de Bruijn variable anywhere in the term. Guards the
+;; arm-descent above: BVar-freeness is what makes the descent shift-free.
+(fn no_bvars ((e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((BVar k) False)
+    ((IntLit _) True)
+    ((SymLit _) True)
+    ((FVar _) True)
+    ((Ctor _ args) (no_bvars_list args))
+    ((Call _ args) (no_bvars_list args))
+    ((If c t el) (if (no_bvars c) (if (no_bvars t) (no_bvars el) False) False))
+    ((Let bs body) (if (no_bvars_list bs) (no_bvars body) False))
+    ((Match s arms) (if (no_bvars s) (no_bvars_arms arms) False))))
+
+(fn no_bvars_list ((es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil True)
+    ((Cons h t) (if (no_bvars h) (no_bvars_list t) False))))
+
+(fn no_bvars_arms ((arms (List Arm))) Bool
+  (measure (struct arms))
+  (match arms
+    (Nil True)
+    ((Cons (Arm p b) t) (if (no_bvars b) (no_bvars_arms t) False))))
+
+;; No binder-introducing node anywhere in the term. Let and Match are the only
+;; binders in Expr, and both are refused outright rather than only where a
+;; pat_var sits beneath them: this is a replacement about to be pushed under an
+;; arm's binders, and a term with no binder of its own places every piece
+;; substituted into it at the depth that piece came from. The partner guard to
+;; no_bvars for the arm descent — see rewrite_all's Match arm.
+(fn no_binders ((e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((BVar _) True)
+    ((IntLit _) True)
+    ((SymLit _) True)
+    ((FVar _) True)
+    ((Ctor _ args) (no_binders_list args))
+    ((Call _ args) (no_binders_list args))
+    ((If c t el)
+     (if (no_binders c) (if (no_binders t) (no_binders el) False) False))
+    ((Let _ _) False)
+    ((Match _ _) False)))
+
+(fn no_binders_list ((es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil True)
+    ((Cons h t) (if (no_binders h) (no_binders_list t) False))))
+
+;; rewrite_all over arm bodies (patterns untouched). Some iff ANY arm changed.
+(fn rewrite_all_arms
+  ((m Module)
+   (pat_vars (List Symbol))
+   (pat Expr)
+   (repl Expr)
+   (want LSort)
+   (cur LSort)
+   (arms (List Arm)))
+  (Option (Pair (List Env) (List Arm)))
+  (measure (size_arms arms))
+  (match arms
+    (Nil None)
+    ((Cons (Arm p b) t)
+     (match (rewrite_all m pat_vars pat repl want cur b)
+       ((Some (Pair es b2))
+        (match (rewrite_all_arms m pat_vars pat repl want cur t)
+          ((Some (Pair es2 t2))
+           (Some (Pair (envs_concat es es2) (Cons (Arm p b2) t2))))
+          (None (Some (Pair es (Cons (Arm p b2) t))))))
+       (None
+         (match (rewrite_all_arms m pat_vars pat repl want cur t)
+           ((Some (Pair es2 t2)) (Some (Pair es2 (Cons (Arm p b) t2))))
+           (None None)))))))
+
+;; args in lockstep with their expected sorts; exhausted list → default.
+(fn rewrite_all_list
+  ((m Module)
+   (pat_vars (List Symbol))
+   (pat Expr)
+   (repl Expr)
+   (want LSort)
+   (df LSort)
+   (ts (List LSort))
+   (es (List Expr)))
+  (Option (Pair (List Env) (List Expr)))
+  (measure (size_list es))
+  (match es
+    (Nil None)
+    ((Cons h t)
+     (match (ls_split df ts)
+       ((Pair cur ts2)
+        (match (rewrite_all m pat_vars pat repl want cur h)
+          ((Some (Pair envs h2))
+           (match (rewrite_all_list m pat_vars pat repl want df ts2 t)
+             ((Some (Pair envs2 t2))
+              (Some (Pair (envs_concat envs envs2) (Cons h2 t2))))
+             (None (Some (Pair envs (Cons h2 t))))))
+          (None
+            (match (rewrite_all_list m pat_vars pat repl want df ts2 t)
+              ((Some (Pair envs2 t2)) (Some (Pair envs2 (Cons h t2))))
+              (None None)))))))))
+
+(fn rewrite_all_if
+  ((m Module)
+   (pat_vars (List Symbol))
+   (pat Expr)
+   (repl Expr)
+   (want LSort)
+   (cur LSort)
+   (c Expr)
+   (t Expr)
+   (el Expr))
+  (Option (Pair (List Env) Expr))
+  (measure (+ 1 (+ (size c) (+ (size t) (size el)))))
+  (match (rewrite_all m pat_vars pat repl want (LAny) c)
+    ((Some (Pair ec c2))
+     (match (rewrite_all m pat_vars pat repl want cur t)
+       ((Some (Pair et t2))
+        (match (rewrite_all m pat_vars pat repl want cur el)
+          ((Some (Pair ee el2))
+           (Some (Pair (envs_concat ec (envs_concat et ee)) (If c2 t2 el2))))
+          (None (Some (Pair (envs_concat ec et) (If c2 t2 el))))))
+       (None
+         (match (rewrite_all m pat_vars pat repl want cur el)
+           ((Some (Pair ee el2))
+            (Some (Pair (envs_concat ec ee) (If c2 t el2))))
+           (None (Some (Pair ec (If c2 t el))))))))
+    (None
+      (match (rewrite_all m pat_vars pat repl want cur t)
+        ((Some (Pair et t2))
+         (match (rewrite_all m pat_vars pat repl want cur el)
+           ((Some (Pair ee el2))
+            (Some (Pair (envs_concat et ee) (If c t2 el2))))
+           (None (Some (Pair et (If c t2 el))))))
+        (None
+          (match (rewrite_all m pat_vars pat repl want cur el)
+            ((Some (Pair ee el2)) (Some (Pair ee (If c t el2))))
+            (None None)))))))
+
+;; ---------------------------------------------------------------------------
+;; rewrite_nth: replace exactly the K-th match site (0-based), counting
+;; sites in rewrite_all's walk order — preorder, Ctor/Call args left to
+;; right, If cond/then/else, Match scrutinee then arm bodies (same
+;; BVar-free/binder-free guard as rewrite_all), and a matched site is counted once
+;; and never entered. So `(at K)` targets precisely the K-th of the
+;; sites an all-occurrences rewrite would touch. A miss threads the
+;; remaining count out; fewer than K+1 sites in the whole term means
+;; the step fails (loudly) rather than silently rewriting elsewhere.
+;; `first` (OccFirst) is exactly K = 0 — so a first-site rewrite reaches
+;; every site an all-occurrences rewrite would, arm bodies included.
+;; ---------------------------------------------------------------------------
+
+;; Counting-walk results: a hit carries the site's match env + the rebuilt
+;; term; a miss carries the count REMAINING after this subtree's sites.
+(type RwNth (RwNthHit Env Expr) (RwNthMiss Int))
+(type RwNthL (RwNthHitL Env (List Expr)) (RwNthMissL Int))
+(type RwNthA (RwNthHitA Env (List Arm)) (RwNthMissA Int))
+
+(fn rewrite_nth
+  ((m Module)
+   (pat_vars (List Symbol))
+   (pat Expr)
+   (repl Expr)
+   (want LSort)
+   (cur LSort)
+   (e Expr)
+   (k Int))
+  RwNth
+  (measure (size e))
+  (match (site_match pat_vars pat want cur e)
+    ;; a site: selected iff the countdown is exhausted; never entered
+    ((Some env)
+     (if (int_eq k 0) (RwNthHit env (subst env repl)) (RwNthMiss (- k 1))))
+    (None
+      (match e
+        ((Ctor c args)
+         (match (arg_sorts_ctor m want c)
+           ((Pair df ts)
+            (match (rewrite_nth_list m pat_vars pat repl want df ts args k)
+              ((RwNthHitL env args2) (RwNthHit env (Ctor c args2)))
+              ((RwNthMissL k2) (RwNthMiss k2))))))
+        ((Call f args)
+         (match (arg_sorts_call m want f)
+           ((Pair df ts)
+            (match (rewrite_nth_list m pat_vars pat repl want df ts args k)
+              ((RwNthHitL env args2) (RwNthHit env (Call f args2)))
+              ((RwNthMissL k2) (RwNthMiss k2))))))
+        ((If c t el) (rewrite_nth_if m pat_vars pat repl want cur c t el k))
+        ((Match scrut arms)
+         (match (rewrite_nth m pat_vars pat repl want (LAny) scrut k)
+           ((RwNthHit env scrut2) (RwNthHit env (Match scrut2 arms)))
+           ((RwNthMiss k2)
+            (if (arm_descent_ok pat repl)
+              (match (rewrite_nth_arms m pat_vars pat repl want cur arms k2)
+                ((RwNthHitA env arms2) (RwNthHit env (Match scrut arms2)))
+                ((RwNthMissA k3) (RwNthMiss k3)))
+              (RwNthMiss k2)))))
+        (_ (RwNthMiss k))))))
+
+(fn rewrite_nth_list
+  ((m Module)
+   (pat_vars (List Symbol))
+   (pat Expr)
+   (repl Expr)
+   (want LSort)
+   (df LSort)
+   (ts (List LSort))
+   (es (List Expr))
+   (k Int))
+  RwNthL
+  (measure (size_list es))
+  (match es
+    (Nil (RwNthMissL k))
+    ((Cons h t)
+     (match (ls_split df ts)
+       ((Pair cur ts2)
+        (match (rewrite_nth m pat_vars pat repl want cur h k)
+          ((RwNthHit env h2) (RwNthHitL env (Cons h2 t)))
+          ((RwNthMiss k2)
+           (match (rewrite_nth_list m pat_vars pat repl want df ts2 t k2)
+             ((RwNthHitL env t2) (RwNthHitL env (Cons h t2)))
+             ((RwNthMissL k3) (RwNthMissL k3))))))))))
+
+(fn rewrite_nth_if
+  ((m Module)
+   (pat_vars (List Symbol))
+   (pat Expr)
+   (repl Expr)
+   (want LSort)
+   (cur LSort)
+   (c Expr)
+   (t Expr)
+   (el Expr)
+   (k Int))
+  RwNth
+  (measure (+ 1 (+ (size c) (+ (size t) (size el)))))
+  (match (rewrite_nth m pat_vars pat repl want (LAny) c k)
+    ((RwNthHit env c2) (RwNthHit env (If c2 t el)))
+    ((RwNthMiss k2)
+     (match (rewrite_nth m pat_vars pat repl want cur t k2)
+       ((RwNthHit env t2) (RwNthHit env (If c t2 el)))
+       ((RwNthMiss k3)
+        (match (rewrite_nth m pat_vars pat repl want cur el k3)
+          ((RwNthHit env el2) (RwNthHit env (If c t el2)))
+          ((RwNthMiss k4) (RwNthMiss k4))))))))
+
+(fn rewrite_nth_arms
+  ((m Module)
+   (pat_vars (List Symbol))
+   (pat Expr)
+   (repl Expr)
+   (want LSort)
+   (cur LSort)
+   (arms (List Arm))
+   (k Int))
+  RwNthA
+  (measure (size_arms arms))
+  (match arms
+    (Nil (RwNthMissA k))
+    ((Cons (Arm p b) t)
+     (match (rewrite_nth m pat_vars pat repl want cur b k)
+       ((RwNthHit env b2) (RwNthHitA env (Cons (Arm p b2) t)))
+       ((RwNthMiss k2)
+        (match (rewrite_nth_arms m pat_vars pat repl want cur t k2)
+          ((RwNthHitA env t2) (RwNthHitA env (Cons (Arm p b) t2)))
+          ((RwNthMissA k3) (RwNthMissA k3))))))))
+
+;; ---------------------------------------------------------------------------
+;; Literal-sort gate. Ground Nat literals pack to the SAME IntLit atom
+;; as Int (reduce.shard nat_pack; tc_nat_lit_view is the typing twin),
+;; so a BARE ground-literal rewrite pattern is the one shape the
+;; untyped walk can apply across sorts: the replacement lands at a
+;; position of the OTHER sort and no later gate re-types the rewritten
+;; goal (the wn_q incident, IMP.md). When the pattern side of a cited
+;; equation is a bare IntLit, `want` = the replacement's sort and the
+;; walk above carries each position's expected sort (`cur`) from
+;; declared signatures, refusing sites whose sort provably conflicts
+;; with `want` (site_match / ls_compat). A refused site is not a site:
+;; it is neither rewritten nor COUNTED by `(at K)` (CERT.md's recorded
+;; boundary). Unknown positions (type vars, parameterized/opaque types,
+;; Match scrutinees, roots without an inferable head) stay unrestricted
+;; — the old behavior; only KNOWN crossings refuse. Compound patterns
+;; never take this path: their `want` is LAny, ls_compat is then True at
+;; every position and the signature lookups are short-circuited. For monomorphic heads the
+;; head fixes each literal subposition's sort syntactically; for
+;; polymorphic heads (TVar fields: Pair/Cons/...) literal subpositions
+;; are exactly as unrestricted as this walk's own LAny fence leaves
+;; them — the exemption COINCIDES with the fence, it is not a stronger
+;; guarantee (probe evidence: ARC-A-REVIEW-2026-07-26 §2c). If the
+;; fence ever tightens, poly-ctor field positions go first.
+;; ---------------------------------------------------------------------------
+
+(type LSort (LInt) (LNat) (LAny))
+
+(fn ls_compat ((site LSort) (want LSort)) Bool
+  (match site
+    ((LAny) True)
+    ((LInt)
+     (match want
+       ((LNat) False)
+       (_ True)))
+    ((LNat)
+     (match want
+       ((LInt) False)
+       (_ True)))))
+
+(fn ls_of_type ((t Type)) LSort
+  (match t
+    ((TCon q Nil)
+     (if (core_named q (quote Int)) (LInt)
+     (if (core_named q (quote Nat)) (LNat)
+     (LAny))))
+    (_ (LAny))))
+
+(fn ls_ctor_owner ((c QName) (tds (List TypeDef))) (Option QName)
+  (measure (struct tds))
+  (match tds
+    (Nil None)
+    ((Cons (TypeDef tn _ cs _) rest)
+     (if (ls_ctor_member c cs) (Some tn) (ls_ctor_owner c rest)))))
+
+(fn ls_ctor_member ((c QName) (cs (List CtorDef))) Bool
+  (measure (struct cs))
+  (match cs
+    (Nil False)
+    ((Cons (CtorDef cn _) rest)
+     (if (qname_eq c cn) True (ls_ctor_member c rest)))))
+
+(fn ls_ctor_fields ((c QName) (tds (List TypeDef))) (Option (List Type))
+  (measure (struct tds))
+  (match tds
+    (Nil None)
+    ((Cons (TypeDef _ _ cs _) rest)
+     (match (find_ctor_fields c cs)
+       ((Some fts) (Some fts))
+       (None (ls_ctor_fields c rest))))))
+
+;; sort of a term by its head, for the replacement and equation roots.
+;; A NONNEG literal is valid at both sorts (tc_nat_lit_view) → LAny. A
+;; Call head missing from the trie is a native primitive: its signature
+;; is the typer's own table (tc_builtin_sig — arithmetic Int → Int,
+;; comparisons Int → Bool).
+(fn ls_of_expr ((m Module) (params (List Param)) (e Expr)) LSort
+  (match e
+    ((IntLit n) (if (lt n 0) (LInt) (LAny)))
+    ((FVar x)
+     (match (find_param x params)
+       ((Some (Param _ t)) (ls_of_type t))
+       (None (LAny))))
+    ((Call f _)
+     (match m
+       ((Module _ _ _ trie _)
+        (match (trie_lookup f trie)
+          ((Some (FnDef _ _ rt _)) (ls_of_type rt))
+          (None
+            (match (tc_builtin_sig (qn_name f))
+              ((Some (Pair _ rt)) (ls_of_type rt))
+              (None (LAny))))))))
+    ((Ctor c _)
+     (match m
+       ((Module tds _ _ _ _)
+        (match (ls_ctor_owner c tds)
+          ((Some tn) (if (core_named tn (quote Nat)) (LNat) (LAny)))
+          (None (LAny))))))
+    (_ (LAny))))
+
+(fn ls_of_types ((ts (List Type))) (List LSort)
+  (measure (struct ts))
+  (match ts
+    (Nil Nil)
+    ((Cons t rest) (Cons (ls_of_type t) (ls_of_types rest)))))
+
+;; per-argument expected sorts of a Ctor / Call head: (Pair default list) —
+;; positions past the list (arity skew, prims) take the default.
+(fn ls_args_ctor ((m Module) (c QName)) (Pair LSort (List LSort))
+  (match m
+    ((Module tds _ _ _ _)
+     (match (ls_ctor_fields c tds)
+       ((Some fts) (Pair (LAny) (ls_of_types fts)))
+       (None (Pair (LAny) Nil))))))
+
+(fn ls_args_call ((m Module) (f QName)) (Pair LSort (List LSort))
+  (match m
+    ((Module _ _ _ trie _)
+     (match (trie_lookup f trie)
+       ((Some (FnDef _ pts _ _)) (Pair (LAny) (ls_of_types pts)))
+       (None
+         (match (tc_builtin_sig (qn_name f))
+           ((Some (Pair pts _)) (Pair (LAny) (ls_of_types pts)))
+           (None (Pair (LAny) Nil))))))))
+
+(fn ls_split ((df LSort) (ts (List LSort))) (Pair LSort (List LSort))
+  (match ts
+    (Nil (Pair df Nil))
+    ((Cons h t) (Pair h t))))
+
+;; the walk's sort context, short-circuited on the generic path: with
+;; `want` = LAny no head is looked up and every root is LAny.
+(fn arg_sorts_ctor ((m Module) (want LSort) (c QName)) (Pair LSort (List LSort))
+  (match want
+    ((LAny) (Pair (LAny) Nil))
+    (_ (ls_args_ctor m c))))
+
+(fn arg_sorts_call ((m Module) (want LSort) (f QName)) (Pair LSort (List LSort))
+  (match want
+    ((LAny) (Pair (LAny) Nil))
+    (_ (ls_args_call m f))))
+
+;; root expected sort = the OTHER side's head sort (a bare-literal goal
+;; side is exactly the (= n 16) shape, where the other side names the sort).
+(fn root_sort ((m Module) (params (List Param)) (want LSort) (other Expr)) LSort
+  (match want
+    ((LAny) (LAny))
+    (_ (ls_of_expr m params other))))
+
+;; the replacement's sort when the pattern is a bare literal; LAny (no
+;; gating) for every compound pattern.
+(fn pat_want ((m Module) (params (List Param)) (pat Expr) (repl Expr)) LSort
+  (match pat
+    ((IntLit _) (ls_of_expr m params repl))
+    (_ (LAny))))
+
+;; THE site test: a pattern match at a position whose sort does not refuse
+;; the replacement's. Refused = not a site (not entered — a bare literal
+;; has no children — and not counted).
+(fn site_match
+  ((pat_vars (List Symbol)) (pat Expr) (want LSort) (cur LSort) (e Expr))
+  (Option Env)
+  (match (expr_match pat_vars pat e Empty)
+    ((Some env) (if (ls_compat cur want) (Some env) None))
+    (None None)))
+
+;; The arm-descent guard (rewrite_all's Match arm): BVar-free pattern and
+;; replacement, and a replacement with no binder of its own — the last
+;; only where the pattern can CAPTURE. A bare-literal pattern binds
+;; nothing (every site env is Empty), so no substituted piece exists to be
+;; re-bound and the binder condition is vacuous: that path's guard is
+;; `no_bvars repl` alone, exactly as the former literal twins had it.
+(fn arm_descent_ok ((pat Expr) (repl Expr)) Bool
+  (if (no_bvars pat)
+    (if (no_bvars repl)
+      (if (no_binders repl) True
+      (match pat
+        ((IntLit _) True)
+        (_ False)))
+      False)
+    False))
+
+;; ---------------------------------------------------------------------------
+;; apply_rewrite: flip the cited equation by Dir, then rewrite on the
+;; chosen Side using rewrite_all / rewrite_nth per `occ` (first = nth 0),
+;; under the literal-sort context of the pattern (pat_want / root_sort).
+;; ---------------------------------------------------------------------------
+
+(fn rw_dispatch
+  ((m Module)
+   (params (List Param))
+   (pat_vars (List Symbol))
+   (pat Expr)
+   (repl Expr)
+   (side Side)
+   (occ Occ)
+   (goal_eq Equation))
+  (Option (Pair (List Env) Equation))
+  (rewrite_side
+    m
+    params
+    pat_vars
+    pat
+    repl
+    (pat_want m params pat repl)
+    side
+    occ
+    goal_eq))
+
+(fn apply_rewrite
+  ((m Module)
+   (params (List Param))
+   (pat_vars (List Symbol))
+   (cited Equation)
+   (dir Dir)
+   (side Side)
+   (occ Occ)
+   (goal_eq Equation))
+  (Option (Pair (List Env) Equation))
+  (match cited
+    ((Equation cl cr)
+     (match dir
+       ((Lr) (rw_dispatch m params pat_vars cl cr side occ goal_eq))
+       ((Rl) (rw_dispatch m params pat_vars cr cl side occ goal_eq))))))
+
+(fn rewrite_side
+  ((m Module)
+   (params (List Param))
+   (pat_vars (List Symbol))
+   (pat Expr)
+   (repl Expr)
+   (want LSort)
+   (side Side)
+   (occ Occ)
+   (goal_eq Equation))
+  (Option (Pair (List Env) Equation))
+  (match goal_eq
+    ((Equation gl gr)
+     (match side
+       ((Lhs)
+        (match
+          (rewrite_one_or_all
+            m
+            pat_vars
+            pat
+            repl
+            want
+            (root_sort m params want gr)
+            occ
+            gl)
+          ((Some (Pair envs gl2)) (Some (Pair envs (Equation gl2 gr))))
+          (None None)))
+       ((Rhs)
+        (match
+          (rewrite_one_or_all
+            m
+            pat_vars
+            pat
+            repl
+            want
+            (root_sort m params want gl)
+            occ
+            gr)
+          ((Some (Pair envs gr2)) (Some (Pair envs (Equation gl gr2))))
+          (None None)))
+       ((Both)
+        (match
+          (rewrite_one_or_all
+            m
+            pat_vars
+            pat
+            repl
+            want
+            (root_sort m params want gr)
+            occ
+            gl)
+          ((Some (Pair el gl2))
+           (match
+             (rewrite_one_or_all
+               m
+               pat_vars
+               pat
+               repl
+               want
+               (root_sort m params want gl)
+               occ
+               gr)
+             ((Some (Pair er gr2))
+              (Some (Pair (envs_concat el er) (Equation gl2 gr2))))
+             (None (Some (Pair el (Equation gl2 gr))))))
+          (None
+            (match
+              (rewrite_one_or_all
+                m
+                pat_vars
+                pat
+                repl
+                want
+                (root_sort m params want gl)
+                occ
+                gr)
+              ((Some (Pair er gr2)) (Some (Pair er (Equation gl gr2))))
+              (None None)))))))))
+
+(fn rewrite_one_or_all
+  ((m Module)
+   (pat_vars (List Symbol))
+   (pat Expr)
+   (repl Expr)
+   (want LSort)
+   (cur LSort)
+   (occ Occ)
+   (e Expr))
+  (Option (Pair (List Env) Expr))
+  (match occ
+    ((OccAll) (rewrite_all m pat_vars pat repl want cur e))
+    ((OccFirst) (nth_result (rewrite_nth m pat_vars pat repl want cur e 0)))
+    ((OccAt k) (nth_result (rewrite_nth m pat_vars pat repl want cur e k)))))
+
+;; a counting-walk hit in the all-occurrences result shape (one site, one env).
+(fn nth_result ((r RwNth)) (Option (Pair (List Env) Expr))
+  (match r
+    ((RwNthHit env e2) (Some (Pair (Cons env Nil) e2)))
+    ((RwNthMiss _) None)))
+
+;; ---------------------------------------------------------------------------
+;; apply_rewrite_with_occ: RewriteWith's occurrence dispatch. The FIRST
+;; match (rewrite_nth at 0 — Lhs before Rhs under Both, ONE side only)
+;; determines the ONE binding env, so premise obligations discharge
+;; exactly once.
+;;   OccFirst — that match IS the rewrite: its env and its rewritten
+;;   equation are returned as found (no re-pass).
+;;   OccAll / OccAt — the cited equation is CLOSED by that env and re-
+;;   applied through apply_rewrite at the requested `occ`, so the
+;;   selector counts the match sites of the fully-instantiated
+;;   conclusion. A site that would need a DIFFERENT instantiation is
+;;   simply not matched — multi-env rewrites stay out (cite again for
+;;   the other instantiation). The re-pass matches the closed pattern
+;;   SYNTACTICALLY (expr_match), which admits no Match/Let node: a
+;;   capture carrying a reified match (a ceval residual in a scrutinee)
+;;   is fine under OccFirst and unmatched under all/(at K) — the x86
+;;   generated certs rely on the former (xcall_bridge citations).
+;; ---------------------------------------------------------------------------
+
+(fn close_eq_with_env ((env Env) (eq Equation)) Equation
+  (match eq
+    ((Equation l r) (Equation (subst env l) (subst env r)))))
+
+(fn apply_rewrite_with_occ
+  ((m Module)
+   (params (List Param))
+   (pat_vars (List Symbol))
+   (cited Equation)
+   (dir Dir)
+   (side Side)
+   (occ Occ)
+   (goal_eq Equation))
+  (Option (Pair Env Equation))
+  (match (rewrite_first_env m params pat_vars cited dir side goal_eq)
+    (None None)
+    ((Some (Pair env eq1))
+     (match occ
+       ((OccFirst) (Some (Pair env eq1)))
+       (_
+         (match
+           (apply_rewrite
+             m
+             params
+             Nil
+             (close_eq_with_env env cited)
+             dir
+             side
+             occ
+             goal_eq)
+           (None None)
+           ((Some (Pair _ eq2)) (Some (Pair env eq2)))))))))
+
+;; the first match on ONE side: apply_rewrite at (at 0), env unwrapped.
+(fn rewrite_first_env_side
+  ((m Module)
+   (params (List Param))
+   (pat_vars (List Symbol))
+   (cited Equation)
+   (dir Dir)
+   (side Side)
+   (goal_eq Equation))
+  (Option (Pair Env Equation))
+  (match (apply_rewrite m params pat_vars cited dir side (OccFirst) goal_eq)
+    (None None)
+    ((Some (Pair envs eq2))
+     (match envs
+       ((Cons env _) (Some (Pair env eq2)))
+       (Nil None)))))
+
+;; Both = the lhs's first match if it has one (rhs untouched), else the
+;; rhs's — one site, one env; a second side would need its own env.
+(fn rewrite_first_env
+  ((m Module)
+   (params (List Param))
+   (pat_vars (List Symbol))
+   (cited Equation)
+   (dir Dir)
+   (side Side)
+   (goal_eq Equation))
+  (Option (Pair Env Equation))
+  (match side
+    ((Both)
+     (match (rewrite_first_env_side m params pat_vars cited dir Lhs goal_eq)
+       ((Some r) (Some r))
+       (None (rewrite_first_env_side m params pat_vars cited dir Rhs goal_eq))))
+    (_ (rewrite_first_env_side m params pat_vars cited dir side goal_eq))))
+
+;; ---------------------------------------------------------------------------
+;; The conversion forms (CERT.md §3): change / exact-conv.
+;;
+;; apply_change: the `change` step's whole semantics, shared verbatim by
+;; apply_step's Change arm and the tracer's failure diagnoser (the
+;; trace-mirror law). The kernel normalizes the INTRODUCED compact term
+;; under the stop set (compute_eval — the same definitional-equality
+;; normalizer Compute trusts) and rewrites the chosen side(s), replacing
+;; occurrences of the NORMAL FORM by the compact term: the FOLD direction
+;; of explicit conversion. Matching stays syntactic against the NF (spell
+;; the goal there first — compute — if it differs); a bare-literal NF
+;; walks under the literal-sort context like any literal pattern
+;; (rw_dispatch / pat_want), so an Int/Nat crossing refuses here exactly
+;; as it does for a cited literal equation. The pattern binds nothing (pat_vars Nil);
+;; the type gate rejects an ill-typed compact term before any
+;; normalization runs (the have-cut rationale).
+;; ---------------------------------------------------------------------------
+
+(fn apply_change
+  ((m Module)
+   (params (List Param))
+   (side Side)
+   (occ Occ)
+   (compact Expr)
+   (stops (List QName))
+   (goal_eq Equation))
+  (Option Equation)
+  (match (tc_check_expr m params compact)
+    ((Some _) None)
+    (None
+      (match
+        (apply_rewrite
+          m
+          params
+          Nil
+          (Equation (compute_eval m stops compact) compact)
+          Lr
+          side
+          occ
+          goal_eq)
+        ((Some (Pair _ eq2)) (Some eq2))
+        (None None)))))
+
+;; exact-conv's closing comparison: both equations normalized under the
+;; ONE stop set, compared per side — NF(cited.lhs) = NF(goal.lhs) and
+;; NF(cited.rhs) = NF(goal.rhs). Definitional equality on each side lets
+;; a cited theorem close a differently-spelled goal.
+(fn conv_sides_ok
+  ((m Module) (stops (List QName)) (cited Equation) (goal_eq Equation))
+  Bool
+  (match cited
+    ((Equation cl cr)
+     (match goal_eq
+       ((Equation gl gr)
+        (if (expr_eq (compute_eval m stops cl) (compute_eval m stops gl))
+          (expr_eq (compute_eval m stops cr) (compute_eval m stops gr))
+          False))))))

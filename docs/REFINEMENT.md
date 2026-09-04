@@ -457,8 +457,9 @@ Almost entirely shard kernel (the Rust side is an evaluator/loader only):
 - `kernel/proof.shard` — the `RefineFact` `Proof` ctor (Expr + continuation,
   fact appended last — the `DivFacts`/`Have` shape).
 - `kernel/proof_reader.shard` — parse `(refine-fact EXPR)`.
-- `kernel/checker.shard` — `do_refine_fact`: build the `(= (PRED (refine_val
-  EXPR)) True)` premise and continue.
+- `kernel/checker.shard` (dispatch) / `kernel/tactics.shard` (`refine_fact_checked`)
+  — `do_refine_fact`: build the `(= (PRED (refine_val EXPR)) True)` premise
+  and continue.
 - `kernel/measure.shard` — [BUILT] `rr_outcome`: the ENFORCED refined-return gate
   (mirrors the `mc_outcome` measure path — walks all srcs, builds each obligation
   goal, emits a HARD `COFail` on missing/rejected proof). `rr_deref` de-refines

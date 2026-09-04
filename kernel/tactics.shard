@@ -1,0 +1,539 @@
+;;; tactics.shard — the checker's NON-BRANCHING rule leaves: each takes a
+;;; Sequent (and the module) and either produces the facts / subgoal the
+;;; rule promises or refuses. None recurses into check_sequent, which is
+;;; why they sit below it:
+;;;   div_facts_checked     kernel-justified Euclidean premise injection
+;;;   refine_fact_checked   the structural invariant of a refined type
+;;;   inject_checked        constructor injectivity
+;;;   wf_rename / build_wf_subgoal   well-founded induction on a MEASURE
+;;;   build_subterm_subgoal (+ subterm_is_datatype / subterm_param_type)
+;;;   do_below              the canonical-subterm order (⚠ its soundness
+;;;                         constraints: see the section comment)
+;;; Tower: sequent.shard ← tactics.shard (this) ← checker.shard.
+
+(import "stdlib.shard")
+(import "term.shard")
+(import "expr_size.shard")  ; size / size_list / size_arm(s) — rewrite_all measure
+(import "module.shard")
+(import "proof.shard")
+(import "proof_size.shard")  ; proof_size / case_list_size — the SCC measure
+(import "reduce.shard")
+(import "arith.shard")
+(import "types.shard")  ; mid-proof type gates (have / wf-measure / citations)
+(import "sequent.shard")
+(use (:: kernel term *))
+(use (:: kernel expr_size *))
+(use (:: kernel module *))
+(use (:: kernel proof *))
+(use (:: kernel proof_size *))
+(use (:: kernel reduce *))
+(use (:: kernel arith *))
+(use (:: kernel types *))
+(use (:: kernel sequent *))
+
+;; ---------------------------------------------------------------------------
+;; do_div_facts: kernel-justified premise injection. Like `have`, but the
+;; justification is the PRIM SEMANTICS itself (the ediv/mod implementation in
+;; reduce.shard, REVIEWED IN LOCKSTEP) rather than a sub-proof. The facts
+;; mention the CONCRETE literal divisor so farkas/lia read them linearly, and
+;; every fact passes the cut type gate (wf_facts_ok). The shared term builders
+;; wf_le / wf_mod / wf_ediv live here. (The Word former's word-fact step was
+;; removed in the std/word demotion — issue #15.)
+;;
+;; div-facts (n, literal d >= 1, fresh q): the Euclidean triple
+;;   n = d*q + mod n d,  0 <= mod n d,  mod n d <= d-1
+;; with the quotient ∀-GENERALIZED as the new Int param q — sound
+;; because instantiating q := ediv n d satisfies every emitted fact, so
+;; a goal proven for all q satisfying them holds in particular there.
+;; The remainder stays the structural TERM (mod n d) so it is the same
+;; farkas atom the word-fact equations mention; q being a VAR is what
+;; lets fin-split supply the integrality step farkas (rational) cannot.
+;; ---------------------------------------------------------------------------
+
+(fn wf_le ((a Expr) (b Expr)) Expr (Call (qn (quote le)) (Cons a (Cons b Nil))))
+
+(fn wf_mod ((a Expr) (d Int)) Expr
+  (Call (qn (quote mod)) (Cons a (Cons (IntLit d) Nil))))
+
+(fn wf_ediv ((a Expr) (d Int)) Expr
+  (Call (qn (quote ediv)) (Cons a (Cons (IntLit d) Nil))))
+
+;; every emitted fact must pass the cut type gate.
+(fn wf_facts_ok ((m Module) (params (List Param)) (eqs (List Equation))) Bool
+  (measure (struct eqs))
+  (match eqs
+    (Nil True)
+    ((Cons eq rest)
+     (match (tc_check_cut m params eq)
+       ((Some _) False)
+       (None (wf_facts_ok m params rest))))))
+
+(fn div_facts_eqs ((n Expr) (d Int) (q Symbol)) (List Equation)
+  (let ((mterm (wf_mod n d)))
+    (Cons
+      (Equation
+        n
+        (Call
+          (qn (quote +))
+          (Cons
+            (Call (qn (quote *)) (Cons (IntLit d) (Cons (FVar q) Nil)))
+            (Cons mterm Nil))))
+      (Cons
+        (Equation (wf_le (IntLit 0) mterm) (Ctor (qn (quote True)) Nil))
+        (Cons
+          (Equation (wf_le mterm (IntLit (- d 1))) (Ctor (qn (quote True)) Nil))
+          ;; quotient-naming identity: (ediv n d) = q. Sound by uniqueness of
+          ;; Euclidean division given the decomposition + bounds above (q is
+          ;; uniquely determined), so this adds no trust — it just exposes the
+          ;; quotient TERM to the linear backends, which cannot derive
+          ;; uniqueness themselves. Mirrors how the remainder is already named
+          ;; by its term (mod n d).
+          (Cons (Equation (wf_ediv n d) (FVar q)) Nil))))))
+
+;; validated div facts: Some (params-with-q, facts) or None. d must be a
+;; positive literal, q fresh (no param capture), n an Int term.
+(fn div_facts_checked
+  ((m Module) (params (List Param)) (n Expr) (d Int) (q Symbol))
+  (Option (Pair (List Param) (List Equation)))
+  (if (lt d 1) None
+  (match (find_param q params)
+    ((Some _) None)
+    (None
+      (match (tc_check_int_expr m params n "div-facts dividend")
+        ((Some _) None)
+        (None
+          (let
+            ((params2 (Cons (Param q (TCon (qn (quote Int)) Nil)) params))
+             (facts (div_facts_eqs n d q)))
+            (if (wf_facts_ok m params2 facts) (Some (Pair params2 facts)) None))))))))
+
+;; ---------------------------------------------------------------------------
+;; do_refine_fact: the structural invariant of a refined type R = (refine BASE
+;; PRED). Injects (= (PRED (refine_val EXPR)) True) as a premise. Sound because
+;; every inhabitant of R was introduced discharging PRED (the subset-type
+;; meaning; PRED must be total — TOTALITY.md). The author names R; the kernel
+;; INFERS EXPR's type and requires its head to equal R, so a refinement cannot
+;; borrow another's predicate (a Big value can't be granted small_pred). The cut
+;; type gate then rejects a malformed predicate. See docs/REFINEMENT.md.
+;; ---------------------------------------------------------------------------
+
+(fn refine_fact_checked ((m Module) (params (List Param)) (r QName) (expr Expr))
+  (Option Equation)
+  (match (typedef_refine r m)
+    (None None)  ; r is not a refined type
+    ((Some (Pair _ pred))
+     (match (tc_infer m (Tc 0 Nil) params Nil expr)
+       ((TcErr _) None)  ; expr ill-typed in this context
+       ((TcOk tc t)
+        (match tc
+          ((Tc _ s)
+           (match (type_head (tc_walk t s))
+             (None None)  ; expr's type is a metavar / TVar — not a concrete R
+             ((Some (Pair rname _))
+              (if (qname_eq rname r)
+                (let
+                  ((eq
+                     (Equation
+                       (Call
+                         pred
+                         (Cons
+                           (Call (qn (quote refine_val)) (Cons expr Nil))
+                           Nil))
+                       (Ctor (qn (quote True)) Nil))))
+                  (match (tc_check_cut m params eq)
+                    ((Some _) None)  ; malformed predicate
+                    (None (Some eq))))
+                None))))))))))  ; expr's type head != R
+
+;; ---------------------------------------------------------------------------
+;; do_inject: constructor injectivity — the converse of Absurd's no-confusion
+;; half. The cited equation must resolve CLOSED (no binders, no premises —
+;; the Absurd restriction) with both sides Ctor-headed by the SAME ctor as
+;; spelled; the facts are the fieldwise equations, in field order. Purely
+;; syntactic on purpose: no normalization happens here, so the appended
+;; premises are spelled exactly as the cited equation's fields (normalize
+;; first via have/compute when the sides aren't ctor-headed yet). Sound
+;; because ctor values are FREE — expr_eq/the matcher already equate two
+;; ctor values iff heads agree and fields are pairwise equal. `n` pins the
+;; surface name-list length against the arity, so a skew in the desugarer's
+;; premise simulation dies HERE, loudly, not as a drifted premise index.
+;; ---------------------------------------------------------------------------
+
+(fn inject_zip ((n Int) (ls (List Expr)) (rs (List Expr)))
+  (Option (List Equation))
+  (measure (struct ls))
+  (match ls
+    (Nil
+      (match rs
+        (Nil (if (int_eq n 0) (Some Nil) None))
+        ((Cons _ _) None)))
+    ((Cons lh lt)
+     (match rs
+       (Nil None)
+       ((Cons rh rt)
+        (match (inject_zip (- n 1) lt rt)
+          (None None)
+          ((Some rest) (Some (Cons (Equation lh rh) rest)))))))))
+
+(fn inject_checked ((er EqRef) (n Int) (seq Sequent) (th Theory))
+  (Option (List Equation))
+  (match (resolve_eq er seq th)
+    (None None)
+    ((Some g)
+     (match g
+       ((Goal Nil Nil (Equation l r))
+        (match l
+          ((Ctor cl argsl)
+           (match r
+             ((Ctor cr argsr)
+              (if (qname_eq cl cr) (inject_zip n argsl argsr) None))
+             (_ None)))
+          (_ None)))
+       (_ None)))))
+
+;; ---------------------------------------------------------------------------
+;; do_wf_induct: well-founded induction on a user-supplied MEASURE (an
+;; Int-valued Expr over the goal's params). Unlike Induct (structural, on a
+;; datatype var) this needs no constructors — it works for Int and any type,
+;; because the well-foundedness comes from the measure's image in ℤ, not the
+;; term's shape.
+;;
+;; ONE subgoal: the original sequent with a strong induction hypothesis
+;; prepended at Hyp 0. For a goal  premises(P) |- eq(P)  with measure μ(P),
+;; the IH is the closed Goal
+;;
+;;   ∀ P'. premises(P') -> 0 <= μ(P') -> μ(P') < μ(P) -> eq(P')
+;;
+;; (P' a fresh copy of ALL params; μ(P) keeps the current params, free).
+;;
+;; SOUNDNESS (why an arbitrary Int measure is OK, not only a Nat one).
+;; Suppose the subgoal holds but the conclusion fails on a nonempty set S of
+;; param-tuples. Let Sp = { x in S : μ(x) >= 0 }.
+;;   - Sp nonempty: its measures are >= 0, so they have a LEAST element μ(x*)
+;;     (the non-negative integers are well-ordered). The IH at x* is then
+;;     dischargeable — any y with 0 <= μ(y) < μ(x*) is not in S by
+;;     minimality, so eq(y) holds — forcing eq(x*), contradicting x* in S.
+;;   - Sp empty: every x in S has μ(x) < 0, so the IH antecedent
+;;     0 <= μ(y) < μ(x) is unsatisfiable — the subgoal proves eq(x) with no
+;;     IH help, contradicting x in S.
+;; The `0 <= μ(P')` guard makes the negative part of μ's range harmless:
+;; below 0 the IH gives nothing, so the subgoal closes those cases without
+;; it. This is ordinary well-founded induction along  y ≺ x == 0<=μ(y)<μ(x).
+;;
+;; Citing the IH (as Hyp 0, via RewriteWith with insts for the fresh P')
+;; thus carries three classes of premise to discharge: the goal's own
+;; premises at P', then 0 <= μ(P'), then μ(P') < μ(P) — the latter two are
+;; the termination obligations (for `/`-recursion: std/div's div_nonneg and
+;; div_lt).
+;; ---------------------------------------------------------------------------
+
+;; Fresh-rename every param: the fresh Param list (same types, new names)
+;; paired with an Env mapping each old name to its fresh FVar.
+(fn wf_rename ((ps (List Param))) (Pair (List Param) Env)
+  (measure (struct ps))
+  (match ps
+    (Nil (Pair Nil Empty))
+    ((Cons (Param x ty) rest)
+     (match (wf_rename rest)
+       ((Pair fresh_rest env_rest)
+        (let ((fx (gen_fresh)))
+          (Pair (Cons (Param fx ty) fresh_rest) (Bind x (FVar fx) env_rest))))))))
+
+;; ---------------------------------------------------------------------------
+;; Shared subgoal builders + UNTRUSTED diagnostics support. build_wf_subgoal
+;; is the ONE wf-induct subgoal constructor — do_wf_induct checks against it
+;; and the FAIL tracer descends through it, so the trace replays the
+;; checker's exact subgoal by construction. The dbg_* helpers below are
+;; tracer/loader-only glue over the same shared pieces.
+;; ---------------------------------------------------------------------------
+(fn build_wf_subgoal ((seq Sequent) (measure Expr)) Sequent
+  (match seq
+    ((Sequent params hyps premises eq)
+     (match (wf_rename params)
+       ((Pair fresh_params env)
+        (let
+          ((measure_fresh (subst env measure))
+           (close_names (reverse_syms (param_names fresh_params))))
+          (let
+            ((wf_premises
+               (Cons
+                 (Equation
+                   (Call (qn (quote le)) (list (IntLit 0) measure_fresh))
+                   (Ctor (qn (quote True)) Nil))
+                 (Cons
+                   (Equation
+                     (Call (qn (quote lt)) (list measure_fresh measure))
+                     (Ctor (qn (quote True)) Nil))
+                   Nil)))
+             (ih_eq (subst_eq env eq)))
+            (let
+              ((ih
+                 (Goal
+                   fresh_params
+                   (close_eqs
+                     close_names
+                     (append_eqs (subst_eqs env premises) wf_premises))
+                   (close_eq close_names ih_eq))))
+              (Sequent params (Cons ih hyps) premises eq)))))))))
+
+;; ---------------------------------------------------------------------------
+;; do_subterm_induct: well-founded induction along the canonical structural
+;; SUBTERM order on a named datatype param. The IH is built EXACTLY like
+;; do_wf_induct's (one strong IH at Hyp 0, all params freshened), except the
+;; well-foundedness premise is the structural `(subterm_below x' x)=True`
+;; instead of the two arithmetic `0<=μ(x') ∧ μ(x')<μ(x)`.
+;;
+;; SOUNDNESS. The order on param-tuples is "the chosen var's x-component is a
+;; strict structural sub-value": (P') < (P) iff x' ⊰ x. This is well-founded
+;; because ⊰ on an inductive datatype is well-founded — the SAME fact do_induct
+;; already trusts (structural induction = induction along ⊰). The other params
+;; are unconstrained but cannot create infinite descent on their own (the order
+;; only holds when x strictly decreases). Reaches NESTED occurrences (an Expr
+;; inside a (List Expr) field): in the term representation those are nested
+;; Ctor nodes, so the strict-subterm check (do_below) descends to them, and the
+;; IH applies to them directly — which shallow Induct's same-type-field IH
+;; cannot. The ordering premise `subterm_below` is INERT: it has no reduction
+;; rule and is discharged ONLY by the `below` step (do_below), so it carries no
+;; assumption beyond genuine structural descent.
+;; ---------------------------------------------------------------------------
+
+;; the declared type of a goal ∀-param, if `var` names one.
+(fn subterm_param_type ((var Symbol) (params (List Param))) (Option Type)
+  (measure (struct params))
+  (match params
+    (Nil None)
+    ((Cons (Param x ty) rest)
+     (if (sym_eq x var) (Some ty) (subterm_param_type var rest)))))
+
+;; ⊰ is well-founded only on an inductive datatype value — gate it so a misuse
+;; (e.g. subterm-induct on an Int) is a clean rejection, not a vacuous IH.
+;; A typedef with ZERO constructors is such a misuse: an opaque sig view or a
+;; refined type has no constructor form, so ⊰ has nothing to descend and the
+;; strong IH is issued over an order that is empty by construction. Refuse it
+;; here for the same reason Induct does (issue #16) rather than leaving the
+;; refusal to do_below's CTORFORM requirement three layers down — measured:
+;; subterm-induct on `(type Zed (refine Int zero_p))` WAS admitted, the IH
+;; type-checked and the citation applied, and only (below) stopped it.
+(fn subterm_is_datatype ((ty Type) (m Module)) Bool
+  (match ty
+    ((TCon tname _)
+     (match (lookup_typedef tname m)
+       ((Some (TypeDef _ _ ctors _))
+        (match ctors
+          (Nil False)
+          (_ True)))
+       (None False)))
+    (_ False)))
+
+;; the IH-bearing subgoal: identical to build_wf_subgoal but the wf premise is
+;; (subterm_below x' x)=True, with x' the fresh copy of var and x the original.
+(fn build_subterm_subgoal ((seq Sequent) (var Symbol)) Sequent
+  (match seq
+    ((Sequent params hyps premises eq)
+     (match (wf_rename params)
+       ((Pair fresh_params env)
+        (let
+          ((var_fresh (subst env (FVar var)))
+           (close_names (reverse_syms (param_names fresh_params))))
+          (let
+            ((ord_premise
+               (Equation
+                 (Call (qn (quote subterm_below)) (list var_fresh (FVar var)))
+                 (Ctor (qn (quote True)) Nil)))
+             (ih_eq (subst_eq env eq)))
+            (let
+              ((ih
+                 (Goal
+                   fresh_params
+                   (close_eqs
+                     close_names
+                     (append_eqs
+                       (subst_eqs env premises)
+                       (Cons ord_premise Nil)))
+                   (close_eq close_names ih_eq))))
+              (Sequent params (Cons ih hyps) premises eq)))))))))
+
+;; ---------------------------------------------------------------------------
+;; do_below: discharge a goal `(subterm_below a x)=True` iff `a` is a strict
+;; structural sub-value of `x`. `x` is resolved to constructor form (it is
+;; already a Ctor when the proof reached here via Induct's substitution, or via
+;; an in-scope (= x CTORFORM) hyp when via CaseOn), then traversed: accept iff
+;; `a` equals some PROPER descendant. The resolving equation is a sound in-scope
+;; fact, and the descent only reports genuine structural sub-values, so an
+;; accepted `subterm_below` always denotes a true ⊰ edge.
+;; ---------------------------------------------------------------------------
+
+;; `a` is a proper subterm of `x` — structural descent, with one power beyond
+;; plain syntactic descent: when a child is a leaf var carrying an in-scope
+;; (= var ctorform) hyp (the case-on / induct case shape), the var is RESOLVED
+;; and traversal continues into its form. This lets (below) reach a sub-value
+;; under a WRAPPED container element — e.g. the Proof `pp` inside a (Case q pp)
+;; / (FinCase n pp) bound by an inner induct (see proof_size_nonneg in
+;; kernel/proof_size.shard). Resolving a var yields a form that is NOT a
+;; structural subterm of the var, so the family is no longer structural and
+;; carries FUEL. A give-up returns False (conservative: (below) fails, the
+;; citing proof fails — sound). The budget dwarfs any real proof's hyp nesting,
+;; and case-analysis hyps are acyclic, so give-up is dead code on real input.
+;;
+;; DESCENT IS CONSTRUCTOR-ONLY (written in blood). ⊰ is the sub-VALUE order, and
+;; only a constructor node's children are components of its value: for a Call /
+;; Match / If / Let node the children are INPUTS to a computation, and the value
+;; they produce need not contain them. Descending into a Call's args let a hyp
+;; `f = (g f)` (g constant) make f a proper subterm of ITSELF, which made the
+;; strong IH self-justifying and proved 0 = 1. See below_resolve's guards; the
+;; two fixes are independent and both are load-bearing.
+(fn below_budget () Int 1000000000)
+
+(fn eps_h ((a Expr) (x Expr) (hyps (List Goal)) (fuel Int)) Bool
+  (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt fuel 1) False
+  (match x
+    ((Ctor _ args) (eps_list_h a args hyps (- fuel 1)))
+    ;; everything else has no VALUE components: FVar/BVar/IntLit/SymLit are
+    ;; leaves, and Call/Match/If/Let are computations, not value formers.
+    (_ False))))
+
+(fn eps_child_h ((a Expr) (c Expr) (hyps (List Goal)) (fuel Int)) Bool
+  (measure
+    fuel
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (lt fuel 1) False
+  (if (expr_eq a c) True
+  (if (eps_h a c hyps (- fuel 1))
+    True
+    ;; c is a leaf var? resolve via an in-scope ctor-form hyp and recurse
+    (match c
+      ((FVar _)
+       (match (below_resolve c hyps)
+         (None False)
+         ((Some form) (eps_child_h a form hyps (- fuel 1)))))
+      (_ False))))))
+
+(fn eps_list_h ((a Expr) (xs (List Expr)) (hyps (List Goal)) (fuel Int)) Bool
+  (measure
+    fuel
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (lt fuel 1) False
+  (match xs
+    (Nil False)
+    ((Cons h t)
+     (if (eps_child_h a h hyps (- fuel 1)) True
+     (eps_list_h a t hyps (- fuel 1)))))))
+
+;; resolve an FVar `x` to a constructor-form term via an in-scope hyp
+;; (= x form) — the CaseOn / Induct case-hyp shape, `Goal Nil Nil (Equation x
+;; (Ctor c fresh-fields))`. THREE guards, each of which was a 0 = 1 without it:
+;;
+;;   1. UNCONDITIONAL AND UNQUANTIFIED (Goal Nil Nil). A hyp with ∀-binders or
+;;      premises asserts its equation only UNDER those; reading its conclusion
+;;      unconditionally promotes a vacuous induction hypothesis to a fact. The
+;;      real case-hyps this rule serves are all Nil/Nil.
+;;   2. CONSTRUCTOR FORM. The descent below reads the form's children as the
+;;      value's components, which holds for a ctor node and nothing else.
+;;   3. `x` DOES NOT OCCUR IN THE FORM. A genuine case-hyp names FRESH fields,
+;;      so x can never appear inside its own form; without the check, a hyp
+;;      `f = (Node f)` walks straight to `f ⊰ f` and the strong IH becomes
+;;      self-justifying. (Such a hyp is unsatisfiable on an inductive datatype,
+;;      but the kernel must not need that argument to stay sound.)
+;;
+;; Guard 2 alone kills the reported exploit (its resolving form was a Call);
+;; the other two are the same hole reachable by other spellings. Pinned by
+;; pins/proof/below_resolve_rejects.shard.
+(fn below_plain_hyp ((ps (List Param)) (prems (List Equation))) Bool
+  (match ps
+    (Nil
+      (match prems
+        (Nil True)
+        (_ False)))
+    (_ False)))
+
+;; does `x` occur anywhere in `e`? Looks EVERYWHERE (unlike the descent, which
+;; is constructor-only): an occurrence under a Call is still a reason to refuse.
+(fn below_occurs ((x Expr) (e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((FVar _) (expr_eq x e))
+    ((BVar _) (expr_eq x e))
+    ((IntLit _) (expr_eq x e))
+    ((SymLit _) (expr_eq x e))
+    ((Ctor _ args) (if (expr_eq x e) True (below_occurs_list x args)))
+    ((Call _ args) (if (expr_eq x e) True (below_occurs_list x args)))
+    ((If c t el)
+     (if (expr_eq x e) True
+     (if (below_occurs x c) True
+     (if (below_occurs x t) True
+     (below_occurs x el)))))
+    ((Let bs body)
+     (if (expr_eq x e) True
+     (if (below_occurs_list x bs) True
+     (below_occurs x body))))
+    ((Match s arms)
+     (if (expr_eq x e) True
+     (if (below_occurs x s) True
+     (below_occurs_arms x arms))))))
+
+(fn below_occurs_list ((x Expr) (es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil False)
+    ((Cons h t) (if (below_occurs x h) True (below_occurs_list x t)))))
+
+(fn below_occurs_arms ((x Expr) (arms (List Arm))) Bool
+  (measure (struct arms))
+  (match arms
+    (Nil False)
+    ((Cons (Arm _ b) t) (if (below_occurs x b) True (below_occurs_arms x t)))))
+
+;; the OTHER side of a candidate hyp, accepted only as a ctor form free of `x`.
+(fn below_form_ok ((x Expr) (form Expr)) (Option Expr)
+  (match form
+    ((Ctor _ _) (if (below_occurs x form) None (Some form)))
+    (_ None)))
+
+(fn below_resolve ((x Expr) (hyps (List Goal))) (Option Expr)
+  (measure (struct hyps))
+  (match hyps
+    (Nil None)
+    ((Cons (Goal ps prems (Equation l r)) rest)
+     (if (below_plain_hyp ps prems)
+       (if (expr_eq l x)
+         (match (below_form_ok x r)
+           ((Some form) (Some form))
+           (None (below_resolve x rest)))
+       (if (expr_eq r x)
+         (match (below_form_ok x l)
+           ((Some form) (Some form))
+           (None (below_resolve x rest)))
+         (below_resolve x rest)))
+       (below_resolve x rest)))))
+
+(fn below_is_true ((e Expr)) Bool
+  (match e
+    ((Ctor n _) (core_named n (quote True)))
+    (_ False)))
+
+(fn do_below ((m Module) (seq Sequent)) Bool
+  (match seq
+    ((Sequent params hyps premises (Equation lhs rhs))
+     (if (below_is_true rhs)
+       (match lhs
+         ((Call op args)
+          (if (core_named op (quote subterm_below))
+            (match args
+              ((Cons a (Cons x Nil))
+               (match x
+                 ((Ctor _ _) (eps_h a x hyps (below_budget)))
+                 (_
+                   (match (below_resolve x hyps)
+                     (None False)
+                     ((Some form) (eps_h a form hyps (below_budget)))))))
+              (_ False))
+            False))
+         (_ False))
+       False))))
