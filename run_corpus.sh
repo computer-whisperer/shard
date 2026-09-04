@@ -1585,7 +1585,7 @@ out=$("${CHECK_CMD[@]}" "$PWD/pins/proof/auto_demo.shard" 2>&1); code=$?
 if [ "$code" -eq 2 ] && grep -q "escapes the repo root" <<<"$out"; then
   echo "REFUSED (exit 2)"
 else
-  echo "GUARD FAILED: exit $code"
+  echo "FAIL repo-root-guard (exit $code; expected REFUSED exit 2)"
   printf '%s\n' "$out" | head -3
 fi
 
@@ -1617,7 +1617,7 @@ done
 echo "=== lowering: lowcheck negative fixture ==="
 if [ -x bin/shard_eval ]; then
   if bin/shard_eval run tools/lowcheck/lowcheck.shard tools/lowcheck/fixtures/lowcheck_rejects.shard > "$TMP/lc.out" 2>&1; then
-    echo "GATE FAILED: nonconforming fixture ACCEPTED"
+    echo "FAIL lowcheck-negative (nonconforming fixture ACCEPTED)"
     tail -5 "$TMP/lc.out"
   else
     tail -1 "$TMP/lc.out"
@@ -1633,7 +1633,7 @@ fi
 echo "=== lowering: manifest negative fixture ==="
 if [ -x bin/shard_eval ]; then
   if bin/shard_eval run tools/lowcheck/manifest.shard tools/lowcheck/fixtures/manifest_rejects.txt models/wasm/wasm.shard tools/lowbuild/fixtures/wasmgen_call_link.shard > "$TMP/mf.out" 2>&1; then
-    echo "GATE FAILED: misbound manifest ACCEPTED"
+    echo "FAIL manifest-negative (misbound manifest ACCEPTED)"
     tail -5 "$TMP/mf.out"
   else
     tail -1 "$TMP/mf.out"
@@ -1649,7 +1649,7 @@ fi
 echo "=== lowering: percolation negative fixture ==="
 if [ -x bin/shard_eval ]; then
   if bin/shard_eval run tools/bytetie/bytetie.shard pins/trust/percolation_rejects.shard > "$TMP/pc.out" 2>&1; then
-    echo "GATE FAILED: hidden effect-point ACCEPTED"
+    echo "FAIL percolation-negative (hidden effect-point ACCEPTED)"
     tail -5 "$TMP/pc.out"
   else
     tail -1 "$TMP/pc.out"
@@ -1666,7 +1666,7 @@ fi
 echo "=== reader: pattern binder-capture negative fixture ==="
 if [ -x bin/shard_eval ]; then
   if bin/shard_eval run kernel/check.shard pins/lang/pat_binder_rejects.shard > "$TMP/pb.out" 2>&1; then
-    echo "GATE FAILED: capitalized binder-capture pattern ACCEPTED"
+    echo "FAIL binder-capture-negative (capitalized binder-capture pattern ACCEPTED)"
     tail -5 "$TMP/pb.out"
   else
     tail -2 "$TMP/pb.out"
