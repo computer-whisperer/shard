@@ -1797,3 +1797,43 @@ immortal / shared (hcells_rep_decc) / dying (a new `hwl_rep_push`)),
 by wf-induct on the remaining slots with the state (cells, wl, lc[6])
 threaded — the fuel per inner iteration and the entry nesting found
 empirically as before.
+
+**C2b-5 part ii — THE INNER LOOP LANDS (2026-09-05).** `rth_slots_run`
+(rth_kit, hand-written = the template; its text was assembled by a
+scratch script over the four arms, as C2b-3/4's legs were): the slot
+walk of one dying cell computes the STATE MIRROR — `s_slots ws (MkSlSt
+m cells wl x7 x8 x9)` (memory, ghost cells, ghost worklist, the three
+scratch locals) whose projections are `m_slots` / `gsc (gh_slots …)` /
+`gsw (gh_slots …)` (s_slots_m/c/w) — by `induct ws`, each Cons arm
+citing the matching STEP LEG (rth_slot_{odd,imm,shared,dying}_run,
+gen_rth.py's `slots` block, fuel tower 12, the body in its COMPUTED
+spelling) and then the IH under the walk invariant. THE INVARIANT
+(18 premises): hcells_rep / hwl_rep / the slot suffix's hslots_rep at
+a + 8 + 8i; `winv` (C2b-2's, stepped by winv_step_skip/imm/decc/move)
+with the static es0 facts (anodup, e_disj, e_brk lo top); the pending
+slots' liveness `slots_ok ws (haddrs cells)` (the one clause the pure
+theory did not carry — the engine reads every even slot's header, so
+the None case must be unreachable: kept by haddrs_hdecc and, for a
+removal, by wex_dy_rest — a dying child appears once in the suffix by
+exactness); wl_ok; cur's entry extent (emem es0 a ar) and its absence
+from cells; ar = i + ilen ws; the bounds; the budget 13 + ilen ws ≤
+fuel (one level per iteration + the body's tower). 1654 canonical
+lines; rth_kit 838/0.
+FINDINGS: (a) a CITATION MATCHES SYNTACTICALLY — a leg stated through
+rt.shard's helper spelling (rldw …) never matches the computed goal;
+the legs and the loop lemma spell the body raw (IpLoadW/IBin …), taken
+from the trace; the fuel is a literal S-tower over a Nat binder so a
+leg is citable at any remainder (nS/ntl in a statement is not). (b)
+`unfold F side` opens ONE occurrence: the mirror's one-step equation
+is stated as a have and rewritten into all four projections. (c)
+fuel: each list node AND each statement costs a level; siblings are
+not at one level (the tower grew 8 → 12 reading the traces). (d) the
+kit now carries: hcells_rep_hrem, hwl_rep (via hcell_rep of the
+link-count cell) + hwl_rep_fr/push, wl_ok, the winv consequences
+(wi_nodup/ewl/edisj/emem/cinwl, wex_dy_rest/wl/self), ebrk_memb,
+whead bounds, ldw_lo/hi (load-word bounds from std/mem's byte bounds).
+NEXT = part iii: the outer loop `rth_wl_run` (pop cur, read link +
+arity, the inner loop via rth_slots_run, the free-class push via
+m_free; wf-induct on the ghost budget k; the invariant adds wsl_ok —
+every worklist cell's slots live — and hwl_rep for the popped chain),
+the LAST leg's entry, hr_dec, and the assembly rth_dec_run.

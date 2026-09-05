@@ -1128,7 +1128,9 @@ BLOCKS.append(("dec", BANNER_DEC, dec_block))
 
 
 # ---------------- slots: ONE ITERATION of rt_dec's inner loop (C2b-5 part ii) ----------------
-# The body over an EXPLICIT locals list (0 v, 1 h, 2 c, 3 hd = the worklist
+# The body in its COMPUTED spelling (a citation matches syntactically against the
+# goal after compute; the rt.shard helper spelling would never match), over an
+# EXPLICIT locals list (0 v, 1 h, 2 c, 3 hd = the worklist
 # head, 4 a = the dying cell, 5 n = its arity, 6 i = the slot index, 7..10
 # scratch), at the slot word w = [a + 8 + 8i], in the code's four cases:
 # odd (skip), immortal (skip), shared ([w] := hword − 1), dying ([w] :=
@@ -1137,17 +1139,7 @@ BLOCKS.append(("dec", BANNER_DEC, dec_block))
 # LITERAL S-tower over a Nat binder so the loop lemma can cite a leg at any
 # remainder.
 SLOTS_TOWER = 12
-SLOTS_BODY = """(Cons (rldw 7 (radd (rl 4) (radd (rk 8) (rmul (rl 6) (rk 8)))))
-        (Cons (IpIf (risref (rl 7))
-          (Cons (rldo 8 7 0) (Cons (IpSet 9 (rcount (rl 8)))
-            (Cons (IpIf (rlt (rl 9) (rk (rimmortal)))
-              (Cons (IpIf (rlt (rk 1) (rl 9))
-                (Cons (rsto 7 0 (rsub (rl 8) (rk 1))) Nil)
-                (Cons (rsto 7 0 (radd (rsub (rl 8) (rl 9)) (rl 3))) (Cons (IpSet 3 (rl 7)) Nil)))
-              Nil)
-              Nil) Nil)))
-          Nil)
-        (Cons (IpSet 6 (radd (rl 6) (rk 1))) Nil)))"""
+SLOTS_BODY = """(Cons (IpLoadW 7 (ITrunc U64 U32 (IBin U64 IAdd (ILoc 4) (IBin U64 IAdd (IConst 8) (IBin U64 IMul (ILoc 6) (IConst 8)))))) (Cons (IpIf (IBin U64 IEq (IBin U64 IAnd (ILoc 7) (IConst 1)) (IConst 0)) (Cons (IpLoadW 8 (ITrunc U64 U32 (IBin U64 IAdd (ILoc 7) (IConst 0)))) (Cons (IpSet 9 (IBin U64 IAnd (ILoc 8) (IConst 4294967295))) (Cons (IpIf (IBin U64 ILt (ILoc 9) (IConst 2147483648)) (Cons (IpIf (IBin U64 ILt (IConst 1) (ILoc 9)) (Cons (IpStoreW (ITrunc U64 U32 (IBin U64 IAdd (ILoc 7) (IConst 0))) (IBin U64 ISub (ILoc 8) (IConst 1))) Nil) (Cons (IpStoreW (ITrunc U64 U32 (IBin U64 IAdd (ILoc 7) (IConst 0))) (IBin U64 IAdd (IBin U64 ISub (ILoc 8) (ILoc 9)) (ILoc 3))) (Cons (IpSet 3 (ILoc 7)) Nil))) Nil) Nil) Nil))) Nil) (Cons (IpSet 6 (IBin U64 IAdd (ILoc 6) (IConst 1))) Nil)))"""
 
 
 def slots_lc(hd="hd", i="i", x7="x7", x8="x8", x9="x9"):
