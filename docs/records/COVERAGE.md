@@ -2263,3 +2263,78 @@ as a `have` with the explicit tower and rewritten by `peel12` +
 selector meets exactly one tower; (b) a case binder must not shadow a
 claim binder (Tri's fields are (x y z), not (a b c)); (c) the closing
 block is identical across arms and fns — one template.
+
+**B-1b — `app` LANDS, B-1b COMPLETE (2026-09-05); the arc PARKS here.**
+(1) THE TWIN. `app_tw g a b av : Pair GHeap Int`, structurally
+recursive on the VALUE av (the twin's fuel): Nil ↦ `(Pair (gh_inc g b)
+b)`; Cons h t ↦ the seal of the two fills of the inc of the alloc over
+the tail's twin ghost, paired with the alloc's address — the product's
+effects in the product's order (recursive call, alloc, inc on the head
+immediate, store, store); `pg`/`pw` read the pair; `app_tw_cons`
+spells the Cons step once. tb_app's statement: heap_rep/hinv/graw
+None, `rb_list (gcells_of g) a av`, `rb_list (gcells_of g) b bv`, the
+table at 5, mlo ≤ rb, gend ≤ msz, budgets `30 ≤ fuel` and `30 + 12·ilen
+av ≤ fuel` ⊢ `tbh RUN rb msz (pg (app_tw g a b av)) (pw (app_tw g a b
+av)) r (rb_list (gcells_of (pg …)) (pw …) (app av bv))`; wf-induct on
+`(ilen av)`; 1,148 canonical lines (= hand: emitted by the scratchpad
+aid); tb_micro 26 claims, 1264/0, 3.8 s; tbh_kit 77 claims, 4,072
+lines, 1238/0, 3.2 s. (2) TWO KIT CORRECTIONS this instance forced.
+(a) rth_kit's `hinv_seal` is VACUOUS: it keeps the roots and asks the
+raw address to be counted once in them, but `roots_ok` admits live
+cells only — no state satisfies its premises. The usable seal law is
+`hinv_seal_r` (tbh_kit): the sealed cell's count 1 is its one NEW
+root — `hinv rb g r ∧ graw g = Some (MkHRaw p tag n fill) ∧ ilen fill
+= n → hinv rb (gh_seal g) (Cons p r)`; proven as hinv_seal's proof
+with the counts conjunct re-derived through `roots_cin0` (no root at
+a never-referenced address) and `counts_ok_roots_cons` (a root at no
+live address changes no count). rth_kit's hinv_seal stands as text;
+nothing cites it. (b) `tbh` gained `msz` and the conjunct `gend_of g'
+≤ msz`: the caller's next runtime call needs the arena bound at the
+CALLEE's ghost, and the twin cannot be asked for it — `tbh_gend`
+unpacks it; `gend_inc/alloc/fill/seal` carry it through the window.
+(3) THE CONSTRUCTOR CHOREOGRAPHY (what B-1c prints per alloc'd
+constructor): `rth_alloc_run` at depth d+1 through a `have` (peel12 +
+the law) → `alloc_out` unfolded → case on `gh_alloc_ok` (the FOom leg
+closes by compute) → `hr_alloc`/`hinv_alloc`/`gh_alloc_raw`/
+`gend_alloc` at the callee's ghost; per stored field: `ldok_raw` for
+the store's bounds, `st_storew_h`, `hr_fill_k` at the literal offset,
+`hinv_fill` (an immediate: `slot_ok_odd`, the roots by `hodd`; a
+reference: `rbl_slot_ok` at the callee's readback, `rinc_mem` for the
+ownership, `rdec_rinc` to give the roots back), `graw_fill` +
+compute for the next fill; at the end `hr_seal`, `hinv_seal_r`,
+`graw_seal`, `gend_seal`, the readback of the new cell by
+`gcells_seal` + `hfget_cons_eq` + `rbc_intro`, its reference field by
+`rbl_seal` over `rbl_fill`/`gcells_alloc` framing; the twin's term
+meets the proof's by `app_tw_cons`, `pg_pair`/`pw_pair`, the head
+slot's `rbi_w` and `gh_inc_odd`. Findings: (a) a chain-intermediate
+`rewrite-with` carries NO trailing `refl` — the parser rejects the
+terminal form mid-chain with "could not parse proof" and no location
+(bisect by truncation with a cheap `(reduce lhs)` filler; a `(compute
+lhs)` filler on the whole run is minutes per probe); (b) a one-element
+`(chain …)` is malformed sugar; (c) every compute in the constructor
+window keeps `gh_alloc m_alloc gh_araddr gh_fill gh_seal gh_inc m_inc
+app_tw pg pw store_le` folded, or the ghost/memory terms unfold into
+the locals list; the closing compute keeps `app` folded so the spelled
+`(app (Cons h t) bv)` step matches; (d) a case binder must not shadow
+a claim binder; (e) the runtime calls' fuel levels read off the trace:
+recursive call S^19, alloc S^18, inc S^17 of the 30-tower.
+
+**PARKED (user, 2026-09-05: "focus on wrapping/parking this arc
+soon").** State at the park: B-1a and B-1b COMPLETE — tb_kit 91,
+tbh_kit 77, tb_micro 26 claims (tb_sumto, tb_id, tb_t_arith, tb_len,
+tb_perim, tb_app + the readbacks and twin), all 0 failed, ≈4 s a
+file, DEFAULT tier. B-1c (the generator as impc's second output, D3)
+NOT STARTED: its inputs are complete — the six hand templates, the
+statement-law template (one `rewrite-with` per symbolic statement, one
+`unfold ipstmt` per constant one, one compute between), the
+have-block emitter shapes (the scratchpad `hblocks.py` /
+`perim2.py` / `app2.py` authoring aids are NOT in the tree; the
+generator re-derives them from the product walk), the fuel-level
+rule (the trace is the oracle; the generator must compute levels from
+statement positions), the per-TypeDef readback + unpackers shape
+(`rb_shape`, `rbs_*`), the twin shape (`app_tw`, `app_tw_cons`,
+`pg`/`pw`). Debt noted at the park: rth_kit's vacuous `hinv_seal`
+(replace by `hinv_seal_r` or delete); the −2^62 mul imprecision
+(impc one-liner); engine reach on tb_kit/tbh_kit never measured; the
+D4 abbreviation question (canonical text is fuel towers and repeated
+have-blocks — tb_app 1,148 lines for a 25-statement fn).
