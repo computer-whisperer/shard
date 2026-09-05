@@ -24,6 +24,8 @@
 (use (:: models imp probes rth_kit *))
 (import "tb_kit.shard")
 (use (:: models imp probes tb_kit *))
+(import "tbh_kit.shard")
+(use (:: models imp probes tbh_kit *))
 (import "../../../tools/impc/fixtures/micro.shard")
 (use (:: tools impc fixtures micro *))
 (import "../../../tools/impc/fixtures/micro_ipc_out.shard")
@@ -650,6 +652,11 @@
                     refl)))))))))))
 
 ;; the towers the four call sites spell, as the counted nS (cited rl before int_nS)
+(claim nS12
+  (goal ((y Nat)) ()
+    (= (nS 12 y) (S (S (S (S (S (S (S (S (S (S (S (S y))))))))))))))
+  (steps ((compute lhs)) refl))
+
 (claim nS21
   (goal ((y Nat)) ()
     (=
@@ -1922,3 +1929,728 @@
                                                                               tb_mem
                                                                               tb_fam)))
                                                                          refl))))))))))))))))))))))))))))))))))))))))))
+
+;; --- len: the first heap theorem (B-1b) --------------------------------------------
+;; A match on a borrowed (List Int) with a recursive call: loads only,
+;; the ghost is unchanged, the result is the immediate of the source
+;; value. The heap statement: memory represents a ghost g under hinv at
+;; the caller's roots r, the argument word decodes to av in g, the run
+;; satisfies tbh at (g, imm (len av)).
+
+(claim tb_len
+  (goal
+    ((av (List Int))
+     (fuel Nat)
+     (fs (List IpFn))
+     (rb Int)
+     (mlo Int)
+     (msz Int)
+     (dmax Int)
+     (d Int)
+     (m Mem)
+     (g GHeap)
+     (r (List Int))
+     (a Int))
+    ((= (heap_rep m rb g) True)
+     (= (hinv rb g r) True)
+     (= (graw_of g) None)
+     (= (rb_list (gcells_of g) a av) True)
+     (= (ipfn_at (rt_app (rt_fns rb) fs) 4) (Some (len_ipfn)))
+     (= (le mlo rb) True)
+     (= (le (gend_of g) msz) True)
+     (= (le 24 (int_of_nat fuel)) True)
+     (= (le (+ 24 (* 12 (ilen av))) (int_of_nat fuel)) True))
+    (=
+      (tbh
+        (ipcall fuel (rt_app (rt_fns rb) fs) mlo msz dmax d 4 (Cons a Nil) m)
+        rb
+        g
+        (imm (len av))
+        r
+        (rb_int (imm (len av)) (len av)))
+      True))
+  (wf-induct (ilen av)
+    (chain
+      (have hpeel (= fuel (nS 24 (ntl 24 fuel)))
+        (rewrite-with
+          (lemma nat_peel)
+          lr
+          lhs
+          ((inst k 24))
+          ((by arith (rows (goal 1)))
+           (steps ((rewrite (premise 7) lr lhs true ())) refl))
+          refl))
+      (steps
+        ((rewrite (premise hpeel) lr lhs true ())
+         (compute lhs (stop imm ntl len ipcall tbh rt_app rt_fns rb_int in63))
+         (unfold ipcall lhs)
+         (reduce lhs)
+         (rewrite (premise 4) lr lhs true ())
+         (compute lhs (stop imm ntl len ipcall tbh rt_app rt_fns rb_int in63))))
+      (case-on (lt d dmax) Bool
+        ((case False
+           (steps
+             ((rewrite (hyp False) lr lhs true ())
+              (compute lhs (stop imm len rt_app rt_fns rb_int in63)))
+             refl))
+         (case True
+           (chain
+             (steps
+               ((rewrite (hyp True) lr lhs true ())
+                (compute lhs (stop imm ntl len ipcall tbh rt_app rt_fns rb_int in63))))
+             (case-on av List
+               ((case Nil
+                  (chain
+                    (have ha1 (= (int_eq a 1) True)
+                      (rewrite-with
+                        (lemma rbl_nil)
+                        lr
+                        lhs
+                        ((inst cs (gcells_of g)))
+                        ((steps
+                           ((rewrite (hyp Nil) rl lhs true ())
+                            (rewrite (premise 3) lr lhs true ()))
+                           refl))
+                        refl))
+                    (have hae (= a 1)
+                      (rewrite-with
+                        (lemma int_eq_eq)
+                        lr
+                        lhs
+                        ((inst b 1))
+                        ((steps ((rewrite (premise ha1) lr lhs true ())) refl))
+                        refl))
+                    (steps
+                      ((rewrite (hyp Nil) lr lhs true ())
+                       (rewrite (premise hae) lr lhs true ())
+                       (compute lhs (stop heap_rep hinv graw_none rt_app rt_fns))
+                       (rewrite (premise 0) lr lhs true ())
+                       (rewrite (premise 1) lr lhs true ())
+                       (unfold graw_none lhs)
+                       (rewrite (premise 2) lr lhs true ())
+                       (compute lhs))
+                      refl)))
+                (case Cons
+                  (h t)
+                  (chain
+                    ;; the cell facts of a: even, live, tag 1, arity 2
+                    (have hc (= (rb_cell (gcells_of g) a 1 2) True)
+                      (rewrite-with
+                        (lemma rbl_cell)
+                        lr
+                        lhs
+                        ((inst h h) (inst t t))
+                        ((steps
+                           ((rewrite (hyp Cons) rl lhs true ())
+                            (rewrite (premise 3) lr lhs true ()))
+                           refl))
+                        refl))
+                    (have he (= (int_eq (mod a 2) 0) True)
+                      (rewrite-with
+                        (lemma rbc_even)
+                        lr
+                        lhs
+                        ((inst cs (gcells_of g)) (inst tag 1) (inst n 2))
+                        ((steps ((rewrite (premise hc) lr lhs true ())) refl))
+                        refl))
+                    (have hm (= (memb (haddrs (gcells_of g)) a) True)
+                      (rewrite-with
+                        (lemma rbc_memb)
+                        lr
+                        lhs
+                        ((inst tag 1) (inst n 2))
+                        ((steps ((rewrite (premise hc) lr lhs true ())) refl))
+                        refl))
+                    (have htg (= (int_eq (htag_of (hfget (gcells_of g) a)) 1) True)
+                      (rewrite-with
+                        (lemma rbc_tag)
+                        lr
+                        lhs
+                        ((inst n 2))
+                        ((steps ((rewrite (premise hc) lr lhs true ())) refl))
+                        refl))
+                    (have har (= (int_eq (harity_of (hfget (gcells_of g) a)) 2) True)
+                      (rewrite-with
+                        (lemma rbc_arity)
+                        lr
+                        lhs
+                        ((inst tag 1))
+                        ((steps ((rewrite (premise hc) lr lhs true ())) refl))
+                        refl))
+                    (have hare (= (harity_of (hfget (gcells_of g) a)) 2)
+                      (rewrite-with
+                        (lemma int_eq_eq)
+                        lr
+                        lhs
+                        ((inst b 2))
+                        ((steps ((rewrite (premise har) lr lhs true ())) refl))
+                        refl))
+                    (have ha0 (= (le 0 a) True)
+                      (rewrite-with
+                        (lemma cell_nonneg)
+                        lr
+                        lhs
+                        ((inst rb rb) (inst g g) (inst r r))
+                        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                         (steps ((rewrite (premise hm) lr lhs true ())) refl))
+                        refl))
+                    (have hau (= (lt a 4294967296) True)
+                      (rewrite-with
+                        (lemma cell_u32)
+                        lr
+                        lhs
+                        ((inst rb rb) (inst g g) (inst r r))
+                        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                         (steps ((rewrite (premise hm) lr lhs true ())) refl))
+                        refl))
+                    (have hmod (= (mod a 18446744073709551616) a)
+                      (rewrite-with
+                        (lemma w64_id)
+                        lr
+                        lhs
+                        ()
+                        ((steps ((rewrite (premise ha0) lr lhs true ())) refl)
+                         (steps ((rewrite (premise hau) lr lhs true ())) refl))
+                        refl))
+                    (have hne (= (int_eq a 1) False)
+                      (case-on (int_eq a 1) Bool
+                        ((case True
+                           (chain
+                             (have hae (= a 1)
+                               (rewrite-with
+                                 (lemma int_eq_eq)
+                                 lr
+                                 lhs
+                                 ((inst b 1))
+                                 ((steps ((rewrite (hyp True) lr lhs true ())) refl))
+                                 refl))
+                             (have hf (= False True)
+                               (steps
+                                 ((rewrite (premise he) rl rhs true ())
+                                  (rewrite (premise hae) lr rhs true ())
+                                  (compute rhs))
+                                 refl))
+                             (absurd (premise hf))))
+                         (case False (steps ((rewrite (hyp False) lr lhs true ())) refl)))))
+                    (have hb1 (= (band a 1) (mod a 2))
+                      (rewrite-with
+                        (lemma band1_mod2)
+                        lr
+                        lhs
+                        ()
+                        ((steps ((rewrite (premise ha0) lr lhs true ())) refl))
+                        refl))
+                    (have hcells (= (cells_ok (gcells_of g)) True)
+                      (rewrite-with
+                        (lemma hi_cells)
+                        lr
+                        lhs
+                        ((inst rb rb) (inst r r))
+                        ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                        refl))
+                    (have hcb (= (cbands (hfget (gcells_of g) a)) True)
+                      (rewrite-with
+                        (lemma hfget_bands)
+                        lr
+                        lhs
+                        ()
+                        ((steps ((rewrite (premise hcells) lr lhs true ())) refl)
+                         (steps ((rewrite (premise hm) lr lhs true ())) refl))
+                        refl))
+                    (have htag
+                      (=
+                        (band (bshr (hword (hfget (gcells_of g) a)) 32) 65535)
+                        (htag_of (hfget (gcells_of g) a)))
+                      (rewrite-with
+                        (lemma hword_tag)
+                        lr
+                        lhs
+                        ()
+                        ((steps ((rewrite (premise hcb) lr lhs true ())) refl))
+                        refl))
+                    (have hl0 (= (ldok mlo msz (+ a 0)) True)
+                      (rewrite-with
+                        (lemma ldok_cell)
+                        lr
+                        lhs
+                        ((inst rb rb) (inst g g) (inst r r))
+                        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                         (steps ((rewrite (premise hm) lr lhs true ())) refl)
+                         (steps ((rewrite (premise 5) lr lhs true ())) refl)
+                         (steps ((rewrite (premise 6) lr lhs true ())) refl)
+                         (steps ((compute lhs)) refl)
+                         (steps
+                           ((rewrite (premise hare) lr lhs true ()) (compute lhs))
+                           refl))
+                        refl))
+                    (have hl8 (= (ldok mlo msz (+ a 8)) True)
+                      (rewrite-with
+                        (lemma ldok_cell)
+                        lr
+                        lhs
+                        ((inst rb rb) (inst g g) (inst r r))
+                        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                         (steps ((rewrite (premise hm) lr lhs true ())) refl)
+                         (steps ((rewrite (premise 5) lr lhs true ())) refl)
+                         (steps ((rewrite (premise 6) lr lhs true ())) refl)
+                         (steps ((compute lhs)) refl)
+                         (steps
+                           ((rewrite (premise hare) lr lhs true ()) (compute lhs))
+                           refl))
+                        refl))
+                    (have hl16 (= (ldok mlo msz (+ a 16)) True)
+                      (rewrite-with
+                        (lemma ldok_cell)
+                        lr
+                        lhs
+                        ((inst rb rb) (inst g g) (inst r r))
+                        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                         (steps ((rewrite (premise hm) lr lhs true ())) refl)
+                         (steps ((rewrite (premise 5) lr lhs true ())) refl)
+                         (steps ((rewrite (premise 6) lr lhs true ())) refl)
+                         (steps ((compute lhs)) refl)
+                         (steps
+                           ((rewrite (premise hare) lr lhs true ()) (compute lhs))
+                           refl))
+                        refl))
+                    (have hrd0
+                      (= (load_le (iw8) m (+ a 0)) (hword (hfget (gcells_of g) a)))
+                      (rewrite-with
+                        (lemma rd_hdr)
+                        lr
+                        lhs
+                        ((inst rb rb) (inst g g))
+                        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                         (steps ((rewrite (premise hm) lr lhs true ())) refl))
+                        refl))
+                    (have hrd8 (= (load_le (iw8) m (+ a 8)) (rb_slot (gcells_of g) a 0))
+                      (rewrite-with
+                        (lemma rd_slot)
+                        lr
+                        lhs
+                        ((inst rb rb) (inst g g) (inst r r) (inst i 0))
+                        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                         (steps ((rewrite (premise 1) lr lhs true ())) refl)
+                         (steps ((rewrite (premise hm) lr lhs true ())) refl)
+                         (steps ((compute lhs)) refl)
+                         (steps
+                           ((rewrite (premise hare) lr lhs true ()) (compute lhs))
+                           refl)
+                         (steps ((compute rhs)) refl))
+                        refl))
+                    (have hrd16 (= (load_le (iw8) m (+ a 16)) (rb_slot (gcells_of g) a 1))
+                      (rewrite-with
+                        (lemma rd_slot)
+                        lr
+                        lhs
+                        ((inst rb rb) (inst g g) (inst r r) (inst i 1))
+                        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                         (steps ((rewrite (premise 1) lr lhs true ())) refl)
+                         (steps ((rewrite (premise hm) lr lhs true ())) refl)
+                         (steps ((compute lhs)) refl)
+                         (steps
+                           ((rewrite (premise hare) lr lhs true ()) (compute lhs))
+                           refl)
+                         (steps ((compute rhs)) refl))
+                        refl))
+                    ;; the run: the Nil-arm miss, the parity test, then statement by statement
+                    (steps
+                      ((rewrite (hyp Cons) lr lhs true ())
+                       (compute lhs (stop imm ntl len ipcall tbh rt_app rt_fns rb_int in63 load_le iw8))
+                       (rewrite (premise hmod) lr lhs true ())
+                       (rewrite (premise hne) lr lhs true ())
+                       (compute lhs (stop imm ntl len ipcall tbh rt_app rt_fns rb_int in63 load_le iw8 band))
+                       (rewrite (premise hb1) lr lhs true ())
+                       (rewrite (premise he) lr lhs true ())
+                       (compute lhs (stop imm ntl len ipcall tbh rt_app rt_fns rb_int in63 load_le iw8 band ipstmt rb_slot hword hfget gcells_of))))
+                    ;; the header load
+                    (rewrite-with
+                      (lemma st_loadw_h)
+                      lr
+                      lhs
+                      ((inst sv a))
+                      ((steps ((compute lhs)) refl)
+                       (steps ((rewrite (premise hl0) lr lhs true ())) refl)
+                       (steps ((compute lhs)) refl)
+                       (steps ((compute lhs)) refl)))
+                    (steps
+                      ((compute lhs (stop imm ntl len ipcall tbh rt_app rt_fns rb_int in63 load_le iw8 band ipstmt rb_slot hword hfget gcells_of))))
+                    ;; the tag test
+                    (rewrite-with
+                      (lemma st_iftag)
+                      lr
+                      lhs
+                      ((inst hv (load_le (iw8) m (+ a 0))))
+                      ((steps ((compute lhs (stop load_le iw8))) refl)))
+                    (steps
+                      ((rewrite (premise hrd0) lr lhs true ())
+                       (rewrite (premise htag) lr lhs true ())
+                       (rewrite (premise htg) lr lhs true ())
+                       (compute lhs (stop imm ntl len ipcall tbh rt_app rt_fns rb_int in63 load_le iw8 band ipstmt rb_slot hword hfget gcells_of))))
+                    ;; slot 0
+                    (rewrite-with
+                      (lemma st_loadw_h)
+                      lr
+                      lhs
+                      ((inst sv a))
+                      ((steps ((compute lhs)) refl)
+                       (steps ((rewrite (premise hl8) lr lhs true ())) refl)
+                       (steps ((compute lhs)) refl)
+                       (steps ((compute lhs)) refl)))
+                    (steps
+                      ((rewrite (premise hrd8) lr lhs true ())
+                       (compute lhs (stop imm ntl len ipcall tbh rt_app rt_fns rb_int in63 load_le iw8 band ipstmt rb_slot hword hfget gcells_of))
+                       (unfold ipstmt lhs)
+                       (compute lhs (stop imm ntl len ipcall tbh rt_app rt_fns rb_int in63 load_le iw8 band ipstmt rb_slot hword hfget gcells_of))))
+                    ;; slot 1
+                    (rewrite-with
+                      (lemma st_loadw_h)
+                      lr
+                      lhs
+                      ((inst sv a))
+                      ((steps ((compute lhs)) refl)
+                       (steps ((rewrite (premise hl16) lr lhs true ())) refl)
+                       (steps ((compute lhs)) refl)
+                       (steps ((compute lhs)) refl)))
+                    (steps
+                      ((rewrite (premise hrd16) lr lhs true ())
+                       (compute lhs (stop imm ntl len ipcall tbh rt_app rt_fns rb_int in63 load_le iw8 band ipstmt rb_slot hword hfget gcells_of))
+                       (unfold ipstmt lhs)
+                       (compute lhs (stop imm ntl len ipcall tbh rt_app rt_fns rb_int in63 load_le iw8 band ipstmt rb_slot hword hfget gcells_of))
+                       (unfold ipstmt lhs)
+                       (compute lhs (stop imm ntl len ipcall tbh rt_app rt_fns rb_int in63 load_le iw8 band ipstmt rb_slot hword hfget gcells_of))
+                       (unfold ipstmt lhs)
+                       (compute lhs (stop imm ntl len ipcall tbh rt_app rt_fns rb_int in63 load_le iw8 band ipstmt rb_slot hword hfget gcells_of))))
+                    ;; the recursive call: the IH at the tail word, fuel S^13
+                    (have hil (= (ilen av) (+ 1 (ilen t)))
+                      (steps
+                        ((rewrite (hyp Cons) lr lhs true ()) (unfold ilen lhs) (reduce lhs))
+                        refl))
+                    (have hil0 (= (le 0 (ilen t)) True)
+                      (steps ((rewrite (lemma ilen_nonneg) lr lhs true ())) refl))
+                    (have hb8 (= (le (+ 24 (* 12 (+ 1 (ilen t)))) (int_of_nat fuel)) True)
+                      (steps
+                        ((rewrite (premise hil) rl lhs true ())
+                         (rewrite (premise 8) lr lhs true ()))
+                        refl))
+                    (have ht (= (rb_list (gcells_of g) (rb_slot (gcells_of g) a 1) t) True)
+                      (rewrite-with
+                        (lemma rbl_tl)
+                        lr
+                        lhs
+                        ((inst h h))
+                        ((steps
+                           ((rewrite (hyp Cons) rl lhs true ())
+                            (rewrite (premise 3) lr lhs true ()))
+                           refl))
+                        refl))
+                    (have hb24
+                      (=
+                        (le
+                          24
+                          (int_of_nat
+                            (S (S (S (S (S (S (S (S (S (S (S (S (ntl 24 fuel)))))))))))))))
+                        True)
+                      (chain
+                        (steps ((rewrite (lemma nS12) rl lhs true ())))
+                        (rewrite-with
+                          (lemma int_nS)
+                          lr
+                          lhs
+                          ()
+                          ((steps ((compute lhs)) refl)))
+                        (rewrite-with
+                          (lemma int_ntl)
+                          lr
+                          lhs
+                          ()
+                          ((steps ((compute lhs)) refl)
+                           (steps ((rewrite (premise 7) lr lhs true ())) refl)))
+                        (by arith (rows (goal 1) (hb8 1) (hil0 12)))))
+                    (have hb2
+                      (=
+                        (le
+                          (+ 24 (* 12 (ilen t)))
+                          (int_of_nat
+                            (S (S (S (S (S (S (S (S (S (S (S (S (ntl 24 fuel)))))))))))))))
+                        True)
+                      (chain
+                        (steps ((rewrite (lemma nS12) rl lhs true ())))
+                        (rewrite-with
+                          (lemma int_nS)
+                          lr
+                          lhs
+                          ()
+                          ((steps ((compute lhs)) refl)))
+                        (rewrite-with
+                          (lemma int_ntl)
+                          lr
+                          lhs
+                          ()
+                          ((steps ((compute lhs)) refl)
+                           (steps ((rewrite (premise 7) lr lhs true ())) refl)))
+                        (by arith (rows (goal 1) (hb8 1)))))
+                    (have hih
+                      (=
+                        (tbh
+                          (ipcall
+                            (S (S (S (S (S (S (S (S (S (S (S (S (ntl 24 fuel)))))))))))))
+                            (rt_app (rt_fns rb) fs)
+                            mlo
+                            msz
+                            dmax
+                            (+ d 1)
+                            4
+                            (Cons (rb_slot (gcells_of g) a 1) Nil)
+                            m)
+                          rb
+                          g
+                          (imm (len t))
+                          r
+                          (rb_int (imm (len t)) (len t)))
+                        True)
+                      (rewrite-with
+                        (hyp 2)
+                        lr
+                        lhs
+                        ()
+                        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                         (steps ((rewrite (premise 1) lr lhs true ())) refl)
+                         (steps ((rewrite (premise 2) lr lhs true ())) refl)
+                         (steps ((rewrite (premise ht) lr lhs true ())) refl)
+                         (steps ((rewrite (premise 4) lr lhs true ())) refl)
+                         (steps ((rewrite (premise 5) lr lhs true ())) refl)
+                         (steps ((rewrite (premise 6) lr lhs true ())) refl)
+                         (steps ((rewrite (premise hb24) lr lhs true ())) refl)
+                         (steps ((rewrite (premise hb2) lr lhs true ())) refl)
+                         (steps ((rewrite (premise hil0) lr lhs true ())) refl)
+                         (chain
+                           (steps ((rewrite (premise hil) lr lhs true ())))
+                           (by arith (rows (goal 1)))))
+                        refl))
+                    (have hokr
+                      (=
+                        (tb_okr
+                          (ipcall
+                            (S (S (S (S (S (S (S (S (S (S (S (S (ntl 24 fuel)))))))))))))
+                            (rt_app (rt_fns rb) fs)
+                            mlo
+                            msz
+                            dmax
+                            (+ d 1)
+                            4
+                            (Cons (rb_slot (gcells_of g) a 1) Nil)
+                            m))
+                        True)
+                      (rewrite-with
+                        (lemma tbh_okr)
+                        lr
+                        lhs
+                        ((inst rb rb)
+                         (inst g g)
+                         (inst w (imm (len t)))
+                         (inst rs r)
+                         (inst ok (rb_int (imm (len t)) (len t))))
+                        ((steps ((rewrite (premise hih) lr lhs true ())) refl))
+                        refl))
+                    (rewrite-with
+                      (lemma st_callg)
+                      lr
+                      lhs
+                      ((inst vs (Cons (rb_slot (gcells_of g) a 1) Nil)))
+                      ((steps ((compute lhs (stop rb_slot gcells_of))) refl)
+                       (steps ((rewrite (premise hokr) lr lhs true ())) refl)
+                       (steps ((compute lhs)) refl)
+                       (steps ((compute lhs)) refl)))
+                    (steps ((compute lhs (stop imm ntl len ipcall tbh rt_app rt_fns rb_int in63 load_le iw8 band ipstmt rb_slot hword hfget gcells_of tb_rv tb_w tb_mem tb_fam))))
+                    ;; the callee's run
+                    (case-on
+                      (ipcall
+                        (S (S (S (S (S (S (S (S (S (S (S (S (ntl 24 fuel)))))))))))))
+                        (rt_app (rt_fns rb) fs)
+                        mlo
+                        msz
+                        dmax
+                        (+ d 1)
+                        4
+                        (Cons (rb_slot (gcells_of g) a 1) Nil)
+                        m)
+                      Option
+                      ((case None
+                         (chain
+                           (have hf (= False True)
+                             (steps
+                               ((rewrite (premise hokr) rl rhs true ())
+                                (rewrite (hyp 0) lr rhs true ())
+                                (compute rhs))
+                               refl))
+                           (absurd (premise hf))))
+                       (case Some
+                         (x)
+                         (case-on x IpRet
+                           ((case IpRtrap
+                              (chain
+                                (have hf (= False True)
+                                  (steps
+                                    ((rewrite (premise hokr) rl rhs true ())
+                                     (rewrite (hyp 1) lr rhs true ())
+                                     (rewrite (hyp 0) lr rhs true ())
+                                     (compute rhs))
+                                    refl))
+                                (absurd (premise hf))))
+                            (case IpRfailed
+                              (fm)
+                              (steps
+                                ((rewrite (hyp 1) lr lhs true ())
+                                 (rewrite (hyp 0) lr lhs true ())
+                                 (compute lhs (stop imm len rb_slot gcells_of rb_int in63)))
+                                refl))
+                            (case IpRv
+                              (w m2)
+                              (chain
+                                ;; the callee's facts: word, memory, roots, band
+                                (have hw (= w (imm (len t)))
+                                  (rewrite-with
+                                    (lemma tbh_w)
+                                    lr
+                                    lhs
+                                    ((inst m2 m2)
+                                     (inst rb rb)
+                                     (inst g g)
+                                     (inst w (imm (len t)))
+                                     (inst rs r)
+                                     (inst ok (rb_int (imm (len t)) (len t))))
+                                    ((steps
+                                       ((rewrite (hyp 0) rl lhs true ())
+                                        (rewrite (hyp 1) rl lhs true ())
+                                        (rewrite (premise hih) lr lhs true ()))
+                                       refl))
+                                    refl))
+                                (have hrep (= (heap_rep m2 rb g) True)
+                                  (rewrite-with
+                                    (lemma tbh_rep)
+                                    lr
+                                    lhs
+                                    ((inst w2 w)
+                                     (inst w (imm (len t)))
+                                     (inst rs r)
+                                     (inst ok (rb_int (imm (len t)) (len t))))
+                                    ((steps
+                                       ((rewrite (hyp 0) rl lhs true ())
+                                        (rewrite (hyp 1) rl lhs true ())
+                                        (rewrite (premise hih) lr lhs true ()))
+                                       refl))
+                                    refl))
+                                (have hok (= (rb_int (imm (len t)) (len t)) True)
+                                  (rewrite-with
+                                    (lemma tbh_ok)
+                                    lr
+                                    lhs
+                                    ((inst w2 w)
+                                     (inst m2 m2)
+                                     (inst rb rb)
+                                     (inst g g)
+                                     (inst w (imm (len t)))
+                                     (inst rs r))
+                                    ((steps
+                                       ((rewrite (hyp 0) rl lhs true ())
+                                        (rewrite (hyp 1) rl lhs true ())
+                                        (rewrite (premise hih) lr lhs true ()))
+                                       refl))
+                                    refl))
+                                (have hin (= (in63 (len t)) True)
+                                  (rewrite-with
+                                    (lemma rbi_in63)
+                                    lr
+                                    lhs
+                                    ((inst w (imm (len t))))
+                                    ((steps ((rewrite (premise hok) lr lhs true ())) refl))
+                                    refl))
+                                (have h3 (= 3 (imm 1)) (steps ((compute rhs)) refl))
+                                ;; the add: bm := w - 1 = dbl (len t); s := 3 + bm = imm (1 + len t)
+                                (steps
+                                  ((rewrite (hyp 1) lr lhs true ())
+                                   (rewrite (hyp 0) lr lhs true ())
+                                   (rewrite (premise hw) lr lhs true ())
+                                   (compute lhs (stop imm ntl len ipcall tbh rt_app rt_fns rb_int in63 load_le iw8 band rb_slot hword hfget gcells_of dbl))
+                                   (rewrite (lemma dbl_of_imm) lr lhs true ())
+                                   (rewrite (premise h3) lr lhs true ())
+                                   (compute lhs (stop imm ntl len ipcall tbh rt_app rt_fns rb_int in63 load_le iw8 band rb_slot hword hfget gcells_of dbl))
+                                   (rewrite (lemma imm_add) lr lhs true ())
+                                   (compute lhs (stop imm ntl len ipcall tbh rt_app rt_fns rb_int in63 load_le iw8 band rb_slot hword hfget gcells_of dbl))))
+                                (case-on
+                                  (int_eq
+                                    (bshr
+                                      (band
+                                        (bxor (imm 1) (imm (+ 1 (len t))))
+                                        (bxor (dbl (len t)) (imm (+ 1 (len t)))))
+                                      63)
+                                    0)
+                                  Bool
+                                  ((case False
+                                     (steps
+                                       ((rewrite (hyp False) lr lhs true ())
+                                        (compute lhs (stop imm len dbl rb_slot gcells_of rb_int in63)))
+                                       refl))
+                                   (case True
+                                     (chain
+                                       (have hz
+                                         (=
+                                           (bshr
+                                             (band
+                                               (bxor (imm 1) (imm (+ 1 (len t))))
+                                               (bxor (dbl (len t)) (imm (+ 1 (len t)))))
+                                             63)
+                                           0)
+                                         (rewrite-with
+                                           (lemma int_eq_eq)
+                                           lr
+                                           lhs
+                                           ((inst b 0))
+                                           ((steps ((rewrite (hyp True) lr lhs true ())) refl))
+                                           refl))
+                                       (have hc1 (= (in63 (+ 1 (len t))) True)
+                                         (rewrite-with
+                                           (lemma ov_add_in)
+                                           lr
+                                           lhs
+                                           ()
+                                           ((steps ((compute lhs)) refl)
+                                            (steps ((rewrite (premise hin) lr lhs true ())) refl)
+                                            (steps ((rewrite (premise hz) lr lhs true ())) refl))
+                                           refl))
+                                       (have hlen (= (len (Cons h t)) (+ 1 (len t)))
+                                         (steps ((unfold len lhs) (reduce lhs)) refl))
+                                       (have hodd1 (= (int_eq (mod (imm (+ 1 (len t))) 2) 1) True)
+                                         (rewrite-with
+                                           (lemma imm_odd)
+                                           lr
+                                           lhs
+                                           ()
+                                           ((steps ((rewrite (premise hc1) lr lhs true ())) refl))
+                                           refl))
+                                       (have hri (= (rb_int (imm (+ 1 (len t))) (+ 1 (len t))) True)
+                                         (rewrite-with
+                                           (lemma rbi_intro)
+                                           lr
+                                           lhs
+                                           ()
+                                           ((steps ((rewrite (premise hc1) lr lhs true ())) refl))
+                                           refl))
+                                       (steps
+                                         ((rewrite (hyp True) lr lhs true ())
+                                          (compute lhs (stop imm len dbl rb_slot gcells_of tbh heap_rep hinv graw_none rinc rb_int in63))
+                                          (rewrite (premise hlen) lr lhs true ())
+                                          (unfold tbh lhs)
+                                          (reduce lhs)
+                                          (rewrite (lemma int_eq_refl) lr lhs true ())
+                                          (rewrite (premise hrep) lr lhs true ())
+                                          (unfold rinc lhs)
+                                          (rewrite (premise hodd1) lr lhs true ())
+                                          (reduce lhs)
+                                          (rewrite (premise 1) lr lhs true ())
+                                          (unfold graw_none lhs)
+                                          (rewrite (premise 2) lr lhs true ())
+                                          (rewrite (premise hri) lr lhs true ())
+                                          (compute lhs))
+                                         refl)))))))))))))))))))))))

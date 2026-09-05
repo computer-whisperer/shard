@@ -2150,3 +2150,85 @@ the callee runs at d + 1, and `false` (first occurrence) is the
 rewrite selector for a fuel respelling; (d) impc's `(* a b)` at
 literal operands is fully decided by compute — the citation is still
 emitted, because the generator cannot know. NEXT = B-1b.
+
+**B-1b — IN PROGRESS (2026-09-05): the heap kit lands, `len` lands,
+and D1 is REVERSED by a finding.** (1) THE FINDING. D1's readback
+`gh_of m rb` with the injectivity law `gh_of_rep` (heap_rep m rb g ∧
+hinv rb g r → gh_of m rb = g) is UNPROVABLE: the ghost's cell list is
+ORDERED (newest first — hinv's acyclicity IS that order, `slots_ok`
+against the older suffix) and memory does not record the seal order.
+Two histories, `alloc X@100; alloc Y@200; dec X; alloc Z@100 (pop)`
+(cells [Z, Y]) and `alloc Z@100; alloc Y@200` (cells [Y, Z]), leave
+byte-identical memories that both satisfy hinv; no function of memory
+returns g. Second obstacle: the walk from glo needs the live and free
+cells to TILE [glo, top), which hinv does not state — the record's
+"exact cover" is the COUNT cover (`exact_cov`, the precision theorem's
+seed), not a tiling. The rejection of (a) in the design record was
+wrong on both counts: a ghost twin is CHECKED by the per-fn theorem
+(a wrong twin fails the check — nothing is trusted), and it is a
+definition, not a second theorem. (2) THE REPLACEMENT (lean; needs the
+user's ruling): the per-fn statement names the INPUT ghost `g` as a
+binder — premises `heap_rep m rb g`, `hinv rb g r`, `graw_of g =
+None`, the arguments' readbacks at `(gcells_of g)` — and the OUTPUT
+ghost as a TERM. A fn that neither allocates nor returns a reference
+(`len`, `perim`) leaves g and returns `(imm (f av))`: no twin. A fn
+that allocates or returns a reference (`app`) gets a GHOST TWIN
+`f_gh : GHeap × words × VALUES → GHeap` (and `f_gw` for the word),
+structurally recursive on the VALUE — the source fn's own recursion
+with the ghost effects (gh_inc, gh_alloc, gh_fill, gh_seal) where the
+product emits them — emitted by B-1c's generator from the same
+structural walk; the value is the twin's fuel. Readbacks are
+RELATIONS structural on the value: `rb_int w v`, `rb_list cs w v`
+through `rb_cell cs w tag n` (even, live, the tag, the arity) and
+`rb_slot cs w i` — D2's spirit (no fuel, no acyclicity side
+condition), with no Option and no immediate inversion. The
+post-predicate `tbh run rb g' w' rs ok`: the run RETURNS w' over a
+memory representing g', `hinv rb g' (rinc rs w')`, no raw cell, and
+the readback fact `ok` (spelled by the theorem at w'); a failure is
+accepted, a trap or fuel-out is not. (3) THE KIT — tbh_kit.shard, 57
+claims, 2,408 canonical lines, 1218/0 cumulative, 3.2 s: `hword_tag`
+(the tag band of the header word); the statement laws of the emitted
+match skeleton over a symbolic locals list — `st_ifeqc`, `st_ifeven`,
+`st_iftag`, `st_loadw`/`st_storew` and their bundle forms `_h` with
+`ldok mlo msz ad` (proven once from hinv for any live cell offset:
+`ldok_cell`), the generic call `st_callg` (`tb_okr`/`tb_w`: a callee
+that returned or failed, for tbh callees and runtime equations alike);
+the readbacks and their unpackers (`rbc_*`, `rbl_*`, `rbi_*`); `tbh`
+with `tbh_w/rep/inv/raw/ok/okr/intro`; the ghost fill `gh_fill` +
+`rdec` with `hr_fill_g` and the unified `hinv_fill` (an immediate
+leaves the roots, a stored reference moves from the roots into the
+slot); readback FRAMING — `hsig`/`hincc_sig` (the found cell modulo
+its count) → `hincc_tag/arity/slots`, `rbl_incc` (a count bump),
+`rbl_cons` (a fresh cell prepended), `gcells_alloc/fill/seal`,
+`rbl_inc/alloc/fill/seal`; the read bridges `rd_hdr`/`rd_slot` at the
+emitted literal offsets; `cell_nonneg`, `cell_u32`, `w64_id`. (4)
+`tb_len` LANDS — the first heap theorem: `heap_rep m rb g`, `hinv rb
+g r`, `graw_of g = None`, `rb_list (gcells_of g) a av`, the table at
+4, `mlo ≤ rb`, `gend ≤ msz`, budgets `24 ≤ fuel` and `24 + 12·ilen av
+≤ fuel` ⊢ `tbh (ipcall fuel TABLE mlo msz dmax d 4 [a] m) rb g (imm
+(len av)) r (rb_int (imm (len av)) (len av))`; wf-induct on `(ilen
+av)`; 717 canonical lines (hand-spelled the same — the statement-law
+template is one-argument-per-line already); tb_micro 12 claims,
+1231/0, 3.5 s. Findings for the generator: (a) the frame BANDS the
+argument (`mod a 2^64`) — `w64_id` off `cell_nonneg`/`cell_u32`; (b)
+compute with the stop set leaves the run at `(match (ipstmt (S^k …)
+STMT LC m) …)` — one `rewrite-with` per symbolic statement (the loads
+through `st_loadw_h` + `ldok_cell`, the tag test through `st_iftag` +
+`rd_hdr` + `hword_tag`), one `unfold ipstmt` per constant statement,
+one compute between; (c) the stop set MUST keep `hword hfget gcells_of
+rb_slot rb_int in63` folded, or compute unfolds the ghost into the
+locals list and the readback into its band test; (d) the first
+spelling put the callee one fuel level too high (S^13; the trace says
+S^12 — the IpCall at `ipstmt (S^13)` hands `S^12` to the callee): the
+generator computes levels from statement positions and the trace is
+the oracle; (e) the Nil-arm miss on a Cons word needs `int_eq a 1 =
+False` from the cell's parity, the parity test needs `0 ≤ a`; (f)
+the ok-flag chain `(IpIf (5 == 1) …)` and the frame's IpSets compute
+on the concrete frame — no locals-law citations at all in `len`.
+NEXT: the user's ruling on (2); then `perim` (three arms: the Dot
+miss, the Seg hit and its inc-imm through `rth_inc_run` +
+`st_callg`, the Tri hit with three slot loads — `st_iftag`'s ELSE leg
+is the tag-miss law) and `app` (the twin; the constructor:
+`rth_alloc_run` + `st_callg`, `hr_fill_g`/`hinv_fill` per store,
+`hr_seal`/`hinv_seal`/`rbl_seal`; the Nil arm's inc on the borrowed
+reference through `rth_inc_run` + `rbl_inc`).
