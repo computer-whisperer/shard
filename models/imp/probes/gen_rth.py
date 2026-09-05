@@ -1119,6 +1119,74 @@ def dec_leg(kind):
     return "\n".join(out)
 
 
+def dec_last_prefix():
+    """The LAST leg's ENTRY: rt_dec's stepping from the call to the release loop
+    (parity, header, count band, the immortal and 1 < count tests, wl := v,
+    [v] := hword - count) — the haves and steps as a (haves, steps) pair for the
+    hand-assembled rth_dec_last_run (C2b-5 part iii-e); probe-only otherwise."""
+    HW = "(hword (hfget (gcells_of g) v))"
+    CNT = "(hcount_of (hfget (gcells_of g) v))"
+    AR = "(harity_of (hfget (gcells_of g) v))"
+    prem = [("hr", "(= (heap_rep m rb g) True)"),
+            ("hi", "(= (hinv rb g r) True)"),
+            ("mem", "(= (memb (haddrs (gcells_of g)) v) True)"),
+            ("cnt", "(= (lt %s 2147483648) True)" % CNT),
+            ("cnt1", "(= (lt 1 %s) False)" % CNT),
+            ("mlo", "(= (le mlo rb) True)"),
+            ("msz", "(= (le (gend_of g) msz) True)"),
+            ("dd", "(= (lt d dmax) True)")]
+    P = {k: i for i, (k, _) in enumerate(prem)}
+    NP = len(prem)
+    haves = []
+    out = []
+
+    def have(nm, goal, proof):
+        out.append(f"    (have {nm} {goal}")
+        out.append(f"      {proof})")
+        haves.append(nm)
+
+    def ident(nm, goal):
+        w = 1 + NP + len(haves)
+        z = " ".join(["1"] + ["0"] * (w - 1))
+        have(nm, goal, f"(by arith (list (list {z}) (list {z})))")
+    ident("hpz", "(= (+ v 0) v)")
+    have("hlv", "(= (live_ok g v) True)", _cite("live_facts", ["(inst rb rb)", "(inst r r)"], [_pr(P["hi"]), _pr(P["mem"])]))
+    have(*_lv("hlo", "(= (le (glo_of g) v) True)", "lv_lo"))
+    have(*_lv("hhi", "(= (le (+ v (+ 8 (* 8 %s))) (gtop_of g)) True)" % AR, "lv_hi"))
+    have(*_lv("hal", "(= (int_eq (mod v 8) 0) True)", "lv_al", ["(inst g g)"]))
+    have(*_lv("hcb", "(= (cbands (hfget (gcells_of g) v)) True)", "lv_bands"))
+    have("hn0", "(= (le 0 %s) True)" % AR, _cite("cb_ar0", [], [_pr("hcb")]))
+    have("h1", "(= (le 0 rb) True)", _cite("hi_rb0", ["(inst g g)", "(inst r r)"], [_pr(P["hi"])]))
+    have("h2", "(= (le (+ rb 152) (glo_of g)) True)", _cite("hi_hdr", ["(inst r r)"], [_pr(P["hi"])]))
+    have("h4", "(= (le (gtop_of g) (gend_of g)) True)", _cite("hi_te", ["(inst rb rb)", "(inst r r)"], [_pr(P["hi"])]))
+    have("h5", "(= (le (gend_of g) 4294967296) True)", _cite("hi_e32", ["(inst rb rb)", "(inst r r)"], [_pr(P["hi"])]))
+    have("hv0", "(= (le 0 v) True)", _rows(("goal", 1), ("h1", 1), ("h2", 1), ("hlo", 1)))
+    have("hv32", "(= (lt v 4294967296) True)", _rows(("goal", 1), ("hhi", 1), ("h4", 1), ("h5", 1), ("hn0", 8)))
+    have("hv64", "(= (lt v 18446744073709551616) True)", _rows(("goal", 1), ("hhi", 1), ("h4", 1), ("h5", 1), ("hn0", 8)))
+    have("hev", "(= (int_eq (mod v 2) 0) True)", _cite("mod8_even", [], [_pr("hal")]))
+    have("hm2", "(= (mod v 2) 0)", _cite("int_eq_eq", ["(inst b 0)"], [_pr("hev")]))
+    have("hb1", "(= (band v 1) (mod v 2))", _cite("band1_mod2", [], [_pr("hv0")]))
+    have("hmv", "(= (mod v 18446744073709551616) v)", _cite("modu64_id", [], [_pr("hv0"), _pr("hv64")]))
+    have("hbv", "(= (band v 4294967295) v)", _cite("bandu32_id", [], [_pr("hv0"), _pr("hv32")]))
+    have("hgl", "(= (le mlo v) True)", _rows(("goal", 1), (P["mlo"], 1), ("h2", 1), ("hlo", 1)))
+    have("hgh", "(= (le (+ v 8) msz) True)", _rows(("goal", 1), ("hhi", 1), ("h4", 1), (P["msz"], 1), ("hn0", 8)))
+    have("hrd", "(= (load_le (iw8) m v) %s)" % HW, _cite("hr_rd_hdr", ["(inst rb rb)", "(inst g g)"], [_pr(P["hr"]), _pr(P["mem"])]))
+    have("hcnt", "(= (band %s 4294967295) %s)" % (HW, CNT), _cite("hword_count", [], [_pr("hcb")]))
+    have("hwhi", "(= (lt %s 18446744073709551616) True)" % HW, _cite("hword_hi", [], [_pr("hcb")]))
+    have("hc1", "(= (le 1 %s) True)" % CNT, _cite("cb_cnt1", [], [_pr("hcb")]))
+    have("ht0", "(= (le 0 (htag_of (hfget (gcells_of g) v))) True)", _cite("cb_tag0", [], [_pr("hcb")]))
+    have("hwe", "(= %s (+ %s (+ (* (htag_of (hfget (gcells_of g) v)) 4294967296) (* %s 281474976710656))))" % (HW, CNT, AR),
+         "(steps ((unfold hword lhs)) refl)")
+    have("hwclo", "(= (le 0 (- %s %s)) True)" % (HW, CNT), _rows(("goal", 1), ("hwe", 1), ("ht0", 4294967296), ("hn0", 281474976710656)))
+    have("hwchi", "(= (lt (- %s %s) 18446744073709551616) True)" % (HW, CNT), _rows(("goal", 1), ("hwhi", 1), ("hc1", 1)))
+    have("hmwc", "(= (mod (- %s %s) 18446744073709551616) (- %s %s))" % (HW, CNT, HW, CNT), _cite("modu64_id", [], [_pr("hwclo"), _pr("hwchi")]))
+    C = "(compute lhs (stop iw8 hword hfget gcells_of hcount_of ipwhile load_le store_le nS whead hlen hrem gfree_of))"
+    guard = [_rw("hpz"), _rw("hmv"), _rw("hbv"), _rw("hgl"), "(reduce lhs)", _rw("hgh"), "(reduce lhs)", C]
+    st = [C, _rw(P["dd"]), "(reduce lhs)", C, _rw("hmv"), C, _rw("hb1"), _rw("hm2"), C]
+    st += guard + [_rw("hrd"), _rw("hcnt"), _rw(P["cnt"]), C, _rw(P["cnt1"]), C] + guard + [_rw("hmwc"), C]
+    return prem, "\n".join(out), st
+
+
 def dec_block():
     return "\n\n".join(dec_leg(k) for k in ("imm", "shared", "sat"))
 
