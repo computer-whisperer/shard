@@ -7455,3 +7455,228 @@
                 refl)
               (steps ((rewrite (premise hbf) lr lhs true ())) refl)))
            (steps ((compute lhs)) refl)))))))
+
+;; --- the call site: the callee's theorem, used ---------------------------------------
+;; the outcome's shape under tb_ok: a value, or a declared failure
+(fn tb_rv ((r (Option IpRet))) Bool
+  (match r
+    (None False)
+    ((Some x)
+     (match x
+       ((IpRv _ _) True)
+       (IpRtrap False)
+       ((IpRfailed _) False)))))
+(fn tb_mem ((r (Option IpRet)) (m Mem)) Mem
+  (match r
+    (None m)
+    ((Some x)
+     (match x
+       ((IpRv _ m2) m2)
+       (IpRtrap m)
+       ((IpRfailed _) m)))))
+(fn tb_fam ((r (Option IpRet))) IFam
+  (match r
+    (None FOverflow)
+    ((Some x)
+     (match x
+       ((IpRv _ _) FOverflow)
+       (IpRtrap FOverflow)
+       ((IpRfailed f) f)))))
+
+;; an IpCall whose callee satisfies tb_ok at v: the local receives v's immediate
+;; and the callee's memory, or the run fails with the callee's family
+(claim st_call
+  (goal
+    ((g Nat)
+     (fs (List IpFn))
+     (mlo Int)
+     (msz Int)
+     (dmax Int)
+     (d Int)
+     (i Int)
+     (k Int)
+     (args (List IExp))
+     (lc (List Int))
+     (m Mem)
+     (vs (List Int))
+     (v Int))
+    ((= (ipexps args lc m mlo msz) (Some vs))
+     (= (tb_ok (ipcall g fs mlo msz dmax d k vs m) v) True)
+     (= (le 0 i) True)
+     (= (lt i (ilen lc)) True))
+    (=
+      (ipstmt (S g) fs mlo msz dmax d (IpCall i k args) lc m)
+      (if (tb_rv (ipcall g fs mlo msz dmax d k vs m))
+        (Some
+          (IpNorm
+            (ilsetf lc i (imm v))
+            (tb_mem (ipcall g fs mlo msz dmax d k vs m) m)))
+        (Some (IpFailed (tb_fam (ipcall g fs mlo msz dmax d k vs m)))))))
+  (chain
+    (steps
+      ((compute lhs (stop ipexps ipcall ilset))
+       (rewrite (premise 0) lr lhs true ())
+       (compute lhs (stop ipcall ilset imm))))
+    (case-on (ipcall g fs mlo msz dmax d k vs m) Option
+      ((case None
+         (chain
+           (have hf (= False True)
+             (rewrite-with
+               (lemma tb_none)
+               lr
+               lhs
+               ((inst v v))
+               ((steps
+                  ((rewrite (hyp 0) rl lhs true ())
+                   (rewrite (premise 1) lr lhs true ()))
+                  refl))
+               refl))
+           (absurd (premise hf))))
+       (case Some
+         (r)
+         (case-on r IpRet
+           ((case IpRtrap
+              (chain
+                (have hf (= False True)
+                  (rewrite-with
+                    (lemma tb_trap)
+                    lr
+                    lhs
+                    ((inst v v))
+                    ((steps
+                       ((rewrite (hyp 0) rl lhs true ())
+                        (rewrite (hyp 1) rl lhs true ())
+                        (rewrite (premise 1) lr lhs true ()))
+                       refl))
+                    refl))
+                (absurd (premise hf))))
+            (case IpRfailed
+              (fm)
+              (steps
+                ((rewrite (hyp 1) lr both true ())
+                 (rewrite (hyp 0) lr both true ())
+                 (compute both (stop imm ilsetf)))
+                refl))
+            (case IpRv
+              (w m2)
+              (chain
+                (have hw (= w (imm v))
+                  (rewrite-with
+                    (lemma tb_rv_w)
+                    lr
+                    lhs
+                    ((inst m m2) (inst v v))
+                    ((steps
+                       ((rewrite (hyp 0) rl lhs true ())
+                        (rewrite (hyp 1) rl lhs true ())
+                        (rewrite (premise 1) lr lhs true ()))
+                       refl))
+                    refl))
+                (steps
+                  ((rewrite (hyp 1) lr both true ())
+                   (rewrite (hyp 0) lr both true ())
+                   (rewrite (premise hw) lr lhs true ())
+                   (compute both (stop imm ilsetf ilset))))
+                (rewrite-with
+                  (lemma ilset_ok)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+                   (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+                (steps ((compute both (stop imm ilsetf))) refl))))))))))
+
+;; --- the immediate is odd; a runtime law's fuel respelled -------------------------
+
+;; an immediate is odd
+(claim imm_odd
+  (goal ((n Int)) ((= (in63 n) True)) (= (int_eq (mod (imm n) 2) 1) True))
+  (chain
+    (have hlo (= (le -4611686018427387904 n) True)
+      (rewrite-with
+        (lemma in63_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hhi (= (lt n 4611686018427387904) True)
+      (rewrite-with
+        (lemma in63_hi)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (case-on (le 0 n) Bool
+      ((case True
+         (chain
+           (have hn (= (le 0 n) True)
+             (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           (have he (= (imm n) (+ (* 2 n) 1))
+             (rewrite-with
+               (lemma imm_pos)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise hn) lr lhs true ())) refl)
+                (by arith (list 1 0 0 1 0)))
+               refl))
+           (have hm (= (mod (+ (* 2 n) 1) 2) 1)
+             (rewrite-with
+               (lemma mod_unique)
+               lr
+               lhs
+               ((inst q n) (inst r 1))
+               ((by arith (list (list 1 0 0 0 0 0) (list 1 0 0 0 0 0)))
+                (by arith (list 1 0 0 0 0 0))
+                (by arith (list 1 0 0 0 0 0)))
+               refl))
+           (steps
+             ((rewrite (premise he) lr lhs true ())
+              (rewrite (premise hm) lr lhs true ())
+              (rewrite (lemma int_eq_refl) lr lhs true ()))
+             refl)))
+       (case False
+         (chain
+           (have hn (= (lt n 0) True)
+             (rewrite-with
+               (lemma not_le_implies_lt_swap)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+               refl))
+           (have he (= (imm n) (+ (+ (* 2 n) 1) 18446744073709551616))
+             (rewrite-with
+               (lemma imm_neg)
+               lr
+               lhs
+               ()
+               ((by arith (list 1 0 1 0 0))
+                (steps ((rewrite (premise hn) lr lhs true ())) refl))
+               refl))
+           (have hm (= (mod (+ (+ (* 2 n) 1) 18446744073709551616) 2) 1)
+             (rewrite-with
+               (lemma mod_unique)
+               lr
+               lhs
+               ((inst q (+ n 9223372036854775808)) (inst r 1))
+               ((by arith (list (list 1 0 0 0 0 0) (list 1 0 0 0 0 0)))
+                (by arith (list 1 0 0 0 0 0))
+                (by arith (list 1 0 0 0 0 0)))
+               refl))
+           (steps
+             ((rewrite (premise he) lr lhs true ())
+              (rewrite (premise hm) lr lhs true ())
+              (rewrite (lemma int_eq_refl) lr lhs true ()))
+             refl)))))))
+
+
+;; a twelve-deep tower as the counted form a runtime law's fuel is spelled in
+(claim peel12
+  (goal ((y Nat)) ()
+    (=
+      (S (S (S (S (S (S (S (S (S (S (S (S y))))))))))))
+      (nS 12 (ntl 12 (S (S (S (S (S (S (S (S (S (S (S (S y))))))))))))))))
+  (steps ((compute rhs)) refl))

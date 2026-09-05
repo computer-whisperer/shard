@@ -2082,3 +2082,71 @@ release theorem composed at a call site — the first of them lands
 when the generator runs over the whole fixture), division/bit ops
 (C3b growth), the −2^62 ruling (impc's one-line change if the user
 wants exactness; the theorem is stated against the product as it is).
+
+**RULING (user, 2026-09-05): "agreed, let's proceed with your leans" —
+D1 (gh_of + injectivity), D2 (ghost-level structural readbacks), D3
+(the generator = impc's second output), D4 (no abbreviation feature in
+B-1), D5 (order a → b → c) are law; the −2^62 mul imprecision stays as
+a noted finding, the theorem is stated against the product as it is.
+B-1a opens.
+
+**B-1a — LANDS (2026-09-05): the multiply kit and the heap-free
+instances.** (1) `int_nS`: tb_sumto's hf5 cites it through a kit
+`nS6` — 524 → 496 canonical lines. (2) THE MULTIPLY LAW, stated at the
+STATEMENT-LIST grain with SYMBOLIC local indices and a SYMBOLIC locals
+list: `mul_pre` (the seven statements before the guards, for any
+in-band operands), `mul_run` (the band leg: the eleven statements impc
+emits for `(* a b)` leave the nine locals of `mul_lc` — sra1 words,
+sign words, magnitudes, product, signed product, the immediate — and
+continue two fuel levels down) and `mul_fail` (outside the band the
+run fails FOverflow: at the divide-back when the ring product wrapped,
+at the band test otherwise). Under them, three layers the generator
+will reuse for EVERY construct: the LOCALS LAWS (`ilsetf` the total
+set; `ilset_ok`, `ilget_setf_eq`, `ilget_setf_ne`, `ilen_setf` — a read
+through k later sets is k `ne` peels and one `eq`, each obligation an
+index-chain Farkas cert over the fixed premise slots), the STATEMENT
+LAWS over a symbolic list (`st_set`, `st_ifneg`, `st_divok`/`st_divfail`,
+`st_bandok`/`st_bandfail`, `st_ifxor` — each proven once by compute
+with the list's reads as premises; the main law cites one per emitted
+statement and never spells a list), and the WORD ALGEBRA (`bor_split` +
+`bor_zero_r` as byte-copies of the bxor laws, `band_p63`, `bor_hi63`,
+`sra1_imm`, `hi_w2c`/`sgn_w2c`, `w2c_pos/neg`, `neg_w2c`, `mul_nowrap`,
+`divback_ok`/`divback_wrap`, `imm_of_w2c`, `neg_mul_l`/`neg_neg_mul`/
+`mul_nonneg` from the kernel's ring axioms, `abs_of_sgn`, `abs_mul`,
+`signed_prod`, the band62 consequences). (3) THE CALL SITE: `st_call` —
+an IpCall whose callee satisfies `tb_ok` at v leaves v's immediate in
+the local and the callee's memory, or fails with the callee's family
+(`tb_rv`/`tb_mem`/`tb_fam` name the outcome's shape); the caller then
+case-splits the RUN with binders (None / IpRtrap / IpRfailed are
+one-line propagations, IpRv (w m2) continues with the memory a NAME).
+(4) THE INSTANCES (tb_micro, 11 claims / 0 failed): `tb_id` (the body is
+one runtime call: rth_inc_imm_run cited after `peel12` respells the
+tower as `(nS 12 (ntl 12 …))`; both FStack legs by the except clause)
+and `tb_t_arith` (40 statements: four calls to id through the table
+premise and `tb_id` — P5's composition beyond self-recursion — two
+`mul_run` citations at literal operands with all sixteen premises by
+compute, the sub and the add by compute). THE NUMBERS: tb_kit 47 → 91
+claims, 2,465 → 7,682 canonical lines, 1,161 / 0, 1.6 s; tb_micro
+1,172 / 0, 1.74 s (≈0.15 s for the three theorems beyond the kit's
+load); tb_id 98 canonical / 25 hand-spelled; tb_t_arith 1,129
+canonical / 83 hand-spelled (emitter output) — the FIRST spelling,
+with the callee memory carried as `(tb_mem run m)` TERMS, was 3,605:
+each call's run term embedded every earlier call's, a quadratic
+nesting the binder split removes. What remains of the 1,129 is the
+five run terms spelled in the case-on scrutinees (a 40-deep fuel
+tower each, one argument per line) and the 64 one-line premise
+discharges of the two mul citations. Engine reach was not re-measured
+in this slice (B-0's 0/1 reading stands; a capped smoke is a
+one-command follow-up when wanted). FINDINGS FOR B-1c: (a) the
+statement-law shape — a symbolic locals list with reads as premises —
+is the construct-law template; the index chain (nine premises) is
+what a generator emits for each occurrence, all discharged by
+compute; (b) fuel is the text: a tower per call site and per
+citation, `nS_k` laws per depth, the peel-and-respell dance for every
+runtime law — D4's abbreviation is the one lever left on canonical
+size, exactly as B-0b said; (c) `rt_app`/`rt_fns` must be in every
+compute's stop set (the table computes to the runtime's literal fns),
+the callee runs at d + 1, and `false` (first occurrence) is the
+rewrite selector for a fuel respelling; (d) impc's `(* a b)` at
+literal operands is fully decided by compute — the citation is still
+emitted, because the generator cannot know. NEXT = B-1b.
