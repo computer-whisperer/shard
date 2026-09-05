@@ -1872,3 +1872,42 @@ pure twin s_wl_reps (heap_rep-level facts at the loop's end, the
 mirror's equivalences s_wl ↔ m_wl/gh_wl, wlpack_res), then iii-e:
 the LAST leg's entry (a generated `last` block), hr_dec, the
 assembly rth_dec_run.
+
+**C2b-5 — LANDS (2026-09-05): rt_dec's law, the release theorem
+assembled.** THE THREE LAWS: `rth_dec_run` (the engine law: on
+`heap_rep m rb g`, `hinv rb g r`, the raw cell closed, v an owned root,
+`ipcall (nS (+ (+ (hlen cells) 1) 65573) f0) … 3 (Cons v Nil) m =
+Some (IpRv 0 (m_dec m rb g v))` — the four legs in the code's case
+order: immediate, saturated, shared (generated, tower 13), last
+(hand-assembled: the entry prefix from gen_rth's dec_last_prefix, the
+count band becoming the link, the release loop by rth_wl_eq at the
+budget hlen + 1, return 0)); `hr_dec` (the memory law: `heap_rep
+(m_dec m rb g v) rb (gh_dec g v)` — identities for the immediate and
+immortal legs, hr_dec_shared, hr_dec_last); `hinv_dec` (C2b-2: `hinv
+rb (gh_dec g v) (irem r v)`). Under them: the memory mirror
+(m_slots/m_free/m_wl/m_dec, pinned byte-for-byte by rth_run's tmir
+rows BEFORE any lemma), the two state mirrors (SlSt/s_slots for the
+slot walk, WlSt/wl_step/s_wl for the release loop) with their
+projection equivalences (s_slots_m/c/w, s_wl_m/c/f), the two loop
+lemmas (rth_slots_run: induct on the slots, 1,654 canonical lines;
+rth_wl_run: wf-induct on the ghost budget with the end-state facts
+carried in the WlPack conclusion, 3,824 lines), the four slot-step
+legs (gen_rth `slots`, tower 12), the worklist representation (hwl_rep
+through hcell_rep of the link-count cell), and ~90 supporting laws
+(hcells_rep_decc/hrem, hwl_rep_fr/push, hfree_rep_push, the winv
+consequences, the exactness consequences wex_dy_*, hword_count0/
+hword_arity, the fuel algebra nS_add/int_nS/nS13/19/20, the Farkas
+helpers). rth_kit 1,070 claims / 0 failed; rth_run 13/13 rows.
+FINDINGS THAT SHAPE B-1'S GENERATOR: (1) a wf-induct hypothesis has
+EVERY binder fresh-renamed — cite it through a match binding all of
+them (WlPack; the budget-built fuel tower) — the generator must emit
+loop lemmas in that shape; (2) citations are syntactic: statements
+spell terms exactly as compute leaves them (raw bodies, literal
+S-towers, the code's own address spellings) — a generator reads them
+off a probe trace, as loop.py/loop3.py did; (3) `compute` opens a
+symbolic record accessor into a stuck match — stop the accessors and
+read constructor fields through the record's generated `FIELD_of_with_`
+laws; (4) an engine lemma's conclusion can carry the pure end-state
+invariant as a Bool field — the pure twin then costs no second
+induction, and pure laws (hr_dec_last) read it off the engine lemma
+with the engine binders instantiated trivially. NEXT = C2b-6.
