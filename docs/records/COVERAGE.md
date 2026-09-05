@@ -1961,3 +1961,124 @@ abbreviation question, and the fact that the call-site laws are stated
 with the fuel base free (so a per-fn certificate composes them under
 one budget). NEXT = B-1: mul's law kit, constructors/match over the C2b
 laws, the per-fn generator in impc.
+
+**B-1 — DESIGN RECORD (2026-09-05; written before the first edit; user:
+"let's open B-1").** Scope, from the B-0b ruling and the C2b close: mul's
+law kit, constructors/match over the C2b laws, the per-fn generator in
+impc, with `int_nS` and the proof-local abbreviation question carried
+in. What the survey of the landed code fixes before any slice is cut:
+
+THE PRODUCT'S SHAPES (tools/impc, micro_ipc_out.shard). (i) MUL
+(`arith_mul`): `sra1` (shift-right-1 OR the sign bit: the immediate 2n+1
+back to n as a two's-complement word), the two sign words (shr 63), the
+two magnitudes (0 − x under the sign), q = ax·ay in the ring, the wrap
+test by DIVIDE-BACK (`q / ax = ay` when ax ≠ 0 — sound because ax < 2^63
+makes a wrapped quotient fall short of ay by at least 2), the band test
+`q < 2^62`, the sign fix, and t = 2r+1. FINDING (not a soundness issue —
+the except clause admits any failure — but an imprecision to rule on):
+the band test refuses q = 2^62 even under a negative sign, so a source
+product equal to −2^62 (in the i63 band) fails FOverflow at runtime.
+(ii) MATCH (`ic_pat`): per arm an ok flag, a nullary pattern by
+immediate compare, a compound one by `risref`, the header load, the
+tag from bits 32..47, then the slot loads into fresh locals under ok;
+no arm left → IpUnreach. (iii) CONSTRUCTOR (`ic_e`'s Ctor arm):
+arguments first, then `rt_alloc tag arity`, then per field an inc of a
+borrowed value, then the slot stores — so no CALL happens while the
+raw cell is open (the C2b laws' `graw_of g = None` premise is met at
+every call boundary) and only rt_inc runs between alloc and the
+stores (rth_inc_run has no raw premise). (iv) OWNERSHIP at the
+boundary: a borrowed parameter returned or stored is inc'd first
+(`id` = one rt_inc on an immediate: the identity leg; `app`'s Nil arm
+= rt_inc on the reference b), an owned temporary consumed in borrow
+position is dec'd after its consumer (the release theorem's instances
+are the callers `t_app`/`t_rev`, not the fns themselves).
+
+THE SLICES. **B-1a — the heap-free growth.** (1) tb_sumto's `hf5` cites
+rth_kit's `int_nS` (landed with C2b-5; tb_kit imports rth_kit) — the
+−40-line shrink B-0b named, the opener. (2) The mul kit in tb_kit:
+`sra1_imm` (sra1 (imm n) = n mod 2^64), the sign/magnitude laws over
+the two's-complement word, `mul_mag_nowrap` (|x|·|y| < 2^62 → the
+ring product is the integer product) and `mul_divback` (a wrapped
+product fails the divide-back), and the construct law `ov_mul_in`:
+`in63 x`, `in63 y` → the emitted statement list leaves imm (x·y) in t
+when |x·y| < 2^62 and fails FOverflow otherwise — bundled-premise form
+as ov_sub_in/ov_add_in. (3) Two instances in tb_micro: `tb_id` (the
+first fn whose body is a RUNTIME call: rth_inc_imm_run composed under
+tb_ok) and `tb_t_arith` (four calls to id, two muls, a sub, an add —
+the first CROSS-fn citation: the callee's theorem cited through the
+table premise `ipfn_at fs 4 = Some (id_ipfn)`, P5's composition beyond
+self-recursion). Acceptance: tb_micro 4 claims / 0 failed; lines per
+fn canonical and hand-spelled, check wall, engine reach on the new kit
+laws — the B-0 three numbers again.
+
+**B-1b — the heap statement (the ledger's P7 shape made precise).**
+The C2b laws are stated over a GHOST g with `heap_rep m rb g`; a per-fn
+theorem's conclusion must name the ghost AFTER the run, and shard has
+no existential. DECISION D1 (lean): a GHOST READBACK `gh_of m rb :
+GHeap` (the arena parsed from memory: the header words, the cells by
+walking headers from glo to top, the free classes by chasing the
+sixteen heads, raw None) and the once-proven INJECTIVITY law
+`gh_of_rep`: `heap_rep m rb g ∧ hinv rb g r → gh_of m rb = g` (its
+foundation is C2b-2's exact cover: the live cells and the free cells
+tile [glo, top)). The per-fn statement then mentions MEMORY only —
+`heap_rep m rb (gh_of m rb)`, `hinv rb (gh_of m rb) r`, readbacks at
+gh_of — and the PROOF carries the witness (gh_seal ∘ gh_fill ∘ gh_inc
+∘ gh_alloc ∘ … applied to gh_of m rb, exactly what the construct laws
+produce) and collapses it at the end by gh_of_rep. Rejected: (a) impc
+emits a ghost TWIN f_gh per fn (the C2b-5 mirror pattern generalized)
+— a second compiler to trust-check and two theorems per fn; (b) a
+Bool post-predicate over the run — cannot name the ghost. DECISION D2
+(lean): READBACKS ARE GHOST-LEVEL AND STRUCTURAL. `rb_T (cs : List
+HCell) (w : Int) : Option T` — an odd word decodes (Int by the
+immediate; a nullary constructor by 2·tag+1), an even word finds its
+cell in cs and recurses on the OLDER suffix (hinv's `slots_ok ws
+older`: every slot references a cell later in the list), so the
+recursion is on the suffix's length — no fuel, no acyclicity side
+condition. The memory side is C2b-3's read laws (hr_rd_hdr /
+hr_rd_slot bridge each emitted IpLoadW to hfget). For B-1b the
+readbacks of `(List Int)` and `Shape` are written by hand; the
+"derived from the TypeDef" generator is B-1c's. The post-predicate
+`tbh_ok r m rb v` mirrors tb_ok at the heap grain: IpRv w m' with
+`rb_T (gcells_of (gh_of m' rb)) w = Some v`, `hinv` at the new roots,
+and the borrowed arguments' readbacks unchanged (the survivor-framing
+laws: alloc extends the cells, inc/dec touch counts, dec frees only
+the unreachable — C2b-2's precision theorem). THE ONCE-PROVEN LAWS
+this slice adds: the MATCH law per type (the emitted ok-flag skeleton
+against `rb_T cs w = Some (Ctor …)`: the tag compare and the slot
+loads are the constructor case), the CONSTRUCTOR law (alloc + the
+field incs + the slot stores + gh_seal ⇒ `rb_T (gh_seal …) p = Some
+(Ctor (rb args))` and hinv at the roots plus p), and the readback
+framing laws. Instances, in order: `len` (match + recursion, loads
+only — the first heap theorem), `perim` (three arms, a nested pattern
+(Tri a b c), an inc-imm on the returned field), `app` (the whole
+story: match, the recursive owned result, alloc, inc on the borrowed
+head, two stores, and the Nil arm's inc on the borrowed reference b).
+Acceptance per instance: 0 failed, lines per fn, check wall.
+
+**B-1c — the generator.** DECISION D3 (lean): impc gains a second
+output — `SRC_cert.shard` beside `SRC_ipc_out.shard`, ONE claim per
+compiled fn, citing tb_kit/rth_kit — generated from the source
+FnDef and the product it just emitted (the same structural walk, the
+proof choreography per construct where ic_e emits the construct).
+Issue #18's ruling holds: in-tree generator for a theorem family, the
+first instances (tb_sumto, tb_id, tb_t_arith, len, perim, app) are the
+hand-written templates, and the acceptance is BYTE IDENTITY with them
+after shardfmt (the regen = canon contract of BUILD.md), then the whole
+micro fixture (21 fns) as the corpus row with its cost table. The four
+C2b-5 findings shape it: loop/induction hypotheses cited through a
+match binding every binder; statements spelled as compute leaves them
+(the generator prints the product's own IpStmt terms — it has them);
+record fields through `FIELD_of_with_` laws; pure facts carried in
+the engine conclusion. DECISION D4 (lean): the proof-local
+abbreviation `(name T)` is NOT built in B-1 — it is a checker feature,
+it changes canonical TEXT only (B-0b: the check is linear and cheap),
+and the generated file's volume is measured by C6's oracle, not by
+the ≈300 proxy the user already read as satisfied; revisit if the
+21-fn cert's size is the thing that blocks. DECISION D5 (lean): order
+a → b → c; rejected c-first on sumto alone — the generator copies the
+templates, and B-1b's statement spelling (D1/D2) is what it must
+print. Out of scope, named: the `t_*` callers' dec instances (the
+release theorem composed at a call site — the first of them lands
+when the generator runs over the whole fixture), division/bit ops
+(C3b growth), the −2^62 ruling (impc's one-line change if the user
+wants exactness; the theorem is stated against the product as it is).
