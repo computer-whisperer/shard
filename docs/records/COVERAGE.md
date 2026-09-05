@@ -1678,3 +1678,11 @@ one-argument-per-line rule applied to eight copies of two 60-token
 terms. Read against what the gate was a proxy for (linear check,
 generator-shaped text), B-0b confirms B-0's reading: SIZE is the only
 number that moved, and it moved by the amount predicted.
+
+**RULING (user, 2026-09-05), closing B-0/B-0b:** "C2b-5 can resume,
+agreed" — the reflected-interpreter door (§11) stays closed on the
+B-0b numbers; the ≈300 gate is read as a proxy that the linear check
+and the generator-shaped text satisfy. Order from here: C2b-5 (rt_dec's
+engine leg) → C2b-6 → B-1 (mul's law kit, constructors/match over the
+C2b laws, the per-fn generator in impc, with the `int_nS` law and the
+proof-local abbreviation question carried into it).
