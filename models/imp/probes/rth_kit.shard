@@ -16824,18 +16824,27 @@
        (hrem (gcells_of g) v)
        (Cons c Nil))))))))
 
-;; the worklist's representation: each dying cell's header carries the link
-;; in its count band, its slots stay intact (the cells are out of hcells_rep)
+;; the worklist's representation: each dying cell is REPRESENTED AS THE CELL
+;; WITH ITS COUNT REPLACED BY THE LINK (hword of that cell = hword − count +
+;; link, the code's stored word); its slots stay intact.  Spelled through
+;; hcell_rep so the frame toolkit applies verbatim.
+(fn wl_link ((c HCell) (rest (List HCell))) HCell (with_hcount (whead rest) c))
+
 (fn hwl_rep ((m Mem) (wl (List HCell))) Bool
+  (measure (struct wl))
+  (match wl
+    (Nil True)
+    ((Cons c rest) (andb (hcell_rep m (wl_link c rest)) (hwl_rep m rest)))))
+
+;; the worklist's cells keep their bands and slot length (they came from cells)
+(fn wl_ok ((wl (List HCell))) Bool
   (measure (struct wl))
   (match wl
     (Nil True)
     ((Cons c rest)
      (andb
-       (int_eq
-         (load_le (iw8) m (haddr_of c))
-         (+ (- (hword c) (hcount_of c)) (whead rest)))
-       (andb (hslots_rep m (+ (haddr_of c) 8) (hslots_of c)) (hwl_rep m rest))))))
+       (andb (int_eq (ilen (hslots_of c)) (harity_of c)) (cbands c))
+       (wl_ok rest)))))
 
 ;; --- the release toolkit: count algebra --------------------------------------------
 ;; C2b-2 part 2b.  Counts are the permutation-stable currency of the
@@ -46010,6 +46019,761 @@
                    (rewrite (premise hih) lr lhs true ())
                    (compute lhs))
                   refl))))))))))
+
+
+;; --- the worklist representation's laws (C2b-5 part ii-a) ----------------------------
+(claim hwr_hd
+  (goal ((m Mem) (c HCell) (rest (List HCell)))
+    ((= (hwl_rep m (Cons c rest)) True))
+    (= (hcell_rep m (wl_link c rest)) True))
+  (chain
+    (have h0 (= (andb (hcell_rep m (wl_link c rest)) (hwl_rep m rest)) True)
+      (steps
+        ((rewrite (premise 0) rl rhs true ()) (unfold hwl_rep rhs) (reduce rhs))
+        refl))
+    (have hx (= (hcell_rep m (wl_link c rest)) True)
+      (rewrite-with
+        (lemma andb_l)
+        lr
+        lhs
+        ((inst b (hwl_rep m rest)))
+        ((steps ((rewrite (premise h0) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hx) lr lhs true ())) refl)))
+
+(claim hwr_tl
+  (goal ((m Mem) (c HCell) (rest (List HCell)))
+    ((= (hwl_rep m (Cons c rest)) True))
+    (= (hwl_rep m rest) True))
+  (chain
+    (have h0 (= (andb (hcell_rep m (wl_link c rest)) (hwl_rep m rest)) True)
+      (steps
+        ((rewrite (premise 0) rl rhs true ()) (unfold hwl_rep rhs) (reduce rhs))
+        refl))
+    (have hx (= (hwl_rep m rest) True)
+      (rewrite-with
+        (lemma andb_r)
+        lr
+        lhs
+        ((inst a (hcell_rep m (wl_link c rest))))
+        ((steps ((rewrite (premise h0) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hx) lr lhs true ())) refl)))
+
+(claim wlo_hd
+  (goal ((c HCell) (rest (List HCell))) ((= (wl_ok (Cons c rest)) True))
+    (= (andb (int_eq (ilen (hslots_of c)) (harity_of c)) (cbands c)) True))
+  (chain
+    (have h0
+      (=
+        (andb
+          (andb (int_eq (ilen (hslots_of c)) (harity_of c)) (cbands c))
+          (wl_ok rest))
+        True)
+      (steps
+        ((rewrite (premise 0) rl rhs true ()) (unfold wl_ok rhs) (reduce rhs))
+        refl))
+    (have hx
+      (= (andb (int_eq (ilen (hslots_of c)) (harity_of c)) (cbands c)) True)
+      (rewrite-with
+        (lemma andb_l)
+        lr
+        lhs
+        ((inst b (wl_ok rest)))
+        ((steps ((rewrite (premise h0) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hx) lr lhs true ())) refl)))
+
+(claim wlo_tl
+  (goal ((c HCell) (rest (List HCell))) ((= (wl_ok (Cons c rest)) True))
+    (= (wl_ok rest) True))
+  (chain
+    (have h0
+      (=
+        (andb
+          (andb (int_eq (ilen (hslots_of c)) (harity_of c)) (cbands c))
+          (wl_ok rest))
+        True)
+      (steps
+        ((rewrite (premise 0) rl rhs true ()) (unfold wl_ok rhs) (reduce rhs))
+        refl))
+    (have hx (= (wl_ok rest) True)
+      (rewrite-with
+        (lemma andb_r)
+        lr
+        lhs
+        ((inst a (andb (int_eq (ilen (hslots_of c)) (harity_of c)) (cbands c))))
+        ((steps ((rewrite (premise h0) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hx) lr lhs true ())) refl)))
+
+(claim wlo_len
+  (goal ((c HCell) (rest (List HCell))) ((= (wl_ok (Cons c rest)) True))
+    (= (int_eq (ilen (hslots_of c)) (harity_of c)) True))
+  (chain
+    (have h0
+      (= (andb (int_eq (ilen (hslots_of c)) (harity_of c)) (cbands c)) True)
+      (rewrite-with
+        (lemma wlo_hd)
+        lr
+        lhs
+        ((inst rest rest))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hx (= (int_eq (ilen (hslots_of c)) (harity_of c)) True)
+      (rewrite-with
+        (lemma andb_l)
+        lr
+        lhs
+        ((inst b (cbands c)))
+        ((steps ((rewrite (premise h0) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hx) lr lhs true ())) refl)))
+
+(claim wlo_bands
+  (goal ((c HCell) (rest (List HCell))) ((= (wl_ok (Cons c rest)) True))
+    (= (cbands c) True))
+  (chain
+    (have h0
+      (= (andb (int_eq (ilen (hslots_of c)) (harity_of c)) (cbands c)) True)
+      (rewrite-with
+        (lemma wlo_hd)
+        lr
+        lhs
+        ((inst rest rest))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hx (= (cbands c) True)
+      (rewrite-with
+        (lemma andb_r)
+        lr
+        lhs
+        ((inst a (int_eq (ilen (hslots_of c)) (harity_of c))))
+        ((steps ((rewrite (premise h0) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hx) lr lhs true ())) refl)))
+
+
+(claim wl_link_addr
+  (goal ((c HCell) (rest (List HCell))) ()
+    (= (haddr_of (wl_link c rest)) (haddr_of c)))
+  (case-on c HCell
+    ((case MkHCell
+       (ax cx tx rx sx)
+       (steps
+         ((rewrite (hyp 0) lr both true ())
+          (unfold wl_link lhs)
+          (compute lhs (stop whead))
+          (compute rhs))
+         refl)))))
+
+(claim wl_link_arity
+  (goal ((c HCell) (rest (List HCell))) ()
+    (= (harity_of (wl_link c rest)) (harity_of c)))
+  (case-on c HCell
+    ((case MkHCell
+       (ax cx tx rx sx)
+       (steps
+         ((rewrite (hyp 0) lr both true ())
+          (unfold wl_link lhs)
+          (compute lhs (stop whead))
+          (compute rhs))
+         refl)))))
+
+(claim wl_link_slots
+  (goal ((c HCell) (rest (List HCell))) ()
+    (= (hslots_of (wl_link c rest)) (hslots_of c)))
+  (case-on c HCell
+    ((case MkHCell
+       (ax cx tx rx sx)
+       (steps
+         ((rewrite (hyp 0) lr both true ())
+          (unfold wl_link lhs)
+          (compute lhs (stop whead))
+          (compute rhs))
+         refl)))))
+
+;; THE WORKLIST FRAME: a store disjoint from every worklist extent keeps hwl_rep
+(claim hwl_rep_fr
+  (goal ((m Mem) (wl (List HCell)) (b Int) (nb Int) (v Int))
+    ((= (hwl_rep m wl) True)
+     (= (e_disj1 b nb (hexts wl)) True)
+     (= (wl_ok wl) True)
+     (= (le 0 nb) True))
+    (= (hwl_rep (store_le (iw8) m b v) wl) True))
+  (induct wl
+    ((case Nil (steps ((unfold hwl_rep lhs) (reduce lhs)) refl))
+     (case Cons
+       (c rest)
+       (chain
+         (have hhd (= (hcell_rep m (wl_link c rest)) True)
+           (rewrite-with
+             (lemma hwr_hd)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have htl (= (hwl_rep m rest) True)
+           (rewrite-with
+             (lemma hwr_tl)
+             lr
+             lhs
+             ((inst c c))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have hlen (= (int_eq (ilen (hslots_of c)) (harity_of c)) True)
+           (rewrite-with
+             (lemma wlo_len)
+             lr
+             lhs
+             ((inst rest rest))
+             ((steps ((rewrite (premise 2) lr lhs true ())) refl))
+             refl))
+         (have hok (= (wl_ok rest) True)
+           (rewrite-with
+             (lemma wlo_tl)
+             lr
+             lhs
+             ((inst c c))
+             ((steps ((rewrite (premise 2) lr lhs true ())) refl))
+             refl))
+         (have hex
+           (=
+             (hexts (Cons c rest))
+             (Cons (Pair (haddr_of c) (harity_of c)) (hexts rest)))
+           (steps ((unfold hexts lhs) (reduce lhs)) refl))
+         (have hdx
+           (=
+             (e_disj1
+               b
+               nb
+               (Cons (Pair (haddr_of c) (harity_of c)) (hexts rest)))
+             True)
+           (steps
+             ((rewrite (premise hex) rl lhs true ())
+              (rewrite (premise 1) lr lhs true ()))
+             refl))
+         (have hd2 (= (e_disj2 b nb (haddr_of c) (harity_of c)) True)
+           (rewrite-with
+             (lemma ed1_hd)
+             lr
+             lhs
+             ((inst rest (hexts rest)))
+             ((steps ((rewrite (premise hdx) lr lhs true ())) refl))
+             refl))
+         (have hd1 (= (e_disj1 b nb (hexts rest)) True)
+           (rewrite-with
+             (lemma ed1_tl)
+             lr
+             lhs
+             ((inst b (haddr_of c)) (inst k (harity_of c)))
+             ((steps ((rewrite (premise hdx) lr lhs true ())) refl))
+             refl))
+         (have hla (= (haddr_of (wl_link c rest)) (haddr_of c))
+           (steps ((rewrite (lemma wl_link_addr) lr lhs true ())) refl))
+         (have hlr (= (harity_of (wl_link c rest)) (harity_of c))
+           (steps ((rewrite (lemma wl_link_arity) lr lhs true ())) refl))
+         (have hls (= (hslots_of (wl_link c rest)) (hslots_of c))
+           (steps ((rewrite (lemma wl_link_slots) lr lhs true ())) refl))
+         (have hd2l
+           (=
+             (e_disj2
+               b
+               nb
+               (haddr_of (wl_link c rest))
+               (harity_of (wl_link c rest)))
+             True)
+           (steps
+             ((rewrite (premise hla) lr lhs true ())
+              (rewrite (premise hlr) lr lhs true ())
+              (rewrite (premise hd2) lr lhs true ()))
+             refl))
+         (have hlenl
+           (=
+             (int_eq
+               (ilen (hslots_of (wl_link c rest)))
+               (harity_of (wl_link c rest)))
+             True)
+           (steps
+             ((rewrite (premise hls) lr lhs true ())
+              (rewrite (premise hlr) lr lhs true ())
+              (rewrite (premise hlen) lr lhs true ()))
+             refl))
+         (have hnew (= (hcell_rep (store_le (iw8) m b v) (wl_link c rest)) True)
+           (rewrite-with
+             (lemma hcell_rep_fr)
+             lr
+             lhs
+             ((inst nb nb))
+             ((steps ((rewrite (premise hhd) lr lhs true ())) refl)
+              (steps ((rewrite (premise hd2l) lr lhs true ())) refl)
+              (steps ((rewrite (premise hlenl) lr lhs true ())) refl)
+              (steps ((rewrite (premise 3) lr lhs true ())) refl))
+             refl))
+         (have hih (= (hwl_rep (store_le (iw8) m b v) rest) True)
+           (rewrite-with
+             (hyp 0)
+             lr
+             lhs
+             ((inst nb nb))
+             ((steps ((rewrite (premise htl) lr lhs true ())) refl)
+              (steps ((rewrite (premise hd1) lr lhs true ())) refl)
+              (steps ((rewrite (premise hok) lr lhs true ())) refl)
+              (steps ((rewrite (premise 3) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((unfold hwl_rep lhs)
+            (reduce lhs)
+            (rewrite (premise hnew) lr lhs true ())
+            (rewrite (premise hih) lr lhs true ())
+            (compute lhs))
+           refl))))))
+
+
+;; THE REMOVAL: a store at a live address (any word) keeps hcells_rep for the
+;; cells without it — hcells_rep_decc's walk with the found cell dropped
+(claim hcells_rep_hrem
+  (goal ((m Mem) (cs (List HCell)) (v Int) (w Int))
+    ((= (hcells_rep m cs) True)
+     (= (cells_ok cs) True)
+     (= (e_disj (hexts cs)) True)
+     (= (memb (haddrs cs) v) True))
+    (= (hcells_rep (store_le (iw8) m v w) (hrem cs v)) True))
+  (induct cs
+    ((case Nil
+       (chain
+         (have hf (= False True)
+           (steps
+             ((rewrite (premise 3) rl rhs true ())
+              (unfold haddrs rhs)
+              (reduce rhs)
+              (unfold memb rhs)
+              (reduce rhs))
+             refl))
+         (absurd (premise hf))))
+     (case Cons
+       (c rest)
+       (chain
+         (have hm (= (memb (Cons (haddr_of c) (haddrs rest)) v) True)
+           (steps
+             ((rewrite (premise 3) rl rhs true ())
+              (unfold haddrs rhs)
+              (reduce rhs))
+             refl))
+         (have hhd (= (hcell_rep m c) True)
+           (rewrite-with
+             (lemma hcs_hd)
+             lr
+             lhs
+             ((inst rest rest))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have htl (= (hcells_rep m rest) True)
+           (rewrite-with
+             (lemma hcs_tl)
+             lr
+             lhs
+             ((inst c c))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have hcot (= (cells_ok rest) True)
+           (rewrite-with
+             (lemma co_tl)
+             lr
+             lhs
+             ((inst c c))
+             ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+             refl))
+         (have hlen (= (int_eq (ilen (hslots_of c)) (harity_of c)) True)
+           (rewrite-with
+             (lemma co_len)
+             lr
+             lhs
+             ((inst rest rest))
+             ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+             refl))
+         (have ha0 (= (le 0 (harity_of c)) True)
+           (rewrite-with
+             (lemma co_ar0)
+             lr
+             lhs
+             ((inst rest rest))
+             ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+             refl))
+         (have hex
+           (=
+             (hexts (Cons c rest))
+             (Cons (Pair (haddr_of c) (harity_of c)) (hexts rest)))
+           (steps ((unfold hexts lhs) (reduce lhs)) refl))
+         (have hdx
+           (=
+             (e_disj (Cons (Pair (haddr_of c) (harity_of c)) (hexts rest)))
+             True)
+           (steps
+             ((rewrite (premise hex) rl lhs true ())
+              (rewrite (premise 2) lr lhs true ()))
+             refl))
+         (have hd1 (= (e_disj1 (haddr_of c) (harity_of c) (hexts rest)) True)
+           (rewrite-with
+             (lemma ed_hd)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise hdx) lr lhs true ())) refl))
+             refl))
+         (have hdt (= (e_disj (hexts rest)) True)
+           (rewrite-with
+             (lemma ed_tl)
+             lr
+             lhs
+             ((inst a (haddr_of c)) (inst n (harity_of c)))
+             ((steps ((rewrite (premise hdx) lr lhs true ())) refl))
+             refl))
+         (case-on (int_eq (haddr_of c) v) Bool
+           ((case True
+              (chain
+                (have hT (= (int_eq (haddr_of c) v) True)
+                  (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                (have hca (= (haddr_of c) v)
+                  (rewrite-with
+                    (lemma int_eq_eq)
+                    lr
+                    lhs
+                    ((inst b v))
+                    ((steps ((rewrite (premise hT) lr lhs true ())) refl))
+                    refl))
+                (have hd1v (= (e_disj1 v (harity_of c) (hexts rest)) True)
+                  (steps
+                    ((rewrite (premise hca) rl lhs true ())
+                     (rewrite (premise hd1) lr lhs true ()))
+                    refl))
+                (have hrest (= (hcells_rep (store_le (iw8) m v w) rest) True)
+                  (rewrite-with
+                    (lemma hcells_rep_fr)
+                    lr
+                    lhs
+                    ((inst nb (harity_of c)))
+                    ((steps ((rewrite (premise htl) lr lhs true ())) refl)
+                     (steps ((rewrite (premise hd1v) lr lhs true ())) refl)
+                     (steps ((rewrite (premise hcot) lr lhs true ())) refl)
+                     (steps ((rewrite (premise ha0) lr lhs true ())) refl))
+                    refl))
+                (steps
+                  ((unfold hrem lhs)
+                   (reduce lhs)
+                   (rewrite (premise hT) lr lhs true ())
+                   (reduce lhs)
+                   (rewrite (premise hrest) lr lhs true ()))
+                  refl)))
+            (case False
+              (chain
+                (have hF (= (int_eq (haddr_of c) v) False)
+                  (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                (have hmt (= (memb (haddrs rest) v) True)
+                  (steps
+                    ((rewrite (premise hm) rl rhs true ())
+                     (unfold memb rhs)
+                     (reduce rhs)
+                     (rewrite (premise hF) lr rhs true ())
+                     (reduce rhs))
+                    refl))
+                (have hih
+                  (= (hcells_rep (store_le (iw8) m v w) (hrem rest v)) True)
+                  (rewrite-with
+                    (hyp 1)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise htl) lr lhs true ())) refl)
+                     (steps ((rewrite (premise hcot) lr lhs true ())) refl)
+                     (steps ((rewrite (premise hdt) lr lhs true ())) refl)
+                     (steps ((rewrite (premise hmt) lr lhs true ())) refl))
+                    refl))
+                (have hcbr (= (cbands (hfget rest v)) True)
+                  (rewrite-with
+                    (lemma hfget_bands)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise hcot) lr lhs true ())) refl)
+                     (steps ((rewrite (premise hmt) lr lhs true ())) refl))
+                    refl))
+                (have hn0 (= (le 0 (harity_of (hfget rest v))) True)
+                  (rewrite-with
+                    (lemma cb_ar0)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise hcbr) lr lhs true ())) refl))
+                    refl))
+                (have hmx
+                  (= (emem (hexts rest) v (harity_of (hfget rest v))) True)
+                  (rewrite-with
+                    (lemma hfget_hexts)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise hmt) lr lhs true ())) refl))
+                    refl))
+                (have hd2
+                  (=
+                    (e_disj2
+                      (haddr_of c)
+                      (harity_of c)
+                      v
+                      (harity_of (hfget rest v)))
+                    True)
+                  (rewrite-with
+                    (lemma ed1_memb)
+                    lr
+                    lhs
+                    ((inst es (hexts rest)))
+                    ((steps ((rewrite (premise hd1) lr lhs true ())) refl)
+                     (steps ((rewrite (premise hmx) lr lhs true ())) refl))
+                    refl))
+                (have hd2s
+                  (=
+                    (e_disj2
+                      v
+                      (harity_of (hfget rest v))
+                      (haddr_of c)
+                      (harity_of c))
+                    True)
+                  (rewrite-with
+                    (lemma ed2_sym)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise hd2) lr lhs true ())) refl))
+                    refl))
+                (have hhd2 (= (hcell_rep (store_le (iw8) m v w) c) True)
+                  (rewrite-with
+                    (lemma hcell_rep_fr)
+                    lr
+                    lhs
+                    ((inst nb (harity_of (hfget rest v))))
+                    ((steps ((rewrite (premise hhd) lr lhs true ())) refl)
+                     (steps ((rewrite (premise hd2s) lr lhs true ())) refl)
+                     (steps ((rewrite (premise hlen) lr lhs true ())) refl)
+                     (steps ((rewrite (premise hn0) lr lhs true ())) refl))
+                    refl))
+                (steps
+                  ((unfold hrem lhs)
+                   (reduce lhs)
+                   (rewrite (premise hF) lr lhs true ())
+                   (reduce lhs)
+                   (unfold hcells_rep lhs)
+                   (reduce lhs)
+                   (rewrite (premise hhd2) lr lhs true ())
+                   (rewrite (premise hih) lr lhs true ())
+                   (compute lhs))
+                  refl))))))))))
+
+
+;; THE PUSH: storing hword d − count d + head at a live cell's header makes the
+;; cell the worklist's new head (its slots stay; the old chain is framed)
+(claim hwl_rep_push
+  (goal ((m Mem) (wl (List HCell)) (d HCell) (w Int))
+    ((= (hwl_rep m wl) True)
+     (= (hcell_rep m d) True)
+     (= (e_disj1 (haddr_of d) (harity_of d) (hexts wl)) True)
+     (= (wl_ok wl) True)
+     (= (int_eq (ilen (hslots_of d)) (harity_of d)) True)
+     (= (cbands d) True)
+     (= (le 0 (whead wl)) True)
+     (= (lt (whead wl) 4294967296) True)
+     (= w (+ (- (hword d) (hcount_of d)) (whead wl))))
+    (= (hwl_rep (store_le (iw8) m (haddr_of d) w) (Cons d wl)) True))
+  (chain
+    (have ha0 (= (le 0 (harity_of d)) True)
+      (rewrite-with
+        (lemma cb_ar0)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 5) lr lhs true ())) refl))
+        refl))
+    (have ht0 (= (le 0 (htag_of d)) True)
+      (rewrite-with
+        (lemma cb_tag0)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 5) lr lhs true ())) refl))
+        refl))
+    (have hthi (= (lt (htag_of d) 65536) True)
+      (rewrite-with
+        (lemma cb_taghi)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 5) lr lhs true ())) refl))
+        refl))
+    (have hahi (= (lt (harity_of d) 65536) True)
+      (rewrite-with
+        (lemma cb_arhi)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 5) lr lhs true ())) refl))
+        refl))
+    (have htail (= (hwl_rep (store_le (iw8) m (haddr_of d) w) wl) True)
+      (rewrite-with
+        (lemma hwl_rep_fr)
+        lr
+        lhs
+        ((inst nb (harity_of d)))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 3) lr lhs true ())) refl)
+         (steps ((rewrite (premise ha0) lr lhs true ())) refl))
+        refl))
+    (have hsl (= (hslots_rep m (+ (haddr_of d) 8) (hslots_of d)) True)
+      (rewrite-with
+        (lemma hc_slots)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (case-on d HCell
+      ((case MkHCell
+         (ax cx tx rx sx)
+         (chain
+           (have hwe
+             (= (hword d) (+ cx (+ (* tx 4294967296) (* rx 281474976710656))))
+             (steps
+               ((rewrite (hyp 0) lr lhs true ())
+                (unfold hword lhs)
+                (compute lhs))
+               refl))
+           (have hcx (= (hcount_of d) cx)
+             (steps ((rewrite (hyp 0) lr lhs true ()) (compute lhs)) refl))
+           (have hax (= (haddr_of d) ax)
+             (steps ((rewrite (hyp 0) lr lhs true ()) (compute lhs)) refl))
+           (have htx (= (htag_of d) tx)
+             (steps ((rewrite (hyp 0) lr lhs true ()) (compute lhs)) refl))
+           (have hrx (= (harity_of d) rx)
+             (steps ((rewrite (hyp 0) lr lhs true ()) (compute lhs)) refl))
+           (have hsx (= (hslots_of d) sx)
+             (steps ((rewrite (hyp 0) lr lhs true ()) (compute lhs)) refl))
+           (have hw2
+             (= w (+ (whead wl) (+ (* tx 4294967296) (* rx 281474976710656))))
+             (steps
+               ((rewrite (premise 8) lr lhs true ())
+                (rewrite (premise hwe) lr lhs true ())
+                (rewrite (premise hcx) lr lhs true ()))
+               (by arith (list (list 1) (list 1)))))
+           (have ht0x (= (le 0 tx) True)
+             (steps
+               ((rewrite (premise htx) rl lhs true ())
+                (rewrite (premise ht0) lr lhs true ()))
+               refl))
+           (have ha0x (= (le 0 rx) True)
+             (steps
+               ((rewrite (premise hrx) rl lhs true ())
+                (rewrite (premise ha0) lr lhs true ()))
+               refl))
+           (have hthix (= (lt tx 65536) True)
+             (steps
+               ((rewrite (premise htx) rl lhs true ())
+                (rewrite (premise hthi) lr lhs true ()))
+               refl))
+           (have hahix (= (lt rx 65536) True)
+             (steps
+               ((rewrite (premise hrx) rl lhs true ())
+                (rewrite (premise hahi) lr lhs true ()))
+               refl))
+           (have hwlo (= (le 0 w) True)
+             (by
+               arith
+               (rows
+                 (goal 1)
+                 (hw2 1)
+                 (6 1)
+                 (ht0x 4294967296)
+                 (ha0x 281474976710656))))
+           (have hwhi (= (lt w 18446744073709551616) True)
+             (by
+               arith
+               (rows
+                 (goal 1)
+                 (hw2 -1)
+                 (7 1)
+                 (hthix 4294967296)
+                 (hahix 281474976710656))))
+           (have hld (= (load_le (iw8) (store_le (iw8) m ax w) ax) w)
+             (rewrite-with
+               (lemma ls8w)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise hwlo) lr lhs true ())) refl)
+                (steps ((rewrite (premise hwhi) lr lhs true ())) refl))
+               refl))
+           (have hwL (= w (hword (MkHCell ax (whead wl) tx rx sx)))
+             (steps
+               ((rewrite (premise hw2) lr lhs true ())
+                (unfold hword rhs)
+                (compute rhs (stop whead)))
+               refl))
+           (have hslx (= (hslots_rep m (+ ax 8) sx) True)
+             (steps
+               ((rewrite (premise hax) rl lhs true ())
+                (rewrite (premise hsx) rl lhs true ())
+                (rewrite (premise hsl) lr lhs true ()))
+               refl))
+           (have hor
+             (=
+               (orb (le (+ ax 8) (+ ax 8)) (le (+ (+ ax 8) (* 8 (ilen sx))) ax))
+               True)
+             (rewrite-with
+               (lemma orb_intro_l)
+               lr
+               lhs
+               ()
+               ((by arith (rows (goal 1))))
+               refl))
+           (have hsl2 (= (hslots_rep (store_le (iw8) m ax w) (+ ax 8) sx) True)
+             (rewrite-with
+               (lemma hslots_rep_fr)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise hslx) lr lhs true ())) refl)
+                (steps ((rewrite (premise hor) lr lhs true ())) refl))
+               refl))
+           (have hlink (= (wl_link d wl) (MkHCell ax (whead wl) tx rx sx))
+             (steps
+               ((unfold wl_link lhs)
+                (rewrite (hyp 0) lr lhs true ())
+                (compute lhs (stop whead)))
+               refl))
+           (have hnew
+             (=
+               (hcell_rep
+                 (store_le (iw8) m ax w)
+                 (MkHCell ax (whead wl) tx rx sx))
+               True)
+             (steps
+               ((unfold hcell_rep lhs)
+                (compute lhs (stop iw8 load_le store_le hslots_rep hword whead))
+                (rewrite (premise hld) lr lhs true ())
+                (rewrite (premise hwL) rl lhs true ())
+                (rewrite (lemma int_eq_refl) lr lhs true ())
+                (rewrite (premise hsl2) lr lhs true ())
+                (compute lhs))
+               refl))
+           (steps
+             ((unfold hwl_rep lhs)
+              (reduce lhs)
+              (rewrite (premise hlink) lr lhs true ())
+              (rewrite (premise htail) lr lhs true ())
+              (rewrite (premise hax) lr lhs true ())
+              (rewrite (premise hnew) lr lhs true ())
+              (compute lhs))
+             refl)))))))
 
 ;; --- the counts: the roots gain v -------------------------------------------------
 
