@@ -1818,7 +1818,8 @@ removal, by wex_dy_rest — a dying child appears once in the suffix by
 exactness); wl_ok; cur's entry extent (emem es0 a ar) and its absence
 from cells; ar = i + ilen ws; the bounds; the budget 13 + ilen ws ≤
 fuel (one level per iteration + the body's tower). 1654 canonical
-lines; rth_kit 838/0.
+lines; rth_kit 839/0 (the lemma sits AFTER the generated slot legs it
+cites — the splice appends generated blocks at the end).
 FINDINGS: (a) a CITATION MATCHES SYNTACTICALLY — a leg stated through
 rt.shard's helper spelling (rldw …) never matches the computed goal;
 the legs and the loop lemma spell the body raw (IpLoadW/IBin …), taken
