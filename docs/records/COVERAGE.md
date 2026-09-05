@@ -1769,3 +1769,31 @@ store away from cur's own slots (a child is never cur: cur is out of
 cells — wexact's exactness gives it); arity ≥ 16 cells (abandoned)
 must be shown out of every extent forever — the ghost already drops
 them, so hexts/fexts shrink and e_disj is monotone (msub laws).
+
+**C2b-5 part i — LANDS (2026-09-05).** (a) THE MEMORY MIRROR:
+`whead` / `m_slots` / `m_free` / `m_wl` / `m_dec` and `hwl_rep` in
+rth_kit (the release's memory effect in the ghost's own recursion; the
+free-class head is the code's own load), and rth_run's five new rows
+(`tmir`: rt_dec's final bytes against m_dec's, word by word over the
+arena — chain cascade, shared parent, shared child, single free push,
+immediate) — BYTE-EQUAL ON THE FIRST RUN, before any lemma was stated.
+(b) THE SIMPLE LEGS: `hcells_rep_decc` (hcells_rep_incc's text with
+the sign flipped — 0 ≤ w now rests on cells_ok's own count ≥ 1; the
+2^31 premise is kept as the leg's own band), `hr_dec_shared` (hr_inc's
+reference case over the found cell: heap_rep ∧ hinv ∧ hfind = Some c
+∧ 1 < count < 2^31 ⟹ heap_rep (store [v] := hword c − 1) rb
+(with_gcells (hdecc cells v) g)), and the three engine legs generated
+by gen_rth.py's new `dec` block — `rth_dec_imm_run` /
+`rth_dec_shared_run` / `rth_dec_sat_run` at fuel tower 13 (rt_inc's 12
+plus the extra `1 < count` IpIf; the guess held on the first check
+for imm/sat, the shared leg needed one cert fix: the tag/arity LOWER
+bounds carry 0 ≤ hword − 1). rth_kit 740/0, rth_run 13/13, both
+shardfmt fixpoints. The generator's inc/dec twins differ in the fn
+index, the tower, one extra test step, and the store's sign — the
+generator form (#18) is confirmed for the per-leg engine proofs.
+NEXT = part ii, the inner loop: `rth_slots_run` over one dying cell's
+slot list (the per-child cases: odd / not-a-cell-is-excluded /
+immortal / shared (hcells_rep_decc) / dying (a new `hwl_rep_push`)),
+by wf-induct on the remaining slots with the state (cells, wl, lc[6])
+threaded — the fuel per inner iteration and the entry nesting found
+empirically as before.
