@@ -16918,6 +16918,14 @@
                  (hword d)
                  (hcount_of d)))))))))))))
 
+;; every worklist cell's slots are live (the outer loop's liveness clause: the popped
+;; cell's slots are the pending suffix the inner loop reads)
+(fn wsl_ok ((wl (List HCell)) (older (List Int))) Bool
+  (measure (struct wl))
+  (match wl
+    (Nil True)
+    ((Cons c rest) (andb (slots_ok (hslots_of c) older) (wsl_ok rest older)))))
+
 ;; the worklist's representation: each dying cell is REPRESENTED AS THE CELL
 ;; WITH ITS COUNT REPLACED BY THE LINK (hword of that cell = hword − count +
 ;; link, the code's stored word); its slots stay intact.  Spelled through
@@ -49148,6 +49156,297 @@
                    (rewrite (premise hih2) lr lhs true ())
                    (compute lhs))
                   refl))))))))))
+
+
+;; --- the outer loop's liveness clause and walk consequences (C2b-5 part iii-b) ------
+(claim wsl_hd
+  (goal ((c HCell) (rest (List HCell)) (older (List Int)))
+    ((= (wsl_ok (Cons c rest) older) True))
+    (= (slots_ok (hslots_of c) older) True))
+  (chain
+    (have h0 (= (andb (slots_ok (hslots_of c) older) (wsl_ok rest older)) True)
+      (steps
+        ((rewrite (premise 0) rl rhs true ()) (unfold wsl_ok rhs) (reduce rhs))
+        refl))
+    (have hx (= (slots_ok (hslots_of c) older) True)
+      (rewrite-with
+        (lemma andb_l)
+        lr
+        lhs
+        ((inst b (wsl_ok rest older)))
+        ((steps ((rewrite (premise h0) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hx) lr lhs true ())) refl)))
+
+(claim wsl_tl
+  (goal ((c HCell) (rest (List HCell)) (older (List Int)))
+    ((= (wsl_ok (Cons c rest) older) True))
+    (= (wsl_ok rest older) True))
+  (chain
+    (have h0 (= (andb (slots_ok (hslots_of c) older) (wsl_ok rest older)) True)
+      (steps
+        ((rewrite (premise 0) rl rhs true ()) (unfold wsl_ok rhs) (reduce rhs))
+        refl))
+    (have hx (= (wsl_ok rest older) True)
+      (rewrite-with
+        (lemma andb_r)
+        lr
+        lhs
+        ((inst a (slots_ok (hslots_of c) older)))
+        ((steps ((rewrite (premise h0) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hx) lr lhs true ())) refl)))
+
+(claim wsl_cons
+  (goal ((c HCell) (rest (List HCell)) (older (List Int)))
+    ((= (wsl_ok rest older) True) (= (slots_ok (hslots_of c) older) True))
+    (= (wsl_ok (Cons c rest) older) True))
+  (steps
+    ((unfold wsl_ok lhs)
+     (reduce lhs)
+     (rewrite (premise 1) lr lhs true ())
+     (rewrite (premise 0) lr lhs true ())
+     (compute lhs))
+    refl))
+
+(claim inb_cons
+  (goal ((c HCell) (rest (List HCell)) (w Int)) ()
+    (=
+      (inbound_cells (Cons c rest) w)
+      (+ (count_in (hslots_of c) w) (inbound_cells rest w))))
+  (steps ((unfold inbound_cells lhs) (reduce lhs)) refl))
+
+(claim wsl_ok_irem
+  (goal ((wl (List HCell)) (older (List Int)) (w Int))
+    ((= (wsl_ok wl older) True) (= (inbound_cells wl w) 0))
+    (= (wsl_ok wl (irem older w)) True))
+  (induct wl
+    ((case Nil (steps ((compute lhs)) refl))
+     (case Cons
+       (c rest)
+       (chain
+         (have hhd (= (slots_ok (hslots_of c) older) True)
+           (rewrite-with
+             (lemma wsl_hd)
+             lr
+             lhs
+             ((inst rest rest))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have htl (= (wsl_ok rest older) True)
+           (rewrite-with
+             (lemma wsl_tl)
+             lr
+             lhs
+             ((inst c c))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have hsp
+           (=
+             (inbound_cells (Cons c rest) w)
+             (+ (count_in (hslots_of c) w) (inbound_cells rest w)))
+           (steps ((rewrite (lemma inb_cons) lr lhs true ())) refl))
+         (have hn1 (= (le 0 (count_in (hslots_of c) w)) True)
+           (steps ((rewrite (lemma cin_nonneg) lr lhs true ())) refl))
+         (have hn2 (= (le 0 (inbound_cells rest w)) True)
+           (steps ((rewrite (lemma inb_nonneg) lr lhs true ())) refl))
+         (have hc0 (= (count_in (hslots_of c) w) 0)
+           (by arith (list (list 1 0 -1 0 0 1 0 1) (list 1 0 0 0 0 0 1 0))))
+         (have hr0 (= (inbound_cells rest w) 0)
+           (by arith (list (list 1 0 -1 0 0 1 1 0 0) (list 1 0 0 0 0 0 0 1 0))))
+         (have hhd2 (= (slots_ok (hslots_of c) (irem older w)) True)
+           (rewrite-with
+             (lemma slots_ok_irem)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise hhd) lr lhs true ())) refl)
+              (steps ((rewrite (premise hc0) lr lhs true ())) refl))
+             refl))
+         (have hih (= (wsl_ok rest (irem older w)) True)
+           (rewrite-with
+             (hyp 0)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise htl) lr lhs true ())) refl)
+              (steps ((rewrite (premise hr0) lr lhs true ())) refl))
+             refl))
+         (rewrite-with
+           (lemma wsl_cons)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise hih) lr lhs true ())) refl)
+            (steps ((rewrite (premise hhd2) lr lhs true ())) refl))
+           refl))))))
+
+(claim wsl_ok_hdecc
+  (goal ((wl (List HCell)) (cells (List HCell)) (w Int))
+    ((= (wsl_ok wl (haddrs cells)) True))
+    (= (wsl_ok wl (haddrs (hdecc cells w))) True))
+  (steps
+    ((rewrite (lemma haddrs_hdecc) lr lhs true ())
+     (rewrite (premise 0) lr lhs true ()))
+    refl))
+
+(claim wi_efls
+  (goal
+    ((cs0 (List HCell))
+     (es0 (List (Pair Int Int)))
+     (r (List Int))
+     (cells (List HCell))
+     (fls (List (List Int)))
+     (wl (List HCell))
+     (ws (List Int)))
+    ((= (winv cs0 es0 r cells fls wl ws) True))
+    (= (eall (fexts fls 0) es0) True))
+  (chain
+    (have hea (= (eall (wext cells fls wl) es0) True)
+      (rewrite-with
+        (lemma wi_ea)
+        lr
+        lhs
+        ((inst cs0 cs0) (inst r r) (inst ws ws))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hea2
+      (=
+        (eall
+          (fexts_app (hexts cells) (fexts_app (fexts fls 0) (hexts wl)))
+          es0)
+        True)
+      (steps ((rewrite (premise hea) rl rhs true ()) (unfold wext rhs)) refl))
+    (have hea3 (= (eall (fexts_app (fexts fls 0) (hexts wl)) es0) True)
+      (rewrite-with
+        (lemma eall_app_r)
+        lr
+        lhs
+        ((inst a (hexts cells)))
+        ((steps ((rewrite (premise hea2) lr lhs true ())) refl))
+        refl))
+    (rewrite-with
+      (lemma eall_app_l)
+      lr
+      lhs
+      ((inst b (hexts wl)))
+      ((steps ((rewrite (premise hea3) lr lhs true ())) refl))
+      refl)))
+
+(claim wi_cinfl
+  (goal
+    ((cs0 (List HCell))
+     (es0 (List (Pair Int Int)))
+     (r (List Int))
+     (cells (List HCell))
+     (fls (List (List Int)))
+     (wl (List HCell))
+     (ws (List Int))
+     (w Int))
+    ((= (winv cs0 es0 r cells fls wl ws) True)
+     (= (anodup (e_addrs es0)) True)
+     (= (memb (haddrs cells) w) True))
+    (= (count_in (faddrs fls) w) 0))
+  (chain
+    (have hms (= (msub (wa cells fls wl) (e_addrs es0)) True)
+      (rewrite-with
+        (lemma wi_ms)
+        lr
+        lhs
+        ((inst cs0 cs0) (inst r r) (inst ws ws))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hnd (= (anodup (wa cells fls wl)) True)
+      (rewrite-with
+        (lemma msub_anodup)
+        lr
+        lhs
+        ((inst ys (e_addrs es0)))
+        ((steps ((rewrite (premise hms) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hle (= (le (count_in (wa cells fls wl) w) 1) True)
+      (rewrite-with
+        (lemma anodup_cin_le1)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hnd) lr lhs true ())) refl))
+        refl))
+    (have hsp
+      (=
+        (count_in (wa cells fls wl) w)
+        (+
+          (count_in (haddrs cells) w)
+          (count_in (iapp (faddrs fls) (haddrs wl)) w)))
+      (steps ((unfold wa lhs) (rewrite (lemma cin_iapp) lr lhs true ())) refl))
+    (have hsp2
+      (=
+        (count_in (iapp (faddrs fls) (haddrs wl)) w)
+        (+ (count_in (faddrs fls) w) (count_in (haddrs wl) w)))
+      (steps ((rewrite (lemma cin_iapp) lr lhs true ())) refl))
+    (have hpos (= (le 1 (count_in (haddrs cells) w)) True)
+      (rewrite-with
+        (lemma memb_cin_pos)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (have hn1 (= (le 0 (count_in (faddrs fls) w)) True)
+      (steps ((rewrite (lemma cin_nonneg) lr lhs true ())) refl))
+    (have hn2 (= (le 0 (count_in (haddrs wl) w)) True)
+      (steps ((rewrite (lemma cin_nonneg) lr lhs true ())) refl))
+    (by
+      arith
+      (list (list 1 0 0 0 0 0 1 1 1 1 0 1) (list 1 0 0 0 0 0 0 0 0 0 1 0)))))
+
+(claim wi_wl_ncells
+  (goal
+    ((cs0 (List HCell))
+     (es0 (List (Pair Int Int)))
+     (r (List Int))
+     (cells (List HCell))
+     (fls (List (List Int)))
+     (wl (List HCell))
+     (ws (List Int))
+     (a Int))
+    ((= (winv cs0 es0 r cells fls wl ws) True)
+     (= (anodup (e_addrs es0)) True)
+     (= (memb (haddrs wl) a) True))
+    (= (memb (haddrs cells) a) False))
+  (case-on (memb (haddrs cells) a) Bool
+    ((case True
+       (chain
+         (have hm (= (memb (haddrs cells) a) True)
+           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+         (have hz (= (count_in (haddrs wl) a) 0)
+           (rewrite-with
+             (lemma wi_cinwl)
+             lr
+             lhs
+             ((inst cs0 cs0)
+              (inst es0 es0)
+              (inst r r)
+              (inst cells cells)
+              (inst fls fls)
+              (inst wl wl)
+              (inst ws ws))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+              (steps ((rewrite (premise 1) lr lhs true ())) refl)
+              (steps ((rewrite (premise hm) lr lhs true ())) refl))
+             refl))
+         (have hpos (= (le 1 (count_in (haddrs wl) a)) True)
+           (rewrite-with
+             (lemma memb_cin_pos)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise 2) lr lhs true ())) refl))
+             refl))
+         (have hf (= (le 1 0) True) (by arith (rows (goal 1) (hpos 1) (hz -1))))
+         (absurd (premise hf))))
+     (case False (steps ((rewrite (hyp False) lr lhs true ())) refl)))))
 
 ;; --- the counts: the roots gain v -------------------------------------------------
 
