@@ -1,0 +1,2465 @@
+;;; models/imp/probes/tb_kit.shard — THE IMMEDIATE-ARITHMETIC KIT (Theorem
+;;; B, docs/COVERAGE.md §10 B-0 design record): the once-proven laws over
+;;; impc's value encoding — an Int is the immediate word 2n+1 (i63, two's
+;;; complement in the U64), Bool 1/3 — stated in the shapes tools/impc
+;;; EMITS (the biased compare, the "b − 1" doubled word, the sign-xor
+;;; overflow tests) so a per-fn certificate cites them straight after
+;;; `compute`. The foundation is the BIT SPLIT (band/bxor at a power of
+;;; two, from the kernel's low-bit recurrences) read at bit 63 — the sign
+;;; bit every arithmetic construct tests.
+;;;
+;;; Closure discipline: kernel, std/mem, std/nat, std/bits, std/order,
+;;; imp.shard, rt.shard, rth_kit.shard (B stands on C2b) — machine-free.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../kernel/facts.shard")
+(use (:: kernel facts *))
+(import "../../../std/mem")
+(use (:: std mem *))
+(import "../../../std/nat")
+(use (:: std nat *))
+(import "../../../std/bits")
+(use (:: std bits *))
+(import "../../../std/order")
+(use (:: std order *))
+(import "../imp.shard")
+(use (:: models imp imp *))
+(import "../rt.shard")
+(use (:: models imp rt *))
+(import "rth_kit.shard")
+(use (:: models imp probes rth_kit *))
+
+;; --- vocabulary ---------------------------------------------------------------------
+
+;; the immediate of an Int: 2n+1 as the U64 word (two's complement)
+(fn imm ((n Int)) Int (mod (+ (* 2 n) 1) 18446744073709551616))
+
+;; the doubled word 2n — what `b − 1` on an immediate yields
+(fn dbl ((n Int)) Int (mod (* 2 n) 18446744073709551616))
+
+;; the sign bit and the rest of a word
+(fn hi ((w Int)) Int (ediv w 9223372036854775808))
+
+(fn lo ((w Int)) Int (mod w 9223372036854775808))
+
+;; the i63 band the immediates encode
+(fn in63 ((v Int)) Bool
+  (if (le -4611686018427387904 v) (lt v 4611686018427387904) False))
+
+;; the POST-PREDICATE of a heap-free per-fn theorem over the run, at the
+;; SPEC value v: the value leg carries v's immediate AND v's band (so a
+;; caller can feed the result to the next construct's law); a declared
+;; family is the artifact's except clause; fuel exhaustion and traps are
+;; refused
+(fn tb_ok ((r (Option IpRet)) (v Int)) Bool
+  (match r
+    (None False)
+    ((Some x)
+     (match x
+       ((IpRv w _) (if (int_eq w (imm v)) (in63 v) False))
+       (IpRtrap False)
+       ((IpRfailed _) True)))))
+
+;; --- immediates: band and the two spellings -----------------------------------------
+
+(claim imm_lo
+  (goal ((n Int)) () (= (le 0 (imm n)) True))
+  (chain
+    (steps ((unfold imm lhs)))
+    (rewrite-with (lemma mod_lo) lr lhs () ((steps ((compute lhs)) refl)) refl)))
+
+(claim imm_hi
+  (goal ((n Int)) () (= (lt (imm n) 18446744073709551616) True))
+  (chain
+    (steps ((unfold imm lhs)))
+    (rewrite-with (lemma mod_hi) lr lhs () ((steps ((compute lhs)) refl)) refl)))
+
+;; the entry's iband_args re-mod is the identity on an immediate
+(claim imm_mod
+  (goal ((n Int)) () (= (mod (imm n) 18446744073709551616) (imm n)))
+  (rewrite-with
+    (lemma mod_unique)
+    lr
+    lhs
+    ((inst q 0) (inst r (imm n)))
+    ((by arith (list (list 1) (list 1)))
+     (steps ((rewrite (lemma imm_lo) lr lhs true ())) refl)
+     (steps ((rewrite (lemma imm_hi) lr lhs true ())) refl))
+    refl))
+
+(claim imm_pos
+  (goal ((n Int)) ((= (le 0 n) True) (= (lt n 9223372036854775808) True))
+    (= (imm n) (+ (* 2 n) 1)))
+  (chain
+    (steps ((unfold imm lhs)))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst q 0) (inst r (+ (* 2 n) 1)))
+      ((by arith (list (list 1 0 0) (list 1 0 0)))
+       (by arith (list 1 2 0))
+       (by arith (list 1 0 2)))
+      refl)))
+
+(claim imm_neg
+  (goal ((n Int)) ((= (le -9223372036854775808 n) True) (= (lt n 0) True))
+    (= (imm n) (+ (+ (* 2 n) 1) 18446744073709551616)))
+  (chain
+    (steps ((unfold imm lhs)))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst q -1) (inst r (+ (+ (* 2 n) 1) 18446744073709551616)))
+      ((by arith (list (list 1 0 0) (list 1 0 0)))
+       (by arith (list 1 2 0))
+       (by arith (list 1 0 2)))
+      refl)))
+
+(claim dbl_pos
+  (goal ((n Int)) ((= (le 0 n) True) (= (lt n 9223372036854775808) True))
+    (= (dbl n) (* 2 n)))
+  (chain
+    (steps ((unfold dbl lhs)))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst q 0) (inst r (* 2 n)))
+      ((by arith (list (list 1 0 0) (list 1 0 0)))
+       (by arith (list 1 2 0))
+       (by arith (list 1 0 2)))
+      refl)))
+
+(claim dbl_neg
+  (goal ((n Int)) ((= (le -9223372036854775808 n) True) (= (lt n 0) True))
+    (= (dbl n) (+ (* 2 n) 18446744073709551616)))
+  (chain
+    (steps ((unfold dbl lhs)))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst q -1) (inst r (+ (* 2 n) 18446744073709551616)))
+      ((by arith (list (list 1 0 0) (list 1 0 0)))
+       (by arith (list 1 2 0))
+       (by arith (list 1 0 2)))
+      refl)))
+;; --- the sign bit of an immediate / a doubled word, by range ------------------------
+;; A sum or difference of two in-band values lands in one of four ranges;
+;; the sign bit (ediv by 2^63) reads off each spelling by div_unique.
+
+(claim hi_imm_p0
+  (goal ((z Int)) ((= (le 0 z) True) (= (lt z 4611686018427387904) True))
+    (= (hi (imm z)) 0))
+  (chain
+    (have hz (= (imm z) (+ (* 2 z) 1))
+      (rewrite-with
+        (lemma imm_pos)
+        lr
+        lhs
+        ()
+        ((by arith (list 1 1 0)) (by arith (list 1 0 1)))
+        refl))
+    (steps ((unfold hi lhs) (rewrite (premise hz) lr lhs true ())))
+    (rewrite-with
+      (lemma div_unique)
+      lr
+      lhs
+      ((inst q 0) (inst r (+ (* 2 z) 1)))
+      ((by arith (list (list 1 0 0 0) (list 1 0 0 0)))
+       (by arith (list 1 2 0 0))
+       (by arith (list 1 0 2 0)))
+      refl)))
+
+(claim hi_imm_p1
+  (goal ((z Int))
+    ((= (le 4611686018427387904 z) True) (= (lt z 9223372036854775808) True))
+    (= (hi (imm z)) 1))
+  (chain
+    (have hz (= (imm z) (+ (* 2 z) 1))
+      (rewrite-with
+        (lemma imm_pos)
+        lr
+        lhs
+        ()
+        ((by arith (list 1 1 0)) (by arith (list 1 0 1)))
+        refl))
+    (steps ((unfold hi lhs) (rewrite (premise hz) lr lhs true ())))
+    (rewrite-with
+      (lemma div_unique)
+      lr
+      lhs
+      ((inst q 1) (inst r (- (+ (* 2 z) 1) 9223372036854775808)))
+      ((by arith (list (list 1 0 0 0) (list 1 0 0 0)))
+       (by arith (list 1 2 0 0))
+       (by arith (list 1 0 2 0)))
+      refl)))
+
+(claim hi_imm_n1
+  (goal ((z Int)) ((= (le -4611686018427387904 z) True) (= (lt z 0) True))
+    (= (hi (imm z)) 1))
+  (chain
+    (have hz (= (imm z) (+ (+ (* 2 z) 1) 18446744073709551616))
+      (rewrite-with
+        (lemma imm_neg)
+        lr
+        lhs
+        ()
+        ((by arith (list 1 1 0)) (by arith (list 1 0 1)))
+        refl))
+    (steps ((unfold hi lhs) (rewrite (premise hz) lr lhs true ())))
+    (rewrite-with
+      (lemma div_unique)
+      lr
+      lhs
+      ((inst q 1)
+       (inst r (- (+ (+ (* 2 z) 1) 18446744073709551616) 9223372036854775808)))
+      ((by arith (list (list 1 0 0 0) (list 1 0 0 0)))
+       (by arith (list 1 2 0 0))
+       (by arith (list 1 0 2 0)))
+      refl)))
+
+(claim hi_imm_n0
+  (goal ((z Int))
+    ((= (le -9223372036854775808 z) True) (= (lt z -4611686018427387904) True))
+    (= (hi (imm z)) 0))
+  (chain
+    (have hz (= (imm z) (+ (+ (* 2 z) 1) 18446744073709551616))
+      (rewrite-with
+        (lemma imm_neg)
+        lr
+        lhs
+        ()
+        ((by arith (list 1 1 0)) (by arith (list 1 0 1)))
+        refl))
+    (steps ((unfold hi lhs) (rewrite (premise hz) lr lhs true ())))
+    (rewrite-with
+      (lemma div_unique)
+      lr
+      lhs
+      ((inst q 0) (inst r (+ (+ (* 2 z) 1) 18446744073709551616)))
+      ((by arith (list (list 1 0 0 0) (list 1 0 0 0)))
+       (by arith (list 1 2 0 0))
+       (by arith (list 1 0 2 0)))
+      refl)))
+
+(claim hi_dbl_p
+  (goal ((z Int)) ((= (le 0 z) True) (= (lt z 4611686018427387904) True))
+    (= (hi (dbl z)) 0))
+  (chain
+    (have hz (= (dbl z) (* 2 z))
+      (rewrite-with
+        (lemma dbl_pos)
+        lr
+        lhs
+        ()
+        ((by arith (list 1 1 0)) (by arith (list 1 0 1)))
+        refl))
+    (steps ((unfold hi lhs) (rewrite (premise hz) lr lhs true ())))
+    (rewrite-with
+      (lemma div_unique)
+      lr
+      lhs
+      ((inst q 0) (inst r (* 2 z)))
+      ((by arith (list (list 1 0 0 0) (list 1 0 0 0)))
+       (by arith (list 1 2 0 0))
+       (by arith (list 1 0 2 0)))
+      refl)))
+
+(claim hi_dbl_n
+  (goal ((z Int)) ((= (le -4611686018427387904 z) True) (= (lt z 0) True))
+    (= (hi (dbl z)) 1))
+  (chain
+    (have hz (= (dbl z) (+ (* 2 z) 18446744073709551616))
+      (rewrite-with
+        (lemma dbl_neg)
+        lr
+        lhs
+        ()
+        ((by arith (list 1 1 0)) (by arith (list 1 0 1)))
+        refl))
+    (steps ((unfold hi lhs) (rewrite (premise hz) lr lhs true ())))
+    (rewrite-with
+      (lemma div_unique)
+      lr
+      lhs
+      ((inst q 1)
+       (inst r (- (+ (* 2 z) 18446744073709551616) 9223372036854775808)))
+      ((by arith (list (list 1 0 0 0) (list 1 0 0 0)))
+       (by arith (list 1 2 0 0))
+       (by arith (list 1 0 2 0)))
+      refl)))
+
+;; --- the ring mod 2^64 -----------------------------------------------------------------
+;; mod absorbs an inner mod on either operand of + / − (the emitted shapes
+;; wrap every intermediate); from ediv_mod_id + mod_unique at the literal
+;; modulus, so every product is linear.
+
+(claim mod_sub_l
+  (goal ((a Int) (b Int)) ()
+    (=
+      (mod (- (mod a 18446744073709551616) b) 18446744073709551616)
+      (mod (- a b) 18446744073709551616)))
+  (chain
+    (have ha
+      (=
+        a
+        (+
+          (* 18446744073709551616 (ediv a 18446744073709551616))
+          (mod a 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hx
+      (=
+        (- a b)
+        (+
+          (* 18446744073709551616 (ediv (- a b) 18446744073709551616))
+          (mod (- a b) 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hx0 (= (le 0 (mod (- a b) 18446744073709551616)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hx1
+      (= (lt (mod (- a b) 18446744073709551616) 18446744073709551616) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst
+         q
+         (- (ediv (- a b) 18446744073709551616) (ediv a 18446744073709551616)))
+       (inst r (mod (- a b) 18446744073709551616)))
+      ((by arith (list (list 1 1 -1 0 0) (list 1 -1 1 0 0)))
+       (steps ((rewrite (premise hx0) lr lhs true ())) refl)
+       (steps ((rewrite (premise hx1) lr lhs true ())) refl))
+      refl)))
+
+(claim mod_sub_r
+  (goal ((a Int) (b Int)) ()
+    (=
+      (mod (- a (mod b 18446744073709551616)) 18446744073709551616)
+      (mod (- a b) 18446744073709551616)))
+  (chain
+    (have hb
+      (=
+        b
+        (+
+          (* 18446744073709551616 (ediv b 18446744073709551616))
+          (mod b 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hx
+      (=
+        (- a b)
+        (+
+          (* 18446744073709551616 (ediv (- a b) 18446744073709551616))
+          (mod (- a b) 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hx0 (= (le 0 (mod (- a b) 18446744073709551616)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hx1
+      (= (lt (mod (- a b) 18446744073709551616) 18446744073709551616) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst
+         q
+         (+ (ediv (- a b) 18446744073709551616) (ediv b 18446744073709551616)))
+       (inst r (mod (- a b) 18446744073709551616)))
+      ((by arith (list (list 1 -1 -1 0 0) (list 1 1 1 0 0)))
+       (steps ((rewrite (premise hx0) lr lhs true ())) refl)
+       (steps ((rewrite (premise hx1) lr lhs true ())) refl))
+      refl)))
+
+(claim mod_add_l
+  (goal ((a Int) (b Int)) ()
+    (=
+      (mod (+ (mod a 18446744073709551616) b) 18446744073709551616)
+      (mod (+ a b) 18446744073709551616)))
+  (chain
+    (have ha
+      (=
+        a
+        (+
+          (* 18446744073709551616 (ediv a 18446744073709551616))
+          (mod a 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hx
+      (=
+        (+ a b)
+        (+
+          (* 18446744073709551616 (ediv (+ a b) 18446744073709551616))
+          (mod (+ a b) 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hx0 (= (le 0 (mod (+ a b) 18446744073709551616)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hx1
+      (= (lt (mod (+ a b) 18446744073709551616) 18446744073709551616) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst
+         q
+         (- (ediv (+ a b) 18446744073709551616) (ediv a 18446744073709551616)))
+       (inst r (mod (+ a b) 18446744073709551616)))
+      ((by arith (list (list 1 1 -1 0 0) (list 1 -1 1 0 0)))
+       (steps ((rewrite (premise hx0) lr lhs true ())) refl)
+       (steps ((rewrite (premise hx1) lr lhs true ())) refl))
+      refl)))
+
+(claim mod_add_r
+  (goal ((a Int) (b Int)) ()
+    (=
+      (mod (+ a (mod b 18446744073709551616)) 18446744073709551616)
+      (mod (+ a b) 18446744073709551616)))
+  (chain
+    (have hb
+      (=
+        b
+        (+
+          (* 18446744073709551616 (ediv b 18446744073709551616))
+          (mod b 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hx
+      (=
+        (+ a b)
+        (+
+          (* 18446744073709551616 (ediv (+ a b) 18446744073709551616))
+          (mod (+ a b) 18446744073709551616)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst d 18446744073709551616))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hx0 (= (le 0 (mod (+ a b) 18446744073709551616)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hx1
+      (= (lt (mod (+ a b) 18446744073709551616) 18446744073709551616) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst
+         q
+         (- (ediv (+ a b) 18446744073709551616) (ediv b 18446744073709551616)))
+       (inst r (mod (+ a b) 18446744073709551616)))
+      ((by arith (list (list 1 1 -1 0 0) (list 1 -1 1 0 0)))
+       (steps ((rewrite (premise hx0) lr lhs true ())) refl)
+       (steps ((rewrite (premise hx1) lr lhs true ())) refl))
+      refl)))
+
+;; --- the construct laws on immediates (the emitted shapes) --------------------------
+
+;; b − 1 on an immediate is the doubled word
+(claim dbl_of_imm
+  (goal ((y Int)) () (= (mod (- (imm y) 1) 18446744073709551616) (dbl y)))
+  (chain
+    (have hl (= (- (+ (* 2 y) 1) 1) (* 2 y))
+      (by arith (list (list 1) (list 1))))
+    (steps
+      ((unfold imm lhs)
+       (rewrite (lemma mod_sub_l) lr lhs true ())
+       (rewrite (premise hl) lr lhs true ())
+       (unfold dbl rhs))
+      refl)))
+
+;; a − (b − 1) on immediates is the immediate of the difference
+(claim imm_sub
+  (goal ((x Int) (y Int)) ()
+    (= (mod (- (imm x) (dbl y)) 18446744073709551616) (imm (- x y))))
+  (chain
+    (have hl (= (- (+ (* 2 x) 1) (* 2 y)) (+ (* 2 (- x y)) 1))
+      (by arith (list (list 1) (list 1))))
+    (steps
+      ((unfold imm lhs)
+       (unfold dbl lhs)
+       (rewrite (lemma mod_sub_l) lr lhs true ())
+       (rewrite (lemma mod_sub_r) lr lhs true ())
+       (rewrite (premise hl) lr lhs true ())
+       (unfold imm rhs))
+      refl)))
+
+;; a + (b − 1) on immediates is the immediate of the sum
+(claim imm_add
+  (goal ((x Int) (y Int)) ()
+    (= (mod (+ (imm x) (dbl y)) 18446744073709551616) (imm (+ x y))))
+  (chain
+    (have hl (= (+ (+ (* 2 x) 1) (* 2 y)) (+ (* 2 (+ x y)) 1))
+      (by arith (list (list 1) (list 1))))
+    (steps
+      ((unfold imm lhs)
+       (unfold dbl lhs)
+       (rewrite (lemma mod_add_l) lr lhs true ())
+       (rewrite (lemma mod_add_r) lr lhs true ())
+       (rewrite (premise hl) lr lhs true ())
+       (unfold imm rhs))
+      refl)))
+;; --- THE BIT SPLIT --------------------------------------------------------------------
+;; band / bxor at a power of two: the high parts combine as the operation on
+;; the quotients, the low parts as the operation on the remainders. By
+;; wf-induction on k over the kernel's low-bit recurrences; the step composes
+;; the quotient (a div 2) div P = a div 2P and the remainder a mod 2P =
+;; 2 (a div 2 mod P) + a mod 2 through div_unique / mod_unique.
+
+(claim band_split
+  (goal ((k Int) (a Int) (b Int))
+    ((= (le 0 k) True) (= (le 0 a) True) (= (le 0 b) True))
+    (=
+      (band a b)
+      (+
+        (* (pow2 k) (band (ediv a (pow2 k)) (ediv b (pow2 k))))
+        (band (mod a (pow2 k)) (mod b (pow2 k))))))
+  (wf-induct k
+    (case-on (le k 0) Bool
+      ((case True
+         (fin-split
+           k
+           (premise 0)
+           (hyp True)
+           ((case 0
+              (chain
+                (have hp0 (= (pow2 0) 1) (steps ((compute lhs)) refl))
+                (steps ((rewrite (premise hp0) lr rhs true ())))
+                (have hda (= (ediv a 1) a)
+                  (rewrite-with
+                    (lemma div_unique)
+                    lr
+                    lhs
+                    ((inst q a) (inst r 0))
+                    ((by arith (list (list 1 0 0 0 0) (list 1 0 0 0 0)))
+                     (by arith (list 1 0 0 0 0))
+                     (by arith (list 1 0 0 0 0)))
+                    refl))
+                (have hdb (= (ediv b 1) b)
+                  (rewrite-with
+                    (lemma div_unique)
+                    lr
+                    lhs
+                    ((inst q b) (inst r 0))
+                    ((by arith (list (list 1 0 0 0 0 0) (list 1 0 0 0 0 0)))
+                     (by arith (list 1 0 0 0 0 0))
+                     (by arith (list 1 0 0 0 0 0)))
+                    refl))
+                (have hma (= (mod a 1) 0)
+                  (rewrite-with
+                    (lemma mod_unique)
+                    lr
+                    lhs
+                    ((inst q a) (inst r 0))
+                    ((by arith (list (list 1 0 0 0 0 0 0) (list 1 0 0 0 0 0 0)))
+                     (by arith (list 1 0 0 0 0 0 0))
+                     (by arith (list 1 0 0 0 0 0 0)))
+                    refl))
+                (have hmb (= (mod b 1) 0)
+                  (rewrite-with
+                    (lemma mod_unique)
+                    lr
+                    lhs
+                    ((inst q b) (inst r 0))
+                    ((by
+                       arith
+                       (list (list 1 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0)))
+                     (by arith (list 1 0 0 0 0 0 0 0))
+                     (by arith (list 1 0 0 0 0 0 0 0)))
+                    refl))
+                (have hz (= (band 0 0) 0) (steps ((compute lhs)) refl))
+                (steps
+                  ((rewrite (premise hda) lr rhs true ())
+                   (rewrite (premise hdb) lr rhs true ())
+                   (rewrite (premise hma) lr rhs true ())
+                   (rewrite (premise hmb) lr rhs true ())
+                   (rewrite (premise hz) lr rhs true ()))
+                  (by
+                    arith
+                    (list (list 1 0 0 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0 0 0)))))))))
+       (case False
+         (chain
+           (have hk1 (= (le k 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hkk (= k (+ (- k 1) 1))
+             (by arith (list (list 1 0 0 0 0) (list 1 0 0 0 0))))
+           (have hps (= (pow2 k) (* 2 (pow2 (- k 1))))
+             (chain
+               (steps ((rewrite (premise hkk) lr lhs true ())))
+               (rewrite-with
+                 (lemma pow2_s)
+                 lr
+                 lhs
+                 ((inst k (- k 1)))
+                 ((by arith (list 1 0 0 0 1 0)))
+                 refl)))
+           (have hpp (= (lt 0 (pow2 (- k 1))) True)
+             (rewrite-with
+               (lemma pow2_pos)
+               lr
+               lhs
+               ((inst k (- k 1)))
+               ((by arith (list 1 0 0 0 1 0 0)))
+               refl))
+           (div-facts
+             a
+             2
+             qa
+             (div-facts
+               b
+               2
+               qb
+               (chain
+                 ;; slots: 0-2 the premises, 3 hk1, 4 hkk, 5 hps, 6 hpp,
+                 ;; 7-10 div-facts a (decomp, lo, hi, quotient), 11-14 the same for b
+                 (have hih
+                   (=
+                     (band qa qb)
+                     (+
+                       (*
+                         (pow2 (- k 1))
+                         (band
+                           (ediv qa (pow2 (- k 1)))
+                           (ediv qb (pow2 (- k 1)))))
+                       (band (mod qa (pow2 (- k 1))) (mod qb (pow2 (- k 1))))))
+                   (rewrite-with
+                     (hyp 1)
+                     rl
+                     rhs
+                     ()
+                     ((by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0))
+                      (by arith (list 2 0 1 0 0 0 0 0 -1 0 1 0 0 0 0 0))
+                      (by arith (list 2 0 0 1 0 0 0 0 0 0 0 0 -1 0 1 0))
+                      (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0))
+                      (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+                     refl))
+                 (have hqa
+                   (=
+                     qa
+                     (+
+                       (* (pow2 (- k 1)) (ediv qa (pow2 (- k 1))))
+                       (mod qa (pow2 (- k 1)))))
+                   (rewrite-with
+                     (lemma ediv_mod_id)
+                     lr
+                     lhs
+                     ((inst d (pow2 (- k 1))))
+                     ((steps ((rewrite (premise hpp) lr lhs true ())) refl))
+                     refl))
+                 (have hqa0 (= (le 0 (mod qa (pow2 (- k 1)))) True)
+                   (rewrite-with
+                     (lemma mod_lo)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise hpp) lr lhs true ())) refl))
+                     refl))
+                 (have hqa1 (= (lt (mod qa (pow2 (- k 1))) (pow2 (- k 1))) True)
+                   (rewrite-with
+                     (lemma mod_hi)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise hpp) lr lhs true ())) refl))
+                     refl))
+                 (have hqb
+                   (=
+                     qb
+                     (+
+                       (* (pow2 (- k 1)) (ediv qb (pow2 (- k 1))))
+                       (mod qb (pow2 (- k 1)))))
+                   (rewrite-with
+                     (lemma ediv_mod_id)
+                     lr
+                     lhs
+                     ((inst d (pow2 (- k 1))))
+                     ((steps ((rewrite (premise hpp) lr lhs true ())) refl))
+                     refl))
+                 (have hqb0 (= (le 0 (mod qb (pow2 (- k 1)))) True)
+                   (rewrite-with
+                     (lemma mod_lo)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise hpp) lr lhs true ())) refl))
+                     refl))
+                 (have hqb1 (= (lt (mod qb (pow2 (- k 1))) (pow2 (- k 1))) True)
+                   (rewrite-with
+                     (lemma mod_hi)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise hpp) lr lhs true ())) refl))
+                     refl))
+                 ;; slots 15 hih, 16 hqa, 17 hqa0, 18 hqa1, 19 hqb, 20 hqb0, 21 hqb1
+                 ;; the quotient composition: a div 2P = (a div 2) div P
+                 (have hda
+                   (= (ediv a (* 2 (pow2 (- k 1)))) (ediv qa (pow2 (- k 1))))
+                   (rewrite-with
+                     (lemma div_unique)
+                     lr
+                     lhs
+                     ((inst q (ediv qa (pow2 (- k 1))))
+                      (inst r (+ (* 2 (mod qa (pow2 (- k 1)))) (mod a 2))))
+                     ((chain
+                        (steps ((rewrite (lemma mul_assoc) lr rhs true ())))
+                        (by
+                          arith
+                          (list
+                            (list 1 0 0 0 0 0 0 0 -1 0 0 0 0 0 0 0 0 -2 0 0 0 0
+                              0)
+                            (list 1 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 2 0 0 0 0 0))))
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 2 0 0 0 0))
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 2 0 0 0)))
+                     refl))
+                 (have hdb
+                   (= (ediv b (* 2 (pow2 (- k 1)))) (ediv qb (pow2 (- k 1))))
+                   (rewrite-with
+                     (lemma div_unique)
+                     lr
+                     lhs
+                     ((inst q (ediv qb (pow2 (- k 1))))
+                      (inst r (+ (* 2 (mod qb (pow2 (- k 1)))) (mod b 2))))
+                     ((chain
+                        (steps ((rewrite (lemma mul_assoc) lr rhs true ())))
+                        (by
+                          arith
+                          (list
+                            (list 1 0 0 0 0 0 0 0 0 0 0 0 -1 0 0 0 0 0 0 0 -2 0
+                              0 0)
+                            (list 1 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 2 0 0
+                              0))))
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 2 0 0))
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 2 0)))
+                     refl))
+                 ;; the remainder composition: a mod 2P = 2 (qa mod P) + a mod 2
+                 (have hma
+                   (=
+                     (mod a (* 2 (pow2 (- k 1))))
+                     (+ (* 2 (mod qa (pow2 (- k 1)))) (mod a 2)))
+                   (rewrite-with
+                     (lemma mod_unique)
+                     lr
+                     lhs
+                     ((inst q (ediv qa (pow2 (- k 1))))
+                      (inst r (+ (* 2 (mod qa (pow2 (- k 1)))) (mod a 2))))
+                     ((chain
+                        (steps ((rewrite (lemma mul_assoc) lr rhs true ())))
+                        (by
+                          arith
+                          (list
+                            (list 1 0 0 0 0 0 0 0 -1 0 0 0 0 0 0 0 0 -2 0 0 0 0
+                              0 0 0)
+                            (list 1 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 2 0 0 0 0 0
+                              0 0))))
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 2 0 0 0 0 0 0))
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 2 0 0 0 0 0)))
+                     refl))
+                 (have hmb
+                   (=
+                     (mod b (* 2 (pow2 (- k 1))))
+                     (+ (* 2 (mod qb (pow2 (- k 1)))) (mod b 2)))
+                   (rewrite-with
+                     (lemma mod_unique)
+                     lr
+                     lhs
+                     ((inst q (ediv qb (pow2 (- k 1))))
+                      (inst r (+ (* 2 (mod qb (pow2 (- k 1)))) (mod b 2))))
+                     ((chain
+                        (steps ((rewrite (lemma mul_assoc) lr rhs true ())))
+                        (by
+                          arith
+                          (list
+                            (list 1 0 0 0 0 0 0 0 0 0 0 0 -1 0 0 0 0 0 0 0 -2 0
+                              0 0 0 0)
+                            (list 1 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 2 0 0
+                              0 0 0))))
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 2 0 0 0
+                          0))
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 2 0 0
+                          0)))
+                     refl))
+                 ;; slots 22 hda, 23 hdb, 24 hma, 25 hmb
+                 (have hea
+                   (=
+                     (ediv (+ (* 2 (mod qa (pow2 (- k 1)))) (mod a 2)) 2)
+                     (mod qa (pow2 (- k 1))))
+                   (rewrite-with
+                     (lemma div_unique)
+                     lr
+                     lhs
+                     ((inst q (mod qa (pow2 (- k 1)))) (inst r (mod a 2)))
+                     ((by
+                        arith
+                        (list
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                            0 0 0)
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                            0 0 0)))
+                      (steps ((rewrite (premise 8) lr lhs true ())) refl)
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                          0 0)))
+                     refl))
+                 (have hna
+                   (=
+                     (mod (+ (* 2 (mod qa (pow2 (- k 1)))) (mod a 2)) 2)
+                     (mod a 2))
+                   (rewrite-with
+                     (lemma mod_unique)
+                     lr
+                     lhs
+                     ((inst q (mod qa (pow2 (- k 1)))) (inst r (mod a 2)))
+                     ((by
+                        arith
+                        (list
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                            0 0 0 0)
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                            0 0 0 0)))
+                      (steps ((rewrite (premise 8) lr lhs true ())) refl)
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                          0 0 0)))
+                     refl))
+                 (have heb
+                   (=
+                     (ediv (+ (* 2 (mod qb (pow2 (- k 1)))) (mod b 2)) 2)
+                     (mod qb (pow2 (- k 1))))
+                   (rewrite-with
+                     (lemma div_unique)
+                     lr
+                     lhs
+                     ((inst q (mod qb (pow2 (- k 1)))) (inst r (mod b 2)))
+                     ((by
+                        arith
+                        (list
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                            0 0 0 0 0)
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                            0 0 0 0 0)))
+                      (steps ((rewrite (premise 12) lr lhs true ())) refl)
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0
+                          0 0 0 0)))
+                     refl))
+                 (have hnb
+                   (=
+                     (mod (+ (* 2 (mod qb (pow2 (- k 1)))) (mod b 2)) 2)
+                     (mod b 2))
+                   (rewrite-with
+                     (lemma mod_unique)
+                     lr
+                     lhs
+                     ((inst q (mod qb (pow2 (- k 1)))) (inst r (mod b 2)))
+                     ((by
+                        arith
+                        (list
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                            0 0 0 0 0 0)
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                            0 0 0 0 0 0)))
+                      (steps ((rewrite (premise 12) lr lhs true ())) refl)
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0
+                          0 0 0 0 0)))
+                     refl))
+                 ;; slots 26 hea, 27 hna, 28 heb, 29 hnb
+                 (have hbr
+                   (=
+                     (band
+                       (+ (* 2 (mod qa (pow2 (- k 1)))) (mod a 2))
+                       (+ (* 2 (mod qb (pow2 (- k 1)))) (mod b 2)))
+                     (+
+                       (*
+                         2
+                         (band (mod qa (pow2 (- k 1))) (mod qb (pow2 (- k 1)))))
+                       (* (mod a 2) (mod b 2))))
+                   (chain
+                     (rewrite-with
+                       (lemma band_rec)
+                       lr
+                       lhs
+                       ()
+                       ((by
+                          arith
+                          (list 1 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 2 0 0 0 0 0
+                            0 0 0 0 0 0 0))
+                        (by
+                          arith
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 2 0 0
+                            0 0 0 0 0 0 0))))
+                     (steps
+                       ((rewrite (premise hea) lr lhs true ())
+                        (rewrite (premise heb) lr lhs true ())
+                        (rewrite (premise hna) lr lhs true ())
+                        (rewrite (premise hnb) lr lhs true ()))
+                       refl)))
+                 ;; slot 30 hbr — assemble
+                 (steps
+                   ((rewrite (premise hps) lr rhs true ())
+                    (rewrite (premise hda) lr rhs true ())
+                    (rewrite (premise hdb) lr rhs true ())
+                    (rewrite (premise hma) lr rhs true ())
+                    (rewrite (premise hmb) lr rhs true ())
+                    (rewrite (premise hbr) lr rhs true ())))
+                 (rewrite-with
+                   (lemma mul_assoc)
+                   lr
+                   rhs
+                   ((inst a 2)
+                    (inst b (pow2 (- k 1)))
+                    (inst
+                      c
+                      (band (ediv qa (pow2 (- k 1))) (ediv qb (pow2 (- k 1))))))
+                   ())
+                 (rewrite-with
+                   (lemma band_rec)
+                   lr
+                   lhs
+                   ()
+                   ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                    (steps ((rewrite (premise 2) lr lhs true ())) refl)))
+                 (steps
+                   ((rewrite (premise 10) lr lhs true ())
+                    (rewrite (premise 14) lr lhs true ())
+                    (rewrite (premise hih) lr lhs true ()))
+                   (by
+                     arith
+                     (list
+                       (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                         0 0 0 0 0 0)
+                       (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                         0 0 0 0 0 0)))))))))))))
+
+(claim bxor_split
+  (goal ((k Int) (a Int) (b Int))
+    ((= (le 0 k) True) (= (le 0 a) True) (= (le 0 b) True))
+    (=
+      (bxor a b)
+      (+
+        (* (pow2 k) (bxor (ediv a (pow2 k)) (ediv b (pow2 k))))
+        (bxor (mod a (pow2 k)) (mod b (pow2 k))))))
+  (wf-induct k
+    (case-on (le k 0) Bool
+      ((case True
+         (fin-split
+           k
+           (premise 0)
+           (hyp True)
+           ((case 0
+              (chain
+                (have hp0 (= (pow2 0) 1) (steps ((compute lhs)) refl))
+                (steps ((rewrite (premise hp0) lr rhs true ())))
+                (have hda (= (ediv a 1) a)
+                  (rewrite-with
+                    (lemma div_unique)
+                    lr
+                    lhs
+                    ((inst q a) (inst r 0))
+                    ((by arith (list (list 1 0 0 0 0) (list 1 0 0 0 0)))
+                     (by arith (list 1 0 0 0 0))
+                     (by arith (list 1 0 0 0 0)))
+                    refl))
+                (have hdb (= (ediv b 1) b)
+                  (rewrite-with
+                    (lemma div_unique)
+                    lr
+                    lhs
+                    ((inst q b) (inst r 0))
+                    ((by arith (list (list 1 0 0 0 0 0) (list 1 0 0 0 0 0)))
+                     (by arith (list 1 0 0 0 0 0))
+                     (by arith (list 1 0 0 0 0 0)))
+                    refl))
+                (have hma (= (mod a 1) 0)
+                  (rewrite-with
+                    (lemma mod_unique)
+                    lr
+                    lhs
+                    ((inst q a) (inst r 0))
+                    ((by arith (list (list 1 0 0 0 0 0 0) (list 1 0 0 0 0 0 0)))
+                     (by arith (list 1 0 0 0 0 0 0))
+                     (by arith (list 1 0 0 0 0 0 0)))
+                    refl))
+                (have hmb (= (mod b 1) 0)
+                  (rewrite-with
+                    (lemma mod_unique)
+                    lr
+                    lhs
+                    ((inst q b) (inst r 0))
+                    ((by
+                       arith
+                       (list (list 1 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0)))
+                     (by arith (list 1 0 0 0 0 0 0 0))
+                     (by arith (list 1 0 0 0 0 0 0 0)))
+                    refl))
+                (have hz (= (bxor 0 0) 0) (steps ((compute lhs)) refl))
+                (steps
+                  ((rewrite (premise hda) lr rhs true ())
+                   (rewrite (premise hdb) lr rhs true ())
+                   (rewrite (premise hma) lr rhs true ())
+                   (rewrite (premise hmb) lr rhs true ())
+                   (rewrite (premise hz) lr rhs true ()))
+                  (by
+                    arith
+                    (list (list 1 0 0 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0 0 0)))))))))
+       (case False
+         (chain
+           (have hk1 (= (le k 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hkk (= k (+ (- k 1) 1))
+             (by arith (list (list 1 0 0 0 0) (list 1 0 0 0 0))))
+           (have hps (= (pow2 k) (* 2 (pow2 (- k 1))))
+             (chain
+               (steps ((rewrite (premise hkk) lr lhs true ())))
+               (rewrite-with
+                 (lemma pow2_s)
+                 lr
+                 lhs
+                 ((inst k (- k 1)))
+                 ((by arith (list 1 0 0 0 1 0)))
+                 refl)))
+           (have hpp (= (lt 0 (pow2 (- k 1))) True)
+             (rewrite-with
+               (lemma pow2_pos)
+               lr
+               lhs
+               ((inst k (- k 1)))
+               ((by arith (list 1 0 0 0 1 0 0)))
+               refl))
+           (div-facts
+             a
+             2
+             qa
+             (div-facts
+               b
+               2
+               qb
+               (chain
+                 ;; slots: 0-2 the premises, 3 hk1, 4 hkk, 5 hps, 6 hpp,
+                 ;; 7-10 div-facts a (decomp, lo, hi, quotient), 11-14 the same for b
+                 (have hih
+                   (=
+                     (bxor qa qb)
+                     (+
+                       (*
+                         (pow2 (- k 1))
+                         (bxor
+                           (ediv qa (pow2 (- k 1)))
+                           (ediv qb (pow2 (- k 1)))))
+                       (bxor (mod qa (pow2 (- k 1))) (mod qb (pow2 (- k 1))))))
+                   (rewrite-with
+                     (hyp 1)
+                     rl
+                     rhs
+                     ()
+                     ((by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0))
+                      (by arith (list 2 0 1 0 0 0 0 0 -1 0 1 0 0 0 0 0))
+                      (by arith (list 2 0 0 1 0 0 0 0 0 0 0 0 -1 0 1 0))
+                      (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0))
+                      (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+                     refl))
+                 (have hqa
+                   (=
+                     qa
+                     (+
+                       (* (pow2 (- k 1)) (ediv qa (pow2 (- k 1))))
+                       (mod qa (pow2 (- k 1)))))
+                   (rewrite-with
+                     (lemma ediv_mod_id)
+                     lr
+                     lhs
+                     ((inst d (pow2 (- k 1))))
+                     ((steps ((rewrite (premise hpp) lr lhs true ())) refl))
+                     refl))
+                 (have hqa0 (= (le 0 (mod qa (pow2 (- k 1)))) True)
+                   (rewrite-with
+                     (lemma mod_lo)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise hpp) lr lhs true ())) refl))
+                     refl))
+                 (have hqa1 (= (lt (mod qa (pow2 (- k 1))) (pow2 (- k 1))) True)
+                   (rewrite-with
+                     (lemma mod_hi)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise hpp) lr lhs true ())) refl))
+                     refl))
+                 (have hqb
+                   (=
+                     qb
+                     (+
+                       (* (pow2 (- k 1)) (ediv qb (pow2 (- k 1))))
+                       (mod qb (pow2 (- k 1)))))
+                   (rewrite-with
+                     (lemma ediv_mod_id)
+                     lr
+                     lhs
+                     ((inst d (pow2 (- k 1))))
+                     ((steps ((rewrite (premise hpp) lr lhs true ())) refl))
+                     refl))
+                 (have hqb0 (= (le 0 (mod qb (pow2 (- k 1)))) True)
+                   (rewrite-with
+                     (lemma mod_lo)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise hpp) lr lhs true ())) refl))
+                     refl))
+                 (have hqb1 (= (lt (mod qb (pow2 (- k 1))) (pow2 (- k 1))) True)
+                   (rewrite-with
+                     (lemma mod_hi)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise hpp) lr lhs true ())) refl))
+                     refl))
+                 ;; slots 15 hih, 16 hqa, 17 hqa0, 18 hqa1, 19 hqb, 20 hqb0, 21 hqb1
+                 ;; the quotient composition: a div 2P = (a div 2) div P
+                 (have hda
+                   (= (ediv a (* 2 (pow2 (- k 1)))) (ediv qa (pow2 (- k 1))))
+                   (rewrite-with
+                     (lemma div_unique)
+                     lr
+                     lhs
+                     ((inst q (ediv qa (pow2 (- k 1))))
+                      (inst r (+ (* 2 (mod qa (pow2 (- k 1)))) (mod a 2))))
+                     ((chain
+                        (steps ((rewrite (lemma mul_assoc) lr rhs true ())))
+                        (by
+                          arith
+                          (list
+                            (list 1 0 0 0 0 0 0 0 -1 0 0 0 0 0 0 0 0 -2 0 0 0 0
+                              0)
+                            (list 1 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 2 0 0 0 0 0))))
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 2 0 0 0 0))
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 2 0 0 0)))
+                     refl))
+                 (have hdb
+                   (= (ediv b (* 2 (pow2 (- k 1)))) (ediv qb (pow2 (- k 1))))
+                   (rewrite-with
+                     (lemma div_unique)
+                     lr
+                     lhs
+                     ((inst q (ediv qb (pow2 (- k 1))))
+                      (inst r (+ (* 2 (mod qb (pow2 (- k 1)))) (mod b 2))))
+                     ((chain
+                        (steps ((rewrite (lemma mul_assoc) lr rhs true ())))
+                        (by
+                          arith
+                          (list
+                            (list 1 0 0 0 0 0 0 0 0 0 0 0 -1 0 0 0 0 0 0 0 -2 0
+                              0 0)
+                            (list 1 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 2 0 0
+                              0))))
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 2 0 0))
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 2 0)))
+                     refl))
+                 ;; the remainder composition: a mod 2P = 2 (qa mod P) + a mod 2
+                 (have hma
+                   (=
+                     (mod a (* 2 (pow2 (- k 1))))
+                     (+ (* 2 (mod qa (pow2 (- k 1)))) (mod a 2)))
+                   (rewrite-with
+                     (lemma mod_unique)
+                     lr
+                     lhs
+                     ((inst q (ediv qa (pow2 (- k 1))))
+                      (inst r (+ (* 2 (mod qa (pow2 (- k 1)))) (mod a 2))))
+                     ((chain
+                        (steps ((rewrite (lemma mul_assoc) lr rhs true ())))
+                        (by
+                          arith
+                          (list
+                            (list 1 0 0 0 0 0 0 0 -1 0 0 0 0 0 0 0 0 -2 0 0 0 0
+                              0 0 0)
+                            (list 1 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 2 0 0 0 0 0
+                              0 0))))
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 2 0 0 0 0 0 0))
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 2 0 0 0 0 0)))
+                     refl))
+                 (have hmb
+                   (=
+                     (mod b (* 2 (pow2 (- k 1))))
+                     (+ (* 2 (mod qb (pow2 (- k 1)))) (mod b 2)))
+                   (rewrite-with
+                     (lemma mod_unique)
+                     lr
+                     lhs
+                     ((inst q (ediv qb (pow2 (- k 1))))
+                      (inst r (+ (* 2 (mod qb (pow2 (- k 1)))) (mod b 2))))
+                     ((chain
+                        (steps ((rewrite (lemma mul_assoc) lr rhs true ())))
+                        (by
+                          arith
+                          (list
+                            (list 1 0 0 0 0 0 0 0 0 0 0 0 -1 0 0 0 0 0 0 0 -2 0
+                              0 0 0 0)
+                            (list 1 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 2 0 0
+                              0 0 0))))
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 2 0 0 0
+                          0))
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 2 0 0
+                          0)))
+                     refl))
+                 ;; slots 22 hda, 23 hdb, 24 hma, 25 hmb
+                 (have hea
+                   (=
+                     (ediv (+ (* 2 (mod qa (pow2 (- k 1)))) (mod a 2)) 2)
+                     (mod qa (pow2 (- k 1))))
+                   (rewrite-with
+                     (lemma div_unique)
+                     lr
+                     lhs
+                     ((inst q (mod qa (pow2 (- k 1)))) (inst r (mod a 2)))
+                     ((by
+                        arith
+                        (list
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                            0 0 0)
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                            0 0 0)))
+                      (steps ((rewrite (premise 8) lr lhs true ())) refl)
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                          0 0)))
+                     refl))
+                 (have hna
+                   (=
+                     (mod (+ (* 2 (mod qa (pow2 (- k 1)))) (mod a 2)) 2)
+                     (mod a 2))
+                   (rewrite-with
+                     (lemma mod_unique)
+                     lr
+                     lhs
+                     ((inst q (mod qa (pow2 (- k 1)))) (inst r (mod a 2)))
+                     ((by
+                        arith
+                        (list
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                            0 0 0 0)
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                            0 0 0 0)))
+                      (steps ((rewrite (premise 8) lr lhs true ())) refl)
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                          0 0 0)))
+                     refl))
+                 (have heb
+                   (=
+                     (ediv (+ (* 2 (mod qb (pow2 (- k 1)))) (mod b 2)) 2)
+                     (mod qb (pow2 (- k 1))))
+                   (rewrite-with
+                     (lemma div_unique)
+                     lr
+                     lhs
+                     ((inst q (mod qb (pow2 (- k 1)))) (inst r (mod b 2)))
+                     ((by
+                        arith
+                        (list
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                            0 0 0 0 0)
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                            0 0 0 0 0)))
+                      (steps ((rewrite (premise 12) lr lhs true ())) refl)
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0
+                          0 0 0 0)))
+                     refl))
+                 (have hnb
+                   (=
+                     (mod (+ (* 2 (mod qb (pow2 (- k 1)))) (mod b 2)) 2)
+                     (mod b 2))
+                   (rewrite-with
+                     (lemma mod_unique)
+                     lr
+                     lhs
+                     ((inst q (mod qb (pow2 (- k 1)))) (inst r (mod b 2)))
+                     ((by
+                        arith
+                        (list
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                            0 0 0 0 0 0)
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                            0 0 0 0 0 0)))
+                      (steps ((rewrite (premise 12) lr lhs true ())) refl)
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0
+                          0 0 0 0 0)))
+                     refl))
+                 ;; slots 26 hea, 27 hna, 28 heb, 29 hnb
+                 (have hbr
+                   (=
+                     (bxor
+                       (+ (* 2 (mod qa (pow2 (- k 1)))) (mod a 2))
+                       (+ (* 2 (mod qb (pow2 (- k 1)))) (mod b 2)))
+                     (+
+                       (*
+                         2
+                         (bxor (mod qa (pow2 (- k 1))) (mod qb (pow2 (- k 1)))))
+                       (- (+ (mod a 2) (mod b 2)) (* 2 (* (mod a 2) (mod b 2))))))
+                   (chain
+                     (rewrite-with
+                       (lemma bxor_rec)
+                       lr
+                       lhs
+                       ()
+                       ((by
+                          arith
+                          (list 1 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 2 0 0 0 0 0
+                            0 0 0 0 0 0 0))
+                        (by
+                          arith
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 2 0 0
+                            0 0 0 0 0 0 0))))
+                     (steps
+                       ((rewrite (premise hea) lr lhs true ())
+                        (rewrite (premise heb) lr lhs true ())
+                        (rewrite (premise hna) lr lhs true ())
+                        (rewrite (premise hnb) lr lhs true ()))
+                       refl)))
+                 ;; slot 30 hbr — assemble
+                 (steps
+                   ((rewrite (premise hps) lr rhs true ())
+                    (rewrite (premise hda) lr rhs true ())
+                    (rewrite (premise hdb) lr rhs true ())
+                    (rewrite (premise hma) lr rhs true ())
+                    (rewrite (premise hmb) lr rhs true ())
+                    (rewrite (premise hbr) lr rhs true ())))
+                 (rewrite-with
+                   (lemma mul_assoc)
+                   lr
+                   rhs
+                   ((inst a 2)
+                    (inst b (pow2 (- k 1)))
+                    (inst
+                      c
+                      (bxor (ediv qa (pow2 (- k 1))) (ediv qb (pow2 (- k 1))))))
+                   ())
+                 (rewrite-with
+                   (lemma bxor_rec)
+                   lr
+                   lhs
+                   ()
+                   ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                    (steps ((rewrite (premise 2) lr lhs true ())) refl)))
+                 (steps
+                   ((rewrite (premise 10) lr lhs true ())
+                    (rewrite (premise 14) lr lhs true ())
+                    (rewrite (premise hih) lr lhs true ()))
+                   (by
+                     arith
+                     (list
+                       (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                         0 0 0 0 0 0)
+                       (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                         0 0 0 0 0 0)))))))))))))
+
+;; --- the sign bit through the ops -------------------------------------------------------
+;; Reading the split at k = 63: the sign bit of band / bxor is the op on the
+;; sign bits; a shift by 63 IS the sign bit.
+
+(claim bxor_zero_r
+  (goal ((a Int)) ((= (le 0 a) True)) (= (bxor a 0) a))
+  (wf-induct a
+    (case-on (le a 0) Bool
+      ((case True
+         (fin-split
+           a
+           (premise 0)
+           (hyp True)
+           ((case 0 (steps ((compute lhs)) refl)))))
+       (case False
+         (chain
+           (have hk1 (= (le a 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (div-facts
+             a
+             2
+             qa
+             (chain
+               ;; slots: 0 le0a, 1 hk1, 2 decomp, 3 lo, 4 hi, 5 quotient
+               (have hih (= (bxor qa 0) qa)
+                 (rewrite-with
+                   (hyp 1)
+                   lr
+                   lhs
+                   ()
+                   ((by arith (list 2 1 0 -1 0 1 0))
+                    (by arith (list 2 1 0 -1 0 1 0))
+                    (by arith (list 2 0 1 1 1 0 0)))
+                   refl))
+               (rewrite-with
+                 (lemma bxor_rec)
+                 lr
+                 lhs
+                 ()
+                 ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                  (by arith (list 1 0 0 0 0 0 0 0))))
+               (steps
+                 ((compute lhs)
+                  (rewrite (premise 5) lr lhs true ())
+                  (rewrite (premise hih) lr lhs true ()))
+                 (by
+                   arith
+                   (list (list 1 0 0 1 0 0 0 0) (list 1 0 0 -1 0 0 0 0))))))))))))
+
+(claim hi_band
+  (goal ((x Int) (y Int)) ((= (le 0 x) True) (= (le 0 y) True))
+    (= (hi (band x y)) (band (hi x) (hi y))))
+  (chain
+    (have hp (= (pow2 63) 9223372036854775808) (steps ((compute lhs)) refl))
+    (have hs
+      (=
+        (band x y)
+        (+
+          (*
+            9223372036854775808
+            (band (ediv x 9223372036854775808) (ediv y 9223372036854775808)))
+          (band (mod x 9223372036854775808) (mod y 9223372036854775808))))
+      (chain
+        (rewrite-with
+          (lemma band_split)
+          lr
+          lhs
+          ((inst k 63))
+          ((by arith (list 1 0 0 0))
+           (steps ((rewrite (premise 0) lr lhs true ())) refl)
+           (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+        (steps ((rewrite (premise hp) lr lhs true ())) refl)))
+    (have hr0
+      (=
+        (le 0 (band (mod x 9223372036854775808) (mod y 9223372036854775808)))
+        True)
+      (rewrite-with
+        (lemma band_lo)
+        lr
+        lhs
+        ()
+        ((rewrite-with
+           (lemma mod_lo)
+           lr
+           lhs
+           ()
+           ((steps ((compute lhs)) refl))
+           refl)
+         (rewrite-with
+           (lemma mod_lo)
+           lr
+           lhs
+           ()
+           ((steps ((compute lhs)) refl))
+           refl))
+        refl))
+    (have hr1
+      (=
+        (le
+          (band (mod x 9223372036854775808) (mod y 9223372036854775808))
+          (mod x 9223372036854775808))
+        True)
+      (rewrite-with
+        (lemma band_le_l)
+        lr
+        lhs
+        ()
+        ((rewrite-with
+           (lemma mod_lo)
+           lr
+           lhs
+           ()
+           ((steps ((compute lhs)) refl))
+           refl)
+         (rewrite-with
+           (lemma mod_lo)
+           lr
+           lhs
+           ()
+           ((steps ((compute lhs)) refl))
+           refl))
+        refl))
+    (have hm1 (= (lt (mod x 9223372036854775808) 9223372036854775808) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (steps ((unfold hi lhs) (unfold hi rhs) (unfold hi rhs)))
+    (rewrite-with
+      (lemma div_unique)
+      lr
+      lhs
+      ((inst q (band (ediv x 9223372036854775808) (ediv y 9223372036854775808)))
+       (inst r (band (mod x 9223372036854775808) (mod y 9223372036854775808))))
+      ((steps ((rewrite (premise hs) lr lhs true ())) refl)
+       (steps ((rewrite (premise hr0) lr lhs true ())) refl)
+       (by arith (list 1 0 0 0 0 0 1 1)))
+      refl)))
+
+(claim hi_bxor
+  (goal ((x Int) (y Int)) ((= (le 0 x) True) (= (le 0 y) True))
+    (= (hi (bxor x y)) (bxor (hi x) (hi y))))
+  (chain
+    (have hp (= (pow2 63) 9223372036854775808) (steps ((compute lhs)) refl))
+    (have hs
+      (=
+        (bxor x y)
+        (+
+          (*
+            9223372036854775808
+            (bxor (ediv x 9223372036854775808) (ediv y 9223372036854775808)))
+          (bxor (mod x 9223372036854775808) (mod y 9223372036854775808))))
+      (chain
+        (rewrite-with
+          (lemma bxor_split)
+          lr
+          lhs
+          ((inst k 63))
+          ((by arith (list 1 0 0 0))
+           (steps ((rewrite (premise 0) lr lhs true ())) refl)
+           (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+        (steps ((rewrite (premise hp) lr lhs true ())) refl)))
+    (have hr0
+      (=
+        (le 0 (bxor (mod x 9223372036854775808) (mod y 9223372036854775808)))
+        True)
+      (rewrite-with
+        (lemma bxor_lo)
+        lr
+        lhs
+        ()
+        ((rewrite-with
+           (lemma mod_lo)
+           lr
+           lhs
+           ()
+           ((steps ((compute lhs)) refl))
+           refl)
+         (rewrite-with
+           (lemma mod_lo)
+           lr
+           lhs
+           ()
+           ((steps ((compute lhs)) refl))
+           refl))
+        refl))
+    (have hm1 (= (lt (mod x 9223372036854775808) 9223372036854775808) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hn1 (= (lt (mod y 9223372036854775808) 9223372036854775808) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl))
+    ;; slots: 0 1 premises, 2 hp, 3 hs, 4 hr0, 5 hm1, 6 hn1
+    (have hr1
+      (=
+        (le
+          (bxor (mod x 9223372036854775808) (mod y 9223372036854775808))
+          (- (pow2 63) 1))
+        True)
+      (rewrite-with
+        (lemma bxor_le_pow2)
+        lr
+        lhs
+        ()
+        ((by arith (list 1 0 0 0 0 0 0 0))
+         (rewrite-with
+           (lemma mod_lo)
+           lr
+           lhs
+           ()
+           ((steps ((compute lhs)) refl))
+           refl)
+         (rewrite-with
+           (lemma mod_lo)
+           lr
+           lhs
+           ()
+           ((steps ((compute lhs)) refl))
+           refl)
+         (chain
+           (steps ((rewrite (premise hp) lr lhs true ())))
+           (by arith (list 1 0 0 0 0 0 1 0)))
+         (chain
+           (steps ((rewrite (premise hp) lr lhs true ())))
+           (by arith (list 1 0 0 0 0 0 0 1))))
+        refl))
+    (steps ((unfold hi lhs) (unfold hi rhs) (unfold hi rhs)))
+    (rewrite-with
+      (lemma div_unique)
+      lr
+      lhs
+      ((inst q (bxor (ediv x 9223372036854775808) (ediv y 9223372036854775808)))
+       (inst r (bxor (mod x 9223372036854775808) (mod y 9223372036854775808))))
+      ((steps ((rewrite (premise hs) lr lhs true ())) refl)
+       (steps ((rewrite (premise hr0) lr lhs true ())) refl)
+       (by arith (list 1 0 0 -1 0 0 0 0 1)))
+      refl)))
+
+(claim shr63
+  (goal ((x Int)) ((= (le 0 x) True)) (= (bshr x 63) (hi x)))
+  (chain
+    (have hp (= (pow2 63) 9223372036854775808) (steps ((compute lhs)) refl))
+    (rewrite-with
+      (lemma shr_pow2)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (by arith (list 1 0 0))))
+    (steps ((rewrite (premise hp) lr lhs true ()) (unfold hi rhs)) refl)))
+
+;; the sign bit of an overflow test is the test on the sign bits
+(claim ov_bits
+  (goal ((a Int) (b Int) (t Int))
+    ((= (le 0 a) True) (= (le 0 b) True) (= (le 0 t) True))
+    (=
+      (bshr (band (bxor a b) (bxor a t)) 63)
+      (band (bxor (hi a) (hi b)) (bxor (hi a) (hi t)))))
+  (chain
+    (have hab (= (le 0 (bxor a b)) True)
+      (rewrite-with
+        (lemma bxor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hat (= (le 0 (bxor a t)) True)
+      (rewrite-with
+        (lemma bxor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (have hnd (= (le 0 (band (bxor a b) (bxor a t))) True)
+      (rewrite-with
+        (lemma band_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hab) lr lhs true ())) refl)
+         (steps ((rewrite (premise hat) lr lhs true ())) refl))
+        refl))
+    (rewrite-with
+      (lemma shr63)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hnd) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma hi_band)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hab) lr lhs true ())) refl)
+       (steps ((rewrite (premise hat) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma hi_bxor)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma hi_bxor)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl))
+      refl)))
+
+;; --- the biased compare --------------------------------------------------------------
+;; xor with 2^63 on an in-band immediate is the SAME linear form for both
+;; signs: 2x + 1 + 2^63 — the signed order becomes the unsigned one.
+
+(claim bias_imm
+  (goal ((x Int))
+    ((= (le -4611686018427387904 x) True) (= (lt x 4611686018427387904) True))
+    (= (bxor (imm x) 9223372036854775808) (+ (+ (* 2 x) 1) 9223372036854775808)))
+  (chain
+    (have hp (= (pow2 63) 9223372036854775808) (steps ((compute lhs)) refl))
+    (have hs
+      (=
+        (bxor (imm x) 9223372036854775808)
+        (+
+          (* 9223372036854775808 (bxor (ediv (imm x) 9223372036854775808) 1))
+          (bxor (mod (imm x) 9223372036854775808) 0)))
+      (chain
+        (rewrite-with
+          (lemma bxor_split)
+          lr
+          lhs
+          ((inst k 63))
+          ((by arith (list 1 0 0 0))
+           (steps ((rewrite (lemma imm_lo) lr lhs true ())) refl)
+           (by arith (list 1 0 0 0))))
+        (steps
+          ((rewrite (premise hp) lr lhs true ()) (compute lhs (stop imm)))
+          refl)))
+    (have hz
+      (=
+        (bxor (mod (imm x) 9223372036854775808) 0)
+        (mod (imm x) 9223372036854775808))
+      (rewrite-with
+        (lemma bxor_zero_r)
+        lr
+        lhs
+        ()
+        ((rewrite-with
+           (lemma mod_lo)
+           lr
+           lhs
+           ()
+           ((steps ((compute lhs)) refl))
+           refl))
+        refl))
+    ;; slots: 0 1 premises, 2 hp, 3 hs, 4 hz
+    (case-on (lt x 0) Bool
+      ((case True
+         (chain
+           (have ht (= (lt x 0) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have hi1 (= (imm x) (+ (+ (* 2 x) 1) 18446744073709551616))
+             (rewrite-with
+               (lemma imm_neg)
+               lr
+               lhs
+               ()
+               ((by arith (list 1 1 0 0 0 0 0))
+                (steps ((rewrite (premise ht) lr lhs true ())) refl))
+               refl))
+           (have hh (= (hi (imm x)) 1)
+             (rewrite-with
+               (lemma hi_imm_n1)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                (steps ((rewrite (premise ht) lr lhs true ())) refl))
+               refl))
+           (have hh2 (= (ediv (imm x) 9223372036854775808) 1)
+             (steps
+               ((rewrite (premise hh) rl rhs true ()) (unfold hi rhs))
+               refl))
+           ;; slots: 5 ht, 6 hi1, 7 hh, 8 hh2
+           (have hl
+             (=
+               (mod (imm x) 9223372036854775808)
+               (+ (+ (* 2 x) 1) 9223372036854775808))
+             (chain
+               (steps ((rewrite (premise hi1) lr lhs true ())))
+               (rewrite-with
+                 (lemma mod_unique)
+                 lr
+                 lhs
+                 ((inst q 1) (inst r (+ (+ (* 2 x) 1) 9223372036854775808)))
+                 ((by
+                    arith
+                    (list (list 1 0 0 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0 0 0)))
+                  (by arith (list 1 2 0 0 0 0 0 0 0 0))
+                  (by arith (list 1 0 0 0 0 0 2 0 0 0)))
+                 refl)))
+           (steps
+             ((rewrite (premise hs) lr lhs true ())
+              (rewrite (premise hh2) lr lhs true ())
+              (rewrite (premise hz) lr lhs true ())
+              (rewrite (premise hl) lr lhs true ())
+              (compute lhs))
+             (by
+               arith
+               (list (list 1 0 0 0 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0 0 0 0))))))
+       (case False
+         (chain
+           (have hf (= (lt x 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hx0 (= (le 0 x) True) (by arith (list 1 0 0 0 0 0 1)))
+           (have hi1 (= (imm x) (+ (* 2 x) 1))
+             (rewrite-with
+               (lemma imm_pos)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise hx0) lr lhs true ())) refl)
+                (by arith (list 1 0 1 0 0 0 0 0)))
+               refl))
+           (have hh (= (hi (imm x)) 0)
+             (rewrite-with
+               (lemma hi_imm_p0)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise hx0) lr lhs true ())) refl)
+                (steps ((rewrite (premise 1) lr lhs true ())) refl))
+               refl))
+           (have hh2 (= (ediv (imm x) 9223372036854775808) 0)
+             (steps
+               ((rewrite (premise hh) rl rhs true ()) (unfold hi rhs))
+               refl))
+           ;; slots: 5 hf, 6 hx0, 7 hi1, 8 hh, 9 hh2
+           (have hl (= (mod (imm x) 9223372036854775808) (+ (* 2 x) 1))
+             (chain
+               (steps ((rewrite (premise hi1) lr lhs true ())))
+               (rewrite-with
+                 (lemma mod_unique)
+                 lr
+                 lhs
+                 ((inst q 0) (inst r (+ (* 2 x) 1)))
+                 ((by
+                    arith
+                    (list
+                      (list 1 0 0 0 0 0 0 0 0 0 0)
+                      (list 1 0 0 0 0 0 0 0 0 0 0)))
+                  (by arith (list 1 0 0 0 0 0 0 2 0 0 0))
+                  (by arith (list 1 0 2 0 0 0 0 0 0 0 0)))
+                 refl)))
+           (steps
+             ((rewrite (premise hs) lr lhs true ())
+              (rewrite (premise hh2) lr lhs true ())
+              (rewrite (premise hz) lr lhs true ())
+              (rewrite (premise hl) lr lhs true ())
+              (compute lhs))
+             (by
+               arith
+               (list
+                 (list 1 0 0 0 0 0 0 0 0 0 0 0)
+                 (list 1 0 0 0 0 0 0 0 0 0 0 0))))))))))
+
+(claim bias_le
+  (goal ((x Int) (y Int))
+    ((= (le -4611686018427387904 x) True)
+     (= (lt x 4611686018427387904) True)
+     (= (le -4611686018427387904 y) True)
+     (= (lt y 4611686018427387904) True))
+    (=
+      (le (bxor (imm x) 9223372036854775808) (bxor (imm y) 9223372036854775808))
+      (le x y)))
+  (chain
+    (have hx
+      (=
+        (bxor (imm x) 9223372036854775808)
+        (+ (+ (* 2 x) 1) 9223372036854775808))
+      (rewrite-with
+        (lemma bias_imm)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hy
+      (=
+        (bxor (imm y) 9223372036854775808)
+        (+ (+ (* 2 y) 1) 9223372036854775808))
+      (rewrite-with
+        (lemma bias_imm)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 3) lr lhs true ())) refl))
+        refl))
+    (steps
+      ((rewrite (premise hx) lr lhs true ())
+       (rewrite (premise hy) lr lhs true ())))
+    (case-on (le x y) Bool
+      ((case True
+         (chain
+           (have ht (= (le x y) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (steps
+             ((rewrite (premise ht) lr rhs true ()))
+             (by arith (list 1 0 0 0 0 0 0 2)))))
+       (case False
+         (chain
+           (have hf (= (le x y) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (steps
+             ((rewrite (premise hf) lr rhs true ()))
+             (by arith (list 1 0 0 0 0 0 0 2)))))))))
+
+;; --- the fuel bridge, continued (rth_kit: nat_open / int_npred / nat_peel) -----------
+
+(claim int_ntl
+  (goal ((k Int) (n Nat)) ((= (le 0 k) True) (= (le k (int_of_nat n)) True))
+    (= (int_of_nat (ntl k n)) (- (int_of_nat n) k)))
+  (wf-induct k
+    (case-on (lt k 1) Bool
+      ((case True
+         (chain
+           (have hg (= (lt k 1) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have hk0 (= (le k 0) True) (by arith (list 1 0 0 1)))
+           (steps
+             ((unfold ntl lhs)
+              (rewrite (premise hg) lr lhs true ())
+              (reduce lhs))
+             (by arith (list (list 1 0 0 0 1) (list 1 1 0 0 0))))))
+       (case False
+         (chain
+           (have h1 (= (lt k 1) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hn1 (= (le 1 (int_of_nat n)) True) (by arith (list 1 0 1 1)))
+           (have hnp (= (int_of_nat (npred n)) (- (int_of_nat n) 1))
+             (rewrite-with
+               (lemma int_npred)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise hn1) lr lhs true ())) refl))
+               refl))
+           (steps
+             ((unfold ntl lhs)
+              (rewrite (premise h1) lr lhs true ())
+              (reduce lhs)))
+           (rewrite-with
+             (hyp 1)
+             lr
+             lhs
+             ()
+             ((by arith (list 1 0 0 1 0 0))
+              (chain
+                (steps ((rewrite (premise hnp) lr lhs true ())))
+                (by arith (list 1 0 1 0 0 0)))
+              (by arith (list 1 0 0 1 0 0))
+              (by arith (list 1 0 0 0 0 0))))
+           (steps
+             ((rewrite (premise hnp) lr lhs true ()))
+             (by arith (list (list 1 0 0 0 0 0) (list 1 0 0 0 0 0))))))))))
+
+(claim int_eq_eq
+  (goal ((a Int) (b Int)) ((= (int_eq a b) True)) (= a b))
+  (by arith (list (list 1 -1) (list 1 1))))
+
+(claim dbl_lo
+  (goal ((n Int)) () (= (le 0 (dbl n)) True))
+  (chain
+    (steps ((unfold dbl lhs)))
+    (rewrite-with (lemma mod_lo) lr lhs () ((steps ((compute lhs)) refl)) refl)))
+
+;; the same, with the shared operand second (arith_add's test)
+(claim ov_bits2
+  (goal ((a Int) (b Int) (t Int))
+    ((= (le 0 a) True) (= (le 0 b) True) (= (le 0 t) True))
+    (=
+      (bshr (band (bxor a t) (bxor b t)) 63)
+      (band (bxor (hi a) (hi t)) (bxor (hi b) (hi t)))))
+  (chain
+    (have hat (= (le 0 (bxor a t)) True)
+      (rewrite-with
+        (lemma bxor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (have hbt (= (le 0 (bxor b t)) True)
+      (rewrite-with
+        (lemma bxor_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (have hnd (= (le 0 (band (bxor a t) (bxor b t))) True)
+      (rewrite-with
+        (lemma band_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hat) lr lhs true ())) refl)
+         (steps ((rewrite (premise hbt) lr lhs true ())) refl))
+        refl))
+    (rewrite-with
+      (lemma shr63)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hnd) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma hi_band)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise hat) lr lhs true ())) refl)
+       (steps ((rewrite (premise hbt) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma hi_bxor)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma hi_bxor)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl))
+      refl)))
+
+;; --- THE OVERFLOW LAWS ------------------------------------------------------------------
+;; In the direction the run needs: a zero sign-xor test puts the result in
+;; band. Each: the test on the sign bits (ov_bits), the out-of-band case
+;; forces the operand signs, the range lemmas make the bits literal, and
+;; the test computes to 1 against the premise's 0.
+
+(claim ov_sub_lo
+  (goal ((x Int) (y Int))
+    ((= (le -4611686018427387904 x) True)
+     (= (lt x 4611686018427387904) True)
+     (= (le -4611686018427387904 y) True)
+     (= (lt y 4611686018427387904) True)
+     (= (bshr (band (bxor (imm x) (dbl y)) (bxor (imm x) (imm (- x y)))) 63) 0))
+    (= (le -4611686018427387904 (- x y)) True))
+  (chain
+    (have hb
+      (=
+        (bshr (band (bxor (imm x) (dbl y)) (bxor (imm x) (imm (- x y)))) 63)
+        (band
+          (bxor (hi (imm x)) (hi (dbl y)))
+          (bxor (hi (imm x)) (hi (imm (- x y))))))
+      (rewrite-with
+        (lemma ov_bits)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (lemma imm_lo) lr lhs true ())) refl)
+         (steps ((rewrite (lemma dbl_lo) lr lhs true ())) refl)
+         (steps ((rewrite (lemma imm_lo) lr lhs true ())) refl))
+        refl))
+    (case-on (lt (- x y) -4611686018427387904) Bool
+      ((case False
+         (chain
+           (have hf (= (lt (- x y) -4611686018427387904) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (by arith (list 1 0 0 0 0 0 0 1))))
+       (case True
+         (chain
+           (have ht (= (lt (- x y) -4611686018427387904) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have hx0 (= (lt x 0) True) (by arith (list 1 0 0 0 1 0 0 1)))
+           (have hy0 (= (le 0 y) True) (by arith (list 1 1 0 0 0 0 0 1 0)))
+           (have h1 (= (hi (imm x)) 1)
+             (rewrite-with
+               (lemma hi_imm_n1)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                (steps ((rewrite (premise hx0) lr lhs true ())) refl))
+               refl))
+           (have h2 (= (hi (dbl y)) 0)
+             (rewrite-with
+               (lemma hi_dbl_p)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise hy0) lr lhs true ())) refl)
+                (steps ((rewrite (premise 3) lr lhs true ())) refl))
+               refl))
+           (have h3 (= (hi (imm (- x y))) 0)
+             (rewrite-with
+               (lemma hi_imm_n0)
+               lr
+               lhs
+               ()
+               ((by arith (list 1 1 0 0 1 0 0 0 0 0 0 0))
+                (steps ((rewrite (premise ht) lr lhs true ())) refl))
+               refl))
+           (have hc (= 1 0)
+             (steps
+               ((rewrite (premise 4) rl rhs true ())
+                (rewrite (premise hb) lr rhs true ())
+                (rewrite (premise h1) lr rhs true ())
+                (rewrite (premise h2) lr rhs true ())
+                (rewrite (premise h3) lr rhs true ())
+                (compute rhs))
+               refl))
+           (absurd (premise hc))))))))
+
+(claim ov_sub_hi
+  (goal ((x Int) (y Int))
+    ((= (le -4611686018427387904 x) True)
+     (= (lt x 4611686018427387904) True)
+     (= (le -4611686018427387904 y) True)
+     (= (lt y 4611686018427387904) True)
+     (= (bshr (band (bxor (imm x) (dbl y)) (bxor (imm x) (imm (- x y)))) 63) 0))
+    (= (lt (- x y) 4611686018427387904) True))
+  (chain
+    (have hb
+      (=
+        (bshr (band (bxor (imm x) (dbl y)) (bxor (imm x) (imm (- x y)))) 63)
+        (band
+          (bxor (hi (imm x)) (hi (dbl y)))
+          (bxor (hi (imm x)) (hi (imm (- x y))))))
+      (rewrite-with
+        (lemma ov_bits)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (lemma imm_lo) lr lhs true ())) refl)
+         (steps ((rewrite (lemma dbl_lo) lr lhs true ())) refl)
+         (steps ((rewrite (lemma imm_lo) lr lhs true ())) refl))
+        refl))
+    (case-on (lt (- x y) 4611686018427387904) Bool
+      ((case True
+         (chain
+           (have ht (= (lt (- x y) 4611686018427387904) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (steps ((rewrite (premise ht) lr lhs true ())) refl)))
+       (case False
+         (chain
+           (have hf (= (lt (- x y) 4611686018427387904) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hx0 (= (le 0 x) True) (by arith (list 1 0 0 1 0 0 0 1)))
+           (have hy0 (= (lt y 0) True) (by arith (list 1 0 1 0 0 0 0 1 0)))
+           (have h1 (= (hi (imm x)) 0)
+             (rewrite-with
+               (lemma hi_imm_p0)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise hx0) lr lhs true ())) refl)
+                (steps ((rewrite (premise 1) lr lhs true ())) refl))
+               refl))
+           (have h2 (= (hi (dbl y)) 1)
+             (rewrite-with
+               (lemma hi_dbl_n)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+                (steps ((rewrite (premise hy0) lr lhs true ())) refl))
+               refl))
+           (have h3 (= (hi (imm (- x y))) 1)
+             (rewrite-with
+               (lemma hi_imm_p1)
+               lr
+               lhs
+               ()
+               ((by arith (list 1 0 0 0 0 0 0 1 0 0 0 0))
+                (by arith (list 1 0 1 1 0 0 0 0 0 0 0 0)))
+               refl))
+           (have hc (= 1 0)
+             (steps
+               ((rewrite (premise 4) rl rhs true ())
+                (rewrite (premise hb) lr rhs true ())
+                (rewrite (premise h1) lr rhs true ())
+                (rewrite (premise h2) lr rhs true ())
+                (rewrite (premise h3) lr rhs true ())
+                (compute rhs))
+               refl))
+           (absurd (premise hc))))))))
+
+(claim ov_add_lo
+  (goal ((x Int) (y Int))
+    ((= (le -4611686018427387904 x) True)
+     (= (lt x 4611686018427387904) True)
+     (= (le -4611686018427387904 y) True)
+     (= (lt y 4611686018427387904) True)
+     (=
+       (bshr
+         (band (bxor (imm x) (imm (+ x y))) (bxor (dbl y) (imm (+ x y))))
+         63)
+       0))
+    (= (le -4611686018427387904 (+ x y)) True))
+  (chain
+    (have hb
+      (=
+        (bshr
+          (band (bxor (imm x) (imm (+ x y))) (bxor (dbl y) (imm (+ x y))))
+          63)
+        (band
+          (bxor (hi (imm x)) (hi (imm (+ x y))))
+          (bxor (hi (dbl y)) (hi (imm (+ x y))))))
+      (rewrite-with
+        (lemma ov_bits2)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (lemma imm_lo) lr lhs true ())) refl)
+         (steps ((rewrite (lemma dbl_lo) lr lhs true ())) refl)
+         (steps ((rewrite (lemma imm_lo) lr lhs true ())) refl))
+        refl))
+    (case-on (lt (+ x y) -4611686018427387904) Bool
+      ((case False
+         (chain
+           (have hf (= (lt (+ x y) -4611686018427387904) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (by arith (list 1 0 0 0 0 0 0 1))))
+       (case True
+         (chain
+           (have ht (= (lt (+ x y) -4611686018427387904) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have hx0 (= (lt x 0) True) (by arith (list 1 0 0 1 0 0 0 1)))
+           (have hy0 (= (lt y 0) True) (by arith (list 1 1 0 0 0 0 0 1 0)))
+           (have h1 (= (hi (imm x)) 1)
+             (rewrite-with
+               (lemma hi_imm_n1)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                (steps ((rewrite (premise hx0) lr lhs true ())) refl))
+               refl))
+           (have h2 (= (hi (dbl y)) 1)
+             (rewrite-with
+               (lemma hi_dbl_n)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+                (steps ((rewrite (premise hy0) lr lhs true ())) refl))
+               refl))
+           (have h3 (= (hi (imm (+ x y))) 0)
+             (rewrite-with
+               (lemma hi_imm_n0)
+               lr
+               lhs
+               ()
+               ((by arith (list 1 1 0 1 0 0 0 0 0 0 0 0))
+                (steps ((rewrite (premise ht) lr lhs true ())) refl))
+               refl))
+           (have hc (= 1 0)
+             (steps
+               ((rewrite (premise 4) rl rhs true ())
+                (rewrite (premise hb) lr rhs true ())
+                (rewrite (premise h1) lr rhs true ())
+                (rewrite (premise h2) lr rhs true ())
+                (rewrite (premise h3) lr rhs true ())
+                (compute rhs))
+               refl))
+           (absurd (premise hc))))))))
+
+(claim ov_add_hi
+  (goal ((x Int) (y Int))
+    ((= (le -4611686018427387904 x) True)
+     (= (lt x 4611686018427387904) True)
+     (= (le -4611686018427387904 y) True)
+     (= (lt y 4611686018427387904) True)
+     (=
+       (bshr
+         (band (bxor (imm x) (imm (+ x y))) (bxor (dbl y) (imm (+ x y))))
+         63)
+       0))
+    (= (lt (+ x y) 4611686018427387904) True))
+  (chain
+    (have hb
+      (=
+        (bshr
+          (band (bxor (imm x) (imm (+ x y))) (bxor (dbl y) (imm (+ x y))))
+          63)
+        (band
+          (bxor (hi (imm x)) (hi (imm (+ x y))))
+          (bxor (hi (dbl y)) (hi (imm (+ x y))))))
+      (rewrite-with
+        (lemma ov_bits2)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (lemma imm_lo) lr lhs true ())) refl)
+         (steps ((rewrite (lemma dbl_lo) lr lhs true ())) refl)
+         (steps ((rewrite (lemma imm_lo) lr lhs true ())) refl))
+        refl))
+    (case-on (lt (+ x y) 4611686018427387904) Bool
+      ((case True
+         (chain
+           (have ht (= (lt (+ x y) 4611686018427387904) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (steps ((rewrite (premise ht) lr lhs true ())) refl)))
+       (case False
+         (chain
+           (have hf (= (lt (+ x y) 4611686018427387904) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hx0 (= (le 0 x) True) (by arith (list 1 0 0 0 1 0 0 1)))
+           (have hy0 (= (le 0 y) True) (by arith (list 1 0 1 0 0 0 0 1 0)))
+           (have h1 (= (hi (imm x)) 0)
+             (rewrite-with
+               (lemma hi_imm_p0)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise hx0) lr lhs true ())) refl)
+                (steps ((rewrite (premise 1) lr lhs true ())) refl))
+               refl))
+           (have h2 (= (hi (dbl y)) 0)
+             (rewrite-with
+               (lemma hi_dbl_p)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise hy0) lr lhs true ())) refl)
+                (steps ((rewrite (premise 3) lr lhs true ())) refl))
+               refl))
+           (have h3 (= (hi (imm (+ x y))) 1)
+             (rewrite-with
+               (lemma hi_imm_p1)
+               lr
+               lhs
+               ()
+               ((by arith (list 1 0 0 0 0 0 0 1 0 0 0 0))
+                (by arith (list 1 0 1 0 1 0 0 0 0 0 0 0)))
+               refl))
+           (have hc (= 1 0)
+             (steps
+               ((rewrite (premise 4) rl rhs true ())
+                (rewrite (premise hb) lr rhs true ())
+                (rewrite (premise h1) lr rhs true ())
+                (rewrite (premise h2) lr rhs true ())
+                (rewrite (premise h3) lr rhs true ())
+                (compute rhs))
+               refl))
+           (absurd (premise hc))))))))

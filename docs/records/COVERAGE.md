@@ -1408,3 +1408,234 @@ iii's; recorded below when green.
 GATES (2026-08-27): pipelines 438 (5985773, part i), 439 (cd0ca92,
 part ii), 440 (6bee27e, part iii) all GREEN, CORPUS == BASELINE —
 C2b-4's acceptance is met end to end.
+
+**B-0 — THE PROBE: DESIGN (2026-09-04; written before the first edit).
+User ruling 2026-09-04 ("Go ahead with the B-0 probe"): the reorder
+question the 2026-09-02 review left open is RESOLVED — Theorem B is
+priced BEFORE C2b-5/C2b-6, on the heap-free fns of the micro-flagship,
+which need no rt_dec law.** The arc's remaining unknown is whether a
+per-fn certificate can be generated from impc's product, checked in
+size linear in the body, and closed by the engine; C2b-5/6 are
+known-shape work and do not depend on the answer. The probe delivers
+THREE NUMBERS and a shape: (1) certificate lines per fn (hand-written
+here; the template a generator would emit), (2) check wall-time for
+the kit and for the per-fn theorem separately (baselines: rth_kit 735
+claims 1.6 s, fra_micro 904 claims 5.2 s), (3) the engine's reach —
+tools/prove (the ladder) and prove_drive on the kit's leaves and on
+the per-fn theorem's residual goals, counted closed / open. The §6
+downgrade trigger (≈300 formatted lines per fn) is read against (1).
+
+**THE TARGET.** `sumto` of tools/impc/fixtures/micro.shard (Int-measure
+recursion: compare, subtraction, a real call, addition, two overflow
+tests, an if) — the one fn that exercises the whole heap-free
+skeleton: immediates, the biased compare, the sign-xor overflow tests,
+a call with the FStack leg, the IH along the source measure, and the
+fuel algebra. `id` is the trivial second point if time allows; mul
+(sra1 + magnitudes + divide-back) and constructor/match fns are OUT of
+B-0 (they are B-1's growth; mul's law kit is the next-heaviest item).
+
+**THE STATEMENT (the P7 / §11 shape, heap-free instance):**
+```
+(claim tb_sumto
+  (goal ((n Int) (fuel Nat) (fs (List IpFn)) (mlo Int) (msz Int)
+         (dmax Int) (d Int) (m Mem))
+    ((= (le -4611686018427387904 n) True) (= (lt n 4611686018427387904) True)
+     (= (ipfn_at fs 10) (Some (sumto_ipfn)))
+     (= (le 20 (int_of_nat fuel)) True)
+     (= (le (+ 20 (* 15 n)) (int_of_nat fuel)) True))
+    (= (tb_ok (ipcall fuel fs mlo msz dmax d 10 (Cons (imm n) Nil) m)
+              (imm (sumto n))) True)))
+```
+`tb_ok r v` = the POST-PREDICATE over the run: `None` → False (fuel
+exhaustion is excluded by the budget), `IpRtrap` → False (no trap on
+a well-kinded product), `IpRv w _` → `int_eq w v`, `IpRfailed _` →
+True (a declared family — overflow / stack — is the artifact's
+`except` clause, P9/#26; the family is not pinned here). The memory
+clause is ABSENT: a heap-free fn's run threads `m` unchanged and the
+predicate never reads it; the general B form (constructor fns) puts
+`heap_rep`/`hinv`/readback of `m'` into the same predicate — Bool fns
+over Mem, never a structural Mem equality. The table is SYMBOLIC with
+the fn pinned at its index by premise (P5's call composition: a
+theorem is about any table holding the fn at that index); the
+micro table's instance is one compute lemma. Depth `d` and `dmax` are
+universal — the `lt d dmax` gate's False leg IS the FStack leg.
+
+**THE FUEL ALGEBRA (the §11 "first thing to re-open").** imp's fuel is
+a NESTING DEPTH, not a linear budget (ipstmts burns one level per list
+node, ipstmt one per statement, ipcall one per call; siblings run at
+the SAME level). For sumto: the recursive ipcall sits 15 levels below
+the entry, the else-branch tail needs 20 from the entry, the true
+branch 11. Budget premise `20 + 15·n ≤ int_of_nat fuel` (plus `20 ≤`
+for n ≤ 0) — linear in the measure, Farkas-shaped (C2b's discipline).
+Proof mechanics: `nat_peel` at k = 20 rewrites `fuel` to the literal
+tower `nS 20 (ntl 20 fuel)`; compute STOPS `ntl` so the remainder
+stays spelled `(ntl 20 fuel)`; the IH is instantiated at
+`(S^5 (ntl 20 fuel))` and its budget premise discharged by a new
+`int_ntl` law (`int_of_nat (ntl k n) = int_of_nat n − k` for
+0 ≤ k ≤ int_of_nat n; wf-induct on k over rth_kit's int_npred) plus
+int_of_nat_succ ×5. No monotonicity lemma (Theorem A's precedent).
+
+**THE ONCE-PROVEN LAWS (models/imp/probes/tb_kit.shard — the
+IMMEDIATE-ARITHMETIC KIT, stated in impc's EMITTED shapes so the
+per-fn proof cites them after `compute`):**
+- vocabulary: `imm n = mod (2n+1) 2^64`, `dbl n = mod (2n) 2^64` (the
+  "b − 1" word both arith_add/arith_sub form), `hi w = ediv w 2^63`
+  (the sign bit), `lo w = mod w 2^63`, `tb_ok`;
+- imm facts: band (0 ≤ imm n < 2^64), `imm_mod` (the entry's
+  iband_args re-mod is identity), `imm_pos`/`imm_neg` (the two
+  two's-complement spellings), `hi_imm_*` (the sign bit of an
+  immediate in each of the FOUR z-ranges a sum/difference of two
+  in-band values can land in: [0,2^62) → 0, [2^62,2^63) → 1,
+  [−2^62,0) → 1, (−2^63,−2^62) → 0), `dbl_*` likewise;
+- the ring facts on mod 2^64 needed by the emitted shapes (`mod_mod`,
+  the `mod (mod a M ± b) M` absorptions) — from ediv_mod_id +
+  mod_unique; NOT x86.shard's wrap64 (closure discipline: the kit is
+  machine-free);
+- THE BIT SPLIT (the foundation): `band_split`/`bxor_split` — for
+  a, b ≥ 0 and k ≥ 0: `band a b = pow2 k · band (a div 2^k) (b div 2^k)
+  + band (a mod 2^k) (b mod 2^k)`, same for bxor; wf-induct on k over
+  the kernel's low-bit recurrences band_rec/bxor_rec, with three
+  quotient/remainder composition helpers (ediv (ediv a 2) P =
+  ediv a (2P); ediv (mod a (2P)) 2 = mod (ediv a 2) P; mod (mod a (2P))
+  2 = mod a 2) from div_unique/mod_unique. Instances at k = 63 over
+  words < 2^64 give `hi (band p q) = hi p · hi q` and `hi (bxor p q) =
+  hi p ⊕ hi q` (bits by fin-split), and `bshr w 63 = hi w` is
+  std/bits' shr_pow2 at the transparent pow2 63. This is the kit
+  every arithmetic construct shares (the bias compare reads bit 63,
+  mul's sra1/sign extraction reads bit 63) — priced once here;
+- the construct laws: `bias_le` (`le (bxor (imm x) 2^63) (bxor (imm y)
+  2^63) = le x y` in band), `imm_sub` (`mod (imm x − dbl y) 2^64 =
+  imm (x − y)`), `imm_add` (`mod (imm x + dbl y) 2^64 = imm (x + y)`),
+  `dbl_of_imm` (`mod (imm y − 1) 2^64 = dbl y`), and the two OVERFLOW
+  laws in the ONE direction the run needs: `ov_sub`: band(x), band(y),
+  `bshr (band (bxor (imm x) (dbl y)) (bxor (imm x) (imm (x−y)))) 63 =
+  0` ⟹ x − y in band (two conclusions, lo and hi); `ov_add` the same
+  over `(bxor (imm x) (imm (x+y)))` and `(bxor (dbl y) (imm (x+y)))`.
+  Proof: split at 63 → the sign bits → hi_imm_* case analysis over the
+  signs of x, y and the four ranges of the result; each leaf is a
+  Farkas row set or a 0 = 1 refutation. The reverse direction (in band
+  ⟹ no overflow) is NOT needed by tb_ok's fail leg and is not proven
+  in B-0 (it becomes needed only for a theorem that PINS the family).
+
+**THE PER-FN PROOF (hand-written in B-0 as the template — the
+rth_init / fe_step_trunc32 precedent; the generator question is
+decided on this text, §3's law: it is impc's to emit at C3b):**
+wf-induct on n; peel the fuel; unfold ipcall, rewrite the table
+premise, the arity check computes, case-on `lt d dmax` (False = the
+FStack leg: tb_ok computes to True); compute the body (stop imm dbl
+ntl sumto tb_ok and the bit prims) to the first stuck guard; each
+guard: instance-have for the literal operand spelled as `(imm 0)` /
+`(dbl 1)`, the construct law, case-on the source-level test, compute
+onward; at the call: the IH via rewrite-with at fuel' = S^5 (ntl 20
+fuel), d' = d + 1, n' = n − 1 (budget by int_ntl, band by ov_sub);
+case-on the callee's run through tb_ok (None / IpRtrap refuted by the
+IH, IpRfailed → the outer fails the same family → True, IpRv →
+int_eq_eq → the word is `imm (sumto (n−1))`), then dbl_of_imm, imm_add,
+ov_add, and the final `int_eq (imm (n + sumto (n−1))) (imm (sumto n))`
+by unfolding sumto's else branch.
+
+**RESIDENCE + GATES.** models/imp/probes/tb_kit.shard (imports kernel,
+std/mem, std/nat, std/bits, std/order, imp, rt, rth_kit — B stands on
+C2b by design; machine-free) and models/imp/probes/tb_micro.shard (the
+instance over the real product: imports micro_ipc_out.shard; the table
+compute lemma; tb_sumto's corollary at the micro table). Both are
+corpus check targets (the fra_micro / rth_kit rows' shape). Acceptance:
+both files 0 failed locally; CI FAIL set == baseline; the three numbers
+in the LANDS record; the decision rule stated in advance: if (1) reads
+past ~300 lines for sumto's theorem body (kit excluded), or the split
+kit fails to close the overflow laws, the reflected-interpreter door
+(§11's rejected alternative for B) is priced before C2b-5 is resumed;
+otherwise C2b-5/6 resume and B-1 (mul, constructors/match over the C2b
+laws, the generator) follows them.
+
+**B-0 — THE PROBE: LANDS (2026-09-04).** Both files check 0 failed
+(tb_kit 772 in closure, tb_micro 774), both shardfmt byte-fixpoints,
+both registered as corpus check targets beside rth_kit/rth_run. THE
+THREE NUMBERS:
+- **(1) certificate size.** `tb_sumto` = 762 canonical lines (the whole
+  claim; statement 15, proof body ≈ 747) — 350 as hand-spelled before
+  shardfmt. The kit (tb_kit.shard, 37 claims) = 2,465 canonical lines
+  (1,835 hand-spelled); its heaviest members are band_split/bxor_split
+  (the wf-induct bit split) and the four ov_* laws (generated by a
+  scratch script over the sign-range case tree, ov_bits2.txt). Against
+  the ≈300 gate: the body reads 2.5× PAST it in canonical form and
+  past it (350) even hand-spelled. Where the lines go: ~40% is the
+  overflow-guard idiom repeated twice (instance-have for the literal
+  operand, the construct law, case-on the test, int_eq_eq, two
+  ov_* cites with five one-line obligations each); ~25% is UNPACKING
+  the callee's `tb_ok` after the IH (hres → hwe → hw → hin → hsl →
+  hsh: six haves to get the word and the two band facts out of a Bool
+  post-predicate); ~15% the callee-run case analysis (None / IpRtrap
+  refuted through the IH, IpRfailed passes through, IpRv continues);
+  the rest is the peel, the compare guard, and the closer. Two
+  kit-side changes would take out roughly a third without touching
+  the kernel: three `tb_ok_rv_*` peel lemmas (word / lo / hi from
+  `tb_ok (Some (IpRv w m)) v = True`) turn the six-have unpack into
+  three cites, and stating the ov_* laws with the band premises
+  BUNDLED as one `in63` hypothesis halves their obligation lists.
+  Neither was done in B-0: the number is reported on the template as
+  first written.
+- **(2) check cost.** Same machine, same session, closure timings:
+  rth_kit 1.88 s (735 claims) → tb_kit 1.84 s (+37 kit claims, inside
+  the noise) → tb_micro 2.0 s (+ the table lemma + tb_sumto). The
+  per-fn theorem costs ≈0.15 s to check; the kit ≈0.1 s. The check is
+  linear in the body and cheap — the certificate is big in TEXT, not
+  in checker time (compute runs the whole ipstmts skeleton to each
+  stuck guard in one step; nothing in the proof is quadratic).
+- **(3) engine reach.** tools/prove (the ladder), one-claim-`auto`
+  copies, one run per claim, 12-way parallel: kit 1/37 closed
+  (int_eq_eq, `(by arith (list))`), tb_sumto 0/1; every other claim
+  "search exhausted" — wall 40–55 s for the plain ones, ≈1,090 s for
+  the eleven whose premises admit the conditional-citation stages
+  (bias_le, hi_*, imm_add, dbl_lo, bxor_zero_r, hi_band), 106 s for
+  tb_sumto. tools/reach's policy-free floor: kit 1/37 (the same
+  lemma), tb_micro 1/2 (micro_sumto_at by compute). The engine drive
+  (prove_branch via `reach --engine`, the capped local smoke the
+  search-on-CI rule allows): micro_sumto_at closes by compute; tb_sumto ran the
+  full 900 s local cap without a verdict (killed, no OPEN row) — 0/1.
+  What no rung has: the mod-ring identities through ediv_mod_id +
+  mod_unique with a 2^64 literal, wf-induct on an Int with fin-split
+  leaves, and the shape of tb_sumto itself (peel + a nine-deep
+  case-on chain with twenty haves) — an order of magnitude past
+  prove_branch's root-alternative budgets (depth 6/8). B's proofs are
+  GENERATOR territory (impc emitting the template per construct, §3),
+  not search territory, exactly as C2b's were.
+
+**FINDINGS.** (a) FUEL: the design's count ("the else-branch tail
+needs 20") was one short — the add's overflow `IpFail` sits at nesting
+21 (the IpIf's else LIST is a level below the IpIf, the statement one
+more); the theorem's budget premises read `21 ≤ fuel` and
+`21 + 15n ≤ fuel`, the peel is nat_peel at 21, the IH at
+`S^6 (ntl 21 fuel)` (int_ntl + int_of_nat_succ ×6; the certs are
+unchanged). The engine found it: the only failing arm after the first
+full write was that IpFail leg, stuck at `(match (ntl 20 fuel) (Z None)
+…)`. A generator must count nesting from the product, never from the
+source. (b) `tb_ok`'s value leg carries `in63 v` (the design as
+recorded above already says so; it was corrected before the theorem
+was written) — without it the caller's ov_add has no band for the
+callee's result. (c) The per-fn mechanics as they actually run (the
+template): compute halts at each stuck guard holding BOTH branches;
+guards are respelled by instance-haves for literal operands (`(imm 0)`,
+`(dbl 1)`) then all-occurrence premise rewrites; source-level case
+splits; the recursive ipcall stays folded (`stop ipcall`) and its term
+spelling matches the IH instance exactly; `case-on RUN Option` then
+`case-on r IpRet`, refutations by `have hf (= False True)` rewriting
+hih rl on the rhs + the case equations + compute, closed by absurd.
+(d) DSL facts learned (for the generator and the next author): Farkas
+cert = `(list G slot…)` with slots = claim premises then haves in
+order, names alias indices; equation rows may take negative
+coefficients; a rewrite-with can sit mid-chain with only its
+obligation list; `(compute lhs (stop …))` folds ground prims but never
+evaluates under a stuck `if`; a wf-induct IH's measure binder is
+renamed — cite it `rl` on the rhs that binds it; `fin-split` wants
+LE-spelled bounds; `div-facts a 2 qa` appends four numbered premises.
+
+**THE DECISION RULE, READ.** Number (1) fires the rule's letter: the
+body is past ≈300 lines. Numbers (2) and (3) say what the gate was a
+proxy for: the certificate checks in linear, negligible time and its
+text is a fixed recipe per construct (a generator's output, three
+constructs deep: guard, call, closer) — which is what "certificate
+generated from impc's product, checked in size linear in the body"
+asked. The reflected-interpreter door (§11) is therefore PRICED, not
+opened, and the pricing is put to the user with the numbers — see the
+session report; C2b-5/6 stay paused until it is read.
