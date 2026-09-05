@@ -1133,7 +1133,9 @@ BLOCKS.append(("dec", BANNER_DEC, dec_block))
 # scratch), at the slot word w = [a + 8 + 8i], in the code's four cases:
 # odd (skip), immortal (skip), shared ([w] := hword − 1), dying ([w] :=
 # hword − count + hd; hd := w).  The loop lemma composes these by
-# wf-induct on the remaining slots (hand-written, part ii-c).
+# induction on the remaining slots (hand-written, part ii-c); the fuel is a
+# LITERAL S-tower over a Nat binder so the loop lemma can cite a leg at any
+# remainder.
 SLOTS_TOWER = 12
 SLOTS_BODY = """(Cons (rldw 7 (radd (rl 4) (radd (rk 8) (rmul (rl 6) (rk 8)))))
         (Cons (IpIf (risref (rl 7))
@@ -1169,7 +1171,7 @@ def slots_leg(kind):
             ("pad32", "(= (lt %s 4294967296) True)" % AD),
             ("pmlo", "(= (le mlo %s) True)" % AD), ("pmsz", "(= (le (+ %s 8) msz) True)" % AD),
             ("pw0", "(= (le 0 w) True)"), ("pw64", "(= (lt w %s) True)" % M)]
-    binders = ("(fs (List IpFn)) (mlo Int) (msz Int) (dmax Int) (dd Int) (m Mem) (fuel Nat) (v Int) (h Int) (c Int) "
+    binders = ("(fs (List IpFn)) (mlo Int) (msz Int) (dmax Int) (dd Int) (m Mem) (f Nat) (v Int) (h Int) (c Int) "
                "(hd Int) (a Int) (n Int) (i Int) (x7 Int) (x8 Int) (x9 Int) (x10 Int) (w Int)")
     if not odd:
         binders += " (d HCell)"
@@ -1193,10 +1195,10 @@ def slots_leg(kind):
         lc1, m1 = slots_lc(i="(+ i 1)", x7="w", x8=HW, x9=CNT), "(store_le (iw8) m w (- %s 1))" % HW
     else:
         lc1, m1 = slots_lc(hd="w", i="(+ i 1)", x7="w", x8=HW, x9=CNT), "(store_le (iw8) m w (+ (- %s %s) hd))" % (HW, CNT)
-    T = SLOTS_TOWER
+    tower = "(S " * SLOTS_TOWER + "f" + ")" * SLOTS_TOWER
     out = [f";; {doc}", f"(claim {name}", "  (goal", f"    ({binders})",
            "    (" + "\n     ".join(x for _, x in prem) + ")",
-           "    (=", f"      (ipstmts (nS {T} (ntl {T} fuel)) fs mlo msz dmax dd", f"        {SLOTS_BODY}",
+           "    (=", f"      (ipstmts {tower} fs mlo msz dmax dd", f"        {SLOTS_BODY}",
            f"        {lc0} m)", f"      (Some (IpNorm {lc1} {m1}))))", "  (chain"]
     haves = []
 
