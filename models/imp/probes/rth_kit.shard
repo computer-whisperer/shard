@@ -16746,6 +16746,97 @@
          (Cons c Nil))
        ((Pair cells2 fls2) (with_gcells cells2 (with_gfree fls2 g))))))))))
 
+;; --- the memory mirror of the release (C2b-5 part i) --------------------------------
+;; The release's memory effect written in gh_slots / gh_wl / gh_dec's OWN
+;; recursion: the store where the ghost mutates, in the code's order.  The
+;; worklist is a chain through the dying cells' COUNT BANDS (a dying count
+;; is 1; the band becomes the link, 0 = end), so a dying child's header
+;; becomes hword − count + head.  The free-class head is READ FROM MEMORY
+;; (the code's rfree_at load) — under heap_rep it is the ghost's hhead.
+
+;; the worklist's head address (0 = empty)
+(fn whead ((wl (List HCell))) Int
+  (match wl
+    (Nil 0)
+    ((Cons c _) (haddr_of c))))
+
+;; one dying cell's slots over memory (gh_slots' mirror; wl = the head at entry)
+(fn m_slots ((m Mem) (ws (List Int)) (cells (List HCell)) (wl (List HCell))) Mem
+  (measure (struct ws))
+  (match ws
+    (Nil m)
+    ((Cons w rest)
+     (if (int_eq (mod w 2) 1) (m_slots m rest cells wl)
+     (match (hfind cells w)
+       (None (m_slots m rest cells wl))
+       ((Some d)
+        (if (le 2147483648 (hcount_of d)) (m_slots m rest cells wl)
+        (if (lt 1 (hcount_of d))
+          (m_slots (store_le (iw8) m w (- (hword d) 1)) rest (hdecc cells w) wl)
+          (m_slots
+            (store_le (iw8) m w (+ (- (hword d) (hcount_of d)) (whead wl)))
+            rest
+            (hrem cells w)
+            (Cons d wl))))))))))
+
+;; a dead cell of arity k joins its free class: [a] := head; [free_at k] := a
+(fn m_free ((m Mem) (rb Int) (a Int) (k Int)) Mem
+  (store_le
+    (iw8)
+    (store_le (iw8) m a (load_le (iw8) m (+ rb (+ 24 (* 8 k)))))
+    (+ rb (+ 24 (* 8 k)))
+    a))
+
+;; the release loop over memory (gh_wl's mirror at the same budget)
+(fn m_wl ((k Int) (m Mem) (rb Int) (cells (List HCell)) (wl (List HCell))) Mem
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt k 1) m
+  (match wl
+    ((Nil) m)
+    ((Cons cur rest)
+     (match (gh_slots (hslots_of cur) cells rest)
+       ((Pair cells2 wl2)
+        (m_wl
+          (- k 1)
+          (if (lt (harity_of cur) 16)
+            (m_free
+              (m_slots m (hslots_of cur) cells rest)
+              rb
+              (haddr_of cur)
+              (harity_of cur))
+            (m_slots m (hslots_of cur) cells rest))
+          rb
+          cells2
+          wl2)))))))
+
+;; THE RELEASE'S MEMORY: gh_dec's mirror
+(fn m_dec ((m Mem) (rb Int) (g GHeap) (v Int)) Mem
+  (if (int_eq (mod v 2) 1) m
+  (match (hfind (gcells_of g) v)
+    (None m)
+    ((Some c)
+     (if (le 2147483648 (hcount_of c)) m
+     (if (lt 1 (hcount_of c)) (store_le (iw8) m v (- (hword c) 1))
+     (m_wl
+       (+ (hlen (gcells_of g)) 1)
+       (store_le (iw8) m v (- (hword c) (hcount_of c)))
+       rb
+       (hrem (gcells_of g) v)
+       (Cons c Nil))))))))
+
+;; the worklist's representation: each dying cell's header carries the link
+;; in its count band, its slots stay intact (the cells are out of hcells_rep)
+(fn hwl_rep ((m Mem) (wl (List HCell))) Bool
+  (measure (struct wl))
+  (match wl
+    (Nil True)
+    ((Cons c rest)
+     (andb
+       (int_eq
+         (load_le (iw8) m (haddr_of c))
+         (+ (- (hword c) (hcount_of c)) (whead rest)))
+       (andb (hslots_rep m (+ (haddr_of c) 8) (hslots_of c)) (hwl_rep m rest))))))
+
 ;; --- the release toolkit: count algebra --------------------------------------------
 ;; C2b-2 part 2b.  Counts are the permutation-stable currency of the
 ;; cascade's bookkeeping: membership, removal, concatenation, and the

@@ -153,7 +153,12 @@
 (fn s4_pop_fn () IpFn
   (tfn
     4
-    (list (tinit 152 4096) (talloc 0 5 1) (rsto 0 8 (rk 1)) (tdec 3 (rl 0)) (talloc 1 7 1))
+    (list
+      (tinit 152 4096)
+      (talloc 0 5 1)
+      (rsto 0 8 (rk 1))
+      (tdec 3 (rl 0))
+      (talloc 1 7 1))
     1))
 
 (fn s4_pop_g0 () GHeap
@@ -166,14 +171,58 @@
 ;; the reference: one cell built and filled, then inc'd once — the ghost's
 ;; count grows; the immediate: the same bytes, the same ghost
 (fn s5_ref_fn () IpFn
-  (tfn 4 (list (tinit 152 4096) (talloc 0 5 1) (rsto 0 8 (rk 1)) (tinc 3 (rl 0))) 0))
+  (tfn
+    4
+    (list (tinit 152 4096) (talloc 0 5 1) (rsto 0 8 (rk 1)) (tinc 3 (rl 0)))
+    0))
 
 (fn s5_ref_g () GHeap (gh_inc (s4_pop_g0) 152))
 
 (fn s5_imm_fn () IpFn
-  (tfn 4 (list (tinit 152 4096) (talloc 0 5 1) (rsto 0 8 (rk 1)) (tinc 3 (rk 7))) 0))
+  (tfn
+    4
+    (list (tinit 152 4096) (talloc 0 5 1) (rsto 0 8 (rk 1)) (tinc 3 (rk 7)))
+    0))
 
 (fn s5_imm_g () GHeap (gh_inc (s4_pop_g0) 7))
+
+;; --- the memory mirror (C2b-5 part i): m_dec's bytes == rt_dec's bytes ----------
+;; The real release's final memory against the MIRROR's (m_dec on the
+;; pre-release memory and ghost), word by word over the whole arena —
+;; evidence before theorems for the mirror itself, as gh_dec was pinned.
+
+(fn wcmp ((a Mem) (b Mem) (p Int) (n Int)) Bool
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) True
+  (if (int_eq (load_le (iw8) a p) (load_le (iw8) b p))
+    (wcmp a b (+ p 8) (- n 1))
+    False)))
+
+;; 1 when the release run's bytes equal the mirror's, 0 otherwise, -1 on a bad run
+(fn tmir ((build IpFn) (decf IpFn) (g GHeap) (v Int)) Int
+  (match (runm build)
+    (None -1)
+    ((Some m0)
+     (match (runm decf)
+       (None -1)
+       ((Some m1) (if (wcmp m1 (m_dec m0 0 g v) 0 512) 1 0))))))
+
+(fn s2_fn () IpFn (tfn 4 (s2_build) 2))
+
+(fn s4_fn () IpFn
+  (tfn 4 (list (tinit 152 4096) (talloc 0 5 1) (rsto 0 8 (rk 1))) 0))
+
+(fn s4_dec_fn () IpFn
+  (tfn
+    4
+    (list (tinit 152 4096) (talloc 0 5 1) (rsto 0 8 (rk 1)) (tdec 3 (rl 0)))
+    0))
+
+(fn s4_imm_fn () IpFn
+  (tfn
+    4
+    (list (tinit 152 4096) (talloc 0 5 1) (rsto 0 8 (rk 1)) (tdec 3 (rk 7)))
+    0))
 
 ;; --- the report -------------------------------------------------------------------
 
@@ -188,7 +237,12 @@
     (Row "alloc bump" 1 (trep (s4_bump_fn) (s4_bump_g)))
     (Row "alloc pop" 1 (trep (s4_pop_fn) (s4_pop_g)))
     (Row "inc ref" 1 (trep (s5_ref_fn) (s5_ref_g)))
-    (Row "inc imm" 1 (trep (s5_imm_fn) (s5_imm_g)))))
+    (Row "inc imm" 1 (trep (s5_imm_fn) (s5_imm_g)))
+    (Row "mirror chain cascade" 1 (tmir (s1_fn) (s1_dec_fn) (s1_g0) 184))
+    (Row "mirror shared parent" 1 (tmir (s2_fn) (s2_dec_fn) (s2_g0) 168))
+    (Row "mirror shared child" 1 (tmir (s2_fn) (s3_dec_fn) (s2_g0) 152))
+    (Row "mirror single free push" 1 (tmir (s4_fn) (s4_dec_fn) (s4_pop_g0) 152))
+    (Row "mirror imm" 1 (tmir (s4_fn) (s4_imm_fn) (s4_pop_g0) 7))))
 
 (fn cat ((a (List Int)) (b (List Int))) (List Int)
   (measure (struct a))
