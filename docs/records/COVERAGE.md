@@ -1838,3 +1838,37 @@ arity, the inner loop via rth_slots_run, the free-class push via
 m_free; wf-induct on the ghost budget k; the invariant adds wsl_ok —
 every worklist cell's slots live — and hwl_rep for the popped chain),
 the LAST leg's entry, hr_dec, and the assembly rth_dec_run.
+
+**C2b-5 part iii-c — THE OUTER LOOP LANDS (2026-09-05).** `rth_wl_run`
+(rth_kit, hand-written = the template, assembled by a scratch script
+as the inner one was): the release loop computes the OUTER STATE
+MIRROR `s_wl k rb (MkWlSt m cells fls wl h x4 … x10)` — memory, ghost
+(cells, free lists, worklist) and the eight scratch locals, stepped
+per popped cell through the inner mirror's projections and the
+free-class push in the code's own spelling (wl_step). wf-induct on the
+ghost budget k; per popped cell: the header read (its count band is
+the LINK — hword_count0 at count ≥ 0 — and its high band the arity —
+hword_arity, shr_pow2 + div_unique), the inner loop by rth_slots_run
+(its 18 obligations from the popped cell's facts: winv_pop, wi_*,
+whead_lo/hi, the wl_link projections), the reps after the walk by
+s_slots_reps' peels (srp_*), the ghost step by gh_slots_inv bridged
+through s_slots_c/w, then either the push (hfree_rd + flhead_bounds
+for the head, ls8w, hfree_rep_fr ×2, hfree_rep_push, hcells_rep_fr /
+hwl_rep_fr ×2 with ed1_intro from the popped address's zero counts
+(wpop_*, zsum_*) and ebrk_ed1_below for the head slot, ldw_below ×6
+for the low words, winv_push with the count carried by gh_slots_inv's
+third conjunct, fllen_push) or the abandonment (no stores), and the
+IH. TWO MECHANICS FINDINGS: (1) a wf-induct hypothesis has EVERY
+binder fresh-renamed (kernel/tactics wf_rename) — it can only be cited
+through a match binding them all: the conclusion is stated inside a
+pack constructor (WlPack) whose RIGHT side carries the engine-only and
+premise-only binders, and the IH is cited right-to-left; (2) the fuel
+is a TOWER BUILT FROM THE BUDGET, `nS (+ k 65560) f0`, so the
+recursion's fuel is syntactically the IH's pattern at k − 1 (nS_add,
+nS20/nS19 by compute, int_nS for the inner budget) — no fuel premise,
+no npred/ntl in the statement. 3824 canonical lines; rth_kit
+1059/0. NEXT = part iii-d: the
+pure twin s_wl_reps (heap_rep-level facts at the loop's end, the
+mirror's equivalences s_wl ↔ m_wl/gh_wl, wlpack_res), then iii-e:
+the LAST leg's entry (a generated `last` block), hr_dec, the
+assembly rth_dec_run.
