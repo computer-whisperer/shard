@@ -1639,3 +1639,42 @@ generated from impc's product, checked in size linear in the body"
 asked. The reflected-interpreter door (§11) is therefore PRICED, not
 opened, and the pricing is put to the user with the numbers — see the
 session report; C2b-5/6 stay paused until it is read.
+
+**B-0b — THE SHRINK PASS (2026-09-05; user ruling 2026-09-04: option
+2, "B-0b shrink pass first, then re-read the number").** Kit-side
+only; the kernel and the checker untouched; tb_sumto RESTATED on the
+new citation surface. tb_kit.shard grew ten lemmas (782 in closure,
+0 failed): `in63_lo`/`in63_hi` (the band's two halves from the one
+`in63` premise), `bias_le_in` / `ov_sub_in` / `ov_add_in` (the
+construct laws over `in63 x`, `in63 y` as ONE premise each, concluding
+`in63 (x ∓ y)` — the ov_* pair's ten obligations become three), and
+tb_ok's PEELS: `tb_rv_eq`/`tb_rv_w`/`tb_rv_in` (the callee's word and
+band from `tb_ok (Some (IpRv w m)) v = True`) and `tb_none`/`tb_trap`
+(the refutations, goal `False = True`, one cite + absurd). tb_sumto's
+statement now carries `(in63 n)` as its single band premise (four
+premises, not five). THE NUMBER RE-READ: 524 canonical lines (was
+762, −31%; the claim from its header to its last closer), 133
+hand-spelled (was 350, −62%); check 1.0 s closure, the theorem still
+≈0.1 s. Where the rest sits (canonical): `hf5` 57 (six one-line
+int_of_nat_succ rewrites + two tautology certs — a kit `int_nS` law
+"int_of_nat (S^k x) = k + int_of_nat x" would make it one cite),
+`hih` 41 (the IH's six obligations), `hc` 34 / `hz2` 28 / `hz` 17 /
+`hov` 18 (each carries the overflow test term spelled in full, and
+shardfmt puts one argument per line — the test appears in six haves
+and two case-ons; a `have` that NAMES the test once would make the
+rest one-line cites, but shard's `have` is an equation, not a
+binding, so the term recurs), the callee case analysis 3 × ~17. What
+was NOT done and why: no `int_nS` (one more kit law, −40 lines, an
+obvious B-1 item); no let-binding of the test terms (a DSL feature
+question — a `(name T)` proof-local abbreviation would cut the
+canonical count by ~150 for this fn alone and is the single largest
+remaining lever; noted for #18's generator discussion, not for B-0b).
+The gate re-read: 524 canonical is still past ≈300; 133 hand-spelled
+is under it. The two counts measure different things — the
+hand-spelled count is the generator's OUTPUT (what impc would emit,
+one construct per line-group), the canonical count is shardfmt's
+spelling of the same text, and the gap between them is entirely the
+one-argument-per-line rule applied to eight copies of two 60-token
+terms. Read against what the gate was a proxy for (linear check,
+generator-shaped text), B-0b confirms B-0's reading: SIZE is the only
+number that moved, and it moved by the amount predicted.
