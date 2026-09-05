@@ -2232,3 +2232,34 @@ is the tag-miss law) and `app` (the twin; the constructor:
 `rth_alloc_run` + `st_callg`, `hr_fill_g`/`hinv_fill` per store,
 `hr_seal`/`hinv_seal`/`rbl_seal`; the Nil arm's inc on the borrowed
 reference through `rth_inc_run` + `rbl_inc`).
+
+**RULING (user, 2026-09-05): "option 1 sounds reasonable" — D1 is
+REPLACED by ghost twins (B-1b (2) above): the per-fn statement names the
+input ghost as a binder and the output ghost as a term — g itself for a
+fn that neither allocates nor returns a reference, a value-recursive
+ghost twin `f_gh`/`f_gw` (emitted by B-1c's generator, checked by the
+theorem) for one that does; readbacks are relations structural on the
+value. Rejected with costs: a weaker readback with a permutation kit
+over hinv (comparable to C2b-2); a memory-ordered ghost (re-proves
+C2b). perim (no twin) then app (the first twin) proceed in D5's order.
+
+**B-1b — `perim` LANDS (2026-09-05).** The three-arm match over a
+borrowed Shape: the Dot miss, the Seg hit (one slot, the inc on the
+returned immediate through `rth_inc_imm_run` at depth d+1 with the
+FStack leg by `rt_at_inc`), the Seg tag-MISS (the header load and
+`st_iftag`'s else leg with `htag = 2`), the Tri hit (three slots, two
+checked adds through `dbl_of_imm`/`imm_add`/`ov_add_in`). Statement as
+tb_len's with `rb_shape` (Dot = 1; Seg tag 1 arity 1; Tri tag 2 arity
+3 — per-TypeDef, with its unpackers `rbs_*`, in tb_micro where B-1c's
+generator will put them) and the budget `26 ≤ fuel` (no recursion).
+957 canonical lines; tb_micro 21 claims, 1239/0, 3.9 s. The repeated
+have-blocks (the cell facts, the per-offset ldok bundles, the slot
+readbacks, the load citations, the closing tbh) were emitted by a
+scratchpad authoring aid — the shape B-1c's generator prints; the
+checked text is the product. Findings: (a) the runtime inc's callee
+level is read off the trace (S^15 of the 26-tower); its run is stated
+as a `have` with the explicit tower and rewritten by `peel12` +
+`rth_inc_imm_run` inside the have, so peel12's first-occurrence
+selector meets exactly one tower; (b) a case binder must not shadow a
+claim binder (Tri's fields are (x y z), not (a b c)); (c) the closing
+block is identical across arms and fns — one template.
