@@ -204,6 +204,7 @@ TARGETS=(
   models/imp/probes/fra_micro.shard
   models/imp/probes/rth_kit.shard
   models/imp/probes/rth_run.shard
+  models/imp/probes/rth_inst.shard
   models/imp/probes/tb_kit.shard
   models/imp/probes/tb_micro.shard
   tools/impgen/fixtures/imp_loop.shard

@@ -1911,3 +1911,53 @@ laws; (4) an engine lemma's conclusion can carry the pure end-state
 invariant as a Bool field — the pure twin then costs no second
 induction, and pure laws (hr_dec_last) read it off the engine lemma
 with the engine binders instantiated trivially. NEXT = C2b-6.
+
+**C2b-6 — LANDS (2026-09-05): the instance, and C2b CLOSES.**
+`models/imp/probes/rth_inst.shard` (check mode, 20 claims / 0 failed,
+421 canonical lines, imports rth_kit + rth_run): every rt_run scenario's
+runtime call re-derived FROM the laws at the scenario's concrete ghost.
+Per scenario, three instances: the engine law (`rth_*_run` at the
+harness's rb 0 / mlo 0 / msz 4096 / dmax 8 / d 0, the fn index and
+argument list the scenario's statement passes, the memory m and the
+fuel base left FREE — `(nS (+ (+ (hlen (gcells_of (s1_g0))) 1) 65573)
+f0)` stays symbolic), the memory law (`hr_*`: any memory meaning the
+ghost before means the ghost after), and the pure law (`hinv_*` at the
+scenario's roots). Every ghost-side premise — hinv at the roots, graw
+None, memb, the free list's shape, the bounds — is decided by ONE
+`(steps ((compute lhs)) refl)`; the memory premise is the claim's own.
+Covered: s0 rt_init 152 4096 (rth_init_run, hr_init; no premise at
+all); s1 the chain (roots (184), dec 184 — hinv computes True at the
+three-cell ghost); s2 the shared child (roots (184 168), dec 168); s4
+both alloc legs (bump on gh_init's raw heap: rth_alloc_bump_run with
+`fl_at … = Nil` by compute; pop on `gh_dec (s4_pop_g0) 152`:
+rth_alloc_pop_run with p 152 / rest Nil by compute); s5 inc ref (152,
+a root) and inc imm (7). All 20 passed at the first citation once the
+dangling pivots were pinned (the inc/alloc engine legs mention no g on
+their left side → `(inst g …)`; the pop leg's p). Wall: ≈0.2 s for the 20
+instances beyond rth_kit's 1.4 s load (bin/shard_check). FINDING: scenario 3 (dec the SHARED
+child 152 at s2_g0) is OUTSIDE the release law — `hinv 0 (s2_g0) r`
+computes False with 152 among the roots (count 2 = the two cell
+references, no root's share) and False at the true roots after `gh_dec
+… 152` (count 1 against two references): rt_run's "shared dec child
+count" row pins bytes the ghost calls an over-release. The law's
+`memb r v` premise is doing its job; the row stays as the byte pin of
+gh_dec's count arithmetic, not as an instance. What the instance does
+NOT do, named: whole-program composition (init; alloc; store; dec
+threaded through iprun over the statement list) — that is B-1's per-fn
+generator over exactly these call-site laws, with the store/seal/read
+laws (C2b-3) between them. Corpus: rth_inst registered in the DEFAULT
+tier next to rth_kit/rth_run.
+
+**C2b — THE LEDGER CLOSES (2026-09-05).** C2b-0 (the plan), C2b-1 (the
+kit + rth_init), C2b-2 (the pure theory: reachability, precision,
+gh_dec), C2b-3 (rt_alloc + fill/seal/read), C2b-4 (rt_inc), C2b-5
+(rt_dec, the release theorem), C2b-6 (the instance) — all landed.
+The runtime's four entry points each carry an engine law, a memory
+law and a pure law over one representation predicate (`heap_rep`) and
+one invariant (`hinv`); rth_kit 1,070 claims, rth_run 13/13 rows,
+rth_inst 20/20. Carried forward to B-1: the four generator-shaping
+findings of the C2b-5 record, the `int_nS` law and the proof-local
+abbreviation question, and the fact that the call-site laws are stated
+with the fuel base free (so a per-fn certificate composes them under
+one budget). NEXT = B-1: mul's law kit, constructors/match over the C2b
+laws, the per-fn generator in impc.
