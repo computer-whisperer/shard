@@ -18,7 +18,8 @@
 | v0.3 | 2026-09-06 | `524b59c` | GPT-6 follow-up R9–R16 answered; evaluation reflection with per-invocation evidence; declarative rules vs the bounded procedure; conventions ruled (Q9); the proof IR (I) |
 | v0.4 | 2026-09-06 | `23094d7` | the naming law (one name per mathematical object; Lean's names by explicit decision; five departures; `docs/LEAN.md`); §12.1 as a pure migration table |
 | v0.5 | 2026-09-06 | `985776b` | GPT-6 integration review R17–R28 folded; the normative/records split; the two rulings of 2026-09-06 (Lean's `Init` as the core library identity; durable P closure for releases) |
-| v0.6 | 2026-09-06 | this commit | **renumbered V2 → V3** across the project (the tree is the lineage's v2; the sibling tree is `v3/`; the archive is `foundation-v3/`); GPT-6 final clarifications R29–R34 folded (role-aware elimination, selection discharges applicability, the `Init` identity stated at `realize`, canonical serialization as the storage boundary, World ownership through aggregates, older snapshot ≠ invalid handle); the first connected path |
+| v0.6 | 2026-09-06 | `150ceeb`, `f14bde8` (§10.5) | **renumbered V2 → V3** across the project (the tree is the lineage's v2; the sibling tree is `v3/`; the archive is `foundation-v3/`); GPT-6 final clarifications R29–R34 folded (role-aware elimination, selection discharges applicability, the `Init` identity stated at `realize`, canonical serialization as the storage boundary, World ownership through aggregates, older snapshot ≠ invalid handle); the first connected path |
+| v0.7 | 2026-09-06 | this commit | Fable's last review folded (§10.5 documentation disposition landed at `f14bde8`): source spans structural; types get realizations (`Array`, `String`, `ByteArray`, `UInt*`; the validated-bytes string = `String`'s realization); numeric literals and the `Nat`/`Int` seam (one automatic coercion); `Quot` erasure row; deriving at Stage 1; CANON's law carried; two user rulings — no tool writes into a source file (engine I lives in sidecars + the pin store), no user-defined notation/macros in v1 |
 
 The GPT-6 documents (archived under `docs/archive/foundation-v3/` — named `foundation-v2/` at v0.5, renamed with the renumbering at v0.6; each memo was an untracked root file until folded in; the memos say "V2" because they predate the renumbering):
 `SHARD_FOUNDATION_PROPOSAL_v0.3.md`, `SHARD_BOOTSTRAP_ADDENDUM_v0.3.md`,
@@ -137,6 +138,14 @@ v3 across the entire project is defensible -- let's do it." The
 foundation is V3, the sibling tree is `v3/`, and the archive directory
 was renamed; the user's earlier quotes above keep their "V2"/"v2"
 wording as spoken.
+
+**2026-09-06 (v0.7, two rulings).** On where engine-authored proofs
+live: "agreed on no automatic injections into the source. The
+implementing agent should be responsible for editing and maintaining
+tactics or 'auto' delegation in the original source, and the
+sidecars+pin store are where generated I content should be maintained."
+On user-defined notation and macros: "agree with refusing in v1". Both
+in §7.5 and §5.3 (departure 6).
 
 ## 3. Rejected alternatives (REJECTED-because, on record)
 
@@ -327,6 +336,18 @@ Also taken: GPT-6's "first connected path" as a paragraph under §12.4
   forbids (R31). Both repaired at v0.6.
 - The foundation was numbered V2 for five drafts while the tree was
   already the lineage's v2 (§2, 2026-09-06). Renumbered V3 at v0.6.
+- v0.6's §4.2 E-type list omitted `String`, `UInt*`, `Array` and `Fin`
+  while §10.3 used all four, and §10.4 kept "`Str` over validated
+  bytes" beside §10.3's `String` — two string types under a one-name
+  law. Resolved at v0.7 by "types get realizations too" (§4.4).
+- Through v0.6 every realization in §4.4 was a function; the
+  representation swap that the README calls the project's signature
+  move had no library-level statement. §4.4 now states it for the
+  library's own types, with the counted heap as the general case.
+- Through v0.6 the document was silent on numeric-literal typing and
+  coercions, the port's largest practical seam (`Int` everywhere today;
+  `Nat` sizes under the naming law), and on source spans (#8), which
+  are an I-schema field and cannot be retrofitted after pins exist.
 
 ## 6. The naming law's derivation (2026-09-06)
 

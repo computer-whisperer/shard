@@ -1,6 +1,6 @@
 # FOUNDATION.md — the shard V3 foundation
 
-> **STATUS: DRAFT v0.6 (Fable), 2026-09-06 — the normative contract, proposed, not yet ratified.**
+> **STATUS: DRAFT v0.7 (Fable), 2026-09-06 — the normative contract, proposed, not yet ratified.**
 > Numbering: the current tree is the lineage's v2 (`archive/TRANSFER.md`
 > is the v1→v2 mandate; `REVISIT.md` is the v2→v3 ledger), so this
 > foundation is **V3** across the whole project — user ruling 2026-09-06.
@@ -245,9 +245,11 @@ layout specializes. Consequences:
 
 ### 4.2 Types and terms
 
-E-types: `Nat`, `Int`, `Bool`, `Char`; `type`-declared inductives
-(parameters only, no function-typed fields) applied to E-types;
-subtypes of E-types per §4.1; structures of E-types. E-bodies:
+E-types: `Nat`, `Int`, `Bool`, `Char`, `String`, `UInt8`–`UInt64`
+and `Fin n` over erased bounds; `type`-declared inductives (parameters
+only, no function-typed fields) applied to E-types; subtypes of E-types
+per §4.1; structures of E-types; the realized types of §4.4 (`Array`,
+`ByteArray`) at their runtime representations. E-bodies:
 constructor application; exhaustive `match`; fully applied calls to
 `fn`s and library primitives; `let`; `if` on a decidable proposition
 (elaborated through the `Decidable` instance — for core types fixed by
@@ -330,6 +332,21 @@ implementation, its applicability evidence and the policy applied. One
 explicit selection demonstrates the contract; no optimizer or registry
 policy is required now (T1, T8).
 
+**Types get realizations too.** A realization may attach to a type: a
+runtime representation different from the constructors, related to the
+logical type by a **representation simulation** (§4.8) with the
+representation invariant erased. Lean's own library is the model and
+the first cases: `Array α` is a structure over `List α` in L and a
+contiguous buffer at runtime; `String` is `List Char` in L and a
+validated UTF-8 buffer at runtime (today's validated-bytes
+representation becomes that realization, not a second string type);
+`ByteArray` likewise over `List UInt8`; `UInt*` over `Fin`. Operations
+on a realized type are realized against the representation and bridged
+to the logical operations by theorems; a theorem about `List` applies
+to `Array` through the wrapper, never by name. This is the
+representation-swap discipline of `MEMORY.md` stated once for the
+library's own types; the counted heap remains its general case (T1).
+
 **The correspondence is semantic, not provenance.** The realization
 relation is stated over the **resolved executable structure** — its
 cases, callees, representations and recursion — and discharged by
@@ -379,6 +396,8 @@ fuel. Structural descent compiles to recursors and needs no obligation.
 | impossible branches | removed on checked evidence only |
 | static packages | operations specialized, laws erased |
 | recursion | source body is the structure; recursor / `WellFounded.fix` is the meaning; equations are the bridge |
+| `Quot` | represented by its carrier; `Quot.mk` is the identity at runtime; `Quot.lift`'s respect proof erased; no runtime quotient |
+| realized types | the logical structure replaced by the representation under its simulation; the representation invariant erased |
 
 ### 4.7 Effects: World, threading, and the effect-use contract
 
@@ -453,6 +472,25 @@ producers. **Stage 3** typeclasses and coercions, consequential
 selections scoped and recorded. Compatibility with the old proof DSL is
 the re-spelling tier of the port (§12.3), not a stage.
 
+**Source spans are structural.** K's terms carry none; everything above
+K does: the elaborator keeps a span map from every L node and I node to
+its S origin, goal states and every diagnostic carry the span, and the
+I schema reserves the field from its first version — retrofitting spans
+after pins exist is a schema change. A rejection names its subject
+(§3.3) and its location (#8; T9).
+
+**Deriving is Stage 1.** Decidable equality, a canonical ordering where
+one exists, and a rendering for diagnostics are derived mechanically
+for `type` and `structure` declarations at Stage 1 — structural
+reconstruction, not a consequential selection — so a new type is
+usable in `if`, as a key and in an error message without a hand-written
+instance.
+
+**One canonical S.** `CANON.md`'s law carries: the surface has one
+canonical form, the fmt gate is a recognizer that refuses rather than a
+printer that is trusted, and identity hashes are over L and P (§8.3),
+never over S text.
+
 ### 5.2 The resolved requirement
 
 Inference may **reconstruct** what the declared inputs determine (an
@@ -467,6 +505,17 @@ reported as such; changing a proof strategy is not. Unknown identifiers
 never become parameters. Declared synthesis holes remain fillable
 without changing the task. The proof-solving agent does not redefine
 the target.
+
+**Numeric literals and the `Nat`/`Int` seam.** A numeral takes the type
+its expected type determines, over the core numeric types (`Nat`,
+`Int`, `UInt*`, `Fin n`) at Stage 1, with `Nat` as the default when
+nothing determines it — reconstruction, not selection. Exactly one
+coercion is inserted without being written: `Nat → Int` (`Int.ofNat`,
+rendered `↑`). Every other coercion is explicit, and a missing one is a
+type error with the pointer. `omega` owns the arithmetic across the
+seam, and `Int.toNat`/`Int.natAbs` are named conversions with their own
+lemmas, never inserted. Sizes and indices are `Nat` (§5.3); a value
+that can go negative is `Int` (§10.2's `capacity - used`).
 
 ### 5.3 The naming law (RULED 2026-09-06)
 
@@ -497,7 +546,14 @@ deployment profile or assumption policy, never to the corresponding L
 abstraction (a mathematical monad or `Inhabited` structure is fine);
 (5) shard-only vocabulary: `measure`, `mod.req`/`sig` views,
 `requirement`/`fulfills`, `bin`, `trusts`, `requires`, World externs,
-models, the artifact-claim forms.
+models, the artifact-claim forms; (6) **no user-defined notation,
+macros or syntax extension** in v1 (RULED 2026-09-06) — Lean's
+`syntax`/`macro`/`notation`/`elab` layer is refused because every
+extension is a private dialect an agent cannot guess and the porting
+pipeline cannot fix; the sugar set is fixed in the elaborator and
+versioned with it; the pointer is "define a `fn`, `def` or tactic"; the
+named door is a hygienic, declared-scope notation facility, wake
+condition = a library whose statements are unreadable without one.
 
 Schematic surface (type parameters bound explicitly; implicitness is a
 Stage 1 attribute; imported declarations such as `List.length` are
@@ -669,6 +725,17 @@ a user `BEq`. Hand-written and engine-written proofs are
 indistinguishable at the pin; a better engine may later replace a hand
 proof with no statement changing. `sorry` is reported loudly and never
 accepted. LS-law 1 (replay is the referee) stands.
+
+**No tool writes into a source file (RULED 2026-09-06).** The source
+carries what the author maintains: a tactic block, or an explicit
+`auto` delegation naming the search policy. Engine-authored I lives in
+the sidecar and the pin store, keyed by the resolved requirement (§5.2),
+and is regenerated there; the implementing agent, not a tool, edits
+the source's tactic or `auto` line when the delegation changes. This is
+the converse of "generated files are never hand-patched": authored
+files are never tool-patched. An `auto` block whose pinned I is missing
+or stale is a pending obligation, reported, never silently re-searched
+at verification (T8).
 
 **Canonical serialization is the storage boundary, not an interactive
 step.** It specifies the persistent evidence representation, not a
@@ -866,7 +933,8 @@ declared migrated.
 | `Nat` former | `Nat` | `Nat.sub` saturates | name |
 | `(refine Int nonneg)` | `Nat` where a size; `Subtype` otherwise | | typed |
 | `std/word` widths | `UInt*`/`BitVec` over `Fin` | wrap | typed |
-| `Bytes` | `List UInt8`; opaque `Bytes` kept as ours | | typed |
+| `Bytes` | `ByteArray` (`List UInt8` in L, packed at runtime — §4.4) | | typed |
+| `Str` (validated bytes) | `String` (`List Char` in L; the validated UTF-8 buffer is its E realization) | | typed |
 | `(record …)`, `F_of`/`with_F` | `structure`, projections | | name |
 | `sym_eq chars_of_sym sym_of_chars gen_fresh` | `String`/`Char`; toolchain-internal | | name |
 
@@ -886,8 +954,9 @@ wants a trap uses `checked_div : Int → Int → Option Int` or
 theorems; a totalized primitive creates no nonzero-divisor obligation
 by itself. Not copied: conveniences that hide failure or choice (§5.3).
 Kept as ours where stronger: `FLOATS.md`'s proven float formats (Lean's
-model is a comparison reference), `Str` over validated bytes, the
-measure regime, `mod.req`.
+model is a comparison reference), the measure regime, `mod.req`. The
+validated-bytes string is kept as `String`'s E realization (§4.4), not
+as a second type.
 
 ### 10.5 Documentation disposition
 
@@ -937,7 +1006,8 @@ boundary, not available on request); unaccounted replacement
 (`implemented_by`, `extern`, `partial`, `unsafe`, each refused for its
 own reason; `csimp`-style theorem-directed rewriting is legitimate);
 hidden speculative state; conveniences that hide failure; exhaustion as
-an indistinguishable error.
+an indistinguishable error; user-level syntax extension (§5.3, departure
+6).
 
 **Borrowed and strengthened:** dependent abstraction, proof terms, local
 inference, typeclasses, broad simplification, classical reasoning,
@@ -1069,15 +1139,15 @@ interventions — never one number.
 | test | experiment | failure reveals |
 |---|---|---|
 | **T0 oracle and raw checking** | `Init` export declaration-for-declaration; hostile battery with declarative reasons (universe collapse, scope capture, forged recursor, non-positive inductive, illicit `Prop` elimination, cyclic definition, same-spelled non-core `Nat.add`, the six 2026 exploits); direct malformed construction through the API; invalid context and inductive metadata; normalized-universe cases; fixed-identity primitive validation; scope logged | rule mismatch, mapping error, budget difference, forgeable inputs |
-| **T1 realization and migration** | structural, measure, subtype-producing and `decide` cases with their equation bridges; a fresh-but-wrong executable view fails while its manifest passes; an omitted branch, a wrong callee, a tautological equation for a looping recursion; a decision tag with erased payload; a branch-local bound proof; an arbitrary-Prop subtype; both branches of a dependent `if` at one result type with no runtime proof; a permitted classical proof justifying an erased invariant accepted while a purported executable result supplied solely by noncomputable choice is refused (validity and support judged separately); a conditional realization selected under an available bound and refused without it unless a justified fallback is supplied; an approximation refused for an exact contract; `Nat`-underflow-sensitive code; zero-divisor target behavior | a missing bridge; provenance mistaken for correspondence; a realization applied outside its conditions; a mislabeled migration |
+| **T1 realization and migration** | structural, measure, subtype-producing and `decide` cases with their equation bridges; a fresh-but-wrong executable view fails while its manifest passes; an omitted branch, a wrong callee, a tautological equation for a looping recursion; a decision tag with erased payload; a branch-local bound proof; an arbitrary-Prop subtype; an `Array` realization simulating its `List` meaning with a `List` theorem reused through the wrapper; both branches of a dependent `if` at one result type with no runtime proof; a permitted classical proof justifying an erased invariant accepted while a purported executable result supplied solely by noncomputable choice is refused (validity and support judged separately); a conditional realization selected under an available bound and refused without it unless a justified fallback is supplied; an approximation refused for an exact contract; `Nat`-underflow-sensitive code; zero-divisor target behavior | a missing bridge; provenance mistaken for correspondence; a realization applied outside its conditions; a mislabeled migration |
 | **T2 static abstraction** | closed lambda, named partial application, captured-value `add_offset`; a static law-bearing package with no runtime dictionary; the generic theorem reused | source restriction mistaken for artifact restriction |
 | **T3 bounded specialization** | the type-growing recursion refuses loudly; a large finite workload within limits | totality mistaken for compiler termination |
 | **T4 holes** | shared hole under renamed binders; dependent expected type; template versus recipe; witness/proof dependency; blocked comparison; closure; failure and exhaustion leave the snapshot unchanged; forked branches on one hole do not merge by name | incoherent open-construction discipline; hidden state |
 | **T5 views and identity** | consumer with the view alone and with the impl linked; a private-equality leak refused; two validated instances of one interface; physical relocation changes no identity; two same-spelled nominal types not conflated; an import identified only by declared mapping; an implementation attached to an imported declaration and an imported theorem about the original still usable afterwards, the mathematical identity unchanged; an attempt to identify a different definition by spelling refused | invalid weakening; identity drift |
 | **T6 embedding** | construct, prepare once, invoke repeatedly, transform, check, lower under one identity; erased-invariant argument validation; prepare revision A then introduce revision B: the retained A handle either keeps executing A under its still-valid contract or is refused for a recorded revocation or lifetime reason, never executes B, and is rejected by an invocation requiring B, while a new B handle executes B and a released handle is refused; a buffer shorter than its shape; mutation after validation; bounded live state after many fork/fail/release cycles | CLI dependence; hidden preparation; wrong invalidation; leaks |
 | **T7 search fidelity** | correlated holes over ground truth; the `n / Fin n` dependent count; a root-only rewrite invalid nested; a failed proof preserving a valid program; an empty bounded `applicable` not treated as `UNSAT`; a cache entry refused under a changed context; approximate relations not silently transitive | wrong pruning, counting or reuse |
-| **T8 acceptance and replay** | direct P verification without I; reconstruction-version drift reported, not overwritten; canonical P encoding stable across allocation orders, and a local goal edit not triggering full-prefix replay or whole-environment serialization (affected nodes and cold/warm work measured, no arena or hash algorithm mandated); a realization whose additional assumptions violate policy rejected despite a correct output equation; a tampered reflection value refused and correct evidence replaying cold; a prohibited-axiom proof failing policy under an identical proposition; `Exhausted` never a receipt; the route recorded | pending evidence, stale caches, an unstated trust transition |
-| **T9 authoring** | §5.4 | folklore; task drift; a seam in the wrong place |
+| **T8 acceptance and replay** | direct P verification without I; an engine run leaving every source file byte-identical while its I lands in the sidecar and store, and a stale `auto` pin reported as pending rather than re-searched; reconstruction-version drift reported, not overwritten; canonical P encoding stable across allocation orders, and a local goal edit not triggering full-prefix replay or whole-environment serialization (affected nodes and cold/warm work measured, no arena or hash algorithm mandated); a realization whose additional assumptions violate policy rejected despite a correct output equation; a tampered reflection value refused and correct evidence replaying cold; a prohibited-axiom proof failing policy under an identical proposition; `Exhausted` never a receipt; the route recorded | pending evidence, stale caches, an unstated trust transition |
+| **T9 authoring** | §5.4; every diagnostic in the run carries a source span; a `Nat`/`Int` mistake answered with the coercion pointer; a refused `notation` answered with the `fn`/`def` pointer | folklore; task drift; a seam in the wrong place |
 | **T10 proof IR** | replay unchanged under changed ambient simp and instance settings; a dependent motive; reused local names in sibling branches; a guarded occurrence whose source changed; an external P accepted through `exact`; an I schema upgrade separate from a foundation change; one engine's solution checked identically by another | an IR only its producer can read |
 
 Performance rule: baselines and budgets agreed before a rung runs;
