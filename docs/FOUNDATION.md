@@ -824,7 +824,7 @@ measured (§4.4), not inferred from compilation.
 | proofs | ~4.9k hand claims | re-spelled into I where I-shaped; solver, cheap agents, strong agents for the rest (§12.3) |
 | generated certs | `std/sha256`, `impgen_*_out`, probe blocks | not ported; superseded by validators and tactic-emitted I |
 | toolchain | K, `ev`, elaborators, tactics, loader, canon, prove, explain | new code, front-loaded |
-| docs | `TCB.md` roster; `TOTALITY.md` → §4.5; `CERT.md` §3/§7 superseded, §4 carried; `LANGUAGE.md` §10 → the surface and I; `SEARCH.md` LS-laws carried; `BOUNDARIES.md` corrected per §4.7 | rewritten or carried |
+| docs | every ledger, the README, the tooling docs, the issue tracker and CI | one disposition per document, with its phase (§10.5) |
 
 ### 10.2 Three migration classes
 
@@ -888,6 +888,44 @@ by itself. Not copied: conveniences that hide failure or choice (§5.3).
 Kept as ours where stronger: `FLOATS.md`'s proven float formats (Lean's
 model is a comparison reference), `Str` over validated bytes, the
 measure regime, `mod.req`.
+
+### 10.5 Documentation disposition
+
+One row per document, decided here so ratification is a banner pass
+(the 2026-08-22 reset precedent: one dated status line on every
+ledger, citing this table). *Carried* = stays law, at most a banner;
+*amended* = a dated section added, contradicted passages bannered, the
+law otherwise untouched until the flip; *superseded* = replaced by the
+cited section, archived at the flip; *manifest* = the document follows
+its family's PORT/ARCHIVE label (§12.2).
+
+| document | disposition | when | what changes |
+|---|---|---|---|
+| `README.md` | amended; rewritten at the flip | phase 0; phase 6 | the tower paragraph (the bootstrap is enduring, never deleted), the status counts, the live-arcs section, the documentation map, the trusted-core path list |
+| `OVERVIEW.md` | amended (dated §11: the foundation ruling); rewritten at the flip | phase 0; phase 6 | §1 "deliberately not the dependent-types path … two languages" and §6 (narrow/full, disposable bootstrap) bannered as contradicted; §10's one-goal ruling deferred behind this arc |
+| `LAYOUT.md` | carried | phase 0 | the `v3/` placement rule; the logical package root |
+| `LANGUAGE.md` | superseded by a new specification of S, L, E and I; the old one archived | phase 2–3 (written); phase 6 (archived) | §10 → the surface and I; §11's narrow/full distinction and §13's lifted constraints (lambdas, partial application, load-time typing) do not survive; amending in place would describe neither tree |
+| `LEAN.md` | new (§5.4) | phase 3 | — |
+| `TCB.md` | amended at phase 0 (the roster governs the old tree; §9 governs V3); roster rewritten | phase 0; phase 1; phase 6 | roster = K, the Rust host, the oracle evidence, retained P, the fixed-identity primitives; the temporary-chain Lifetime story replaced by the four routes |
+| `TOTALITY.md` | superseded by §4.5 | phase 3 | the measure regime becomes elaboration and tactics; the kit's theorems port |
+| `REFINEMENT.md` | superseded by §4.1 | phase 3 | subtypes over arbitrary `Prop`; #17 dissolves |
+| `CERT.md` | §4 (validators) carried; §3, §7 superseded by §7.5 and §8.3; §10's two standing laws carried | phase 3–5 | conversion is K's definitional equality; sharing is the content store |
+| `STORAGE.md` | superseded by §7.5 and §8.4 | phase 3 | the cert cache and images give way to the deduplicated store and dependency classes; #33/#34 close |
+| `CANON.md` | rule set rewritten for S; §7 content addressing → §8.3 | phase 2 | the law itself (one canonical form, a gate not a printer) carried |
+| `SEARCH.md` | LS-laws carried; the sketch/hole interface → §7.3–7.4 | phase 4 | the lock-step law becomes joint search under one metavariable context |
+| `BOUNDARIES.md` | carried, corrected | done (2026-09-06); phase 4 | §4.7's ownership check and trace relation |
+| `FLOATS.md` | carried as ours | phase 5 (its own port line) | Lean's model as a comparison reference |
+| `MEMORY.md` | carried | phase 7 | rung 4 unchanged; D8 unchanged |
+| `LOWERING.md`, `IMP.md`, `X86.md`, `ISA.md`, `RISCV.md`, `STREAM.md`, `PIO.md` | manifest | phase 5 | banner per family; certificates become I; ARCHIVE families keep their ledgers as history |
+| `BUILD.md` | carried | phase 5 | products and profiles unchanged |
+| `COVERAGE.md`, `records/COVERAGE.md` | carried, parked | phase 0 | the unpark pointer (phase 7; B-1c as an I-emitting tactic) |
+| `REVISIT.md` | frozen | phase 0 | banner → `records/FOUNDATION.md`; no new entries |
+| `tools/lower/DESIGN.md` | superseded by route 1 (§9.1) | phase 1 banner; deleted at the flip | — |
+| `tools/zed-shard`, `shard-viewer/README.md` | carried | phase 2 | the V3 surface keywords and forms |
+| `examples/*/README.md` | manifest | phase 5 | — |
+| `docs/archive/` | grows | phase 6 | the superseded ledgers move under one lineage directory |
+| the issue tracker | carried | phase 0 | an arc label and a tracking issue with the phase gates; #4, #5, #6, #9, #10, #12, #17 relinked to the sections that answer them; #23, #25, #26, #27 gain the phase 7 wake condition |
+| `.gitlab-ci.yml`, `run_corpus.sh` | carried | phase 1 | one V3 job per phase gate; the tier header says which tree each gate covers |
 
 ---
 
