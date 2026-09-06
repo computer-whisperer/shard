@@ -126,9 +126,16 @@ machine, no request/response bouncing.
 In a PROOF the externs are uninterpreted (mechanism B): a call is left
 stuck and its behaviour is given by axioms (the bridging axioms — e.g.
 "read advances the clock by 1"). Because the World threads through, the
-sequencing discipline is itself a theorem — e.g. `clock(main w) ≥ clock w`
-(monotonic ⇒ no effect reuses a clock), proven by ordinary induction even
-for an oracle-driven loop (`examples/io/cat_loop.shard`).
+sequencing discipline is itself a theorem — e.g. `clock(main w) ≥ clock w`,
+proven by ordinary induction even for an oracle-driven loop
+(`examples/io/cat_loop.shard`). *Correction (2026-09-06, FOUNDATION.md
+§4.7 / records R25):* endpoint monotonicity does NOT imply that no effect
+reuses a clock — two writes that both consume the same `w` still leave the
+final clock advanced. Unique use is a separate, syntactic
+well-threadedness property (affine use of each World token along every
+branch), checked by the lowering's no-duplication gate today and by the
+E classifier in V2; the trace relation, not the clock, is the effect
+semantics.
 
 At RUN time the Rust handler (the World effect handler in
 `rust_bootstrap/src/bin/eval.rs`) intercepts each stuck extern call and
