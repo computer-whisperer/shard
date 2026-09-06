@@ -1,14 +1,17 @@
 # FOUNDATION.md — the shard V2 foundation: a Lean-parity logic over a lowerable core
 
-> **STATUS: DRAFT v0.3 (Fable), 2026-09-06 — a proposal for review, not law.**
+> **STATUS: DRAFT v0.4 (Fable), 2026-09-06 — a proposal for review, not law.**
 > v0.1 (2026-09-05, `5d95b81`) was reviewed by GPT-6 as
 > `SHARD_FOUNDATION_FEEDBACK_v0.1.md` (R1–R8); v0.2 (`d6b25f1`) folded
 > that in and was reviewed as `SHARD_FOUNDATION_FOLLOWUP_MEMO_v0.1.md`
-> (R9–R16). v0.3 answers R9–R16 (§17), rewrites the Lean review (§13)
-> along the memo's borrow/refuse/improve structure with the factual
-> corrections it caught, adds the **proof IR** section (§16, the user's
-> 2026-09-06 question on keeping proof search first-class), and records
-> the user's delegation on cross-discipline conventions (§12.1, Q9).
+> (R9–R16). v0.3 (`524b59c`) answered R9–R16 (§17), rewrote the Lean
+> review (§13), added the **proof IR** (§16) and the conventions ruling
+> (§12.1, Q9). v0.4 adds **the naming law** (§6.4, RULED 2026-09-06 —
+> one name per mathematical object across `fn`/`def`/`theorem`, Lean's
+> names and naming grammar by explicit decision, five deliberate
+> departures, a refusal list with pointers, `docs/LEAN.md` as the seam
+> document in the T9 gate) and turns §12.1's crosswalk into a pure
+> old-to-new migration table.
 > The GPT-6 documents live in the repo root, untracked. Companion and
 > counter-proposal to GPT-6's `SHARD_FOUNDATION_PROPOSAL_v0.3.md` and
 > `SHARD_BOOTSTRAP_ADDENDUM_v0.3.md`; their decision IDs D01–D13 and
@@ -194,6 +197,15 @@ program, and therefore no `ev` value, no Rust value, and no artifact,
 ever contains a function value or an indirect call. A `fn` either
 lowers or is refused; there is no "interpreted-only" status for a `fn`
 (§5.3; GPT-6 withdrew the request in its follow-up).
+
+**One name per mathematical object (proposed law, §6.4).** A `fn`
+body, a `def` body and a `theorem` statement refer to the same constant
+by the same spelling; the E classifier changes no name; there is no
+"executable spelling" and "logical spelling" of one operation. The
+split-brain shard has today — `/` truncating beside `ediv`, `int_eq`
+and `le` as Bool functions beside `=` and the proof surface, `andb`
+chains beside conjunction — is resolved by adopting one vocabulary
+(§6.4), not by mapping between two.
 
 **The L/E correspondence is by defining equations (proposed law).** An
 E definition's *executable structure* is its source body; its *L
@@ -443,10 +455,15 @@ intrinsically indexed execution IR in v1).
 
 Constructor application; `match` with exhaustive patterns over
 E-types; fully-applied calls to `fn`s and to library primitives; `let`;
-`if`; literals; `decide` on decidable propositions is permitted and
-lowers to the Bool its selected decision procedure computes — that
-procedure must itself be E (R1). Proof-typed arguments are permitted
-and erased. No `Classical.choice`, no proof used computationally, no
+`if`; literals. **`if` takes a decidable proposition**, as in Lean:
+`(if (<= a b) x y)` in a `fn` elaborates through the `Decidable`
+instance for `Int.le` to the E function `Int.ble`, so a program and a
+theorem write the same `<=` (§6.4). `decide` on a decidable proposition
+is likewise permitted and lowers to the Bool its selected decision
+procedure computes — that procedure must itself be E (R1); for the
+core types the instance is fixed by the library, not a consequential
+selection in the sense of §6.2. Proof-typed arguments are permitted and
+erased. No `Classical.choice`, no proof used computationally, no
 `Sort`- or `Pi`-typed value in any position of an *elaborated* E body.
 
 ### 5.3 The lambda profile: static forms, eliminated by elaboration
@@ -658,12 +675,12 @@ syntax):
   (induct xs ((case Nil (steps ((simp both)) refl))
               (case Cons (steps ((simp both) (rewrite (hyp ih) lr lhs true ())) refl)))))
 
-;; V2 (schematic)
-(theorem len_append ((xs ys (List α)))
-  (= (len (append xs ys)) (+ (len xs) (len ys)))
+;; V2 (schematic; names under the naming law of §6.4)
+(theorem List.length_append ((xs ys (List α)))
+  (= (List.length (List.append xs ys)) (+ (List.length xs) (List.length ys)))
   (by (induction xs)
-      (case nil (simp [append len]))
-      (case cons (x t ih) (simp [append len ih]) omega)))
+      (case nil (simp [List.append List.length]))
+      (case cons (x t ih) (simp [List.append List.length ih]) omega)))
 
 ;; a statement today's logic cannot state, in the same surface
 (theorem dot_bound ((n Nat) (u v (Vector Real n)))
@@ -672,11 +689,15 @@ syntax):
   (by ...))
 
 ;; the executable/logical split is one keyword
-(fn  len ((xs (List α))) Nat (measure (struct xs)) (match xs (Nil 0) ((Cons _ t) (+ 1 (len t)))))
-(def spec_sorted ((xs (List Int))) Prop (forall ((i j (Fin (len xs)))) (-> (< i j) (<= (get xs i) (get xs j)))))
+(fn  List.length ((xs (List α))) Nat (measure (struct xs))
+  (match xs (nil 0) ((cons _ t) (+ 1 (List.length t)))))
+(def Sorted ((xs (List Int))) Prop
+  (forall ((i j (Fin (List.length xs)))) (-> (< i j) (<= (List.get xs i) (List.get xs j)))))
 
-;; a static lambda: eliminated by elaboration, no function value in E
-(fn add_offset ((k Int) (xs (List Int))) (List Int) (map (fun (x) (+ x k)) xs))
+;; a static lambda: eliminated by elaboration, no function value in E;
+;; `if` on a decidable proposition, the same `<=` as in a theorem
+(fn add_offset ((k Int) (xs (List Int))) (List Int)
+  (List.map (fun (x) (if (<= x 0) x (+ x k))) xs))
 ```
 
 **Reconstruction versus selection (R11).** Concise source and fully
@@ -698,11 +719,100 @@ it. *Q6 RULED: no Lean concrete-syntax reader in v1.*
 
 ### 6.3 The LLM-first gate
 
-An agent with no memory files and no gotcha list proves a
-`tb_len`-class theorem (§14) from `LANGUAGE.md` alone. That gate, not
-line counts, is the measure of the surface; it runs early on small
-tasks and again at the end. Structured exhaustion and replayable
-evidence are the guarantees; fast completion is not.
+An agent with no memory files and no gotcha list, given `LANGUAGE.md`
+and `docs/LEAN.md` (§6.4) and nothing else, proves a `tb_len`-class
+theorem (§14) and writes a `fn` that lowers. That gate, not line
+counts, is the measure of the surface; it runs early on small tasks
+and again at the end. Structured exhaustion and replayable evidence
+are the guarantees; fast completion is not. If `LEAN.md` has to grow
+past a few pages for the gate to pass, the seam is in the wrong place.
+
+### 6.4 The naming law (RULED 2026-09-06)
+
+The user's question: "as the primary author of shard source within the
+overall system we are building, what would be the least confusing
+paradigms to adopt here? If the answer is that Lean is already the
+ideal form, then I am fine with that, but I would rather it be an
+explicit decision." The decision, explicit: **Lean's names, conventions
+and naming grammar by default**, because they give the author a
+*complete* mental map — above all the theorem-naming grammar
+(`List.length_append`, `Nat.add_comm`, `Int.emod_nonneg`, the `_of_`,
+`_iff`, `_left`, `_self` suffixes), mechanical enough that a lemma
+never seen can be cited by guess, which is the guessable-names clause
+of the LLM-first principle already solved. A second full vocabulary
+would put a translation at every token; the map in `docs/LEAN.md` must
+fit in dozens of rows. Each departure below is one explicit decision.
+The damascene precedent is the model: the common things under the
+names the agent expects, the parts that fail scrutiny refused with a
+pointer, one short document for the seam.
+
+**Adopted from Lean, as the discipline's consensus rather than as
+Lean-isms:**
+
+1. **Names and namespaces.** `List.length`, `List.map`, `Option.getD`,
+   `Subtype.val`, `Fin`, `decide`; namespaces are shard's qualified
+   identities (module paths). `use` brings short names into scope as
+   `open` does; the resolution is recorded, so canonical form may keep
+   the short spelling.
+2. **Lowercase constructors and Bool literals.** `some`, `none`,
+   `cons`, `nil`, `true`, `false`. Today's capitalized `Some`/`Nil` and
+   Bool constructors `True`/`False` collide head-on with Lean, where
+   `True` is a proposition; this rename removes a whole class of
+   confusion and is mechanical.
+3. **One set of connectives, propositional first.** `=`, `<=`, `<`,
+   `and`, `or`, `not`, `->`, `iff`, `forall`, `exists`, `fun` — Lean's
+   own ASCII spellings. E's `if` and `decide` bridge through
+   `Decidable` (§5.2), so a `fn` and a `theorem` write the same
+   `(<= a b)`. `==`, `&&`, `||` exist for Bool *values* and are rarely
+   needed. `int_eq`, `le`, `lt`, `andb` and their kin disappear.
+4. **Operators and conventions** (Q9, §12.1): `/` and `%` on `Int` are
+   Euclidean, `Int.tdiv`/`Int.tmod` the named truncating forms; `Nat`
+   subtraction saturates; words wrap.
+5. **Sizes and indices are `Nat`.** Today lengths are `Int` with
+   nonneg refinements and lemmas; Lean's choice simplifies our own
+   totality regime — a `Nat` measure needs no nonnegativity obligation,
+   which deletes half of today's measure work — and `omega` handles the
+   `Nat`/`Int` mixing. The one adoption that is an outright improvement
+   on what we have.
+6. **Theorem naming grammar and equation lemmas.** Mathlib's
+   convention; `f.eq_N` and `f.eq_def` for generated defining equations.
+
+**Deliberate departures, each with its reason:**
+
+1. **Declaration keywords are Rust-flavored:** `fn`, `def`, `type`,
+   `inductive`, `structure`, `sig`, `theorem`. `fn` versus `def` is the
+   E/L split, a concept Lean lacks; Rust is the other corpus the author
+   carries, so the keyword reads correctly on sight.
+2. **The surface is s-expression prefix form:** `(<= a b)`,
+   `(List.map f xs)`, `(match xs (nil …) ((cons h t) …))`. The canon
+   and tooling investment; the map is trivial (Q6).
+3. **No effect notation.** No `do`, no `IO`, no monads; World threading
+   stays explicit because that is what makes a `bin` an honest
+   artifact. One paragraph in `LEAN.md`.
+4. **Refusals, each with a pointer to the replacement** (§13.1):
+   `get!`-style default-valued access (→ `get?`, `getD`), `Inhabited`
+   defaults, `partial` (→ `measure`), `unsafe`, `implemented_by` (→
+   evidence-backed replacement, §5.7), auto-bound implicits (→ explicit
+   binders), declaration-order instance selection (→ scoped selection,
+   §6.2). An agent who writes the Lean form is refused with the shard
+   form named — the hardened-error clause of the LLM-first principle
+   applied at the seam.
+5. **Shard-only vocabulary**, with nothing to map to: `measure`,
+   `mod.req` and `sig` views, `requirement`/`fulfills`, `bin`,
+   `trusts`, `requires`, World externs, models, the artifact-claim
+   forms.
+
+**`docs/LEAN.md`** is the seam document, written at phase 3 and kept
+short: (i) what is the same as Lean and needs no explanation; (ii) what
+is refused, why, and what to write instead; (iii) what is shard-only.
+It is an input to T9 and to the porting context pack (§14.3).
+
+**Corpus impact.** Constructors, Bool literals, `std/list` and
+`std/order` names, comparison and equality functions, and `Int`-typed
+sizes all change; every one is a mechanical rename the migration tool
+performs before any agent sees a file (§12, §14.3 tier 0). The measure
+regime gets simpler. The names in this document's own examples are to
+be read under this law.
 
 ---
 
@@ -876,7 +986,7 @@ one number for all costs.
 | **T6 — embedding** | an in-process client constructs a declaration, prepares once, invokes repeatedly, transforms with `meta/`, checks a claim, and requests a lowering, under one declaration identity; preparation count and marshaling measured; **an implementation change invalidates prepared/inlined execution but not abstract client proofs** | CLI dependence, duplicate environments, hidden preparation cost, wrong invalidation |
 | **T7 — search fidelity** | a small ground-truth candidate space with correlated holes; a root-only observer rewrite invalid in a nested position; a heuristic timeout that must not count as UNSAT; **a cache entry reused under a changed context is refused; two error licenses or two root-only equalities do not compose into an unrestricted equivalence** | wrong pruning, counting, or reuse of observational equalities |
 | **T8 — replay and trust** | cold replay of I, terms, assumptions, declaration identity and artifact bytes on reviewed Rust-hosted K; `Exhausted` never yields a receipt; the execution route is recorded; **an evaluation-reflection result with a tampered value is refused, and correct evidence replays cold without the originating tactic; the same proposition proved under permitted assumptions and under a prohibited axiom — the second fails policy** | pending evidence, stale caches, an unstated trust transition, a native-result oracle |
-| **T9 — the LLM-first gate** | §6.3, early on small tasks and again at the end; **a misspelled requirement identifier fails; an import that changes a selected ordering is reported as a requirement change; changing a proof strategy leaves the resolved requirement unchanged; a declared synthesis hole remains solvable** | a surface that needs folklore; silent task drift |
+| **T9 — the LLM-first gate** | §6.3, with `LANGUAGE.md` + `docs/LEAN.md` as the only inputs, early on small tasks and again at the end; **a misspelled requirement identifier fails; an import that changes a selected ordering is reported as a requirement change; changing a proof strategy leaves the resolved requirement unchanged; a declared synthesis hole remains solvable; a refused Lean form is answered with the shard form** | a surface that needs folklore; silent task drift; a seam document that cannot stay short |
 | **T10 — proof-IR navigability** | §16.4: a search engine reads a pinned I, elaborates a prefix to its goal state, enumerates applicable I forms, fills a hole, and the result replays; an I-level solution found by one engine is checked identically by another | an IR that only its producer can read |
 
 Performance decision rule (GPT-6 §16.1, accepted): baselines and
@@ -980,29 +1090,37 @@ choice:** `panic!`-style default-valued indexing (`a[i]!` with an
 `Inhabited` default); `Inhabited`-backed `opaque` defaults; `partial`;
 auto-bound implicits (§6.2); instance selection by declaration order
 without a declared scope (§6.2). E indexing is `Option`-valued or
-proof-indexed; a default-valued read is a named `get_or`.
+proof-indexed; a default-valued read is the named `getD`. The full
+refusal list with pointers is §6.4.
 
 **Keep ours where ours is stronger:** floats (`docs/FLOATS.md`'s proven
 `std/f32`/`f64` versus Lean's opaque `Float`), `Str` as
 `(refine Bytes utf8_valid)`, the measure regime, `mod.req`; Lean's
 counterparts are mapped for import only.
 
-**The crosswalk records exceptional-input behavior as part of each
-operation's meaning.** Initial rows; every row validated in phase 3
-before any statement is declared migrated:
+**The migration table.** Under the naming law (§6.4) there is no
+surviving "shard spelling": the right column *is* the language, and
+the left column exists only for the migration tool and the
+per-interface migration records. Exceptional-input behavior is part of
+each operation's meaning and is recorded per row. Initial rows; every
+row validated in phase 3 before any statement is declared migrated:
 
-| shard today | L / Lean name | exceptional behavior | note |
+| old spelling (at `5abc600`) | V2 spelling | exceptional behavior | note |
 |---|---|---|---|
-| `+ - *` on Int | `Int.add/sub/mul` | none | |
-| `/`, `tmod` | `Int.tdiv`, `Int.tmod` | `x/0 = 0`, `tmod x 0 = x` (today: stuck / trap) | truncating; today's runtime corner |
-| `ediv`, `mod` | `Int.ediv`, `Int.emod` | `x/0 = 0`, `x % 0 = x` (today: stuck) | Euclidean; today's proof-surface division |
-| `int_eq`, `le`, `lt` | `decide (a = b)`, `Int.ble`/`decide (a ≤ b)`, `Int.blt` | none | Bool-valued in E; `Decidable` bridges to `Prop` |
-| `band bor bxor bshl bshr` (premised `0 ≤`) | `Nat.land/lor/xor/shiftLeft/shiftRight` on the nonneg carrier | none on `Nat` | the 0≤ premises become the `Nat` type |
+| `+ - *` on Int | `+ - *` (`Int.add/sub/mul`) | none | |
+| `/`, `tmod` | `Int.tdiv`, `Int.tmod` | `x/0 = 0`, `tmod x 0 = x` (today: stuck / trap) | truncating, now the *named* form |
+| `ediv`, `mod` | `/`, `%` (`Int.ediv`, `Int.emod`) | `x/0 = 0`, `x % 0 = x` (today: stuck) | Euclidean, now the *operator* |
+| `int_eq`, `le`, `lt` (Bool fns) | `=`, `<=`, `<` (Prop; `Decidable` in E), `==` for Bool values | none | the Bool/Prop split leaves the surface |
+| `andb`, `orb`, `notb` | `and`, `or`, `not` (Prop; decided in E); `&&`, `\|\|`, `!` for Bool values | | |
+| `True`/`False` (Bool ctors) | `true`/`false`; `True`/`False` become the propositions | | mechanical rename, corpus-wide |
+| `Some`/`None`, `Cons`/`Nil`, `Pair` | `some`/`none`, `cons`/`nil`, `Prod.mk` | | lowercase constructors |
+| `len`, `append`, `rev`, `inth`, `memb` | `List.length` (`Nat`), `List.append`, `List.reverse`, `List.get?`, `List.contains`/`List.Mem` | `get?` is `Option`, never a default; `getD` is the named default form | sizes become `Nat` |
+| `band bor bxor bshl bshr` (premised `0 ≤`) | `Nat.land/lor/xor/shiftLeft/shiftRight` | none on `Nat` | the 0≤ premises become the `Nat` type |
 | `Nat` former (literal-packed) | `Nat` | `Nat.sub` saturates | kernel literal ops |
-| `(refine Int nonneg)` etc. | `Subtype` | | |
+| `(refine Int nonneg)` etc. | `Nat` where it is a size; `Subtype` otherwise | | |
 | `Word`/`U8`… (std/word) | `UInt*`/`BitVec` over `Fin` | wrap at width | Q3 |
-| `Bytes` = `(List U8)` | `List UInt8` | | |
-| `inth`, list index | `List.get?` / proof-indexed `get` | `Option`, never a default | `get_or` is the named default form |
+| `Bytes` = `(List U8)` | `List UInt8` (opaque `Bytes` kept as ours) | | |
+| `(record …)`, `F_of`/`with_F` | `structure`, projections | | |
 | `sym_eq`, `chars_of_sym`, `sym_of_chars` | `String`/`Char` | | toolchain-internal today |
 | `gen_fresh` | toolchain-internal | | never in a statement |
 
@@ -1051,8 +1169,10 @@ not a catalogue of Lean defects.
   Failure and exhaustion never leave assignments behind or justify
   pruning; blocked, invalid, exhausted, open-valid and closed-accepted
   stay distinct outcomes (§3.3).
-- **Convenience conventions that hide failure** (§12.1): default-valued
-  indexing, `Inhabited` defaults, `partial`.
+- **Convenience conventions that hide failure** (§12.1, §6.4):
+  default-valued indexing, `Inhabited` defaults, `partial`. Every
+  refusal is paired with the shard form, and writing the Lean form is
+  refused with that form named.
 - **Exhaustion as an error.** Lean's heartbeat limit is an error
   indistinguishable from failure; here `Exhausted` is a verdict at every
   layer, K and elaborator alike.
@@ -1170,11 +1290,13 @@ The port is the pruning opportunity the slimming arc was waiting for.
 The existing auto-proof-solver architecture with an LLM as the solver
 of last resort, now targeting I (§16):
 
-0. **Re-spelling tier.** Old proofs whose steps are I-shaped (unfold,
-   rewrite with a lemma at an occurrence, case split, induction, a
-   Farkas certificate) are re-spelled into I by the migration tool with
-   named hypotheses; whatever replays is done. This replaces the
-   optional compatibility layer of v0.2.
+0. **Re-spelling tier.** The migration tool applies the naming law
+   (§6.4) to every file mechanically — constructors, Bool literals,
+   `std` names, comparison and equality forms, `Int` sizes to `Nat` —
+   and re-spells old proofs whose steps are I-shaped (unfold, rewrite
+   with a lemma at an occurrence, case split, induction, a Farkas
+   certificate) into I with named hypotheses; whatever replays is done.
+   This replaces the optional compatibility layer of v0.2.
 1. **Solver tier.** Every remaining PORT claim is attempted by the V2
    solver with a generic script (induction, `simp`, arithmetic
    reflection, the ported `tools/prove` ladder). The old engine
@@ -1213,9 +1335,11 @@ measured on real numbers before the bulk begins.
 3. **Elaboration, the proof IR, the first library.** Stages 1–2
    including the I elaborator and goal-state API (§16), core tactics,
    certified arithmetic; `std/list`, `order`, `nat`, `div`, `bits`,
-   `arith` re-proved in `v2/std`; the 15 former axioms proved as
-   theorems; the primitive crosswalk validated including exceptional
-   behavior; the porting pipeline built and **measured here**. Gates:
+   `arith` re-proved in `v2/std` **under the naming law** (§6.4:
+   `List.length` over `Nat`, lowercase constructors, propositional
+   connectives); the 15 former axioms proved as theorems; the migration
+   table validated including exceptional behavior; `docs/LEAN.md`
+   written; the porting pipeline built and **measured here**. Gates:
    T2, T3, T9 (small form), T10, the tier split recorded.
 4. **Entrenchment tests.** Before the environment and executable
    representation are sealed: a `tb_len`-class compiler proof with its
