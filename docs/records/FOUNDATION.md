@@ -1,4 +1,4 @@
-# records/FOUNDATION.md — the V2 foundation: history, rulings, and the review loop
+# records/FOUNDATION.md — the V3 foundation: history, rulings, and the review loop
 
 > The dated record behind `docs/FOUNDATION.md` (the normative contract).
 > Everything here is history or argument: the user's words, the
@@ -14,17 +14,19 @@
 | version | date | commit | what changed |
 |---|---|---|---|
 | v0.1 | 2026-09-05 | `5d95b81` | first proposal: Lean-rule-exact K in shard, E as the lowerable core, four execution routes, crosswalk, pathfinder ladder, Q1–Q8 |
-| v0.2 | 2026-09-06 | `d6b25f1` | GPT-6 feedback R1–R8 folded; Q1–Q8 ruled; static lambda profile; Lean review; Foundation-arc plan with the sibling `v2/` tree |
+| v0.2 | 2026-09-06 | `d6b25f1` | GPT-6 feedback R1–R8 folded; Q1–Q8 ruled; static lambda profile; Lean review; Foundation-arc plan with the sibling `v2/` tree (renamed `v3/` at v0.6) |
 | v0.3 | 2026-09-06 | `524b59c` | GPT-6 follow-up R9–R16 answered; evaluation reflection with per-invocation evidence; declarative rules vs the bounded procedure; conventions ruled (Q9); the proof IR (I) |
 | v0.4 | 2026-09-06 | `23094d7` | the naming law (one name per mathematical object; Lean's names by explicit decision; five departures; `docs/LEAN.md`); §12.1 as a pure migration table |
-| v0.5 | 2026-09-06 | this commit | GPT-6 integration review R17–R28 folded; the normative/records split; the two rulings of 2026-09-06 (Lean's `Init` as the core library identity; durable P closure for releases) |
+| v0.5 | 2026-09-06 | `985776b` | GPT-6 integration review R17–R28 folded; the normative/records split; the two rulings of 2026-09-06 (Lean's `Init` as the core library identity; durable P closure for releases) |
+| v0.6 | 2026-09-06 | this commit | **renumbered V2 → V3** across the project (the tree is the lineage's v2; the sibling tree is `v3/`; the archive is `foundation-v3/`); GPT-6 final clarifications R29–R34 folded (role-aware elimination, selection discharges applicability, the `Init` identity stated at `realize`, canonical serialization as the storage boundary, World ownership through aggregates, older snapshot ≠ invalid handle); the first connected path |
 
-The GPT-6 documents (archived under `docs/archive/foundation-v2/` at v0.5; they were untracked root files until then):
+The GPT-6 documents (archived under `docs/archive/foundation-v3/` — named `foundation-v2/` at v0.5, renamed with the renumbering at v0.6; each memo was an untracked root file until folded in; the memos say "V2" because they predate the renumbering):
 `SHARD_FOUNDATION_PROPOSAL_v0.3.md`, `SHARD_BOOTSTRAP_ADDENDUM_v0.3.md`,
 `SHARD_PROPOSAL_CHANGES_v0.3.md` (its proposal, D01–D13, B06–B16);
 `SHARD_FOUNDATION_FEEDBACK_v0.1.md` (R1–R8, on v0.1);
 `SHARD_FOUNDATION_FOLLOWUP_MEMO_v0.1.md` (R9–R16, on v0.2);
-`SHARD_FOUNDATION_INTEGRATION_REVIEW_v0.1.md` (R17–R28, on v0.4).
+`SHARD_FOUNDATION_INTEGRATION_REVIEW_v0.1.md` (R17–R28, on v0.4);
+`SHARD_FOUNDATION_FINAL_CLARIFICATIONS_v0.1.md` (R29–R34, on v0.5).
 The user points GPT-6 at each commit by SHA; positions are answered by
 ID so the documents read side by side.
 
@@ -125,6 +127,17 @@ realizations attached; R23: releases retain the full P closure in a
 deduplicated store). "Yes we can archive the rest of the context in
 records/."
 
+**2026-09-06 (the number).** Surveying the documentation that ratification
+touches surfaced that the repo already calls today's shard "v2"
+(`archive/TRANSFER.md` is the v1→v2 handoff; `REVISIT.md` is titled "v2 →
+v3 Revisit Ledger" and says "v2 is a prototype … planning v3";
+`archive/M3-V1-VS-V2.md`), while the foundation called itself V2 with a
+`v2/` tree. User: "My original thought was kernel v2, but calling this
+v3 across the entire project is defensible -- let's do it." The
+foundation is V3, the sibling tree is `v3/`, and the archive directory
+was renamed; the user's earlier quotes above keep their "V2"/"v2"
+wording as spoken.
+
 ## 3. Rejected alternatives (REJECTED-because, on record)
 
 **A HOL-class kernel (2026-09-05).** Proposed by Fable first: simply
@@ -160,8 +173,8 @@ executes E and defines no independently evolving front-end; the initial
 loader reads the narrow-compatible toolchain sources exactly as it
 reads the kernel today.
 
-**A separate repository for V2.** Cleaner for the archive question,
-worse for shared CI, tooling and history; the sibling `v2/` tree with a
+**A separate repository for V3.** Cleaner for the archive question,
+worse for shared CI, tooling and history; the sibling `v3/` tree with a
 logical package root independent of the physical path (R24) was chosen.
 
 **Universe cumulativity, dropping `String` literals, changes to `Quot`,
@@ -269,6 +282,25 @@ loading profile; the stale "Lean's opaque Float" contrast removed
 "verbatim", "mechanical", "unchanged", "no search" used only where the
 contract supports them; the normative/records split itself.
 
+### 4.5 R29–R34 (final clarifications on v0.5, answered at v0.6)
+
+GPT-6's framing: "the design is ready for implementation. These
+clarifications prevent a handful of ambiguous sentences from becoming
+incompatible implementations." All six accepted as wording folded into
+the existing sections and tests; no new architecture layer.
+
+| ID | disposition | where in the normative document | notes |
+|---|---|---|---|
+| R29 role-aware elimination | accept | §4.1–4.2, T1 | K authorizes logical elimination; E realizes supported valid constructions and grants no elimination rule; `Decidable` case analysis is elimination of data; the residual `Sort`/`Pi`/choice restriction applies to runtime roles only; the dependent-`if` example repaired to return `Option` in both branches |
+| R30 selection discharges applicability | accept | §4.4, T1, T8 | registration ≠ selection; a conditional realization does not discharge its own condition; approximations not selected for exact contracts; the selection record binds implementation, applicability evidence and policy |
+| R31 `Init` identity at `realize` | accept | §4.4, §5.3, T5 | the ruling stated normatively beside `realize`; the §5.3 example now realizes the imported `List.length` and uses a native `sum_list` for the `fn`/`theorem` illustration (the old example redeclared an imported name, which §4.4 forbids) |
+| R32 canonical serialization boundary | accept | §7.5, T8, T10 | storage representation, not a per-edit whole-graph operation; incremental digests permitted; cached admissions bound to validated contexts |
+| R33 World ownership | accept | §4.7, phase 4 | ownership through aggregates, projections, helpers and exclusive branches; names do not make tokens; the box/unwrap-twice fixture; erased references consume nothing; the two model tests retained |
+| R34 older snapshot ≠ invalid handle | accept | §8.4, §9.3, T6 | a handle keeps denoting its revision; a new revision retargets and revokes nothing; release, revocation and lifetime govern; T6's ambiguous clause replaced |
+
+Also taken: GPT-6's "first connected path" as a paragraph under §12.4
+(inside the phases, not a new one).
+
 ## 5. Findings and corrections made along the way
 
 - The measured provocation: B-1b's per-function certificates (tb_len
@@ -289,6 +321,12 @@ contract supports them; the normative/records split itself.
   (R19/§15) — both verified against the files and corrected.
 - "Subtype predicates must be E functions" (v0.2–v0.4) was too strong;
   certified-program values need arbitrary-Prop refinements (R17).
+- The v0.4–v0.5 dependent-`if` example returned an element in one branch
+  and `none` in the other (R29); the v0.4–v0.5 surface example
+  redeclared the imported `List.length` as a `fn`, which §4.4 itself
+  forbids (R31). Both repaired at v0.6.
+- The foundation was numbered V2 for five drafts while the tree was
+  already the lineage's v2 (§2, 2026-09-06). Renumbered V3 at v0.6.
 
 ## 6. The naming law's derivation (2026-09-06)
 
@@ -312,7 +350,7 @@ is `docs/FOUNDATION.md` §5.3.
 ## 7. Related records
 
 `docs/COVERAGE.md` and `docs/records/COVERAGE.md` (the coverage arc,
-PARKED at B-1b 2026-09-05; resumes at phase 7 on V2); `docs/TCB.md`
+PARKED at B-1b 2026-09-05; resumes at phase 7 on V3); `docs/TCB.md`
 (the roster this replaces); `docs/TOTALITY.md` (the measure regime,
 carried as elaboration); `docs/CERT.md` (validators carried; §3/§7
 superseded); `docs/SEARCH.md` (LS-laws carried; the lock-step law

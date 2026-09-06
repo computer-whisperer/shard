@@ -134,7 +134,7 @@ reuses a clock — two writes that both consume the same `w` still leave the
 final clock advanced. Unique use is a separate, syntactic
 well-threadedness property (affine use of each World token along every
 branch), checked by the lowering's no-duplication gate today and by the
-E classifier in V2; the trace relation, not the clock, is the effect
+E classifier in V3; the trace relation, not the clock, is the effect
 semantics.
 
 At RUN time the Rust handler (the World effect handler in

@@ -1,9 +1,13 @@
-# FOUNDATION.md — the shard V2 foundation
+# FOUNDATION.md — the shard V3 foundation
 
-> **STATUS: DRAFT v0.5 (Fable), 2026-09-06 — the normative contract, proposed, not yet ratified.**
+> **STATUS: DRAFT v0.6 (Fable), 2026-09-06 — the normative contract, proposed, not yet ratified.**
+> Numbering: the current tree is the lineage's v2 (`archive/TRANSFER.md`
+> is the v1→v2 mandate; `REVISIT.md` is the v2→v3 ledger), so this
+> foundation is **V3** across the whole project — user ruling 2026-09-06.
+> GPT-6's memos, written before the renumbering, say "V2" for the same thing.
 > This document states the rules. The history, the user's rulings by
 > date, the rejected alternatives, and the round-by-round positions on
-> GPT-6's review IDs (D01–D13, B06–B16, R1–R28) live in
+> GPT-6's review IDs (D01–D13, B06–B16, R1–R34) live in
 > [`records/FOUNDATION.md`](records/FOUNDATION.md). When the two
 > disagree, this document wins and the record is corrected. Nothing here
 > is implemented; sizes are estimates and say so. Ratification turns
@@ -216,16 +220,23 @@ layout specializes. Consequences:
   `Realizes` is a legitimate E value: the validator architecture's
   certified-program type.
 - A `Decidable P` value keeps its tag and erases its proof payload;
-  `(if h (< i (List.length xs)) (List.get xs i h) none)` computes the
-  decision once, discharges the access obligation by `h`, and carries
-  no runtime proof. Short-circuiting and evaluation order of composite
+  schematically, for `xs : List A`, `i : Nat` and an `Option A` result,
+  `(if h (< i (List.length xs)) (some (List.get xs (Fin.mk i h))) none)`
+  computes the decision once, discharges the access obligation by `h`
+  in the proof-indexed `Fin` argument, and carries no runtime proof. Short-circuiting and evaluation order of composite
   decisions are specified, not inferred from the mathematics.
 - A statically selected law-bearing package (operations plus laws)
   specializes its operation projections and erases its laws — the
   package analogue of templates; no runtime dictionary.
-- Elimination from `Prop` into data happens only where the translation
-  says: decision tags, equality transport, `False.elim` on checked
-  evidence. A missing proof justifies none of them.
+- **Logical elimination and executable support are two judgments.**
+  Every elimination must first be valid under K's rules; the E
+  translation provides specified executable realizations of supported
+  valid constructions and never grants an additional elimination rule.
+  Case analysis on `Decidable P` is elimination of data (its definition
+  lives in `Type`), not elimination of a proposition; equality transport
+  and impossible branches use the permitted logical eliminators and
+  their justified erasure rules. Missing evidence authorizes none of
+  these operations (T1 checks validity and support separately).
 - "No indices" means no index-dependent **runtime layouts** in v1.
   Value-indexed logical interfaces (`Fin n`, `BitVec w`, proof-indexed
   access) are realized through ordinary E representations with erased
@@ -241,8 +252,16 @@ constructor application; exhaustive `match`; fully applied calls to
 `fn`s and library primitives; `let`; `if` on a decidable proposition
 (elaborated through the `Decidable` instance — for core types fixed by
 the library, not a consequential selection); `decide`; literals;
-proof-typed arguments (erased). No `Classical.choice`, no `Sort`- or
-`Pi`-typed value in an elaborated E body.
+proof-typed arguments (erased). The residual restriction is
+role-aware: after staging and erasure, **runtime** E contains no
+unsupported `Sort`- or `Pi`-typed value and no operation that obtains
+runtime data solely through noncomputable choice. Static parameters and
+erased proofs may contain richer L structure, including permitted
+classical reasoning, with their assumptions tracked; a logical term is
+not rejected merely because such structure occurs in a non-runtime
+role. This keeps the runtime first-order and refuses an unimplemented
+computational witness without making classical definitions executable
+or authorizing arbitrary erasure.
 
 ### 4.3 The lambda profile
 
@@ -279,10 +298,37 @@ a supported executable view derived from the definition and checked, or
 a separately supplied E implementation related to it by a theorem. An
 imported or mathematical `def` is not executable by default and gains
 no compiler guarantee silently. One mathematical identity may have
-several implementation identities linked by evidence; choosing among
-them changes execution cost and the realization record, never the
-requirement. An imported name is never identified with a native
-declaration by spelling.
+several implementation identities linked by evidence; successful
+selection under an unchanged contract changes execution cost and the
+realization record, never the requirement. An imported name is never
+identified with a native declaration by spelling.
+
+**The core library identity.** The shared mathematical core uses the
+admitted declarations from the pinned Lean `Init` export under the
+declared import identity mapping (RULED 2026-09-06; the pin is a phase 0
+deliverable). They are imported once; E realizations are attached to
+the existing declarations where required. No second mathematical
+declaration is introduced merely to give an imported operation an
+executable spelling; shard-specific declarations remain native
+additions. Duplicate or incompatible import revisions are handled
+explicitly, never unified by name alone (T5).
+
+**Selection discharges applicability.** Registration and selection are
+distinct: a conditional realization (correct for `0 ≤ x < 2^32`, or
+error-bounded) may exist in the registry before it applies to a
+particular call, and a proved conditional relationship does not
+discharge its own condition. A realization is eligible only when its
+input conditions, representations, preserved observations, resource and
+failure conditions, and additional assumptions satisfy the caller's
+declared contract. Selection discharges the necessary conditions,
+establishes an authorized guard or fallback, or refuses the candidate;
+any additional caller obligation is exposed as a requirement or
+artifact-premise change, never inserted silently; an approximate
+realization is not selected for an exact contract without the required
+relationship established. The selection record binds the chosen
+implementation, its applicability evidence and the policy applied. One
+explicit selection demonstrates the contract; no optimizer or registry
+policy is required now (T1, T8).
 
 **The correspondence is semantic, not provenance.** The realization
 relation is stated over the **resolved executable structure** — its
@@ -352,6 +398,21 @@ eliminates, memoizes or reorders a host call because it looks pure.
 Pure evaluation refuses reachable externs; effectful execution takes an
 explicit handler contract. No linear types in K, no monads, no `do`.
 `BOUNDARIES.md`'s inference is corrected accordingly.
+
+**Ownership, not spellings.** Well-threadedness tracks runtime World
+ownership through supported aggregate values, projections, helper calls
+and mutually exclusive branches; distinct variable names do not
+establish distinct tokens (a World boxed once and unwrapped twice is one
+token used twice). The check follows the staged, erased executable
+structure, so references used only in erased proofs consume no runtime
+ownership. Unsupported ownership patterns may be conservatively refused
+but cannot bypass the check through a supposedly pure wrapper; a
+conservative local discipline with explicit function summaries is the
+initial supported fragment. Lowering preserves both the established
+ownership discipline and the specified effect trace. Unique use does
+not by itself establish that an effect-axiom bundle is jointly
+realizable, and an unused effect result does not authorize deleting the
+effect.
 
 ### 4.8 Replacement with evidence
 
@@ -439,17 +500,23 @@ abstraction (a mathematical monad or `Inhabited` structure is fine);
 models, the artifact-claim forms.
 
 Schematic surface (type parameters bound explicitly; implicitness is a
-Stage 1 attribute):
+Stage 1 attribute; imported declarations such as `List.length` are
+realized, never redeclared — §4.4; the `realize` form's surface is fixed
+at phase 2, so the line below is a placeholder for "attach the checked
+executable view of the definition"):
 
 ```sexp
-(theorem List.length_append ((α Type) (xs ys (List α)))
-  (= (List.length (List.append xs ys)) (+ (List.length xs) (List.length ys)))
-  (by (induction xs)
-      (case nil (simp_only [List.append List.length]))
-      (case cons (x t ih) (simp_only [List.append List.length ih]) omega)))
+;; List.length, List.append, List.map, List.get, Fin: imported once from Init.
+(realize List.length (executable-view))
 
-(fn  List.length ((α Type) (xs (List α))) Nat (measure (struct xs))
-  (match xs (nil 0) ((cons _ t) (+ 1 (List.length t)))))
+(fn sum_list ((xs (List Int))) Int (measure (struct xs))
+  (match xs (nil 0) ((cons x t) (+ x (sum_list t)))))
+(theorem sum_list_append ((xs ys (List Int)))
+  (= (sum_list (List.append xs ys)) (+ (sum_list xs) (sum_list ys)))
+  (by (induction xs)
+      (case nil (simp_only [List.append sum_list]) omega)
+      (case cons (x t ih) (simp_only [List.append sum_list ih]) omega)))
+
 (def Sorted ((xs (List Int))) Prop
   (forall ((i j (Fin (List.length xs)))) (-> (< i j) (<= (List.get xs i) (List.get xs j)))))
 (fn add_offset ((k Int) (xs (List Int))) (List Int)
@@ -603,6 +670,18 @@ indistinguishable at the pin; a better engine may later replace a hand
 proof with no statement changing. `sorry` is reported loudly and never
 accepted. LS-law 1 (replay is the referee) stands.
 
+**Canonical serialization is the storage boundary, not an interactive
+step.** It specifies the persistent evidence representation, not a
+whole-graph transformation after every interactive operation (§7.3's
+incremental queries and §9.4's reclamation are not defeated by it).
+Internal arenas, local identifiers, sharing and incremental digests may
+differ from the external encoding; persistence and loading establish
+the specified correspondence, and an implementation may canonicalize or
+hash incrementally where profitable. Cached admission results remain
+bound to their validated environments and contexts; internal identity
+alone is never proof of a judgment, and no unchecked cached receipt is
+accepted (T8, T10).
+
 ---
 
 ## 8. Identity, views, and acceptance
@@ -640,7 +719,7 @@ emulate either).
 
 A declaration's identity is its qualified name within a **logical
 package root** plus the content hash of its revision; physical location
-is separate, so relocating `v2/` at the flip changes no identity. An
+is separate, so relocating `v3/` at the flip changes no identity. An
 abstract interface slot and the concrete body filling it are two keys.
 A concrete definition with a checked body is immutable; changing the
 body is a new revision, and a proof that unfolded the old body is not
@@ -656,9 +735,10 @@ dependencies; evidence and assumption dependencies; executable-build
 dependencies (including a build that inspected an I derivation or a
 proof body to choose a representation). A proof-only change re-runs
 acceptance policy and invalidates only builds that inspected the proof.
-An implementation-only change invalidates prepared and inlined
-execution and any client proof that unfolded the body, and no abstract
-client proof. Nothing is invalidated because all files live under one
+An implementation-only change invalidates reuse of an old preparation
+as the preparation of the **new** revision and any inlined execution or
+client proof that unfolded the body, and no abstract client proof; it
+never retargets or revokes a handle bound to the old revision (§9.3). Nothing is invalidated because all files live under one
 directory hash.
 
 ---
@@ -680,7 +760,7 @@ claim with separate evidence.
 
 ### 9.2 The cold bootstrap route
 
-The V2 toolchain's own sources (K, `ev`, loader, elaborators) are
+The V3 toolchain's own sources (K, `ev`, loader, elaborators) are
 written in the **narrow-compatible E profile** — first-order, no
 surface sugar needing elaboration. The Rust loader reads them exactly
 as it reads `kernel/*.shard` today (this is its entire parsing role,
@@ -700,7 +780,17 @@ well-typed, checked or accepted (§3.5). A **prepared handle** binds the
 entry, its declaration and environment revision, the selected
 realization, argument and result representations and the execution
 policy; a workspace edit never retargets it; release, invalid
-arguments, cancellation and reentrancy are specified. Bulk buffers use
+arguments, cancellation and reentrancy are specified. **An older
+snapshot is not an invalid handle**: a handle bound to revision A keeps
+denoting A, and may keep invoking A while its retained resources,
+handler contract and applicable policy remain valid — the existence of
+revision B neither retargets A nor revokes it. An operation requesting
+B refuses an A handle; a new B handle executes B. Release, explicit
+revocation, or a violated lifetime or environment condition invalidates
+a handle independently of any newer revision; a policy that withdraws
+permission to run the old realization is such a revocation. This lets
+an embedding finish old work while preparing its replacement, without
+a hot-reload or revocation service (T6). Bulk buffers use
 explicit views with format, shape, length, alignment, aliasing and
 lifetime rules, never literal term trees; a proof about buffer contents
 is valid for a state, so calls take read-only ownership, a version
@@ -762,7 +852,7 @@ records. Exceptional-input behavior is part of each operation's
 meaning. Every row validated in phase 3 before any statement is
 declared migrated.
 
-| old spelling | V2 spelling | exceptional behavior | class |
+| old spelling | V3 spelling | exceptional behavior | class |
 |---|---|---|---|
 | `+ - *` on Int | `+ - *` | none | name |
 | `/`, `tmod` | `Int.tdiv`, `Int.tmod` | `x/0 = 0`, `tmod x 0 = x` (was stuck/trap) | behavior |
@@ -839,11 +929,11 @@ equalities (Lean4Less) are research; no v1 departure is authorized.
 
 ### 12.1 The sibling tree (RULED)
 
-V2 is built in `v2/` — `v2/kernel`, `v2/meta`, then `v2/std` —
+V3 is built in `v3/` — `v3/kernel`, `v3/meta`, then `v3/std` —
 committed to main, while the old tree keeps checking the old corpus and
 serves as the oracle for ported modules. The **logical package root** is
 declared at phase 0 so that the flip (phase 6) is a deployment change.
-`LAYOUT.md` gains the `v2/` rule at phase 0.
+`LAYOUT.md` gains the `v3/` rule at phase 0.
 
 ### 12.2 The port manifest
 
@@ -878,9 +968,9 @@ phase 3.
    inventory and procedure written; the package root, the relevance
    rules, the I reconstruction contract and the core-library identity
    policy (§4.4: Lean's `Init` for the shared mathematical types)
-   decided; the port manifest drafted; `LAYOUT.md` gains `v2/`; the
+   decided; the port manifest drafted; `LAYOUT.md` gains `v3/`; the
    translations that remain trusted during bring-up named.
-1. **K.** `v2/kernel`, narrow-compatible E, route 3; raw-input
+1. **K.** `v3/kernel`, narrow-compatible E, route 3; raw-input
    validation and immutable checked environments; decoding and
    primitive budgets; the concrete cold-start route. Gate: T0.
 2. **Front-end and `ev`.** Loader and reader to explicit L; views; the
@@ -901,21 +991,36 @@ phase 3.
    states; prepared invocation, stale handles, buffer rules and
    reclamation (T6); evaluation reflection and its cost comparison (T8);
    the World-use and model tests before any effectful certificate is
-   called ported.
+   called ported — the negative fixture hides duplication behind
+   structure (one World boxed, unwrapped twice, written twice) and a
+   helper boundary; exclusive branches each consuming the incoming
+   token once are accepted, as are erased proof references (§4.7).
 5. **Bulk port** by manifest and migration class; floats as their own
    line; REGENERATE families produced by validators and tactics. Gate:
-   the V2 corpus green on every PORT file; every ARCHIVE decision
+   the V3 corpus green on every PORT file; every ARCHIVE decision
    recorded.
-6. **The flip.** `v2/` becomes the tree without identity changes; cold
+6. **The flip.** `v3/` becomes the tree without identity changes; cold
    replay of accepted P and selected I reconstructions; CI, `bin/`,
    docs, README and memory move. Gate: the fmt gate and the DEFAULT
-   corpus on V2.
+   corpus on V3.
 7. **Resume.** The coverage arc unparks with B-1c as an I-emitting
    tactic; Mathlib export at scale as a measured performance goal;
    optional kernel experiments stay off the critical path.
 
 Serial on main, one gate per phase, CI green behind each, generated
 files never hand-patched, kernel sources frozen during corpus runs.
+
+**The first connected path** (inside the phases, not a new one): one
+imported logical declaration → one checked E realization → one caller
+using a branch-local proof → a claim constructed through I → its
+retained P verified without the elaborator → repeated execution through
+a prepared handle. Assembled incrementally as each capability lands,
+then broken deliberately at each joint — wrong executable body, missing
+bound evidence, mismatched revision, tampered result, invalid raw
+argument — with the World-alias fixture added before any effectful
+certificate counts as ported. Its purpose is to learn whether the
+interfaces compose at tolerable cost before a large library, the full
+engine or a certified host exists.
 
 ### 12.5 The acceptance battery
 
@@ -926,14 +1031,14 @@ interventions — never one number.
 | test | experiment | failure reveals |
 |---|---|---|
 | **T0 oracle and raw checking** | `Init` export declaration-for-declaration; hostile battery with declarative reasons (universe collapse, scope capture, forged recursor, non-positive inductive, illicit `Prop` elimination, cyclic definition, same-spelled non-core `Nat.add`, the six 2026 exploits); direct malformed construction through the API; invalid context and inductive metadata; normalized-universe cases; fixed-identity primitive validation; scope logged | rule mismatch, mapping error, budget difference, forgeable inputs |
-| **T1 realization and migration** | structural, measure, subtype-producing and `decide` cases with their equation bridges; a fresh-but-wrong executable view fails while its manifest passes; an omitted branch, a wrong callee, a tautological equation for a looping recursion; a decision tag with erased payload; a branch-local bound proof; an arbitrary-Prop subtype; `Nat`-underflow-sensitive code; zero-divisor target behavior | a missing bridge; provenance mistaken for correspondence; a mislabeled migration |
+| **T1 realization and migration** | structural, measure, subtype-producing and `decide` cases with their equation bridges; a fresh-but-wrong executable view fails while its manifest passes; an omitted branch, a wrong callee, a tautological equation for a looping recursion; a decision tag with erased payload; a branch-local bound proof; an arbitrary-Prop subtype; both branches of a dependent `if` at one result type with no runtime proof; a permitted classical proof justifying an erased invariant accepted while a purported executable result supplied solely by noncomputable choice is refused (validity and support judged separately); a conditional realization selected under an available bound and refused without it unless a justified fallback is supplied; an approximation refused for an exact contract; `Nat`-underflow-sensitive code; zero-divisor target behavior | a missing bridge; provenance mistaken for correspondence; a realization applied outside its conditions; a mislabeled migration |
 | **T2 static abstraction** | closed lambda, named partial application, captured-value `add_offset`; a static law-bearing package with no runtime dictionary; the generic theorem reused | source restriction mistaken for artifact restriction |
 | **T3 bounded specialization** | the type-growing recursion refuses loudly; a large finite workload within limits | totality mistaken for compiler termination |
 | **T4 holes** | shared hole under renamed binders; dependent expected type; template versus recipe; witness/proof dependency; blocked comparison; closure; failure and exhaustion leave the snapshot unchanged; forked branches on one hole do not merge by name | incoherent open-construction discipline; hidden state |
-| **T5 views and identity** | consumer with the view alone and with the impl linked; a private-equality leak refused; two validated instances of one interface; physical relocation changes no identity; two same-spelled nominal types not conflated; an import identified only by declared mapping | invalid weakening; identity drift |
-| **T6 embedding** | construct, prepare once, invoke repeatedly, transform, check, lower under one identity; erased-invariant argument validation; a stale handle refused after an implementation edit; a buffer shorter than its shape; mutation after validation; bounded live state after many fork/fail/release cycles | CLI dependence; hidden preparation; wrong invalidation; leaks |
+| **T5 views and identity** | consumer with the view alone and with the impl linked; a private-equality leak refused; two validated instances of one interface; physical relocation changes no identity; two same-spelled nominal types not conflated; an import identified only by declared mapping; an implementation attached to an imported declaration and an imported theorem about the original still usable afterwards, the mathematical identity unchanged; an attempt to identify a different definition by spelling refused | invalid weakening; identity drift |
+| **T6 embedding** | construct, prepare once, invoke repeatedly, transform, check, lower under one identity; erased-invariant argument validation; prepare revision A then introduce revision B: the retained A handle either keeps executing A under its still-valid contract or is refused for a recorded revocation or lifetime reason, never executes B, and is rejected by an invocation requiring B, while a new B handle executes B and a released handle is refused; a buffer shorter than its shape; mutation after validation; bounded live state after many fork/fail/release cycles | CLI dependence; hidden preparation; wrong invalidation; leaks |
 | **T7 search fidelity** | correlated holes over ground truth; the `n / Fin n` dependent count; a root-only rewrite invalid nested; a failed proof preserving a valid program; an empty bounded `applicable` not treated as `UNSAT`; a cache entry refused under a changed context; approximate relations not silently transitive | wrong pruning, counting or reuse |
-| **T8 acceptance and replay** | direct P verification without I; reconstruction-version drift reported, not overwritten; canonical P encoding stable across allocation orders; a tampered reflection value refused and correct evidence replaying cold; a prohibited-axiom proof failing policy under an identical proposition; `Exhausted` never a receipt; the route recorded | pending evidence, stale caches, an unstated trust transition |
+| **T8 acceptance and replay** | direct P verification without I; reconstruction-version drift reported, not overwritten; canonical P encoding stable across allocation orders, and a local goal edit not triggering full-prefix replay or whole-environment serialization (affected nodes and cold/warm work measured, no arena or hash algorithm mandated); a realization whose additional assumptions violate policy rejected despite a correct output equation; a tampered reflection value refused and correct evidence replaying cold; a prohibited-axiom proof failing policy under an identical proposition; `Exhausted` never a receipt; the route recorded | pending evidence, stale caches, an unstated trust transition |
 | **T9 authoring** | §5.4 | folklore; task drift; a seam in the wrong place |
 | **T10 proof IR** | replay unchanged under changed ambient simp and instance settings; a dependent motive; reused local names in sibling branches; a guarded occurrence whose source changed; an external P accepted through `exact`; an I schema upgrade separate from a foundation change; one engine's solution checked identically by another | an IR only its producer can read |
 
@@ -975,5 +1080,5 @@ synthesis; simplifier configuration; the 4.33 release notes); Vaishnav,
 `docs/BOUNDARIES.md`, `docs/FLOATS.md`, `docs/MEMORY.md`,
 `docs/LANGUAGE.md`, `docs/COVERAGE.md`, `kernel/proof.shard`,
 `meta/sketch/mod.req.shard`, `meta/invoke/prepared.shard`,
-`tools/search/theorem_scope.shard`; the GPT-6 documents under `docs/archive/foundation-v2/`, listed in
+`tools/search/theorem_scope.shard`; the GPT-6 documents under `docs/archive/foundation-v3/`, listed in
 `records/FOUNDATION.md`.
