@@ -19,7 +19,8 @@
 | v0.4 | 2026-09-06 | `23094d7` | the naming law (one name per mathematical object; Lean's names by explicit decision; five departures; `docs/LEAN.md`); §12.1 as a pure migration table |
 | v0.5 | 2026-09-06 | `985776b` | GPT-6 integration review R17–R28 folded; the normative/records split; the two rulings of 2026-09-06 (Lean's `Init` as the core library identity; durable P closure for releases) |
 | v0.6 | 2026-09-06 | `150ceeb`, `f14bde8` (§10.5) | **renumbered V2 → V3** across the project (the tree is the lineage's v2; the sibling tree is `v3/`; the archive is `foundation-v3/`); GPT-6 final clarifications R29–R34 folded (role-aware elimination, selection discharges applicability, the `Init` identity stated at `realize`, canonical serialization as the storage boundary, World ownership through aggregates, older snapshot ≠ invalid handle); the first connected path |
-| v0.7 | 2026-09-06 | this commit | Fable's last review folded (§10.5 documentation disposition landed at `f14bde8`): source spans structural; types get realizations (`Array`, `String`, `ByteArray`, `UInt*`; the validated-bytes string = `String`'s realization); numeric literals and the `Nat`/`Int` seam (one automatic coercion); `Quot` erasure row; deriving at Stage 1; CANON's law carried; two user rulings — no tool writes into a source file (engine I lives in sidecars + the pin store), no user-defined notation/macros in v1 |
+| v0.7 | 2026-09-06 | `68c0e08` | Fable's last review folded (§10.5 documentation disposition landed at `f14bde8`): source spans structural; types get realizations (`Array`, `String`, `ByteArray`, `UInt*`; the validated-bytes string = `String`'s realization); numeric literals and the `Nat`/`Int` seam (one automatic coercion); `Quot` erasure row; deriving at Stage 1; CANON's law carried; two user rulings — no tool writes into a source file (engine I lives in sidecars + the pin store), no user-defined notation/macros in v1 |
+| v0.8 | 2026-09-06 | this commit | GPT-6 pre-ratification refinements R35–R41 folded (imported identity vs view vs representation, with the phase 0 shared-type inventory; conditional quotient erasure; deriving under a declared policy; occurrence-aware provenance; literal defaulting order and coercion placement; the syntax ban scoped to the grammar; migration as an explicit authoring action); the `Fin` numeral ruling (imported meaning kept, oversized source literals refused); GPT-6: "ratify the design and implement the first connected path" |
 
 The GPT-6 documents (archived under `docs/archive/foundation-v3/` — named `foundation-v2/` at v0.5, renamed with the renumbering at v0.6; each memo was an untracked root file until folded in; the memos say "V2" because they predate the renumbering):
 `SHARD_FOUNDATION_PROPOSAL_v0.3.md`, `SHARD_BOOTSTRAP_ADDENDUM_v0.3.md`,
@@ -27,7 +28,8 @@ The GPT-6 documents (archived under `docs/archive/foundation-v3/` — named `fou
 `SHARD_FOUNDATION_FEEDBACK_v0.1.md` (R1–R8, on v0.1);
 `SHARD_FOUNDATION_FOLLOWUP_MEMO_v0.1.md` (R9–R16, on v0.2);
 `SHARD_FOUNDATION_INTEGRATION_REVIEW_v0.1.md` (R17–R28, on v0.4);
-`SHARD_FOUNDATION_FINAL_CLARIFICATIONS_v0.1.md` (R29–R34, on v0.5).
+`SHARD_FOUNDATION_FINAL_CLARIFICATIONS_v0.1.md` (R29–R34, on v0.5);
+`SHARD_FOUNDATION_PRERATIFICATION_TWEAKS_v0.1.md` (R35–R41, on v0.7).
 The user points GPT-6 at each commit by SHA; positions are answered by
 ID so the documents read side by side.
 
@@ -146,6 +148,15 @@ tactics or 'auto' delegation in the original source, and the
 sidecars+pin store are where generated I content should be maintained."
 On user-defined notation and macros: "agree with refusing in v1". Both
 in §7.5 and §5.3 (departure 6).
+
+**2026-09-06 (v0.8, `Fin` numerals).** GPT-6 recommended keeping Lean's
+imported instance (an oversized numeral reduces modulo the bound) and
+documenting it; my lean was one step stricter within the naming law's
+refusal scope — the L instance keeps its meaning, the elaborator refuses
+a source literal whose written magnitude reaches a statically known
+bound, with the pointer to the explicit wrapping construction or
+`Fin.mk`. User: "your stricter point sounds reasonble, let's fold all
+this in." §5.2.
 
 ## 3. Rejected alternatives (REJECTED-because, on record)
 
@@ -310,6 +321,27 @@ the existing sections and tests; no new architecture layer.
 Also taken: GPT-6's "first connected path" as a paragraph under §12.4
 (inside the phases, not a new one).
 
+### 4.6 R35–R41 (pre-ratification refinements on v0.7, answered at v0.8)
+
+GPT-6's framing: keep every v0.7 addition; make them obey the contracts
+already chosen; "after these edits, the recommendation is to ratify the
+design and implement the first connected path". All seven accepted.
+
+| ID | disposition | where in the normative document | notes |
+|---|---|---|---|
+| R35 imported type ≠ view ≠ representation | accept | §4.4, §10.3, phase 0 | my "`String` is `List Char` in L" was a remembered model — the current Lean reference models `String` over `ByteArray` with a UTF-8 proof; the pin decides, the document no longer restates shapes; the shared-type inventory is a phase 0 deliverable |
+| R36 conditional quotient erasure | accept | §4.6 | supported carrier and operations only; the respect obligation is discharged then erased, never removed; representative comparison is not quotient equality; the `% 2` fixture |
+| R37 deriving under policy | accept | §5.1 | my "canonical ordering where one exists" contradicted §5.2 — an ordering is a convention; the policy is recorded in the generated declaration's dependencies; precise refusals |
+| R38 occurrence-aware provenance | accept | §5.1, T0/T8/T9 | shared nodes, generated obligations, API-built declarations; best available origin, "unavailable" never invented; origins outside P identity |
+| R39 defaulting order, coercion placement, `Fin` numerals | accept; `Fin` RULED (stricter than GPT-6's lean) | §5.2, T1/T9 | the `Int.ofNat (1 - 2)` hazard; coercion sites recorded; no retroactive re-resolution |
+| R40 the syntax ban scoped | accept | §5.3 departure 6, T10 | grammar and elaboration hooks only; E libraries producing L/I through the APIs are the extension model |
+| R41 source ownership vs migration | accept | §7.5, §12.3, T8 | migration emits patches; application is a distinct recorded command the agent runs; never a side effect of proof success or failure |
+
+Also taken: §10.5's note that ratification is not passing a gate, that
+a superseded banner names the tree the old text still describes, and
+that a superseded issue keeps its capability attached to the
+replacement gate.
+
 ## 5. Findings and corrections made along the way
 
 - The measured provocation: B-1b's per-function certificates (tb_len
@@ -344,6 +376,10 @@ Also taken: GPT-6's "first connected path" as a paragraph under §12.4
   representation swap that the README calls the project's signature
   move had no library-level statement. §4.4 now states it for the
   library's own types, with the counted heap as the general case.
+- v0.7 restated Lean's `String` as `List Char` from memory (R35); the
+  pinned export decides shapes and the contract now says so instead of
+  restating any. v0.7 also filed derived orderings under reconstruction
+  while §5.2 calls orderings consequential (R37).
 - Through v0.6 the document was silent on numeric-literal typing and
   coercions, the port's largest practical seam (`Int` everywhere today;
   `Nat` sizes under the naming law), and on source spans (#8), which
