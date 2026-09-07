@@ -350,6 +350,19 @@
 (fn string_lit_to_constructor ((bs (List Int))) Expr
   (mk_app (mk_const (nm_string_of_list) Nil) (char_list_expr (utf8_decode bs))))
 
+;; the expansion is enabled only under the pinned identities it names (§3.2):
+;; String (the literal's type), String.ofList, List, Char and Char.ofNat —
+;; otherwise the literal is outside the profile, Unsupported, never stuck
+(fn nm_list () Name (n1 (quote List)))
+(fn string_lit_expansion ((c Ctx) (st St) (bs (List Int))) (KRes Expr)
+  (let ((e (ctx_env c)))
+    (if (bool_and (env_pinned e (nm_string))
+        (bool_and (env_pinned e (nm_string_of_list))
+        (bool_and (env_pinned e (nm_list))
+        (bool_and (env_pinned e (nm_char)) (env_pinned e (nm_char_of_nat))))))
+      (KOk st (string_lit_to_constructor bs))
+      (KFail (FRej (Unsupported (quote string_literal_unpinned_expansion)))))))
+
 ;; is_nat_lit_ext (l. 637): a literal or the constant Nat.zero
 (fn is_nat_lit_ext ((e Expr)) Bool
   (match e ((Lit _ (LitNat _)) True) ((Const _ n Nil) (name_eq n (nm_nat_zero))) (_ False)))
@@ -755,7 +768,7 @@
 
 (fn reduce_proj_core ((c Ctx) (st St) (d Int) (x0 Expr) (sname Name) (idx Int)) (KRes (Option Expr))
   (match (match x0
-            ((Lit _ (LitStr s)) (whnf c st d (string_lit_to_constructor s)))
+            ((Lit _ (LitStr s)) (match (string_lit_expansion c st s) ((KFail f) (KFail f)) ((KOk sx ex) (whnf c sx d ex))))
             (_ (KOk st x0)))
     ((KFail f) (KFail f))
     ((KOk st1 x)
@@ -920,7 +933,7 @@
                      ((KOk st2 major2)
                       (match (match major2
                                ((Lit _ (LitNat n)) (KOk st2 (nat_lit_to_constructor n)))
-                               ((Lit _ (LitStr s)) (whnf c st2 d (string_lit_to_constructor s)))
+                               ((Lit _ (LitStr s)) (match (string_lit_expansion c st2 s) ((KFail f) (KFail f)) ((KOk sx ex) (whnf c sx d ex))))
                                (_ (to_cnstr_when_structure c st2 d induct major2)))
                         ((KFail f) (KFail f))
                         ((KOk st3 major)
@@ -1454,7 +1467,7 @@
      (match s
        ((App _ f _)
         (if (is_const_named f (nm_string_of_list))
-          (match (whnf c st d (string_lit_to_constructor bs))
+          (match (match (string_lit_expansion c st bs) ((KFail f) (KFail f)) ((KOk sx ex) (whnf c sx d ex)))
             ((KFail x) (KFail x))
             ((KOk st1 te) (lbool_res (is_def_eq_core c st1 d te s))))
           (KOk st LUndef)))

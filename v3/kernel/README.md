@@ -58,6 +58,18 @@ the interpreter stays the authority and `v3/t0_full.sh` byte-ties the
 two on a prefix before every full-export replay; ruled 2026-09-07). Name
 the tools repo-relative from the repo root — #41.
 
+T0's other half (§3.6, "identical verdicts *and axiom closures*"):
+`axioms.shard` computes each admitted constant's closure — the relation
+of `src/Lean/Util/CollectAxioms.lean` at the pin, as a least fixpoint
+(an inductive block is resolved as a unit; the memo lives outside the
+CheckedEnv) — and the driver's `-a` prints it (`AX name: …`); the
+oracle is `v3/axioms.lean` over Lean's own environment (the same
+relation as a Kleene fixpoint, not `collectAxioms`'s order-dependent
+memo; records §8), joined by `v3/t0_axioms_cmp.sh`. The fixture test
+asserts it on the committed prefix against
+`test/fixtures/init_prefix_3000.axioms`; `v3/t0_full.sh` on the whole
+export.
+
 ## The reconciliation ledger — what the pinned kernel has beyond the thesis
 
 Each item is a rule K implements because the pin does; Lean4Lean's
@@ -68,7 +80,7 @@ status is noted where known. None is a departure.
 3. **Unit-like types** (`is_def_eq_unit_like`): any two terms of a non-recursive structure with zero fields are definitionally equal.
 4. **Proof irrelevance** (`is_def_eq_proof_irrel`): two proofs of definitionally equal propositions are equal; `is_prop` is up to level normalization (`imax 1 0`).
 5. **Nat literals** (`infer_lit`, `reduce_nat`, `is_def_eq_offset`, `nat_lit_to_constructor`): GMP-backed literals of type `Nat`; `Nat.zero` and literal `0` interchangeable; `succ n` versus literal by offset; binary accelerators on literal arguments only for `Nat.add sub mul pow gcd mod div beq ble land lor xor shiftLeft shiftRight (and the unary Nat.succ)` with **size limits** (`LEAN_NAT_MAX_SIZE`; `Nat.pow`/`shiftLeft` count must fit 32 bits) — an `Exhausted`, not a rule. K binds each to a fixed admitted identity (FOUNDATION §3.2).
-6. **String literals** (`string_lit_to_constructor`, `try_string_lit_expansion`): a string literal has type `String` and unfolds to **`String.ofList (List.cons Char (Char.ofNat c₁) (… List.nil Char))`** over the UTF-8-decoded scalar values — at `v4.33.1` the head is `String.ofList`, not `String.mk` (the logical `String` is `ofByteArray`; `v3/INVENTORY.md`). The expansion fires in recursor reduction, projection reduction and definitional equality against a `String.ofList` application.
+6. **String literals** (`string_lit_to_constructor`, `try_string_lit_expansion`): a string literal has type `String` and unfolds to **`String.ofList (List.cons Char (Char.ofNat c₁) (… List.nil Char))`** over the UTF-8-decoded scalar values — at `v4.33.1` the head is `String.ofList`, not `String.mk` (the logical `String` is `ofByteArray`; `v3/INVENTORY.md`). The expansion fires in recursor reduction, projection reduction and definitional equality against a `String.ofList` application. The expansion is enabled only under the pinned identities it names — `String`, `String.ofList`, `List`, `Char`, `Char.ofNat` (§3.2; `string_lit_expansion`, Unsupported `string_literal_unpinned_expansion` otherwise).
 7. **K-like reduction** (`to_cnstr_when_K`, `init_K_target`): for a single-constructor, zero-field inductive predicate, the major premise is replaced by the constructor when its type is definitionally the expected one.
 8. **Lazy delta with hints** (`lazy_delta_reduction_step`, `ReducibilityHints`): unfold the side with the greater height; `abbrev` first; equal regular heights try argument-wise equality before unfolding; a projection application on one side is unfolded in preference. **Theorems unfold**: `constant_info::has_value` is `is_theorem() || is_definition()` — a theorem's body is delta-reducible in the kernel (FOUNDATION §3.2 said "opaque for unfolding"; corrected 2026-09-06). `opaque` never unfolds.
 9. **Native reduction** (`reduce_native`, `Lean.reduceBool`/`Lean.reduceNat`): runs compiled code; sound only under the axiom `Lean.ofReduceBool`, outside the standard profile. K refuses these applications as `Unsupported` and the axiom as outside policy — not a departure, since no standard-profile declaration depends on them.
@@ -81,7 +93,7 @@ status is noted where known. None is a departure.
 16. **Positivity and occurrence** (`check_positivity`, `is_valid_ind_app`): strictly positive occurrences only; an occurrence may not appear inside its own indices (lean4#2125); reflexive occurrences (a function returning the type) allowed and flagged `isReflexive`.
 17. **Safety** (`DefinitionSafety`): `unsafe` and `partial` declarations may not be used by `safe` ones; mutual definitions are `unsafe`/`partial` only (safe mutual recursion is compiled to recursors/`WellFounded.fix` before the kernel). K's standard profile admits `safe` only; `unsafe`/`partial` are `Unsupported` at raw admission and never exported by default.
 18. **Metavariables and free variables** in inputs are refused (`check_no_metavar_no_fvar`); `mdata` is transparent to every rule and is stripped at import (the exporter drops it by default).
-19. **Resource limits** (`max_heartbeat`, `max_rec_depth`, `check_system`): every procedure is bounded; K reports `Exhausted(resource, site)` (§3.3, §9.4).
+19. **Resource limits** (`max_heartbeat`, `max_rec_depth`, `check_system`): every procedure is bounded; K reports `Exhausted(resource, site)` (§3.3, §9.4). Fuel monotonicity (§9.4) holds and is tested (hostile battery 12b/12c): a result reached under a budget is the same under any larger one — exhaustion is never cached and never mutates the environment.
 20. **Quotients** (`quot.cpp`): `Quot`, `Quot.mk`, `Quot.lift`, `Quot.ind` are added as `QuotInfo` constants with exactly the types built there, after `Eq` is checked to have the expected shape; `Quot.lift f h (Quot.mk r a) ≡ f a` is the computation rule.
 
 ## The procedure (FOUNDATION §3.3)

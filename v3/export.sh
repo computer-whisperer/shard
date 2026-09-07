@@ -4,21 +4,29 @@
 # lean4export at 15f6055 with its toolchain forced to v4.33.1 (the head pins a
 # later toolchain that cannot export the pinned kernel — records §8), into
 # $V3_EXPORT_DIR (default .shard-cache/v3-export: untracked; on CI built
-# fresh every run, 77 s — caching the 3.5 GB tree cost more than that).
-# Idempotent: an export carrying the pin marker is reused.
+# fresh every run, 77 s — caching the 3.5 GB tree cost more than that),
+# with the axiom-closure oracle (v3/axioms.lean → init.axioms, 15 s) over
+# the same environment. Idempotent: an export carrying the pin marker and
+# its oracle file is reused.
 # elan is installed into $ELAN_HOME (default $V3_EXPORT_DIR/elan) when absent,
 # without touching shell profiles.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+ROOT=$PWD
 LEAN_TOOLCHAIN=leanprover/lean4:v4.33.1
 EXPORT_COMMIT=15f6055
 DIR=${V3_EXPORT_DIR:-.shard-cache/v3-export}
 mkdir -p "$DIR"
 DIR=$(cd "$DIR" && pwd)
 PIN="$LEAN_TOOLCHAIN $EXPORT_COMMIT"
+EXPORT_OK=0
 if [ -s "$DIR/init.ndjson" ] && [ "$(cat "$DIR/init.ndjson.pin" 2>/dev/null)" = "$PIN" ]; then
+  EXPORT_OK=1
   echo "export present: $DIR/init.ndjson ($(wc -l < "$DIR/init.ndjson") lines; $PIN)"
-  exit 0
+  if [ -s "$DIR/init.axioms" ]; then
+    echo "axiom closures present: $DIR/init.axioms ($(wc -l < "$DIR/init.axioms") constants)"
+    exit 0
+  fi
 fi
 export ELAN_HOME=${ELAN_HOME:-$DIR/elan}
 export PATH="$ELAN_HOME/bin:$PATH"
@@ -36,9 +44,17 @@ git checkout -q "$EXPORT_COMMIT" 2>/dev/null || { git fetch -q; git checkout -q 
 echo "$LEAN_TOOLCHAIN" > lean-toolchain
 echo "== $(date '+%H:%M:%S') lake build"
 lake build
-echo "== $(date '+%H:%M:%S') exporting Init"
-lake env .lake/build/bin/lean4export Init > "$DIR/init.ndjson.tmp" 2> "$DIR/init.export.err"
-mv "$DIR/init.ndjson.tmp" "$DIR/init.ndjson"
-echo "$PIN" > "$DIR/init.ndjson.pin"
-rm -rf "$DIR/chunks"
-echo "== $(date '+%H:%M:%S') export built: $(wc -l < "$DIR/init.ndjson") lines"
+if [ "$EXPORT_OK" = 0 ]; then
+  echo "== $(date '+%H:%M:%S') exporting Init"
+  rm -f "$DIR/init.axioms"
+  lake env .lake/build/bin/lean4export Init > "$DIR/init.ndjson.tmp" 2> "$DIR/init.export.err"
+  mv "$DIR/init.ndjson.tmp" "$DIR/init.ndjson"
+  echo "$PIN" > "$DIR/init.ndjson.pin"
+  rm -rf "$DIR/chunks"
+  echo "== $(date '+%H:%M:%S') export built: $(wc -l < "$DIR/init.ndjson") lines"
+fi
+# the axiom-closure oracle over the same environment (v3/axioms.lean; §3.6)
+echo "== $(date '+%H:%M:%S') axiom closures"
+lake env lean --run "$ROOT/v3/axioms.lean" > "$DIR/init.axioms.tmp" 2> "$DIR/init.axioms.err"
+mv "$DIR/init.axioms.tmp" "$DIR/init.axioms"
+echo "== $(date '+%H:%M:%S') axiom closures built: $(wc -l < "$DIR/init.axioms") constants ($(cat "$DIR/init.axioms.err" | head -1))"

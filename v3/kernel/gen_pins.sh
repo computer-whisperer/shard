@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # v3/kernel/gen_pins.sh CHUNK… — regenerate accel_pins.shard from the pinned
-# export's first chunks (the ones that declare Nat, String, Char, List and
-# the Nat operations). The table is the fixed-identity pin of FOUNDATION §3.2.
+# export's chunks through the last candidate's declaration: chunks 0–35 at
+# the 2026-09-07 export (Nat, String, Char, List and most Nat operations in
+# chunks 0–1; Char.ofNat and String.ofList in 3; Nat.lor and Nat.shiftLeft in
+# 9; Nat.xor at line 702,093, chunk 35). Runs on the interpreter — the
+# authority produces the table (4.5 min). The table is the fixed-identity pin
+# of FOUNDATION §3.2.
 set -eu
 cd "$(dirname "$0")/../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}

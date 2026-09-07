@@ -1,0 +1,208 @@
+;;; v3/kernel/axioms.shard — axiom closures (FOUNDATION §3.2: the axiom is
+;;; TRACKED, any axiom beyond the standard profile is an assumption-policy
+;;; matter above K, reported in the receipt; §3.6: T0 compares K's closures
+;;; with the oracle's).
+;;;
+;;; The relation is src/Lean/Util/CollectAxioms.lean at v4.33.1: an axiom
+;;; contributes itself and its type's constants; a definition, theorem or
+;;; opaque its type's and value's; a quotient nothing; a constructor and a
+;;; recursor their type's; an inductive its type's and its constructors. The
+;;; closure is the transitive reachability of that relation — the least
+;;; fixpoint, NOT Lean's memoized walk: that walk plants a sentinel for the
+;;; constant in progress, so an inductive's cached closure depends on whether
+;;; it or one of its constructors was visited first (an order-dependent cache
+;;; the oracle script v3/axioms.lean also avoids; records §8).
+;;;
+;;; A checked environment is append-only and every constant references only
+;;; earlier ones, except inside one inductive block: a constructor's type
+;;; names its type, the type's edges are its constructors. Those blocks are
+;;; the only cycles, and `block_closures` resolves a block as a unit — each
+;;; member's closure is the union, over the members it reaches inside the
+;;; block, of their contributions through edges leaving the block. Everything
+;;; else is memoized directly; asked in admission order (the T0 driver) the
+;;; recursion never goes deeper than one block.
+
+(import "tc.shard")
+
+;; the memo: name key → bucket of (name, closure); a cache of a pure function
+;; of the checked environment, kept OUTSIDE it (§9.4: cache policy is distinct
+;; from authoritative state)
+(type AxMemo (AxMemo (IntMap (List (Pair Name (List Name))))))
+
+(fn ax_memo_empty () AxMemo (AxMemo IMEmpty))
+
+(fn ax_bucket_find ((b (List (Pair Name (List Name)))) (n Name)) (Option (List Name))
+  (measure (struct b))
+  (match b (Nil None) ((Cons (Pair k v) r) (if (name_eq k n) (Some v) (ax_bucket_find r n)))))
+
+(fn ax_find ((m AxMemo) (n Name)) (Option (List Name))
+  (match m ((AxMemo t) (match (im_find t (env_key n)) (None None) ((Some b) (ax_bucket_find b n))))))
+
+(fn ax_put ((m AxMemo) (n Name) (axs (List Name))) AxMemo
+  (match m
+    ((AxMemo t)
+     (let ((k (env_key n)))
+       (AxMemo (im_insert t k (Cons (Pair n axs) (match (im_find t k) ((Some b) b) (None Nil)))))))))
+
+(fn names_union ((a (List Name)) (b (List Name))) (List Name)
+  (measure (struct b))
+  (match b (Nil a) ((Cons x r) (names_union (if (mem_name x a) a (Cons x a)) r))))
+
+;; ---- the constants an expression mentions --------------------------------------------
+;; every DAG node once (visited by id; anonymous nodes — leaves, and terms
+;; built outside a check — are walked as trees), Const names in occurrence order
+
+(fn im_has ((m (IntMap Bool)) (k Int)) Bool (match (im_find m k) ((Some _) True) (None False)))
+
+(fn used_consts ((e Expr) (seen (IntMap Bool)) (acc (List Name))) (Pair (IntMap Bool) (List Name))
+  (measure (struct e))
+  (let ((id (expr_id e)))
+    (if (bool_and (lt 0 id) (im_has seen id))
+      (Pair seen acc)
+      (let ((seen1 (if (lt 0 id) (im_insert seen id True) seen)))
+        (match e
+          ((Const _ n _) (Pair seen1 (Cons n acc)))
+          ((App _ f a) (match (used_consts f seen1 acc) ((Pair s1 a1) (used_consts a s1 a1))))
+          ((Lam _ _ _ t b) (match (used_consts t seen1 acc) ((Pair s1 a1) (used_consts b s1 a1))))
+          ((Pi _ _ _ t b) (match (used_consts t seen1 acc) ((Pair s1 a1) (used_consts b s1 a1))))
+          ((Let _ _ t v b)
+           (match (used_consts t seen1 acc)
+             ((Pair s1 a1) (match (used_consts v s1 a1) ((Pair s2 a2) (used_consts b s2 a2))))))
+          ((Proj _ _ _ x) (used_consts x seen1 acc))
+          (_ (Pair seen1 acc)))))))
+
+(fn expr_consts ((e Expr)) (List Name) (match (used_consts e IMEmpty Nil) ((Pair _ ns) ns)))
+
+;; the relation's direct edges of a constant
+(fn ci_used ((i ConstantInfo)) (List Name)
+  (match i
+    ((QuotInfo _ _) Nil)
+    ((InductInfo _ _ _ _ ctors _ _ _ _) (append (expr_consts (ci_type i)) ctors))
+    (_ (append (expr_consts (ci_type i))
+               (match i
+                 ((DefnInfo _ val _ _ _) (expr_consts val))
+                 ((ThmInfo _ val _) (expr_consts val))
+                 ((OpaqueInfo _ val _ _) (expr_consts val))
+                 (_ Nil))))))
+
+(fn ci_is_axiom ((i ConstantInfo)) Bool (match i ((AxiomInfo _ _) True) (_ False)))
+
+;; ---- inductive blocks -------------------------------------------------------------------
+
+(fn induct_all ((env CheckedEnv) (t Name)) (List Name)
+  (match (env_find env t) ((Some (InductInfo _ _ _ all _ _ _ _ _)) all) (_ (Cons t Nil))))
+
+(fn induct_ctors ((env CheckedEnv) (t Name)) (List Name)
+  (match (env_find env t) ((Some (InductInfo _ _ _ _ ctors _ _ _ _)) ctors) (_ Nil)))
+
+;; the members of a block: its types and their constructors
+(fn block_members ((env CheckedEnv) (all (List Name))) (List Name)
+  (measure (struct all))
+  (match all (Nil Nil) ((Cons t r) (append (Cons t (induct_ctors env t)) (block_members env r)))))
+
+;; a block edge list: (member, edges inside the block, closure through the edges leaving it)
+(type BlockEdges (BlockEdges Name (List Name) (List Name)))
+
+(fn be_name ((b BlockEdges)) Name (match b ((BlockEdges n _ _) n)))
+
+(fn split_edges ((used (List Name)) (members (List Name)) (inside (List Name)) (outside (List Name))) (Pair (List Name) (List Name))
+  (measure (struct used))
+  (match used
+    (Nil (Pair inside outside))
+    ((Cons u r)
+     (if (mem_name u members)
+       (split_edges r members (if (mem_name u inside) inside (Cons u inside)) outside)
+       (split_edges r members inside (Cons u outside))))))
+
+;; the members reachable from `front` inside the block, accumulated in `seen`
+(fn block_reach ((edges (List BlockEdges)) (front (List Name)) (seen (List Name)) (fuel Int)) (List Name)
+  (measure fuel)
+  (if (lt fuel 0) seen
+  (match front
+    (Nil seen)
+    ((Cons n r)
+     (if (mem_name n seen)
+       (block_reach edges r seen (- fuel 1))
+       (block_reach edges (append (block_inside edges n) r) (Cons n seen) (- fuel 1)))))))
+
+(fn block_inside ((edges (List BlockEdges)) (n Name)) (List Name)
+  (measure (struct edges))
+  (match edges (Nil Nil) ((Cons (BlockEdges m ins _) r) (if (name_eq m n) ins (block_inside r n)))))
+
+(fn block_outside_of ((edges (List BlockEdges)) (ns (List Name)) (acc (List Name))) (List Name)
+  (measure (struct ns))
+  (match ns
+    (Nil acc)
+    ((Cons n r) (block_outside_of edges r (names_union acc (block_outside edges n))))))
+
+(fn block_outside ((edges (List BlockEdges)) (n Name)) (List Name)
+  (measure (struct edges))
+  (match edges (Nil Nil) ((Cons (BlockEdges m _ out) r) (if (name_eq m n) out (block_outside r n)))))
+
+;; ---- closures ----------------------------------------------------------------------------
+;; `d` bounds the dependency recursion (a chain longer than the environment is
+;; impossible in a checked environment; None = the bound was hit, reported by
+;; the caller, never a silent answer)
+
+(fn ax_depth () Int 1000000)
+
+(fn closure_of ((env CheckedEnv) (m AxMemo) (d Int) (n Name)) (Pair AxMemo (Option (List Name)))
+  (measure d)
+  (if (lt d 0) (Pair m None)
+  (match (ax_find m n)
+    ((Some axs) (Pair m (Some axs)))
+    (None
+     (match (env_find env n)
+       (None (Pair m (Some Nil)))    ; the relation's `none` case: not a constant here, nothing contributed
+       ((Some i)
+        (match i
+          ((InductInfo _ _ _ all _ _ _ _ _) (block_closure env m d n (block_members env all)))
+          ((CtorInfo _ ind _ _ _ _) (block_closure env m d n (block_members env (induct_all env ind))))
+          (_
+           (match (closures_of env m (- d 1) (ci_used i) (if (ci_is_axiom i) (Cons n Nil) Nil))
+             ((Pair m1 None) (Pair m1 None))
+             ((Pair m1 (Some axs)) (Pair (ax_put m1 n axs) (Some axs))))))))))))
+
+(fn closures_of ((env CheckedEnv) (m AxMemo) (d Int) (ns (List Name)) (acc (List Name))) (Pair AxMemo (Option (List Name)))
+  (measure (struct ns))
+  (match ns
+    (Nil (Pair m (Some acc)))
+    ((Cons n r)
+     (match (closure_of env m d n)
+       ((Pair m1 None) (Pair m1 None))
+       ((Pair m1 (Some axs)) (closures_of env m1 d r (names_union acc axs)))))))
+
+;; every member's closure at once, then the one asked for
+(fn block_closure ((env CheckedEnv) (m AxMemo) (d Int) (n Name) (members (List Name))) (Pair AxMemo (Option (List Name)))
+  (match (block_edges env m (- d 1) members members Nil)
+    ((Pair m1 None) (Pair m1 None))
+    ((Pair m1 (Some edges))
+     (let ((m2 (block_store m1 edges members)))
+       (match (ax_find m2 n) ((Some axs) (Pair m2 (Some axs))) (None (Pair m2 (Some Nil))))))))
+
+(fn block_edges ((env CheckedEnv) (m AxMemo) (d Int) (members (List Name)) (todo (List Name)) (acc (List BlockEdges))) (Pair AxMemo (Option (List BlockEdges)))
+  (measure (struct todo))
+  (match todo
+    (Nil (Pair m (Some acc)))
+    ((Cons n r)
+     (match (env_find env n)
+       (None (block_edges env m d members r acc))
+       ((Some i)
+        (match (split_edges (ci_used i) members Nil Nil)
+          ((Pair inside outside)
+           (match (closures_of env m d outside Nil)
+             ((Pair m1 None) (Pair m1 None))
+             ((Pair m1 (Some out_axs))
+              (block_edges env m1 d members r (Cons (BlockEdges n inside out_axs) acc)))))))))))
+
+(fn block_store ((m AxMemo) (edges (List BlockEdges)) (todo (List Name))) AxMemo
+  (measure (struct todo))
+  (match todo
+    (Nil m)
+    ((Cons n r)
+     (let ((reach (block_reach edges (Cons n Nil) Nil (* 4 (len edges)))))
+       (block_store (ax_put m n (block_outside_of edges reach Nil)) edges r)))))
+
+;; the API: the closure of a constant of a checked environment
+(fn axioms_of ((env CheckedEnv) (m AxMemo) (n Name)) (Pair AxMemo (Option (List Name)))
+  (closure_of env m (ax_depth) n))

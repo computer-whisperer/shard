@@ -4,7 +4,9 @@
 # print byte-identical verbose per-declaration output on the committed fixture
 # and on the export's first 100,000 lines (the authority confirming the
 # engine, FOUNDATION §9.1); (2) the verdict line of the full replay equals the
-# pinned line in v3/t0_expected.txt. The replay is one process over the
+# pinned line in v3/t0_expected.txt, and (3) every admitted constant's axiom
+# closure (the driver's -a lines) is identical to the oracle's (init.axioms,
+# v3/axioms.lean; v3/t0_axioms_cmp.sh). The replay is one process over the
 # 20,000-line chunks; its peak resident set is reported (the export tables hold
 # every referenced node: 30 GB at 2026-09-07's export, 745 s) and capped by
 # V3_T0_RSS_CAP_KB (default 400 GB). V3_T0_SKIP_FULL=1 runs the byte-ties only
@@ -19,6 +21,7 @@ CAP_KB=${V3_T0_RSS_CAP_KB:-$((400 * 1024 * 1024))}
 [ -x "$K" ] || { echo "missing $K (v3/build.sh)"; exit 1; }
 [ -x "$RUST_EVAL" ] || { echo "missing $RUST_EVAL (cargo build --release in rust_bootstrap/)"; exit 1; }
 [ -s "$DIR/init.ndjson" ] || { echo "missing $DIR/init.ndjson (v3/export.sh)"; exit 1; }
+[ -s "$DIR/init.axioms" ] || { echo "missing $DIR/init.axioms (v3/export.sh)"; exit 1; }
 DIR=$(cd "$DIR" && pwd)
 K=$(cd "$(dirname "$K")" && pwd)/$(basename "$K")
 CH=$DIR/chunks
@@ -28,18 +31,19 @@ if [ ! -d "$CH" ] || [ -z "$(ls "$CH" 2>/dev/null)" ]; then
 fi
 FIX=v3/kernel/test/fixtures/init_prefix_3000.ndjson
 
-echo "== byte-tie: interpreter vs compiled K, verbose, on the fixture"
-"$RUST_EVAL" direct v3/kernel/t0.shard -v "$FIX" > "$LOG.tie_interp" 2>&1 || true
-"$K" -v "$FIX" > "$LOG.tie_native" 2>&1 || true
+echo "== byte-tie: interpreter vs compiled K, verbose + closures, on the fixture"
+"$RUST_EVAL" direct v3/kernel/t0.shard -v -a "$FIX" > "$LOG.tie_interp" 2>&1 || true
+"$K" -v -a "$FIX" > "$LOG.tie_native" 2>&1 || true
 cmp "$LOG.tie_interp" "$LOG.tie_native" || { echo "BYTE-TIE FAILED (fixture)"; diff "$LOG.tie_interp" "$LOG.tie_native" | head -20; exit 1; }
 echo "   fixture: identical ($(wc -l < "$LOG.tie_native") lines)"
 echo "== byte-tie: chunks 0-4 (100,000 lines)"
 PRE=$(ls "$CH"/probe_000[0-4])
-"$RUST_EVAL" direct v3/kernel/t0.shard -v $PRE > "$LOG.tie_interp" 2>&1 || true
-"$K" -v $PRE > "$LOG.tie_native" 2>&1 || true
+"$RUST_EVAL" direct v3/kernel/t0.shard -v -a $PRE > "$LOG.tie_interp" 2>&1 || true
+"$K" -v -a $PRE > "$LOG.tie_native" 2>&1 || true
 cmp "$LOG.tie_interp" "$LOG.tie_native" || { echo "BYTE-TIE FAILED (chunks 0-4)"; diff "$LOG.tie_interp" "$LOG.tie_native" | head -20; exit 1; }
 echo "   chunks 0-4: identical ($(wc -l < "$LOG.tie_native") lines)"
 tail -1 "$LOG.tie_native"
+v3/t0_axioms_cmp.sh "$LOG.tie_native" "$DIR/init.axioms" || { echo "AXIOM CLOSURES DIFFER FROM THE ORACLE (chunks 0-4)"; exit 1; }
 if [ "${V3_T0_SKIP_FULL:-0}" = 1 ]; then
   echo "V3_T0_SKIP_FULL=1: byte-ties only, the full replay skipped"
   exit 0
@@ -47,7 +51,7 @@ fi
 
 echo "== full export: $(ls "$CH" | wc -l) chunks, compiled K"
 start=$(date +%s)
-"$K" "$CH"/probe_* > "$LOG" 2>&1 &
+"$K" -a "$CH"/probe_* > "$LOG" 2>&1 &
 ENG=$!
 PEAK=0
 while kill -0 "$ENG" 2>/dev/null; do
@@ -65,4 +69,5 @@ echo "   replay exit $STATUS, $(( $(date +%s) - start )) s, peak RSS ${PEAK} kB"
 [ "$STATUS" -eq 0 ] || { tail -20 "$LOG"; exit 1; }
 tail -1 "$LOG"
 grep -qxF "$(cat v3/t0_expected.txt)" "$LOG" || { echo "VERDICT LINE DIFFERS FROM v3/t0_expected.txt: $(cat v3/t0_expected.txt)"; exit 1; }
-echo "T0 FULL == PINNED"
+v3/t0_axioms_cmp.sh "$LOG" "$DIR/init.axioms" || { echo "AXIOM CLOSURES DIFFER FROM THE ORACLE"; exit 1; }
+echo "T0 FULL == PINNED, closures identical"

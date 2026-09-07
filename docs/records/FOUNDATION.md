@@ -714,15 +714,74 @@ is `docs/FOUNDATION.md` §5.3.
   K byte-identical to the Aug 2 engine's). The interpreter is still the
   authority; the compiled artifact becomes route 1 proper when the
   lowering is proven.
-- **Open in phase 1:** the interpreter's own full-export run (the
-  verdicts are in: see above)
-  (chunks 0–24 done; 25–324 next — a multi-hour run whose environment
-  and tables grow with the export: 1.2 GB peak through chunk 49 on the
-  interpreter, 30.2 GB peak for the whole export on the compiled K), the
-  six accelerator pins
-  declared 24k–700k lines into the export, the `use`-free toolchain
-  profile's gate moving to CI, the evaluator levers listed above if a
-  prefix run needs them.
+- **Phase 1 against the law (2026-09-07, late):** user: "Let's dig into
+  the remaining phase 1 work" → the remainder re-derived from §12.4
+  phase 1, §3.5, §3.6, §9.4 and §10.5 rather than from the running list;
+  then "agreed, let's do 1 through 4 now". (1) **Pins:** five candidates
+  had no row, not six — `Char.ofNat` and `String.ofList` (export line
+  77k, chunk 3), `Nat.lor` and `Nat.shiftLeft` (183k–186k, chunk 9),
+  `Nat.xor` (line 702,093, chunk 35); `gen_pins.sh` regenerated the
+  table on the interpreter over chunks 0–35 (6,181 declarations, 4.5
+  min): 20 rows, the fifteen old hashes unchanged. The string-literal
+  expansion had been enabled on the `String` pin alone while naming
+  `String.ofList`, `Char.ofNat`, `List` and `Char` — §3.2's letter says
+  the expansion is enabled only under the identities it names, so
+  `string_lit_expansion` now gates all three expansion sites on the
+  five pins (Unsupported `string_literal_unpinned_expansion`
+  otherwise); the battery gained "8b a string literal under a
+  non-pinned String is Unsupported". (2) **Axiom closures — the gap:**
+  §3.6's gate is "identical verdicts *and axiom closures*"; T0 compared
+  verdicts only — K tracked axioms at admission but computed no closure,
+  and no oracle existed. Landed: `v3/kernel/axioms.shard` — the relation
+  of `src/Lean/Util/CollectAxioms.lean` at the pin (an axiom contributes
+  itself and its type's constants; a definition, theorem or opaque its
+  type's and value's; a quotient nothing; a constructor and a recursor
+  their type's; an inductive its type's and its constructors), computed
+  as the least fixpoint: an inductive block — the only cycle a checked
+  environment holds — is resolved as a unit by in-block reachability,
+  everything else memoized (the memo outside the CheckedEnv, §9.4),
+  expressions walked once per DAG node by id; the driver's `-a` prints
+  one `AX name: …` line per admitted constant (per quotient record, the
+  constant it names). The oracle `v3/axioms.lean` computes the same
+  relation over Lean's own environment and `getUsedConstants` as a
+  Kleene fixpoint in module order — NOT by calling `collectAxioms`:
+  that function's memo plants a sentinel for the constant in progress,
+  so an inductive's cached closure depends on whether it or one of its
+  constructors was visited first (order-dependent; §3.6 compares by
+  rule, not by tool name). 66,124 constants, 11 passes, 15 s; built by
+  `export.sh` into `init.axioms`. `v3/t0_axioms_cmp.sh` normalizes both
+  sides (axioms sorted per line), joins by name and requires every K
+  constant in the oracle with the same closure. Evidence: the fixture
+  181/181 identical (now `t0_fixture_test.sh`'s second assertion; the
+  oracle slice committed as `fixtures/init_prefix_3000.axioms`), chunks
+  0–4 1,813/1,813 identical at 12.6 s against 12.0 s without; the
+  interpreter and the compiled K byte-tie on `-v -a`; `t0_full.sh`
+  byte-ties with closures, replays with `-a` and gates on the
+  comparison as well as the verdict line — the whole export's
+  comparison runs in the CI job (its first pass pending at this
+  writing). `Init` declares seven axioms: `Classical.choice`,
+  `propext`, `Quot.sound`, `Lean.trustCompiler`, `Lean.ofReduceNat`,
+  `sorryAx`, `Lean.ofReduceBool`; 40,890 of the 66,124 constants have a
+  non-empty closure. (3) **Fuel monotonicity (§9.4)** stated in the
+  kernel README and tested: the battery's 12b/12c exhaust `c_deep` at
+  depth 2 and at one heartbeat, then admit the same identity at 64 /
+  1,000 and at the default. (4) **The doc rows due at phase 1 (§10.5):**
+  TCB.md carries the V3 roster (K; the Rust host as authority, the
+  compiled K a differential artifact; the oracle evidence; retained P —
+  none yet; the fixed-identity primitives) and the four-routes lifetime
+  note; `tools/lower/DESIGN.md` the route-1 banner; `.gitlab-ci.yml` and
+  `run_corpus.sh` say which tree each gate covers. Also: the `v3` job's
+  export cache dropped — its 3.5 GB, 18,569-file upload ran past 45
+  minutes against a 77 s rebuild. Deferred and recorded: §3.5's
+  never-forgeable checked environment — `CheckedEnv`'s constructor is
+  callable by any client until V3 has a module surface (phase 2); the
+  hostile battery itself forges an empty one.
+- **Open in phase 1:** the interpreter's own full-export run — route 3
+  is phase 1's named route and the authority has seen prefixes and
+  byte-ties only: one background run of about an hour at tens of GB
+  under a cgroup cap, on the user's go-ahead; the closure gate's first
+  full pass on CI; §3.5's forgeability, deferred to the module surface
+  (above).
 
 ## 9. Related records
 

@@ -70,9 +70,20 @@ toolchain's export into `.shard-cache/v3-export/`, reused by pin),
 `v3/t0_full.sh` (fixture + chunks 0–4 byte-tie, then the full replay
 against the pinned verdict line `v3/t0_expected.txt`, peak resident set
 reported); the `v3` CI job runs `v3/test.sh` and then all three on the
-high-memory runner (first pass 2026-09-07: 43 min, 30.4 GB peak). Not yet: the rest of the export
-(≈6.5M lines; runs on prefixes are measured first), the six
-later-declared accelerator pins. **Nested
+high-memory runner (first pass 2026-09-07: 43 min, 30.4 GB peak).
+**Closed out against the law (2026-09-07, late; records §8):** all 20
+accelerator pins generated (chunks 0–35), the string-literal expansion
+gated on the five identities it names; T0 now compares **axiom
+closures** as §3.6 requires — `kernel/axioms.shard` computes the
+relation of Lean's `CollectAxioms` as a least fixpoint, the driver's
+`-a` prints one line per admitted constant, `v3/axioms.lean` is the
+oracle over the same environment (66,124 constants, 15 s, built by
+`export.sh` into `init.axioms`), `v3/t0_axioms_cmp.sh` joins the two:
+identical on the fixture (181 constants) and on chunks 0–4 (1,813);
+the whole export's comparison is the CI job's third gate — and §9.4's
+fuel monotonicity is stated and tested. Still open: the interpreter's
+own full replay (one run, on request); §3.5's non-forgeable checked
+environment waits for the module surface (phase 2). **Nested
 inductives validated:** `Lean.Syntax` (export line 78,503; two levels of
 nesting) admitted and its three exported recursors identical to K's
 generated ones — 1,375 declarations accepted, 0 rejected, 0 mismatched

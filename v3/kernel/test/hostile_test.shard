@@ -1,7 +1,10 @@
 ;;; v3/kernel/test/hostile_test.shard — T0's hostile battery (FOUNDATION
 ;;; §12.5): declarations that must be REFUSED, each for its declared
 ;;; reason, and the accelerator-identity case (§3.2). Nothing here may be
-;;; Accepted. The old tree's six 2026 holes lived in special rules,
+;;; Accepted except where a case says so (the budget cases 12: exhaustion is
+;;; not a verdict, and §9.4's fuel monotonicity — a result reached under a
+;;; budget is the same under any larger one, since exhaustion is never cached).
+;;; The old tree's six 2026 holes lived in special rules,
 ;;; dispatch tables and text-derived gates; K has none, so their
 ;;; analogues are the pin gates and the raw-input checks below.
 
@@ -41,6 +44,17 @@
 (fn refl_nat ((a Expr)) Expr (mk_app (mk_app (mk_const (nm_eq_refl) (list (LSucc LZero))) (nat)) a))
 
 (fn accepted ((o Outcome)) Bool (match o ((Accepted _) True) (_ False)))
+;; §9.4 fuel monotonicity: two acceptances admitted the same identity
+(fn same_identity ((a Outcome) (b Outcome) (n Name)) Bool
+  (match a
+    ((Accepted ea)
+     (match b
+       ((Accepted eb)
+        (match (identity_hash ea n)
+          ((Some x) (match (identity_hash eb n) ((Some y) (int_eq x y)) (None False)))
+          (None False)))
+       (_ False)))
+    (_ False)))
 (fn refused ((o Outcome) (s Symbol)) Bool
   (match o
     ((Rejected (RuleViolation t) _) (sym_eq s t)) ((Rejected (Malformed t) _) (sym_eq s t))
@@ -103,6 +117,13 @@
     (list (Constructor (nm_nat_zero) (nat)) (Constructor (nm_nat_succ) (arrow (nat) (nat))) (Constructor (n2 (quote Nat) (quote extra)) (nat))))) False))
 (fn e_odd () CheckedEnv (env_after (check (e0) (st0) (odd_nat_decl)) (e0)))
 (fn c_lit_unpinned () Declaration (DefnDecl (cv (n1 (quote seven)) Nil (nat)) (lit 7) (HRegular 1) Safe (list (n1 (quote seven)))))
+;; 8b. a string literal under an environment whose String is not the pinned one
+(fn odd_string_decl () Declaration
+  (InductDecl Nil 0 (list (InductiveType (nm_string) (type1)
+    (list (Constructor (n2 (quote String) (quote mk)) (mk_const (nm_string) Nil))))) False))
+(fn e_odd_string () CheckedEnv (env_after (check (e0) (st0) (odd_string_decl)) (e0)))
+(fn c_str_unpinned () Declaration
+  (DefnDecl (cv (n1 (quote hello)) Nil (mk_const (nm_string) Nil)) (mk_lit (LitStr "hi")) (HRegular 1) Safe (list (n1 (quote hello)))))
 ;; 9. duplicates
 (fn c_dup_ctor () Declaration
   (InductDecl Nil 0 (list (InductiveType (n1 (quote D)) (type1)
@@ -153,12 +174,19 @@
     (Case "7 the user's Nat.add is not pinned" (bool_not (env_pinned (e_user_add) (n2 (quote Nat) (quote add)))))
     (Case "8 a Nat literal under a non-pinned Nat is Unsupported" (refused (check (e_odd) (st0) (c_lit_unpinned)) (quote nat_literal_unpinned_Nat)))
     (Case "8 the pinned Nat is pinned" (env_pinned (e_nat) (nm_nat)))
+    (Case "8b a string literal under a non-pinned String is Unsupported" (refused (check (e_odd_string) (st0) (c_str_unpinned)) (quote string_literal_unpinned_String)))
     (Case "9 duplicate constructor" (refused (check (e_nat) (st0) (c_dup_ctor)) (quote duplicate_constructor)))
     (Case "9 duplicate universe parameter" (refused (check (e_nat) (st0) (c_dup_univ)) (quote duplicate_univ_param)))
     (Case "10 theorem with a data type" (refused (check (e_nat) (st0) (c_thm_data)) (quote theorem_type_not_prop)))
     (Case "11 Quot under a wrong Eq" (refused (check (e_bad_eq) (st0) QuotDecl) (quote quot_eq_shape)))
     (Case "12 exhaustion is not a verdict" (refused (check_with (e_nat) (st0) (Limits 2 1000000) (c_deep)) (quote exhausted)))
     (Case "12 the same declaration under the default limits is fine" (accepted (check (e_nat) (st0) (c_deep))))
+    (Case "12b fuel monotonicity, depth: exhausted at 2; at 64 and at the default the same admitted identity"
+      (bool_and (refused (check_with (e_nat) (st0) (Limits 2 1000000) (c_deep)) (quote exhausted))
+                (same_identity (check_with (e_nat) (st0) (Limits 64 1000000) (c_deep)) (check (e_nat) (st0) (c_deep)) (n1 (quote deep)))))
+    (Case "12c fuel monotonicity, steps: exhausted at 1; at 1000 and at the default the same admitted identity"
+      (bool_and (refused (check_with (e_nat) (st0) (Limits 8192 1) (c_deep)) (quote exhausted))
+                (same_identity (check_with (e_nat) (st0) (Limits 8192 1000) (c_deep)) (check (e_nat) (st0) (c_deep)) (n1 (quote deep)))))
     (Case "13 unsafe out of the profile" (refused (check (e_nat) (st0) (c_unsafe)) (quote unsafe_declaration)))
     (Case "13 partial out of the profile" (refused (check (e_nat) (st0) (c_partial)) (quote unsafe_declaration)))
     (Case "13 mutual block out of the profile" (refused (check (e_nat) (st0) (MutualDefnDecl Nil)) (quote mutual_unsafe_block)))

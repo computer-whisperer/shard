@@ -1,5 +1,14 @@
 # The temporary compiler chain (lower + codegen)
 
+> **FOUNDATION (phase 1, 2026-09-07): SUPERSEDED BY ROUTE 1 (`docs/FOUNDATION.md`
+> §9.1) for V3.** This chain now also compiles K (`v3/build.sh` →
+> `v3/bin/t0`), and the compiled K is T0's engine by ruling (records §8,
+> 2026-09-07) — still a differential artifact: the Rust interpreter is the
+> authority and confirms it by byte-tie before every full replay. Route 1
+> proper is K compiled by the PROVEN lowering; when that lands this
+> document is deleted at the flip (§10.5). Everything below describes the
+> chain as built for the old tree and still holds for it.
+
 Purpose: escape the interpretation tax (direct engine ~minutes per gate run,
 tower ~100x that) while the core language is still moving. This chain is a
 DEV ACCELERATOR, not an authority: anything soundness-relevant (sidecar

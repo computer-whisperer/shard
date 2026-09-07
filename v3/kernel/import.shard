@@ -12,13 +12,14 @@
 ;;; numbering at 1 for both).
 
 (import "add.shard")
+(import "axioms.shard")
 (import "json.shard")
 (import "intmap.shard")
 
 (type Tabs (Tabs (IntMap Name) (IntMap Level) (IntMap Expr)))
 
 ;; the run's state: tables, environment, checker state, counters
-(type Run (Run Tabs CheckedEnv St Int Int Int Int Int Bool))   ; accepted rejected exhausted mismatched unsupported; pins mode
+(type Run (Run Tabs CheckedEnv St Int Int Int Int Int Bool Bool AxMemo))   ; accepted rejected exhausted mismatched unsupported; pins mode; -a mode + its closure memo
 
 (type Verdict
   (VAccept Name)
@@ -417,21 +418,24 @@
 
 ;; ---- one record ---------------------------------------------------------------------------
 
-(fn run_tabs ((r Run)) Tabs (match r ((Run t _ _ _ _ _ _ _ _) t)))
-(fn run_env ((r Run)) CheckedEnv (match r ((Run _ e _ _ _ _ _ _ _) e)))
-(fn run_st ((r Run)) St (match r ((Run _ _ s _ _ _ _ _ _) s)))
-(fn run_pins_mode ((r Run)) Bool (match r ((Run _ _ _ _ _ _ _ _ m) m)))
-(fn run_counts ((r Run)) (List Int) (match r ((Run _ _ _ a b c d e _) (list a b c d e))))
-(fn run_with_tabs ((r Run) (t Tabs) (s St)) Run (match r ((Run _ e _ a b c d f m) (Run t e s a b c d f m))))
-(fn run_with_env ((r Run) (e CheckedEnv) (s St)) Run (match r ((Run t _ _ a b c d f m) (Run t e s a b c d f m))))
+(fn run_tabs ((r Run)) Tabs (match r ((Run t _ _ _ _ _ _ _ _ _ _) t)))
+(fn run_env ((r Run)) CheckedEnv (match r ((Run _ e _ _ _ _ _ _ _ _ _) e)))
+(fn run_st ((r Run)) St (match r ((Run _ _ s _ _ _ _ _ _ _ _) s)))
+(fn run_pins_mode ((r Run)) Bool (match r ((Run _ _ _ _ _ _ _ _ m _ _) m)))
+(fn run_ax_mode ((r Run)) Bool (match r ((Run _ _ _ _ _ _ _ _ _ x _) x)))
+(fn run_memo ((r Run)) AxMemo (match r ((Run _ _ _ _ _ _ _ _ _ _ mm) mm)))
+(fn run_with_memo ((r Run) (mm AxMemo)) Run (match r ((Run t e s a b c d f m x _) (Run t e s a b c d f m x mm))))
+(fn run_counts ((r Run)) (List Int) (match r ((Run _ _ _ a b c d e _ _ _) (list a b c d e))))
+(fn run_with_tabs ((r Run) (t Tabs) (s St)) Run (match r ((Run _ e _ a b c d f m x mm) (Run t e s a b c d f m x mm))))
+(fn run_with_env ((r Run) (e CheckedEnv) (s St)) Run (match r ((Run t _ _ a b c d f m x mm) (Run t e s a b c d f m x mm))))
 (fn run_count ((r Run) (which Int)) Run
   (match r
-    ((Run t e s a b c d f m)
-     (if (int_eq which 0) (Run t e s (+ a 1) b c d f m)
-     (if (int_eq which 1) (Run t e s a (+ b 1) c d f m)
-     (if (int_eq which 2) (Run t e s a b (+ c 1) d f m)
-     (if (int_eq which 3) (Run t e s a b c (+ d 1) f m)
-     (Run t e s a b c d (+ f 1) m))))))))
+    ((Run t e s a b c d f m x mm)
+     (if (int_eq which 0) (Run t e s (+ a 1) b c d f m x mm)
+     (if (int_eq which 1) (Run t e s a (+ b 1) c d f m x mm)
+     (if (int_eq which 2) (Run t e s a b (+ c 1) d f m x mm)
+     (if (int_eq which 3) (Run t e s a b c (+ d 1) f m x mm)
+     (Run t e s a b c d (+ f 1) m x mm))))))))
 
 ;; the verdict of checking one declaration and the run afterwards
 (fn check_into ((r Run) (d Declaration)) (Pair Run Verdict)
@@ -500,6 +504,48 @@
     (VSkip None)
     ((VMalformed k) (Some (append "MALFORMED " k)))))
 
+;; -a: the axiom closure of every constant an accepted record admitted (§3.6,
+;; axioms.shard), one line each — `AX name: axiom axiom …`, the axioms in
+;; collection order (the gate sorts both sides); `?depth` = the bound was hit
+(fn json_names ((t Tabs) (js (List Json))) (List Name)
+  (measure (struct js))
+  (match js
+    (Nil Nil)
+    ((Cons j r) (match (fint j "name") ((Some i) (Cons (name_at t i) (json_names t r))) (None (json_names t r))))))
+
+(fn record_constants ((t Tabs) (j Json) (v Verdict)) (List Name)
+  (match v
+    ((VAccept n)
+     (match (jkind_of_record j)
+       (None (Cons n Nil))
+       ((Some kind)
+        (if (int_list_eq kind "inductive")
+          (match (inductive_parts j)
+            ((Some (Pair ts (Pair cs rs))) (append (json_names t ts) (append (json_names t cs) (json_names t rs))))
+            (None (Cons n Nil)))
+        (if (int_list_eq kind "quot")
+          ;; one record per quotient constant; the first admits all four, each names its own
+          (match (jget j "quot")
+            ((Some o) (match (fint o "name") ((Some i) (Cons (name_at t i) Nil)) (None (Cons n Nil))))
+            (None (Cons n Nil)))
+          (Cons n Nil))))))
+    (_ Nil)))
+
+(fn show_names_sp ((ns (List Name))) (List Int)
+  (measure (struct ns))
+  (match ns (Nil "") ((Cons n r) (append " " (append (show_name n) (show_names_sp r))))))
+
+(fn emit_axioms ((r Run) (ns (List Name)) (w World)) (Pair Run World)
+  (measure (struct ns))
+  (match ns
+    (Nil (Pair r w))
+    ((Cons n rest)
+     (match (axioms_of (run_env r) (run_memo r) n)
+       ((Pair m1 (Some axs))
+        (emit_axioms (run_with_memo r m1) rest (write_line (append "AX " (append (show_name n) (append ":" (show_names_sp axs)))) w)))
+       ((Pair m1 None)
+        (emit_axioms (run_with_memo r m1) rest (write_line (append "AX " (append (show_name n) ": ?depth")) w)))))))
+
 ;; process every line of a chunk; verbose = print ACCEPT lines too
 (fn process_lines ((r Run) (bs0 (List Int)) (verbose Bool) (w World)) (Pair Run World)
   (measure (struct bs0))
@@ -515,7 +561,8 @@
              (let ((w1 (match (show_verdict v)
                          (None w)
                          ((Some s) (match v ((VAccept _) (if verbose (write_line s w) w)) (_ (write_line s w)))))))
-               (process_lines r1 rest verbose w1))))))))))
+               (match (if (run_ax_mode r1) (emit_axioms r1 (record_constants (run_tabs r1) j v) w1) (Pair r1 w1))
+                 ((Pair r2 w2) (process_lines r2 rest verbose w2))))))))))))
 
 (fn show_counts ((r Run)) (List Int)
   (match (run_counts r)
@@ -524,7 +571,7 @@
        (append "  mismatched " (append (show_nat d) (append "  unsupported " (show_nat e)))))))))))
     (_ "")))
 
-(fn empty_run ((pins_mode Bool)) Run (Run (Tabs IMEmpty IMEmpty IMEmpty) (CheckedEnv IMEmpty False Nil 0) (st_init) 0 0 0 0 0 pins_mode))
+(fn empty_run ((pins_mode Bool) (ax_mode Bool)) Run (Run (Tabs IMEmpty IMEmpty IMEmpty) (CheckedEnv IMEmpty False Nil 0) (st_init) 0 0 0 0 0 pins_mode ax_mode (ax_memo_empty)))
 
 ;; pins mode (gen_pins.sh): every candidate is pinned as admitted — the
 ;; run that PRODUCES the table from the pinned export; never a checking run

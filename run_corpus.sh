@@ -25,6 +25,9 @@ set -u
 # default run would otherwise report its row as MISSING and the diff fails,
 # which is the safe direction.
 # CORPUS_LIST=1 prints the tier membership and exits 0 (the local dry run).
+# V3 (FOUNDATION §10.5, phase 1): no tier here reaches v3/ — the old tree
+# is what these tiers gate; V3's gate is the CI `v3` job (v3/test.sh, then
+# T0 on the pinned export: v3/t0_full.sh), one job per phase gate.
 CLOSED=${CORPUS_CLOSED:-0}
 # Engine selection, fastest fresh option first (see gate_sweep.sh):
 # direct-compiled bin/shard_check (stamp-fresh only) > bin/shard_eval
