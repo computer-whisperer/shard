@@ -75,6 +75,24 @@ World app; bin/rebuild.sh's engine-parity fixture), `weld_probe`,
 `bytes_bridge`, the demos and pins that ARE demonstrations
 (`natview_*`, `spell_pin`, …), and the app directories.
 
+## The V3 sibling tree (2026-09-06, FOUNDATION.md §12.1 — RATIFIED)
+
+`v3/` is a **package root**, not a directory in the old tree's
+namespace: the qualified name of `v3/A/B.shard` is `(:: A B …)`,
+exactly what `A/B.shard` is named after the flip, so relocating the
+tree at phase 6 changes no identity (FOUNDATION.md §8.3). The V3
+loader is told its root explicitly; the old loader never reads under
+`v3/`. Inside `v3/` the placement rule above applies unchanged —
+`v3/kernel` (K, `ev`, the loader tower), `v3/meta`, `v3/std`,
+`v3/pins`, later `v3/tools`, `v3/models`, `v3/examples`. No file under
+`v3/` imports the old tree and no old-tree file imports `v3/`; the old
+tree is the oracle for ported modules by differential runs, never by
+import. The arc's working documents live at the root of `v3/`:
+`README.md` (root, pins, phase status), `MANIFEST.md` (PORT / ARCHIVE /
+REGENERATE per family), `INVENTORY.md` (the shared types). The old
+tree's files keep their paths and names until the flip; the manifest,
+not a move, says what happens to each.
+
 ## The path-map policy
 
 Ledgers and archived records keep the paths that were true when their

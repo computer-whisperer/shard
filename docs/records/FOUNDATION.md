@@ -20,7 +20,8 @@
 | v0.5 | 2026-09-06 | `985776b` | GPT-6 integration review R17–R28 folded; the normative/records split; the two rulings of 2026-09-06 (Lean's `Init` as the core library identity; durable P closure for releases) |
 | v0.6 | 2026-09-06 | `150ceeb`, `f14bde8` (§10.5) | **renumbered V2 → V3** across the project (the tree is the lineage's v2; the sibling tree is `v3/`; the archive is `foundation-v3/`); GPT-6 final clarifications R29–R34 folded (role-aware elimination, selection discharges applicability, the `Init` identity stated at `realize`, canonical serialization as the storage boundary, World ownership through aggregates, older snapshot ≠ invalid handle); the first connected path |
 | v0.7 | 2026-09-06 | `68c0e08` | Fable's last review folded (§10.5 documentation disposition landed at `f14bde8`): source spans structural; types get realizations (`Array`, `String`, `ByteArray`, `UInt*`; the validated-bytes string = `String`'s realization); numeric literals and the `Nat`/`Int` seam (one automatic coercion); `Quot` erasure row; deriving at Stage 1; CANON's law carried; two user rulings — no tool writes into a source file (engine I lives in sidecars + the pin store), no user-defined notation/macros in v1 |
-| v0.8 | 2026-09-06 | this commit | GPT-6 pre-ratification refinements R35–R41 folded (imported identity vs view vs representation, with the phase 0 shared-type inventory; conditional quotient erasure; deriving under a declared policy; occurrence-aware provenance; literal defaulting order and coercion placement; the syntax ban scoped to the grammar; migration as an explicit authoring action); the `Fin` numeral ruling (imported meaning kept, oversized source literals refused); GPT-6: "ratify the design and implement the first connected path" |
+| v0.8 | 2026-09-06 | `28809ec` | GPT-6 pre-ratification refinements R35–R41 folded (imported identity vs view vs representation, with the phase 0 shared-type inventory; conditional quotient erasure; deriving under a declared policy; occurrence-aware provenance; literal defaulting order and coercion placement; the syntax ban scoped to the grammar; migration as an explicit authoring action); the `Fin` numeral ruling (imported meaning kept, oversized source literals refused); GPT-6: "ratify the design and implement the first connected path" |
+| RATIFIED | 2026-09-06 | this commit | user: "Ratify it and start on phase 0"; phase 0 opened — the pin (Lean v4.33.1 `819816b`; lean4export, lean4lean, nanoda_lib, lean4checker heads), the package root, the shared-type inventory and the port manifest drafted under `v3/`, the trusted bring-up translations named in `TCB.md`, the §10.5 phase 0 banner pass |
 
 The GPT-6 documents (archived under `docs/archive/foundation-v3/` — named `foundation-v2/` at v0.5, renamed with the renumbering at v0.6; each memo was an untracked root file until folded in; the memos say "V2" because they predate the renumbering):
 `SHARD_FOUNDATION_PROPOSAL_v0.3.md`, `SHARD_BOOTSTRAP_ADDENDUM_v0.3.md`,
@@ -157,6 +158,10 @@ a source literal whose written magnitude reaches a statically known
 bound, with the pointer to the explicit wrapping construction or
 `Fin.mk`. User: "your stricter point sounds reasonble, let's fold all
 this in." §5.2.
+
+**2026-09-06 (ratification).** "Ratify it and start on phase 0." The
+contract is law at v0.8; GPT-6's R1–R41 are all folded; the review loop
+continues on code and measured behavior, not on the contract.
 
 ## 3. Rejected alternatives (REJECTED-because, on record)
 
@@ -404,7 +409,34 @@ keywords; the s-expression prefix surface; no effect notation;
 refusals with pointers; shard-only vocabulary). The normative statement
 is `docs/FOUNDATION.md` §5.3.
 
-## 7. Related records
+## 7. Phase 0 record (opened 2026-09-06)
+
+- **The pin:** Lean v4.33.1 (`819816b2e0a3bf405af45ae5c7af2491d8f5bee6`,
+  released 2026-08-21, the latest stable at pinning; the toolchain is
+  installed locally under elan). Tool heads as of pinning:
+  lean4export `411dce7db58a`, lean4lean `8223d223ed98`, nanoda_lib
+  `05055695879d`, lean4checker `91a7f0e8e9df`. Recorded in
+  `v3/README.md`; phase 1 validates each against the release.
+- **The package root:** `v3/` — `v3/A/B.shard` is `A.B` (LAYOUT.md).
+- **The shared-type inventory** (`v3/INVENTORY.md`), read from the
+  pinned `Init/Prelude.lean`: `String` is `ofByteArray (toByteArray :
+  ByteArray) (isValidUTF8 : …)` — R35 confirmed against the pin;
+  `Array` is `mk (toList : List α)`; `ByteArray` is `mk (data : Array
+  UInt8)`; `UInt8` is `ofBitVec (toBitVec : BitVec 8)`; `BitVec w` is
+  `ofFin (toFin : Fin (2 ^ w))`; `Char` is `val : UInt32` plus a
+  validity proof; `Float` is `ofModel (toModel : Float.Model)`.
+- **The port manifest** (`v3/MANIFEST.md`): REGENERATE ≈700k lines,
+  ARCHIVE (proposed) ≈200k, PORT ≈300k of ≈1.22M. The proposed ARCHIVE
+  families await the user's ruling: the sha256 weld/shani/xchain
+  articles and the sha256sum dispatch/shani x86 articles (Arc B's
+  hand-authored fast path), `models/wasm`, `models/riscv`,
+  `models/pio`, `tools/wasmgen`, `tools/x86gen`, `tools/impgen`'s
+  frozen oracles, `examples/snake_game` (v1).
+- **The trusted bring-up translations** are named in `docs/TCB.md`.
+- **Not started:** K's rule inventory and procedure document
+  (`v3/kernel/RULES.md`) — the last phase 0 deliverable.
+
+## 8. Related records
 
 `docs/COVERAGE.md` and `docs/records/COVERAGE.md` (the coverage arc,
 PARKED at B-1b 2026-09-05; resumes at phase 7 on V3); `docs/TCB.md`

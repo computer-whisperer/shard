@@ -29,6 +29,8 @@ competing with it.
 
 ## 1. Programs are data
 
+> **FOUNDATION (2026-09-06):** the sentence below that shard is "deliberately *not* the dependent-types path" with "two languages" is **superseded** for V3 by §11 — the logic is Lean's dependent type theory, the executable fragment stays a first-order total language, and one kernel checks both. It remains true of the old tree until the flip.
+
 shard's defining choice: a function, a data structure, a whole application is
 an **in-memory compute structure** — an algebraic value (the object AST). The
 proof checker, the refinement tools, and the compiler all *inspect, transform,
@@ -206,6 +208,8 @@ only because it leaves nothing behind.)
 
 
 ## 6. The substrate: shard, narrow, full, and a disposable bootstrap
+
+> **FOUNDATION (2026-09-06):** for V3 the Rust bootstrap is the **enduring bootstrap facility**, not scaffolding to be deleted, and the narrow/full split becomes the S/L/E distinction (FOUNDATION.md §2, §9.1–9.2; §11 below). This section describes the old tree until the flip.
 
 (See `LANGUAGE.md` §11 for the normative version.)
 
@@ -472,6 +476,40 @@ The ruling's principle, stated once: pick one practical goal and push
 for it; re-adjudicate banked decisions when the goal touches them, not
 in the abstract.
 
+
+## 11. The foundation ruling — 2026-09-06 (V3)
+
+Recorded once, here, the way §10 recorded the reset. The user opened
+the question on 2026-09-05 ("the existing kernel has some properties
+that reflect the early MVP nature"; the bar: "parity with Lean … in a
+few years we won't find our system fundamentally incapable of the
+kinds of reasoning LM agents may wish to exploit") and ratified
+`FOUNDATION.md` on 2026-09-06 after eight drafts reviewed by GPT-6.
+What changes, in this document's terms:
+
+- **§1's refusal of the dependent-types path is reversed for the
+  logic, not for the programs.** V3's logic **L** is Lean 4's dependent
+  type theory, checked by a kernel **K** that implements Lean's rules
+  exactly; V3's executable fragment **E** is the same first-order,
+  total, lowerable language this document has always described, now
+  with lambdas eliminated by elaboration rather than banned at source.
+  Programs are still data: K, the evaluator and every tactic are E
+  programs over L-as-data.
+- **§6's disposable bootstrap becomes the enduring bootstrap facility**
+  (FOUNDATION.md §9.1): Rust executes E only, defines no rule, and is
+  retired from the trust roster by a proven compiled K, never deleted
+  by fiat.
+- **§7's identity story is kept and strengthened** (FOUNDATION.md §8):
+  a logical package root, dependency classes, six acceptance records.
+- **§10's one goal (#23) stands, parked** at B-1b until phase 7; the
+  foundation arc precedes it because its flagship proof is the
+  measured provocation (FOUNDATION.md §1, records §5).
+- **The numbering:** this tree is the lineage's v2 (`archive/
+  TRANSFER.md`); the foundation is V3 and is built under `v3/`
+  (`LAYOUT.md`).
+
+The rest of this document is true of the old tree until the flip and
+is rewritten then (FOUNDATION.md §10.5).
 
 ## See also
 

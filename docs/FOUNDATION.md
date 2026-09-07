@@ -1,6 +1,6 @@
 # FOUNDATION.md — the shard V3 foundation
 
-> **STATUS: DRAFT v0.8 (Fable), 2026-09-06 — the normative contract, proposed, not yet ratified.**
+> **STATUS: RATIFIED 2026-09-06 (user: "Ratify it and start on phase 0") at v0.8 — LAW.** Phase 0 is open; its deliverables and the pin live in [`../v3/README.md`](../v3/README.md). Amendments are dated decisions recorded in `records/FOUNDATION.md`.
 > Numbering: the current tree is the lineage's v2 (`archive/TRANSFER.md`
 > is the v1→v2 mandate; `REVISIT.md` is the v2→v3 ledger), so this
 > foundation is **V3** across the whole project — user ruling 2026-09-06.
@@ -10,8 +10,7 @@
 > GPT-6's review IDs (D01–D13, B06–B16, R1–R41) live in
 > [`records/FOUNDATION.md`](records/FOUNDATION.md). When the two
 > disagree, this document wins and the record is corrected. Nothing here
-> is implemented; sizes are estimates and say so. Ratification turns
-> "proposed law" into law.
+> is implemented; sizes are estimates and say so.
 
 Evidence baseline: the tree at `5abc600` (coverage arc parked at B-1b),
 `docs/TCB.md`, `docs/TOTALITY.md`, `docs/CERT.md`, `docs/SEARCH.md`,

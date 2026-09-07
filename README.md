@@ -118,8 +118,10 @@ this to its full depth.
 
 ## How it works
 
+> **FOUNDATION (2026-09-06):** the V3 foundation — a kernel implementing Lean 4's rules exactly, written in first-order shard, with a proof IR and the naming law — is **ratified** ([docs/FOUNDATION.md](docs/FOUNDATION.md)) and is being built under [`v3/`](v3/README.md) beside this tree. This section describes the tree as it runs today; the Rust bootstrap is now the *enduring* bootstrap facility (FOUNDATION §9.1), not a disposable one.
+
 **The tower.** A deliberately small **Rust bootstrap**
-(`rust_bootstrap/`, ~3k lines, trusted by review, disposable)
+(`rust_bootstrap/`, ~3k lines, trusted by review)
 evaluates *narrow* shard — a minimal subset. Everything else is shard:
 the engine (`kernel/eval.shard`, an environment machine with TCO), the
 reader, the elaborator, and the proof checker
@@ -128,9 +130,9 @@ runs. For day-to-day speed the checker and engine are also compiled to
 native binaries (`bin/shard_check`, `bin/shard_eval`) by a temporary
 native chain — stamp-guarded against source drift, and **never the
 soundness authority**: authoritative runs go through the Rust
-interpreter path explicitly. When the certifying compiler below
-replaces that chain, `rust_bootstrap/` is deleted and shard stands on
-its own.
+interpreter path explicitly. When a proven compiled kernel
+replaces that chain, the Rust host leaves the trust roster (it is
+never deleted by fiat — FOUNDATION §9.1).
 
 **The proof layer.** `(claim NAME GOAL PROOF)` checks a theorem
 against a small kernel: equational reduction, structural /
@@ -289,7 +291,9 @@ authority for its area:
 
 | doc | area |
 |---|---|
-| [OVERVIEW.md](docs/OVERVIEW.md) | design intent — the why, in full |
+| [FOUNDATION.md](docs/FOUNDATION.md) | **the V3 foundation (RATIFIED 2026-09-06)**: Lean-rule-exact kernel in first-order shard, E, the proof IR, the naming law, the arc; history in [records/FOUNDATION.md](docs/records/FOUNDATION.md), GPT-6's reviews in [archive/foundation-v3/](docs/archive/foundation-v3/) |
+| [v3/README.md](v3/README.md) | the V3 tree: package root, the Lean pin, phase status, the port manifest and the shared-type inventory |
+| [OVERVIEW.md](docs/OVERVIEW.md) | design intent — the why, in full (§11: the foundation ruling) |
 | [LAYOUT.md](docs/LAYOUT.md) | repository layout: the placement rule + the move map |
 | [LANGUAGE.md](docs/LANGUAGE.md) | the narrow object language (syntax, semantics) |
 | [TOTALITY.md](docs/TOTALITY.md) | measures, admission, mutual recursion |
@@ -319,10 +323,14 @@ authority for its area:
 
 ## Live arcs
 
+- **THE FOUNDATION ARC (V3) — RATIFIED 2026-09-06, phase 0 open**:
+  [docs/FOUNDATION.md](docs/FOUNDATION.md) is the law; the tree is built
+  under [`v3/`](v3/README.md) (Lean v4.33.1 pinned). Phases 0–7 in
+  FOUNDATION §12.4; the coverage arc below is **parked** until phase 7.
 - **The prune arc (2026-08, issue #24) — CLOSED 2026-08-22**: tree and
   branches, the issue tracker as the single backlog, ledger status
   banners, corpus cost instrumentation (the long pole is debt #37).
-- **THE GOAL — the coverage arc (issue #23)**: `tools/shardfmt` shipped
+- **The coverage arc (issue #23) — PARKED 2026-09-05 at B-1b, resumes at FOUNDATION phase 7**: `tools/shardfmt` shipped
   as a proven native binary through the GENERIC path (spec → imp by the
   uniform-representation compiler → x86 as Theorem A's computed
   `ixf_prog` value; tools/impgen emits nothing for that leg), with the
@@ -355,7 +363,7 @@ authority for its area:
 - **Trusted-core touch is called out explicitly.** Changes to
   `kernel/*.shard`, `rust_bootstrap/src/*.rs`, or any `mod.req.shard`
   grow or shift the audited surface; impls, proofs, and examples do
-  not.
+  not. Under `v3/`, `v3/kernel/*.shard` is the audited surface.
 - **Corpus discipline.** Every change is gated by the FAIL-set diff of
   `./run_corpus.sh` against the pinned baseline; new features land
   with corpus pins (positive and negative).
@@ -367,10 +375,10 @@ authority for its area:
 
 ## Status
 
-~945k lines of tracked shard (kernel: ~28k; more than half of the
-total is generated certificate text and validation articles) over a
-~3.1k-line disposable Rust bootstrap. The proof corpus, the std
+≈1.22M lines of tracked shard (kernel: ~35k; well over half of the
+total is generated certificate text and validation articles — see
+`v3/MANIFEST.md`) over a ~3146-line Rust bootstrap. The proof corpus, the std
 interfaces, the wasm / x86 / RISC-V models and lowering pipelines, the
 trust-ledger machinery, the proof-search engine, and the streaming-bin
-flagship are live and CI-gated; the prune arc closed 2026-08-22 and
-the current front is the coverage arc (see Live arcs).
+flagship are live and CI-gated; the prune arc closed 2026-08-22, the coverage arc is parked at B-1b,
+and the current front is the V3 foundation arc (see Live arcs).
