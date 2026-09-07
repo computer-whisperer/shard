@@ -641,10 +641,62 @@ is `docs/FOUNDATION.md` §5.3.
   primitives 49.5%, expr.shard 19.9%, util.shard 14.7% (bool_or,
   int_list_eq, rev_onto — largely the reader's), json.shard 6.4%,
   tc.shard 4.3%, intmap.shard 3.7%.
-- **Open in phase 1:** the full-export run and its cost measurement
+- **The evaluator, round two, and the compiled route (2026-09-07,
+  late):** user: "Let's continue digging for performance improvements —
+  especially in the rust evaluator engine. We need this to be fast
+  enough to get through the v3 arc without needing the compiled system.
+  That or we update the c-based compile chain to support the v3
+  kernel." Six more evaluator steps, each landed on identical verdicts
+  (chunks 0–4, from 25.8 s): leaves answered without entering the
+  machine, prebuilt zero-argument constructors, boxed errors (ec9ce61,
+  23.1 s); unboxed i64 integers with `Val::Big` only beyond a word
+  (7a5fce8, 20.0 s); flat constructor patterns bound by one slice copy
+  (0918a41, 19.5 s); one value stack with the lowerer computing each
+  variable's physical slot past the temporaries in flight — no operand
+  stack, nothing moved (2e89439, 18.1 s); a SIXTEEN-BYTE value —
+  constructor blocks behind one thin pointer with the fields inline,
+  interned name ids — so every result returns in registers (0622881,
+  12.7 s); the reader's symbol ↔ bytes bridge on the fast path (fa21ff9,
+  12.6 s); `if` fused with a comparison condition (916e81f, 12.0 s).
+  Measured and NOT kept: moving a binding's only use out of its slot
+  instead of cloning fires at 42% of read sites and changes nothing —
+  refcount traffic on reads is not the cost. Totals for the day: chunks
+  0–4 67.7 s → 12.0 s; chunks 0–24 830 s → 184 s (4,380 / 0 / 0 / 0);
+  chunks 0–49 (line 1,000,000) 8,511 / 0 / 0 / 0 in 340 s at a 1.2 GB
+  peak (2.6 GB at chunk 20 this morning). What remains in the
+  interpreter is the tree walk itself (the machine loop and pattern
+  matching, then constructor allocation and freeing); the next multiple
+  there would be a bytecode or closure-compiled machine, a rewrite for
+  perhaps 1.5×.
+  **The compiled route works today.** A read-only investigation of this
+  morning's chain failure found the cause in `kernel/resolve.shard`:
+  `is_core_path` recognises `core` only as the exact path
+  `kernel/stdlib`, so a tool named by an absolute path (as I had run it,
+  from the scratch directory) imports a non-core prelude and its `Pair`
+  patterns never match the engine's values (#41). Named relatively from
+  the repo root, `tools/lower` + `tools/codegen` + cc build
+  `v3/kernel/t0.shard` into a native binary in 17 s, the lower output
+  byte-ties against the Rust interpreter, and the binary's verbose
+  per-declaration output on chunks 0–4 is byte-identical to `eval
+  direct`'s: chunks 0–4 in 2.2 s, chunks 0–24 in 40 s (4,380 / 0 / 0 /
+  0). **The full export (325 chunks, 6,490,422 lines): 57,977
+  declarations accepted, 0 rejected, 0 exhausted, 0 mismatched, 0
+  unsupported, in 12 min 17 s** on the compiled K — a run the
+  investigating agent started on its own; I let it finish under a memory
+  cap. Resident memory was 22 GB at chunk 255 of 325 and the peak was
+  not captured (the export tables hold every referenced node). §9.1
+  ranks this engine first — route 1, K compiled by shard's own lowering
+  — with its proof still to come; the Rust interpreter (route 3) stays
+  the authority, and at today's ratio (about 5×) would replay the whole
+  export in roughly an hour. The route question is the user's: compiled
+  K for the export's verdicts with the interpreter confirming prefixes
+  and the lower byte-tie, or the interpreter alone.
+- **Open in phase 1:** the interpreter's own full-export run and the
+  compiled run's memory peak (the verdicts are in: see above)
   (chunks 0–24 done; 25–324 next — a multi-hour run whose environment
-  and tables grow with the export: 2.6 GB resident at chunk 20; at the
-  cut rate chunks 0–24 take about 6 minutes), the six accelerator pins
+  and tables grow with the export: 1.2 GB peak through chunk 49 on the
+  interpreter, above 22 GB for the whole export on the compiled K — the
+  peak is unmeasured), the six accelerator pins
   declared 24k–700k lines into the export, the `use`-free toolchain
   profile's gate moving to CI, the evaluator levers listed above if a
   prefix run needs them.

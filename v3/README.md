@@ -49,8 +49,20 @@ two largest chunks at 143 s and 77 s. **Interpreter constant
 (2026-09-07):** the bootstrap evaluator binds on a value stack (its
 environment was an Rc-consed list — half the run time was malloc/free),
 the bitwise primitives take the tagged fast path, mimalloc is the
-allocator, and K's IntMap ends in leaves; chunks 0–4 now take 25.8 s
-and chunks 0–21 280 s, verdicts identical (records §8). Not yet: the rest of the export
+allocator, and K's IntMap ends in leaves; then unboxed integers,
+sixteen-byte values (constructor blocks behind one thin pointer,
+interned name ids), one stack with statically computed slots, and a
+fused `if`-on-compare: chunks 0–4 take 12.0 s, chunks 0–24 184 s,
+chunks 0–49 340 s (8,511 declarations accepted, 1.2 GB peak), verdicts
+identical at every step (records §8). **Compiled K (2026-09-07):** the
+existing chain (`tools/lower` → `tools/codegen` → cc, tools named by
+repo-relative paths — #41) builds `v3/kernel/t0.shard` into a native
+binary whose per-declaration output is byte-identical to `eval
+direct`'s: chunks 0–4 in 2.2 s, chunks 0–24 in 40 s, and **the whole
+`Init` export (6,490,422 lines) in 12 min 17 s: 57,977 declarations
+accepted, 0 rejected, 0 exhausted, 0 mismatched, 0 unsupported** (memory
+above 22 GB; records §8). The interpreter remains the authority
+(FOUNDATION §9.1: route 1 without its proof yet). Not yet: the rest of the export
 (≈6.5M lines; runs on prefixes are measured first), the six
 later-declared accelerator pins. **Nested
 inductives validated:** `Lean.Syntax` (export line 78,503; two levels of
