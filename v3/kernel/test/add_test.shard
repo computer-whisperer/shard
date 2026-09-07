@@ -1,0 +1,121 @@
+;;; v3/kernel/test/add_test.shard — environment-level admission and quotients.
+
+(import "../host.shard")
+(import "../add.shard")
+
+(type Case (Case (List Int) Bool))
+
+(fn u () Level (LParam (n1 (quote u))))
+(fn nat () Expr (Const (nm_nat) Nil))
+(fn zero () Expr (Const (nm_nat_zero) Nil))
+(fn lit ((k Int)) Expr (Lit (LitNat k)))
+(fn x_ () Name (n1 (quote x)))
+(fn arrow ((a Expr) (b Expr)) Expr (Pi (x_) BDefault a (lift_loose_bvars b 0 1)))
+(fn type1 () Expr (Sort (LSucc LZero)))
+(fn st0 () St (St 0 0))
+(fn cv ((n Name) (ps (List Name)) (t Expr)) ConstantVal (ConstantVal n ps t))
+
+(fn nat_decl () Declaration
+  (InductDecl Nil 0
+    (list (InductiveType (nm_nat) (type1)
+            (list (Constructor (nm_nat_zero) (nat)) (Constructor (nm_nat_succ) (Pi (n1 (quote n)) BDefault (nat) (nat))))))
+    False))
+(fn eq_decl () Declaration
+  (InductDecl (list (n1 (quote u))) 2
+    (list (InductiveType (nm_eq)
+            (Pi (n1 (quote a)) BImplicit (Sort (u)) (Pi (n1 (quote a)) BDefault (BVar 0) (Pi (n1 (quote b)) BDefault (BVar 1) (Sort LZero))))
+            (list (Constructor (nm_eq_refl)
+                    (Pi (n1 (quote a)) BImplicit (Sort (u)) (Pi (n1 (quote a)) BDefault (BVar 0)
+                      (App (App (App (Const (nm_eq) (list (u))) (BVar 1)) (BVar 0)) (BVar 0))))))))
+    False))
+
+(fn env_after ((o Outcome) (dflt CheckedEnv)) CheckedEnv (match o ((Accepted e) e) (_ dflt)))
+(fn accepted ((o Outcome)) Bool (match o ((Accepted _) True) (_ False)))
+(fn rejected ((o Outcome) (s Symbol)) Bool
+  (match o
+    ((Rejected (RuleViolation t) _) (sym_eq s t)) ((Rejected (Malformed t) _) (sym_eq s t))
+    ((Rejected (Unsupported t) _) (sym_eq s t)) ((Rejected (ConversionNotEstablished) _) (sym_eq s (quote conversion)))
+    (_ False)))
+
+(fn e0 () CheckedEnv (CheckedEnv Nil False))
+(fn e_nat () CheckedEnv (env_after (check (e0) (st0) (nat_decl)) (e0)))
+(fn e_eq () CheckedEnv (env_after (check (e_nat) (st0) (eq_decl)) (e0)))
+(fn e_quot () CheckedEnv (env_after (check (e_eq) (st0) QuotDecl) (e0)))
+
+(fn id_decl () Declaration
+  (DefnDecl (cv (n1 (quote idn)) Nil (arrow (nat) (nat))) (Lam (x_) BDefault (nat) (BVar 0)) (HRegular 1) Safe (list (n1 (quote idn)))))
+(fn bad_defn () Declaration
+  (DefnDecl (cv (n1 (quote bad)) Nil (arrow (nat) (nat))) (zero) (HRegular 1) Safe (list (n1 (quote bad)))))
+;; theorem rfl0 : Eq Nat 0 0 := Eq.refl Nat 0
+(fn eq_nat ((a Expr) (b Expr)) Expr (App (App (App (Const (nm_eq) (list (LSucc LZero))) (nat)) a) b))
+(fn thm_decl () Declaration
+  (ThmDecl (cv (n1 (quote rfl0)) Nil (eq_nat (zero) (zero))) (App (App (Const (nm_eq_refl) (list (LSucc LZero))) (nat)) (zero)) (list (n1 (quote rfl0)))))
+;; theorem by computation: Eq Nat (Nat.succ 1) 2 := Eq.refl Nat 2
+(fn thm_comp () Declaration
+  (ThmDecl (cv (n1 (quote s1)) Nil (eq_nat (App (Const (nm_nat_succ) Nil) (lit 1)) (lit 2)))
+           (App (App (Const (nm_eq_refl) (list (LSucc LZero))) (nat)) (lit 2)) (list (n1 (quote s1)))))
+(fn thm_wrong () Declaration
+  (ThmDecl (cv (n1 (quote w)) Nil (eq_nat (lit 1) (lit 2))) (App (App (Const (nm_eq_refl) (list (LSucc LZero))) (nat)) (lit 2)) (list (n1 (quote w)))))
+(fn thm_not_prop () Declaration
+  (ThmDecl (cv (n1 (quote np)) Nil (nat)) (zero) (list (n1 (quote np)))))
+(fn ax_decl () Declaration (AxiomDecl (cv (n1 (quote ax)) Nil (eq_nat (lit 1) (lit 2))) False))
+(fn ax_unsafe () Declaration (AxiomDecl (cv (n1 (quote axu)) Nil (nat)) True))
+(fn opaque_decl () Declaration (OpaqueDecl (cv (n1 (quote op)) Nil (nat)) (zero) False (list (n1 (quote op)))))
+(fn univ_decl () Declaration (AxiomDecl (cv (n1 (quote uu)) Nil (Sort (u))) False))
+(fn dup_univ () Declaration (AxiomDecl (cv (n1 (quote du)) (list (n1 (quote u)) (n1 (quote u))) (Sort (u))) False))
+
+;; Quot.lift.{1,1} Nat r Nat f h (Quot.mk Nat r 3) ⇒ f 3, with r, f, h opaque locals
+(fn quot_ctx () Ctx
+  (Ctx (e_quot)
+       (list (LDecl 1002 (n1 (quote h)) (nat) None BDefault)      ; type irrelevant to the reduction rule
+             (LDecl 1001 (n1 (quote f)) (arrow (nat) (nat)) None BDefault)
+             (LDecl 1000 (n1 (quote r)) (arrow (nat) (arrow (nat) (Sort LZero))) None BDefault))
+       (Some Nil) Safe False 1000000))
+(fn quot_lift_app () Expr
+  (App (App (App (App (App (App (Const (nm_quot_lift) (list (LSucc LZero) (LSucc LZero))) (nat)) (FVar 1000)) (nat)) (FVar 1001)) (FVar 1002))
+       (App (App (App (Const (nm_quot_mk) (list (LSucc LZero))) (nat)) (FVar 1000)) (lit 3))))
+(fn ok_is ((r (KRes Expr)) (e Expr)) Bool (match r ((KOk _ x) (expr_eq x e)) (_ False)))
+
+(fn cases () (List Case)
+  (list
+    (Case "Nat accepted" (accepted (check (e0) (st0) (nat_decl))))
+    (Case "Eq accepted" (accepted (check (e_nat) (st0) (eq_decl))))
+    (Case "Quot accepted after Eq" (accepted (check (e_eq) (st0) QuotDecl)))
+    (Case "Quot refused without Eq" (rejected (check (e_nat) (st0) QuotDecl) (quote quot_eq_shape)))
+    (Case "Quot constants present and typed"
+      (match (env_find (e_quot) (nm_quot_lift))
+        ((Some i) (match (infer (Ctx (e_quot) Nil (Some (list (n1 (quote u)) (n1 (quote v)))) Safe False 1000000) (st0) 300 (ci_type i) False)
+                    ((KOk _ s) (is_sort s)) (_ False)))
+        (None False)))
+    (Case "Quot.ind type checks"
+      (match (env_find (e_quot) (nm_quot_ind))
+        ((Some i) (match (infer (Ctx (e_quot) Nil (Some (list (n1 (quote u)))) Safe False 1000000) (st0) 300 (ci_type i) False)
+                    ((KOk _ s) (is_sort s)) (_ False)))
+        (None False)))
+    (Case "Quot.lift f h (Quot.mk r 3) ⇒ f 3" (ok_is (whnf (quot_ctx) (St 2000 0) 300 (quot_lift_app)) (App (FVar 1001) (lit 3))))
+    (Case "Quot idempotent" (accepted (check (e_quot) (st0) QuotDecl)))
+    (Case "definition accepted" (accepted (check (e_nat) (st0) (id_decl))))
+    (Case "definition value/type mismatch: conversion not established" (rejected (check (e_nat) (st0) (bad_defn)) (quote conversion)))
+    (Case "theorem rfl0 accepted" (accepted (check (e_eq) (st0) (thm_decl))))
+    (Case "theorem by computation: succ 1 = 2 by rfl" (accepted (check (e_eq) (st0) (thm_comp))))
+    (Case "theorem 1 = 2 by rfl refused" (rejected (check (e_eq) (st0) (thm_wrong)) (quote conversion)))
+    (Case "theorem whose type is not a Prop refused" (rejected (check (e_eq) (st0) (thm_not_prop)) (quote theorem_type_not_prop)))
+    (Case "axiom accepted (tracked, not judged)" (accepted (check (e_eq) (st0) (ax_decl))))
+    (Case "unsafe axiom unsupported" (rejected (check (e_nat) (st0) (ax_unsafe)) (quote unsafe_declaration)))
+    (Case "opaque accepted" (accepted (check (e_nat) (st0) (opaque_decl))))
+    (Case "opaque never unfolds"
+      (ok_is (whnf (Ctx (env_after (check (e_nat) (st0) (opaque_decl)) (e0)) Nil (Some Nil) Safe False 1000000) (st0) 300 (Const (n1 (quote op)) Nil))
+             (Const (n1 (quote op)) Nil)))
+    (Case "undefined universe in a type refused" (rejected (check (e_nat) (st0) (univ_decl)) (quote undefined_universe)))
+    (Case "duplicate universe parameter refused" (rejected (check (e_nat) (st0) (dup_univ)) (quote duplicate_univ_param)))
+    (Case "redeclaration refused" (rejected (check (e_nat) (st0) (nat_decl)) (quote already_declared)))
+    (Case "mutual block unsupported" (rejected (check (e_nat) (st0) (MutualDefnDecl Nil)) (quote mutual_unsafe_block)))))
+
+(fn run ((cs (List Case)) (fails Int) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil (exit fails (write_line (append "add_test: failures = " (show_int fails)) w)))
+    ((Cons (Case name ok) r)
+     (run r (if ok fails (+ fails 1)) (write_line (append (if ok "PASS " "FAIL ") name) w)))))
+
+(fn main ((w World)) World (run (cases) 0 w))

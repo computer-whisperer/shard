@@ -1,0 +1,172 @@
+;;; v3/kernel/add.shard — `check(env, decl, limits)` (FOUNDATION §3.3):
+;;; environment-level admission after src/kernel/environment.cpp
+;;; (`environment::add_*`, l. 127–262) and quot.cpp (`add_quot`, l. 40).
+;;; The standard profile (§3.2) admits `Safe` declarations only: unsafe /
+;;; partial declarations and mutual definition blocks are Unsupported.
+
+(import "inductive.shard")
+
+(fn nm_quot () Name (n1 (quote Quot)))
+(fn nm_eq () Name (n1 (quote Eq)))
+(fn nm_eq_refl () Name (n2 (quote Eq) (quote refl)))
+
+(fn cv_name ((v ConstantVal)) Name (match v ((ConstantVal n _ _) n)))
+(fn cv_lparams ((v ConstantVal)) (List Name) (match v ((ConstantVal _ ps _) ps)))
+(fn cv_type ((v ConstantVal)) Expr (match v ((ConstantVal _ _ t) t)))
+
+(fn ctx_for ((env CheckedEnv) (ps (List Name)) (safety DefinitionSafety)) Ctx
+  (Ctx env Nil (Some ps) safety False (budget_ticks)))
+
+;; check_constant_val (environment.cpp l. 127): name free, level params
+;; distinct, no fvar in the type, the type checks and is a sort
+(fn check_constant_val ((env CheckedEnv) (st St) (v ConstantVal) (safety DefinitionSafety)) (KRes Int)
+  (match (env_check_name env (cv_name v))
+    ((Some f) (KFail f))
+    (None
+     (if (bool_not (check_duplicated_univ_params (cv_lparams v))) (KFail (FRej (RuleViolation (quote duplicate_univ_param))))
+     (if (has_fvar (cv_type v)) (KFail (FRej (Malformed (quote fvar_in_type))))
+     (match (infer (ctx_for env (cv_lparams v) safety) st (budget_depth) (cv_type v) False)
+       ((KFail f) (KFail f))
+       ((KOk st1 s)
+        (match (ensure_sort (ctx_for env (cv_lparams v) safety) st1 (budget_depth) s)
+          ((KFail f) (KFail f))
+          ((KOk st2 _) (KOk st2 0))))))))))
+
+;; a value checks and its type is definitionally the declared type
+(fn check_value ((env CheckedEnv) (st St) (v ConstantVal) (value Expr) (safety DefinitionSafety)) (KRes Int)
+  (if (has_fvar value) (KFail (FRej (Malformed (quote fvar_in_value))))
+  (match (infer (ctx_for env (cv_lparams v) safety) st (budget_depth) value False)
+    ((KFail f) (KFail f))
+    ((KOk st1 vty)
+     (match (is_def_eq (ctx_for env (cv_lparams v) safety) st1 (budget_depth) vty (cv_type v))
+       ((KFail f) (KFail f))
+       ((KOk st2 ok) (if ok (KOk st2 0) (KFail (FRej (ConversionNotEstablished))))))))))
+
+;; the four quotient constants (quot.cpp l. 40–95), levels u and v
+(fn quot_u () Level (LParam (n1 (quote u))))
+(fn quot_v () Level (LParam (n1 (quote v))))
+(fn rel_type ((alpha Expr)) Expr   ; α → α → Prop, with α given as the bvar of the enclosing position
+  (Pi (n1 (quote x)) BDefault alpha (Pi (n1 (quote y)) BDefault (lift_loose_bvars alpha 0 1) (Sort LZero))))
+
+(fn quot_type () Expr
+  (Pi (n1 (quote a)) BImplicit (Sort (quot_u)) (Pi (n1 (quote r)) BDefault (rel_type (BVar 0)) (Sort (quot_u)))))
+
+(fn quot_mk_type () Expr
+  (Pi (n1 (quote a)) BImplicit (Sort (quot_u))
+    (Pi (n1 (quote r)) BDefault (rel_type (BVar 0))
+      (Pi (n1 (quote a)) BDefault (BVar 1) (App (App (Const (nm_quot) (list (quot_u))) (BVar 2)) (BVar 1))))))
+
+(fn quot_lift_type () Expr
+  (Pi (n1 (quote a)) BImplicit (Sort (quot_u))
+    (Pi (n1 (quote r)) BImplicit (rel_type (BVar 0))
+      (Pi (n1 (quote b)) BImplicit (Sort (quot_v))
+        (Pi (n1 (quote f)) BDefault (Pi (n1 (quote x)) BDefault (BVar 2) (BVar 1))
+          (Pi (n1 (quote h)) BDefault
+            (Pi (n1 (quote a)) BDefault (BVar 3)
+              (Pi (n1 (quote b)) BDefault (BVar 4)
+                (Pi (n1 (quote h)) BDefault (App (App (BVar 4) (BVar 1)) (BVar 0))
+                  (App (App (App (Const (nm_eq) (list (quot_v))) (BVar 4)) (App (BVar 3) (BVar 2))) (App (BVar 3) (BVar 1))))))
+            (Pi (n1 (quote q)) BDefault (App (App (Const (nm_quot) (list (quot_u))) (BVar 4)) (BVar 3)) (BVar 3))))))))
+
+(fn quot_ind_type () Expr
+  (Pi (n1 (quote a)) BImplicit (Sort (quot_u))
+    (Pi (n1 (quote r)) BImplicit (rel_type (BVar 0))
+      (Pi (n1 (quote b)) BImplicit (Pi (n1 (quote q)) BDefault (App (App (Const (nm_quot) (list (quot_u))) (BVar 1)) (BVar 0)) (Sort LZero))
+        (Pi (n1 (quote mk)) BDefault
+          (Pi (n1 (quote a)) BDefault (BVar 2) (App (BVar 1) (App (App (App (Const (nm_quot_mk) (list (quot_u))) (BVar 3)) (BVar 2)) (BVar 0))))
+          (Pi (n1 (quote q)) BDefault (App (App (Const (nm_quot) (list (quot_u))) (BVar 3)) (BVar 2)) (App (BVar 2) (BVar 0))))))))
+
+;; check_eq_type (quot.cpp l. 13): Eq is an inductive with one level
+;; parameter u, one constructor, type {α : Sort u} → α → α → Prop, and
+;; Eq.refl : ∀ {α : Sort u} (a : α), Eq α a a — structurally
+(fn check_eq_type ((env CheckedEnv)) Bool
+  (match (env_find env (nm_eq))
+    ((Some (InductInfo (ConstantVal _ (Cons up Nil) ty) _ _ _ (Cons ctor Nil) _ _ _ _))
+     (let ((u (LParam up)))
+       (if (bool_not (expr_eq ty (Pi (n1 (quote a)) BImplicit (Sort u) (Pi (n1 (quote a)) BDefault (BVar 0) (Pi (n1 (quote b)) BDefault (BVar 1) (Sort LZero)))))) False
+       (match (env_find env ctor)
+         ((Some (CtorInfo (ConstantVal _ (Cons cp Nil) cty) _ _ _ _ _))
+          (expr_eq cty (Pi (n1 (quote a)) BImplicit (Sort (LParam cp)) (Pi (n1 (quote a)) BDefault (BVar 0)
+                          (App (App (App (Const (nm_eq) (list (LParam cp))) (BVar 1)) (BVar 0)) (BVar 0))))))
+         (_ False)))))
+    (_ False)))
+
+(fn add_quot ((env CheckedEnv) (st St)) (KRes CheckedEnv)
+  (if (env_quot_init env) (KOk st env)
+  (if (bool_not (check_eq_type env)) (KFail (FRej (RuleViolation (quote quot_eq_shape))))
+  (match (env_check_name env (nm_quot))
+    ((Some f) (KFail f))
+    (None
+     (match (env_check_name env (nm_quot_mk))
+       ((Some f) (KFail f))
+       (None
+        (match (env_check_name env (nm_quot_lift))
+          ((Some f) (KFail f))
+          (None
+           (match (env_check_name env (nm_quot_ind))
+             ((Some f) (KFail f))
+             (None
+              (let ((u (list (n1 (quote u)))) (uv (list (n1 (quote u)) (n1 (quote v)))))
+                (match (env_add (env_add (env_add (env_add env
+                          (nm_quot) (QuotInfo (ConstantVal (nm_quot) u (quot_type)) QType))
+                          (nm_quot_mk) (QuotInfo (ConstantVal (nm_quot_mk) u (quot_mk_type)) QCtor))
+                          (nm_quot_lift) (QuotInfo (ConstantVal (nm_quot_lift) uv (quot_lift_type)) QLift))
+                          (nm_quot_ind) (QuotInfo (ConstantVal (nm_quot_ind) u (quot_ind_type)) QInd))
+                  ((CheckedEnv xs _) (KOk st (CheckedEnv xs True))))))))))))))))
+
+;; environment::add (l. 262) — the procedure of §3.3
+(fn check_decl ((env CheckedEnv) (st St) (d Declaration)) (KRes CheckedEnv)
+  (match d
+    ((AxiomDecl v unsafe)
+     (if unsafe (KFail (FRej (Unsupported (quote unsafe_declaration))))
+     (match (check_constant_val env st v Safe)
+       ((KFail f) (KFail f))
+       ((KOk st1 _) (KOk st1 (env_add env (cv_name v) (AxiomInfo v False)))))))
+    ((DefnDecl v value hints safety all)
+     (if (bool_not (safety_is_safe safety)) (KFail (FRej (Unsupported (quote unsafe_declaration))))
+     (match (check_constant_val env st v Safe)
+       ((KFail f) (KFail f))
+       ((KOk st1 _)
+        (match (check_value env st1 v value Safe)
+          ((KFail f) (KFail f))
+          ((KOk st2 _) (KOk st2 (env_add env (cv_name v) (DefnInfo v value hints safety all)))))))))
+    ((ThmDecl v value all)
+     (match (check_constant_val env st v Safe)
+       ((KFail f) (KFail f))
+       ((KOk st1 _)
+        (match (is_prop (ctx_for env (cv_lparams v) Safe) st1 (budget_depth) (cv_type v))
+          ((KFail f) (KFail f))
+          ((KOk st2 p)
+           (if (bool_not p) (KFail (FRej (RuleViolation (quote theorem_type_not_prop))))
+           (match (check_value env st2 v value Safe)
+             ((KFail f) (KFail f))
+             ((KOk st3 _) (KOk st3 (env_add env (cv_name v) (ThmInfo v value all)))))))))))
+    ((OpaqueDecl v value unsafe all)
+     (if unsafe (KFail (FRej (Unsupported (quote unsafe_declaration))))
+     (match (check_constant_val env st v Safe)
+       ((KFail f) (KFail f))
+       ((KOk st1 _)
+        (match (check_value env st1 v value Safe)
+          ((KFail f) (KFail f))
+          ((KOk st2 _) (KOk st2 (env_add env (cv_name v) (OpaqueInfo v value False all)))))))))
+    (QuotDecl (add_quot env st))
+    ((MutualDefnDecl _) (KFail (FRej (Unsupported (quote mutual_unsafe_block)))))
+    ((InductDecl lps nparams types unsafe)
+     (if unsafe (KFail (FRej (Unsupported (quote unsafe_declaration))))
+     (add_inductive_core env st lps nparams types False 0)))))
+
+;; §3.3's outcome, from a KRes
+(fn outcome_of ((r (KRes CheckedEnv)) (subject Name)) Outcome
+  (match r
+    ((KOk _ e) (Accepted e))
+    ((KFail (FRej reason)) (Rejected reason subject))
+    ((KFail (FOut res site)) (Exhausted res site))))
+
+(fn decl_name ((d Declaration)) Name
+  (match d
+    ((AxiomDecl v _) (cv_name v)) ((DefnDecl v _ _ _ _) (cv_name v)) ((ThmDecl v _ _) (cv_name v))
+    ((OpaqueDecl v _ _ _) (cv_name v)) (QuotDecl (nm_quot)) ((MutualDefnDecl _) Anon)
+    ((InductDecl _ _ (Cons t _) _) (it_name t)) ((InductDecl _ _ Nil _) Anon)))
+
+(fn check ((env CheckedEnv) (st St) (d Declaration)) Outcome
+  (outcome_of (check_decl env st d) (decl_name d)))
