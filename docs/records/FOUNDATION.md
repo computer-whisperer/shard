@@ -478,9 +478,20 @@ is `docs/FOUNDATION.md` §5.3.
   `normalize` does not re-sort after `mk_imax`; a `Type` field in a
   `Type` inductive fails the universe check before the result-shape
   check.
-- **Open in phase 1:** nested inductives (`elim_nested_inductive_fn`),
-  the memo tables, the hostile battery, the full-export run and its
-  cost measurement, the `use`-free toolchain profile's gate moving to
+- **Slices 6–8 (2026-09-06):** nested inductives (`nested.shard`, with
+  a `Lean.Syntax`-shaped two-level fixture); the fixed-identity pins of
+  §3.2 (`hash_expr`; `accel_pins.shard` generated from the pinned export;
+  a Nat/String literal is typed and an accelerator fires only under a
+  pinned identity — the same-spelled non-core `Nat.add` case leaves the
+  accelerator off, fixture in the hostile battery); the hostile battery
+  (27 refusals, each for its declared reason); `check_with` carrying
+  §3.3's limits. Cost work: the environment store is an IntMap by name
+  hash (was an association list), a 4-ary trie on bit operations (the
+  bootstrap's mod/ediv are bignum divisions), stream parsing, a changed
+  flag from `whnf_core` instead of structural re-comparison.
+- **Open in phase 1:** the memo tables, the full-export run and its
+  cost measurement, the six accelerator pins declared 24k–700k lines
+  into the export, the `use`-free toolchain profile's gate moving to
   CI.
 
 ## 9. Related records
