@@ -7,7 +7,8 @@
 # pinned line in v3/t0_expected.txt. The replay is one process over the
 # 20,000-line chunks; its peak resident set is reported (the export tables hold
 # every referenced node: 30 GB at 2026-09-07's export, 745 s) and capped by
-# V3_T0_RSS_CAP_KB (default 400 GB).
+# V3_T0_RSS_CAP_KB (default 400 GB). V3_T0_SKIP_FULL=1 runs the byte-ties only
+# (the local smoke; the dev box does not replay the whole export routinely).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 DIR=${V3_EXPORT_DIR:-.shard-cache/v3-export}
@@ -18,6 +19,8 @@ CAP_KB=${V3_T0_RSS_CAP_KB:-$((400 * 1024 * 1024))}
 [ -x "$K" ] || { echo "missing $K (v3/build.sh)"; exit 1; }
 [ -x "$RUST_EVAL" ] || { echo "missing $RUST_EVAL (cargo build --release in rust_bootstrap/)"; exit 1; }
 [ -s "$DIR/init.ndjson" ] || { echo "missing $DIR/init.ndjson (v3/export.sh)"; exit 1; }
+DIR=$(cd "$DIR" && pwd)
+K=$(cd "$(dirname "$K")" && pwd)/$(basename "$K")
 CH=$DIR/chunks
 if [ ! -d "$CH" ] || [ -z "$(ls "$CH" 2>/dev/null)" ]; then
   mkdir -p "$CH"
@@ -37,6 +40,10 @@ PRE=$(ls "$CH"/probe_000[0-4])
 cmp "$LOG.tie_interp" "$LOG.tie_native" || { echo "BYTE-TIE FAILED (chunks 0-4)"; diff "$LOG.tie_interp" "$LOG.tie_native" | head -20; exit 1; }
 echo "   chunks 0-4: identical ($(wc -l < "$LOG.tie_native") lines)"
 tail -1 "$LOG.tie_native"
+if [ "${V3_T0_SKIP_FULL:-0}" = 1 ]; then
+  echo "V3_T0_SKIP_FULL=1: byte-ties only, the full replay skipped"
+  exit 0
+fi
 
 echo "== full export: $(ls "$CH" | wc -l) chunks, compiled K"
 start=$(date +%s)
