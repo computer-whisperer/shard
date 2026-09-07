@@ -165,6 +165,17 @@ impl std::fmt::Display for EvalError {
 
 impl std::error::Error for EvalError {}
 
+// Inside the machine an error is boxed: `Result<Val, Box<EvalError>>` is
+// 40 bytes (Val's niche holds the discriminant) where the unboxed one was
+// 56, and every sub-evaluation returns one. Errors are rare and terminal.
+type EResult<T> = Result<T, Box<EvalError>>;
+
+#[cold]
+#[inline(never)]
+fn fail<T>(e: EvalError) -> EResult<T> {
+    Err(Box::new(e))
+}
+
 /// A fully-evaluated, closed value. Recursive children are `Rc`-shared
 /// so cloning a value (variable lookup, pattern capture) is O(1) — the
 /// shared-structure that makes this an environment machine rather than
@@ -199,6 +210,9 @@ enum IExpr {
     Sym(Rc<str>),
     FVar(Rc<str>),
     BVar(u32),
+    /// A zero-argument constructor, built once at lowering: evaluating it
+    /// is a clone (the general arm allocated an empty Rc slice per visit).
+    Ctor0(Val),
     Ctor(Rc<str>, Box<[IExpr]>),
     CallFn(u32, Box<[IExpr]>),
     CallOther(PrimTag, Rc<str>, Box<[IExpr]>),
@@ -245,6 +259,10 @@ struct IFn {
 
 struct Prog {
     fns: Vec<IFn>,
+    /// The interned Bool names, for the If test (pointer compares: every
+    /// runtime name is canonical, see `intern`).
+    true_name: Rc<str>,
+    false_name: Rc<str>,
 }
 
 // The CANONICAL name interner — process-wide (per thread). EVERY runtime
@@ -289,6 +307,14 @@ impl<'a> Lowerer<'a> {
             Expr::SymLit(s) => IExpr::Sym(self.intern(s)),
             Expr::FVar(s) => IExpr::FVar(self.intern(s)),
             Expr::BVar(k) => IExpr::BVar(*k),
+            // Nat former (kernel/stdlib.shard): a bare `Z` IS the literal 0
+            // (the eval arm's packing rule, decided here once).
+            Expr::Ctor(n, args) if args.is_empty() && n == "Z" => {
+                IExpr::Int(Rc::new(num_traits::Zero::zero()))
+            }
+            Expr::Ctor(n, args) if args.is_empty() => {
+                IExpr::Ctor0(Val::Ctor(self.intern(n), Rc::from([].as_slice())))
+            }
             Expr::Ctor(n, args) => IExpr::Ctor(self.intern(n), self.lower_list(args)),
             Expr::Call(n, args) => {
                 let largs = self.lower_list(args);
@@ -370,14 +396,16 @@ fn lower_program<'a>(m: &'a Module, e: &'a Expr) -> (Prog, IExpr) {
         })
         .collect();
     let ie = lo.lower(e);
-    (Prog { fns }, ie)
+    let true_name = intern("True");
+    let false_name = intern("False");
+    (Prog { fns, true_name, false_name }, ie)
 }
 
 /// Reduce `e` to normal form within the context of `m`'s definitions.
 pub fn eval(m: &Module, e: &Expr) -> Result<Expr, EvalError> {
     let (prog, ie) = lower_program(m, e);
     let mut st = Stacks { fr: Vec::with_capacity(4096), op: Vec::with_capacity(1024) };
-    let v = eval_ir(&prog, &mut st, &ie)?;
+    let v = eval_ir(&prog, &mut st, &ie).map_err(|b| *b)?;
     Ok(val_to_expr(&v))
 }
 
@@ -393,7 +421,7 @@ pub fn eval(m: &Module, e: &Expr) -> Result<Expr, EvalError> {
 // the binding stack to this invocation's entry height first, so the frame
 // it replaces (and the terms only it reached) is dropped before the next
 // step.
-fn eval_ir<'a>(prog: &'a Prog, st: &mut Stacks, e0: &'a IExpr) -> Result<Val, EvalError> {
+fn eval_ir<'a>(prog: &'a Prog, st: &mut Stacks, e0: &'a IExpr) -> EResult<Val> {
     let fb = st.fr.len();
     let ob = st.op.len();
     let r = eval_loop(prog, st, fb, e0);
@@ -402,12 +430,34 @@ fn eval_ir<'a>(prog: &'a Prog, st: &mut Stacks, e0: &'a IExpr) -> Result<Val, Ev
     r
 }
 
+/// Evaluate one sub-expression. A LEAF — a bound variable, a literal, a
+/// prebuilt constructor — is answered here without entering the machine
+/// (most arguments and scrutinees are variables); anything else recurses.
+#[inline(always)]
+fn eval_sub<'a>(prog: &'a Prog, st: &mut Stacks, e: &'a IExpr) -> EResult<Val> {
+    match e {
+        IExpr::BVar(k) => {
+            let n = st.fr.len();
+            let k = *k as usize;
+            if k < n {
+                Ok(st.fr[n - 1 - k].clone())
+            } else {
+                fail(EvalError::UnboundBVar(k as u32))
+            }
+        }
+        IExpr::Int(n) => Ok(Val::Int(n.clone())),
+        IExpr::Sym(s) => Ok(Val::Sym(s.clone())),
+        IExpr::Ctor0(v) => Ok(v.clone()),
+        _ => eval_ir(prog, st, e),
+    }
+}
+
 /// Evaluate `args` left to right against the current frame, pushing each
 /// value onto the operand stack; they end up at `st.op[mark..]` in order.
 #[inline]
-fn push_args<'a>(prog: &'a Prog, st: &mut Stacks, args: &'a [IExpr]) -> Result<(), EvalError> {
+fn push_args<'a>(prog: &'a Prog, st: &mut Stacks, args: &'a [IExpr]) -> EResult<()> {
     for a in args {
-        let v = eval_ir(prog, st, a)?;
+        let v = eval_sub(prog, st, a)?;
         st.op.push(v);
     }
     Ok(())
@@ -418,13 +468,14 @@ fn eval_loop<'a>(
     st: &mut Stacks,
     base: usize,
     e0: &'a IExpr,
-) -> Result<Val, EvalError> {
+) -> EResult<Val> {
     let mut e: &'a IExpr = e0;
     loop {
         match e {
             IExpr::Int(n) => return Ok(Val::Int(n.clone())),
             IExpr::Sym(s) => return Ok(Val::Sym(s.clone())),
             IExpr::FVar(s) => return Ok(Val::FVar(s.clone())),
+            IExpr::Ctor0(v) => return Ok(v.clone()),
 
             // A bound variable indexes the binding stack from its top.
             IExpr::BVar(k) => {
@@ -433,22 +484,20 @@ fn eval_loop<'a>(
                 if k < n {
                     return Ok(st.fr[n - 1 - k].clone());
                 }
-                return Err(EvalError::UnboundBVar(k as u32));
+                return fail(EvalError::UnboundBVar(k as u32));
             }
 
             IExpr::Ctor(name, args) => {
                 let mark = st.op.len();
                 push_args(prog, st, args)?;
                 // Nat former (kernel/stdlib.shard): ground Z/S packs to its
-                // nonneg literal — the unique ground Nat value. This engine is
-                // flat-core (names ARE identity, cf. the True/False tests
-                // below), so the gate is the bare name. A symbolic or negative
-                // argument never packs. (An early return leaves the fields on
-                // the operand stack; `eval_ir` pops them.)
+                // nonneg literal — the unique ground Nat value (`Z` itself is
+                // lowered to the literal). This engine is flat-core (names ARE
+                // identity, cf. the True/False tests below), so the gate is the
+                // bare name. A symbolic or negative argument never packs. (An
+                // early return leaves the fields on the operand stack;
+                // `eval_ir` pops them.)
                 match &**name {
-                    "Z" if args.is_empty() => {
-                        return Ok(Val::Int(Rc::new(num_traits::Zero::zero())))
-                    }
                     "S" if args.len() == 1 => {
                         if let Val::Int(n) = &st.op[mark] {
                             if !num_traits::Signed::is_negative(&**n) {
@@ -474,7 +523,7 @@ fn eval_loop<'a>(
                 let fd = &prog.fns[*i as usize];
                 prof_count(&fd.name);
                 if fd.arity != args.len() {
-                    return Err(EvalError::ArityMismatch {
+                    return fail(EvalError::ArityMismatch {
                         name: fd.name.to_string(),
                         expected: fd.arity,
                         got: args.len(),
@@ -493,14 +542,14 @@ fn eval_loop<'a>(
                 return apply_other(*tag, name, &st.op[mark..]);
             }
 
-            IExpr::If(c, t, el) => match eval_ir(prog, st, c)? {
-                Val::Ctor(ref n, ref a) if a.is_empty() && &**n == "True" => e = t,
-                Val::Ctor(ref n, ref a) if a.is_empty() && &**n == "False" => e = el,
-                other => return Err(EvalError::IfNonBool(format!("{:?}", val_to_expr(&other)))),
+            IExpr::If(c, t, el) => match eval_sub(prog, st, c)? {
+                Val::Ctor(ref n, ref a) if a.is_empty() && Rc::ptr_eq(n, &prog.true_name) => e = t,
+                Val::Ctor(ref n, ref a) if a.is_empty() && Rc::ptr_eq(n, &prog.false_name) => e = el,
+                other => return fail(EvalError::IfNonBool(format!("{:?}", val_to_expr(&other)))),
             },
 
             IExpr::Match(scrut, arms) => {
-                let v = eval_ir(prog, st, scrut)?;
+                let v = eval_sub(prog, st, scrut)?;
                 let mut next: Option<&'a IExpr> = None;
                 for arm in arms {
                     // Captures are pushed as they are matched, in capture
@@ -516,7 +565,7 @@ fn eval_loop<'a>(
                 }
                 match next {
                     Some(body) => e = body,
-                    None => return Err(EvalError::NoMatchArm(format!("{:?}", val_to_expr(&v)))),
+                    None => return fail(EvalError::NoMatchArm(format!("{:?}", val_to_expr(&v)))),
                 }
             }
 
@@ -584,7 +633,7 @@ fn both_nonneg_i64(a: &crate::ast::IntLit, b: &crate::ast::IntLit) -> Option<(i6
     if x >= 0 && y >= 0 { Some((x, y)) } else { None }
 }
 
-fn apply_other(tag: PrimTag, name: &str, args: &[Val]) -> Result<Val, EvalError> {
+fn apply_other(tag: PrimTag, name: &str, args: &[Val]) -> EResult<Val> {
     // FAST PATH: the measured-hottest primitives, applied directly on `Val`s
     // and dispatched by the PrimTag assigned at lowering (no strcmp). The
     // general path below converts every argument Val→Expr (allocating) and
@@ -700,9 +749,9 @@ fn apply_other(tag: PrimTag, name: &str, args: &[Val]) -> Result<Val, EvalError>
     if let Some(result) = EFFECTS.with(|e| {
         e.borrow_mut().as_mut().map(|h| h(name, &arg_exprs))
     }) {
-        return result.map(|out| val_of_value_expr(&out)).map_err(EvalError::Effect);
+        return result.map(|out| val_of_value_expr(&out)).map_err(|m| Box::new(EvalError::Effect(m)));
     }
-    Err(EvalError::UnknownCall(name.into()))
+    fail(EvalError::UnknownCall(name.into()))
 }
 
 // -----------------------------------------------------------------------------
