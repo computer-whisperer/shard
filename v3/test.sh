@@ -12,5 +12,9 @@ for t in v3/kernel/test/*_test.shard; do
   total=$((total+1))
   if [ "$rc" -ne 0 ]; then failed=$((failed+1)); echo "== $t: exit $rc"; echo "$out" | grep -v '^PASS' | tail -20; fi
 done
+for t in v3/kernel/test/*_test.sh; do
+  total=$((total+1))
+  if ! "$t"; then failed=$((failed+1)); echo "== $t FAILED"; fi
+done
 echo "v3 tests: $total entrypoints, $failed failed"
 exit $failed

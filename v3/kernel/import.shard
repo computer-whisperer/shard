@@ -1,0 +1,522 @@
+;;; v3/kernel/import.shard — the lean4export NDJSON import: records →
+;;; the Name/Level/Expr tables → Declarations → `check`, in export order;
+;;; and the T0 validation of K's generated inductive constants against
+;;; the exported ones (FOUNDATION §3.2, §3.6, §12.5 T0). Trusted
+;;; bring-up translation (3) of docs/TCB.md until T0 retires it.
+;;;
+;;; The export's tables share subterms by index; the IntMap tables keep
+;;; that sharing in memory. Index 0 is `anonymous` for names and `zero`
+;;; for levels (the exporter starts its numbering at 1 for both).
+
+(import "add.shard")
+(import "json.shard")
+(import "intmap.shard")
+
+(type Tabs (Tabs (IntMap Name) (IntMap Level) (IntMap Expr)))
+
+;; the run's state: tables, environment, checker state, counters
+(type Run (Run Tabs CheckedEnv St Int Int Int Int Int))   ; accepted rejected exhausted mismatched unsupported
+
+(type Verdict
+  (VAccept Name)
+  (VReject Reason Name)
+  (VExhaust Resource Symbol Name)
+  (VMismatch Name Symbol)          ; a generated constant differs from the export
+  (VUnsupported Symbol Name)
+  (VSkip)                          ; a table record or meta: no verdict
+  (VMalformed (List Int)))         ; the record could not be read
+
+(fn tabs_names ((t Tabs)) (IntMap Name) (match t ((Tabs n _ _) n)))
+(fn tabs_levels ((t Tabs)) (IntMap Level) (match t ((Tabs _ l _) l)))
+(fn tabs_exprs ((t Tabs)) (IntMap Expr) (match t ((Tabs _ _ e) e)))
+
+(fn name_at ((t Tabs) (i Int)) Name (if (int_eq i 0) Anon (match (im_find (tabs_names t) i) ((Some n) n) (None Anon))))
+(fn level_at ((t Tabs) (i Int)) Level (if (int_eq i 0) LZero (match (im_find (tabs_levels t) i) ((Some l) l) (None LZero))))
+(fn expr_at ((t Tabs) (i Int)) (Option Expr) (im_find (tabs_exprs t) i))
+
+;; ---- field readers -----------------------------------------------------------------
+
+(fn fint ((j Json) (key (List Int))) (Option Int) (match (jget j key) ((Some v) (jint v)) (None None)))
+(fn fstr ((j Json) (key (List Int))) (Option (List Int)) (match (jget j key) ((Some v) (jstr v)) (None None)))
+(fn fbool ((j Json) (key (List Int))) (Option Bool) (match (jget j key) ((Some v) (jbool v)) (None None)))
+(fn fints ((j Json) (key (List Int))) (Option (List Int))
+  (match (jget j key) ((Some (JArr xs)) (ints_of xs Nil)) (_ None)))
+(fn ints_of ((xs (List Json)) (acc (List Int))) (Option (List Int))
+  (measure (struct xs))
+  (match xs
+    (Nil (Some (rev acc)))
+    ((Cons x r) (match (jint x) ((Some n) (ints_of r (Cons n acc))) (None None)))))
+
+(fn names_at ((t Tabs) (is (List Int))) (List Name)
+  (measure (struct is))
+  (match is (Nil Nil) ((Cons i r) (Cons (name_at t i) (names_at t r)))))
+(fn levels_at ((t Tabs) (is (List Int))) (List Level)
+  (measure (struct is))
+  (match is (Nil Nil) ((Cons i r) (Cons (level_at t i) (levels_at t r)))))
+
+(fn fexpr ((t Tabs) (j Json) (key (List Int))) (Option Expr)
+  (match (fint j key) ((Some i) (expr_at t i)) (None None)))
+
+(fn binder_info_of ((s (List Int))) BinderInfo
+  (if (int_list_eq s "implicit") BImplicit
+  (if (int_list_eq s "strictImplicit") BStrictImplicit
+  (if (int_list_eq s "instImplicit") BInstImplicit
+  BDefault))))
+
+;; ---- table records ----------------------------------------------------------------
+
+;; returns the updated tables, or None for a malformed record
+(fn table_record ((t Tabs) (kind (List Int)) (j Json)) (Option Tabs)
+  (if (int_list_eq kind "str")
+    (match (jget j "str")
+      ((Some o)
+       (match (fint j "in")
+         ((Some idx)
+          (match (fint o "pre")
+            ((Some pre)
+             (match (fstr o "str")
+               ((Some s) (Some (Tabs (im_insert (tabs_names t) idx (Str (name_at t pre) (sym_of_chars s))) (tabs_levels t) (tabs_exprs t))))
+               (None None)))
+            (None None)))
+         (None None)))
+      (None None))
+  (if (int_list_eq kind "num")
+    (match (jget j "num")
+      ((Some o)
+       (match (fint j "in")
+         ((Some idx)
+          (match (fint o "pre")
+            ((Some pre)
+             (match (fint o "i")
+               ((Some i) (Some (Tabs (im_insert (tabs_names t) idx (Num (name_at t pre) i)) (tabs_levels t) (tabs_exprs t))))
+               (None None)))
+            (None None)))
+         (None None)))
+      (None None))
+  (if (int_list_eq kind "succ")
+    (match (fint j "il") ((Some idx) (match (fint j "succ") ((Some a) (Some (put_level t idx (LSucc (level_at t a))))) (None None))) (None None))
+  (if (int_list_eq kind "max")
+    (match (fint j "il")
+      ((Some idx) (match (fints j "max") ((Some (Cons a (Cons b Nil))) (Some (put_level t idx (LMax (level_at t a) (level_at t b))))) (_ None)))
+      (None None))
+  (if (int_list_eq kind "imax")
+    (match (fint j "il")
+      ((Some idx) (match (fints j "imax") ((Some (Cons a (Cons b Nil))) (Some (put_level t idx (LIMax (level_at t a) (level_at t b))))) (_ None)))
+      (None None))
+  (if (int_list_eq kind "param")
+    (match (fint j "il") ((Some idx) (match (fint j "param") ((Some n) (Some (put_level t idx (LParam (name_at t n))))) (None None))) (None None))
+  (match (fint j "ie")
+    (None None)
+    ((Some idx)
+     (match (expr_record t kind j)
+       ((Some e) (Some (Tabs (tabs_names t) (tabs_levels t) (im_insert (tabs_exprs t) idx e))))
+       (None None)))))))))))
+
+(fn put_level ((t Tabs) (idx Int) (l Level)) Tabs (Tabs (tabs_names t) (im_insert (tabs_levels t) idx l) (tabs_exprs t)))
+
+(fn expr_record ((t Tabs) (kind (List Int)) (j Json)) (Option Expr)
+  (if (int_list_eq kind "bvar") (match (fint j "bvar") ((Some n) (Some (BVar n))) (None None))
+  (if (int_list_eq kind "sort") (match (fint j "sort") ((Some l) (Some (Sort (level_at t l)))) (None None))
+  (if (int_list_eq kind "const")
+    (match (jget j "const")
+      ((Some o) (match (fint o "name") ((Some n) (match (fints o "us") ((Some us) (Some (Const (name_at t n) (levels_at t us)))) (None None))) (None None)))
+      (None None))
+  (if (int_list_eq kind "app")
+    (match (jget j "app")
+      ((Some o) (match (fexpr t o "fn") ((Some f) (match (fexpr t o "arg") ((Some a) (Some (App f a))) (None None))) (None None)))
+      (None None))
+  (if (bool_or (int_list_eq kind "lam") (int_list_eq kind "forallE"))
+    (match (jget j kind)
+      ((Some o)
+       (match (fint o "name")
+         ((Some n)
+          (match (fexpr t o "type")
+            ((Some ty)
+             (match (fexpr t o "body")
+               ((Some b)
+                (let ((bi (match (fstr o "binderInfo") ((Some s) (binder_info_of s)) (None BDefault))))
+                  (Some (if (int_list_eq kind "lam") (Lam (name_at t n) bi ty b) (Pi (name_at t n) bi ty b)))))
+               (None None)))
+            (None None)))
+         (None None)))
+      (None None))
+  (if (int_list_eq kind "letE")
+    (match (jget j "letE")
+      ((Some o)
+       (match (fint o "name")
+         ((Some n)
+          (match (fexpr t o "type")
+            ((Some ty)
+             (match (fexpr t o "value")
+               ((Some v)
+                (match (fexpr t o "body")
+                  ((Some b) (Some (Let (name_at t n) ty v b)))
+                  (None None)))
+               (None None)))
+            (None None)))
+         (None None)))
+      (None None))
+  (if (int_list_eq kind "proj")
+    (match (jget j "proj")
+      ((Some o)
+       (match (fint o "typeName")
+         ((Some n) (match (fint o "idx") ((Some i) (match (fexpr t o "struct") ((Some s) (Some (Proj (name_at t n) i s))) (None None))) (None None)))
+         (None None)))
+      (None None))
+  (if (int_list_eq kind "natVal")
+    (match (fstr j "natVal") ((Some s) (match (parse_nat s 0) ((Some n) (Some (Lit (LitNat n)))) (None None))) (None None))
+  (if (int_list_eq kind "strVal")
+    (match (fstr j "strVal") ((Some s) (Some (Lit (LitStr s)))) (None None))
+  (if (int_list_eq kind "mdata")
+    ;; transparent to every rule (expr.shard): the inner term
+    (match (jget j "mdata") ((Some o) (fexpr t o "expr")) (None None))
+  None)))))))))))
+
+;; ---- declaration records ------------------------------------------------------------
+
+(fn cval_of ((t Tabs) (o Json)) (Option ConstantVal)
+  (match (fint o "name")
+    ((Some n)
+     (match (fints o "levelParams")
+       ((Some ps)
+        (match (fexpr t o "type")
+          ((Some ty) (Some (ConstantVal (name_at t n) (names_at t ps) ty)))
+          (None None)))
+       (None None)))
+    (None None)))
+
+(fn hints_of ((j Json)) ReducibilityHints
+  (match j
+    ((JStr s) (if (int_list_eq s "abbrev") HAbbrev HOpaque))
+    (_ (match (fint j "regular") ((Some n) (HRegular n)) (None HOpaque)))))
+
+(fn safety_of ((s (List Int))) DefinitionSafety
+  (if (int_list_eq s "unsafe") Unsafe (if (int_list_eq s "partial") Partial Safe)))
+
+(fn decl_record ((t Tabs) (kind (List Int)) (j Json)) (Option Declaration)
+  (match (jget j kind)
+    (None None)
+    ((Some o)
+     (if (int_list_eq kind "axiom")
+       (match (cval_of t o) ((Some cv) (Some (AxiomDecl cv (match (fbool o "isUnsafe") ((Some b) b) (None False))))) (None None))
+     (if (int_list_eq kind "def")
+       (match (cval_of t o)
+         ((Some cv)
+          (match (fexpr t o "value")
+            ((Some v)
+             (Some (DefnDecl cv v
+                     (match (jget o "hints") ((Some h) (hints_of h)) (None HOpaque))
+                     (match (fstr o "safety") ((Some s) (safety_of s)) (None Safe))
+                     (match (fints o "all") ((Some xs) (names_at t xs)) (None Nil)))))
+            (None None)))
+         (None None))
+     (if (int_list_eq kind "thm")
+       (match (cval_of t o)
+         ((Some cv)
+          (match (fexpr t o "value")
+            ((Some v) (Some (ThmDecl cv v (match (fints o "all") ((Some xs) (names_at t xs)) (None Nil)))))
+            (None None)))
+         (None None))
+     (if (int_list_eq kind "opaque")
+       (match (cval_of t o)
+         ((Some cv)
+          (match (fexpr t o "value")
+            ((Some v) (Some (OpaqueDecl cv v (match (fbool o "isUnsafe") ((Some b) b) (None False)) (match (fints o "all") ((Some xs) (names_at t xs)) (None Nil)))))
+            (None None)))
+         (None None))
+     None)))))))
+
+;; the exported inductive block: (types, ctors, recs) as Json arrays
+(fn inductive_parts ((j Json)) (Option (Pair (List Json) (Pair (List Json) (List Json))))
+  (match (jget j "inductive")
+    (None None)
+    ((Some o)
+     (match (jget o "types")
+       ((Some (JArr ts))
+        (match (jget o "ctors")
+          ((Some (JArr cs))
+           (match (jget o "recs")
+             ((Some (JArr rs)) (Some (Pair ts (Pair cs rs))))
+             (_ None)))
+          (_ None)))
+       (_ None)))))
+
+;; the raw declaration from the exported block
+(fn induct_decl_of ((t Tabs) (ts (List Json)) (cs (List Json))) (Option Declaration)
+  (match ts
+    (Nil None)
+    ((Cons t0 _)
+     (match (fints t0 "levelParams")
+       (None None)
+       ((Some lps)
+        (match (fint t0 "numParams")
+          (None None)
+          ((Some np)
+           (match (induct_types_of t ts cs Nil)
+             (None None)
+             ((Some types)
+              (Some (InductDecl (names_at t lps) np types (match (fbool t0 "isUnsafe") ((Some b) b) (None False)))))))))))))
+
+(fn induct_types_of ((t Tabs) (ts (List Json)) (cs (List Json)) (acc (List InductiveType))) (Option (List InductiveType))
+  (measure (struct ts))
+  (match ts
+    (Nil (Some (rev acc)))
+    ((Cons tj r)
+     (match (fint tj "name")
+       (None None)
+       ((Some n)
+        (match (fexpr t tj "type")
+          (None None)
+          ((Some ty)
+           (match (fints tj "ctors")
+             (None None)
+             ((Some cidx)
+              (match (ctors_of t cs (names_at t cidx) Nil)
+                (None None)
+                ((Some ctors) (induct_types_of t r cs (Cons (InductiveType (name_at t n) ty ctors) acc)))))))))))))
+
+;; the constructors named, in the exported order of the type's ctor list
+(fn ctors_of ((t Tabs) (cs (List Json)) (names (List Name)) (acc (List Constructor))) (Option (List Constructor))
+  (measure (struct names))
+  (match names
+    (Nil (Some (rev acc)))
+    ((Cons n r)
+     (match (find_ctor_json t cs n)
+       (None None)
+       ((Some cj)
+        (match (fexpr t cj "type")
+          (None None)
+          ((Some ty) (ctors_of t cs r (Cons (Constructor n ty) acc)))))))))
+
+(fn find_ctor_json ((t Tabs) (cs (List Json)) (n Name)) (Option Json)
+  (measure (struct cs))
+  (match cs
+    (Nil None)
+    ((Cons cj r) (match (fint cj "name") ((Some i) (if (name_eq (name_at t i) n) (Some cj) (find_ctor_json t r n))) (None (find_ctor_json t r n))))))
+
+;; ---- T0 validation: the exported constants against K's generated ones -------------------
+
+(fn nested_count ((ts (List Json))) Int
+  (match ts ((Cons t0 _) (match (fint t0 "numNested") ((Some n) n) (None 0))) (Nil 0)))
+
+;; every exported InductiveVal / ConstructorVal / RecursorVal must match K's
+(fn validate_inductive ((t Tabs) (env CheckedEnv) (ts (List Json)) (cs (List Json)) (rs (List Json))) (Option Symbol)
+  (match (validate_types t env ts)
+    ((Some s) (Some s))
+    (None
+     (match (validate_ctors t env cs)
+       ((Some s) (Some s))
+       (None (validate_recs t env rs))))))
+
+(fn validate_types ((t Tabs) (env CheckedEnv) (ts (List Json))) (Option Symbol)
+  (measure (struct ts))
+  (match ts
+    (Nil None)
+    ((Cons tj r)
+     (match (fint tj "name")
+       (None (Some (quote type_record)))
+       ((Some ni)
+        (match (env_find env (name_at t ni))
+          ((Some (InductInfo (ConstantVal _ lps ty) np nidx all ctors nn isrec _ isrefl))
+           (if (bool_not (opt_int_eq (fint tj "numParams") np)) (Some (quote numParams))
+           (if (bool_not (opt_int_eq (fint tj "numIndices") nidx)) (Some (quote numIndices))
+           (if (bool_not (opt_names_eq t (fints tj "all") all)) (Some (quote all))
+           (if (bool_not (opt_names_eq t (fints tj "ctors") ctors)) (Some (quote ctors))
+           (if (bool_not (opt_names_eq t (fints tj "levelParams") lps)) (Some (quote levelParams))
+           (if (bool_not (opt_bool_eq (fbool tj "isRec") isrec)) (Some (quote isRec))
+           (if (bool_not (opt_bool_eq (fbool tj "isReflexive") isrefl)) (Some (quote isReflexive))
+           (if (bool_not (opt_expr_eq (fexpr t tj "type") ty)) (Some (quote type))
+           (validate_types t env r))))))))))
+          (_ (Some (quote inductive_missing)))))))))
+
+(fn validate_ctors ((t Tabs) (env CheckedEnv) (cs (List Json))) (Option Symbol)
+  (measure (struct cs))
+  (match cs
+    (Nil None)
+    ((Cons cj r)
+     (match (fint cj "name")
+       (None (Some (quote ctor_record)))
+       ((Some ni)
+        (match (env_find env (name_at t ni))
+          ((Some (CtorInfo (ConstantVal _ lps ty) induct cidx np nf _))
+           (if (bool_not (opt_name_eq t (fint cj "induct") induct)) (Some (quote induct))
+           (if (bool_not (opt_int_eq (fint cj "cidx") cidx)) (Some (quote cidx))
+           (if (bool_not (opt_int_eq (fint cj "numParams") np)) (Some (quote ctor_numParams))
+           (if (bool_not (opt_int_eq (fint cj "numFields") nf)) (Some (quote numFields))
+           (if (bool_not (opt_names_eq t (fints cj "levelParams") lps)) (Some (quote ctor_levelParams))
+           (if (bool_not (opt_expr_eq (fexpr t cj "type") ty)) (Some (quote ctor_type))
+           (validate_ctors t env r))))))))
+          (_ (Some (quote ctor_missing)))))))))
+
+(fn validate_recs ((t Tabs) (env CheckedEnv) (rs (List Json))) (Option Symbol)
+  (measure (struct rs))
+  (match rs
+    (Nil None)
+    ((Cons rj r)
+     (match (fint rj "name")
+       (None (Some (quote rec_record)))
+       ((Some ni)
+        (match (env_find env (name_at t ni))
+          ((Some (RecInfo (ConstantVal _ lps ty) all np nidx nmot nmin rules k _))
+           (if (bool_not (opt_names_eq t (fints rj "levelParams") lps)) (Some (quote rec_levelParams))
+           (if (bool_not (opt_expr_eq (fexpr t rj "type") ty)) (Some (quote rec_type))
+           (if (bool_not (opt_names_eq t (fints rj "all") all)) (Some (quote rec_all))
+           (if (bool_not (opt_int_eq (fint rj "numParams") np)) (Some (quote rec_numParams))
+           (if (bool_not (opt_int_eq (fint rj "numIndices") nidx)) (Some (quote rec_numIndices))
+           (if (bool_not (opt_int_eq (fint rj "numMotives") nmot)) (Some (quote numMotives))
+           (if (bool_not (opt_int_eq (fint rj "numMinors") nmin)) (Some (quote numMinors))
+           (if (bool_not (opt_bool_eq (fbool rj "k") k)) (Some (quote k))
+           (match (jget rj "rules")
+             ((Some (JArr rjs)) (match (validate_rules t rjs rules) ((Some s) (Some s)) (None (validate_recs t env r))))
+             (_ (Some (quote rules_record)))))))))))))
+          (_ (Some (quote rec_missing)))))))))
+
+(fn validate_rules ((t Tabs) (rjs (List Json)) (rules (List RecursorRule))) (Option Symbol)
+  (measure (struct rjs))
+  (match rjs
+    (Nil (match rules (Nil None) (_ (Some (quote rule_count)))))
+    ((Cons rj rr)
+     (match rules
+       (Nil (Some (quote rule_count)))
+       ((Cons (RecursorRule cn nf rhs) rules_r)
+        (if (bool_not (opt_name_eq t (fint rj "ctor") cn)) (Some (quote rule_ctor))
+        (if (bool_not (opt_int_eq (fint rj "nfields") nf)) (Some (quote rule_nfields))
+        (if (bool_not (opt_expr_eq (fexpr t rj "rhs") rhs)) (Some (quote rule_rhs))
+        (validate_rules t rr rules_r)))))))))
+
+(fn opt_int_eq ((o (Option Int)) (n Int)) Bool (match o ((Some m) (int_eq m n)) (None False)))
+(fn opt_bool_eq ((o (Option Bool)) (b Bool)) Bool (match o ((Some c) (if b c (bool_not c))) (None False)))
+(fn opt_expr_eq ((o (Option Expr)) (e Expr)) Bool (match o ((Some x) (expr_eq x e)) (None False)))
+(fn opt_name_eq ((t Tabs) (o (Option Int)) (n Name)) Bool (match o ((Some i) (name_eq (name_at t i) n)) (None False)))
+(fn opt_names_eq ((t Tabs) (o (Option (List Int))) (ns (List Name))) Bool (match o ((Some is) (names_eq (names_at t is) ns)) (None False)))
+
+;; a "quot" record: the first one adds the four constants; every one is
+;; validated against K's own (types structurally equal)
+(fn quot_record ((t Tabs) (env CheckedEnv) (st St) (j Json)) (Pair (KRes CheckedEnv) (Option Symbol))
+  (match (jget j "quot")
+    (None (Pair (KFail (FRej (Malformed (quote quot_record)))) None))
+    ((Some o)
+     (match (add_quot env st)
+       ((KFail f) (Pair (KFail f) None))
+       ((KOk st1 env1)
+        (match (fint o "name")
+          (None (Pair (KOk st1 env1) (Some (quote quot_record))))
+          ((Some ni)
+           (match (env_find env1 (name_at t ni))
+             ((Some (QuotInfo (ConstantVal _ lps ty) _))
+              (if (bool_not (opt_names_eq t (fints o "levelParams") lps)) (Pair (KOk st1 env1) (Some (quote quot_levelParams)))
+              (if (bool_not (opt_expr_eq (fexpr t o "type") ty)) (Pair (KOk st1 env1) (Some (quote quot_type)))
+              (Pair (KOk st1 env1) None))))
+             (_ (Pair (KOk st1 env1) (Some (quote quot_missing))))))))))))
+
+;; ---- one record ---------------------------------------------------------------------------
+
+(fn run_tabs ((r Run)) Tabs (match r ((Run t _ _ _ _ _ _ _) t)))
+(fn run_env ((r Run)) CheckedEnv (match r ((Run _ e _ _ _ _ _ _) e)))
+(fn run_st ((r Run)) St (match r ((Run _ _ s _ _ _ _ _) s)))
+(fn run_counts ((r Run)) (List Int) (match r ((Run _ _ _ a b c d e) (list a b c d e))))
+(fn run_with_tabs ((r Run) (t Tabs)) Run (match r ((Run _ e s a b c d f) (Run t e s a b c d f))))
+(fn run_with_env ((r Run) (e CheckedEnv) (s St)) Run (match r ((Run t _ _ a b c d f) (Run t e s a b c d f))))
+(fn run_count ((r Run) (which Int)) Run
+  (match r
+    ((Run t e s a b c d f)
+     (if (int_eq which 0) (Run t e s (+ a 1) b c d f)
+     (if (int_eq which 1) (Run t e s a (+ b 1) c d f)
+     (if (int_eq which 2) (Run t e s a b (+ c 1) d f)
+     (if (int_eq which 3) (Run t e s a b c (+ d 1) f)
+     (Run t e s a b c d (+ f 1)))))))))
+
+;; the verdict of checking one declaration and the run afterwards
+(fn check_into ((r Run) (d Declaration)) (Pair Run Verdict)
+  (match (check_decl (run_env r) (run_st r) d)
+    ((KOk st1 env1) (Pair (run_count (run_with_env r env1 st1) 0) (VAccept (decl_name d))))
+    ((KFail (FRej (Unsupported s))) (Pair (run_count r 4) (VUnsupported s (decl_name d))))
+    ((KFail (FRej reason)) (Pair (run_count r 1) (VReject reason (decl_name d))))
+    ((KFail (FOut res site)) (Pair (run_count r 2) (VExhaust res site (decl_name d))))))
+
+(fn process_record ((r Run) (line (List Int))) (Pair Run Verdict)
+  (match (json_parse line)
+    (JErr (Pair r (VMalformed "json")))
+    ((JRes j _)
+     (match (jkind_of_record j)
+       (None (Pair r (VMalformed "kind")))
+       ((Some kind)
+        (if (int_list_eq kind "meta") (Pair r VSkip)
+        (if (int_list_eq kind "inductive")
+          (match (inductive_parts j)
+            (None (Pair r (VMalformed "inductive")))
+            ((Some (Pair ts (Pair cs rs)))
+             (if (lt 0 (nested_count ts))
+               (Pair (run_count r 4) (VUnsupported (quote nested_inductive) (first_type_name (run_tabs r) ts)))
+               (match (induct_decl_of (run_tabs r) ts cs)
+                 (None (Pair r (VMalformed "inductive-decl")))
+                 ((Some d)
+                  (match (check_into r d)
+                    ((Pair r1 (VAccept n))
+                     (match (validate_inductive (run_tabs r1) (run_env r1) ts cs rs)
+                       (None (Pair r1 (VAccept n)))
+                       ((Some s) (Pair (run_count r1 3) (VMismatch n s)))))
+                    ((Pair r1 v) (Pair r1 v))))))))
+        (if (int_list_eq kind "quot")
+          (match (quot_record (run_tabs r) (run_env r) (run_st r) j)
+            ((Pair (KFail (FRej reason)) _) (Pair (run_count r 1) (VReject reason (nm_quot))))
+            ((Pair (KFail (FOut res site)) _) (Pair (run_count r 2) (VExhaust res site (nm_quot))))
+            ((Pair (KOk st1 env1) None) (Pair (run_count (run_with_env r env1 st1) 0) (VAccept (nm_quot))))
+            ((Pair (KOk st1 env1) (Some s)) (Pair (run_count (run_with_env r env1 st1) 3) (VMismatch (nm_quot) s))))
+        (match (decl_record (run_tabs r) kind j)
+          ((Some d) (check_into r d))
+          (None
+           (match (table_record (run_tabs r) kind j)
+             ((Some t1) (Pair (run_with_tabs r t1) VSkip))
+             (None (Pair r (VMalformed kind))))))))))))))
+
+(fn first_type_name ((t Tabs) (ts (List Json))) Name
+  (match ts ((Cons t0 _) (match (fint t0 "name") ((Some i) (name_at t i)) (None Anon))) (Nil Anon)))
+
+(fn show_reason ((r Reason)) (List Int)
+  (match r
+    ((Malformed s) (append "Malformed:" (chars_of_sym s)))
+    ((RuleViolation s) (append "RuleViolation:" (chars_of_sym s)))
+    ((Unsupported s) (append "Unsupported:" (chars_of_sym s)))
+    ((UnresolvedObligation s) (append "UnresolvedObligation:" (chars_of_sym s)))
+    (ConversionNotEstablished "ConversionNotEstablished")))
+
+(fn show_resource ((r Resource)) (List Int)
+  (match r (RHeartbeats "heartbeats") (RRecDepth "rec_depth") (RNatSize "nat_size") (RNatCount "nat_count") (RDecode "decode") (RAlloc "alloc")))
+
+(fn show_verdict ((v Verdict)) (Option (List Int))
+  (match v
+    ((VAccept n) (Some (append "ACCEPT " (show_name n))))
+    ((VReject reason n) (Some (append "REJECT " (append (show_reason reason) (append " " (show_name n))))))
+    ((VExhaust res site n) (Some (append "EXHAUSTED " (append (show_resource res) (append "@" (append (chars_of_sym site) (append " " (show_name n))))))))
+    ((VMismatch n s) (Some (append "MISMATCH " (append (chars_of_sym s) (append " " (show_name n))))))
+    ((VUnsupported s n) (Some (append "UNSUPPORTED " (append (chars_of_sym s) (append " " (show_name n))))))
+    (VSkip None)
+    ((VMalformed k) (Some (append "MALFORMED " k)))))
+
+;; process every line of a chunk; verbose = print ACCEPT lines too
+(fn process_lines ((r Run) (bs (List Int)) (verbose Bool) (w World)) (Pair Run World)
+  (measure (struct bs))
+  (match bs
+    (Nil (Pair r w))
+    (_
+     (match (take_line bs Nil)
+       ((Pair line rest)
+        (match line
+          (Nil (process_lines r rest verbose w))
+          (_
+           (match (process_record r line)
+             ((Pair r1 v)
+              (let ((w1 (match (show_verdict v)
+                          (None w)
+                          ((Some s) (match v ((VAccept _) (if verbose (write_line s w) w)) (_ (write_line s w)))))))
+                (process_lines r1 rest verbose w1)))))))))))
+
+(fn show_counts ((r Run)) (List Int)
+  (match (run_counts r)
+    ((Cons a (Cons b (Cons c (Cons d (Cons e Nil)))))
+     (append "accepted " (append (show_nat a) (append "  rejected " (append (show_nat b) (append "  exhausted " (append (show_nat c)
+       (append "  mismatched " (append (show_nat d) (append "  unsupported " (show_nat e)))))))))))
+    (_ "")))
+
+(fn empty_run () Run (Run (Tabs IMEmpty IMEmpty IMEmpty) (CheckedEnv Nil False) (St 0 0) 0 0 0 0 0))

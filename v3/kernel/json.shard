@@ -1,0 +1,192 @@
+;;; v3/kernel/json.shard — a JSON reader over UTF-8 bytes, for the
+;;; lean4export NDJSON import (v3/README.md pin; format 3.1.0). Part of
+;;; the trusted bring-up translation (3) of docs/TCB.md; retired by T0.
+;;; Numbers are kept as their digit strings (natVal literals can exceed
+;;; any fixed width); objects keep their key order.
+
+(import "util.shard")
+
+(type Json
+  (JNull)
+  (JBool Bool)
+  (JNum (List Int))                 ; the number's characters
+  (JStr (List Int))                 ; UTF-8 bytes, escapes decoded
+  (JArr (List Json))
+  (JObj (List (Pair (List Int) Json))))
+
+;; the parse result: value and the remaining input, or None on malformed input
+(type JRes (JRes Json (List Int)) (JErr))
+
+(fn is_ws ((c Int)) Bool (bool_or (int_eq c 32) (bool_or (int_eq c 10) (bool_or (int_eq c 13) (int_eq c 9)))))
+
+(fn skip_ws ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs ((Cons c r) (if (is_ws c) (skip_ws r) bs)) (Nil Nil)))
+
+(fn starts_with_lit ((lit (List Int)) (bs (List Int))) (Option (List Int))
+  (measure (struct lit))
+  (match lit
+    (Nil (Some bs))
+    ((Cons c lr) (match bs ((Cons b br) (if (int_eq c b) (starts_with_lit lr br) None)) (Nil None)))))
+
+(fn is_digit ((c Int)) Bool (bool_and (le 48 c) (le c 57)))
+
+(fn json_parse ((bs0 (List Int))) JRes
+  (measure (struct bs0))
+  (let ((bs (skip_ws bs0)))
+    (match bs
+      (Nil JErr)
+      ((Cons c r)
+       (if (int_eq c 123) (parse_object r Nil)
+       (if (int_eq c 91) (parse_array r Nil)
+       (if (int_eq c 34) (match (parse_string r Nil) ((Some (Pair s rest)) (JRes (JStr s) rest)) (None JErr))
+       (if (bool_or (is_digit c) (int_eq c 45)) (parse_number bs Nil)
+       (match (starts_with_lit "true" bs)
+         ((Some rest) (JRes (JBool True) rest))
+         (None
+          (match (starts_with_lit "false" bs)
+            ((Some rest) (JRes (JBool False) rest))
+            (None
+             (match (starts_with_lit "null" bs)
+               ((Some rest) (JRes JNull rest))
+               (None JErr))))))))))))))
+
+(fn parse_number ((bs (List Int)) (acc (List Int))) JRes
+  (measure (struct bs))
+  (match bs
+    ((Cons c r)
+     (if (bool_or (is_digit c) (bool_or (int_eq c 45) (bool_or (int_eq c 46) (bool_or (int_eq c 101) (bool_or (int_eq c 69) (int_eq c 43))))))
+       (parse_number r (Cons c acc))
+       (JRes (JNum (rev acc)) bs)))
+    (Nil (JRes (JNum (rev acc)) Nil))))
+
+;; after the opening quote; escapes decoded; \uXXXX (with surrogate pairs) to UTF-8
+(fn parse_string ((bs (List Int)) (acc (List Int))) (Option (Pair (List Int) (List Int)))
+  (measure (struct bs))
+  (match bs
+    (Nil None)
+    ((Cons c r)
+     (if (int_eq c 34) (Some (Pair (rev acc) r))
+     (if (int_eq c 92)
+       (match r
+         (Nil None)
+         ((Cons e r2)
+          (if (int_eq e 117)
+            (match (parse_hex4 r2)
+              (None None)
+              ((Some (Pair cp r3))
+               (if (bool_and (le 55296 cp) (le cp 56319))
+                 ;; high surrogate: expect \uDCxx
+                 (match r3
+                   ((Cons 92 (Cons 117 r4))
+                    (match (parse_hex4 r4)
+                      ((Some (Pair lo r5)) (parse_string r5 (rev_onto (utf8_encode (+ 65536 (+ (* (- cp 55296) 1024) (- lo 56320)))) acc)))
+                      (None None)))
+                   (_ None))
+                 (parse_string r3 (rev_onto (utf8_encode cp) acc)))))
+            (parse_string r2 (Cons (unescape e) acc)))))
+       (parse_string r (Cons c acc)))))))
+
+(fn unescape ((e Int)) Int
+  (if (int_eq e 110) 10 (if (int_eq e 116) 9 (if (int_eq e 114) 13 (if (int_eq e 98) 8 (if (int_eq e 102) 12 e))))))
+
+(fn hex_val ((c Int)) Int
+  (if (is_digit c) (- c 48)
+  (if (bool_and (le 97 c) (le c 102)) (+ 10 (- c 97))
+  (if (bool_and (le 65 c) (le c 70)) (+ 10 (- c 65)) (- 0 1)))))
+
+(fn parse_hex4 ((bs (List Int))) (Option (Pair Int (List Int)))
+  (match bs
+    ((Cons a (Cons b (Cons c (Cons d r))))
+     (let ((v (+ (* (hex_val a) 4096) (+ (* (hex_val b) 256) (+ (* (hex_val c) 16) (hex_val d))))))
+       (if (lt v 0) None (Some (Pair v r)))))
+    (_ None)))
+
+(fn utf8_encode ((cp Int)) (List Int)
+  (if (lt cp 128) (list cp)
+  (if (lt cp 2048) (list (+ 192 (ediv cp 64)) (+ 128 (mod cp 64)))
+  (if (lt cp 65536) (list (+ 224 (ediv cp 4096)) (+ 128 (mod (ediv cp 64) 64)) (+ 128 (mod cp 64)))
+  (list (+ 240 (ediv cp 262144)) (+ 128 (mod (ediv cp 4096) 64)) (+ 128 (mod (ediv cp 64) 64)) (+ 128 (mod cp 64)))))))
+
+(fn parse_array ((bs0 (List Int)) (acc (List Json))) JRes
+  (measure (struct bs0))
+  (let ((bs (skip_ws bs0)))
+    (match bs
+      ((Cons 93 r) (JRes (JArr (rev acc)) r))
+      (_
+       (match (json_parse bs)
+         (JErr JErr)
+         ((JRes v rest)
+          (match (skip_ws rest)
+            ((Cons 44 r2) (parse_array r2 (Cons v acc)))
+            ((Cons 93 r2) (JRes (JArr (rev (Cons v acc))) r2))
+            (_ JErr))))))))
+
+(fn parse_object ((bs0 (List Int)) (acc (List (Pair (List Int) Json)))) JRes
+  (measure (struct bs0))
+  (let ((bs (skip_ws bs0)))
+    (match bs
+      ((Cons 125 r) (JRes (JObj (rev acc)) r))
+      ((Cons 34 r)
+       (match (parse_string r Nil)
+         (None JErr)
+         ((Some (Pair key rest))
+          (match (skip_ws rest)
+            ((Cons 58 r2)
+             (match (json_parse r2)
+               (JErr JErr)
+               ((JRes v rest2)
+                (match (skip_ws rest2)
+                  ((Cons 44 r3) (parse_object r3 (Cons (Pair key v) acc)))
+                  ((Cons 125 r3) (JRes (JObj (rev (Cons (Pair key v) acc))) r3))
+                  (_ JErr)))))
+            (_ JErr)))))
+      (_ JErr))))
+
+;; ---- accessors --------------------------------------------------------------
+
+(fn jget ((j Json) (key (List Int))) (Option Json)
+  (match j ((JObj fields) (jget_fields fields key)) (_ None)))
+(fn jget_fields ((fs (List (Pair (List Int) Json))) (key (List Int))) (Option Json)
+  (measure (struct fs))
+  (match fs
+    (Nil None)
+    ((Cons (Pair k v) r) (if (int_list_eq k key) (Some v) (jget_fields r key)))))
+
+(fn jint ((j Json)) (Option Int)
+  (match j ((JNum cs) (parse_int cs)) (_ None)))
+
+(fn parse_int ((cs (List Int))) (Option Int)
+  (match cs
+    ((Cons 45 r) (match (parse_nat r 0) ((Some n) (Some (- 0 n))) (None None)))
+    (_ (parse_nat cs 0))))
+(fn parse_nat ((cs (List Int)) (acc Int)) (Option Int)
+  (measure (struct cs))
+  (match cs
+    (Nil (Some acc))
+    ((Cons c r) (if (is_digit c) (parse_nat r (+ (* acc 10) (- c 48))) None))))
+
+(fn jstr ((j Json)) (Option (List Int)) (match j ((JStr s) (Some s)) (_ None)))
+(fn jbool ((j Json)) (Option Bool) (match j ((JBool b) (Some b)) (_ None)))
+(fn jarr ((j Json)) (Option (List Json)) (match j ((JArr xs) (Some xs)) (_ None)))
+
+;; the first key of an object — the record's kind in the export format
+(fn jkind ((j Json)) (Option (List Int)) (match j ((JObj (Cons (Pair k _) _)) (Some k)) (_ None)))
+
+;; the record kind of an export line: the key that is not "in"/"il"/"ie"
+(fn jkind_of_record ((j Json)) (Option (List Int))
+  (match j ((JObj fs) (jkind_go fs)) (_ None)))
+(fn jkind_go ((fs (List (Pair (List Int) Json)))) (Option (List Int))
+  (measure (struct fs))
+  (match fs
+    (Nil None)
+    ((Cons (Pair k _) r)
+     (if (bool_or (int_list_eq k "in") (bool_or (int_list_eq k "il") (int_list_eq k "ie"))) (jkind_go r) (Some k)))))
+
+;; split a byte list at newlines: (line, rest) — the line without its newline
+(fn take_line ((bs (List Int)) (acc (List Int))) (Pair (List Int) (List Int))
+  (measure (struct bs))
+  (match bs
+    (Nil (Pair (rev acc) Nil))
+    ((Cons 10 r) (Pair (rev acc) r))
+    ((Cons c r) (take_line r (Cons c acc)))))
