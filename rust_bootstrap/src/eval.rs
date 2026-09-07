@@ -342,6 +342,13 @@ enum IExpr {
     CallFn(u32, Box<[IExpr]>),
     CallOther(PrimTag, Rc<str>, Box<[IExpr]>),
     If(Box<IExpr>, Box<IExpr>, Box<IExpr>),
+    /// `(if (CMP a b) t e)` with a comparison primitive as the condition —
+    /// the shape of most branches: the two operands are computed in place
+    /// and the branch taken on the machine compare, with no Bool value
+    /// built, cloned and dropped and no recursive evaluation of the
+    /// condition. Operand shapes the fast compare does not cover fall back
+    /// to the primitive itself (the name is kept for that).
+    IfCmp(PrimTag, Rc<str>, Box<[IExpr]>, Box<IExpr>, Box<IExpr>),
     Match(Box<IExpr>, Box<[IArm]>),
     Let(Box<[IExpr]>, Box<IExpr>),
 }
@@ -525,11 +532,34 @@ impl<'a> Lowerer<'a> {
                     }
                 }
             }
-            Expr::If(c, t, el) => IExpr::If(
-                Box::new(self.lower(c)),
-                Box::new(self.lower(t)),
-                Box::new(self.lower(el)),
-            ),
+            Expr::If(c, t, el) => {
+                if let Expr::Call(n, args) = &**c {
+                    if args.len() == 2 && !self.fnidx.contains_key(n.as_str()) {
+                        let tag = match n.as_str() {
+                            "int_eq" => Some(PrimTag::IntEq),
+                            "lt" => Some(PrimTag::Lt),
+                            "le" => Some(PrimTag::Le),
+                            "sym_eq" => Some(PrimTag::SymEq),
+                            _ => None,
+                        };
+                        if let Some(tag) = tag {
+                            let ab = self.lower_args(args);
+                            return IExpr::IfCmp(
+                                tag,
+                                Rc::from(n.as_str()),
+                                ab,
+                                Box::new(self.lower(t)),
+                                Box::new(self.lower(el)),
+                            );
+                        }
+                    }
+                }
+                IExpr::If(
+                    Box::new(self.lower(c)),
+                    Box::new(self.lower(t)),
+                    Box::new(self.lower(el)),
+                )
+            }
             // The scrutinee's and the condition's values go to a Rust local,
             // never onto the stack: the arms see the outer layout, plus the
             // captures a fired arm pushes.
@@ -770,6 +800,38 @@ fn eval_loop<'a>(prog: &'a Prog, st: &mut Stack, base: usize, e0: &'a IExpr) -> 
                 Val::Ctor(ref c) if c.len() == 0 && c.name() == FALSE_ID => e = el,
                 other => return fail(EvalError::IfNonBool(format!("{:?}", val_to_expr(&other)))),
             },
+
+            IExpr::IfCmp(tag, name, ab, t, el) => {
+                let mark = st.len();
+                push_args(prog, st, ab)?;
+                let cond = match (tag, &st[mark..]) {
+                    (PrimTag::IntEq, [Val::Int(x), Val::Int(y)]) => {
+                        prof_count_prim("int_eq");
+                        x == y
+                    }
+                    (PrimTag::Lt, [Val::Int(x), Val::Int(y)]) => {
+                        prof_count_prim("lt");
+                        x < y
+                    }
+                    (PrimTag::Le, [Val::Int(x), Val::Int(y)]) => {
+                        prof_count_prim("le");
+                        x <= y
+                    }
+                    (PrimTag::SymEq, [Val::Sym(a), Val::Sym(b)]) => {
+                        prof_count_prim("sym_eq");
+                        a == b
+                    }
+                    _ => match apply_other(*tag, name, &st[mark..])? {
+                        Val::Ctor(ref c) if c.len() == 0 && c.name() == TRUE_ID => true,
+                        Val::Ctor(ref c) if c.len() == 0 && c.name() == FALSE_ID => false,
+                        other => {
+                            return fail(EvalError::IfNonBool(format!("{:?}", val_to_expr(&other))))
+                        }
+                    },
+                };
+                st.truncate(mark);
+                e = if cond { t } else { el };
+            }
 
             IExpr::Match(scrut, arms) => {
                 let v = eval_sub(prog, st, scrut)?;
