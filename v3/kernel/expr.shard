@@ -1,0 +1,197 @@
+;;; v3/kernel/expr.shard — L terms (Lean `Expr`) and the rules over them.
+;;;
+;;; Reconciled against src/kernel/expr.h, type_checker.cpp, inductive.h
+;;; (v4.33.1). Line numbers are into type_checker.cpp unless said.
+;;; Representation choices that are NOT rule departures:
+;;;   - no MVar: refused in inputs (l. 342 "does not support meta
+;;;     variables"); K's metavariables live in meta (FOUNDATION §6).
+;;;   - no MData: transparent to every rule (infer l. 339, whnf l. 742,
+;;;     quick_is_def_eq); stripped at import (the exporter drops it).
+;;;   - FVar is K-internal: locally nameless checking opens a binder with
+;;;     a fresh FVar in a local context; a raw input containing one is
+;;;     Malformed (`check_no_metavar_no_fvar`).
+;;;   - de Bruijn indices and projection indices are Int ≥ 0.
+
+(import "level.shard")
+
+(type BinderInfo
+  (BDefault)
+  (BImplicit)
+  (BStrictImplicit)
+  (BInstImplicit))
+;; Binder info never affects a judgment; it is display/elaboration data
+;; carried through for the exporter round trip and for I (§7). The C++
+;; enum also has `Rec` (legacy); the exporter does not emit it — Malformed
+;; if seen.
+
+(type Literal
+  (LitNat Int)          ; a Nat numeral (GMP); ≥ 0; size-bounded (below)
+  (LitStr (List Int)))  ; a string literal as its UTF-8 bytes
+
+(type Expr
+  (BVar Int)                        ; bound variable, de Bruijn index
+  (FVar Int)                        ; K-internal free variable (local context id)
+  (Sort Level)                      ; Sort u
+  (Const Name (List Level))         ; a constant with universe arguments
+  (App Expr Expr)                   ; f a
+  (Lam Name BinderInfo Expr Expr)   ; fun (x : A) => b   — name is display only
+  (Pi  Name BinderInfo Expr Expr)   ; (x : A) → B
+  (Let Name Expr Expr Expr)         ; let x : A := v; b
+  (Lit Literal)
+  (Proj Name Int Expr))             ; e.i on structure S: (Proj S i e)
+
+;; ======================================================================
+;; TYPING — `infer_type_core(e, infer_only)` (l. 325). With infer_only
+;; false every rule also CHECKS; K's `check` is the checking mode, and
+;; the inference-only mode is an internal accelerator that must agree.
+;; Results are memoized per mode.
+;;
+;;   BVar      unreachable: a checked term is closed; binders are opened
+;;             with FVars (l. 344 `lean_unreachable`). Loose bvar in a raw
+;;             input → Malformed.
+;;   FVar      its type in the local context (l. 93); unknown → Malformed.
+;;   Sort u    check_level u (declared params only); type = Sort (u+1).
+;;   Const c ls
+;;             c must exist; length ls = c's level-parameter count
+;;             (l. 105 "incorrect number of universe levels parameters");
+;;             checking mode: c unsafe ⇒ the checked declaration must be
+;;             unsafe; c partial ⇒ the checked declaration must not be
+;;             safe (l. 110–116); each l in ls check_level'd; type =
+;;             c's type with its level params instantiated by ls.
+;;   App f a   f's type whnf'd must be a Pi (l. 175 `ensure_pi_core`, else
+;;             "function expected"); a's type must be def-eq to the
+;;             domain (l. 184, else "application type mismatch"); the
+;;             `eagerReduce _ _` argument form sets the eager flag for
+;;             that comparison (l. 178); type = codomain[a].
+;;   Lam x A b infer_lambda (l. 125): A checks as a type (ensure_sort of
+;;             A's type); open x as an FVar; type = Pi x A (type of b).
+;;   Pi x A B  infer_pi (l. 144): A : Sort u, B : Sort v (each ensure_sort);
+;;             type = Sort (imax u v) — impredicative Prop.
+;;   Let x A v b
+;;             infer_let (l. 208): A a type; v's type def-eq A; body under
+;;             an FVar whose local decl carries the value (whnf may
+;;             zeta-expand it, l. 744 `is_let_fvar`); type = type of b[v].
+;;   Lit (LitNat n)
+;;             infer_lit (l. 315): the numeral's byte size is bounded by
+;;             LEAN_NAT_MAX_SIZE (`check_nat_size`, else an exception K
+;;             reports as Exhausted(nat_size)); type = Nat.
+;;   Lit (LitStr s)
+;;             type = String (the pinned `String`; its expansion below).
+;;   Proj S i e
+;;             infer_proj (l. 247): e's type whnf's to `S params indices`
+;;             with S an inductive with exactly one constructor
+;;             (else "invalid projection"); walk the constructor's type
+;;             past the params (instantiated with the actual params) and
+;;             the first i fields (each dependent field instantiated with
+;;             `Proj S j e`); if the struct type is a proposition, every
+;;             field passed and the result must be propositions (no data
+;;             out of a proof); type = the i-th field's type.
+
+;; ======================================================================
+;; REDUCTION — `whnf_core(e, cheap_rec, cheap_proj)` (l. 468) and
+;; `whnf(e)` (l. 736).
+;;
+;;   whnf_core (no delta, no Nat/native extensions), memoized:
+;;     BVar Sort Pi Lit          : itself
+;;     FVar                      : itself unless a let-bound local (zeta)
+;;     MData                     : the inner term
+;;     Proj                      : reduce_proj (l. 444): whnf_core the
+;;                                 struct (whnf if not cheap_proj); if it
+;;                                 is a string literal, expand it first
+;;                                 (l. 421); if a constructor application
+;;                                 with enough args, the i-th field.
+;;     App                       : whnf_core the head; Lam head → beta
+;;                                 (all available args at once, l. 523);
+;;                                 Const head → reduce_recursor (below);
+;;                                 changed head → rebuild and recurse.
+;;     Let x A v b               : zeta — b[v] (l. 543).
+;;   reduce_recursor (l. 393): quot_reduce_rec first, then
+;;     inductive_reduce_rec (inductive.h l. 77):
+;;       major index = nparams + nmotives + nminors + nindices;
+;;       K-like target: major replaced by the nullary constructor when its
+;;         type is def-eq to the recursor's expected inductive
+;;         (`to_cnstr_when_K`);
+;;       major := whnf(major); a Nat literal → `Nat.succ (n-1)` / Nat.zero
+;;         (`nat_lit_to_constructor`); a string literal → whnf of its
+;;         expansion; otherwise `to_cnstr_when_structure`: for a
+;;         non-recursive single-constructor type (not a proposition) a
+;;         non-constructor major is eta-expanded to `mk e.0 … e.(n-1)`;
+;;       rule := the rule whose ctor is the major's head (none → stuck);
+;;       rhs := rule.rhs with the recursor's level params := the
+;;         recursor's level arguments (counts must match, else stuck),
+;;         applied to the first nparams+nmotives+nminors rec args, then
+;;         the major's LAST nfields args, then the args after the major.
+;;     quot_reduce_rec (quot.h): `Quot.lift f h (Quot.mk r a) rest…` ⇒
+;;       `f a rest…` (major at index 5); `Quot.ind h (Quot.mk r a)` ⇒
+;;       `h a`; the major is whnf'd first and must be a `Quot.mk` app.
+;;   whnf (l. 736): loop { t := whnf_core t; native (below) ; reduce_nat
+;;     (below); else unfold_definition t (delta, l. 589: the head constant
+;;     must have a value — a DEFINITION or a THEOREM, never opaque/axiom
+;;     — and exactly its level-parameter count of arguments) } until no
+;;     step applies; memoized.
+;;   reduce_nat (l. 702): on `Nat.succ lit` and on the binary ops
+;;     Nat.add sub mul div mod gcd beq ble land lor xor shiftLeft
+;;     shiftRight pow log2 with BOTH arguments literals or `Nat.zero`:
+;;     compute (GMP); `beq`/`ble` yield Bool.true/false; results and
+;;     inputs size-bounded; `pow`/`shiftLeft` count must fit 32 bits
+;;     (else Exhausted, l. 671/686). K binds each op name to the
+;;     admitted declaration's fixed identity (FOUNDATION §3.2), validated
+;;     at phase 0/T0 against the export.
+;;   reduce_native (l. 614): `Lean.reduceBool c` / `Lean.reduceNat c` run
+;;     compiled code — sound only under axiom `Lean.ofReduceBool`, outside
+;;     the standard profile: K returns Unsupported at that site.
+
+;; ======================================================================
+;; DEFINITIONAL EQUALITY — `is_def_eq_core(t, s)` (l. 1171), in EXACTLY
+;; this order (the order is observable through budgets and caches):
+;;   0. quick_is_def_eq (l. 835): pointer/structural equality or a cached
+;;      success → true; same kind and Lam/Pi → is_def_eq_binding (domains
+;;      then bodies under a shared FVar, l. 785); Sort → level
+;;      is_equivalent; Lit → literal equality; else undecided.
+;;   1. `s` is `Bool.true` and `t` closed (or eager): if whnf(t) is
+;;      Bool.true → true (the `decide` path, l. 1180).
+;;   2. t_n := whnf_core(t, cheap_proj=true), s_n likewise; if either
+;;      changed, quick_is_def_eq again.
+;;   3. is_def_eq_proof_irrel (l. 932): if t_n's type is a proposition,
+;;      the answer is whether the two TYPES are def-eq.
+;;   4. lazy_delta_reduction (l. 1088), a loop: is_def_eq_offset (both
+;;      `Nat.zero`/0 → true; both `succ`/positive literals → recurse on
+;;      predecessors); if no FVars (or eager) reduce_nat on either side
+;;      and recurse; reduce_native on either side and recurse; then one
+;;      lazy_delta_reduction_step (l. 999): neither side delta → stop
+;;      undecided; one side delta → unfold it (unless the OTHER side is
+;;      a projection application that whnf_core can reduce — reduce that
+;;      instead, l. 1010); both delta → compare ReducibilityHints:
+;;      unfold the greater height (abbrev counts as greatest, opaque as
+;;      least); equal heights of the SAME regular constant with
+;;      arguments → try levels + argument-wise equality first (cached
+;;      failure prevents retry); else unfold both; then quick_is_def_eq
+;;      decides or the loop continues.
+;;   5. same Const name with def-eq levels → true; same FVar → true.
+;;   6. Proj with the same struct and index → lazy_delta_proj_reduction
+;;      (l. 1123) on the struct terms, falling back to reducing both
+;;      projections; true if that succeeds.
+;;   7. whnf_core with full projection reduction; if changed, recurse.
+;;   8. is_def_eq_app (l. 911): same-length applications with def-eq
+;;      heads and def-eq arguments pairwise.
+;;   9. try_eta_expansion (l. 874), both directions: `fun x => b` vs `s`
+;;      where s's whnf'd type is a Pi ⇒ compare with `fun x => s x`.
+;;  10. try_eta_struct (l. 889), both directions: s = `mk a_1 … a_n` of a
+;;      non-recursive structure with nparams+nfields args, types def-eq,
+;;      and each `Proj i t` def-eq `a_i`.
+;;  11. try_string_lit_expansion (l. 1145), both directions: a string
+;;      literal against a `String.ofList …` application ⇒ compare the
+;;      literal's expansion.
+;;  12. is_def_eq_unit_like (l. 1159): t's type whnf's to a non-recursive
+;;      structure with a zero-field constructor and the types are def-eq
+;;      ⇒ true.
+;;  13. false. Successes are cached symmetrically (l. 1248).
+;;
+;; String literal expansion (inductive.cpp l. 1368, at v4.33.1):
+;;   "…" ⇒ String.ofList (List.cons.{0} Char (Char.ofNat c₁)
+;;                          (… (List.nil.{0} Char)))
+;;   over the UTF-8-decoded scalar values c_i as Nat literals. The head
+;;   is `String.ofList` (g_string_mk, inductive.cpp l. 1394) — the
+;;   logical String is `String.ofByteArray` (v3/INVENTORY.md); the
+;;   kernel's literal rule goes through `ofList`, whose body relates
+;;   the two. Exactness means K expands to this term, not to `String.mk`.

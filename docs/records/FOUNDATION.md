@@ -381,6 +381,9 @@ replacement gate.
   representation swap that the README calls the project's signature
   move had no library-level statement. §4.4 now states it for the
   library's own types, with the counted heap as the general case.
+- FOUNDATION §3.2 (v0.1–v0.8) called theorems "opaque for unfolding";
+  the pinned kernel unfolds them (`has_value`). Corrected at ratification
+  + phase 0, 2026-09-06, from the sources.
 - v0.7 restated Lean's `String` as `List Char` from memory (R35); the
   pinned export decides shapes and the contract now says so instead of
   restating any. v0.7 also filed derived orderings under reconstruction
@@ -433,8 +436,27 @@ is `docs/FOUNDATION.md` §5.3.
   `models/pio`, `tools/wasmgen`, `tools/x86gen`, `tools/impgen`'s
   frozen oracles, `examples/snake_game` (v1).
 - **The trusted bring-up translations** are named in `docs/TCB.md`.
-- **Not started:** K's rule inventory and procedure document
-  (`v3/kernel/RULES.md`) — the last phase 0 deliverable.
+- **K's rule inventory** (2026-09-06, user ruling: shard declarations with
+  the rules as comments, not prose): `v3/kernel/{prelude,name,level,expr,
+  decl,env}.shard` plus `v3/kernel/README.md` (the reconciliation ledger,
+  20 items beyond the thesis, and the procedure). Reconciled against the
+  pinned `src/kernel` sources (fetched at `819816b`), Carneiro 2019 and
+  Lean4Lean. Gate: the closure loads and runs under the Rust bootstrap
+  (`eval direct` on a probe entrypoint importing `env.shard`; exit 0) —
+  the instrument for the toolchain profile; `bin/check` is not (it
+  resolves type names through path-derived `use` lines the package root
+  does not share, LAYOUT.md).
+- **The toolchain-source profile, fixed (phase 0):** today's `(type …)`
+  forms with the stdlib names the Rust loader has built in (`Nil Cons True
+  False Some None Z S`), indices as `Int` — exactly what `kernel/*.shard`
+  is; `v3/kernel/prelude.shard` is the stdlib copy. The naming law governs
+  S; the V3 reader carries this profile at the flip (FOUNDATION §9.2).
+- **Two findings against the pin while writing the inventory:** (1)
+  FOUNDATION §3.2 said theorems are "opaque for unfolding" — the pinned
+  kernel's `constant_info::has_value()` is `is_theorem() || is_definition()`,
+  so theorems ARE delta-reducible; §3.2 corrected. (2) at v4.33.1 a string
+  literal expands to `String.ofList (List.cons Char (Char.ofNat c) …)`, not
+  `String.mk …` (`inductive.cpp` l. 1368, 1394); the inventory says so.
 
 ## 8. Related records
 

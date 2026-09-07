@@ -125,8 +125,10 @@ variables (locally nameless), `Sort`, `Pi`, `lambda`, `app`, `let`,
 constant with universe arguments, `Nat` literal, `String` literal,
 projection. Definitional equality: beta, delta, iota, zeta, eta
 (functions and structures), proof irrelevance, Nat-literal computation,
-Quot computation. Declarations: `definition`, `theorem` (opaque for
-unfolding), `opaque`, `axiom` (tracked), `inductive` (strict
+Quot computation. Declarations: `definition`, `theorem` (delta-reducible like a
+definition — the pinned kernel's `has_value` includes theorems; corrected
+2026-09-06 from "opaque for unfolding"), `opaque` (never unfolded),
+`axiom` (tracked), `inductive` (strict
 positivity, universe constraints, mutual and nested per Lean's
 admission fragment; K generates and validates recursors), `Quot`.
 Axioms of the standard profile and no others: `propext`, `Quot.sound`,

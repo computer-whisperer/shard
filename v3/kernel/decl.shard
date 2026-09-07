@@ -1,0 +1,168 @@
+;;; v3/kernel/decl.shard — declarations (raw inputs) and constants
+;;; (checked environment entries), with admission per kind.
+;;;
+;;; Reconciled against src/kernel/declaration.h, environment.cpp,
+;;; inductive.cpp, quot.cpp (v4.33.1). Shapes follow the lean4export
+;;; NDJSON format 3.1.0 field for field (v3/README.md pin), so the
+;;; import is a re-encoding, not a translation.
+
+(import "expr.shard")
+
+(type ReducibilityHints
+  (HOpaque)        ; never unfolded by lazy delta preference (still delta-reducible by whnf)
+  (HAbbrev)        ; unfolded first
+  (HRegular Int))  ; definitional height; greater height unfolds first
+
+(type DefinitionSafety (Unsafe) (Safe) (Partial))
+;; K's standard profile admits Safe only; Unsafe/Partial declarations are
+;; Unsupported at raw admission (the exporter omits them by default).
+;; Rule (type_checker.cpp l. 110–116): a checked declaration of safety s
+;; may reference a constant c only if: c unsafe ⇒ s unsafe; c partial ⇒
+;; s ≠ safe.
+
+;; name, universe parameters, type — the header every constant has.
+(type ConstantVal (ConstantVal Name (List Name) Expr))
+;; check_constant_val (environment.cpp l. 127): check_name; no duplicate
+;; level parameter; no mvar/fvar in the type; the type checks under the
+;; level parameters and its type is a Sort (`ensure_sort`).
+
+(type RecursorRule (RecursorRule Name Int Expr))   ; ctor, nfields, rhs
+
+(type QuotKind (QType) (QCtor) (QLift) (QInd))
+
+;; A CHECKED environment entry (Lean ConstantInfo). Only admission builds
+;; one (FOUNDATION §3.5): a raw Declaration becomes a ConstantInfo by
+;; passing `check`, never by re-tagging.
+(type ConstantInfo
+  (AxiomInfo ConstantVal Bool)                                   ; isUnsafe
+  (DefnInfo ConstantVal Expr ReducibilityHints DefinitionSafety (List Name))  ; value hints safety all
+  (ThmInfo ConstantVal Expr (List Name))                         ; value all — DELTA-REDUCIBLE (has_value)
+  (OpaqueInfo ConstantVal Expr Bool (List Name))                 ; value isUnsafe all — never unfolded
+  (QuotInfo ConstantVal QuotKind)
+  (InductInfo ConstantVal Int Int (List Name) (List Name) Int Bool Bool Bool)
+    ; nparams nindices all ctors nnested isRec isUnsafe isReflexive
+  (CtorInfo ConstantVal Name Int Int Int Bool)                   ; induct cidx nparams nfields isUnsafe
+  (RecInfo ConstantVal (List Name) Int Int Int Int (List RecursorRule) Bool Bool))
+    ; all nparams nindices nmotives nminors rules k isUnsafe
+    ; major premise index = nparams + nmotives + nminors + nindices
+
+(type Constructor (Constructor Name Expr))                      ; name, type
+(type InductiveType (InductiveType Name Expr (List Constructor)))
+
+;; A RAW declaration — the input to `check` (Lean Declaration).
+(type Declaration
+  (AxiomDecl ConstantVal Bool)
+  (DefnDecl ConstantVal Expr ReducibilityHints DefinitionSafety (List Name))
+  (ThmDecl ConstantVal Expr (List Name))
+  (OpaqueDecl ConstantVal Expr Bool (List Name))
+  (QuotDecl)
+  (MutualDefnDecl (List Declaration))            ; each a DefnDecl; unsafe/partial only
+  (InductDecl (List Name) Int (List InductiveType) Bool))   ; lparams nparams types isUnsafe
+
+;; ======================================================================
+;; ADMISSION — `environment::add` (environment.cpp l. 262), per kind:
+;;
+;;   AxiomDecl   check_constant_val. Nothing else: the axiom is TRACKED
+;;               (§3.2: standard profile = propext, Quot.sound,
+;;               Classical.choice; any other axiom in a declaration's
+;;               closure is an assumption-policy matter above K, reported
+;;               in the receipt; `Lean.ofReduceBool` is outside the profile).
+;;   DefnDecl    (safe) check_constant_val; value has no mvar/fvar; value
+;;               checks under the level params; its type is def-eq to the
+;;               declared type ("definition type mismatch"). (unsafe:
+;;               header first, add, then the body may be recursive —
+;;               Unsupported in the standard profile.)
+;;   ThmDecl     as DefnDecl, plus the declared type must be a
+;;               proposition (`is_prop`, "theorem type is not Prop").
+;;               Note: the pin shares the value/type DAG before checking
+;;               (`sharecommon_persistent_fn`) — a representation matter.
+;;   OpaqueDecl  as DefnDecl; the value is checked but the constant never
+;;               unfolds.
+;;   MutualDefnDecl
+;;               non-empty; all the same safety, which must NOT be safe
+;;               ("not tagged as unsafe/partial"); same level params;
+;;               distinct names; headers checked, all added, then each
+;;               body checked in the extended environment. Unsupported in
+;;               the standard profile (safe mutual recursion arrives at K
+;;               already compiled to recursors / WellFounded.fix).
+;;   QuotDecl    add_quot (quot.cpp l. 40): once per environment; `Eq`
+;;               must exist as an inductive with one level param, one
+;;               constructor, type `{α : Sort u} → α → α → Prop` and
+;;               `Eq.refl : ∀ {α} (a : α), Eq a a` EXACTLY; the four
+;;               names free; then add
+;;                 Quot.{u}      : {α : Sort u} → (α → α → Prop) → Sort u
+;;                 Quot.mk.{u}   : {α} → (r : α → α → Prop) → α → Quot r
+;;                 Quot.lift.{u,v}: {α} {r} {β : Sort v} (f : α → β) →
+;;                                 (∀ a b, r a b → f a = f b) → Quot r → β
+;;                 Quot.ind.{u}  : {α} {r} {β : Quot r → Prop} →
+;;                                 (∀ a, β (Quot.mk r a)) → ∀ q, β q
+;;               as QuotInfo constants with the matching kinds, and mark
+;;               the environment quot-initialized. Computation:
+;;               expr.shard `quot_reduce_rec`. `Quot.sound` is an ordinary
+;;               axiom of the profile, not a kernel constant.
+;;   InductDecl  add_inductive (inductive.cpp l. 1235), in order:
+;;               (a) no mvar/fvar and no auxiliary-name reference in any
+;;                   type or constructor type;
+;;               (b) check_uniform_ind_occs: every syntactic occurrence of
+;;                   a type being declared, in every constructor type, is
+;;                   applied to the declaration's own level params and to
+;;                   the parameter binders in order (l. 134 comment);
+;;                   nparams must be small;
+;;               (c) elim_nested_inductive: nested occurrences `J … (I …) …`
+;;                   replaced by auxiliary mutual types; nnested counted;
+;;               (d) add_inductive_fn on the auxiliary declaration:
+;;                   check_inductive_types (l. 254): each type's name and
+;;                     `<name>.rec` free; no mvar/fvar; the type checks;
+;;                     its first nparams binders are the params (def-eq
+;;                     across all types, "parameters of all inductive
+;;                     datatypes must match"), the rest are indices; the
+;;                     result is a Sort (`ensure_sort`), the same level
+;;                     for every type in the block ("must live in the
+;;                     same universe"); is_not_zero recorded;
+;;                   is_rec / is_reflexive computed (l. 308, 337);
+;;                   declare the types;
+;;                   check_constructors (l. 456): distinct names, free
+;;                     names; no mvar/fvar; the type checks; the first
+;;                     nparams binders def-eq the params ("does not match
+;;                     inductive datatypes parameters"); every further
+;;                     field's sort is `is_geq`-below the result level
+;;                     unless the result level normalizes to zero
+;;                     ("universe level … too big"); check_positivity on
+;;                     each field (whnf; no occurrence → ok; a Pi whose
+;;                     domain mentions the type → "non positive
+;;                     occurrence"; a Pi → recurse into the codomain; a
+;;                     valid application of a declared type → ok; anything
+;;                     else → "non valid occurrence"), where a valid
+;;                     application is the type constant applied to
+;;                     exactly the params (syntactically) and its indices,
+;;                     with NO occurrence of a declared type inside the
+;;                     indices (lean4#2125); the constructor's result is a
+;;                     valid application of ITS type ("invalid return
+;;                     type");
+;;                   declare the constructors;
+;;                   init_elim_level (l. 580): elim_only_at_universe_zero
+;;                     (l. 522) ⇒ motive into Prop only; else a fresh
+;;                     level param `u` (first of u, u_1, … not taken);
+;;                   init_K_target: single type, result level normalizes
+;;                     to zero, one constructor with zero fields;
+;;                   mk_rec_infos / collect_minor_premises /
+;;                   declare_recursors (l. 632–829): one recursor per
+;;                     type in the block, sharing all motives and minors;
+;;                     shape `params → motives → minors → indices → major
+;;                     → motive indices major`; a minor premise per
+;;                     constructor takes its fields and an inductive
+;;                     hypothesis per recursive field (reflexive fields
+;;                     give function-typed hypotheses); each RecursorRule's
+;;                     rhs is `fun params motives minors fields => minor
+;;                     fields ihs` with the ihs built by applying the
+;;                     recursor; check_recursors re-checks every generated
+;;                     type and rule (l. 829, 862);
+;;               (e) restore_nested: the auxiliary recursors are renamed
+;;                   and their types/rules rewritten back to the nested
+;;                   form; the original nested applications are type
+;;                   checked in the final environment; every rewritten
+;;                   constructor type, recursor type and rule rhs is
+;;                   re-checked (l. 1318–1345).
+;;               K GENERATES the recursors by this algorithm and, on an
+;;               import, VALIDATES the exported RecInfo/rules against its
+;;               own generation declaration-for-declaration (§3.2, T0).

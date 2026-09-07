@@ -19,7 +19,7 @@ modules by differential runs.
 | the shared-type inventory | `INVENTORY.md` | DRAFTED 2026-09-06 (from the pinned sources; validated by T0's export) |
 | the port manifest | `MANIFEST.md` | DRAFTED 2026-09-06 — labels proposed per family, the user rules |
 | the translations that remain trusted during bring-up | `docs/TCB.md` "V3 bring-up" | DONE 2026-09-06 |
-| K's rule inventory and procedure document | `kernel/RULES.md` | NOT STARTED — the last phase 0 item |
+| K's rule inventory and procedure | `kernel/README.md` + `kernel/{prelude,name,level,expr,decl,env}.shard` | DONE 2026-09-06 — declarations with the rules as comments (user ruling); reconciled against the pinned `src/kernel`; loads under the Rust bootstrap |
 | `LAYOUT.md` gains `v3/` | `docs/LAYOUT.md` | DONE 2026-09-06 |
 
 ## The pin (2026-09-06)
@@ -45,7 +45,7 @@ each against v4.33.1 and records any bump here.
 v3/README.md      this file: root, pins, phase status
 v3/MANIFEST.md    the port manifest — PORT / ARCHIVE / REGENERATE per family
 v3/INVENTORY.md   the shared-type inventory — imported identity, fields, view, realization
-v3/kernel/        phase 1: K (RULES.md first), then ev and the loader tower
+v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K's fns, then ev and the loader tower
 v3/meta/          phase 3: the elaborators, I, the goal graph, tactics
 v3/std/           phase 3: the first library under the naming law
 v3/pins/          the corpus law of the new tree (T0's hostile battery first)
