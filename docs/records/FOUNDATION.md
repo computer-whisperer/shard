@@ -495,6 +495,31 @@ is `docs/FOUNDATION.md` §5.3.
   and `List`) admitted, and its three exported recursors
   (`Lean.Syntax.rec`, `rec_1`, `rec_2`) equal to K's generated ones
   field for field and rule for rule.
+- **T0 through export line 180,000 (2026-09-06):** chunks 0–8 (2,418
+  declarations) accepted 2,417 / rejected 0 / mismatched 1, then a crash
+  in chunk 9. Both findings fixed with fixtures: (1) `MonadReaderOf.rec`
+  — `consume_type_annotations` lacked `semiOutParam`; the pin's list is
+  `Expr.consumeTypeAnnotations` in `Lean/Expr.lean` (exported into the
+  C++ kernel), optParam/autoParam at arity 2 and outParam/semiOutParam
+  at arity 1, and the first Init class carrying `semiOutParam` on a
+  parameter is `MonadReaderOf` (the outParam classes before it passed);
+  (2) `Nat.pow` with exponent 0 — the size guard evaluated `(ediv max b)`
+  under `bool_and`, which is a strict function in E, and the bootstrap's
+  `ediv` by zero is a stuck primitive that surfaces as the entrypoint
+  error "expected a World as the last argument". Rule for K's authors:
+  a guard over a partial primitive is a nested `if`, never a `bool_and`
+  operand.
+- **Sharing measurement (2026-09-06):** per 20,000-line chunk of the
+  export, the DAG size (distinct expression-table entries reachable
+  from each declaration) against the expanded tree size. DAG size is
+  flat at 20k–50k nodes per chunk; tree size is 74k (chunk 0), 454k
+  (chunk 4), 19.5M (chunk 18), 27.3M (chunk 24, two declarations); the
+  tree/DAG ratio runs 2.75 → 720, and the check time per chunk under the
+  plain tree representation tracks the tree size (13 s, 118 s for
+  chunks 0 and 4) with no correlation to DAG size. Conclusion: the
+  representation must see the export's sharing; the tree cannot check
+  Init. The representation ruling is pending (annotated nodes with
+  identity, as the pin, versus a hash-consed index arena).
 - **Open in phase 1:** the memo tables, the full-export run and its
   cost measurement, the six accelerator pins declared 24k–700k lines
   into the export, the `use`-free toolchain profile's gate moving to
