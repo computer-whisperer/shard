@@ -23,8 +23,10 @@
 //! variant, so a value structurally cannot carry a free index. That is
 //! exactly the invariant the substitution machine relied on by hand.
 
-use std::cell::RefCell;
+use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::ptr::NonNull;
 use std::rc::Rc;
 
 use crate::ast::{Expr, FnDef, Module, Pat};
@@ -170,10 +172,14 @@ fn fail<T>(e: EvalError) -> EResult<T> {
     Err(Box::new(e))
 }
 
-/// A fully-evaluated, closed value. Recursive children are `Rc`-shared
-/// so cloning a value (variable lookup, pattern capture) is O(1) — the
-/// shared-structure that makes this an environment machine rather than
-/// a substitution machine.
+/// A fully-evaluated, closed value, SIXTEEN BYTES: a tag and one word.
+/// Every result of the machine is one of these, so it comes back in two
+/// registers and goes onto the stack with one store (at 40 bytes — two
+/// fat pointers in the constructor arm — the moves through returns and
+/// pushes were a quarter of the samples). Recursive children are
+/// refcount-shared so cloning a value (variable lookup, pattern capture)
+/// is O(1) — the shared structure that makes this an environment machine
+/// rather than a substitution machine.
 #[derive(Clone)]
 enum Val {
     /// An integer that fits a machine word — every index, code, hash and
@@ -183,9 +189,119 @@ enum Val {
     /// is the only constructor, so `Int` and `Big` never compare equal and
     /// a `Big` is never zero). Rc keeps the clone O(1).
     Big(Rc<crate::ast::IntLit>),
-    Sym(Rc<str>),
-    FVar(Rc<str>),
-    Ctor(Rc<str>, Rc<[Val]>),
+    /// An interned name id (see `intern`): equal names are equal ids.
+    Sym(u32),
+    FVar(u32),
+    /// A constructor application behind one thin pointer (see `CtorRef`).
+    Ctor(CtorRef),
+}
+
+const _: () = assert!(std::mem::size_of::<Val>() == 16);
+
+/// A constructor value: ONE allocation holding a header (refcount, name
+/// id, field count) with the fields inline after it, reached through a
+/// thin pointer. `Rc<[Val]>` would be a fat pointer (and the name a second
+/// one), which is what kept `Val` at 40 bytes. Non-atomic refcount, like
+/// `Rc`; `!Send` like `Rc` (NonNull). Dropping the last reference drops
+/// the fields in order and frees the block.
+struct CtorRef {
+    ptr: NonNull<CtorHeader>,
+}
+
+#[repr(C)]
+struct CtorHeader {
+    rc: Cell<usize>,
+    name: u32,
+    len: u32,
+}
+
+impl CtorRef {
+    fn layout(len: usize) -> Layout {
+        let size = std::mem::size_of::<CtorHeader>() + len * std::mem::size_of::<Val>();
+        let align = std::mem::align_of::<CtorHeader>().max(std::mem::align_of::<Val>());
+        Layout::from_size_align(size, align).expect("constructor layout")
+    }
+
+    /// The header is 16 bytes and 8-aligned, so the fields start right
+    /// after it at `Val`'s alignment.
+    #[inline]
+    fn fields_ptr(&self) -> *mut Val {
+        unsafe { self.ptr.as_ptr().add(1) as *mut Val }
+    }
+
+    fn new<I: ExactSizeIterator<Item = Val>>(name: u32, fields: I) -> CtorRef {
+        let len = fields.len();
+        let layout = Self::layout(len);
+        unsafe {
+            let p = alloc(layout) as *mut CtorHeader;
+            if p.is_null() {
+                handle_alloc_error(layout);
+            }
+            p.write(CtorHeader { rc: Cell::new(1), name, len: len as u32 });
+            let f = p.add(1) as *mut Val;
+            let mut i = 0;
+            for v in fields {
+                assert!(i < len, "constructor field iterator overran its length");
+                f.add(i).write(v);
+                i += 1;
+            }
+            assert!(i == len, "constructor field iterator ended short");
+            CtorRef { ptr: NonNull::new_unchecked(p) }
+        }
+    }
+
+    #[inline]
+    fn header(&self) -> &CtorHeader {
+        unsafe { self.ptr.as_ref() }
+    }
+
+    #[inline]
+    fn name(&self) -> u32 {
+        self.header().name
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.header().len as usize
+    }
+
+    #[inline]
+    fn fields(&self) -> &[Val] {
+        unsafe { std::slice::from_raw_parts(self.fields_ptr(), self.len()) }
+    }
+}
+
+impl Clone for CtorRef {
+    #[inline]
+    fn clone(&self) -> CtorRef {
+        let h = self.header();
+        h.rc.set(h.rc.get() + 1);
+        CtorRef { ptr: self.ptr }
+    }
+}
+
+impl Drop for CtorRef {
+    #[inline]
+    fn drop(&mut self) {
+        let h = self.header();
+        let rc = h.rc.get() - 1;
+        h.rc.set(rc);
+        if rc == 0 {
+            let len = self.len();
+            unsafe {
+                let f = self.fields_ptr();
+                for i in 0..len {
+                    std::ptr::drop_in_place(f.add(i));
+                }
+                dealloc(self.ptr.as_ptr() as *mut u8, Self::layout(len));
+            }
+        }
+    }
+}
+
+#[inline]
+fn ctor0(name: u32) -> Val {
+    Val::Ctor(CtorRef::new(name, std::iter::empty()))
 }
 
 /// The one way an arbitrary-precision result becomes a `Val`: canonical
@@ -204,10 +320,9 @@ fn int_val(n: crate::ast::IntLit) -> Val {
 // where everything per-step-expensive is precomputed:
 //   - integer literals are prebuilt `Val`s — evaluating one is a clone (a
 //     word copy for an i64), where the AST walk cloned the BigInt every time;
-//   - ctor / symbol names are INTERNED `Rc<str>` — evaluating a Ctor shares
-//     the name instead of `Rc::from(&str)` (alloc + memcpy) per evaluation,
-//     and pattern-match name tests are `Rc::ptr_eq` (same interner on both
-//     sides) with a string fallback only for values built outside it;
+//   - ctor / symbol names are INTERNED ids (`intern`) — evaluating a Ctor
+//     or a symbol carries a u32, and every pattern-match name test is an
+//     integer compare;
 //   - call heads are RESOLVED: a user fn becomes an index into the lowered
 //     fn table (no per-call HashMap+SipHash lookup), and the measured-hot
 //     primitives carry a PrimTag so dispatch is a jump, not a strcmp chain.
@@ -217,13 +332,13 @@ fn int_val(n: crate::ast::IntLit) -> Val {
 
 enum IExpr {
     Int(Val),
-    Sym(Rc<str>),
-    FVar(Rc<str>),
+    Sym(u32),
+    FVar(u32),
     BVar(u32),
     /// A zero-argument constructor, built once at lowering: evaluating it
     /// is a clone (the general arm allocated an empty Rc slice per visit).
     Ctor0(Val),
-    Ctor(Rc<str>, Box<[IExpr]>),
+    Ctor(u32, Box<[IExpr]>),
     CallFn(u32, Box<[IExpr]>),
     CallOther(PrimTag, Rc<str>, Box<[IExpr]>),
     If(Box<IExpr>, Box<IExpr>, Box<IExpr>),
@@ -259,10 +374,10 @@ enum IPat {
     /// A literal pattern, prebuilt canonical (`int_val`), so the test is a
     /// word compare for an i64 and never confuses the two integer shapes.
     Int(Val),
-    Sym(Rc<str>),
+    Sym(u32),
     /// A constructor pattern; the flag says every sub-pattern is a variable
     /// (the common shape), so a match binds the fields with one slice copy.
-    Ctor(Rc<str>, Box<[IPat]>, bool),
+    Ctor(u32, Box<[IPat]>, bool),
 }
 
 struct IFn {
@@ -273,39 +388,59 @@ struct IFn {
 
 struct Prog {
     fns: Vec<IFn>,
-    /// The interned Bool names, for the If test (pointer compares: every
-    /// runtime name is canonical, see `intern`).
-    true_name: Rc<str>,
-    false_name: Rc<str>,
 }
 
 // The CANONICAL name interner — process-wide (per thread). EVERY runtime
-// name `Rc<str>` is produced here: the lowerer (ctor/sym names + patterns),
+// name is an id from here: the lowerer (ctor/sym names + patterns),
 // `val_of_value_expr` (primitive + effect-handler results), and the cached
-// Bool values. That makes pointer identity COMPLETE for names: two equal
-// name strings are always the same Rc, so pattern-match name tests are pure
-// pointer compares with no string fallback (see `match_pat`).
-thread_local! {
-    static INTERN: RefCell<std::collections::HashSet<Rc<str>>> =
-        RefCell::new(std::collections::HashSet::new());
+// Bool values. Equal name strings are the same id, so every name test in
+// the machine is an integer compare. The four names the machine itself
+// knows are interned first, at fixed ids.
+struct Names {
+    ids: HashMap<Rc<str>, u32>,
+    strs: Vec<Rc<str>>,
 }
 
-fn intern(s: &str) -> Rc<str> {
-    INTERN.with(|t| {
-        let mut set = t.borrow_mut();
-        match set.get(s) {
-            Some(r) => r.clone(),
-            None => {
-                let r: Rc<str> = Rc::from(s);
-                set.insert(r.clone());
-                r
-            }
+const TRUE_ID: u32 = 0;
+const FALSE_ID: u32 = 1;
+const Z_ID: u32 = 2;
+const S_ID: u32 = 3;
+
+impl Names {
+    fn new() -> Names {
+        let mut n = Names { ids: HashMap::new(), strs: Vec::new() };
+        for (i, s) in ["True", "False", "Z", "S"].iter().enumerate() {
+            assert_eq!(n.intern(s), i as u32);
         }
-    })
+        n
+    }
+
+    fn intern(&mut self, s: &str) -> u32 {
+        if let Some(&i) = self.ids.get(s) {
+            return i;
+        }
+        let r: Rc<str> = Rc::from(s);
+        let i = self.strs.len() as u32;
+        self.strs.push(r.clone());
+        self.ids.insert(r, i);
+        i
+    }
+}
+
+thread_local! {
+    static NAMES: RefCell<Names> = RefCell::new(Names::new());
+}
+
+fn intern(s: &str) -> u32 {
+    NAMES.with(|n| n.borrow_mut().intern(s))
+}
+
+fn name_str(id: u32) -> Rc<str> {
+    NAMES.with(|n| n.borrow().strs[id as usize].clone())
 }
 
 struct Lowerer<'a> {
-    names: HashMap<&'a str, Rc<str>>,
+    names: HashMap<&'a str, u32>,
     fnidx: HashMap<&'a str, u32>,
     /// The stack layout at the point being lowered, bottom to top: `true`
     /// for a binding (a parameter, a pattern capture, a let binding),
@@ -326,9 +461,9 @@ fn count_pvars(p: &Pat) -> usize {
 }
 
 impl<'a> Lowerer<'a> {
-    fn intern(&mut self, s: &'a str) -> Rc<str> {
+    fn intern(&mut self, s: &'a str) -> u32 {
         // L1 cache over the global interner, keyed by the AST string slice.
-        self.names.entry(s).or_insert_with(|| intern(s)).clone()
+        *self.names.entry(s).or_insert_with(|| intern(s))
     }
 
     /// The physical slot (from the top of the stack) of the `k`-th binding
@@ -357,9 +492,7 @@ impl<'a> Lowerer<'a> {
             // Nat former (kernel/stdlib.shard): a bare `Z` IS the literal 0
             // (the eval arm's packing rule, decided here once).
             Expr::Ctor(n, args) if args.is_empty() && n == "Z" => IExpr::Int(Val::Int(0)),
-            Expr::Ctor(n, args) if args.is_empty() => {
-                IExpr::Ctor0(Val::Ctor(self.intern(n), Rc::from([].as_slice())))
-            }
+            Expr::Ctor(n, args) if args.is_empty() => IExpr::Ctor0(ctor0(self.intern(n))),
             Expr::Ctor(n, args) => IExpr::Ctor(self.intern(n), self.lower_args(args)),
             Expr::Call(n, args) => {
                 let largs = self.lower_args(args);
@@ -382,7 +515,7 @@ impl<'a> Lowerer<'a> {
                             "mod" => PrimTag::Mod,
                             _ => PrimTag::Other,
                         };
-                        IExpr::CallOther(tag, self.intern(n), largs)
+                        IExpr::CallOther(tag, Rc::from(n.as_str()), largs)
                     }
                 }
             }
@@ -479,14 +612,12 @@ fn lower_program<'a>(m: &'a Module, e: &'a Expr) -> (Prog, IExpr) {
             // A body's frame is its parameters, the last one on top.
             lo.layout.clear();
             lo.layout.resize(f.params.len(), true);
-            IFn { name: lo.intern(&f.name), arity: f.params.len(), body: lo.lower(&f.body) }
+            IFn { name: Rc::from(f.name.as_str()), arity: f.params.len(), body: lo.lower(&f.body) }
         })
         .collect();
     lo.layout.clear();
     let ie = lo.lower(e);
-    let true_name = intern("True");
-    let false_name = intern("False");
-    (Prog { fns, true_name, false_name }, ie)
+    (Prog { fns }, ie)
 }
 
 /// Reduce `e` to normal form within the context of `m`'s definitions.
@@ -579,25 +710,22 @@ fn eval_loop<'a>(prog: &'a Prog, st: &mut Stack, base: usize, e0: &'a IExpr) -> 
                 // bare name. A symbolic or negative argument never packs. (An
                 // early return leaves the field on the stack; `eval_ir` pops
                 // it.)
-                match &**name {
-                    "S" if args.len() == 1 => match &st[mark] {
+                if *name == S_ID && args.len() == 1 {
+                    match &st[mark] {
                         Val::Int(n) if *n >= 0 => {
                             return Ok(match n.checked_add(1) {
                                 Some(m) => Val::Int(m),
                                 None => int_val(crate::ast::IntLit::from(*n) + 1),
-                            })
+                            });
                         }
                         Val::Big(n) if !num_traits::Signed::is_negative(&**n) => {
-                            return Ok(int_val((**n).clone() + 1))
+                            return Ok(int_val((**n).clone() + 1));
                         }
                         _ => {}
-                    },
-                    _ => {}
+                    }
                 }
-                // One allocation, the fields moved off the stack (Drain is
-                // TrustedLen, so this is `from_iter_exact`).
-                let fields: Rc<[Val]> = st.drain(mark..).collect();
-                return Ok(Val::Ctor(name.clone(), fields));
+                // One allocation, the fields moved off the stack.
+                return Ok(Val::Ctor(CtorRef::new(*name, st.drain(mark..))));
             }
 
             IExpr::CallFn(i, args) => {
@@ -632,8 +760,8 @@ fn eval_loop<'a>(prog: &'a Prog, st: &mut Stack, base: usize, e0: &'a IExpr) -> 
             }
 
             IExpr::If(c, t, el) => match eval_sub(prog, st, c)? {
-                Val::Ctor(ref n, ref a) if a.is_empty() && Rc::ptr_eq(n, &prog.true_name) => e = t,
-                Val::Ctor(ref n, ref a) if a.is_empty() && Rc::ptr_eq(n, &prog.false_name) => e = el,
+                Val::Ctor(ref c) if c.len() == 0 && c.name() == TRUE_ID => e = t,
+                Val::Ctor(ref c) if c.len() == 0 && c.name() == FALSE_ID => e = el,
                 other => return fail(EvalError::IfNonBool(format!("{:?}", val_to_expr(&other)))),
             },
 
@@ -675,11 +803,10 @@ fn eval_loop<'a>(prog: &'a Prog, st: &mut Stack, base: usize, e0: &'a IExpr) -> 
 // result directly. The user-fn case is handled inline in `eval_ir` so it can
 // tail-loop into the body.
 thread_local! {
-    // The two Bool values, built once: the general path allocated a fresh
-    // `Rc<str>` ctor name per comparison result (millions per checking run).
-    // Names go through the canonical interner so they ptr-match patterns.
-    static TRUE_V: Val = Val::Ctor(intern("True"), Rc::from([].as_slice()));
-    static FALSE_V: Val = Val::Ctor(intern("False"), Rc::from([].as_slice()));
+    // The two Bool values, built once (the general path builds a fresh
+    // constructor block per comparison result — millions per checking run).
+    static TRUE_V: Val = ctor0(TRUE_ID);
+    static FALSE_V: Val = ctor0(FALSE_ID);
 }
 
 #[inline]
@@ -744,7 +871,7 @@ fn apply_other(tag: PrimTag, name: &str, args: &[Val]) -> EResult<Val> {
         }
         (PrimTag::SymEq, [Val::Sym(a), Val::Sym(b)]) => {
             prof_count_prim("sym_eq");
-            return Ok(bool_val(Rc::ptr_eq(a, b) || a == b));
+            return Ok(bool_val(a == b));
         }
         (PrimTag::Band, [Val::Int(x), Val::Int(y)]) => {
             prof_count_prim("band");
@@ -812,11 +939,10 @@ fn apply_other(tag: PrimTag, name: &str, args: &[Val]) -> EResult<Val> {
 // i.e. `BVar 0` — matching the de Bruijn convention.
 // -----------------------------------------------------------------------------
 
-// Name tests are PURE POINTER COMPARES: every runtime name — lowered
-// patterns and Ctor evals, bool_val's cached True/False, prim and
-// effect-handler results via val_of_value_expr — goes through the one
-// canonical interner, so string-equal names are Rc-identical by
-// construction. The debug_assert pins that invariant in debug builds.
+// Name tests are INTEGER COMPARES: every runtime name — lowered patterns
+// and Ctor evals, bool_val's cached True/False, prim and effect-handler
+// results via val_of_value_expr — is an id from the one canonical
+// interner, so string-equal names are the same id by construction.
 fn match_pat(p: &IPat, v: &Val, acc: &mut Vec<Val>) -> bool {
     match p {
         IPat::Var => {
@@ -828,22 +954,15 @@ fn match_pat(p: &IPat, v: &Val, acc: &mut Vec<Val>) -> bool {
             (Val::Big(a), Val::Big(b)) => **a == **b,
             _ => false,
         },
-        IPat::Sym(s) => match v {
-            Val::Sym(t) => {
-                debug_assert!(Rc::ptr_eq(t, s) == (**t == **s), "non-canonical Sym name");
-                Rc::ptr_eq(t, s)
-            }
-            _ => false,
-        },
+        IPat::Sym(s) => matches!(v, Val::Sym(t) if t == s),
         IPat::Ctor(cn, sub_pats, flat) => {
-            if let Val::Ctor(vc, vargs) = v {
-                debug_assert!(Rc::ptr_eq(vc, cn) == (**vc == **cn), "non-canonical Ctor name");
-                if Rc::ptr_eq(vc, cn) && sub_pats.len() == vargs.len() {
+            if let Val::Ctor(c) = v {
+                if c.name() == *cn && sub_pats.len() == c.len() {
                     if *flat {
-                        acc.extend_from_slice(vargs);
+                        acc.extend_from_slice(c.fields());
                         return true;
                     }
-                    for (sp, sv) in sub_pats.iter().zip(vargs.iter()) {
+                    for (sp, sv) in sub_pats.iter().zip(c.fields().iter()) {
                         if !match_pat(sp, sv, acc) {
                             return false;
                         }
@@ -856,24 +975,26 @@ fn match_pat(p: &IPat, v: &Val, acc: &mut Vec<Val>) -> bool {
             // for deep patterns). Negatives are ill-typed garbage: no match
             // (this closed-world engine reports NoMatchArm, loudly).
             match v {
-                Val::Int(m) => match &**cn {
-                    "Z" => return sub_pats.is_empty() && *m == 0,
-                    "S" if sub_pats.len() == 1 => {
+                Val::Int(m) => {
+                    if *cn == Z_ID {
+                        return sub_pats.is_empty() && *m == 0;
+                    }
+                    if *cn == S_ID && sub_pats.len() == 1 {
                         return *m > 0 && match_pat(&sub_pats[0], &Val::Int(m - 1), acc);
                     }
-                    _ => {}
-                },
+                }
                 // A Big is never zero (canonical), so only S can match it.
-                Val::Big(m) => match &**cn {
-                    "Z" => return false,
-                    "S" if sub_pats.len() == 1 => {
+                Val::Big(m) => {
+                    if *cn == Z_ID {
+                        return false;
+                    }
+                    if *cn == S_ID && sub_pats.len() == 1 {
                         if num_traits::Signed::is_positive(&**m) {
                             return match_pat(&sub_pats[0], &int_val((**m).clone() - 1), acc);
                         }
                         return false;
                     }
-                    _ => {}
-                },
+                }
                 _ => {}
             }
             false
@@ -889,10 +1010,10 @@ fn val_to_expr(v: &Val) -> Expr {
     match v {
         Val::Int(n) => Expr::IntLit(crate::ast::IntLit::from(*n)),
         Val::Big(n) => Expr::IntLit((**n).clone()),
-        Val::Sym(s) => Expr::SymLit(s.to_string()),
-        Val::FVar(s) => Expr::FVar(s.to_string()),
-        Val::Ctor(n, args) => {
-            Expr::Ctor(n.to_string(), args.iter().map(val_to_expr).collect())
+        Val::Sym(s) => Expr::SymLit(name_str(*s).to_string()),
+        Val::FVar(s) => Expr::FVar(name_str(*s).to_string()),
+        Val::Ctor(c) => {
+            Expr::Ctor(name_str(c.name()).to_string(), c.fields().iter().map(val_to_expr).collect())
         }
     }
 }
@@ -906,10 +1027,7 @@ fn val_of_value_expr(e: &Expr) -> Val {
         // being canonical (pointer compares, no string fallback).
         Expr::SymLit(s) => Val::Sym(intern(s)),
         Expr::FVar(s) => Val::FVar(intern(s)),
-        Expr::Ctor(n, args) => Val::Ctor(
-            intern(n),
-            args.iter().map(val_of_value_expr).collect::<Vec<_>>().into(),
-        ),
+        Expr::Ctor(n, args) => Val::Ctor(CtorRef::new(intern(n), args.iter().map(val_of_value_expr))),
         // Primitives only ever return values; any other shape is a bug
         // in the primitive table, not reachable input.
         other => unreachable!("primitive returned a non-value expr: {other:?}"),
