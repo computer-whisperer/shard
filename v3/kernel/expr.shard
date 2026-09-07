@@ -195,3 +195,280 @@
 ;;   logical String is `String.ofByteArray` (v3/INVENTORY.md); the
 ;;   kernel's literal rule goes through `ofList`, whose body relates
 ;;   the two. Exactness means K expands to this term, not to `String.mk`.
+
+;; ======================================================================
+;; THE FUNCTIONS (phase 1) — expr.cpp / instantiate.cpp / abstract.cpp.
+;; De Bruijn discipline: `instantiate` and `abstract` are the pin's
+;; (instantiate.cpp l. 15/99, abstract.cpp l. 14); the loose-bvar range is
+;; recomputed rather than cached (a measured optimization point for T0).
+
+;; ---- predicates ----------------------------------------------------------
+
+(fn is_sort ((e Expr)) Bool (match e ((Sort _) True) (_ False)))
+(fn is_pi ((e Expr)) Bool (match e ((Pi _ _ _ _) True) (_ False)))
+(fn is_lambda ((e Expr)) Bool (match e ((Lam _ _ _ _) True) (_ False)))
+(fn is_let ((e Expr)) Bool (match e ((Let _ _ _ _) True) (_ False)))
+(fn is_app ((e Expr)) Bool (match e ((App _ _) True) (_ False)))
+(fn is_const ((e Expr)) Bool (match e ((Const _ _) True) (_ False)))
+(fn is_fvar ((e Expr)) Bool (match e ((FVar _) True) (_ False)))
+(fn is_bvar ((e Expr)) Bool (match e ((BVar _) True) (_ False)))
+(fn is_lit ((e Expr)) Bool (match e ((Lit _) True) (_ False)))
+(fn is_proj ((e Expr)) Bool (match e ((Proj _ _ _) True) (_ False)))
+(fn is_nat_lit ((e Expr)) Bool (match e ((Lit (LitNat _)) True) (_ False)))
+(fn is_string_lit ((e Expr)) Bool (match e ((Lit (LitStr _)) True) (_ False)))
+(fn is_const_named ((e Expr) (n Name)) Bool (match e ((Const c _) (name_eq c n)) (_ False)))
+
+(fn lit_eq ((a Literal) (b Literal)) Bool
+  (match a
+    ((LitNat x) (match b ((LitNat y) (int_eq x y)) (_ False)))
+    ((LitStr x) (match b ((LitStr y) (int_list_eq x y)) (_ False)))))
+
+;; structural equality (expr.cpp `is_equal`): binder names and binder
+;; info are NOT compared; levels structurally (level_eq)
+(fn expr_eq ((a Expr) (b Expr)) Bool
+  (measure (struct a))
+  (match a
+    ((BVar i) (match b ((BVar j) (int_eq i j)) (_ False)))
+    ((FVar i) (match b ((FVar j) (int_eq i j)) (_ False)))
+    ((Sort u) (match b ((Sort v) (level_eq u v)) (_ False)))
+    ((Const n ls) (match b ((Const m ms) (if (name_eq n m) (levels_eq ls ms) False)) (_ False)))
+    ((App f x) (match b ((App g y) (if (expr_eq f g) (expr_eq x y) False)) (_ False)))
+    ((Lam _ _ d1 b1) (match b ((Lam _ _ d2 b2) (if (expr_eq d1 d2) (expr_eq b1 b2) False)) (_ False)))
+    ((Pi _ _ d1 b1) (match b ((Pi _ _ d2 b2) (if (expr_eq d1 d2) (expr_eq b1 b2) False)) (_ False)))
+    ((Let _ t1 v1 b1)
+     (match b ((Let _ t2 v2 b2) (if (expr_eq t1 t2) (if (expr_eq v1 v2) (expr_eq b1 b2) False) False)) (_ False)))
+    ((Lit l1) (match b ((Lit l2) (lit_eq l1 l2)) (_ False)))
+    ((Proj s1 i1 e1) (match b ((Proj s2 i2 e2) (if (name_eq s1 s2) (if (int_eq i1 i2) (expr_eq e1 e2) False) False)) (_ False)))))
+
+(fn exprs_eq ((a (List Expr)) (b (List Expr))) Bool
+  (measure (struct a))
+  (match a
+    (Nil (match b (Nil True) (_ False)))
+    ((Cons x ar) (match b (Nil False) ((Cons y br) (if (expr_eq x y) (exprs_eq ar br) False))))))
+
+;; ---- loose bound variables ---------------------------------------------
+
+;; get_loose_bvar_range: 0 for a closed term, else 1 + the largest loose index
+(fn loose_bvar_range ((e Expr)) Int
+  (measure (struct e))
+  (match e
+    ((BVar i) (+ i 1))
+    ((App f a) (max_int (loose_bvar_range f) (loose_bvar_range a)))
+    ((Lam _ _ d b) (max_int (loose_bvar_range d) (- (loose_bvar_range b) 1)))
+    ((Pi _ _ d b) (max_int (loose_bvar_range d) (- (loose_bvar_range b) 1)))
+    ((Let _ t v b) (max_int (max_int (loose_bvar_range t) (loose_bvar_range v)) (- (loose_bvar_range b) 1)))
+    ((Proj _ _ x) (loose_bvar_range x))
+    (_ 0)))
+
+(fn has_loose_bvars ((e Expr)) Bool (lt 0 (loose_bvar_range e)))
+
+;; has_loose_bvar(e, i): does the loose index i occur?
+(fn has_loose_bvar ((e Expr) (i Int)) Bool
+  (measure (struct e))
+  (match e
+    ((BVar j) (int_eq i j))
+    ((App f a) (bool_or (has_loose_bvar f i) (has_loose_bvar a i)))
+    ((Lam _ _ d b) (bool_or (has_loose_bvar d i) (has_loose_bvar b (+ i 1))))
+    ((Pi _ _ d b) (bool_or (has_loose_bvar d i) (has_loose_bvar b (+ i 1))))
+    ((Let _ t v b) (bool_or (bool_or (has_loose_bvar t i) (has_loose_bvar v i)) (has_loose_bvar b (+ i 1))))
+    ((Proj _ _ x) (has_loose_bvar x i))
+    (_ False)))
+
+;; lift_loose_bvars(e, s, d): every loose index ≥ s becomes index + d
+(fn lift_loose_bvars ((e Expr) (s Int) (d Int)) Expr
+  (measure (struct e))
+  (if (int_eq d 0) e
+  (match e
+    ((BVar i) (if (le s i) (BVar (+ i d)) e))
+    ((App f a) (App (lift_loose_bvars f s d) (lift_loose_bvars a s d)))
+    ((Lam n bi t b) (Lam n bi (lift_loose_bvars t s d) (lift_loose_bvars b (+ s 1) d)))
+    ((Pi n bi t b) (Pi n bi (lift_loose_bvars t s d) (lift_loose_bvars b (+ s 1) d)))
+    ((Let n t v b) (Let n (lift_loose_bvars t s d) (lift_loose_bvars v s d) (lift_loose_bvars b (+ s 1) d)))
+    ((Proj sn i x) (Proj sn i (lift_loose_bvars x s d)))
+    (_ e))))
+
+;; lower_loose_bvars(e, s, d): every loose index ≥ s becomes index − d
+;; (precondition: no loose index in [s−d, s))
+(fn lower_loose_bvars ((e Expr) (s Int) (d Int)) Expr
+  (measure (struct e))
+  (match e
+    ((BVar i) (if (le s i) (BVar (- i d)) e))
+    ((App f a) (App (lower_loose_bvars f s d) (lower_loose_bvars a s d)))
+    ((Lam n bi t b) (Lam n bi (lower_loose_bvars t s d) (lower_loose_bvars b (+ s 1) d)))
+    ((Pi n bi t b) (Pi n bi (lower_loose_bvars t s d) (lower_loose_bvars b (+ s 1) d)))
+    ((Let n t v b) (Let n (lower_loose_bvars t s d) (lower_loose_bvars v s d) (lower_loose_bvars b (+ s 1) d)))
+    ((Proj sn i x) (Proj sn i (lower_loose_bvars x s d)))
+    (_ e)))
+
+;; instantiate(e, s, subst) (instantiate.cpp l. 15): under `offset`
+;; binders, a loose bvar with index vidx ≥ s+offset becomes
+;;   subst[vidx − (s+offset)] lifted by offset   if vidx < s+offset+n
+;;   BVar (vidx − n)                              otherwise
+(fn instantiate_go ((e Expr) (s Int) (subst (List Expr)) (n Int) (offset Int)) Expr
+  (measure (struct e))
+  (match e
+    ((BVar i)
+     (let ((s1 (+ s offset)))
+       (if (lt i s1) e
+       (if (lt i (+ s1 n))
+         (match (nth subst (- i s1)) ((Some v) (lift_loose_bvars v 0 offset)) (None e))
+         (BVar (- i n))))))
+    ((App f a) (App (instantiate_go f s subst n offset) (instantiate_go a s subst n offset)))
+    ((Lam nm bi t b) (Lam nm bi (instantiate_go t s subst n offset) (instantiate_go b s subst n (+ offset 1))))
+    ((Pi nm bi t b) (Pi nm bi (instantiate_go t s subst n offset) (instantiate_go b s subst n (+ offset 1))))
+    ((Let nm t v b)
+     (Let nm (instantiate_go t s subst n offset) (instantiate_go v s subst n offset) (instantiate_go b s subst n (+ offset 1))))
+    ((Proj sn i x) (Proj sn i (instantiate_go x s subst n offset)))
+    (_ e)))
+
+(fn instantiate_n ((e Expr) (s Int) (subst (List Expr))) Expr
+  (let ((n (len subst)))
+    (if (bool_or (int_eq n 0) (le (loose_bvar_range e) s)) e
+      (instantiate_go e s subst n 0))))
+
+;; instantiate(e, v): BVar 0 := v
+(fn instantiate1 ((e Expr) (v Expr)) Expr (instantiate_n e 0 (Cons v Nil)))
+
+;; instantiate_rev(e, subst) (l. 99): subst given in BINDER order — the
+;; LAST element replaces BVar 0 (the innermost binder). Implemented by
+;; reversing and using `instantiate_n` at s = 0.
+(fn instantiate_rev ((e Expr) (subst (List Expr))) Expr
+  (if (has_loose_bvars e) (instantiate_n e 0 (rev subst)) e))
+
+;; abstract(e, fvars) (abstract.cpp l. 14): fvars in binder order; the
+;; i-th fvar becomes BVar (offset + n − i − 1)
+(fn abstract_go ((e Expr) (ids (List Int)) (n Int) (offset Int)) Expr
+  (measure (struct e))
+  (match e
+    ((FVar id)
+     (match (index_of_int id ids 0)
+       ((Some i) (BVar (- (+ offset n) (+ i 1))))
+       (None e)))
+    ((App f a) (App (abstract_go f ids n offset) (abstract_go a ids n offset)))
+    ((Lam nm bi t b) (Lam nm bi (abstract_go t ids n offset) (abstract_go b ids n (+ offset 1))))
+    ((Pi nm bi t b) (Pi nm bi (abstract_go t ids n offset) (abstract_go b ids n (+ offset 1))))
+    ((Let nm t v b) (Let nm (abstract_go t ids n offset) (abstract_go v ids n offset) (abstract_go b ids n (+ offset 1))))
+    ((Proj sn i x) (Proj sn i (abstract_go x ids n offset)))
+    (_ e)))
+
+(fn index_of_int ((x Int) (xs (List Int)) (i Int)) (Option Int)
+  (measure (struct xs))
+  (match xs
+    (Nil None)
+    ((Cons y r) (if (int_eq x y) (Some i) (index_of_int x r (+ i 1))))))
+
+(fn abstract_fvars ((e Expr) (ids (List Int))) Expr
+  (if (has_fvar e) (abstract_go e ids (len ids) 0) e))
+
+(fn has_fvar ((e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((FVar _) True)
+    ((App f a) (bool_or (has_fvar f) (has_fvar a)))
+    ((Lam _ _ d b) (bool_or (has_fvar d) (has_fvar b)))
+    ((Pi _ _ d b) (bool_or (has_fvar d) (has_fvar b)))
+    ((Let _ t v b) (bool_or (bool_or (has_fvar t) (has_fvar v)) (has_fvar b)))
+    ((Proj _ _ x) (has_fvar x))
+    (_ False)))
+
+;; ---- application spines ---------------------------------------------------
+
+(fn get_app_fn ((e Expr)) Expr
+  (measure (struct e))
+  (match e ((App f _) (get_app_fn f)) (_ e)))
+
+(fn get_app_args_go ((e Expr) (acc (List Expr))) (List Expr)
+  (measure (struct e))
+  (match e ((App f a) (get_app_args_go f (Cons a acc))) (_ acc)))
+
+;; the arguments in order (leftmost first)
+(fn get_app_args ((e Expr)) (List Expr) (get_app_args_go e Nil))
+
+(fn get_app_num_args ((e Expr)) Int
+  (measure (struct e))
+  (match e ((App f _) (+ 1 (get_app_num_args f))) (_ 0)))
+
+(fn mk_app_list ((f Expr) (args (List Expr))) Expr
+  (measure (struct args))
+  (match args (Nil f) ((Cons a r) (mk_app_list (App f a) r))))
+
+;; ---- universe parameters in terms ----------------------------------------
+
+(fn expr_inst_lparams ((e Expr) (ps (List Name)) (ls (List Level))) Expr
+  (measure (struct e))
+  (match e
+    ((Sort u) (Sort (level_inst u ps ls)))
+    ((Const n us) (Const n (levels_inst us ps ls)))
+    ((App f a) (App (expr_inst_lparams f ps ls) (expr_inst_lparams a ps ls)))
+    ((Lam nm bi t b) (Lam nm bi (expr_inst_lparams t ps ls) (expr_inst_lparams b ps ls)))
+    ((Pi nm bi t b) (Pi nm bi (expr_inst_lparams t ps ls) (expr_inst_lparams b ps ls)))
+    ((Let nm t v b) (Let nm (expr_inst_lparams t ps ls) (expr_inst_lparams v ps ls) (expr_inst_lparams b ps ls)))
+    ((Proj sn i x) (Proj sn i (expr_inst_lparams x ps ls)))
+    (_ e)))
+
+;; ---- beta ----------------------------------------------------------------------
+
+;; cheap_beta_reduce (instantiate.cpp l. 211): strip as many lambdas as
+;; there are arguments; if the remaining body has no loose bvars, drop the
+;; consumed arguments; if it is a bare BVar, select that argument; else
+;; leave the term alone.
+(fn cheap_beta_reduce ((e Expr)) Expr
+  (match e
+    ((App _ _)
+     (let ((fn (get_app_fn e)) (args (get_app_args e)))
+       (if (is_lambda fn)
+         (match (strip_lambdas fn (len args) 0)
+           ((Pair body i)
+            (if (bool_not (has_loose_bvars body)) (mk_app_list body (drop i args))
+            (match body
+              ((BVar k) (match (nth args (- (- i k) 1))
+                          ((Some a) (mk_app_list a (drop i args)))
+                          (None e)))
+              (_ e)))))
+         e)))
+    (_ e)))
+
+;; strip up to n lambdas; returns (body, number stripped)
+(fn strip_lambdas ((f Expr) (n Int) (i Int)) (Pair Expr Int)
+  (measure (struct f))
+  (match f
+    ((Lam _ _ _ b) (if (lt i n) (strip_lambdas b n (+ i 1)) (Pair f i)))
+    (_ (Pair f i))))
+
+;; beta-reduce the head with all available arguments at once (the App case
+;; of whnf_core, type_checker.cpp l. 517–524): consume min(#lambdas, #args)
+(fn beta_head ((f Expr) (args (List Expr))) Expr
+  (match (strip_lambdas f (len args) 0)
+    ((Pair body m)
+     (mk_app_list (instantiate_n body 0 (rev (take m args))) (drop m args)))))
+
+;; ---- rendering (diagnostics, tests) ----------------------------------------
+
+(fn show_expr ((e Expr)) (List Int)
+  (measure (struct e))
+  (match e
+    ((BVar i) (append "#" (show_nat i)))
+    ((FVar i) (append "?f" (show_nat i)))
+    ((Sort u) (append "(Sort " (append (show_level u) ")")))
+    ((Const n Nil) (show_name n))
+    ((Const n ls) (append (show_name n) (append ".{" (append (show_levels ls) "}"))))
+    ((App f a) (append "(" (append (show_expr f) (append " " (append (show_expr a) ")")))))
+    ((Lam n _ d b)
+     (append "(fun (" (append (chars_of_name_last n) (append " : " (append (show_expr d) (append ") => " (append (show_expr b) ")")))))))
+    ((Pi n _ d b)
+     (append "((" (append (chars_of_name_last n) (append " : " (append (show_expr d) (append ") -> " (append (show_expr b) ")")))))))
+    ((Let n t v b)
+     (append "(let " (append (chars_of_name_last n) (append " : " (append (show_expr t) (append " := " (append (show_expr v) (append "; " (append (show_expr b) ")")))))))))
+    ((Lit (LitNat k)) (show_nat k))
+    ((Lit (LitStr s)) (append "\"" (append s "\"")))
+    ((Proj s i x) (append (show_expr x) (append "." (show_nat i))))))
+
+(fn show_levels ((ls (List Level))) (List Int)
+  (measure (struct ls))
+  (match ls
+    (Nil "")
+    ((Cons l Nil) (show_level l))
+    ((Cons l r) (append (show_level l) (append ", " (show_levels r))))))
+
+(fn chars_of_name_last ((n Name)) (List Int)
+  (match n ((Str _ s) (chars_of_sym s)) ((Num _ k) (show_nat k)) (Anon "_")))

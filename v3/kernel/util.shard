@@ -1,0 +1,138 @@
+;;; v3/kernel/util.shard — list, integer and name utilities for the
+;;; toolchain (narrow-compatible E: first-order, every traversal its own
+;;; fn, no function values — FOUNDATION §2).
+
+(import "name.shard")
+
+;; ---- lists ------------------------------------------------------------
+
+(fn len ((xs (List T))) Int
+  (measure (struct xs))
+  (match xs (Nil 0) ((Cons _ r) (+ 1 (len r)))))
+
+(fn append ((xs (List T)) (ys (List T))) (List T)
+  (measure (struct xs))
+  (match xs (Nil ys) ((Cons x r) (Cons x (append r ys)))))
+
+(fn rev_onto ((xs (List T)) (acc (List T))) (List T)
+  (measure (struct xs))
+  (match xs (Nil acc) ((Cons x r) (rev_onto r (Cons x acc)))))
+
+(fn rev ((xs (List T))) (List T) (rev_onto xs Nil))
+
+;; the i-th element (0-based), None past the end or for i < 0
+(fn nth ((xs (List T)) (i Int)) (Option T)
+  (measure (struct xs))
+  (match xs
+    (Nil None)
+    ((Cons x r) (if (int_eq i 0) (Some x) (if (lt i 0) None (nth r (- i 1)))))))
+
+(fn take ((n Int) (xs (List T))) (List T)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons x r) (if (le n 0) Nil (Cons x (take (- n 1) r))))))
+
+(fn drop ((n Int) (xs (List T))) (List T)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons x r) (if (le n 0) xs (drop (- n 1) r)))))
+
+(fn int_list_eq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil (match b (Nil True) (_ False)))
+    ((Cons x ar) (match b (Nil False) ((Cons y br) (if (int_eq x y) (int_list_eq ar br) False))))))
+
+;; lexicographic order on byte lists
+(fn int_list_lt ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil (match b (Nil False) (_ True)))
+    ((Cons x ar)
+     (match b
+       (Nil False)
+       ((Cons y br) (if (lt x y) True (if (lt y x) False (int_list_lt ar br))))))))
+
+(fn mem_int ((x Int) (xs (List Int))) Bool
+  (measure (struct xs))
+  (match xs (Nil False) ((Cons y r) (if (int_eq x y) True (mem_int x r)))))
+
+(fn bool_and ((a Bool) (b Bool)) Bool (if a b False))
+(fn bool_or ((a Bool) (b Bool)) Bool (if a True b))
+(fn bool_not ((a Bool)) Bool (if a False True))
+
+(fn max_int ((a Int) (b Int)) Int (if (lt a b) b a))
+
+;; ---- decimal rendering ---------------------------------------------------
+
+(fn show_nat_go ((n Int) (acc (List Int))) (List Int)
+  (measure n)
+  (if (lt n 10) (Cons (+ 48 n) acc)
+    (show_nat_go (ediv n 10) (Cons (+ 48 (mod n 10)) acc))))
+
+(fn show_nat ((n Int)) (List Int) (show_nat_go n Nil))
+
+(fn show_int ((n Int)) (List Int)
+  (if (lt n 0) (Cons 45 (show_nat (- 0 n))) (show_nat n)))
+
+;; ---- names -----------------------------------------------------------------
+
+(fn name_eq ((a Name) (b Name)) Bool
+  (measure (struct a))
+  (match a
+    (Anon (match b (Anon True) (_ False)))
+    ((Str ap as)
+     (match b ((Str bp bs) (if (sym_eq as bs) (name_eq ap bp) False)) (_ False)))
+    ((Num ap an)
+     (match b ((Num bp bn) (if (int_eq an bn) (name_eq ap bp) False)) (_ False)))))
+
+;; Name.cmp's order (Lean `Name.cmp`; util/name.cpp `cmp`): compare the
+;; prefixes first, then the last component, numerals before strings.
+;; Only used to order universe levels in `normalize` (level.shard), where
+;; ANY fixed total order yields the same equivalence verdicts.
+(fn name_lt ((a Name) (b Name)) Bool
+  (measure (struct a))
+  (match a
+    (Anon (match b (Anon False) (_ True)))
+    ((Str ap as)
+     (match b
+       (Anon False)
+       ((Num _ _) False)
+       ((Str bp bs)
+        (if (name_lt ap bp) True
+        (if (name_lt bp ap) False
+        (int_list_lt (chars_of_sym as) (chars_of_sym bs)))))))
+    ((Num ap an)
+     (match b
+       (Anon False)
+       ((Str _ _) True)
+       ((Num bp bn)
+        (if (name_lt ap bp) True
+        (if (name_lt bp ap) False
+        (lt an bn))))))))
+
+(fn names_eq ((a (List Name)) (b (List Name))) Bool
+  (measure (struct a))
+  (match a
+    (Nil (match b (Nil True) (_ False)))
+    ((Cons x ar) (match b (Nil False) ((Cons y br) (if (name_eq x y) (names_eq ar br) False))))))
+
+(fn mem_name ((x Name) (xs (List Name))) Bool
+  (measure (struct xs))
+  (match xs (Nil False) ((Cons y r) (if (name_eq x y) True (mem_name x r)))))
+
+;; `a.b.c` rendering; numeric components in decimal
+(fn show_name ((n Name)) (List Int)
+  (measure (struct n))
+  (match n
+    (Anon "[anonymous]")
+    ((Str Anon s) (chars_of_sym s))
+    ((Str p s) (append (show_name p) (Cons 46 (chars_of_sym s))))
+    ((Num Anon k) (show_nat k))
+    ((Num p k) (append (show_name p) (Cons 46 (show_nat k))))))
+
+;; convenience constructors
+(fn n1 ((a Symbol)) Name (Str Anon a))
+(fn n2 ((a Symbol) (b Symbol)) Name (Str (Str Anon a) b))

@@ -1,0 +1,70 @@
+;;; v3/kernel/test/level_test.shard — the level slice's fixtures.
+;;; Run: ./rust_bootstrap/target/release/eval direct v3/kernel/test/level_test.shard
+;;; (v3/test.sh runs every test entrypoint). Exit code = number of failures.
+
+(import "../host.shard")
+(import "../level.shard")
+
+(type Case (Case (List Int) Bool))
+
+(fn u () Level (LParam (n1 (quote u))))
+(fn v () Level (LParam (n1 (quote v))))
+(fn one () Level (LSucc LZero))
+(fn two () Level (LSucc (LSucc LZero)))
+
+(fn cases () (List Case)
+  (list
+    (Case "normalize (max u 0) = u" (level_eq (normalize (LMax (u) LZero)) (u)))
+    (Case "equiv (max u v) (max v u)" (is_equivalent (LMax (u) (v)) (LMax (v) (u))))
+    (Case "equiv (succ (max u v)) (max (succ u) (succ v))"
+      (is_equivalent (LSucc (LMax (u) (v))) (LMax (LSucc (u)) (LSucc (v)))))
+    (Case "normalize (imax u 0) = 0" (is_zero (normalize (LIMax (u) LZero))))
+    ;; EXACTNESS: the pin's normalize does not re-sort after mk_imax
+    ;; (level.cpp l. 462 returns mk_succ(mk_imax(l1,l2),k) as is), so
+    ;; (imax u 1) normalizes to (max u 1) while (max u 1) normalizes to
+    ;; (max 1 u); Lean's is_equivalent is incomplete here and K agrees.
+    (Case "pin: not equiv (imax u 1) (max u 1)" (bool_not (is_equivalent (LIMax (u) (one)) (LMax (u) (one)))))
+    (Case "pin: normalize (imax u 1) = (max u 1) structurally" (level_eq (normalize (LIMax (u) (one))) (LMax (u) (one))))
+    (Case "pin: normalize (max u 1) = (max 1 u) structurally" (level_eq (normalize (LMax (u) (one))) (LMax (one) (u))))
+    (Case "normalize (imax 1 u) = u" (level_eq (normalize (LIMax (one) (u))) (u)))
+    (Case "not equiv u (succ u)" (bool_not (is_equivalent (u) (LSucc (u)))))
+    (Case "not equiv (max u v) u" (bool_not (is_equivalent (LMax (u) (v)) (u))))
+    (Case "normalize (max u u) = u" (level_eq (normalize (LMax (u) (u))) (u)))
+    (Case "normalize (max u (succ u)) = succ u" (level_eq (normalize (LMax (u) (LSucc (u)))) (LSucc (u))))
+    (Case "normalize (max 1 u) keeps 1" (is_equivalent (normalize (LMax (one) (u))) (LMax (one) (u))))
+    (Case "normalize (max 1 (succ u)) drops 1" (level_eq (normalize (LMax (one) (LSucc (u)))) (LSucc (u))))
+    (Case "normalize (max 2 1) = 2" (level_eq (normalize (LMax (two) (one))) (two)))
+    (Case "geq (max u v) u" (is_geq (LMax (u) (v)) (u)))
+    (Case "geq (succ u) u" (is_geq (LSucc (u)) (u)))
+    (Case "not geq u (succ u)" (bool_not (is_geq (u) (LSucc (u)))))
+    (Case "geq u 0" (is_geq (u) LZero))
+    (Case "not geq 0 u" (bool_not (is_geq LZero (u))))
+    (Case "geq (imax u v) v" (is_geq (LIMax (u) (v)) (v)))
+    (Case "geq (max (succ u) v) (max u v)" (is_geq (LMax (LSucc (u)) (v)) (LMax (u) (v))))
+    (Case "not geq (max u v) (succ u)" (bool_not (is_geq (LMax (u) (v)) (LSucc (u)))))
+    (Case "is_not_zero (succ u)" (is_not_zero (LSucc (u))))
+    (Case "not is_not_zero (max u 0)" (bool_not (is_not_zero (LMax (u) LZero))))
+    (Case "normalizes_to_zero (imax 1 0)" (normalizes_to_zero (LIMax (one) LZero)))
+    (Case "not normalizes_to_zero (imax 0 u)" (bool_not (normalizes_to_zero (LIMax LZero (u)))))
+    (Case "inst u:=1 in (max u v)"
+      (level_eq (level_inst (LMax (u) (v)) (list (n1 (quote u))) (list (one))) (LMax (one) (v))))
+    (Case "inst collapses (imax u v) with v:=1" 
+      (level_eq (level_inst (LIMax (u) (v)) (list (n1 (quote v))) (list (one))) (LMax (u) (one))))
+    (Case "undef_param finds w"
+      (match (undef_param (LMax (u) (LParam (n1 (quote w)))) (list (n1 (quote u)) (n1 (quote v))))
+        ((Some n) (name_eq n (n1 (quote w)))) (None False)))
+    (Case "undef_param none" (match (undef_param (LMax (u) (v)) (list (n1 (quote u)) (n1 (quote v)))) (None True) (_ False)))
+    (Case "show (max u 1)" (int_list_eq (show_level (LMax (u) (one))) "(max u 1)"))
+    (Case "depth explicit 2" (int_eq (level_depth (two)) 2))
+    (Case "mk_max 1 2 = 2" (level_eq (mk_max (one) (two)) (two)))
+    (Case "mk_max u (max u v) = max u v" (level_eq (mk_max (u) (LMax (u) (v))) (LMax (u) (v))))))
+
+(fn run ((cs (List Case)) (fails Int) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil (exit fails (write_line (append "level_test: failures = " (show_int fails)) w)))
+    ((Cons (Case name ok) r)
+     (run r (if ok fails (+ fails 1))
+       (write_line (append (if ok "PASS " "FAIL ") name) w)))))
+
+(fn main ((w World)) World (run (cases) 0 w))

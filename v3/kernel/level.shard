@@ -4,7 +4,7 @@
 ;;; constructor: K refuses metavariables (FOUNDATION §6); the exporter
 ;;; never emits them.
 
-(import "name.shard")
+(import "util.shard")
 
 (type Level
   (LZero)                 ; 0 — the level of Prop
@@ -42,3 +42,336 @@
 ;;     `check_duplicated_univ_params` refuses a repeated parameter name.
 ;;   Sort typing: `Sort u : Sort (u+1)`; `Prop = Sort 0` impredicative
 ;;     (a Pi whose codomain is in Prop is in Prop — expr.shard, Pi).
+
+;; ======================================================================
+;; THE FUNCTIONS (phase 1) — each is the level.cpp procedure of the same
+;; name; line numbers are into level.cpp at the pin.
+
+;; structural equality (operator==, l. 128) — no normalization
+(fn level_eq ((a Level) (b Level)) Bool
+  (measure (struct a))
+  (match a
+    (LZero (match b (LZero True) (_ False)))
+    ((LSucc x) (match b ((LSucc y) (level_eq x y)) (_ False)))
+    ((LMax x1 x2) (match b ((LMax y1 y2) (if (level_eq x1 y1) (level_eq x2 y2) False)) (_ False)))
+    ((LIMax x1 x2) (match b ((LIMax y1 y2) (if (level_eq x1 y1) (level_eq x2 y2) False)) (_ False)))
+    ((LParam n) (match b ((LParam m) (name_eq n m)) (_ False)))))
+
+(fn levels_eq ((a (List Level)) (b (List Level))) Bool
+  (measure (struct a))
+  (match a
+    (Nil (match b (Nil True) (_ False)))
+    ((Cons x ar) (match b (Nil False) ((Cons y br) (if (level_eq x y) (levels_eq ar br) False))))))
+
+(fn level_has_param ((l Level)) Bool
+  (measure (struct l))
+  (match l
+    (LZero False)
+    ((LSucc x) (level_has_param x))
+    ((LMax x y) (bool_or (level_has_param x) (level_has_param y)))
+    ((LIMax x y) (bool_or (level_has_param x) (level_has_param y)))
+    ((LParam _) True)))
+
+;; kind order of the C++ enum: Zero < Succ < Max < IMax < Param (< MVar)
+(fn level_kind ((l Level)) Int
+  (match l (LZero 0) ((LSucc _) 1) ((LMax _ _) 2) ((LIMax _ _) 3) ((LParam _) 4)))
+
+(fn is_zero ((l Level)) Bool (match l (LZero True) (_ False)))
+(fn is_one ((l Level)) Bool (match l ((LSucc LZero) True) (_ False)))
+(fn is_max ((l Level)) Bool (match l ((LMax _ _) True) (_ False)))
+
+;; is_explicit (l. 60): succ^k zero
+(fn is_explicit ((l Level)) Bool
+  (measure (struct l))
+  (match l (LZero True) ((LSucc x) (is_explicit x)) (_ False)))
+
+;; to_offset (l. 71): succ^k l ↦ (l, k)
+(fn to_offset_go ((l Level) (k Int)) (Pair Level Int)
+  (measure (struct l))
+  (match l ((LSucc x) (to_offset_go x (+ k 1))) (_ (Pair l k))))
+(fn to_offset ((l Level)) (Pair Level Int) (to_offset_go l 0))
+(fn offset_base ((l Level)) Level (match (to_offset l) ((Pair b _) b)))
+(fn offset_k ((l Level)) Int (match (to_offset l) ((Pair _ k) k)))
+
+;; depth (lean_level_depth): the height used by mk_max on explicit levels
+(fn level_depth ((l Level)) Int
+  (measure (struct l))
+  (match l
+    (LZero 0)
+    ((LSucc x) (+ 1 (level_depth x)))
+    ((LMax x y) (+ 1 (max_int (level_depth x) (level_depth y))))
+    ((LIMax x y) (+ 1 (max_int (level_depth x) (level_depth y))))
+    ((LParam _) 0)))
+
+;; mk_succ(l, k) (l. 447)
+(fn mk_succ_n ((l Level) (k Int)) Level
+  (measure k)
+  (if (le k 0) l (mk_succ_n (LSucc l) (- k 1))))
+
+;; is_not_zero (l. 160)
+(fn is_not_zero ((l Level)) Bool
+  (measure (struct l))
+  (match l
+    (LZero False)
+    ((LParam _) False)
+    ((LSucc _) True)
+    ((LMax x y) (bool_or (is_not_zero x) (is_not_zero y)))
+    ((LIMax _ y) (is_not_zero y))))
+
+;; normalizes_to_zero (l. 176) — the `is_prop` test
+(fn normalizes_to_zero ((l Level)) Bool
+  (measure (struct l))
+  (match l
+    (LZero True)
+    ((LParam _) False)
+    ((LSucc _) False)
+    ((LMax x y) (bool_and (normalizes_to_zero x) (normalizes_to_zero y)))
+    ((LIMax _ y) (normalizes_to_zero y))))
+
+;; the smart constructors mk_max (l. 76) and mk_imax (l. 108), exactly
+(fn mk_max ((l1 Level) (l2 Level)) Level
+  (if (bool_and (is_explicit l1) (is_explicit l2))
+    (if (le (level_depth l2) (level_depth l1)) l1 l2)
+  (if (level_eq l1 l2) l1
+  (if (is_zero l1) l2
+  (if (is_zero l2) l1
+  (match l2
+    ((LMax a b)
+     (if (bool_or (level_eq a l1) (level_eq b l1)) l2 (mk_max_rest l1 l2)))
+    (_ (mk_max_rest l1 l2))))))))
+
+(fn mk_max_rest ((l1 Level) (l2 Level)) Level
+  (match l1
+    ((LMax a b)
+     (if (bool_or (level_eq a l2) (level_eq b l2)) l1 (mk_max_offsets l1 l2)))
+    (_ (mk_max_offsets l1 l2))))
+
+(fn mk_max_offsets ((l1 Level) (l2 Level)) Level
+  (match (to_offset l1)
+    ((Pair b1 k1)
+     (match (to_offset l2)
+       ((Pair b2 k2)
+        (if (level_eq b1 b2)
+          (if (lt k2 k1) l1 l2)
+          (LMax l1 l2)))))))
+
+(fn mk_imax ((l1 Level) (l2 Level)) Level
+  (if (is_not_zero l2) (mk_max l1 l2)
+  (if (is_zero l2) l2
+  (if (bool_or (is_zero l1) (is_one l1)) l2
+  (if (level_eq l1 l2) l1
+  (LIMax l1 l2))))))
+
+;; is_norm_lt (l. 397): the order `normalize` sorts max-arguments by
+(fn is_norm_lt ((a Level) (b Level)) Bool
+  (measure (struct a))
+  (match (to_offset a)
+    ((Pair l1 k1)
+     (match (to_offset b)
+       ((Pair l2 k2)
+        (if (level_eq l1 l2) (lt k1 k2)
+        (if (bool_not (int_eq (level_kind l1) (level_kind l2)))
+          (lt (level_kind l1) (level_kind l2))
+        (match l1
+          ((LParam n) (match l2 ((LParam m) (name_lt n m)) (_ False)))
+          ((LMax x1 y1)
+           (match l2
+             ((LMax x2 y2) (if (level_eq x1 x2) (is_norm_lt y1 y2) (is_norm_lt x1 x2)))
+             (_ False)))
+          ((LIMax x1 y1)
+           (match l2
+             ((LIMax x2 y2) (if (level_eq x1 x2) (is_norm_lt y1 y2) (is_norm_lt x1 x2)))
+             (_ False)))
+          (_ False)))))))))
+
+;; push_max_args (l. 421): flatten nested max into a list, left to right
+(fn push_max_args ((l Level) (acc (List Level))) (List Level)
+  (measure (struct l))
+  (match l
+    ((LMax a b) (push_max_args a (push_max_args b acc)))
+    (_ (Cons l acc))))
+
+;; stable insertion sort by is_norm_lt (std::sort is unstable, but the
+;; order among equal elements cannot affect the result of `normalize`:
+;; equal-base arguments are merged by offset and explicit ones by value)
+(fn insert_norm ((x Level) (xs (List Level))) (List Level)
+  (measure (struct xs))
+  (match xs
+    (Nil (Cons x Nil))
+    ((Cons y r) (if (is_norm_lt y x) (Cons y (insert_norm x r)) (Cons x xs)))))
+
+(fn sort_norm ((xs (List Level))) (List Level)
+  (measure (struct xs))
+  (match xs (Nil Nil) ((Cons x r) (insert_norm x (sort_norm r)))))
+
+;; mk_max over a list (l. 434): right-nested max of the arguments
+(fn mk_max_list ((xs (List Level))) Level
+  (measure (struct xs))
+  (match xs
+    (Nil LZero)
+    ((Cons x Nil) x)
+    ((Cons x r) (mk_max x (mk_max_list r)))))
+
+;; normalize (l. 454)
+(fn normalize ((l Level)) Level
+  (measure (struct l))
+  (match (to_offset l)
+    ((Pair r k)
+     (match r
+       (LZero l)
+       ((LParam _) l)
+       ((LIMax a b) (mk_succ_n (mk_imax (normalize a) (normalize b)) k))
+       ((LMax _ _)
+        (let ((args (sort_norm (push_max_args_norm (push_max_args r Nil) Nil))))
+          (mk_max_list (add_offsets (merge_norm_args (drop_explicits args)) k))))
+       ((LSucc _) l)))))   ; unreachable: to_offset strips every succ
+
+;; normalize each flattened argument and flatten again (l. 466)
+(fn push_max_args_norm ((xs (List Level)) (acc (List Level))) (List Level)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons x r) (push_max_args (normalize x) (push_max_args_norm r acc)))))
+
+;; l. 470–484: among a sorted list whose explicit numerals come first,
+;; keep only the LAST explicit numeral, and drop it too when some later
+;; argument has an offset ≥ it.
+(fn drop_explicits ((args (List Level))) (List Level)
+  (match args
+    (Nil Nil)
+    ((Cons a _)
+     (if (is_explicit a)
+       (let ((last (last_explicit args)))
+         (match (skip_explicits args)
+           (Nil (Cons last Nil))
+           (rest (if (exists_offset_geq (offset_k last) rest) rest (Cons last rest)))))
+       args))))
+
+(fn last_explicit ((args (List Level))) Level
+  (measure (struct args))
+  (match args
+    (Nil LZero)
+    ((Cons a r)
+     (match r
+       (Nil a)
+       ((Cons b _) (if (is_explicit b) (last_explicit r) a))))))
+
+(fn skip_explicits ((args (List Level))) (List Level)
+  (measure (struct args))
+  (match args
+    (Nil Nil)
+    ((Cons a r) (if (is_explicit a) (skip_explicits r) args))))
+
+(fn exists_offset_geq ((k Int) (args (List Level))) Bool
+  (measure (struct args))
+  (match args
+    (Nil False)
+    ((Cons a r) (if (le k (offset_k a)) True (exists_offset_geq k r)))))
+
+;; l. 486–500: consecutive arguments with the same base keep the greater
+;; offset (the list is sorted, so equal bases are adjacent)
+(fn merge_norm_args ((args (List Level))) (List Level)
+  (measure (struct args))
+  (match args
+    (Nil Nil)
+    ((Cons a r)
+     (match r
+       (Nil args)
+       ((Cons b _)
+        (if (level_eq (offset_base a) (offset_base b))
+          (merge_norm_args r)          ; b has the greater-or-equal offset (sorted)
+          (Cons a (merge_norm_args r))))))))
+
+(fn add_offsets ((args (List Level)) (k Int)) (List Level)
+  (measure (struct args))
+  (match args (Nil Nil) ((Cons a r) (Cons (mk_succ_n a k) (add_offsets r k)))))
+
+;; is_equivalent (l. 518) — the definitional equality of universe levels
+(fn is_equivalent ((a Level) (b Level)) Bool
+  (if (level_eq a b) True (level_eq (normalize a) (normalize b))))
+
+(fn levels_equivalent ((a (List Level)) (b (List Level))) Bool
+  (measure (struct a))
+  (match a
+    (Nil (match b (Nil True) (_ False)))
+    ((Cons x ar) (match b (Nil False) ((Cons y br) (if (is_equivalent x y) (levels_equivalent ar br) False))))))
+
+;; is_geq_core (l. 523) on normalized inputs; is_geq (l. 542)
+(fn is_geq_core ((l1 Level) (l2 Level) (fuel Int)) Bool
+  (measure fuel)
+  (if (le fuel 0) False
+  (if (bool_or (level_eq l1 l2) (is_zero l2)) True
+  (match l2
+    ((LMax a b) (bool_and (is_geq_core l1 a (- fuel 1)) (is_geq_core l1 b (- fuel 1))))
+    (_
+     (if (match l1
+           ((LMax a b) (bool_or (is_geq_core a l2 (- fuel 1)) (is_geq_core b l2 (- fuel 1))))
+           (_ False))
+       True
+     (match l2
+       ((LIMax a b) (bool_and (is_geq_core l1 a (- fuel 1)) (is_geq_core l1 b (- fuel 1))))
+       (_
+        (match l1
+          ((LIMax _ b) (is_geq_core b l2 (- fuel 1)))
+          (_ (is_geq_offsets l1 l2 (- fuel 1))))))))))))
+
+(fn is_geq_offsets ((l1 Level) (l2 Level) (fuel Int)) Bool
+  (match (to_offset l1)
+    ((Pair b1 k1)
+     (match (to_offset l2)
+       ((Pair b2 k2)
+        (if (bool_or (level_eq b1 b2) (is_zero b2)) (le k2 k1)
+        (if (bool_and (int_eq k1 k2) (lt 0 k1)) (is_geq_core b1 b2 fuel)
+        False)))))))
+
+;; the fuel bounds the recursion on the structure; the level depth is a
+;; sufficient budget (each step strips a constructor from one side)
+(fn is_geq ((l1 Level) (l2 Level)) Bool
+  (let ((n1 (normalize l1)) (n2 (normalize l2)))
+    (is_geq_core n1 n2 (+ 4 (* 2 (+ (level_depth n1) (level_depth n2)))))))
+
+;; instantiate (l. 340): substitute the declared parameters ps by ls,
+;; positionally; a parameter not in ps stays
+(fn level_inst ((l Level) (ps (List Name)) (ls (List Level))) Level
+  (measure (struct l))
+  (match l
+    (LZero l)
+    ((LSucc x) (LSucc (level_inst x ps ls)))
+    ((LMax x y) (mk_max (level_inst x ps ls) (level_inst y ps ls)))
+    ((LIMax x y) (mk_imax (level_inst x ps ls) (level_inst y ps ls)))
+    ((LParam n) (level_lookup n ps ls l))))
+
+(fn level_lookup ((n Name) (ps (List Name)) (ls (List Level)) (dflt Level)) Level
+  (measure (struct ps))
+  (match ps
+    (Nil dflt)
+    ((Cons p pr)
+     (match ls
+       (Nil dflt)
+       ((Cons l lr) (if (name_eq n p) l (level_lookup n pr lr dflt)))))))
+
+(fn levels_inst ((xs (List Level)) (ps (List Name)) (ls (List Level))) (List Level)
+  (measure (struct xs))
+  (match xs (Nil Nil) ((Cons x r) (Cons (level_inst x ps ls) (levels_inst r ps ls)))))
+
+;; get_undef_param (l. 324): the first parameter of l not among ps —
+;; `check_level`'s test (type_checker.cpp l. 85)
+(fn undef_param ((l Level) (ps (List Name))) (Option Name)
+  (measure (struct l))
+  (match l
+    (LZero None)
+    ((LSucc x) (undef_param x ps))
+    ((LMax x y) (match (undef_param x ps) ((Some n) (Some n)) (None (undef_param y ps))))
+    ((LIMax x y) (match (undef_param x ps) ((Some n) (Some n)) (None (undef_param y ps))))
+    ((LParam n) (if (mem_name n ps) None (Some n)))))
+
+;; rendering, for diagnostics and tests (level.cpp print, l. 361)
+(fn show_level ((l Level)) (List Int)
+  (measure (struct l))
+  (if (is_explicit l) (show_nat (level_depth l))
+  (match l
+    ((LParam n) (show_name n))
+    ((LSucc x) (append "(succ " (append (show_level x) ")")))
+    ((LMax x y) (append "(max " (append (show_level x) (append " " (append (show_level y) ")")))))
+    ((LIMax x y) (append "(imax " (append (show_level x) (append " " (append (show_level y) ")")))))
+    (LZero "0"))))

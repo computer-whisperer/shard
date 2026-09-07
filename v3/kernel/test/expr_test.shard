@@ -1,0 +1,76 @@
+;;; v3/kernel/test/expr_test.shard — term utilities: instantiate, abstract,
+;;; lift, spines, level instantiation, cheap beta.
+
+(import "../host.shard")
+(import "../expr.shard")
+
+(type Case (Case (List Int) Bool))
+
+(fn nat_c () Expr (Const (n1 (quote Nat)) Nil))
+(fn x_n () Name (n1 (quote x)))
+(fn u () Level (LParam (n1 (quote u))))
+;; fun (x : Nat) => fun (y : Nat) => x   ==  Lam x Nat (Lam y Nat #1)
+(fn k_fn () Expr (Lam (x_n) BDefault (nat_c) (Lam (n1 (quote y)) BDefault (nat_c) (BVar 1))))
+(fn lit ((k Int)) Expr (Lit (LitNat k)))
+
+(fn cases () (List Case)
+  (list
+    (Case "range closed" (int_eq (loose_bvar_range (k_fn)) 0))
+    (Case "range #2 under one binder" (int_eq (loose_bvar_range (Lam (x_n) BDefault (nat_c) (BVar 2))) 2))
+    (Case "instantiate1 #0" (expr_eq (instantiate1 (App (BVar 0) (BVar 1)) (lit 7)) (App (lit 7) (BVar 0))))
+    (Case "instantiate1 under binder lifts"
+      (expr_eq (instantiate1 (Lam (x_n) BDefault (nat_c) (App (BVar 1) (BVar 0))) (BVar 0))
+               (Lam (x_n) BDefault (nat_c) (App (BVar 1) (BVar 0)))))
+    (Case "instantiate1 under binder substitutes a closed term"
+      (expr_eq (instantiate1 (Lam (x_n) BDefault (nat_c) (App (BVar 1) (BVar 0))) (lit 3))
+               (Lam (x_n) BDefault (nat_c) (App (lit 3) (BVar 0)))))
+    (Case "instantiate_rev order: last replaces #0"
+      (expr_eq (instantiate_rev (App (BVar 0) (BVar 1)) (list (lit 1) (lit 2))) (App (lit 2) (lit 1))))
+    (Case "abstract fvars in binder order"
+      (expr_eq (abstract_fvars (App (FVar 10) (FVar 11)) (list 10 11)) (App (BVar 1) (BVar 0))))
+    (Case "abstract under a binder offsets"
+      (expr_eq (abstract_fvars (Lam (x_n) BDefault (nat_c) (FVar 10)) (list 10)) (Lam (x_n) BDefault (nat_c) (BVar 1))))
+    (Case "abstract then instantiate_rev is identity"
+      (let ((e (App (App (FVar 3) (FVar 4)) (Lam (x_n) BDefault (nat_c) (FVar 3)))))
+        (expr_eq (instantiate_rev (abstract_fvars e (list 3 4)) (list (FVar 3) (FVar 4))) e)))
+    (Case "lift ≥ 1 by 2" (expr_eq (lift_loose_bvars (App (BVar 0) (BVar 1)) 1 2) (App (BVar 0) (BVar 3))))
+    (Case "lower" (expr_eq (lower_loose_bvars (App (BVar 0) (BVar 3)) 1 2) (App (BVar 0) (BVar 1))))
+    (Case "has_loose_bvar 1 under binder" (has_loose_bvar (Lam (x_n) BDefault (nat_c) (BVar 2)) 1))
+    (Case "get_app_fn / args"
+      (let ((e (App (App (nat_c) (lit 1)) (lit 2))))
+        (bool_and (expr_eq (get_app_fn e) (nat_c)) (exprs_eq (get_app_args e) (list (lit 1) (lit 2))))))
+    (Case "mk_app_list roundtrip"
+      (let ((e (App (App (nat_c) (lit 1)) (lit 2))))
+        (expr_eq (mk_app_list (get_app_fn e) (get_app_args e)) e)))
+    (Case "num args" (int_eq (get_app_num_args (App (App (nat_c) (lit 1)) (lit 2))) 2))
+    (Case "inst lparams in Sort and Const"
+      (expr_eq (expr_inst_lparams (App (Sort (u)) (Const (n1 (quote c)) (list (u)))) (list (n1 (quote u))) (list LZero))
+               (App (Sort LZero) (Const (n1 (quote c)) (list LZero)))))
+    (Case "cheap beta: closed body drops args"
+      (expr_eq (cheap_beta_reduce (App (Lam (x_n) BDefault (nat_c) (lit 5)) (lit 9))) (lit 5)))
+    (Case "cheap beta: bvar body selects arg"
+      (expr_eq (cheap_beta_reduce (App (App (k_fn) (lit 1)) (lit 2))) (lit 1)))
+    (Case "cheap beta: partial application untouched"
+      (let ((e (App (k_fn) (lit 1)))) (expr_eq (cheap_beta_reduce e) e)))
+    (Case "cheap beta: extra args kept"
+      (expr_eq (cheap_beta_reduce (App (App (Lam (x_n) BDefault (nat_c) (BVar 0)) (nat_c)) (lit 4)))
+               (App (nat_c) (lit 4))))
+    (Case "beta_head: two lambdas, two args"
+      (expr_eq (beta_head (k_fn) (list (lit 1) (lit 2))) (lit 1)))
+    (Case "beta_head: one lambda, two args keeps the second"
+      (expr_eq (beta_head (Lam (x_n) BDefault (nat_c) (BVar 0)) (list (nat_c) (lit 4))) (App (nat_c) (lit 4))))
+    (Case "beta_head: dependent body substitution"
+      (expr_eq (beta_head (Lam (x_n) BDefault (nat_c) (Lam (n1 (quote y)) BDefault (BVar 0) (BVar 1))) (list (lit 8)))
+               (Lam (n1 (quote y)) BDefault (lit 8) (lit 8))))
+    (Case "expr_eq ignores binder names"
+      (expr_eq (Lam (x_n) BDefault (nat_c) (BVar 0)) (Lam (n1 (quote z)) BImplicit (nat_c) (BVar 0))))
+    (Case "show" (int_list_eq (show_expr (App (nat_c) (lit 3))) "(Nat 3)"))))
+
+(fn run ((cs (List Case)) (fails Int) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil (exit fails (write_line (append "expr_test: failures = " (show_int fails)) w)))
+    ((Cons (Case name ok) r)
+     (run r (if ok fails (+ fails 1)) (write_line (append (if ok "PASS " "FAIL ") name) w)))))
+
+(fn main ((w World)) World (run (cases) 0 w))
