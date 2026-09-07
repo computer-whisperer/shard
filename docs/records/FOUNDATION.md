@@ -607,13 +607,47 @@ is `docs/FOUNDATION.md` §5.3.
   factors: name equality (20M calls in the chunk) and level-list
   equality (10M) before a hash short-circuit, the linear `nth` on the
   substitution (12.8M), and the JSON reader as the flat floor.
+- **The interpreter's constant, measured and cut (2026-09-07):** a
+  fresh look at the same profile from the host side. `perf` on a replay
+  of chunks 0–4 put 49% of samples in libc malloc/free: the bootstrap
+  evaluator's environment was a persistent cons list allocating one Rc
+  node per bound value — per argument, per pattern capture (wildcards
+  included), per let binding, about five per dispatch — and the bitwise
+  and `mod` primitives took the general Val→Expr→Val path (a Vec and
+  several BigInt clones per call, ~240M calls over chunks 0–18). Landed
+  in `rust_bootstrap` (8b1030e): bindings on one value stack with a
+  separate operand stack for in-flight values (pushing operands onto
+  the binding stack read outer bindings at the wrong offset when a
+  match sat inside an argument — v3/test.sh caught it), the six
+  primitives on the tagged fast path with the table's guards repeated
+  (a new test sweeps every shared two-Int primitive through `eval::eval`
+  against the table), mimalloc as the allocator. In K (430b16a): the
+  IntMap trie ends in leaves, so a walk is ≈ log₄(table size) levels
+  instead of the full 24-bit key width (the trie was a quarter of all
+  dispatches, mostly in the per-declaration memo tables of a few hundred
+  entries). Chunks 0–4: 67.7 s → 51.1 (stack) → 46.9 (prims) → 32.5
+  (operand stack) → 30.4 (mimalloc) → 25.8 (leaves); chunks 0–21: 724 s
+  → 280 s; verdicts identical at every step (4,367 / 0 / 0 / 0 through
+  chunk 21; chunks 0–24 accepted 4,380 / 0 / 0 / 0, 416 s).
+  What remains is the evaluator's own dispatch: 52% of samples in
+  `eval_ir` itself, 11% pattern matching, 6% moving arguments from the
+  operand stack to the frame, 9% Rc clone/drop, libc 1%. Levers left
+  there, each a few percent: unboxed small ints (every int is an
+  `Rc<BigInt>`; hash values allocate), a flat-pattern fast path in
+  `match_pat`, pointer compares for the If's True/False. The v2 compiler
+  chain does not take K's sources (tools/lower on `t0.shard` falls
+  through a run-mode match on `Pair` at once), so the compiled route
+  stays V3's own. Per-file dispatch share on chunks 0–4 after the cut:
+  primitives 49.5%, expr.shard 19.9%, util.shard 14.7% (bool_or,
+  int_list_eq, rev_onto — largely the reader's), json.shard 6.4%,
+  tc.shard 4.3%, intmap.shard 3.7%.
 - **Open in phase 1:** the full-export run and its cost measurement
   (chunks 0–24 done; 25–324 next — a multi-hour run whose environment
-  and tables grow with the export: 2.6 GB resident at chunk 20), the
-  six accelerator pins
+  and tables grow with the export: 2.6 GB resident at chunk 20; at the
+  cut rate chunks 0–24 take about 6 minutes), the six accelerator pins
   declared 24k–700k lines into the export, the `use`-free toolchain
-  profile's gate moving to CI, the per-traversal caches of the pin's
-  `replace_rec_fn` if a profile shows instantiate dominating.
+  profile's gate moving to CI, the evaluator levers listed above if a
+  prefix run needs them.
 
 ## 9. Related records
 

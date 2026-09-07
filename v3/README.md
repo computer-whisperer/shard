@@ -45,7 +45,12 @@ pointer identity), and the checker keeps the pin's memo tables; chunks
 route 3, flat in the DAG size where the plain tree took 13 / 28 / 48 /
 — / 118 s (records §8); chunks 0–21 (line 440,000, 4,367 declarations)
 accepted 4,367 / rejected 0 / exhausted 0 / mismatched 0 in 724 s, the
-two largest chunks at 143 s and 77 s. Not yet: the rest of the export
+two largest chunks at 143 s and 77 s. **Interpreter constant
+(2026-09-07):** the bootstrap evaluator binds on a value stack (its
+environment was an Rc-consed list — half the run time was malloc/free),
+the bitwise primitives take the tagged fast path, mimalloc is the
+allocator, and K's IntMap ends in leaves; chunks 0–4 now take 25.8 s
+and chunks 0–21 280 s, verdicts identical (records §8). Not yet: the rest of the export
 (≈6.5M lines; runs on prefixes are measured first), the six
 later-declared accelerator pins. **Nested
 inductives validated:** `Lean.Syntax` (export line 78,503; two levels of
