@@ -1,0 +1,194 @@
+;;; v3/kernel/test/tc_test.shard — the checker core on a hand-built
+;;; environment (Nat with its recursor, Bool, a two-field structure).
+;;; The recursor is written by hand here; inductive.shard generates it
+;;; in the next slice and this file then cross-checks the generation.
+
+(import "../host.shard")
+(import "../tc.shard")
+
+(type Case (Case (List Int) Bool))
+
+(fn u () Level (LParam (n1 (quote u))))
+(fn nat () Expr (Const (nm_nat) Nil))
+(fn zero () Expr (Const (nm_nat_zero) Nil))
+(fn succ () Expr (Const (nm_nat_succ) Nil))
+(fn lit ((k Int)) Expr (Lit (LitNat k)))
+(fn nm_rec () Name (n2 (quote Nat) (quote rec)))
+(fn nm_bool () Name (n1 (quote Bool)))
+(fn nm_p2 () Name (n1 (quote P2)))
+(fn nm_p2_mk () Name (n2 (quote P2) (quote mk)))
+(fn cv ((n Name) (ps (List Name)) (t Expr)) ConstantVal (ConstantVal n ps t))
+(fn x_ () Name (n1 (quote x)))
+(fn arrow ((a Expr) (b Expr)) Expr (Pi (x_) BDefault a (lift_loose_bvars b 0 1)))
+
+;; Nat.rec.{u} : (motive : Nat → Sort u) → motive Nat.zero →
+;;   ((n : Nat) → motive n → motive (Nat.succ n)) → (t : Nat) → motive t
+(fn rec_type () Expr
+  (Pi (n1 (quote motive)) BDefault (Pi (x_) BDefault (nat) (Sort (u)))
+    (Pi (n1 (quote zero)) BDefault (App (BVar 0) (zero))
+      (Pi (n1 (quote succ)) BDefault
+        (Pi (n1 (quote n)) BDefault (nat)
+          (Pi (n1 (quote ih)) BDefault (App (BVar 2) (BVar 0)) (App (BVar 3) (App (succ) (BVar 1)))))
+        (Pi (n1 (quote t)) BDefault (nat) (App (BVar 3) (BVar 0)))))))
+(fn succ_dom () Expr
+  (Pi (n1 (quote n)) BDefault (nat)
+    (Pi (n1 (quote ih)) BDefault (App (BVar 2) (BVar 0)) (App (BVar 3) (App (succ) (BVar 1))))))
+;; fun motive zero succ => zero
+(fn rule_zero () Expr
+  (Lam (n1 (quote motive)) BDefault (Pi (x_) BDefault (nat) (Sort (u)))
+    (Lam (n1 (quote zero)) BDefault (App (BVar 0) (zero))
+      (Lam (n1 (quote succ)) BDefault (succ_dom) (BVar 1)))))
+;; fun motive zero succ n => succ n (Nat.rec motive zero succ n)
+(fn rule_succ () Expr
+  (Lam (n1 (quote motive)) BDefault (Pi (x_) BDefault (nat) (Sort (u)))
+    (Lam (n1 (quote zero)) BDefault (App (BVar 0) (zero))
+      (Lam (n1 (quote succ)) BDefault (succ_dom)
+        (Lam (n1 (quote n)) BDefault (nat)
+          (App (App (BVar 1) (BVar 0))
+               (App (App (App (App (Const (nm_rec) (list (u))) (BVar 3)) (BVar 2)) (BVar 1)) (BVar 0))))))))
+
+(fn env () CheckedEnv
+  (CheckedEnv
+    (list
+      (Pair (nm_nat) (InductInfo (cv (nm_nat) Nil (Sort (LSucc LZero))) 0 0 (list (nm_nat)) (list (nm_nat_zero) (nm_nat_succ)) 0 True False False))
+      (Pair (nm_nat_zero) (CtorInfo (cv (nm_nat_zero) Nil (nat)) (nm_nat) 0 0 0 False))
+      (Pair (nm_nat_succ) (CtorInfo (cv (nm_nat_succ) Nil (arrow (nat) (nat))) (nm_nat) 1 0 1 False))
+      (Pair (nm_rec) (RecInfo (cv (nm_rec) (list (n1 (quote u))) (rec_type)) (list (nm_nat)) 0 0 1 2
+                       (list (RecursorRule (nm_nat_zero) 0 (rule_zero)) (RecursorRule (nm_nat_succ) 1 (rule_succ))) False False))
+      (Pair (nm_bool) (InductInfo (cv (nm_bool) Nil (Sort (LSucc LZero))) 0 0 (list (nm_bool)) (list (nm_bool_false) (nm_bool_true)) 0 False False False))
+      (Pair (nm_bool_false) (CtorInfo (cv (nm_bool_false) Nil (Const (nm_bool) Nil)) (nm_bool) 0 0 0 False))
+      (Pair (nm_bool_true) (CtorInfo (cv (nm_bool_true) Nil (Const (nm_bool) Nil)) (nm_bool) 1 0 0 False))
+      ;; structure P2 (a b : Nat)
+      (Pair (nm_p2) (InductInfo (cv (nm_p2) Nil (Sort (LSucc LZero))) 0 0 (list (nm_p2)) (list (nm_p2_mk)) 0 False False False))
+      (Pair (nm_p2_mk) (CtorInfo (cv (nm_p2_mk) Nil (arrow (nat) (arrow (nat) (Const (nm_p2) Nil)))) (nm_p2) 0 0 2 False))
+      ;; def id2 (x : Nat) : Nat := x   (regular hint, height 1)
+      (Pair (n1 (quote id2)) (DefnInfo (cv (n1 (quote id2)) Nil (arrow (nat) (nat))) (Lam (x_) BDefault (nat) (BVar 0)) (HRegular 1) Safe (list (n1 (quote id2)))))
+      ;; the operators reduce_nat accelerates, as axiom-shaped constants (typing only)
+      (Pair (n2 (quote Nat) (quote add)) (AxiomInfo (cv (n2 (quote Nat) (quote add)) Nil (arrow (nat) (arrow (nat) (nat)))) False))
+      (Pair (n2 (quote Nat) (quote sub)) (AxiomInfo (cv (n2 (quote Nat) (quote sub)) Nil (arrow (nat) (arrow (nat) (nat)))) False))
+      (Pair (n2 (quote Nat) (quote beq)) (AxiomInfo (cv (n2 (quote Nat) (quote beq)) Nil (arrow (nat) (arrow (nat) (Const (nm_bool) Nil)))) False))
+      (Pair (n2 (quote Nat) (quote ble)) (AxiomInfo (cv (n2 (quote Nat) (quote ble)) Nil (arrow (nat) (arrow (nat) (Const (nm_bool) Nil)))) False))
+      ;; the string-literal expansion's constants (typing only)
+      (Pair (nm_string) (AxiomInfo (cv (nm_string) Nil (Sort (LSucc LZero))) False))
+      (Pair (nm_char) (AxiomInfo (cv (nm_char) Nil (Sort (LSucc LZero))) False))
+      (Pair (n1 (quote List)) (AxiomInfo (cv (n1 (quote List)) (list (n1 (quote u))) (arrow (Sort (LSucc (u))) (Sort (LSucc (u))))) False))
+      (Pair (nm_list_nil) (AxiomInfo (cv (nm_list_nil) (list (n1 (quote u)))
+        (Pi (n1 (quote a)) BImplicit (Sort (LSucc (u))) (App (Const (n1 (quote List)) (list (u))) (BVar 0)))) False))
+      (Pair (nm_list_cons) (AxiomInfo (cv (nm_list_cons) (list (n1 (quote u)))
+        (Pi (n1 (quote a)) BImplicit (Sort (LSucc (u)))
+          (arrow (BVar 0) (arrow (App (Const (n1 (quote List)) (list (u))) (BVar 1)) (App (Const (n1 (quote List)) (list (u))) (BVar 2)))))) False))
+      (Pair (nm_char_of_nat) (AxiomInfo (cv (nm_char_of_nat) Nil (arrow (nat) (Const (nm_char) Nil))) False))
+      (Pair (nm_string_of_list) (AxiomInfo (cv (nm_string_of_list) Nil (arrow (App (Const (n1 (quote List)) (list LZero)) (Const (nm_char) Nil)) (Const (nm_string) Nil))) False))
+      ;; theorem-shaped constant: thm : Nat := Nat.zero (has_value ⇒ unfolds)
+      (Pair (n1 (quote thm)) (ThmInfo (cv (n1 (quote thm)) Nil (nat)) (zero) (list (n1 (quote thm))))))
+    False))
+
+(fn ctx () Ctx (Ctx (env) Nil (Some (list (n1 (quote u)))) Safe False 100000))
+(fn ctx_np () Ctx (Ctx (env) Nil (Some Nil) Safe False 100000))
+(fn st0 () St (St 0 0))
+(fn D () Int 300)
+
+(fn ok_is ((r (KRes Expr)) (e Expr)) Bool (match r ((KOk _ x) (expr_eq x e)) (_ False)))
+(fn ok_bool ((r (KRes Bool)) (b Bool)) Bool (match r ((KOk _ x) (if b x (bool_not x))) (_ False)))
+(fn rejected ((r (KRes Expr)) (s Symbol)) Bool
+  (match r
+    ((KFail (FRej (RuleViolation t))) (sym_eq s t))
+    ((KFail (FRej (Malformed t))) (sym_eq s t))
+    ((KFail (FRej (Unsupported t))) (sym_eq s t))
+    (_ False)))
+(fn exhausted ((r (KRes Expr))) Bool (match r ((KFail (FOut _ _)) True) (_ False)))
+
+(fn id_nat () Expr (Lam (x_) BDefault (nat) (BVar 0)))
+(fn motive_nat () Expr (Lam (x_) BDefault (nat) (nat)))
+;; Nat.rec.{1} (fun _ => Nat) 7 (fun n ih => ih) 2
+(fn rec_app ((major Expr)) Expr
+  (App (App (App (App (Const (nm_rec) (list (LSucc LZero))) (motive_nat)) (lit 7))
+            (Lam (n1 (quote n)) BDefault (nat) (Lam (n1 (quote ih)) BDefault (nat) (BVar 0))))
+       major))
+(fn nat_add ((a Expr) (b Expr)) Expr (App (App (Const (n2 (quote Nat) (quote add)) Nil) a) b))
+(fn p2_mk ((a Expr) (b Expr)) Expr (App (App (Const (nm_p2_mk) Nil) a) b))
+(fn ctx_with_p () Ctx (ctx_add_local (ctx) (LDecl 0 (n1 (quote p)) (Const (nm_p2) Nil) None BDefault)))
+(fn ctx_with_h () Ctx
+  ;; h1 h2 : (∀ p : Prop, p)  — two proofs of one proposition
+  (ctx_add_local (ctx_add_local (ctx) (LDecl 0 (n1 (quote h1)) (Pi (x_) BDefault (Sort LZero) (BVar 0)) None BDefault))
+                 (LDecl 1 (n1 (quote h2)) (Pi (x_) BDefault (Sort LZero) (BVar 0)) None BDefault)))
+
+(fn cases () (List Case)
+  (list
+    (Case "Sort 0 : Sort 1" (ok_is (infer (ctx) (st0) (D) (Sort LZero) False) (Sort (LSucc LZero))))
+    (Case "Nat : Sort 1" (ok_is (infer (ctx) (st0) (D) (nat) False) (Sort (LSucc LZero))))
+    (Case "fun x : Nat => x  :  Nat -> Nat" (ok_is (infer (ctx) (st0) (D) (id_nat) False) (arrow (nat) (nat))))
+    (Case "(fun x => x) zero : Nat" (ok_is (infer (ctx) (st0) (D) (App (id_nat) (zero)) False) (nat)))
+    (Case "succ zero : Nat" (ok_is (infer (ctx) (st0) (D) (App (succ) (zero)) False) (nat)))
+    (Case "succ Nat  rejected: app_type_mismatch" (rejected (infer (ctx) (st0) (D) (App (succ) (nat)) False) (quote app_type_mismatch)))
+    (Case "zero zero rejected: function_expected" (rejected (infer (ctx) (st0) (D) (App (zero) (zero)) False) (quote function_expected)))
+    (Case "forall p : Prop, p  :  Prop" (ok_is (infer (ctx) (st0) (D) (Pi (x_) BDefault (Sort LZero) (BVar 0)) False) (Sort LZero)))
+    (Case "Nat -> Nat : Sort 1" (ok_is (infer (ctx) (st0) (D) (arrow (nat) (nat)) False) (Sort (LSucc LZero))))
+    (Case "Sort u with u declared" (ok_is (infer (ctx) (st0) (D) (Sort (u)) False) (Sort (LSucc (u)))))
+    (Case "Sort u undeclared rejected" (rejected (infer (ctx_np) (st0) (D) (Sort (u)) False) (quote undefined_universe)))
+    (Case "unknown constant rejected" (rejected (infer (ctx) (st0) (D) (Const (n1 (quote nope)) Nil) False) (quote unknown_constant)))
+    (Case "universe arity rejected" (rejected (infer (ctx) (st0) (D) (Const (nm_rec) Nil) False) (quote universe_arity)))
+    (Case "loose bvar malformed" (rejected (infer (ctx) (st0) (D) (BVar 0) False) (quote loose_bvar)))
+    (Case "let x := zero; succ x : Nat"
+      (ok_is (infer (ctx) (st0) (D) (Let (x_) (nat) (zero) (App (succ) (BVar 0))) False) (nat)))
+    (Case "literal 5 : Nat" (ok_is (infer (ctx) (st0) (D) (lit 5) False) (nat)))
+    (Case "string literal : String" (ok_is (infer (ctx) (st0) (D) (Lit (LitStr "ab")) False) (Const (nm_string) Nil)))
+    ;; the pin returns the instantiated codomain unreduced (infer_app l. 187): motive t = (fun _ => Nat) 2
+    (Case "rec app : (fun _ => Nat) 2" (ok_is (infer (ctx) (st0) (D) (rec_app (lit 2)) False) (App (motive_nat) (lit 2))))
+    (Case "rec app type ≡ Nat" (match (infer (ctx) (st0) (D) (rec_app (lit 2)) False) ((KOk st1 t) (ok_bool (is_def_eq (ctx) st1 (D) t (nat)) True)) (_ False)))
+    (Case "whnf beta" (ok_is (whnf (ctx) (st0) (D) (App (id_nat) (zero))) (zero)))
+    ;; the pin: after zeta, `Nat.succ Nat.zero` meets reduce_nat (Nat.zero is a nat-lit-ext) → literal 1
+    (Case "whnf zeta then nat: let x := zero; succ x = 1" (ok_is (whnf (ctx) (st0) (D) (Let (x_) (nat) (zero) (App (succ) (BVar 0)))) (lit 1)))
+    (Case "whnf_core zeta alone" (ok_is (whnf_core (ctx) (st0) (D) (Let (x_) (nat) (zero) (App (succ) (BVar 0))) False False) (App (succ) (zero))))
+    (Case "whnf succ 3 = 4" (ok_is (whnf (ctx) (st0) (D) (App (succ) (lit 3))) (lit 4)))
+    (Case "whnf Nat.add 2 3 = 5" (ok_is (whnf (ctx) (st0) (D) (nat_add (lit 2) (lit 3))) (lit 5)))
+    (Case "whnf delta id2 zero = zero" (ok_is (whnf (ctx) (st0) (D) (App (Const (n1 (quote id2)) Nil) (zero))) (zero)))
+    (Case "whnf unfolds a theorem" (ok_is (whnf (ctx) (st0) (D) (Const (n1 (quote thm)) Nil)) (zero)))
+    (Case "iota on literal major: rec … 2 = 7" (ok_is (whnf (ctx) (st0) (D) (rec_app (lit 2))) (lit 7)))
+    (Case "iota on ctor major: rec … (succ zero) = 7" (ok_is (whnf (ctx) (st0) (D) (rec_app (App (succ) (zero)))) (lit 7)))
+    (Case "proj reduces: (P2.mk 1 2).1 = 2" (ok_is (whnf (ctx) (st0) (D) (Proj (nm_p2) 1 (p2_mk (lit 1) (lit 2)))) (lit 2)))
+    (Case "infer proj: (P2.mk 1 2).0 : Nat" (ok_is (infer (ctx) (st0) (D) (Proj (nm_p2) 0 (p2_mk (lit 1) (lit 2))) False) (nat)))
+    (Case "proj out of range rejected" (rejected (infer (ctx) (st0) (D) (Proj (nm_p2) 2 (p2_mk (lit 1) (lit 2))) False) (quote invalid_projection)))
+    (Case "defeq refl" (ok_bool (is_def_eq (ctx) (st0) (D) (nat) (nat)) True))
+    (Case "defeq offset: succ (succ zero) ≡ 2" (ok_bool (is_def_eq (ctx) (st0) (D) (App (succ) (App (succ) (zero))) (lit 2)) True))
+    (Case "defeq: 2 ≢ 3" (ok_bool (is_def_eq (ctx) (st0) (D) (lit 2) (lit 3)) False))
+    (Case "defeq beta: (fun x => x) zero ≡ zero" (ok_bool (is_def_eq (ctx) (st0) (D) (App (id_nat) (zero)) (zero)) True))
+    (Case "defeq eta: (fun x => succ x) ≡ succ" (ok_bool (is_def_eq (ctx) (st0) (D) (Lam (x_) BDefault (nat) (App (succ) (BVar 0))) (succ)) True))
+    (Case "defeq delta: id2 ≡ fun x => x" (ok_bool (is_def_eq (ctx) (st0) (D) (Const (n1 (quote id2)) Nil) (id_nat)) True))
+    (Case "defeq nat: Nat.add 2 3 ≡ 5" (ok_bool (is_def_eq (ctx) (st0) (D) (nat_add (lit 2) (lit 3)) (lit 5)) True))
+    (Case "defeq iota: rec … 2 ≡ 7" (ok_bool (is_def_eq (ctx) (st0) (D) (rec_app (lit 2)) (lit 7)) True))
+    (Case "defeq levels: Sort (max u 0) ≡ Sort u" (ok_bool (is_def_eq (ctx) (st0) (D) (Sort (LMax (u) LZero)) (Sort (u))) True))
+    (Case "defeq binding: Nat -> Nat ≡ Nat -> Nat with beta in domain"
+      (ok_bool (is_def_eq (ctx) (st0) (D) (arrow (App (motive_nat) (zero)) (nat)) (arrow (nat) (nat))) True))
+    (Case "defeq struct eta: p ≡ P2.mk p.0 p.1"
+      (ok_bool (is_def_eq (ctx_with_p) (st0) (D) (FVar 0) (p2_mk (Proj (nm_p2) 0 (FVar 0)) (Proj (nm_p2) 1 (FVar 0)))) True))
+    (Case "defeq proof irrelevance: h1 ≡ h2"
+      (ok_bool (is_def_eq (ctx_with_h) (st0) (D) (FVar 0) (FVar 1)) True))
+    (Case "defeq Bool.true shortcut: Nat.beq 2 2 ≡ true"
+      (ok_bool (is_def_eq (ctx) (st0) (D) (App (App (Const (n2 (quote Nat) (quote beq)) Nil) (lit 2)) (lit 2)) (c_bool_true)) True))
+    (Case "defeq: Nat.ble 3 2 ≢ true"
+      (ok_bool (is_def_eq (ctx) (st0) (D) (App (App (Const (n2 (quote Nat) (quote ble)) Nil) (lit 3)) (lit 2)) (c_bool_true)) False))
+    (Case "string lit ≡ its expansion head"
+      (ok_bool (is_def_eq (ctx) (st0) (D) (Lit (LitStr "a")) (string_lit_to_constructor "a")) True))
+    (Case "native reduction unsupported"
+      (rejected (whnf (ctx) (st0) (D) (App (Const (nm_reduce_bool) Nil) (Const (n1 (quote c)) Nil))) (quote native_reduction)))
+    (Case "depth exhaustion" (exhausted (infer (ctx) (st0) 2 (App (id_nat) (App (id_nat) (zero))) False)))
+    (Case "heartbeat exhaustion" (exhausted (infer (Ctx (env) Nil (Some Nil) Safe False 3) (st0) (D) (rec_app (lit 2)) False)))
+    (Case "nat size exhaustion: pow" (exhausted (whnf (ctx) (st0) (D) (App (App (Const (n2 (quote Nat) (quote pow)) Nil) (lit 2)) (lit 5000000000)))))
+    (Case "Nat.sub saturates: 2 - 3 = 0" (ok_is (whnf (ctx) (st0) (D) (App (App (Const (n2 (quote Nat) (quote sub)) Nil) (lit 2)) (lit 3))) (lit 0)))
+    (Case "Nat.div 7 0 = 0" (ok_is (whnf (ctx) (st0) (D) (App (App (Const (n2 (quote Nat) (quote div)) Nil) (lit 7)) (lit 0))) (lit 0)))
+    (Case "Nat.mod 7 0 = 7" (ok_is (whnf (ctx) (st0) (D) (App (App (Const (n2 (quote Nat) (quote mod)) Nil) (lit 7)) (lit 0))) (lit 7)))
+    (Case "Nat.gcd 12 18 = 6" (ok_is (whnf (ctx) (st0) (D) (App (App (Const (n2 (quote Nat) (quote gcd)) Nil) (lit 12)) (lit 18))) (lit 6)))
+    (Case "Nat.shiftLeft 3 4 = 48" (ok_is (whnf (ctx) (st0) (D) (App (App (Const (n2 (quote Nat) (quote shiftLeft)) Nil) (lit 3)) (lit 4))) (lit 48)))
+    (Case "Nat.pow 2 10 = 1024" (ok_is (whnf (ctx) (st0) (D) (App (App (Const (n2 (quote Nat) (quote pow)) Nil) (lit 2)) (lit 10))) (lit 1024)))
+    (Case "Nat.xor 5 3 = 6" (ok_is (whnf (ctx) (st0) (D) (App (App (Const (n2 (quote Nat) (quote xor)) Nil) (lit 5)) (lit 3))) (lit 6)))
+    (Case "utf8 decode" (int_list_eq (utf8_decode "aé€") (list 97 233 8364)))))
+
+(fn run ((cs (List Case)) (fails Int) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil (exit fails (write_line (append "tc_test: failures = " (show_int fails)) w)))
+    ((Cons (Case name ok) r)
+     (run r (if ok fails (+ fails 1)) (write_line (append (if ok "PASS " "FAIL ") name) w)))))
+
+(fn main ((w World)) World (run (cases) 0 w))
