@@ -8,12 +8,12 @@
 //! (`Rc`), so capturing a list tail in a pattern or looking up a
 //! variable is O(1) — no structural copying on the hot path.
 //!
-//! Binding convention (unchanged, locally-nameless / de Bruijn): the
-//! environment is innermost-first, `BVar 0` = the most recently bound
-//! value. It is kept on a binding STACK (see `Stacks` below); entering a
-//! binder PUSHES its freshly-bound values, which reproduces the de
-//! Bruijn shift (existing indices move up by the number of new binders)
-//! without any renumbering. A user fn's body is closed except for its
+//! Binding convention (unchanged at the loader, locally-nameless / de
+//! Bruijn): `BVar 0` = the most recently bound value. Values live on ONE
+//! STACK (see `Stack` below); entering a binder PUSHES its freshly-bound
+//! values, which reproduces the de Bruijn shift without any renumbering,
+//! and the lowerer turns each index into the physical slot past the
+//! temporaries in flight. A user fn's body is closed except for its
 //! parameters, so a call evaluates the body in a frame of just the
 //! argument values (the last one on top).
 //!
@@ -30,32 +30,26 @@ use std::rc::Rc;
 use crate::ast::{Expr, FnDef, Module, Pat};
 use crate::prim;
 
-// The ENVIRONMENT is ONE BINDING STACK shared by the whole evaluation,
-// innermost-first from the top: `BVar 0` is the top of `fr`. Entering a
-// binder PUSHES its freshly-bound values, which reproduces the de Bruijn
-// shift with no renumbering and NO ALLOCATION. This replaces an Rc-consed
-// list that heap-allocated one node per bound value — per argument, per
-// pattern capture (wildcards included), per let binding — which `perf`
-// showed as half the run time of a kernel replay (malloc/free = 49% of
-// samples, ~5 nodes per dispatch).
-//
-// Values in flight — a call's arguments, a let's RHSs, a constructor's
-// fields — are evaluated straight onto a second, OPERAND stack `op`, never
-// onto `fr`: an argument is evaluated against the frame that is current
-// when its call began, and a match or let inside it must find that frame
-// exactly at the top of `fr`. (Pushing operands onto `fr` itself was tried
-// and read outer bindings at the wrong offset.) A call then moves its
-// arguments from `op` onto `fr` in one drain. Every `eval_ir` call records
-// both heights at entry and restores them before returning, so a
-// sub-evaluation leaves the caller's stacks exactly as it found them; a
-// tail call truncates `fr` to its entry height first, dropping the frame it
-// replaces. A fn body is closed but for its parameters, so an index never
-// reaches below its own frame into the caller's; the bounds check in the
-// BVar arm is the loud failure for a body that was never opened.
-struct Stacks {
-    fr: Vec<Val>,
-    op: Vec<Val>,
-}
+// The ENVIRONMENT is ONE VALUE STACK shared by the whole evaluation.
+// Entering a binder PUSHES its freshly-bound values, and values in flight
+// — a call's arguments, a let's RHSs, a constructor's fields — are pushed
+// onto the same stack as they are computed: NO ALLOCATION per binding (an
+// Rc-consed list here was half the run time of a kernel replay: malloc/free
+// = 49% of samples, ~5 nodes per dispatch) and NO MOVE per call (a separate
+// operand stack, tried next, spent 8% moving arguments onto the frame).
+// The loader's de Bruijn index counts BINDINGS only, so the lowerer turns
+// it into a PHYSICAL slot from the top — the binding's distance plus the
+// temporaries in flight above it at that point in the expression, known
+// statically (see `Lowerer::layout`). Every `eval_ir` call records the
+// stack height at entry and restores it before returning, so a
+// sub-evaluation leaves the caller's stack exactly as it found it; a tail
+// call drains the frame this invocation owns out from under the arguments
+// it just pushed (they slide down into place; nothing moves when the
+// invocation owns no frame yet, the common non-tail call). A fn body is
+// closed but for its parameters, so a slot never reaches below its own
+// frame into the caller's; the bounds check in the BVar arm is the loud
+// failure for a body that was never opened.
+type Stack = Vec<Val>;
 
 #[derive(Debug)]
 pub enum EvalError {
@@ -313,6 +307,22 @@ fn intern(s: &str) -> Rc<str> {
 struct Lowerer<'a> {
     names: HashMap<&'a str, Rc<str>>,
     fnidx: HashMap<&'a str, u32>,
+    /// The stack layout at the point being lowered, bottom to top: `true`
+    /// for a binding (a parameter, a pattern capture, a let binding),
+    /// `false` for a temporary in flight (an argument already computed for
+    /// the call being lowered). A de Bruijn index counts bindings only;
+    /// the physical slot counts both.
+    layout: Vec<bool>,
+}
+
+/// Captures a pattern introduces (the loader binds one name per `PVar`,
+/// left to right).
+fn count_pvars(p: &Pat) -> usize {
+    match p {
+        Pat::PVar => 1,
+        Pat::PCtor(_, sub) => sub.iter().map(count_pvars).sum(),
+        Pat::PInt(_) | Pat::PSym(_) => 0,
+    }
 }
 
 impl<'a> Lowerer<'a> {
@@ -321,21 +331,38 @@ impl<'a> Lowerer<'a> {
         self.names.entry(s).or_insert_with(|| intern(s)).clone()
     }
 
+    /// The physical slot (from the top of the stack) of the `k`-th binding
+    /// from the top, skipping the temporaries in flight. An index the
+    /// layout does not reach is a loader bug; it becomes an out-of-range
+    /// slot, which the machine reports as UnboundBVar.
+    fn slot(&self, k: u32) -> u32 {
+        let mut left = k;
+        for (p, is_binding) in self.layout.iter().rev().enumerate() {
+            if *is_binding {
+                if left == 0 {
+                    return p as u32;
+                }
+                left -= 1;
+            }
+        }
+        u32::MAX
+    }
+
     fn lower(&mut self, e: &'a Expr) -> IExpr {
         match e {
             Expr::IntLit(n) => IExpr::Int(int_val(n.clone())),
             Expr::SymLit(s) => IExpr::Sym(self.intern(s)),
             Expr::FVar(s) => IExpr::FVar(self.intern(s)),
-            Expr::BVar(k) => IExpr::BVar(*k),
+            Expr::BVar(k) => IExpr::BVar(self.slot(*k)),
             // Nat former (kernel/stdlib.shard): a bare `Z` IS the literal 0
             // (the eval arm's packing rule, decided here once).
             Expr::Ctor(n, args) if args.is_empty() && n == "Z" => IExpr::Int(Val::Int(0)),
             Expr::Ctor(n, args) if args.is_empty() => {
                 IExpr::Ctor0(Val::Ctor(self.intern(n), Rc::from([].as_slice())))
             }
-            Expr::Ctor(n, args) => IExpr::Ctor(self.intern(n), self.lower_list(args)),
+            Expr::Ctor(n, args) => IExpr::Ctor(self.intern(n), self.lower_args(args)),
             Expr::Call(n, args) => {
-                let largs = self.lower_list(args);
+                let largs = self.lower_args(args);
                 match self.fnidx.get(n.as_str()) {
                     Some(&i) => IExpr::CallFn(i, largs),
                     None => {
@@ -364,20 +391,53 @@ impl<'a> Lowerer<'a> {
                 Box::new(self.lower(t)),
                 Box::new(self.lower(el)),
             ),
-            Expr::Match(scrut, arms) => IExpr::Match(
-                Box::new(self.lower(scrut)),
-                arms.iter()
-                    .map(|a| IArm { pat: self.lower_pat(&a.pat), body: self.lower(&a.body) })
-                    .collect(),
-            ),
+            // The scrutinee's and the condition's values go to a Rust local,
+            // never onto the stack: the arms see the outer layout, plus the
+            // captures a fired arm pushes.
+            Expr::Match(scrut, arms) => {
+                let scrut = Box::new(self.lower(scrut));
+                let arms = arms
+                    .iter()
+                    .map(|a| {
+                        let pat = self.lower_pat(&a.pat);
+                        let n = count_pvars(&a.pat);
+                        let depth = self.layout.len();
+                        self.layout.resize(depth + n, true);
+                        let body = self.lower(&a.body);
+                        self.layout.truncate(depth);
+                        IArm { pat, body }
+                    })
+                    .collect();
+                IExpr::Match(scrut, arms)
+            }
+            // Parallel let: the RHSs are computed in flight (each sees the
+            // outer bindings past the earlier RHSs), then BECOME the
+            // bindings in place — the same slots, relabelled.
             Expr::Let(rhss, body) => {
-                IExpr::Let(self.lower_list(rhss), Box::new(self.lower(body)))
+                let rhs = self.lower_args(rhss);
+                let depth = self.layout.len();
+                self.layout.resize(depth + rhss.len(), true);
+                let body = Box::new(self.lower(body));
+                self.layout.truncate(depth);
+                IExpr::Let(rhs, body)
             }
         }
     }
 
-    fn lower_list(&mut self, es: &'a [Expr]) -> Box<[IExpr]> {
-        es.iter().map(|e| self.lower(e)).collect()
+    /// Lower a list of values computed in flight, left to right: each is
+    /// lowered with the earlier ones already on the stack as temporaries.
+    fn lower_args(&mut self, es: &'a [Expr]) -> Box<[IExpr]> {
+        let depth = self.layout.len();
+        let out = es
+            .iter()
+            .map(|e| {
+                let ie = self.lower(e);
+                self.layout.push(false);
+                ie
+            })
+            .collect();
+        self.layout.truncate(depth);
+        out
     }
 
     fn lower_pat(&mut self, p: &'a Pat) -> IPat {
@@ -401,7 +461,11 @@ impl<'a> Lowerer<'a> {
 /// assigned before any body is lowered, so recursive (and mutually
 /// referencing) calls resolve.
 fn lower_program<'a>(m: &'a Module, e: &'a Expr) -> (Prog, IExpr) {
-    let mut lo = Lowerer { names: HashMap::new(), fnidx: HashMap::with_capacity(m.fns.len()) };
+    let mut lo = Lowerer {
+        names: HashMap::new(),
+        fnidx: HashMap::with_capacity(m.fns.len()),
+        layout: Vec::new(),
+    };
     let mut firsts: Vec<&'a FnDef> = Vec::with_capacity(m.fns.len());
     for f in &m.fns {
         if !lo.fnidx.contains_key(f.name.as_str()) {
@@ -411,12 +475,14 @@ fn lower_program<'a>(m: &'a Module, e: &'a Expr) -> (Prog, IExpr) {
     }
     let fns = firsts
         .iter()
-        .map(|f| IFn {
-            name: lo.intern(&f.name),
-            arity: f.params.len(),
-            body: lo.lower(&f.body),
+        .map(|f| {
+            // A body's frame is its parameters, the last one on top.
+            lo.layout.clear();
+            lo.layout.resize(f.params.len(), true);
+            IFn { name: lo.intern(&f.name), arity: f.params.len(), body: lo.lower(&f.body) }
         })
         .collect();
+    lo.layout.clear();
     let ie = lo.lower(e);
     let true_name = intern("True");
     let false_name = intern("False");
@@ -426,7 +492,7 @@ fn lower_program<'a>(m: &'a Module, e: &'a Expr) -> (Prog, IExpr) {
 /// Reduce `e` to normal form within the context of `m`'s definitions.
 pub fn eval(m: &Module, e: &Expr) -> Result<Expr, EvalError> {
     let (prog, ie) = lower_program(m, e);
-    let mut st = Stacks { fr: Vec::with_capacity(4096), op: Vec::with_capacity(1024) };
+    let mut st: Stack = Vec::with_capacity(4096);
     let v = eval_ir(&prog, &mut st, &ie).map_err(|b| *b)?;
     Ok(val_to_expr(&v))
 }
@@ -443,12 +509,10 @@ pub fn eval(m: &Module, e: &Expr) -> Result<Expr, EvalError> {
 // the binding stack to this invocation's entry height first, so the frame
 // it replaces (and the terms only it reached) is dropped before the next
 // step.
-fn eval_ir<'a>(prog: &'a Prog, st: &mut Stacks, e0: &'a IExpr) -> EResult<Val> {
-    let fb = st.fr.len();
-    let ob = st.op.len();
-    let r = eval_loop(prog, st, fb, e0);
-    st.fr.truncate(fb);
-    st.op.truncate(ob);
+fn eval_ir<'a>(prog: &'a Prog, st: &mut Stack, e0: &'a IExpr) -> EResult<Val> {
+    let base = st.len();
+    let r = eval_loop(prog, st, base, e0);
+    st.truncate(base);
     r
 }
 
@@ -456,13 +520,13 @@ fn eval_ir<'a>(prog: &'a Prog, st: &mut Stacks, e0: &'a IExpr) -> EResult<Val> {
 /// prebuilt constructor — is answered here without entering the machine
 /// (most arguments and scrutinees are variables); anything else recurses.
 #[inline(always)]
-fn eval_sub<'a>(prog: &'a Prog, st: &mut Stacks, e: &'a IExpr) -> EResult<Val> {
+fn eval_sub<'a>(prog: &'a Prog, st: &mut Stack, e: &'a IExpr) -> EResult<Val> {
     match e {
         IExpr::BVar(k) => {
-            let n = st.fr.len();
+            let n = st.len();
             let k = *k as usize;
             if k < n {
-                Ok(st.fr[n - 1 - k].clone())
+                Ok(st[n - 1 - k].clone())
             } else {
                 fail(EvalError::UnboundBVar(k as u32))
             }
@@ -474,23 +538,19 @@ fn eval_sub<'a>(prog: &'a Prog, st: &mut Stacks, e: &'a IExpr) -> EResult<Val> {
     }
 }
 
-/// Evaluate `args` left to right against the current frame, pushing each
-/// value onto the operand stack; they end up at `st.op[mark..]` in order.
+/// Evaluate `args` left to right, pushing each value; they end up at
+/// `st[mark..]` in order (the LAST one on top). Each argument's slots were
+/// lowered with the earlier ones counted as temporaries above the frame.
 #[inline]
-fn push_args<'a>(prog: &'a Prog, st: &mut Stacks, args: &'a [IExpr]) -> EResult<()> {
+fn push_args<'a>(prog: &'a Prog, st: &mut Stack, args: &'a [IExpr]) -> EResult<()> {
     for a in args {
         let v = eval_sub(prog, st, a)?;
-        st.op.push(v);
+        st.push(v);
     }
     Ok(())
 }
 
-fn eval_loop<'a>(
-    prog: &'a Prog,
-    st: &mut Stacks,
-    base: usize,
-    e0: &'a IExpr,
-) -> EResult<Val> {
+fn eval_loop<'a>(prog: &'a Prog, st: &mut Stack, base: usize, e0: &'a IExpr) -> EResult<Val> {
     let mut e: &'a IExpr = e0;
     loop {
         match e {
@@ -499,28 +559,28 @@ fn eval_loop<'a>(
             IExpr::FVar(s) => return Ok(Val::FVar(s.clone())),
             IExpr::Ctor0(v) => return Ok(v.clone()),
 
-            // A bound variable indexes the binding stack from its top.
+            // A bound variable's slot, from the top of the stack.
             IExpr::BVar(k) => {
-                let n = st.fr.len();
+                let n = st.len();
                 let k = *k as usize;
                 if k < n {
-                    return Ok(st.fr[n - 1 - k].clone());
+                    return Ok(st[n - 1 - k].clone());
                 }
                 return fail(EvalError::UnboundBVar(k as u32));
             }
 
             IExpr::Ctor(name, args) => {
-                let mark = st.op.len();
+                let mark = st.len();
                 push_args(prog, st, args)?;
                 // Nat former (kernel/stdlib.shard): ground Z/S packs to its
                 // nonneg literal — the unique ground Nat value (`Z` itself is
                 // lowered to the literal). This engine is flat-core (names ARE
                 // identity, cf. the True/False tests below), so the gate is the
                 // bare name. A symbolic or negative argument never packs. (An
-                // early return leaves the fields on the operand stack;
-                // `eval_ir` pops them.)
+                // early return leaves the field on the stack; `eval_ir` pops
+                // it.)
                 match &**name {
-                    "S" if args.len() == 1 => match &st.op[mark] {
+                    "S" if args.len() == 1 => match &st[mark] {
                         Val::Int(n) if *n >= 0 => {
                             return Ok(match n.checked_add(1) {
                                 Some(m) => Val::Int(m),
@@ -534,19 +594,20 @@ fn eval_loop<'a>(
                     },
                     _ => {}
                 }
-                // One allocation, the fields moved off the operand stack
-                // (Drain is TrustedLen, so this is `from_iter_exact`).
-                let fields: Rc<[Val]> = st.op.drain(mark..).collect();
+                // One allocation, the fields moved off the stack (Drain is
+                // TrustedLen, so this is `from_iter_exact`).
+                let fields: Rc<[Val]> = st.drain(mark..).collect();
                 return Ok(Val::Ctor(name.clone(), fields));
             }
 
             IExpr::CallFn(i, args) => {
-                // TAIL-LOOP into the fn body: the arguments are evaluated
-                // against the current frame onto the operand stack; then the
-                // frame this invocation owns is dropped and the arguments
-                // move onto the binding stack as the callee's frame. In
-                // order, so the LAST argument ends on top: BVar 0 = last
-                // parameter.
+                // TAIL-LOOP into the fn body: the arguments are pushed above
+                // whatever this invocation owns (its current frame, captures,
+                // let bindings — all dead once the call is made), which is
+                // then drained out from under them; they slide down to become
+                // the callee's frame, the LAST argument on top: BVar 0 = last
+                // parameter. A fresh invocation owns nothing yet, so its first
+                // call moves nothing.
                 let fd = &prog.fns[*i as usize];
                 prof_count(&fd.name);
                 if fd.arity != args.len() {
@@ -556,17 +617,18 @@ fn eval_loop<'a>(
                         got: args.len(),
                     });
                 }
-                let mark = st.op.len();
+                let mark = st.len();
                 push_args(prog, st, args)?;
-                st.fr.truncate(base);
-                st.fr.extend(st.op.drain(mark..));
+                if mark > base {
+                    st.drain(base..mark);
+                }
                 e = &fd.body;
             }
 
             IExpr::CallOther(tag, name, args) => {
-                let mark = st.op.len();
+                let mark = st.len();
                 push_args(prog, st, args)?;
-                return apply_other(*tag, name, &st.op[mark..]);
+                return apply_other(*tag, name, &st[mark..]);
             }
 
             IExpr::If(c, t, el) => match eval_sub(prog, st, c)? {
@@ -583,12 +645,12 @@ fn eval_loop<'a>(
                     // order (leftmost PVar first), so the LAST capture ends
                     // on top (= BVar 0) above the outer bindings, which stay;
                     // a failed arm's partial captures are popped again.
-                    let mark = st.fr.len();
-                    if match_pat(&arm.pat, &v, &mut st.fr) {
+                    let mark = st.len();
+                    if match_pat(&arm.pat, &v, st) {
                         next = Some(&arm.body);
                         break;
                     }
-                    st.fr.truncate(mark);
+                    st.truncate(mark);
                 }
                 match next {
                     Some(body) => e = body,
@@ -597,13 +659,11 @@ fn eval_loop<'a>(
             }
 
             IExpr::Let(rhss, body) => {
-                // Parallel let: every RHS is evaluated against the OUTER
-                // frame onto the operand stack before any is bound, so later
-                // RHSs cannot see earlier bindings; moved over in order, the
-                // LAST binding ends on top (= BVar 0).
-                let mark = st.op.len();
+                // Parallel let: every RHS is computed against the outer
+                // bindings (the lowerer counted the earlier RHSs as
+                // temporaries), and the values pushed ARE the bindings, the
+                // LAST one on top (= BVar 0).
                 push_args(prog, st, rhss)?;
-                st.fr.extend(st.op.drain(mark..));
                 e = body;
             }
         }
