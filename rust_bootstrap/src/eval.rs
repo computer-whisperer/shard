@@ -143,7 +143,8 @@ pub fn prof_dump() {
             v.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
             let total: u64 = v.iter().map(|&(_, n)| n).sum();
             eprintln!("== SHARD_PROF: {total} dispatches ==");
-            for (name, n) in v.iter().take(40) {
+            let top = std::env::var("SHARD_PROF_TOP").ok().and_then(|s| s.parse().ok()).unwrap_or(40);
+            for (name, n) in v.iter().take(top) {
                 eprintln!("{n:>14}  {name}");
             }
         }
