@@ -3,8 +3,9 @@
 # 819816b2e0a3bf405af45ae5c7af2491d8f5bee6, v3/README.md) exported by
 # lean4export at 15f6055 with its toolchain forced to v4.33.1 (the head pins a
 # later toolchain that cannot export the pinned kernel — records §8), into
-# $V3_EXPORT_DIR (default .shard-cache/v3-export: untracked; on CI the
-# runner-local cache). Idempotent: an export carrying the pin marker is reused.
+# $V3_EXPORT_DIR (default .shard-cache/v3-export: untracked; on CI built
+# fresh every run, 77 s — caching the 3.5 GB tree cost more than that).
+# Idempotent: an export carrying the pin marker is reused.
 # elan is installed into $ELAN_HOME (default $V3_EXPORT_DIR/elan) when absent,
 # without touching shell profiles.
 set -euo pipefail

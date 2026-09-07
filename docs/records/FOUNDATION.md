@@ -707,7 +707,9 @@ is `docs/FOUNDATION.md` §5.3.
   745 s, 30.2 GB peak; the first CI pass, pipeline 448 on the high-cpu
   runner: 2,564 s, 30.4 GB peak, the export built there in 74 s), and the
   `v3` CI job (gate stage, high-cpu, needs the engine artifacts, the
-  export in the runner-local cache). `bin/shard_eval` rebuilt on the dev
+  export built fresh each run: a runner cache of the 3.5 GB export tree
+  was tried on the first pass and its upload ran past 45 minutes against
+  a 77 s rebuild, so it was dropped). `bin/shard_eval` rebuilt on the dev
   box (stamp a3c9a930…, 16 s fast-boot; its lower and codegen outputs on
   K byte-identical to the Aug 2 engine's). The interpreter is still the
   authority; the compiled artifact becomes route 1 proper when the
