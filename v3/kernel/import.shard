@@ -15,7 +15,7 @@
 (type Tabs (Tabs (IntMap Name) (IntMap Level) (IntMap Expr)))
 
 ;; the run's state: tables, environment, checker state, counters
-(type Run (Run Tabs CheckedEnv St Int Int Int Int Int))   ; accepted rejected exhausted mismatched unsupported
+(type Run (Run Tabs CheckedEnv St Int Int Int Int Int Bool))   ; accepted rejected exhausted mismatched unsupported; pins mode
 
 (type Verdict
   (VAccept Name)
@@ -411,25 +411,27 @@
 
 ;; ---- one record ---------------------------------------------------------------------------
 
-(fn run_tabs ((r Run)) Tabs (match r ((Run t _ _ _ _ _ _ _) t)))
-(fn run_env ((r Run)) CheckedEnv (match r ((Run _ e _ _ _ _ _ _) e)))
-(fn run_st ((r Run)) St (match r ((Run _ _ s _ _ _ _ _) s)))
-(fn run_counts ((r Run)) (List Int) (match r ((Run _ _ _ a b c d e) (list a b c d e))))
-(fn run_with_tabs ((r Run) (t Tabs)) Run (match r ((Run _ e s a b c d f) (Run t e s a b c d f))))
-(fn run_with_env ((r Run) (e CheckedEnv) (s St)) Run (match r ((Run t _ _ a b c d f) (Run t e s a b c d f))))
+(fn run_tabs ((r Run)) Tabs (match r ((Run t _ _ _ _ _ _ _ _) t)))
+(fn run_env ((r Run)) CheckedEnv (match r ((Run _ e _ _ _ _ _ _ _) e)))
+(fn run_st ((r Run)) St (match r ((Run _ _ s _ _ _ _ _ _) s)))
+(fn run_pins_mode ((r Run)) Bool (match r ((Run _ _ _ _ _ _ _ _ m) m)))
+(fn run_counts ((r Run)) (List Int) (match r ((Run _ _ _ a b c d e _) (list a b c d e))))
+(fn run_with_tabs ((r Run) (t Tabs)) Run (match r ((Run _ e s a b c d f m) (Run t e s a b c d f m))))
+(fn run_with_env ((r Run) (e CheckedEnv) (s St)) Run (match r ((Run t _ _ a b c d f m) (Run t e s a b c d f m))))
 (fn run_count ((r Run) (which Int)) Run
   (match r
-    ((Run t e s a b c d f)
-     (if (int_eq which 0) (Run t e s (+ a 1) b c d f)
-     (if (int_eq which 1) (Run t e s a (+ b 1) c d f)
-     (if (int_eq which 2) (Run t e s a b (+ c 1) d f)
-     (if (int_eq which 3) (Run t e s a b c (+ d 1) f)
-     (Run t e s a b c d (+ f 1)))))))))
+    ((Run t e s a b c d f m)
+     (if (int_eq which 0) (Run t e s (+ a 1) b c d f m)
+     (if (int_eq which 1) (Run t e s a (+ b 1) c d f m)
+     (if (int_eq which 2) (Run t e s a b (+ c 1) d f m)
+     (if (int_eq which 3) (Run t e s a b c (+ d 1) f m)
+     (Run t e s a b c d (+ f 1) m))))))))
 
 ;; the verdict of checking one declaration and the run afterwards
 (fn check_into ((r Run) (d Declaration)) (Pair Run Verdict)
-  (match (check_decl (run_env r) (run_st r) d)
-    ((KOk st1 env1) (Pair (run_count (run_with_env r env1 st1) 0) (VAccept (decl_name d))))
+  (match (check_decl_pinning (run_env r) (run_st r) d)
+    ((KOk st1 env1)
+     (Pair (run_count (run_with_env r (if (run_pins_mode r) (pin_names_unconditionally env1 (decl_pin_candidates d)) env1) st1) 0) (VAccept (decl_name d))))
     ((KFail (FRej (Unsupported s))) (Pair (run_count r 4) (VUnsupported s (decl_name d))))
     ((KFail (FRej reason)) (Pair (run_count r 1) (VReject reason (decl_name d))))
     ((KFail (FOut res site)) (Pair (run_count r 2) (VExhaust res site (decl_name d))))))
@@ -519,4 +521,23 @@
        (append "  mismatched " (append (show_nat d) (append "  unsupported " (show_nat e)))))))))))
     (_ "")))
 
-(fn empty_run () Run (Run (Tabs IMEmpty IMEmpty IMEmpty) (CheckedEnv Nil False) (St 0 0) 0 0 0 0 0))
+(fn empty_run ((pins_mode Bool)) Run (Run (Tabs IMEmpty IMEmpty IMEmpty) (CheckedEnv Nil False Nil) (St 0 0) 0 0 0 0 0 pins_mode))
+
+;; pins mode (gen_pins.sh): every candidate is pinned as admitted — the
+;; run that PRODUCES the table from the pinned export; never a checking run
+(fn pin_names_unconditionally ((env CheckedEnv) (ns (List Name))) CheckedEnv
+  (measure (struct ns))
+  (match ns
+    (Nil env)
+    ((Cons n r) (pin_names_unconditionally (if (is_pin_candidate n) (env_pin env n) env) r))))
+
+;; the identity hashes of the pinned declarations, printed after the run
+(fn show_pins ((env CheckedEnv) (ns (List Name)) (w World)) World
+  (measure (struct ns))
+  (match ns
+    (Nil w)
+    ((Cons n r)
+     (show_pins env r
+       (match (identity_hash env n)
+         ((Some h) (write_line (append "PIN " (append (show_name n) (append " " (show_nat h)))) w))
+         (None w))))))

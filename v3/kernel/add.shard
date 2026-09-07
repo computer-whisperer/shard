@@ -5,6 +5,7 @@
 ;;; partial declarations and mutual definition blocks are Unsupported.
 
 (import "nested.shard")
+(import "accel_pins.shard")
 
 (fn nm_quot () Name (n1 (quote Quot)))
 (fn nm_eq () Name (n1 (quote Eq)))
@@ -112,7 +113,7 @@
                           (nm_quot_mk) (QuotInfo (ConstantVal (nm_quot_mk) u (quot_mk_type)) QCtor))
                           (nm_quot_lift) (QuotInfo (ConstantVal (nm_quot_lift) uv (quot_lift_type)) QLift))
                           (nm_quot_ind) (QuotInfo (ConstantVal (nm_quot_ind) u (quot_ind_type)) QInd))
-                  ((CheckedEnv xs _) (KOk st (CheckedEnv xs True))))))))))))))))
+                  ((CheckedEnv xs _ p) (KOk st (CheckedEnv xs True p))))))))))))))))
 
 ;; environment::add (l. 262) — the procedure of §3.3
 (fn check_decl ((env CheckedEnv) (st St) (d Declaration)) (KRes CheckedEnv)
@@ -168,5 +169,49 @@
     ((OpaqueDecl v _ _ _) (cv_name v)) (QuotDecl (nm_quot)) ((MutualDefnDecl _) Anon)
     ((InductDecl _ _ (Cons t _) _) (it_name t)) ((InductDecl _ _ Nil _) Anon)))
 
+;; the identity hash of an admitted constant: its type and, for
+;; definitions, its value; for an inductive type, its type and every
+;; constructor's type (in order)
+(fn identity_hash ((env CheckedEnv) (n Name)) (Option Int)
+  (match (env_find env n)
+    ((Some (DefnInfo (ConstantVal _ _ ty) v _ _ _)) (Some (mix (hash_expr ty) (hash_expr v))))
+    ((Some (InductInfo (ConstantVal _ _ ty) _ _ _ ctors _ _ _ _)) (Some (hash_ctor_types env ctors (hash_expr ty))))
+    ((Some info) (Some (hash_expr (ci_type info))))
+    (None None)))
+
+(fn hash_ctor_types ((env CheckedEnv) (ctors (List Name)) (acc Int)) Int
+  (measure (struct ctors))
+  (match ctors
+    (Nil acc)
+    ((Cons c r) (match (env_find env c) ((Some info) (hash_ctor_types env r (mix acc (hash_expr (ci_type info))))) (None acc)))))
+
+;; after admission: pin the declaration if its identity matches the table
+(fn pin_if_matches ((env CheckedEnv) (n Name)) CheckedEnv
+  (match (accel_pin n)
+    (None env)
+    ((Some h)
+     (match (identity_hash env n)
+       ((Some h1) (if (int_eq h h1) (env_pin env n) env))
+       (None env)))))
+
+(fn env_pin ((env CheckedEnv) (n Name)) CheckedEnv
+  (match env ((CheckedEnv xs q p) (CheckedEnv xs q (Cons n p)))))
+
+;; check + pin (the environment K clients use)
+(fn check_decl_pinning ((env CheckedEnv) (st St) (d Declaration)) (KRes CheckedEnv)
+  (match (check_decl env st d)
+    ((KFail f) (KFail f))
+    ((KOk st1 env1) (KOk st1 (pin_names env1 (decl_pin_candidates d))))))
+
+(fn pin_names ((env CheckedEnv) (ns (List Name))) CheckedEnv
+  (measure (struct ns))
+  (match ns (Nil env) ((Cons n r) (pin_names (pin_if_matches env n) r))))
+
+;; the names a declaration may pin: its own, or an inductive block's types
+(fn decl_pin_candidates ((d Declaration)) (List Name)
+  (match d
+    ((InductDecl _ _ types _) (all_names types))
+    (_ (Cons (decl_name d) Nil))))
+
 (fn check ((env CheckedEnv) (st St) (d Declaration)) Outcome
-  (outcome_of (check_decl env st d) (decl_name d)))
+  (outcome_of (check_decl_pinning env st d) (decl_name d)))

@@ -472,3 +472,51 @@
 
 (fn chars_of_name_last ((n Name)) (List Int)
   (match n ((Str _ s) (chars_of_sym s)) ((Num _ k) (show_nat k)) (Anon "_")))
+
+;; ---- structural hashing (identity pins, memo tables) --------------------------------
+;; A structural hash ignoring binder names and binder infos (like expr_eq),
+;; bounded by the prime M = 2^61 − 1. Not a security hash: it fixes an
+;; identity for the accelerator pins (FOUNDATION §3.2) and keys caches.
+
+(fn hash_m () Int 2305843009213693951)
+(fn mix ((a Int) (b Int)) Int (mod (+ (* a 1000003) (+ b 1)) (hash_m)))
+(fn mix3 ((a Int) (b Int) (c Int)) Int (mix (mix a b) c))
+
+(fn hash_bytes ((bs (List Int)) (acc Int)) Int
+  (measure (struct bs))
+  (match bs (Nil acc) ((Cons b r) (hash_bytes r (mix acc b)))))
+
+(fn hash_name ((n Name)) Int
+  (measure (struct n))
+  (match n
+    (Anon 7)
+    ((Str p s) (mix (hash_name p) (hash_bytes (chars_of_sym s) 5)))
+    ((Num p k) (mix (hash_name p) (+ k 3)))))
+
+(fn hash_level ((l Level)) Int
+  (measure (struct l))
+  (match l
+    (LZero 11)
+    ((LSucc x) (mix 13 (hash_level x)))
+    ((LMax a b) (mix3 17 (hash_level a) (hash_level b)))
+    ((LIMax a b) (mix3 19 (hash_level a) (hash_level b)))
+    ((LParam n) (mix 23 (hash_name n)))))
+
+(fn hash_levels ((ls (List Level)) (acc Int)) Int
+  (measure (struct ls))
+  (match ls (Nil acc) ((Cons l r) (hash_levels r (mix acc (hash_level l))))))
+
+(fn hash_expr ((e Expr)) Int
+  (measure (struct e))
+  (match e
+    ((BVar i) (mix 29 i))
+    ((FVar i) (mix 31 i))
+    ((Sort u) (mix 37 (hash_level u)))
+    ((Const n ls) (mix3 41 (hash_name n) (hash_levels ls 1)))
+    ((App f a) (mix3 43 (hash_expr f) (hash_expr a)))
+    ((Lam _ _ d b) (mix3 47 (hash_expr d) (hash_expr b)))
+    ((Pi _ _ d b) (mix3 53 (hash_expr d) (hash_expr b)))
+    ((Let _ t v b) (mix3 59 (mix (hash_expr t) (hash_expr v)) (hash_expr b)))
+    ((Lit (LitNat n)) (mix 61 n))
+    ((Lit (LitStr s)) (mix 67 (hash_bytes s 1)))
+    ((Proj s i x) (mix3 71 (mix (hash_name s) i) (hash_expr x)))))

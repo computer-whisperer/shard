@@ -50,8 +50,14 @@
 (fn ctx_set_eager ((c Ctx) (b Bool)) Ctx
   (match c ((Ctx e l p s _ m) (Ctx e l p s b m))))
 
-(fn env_entries ((e CheckedEnv)) (List (Pair Name ConstantInfo)) (match e ((CheckedEnv xs _) xs)))
-(fn env_quot_init ((e CheckedEnv)) Bool (match e ((CheckedEnv _ q) q)))
+(fn env_entries ((e CheckedEnv)) (List (Pair Name ConstantInfo)) (match e ((CheckedEnv xs _ _) xs)))
+(fn env_quot_init ((e CheckedEnv)) Bool (match e ((CheckedEnv _ q _) q)))
+(fn env_pins ((e CheckedEnv)) (List Name) (match e ((CheckedEnv _ _ p) p)))
+;; the fixed-identity gate (FOUNDATION §3.2): an accelerator, a literal
+;; typing rule or a literal expansion is enabled only for a declaration
+;; whose identity (its name and the structural hash of its admitted type
+;; and value) matches the pin table (accel_pins.shard)
+(fn env_pinned ((e CheckedEnv) (n Name)) Bool (mem_name n (env_pins e)))
 
 (fn assoc_name ((n Name) (xs (List (Pair Name ConstantInfo)))) (Option ConstantInfo)
   (measure (struct xs))
@@ -261,6 +267,12 @@
     (Nil None)
     ((Cons l r) (match (check_level c l) ((Some n) (Some n)) (None (check_levels c r))))))
 
+;; a literal is typed only under a pinned Nat / String (§3.2)
+(fn infer_lit_gated ((c Ctx) (st St) (l Literal)) (KRes Expr)
+  (match l
+    ((LitNat _) (if (env_pinned (ctx_env c) (nm_nat)) (infer_lit st l) (KFail (FRej (Unsupported (quote nat_literal_unpinned_Nat))))))
+    ((LitStr _) (if (env_pinned (ctx_env c) (nm_string)) (infer_lit st l) (KFail (FRej (Unsupported (quote string_literal_unpinned_String))))))))
+
 (fn infer_lit ((st St) (l Literal)) (KRes Expr)
   (match l
     ((LitNat n)
@@ -275,7 +287,7 @@
     ((KFail f) (KFail f))
     ((KOk st1 _)
      (match e
-       ((Lit l) (infer_lit st1 l))
+       ((Lit l) (infer_lit_gated c st1 l))
        ((Proj s i x) (infer_proj c st1 (- d 1) s i x io))
        ((FVar id)
         (match (lctx_find (ctx_lctx c) id)
@@ -851,7 +863,7 @@
     (if (int_eq nargs 1)
       (match e
         ((App f a)
-         (if (is_const_named f (nm_nat_succ))
+         (if (bool_and (is_const_named f (nm_nat_succ)) (env_pinned (ctx_env c) (nm_nat)))
            (match (whnf c st d a)
              ((KFail x) (KFail x))
              ((KOk st1 a1)
@@ -866,7 +878,7 @@
          (match f
            ((Const fnn _)
             (let ((op (nat_op_of fnn)))
-              (if (int_eq op 0) (KOk st None)
+              (if (bool_or (int_eq op 0) (bool_not (env_pinned (ctx_env c) fnn))) (KOk st None)
               (match (whnf c st d a)
                 ((KFail x) (KFail x))
                 ((KOk st1 a1)
