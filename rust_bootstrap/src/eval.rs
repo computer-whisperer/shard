@@ -361,6 +361,8 @@ enum PrimTag {
     Bshl,
     Bshr,
     Mod,
+    SymOfChars,
+    CharsOfSym,
     Other,
 }
 
@@ -394,7 +396,7 @@ struct Prog {
 // name is an id from here: the lowerer (ctor/sym names + patterns),
 // `val_of_value_expr` (primitive + effect-handler results), and the cached
 // Bool values. Equal name strings are the same id, so every name test in
-// the machine is an integer compare. The four names the machine itself
+// the machine is an integer compare. The six names the machine itself
 // knows are interned first, at fixed ids.
 struct Names {
     ids: HashMap<Rc<str>, u32>,
@@ -405,11 +407,13 @@ const TRUE_ID: u32 = 0;
 const FALSE_ID: u32 = 1;
 const Z_ID: u32 = 2;
 const S_ID: u32 = 3;
+const CONS_ID: u32 = 4;
+const NIL_ID: u32 = 5;
 
 impl Names {
     fn new() -> Names {
         let mut n = Names { ids: HashMap::new(), strs: Vec::new() };
-        for (i, s) in ["True", "False", "Z", "S"].iter().enumerate() {
+        for (i, s) in ["True", "False", "Z", "S", "Cons", "Nil"].iter().enumerate() {
             assert_eq!(n.intern(s), i as u32);
         }
         n
@@ -513,6 +517,8 @@ impl<'a> Lowerer<'a> {
                             "bshl" => PrimTag::Bshl,
                             "bshr" => PrimTag::Bshr,
                             "mod" => PrimTag::Mod,
+                            "sym_of_chars" => PrimTag::SymOfChars,
+                            "chars_of_sym" => PrimTag::CharsOfSym,
                             _ => PrimTag::Other,
                         };
                         IExpr::CallOther(tag, Rc::from(n.as_str()), largs)
@@ -820,6 +826,40 @@ fn shift_ok(k: i64) -> bool {
     (0..64).contains(&k)
 }
 
+/// The table's `decode_char_list` on a value: a Cons/Nil spine of bytes
+/// (each 0..256) that is valid UTF-8; None on any other shape (the call
+/// then takes the general path and stays stuck, as the table decides).
+fn decode_byte_list(v: &Val) -> Option<String> {
+    let mut bytes = Vec::new();
+    let mut cur = v;
+    loop {
+        match cur {
+            Val::Ctor(c) if c.name() == NIL_ID && c.len() == 0 => {
+                return String::from_utf8(bytes).ok();
+            }
+            Val::Ctor(c) if c.name() == CONS_ID && c.len() == 2 => {
+                let f = c.fields();
+                match &f[0] {
+                    Val::Int(b) if (0..256).contains(b) => bytes.push(*b as u8),
+                    _ => return None,
+                }
+                cur = &f[1];
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// The table's `encode_char_list`: the name's UTF-8 bytes as a Cons/Nil
+/// spine of ints, built back to front.
+fn encode_byte_list(s: &str) -> Val {
+    let mut acc = ctor0(NIL_ID);
+    for b in s.bytes().rev() {
+        acc = Val::Ctor(CtorRef::new(CONS_ID, [Val::Int(b as i64), acc].into_iter()));
+    }
+    acc
+}
+
 fn apply_other(tag: PrimTag, name: &str, args: &[Val]) -> EResult<Val> {
     // FAST PATH: the measured-hottest primitives on two machine integers,
     // dispatched by the PrimTag assigned at lowering (no strcmp). Each arm
@@ -908,6 +948,18 @@ fn apply_other(tag: PrimTag, name: &str, args: &[Val]) -> EResult<Val> {
                 Some(r) => Val::Int(r),
                 None => int_val(prim::rem_euclid(&Big::from(*x), &Big::from(*y))),
             });
+        }
+        // The symbol ↔ bytes bridge the reader lives on: the general path
+        // would rebuild the whole byte list as an Expr and back.
+        (PrimTag::SymOfChars, [v]) => {
+            if let Some(s) = decode_byte_list(v) {
+                prof_count_prim("sym_of_chars");
+                return Ok(Val::Sym(intern(&s)));
+            }
+        }
+        (PrimTag::CharsOfSym, [Val::Sym(id)]) => {
+            prof_count_prim("chars_of_sym");
+            return Ok(encode_byte_list(&name_str(*id)));
         }
         _ => {}
     }

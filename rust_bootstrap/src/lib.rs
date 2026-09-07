@@ -968,21 +968,41 @@ mod tests {
                         ast::Expr::IntLit(a.clone()),
                         ast::Expr::IntLit(b.clone()),
                     ];
-                    let native = prim::try_apply(name, &args);
-                    let call = ast::Expr::Call((*name).into(), args.to_vec());
-                    match (eval::eval(&m, &call), native) {
-                        (Ok(got), Some(want)) => {
-                            assert_eq!(got, want, "fast path drift at ({name} {a} {b})")
-                        }
-                        (Err(eval::EvalError::UnknownCall(n)), None) => {
-                            assert_eq!(n, *name)
-                        }
-                        (got, want) => panic!(
-                            "fast path vs table at ({name} {a} {b}): evaluator {got:?}, table {want:?}"
-                        ),
-                    }
+                    fast_path_point(&m, name, &args);
                 }
             }
+        }
+        // The symbol bridge: names round-trip, and the out-of-domain byte
+        // lists (a non-byte, a bare continuation byte, an encoded surrogate,
+        // a truncated lead, a negative) stay stuck through the evaluator too.
+        let syms = ["x", "y", "wadd", "_fresh0", "λ→"];
+        for a in syms {
+            for b in syms {
+                fast_path_point(&m, "sym_eq", &[ast::Expr::SymLit(a.into()), ast::Expr::SymLit(b.into())]);
+            }
+            fast_path_point(&m, "chars_of_sym", &[ast::Expr::SymLit(a.into())]);
+            let bs: Vec<ast::Expr> = a.bytes().map(|b| ast::Expr::IntLit(b.into())).collect();
+            fast_path_point(&m, "sym_of_chars", &[expr_spine(bs)]);
+        }
+        fast_path_point(&m, "sym_of_chars", &[expr_spine(vec![])]);
+        for bad in [vec![955], vec![0xFF], vec![0xED, 0xA0, 0x80], vec![0xC2], vec![-1]] {
+            let es: Vec<ast::Expr> =
+                bad.into_iter().map(|b: i64| ast::Expr::IntLit(b.into())).collect();
+            fast_path_point(&m, "sym_of_chars", &[expr_spine(es)]);
+        }
+    }
+
+    /// One (name, args) point through `eval::eval` against the native table:
+    /// equal values, or stuck (UnknownCall) exactly where the table is None.
+    fn fast_path_point(m: &ast::Module, name: &str, args: &[ast::Expr]) {
+        let native = prim::try_apply(name, args);
+        let call = ast::Expr::Call(name.into(), args.to_vec());
+        match (eval::eval(m, &call), native) {
+            (Ok(got), Some(want)) => assert_eq!(got, want, "fast path drift at ({name} {args:?})"),
+            (Err(eval::EvalError::UnknownCall(n)), None) => assert_eq!(n, name),
+            (got, want) => panic!(
+                "fast path vs table at ({name} {args:?}): evaluator {got:?}, table {want:?}"
+            ),
         }
     }
 
