@@ -5,15 +5,14 @@
 ;;; v4.33.1 — line numbers below are into type_checker.cpp unless said).
 ;;;
 ;;; Plumbing (narrow-compatible E, FOUNDATION §9.2): no mutation, so the
-;;; checker state `St` (fresh-variable counter, heartbeats) is threaded
-;;; through every procedure and every procedure returns a `KRes`. The
-;;; recursion-depth budget is the explicit `d` (the pin's max_rec_depth;
-;;; the measure of every mutually recursive procedure); the heartbeat
-;;; budget is counted in St (the pin's max_heartbeat). Both exhaust into
-;;; `Exhausted` (§3.3), never into a verdict. The pin's memo tables
-;;; (infer, whnf_core, whnf, defeq success/failure) are NOT implemented
-;;; in this slice: they change cost, never verdicts — a measured
-;;; optimization for T0 (FOUNDATION §12.5).
+;;; checker state `St` (fresh-variable counter, heartbeats, node-id
+;;; counter — expr.shard) is threaded through every procedure and every
+;;; procedure returns a `KRes`. The recursion-depth budget is the explicit
+;;; `d` (the pin's max_rec_depth; the measure of every mutually recursive
+;;; procedure); the heartbeat budget is counted in St (the pin's
+;;; max_heartbeat). Both exhaust into `Exhausted` (§3.3), never into a
+;;; verdict. The pin's memo tables (infer, whnf_core, whnf, defeq
+;;; success/failure) are the next slice: they change cost, never verdicts.
 
 (import "env.shard")
 
@@ -21,8 +20,6 @@
 
 ;; a local declaration: fvar id, user name, type, let-value, binder info
 (type LDecl (LDecl Int Name Expr (Option Expr) BinderInfo))
-
-(type St (St Int Int))          ; next fvar id; heartbeats used
 
 (type Failure (FRej Reason) (FOut Resource Symbol))
 
@@ -50,7 +47,7 @@
 (fn ctx_set_eager ((c Ctx) (b Bool)) Ctx
   (match c ((Ctx e l p s _ m) (Ctx e l p s b m))))
 
-(fn env_map ((e CheckedEnv)) (IntMap (List (Pair Name ConstantInfo))) (match e ((CheckedEnv m _ _) m)))
+(fn env_map ((e CheckedEnv)) (IntMap (List (Pair Name ConstantInfo))) (match e ((CheckedEnv m _ _ _) m)))
 ;; every entry (tests and diagnostics only; the map is the store)
 (fn env_entries ((e CheckedEnv)) (List (Pair Name ConstantInfo)) (im_values (env_map e) Nil))
 (fn im_values ((m (IntMap (List (Pair Name ConstantInfo)))) (acc (List (Pair Name ConstantInfo)))) (List (Pair Name ConstantInfo))
@@ -58,8 +55,78 @@
   (match m
     (IMEmpty acc)
     ((IMNode v c0 c1 c2 c3) (im_values c0 (im_values c1 (im_values c2 (im_values c3 (match v ((Some b) (append b acc)) (None acc)))))))))
-(fn env_quot_init ((e CheckedEnv)) Bool (match e ((CheckedEnv _ q _) q)))
-(fn env_pins ((e CheckedEnv)) (List Name) (match e ((CheckedEnv _ _ p) p)))
+(fn env_quot_init ((e CheckedEnv)) Bool (match e ((CheckedEnv _ q _ _) q)))
+(fn env_pins ((e CheckedEnv)) (List Name) (match e ((CheckedEnv _ _ p _) p)))
+;; the node-id watermark: every node reachable from the env has id < it
+(fn env_watermark ((e CheckedEnv)) Int (match e ((CheckedEnv _ _ _ w) w)))
+(fn env_set_watermark ((e CheckedEnv) (w Int)) CheckedEnv (match e ((CheckedEnv m q p _) (CheckedEnv m q p w))))
+;; the state a direct caller of the checker starts from on a checked env
+(fn st_for ((e CheckedEnv)) St (St 0 0 (env_watermark e) (memo_empty)))
+;; the state a check starts from: node ids above both the env's and the
+;; caller's, and fresh memo tables (the pin's fresh checker per add)
+(fn st_seed ((e CheckedEnv) (st St)) St
+  (match st ((St g t k _) (St g t (max_int k (env_watermark e)) (memo_empty)))))
+;; the state a check hands back: the memo tables dropped
+(fn st_clear_memo ((st St)) St (match st ((St g t k _) (St g t k (memo_empty)))))
+
+;; ---- the memo tables (type_checker.h `state`; expr_map = hash + expr_eq) ----
+
+(fn st_memo ((st St)) Memo (match st ((St _ _ _ m) m)))
+(fn st_set_memo ((st St) (m Memo)) St (match st ((St g t k _) (St g t k m))))
+(fn memo_infer ((m Memo) (io Bool)) (IntMap (List (Pair Expr Expr)))
+  (match m ((Memo a b _ _ _ _ _) (if io b a))))
+(fn memo_whnf_core ((m Memo)) (IntMap (List (Pair Expr Expr))) (match m ((Memo _ _ x _ _ _ _) x)))
+(fn memo_whnf ((m Memo)) (IntMap (List (Pair Expr Expr))) (match m ((Memo _ _ _ x _ _ _) x)))
+(fn memo_unfold ((m Memo)) (IntMap (List (Pair Expr Expr))) (match m ((Memo _ _ _ _ x _ _) x)))
+(fn memo_success ((m Memo)) (IntMap (List (Pair Expr Expr))) (match m ((Memo _ _ _ _ _ x _) x)))
+(fn memo_failure ((m Memo)) (IntMap (List (Pair Expr Expr))) (match m ((Memo _ _ _ _ _ _ x) x)))
+
+(fn memo_mask () Int 16777215)
+(fn memo_key ((e Expr)) Int (band (hash_expr e) (memo_mask)))
+(fn tab_find ((m (IntMap (List (Pair Expr Expr)))) (e Expr)) (Option Expr)
+  (match (im_find m (memo_key e)) ((Some b) (assoc_expr e b)) (None None)))
+(fn assoc_expr ((e Expr) (xs (List (Pair Expr Expr)))) (Option Expr)
+  (measure (struct xs))
+  (match xs (Nil None) ((Cons (Pair k v) r) (if (expr_eq k e) (Some v) (assoc_expr e r)))))
+(fn tab_add ((m (IntMap (List (Pair Expr Expr)))) (e Expr) (v Expr)) (IntMap (List (Pair Expr Expr)))
+  (let ((k (memo_key e)))
+    (im_insert m k (Cons (Pair e v) (match (im_find m k) ((Some b) b) (None Nil))))))
+
+(fn st_add_infer ((st St) (io Bool) (e Expr) (v Expr)) St
+  (match (st_memo st)
+    ((Memo a b x y z p q)
+     (st_set_memo st (if io (Memo a (tab_add b e v) x y z p q) (Memo (tab_add a e v) b x y z p q))))))
+(fn st_add_whnf_core ((st St) (e Expr) (v Expr)) St
+  (match (st_memo st) ((Memo a b x y z p q) (st_set_memo st (Memo a b (tab_add x e v) y z p q)))))
+(fn st_add_whnf ((st St) (e Expr) (v Expr)) St
+  (match (st_memo st) ((Memo a b x y z p q) (st_set_memo st (Memo a b x (tab_add y e v) z p q)))))
+(fn st_add_unfold ((st St) (e Expr) (v Expr)) St
+  (match (st_memo st) ((Memo a b x y z p q) (st_set_memo st (Memo a b x y (tab_add z e v) p q)))))
+
+;; the pair tables: (t, s) stored with hash t <= hash s (l. 953, 972); a
+;; lookup with equal hashes tries both orders (l. 942, 961)
+(fn pair_key ((t Expr) (s Expr)) Int (band (mix (hash_expr t) (hash_expr s)) (memo_mask)))
+(fn pair_mem ((m (IntMap (List (Pair Expr Expr)))) (t Expr) (s Expr)) Bool
+  (match (im_find m (pair_key t s)) ((Some b) (assoc_pair t s b)) (None False)))
+(fn assoc_pair ((t Expr) (s Expr) (xs (List (Pair Expr Expr)))) Bool
+  (measure (struct xs))
+  (match xs (Nil False) ((Cons (Pair a b) r) (if (expr_eq a t) (if (expr_eq b s) True (assoc_pair t s r)) (assoc_pair t s r)))))
+(fn pair_add ((m (IntMap (List (Pair Expr Expr)))) (t Expr) (s Expr)) (IntMap (List (Pair Expr Expr)))
+  (let ((k (pair_key t s)))
+    (im_insert m k (Cons (Pair t s) (match (im_find m k) ((Some b) b) (None Nil))))))
+(fn pair_mem_ordered ((m (IntMap (List (Pair Expr Expr)))) (t Expr) (s Expr)) Bool
+  (let ((ht (hash_expr t)) (hs (hash_expr s)))
+    (if (lt ht hs) (pair_mem m t s)
+    (if (lt hs ht) (pair_mem m s t)
+    (if (pair_mem m t s) True (pair_mem m s t))))))
+(fn pair_add_ordered ((m (IntMap (List (Pair Expr Expr)))) (t Expr) (s Expr)) (IntMap (List (Pair Expr Expr)))
+  (if (le (hash_expr t) (hash_expr s)) (pair_add m t s) (pair_add m s t)))
+(fn succeeded_before ((st St) (t Expr) (s Expr)) Bool (pair_mem_ordered (memo_success (st_memo st)) t s))
+(fn failed_before ((st St) (t Expr) (s Expr)) Bool (pair_mem_ordered (memo_failure (st_memo st)) t s))
+(fn cache_success ((st St) (t Expr) (s Expr)) St
+  (match (st_memo st) ((Memo a b x y z p q) (st_set_memo st (Memo a b x y z (pair_add_ordered p t s) q)))))
+(fn cache_failure ((st St) (t Expr) (s Expr)) St
+  (match (st_memo st) ((Memo a b x y z p q) (st_set_memo st (Memo a b x y z p (pair_add_ordered q t s))))))
 ;; the fixed-identity gate (FOUNDATION §3.2): an accelerator, a literal
 ;; typing rule or a literal expansion is enabled only for a declaration
 ;; whose identity (its name and the structural hash of its admitted type
@@ -80,9 +147,9 @@
 
 (fn env_add ((e CheckedEnv) (n Name) (i ConstantInfo)) CheckedEnv
   (match e
-    ((CheckedEnv m q p)
+    ((CheckedEnv m q p w)
      (let ((h (env_key n)))
-       (CheckedEnv (im_insert m h (Cons (Pair n i) (match (im_find m h) ((Some b) b) (None Nil)))) q p)))))
+       (CheckedEnv (im_insert m h (Cons (Pair n i) (match (im_find m h) ((Some b) b) (None Nil)))) q p w)))))
 
 (fn lctx_find ((l (List LDecl)) (id Int)) (Option LDecl)
   (measure (struct l))
@@ -93,55 +160,63 @@
 (fn ldecl_type ((dcl LDecl)) Expr (match dcl ((LDecl _ _ t _ _) t)))
 (fn ldecl_value ((dcl LDecl)) (Option Expr) (match dcl ((LDecl _ _ _ v _) v)))
 
-(fn st_ticks ((st St)) Int (match st ((St _ t) t)))
+(fn st_ticks ((st St)) Int (match st ((St _ t _ _) t)))
 
 ;; scope_rec_depth + check_system (l. 329–330, 469–470, 1172–1173)
 (fn guard ((c Ctx) (st St) (d Int) (site Symbol)) (KRes Int)
   (if (le d 0) (KFail (FOut RRecDepth site))
   (match st
-    ((St g t)
+    ((St g t k m)
      (if (lt (ctx_max_ticks c) (+ t 1)) (KFail (FOut RHeartbeats site))
-       (KOk (St g (+ t 1)) 0))))))
+       (KOk (St g (+ t 1) k m) 0))))))
 
 ;; local_ctx::mk_local_decl with a fresh id from the name generator
 (fn mk_local ((c Ctx) (st St) (n Name) (ty Expr) (v (Option Expr)) (bi BinderInfo)) Loc
   (match st
-    ((St g t) (Loc (ctx_add_local c (LDecl g n ty v bi)) (St (+ g 1) t) (FVar g)))))
+    ((St g t k m) (Loc (ctx_add_local c (LDecl g n ty v bi)) (St (+ g 1) t k m) (mk_fvar g)))))
 
 (fn fvar_ids ((fvars (List Expr))) (List Int)
   (measure (struct fvars))
   (match fvars
     (Nil Nil)
-    ((Cons (FVar i) r) (Cons i (fvar_ids r)))
+    ((Cons (FVar _ i) r) (Cons i (fvar_ids r)))
     ((Cons _ r) (fvar_ids r))))
 
 ;; local_ctx::mk_binding (local_ctx.cpp l. 94): abstract the fvars, then
 ;; rebuild binders from the innermost outwards — a let-local becomes a
 ;; `Let` (or is dropped when dead and remove_dead_let holds), else a Lam / Pi
-(fn mk_binding ((c Ctx) (is_lam Bool) (fvars (List Expr)) (b Expr) (rdl Bool)) Expr
+(fn mk_binding ((c Ctx) (st St) (is_lam Bool) (fvars (List Expr)) (b Expr) (rdl Bool)) (Pair St Expr)
   (let ((ids (fvar_ids fvars)))
-    (mk_binding_fold c is_lam ids (len ids) (abstract_fvars b ids) rdl)))
+    (match (abstract_fvars st b ids)
+      ((Pair st1 b1) (mk_binding_fold c st1 is_lam ids (len ids) b1 rdl)))))
 
-(fn mk_binding_fold ((c Ctx) (is_lam Bool) (ids (List Int)) (i Int) (r Expr) (rdl Bool)) Expr
+(fn mk_binding_fold ((c Ctx) (st St) (is_lam Bool) (ids (List Int)) (i Int) (r Expr) (rdl Bool)) (Pair St Expr)
   (measure i)
-  (if (le i 0) r
+  (if (le i 0) (Pair st r)
     (let ((j (- i 1)))
       (match (nth ids j)
-        (None r)
+        (None (Pair st r))
         ((Some id)
          (match (lctx_find (ctx_lctx c) id)
-           (None r)
+           (None (Pair st r))
            ((Some (LDecl _ nm ty val bi))
             (let ((pre (take j ids)))
               (match val
                 ((Some v)
                  (if (bool_or (bool_not rdl) (has_loose_bvar r 0))
-                   (mk_binding_fold c is_lam ids j (Let nm (abstract_fvars ty pre) (abstract_fvars v pre) r) rdl)
-                   (mk_binding_fold c is_lam ids j (lower_loose_bvars r 1 1) rdl)))
+                   (match (abstract_fvars st ty pre)
+                     ((Pair st1 ty1)
+                      (match (abstract_fvars st1 v pre)
+                        ((Pair st2 v1)
+                         (match (new_let st2 nm ty1 v1 r)
+                           ((Pair st3 r1) (mk_binding_fold c st3 is_lam ids j r1 rdl)))))))
+                   (match (lower_loose_bvars st r 1 1)
+                     ((Pair st1 r1) (mk_binding_fold c st1 is_lam ids j r1 rdl)))))
                 (None
-                 (if is_lam
-                   (mk_binding_fold c is_lam ids j (Lam nm bi (abstract_fvars ty pre) r) rdl)
-                   (mk_binding_fold c is_lam ids j (Pi nm bi (abstract_fvars ty pre) r) rdl))))))))))))
+                 (match (abstract_fvars st ty pre)
+                   ((Pair st1 ty1)
+                    (match (if is_lam (new_lam st1 nm bi ty1 r) (new_pi st1 nm bi ty1 r))
+                      ((Pair st2 r1) (mk_binding_fold c st2 is_lam ids j r1 rdl)))))))))))))))
 
 ;; ---- constant info accessors -----------------------------------------------
 
@@ -176,10 +251,12 @@
 (fn safety_is_unsafe ((s DefinitionSafety)) Bool (match s (Unsafe True) (_ False)))
 (fn safety_is_safe ((s DefinitionSafety)) Bool (match s (Safe True) (_ False)))
 
-(fn inst_type_lparams ((i ConstantInfo) (ls (List Level))) Expr
-  (expr_inst_lparams (ci_type i) (ci_lparams i) ls))
-(fn inst_value_lparams ((i ConstantInfo) (ls (List Level))) (Option Expr)
-  (match (ci_value i) (None None) ((Some v) (Some (expr_inst_lparams v (ci_lparams i) ls)))))
+(fn inst_type_lparams ((st St) (i ConstantInfo) (ls (List Level))) (Pair St Expr)
+  (expr_inst_lparams st (ci_type i) (ci_lparams i) ls))
+(fn inst_value_lparams ((st St) (i ConstantInfo) (ls (List Level))) (Pair St (Option Expr))
+  (match (ci_value i)
+    (None (Pair st None))
+    ((Some v) (match (expr_inst_lparams st v (ci_lparams i) ls) ((Pair st1 v1) (Pair st1 (Some v1)))))))
 
 ;; is_non_rec_structure (inductive.cpp l. 28)
 (fn is_non_rec_structure ((e CheckedEnv) (n Name)) Bool
@@ -196,7 +273,7 @@
 ;; is_constructor_app (l. 47)
 (fn is_constructor_app ((e CheckedEnv) (x Expr)) Bool
   (match (get_app_fn x)
-    ((Const n _) (match (env_find e n) ((Some i) (ci_is_ctor i)) (None False)))
+    ((Const _ n _) (match (env_find e n) ((Some i) (ci_is_ctor i)) (None False)))
     (_ False)))
 
 ;; ---- the well-known constants ------------------------------------------------
@@ -219,9 +296,9 @@
 (fn nm_quot_ind () Name (n2 (quote Quot) (quote ind)))
 (fn nm_quot_mk () Name (n2 (quote Quot) (quote mk)))
 
-(fn c_nat_zero () Expr (Const (nm_nat_zero) Nil))
-(fn c_bool_true () Expr (Const (nm_bool_true) Nil))
-(fn c_bool_false () Expr (Const (nm_bool_false) Nil))
+(fn c_nat_zero () Expr (mk_const (nm_nat_zero) Nil))
+(fn c_bool_true () Expr (mk_const (nm_bool_true) Nil))
+(fn c_bool_false () Expr (mk_const (nm_bool_false) Nil))
 
 ;; the numeral size limit (LEAN_NAT_MAX_SIZE_DEFAULT, l. 36): 128 MiB
 (fn nat_max_size () Int 134217728)
@@ -233,8 +310,10 @@
 
 ;; ---- literals -------------------------------------------------------------------
 
+(fn nat_lit ((n Int)) Expr (mk_lit (LitNat n)))
+
 (fn nat_lit_to_constructor ((n Int)) Expr
-  (if (int_eq n 0) (c_nat_zero) (App (Const (nm_nat_succ) Nil) (Lit (LitNat (- n 1))))))
+  (if (int_eq n 0) (c_nat_zero) (mk_app (mk_const (nm_nat_succ) Nil) (nat_lit (- n 1)))))
 
 ;; utf8_decode: bytes → scalar values (string literals are valid UTF-8)
 (fn utf8_decode ((bs (List Int))) (List Int)
@@ -259,19 +338,19 @@
 (fn char_list_expr ((cs (List Int))) Expr
   (measure (struct cs))
   (match cs
-    (Nil (App (Const (nm_list_nil) (Cons LZero Nil)) (Const (nm_char) Nil)))
+    (Nil (mk_app (mk_const (nm_list_nil) (Cons LZero Nil)) (mk_const (nm_char) Nil)))
     ((Cons c r)
-     (App (App (App (Const (nm_list_cons) (Cons LZero Nil)) (Const (nm_char) Nil))
-               (App (Const (nm_char_of_nat) Nil) (Lit (LitNat c))))
-          (char_list_expr r)))))
+     (mk_app (mk_app (mk_app (mk_const (nm_list_cons) (Cons LZero Nil)) (mk_const (nm_char) Nil))
+                     (mk_app (mk_const (nm_char_of_nat) Nil) (nat_lit c)))
+             (char_list_expr r)))))
 
 (fn string_lit_to_constructor ((bs (List Int))) Expr
-  (App (Const (nm_string_of_list) Nil) (char_list_expr (utf8_decode bs))))
+  (mk_app (mk_const (nm_string_of_list) Nil) (char_list_expr (utf8_decode bs))))
 
 ;; is_nat_lit_ext (l. 637): a literal or the constant Nat.zero
 (fn is_nat_lit_ext ((e Expr)) Bool
-  (match e ((Lit (LitNat _)) True) ((Const n Nil) (name_eq n (nm_nat_zero))) (_ False)))
-(fn nat_val ((e Expr)) Int (match e ((Lit (LitNat n)) n) (_ 0)))
+  (match e ((Lit _ (LitNat _)) True) ((Const _ n Nil) (name_eq n (nm_nat_zero))) (_ False)))
+(fn nat_val ((e Expr)) Int (match e ((Lit _ (LitNat n)) n) (_ 0)))
 
 ;; ---- inference (infer_type_core, l. 325) ----------------------------------------
 
@@ -294,33 +373,43 @@
   (match l
     ((LitNat n)
      (if (lt (nat_max_size) (nat_bytes n)) (KFail (FOut RNatSize (quote infer_lit)))
-       (KOk st (Const (nm_nat) Nil))))
-    ((LitStr _) (KOk st (Const (nm_string) Nil)))))
+       (KOk st (mk_const (nm_nat) Nil))))
+    ((LitStr _) (KOk st (mk_const (nm_string) Nil)))))
 
-;; infer(e, infer_only): with io = False every rule also CHECKS
+;; infer(e, infer_only): with io = False every rule also CHECKS; memoized
+;; per mode (l. 332, 356)
 (fn infer ((c Ctx) (st St) (d Int) (e Expr) (io Bool)) (KRes Expr)
   (measure d)
   (match (guard c st d (quote infer))
     ((KFail f) (KFail f))
     ((KOk st1 _)
-     (match e
-       ((Lit l) (infer_lit_gated c st1 l))
-       ((Proj s i x) (infer_proj c st1 (- d 1) s i x io))
-       ((FVar id)
+     (match (tab_find (memo_infer (st_memo st1) io) e)
+       ((Some r) (KOk st1 r))
+       (None
+        (match (infer_core c st1 d e io)
+          ((KFail f) (KFail f))
+          ((KOk st2 r) (KOk (st_add_infer st2 io e r) r))))))))
+
+(fn infer_core ((c Ctx) (st1 St) (d Int) (e Expr) (io Bool)) (KRes Expr)
+  (measure d)
+  (match e
+       ((Lit _ l) (infer_lit_gated c st1 l))
+       ((Proj _ s i x) (infer_proj c st1 (- d 1) s i x io))
+       ((FVar _ id)
         (match (lctx_find (ctx_lctx c) id)
           ((Some dcl) (KOk st1 (ldecl_type dcl)))
           (None (KFail (FRej (Malformed (quote unknown_fvar)))))))
-       ((BVar _) (KFail (FRej (Malformed (quote loose_bvar)))))
-       ((Sort u)
-        (if io (KOk st1 (Sort (LSucc u)))
+       ((BVar _ _) (KFail (FRej (Malformed (quote loose_bvar)))))
+       ((Sort _ u)
+        (if io (KOk st1 (mk_sort (LSucc u)))
         (match (check_level c u)
           ((Some _) (KFail (FRej (RuleViolation (quote undefined_universe)))))
-          (None (KOk st1 (Sort (LSucc u)))))))
-       ((Const n ls) (infer_constant c st1 n ls io))
-       ((Lam _ _ _ _) (infer_lambda c st1 (- d 1) e Nil io))
-       ((Pi _ _ _ _) (infer_pi c st1 (- d 1) e Nil Nil io))
-       ((App f a) (if io (infer_app_only c st1 (- d 1) e) (infer_app_check c st1 (- d 1) f a)))
-       ((Let _ _ _ _) (infer_let c st1 (- d 1) e Nil io))))))
+          (None (KOk st1 (mk_sort (LSucc u)))))))
+       ((Const _ n ls) (infer_constant c st1 n ls io))
+       ((Lam _ _ _ _ _) (infer_lambda c st1 (- d 1) e Nil io))
+       ((Pi _ _ _ _ _) (infer_pi c st1 (- d 1) e Nil Nil io))
+       ((App _ f a) (if io (infer_app_only c st1 (- d 1) e) (infer_app_check c st1 (- d 1) f a)))
+       ((Let _ _ _ _ _) (infer_let c st1 (- d 1) e Nil io))))
 
 ;; infer_constant (l. 101)
 (fn infer_constant ((c Ctx) (st St) (n Name) (ls (List Level)) (io Bool)) (KRes Expr)
@@ -329,14 +418,14 @@
     ((Some info)
      (if (bool_not (int_eq (len (ci_lparams info)) (len ls)))
        (KFail (FRej (RuleViolation (quote universe_arity))))
-     (if io (KOk st (inst_type_lparams info ls))
+     (if io (match (inst_type_lparams st info ls) ((Pair st1 t) (KOk st1 t)))
      (if (bool_and (ci_is_unsafe info) (bool_not (safety_is_unsafe (ctx_safety c))))
        (KFail (FRej (RuleViolation (quote uses_unsafe))))
      (if (bool_and (ci_is_partial info) (safety_is_safe (ctx_safety c)))
        (KFail (FRej (RuleViolation (quote uses_partial))))
      (match (check_levels c ls)
        ((Some _) (KFail (FRej (RuleViolation (quote undefined_universe)))))
-       (None (KOk st (inst_type_lparams info ls)))))))))))
+       (None (match (inst_type_lparams st info ls) ((Pair st1 t) (KOk st1 t))))))))))))
 
 ;; ensure_sort_core (l. 62) / ensure_pi_core (l. 74)
 (fn ensure_sort ((c Ctx) (st St) (d Int) (e Expr)) (KRes Expr)
@@ -357,7 +446,7 @@
     ((KFail f) (KFail f))
     ((KOk st1 t) (ensure_sort c st1 d t))))
 
-(fn sort_level ((e Expr)) Level (match e ((Sort u) u) (_ LZero)))
+(fn sort_level ((e Expr)) Level (match e ((Sort _ u) u) (_ LZero)))
 
 ;; is_prop (l. 383): up to level normalization
 (fn is_prop ((c Ctx) (st St) (d Int) (e Expr)) (KRes Bool)
@@ -370,34 +459,42 @@
 (fn infer_lambda ((c Ctx) (st St) (d Int) (e Expr) (fvars (List Expr)) (io Bool)) (KRes Expr)
   (measure (struct e))
   (match e
-    ((Lam n bi dom body)
-     (let ((dom1 (instantiate_rev dom fvars)))
-       (match (if io (KOk st dom1) (infer_sort c st d dom1 io))
-         ((KFail f) (KFail f))
-         ((KOk st1 _)
-          (match (mk_local c st1 n dom1 None bi)
-            ((Loc c2 st2 fv) (infer_lambda c2 st2 d body (append fvars (Cons fv Nil)) io)))))))
+    ((Lam _ n bi dom body)
+     (match (instantiate_rev st dom fvars)
+       ((Pair st0 dom1)
+        (match (if io (KOk st0 dom1) (infer_sort c st0 d dom1 io))
+          ((KFail f) (KFail f))
+          ((KOk st1 _)
+           (match (mk_local c st1 n dom1 None bi)
+             ((Loc c2 st2 fv) (infer_lambda c2 st2 d body (append fvars (Cons fv Nil)) io))))))))
     (_
-     (match (infer c st d (instantiate_rev e fvars) io)
-       ((KFail f) (KFail f))
-       ((KOk st1 r) (KOk st1 (mk_binding c False fvars (cheap_beta_reduce r) False)))))))   ; mk_pi (l. 141)
+     (match (instantiate_rev st e fvars)
+       ((Pair st0 e1)
+        (match (infer c st0 d e1 io)
+          ((KFail f) (KFail f))
+          ((KOk st1 r)
+           (match (cheap_beta_reduce st1 r)
+             ((Pair st2 r1) (match (mk_binding c st2 False fvars r1 False) ((Pair st3 r2) (KOk st3 r2))))))))))))   ; mk_pi (l. 141)
 
 ;; infer_pi (l. 144): Sort (imax u_1 (imax … (imax u_n v)))
 (fn infer_pi ((c Ctx) (st St) (d Int) (e Expr) (fvars (List Expr)) (us (List Level)) (io Bool)) (KRes Expr)
   (measure (struct e))
   (match e
-    ((Pi n bi dom body)
-     (let ((dom1 (instantiate_rev dom fvars)))
-       (match (infer_sort c st d dom1 io)
-         ((KFail f) (KFail f))
-         ((KOk st1 s)
-          (match (mk_local c st1 n dom1 None bi)
-            ((Loc c2 st2 fv)
-             (infer_pi c2 st2 d body (append fvars (Cons fv Nil)) (Cons (sort_level s) us) io)))))))
+    ((Pi _ n bi dom body)
+     (match (instantiate_rev st dom fvars)
+       ((Pair st0 dom1)
+        (match (infer_sort c st0 d dom1 io)
+          ((KFail f) (KFail f))
+          ((KOk st1 s)
+           (match (mk_local c st1 n dom1 None bi)
+             ((Loc c2 st2 fv)
+              (infer_pi c2 st2 d body (append fvars (Cons fv Nil)) (Cons (sort_level s) us) io))))))))
     (_
-     (match (infer_sort c st d (instantiate_rev e fvars) io)
-       ((KFail f) (KFail f))
-       ((KOk st1 s) (KOk st1 (Sort (fold_imax us (sort_level s)))))))))
+     (match (instantiate_rev st e fvars)
+       ((Pair st0 e1)
+        (match (infer_sort c st0 d e1 io)
+          ((KFail f) (KFail f))
+          ((KOk st1 s) (KOk st1 (mk_sort (fold_imax us (sort_level s)))))))))))
 
 ;; us holds the binder levels innermost first (l. 165–169)
 (fn fold_imax ((us (List Level)) (r Level)) Level
@@ -420,11 +517,11 @@
           ((KFail x) (KFail x))
           ((KOk st3 aty)
            (match pi
-             ((Pi _ _ dom body)
+             ((Pi _ _ _ dom body)
               (match (is_def_eq (if (is_eager_reduce a) (ctx_set_eager c True) c) st3 d aty dom)
                 ((KFail x) (KFail x))
                 ((KOk st4 ok)
-                 (if ok (KOk st4 (instantiate1 body a))
+                 (if ok (match (instantiate1 st4 body a) ((Pair st5 r) (KOk st5 r)))
                    (KFail (FRej (RuleViolation (quote app_type_mismatch))))))))
              (_ (KFail (FRej (RuleViolation (quote function_expected)))))))))))))
 
@@ -438,33 +535,42 @@
 (fn infer_app_walk ((c Ctx) (st St) (d Int) (fty Expr) (args (List Expr)) (pending (List Expr))) (KRes Expr)
   (measure (struct args))
   (match args
-    (Nil (KOk st (instantiate_rev fty pending)))
+    (Nil (match (instantiate_rev st fty pending) ((Pair st1 r) (KOk st1 r))))
     ((Cons a rest)
      (match fty
-       ((Pi _ _ _ body) (infer_app_walk c st d body rest (append pending (Cons a Nil))))
+       ((Pi _ _ _ _ body) (infer_app_walk c st d body rest (append pending (Cons a Nil))))
        (_
-        (match (ensure_pi c st d (instantiate_rev fty pending))
-          ((KFail x) (KFail x))
-          ((KOk st1 pi)
-           (match pi
-             ((Pi _ _ _ body) (infer_app_walk c st1 d body rest (Cons a Nil)))
-             (_ (KFail (FRej (RuleViolation (quote function_expected)))))))))))))
+        (match (instantiate_rev st fty pending)
+          ((Pair st0 fty1)
+           (match (ensure_pi c st0 d fty1)
+             ((KFail x) (KFail x))
+             ((KOk st1 pi)
+              (match pi
+                ((Pi _ _ _ _ body) (infer_app_walk c st1 d body rest (Cons a Nil)))
+                (_ (KFail (FRej (RuleViolation (quote function_expected)))))))))))))))
 
 ;; infer_let (l. 208)
 (fn infer_let ((c Ctx) (st St) (d Int) (e Expr) (fvars (List Expr)) (io Bool)) (KRes Expr)
   (measure (struct e))
   (match e
-    ((Let n ty v body)
-     (let ((ty1 (instantiate_rev ty fvars)) (v1 (instantiate_rev v fvars)))
-       (match (if io (KOk st True) (check_let_value c st d ty1 v1))
-         ((KFail f) (KFail f))
-         ((KOk st1 _)
-          (match (mk_local c st1 n ty1 (Some v1) BDefault)
-            ((Loc c2 st2 fv) (infer_let c2 st2 d body (append fvars (Cons fv Nil)) io)))))))
+    ((Let _ n ty v body)
+     (match (instantiate_rev st ty fvars)
+       ((Pair st0 ty1)
+        (match (instantiate_rev st0 v fvars)
+          ((Pair st00 v1)
+           (match (if io (KOk st00 True) (check_let_value c st00 d ty1 v1))
+             ((KFail f) (KFail f))
+             ((KOk st1 _)
+              (match (mk_local c st1 n ty1 (Some v1) BDefault)
+                ((Loc c2 st2 fv) (infer_let c2 st2 d body (append fvars (Cons fv Nil)) io))))))))))
     (_
-     (match (infer c st d (instantiate_rev e fvars) io)
-       ((KFail f) (KFail f))
-       ((KOk st1 r) (KOk st1 (mk_binding c False fvars (cheap_beta_reduce r) True)))))))
+     (match (instantiate_rev st e fvars)
+       ((Pair st0 e1)
+        (match (infer c st0 d e1 io)
+          ((KFail f) (KFail f))
+          ((KOk st1 r)
+           (match (cheap_beta_reduce st1 r)
+             ((Pair st2 r1) (match (mk_binding c st2 False fvars r1 True) ((Pair st3 r2) (KOk st3 r2))))))))))))
 
 (fn check_let_value ((c Ctx) (st St) (d Int) (ty Expr) (v Expr)) (KRes Bool)
   (match (infer_sort c st d ty False)
@@ -487,7 +593,7 @@
        ((KFail f) (KFail f))
        ((KOk st2 xty)
         (match (get_app_fn xty)
-          ((Const iname ls)
+          ((Const _ iname ls)
            (if (bool_not (name_eq iname sname)) (KFail (FRej (RuleViolation (quote invalid_projection))))
            (match (env_find (ctx_env c) iname)
              ((Some (InductInfo _ nparams nindices _ (Cons ctor Nil) _ _ _ _))
@@ -500,9 +606,11 @@
                    (match (is_prop c st2 d xty)
                      ((KFail f) (KFail f))
                      ((KOk st3 isp)
-                      (match (proj_skip_params c st3 d (inst_type_lparams cinfo ls) (take nparams args))
-                        ((KFail f) (KFail f))
-                        ((KOk st4 r) (proj_walk_fields c st4 d r iname idx 0 x isp))))))))))
+                      (match (inst_type_lparams st3 cinfo ls)
+                        ((Pair st30 cty)
+                         (match (proj_skip_params c st30 d cty (take nparams args))
+                           ((KFail f) (KFail f))
+                           ((KOk st4 r) (proj_walk_fields c st4 d r iname idx 0 x isp))))))))))))
              (_ (KFail (FRej (RuleViolation (quote invalid_projection))))))))
           (_ (KFail (FRej (RuleViolation (quote invalid_projection))))))))))))
 
@@ -515,7 +623,7 @@
        ((KFail f) (KFail f))
        ((KOk st1 r1)
         (match r1
-          ((Pi _ _ _ body) (proj_skip_params c st1 d (instantiate1 body p) rest))
+          ((Pi _ _ _ _ body) (match (instantiate1 st1 body p) ((Pair st2 b1) (proj_skip_params c st2 d b1 rest))))
           (_ (KFail (FRej (RuleViolation (quote invalid_projection)))))))))))
 
 (fn proj_walk_fields ((c Ctx) (st St) (d Int) (r Expr) (iname Name) (idx Int) (i Int) (x Expr) (isp Bool)) (KRes Expr)
@@ -524,7 +632,7 @@
     ((KFail f) (KFail f))
     ((KOk st1 r1)
      (match r1
-       ((Pi _ _ dom body)
+       ((Pi _ _ _ dom body)
         (if (int_eq i idx)
           (if isp
             (match (is_prop c st1 d dom)
@@ -535,7 +643,11 @@
           (match (if isp (is_prop c st1 d dom) (KOk st1 True))
             ((KFail f) (KFail f))
             ((KOk st2 dp)
-             (if dp (proj_walk_fields c st2 d (instantiate1 body (Proj iname i x)) iname idx (+ i 1) x isp)
+             (if dp
+               (match (new_proj st2 iname i x)
+                 ((Pair st3 pj)
+                  (match (instantiate1 st3 body pj)
+                    ((Pair st4 b1) (proj_walk_fields c st4 d b1 iname idx (+ i 1) x isp)))))
                (KFail (FRej (RuleViolation (quote invalid_projection)))))))
           (proj_walk_fields c st1 d body iname idx (+ i 1) x isp))))
        (_ (KFail (FRej (RuleViolation (quote invalid_projection)))))))))
@@ -549,21 +661,46 @@
 
 ;; whnf_core with a "changed" flag — the pin compares results by pointer
 ;; identity (`is_eqp`); we return whether any reduction fired instead of
-;; re-comparing structurally (an O(n) walk per call)
+;; re-comparing structurally. The easy kinds return themselves uncached;
+;; App/Let/Proj/let-bound FVar go through the cache (l. 491), which is
+;; filled only when neither cheap flag is set (l. 547)
 (fn whnf_core_c ((c Ctx) (st St) (d Int) (e Expr) (cr Bool) (cp Bool)) (KRes (Pair Bool Expr))
   (measure d)
   (match (guard c st d (quote whnf_core))
     ((KFail f) (KFail f))
     ((KOk st1 _)
      (match e
-       ((FVar id)
+       ((FVar _ id)
+        (match (lctx_find (ctx_lctx c) id)
+          ((Some (LDecl _ _ _ (Some _) _)) (whnf_core_cached c st1 d e cr cp))
+          (_ (KOk st1 (Pair False e)))))
+       ((Proj _ _ _ _) (whnf_core_cached c st1 d e cr cp))
+       ((App _ _ _) (whnf_core_cached c st1 d e cr cp))
+       ((Let _ _ _ _ _) (whnf_core_cached c st1 d e cr cp))
+       (_ (KOk st1 (Pair False e)))))))
+
+(fn whnf_core_cached ((c Ctx) (st St) (d Int) (e Expr) (cr Bool) (cp Bool)) (KRes (Pair Bool Expr))
+  (measure d)
+  ;; a hit's "changed" is structural: the cached key may be a distinct node equal to e
+  (match (tab_find (memo_whnf_core (st_memo st)) e)
+    ((Some r) (KOk st (Pair (bool_not (expr_eq e r)) r)))
+    (None
+     (match (whnf_core_work c st d e cr cp)
+       ((KFail f) (KFail f))
+       ((KOk st2 (Pair ch r)) (KOk (if cr st2 (if cp st2 (st_add_whnf_core st2 e r))) (Pair ch r)))))))
+
+;; the reductions of whnf_core after the cache (l. 500–546)
+(fn whnf_core_work ((c Ctx) (st1 St) (d Int) (e Expr) (cr Bool) (cp Bool)) (KRes (Pair Bool Expr))
+  (measure d)
+  (match e
+       ((FVar _ id)
         (match (lctx_find (ctx_lctx c) id)
           ((Some (LDecl _ _ _ (Some v) _))
            (match (whnf_core_c c st1 (- d 1) v cr cp)
              ((KFail f) (KFail f))
              ((KOk st2 (Pair _ r)) (KOk st2 (Pair True r)))))
           (_ (KOk st1 (Pair False e)))))
-       ((Proj _ _ _)
+       ((Proj _ _ _ _)
         (match (reduce_proj c st1 (- d 1) e cr cp)
           ((KFail f) (KFail f))
           ((KOk st2 (Some m))
@@ -571,15 +708,17 @@
              ((KFail f) (KFail f))
              ((KOk st3 (Pair _ r)) (KOk st3 (Pair True r)))))
           ((KOk st2 None) (KOk st2 (Pair False e)))))
-       ((App _ _)
+       ((App _ _ _)
         (let ((f0 (get_app_fn e)) (args (get_app_args e)))
           (match (whnf_core_c c st1 (- d 1) f0 cr cp)
             ((KFail f) (KFail f))
             ((KOk st2 (Pair head_changed f))
              (if (is_lambda f)
-               (match (whnf_core_c c st2 (- d 1) (beta_head f args) cr cp)
-                 ((KFail x) (KFail x))
-                 ((KOk st3 (Pair _ r)) (KOk st3 (Pair True r))))
+               (match (beta_head st2 f args)
+                 ((Pair st20 red)
+                  (match (whnf_core_c c st20 (- d 1) red cr cp)
+                    ((KFail x) (KFail x))
+                    ((KOk st3 (Pair _ r)) (KOk st3 (Pair True r))))))
              (if (bool_not head_changed)
                (match (reduce_recursor c st2 (- d 1) e cr cp)
                  ((KFail x) (KFail x))
@@ -588,19 +727,23 @@
                     ((KFail x) (KFail x))
                     ((KOk st4 (Pair _ r2)) (KOk st4 (Pair True r2)))))
                  ((KOk st3 None) (KOk st3 (Pair False e))))
-               (match (whnf_core_c c st2 (- d 1) (mk_app_list f args) cr cp)
-                 ((KFail x) (KFail x))
-                 ((KOk st3 (Pair _ r)) (KOk st3 (Pair True r))))))))))
-       ((Let _ _ v b)
-        (match (whnf_core_c c st1 (- d 1) (instantiate1 b v) cr cp)
-          ((KFail f) (KFail f))
-          ((KOk st2 (Pair _ r)) (KOk st2 (Pair True r)))))
-       (_ (KOk st1 (Pair False e)))))))
+               (match (mk_app_list st2 f args)
+                 ((Pair st20 e1)
+                  (match (whnf_core_c c st20 (- d 1) e1 cr cp)
+                    ((KFail x) (KFail x))
+                    ((KOk st3 (Pair _ r)) (KOk st3 (Pair True r))))))))))))
+       ((Let _ _ _ v b)
+        (match (instantiate1 st1 b v)
+          ((Pair st10 b1)
+           (match (whnf_core_c c st10 (- d 1) b1 cr cp)
+             ((KFail f) (KFail f))
+             ((KOk st2 (Pair _ r)) (KOk st2 (Pair True r)))))))
+       (_ (KOk st1 (Pair False e)))))
 
 ;; reduce_proj (l. 444) / reduce_proj_core (l. 420)
 (fn reduce_proj ((c Ctx) (st St) (d Int) (e Expr) (cr Bool) (cp Bool)) (KRes (Option Expr))
   (match e
-    ((Proj sname idx x)
+    ((Proj _ sname idx x)
      (if (lt idx 0) (KOk st None)
      (match (if cp (whnf_core c st d x cr cp) (whnf c st d x))
        ((KFail f) (KFail f))
@@ -609,12 +752,12 @@
 
 (fn reduce_proj_core ((c Ctx) (st St) (d Int) (x0 Expr) (sname Name) (idx Int)) (KRes (Option Expr))
   (match (match x0
-            ((Lit (LitStr s)) (whnf c st d (string_lit_to_constructor s)))
+            ((Lit _ (LitStr s)) (whnf c st d (string_lit_to_constructor s)))
             (_ (KOk st x0)))
     ((KFail f) (KFail f))
     ((KOk st1 x)
      (match (get_app_fn x)
-       ((Const mk _)
+       ((Const _ mk _)
         (match (env_find (ctx_env c) mk)
           ((Some (CtorInfo _ induct _ nparams _ _))
            (if (bool_not (name_eq induct sname)) (KOk st1 None)
@@ -632,7 +775,7 @@
 ;; quot_reduce_rec (quot.h l. 44)
 (fn quot_reduce_rec ((c Ctx) (st St) (d Int) (e Expr)) (KRes (Option Expr))
   (match (get_app_fn e)
-    ((Const fnn _)
+    ((Const _ fnn _)
      (let ((mk_pos (if (name_eq fnn (nm_quot_lift)) 5 (if (name_eq fnn (nm_quot_ind)) 4 (- 0 1))))
            (args (get_app_args e)))
        (if (lt mk_pos 0) (KOk st None)
@@ -648,8 +791,11 @@
                  (None (KOk st1 None))
                  ((Some f)
                   (match mk
-                    ((App _ a)
-                     (KOk st1 (Some (mk_app_list (App f a) (drop (+ mk_pos 1) args)))))
+                    ((App _ _ a)
+                     (match (new_app st1 f a)
+                       ((Pair st2 fa)
+                        (match (mk_app_list st2 fa (drop (+ mk_pos 1) args))
+                          ((Pair st3 r) (KOk st3 (Some r)))))))
                     (_ (KOk st1 None)))))
                (KOk st1 None))))))))))
     (_ (KOk st None))))
@@ -658,9 +804,9 @@
 (fn rec_major_induct ((ty Expr) (major_idx Int)) (Option Name)
   (measure major_idx)
   (match ty
-    ((Pi _ _ dom body)
+    ((Pi _ _ _ dom body)
      (if (le major_idx 0)
-       (match (get_app_fn dom) ((Const n _) (Some n)) (_ None))
+       (match (get_app_fn dom) ((Const _ n _) (Some n)) (_ None))
        (rec_major_induct body (- major_idx 1))))
     (_ None)))
 
@@ -668,7 +814,7 @@
 (fn rec_rule_for ((rules (List RecursorRule)) (major Expr)) (Option RecursorRule)
   (measure (struct rules))
   (match (get_app_fn major)
-    ((Const cn _)
+    ((Const _ cn _)
      (match rules
        (Nil None)
        ((Cons (RecursorRule rc nf rhs) r)
@@ -676,31 +822,39 @@
     (_ None)))
 
 ;; mk_nullary_cnstr (inductive.cpp l. 88)
-(fn mk_nullary_cnstr ((c Ctx) (ty Expr) (nparams Int)) (Option Expr)
+(fn mk_nullary_cnstr ((c Ctx) (st St) (ty Expr) (nparams Int)) (Pair St (Option Expr))
   (match (get_app_fn ty)
-    ((Const dn ls)
+    ((Const _ dn ls)
      (match (first_ctor (ctx_env c) dn)
-       (None None)
-       ((Some cn) (Some (mk_app_list (Const cn ls) (take nparams (get_app_args ty)))))))
-    (_ None)))
+       (None (Pair st None))
+       ((Some cn)
+        (match (mk_app_list st (mk_const cn ls) (take nparams (get_app_args ty)))
+          ((Pair st1 k) (Pair st1 (Some k)))))))
+    (_ (Pair st None))))
 
 ;; expand_eta_struct (inductive.cpp l. 99): mk params e.0 … e.(n−1)
-(fn expand_eta_struct ((c Ctx) (ety Expr) (e Expr)) Expr
+(fn expand_eta_struct ((c Ctx) (st St) (ety Expr) (e Expr)) (Pair St Expr)
   (match (get_app_fn ety)
-    ((Const iname ls)
+    ((Const _ iname ls)
      (match (first_ctor (ctx_env c) iname)
-       (None e)
+       (None (Pair st e))
        ((Some cn)
         (match (env_find (ctx_env c) cn)
           ((Some (CtorInfo _ _ _ nparams nfields _))
-           (mk_app_list (mk_app_list (Const cn ls) (take nparams (get_app_args ety)))
-                        (proj_list iname e 0 nfields)))
-          (_ e)))))
-    (_ e)))
+           (match (mk_app_list st (mk_const cn ls) (take nparams (get_app_args ety)))
+             ((Pair st1 head)
+              (match (proj_list st1 iname e 0 nfields)
+                ((Pair st2 projs) (mk_app_list st2 head projs))))))
+          (_ (Pair st e))))))
+    (_ (Pair st e))))
 
-(fn proj_list ((iname Name) (e Expr) (i Int) (n Int)) (List Expr)
+(fn proj_list ((st St) (iname Name) (e Expr) (i Int) (n Int)) (Pair St (List Expr))
   (measure (- n i))
-  (if (le n i) Nil (Cons (Proj iname i e) (proj_list iname e (+ i 1) n))))
+  (if (le n i) (Pair st Nil)
+    (match (new_proj st iname i e)
+      ((Pair st1 p)
+       (match (proj_list st1 iname e (+ i 1) n)
+         ((Pair st2 r) (Pair st2 (Cons p r))))))))
 
 ;; to_cnstr_when_K (inductive.h l. 20)
 (fn to_cnstr_when_K ((c Ctx) (st St) (d Int) (induct Name) (nparams Int) (e Expr)) (KRes Expr)
@@ -711,10 +865,10 @@
        ((KFail f) (KFail f))
        ((KOk st2 ty)
         (if (bool_not (is_const_named (get_app_fn ty) induct)) (KOk st2 e)
-        (match (mk_nullary_cnstr c ty nparams)
-          (None (KOk st2 e))
-          ((Some k)
-           (match (infer c st2 d k True)
+        (match (mk_nullary_cnstr c st2 ty nparams)
+          ((Pair st20 None) (KOk st20 e))
+          ((Pair st20 (Some k))
+           (match (infer c st20 d k True)
              ((KFail f) (KFail f))
              ((KOk st3 kty)
               (match (is_def_eq c st3 d ty kty)
@@ -733,12 +887,14 @@
         (if (bool_not (is_const_named (get_app_fn ty) induct)) (KOk st2 e)
         (match (is_prop c st2 d ty)
           ((KFail f) (KFail f))
-          ((KOk st3 p) (KOk st3 (if p e (expand_eta_struct c ty e))))))))))))
+          ((KOk st3 p)
+           (if p (KOk st3 e)
+             (match (expand_eta_struct c st3 ty e) ((Pair st4 r) (KOk st4 r)))))))))))))
 
 ;; inductive_reduce_rec (inductive.h l. 77)
 (fn inductive_reduce_rec ((c Ctx) (st St) (d Int) (e Expr) (cr Bool) (cp Bool)) (KRes (Option Expr))
   (match (get_app_fn e)
-    ((Const rn rls)
+    ((Const _ rn rls)
      (match (env_find (ctx_env c) rn)
        ((Some (RecInfo cv _ nparams nindices nmotives nminors rules k _))
         (let ((rec_args (get_app_args e))
@@ -760,8 +916,8 @@
                      ((KFail f) (KFail f))
                      ((KOk st2 major2)
                       (match (match major2
-                               ((Lit (LitNat n)) (KOk st2 (nat_lit_to_constructor n)))
-                               ((Lit (LitStr s)) (whnf c st2 d (string_lit_to_constructor s)))
+                               ((Lit _ (LitNat n)) (KOk st2 (nat_lit_to_constructor n)))
+                               ((Lit _ (LitStr s)) (whnf c st2 d (string_lit_to_constructor s)))
                                (_ (to_cnstr_when_structure c st2 d induct major2)))
                         ((KFail f) (KFail f))
                         ((KOk st3 major)
@@ -770,20 +926,21 @@
                            ((Some (RecursorRule _ nfields rhs0))
                             (let ((major_args (get_app_args major)))
                               (if (lt (len major_args) nfields) (KOk st3 None)
-                                (KOk st3 (Some
-                                  (mk_app_list
-                                    (mk_app_list
-                                      (mk_app_list (expr_inst_lparams rhs0 rlparams rls)
-                                                   (take (+ nparams (+ nmotives nminors)) rec_args))
-                                      (drop (- (len major_args) nfields) major_args))
-                                    (drop (+ major_idx 1) rec_args))))))))))))))))))))))
+                                (match (expr_inst_lparams st3 rhs0 rlparams rls)
+                                  ((Pair st4 rhs)
+                                   (match (mk_app_list st4 rhs (take (+ nparams (+ nmotives nminors)) rec_args))
+                                     ((Pair st5 r1)
+                                      (match (mk_app_list st5 r1 (drop (- (len major_args) nfields) major_args))
+                                        ((Pair st6 r2)
+                                         (match (mk_app_list st6 r2 (drop (+ major_idx 1) rec_args))
+                                           ((Pair st7 r3) (KOk st7 (Some r3))))))))))))))))))))))))))))
        (_ (KOk st None))))
     (_ (KOk st None))))
 
 ;; is_delta (l. 555): head constant with a value and the right level count
 (fn is_delta ((c Ctx) (e Expr)) (Option ConstantInfo)
   (match (get_app_fn e)
-    ((Const n ls)
+    ((Const _ n ls)
      (match (env_find (ctx_env c) n)
        ((Some info)
         (match (ci_value info)
@@ -792,38 +949,53 @@
        (None None)))
     (_ None)))
 
-;; unfold_definition (l. 589)
-(fn unfold_definition ((c Ctx) (e Expr)) (Option Expr)
+;; unfold_definition (l. 589); the instantiated value of a constant with
+;; level arguments is memoized on the head constant (l. 574–578)
+(fn unfold_definition ((c Ctx) (st St) (e Expr)) (Pair St (Option Expr))
   (match (get_app_fn e)
-    ((Const n ls)
+    ((Const _ n ls)
      (match (is_delta c e)
        ((Some info)
-        (match (inst_value_lparams info ls)
-          ((Some v) (Some (mk_app_list v (get_app_args e))))
-          (None None)))
-       (None None)))
-    (_ None)))
+        (match (if (int_eq (len ls) 0) None (tab_find (memo_unfold (st_memo st)) (get_app_fn e)))
+          ((Some v) (match (mk_app_list st v (get_app_args e)) ((Pair st2 r) (Pair st2 (Some r)))))
+          (None
+           (match (inst_value_lparams st info ls)
+             ((Pair st1 (Some v))
+              (match (mk_app_list (if (int_eq (len ls) 0) st1 (st_add_unfold st1 (get_app_fn e) v)) v (get_app_args e))
+                ((Pair st2 r) (Pair st2 (Some r)))))
+             ((Pair st1 None) (Pair st1 None))))))
+       (None (Pair st None))))
+    (_ (Pair st None))))
 
 ;; reduce_native (l. 614): out of the standard profile → Unsupported
 (fn reduce_native ((st St) (e Expr)) (KRes (Option Expr))
   (match e
-    ((App f (Const _ _))
+    ((App _ f (Const _ _ _))
      (if (bool_or (is_const_named f (nm_reduce_bool)) (is_const_named f (nm_reduce_nat)))
        (KFail (FRej (Unsupported (quote native_reduction))))
        (KOk st None)))
     (_ (KOk st None))))
 
-;; whnf (l. 736)
+;; whnf (l. 736): the easy kinds uncached; the rest through the cache (l. 755, 763–772)
 (fn whnf ((c Ctx) (st St) (d Int) (e Expr)) (KRes Expr)
   (measure d)
   (match e
-    ((BVar _) (KOk st e)) ((Sort _) (KOk st e)) ((Pi _ _ _ _) (KOk st e))
-    ((Lam _ _ _ _) (KOk st e)) ((Lit _) (KOk st e))
-    ((FVar id)
+    ((BVar _ _) (KOk st e)) ((Sort _ _) (KOk st e)) ((Pi _ _ _ _ _) (KOk st e))
+    ((Lit _ _) (KOk st e))
+    ((FVar _ id)
      (match (lctx_find (ctx_lctx c) id)
-       ((Some (LDecl _ _ _ (Some _) _)) (whnf_loop c st d e))
+       ((Some (LDecl _ _ _ (Some _) _)) (whnf_cached c st d e))
        (_ (KOk st e))))
-    (_ (whnf_loop c st d e))))
+    (_ (whnf_cached c st d e))))
+
+(fn whnf_cached ((c Ctx) (st St) (d Int) (e Expr)) (KRes Expr)
+  (measure d)
+  (match (tab_find (memo_whnf (st_memo st)) e)
+    ((Some r) (KOk st r))
+    (None
+     (match (whnf_loop c st d e)
+       ((KFail f) (KFail f))
+       ((KOk st1 r) (KOk (st_add_whnf st1 e r) r))))))
 
 (fn whnf_loop ((c Ctx) (st St) (d Int) (t Expr)) (KRes Expr)
   (measure d)
@@ -841,9 +1013,9 @@
              ((KFail f) (KFail f))
              ((KOk st3 (Some v)) (KOk st3 v))
              ((KOk st3 None)
-              (match (unfold_definition c t1)
-                ((Some t2) (whnf_loop c st3 (- d 1) t2))
-                (None (KOk st3 t1))))))))))))
+              (match (unfold_definition c st3 t1)
+                ((Pair st4 (Some t2)) (whnf_loop c st4 (- d 1) t2))
+                ((Pair st4 None) (KOk st4 t1))))))))))))
 
 ;; ---- Nat literal accelerators (reduce_nat, l. 702) ------------------------------
 
@@ -883,33 +1055,33 @@
       (if (lt 0 b)
         (if (lt (ediv (nat_max_size) b) (nat_bytes a))
           (KFail (FOut RNatSize (quote pow)))
-          (KOk st (Lit (LitNat (nat_pow a b)))))
-        (KOk st (Lit (LitNat (nat_pow a b)))))
-      (KOk st (Lit (LitNat (nat_pow a b))))))
-  (if (int_eq op 5) (KOk st (Lit (LitNat (nat_gcd a b))))
-  (if (int_eq op 6) (KOk st (Lit (LitNat (if (int_eq b 0) a (mod a b)))))
-  (if (int_eq op 7) (KOk st (Lit (LitNat (if (int_eq b 0) 0 (ediv a b)))))
+          (KOk st (nat_lit (nat_pow a b))))
+        (KOk st (nat_lit (nat_pow a b))))
+      (KOk st (nat_lit (nat_pow a b)))))
+  (if (int_eq op 5) (KOk st (nat_lit (nat_gcd a b)))
+  (if (int_eq op 6) (KOk st (nat_lit (if (int_eq b 0) a (mod a b))))
+  (if (int_eq op 7) (KOk st (nat_lit (if (int_eq b 0) 0 (ediv a b))))
   (if (int_eq op 8) (KOk st (if (int_eq a b) (c_bool_true) (c_bool_false)))
   (if (int_eq op 9) (KOk st (if (le a b) (c_bool_true) (c_bool_false)))
-  (if (int_eq op 10) (KOk st (Lit (LitNat (band a b))))
-  (if (int_eq op 11) (KOk st (Lit (LitNat (bor a b))))
-  (if (int_eq op 12) (KOk st (Lit (LitNat (bxor a b))))
+  (if (int_eq op 10) (KOk st (nat_lit (band a b)))
+  (if (int_eq op 11) (KOk st (nat_lit (bor a b)))
+  (if (int_eq op 12) (KOk st (nat_lit (bxor a b)))
   (if (int_eq op 13)
-    (if (int_eq a 0) (KOk st (Lit (LitNat 0)))
+    (if (int_eq a 0) (KOk st (nat_lit 0))
     (if (lt (count_max) b) (KFail (FOut RNatCount (quote shiftLeft)))
     (if (lt (nat_max_size) (+ (nat_bytes a) (+ (ediv b 8) 1))) (KFail (FOut RNatSize (quote shiftLeft)))
-      (KOk st (Lit (LitNat (* a (nat_pow 2 b))))))))
-  (if (int_eq op 14) (KOk st (Lit (LitNat (ediv a (nat_pow 2 b)))))
-  (KOk st (Lit (LitNat 0))))))))))))))))))
+      (KOk st (nat_lit (* a (nat_pow 2 b)))))))
+  (if (int_eq op 14) (KOk st (nat_lit (ediv a (nat_pow 2 b))))
+  (KOk st (nat_lit 0)))))))))))))))))
 
 (fn nat_lit_checked ((st St) (n Int)) (KRes Expr)
-  (if (lt (nat_max_size) (nat_bytes n)) (KFail (FOut RNatSize (quote reduce_nat))) (KOk st (Lit (LitNat n)))))
+  (if (lt (nat_max_size) (nat_bytes n)) (KFail (FOut RNatSize (quote reduce_nat))) (KOk st (nat_lit n))))
 
 (fn reduce_nat ((c Ctx) (st St) (d Int) (e Expr)) (KRes (Option Expr))
   (let ((nargs (get_app_num_args e)))
     (if (int_eq nargs 1)
       (match e
-        ((App f a)
+        ((App _ f a)
          (if (bool_and (is_const_named f (nm_nat_succ)) (env_pinned (ctx_env c) (nm_nat)))
            (match (whnf c st d a)
              ((KFail x) (KFail x))
@@ -921,9 +1093,9 @@
         (_ (KOk st None)))
     (if (int_eq nargs 2)
       (match e
-        ((App (App f a) b)
+        ((App _ (App _ f a) b)
          (match f
-           ((Const fnn _)
+           ((Const _ fnn _)
             (let ((op (nat_op_of fnn)))
               (if (bool_or (int_eq op 0) (bool_not (env_pinned (ctx_env c) fnn))) (KOk st None)
               (match (whnf c st d a)
@@ -943,22 +1115,26 @@
 
 ;; ---- definitional equality (is_def_eq_core, l. 1171) --------------------------
 
+;; the public is_def_eq (l. 1247): successes are cached
 (fn is_def_eq ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes Bool)
   (measure d)
-  (is_def_eq_core c st d t s))
+  (match (is_def_eq_core c st d t s)
+    ((KFail f) (KFail f))
+    ((KOk st1 ok) (KOk (if ok (cache_success st1 t s) st1) ok))))
 
 (fn lbool_of ((b Bool)) LBool (if b LTrue LFalse))
 
-;; quick_is_def_eq (l. 835)
+;; quick_is_def_eq (l. 835): structural equality or a cached success first
 (fn quick_is_def_eq ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes LBool)
   (measure d)
   (if (expr_eq t s) (KOk st LTrue)
+  (if (succeeded_before st t s) (KOk st LTrue)
   (match t
-    ((Lam _ _ _ _) (match s ((Lam _ _ _ _) (lbool_res (is_def_eq_binding c st d t s))) (_ (KOk st LUndef))))
-    ((Pi _ _ _ _) (match s ((Pi _ _ _ _) (lbool_res (is_def_eq_binding c st d t s))) (_ (KOk st LUndef))))
-    ((Sort u) (match s ((Sort v) (KOk st (lbool_of (is_equivalent u v)))) (_ (KOk st LUndef))))
-    ((Lit a) (match s ((Lit b) (KOk st (lbool_of (lit_eq a b)))) (_ (KOk st LUndef))))
-    (_ (KOk st LUndef)))))
+    ((Lam _ _ _ _ _) (match s ((Lam _ _ _ _ _) (lbool_res (is_def_eq_binding c st d t s))) (_ (KOk st LUndef))))
+    ((Pi _ _ _ _ _) (match s ((Pi _ _ _ _ _) (lbool_res (is_def_eq_binding c st d t s))) (_ (KOk st LUndef))))
+    ((Sort _ u) (match s ((Sort _ v) (KOk st (lbool_of (is_equivalent u v)))) (_ (KOk st LUndef))))
+    ((Lit _ a) (match s ((Lit _ b) (KOk st (lbool_of (lit_eq a b)))) (_ (KOk st LUndef))))
+    (_ (KOk st LUndef))))))
 
 (fn lbool_res ((r (KRes Bool))) (KRes LBool)
   (match r ((KFail f) (KFail f)) ((KOk st b) (KOk st (lbool_of b)))))
@@ -972,28 +1148,36 @@
 (fn is_def_eq_binding_go ((c Ctx) (st St) (d Int) (t Expr) (s Expr) (subst (List Expr)) (lam Bool)) (KRes Bool)
   (measure (struct t))
   (match (binding_parts t lam)
-    (None (is_def_eq c st d (instantiate_rev t subst) (instantiate_rev s subst)))
+    (None (defeq_under c st d t s subst))
     ((Some (Pair td tb))
      (match (binding_parts s lam)
-       (None (is_def_eq c st d (instantiate_rev t subst) (instantiate_rev s subst)))
+       (None (defeq_under c st d t s subst))
        ((Some (Pair sd sb))
-        (match (if (expr_eq td sd) (KOk st True)
-                 (is_def_eq c st d (instantiate_rev td subst) (instantiate_rev sd subst)))
+        (match (if (expr_eq td sd) (KOk st True) (defeq_under c st d td sd subst))
           ((KFail f) (KFail f))
           ((KOk st1 ok)
            (if (bool_not ok) (KOk st1 False)
            (if (bool_or (has_loose_bvars tb) (has_loose_bvars sb))
-             (match (mk_local c st1 (binding_name s) (instantiate_rev sd subst) None (binding_info s))
-               ((Loc c2 st2 fv) (is_def_eq_binding_go c2 st2 d tb sb (append subst (Cons fv Nil)) lam)))
-             (is_def_eq_binding_go c st1 d tb sb (append subst (Cons (Const (n1 (quote dontcare)) Nil) Nil)) lam))))))))))
+             (match (instantiate_rev st1 sd subst)
+               ((Pair st10 sd1)
+                (match (mk_local c st10 (binding_name s) sd1 None (binding_info s))
+                  ((Loc c2 st2 fv) (is_def_eq_binding_go c2 st2 d tb sb (append subst (Cons fv Nil)) lam)))))
+             (is_def_eq_binding_go c st1 d tb sb (append subst (Cons (mk_const (n1 (quote dontcare)) Nil) Nil)) lam))))))))))
+
+;; is_def_eq of two terms instantiated with the shared locals
+(fn defeq_under ((c Ctx) (st St) (d Int) (t Expr) (s Expr) (subst (List Expr))) (KRes Bool)
+  (match (instantiate_rev st t subst)
+    ((Pair st1 t1)
+     (match (instantiate_rev st1 s subst)
+       ((Pair st2 s1) (is_def_eq c st2 d t1 s1))))))
 
 (fn binding_parts ((e Expr) (lam Bool)) (Option (Pair Expr Expr))
   (match e
-    ((Lam _ _ dm b) (if lam (Some (Pair dm b)) None))
-    ((Pi _ _ dm b) (if lam None (Some (Pair dm b))))
+    ((Lam _ _ _ dm b) (if lam (Some (Pair dm b)) None))
+    ((Pi _ _ _ dm b) (if lam None (Some (Pair dm b))))
     (_ None)))
-(fn binding_name ((e Expr)) Name (match e ((Lam n _ _ _) n) ((Pi n _ _ _) n) (_ Anon)))
-(fn binding_info ((e Expr)) BinderInfo (match e ((Lam _ b _ _) b) ((Pi _ b _ _) b) (_ BDefault)))
+(fn binding_name ((e Expr)) Name (match e ((Lam _ n _ _ _) n) ((Pi _ n _ _ _) n) (_ Anon)))
+(fn binding_info ((e Expr)) BinderInfo (match e ((Lam _ _ b _ _) b) ((Pi _ _ b _ _) b) (_ BDefault)))
 
 ;; is_def_eq_args (l. 863)
 (fn is_def_eq_args ((c Ctx) (st St) (d Int) (ts (List Expr)) (ss (List Expr))) (KRes Bool)
@@ -1018,7 +1202,13 @@
          ((KFail f) (KFail f))
          ((KOk st2 sty)
           (match sty
-            ((Pi n bi dom _) (is_def_eq c st2 d t (Lam n bi dom (App (lift_loose_bvars s 0 1) (BVar 0)))))
+            ((Pi _ n bi dom _)
+             (match (lift_loose_bvars st2 s 0 1)
+               ((Pair st3 s1)
+                (match (new_app st3 s1 (mk_bvar 0))
+                  ((Pair st4 body)
+                   (match (new_lam st4 n bi dom body)
+                     ((Pair st5 lam) (is_def_eq c st5 d t lam))))))))
             (_ (KOk st2 False)))))))
     (KOk st False)))
 
@@ -1030,7 +1220,7 @@
 ;; try_eta_struct_core (l. 889), both directions
 (fn try_eta_struct_core ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes Bool)
   (match (get_app_fn s)
-    ((Const cn _)
+    ((Const _ cn _)
      (match (env_find (ctx_env c) cn)
        ((Some (CtorInfo _ induct _ nparams nfields _))
         (if (bool_not (int_eq (get_app_num_args s) (+ nparams nfields))) (KOk st False)
@@ -1054,9 +1244,11 @@
   (match fields
     (Nil (KOk st True))
     ((Cons a r)
-     (match (is_def_eq c st d (Proj induct i t) a)
-       ((KFail f) (KFail f))
-       ((KOk st1 ok) (if ok (eta_struct_fields c st1 d induct t r (+ i 1)) (KOk st1 False)))))))
+     (match (new_proj st induct i t)
+       ((Pair st0 pj)
+        (match (is_def_eq c st0 d pj a)
+          ((KFail f) (KFail f))
+          ((KOk st1 ok) (if ok (eta_struct_fields c st1 d induct t r (+ i 1)) (KOk st1 False)))))))))
 
 (fn try_eta_struct ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes Bool)
   (match (try_eta_struct_core c st d t s)
@@ -1107,9 +1299,9 @@
     (HAbbrev (match h2 (HAbbrev 0) (_ (- 0 1))))))
 
 (fn unfold_core ((c Ctx) (st St) (d Int) (e Expr)) (KRes Expr)
-  (match (unfold_definition c e)
-    ((Some e1) (whnf_core c st d e1 False True))
-    (None (KOk st e))))
+  (match (unfold_definition c st e)
+    ((Pair st1 (Some e1)) (whnf_core c st1 d e1 False True))
+    ((Pair st1 None) (KOk st1 e))))
 
 ;; lazy_delta_reduction_step (l. 999)
 (fn lazy_delta_step ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes StepRes)
@@ -1148,17 +1340,21 @@
                   ((KFail f) (KFail f))
                   ((KOk st3 s1) (lazy_delta_finish c st3 d t1 s1)))))))))))))))
 
-;; the same-constant optimization (l. 1034–1046): levels + arguments
+;; the same-constant optimization (l. 1034–1046): levels + arguments,
+;; skipped after a cached failure, and a failure is cached
 (fn lazy_delta_same ((c Ctx) (st St) (d Int) (t Expr) (s Expr) (dt ConstantInfo) (ds ConstantInfo)) (KRes Bool)
   (if (bool_and (is_app t) (bool_and (is_app s) (bool_and (name_eq (ci_name dt) (ci_name ds)) (hints_is_regular (ci_hints dt)))))
+    (if (failed_before st t s) (KOk st False)
     (match (get_app_fn t)
-      ((Const _ lt1)
+      ((Const _ _ lt1)
        (match (get_app_fn s)
-         ((Const _ ls1)
-          (if (bool_not (levels_equivalent lt1 ls1)) (KOk st False)
-            (is_def_eq_args c st d (get_app_args t) (get_app_args s))))
+         ((Const _ _ ls1)
+          (if (bool_not (levels_equivalent lt1 ls1)) (KOk (cache_failure st t s) False)
+            (match (is_def_eq_args c st d (get_app_args t) (get_app_args s))
+              ((KFail f) (KFail f))
+              ((KOk st1 ok) (KOk (if ok st1 (cache_failure st1 t s)) ok)))))
          (_ (KOk st False))))
-      (_ (KOk st False)))
+      (_ (KOk st False))))
     (KOk st False)))
 
 (fn hints_is_regular ((h ReducibilityHints)) Bool (match h ((HRegular _) True) (_ False)))
@@ -1172,11 +1368,11 @@
 
 ;; is_def_eq_offset (l. 1076)
 (fn is_nat_zero_e ((e Expr)) Bool
-  (match e ((Lit (LitNat n)) (int_eq n 0)) ((Const n Nil) (name_eq n (nm_nat_zero))) (_ False)))
+  (match e ((Lit _ (LitNat n)) (int_eq n 0)) ((Const _ n Nil) (name_eq n (nm_nat_zero))) (_ False)))
 (fn is_nat_succ_e ((e Expr)) (Option Expr)
   (match e
-    ((Lit (LitNat n)) (if (lt 0 n) (Some (Lit (LitNat (- n 1)))) None))
-    ((App f a) (if (bool_and (is_const_named f (nm_nat_succ)) (int_eq (get_app_num_args e) 1)) (Some a) None))
+    ((Lit _ (LitNat n)) (if (lt 0 n) (Some (nat_lit (- n 1))) None))
+    ((App _ f a) (if (bool_and (is_const_named f (nm_nat_succ)) (int_eq (get_app_num_args e) 1)) (Some a) None))
     (_ None)))
 
 (fn is_def_eq_offset ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes LBool)
@@ -1254,9 +1450,9 @@
 ;; try_string_lit_expansion (l. 1145), both directions
 (fn try_string_lit_expansion_core ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes LBool)
   (match t
-    ((Lit (LitStr bs))
+    ((Lit _ (LitStr bs))
      (match s
-       ((App f _)
+       ((App _ f _)
         (if (is_const_named f (nm_string_of_list))
           (match (whnf c st d (string_lit_to_constructor bs))
             ((KFail x) (KFail x))
@@ -1280,7 +1476,7 @@
        ((KFail f) (KFail f))
        ((KOk st2 tty)
         (match (get_app_fn tty)
-          ((Const iname _)
+          ((Const _ iname _)
            (if (bool_not (is_non_rec_structure (ctx_env c) iname)) (KOk st2 False)
            (match (first_ctor (ctx_env c) iname)
              (None (KOk st2 False))
@@ -1308,7 +1504,7 @@
         ;; the Bool.true reflection shortcut (l. 1180)
         (match (if (bool_and (bool_or (bool_not (has_fvar t)) (ctx_eager c)) (is_const_named s (nm_bool_true)))
                  (whnf c st1 (- d 1) t)
-                 (KOk st1 (Const Anon Nil)))
+                 (KOk st1 (mk_const Anon Nil)))
           ((KFail f) (KFail f))
           ((KOk st2 tw)
            (if (is_const_named tw (nm_bool_true)) (KOk st2 True)
@@ -1343,17 +1539,17 @@
     ((KOk st1 (DeltaRes LFalse _ _)) (KOk st1 False))
     ((KOk st1 (DeltaRes LUndef tn sn))
      (match tn
-       ((Const n ls)
+       ((Const _ n ls)
         (match sn
-          ((Const m ms) (if (bool_and (name_eq n m) (levels_equivalent ls ms)) (KOk st1 True) (defeq_step7 c st1 d tn sn)))
+          ((Const _ m ms) (if (bool_and (name_eq n m) (levels_equivalent ls ms)) (KOk st1 True) (defeq_step7 c st1 d tn sn)))
           (_ (defeq_step7 c st1 d tn sn))))
-       ((FVar i)
+       ((FVar _ i)
         (match sn
-          ((FVar j) (if (int_eq i j) (KOk st1 True) (defeq_step7 c st1 d tn sn)))
+          ((FVar _ j) (if (int_eq i j) (KOk st1 True) (defeq_step7 c st1 d tn sn)))
           (_ (defeq_step7 c st1 d tn sn))))
-       ((Proj ts ti tc)
+       ((Proj _ ts ti tc)
         (match sn
-          ((Proj ss si sc)
+          ((Proj _ ss si sc)
            (if (bool_and (name_eq ts ss) (int_eq ti si))
              (match (lazy_delta_proj_reduction c st1 d tc sc ts ti)
                ((KFail f) (KFail f))

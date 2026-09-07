@@ -520,10 +520,54 @@ is `docs/FOUNDATION.md` §5.3.
   representation must see the export's sharing; the tree cannot check
   Init. The representation ruling is pending (annotated nodes with
   identity, as the pin, versus a hash-consed index arena).
-- **Open in phase 1:** the memo tables, the full-export run and its
-  cost measurement, the six accelerator pins declared 24k–700k lines
-  into the export, the `use`-free toolchain profile's gate moving to
-  CI.
+- **Representation RULED and built (2026-09-07):** user: "The annotated
+  nodes with identity approach sounds like the correct one to pursue."
+  Chosen because it is the pin's own mechanism (expr.h's cached hash,
+  loose-bvar range and flags; pointer identity as the equality fast
+  path; expr_map memo tables keyed structurally) and changes only
+  construction sites, never a match; rejected-because for the
+  hash-consed arena: the pin does not hash-cons, O(1) equality is a
+  property it never had, and in E every match would become a trie
+  lookup and every construction a persistent-trie insert. Every `Expr`
+  constructor's first field is a `D` (id, hash, loose-bvar range,
+  has_fvar, has_lparam); id 0 is anonymous, ids > 0 are minted from
+  `St`'s node counter and are unique within an environment lineage —
+  the `CheckedEnv` carries a node-id watermark and every check seeds its
+  counter above it (a client restarting the state at zero would
+  otherwise mint colliding ids into an environment that keeps them).
+  Traversals prune by the cached range and flags exactly as the pin's
+  instantiate/abstract/instantiate_lparams do. Then the pin's memo
+  tables (type_checker.h `state`: infer per mode, whnf_core filled only
+  when neither cheap flag is set, whnf for the non-easy kinds, unfold,
+  the success and failure pair sets ordered by hash), keyed on the hash
+  and verified by structural equality, reset at every environment
+  extension because the pin builds a fresh checker per `tc()` call.
+  Cost over chunks 0–4 of the export, identical verdicts throughout
+  (519 / 908 / 1,153 / 1,400 / 1,570 accepted, 0 mismatched):
+
+  | chunk | tree | ids + flags | + memo tables |
+  |---|---|---|---|
+  | 0 | 13 s | 8.2 s | 7.8 s |
+  | 1 | 28 s | 22.5 s | 10.7 s |
+  | 2 | 48 s | 36.9 s | 13.4 s |
+  | 3 | — | 39.0 s | 14.0 s |
+  | 4 | 118 s | 92.7 s | 18.6 s |
+
+  The per-chunk time is now flat and tracks the DAG size (20k–50k nodes
+  per chunk), as the sharing measurement predicted. Two findings on the
+  way: a memo hit's "changed" verdict must be structural, not identity
+  (a distinct but equal key made `whnf_core` loop to depth exhaustion —
+  the nested-inductive fixture caught it); and a `fn` named like a
+  constructor shadows it in the bootstrap. The port is audited by a
+  constructor-arity checker over pattern and expression position (the
+  bootstrap builds a short constructor silently and fails at the first
+  match) before the suite: 9 entrypoints, the 3,000-line fixture with
+  identical verdicts.
+- **Open in phase 1:** the full-export run and its cost measurement
+  (chunks 0–24 running at this commit), the six accelerator pins
+  declared 24k–700k lines into the export, the `use`-free toolchain
+  profile's gate moving to CI, the per-traversal caches of the pin's
+  `replace_rec_fn` if a profile shows instantiate dominating.
 
 ## 9. Related records
 

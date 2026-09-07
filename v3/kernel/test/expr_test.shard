@@ -1,70 +1,104 @@
 ;;; v3/kernel/test/expr_test.shard — term utilities: instantiate, abstract,
-;;; lift, spines, level instantiation, cheap beta.
+;;; lift, spines, level instantiation, cheap beta; and the node data
+;;; (hash, range, flags, identity) of the annotated representation.
 
 (import "../host.shard")
 (import "../expr.shard")
 
 (type Case (Case (List Int) Bool))
 
-(fn nat_c () Expr (Const (n1 (quote Nat)) Nil))
+(fn nat_c () Expr (mk_const (n1 (quote Nat)) Nil))
 (fn x_n () Name (n1 (quote x)))
 (fn u () Level (LParam (n1 (quote u))))
 ;; fun (x : Nat) => fun (y : Nat) => x   ==  Lam x Nat (Lam y Nat #1)
-(fn k_fn () Expr (Lam (x_n) BDefault (nat_c) (Lam (n1 (quote y)) BDefault (nat_c) (BVar 1))))
-(fn lit ((k Int)) Expr (Lit (LitNat k)))
+(fn k_fn () Expr (mk_lam (x_n) BDefault (nat_c) (mk_lam (n1 (quote y)) BDefault (nat_c) (mk_bvar 1))))
+(fn lit ((k Int)) Expr (mk_lit (LitNat k)))
+;; the utilities threaded in anonymous mode
+(fn sa () St (st_anon))
+(fn val ((p (Pair St Expr))) Expr (match p ((Pair _ e) e)))
+;; identified nodes are minted from a fresh counter
+(fn st1 () St (st_init))
 
 (fn cases () (List Case)
   (list
     (Case "range closed" (int_eq (loose_bvar_range (k_fn)) 0))
-    (Case "range #2 under one binder" (int_eq (loose_bvar_range (Lam (x_n) BDefault (nat_c) (BVar 2))) 2))
-    (Case "instantiate1 #0" (expr_eq (instantiate1 (App (BVar 0) (BVar 1)) (lit 7)) (App (lit 7) (BVar 0))))
+    (Case "range #2 under one binder" (int_eq (loose_bvar_range (mk_lam (x_n) BDefault (nat_c) (mk_bvar 2))) 2))
+    (Case "instantiate1 #0" (expr_eq (val (instantiate1 (sa) (mk_app (mk_bvar 0) (mk_bvar 1)) (lit 7))) (mk_app (lit 7) (mk_bvar 0))))
     (Case "instantiate1 under binder lifts"
-      (expr_eq (instantiate1 (Lam (x_n) BDefault (nat_c) (App (BVar 1) (BVar 0))) (BVar 0))
-               (Lam (x_n) BDefault (nat_c) (App (BVar 1) (BVar 0)))))
+      (expr_eq (val (instantiate1 (sa) (mk_lam (x_n) BDefault (nat_c) (mk_app (mk_bvar 1) (mk_bvar 0))) (mk_bvar 0)))
+               (mk_lam (x_n) BDefault (nat_c) (mk_app (mk_bvar 1) (mk_bvar 0)))))
     (Case "instantiate1 under binder substitutes a closed term"
-      (expr_eq (instantiate1 (Lam (x_n) BDefault (nat_c) (App (BVar 1) (BVar 0))) (lit 3))
-               (Lam (x_n) BDefault (nat_c) (App (lit 3) (BVar 0)))))
+      (expr_eq (val (instantiate1 (sa) (mk_lam (x_n) BDefault (nat_c) (mk_app (mk_bvar 1) (mk_bvar 0))) (lit 3)))
+               (mk_lam (x_n) BDefault (nat_c) (mk_app (lit 3) (mk_bvar 0)))))
     (Case "instantiate_rev order: last replaces #0"
-      (expr_eq (instantiate_rev (App (BVar 0) (BVar 1)) (list (lit 1) (lit 2))) (App (lit 2) (lit 1))))
+      (expr_eq (val (instantiate_rev (sa) (mk_app (mk_bvar 0) (mk_bvar 1)) (list (lit 1) (lit 2)))) (mk_app (lit 2) (lit 1))))
     (Case "abstract fvars in binder order"
-      (expr_eq (abstract_fvars (App (FVar 10) (FVar 11)) (list 10 11)) (App (BVar 1) (BVar 0))))
+      (expr_eq (val (abstract_fvars (sa) (mk_app (mk_fvar 10) (mk_fvar 11)) (list 10 11))) (mk_app (mk_bvar 1) (mk_bvar 0))))
     (Case "abstract under a binder offsets"
-      (expr_eq (abstract_fvars (Lam (x_n) BDefault (nat_c) (FVar 10)) (list 10)) (Lam (x_n) BDefault (nat_c) (BVar 1))))
+      (expr_eq (val (abstract_fvars (sa) (mk_lam (x_n) BDefault (nat_c) (mk_fvar 10)) (list 10))) (mk_lam (x_n) BDefault (nat_c) (mk_bvar 1))))
     (Case "abstract then instantiate_rev is identity"
-      (let ((e (App (App (FVar 3) (FVar 4)) (Lam (x_n) BDefault (nat_c) (FVar 3)))))
-        (expr_eq (instantiate_rev (abstract_fvars e (list 3 4)) (list (FVar 3) (FVar 4))) e)))
-    (Case "lift ≥ 1 by 2" (expr_eq (lift_loose_bvars (App (BVar 0) (BVar 1)) 1 2) (App (BVar 0) (BVar 3))))
-    (Case "lower" (expr_eq (lower_loose_bvars (App (BVar 0) (BVar 3)) 1 2) (App (BVar 0) (BVar 1))))
-    (Case "has_loose_bvar 1 under binder" (has_loose_bvar (Lam (x_n) BDefault (nat_c) (BVar 2)) 1))
+      (let ((e (mk_app (mk_app (mk_fvar 3) (mk_fvar 4)) (mk_lam (x_n) BDefault (nat_c) (mk_fvar 3)))))
+        (expr_eq (val (instantiate_rev (sa) (val (abstract_fvars (sa) e (list 3 4))) (list (mk_fvar 3) (mk_fvar 4)))) e)))
+    (Case "lift ≥ 1 by 2" (expr_eq (val (lift_loose_bvars (sa) (mk_app (mk_bvar 0) (mk_bvar 1)) 1 2)) (mk_app (mk_bvar 0) (mk_bvar 3))))
+    (Case "lower" (expr_eq (val (lower_loose_bvars (sa) (mk_app (mk_bvar 0) (mk_bvar 3)) 1 2)) (mk_app (mk_bvar 0) (mk_bvar 1))))
+    (Case "has_loose_bvar 1 under binder" (has_loose_bvar (mk_lam (x_n) BDefault (nat_c) (mk_bvar 2)) 1))
+    (Case "has_loose_bvar prunes by range" (bool_not (has_loose_bvar (mk_app (mk_bvar 0) (mk_bvar 1)) 2)))
     (Case "get_app_fn / args"
-      (let ((e (App (App (nat_c) (lit 1)) (lit 2))))
+      (let ((e (mk_app (mk_app (nat_c) (lit 1)) (lit 2))))
         (bool_and (expr_eq (get_app_fn e) (nat_c)) (exprs_eq (get_app_args e) (list (lit 1) (lit 2))))))
     (Case "mk_app_list roundtrip"
-      (let ((e (App (App (nat_c) (lit 1)) (lit 2))))
-        (expr_eq (mk_app_list (get_app_fn e) (get_app_args e)) e)))
-    (Case "num args" (int_eq (get_app_num_args (App (App (nat_c) (lit 1)) (lit 2))) 2))
+      (let ((e (mk_app (mk_app (nat_c) (lit 1)) (lit 2))))
+        (expr_eq (val (mk_app_list (sa) (get_app_fn e) (get_app_args e))) e)))
+    (Case "num args" (int_eq (get_app_num_args (mk_app (mk_app (nat_c) (lit 1)) (lit 2))) 2))
     (Case "inst lparams in Sort and Const"
-      (expr_eq (expr_inst_lparams (App (Sort (u)) (Const (n1 (quote c)) (list (u)))) (list (n1 (quote u))) (list LZero))
-               (App (Sort LZero) (Const (n1 (quote c)) (list LZero)))))
+      (expr_eq (val (expr_inst_lparams (sa) (mk_app (mk_sort (u)) (mk_const (n1 (quote c)) (list (u)))) (list (n1 (quote u))) (list LZero)))
+               (mk_app (mk_sort LZero) (mk_const (n1 (quote c)) (list LZero)))))
     (Case "cheap beta: closed body drops args"
-      (expr_eq (cheap_beta_reduce (App (Lam (x_n) BDefault (nat_c) (lit 5)) (lit 9))) (lit 5)))
+      (expr_eq (val (cheap_beta_reduce (sa) (mk_app (mk_lam (x_n) BDefault (nat_c) (lit 5)) (lit 9)))) (lit 5)))
     (Case "cheap beta: bvar body selects arg"
-      (expr_eq (cheap_beta_reduce (App (App (k_fn) (lit 1)) (lit 2))) (lit 1)))
+      (expr_eq (val (cheap_beta_reduce (sa) (mk_app (mk_app (k_fn) (lit 1)) (lit 2)))) (lit 1)))
     (Case "cheap beta: partial application untouched"
-      (let ((e (App (k_fn) (lit 1)))) (expr_eq (cheap_beta_reduce e) e)))
+      (let ((e (mk_app (k_fn) (lit 1)))) (expr_eq (val (cheap_beta_reduce (sa) e)) e)))
     (Case "cheap beta: extra args kept"
-      (expr_eq (cheap_beta_reduce (App (App (Lam (x_n) BDefault (nat_c) (BVar 0)) (nat_c)) (lit 4)))
-               (App (nat_c) (lit 4))))
+      (expr_eq (val (cheap_beta_reduce (sa) (mk_app (mk_app (mk_lam (x_n) BDefault (nat_c) (mk_bvar 0)) (nat_c)) (lit 4))))
+               (mk_app (nat_c) (lit 4))))
     (Case "beta_head: two lambdas, two args"
-      (expr_eq (beta_head (k_fn) (list (lit 1) (lit 2))) (lit 1)))
+      (expr_eq (val (beta_head (sa) (k_fn) (list (lit 1) (lit 2)))) (lit 1)))
     (Case "beta_head: one lambda, two args keeps the second"
-      (expr_eq (beta_head (Lam (x_n) BDefault (nat_c) (BVar 0)) (list (nat_c) (lit 4))) (App (nat_c) (lit 4))))
+      (expr_eq (val (beta_head (sa) (mk_lam (x_n) BDefault (nat_c) (mk_bvar 0)) (list (nat_c) (lit 4)))) (mk_app (nat_c) (lit 4))))
     (Case "beta_head: dependent body substitution"
-      (expr_eq (beta_head (Lam (x_n) BDefault (nat_c) (Lam (n1 (quote y)) BDefault (BVar 0) (BVar 1))) (list (lit 8)))
-               (Lam (n1 (quote y)) BDefault (lit 8) (lit 8))))
+      (expr_eq (val (beta_head (sa) (mk_lam (x_n) BDefault (nat_c) (mk_lam (n1 (quote y)) BDefault (mk_bvar 0) (mk_bvar 1))) (list (lit 8))))
+               (mk_lam (n1 (quote y)) BDefault (lit 8) (lit 8))))
     (Case "expr_eq ignores binder names"
-      (expr_eq (Lam (x_n) BDefault (nat_c) (BVar 0)) (Lam (n1 (quote z)) BImplicit (nat_c) (BVar 0))))
-    (Case "show" (int_list_eq (show_expr (App (nat_c) (lit 3))) "(Nat 3)"))))
+      (expr_eq (mk_lam (x_n) BDefault (nat_c) (mk_bvar 0)) (mk_lam (n1 (quote z)) BImplicit (nat_c) (mk_bvar 0))))
+    (Case "show" (int_list_eq (show_expr (mk_app (nat_c) (lit 3))) "(Nat 3)"))
+    ;; the node data
+    (Case "flags: fvar and lparam"
+      (let ((e (mk_app (mk_fvar 1) (mk_sort (u)))))
+        (bool_and (has_fvar e) (bool_and (has_lparam e) (bool_and (bool_not (has_fvar (nat_c))) (bool_not (has_lparam (nat_c))))))))
+    (Case "anonymous mode mints no ids" (int_eq (expr_id (val (instantiate1 (sa) (mk_app (mk_bvar 0) (nat_c)) (lit 1)))) 0))
+    (Case "identified nodes carry ids from 1" (match (new_app (st1) (nat_c) (lit 2)) ((Pair _ e) (int_eq (expr_id e) 1))))
+    (Case "identified vs anonymous twin: equal, same hash"
+      (match (new_app (st1) (nat_c) (lit 2))
+        ((Pair _ e) (bool_and (expr_eq e (mk_app (nat_c) (lit 2))) (int_eq (hash_expr e) (hash_expr (mk_app (nat_c) (lit 2))))))))
+    (Case "hash unchanged by identity and by binder names"
+      (match (new_lam (st1) (n1 (quote q)) BImplicit (nat_c) (mk_bvar 0))
+        ((Pair _ e) (int_eq (hash_expr e) (hash_expr (mk_lam (x_n) BDefault (nat_c) (mk_bvar 0)))))))
+    (Case "instantiate keeps a closed subterm's identity"
+      (match (new_app (st1) (nat_c) (lit 1))
+        ((Pair st c)
+         (match (instantiate1 st (mk_app (mk_bvar 0) c) (lit 1))
+           ((Pair _ r) (match r ((App _ _ c1) (same_node c c1)) (_ False)))))))
+    (Case "abstract keeps an untouched node's identity"
+      (match (new_app (st1) (mk_fvar 7) (nat_c))
+        ((Pair st e) (match (abstract_fvars st e (list 8)) ((Pair _ e1) (same_node e e1))))))
+    (Case "abstract rebuilds a touched node"
+      (match (new_app (st1) (mk_fvar 7) (nat_c))
+        ((Pair st e)
+         (match (abstract_fvars st e (list 7))
+           ((Pair _ e1) (bool_and (bool_not (same_node e e1)) (expr_eq e1 (mk_app (mk_bvar 0) (nat_c)))))))))
+    (Case "watermark: st_fresh_node advances the node counter only"
+      (match (st_fresh_node (St 5 6 7 (memo_empty))) ((Pair (St g t k _) id) (bool_and (int_eq id 8) (bool_and (int_eq k 8) (bool_and (int_eq g 5) (int_eq t 6)))))))))
 
 (fn run ((cs (List Case)) (fails Int) (w World)) World
   (measure (struct cs))

@@ -37,10 +37,14 @@ driver). Tests: `v3/test.sh` — nine entrypoints incl. the hostile
 battery (27 refusals) and the committed 3,000-line export prefix. **T0
 evidence (2026-09-06):** the first 60,000 lines of the `Init` export —
 1,153 declarations through `Init.Prelude` into `Init.Core` — accepted
-1,153 / rejected 0 / mismatched 0; per-chunk cost 13 s, 28 s, 48 s on
-route 3 (the environment store is a hash map; no memo tables yet). Not
-yet: the memo tables, the full export (≈6.5M lines; runs on prefixes
-are measured first), the six later-declared accelerator pins. **Nested
+1,153 / rejected 0 / mismatched 0. **Representation (2026-09-07,
+ruled):** annotated nodes with identity — every node carries a cached
+hash, loose-bvar range, flags and an id (the pin's expr data plus
+pointer identity), and the checker keeps the pin's memo tables; chunks
+0–4 (1,570 declarations) check in 7.8 / 10.7 / 13.4 / 14.0 / 18.6 s on
+route 3, flat in the DAG size where the plain tree took 13 / 28 / 48 /
+— / 118 s (records §8). Not yet: the full export (≈6.5M lines; runs on
+prefixes are measured first), the six later-declared accelerator pins. **Nested
 inductives validated:** `Lean.Syntax` (export line 78,503; two levels of
 nesting) admitted and its three exported recursors identical to K's
 generated ones — 1,375 declarations accepted, 0 rejected, 0 mismatched

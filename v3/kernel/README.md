@@ -1,12 +1,17 @@
-# v3/kernel — K's rule inventory (phase 0) and, from phase 1, K itself
+# v3/kernel — K: the rule inventory (phase 0) and the checker (phase 1)
 
-**Status: phase 0 deliverable, 2026-09-06 — the rule inventory and
-procedure, written as the shard declarations K will use, with every
-rule as a comment beside the constructor it governs** (user ruling
-2026-09-06: declarations, not a prose restatement, "because the
-declarations are phase 1's first file anyway and a prose restatement
-would drift from them"). Nothing here executes yet; the `fn`s come in
-phase 1. The declarations are the narrow-compatible E profile
+**Status: phase 1 in progress — K checks the `Init` export
+declaration for declaration (T0; `v3/README.md` for the evidence).**
+The rule inventory of phase 0 stands as the comments beside the
+declarations (user ruling 2026-09-06: declarations, not a prose
+restatement, "because the declarations are phase 1's first file anyway
+and a prose restatement would drift from them"); the `fn`s beneath them
+are the procedure, file for file after the pinned sources. The
+representation is annotated nodes with identity (ruled 2026-09-07;
+`expr.shard`'s header is the law: every node's first field is its
+cached hash, loose-bvar range, flags and id; `St` mints ids and holds
+the pin's memo tables; a `CheckedEnv` carries the node-id watermark).
+The declarations are the narrow-compatible E profile
 (FOUNDATION §9.2): today's `(type …)` forms with the stdlib names the
 Rust loader has built in (`Nil Cons True False Some None Z S`), because
 the loader reads these files exactly as it reads `kernel/*.shard`. The
@@ -31,7 +36,7 @@ in the comments are into those files at that commit.
 | `prelude.shard` | `List Option Bool Pair Nat` — the stdlib copy the loader needs | — |
 | `name.shard` | `Name` | hierarchical names; `check_name` (no redeclaration); reserved suffixes |
 | `level.shard` | `Level` | `normalize`, `is_equivalent`, `is_geq`, `is_not_zero`, `normalizes_to_zero`; `check_level` (declared parameters only) |
-| `expr.shard` | `BinderInfo Literal Expr` | the typing rules per constructor (`infer_*`), `whnf_core`/`whnf`, definitional equality (`is_def_eq_core` in its exact order), literal rules, projection rules |
+| `expr.shard` | `BinderInfo Literal D Expr Memo St` | the typing rules per constructor (`infer_*`), `whnf_core`/`whnf`, definitional equality (`is_def_eq_core` in its exact order), literal rules, projection rules; the representation (node data, identity, the state) |
 | `decl.shard` | `ReducibilityHints DefinitionSafety ConstantVal RecursorRule QuotKind ConstantInfo InductiveType Constructor Declaration` | admission per declaration kind (`environment::add_*`), the inductive admission checks, recursor generation, the quotient axioms |
 | `env.shard` | `Env` (raw and checked), `Outcome` | §3.3's outcomes; raw versus checked (§3.5); the fixed-identity `Nat` accelerators |
 

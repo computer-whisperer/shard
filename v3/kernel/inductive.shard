@@ -2,9 +2,9 @@
 ;;; generation (FOUNDATION §3.2: "K generates and validates recursors").
 ;;; Function for function after src/kernel/inductive.cpp at v4.33.1
 ;;; (`add_inductive_fn`; line numbers below are into that file). Nested
-;;; inductive elimination (`elim_nested_inductive_fn`, l. 1000–1220) is the
-;;; next slice; until then a nested occurrence fails positivity exactly as
-;;; the pin's core would without the auxiliary types.
+;;; inductive elimination (`elim_nested_inductive_fn`, l. 1000–1220) is
+;;; nested.shard; a nested occurrence reaching this file fails positivity
+;;; exactly as the pin's core would without the auxiliary types.
 ;;;
 ;;; The admission record A threads the environment being extended, the
 ;;; checker state, the local context holding the parameter fvars, and the
@@ -56,7 +56,10 @@
 (fn a_k_target ((a A)) Bool (match a ((A _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ k _) k)))
 (fn a_rec_infos ((a A)) (List RecInfoF) (match a ((A _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ r) r)))
 
-(fn a_set_env ((a A) (x CheckedEnv)) A (match a ((A _ s l p v n u nn t ps ni ic r z e k ri) (A x s l p v n u nn t ps ni ic r z e k ri))))
+;; extending the environment drops the memo tables: the pin builds a fresh
+;; type_checker (fresh caches) at every tc() call, so no cached result ever
+;; spans two environment snapshots
+(fn a_set_env ((a A) (x CheckedEnv)) A (match a ((A _ s l p v n u nn t ps ni ic r z e k ri) (A x (st_clear_memo s) l p v n u nn t ps ni ic r z e k ri))))
 (fn a_set_st ((a A) (x St)) A (match a ((A e _ l p v n u nn t ps ni ic r z el k ri) (A e x l p v n u nn t ps ni ic r z el k ri))))
 (fn a_set_lctx ((a A) (x (List LDecl))) A (match a ((A e s _ p v n u nn t ps ni ic r z el k ri) (A e s x p v n u nn t ps ni ic r z el k ri))))
 (fn a_set_params ((a A) (x (List Expr))) A (match a ((A e s l p v n u nn t _ ni ic r z el k ri) (A e s l p v n u nn t x ni ic r z el k ri))))
@@ -76,6 +79,19 @@
 
 ;; failures carry through unchanged
 (fn a_fail ((f Failure)) (KRes A) (KFail f))
+
+;; ---- term construction through A's state --------------------------------------
+
+(fn a_inst1 ((a A) (b Expr) (v Expr)) (Pair A Expr)
+  (match (instantiate1 (a_st a) b v) ((Pair st e) (Pair (a_set_st a st) e))))
+(fn a_app ((a A) (f Expr) (x Expr)) (Pair A Expr)
+  (match (new_app (a_st a) f x) ((Pair st e) (Pair (a_set_st a st) e))))
+(fn a_app_list ((a A) (f Expr) (xs (List Expr))) (Pair A Expr)
+  (match (mk_app_list (a_st a) f xs) ((Pair st e) (Pair (a_set_st a st) e))))
+(fn a_mk_pi ((a A) (fvars (List Expr)) (b Expr)) (Pair A Expr)
+  (match (mk_binding (a_ctx a) (a_st a) False fvars b False) ((Pair st e) (Pair (a_set_st a st) e))))
+(fn a_mk_lambda ((a A) (fvars (List Expr)) (b Expr)) (Pair A Expr)
+  (match (mk_binding (a_ctx a) (a_st a) True fvars b False) ((Pair st e) (Pair (a_set_st a st) e))))
 
 ;; ---- name helpers -------------------------------------------------------------
 
@@ -108,9 +124,9 @@
 (fn consume_type_annotations ((e Expr)) Expr
   (measure (struct e))
   (match e
-    ((App (App (Const n _) a) _)
+    ((App _ (App _ (Const _ n _) a) _)
      (if (bool_or (name_eq n (n1 (quote optParam))) (name_eq n (n1 (quote autoParam)))) (consume_type_annotations a) e))
-    ((App (Const n _) a)
+    ((App _ (Const _ n _) a)
      (if (bool_or (name_eq n (n1 (quote outParam))) (name_eq n (n1 (quote semiOutParam)))) (consume_type_annotations a) e))
     (_ e)))
 
@@ -119,7 +135,6 @@
 ;; environment::check_name (environment.cpp l. 102)
 (fn env_check_name ((e CheckedEnv) (n Name)) (Option Failure)
   (match (env_find e n) ((Some _) (Some (FRej (RuleViolation (quote already_declared))))) (None None)))
-
 
 (fn check_duplicated_univ_params ((ps (List Name))) Bool
   (measure (struct ps))
@@ -130,10 +145,10 @@
 ;; mk_local_decl_for(t) (l. 225): open the Pi's binder as an fvar
 (fn a_local_for ((a A) (t Expr)) (Pair A Expr)
   (match t
-    ((Pi n bi dom _)
+    ((Pi _ n bi dom _)
      (match (mk_local (a_ctx a) (a_st a) n (consume_type_annotations dom) None bi)
        ((Loc c st fv) (Pair (a_adopt a c st) fv))))
-    (_ (Pair a (Const Anon Nil)))))
+    (_ (Pair a (mk_const Anon Nil)))))
 
 (fn a_local ((a A) (n Name) (t Expr)) (Pair A Expr)
   (match (mk_local (a_ctx a) (a_st a) n (consume_type_annotations t) None BDefault)
@@ -146,16 +161,13 @@
 (fn a_ensure_sort ((a A) (t Expr)) (KRes Expr) (ensure_sort (a_ctx a) (a_st a) (budget_depth) t))
 (fn a_is_prop ((a A) (t Expr)) (KRes Bool) (is_prop (a_ctx a) (a_st a) (budget_depth) t))
 
-(fn a_mk_pi ((a A) (fvars (List Expr)) (b Expr)) Expr (mk_binding (a_ctx a) False fvars b False))
-(fn a_mk_lambda ((a A) (fvars (List Expr)) (b Expr)) Expr (mk_binding (a_ctx a) True fvars b False))
-
 (fn ldecl_type_of ((a A) (fv Expr)) Expr
   (match fv
-    ((FVar id) (match (lctx_find (a_lctx a) id) ((Some dcl) (ldecl_type dcl)) (None (Const Anon Nil))))
-    (_ (Const Anon Nil))))
+    ((FVar _ id) (match (lctx_find (a_lctx a) id) ((Some dcl) (ldecl_type dcl)) (None (mk_const Anon Nil))))
+    (_ (mk_const Anon Nil))))
 (fn ldecl_name_of ((a A) (fv Expr)) Name
   (match fv
-    ((FVar id) (match (lctx_find (a_lctx a) id) ((Some (LDecl _ n _ _ _)) n) (None Anon)))
+    ((FVar _ id) (match (lctx_find (a_lctx a) id) ((Some (LDecl _ n _ _ _)) n) (None Anon)))
     (_ Anon)))
 
 (fn it_name ((t InductiveType)) Name (match t ((InductiveType n _ _) n)))
@@ -202,9 +214,9 @@
                     (let ((lvl (sort_level s)) (a3 (a_set_st a2 st3)))
                       (if first
                         (cit_types (a_set_result a3 lvl (is_not_zero lvl)) r False (Cons nidx nidx_acc)
-                                   (Cons (Const (it_name t) (a_levels a3)) cnst_acc))
+                                   (Cons (mk_const (it_name t) (a_levels a3)) cnst_acc))
                       (if (is_equivalent lvl (a_result_level a3))
-                        (cit_types a3 r False (Cons nidx nidx_acc) (Cons (Const (it_name t) (a_levels a3)) cnst_acc))
+                        (cit_types a3 r False (Cons nidx nidx_acc) (Cons (mk_const (it_name t) (a_levels a3)) cnst_acc))
                         (KFail (FRej (RuleViolation (quote mutual_universe_mismatch)))))))))))))))))))))
 
 ;; walk a type's binders: the first nparams are the params (created on the
@@ -217,21 +229,27 @@
     ((KOk st1 t)
      (let ((a1 (a_set_st a st1)))
        (match t
-         ((Pi _ _ dom body)
+         ((Pi _ _ _ dom body)
           (if (lt i (a_nparams a1))
             (if first
               (match (a_local_for a1 t)
-                ((Pair a2 p) (cit_binders (a_set_params a2 (append (a_params a2) (Cons p Nil))) (instantiate1 body p) (+ i 1) first nidx)))
+                ((Pair a2 p)
+                 (match (a_inst1 (a_set_params a2 (append (a_params a2) (Cons p Nil))) body p)
+                   ((Pair a3 b1) (cit_binders a3 b1 (+ i 1) first nidx)))))
               (match (nth (a_params a1) i)
                 (None (KFail (FRej (RuleViolation (quote param_mismatch)))))
                 ((Some p)
                  (match (a_is_def_eq a1 dom (ldecl_type_of a1 p))
                    ((KFail f) (KFail f))
                    ((KOk st2 ok)
-                    (if ok (cit_binders (a_set_st a1 st2) (instantiate1 body p) (+ i 1) first nidx)
+                    (if ok
+                      (match (a_inst1 (a_set_st a1 st2) body p)
+                        ((Pair a3 b1) (cit_binders a3 b1 (+ i 1) first nidx)))
                       (KFail (FRej (RuleViolation (quote param_mismatch))))))))))
             (match (a_local_for a1 t)
-              ((Pair a2 x) (cit_binders a2 (instantiate1 body x) (+ i 1) first (+ nidx 1))))))
+              ((Pair a2 x)
+               (match (a_inst1 a2 body x)
+                 ((Pair a3 b1) (cit_binders a3 b1 (+ i 1) first (+ nidx 1))))))))
          (_
           (if (bool_not (int_eq i (a_nparams a1)))
             (if (lt i (a_nparams a1)) (KFail (FRej (RuleViolation (quote param_count_mismatch))))
@@ -241,17 +259,17 @@
 ;; ---- is_rec / is_reflexive (l. 308, 337) -------------------------------------------
 
 (fn is_ind_occ ((a A) (e Expr)) Bool
-  (match e ((Const n _) (mem_name n (all_names (a_types a)))) (_ False)))
+  (match e ((Const _ n _) (mem_name n (all_names (a_types a)))) (_ False)))
 
 (fn has_ind_occ ((a A) (e Expr)) Bool
   (measure (struct e))
   (match e
-    ((Const _ _) (is_ind_occ a e))
-    ((App f x) (bool_or (has_ind_occ a f) (has_ind_occ a x)))
-    ((Lam _ _ d b) (bool_or (has_ind_occ a d) (has_ind_occ a b)))
-    ((Pi _ _ d b) (bool_or (has_ind_occ a d) (has_ind_occ a b)))
-    ((Let _ t v b) (bool_or (bool_or (has_ind_occ a t) (has_ind_occ a v)) (has_ind_occ a b)))
-    ((Proj _ _ x) (has_ind_occ a x))
+    ((Const _ _ _) (is_ind_occ a e))
+    ((App _ f x) (bool_or (has_ind_occ a f) (has_ind_occ a x)))
+    ((Lam _ _ _ d b) (bool_or (has_ind_occ a d) (has_ind_occ a b)))
+    ((Pi _ _ _ d b) (bool_or (has_ind_occ a d) (has_ind_occ a b)))
+    ((Let _ _ t v b) (bool_or (bool_or (has_ind_occ a t) (has_ind_occ a v)) (has_ind_occ a b)))
+    ((Proj _ _ _ x) (has_ind_occ a x))
     (_ False)))
 
 (fn is_rec_a ((a A)) Bool (is_rec_types a (a_types a)))
@@ -263,7 +281,7 @@
   (match cs (Nil False) ((Cons c r) (bool_or (is_rec_binders a (ctor_type c)) (is_rec_ctors a r)))))
 (fn is_rec_binders ((a A) (t Expr)) Bool
   (measure (struct t))
-  (match t ((Pi _ _ dom body) (bool_or (has_ind_occ a dom) (is_rec_binders a body))) (_ False)))
+  (match t ((Pi _ _ _ dom body) (bool_or (has_ind_occ a dom) (is_rec_binders a body))) (_ False)))
 
 (fn is_reflexive_a ((a A)) Bool (is_refl_types a (a_types a)))
 (fn is_refl_types ((a A) (ts (List InductiveType))) Bool
@@ -275,7 +293,7 @@
 (fn is_refl_binders ((a A) (t Expr)) Bool
   (measure (struct t))
   (match t
-    ((Pi _ _ dom body) (bool_or (bool_and (is_pi dom) (has_ind_occ a dom)) (is_refl_binders a body)))
+    ((Pi _ _ _ dom body) (bool_or (bool_and (is_pi dom) (has_ind_occ a dom)) (is_refl_binders a body)))
     (_ False)))
 
 ;; ---- declare_inductive_types (l. 360) --------------------------------------------
@@ -328,9 +346,9 @@
     ((KOk st1 t1)
      (let ((a1 (a_set_st a st1)))
        (match t1
-         ((Pi _ _ _ body)
+         ((Pi _ _ _ _ body)
           (match (a_local_for a1 t1)
-            ((Pair a2 x) (is_rec_argument a2 (instantiate1 body x)))))
+            ((Pair a2 x) (match (a_inst1 a2 body x) ((Pair a3 b1) (is_rec_argument a3 b1))))))
          (_ (KOk (a_st a1) (is_valid_ind_app a1 t1))))))))
 
 ;; check_positivity (l. 436)
@@ -341,10 +359,10 @@
      (let ((a1 (a_set_st a st1)))
        (if (bool_not (has_ind_occ a1 t)) (KOk (a_st a1) a1)
        (match t
-         ((Pi _ _ dom body)
+         ((Pi _ _ _ dom body)
           (if (has_ind_occ a1 dom) (KFail (FRej (RuleViolation (quote non_positive_occurrence))))
             (match (a_local_for a1 t)
-              ((Pair a2 x) (check_positivity a2 (instantiate1 body x) cn arg_idx)))))
+              ((Pair a2 x) (match (a_inst1 a2 body x) ((Pair a3 b1) (check_positivity a3 b1 cn arg_idx)))))))
          (_
           (match (is_valid_ind_app a1 t)
             ((Some _) (KOk (a_st a1) a1))
@@ -385,7 +403,7 @@
 (fn cc_binders ((a A) (t Expr) (i Int) (cn Name) (idx Int)) (KRes A)
   (measure (struct t))
   (match t
-    ((Pi _ _ dom body)
+    ((Pi _ _ _ dom body)
      (if (lt i (a_nparams a))
        (match (nth (a_params a) i)
          (None (KFail (FRej (RuleViolation (quote param_mismatch)))))
@@ -393,7 +411,8 @@
           (match (a_is_def_eq a dom (ldecl_type_of a p))
             ((KFail f) (KFail f))
             ((KOk st1 ok)
-             (if ok (cc_binders (a_set_st a st1) (instantiate1 body p) (+ i 1) cn idx)
+             (if ok
+               (match (a_inst1 (a_set_st a st1) body p) ((Pair a2 b1) (cc_binders a2 b1 (+ i 1) cn idx)))
                (KFail (FRej (RuleViolation (quote ctor_param_mismatch)))))))))
        (match (a_infer a dom)
          ((KFail f) (KFail f))
@@ -408,7 +427,7 @@
                  ((KFail f) (KFail f))
                  ((KOk st3 a3)
                   (match (a_local_for (a_set_st a3 st3) t)
-                    ((Pair a4 x) (cc_binders a4 (instantiate1 body x) (+ i 1) cn idx)))))))))))))
+                    ((Pair a4 x) (match (a_inst1 a4 body x) ((Pair a5 b1) (cc_binders a5 b1 (+ i 1) cn idx)))))))))))))))
     (_
      (if (is_valid_ind_app_i a t idx) (KOk (a_st a) a)
        (KFail (FRej (RuleViolation (quote invalid_ctor_result))))))))
@@ -439,7 +458,7 @@
 
 (fn pi_arity ((t Expr)) Int
   (measure (struct t))
-  (match t ((Pi _ _ _ b) (+ 1 (pi_arity b))) (_ 0)))
+  (match t ((Pi _ _ _ _ b) (+ 1 (pi_arity b))) (_ 0)))
 
 ;; ---- elimination level and K-target (l. 522–631) ------------------------------------
 
@@ -458,18 +477,21 @@
 (fn eoz_single ((a A) (t Expr) (i Int) (to_check (List Expr))) (KRes Bool)
   (measure (struct t))
   (match t
-    ((Pi _ _ dom body)
+    ((Pi _ _ _ dom body)
      (match (a_local_for a t)
        ((Pair a1 x)
-        (if (lt i (a_nparams a1)) (eoz_single a1 (instantiate1 body x) (+ i 1) to_check)
+        (if (lt i (a_nparams a1))
+          (match (a_inst1 a1 body x) ((Pair a2 b1) (eoz_single a2 b1 (+ i 1) to_check)))
         (match (a_infer a1 dom)
           ((KFail f) (KFail f))
           ((KOk st1 dty)
            (match (a_ensure_sort (a_set_st a1 st1) dty)
              ((KFail f) (KFail f))
              ((KOk st2 s)
-              (eoz_single (a_set_st a1 st2) (instantiate1 body x) (+ i 1)
-                          (if (normalizes_to_zero (sort_level s)) to_check (Cons x to_check)))))))))))
+              (match (a_inst1 (a_set_st a1 st2) body x)
+                ((Pair a2 b1)
+                 (eoz_single a2 b1 (+ i 1)
+                             (if (normalizes_to_zero (sort_level s)) to_check (Cons x to_check)))))))))))))
     (_
      (let ((result_args (get_app_args t)))
        (KOk (a_st a) (bool_not (all_mem_exprs to_check result_args)))))))
@@ -531,13 +553,20 @@
           (match (nth (a_ind_cnsts a2) idx)
             (None (KFail (FRej (Malformed (quote ind_cnst)))))
             ((Some ic)
-             (match (a_local a2 (n1 (quote t)) (mk_app_list (mk_app_list ic (a_params a2)) indices))
-               ((Pair a3 major)
-                (let ((c_ty (a_mk_pi a3 indices (a_mk_pi a3 (Cons major Nil) (Sort (a_elim_level a3)))))
-                      (c_name (if (lt 1 (len (a_types a3))) (name_append_after (n1 (quote motive)) (+ idx 1)) (n1 (quote motive)))))
-                  (match (a_local a3 c_name c_ty)
-                    ((Pair a4 cfv)
-                     (mri_types a4 r (+ idx 1) (Cons (RecInfoF cfv indices major Nil) acc)))))))))))))))
+             (match (a_app_list a2 ic (a_params a2))
+               ((Pair a20 icp)
+                (match (a_app_list a20 icp indices)
+                  ((Pair a21 major_ty)
+                   (match (a_local a21 (n1 (quote t)) major_ty)
+                     ((Pair a3 major)
+                      (match (a_mk_pi a3 (Cons major Nil) (mk_sort (a_elim_level a3)))
+                        ((Pair a30 c_ty0)
+                         (match (a_mk_pi a30 indices c_ty0)
+                           ((Pair a31 c_ty)
+                            (let ((c_name (if (lt 1 (len (a_types a31))) (name_append_after (n1 (quote motive)) (+ idx 1)) (n1 (quote motive)))))
+                              (match (a_local a31 c_name c_ty)
+                                ((Pair a4 cfv)
+                                 (mri_types a4 r (+ idx 1) (Cons (RecInfoF cfv indices major Nil) acc)))))))))))))))))))))))
 
 ;; open a type's binders: params instantiated, indices as fresh locals
 (fn mri_open_type ((a A) (ty Expr) (i Int) (indices (List Expr))) (KRes (Pair A (List Expr)))
@@ -547,13 +576,15 @@
     ((KOk st1 t)
      (let ((a1 (a_set_st a st1)))
        (match t
-         ((Pi _ _ _ body)
+         ((Pi _ _ _ _ body)
           (if (lt i (a_nparams a1))
             (match (nth (a_params a1) i)
               (None (KFail (FRej (Malformed (quote param)))))
-              ((Some p) (mri_open_type a1 (instantiate1 body p) (+ i 1) indices)))
+              ((Some p) (match (a_inst1 a1 body p) ((Pair a2 b1) (mri_open_type a2 b1 (+ i 1) indices)))))
             (match (a_local_for a1 t)
-              ((Pair a2 x) (mri_open_type a2 (instantiate1 body x) (+ i 1) (append indices (Cons x Nil)))))))
+              ((Pair a2 x)
+               (match (a_inst1 a2 body x)
+                 ((Pair a3 b1) (mri_open_type a3 b1 (+ i 1) (append indices (Cons x Nil)))))))))
          (_ (KOk (a_st a1) (Pair a1 indices))))))))
 
 ;; the minor premises: one per constructor, appended to its type's rec info
@@ -582,16 +613,26 @@
              (match (nth (a_rec_infos a2) it_idx)
                (None (KFail (FRej (Malformed (quote rec_info)))))
                ((Some (RecInfoF cfv _ _ _))
-                (let ((c_app (App (mk_app_list cfv (drop (a_nparams a2) (get_app_args t)))
-                                  (mk_app_list (mk_app_list (Const (ctor_name c) (a_levels a2)) (a_params a2)) b_u))))
-                  (match (mk_ihs a2 u Nil)
-                    ((KFail f) (KFail f))
-                    ((KOk st2 (Pair a3 v))
-                     (let ((minor_ty (a_mk_pi a3 b_u (a_mk_pi a3 v c_app)))
-                           (minor_name (name_replace_prefix (ctor_name c) iname Anon)))
-                       (match (a_local (a_set_st a3 st2) minor_name minor_ty)
-                         ((Pair a4 minor)
-                          (mri_ctor_minors (a_set_rec_infos a4 (append_minor (a_rec_infos a4) idx minor)) r iname idx)))))))))))))))))
+                ;; c_app = cfv indices (ctor params fields)
+                (match (a_app_list a2 cfv (drop (a_nparams a2) (get_app_args t)))
+                  ((Pair a20 c_idx)
+                   (match (a_app_list a20 (mk_const (ctor_name c) (a_levels a20)) (a_params a20))
+                     ((Pair a21 ctor_p)
+                      (match (a_app_list a21 ctor_p b_u)
+                        ((Pair a22 ctor_app)
+                         (match (a_app a22 c_idx ctor_app)
+                           ((Pair a23 c_app)
+                            (match (mk_ihs a23 u Nil)
+                              ((KFail f) (KFail f))
+                              ((KOk st2 (Pair a3 v))
+                               (match (a_mk_pi (a_set_st a3 st2) v c_app)
+                                 ((Pair a30 minor_ty0)
+                                  (match (a_mk_pi a30 b_u minor_ty0)
+                                    ((Pair a31 minor_ty)
+                                     (let ((minor_name (name_replace_prefix (ctor_name c) iname Anon)))
+                                       (match (a_local a31 minor_name minor_ty)
+                                         ((Pair a4 minor)
+                                          (mri_ctor_minors (a_set_rec_infos a4 (append_minor (a_rec_infos a4) idx minor)) r iname idx))))))))))))))))))))))))))))
 
 (fn append_minor ((ris (List RecInfoF)) (idx Int) (m Expr)) (List RecInfoF)
   (measure (struct ris))
@@ -606,18 +647,20 @@
 (fn open_ctor ((a A) (t Expr) (i Int) (b_u (List Expr)) (u (List Expr))) (KRes (Pair A (Pair (List Expr) (Pair (List Expr) Expr))))
   (measure (struct t))
   (match t
-    ((Pi _ _ dom body)
+    ((Pi _ _ _ dom body)
      (if (lt i (a_nparams a))
        (match (nth (a_params a) i)
          (None (KFail (FRej (Malformed (quote param)))))
-         ((Some p) (open_ctor a (instantiate1 body p) (+ i 1) b_u u)))
+         ((Some p) (match (a_inst1 a body p) ((Pair a1 b1) (open_ctor a1 b1 (+ i 1) b_u u)))))
        (match (a_local_for a t)
          ((Pair a1 l)
           (match (is_rec_argument a1 dom)
             ((KFail f) (KFail f))
             ((KOk st2 recarg)
-             (open_ctor (a_set_st a1 st2) (instantiate1 body l) (+ i 1) (append b_u (Cons l Nil))
-                        (match recarg ((Some _) (append u (Cons l Nil))) (None u)))))))))
+             (match (a_inst1 (a_set_st a1 st2) body l)
+               ((Pair a2 b1)
+                (open_ctor a2 b1 (+ i 1) (append b_u (Cons l Nil))
+                           (match recarg ((Some _) (append u (Cons l Nil))) (None u)))))))))))
     (_ (KOk (a_st a) (Pair a (Pair b_u (Pair u t)))))))
 
 ;; the inductive hypotheses v_i for the recursive fields u_i (l. 675–692)
@@ -639,9 +682,17 @@
                 (match (nth (a_rec_infos a3) it_idx)
                   (None (KFail (FRej (Malformed (quote rec_info)))))
                   ((Some (RecInfoF cfv _ _ _))
-                   (let ((c_app (App (mk_app_list cfv (drop (a_nparams a3) (get_app_args uty))) (mk_app_list u_i xs))))
-                     (match (a_local a3 (name_append_str (ldecl_name_of a3 u_i) "_ih") (a_mk_pi a3 xs c_app))
-                       ((Pair a4 v_i) (mk_ihs a4 r (Cons v_i acc)))))))))))))))))
+                   ;; c_app = cfv indices (u_i xs)
+                   (match (a_app_list a3 cfv (drop (a_nparams a3) (get_app_args uty)))
+                     ((Pair a30 c_idx)
+                      (match (a_app_list a30 u_i xs)
+                        ((Pair a31 uxs)
+                         (match (a_app a31 c_idx uxs)
+                           ((Pair a32 c_app)
+                            (match (a_mk_pi a32 xs c_app)
+                              ((Pair a33 ih_ty)
+                               (match (a_local a33 (name_append_str (ldecl_name_of a33 u_i) "_ih") ih_ty)
+                                 ((Pair a4 v_i) (mk_ihs a4 r (Cons v_i acc))))))))))))))))))))))))
 
 ;; whnf and open every Pi of a recursive field's type: (a, (xs, head))
 (fn open_pis ((a A) (ty Expr) (xs (List Expr))) (KRes (Pair A (Pair (List Expr) Expr)))
@@ -651,9 +702,11 @@
     ((KOk st1 t)
      (let ((a1 (a_set_st a st1)))
        (match t
-         ((Pi _ _ _ body)
+         ((Pi _ _ _ _ body)
           (match (a_local_for a1 t)
-            ((Pair a2 x) (open_pis a2 (instantiate1 body x) (append xs (Cons x Nil))))))
+            ((Pair a2 x)
+             (match (a_inst1 a2 body x)
+               ((Pair a3 b1) (open_pis a3 b1 (append xs (Cons x Nil))))))))
          (_ (KOk (a_st a1) (Pair a1 (Pair xs t)))))))))
 
 ;; ---- declare_recursors (l. 795) / mk_rec_rules (l. 749) ----------------------------------
@@ -676,20 +729,33 @@
      (match (nth (a_rec_infos a) idx)
        (None (KFail (FRej (Malformed (quote rec_info)))))
        ((Some (RecInfoF cfv indices major _))
-        (let ((rec_name (mk_rec_name (it_name t)))
-              (c_app (App (mk_app_list cfv indices) major)))
-          (let ((rec_ty (a_mk_pi a (a_params a) (a_mk_pi a cs (a_mk_pi a minors (a_mk_pi a indices (a_mk_pi a (Cons major Nil) c_app)))))))
-            (match (mk_rec_rules a (it_ctors t) cs minors minor_idx Nil)
-              ((KFail f) (KFail f))
-              ((KOk st1 (Pair a1 rules))
-               (match (env_check_name (a_env a1) rec_name)
-                 ((Some f) (KFail f))
-                 (None
-                  (let ((nidx (match (nth (a_nindices a1) idx) ((Some n) n) (None 0))))
-                    (dr_go (a_set_st (a_set_env a1 (env_add (a_env a1) rec_name
-                             (RecInfo (ConstantVal rec_name (get_rec_lparams a1) rec_ty) (all_names (a_types a1))
-                                      (a_nparams a1) nidx (len cs) (len minors) rules (a_k_target a1) (a_unsafe a1)))) st1)
-                           r (+ idx 1) cs minors (+ minor_idx (len (it_ctors t))))))))))))))))
+        (let ((rec_name (mk_rec_name (it_name t))))
+          ;; rec_ty = Pi params, Pi Cs, Pi minors, Pi indices, Pi major, cfv indices major
+          (match (a_app_list a cfv indices)
+            ((Pair a0 c_idx)
+             (match (a_app a0 c_idx major)
+               ((Pair a1 c_app)
+                (match (a_mk_pi a1 (Cons major Nil) c_app)
+                  ((Pair a2 t1)
+                   (match (a_mk_pi a2 indices t1)
+                     ((Pair a3 t2)
+                      (match (a_mk_pi a3 minors t2)
+                        ((Pair a4 t3)
+                         (match (a_mk_pi a4 cs t3)
+                           ((Pair a5 t4)
+                            (match (a_mk_pi a5 (a_params a5) t4)
+                              ((Pair a6 rec_ty)
+                               (match (mk_rec_rules a6 (it_ctors t) cs minors minor_idx Nil)
+                                 ((KFail f) (KFail f))
+                                 ((KOk st1 (Pair a7 rules))
+                                  (match (env_check_name (a_env a7) rec_name)
+                                    ((Some f) (KFail f))
+                                    (None
+                                     (let ((nidx (match (nth (a_nindices a7) idx) ((Some n) n) (None 0))))
+                                       (dr_go (a_set_st (a_set_env a7 (env_add (a_env a7) rec_name
+                                                (RecInfo (ConstantVal rec_name (get_rec_lparams a7) rec_ty) (all_names (a_types a7))
+                                                         (a_nparams a7) nidx (len cs) (len minors) rules (a_k_target a7) (a_unsafe a7)))) st1)
+                                              r (+ idx 1) cs minors (+ minor_idx (len (it_ctors t)))))))))))))))))))))))))))))
 
 ;; one rule per constructor: rhs = fun params Cs minors fields => minor fields ihs
 (fn mk_rec_rules ((a A) (ctors (List Constructor)) (cs (List Expr)) (minors (List Expr)) (minor_idx Int) (acc (List RecursorRule))) (KRes (Pair A (List RecursorRule)))
@@ -706,12 +772,22 @@
            (match (nth minors minor_idx)
              (None (KFail (FRej (Malformed (quote minor)))))
              ((Some minor)
-              (let ((e_app (mk_app_list (mk_app_list minor b_u) v)))
-                (let ((rhs (a_mk_lambda a2 (a_params a2) (a_mk_lambda a2 cs (a_mk_lambda a2 minors (a_mk_lambda a2 b_u e_app))))))
-                  (mk_rec_rules (a_set_st a2 st2) r cs minors (+ minor_idx 1)
-                                (Cons (RecursorRule (ctor_name c) (len b_u) rhs) acc)))))))))))))
+              (match (a_app_list (a_set_st a2 st2) minor b_u)
+                ((Pair a20 mb)
+                 (match (a_app_list a20 mb v)
+                   ((Pair a21 e_app)
+                    (match (a_mk_lambda a21 b_u e_app)
+                      ((Pair a22 l1)
+                       (match (a_mk_lambda a22 minors l1)
+                         ((Pair a23 l2)
+                          (match (a_mk_lambda a23 cs l2)
+                            ((Pair a24 l3)
+                             (match (a_mk_lambda a24 (a_params a24) l3)
+                               ((Pair a25 rhs)
+                                (mk_rec_rules a25 r cs minors (+ minor_idx 1)
+                                              (Cons (RecursorRule (ctor_name c) (len b_u) rhs) acc)))))))))))))))))))))))
 
-;; the recursive calls standing for the ihs in a rule (l. 764–777)
+;; the recursive calls standing for the ihs in a rule (l. 764–777)))
 (fn mk_rule_ihs ((a A) (u (List Expr)) (cs (List Expr)) (minors (List Expr)) (acc (List Expr))) (KRes (Pair A (List Expr)))
   (measure (struct u))
   (match u
@@ -730,11 +806,21 @@
                 (match (nth (a_types a3) it_idx)
                   (None (KFail (FRej (Malformed (quote rec_info)))))
                   ((Some t)
-                   (let ((rec_app (mk_app_list
-                                    (mk_app_list (mk_app_list (mk_app_list (mk_app_list (Const (mk_rec_name (it_name t)) (get_rec_levels a3)) (a_params a3)) cs) minors)
-                                                 (drop (a_nparams a3) (get_app_args uty)))
-                                    (Cons (mk_app_list u_i xs) Nil))))
-                     (mk_rule_ihs a3 r cs minors (Cons (a_mk_lambda a3 xs rec_app) acc)))))))))))))))
+                   ;; rec_app = I.rec params cs minors indices (u_i xs)
+                   (match (a_app_list a3 (mk_const (mk_rec_name (it_name t)) (get_rec_levels a3)) (a_params a3))
+                     ((Pair a30 r1)
+                      (match (a_app_list a30 r1 cs)
+                        ((Pair a31 r2)
+                         (match (a_app_list a31 r2 minors)
+                           ((Pair a32 r3)
+                            (match (a_app_list a32 r3 (drop (a_nparams a32) (get_app_args uty)))
+                              ((Pair a33 r4)
+                               (match (a_app_list a33 u_i xs)
+                                 ((Pair a34 uxs)
+                                  (match (a_app a34 r4 uxs)
+                                    ((Pair a35 rec_app)
+                                     (match (a_mk_lambda a35 xs rec_app)
+                                       ((Pair a36 ih) (mk_rule_ihs a36 r cs minors (Cons ih acc))))))))))))))))))))))))))))
 
 ;; ---- check_recursors (l. 829): the generated types check; each rule preserves types ----
 
@@ -754,10 +840,16 @@
                         (a_st a) (budget_depth) (ci_type rinfo) False)
             ((KFail f) (KFail f))
             ((KOk st1 _)
-             (let ((rec_pre (mk_app_list (mk_app_list (mk_app_list (Const rec_name (get_rec_levels a)) (a_params a)) cs) minors)))
-               (match (cr_ctors (a_set_st a st1) (it_ctors t) rec_pre)
-                 ((KFail f) (KFail f))
-                 ((KOk st2 a2) (cr_go (a_set_st a2 st2) r cs minors))))))))))))
+             ;; rec_pre = I.rec params cs minors
+             (match (a_app_list (a_set_st a st1) (mk_const rec_name (get_rec_levels a)) (a_params a))
+               ((Pair a1 p1)
+                (match (a_app_list a1 p1 cs)
+                  ((Pair a2 p2)
+                   (match (a_app_list a2 p2 minors)
+                     ((Pair a3 rec_pre)
+                      (match (cr_ctors a3 (it_ctors t) rec_pre)
+                        ((KFail f) (KFail f))
+                        ((KOk st2 a4) (cr_go (a_set_st a4 st2) r cs minors)))))))))))))))))
 
 (fn cr_ctors ((a A) (ctors (List Constructor)) (rec_pre Expr)) (KRes A)
   (measure (struct ctors))
@@ -768,40 +860,49 @@
        ((KFail f) (KFail f))
        ((KOk st1 (Pair a1 (Pair b_u t)))
         (let ((a2 (a_set_st a1 st1)))
-          (let ((lhs (App (mk_app_list rec_pre (drop (a_nparams a2) (get_app_args t)))
-                          (mk_app_list (mk_app_list (Const (ctor_name c) (a_levels a2)) (a_params a2)) b_u))))
-            (match (a_infer a2 lhs)
-              ((KFail f) (KFail f))
-              ((KOk st2 expected)
-               (match (a_whnf (a_set_st a2 st2) lhs)
-                 ((KFail f) (KFail f))
-                 ((KOk st3 reduct)
-                  (match (a_infer (a_set_st a2 st3) reduct)
-                    ((KFail f) (KFail f))
-                    ((KOk st4 actual)
-                     (match (a_is_def_eq (a_set_st a2 st4) actual expected)
-                       ((KFail f) (KFail f))
-                       ((KOk st5 ok)
-                        (if ok (cr_ctors (a_set_st a2 st5) r rec_pre)
-                          (KFail (FRej (RuleViolation (quote rule_not_type_preserving))))))))))))))))))))
+          ;; lhs = rec_pre indices (ctor params fields)
+          (match (a_app_list a2 rec_pre (drop (a_nparams a2) (get_app_args t)))
+            ((Pair a20 lhs_idx)
+             (match (a_app_list a20 (mk_const (ctor_name c) (a_levels a20)) (a_params a20))
+               ((Pair a21 ctor_p)
+                (match (a_app_list a21 ctor_p b_u)
+                  ((Pair a22 ctor_app)
+                   (match (a_app a22 lhs_idx ctor_app)
+                     ((Pair a23 lhs)
+                      (match (a_infer a23 lhs)
+                        ((KFail f) (KFail f))
+                        ((KOk st2 expected)
+                         (match (a_whnf (a_set_st a23 st2) lhs)
+                           ((KFail f) (KFail f))
+                           ((KOk st3 reduct)
+                            (match (a_infer (a_set_st a23 st3) reduct)
+                              ((KFail f) (KFail f))
+                              ((KOk st4 actual)
+                               (match (a_is_def_eq (a_set_st a23 st4) actual expected)
+                                 ((KFail f) (KFail f))
+                                 ((KOk st5 ok)
+                                  (if ok (cr_ctors (a_set_st a23 st5) r rec_pre)
+                                    (KFail (FRej (RuleViolation (quote rule_not_type_preserving)))))))))))))))))))))))))))
 
-;; open a constructor without classifying fields: (a, (fields, result))
+;; open a constructor without classifying fields: (a, (fields, result)))
 (fn open_ctor_plain ((a A) (t Expr) (i Int) (b_u (List Expr))) (KRes (Pair A (Pair (List Expr) Expr)))
   (measure (struct t))
   (match t
-    ((Pi _ _ _ body)
+    ((Pi _ _ _ _ body)
      (if (lt i (a_nparams a))
        (match (nth (a_params a) i)
          (None (KFail (FRej (Malformed (quote param)))))
-         ((Some p) (open_ctor_plain a (instantiate1 body p) (+ i 1) b_u)))
+         ((Some p) (match (a_inst1 a body p) ((Pair a1 b1) (open_ctor_plain a1 b1 (+ i 1) b_u)))))
        (match (a_local_for a t)
-         ((Pair a1 l) (open_ctor_plain a1 (instantiate1 body l) (+ i 1) (append b_u (Cons l Nil)))))))
+         ((Pair a1 l)
+          (match (a_inst1 a1 body l)
+            ((Pair a2 b1) (open_ctor_plain a2 b1 (+ i 1) (append b_u (Cons l Nil)))))))))
     (_ (KOk (a_st a) (Pair a (Pair b_u t))))))
 
 ;; ---- add_inductive_fn::operator() (l. 868) -------------------------------------------------
 
 (fn add_inductive_core ((env CheckedEnv) (st St) (lparams (List Name)) (nparams Int) (types (List InductiveType)) (is_unsafe Bool) (nnested Int)) (KRes CheckedEnv)
-  (let ((a0 (A env st Nil lparams (params_to_levels lparams) nparams is_unsafe nnested types Nil Nil Nil LZero False LZero False Nil)))
+  (let ((a0 (A env (st_clear_memo st) Nil lparams (params_to_levels lparams) nparams is_unsafe nnested types Nil Nil Nil LZero False LZero False Nil)))
     (match (check_inductive_types a0)
       ((KFail f) (KFail f))
       ((KOk st1 a1)

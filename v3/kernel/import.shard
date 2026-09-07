@@ -5,8 +5,11 @@
 ;;; bring-up translation (3) of docs/TCB.md until T0 retires it.
 ;;;
 ;;; The export's tables share subterms by index; the IntMap tables keep
-;;; that sharing in memory. Index 0 is `anonymous` for names and `zero`
-;;; for levels (the exporter starts its numbering at 1 for both).
+;;; that sharing in memory, and every table node is IDENTIFIED (minted
+;;; from the run's St, which every check seeds from — expr.shard), so the
+;;; export's DAG arrives with its sharing recognizable. Index 0 is
+;;; `anonymous` for names and `zero` for levels (the exporter starts its
+;;; numbering at 1 for both).
 
 (import "add.shard")
 (import "json.shard")
@@ -65,8 +68,8 @@
 
 ;; ---- table records ----------------------------------------------------------------
 
-;; returns the updated tables, or None for a malformed record
-(fn table_record ((t Tabs) (kind (List Int)) (j Json)) (Option Tabs)
+;; returns the updated state and tables, or None for a malformed record
+(fn table_record ((t Tabs) (st St) (kind (List Int)) (j Json)) (Option (Pair St Tabs))
   (if (int_list_eq kind "str")
     (match (jget j "str")
       ((Some o)
@@ -75,7 +78,7 @@
           (match (fint o "pre")
             ((Some pre)
              (match (fstr o "str")
-               ((Some s) (Some (Tabs (im_insert (tabs_names t) idx (Str (name_at t pre) (sym_of_chars s))) (tabs_levels t) (tabs_exprs t))))
+               ((Some s) (Some (Pair st (Tabs (im_insert (tabs_names t) idx (Str (name_at t pre) (sym_of_chars s))) (tabs_levels t) (tabs_exprs t)))))
                (None None)))
             (None None)))
          (None None)))
@@ -88,43 +91,46 @@
           (match (fint o "pre")
             ((Some pre)
              (match (fint o "i")
-               ((Some i) (Some (Tabs (im_insert (tabs_names t) idx (Num (name_at t pre) i)) (tabs_levels t) (tabs_exprs t))))
+               ((Some i) (Some (Pair st (Tabs (im_insert (tabs_names t) idx (Num (name_at t pre) i)) (tabs_levels t) (tabs_exprs t)))))
                (None None)))
             (None None)))
          (None None)))
       (None None))
   (if (int_list_eq kind "succ")
-    (match (fint j "il") ((Some idx) (match (fint j "succ") ((Some a) (Some (put_level t idx (LSucc (level_at t a))))) (None None))) (None None))
+    (match (fint j "il") ((Some idx) (match (fint j "succ") ((Some a) (Some (Pair st (put_level t idx (LSucc (level_at t a)))))) (None None))) (None None))
   (if (int_list_eq kind "max")
     (match (fint j "il")
-      ((Some idx) (match (fints j "max") ((Some (Cons a (Cons b Nil))) (Some (put_level t idx (LMax (level_at t a) (level_at t b))))) (_ None)))
+      ((Some idx) (match (fints j "max") ((Some (Cons a (Cons b Nil))) (Some (Pair st (put_level t idx (LMax (level_at t a) (level_at t b)))))) (_ None)))
       (None None))
   (if (int_list_eq kind "imax")
     (match (fint j "il")
-      ((Some idx) (match (fints j "imax") ((Some (Cons a (Cons b Nil))) (Some (put_level t idx (LIMax (level_at t a) (level_at t b))))) (_ None)))
+      ((Some idx) (match (fints j "imax") ((Some (Cons a (Cons b Nil))) (Some (Pair st (put_level t idx (LIMax (level_at t a) (level_at t b)))))) (_ None)))
       (None None))
   (if (int_list_eq kind "param")
-    (match (fint j "il") ((Some idx) (match (fint j "param") ((Some n) (Some (put_level t idx (LParam (name_at t n))))) (None None))) (None None))
+    (match (fint j "il") ((Some idx) (match (fint j "param") ((Some n) (Some (Pair st (put_level t idx (LParam (name_at t n)))))) (None None))) (None None))
   (match (fint j "ie")
     (None None)
     ((Some idx)
-     (match (expr_record t kind j)
-       ((Some e) (Some (Tabs (tabs_names t) (tabs_levels t) (im_insert (tabs_exprs t) idx e))))
-       (None None)))))))))))
+     (match (expr_record t st kind j)
+       ((Pair st1 (Some e)) (Some (Pair st1 (Tabs (tabs_names t) (tabs_levels t) (im_insert (tabs_exprs t) idx e)))))
+       ((Pair _ None) None)))))))))))
 
 (fn put_level ((t Tabs) (idx Int) (l Level)) Tabs (Tabs (tabs_names t) (im_insert (tabs_levels t) idx l) (tabs_exprs t)))
 
-(fn expr_record ((t Tabs) (kind (List Int)) (j Json)) (Option Expr)
-  (if (int_list_eq kind "bvar") (match (fint j "bvar") ((Some n) (Some (BVar n))) (None None))
-  (if (int_list_eq kind "sort") (match (fint j "sort") ((Some l) (Some (Sort (level_at t l)))) (None None))
+;; an identified compound node, or None
+(fn some_node ((p (Pair St Expr))) (Pair St (Option Expr)) (match p ((Pair st e) (Pair st (Some e)))))
+
+(fn expr_record ((t Tabs) (st St) (kind (List Int)) (j Json)) (Pair St (Option Expr))
+  (if (int_list_eq kind "bvar") (match (fint j "bvar") ((Some n) (Pair st (Some (mk_bvar n)))) (None (Pair st None)))
+  (if (int_list_eq kind "sort") (match (fint j "sort") ((Some l) (Pair st (Some (mk_sort (level_at t l))))) (None (Pair st None)))
   (if (int_list_eq kind "const")
     (match (jget j "const")
-      ((Some o) (match (fint o "name") ((Some n) (match (fints o "us") ((Some us) (Some (Const (name_at t n) (levels_at t us)))) (None None))) (None None)))
-      (None None))
+      ((Some o) (match (fint o "name") ((Some n) (match (fints o "us") ((Some us) (Pair st (Some (mk_const (name_at t n) (levels_at t us))))) (None (Pair st None)))) (None (Pair st None))))
+      (None (Pair st None)))
   (if (int_list_eq kind "app")
     (match (jget j "app")
-      ((Some o) (match (fexpr t o "fn") ((Some f) (match (fexpr t o "arg") ((Some a) (Some (App f a))) (None None))) (None None)))
-      (None None))
+      ((Some o) (match (fexpr t o "fn") ((Some f) (match (fexpr t o "arg") ((Some a) (some_node (new_app st f a))) (None (Pair st None)))) (None (Pair st None))))
+      (None (Pair st None)))
   (if (bool_or (int_list_eq kind "lam") (int_list_eq kind "forallE"))
     (match (jget j kind)
       ((Some o)
@@ -135,11 +141,11 @@
              (match (fexpr t o "body")
                ((Some b)
                 (let ((bi (match (fstr o "binderInfo") ((Some s) (binder_info_of s)) (None BDefault))))
-                  (Some (if (int_list_eq kind "lam") (Lam (name_at t n) bi ty b) (Pi (name_at t n) bi ty b)))))
-               (None None)))
-            (None None)))
-         (None None)))
-      (None None))
+                  (some_node (if (int_list_eq kind "lam") (new_lam st (name_at t n) bi ty b) (new_pi st (name_at t n) bi ty b)))))
+               (None (Pair st None))))
+            (None (Pair st None))))
+         (None (Pair st None))))
+      (None (Pair st None)))
   (if (int_list_eq kind "letE")
     (match (jget j "letE")
       ((Some o)
@@ -150,27 +156,27 @@
              (match (fexpr t o "value")
                ((Some v)
                 (match (fexpr t o "body")
-                  ((Some b) (Some (Let (name_at t n) ty v b)))
-                  (None None)))
-               (None None)))
-            (None None)))
-         (None None)))
-      (None None))
+                  ((Some b) (some_node (new_let st (name_at t n) ty v b)))
+                  (None (Pair st None))))
+               (None (Pair st None))))
+            (None (Pair st None))))
+         (None (Pair st None))))
+      (None (Pair st None)))
   (if (int_list_eq kind "proj")
     (match (jget j "proj")
       ((Some o)
        (match (fint o "typeName")
-         ((Some n) (match (fint o "idx") ((Some i) (match (fexpr t o "struct") ((Some s) (Some (Proj (name_at t n) i s))) (None None))) (None None)))
-         (None None)))
-      (None None))
+         ((Some n) (match (fint o "idx") ((Some i) (match (fexpr t o "struct") ((Some s) (some_node (new_proj st (name_at t n) i s))) (None (Pair st None)))) (None (Pair st None))))
+         (None (Pair st None))))
+      (None (Pair st None)))
   (if (int_list_eq kind "natVal")
-    (match (fstr j "natVal") ((Some s) (match (parse_nat s 0) ((Some n) (Some (Lit (LitNat n)))) (None None))) (None None))
+    (match (fstr j "natVal") ((Some s) (match (parse_nat s 0) ((Some n) (Pair st (Some (mk_lit (LitNat n))))) (None (Pair st None)))) (None (Pair st None)))
   (if (int_list_eq kind "strVal")
-    (match (fstr j "strVal") ((Some s) (Some (Lit (LitStr s)))) (None None))
+    (match (fstr j "strVal") ((Some s) (Pair st (Some (mk_lit (LitStr s))))) (None (Pair st None)))
   (if (int_list_eq kind "mdata")
     ;; transparent to every rule (expr.shard): the inner term
-    (match (jget j "mdata") ((Some o) (fexpr t o "expr")) (None None))
-  None)))))))))))
+    (match (jget j "mdata") ((Some o) (Pair st (fexpr t o "expr"))) (None (Pair st None)))
+  (Pair st None))))))))))))
 
 ;; ---- declaration records ------------------------------------------------------------
 
@@ -416,7 +422,7 @@
 (fn run_st ((r Run)) St (match r ((Run _ _ s _ _ _ _ _ _) s)))
 (fn run_pins_mode ((r Run)) Bool (match r ((Run _ _ _ _ _ _ _ _ m) m)))
 (fn run_counts ((r Run)) (List Int) (match r ((Run _ _ _ a b c d e _) (list a b c d e))))
-(fn run_with_tabs ((r Run) (t Tabs)) Run (match r ((Run _ e s a b c d f m) (Run t e s a b c d f m))))
+(fn run_with_tabs ((r Run) (t Tabs) (s St)) Run (match r ((Run _ e _ a b c d f m) (Run t e s a b c d f m))))
 (fn run_with_env ((r Run) (e CheckedEnv) (s St)) Run (match r ((Run t _ _ a b c d f m) (Run t e s a b c d f m))))
 (fn run_count ((r Run) (which Int)) Run
   (match r
@@ -466,8 +472,8 @@
         (match (decl_record (run_tabs r) kind j)
           ((Some d) (check_into r d))
           (None
-           (match (table_record (run_tabs r) kind j)
-             ((Some t1) (Pair (run_with_tabs r t1) VSkip))
+           (match (table_record (run_tabs r) (run_st r) kind j)
+             ((Some (Pair st1 t1)) (Pair (run_with_tabs r t1 st1) VSkip))
              (None (Pair r (VMalformed kind))))))))))))))
 
 (fn first_type_name ((t Tabs) (ts (List Json))) Name
@@ -518,7 +524,7 @@
        (append "  mismatched " (append (show_nat d) (append "  unsupported " (show_nat e)))))))))))
     (_ "")))
 
-(fn empty_run ((pins_mode Bool)) Run (Run (Tabs IMEmpty IMEmpty IMEmpty) (CheckedEnv IMEmpty False Nil) (St 0 0) 0 0 0 0 0 pins_mode))
+(fn empty_run ((pins_mode Bool)) Run (Run (Tabs IMEmpty IMEmpty IMEmpty) (CheckedEnv IMEmpty False Nil 0) (st_init) 0 0 0 0 0 pins_mode))
 
 ;; pins mode (gen_pins.sh): every candidate is pinned as admitted — the
 ;; run that PRODUCES the table from the pinned export; never a checking run
