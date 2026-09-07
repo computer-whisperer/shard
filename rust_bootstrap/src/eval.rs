@@ -182,18 +182,34 @@ fn fail<T>(e: EvalError) -> EResult<T> {
 /// a substitution machine.
 #[derive(Clone)]
 enum Val {
-    // BigInt clones are O(digits); Rc keeps Val's clone O(1) like the others.
-    Int(Rc<crate::ast::IntLit>),
+    /// An integer that fits a machine word — every index, code, hash and
+    /// counter a checker computes. Unboxed: no allocation, no refcount.
+    Int(i64),
+    /// An integer that does NOT fit an i64 (never one that does: `int_val`
+    /// is the only constructor, so `Int` and `Big` never compare equal and
+    /// a `Big` is never zero). Rc keeps the clone O(1).
+    Big(Rc<crate::ast::IntLit>),
     Sym(Rc<str>),
     FVar(Rc<str>),
     Ctor(Rc<str>, Rc<[Val]>),
 }
 
+/// The one way an arbitrary-precision result becomes a `Val`: canonical
+/// (see `Val::Big`).
+#[inline]
+fn int_val(n: crate::ast::IntLit) -> Val {
+    use num_traits::ToPrimitive;
+    match n.to_i64() {
+        Some(i) => Val::Int(i),
+        None => Val::Big(Rc::new(n)),
+    }
+}
+
 // -----------------------------------------------------------------------------
 // LOWERED PROGRAM. The ast::Expr tree is lowered ONCE per `eval` into an IR
 // where everything per-step-expensive is precomputed:
-//   - integer literals are pre-boxed (`Rc<IntLit>`) — evaluating one is an Rc
-//     clone, where the AST walk cloned the BigInt heap allocation every time;
+//   - integer literals are prebuilt `Val`s — evaluating one is a clone (a
+//     word copy for an i64), where the AST walk cloned the BigInt every time;
 //   - ctor / symbol names are INTERNED `Rc<str>` — evaluating a Ctor shares
 //     the name instead of `Rc::from(&str)` (alloc + memcpy) per evaluation,
 //     and pattern-match name tests are `Rc::ptr_eq` (same interner on both
@@ -206,7 +222,7 @@ enum Val {
 // -----------------------------------------------------------------------------
 
 enum IExpr {
-    Int(Rc<crate::ast::IntLit>),
+    Int(Val),
     Sym(Rc<str>),
     FVar(Rc<str>),
     BVar(u32),
@@ -246,7 +262,9 @@ struct IArm {
 
 enum IPat {
     Var,
-    Int(crate::ast::IntLit),
+    /// A literal pattern, prebuilt canonical (`int_val`), so the test is a
+    /// word compare for an i64 and never confuses the two integer shapes.
+    Int(Val),
     Sym(Rc<str>),
     Ctor(Rc<str>, Box<[IPat]>),
 }
@@ -303,15 +321,13 @@ impl<'a> Lowerer<'a> {
 
     fn lower(&mut self, e: &'a Expr) -> IExpr {
         match e {
-            Expr::IntLit(n) => IExpr::Int(Rc::new(n.clone())),
+            Expr::IntLit(n) => IExpr::Int(int_val(n.clone())),
             Expr::SymLit(s) => IExpr::Sym(self.intern(s)),
             Expr::FVar(s) => IExpr::FVar(self.intern(s)),
             Expr::BVar(k) => IExpr::BVar(*k),
             // Nat former (kernel/stdlib.shard): a bare `Z` IS the literal 0
             // (the eval arm's packing rule, decided here once).
-            Expr::Ctor(n, args) if args.is_empty() && n == "Z" => {
-                IExpr::Int(Rc::new(num_traits::Zero::zero()))
-            }
+            Expr::Ctor(n, args) if args.is_empty() && n == "Z" => IExpr::Int(Val::Int(0)),
             Expr::Ctor(n, args) if args.is_empty() => {
                 IExpr::Ctor0(Val::Ctor(self.intern(n), Rc::from([].as_slice())))
             }
@@ -365,7 +381,7 @@ impl<'a> Lowerer<'a> {
     fn lower_pat(&mut self, p: &'a Pat) -> IPat {
         match p {
             Pat::PVar => IPat::Var,
-            Pat::PInt(n) => IPat::Int(n.clone()),
+            Pat::PInt(n) => IPat::Int(int_val(n.clone())),
             Pat::PSym(s) => IPat::Sym(self.intern(s)),
             Pat::PCtor(n, sub) => IPat::Ctor(
                 self.intern(n),
@@ -445,7 +461,7 @@ fn eval_sub<'a>(prog: &'a Prog, st: &mut Stacks, e: &'a IExpr) -> EResult<Val> {
                 fail(EvalError::UnboundBVar(k as u32))
             }
         }
-        IExpr::Int(n) => Ok(Val::Int(n.clone())),
+        IExpr::Int(v) => Ok(v.clone()),
         IExpr::Sym(s) => Ok(Val::Sym(s.clone())),
         IExpr::Ctor0(v) => Ok(v.clone()),
         _ => eval_ir(prog, st, e),
@@ -472,7 +488,7 @@ fn eval_loop<'a>(
     let mut e: &'a IExpr = e0;
     loop {
         match e {
-            IExpr::Int(n) => return Ok(Val::Int(n.clone())),
+            IExpr::Int(v) => return Ok(v.clone()),
             IExpr::Sym(s) => return Ok(Val::Sym(s.clone())),
             IExpr::FVar(s) => return Ok(Val::FVar(s.clone())),
             IExpr::Ctor0(v) => return Ok(v.clone()),
@@ -498,13 +514,18 @@ fn eval_loop<'a>(
                 // early return leaves the fields on the operand stack;
                 // `eval_ir` pops them.)
                 match &**name {
-                    "S" if args.len() == 1 => {
-                        if let Val::Int(n) = &st.op[mark] {
-                            if !num_traits::Signed::is_negative(&**n) {
-                                return Ok(Val::Int(Rc::new((**n).clone() + 1)));
-                            }
+                    "S" if args.len() == 1 => match &st.op[mark] {
+                        Val::Int(n) if *n >= 0 => {
+                            return Ok(match n.checked_add(1) {
+                                Some(m) => Val::Int(m),
+                                None => int_val(crate::ast::IntLit::from(*n) + 1),
+                            })
                         }
-                    }
+                        Val::Big(n) if !num_traits::Signed::is_negative(&**n) => {
+                            return Ok(int_val((**n).clone() + 1))
+                        }
+                        _ => {}
+                    },
                     _ => {}
                 }
                 // One allocation, the fields moved off the operand stack
@@ -600,137 +621,100 @@ fn bool_val(b: bool) -> Val {
     if b { TRUE_V.with(Val::clone) } else { FALSE_V.with(Val::clone) }
 }
 
-// Small-integer Val cache. Checker workloads are dominated by small ints
-// (char codes, indices, de Bruijn arithmetic); without this every `+`/`-`
-// result allocates a fresh BigInt + Rc. Covers [0, 1024].
-thread_local! {
-    static SMALL_INTS: Vec<Val> = (0..=1024)
-        .map(|k| Val::Int(Rc::new(crate::ast::IntLit::from(k))))
-        .collect();
-}
-
+/// A shift amount the table accepts (`prim::shift_amount`): 0..64.
 #[inline]
-fn int_val_i64(n: i64) -> Val {
-    if (0..=1024).contains(&n) {
-        SMALL_INTS.with(|v| v[n as usize].clone())
-    } else {
-        Val::Int(Rc::new(crate::ast::IntLit::from(n)))
-    }
-}
-
-/// i64 view of both operands, when they fit (the overwhelmingly common case).
-#[inline]
-fn both_i64(a: &crate::ast::IntLit, b: &crate::ast::IntLit) -> Option<(i64, i64)> {
-    use num_traits::ToPrimitive;
-    Some((a.to_i64()?, b.to_i64()?))
-}
-
-/// Both operands as NONNEGATIVE i64s — the range where the machine bitwise
-/// operators and shifts agree with the BigInt ones (no sign to extend).
-#[inline]
-fn both_nonneg_i64(a: &crate::ast::IntLit, b: &crate::ast::IntLit) -> Option<(i64, i64)> {
-    let (x, y) = both_i64(a, b)?;
-    if x >= 0 && y >= 0 { Some((x, y)) } else { None }
+fn shift_ok(k: i64) -> bool {
+    (0..64).contains(&k)
 }
 
 fn apply_other(tag: PrimTag, name: &str, args: &[Val]) -> EResult<Val> {
-    // FAST PATH: the measured-hottest primitives, applied directly on `Val`s
-    // and dispatched by the PrimTag assigned at lowering (no strcmp). The
-    // general path below converts every argument Val→Expr (allocating) and
-    // the result back — pure overhead for these. Arms mirror prim.rs exactly
-    // (same value shapes, BigInt semantics). The guarded prims (`mod`'s b≠0,
-    // the shifts' 0..64 amount) repeat their table guard as an arm guard, so
-    // a guard failure falls through to the general path and stays stuck
-    // exactly as before. The bitwise arms take the i64 route only for two
-    // nonnegative operands, where every semantics coincides; anything else
-    // runs the table's own BigInt operator. Non-matching shapes fall through
-    // to the general path, which reproduces the old behavior bit for bit.
+    // FAST PATH: the measured-hottest primitives on two machine integers,
+    // dispatched by the PrimTag assigned at lowering (no strcmp). Each arm
+    // computes on i64 with checked arithmetic and hands an overflow to the
+    // table's own BigInt operator through `int_val`, so results are the
+    // table's bit for bit. The guarded prims (`mod`'s b≠0, the shifts'
+    // 0..64 amount) repeat their table guard as an arm guard, so a guard
+    // failure falls through to the general path and stays stuck exactly as
+    // before. Anything not two `Val::Int`s — a `Big` operand, a non-integer,
+    // an untagged name — takes the general path below, which converts every
+    // argument Val→Expr and the result back (allocating; the reason the hot
+    // arms exist). The bitwise ops on i64 are exact for every i64 pair (the
+    // table's BigInt treats negatives as two's complement); the right shift
+    // keeps negatives on the table's operator.
+    use crate::ast::IntLit as Big;
     match (tag, args) {
-        (PrimTag::IntEq, [Val::Int(a), Val::Int(b)]) => {
+        (PrimTag::IntEq, [Val::Int(x), Val::Int(y)]) => {
             prof_count_prim("int_eq");
-            return Ok(bool_val(a == b));
+            return Ok(bool_val(x == y));
         }
-        (PrimTag::Le, [Val::Int(a), Val::Int(b)]) => {
+        (PrimTag::Le, [Val::Int(x), Val::Int(y)]) => {
             prof_count_prim("le");
-            return Ok(bool_val(a <= b));
+            return Ok(bool_val(x <= y));
         }
-        (PrimTag::Lt, [Val::Int(a), Val::Int(b)]) => {
+        (PrimTag::Lt, [Val::Int(x), Val::Int(y)]) => {
             prof_count_prim("lt");
-            return Ok(bool_val(a < b));
+            return Ok(bool_val(x < y));
         }
-        (PrimTag::Add, [Val::Int(a), Val::Int(b)]) => {
+        (PrimTag::Add, [Val::Int(x), Val::Int(y)]) => {
             prof_count_prim("+");
-            // i64 fast path with checked math: overflow (or a true BigInt
-            // operand) falls back to BigInt — results are identical, BigInt
-            // is the semantics either way.
-            if let Some(r) = both_i64(a, b).and_then(|(x, y)| x.checked_add(y)) {
-                return Ok(int_val_i64(r));
-            }
-            return Ok(Val::Int(Rc::new(&**a + &**b)));
+            return Ok(match x.checked_add(*y) {
+                Some(r) => Val::Int(r),
+                None => int_val(Big::from(*x) + Big::from(*y)),
+            });
         }
-        (PrimTag::Sub, [Val::Int(a), Val::Int(b)]) => {
+        (PrimTag::Sub, [Val::Int(x), Val::Int(y)]) => {
             prof_count_prim("-");
-            if let Some(r) = both_i64(a, b).and_then(|(x, y)| x.checked_sub(y)) {
-                return Ok(int_val_i64(r));
-            }
-            return Ok(Val::Int(Rc::new(&**a - &**b)));
+            return Ok(match x.checked_sub(*y) {
+                Some(r) => Val::Int(r),
+                None => int_val(Big::from(*x) - Big::from(*y)),
+            });
         }
-        (PrimTag::Mul, [Val::Int(a), Val::Int(b)]) => {
+        (PrimTag::Mul, [Val::Int(x), Val::Int(y)]) => {
             prof_count_prim("*");
-            if let Some(r) = both_i64(a, b).and_then(|(x, y)| x.checked_mul(y)) {
-                return Ok(int_val_i64(r));
-            }
-            return Ok(Val::Int(Rc::new(&**a * &**b)));
+            return Ok(match x.checked_mul(*y) {
+                Some(r) => Val::Int(r),
+                None => int_val(Big::from(*x) * Big::from(*y)),
+            });
         }
         (PrimTag::SymEq, [Val::Sym(a), Val::Sym(b)]) => {
             prof_count_prim("sym_eq");
             return Ok(bool_val(Rc::ptr_eq(a, b) || a == b));
         }
-        (PrimTag::Band, [Val::Int(a), Val::Int(b)]) => {
+        (PrimTag::Band, [Val::Int(x), Val::Int(y)]) => {
             prof_count_prim("band");
-            if let Some((x, y)) = both_nonneg_i64(a, b) {
-                return Ok(int_val_i64(x & y));
-            }
-            return Ok(Val::Int(Rc::new(&**a & &**b)));
+            return Ok(Val::Int(x & y));
         }
-        (PrimTag::Bor, [Val::Int(a), Val::Int(b)]) => {
+        (PrimTag::Bor, [Val::Int(x), Val::Int(y)]) => {
             prof_count_prim("bor");
-            if let Some((x, y)) = both_nonneg_i64(a, b) {
-                return Ok(int_val_i64(x | y));
-            }
-            return Ok(Val::Int(Rc::new(&**a | &**b)));
+            return Ok(Val::Int(x | y));
         }
-        (PrimTag::Bxor, [Val::Int(a), Val::Int(b)]) => {
+        (PrimTag::Bxor, [Val::Int(x), Val::Int(y)]) => {
             prof_count_prim("bxor");
-            if let Some((x, y)) = both_nonneg_i64(a, b) {
-                return Ok(int_val_i64(x ^ y));
-            }
-            return Ok(Val::Int(Rc::new(&**a ^ &**b)));
+            return Ok(Val::Int(x ^ y));
         }
-        (PrimTag::Bshl, [Val::Int(a), Val::Int(b)]) if prim::shift_amount(b).is_some() => {
+        (PrimTag::Bshl, [Val::Int(x), Val::Int(k)]) if shift_ok(*k) => {
             prof_count_prim("bshl");
-            let k = prim::shift_amount(b).unwrap();
-            if let Some((x, _)) = both_nonneg_i64(a, a) {
-                if let Ok(r) = i64::try_from((x as i128) << k) {
-                    return Ok(int_val_i64(r));
-                }
-            }
-            return Ok(Val::Int(Rc::new(&**a << k)));
+            // |x| < 2^63 and k < 64: the i128 product is exact.
+            let r = (*x as i128) << *k;
+            return Ok(match i64::try_from(r) {
+                Ok(r) => Val::Int(r),
+                Err(_) => int_val(Big::from(r)),
+            });
         }
-        (PrimTag::Bshr, [Val::Int(a), Val::Int(b)]) if prim::shift_amount(b).is_some() => {
+        (PrimTag::Bshr, [Val::Int(x), Val::Int(k)]) if *x >= 0 && shift_ok(*k) => {
             prof_count_prim("bshr");
-            let k = prim::shift_amount(b).unwrap();
-            if let Some((x, _)) = both_nonneg_i64(a, a) {
-                return Ok(int_val_i64(x >> k));
-            }
-            return Ok(Val::Int(Rc::new(&**a >> k)));
+            return Ok(Val::Int(x >> k));
         }
-        (PrimTag::Mod, [Val::Int(a), Val::Int(b)]) if !num_traits::Zero::is_zero(&**b) => {
+        (PrimTag::Bshr, [Val::Int(x), Val::Int(k)]) if shift_ok(*k) => {
+            prof_count_prim("bshr");
+            return Ok(int_val(Big::from(*x) >> (*k as u64)));
+        }
+        (PrimTag::Mod, [Val::Int(x), Val::Int(y)]) if *y != 0 => {
             prof_count_prim("mod");
-            if let Some(r) = both_i64(a, b).and_then(|(x, y)| x.checked_rem_euclid(y)) {
-                return Ok(int_val_i64(r));
-            }
-            return Ok(Val::Int(Rc::new(prim::rem_euclid(a, b))));
+            return Ok(match x.checked_rem_euclid(*y) {
+                Some(r) => Val::Int(r),
+                None => int_val(prim::rem_euclid(&Big::from(*x), &Big::from(*y))),
+            });
         }
         _ => {}
     }
@@ -773,7 +757,11 @@ fn match_pat(p: &IPat, v: &Val, acc: &mut Vec<Val>) -> bool {
             acc.push(v.clone());
             true
         }
-        IPat::Int(n) => matches!(v, Val::Int(m) if &**m == n),
+        IPat::Int(n) => match (n, v) {
+            (Val::Int(a), Val::Int(b)) => a == b,
+            (Val::Big(a), Val::Big(b)) => **a == **b,
+            _ => false,
+        },
         IPat::Sym(s) => match v {
             Val::Sym(t) => {
                 debug_assert!(Rc::ptr_eq(t, s) == (**t == **s), "non-canonical Sym name");
@@ -797,21 +785,26 @@ fn match_pat(p: &IPat, v: &Val, acc: &mut Vec<Val>) -> bool {
             // matches Z/S structurally (0 is Z, n>=1 is (S (n-1)), recursing
             // for deep patterns). Negatives are ill-typed garbage: no match
             // (this closed-world engine reports NoMatchArm, loudly).
-            if let Val::Int(m) = v {
-                match &**cn {
-                    "Z" => return sub_pats.is_empty() && num_traits::Zero::is_zero(&**m),
+            match v {
+                Val::Int(m) => match &**cn {
+                    "Z" => return sub_pats.is_empty() && *m == 0,
+                    "S" if sub_pats.len() == 1 => {
+                        return *m > 0 && match_pat(&sub_pats[0], &Val::Int(m - 1), acc);
+                    }
+                    _ => {}
+                },
+                // A Big is never zero (canonical), so only S can match it.
+                Val::Big(m) => match &**cn {
+                    "Z" => return false,
                     "S" if sub_pats.len() == 1 => {
                         if num_traits::Signed::is_positive(&**m) {
-                            return match_pat(
-                                &sub_pats[0],
-                                &Val::Int(Rc::new((**m).clone() - 1)),
-                                acc,
-                            );
+                            return match_pat(&sub_pats[0], &int_val((**m).clone() - 1), acc);
                         }
                         return false;
                     }
                     _ => {}
-                }
+                },
+                _ => {}
             }
             false
         }
@@ -824,7 +817,8 @@ fn match_pat(p: &IPat, v: &Val, acc: &mut Vec<Val>) -> bool {
 
 fn val_to_expr(v: &Val) -> Expr {
     match v {
-        Val::Int(n) => Expr::IntLit((**n).clone()),
+        Val::Int(n) => Expr::IntLit(crate::ast::IntLit::from(*n)),
+        Val::Big(n) => Expr::IntLit((**n).clone()),
         Val::Sym(s) => Expr::SymLit(s.to_string()),
         Val::FVar(s) => Expr::FVar(s.to_string()),
         Val::Ctor(n, args) => {
@@ -837,7 +831,7 @@ fn val_to_expr(v: &Val) -> Expr {
 /// IntLit / SymLit / FVar / Ctor over values) into a `Val`.
 fn val_of_value_expr(e: &Expr) -> Val {
     match e {
-        Expr::IntLit(n) => Val::Int(Rc::new(n.clone())),
+        Expr::IntLit(n) => int_val(n.clone()),
         // Names are INTERNED — pattern matching relies on every runtime name
         // being canonical (pointer compares, no string fallback).
         Expr::SymLit(s) => Val::Sym(intern(s)),
