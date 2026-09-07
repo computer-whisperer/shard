@@ -51,6 +51,13 @@ instrument: the old checker resolves imported type names through
 these files a different module identity by design (LAYOUT.md). `use`
 lines are added in phase 2 under the V3 reader's own resolution.
 
+The same flat profile is what the compiler chain's RUN-mode front end
+reads, so `v3/build.sh` compiles `t0.shard` to a native binary through
+`tools/lower` → `tools/codegen` → cc (FOUNDATION §9.1 route 1, unproven:
+the interpreter stays the authority and `v3/t0_full.sh` byte-ties the
+two on a prefix before every full-export replay; ruled 2026-09-07). Name
+the tools repo-relative from the repo root — #41.
+
 ## The reconciliation ledger — what the pinned kernel has beyond the thesis
 
 Each item is a rule K implements because the pin does; Lean4Lean's

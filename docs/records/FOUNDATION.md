@@ -683,20 +683,40 @@ is `docs/FOUNDATION.md` §5.3.
   declarations accepted, 0 rejected, 0 exhausted, 0 mismatched, 0
   unsupported, in 12 min 17 s** on the compiled K — a run the
   investigating agent started on its own; I let it finish under a memory
-  cap. Resident memory was 22 GB at chunk 255 of 325 and the peak was
-  not captured (the export tables hold every referenced node). §9.1
+  cap. Peak resident set 30.2 GB (measured on the next run, by
+  `v3/t0_full.sh`'s watchdog; the export tables hold every referenced
+  node). §9.1
   ranks this engine first — route 1, K compiled by shard's own lowering
   — with its proof still to come; the Rust interpreter (route 3) stays
   the authority, and at today's ratio (about 5×) would replay the whole
   export in roughly an hour. The route question is the user's: compiled
   K for the export's verdicts with the interpreter confirming prefixes
   and the lower byte-tie, or the interpreter alone.
-- **Open in phase 1:** the interpreter's own full-export run and the
-  compiled run's memory peak (the verdicts are in: see above)
+- **Compiled K RULED (2026-09-07, late):** user: "Compiled K sounds like
+  a fine approach for now. Our CI runners on gitlab have much higher ram
+  budgets since they run on local hardware. We can also kick off a new
+  shard_eval build." Chose-because: the whole export in minutes, byte-tied
+  to the authority on prefixes; rejected-because (for the interpreter
+  alone): about an hour per full replay with nothing left in the tree
+  walk short of a bytecode rewrite. Landed: `v3/build.sh` (the chain into
+  `v3/bin/t0`, boot engine `bin/shard_eval` or the Rust interpreter),
+  `v3/export.sh` (elan + Lean v4.33.1 + lean4export@15f6055 into
+  `.shard-cache/v3-export/`, reused by a pin marker), `v3/t0_full.sh`
+  (fixture and chunks 0–4 verbose byte-tie, then the full replay under an
+  RSS watchdog against `v3/t0_expected.txt` = the 57,977 line; locally
+  745 s, 30.2 GB peak), and the
+  `v3` CI job (gate stage, high-cpu, needs the engine artifacts, the
+  export in the runner-local cache). `bin/shard_eval` rebuilt on the dev
+  box (stamp a3c9a930…, 16 s fast-boot; its lower and codegen outputs on
+  K byte-identical to the Aug 2 engine's). The interpreter is still the
+  authority; the compiled artifact becomes route 1 proper when the
+  lowering is proven.
+- **Open in phase 1:** the interpreter's own full-export run (the
+  verdicts are in: see above)
   (chunks 0–24 done; 25–324 next — a multi-hour run whose environment
   and tables grow with the export: 1.2 GB peak through chunk 49 on the
-  interpreter, above 22 GB for the whole export on the compiled K — the
-  peak is unmeasured), the six accelerator pins
+  interpreter, 30.2 GB peak for the whole export on the compiled K), the
+  six accelerator pins
   declared 24k–700k lines into the export, the `use`-free toolchain
   profile's gate moving to CI, the evaluator levers listed above if a
   prefix run needs them.

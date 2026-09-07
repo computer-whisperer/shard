@@ -60,9 +60,17 @@ repo-relative paths — #41) builds `v3/kernel/t0.shard` into a native
 binary whose per-declaration output is byte-identical to `eval
 direct`'s: chunks 0–4 in 2.2 s, chunks 0–24 in 40 s, and **the whole
 `Init` export (6,490,422 lines) in 12 min 17 s: 57,977 declarations
-accepted, 0 rejected, 0 exhausted, 0 mismatched, 0 unsupported** (memory
-above 22 GB; records §8). The interpreter remains the authority
-(FOUNDATION §9.1: route 1 without its proof yet). Not yet: the rest of the export
+accepted, 0 rejected, 0 exhausted, 0 mismatched, 0 unsupported** (peak
+resident set 30.2 GB; records §8). **Ruled 2026-09-07: compiled K is T0's engine
+for now** — FOUNDATION §9.1 route 1 without its proof yet, so the
+interpreter remains the authority and confirms it by byte-tie on a
+prefix before every full replay. The gate: `v3/build.sh` (the chain, tools
+named repo-relative — #41 — into `v3/bin/t0`), `v3/export.sh` (the pinned
+toolchain's export into `.shard-cache/v3-export/`, reused by pin),
+`v3/t0_full.sh` (fixture + chunks 0–4 byte-tie, then the full replay
+against the pinned verdict line `v3/t0_expected.txt`, peak resident set
+reported); the `v3` CI job runs `v3/test.sh` and then all three on the
+high-memory runner. Not yet: the rest of the export
 (≈6.5M lines; runs on prefixes are measured first), the six
 later-declared accelerator pins. **Nested
 inductives validated:** `Lean.Syntax` (export line 78,503; two levels of
