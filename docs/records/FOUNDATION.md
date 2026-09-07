@@ -489,6 +489,12 @@ is `docs/FOUNDATION.md` §5.3.
   hash (was an association list), a 4-ary trie on bit operations (the
   bootstrap's mod/ediv are bignum divisions), stream parsing, a changed
   flag from `whnf_core` instead of structural re-comparison.
+- **T0 through `Lean.Syntax` (2026-09-06):** the export prefix to line
+  78,503 — 1,375 declarations — accepted 1,375 / rejected 0 /
+  mismatched 0; `Lean.Syntax` (two levels of nesting through `Array`
+  and `List`) admitted, and its three exported recursors
+  (`Lean.Syntax.rec`, `rec_1`, `rec_2`) equal to K's generated ones
+  field for field and rule for rule.
 - **Open in phase 1:** the memo tables, the full-export run and its
   cost measurement, the six accelerator pins declared 24k–700k lines
   into the export, the `use`-free toolchain profile's gate moving to

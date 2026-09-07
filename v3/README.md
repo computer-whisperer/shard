@@ -40,7 +40,11 @@ evidence (2026-09-06):** the first 60,000 lines of the `Init` export —
 1,153 / rejected 0 / mismatched 0; per-chunk cost 13 s, 28 s, 48 s on
 route 3 (the environment store is a hash map; no memo tables yet). Not
 yet: the memo tables, the full export (≈6.5M lines; runs on prefixes
-are measured first), the six later-declared accelerator pins. The export is produced by `lean4export` at `15f6055` built
+are measured first), the six later-declared accelerator pins. **Nested
+inductives validated:** `Lean.Syntax` (export line 78,503; two levels of
+nesting) admitted and its three exported recursors identical to K's
+generated ones — 1,375 declarations accepted, 0 rejected, 0 mismatched
+to that point. The export is produced by `lean4export` at `15f6055` built
 against v4.33.1 (the head `411dce7` pins v4.34.0-rc2 and cannot export
 the pinned kernel; recorded as the phase 1 tool bump), split into
 20,000-line chunks (`split -l 20000`) for the streaming reader.
