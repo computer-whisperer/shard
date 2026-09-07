@@ -266,7 +266,9 @@ enum IPat {
     /// word compare for an i64 and never confuses the two integer shapes.
     Int(Val),
     Sym(Rc<str>),
-    Ctor(Rc<str>, Box<[IPat]>),
+    /// A constructor pattern; the flag says every sub-pattern is a variable
+    /// (the common shape), so a match binds the fields with one slice copy.
+    Ctor(Rc<str>, Box<[IPat]>, bool),
 }
 
 struct IFn {
@@ -383,10 +385,14 @@ impl<'a> Lowerer<'a> {
             Pat::PVar => IPat::Var,
             Pat::PInt(n) => IPat::Int(int_val(n.clone())),
             Pat::PSym(s) => IPat::Sym(self.intern(s)),
-            Pat::PCtor(n, sub) => IPat::Ctor(
-                self.intern(n),
-                sub.iter().map(|sp| self.lower_pat(sp)).collect(),
-            ),
+            Pat::PCtor(n, sub) => {
+                let flat = sub.iter().all(|sp| matches!(sp, Pat::PVar));
+                IPat::Ctor(
+                    self.intern(n),
+                    sub.iter().map(|sp| self.lower_pat(sp)).collect(),
+                    flat,
+                )
+            }
         }
     }
 }
@@ -769,10 +775,14 @@ fn match_pat(p: &IPat, v: &Val, acc: &mut Vec<Val>) -> bool {
             }
             _ => false,
         },
-        IPat::Ctor(cn, sub_pats) => {
+        IPat::Ctor(cn, sub_pats, flat) => {
             if let Val::Ctor(vc, vargs) = v {
                 debug_assert!(Rc::ptr_eq(vc, cn) == (**vc == **cn), "non-canonical Ctor name");
                 if Rc::ptr_eq(vc, cn) && sub_pats.len() == vargs.len() {
+                    if *flat {
+                        acc.extend_from_slice(vargs);
+                        return true;
+                    }
                     for (sp, sv) in sub_pats.iter().zip(vargs.iter()) {
                         if !match_pat(sp, sv, acc) {
                             return false;

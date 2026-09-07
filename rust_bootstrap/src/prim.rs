@@ -97,7 +97,7 @@ pub(crate) fn rem_euclid(a: &Int, b: &Int) -> Int {
 
 /// The i64-era shift guard: a shift amount must be in `0..64`.
 /// None outside that range (the call stays stuck).
-pub(crate) fn shift_amount(b: &Int) -> Option<u64> {
+fn shift_amount(b: &Int) -> Option<u64> {
     b.to_u64().filter(|k| *k < 64)
 }
 
