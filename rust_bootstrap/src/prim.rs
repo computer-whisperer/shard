@@ -90,14 +90,14 @@ pub fn try_apply(name: &str, args: &[Expr]) -> Option<Expr> {
 
 /// Euclidean remainder: in `[0, |b|)`, like `i64::rem_euclid`. BigInt's
 /// `%` truncates (sign follows the dividend), so fix up negatives.
-fn rem_euclid(a: &Int, b: &Int) -> Int {
+pub(crate) fn rem_euclid(a: &Int, b: &Int) -> Int {
     let r = a % b;
     if r.is_negative() { r + b.abs() } else { r }
 }
 
 /// The i64-era shift guard: a shift amount must be in `0..64`.
 /// None outside that range (the call stays stuck).
-fn shift_amount(b: &Int) -> Option<u64> {
+pub(crate) fn shift_amount(b: &Int) -> Option<u64> {
     b.to_u64().filter(|k| *k < 64)
 }
 

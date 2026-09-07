@@ -17,6 +17,13 @@ pub mod eval;
 pub mod load;
 pub mod prim;
 
+// The process allocator. The evaluator's values are Rc-boxed constructor
+// buffers and BigInts, allocated and freed at the dispatch rate; mimalloc's
+// thread-local free lists make that materially cheaper than glibc's (see
+// the kernel-replay timings in the commit that introduced it).
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Load the kernel from a directory of `.shard` files. The file list
 /// is fixed (the kernel itself is not yet a module tree — see
 /// docs/REVISIT.md, "Kernel loader is a flat path list"). Used by the
@@ -938,6 +945,42 @@ mod tests {
                         ast::Expr::IntLit(b.clone()),
                     ];
                     conform(&m, name, &args);
+                }
+            }
+        }
+    }
+
+    /// The evaluator's FAST ARMS (eval.rs `apply_other`: the primitives
+    /// tagged at lowering and applied directly on `Val`s) agree with the
+    /// native table on the full pair matrix — values AND domains: where the
+    /// table leaves a call stuck (b=0 division, a shift amount outside
+    /// 0..64) the evaluator must report UnknownCall, never a value or a
+    /// crash. Untagged names take the general path, so the sweep also pins
+    /// that path's conversion for every shared primitive.
+    #[test]
+    fn prim_fast_path_matches_table() {
+        let m = ast::Module::default();
+        let vals = int_matrix();
+        for name in SHARED_INT2 {
+            for a in &vals {
+                for b in &vals {
+                    let args = [
+                        ast::Expr::IntLit(a.clone()),
+                        ast::Expr::IntLit(b.clone()),
+                    ];
+                    let native = prim::try_apply(name, &args);
+                    let call = ast::Expr::Call((*name).into(), args.to_vec());
+                    match (eval::eval(&m, &call), native) {
+                        (Ok(got), Some(want)) => {
+                            assert_eq!(got, want, "fast path drift at ({name} {a} {b})")
+                        }
+                        (Err(eval::EvalError::UnknownCall(n)), None) => {
+                            assert_eq!(n, *name)
+                        }
+                        (got, want) => panic!(
+                            "fast path vs table at ({name} {a} {b}): evaluator {got:?}, table {want:?}"
+                        ),
+                    }
                 }
             }
         }

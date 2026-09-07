@@ -9,12 +9,13 @@
 //! variable is O(1) — no structural copying on the hot path.
 //!
 //! Binding convention (unchanged, locally-nameless / de Bruijn): the
-//! environment is innermost-first, `env[0]` = `BVar 0`. Entering a
-//! binder PREPENDS its freshly-bound values; this reproduces the de
-//! Bruijn shift (existing indices move up by the number of new
-//! binders) without any renumbering. A user fn's body is closed except
-//! for its parameters, so a call evaluates the body in a FRESH
-//! environment of just the (reversed) argument values.
+//! environment is innermost-first, `BVar 0` = the most recently bound
+//! value. It is kept on a binding STACK (see `Stacks` below); entering a
+//! binder PUSHES its freshly-bound values, which reproduces the de
+//! Bruijn shift (existing indices move up by the number of new binders)
+//! without any renumbering. A user fn's body is closed except for its
+//! parameters, so a call evaluates the body in a frame of just the
+//! argument values (the last one on top).
 //!
 //! There are no lambdas in the narrow language (calls are saturated,
 //! functions are top-level), so no closures are needed: a `Val` is
@@ -26,49 +27,34 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use smallvec::SmallVec;
-
 use crate::ast::{Expr, FnDef, Module, Pat};
 use crate::prim;
 
-// Most environments and argument lists are tiny (1–5 entries), but each one
-// used to be a heap-allocated Vec built and freed per reduction step — ~28% of
-// runtime was that alloc/free churn (see profile). SmallVec keeps the common
-// small case on the stack; it spills to the heap only for larger lists.
-type Vals = SmallVec<[Val; 8]>;
-
-// The ENVIRONMENT is a persistent (Rc-shared) cons list, innermost-first:
-// the head is `BVar 0`. Entering a binder CONSES the new bindings onto the
-// shared tail in O(new bindings) — the flat-vector representation this
-// replaces cloned the ENTIRE environment on every fired match arm
-// (`binds.extend(env.iter().cloned())`), which the profile showed as the
-// single largest block of host time (SmallVec extend + Rc churn + frees).
-// Lookup walks `k` links; environments are shallow (parameters + enclosing
-// match depth), so the walk is short where the clone was O(depth) always.
-#[derive(Clone)]
-struct EnvNode {
-    v: Val,
-    next: Env,
-}
-type Env = Option<Rc<EnvNode>>;
-
-#[inline]
-fn env_cons(v: Val, next: Env) -> Env {
-    Some(Rc::new(EnvNode { v, next }))
-}
-
-#[inline]
-fn env_lookup(env: &Env, k: u32) -> Option<&Val> {
-    let mut cur = env;
-    let mut k = k;
-    while let Some(node) = cur {
-        if k == 0 {
-            return Some(&node.v);
-        }
-        k -= 1;
-        cur = &node.next;
-    }
-    None
+// The ENVIRONMENT is ONE BINDING STACK shared by the whole evaluation,
+// innermost-first from the top: `BVar 0` is the top of `fr`. Entering a
+// binder PUSHES its freshly-bound values, which reproduces the de Bruijn
+// shift with no renumbering and NO ALLOCATION. This replaces an Rc-consed
+// list that heap-allocated one node per bound value — per argument, per
+// pattern capture (wildcards included), per let binding — which `perf`
+// showed as half the run time of a kernel replay (malloc/free = 49% of
+// samples, ~5 nodes per dispatch).
+//
+// Values in flight — a call's arguments, a let's RHSs, a constructor's
+// fields — are evaluated straight onto a second, OPERAND stack `op`, never
+// onto `fr`: an argument is evaluated against the frame that is current
+// when its call began, and a match or let inside it must find that frame
+// exactly at the top of `fr`. (Pushing operands onto `fr` itself was tried
+// and read outer bindings at the wrong offset.) A call then moves its
+// arguments from `op` onto `fr` in one drain. Every `eval_ir` call records
+// both heights at entry and restores them before returning, so a
+// sub-evaluation leaves the caller's stacks exactly as it found them; a
+// tail call truncates `fr` to its entry height first, dropping the frame it
+// replaces. A fn body is closed but for its parameters, so an index never
+// reaches below its own frame into the caller's; the bounds check in the
+// BVar arm is the loud failure for a body that was never opened.
+struct Stacks {
+    fr: Vec<Val>,
+    op: Vec<Val>,
 }
 
 #[derive(Debug)]
@@ -113,9 +99,16 @@ thread_local! {
     static PROF: RefCell<Option<HashMap<String, u64>>> =
         RefCell::new(std::env::var("SHARD_PROF").is_ok().then(HashMap::new));
 }
+// Read once; with profiling off a dispatch pays one relaxed load, not a
+// thread-local borrow.
+static PROF_ON: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var("SHARD_PROF").is_ok());
 
 #[inline]
 fn prof_count(name: &str) {
+    if !*PROF_ON {
+        return;
+    }
     PROF.with(|p| {
         if let Some(map) = p.borrow_mut().as_mut() {
             *map.entry(name.to_string()).or_insert(0) += 1;
@@ -128,6 +121,9 @@ fn prof_count(name: &str) {
 /// on every primitive application even with SHARD_PROF off).
 #[inline]
 fn prof_count_prim(name: &str) {
+    if !*PROF_ON {
+        return;
+    }
     PROF.with(|p| {
         if let Some(map) = p.borrow_mut().as_mut() {
             *map.entry(format!("prim:{name}")).or_insert(0) += 1;
@@ -220,6 +216,12 @@ enum PrimTag {
     Sub,
     Mul,
     SymEq,
+    Band,
+    Bor,
+    Bxor,
+    Bshl,
+    Bshr,
+    Mod,
     Other,
 }
 
@@ -301,6 +303,12 @@ impl<'a> Lowerer<'a> {
                             "-" => PrimTag::Sub,
                             "*" => PrimTag::Mul,
                             "sym_eq" => PrimTag::SymEq,
+                            "band" => PrimTag::Band,
+                            "bor" => PrimTag::Bor,
+                            "bxor" => PrimTag::Bxor,
+                            "bshl" => PrimTag::Bshl,
+                            "bshr" => PrimTag::Bshr,
+                            "mod" => PrimTag::Mod,
                             _ => PrimTag::Other,
                         };
                         IExpr::CallOther(tag, self.intern(n), largs)
@@ -368,7 +376,8 @@ fn lower_program<'a>(m: &'a Module, e: &'a Expr) -> (Prog, IExpr) {
 /// Reduce `e` to normal form within the context of `m`'s definitions.
 pub fn eval(m: &Module, e: &Expr) -> Result<Expr, EvalError> {
     let (prog, ie) = lower_program(m, e);
-    let v = eval_ir(&prog, &None, &ie)?;
+    let mut st = Stacks { fr: Vec::with_capacity(4096), op: Vec::with_capacity(1024) };
+    let v = eval_ir(&prog, &mut st, &ie)?;
     Ok(val_to_expr(&v))
 }
 
@@ -376,14 +385,40 @@ pub fn eval(m: &Module, e: &Expr) -> Result<Expr, EvalError> {
 // app reducer's `compute_expr` loop, or any direct-style loop) reduces to a
 // `continue` here, NOT a Rust recursive call. Without this, a long shard
 // reduction chain keeps one Rust stack frame per step alive — and each frame
-// pins its `env`, so every intermediate term stays reachable → O(steps) stack
-// AND heap. Sub-evaluations that are NOT in tail position (a Call's args, an
-// If condition, a Match scrutinee, a Let's RHSs) still recurse, bounded by
-// term depth. The four tail positions — user-fn body, taken If branch, fired
-// Match arm, Let body — loop instead, freeing the prior frame (and its env, so
-// the old term is dropped) before the next step.
-fn eval_ir<'a>(prog: &'a Prog, env0: &Env, e0: &'a IExpr) -> Result<Val, EvalError> {
-    let mut env: Env = env0.clone(); // O(1): shares the spine
+// pins its bindings, so every intermediate term stays reachable → O(steps)
+// stack AND heap. Sub-evaluations that are NOT in tail position (a Call's
+// args, an If condition, a Match scrutinee, a Let's RHSs) still recurse,
+// bounded by term depth. The four tail positions — user-fn body, taken If
+// branch, fired Match arm, Let body — loop instead; a user-fn call truncates
+// the binding stack to this invocation's entry height first, so the frame
+// it replaces (and the terms only it reached) is dropped before the next
+// step.
+fn eval_ir<'a>(prog: &'a Prog, st: &mut Stacks, e0: &'a IExpr) -> Result<Val, EvalError> {
+    let fb = st.fr.len();
+    let ob = st.op.len();
+    let r = eval_loop(prog, st, fb, e0);
+    st.fr.truncate(fb);
+    st.op.truncate(ob);
+    r
+}
+
+/// Evaluate `args` left to right against the current frame, pushing each
+/// value onto the operand stack; they end up at `st.op[mark..]` in order.
+#[inline]
+fn push_args<'a>(prog: &'a Prog, st: &mut Stacks, args: &'a [IExpr]) -> Result<(), EvalError> {
+    for a in args {
+        let v = eval_ir(prog, st, a)?;
+        st.op.push(v);
+    }
+    Ok(())
+}
+
+fn eval_loop<'a>(
+    prog: &'a Prog,
+    st: &mut Stacks,
+    base: usize,
+    e0: &'a IExpr,
+) -> Result<Val, EvalError> {
     let mut e: &'a IExpr = e0;
     loop {
         match e {
@@ -391,26 +426,31 @@ fn eval_ir<'a>(prog: &'a Prog, env0: &Env, e0: &'a IExpr) -> Result<Val, EvalErr
             IExpr::Sym(s) => return Ok(Val::Sym(s.clone())),
             IExpr::FVar(s) => return Ok(Val::FVar(s.clone())),
 
-            // A bound variable indexes into the environment (innermost-first).
+            // A bound variable indexes the binding stack from its top.
             IExpr::BVar(k) => {
-                return env_lookup(&env, *k)
-                    .cloned()
-                    .ok_or(EvalError::UnboundBVar(*k))
+                let n = st.fr.len();
+                let k = *k as usize;
+                if k < n {
+                    return Ok(st.fr[n - 1 - k].clone());
+                }
+                return Err(EvalError::UnboundBVar(k as u32));
             }
 
             IExpr::Ctor(name, args) => {
-                let vals = eval_iargs(prog, &env, args)?;
+                let mark = st.op.len();
+                push_args(prog, st, args)?;
                 // Nat former (kernel/stdlib.shard): ground Z/S packs to its
                 // nonneg literal — the unique ground Nat value. This engine is
                 // flat-core (names ARE identity, cf. the True/False tests
                 // below), so the gate is the bare name. A symbolic or negative
-                // argument never packs.
+                // argument never packs. (An early return leaves the fields on
+                // the operand stack; `eval_ir` pops them.)
                 match &**name {
-                    "Z" if vals.is_empty() => {
+                    "Z" if args.is_empty() => {
                         return Ok(Val::Int(Rc::new(num_traits::Zero::zero())))
                     }
-                    "S" if vals.len() == 1 => {
-                        if let Val::Int(n) = &vals[0] {
+                    "S" if args.len() == 1 => {
+                        if let Val::Int(n) = &st.op[mark] {
                             if !num_traits::Signed::is_negative(&**n) {
                                 return Ok(Val::Int(Rc::new((**n).clone() + 1)));
                             }
@@ -418,15 +458,19 @@ fn eval_ir<'a>(prog: &'a Prog, env0: &Env, e0: &'a IExpr) -> Result<Val, EvalErr
                     }
                     _ => {}
                 }
-                return Ok(Val::Ctor(name.clone(), Rc::from(vals.as_slice())));
+                // One allocation, the fields moved off the operand stack
+                // (Drain is TrustedLen, so this is `from_iter_exact`).
+                let fields: Rc<[Val]> = st.op.drain(mark..).collect();
+                return Ok(Val::Ctor(name.clone(), fields));
             }
 
             IExpr::CallFn(i, args) => {
-                // TAIL-LOOP into the fn body in a fresh env of the argument
-                // values — the body is closed but for its params. Arguments
-                // evaluate left-to-right DIRECTLY into env nodes (no staging
-                // vector); consing forward leaves the LAST argument at the
-                // head, i.e. env[0] = BVar 0 = last parameter.
+                // TAIL-LOOP into the fn body: the arguments are evaluated
+                // against the current frame onto the operand stack; then the
+                // frame this invocation owns is dropped and the arguments
+                // move onto the binding stack as the callee's frame. In
+                // order, so the LAST argument ends on top: BVar 0 = last
+                // parameter.
                 let fd = &prog.fns[*i as usize];
                 prof_count(&fd.name);
                 if fd.arity != args.len() {
@@ -436,41 +480,39 @@ fn eval_ir<'a>(prog: &'a Prog, env0: &Env, e0: &'a IExpr) -> Result<Val, EvalErr
                         got: args.len(),
                     });
                 }
-                let mut next: Env = None;
-                for a in args.iter() {
-                    next = env_cons(eval_ir(prog, &env, a)?, next);
-                }
-                env = next;
+                let mark = st.op.len();
+                push_args(prog, st, args)?;
+                st.fr.truncate(base);
+                st.fr.extend(st.op.drain(mark..));
                 e = &fd.body;
             }
 
             IExpr::CallOther(tag, name, args) => {
-                let vals = eval_iargs(prog, &env, args)?;
-                return apply_other(*tag, name, vals);
+                let mark = st.op.len();
+                push_args(prog, st, args)?;
+                return apply_other(*tag, name, &st.op[mark..]);
             }
 
-            IExpr::If(c, t, el) => match eval_ir(prog, &env, c)? {
+            IExpr::If(c, t, el) => match eval_ir(prog, st, c)? {
                 Val::Ctor(ref n, ref a) if a.is_empty() && &**n == "True" => e = t,
                 Val::Ctor(ref n, ref a) if a.is_empty() && &**n == "False" => e = el,
                 other => return Err(EvalError::IfNonBool(format!("{:?}", val_to_expr(&other)))),
             },
 
             IExpr::Match(scrut, arms) => {
-                let v = eval_ir(prog, &env, scrut)?;
+                let v = eval_ir(prog, st, scrut)?;
                 let mut next: Option<&'a IExpr> = None;
                 for arm in arms {
-                    let mut binds: Vals = SmallVec::new();
-                    if match_pat(&arm.pat, &v, &mut binds) {
-                        // env' = bindings ++ outer env, innermost-first.
-                        // `binds` is in capture order (leftmost PVar first);
-                        // consing forward leaves the LAST capture at the head
-                        // (= BVar 0), and the outer env is SHARED, not cloned.
-                        for b in binds {
-                            env = env_cons(b, env);
-                        }
+                    // Captures are pushed as they are matched, in capture
+                    // order (leftmost PVar first), so the LAST capture ends
+                    // on top (= BVar 0) above the outer bindings, which stay;
+                    // a failed arm's partial captures are popped again.
+                    let mark = st.fr.len();
+                    if match_pat(&arm.pat, &v, &mut st.fr) {
                         next = Some(&arm.body);
                         break;
                     }
+                    st.fr.truncate(mark);
                 }
                 match next {
                     Some(body) => e = body,
@@ -479,27 +521,17 @@ fn eval_ir<'a>(prog: &'a Prog, env0: &Env, e0: &'a IExpr) -> Result<Val, EvalErr
             }
 
             IExpr::Let(rhss, body) => {
-                // Parallel let: RHSs evaluated in the OUTER scope (`env`),
-                // consed onto a separate extension so later RHSs cannot see
-                // earlier bindings; forward order leaves the LAST binding at
-                // the head (= BVar 0).
-                let mut next: Env = env.clone();
-                for a in rhss.iter() {
-                    next = env_cons(eval_ir(prog, &env, a)?, next);
-                }
-                env = next;
+                // Parallel let: every RHS is evaluated against the OUTER
+                // frame onto the operand stack before any is bound, so later
+                // RHSs cannot see earlier bindings; moved over in order, the
+                // LAST binding ends on top (= BVar 0).
+                let mark = st.op.len();
+                push_args(prog, st, rhss)?;
+                st.fr.extend(st.op.drain(mark..));
                 e = body;
             }
         }
     }
-}
-
-fn eval_iargs<'a>(prog: &'a Prog, env: &Env, args: &'a [IExpr]) -> Result<Vals, EvalError> {
-    let mut vals = Vals::with_capacity(args.len());
-    for a in args {
-        vals.push(eval_ir(prog, env, a)?);
-    }
-    Ok(vals)
 }
 
 // A Call whose head is NOT a user fn: a primitive, an effectful extern, or an
@@ -544,16 +576,27 @@ fn both_i64(a: &crate::ast::IntLit, b: &crate::ast::IntLit) -> Option<(i64, i64)
     Some((a.to_i64()?, b.to_i64()?))
 }
 
-fn apply_other(tag: PrimTag, name: &str, args: Vals) -> Result<Val, EvalError> {
+/// Both operands as NONNEGATIVE i64s — the range where the machine bitwise
+/// operators and shifts agree with the BigInt ones (no sign to extend).
+#[inline]
+fn both_nonneg_i64(a: &crate::ast::IntLit, b: &crate::ast::IntLit) -> Option<(i64, i64)> {
+    let (x, y) = both_i64(a, b)?;
+    if x >= 0 && y >= 0 { Some((x, y)) } else { None }
+}
+
+fn apply_other(tag: PrimTag, name: &str, args: &[Val]) -> Result<Val, EvalError> {
     // FAST PATH: the measured-hottest primitives, applied directly on `Val`s
     // and dispatched by the PrimTag assigned at lowering (no strcmp). The
     // general path below converts every argument Val→Expr (allocating) and
     // the result back — pure overhead for these. Arms mirror prim.rs exactly
-    // (same value shapes, BigInt comparison semantics); only UNGUARDED prims
-    // are tagged (the division family keeps its b=0 stuck-guard in the
-    // table). Non-matching shapes fall through to the general path, which
-    // reproduces the old behavior bit for bit.
-    match (tag, args.as_slice()) {
+    // (same value shapes, BigInt semantics). The guarded prims (`mod`'s b≠0,
+    // the shifts' 0..64 amount) repeat their table guard as an arm guard, so
+    // a guard failure falls through to the general path and stays stuck
+    // exactly as before. The bitwise arms take the i64 route only for two
+    // nonnegative operands, where every semantics coincides; anything else
+    // runs the table's own BigInt operator. Non-matching shapes fall through
+    // to the general path, which reproduces the old behavior bit for bit.
+    match (tag, args) {
         (PrimTag::IntEq, [Val::Int(a), Val::Int(b)]) => {
             prof_count_prim("int_eq");
             return Ok(bool_val(a == b));
@@ -594,6 +637,52 @@ fn apply_other(tag: PrimTag, name: &str, args: Vals) -> Result<Val, EvalError> {
             prof_count_prim("sym_eq");
             return Ok(bool_val(Rc::ptr_eq(a, b) || a == b));
         }
+        (PrimTag::Band, [Val::Int(a), Val::Int(b)]) => {
+            prof_count_prim("band");
+            if let Some((x, y)) = both_nonneg_i64(a, b) {
+                return Ok(int_val_i64(x & y));
+            }
+            return Ok(Val::Int(Rc::new(&**a & &**b)));
+        }
+        (PrimTag::Bor, [Val::Int(a), Val::Int(b)]) => {
+            prof_count_prim("bor");
+            if let Some((x, y)) = both_nonneg_i64(a, b) {
+                return Ok(int_val_i64(x | y));
+            }
+            return Ok(Val::Int(Rc::new(&**a | &**b)));
+        }
+        (PrimTag::Bxor, [Val::Int(a), Val::Int(b)]) => {
+            prof_count_prim("bxor");
+            if let Some((x, y)) = both_nonneg_i64(a, b) {
+                return Ok(int_val_i64(x ^ y));
+            }
+            return Ok(Val::Int(Rc::new(&**a ^ &**b)));
+        }
+        (PrimTag::Bshl, [Val::Int(a), Val::Int(b)]) if prim::shift_amount(b).is_some() => {
+            prof_count_prim("bshl");
+            let k = prim::shift_amount(b).unwrap();
+            if let Some((x, _)) = both_nonneg_i64(a, a) {
+                if let Ok(r) = i64::try_from((x as i128) << k) {
+                    return Ok(int_val_i64(r));
+                }
+            }
+            return Ok(Val::Int(Rc::new(&**a << k)));
+        }
+        (PrimTag::Bshr, [Val::Int(a), Val::Int(b)]) if prim::shift_amount(b).is_some() => {
+            prof_count_prim("bshr");
+            let k = prim::shift_amount(b).unwrap();
+            if let Some((x, _)) = both_nonneg_i64(a, a) {
+                return Ok(int_val_i64(x >> k));
+            }
+            return Ok(Val::Int(Rc::new(&**a >> k)));
+        }
+        (PrimTag::Mod, [Val::Int(a), Val::Int(b)]) if !num_traits::Zero::is_zero(&**b) => {
+            prof_count_prim("mod");
+            if let Some(r) = both_i64(a, b).and_then(|(x, y)| x.checked_rem_euclid(y)) {
+                return Ok(int_val_i64(r));
+            }
+            return Ok(Val::Int(Rc::new(prim::rem_euclid(a, b))));
+        }
         _ => {}
     }
     // Primitive: cross to the `Expr`-typed primitive table at the
@@ -619,11 +708,9 @@ fn apply_other(tag: PrimTag, name: &str, args: Vals) -> Result<Val, EvalError> {
 // -----------------------------------------------------------------------------
 // Pattern matching. Mirrors kernel/reduce.shard:match_pat.
 //
-// Convention: bindings collected in CAPTURE order (leftmost PVar first).
-// The caller conses them onto the environment forward, which leaves the
-// LAST (rightmost) PVar at the head — i.e. `BVar 0` — matching the de
-// Bruijn convention. (The old flat-vector env wanted innermost-first and
-// paid an O(n) front-insert per capture to get it.)
+// Convention: bindings are pushed onto the value stack in CAPTURE order
+// (leftmost PVar first), which leaves the LAST (rightmost) PVar on top —
+// i.e. `BVar 0` — matching the de Bruijn convention.
 // -----------------------------------------------------------------------------
 
 // Name tests are PURE POINTER COMPARES: every runtime name — lowered
@@ -631,7 +718,7 @@ fn apply_other(tag: PrimTag, name: &str, args: Vals) -> Result<Val, EvalError> {
 // effect-handler results via val_of_value_expr — goes through the one
 // canonical interner, so string-equal names are Rc-identical by
 // construction. The debug_assert pins that invariant in debug builds.
-fn match_pat(p: &IPat, v: &Val, acc: &mut Vals) -> bool {
+fn match_pat(p: &IPat, v: &Val, acc: &mut Vec<Val>) -> bool {
     match p {
         IPat::Var => {
             acc.push(v.clone());
