@@ -563,8 +563,28 @@ is `docs/FOUNDATION.md` §5.3.
   bootstrap builds a short constructor silently and fails at the first
   match) before the suite: 9 entrypoints, the 3,000-line fixture with
   identical verdicts.
+- **Recursion-depth accounting (2026-09-07):** the run over chunks
+  0–24 (line 500,000) accepted 4,378 declarations, 0 mismatched, with
+  one exhaustion — `ByteArray.utf8DecodeChar?_utf8EncodeChar_append`
+  (chunk 21) ran out of recursion depth in `whnf_core`, and its
+  dependent theorem was rejected as unknown_constant in consequence.
+  Two departures from the pin's budget, both fixed: (1) K's `whnf`
+  unfold loop, `lazy_delta_reduction` and `lazy_delta_proj_reduction`
+  recursed with depth − 1 per iteration, where the pin's are `while
+  (true)` loops with no `scope_rec_depth` of their own (the pin's three
+  guard sites are infer_type_core, whnf_core and is_def_eq_core) — the
+  loops now keep the depth and take the heartbeat budget as their
+  measure; (2) the kernel's limit is `maxRecDepth` (512) times
+  `g_kernel_rec_depth_factor` (16) — runtime/interrupt.cpp: "the kernel
+  recurses substantially deeper than the elaborator did for the same
+  term … we therefore let the kernel reach a generous multiple" — so
+  `budget_depth` is 8,192, not 512. Verified: chunks 0–21 (line
+  440,000) accepted 4,367 / rejected 0 / exhausted 0 / mismatched 0;
+  the formerly exhausted declaration checks in about 20 s. Cost of the
+  large chunks: 18 (the 19.5M-node tree) 143 s, 21 77 s — checkable,
+  not yet cheap.
 - **Open in phase 1:** the full-export run and its cost measurement
-  (chunks 0–24 running at this commit), the six accelerator pins
+  (chunks 0–24 done; 25–324 next), the six accelerator pins
   declared 24k–700k lines into the export, the `use`-free toolchain
   profile's gate moving to CI, the per-traversal caches of the pin's
   `replace_rec_fn` if a profile shows instantiate dominating.

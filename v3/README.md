@@ -43,8 +43,11 @@ hash, loose-bvar range, flags and an id (the pin's expr data plus
 pointer identity), and the checker keeps the pin's memo tables; chunks
 0–4 (1,570 declarations) check in 7.8 / 10.7 / 13.4 / 14.0 / 18.6 s on
 route 3, flat in the DAG size where the plain tree took 13 / 28 / 48 /
-— / 118 s (records §8). Not yet: the full export (≈6.5M lines; runs on
-prefixes are measured first), the six later-declared accelerator pins. **Nested
+— / 118 s (records §8); chunks 0–21 (line 440,000, 4,367 declarations)
+accepted 4,367 / rejected 0 / exhausted 0 / mismatched 0 in 724 s, the
+two largest chunks at 143 s and 77 s. Not yet: the rest of the export
+(≈6.5M lines; runs on prefixes are measured first), the six
+later-declared accelerator pins. **Nested
 inductives validated:** `Lean.Syntax` (export line 78,503; two levels of
 nesting) admitted and its three exported recursors identical to K's
 generated ones — 1,375 declarations accepted, 0 rejected, 0 mismatched
