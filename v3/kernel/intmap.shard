@@ -1,19 +1,26 @@
 ;;; v3/kernel/intmap.shard — a persistent map keyed by nonnegative Int: a
 ;;; 4-ary trie over the key's bits (two bits per level, LSB first; bit
-;;; operations, never division), O(log₄ key) lookup and insert, no
-;;; rebalancing. Used for the export tables (names, levels, terms by
-;;; index), the environment (by name hash) and, later, K's memo tables.
+;;; operations, never division), no rebalancing. Used for the export tables
+;;; (names, levels, terms by index), the environment (by name hash) and K's
+;;; memo tables. A subtree holding ONE entry is a leaf carrying the key's
+;;; remaining bits, so a lookup or insert walks only as deep as the keys
+;;; present force it (≈ log₄ of the table size for hash keys), not the full
+;;; key width: with 24-bit hash keys the old always-12-level walk was a
+;;; quarter of every dispatch in a kernel replay, most of it in tables of a
+;;; few hundred entries (the memo tables reset per declaration).
 
 (import "prelude.shard")
 
 (type (IntMap V)
   (IMEmpty)
+  (IMLeaf Int V)                                                        ; one entry: the key's remaining bits, its value
   (IMNode (Option V) (IntMap V) (IntMap V) (IntMap V) (IntMap V)))   ; value at this key; children for the low two bits 0..3
 
 (fn im_find ((m (IntMap V)) (k Int)) (Option V)
   (measure k)
   (match m
     (IMEmpty None)
+    ((IMLeaf j v) (if (int_eq j k) (Some v) None))
     ((IMNode v c0 c1 c2 c3)
      (if (int_eq k 0) v
        (let ((b (band k 3)) (r (bshr k 2)))
@@ -26,7 +33,8 @@
 (fn im_insert ((m (IntMap V)) (k Int) (v V)) (IntMap V)
   (measure k)
   (match m
-    (IMEmpty (im_insert (IMNode None IMEmpty IMEmpty IMEmpty IMEmpty) k v))
+    (IMEmpty (IMLeaf k v))
+    ((IMLeaf j w) (if (int_eq j k) (IMLeaf k v) (im_split j w k v)))
     ((IMNode w c0 c1 c2 c3)
      (if (int_eq k 0) (IMNode (Some v) c0 c1 c2 c3)
        (let ((b (band k 3)) (r (bshr k 2)))
@@ -34,3 +42,29 @@
          (if (int_eq b 1) (IMNode w c0 (im_insert c1 r v) c2 c3)
          (if (int_eq b 2) (IMNode w c0 c1 (im_insert c2 r v) c3)
          (IMNode w c0 c1 c2 (im_insert c3 r v))))))))))
+
+;; A node holding exactly the two entries (j, w) and (k, v), j ≠ k: they
+;; part at the first level where their low bits differ (or where one of
+;; them is key 0, which lives at the node itself).
+(fn im_split ((j Int) (w V) (k Int) (v V)) (IntMap V)
+  (measure k)
+  (if (int_eq k 0) (im_put (IMNode (Some v) IMEmpty IMEmpty IMEmpty IMEmpty) j w)
+  (if (int_eq j 0) (im_put (IMNode (Some w) IMEmpty IMEmpty IMEmpty IMEmpty) k v)
+    (let ((bj (band j 3)) (bk (band k 3)))
+      (if (int_eq bj bk)
+        (im_with_child (IMNode None IMEmpty IMEmpty IMEmpty IMEmpty) bk (im_split (bshr j 2) w (bshr k 2) v))
+        (im_put (im_put (IMNode None IMEmpty IMEmpty IMEmpty IMEmpty) j w) k v))))))
+
+;; (im_put node k v): the leaf for a nonzero key k under the child its low
+;; two bits select — that child must be empty.
+(fn im_put ((m (IntMap V)) (k Int) (v V)) (IntMap V)
+  (im_with_child m (band k 3) (IMLeaf (bshr k 2) v)))
+
+(fn im_with_child ((m (IntMap V)) (b Int) (c (IntMap V))) (IntMap V)
+  (match m
+    ((IMNode w c0 c1 c2 c3)
+     (if (int_eq b 0) (IMNode w c c1 c2 c3)
+     (if (int_eq b 1) (IMNode w c0 c c2 c3)
+     (if (int_eq b 2) (IMNode w c0 c1 c c3)
+     (IMNode w c0 c1 c2 c)))))
+    (_ m)))
