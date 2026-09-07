@@ -15,31 +15,37 @@
 (fn cv_lparams ((v ConstantVal)) (List Name) (match v ((ConstantVal _ ps _) ps)))
 (fn cv_type ((v ConstantVal)) Expr (match v ((ConstantVal _ _ t) t)))
 
-(fn ctx_for ((env CheckedEnv) (ps (List Name)) (safety DefinitionSafety)) Ctx
-  (Ctx env Nil (Some ps) safety False (budget_ticks)))
+;; the limits of §3.3: recursion depth and heartbeats
+(type Limits (Limits Int Int))
+(fn lim_depth ((l Limits)) Int (match l ((Limits d _) d)))
+(fn lim_ticks ((l Limits)) Int (match l ((Limits _ t) t)))
+(fn default_limits () Limits (Limits (budget_depth) (budget_ticks)))
+
+(fn ctx_for ((env CheckedEnv) (ps (List Name)) (safety DefinitionSafety) (lim Limits)) Ctx
+  (Ctx env Nil (Some ps) safety False (lim_ticks lim)))
 
 ;; check_constant_val (environment.cpp l. 127): name free, level params
 ;; distinct, no fvar in the type, the type checks and is a sort
-(fn check_constant_val ((env CheckedEnv) (st St) (v ConstantVal) (safety DefinitionSafety)) (KRes Int)
+(fn check_constant_val ((env CheckedEnv) (st St) (v ConstantVal) (safety DefinitionSafety) (lim Limits)) (KRes Int)
   (match (env_check_name env (cv_name v))
     ((Some f) (KFail f))
     (None
      (if (bool_not (check_duplicated_univ_params (cv_lparams v))) (KFail (FRej (RuleViolation (quote duplicate_univ_param))))
      (if (has_fvar (cv_type v)) (KFail (FRej (Malformed (quote fvar_in_type))))
-     (match (infer (ctx_for env (cv_lparams v) safety) st (budget_depth) (cv_type v) False)
+     (match (infer (ctx_for env (cv_lparams v) safety lim) st (lim_depth lim) (cv_type v) False)
        ((KFail f) (KFail f))
        ((KOk st1 s)
-        (match (ensure_sort (ctx_for env (cv_lparams v) safety) st1 (budget_depth) s)
+        (match (ensure_sort (ctx_for env (cv_lparams v) safety lim) st1 (lim_depth lim) s)
           ((KFail f) (KFail f))
           ((KOk st2 _) (KOk st2 0))))))))))
 
 ;; a value checks and its type is definitionally the declared type
-(fn check_value ((env CheckedEnv) (st St) (v ConstantVal) (value Expr) (safety DefinitionSafety)) (KRes Int)
+(fn check_value ((env CheckedEnv) (st St) (v ConstantVal) (value Expr) (safety DefinitionSafety) (lim Limits)) (KRes Int)
   (if (has_fvar value) (KFail (FRej (Malformed (quote fvar_in_value))))
-  (match (infer (ctx_for env (cv_lparams v) safety) st (budget_depth) value False)
+  (match (infer (ctx_for env (cv_lparams v) safety lim) st (lim_depth lim) value False)
     ((KFail f) (KFail f))
     ((KOk st1 vty)
-     (match (is_def_eq (ctx_for env (cv_lparams v) safety) st1 (budget_depth) vty (cv_type v))
+     (match (is_def_eq (ctx_for env (cv_lparams v) safety lim) st1 (lim_depth lim) vty (cv_type v))
        ((KFail f) (KFail f))
        ((KOk st2 ok) (if ok (KOk st2 0) (KFail (FRej (ConversionNotEstablished))))))))))
 
@@ -117,37 +123,40 @@
 
 ;; environment::add (l. 262) — the procedure of §3.3
 (fn check_decl ((env CheckedEnv) (st St) (d Declaration)) (KRes CheckedEnv)
+  (check_decl_lim env st (default_limits) d))
+
+(fn check_decl_lim ((env CheckedEnv) (st St) (lim Limits) (d Declaration)) (KRes CheckedEnv)
   (match d
     ((AxiomDecl v unsafe)
      (if unsafe (KFail (FRej (Unsupported (quote unsafe_declaration))))
-     (match (check_constant_val env st v Safe)
+     (match (check_constant_val env st v Safe lim)
        ((KFail f) (KFail f))
        ((KOk st1 _) (KOk st1 (env_add env (cv_name v) (AxiomInfo v False)))))))
     ((DefnDecl v value hints safety all)
      (if (bool_not (safety_is_safe safety)) (KFail (FRej (Unsupported (quote unsafe_declaration))))
-     (match (check_constant_val env st v Safe)
+     (match (check_constant_val env st v Safe lim)
        ((KFail f) (KFail f))
        ((KOk st1 _)
-        (match (check_value env st1 v value Safe)
+        (match (check_value env st1 v value Safe lim)
           ((KFail f) (KFail f))
           ((KOk st2 _) (KOk st2 (env_add env (cv_name v) (DefnInfo v value hints safety all)))))))))
     ((ThmDecl v value all)
-     (match (check_constant_val env st v Safe)
+     (match (check_constant_val env st v Safe lim)
        ((KFail f) (KFail f))
        ((KOk st1 _)
-        (match (is_prop (ctx_for env (cv_lparams v) Safe) st1 (budget_depth) (cv_type v))
+        (match (is_prop (ctx_for env (cv_lparams v) Safe lim) st1 (lim_depth lim) (cv_type v))
           ((KFail f) (KFail f))
           ((KOk st2 p)
            (if (bool_not p) (KFail (FRej (RuleViolation (quote theorem_type_not_prop))))
-           (match (check_value env st2 v value Safe)
+           (match (check_value env st2 v value Safe lim)
              ((KFail f) (KFail f))
              ((KOk st3 _) (KOk st3 (env_add env (cv_name v) (ThmInfo v value all)))))))))))
     ((OpaqueDecl v value unsafe all)
      (if unsafe (KFail (FRej (Unsupported (quote unsafe_declaration))))
-     (match (check_constant_val env st v Safe)
+     (match (check_constant_val env st v Safe lim)
        ((KFail f) (KFail f))
        ((KOk st1 _)
-        (match (check_value env st1 v value Safe)
+        (match (check_value env st1 v value Safe lim)
           ((KFail f) (KFail f))
           ((KOk st2 _) (KOk st2 (env_add env (cv_name v) (OpaqueInfo v value False all)))))))))
     (QuotDecl (add_quot env st))
@@ -199,7 +208,10 @@
 
 ;; check + pin (the environment K clients use)
 (fn check_decl_pinning ((env CheckedEnv) (st St) (d Declaration)) (KRes CheckedEnv)
-  (match (check_decl env st d)
+  (check_decl_pinning_lim env st (default_limits) d))
+
+(fn check_decl_pinning_lim ((env CheckedEnv) (st St) (lim Limits) (d Declaration)) (KRes CheckedEnv)
+  (match (check_decl_lim env st lim d)
     ((KFail f) (KFail f))
     ((KOk st1 env1) (KOk st1 (pin_names env1 (decl_pin_candidates d))))))
 
@@ -215,3 +227,7 @@
 
 (fn check ((env CheckedEnv) (st St) (d Declaration)) Outcome
   (outcome_of (check_decl_pinning env st d) (decl_name d)))
+
+;; check(env, decl, limits) — §3.3's signature
+(fn check_with ((env CheckedEnv) (st St) (lim Limits) (d Declaration)) Outcome
+  (outcome_of (check_decl_pinning_lim env st lim d) (decl_name d)))

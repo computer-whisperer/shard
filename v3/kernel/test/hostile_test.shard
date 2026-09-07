@@ -1,0 +1,172 @@
+;;; v3/kernel/test/hostile_test.shard — T0's hostile battery (FOUNDATION
+;;; §12.5): declarations that must be REFUSED, each for its declared
+;;; reason, and the accelerator-identity case (§3.2). Nothing here may be
+;;; Accepted. The old tree's six 2026 holes lived in special rules,
+;;; dispatch tables and text-derived gates; K has none, so their
+;;; analogues are the pin gates and the raw-input checks below.
+
+(import "../host.shard")
+(import "../add.shard")
+
+(type Case (Case (List Int) Bool))
+
+(fn u () Level (LParam (n1 (quote u))))
+(fn nat () Expr (Const (nm_nat) Nil))
+(fn zero () Expr (Const (nm_nat_zero) Nil))
+(fn lit ((k Int)) Expr (Lit (LitNat k)))
+(fn x_ () Name (n1 (quote x)))
+(fn arrow ((a Expr) (b Expr)) Expr (Pi (x_) BDefault a (lift_loose_bvars b 0 1)))
+(fn type1 () Expr (Sort (LSucc LZero)))
+(fn st0 () St (St 0 0))
+(fn cv ((n Name) (ps (List Name)) (t Expr)) ConstantVal (ConstantVal n ps t))
+(fn e0 () CheckedEnv (CheckedEnv IMEmpty False Nil))
+(fn nat_decl () Declaration
+  (InductDecl Nil 0
+    (list (InductiveType (nm_nat) (type1)
+            (list (Constructor (nm_nat_zero) (nat)) (Constructor (nm_nat_succ) (Pi (n1 (quote n)) BDefault (nat) (nat))))))
+    False))
+(fn eq_decl () Declaration
+  (InductDecl (list (n1 (quote u))) 2
+    (list (InductiveType (nm_eq)
+            (Pi (n1 (quote a)) BImplicit (Sort (u)) (Pi (n1 (quote a)) BDefault (BVar 0) (Pi (n1 (quote b)) BDefault (BVar 1) (Sort LZero))))
+            (list (Constructor (nm_eq_refl)
+                    (Pi (n1 (quote a)) BImplicit (Sort (u)) (Pi (n1 (quote a)) BDefault (BVar 0)
+                      (App (App (App (Const (nm_eq) (list (u))) (BVar 1)) (BVar 0)) (BVar 0))))))))
+    False))
+(fn env_after ((o Outcome) (dflt CheckedEnv)) CheckedEnv (match o ((Accepted e) e) (_ dflt)))
+(fn e_nat () CheckedEnv (env_after (check (e0) (st0) (nat_decl)) (e0)))
+(fn e_eq () CheckedEnv (env_after (check (e_nat) (st0) (eq_decl)) (e0)))
+(fn eq_nat ((a Expr) (b Expr)) Expr (App (App (App (Const (nm_eq) (list (LSucc LZero))) (nat)) a) b))
+(fn refl_nat ((a Expr)) Expr (App (App (Const (nm_eq_refl) (list (LSucc LZero))) (nat)) a))
+
+(fn accepted ((o Outcome)) Bool (match o ((Accepted _) True) (_ False)))
+(fn refused ((o Outcome) (s Symbol)) Bool
+  (match o
+    ((Rejected (RuleViolation t) _) (sym_eq s t)) ((Rejected (Malformed t) _) (sym_eq s t))
+    ((Rejected (Unsupported t) _) (sym_eq s t)) ((Rejected (ConversionNotEstablished) _) (sym_eq s (quote conversion)))
+    ((Exhausted _ _) (sym_eq s (quote exhausted)))
+    (_ False)))
+(fn not_accepted ((o Outcome)) Bool (bool_not (accepted o)))
+
+;; --- the cases ------------------------------------------------------------------
+
+;; 1. universe collapse: def bad : Prop := Nat  (Nat : Type, never Prop)
+(fn c_collapse () Declaration (DefnDecl (cv (n1 (quote bad)) Nil (Sort LZero)) (nat) (HRegular 1) Safe (list (n1 (quote bad)))))
+;; 2. scope capture: a loose bound variable in a value
+(fn c_loose () Declaration (DefnDecl (cv (n1 (quote loose)) Nil (nat)) (BVar 0) (HRegular 1) Safe (list (n1 (quote loose)))))
+;; 2b. a free variable smuggled into a type
+(fn c_fvar () Declaration (AxiomDecl (cv (n1 (quote smug)) Nil (FVar 7)) False))
+;; 3. a forged recursor cannot be declared: Declaration has no recursor form; a
+;;    constructor returning the wrong type is the closest raw forgery
+(fn c_forged () Declaration
+  (InductDecl Nil 0 (list (InductiveType (n1 (quote F)) (type1) (list (Constructor (n2 (quote F) (quote mk)) (nat))))) False))
+;; 4. non-positive occurrence
+(fn c_nonpos () Declaration
+  (InductDecl Nil 0 (list (InductiveType (n1 (quote Bad)) (type1)
+    (list (Constructor (n2 (quote Bad) (quote mk)) (arrow (arrow (Const (n1 (quote Bad)) Nil) (nat)) (Const (n1 (quote Bad)) Nil)))))) False))
+;; 5. illicit Prop elimination: Or-like predicate (two constructors) eliminates
+;;    only into Prop, so its recursor has no universe parameter — Or2.rec.{1} is refused
+(fn or_decl () Declaration
+  (InductDecl Nil 0 (list (InductiveType (n1 (quote Or2)) (Sort LZero)
+    (list (Constructor (n2 (quote Or2) (quote l)) (Const (n1 (quote Or2)) Nil)) (Constructor (n2 (quote Or2) (quote r)) (Const (n1 (quote Or2)) Nil))))) False))
+(fn e_or () CheckedEnv (env_after (check (e_nat) (st0) (or_decl)) (e0)))
+(fn c_large_elim () Declaration
+  (DefnDecl (cv (n1 (quote elim)) Nil (arrow (Const (n1 (quote Or2)) Nil) (nat)))
+    (Lam (n1 (quote h)) BDefault (Const (n1 (quote Or2)) Nil)
+      (App (App (App (App (Const (n2 (quote Or2) (quote rec)) (list (LSucc LZero))) (Lam (x_) BDefault (Const (n1 (quote Or2)) Nil) (nat))) (lit 0)) (lit 1)) (BVar 0)))
+    (HRegular 1) Safe (list (n1 (quote elim)))))
+;; 5b. data out of a proof: a Prop structure with a Nat field cannot be projected
+(fn ex_decl () Declaration
+  (InductDecl Nil 0 (list (InductiveType (n1 (quote Ex)) (Sort LZero)
+    (list (Constructor (n2 (quote Ex) (quote mk)) (arrow (nat) (Const (n1 (quote Ex)) Nil)))))) False))
+(fn e_ex () CheckedEnv (env_after (check (e_nat) (st0) (ex_decl)) (e0)))
+(fn c_proj_prop () Declaration
+  (DefnDecl (cv (n1 (quote leak)) Nil (arrow (Const (n1 (quote Ex)) Nil) (nat)))
+    (Lam (n1 (quote h)) BDefault (Const (n1 (quote Ex)) Nil) (Proj (n1 (quote Ex)) 0 (BVar 0)))
+    (HRegular 1) Safe (list (n1 (quote leak)))))
+;; 6. cyclic / self-referential definition
+(fn c_cyclic () Declaration (DefnDecl (cv (n1 (quote cyc)) Nil (nat)) (Const (n1 (quote cyc)) Nil) (HRegular 1) Safe (list (n1 (quote cyc)))))
+;; 7. the same-spelled non-core Nat.add: a user definition `Nat.add a b := a`
+(fn user_add () Declaration
+  (DefnDecl (cv (n2 (quote Nat) (quote add)) Nil (arrow (nat) (arrow (nat) (nat))))
+    (Lam (n1 (quote a)) BDefault (nat) (Lam (n1 (quote b)) BDefault (nat) (BVar 1))) (HRegular 1) Safe (list (n2 (quote Nat) (quote add)))))
+(fn e_user_add () CheckedEnv (env_after (check (e_eq) (st0) (user_add)) (e0)))
+(fn nat_add ((a Expr) (b Expr)) Expr (App (App (Const (n2 (quote Nat) (quote add)) Nil) a) b))
+(fn t_add_true () Declaration   ; Nat.add 2 3 = 2 holds for the USER's Nat.add
+  (ThmDecl (cv (n1 (quote t1)) Nil (eq_nat (nat_add (lit 2) (lit 3)) (lit 2))) (refl_nat (lit 2)) (list (n1 (quote t1)))))
+(fn t_add_false () Declaration  ; Nat.add 2 3 = 5 does NOT — a name-keyed accelerator would accept it
+  (ThmDecl (cv (n1 (quote t2)) Nil (eq_nat (nat_add (lit 2) (lit 3)) (lit 5))) (refl_nat (lit 5)) (list (n1 (quote t2)))))
+;; 8. a Nat literal under an environment whose Nat is not the pinned one
+(fn odd_nat_decl () Declaration
+  (InductDecl Nil 0 (list (InductiveType (nm_nat) (type1)
+    (list (Constructor (nm_nat_zero) (nat)) (Constructor (nm_nat_succ) (arrow (nat) (nat))) (Constructor (n2 (quote Nat) (quote extra)) (nat))))) False))
+(fn e_odd () CheckedEnv (env_after (check (e0) (st0) (odd_nat_decl)) (e0)))
+(fn c_lit_unpinned () Declaration (DefnDecl (cv (n1 (quote seven)) Nil (nat)) (lit 7) (HRegular 1) Safe (list (n1 (quote seven)))))
+;; 9. duplicates
+(fn c_dup_ctor () Declaration
+  (InductDecl Nil 0 (list (InductiveType (n1 (quote D)) (type1)
+    (list (Constructor (n2 (quote D) (quote a)) (Const (n1 (quote D)) Nil)) (Constructor (n2 (quote D) (quote a)) (Const (n1 (quote D)) Nil))))) False))
+(fn c_dup_univ () Declaration (AxiomDecl (cv (n1 (quote du)) (list (n1 (quote u)) (n1 (quote u))) (Sort (u))) False))
+;; 10. a theorem whose type is not a proposition
+(fn c_thm_data () Declaration (ThmDecl (cv (n1 (quote td)) Nil (nat)) (zero) (list (n1 (quote td)))))
+;; 11. Quot under a wrong Eq (an extra constructor)
+(fn bad_eq_decl () Declaration
+  (InductDecl (list (n1 (quote u))) 2
+    (list (InductiveType (nm_eq)
+            (Pi (n1 (quote a)) BImplicit (Sort (u)) (Pi (n1 (quote a)) BDefault (BVar 0) (Pi (n1 (quote b)) BDefault (BVar 1) (Sort LZero))))
+            (list (Constructor (nm_eq_refl)
+                    (Pi (n1 (quote a)) BImplicit (Sort (u)) (Pi (n1 (quote a)) BDefault (BVar 0)
+                      (App (App (App (Const (nm_eq) (list (u))) (BVar 1)) (BVar 0)) (BVar 0)))))
+                  (Constructor (n2 (quote Eq) (quote bogus))
+                    (Pi (n1 (quote a)) BImplicit (Sort (u)) (Pi (n1 (quote a)) BDefault (BVar 0) (Pi (n1 (quote b)) BDefault (BVar 1)
+                      (App (App (App (Const (nm_eq) (list (u))) (BVar 2)) (BVar 1)) (BVar 0)))))))))
+    False))
+(fn e_bad_eq () CheckedEnv (env_after (check (e_nat) (st0) (bad_eq_decl)) (e0)))
+;; 12. exhaustion is never a verdict: a definition under a tiny budget
+(fn c_deep () Declaration
+  (DefnDecl (cv (n1 (quote deep)) Nil (nat)) (App (Lam (x_) BDefault (nat) (App (Lam (x_) BDefault (nat) (BVar 0)) (BVar 0))) (zero)) (HRegular 1) Safe (list (n1 (quote deep)))))
+;; 13. unsafe / partial / mutual are out of the profile
+(fn c_unsafe () Declaration (DefnDecl (cv (n1 (quote un)) Nil (nat)) (zero) (HRegular 1) Unsafe (list (n1 (quote un)))))
+(fn c_partial () Declaration (DefnDecl (cv (n1 (quote pa)) Nil (nat)) (zero) (HRegular 1) Partial (list (n1 (quote pa)))))
+;; 14. an auxiliary-nested name reserved
+(fn c_reserved () Declaration
+  (InductDecl Nil 0 (list (InductiveType (n2 (quote _nested) (quote X)) (type1) (list (Constructor (n2 (quote _nested) (quote mk)) (Const (n2 (quote _nested) (quote X)) Nil))))) False))
+;; 15. a wrong universe arity on a constant
+(fn c_arity () Declaration (DefnDecl (cv (n1 (quote ar)) Nil (Sort (LSucc LZero))) (Const (nm_nat) (list LZero)) (HRegular 1) Safe (list (n1 (quote ar)))))
+
+(fn cases () (List Case)
+  (list
+    (Case "the base environment is sound to start from" (accepted (check (e_nat) (st0) (eq_decl))))
+    (Case "1 universe collapse: def bad : Prop := Nat" (refused (check (e_nat) (st0) (c_collapse)) (quote conversion)))
+    (Case "2 loose bound variable" (refused (check (e_nat) (st0) (c_loose)) (quote loose_bvar)))
+    (Case "2b free variable in a type" (refused (check (e_nat) (st0) (c_fvar)) (quote fvar_in_type)))
+    (Case "3 constructor returning the wrong type" (refused (check (e_nat) (st0) (c_forged)) (quote invalid_ctor_result)))
+    (Case "4 non-positive occurrence" (refused (check (e_nat) (st0) (c_nonpos)) (quote non_positive_occurrence)))
+    (Case "5 Or2 admitted" (accepted (check (e_nat) (st0) (or_decl))))
+    (Case "5 large elimination from a two-constructor predicate refused" (refused (check (e_or) (st0) (c_large_elim)) (quote universe_arity)))
+    (Case "5b data projected out of a proof refused" (refused (check (e_ex) (st0) (c_proj_prop)) (quote invalid_projection)))
+    (Case "6 self-reference" (refused (check (e_nat) (st0) (c_cyclic)) (quote unknown_constant)))
+    (Case "7 user Nat.add admitted" (accepted (check (e_eq) (st0) (user_add))))
+    (Case "7 accelerator OFF: Nat.add 2 3 = 2 holds by the user's definition" (accepted (check (e_user_add) (st0) (t_add_true))))
+    (Case "7 accelerator OFF: Nat.add 2 3 = 5 refused" (refused (check (e_user_add) (st0) (t_add_false)) (quote conversion)))
+    (Case "7 the user's Nat.add is not pinned" (bool_not (env_pinned (e_user_add) (n2 (quote Nat) (quote add)))))
+    (Case "8 a Nat literal under a non-pinned Nat is Unsupported" (refused (check (e_odd) (st0) (c_lit_unpinned)) (quote nat_literal_unpinned_Nat)))
+    (Case "8 the pinned Nat is pinned" (env_pinned (e_nat) (nm_nat)))
+    (Case "9 duplicate constructor" (refused (check (e_nat) (st0) (c_dup_ctor)) (quote duplicate_constructor)))
+    (Case "9 duplicate universe parameter" (refused (check (e_nat) (st0) (c_dup_univ)) (quote duplicate_univ_param)))
+    (Case "10 theorem with a data type" (refused (check (e_nat) (st0) (c_thm_data)) (quote theorem_type_not_prop)))
+    (Case "11 Quot under a wrong Eq" (refused (check (e_bad_eq) (st0) QuotDecl) (quote quot_eq_shape)))
+    (Case "12 exhaustion is not a verdict" (refused (check_with (e_nat) (st0) (Limits 2 1000000) (c_deep)) (quote exhausted)))
+    (Case "12 the same declaration under the default limits is fine" (accepted (check (e_nat) (st0) (c_deep))))
+    (Case "13 unsafe out of the profile" (refused (check (e_nat) (st0) (c_unsafe)) (quote unsafe_declaration)))
+    (Case "13 partial out of the profile" (refused (check (e_nat) (st0) (c_partial)) (quote unsafe_declaration)))
+    (Case "13 mutual block out of the profile" (refused (check (e_nat) (st0) (MutualDefnDecl Nil)) (quote mutual_unsafe_block)))
+    (Case "14 reserved auxiliary prefix" (refused (check (e_nat) (st0) (c_reserved)) (quote reserved_nested_prefix)))
+    (Case "15 wrong universe arity" (refused (check (e_nat) (st0) (c_arity)) (quote universe_arity)))))
+
+(fn run ((cs (List Case)) (fails Int) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil (exit fails (write_line (append "hostile_test: failures = " (show_int fails)) w)))
+    ((Cons (Case name ok) r) (run r (if ok fails (+ fails 1)) (write_line (append (if ok "PASS " "FAIL ") name) w)))))
+(fn main ((w World)) World (run (cases) 0 w))
