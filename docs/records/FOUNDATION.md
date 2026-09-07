@@ -458,7 +458,32 @@ is `docs/FOUNDATION.md` §5.3.
   literal expands to `String.ofList (List.cons Char (Char.ofNat c) …)`, not
   `String.mk …` (`inductive.cpp` l. 1368, 1394); the inventory says so.
 
-## 8. Related records
+## 8. Phase 1 record (opened 2026-09-06)
+
+- **Slices landed 2026-09-06** (all under `v3/kernel`, all green under
+  `v3/test.sh`): 1 level + term utilities; 2 the checker core
+  (`tc.shard`); 3 inductive admission and recursor generation; 4
+  `check(env, decl)` with quotients; 5 the lean4export import and the
+  T0 driver.
+- **First T0 evidence:** the first 20,000 lines of the v4.33.1 `Init`
+  export (519 declarations, `Init.Prelude` into `Init.Core`) accepted
+  with zero rejections and zero generated-constant mismatches, in 18 s
+  on route 3. The 3,000-line prefix (116 declarations) is a committed
+  fixture.
+- **Tool bump:** `lean4export` head pins v4.34.0-rc2; the v4.33.0-bump
+  commit `15f6055` built against v4.33.1 produces the export.
+- **Pin behaviours a naive expectation gets wrong, now fixtures:**
+  `whnf` continues from zeta into `reduce_nat` (`let x := zero; succ x`
+  is the literal 1); `infer_app` returns the unreduced codomain;
+  `normalize` does not re-sort after `mk_imax`; a `Type` field in a
+  `Type` inductive fails the universe check before the result-shape
+  check.
+- **Open in phase 1:** nested inductives (`elim_nested_inductive_fn`),
+  the memo tables, the hostile battery, the full-export run and its
+  cost measurement, the `use`-free toolchain profile's gate moving to
+  CI.
+
+## 9. Related records
 
 `docs/COVERAGE.md` and `docs/records/COVERAGE.md` (the coverage arc,
 PARKED at B-1b 2026-09-05; resumes at phase 7 on V3); `docs/TCB.md`
