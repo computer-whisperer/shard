@@ -1,0 +1,230 @@
+;;; v3/kernel/test/inductive_test.shard — admission and recursor generation.
+
+(import "../host.shard")
+(import "../inductive.shard")
+
+(type Case (Case (List Int) Bool))
+
+(fn u () Level (LParam (n1 (quote u))))
+(fn nat () Expr (Const (nm_nat) Nil))
+(fn zero () Expr (Const (nm_nat_zero) Nil))
+(fn succ () Expr (Const (nm_nat_succ) Nil))
+(fn lit ((k Int)) Expr (Lit (LitNat k)))
+(fn nm_rec () Name (n2 (quote Nat) (quote rec)))
+(fn x_ () Name (n1 (quote x)))
+(fn arrow ((a Expr) (b Expr)) Expr (Pi (x_) BDefault a (lift_loose_bvars b 0 1)))
+(fn type1 () Expr (Sort (LSucc LZero)))
+(fn st0 () St (St 0 0))
+(fn empty_env () CheckedEnv (CheckedEnv Nil False))
+
+;; the hand-written Nat.rec of tc_test, for the cross-check
+(fn rec_type () Expr
+  (Pi (n1 (quote motive)) BDefault (Pi (x_) BDefault (nat) (Sort (u)))
+    (Pi (n1 (quote zero)) BDefault (App (BVar 0) (zero))
+      (Pi (n1 (quote succ)) BDefault
+        (Pi (n1 (quote n)) BDefault (nat)
+          (Pi (n1 (quote ih)) BDefault (App (BVar 2) (BVar 0)) (App (BVar 3) (App (succ) (BVar 1)))))
+        (Pi (n1 (quote t)) BDefault (nat) (App (BVar 3) (BVar 0)))))))
+(fn succ_dom () Expr
+  (Pi (n1 (quote n)) BDefault (nat)
+    (Pi (n1 (quote ih)) BDefault (App (BVar 2) (BVar 0)) (App (BVar 3) (App (succ) (BVar 1))))))
+(fn rule_zero () Expr
+  (Lam (n1 (quote motive)) BDefault (Pi (x_) BDefault (nat) (Sort (u)))
+    (Lam (n1 (quote zero)) BDefault (App (BVar 0) (zero))
+      (Lam (n1 (quote succ)) BDefault (succ_dom) (BVar 1)))))
+(fn rule_succ () Expr
+  (Lam (n1 (quote motive)) BDefault (Pi (x_) BDefault (nat) (Sort (u)))
+    (Lam (n1 (quote zero)) BDefault (App (BVar 0) (zero))
+      (Lam (n1 (quote succ)) BDefault (succ_dom)
+        (Lam (n1 (quote n)) BDefault (nat)
+          (App (App (BVar 1) (BVar 0))
+               (App (App (App (App (Const (nm_rec) (list (u))) (BVar 3)) (BVar 2)) (BVar 1)) (BVar 0))))))))
+
+(fn nat_decl () (List InductiveType)
+  (list (InductiveType (nm_nat) (type1)
+          (list (Constructor (nm_nat_zero) (nat))
+                (Constructor (nm_nat_succ) (Pi (n1 (quote n)) BDefault (nat) (nat)))))))
+
+(fn add ((env CheckedEnv) (lps (List Name)) (np Int) (ts (List InductiveType))) (KRes CheckedEnv)
+  (add_inductive_core env (st0) lps np ts False 0))
+
+(fn env_of ((r (KRes CheckedEnv))) CheckedEnv (match r ((KOk _ e) e) (_ (empty_env))))
+(fn accepted ((r (KRes CheckedEnv))) Bool (match r ((KOk _ _) True) (_ False)))
+(fn rejected ((r (KRes CheckedEnv)) (s Symbol)) Bool
+  (match r ((KFail (FRej (RuleViolation t))) (sym_eq s t)) ((KFail (FRej (Malformed t))) (sym_eq s t)) (_ False)))
+
+(fn nat_env () CheckedEnv (env_of (add (empty_env) Nil 0 (nat_decl))))
+(fn ctx_of ((e CheckedEnv) (lps (List Name))) Ctx (Ctx e Nil (Some lps) Safe False 1000000))
+
+(fn rec_of ((e CheckedEnv) (n Name)) (Option ConstantInfo) (env_find e n))
+(fn rec_rules ((i ConstantInfo)) (List RecursorRule) (match i ((RecInfo _ _ _ _ _ _ rs _ _) rs) (_ Nil)))
+(fn rec_k ((i ConstantInfo)) Bool (match i ((RecInfo _ _ _ _ _ _ _ k _) k) (_ False)))
+(fn rec_nmotives ((i ConstantInfo)) Int (match i ((RecInfo _ _ _ _ nm _ _ _ _) nm) (_ (- 0 1))))
+(fn rec_nminors ((i ConstantInfo)) Int (match i ((RecInfo _ _ _ _ _ nmi _ _ _) nmi) (_ (- 0 1))))
+(fn rec_nindices ((i ConstantInfo)) Int (match i ((RecInfo _ _ _ ni _ _ _ _ _) ni) (_ (- 0 1))))
+(fn rule_rhs ((rs (List RecursorRule)) (c Name)) (Option Expr)
+  (measure (struct rs))
+  (match rs (Nil None) ((Cons (RecursorRule n _ rhs) r) (if (name_eq n c) (Some rhs) (rule_rhs r c)))))
+(fn opt_expr_eq ((o (Option Expr)) (e Expr)) Bool (match o ((Some x) (expr_eq x e)) (None False)))
+(fn ind_flags ((e CheckedEnv) (n Name)) (Pair Bool Bool)
+  (match (env_find e n) ((Some (InductInfo _ _ _ _ _ _ isrec _ isrefl)) (Pair isrec isrefl)) (_ (Pair False False))))
+
+(fn motive_nat () Expr (Lam (x_) BDefault (nat) (nat)))
+(fn rec_app ((major Expr)) Expr
+  (App (App (App (App (Const (nm_rec) (list (LSucc LZero))) (motive_nat)) (lit 7))
+            (Lam (n1 (quote n)) BDefault (nat) (Lam (n1 (quote ih)) BDefault (nat) (BVar 0))))
+       major))
+(fn ok_is ((r (KRes Expr)) (e Expr)) Bool (match r ((KOk _ x) (expr_eq x e)) (_ False)))
+
+;; Bool
+(fn nm_bool () Name (n1 (quote Bool)))
+(fn bool_decl () (List InductiveType)
+  (list (InductiveType (nm_bool) (type1)
+          (list (Constructor (nm_bool_false) (Const (nm_bool) Nil)) (Constructor (nm_bool_true) (Const (nm_bool) Nil))))))
+
+;; True : Prop, True.intro : True
+(fn nm_true () Name (n1 (quote True)))
+(fn true_decl () (List InductiveType)
+  (list (InductiveType (nm_true) (Sort LZero) (list (Constructor (n2 (quote True) (quote intro)) (Const (nm_true) Nil))))))
+
+;; Eq.{u} : {α : Sort u} → α → α → Prop ; Eq.refl : ∀ {α} (a : α), Eq α a a   (nparams 2)
+(fn nm_eq () Name (n1 (quote Eq)))
+(fn nm_eq_refl () Name (n2 (quote Eq) (quote refl)))
+(fn eq_decl () (List InductiveType)
+  (list (InductiveType (nm_eq)
+          (Pi (n1 (quote a)) BImplicit (Sort (u)) (Pi (n1 (quote a)) BDefault (BVar 0) (Pi (n1 (quote b)) BDefault (BVar 1) (Sort LZero))))
+          (list (Constructor (nm_eq_refl)
+                  (Pi (n1 (quote a)) BImplicit (Sort (u)) (Pi (n1 (quote a)) BDefault (BVar 0)
+                    (App (App (App (Const (nm_eq) (list (u))) (BVar 1)) (BVar 0)) (BVar 0)))))))))
+(fn eq_env () CheckedEnv (env_of (add (nat_env) (list (n1 (quote u))) 2 (eq_decl))))
+;; a : Nat (fvar 1000), h : Eq Nat a a (fvar 1001)
+(fn eq_ctx () Ctx
+  (Ctx (eq_env)
+       (list (LDecl 1001 (n1 (quote h)) (App (App (App (Const (nm_eq) (list (LSucc LZero))) (nat)) (FVar 1000)) (FVar 1000)) None BDefault)
+             (LDecl 1000 (n1 (quote a)) (nat) None BDefault))
+       (Some Nil) Safe False 1000000))
+;; Eq.rec.{1,1} Nat a (fun b h => Nat) 7 a h
+(fn eq_rec_app () Expr
+  (App (App (App (App (App (App (Const (n2 (quote Eq) (quote rec)) (list (LSucc LZero) (LSucc LZero))) (nat)) (FVar 1000))
+                      (Lam (n1 (quote b)) BDefault (nat) (Lam (n1 (quote h)) BDefault (App (App (App (Const (nm_eq) (list (LSucc LZero))) (nat)) (FVar 1000)) (BVar 0)) (nat))))
+                 (lit 7))
+            (FVar 1000))
+       (FVar 1001)))
+
+;; structure P2 (a b : Nat)
+(fn nm_p2 () Name (n1 (quote P2)))
+(fn p2_decl () (List InductiveType)
+  (list (InductiveType (nm_p2) (type1)
+          (list (Constructor (n2 (quote P2) (quote mk)) (Pi (n1 (quote a)) BDefault (nat) (Pi (n1 (quote b)) BDefault (nat) (Const (nm_p2) Nil))))))))
+
+;; mutual: A.mk : B → A ; B.nil : B ; B.cons : A → B
+(fn nm_a () Name (n1 (quote A)))
+(fn nm_b () Name (n1 (quote B)))
+(fn mutual_decl () (List InductiveType)
+  (list (InductiveType (nm_a) (type1) (list (Constructor (n2 (quote A) (quote mk)) (arrow (Const (nm_b) Nil) (Const (nm_a) Nil)))))
+        (InductiveType (nm_b) (type1) (list (Constructor (n2 (quote B) (quote nil)) (Const (nm_b) Nil))
+                                            (Constructor (n2 (quote B) (quote cons)) (arrow (Const (nm_a) Nil) (Const (nm_b) Nil)))))))
+
+;; reflexive: T.mk : (Nat → T) → T
+(fn nm_t () Name (n1 (quote T)))
+(fn refl_decl () (List InductiveType)
+  (list (InductiveType (nm_t) (type1) (list (Constructor (n2 (quote T) (quote mk)) (arrow (arrow (nat) (Const (nm_t) Nil)) (Const (nm_t) Nil)))))))
+
+;; negative: Bad.mk : (Bad → Nat) → Bad
+(fn nm_bad () Name (n1 (quote Bad)))
+(fn bad_decl () (List InductiveType)
+  (list (InductiveType (nm_bad) (type1) (list (Constructor (n2 (quote Bad) (quote mk)) (arrow (arrow (Const (nm_bad) Nil) (nat)) (Const (nm_bad) Nil)))))))
+
+;; universe: U : Type, U.mk : Type → U   (a Type-1 field in a Type)
+(fn nm_u () Name (n1 (quote U)))
+(fn big_decl () (List InductiveType)
+  (list (InductiveType (nm_u) (type1) (list (Constructor (n2 (quote U) (quote mk)) (arrow (type1) (Const (nm_u) Nil)))))))
+
+;; result shape: Q (α : Type) : Type, Q.mk : (α : Type) → (n : Nat) → Q Nat  — the result is not `Q α`
+;; (a Type-valued field would fail the universe check first, as the pin does: "universe level … too big")
+(fn nm_q () Name (n1 (quote Q)))
+(fn q_decl () (List InductiveType)
+  (list (InductiveType (nm_q) (Pi (n1 (quote a)) BDefault (type1) (type1))
+          (list (Constructor (n2 (quote Q) (quote mk))
+                  (Pi (n1 (quote a)) BDefault (type1) (Pi (n1 (quote n)) BDefault (nat) (App (Const (nm_q) Nil) (nat)))))))))
+;; the universe refusal, stated as its own case
+(fn q_big_decl () (List InductiveType)
+  (list (InductiveType (nm_q) (Pi (n1 (quote a)) BDefault (type1) (type1))
+          (list (Constructor (n2 (quote Q) (quote mk))
+                  (Pi (n1 (quote a)) BDefault (type1) (Pi (n1 (quote b)) BDefault (type1) (App (Const (nm_q) Nil) (BVar 0)))))))))
+
+;; a wrong universe: W : Prop with a Type-valued constructor is fine (props may hold anything)… but a duplicate name is not
+(fn dup_decl () (List InductiveType)
+  (list (InductiveType (nm_nat) (type1) Nil)))
+
+(fn cases () (List Case)
+  (let ((ne (nat_env)))
+    (list
+      (Case "Nat admitted" (accepted (add (empty_env) Nil 0 (nat_decl))))
+      (Case "Nat.rec generated with the hand-written type"
+        (match (rec_of ne (nm_rec)) ((Some i) (expr_eq (ci_type i) (rec_type))) (None False)))
+      (Case "Nat.rec lparams = [u]" (match (rec_of ne (nm_rec)) ((Some i) (names_eq (ci_lparams i) (list (n1 (quote u))))) (None False)))
+      (Case "Nat.rec rule zero" (match (rec_of ne (nm_rec)) ((Some i) (opt_expr_eq (rule_rhs (rec_rules i) (nm_nat_zero)) (rule_zero))) (None False)))
+      (Case "Nat.rec rule succ" (match (rec_of ne (nm_rec)) ((Some i) (opt_expr_eq (rule_rhs (rec_rules i) (nm_nat_succ)) (rule_succ))) (None False)))
+      (Case "Nat.rec counts: 1 motive, 2 minors, 0 indices, not K"
+        (match (rec_of ne (nm_rec))
+          ((Some i) (bool_and (int_eq (rec_nmotives i) 1) (bool_and (int_eq (rec_nminors i) 2) (bool_and (int_eq (rec_nindices i) 0) (bool_not (rec_k i))))))
+          (None False)))
+      (Case "Nat isRec, not reflexive" (match (ind_flags ne (nm_nat)) ((Pair r f) (bool_and r (bool_not f)))))
+      (Case "Nat.succ ctor info: cidx 1, nfields 1"
+        (match (env_find ne (nm_nat_succ)) ((Some (CtorInfo _ _ cidx np nf _)) (bool_and (int_eq cidx 1) (bool_and (int_eq np 0) (int_eq nf 1)))) (_ False)))
+      (Case "iota through the generated recursor: rec … 2 = 7"
+        (ok_is (whnf (ctx_of ne Nil) (st0) 300 (rec_app (lit 2))) (lit 7)))
+      (Case "rec app checks: (fun _ => Nat) 2"
+        (ok_is (infer (ctx_of ne Nil) (st0) 300 (rec_app (lit 2)) False) (App (motive_nat) (lit 2))))
+      (Case "Bool admitted, large elimination (u), not K"
+        (match (rec_of (env_of (add (empty_env) Nil 0 (bool_decl))) (n2 (quote Bool) (quote rec)))
+          ((Some i) (bool_and (names_eq (ci_lparams i) (list (n1 (quote u)))) (bool_not (rec_k i)))) (None False)))
+      (Case "True admitted: K-target, eliminates into any universe"
+        (match (rec_of (env_of (add (empty_env) Nil 0 (true_decl))) (n2 (quote True) (quote rec)))
+          ((Some i) (bool_and (rec_k i) (names_eq (ci_lparams i) (list (n1 (quote u)))))) (None False)))
+      (Case "Eq admitted with 1 index, K-target, fresh level u_1"
+        (match (rec_of (eq_env) (n2 (quote Eq) (quote rec)))
+          ((Some i) (bool_and (int_eq (rec_nindices i) 1) (bool_and (rec_k i) (names_eq (ci_lparams i) (list (n1 (quote u_1)) (n1 (quote u)))))))
+          (None False)))
+      (Case "K-like reduction: Eq.rec … h = 7 for an opaque h : Eq Nat a a"
+        (ok_is (whnf (eq_ctx) (St 2000 0) 300 (eq_rec_app)) (lit 7)))
+      (Case "P2 admitted: non-recursive structure"
+        (bool_and (accepted (add ne Nil 0 (p2_decl))) (is_non_rec_structure (env_of (add ne Nil 0 (p2_decl))) (nm_p2))))
+      (Case "P2 struct eta through the generated env"
+        (let ((e (env_of (add ne Nil 0 (p2_decl)))))
+          (match (is_def_eq (Ctx e (list (LDecl 1000 (n1 (quote p)) (Const (nm_p2) Nil) None BDefault)) (Some Nil) Safe False 1000000) (St 2000 0) 300
+                   (FVar 1000) (App (App (Const (n2 (quote P2) (quote mk)) Nil) (Proj (nm_p2) 0 (FVar 1000))) (Proj (nm_p2) 1 (FVar 1000))))
+            ((KOk _ b) b) (_ False))))
+      (Case "mutual A/B: two recursors, 2 motives, 3 minors each"
+        (let ((e (env_of (add (empty_env) Nil 0 (mutual_decl)))))
+          (match (rec_of e (n2 (quote A) (quote rec)))
+            ((Some i) (match (rec_of e (n2 (quote B) (quote rec)))
+                        ((Some j) (bool_and (int_eq (rec_nmotives i) 2) (bool_and (int_eq (rec_nminors i) 3) (bool_and (int_eq (rec_nmotives j) 2) (int_eq (rec_nminors j) 3)))))
+                        (None False)))
+            (None False))))
+      (Case "mutual motives named motive_1, motive_2"
+        (match (rec_of (env_of (add (empty_env) Nil 0 (mutual_decl))) (n2 (quote A) (quote rec)))
+          ((Some i) (match (ci_type i) ((Pi n _ _ (Pi m _ _ _)) (bool_and (name_eq n (n1 (quote motive_1))) (name_eq m (n1 (quote motive_2))))) (_ False)))
+          (None False)))
+      (Case "reflexive T admitted and flagged" (match (ind_flags (env_of (add ne Nil 0 (refl_decl))) (nm_t)) ((Pair r f) (bool_and r f))))
+      (Case "reflexive ih is function-typed"
+        (match (rec_of (env_of (add ne Nil 0 (refl_decl))) (n2 (quote T) (quote rec)))
+          ((Some i) (match (ci_type i) ((Pi _ _ _ (Pi _ _ minor _)) (match minor ((Pi _ _ _ (Pi _ _ ih _)) (is_pi ih)) (_ False))) (_ False)))
+          (None False)))
+      (Case "non-positive occurrence rejected" (rejected (add ne Nil 0 (bad_decl)) (quote non_positive_occurrence)))
+      (Case "field universe too big rejected" (rejected (add (empty_env) Nil 0 (big_decl)) (quote field_universe_too_big)))
+      (Case "constructor result with the wrong params rejected" (rejected (add ne Nil 1 (q_decl)) (quote invalid_ctor_result)))
+      (Case "a Type field in a Type inductive: universe check fires first" (rejected (add (empty_env) Nil 1 (q_big_decl)) (quote field_universe_too_big)))
+      (Case "redeclaration rejected" (rejected (add ne Nil 0 (dup_decl)) (quote already_declared)))
+      (Case "ctor universe check: Prop-valued type may hold a Type field"
+        (accepted (add (empty_env) Nil 0 (list (InductiveType (n1 (quote Ex)) (Sort LZero) (list (Constructor (n2 (quote Ex) (quote mk)) (arrow (type1) (Const (n1 (quote Ex)) Nil))))))))))))
+
+(fn run ((cs (List Case)) (fails Int) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil (exit fails (write_line (append "inductive_test: failures = " (show_int fails)) w)))
+    ((Cons (Case name ok) r)
+     (run r (if ok fails (+ fails 1)) (write_line (append (if ok "PASS " "FAIL ") name) w)))))
+
+(fn main ((w World)) World (run (cases) 0 w))
