@@ -70,7 +70,7 @@ toolchain's export into `.shard-cache/v3-export/`, reused by pin),
 `v3/t0_full.sh` (fixture + chunks 0–4 byte-tie, then the full replay
 against the pinned verdict line `v3/t0_expected.txt`, peak resident set
 reported); the `v3` CI job runs `v3/test.sh` and then all three on the
-high-memory runner. Not yet: the rest of the export
+high-memory runner (first pass 2026-09-07: 43 min, 30.4 GB peak). Not yet: the rest of the export
 (≈6.5M lines; runs on prefixes are measured first), the six
 later-declared accelerator pins. **Nested
 inductives validated:** `Lean.Syntax` (export line 78,503; two levels of

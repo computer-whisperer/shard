@@ -704,7 +704,8 @@ is `docs/FOUNDATION.md` §5.3.
   `.shard-cache/v3-export/`, reused by a pin marker), `v3/t0_full.sh`
   (fixture and chunks 0–4 verbose byte-tie, then the full replay under an
   RSS watchdog against `v3/t0_expected.txt` = the 57,977 line; locally
-  745 s, 30.2 GB peak), and the
+  745 s, 30.2 GB peak; the first CI pass, pipeline 448 on the high-cpu
+  runner: 2,564 s, 30.4 GB peak, the export built there in 74 s), and the
   `v3` CI job (gate stage, high-cpu, needs the engine artifacts, the
   export in the runner-local cache). `bin/shard_eval` rebuilt on the dev
   box (stamp a3c9a930…, 16 s fast-boot; its lower and codegen outputs on
