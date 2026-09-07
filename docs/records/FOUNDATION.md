@@ -583,8 +583,34 @@ is `docs/FOUNDATION.md` §5.3.
   the formerly exhausted declaration checks in about 20 s. Cost of the
   large chunks: 18 (the 19.5M-node tree) 143 s, 21 77 s — checkable,
   not yet cheap.
+- **Where the large declarations spend their time (2026-09-07):** chunk
+  18's 140 s is three private omega-style proofs of
+  `Array.extract_append_extract` (66 / 52 / 27 s; trees of 12.5M / 5.5M
+  / 1.3M nodes over DAGs of 24.5k / 11.3k / 5.7k). A differential
+  dispatch profile (chunks 0–18 minus 0–17) shows the checker's
+  procedures run DAG-many times (infer +127k, is_def_eq +81k, whnf_core
+  +525k, instantiate calls +172k) — the memo tables hold — while the
+  work inside them is large: instantiate averages 68 visits and 36 new
+  nodes per call (11.8M visits), and structural equality runs 37M
+  calls, about 75 nodes per memo lookup, because these terms have big
+  open parts under up to 15 nested binders. The pin's per-traversal
+  cache (replace_rec_fn, keyed on node and offset) was built and
+  measured — it works (a shared open subterm is rebuilt once) but the
+  outer instantiate it would help costs only 23k rebuilds by the DAG
+  model; unconditionally it made chunks 0–4 67 → 96 s and chunk 18 140
+  → 207 s through trie inserts (about 300 dispatches each at the
+  interpreter's ~4.4M dispatches/s), and no threshold recovered it, so
+  it is not in the tree. Conclusion: no sharing blowup remains; the
+  large declarations cost the interpreter's constant factor on the
+  pin's own algorithm (about 3.5 ms per DAG node against 0.3 ms on
+  ordinary declarations). Remaining route-3 levers are constant
+  factors: name equality (20M calls in the chunk) and level-list
+  equality (10M) before a hash short-circuit, the linear `nth` on the
+  substitution (12.8M), and the JSON reader as the flat floor.
 - **Open in phase 1:** the full-export run and its cost measurement
-  (chunks 0–24 done; 25–324 next), the six accelerator pins
+  (chunks 0–24 done; 25–324 next — a multi-hour run whose environment
+  and tables grow with the export: 2.6 GB resident at chunk 20), the
+  six accelerator pins
   declared 24k–700k lines into the export, the `use`-free toolchain
   profile's gate moving to CI, the per-traversal caches of the pin's
   `replace_rec_fn` if a profile shows instantiate dominating.
