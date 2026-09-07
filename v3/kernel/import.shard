@@ -436,10 +436,10 @@
     ((KFail (FRej reason)) (Pair (run_count r 1) (VReject reason (decl_name d))))
     ((KFail (FOut res site)) (Pair (run_count r 2) (VExhaust res site (decl_name d))))))
 
-(fn process_record ((r Run) (line (List Int))) (Pair Run Verdict)
-  (match (json_parse line)
-    (JErr (Pair r (VMalformed "json")))
-    ((JRes j _)
+(fn process_record ((r Run) (j Json)) (Pair Run Verdict)
+  (match j
+    (JNull (Pair r (VMalformed "json")))
+    (_
      (match (jkind_of_record j)
        (None (Pair r (VMalformed "kind")))
        ((Some kind)
@@ -448,17 +448,15 @@
           (match (inductive_parts j)
             (None (Pair r (VMalformed "inductive")))
             ((Some (Pair ts (Pair cs rs)))
-             (if (lt 0 (nested_count ts))
-               (Pair (run_count r 4) (VUnsupported (quote nested_inductive) (first_type_name (run_tabs r) ts)))
-               (match (induct_decl_of (run_tabs r) ts cs)
-                 (None (Pair r (VMalformed "inductive-decl")))
-                 ((Some d)
-                  (match (check_into r d)
-                    ((Pair r1 (VAccept n))
-                     (match (validate_inductive (run_tabs r1) (run_env r1) ts cs rs)
-                       (None (Pair r1 (VAccept n)))
-                       ((Some s) (Pair (run_count r1 3) (VMismatch n s)))))
-                    ((Pair r1 v) (Pair r1 v))))))))
+             (match (induct_decl_of (run_tabs r) ts cs)
+               (None (Pair r (VMalformed "inductive-decl")))
+               ((Some d)
+                (match (check_into r d)
+                  ((Pair r1 (VAccept n))
+                   (match (validate_inductive (run_tabs r1) (run_env r1) ts cs rs)
+                     (None (Pair r1 (VAccept n)))
+                     ((Some s) (Pair (run_count r1 3) (VMismatch n s)))))
+                  ((Pair r1 v) (Pair r1 v)))))))
         (if (int_list_eq kind "quot")
           (match (quot_record (run_tabs r) (run_env r) (run_st r) j)
             ((Pair (KFail (FRej reason)) _) (Pair (run_count r 1) (VReject reason (nm_quot))))
@@ -497,22 +495,21 @@
     ((VMalformed k) (Some (append "MALFORMED " k)))))
 
 ;; process every line of a chunk; verbose = print ACCEPT lines too
-(fn process_lines ((r Run) (bs (List Int)) (verbose Bool) (w World)) (Pair Run World)
-  (measure (struct bs))
-  (match bs
-    (Nil (Pair r w))
-    (_
-     (match (take_line bs Nil)
-       ((Pair line rest)
-        (match line
-          (Nil (process_lines r rest verbose w))
-          (_
-           (match (process_record r line)
-             ((Pair r1 v)
-              (let ((w1 (match (show_verdict v)
-                          (None w)
-                          ((Some s) (match v ((VAccept _) (if verbose (write_line s w) w)) (_ (write_line s w)))))))
-                (process_lines r1 rest verbose w1)))))))))))
+(fn process_lines ((r Run) (bs0 (List Int)) (verbose Bool) (w World)) (Pair Run World)
+  (measure (struct bs0))
+  (let ((bs (skip_ws bs0)))
+    (match bs
+      (Nil (Pair r w))
+      (_
+       (match (json_parse bs)
+         (JErr (Pair r (write_line "MALFORMED json (stream)" w)))
+         ((JRes j rest)
+          (match (process_record r j)
+            ((Pair r1 v)
+             (let ((w1 (match (show_verdict v)
+                         (None w)
+                         ((Some s) (match v ((VAccept _) (if verbose (write_line s w) w)) (_ (write_line s w)))))))
+               (process_lines r1 rest verbose w1))))))))))
 
 (fn show_counts ((r Run)) (List Int)
   (match (run_counts r)
@@ -521,7 +518,7 @@
        (append "  mismatched " (append (show_nat d) (append "  unsupported " (show_nat e)))))))))))
     (_ "")))
 
-(fn empty_run ((pins_mode Bool)) Run (Run (Tabs IMEmpty IMEmpty IMEmpty) (CheckedEnv Nil False Nil) (St 0 0) 0 0 0 0 0 pins_mode))
+(fn empty_run ((pins_mode Bool)) Run (Run (Tabs IMEmpty IMEmpty IMEmpty) (CheckedEnv IMEmpty False Nil) (St 0 0) 0 0 0 0 0 pins_mode))
 
 ;; pins mode (gen_pins.sh): every candidate is pinned as admitted — the
 ;; run that PRODUCES the table from the pinned export; never a checking run

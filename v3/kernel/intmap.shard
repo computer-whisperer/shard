@@ -1,32 +1,37 @@
 ;;; v3/kernel/intmap.shard — a persistent map keyed by nonnegative Int: a
-;;; binary trie over the key's bits (LSB first), O(log key) lookup and
-;;; insert, no rebalancing. Used for the export tables (names, levels,
-;;; terms by index) and, later, for K's memo tables.
+;;; 4-ary trie over the key's bits (two bits per level, LSB first; bit
+;;; operations, never division), O(log₄ key) lookup and insert, no
+;;; rebalancing. Used for the export tables (names, levels, terms by
+;;; index), the environment (by name hash) and, later, K's memo tables.
 
 (import "prelude.shard")
 
 (type (IntMap V)
   (IMEmpty)
-  (IMNode (Option V) (IntMap V) (IntMap V)))   ; value at this key; children for bit 0 / bit 1
+  (IMNode (Option V) (IntMap V) (IntMap V) (IntMap V) (IntMap V)))   ; value at this key; children for the low two bits 0..3
 
 (fn im_find ((m (IntMap V)) (k Int)) (Option V)
   (measure k)
   (match m
     (IMEmpty None)
-    ((IMNode v z o)
+    ((IMNode v c0 c1 c2 c3)
      (if (int_eq k 0) v
-       (if (int_eq (mod k 2) 0) (im_find z (ediv k 2)) (im_find o (ediv k 2)))))))
+       (let ((b (band k 3)) (r (bshr k 2)))
+         (if (int_eq b 0) (im_find c0 r)
+         (if (int_eq b 1) (im_find c1 r)
+         (if (int_eq b 2) (im_find c2 r)
+         (im_find c3 r)))))))))
 
-;; keys are read as: bit 0 selects the child, the remaining bits index into it;
-;; key 0 is stored at the node itself. Only keys ≥ 0 are ever used.
+;; key 0 is stored at the node itself; the low two bits select the child
+;; and the remaining bits index into it. Only keys ≥ 0 are ever used.
 (fn im_insert ((m (IntMap V)) (k Int) (v V)) (IntMap V)
   (measure k)
   (match m
-    (IMEmpty
-     (if (int_eq k 0) (IMNode (Some v) IMEmpty IMEmpty)
-       (if (int_eq (mod k 2) 0) (IMNode None (im_insert IMEmpty (ediv k 2) v) IMEmpty)
-         (IMNode None IMEmpty (im_insert IMEmpty (ediv k 2) v)))))
-    ((IMNode w z o)
-     (if (int_eq k 0) (IMNode (Some v) z o)
-       (if (int_eq (mod k 2) 0) (IMNode w (im_insert z (ediv k 2) v) o)
-         (IMNode w z (im_insert o (ediv k 2) v)))))))
+    (IMEmpty (im_insert (IMNode None IMEmpty IMEmpty IMEmpty IMEmpty) k v))
+    ((IMNode w c0 c1 c2 c3)
+     (if (int_eq k 0) (IMNode (Some v) c0 c1 c2 c3)
+       (let ((b (band k 3)) (r (bshr k 2)))
+         (if (int_eq b 0) (IMNode w (im_insert c0 r v) c1 c2 c3)
+         (if (int_eq b 1) (IMNode w c0 (im_insert c1 r v) c2 c3)
+         (if (int_eq b 2) (IMNode w c0 c1 (im_insert c2 r v) c3)
+         (IMNode w c0 c1 c2 (im_insert c3 r v))))))))))
