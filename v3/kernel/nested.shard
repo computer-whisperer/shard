@@ -1,0 +1,674 @@
+;;; v3/kernel/nested.shard — nested inductive types: elimination into
+;;; auxiliary mutual types, admission, and restoration; plus the uniform
+;;; occurrence check. After src/kernel/inductive.cpp at v4.33.1:
+;;; `check_uniform_ind_occs` (l. 134), `elim_nested_inductive_fn`
+;;; (l. 1000–1220), `restore_nested` (l. 927), `mk_aux_rec_name_map`
+;;; (l. 1183), `environment::add_inductive` (l. 1235). `add_inductive`
+;;; below is the entry `add.shard` dispatches to.
+
+(import "inductive.shard")
+
+(fn nm_nested () Name (n1 (quote _nested)))
+
+;; is_prefix_of(_nested, n): n's root component is `_nested`
+(fn has_nested_prefix ((n Name)) Bool
+  (measure (struct n))
+  (match n
+    (Anon False)
+    ((Str Anon s) (sym_eq s (quote _nested)))
+    ((Str p _) (has_nested_prefix p))
+    ((Num p _) (has_nested_prefix p))))
+
+;; check_no_nested_aux (l. 1222): no constant or projection naming an auxiliary type
+(fn mentions_nested_aux ((e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((Const n _) (has_nested_prefix n))
+    ((Proj s _ x) (bool_or (has_nested_prefix s) (mentions_nested_aux x)))
+    ((App f a) (bool_or (mentions_nested_aux f) (mentions_nested_aux a)))
+    ((Lam _ _ d b) (bool_or (mentions_nested_aux d) (mentions_nested_aux b)))
+    ((Pi _ _ d b) (bool_or (mentions_nested_aux d) (mentions_nested_aux b)))
+    ((Let _ t v b) (bool_or (bool_or (mentions_nested_aux t) (mentions_nested_aux v)) (mentions_nested_aux b)))
+    (_ False)))
+
+;; name concatenation `_nested ++ J` (name + name)
+(fn name_concat ((p Name) (n Name)) Name
+  (measure (struct n))
+  (match n
+    (Anon p)
+    ((Str q s) (Str (name_concat p q) s))
+    ((Num q k) (Num (name_concat p q) k))))
+
+;; ---- check_uniform_ind_occs (l. 134) ----------------------------------------------------
+;; every syntactic occurrence of a declared type in a constructor type is
+;; applied to the declaration's levels and, at binder depth `offset`, to
+;; the parameter bvars #(offset−1) … #(offset−nparams)
+
+(fn check_uniform ((lps (List Name)) (nparams Int) (types (List InductiveType))) (Option Failure)
+  (cu_types (params_to_levels lps) nparams (all_names types) types))
+
+(fn cu_types ((lvls (List Level)) (nparams Int) (names (List Name)) (ts (List InductiveType))) (Option Failure)
+  (measure (struct ts))
+  (match ts
+    (Nil None)
+    ((Cons t r)
+     (match (cu_ctors lvls nparams names (it_ctors t))
+       ((Some f) (Some f))
+       (None (cu_types lvls nparams names r))))))
+
+(fn cu_ctors ((lvls (List Level)) (nparams Int) (names (List Name)) (cs (List Constructor))) (Option Failure)
+  (measure (struct cs))
+  (match cs
+    (Nil None)
+    ((Cons c r)
+     (if (cu_expr lvls nparams names (ctor_type c) 0) (cu_ctors lvls nparams names r)
+       (Some (FRej (RuleViolation (quote non_uniform_occurrence))))))))
+
+;; True if every occurrence in e (at binder depth offset) is uniform
+(fn cu_expr ((lvls (List Level)) (nparams Int) (names (List Name)) (e Expr) (offset Int)) Bool
+  (measure (struct e))
+  (match (get_app_fn e)
+    ((Const n ls)
+     (if (bool_not (mem_name n names)) (cu_children lvls nparams names e offset)
+     (let ((args (get_app_args e)))
+       (if (lt nparams (len args)) (cu_children lvls nparams names e offset)   ; over-applied: descend
+       (bool_and (int_eq (len args) nparams)
+         (bool_and (le nparams offset)
+           (bool_and (levels_eq ls lvls) (cu_param_bvars args offset 0))))))))
+    (_ (cu_children lvls nparams names e offset))))
+
+(fn cu_param_bvars ((args (List Expr)) (offset Int) (i Int)) Bool
+  (measure (struct args))
+  (match args
+    (Nil True)
+    ((Cons a r)
+     (match a
+       ((BVar k) (if (int_eq k (- (- offset 1) i)) (cu_param_bvars r offset (+ i 1)) False))
+       (_ False)))))
+
+(fn cu_children ((lvls (List Level)) (nparams Int) (names (List Name)) (e Expr) (offset Int)) Bool
+  (measure (struct e))
+  (match e
+    ((App f a) (bool_and (cu_expr lvls nparams names f offset) (cu_expr lvls nparams names a offset)))
+    ((Lam _ _ d b) (bool_and (cu_expr lvls nparams names d offset) (cu_expr lvls nparams names b (+ offset 1))))
+    ((Pi _ _ d b) (bool_and (cu_expr lvls nparams names d offset) (cu_expr lvls nparams names b (+ offset 1))))
+    ((Let _ t v b) (bool_and (bool_and (cu_expr lvls nparams names t offset) (cu_expr lvls nparams names v offset)) (cu_expr lvls nparams names b (+ offset 1))))
+    ((Proj _ _ x) (cu_expr lvls nparams names x offset))
+    (_ True)))
+
+;; ---- elim_nested_inductive_fn (l. 1000) ----------------------------------------------------
+
+;; the elimination state
+(type N
+  (N CheckedEnv                 ; 0 env (the original)
+     St                         ; 1 fresh ids
+     (List LDecl)               ; 2 lctx (params and per-constructor As)
+     (List Level)               ; 3 the declaration's levels
+     (List Expr)                ; 4 params (fvars, from the first type)
+     (List (Pair Expr Name))    ; 5 nested_aux: (I Ds over params, aux name)
+     (List InductiveType)       ; 6 new_types (worklist; grows)
+     Int))                      ; 7 next_idx
+
+(fn n_env ((n N)) CheckedEnv (match n ((N e _ _ _ _ _ _ _) e)))
+(fn n_st ((n N)) St (match n ((N _ s _ _ _ _ _ _) s)))
+(fn n_lctx ((n N)) (List LDecl) (match n ((N _ _ l _ _ _ _ _) l)))
+(fn n_lvls ((n N)) (List Level) (match n ((N _ _ _ v _ _ _ _) v)))
+(fn n_params ((n N)) (List Expr) (match n ((N _ _ _ _ p _ _ _) p)))
+(fn n_aux ((n N)) (List (Pair Expr Name)) (match n ((N _ _ _ _ _ a _ _) a)))
+(fn n_types ((n N)) (List InductiveType) (match n ((N _ _ _ _ _ _ t _) t)))
+(fn n_next ((n N)) Int (match n ((N _ _ _ _ _ _ _ i) i)))
+(fn n_set_st_lctx ((n N) (s St) (l (List LDecl))) N (match n ((N e _ _ v p a t i) (N e s l v p a t i))))
+(fn n_set_params ((n N) (p (List Expr))) N (match n ((N e s l v _ a t i) (N e s l v p a t i))))
+(fn n_add_aux ((n N) (x (Pair Expr Name))) N (match n ((N e s l v p a t i) (N e s l v p (append a (Cons x Nil)) t i))))
+(fn n_add_type ((n N) (x InductiveType)) N (match n ((N e s l v p a t i) (N e s l v p a (append t (Cons x Nil)) i))))
+(fn n_set_type ((n N) (idx Int) (x InductiveType)) N (match n ((N e s l v p a t i) (N e s l v p a (set_nth t idx x) t_i_dummy))))
+(fn t_i_dummy () Int 0)
+(fn n_set_next ((n N) (i Int)) N (match n ((N e s l v p a t _) (N e s l v p a t i))))
+
+(fn set_nth ((xs (List T)) (i Int) (x T)) (List T)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons y r) (if (int_eq i 0) (Cons x r) (Cons y (set_nth r (- i 1) x))))))
+
+(fn n_ctx ((n N)) Ctx (Ctx (n_env n) (n_lctx n) None Safe False (budget_ticks)))
+
+;; a fresh local (no type annotations consumed here: the pin's mk_local_decl in this class)
+(fn n_local ((n N) (nm Name) (ty Expr) (bi BinderInfo)) (Pair N Expr)
+  (match (mk_local (n_ctx n) (n_st n) nm ty None bi)
+    ((Loc c st fv) (Pair (n_set_st_lctx n st (ctx_lctx c)) fv))))
+
+(fn n_mk_pi ((n N) (fvars (List Expr)) (b Expr)) Expr (mk_binding (n_ctx n) False fvars b False))
+(fn n_mk_lambda ((n N) (fvars (List Expr)) (b Expr)) Expr (mk_binding (n_ctx n) True fvars b False))
+
+;; get_params (l. 1138): open nparams binders of a type as locals; (n, (locals, rest))
+(fn get_params ((n N) (ty Expr) (k Int) (acc (List Expr))) (KRes (Pair N (Pair (List Expr) Expr)))
+  (measure k)
+  (if (le k 0) (KOk (n_st n) (Pair n (Pair (rev acc) ty)))
+  (match ty
+    ((Pi nm bi dom body)
+     (match (n_local n nm dom bi)
+       ((Pair n1 x) (get_params n1 (instantiate1 body x) (- k 1) (Cons x acc)))))
+    (_ (KFail (FRej (RuleViolation (quote param_count_mismatch))))))))
+
+;; mk_unique_name (l. 1005): n_idx, n_(idx+1), … not in the environment
+(fn mk_unique_name ((n N) (base Name)) (Pair N Name)
+  (let ((cand (name_append_after base (n_next n))))
+    (match (env_find (n_env n) cand)
+      (None (Pair (n_set_next n (+ (n_next n) 1)) cand))
+      ((Some _) (mk_unique_name (n_set_next n (+ (n_next n) 1)) base)))))
+
+;; replace_params (l. 1013): the constructor's own param locals As ↦ the shared params
+(fn replace_params ((n N) (e Expr) (as (List Expr))) Expr
+  (instantiate_rev (abstract_fvars e (fvar_ids as)) (n_params n)))
+
+;; instantiate_pi_params (l. 1057): strip nparams Pis, instantiate them with Ds
+(fn instantiate_pi_params ((e Expr) (k Int) (ds (List Expr))) (Option Expr)
+  (measure k)
+  (if (le k 0) (Some (instantiate_rev e ds))
+  (match e ((Pi _ _ _ body) (instantiate_pi_params body (- k 1) ds)) (_ None))))
+
+(fn declared_name ((n N) (nm Name)) Bool (mem_name nm (all_names (n_types n))))
+
+;; does e mention a type being declared (including the aux types)?
+(fn mentions_declared ((n N) (e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((Const nm _) (declared_name n nm))
+    ((App f a) (bool_or (mentions_declared n f) (mentions_declared n a)))
+    ((Lam _ _ d b) (bool_or (mentions_declared n d) (mentions_declared n b)))
+    ((Pi _ _ d b) (bool_or (mentions_declared n d) (mentions_declared n b)))
+    ((Let _ t v b) (bool_or (bool_or (mentions_declared n t) (mentions_declared n v)) (mentions_declared n b)))
+    ((Proj _ _ x) (mentions_declared n x))
+    (_ False)))
+
+(fn any_mentions_declared ((n N) (es (List Expr))) Bool
+  (measure (struct es))
+  (match es (Nil False) ((Cons e r) (bool_or (mentions_declared n e) (any_mentions_declared n r)))))
+(fn any_loose ((es (List Expr))) Bool
+  (measure (struct es))
+  (match es (Nil False) ((Cons e r) (bool_or (has_loose_bvars e) (any_loose r)))))
+
+;; is_nested_inductive_app (l. 1023): `I Ds is`, I a previously declared
+;; inductive, Ds mention a declared type and have no loose bvars →
+;; (I's name, levels, nparams, all)
+(fn nested_app ((n N) (e Expr)) (KRes (Option (Pair Name (Pair (List Level) (Pair Int (List Name))))))
+  (if (bool_not (is_app e)) (KOk (n_st n) None)
+  (match (get_app_fn e)
+    ((Const iname ls)
+     (match (env_find (n_env n) iname)
+       ((Some (InductInfo _ nparams _ all _ _ _ _ _))
+        (let ((args (get_app_args e)))
+          (if (lt (len args) nparams) (KOk (n_st n) None)
+          (let ((ds (take nparams args)))
+            (if (bool_not (any_mentions_declared n ds)) (KOk (n_st n) None)
+            (if (any_loose ds) (KFail (FRej (RuleViolation (quote nested_params_with_locals))))
+            (KOk (n_st n) (Some (Pair iname (Pair ls (Pair nparams all)))))))))))
+       (_ (KOk (n_st n) None))))
+    (_ (KOk (n_st n) None)))))
+
+(fn find_aux ((aux (List (Pair Expr Name))) (key Expr)) (Option Name)
+  (measure (struct aux))
+  (match aux
+    (Nil None)
+    ((Cons (Pair k nm) r) (if (expr_eq k key) (Some nm) (find_aux r key)))))
+
+;; replace_if_nested (l. 1066): the replacement for e, if it is a nested occurrence
+(fn replace_if_nested ((n N) (as (List Expr)) (e Expr)) (KRes (Pair N (Option Expr)))
+  (match (nested_app n e)
+    ((KFail f) (KFail f))
+    ((KOk _ None) (KOk (n_st n) (Pair n None)))
+    ((KOk _ (Some (Pair iname (Pair ls (Pair inparams all)))))
+     (let ((args (get_app_args e)))
+       (let ((ds (take inparams args)) (rest (drop inparams args))
+             (key (replace_params n (mk_app_list (Const iname ls) (take inparams args)) as)))
+         (match (find_aux (n_aux n) key)
+           ((Some auxi) (KOk (n_st n) (Pair n (Some (mk_app_list (mk_app_list (Const auxi (n_lvls n)) as) rest)))))
+           (None
+            (match (create_aux_types n as iname ls inparams ds all None)
+              ((KFail f) (KFail f))
+              ((KOk _ (Pair n1 (Some auxi))) (KOk (n_st n1) (Pair n1 (Some (mk_app_list (mk_app_list (Const auxi (n_lvls n1)) as) rest)))))
+              ((KOk _ (Pair n1 None)) (KFail (FRej (Malformed (quote nested_aux)))))))))))))
+
+;; l. 1093–1128: for every J in I's mutual block, an auxiliary type
+;; auxJ with J's type and constructors instantiated at Ds, over As
+(fn create_aux_types ((n N) (as (List Expr)) (iname Name) (ls (List Level)) (inparams Int) (ds (List Expr)) (all (List Name)) (result (Option Name))) (KRes (Pair N (Option Name)))
+  (measure (struct all))
+  (match all
+    (Nil (KOk (n_st n) (Pair n result)))
+    ((Cons jname r)
+     (match (env_find (n_env n) jname)
+       ((Some (InductInfo (ConstantVal _ jlps jty) _ _ _ jctors _ _ _ _))
+        (match (mk_unique_name n (name_concat (nm_nested) jname))
+          ((Pair n1 auxj)
+           (match (instantiate_pi_params (expr_inst_lparams jty jlps ls) inparams ds)
+             (None (KFail (FRej (Malformed (quote nested_type_arity)))))
+             ((Some jty1)
+              (let ((auxj_type (n_mk_pi n1 as jty1))
+                    (n2 (n_add_aux n1 (Pair (replace_params n1 (mk_app_list (Const jname ls) ds) as) auxj))))
+                (match (aux_ctors n2 as jname auxj ls inparams ds jctors Nil)
+                  ((KFail f) (KFail f))
+                  ((KOk _ (Pair n3 ctors))
+                   (create_aux_types (n_add_type n3 (InductiveType auxj auxj_type ctors)) as iname ls inparams ds r
+                                     (if (name_eq jname iname) (Some auxj) result))))))))))
+       (_ (KFail (FRej (Malformed (quote nested_missing_type)))))))))
+
+(fn aux_ctors ((n N) (as (List Expr)) (jname Name) (auxj Name) (ls (List Level)) (inparams Int) (ds (List Expr)) (cnames (List Name)) (acc (List Constructor))) (KRes (Pair N (List Constructor)))
+  (measure (struct cnames))
+  (match cnames
+    (Nil (KOk (n_st n) (Pair n (rev acc))))
+    ((Cons cn r)
+     (match (env_find (n_env n) cn)
+       ((Some (CtorInfo (ConstantVal _ clps cty) _ _ _ _ _))
+        (match (instantiate_pi_params (expr_inst_lparams cty clps ls) inparams ds)
+          (None (KFail (FRej (Malformed (quote nested_ctor_arity)))))
+          ((Some cty1)
+           (aux_ctors n as jname auxj ls inparams ds r
+                      (Cons (Constructor (name_replace_prefix cn jname auxj) (n_mk_pi n as cty1)) acc)))))
+       (_ (KFail (FRej (Malformed (quote nested_missing_ctor)))))))))
+
+;; replace_all_nested (l. 1134): top-down; a replaced subterm is not descended into
+(fn replace_all_nested ((n N) (as (List Expr)) (e Expr)) (KRes (Pair N Expr))
+  (measure (struct e))
+  (match (replace_if_nested n as e)
+    ((KFail f) (KFail f))
+    ((KOk _ (Pair n1 (Some e1))) (KOk (n_st n1) (Pair n1 e1)))
+    ((KOk _ (Pair n1 None))
+     (match e
+       ((App f a)
+        (match (replace_all_nested n1 as f)
+          ((KFail x) (KFail x))
+          ((KOk _ (Pair n2 f1))
+           (match (replace_all_nested n2 as a)
+             ((KFail x) (KFail x))
+             ((KOk _ (Pair n3 a1)) (KOk (n_st n3) (Pair n3 (App f1 a1))))))))
+       ((Lam nm bi d b)
+        (match (replace_all_nested n1 as d)
+          ((KFail x) (KFail x))
+          ((KOk _ (Pair n2 d1))
+           (match (replace_all_nested n2 as b)
+             ((KFail x) (KFail x))
+             ((KOk _ (Pair n3 b1)) (KOk (n_st n3) (Pair n3 (Lam nm bi d1 b1))))))))
+       ((Pi nm bi d b)
+        (match (replace_all_nested n1 as d)
+          ((KFail x) (KFail x))
+          ((KOk _ (Pair n2 d1))
+           (match (replace_all_nested n2 as b)
+             ((KFail x) (KFail x))
+             ((KOk _ (Pair n3 b1)) (KOk (n_st n3) (Pair n3 (Pi nm bi d1 b1))))))))
+       ((Let nm t v b)
+        (match (replace_all_nested n1 as t)
+          ((KFail x) (KFail x))
+          ((KOk _ (Pair n2 t1))
+           (match (replace_all_nested n2 as v)
+             ((KFail x) (KFail x))
+             ((KOk _ (Pair n3 v1))
+              (match (replace_all_nested n3 as b)
+                ((KFail x) (KFail x))
+                ((KOk _ (Pair n4 b1)) (KOk (n_st n4) (Pair n4 (Let nm t1 v1 b1))))))))))
+       ((Proj s i x)
+        (match (replace_all_nested n1 as x)
+          ((KFail y) (KFail y))
+          ((KOk _ (Pair n2 x1)) (KOk (n_st n2) (Pair n2 (Proj s i x1))))))
+       (_ (KOk (n_st n1) (Pair n1 e)))))))
+
+;; the worklist (l. 1153–1175): process type qhead's constructors, then the next
+(fn elim_worklist ((n N) (qhead Int) (nparams Int)) (KRes N)
+  (measure (- 100000 qhead))
+  (match (nth (n_types n) qhead)
+    (None (KOk (n_st n) n))
+    ((Some t)
+     (match (elim_ctors n (it_ctors t) nparams Nil)
+       ((KFail f) (KFail f))
+       ((KOk _ (Pair n1 ctors))
+        (elim_worklist (n_set_type n1 qhead (InductiveType (it_name t) (it_type t) ctors)) (+ qhead 1) nparams))))))
+
+(fn elim_ctors ((n N) (cs (List Constructor)) (nparams Int) (acc (List Constructor))) (KRes (Pair N (List Constructor)))
+  (measure (struct cs))
+  (match cs
+    (Nil (KOk (n_st n) (Pair n (rev acc))))
+    ((Cons c r)
+     ;; re-create the params for each constructor (binder infos preserved)
+     (match (get_params n (ctor_type c) nparams Nil)
+       ((KFail f) (KFail f))
+       ((KOk _ (Pair n1 (Pair as body)))
+        (match (replace_all_nested n1 as body)
+          ((KFail f) (KFail f))
+          ((KOk _ (Pair n2 body1))
+           (elim_ctors n2 r nparams (Cons (Constructor (ctor_name c) (n_mk_pi n2 as body1)) acc)))))))))
+
+;; ---- restore_nested (l. 927) ------------------------------------------------------------------
+
+;; the restoration state: the original env, params, aux2nested, the aux rec name map
+(type R (R CheckedEnv St (List LDecl) (List Expr) (List (Pair Expr Name)) (List (Pair Name Name))))
+(fn r_env ((r R)) CheckedEnv (match r ((R e _ _ _ _ _) e)))
+(fn r_st ((r R)) St (match r ((R _ s _ _ _ _) s)))
+(fn r_lctx ((r R)) (List LDecl) (match r ((R _ _ l _ _ _) l)))
+(fn r_params ((r R)) (List Expr) (match r ((R _ _ _ p _ _) p)))
+(fn r_aux ((r R)) (List (Pair Expr Name)) (match r ((R _ _ _ _ a _) a)))
+(fn r_recmap ((r R)) (List (Pair Name Name)) (match r ((R _ _ _ _ _ m) m)))
+(fn r_set_st_lctx ((r R) (s St) (l (List LDecl))) R (match r ((R e _ _ p a m) (R e s l p a m))))
+(fn r_ctx ((r R)) Ctx (Ctx (r_env r) (r_lctx r) None Safe False (budget_ticks)))
+(fn r_local ((r R) (nm Name) (ty Expr) (bi BinderInfo)) (Pair R Expr)
+  (match (mk_local (r_ctx r) (r_st r) nm ty None bi)
+    ((Loc c st fv) (Pair (r_set_st_lctx r st (ctx_lctx c)) fv))))
+
+;; aux name → the nested `I Ds` (over the params)
+(fn aux_nested ((aux (List (Pair Expr Name))) (nm Name)) (Option Expr)
+  (measure (struct aux))
+  (match aux (Nil None) ((Cons (Pair e a) r) (if (name_eq a nm) (Some e) (aux_nested r nm)))))
+
+(fn lookup_name ((m (List (Pair Name Name))) (k Name)) (Option Name)
+  (measure (struct m))
+  (match m (Nil None) ((Cons (Pair a b) r) (if (name_eq a k) (Some b) (lookup_name r k)))))
+
+;; get_nested_if_aux_constructor (l. 946): a constructor of an aux type → (nested, aux type)
+(fn nested_if_aux_ctor ((r R) (aux_env CheckedEnv) (c Name)) (Option (Pair Expr Name))
+  (match (env_find aux_env c)
+    ((Some (CtorInfo _ induct _ _ _ _))
+     (match (aux_nested (r_aux r) induct) ((Some nested) (Some (Pair nested induct))) (None None)))
+    (_ None)))
+
+;; restore one term: open the params, rewrite, close (Pi if it was a Pi, else Lam)
+(fn restore_nested ((r R) (aux_env CheckedEnv) (e Expr)) (KRes (Pair R Expr))
+  (match (restore_open r e (len (r_params r)) Nil)
+    ((KFail f) (KFail f))
+    ((KOk _ (Pair r1 (Pair as body)))
+     (match (restore_rewrite r1 aux_env as body)
+       ((KFail f) (KFail f))
+       ((KOk _ body1)
+        (KOk (r_st r1) (Pair r1 (if (is_pi e) (mk_binding (r_ctx r1) False as body1 False) (mk_binding (r_ctx r1) True as body1 False)))))))))
+
+(fn restore_open ((r R) (e Expr) (k Int) (acc (List Expr))) (KRes (Pair R (Pair (List Expr) Expr)))
+  (measure k)
+  (if (le k 0) (KOk (r_st r) (Pair r (Pair (rev acc) e)))
+  (match e
+    ((Pi nm bi dom body) (match (r_local r nm dom bi) ((Pair r1 x) (restore_open r1 (instantiate1 body x) (- k 1) (Cons x acc)))))
+    ((Lam nm bi dom body) (match (r_local r nm dom bi) ((Pair r1 x) (restore_open r1 (instantiate1 body x) (- k 1) (Cons x acc)))))
+    (_ (KFail (FRej (RuleViolation (quote nested_restore_binders))))))))
+
+;; `replace` with the restoration callback (l. 936–971), top-down
+(fn restore_rewrite ((r R) (aux_env CheckedEnv) (as (List Expr)) (e Expr)) (KRes Expr)
+  (measure (struct e))
+  (match (restore_at r aux_env as e)
+    ((KFail f) (KFail f))
+    ((KOk _ (Some e1)) (KOk (r_st r) e1))
+    ((KOk _ None)
+     (match e
+       ((App f a)
+        (match (restore_rewrite r aux_env as f)
+          ((KFail x) (KFail x))
+          ((KOk _ f1) (match (restore_rewrite r aux_env as a) ((KFail x) (KFail x)) ((KOk _ a1) (KOk (r_st r) (App f1 a1)))))))
+       ((Lam nm bi d b)
+        (match (restore_rewrite r aux_env as d)
+          ((KFail x) (KFail x))
+          ((KOk _ d1) (match (restore_rewrite r aux_env as b) ((KFail x) (KFail x)) ((KOk _ b1) (KOk (r_st r) (Lam nm bi d1 b1)))))))
+       ((Pi nm bi d b)
+        (match (restore_rewrite r aux_env as d)
+          ((KFail x) (KFail x))
+          ((KOk _ d1) (match (restore_rewrite r aux_env as b) ((KFail x) (KFail x)) ((KOk _ b1) (KOk (r_st r) (Pi nm bi d1 b1)))))))
+       ((Let nm t v b)
+        (match (restore_rewrite r aux_env as t)
+          ((KFail x) (KFail x))
+          ((KOk _ t1)
+           (match (restore_rewrite r aux_env as v)
+             ((KFail x) (KFail x))
+             ((KOk _ v1) (match (restore_rewrite r aux_env as b) ((KFail x) (KFail x)) ((KOk _ b1) (KOk (r_st r) (Let nm t1 v1 b1)))))))))
+       ((Proj s i x) (match (restore_rewrite r aux_env as x) ((KFail y) (KFail y)) ((KOk _ x1) (KOk (r_st r) (Proj s i x1)))))
+       (_ (KOk (r_st r) e))))))
+
+;; the nested expr (over the params) re-expressed over this term's own As
+(fn over_as ((r R) (nested Expr) (as (List Expr))) Expr
+  (instantiate_rev (abstract_fvars nested (fvar_ids (r_params r))) as))
+
+(fn restore_at ((r R) (aux_env CheckedEnv) (as (List Expr)) (e Expr)) (KRes (Option Expr))
+  (let ((np (len (r_params r))))
+    (match e
+      ((Const c ls)
+       (match (lookup_name (r_recmap r) c)
+         ((Some c1) (KOk (r_st r) (Some (Const c1 ls))))
+         (None (restore_app r aux_env as e np))))
+      (_ (restore_app r aux_env as e np)))))
+
+(fn restore_app ((r R) (aux_env CheckedEnv) (as (List Expr)) (e Expr) (np Int)) (KRes (Option Expr))
+  (match (get_app_fn e)
+    ((Const fnn _)
+     (match (aux_nested (r_aux r) fnn)
+       ((Some nested)
+        (let ((args (get_app_args e)))
+          (if (lt (len args) np) (KFail (FRej (RuleViolation (quote nested_aux_underapplied))))
+            (KOk (r_st r) (Some (mk_app_list (over_as r nested as) (drop np args)))))))
+       (None
+        (match (nested_if_aux_ctor r aux_env fnn)
+          (None (KOk (r_st r) None))
+          ((Some (Pair nested auxi))
+           (let ((args (get_app_args e)))
+             (if (lt (len args) np) (KFail (FRej (RuleViolation (quote nested_aux_ctor_underapplied))))
+               (let ((new_nested (over_as r nested as)))
+                 (match (get_app_fn new_nested)
+                   ((Const iname ils)
+                    (KOk (r_st r) (Some (mk_app_list (mk_app_list (Const (name_replace_prefix fnn auxi iname) ils) (get_app_args new_nested)) (drop np args)))))
+                   (_ (KFail (FRej (RuleViolation (quote nested_not_inductive_app))))))))))))))
+    (_ (KOk (r_st r) None))))
+
+;; restore_constructor_name (l. 956)
+(fn restore_ctor_name ((r R) (aux_env CheckedEnv) (cn Name)) (Option Name)
+  (match (nested_if_aux_ctor r aux_env cn)
+    (None None)
+    ((Some (Pair nested auxi))
+     (match (get_app_fn nested) ((Const iname _) (Some (name_replace_prefix cn auxi iname))) (_ None)))))
+
+;; mk_aux_rec_name_map (l. 1183): the aux recursors become main.rec_1, main.rec_2, …
+(fn aux_rec_map ((all (List Name)) (ntypes Int) (main Name) (i Int) (next Int) (acc (List (Pair Name Name)))) (List (Pair Name Name))
+  (measure (struct all))
+  (match all
+    (Nil (rev acc))
+    ((Cons nm r)
+     (if (lt i ntypes) (aux_rec_map r ntypes main (+ i 1) next acc)
+       (aux_rec_map r ntypes main (+ i 1) (+ next 1) (Cons (Pair (mk_rec_name nm) (name_append_after (mk_rec_name main) next)) acc))))))
+
+;; ---- environment::add_inductive (l. 1235) --------------------------------------------------------
+
+(fn no_fvar_or_aux_types ((ts (List InductiveType))) (Option Failure)
+  (measure (struct ts))
+  (match ts
+    (Nil None)
+    ((Cons t r)
+     (if (has_fvar (it_type t)) (Some (FRej (Malformed (quote fvar_in_type))))
+     (if (mentions_nested_aux (it_type t)) (Some (FRej (RuleViolation (quote reserved_nested_prefix))))
+     (match (no_fvar_or_aux_ctors (it_ctors t)) ((Some f) (Some f)) (None (no_fvar_or_aux_types r))))))))
+(fn no_fvar_or_aux_ctors ((cs (List Constructor))) (Option Failure)
+  (measure (struct cs))
+  (match cs
+    (Nil None)
+    ((Cons c r)
+     (if (has_fvar (ctor_type c)) (Some (FRej (Malformed (quote fvar_in_type))))
+     (if (mentions_nested_aux (ctor_type c)) (Some (FRej (RuleViolation (quote reserved_nested_prefix))))
+     (no_fvar_or_aux_ctors r))))))
+
+(fn add_inductive ((env CheckedEnv) (st St) (lps (List Name)) (nparams Int) (types (List InductiveType)) (is_unsafe Bool)) (KRes CheckedEnv)
+  (match (no_fvar_or_aux_types types)
+    ((Some f) (KFail f))
+    (None
+     (match (check_uniform lps nparams types)
+       ((Some f) (KFail f))
+       (None
+        (match types
+          (Nil (KFail (FRej (RuleViolation (quote empty_inductive_block)))))
+          ((Cons t0 _)
+           (let ((n0 (N env st Nil (params_to_levels lps) Nil Nil types 1)))
+             (match (get_params n0 (it_type t0) nparams Nil)
+               ((KFail f) (KFail f))
+               ((KOk _ (Pair n1 (Pair params _)))
+                (match (elim_worklist (n_set_params n1 params) 0 nparams)
+                  ((KFail f) (KFail f))
+                  ((KOk _ n2)
+                   (let ((nnested (len (n_aux n2))))
+                     (match (add_inductive_core env (n_st n2) lps nparams (n_types n2) is_unsafe nnested)
+                       ((KFail f) (KFail f))
+                       ((KOk st1 aux_env)
+                        (if (int_eq nnested 0) (KOk st1 aux_env)
+                          (restore_all env st1 (n_lctx n2) params (n_aux n2) types lps aux_env is_unsafe)))))))))))))))))
+
+;; l. 1255–1345: rebuild the original types, constructors and recursors in
+;; the ORIGINAL environment from the auxiliary one, then re-check
+(fn restore_all ((env CheckedEnv) (st St) (lctx (List LDecl)) (params (List Expr)) (aux (List (Pair Expr Name))) (types (List InductiveType)) (lps (List Name)) (aux_env CheckedEnv) (is_unsafe Bool)) (KRes CheckedEnv)
+  (match types
+    (Nil (KFail (FRej (Malformed (quote nested_restore)))))
+    ((Cons main _)
+     (match (env_find aux_env (it_name main))
+       ((Some (InductInfo _ _ _ all_aux _ _ _ _ _))
+        (let ((recmap (aux_rec_map all_aux (len types) (it_name main) 0 1 Nil))
+              (all (all_names types)))
+          (let ((r0 (R env st lctx params aux recmap)))
+            (match (restore_types r0 aux_env types all None)
+              ((KFail f) (KFail f))
+              ((KOk _ (Pair r1 new_env1))
+               (match (restore_recs r1 aux_env (map_fst recmap) all new_env1 Nil)
+                 ((KFail f) (KFail f))
+                 ((KOk _ (Pair r2 (Pair new_env2 rec_names)))
+                  (match (check_nested_apps r2 new_env2 aux lps is_unsafe)
+                    ((KFail f) (KFail f))
+                    ((KOk st3 _)
+                     (match (recheck_restored (r_set_st_lctx r2 st3 (r_lctx r2)) new_env2 types lps rec_names is_unsafe)
+                       ((KFail f) (KFail f))
+                       ((KOk st4 _) (KOk st4 new_env2))))))))))))
+       (_ (KFail (FRej (Malformed (quote nested_restore)))))))))
+
+(fn map_fst ((m (List (Pair Name Name)))) (List Name)
+  (measure (struct m))
+  (match m (Nil Nil) ((Cons (Pair a _) r) (Cons a (map_fst r)))))
+
+;; the original types: InductInfo with `all` = the original names; ctors restored; main recursors
+(fn restore_types ((r R) (aux_env CheckedEnv) (types (List InductiveType)) (all (List Name)) (acc_env (Option CheckedEnv))) (KRes (Pair R CheckedEnv))
+  (measure (struct types))
+  (let ((env (match acc_env ((Some e) e) (None (r_env r)))))
+    (match types
+      (Nil (KOk (r_st r) (Pair r env)))
+      ((Cons t rest)
+       (match (env_find aux_env (it_name t))
+         ((Some (InductInfo cv np ni _ ctors nn isrec unsafe isrefl))
+          (match (env_check_name env (it_name t))
+            ((Some f) (KFail f))
+            (None
+             (let ((env1 (env_add env (it_name t) (InductInfo cv np ni all ctors nn isrec unsafe isrefl))))
+               (match (restore_ctors r aux_env ctors env1)
+                 ((KFail f) (KFail f))
+                 ((KOk _ (Pair r1 env2))
+                  (match (restore_rec r1 aux_env (mk_rec_name (it_name t)) all env2)
+                    ((KFail f) (KFail f))
+                    ((KOk _ (Pair r2 env3)) (restore_types r2 aux_env rest all (Some env3))))))))))
+         (_ (KFail (FRej (Malformed (quote nested_restore_type))))))))))
+
+(fn restore_ctors ((r R) (aux_env CheckedEnv) (ctors (List Name)) (env CheckedEnv)) (KRes (Pair R CheckedEnv))
+  (measure (struct ctors))
+  (match ctors
+    (Nil (KOk (r_st r) (Pair r env)))
+    ((Cons cn rest)
+     (match (env_find aux_env cn)
+       ((Some (CtorInfo (ConstantVal _ lps ty) induct cidx np nf unsafe))
+        (match (restore_nested r aux_env ty)
+          ((KFail f) (KFail f))
+          ((KOk _ (Pair r1 ty1))
+           (match (env_check_name env cn)
+             ((Some f) (KFail f))
+             (None (restore_ctors r1 aux_env rest (env_add env cn (CtorInfo (ConstantVal cn lps ty1) induct cidx np nf unsafe))))))))
+       (_ (KFail (FRej (Malformed (quote nested_restore_ctor)))))))))
+
+;; process_rec (l. 1266): one recursor (main or aux) restored into env
+(fn restore_rec ((r R) (aux_env CheckedEnv) (rec_name Name) (all (List Name)) (env CheckedEnv)) (KRes (Pair R CheckedEnv))
+  (let ((new_name (match (lookup_name (r_recmap r) rec_name) ((Some nn) nn) (None rec_name))))
+    (match (env_find aux_env rec_name)
+      ((Some (RecInfo (ConstantVal _ lps ty) _ np ni nmot nmin rules k unsafe))
+       (match (restore_nested r aux_env ty)
+         ((KFail f) (KFail f))
+         ((KOk _ (Pair r1 ty1))
+          (match (restore_rules r1 aux_env rules (bool_not (name_eq new_name rec_name)) Nil)
+            ((KFail f) (KFail f))
+            ((KOk _ (Pair r2 rules1))
+             (match (env_check_name env new_name)
+               ((Some f) (KFail f))
+               (None (KOk (r_st r2) (Pair r2 (env_add env new_name (RecInfo (ConstantVal new_name lps ty1) all np ni nmot nmin rules1 k unsafe)))))))))))
+      (_ (KFail (FRej (Malformed (quote nested_restore_rec))))))))
+
+(fn restore_rules ((r R) (aux_env CheckedEnv) (rules (List RecursorRule)) (rename Bool) (acc (List RecursorRule))) (KRes (Pair R (List RecursorRule)))
+  (measure (struct rules))
+  (match rules
+    (Nil (KOk (r_st r) (Pair r (rev acc))))
+    ((Cons (RecursorRule cn nf rhs) rest)
+     (match (restore_nested r aux_env rhs)
+       ((KFail f) (KFail f))
+       ((KOk _ (Pair r1 rhs1))
+        (let ((cn1 (if rename (match (restore_ctor_name r1 aux_env cn) ((Some c) c) (None cn)) cn)))
+          (restore_rules r1 aux_env rest rename (Cons (RecursorRule cn1 nf rhs1) acc))))))))
+
+;; the aux recursors, after the main ones (l. 1311)
+(fn restore_recs ((r R) (aux_env CheckedEnv) (aux_recs (List Name)) (all (List Name)) (env CheckedEnv) (acc (List Name))) (KRes (Pair R (Pair CheckedEnv (List Name))))
+  (measure (struct aux_recs))
+  (match aux_recs
+    (Nil (KOk (r_st r) (Pair r (Pair env (rev acc)))))
+    ((Cons rn rest)
+     (match (restore_rec r aux_env rn all env)
+       ((KFail f) (KFail f))
+       ((KOk _ (Pair r1 env1))
+        (restore_recs r1 aux_env rest all env1 (Cons (match (lookup_name (r_recmap r1) rn) ((Some nn) nn) (None rn)) acc)))))))
+
+;; l. 1318–1326: the nested applications `I Ds` are type checked in the final env
+(fn check_nested_apps ((r R) (env CheckedEnv) (aux (List (Pair Expr Name))) (lps (List Name)) (is_unsafe Bool)) (KRes Int)
+  (measure (struct aux))
+  (match aux
+    (Nil (KOk (r_st r) 0))
+    ((Cons (Pair nested _) rest)
+     (match (infer (Ctx env (r_lctx r) (Some lps) (if is_unsafe Unsafe Safe) False (budget_ticks)) (r_st r) (budget_depth) nested False)
+       ((KFail f) (KFail f))
+       ((KOk st1 _) (check_nested_apps (r_set_st_lctx r st1 (r_lctx r)) env rest lps is_unsafe))))))
+
+;; l. 1334–1345: every restored constructor type, recursor type and rule rhs re-checks
+(fn recheck_restored ((r R) (env CheckedEnv) (types (List InductiveType)) (lps (List Name)) (aux_rec_names (List Name)) (is_unsafe Bool)) (KRes Int)
+  (match (recheck_ctor_types r env (all_ctor_names types) lps is_unsafe)
+    ((KFail f) (KFail f))
+    ((KOk st1 _)
+     (recheck_recs (r_set_st_lctx r st1 (r_lctx r)) env (append (main_rec_names types) aux_rec_names) is_unsafe))))
+
+(fn all_ctor_names ((ts (List InductiveType))) (List Name)
+  (measure (struct ts))
+  (match ts (Nil Nil) ((Cons t r) (append (ctor_names (it_ctors t)) (all_ctor_names r)))))
+(fn main_rec_names ((ts (List InductiveType))) (List Name)
+  (measure (struct ts))
+  (match ts (Nil Nil) ((Cons t r) (Cons (mk_rec_name (it_name t)) (main_rec_names r)))))
+
+(fn recheck_ctor_types ((r R) (env CheckedEnv) (cs (List Name)) (lps (List Name)) (is_unsafe Bool)) (KRes Int)
+  (measure (struct cs))
+  (match cs
+    (Nil (KOk (r_st r) 0))
+    ((Cons cn rest)
+     (match (env_find env cn)
+       ((Some info)
+        (match (infer (Ctx env Nil (Some lps) (if is_unsafe Unsafe Safe) False (budget_ticks)) (r_st r) (budget_depth) (ci_type info) False)
+          ((KFail f) (KFail f))
+          ((KOk st1 _) (recheck_ctor_types (r_set_st_lctx r st1 (r_lctx r)) env rest lps is_unsafe))))
+       (None (KFail (FRej (Malformed (quote nested_recheck)))))))))
+
+(fn recheck_recs ((r R) (env CheckedEnv) (recs (List Name)) (is_unsafe Bool)) (KRes Int)
+  (measure (struct recs))
+  (match recs
+    (Nil (KOk (r_st r) 0))
+    ((Cons rn rest)
+     (match (env_find env rn)
+       ((Some (RecInfo (ConstantVal _ lps ty) _ _ _ _ _ rules _ _))
+        (match (infer (Ctx env Nil (Some lps) (if is_unsafe Unsafe Safe) False (budget_ticks)) (r_st r) (budget_depth) ty False)
+          ((KFail f) (KFail f))
+          ((KOk st1 _)
+           (match (recheck_rules (r_set_st_lctx r st1 (r_lctx r)) env rules lps is_unsafe)
+             ((KFail f) (KFail f))
+             ((KOk st2 _) (recheck_recs (r_set_st_lctx r st2 (r_lctx r)) env rest is_unsafe))))))
+       (_ (KFail (FRej (Malformed (quote nested_recheck_rec)))))))))
+
+(fn recheck_rules ((r R) (env CheckedEnv) (rules (List RecursorRule)) (lps (List Name)) (is_unsafe Bool)) (KRes Int)
+  (measure (struct rules))
+  (match rules
+    (Nil (KOk (r_st r) 0))
+    ((Cons (RecursorRule _ _ rhs) rest)
+     (match (infer (Ctx env Nil (Some lps) (if is_unsafe Unsafe Safe) False (budget_ticks)) (r_st r) (budget_depth) rhs False)
+       ((KFail f) (KFail f))
+       ((KOk st1 _) (recheck_rules (r_set_st_lctx r st1 (r_lctx r)) env rest lps is_unsafe))))))

@@ -1,0 +1,88 @@
+;;; v3/kernel/test/nested_test.shard — nested inductives through add.shard:
+;;; List.{u} first, then Tree with a `List Tree` field.
+
+(import "../host.shard")
+(import "../add.shard")
+
+(type Case (Case (List Int) Bool))
+(fn u () Level (LParam (n1 (quote u))))
+(fn type1 () Expr (Sort (LSucc LZero)))
+(fn typeu () Expr (Sort (LSucc (u))))
+(fn st0 () St (St 0 0))
+(fn nm_list () Name (n1 (quote List)))
+(fn nm_nil () Name (n2 (quote List) (quote nil)))
+(fn nm_cons () Name (n2 (quote List) (quote cons)))
+(fn nm_tree () Name (n1 (quote Tree)))
+(fn nm_node () Name (n2 (quote Tree) (quote node)))
+(fn nm_leaf () Name (n2 (quote Tree) (quote leaf)))
+(fn nat () Expr (Const (nm_nat) Nil))
+(fn x_ () Name (n1 (quote x)))
+(fn arrow ((a Expr) (b Expr)) Expr (Pi (x_) BDefault a (lift_loose_bvars b 0 1)))
+
+;; List.{u} (α : Type u) : Type u ; nil : List α ; cons : α → List α → List α
+(fn list_decl () Declaration
+  (InductDecl (list (n1 (quote u))) 1
+    (list (InductiveType (nm_list) (Pi (n1 (quote a)) BDefault (typeu) (typeu))
+            (list (Constructor (nm_nil) (Pi (n1 (quote a)) BDefault (typeu) (App (Const (nm_list) (list (u))) (BVar 0))))
+                  (Constructor (nm_cons)
+                    (Pi (n1 (quote a)) BDefault (typeu)
+                      (Pi (n1 (quote h)) BDefault (BVar 0)
+                        (Pi (n1 (quote t)) BDefault (App (Const (nm_list) (list (u))) (BVar 1))
+                          (App (Const (nm_list) (list (u))) (BVar 2)))))))))
+    False))
+(fn nat_decl () Declaration
+  (InductDecl Nil 0
+    (list (InductiveType (nm_nat) (type1)
+            (list (Constructor (nm_nat_zero) (nat)) (Constructor (nm_nat_succ) (Pi (n1 (quote n)) BDefault (nat) (nat))))))
+    False))
+;; Tree : Type ; leaf : Nat → Tree ; node : List.{0} Tree → Tree
+(fn tree_decl () Declaration
+  (InductDecl Nil 0
+    (list (InductiveType (nm_tree) (type1)
+            (list (Constructor (nm_leaf) (arrow (nat) (Const (nm_tree) Nil)))
+                  (Constructor (nm_node) (arrow (App (Const (nm_list) (list LZero)) (Const (nm_tree) Nil)) (Const (nm_tree) Nil))))))
+    False))
+;; a non-uniform occurrence: Bad (α : Type) : Type ; mk : Bad Nat → Bad α
+(fn nonuniform_decl () Declaration
+  (InductDecl Nil 1
+    (list (InductiveType (n1 (quote Bad)) (Pi (n1 (quote a)) BDefault (type1) (type1))
+            (list (Constructor (n2 (quote Bad) (quote mk))
+                    (Pi (n1 (quote a)) BDefault (type1) (arrow (App (Const (n1 (quote Bad)) Nil) (nat)) (App (Const (n1 (quote Bad)) Nil) (BVar 0))))))))
+    False))
+
+(fn env_after ((o Outcome) (dflt CheckedEnv)) CheckedEnv (match o ((Accepted e) e) (_ dflt)))
+(fn accepted ((o Outcome)) Bool (match o ((Accepted _) True) (_ False)))
+(fn rejected ((o Outcome) (s Symbol)) Bool
+  (match o ((Rejected (RuleViolation t) _) (sym_eq s t)) ((Rejected (Malformed t) _) (sym_eq s t)) (_ False)))
+(fn e0 () CheckedEnv (CheckedEnv Nil False))
+(fn e1 () CheckedEnv (env_after (check (env_after (check (e0) (st0) (nat_decl)) (e0)) (st0) (list_decl)) (e0)))
+(fn e2 () CheckedEnv (env_after (check (e1) (st0) (tree_decl)) (e0)))
+(fn has ((e CheckedEnv) (n Name)) Bool (match (env_find e n) ((Some _) True) (None False)))
+(fn any_nested_name ((xs (List (Pair Name ConstantInfo)))) Bool
+  (measure (struct xs))
+  (match xs (Nil False) ((Cons (Pair n _) r) (bool_or (has_nested_prefix n) (any_nested_name r)))))
+(fn rec_all ((e CheckedEnv) (n Name)) (List Name) (match (env_find e n) ((Some (RecInfo _ all _ _ _ _ _ _ _)) all) (_ Nil)))
+(fn rec_nmotives ((e CheckedEnv) (n Name)) Int (match (env_find e n) ((Some (RecInfo _ _ _ _ nm _ _ _ _)) nm) (_ (- 0 1))))
+(fn ctor_type_of ((e CheckedEnv) (n Name)) (Option Expr) (match (env_find e n) ((Some i) (Some (ci_type i))) (None None)))
+(fn show_o ((o Outcome)) (List Int)
+  (match o ((Accepted _) "accepted") ((Rejected r _) (show_reason r)) ((Exhausted _ s) (append "exhausted " (chars_of_sym s)))))
+
+(fn cases () (List Case)
+  (list
+    (Case "List accepted" (accepted (check (env_after (check (e0) (st0) (nat_decl)) (e0)) (st0) (list_decl))))
+    (Case "Tree (nested via List) accepted" (accepted (check (e1) (st0) (tree_decl))))
+    (Case "Tree.rec and Tree.rec_1 present" (bool_and (has (e2) (n2 (quote Tree) (quote rec))) (has (e2) (n2 (quote Tree) (quote rec_1)))))
+    (Case "no auxiliary name survives" (bool_not (any_nested_name (match (e2) ((CheckedEnv xs _) xs)))))
+    (Case "Tree.rec: all = [Tree], 2 motives" (bool_and (names_eq (rec_all (e2) (n2 (quote Tree) (quote rec))) (list (nm_tree))) (int_eq (rec_nmotives (e2) (n2 (quote Tree) (quote rec))) 2)))
+    (Case "Tree.node's type restored to List Tree"
+      (match (ctor_type_of (e2) (nm_node))
+        ((Some t) (expr_eq t (arrow (App (Const (nm_list) (list LZero)) (Const (nm_tree) Nil)) (Const (nm_tree) Nil))))
+        (None False)))
+    (Case "non-uniform occurrence refused" (rejected (check (env_after (check (e0) (st0) (nat_decl)) (e0)) (st0) (nonuniform_decl)) (quote non_uniform_occurrence)))))
+
+(fn run ((cs (List Case)) (fails Int) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil (exit fails (write_line (append "nested_test: failures = " (show_int fails)) w)))
+    ((Cons (Case name ok) r) (run r (if ok fails (+ fails 1)) (write_line (append (if ok "PASS " "FAIL ") name) w)))))
+(fn main ((w World)) World (run (cases) 0 w))
