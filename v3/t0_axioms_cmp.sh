@@ -8,7 +8,10 @@
 # 20) and the counts are printed either way.
 set -u
 klog=$1; oracle=$2
-norm() { grep '^AX ' "$1" | awk '{ name=$2; sub(/:$/,"",name); n=0; delete a; for (i=3;i<=NF;i++) a[++n]=$i; s=""; if (n>0) { asort(a); for (i=1;i<=n;i++) s=s " " a[i] } print name ":" s }' | LC_ALL=C sort -t: -k1,1 -u; }
+# POSIX awk only (CI's awk is mawk: no asort): the axioms are sorted by insertion
+norm() { grep '^AX ' "$1" | awk '{ name=$2; sub(/:$/,"",name); n=0; for (i=3;i<=NF;i++) a[n++]=$i
+  for (i=1;i<n;i++) { v=a[i]; j=i-1; while (j>=0 && a[j] > v) { a[j+1]=a[j]; j-- } a[j+1]=v }
+  s=""; for (i=0;i<n;i++) s=s " " a[i]; print name ":" s }' | LC_ALL=C sort -t: -k1,1 -u; }
 k=$(mktemp); o=$(mktemp); trap 'rm -f "$k" "$o"' EXIT
 norm "$klog" > "$k"; norm "$oracle" > "$o"
 nk=$(wc -l < "$k"); no=$(wc -l < "$o")
