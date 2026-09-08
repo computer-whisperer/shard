@@ -98,6 +98,26 @@ against v4.33.1 (the head `411dce7` pins v4.34.0-rc2 and cannot export
 the pinned kernel; recorded as the phase 1 tool bump), split into
 20,000-line chunks (`split -l 20000`) for the streaming reader.
 
+## Phase 2 status (opened 2026-09-07)
+
+Front-end and `ev` (FOUNDATION §12.4 item 2; gates: T1's three named
+items, T5, T8's replay half, conformance). **Rulings 2026-09-07:**
+Stage 0 strictly — a `fn` has an E body and no L meaning until phase
+3's Stage 1, when `fn` becomes `def` plus `realize`; `examples/calc`
+ports its program half, its claims wait for phase 3. **Slice 1
+(2026-09-07): the design on disk** — `LANGUAGE.md` (S, L and E at
+Stage 0: the keywords, terms and levels, modules and identity, the
+`Init` prefix import, `ev`'s contract, the classifier, views, the
+`realize` surface, the toolchain profile, policy and entries, the four
+conformance suites, the deferred table, the ratification items) and
+`kernel/prog.shard` (E programs as data — the type `ev` runs; loads
+under the bootstrap, `kernel/test/prog_test.shard`). The ladder: 2 the
+s-expression and Stage-0 readers into K; 3 the loader (package root,
+`use`, the `Init` prefix import, acceptance records, `CheckedEnv`
+sealed); 4 views; 5 the classifier, `ev` and route 2's byte-tie; 6
+calc's program half under `ev` and frontend parity retiring the Rust
+loader's parsing role; 7 the doc rows and the CI job.
+
 ## The pin (2026-09-06)
 
 The pinned Lean release and the oracle tools. Every rule, name, shape
@@ -121,7 +141,8 @@ each against v4.33.1 and records any bump here.
 v3/README.md      this file: root, pins, phase status
 v3/MANIFEST.md    the port manifest — PORT / ARCHIVE / REGENERATE per family
 v3/INVENTORY.md   the shared-type inventory — imported identity, fields, view, realization
-v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K's fns, then ev and the loader tower
+v3/LANGUAGE.md    the V3 language — S, L and E at Stage 0 (phase 2 draft; I in phase 3)
+v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K; phase 2: prog, the reader tower, ev
 v3/meta/          phase 3: the elaborators, I, the goal graph, tactics
 v3/std/           phase 3: the first library under the naming law
 v3/pins/          the corpus law of the new tree (T0's hostile battery first)

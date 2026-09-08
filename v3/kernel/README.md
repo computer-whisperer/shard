@@ -1,7 +1,9 @@
 # v3/kernel — K: the rule inventory (phase 0) and the checker (phase 1)
 
-**Status: phase 1 in progress — K checks the `Init` export
-declaration for declaration (T0; `v3/README.md` for the evidence).**
+**Status: phase 1 closed against the law (T0 holds on routes 1 and 3
+with axiom closures; `v3/README.md` for the evidence); phase 2 opened
+2026-09-07 — the reader, loader, views, classifier and `ev` are built
+to `v3/LANGUAGE.md`, and `prog.shard` is its first file.**
 The rule inventory of phase 0 stands as the comments beside the
 declarations (user ruling 2026-09-06: declarations, not a prose
 restatement, "because the declarations are phase 1's first file anyway
@@ -39,6 +41,7 @@ in the comments are into those files at that commit.
 | `expr.shard` | `BinderInfo Literal D Expr Memo St` | the typing rules per constructor (`infer_*`), `whnf_core`/`whnf`, definitional equality (`is_def_eq_core` in its exact order), literal rules, projection rules; the representation (node data, identity, the state) |
 | `decl.shard` | `ReducibilityHints DefinitionSafety ConstantVal RecursorRule QuotKind ConstantInfo InductiveType Constructor Declaration` | admission per declaration kind (`environment::add_*`), the inductive admission checks, recursor generation, the quotient axioms |
 | `env.shard` | `Env` (raw and checked), `Outcome` | §3.3's outcomes; raw versus checked (§3.5); the fixed-identity `Nat` accelerators |
+| `prog.shard` | `EType ELit EPat ETerm EArm ERec ECtorDef EDecl Prog Val EvRes` | **phase 2, slice 1 (2026-09-07):** E programs as data — what `ev` runs (`v3/LANGUAGE.md` §6): the bootstrap's AST with resolved identities and classified heads; `ev`'s rule per node; the recursion structure the correspondence is stated over (§4.4) |
 
 ## The gate for these files
 

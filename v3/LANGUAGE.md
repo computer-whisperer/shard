@@ -1,0 +1,647 @@
+# The V3 language — S, L and E at Stage 0 (phase 2 draft)
+
+> **STATUS (2026-09-07): DRAFT — slice 1 of phase 2 (FOUNDATION §12.4
+> item 2; `docs/records/FOUNDATION.md` §9).** Written before the reader
+> exists, as the design the reader, the loader, the views, the fragment
+> classifier and `ev` are built to; the design is on disk before the
+> first line of code. It supersedes `docs/LANGUAGE.md` for the `v3/`
+> tree (FOUNDATION §10.5); the old document keeps describing the old
+> tree until the flip. The proof IR **I** is phase 3's chapter and is
+> not here. Everything below is **Stage 0** of the law's §5.1: explicit
+> L, no inference. What Stages 1–3 add is listed in §11 with its phase.
+> Decisions this draft makes beyond the law's text are collected in §12
+> for ratification; until ratified they are the implementation's
+> working assumptions, not law.
+
+The normative contract is `docs/FOUNDATION.md`; this document
+specifies the surface and the executable fragment as phase 2 builds
+them and does not restate the law's reasons. K's data — names, levels,
+terms, declarations, environments — is defined once, by
+`v3/kernel/{name,level,expr,decl,env}.shard`; this document cites
+those files and never redraws their constructors.
+
+## 0. The two rulings this draft is built on
+
+- **Stage 0 strictly (ruled 2026-09-07).** At phase 2 a `fn` has an
+  executable body that `ev` runs and **no L meaning**: it is not in the
+  checked environment, nothing in L can cite it, and no theorem is
+  stated about it. Its L value arrives with Stage 1's match compilation
+  and structural recursion (phase 3), when `fn` becomes a `def` plus a
+  `realize` in one form (law §4.4: "`fn` requests logical admission and
+  an executable realization together"). The phase-2 route into K is the
+  explicit-L forms: `inductive`, `type`, `structure`, `def`, `theorem`,
+  `axiom`, `opaque`, and `realize` for the E side of an L constant.
+- **`examples/calc` ports its program half at phase 2 (ruled
+  2026-09-07):** the lexer, parser, evaluator, show and the app's step
+  function run under `ev`, differential against the old tree; its 100
+  claims wait for phase 3's tactics. `v3/MANIFEST.md` says so.
+
+## 1. The languages, restated for the reader
+
+| name | at phase 2 | produced by | checked by |
+|---|---|---|---|
+| **S** | s-expression text: the forms of §4 and the terms of §5 | authors | nothing (untrusted) |
+| **L** | K's `Declaration` and `Expr` values (`decl.shard`, `expr.shard`) | the reader, Stage 0: the explicit-L forms elaborate to L term for term | K (`add.shard`'s `check`) |
+| **E** | `kernel/prog.shard`'s `Prog`: E declarations and bodies as data | the reader from `fn`/`type`/`extern`; the classifier from `realize` | the classifier (structural, untrusted); `ev` is its meaning |
+| **P** | L terms of `Prop` type | at Stage 0 only `(exact TERM)` | K |
+
+Two pipelines share one reader: **S → L → K** for the logical forms
+and **S → E → `ev`** for the executable ones. They meet at `realize`,
+which gives an admitted L constant an E body (§7). The toolchain's own
+sources — K, `ev`, the reader — are E in the *toolchain profile* (§8)
+and are read by the Rust bootstrap until frontend parity retires that
+role (§10).
+
+## 2. Lexical syntax
+
+The on-disk format is s-expressions.
+
+- **Whitespace** separates tokens; otherwise insignificant.
+- **Comments** begin with `;` and run to the end of the line (`;`
+  trailing, `;;` line, `;;;` file and section headers — carried).
+- **Numerals**: decimal digit strings, `42`. A leading `-` is a
+  numeral only in the toolchain profile (§8); in S a negative integer
+  is written `(Int.neg (Int.ofNat 7))` or `(Int.negSucc 6)`, exactly
+  the L constructors it denotes (the law's §5.2 numeral rule is Stage
+  1).
+- **Symbols**: Lean's identifier characters — Unicode letters, digits,
+  `_`, `'`, `?`, `!`, and `.` separating namespace components
+  (`List.length`, `Nat.decLt`, `f.eq_1`) — plus the operator symbols
+  `+ - * / % < <= > >= = == != && || -> ↑`. A symbol never starts with
+  a digit. The naming law (§5.3 of the law) governs which symbols an
+  author writes.
+- **Universe suffix**: a symbol ending in `.{` opens a **level list**
+  closed by `}`: `List.{0}`, `Prod.{u v}`, `Sum.{(max u v) 0}`. The
+  reader lexes the list as ordinary tokens (whitespace-separated
+  level terms, §5.2) and attaches it to the symbol as its universe
+  arguments. This is Lean's `List.{u}` with s-expression level terms.
+- **Strings**: `"…"` with the escapes `\n \t \r \\ \" \xHH \u{HHHH}`;
+  the value is the UTF-8 byte sequence (K's `LitStr`, `expr.shard`).
+- **Lists**: `( … )`. The quote reader macro `'X` ≡ `(quote X)` is
+  carried for the toolchain profile; S has no use for it (§5.4).
+
+## 3. Files, modules, identity
+
+**A file is a module.** Its **module path** is its path from the
+package root with `/` read as `.` and `.shard` dropped:
+`v3/std/list.shard` is `std.list` (`docs/LAYOUT.md`, "The V3 sibling
+tree"). A directory module's interface `DIR/mod.req.shard` (or
+`DIR/mod.req/mod.req.shard`, the dir form) has the directory's path;
+the directory's other files are its implementation and share the path
+(the old tree's rule, carried). The package root is told to the
+loader explicitly; nothing under it is named by an absolute path.
+
+**A declaration's identity** (law §8.3) is its **module path plus its
+declared name**, and the content hash of its L revision:
+
+- The declared name may itself be dotted — `(fn List.sum …)` in
+  `std/list.shard` declares `std.list.List.sum` — so a native
+  declaration extends a Lean namespace by name while its identity says
+  where it lives. K's environment is keyed on exactly this full name
+  (`name.shard`'s `Name`), so two modules can never collide in K and
+  `check_name` needs no help.
+- **Imported declarations keep their exported names as K names**
+  (`List.length`, not `Init.List.length`): their identity is *the
+  import plus the name* — the import is the declared mapping of law
+  §4.4 (§3.2 below) — and the loader's scope shows them under the
+  prefix `Init`, which every file that imports `Init` opens. So a
+  native file cannot declare a bare `List.foo`: it declares
+  `std.list.List.foo`, and the two spellings of `List.foo` are two
+  identities that only an explicit citation tells apart (T5: "two
+  same-spelled nominal types not conflated"; "an attempt to identify a
+  different definition by spelling refused" — there is no form that
+  identifies them).
+- The **content hash** is `expr.shard`'s structural hash over the L
+  declaration (kind, level parameters, type, value), never over S
+  text: whitespace, comments, the order of unrelated forms and the
+  root's location change no identity (T8's origin-only change). The
+  hash of an `inductive` covers its constructor types; the hash of a
+  `realize` covers the E body and the equation identities (§7).
+- Moving a file within the root changes its module path and therefore
+  its identity, exactly as a Lean `import` path would; only the root
+  moves for free (the flip).
+
+### 3.1 `import` and `use`
+
+```
+(import "list.shard")          ; a file, relative to the importing file
+(import "../std/list")         ; a directory module: its view (§6.5)
+(import Init WellFounded.fix)  ; the pinned export through the named declaration
+(use std.list)                 ; open a prefix: std.list.X is citable as X
+(use Init.List)                ; open a namespace: List.nil is citable as nil
+```
+
+`import` brings identities into the **scope**; it opens nothing.
+`use` opens a **prefix**: every identity beginning with `PREFIX.` is
+citable by the remainder. One mechanism serves modules and namespaces
+because both are name prefixes. A citation that resolves under two
+opened prefixes is an error naming both identities; it is never a
+silent choice, and the full identity always resolves. `(use Init)` is
+implicit in every file that imports `Init`, so `List.length` cites the
+import's `List.length`; `nil` needs `(use Init.List)` or the qualified
+`List.nil` (Stage 1 resolves constructors by expected type; Stage 0
+has no expected type).
+
+**The `Init` import is a dependency-ordered prefix of the pinned
+export**, K-checked on load, named by its last declaration. Two
+prefixes are nested, so a closure that imports `(import Init Nat.decEq)`
+in one file and `(import Init WellFounded.fix)` in another checks the
+larger once. The loader refuses an export whose `meta` line (the
+kernel githash and the exporter version, `v3/README.md`'s pin) is not
+the pin it was built against: that check plus the `import` form is the
+declared mapping of law §4.4, and the import's identity is the pin plus
+the prefix name. Chunk 0 of the export (its first 20,000 lines, 519
+declarations, 8 s on route 3) already holds `ite`, `dite`, `Nat.decLt`,
+`List.length`, `List.get`, `Decidable.decide` and `WellFounded.fix` —
+everything T1's phase-2 items need. The whole export (12 min compiled,
+76 min interpreted) is never a load; a long-lived checked environment
+is phase 4's T6, and the law's §3.5 and §7.5 forbid the alternative, a
+deserialized receipt.
+
+### 3.2 What the loader records (law §8.1 at phase 2)
+
+For every admitted declaration: its identity (K name and content
+hash); the module; the **route** (3, the bootstrap; 1, compiled K) and
+the engine stamp; its **axiom closure** (`axioms.shard`); the
+assumption policy applied and its verdict (§9); the environment
+revision it was checked against — the `Init` pin and prefix name and
+the hashes of the imported modules; and, for a `realize`, the E body's
+hash and the identities of its equations. At phase 2 the record is
+what the driver prints per declaration and what fixtures pin; the
+content store of law §7.5 is phase 3. `Exhausted` is never a receipt:
+an exhausted declaration is reported with its resource and site and
+enters no environment.
+
+## 4. Declarations — the surface keywords, fixed at phase 2
+
+The law's §5.3 names `fn def type inductive structure sig theorem
+realize`; this draft adds `axiom` and `opaque` (K's kinds, needed by the
+hostile battery and by views) and carries the shard-only vocabulary
+`import use extern requirement fulfills trusts measure`. Reserved for
+later phases and refused with the phase named: `by` (phase 3), `bin`
+`requires` `app` (phase 4), `instance` `class` (phase 3), `namespace`
+`section` `variable` (undecided; the dotted declared name covers the
+common case).
+
+| form | phase-2 meaning | goes to |
+|---|---|---|
+| `(import …)`, `(use …)` | §3.1 | the scope |
+| `(inductive NAME.{u…} BINDERS TYPE (CTOR TYPE)…)` | Lean's `inductive`: level parameters on the name, parameter binders, the type after the parameters (`(Sort …)` or a `forall` over indices), each constructor's full type after the parameters | K: `InductDecl` |
+| `(type (NAME T…) (CTOR FIELD-TYPE…)…)` | today's E data form, sugar for an `inductive` with parameters `T : Type`, result `Type`, non-dependent fields; E-eligible by construction | K (`InductDecl`) **and** E (`EInd`) |
+| `(structure NAME.{u…} BINDERS (FIELD TYPE)…)` | one constructor `NAME.mk`; projections `NAME.FIELD` generated as `def`s over `proj` (Lean's projections are `Expr.proj` definitions); fields dependent on earlier fields | K |
+| `(def NAME.{u…} BINDERS TYPE VALUE)` | an L definition; hints `regular` at height 1 + the greatest height it references | K: `DefnDecl` |
+| `(abbrev …)` | as `def` with hint `abbrev` | K |
+| `(opaque NAME.{u…} BINDERS TYPE VALUE)` | checked, never unfolded | K: `OpaqueDecl` |
+| `(theorem NAME.{u…} BINDERS PROP PROOF)` | PROOF is `(exact TERM)` or `sorry` at Stage 0; `sorry` is reported loudly, admits nothing, and every citation of the theorem is a pending obligation, never an assumption | K: `ThmDecl` |
+| `(axiom NAME.{u…} BINDERS TYPE)` | admitted only under `(trusts NAME)` in the same file (§9) | K: `AxiomDecl` |
+| `(fn NAME BINDERS RET (measure M)? BODY)` | an E function: parameters are E-types, BODY is §5.4's E term language; classified (§6.3); **no L declaration at phase 2** (§0) | E: `EFn` |
+| `(extern NAME BINDERS RET)` | a World extern (law §4.7) | E: `EExtern` |
+| `(sig fn NAME BINDERS RET)`, `(sig type (NAME T…))` | a view's bodyless signature and opaque type (§6.5) | E: `ESig`, `ESigType`; L: a view parameter |
+| `(requirement NAME BINDERS PROP)`, `(fulfills NAME PROOF)` | a view's promised law and its discharge in the implementation (§6.5) | L |
+| `(realize NAME …)` | an E body for an admitted L constant (§7) | E: `EFn`; L: the equations |
+| `(trusts AXIOM…)` | widens this file's assumption policy (§9) | policy |
+
+**Binders** are `((x TYPE) …)`; a binder may carry an info marker,
+`(x TYPE implicit)`, `(x TYPE strict)`, `(x TYPE inst)`, recorded as
+K's `BinderInfo` (display and Stage-1 data; no rule depends on it).
+At Stage 0 every argument is passed explicitly regardless of the
+marker.
+
+**Universe parameters** are declared by the `.{u v}` suffix on the
+declared name and cited by the same suffix (§2). A citation without a
+suffix is a constant with **zero** universe parameters; citing a
+polymorphic constant bare is a Stage-0 error with the pointer to write
+`List.{0}` — except in **E-type positions** (a `fn`'s binders and return
+type, a `type`'s fields, a `realize` signature), where every
+polymorphic type constructor is instantiated at level 0 by rule, since
+E-types live in `Type` (law §4.2). That is reconstruction of what the
+form determines, not inference.
+
+## 5. Terms
+
+### 5.1 Explicit L (the argument of `def`, `theorem`, `inductive`, `structure`, `realize`'s equations)
+
+```
+TERM ::= NAME                          ; a bound variable (innermost binding wins), else a constant
+       | NAME.{LEVEL…}                 ; a constant with universe arguments
+       | (TERM TERM…)                  ; application, left-nested
+       | (fun (BINDER…) TERM)          ; lambda
+       | (forall (BINDER…) TERM)       ; Pi
+       | (-> TERM… TERM)               ; non-dependent Pi, right-nested
+       | (let ((x TYPE TERM)…) TERM)   ; sequential; one L Let per binding
+       | (Sort LEVEL) | Prop | Type | (Type LEVEL)
+       | NUMERAL                       ; K's Nat literal
+       | "…"                           ; K's String literal
+       | (proj S i TERM)               ; the i-th field of structure S (0-based)
+```
+
+Elaboration is term for term into `expr.shard`'s `Expr`: names bound
+by `fun`, `forall` and `let` become `BVar` indices (locally nameless,
+0 the innermost; the binder's display name is kept on the node);
+unbound names resolve through the scope (§3.1) to `Const` with the
+universe arguments written; `Prop` is `(Sort 0)`, `Type` is `(Sort 1)`,
+`(Type u)` is `(Sort (succ u))`. A bound name shadows a constant. No
+argument is inserted, no metavariable exists, no universe is inferred:
+`(ite.{1} Nat (Nat.lt i n) (Nat.decLt i n) a b)` is what an author
+writes for `if i < n then a else b` at Stage 0. This is verbose by
+design — the machinery is the deliverable, Stage 1 is the ergonomics.
+
+### 5.2 Levels
+
+```
+LEVEL ::= NUMERAL | NAME | (succ LEVEL) | (max LEVEL LEVEL) | (imax LEVEL LEVEL)
+```
+
+The same grammar inside `.{…}` and in `(Sort …)`; `NAME` must be a
+declared universe parameter of the enclosing declaration
+(`level.shard`'s `check_level`). Lean's `u+1` is `(succ u)`.
+
+### 5.3 Literals
+
+A numeral is K's `LitNat`; a string is K's `LitStr` and has type
+`String`, the pinned declaration (`v3/INVENTORY.md`); `Char` values
+are `(Char.ofNat 97)`. The toolchain profile reads both differently
+(§8). The E realization of `String` (the validated-UTF-8 buffer) is
+phase 3; at phase 2 no E body computes with a `String` literal outside
+the toolchain profile.
+
+### 5.4 E terms (the body of `fn` and of a supplied `realize`)
+
+```
+E ::= NAME                        ; a parameter or pattern variable (innermost wins), else a call head
+    | (HEAD E…)                   ; saturated: a constructor, an E function, a primitive (§6.4) or an extern
+    | (match E (PAT E)…)          ; first arm whose pattern matches; refused if not exhaustive (§6.3)
+    | (let ((x E)…) E)            ; parallel bindings (today's semantics, §8); `(let* …)` is not a form
+    | (if E E E)                  ; branches on a decision tag (§6.2)
+    | NUMERAL | "…" | (quote NAME)
+PAT ::= _ | NAME | (CTOR PAT…) | NUMERAL | (quote NAME)
+```
+
+A `fn`'s binders are E-types; a `NAME` in head position resolves,
+through the scope, to exactly one of: a constructor of an E-eligible
+inductive, an `fn`/`sig fn`, a primitive, an extern. A function name in
+argument position is the escape rule's refusal (law §4.3); there are no
+function values. The E term language is deliberately today's: the
+toolchain's own sources, `examples/calc` and every PORT `fn` are
+already written in it, and its meaning is `ev` (§6.2). Lean's `let` is
+sequential; the E `let` is parallel, as in every existing `fn`. This
+draft keeps the E `let` parallel and makes S's L-level `let` (§5.1)
+sequential, because the two never meet until Stage 1 lowers `fn`
+bodies to L — the point where one rule must be chosen (§12).
+
+## 6. E — the executable fragment at phase 2
+
+### 6.1 E programs as data: `kernel/prog.shard`
+
+`Prog` is the datatype `ev` runs and, once the toolchain's own sources
+are admitted to L (phase 3 and the flip), the L type over which
+evaluation reflection is stated (law §4.4: `rfl : ev p args n = some
+v`). It is declared once, in the toolchain profile, in
+`v3/kernel/prog.shard`; this section is its summary, the file is the
+definition. Its shape is the Rust bootstrap's AST (`rust_bootstrap/
+src/ast.rs`) with names resolved to identities and call heads
+classified:
+
+- `EType`: a type constructor applied to E-types, or a type parameter
+  by position.
+- `ETerm`: bound variable (de Bruijn, 0 innermost); literal;
+  constructor, function call, **primitive** and **extern** — four
+  distinct nodes, each with a resolved `Name` and saturated arguments,
+  so `ev` never guesses what a head is; `match` with arms; parallel
+  `let`; `if`.
+- `EPat`: variable (binds the next index), constructor with
+  sub-patterns, literal.
+- `EDecl`: an E-eligible inductive (name, parameter count,
+  constructors with field types); a function (name, type-parameter
+  count, parameter types, return type, **recursion structure**, body);
+  an extern; a view's signature and opaque type.
+- `ERec`: none, structural on parameter *i*, or a measure term — the
+  "recursion" of the resolved executable structure the correspondence
+  is stated over (law §4.4).
+- `Val`: constructor cells, unbounded integers (the realization of
+  `Nat` and `Int` alike, `v3/INVENTORY.md`), symbols (§8).
+- `EvRes`: a value, out of fuel, or stuck with a reason and the
+  subject.
+
+### 6.2 `ev` — the definition of "run"
+
+`ev : Prog → Name → List Val → Int → EvRes`. One shard `fn` in the
+toolchain profile, structurally recursive on the fuel first and the
+term second: entering a function body costs one unit of fuel, walking
+a term costs none. **Pure**: an extern node is `EvStuck`; the
+effectful driver `run` performs externs through the host's own externs
+by the effect-frontier loop of the old tree's env machine
+(`kernel/evm.shard` `run_app`: find the innermost stuck extern, perform
+it, substitute, continue) — the explicit handler contract of law §4.7 at
+phase 2 is "the toolchain's six World externs, performed in order".
+
+Per node: a variable reads its frame slot; a literal is its value; a
+constructor evaluates its arguments left to right and builds the cell;
+a call evaluates its arguments, then the callee's body in a fresh frame
+of exactly those values, fuel less one; a primitive applies §6.4's
+table — a guard failure (division by zero for the profile's `/`, a
+shift out of range) is `EvStuck`, never a value; `match` tries arms in
+order and the first matching pattern binds its variables, no arm
+matching is `EvStuck`; `let` evaluates every right-hand side in the
+outer frame and pushes them in order; `if` evaluates its condition to a
+cell and takes the **then** branch iff the cell's constructor is the
+**second** constructor of its type — `Bool.true`, `Decidable.isTrue`
+and the toolchain's `True` all are, which is what "a decision tag with
+erased payload" means at run time: the tag decides, the payload is not
+there.
+
+`ev` is E at phase 2, not an L constant; its two-sided theorem and the
+reflection node are phase 4's T8, stated over this `Prog`. Cost is a
+measurement (law §4.4), taken on route 2 — K's fixture check under
+`ev` — before any claim about it.
+
+### 6.3 The fragment classifier (law §4.1, §4.3), Stage 0
+
+A structural pass over every `fn` and every `realize`, loud and
+untrusted, before `ev` sees a program:
+
+1. every head resolves to one kind (constructor, function, primitive,
+   extern) and is saturated;
+2. no function name occurs in argument position, a constructor field,
+   a return position or a `let` binding — the escape rule;
+3. every `match` is exhaustive over the scrutinee's constructors as far
+   as the arms' patterns determine it (a variable or `_` arm closes
+   it; Stage 0 has no types, so a scrutinee whose type is not fixed by
+   a constructor pattern is closed only by a variable arm);
+4. type parameters are static: they occur in binder types only;
+5. in a `realize` derived from an L body (§7.1), every binder and every
+   argument is classified by **role** from its L type — a `Sort`-typed
+   binder is static and erased, a `Prop`-typed one is erased evidence,
+   everything else is runtime data — and an erased binder may occur
+   only in erased positions of the L body; a runtime position that
+   obtains its value solely through an erased or noncomputable term is
+   the refusal (law §4.2), with the position named.
+
+The lowering on the post-specialization closure remains the authority
+(law §4.3); the classifier is the loud early gate.
+
+### 6.4 The primitive table
+
+One table keyed on **identity**, so the profile's `+` and the naming
+law's `+` reach the same entry and `ev`'s table matches the Rust
+bootstrap's `prim.rs` operation for operation (execution parity, §10).
+At phase 2 the table is the bootstrap's — `+ - * / mod tmod ediv band
+bor bxor bshl bshr int_eq sym_eq lt le sym_of_chars chars_of_sym` and
+the effectful `gen_fresh` (`docs/LANGUAGE.md` §8) — under their profile
+names, plus the naming-law spellings of law §10.3 as **distinct**
+identities where the meaning differs: `Int.tdiv` and `Int.tmod` total
+with `x / 0 = 0` and `tmod x 0 = x`, `Int.ediv`/`Int.emod` likewise,
+`Nat.sub` saturating, `Nat.land lor xor shiftLeft shiftRight` on
+non-negative values. The profile's `/` staying stuck at zero and
+`Int.tdiv` returning zero are two entries, not one entry with a mode;
+the migration table calls that row a behavior change and this is where
+the change is visible. Every entry has a positive, a negative and a
+boundary case in the execution-parity suite.
+
+### 6.5 Views (law §8.2) at phase 2
+
+A directory module's interface is an **environment view**: `type`
+(transparent), `sig type` (opaque: the name and arity, no
+constructors), `sig fn` (a signature, no body), `requirement` (a law,
+no proof), and `theorem` (a public lemma with its proof). The three
+checked conditions, at Stage 0:
+
+- **view validity**: the view's declarations form a well-formed
+  environment on their own — each `sig fn` and `sig type` enters K as a
+  **view parameter** (an axiom-kind constant to K, a distinct class to
+  the policy of §9), each `requirement` likewise, each `theorem` is
+  checked against them;
+- **implementation matching**: the implementation files declare a
+  `type` for every `sig type` with the same arity, a `fn` (E) for every
+  `sig fn` with the same E signature, and a `fulfills` for every
+  `requirement` whose proof checks against the implementation's own
+  environment, where the implementation's `type` shadows the opaque
+  twin (the old tree's structural opacity rule, carried);
+- **evidence binding**: an exported theorem's axiom closure names the
+  view parameters it rests on; linking an implementation discharges
+  exactly those, and a theorem whose closure names a parameter no
+  implementation discharged is reported, not accepted.
+
+A consumer checks against the view alone: its L environment holds the
+view parameters, never the bodies; K cannot unfold a `sig fn`. Its E
+programs are linked to the implementation's `EFn`s by `run` at
+execution (T5's "with the impl linked"). A consumer that matches a
+`sig type`'s constructor or compares two values of a `sig type` for
+equality by constructor is refused at classification — the
+private-equality leak. This is the module surface phase 1 deferred to:
+`CheckedEnv` becomes a `sig type` of `kernel/env`'s view and no client
+outside `kernel` can build one (law §3.5).
+
+## 7. `realize` — the surface, fixed at phase 2
+
+`realize` attaches a checked E body to an **existing admitted L
+constant** under its existing identity (law §4.4). Two forms, both
+live at phase 2:
+
+```
+(realize NAME (view))
+(realize NAME BINDERS RET (measure M)? BODY)
+(realize NAME BINDERS RET (measure M)? BODY (equations THM…))
+(realize TYPE (repr E-TYPE) …)      ; a type's runtime representation: form reserved, evidence phase 3
+```
+
+### 7.1 The derived view
+
+`(realize NAME (view))` asks the classifier to **erase** `NAME`'s L
+body into an E body: `Decidable.casesOn`, `ite` and `dite` become
+`if` (the instance argument is the decision, its proof binders
+erased); `T.casesOn` and `T.rec` with no recursive minor premise
+become `match`; constructor applications drop erased fields (`Fin.mk
+i h` is `i` under `Fin`'s realization as `Nat`, `v3/INVENTORY.md`);
+constants become calls to their own realizations, which must exist.
+Refused, with the reason and the position: a body that is `brecOn` or
+`WellFounded.fix` (the executable structure of a recursive L
+definition is not readable off the kernel term — §7.3), a function
+value in a runtime position, a runtime value obtained through
+noncomputable choice, a constant without a realization. The derived
+view is exact by construction: no equations are generated, the E body
+*is* the erasure, and the correspondence is the classifier's erasure
+rule (law §4.6), stated once.
+
+### 7.2 The supplied body
+
+The second form gives an E body whose **signature is the erasure of
+`NAME`'s L type**, binder for binder: a `Sort`-typed binder becomes a
+type parameter, a `Prop`-typed binder disappears, the rest are the E
+parameters in order, and RET is the erasure of the result type. The
+loader checks the correspondence positionally. The correspondence of
+the body is by **equations, one per arm of the body's outermost
+`match`** (or one for a body without a `match`): for the arm with
+pattern `(CTOR x…)` and right-hand side `r`, the L statement
+
+```
+forall PARAMS, NAME PARAMS-with-(CTOR x…) = ⟦r⟧
+```
+
+where `⟦r⟧` translates the E term into L head for head — a
+constructor to its constant applied to the parameters, a call to the
+callee's L constant, a primitive to its L identity (§6.4), `let` to
+`let`, `if` to `dite` over the condition's L term. The equations are
+declared as theorems named `NAME.realize_1 … NAME.realize_N` in the
+realizing module, and proven at Stage 0 by `rfl` (K's definitional
+equality unfolds `brecOn` applied to a constructor — that is exactly
+what Lean's own `eq_N` lemmas are proven by), or by the theorems the
+`equations` clause names, in arm order, when `rfl` does not close them.
+The recursion structure (`measure`) is recorded on the `EFn`;
+well-foundedness of the supplied body's recursion is a separate
+obligation — "`f x = f x` justifies no looping implementation" (law
+§4.4) — and at Stage 0 it is discharged only for structural recursion
+on a parameter whose type is an `inductive` the classifier knows
+(`RecStruct`); a `measure` other than `struct` is a reported obligation
+until phase 3's tactics.
+
+### 7.3 Why both forms, on the evidence
+
+In the pinned export `List.length`, `List.get`, `List.map`, `Nat.add`
+and `Nat.sub` are `T.brecOn` applied to a generated `NAME._f`
+functional, not `T.rec` with visible minor premises; Lean's compiler
+never reads the kernel term either — it compiles the pre-definition.
+Lean's own equation lemmas exist in the export only where `Init`
+realized them, and late: `List.length.eq_2` at line 1,370,217,
+`List.length.eq_1` at 5,465,298, `Nat.add.eq_1` not at all. So the
+shared core's operations take the supplied form with `rfl` bridges,
+and the derived form serves non-recursive definitions (`ite`, `dite`,
+`Decidable.decide`, `Nat.decLt`, the structure projections) — which is
+where T1's phase-2 items live: a decision tag with erased payload
+(`Nat.decLt` derived), a branch-local proof (a `dite` whose `h` is used
+only in a `Fin.mk` field), raw versus checked arguments (§9's
+entries). Neither form redefines the constant; `List.length`'s
+identity, and every imported theorem about it, is unchanged (T5).
+
+### 7.4 Equation names
+
+`NAME.realize_N` rather than Lean's `NAME.eq_N`: the `eq_N` lemmas are
+Lean's, tied to Lean's match structure, and present in the export for
+some constants — a same-named native theorem would collide at
+`check_name` once an `Init` prefix reaches them. `realize_N` is
+guessable from this one rule (law §5.3's grammar) and cannot collide.
+A ratification item (§12).
+
+## 8. The toolchain profile
+
+The toolchain's own sources — everything under `v3/kernel`, later
+`v3/meta` — are E in the profile the Rust bootstrap reads
+(`docs/LANGUAGE.md` narrow; law §9.2; records §7), and the V3 reader
+carries the profile so that it can re-parse them (§10). The profile is
+S's E term language (§5.4) with these differences, each a reader
+rule, none a semantic mode of `ev`:
+
+| in the profile | in S |
+|---|---|
+| the prelude's names `Nil Cons True False Some None Z S Pair` are the toolchain's own E types (`kernel/prelude.shard`), unrelated to `Init`'s | `Init`'s `List.nil` … |
+| `"…"` is the `(List Int)` of its UTF-8 bytes | K's `String` literal |
+| numerals are `Int`; `-7` is a numeral | numerals are `Nat`; negatives are constructor terms |
+| `(quote X)` and `'X` are `Symbol` literals; `sym_eq`, `sym_of_chars`, `chars_of_sym` | no symbols: a name is a `Name` constructor value |
+| `(list a b c)` is list sugar | none (Stage 1 may add it) |
+| a file `import` also opens the imported module (today's flat scope) | `import` never opens; `use` does — the profile files gain `use` lines when the V3 reader first reads them (records §7: "`use` lines come in phase 2") |
+| the primitive names of `docs/LANGUAGE.md` §8 | the naming-law spellings, same table (§6.4) |
+
+Which files are in the profile is decided by the loader from the
+package layout (the toolchain directories, named in `v3/README.md`'s
+layout), not by a marker form: the Rust loader refuses any top-level
+form it does not know, so a `(profile toolchain)` marker would need a
+one-word bootstrap change; the parity slice (§10) may still prefer the
+marker. A ratification item (§12).
+
+## 9. Assumption policy and entries
+
+**Policy** (law §8.1, §3.2): a declaration is accepted only if its
+axiom closure (`axioms.shard`) lies within the file's policy. The
+default policy is the standard profile — `propext`, `Quot.sound`,
+`Classical.choice`. `Init`'s other four axioms (`Lean.trustCompiler`,
+`Lean.ofReduceNat`, `Lean.ofReduceBool`, `sorryAx`; the closures of eight of its
+constants reach one of them, records §8) are outside it, so a native declaration whose
+closure reaches one is refused by policy, its closure printed, under
+an identical proposition (T8). `(trusts NAME…)` widens the file's
+policy by name; a file that declares an `axiom` must trust it. View
+parameters (§6.5) are a third class: permitted while a consumer checks
+against the view, discharged at link, reported if never discharged.
+
+**Entries** (law §9.3): every way a value from outside enters an E
+program is **checked** or **preconditioned**. At phase 2 the entries
+are the driver's — command-line arguments and file contents arrive as
+raw byte lists through the World externs and are validated against the
+entry function's E signature before `ev` is invoked (an `Int`
+parameter parses or the entry refuses with the argument's origin; a
+`(List Int)` is bytes) — and a `realize` body's parameters, whose
+precondition is the L type's erased evidence, recorded in the
+realization record. "Raw versus checked arguments" (T1) is one fixture
+on each: a malformed argument refused at a checked entry with an
+artifact origin and no fabricated file span, and a preconditioned call
+inside E carrying no runtime proof.
+
+## 10. Conformance at phase 2 (records §4.1 B10)
+
+Four suites, agreed before any result is read:
+
+1. **Frontend parity.** The V3 reader over `v3/kernel/*.shard` and the
+   Rust loader over the same files produce the same `Prog`, compared as
+   one canonical text: the reader prints its `Prog`; the bootstrap
+   gains a `dump` mode that prints its `Module` in the same text.
+   Byte-identical over the toolchain's closure retires TCB bring-up
+   item (2), the Rust loader's parsing role.
+2. **Execution parity.** The same `Prog` under `ev` (hosted on route 3)
+   and under the Rust evaluator: K's test entrypoints and the T0
+   fixture — route 2, K interpreted by `ev` — with byte-identical
+   verdict lines; `examples/calc`'s program half under `ev` against the
+   old tree's evaluator on a fixed input set; every primitive's
+   positive, negative and boundary cases.
+3. **Checker parity.** Phase 1's byte-tie of routes 1 and 3, carried
+   unchanged.
+4. **Independent pins.** Expected outputs fixed by hand, never
+   generated by either engine under comparison — the `t0_expected.txt`
+   precedent.
+
+Wall-clock, memory and allocation counts are measured and recorded,
+never compared as verdicts.
+
+## 11. Deferred, by phase
+
+| capability | law | phase |
+|---|---|---|
+| implicit arguments, first-order unification, universe inference, the numeral rule of §5.2, coercion `Nat → Int` | §5.1 Stage 1, §5.2 | 3 |
+| match compilation, structural recursion to recursors, `f.eq_N`, `noConfusion`, `WellFounded.fix` from `measure`, `fn` = `def` + `realize` | §5.1 Stage 1, §4.5 | 3 |
+| deriving under a declared policy | §5.1 | 3 |
+| tactic blocks, the I elaborator, the goal graph, `sorry` as a hole | §5.1 Stage 2, §7 | 3 |
+| typeclasses, instances, coercions | §5.1 Stage 3 | 3 |
+| the `Init` import with E realizations attached; `String`, `Array`, `ByteArray` representations | §4.4, INVENTORY | 3 |
+| lambda lifting, templates, specialization | §4.3 | 3–4 |
+| `bin`, `requires`, the World-use check, effect traces | §4.7 | 4 |
+| prepared handles, long-lived environments | §9.3, T6 | 4 |
+| evaluation reflection: `ev`'s theorem, the `rfl` node | §4.4, T8 | 4 |
+| the canonical S form: CANON's rule set rewritten for S | §5.1 "One canonical S", §10.5 | 2, its own slice |
+| user notation | §5.3 departure 6 | never in v1 |
+
+## 12. For ratification — decisions made here beyond the law's text
+
+1. **Native K names carry the module path** (`std.list.List.sum`);
+   imported names do not (`List.length`), the import being their
+   identity. Alternative: prefix imports too (`Init.List.length` in K),
+   which renames every constant in every imported term at import time
+   and changes the accelerator pins' identity hashes.
+2. **`.{u v}` universe suffix** on declared and cited names, lexed as
+   a level list with the `(Sort …)` grammar. Alternative: a separate
+   `(@ NAME LEVEL…)` form.
+3. **`axiom` and `opaque` added** to the keyword set; `abbrev` as a
+   hint spelling. They are K's kinds; the hostile battery and views
+   need them.
+4. **`NAME.realize_N`** for a supplied realization's equations (§7.4).
+5. **S's L-level `let` is sequential, the E `let` is parallel** (§5.4);
+   the rule for `fn` bodies in L is chosen at Stage 1.
+6. **`(import Init NAME)`**, a dependency-ordered prefix named by its
+   last declaration, as the whole import mechanism at phase 2.
+   Alternative: closure imports by name set, which need an index of
+   the export and a union of closures re-ordered per load.
+7. **Constructor citations resolve through opened prefixes only** at
+   Stage 0; the `type` form opens its own namespace for the rest of
+   its file so today's bare `Nil`/`Cons` keep working.
+8. **The toolchain profile is a property of the package layout**, not
+   of a marker form (§8).
+9. **`ev`'s `if` rule**: the then-branch iff the condition's cell is the
+   second constructor of its type — one rule for `Bool`, `Decidable`
+   and the profile's `Bool`.

@@ -40,7 +40,7 @@ family; the rest follow the contract.**
 | `tools/prove`, `tools/explain`, `tools/canon`, `tools/digest` | 14 | 10,685 | new code (I producer; goal-state renderer; the S rule set; the map instrument) | |
 | `tools/shardfmt` | 3 | 989 | PORT | the goal's flagship (#23) |
 | `pins/` | 118 | 6,052 | PORT | corpus law; `pins/trust` seeds T0's hostile battery |
-| `examples/calc` | — | 3,130 | PORT (phase 2, named) | |
+| `examples/calc` | — | 3,130 | PORT — the program half (lexer, parser, evaluator, show, the app's step; 51 fns, 9 types, ~1,000 lines) at phase 2 under `ev`; the 100 claims (~2,100 lines) at phase 3 with tactics (ruled 2026-09-07) | |
 | `examples/sha256sum` (the bin, `mod.req`, stream) | ~5 | ~10,000 | PORT | |
 | `examples/sha256sum/*_dispatch_x86`, `*_shani_x86` | 2 | 58,208 | ARCHIVE with the weld family (proposed) | |
 | `examples/snake_game_3`, `addw`, `add`, `io`, `modules_demo`, `req_*`, `ledger_dep`, root demos | ~30 | ~11,000 | PORT | the teaching corpus; T9's material |

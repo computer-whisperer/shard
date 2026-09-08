@@ -1,0 +1,142 @@
+;;; v3/kernel/prog.shard — E programs as data: what `ev` runs.
+;;;
+;;; FOUNDATION §2 ("programs are data"), §4.2 (E's types and terms),
+;;; §4.4 (`ev` is the definition of "run"; evaluation reflection is
+;;; stated over this data), §9.1 (route 2: K interpreted by compiled
+;;; `ev`). v3/LANGUAGE.md §6 is the specification; this file is the
+;;; definition, phase 2 slice 1 (2026-09-07): declarations with the
+;;; rules as comments, the phase-0 precedent — `ev` and the classifier
+;;; are the slices after the reader.
+;;;
+;;; The shape is the Rust bootstrap's AST (rust_bootstrap/src/ast.rs,
+;;; the executor of E today) with every name resolved to an identity
+;;; (name.shard's Name: the module path plus the declared name for a
+;;; native declaration, the exported name for an imported one) and every
+;;; call head classified at load, so `ev` never guesses what a head is.
+;;; Frontend parity (LANGUAGE.md §10) compares a Prog printed by the V3
+;;; reader with the bootstrap's Module printed in the same text.
+;;;
+;;; This is a toolchain-profile file: the L-level List/Option/Bool/Nat
+;;; of the library are Init's and unrelated (prelude.shard).
+
+(import "util.shard")   ; Name (name.shard) + name_eq
+
+;; ---------------------------------------------------------------------
+;; TYPES. E-types (§4.2): a type constructor applied to E-types, or a type
+;; parameter of the enclosing declaration by position. Every polymorphic
+;; type constructor is at universe level 0 here — E-types live in Type —
+;; so no levels are carried (LANGUAGE.md §4, "E-type positions").
+(type EType
+  (ETCon Name (List EType))   ; List Int, Option (List Int), Nat, a native inductive applied
+  (ETVar Int))                ; the i-th type parameter of the declaration (0-based)
+
+;; ---------------------------------------------------------------------
+;; LITERALS. LNat and LInt share the runtime representation (VInt) — the
+;; realization of Nat and Int alike is the unbounded integer
+;; (v3/INVENTORY.md); the constructor records the literal's E type for the
+;; Stage-1 typing of bodies. LStr is the toolchain profile's string
+;; literal, a byte list (LANGUAGE.md §8); S's String literal has no E
+;; realization until phase 3. LSym is the profile's symbol literal.
+(type ELit
+  (LNat Int)          ; a Nat numeral, ≥ 0
+  (LInt Int)          ; an Int numeral (the profile's numerals)
+  (LStr (List Int))   ; UTF-8 bytes (the profile's "…")
+  (LSym Symbol))      ; (quote X) — the profile only
+
+;; ---------------------------------------------------------------------
+;; PATTERNS. A variable binds the next de Bruijn index (positional, as in
+;; the bootstrap: PVar carries no name); a constructor pattern names the
+;; constructor's identity and binds its sub-patterns left to right; a
+;; literal pattern compares by value.
+(type EPat
+  (PVar)                      ; `_` or a name — binds one slot
+  (PCtor Name (List EPat))
+  (PLit ELit))
+
+;; ---------------------------------------------------------------------
+;; TERMS. Locally nameless: EBVar 0 is the innermost binding (a fn's last
+;; parameter, the last variable a pattern bound, the last binding of a
+;; let). Four head kinds are four constructors: the classifier resolved
+;; each head to exactly one of them (LANGUAGE.md §6.3), all saturated.
+(type ETerm
+  (EBVar Int)                    ; a parameter or pattern/let variable
+  (ELit ELit)
+  (ECtor Name (List ETerm))      ; a constructor of an E-eligible inductive, applied to its fields
+  (ECall Name (List ETerm))      ; an E function (EFn, or an ESig linked at run time)
+  (EPrim Name (List ETerm))      ; a primitive of the fixed table, by identity (LANGUAGE.md §6.4)
+  (EExt Name (List ETerm))       ; a World extern — `ev` is pure and stops here; `run` performs it
+  (EMatch ETerm (List EArm))     ; first arm whose pattern matches; no arm = stuck
+  (ELet (List ETerm) ETerm)      ; PARALLEL: every rhs in the outer frame, pushed in order
+  (EIf ETerm ETerm ETerm))       ; then-branch iff the condition's cell is the SECOND constructor of its type
+;; RULES of `ev` per node (LANGUAGE.md §6.2): arguments left to right; a
+;; call evaluates the callee's body in a fresh frame of exactly its
+;; argument values with one unit of fuel less; a primitive's guard
+;; failure (the profile's `/` at zero, a shift out of range) is stuck,
+;; never a value; `if` is the tag rule — Bool.true, Decidable.isTrue and
+;; the prelude's True are all the second constructor — which is what "a
+;; decision tag with erased payload" means at run time.
+
+(type EArm (EArm EPat ETerm))
+
+;; ---------------------------------------------------------------------
+;; RECURSION STRUCTURE (FOUNDATION §4.4: the correspondence is stated
+;; over "its cases, callees, representations and recursion"). `ev` needs
+;; none of it — fuel bounds every run — but the realization record does.
+(type ERec
+  (RecNone)              ; no measure clause
+  (RecStruct Int)        ; (measure (struct x)): structural on parameter i (0-based)
+  (RecMeasure ETerm))    ; (measure E): a term over the parameters — an obligation until phase 3
+
+;; ---------------------------------------------------------------------
+;; DECLARATIONS.
+(type ECtorDef (ECtorDef Name (List EType)))   ; constructor identity, field types over ETVar 0..nparams-1
+
+(type EDecl
+  (EInd Name Int (List ECtorDef))              ; an E-eligible inductive: identity, nparams, constructors
+  (EFn Name Int (List EType) EType ERec ETerm) ; identity, ntparams, parameter types, return type, recursion, body
+  (EExtern Name Int (List EType) EType)        ; a World extern: identity, ntparams, parameter types, return type
+  (ESig Name Int (List EType) EType)           ; a view's `sig fn`: a signature `run` links to an EFn (LANGUAGE.md §6.5)
+  (ESigType Name Int))                         ; a view's `sig type`: identity and arity, no constructors
+;; RULES: identities are unique across a Prog (the loader's scope, K's
+;; check_name for the L twins); an ECall's target is an EFn or an ESig
+;; of the same arity; an ECtor's constructor belongs to an EInd and is
+;; applied to exactly its fields; a consumer's body never names an
+;; ESigType's constructor (the private-equality leak, refused at
+;; classification).
+
+(type Prog (Prog (List EDecl)))
+
+;; ---------------------------------------------------------------------
+;; VALUES and RESULTS. A value is closed data: `ev` values carry no
+;; index (the bootstrap's invariant, eval.rs). Nat and Int are both
+;; VInt; a Bool is the cell (VCtor Bool.true Nil).
+(type Val
+  (VCtor Name (List Val))
+  (VInt Int)
+  (VSym Symbol))
+
+(type EvRes
+  (EvOk Val)
+  (EvOut)                 ; fuel exhausted — never a value, never a refusal (§9.4)
+  (EvStuck Symbol Name))  ; reason (no_arm, guard, unbound, extern, unknown_head), subject (the function)
+
+;; ---------------------------------------------------------------------
+;; the identity of a declaration, and lookup by identity (name.shard's
+;; structural equality; `ev` may index a Prog however it likes — no
+;; representation is mandated).
+(fn edecl_name ((d EDecl)) Name
+  (match d
+    ((EInd n _ _) n)
+    ((EFn n _ _ _ _ _) n)
+    ((EExtern n _ _ _) n)
+    ((ESig n _ _ _) n)
+    ((ESigType n _) n)))
+
+(fn prog_find ((p Prog) (n Name)) (Option EDecl)
+  (match p ((Prog ds) (prog_find_in ds n))))
+
+(fn prog_find_in ((ds (List EDecl)) (n Name)) (Option EDecl)
+  (measure (struct ds))
+  (match ds
+    (Nil None)
+    ((Cons d r) (if (name_eq (edecl_name d) n) (Some d) (prog_find_in r n)))))

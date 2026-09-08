@@ -820,7 +820,72 @@ is `docs/FOUNDATION.md` §5.3.
 - **Open in phase 1:** §3.5's forgeability, deferred to the module
   surface (above).
 
-## 9. Related records
+## 9. Phase 2 record (opened 2026-09-07)
+
+- **Opened** after T0 closed on both routes (§8). The phase per
+  §12.4 item 2: the loader and reader to explicit L, views, the
+  fragment classifier with relevance roles, `ev`, `examples/calc`;
+  gates T1 (a decision tag with erased payload, a branch-local proof,
+  raw versus checked arguments), T5, T8's replay half, conformance
+  (B10's four suites, §4.1 above).
+- **The dig (2026-09-07), what shaped the plan:** (1) a `fn` with a
+  `match` body has no L meaning at Stage 0 — match compilation and
+  structural recursion to recursors are Stage 1, phase 3. (2) In the
+  export `List.length`, `List.get`, `List.map`, `Nat.add` and `Nat.sub`
+  are `brecOn` applied to a generated `_f` functional, so no executable
+  view is readable off the kernel term; Lean's `eq_N` lemmas are in the
+  export only where `Init` realized them, and late (`List.length.eq_2`
+  at line 1,370,217, `List.length.eq_1` at 5,465,298, `Nat.add.eq_1`
+  absent) — the shared core's realizations are supplied bodies with
+  `rfl` bridges. (3) The base environment must be a declared prefix of
+  the export: §3.5 and §7.5 forbid receipts, the whole export costs
+  12 min compiled and 76 min interpreted per load, and chunk 0 (519
+  declarations, 8 s) holds `ite` (line 2,727), `dite` (2,780),
+  `Nat.decLt` (5,492), `List.length` (10,558), `List.get` (10,970),
+  `Decidable.decide` (13,280) and `WellFounded.fix` (14,624). (4) calc
+  is 51 fns and 9 types in about 1,000 lines plus 100 claims in about
+  2,100; the claims need I.
+- **Rulings (user, 2026-09-07): "Agreed on A and the program half."**
+  (A) Stage 0 strictly: a `fn` is E only at phase 2, its L value
+  pending until phase 3, when `fn` = `def` + `realize`; the explicit-L
+  forms are the route into K; T1's items are explicit-L fixtures.
+  Rejected: pulling the first-order match/recursion translation into
+  phase 2 — the elaborator's hardest piece built without the gates
+  that test it. (B) calc's program half under `ev`, differential
+  against the old tree; its claims wait for phase 3 (`v3/MANIFEST.md`
+  amended).
+- **Slice 1 (2026-09-07): the design on disk.** `v3/LANGUAGE.md` — S,
+  L and E at Stage 0: lexical syntax with the `.{u v}` universe suffix;
+  modules and identity (native K names carry the module path, imported
+  names do not — the import is their identity; the `Init` import is a
+  dependency-ordered prefix named by its last declaration, its identity
+  the pin plus that name; the content hash is over L, never S); the
+  keyword table (`axiom` and `opaque` added to the law's list; reserved
+  forms refused with the phase named); explicit-L terms and levels; the
+  E term language (today's, parallel `let`); `ev`'s contract per node
+  (pure; the tag rule for `if`; one unit of fuel per call; stuck never
+  a value); the classifier's five Stage-0 checks; the primitive table
+  keyed on identity, the profile's and the naming law's spellings as
+  distinct entries where the meaning differs; views with the three
+  conditions (view parameters are axiom-kind constants to K and a
+  distinct policy class; `CheckedEnv` becomes a `sig type`, closing
+  §3.5); `realize` in two forms — the derived view (erasure of a
+  non-recursive L body) and the supplied body with per-arm
+  `NAME.realize_N` equations proven by `rfl` at Stage 0 — plus the
+  reserved type-representation form; the toolchain profile as a table
+  of reader rules; policy (the standard three axioms; `trusts`; view
+  parameters) and entries (checked versus preconditioned); the four
+  conformance suites; the deferred table by phase; nine ratification
+  items. `v3/kernel/prog.shard` — E programs as data with the rules as
+  comments (the phase-0 precedent): `EType ELit EPat ETerm EArm ERec
+  ECtorDef EDecl Prog Val EvRes`, `prog_find`; loads and runs under the
+  bootstrap (`test/prog_test.shard`). The ladder: 2 the s-expression and
+  Stage-0 readers into K (the hostile battery in S; T8's direct P
+  verification; identity invariant under origin-only change); 3 the
+  loader; 4 views; 5 the classifier, `ev` and route 2's byte-tie; 6
+  calc's program half and frontend parity; 7 the doc rows, records, CI.
+
+## 10. Related records
 
 `docs/COVERAGE.md` and `docs/records/COVERAGE.md` (the coverage arc,
 PARKED at B-1b 2026-09-05; resumes at phase 7 on V3); `docs/TCB.md`
