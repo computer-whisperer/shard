@@ -748,7 +748,7 @@ is `docs/FOUNDATION.md` §5.3.
   that function's memo plants a sentinel for the constant in progress,
   so an inductive's cached closure depends on whether it or one of its
   constructors was visited first (order-dependent; §3.6 compares by
-  rule, not by tool name). 66,124 constants, 11 passes, 15 s; built by
+  rule, not by tool name). 65,994 constants, 11 passes, 15 s; built by
   `export.sh` into `init.axioms`. `v3/t0_axioms_cmp.sh` normalizes both
   sides (axioms sorted per line), joins by name and requires every K
   constant in the oracle with the same closure. Evidence: the fixture
@@ -761,7 +761,7 @@ is `docs/FOUNDATION.md` §5.3.
   comparison runs in the CI job (its first pass pending at this
   writing). `Init` declares seven axioms: `Classical.choice`,
   `propext`, `Quot.sound`, `Lean.trustCompiler`, `Lean.ofReduceNat`,
-  `sorryAx`, `Lean.ofReduceBool`; 40,890 of the 66,124 constants have a
+  `sorryAx`, `Lean.ofReduceBool`; 40,861 of the 65,994 constants have a
   non-empty closure. (3) **Fuel monotonicity (§9.4)** stated in the
   kernel README and tested: the battery's 12b/12c exhaust `c_deep` at
   depth 2 and at one heartbeat, then admit the same identity at 64 /
@@ -776,12 +776,49 @@ is `docs/FOUNDATION.md` §5.3.
   never-forgeable checked environment — `CheckedEnv`'s constructor is
   callable by any client until V3 has a module surface (phase 2); the
   hostile battery itself forges an empty one.
-- **Open in phase 1:** the interpreter's own full-export run — route 3
-  is phase 1's named route and the authority has seen prefixes and
-  byte-ties only: one background run of about an hour at tens of GB
-  under a cgroup cap, on the user's go-ahead; the closure gate's first
-  full pass on CI; §3.5's forgeability, deferred to the module surface
-  (above).
+- **The interpreter's own full replay (2026-09-07, late):** user: "go
+  ahead on the full replay run". Route 3 on the dev box, detached under a
+  40 GB cgroup cap, with `-a`: 57,977 accepted / 0 rejected / 0
+  exhausted / 0 mismatched / 0 unsupported — the pinned line — in 4,591 s
+  (76.5 min; user 4,537 s), peak resident set **8.0 GB** against the
+  compiled K's 30.2 GB for the same replay (the bootstrap's sixteen-byte
+  values and inline constructor blocks against the C runtime's boxed
+  cells), and every one of its 59,433 admitted constants' closures
+  identical to the oracle's. Its log is byte-identical to the compiled
+  K's log from the runner (pipeline 452; 60,084 lines — every verdict
+  line and every closure — once the chunk-path headers are normalized):
+  the full-export byte-tie between the authority and the compiled
+  artifact, where the gate scripts tie a 100,000-line prefix. One
+  declaration took a third of the run:
+  `WellFounded.partialExtrinsicFix₃_eq_partialExtrinsicFix` (chunk 255,
+  ≈25 min interpreted); the rest of the export ran at eight chunks a
+  minute. Axiom use across the export's constants (K's lines): `propext`
+  38,131, `Quot.sound` 24,737, `Classical.choice` 11,655,
+  `Lean.trustCompiler` 5, `sorryAx` / `Lean.ofReduceNat` /
+  `Lean.ofReduceBool` 1 each; 38,455 non-empty closures. Two defects in
+  the comparison script surfaced on the way, both in the instrument, not
+  in K or the oracle: (1) the CI image's awk is mawk, which has no
+  `asort`, so the first closure-gate pipeline (451) failed with zero
+  constants on both sides — the sort is now an insertion sort in POSIX
+  awk; (2) the join used `:` as its separator and 23 of `Init`'s
+  constants are syntax-category names containing colons
+  (`Array.term__[:_]::_]`, `List.term_<+:_::_`, the simproc-declaration
+  commands), reported as differing — the separator is a TAB, `-u` on the
+  key is gone (a duplicate name with two closures now shows as a
+  difference), and the script was made to fail on a tampered closure
+  and on a constant the oracle lacks before being trusted again. The
+  oracle listed 91 auxiliary constants (`.eq_1`, `.congr_simp`) under
+  two modules; it now lists each once (65,994).
+- **The closure gate's first full pass on the runner (2026-09-08,
+  pipeline 453 on 08cb592):** the export and the oracle built in 49 s
+  and 49 s, both byte-ties identical with closures, the replay exit 0
+  in 2,478 s at a 29.7 GB peak, the pinned verdict line, and all 59,433
+  closures identical to the oracle's — "T0 FULL == PINNED, closures
+  identical". T0 as §3.6 states it — verdicts and axiom closures over
+  the whole of `Init`, the hostile battery, the scope logged — now holds
+  on both routes 1 and 3, with the two routes' full logs byte-identical.
+- **Open in phase 1:** §3.5's forgeability, deferred to the module
+  surface (above).
 
 ## 9. Related records
 

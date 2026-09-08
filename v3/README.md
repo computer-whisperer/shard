@@ -77,12 +77,18 @@ gated on the five identities it names; T0 now compares **axiom
 closures** as §3.6 requires — `kernel/axioms.shard` computes the
 relation of Lean's `CollectAxioms` as a least fixpoint, the driver's
 `-a` prints one line per admitted constant, `v3/axioms.lean` is the
-oracle over the same environment (66,124 constants, 15 s, built by
+oracle over the same environment (65,994 constants, 15 s, built by
 `export.sh` into `init.axioms`), `v3/t0_axioms_cmp.sh` joins the two:
-identical on the fixture (181 constants) and on chunks 0–4 (1,813);
-the whole export's comparison is the CI job's third gate — and §9.4's
-fuel monotonicity is stated and tested. Still open: the interpreter's
-own full replay (one run, on request); §3.5's non-forgeable checked
+identical on the fixture (181 constants), on chunks 0–4 (1,813) and on
+the whole export (59,433); the comparison is the CI job's third gate
+(first full pass 2026-09-08, pipeline 453: 2,478 s, 29.7 GB peak) —
+and §9.4's fuel monotonicity is stated and tested. **The interpreter's
+own full replay (route 3, 2026-09-07, late):** the pinned verdict line
+in 4,591 s at an 8.0 GB peak (the compiled K: 745 s, 30.2 GB), closures
+identical to the oracle's, and its log byte-identical to the compiled
+K's over the whole export (60,084 lines); one theorem,
+`WellFounded.partialExtrinsicFix₃_eq_partialExtrinsicFix`, took about
+25 of the 76 minutes. Still open: §3.5's non-forgeable checked
 environment waits for the module surface (phase 2). **Nested
 inductives validated:** `Lean.Syntax` (export line 78,503; two levels of
 nesting) admitted and its three exported recursors identical to K's

@@ -46,10 +46,14 @@ def main : IO Unit := do
   let env := env.setExporting false
   -- module order is import order: a constant's dependencies precede it
   -- except inside one inductive block (types ↔ constructors)
+  -- 91 auxiliary constants (`.eq_1`, `.congr_simp`, …) are listed by two modules: once each
   let mut names : Array Name := #[]
+  let mut listed : Std.HashSet Name := {}
   for md in env.header.moduleData do
     for n in md.constNames do
-      names := names.push n
+      unless listed.contains n do
+        listed := listed.insert n
+        names := names.push n
   let mut depsOf : Std.HashMap Name (Array Name) := {}
   let mut cl : Std.HashMap Name (Array Name) := {}
   for n in names do
