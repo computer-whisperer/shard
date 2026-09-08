@@ -9,7 +9,9 @@
 > tree until the flip. The proof IR **I** is phase 3's chapter and is
 > not here. Everything below is **Stage 0** of the law's §5.1: explicit
 > L, no inference. What Stages 1–3 add is listed in §11 with its phase.
-> Decisions this draft makes beyond the law's text are collected in §12
+> §12 is the ledger of changes from v2 — every v2 feature with its fate,
+> the AT RISK rows being the ones to watch. Decisions this draft makes
+> beyond the law's text are collected in §13
 > for ratification; until ratified they are the implementation's
 > working assumptions, not law.
 
@@ -133,8 +135,10 @@ declared name**, and the content hash of its L revision:
 
 `import` brings identities into the **scope**; it opens nothing.
 `use` opens a **prefix**: every identity beginning with `PREFIX.` is
-citable by the remainder. One mechanism serves modules and namespaces
-because both are name prefixes. A citation that resolves under two
+citable by the remainder; `(use PREFIX NAME…)` opens only the named
+members (v2's selective `(use (:: m name))`, 1,768 sites in the old
+tree; Lean's `open M (a b)`). One mechanism serves modules and
+namespaces because both are name prefixes. A citation that resolves under two
 opened prefixes is an error naming both identities; it is never a
 silent choice, and the full identity always resolves. `(use Init)` is
 implicit in every file that imports `Init`, so `List.length` cites the
@@ -287,7 +291,7 @@ already written in it, and its meaning is `ev` (§6.2). Lean's `let` is
 sequential; the E `let` is parallel, as in every existing `fn`. This
 draft keeps the E `let` parallel and makes S's L-level `let` (§5.1)
 sequential, because the two never meet until Stage 1 lowers `fn`
-bodies to L — the point where one rule must be chosen (§12).
+bodies to L — the point where one rule must be chosen (§13 item 5).
 
 ## 6. E — the executable fragment at phase 2
 
@@ -422,8 +426,11 @@ checked conditions, at Stage 0:
   exactly those, and a theorem whose closure names a parameter no
   implementation discharged is reported, not accepted.
 
-A consumer checks against the view alone: its L environment holds the
-view parameters, never the bodies; K cannot unfold a `sig fn`. Its E
+An interface file imports only other interfaces, bare directory
+modules and the kernel, never an implementation file — v2's req-scope
+gate, carried, refused before the file is read. A consumer checks
+against the view alone: its L environment holds the view parameters,
+never the bodies; K cannot unfold a `sig fn`. Its E
 programs are linked to the implementation's `EFn`s by `run` at
 execution (T5's "with the impl linked"). A consumer that matches a
 `sig type`'s constructor or compares two values of a `sig type` for
@@ -520,7 +527,7 @@ Lean's, tied to Lean's match structure, and present in the export for
 some constants — a same-named native theorem would collide at
 `check_name` once an `Init` prefix reaches them. `realize_N` is
 guessable from this one rule (law §5.3's grammar) and cannot collide.
-A ratification item (§12).
+A ratification item (§13).
 
 ## 8. The toolchain profile
 
@@ -534,6 +541,7 @@ rule, none a semantic mode of `ev`:
 | in the profile | in S |
 |---|---|
 | the prelude's names `Nil Cons True False Some None Z S Pair` are the toolchain's own E types (`kernel/prelude.shard`), unrelated to `Init`'s | `Init`'s `List.nil` … |
+| type parameters by the parenthesized head `(fn (append T) …)` or by a bare type variable in a binder type (`(xs (List T))`), auto-bound | explicit `((T Type) …)` binders (law §5.3 departure 4) |
 | `"…"` is the `(List Int)` of its UTF-8 bytes | K's `String` literal |
 | numerals are `Int`; `-7` is a numeral | numerals are `Nat`; negatives are constructor terms |
 | `(quote X)` and `'X` are `Symbol` literals; `sym_eq`, `sym_of_chars`, `chars_of_sym` | no symbols: a name is a `Name` constructor value |
@@ -546,7 +554,7 @@ package layout (the toolchain directories, named in `v3/README.md`'s
 layout), not by a marker form: the Rust loader refuses any top-level
 form it does not know, so a `(profile toolchain)` marker would need a
 one-word bootstrap change; the parity slice (§10) may still prefer the
-marker. A ratification item (§12).
+marker. A ratification item (§13).
 
 ## 9. Assumption policy and entries
 
@@ -617,7 +625,113 @@ never compared as verdicts.
 | the canonical S form: CANON's rule set rewritten for S | §5.1 "One canonical S", §10.5 | 2, its own slice |
 | user notation | §5.3 departure 6 | never in v1 |
 
-## 12. For ratification — decisions made here beyond the law's text
+## 12. Changes from v2 — the compatibility ledger
+
+v2 is today's tree (`docs/LANGUAGE.md` and the layered systems above
+it). This section lists every v2 feature with its fate, so that
+compatibility breaks are decided rather than discovered and nothing is
+lost by omission. Fates: **carried** (same form, same meaning);
+**re-spelled** (same capability, a different form — the migration tool's
+job, law §12.3); **changed** (the meaning differs); **deferred** (not at
+phase 2; the phase named); **dropped** (deliberately, the replacement
+named); **AT RISK** (nothing in the law or this draft provides it yet —
+the rows to watch). Counts are from the tree at `5b9cc0c`. The
+migration table of law §10.3 owns the name and behavior changes of the
+*operations*; this ledger owns the *forms and semantics*.
+
+### 12.1 The object language
+
+| v2 | fate | where / note |
+|---|---|---|
+| `(type (NAME T…) (CTOR F…)…)` | carried | §4; constructors gain the identity `NAME.CTOR`; a bare constructor citation needs the declaring file or a `use` (§13 item 7) |
+| `(fn NAME PARAMS RET BODY)` | carried as E; **changed** | §0: no L meaning at phase 2 — in v2 a `fn` was also the object of `unfold`/`simp` in proofs; restored at phase 3 |
+| polymorphic head `(fn (append T) …)`; bare type variables in binders auto-bound (`(xs (List T))`) | re-spelled in S; carried in the profile | S: explicit `((T Type) …)` binders — law §5.3 departure (4), "auto-bound implicits → explicit binders"; the profile keeps both v2 spellings (§8) |
+| `(extern NAME PARAMS RET)`, polymorphic externs | carried | §4; the roster is the host's (§12.4) |
+| return types unchecked (no load-time typing) | **changed at phase 3** | Stage 1 types every `fn` body against its signature; v2 code that runs only because nothing checked it will be refused then. At phase 2 unchanged |
+| `if` on `True`/`False` by constructor name | carried, generalized | §6.2's tag rule; v2's `(type Bool (False) (True))` has Init's constructor order |
+| `match`: first match wins, nested patterns, integer and `(quote S)` patterns, `_`, bare 0-ary constructors | carried in E | symbol patterns profile only; Stage 1's match compilation must keep first-match semantics (Lean's does) |
+| parallel `let`, no `let*` | carried in E | §5.4; the L-level `let` is sequential (§5.1); one rule chosen at Stage 1 (§13 item 5) |
+| `(quote S)`, `'S`, the `Symbol` type, `sym_eq`, `sym_of_chars`, `chars_of_sym` | profile only; **AT RISK in S** | S has no symbol type: a name is a `Name` value. The toolchain (ten kernel files) and the tools use symbols as tags and identifiers; whether V3 source gets a `Name` literal is a phase-3 decision |
+| `(list a b c)` (9,455 uses outside `v3/`) | profile only; **AT RISK in S** | Lean's `[a, b, c]` is elaborator sugar; Stage 1 should add a list literal or every ported `fn` spells `cons` chains |
+| `"…"` = UTF-8 bytes as `(List Int)`, on the extern wire too | **changed** in S | K's `String` literal, its E realization phase 3 (§5.3). **AT RISK:** the extern wire's byte convention under the naming law (`List UInt8`? `ByteArray`?) is undecided; the profile keeps bytes |
+| `Int` numerals everywhere, `-7` | **changed** in S | numerals are `Nat`; negatives are constructor terms at Stage 0 (§2); the numeral rule of law §5.2 is Stage 1 and `-7` as `Neg.neg` is a Stage-3 instance — **AT RISK:** negative literals stay verbose until then unless Stage 1 special-cases `-` |
+| unbound identifier = `FVar` (proof-time opened variables) | dropped | an unbound name is a resolution error; K refuses free variables; I's named context replaces the use (phase 3) |
+| primitive dispatch by name, trie-first, bodyless-name collision = stuck (`pins/lang/prim_shadow_rejects`) | **changed** | heads classified at load into four node kinds; a primitive is an identity (§6.4); the pin becomes a classifier refusal |
+| the primitive table | carried under the profile names; **changed** under the naming-law names | §6.4; `/` stuck at zero versus `Int.tdiv` total are two entries |
+| `gen_fresh`, the one effectful primitive | **AT RISK** | law §4.7 has no effectful primitives: pure `ev` refuses reachable externs. Ten kernel files use it (types, canon, sequent, reduce, tactics, proof_reader, proof, trace, the two lowered twins). The V3 toolchain threads a counter or declares an extern; decided at slice 5 |
+| `Nat` former: `Z`/`S` packed to literals, patterns match literals by view, proof-facing normalizers never pack, bare literals do not type as `Nat` | **changed** | `Nat` is Init's; K's literal rules (offset, `Nat.zero` ≡ `0`, accelerators) replace the former; numerals type as `Nat` by rule (§5.3). The profile keeps the prelude's `Nat` for measures |
+| `(refine BASE PRED)`, `refine_val`, `refine_try`, `refine-fact`, `(returns …)` (37 types, 43 `refine-fact` sites) | re-spelled; deferred | `Subtype` over any `Prop` (law §4.1): `refine_val` → `Subtype.val`, `refine_try` → a `decide`-bridged constructor, `refine-fact` → `Subtype.property`; the return obligation is a Stage-1 elaboration obligation. Phase 3 (REFINEMENT.md superseded) |
+| `(record …)`, `make`, `with`, `F_of`/`with_F`, the six-law family, `NAME_eta` (21 files, 237 `with_F` sites) | re-spelled; **AT RISK** | `structure` with projections (§4): `F_of` → `NAME.F`; `NAME_eta` is K's structure eta for free; the laws are `rfl`. **No Stage-0 form for `with_F` updaters or order-free `make`**: Lean's `{ s with f := v }` is elaborator sugar — Stage 1 must add it or every update site spells the constructor |
+| `std/word` (`U8`…`I32`, opaque), `std/bytes`, `std/str` | re-spelled | `UInt*`/`BitVec`, `ByteArray`, `String` (law §10.3, INVENTORY), phase 3–5. **AT RISK:** widths beyond 64 — INVENTORY realizes `BitVec w` only for static `w ≤ 64`; the 2026-09-02 ruling kept `std/word`'s unused widths as a facility |
+| `S^`, `inline`, `chain` (2,733 / 1,851 / 320 uses) | dropped with the v2 proof language | their reason — claim statements must be literal spellings that match CBV residues — does not survive: I's `rw`/`simp_only` match terms, and Nat towers are K literals. Phase 3 confirms; **AT RISK** if some I form still needs a literal tower |
+| `(import "x.shard")` opens the file's names (flat scope) | **changed** | `import` never opens, `use` does (§3.1); the profile keeps flat scope until its `use` lines are added (slice 6) |
+| `(use (:: m *))`, selective `(use (:: m name))` (1,768 selective sites) | re-spelled | `(use m)` and `(use m name…)` (§3.1) |
+| `use-module` (2 uses) | dropped | vestigial |
+
+### 12.2 Modules and interfaces
+
+| v2 | fate | note |
+|---|---|---|
+| `mod.req.shard`, the `mod.req/` dir form, `sig fn`, `sig type` (private constructors), `requirement`/`fulfills`, requirements granted to consumers, structural opacity per closure, mode-aware resolution (check = interface, run = implementation), canonical closure dedup | carried | §6.5 — with one change: a `sig fn`/`sig type`/`requirement` is a **view parameter**, an axiom-kind constant to K and a policy class, so evidence binding is checked on closures rather than by the loader's granted flag |
+| the req-scope gate (an interface file imports only interfaces and the kernel) | carried | §6.5 |
+| back-compat shims (`std/nat.shard` → `(import "nat")`) | dropped | V3's files are new |
+| `(bin …)` (16), `trusts`, `requires` | deferred | phase 4 (§4 reserved forms); `trusts` already carries the axiom policy at phase 2 (§9) |
+| `(app …)`, `(cli …)` (recognized by the reader; no uses in the tree) | dropped | the MVU driver is phase 4's `bin` story |
+| `(lib …)` (4 uses, `tools/lowcheck` fixtures) | **AT RISK** | the lib-build arc's form; the law names the lowering-side toolchain "new code where toolchain" (MANIFEST) and never mentions `lib`; a phase-5 decision |
+
+### 12.3 The proof language
+
+Everything here becomes I (law §7) at phase 3; the v2 proof DSL is
+the re-spelling tier of the port, not a stage (law §5.1). The rows
+say what each v2 form most plausibly becomes, so the phase-3 roster
+can be checked against them; "phase 3 decides" is implicit in every
+row.
+
+| v2 | becomes | note |
+|---|---|---|
+| `(claim NAME (binders) GOAL PROOF)` with `(goal (premises) concl)` sequents, named hypotheses, type parameters inferred from binders | `theorem` with explicit binders, premises as `->` or named binders | conclusions were equations between object terms; V3 admits any `Prop` (law §10.2: "Bool predicate → proposition plus decision") |
+| `axiom` (49; kernel, app and bin scopes only) | `axiom` under `trusts` | §9 |
+| `refl` | `rfl` | |
+| `steps` with `reduce` / `simp` / `simp (stop …)` / `compute` / `compute (stop …)` / `unfold` / `rewrite … OCC` / `inspect` | `simp_only`, `unfold`, `rw` with a guarded occurrence path, `decide`/`reflect` for ground computation; `inspect` → `goal_of` renderers | `compute` becomes evaluation reflection (§6.2, phase 4), not a rewrite |
+| `induct`, `case-on` | `induction`, `cases` | |
+| `wf-induct MEASURE`, `subterm-induct`, `(below)` | `wf` over `WellFounded` / `sizeOf` | **AT RISK:** the strong IH citable at any proper subterm with `(below)` discharging the `⊰` premise syntactically — Lean has `sizeOf`-based termination; whether I keeps a subterm-order rule is a phase-3 decision |
+| `have`, named `have`, `(premise NAME)`, `(hyp K)`, `(lemma NAME)` | `have`, the named context, `exact` | |
+| `fin-split VAR LO HI` | `decide` over a bounded `Fin`/interval, or `omega` | **AT RISK:** bounded enumeration as one primitive step |
+| `div-facts TERM D Q` | `omega` (owns the `Nat`/`Int` seam, law §5.2) | |
+| `inject`, `absurd` | `injection`, `noConfusion`/`absurd` | Stage 1 generates `noConfusion` (law §5.1) |
+| `rewrite-with EQREF DIR SIDE (INST…) (PROOF…)` | `rw` carrying lemma identity, instantiation, direction, guarded occurrence path | law §7.2 |
+| `(by arith (list …))` — tautology, Farkas certificate (5,105 uses) | `arith` with the checked certificate as I data; `omega` as the producer | law §7.2 lists `arith` |
+| `refine-fact` | `Subtype.property` | |
+| `(admit)` truncation | `sorry`, reported loudly, never accepted | law §7.5 |
+| `.auto.shard` sidecars, `(proof-for NAME PROOF)` (1,495), the `auto` delegation | the sidecar and the pin store keyed by the resolved requirement; engine-authored I | law §7.5; T8's stale-pin rule |
+| the tracer, focus mode, `tools/explain` | renderers of goal states | law §7.3 |
+| corpus pins (`pins/`, `pin_run`, `fails-base.txt`, the tiers) | `v3/pins`, the hostile battery first | phase 5; `run_corpus.sh` never reaches `v3/` (phase 1 header) |
+
+### 12.4 Semantics and the host
+
+| v2 | fate | note |
+|---|---|---|
+| division by zero stuck | **changed** under the naming law: `x / 0 = 0`, `x % 0 = x` | law §10.4; the profile's `/` stays stuck (§6.4) |
+| bitwise ops on `Int` premised `0 ≤` | re-spelled | `Nat.land` … (law §10.3) |
+| sizes and indices `Int` | **changed** | `Nat` where a size, saturating subtraction — the migration tool's typed class, reviewed per use (law §10.2) |
+| `int_eq`/`lt`/`le` return `Bool` | re-spelled | `Decidable` propositions with `decide` bridges; `==` for `Bool` values |
+| World threading with no use check | **changed at phase 4** | the well-threadedness check (law §4.7): a v2 program that uses one World token twice will be refused; the World-alias fixture lands before any effectful port |
+| the extern roster `get_args read_file read_dir read_key write write_file write_line exit` | partly carried | `kernel/host.shard` declares six; `read_dir` (the old loader, codegen) and `read_key` (snake) return when a V3 consumer needs them. **AT RISK:** the wire convention (above) |
+| evaluator errors `NoMatchArm`, `IfNonBool`, `UnknownCall`; no fuel | **changed** | `EvStuck` with a reason and subject; `EvOut` is new — v2 relied on the totality gate instead of fuel (§6.2) |
+| `(measure (struct x))` (3,175), `(measure (- …))` (29), size-function measures (about 20) | carried as `ERec` | the obligation: v2's measure gate and the offline `admit` classifier on every checked `fn` → law §4.5's tactic-discharged obligations (phase 3). **AT RISK during phase 2:** no totality check on any `fn` — exactly `eval direct`'s situation today, and only for the duration of Stage 0 |
+| mutual recursion (the measure gate's SCCs) | deferred | "mutually recursive groups need a joint well-founded argument" (law §4.4), Stage 1 |
+| a user `(type Nat …)` shadows the core one | carried by identity | two `Nat`s are two identities; no shadowing rule is needed |
+
+### 12.5 Tooling surfaces
+
+| v2 | fate | note |
+|---|---|---|
+| `bin/check`, `bin/shard_check`, `bin/shard_eval`, `eval direct` | the V3 driver replaces `check` (slice 3); `eval direct` stays the bootstrap's; the compiled chain is route 1 | law §9.1; `tools/lower` ARCHIVE at the flip |
+| shardfmt and CANON's rule set | rewritten for S | law §10.5: phase 2, its own slice; the fmt gate on V3 at phase 6 |
+| `tools/digest`, `explain`, `prove`, `search` | new code onto law §7.3 | MANIFEST |
+| `tools/zed-shard`, `shard-viewer` keyword lists | the V3 keywords (§4) | law §10.5, phase 2 |
+
+## 13. For ratification — decisions made here beyond the law's text
 
 1. **Native K names carry the module path** (`std.list.List.sum`);
    imported names do not (`List.length`), the import being their

@@ -884,6 +884,23 @@ is `docs/FOUNDATION.md` §5.3.
   verification; identity invariant under origin-only change); 3 the
   loader; 4 views; 5 the classifier, `ev` and route 2's byte-tie; 6
   calc's program half and frontend parity; 7 the doc rows, records, CI.
+- **The v2 compatibility ledger (2026-09-07, user: "keep an eye on
+  where the compatibility breaks are and what features we may be
+  unintentionally losing"):** `v3/LANGUAGE.md` §12 lists every v2
+  feature with its fate — carried, re-spelled, changed, deferred (with
+  the phase), dropped (with the replacement), or AT RISK (nothing in
+  the law or the draft provides it yet). Eleven AT RISK rows to watch:
+  symbols in S (the toolchain's tags and identifiers); the `(list …)`
+  literal (9,455 sites); the extern wire's byte convention under the
+  naming law; negative numerals until Stage 3's `Neg`; `gen_fresh`
+  (an effectful primitive, ten kernel files, no place in §4.7);
+  record updaters `with_F` and order-free `make` (237 sites, no
+  Stage-0 form); `std/word` widths beyond 64; `S^`/`inline`/`chain`
+  if an I form still needs literal towers; `(lib …)`; the
+  subterm-order strong induction (`subterm-induct`/`(below)`) and
+  `fin-split` as I steps; no totality check on any `fn` during Stage
+  0. Two draft fixes fell out of writing it: selective `(use PREFIX
+  NAME…)` and the req-scope gate, both now in the draft.
 
 ## 10. Related records
 

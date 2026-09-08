@@ -109,7 +109,9 @@ ports its program half, its claims wait for phase 3. **Slice 1
 Stage 0: the keywords, terms and levels, modules and identity, the
 `Init` prefix import, `ev`'s contract, the classifier, views, the
 `realize` surface, the toolchain profile, policy and entries, the four
-conformance suites, the deferred table, the ratification items) and
+conformance suites, the deferred table, **the v2 compatibility ledger
+— every v2 feature with its fate, the AT RISK rows being the ones to
+watch (§12)**, the ratification items) and
 `kernel/prog.shard` (E programs as data — the type `ev` runs; loads
 under the bootstrap, `kernel/test/prog_test.shard`). The ladder: 2 the
 s-expression and Stage-0 readers into K; 3 the loader (package root,
