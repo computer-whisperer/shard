@@ -148,11 +148,16 @@ header line): 13 entrypoints, 0 failed.
 What the phase-1 result above does **not** establish, beside it until
 each closes on its named gate:
 
-- **R42, the accelerator pins** — fixed at `12a7aac`; closes when the
-  `v3` CI job's new assertion passes on the full export: every one of
-  the 20 candidates pinned by structural comparison (`t0_full.sh`,
-  the driver's `-p` line). Locally: all 20 on compiled K over chunks
-  0–35, byte-ties identical.
+- **R42, the accelerator pins** — fixed at `12a7aac`; **CLOSED
+  2026-09-12, pipeline 461** (`9d2ae0e`): the full-export replay on
+  compiled K (2,499 s, 31.0 GB peak) pinned all 20 candidates by
+  structural comparison, closures identical to the oracle, byte-ties
+  identical; 13 test entrypoints green. Pipelines 457–460 had died in
+  the runner before any project code ran: the `c-srv3` host rebooted,
+  its Ceph mount raced the MDS and failed, the kubelet's dependency on
+  it kept that node's API server down, and the cluster's single
+  control-plane endpoint took every Cilium agent's policy path with it
+  (recorded for the cluster owner, not this tree).
 - **R43, the raw-to-checked boundary** — not enforced: the toolchain
   profile exposes `CheckedEnv`'s constructor (the hostile battery
   builds one) and `expr_eq`'s positive-id shortcut trusts the ids of
