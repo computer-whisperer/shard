@@ -164,7 +164,26 @@ Init prefixes, the wrong-pin fixture, visibility across root files):
 15 entrypoints, 0 failed, 2 s. **CI (pipeline 464, `77ebcab`):** green
 — 15 entrypoints, the full-export replay on compiled K in 2,499 s at a
 31.0 GB peak, all 20 candidates pinned, closures identical, byte-ties
-identical.
+identical. **Slice 4 (2026-09-12): views** — `LANGUAGE.md` §6.5 built
+as §6.6: a directory module's view (`DIR/mod.req.shard` or the dir
+form) loads on `(import "DIR")` with `sig type`, `sig fn` and
+`requirement` admitted as view parameters (axiom-kind constants; the
+policy's third class, named on each record's `params=`), the req-scope
+gate refusing a view's plain-file import before it is read, `fn` and
+bodies refused in a view; given `DIR` itself, the loader checks the
+implementation `DIR/BASE.shard` in a **fork** of its state from the
+view's fork point — the view replayed with the implementation's
+`type` substituted for each `sig type` (parameter count compared),
+each `sig fn`'s E signature compared with the `fn`'s head, each
+`requirement` discharged by `(fulfills NAME PROOF)` with the statement
+re-read where the types are concrete (proved, or pending on `sorry`),
+the implementation's forms consumed in file order up to the
+implementing one — one `DISCHARGE` line per parameter, its own
+declarations under `IMPL`. Tests: 14 view cases in `v3/pins/loader/`
+(34 in all; a `;; roots:` header names what the loader is given) and
+five in `loader_test` (a consumer's import loads the view only; the
+consumer's theorem records the parameters it rests on; the directory
+as a root discharges every parameter); 15 entrypoints, 0 failed.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
@@ -200,7 +219,10 @@ each closes on its named gate:
   still to come, the interpreter stays the authority, and every full
   replay is preceded by the byte-tie on a prefix.
 - **§3.5's sealed checked environment** — the ingestion half landed
-  at slice 3 (R43 above); the constructor's sealing waits for views.
+  at slice 3 (R43 above); views landed at slice 4 (`LANGUAGE.md`
+  §6.6), so the mechanism exists; the seal itself — `CheckedEnv` a
+  `sig type` of `kernel/env`'s view — lands when the toolchain's own
+  sources load under this loader (slice 6).
 
 ## The pin (2026-09-06)
 
@@ -229,5 +251,5 @@ v3/LANGUAGE.md    the V3 language — S, L and E at Stage 0 (phase 2 draft; I in
 v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K; phase 2: prog, the reader tower, ev
 v3/meta/          phase 3: the elaborators, I, the goal graph, tactics
 v3/std/           phase 3: the first library under the naming law
-v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers), pins/loader/ (slice 3: package roots, main.shard's header)
+v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers), pins/loader/ (slices 3–4: package roots, main.shard's `;; expect:` and `;; roots:` headers)
 ```

@@ -1004,6 +1004,34 @@ is `docs/FOUNDATION.md` §5.3.
   `is_ws`/`is_digit`/`starts_with_lit` had three copies (json, sexpr, a
   test) under a bootstrap that silently keeps the first — one each in
   `util.shard`; sexpr's comment-skipping `skip_ws` is `skip_blank`.
+- **2026-09-12 — slice 4 landed: views.** §6.5's three conditions at
+  Stage 0, the mechanics written as `LANGUAGE.md` §6.6 before the
+  code and ratification items 12–14. The old tree's structural opacity
+  (two same-named typedefs in one closure, a preferring lookup) cannot
+  live in K's one-name environment; the rule that replaces it is one
+  environment per role: consumers see the view's parameters (`sig
+  type`, `sig fn`, `requirement` as axiom-kind constants, the policy's
+  third class, named on each record's `params=`); the implementation
+  `DIR/BASE.shard` is checked in a fork of the loader's state from the
+  view's fork point (after its directives), the view replayed with the
+  implementation's `type` at each `sig type` (parameter count), the
+  `fn`'s E signature against each `sig fn` (`expr_eq` of the Π-types,
+  the parameter then admitted — a `fn` has no L meaning at Stage 0),
+  each `requirement` discharged by `fulfills` with the statement
+  re-read where the types are concrete (proved or pending), the
+  implementation's forms consumed in file order up to the implementing
+  one so a private helper declared before it is admitted first; a
+  view's theorem is not re-checked, its closure binds it. The fork
+  point is kept on the view's module record, so the check runs whether
+  or not a consumer loaded the view first. The req-scope gate refuses
+  a view's plain-file import before the file is read; `fn` and bodies
+  are refused in a view, parameters outside one. Tests: 14 view cases
+  in `v3/pins/loader/` (a `;; roots:` header names the files the
+  loader is given; `impl-error` joins the expectation words) and five
+  in `loader_test`; 15 entrypoints, 0 failed. What waits: the seal of
+  `CheckedEnv` behind `kernel/env`'s view needs the toolchain's own
+  sources under this loader (slice 6); the private-equality leak is
+  refused at classification (slice 5).
 
 ## 10. Related records
 

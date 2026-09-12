@@ -1,6 +1,6 @@
 # The V3 language — S, L and E at Stage 0 (phase 2 draft)
 
-> **STATUS (2026-09-12): DRAFT — slices 1–3 of phase 2 (FOUNDATION
+> **STATUS (2026-09-12): DRAFT — slices 1–4 of phase 2 (FOUNDATION
 > §12.4 item 2; `docs/records/FOUNDATION.md` §9).** Written before the
 > reader existed, as the design the reader, the loader, the views, the
 > fragment classifier and `ev` are built to. **Slice 2 built §2 and the
@@ -14,8 +14,13 @@
 > `trusts`, the `Init` prefix import against the pin, the per-file
 > policy, the acceptance records) with `v3/kernel/load.shard` as the
 > driver and `v3/pins/loader/` as its corpus; K's raw entry now ingests
-> what it is handed (§3.3; GPT-6 R43). A `fn`'s body is read with the
-> classifier (slice 5), views are slice 4. It supersedes `docs/LANGUAGE.md` for the `v3/`
+> what it is handed (§3.3; GPT-6 R43). **Slice 4 built §6.5 as §6.6:**
+> directory modules and their views — `sig type`, `sig fn` and
+> `requirement` as view parameters (the policy's third class), the
+> req-scope gate, the implementation checked in a fork of the loader's
+> state where the view is replayed with the implementation substituted
+> at each signature, `fulfills` proved or pending, one `DISCHARGE` per
+> parameter. A `fn`'s body is read with the classifier (slice 5). It supersedes `docs/LANGUAGE.md` for the `v3/`
 > tree (FOUNDATION §10.5); the old document keeps describing the old
 > tree until the flip. The proof IR **I** is phase 3's chapter and is
 > not here. Everything below is **Stage 0** of the law's §5.1: explicit
@@ -100,8 +105,9 @@ package root with `/` read as `.` and `.shard` dropped:
 `v3/std/list.shard` is `std.list` (`docs/LAYOUT.md`, "The V3 sibling
 tree"). A directory module's interface `DIR/mod.req.shard` (or
 `DIR/mod.req/mod.req.shard`, the dir form) has the directory's path;
-the directory's other files are its implementation and share the path
-(the old tree's rule, carried). The package root is told to the
+its implementation `DIR/BASE.shard` shares the path (the old tree's
+rule, carried exactly — §6.6; other files in the directory are file
+modules of their own). The package root is told to the
 loader explicitly; nothing under it is named by an absolute path.
 
 **A declaration's identity** (law §8.3) is its **module path plus its
@@ -534,6 +540,73 @@ private-equality leak. This is the module surface phase 1 deferred to:
 `CheckedEnv` becomes a `sig type` of `kernel/env`'s view and no client
 outside `kernel` can build one (law §3.5).
 
+### 6.6 The loader's view mechanics (slice 4, 2026-09-12)
+
+What §6.5 leaves to the implementation, as `loader.shard` builds it.
+K's environment holds one declaration per name, so the old tree's
+structural opacity — two same-named typedefs in one closure, lookup
+preferring the one with constructors — cannot be carried as it was.
+The rule that replaces it: **one environment per role.** A consumer's
+environment holds the view's parameters; the implementation is checked
+in a **fork** of the loader's state taken before the view was loaded,
+where the view's forms are replayed with the implementation's concrete
+declarations substituted at each signature. Nothing is looked up by
+preference; K sees one `std.list.List` in either environment.
+
+- **Files.** A directory module `DIR` has its interface at
+  `DIR/mod.req.shard` or, the dir form, `DIR/mod.req/mod.req.shard`,
+  and its implementation at `DIR/BASE.shard` (`BASE` the directory's
+  last component) — the old tree's rule exactly; §3's "the directory's
+  other files" is narrowed to that file at this slice, other files in
+  `DIR` being ordinary file modules with their own paths. Both carry
+  the module path `DIR`. `(import "DIR")` loads the interface; a
+  missing one is `missing_interface`. Sibling files under `mod.req/`
+  are refused until a consumer needs them.
+- **The view's forms.** `(sig type NAME)` or `(sig type (NAME T…))`
+  admits the view parameter `DIR.NAME : Type → … → Type`; `(sig fn
+  NAME BINDERS RET)` admits `DIR.NAME : ∀ BINDERS, RET`, the binders
+  and result read as E-types (§4: level 0 by rule); `(requirement NAME
+  BINDERS PROP)` admits `DIR.NAME : ∀ BINDERS, PROP`. Each is an
+  axiom-kind constant to K and a **view parameter** to the policy —
+  the third class of §9: a declaration whose closure reaches one is
+  accepted and its record names it (`params=`). The L forms (`type
+  inductive structure def abbrev theorem axiom`) are the view's own,
+  transparent; `fn`, `extern`, `realize` and `fulfills` are refused in
+  a view (`view_form`). The req-scope gate: a view imports only
+  directory modules, `Init` and req-scope files; a plain file import
+  is `req_scope`, refused before the file is read.
+- **The implementation check** runs when the loader is given `DIR`
+  itself (the driver: `load.shard --root R R/DIR`), never when a
+  consumer imports it. In the fork, the view's forms are replayed in
+  view order: a directive as in the view; an L form admitted; `(sig
+  type NAME)` replaced by the implementation's `(type NAME …)` — the
+  implementation file's forms are consumed in **file order up to and
+  including** the matching form, so a private helper declared before
+  it is admitted first — its parameter count compared
+  (`impl_type_arity`); `(sig fn NAME …)` matched against the
+  implementation's `(fn NAME BINDERS RET …)` by the E signature read
+  in the fork (`expr_eq` of the Π-types; `impl_signature`), the
+  parameter then admitted, since a `fn` has no L meaning at Stage 0
+  (§0); `(requirement NAME …)` discharged by the implementation's
+  `(fulfills NAME PROOF)` — the statement re-read in the fork, where
+  the sig types are concrete, and the proof `(exact TERM)` checked as
+  a theorem or `sorry` recorded pending; a view `theorem` is not
+  re-checked (it was checked once, against the parameters; what binds
+  it is its closure). Missing forms are `impl_missing_type`,
+  `impl_missing_fn`, `impl_missing_fulfills`; a `fulfills` of no
+  requirement is `fulfills_unknown`. After the view's forms, the
+  implementation's remaining forms in file order (private types,
+  theorems, `fn`s deferred to slice 5). The fork's records print under
+  `IMPL`, one `DISCHARGE` line per parameter.
+- **Evidence binding** at Stage 0 is by closure: an exported
+  theorem's `axioms=` names the parameters it rests on; the
+  implementation check's `DISCHARGE` lines say which the implementation
+  discharged and which are pending; a consumer that links an
+  implementation at `run` is slice 5's. `CheckedEnv` behind
+  `kernel/env`'s view waits for the toolchain to load under this
+  loader (slice 6); until then the profile exposes its constructor
+  (R43, `v3/README.md`).
+
 ## 7. `realize` — the surface, fixed at phase 2
 
 `realize` attaches a checked E body to an **existing admitted L
@@ -881,3 +954,16 @@ and the disposition this draft intends.
     past a K refusal, a policy refusal and a `sorry`** (§3.2): the
     former say the text is not what its author thinks, the latter are
     verdicts on one declaration with the environment unchanged.
+12. **One environment per role** (§6.6, slice 4): the implementation
+    is checked in a fork of the loader's state from the view's fork
+    point, the view replayed with the implementation's declarations
+    substituted at each signature, the implementation's forms consumed
+    in file order up to the implementing one. Alternative: the old
+    tree's two same-named typedefs in one closure with a preferring
+    lookup, which K's one-name environment cannot carry.
+13. **A view's theorem is not re-checked in the fork**: checked once
+    against the parameters, it is bound by its closure; the fork
+    discharges parameters, not theorems.
+14. **The implementation is `DIR/BASE.shard`** (the old tree's rule),
+    not every file in the directory; `mod.req/` siblings wait for a
+    consumer.

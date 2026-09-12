@@ -11,21 +11,33 @@
 (fn cases () (List (List Int))
   (list "basic" "no_open" "ambiguous" "selective" "cycle" "missing" "directory" "outside"
         "init" "init_nested" "init_not_found" "sorry" "type_opens"
-        "policy_axiom" "policy_trusts" "policy_cross" "read_error" "later_fn" "refused" "visible"))
+        "policy_axiom" "policy_trusts" "policy_cross" "read_error" "later_fn" "refused" "visible"
+        "view_basic" "view_pending" "view_missing_fn" "view_missing_type" "view_missing_fulfills"
+        "view_signature" "view_arity" "view_fulfills_unknown" "view_req_scope" "view_no_interface"
+        "view_dir_form" "view_form" "view_sig_outside" "view_helper"))
 
-;; the outcome of a load: its first record that is not a module, an Init load
-;; or an acceptance; None = every record accepted
+;; the outcome of a load: its first record that is not a module, an Init
+;; load, an acceptance, a parameter or a discharge (the implementation's
+;; own records under IMPL likewise); None = every record accepted
 (fn first_bad ((rs (List Rec))) (Option Rec)
   (measure (struct rs))
   (match rs
     (Nil None)
-    ((Cons (RModule _ _ _ _) r) (first_bad r))
-    ((Cons (RInit _ _) r) (first_bad r))
-    ((Cons (RAccept _ _ _ _ _) r) (first_bad r))
-    ((Cons x _) (Some x))))
+    ((Cons x r) (if (rec_ok x) (first_bad r) (Some (unwrap_impl x))))))
+(fn rec_ok ((x Rec)) Bool
+  (measure (struct x))
+  (match x
+    ((RModule _ _ _ _) True) ((RInit _ _) True) ((RAccept _ _ _ _ _ _) True)
+    ((RParam _ _ _) True) ((RDischarge _ _) True)
+    ((RImplRec y) (rec_ok y))
+    (_ False)))
+(fn unwrap_impl ((x Rec)) Rec (match x ((RImplRec y) (unwrap_impl y)) (_ x)))
 (fn accepts ((rs (List Rec))) Int
   (measure (struct rs))
-  (match rs (Nil 0) ((Cons (RAccept _ _ _ _ _) r) (+ 1 (accepts r))) ((Cons _ r) (accepts r))))
+  (match rs (Nil 0) ((Cons x r) (+ (accepted_one x) (accepts r)))))
+(fn accepted_one ((x Rec)) Int
+  (measure (struct x))
+  (match x ((RAccept _ _ _ _ _ _) 1) ((RParam _ _ _) 1) ((RImplRec y) (accepted_one y)) (_ 0)))
 
 (fn matches ((ws (List (List Int))) (rs (List Rec))) Bool
   (match ws
@@ -43,10 +55,25 @@
        (match (first_bad rs) ((Some (RLater k n)) (bool_and (int_list_eq (show_name n) name) (int_list_eq (chars_of_sym k) (join_words rest)))) (_ False))
      (if (int_list_eq kind "policy")
        (match (first_bad rs) ((Some (RPolicy n out)) (bool_and (int_list_eq (show_name n) name) (int_list_eq (show_names_c out) (join_words rest)))) (_ False))
-       False)))))
+     (if (int_list_eq kind "impl-error")
+       (match (first_bad rs) ((Some (RImplErr n e _)) (bool_and (int_list_eq (show_name n) name) (int_list_eq (chars_of_sym e) (join_words rest)))) (_ False))
+       False))))))
     (_ False)))
 
 (fn case_root ((c (List Int))) (List Int) (append "v3/pins/loader/" c))
+;; the files the loader is given, in order: the `;; roots:` header, else main.shard
+(fn root_files ((c (List Int)) (src (List Int))) (List (List Int))
+  (match (header_words ";; roots:" src)
+    (Nil (list (append (case_root c) "/main.shard")))
+    (ws (prefix_all (append (case_root c) "/") ws))))
+(fn prefix_all ((p (List Int)) (ws (List (List Int)))) (List (List Int))
+  (measure (struct ws))
+  (match ws (Nil Nil) ((Cons w r) (Cons (append p w) (prefix_all p r)))))
+(fn load_roots ((l Load) (files (List (List Int))) (w World)) (Pair Load World)
+  (measure (struct files))
+  (match files
+    (Nil (Pair l w))
+    ((Cons f r) (match (load_root_file l f w) ((Pair l1 w1) (load_roots l1 r w1))))))
 (fn run ((cs (List (List Int))) (fails Int) (w World)) World
   (measure (struct cs))
   (match cs
@@ -60,7 +87,7 @@
             (match (parts_of (case_root c))
               (None (run r (+ fails 1) (write_line (append "FAIL bad root " c) w1)))
               ((Some rootp)
-               (match (load_root_file (load0 rootp (list (fixture))) main w1)
+               (match (load_roots (load0 rootp (list (fixture))) (root_files c src) w1)
                  ((Pair l w2)
                   (if (matches ws (ld_recs l))
                     (run r fails (write_line (append "PASS " (append c (append " — " (show_words ws)))) w2))

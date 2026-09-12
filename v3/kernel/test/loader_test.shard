@@ -32,7 +32,7 @@
   (measure (struct rs))
   (match rs
     (Nil Nil)
-    ((Cons (RAccept n m h a p) r) (append (show_rec (RAccept n m h a p)) (Cons 10 (accept_lines r))))
+    ((Cons (RAccept n m h a p q) r) (append (show_rec (RAccept n m h a p q)) (Cons 10 (accept_lines r))))
     ((Cons (RModule m _ h cl) r) (append (show_rec (RModule m Nil h cl)) (Cons 10 (accept_lines r))))
     ((Cons _ r) (accept_lines r))))
 (fn inits ((rs (List Rec))) (List Int)
@@ -49,7 +49,14 @@
   (match rs (Nil False) ((Cons (RLoadErr _ f _) r) (if (sym_eq e f) True (has_load_err r e))) ((Cons _ r) (has_load_err r e))))
 (fn count_accepts ((rs (List Rec))) Int
   (measure (struct rs))
-  (match rs (Nil 0) ((Cons (RAccept _ _ _ _ _) r) (+ 1 (count_accepts r))) ((Cons _ r) (count_accepts r))))
+  (match rs (Nil 0) ((Cons (RAccept _ _ _ _ _ _) r) (+ 1 (count_accepts r))) ((Cons _ r) (count_accepts r))))
+(fn count_kind ((rs (List Rec)) (k Symbol)) Int
+  (measure (struct rs))
+  (match rs
+    (Nil 0)
+    ((Cons (RDischarge _ _) r) (+ (if (sym_eq k (quote discharge)) 1 0) (count_kind r k)))
+    ((Cons (RImplRec _) r) (+ (if (sym_eq k (quote impl)) 1 0) (count_kind r k)))
+    ((Cons _ r) (count_kind r k))))
 (fn first ((xs (List Int))) Int (match xs ((Cons x _) x) (Nil 0)))
 (fn second ((xs (List Int))) Int (match xs ((Cons _ (Cons x _)) x) (_ 0)))
 
@@ -70,11 +77,15 @@
                       ((Pair noinit w7)
                        (match (load_case "v3/pins/loader/basic" Nil (list "v3/pins/loader/outside/main.shard") w7)
                          ((Pair outside w8)
+                          (match (load_case "v3/pins/loader/view_basic" (list (fixture)) (list "v3/pins/loader/view_basic/main.shard") w8)
+                            ((Pair view w9)
+                             (match (load_case "v3/pins/loader/view_basic" (list (fixture)) (list "v3/pins/loader/view_basic/lib") w9)
+                               ((Pair impl w10)
                           (Pair
                             (list
                               (Case "basic: 7 declarations accepted in two modules" (int_eq (count_accepts basic) 7))
                               (Case "basic: a.two_rfl's record names its module and an empty axiom closure"
-                                (has_rec basic "ACCEPT a.two_rfl module=a hash=1718361179517844046 axioms= init=-"))
+                                (has_rec basic "ACCEPT a.two_rfl module=a hash=1718361179517844046 axioms= init=- params="))
                               (Case "basic: main sees a and itself" (has_rec basic "MODULE main file=main.shard hash=119538086569699698 sees=a,main"))
                               (Case "T8 origin-only: the root spelled from ./ gives the same declaration and module records"
                                 (int_list_eq (accept_lines basic) (accept_lines basic2)))
@@ -87,8 +98,15 @@
                               (Case "visibility: b.Nat is in K's environment (one.shard imported b) but not in two.shard's closure"
                                 (bool_and (int_eq (count_accepts vis) 2) (has_read_err vis (quote unknown_constant))))
                               (Case "sorry: citing the pending theorem is the obligation, never an assumption" (has_read_err sorry (quote pending_obligation)))
-                              (Case "a file outside the root is refused as such" (has_load_err outside (quote outside_root))))
-                            w8))))))))))))))))))
+                              (Case "a file outside the root is refused as such" (has_load_err outside (quote outside_root)))
+                              (Case "views: a consumer's import loads the view only — no discharge, no IMPL record" (bool_and (int_eq (count_kind view (quote discharge)) 0) (int_eq (count_kind view (quote impl)) 0)))
+                              (Case "views: the consumer's theorem rests on the view's parameters, named on its record"
+                                (has_rec view "ACCEPT main.t module=main hash=990260074396937510 axioms=lib.stack_refl,lib.push,lib.Stack init=Eq params=lib.stack_refl,lib.push,lib.Stack"))
+                              (Case "views: the directory as a root discharges every parameter — type, fn, fn, proved" (int_eq (count_kind impl (quote discharge)) 4))
+                              (Case "views: the implementation's own declarations are recorded under IMPL" (lt 0 (count_kind impl (quote impl))))
+                              (Case "views: the fork's environment is not the consumer's — the view's parameters stay parameters after the check"
+                                (has_rec impl "PARAM lib.stack_refl requirement")))
+                            w10))))))))))))))))))))))
 
 (fn run ((cs (List Case)) (fails Int) (w World)) World
   (measure (struct cs))

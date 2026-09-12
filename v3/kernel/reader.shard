@@ -30,7 +30,8 @@
   (RDOk (List Declaration))     ; what the form declares, in admission order
   (RDPending Name Symbol)       ; `sorry`: read, admits nothing; the loader's obligation
   (RDDirective SExpr)           ; import / use / trusts: the loader's
-  (RDLater Symbol)              ; fn / extern / sig / requirement / fulfills / realize: slices 4–5
+  (RDParam Declaration Symbol Int)  ; a view parameter (§6.5): the axiom, its kind (type / fn / requirement), a sig type's arity
+  (RDLater Symbol)              ; fn / extern / fulfills / realize: slices 4–5 (fulfills: the loader's, with the view's requirement)
   (RDErr Symbol (List Int)))    ; reason, message
 
 ;; a term result
@@ -420,12 +421,13 @@
      (if (sym_eq h (quote type)) (read_type sc env args)
      (if (sym_eq h (quote structure)) (read_structure sc env args)
      (if (bool_or (sym_eq h (quote import)) (bool_or (sym_eq h (quote use)) (sym_eq h (quote trusts)))) (RDDirective s)
-     (if (bool_or (sym_eq h (quote fn)) (bool_or (sym_eq h (quote extern)) (bool_or (sym_eq h (quote sig))
-         (bool_or (sym_eq h (quote requirement)) (bool_or (sym_eq h (quote fulfills)) (sym_eq h (quote realize)))))))
+     (if (sym_eq h (quote sig)) (read_sig sc env args)
+     (if (sym_eq h (quote requirement)) (read_requirement sc env args)
+     (if (bool_or (sym_eq h (quote fn)) (bool_or (sym_eq h (quote extern)) (bool_or (sym_eq h (quote fulfills)) (sym_eq h (quote realize)))))
        (RDLater h)
      (match (reserved_phase h)
        ((Some ph) (RDErr (quote reserved_form) (append (chars_of_sym h) (append ": " ph))))
-       (None (RDErr (quote unknown_form) (chars_of_sym h)))))))))))))))
+       (None (RDErr (quote unknown_form) (chars_of_sym h)))))))))))))))))
     (_ (RDErr (quote unknown_form) "a top-level form is (KEYWORD …)"))))
 (fn reserved_phase ((h Symbol)) (Option (List Int))
   (if (sym_eq h (quote by)) (Some "phase 3 (tactics); a Stage-0 proof is (exact TERM) or sorry")
@@ -469,6 +471,66 @@
      (if (sym_eq e (quote by)) (RDErr (quote reserved_form) "by: phase 3 (tactics); a Stage-0 proof is (exact TERM) or sorry")
        (RDErr (quote bad_proof) "a Stage-0 proof is (exact TERM) or sorry"))))
     (_ (RDErr (quote bad_proof) "a Stage-0 proof is (exact TERM) or sorry"))))
+
+;; ---- views (§6.5, §6.6) ---------------------------------------------------------------
+;; (sig type NAME) / (sig type (NAME T…)): the parameter NAME : Type → … → Type
+;; (sig fn NAME BINDERS RET): the parameter NAME : ∀ BINDERS, RET — E-types (level 0 by rule)
+(fn read_sig ((sc Scope) (env CheckedEnv) (args (List SExpr))) RDecl
+  (match args
+    ((Cons (SSym k) rest)
+     (if (sym_eq k (quote type))
+       (match rest
+         ((Cons hd Nil)
+          (match (type_head sc hd)
+            ((Pair None m) (RDErr (quote bad_name) m))
+            ((Pair (Some (Pair n params)) _)
+             (RDParam (AxiomDecl (ConstantVal n Nil (mk_pis (type_binders params) (mk_sort (LSucc LZero)))) False) (quote type) (len params)))))
+         (_ (RDErr (quote bad_shape) "(sig type NAME) or (sig type (NAME T…))")))
+     (if (sym_eq k (quote fn))
+       (match (read_signature sc env rest)
+         ((Pair (Some (Pair n t)) _) (RDParam (AxiomDecl (ConstantVal n Nil t) False) (quote fn) 0))
+         ((Pair None m) (RDErr (quote bad_shape) m)))
+       (RDErr (quote bad_shape) "(sig fn NAME BINDERS RET) or (sig type NAME)"))))
+    (_ (RDErr (quote bad_shape) "(sig fn NAME BINDERS RET) or (sig type NAME)"))))
+;; NAME BINDERS RET …: the E signature as a Π-type — a `sig fn`'s, or a `fn`'s
+;; head (its body and measure ignored); the qualified name with it
+(fn read_signature ((sc Scope) (env CheckedEnv) (args (List SExpr))) (Pair (Option (Pair Name Expr)) (List Int))
+  (match args
+    ((Cons (SSym x) (Cons (SList bs) (Cons ret _)))
+     (match (name_of_sym x)
+       (None (Pair None (chars_of_sym x)))
+       ((Some short)
+        (match (read_binders (cx_with_etype (cx0 sc env Nil Nil) True) bs Nil)
+          ((Pair None m) (Pair None (append "bad binder: " m)))
+          ((Pair (Some (Pair c binders)) _)
+           (match (elab c ret)
+             ((EErr e m) (Pair None (append (chars_of_sym e) (append ": " m))))
+             ((EOk t) (Pair (Some (Pair (qualify sc short) (mk_pis binders t))) Nil))))))))
+    (_ (Pair None "NAME ((x TYPE)…) RET"))))
+;; (requirement NAME BINDERS PROP): the parameter NAME : ∀ BINDERS, PROP (L terms)
+(fn read_requirement ((sc Scope) (env CheckedEnv) (args (List SExpr))) RDecl
+  (match (read_statement sc env args)
+    ((Pair (Some (Pair cv _)) _) (RDParam (AxiomDecl cv False) (quote requirement) 0))
+    ((Pair None m) (RDErr (quote bad_shape) m))))
+(fn read_statement ((sc Scope) (env CheckedEnv) (args (List SExpr))) (Pair (Option (Pair ConstantVal (Pair Cx (List Binder)))) (List Int))
+  (match args
+    ((Cons hd (Cons (SList bs) (Cons prop Nil)))
+     (match (read_head sc hd)
+       ((Pair None m) (Pair None m))
+       ((Pair (Some (Head n lps)) _)
+        (match (read_binders (cx0 sc env lps Nil) bs Nil)
+          ((Pair None m) (Pair None (append "bad binder: " m)))
+          ((Pair (Some (Pair c binders)) _)
+           (match (elab c prop)
+             ((EErr e m) (Pair None (append (chars_of_sym e) (append ": " m))))
+             ((EOk t) (Pair (Some (Pair (ConstantVal n lps (mk_pis binders t)) (Pair c binders))) Nil))))))))
+    (_ (Pair None "(requirement NAME ((x TYPE)…) PROP)"))))
+;; (fulfills NAME PROOF) against the view's (requirement NAME BINDERS PROP), the
+;; statement re-read in this environment: a theorem, or pending
+(fn read_fulfills ((sc Scope) (env CheckedEnv) (req_args (List SExpr)) (proof SExpr)) RDecl
+  (match (read_statement sc env req_args)
+    ((Pair None m) (RDErr (quote bad_shape) m))
+    ((Pair (Some (Pair cv (Pair c binders))) _) (read_proof c cv binders proof))))
 
 ;; (axiom NAME.{u…} BINDERS TYPE) — the loader admits it only under (trusts NAME) (§9)
 (fn read_axiom ((sc Scope) (env CheckedEnv) (args (List SExpr))) RDecl

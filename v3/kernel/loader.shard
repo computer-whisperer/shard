@@ -62,25 +62,39 @@
 
 ;; the module path of a root-relative file: `.shard` dropped from the last
 ;; component, each component one name component (§3). A path whose last
-;; component lacks `.shard` names a directory module (its view: slice 4).
-(type ModPath (MPOk Name) (MPDir) (MPBad (List Int)))
-(fn module_of ((parts (List (List Int)))) ModPath
-  (match parts
-    (Nil (MPBad "empty path"))
-    ((Cons p Nil)
-     (match (strip_suffix ".shard" p)
-       (None MPDir)
-       ((Some stem) (module_comp Anon stem Nil))))
-    ((Cons p r) (match (module_comp Anon p Nil) ((MPOk m) (module_rest m r)) (x x)))))
+;; component lacks `.shard` names a directory module (§6.6: its view);
+;; `DIR/mod.req.shard` and the dir form `DIR/mod.req/mod.req.shard` are
+;; DIR's view and carry DIR's path (MPView); other files under `mod.req/`
+;; wait for a consumer.
+(type ModPath (MPOk Name) (MPView Name) (MPDir) (MPBad (List Int)))
+(fn module_of ((parts (List (List Int)))) ModPath (module_rest Anon parts))
 (fn module_rest ((m Name) (parts (List (List Int)))) ModPath
   (measure (struct parts))
   (match parts
     (Nil (MPBad "empty path"))
     ((Cons p Nil)
+     (if (int_list_eq p "mod.req.shard") (match m (Anon (MPBad "a view at the root: no directory")) (_ (MPView m)))
      (match (strip_suffix ".shard" p)
-       (None MPDir)
-       ((Some stem) (module_comp m stem Nil))))
-    ((Cons p r) (match (module_comp m p Nil) ((MPOk m2) (module_rest m2 r)) (x x)))))
+       (None (if (int_list_eq p "mod.req") (MPBad "mod.req/ names the dir form's directory, not a module") MPDir))
+       ((Some stem) (module_comp m stem Nil)))))
+    ((Cons p (Cons q Nil)) (if (bool_and (int_list_eq p "mod.req") (int_list_eq q "mod.req.shard")) (match m (Anon (MPBad "a view at the root: no directory")) (_ (MPView m))) (module_step m p (list q))))
+    ((Cons p r) (module_step m p r))))
+(fn module_step ((m Name) (p (List Int)) (r (List (List Int)))) ModPath
+  (if (int_list_eq p "mod.req") (MPBad "a file under mod.req/ other than mod.req.shard: not at slice 4")
+    (match (module_comp m p Nil) ((MPOk m2) (module_rest m2 r)) (x x))))
+;; a directory's module path: each component one name component
+(fn dir_module ((parts (List (List Int)))) ModPath (dir_module_go Anon parts))
+(fn dir_module_go ((m Name) (parts (List (List Int)))) ModPath
+  (measure (struct parts))
+  (match parts
+    (Nil (match m (Anon (MPBad "empty path")) (_ (MPOk m))))
+    ((Cons p r) (if (int_list_eq p "mod.req") (MPBad "mod.req/ is the dir form's directory, not a module") (match (module_comp m p Nil) ((MPOk m2) (dir_module_go m2 r)) (x x))))))
+;; the view file of a directory module, dir form first, then flat
+(fn view_candidates ((dir (List (List Int)))) (List (List (List Int)))
+  (list (append dir (list "mod.req" "mod.req.shard")) (append dir (list "mod.req.shard"))))
+;; the implementation file: DIR/BASE.shard (the old tree's rule; §6.6)
+(fn impl_file ((dir (List (List Int)))) (Option (List (List Int)))
+  (match (rev dir) (Nil None) ((Cons base _) (Some (append dir (list (append base ".shard")))))))
 ;; one component; a dot inside it would split a citation, so it is refused
 (fn module_comp ((m Name) (comp (List Int)) (seen (List Int))) ModPath
   (measure (struct comp))
@@ -95,11 +109,14 @@
 ;; a loaded module: path, root-relative file, hash (over its accepted
 ;; declarations' fingerprints, in order), its closure (the module paths
 ;; visible in it, itself included), whether the Init prefix is visible in it
-(type Mod (Mod Name (List Int) Int (List Name) Bool))
-(fn mod_path ((m Mod)) Name (match m ((Mod p _ _ _ _) p)))
-(fn mod_hash ((m Mod)) Int (match m ((Mod _ _ h _ _) h)))
-(fn mod_closure ((m Mod)) (List Name) (match m ((Mod _ _ _ c _) c)))
-(fn mod_init ((m Mod)) Bool (match m ((Mod _ _ _ _ i) i)))
+;; a view's module also keeps its fork point (§6.6) for the implementation
+;; check, which may come after a consumer loaded the view
+(type Mod (Mod Name (List Int) Int (List Name) Bool (Option ForkPt)))
+(fn mod_path ((m Mod)) Name (match m ((Mod p _ _ _ _ _) p)))
+(fn mod_hash ((m Mod)) Int (match m ((Mod _ _ h _ _ _) h)))
+(fn mod_closure ((m Mod)) (List Name) (match m ((Mod _ _ _ c _ _) c)))
+(fn mod_init ((m Mod)) Bool (match m ((Mod _ _ _ _ i _) i)))
+(fn mod_fork ((m Mod)) (Option ForkPt) (match m ((Mod _ _ _ _ _ f) f)))
 
 ;; the Init stream: the import run (its tables persist across chunks), the
 ;; rest of the current chunk, the chunk files still unread, the prefix
@@ -109,58 +126,69 @@
 (type Rec
   (RModule Name (List Int) Int (List Name))   ; a module loaded: path, file, hash, its closure
   (RInit Name Int)                            ; the Init prefix loaded through NAME: declarations admitted so far
-  (RAccept Name Name Int (List Name) Name)    ; declaration, module, content fingerprint, axiom closure, the Init prefix at the check (Anon = none)
+  (RAccept Name Name Int (List Name) Name (List Name))  ; declaration, module, content fingerprint, axiom closure, the Init prefix at the check (Anon = none), the view parameters it rests on
+  (RParam Name Symbol Int)                    ; a view parameter admitted: kind (type / fn / requirement), a sig type's arity
   (RRefuse Name Symbol)                       ; K refused
   (RPolicy Name (List Name))                  ; outside the file's policy: the axioms it reaches that the policy lacks
   (RPending Name Symbol)                      ; sorry: read, admits nothing
   (RLater Symbol Name)                        ; an E form: its slice's
+  (RDischarge Name Symbol)                    ; the implementation check: a parameter discharged (type / fn / proved) or pending
+  (RImplErr Name Symbol (List Int))           ; the implementation check: a parameter without its implementation, a mismatch
+  (RImplRec Rec)                              ; a record of the implementation's fork (its own declarations)
   (RReadErr (List Int) Symbol (List Int))     ; file, reason, message — the file's reading ends here
   (RLoadErr (List Int) Symbol (List Int)))    ; file, reason, detail — the file's loading ends here
 
 ;; root, environment, closure memo, modules, the Init stream, declaration →
 ;; module, pending names, the loading stack (cycles), records newest first,
-;; the export chunk files the driver named
-(type Load (Load (List (List Int)) CheckedEnv AxMemo (List Mod) InitSt (IntMap (List (Pair Name Name))) (List Name) (List Name) (List Rec) (List (List Int))))
+;; the export chunk files the driver named, the view parameters admitted (§6.6)
+(type Load (Load (List (List Int)) CheckedEnv AxMemo (List Mod) InitSt (IntMap (List (Pair Name Name))) (List Name) (List Name) (List Rec) (List (List Int)) (List Name)))
 (fn load0 ((root (List (List Int))) (chunks (List (List Int)))) Load
-  (Load root (CheckedEnv IMEmpty False Nil 0) (ax_memo_empty) Nil InitNone IMEmpty Nil Nil Nil chunks))
-(fn ld_root ((l Load)) (List (List Int)) (match l ((Load r _ _ _ _ _ _ _ _ _) r)))
-(fn ld_env ((l Load)) CheckedEnv (match l ((Load _ e _ _ _ _ _ _ _ _) e)))
-(fn ld_memo ((l Load)) AxMemo (match l ((Load _ _ m _ _ _ _ _ _ _) m)))
-(fn ld_mods ((l Load)) (List Mod) (match l ((Load _ _ _ ms _ _ _ _ _ _) ms)))
-(fn ld_init ((l Load)) InitSt (match l ((Load _ _ _ _ i _ _ _ _ _) i)))
-(fn ld_tbl ((l Load)) (IntMap (List (Pair Name Name))) (match l ((Load _ _ _ _ _ t _ _ _ _) t)))
-(fn ld_pending ((l Load)) (List Name) (match l ((Load _ _ _ _ _ _ p _ _ _) p)))
-(fn ld_stack ((l Load)) (List Name) (match l ((Load _ _ _ _ _ _ _ s _ _) s)))
-(fn ld_recs ((l Load)) (List Rec) (match l ((Load _ _ _ _ _ _ _ _ rs _) (rev rs))))
-(fn ld_chunks ((l Load)) (List (List Int)) (match l ((Load _ _ _ _ _ _ _ _ _ c) c)))
-(fn ld_with_env ((l Load) (e CheckedEnv) (m AxMemo)) Load (match l ((Load r _ _ ms i t p s rs c) (Load r e m ms i t p s rs c))))
-(fn ld_add_mod ((l Load) (md Mod)) Load (match l ((Load r e m ms i t p s rs c) (Load r e m (Cons md ms) i t p s rs c))))
-(fn ld_with_init ((l Load) (i InitSt)) Load (match l ((Load r e m ms _ t p s rs c) (Load r e m ms i t p s rs c))))
-(fn ld_with_tbl ((l Load) (t (IntMap (List (Pair Name Name))))) Load (match l ((Load r e m ms i _ p s rs c) (Load r e m ms i t p s rs c))))
-(fn ld_add_pending ((l Load) (n Name)) Load (match l ((Load r e m ms i t p s rs c) (Load r e m ms i t (Cons n p) s rs c))))
-(fn ld_with_stack ((l Load) (s (List Name))) Load (match l ((Load r e m ms i t p _ rs c) (Load r e m ms i t p s rs c))))
-(fn ld_rec ((l Load) (x Rec)) Load (match l ((Load r e m ms i t p s rs c) (Load r e m ms i t p s (Cons x rs) c))))
+  (Load root (CheckedEnv IMEmpty False Nil 0) (ax_memo_empty) Nil InitNone IMEmpty Nil Nil Nil chunks Nil))
+(fn ld_root ((l Load)) (List (List Int)) (match l ((Load r _ _ _ _ _ _ _ _ _ _) r)))
+(fn ld_env ((l Load)) CheckedEnv (match l ((Load _ e _ _ _ _ _ _ _ _ _) e)))
+(fn ld_memo ((l Load)) AxMemo (match l ((Load _ _ m _ _ _ _ _ _ _ _) m)))
+(fn ld_mods ((l Load)) (List Mod) (match l ((Load _ _ _ ms _ _ _ _ _ _ _) ms)))
+(fn ld_init ((l Load)) InitSt (match l ((Load _ _ _ _ i _ _ _ _ _ _) i)))
+(fn ld_tbl ((l Load)) (IntMap (List (Pair Name Name))) (match l ((Load _ _ _ _ _ t _ _ _ _ _) t)))
+(fn ld_pending ((l Load)) (List Name) (match l ((Load _ _ _ _ _ _ p _ _ _ _) p)))
+(fn ld_stack ((l Load)) (List Name) (match l ((Load _ _ _ _ _ _ _ s _ _ _) s)))
+(fn ld_recs ((l Load)) (List Rec) (match l ((Load _ _ _ _ _ _ _ _ rs _ _) (rev rs))))
+(fn ld_chunks ((l Load)) (List (List Int)) (match l ((Load _ _ _ _ _ _ _ _ _ c _) c)))
+(fn ld_params ((l Load)) (List Name) (match l ((Load _ _ _ _ _ _ _ _ _ _ ps) ps)))
+(fn ld_with_env ((l Load) (e CheckedEnv) (m AxMemo)) Load (match l ((Load r _ _ ms i t p s rs c ps) (Load r e m ms i t p s rs c ps))))
+(fn ld_add_mod ((l Load) (md Mod)) Load (match l ((Load r e m ms i t p s rs c ps) (Load r e m (Cons md ms) i t p s rs c ps))))
+(fn ld_with_init ((l Load) (i InitSt)) Load (match l ((Load r e m ms _ t p s rs c ps) (Load r e m ms i t p s rs c ps))))
+(fn ld_with_tbl ((l Load) (t (IntMap (List (Pair Name Name))))) Load (match l ((Load r e m ms i _ p s rs c ps) (Load r e m ms i t p s rs c ps))))
+(fn ld_add_pending ((l Load) (n Name)) Load (match l ((Load r e m ms i t p s rs c ps) (Load r e m ms i t (Cons n p) s rs c ps))))
+(fn ld_with_stack ((l Load) (s (List Name))) Load (match l ((Load r e m ms i t p _ rs c ps) (Load r e m ms i t p s rs c ps))))
+(fn ld_rec ((l Load) (x Rec)) Load (match l ((Load r e m ms i t p s rs c ps) (Load r e m ms i t p s (Cons x rs) c ps))))
+(fn ld_add_param ((l Load) (n Name)) Load (match l ((Load r e m ms i t p s rs c ps) (Load r e m ms i t p s rs c (Cons n ps)))))
+(fn ld_recs_raw ((l Load)) (List Rec) (match l ((Load _ _ _ _ _ _ _ _ rs _ _) rs)))
+(fn ld_with_recs_raw ((l Load) (rs (List Rec))) Load (match l ((Load r e m ms i t p s _ c ps) (Load r e m ms i t p s rs c ps))))
 (fn ld_find_mod ((ms (List Mod)) (p Name)) (Option Mod)
   (measure (struct ms))
   (match ms (Nil None) ((Cons m r) (if (name_eq (mod_path m) p) (Some m) (ld_find_mod r p)))))
 (fn init_prefix ((l Load)) Name (match (ld_init l) (InitNone Anon) ((InitSt _ _ _ p _) p)))
 
 ;; the file being loaded: module, root-relative parts, opened prefixes, the
-;; visible modules (itself included), Init visible?, trusted names, hash so far
-(type Fx (Fx Name (List (List Int)) (List Open) (List Name) Bool (List Name) Int))
-(fn fx_module ((f Fx)) Name (match f ((Fx m _ _ _ _ _ _) m)))
-(fn fx_parts ((f Fx)) (List (List Int)) (match f ((Fx _ p _ _ _ _ _) p)))
-(fn fx_opened ((f Fx)) (List Open) (match f ((Fx _ _ o _ _ _ _) o)))
-(fn fx_vis ((f Fx)) (List Name) (match f ((Fx _ _ _ v _ _ _) v)))
-(fn fx_init ((f Fx)) Bool (match f ((Fx _ _ _ _ i _ _) i)))
-(fn fx_trusts ((f Fx)) (List Name) (match f ((Fx _ _ _ _ _ t _) t)))
-(fn fx_hash ((f Fx)) Int (match f ((Fx _ _ _ _ _ _ h) h)))
+;; visible modules (itself included), Init visible?, trusted names, hash so
+;; far, and whether it is a view (§6.6: the forms it may hold, the req-scope gate)
+(type Fx (Fx Name (List (List Int)) (List Open) (List Name) Bool (List Name) Int Bool))
+(fn fx_module ((f Fx)) Name (match f ((Fx m _ _ _ _ _ _ _) m)))
+(fn fx_parts ((f Fx)) (List (List Int)) (match f ((Fx _ p _ _ _ _ _ _) p)))
+(fn fx_opened ((f Fx)) (List Open) (match f ((Fx _ _ o _ _ _ _ _) o)))
+(fn fx_vis ((f Fx)) (List Name) (match f ((Fx _ _ _ v _ _ _ _) v)))
+(fn fx_init ((f Fx)) Bool (match f ((Fx _ _ _ _ i _ _ _) i)))
+(fn fx_trusts ((f Fx)) (List Name) (match f ((Fx _ _ _ _ _ t _ _) t)))
+(fn fx_hash ((f Fx)) Int (match f ((Fx _ _ _ _ _ _ h _) h)))
+(fn fx_view ((f Fx)) Bool (match f ((Fx _ _ _ _ _ _ _ v) v)))
 (fn fx_file ((f Fx)) (List Int) (join_path (fx_parts f)))
-(fn fx_open ((f Fx) (o Open)) Fx (match f ((Fx m p os v i t h) (Fx m p (append os (list o)) v i t h))))
+(fn fx_open ((f Fx) (o Open)) Fx (match f ((Fx m p os v i t h vw) (Fx m p (append os (list o)) v i t h vw))))
 (fn fx_see ((f Fx) (mods (List Name)) (init Bool)) Fx
-  (match f ((Fx m p os v i t h) (Fx m p os (names_union v mods) (bool_or i init) t h))))
-(fn fx_trust ((f Fx) (ns (List Name))) Fx (match f ((Fx m p os v i t h) (Fx m p os v i (append t ns) h))))
-(fn fx_mix ((f Fx) (x Int)) Fx (match f ((Fx m p os v i t h) (Fx m p os v i t (mix h x)))))
+  (match f ((Fx m p os v i t h vw) (Fx m p os (names_union v mods) (bool_or i init) t h vw))))
+(fn fx_trust ((f Fx) (ns (List Name))) Fx (match f ((Fx m p os v i t h vw) (Fx m p os v i (append t ns) h vw))))
+(fn fx_mix ((f Fx) (x Int)) Fx (match f ((Fx m p os v i t h vw) (Fx m p os v i t (mix h x) vw))))
+(fn fx_as_impl ((f Fx)) Fx (match f ((Fx m p os v i t h _) (Fx m p os v i t h False))))
 (fn fx_scope ((l Load) (f Fx)) Scope
   (Scope (fx_module f) (fx_opened f) (VisOnly (fx_vis f) (fx_init f) (ld_tbl l) (ld_pending l))))
 
@@ -225,14 +253,18 @@
 
 ;; ---- the policy (§9) -----------------------------------------------------------------------
 (fn std_axioms () (List Name) (list (n1 (quote propext)) (n2 (quote Quot) (quote sound)) (n2 (quote Classical) (quote choice))))
-;; the axioms of a closure the file's policy lacks
-(fn outside_policy ((sc Scope) (trusts (List Name)) (axs (List Name))) (List Name)
+;; the axioms of a closure the file's policy lacks; a view parameter is the
+;; third class (§9, §6.6): permitted, named on the record
+(fn outside_policy ((sc Scope) (trusts (List Name)) (params (List Name)) (axs (List Name))) (List Name)
   (measure (struct axs))
   (match axs
     (Nil Nil)
-    ((Cons a r) (if (permitted sc trusts a) (outside_policy sc trusts r) (Cons a (outside_policy sc trusts r))))))
-(fn permitted ((sc Scope) (trusts (List Name)) (a Name)) Bool
-  (if (mem_name a (std_axioms)) True (trusted sc trusts a)))
+    ((Cons a r) (if (permitted sc trusts params a) (outside_policy sc trusts params r) (Cons a (outside_policy sc trusts params r))))))
+(fn permitted ((sc Scope) (trusts (List Name)) (params (List Name)) (a Name)) Bool
+  (if (mem_name a (std_axioms)) True (if (mem_name a params) True (trusted sc trusts a))))
+(fn params_of ((params (List Name)) (axs (List Name))) (List Name)
+  (measure (struct axs))
+  (match axs (Nil Nil) ((Cons a r) (if (mem_name a params) (Cons a (params_of params r)) (params_of params r)))))
 ;; a trusted name is spelled as a citation would be: it resolves through the scope
 (fn trusted ((sc Scope) (ts (List Name)) (a Name)) Bool
   (measure (struct ts))
@@ -283,29 +315,35 @@
        (match (axioms_of env memo n)
          ((Pair memo1 None) (PolBound n))
          ((Pair memo1 (Some axs))
-          (match (outside_policy (fx_scope l f) (fx_trusts f) axs)
+          (match (outside_policy (fx_scope l f) (fx_trusts f) (ld_params l) axs)
             (Nil (policy_pass l f env memo1 r
-                   (Cons (RAccept n (fx_module f) (match (identity_hash env n) ((Some h) h) (None 0)) axs (init_prefix l)) acc)))
+                   (Cons (RAccept n (fx_module f) (match (identity_hash env n) ((Some h) h) (None 0)) axs (init_prefix l) (params_of (ld_params l) axs)) acc)))
             (out (PolOut n out)))))))))
 
 (fn mix_recs ((f Fx) (rs (List Rec))) Fx
   (measure (struct rs))
   (match rs
     (Nil f)
-    ((Cons (RAccept _ _ h _ _) r) (mix_recs (fx_mix f h) r))
+    ((Cons (RAccept _ _ h _ _ _) r) (mix_recs (fx_mix f h) r))
     ((Cons _ r) (mix_recs f r))))
 (fn recs_add ((l Load) (rs (List Rec))) Load
   (measure (struct rs))
   (match rs (Nil l) ((Cons x r) (recs_add (ld_rec l x) r))))
 
-;; one declared form: read, admit, check the policy, record
+;; one declared form: read, admit, check the policy, record. A view holds
+;; L forms and parameters, never E bodies; a parameter belongs in a view.
 (fn load_decl ((l Load) (f Fx) (s SExpr)) (Pair Load Fx)
-  (let ((sc (fx_scope l f)))
+  (let ((sc (fx_scope l f)) (h (form_head s)))
+    (if (bool_and (fx_view f) (bool_or (sym_eq h (quote fn)) (bool_or (sym_eq h (quote extern)) (bool_or (sym_eq h (quote realize)) (sym_eq h (quote fulfills))))))
+      (Pair (ld_rec l (RLoadErr (fx_file f) (quote view_form) (append (chars_of_sym h) ": a view holds declarations and parameters, never bodies"))) f)
+    (if (bool_and (bool_not (fx_view f)) (bool_or (sym_eq h (quote sig)) (sym_eq h (quote requirement))))
+      (Pair (ld_rec l (RLoadErr (fx_file f) (quote sig_outside_view) (append (chars_of_sym h) ": a parameter belongs in a view (mod.req.shard)"))) f)
     (match (read_decl sc (ld_env l) s)
       ((RDErr e m) (Pair (ld_rec l (RReadErr (fx_file f) e m)) f))
       ((RDPending n r) (Pair (ld_rec (ld_add_pending l n) (RPending n r)) f))
       ((RDDirective _) (Pair (ld_rec l (RLoadErr (fx_file f) (quote bad_directive) (chars_of_sym (form_head s)))) f))
       ((RDLater k) (Pair (ld_rec l (RLater k (form_name sc s))) f))
+      ((RDParam d kind arity) (admit_param l f d kind arity))
       ((RDOk ds)
        (match (admit_decls (ld_env l) ds)
          ((AdRefused subj reason) (Pair (ld_rec l (RRefuse subj reason)) f))
@@ -315,7 +353,16 @@
             ((PolOut n out) (Pair (ld_rec (ld_with_env l (ld_env l) (ax_memo_empty)) (RPolicy n out)) f))
             ((PolOk memo1 recs)
              (let ((l1 (recs_add (ld_with_tbl (ld_with_env l env1 memo1) (tbl_add_all (ld_tbl l) (decls_declare env1 ds) (fx_module f))) recs)))
-               (Pair l1 (open_type (mix_recs f recs) s ds)))))))))))
+               (Pair l1 (open_type (mix_recs f recs) s ds)))))))))))))
+;; a view parameter: an axiom-kind constant to K, the third class to the policy
+(fn admit_param ((l Load) (f Fx) (d Declaration) (kind Symbol) (arity Int)) (Pair Load Fx)
+  (let ((n (decl_name d)))
+    (match (check (ld_env l) (st_init) d)
+      ((Accepted env1)
+       (Pair (ld_rec (ld_add_param (ld_with_tbl (ld_with_env l env1 (ld_memo l)) (tbl_add (ld_tbl l) n (fx_module f))) n) (RParam n kind arity))
+             (fx_mix f (match (identity_hash env1 n) ((Some h) h) (None 0)))))
+      ((Rejected reason subject) (Pair (ld_rec l (RRefuse subject (reason_of reason))) f))
+      ((Exhausted _ _) (Pair (ld_rec l (RRefuse n (quote exhausted))) f)))))
 ;; a `type` form opens its own namespace for the rest of the file (§13 item 7)
 (fn open_type ((f Fx) (s SExpr) (ds (List Declaration))) Fx
   (if (sym_eq (form_head s) (quote type))
@@ -416,7 +463,10 @@
     ((Some parts)
      (match (strip_parts (ld_root l) parts)
        (None (Pair (ld_rec l (RLoadErr file (quote outside_root) (join_path (ld_root l)))) w))
-       ((Some rel) (load_module l rel (import_depth) w))))))
+       ((Some rel)
+        (match (module_of rel)
+          (MPDir (load_dir_checked l rel (import_depth) w))
+          (_ (load_module l rel (import_depth) w))))))))
 
 ;; a root-relative file as a module: once; a cycle refused; the records
 ;; of its forms; its MODULE record when its forms are done
@@ -424,25 +474,297 @@
   (measure fuel)
   (match (module_of rel)
     ((MPBad m) (Pair (ld_rec l (RLoadErr (join_path rel) (quote bad_module_name) m)) w))
-    (MPDir (Pair (ld_rec l (RLoadErr (join_path rel) (quote directory_module) "a directory module's view: slice 4")) w))
-    ((MPOk mp)
-     (match (ld_find_mod (ld_mods l) mp)
-       ((Some _) (Pair l w))
-       (None
-        (if (mem_name mp (ld_stack l)) (Pair (ld_rec l (RLoadErr (join_path rel) (quote import_cycle) (show_name mp))) w)
-        (if (lt fuel 0) (Pair (ld_rec l (RLoadErr (join_path rel) (quote import_depth) "")) w)
-        (match (read_file (join_path (append (ld_root l) rel)) w)
-          ((Pair None w1) (Pair (ld_rec l (RLoadErr (join_path rel) (quote missing_file) (join_path (append (ld_root l) rel)))) w1))
-          ((Pair (Some src) w1)
+    (MPDir (load_dir l rel fuel w))
+    ((MPView mp) (match (load_file_module l rel mp True fuel w) ((Pair (Pair l1 _) w1) (Pair l1 w1))))
+    ((MPOk mp) (match (load_file_module l rel mp False fuel w) ((Pair (Pair l1 _) w1) (Pair l1 w1))))))
+
+;; one file as the module `mp`; a view when `view`. Returns, for a view, the
+;; fork point of §6.6: the loader's state after the view's leading
+;; directives, the file's context then, and the forms after them
+(type ForkPt (ForkPt Load Fx (List SExpr)))
+(fn load_file_module ((l Load) (rel (List (List Int))) (mp Name) (view Bool) (fuel Int) (w World)) (Pair (Pair Load (Option ForkPt)) World)
+  (measure fuel)
+  (match (ld_find_mod (ld_mods l) mp)
+    ((Some _) (Pair (Pair l None) w))
+    (None
+     (if (mem_name mp (ld_stack l)) (Pair (Pair (ld_rec l (RLoadErr (join_path rel) (quote import_cycle) (show_name mp))) None) w)
+     (if (lt fuel 0) (Pair (Pair (ld_rec l (RLoadErr (join_path rel) (quote import_depth) "")) None) w)
+     (match (read_file (join_path (append (ld_root l) rel)) w)
+       ((Pair None w1) (Pair (Pair (ld_rec l (RLoadErr (join_path rel) (quote missing_file) (join_path (append (ld_root l) rel)))) None) w1))
+       ((Pair (Some src) w1)
+        (match (read_all False src)
+          ((RAErr e off) (Pair (Pair (ld_rec l (RReadErr (join_path rel) e (append "at byte " (show_nat off)))) None) w1))
+          ((RAOk forms)
+           (match (split_directives forms Nil)
+             ((Pair dirs rest)
+              (match (load_forms (ld_with_stack l (Cons mp (ld_stack l))) (Fx mp rel Nil (list mp) False Nil (hash_name mp) view) dirs fuel w1)
+                ((Pair (Pair l1 None) w2) (Pair (Pair (ld_with_stack l1 (ld_stack l)) None) w2))
+                ((Pair (Pair l1 (Some f1)) w2)
+                 (match (load_forms l1 f1 rest fuel w2)
+                   ((Pair (Pair l2 (Some f)) w3)
+                    (let ((fp (if view (Some (ForkPt (ld_with_stack l1 (ld_stack l)) f1 rest)) None)))
+                      (Pair (Pair (ld_rec (ld_add_mod (ld_with_stack l2 (ld_stack l)) (Mod mp (join_path rel) (fx_hash f) (fx_vis f) (fx_init f) fp))
+                                          (RModule mp (join_path rel) (fx_hash f) (fx_vis f)))
+                                  fp)
+                            w3)))
+                   ((Pair (Pair l2 None) w3) (Pair (Pair (ld_with_stack l2 (ld_stack l)) None) w3))))))))))))))))
+;; the leading directives (import / use / trusts) and the rest
+(fn split_directives ((forms (List SExpr)) (acc (List SExpr))) (Pair (List SExpr) (List SExpr))
+  (measure (struct forms))
+  (match forms
+    (Nil (Pair (rev acc) Nil))
+    ((Cons s r) (match (form_of s) (FDecl (Pair (rev acc) forms)) (_ (split_directives r (Cons s acc)))))))
+
+;; ---- directory modules (§6.5, §6.6) ------------------------------------------------------
+;; (import "DIR"): the view — DIR/mod.req/mod.req.shard, else DIR/mod.req.shard
+(fn load_dir ((l Load) (dir (List (List Int))) (fuel Int) (w World)) (Pair Load World)
+  (match (load_dir_view l dir fuel w) ((Pair (Pair l1 _) w1) (Pair l1 w1))))
+(fn load_dir_view ((l Load) (dir (List (List Int))) (fuel Int) (w World)) (Pair (Pair Load (Option ForkPt)) World)
+  (match (dir_module dir)
+    ((MPOk mp) (load_view_candidates l dir mp (view_candidates dir) fuel w))
+    ((MPBad m) (Pair (Pair (ld_rec l (RLoadErr (join_path dir) (quote bad_module_name) m)) None) w))
+    (_ (Pair (Pair (ld_rec l (RLoadErr (join_path dir) (quote bad_module_name) "")) None) w))))
+(fn load_view_candidates ((l Load) (dir (List (List Int))) (mp Name) (cands (List (List (List Int)))) (fuel Int) (w World)) (Pair (Pair Load (Option ForkPt)) World)
+  (measure (struct cands))
+  (match cands
+    (Nil (Pair (Pair (ld_rec l (RLoadErr (join_path dir) (quote missing_interface) "no mod.req.shard (nor mod.req/mod.req.shard)")) None) w))
+    ((Cons c r)
+     (match (read_file (join_path (append (ld_root l) c)) w)
+       ((Pair None w1) (load_view_candidates l dir mp r fuel w1))
+       ((Pair (Some _) w1) (load_file_module l c mp True fuel w1))))))
+
+;; the loader given DIR itself: the view, then the implementation checked
+;; against it in a fork from the view's fork point (§6.6)
+(fn load_dir_checked ((l Load) (dir (List (List Int))) (fuel Int) (w World)) (Pair Load World)
+  (match (load_dir_view l dir fuel w)
+    ((Pair (Pair l1 fp) w1) (check_impl l1 dir (match fp ((Some x) (Some x)) (None (stored_fork l1 dir))) w1))))
+;; the fork point of a view a consumer loaded earlier
+(fn stored_fork ((l Load) (dir (List (List Int)))) (Option ForkPt)
+  (match (dir_module dir)
+    ((MPOk mp) (match (ld_find_mod (ld_mods l) mp) ((Some m) (mod_fork m)) (None None)))
+    (_ None)))
+(fn check_impl ((l1 Load) (dir (List (List Int))) (fp (Option ForkPt)) (w1 World)) (Pair Load World)
+  (match fp
+    (None (Pair l1 w1))
+    ((Some (ForkPt lf f rest))
+     (match (impl_file dir)
+       (None (Pair (ld_rec l1 (RLoadErr (join_path dir) (quote bad_module_name) "")) w1))
+       ((Some ifile)
+        (match (read_file (join_path (append (ld_root l1) ifile)) w1)
+          ((Pair None w2) (Pair (ld_rec l1 (RLoadErr (join_path ifile) (quote missing_implementation) (join_path (append (ld_root l1) ifile)))) w2))
+          ((Pair (Some src) w2)
            (match (read_all False src)
-             ((RAErr e off) (Pair (ld_rec l (RReadErr (join_path rel) e (append "at byte " (show_nat off)))) w1))
-             ((RAOk forms)
-              (match (load_forms (ld_with_stack l (Cons mp (ld_stack l))) (Fx mp rel Nil (list mp) False Nil (hash_name mp)) forms fuel w1)
-                ((Pair (Pair l1 (Some f)) w2)
-                 (Pair (ld_rec (ld_add_mod (ld_with_stack l1 (ld_stack l)) (Mod mp (join_path rel) (fx_hash f) (fx_vis f) (fx_init f)))
-                               (RModule mp (join_path rel) (fx_hash f) (fx_vis f)))
-                       w2))
-                ((Pair (Pair l1 None) w2) (Pair (ld_with_stack l1 (ld_stack l)) w2))))))))))))))
+             ((RAErr e off) (Pair (ld_rec l1 (RReadErr (join_path ifile) e (append "at byte " (show_nat off)))) w2))
+             ((RAOk iforms)
+              (match (impl_replay (ld_with_recs_raw lf Nil) (Im rest iforms Nil (fx_as_impl f) ifile rest) (import_depth) w2)
+                ((Pair (Pair lf2 im) w3)
+                 (Pair (merge_impl_recs l1 (ld_recs lf2)) w3))))))))))))
+;; the fork's records under IMPL; DISCHARGE and IMPL-ERROR as themselves
+(fn merge_impl_recs ((l Load) (rs (List Rec))) Load
+  (measure (struct rs))
+  (match rs
+    (Nil l)
+    ((Cons (RDischarge n k) r) (merge_impl_recs (ld_rec l (RDischarge n k)) r))
+    ((Cons (RImplErr n e m) r) (merge_impl_recs (ld_rec l (RImplErr n e m)) r))
+    ((Cons x r) (merge_impl_recs (ld_rec l (RImplRec x)) r))))
+
+;; the implementation check's state: the view's forms still to replay, the
+;; implementation's forms not yet consumed (file order), the parameters
+;; discharged so far, the fork's file context, the implementation file
+(type Im (Im (List SExpr) (List SExpr) (List (Pair Symbol Name)) Fx (List (List Int)) (List SExpr)))
+(fn im_view ((i Im)) (List SExpr) (match i ((Im v _ _ _ _ _) v)))
+(fn im_impl ((i Im)) (List SExpr) (match i ((Im _ p _ _ _ _) p)))
+(fn im_done ((i Im)) (List (Pair Symbol Name)) (match i ((Im _ _ d _ _ _) d)))
+(fn im_fx ((i Im)) Fx (match i ((Im _ _ _ f _ _) f)))
+(fn im_file ((i Im)) (List Int) (match i ((Im _ _ _ _ p _) (join_path p))))
+(fn im_view_all ((i Im)) (List SExpr) (match i ((Im _ _ _ _ _ a) a)))
+(fn im_with_fx ((i Im) (f Fx)) Im (match i ((Im v p d _ fl a) (Im v p d f fl a))))
+(fn im_with_impl ((i Im) (p (List SExpr))) Im (match i ((Im v _ d f fl a) (Im v p d f fl a))))
+(fn im_with_view ((i Im) (v (List SExpr))) Im (match i ((Im _ p d f fl a) (Im v p d f fl a))))
+(fn im_mark ((i Im) (k Symbol) (n Name)) Im (match i ((Im v p d f fl a) (Im v p (Cons (Pair k n) d) f fl a))))
+(fn im_marked ((i Im) (k Symbol) (n Name)) Bool (marked (im_done i) k n))
+(fn marked ((d (List (Pair Symbol Name))) (k Symbol) (n Name)) Bool
+  (measure (struct d))
+  (match d (Nil False) ((Cons (Pair k2 n2) r) (if (bool_and (sym_eq k k2) (name_eq n n2)) True (marked r k n)))))
+
+;; the view's forms in order, then the implementation's rest
+(fn impl_replay ((l Load) (im Im) (fuel Int) (w World)) (Pair (Pair Load Im) World)
+  (measure fuel)
+  (if (lt fuel 0) (Pair (Pair (ld_rec l (RLoadErr (im_file im) (quote import_depth) "")) im) w)
+  (match (im_view im)
+    (Nil (impl_rest l im fuel w))
+    ((Cons s r)
+     (let ((im1 (im_with_view im r)))
+       (match (form_of s)
+         (FDecl (match (replay_decl l im1 s fuel w) ((Pair (Pair l2 im2) w2) (impl_replay l2 im2 (- fuel 1) w2))))
+         (_ (match (load_forms l (im_fx im1) (list s) fuel w)
+              ((Pair (Pair l2 (Some f2)) w2) (impl_replay l2 (im_with_fx im1 f2) (- fuel 1) w2))
+              ((Pair (Pair l2 None) w2) (Pair (Pair l2 im1) w2))))))))))
+;; one view form in the fork: a parameter is discharged by the implementation's form
+(fn replay_decl ((l Load) (im Im) (s SExpr) (fuel Int) (w World)) (Pair (Pair Load Im) World)
+  (let ((sc (fx_scope l (im_fx im))) (h (form_head s)))
+    (if (sym_eq h (quote theorem)) (Pair (Pair l im) w)              ; checked once, against the parameters; bound by its closure
+    (if (sym_eq h (quote sig))
+      (match (sig_kind_name sc s)
+        (None (Pair (Pair (ld_rec l (RReadErr (im_file im) (quote bad_shape) "(sig fn NAME …) or (sig type NAME)")) im) w))
+        ((Some (Pair k n)) (discharge l im k n s fuel w)))
+    (if (sym_eq h (quote requirement))
+      (match (form_name sc s) (Anon (Pair (Pair (ld_rec l (RReadErr (im_file im) (quote bad_shape) "(requirement NAME …)")) im) w))
+        (n (discharge l im (quote requirement) n s fuel w)))
+      (match (load_decl l (im_fx im) s) ((Pair l2 f2) (Pair (Pair l2 (im_with_fx im f2)) w))))))))
+;; (sig type (NAME …)) / (sig type NAME) / (sig fn NAME …): its kind and qualified name
+(fn sig_kind_name ((sc Scope) (s SExpr)) (Option (Pair Symbol Name))
+  (match s
+    ((SList (Cons _ (Cons (SSym k) (Cons hd _))))
+     (if (sym_eq k (quote type))
+       (match (type_head sc hd) ((Pair (Some (Pair n _)) _) (Some (Pair (quote type) n))) (_ None))
+     (if (sym_eq k (quote fn))
+       (match hd ((SSym x) (match (name_of_sym x) ((Some n) (Some (Pair (quote fn) (qualify sc n)))) (None None))) (_ None))
+       None)))
+    (_ None)))
+;; a parameter's discharge: the implementation's form for it — consumed
+;; already (checked when consumed), or reached now by consuming the
+;; implementation's forms in file order up to it — else missing
+(fn discharge ((l Load) (im Im) (k Symbol) (n Name) (s SExpr) (fuel Int) (w World)) (Pair (Pair Load Im) World)
+  (if (im_marked im k n) (Pair (Pair l im) w)
+  (match (advance l im k n fuel w)
+    ((Pair (Pair l1 im1) w1)
+     (if (im_marked im1 k n) (Pair (Pair l1 im1) w1)
+       (Pair (Pair (ld_rec l1 (RImplErr n (missing_reason k) (im_file im1))) im1) w1))))))
+(fn missing_reason ((k Symbol)) Symbol
+  (if (sym_eq k (quote type)) (quote impl_missing_type)
+  (if (sym_eq k (quote fn)) (quote impl_missing_fn)
+    (quote impl_missing_fulfills))))
+;; consume the implementation's forms in order through the one that
+;; implements (k, n); every form consumed is processed as the implementation's
+(fn advance ((l Load) (im Im) (k Symbol) (n Name) (fuel Int) (w World)) (Pair (Pair Load Im) World)
+  (measure fuel)
+  (if (lt fuel 0) (Pair (Pair l im) w)
+  (match (im_impl im)
+    (Nil (Pair (Pair l im) w))
+    ((Cons s r)
+     (match (impl_form l (im_with_impl im r) s fuel w)
+       ((Pair (Pair l1 im1) w1)
+        (if (im_marked im1 k n) (Pair (Pair l1 im1) w1)
+          (match (ld_recs_head l1)
+            ((Some (RReadErr _ _ _)) (Pair (Pair l1 im1) w1))
+            ((Some (RLoadErr _ _ _)) (Pair (Pair l1 im1) w1))
+            (_ (advance l1 im1 k n (- fuel 1) w1))))))))))
+;; the implementation's remaining forms after the view's
+(fn impl_rest ((l Load) (im Im) (fuel Int) (w World)) (Pair (Pair Load Im) World)
+  (measure fuel)
+  (if (lt fuel 0) (Pair (Pair l im) w)
+  (match (im_impl im)
+    (Nil (Pair (Pair l im) w))
+    ((Cons s r)
+     (match (impl_form l (im_with_impl im r) s fuel w)
+       ((Pair (Pair l1 im1) w1)
+        (match (ld_recs_head l1)
+          ((Some (RReadErr _ _ _)) (Pair (Pair l1 im1) w1))
+          ((Some (RLoadErr _ _ _)) (Pair (Pair l1 im1) w1))
+          (_ (impl_rest l1 im1 (- fuel 1) w1)))))))))
+;; one implementation form: a directive as any; (type NAME …) implementing a
+;; sig type — its parameter count checked; (fn NAME …) implementing a sig fn
+;; — the E signatures compared, the parameter then admitted; (fulfills NAME
+;; PROOF) — the requirement's statement re-read here, the proof checked or
+;; pending; anything else the implementation's own
+(fn impl_form ((l Load) (im Im) (s SExpr) (fuel Int) (w World)) (Pair (Pair Load Im) World)
+  (let ((sc (fx_scope l (im_fx im))) (h (form_head s)))
+    (match (form_of s)
+      (FDecl
+       (if (sym_eq h (quote type))
+         (match (load_decl l (im_fx im) s)
+           ((Pair l1 f1)
+            (let ((n (form_name sc s)))
+              (match (find_sig (im_view_all im) sc (quote type) n)
+                (None (Pair (Pair l1 (im_with_fx im f1)) w))
+                ((Some sig) (Pair (Pair (check_arity l1 n sig) (im_mark (im_with_fx im f1) (quote type) n)) w))))))
+       (if (sym_eq h (quote fn))
+         (let ((n (form_name sc s)))
+           (match (find_sig (im_view_all im) sc (quote fn) n)
+             (None (Pair (Pair (ld_rec l (RLater (quote fn) n)) im) w))
+             ((Some sig) (match (check_signature l im sig s n) ((Pair l1 im1) (Pair (Pair l1 im1) w))))))
+       (if (sym_eq h (quote fulfills))
+         (match s
+           ((SList (Cons _ (Cons (SSym x) (Cons proof Nil))))
+            (match (name_of_sym x)
+              (None (Pair (Pair (ld_rec l (RReadErr (im_file im) (quote bad_name) (chars_of_sym x))) im) w))
+              ((Some short)
+               (let ((n (qualify sc short)))
+                 (match (find_sig (im_view_all im) sc (quote requirement) n)
+                   (None (Pair (Pair (ld_rec l (RImplErr n (quote fulfills_unknown) "no such requirement in the view")) im) w))
+                   ((Some (SList (Cons _ rargs))) (match (fulfil l im n rargs proof) ((Pair l1 im1) (Pair (Pair l1 im1) w))))
+                   (_ (Pair (Pair l im) w)))))))
+           (_ (Pair (Pair (ld_rec l (RReadErr (im_file im) (quote bad_shape) "(fulfills NAME PROOF)")) im) w)))
+         (match (load_decl l (im_fx im) s) ((Pair l1 f1) (Pair (Pair l1 (im_with_fx im f1)) w)))))))
+      (_ (match (load_forms l (im_fx im) (list s) fuel w)
+           ((Pair (Pair l1 (Some f1)) w1) (Pair (Pair l1 (im_with_fx im f1)) w1))
+           ((Pair (Pair l1 None) w1) (Pair (Pair l1 im) w1)))))))
+;; the view's (sig K NAME …) / (requirement NAME …) form for (k, n)
+(fn find_sig ((forms (List SExpr)) (sc Scope) (k Symbol) (n Name)) (Option SExpr)
+  (measure (struct forms))
+  (match forms
+    (Nil None)
+    ((Cons s r)
+     (let ((h (form_head s)))
+       (if (bool_and (sym_eq h (quote sig)) (bool_not (sym_eq k (quote requirement))))
+         (match (sig_kind_name sc s)
+           ((Some (Pair k2 n2)) (if (bool_and (sym_eq k k2) (name_eq n n2)) (Some s) (find_sig r sc k n)))
+           (None (find_sig r sc k n)))
+       (if (bool_and (sym_eq h (quote requirement)) (sym_eq k (quote requirement)))
+         (if (name_eq (form_name sc s) n) (Some s) (find_sig r sc k n))
+         (find_sig r sc k n)))))))
+;; (sig type (NAME T…)) against the admitted (type (NAME T…) …): the parameter count
+(fn check_arity ((l Load) (n Name) (sig SExpr)) Load
+  (match (ld_recs_head l)
+    ((Some (RAccept _ _ _ _ _ _))
+     (match (env_find (ld_env l) n)
+       ((Some (InductInfo _ _ np _ _ _ _ _ _))
+        (match sig
+          ((SList (Cons _ (Cons _ (Cons hd _))))
+           (let ((want (match hd ((SList (Cons _ ps)) (len ps)) (_ 0))))
+             (if (int_eq np want) (ld_rec l (RDischarge n (quote type)))
+               (ld_rec l (RImplErr n (quote impl_type_arity) (append "the view's " (append (show_nat want) (append ", the implementation's " (show_nat np)))))))))
+          (_ l)))
+       (_ l)))
+    (_ l)))
+;; (sig fn NAME BINDERS RET) against (fn NAME BINDERS RET …): the Π-types, then the parameter admitted
+(fn check_signature ((l Load) (im Im) (sig SExpr) (fnform SExpr) (n Name)) (Pair Load Im)
+  (let ((sc (fx_scope l (im_fx im))))
+    (match sig
+      ((SList (Cons _ (Cons _ sargs)))
+       (match fnform
+         ((SList (Cons _ fargs))
+          (match (read_signature sc (ld_env l) sargs)
+            ((Pair None m) (Pair (ld_rec l (RReadErr (im_file im) (quote bad_shape) m)) im))
+            ((Pair (Some (Pair _ st)) _)
+             (match (read_signature sc (ld_env l) fargs)
+               ((Pair None m) (Pair (ld_rec l (RReadErr (im_file im) (quote bad_shape) m)) im))
+               ((Pair (Some (Pair _ ft)) _)
+                (if (expr_eq st ft)
+                  (match (read_decl sc (ld_env l) sig)
+                    ((RDParam d k a) (match (admit_param l (im_fx im) d k a) ((Pair l1 f1) (Pair (ld_rec l1 (RDischarge n (quote fn))) (im_mark (im_with_fx im f1) (quote fn) n)))))
+                    (_ (Pair l im)))
+                  (Pair (ld_rec l (RImplErr n (quote impl_signature) "the implementation's E signature differs from the view's")) (im_mark im (quote fn) n))))))))
+         (_ (Pair l im))))
+      (_ (Pair l im)))))
+;; (fulfills NAME PROOF): the requirement's statement here, the proof a theorem or pending
+(fn fulfil ((l Load) (im Im) (n Name) (rargs (List SExpr)) (proof SExpr)) (Pair Load Im)
+  (let ((sc (fx_scope l (im_fx im))))
+    (match (read_fulfills sc (ld_env l) rargs proof)
+      ((RDErr e m) (Pair (ld_rec l (RReadErr (im_file im) e m)) im))
+      ((RDPending n2 r) (Pair (ld_rec (ld_rec (ld_add_pending l n2) (RPending n2 r)) (RDischarge n (quote pending))) (im_mark im (quote requirement) n)))
+      ((RDOk ds)
+       (match (admit_decls (ld_env l) ds)
+         ((AdRefused subj reason) (Pair (ld_rec l (RRefuse subj reason)) (im_mark im (quote requirement) n)))
+         ((AdOk env1)
+          (match (policy_pass l (im_fx im) env1 (ld_memo l) ds Nil)
+            ((PolBound _) (Pair (ld_rec l (RLoadErr (im_file im) (quote closure_bound) (show_name n))) im))
+            ((PolOut n2 out) (Pair (ld_rec (ld_with_env l (ld_env l) (ax_memo_empty)) (RPolicy n2 out)) (im_mark im (quote requirement) n)))
+            ((PolOk memo1 recs)
+             (Pair (ld_rec (recs_add (ld_with_tbl (ld_with_env l env1 memo1) (tbl_add_all (ld_tbl l) (decls_declare env1 ds) (fx_module (im_fx im)))) recs) (RDischarge n (quote proved)))
+                   (im_mark (im_with_fx im (mix_recs (im_fx im) recs)) (quote requirement) n)))))))
+      (_ (Pair l im)))))
 
 ;; the forms in order; None when the file's loading ended in an error
 (fn load_forms ((l Load) (f Fx) (forms (List SExpr)) (fuel Int) (w World)) (Pair (Pair Load (Option Fx)) World)
@@ -469,7 +791,7 @@
              ((Some (RReadErr _ _ _)) (Pair (Pair l1 None) w))
              ((Some (RLoadErr _ _ _)) (Pair (Pair l1 None) w))
              (_ (load_forms l1 f1 r fuel w))))))))))
-(fn ld_recs_head ((l Load)) (Option Rec) (match l ((Load _ _ _ _ _ _ _ _ rs _) (match rs (Nil None) ((Cons x _) (Some x))))))
+(fn ld_recs_head ((l Load)) (Option Rec) (match (ld_recs_raw l) (Nil None) ((Cons x _) (Some x))))
 
 ;; (import "PATH"): relative to the importing file's directory, under the root
 (fn import_file ((l Load) (f Fx) (p (List Int)) (fuel Int) (w World)) (Pair (Pair Load (Option Fx)) World)
@@ -479,26 +801,45 @@
      (match (norm_parts (append (dir_of (fx_parts f)) (split_path p Nil Nil)) Nil)
        (None (Pair (Pair (ld_rec l (RLoadErr (fx_file f) (quote import_outside_root) p)) None) w))
        ((Some rel)
-        (match (load_module l rel fuel w)
-          ((Pair l1 w1)
-           (match (module_of rel)
-             ((MPOk mp)
-              (match (ld_find_mod (ld_mods l1) mp)
-                ((Some m) (Pair (Pair l1 (Some (fx_see f (mod_closure m) (mod_init m)))) w1))
-                (None (Pair (Pair (ld_rec l1 (RLoadErr (fx_file f) (quote import_failed) (join_path rel))) None) w1))))
-             (_ (Pair (Pair (ld_rec l1 (RLoadErr (fx_file f) (quote import_failed) (join_path rel))) None) w1))))))))))
+        (match (module_of rel)
+          ((MPOk _)
+           (if (fx_view f)
+             (Pair (Pair (ld_rec l (RLoadErr (fx_file f) (quote req_scope) (append (join_path rel) ": a view imports only directory modules, Init and req-scope files"))) None) w)
+             (import_loaded l f rel fuel w)))
+          (_ (import_loaded l f rel fuel w))))))))
+(fn import_loaded ((l Load) (f Fx) (rel (List (List Int))) (fuel Int) (w World)) (Pair (Pair Load (Option Fx)) World)
+  (match (load_module l rel fuel w)
+    ((Pair l1 w1)
+     (match (import_target rel)
+       ((Some mp)
+        (match (ld_find_mod (ld_mods l1) mp)
+          ((Some m) (Pair (Pair l1 (Some (fx_see f (mod_closure m) (mod_init m)))) w1))
+          (None (Pair (Pair (ld_rec l1 (RLoadErr (fx_file f) (quote import_failed) (join_path rel))) None) w1))))
+       (None (Pair (Pair (ld_rec l1 (RLoadErr (fx_file f) (quote import_failed) (join_path rel))) None) w1))))))
+;; the module an import path names: a file's path, a view's directory, a directory's
+(fn import_target ((rel (List (List Int)))) (Option Name)
+  (match (module_of rel)
+    ((MPOk mp) (Some mp))
+    ((MPView mp) (Some mp))
+    (MPDir (match (dir_module rel) ((MPOk mp) (Some mp)) (_ None)))
+    (_ None)))
 
 ;; ---- printing (the driver; the pins) --------------------------------------------------------
 (fn show_names_c ((ns (List Name))) (List Int)
   (measure (struct ns))
   (match ns (Nil Nil) ((Cons n Nil) (show_name n)) ((Cons n r) (append (show_name n) (Cons 44 (show_names_c r))))))
 (fn show_rec ((x Rec)) (List Int)
+  (measure (struct x))
   (match x
     ((RModule m file h cl) (append "MODULE " (append (show_name m) (append " file=" (append file (append " hash=" (append (show_nat h) (append " sees=" (show_names_c cl)))))))))
     ((RInit n k) (append "INIT " (append (show_name n) (append ": " (append (show_nat k) " declarations admitted")))))
-    ((RAccept n m h axs pfx)
+    ((RAccept n m h axs pfx ps)
      (append "ACCEPT " (append (show_name n) (append " module=" (append (show_name m) (append " hash=" (append (show_nat h)
-       (append " axioms=" (append (show_names_c axs) (append " init=" (match pfx (Anon "-") (_ (show_name pfx)))))))))))))
+       (append " axioms=" (append (show_names_c axs) (append " init=" (append (match pfx (Anon "-") (_ (show_name pfx))) (append " params=" (show_names_c ps)))))))))))))
+    ((RParam n k a) (append "PARAM " (append (show_name n) (append " " (append (chars_of_sym k) (if (sym_eq k (quote type)) (append " arity=" (show_nat a)) Nil))))))
+    ((RDischarge n k) (append "DISCHARGE " (append (show_name n) (append " " (chars_of_sym k)))))
+    ((RImplErr n e m) (append "IMPL-ERROR " (append (show_name n) (append " " (append (chars_of_sym e) (append ": " m))))))
+    ((RImplRec y) (append "IMPL " (show_rec y)))
     ((RRefuse n r) (append "REFUSE " (append (show_name n) (append " " (chars_of_sym r)))))
     ((RPolicy n out) (append "POLICY " (append (show_name n) (append " outside the policy: " (show_names_c out)))))
     ((RPending n r) (append "PENDING " (append (show_name n) (append " " (chars_of_sym r)))))
@@ -511,21 +852,26 @@
   (measure (struct rs))
   (match rs
     (Nil acc)
-    ((Cons x r)
-     (match acc
-       ((Cons a (Cons b (Cons c (Cons d (Cons e (Cons g Nil))))))
-        (rec_counts r
-          (match x
-            ((RModule _ _ _ _) (list (+ a 1) b c d e g))
-            ((RAccept _ _ _ _ _) (list a (+ b 1) c d e g))
-            ((RRefuse _ _) (list a b (+ c 1) d e g))
-            ((RPolicy _ _) (list a b (+ c 1) d e g))
-            ((RPending _ _) (list a b c (+ d 1) e g))
-            ((RLater _ _) (list a b c d (+ e 1) g))
-            ((RReadErr _ _ _) (list a b c d e (+ g 1)))
-            ((RLoadErr _ _ _) (list a b c d e (+ g 1)))
-            ((RInit _ _) acc))))
-       (_ acc)))))
+    ((Cons x r) (rec_counts r (rec_count x acc)))))
+(fn rec_count ((x Rec) (acc (List Int))) (List Int)
+  (measure (struct x))
+  (match acc
+    ((Cons a (Cons b (Cons c (Cons d (Cons e (Cons g Nil))))))
+     (match x
+       ((RModule _ _ _ _) (list (+ a 1) b c d e g))
+       ((RAccept _ _ _ _ _ _) (list a (+ b 1) c d e g))
+       ((RParam _ _ _) (list a (+ b 1) c d e g))
+       ((RRefuse _ _) (list a b (+ c 1) d e g))
+       ((RPolicy _ _) (list a b (+ c 1) d e g))
+       ((RPending _ _) (list a b c (+ d 1) e g))
+       ((RLater _ _) (list a b c d (+ e 1) g))
+       ((RDischarge _ _) acc)
+       ((RImplErr _ _ _) (list a b c d e (+ g 1)))
+       ((RImplRec y) (rec_count y acc))
+       ((RReadErr _ _ _) (list a b c d e (+ g 1)))
+       ((RLoadErr _ _ _) (list a b c d e (+ g 1)))
+       ((RInit _ _) acc)))
+    (_ acc)))
 (fn show_counts_load ((cs (List Int))) (List Int)
   (match cs
     ((Cons a (Cons b (Cons c (Cons d (Cons e (Cons g Nil))))))
