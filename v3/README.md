@@ -161,7 +161,10 @@ through the raw API (hostile battery 16, eight cases). Tests:
 `loader_pins_test` replaying `v3/pins/loader/` (20 package cases, each
 `main.shard` carrying its expectation), `loader_test` (records, nested
 Init prefixes, the wrong-pin fixture, visibility across root files):
-15 entrypoints, 0 failed, 2 s.
+15 entrypoints, 0 failed, 2 s. **CI (pipeline 464, `77ebcab`):** green
+— 15 entrypoints, the full-export replay on compiled K in 2,499 s at a
+31.0 GB peak, all 20 candidates pinned, closures identical, byte-ties
+identical.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

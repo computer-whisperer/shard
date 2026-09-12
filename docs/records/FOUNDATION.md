@@ -997,7 +997,10 @@ is `docs/FOUNDATION.md` §5.3.
   false theorem refused) and `loader_test` (the records' text, nested
   Init loads, the wrong-pin fixture, visibility across two root files,
   the root's spelling changing no record). 15 entrypoints, 0 failed,
-  2 s on route 3; T0 on the fixture unchanged. Cleanup beside it:
+  2 s on route 3; T0 on the fixture unchanged. **CI (pipeline 464,
+  `77ebcab`):** green — the full-export replay on compiled K in 2,499 s
+  at a 31.0 GB peak, all 20 candidates pinned, closures identical,
+  byte-ties identical, 15 entrypoints. Cleanup beside it:
   `is_ws`/`is_digit`/`starts_with_lit` had three copies (json, sexpr, a
   test) under a bootstrap that silently keeps the first — one each in
   `util.shard`; sexpr's comment-skipping `skip_ws` is `skip_blank`.
