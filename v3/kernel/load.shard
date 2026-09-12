@@ -1,0 +1,48 @@
+;;; v3/kernel/load.shard — the loader's driver:
+;;;   eval direct v3/kernel/load.shard --root DIR [--init CHUNK]… [--route N] [--engine S] FILE…
+;;; loads each FILE (under DIR, spelled from the same base) as a module with
+;;; its imports (loader.shard) and prints the records (LANGUAGE.md §3.2) —
+;;; one line per module, Init load and declaration — then the counts; the
+;;; exit code is refused + errors. `--init` names the export chunks in
+;;; order (v3/README.md's pin; `(import Init NAME)` streams them through
+;;; NAME); `--route`/`--engine` stamp the header line with the route the
+;;; driver runs on (3 the bootstrap, 1 compiled K) and the engine.
+
+(import "loader.shard")
+
+(type Args (Args (List Int) (List (List Int)) (List Int) (List Int) (List (List Int))))   ; root, chunks, route, engine, files
+(fn parse_args ((args (List (List Int))) (root (List Int)) (chunks (List (List Int))) (route (List Int)) (engine (List Int)) (files (List (List Int)))) Args
+  (measure (struct args))
+  (match args
+    (Nil (Args root (rev chunks) route engine (rev files)))
+    ((Cons x r)
+     (if (int_list_eq x "--root") (match r ((Cons v r2) (parse_args r2 v chunks route engine files)) (Nil (parse_args Nil root chunks route engine files)))
+     (if (int_list_eq x "--init") (match r ((Cons v r2) (parse_args r2 root (Cons v chunks) route engine files)) (Nil (parse_args Nil root chunks route engine files)))
+     (if (int_list_eq x "--route") (match r ((Cons v r2) (parse_args r2 root chunks v engine files)) (Nil (parse_args Nil root chunks route engine files)))
+     (if (int_list_eq x "--engine") (match r ((Cons v r2) (parse_args r2 root chunks route v files)) (Nil (parse_args Nil root chunks route engine files)))
+       (parse_args r root chunks route engine (Cons x files)))))))))
+
+(fn load_files ((l Load) (files (List (List Int))) (w World)) (Pair Load World)
+  (measure (struct files))
+  (match files
+    (Nil (Pair l w))
+    ((Cons f r) (match (load_root_file l f w) ((Pair l1 w1) (load_files l1 r w1))))))
+
+(fn print_recs ((rs (List Rec)) (w World)) World
+  (measure (struct rs))
+  (match rs (Nil w) ((Cons x r) (print_recs r (write_line (show_rec x) w)))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match (parse_args args Nil Nil "3" "bootstrap" Nil)
+       ((Args root chunks route engine files)
+        (match (parts_of root)
+          (None (exit 2 (write_line "load: --root DIR is required" w1)))
+          ((Some rootp)
+           (if (int_eq (len rootp) 0) (exit 2 (write_line "load: --root DIR is required" w1))
+           (match (load_files (load0 rootp chunks) files (write_line (append "LOAD root=" (append (join_path rootp) (append " route=" (append route (append " engine=" engine))))) w1))
+             ((Pair l w2)
+              (let ((cs (rec_counts (ld_recs l) (list 0 0 0 0 0 0))))
+                (exit (load_failures cs)
+                  (write_line (append "LOAD: " (show_counts_load cs)) (print_recs (ld_recs l) w2))))))))))))))

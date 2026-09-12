@@ -1,0 +1,68 @@
+;;; v3/kernel/test/loader_pins_test.shard — replays v3/pins/loader/CASE/main.shard
+;;; (the list below) as a package rooted at CASE through the loader and
+;;; compares the load's outcome with the file's `;; expect:` header
+;;; (v3/pins/loader/README.md). `(import Init NAME)` streams the 3000-line
+;;; export fixture.
+
+(import "reader_kit.shard")
+(import "../loader.shard")
+
+(fn fixture () (List Int) "v3/kernel/test/fixtures/init_prefix_3000.ndjson")
+(fn cases () (List (List Int))
+  (list "basic" "no_open" "ambiguous" "selective" "cycle" "missing" "directory" "outside"
+        "init" "init_nested" "init_not_found" "sorry" "type_opens"
+        "policy_axiom" "policy_trusts" "policy_cross" "read_error" "later_fn" "refused" "visible"))
+
+;; the outcome of a load: its first record that is not a module, an Init load
+;; or an acceptance; None = every record accepted
+(fn first_bad ((rs (List Rec))) (Option Rec)
+  (measure (struct rs))
+  (match rs
+    (Nil None)
+    ((Cons (RModule _ _ _ _) r) (first_bad r))
+    ((Cons (RInit _ _) r) (first_bad r))
+    ((Cons (RAccept _ _ _ _ _) r) (first_bad r))
+    ((Cons x _) (Some x))))
+(fn accepts ((rs (List Rec))) Int
+  (measure (struct rs))
+  (match rs (Nil 0) ((Cons (RAccept _ _ _ _ _) r) (+ 1 (accepts r))) ((Cons _ r) (accepts r))))
+
+(fn matches ((ws (List (List Int))) (rs (List Rec))) Bool
+  (match ws
+    ((Cons w Nil) (if (int_list_eq w "ok") (bool_and (match (first_bad rs) (None True) (_ False)) (lt 0 (accepts rs))) False))
+    ((Cons w1 (Cons w2 Nil))
+     (if (int_list_eq w1 "read-error") (match (first_bad rs) ((Some (RReadErr _ e _)) (int_list_eq (chars_of_sym e) w2)) (_ False))
+     (if (int_list_eq w1 "load-error") (match (first_bad rs) ((Some (RLoadErr _ e _)) (int_list_eq (chars_of_sym e) w2)) (_ False))
+       False)))
+    ((Cons name (Cons kind rest))
+     (if (int_list_eq kind "refused")
+       (match (first_bad rs) ((Some (RRefuse n r)) (bool_and (int_list_eq (show_name n) name) (int_list_eq (chars_of_sym r) (join_words rest)))) (_ False))
+     (if (int_list_eq kind "pending")
+       (match (first_bad rs) ((Some (RPending n r)) (bool_and (int_list_eq (show_name n) name) (int_list_eq (chars_of_sym r) (join_words rest)))) (_ False))
+     (if (int_list_eq kind "later")
+       (match (first_bad rs) ((Some (RLater k n)) (bool_and (int_list_eq (show_name n) name) (int_list_eq (chars_of_sym k) (join_words rest)))) (_ False))
+     (if (int_list_eq kind "policy")
+       (match (first_bad rs) ((Some (RPolicy n out)) (bool_and (int_list_eq (show_name n) name) (int_list_eq (show_names_c out) (join_words rest)))) (_ False))
+       False)))))
+    (_ False)))
+
+(fn case_root ((c (List Int))) (List Int) (append "v3/pins/loader/" c))
+(fn run ((cs (List (List Int))) (fails Int) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil (exit fails (write_line (append "loader_pins_test: failures = " (show_int fails)) w)))
+    ((Cons c r)
+     (let ((main (append (case_root c) "/main.shard")))
+       (match (read_file main w)
+         ((Pair None w1) (run r (+ fails 1) (write_line (append "FAIL cannot read " main) w1)))
+         ((Pair (Some src) w1)
+          (let ((ws (expect_words src)))
+            (match (parts_of (case_root c))
+              (None (run r (+ fails 1) (write_line (append "FAIL bad root " c) w1)))
+              ((Some rootp)
+               (match (load_root_file (load0 rootp (list (fixture))) main w1)
+                 ((Pair l w2)
+                  (if (matches ws (ld_recs l))
+                    (run r fails (write_line (append "PASS " (append c (append " — " (show_words ws)))) w2))
+                    (run r (+ fails 1) (write_line (append "FAIL " (append c (append " expected " (append (show_words ws) (append " got " (match (first_bad (ld_recs l)) ((Some x) (show_rec x)) (None "all accepted"))))))) w2))))))))))))))
+(fn main ((w World)) World (run (cases) 0 w))

@@ -331,9 +331,34 @@
     ((InductDecl _ _ types _) (all_names types))
     (_ (Cons (decl_name d) Nil))))
 
+;; ---- the raw entry (§3.5; GPT-6 R43) ------------------------------------------------
+;; `check` is where a declaration built OUTSIDE K enters: the reader's, a
+;; test's, an embedding's. Its node data is a claim (expr.shard: ingestion),
+;; so every term is rebuilt anonymously before the procedure reads it. The
+;; import's records enter through `check_decl_pinning` directly — K's own
+;; lineage, its ids minted through St — and never pay the rebuild.
+(fn ingest_cval ((v ConstantVal)) ConstantVal
+  (match v ((ConstantVal n ps t) (ConstantVal n ps (ingest_expr t)))))
+(fn ingest_ctors ((cs (List Constructor))) (List Constructor)
+  (measure (struct cs))
+  (match cs (Nil Nil) ((Cons (Constructor n t) r) (Cons (Constructor n (ingest_expr t)) (ingest_ctors r)))))
+(fn ingest_types ((ts (List InductiveType))) (List InductiveType)
+  (measure (struct ts))
+  (match ts (Nil Nil) ((Cons (InductiveType n t cs) r) (Cons (InductiveType n (ingest_expr t) (ingest_ctors cs)) (ingest_types r)))))
+(fn ingest_decl ((d Declaration)) Declaration
+  (match d
+    ((AxiomDecl v u) (AxiomDecl (ingest_cval v) u))
+    ((DefnDecl v x h s a) (DefnDecl (ingest_cval v) (ingest_expr x) h s a))
+    ((ThmDecl v x a) (ThmDecl (ingest_cval v) (ingest_expr x) a))
+    ((OpaqueDecl v x u a) (OpaqueDecl (ingest_cval v) (ingest_expr x) u a))
+    (QuotDecl QuotDecl)
+    ((MutualDefnDecl ds) (MutualDefnDecl ds))            ; refused unread (mutual_unsafe_block)
+    ((InductDecl lps np ts u) (InductDecl lps np (ingest_types ts) u))))
+
 (fn check ((env CheckedEnv) (st St) (d Declaration)) Outcome
-  (outcome_of (check_decl_pinning env st d) (decl_name d)))
+  (check_with env st (default_limits) d))
 
 ;; check(env, decl, limits) — §3.3's signature
-(fn check_with ((env CheckedEnv) (st St) (lim Limits) (d Declaration)) Outcome
-  (outcome_of (check_decl_pinning_lim env st lim d) (decl_name d)))
+(fn check_with ((env CheckedEnv) (st St) (lim Limits) (d0 Declaration)) Outcome
+  (let ((d (ingest_decl d0)))
+    (outcome_of (check_decl_pinning_lim env st lim d) (decl_name d))))

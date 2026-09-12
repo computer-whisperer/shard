@@ -197,6 +197,51 @@
 ;; 14. an auxiliary-nested name reserved
 (fn c_reserved () Declaration
   (InductDecl Nil 0 (list (InductiveType (n2 (quote _nested) (quote X)) (type1) (list (Constructor (n2 (quote _nested) (quote mk)) (mk_const (n2 (quote _nested) (quote X)) Nil))))) False))
+;; 16. GPT-6 R43 (2026-09-12): node data on a raw term is a claim. Before the raw
+;;     entry ingested its input, two different literals wearing one positive id
+;;     made `0 = 1` a theorem (quick_is_def_eq's expr_eq shortcut); a BVar
+;;     claiming a closed range, an FVar claiming no fvar, slipped their checks.
+;;     `check` now rebuilds every node from its structure (expr.shard ingest_expr).
+(fn forged_lit ((k Int)) Expr (Lit (D 5 12345 0 False False) (LitNat k)))
+(fn c_forged_ids () Declaration
+  (ThmDecl (cv (n1 (quote zero_eq_one)) Nil (eq_nat (forged_lit 0) (forged_lit 1))) (refl_nat (forged_lit 0)) (list (n1 (quote zero_eq_one)))))
+;; a loose BVar 0 whose node data claims a closed term
+(fn c_forged_range () Declaration
+  (DefnDecl (cv (n1 (quote closed)) Nil (nat)) (BVar (D 0 (mix 29 0) 0 False False) 0) (HRegular 1) Safe (list (n1 (quote closed)))))
+;; an FVar whose node data claims has_fvar = false
+(fn c_forged_fvar () Declaration (AxiomDecl (cv (n1 (quote nofv)) Nil (FVar (D 0 (mix 31 7) 0 False False) 7)) False))
+;; a stale cached hash on a correct term: two = two by rfl, the right-hand `two` mis-hashed
+(fn two_lit () Expr (mk_app (mk_const (nm_nat_succ) Nil) (mk_app (mk_const (nm_nat_succ) Nil) (mk_const (nm_nat_zero) Nil))))
+(fn stale_two () Expr (match (two_lit) ((App _ f a) (App (D 0 999 0 False False) f a)) (e e)))
+(fn c_stale_hash () Declaration
+  (ThmDecl (cv (n1 (quote two_two)) Nil (eq_nat (two_lit) (stale_two))) (refl_nat (two_lit)) (list (n1 (quote two_two)))))
+;; snapshot forks: from one env, two checks mint the same ids for different
+;; nodes; a node taken from one fork, submitted into the other, must not be
+;; equated by its id — `a`'s value (fun x => x) from fork A against `b`'s
+;; (fun x => Nat.zero) from fork B
+(fn nat_fn () Expr (arrow (nat) (nat)))
+(fn d_a () Declaration (DefnDecl (cv (n1 (quote a)) Nil (nat_fn)) (mk_lam (x_) BDefault (nat) (mk_bvar 0)) (HRegular 1) Safe (list (n1 (quote a)))))
+(fn d_b () Declaration (DefnDecl (cv (n1 (quote b)) Nil (nat_fn)) (mk_lam (x_) BDefault (nat) (mk_const (nm_nat_zero) Nil)) (HRegular 1) Safe (list (n1 (quote b)))))
+(fn e_fork_a () CheckedEnv (env_after (check (e_eq) (st0) (d_a)) (e0)))
+(fn e_fork_b () CheckedEnv (env_after (check (e_eq) (st0) (d_b)) (e0)))
+(fn value_of ((env CheckedEnv) (n Name)) Expr
+  (match (env_find env n) ((Some (DefnInfo _ v _ _ _)) v) (_ (nat))))
+(fn c_fork_mix () Declaration
+  (ThmDecl (cv (n1 (quote a_is_b)) Nil
+             (mk_app (mk_app (mk_app (mk_const (nm_eq) (list (LSucc LZero))) (nat_fn)) (value_of (e_fork_a) (n1 (quote a)))) (value_of (e_fork_b) (n1 (quote b)))))
+           (mk_app (mk_app (mk_const (nm_eq_refl) (list (LSucc LZero))) (nat_fn)) (value_of (e_fork_a) (n1 (quote a))))
+           (list (n1 (quote a_is_b)))))
+(fn ids_collide () Bool
+  (int_eq (expr_id (value_of (e_fork_a) (n1 (quote a)))) (expr_id (value_of (e_fork_b) (n1 (quote b))))))
+;; independently built anonymous terms compare by structure
+(fn built_twice () Bool (expr_eq (two_lit) (two_lit)))
+;; a failed check leaves the env it was given untouched: the next check sees no trace
+(fn after_failure () Bool
+  (bool_and (refused (check (e_eq) (st0) (c_forged_ids)) (quote conversion))
+            (accepted (check (e_eq) (st0) (t_add_true_std)))))
+(fn t_add_true_std () Declaration
+  (ThmDecl (cv (n1 (quote two_rfl)) Nil (eq_nat (two_lit) (two_lit))) (refl_nat (two_lit)) (list (n1 (quote two_rfl)))))
+
 ;; 15. a wrong universe arity on a constant
 (fn c_arity () Declaration (DefnDecl (cv (n1 (quote ar)) Nil (mk_sort (LSucc LZero))) (mk_const (nm_nat) (list LZero)) (HRegular 1) Safe (list (n1 (quote ar)))))
 
@@ -243,7 +288,15 @@
     (Case "13 partial out of the profile" (refused (check (e_nat) (st0) (c_partial)) (quote unsafe_declaration)))
     (Case "13 mutual block out of the profile" (refused (check (e_nat) (st0) (MutualDefnDecl Nil)) (quote mutual_unsafe_block)))
     (Case "14 reserved auxiliary prefix" (refused (check (e_nat) (st0) (c_reserved)) (quote reserved_nested_prefix)))
-    (Case "15 wrong universe arity" (refused (check (e_nat) (st0) (c_arity)) (quote universe_arity)))))
+    (Case "15 wrong universe arity" (refused (check (e_nat) (st0) (c_arity)) (quote universe_arity)))
+    (Case "16 R43: two literals wearing one positive id — 0 = 1 refused" (refused (check (e_eq) (st0) (c_forged_ids)) (quote conversion)))
+    (Case "16b R43: a loose BVar claiming a closed range" (refused (check (e_nat) (st0) (c_forged_range)) (quote loose_bvar)))
+    (Case "16c R43: an FVar claiming has_fvar = false" (refused (check (e_nat) (st0) (c_forged_fvar)) (quote fvar_in_type)))
+    (Case "16d R43: a stale cached hash on a correct term is rebuilt, the theorem admitted" (accepted (check (e_eq) (st0) (c_stale_hash))))
+    (Case "16e R43: snapshot forks mint the same ids for different nodes" (ids_collide))
+    (Case "16e R43: a node from fork A against fork B's is not equated by id" (refused (check (e_fork_b) (st0) (c_fork_mix)) (quote conversion)))
+    (Case "16f R43: independently built anonymous terms compare by structure" (built_twice))
+    (Case "16g R43: a failed check leaves no trace for the next" (after_failure))))
 
 (fn run ((cs (List Case)) (fails Int) (w World)) World
   (measure (struct cs))

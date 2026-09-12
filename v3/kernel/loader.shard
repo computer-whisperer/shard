@@ -1,0 +1,537 @@
+;;; v3/kernel/loader.shard — the loader (v3/LANGUAGE.md §3, §3.1, §3.2, §9).
+;;; Phase 2, slice 3. A package root and its files: each file is a module
+;;; named by its path from the root; `import` loads a file once (a cycle is
+;;; refused) and makes the imported module's closure visible, opening
+;;; nothing; `(import Init NAME)` streams the pinned export through NAME
+;;; into K, checking the export's meta line against the pin, the larger of
+;;; two nested prefixes loaded once; `use` opens a prefix for the rest of
+;;; the file; `trusts` widens the file's assumption policy; every declared
+;;; form goes through the reader (reader.shard) into K's raw entry
+;;; (add.shard `check`, which ingests), and an admitted declaration's
+;;; axiom closure (axioms.shard) is checked against the file's policy —
+;;; outside it, the declaration is reported and dropped, the environment
+;;; kept as it was. What the loader records per declaration is §3.2's
+;;; acceptance record at phase 2 (the driver load.shard prints it): the
+;;; identity (K name and content fingerprint), the module, the axiom
+;;; closure, and the environment revision (the Init prefix, the visible
+;;; modules and their hashes on their MODULE lines). Nothing here is
+;;; authority: K's verdicts are K's.
+
+(import "host.shard")
+(import "reader.shard")
+(import "import.shard")
+
+;; ---- paths ---------------------------------------------------------------------------
+;; a path as its components on `/`
+(fn split_path ((bs (List Int)) (cur (List Int)) (acc (List (List Int)))) (List (List Int))
+  (measure (struct bs))
+  (match bs
+    (Nil (rev (Cons (rev cur) acc)))
+    ((Cons c r) (if (int_eq c 47) (split_path r Nil (Cons (rev cur) acc)) (split_path r (Cons c cur) acc)))))
+;; normalized: empty and `.` components dropped, `..` pops; None if `..` would climb above the start
+(fn norm_parts ((parts (List (List Int))) (acc (List (List Int)))) (Option (List (List Int)))
+  (measure (struct parts))
+  (match parts
+    (Nil (Some (rev acc)))
+    ((Cons p r)
+     (if (int_list_eq p Nil) (norm_parts r acc)
+     (if (int_list_eq p ".") (norm_parts r acc)
+     (if (int_list_eq p "..") (match acc (Nil None) ((Cons _ a2) (norm_parts r a2)))
+       (norm_parts r (Cons p acc))))))))
+(fn parts_of ((bs (List Int))) (Option (List (List Int))) (norm_parts (split_path bs Nil Nil) Nil))
+(fn join_path ((parts (List (List Int)))) (List Int)
+  (measure (struct parts))
+  (match parts (Nil Nil) ((Cons p Nil) p) ((Cons p r) (append p (Cons 47 (join_path r))))))
+(fn dir_of ((parts (List (List Int)))) (List (List Int))
+  (measure (struct parts))
+  (match parts (Nil Nil) ((Cons _ Nil) Nil) ((Cons p r) (Cons p (dir_of r)))))
+;; the rest of `parts` after the prefix `pre`, or None
+(fn strip_parts ((pre (List (List Int))) (parts (List (List Int)))) (Option (List (List Int)))
+  (measure (struct pre))
+  (match pre
+    (Nil (Some parts))
+    ((Cons p pr) (match parts ((Cons q qr) (if (int_list_eq p q) (strip_parts pr qr) None)) (Nil None)))))
+(fn parts_eq ((a (List (List Int))) (b (List (List Int)))) Bool
+  (measure (struct a))
+  (match a
+    (Nil (match b (Nil True) (_ False)))
+    ((Cons x ar) (match b (Nil False) ((Cons y br) (if (int_list_eq x y) (parts_eq ar br) False))))))
+(fn strip_suffix ((suf (List Int)) (bs (List Int))) (Option (List Int))
+  (let ((n (- (len bs) (len suf))))
+    (if (lt n 0) None (if (int_list_eq (drop n bs) suf) (Some (take n bs)) None))))
+
+;; the module path of a root-relative file: `.shard` dropped from the last
+;; component, each component one name component (§3). A path whose last
+;; component lacks `.shard` names a directory module (its view: slice 4).
+(type ModPath (MPOk Name) (MPDir) (MPBad (List Int)))
+(fn module_of ((parts (List (List Int)))) ModPath
+  (match parts
+    (Nil (MPBad "empty path"))
+    ((Cons p Nil)
+     (match (strip_suffix ".shard" p)
+       (None MPDir)
+       ((Some stem) (module_comp Anon stem Nil))))
+    ((Cons p r) (match (module_comp Anon p Nil) ((MPOk m) (module_rest m r)) (x x)))))
+(fn module_rest ((m Name) (parts (List (List Int)))) ModPath
+  (measure (struct parts))
+  (match parts
+    (Nil (MPBad "empty path"))
+    ((Cons p Nil)
+     (match (strip_suffix ".shard" p)
+       (None MPDir)
+       ((Some stem) (module_comp m stem Nil))))
+    ((Cons p r) (match (module_comp m p Nil) ((MPOk m2) (module_rest m2 r)) (x x)))))
+;; one component; a dot inside it would split a citation, so it is refused
+(fn module_comp ((m Name) (comp (List Int)) (seen (List Int))) ModPath
+  (measure (struct comp))
+  (match comp
+    (Nil
+     (match (name_push m (rev seen))
+       (None (MPBad "empty component"))
+       ((Some n) (if (bool_and (name_eq m Anon) (name_eq n (n1 (quote Init)))) (MPBad "Init is the import's prefix, never a module") (MPOk n)))))
+    ((Cons c r) (if (int_eq c 46) (MPBad (append "a dot in a file name: " (rev_onto seen comp))) (module_comp m r (Cons c seen))))))
+
+;; ---- the state -------------------------------------------------------------------------
+;; a loaded module: path, root-relative file, hash (over its accepted
+;; declarations' fingerprints, in order), its closure (the module paths
+;; visible in it, itself included), whether the Init prefix is visible in it
+(type Mod (Mod Name (List Int) Int (List Name) Bool))
+(fn mod_path ((m Mod)) Name (match m ((Mod p _ _ _ _) p)))
+(fn mod_hash ((m Mod)) Int (match m ((Mod _ _ h _ _) h)))
+(fn mod_closure ((m Mod)) (List Name) (match m ((Mod _ _ _ c _) c)))
+(fn mod_init ((m Mod)) Bool (match m ((Mod _ _ _ _ i) i)))
+
+;; the Init stream: the import run (its tables persist across chunks), the
+;; rest of the current chunk, the chunk files still unread, the prefix
+;; reached (the last target), declarations admitted so far
+(type InitSt (InitNone) (InitSt Run (List Int) (List (List Int)) Name Int))
+
+(type Rec
+  (RModule Name (List Int) Int (List Name))   ; a module loaded: path, file, hash, its closure
+  (RInit Name Int)                            ; the Init prefix loaded through NAME: declarations admitted so far
+  (RAccept Name Name Int (List Name) Name)    ; declaration, module, content fingerprint, axiom closure, the Init prefix at the check (Anon = none)
+  (RRefuse Name Symbol)                       ; K refused
+  (RPolicy Name (List Name))                  ; outside the file's policy: the axioms it reaches that the policy lacks
+  (RPending Name Symbol)                      ; sorry: read, admits nothing
+  (RLater Symbol Name)                        ; an E form: its slice's
+  (RReadErr (List Int) Symbol (List Int))     ; file, reason, message — the file's reading ends here
+  (RLoadErr (List Int) Symbol (List Int)))    ; file, reason, detail — the file's loading ends here
+
+;; root, environment, closure memo, modules, the Init stream, declaration →
+;; module, pending names, the loading stack (cycles), records newest first,
+;; the export chunk files the driver named
+(type Load (Load (List (List Int)) CheckedEnv AxMemo (List Mod) InitSt (IntMap (List (Pair Name Name))) (List Name) (List Name) (List Rec) (List (List Int))))
+(fn load0 ((root (List (List Int))) (chunks (List (List Int)))) Load
+  (Load root (CheckedEnv IMEmpty False Nil 0) (ax_memo_empty) Nil InitNone IMEmpty Nil Nil Nil chunks))
+(fn ld_root ((l Load)) (List (List Int)) (match l ((Load r _ _ _ _ _ _ _ _ _) r)))
+(fn ld_env ((l Load)) CheckedEnv (match l ((Load _ e _ _ _ _ _ _ _ _) e)))
+(fn ld_memo ((l Load)) AxMemo (match l ((Load _ _ m _ _ _ _ _ _ _) m)))
+(fn ld_mods ((l Load)) (List Mod) (match l ((Load _ _ _ ms _ _ _ _ _ _) ms)))
+(fn ld_init ((l Load)) InitSt (match l ((Load _ _ _ _ i _ _ _ _ _) i)))
+(fn ld_tbl ((l Load)) (IntMap (List (Pair Name Name))) (match l ((Load _ _ _ _ _ t _ _ _ _) t)))
+(fn ld_pending ((l Load)) (List Name) (match l ((Load _ _ _ _ _ _ p _ _ _) p)))
+(fn ld_stack ((l Load)) (List Name) (match l ((Load _ _ _ _ _ _ _ s _ _) s)))
+(fn ld_recs ((l Load)) (List Rec) (match l ((Load _ _ _ _ _ _ _ _ rs _) (rev rs))))
+(fn ld_chunks ((l Load)) (List (List Int)) (match l ((Load _ _ _ _ _ _ _ _ _ c) c)))
+(fn ld_with_env ((l Load) (e CheckedEnv) (m AxMemo)) Load (match l ((Load r _ _ ms i t p s rs c) (Load r e m ms i t p s rs c))))
+(fn ld_add_mod ((l Load) (md Mod)) Load (match l ((Load r e m ms i t p s rs c) (Load r e m (Cons md ms) i t p s rs c))))
+(fn ld_with_init ((l Load) (i InitSt)) Load (match l ((Load r e m ms _ t p s rs c) (Load r e m ms i t p s rs c))))
+(fn ld_with_tbl ((l Load) (t (IntMap (List (Pair Name Name))))) Load (match l ((Load r e m ms i _ p s rs c) (Load r e m ms i t p s rs c))))
+(fn ld_add_pending ((l Load) (n Name)) Load (match l ((Load r e m ms i t p s rs c) (Load r e m ms i t (Cons n p) s rs c))))
+(fn ld_with_stack ((l Load) (s (List Name))) Load (match l ((Load r e m ms i t p _ rs c) (Load r e m ms i t p s rs c))))
+(fn ld_rec ((l Load) (x Rec)) Load (match l ((Load r e m ms i t p s rs c) (Load r e m ms i t p s (Cons x rs) c))))
+(fn ld_find_mod ((ms (List Mod)) (p Name)) (Option Mod)
+  (measure (struct ms))
+  (match ms (Nil None) ((Cons m r) (if (name_eq (mod_path m) p) (Some m) (ld_find_mod r p)))))
+(fn init_prefix ((l Load)) Name (match (ld_init l) (InitNone Anon) ((InitSt _ _ _ p _) p)))
+
+;; the file being loaded: module, root-relative parts, opened prefixes, the
+;; visible modules (itself included), Init visible?, trusted names, hash so far
+(type Fx (Fx Name (List (List Int)) (List Open) (List Name) Bool (List Name) Int))
+(fn fx_module ((f Fx)) Name (match f ((Fx m _ _ _ _ _ _) m)))
+(fn fx_parts ((f Fx)) (List (List Int)) (match f ((Fx _ p _ _ _ _ _) p)))
+(fn fx_opened ((f Fx)) (List Open) (match f ((Fx _ _ o _ _ _ _) o)))
+(fn fx_vis ((f Fx)) (List Name) (match f ((Fx _ _ _ v _ _ _) v)))
+(fn fx_init ((f Fx)) Bool (match f ((Fx _ _ _ _ i _ _) i)))
+(fn fx_trusts ((f Fx)) (List Name) (match f ((Fx _ _ _ _ _ t _) t)))
+(fn fx_hash ((f Fx)) Int (match f ((Fx _ _ _ _ _ _ h) h)))
+(fn fx_file ((f Fx)) (List Int) (join_path (fx_parts f)))
+(fn fx_open ((f Fx) (o Open)) Fx (match f ((Fx m p os v i t h) (Fx m p (append os (list o)) v i t h))))
+(fn fx_see ((f Fx) (mods (List Name)) (init Bool)) Fx
+  (match f ((Fx m p os v i t h) (Fx m p os (names_union v mods) (bool_or i init) t h))))
+(fn fx_trust ((f Fx) (ns (List Name))) Fx (match f ((Fx m p os v i t h) (Fx m p os v i (append t ns) h))))
+(fn fx_mix ((f Fx) (x Int)) Fx (match f ((Fx m p os v i t h) (Fx m p os v i t (mix h x)))))
+(fn fx_scope ((l Load) (f Fx)) Scope
+  (Scope (fx_module f) (fx_opened f) (VisOnly (fx_vis f) (fx_init f) (ld_tbl l) (ld_pending l))))
+
+;; ---- the forms -------------------------------------------------------------------------
+(type Form
+  (FImportFile (List Int))
+  (FImportInit Name)
+  (FUse Name (List Symbol))
+  (FTrusts (List Name))
+  (FDecl)
+  (FBad Symbol (List Int)))
+(fn form_of ((s SExpr)) Form
+  (match s
+    ((SList (Cons (SSym h) args))
+     (if (sym_eq h (quote import)) (import_form args)
+     (if (sym_eq h (quote use)) (use_form args)
+     (if (sym_eq h (quote trusts)) (trusts_form args Nil)
+       FDecl))))
+    (_ FDecl)))
+(fn import_form ((args (List SExpr))) Form
+  (match args
+    ((Cons (SStr p) Nil) (FImportFile p))
+    ((Cons (SSym i) (Cons (SSym n) Nil))
+     (if (sym_eq i (quote Init))
+       (match (name_of_sym n) ((Some m) (FImportInit m)) (None (FBad (quote bad_import) "(import Init NAME)")))
+       (FBad (quote bad_import) "(import \"FILE\") or (import Init NAME)")))
+    (_ (FBad (quote bad_import) "(import \"FILE\") or (import Init NAME)"))))
+;; (use P) opens P; (use P a b) opens P for the names a… and b…; a leading
+;; `Init` is dropped — imported names are bare in K (§3), so (use Init) opens
+;; nothing new and (use Init.List) opens `List`
+(fn use_form ((args (List SExpr))) Form
+  (match args
+    ((Cons (SSym p) ms)
+     (match (name_of_sym p)
+       (None (FBad (quote bad_use) "(use PREFIX NAME…)"))
+       ((Some n) (match (use_members ms Nil) ((Some syms) (FUse (drop_init n) syms)) (None (FBad (quote bad_use) "(use PREFIX NAME…)"))))))
+    (_ (FBad (quote bad_use) "(use PREFIX NAME…)"))))
+(fn use_members ((ms (List SExpr)) (acc (List Symbol))) (Option (List Symbol))
+  (measure (struct ms))
+  (match ms
+    (Nil (Some (rev acc)))
+    ((Cons (SSym s) r) (use_members r (Cons s acc)))
+    (_ None)))
+(fn drop_init ((n Name)) Name
+  (measure (struct n))
+  (match n
+    ((Str Anon s) (if (sym_eq s (quote Init)) Anon n))
+    ((Str p s) (Str (drop_init p) s))
+    ((Num p k) (Num (drop_init p) k))
+    (Anon Anon)))
+(fn trusts_form ((args (List SExpr)) (acc (List Name))) Form
+  (measure (struct args))
+  (match args
+    (Nil (FTrusts (rev acc)))
+    ((Cons (SSym s) r) (match (name_of_sym s) ((Some n) (trusts_form r (Cons n acc))) (None (FBad (quote bad_trusts) "(trusts NAME…)"))))
+    (_ (FBad (quote bad_trusts) "(trusts NAME…)"))))
+(fn form_head ((s SExpr)) Symbol (match s ((SList (Cons (SSym h) _)) h) (_ (quote form))))
+(fn form_name ((sc Scope) (s SExpr)) Name
+  (match s
+    ((SList (Cons _ (Cons (SSym n) _))) (match (name_of_sym n) ((Some m) (qualify sc m)) (None Anon)))
+    (_ Anon)))
+
+;; ---- the policy (§9) -----------------------------------------------------------------------
+(fn std_axioms () (List Name) (list (n1 (quote propext)) (n2 (quote Quot) (quote sound)) (n2 (quote Classical) (quote choice))))
+;; the axioms of a closure the file's policy lacks
+(fn outside_policy ((sc Scope) (trusts (List Name)) (axs (List Name))) (List Name)
+  (measure (struct axs))
+  (match axs
+    (Nil Nil)
+    ((Cons a r) (if (permitted sc trusts a) (outside_policy sc trusts r) (Cons a (outside_policy sc trusts r))))))
+(fn permitted ((sc Scope) (trusts (List Name)) (a Name)) Bool
+  (if (mem_name a (std_axioms)) True (trusted sc trusts a)))
+;; a trusted name is spelled as a citation would be: it resolves through the scope
+(fn trusted ((sc Scope) (ts (List Name)) (a Name)) Bool
+  (measure (struct ts))
+  (match ts (Nil False) ((Cons t r) (if (mem_name a (scope_candidates sc t)) True (trusted sc r a)))))
+
+;; ---- admission of one form's declarations --------------------------------------------------
+;; every constant a declaration adds to the environment, for the table
+(fn decl_declares ((env CheckedEnv) (d Declaration)) (List Name)
+  (match d
+    ((InductDecl _ _ ts _) (block_names env (all_names ts)))
+    (_ (list (decl_name d)))))
+(fn block_names ((env CheckedEnv) (ts (List Name))) (List Name)
+  (measure (struct ts))
+  (match ts
+    (Nil Nil)
+    ((Cons t r) (Cons t (append (induct_ctors env t) (Cons (Str t (quote rec)) (block_names env r)))))))
+(fn decls_declare ((env CheckedEnv) (ds (List Declaration))) (List Name)
+  (measure (struct ds))
+  (match ds (Nil Nil) ((Cons d r) (append (decl_declares env d) (decls_declare env r)))))
+(fn tbl_add_all ((tbl (IntMap (List (Pair Name Name)))) (ns (List Name)) (m Name)) (IntMap (List (Pair Name Name)))
+  (measure (struct ns))
+  (match ns (Nil tbl) ((Cons n r) (tbl_add_all (tbl_add tbl n m) r m))))
+
+(type Admit (AdOk CheckedEnv) (AdRefused Name Symbol))
+(fn admit_decls ((env CheckedEnv) (ds (List Declaration))) Admit
+  (measure (struct ds))
+  (match ds
+    (Nil (AdOk env))
+    ((Cons d r)
+     (match (check env (st_init) d)
+       ((Accepted e2) (admit_decls e2 r))
+       ((Rejected reason subject) (AdRefused subject (reason_of reason)))
+       ((Exhausted _ _) (AdRefused (decl_name d) (quote exhausted)))))))
+(fn reason_of ((r Reason)) Symbol
+  (match r
+    ((Malformed t) t) ((RuleViolation t) t) ((Unsupported t) t) ((UnresolvedObligation t) t)
+    (ConversionNotEstablished (quote conversion))))
+
+;; the closures of the declared names against the policy: the first
+;; declaration outside it, or the records to add
+(type Pol (PolOk AxMemo (List Rec)) (PolOut Name (List Name)) (PolBound Name))
+(fn policy_pass ((l Load) (f Fx) (env CheckedEnv) (memo AxMemo) (ds (List Declaration)) (acc (List Rec))) Pol
+  (measure (struct ds))
+  (match ds
+    (Nil (PolOk memo (rev acc)))
+    ((Cons d r)
+     (let ((n (decl_name d)))
+       (match (axioms_of env memo n)
+         ((Pair memo1 None) (PolBound n))
+         ((Pair memo1 (Some axs))
+          (match (outside_policy (fx_scope l f) (fx_trusts f) axs)
+            (Nil (policy_pass l f env memo1 r
+                   (Cons (RAccept n (fx_module f) (match (identity_hash env n) ((Some h) h) (None 0)) axs (init_prefix l)) acc)))
+            (out (PolOut n out)))))))))
+
+(fn mix_recs ((f Fx) (rs (List Rec))) Fx
+  (measure (struct rs))
+  (match rs
+    (Nil f)
+    ((Cons (RAccept _ _ h _ _) r) (mix_recs (fx_mix f h) r))
+    ((Cons _ r) (mix_recs f r))))
+(fn recs_add ((l Load) (rs (List Rec))) Load
+  (measure (struct rs))
+  (match rs (Nil l) ((Cons x r) (recs_add (ld_rec l x) r))))
+
+;; one declared form: read, admit, check the policy, record
+(fn load_decl ((l Load) (f Fx) (s SExpr)) (Pair Load Fx)
+  (let ((sc (fx_scope l f)))
+    (match (read_decl sc (ld_env l) s)
+      ((RDErr e m) (Pair (ld_rec l (RReadErr (fx_file f) e m)) f))
+      ((RDPending n r) (Pair (ld_rec (ld_add_pending l n) (RPending n r)) f))
+      ((RDDirective _) (Pair (ld_rec l (RLoadErr (fx_file f) (quote bad_directive) (chars_of_sym (form_head s)))) f))
+      ((RDLater k) (Pair (ld_rec l (RLater k (form_name sc s))) f))
+      ((RDOk ds)
+       (match (admit_decls (ld_env l) ds)
+         ((AdRefused subj reason) (Pair (ld_rec l (RRefuse subj reason)) f))
+         ((AdOk env1)
+          (match (policy_pass l f env1 (ld_memo l) ds Nil)
+            ((PolBound n) (Pair (ld_rec (ld_with_env l (ld_env l) (ax_memo_empty)) (RLoadErr (fx_file f) (quote closure_bound) (show_name n))) f))
+            ((PolOut n out) (Pair (ld_rec (ld_with_env l (ld_env l) (ax_memo_empty)) (RPolicy n out)) f))
+            ((PolOk memo1 recs)
+             (let ((l1 (recs_add (ld_with_tbl (ld_with_env l env1 memo1) (tbl_add_all (ld_tbl l) (decls_declare env1 ds) (fx_module f))) recs)))
+               (Pair l1 (open_type (mix_recs f recs) s ds)))))))))))
+;; a `type` form opens its own namespace for the rest of the file (§13 item 7)
+(fn open_type ((f Fx) (s SExpr) (ds (List Declaration))) Fx
+  (if (sym_eq (form_head s) (quote type))
+    (match ds ((Cons d _) (fx_open f (OpenAll (decl_name d)))) (Nil f))
+    f))
+
+;; ---- the Init prefix (§3.1) ----------------------------------------------------------------
+;; the pin (v3/README.md): the export's meta line must say so
+(fn init_pin_githash () (List Int) "819816b2e0a3bf405af45ae5c7af2491d8f5bee6")
+(fn init_pin_exporter () (List Int) "lean4export")
+(fn init_pin_exporter_version () (List Int) "3.1.0")
+(fn init_pin_format () (List Int) "3.1.0")
+(fn init_budget () Int 100000000)
+
+;; the first record must be the meta line matching the pin; the rest of the chunk follows
+(fn check_meta ((bs (List Int))) (Pair (Option (List Int)) (List Int))
+  (match (json_parse bs)
+    (JErr (Pair None "the export's first record is not JSON"))
+    ((JRes j rest)
+     (match (jget j "meta")
+       (None (Pair None "the export's first record is not its meta line"))
+       ((Some m)
+        (let ((githash (jpath m "lean" "githash"))
+              (exporter (jpath m "exporter" "name"))
+              (exv (jpath m "exporter" "version"))
+              (fmt (jpath m "format" "version")))
+          (if (bool_not (opt_str_eq githash (init_pin_githash))) (Pair None (append "lean githash " (append (show_opt_str githash) (append ", the pin is " (init_pin_githash)))))
+          (if (bool_not (opt_str_eq exporter (init_pin_exporter))) (Pair None (append "exporter " (show_opt_str exporter)))
+          (if (bool_not (opt_str_eq exv (init_pin_exporter_version))) (Pair None (append "exporter version " (append (show_opt_str exv) (append ", the pin is " (init_pin_exporter_version)))))
+          (if (bool_not (opt_str_eq fmt (init_pin_format))) (Pair None (append "format version " (append (show_opt_str fmt) (append ", the pin is " (init_pin_format)))))
+            (Pair (Some rest) Nil)))))))))))
+(fn jpath ((j Json) (a (List Int)) (b (List Int))) (Option (List Int))
+  (match (jget j a) ((Some x) (match (jget x b) ((Some y) (jstr y)) (None None))) (None None)))
+(fn opt_str_eq ((o (Option (List Int))) (s (List Int))) Bool (match o ((Some x) (int_list_eq x s)) (None False)))
+(fn show_opt_str ((o (Option (List Int)))) (List Int) (match o ((Some x) x) (None "(missing)")))
+
+;; the Init stream saved: its environment becomes the loader's
+(fn init_save ((l Load) (run Run) (rest (List Int)) (files (List (List Int))) (pfx Name) (n Int)) Load
+  (ld_with_init (ld_with_env l (run_env run) (ld_memo l)) (InitSt run rest files pfx n)))
+(fn init_err ((l Load) (file (List Int)) (reason Symbol) (detail (List Int))) (Pair Load Bool)
+  (Pair (ld_rec l (RLoadErr file reason detail)) False))
+
+;; load the export through `target`: already admitted = within the loaded
+;; prefix (two nested prefixes, the larger once); else stream on from where
+;; the last import stopped
+(fn init_through ((l Load) (target Name) (w World)) (Pair (Pair Load Bool) World)
+  (match (env_find (ld_env l) target)
+    ((Some _) (Pair (Pair l True) w))
+    (None
+     (match (ld_init l)
+       (InitNone
+        (match (ld_chunks l)
+          (Nil (Pair (init_err l "Init" (quote init_unavailable) "no export chunks were given (load.shard --init CHUNK…)") w))
+          ((Cons f rest)
+           (match (read_file f w)
+             ((Pair None w1) (Pair (init_err l f (quote missing_file) "the export chunk") w1))
+             ((Pair (Some bs) w1)
+              (match (check_meta bs)
+                ((Pair None msg) (Pair (init_err l f (quote export_pin_mismatch) msg) w1))
+                ((Pair (Some after) _)
+                 (init_stream l (run_with_env (empty_run False False) (ld_env l) (st_for (ld_env l))) after rest target 0 (init_budget) w1))))))))
+       ((InitSt run rest files _ n)
+        (init_stream l (run_with_env run (ld_env l) (st_for (ld_env l))) rest files target n (init_budget) w))))))
+
+(fn init_stream ((l Load) (run Run) (bs0 (List Int)) (files (List (List Int))) (target Name) (n Int) (fuel Int) (w World)) (Pair (Pair Load Bool) World)
+  (measure fuel)
+  (if (lt fuel 0) (Pair (init_err (init_save l run bs0 files (init_prefix l) n) "Init" (quote init_budget) "the record budget") w)
+  (let ((bs (skip_ws bs0)))
+    (match bs
+      (Nil
+       (match files
+         (Nil (Pair (init_err (init_save l run Nil Nil (init_prefix l) n) "Init" (quote init_name_not_found) (append (show_name target) " is not in the export chunks given")) w))
+         ((Cons f rest)
+          (match (read_file f w)
+            ((Pair None w1) (Pair (init_err (init_save l run Nil rest (init_prefix l) n) f (quote missing_file) "the export chunk") w1))
+            ((Pair (Some bs2) w1) (init_stream l run bs2 rest target n (- fuel 1) w1))))))
+      (_
+       (match (json_parse bs)
+         (JErr (Pair (init_err (init_save l run Nil files (init_prefix l) n) "Init" (quote init_malformed) "a record is not JSON") w))
+         ((JRes j rest)
+          (match (process_record run j)
+            ((Pair run1 v)
+             (match v
+               (VSkip (init_stream l run1 rest files target n (- fuel 1) w))
+               ((VAccept _)
+                (if (mem_name target (record_constants (run_tabs run1) j v))
+                  (Pair (Pair (ld_rec (init_save l run1 rest files target (+ n 1)) (RInit target (+ n 1))) True) w)
+                  (init_stream l run1 rest files target (+ n 1) (- fuel 1) w)))
+               (_ (Pair (init_err (init_save l run1 rest files (init_prefix l) n) "Init" (quote init_refused) (match (show_verdict v) ((Some t) t) (None "?"))) w))))))))))))
+
+;; ---- files and modules -----------------------------------------------------------------------
+(fn import_depth () Int 1000)
+
+;; a file named on the command line: under the root, spelled from the same base as the root
+(fn load_root_file ((l Load) (file (List Int)) (w World)) (Pair Load World)
+  (match (parts_of file)
+    (None (Pair (ld_rec l (RLoadErr file (quote bad_path) "")) w))
+    ((Some parts)
+     (match (strip_parts (ld_root l) parts)
+       (None (Pair (ld_rec l (RLoadErr file (quote outside_root) (join_path (ld_root l)))) w))
+       ((Some rel) (load_module l rel (import_depth) w))))))
+
+;; a root-relative file as a module: once; a cycle refused; the records
+;; of its forms; its MODULE record when its forms are done
+(fn load_module ((l Load) (rel (List (List Int))) (fuel Int) (w World)) (Pair Load World)
+  (measure fuel)
+  (match (module_of rel)
+    ((MPBad m) (Pair (ld_rec l (RLoadErr (join_path rel) (quote bad_module_name) m)) w))
+    (MPDir (Pair (ld_rec l (RLoadErr (join_path rel) (quote directory_module) "a directory module's view: slice 4")) w))
+    ((MPOk mp)
+     (match (ld_find_mod (ld_mods l) mp)
+       ((Some _) (Pair l w))
+       (None
+        (if (mem_name mp (ld_stack l)) (Pair (ld_rec l (RLoadErr (join_path rel) (quote import_cycle) (show_name mp))) w)
+        (if (lt fuel 0) (Pair (ld_rec l (RLoadErr (join_path rel) (quote import_depth) "")) w)
+        (match (read_file (join_path (append (ld_root l) rel)) w)
+          ((Pair None w1) (Pair (ld_rec l (RLoadErr (join_path rel) (quote missing_file) (join_path (append (ld_root l) rel)))) w1))
+          ((Pair (Some src) w1)
+           (match (read_all False src)
+             ((RAErr e off) (Pair (ld_rec l (RReadErr (join_path rel) e (append "at byte " (show_nat off)))) w1))
+             ((RAOk forms)
+              (match (load_forms (ld_with_stack l (Cons mp (ld_stack l))) (Fx mp rel Nil (list mp) False Nil (hash_name mp)) forms fuel w1)
+                ((Pair (Pair l1 (Some f)) w2)
+                 (Pair (ld_rec (ld_add_mod (ld_with_stack l1 (ld_stack l)) (Mod mp (join_path rel) (fx_hash f) (fx_vis f) (fx_init f)))
+                               (RModule mp (join_path rel) (fx_hash f) (fx_vis f)))
+                       w2))
+                ((Pair (Pair l1 None) w2) (Pair (ld_with_stack l1 (ld_stack l)) w2))))))))))))))
+
+;; the forms in order; None when the file's loading ended in an error
+(fn load_forms ((l Load) (f Fx) (forms (List SExpr)) (fuel Int) (w World)) (Pair (Pair Load (Option Fx)) World)
+  (measure fuel)
+  (match forms
+    (Nil (Pair (Pair l (Some f)) w))
+    ((Cons s r)
+     (match (form_of s)
+       ((FBad e m) (Pair (Pair (ld_rec l (RLoadErr (fx_file f) e m)) None) w))
+       ((FUse p ms) (load_forms l (fx_open f (if (int_eq (len ms) 0) (OpenAll p) (OpenSome p ms))) r fuel w))
+       ((FTrusts ns) (load_forms l (fx_trust f ns) r fuel w))
+       ((FImportInit n)
+        (match (init_through l n w)
+          ((Pair (Pair l1 True) w1) (load_forms l1 (fx_see f Nil True) r fuel w1))
+          ((Pair (Pair l1 False) w1) (Pair (Pair l1 None) w1))))
+       ((FImportFile p)
+        (match (import_file l f p (- fuel 1) w)
+          ((Pair (Pair l1 (Some f1)) w1) (load_forms l1 f1 r fuel w1))
+          ((Pair (Pair l1 None) w1) (Pair (Pair l1 None) w1))))
+       (FDecl
+        (match (load_decl l f s)
+          ((Pair l1 f1)
+           (match (ld_recs_head l1)
+             ((Some (RReadErr _ _ _)) (Pair (Pair l1 None) w))
+             ((Some (RLoadErr _ _ _)) (Pair (Pair l1 None) w))
+             (_ (load_forms l1 f1 r fuel w))))))))))
+(fn ld_recs_head ((l Load)) (Option Rec) (match l ((Load _ _ _ _ _ _ _ _ rs _) (match rs (Nil None) ((Cons x _) (Some x))))))
+
+;; (import "PATH"): relative to the importing file's directory, under the root
+(fn import_file ((l Load) (f Fx) (p (List Int)) (fuel Int) (w World)) (Pair (Pair Load (Option Fx)) World)
+  (match p
+    ((Cons 47 _) (Pair (Pair (ld_rec l (RLoadErr (fx_file f) (quote absolute_import) p)) None) w))
+    (_
+     (match (norm_parts (append (dir_of (fx_parts f)) (split_path p Nil Nil)) Nil)
+       (None (Pair (Pair (ld_rec l (RLoadErr (fx_file f) (quote import_outside_root) p)) None) w))
+       ((Some rel)
+        (match (load_module l rel fuel w)
+          ((Pair l1 w1)
+           (match (module_of rel)
+             ((MPOk mp)
+              (match (ld_find_mod (ld_mods l1) mp)
+                ((Some m) (Pair (Pair l1 (Some (fx_see f (mod_closure m) (mod_init m)))) w1))
+                (None (Pair (Pair (ld_rec l1 (RLoadErr (fx_file f) (quote import_failed) (join_path rel))) None) w1))))
+             (_ (Pair (Pair (ld_rec l1 (RLoadErr (fx_file f) (quote import_failed) (join_path rel))) None) w1))))))))))
+
+;; ---- printing (the driver; the pins) --------------------------------------------------------
+(fn show_names_c ((ns (List Name))) (List Int)
+  (measure (struct ns))
+  (match ns (Nil Nil) ((Cons n Nil) (show_name n)) ((Cons n r) (append (show_name n) (Cons 44 (show_names_c r))))))
+(fn show_rec ((x Rec)) (List Int)
+  (match x
+    ((RModule m file h cl) (append "MODULE " (append (show_name m) (append " file=" (append file (append " hash=" (append (show_nat h) (append " sees=" (show_names_c cl)))))))))
+    ((RInit n k) (append "INIT " (append (show_name n) (append ": " (append (show_nat k) " declarations admitted")))))
+    ((RAccept n m h axs pfx)
+     (append "ACCEPT " (append (show_name n) (append " module=" (append (show_name m) (append " hash=" (append (show_nat h)
+       (append " axioms=" (append (show_names_c axs) (append " init=" (match pfx (Anon "-") (_ (show_name pfx)))))))))))))
+    ((RRefuse n r) (append "REFUSE " (append (show_name n) (append " " (chars_of_sym r)))))
+    ((RPolicy n out) (append "POLICY " (append (show_name n) (append " outside the policy: " (show_names_c out)))))
+    ((RPending n r) (append "PENDING " (append (show_name n) (append " " (chars_of_sym r)))))
+    ((RLater k n) (append "LATER " (append (chars_of_sym k) (append " " (show_name n)))))
+    ((RReadErr file e m) (append "READ-ERROR " (append file (append " " (append (chars_of_sym e) (append ": " m))))))
+    ((RLoadErr file e m) (append "LOAD-ERROR " (append file (append " " (append (chars_of_sym e) (append ": " m))))))))
+
+;; counts: modules accepted refused pending later errors
+(fn rec_counts ((rs (List Rec)) (acc (List Int))) (List Int)
+  (measure (struct rs))
+  (match rs
+    (Nil acc)
+    ((Cons x r)
+     (match acc
+       ((Cons a (Cons b (Cons c (Cons d (Cons e (Cons g Nil))))))
+        (rec_counts r
+          (match x
+            ((RModule _ _ _ _) (list (+ a 1) b c d e g))
+            ((RAccept _ _ _ _ _) (list a (+ b 1) c d e g))
+            ((RRefuse _ _) (list a b (+ c 1) d e g))
+            ((RPolicy _ _) (list a b (+ c 1) d e g))
+            ((RPending _ _) (list a b c (+ d 1) e g))
+            ((RLater _ _) (list a b c d (+ e 1) g))
+            ((RReadErr _ _ _) (list a b c d e (+ g 1)))
+            ((RLoadErr _ _ _) (list a b c d e (+ g 1)))
+            ((RInit _ _) acc))))
+       (_ acc)))))
+(fn show_counts_load ((cs (List Int))) (List Int)
+  (match cs
+    ((Cons a (Cons b (Cons c (Cons d (Cons e (Cons g Nil))))))
+     (append "modules " (append (show_nat a) (append "  accepted " (append (show_nat b) (append "  refused " (append (show_nat c)
+       (append "  pending " (append (show_nat d) (append "  later " (append (show_nat e) (append "  errors " (show_nat g)))))))))))))
+    (_ "")))
+;; the exit code: refused (policy included) plus errors
+(fn load_failures ((cs (List Int))) Int
+  (match cs ((Cons _ (Cons _ (Cons c (Cons _ (Cons _ (Cons g Nil)))))) (+ c g)) (_ 1)))

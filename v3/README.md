@@ -141,7 +141,27 @@ world declared from S — `Nat`, `Eq.{u}`, structures, `type`s — with
 `rfl` proofs **verified by K directly from S**, every refusal with its
 reason, T8's origin-only invariance), and `reader_pins_test` replaying
 `v3/pins/reader/` (12 files, each carrying its expectation in a
-header line): 13 entrypoints, 0 failed.
+header line): 13 entrypoints, 0 failed. **Slice 3 (2026-09-12): the
+loader** — `kernel/loader.shard` (`LANGUAGE.md` §3, §3.1–3.3, §9: a
+package root and its files as modules named by their paths; `import`
+loads a file once, refuses a cycle and makes the imported closure
+visible without opening it; `(import Init NAME)` streams the pinned
+export through NAME after checking its meta line against the pin, two
+nested prefixes loaded once; `use` and `(use P a b)`; `(trusts …)` as
+the file's policy, every admitted declaration's axiom closure checked
+against it and a declaration outside it dropped with the environment
+as it was; `sorry` as a pending name whose citation is the
+obligation) and `kernel/load.shard`, the driver that prints §3.2's
+acceptance records (`ACCEPT M.x module= hash= axioms= init=`, `MODULE`,
+`INIT`, the refusals) with `--root`, `--init CHUNK…`, `--route`,
+`--engine`. **K's raw entry ingests (GPT-6 R43):** `check` rebuilds
+every node of a submitted declaration before reading it — two
+literals wearing one forged positive id had made `0 = 1` a theorem
+through the raw API (hostile battery 16, eight cases). Tests:
+`loader_pins_test` replaying `v3/pins/loader/` (20 package cases, each
+`main.shard` carrying its expectation), `loader_test` (records, nested
+Init prefixes, the wrong-pin fixture, visibility across root files):
+15 entrypoints, 0 failed, 2 s.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
@@ -158,12 +178,17 @@ each closes on its named gate:
   it kept that node's API server down, and the cluster's single
   control-plane endpoint took every Cilium agent's policy path with it
   (recorded for the cluster owner, not this tree).
-- **R43, the raw-to-checked boundary** — not enforced: the toolchain
-  profile exposes `CheckedEnv`'s constructor (the hostile battery
-  builds one) and `expr_eq`'s positive-id shortcut trusts the ids of
-  whatever nodes a caller hands K. Raw-API callers are reviewed
-  toolchain code until slice 3 seals the environment behind the module
-  surface and an ingestion step rebuilds cached metadata.
+- **R43, the raw-to-checked boundary** — **ingestion enforced
+  2026-09-12 (slice 3):** K's raw entry `check` rebuilds every node of
+  a submitted declaration from its structure, so no id, hash, range or
+  flag a caller wrote reaches `expr_eq`'s shortcut, the memo tables or
+  a pruned traversal (hostile battery 16: forged ids, a claimed-closed
+  loose variable, a claimed-absent fvar, a stale hash, snapshot forks,
+  independent construction, no trace after a failure). **Still open:**
+  the toolchain profile exposes `CheckedEnv`'s constructor (the
+  battery builds one); it is sealed when `kernel/env` has a view
+  (`LANGUAGE.md` §6.5, slice 4) and the toolchain loads under it.
+  Raw-API callers are reviewed toolchain code until then.
 - **The Stage-0 `fn` gap** — a `fn` has an E body and no L meaning, no
   totality check, and nothing in L cites it, until phase 3's Stage 1
   (`LANGUAGE.md` §0, §12.6); the driver's status kinds (R45) land at
@@ -171,7 +196,8 @@ each closes on its named gate:
 - **The compiled route** — tested, not proved: route 1's proof is
   still to come, the interpreter stays the authority, and every full
   replay is preceded by the byte-tie on a prefix.
-- **§3.5's sealed checked environment** — phase 2, slice 3.
+- **§3.5's sealed checked environment** — the ingestion half landed
+  at slice 3 (R43 above); the constructor's sealing waits for views.
 
 ## The pin (2026-09-06)
 
@@ -200,5 +226,5 @@ v3/LANGUAGE.md    the V3 language — S, L and E at Stage 0 (phase 2 draft; I in
 v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K; phase 2: prog, the reader tower, ev
 v3/meta/          phase 3: the elaborators, I, the goal graph, tactics
 v3/std/           phase 3: the first library under the naming law
-v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers)
+v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers), pins/loader/ (slice 3: package roots, main.shard's header)
 ```

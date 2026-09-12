@@ -12,9 +12,19 @@
 (import "sexpr.shard")
 (import "add.shard")
 
-;; the module's own path (Anon for a scratch file: declared names stay bare)
-;; and the opened prefixes in order (§3.1; `(use Init)` = bare names, always last)
-(type Scope (Scope Name (List Name)))
+;; the scope the loader builds (loader.shard; §3.1): the module's own path
+;; (Anon for a scratch file: declared names stay bare), the opened prefixes in
+;; order (`(use Init)` = bare names, always last), and what is visible
+(type Open
+  (OpenAll Name)                  ; (use P): P.x is citable as x
+  (OpenSome Name (List Symbol)))  ; (use P a b): only a… and b… — the citation's first component
+(type Vis
+  (VisAll)                        ; a scratch scope: everything the environment holds
+  (VisOnly (List Name) Bool (IntMap (List (Pair Name Name))) (List Name)))
+  ;; the visible modules (the file's import closure and itself), whether the
+  ;; Init prefix is visible, declaration → module for every native declaration
+  ;; (a constant absent from the table is Init's), the pending (sorry) names
+(type Scope (Scope Name (List Open) Vis))
 
 (type RDecl
   (RDOk (List Declaration))     ; what the form declares, in admission order
@@ -70,10 +80,27 @@
     ((Str q s) (Str (name_append p q) s))
     ((Num q k) (Num (name_append p q) k))))
 
-(fn sc_module ((sc Scope)) Name (match sc ((Scope m _) m)))
-(fn sc_opened ((sc Scope)) (List Name) (match sc ((Scope _ o) o)))
+(fn sc_module ((sc Scope)) Name (match sc ((Scope m _ _) m)))
+(fn sc_opened ((sc Scope)) (List Open) (match sc ((Scope _ o _) o)))
+(fn sc_vis ((sc Scope)) Vis (match sc ((Scope _ _ v) v)))
 ;; a declared name's identity: the module path plus the name (§3)
 (fn qualify ((sc Scope) (n Name)) Name (name_append (sc_module sc) n))
+
+;; the declaration → module table (VisOnly's third field), keyed as the environment is
+(fn tbl_find ((tbl (IntMap (List (Pair Name Name)))) (k Name)) (Option Name)
+  (match (im_find tbl (env_key k)) ((Some b) (assoc_name k b)) (None None)))
+(fn tbl_add ((tbl (IntMap (List (Pair Name Name)))) (k Name) (m Name)) (IntMap (List (Pair Name Name)))
+  (let ((h (env_key k)))
+    (im_insert tbl h (Cons (Pair k m) (match (im_find tbl h) ((Some b) b) (None Nil))))))
+;; is the constant k citable from this scope? (a name being declared by the
+;; current form is, always — resolve_go asks first)
+(fn visible ((sc Scope) (k Name)) Bool
+  (match (sc_vis sc)
+    (VisAll True)
+    ((VisOnly mods init tbl _)
+     (match (tbl_find tbl k) ((Some m) (mem_name m mods)) (None init)))))
+(fn pending_name ((sc Scope) (k Name)) Bool
+  (match (sc_vis sc) (VisAll False) ((VisOnly _ _ _ p) (mem_name k p))))
 
 ;; the universe arity of a citable constant: being declared here, or in the environment
 (fn const_arity ((c Cx) (n Name)) (Option Int)
@@ -86,28 +113,52 @@
 
 ;; resolution (§3.1): the module's own declarations, each opened prefix in
 ;; order, then the bare name (`(use Init)` is implicit). Two hits = ambiguous.
-(type Resolved (RName Name Int) (RNone) (RAmbiguous Name Name))
+;; A candidate is a hit when it is being declared by this form or is a
+;; visible constant; a pending (sorry) candidate is the obligation itself.
+(type Resolved (RName Name Int) (RNone) (RAmbiguous Name Name) (RPend Name))
 (fn resolve ((c Cx) (n Name)) Resolved
-  (resolve_go c n (candidates c n) RNone))
-(fn candidates ((c Cx) (n Name)) (List Name)
-  (let ((m (sc_module (cx_scope c))))
+  (resolve_go c n (scope_candidates (cx_scope c) n) RNone))
+(fn scope_candidates ((sc Scope) (n Name)) (List Name)
+  (let ((m (sc_module sc)))
     (append (match m (Anon Nil) (_ (list (name_append m n))))
-            (append (prefixed (sc_opened (cx_scope c)) n) (list n)))))
-(fn prefixed ((ps (List Name)) (n Name)) (List Name)
+            (append (prefixed (sc_opened sc) n) (list n)))))
+(fn prefixed ((ps (List Open)) (n Name)) (List Name)
   (measure (struct ps))
-  (match ps (Nil Nil) ((Cons p r) (Cons (name_append p n) (prefixed r n)))))
+  (match ps
+    (Nil Nil)
+    ((Cons (OpenAll p) r) (Cons (name_append p n) (prefixed r n)))
+    ((Cons (OpenSome p ms) r)
+     (if (first_component_in n ms) (Cons (name_append p n) (prefixed r n)) (prefixed r n)))))
+(fn first_component_in ((n Name) (ms (List Symbol))) Bool
+  (match (first_component n) ((Some s) (mem_sym s ms)) (None False)))
+(fn first_component ((n Name)) (Option Symbol)
+  (measure (struct n))
+  (match n
+    (Anon None)
+    ((Str Anon s) (Some s))
+    ((Str p _) (first_component p))
+    ((Num Anon _) None)
+    ((Num p _) (first_component p))))
+(fn mem_sym ((s Symbol) (xs (List Symbol))) Bool
+  (measure (struct xs))
+  (match xs (Nil False) ((Cons y r) (if (sym_eq s y) True (mem_sym s r)))))
+(fn is_defining ((c Cx) (k Name)) Bool
+  (match (assoc_name_int k (cx_defining c)) ((Some _) True) (None False)))
 (fn resolve_go ((c Cx) (n Name) (cands (List Name)) (found Resolved)) Resolved
   (measure (struct cands))
   (match cands
     (Nil found)
     ((Cons k r)
+     (if (pending_name (cx_scope c) k) (RPend k)
      (match (const_arity c k)
        (None (resolve_go c n r found))
        ((Some a)
-        (match found
-          (RNone (resolve_go c n r (RName k a)))
-          ((RName f _) (if (name_eq f k) (resolve_go c n r found) (RAmbiguous f k)))
-          (_ found)))))))
+        (if (bool_or (is_defining c k) (visible (cx_scope c) k))
+          (match found
+            (RNone (resolve_go c n r (RName k a)))
+            ((RName f _) (if (name_eq f k) (resolve_go c n r found) (RAmbiguous f k)))
+            (_ found))
+          (resolve_go c n r found))))))))
 
 ;; ---- levels (§5.2) ---------------------------------------------------------------------
 (fn elab_level ((c Cx) (s SExpr)) (Option Level)
@@ -191,6 +242,7 @@
   (match (resolve c n)
     (RNone (EErr (quote unknown_constant) (show_name n)))
     ((RAmbiguous a b) (EErr (quote ambiguous_name) (append (show_name n) (append ": " (append (show_name a) (append " and " (show_name b)))))))
+    ((RPend k) (EErr (quote pending_obligation) (append (show_name k) " was read with sorry: it admits nothing, and citing it is the obligation")))
     ((RName k arity)
      (if has_univ
        (match (elab_levels c ls)

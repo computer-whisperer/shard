@@ -1,6 +1,6 @@
 # The V3 language — S, L and E at Stage 0 (phase 2 draft)
 
-> **STATUS (2026-09-12): DRAFT — slices 1–2 of phase 2 (FOUNDATION
+> **STATUS (2026-09-12): DRAFT — slices 1–3 of phase 2 (FOUNDATION
 > §12.4 item 2; `docs/records/FOUNDATION.md` §9).** Written before the
 > reader existed, as the design the reader, the loader, the views, the
 > fragment classifier and `ev` are built to. **Slice 2 built §2 and the
@@ -9,9 +9,13 @@
 > `v3/kernel/reader.shard` (the Stage-0 reader into K's `Declaration`:
 > terms, levels, binders, `structure` projections over `proj`, scope
 > resolution as data for the loader), with `v3/pins/reader/` as the
-> first corpus of the new tree. A `fn`'s body is read with the
-> classifier (slice 5), the file and module plumbing is the loader
-> (slice 3). It supersedes `docs/LANGUAGE.md` for the `v3/`
+> first corpus of the new tree. **Slice 3 built §3, §3.1–3.3 and §9:**
+> `v3/kernel/loader.shard` (package root, modules, `import`/`use`/
+> `trusts`, the `Init` prefix import against the pin, the per-file
+> policy, the acceptance records) with `v3/kernel/load.shard` as the
+> driver and `v3/pins/loader/` as its corpus; K's raw entry now ingests
+> what it is handed (§3.3; GPT-6 R43). A `fn`'s body is read with the
+> classifier (slice 5), views are slice 4. It supersedes `docs/LANGUAGE.md` for the `v3/`
 > tree (FOUNDATION §10.5); the old document keeps describing the old
 > tree until the flip. The proof IR **I** is phase 3's chapter and is
 > not here. Everything below is **Stage 0** of the law's §5.1: explicit
@@ -185,6 +189,26 @@ deserialized receipt.
 
 ### 3.2 What the loader records (law §8.1 at phase 2)
 
+At slice 3 the record is the driver's line per declaration
+(`load.shard`), and the pins compare outcomes, never the line's text:
+
+```
+LOAD root=DIR route=3 engine=bootstrap             ; the run: route and engine stamp (flags)
+INIT NAME: N declarations admitted                 ; the Init load through NAME (§3.1), so far
+ACCEPT M.x module=M hash=H axioms=a,b init=NAME    ; identity, module, fingerprint, closure, the prefix at the check
+MODULE M file=F hash=H sees=M1,M2                  ; the module done: its hash over its declarations, its closure
+REFUSE M.x REASON | POLICY M.x outside the policy: a | PENDING M.x sorry | LATER fn M.f
+READ-ERROR F REASON: … | LOAD-ERROR F REASON: …    ; the file's loading ends here
+LOAD: modules … accepted … refused … pending … later … errors …
+```
+
+The environment revision of an `ACCEPT` line is its `init=` prefix
+plus the `MODULE` lines of the modules its file sees, each with its
+hash. A K refusal, a policy refusal and a `sorry` are verdicts on one
+declaration — the file goes on, the environment as it was; a reading
+or loading error ends the file, and an importer whose import ended so
+ends too.
+
 For every admitted declaration: its identity (K name and content
 hash); the module; the **route** (3, the bootstrap; 1, compiled K) and
 the engine stamp; its **axiom closure** (`axioms.shard`); the
@@ -196,6 +220,49 @@ what the driver prints per declaration and what fixtures pin; the
 content store of law §7.5 is phase 3. `Exhausted` is never a receipt:
 an exhausted declaration is reported with its resource and site and
 enters no environment.
+
+### 3.3 What the loader fixes (slice 3, 2026-09-12)
+
+The rules §3.1 leaves to the implementation, as `loader.shard` has
+them; each is a candidate for §13.
+
+- **Visibility is the transitive import closure** (Lean's rule, and
+  v2's flat closure): a citation resolves to a constant only if the
+  constant's module is the file's own or reachable through its
+  `import`s, or is `Init`'s and some file in the closure imported
+  `Init`. A constant in K's environment that no import reaches is
+  invisible (`loader_test`: two root files, one importing `b`, the
+  other not). The loader keeps declaration → module for every native
+  constant; a constant absent from that table is the import's.
+- **`(use P a b)`** opens `P` for citations whose first component is
+  `a` or `b`; `(use Init.List)` opens `List` (imported names are bare
+  in K, §3); `(use Init)` opens nothing new.
+- **A `type` form opens its own namespace** for the rest of its file
+  (§13 item 7); `inductive` and `structure` do not.
+- **The export's meta line** must carry the pin's Lean githash, the
+  exporter's name and version and the format version (`init_pin_*`);
+  the first record is checked before any declaration streams. The
+  chunks are the driver's `--init` arguments in order; a target past
+  them is `init_name_not_found`.
+- **The policy is per file**: `(trusts NAME…)` names are resolved
+  through the file's scope when a closure is checked, so `(trusts ax)`
+  in the declaring file covers `M.ax`. A theorem in another file that
+  rests on `M.ax` without trusting it is outside that file's policy.
+- **A `sorry` name is pending**: citing it is refused with
+  `pending_obligation`, never resolved to an assumption.
+- **Paths**: an import is relative to the importing file's directory,
+  never absolute, never above the root; a module path with a dot in a
+  file stem, or headed `Init`, is refused; a path without `.shard` is a
+  directory module — its view, slice 4.
+- **K's raw entry ingests (law §3.5; GPT-6 R43).** `check` rebuilds
+  every node of a submitted declaration from its structure before the
+  procedure reads it, so no cached id, hash, range or flag a caller
+  wrote reaches a shortcut. Before this, two literals wearing one
+  positive id made `0 = 1` a theorem through the raw entry (hostile
+  battery 16). The import's records enter through K's own lineage and
+  never pay the rebuild. What remains open is the profile's exposure of
+  `CheckedEnv`'s constructor, sealed when `kernel/env` has a view
+  (§6.5) and the toolchain loads under it.
 
 ## 4. Declarations — the surface keywords, fixed at phase 2
 
@@ -754,7 +821,7 @@ row.
 
 | v2 | fate | note |
 |---|---|---|
-| `bin/check`, `bin/shard_check`, `bin/shard_eval`, `eval direct` | the V3 driver replaces `check` (slice 3); `eval direct` stays the bootstrap's; the compiled chain is route 1 | law §9.1; `tools/lower` ARCHIVE at the flip |
+| `bin/check`, `bin/shard_check`, `bin/shard_eval`, `eval direct` | the V3 driver (`kernel/load.shard`, slice 3) replaces `check`; `eval direct` stays the bootstrap's; the compiled chain is route 1 | law §9.1; `tools/lower` ARCHIVE at the flip |
 | shardfmt and CANON's rule set | rewritten for S | law §10.5: phase 2, its own slice; the fmt gate on V3 at phase 6 |
 | `tools/digest`, `explain`, `prove`, `search` | new code onto law §7.3 | MANIFEST |
 | `tools/zed-shard`, `shard-viewer` keyword lists | the V3 keywords (§4) | law §10.5, phase 2 |
@@ -807,3 +874,10 @@ and the disposition this draft intends.
 9. **`ev`'s `if` rule**: the then-branch iff the condition's cell is the
    second constructor of its type — one rule for `Bool`, `Decidable`
    and the profile's `Bool`.
+10. **Visibility is the transitive import closure** (§3.3, slice 3).
+    Alternative: Rust-style explicit re-export, which v2 never had and
+    the toolchain's own files would need lines for.
+11. **A file's loading ends at a reading or loading error and goes on
+    past a K refusal, a policy refusal and a `sorry`** (§3.2): the
+    former say the text is not what its author thinks, the latter are
+    verdicts on one declaration with the environment unchanged.

@@ -1,0 +1,98 @@
+;;; v3/kernel/test/loader_test.shard — the loader's cases beyond the pins
+;;; (loader_pins_test): what the records say, nested Init prefixes, the
+;;; export pin, visibility across root files, the sorry obligation, the
+;;; root's location changing nothing (T8's origin-only invariance).
+
+(import "reader_kit.shard")
+(import "../loader.shard")
+
+(type Case (Case (List Int) Bool))
+
+(fn fixture () (List Int) "v3/kernel/test/fixtures/init_prefix_3000.ndjson")
+(fn wrong_pin () (List Int) "v3/kernel/test/fixtures/init_wrong_pin.ndjson")
+
+;; a load of FILES under ROOT with the chunk list, its records
+(fn load_case ((root (List Int)) (chunks (List (List Int))) (files (List (List Int))) (w World)) (Pair (List Rec) World)
+  (match (parts_of root)
+    (None (Pair Nil w))
+    ((Some rootp)
+     (match (load_all (load0 rootp chunks) files w)
+       ((Pair l w1) (Pair (ld_recs l) w1))))))
+(fn load_all ((l Load) (files (List (List Int))) (w World)) (Pair Load World)
+  (measure (struct files))
+  (match files
+    (Nil (Pair l w))
+    ((Cons f r) (match (load_root_file l f w) ((Pair l1 w1) (load_all l1 r w1))))))
+
+(fn show_recs ((rs (List Rec))) (List Int)
+  (measure (struct rs))
+  (match rs (Nil Nil) ((Cons x r) (append (show_rec x) (Cons 10 (show_recs r))))))
+;; the records without their MODULE lines' file paths (the root's spelling)
+(fn accept_lines ((rs (List Rec))) (List Int)
+  (measure (struct rs))
+  (match rs
+    (Nil Nil)
+    ((Cons (RAccept n m h a p) r) (append (show_rec (RAccept n m h a p)) (Cons 10 (accept_lines r))))
+    ((Cons (RModule m _ h cl) r) (append (show_rec (RModule m Nil h cl)) (Cons 10 (accept_lines r))))
+    ((Cons _ r) (accept_lines r))))
+(fn inits ((rs (List Rec))) (List Int)
+  (measure (struct rs))
+  (match rs (Nil Nil) ((Cons (RInit _ k) r) (Cons k (inits r))) ((Cons _ r) (inits r))))
+(fn has_rec ((rs (List Rec)) (want (List Int))) Bool
+  (measure (struct rs))
+  (match rs (Nil False) ((Cons x r) (if (int_list_eq (show_rec x) want) True (has_rec r want)))))
+(fn has_read_err ((rs (List Rec)) (e Symbol)) Bool
+  (measure (struct rs))
+  (match rs (Nil False) ((Cons (RReadErr _ f _) r) (if (sym_eq e f) True (has_read_err r e))) ((Cons _ r) (has_read_err r e))))
+(fn has_load_err ((rs (List Rec)) (e Symbol)) Bool
+  (measure (struct rs))
+  (match rs (Nil False) ((Cons (RLoadErr _ f _) r) (if (sym_eq e f) True (has_load_err r e))) ((Cons _ r) (has_load_err r e))))
+(fn count_accepts ((rs (List Rec))) Int
+  (measure (struct rs))
+  (match rs (Nil 0) ((Cons (RAccept _ _ _ _ _) r) (+ 1 (count_accepts r))) ((Cons _ r) (count_accepts r))))
+(fn first ((xs (List Int))) Int (match xs ((Cons x _) x) (Nil 0)))
+(fn second ((xs (List Int))) Int (match xs ((Cons _ (Cons x _)) x) (_ 0)))
+
+(fn cases ((w World)) (Pair (List Case) World)
+  (match (load_case "v3/pins/loader/basic" Nil (list "v3/pins/loader/basic/main.shard") w)
+    ((Pair basic w1)
+     (match (load_case "./v3/pins/loader/basic" Nil (list "./v3/pins/loader/basic/main.shard") w1)
+       ((Pair basic2 w2)
+        (match (load_case "v3/pins/loader/init_nested" (list (fixture)) (list "v3/pins/loader/init_nested/main.shard" "v3/pins/loader/init_nested/a.shard") w2)
+          ((Pair nested w3)
+           (match (load_case "v3/pins/loader/init" (list (wrong_pin)) (list "v3/pins/loader/init/main.shard") w3)
+             ((Pair pin w4)
+              (match (load_case "v3/pins/loader/visible" Nil (list "v3/pins/loader/visible/one.shard" "v3/pins/loader/visible/two.shard") w4)
+                ((Pair vis w5)
+                 (match (load_case "v3/pins/loader/sorry" Nil (list "v3/pins/loader/sorry/main.shard") w5)
+                   ((Pair sorry w6)
+                    (match (load_case "v3/pins/loader/init" Nil (list "v3/pins/loader/init/main.shard") w6)
+                      ((Pair noinit w7)
+                       (match (load_case "v3/pins/loader/basic" Nil (list "v3/pins/loader/outside/main.shard") w7)
+                         ((Pair outside w8)
+                          (Pair
+                            (list
+                              (Case "basic: 7 declarations accepted in two modules" (int_eq (count_accepts basic) 7))
+                              (Case "basic: a.two_rfl's record names its module and an empty axiom closure"
+                                (has_rec basic "ACCEPT a.two_rfl module=a hash=1718361179517844046 axioms= init=-"))
+                              (Case "basic: main sees a and itself" (has_rec basic "MODULE main file=main.shard hash=119538086569699698 sees=a,main"))
+                              (Case "T8 origin-only: the root spelled from ./ gives the same declaration and module records"
+                                (int_list_eq (accept_lines basic) (accept_lines basic2)))
+                              (Case "nested Init prefixes: a's load through Nat, then main's through Bool, on from where a stopped"
+                                (bool_and (int_eq (len (inits nested)) 2) (lt (first (inits nested)) (second (inits nested)))))
+                              (Case "nested Init prefixes: a.shard named again is loaded once (no new module, no new Init load)"
+                                (int_eq (count_accepts nested) 3))
+                              (Case "the export's meta line off the pin: refused before any record" (has_load_err pin (quote export_pin_mismatch)))
+                              (Case "no chunks given: (import Init …) is init_unavailable" (has_load_err noinit (quote init_unavailable)))
+                              (Case "visibility: b.Nat is in K's environment (one.shard imported b) but not in two.shard's closure"
+                                (bool_and (int_eq (count_accepts vis) 2) (has_read_err vis (quote unknown_constant))))
+                              (Case "sorry: citing the pending theorem is the obligation, never an assumption" (has_read_err sorry (quote pending_obligation)))
+                              (Case "a file outside the root is refused as such" (has_load_err outside (quote outside_root))))
+                            w8))))))))))))))))))
+
+(fn run ((cs (List Case)) (fails Int) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil (exit fails (write_line (append "loader_test: failures = " (show_int fails)) w)))
+    ((Cons (Case name ok) r) (run r (if ok fails (+ fails 1)) (write_line (append (if ok "PASS " "FAIL ") name) w)))))
+(fn main ((w World)) World (match (cases w) ((Pair cs w1) (run cs 0 w1))))

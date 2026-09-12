@@ -86,6 +86,10 @@ governs `v3/` now:
    (v4.33.1, commit 819816b2); the checking logic is reviewed as
    source. Its outcomes are §3.3's: Accepted, Rejected(reason,
    subject), Exhausted(resource, site) — exhaustion is never a verdict.
+   Its raw entry `check` rebuilds every node it is handed before the
+   procedure reads it (§3.5; 2026-09-12, GPT-6 R43): a caller's node
+   data is a claim, never consumed by a shortcut. The import's records
+   enter through K's own lineage.
 2. **The Rust host** (`rust_bootstrap`, `eval direct`): route 3 of §9.1
    — implements E's operational semantics, defines no rule, executes K
    only, trusted by review as it always was. It is the execution
