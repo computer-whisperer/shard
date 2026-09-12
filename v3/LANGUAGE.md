@@ -118,7 +118,14 @@ declared name**, and the content hash of its L revision:
   text: whitespace, comments, the order of unrelated forms and the
   root's location change no identity (T8's origin-only change). The
   hash of an `inductive` covers its constructor types; the hash of a
-  `realize` covers the E body and the equation identities (§7).
+  `realize` covers the E body and the equation identities (§7). It is
+  a **fingerprint for records and fixtures, never an authority**:
+  nothing is enabled, identified or trusted on hash agreement alone
+  (GPT-6 R42, 2026-09-12 — the hash is affine in a trailing literal, so
+  a preimage is one subtraction; K's accelerator pins compare reference
+  declarations structurally, `add.shard`). The collision-resistant
+  identity that law §7.5's content store needs is chosen with the
+  store, phase 3.
 - Moving a file within the root changes its module path and therefore
   its identity, exactly as a Lean `import` path would; only the root
   moves for free (the flip).

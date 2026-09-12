@@ -187,9 +187,13 @@
     ((OpaqueDecl v _ _ _) (cv_name v)) (QuotDecl (nm_quot)) ((MutualDefnDecl _) Anon)
     ((InductDecl _ _ (Cons t _) _) (it_name t)) ((InductDecl _ _ Nil _) Anon)))
 
-;; the identity hash of an admitted constant: its type and, for
-;; definitions, its value; for an inductive type, its type and every
-;; constructor's type (in order)
+;; the identity FINGERPRINT of an admitted constant (reports, the fuel-monotonicity
+;; test): its type and, for definitions, its value; for an inductive type, its
+;; type and every constructor's type (in order). A 61-bit structural hash —
+;; NEVER an authority: it is affine in a trailing literal, so a preimage is one
+;; subtraction, and it collides on ordinary Init terms (`List.cons`'s type
+;; against `List α → α → List α`) (GPT-6 R42, 2026-09-12; records §4.7).
+;; Nothing enables a shortcut on it; see `pin_if_matches`.
 (fn identity_hash ((env CheckedEnv) (n Name)) (Option Int)
   (match (env_find env n)
     ((Some (DefnInfo (ConstantVal _ _ ty) v _ _ _)) (Some (mix (hash_expr ty) (hash_expr v))))
@@ -203,14 +207,107 @@
     (Nil acc)
     ((Cons c r) (match (env_find env c) ((Some info) (hash_ctor_types env r (mix acc (hash_expr (ci_type info))))) (None acc)))))
 
-;; after admission: pin the declaration if its identity matches the table
+;; ---- the accelerator pins (FOUNDATION §3.2) --------------------------------------------
+;; A shortcut (a Nat operation on literals, a literal's typing rule, the string
+;; literal expansion) is enabled for a candidate name only when its IDENTITY
+;; CLOSURE matches the reference table generated from the pinned export
+;; (accel_pins.shard `accel_ref`): the declaration itself and, transitively,
+;; every definition, opaque, axiom and inductive type that its type and value
+;; cite. Compared exactly, by `expr_eq` (binder names and infos ignored): the
+;; kind, the level parameters, the type, the value; for an inductive its
+;; parameter count, its block and each constructor's name and type in order.
+;; Not compared: theorems (proof irrelevance — a different proof can only make
+;; a reduction stick, never change a value); constructors and recursors (K
+;; generated them from their inductive, which IS compared); quotients (K fixes
+;; them itself); reducibility hints and `all` lists (no effect on a value).
+;; Never a hash and never a name: a same-spelled `Nat.add` with a different
+;; body, or the pinned body over a different `Nat.pred`, is admitted as an
+;; ordinary definition and reaches no shortcut. The walk is fuel-bounded; out
+;; of fuel = no pin, never a wrong pin.
+(fn ref_fuel () Int 100000)
+
 (fn pin_if_matches ((env CheckedEnv) (n Name)) CheckedEnv
-  (match (accel_pin n)
-    (None env)
-    ((Some h)
-     (match (identity_hash env n)
-       ((Some h1) (if (int_eq h h1) (env_pin env n) env))
-       (None env)))))
+  (if (is_pin_candidate n)
+    (if (ref_closure_ok env (Cons n Nil) Nil (ref_fuel)) (env_pin env n) env)
+    env))
+
+(fn ref_closure_ok ((env CheckedEnv) (todo (List Name)) (seen (List Name)) (fuel Int)) Bool
+  (measure fuel)
+  (if (lt fuel 0) False
+  (match todo
+    (Nil True)
+    ((Cons c r)
+     (if (mem_name c seen) (ref_closure_ok env r seen (- fuel 1))
+     (match (env_find env c)
+       (None False)
+       ((Some info)
+        (if (ref_matches env c info)
+          (ref_closure_ok env (append (ref_edges env info) r) (Cons c seen) (- fuel 1))
+          False))))))))
+
+;; the identity closure's edges out of an entry (the generator walks the same edges)
+(fn ref_edges ((env CheckedEnv) (info ConstantInfo)) (List Name)
+  (match info
+    ((DefnInfo cv v _ _ _) (append (expr_consts (cv_type cv)) (expr_consts v)))
+    ((OpaqueInfo cv v _ _) (append (expr_consts (cv_type cv)) (expr_consts v)))
+    ((AxiomInfo cv _) (expr_consts (cv_type cv)))
+    ((InductInfo cv _ _ all ctors _ _ _ _) (append (expr_consts (cv_type cv)) (append (ctor_types_consts env ctors) all)))
+    ((CtorInfo _ induct _ _ _ _) (Cons induct Nil))
+    ((RecInfo _ all _ _ _ _ _ _ _) all)
+    (_ Nil)))
+
+(fn ctor_types_consts ((env CheckedEnv) (ctors (List Name))) (List Name)
+  (measure (struct ctors))
+  (match ctors
+    (Nil Nil)
+    ((Cons c r) (append (match (env_find env c) ((Some info) (expr_consts (ci_type info))) (None Nil)) (ctor_types_consts env r)))))
+
+;; an entry against its reference row
+(fn ref_matches ((env CheckedEnv) (c Name) (info ConstantInfo)) Bool
+  (match info
+    ((ThmInfo _ _ _) True)
+    ((QuotInfo _ _) True)
+    ((CtorInfo _ _ _ _ _ _) True)
+    ((RecInfo _ _ _ _ _ _ _ _ _) True)
+    ((DefnInfo cv v _ _ _)
+     (match (accel_ref c) ((Some (DefnDecl rcv rv _ _ _)) (bool_and (cval_eq cv rcv) (expr_eq v rv))) (_ False)))
+    ((OpaqueInfo cv v _ _)
+     (match (accel_ref c) ((Some (OpaqueDecl rcv rv _ _)) (bool_and (cval_eq cv rcv) (expr_eq v rv))) (_ False)))
+    ((AxiomInfo cv _)
+     (match (accel_ref c) ((Some (AxiomDecl rcv _)) (cval_eq cv rcv)) (_ False)))
+    ((InductInfo cv np _ all ctors _ _ _ _)
+     (match (accel_ref c)
+       ((Some (InductDecl lps rnp types _))
+        (bool_and (names_eq (cv_lparams cv) lps)
+        (bool_and (int_eq np rnp)
+        (bool_and (names_eq all (all_names types))
+          (match (find_it types c)
+            ((Some it) (bool_and (expr_eq (cv_type cv) (it_type it)) (ctors_match env ctors (it_ctors it))))
+            (None False))))))
+       (_ False)))))
+
+(fn cval_eq ((a ConstantVal) (b ConstantVal)) Bool
+  (bool_and (name_eq (cv_name a) (cv_name b))
+  (bool_and (names_eq (cv_lparams a) (cv_lparams b)) (expr_eq (cv_type a) (cv_type b)))))
+
+(fn find_it ((ts (List InductiveType)) (n Name)) (Option InductiveType)
+  (measure (struct ts))
+  (match ts (Nil None) ((Cons t r) (if (name_eq (it_name t) n) (Some t) (find_it r n)))))
+
+;; the admitted constructors (names, in order) against the reference's, type by type
+(fn ctors_match ((env CheckedEnv) (ns (List Name)) (cs (List Constructor))) Bool
+  (measure (struct ns))
+  (match ns
+    (Nil (match cs (Nil True) (_ False)))
+    ((Cons n r)
+     (match cs
+       (Nil False)
+       ((Cons c cr)
+        (if (name_eq n (ctor_name c))
+          (match (env_find env n)
+            ((Some info) (if (expr_eq (ci_type info) (ctor_type c)) (ctors_match env r cr) False))
+            (None False))
+          False))))))
 
 (fn env_pin ((env CheckedEnv) (n Name)) CheckedEnv
   (match env ((CheckedEnv xs q p w) (CheckedEnv xs q (Cons n p) w))))

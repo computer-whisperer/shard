@@ -106,6 +106,50 @@
   (DefnDecl (cv (n2 (quote Nat) (quote add)) Nil (arrow (nat) (arrow (nat) (nat))))
     (mk_lam (n1 (quote a)) BDefault (nat) (mk_lam (n1 (quote b)) BDefault (nat) (mk_bvar 1))) (HRegular 1) Safe (list (n2 (quote Nat) (quote add)))))
 (fn e_user_add () CheckedEnv (env_after (check (e_eq) (st0) (user_add)) (e0)))
+;; 7b. GPT-6 R42 (2026-09-12): the same-spelled Nat.add whose 61-bit identity
+;;     hash EQUALLED the committed pin — `Nat.add a b := 1781693077243641776`,
+;;     the literal one subtraction from the pin (the hash is affine in it).
+;;     Before the fix K pinned it and accepted `Nat.add 2 3 = 5` by the
+;;     accelerator (records §4.7). Now: admitted as an ordinary definition; the
+;;     reference closure refuses it; `Nat.add 2 3 = 5` is not established and
+;;     `Nat.add 2 3 = 1781693077243641776` holds by the definition.
+(fn big () Int 1781693077243641776)
+(fn nm_add () Name (n2 (quote Nat) (quote add)))
+(fn collide_add () Declaration
+  (DefnDecl (cv (nm_add) Nil (arrow (nat) (arrow (nat) (nat))))
+    (mk_lam (n1 (quote a)) BDefault (nat) (mk_lam (n1 (quote b)) BDefault (nat) (lit (big)))) (HRegular 1) Safe (list (nm_add))))
+(fn e_collide () CheckedEnv (env_after (check (e_eq) (st0) (collide_add)) (e0)))
+(fn t_add_five () Declaration
+  (ThmDecl (cv (n1 (quote t5)) Nil (eq_nat (nat_add (lit 2) (lit 3)) (lit 5))) (refl_nat (lit 5)) (list (n1 (quote t5)))))
+(fn t_add_big () Declaration
+  (ThmDecl (cv (n1 (quote tb)) Nil (eq_nat (nat_add (lit 2) (lit 3)) (lit (big)))) (refl_nat (lit (big))) (list (n1 (quote tb)))))
+;; 7c. the reference rows of Nat.add's identity closure (accel_pins.shard
+;;     `accel_ref_closure`), replayed from the empty environment through `check`:
+;;     the export's own declarations pin.
+;; 7d. the same replay with `Nat.add._f` re-spelled as the beta-redex
+;;     `(fun x => x) VALUE` — definitionally equal, structurally different — and
+;;     the genuine Nat.add over it: admitted, NOT pinned (a same-shaped
+;;     definition over a different dependency is a different primitive).
+(fn nm_add_f () Name (Str (nm_add) (quote _f)))
+(fn wrap_value ((d Declaration)) Declaration
+  (match d
+    ((DefnDecl v val h s all) (DefnDecl v (mk_app (mk_lam (x_) BDefault (cv_type v) (mk_bvar 0)) val) h s all))
+    (_ d)))
+(fn replay ((env CheckedEnv) (ns (List Name)) (wrap Name)) CheckedEnv
+  (measure (struct ns))
+  (match ns
+    (Nil env)
+    ((Cons n r)
+     (replay
+       (match (env_find env n)
+         ((Some _) env)
+         (None (match (accel_ref n)
+                 (None env)
+                 ((Some d) (env_after (check env (st0) (if (name_eq n wrap) (wrap_value d) d)) env)))))
+       r wrap))))
+(fn has ((env CheckedEnv) (n Name)) Bool (match (env_find env n) ((Some _) True) (None False)))
+(fn e_replay () CheckedEnv (replay (e0) (accel_ref_closure (nm_add)) Anon))
+(fn e_replay_wrapped () CheckedEnv (replay (e0) (accel_ref_closure (nm_add)) (nm_add_f)))
 (fn nat_add ((a Expr) (b Expr)) Expr (mk_app (mk_app (mk_const (n2 (quote Nat) (quote add)) Nil) a) b))
 (fn t_add_true () Declaration   ; Nat.add 2 3 = 2 holds for the USER's Nat.add
   (ThmDecl (cv (n1 (quote t1)) Nil (eq_nat (nat_add (lit 2) (lit 3)) (lit 2))) (refl_nat (lit 2)) (list (n1 (quote t1)))))
@@ -172,6 +216,14 @@
     (Case "7 accelerator OFF: Nat.add 2 3 = 2 holds by the user's definition" (accepted (check (e_user_add) (st0) (t_add_true))))
     (Case "7 accelerator OFF: Nat.add 2 3 = 5 refused" (refused (check (e_user_add) (st0) (t_add_false)) (quote conversion)))
     (Case "7 the user's Nat.add is not pinned" (bool_not (env_pinned (e_user_add) (n2 (quote Nat) (quote add)))))
+    (Case "7b R42: the Nat.add whose hash equalled the old pin is admitted" (accepted (check (e_eq) (st0) (collide_add))))
+    (Case "7b R42: not pinned — the reference closure refuses it" (bool_not (env_pinned (e_collide) (nm_add))))
+    (Case "7b R42: accelerator OFF: Nat.add 2 3 = 5 refused" (refused (check (e_collide) (st0) (t_add_five)) (quote conversion)))
+    (Case "7b R42: Nat.add 2 3 = 1781693077243641776 holds by the definition" (accepted (check (e_collide) (st0) (t_add_big))))
+    (Case "7c the reference rows of Nat.add's closure, replayed from empty, pin Nat" (env_pinned (e_replay) (nm_nat)))
+    (Case "7c the replayed reference rows pin Nat.add" (env_pinned (e_replay) (nm_add)))
+    (Case "7d the genuine Nat.add over a defeq-but-different Nat.add._f: admitted" (has (e_replay_wrapped) (nm_add)))
+    (Case "7d the genuine Nat.add over a defeq-but-different Nat.add._f: not pinned" (bool_not (env_pinned (e_replay_wrapped) (nm_add))))
     (Case "8 a Nat literal under a non-pinned Nat is Unsupported" (refused (check (e_odd) (st0) (c_lit_unpinned)) (quote nat_literal_unpinned_Nat)))
     (Case "8 the pinned Nat is pinned" (env_pinned (e_nat) (nm_nat)))
     (Case "8b a string literal under a non-pinned String is Unsupported" (refused (check (e_odd_string) (st0) (c_str_unpinned)) (quote string_literal_unpinned_String)))

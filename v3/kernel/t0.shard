@@ -1,7 +1,9 @@
 ;;; v3/kernel/t0.shard — the T0 driver: `eval direct v3/kernel/t0.shard [-v] [-a] CHUNK…`
 ;;; `-a` = print the axiom closure of every admitted constant (axioms.shard; §3.6).
 ;;; `--pins` = pins mode (gen_pins.sh): pin every candidate as admitted and print
-;;; the identity hashes at the end.
+;;; the reference table (refgen.shard) at the end.
+;;; `-p` = print which candidates the run pinned (`PINS pinned: … | unpinned: …`;
+;;; v3/t0_full.sh requires the unpinned list empty).
 ;;; reads the lean4export NDJSON chunks in order (split -l of the export;
 ;;; v3/README.md), imports and checks every declaration, prints every
 ;;; non-ACCEPT verdict (ACCEPT too with -v) and the counts; exit code =
@@ -9,6 +11,7 @@
 
 (import "host.shard")
 (import "import.shard")
+(import "refgen.shard")
 
 (fn run_files ((r Run) (files (List (List Int))) (verbose Bool) (w World)) (Pair Run World)
   (measure (struct files))
@@ -21,25 +24,43 @@
         (match (process_lines r bs verbose (write_line (append "== " f) w1))
           ((Pair r1 w2) (run_files r1 rest verbose (write_line (show_counts r1) w2)))))))))
 
-(fn parse_flags ((args (List (List Int))) (v Bool) (a Bool) (p Bool)) (Pair (List (List Int)) (List Bool))
+(fn parse_flags ((args (List (List Int))) (v Bool) (a Bool) (p Bool) (q Bool)) (Pair (List (List Int)) (List Bool))
   (measure (struct args))
   (match args
-    (Nil (Pair Nil (list v a p)))
+    (Nil (Pair Nil (list v a p q)))
     ((Cons x r)
-     (if (int_list_eq x "-v") (parse_flags r True a p)
-     (if (int_list_eq x "-a") (parse_flags r v True p)
-     (if (int_list_eq x "--pins") (parse_flags r v a True)
-     (Pair args (list v a p))))))))
+     (if (int_list_eq x "-v") (parse_flags r True a p q)
+     (if (int_list_eq x "-a") (parse_flags r v True p q)
+     (if (int_list_eq x "--pins") (parse_flags r v a True q)
+     (if (int_list_eq x "-p") (parse_flags r v a p True)
+     (Pair args (list v a p q)))))))))
+
+;; -p: which candidates the run pinned (add.shard `pin_if_matches`) — every
+;; candidate present in the environment must be; the unpinned list is the gate
+(fn show_pinned ((env CheckedEnv) (ns (List Name)) (yes (List Int)) (no (List Int))) (List Int)
+  (measure (struct ns))
+  (match ns
+    (Nil (append "PINS pinned:" (append yes (append " | unpinned:" no))))
+    ((Cons n r)
+     (match (env_find env n)
+       (None (show_pinned env r yes no))
+       ((Some _)
+        (if (env_pinned env n)
+          (show_pinned env r (append yes (Cons 32 (show_name n))) no)
+          (show_pinned env r yes (append no (Cons 32 (show_name n))))))))))
 
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
-     (match (parse_flags args False False False)
-       ((Pair files (Cons verbose (Cons ax (Cons pins Nil))))
+     (match (parse_flags args False False False False)
+       ((Pair files (Cons verbose (Cons ax (Cons pins (Cons pp Nil)))))
         (match (run_files (empty_run pins ax) files verbose w1)
           ((Pair r w2)
            (match (run_counts r)
              ((Cons _ (Cons b (Cons c (Cons d _))))
-              (exit (+ b (+ c d)) (write_line (append "T0: " (show_counts r)) (if pins (show_pins (run_env r) (pin_candidates) w2) w2))))
+              (exit (+ b (+ c d))
+                (write_line (append "T0: " (show_counts r))
+                  (if pp (write_line (show_pinned (run_env r) (pin_candidates) Nil Nil) w2)
+                  (if pins (show_refs (run_env r) (pin_candidates) w2) w2)))))
              (_ (exit 2 w2))))))
        (_ (exit 2 w1))))))

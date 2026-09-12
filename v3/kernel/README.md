@@ -41,6 +41,8 @@ in the comments are into those files at that commit.
 | `expr.shard` | `BinderInfo Literal D Expr Memo St` | the typing rules per constructor (`infer_*`), `whnf_core`/`whnf`, definitional equality (`is_def_eq_core` in its exact order), literal rules, projection rules; the representation (node data, identity, the state) |
 | `decl.shard` | `ReducibilityHints DefinitionSafety ConstantVal RecursorRule QuotKind ConstantInfo InductiveType Constructor Declaration` | admission per declaration kind (`environment::add_*`), the inductive admission checks, recursor generation, the quotient axioms |
 | `env.shard` | `Env` (raw and checked), `Outcome` | §3.3's outcomes; raw versus checked (§3.5); the fixed-identity `Nat` accelerators |
+| `accel_pins.shard` | `pin_candidates accel_ref accel_ref_closure` | **GENERATED** by `gen_pins.sh` from the pinned export: FOUNDATION §3.2's fixed identities as reference declarations — each accelerated or literal-bearing candidate's identity closure (`add.shard` `ref_edges`), spelled with the anonymous constructors; `add.shard` `pin_if_matches` compares an admitted closure against them structurally (2026-09-12, replacing a 61-bit hash table — GPT-6 R42, records §4.7) |
+| `refgen.shard` | — | the generator behind `t0.shard --pins`: prints the reference table as `REF` lines; generation-only, outside K's checking path |
 | `prog.shard` | `EType ELit EPat ETerm EArm ERec ECtorDef EDecl Prog Val EvRes` | **phase 2, slice 1 (2026-09-07):** E programs as data — what `ev` runs (`v3/LANGUAGE.md` §6): the bootstrap's AST with resolved identities and classified heads; `ev`'s rule per node; the recursion structure the correspondence is stated over (§4.4) |
 
 ## The gate for these files

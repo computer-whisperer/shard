@@ -1,0 +1,394 @@
+;;; v3/kernel/refgen.shard — pins mode's generator (gen_pins.sh, t0.shard
+;;; --pins): after the export replay, print the reference table that
+;;; accel_pins.shard carries below its marker — every candidate's identity
+;;; closure (add.shard `ref_edges`: the candidate and, transitively, each
+;;; definition, opaque, axiom and inductive type its type and value cite) as
+;;; the L declarations K admitted, spelled with expr.shard's anonymous
+;;; constructors. One `REF ` line per generated form (gen_pins.sh strips the
+;;; prefix); a `REF-ERROR` line aborts the generation. Generation-only code:
+;;; nothing in K's checking path imports this file.
+
+(import "host.shard")
+(import "add.shard")
+
+;; ---- text ---------------------------------------------------------------------------
+(fn wr ((s (List Int)) (w World)) World (write s w))
+(fn nat_s ((k Int)) (List Int) (show_nat k))
+
+;; a byte list as `(list b …)` or `Nil`
+(fn ints_s ((bs (List Int))) (List Int)
+  (match bs (Nil "Nil") (_ (append "(list" (append (ints_go bs) ")")))))
+(fn ints_go ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs (Nil Nil) ((Cons b r) (append " " (append (nat_s b) (ints_go r))))))
+
+;; a symbol: `(sy "…")` when every byte is printable ASCII (`"` and `\` escaped),
+;; else `(sym_of_chars (list …))` — lexpr's symbols cannot spell every name
+(fn sym_plain ((bs (List Int))) Bool
+  (measure (struct bs))
+  (match bs (Nil True) ((Cons b r) (if (bool_and (le 32 b) (le b 126)) (sym_plain r) False))))
+(fn esc ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b r) (if (bool_or (int_eq b 34) (int_eq b 92)) (Cons 92 (Cons b (esc r))) (Cons b (esc r))))))
+(fn wr_sym ((s Symbol) (w World)) World
+  (let ((bs (chars_of_sym s)))
+    (if (sym_plain bs)
+      (wr (append "(sy \"" (append (esc bs) "\")")) w)
+      (wr (append "(sym_of_chars " (append (ints_s bs) ")")) w))))
+
+;; a name by reference: `(rn_H)` with H = hash_name; Anon literally
+(fn wr_nref ((n Name) (w World)) World
+  (match n (Anon (wr "Anon" w)) (_ (wr (append "(rn_" (append (nat_s (hash_name n)) ")")) w))))
+(fn wr_names ((ns (List Name)) (w World)) World
+  (match ns (Nil (wr "Nil" w)) (_ (wr ")" (wr_names_go ns (wr "(list" w))))))
+(fn wr_names_go ((ns (List Name)) (w World)) World
+  (measure (struct ns))
+  (match ns (Nil w) ((Cons n r) (wr_names_go r (wr_nref n (wr " " w))))))
+
+(fn wr_level ((l Level) (w World)) World
+  (measure (struct l))
+  (match l
+    (LZero (wr "LZero" w))
+    ((LSucc x) (wr ")" (wr_level x (wr "(LSucc " w))))
+    ((LMax a b) (wr ")" (wr_level b (wr " " (wr_level a (wr "(LMax " w))))))
+    ((LIMax a b) (wr ")" (wr_level b (wr " " (wr_level a (wr "(LIMax " w))))))
+    ((LParam n) (wr ")" (wr_nref n (wr "(LParam " w))))))
+(fn wr_levels ((ls (List Level)) (w World)) World
+  (match ls (Nil (wr "Nil" w)) (_ (wr ")" (wr_levels_go ls (wr "(list" w))))))
+(fn wr_levels_go ((ls (List Level)) (w World)) World
+  (measure (struct ls))
+  (match ls (Nil w) ((Cons l r) (wr_levels_go r (wr_level l (wr " " w))))))
+
+(fn wr_bi ((b BinderInfo) (w World)) World
+  (wr (match b (BDefault "BDefault") (BImplicit "BImplicit") (BStrictImplicit "BStrictImplicit") (BInstImplicit "BInstImplicit")) w))
+
+;; ---- terms: one `(fn re_K () Expr …)` per distinct node -----------------------------
+;; Nodes are numbered by a counter and found by structural equality in a
+;; hash bucket: expr.shard's hash is affine in each child, so structurally
+;; different Init terms collide on it naturally (`List.cons`'s type against
+;; `List α → α → List α`: the inner domains swapped, `List` adding the same
+;; constant to each). No generated line nests deeper than a constructor and
+;; its children (the s-expression reader has a depth limit).
+(type RefSt (RefSt (IntMap (List (Pair Expr Int))) Int))   ; numbered nodes by hash bucket; the next number
+
+(fn ref_st0 () RefSt (RefSt IMEmpty 1))
+(fn ref_lookup ((st RefSt) (e Expr)) (Option Int)
+  (match st ((RefSt m _) (match (im_find m (hash_expr e)) ((Some b) (ref_assoc e b)) (None None)))))
+(fn ref_assoc ((e Expr) (b (List (Pair Expr Int)))) (Option Int)
+  (measure (struct b))
+  (match b (Nil None) ((Cons (Pair x k) r) (if (expr_eq x e) (Some k) (ref_assoc e r)))))
+(fn ref_number ((st RefSt) (e Expr)) (Pair RefSt Int)
+  (match st
+    ((RefSt m k)
+     (let ((h (hash_expr e)))
+       (Pair (RefSt (im_insert m h (Cons (Pair e k) (match (im_find m h) ((Some b) b) (None Nil)))) (+ k 1)) k)))))
+
+(fn wr_eref ((st RefSt) (e Expr) (w World)) World
+  (match (ref_lookup st e)
+    ((Some k) (wr (append "(re_" (append (nat_s k) ")")) w))
+    (None (write_line "REF-ERROR unnumbered node" w))))
+
+;; one node with the anonymous constructor and its children by reference
+(fn wr_node ((st RefSt) (e Expr) (w World)) World
+  (match e
+    ((BVar _ i) (wr (append "(mk_bvar " (append (nat_s i) ")")) w))
+    ((FVar _ i) (wr (append "(mk_fvar " (append (nat_s i) ")")) w))
+    ((Sort _ u) (wr ")" (wr_level u (wr "(mk_sort " w))))
+    ((Const _ n ls) (wr ")" (wr_levels ls (wr " " (wr_nref n (wr "(mk_const " w))))))
+    ((App _ f a) (wr ")" (wr_eref st a (wr " " (wr_eref st f (wr "(mk_app " w))))))
+    ((Lam _ n bi d b) (wr ")" (wr_eref st b (wr " " (wr_eref st d (wr " " (wr_bi bi (wr " " (wr_nref n (wr "(mk_lam " w))))))))))
+    ((Pi _ n bi d b) (wr ")" (wr_eref st b (wr " " (wr_eref st d (wr " " (wr_bi bi (wr " " (wr_nref n (wr "(mk_pi " w))))))))))
+    ((Let _ n t v b) (wr ")" (wr_eref st b (wr " " (wr_eref st v (wr " " (wr_eref st t (wr " " (wr_nref n (wr "(mk_let " w))))))))))
+    ((Lit _ (LitNat k)) (wr (append "(mk_lit (LitNat " (append (nat_s k) "))")) w))
+    ((Lit _ (LitStr bs)) (wr (append "(mk_lit (LitStr " (append (ints_s bs) "))")) w))
+    ((Proj _ s i x) (wr ")" (wr_eref st x (wr " " (wr (nat_s i) (wr " " (wr_nref s (wr "(mk_proj " w))))))))))
+
+;; the node definitions of a term, children first, each distinct node once
+(fn wr_expr_defs ((e Expr) (st RefSt) (w World)) (Pair RefSt World)
+  (measure (struct e))
+  (match (ref_lookup st e)
+    ((Some _) (Pair st w))
+    (None
+     (match (wr_expr_children e st w)
+       ((Pair st1 w1)
+        (match (ref_number st1 e)
+          ((Pair st2 k)
+           (Pair st2 (write_line ")" (wr_node st2 e (wr (append "REF (fn re_" (append (nat_s k) " () Expr ")) w1)))))))))))
+(fn wr_expr_children ((e Expr) (st RefSt) (w World)) (Pair RefSt World)
+  (measure (struct e))
+  (match e
+    ((App _ f a) (match (wr_expr_defs f st w) ((Pair s1 w1) (wr_expr_defs a s1 w1))))
+    ((Lam _ _ _ d b) (match (wr_expr_defs d st w) ((Pair s1 w1) (wr_expr_defs b s1 w1))))
+    ((Pi _ _ _ d b) (match (wr_expr_defs d st w) ((Pair s1 w1) (wr_expr_defs b s1 w1))))
+    ((Let _ _ t v b)
+     (match (wr_expr_defs t st w)
+       ((Pair s1 w1) (match (wr_expr_defs v s1 w1) ((Pair s2 w2) (wr_expr_defs b s2 w2))))))
+    ((Proj _ _ _ x) (wr_expr_defs x st w))
+    (_ (Pair st w))))
+(fn wr_exprs_defs ((es (List Expr)) (st RefSt) (w World)) (Pair RefSt World)
+  (measure (struct es))
+  (match es
+    (Nil (Pair st w))
+    ((Cons e r) (match (wr_expr_defs e st w) ((Pair s1 w1) (wr_exprs_defs r s1 w1))))))
+
+;; every term a row spells: its type and value; an inductive block's types and constructor types
+(fn row_exprs ((env CheckedEnv) (info ConstantInfo)) (List Expr)
+  (match info
+    ((DefnInfo cv v _ _ _) (list (cv_type cv) v))
+    ((OpaqueInfo cv v _ _) (list (cv_type cv) v))
+    ((AxiomInfo cv _) (list (cv_type cv)))
+    ((InductInfo _ _ _ all _ _ _ _ _) (block_exprs env all))
+    (_ Nil)))
+(fn block_exprs ((env CheckedEnv) (all (List Name))) (List Expr)
+  (measure (struct all))
+  (match all
+    (Nil Nil)
+    ((Cons t r)
+     (append (match (env_find env t)
+               ((Some (InductInfo cv _ _ _ ctors _ _ _ _)) (Cons (cv_type cv) (ctor_exprs env ctors)))
+               (_ Nil))
+             (block_exprs env r)))))
+(fn ctor_exprs ((env CheckedEnv) (cs (List Name))) (List Expr)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons c r) (match (env_find env c) ((Some info) (Cons (ci_type info) (ctor_exprs env r))) (None (ctor_exprs env r))))))
+(fn wr_rows_exprs ((env CheckedEnv) (ns (List Name)) (st RefSt) (w World)) (Pair RefSt World)
+  (measure (struct ns))
+  (match ns
+    (Nil (Pair st w))
+    ((Cons n r)
+     (match (env_find env n)
+       (None (wr_rows_exprs env r st w))
+       ((Some info) (match (wr_exprs_defs (row_exprs env info) st w) ((Pair s1 w1) (wr_rows_exprs env r s1 w1))))))))
+
+(fn wr_cval ((st RefSt) (cv ConstantVal) (w World)) World
+  (wr ")" (wr_eref st (cv_type cv) (wr " " (wr_names (cv_lparams cv) (wr " " (wr_nref (cv_name cv) (wr "(ConstantVal " w))))))))
+(fn wr_hints ((h ReducibilityHints) (w World)) World
+  (match h
+    (HOpaque (wr "HOpaque" w))
+    (HAbbrev (wr "HAbbrev" w))
+    ((HRegular k) (wr (append "(HRegular " (append (nat_s k) ")")) w))))
+
+;; the constructors of one inductive type, by name from the checked environment
+(fn wr_ctors ((env CheckedEnv) (st RefSt) (cs (List Name)) (w World)) World
+  (match cs (Nil (wr "Nil" w)) (_ (wr ")" (wr_ctors_go env st cs (wr "(list" w))))))
+(fn wr_ctors_go ((env CheckedEnv) (st RefSt) (cs (List Name)) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil w)
+    ((Cons c r)
+     (wr_ctors_go env st r
+       (match (env_find env c)
+         ((Some info) (wr ")" (wr_eref st (ci_type info) (wr " " (wr_nref c (wr " (Constructor " w))))))
+         (None (write_line "REF-ERROR constructor missing from the environment" w)))))))
+(fn wr_induct_types ((env CheckedEnv) (st RefSt) (all (List Name)) (w World)) World
+  (measure (struct all))
+  (match all
+    (Nil w)
+    ((Cons t r)
+     (wr_induct_types env st r
+       (match (env_find env t)
+         ((Some (InductInfo cv _ _ _ ctors _ _ _ _))
+          (wr ")" (wr_ctors env st ctors (wr " " (wr_eref st (cv_type cv) (wr " " (wr_nref t (wr " (InductiveType " w))))))))
+         (_ (write_line "REF-ERROR inductive block member missing" w)))))))
+
+;; one reference row: `(fn rd_H () Declaration …)`
+(fn wr_decl ((env CheckedEnv) (st RefSt) (c Name) (info ConstantInfo) (w World)) World
+  (let ((w1 (wr (append "REF (fn rd_" (append (nat_s (hash_name c)) " () Declaration ")) w)))
+    (match info
+      ((DefnInfo cv v h _ all)
+       (write_line "))" (wr_names all (wr " Safe " (wr_hints h (wr " " (wr_eref st v (wr " " (wr_cval st cv (wr "(DefnDecl " w1))))))))))
+      ((OpaqueInfo cv v _ all)
+       (write_line "))" (wr_names all (wr " False " (wr_eref st v (wr " " (wr_cval st cv (wr "(OpaqueDecl " w1))))))))
+      ((AxiomInfo cv _)
+       (write_line " False))" (wr_cval st cv (wr "(AxiomDecl " w1))))
+      ((InductInfo cv np _ all _ _ _ _ _)
+       (write_line ") False))" (wr_induct_types env st all (wr " (list" (wr (nat_s np) (wr " " (wr_names (cv_lparams cv) (wr "(InductDecl " w1))))))))
+      (_ (write_line "REF-ERROR not a reference kind" w1)))))
+
+;; ---- the names table ----------------------------------------------------------------
+;; every name the rows cite, keyed by hash_name (a bucket of two = a collision,
+;; reported); a name brings its prefixes
+(fn name_prefix ((n Name)) Name (match n (Anon Anon) ((Str p _) p) ((Num p _) p)))
+(fn seen_add ((s (IntMap (List Name))) (n Name)) (IntMap (List Name))
+  (measure (struct n))
+  (match n
+    (Anon s)
+    (_ (let ((h (hash_name n)))
+         (match (im_find s h)
+           ((Some b) (if (mem_name n b) s (im_insert s h (Cons n b))))
+           (None (seen_add (im_insert s h (Cons n Nil)) (name_prefix n))))))))
+(fn seen_names ((s (IntMap (List Name))) (ns (List Name))) (IntMap (List Name))
+  (measure (struct ns))
+  (match ns (Nil s) ((Cons n r) (seen_names (seen_add s n) r))))
+(fn seen_level ((s (IntMap (List Name))) (l Level)) (IntMap (List Name))
+  (measure (struct l))
+  (match l
+    (LZero s)
+    ((LSucc x) (seen_level s x))
+    ((LMax a b) (seen_level (seen_level s a) b))
+    ((LIMax a b) (seen_level (seen_level s a) b))
+    ((LParam n) (seen_add s n))))
+(fn seen_levels ((s (IntMap (List Name))) (ls (List Level))) (IntMap (List Name))
+  (measure (struct ls))
+  (match ls (Nil s) ((Cons l r) (seen_levels (seen_level s l) r))))
+(fn seen_expr ((s (IntMap (List Name))) (e Expr)) (IntMap (List Name))
+  (measure (struct e))
+  (match e
+    ((Sort _ u) (seen_level s u))
+    ((Const _ n ls) (seen_levels (seen_add s n) ls))
+    ((App _ f a) (seen_expr (seen_expr s f) a))
+    ((Lam _ n _ d b) (seen_expr (seen_expr (seen_add s n) d) b))
+    ((Pi _ n _ d b) (seen_expr (seen_expr (seen_add s n) d) b))
+    ((Let _ n t v b) (seen_expr (seen_expr (seen_expr (seen_add s n) t) v) b))
+    ((Proj _ n _ x) (seen_expr (seen_add s n) x))
+    (_ s)))
+(fn seen_cval ((s (IntMap (List Name))) (cv ConstantVal)) (IntMap (List Name))
+  (seen_expr (seen_names (seen_add s (cv_name cv)) (cv_lparams cv)) (cv_type cv)))
+(fn seen_ctors ((env CheckedEnv) (s (IntMap (List Name))) (cs (List Name))) (IntMap (List Name))
+  (measure (struct cs))
+  (match cs
+    (Nil s)
+    ((Cons c r) (seen_ctors env (match (env_find env c) ((Some info) (seen_cval s (ci_val info))) (None s)) r))))
+(fn seen_block ((env CheckedEnv) (s (IntMap (List Name))) (all (List Name))) (IntMap (List Name))
+  (measure (struct all))
+  (match all
+    (Nil s)
+    ((Cons t r)
+     (seen_block env
+       (match (env_find env t)
+         ((Some (InductInfo cv _ _ _ ctors _ _ _ _)) (seen_ctors env (seen_cval s cv) ctors))
+         (_ s))
+       r))))
+(fn seen_decl ((env CheckedEnv) (s (IntMap (List Name))) (info ConstantInfo)) (IntMap (List Name))
+  (match info
+    ((DefnInfo cv v _ _ all) (seen_names (seen_expr (seen_cval s cv) v) all))
+    ((OpaqueInfo cv v _ all) (seen_names (seen_expr (seen_cval s cv) v) all))
+    ((AxiomInfo cv _) (seen_cval s cv))
+    ((InductInfo cv _ _ all _ _ _ _ _) (seen_block env (seen_cval s cv) all))
+    (_ s)))
+(fn seen_decls ((env CheckedEnv) (s (IntMap (List Name))) (ns (List Name))) (IntMap (List Name))
+  (measure (struct ns))
+  (match ns
+    (Nil s)
+    ((Cons n r) (seen_decls env (match (env_find env n) ((Some info) (seen_decl env s info)) (None s)) r))))
+
+(fn wr_name_def ((n Name) (w World)) World
+  (match n
+    (Anon w)
+    ((Str p s) (write_line "))" (wr_sym s (wr " " (wr_nref p (wr (append "REF (fn rn_" (append (nat_s (hash_name n)) " () Name (Str ")) w))))))
+    ((Num p k) (write_line "))" (wr (nat_s k) (wr " " (wr_nref p (wr (append "REF (fn rn_" (append (nat_s (hash_name n)) " () Name (Num ")) w))))))))
+(fn wr_name_defs ((m (IntMap (List Name))) (w World)) World
+  (measure (struct m))
+  (match m
+    (IMEmpty w)
+    ((IMLeaf _ b) (wr_name_bucket b w))
+    ((IMNode v c0 c1 c2 c3)
+     (wr_name_defs c3 (wr_name_defs c2 (wr_name_defs c1 (wr_name_defs c0 (match v ((Some b) (wr_name_bucket b w)) (None w)))))))))
+(fn wr_name_bucket ((b (List Name)) (w World)) World
+  (match b
+    ((Cons n Nil) (wr_name_def n w))
+    (_ (write_line "REF-ERROR name hash collision" w))))
+
+;; ---- the closure in dependency order ------------------------------------------------
+;; depth-first over `ref_edges`; `done` is the reverse post-order (a constant
+;; after everything it cites), `pending` the path (cycles: a block's `all`,
+;; a constructor's own inductive)
+(fn ref_visit ((env CheckedEnv) (c Name) (done (List Name)) (pending (List Name)) (fuel Int)) (List Name)
+  (measure fuel)
+  (if (lt fuel 0) done
+  (if (bool_or (mem_name c done) (mem_name c pending)) done
+  (match (env_find env c)
+    (None done)
+    ((Some info) (Cons c (ref_visit_all env (ref_edges env info) done (Cons c pending) (- fuel 1))))))))
+(fn ref_visit_all ((env CheckedEnv) (cs (List Name)) (done (List Name)) (pending (List Name)) (fuel Int)) (List Name)
+  (measure fuel)
+  (if (lt fuel 0) done
+  (match cs
+    (Nil done)
+    ((Cons c r) (ref_visit_all env r (ref_visit env c done pending (- fuel 1)) pending (- fuel 1))))))
+
+;; the entries with a row: definitions, opaques, axioms, inductive types
+(fn ref_kind ((info ConstantInfo)) Bool
+  (match info
+    ((DefnInfo _ _ _ _ _) True) ((OpaqueInfo _ _ _ _) True) ((AxiomInfo _ _) True) ((InductInfo _ _ _ _ _ _ _ _ _) True)
+    (_ False)))
+(fn ref_rows ((env CheckedEnv) (ns (List Name))) (List Name)
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons n r) (match (env_find env n) ((Some info) (if (ref_kind info) (Cons n (ref_rows env r)) (ref_rows env r))) (None (ref_rows env r))))))
+
+;; a candidate's closure, dependency order, rows only
+(fn candidate_closure ((env CheckedEnv) (c Name)) (List Name)
+  (ref_rows env (rev (ref_visit env c Nil Nil (ref_fuel)))))
+(fn candidates_closure ((env CheckedEnv) (cs (List Name)) (done (List Name))) (List Name)
+  (measure (struct cs))
+  (match cs (Nil done) ((Cons c r) (candidates_closure env r (ref_visit env c done Nil (ref_fuel))))))
+
+;; ---- the tables ---------------------------------------------------------------------
+(fn wr_rows ((env CheckedEnv) (st RefSt) (ns (List Name)) (w World)) World
+  (measure (struct ns))
+  (match ns
+    (Nil w)
+    ((Cons n r) (wr_rows env st r (match (env_find env n) ((Some info) (wr_decl env st n info w)) (None w))))))
+(fn close_parens ((k Int) (w World)) World
+  (measure k)
+  (if (lt k 1) w (close_parens (- k 1) (wr ")" w))))
+; the table, bucketed on the low four bits of hash_name: no generated `if`
+;; chain deeper than a bucket (the s-expression reader has a depth limit; the
+;; 206-row chain hit it), and a lookup costs a bucket, not the table
+(fn wr_ref_table ((ns (List Name)) (w World)) World
+  (wr_ref_buckets ns 0
+    (write_line "" (close_parens 18 (wr "REF   None" (wr_ref_top 0
+      (write_line "REF (fn accel_ref ((n Name)) (Option Declaration) (let ((b (band (hash_name n) 15)))" w)))))))
+(fn wr_ref_top ((k Int) (w World)) World
+  (measure (- 16 k))
+  (if (lt 15 k) w
+    (wr_ref_top (+ k 1) (write_line (append (nat_s k) " n)") (wr (append "REF   (if (int_eq b " (append (nat_s k) ") (accel_ref_b")) w)))))
+(fn wr_ref_buckets ((ns (List Name)) (k Int) (w World)) World
+  (measure (- 16 k))
+  (if (lt 15 k) w
+    (let ((b (bucket_of ns k)))
+      (wr_ref_buckets ns (+ k 1)
+        (write_line "" (close_parens (+ (len b) 1) (wr "REF   None" (wr_ref_rows b
+          (write_line (append "REF (fn accel_ref_b" (append (nat_s k) " ((n Name)) (Option Declaration)")) w)))))))))
+(fn bucket_of ((ns (List Name)) (k Int)) (List Name)
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons n r) (if (int_eq (band (hash_name n) 15) k) (Cons n (bucket_of r k)) (bucket_of r k)))))
+(fn wr_ref_rows ((ns (List Name)) (w World)) World
+  (measure (struct ns))
+  (match ns
+    (Nil w)
+    ((Cons n r)
+     (let ((h (nat_s (hash_name n))))
+       (wr_ref_rows r (write_line "))" (wr h (wr ")) (Some (rd_" (wr h (wr "REF   (if (name_eq n (rn_" w))))))))))
+(fn wr_closure_table ((env CheckedEnv) (cs (List Name)) (w World)) World
+  (write_line "" (close_parens (+ (len cs) 1) (wr "REF   Nil" (wr_closure_rows env cs (write_line "REF (fn accel_ref_closure ((n Name)) (List Name)" w))))))
+(fn wr_closure_rows ((env CheckedEnv) (cs (List Name)) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil w)
+    ((Cons c r)
+     (wr_closure_rows env r
+       (match (env_find env c)
+         (None w)
+         ((Some _) (write_line "" (wr_names (candidate_closure env c) (wr (append "REF   (if (name_eq n (rn_" (append (nat_s (hash_name c)) ")) ")) w)))))))))
+
+;; the entry point: the generated section of accel_pins.shard
+(fn show_refs ((env CheckedEnv) (cands (List Name)) (w World)) World
+  (let ((rows (ref_rows env (rev (candidates_closure env cands Nil)))))
+    (let ((names (seen_decls env IMEmpty rows)))
+      (wr_closure_table env (present env cands)
+        (wr_ref_table rows
+          (wr_name_defs names
+            (match (wr_rows_exprs env rows (ref_st0) (write_line (append "REF ;; " (append (nat_s (len rows)) " reference rows")) w))
+              ((Pair st w1) (wr_rows env st rows w1)))))))))
+(fn present ((env CheckedEnv) (ns (List Name))) (List Name)
+  (measure (struct ns))
+  (match ns (Nil Nil) ((Cons n r) (match (env_find env n) ((Some _) (Cons n (present env r))) (None (present env r))))))
