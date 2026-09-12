@@ -955,7 +955,16 @@ is `docs/FOUNDATION.md` §5.3.
   (whitespace, comments, binder names change no declaration and no
   admitted identity). `v3/pins/reader/` opens the new tree's corpus: 12
   S files, each carrying `;; expect:` in a header line, replayed from
-  the empty environment. 13 entrypoints, 0 failed.
+  the empty environment. 13 entrypoints, 0 failed. **CI (pipeline 461,
+  `9d2ae0e`):** green — the full-export replay on compiled K in 2,499 s
+  at a 31.0 GB peak, all 20 accelerator candidates pinned by structural
+  comparison (R42's closing gate), closures identical, byte-ties
+  identical. Pipelines 457–460 had failed in the runner before any
+  project code ran (the `c-srv3` host rebooted; its Ceph mount raced
+  the MDS and failed; the kubelet's dependency kept that node's API
+  server down; the single control-plane endpoint took every Cilium
+  agent with it — a cluster matter, diagnosed and reported the same
+  day).
 
 ## 10. Related records
 
