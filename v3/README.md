@@ -125,7 +125,23 @@ loader's parsing role; 7 the doc rows and the CI job. **2026-09-12:**
 GPT-6's implementation review (R42–R48, records §4.7) — R42 fixed at
 `12a7aac` (the accelerator pins compare reference declarations, never
 a hash; hostile battery 7b–7d), R44 ruled: `let` is sequential in L
-and E (0 of 30,611 `let` groups depend on parallel binding).
+and E (0 of 30,611 `let` groups depend on parallel binding). **Slice 2
+(2026-09-12): the s-expression and Stage-0 readers into K** —
+`kernel/sexpr.shard` (LANGUAGE.md §2: numerals, symbols with the
+universe suffix `.{…}`, strings and their escapes, `'X`; the profile's
+`-7` as a reader flag; every error a reason at a byte offset) and
+`kernel/reader.shard` (§4–§5: `def abbrev opaque theorem axiom
+inductive type structure` into K's `Declaration`, term for term —
+`fun forall -> let Sort Type proj`, levels, binders with their infos,
+`structure` projections as abbrevs over `proj`, scope resolution as
+data: the module's own declarations, the opened prefixes in order,
+then the bare name; directives and the E forms routed to the loader
+and slice 5). Tests: `sexpr_test` (33 cases), `reader_test` (45: the
+world declared from S — `Nat`, `Eq.{u}`, structures, `type`s — with
+`rfl` proofs **verified by K directly from S**, every refusal with its
+reason, T8's origin-only invariance), and `reader_pins_test` replaying
+`v3/pins/reader/` (12 files, each carrying its expectation in a
+header line): 13 entrypoints, 0 failed.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
@@ -179,5 +195,5 @@ v3/LANGUAGE.md    the V3 language — S, L and E at Stage 0 (phase 2 draft; I in
 v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K; phase 2: prog, the reader tower, ev
 v3/meta/          phase 3: the elaborators, I, the goal graph, tactics
 v3/std/           phase 3: the first library under the naming law
-v3/pins/          the corpus law of the new tree (T0's hostile battery first)
+v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers)
 ```

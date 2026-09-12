@@ -1,0 +1,92 @@
+;;; v3/kernel/test/reader_test.shard — the Stage-0 reader against
+;;; LANGUAGE.md §4–§5 through K: a world declared from S text (no import,
+;;; no Rust loader: the direct S → L → K path), every form of §4, the term
+;;; grammar of §5.1, scope resolution, the refusals with their reasons, and
+;;; T8's origin-only invariance (whitespace, comments, binder names change
+;;; no declaration).
+
+(import "reader_kit.shard")
+
+(type Case (Case (List Int) Bool))
+
+(fn sc () Scope (Scope Anon Nil))
+(fn s_nat () (List Int) "(inductive Nat () Type (zero Nat) (succ (-> Nat Nat)))")
+(fn s_eq () (List Int) "(inductive Eq.{u} ((α (Sort u) implicit) (a α)) (-> α Prop) (refl (Eq.{u} α a a)))")
+(fn s_two () (List Int) "(def two () Nat (Nat.succ (Nat.succ Nat.zero)))")
+(fn e_nat () CheckedEnv (env_of (step (sc) (e0) (s_nat)) (e0)))
+(fn e_eq () CheckedEnv (env_of (step (sc) (e_nat) (s_eq)) (e0)))
+(fn e_two () CheckedEnv (env_of (step (sc) (e_eq) (s_two)) (e0)))
+(fn e_pt () CheckedEnv (env_of (step (sc) (e_two) "(structure Pt () (x Nat) (y Nat))") (e0)))
+(fn e_id () CheckedEnv (env_of (step (sc) (e_two) "(inductive Id.{u} ((α (Type u))) (Type u) (mk (-> α (Id.{u} α))))") (e0)))
+(fn at ((env CheckedEnv) (src (List Int))) Step (step (sc) env src))
+
+;; scopes for the resolution cases: module A declares x, module B declares x
+(fn sc_a () Scope (Scope (n1 (quote A)) Nil))
+(fn sc_b () Scope (Scope (n1 (quote B)) Nil))
+(fn e_ab () CheckedEnv
+  (env_of (step (sc_b) (env_of (step (sc_a) (e_two) "(def x () Nat two)") (e0)) "(def x () Nat Nat.zero)") (e0)))
+
+(fn same_decl ((a (List Int)) (b (List Int))) Bool
+  (match (read_one (sc) (e_eq) a)
+    (None False)
+    ((Some d1) (match (read_one (sc) (e_eq) b) (None False) ((Some d2) (decl_eq d1 d2))))))
+(fn same_identity ((a (List Int)) (b (List Int)) (n Name)) Bool
+  (match (identity_hash (env_of (at (e_eq) a) (e0)) n)
+    (None False)
+    ((Some h1) (match (identity_hash (env_of (at (e_eq) b) (e0)) n) (None False) ((Some h2) (int_eq h1 h2))))))
+
+(fn cases () (List Case)
+  (list
+    (Case "the world: Nat from S" (acc (step (sc) (e0) (s_nat))))
+    (Case "the world: Eq.{u} from S, with implicit and universe binders" (acc (step (sc) (e_nat) (s_eq))))
+    (Case "def two" (acc (step (sc) (e_eq) (s_two))))
+    (Case "the S-read Nat is pinned (its closure matches the reference)" (env_pinned (e_nat) (nm_nat)))
+    (Case "a Nat literal types under the S-read Nat" (acc (at (e_two) "(def five () Nat 5)")))
+    (Case "a theorem by rfl: direct P verification" (acc (at (e_two) "(theorem t1 () (Eq.{1} Nat two two) (exact (Eq.refl.{1} Nat two)))")))
+    (Case "a false theorem refused by K: conversion" (rej (at (e_two) "(theorem t2 () (Eq.{1} Nat two Nat.zero) (exact (Eq.refl.{1} Nat two)))") (quote conversion)))
+    (Case "sorry: pending, admits nothing" (pend (at (e_two) "(theorem t3 () (Eq.{1} Nat two Nat.zero) sorry)")))
+    (Case "by: reserved for phase 3" (rerr (at (e_two) "(theorem t4 () (Eq.{1} Nat two two) (by rfl))") (quote reserved_form)))
+    (Case "an unknown constant" (rerr (at (e_two) "(def bad () Nat foo)") (quote unknown_constant)))
+    (Case "a polymorphic constant cited bare" (rerr (at (e_two) "(def bad () Prop (Eq Nat two two))") (quote universe_args_required)))
+    (Case "the wrong universe arity" (rerr (at (e_two) "(def bad () Prop (Eq.{1 2} Nat two two))") (quote universe_arity)))
+    (Case "an undeclared universe name" (rerr (at (e_two) "(def bad () (Sort v) Nat)") (quote bad_level)))
+    (Case "a declared universe name" (acc (at (e_two) "(def ty.{v} () (Sort (succ v)) (Sort v))")))
+    (Case "fun / forall / ->: the polymorphic identity" (acc (at (e_two) "(def id () (forall ((A Type)) (-> A A)) (fun ((A Type) (x A)) x))")))
+    (Case "application of it" (acc (at (env_of (at (e_two) "(def id () (forall ((A Type)) (-> A A)) (fun ((A Type) (x A)) x))") (e0)) "(def two' () Nat (id Nat two))")))
+    (Case "let, sequential: the second binding sees the first" (acc (at (e_two) "(def four () Nat (let ((t Nat two) (u Nat (Nat.succ t))) (Nat.succ u)))")))
+    (Case "let reduces by zeta under rfl" (acc (at (env_of (at (e_two) "(def four () Nat (let ((t Nat two) (u Nat (Nat.succ t))) (Nat.succ u)))") (e0)) "(theorem t5 () (Eq.{1} Nat four (Nat.succ (Nat.succ two))) (exact (Eq.refl.{1} Nat four)))")))
+    (Case "structure: Pt, Pt.mk, Pt.x, Pt.y admitted" (acc (at (e_two) "(structure Pt () (x Nat) (y Nat))")))
+    (Case "a projection reduces under rfl" (acc (at (e_pt) "(theorem t6 () (Eq.{1} Nat (Pt.x (Pt.mk two Nat.zero)) two) (exact (Eq.refl.{1} Nat two)))")))
+    (Case "the raw proj form" (acc (at (e_pt) "(def px () Nat (proj Pt 1 (Pt.mk two Nat.zero)))")))
+    (Case "a dependent structure: the second field's type cites the first through its projection" (acc (at (e_two) "(structure Dep () (n Nat) (p (Eq.{1} Nat n n)))")))
+    (Case "type: an enumeration" (acc (at (e_two) "(type Color (red) (green))")))
+    (Case "type: a parameterized pair, its constructor applied" (acc (at (env_of (at (e_two) "(type (Pair2 A B) (mk A B))") (e0)) "(def p () (Pair2 Nat Nat) (Pair2.mk Nat Nat two two))")))
+    (Case "type: a polymorphic field type takes level 0 by rule (E-type position)" (acc (at (e_id) "(type (W T) (mk (Id T)))")))
+    (Case "the same citation outside an E-type position is refused" (rerr (at (e_id) "(def w () Type (Id Nat))") (quote universe_args_required)))
+    (Case "axiom: read (the trusts gate is the loader's)" (acc (at (e_two) "(axiom ax () (Eq.{1} Nat two two))")))
+    (Case "opaque" (acc (at (e_two) "(opaque o () Nat two)")))
+    (Case "abbrev" (acc (at (e_two) "(abbrev a () Nat two)")))
+    (Case "a negative numeral is not S" (rerr (at (e_two) "(def m () Nat -7)") (quote negative_numeral)))
+    (Case "an unknown form" (rerr (at (e_two) "(frob x)") (quote unknown_form)))
+    (Case "instance: reserved for phase 3" (rerr (at (e_two) "(instance x)") (quote reserved_form)))
+    (Case "bin: reserved for phase 4" (rerr (at (e_two) "(bin x)") (quote reserved_form)))
+    (Case "fn: read at slice 5" (later (at (e_two) "(fn f ((x Nat)) Nat x)")))
+    (Case "import: the loader's" (directive (at (e_two) "(import \"x.shard\")")))
+    (Case "a malformed binder" (rerr (at (e_two) "(def bad ((x)) Nat two)") (quote bad_binder)))
+    (Case "a malformed def" (rerr (at (e_two) "(def bad Nat two)") (quote bad_shape)))
+    (Case "resolution: a module's own declaration first" (acc (step (sc_a) (e_ab) "(def y () Nat x)")))
+    (Case "resolution: the module's own x is A.x" (match (read_one (sc_a) (e_ab) "(def y () Nat x)") ((Some (DefnDecl _ (Const _ n _) _ _ _)) (name_eq n (n2 (quote A) (quote x)))) (_ False)))
+    (Case "resolution: one opened prefix" (acc (step (Scope Anon (list (n1 (quote B)))) (e_ab) "(def y () Nat x)")))
+    (Case "resolution: two opened prefixes both declaring x is ambiguous" (rerr (step (Scope Anon (list (n1 (quote A)) (n1 (quote B)))) (e_ab) "(def y () Nat x)") (quote ambiguous_name)))
+    (Case "resolution: the qualified name always resolves" (acc (step (Scope Anon (list (n1 (quote A)) (n1 (quote B)))) (e_ab) "(def y () Nat A.x)")))
+    (Case "T8: whitespace and comments change no declaration" (same_decl (s_two) "( def   two ( ) ; the comment\n  Nat\n  (Nat.succ (Nat.succ  Nat.zero)) )"))
+    (Case "T8: binder names change no declaration" (same_decl "(def k () (forall ((A Type)) (-> A A)) (fun ((A Type) (x A)) x))" "(def k () (forall ((B Type)) (-> B B)) (fun ((T Type) (y T)) y))"))
+    (Case "T8: the admitted identity is the same" (same_identity (s_two) "(def two () Nat (Nat.succ\n (Nat.succ Nat.zero)))" (n1 (quote two))))
+    (Case "T8: a different body is a different declaration" (bool_not (same_decl (s_two) "(def two () Nat (Nat.succ Nat.zero))")))))
+
+(fn run ((cs (List Case)) (fails Int) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil (exit fails (write_line (append "reader_test: failures = " (show_int fails)) w)))
+    ((Cons (Case name ok) r) (run r (if ok fails (+ fails 1)) (write_line (append (if ok "PASS " "FAIL ") name) w)))))
+(fn main ((w World)) World (run (cases) 0 w))

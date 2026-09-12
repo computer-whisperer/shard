@@ -1,0 +1,97 @@
+;;; v3/kernel/test/reader_pins_test.shard — replays v3/pins/reader/*.shard
+;;; (the list below; read_dir returns when a consumer needs it) from the
+;;; empty environment through the reader into K and compares each file's
+;;; outcome with its `;; expect:` header (v3/pins/reader/README.md).
+
+(import "reader_kit.shard")
+
+(fn pin_files () (List (List Int))
+  (list "v3/pins/reader/world.shard"
+        "v3/pins/reader/refuse_universe_collapse.shard"
+        "v3/pins/reader/refuse_false_theorem.shard"
+        "v3/pins/reader/refuse_nonpositive.shard"
+        "v3/pins/reader/pending_sorry.shard"
+        "v3/pins/reader/refuse_reserved_by.shard"
+        "v3/pins/reader/refuse_universe_args.shard"
+        "v3/pins/reader/refuse_negative_numeral.shard"
+        "v3/pins/reader/refuse_unknown_constant.shard"
+        "v3/pins/reader/refuse_unterminated.shard"
+        "v3/pins/reader/refuse_universe_arity.shard"
+        "v3/pins/reader/refuse_unknown_form.shard"))
+
+;; ---- the header --------------------------------------------------------------------
+;; the words after the first `;; expect:` line's marker
+(fn expect_words ((src (List Int))) (List (List Int))
+  (measure (struct src))
+  (match (take_line src Nil)
+    ((Pair line rest)
+     (match (starts_with_lit ";; expect:" line)
+       ((Some tail) (words tail Nil Nil))
+       (None (match rest (Nil Nil) (_ (expect_words rest))))))))
+(fn take_line ((bs (List Int)) (acc (List Int))) (Pair (List Int) (List Int))
+  (measure (struct bs))
+  (match bs
+    (Nil (Pair (rev acc) Nil))
+    ((Cons c r) (if (int_eq c 10) (Pair (rev acc) r) (take_line r (Cons c acc))))))
+(fn starts_with_lit ((lit (List Int)) (bs (List Int))) (Option (List Int))
+  (measure (struct lit))
+  (match lit
+    (Nil (Some bs))
+    ((Cons c r) (match bs ((Cons d br) (if (int_eq c d) (starts_with_lit r br) None)) (Nil None)))))
+(fn words ((bs (List Int)) (cur (List Int)) (acc (List (List Int)))) (List (List Int))
+  (measure (struct bs))
+  (match bs
+    (Nil (rev (match cur (Nil acc) (_ (Cons (rev cur) acc)))))
+    ((Cons c r)
+     (if (is_ws c)
+       (words r Nil (match cur (Nil acc) (_ (Cons (rev cur) acc))))
+       (words r (Cons c cur) acc)))))
+
+;; ---- the replay --------------------------------------------------------------------
+;; every form in order from the empty environment; the first non-acceptance ends it
+(fn replay ((forms (List SExpr)) (env CheckedEnv) (n Int)) (Pair Step Int)
+  (measure (struct forms))
+  (match forms
+    (Nil (Pair (SAcc env) n))
+    ((Cons f r)
+     (match (step_form (Scope Anon Nil) env f)
+       ((SAcc e2) (replay r e2 (+ n 1)))
+       (s (Pair s n))))))
+
+(fn outcome ((src (List Int))) (Pair Step Int)
+  (match (read_all False src)
+    ((RAErr e off) (Pair (SRead e (append "at byte " (show_nat off))) 0))
+    ((RAOk forms) (replay forms (e0) 0))))
+
+;; the outcome against the header's words
+(fn matches ((ws (List (List Int))) (s Step) (n Int)) Bool
+  (match ws
+    ((Cons w Nil) (if (int_list_eq w "ok") (bool_and (acc s) (lt 0 n)) False))
+    ((Cons w1 (Cons w2 Nil))
+     (if (int_list_eq w1 "read-error") (match s ((SRead e _) (int_list_eq (chars_of_sym e) w2)) (_ False)) False))
+    ((Cons name (Cons kind (Cons reason Nil)))
+     (if (int_list_eq kind "refused")
+       (match s ((SRej subj r) (bool_and (int_list_eq (show_name subj) name) (int_list_eq (chars_of_sym r) reason))) (_ False))
+     (if (int_list_eq kind "pending")
+       (match s ((SPend subj r) (bool_and (int_list_eq (show_name subj) name) (int_list_eq (chars_of_sym r) reason))) (_ False))
+       False)))
+    (_ False)))
+(fn show_words ((ws (List (List Int)))) (List Int)
+  (measure (struct ws))
+  (match ws (Nil Nil) ((Cons w r) (append w (Cons 32 (show_words r))))))
+
+(fn run ((files (List (List Int))) (fails Int) (w World)) World
+  (measure (struct files))
+  (match files
+    (Nil (exit fails (write_line (append "reader_pins_test: failures = " (show_int fails)) w)))
+    ((Cons f r)
+     (match (read_file f w)
+       ((Pair None w1) (run r (+ fails 1) (write_line (append "FAIL cannot read " f) w1)))
+       ((Pair (Some src) w1)
+        (let ((ws (expect_words src)))
+          (match (outcome src)
+            ((Pair s n)
+             (if (matches ws s n)
+               (run r fails (write_line (append "PASS " (append f (append " — " (show_words ws)))) w1))
+               (run r (+ fails 1) (write_line (append "FAIL " (append f (append " expected " (append (show_words ws) (append " got " (show_step s)))))) w1)))))))))))
+(fn main ((w World)) World (run (pin_files) 0 w))

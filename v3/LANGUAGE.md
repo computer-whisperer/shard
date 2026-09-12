@@ -1,10 +1,17 @@
 # The V3 language — S, L and E at Stage 0 (phase 2 draft)
 
-> **STATUS (2026-09-07): DRAFT — slice 1 of phase 2 (FOUNDATION §12.4
-> item 2; `docs/records/FOUNDATION.md` §9).** Written before the reader
-> exists, as the design the reader, the loader, the views, the fragment
-> classifier and `ev` are built to; the design is on disk before the
-> first line of code. It supersedes `docs/LANGUAGE.md` for the `v3/`
+> **STATUS (2026-09-12): DRAFT — slices 1–2 of phase 2 (FOUNDATION
+> §12.4 item 2; `docs/records/FOUNDATION.md` §9).** Written before the
+> reader existed, as the design the reader, the loader, the views, the
+> fragment classifier and `ev` are built to. **Slice 2 built §2 and the
+> S → L half of §4–§5:** `v3/kernel/sexpr.shard` (the s-expression
+> reader, the profile's lexical rules as a flag) and
+> `v3/kernel/reader.shard` (the Stage-0 reader into K's `Declaration`:
+> terms, levels, binders, `structure` projections over `proj`, scope
+> resolution as data for the loader), with `v3/pins/reader/` as the
+> first corpus of the new tree. A `fn`'s body is read with the
+> classifier (slice 5), the file and module plumbing is the loader
+> (slice 3). It supersedes `docs/LANGUAGE.md` for the `v3/`
 > tree (FOUNDATION §10.5); the old document keeps describing the old
 > tree until the flip. The proof IR **I** is phase 3's chapter and is
 > not here. Everything below is **Stage 0** of the law's §5.1: explicit

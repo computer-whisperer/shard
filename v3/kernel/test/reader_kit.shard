@@ -1,0 +1,85 @@
+;;; v3/kernel/test/reader_kit.shard — shared by the reader tests: one S form
+;;; from text through the reader into K, and the verdict as a Step. Not an
+;;; entrypoint. The loader (slice 3) owns the file-level version of this.
+
+(import "../host.shard")
+(import "../reader.shard")
+
+(type Step
+  (SAcc CheckedEnv)            ; every declaration the form made was admitted
+  (SRej Name Symbol)           ; K refused (subject, reason)
+  (SPend Name Symbol)          ; read, admits nothing (sorry)
+  (SRead Symbol (List Int))    ; the reader or the s-expression reader refused (reason, message)
+  (SDirective)                 ; import / use / trusts
+  (SLater Symbol))             ; an E form (fn, extern, sig, requirement, fulfills, realize)
+
+(fn st0 () St (st_init))
+(fn e0 () CheckedEnv (CheckedEnv IMEmpty False Nil 0))
+
+(fn reason_sym ((r Reason)) Symbol
+  (match r
+    ((Malformed t) t) ((RuleViolation t) t) ((Unsupported t) t) ((UnresolvedObligation t) t)
+    (ConversionNotEstablished (quote conversion))))
+
+(fn admit_all ((env CheckedEnv) (ds (List Declaration))) Step
+  (measure (struct ds))
+  (match ds
+    (Nil (SAcc env))
+    ((Cons d r)
+     (match (check env (st0) d)
+       ((Accepted e2) (admit_all e2 r))
+       ((Rejected reason subject) (SRej subject (reason_sym reason)))
+       ((Exhausted _ _) (SRej (decl_name d) (quote exhausted)))))))
+
+;; one already-read form
+(fn step_form ((sc Scope) (env CheckedEnv) (s SExpr)) Step
+  (match (read_decl sc env s)
+    ((RDOk ds) (admit_all env ds))
+    ((RDPending n r) (SPend n r))
+    ((RDErr e m) (SRead e m))
+    ((RDDirective _) SDirective)
+    ((RDLater k) (SLater k))))
+
+;; one form from S text
+(fn step ((sc Scope) (env CheckedEnv) (src (List Int))) Step
+  (match (read_expr False src (read_budget))
+    ((SOk s _) (step_form sc env s))
+    ((SErr e _) (SRead e Nil))
+    (SEnd (SRead (quote empty) Nil))))
+
+(fn env_of ((s Step) (dflt CheckedEnv)) CheckedEnv (match s ((SAcc e) e) (_ dflt)))
+(fn acc ((s Step)) Bool (match s ((SAcc _) True) (_ False)))
+(fn rej ((s Step) (r Symbol)) Bool (match s ((SRej _ t) (sym_eq r t)) (_ False)))
+(fn rerr ((s Step) (r Symbol)) Bool (match s ((SRead t _) (sym_eq r t)) (_ False)))
+(fn pend ((s Step)) Bool (match s ((SPend _ _) True) (_ False)))
+(fn later ((s Step)) Bool (match s ((SLater _) True) (_ False)))
+(fn directive ((s Step)) Bool (match s (SDirective True) (_ False)))
+(fn show_step ((s Step)) (List Int)
+  (match s
+    ((SAcc _) "accepted")
+    ((SRej n r) (append "refused " (append (show_name n) (append " " (chars_of_sym r)))))
+    ((SPend n r) (append "pending " (append (show_name n) (append " " (chars_of_sym r)))))
+    ((SRead e m) (append "read-error " (append (chars_of_sym e) (append ": " m))))
+    (SDirective "directive")
+    ((SLater k) (append "later " (chars_of_sym k)))))
+
+;; two declarations the same? kind, name, level parameters, type, value (expr_eq: binder names ignored)
+(fn decl_eq ((a Declaration) (b Declaration)) Bool
+  (match a
+    ((DefnDecl v1 x1 _ _ _) (match b ((DefnDecl v2 x2 _ _ _) (bool_and (cval_eq v1 v2) (expr_eq x1 x2))) (_ False)))
+    ((ThmDecl v1 x1 _) (match b ((ThmDecl v2 x2 _) (bool_and (cval_eq v1 v2) (expr_eq x1 x2))) (_ False)))
+    ((InductDecl l1 n1 (Cons (InductiveType a1 t1 c1) Nil) _)
+     (match b
+       ((InductDecl l2 n2 (Cons (InductiveType a2 t2 c2) Nil) _)
+        (bool_and (names_eq l1 l2) (bool_and (int_eq n1 n2) (bool_and (name_eq a1 a2) (bool_and (expr_eq t1 t2) (ctors_eq c1 c2))))))
+       (_ False)))
+    (_ False)))
+(fn ctors_eq ((a (List Constructor)) (b (List Constructor))) Bool
+  (measure (struct a))
+  (match a
+    (Nil (match b (Nil True) (_ False)))
+    ((Cons (Constructor n1 t1) r1) (match b ((Cons (Constructor n2 t2) r2) (bool_and (name_eq n1 n2) (bool_and (expr_eq t1 t2) (ctors_eq r1 r2)))) (_ False)))))
+(fn read_one ((sc Scope) (env CheckedEnv) (src (List Int))) (Option Declaration)
+  (match (read_expr False src (read_budget))
+    ((SOk s _) (match (read_decl sc env s) ((RDOk (Cons d _)) (Some d)) (_ None)))
+    (_ None)))

@@ -940,6 +940,22 @@ is `docs/FOUNDATION.md` §5.3.
   dependency in the hostile battery — before slice 2, as a phase-1
   closure defect. R44 ruled sequential (0 sites depend on parallel
   binding); R47 and R48 as doc fixes; R43 and R45 ride slices 3 and 5.
+- **2026-09-12 — slice 2 landed: the s-expression and Stage-0 readers
+  into K.** `sexpr.shard` (§2 to the letter; `'` an identifier
+  character, the quote macro at a token's start only; the profile's
+  `-7` a flag) and `reader.shard` (§4–§5 S → L; scope resolution as
+  data the loader builds; `structure` projections over `proj`; the
+  reducibility height from the environment as environment.cpp does).
+  Scoped to S → L: a `fn`'s body is inseparable from head
+  classification, so its reader lands with the classifier at slice 5.
+  The direct S → L → K path is exercised without any import: a world
+  (`Nat`, `Eq.{u}`, structures, `type`s) declared from S text, `rfl`
+  theorems verified by K, projections and `let` reducing, every
+  refusal with its declared reason, T8's origin-only invariance
+  (whitespace, comments, binder names change no declaration and no
+  admitted identity). `v3/pins/reader/` opens the new tree's corpus: 12
+  S files, each carrying `;; expect:` in a header line, replayed from
+  the empty environment. 13 entrypoints, 0 failed.
 
 ## 10. Related records
 

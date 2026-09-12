@@ -1,0 +1,73 @@
+;;; v3/kernel/test/sexpr_test.shard — the s-expression reader against
+;;; LANGUAGE.md §2: atoms, lists, strings and their escapes, the quote
+;;; macro, the universe suffix, the profile's negative numerals, comments,
+;;; and every reader error with its declared reason.
+
+(import "../host.shard")
+(import "../sexpr.shard")
+
+(type Case (Case (List Int) Bool))
+
+;; read one tree from S text and print it back
+(fn rt ((src (List Int))) (List Int)
+  (match (read_expr False src (read_budget))
+    ((SOk x _) (show_sexpr x))
+    (SEnd "<end>")
+    ((SErr e _) (append "ERR " (chars_of_sym e)))))
+(fn rtp ((src (List Int))) (List Int)
+  (match (read_expr True src (read_budget))
+    ((SOk x _) (show_sexpr x))
+    (SEnd "<end>")
+    ((SErr e _) (append "ERR " (chars_of_sym e)))))
+(fn same ((a (List Int)) (b (List Int))) Bool (int_list_eq a b))
+(fn err_at ((src (List Int)) (e Symbol) (off Int)) Bool
+  (match (read_all False src)
+    ((RAErr e2 k) (bool_and (sym_eq e e2) (int_eq k off)))
+    (_ False)))
+(fn bytes_of ((src (List Int))) (List Int)
+  (match (read_expr False src (read_budget))
+    ((SOk (SStr bs) _) bs)
+    (_ (list 999))))
+
+(fn cases () (List Case)
+  (list
+    (Case "a numeral" (same (rt "42") "42"))
+    (Case "a symbol with dots and primes" (same (rt "List.length'") "List.length'"))
+    (Case "operator symbols" (same (rt "(-> A B)") "(-> A B)"))
+    (Case "a nested list, whitespace normalized" (same (rt "( def  x\n  (f 1)   )") "(def x (f 1))"))
+    (Case "a comment to the end of the line" (same (rt "(a ; the b\n b)") "(a b)"))
+    (Case "the quote macro" (same (rt "'x") "(quote x)"))
+    (Case "the quote macro on a list" (same (rt "'(a b)") "(quote (a b))"))
+    (Case "a string" (same (rt "\"hi\"") "\"hi\""))
+    (Case "string escapes: \\n \\t \\\\ \\\"" (same (bytes_of "\"a\\n\\t\\\\\\\"\"") (list 97 10 9 92 34)))
+    (Case "string escape \\xHH" (same (bytes_of "\"\\x41\\x7a\"") (list 65 122)))
+    (Case "string escape \\u{HHHH} to UTF-8" (same (bytes_of "\"\\u{3b1}\\u{1F600}\"") (list 206 177 240 159 152 128)))
+    (Case "raw UTF-8 in a string" (same (bytes_of "\"α\"") (list 206 177)))
+    (Case "a universe suffix with one level" (same (rt "List.{0}") "List.{0}"))
+    (Case "a universe suffix with names and terms" (same (rt "Sum.{(max u v) 0}") "Sum.{(max u v) 0}"))
+    (Case "a universe suffix with spaces inside" (same (rt "Prod.{ u  v }") "Prod.{u v}"))
+    (Case "a universe suffix inside a list" (same (rt "(List.{u} a)") "(List.{u} a)"))
+    (Case "S: a negative numeral is refused" (same (rt "-7") "ERR negative_numeral"))
+    (Case "profile: a negative numeral" (same (rtp "-7") "-7"))
+    (Case "S: a bare minus is a symbol" (same (rt "(- a b)") "(- a b)"))
+    (Case "a numeral-led atom that is not a numeral" (same (rt "7x") "ERR bad_numeral"))
+    (Case "unexpected close" (same (rt ")") "ERR unexpected_close"))
+    (Case "unterminated list" (same (rt "(a (b c)") "ERR unterminated_list"))
+    (Case "unterminated string" (same (rt "\"abc") "ERR unterminated_string"))
+    (Case "bad escape" (same (rt "\"\\q\"") "ERR bad_escape"))
+    (Case "bad \\u escape" (same (rt "\"\\u{zz}\"") "ERR bad_escape"))
+    (Case "stray brace" (same (rt "}") "ERR stray_brace"))
+    (Case "brace after a non-dot symbol" (same (rt "List{0}") "ERR bad_universe_suffix"))
+    (Case "unterminated universe list" (same (rt "List.{0") "ERR unterminated_universe_list"))
+    (Case "quote at end" (same (rt "'") "ERR quote_at_end"))
+    (Case "only whitespace and comments" (same (rt "  ; nothing\n") "<end>"))
+    (Case "read_all: three forms" (match (read_all False "(a) b ; c\n \"s\"") ((RAOk (Cons _ (Cons _ (Cons _ Nil)))) True) (_ False)))
+    (Case "read_all: the error offset (byte 6)" (err_at "(a b) )" (quote unexpected_close) 6))
+    (Case "size_sexpr" (match (read_expr False "(a (b c) d)" (read_budget)) ((SOk x _) (int_eq (size_sexpr x) 6)) (_ False)))))
+
+(fn run ((cs (List Case)) (fails Int) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil (exit fails (write_line (append "sexpr_test: failures = " (show_int fails)) w)))
+    ((Cons (Case name ok) r) (run r (if ok fails (+ fails 1)) (write_line (append (if ok "PASS " "FAIL ") name) w)))))
+(fn main ((w World)) World (run (cases) 0 w))
