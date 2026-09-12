@@ -121,7 +121,36 @@ s-expression and Stage-0 readers into K; 3 the loader (package root,
 `use`, the `Init` prefix import, acceptance records, `CheckedEnv`
 sealed); 4 views; 5 the classifier, `ev` and route 2's byte-tie; 6
 calc's program half under `ev` and frontend parity retiring the Rust
-loader's parsing role; 7 the doc rows and the CI job.
+loader's parsing role; 7 the doc rows and the CI job. **2026-09-12:**
+GPT-6's implementation review (R42–R48, records §4.7) — R42 fixed at
+`12a7aac` (the accelerator pins compare reference declarations, never
+a hash; hostile battery 7b–7d), R44 ruled: `let` is sequential in L
+and E (0 of 30,611 `let` groups depend on parallel binding).
+
+## Open obligations (2026-09-12; GPT-6 R48)
+
+What the phase-1 result above does **not** establish, beside it until
+each closes on its named gate:
+
+- **R42, the accelerator pins** — fixed at `12a7aac`; closes when the
+  `v3` CI job's new assertion passes on the full export: every one of
+  the 20 candidates pinned by structural comparison (`t0_full.sh`,
+  the driver's `-p` line). Locally: all 20 on compiled K over chunks
+  0–35, byte-ties identical.
+- **R43, the raw-to-checked boundary** — not enforced: the toolchain
+  profile exposes `CheckedEnv`'s constructor (the hostile battery
+  builds one) and `expr_eq`'s positive-id shortcut trusts the ids of
+  whatever nodes a caller hands K. Raw-API callers are reviewed
+  toolchain code until slice 3 seals the environment behind the module
+  surface and an ingestion step rebuilds cached metadata.
+- **The Stage-0 `fn` gap** — a `fn` has an E body and no L meaning, no
+  totality check, and nothing in L cites it, until phase 3's Stage 1
+  (`LANGUAGE.md` §0, §12.6); the driver's status kinds (R45) land at
+  slice 5.
+- **The compiled route** — tested, not proved: route 1's proof is
+  still to come, the interpreter stays the authority, and every full
+  replay is preceded by the byte-tie on a prefix.
+- **§3.5's sealed checked environment** — phase 2, slice 3.
 
 ## The pin (2026-09-06)
 

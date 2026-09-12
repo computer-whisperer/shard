@@ -103,10 +103,14 @@ declared name**, and the content hash of its L revision:
   (`name.shard`'s `Name`), so two modules can never collide in K and
   `check_name` needs no help.
 - **Imported declarations keep their exported names as K names**
-  (`List.length`, not `Init.List.length`): their identity is *the
-  import plus the name* — the import is the declared mapping of law
-  §4.4 (§3.2 below) — and the loader's scope shows them under the
-  prefix `Init`, which every file that imports `Init` opens. So a
+  (`List.length`, not `Init.List.length`): their identity is **the
+  pin plus the name plus the content** — the `import` form is the
+  declared mapping of law §4.4 (§3.2 below), and what it records is
+  the *load*: its prefix is the scope, never part of a declaration's
+  identity, so enlarging a prefix changes nothing about a declaration
+  it already contained (GPT-6 R47, 2026-09-12). The loader's scope
+  shows them under the prefix `Init`, which every file that imports
+  `Init` opens. So a
   native file cannot declare a bare `List.foo`: it declares
   `std.list.List.foo`, and the two spellings of `List.foo` are two
   identities that only an explicit citation tells apart (T5: "two
@@ -160,8 +164,11 @@ in one file and `(import Init WellFounded.fix)` in another checks the
 larger once. The loader refuses an export whose `meta` line (the
 kernel githash and the exporter version, `v3/README.md`'s pin) is not
 the pin it was built against: that check plus the `import` form is the
-declared mapping of law §4.4, and the import's identity is the pin plus
-the prefix name. Chunk 0 of the export (its first 20,000 lines, 519
+declared mapping of law §4.4. The *load* is recorded as the pin plus
+the prefix name (§3.2); a *declaration's* identity is the pin plus its
+name plus its content (§3), so two nested prefixes give their shared
+declarations one identity and a small program never needs to know the
+incidental last declaration of a convenient prefix. Chunk 0 of the export (its first 20,000 lines, 519
 declarations, 8 s on route 3) already holds `ite`, `dite`, `Nat.decLt`,
 `List.length`, `List.get`, `Decidable.decide` and `WellFounded.fix` —
 everything T1's phase-2 items need. The whole export (12 min compiled,
@@ -282,7 +289,7 @@ the toolchain profile.
 E ::= NAME                        ; a parameter or pattern variable (innermost wins), else a call head
     | (HEAD E…)                   ; saturated: a constructor, an E function, a primitive (§6.4) or an extern
     | (match E (PAT E)…)          ; first arm whose pattern matches; refused if not exhaustive (§6.3)
-    | (let ((x E)…) E)            ; parallel bindings (today's semantics, §8); `(let* …)` is not a form
+    | (let ((x E)…) E)            ; sequential bindings (RULED 2026-09-12, R44); `(let* …)` is not a form
     | (if E E E)                  ; branches on a decision tag (§6.2)
     | NUMERAL | "…" | (quote NAME)
 PAT ::= _ | NAME | (CTOR PAT…) | NUMERAL | (quote NAME)
@@ -294,11 +301,17 @@ inductive, an `fn`/`sig fn`, a primitive, an extern. A function name in
 argument position is the escape rule's refusal (law §4.3); there are no
 function values. The E term language is deliberately today's: the
 toolchain's own sources, `examples/calc` and every PORT `fn` are
-already written in it, and its meaning is `ev` (§6.2). Lean's `let` is
-sequential; the E `let` is parallel, as in every existing `fn`. This
-draft keeps the E `let` parallel and makes S's L-level `let` (§5.1)
-sequential, because the two never meet until Stage 1 lowers `fn`
-bodies to L — the point where one rule must be chosen (§13 item 5).
+already written in it, and its meaning is `ev` (§6.2). **`let` is
+sequential in both L and E** (RULED 2026-09-12, GPT-6 R44): each
+binding sees the ones before it, as Lean's `let` does; `ev` binds in
+order and Stage 1 lowers an `ELet` to nested one-binding `Let`s. The
+bootstrap's evaluator binds in parallel, and the tree was measured
+before ruling: of its 30,611 `let` groups, 162 bind two or more names
+and **none** has a later right-hand side citing an earlier binder (the
+scanner's one hit is a quoted symbol), so every existing source means
+the same under both rules, no migration is needed, and the toolchain
+profile changes no result while the bootstrap still runs it; the V3
+reader (slice 2) gives the toolchain's own sources the sequential rule.
 
 ## 6. E — the executable fragment at phase 2
 
@@ -318,7 +331,7 @@ classified:
 - `ETerm`: bound variable (de Bruijn, 0 innermost); literal;
   constructor, function call, **primitive** and **extern** — four
   distinct nodes, each with a resolved `Name` and saturated arguments,
-  so `ev` never guesses what a head is; `match` with arms; parallel
+  so `ev` never guesses what a head is; `match` with arms; sequential
   `let`; `if`.
 - `EPat`: variable (binds the next index), constructor with
   sub-patterns, literal.
@@ -353,8 +366,9 @@ of exactly those values, fuel less one; a primitive applies §6.4's
 table — a guard failure (division by zero for the profile's `/`, a
 shift out of range) is `EvStuck`, never a value; `match` tries arms in
 order and the first matching pattern binds its variables, no arm
-matching is `EvStuck`; `let` evaluates every right-hand side in the
-outer frame and pushes them in order; `if` evaluates its condition to a
+matching is `EvStuck`; `let` evaluates its right-hand sides in order,
+each in the frame the earlier bindings extended (sequential, RULED
+2026-09-12 — R44); `if` evaluates its condition to a
 cell and takes the **then** branch iff the cell's constructor is the
 **second** constructor of its type — `Bool.true`, `Decidable.isTrue`
 and the toolchain's `True` all are, which is what "a decision tag with
@@ -657,7 +671,7 @@ migration table of law §10.3 owns the name and behavior changes of the
 | return types unchecked (no load-time typing) | **changed at phase 3** | Stage 1 types every `fn` body against its signature; v2 code that runs only because nothing checked it will be refused then. At phase 2 unchanged |
 | `if` on `True`/`False` by constructor name | carried, generalized | §6.2's tag rule; v2's `(type Bool (False) (True))` has Init's constructor order |
 | `match`: first match wins, nested patterns, integer and `(quote S)` patterns, `_`, bare 0-ary constructors | carried in E | symbol patterns profile only; Stage 1's match compilation must keep first-match semantics (Lean's does) |
-| parallel `let`, no `let*` | carried in E | §5.4; the L-level `let` is sequential (§5.1); one rule chosen at Stage 1 (§13 item 5) |
+| parallel `let`, no `let*` | **changed**: sequential in L and E (RULED 2026-09-12, R44) | §5.4; 0 of the tree's 30,611 `let` groups depend on parallel binding, so no source changes meaning; the bootstrap evaluator's parallel rule gives identical results on all of them until the V3 reader replaces it (slice 2) |
 | `(quote S)`, `'S`, the `Symbol` type, `sym_eq`, `sym_of_chars`, `chars_of_sym` | profile only; **AT RISK in S** | S has no symbol type: a name is a `Name` value. The toolchain (ten kernel files) and the tools use symbols as tags and identifiers; whether V3 source gets a `Name` literal is a phase-3 decision |
 | `(list a b c)` (9,455 uses outside `v3/`) | profile only; **AT RISK in S** | Lean's `[a, b, c]` is elaborator sugar; Stage 1 should add a list literal or every ported `fn` spells `cons` chains |
 | `"…"` = UTF-8 bytes as `(List Int)`, on the extern wire too | **changed** in S | K's `String` literal, its E realization phase 3 (§5.3). **AT RISK:** the extern wire's byte convention under the naming law (`List UInt8`? `ByteArray`?) is undecided; the profile keeps bytes |
@@ -738,6 +752,26 @@ row.
 | `tools/digest`, `explain`, `prove`, `search` | new code onto law §7.3 | MANIFEST |
 | `tools/zed-shard`, `shard-viewer` keyword lists | the V3 keywords (§4) | law §10.5, phase 2 |
 
+### 12.6 The AT RISK rows: owner, consumer, regression (R47, 2026-09-12)
+
+Each row above marked AT RISK, with who decides it, which consumer
+first needs it, the small regression that shows the gap or the fix,
+and the disposition this draft intends.
+
+| row | owner | first consumer | regression | intended disposition |
+|---|---|---|---|---|
+| symbols in S (`quote`, `Symbol`, `sym_eq`) | phase 3, Stage 1 (the reader) | the toolchain's own sources (ten kernel files) when they port to L | a `fn` using `(quote x)` and `sym_eq` under the V3 reader is refused with a named reason until decided | a `Name` literal, or symbols stay profile-only |
+| `(list a b c)` | phase 3, Stage 1 | every ported `fn` (9,455 sites); calc's program half runs under the profile at slice 6 | `(list 1 2)` under the V3 reader refused by name | a list literal at Stage 1 |
+| the extern wire's bytes | slice 5 (`ev`'s extern boundary); phase 3 for the L type | `sha256sum`'s bin; calc's app step | `write_line` of a literal round-trips its bytes through the driver | bytes at phase 2; `ByteArray` or `List UInt8` decided with §5.3's `String` realization |
+| negative numerals | phase 3, Stage 1 | calc (negative `Int` results); `std/div` | `-7` under the V3 reader = the constructor term at Stage 0 | Stage 1 special-cases `-` on a numeral; ruled then |
+| `gen_fresh` | slice 5 | the ten kernel files (canon, tactics) as they port | a `fn` reaching `gen_fresh` is `EvStuck` under pure `ev` | a threaded counter in the ported toolchain, or an extern the driver performs |
+| `with_F` updaters, order-free `make` | phase 3, Stage 1 | 237 sites (`models/imp`, the tools) | `(with_F s v)` refused by name until the update form exists | Stage 1 record-update sugar (Lean's `{ s with f := v }`) |
+| `std/word` widths beyond 64 | phase 5 (the word/float line) | none today (the 2026-09-02 ruling kept the widths as a facility) | INVENTORY's static `w ≤ 64` bound on `BitVec w` | static `w ≤ 64` unless a consumer appears |
+| `S^`, `inline`, `chain` | phase 3 (I) | the PORT theorem corpus | a claim whose statement needs a literal tower under I's `rw` | dropped; phase 3 confirms |
+| `(lib …)` | phase 5 | `tools/lowcheck`'s fixtures (4 uses) | the fixtures under the profile | decided with the lowering-side toolchain |
+| `subterm-induct`/`(below)`, `fin-split` | phase 3 (I steps) | the regenerated certificate kits; the std proofs that use them | one theorem each: `tb_len`'s strong induction; one bounded enumeration | `wf` over `sizeOf` and `decide`/`omega`; a subterm rule only if a ported proof needs it |
+| no totality check on any `fn` during Stage 0 | phase 3, Stage 1 (law §4.5) | every `fn`; calc's program half at slice 6 | R45's self-recursive candidate exhausts and gains no equations (slice 5's test) | measure obligations discharged at Stage 1; the runnable-only status visible in the driver's output meanwhile (R45) |
+
 ## 13. For ratification — decisions made here beyond the law's text
 
 1. **Native K names carry the module path** (`std.list.List.sum`);
@@ -752,8 +786,8 @@ row.
    hint spelling. They are K's kinds; the hostile battery and views
    need them.
 4. **`NAME.realize_N`** for a supplied realization's equations (§7.4).
-5. **S's L-level `let` is sequential, the E `let` is parallel** (§5.4);
-   the rule for `fn` bodies in L is chosen at Stage 1.
+5. **`let` is sequential in both L and E** — RULED 2026-09-12 (GPT-6
+   R44; the measurement in §5.4).
 6. **`(import Init NAME)`**, a dependency-ordered prefix named by its
    last declaration, as the whole import mechanism at phase 2.
    Alternative: closure imports by name set, which need an index of
