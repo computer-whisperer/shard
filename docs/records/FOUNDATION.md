@@ -1031,7 +1031,10 @@ is `docs/FOUNDATION.md` §5.3.
   in `loader_test`; 15 entrypoints, 0 failed. What waits: the seal of
   `CheckedEnv` behind `kernel/env`'s view needs the toolchain's own
   sources under this loader (slice 6); the private-equality leak is
-  refused at classification (slice 5).
+  refused at classification (slice 5). **CI (pipeline 466, `2f7f032`):**
+  green — 15 entrypoints, the full-export replay on compiled K in
+  2,459 s at a 31.0 GB peak, all 20 candidates pinned, closures
+  identical, byte-ties identical.
 
 ## 10. Related records
 

@@ -183,7 +183,10 @@ declarations under `IMPL`. Tests: 14 view cases in `v3/pins/loader/`
 (34 in all; a `;; roots:` header names what the loader is given) and
 five in `loader_test` (a consumer's import loads the view only; the
 consumer's theorem records the parameters it rests on; the directory
-as a root discharges every parameter); 15 entrypoints, 0 failed.
+as a root discharges every parameter); 15 entrypoints, 0 failed. **CI
+(pipeline 466, `2f7f032`):** green — 15 entrypoints, the full-export
+replay on compiled K in 2,459 s at a 31.0 GB peak, all 20 candidates
+pinned, closures identical, byte-ties identical.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
