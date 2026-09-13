@@ -261,7 +261,12 @@ the body's environment, and gave the `equations` clause its levels.
 Tests: 21 realize pins (74 in all), three `loader_test` cases (R45's
 third test: the same body as a `fn` is `RUNNABLE`, as a `realize`
 `REALIZE` with an equation a theorem cites and a body `ev` runs under
-the L identity), 21 `ev_test` cases for the Nat set (56 in all).
+the L identity), 21 `ev_test` cases for the Nat set (56 in all). **CI
+(pipeline 470, `6e11748`):** green — 17 entrypoints, route 2's byte-tie
+in 47 s on the runner, the full-export replay on compiled K in 2,458 s
+at a 31.0 GB peak, all 20 candidates pinned, closures identical,
+byte-ties identical (engine 193 s, corpus 1,479 s, v3 3,234 s; the
+pipeline 3,428 s).
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

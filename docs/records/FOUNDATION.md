@@ -1179,7 +1179,10 @@ is `docs/FOUNDATION.md` §5.3.
   `fn` is `RUNNABLE` and unlinkable (as after a refused `fn`, the load
   already failing). Tests: 21 `realize_*` pins (74 in all), three
   `loader_test` cases (R45's third test), 21 `ev_test` cases (56 in
-  all).
+  all). **CI (pipeline 470, `6e11748`):** green — 17 entrypoints,
+  route 2's byte-tie in 47 s on the runner, the full-export replay on
+  compiled K in 2,458 s at a 31.0 GB peak, all 20 candidates pinned,
+  closures identical, byte-ties identical.
 
 ## 10. Related records
 
