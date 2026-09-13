@@ -38,15 +38,20 @@
   (LBody Name Int LTerm)       ; a function: identity, parameter count, body
   (LExtern Name Symbol Int)    ; an extern: identity, its short name (the host's), parameter count
   (LUnlinked Name))            ; a sig fn no implementation was linked to
-;; the wire's tags: nil cons none some pair false true
-(type Wire (Wire Int Int Int Int Int Int Int))
-(fn wire_nil ((w Wire)) Int (match w ((Wire a _ _ _ _ _ _) a)))
-(fn wire_cons ((w Wire)) Int (match w ((Wire _ a _ _ _ _ _) a)))
-(fn wire_none ((w Wire)) Int (match w ((Wire _ _ a _ _ _ _) a)))
-(fn wire_some ((w Wire)) Int (match w ((Wire _ _ _ a _ _ _) a)))
-(fn wire_pair ((w Wire)) Int (match w ((Wire _ _ _ _ a _ _) a)))
-(fn wire_false ((w Wire)) Int (match w ((Wire _ _ _ _ _ a _) a)))
-(fn wire_true ((w Wire)) Int (match w ((Wire _ _ _ _ _ _ a) a)))
+;; the wire's tags: nil cons none some pair false true — and, for the table's Nat set
+;; (§7.5), Init's Bool.false Bool.true and Decidable.isFalse Decidable.isTrue
+(type Wire (Wire Int Int Int Int Int Int Int Int Int Int Int))
+(fn wire_nil ((w Wire)) Int (match w ((Wire a _ _ _ _ _ _ _ _ _ _) a)))
+(fn wire_cons ((w Wire)) Int (match w ((Wire _ a _ _ _ _ _ _ _ _ _) a)))
+(fn wire_none ((w Wire)) Int (match w ((Wire _ _ a _ _ _ _ _ _ _ _) a)))
+(fn wire_some ((w Wire)) Int (match w ((Wire _ _ _ a _ _ _ _ _ _ _) a)))
+(fn wire_pair ((w Wire)) Int (match w ((Wire _ _ _ _ a _ _ _ _ _ _) a)))
+(fn wire_false ((w Wire)) Int (match w ((Wire _ _ _ _ _ a _ _ _ _ _) a)))
+(fn wire_true ((w Wire)) Int (match w ((Wire _ _ _ _ _ _ a _ _ _ _) a)))
+(fn wire_bfalse ((w Wire)) Int (match w ((Wire _ _ _ _ _ _ _ a _ _ _) a)))
+(fn wire_btrue ((w Wire)) Int (match w ((Wire _ _ _ _ _ _ _ _ a _ _) a)))
+(fn wire_dfalse ((w Wire)) Int (match w ((Wire _ _ _ _ _ _ _ _ _ a _) a)))
+(fn wire_dtrue ((w Wire)) Int (match w ((Wire _ _ _ _ _ _ _ _ _ _ a) a)))
 ;; functions by index, constructor tags by identity, identities by tag, function indices by identity, the wire
 (type Linked (Linked (IntMap LFn) (IntMap (List (Pair Name Int))) (IntMap Name) (IntMap (List (Pair Name Int))) Wire))
 (fn lk_fns ((l Linked)) (IntMap LFn) (match l ((Linked f _ _ _ _) f)))
@@ -112,7 +117,15 @@
                  (match (intern_wire t5 (prelude_false) 0)
                    ((Pair t6 fl)
                     (match (intern_wire t6 (prelude_true) 1)
-                      ((Pair t7 tr) (Pair t7 (Wire nl cs nn sm pr fl tr)))))))))))))))))
+                      ((Pair t7 tr)
+                       (match (intern_wire t7 (n2 (quote Bool) (quote false)) 0)
+                         ((Pair t8 bf)
+                          (match (intern_wire t8 (n2 (quote Bool) (quote true)) 1)
+                            ((Pair t9 bt)
+                             (match (intern_wire t9 (n2 (quote Decidable) (quote isFalse)) 0)
+                               ((Pair t10 df)
+                                (match (intern_wire t10 (n2 (quote Decidable) (quote isTrue)) 1)
+                                  ((Pair t11 dt) (Pair t11 (Wire nl cs nn sm pr fl tr bf bt df dt)))))))))))))))))))))))))
 ;; function indices
 (fn index_fns ((ds (List EDecl)) (j Int) (ids (IntMap (List (Pair Name Int))))) (IntMap (List (Pair Name Int)))
   (measure (struct ds))
@@ -284,6 +297,9 @@
        None)))
     (_ None))))
 (fn bool_cell ((lk Linked) (b Bool)) IVal (IVCtor (if b (wire_true (lk_wire lk)) (wire_false (lk_wire lk))) Nil))
+;; Init's Bool and Decidable cells: what the table's Nat set returns (§7.5)
+(fn init_bool_cell ((lk Linked) (b Bool)) IVal (IVCtor (if b (wire_btrue (lk_wire lk)) (wire_bfalse (lk_wire lk))) Nil))
+(fn dec_cell ((lk Linked) (b Bool)) IVal (IVCtor (if b (wire_dtrue (lk_wire lk)) (wire_dfalse (lk_wire lk))) Nil))
 (fn pair_cell ((lk Linked) (a IVal) (b IVal)) IVal (IVCtor (wire_pair (lk_wire lk)) (list a b)))
 (fn some_cell ((lk Linked) (a IVal)) IVal (IVCtor (wire_some (lk_wire lk)) (list a)))
 (fn none_cell ((lk Linked)) IVal (IVCtor (wire_none (lk_wire lk)) Nil))
@@ -428,7 +444,41 @@
   (if (int_eq code 25) (Some (IVInt (bxor x y)))
   (if (int_eq code 26) (Some (IVInt (nat_shl x y)))
   (if (int_eq code 27) (Some (IVInt (nat_shr x y)))
-    None)))))))))))
+    (nat_prim lk code x y))))))))))))
+;; K's accelerated Nat set under its identities (§7.5; tc.shard's nat_apply): total where
+;; Lean's are — Nat.div x 0 = 0, Nat.mod x 0 = x — and stuck where K exhausts: a result past
+;; K's literal size (nat_max_size, 2^27 bytes), a power's exponent past its count or its
+;; size estimate
+(fn nat_prim ((lk Linked) (code Int) (x Int) (y Int)) (Option IVal)
+  (if (int_eq code 28) (nat_sized (+ x y))
+  (if (int_eq code 29) (nat_sized (* x y))
+  (if (int_eq code 30) (Some (IVInt (if (int_eq y 0) 0 (/ x y))))
+  (if (int_eq code 31) (Some (IVInt (if (int_eq y 0) x (mod x y))))
+  (if (int_eq code 32) (Some (IVInt (nat_gcd_ev x y)))
+  (if (int_eq code 33)
+    (if (lt 4294967295 y) None
+    (if (bool_and (lt 1 x) (bool_and (lt 0 y) (lt (ediv (ev_nat_max_size) y) (ev_nat_bytes x)))) None
+      (nat_sized (nat_pow_ev x y))))
+  (if (int_eq code 34) (Some (init_bool_cell lk (int_eq x y)))
+  (if (int_eq code 35) (Some (init_bool_cell lk (le x y)))
+  (if (int_eq code 36) (Some (dec_cell lk (int_eq x y)))
+  (if (int_eq code 37) (Some (dec_cell lk (lt x y)))
+  (if (int_eq code 38) (Some (dec_cell lk (le x y)))
+    None))))))))))))
+(fn ev_nat_max_size () Int 134217728)
+(fn ev_nat_bytes_go ((n Int) (acc Int)) Int
+  (measure n)
+  (if (le n 0) acc (ev_nat_bytes_go (ediv n 256) (+ acc 1))))
+(fn ev_nat_bytes ((n Int)) Int (ev_nat_bytes_go n 0))
+(fn nat_sized ((r Int)) (Option IVal) (if (lt (ev_nat_max_size) (ev_nat_bytes r)) None (Some (IVInt r))))
+(fn nat_gcd_ev ((a Int) (b Int)) Int
+  (measure b)
+  (if (le b 0) a (nat_gcd_ev b (mod a b))))
+(fn nat_pow_ev ((b Int) (e Int)) Int
+  (measure e)
+  (if (le e 0) 1
+    (let ((h (nat_pow_ev b (ediv e 2))))
+      (if (int_eq (mod e 2) 0) (* h h) (* (* h h) b)))))
 ;; Nat.shiftLeft n k = n · 2^k and Nat.shiftRight n k = n / 2^k, total (Lean's), in
 ;; steps of 62 bits over the host's guarded shifts; a right shift stops at zero
 (fn nat_shl ((n Int) (k Int)) Int

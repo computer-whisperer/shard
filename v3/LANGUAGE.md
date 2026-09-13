@@ -26,7 +26,14 @@
 > leak; the toolchain profile as read) and `v3/kernel/ev.shard` (`ev` as a
 > machine with an explicit continuation, `run_prog` performing the host's
 > externs); K's own sources load under the profile and K interpreted by `ev`
-> byte-ties route 3 on the fixture (route 2). `realize` waits for slice 5b.
+> byte-ties route 3 on the fixture (route 2). **Slice 5b built §7 as §7.5:**
+> `v3/kernel/realize.shard` (the supplied form's equations by first-order
+> matching over the constant's telescope, the case tree compiled column by
+> column, descent and order; the derived view's erasure by roles),
+> `v3/kernel/erase.shard` (Init's inductives as E types on first citation,
+> the roles of a constant's binders), `v3/kernel/etable.shard` (the E table,
+> split out of the classifier); K's accelerated Nat set in the primitive
+> table under its identities; the `REALIZE` record; R45's third test.
 > It supersedes `docs/LANGUAGE.md` for the `v3/`
 > tree (FOUNDATION §10.5); the old document keeps describing the old
 > tree until the flip. The proof IR **I** is phase 3's chapter and is
@@ -211,10 +218,11 @@ INIT NAME: N declarations admitted                 ; the Init load through NAME 
 ACCEPT M.x module=M hash=H axioms=a,b init=NAME    ; identity, module, fingerprint, closure, the prefix at the check
 MODULE M file=F hash=H sees=M1,M2                  ; the module done: its hash over its declarations, its closure
 RUNNABLE fn M.f | RUNNABLE extern M.e | RUNNABLE type M.T   ; an E declaration classified (§6.7; R45's status kind: runnable, no L meaning)
+REALIZE NAME supplied equations=M.NAME.realize_1,… | REALIZE NAME view equations=   ; a realization attached under NAME's identity (§7.5)
 REFUSE M.x REASON | REFUSE M.f REASON: …           ; K's refusal; the classifier's, with its message
-POLICY M.x outside the policy: a | PENDING M.x sorry | LATER realize M.f
+POLICY M.x outside the policy: a | PENDING M.x sorry | PENDING NAME measure
 READ-ERROR F REASON: … | LOAD-ERROR F REASON: …    ; the file's loading ends here
-LOAD: modules … accepted … runnable … refused … pending … later … errors …
+LOAD: modules … accepted … runnable … refused … pending … realized … errors …
 ```
 
 The environment revision of an `ACCEPT` line is its `init=` prefix
@@ -509,8 +517,14 @@ with `x / 0 = 0` and `tmod x 0 = x`, `Int.ediv`/`Int.emod` likewise,
 non-negative values. The profile's `/` staying stuck at zero and
 `Int.tdiv` returning zero are two entries, not one entry with a mode;
 the migration table calls that row a behavior change and this is where
-the change is visible. Every entry has a positive, a negative and a
-boundary case in the execution-parity suite.
+the change is visible. **Slice 5b (§7.5):** K's own accelerated `Nat`
+set joins the table under its identities — `Nat.add mul div mod gcd
+pow beq ble` beside `Nat.sub` and the bitwise five — and the three
+decisions `Nat.decEq decLt decLe`; the naming-law entries are L
+constants under their own names (`prim_l_identity`), the profile's
+spellings have none, and an entry of the table is never `realize`d:
+K's rule is its realization. Every entry has a positive, a negative
+and a boundary case in the execution-parity suite.
 
 ### 6.5 Views (law §8.2) at phase 2
 
@@ -768,15 +782,11 @@ reader kit one, all found by the matrix.
 
 **Dropped:** `gen_fresh` (§12.1's AT RISK row): no V3 file calls it,
 the table does not carry it, and a ported source that needs fresh
-names threads a counter. **Deferred to its own slice (5b):** `realize`
-in both forms and R45's third test (a checked realization
-distinguishable from a linked function). The supplied form's equations
-(§7.2) translate an E body into L head for head, which needs the L type
-of every runtime subterm — a constructor's parameters, a callee's
-universe arguments — and Stage 0 has types only on binders; slice 5b
-decides whether the equations are stated for bodies whose subterms'
-types the binders determine, or wait for Stage 1's typing. §3.2 now
-lists the `RUNNABLE` record, §13 the decisions here (items 15–19).
+names threads a counter. **Built at slice 5b (§7.5):** `realize`
+in both forms and R45's third test; the E→L translation question
+resolved by first-order matching over the callee's telescope with the
+classifier's static types as the fallback. §3.2 lists the `RUNNABLE`
+and `REALIZE` records, §13 the decisions here (items 15–24).
 
 ## 7. `realize` — the surface, fixed at phase 2
 
@@ -867,6 +877,176 @@ some constants — a same-named native theorem would collide at
 `check_name` once an `Init` prefix reaches them. `realize_N` is
 guessable from this one rule (law §5.3's grammar) and cannot collide.
 A ratification item (§13).
+
+### 7.5 `realize` as built (slice 5b, 2026-09-13)
+
+Written before the code, as §6.6 and §6.7 were. §7.1–7.4 stay the
+specification; this section fixes what they left to the
+implementation, and three decisions the supplied form needs before a
+single equation can be stated (§13 items 20–24).
+
+**Init's inductives are E types.** An inductive of the checked
+environment — Lean's own or a native `inductive` — is **E-eligible**
+when it has no indices, its result sort is not `Prop`, every parameter
+is a type (`Sort` at `Type` once its level is solved) or a proposition
+(erased), every constructor field is an E type over the type
+parameters or a proposition (erased), and no field is a `Sort` or a
+function. `Nat` and `Int` are excluded by name: their realization is
+the unbounded integer, and a citation of `Nat.succ` or `Int.ofNat` in
+an E position is refused with the pointer to numerals and the
+primitives (`nat_constructor`). Levels are solved from the parameters'
+sorts (`Sort (u+1)` gives `u := 0`, `Sort u` gives `u := 1`), then the
+result sort; an inductive whose levels cannot be solved that way is
+not eligible. An eligible inductive enters the E table **on first
+citation** — each S form is scanned for its names before it is
+classified, every name that resolves to an eligible inductive or one
+of its constructors registers the inductive with its constructors
+(ordinals, runtime field types) under the module that declares it, or
+under `Init` — so `List.cons` is a constructor in a pattern and
+`(List Nat)` an E type in a binder, and the pattern matrix, the leak
+check and `ev` treat them as any `type`. `Decidable` is E-eligible
+with no type parameter and two field-less constructors: a decision
+tag with erased payload (§6.2); `Prod` and `Sum`, whose result sort is
+a `max` the binders already solve, are; `Fin n` is not — a value
+parameter — so §7.1's `Fin.mk` example waits for the reserved
+type-representation form (phase 3). A constructor with an erased field can
+be **matched** in E and never **built** there (`erased_field`): the
+proof is not there. S numerals type as `Nat` (the slice-5 pass typed
+them as `Int`).
+
+**The primitive table's L identities.** Entries 0–17 (the profile's
+spellings) have none: they are the bootstrap's Int operations and are
+refused inside a `realize` body with the pointer to the naming-law
+spelling (`no_l_identity`). Entries 18 and up are L constants under
+their own names. Slice 5b adds K's own accelerated `Nat` set —
+`Nat.add Nat.mul Nat.div Nat.mod Nat.gcd Nat.pow Nat.beq Nat.ble`
+beside the `Nat.sub` and bitwise entries of slice 5 (`reduce_nat`'s
+list; `Nat.div x 0 = 0`, `Nat.mod x 0 = x`, `Nat.pow` stuck where K
+exhausts) — and the three decisions `if` needs, `Nat.decEq Nat.decLt
+Nat.decLe`. `Nat.beq` and `Nat.ble` return `Init`'s `Bool` cells,
+the decisions `Decidable.isFalse`/`isTrue` cells with no fields; the
+linker interns those four identities as it interns the wire's. An
+entry of the table is never `realize`d (`realize_primitive`): K's rule
+is its realization, and a body cites it as a primitive. The equation a
+realization states *through* such an entry — `twice n = Nat.add n n`
+for a native `def` — is proven by K's literal rule for the same
+constant, which is the point: the table's `Nat` entries are K's own
+accelerated operations under their identities.
+
+**The supplied form.** `(realize NAME BINDERS RET (measure M)? BODY
+(equations THM…)?)`, NAME resolving through the scope to a
+**definition** of the checked environment (`realize_kind` for an
+axiom, a theorem, a constructor). NAME's L type is walked binder by
+binder and each binder classified by role: a `Sort`-typed binder is a
+**type parameter** (`Type` once the constant's levels are solved as
+above; any other universe is `realize_signature`), a proposition is
+**erased** (it becomes a binder of every equation and nothing in E), a
+data binder's type must translate to an E type, and a function-typed
+binder is `realize_signature` with the binder named (law §4.3). A
+Pi over a proposition erases to its codomain, so `dite`'s `t : c → α`
+is an E binder of type `α`. The E signature must match positionally:
+the `(T Type)` binders are the type parameters in order, the data
+binders' E types equal the erasure's, RET the result's; the message
+names the first binder that differs. BODY is read exactly as a `fn`
+body (§6.7's classifier, every check), the measure as a `fn`'s.
+
+**Equations.** The body's **leading matches on parameters and
+pattern variables** form a case tree; its leaves are the equations,
+one per leaf. The tree is compiled column by column as Lean's match
+compiler does (the pattern matrix of §6.7's exhaustiveness check,
+specialized instead of tested): for the first column holding a
+constructor pattern, each constructor of the column's inductive gives
+a branch — the constructor's fields become fresh binders (the erased
+fields too; a runtime field is a new column), the column's variable
+is **replaced by the constructor term** everywhere it occurs (the
+left-hand side included, so nested patterns state nested terms), a row
+whose pattern is a variable binds it to that term and continues into
+every branch. A leaf's left-hand side is `NAME` applied to the type
+parameters, the erased binders and the parameters with their
+constructor terms; its right-hand side is the translation of the
+first matching arm's body; its binders, in order, are the type
+parameters and erased binders, the parameters not split, then the
+fields of each split as it happened (a theorem cites
+`List.append.realize_2 a ys x t`). A numeral pattern in the tree is
+`equation_form` (Stage 1's numeral rule). The translation `⟦·⟧` of a
+body: a bound variable is its binder; a numeral is K's literal; a
+constructor, a call and a primitive apply the constant's L identity
+to **its whole telescope** — the runtime binders from the E arguments,
+the type parameters and erased binders solved by **first-order
+matching** of each runtime binder's declared type against the
+argument's inferred L type (`xs : List α` against `List Nat` fixes
+`α`), with the classifier's static E type as the fallback for a bare
+constructor (`List.nil`), and `untyped_subterm` naming the position
+when neither determines a binder; a `let` is K's `let` with the
+inferred type; a `match` whose scrutinee is not a variable, and an
+`if`, are the scrutinee's inductive's **recursor** with a constant
+motive — the arms flat constructor patterns each once, a variable arm
+expanded into the constructors it covers, the recursor's minor
+premises lambdas over every field and induction hypothesis, unused
+where E has no name for them. Equation *N* is declared as the theorem
+`NAME.realize_N` in the realizing module — `NAME.realize_N` itself for
+a constant of that module, the module's prefix in front of NAME's
+spelling otherwise — at the constant's solved levels and with no
+universe parameters of its own (a theorem at another universe cannot
+cite it until Stage 1), proven by `Eq.refl` or by the *N*-th theorem
+of the `equations` clause applied to the binders, that theorem taken
+at no universe arguments or at the constant's solved levels
+(`equations_count` when the clause's length is not the leaf count,
+`universe_arity` otherwise),
+and admitted through the same path as any theorem (the policy, the
+`ACCEPT` record); K's refusal of one equation refuses the form and
+attaches nothing — the earlier equations are not admitted either.
+
+**Descent and order.** `(measure (struct x))` is discharged
+syntactically: every self-call passes, at `x`'s position, a variable
+bound by a constructor pattern under `x` (any depth), so `f x = f x`
+is `realize_descent` although its equation proves; `(measure E)` is
+recorded `PENDING NAME measure` and the realization attached — except
+that a self-call on the parameters themselves is `realize_descent`
+under any measure, since no measure decreases on it; no measure with a
+self-call is `realize_recursion`. A callee must be an L constant with
+a realization **already attached** or a view's `sig fn`; a callee
+realized later in the file is `realize_order`, a `fn` or an extern
+`no_l_meaning`. And a `fn` or `extern` may not take an admitted
+constant's identity at all (`name_taken`, the loader): only a
+`realize` attaches an E body under one, and its equations are the
+warrant — the review of this slice found a `fn append` in a module
+named `List` standing in for Lean's `List.append` in a realization's
+body, with the equations stated about Lean's. Realizations therefore
+form no cycle but self-recursion, and self-recursion is structural.
+
+**The derived view.** `(realize NAME (view))` erases NAME's value
+under the same roles: the leading lambdas are the binders (a value
+with fewer lambdas than binders is applied to the rest); a constant
+applied to arguments is, by its identity, a constructor of an
+E-eligible inductive (the static and erased arguments dropped), a
+constant with a realization attached (a call, likewise), a primitive
+of the table (`Nat.succ x` is `Nat.add x 1`, `OfNat.ofNat Nat n _` is
+the numeral), `T.casesOn` or `T.rec` of an E-eligible `T` (a `match`,
+each minor's field lambdas the pattern's variables; a minor that uses
+an induction hypothesis is `recursion_structure`), `ite` or `dite`
+(an `if`; `dite`'s branches applied to their erased proof); a
+projection is a `match` on the structure's constructor; a `let` whose
+value is a proposition or a type vanishes, any other is an E `let`; a
+variable of erased role in a runtime position is `erased_in_runtime`,
+a lambda or an unknown-headed application `function_value`,
+`brecOn`, `WellFounded.fix`, `Acc.rec`, `Quot.*` and
+`Classical.choice` are refused by name (`recursion_structure`,
+`noncomputable`), any other constant `no_realization`. The result is
+classified as a `fn` body and attached under NAME's identity with no
+equations (§7.1).
+
+**Records and the driver.** `REALIZE NAME supplied|view
+equations=NAME.realize_1,…` counts in the new `realized` column; the
+equations are `ACCEPT` lines; a K refusal of an equation is `REFUSE
+NAME.realize_N reason`; the classifier's refusals of the form are
+`REFUSE NAME reason: message` as a `fn`'s. The `LATER` record is
+gone: `realize` is built, and a `fulfills` outside an implementation
+check is the load error `fulfills_outside_impl` (give the loader the
+directory). R45's third test is the pair: the same body as a `fn` is
+`RUNNABLE` with no L meaning, as a `realize` it is `REALIZE` with
+accepted equations a theorem can cite and a body `ev` runs under the
+L identity.
 
 ## 8. The toolchain profile
 
@@ -959,7 +1139,7 @@ never compared as verdicts.
 | deriving under a declared policy | §5.1 | 3 |
 | tactic blocks, the I elaborator, the goal graph, `sorry` as a hole | §5.1 Stage 2, §7 | 3 |
 | typeclasses, instances, coercions | §5.1 Stage 3 | 3 |
-| the `Init` import with E realizations attached; `String`, `Array`, `ByteArray` representations | §4.4, INVENTORY | 3 |
+| the `Init` import with E realizations attached; `String`, `Array`, `ByteArray` representations (Init's E-eligible inductives are E types since slice 5b, §7.5; a `realize` attaches a body per constant) | §4.4, INVENTORY | 3 |
 | lambda lifting, templates, specialization | §4.3 | 3–4 |
 | `bin`, `requires`, the World-use check, effect traces | §4.7 | 4 |
 | prepared handles, long-lived environments | §9.3, T6 | 4 |
@@ -985,7 +1165,7 @@ migration table of law §10.3 owns the name and behavior changes of the
 
 | v2 | fate | where / note |
 |---|---|---|
-| `(type (NAME T…) (CTOR F…)…)` | carried | §4; constructors gain the identity `NAME.CTOR`; a bare constructor citation needs the declaring file or a `use` (§13 item 7) |
+| `(type (NAME T…) (CTOR F…)…)` | carried | §4; constructors gain the identity `NAME.CTOR`; a bare constructor citation needs the declaring file or a `use` (§13 item 7). Since slice 5b `Init`'s E-eligible inductives (`List`, `Option`, `Bool`, `Decidable`, `Array`, …) are E types with their constructors in S (§7.5); `Nat.succ` is refused with the pointer to numerals |
 | `(fn NAME PARAMS RET BODY)` | carried as E; **changed** | §0: no L meaning at phase 2 — in v2 a `fn` was also the object of `unfold`/`simp` in proofs; restored at phase 3 |
 | polymorphic head `(fn (append T) …)`; bare type variables in binders auto-bound (`(xs (List T))`) | re-spelled in S; carried in the profile | S: explicit `((T Type) …)` binders — law §5.3 departure (4), "auto-bound implicits → explicit binders"; the profile keeps both v2 spellings (§8) |
 | `(extern NAME PARAMS RET)`, polymorphic externs | carried | §4; the roster is the host's (§12.4) |
@@ -1091,7 +1271,7 @@ and the disposition this draft intends.
 | `S^`, `inline`, `chain` | phase 3 (I) | the PORT theorem corpus | a claim whose statement needs a literal tower under I's `rw` | dropped; phase 3 confirms |
 | `(lib …)` | phase 5 | `tools/lowcheck`'s fixtures (4 uses) | the fixtures under the profile | decided with the lowering-side toolchain |
 | `subterm-induct`/`(below)`, `fin-split` | phase 3 (I steps) | the regenerated certificate kits; the std proofs that use them | one theorem each: `tb_len`'s strong induction; one bounded enumeration | `wf` over `sizeOf` and `decide`/`omega`; a subterm rule only if a ported proof needs it |
-| no totality check on any `fn` during Stage 0 | phase 3, Stage 1 (law §4.5) | every `fn`; calc's program half at slice 6 | R45's self-recursive candidate exhausts and gains no equations (`ev_test`, landed slice 5) | measure obligations discharged at Stage 1; the runnable-only status visible in the driver's output meanwhile (`RUNNABLE`, R45, landed) |
+| no totality check on any `fn` during Stage 0 | phase 3, Stage 1 (law §4.5) | every `fn`; calc's program half at slice 6 | R45's self-recursive candidate exhausts and gains no equations (`ev_test`, landed slice 5); a `realize` is checked for structural descent and a looping body refused (`realize_loop`, landed 5b) | measure obligations discharged at Stage 1; the runnable-only status visible in the driver's output meanwhile (`RUNNABLE`, R45, landed); a `realize`'s `(measure E)` a reported obligation (`PENDING … measure`, 5b) |
 
 ## 13. For ratification — decisions made here beyond the law's text
 
@@ -1163,5 +1343,30 @@ and the disposition this draft intends.
     declaration resolved by the linker, tried and removed — the fork
     already replays the view with the implementation substituted.
 19. **`gen_fresh` is dropped**; `realize` (both forms, §7) and R45's
-    third test move to slice 5b with the E→L translation question
-    (§6.7).
+    third test moved to slice 5b (§7.5, items 20–24).
+20. **The equations' types come from the classifier and K, not Stage
+    1** (§7.5, slice 5b): a callee's telescope is filled by first-order
+    matching of each runtime binder's type against its argument's
+    inferred type, the classifier's static E type the fallback for a
+    bare constructor; an undetermined binder is `untyped_subterm`.
+    Alternative: waiting for Stage 1's typing, which would have left
+    `realize` unbuilt until phase 3.
+21. **Init's E-eligible inductives are E types on first citation**
+    (§7.5): no indices, not in Prop, parameters types or propositions,
+    fields E types or propositions; `Nat` and `Int` excluded by name.
+    Alternative: registering every inductive of the prefix at import,
+    thousands of telescope walks for the few a program cites.
+22. **The primitive table's `Nat` set is K's accelerated set** under
+    its identities, plus the three decisions; an entry is never
+    realized. Alternative: one entry per operator with the identity
+    chosen by argument type — the mode per entry §6.4 refused.
+23. **A Stage-0 equation per leaf of the case tree**, the tree the
+    body's leading matches on parameters and pattern variables
+    compiled column by column; a match elsewhere and an `if` are the
+    recursor with a constant motive; numeral patterns are Stage 1's.
+    Descent is syntactic; a callee must be realized earlier in the
+    file. Alternative: one equation per arm of the outermost match
+    only, which cannot be `rfl` for a nested pattern.
+24. **The `LATER` record is gone** with `realize` built; a `fulfills`
+    outside an implementation check is the load error
+    `fulfills_outside_impl`.

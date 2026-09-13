@@ -1,0 +1,375 @@
+;;; v3/kernel/erase.shard — roles, levels and E-eligibility over the checked
+;;; environment (v3/LANGUAGE.md §7.5; law §4.1). Which inductives of K's
+;;; environment are E types — Init's `List`, `Option`, `Bool`, `Decidable`,
+;;; a native `inductive` — registered into the E table on first citation;
+;;; the roles of a constant's binders (a type parameter, erased evidence,
+;;; runtime data with its E type), which the supplied `realize` checks a
+;;; signature against and the derived view erases a body by. `Nat` and
+;;; `Int` are never E inductives: their realization is the integer.
+;;; Phase 2, slice 5b.
+(import "etable.shard")
+
+;; ---- a walk over K's terms: the environment, a local context, the checker state ----
+(type W (W CheckedEnv (List LDecl) St))
+(fn w_env ((w W)) CheckedEnv (match w ((W e _ _) e)))
+(fn w_lctx ((w W)) (List LDecl) (match w ((W _ l _) l)))
+(fn w_st ((w W)) St (match w ((W _ _ s) s)))
+(fn w_ctx ((w W)) Ctx (match w ((W e l _) (Ctx e l (Some Nil) Safe False (budget_ticks)))))
+(fn w0 ((env CheckedEnv)) W (W env Nil (st_for env)))
+(fn w_set_st ((w W) (st St)) W (match w ((W e l _) (W e l st))))
+;; a fresh local of type ty, without and with a value
+(fn w_local ((w W) (n Name) (ty Expr)) (Pair W Expr)
+  (match (mk_local (w_ctx w) (w_st w) n ty None BDefault)
+    ((Loc c st fv) (Pair (W (w_env w) (ctx_lctx c) st) fv))))
+(fn w_local_val ((w W) (n Name) (ty Expr) (v Expr)) (Pair W Expr)
+  (match (mk_local (w_ctx w) (w_st w) n ty (Some v) BDefault)
+    ((Loc c st fv) (Pair (W (w_env w) (ctx_lctx c) st) fv))))
+;; K's procedures; a failure (exhaustion, an ill-typed term) is None
+(fn w_whnf ((w W) (e Expr)) (Pair W (Option Expr))
+  (match (whnf (w_ctx w) (w_st w) (budget_depth) e)
+    ((KOk st r) (Pair (w_set_st w st) (Some r)))
+    ((KFail _) (Pair w None))))
+(fn w_infer ((w W) (e Expr)) (Pair W (Option Expr))
+  (match (infer (w_ctx w) (w_st w) (budget_depth) e True)
+    ((KOk st r) (Pair (w_set_st w st) (Some r)))
+    ((KFail _) (Pair w None))))
+(fn w_is_prop ((w W) (e Expr)) (Pair W (Option Bool))
+  (match (is_prop (w_ctx w) (w_st w) (budget_depth) e)
+    ((KOk st r) (Pair (w_set_st w st) (Some r)))
+    ((KFail _) (Pair w None))))
+(fn w_inst1 ((w W) (e Expr) (v Expr)) (Pair W Expr)
+  (match (instantiate1 (w_st w) e v) ((Pair st r) (Pair (w_set_st w st) r))))
+(fn w_apps ((w W) (f Expr) (args (List Expr))) (Pair W Expr)
+  (match (mk_app_list (w_st w) f args) ((Pair st r) (Pair (w_set_st w st) r))))
+(fn w_inst_lparams ((w W) (e Expr) (ps (List Name)) (ls (List Level))) (Pair W Expr)
+  (match (expr_inst_lparams (w_st w) e ps ls) ((Pair st r) (Pair (w_set_st w st) r))))
+;; the binders and lambdas over fvars (K's mk_binding; a let-local becomes a Let)
+(fn w_pis ((w W) (fvars (List Expr)) (b Expr)) (Pair W Expr)
+  (match (mk_binding (w_ctx w) (w_st w) False fvars b False) ((Pair st r) (Pair (w_set_st w st) r))))
+(fn w_lams ((w W) (fvars (List Expr)) (b Expr)) (Pair W Expr)
+  (match (mk_binding (w_ctx w) (w_st w) True fvars b False) ((Pair st r) (Pair (w_set_st w st) r))))
+;; e with the fvar id replaced by v
+(fn w_subst ((w W) (e Expr) (id Int) (v Expr)) (Pair W Expr)
+  (match (abstract_fvars (w_st w) e (list id))
+    ((Pair st1 e1) (match (instantiate1 st1 e1 v) ((Pair st2 e2) (Pair (w_set_st w st2) e2))))))
+(fn fvar_index ((id Int) (fvs (List Expr)) (i Int)) (Option Int)
+  (measure (struct fvs))
+  (match fvs
+    (Nil None)
+    ((Cons (FVar _ j) r) (if (int_eq id j) (Some i) (fvar_index id r (+ i 1))))
+    ((Cons _ r) (fvar_index id r (+ i 1)))))
+(fn fvar_id_of ((e Expr)) Int (match e ((FVar _ id) id) (_ (- 0 1))))
+;; the module a constant registers under: its declaring module, else Init
+(fn decl_module ((sc Scope) (n Name)) Name
+  (match (sc_vis sc)
+    (VisAll (init_module))
+    ((VisOnly _ _ tbl _) (match (tbl_find tbl n) ((Some m) m) (None (init_module))))))
+(fn nm_int_ty () Name (n1 (quote Int)))
+(fn is_nat_or_int ((n Name)) Bool (bool_or (name_eq n (nm_nat)) (name_eq n (nm_int_ty))))
+
+;; ---- levels (§7.5): a constant's level parameters solved so that its Sort binders are Type ----
+(fn solve_levels ((info ConstantInfo)) (Option (List Level))
+  (match (solve_tele (ci_type info) Nil)
+    (None None)
+    ((Some sol) (Some (levels_from (ci_lparams info) sol)))))
+;; the bindings from the binder sorts, then the result sort — which needs no shape of its own
+;; when the binders solved every parameter it names (`Prod.{u v} : Type (max u v)`); None on a
+;; conflict or an unsolvable Sort
+(fn solve_tele ((t Expr) (sol (List (Pair Name Level)))) (Option (List (Pair Name Level)))
+  (measure (struct t))
+  (match t
+    ((Pi _ _ _ dom body) (match (solve_sort dom sol) (None None) ((Some sol1) (solve_tele body sol1))))
+    ((Sort _ l) (if (all_solved (level_params l Nil) sol) (Some sol) (solve_sort t sol)))
+    (_ (solve_sort t sol))))
+(fn level_params ((l Level) (acc (List Name))) (List Name)
+  (measure (struct l))
+  (match l
+    ((LParam p) (Cons p acc))
+    ((LSucc a) (level_params a acc))
+    ((LMax a b) (level_params a (level_params b acc)))
+    ((LIMax a b) (level_params a (level_params b acc)))
+    (LZero acc)))
+(fn all_solved ((ps (List Name)) (sol (List (Pair Name Level)))) Bool
+  (measure (struct ps))
+  (match ps (Nil True) ((Cons p r) (match (assoc_level p sol) ((Some _) (all_solved r sol)) (None False)))))
+;; `Sort (succ p)` binds p := 0, `Sort p` binds p := 1; a Sort of another shape over a parameter is unsolvable
+(fn solve_sort ((e Expr) (sol (List (Pair Name Level)))) (Option (List (Pair Name Level)))
+  (match e
+    ((Sort _ (LSucc (LParam p))) (bind_level p LZero sol))
+    ((Sort _ (LParam p)) (bind_level p (LSucc LZero) sol))
+    ((Sort _ l) (if (level_has_param l) None (Some sol)))
+    (_ (Some sol))))
+(fn bind_level ((p Name) (l Level) (sol (List (Pair Name Level)))) (Option (List (Pair Name Level)))
+  (match (assoc_level p sol)
+    (None (Some (Cons (Pair p l) sol)))
+    ((Some l2) (if (level_eq l l2) (Some sol) None))))
+(fn assoc_level ((p Name) (sol (List (Pair Name Level)))) (Option Level)
+  (measure (struct sol))
+  (match sol (Nil None) ((Cons (Pair q l) r) (if (name_eq p q) (Some l) (assoc_level p r)))))
+;; every parameter in order; an unsolved one is 0
+(fn levels_from ((ps (List Name)) (sol (List (Pair Name Level)))) (List Level)
+  (measure (struct ps))
+  (match ps (Nil Nil) ((Cons p r) (Cons (match (assoc_level p sol) ((Some l) l) (None LZero)) (levels_from r sol)))))
+;; a constant's type at its solved levels
+(fn type_at_levels ((w W) (info ConstantInfo)) (Pair W (Option (Pair (List Level) Expr)))
+  (match (solve_levels info)
+    (None (Pair w None))
+    ((Some ls) (match (w_inst_lparams w (ci_type info) (ci_lparams info) ls) ((Pair w1 ty) (Pair w1 (Some (Pair ls ty))))))))
+
+;; ---- E-eligibility (§7.5) ----------------------------------------------------------------
+;; an inductive of the environment is an E type: no indices, not in Prop, its parameters
+;; types or propositions, its fields E types or propositions; registered with its
+;; constructors (runtime field types over the type parameters) on the first yes.
+;; `pending` holds the inductives under examination (a field of the type itself, or a
+;; nested occurrence, counts as eligible while its own check runs).
+(fn ind_eligible ((w W) (es ESt) (sc Scope) (n Name) (pending (List Name))) (Pair (Pair W ESt) Bool)
+  (if (is_nat_or_int n) (Pair (Pair w es) False)
+  (if (mem_name n pending) (Pair (Pair w es) True)
+  (match (es_info es n)
+    ((Some (EIInd _ _)) (Pair (Pair w es) True))
+    ((Some _) (Pair (Pair w es) False))
+    (None
+     (match (env_find (w_env w) n)
+       ((Some info)
+        (match info
+          ((InductInfo _ nparams nindices _ ctors _ _ unsafe refl)
+           (if (bool_or (bool_not (int_eq nindices 0)) (bool_or unsafe refl)) (Pair (Pair w es) False)
+             (match (type_at_levels w info)
+               ((Pair w1 None) (Pair (Pair w1 es) False))
+               ((Pair w1 (Some (Pair ls ty)))
+                (match (ind_params w1 ty nparams Nil Nil)
+                  ((Pair w2 None) (Pair (Pair w2 es) False))
+                  ((Pair w2 (Some (Pair fvs tps)))
+                   (match (ind_ctors w2 es sc n ctors ls fvs tps (Cons n pending) Nil)
+                     ((Pair (Pair w3 es3) None) (Pair (Pair w3 es3) False))
+                     ((Pair (Pair w3 es3) (Some cdefs))
+                      (Pair (Pair w3 (register_ind es3 (decl_module sc n) n (len tps) cdefs)) True)))))))))
+          (_ (Pair (Pair w es) False))))
+       (None (Pair (Pair w es) False))))))))
+;; the parameters opened as locals: all of them (in order) and the type parameters among them;
+;; then the result must be a Sort above Prop
+(fn ind_params ((w W) (ty Expr) (k Int) (fvs (List Expr)) (tps (List Expr))) (Pair W (Option (Pair (List Expr) (List Expr))))
+  (measure k)
+  (match (w_whnf w ty)
+    ((Pair w1 None) (Pair w1 None))
+    ((Pair w1 (Some t))
+     (if (le k 0)
+       (match t
+         ((Sort _ l) (if (is_zero (normalize l)) (Pair w1 None) (Pair w1 (Some (Pair (rev fvs) (rev tps))))))
+         (_ (Pair w1 None)))
+       (match t
+         ((Pi _ n _ dom body)
+          (match (sort_role w1 dom)
+            ((Pair w2 None) (Pair w2 None))
+            ((Pair w2 (Some is_type))
+             (match (w_local w2 n dom)
+               ((Pair w3 fv)
+                (match (w_inst1 w3 body fv)
+                  ((Pair w4 body1) (ind_params w4 body1 (- k 1) (Cons fv fvs) (if is_type (Cons fv tps) tps)))))))))
+         (_ (Pair w1 None)))))))
+;; a parameter's binder type: Some True for Type, Some False for Prop, None otherwise
+(fn sort_role ((w W) (dom Expr)) (Pair W (Option Bool))
+  (match (w_whnf w dom)
+    ((Pair w1 (Some (Sort _ l)))
+     (let ((nl (normalize l)))
+       (if (is_zero nl) (Pair w1 (Some False)) (if (is_one nl) (Pair w1 (Some True)) (Pair w1 None)))))
+    ((Pair w1 _) (Pair w1 None))))
+;; the type parameters' roles of a registered (or eligible) inductive: True = a type parameter, False = erased
+(fn ind_param_roles ((w W) (n Name)) (Pair W (Option (List Bool)))
+  (match (env_find (w_env w) n)
+    ((Some info)
+     (match info
+       ((InductInfo _ nparams _ _ _ _ _ _ _)
+        (match (type_at_levels w info)
+          ((Pair w1 None) (Pair w1 None))
+          ((Pair w1 (Some (Pair _ ty))) (param_roles w1 ty nparams Nil))))
+       (_ (Pair w None))))
+    (None (Pair w None))))
+(fn param_roles ((w W) (ty Expr) (k Int) (acc (List Bool))) (Pair W (Option (List Bool)))
+  (measure k)
+  (if (le k 0) (Pair w (Some (rev acc)))
+  (match (w_whnf w ty)
+    ((Pair w1 (Some (Pi _ n _ dom body)))
+     (match (sort_role w1 dom)
+       ((Pair w2 None) (Pair w2 None))
+       ((Pair w2 (Some is_type))
+        (match (w_local w2 n dom)
+          ((Pair w3 fv) (match (w_inst1 w3 body fv) ((Pair w4 body1) (param_roles w4 body1 (- k 1) (Cons is_type acc)))))))))
+    ((Pair w1 _) (Pair w1 None)))))
+;; each constructor's runtime field types over the type parameters
+(fn ind_ctors ((w W) (es ESt) (sc Scope) (ind Name) (cs (List Name)) (ls (List Level)) (fvs (List Expr)) (tps (List Expr)) (pending (List Name)) (acc (List ECtorDef))) (Pair (Pair W ESt) (Option (List ECtorDef)))
+  (measure (struct cs))
+  (match cs
+    (Nil (Pair (Pair w es) (Some (rev acc))))
+    ((Cons c r)
+     (match (env_find (w_env w) c)
+       ((Some info)
+        (match (w_inst_lparams w (ci_type info) (ci_lparams info) ls)
+          ((Pair w1 cty)
+           (match (inst_params w1 cty fvs)
+             ((Pair w2 None) (Pair (Pair w2 es) None))
+             ((Pair w2 (Some fty))
+              (match (ctor_fields w2 es sc fty tps pending Nil (budget_depth))
+                ((Pair (Pair w3 es3) None) (Pair (Pair w3 es3) None))
+                ((Pair (Pair w3 es3) (Some fts)) (ind_ctors w3 es3 sc ind r ls fvs tps pending (Cons (ECtorDef c fts) acc)))))))))
+       (None (Pair (Pair w es) None))))))
+;; the leading binders instantiated with the parameters' locals
+(fn inst_params ((w W) (ty Expr) (fvs (List Expr))) (Pair W (Option Expr))
+  (measure (struct fvs))
+  (match fvs
+    (Nil (Pair w (Some ty)))
+    ((Cons fv r)
+     (match (w_whnf w ty)
+       ((Pair w1 (Some (Pi _ _ _ _ body))) (match (w_inst1 w1 body fv) ((Pair w2 body1) (inst_params w2 body1 r))))
+       ((Pair w1 _) (Pair w1 None))))))
+;; the fields after the parameters: a proposition is erased, a data field is its E type, anything else refuses
+(fn ctor_fields ((w W) (es ESt) (sc Scope) (ty Expr) (tps (List Expr)) (pending (List Name)) (acc (List EType)) (fuel Int)) (Pair (Pair W ESt) (Option (List EType)))
+  (measure fuel)
+  (if (lt fuel 0) (Pair (Pair w es) None)
+  (match (w_whnf w ty)
+    ((Pair w1 (Some (Pi _ n _ dom body)))
+     (match (w_is_prop w1 dom)
+       ((Pair w2 (Some True))
+        (match (w_local w2 n dom)
+          ((Pair w3 fv) (match (w_inst1 w3 body fv) ((Pair w4 body1) (ctor_fields w4 es sc body1 tps pending acc (- fuel 1)))))))
+       ((Pair w2 _)
+        (match (l_to_etype w2 es sc dom tps pending)
+          ((Pair (Pair w3 es3) None) (Pair (Pair w3 es3) None))
+          ((Pair (Pair w3 es3) (Some t))
+           (match (w_local w3 n dom)
+             ((Pair w4 fv) (match (w_inst1 w4 body fv) ((Pair w5 body1) (ctor_fields w5 es3 sc body1 tps pending (Cons t acc) (- fuel 1)))))))))))
+    ((Pair w1 (Some _)) (Pair (Pair w1 es) (Some (rev acc))))
+    ((Pair w1 None) (Pair (Pair w1 es) None)))))
+(fn register_ind ((es ESt) (m Name) (n Name) (ntparams Int) (cdefs (List ECtorDef))) ESt
+  (es_add_decl (es_register_all es m (Cons (Pair n (EIInd ntparams (ector_names cdefs))) (ctor_infos n cdefs 0))) (EInd n ntparams cdefs)))
+
+;; ---- an L type as an E type (§7.5) --------------------------------------------------------
+;; over the type parameters' locals: a local is its ETVar, `Nat` and `Int` are themselves, an
+;; E-eligible inductive applied to its parameters keeps the type arguments and drops the erased ones
+(fn l_to_etype ((w W) (es ESt) (sc Scope) (e Expr) (tps (List Expr)) (pending (List Name))) (Pair (Pair W ESt) (Option EType))
+  (match (w_whnf w e)
+    ((Pair w1 None) (Pair (Pair w1 es) None))
+    ((Pair w1 (Some e1))
+     (match e1
+       ((FVar _ id) (match (fvar_index id tps 0) ((Some i) (Pair (Pair w1 es) (Some (ETVar i)))) (None (Pair (Pair w1 es) None))))
+       (_
+        (match (get_app_fn e1)
+          ((Const _ n _)
+           (if (is_nat_or_int n)
+             (if (int_eq (get_app_num_args e1) 0) (Pair (Pair w1 es) (Some (ETCon n Nil))) (Pair (Pair w1 es) None))
+             (match (ind_eligible w1 es sc n pending)
+               ((Pair (Pair w2 es2) False) (Pair (Pair w2 es2) None))
+               ((Pair (Pair w2 es2) True)
+                (match (ind_param_roles w2 n)
+                  ((Pair w3 None) (Pair (Pair w3 es2) None))
+                  ((Pair w3 (Some roles))
+                   (if (bool_not (int_eq (len roles) (get_app_num_args e1))) (Pair (Pair w3 es2) None)
+                     (match (etype_args w3 es2 sc roles (get_app_args e1) tps pending Nil)
+                       ((Pair (Pair w4 es4) None) (Pair (Pair w4 es4) None))
+                       ((Pair (Pair w4 es4) (Some args)) (Pair (Pair w4 es4) (Some (ETCon n args))))))))))))
+          (_ (Pair (Pair w1 es) None))))))))
+(fn etype_args ((w W) (es ESt) (sc Scope) (roles (List Bool)) (args (List Expr)) (tps (List Expr)) (pending (List Name)) (acc (List EType))) (Pair (Pair W ESt) (Option (List EType)))
+  (measure (struct roles))
+  (match roles
+    (Nil (Pair (Pair w es) (Some (rev acc))))
+    ((Cons is_type rr)
+     (match args
+       (Nil (Pair (Pair w es) None))
+       ((Cons a ar)
+        (if is_type
+          (match (l_to_etype w es sc a tps pending)
+            ((Pair (Pair w1 es1) None) (Pair (Pair w1 es1) None))
+            ((Pair (Pair w1 es1) (Some t)) (etype_args w1 es1 sc rr ar tps pending (Cons t acc))))
+          (etype_args w es sc rr ar tps pending acc)))))))
+
+;; ---- the roles of a constant's binders (law §4.1) ------------------------------------------
+(type BRole (BType) (BErased) (BData EType))
+(type TBind (TBind Name BRole Expr))                     ; the binder's name, role, local
+(type Tele (Tele (List Level) (List TBind) EType Expr))  ; levels, binders in order, the result's E type and L type
+(type TeleRes (TeleOk W ESt Tele) (TeleErr Symbol (List Int)))
+;; the telescope of a constant at its solved levels, its binders opened as locals (kept in W)
+(fn tele_of ((w W) (es ESt) (sc Scope) (info ConstantInfo)) TeleRes
+  (match (type_at_levels w info)
+    ((Pair w1 None) (TeleErr (quote realize_signature) (append (show_name (ci_name info)) ": its universe parameters do not solve to Type")))
+    ((Pair w1 (Some (Pair ls ty))) (tele_walk w1 es sc ty Nil ls (budget_depth)))))
+(fn tele_walk ((w W) (es ESt) (sc Scope) (ty Expr) (acc (List TBind)) (ls (List Level)) (fuel Int)) TeleRes
+  (measure fuel)
+  (if (lt fuel 0) (TeleErr (quote realize_signature) "the telescope is too deep")
+  (match (w_whnf w ty)
+    ((Pair w1 None) (TeleErr (quote realize_signature) "K could not read the type"))
+    ((Pair w1 (Some (Pi _ n bi dom body)))
+     (match (binder_role w1 es sc dom (tparams_of acc))
+       ((Pair (Pair w2 es2) None) (TeleErr (quote realize_signature) (append (show_name n) ": a binder that is neither a type parameter, a proposition nor an E type (law §4.1–4.3)")))
+       ((Pair (Pair w2 es2) (Some role))
+        (match (w_local w2 n dom)
+          ((Pair w3 fv)
+           (match (w_inst1 w3 body fv)
+             ((Pair w4 body1) (tele_walk w4 es2 sc body1 (Cons (TBind n role fv) acc) ls (- fuel 1)))))))))
+    ((Pair w1 (Some r))
+     (match (binder_role w1 es sc r (tparams_of acc))
+       ((Pair (Pair w2 es2) (Some (BData rt))) (TeleOk w2 es2 (Tele ls (rev acc) rt r)))
+       ((Pair (Pair w2 es2) _) (TeleErr (quote realize_signature) "the result is not an E type (a proposition, a type, a function)")))))))
+;; the type parameters' locals in order, from the reversed binders
+(fn tparams_of ((acc (List TBind))) (List Expr) (rev (tparams_rev acc)))
+(fn tparams_rev ((acc (List TBind))) (List Expr)
+  (measure (struct acc))
+  (match acc
+    (Nil Nil)
+    ((Cons (TBind _ BType fv) r) (Cons fv (tparams_rev r)))
+    ((Cons _ r) (tparams_rev r))))
+;; a binder's role from its type: a Sort at Type is a type parameter, a Sort at Prop or a
+;; proposition is erased, a Pi over propositions erases to its codomain, an E type is data
+(fn binder_role ((w W) (es ESt) (sc Scope) (dom Expr) (tps (List Expr))) (Pair (Pair W ESt) (Option BRole))
+  (match (w_whnf w dom)
+    ((Pair w1 None) (Pair (Pair w1 es) None))
+    ((Pair w1 (Some (Sort _ l)))
+     (let ((nl (normalize l)))
+       (if (is_zero nl) (Pair (Pair w1 es) (Some BErased))
+       (if (is_one nl) (Pair (Pair w1 es) (Some BType))
+         (Pair (Pair w1 es) None)))))
+    ((Pair w1 (Some d))
+     (match (w_is_prop w1 d)
+       ((Pair w2 (Some True)) (Pair (Pair w2 es) (Some BErased)))
+       ((Pair w2 _)
+        (match (erased_pi w2 d (budget_depth))
+          ((Pair w3 d1)
+           (match (l_to_etype w3 es sc d1 tps Nil)
+             ((Pair (Pair w4 es4) (Some t)) (Pair (Pair w4 es4) (Some (BData t))))
+             ((Pair (Pair w4 es4) None) (Pair (Pair w4 es4) None))))))))))
+;; a Pi whose domain is a proposition, repeatedly: its codomain (the proof argument vanishes in E)
+(fn erased_pi ((w W) (d Expr) (fuel Int)) (Pair W Expr)
+  (measure fuel)
+  (if (lt fuel 0) (Pair w d)
+  (match d
+    ((Pi _ n _ dom body)
+     (match (w_is_prop w dom)
+       ((Pair w1 (Some True))
+        (match (w_local w1 n dom)
+          ((Pair w2 fv) (match (w_inst1 w2 body fv) ((Pair w3 body1) (erased_pi w3 body1 (- fuel 1)))))))
+       ((Pair w1 _) (Pair w1 d))))
+    (_ (Pair w d)))))
+
+;; ---- the pre-scan (§7.5): an S form's names that resolve to eligible inductives or their constructors ----
+(fn es_scan_init ((es ESt) (sc Scope) (env CheckedEnv) (s SExpr)) ESt
+  (match (scan_sexpr (w0 env) es sc s) ((Pair _ es1) es1)))
+(fn scan_sexpr ((w W) (es ESt) (sc Scope) (s SExpr)) (Pair W ESt)
+  (measure (struct s))
+  (match s
+    ((SSym x) (scan_name w es sc x))
+    ((SSymU x _) (scan_name w es sc x))
+    ((SList xs) (scan_list w es sc xs))
+    (_ (Pair w es))))
+(fn scan_list ((w W) (es ESt) (sc Scope) (xs (List SExpr))) (Pair W ESt)
+  (measure (struct xs))
+  (match xs (Nil (Pair w es)) ((Cons x r) (match (scan_sexpr w es sc x) ((Pair w1 es1) (scan_list w1 es1 sc r))))))
+(fn scan_name ((w W) (es ESt) (sc Scope) (x Symbol)) (Pair W ESt)
+  (match (name_of_sym x)
+    (None (Pair w es))
+    ((Some n)
+     (match (resolve (cx0 sc (w_env w) Nil Nil) n)
+       ((RName k _)
+        (match (env_find (w_env w) k)
+          ((Some (InductInfo _ _ _ _ _ _ _ _ _)) (match (ind_eligible w es sc k Nil) ((Pair (Pair w1 es1) _) (Pair w1 es1))))
+          ((Some (CtorInfo _ ind _ _ _ _)) (match (ind_eligible w es sc ind Nil) ((Pair (Pair w1 es1) _) (Pair w1 es1))))
+          (_ (Pair w es))))
+       (_ (Pair w es))))))

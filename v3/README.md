@@ -214,6 +214,54 @@ pass's `pattern_type` and `pattern_name` refusals and type-argument
 inference (§6.7).
 `gen_fresh` dropped; `realize` and R45's third test wait for slice 5b
 (§6.7). **CI (pipeline 468, `d76b7a2`):** green — 17 entrypoints, route 2's byte-tie in 46 s on the runner, the full-export replay on compiled K in 2,489 s at a 31.0 GB peak, all 20 candidates pinned, closures identical, byte-ties identical.
+**Slice 5b (2026-09-13): `realize`** — `LANGUAGE.md` §7 built as §7.5,
+after a direction checkpoint with the user (records §9: E is a fragment
+of L by the law's definition; `realize` is the route for constants not
+born as a `fn`, and the Stage-0 ruling had made it temporarily the only
+bridge). `kernel/erase.shard`: a constant's level parameters solved so
+its Sort binders are `Type`, its binders classified by role (a type
+parameter, erased evidence, runtime data with its E type) by K's own
+`whnf`/`is_prop` over locals; Init's inductives E-eligible (no indices,
+not in Prop, parameters types or propositions, fields E types or
+propositions; `Nat` and `Int` never) and registered with their
+constructors on first citation, so `List.cons` is a pattern and
+`(Option Nat)` a binder type in S. `kernel/realize.shard`: the supplied
+form's E signature checked against the erasure binder for binder, its
+body read as a `fn`'s, descent checked syntactically (a self-call
+passes a variable bound under the structural parameter — `f x = f x`
+refused although its equation proves), callees realized earlier or a
+view's sig fn; the equations one per leaf of the body's leading
+matches, compiled column by column as Lean's match compiler does (a
+column's variable replaced by the constructor term everywhere, a
+variable row bound to it, nested patterns nested left-hand sides), each
+leaf's body translated into L with every constant's telescope filled by
+first-order matching of the runtime binders' types against the
+arguments' inferred types (the classifier's static type the fallback
+for a bare constructor), a `let` by inference, a non-variable `match`
+and an `if` the recursor with a constant motive; each equation a
+theorem `NAME.realize_N` proven by `Eq.refl` (or the `equations`
+clause) and admitted through the loader's ordinary path — one refused,
+nothing attached. The derived view erases the constant's value by the
+same roles (`casesOn`, `rec` without a hypothesis, `ite`, `dite`,
+projections, constructors, realized constants; `brecOn` and choice
+refused by name). The primitive table gains K's accelerated `Nat` set
+under its identities plus `Nat.decEq/decLt/decLe` (Init's `Bool` and
+`Decidable` cells); an entry is never realized. Records: `REALIZE NAME
+supplied|view equations=…`, the `realized` count; `LATER` is gone.
+**Evidence on the 3,000-line fixture:** `List.append`, `List.concat`
+(nested patterns, three equations) and `List.flatten` realized with
+every equation accepted by K through `brecOn`; `ite`, `dite`,
+`Array.toList` and `Array.push` by the derived view; a wrong body's
+second equation refused (`conversion`), the looping body refused before
+K sees it. A review after the build (records §9) closed a real hole —
+a `fn` taking an admitted constant's identity could stand in for it in
+a realization's body — with `name_taken`, refused a self-call on the
+parameters under any measure, fixed the substitution of a split into
+the body's environment, and gave the `equations` clause its levels.
+Tests: 21 realize pins (74 in all), three `loader_test` cases (R45's
+third test: the same body as a `fn` is `RUNNABLE`, as a `realize`
+`REALIZE` with an equation a theorem cites and a body `ev` runs under
+the L identity), 21 `ev_test` cases for the Nat set (56 in all).
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
@@ -245,8 +293,10 @@ each closes on its named gate:
   totality check, and nothing in L cites it, until phase 3's Stage 1
   (`LANGUAGE.md` §0, §12.6); the driver says so per declaration since
   slice 5 (`RUNNABLE`, R45), and `ev_test` shows the self-recursive
-  candidate exhausting; R45's third test (a checked realization against
-  a linked function) waits for `realize` (slice 5b).
+  candidate exhausting; R45's third test landed at slice 5b
+  (`realize`: `REALIZE` against `RUNNABLE`, `loader_test`). The
+  mechanism Stage 1 automates for every `fn` — the E→L translation and
+  the equations — exists since 5b, hand-triggered per constant.
 - **The compiled route** — tested, not proved: route 1's proof is
   still to come, the interpreter stays the authority, and every full
   replay is preceded by the byte-tie on a prefix.
@@ -280,7 +330,7 @@ v3/README.md      this file: root, pins, phase status
 v3/MANIFEST.md    the port manifest — PORT / ARCHIVE / REGENERATE per family
 v3/INVENTORY.md   the shared-type inventory — imported identity, fields, view, realization
 v3/LANGUAGE.md    the V3 language — S, L and E at Stage 0 (phase 2 draft; I in phase 3)
-v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K; phase 2: prog, the reader tower, ev
+v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K; phase 2: prog, the reader tower, ev, realize
 v3/meta/          phase 3: the elaborators, I, the goal graph, tactics
 v3/std/           phase 3: the first library under the naming law
 v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers), pins/loader/ (slices 3–5: package roots, main.shard's `;; expect:` and `;; roots:` headers; the ev_* cases are the classifier's)

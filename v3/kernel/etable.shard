@@ -1,0 +1,180 @@
+;;; v3/kernel/etable.shard — the E table (v3/LANGUAGE.md §6.7): every E
+;;; identity findable by any suffix of its spelling (`hex_val`,
+;;; `json.hex_val`, `kernel.json.hex_val`), pre-registered per file before
+;;; any body is read so that a body may cite what its file declares later;
+;;; an identity registered again overrides (the implementation check's
+;;; substitution, the link). Resolution: the visible hits, in S those among
+;;; the scope's candidates (§3.1); the toolchain profile is flat. Split out
+;;; of classify.shard at slice 5b so that erase.shard (Init's inductives as
+;;; E types, §7.5) can register into it below the classifier.
+(import "reader.shard")
+(import "prog.shard")
+;; ---- the E table ----------------------------------------------------------------------
+(type EInfo
+  (EICtor Name Int Int)      ; its inductive, its ordinal, its field count
+  (EIInd Int (List Name))    ; parameter count, constructors in order
+  (EIFn Int)                 ; parameter count
+  (EISig Int)                ; a view's sig fn: parameter count
+  (EIExt Int)                ; an extern: parameter count
+  (EISigType Int))           ; a view's sig type: arity
+(type EEnt (EEnt Name Name Name EInfo))   ; suffix, identity, module, info
+;; declarations (reversed), the suffix table, the declarations by identity.
+;; An identity registered again overrides (newest first): the implementation
+;; check's fork substitutes the implementation's fn and type under the view's
+;; sig fn and sig type (§6.6, §6.7), and its merge into the main line does the
+;; same — that substitution is the link `run` needs.
+(type ESt (ESt (List EDecl) (IntMap (List EEnt)) (IntMap (List (Pair Name EDecl)))))
+(fn es0 () ESt (ESt Nil IMEmpty IMEmpty))
+(fn es_decls ((e ESt)) (List EDecl) (match e ((ESt ds _ _) (rev ds))))
+(fn es_tbl ((e ESt)) (IntMap (List EEnt)) (match e ((ESt _ t _) t)))
+(fn es_idx ((e ESt)) (IntMap (List (Pair Name EDecl))) (match e ((ESt _ _ x) x)))
+;; the program: the declarations in order, a sig fn or sig type dropped where
+;; the implementation was substituted under its identity
+(fn es_prog ((e ESt)) Prog (Prog (live_decls e (es_decls e))))
+(fn live_decls ((e ESt) (ds (List EDecl))) (List EDecl)
+  (measure (struct ds))
+  (match ds
+    (Nil Nil)
+    ((Cons (ESig n a b c) r) (match (es_find_decl e n) ((Some (ESig _ _ _ _)) (Cons (ESig n a b c) (live_decls e r))) (_ (live_decls e r))))
+    ((Cons (ESigType n a) r) (match (es_find_decl e n) ((Some (ESigType _ _)) (Cons (ESigType n a) (live_decls e r))) (_ (live_decls e r))))
+    ((Cons d r) (Cons d (live_decls e r)))))
+
+;; a name's components as one-step names, outermost first; its suffixes on component boundaries
+(fn name_steps ((n Name)) (List Name)
+  (measure (struct n))
+  (match n
+    (Anon Nil)
+    ((Str p s) (append (name_steps p) (list (Str Anon s))))
+    ((Num p k) (append (name_steps p) (list (Num Anon k))))))
+(fn join_steps ((ss (List Name)) (acc Name)) Name
+  (measure (struct ss))
+  (match ss (Nil acc) ((Cons s r) (join_steps r (name_append acc s)))))
+(fn suffixes_of ((ss (List Name))) (List Name)
+  (measure (struct ss))
+  (match ss (Nil Nil) ((Cons _ r) (Cons (join_steps ss Anon) (suffixes_of r)))))
+(fn name_suffixes ((n Name)) (List Name) (suffixes_of (name_steps n)))
+
+;; register an identity under every suffix
+(fn es_register ((e ESt) (id Name) (m Name) (info EInfo)) ESt
+  (match e ((ESt ds t x) (ESt ds (tbl_put_all t (name_suffixes id) id m info) x))))
+(fn tbl_put_all ((t (IntMap (List EEnt))) (sufs (List Name)) (id Name) (m Name) (info EInfo)) (IntMap (List EEnt))
+  (measure (struct sufs))
+  (match sufs
+    (Nil t)
+    ((Cons s r)
+     (let ((h (name_key s)))
+       (tbl_put_all (im_insert t h (Cons (EEnt s id m info) (match (im_find t h) ((Some b) b) (None Nil)))) r id m info)))))
+;; every entry whose suffix is the citation — the newest per identity
+(fn es_hits ((e ESt) (n Name)) (List EEnt)
+  (match (im_find (es_tbl e) (name_key n)) (None Nil) ((Some b) (hits_with b n Nil))))
+(fn hits_with ((b (List EEnt)) (n Name) (seen (List Name))) (List EEnt)
+  (measure (struct b))
+  (match b
+    (Nil Nil)
+    ((Cons (EEnt s id m i) r)
+     (if (bool_and (name_eq s n) (bool_not (mem_name id seen)))
+       (Cons (EEnt s id m i) (hits_with r n (Cons id seen)))
+       (hits_with r n seen)))))
+;; the entry registered under an identity's full spelling
+(fn es_info ((e ESt) (id Name)) (Option EInfo)
+  (match (full_entry (es_hits e id) id) ((Some (EEnt _ _ _ i)) (Some i)) (None None)))
+(fn full_entry ((b (List EEnt)) (id Name)) (Option EEnt)
+  (measure (struct b))
+  (match b
+    (Nil None)
+    ((Cons (EEnt s i m x) r) (if (name_eq i id) (Some (EEnt s i m x)) (full_entry r id)))))
+(fn es_has ((e ESt) (id Name)) Bool (match (es_info e id) ((Some _) True) (None False)))
+
+;; a declaration reached: recorded, findable by identity
+(fn es_add_decl ((e ESt) (d EDecl)) ESt
+  (match e
+    ((ESt ds t x)
+     (let ((n (edecl_name d)))
+       (let ((h (name_key n)))
+         (ESt (Cons d ds) t (im_insert x h (Cons (Pair n d) (match (im_find x h) ((Some b) b) (None Nil))))))))))
+(fn es_find_decl ((e ESt) (n Name)) (Option EDecl)
+  (match (im_find (es_idx e) (name_key n)) (None None) ((Some b) (assoc_decl b n))))
+(fn assoc_decl ((b (List (Pair Name EDecl))) (n Name)) (Option EDecl)
+  (measure (struct b))
+  (match b (Nil None) ((Cons (Pair k d) r) (if (name_eq k n) (Some d) (assoc_decl r n)))))
+;; the info a declaration registers (the fork's declarations merged into the main line, §6.7)
+(fn decl_infos ((d EDecl)) (List (Pair Name EInfo))
+  (match d
+    ((EInd n np cs) (Cons (Pair n (EIInd np (ector_names cs))) (ctor_infos n cs 0)))
+    ((EFn n _ ps _ _ _) (list (Pair n (EIFn (len ps)))))
+    ((EExtern n _ ps _) (list (Pair n (EIExt (len ps)))))
+    ((ESig n _ ps _) (list (Pair n (EISig (len ps)))))
+    ((ESigType n a) (list (Pair n (EISigType a))))))
+(fn ector_names ((cs (List ECtorDef))) (List Name)
+  (measure (struct cs))
+  (match cs (Nil Nil) ((Cons (ECtorDef c _) r) (Cons c (ector_names r)))))
+(fn ctor_infos ((ind Name) (cs (List ECtorDef)) (i Int)) (List (Pair Name EInfo))
+  (measure (struct cs))
+  (match cs (Nil Nil) ((Cons (ECtorDef c fs) r) (Cons (Pair c (EICtor ind i (len fs))) (ctor_infos ind r (+ i 1))))))
+(fn es_register_all ((e ESt) (m Name) (infos (List (Pair Name EInfo)))) ESt
+  (measure (struct infos))
+  (match infos (Nil e) ((Cons (Pair n i) r) (es_register_all (es_register e n m i) m r))))
+;; the fork's state merged into the main line: its declarations the main line
+;; lacks, and its fn / type under a sig fn / sig type the main line holds (the substitution)
+(fn es_merge ((main ESt) (fork ESt)) ESt (es_merge_decls main (es_decls fork) (es_tbl fork)))
+(fn es_merge_decls ((main ESt) (ds (List EDecl)) (ftbl (IntMap (List EEnt)))) ESt
+  (measure (struct ds))
+  (match ds
+    (Nil main)
+    ((Cons d r)
+     (let ((n (edecl_name d)))
+       (if (substitutes main n d)
+         (es_merge_decls (es_add_decl (es_register_all main (entry_module ftbl n) (decl_infos d)) d) r ftbl)
+         (es_merge_decls main r ftbl))))))
+;; d takes the identity n in main: n is new, or main holds a sig fn and d is a fn, a sig type and d a type
+(fn substitutes ((main ESt) (n Name) (d EDecl)) Bool
+  (match (es_find_decl main n)
+    (None True)
+    ((Some (ESig _ _ _ _)) (match d ((EFn _ _ _ _ _ _) True) (_ False)))
+    ((Some (ESigType _ _)) (match d ((EInd _ _ _) True) (_ False)))
+    (_ False)))
+(fn entry_module ((t (IntMap (List EEnt))) (id Name)) Name
+  (match (im_find t (name_key id)) (None Anon) ((Some b) (match (full_entry b id) ((Some (EEnt _ _ m _)) m) (None Anon)))))
+
+;; ---- resolution (§6.7) ---------------------------------------------------------------------
+(type EHit (EHit Name Name EInfo))   ; identity, module, info
+(fn eresolve ((es ESt) (sc Scope) (profile Bool) (n Name)) (List EHit)
+  (hits_in_scope (es_hits es n) sc (if profile Nil (scope_candidates sc n)) profile))
+(fn hits_in_scope ((hs (List EEnt)) (sc Scope) (cands (List Name)) (profile Bool)) (List EHit)
+  (measure (struct hs))
+  (match hs
+    (Nil Nil)
+    ((Cons (EEnt _ id m i) r)
+     (if (bool_and (mod_visible sc m) (bool_or profile (mem_name id cands)))
+       (Cons (EHit id m i) (hits_in_scope r sc cands profile))
+       (hits_in_scope r sc cands profile)))))
+(fn mod_visible ((sc Scope) (m Name)) Bool
+  (match (sc_vis sc)
+    (VisAll True)
+    ((VisOnly mods init _ _) (if (name_eq m (init_module)) init (mem_name m mods)))))
+;; the module an Init inductive registers under (§7.5): visible where the Init prefix is
+(fn init_module () Name (n1 (quote Init)))
+(fn only_ctors ((hs (List EHit))) (List EHit)
+  (measure (struct hs))
+  (match hs
+    (Nil Nil)
+    ((Cons (EHit id m (EICtor a b c)) r) (Cons (EHit id m (EICtor a b c)) (only_ctors r)))
+    ((Cons _ r) (only_ctors r))))
+;; the hits a term position sees: constructors, functions, sig fns, externs — never a type
+(fn only_values ((hs (List EHit))) (List EHit)
+  (measure (struct hs))
+  (match hs
+    (Nil Nil)
+    ((Cons (EHit id m (EIInd a b)) r) (only_values r))
+    ((Cons (EHit id m (EISigType a)) r) (only_values r))
+    ((Cons h r) (Cons h (only_values r)))))
+(fn only_types ((hs (List EHit))) (List EHit)
+  (measure (struct hs))
+  (match hs
+    (Nil Nil)
+    ((Cons (EHit id m (EIInd a b)) r) (Cons (EHit id m (EIInd a b)) (only_types r)))
+    ((Cons (EHit id m (EISigType a)) r) (Cons (EHit id m (EISigType a)) (only_types r)))
+    ((Cons _ r) (only_types r))))
+(fn ambiguous_msg ((n Name) (a Name) (b Name)) (List Int)
+  (append (show_name n) (append ": " (append (show_name a) (append " and " (show_name b))))))
+
