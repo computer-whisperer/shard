@@ -1,0 +1,94 @@
+;;; v3/examples/calc/calc_spec.shard — THE REQUIREMENT: the reference
+;;; recursive-descent parser over the raw input, examples/calc/calc_spec.shard
+;;; ported to S at slice 6 (LANGUAGE.md §10 item 2). The requirement itself,
+;;; run cs = spec_run cs for every cs, and this file's six claims wait for
+;;; phase 3's I. `parse_tail` recurses on a strict suffix, total by the length
+;;; measure: at Stage 0 the measure is a reported term, its descent proof a
+;;; phase-3 obligation (§12.6, totality).
+;;;
+;;;   expr   ::=  ws* number ( ws* ('+'|'-') ws* number )* ws*
+;;;   number ::=  digit+
+;;;   ws     ::=  c <= 32
+
+(import "calc.shard")
+(import "list.shard")
+(use examples.calc.calc)
+(use examples.calc.list)
+(use Init.List)
+(use Init.Option)
+(use Init.Bool)
+(use examples.calc.calc.Exp)
+
+(type NumRes (NumR Int (List Int)))   ; a parsed number value + the rest
+(type ExpRes (ExpR Exp (List Int)))   ; a parsed expression  + the rest
+
+;; drop a leading run of whitespace
+(fn skip_ws ((cs (List Int))) (List Int)
+  (measure (struct cs))
+  (match cs
+    (nil nil)
+    ((cons c rest) (if (is_ws c) (skip_ws rest) cs))))
+
+;; fold a maximal run of digit codepoints into acc, MSD-first Horner
+(fn take_digits ((cs (List Int)) (acc Int)) NumRes
+  (measure (struct cs))
+  (match cs
+    (nil (NumR acc nil))
+    ((cons c rest)
+     (if (is_digit c) (take_digits rest (+ (* acc 10) (digit_val c)))
+     (NumR acc cs)))))
+
+;; a number is one-or-more digits; none if the head is not a digit
+(fn parse_num ((cs (List Int))) (Option NumRes)
+  (match cs
+    (nil none)
+    ((cons c rest)
+     (if (is_digit c) (some (take_digits rest (digit_val c))) none))))
+
+;; build the operator node
+(fn combine ((is_add Bool) (a Exp) (b Exp)) Exp (if is_add (Add a b) (Sub a b)))
+
+;; the tail of an expression: zero or more (ws* op ws* number) groups after acc
+(fn parse_tail ((acc Exp) (cs (List Int))) (Option ExpRes)
+  (measure (len cs))
+  (match (skip_ws cs)
+    (nil (some (ExpR acc nil)))
+    ((cons c rest)
+     (if (int_eq c 43)
+       (match (parse_num (skip_ws rest))
+         (none none)
+         ((some (NumR n rest2)) (parse_tail (combine true acc (Num n)) rest2)))
+     (if (int_eq c 45)
+       (match (parse_num (skip_ws rest))
+         (none none)
+         ((some (NumR n rest2)) (parse_tail (combine false acc (Num n)) rest2)))
+       none)))))
+
+(fn numr_val ((r NumRes)) Int
+  (match r
+    ((NumR v rest) v)))
+(fn numr_rest ((r NumRes)) (List Int)
+  (match r
+    ((NumR v rest) rest)))
+
+(fn pn_some ((o (Option NumRes))) Bool
+  (match o
+    (none false)
+    ((some _) true)))
+(fn pn_rest ((o (Option NumRes))) (List Int)
+  (match o
+    (none nil)
+    ((some r) (numr_rest r))))
+
+(fn parse_expr ((cs (List Int))) (Option Exp)
+  (match (parse_num (skip_ws cs))
+    (none none)
+    ((some (NumR n rest))
+     (match (parse_tail (Num n) rest)
+       (none none)
+       ((some (ExpR e rest2))
+        (match rest2
+          (nil (some e))
+          ((cons _ _) none)))))))   ; leftover after a complete parse -> reject
+
+(fn spec_run ((cs (List Int))) (Option Int) (eval_opt (parse_expr cs)))

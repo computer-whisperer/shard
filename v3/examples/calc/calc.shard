@@ -1,0 +1,89 @@
+;;; v3/examples/calc/calc.shard — the calculator's lexer, AST, evaluator and
+;;; parser: examples/calc/calc.shard ported to S at slice 6 (LANGUAGE.md §10
+;;; item 2; ruled 2026-09-07: the program half at phase 2 under `ev`, the
+;;; claims at phase 3 with I). Verbatim under Init's Int, List, Option and
+;;; Bool; numerals are Nat at Stage 0 and the arithmetic runs on them as
+;;; integers (§12.6 — the numeral rule is Stage 1's). Each `fn` is RUNNABLE
+;;; with no L meaning (§0); the old tree is the oracle by a differential run
+;;; (kernel/test/calc_test.sh), never by import.
+
+(import Init Int)
+(use Init.List)
+(use Init.Option)
+(use Init.Bool)
+
+;; Grammar (flat, left-to-right):  INT (('+' | '-') INT)*
+(type Token
+  (TNum Int)   ; a literal number, already folded from its digits
+  (TPlus)      ; '+'
+  (TMinus)     ; '-'
+  (TBad))      ; a lexically illegal byte — poisons the stream so parse rejects
+
+;; '0'..'9' are codepoints 48..57
+(fn is_digit ((c Int)) Bool (if (le 48 c) (le c 57) false))
+(fn digit_val ((c Int)) Int (- c 48))
+;; whitespace: every control byte and space, c <= 32
+(fn is_ws ((c Int)) Bool (le c 32))
+
+;; fold one digit codepoint into the number being built (none = start fresh)
+(fn acc_digit ((acc (Option Int)) (c Int)) Int
+  (match acc
+    (none (digit_val c))
+    ((some n) (+ (* n 10) (digit_val c)))))
+
+;; emit any pending accumulated number as a leading TNum, else pass through
+(fn flush ((acc (Option Int)) (toks (List Token))) (List Token)
+  (match acc
+    (none toks)
+    ((some n) (cons (TNum n) toks))))
+
+;; one structural pass over the input, threading acc = the number being built
+(fn lex_go ((cs (List Int)) (acc (Option Int))) (List Token)
+  (measure (struct cs))
+  (match cs
+    (nil (flush acc nil))
+    ((cons c rest)
+     (if (is_digit c) (lex_go rest (some (acc_digit acc c)))
+     (flush
+       acc
+       (if (int_eq c 43) (cons TPlus (lex_go rest none))
+       (if (int_eq c 45) (cons TMinus (lex_go rest none))
+       (if (is_ws c) (lex_go rest none)
+       (cons TBad (lex_go rest none))))))))))
+
+(fn lex ((cs (List Int))) (List Token) (lex_go cs none))
+
+;; the AST; named Exp, not Expr, as in the old tree
+(type Exp (Num Int) (Add Exp Exp) (Sub Exp Exp))
+
+;; tree-walking evaluator — the meaning of an Exp
+(fn eval ((e Exp)) Int
+  (measure (struct e))
+  (match e
+    ((Num n) n)
+    ((Add a b) (+ (eval a) (eval b)))
+    ((Sub a b) (- (eval a) (eval b)))))
+
+;; fold a run of (op number) pairs into a left-leaning tree; none on a malformed tail
+(fn parse_rest ((toks (List Token)) (acc Exp)) (Option Exp)
+  (measure (struct toks))
+  (match toks
+    (nil (some acc))
+    ((cons TPlus (cons (TNum n) rest)) (parse_rest rest (Add acc (Num n))))
+    ((cons TMinus (cons (TNum n) rest)) (parse_rest rest (Sub acc (Num n))))
+    ((cons _ _) none)))
+
+;; a well-formed expression starts with a number, then a run of operator/number pairs
+(fn parse ((toks (List Token))) (Option Exp)
+  (match toks
+    ((cons (TNum n) rest) (parse_rest rest (Num n)))
+    ((cons _ _) none)
+    (nil none)))
+
+(fn eval_opt ((oe (Option Exp))) (Option Int)
+  (match oe
+    (none none)
+    ((some e) (some (eval e)))))
+
+;; the whole pipeline: text → tokens → AST → value; none on any failure to parse
+(fn run ((cs (List Int))) (Option Int) (eval_opt (parse (lex cs))))

@@ -4,7 +4,7 @@
 
 > Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
 
-> **FOUNDATION (2026-09-06): AMENDED — this roster governs the OLD tree; `docs/FOUNDATION.md` §9 governs `v3/`** (the V3 roster — K, the Rust host, the oracle evidence, retained P, the fixed-identity primitives — is written below (phase 1, 2026-09-07) and replaces this file at the flip; §10.5). **The translations trusted during V3 bring-up** (FOUNDATION §12.4 phase 0), each by review until the named gate retires it: (1) the Rust bootstrap as E's executor, as today (retired by route 1, §9.1, never by fiat); (2) the Rust narrow loader for the V3 toolchain's own sources, in exactly today's parsing profile (§9.2; retired when the shard reader tower re-parses them byte-identically); (3) the `lean4export` reader and the import identity mapping into `Env` (retired by T0: declaration-for-declaration agreement with the export and the independent checkers); (4) the initial S→L elaborator for the toolchain's own inline proofs, which are pending claims under the reviewed host until K checks them (§9.2); (5) the old tree's checker as the differential **oracle** for ported modules — evidence, never authority; (6) the temporary native chain for speed, never authority, exactly as this file already says. Nothing else is trusted during bring-up; a seventh item is a dated decision.
+> **FOUNDATION (2026-09-06): AMENDED — this roster governs the OLD tree; `docs/FOUNDATION.md` §9 governs `v3/`** (the V3 roster — K, the Rust host, the oracle evidence, retained P, the fixed-identity primitives — is written below (phase 1, 2026-09-07) and replaces this file at the flip; §10.5). **The translations trusted during V3 bring-up** (FOUNDATION §12.4 phase 0), each by review until the named gate retires it: (1) the Rust bootstrap as E's executor, as today (retired by route 1, §9.1, never by fiat); (2) the Rust narrow loader for the V3 toolchain's own sources, in exactly today's parsing profile (§9.2) — **RETIRED 2026-09-13 (phase 2, slice 6): `v3/kernel/test/parity_test.sh` has the V3 reader re-parse every toolchain closure byte-identically on every run (18 closures, 61,080 declaration lines), so the Rust loader's parse is cross-checked, never trusted alone;** (3) the `lean4export` reader and the import identity mapping into `Env` (retired by T0: declaration-for-declaration agreement with the export and the independent checkers); (4) the initial S→L elaborator for the toolchain's own inline proofs, which are pending claims under the reviewed host until K checks them (§9.2); (5) the old tree's checker as the differential **oracle** for ported modules — evidence, never authority; (6) the temporary native chain for speed, never authority, exactly as this file already says. Nothing else is trusted during bring-up; a seventh item is a dated decision.
 
 **Status: RATIFIED 2026-07-10 (trust-residue fork).**
 The standing discipline for what a shard verdict rests on, what is
@@ -93,7 +93,9 @@ governs `v3/` now:
 2. **The Rust host** (`rust_bootstrap`, `eval direct`): route 3 of §9.1
    — implements E's operational semantics, defines no rule, executes K
    only, trusted by review as it always was. It is the execution
-   AUTHORITY for V3 verdicts. The compiled K (`v3/bin/t0`, built by the
+   AUTHORITY for V3 verdicts. Its parse of the toolchain's own sources
+   is cross-checked by the V3 reader on every test run (frontend
+   parity, `v3/kernel/test/parity_test.sh`, 2026-09-13). The compiled K (`v3/bin/t0`, built by the
    temporary chain — route 1 without its proof, ruled 2026-09-07) is a
    differential artifact: it runs T0's full replay only after the
    interpreter byte-ties its verbose output on a prefix, and its word

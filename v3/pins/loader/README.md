@@ -1,4 +1,4 @@
-# v3/pins/loader — the loader's corpus (phase 2, slices 3–5b)
+# v3/pins/loader — the loader's corpus (phase 2, slices 3–6)
 
 Each directory is a **package root**; `CASE/main.shard` is the file the
 loader is given (`v3/kernel/load.shard --root v3/pins/loader/CASE …`),

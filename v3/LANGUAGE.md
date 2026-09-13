@@ -1,6 +1,6 @@
 # The V3 language — S, L and E at Stage 0 (phase 2 draft)
 
-> **STATUS (2026-09-12): DRAFT — slices 1–5 of phase 2 (FOUNDATION
+> **STATUS (2026-09-13): DRAFT — slices 1–6 of phase 2 (FOUNDATION
 > §12.4 item 2; `docs/records/FOUNDATION.md` §9).** Written before the
 > reader existed, as the design the reader, the loader, the views, the
 > fragment classifier and `ev` are built to. **Slice 2 built §2 and the
@@ -34,6 +34,17 @@
 > the roles of a constant's binders), `v3/kernel/etable.shard` (the E table,
 > split out of the classifier); K's accelerated Nat set in the primitive
 > table under its identities; the `REALIZE` record; R45's third test.
+> **Slice 6 built §10's items 1 and 2:** `v3/examples/calc/` (the
+> program half ported to S, one file per old file, the claims waiting for
+> phase 3), `kernel/test/calc_harness.shard` and the old tree's
+> `examples/calc/calc_differential.shard` (the differential's two drivers
+> over one shared input set, byte-identical outputs —
+> `kernel/test/calc_test.sh`), `kernel/dump.shard` with `load.shard
+> --dump` and the bootstrap's `dump` verb (frontend parity: the canonical
+> text of §10, byte-identical over every toolchain closure —
+> `kernel/test/parity_test.sh` — retiring TCB bring-up item 2); the seal
+> of `CheckedEnv` deferred to the phase-3 opener with its analysis (§6.6,
+> §13 item 26).
 > It supersedes `docs/LANGUAGE.md` for the `v3/`
 > tree (FOUNDATION §10.5); the old document keeps describing the old
 > tree until the flip. The proof IR **I** is phase 3's chapter and is
@@ -273,6 +284,10 @@ them; each is a candidate for §13.
   rests on `M.ax` without trusting it is outside that file's policy.
 - **A `sorry` name is pending**: citing it is refused with
   `pending_obligation`, never resolved to an assumption.
+- **A file whose loading failed is loaded once** (slice 6): its
+  module is recorded as failed after its heads were pre-registered, so
+  a later import of it reports `import_failed` instead of re-reading
+  it into `duplicate_name` (`v3/pins/loader/retry`).
 - **Paths**: an import is relative to the importing file's directory,
   never absolute, never above the root; a module path with a dot in a
   file stem, or headed `Init`, is refused; a path without `.shard` is a
@@ -625,10 +640,24 @@ preference; K sees one `std.list.List` in either environment.
   theorem's `axioms=` names the parameters it rests on; the
   implementation check's `DISCHARGE` lines say which the implementation
   discharged and which are pending; a consumer that links an
-  implementation at `run` is slice 5's. `CheckedEnv` behind
-  `kernel/env`'s view waits for the toolchain to load under this
-  loader (slice 6); until then the profile exposes its constructor
-  (R43, `v3/README.md`).
+  implementation at `run` is slice 5's.
+- **The seal of `CheckedEnv` (§6.5, law §3.5) is deferred to the
+  phase-3 opener (ruled 2026-09-13, slice 6; §13 item 26).**
+  `kernel/env`'s view is not the boundary: a `sig type CheckedEnv`
+  there would have to export the operations `add`, `tc` and `import`
+  build environments with — the entry insert, the quotient flag, the
+  pin list, the watermark — and a forged environment then enters
+  through the API instead of the constructor. The boundary is K: the
+  fifteen files `name level expr decl env intmap tc add inductive
+  nested import axioms accel_pins refgen json` as one directory module
+  whose view carries the 87 functions and the twenty types the rest of
+  the toolchain calls today, a bootstrap resolver that follows a
+  directory import so route 3 still runs, and a rule refusing a direct
+  import into a sealed directory from outside it. No client outside
+  `kernel/` exists at phase 2; the first is `meta/` at phase 3, and the
+  view should list what `meta/` needs rather than what today's files
+  happen to call. Until then the profile exposes the constructor and
+  raw-API callers are reviewed toolchain code (R43, `v3/README.md`).
 
 ### 6.7 The classifier, `ev` and `run` as built (slice 5, 2026-09-12)
 
@@ -1113,14 +1142,77 @@ Four suites, agreed before any result is read:
    one canonical text: the reader prints its `Prog`; the bootstrap
    gains a `dump` mode that prints its `Module` in the same text.
    Byte-identical over the toolchain's closure retires TCB bring-up
-   item (2), the Rust loader's parsing role.
+   item (2), the Rust loader's parsing role. **As built (slice 6,
+   2026-09-13; §13 item 25).** The canonical text is one line per
+   declaration, the lines sorted bytewise: `type NAME n (CTOR T…)…`,
+   `fn NAME n (T…) T BODY`, `extern NAME n (T…) T`, with `n` the
+   type-parameter count and every name its last component (a
+   primitive's its full spelling); types `Int`, `Symbol`, `(NAME T…)`
+   and `?i` for the i-th type parameter, numbered by the parameterized
+   head first and then by first occurrence across the binders and the
+   result; terms `#i` for a bound variable, integers in decimal, `'x`
+   for a symbol, `(NAME E…)` for a constructor, a call, a primitive or
+   an extern alike, `(match E (PAT E)…)` with `_` for a variable
+   pattern, `(let (E…) E)` at the **sequential** indices — the
+   bootstrap binds in parallel and its dump shifts each right-hand
+   side's outer indices, which §5.4's measurement says changes no
+   toolchain `let` — and `(if E E E)`; a string and a `(list …)` are
+   the constructor chains both loaders build from them. The measure
+   clause is outside the text, since the bootstrap drops it at load.
+   `kernel/dump.shard` prints a `Prog`, `load.shard --dump FILE` after
+   a clean load; the bootstrap's `eval dump FILE` prints the same
+   closure (`rust_bootstrap/src/dump.rs`). `kernel/test/parity_test.sh`
+   runs both over every toolchain entrypoint — the driver, the T0
+   driver, the calc harness, every test — and compares: **byte-identical
+   over 18 closures, 61,080 declaration lines, in 37 s (2026-09-13)**,
+   after one finding — the driver's own closure had never been
+   classified, and `rz_open_ctor`'s wildcard arm sat one match too deep
+   (a real non-exhaustive match the bootstrap tolerated because its
+   callers pass constructors only; fixed). Green, it retires TCB
+   bring-up item 2 (`docs/TCB.md`, the V3 roster): the Rust loader
+   still parses the toolchain for route 3, and the V3 reader's
+   agreement is the gate that keeps it honest, as route 1's byte-tie
+   keeps compiled K.
 2. **Execution parity.** The same `Prog` under `ev` (hosted on route 3)
    and under the Rust evaluator: K's test entrypoints and the T0
    fixture — route 2, K interpreted by `ev` — with byte-identical
    verdict lines — **the fixture's tie landed at slice 5**
    (`kernel/test/route2_test.sh`, §6.7); `examples/calc`'s program half under `ev` against the
    old tree's evaluator on a fixed input set; every primitive's
-   positive, negative and boundary cases.
+   positive, negative and boundary cases. **Calc as built (slice 6;
+   §13 item 27).** `v3/examples/calc/` is the program half in S, one
+   file per old file (the claims a header line each, phase 3): the 51
+   functions and 9 types verbatim under Init's `Int`, `List`, `Option`
+   and `Bool` — `(import Init Int)` over the 17,812-line fixture
+   `kernel/test/fixtures/init_prefix_int.ndjson`, the export through
+   the `Int` inductive — the measure proofs reduced to their terms,
+   `ediv`/`mod` as `Int.ediv`/`Int.emod`, `append` and `len` as the
+   port's own `list.shard` until `v3/std` (phase 3), the pair `drive`
+   returns declared in the port because `Prod` lies past the fixture.
+   Numerals are `Nat` at Stage 0 and the arithmetic runs on them as
+   integers (§12.6's numeral rows). An S program cannot name the wire's
+   cells — they are the prelude's, and a file that opens the prelude's
+   `List` can no longer name Init's under §3.1's candidate rule — so the
+   differential's drivers sit outside the program: `kernel/test/
+   calc_harness.shard` loads the package, calls `ev` on each entry with
+   values built as data and renders the results in the old tree's
+   value syntax; the old side is the tower's expression mode (`eval
+   MODULE EXPR`, `kernel/eval.shard`'s evaluator and printer — `eval
+   direct`'s flat resolver cannot follow `std/list`'s directory-module
+   imports) over `examples/calc/calc_differential.shard`, a pure module
+   in the old tree adding only the derived inputs (LAYOUT: no file
+   under `v3/` imports the old tree), driven case by case by
+   `kernel/test/calc_test.sh`. Both sides read
+   `kernel/test/fixtures/calc_inputs.txt` and produce one line per
+   input and case — `lex`, `parse`, `run`, the spec parser's eleven
+   functions, `spec_run`, `step` and `step_spec` with the state
+   threaded, the trace and world folds, `show`/`valI`, `show_ascii`,
+   the digit functions: 34 cases per line and 13 folds — and the script
+   compares the two outputs byte for byte. **Byte-identical over 21
+   inputs, 727 lines a side (2026-09-13): the port under `ev` in 7 s,
+   the old tree in 154 s.** Left out on both sides: `calc_ndigit`'s
+   `codes`, shadowed in the old tree's flat closure by
+   `calc_show_run`'s (first definition wins), covered by `code`.
 3. **Checker parity.** Phase 1's byte-tie of routes 1 and 3, carried
    unchanged.
 4. **Independent pins.** Expected outputs fixed by hand, never
@@ -1145,6 +1237,7 @@ never compared as verdicts.
 | prepared handles, long-lived environments | §9.3, T6 | 4 |
 | evaluation reflection: `ev`'s theorem, the `rfl` node | §4.4, T8 | 4 |
 | the canonical S form: CANON's rule set rewritten for S | §5.1 "One canonical S", §10.5 | 2, its own slice |
+| `CheckedEnv` sealed: K one directory module behind a view (§6.6) | §3.5, §8.2 | 3, the opener |
 | user notation | §5.3 departure 6 | never in v1 |
 
 ## 12. Changes from v2 — the compatibility ledger
@@ -1165,7 +1258,7 @@ migration table of law §10.3 owns the name and behavior changes of the
 
 | v2 | fate | where / note |
 |---|---|---|
-| `(type (NAME T…) (CTOR F…)…)` | carried | §4; constructors gain the identity `NAME.CTOR`; a bare constructor citation needs the declaring file or a `use` (§13 item 7). Since slice 5b `Init`'s E-eligible inductives (`List`, `Option`, `Bool`, `Decidable`, `Array`, …) are E types with their constructors in S (§7.5); `Nat.succ` is refused with the pointer to numerals |
+| `(type (NAME T…) (CTOR F…)…)` | carried | §4; constructors gain the identity `NAME.CTOR`; a bare constructor citation needs the declaring file or a `use` of the type's namespace (§13 item 7: `(use m.Exp)` for `Num`); a constructor bearing its type's name — `(type World (World Int))` — resolves to the type in an E-type position and to the constructor elsewhere (§13 item 28, slice 6). Since slice 5b `Init`'s E-eligible inductives (`List`, `Option`, `Bool`, `Decidable`, `Array`, …) are E types with their constructors in S (§7.5); `Nat.succ` is refused with the pointer to numerals |
 | `(fn NAME PARAMS RET BODY)` | carried as E; **changed** | §0: no L meaning at phase 2 — in v2 a `fn` was also the object of `unfold`/`simp` in proofs; restored at phase 3 |
 | polymorphic head `(fn (append T) …)`; bare type variables in binders auto-bound (`(xs (List T))`) | re-spelled in S; carried in the profile | S: explicit `((T Type) …)` binders — law §5.3 departure (4), "auto-bound implicits → explicit binders"; the profile keeps both v2 spellings (§8) |
 | `(extern NAME PARAMS RET)`, polymorphic externs | carried | §4; the roster is the host's (§12.4) |
@@ -1174,7 +1267,7 @@ migration table of law §10.3 owns the name and behavior changes of the
 | `match`: first match wins, nested patterns, integer and `(quote S)` patterns, `_`, bare 0-ary constructors | carried in E | symbol patterns profile only; Stage 1's match compilation must keep first-match semantics (Lean's does) |
 | parallel `let`, no `let*` | **changed**: sequential in L and E (RULED 2026-09-12, R44) | §5.4; 0 of the tree's 30,611 `let` groups depend on parallel binding, so no source changes meaning; the bootstrap evaluator's parallel rule gives identical results on all of them until the V3 reader replaces it (slice 2) |
 | `(quote S)`, `'S`, the `Symbol` type, `sym_eq`, `sym_of_chars`, `chars_of_sym` | profile only; **AT RISK in S** — refused by name in S since slice 5 (`symbol_literal`) | S has no symbol type: a name is a `Name` value. The toolchain (ten kernel files) and the tools use symbols as tags and identifiers; whether V3 source gets a `Name` literal is a phase-3 decision |
-| `(list a b c)` (9,455 uses outside `v3/`) | profile only; **AT RISK in S** — refused by name in S since slice 5 (`list_sugar`) | Lean's `[a, b, c]` is elaborator sugar; Stage 1 should add a list literal or every ported `fn` spells `cons` chains |
+| `(list a b c)` (9,455 uses outside `v3/`) | profile only; **AT RISK in S** — refused by name in S since slice 5 (`list_sugar`) | Lean's `[a, b, c]` is elaborator sugar; Stage 1 should add a list literal or every ported `fn` spells `cons` chains — calc's port spells its two (slice 6) |
 | `"…"` = UTF-8 bytes as `(List Int)`, on the extern wire too | **changed** in S | K's `String` literal, its E realization phase 3 (§5.3) — in an S E body refused since slice 5 (`string_literal`). **AT RISK:** the extern wire's byte convention under the naming law (`List UInt8`? `ByteArray`?) is undecided; the profile keeps bytes, and at phase 2 the wire's cells are the toolchain prelude's `List`, `Option`, `Pair` and `Bool` (§6.7) |
 | `Int` numerals everywhere, `-7` | **changed** in S | numerals are `Nat`; negatives are constructor terms at Stage 0 (§2); the numeral rule of law §5.2 is Stage 1 and `-7` as `Neg.neg` is a Stage-3 instance — **AT RISK:** negative literals stay verbose until then unless Stage 1 special-cases `-` |
 | unbound identifier = `FVar` (proof-time opened variables) | dropped | an unbound name is a resolution error; K refuses free variables; I's named context replaces the use (phase 3) |
@@ -1186,7 +1279,7 @@ migration table of law §10.3 owns the name and behavior changes of the
 | `(record …)`, `make`, `with`, `F_of`/`with_F`, the six-law family, `NAME_eta` (21 files, 237 `with_F` sites) | re-spelled; **AT RISK** | `structure` with projections (§4): `F_of` → `NAME.F`; `NAME_eta` is K's structure eta for free; the laws are `rfl`. **No Stage-0 form for `with_F` updaters or order-free `make`**: Lean's `{ s with f := v }` is elaborator sugar — Stage 1 must add it or every update site spells the constructor |
 | `std/word` (`U8`…`I32`, opaque), `std/bytes`, `std/str` | re-spelled | `UInt*`/`BitVec`, `ByteArray`, `String` (law §10.3, INVENTORY), phase 3–5. **AT RISK:** widths beyond 64 — INVENTORY realizes `BitVec w` only for static `w ≤ 64`; the 2026-09-02 ruling kept `std/word`'s unused widths as a facility |
 | `S^`, `inline`, `chain` (2,733 / 1,851 / 320 uses) | dropped with the v2 proof language | their reason — claim statements must be literal spellings that match CBV residues — does not survive: I's `rw`/`simp_only` match terms, and Nat towers are K literals. Phase 3 confirms; **AT RISK** if some I form still needs a literal tower |
-| `(import "x.shard")` opens the file's names (flat scope) | **changed** | `import` never opens, `use` does (§3.1); the profile keeps flat scope until its `use` lines are added (slice 6) |
+| `(import "x.shard")` opens the file's names (flat scope) | **changed** | `import` never opens, `use` does (§3.1); the profile keeps flat scope with no `use` lines (§13 item 16 — slice 1's expectation that slice 6 adds them is withdrawn) |
 | `(use (:: m *))`, selective `(use (:: m name))` (1,768 selective sites) | re-spelled | `(use m)` and `(use m name…)` (§3.1) |
 | `use-module` (2 uses) | dropped | vestigial |
 
@@ -1262,16 +1355,16 @@ and the disposition this draft intends.
 | row | owner | first consumer | regression | intended disposition |
 |---|---|---|---|---|
 | symbols in S (`quote`, `Symbol`, `sym_eq`) | phase 3, Stage 1 (the reader) | the toolchain's own sources (ten kernel files) when they port to L | a `fn` using `(quote x)` and `sym_eq` under the V3 reader is refused with a named reason until decided | a `Name` literal, or symbols stay profile-only |
-| `(list a b c)` | phase 3, Stage 1 | every ported `fn` (9,455 sites); calc's program half runs under the profile at slice 6 | `(list 1 2)` under the V3 reader refused by name | a list literal at Stage 1 |
-| the extern wire's bytes | slice 5 (`ev`'s extern boundary — **bytes as the prelude's cells, landed**); phase 3 for the L type | `sha256sum`'s bin; calc's app step | `write_line` of a literal round-trips its bytes through the driver (route 2's byte-tie) | bytes at phase 2; `ByteArray` or `List UInt8` decided with §5.3's `String` realization |
-| negative numerals | phase 3, Stage 1 | calc (negative `Int` results); `std/div` | `-7` under the V3 reader = the constructor term at Stage 0 | Stage 1 special-cases `-` on a numeral; ruled then |
+| `(list a b c)` | phase 3, Stage 1 | every ported `fn` (9,455 sites); calc's program half, ported to S at slice 6, spells its list literals as constructor chains | `(list 1 2)` under the V3 reader refused by name | a list literal at Stage 1 |
+| the extern wire's bytes | slice 5 (`ev`'s extern boundary — **bytes as the prelude's cells, landed**); phase 3 for the L type | `sha256sum`'s bin; calc's app step — an S program names no wire cell at phase 2, so calc's differential keeps its drivers outside the program (slice 6, §10) | `write_line` of a literal round-trips its bytes through the driver (route 2's byte-tie) | bytes at phase 2; `ByteArray` or `List UInt8` decided with §5.3's `String` realization |
+| negative numerals | phase 3, Stage 1 | calc (negative `Int` results); `std/div` | `-7` under the V3 reader = the constructor term at Stage 0; calc's port (slice 6) writes no negative literal and computes its negative results from `-` at run time, its `Nat` numerals running as integers | Stage 1 special-cases `-` on a numeral; ruled then |
 | `gen_fresh` | **decided slice 5: dropped** | the ten old-tree kernel files (canon, tactics) as they port | a `fn` citing `gen_fresh` is refused at load (`unknown_head`) | a threaded counter in the ported toolchain |
 | `with_F` updaters, order-free `make` | phase 3, Stage 1 | 237 sites (`models/imp`, the tools) | `(with_F s v)` refused by name until the update form exists | Stage 1 record-update sugar (Lean's `{ s with f := v }`) |
 | `std/word` widths beyond 64 | phase 5 (the word/float line) | none today (the 2026-09-02 ruling kept the widths as a facility) | INVENTORY's static `w ≤ 64` bound on `BitVec w` | static `w ≤ 64` unless a consumer appears |
 | `S^`, `inline`, `chain` | phase 3 (I) | the PORT theorem corpus | a claim whose statement needs a literal tower under I's `rw` | dropped; phase 3 confirms |
 | `(lib …)` | phase 5 | `tools/lowcheck`'s fixtures (4 uses) | the fixtures under the profile | decided with the lowering-side toolchain |
 | `subterm-induct`/`(below)`, `fin-split` | phase 3 (I steps) | the regenerated certificate kits; the std proofs that use them | one theorem each: `tb_len`'s strong induction; one bounded enumeration | `wf` over `sizeOf` and `decide`/`omega`; a subterm rule only if a ported proof needs it |
-| no totality check on any `fn` during Stage 0 | phase 3, Stage 1 (law §4.5) | every `fn`; calc's program half at slice 6 | R45's self-recursive candidate exhausts and gains no equations (`ev_test`, landed slice 5); a `realize` is checked for structural descent and a looping body refused (`realize_loop`, landed 5b) | measure obligations discharged at Stage 1; the runnable-only status visible in the driver's output meanwhile (`RUNNABLE`, R45, landed); a `realize`'s `(measure E)` a reported obligation (`PENDING … measure`, 5b) |
+| no totality check on any `fn` during Stage 0 | phase 3, Stage 1 (law §4.5) | every `fn`; calc's 51 functions, `RUNNABLE` since slice 6 with their measures reduced to terms | R45's self-recursive candidate exhausts and gains no equations (`ev_test`, landed slice 5); a `realize` is checked for structural descent and a looping body refused (`realize_loop`, landed 5b) | measure obligations discharged at Stage 1; the runnable-only status visible in the driver's output meanwhile (`RUNNABLE`, R45, landed); a `realize`'s `(measure E)` a reported obligation (`PENDING … measure`, 5b) |
 
 ## 13. For ratification — decisions made here beyond the law's text
 
@@ -1370,3 +1463,28 @@ and the disposition this draft intends.
 24. **The `LATER` record is gone** with `realize` built; a `fulfills`
     outside an implementation check is the load error
     `fulfills_outside_impl`.
+25. **The canonical dump text and the sequential normalization** (§10
+    item 1, slice 6): the bootstrap's dump converts its parallel `let`
+    to the sequential indices; the measure clause is outside the text;
+    names print as their last component, primitives in full.
+    Alternative: the V3 printer converting to parallel indices, which
+    cannot represent a right-hand side citing an earlier binder.
+26. **The seal is deferred to the phase-3 opener** (§6.6): the boundary
+    is K, not `kernel/env`, and sealing K is a directory module of
+    fifteen files, a view of 87 signatures, a bootstrap resolver change
+    and a `private_module` rule, for no client that exists at phase 2.
+    Alternative: sealing now against the 87 calls today's files make,
+    then re-cutting the view for `meta/`.
+27. **Calc's differential drivers sit outside the program** (§10 item
+    2): the harness calls `ev` with values built as data and renders
+    the results; an S program names no wire cell at phase 2.
+    Alternative: the S port importing the prelude for the wire's cells,
+    which the candidate rule of §3.1 refuses beside Init's `List`.
+28. **An E-type position takes the type** when a citation resolves to
+    both a type and its same-named constructor (the `type` form opens
+    its own namespace, item 7, so `(type World (World Int))` opens
+    `World` and `World.World`): a `fn`'s binders and result and a
+    `type`'s fields are type positions; a term or pattern position
+    still takes the constructor. Reconstruction of what the position
+    determines, as level 0 is (§4). Alternative: refusing the idiom,
+    which is v2's commonest; or a Stage-1 expected-kind resolution.

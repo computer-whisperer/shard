@@ -1183,6 +1183,68 @@ is `docs/FOUNDATION.md` §5.3.
   route 2's byte-tie in 47 s on the runner, the full-export replay on
   compiled K in 2,458 s at a 31.0 GB peak, all 20 candidates pinned,
   closures identical, byte-ties identical.
+- **Slice 6 (2026-09-13): calc's program half under `ev`, frontend
+  parity, the seal deferred.** Opened with a design report and five
+  rulings (user: "1: commit the 1.0MB fixture, 2: port all, 3: yes, 4:
+  defer, 5: accept"): the `Int`-bearing fixture committed
+  (`init_prefix_int.ndjson`, the export through the `Int` inductive at
+  line 17,812; loads in about 2 s), all thirteen calc files ported, the
+  old side's driver in the old tree (LAYOUT forbids `v3/` importing
+  it), the seal deferred, a bootstrap `dump` verb accepted. Written to
+  `LANGUAGE.md` first (banner; §6.6's deferral; §10 items 1 and 2 as
+  built; §11; §12.1 and §12.6 rows; §13 items 25–28). **Calc:**
+  `v3/examples/calc/` is the program half in S, one file per old file,
+  the claims a header line each — verbatim under Init's `Int`, `List`,
+  `Option` and `Bool` with `use` lines for the modules and the types'
+  namespaces it cites, the measure proofs reduced to their terms,
+  `Int.ediv`/`Int.emod`, its own `list.shard` for `append` and `len`,
+  its own pair where `drive` returns one (`Prod` lies past the
+  fixture); 53 declarations `RUNNABLE`, 0 refused. An S program names
+  no wire cell at phase 2 (the prelude's `List` beside Init's is what
+  §3.1's candidate rule refuses), so the drivers sit outside the
+  program: `kernel/test/calc_harness.shard` loads the package and
+  calls `ev` with values built as data, rendering in the old tree's
+  value syntax; the old side is the tower's expression mode over
+  `examples/calc/calc_differential.shard` — `eval direct`'s flat
+  resolver cannot follow `std/list`'s directory-module imports —
+  driven case by case by `kernel/test/calc_test.sh`: 34 cases per input
+  line and 13 folds over one input set of 21 lines, **byte-identical,
+  727 lines a side** (the port in 7 s, the old tree in 154 s).
+  **Frontend parity:** `kernel/dump.shard` and `load.shard --dump`
+  print a `Prog` as one canonical text (§10 item 1: sorted lines, last
+  components, `?i` by first occurrence, sequential indices, literal
+  chains, no measure clause), `rust_bootstrap/src/dump.rs` and `eval
+  dump` the bootstrap's Module in the same text — its parallel `let`
+  resolved to binders and re-indexed sequentially; `kernel/test/
+  parity_test.sh` compares them over every toolchain closure:
+  **byte-identical, 18 closures, 61,080 declaration lines, 37 s** —
+  TCB bring-up item 2 retired (`docs/TCB.md`). **Findings, all fixed
+  and pinned:** (1) the driver's own closure had never been classified
+  — `rz_open_ctor`'s wildcard arm sat one match too deep, a real
+  non-exhaustive match the bootstrap tolerated because its callers
+  pass constructors only (found by the classifier through the parity
+  run; a paren-placement slip of 5b); (2) a `type` whose constructor
+  bears its name — v2's commonest idiom — was `ambiguous_type` in a
+  binder: an E-type position now takes the type (§13 item 28;
+  `type_ctor_name`); (3) a file whose reading failed after its heads
+  were pre-registered was re-read by the next root's import and
+  reported `duplicate_name`: it is recorded as failed and a later
+  import says `import_failed` (§3.3; `retry`, `loader_test`); (4)
+  `LANGUAGE.md` §12.1 still said the profile gains `use` lines at
+  slice 6 against §13 item 16 — withdrawn. **The seal (§13 item 26):**
+  `kernel/env`'s view would export the environment's mutators, so it
+  is no seal; the boundary is K, and sealing K — fifteen files as one
+  directory module, a view of the 87 functions and twenty types the
+  rest of the toolchain uses, a bootstrap resolver that follows a
+  directory import, a rule refusing direct imports into a sealed
+  directory — is the phase-3 opener's, when `meta/` is the first client
+  outside `kernel/` and the view can list what it needs. **Left for
+  slice 7's close-out:** of T1's three phase-2 fixtures only the
+  decision tag is covered; the branch-local proof needs `Fin` (phase
+  3) and the checked entry needs the driver's argument validation (§9),
+  which it does not have — phase 2 cannot close without a ruling on
+  them. Tests: 19 entrypoints, 0 failed, 237 s (route 2's byte-tie 21
+  s; calc 161 s; parity 37 s).
 
 ## 10. Related records
 

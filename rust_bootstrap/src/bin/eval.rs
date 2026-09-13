@@ -113,6 +113,31 @@ fn run() -> ExitCode {
     // that logic lives in loader.shard and stays there; check.shard
     // qualifies, shardfmt does not). Semantics are identical — the tower
     // remains the self-hosting cross-check.
+    // `eval dump <file.shard>`: the file's closure loaded exactly as `direct`
+    // loads it and printed as the canonical text of frontend parity
+    // (v3/LANGUAGE.md §10 item 1; dump.rs) — nothing is run.
+    if prog_args.first().map(String::as_str) == Some("dump") {
+        if prog_args.len() != 2 {
+            eprintln!("usage: eval dump <file.shard>");
+            return ExitCode::from(2);
+        }
+        let paths = match resolve_closure(Path::new(&prog_args[1])) {
+            Ok(ps) => ps,
+            Err(e) => {
+                eprintln!("error resolving entrypoint closure: {}", e);
+                return ExitCode::from(2);
+            }
+        };
+        let vm = match load::module_from_paths_with_base(&paths, None) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("error loading entrypoint closure: {}", e);
+                return ExitCode::from(2);
+            }
+        };
+        print!("{}", proving_bootstrap_v2::dump::dump(&vm));
+        return ExitCode::SUCCESS;
+    }
     let entry = if prog_args.first().map(String::as_str) == Some("direct") {
         if prog_args.len() < 2 {
             eprintln!("usage: eval direct <app.shard> [args…]");

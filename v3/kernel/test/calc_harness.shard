@@ -1,0 +1,251 @@
+;;; v3/kernel/test/calc_harness.shard — the V3 side of calc's differential
+;;; (LANGUAGE.md §10 item 2, slice 6; kernel/test/calc_test.sh):
+;;;   eval direct v3/kernel/test/calc_harness.shard FIXTURE INPUTS
+;;; loads v3/examples/calc/ (root v3) with the Init prefix FIXTURE (through
+;;; Int: fixtures/init_prefix_int.ndjson), then for each line of INPUTS calls
+;;; `ev` on every entry of the program half with the line as an Init
+;;; `List Int` cell — the values built as data, since an S program names no
+;;; wire cell at phase 2 (§13 item 27) — and prints one line per input and
+;;; entry, `[i] NAME: VALUE`, then the folds over all the lines as
+;;; `* NAME: VALUE`. VALUE is written in the old tree's value syntax — the
+;;; tower's printer (`eval MODULE EXPR`, kernel/eval.shard) is the other
+;;; side, driven case by case by calc_test.sh over examples/calc/
+;;; calc_differential.shard: `(Some 3)`, `None`, `(Cons 1 Nil)`, `True`,
+;;; a nullary constructor bare, integers in decimal. The case list here and
+;;; in calc_test.sh is one list in one order; a disagreement is a finding.
+
+(import "../loader.shard")
+(import "../ev.shard")
+
+(fn fuel () Int 100000000)
+(fn nm ((s Symbol)) Name (match (name_of_sym s) ((Some n) n) (None Anon)))
+
+;; ---- values as data: Init's cells and the port's --------------------------------
+(fn v_nil () Val (VCtor (nm (quote List.nil)) Nil))
+(fn v_cons ((x Val) (r Val)) Val (VCtor (nm (quote List.cons)) (list x r)))
+(fn v_bytes ((bs (List Int))) Val
+  (measure (struct bs))
+  (match bs (Nil (v_nil)) ((Cons b r) (v_cons (VInt b) (v_bytes r)))))
+(fn v_lines ((ls (List (List Int)))) Val
+  (measure (struct ls))
+  (match ls (Nil (v_nil)) ((Cons l r) (v_cons (v_bytes l) (v_lines r)))))
+(fn v_none () Val (VCtor (nm (quote Option.none)) Nil))
+(fn v_state0 () Val (VCtor (nm (quote examples.calc.calc_app.CalcState.CalcState)) (list (v_none))))
+(fn v_world0 () Val (VCtor (nm (quote examples.calc.calc_app_world.CalcWorld.CalcWorld)) (list (v_nil))))
+(fn v_num ((n Int)) Val (VCtor (nm (quote examples.calc.calc.Exp.Num)) (list (VInt n))))
+(fn v_add ((a Val) (b Val)) Val (VCtor (nm (quote examples.calc.calc.Exp.Add)) (list a b)))
+(fn v_sub ((a Val) (b Val)) Val (VCtor (nm (quote examples.calc.calc.Exp.Sub)) (list a b)))
+(fn v_print ((bs (List Int))) Val (VCtor (nm (quote examples.calc.calc_app.Action.Print)) (list (v_bytes bs))))
+(fn v_exit ((n Int)) Val (VCtor (nm (quote examples.calc.calc_app.Action.Exit)) (list (VInt n))))
+(fn v_nop () Val (VCtor (nm (quote examples.calc.calc_app.Action.Nop)) Nil))
+(fn v_true () Val (VCtor (nm (quote Bool.true)) Nil))
+(fn v_false () Val (VCtor (nm (quote Bool.false)) Nil))
+(fn v_digit ((b Int)) Val (VCtor (nm (sym_of_chars (append "examples.calc.calc_ndigit.Digit.D" (show_int (- b 48))))) Nil))
+(fn v_digits ((bs (List Int))) Val
+  (measure (struct bs))
+  (match bs
+    (Nil (v_nil))
+    ((Cons b r) (if (bool_and (le 48 b) (le b 57)) (v_cons (v_digit b) (v_digits r)) (v_digits r)))))
+(fn first_digit ((bs (List Int))) (Option Int)
+  (measure (struct bs))
+  (match bs
+    (Nil None)
+    ((Cons b r) (if (bool_and (le 48 b) (le b 57)) (Some b) (first_digit r)))))
+
+;; ---- the old tree's value syntax ---------------------------------------------------
+(fn r_val ((v Val)) (List Int)
+  (measure (struct v))
+  (match v
+    ((VInt n) (show_int n))
+    ((VSym s) (Cons 39 (chars_of_sym s)))
+    ((VCtor c args)
+     (match args
+       (Nil (r_ctor c))
+       (_ (append "(" (append (r_ctor c) (append (r_args args) ")"))))))))
+(fn r_args ((vs (List Val))) (List Int)
+  (measure (struct vs))
+  (match vs (Nil Nil) ((Cons v r) (append " " (append (r_val v) (r_args r))))))
+;; Init's constructors under the old tree's names; the port's by their last component
+(fn r_ctor ((c Name)) (List Int)
+  (let ((s (chars_of_sym (match c ((Str _ x) x) (_ (quote anon))))))
+    (if (int_list_eq s "some") "Some"
+    (if (int_list_eq s "none") "None"
+    (if (int_list_eq s "cons") "Cons"
+    (if (int_list_eq s "nil") "Nil"
+    (if (int_list_eq s "true") "True"
+    (if (int_list_eq s "false") "False" s))))))))
+(fn r_opt ((o (Option (List Int)))) (List Int)
+  (match o (None "None") ((Some s) (append "(Some " (append s ")")))))
+
+;; ---- calling the program ----------------------------------------------------------------
+(fn call ((p Prog) (f Symbol) (args (List Val))) (List Int)
+  (match (ev p (nm f) args (fuel))
+    ((EvOk v) (r_val v))
+    (EvOut "out-of-fuel")
+    ((EvStuck r n) (append "stuck " (append (chars_of_sym r) (append " in " (show_name n)))))))
+(fn call_v ((p Prog) (f Symbol) (args (List Val))) (Option Val)
+  (match (ev p (nm f) args (fuel)) ((EvOk v) (Some v)) (_ None)))
+;; the result of `run`, when some
+(fn run_int ((p Prog) (line Val)) (Option Int)
+  (match (call_v p (quote examples.calc.calc.run) (list line))
+    ((Some (VCtor _ (Cons (VInt m) Nil))) (Some m))
+    (_ None)))
+(fn abs_int ((n Int)) Int (if (lt n 0) (- 0 n) n))
+
+(fn out ((i Int) (name (List Int)) (v (List Int)) (w World)) World
+  (write_line (append "[" (append (show_int i) (append "] " (append name (append ": " v))))) w))
+(fn out_g ((name (List Int)) (v (List Int)) (w World)) World
+  (write_line (append "* " (append name (append ": " v))) w))
+
+(fn fc ((s Symbol)) Symbol (sym_of_chars (append "examples.calc.calc." (chars_of_sym s))))
+(fn fcs ((s Symbol)) Symbol (sym_of_chars (append "examples.calc.calc_spec." (chars_of_sym s))))
+(fn fce ((s Symbol)) Symbol (sym_of_chars (append "examples.calc.calc_equiv." (chars_of_sym s))))
+(fn fca ((s Symbol)) Symbol (sym_of_chars (append "examples.calc.calc_app." (chars_of_sym s))))
+(fn fcas ((s Symbol)) Symbol (sym_of_chars (append "examples.calc.calc_app_spec." (chars_of_sym s))))
+(fn fct ((s Symbol)) Symbol (sym_of_chars (append "examples.calc.calc_app_trace." (chars_of_sym s))))
+(fn fcw ((s Symbol)) Symbol (sym_of_chars (append "examples.calc.calc_app_world." (chars_of_sym s))))
+(fn fcsh ((s Symbol)) Symbol (sym_of_chars (append "examples.calc.calc_show." (chars_of_sym s))))
+(fn fcsr ((s Symbol)) Symbol (sym_of_chars (append "examples.calc.calc_show_run." (chars_of_sym s))))
+(fn fcn ((s Symbol)) Symbol (sym_of_chars (append "examples.calc.calc_ndigit." (chars_of_sym s))))
+
+;; the cases over one line, in calc_test.sh's order (the innermost call prints first; the
+;; bootstrap's `let` binds in parallel, so the World is threaded by nesting); prev = the lines before it
+(fn pl_a ((p Prog) (i Int) (L Val) (tv Val) (pnv Val) (tdv Val) (ptv Val) (w World)) World
+  (out i "numr_rest" (call p (fcs (quote numr_rest)) (list tdv))
+  (out i "numr_val" (call p (fcs (quote numr_val)) (list tdv))
+  (out i "pn_rest" (call p (fcs (quote pn_rest)) (list pnv))
+  (out i "pn_some" (call p (fcs (quote pn_some)) (list pnv))
+  (out i "head_is_ws" (call p (fce (quote head_is_ws)) (list L))
+  (out i "strip" (call p (fce (quote strip)) (list ptv))
+  (out i "parse_tail" (r_val ptv)
+  (out i "parse_num" (r_val pnv)
+  (out i "take_digits" (r_val tdv)
+  (out i "skip_ws" (call p (fcs (quote skip_ws)) (list L))
+  (out i "parse_expr" (call p (fcs (quote parse_expr)) (list L))
+  (out i "spec_run" (call p (fcs (quote spec_run)) (list L))
+  (out i "run" (call p (fc (quote run)) (list L))
+  (out i "parse" (call p (fc (quote parse)) (list tv))
+  (out i "lex" (r_val tv) w))))))))))))))))
+(fn pl_b ((p Prog) (i Int) (L Val) (sv Val) (s2v Val) (w World)) World
+  (out i "emitted_spec" (call p (fct (quote emitted_spec)) (list s2v L))
+  (out i "next_state_spec" (call p (fct (quote next_state_spec)) (list s2v L))
+  (out i "emitted" (call p (fct (quote emitted)) (list sv L))
+  (out i "next_state" (call p (fct (quote next_state)) (list sv L))
+  (out i "step_spec" (call p (fcas (quote step_spec)) (list s2v L))
+  (out i "step" (call p (fca (quote step)) (list sv L)) w)))))))
+;; over the run result, when some: show_ascii of it, show/show_nat/valI/codes of its magnitude
+(fn pl_c ((p Prog) (i Int) (m (Option Int)) (w World)) World
+  (match m
+    (None (out i "codes" "None" (out i "valI" "None" (out i "show_nat" "None" (out i "show" "None" (out i "show_ascii" "None" w))))))
+    ((Some mv)
+     (let ((a (VInt (abs_int mv))))
+       (match (call_v p (fcsh (quote show)) (list a))
+         (None (out i "show_ascii" "stuck" w))
+         ((Some shown)
+          (out i "codes" (r_opt (Some (call p (fcsr (quote codes)) (list shown))))
+          (out i "valI" (r_opt (Some (call p (fcsh (quote valI)) (list shown))))
+          (out i "show_nat" (r_opt (Some (call p (fca (quote show_nat)) (list a))))
+          (out i "show" (r_opt (Some (r_val shown)))
+          (out i "show_ascii" (r_opt (Some (call p (fca (quote show_ascii)) (list (VInt mv))))) w)))))))))))
+;; the line's digits as Digit values; dval and code over the first, when any
+(fn pl_d ((p Prog) (i Int) (line (List Int)) (ds Val) (w World)) World
+  (match (first_digit line)
+    (None (out i "code" "None" (out i "dval" "None" (pl_d0 p i ds w))))
+    ((Some b)
+     (out i "code" (r_opt (Some (call p (fcn (quote code)) (list (v_digit b)))))
+     (out i "dval" (r_opt (Some (call p (fcn (quote dval)) (list (v_digit b)))))
+     (pl_d0 p i ds w))))))
+(fn pl_d0 ((p Prog) (i Int) (ds Val) (w World)) World
+  (out i "value_go" (call p (fcn (quote value_go)) (list ds (VInt 7)))
+  (out i "value" (call p (fcn (quote value)) (list ds))
+  (out i "digits" (r_val ds) w))))
+;; over the first byte, when any
+(fn pl_e ((p Prog) (i Int) (line (List Int)) (w World)) World
+  (match line
+    (Nil (out i "digit_val" "None" (out i "is_ws" "None" (out i "is_digit" "None" w))))
+    ((Cons b _)
+     (out i "digit_val" (r_opt (Some (call p (fc (quote digit_val)) (list (VInt b)))))
+     (out i "is_ws" (r_opt (Some (call p (fc (quote is_ws)) (list (VInt b)))))
+     (out i "is_digit" (r_opt (Some (call p (fc (quote is_digit)) (list (VInt b))))) w))))))
+(fn per_line ((p Prog) (i Int) (line (List Int)) (prev (List (List Int))) (w World)) World
+  (let ((s (call_v p (fct (quote run_state)) (list (v_state0) (v_lines prev))))
+        (s2 (call_v p (fct (quote run_state_spec)) (list (v_state0) (v_lines prev))))
+        (toks (call_v p (fc (quote lex)) (list (v_bytes line))))
+        (pn (call_v p (fcs (quote parse_num)) (list (v_bytes line))))
+        (td (call_v p (fcs (quote take_digits)) (list (v_bytes line) (VInt 0))))
+        (pt (call_v p (fcs (quote parse_tail)) (list (v_num 0) (v_bytes line)))))
+    (match (Pair (Pair s s2) (Pair (Pair toks pn) (Pair td pt)))
+      ((Pair (Pair (Some sv) (Some s2v)) (Pair (Pair (Some tv) (Some pnv)) (Pair (Some tdv) (Some ptv))))
+       (pl_e p i line
+       (pl_d p i line (v_digits line)
+       (pl_c p i (run_int p (v_bytes line))
+       (pl_b p i (v_bytes line) sv s2v
+       (pl_a p i (v_bytes line) tv pnv tdv ptv w))))))
+      (_ (out i "harness" "a derived input got stuck" w)))))
+
+(fn lines_loop ((p Prog) (i Int) (lines (List (List Int))) (prev (List (List Int))) (w World)) World
+  (measure (struct lines))
+  (match lines
+    (Nil w)
+    ((Cons line rest) (lines_loop p (+ i 1) rest (append prev (list line)) (per_line p i line prev w)))))
+
+;; the folds over all the lines, in calc_test.sh's order (the innermost prints first
+(fn folds ((p Prog) (lines (List (List Int))) (w World)) World
+  (let ((E (v_lines lines)) (s0 (v_state0)) (w0 (v_world0)))
+    (out_g "eval" (call p (fc (quote eval)) (list (v_add (v_num 1) (v_sub (v_num 2) (v_num 3)))))
+    (out_g "combine" (match (call_v p (fcs (quote combine)) (list (v_true) (v_num 1) (v_num 2)))
+                       ((Some inner) (call p (fcs (quote combine)) (list (v_false) inner (v_num 3))))
+                       (None "stuck"))
+    (out_g "apply_action_nop" (call p (fcw (quote apply_action)) (list w0 (v_nop)))
+    (out_g "apply_action_exit" (call p (fcw (quote apply_action)) (list w0 (v_exit 3)))
+    (out_g "apply_action_print" (call p (fcw (quote apply_action)) (list w0 (v_print (list 49))))
+    (out_g "run_world_spec" (call p (fcw (quote run_world_spec)) (list w0 s0 E))
+    (out_g "run_world" (call p (fcw (quote run_world)) (list w0 s0 E))
+    (out_g "drive_spec" (call p (fct (quote drive_spec)) (list s0 E))
+    (out_g "run_trace_spec" (call p (fct (quote run_trace_spec)) (list s0 E))
+    (out_g "run_state_spec" (call p (fct (quote run_state_spec)) (list s0 E))
+    (out_g "drive" (call p (fct (quote drive)) (list s0 E))
+    (out_g "run_trace" (call p (fct (quote run_trace)) (list s0 E))
+    (out_g "run_state" (call p (fct (quote run_state)) (list s0 E)) w)))))))))))))))
+
+(fn split_lines ((bs (List Int)) (cur (List Int)) (acc (List (List Int)))) (List (List Int))
+  (measure (struct bs))
+  (match bs
+    (Nil (rev (match cur (Nil acc) ((Cons _ _) (Cons (rev cur) acc)))))
+    ((Cons b r) (if (int_eq b 10) (split_lines r Nil (Cons (rev cur) acc)) (split_lines r (Cons b cur) acc)))))
+
+(fn roots () (List (List Int))
+  (list "v3/examples/calc/calc_app_world.shard" "v3/examples/calc/calc_show_run.shard" "v3/examples/calc/calc_ndigit.shard"
+        "v3/examples/calc/calc_reconcile_tests.shard" "v3/examples/calc/calc_spec_tests.shard"))
+(fn load_roots ((l Load) (files (List (List Int))) (w World)) (Pair Load World)
+  (measure (struct files))
+  (match files
+    (Nil (Pair l w))
+    ((Cons f r) (match (load_root_file l f w) ((Pair l1 w1) (load_roots l1 r w1))))))
+(fn print_failures ((rs (List Rec)) (w World)) World
+  (measure (struct rs))
+  (match rs
+    (Nil w)
+    ((Cons (RRefuse n r) t) (print_failures t (write_line (append "REFUSE " (append (show_name n) (append " " (chars_of_sym r)))) w)))
+    ((Cons (RClassify n r m) t) (print_failures t (write_line (append "REFUSE " (append (show_name n) (append " " (append (chars_of_sym r) (append ": " m))))) w)))
+    ((Cons (RReadErr f r m) t) (print_failures t (write_line (append "READ-ERROR " (append f (append " " (append (chars_of_sym r) (append ": " m))))) w)))
+    ((Cons (RLoadErr f r m) t) (print_failures t (write_line (append "LOAD-ERROR " (append f (append " " (append (chars_of_sym r) (append ": " m))))) w)))
+    ((Cons _ t) (print_failures t w))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair (Cons fixture (Cons inputs Nil)) w1)
+     (match (parts_of "v3")
+       (None (exit 2 w1))
+       ((Some rootp)
+        (match (load_roots (load0 rootp (list fixture)) (roots) w1)
+          ((Pair l w2)
+           (let ((fails (load_failures (rec_counts (ld_recs l) (zero_counts)))))
+             (if (lt 0 fails)
+               (exit 2 (write_line (append "calc_harness: the port did not load: " (show_counts_load (rec_counts (ld_recs l) (zero_counts)))) (print_failures (ld_recs l) w2)))
+               (match (read_file inputs w2)
+                 ((Pair None w3) (exit 2 (write_line "calc_harness: cannot read the inputs" w3)))
+                 ((Pair (Some bs) w3)
+                  (let ((p (es_prog (ld_e l))) (lines (split_lines bs Nil Nil)))
+                    (folds p lines (lines_loop p 0 lines Nil w3))))))))))))
+    ((Pair _ w1) (exit 2 (write_line "usage: eval direct v3/kernel/test/calc_harness.shard FIXTURE INPUTS" w1)))))

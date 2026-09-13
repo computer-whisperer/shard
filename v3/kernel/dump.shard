@@ -1,0 +1,146 @@
+;;; v3/kernel/dump.shard — a Prog as the canonical text of frontend parity
+;;; (LANGUAGE.md §10 item 1, slice 6): one line per declaration, the lines
+;;; sorted bytewise, so that the V3 reader's Prog over a toolchain closure
+;;; and the bootstrap's Module over the same files (`eval dump FILE`,
+;;; rust_bootstrap/src/dump.rs) compare byte for byte
+;;; (kernel/test/parity_test.sh). `load.shard --dump FILE` prints it.
+;;;
+;;;   type NAME n (CTOR T…)…        n type parameters; every name its last component
+;;;   fn NAME n (T…) T BODY         n = the distinct type variables of the signature,
+;;;   extern NAME n (T…) T            numbered ?i by first occurrence across the binders then the result
+;;;   T   ::= Int | Symbol | NAME | (NAME T…) | ?i
+;;;   E   ::= #i | INT | 'sym | (NAME E…)            a constructor, a call, an extern (last component),
+;;;         | (match E (PAT E)…) | (let (E…) E) | (if E E E)   a primitive (its full spelling)
+;;;   PAT ::= _ | NAME | (NAME PAT…) | INT | 'sym
+;;; A string and a `(list …)` are the constructor chains both loaders build;
+;;; `#i` is the sequential index (the bootstrap's dump converts its parallel
+;;; `let`); the measure clause is outside the text (§13 item 25).
+
+(import "prog.shard")
+
+(fn dump_prog ((p Prog)) (List (List Int))
+  (match p ((Prog ds) (dm_sort (dm_decls ds)))))
+(fn dm_decls ((ds (List EDecl))) (List (List Int))
+  (measure (struct ds))
+  (match ds (Nil Nil) ((Cons d r) (Cons (dm_decl d) (dm_decls r)))))
+
+(fn dm_decl ((d EDecl)) (List Int)
+  (match d
+    ((EInd n np ctors) (append "type " (append (dm_short n) (append " " (append (show_int np) (dm_ctors ctors))))))
+    ((EFn n _ ps rt _ body)
+     (let ((sig (dm_sig ps rt)))
+       (append "fn " (append (dm_short n) (append " " (append sig (append " " (dm_term body))))))))
+    ((EExtern n _ ps rt) (append "extern " (append (dm_short n) (append " " (dm_sig ps rt)))))
+    ((ESig n _ ps rt) (append "sig " (append (dm_short n) (append " " (dm_sig ps rt)))))
+    ((ESigType n k) (append "sigtype " (append (dm_short n) (append " " (show_int k)))))))
+(fn dm_ctors ((cs (List ECtorDef))) (List Int)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons (ECtorDef c fs) r) (append " (" (append (dm_short c) (append (dm_types fs Nil) (append ")" (dm_ctors r))))))))
+;; the signature: `n (T…) T` with the type variables renumbered by first occurrence
+(fn dm_sig ((ps (List EType)) (rt EType)) (List Int)
+  (let ((order (dm_vars_of rt (dm_vars_all ps Nil))))
+    (append (show_int (len order)) (append " (" (append (dm_types_sp ps order True) (append ") " (dm_type rt order)))))))
+;; type variables in order of first occurrence
+(fn dm_vars_all ((ts (List EType)) (acc (List Int))) (List Int)
+  (measure (struct ts))
+  (match ts (Nil acc) ((Cons t r) (dm_vars_all r (dm_vars_of t acc)))))
+(fn dm_vars_of ((t EType) (acc (List Int))) (List Int)
+  (measure (struct t))
+  (match t
+    ((ETVar i) (if (mem_int i acc) acc (append acc (list i))))
+    ((ETCon _ args) (dm_vars_all args acc))))
+(fn dm_type ((t EType) (order (List Int))) (List Int)
+  (measure (struct t))
+  (match t
+    ((ETVar i) (append "?" (show_int (dm_index i order 0))))
+    ((ETCon n Nil) (dm_short n))
+    ((ETCon n args) (append "(" (append (dm_short n) (append (dm_types args order) ")"))))))
+(fn dm_index ((i Int) (order (List Int)) (k Int)) Int
+  (measure (struct order))
+  (match order (Nil i) ((Cons x r) (if (int_eq x i) k (dm_index i r (+ k 1))))))
+;; " T T …" (each preceded by a space), and the same without the leading space
+(fn dm_types ((ts (List EType)) (order (List Int))) (List Int)
+  (measure (struct ts))
+  (match ts (Nil Nil) ((Cons t r) (append " " (append (dm_type t order) (dm_types r order))))))
+(fn dm_types_sp ((ts (List EType)) (order (List Int)) (first Bool)) (List Int)
+  (measure (struct ts))
+  (match ts
+    (Nil Nil)
+    ((Cons t r) (append (if first Nil " ") (append (dm_type t order) (dm_types_sp r order False))))))
+
+(fn dm_term ((t ETerm)) (List Int)
+  (measure (struct t))
+  (match t
+    ((EBVar i) (append "#" (show_int i)))
+    ((ELit l) (dm_lit l))
+    ((ECtor n args) (dm_app (dm_short n) args))
+    ((ECall n args) (dm_app (dm_short n) args))
+    ((EPrim n args) (dm_app (show_name n) args))
+    ((EExt n args) (dm_app (dm_short n) args))
+    ((EMatch s arms) (append "(match " (append (dm_term s) (append (dm_arms arms) ")"))))
+    ((ELet rs body) (append "(let (" (append (dm_terms_sp rs True) (append ") " (append (dm_term body) ")")))))
+    ((EIf c a b) (append "(if " (append (dm_term c) (append " " (append (dm_term a) (append " " (append (dm_term b) ")")))))))))
+(fn dm_app ((head (List Int)) (args (List ETerm))) (List Int)
+  (append "(" (append head (append (dm_terms args) ")"))))
+(fn dm_terms ((ts (List ETerm))) (List Int)
+  (measure (struct ts))
+  (match ts (Nil Nil) ((Cons t r) (append " " (append (dm_term t) (dm_terms r))))))
+(fn dm_terms_sp ((ts (List ETerm)) (first Bool)) (List Int)
+  (measure (struct ts))
+  (match ts
+    (Nil Nil)
+    ((Cons t r) (append (if first Nil " ") (append (dm_term t) (dm_terms_sp r False))))))
+(fn dm_arms ((arms (List EArm))) (List Int)
+  (measure (struct arms))
+  (match arms
+    (Nil Nil)
+    ((Cons (EArm p b) r) (append " (" (append (dm_pat p) (append " " (append (dm_term b) (append ")" (dm_arms r)))))))))
+(fn dm_pat ((p EPat)) (List Int)
+  (measure (struct p))
+  (match p
+    (PVar "_")
+    ((PCtor n Nil) (dm_short n))
+    ((PCtor n subs) (append "(" (append (dm_short n) (append (dm_pats subs) ")"))))
+    ((PLit l) (dm_lit l))))
+(fn dm_pats ((ps (List EPat))) (List Int)
+  (measure (struct ps))
+  (match ps (Nil Nil) ((Cons p r) (append " " (append (dm_pat p) (dm_pats r))))))
+;; a literal: a string is the prelude's constructor chain over its bytes, as the bootstrap builds it
+(fn dm_lit ((l ELit)) (List Int)
+  (match l
+    ((LNat k) (show_int k))
+    ((LInt k) (show_int k))
+    ((LSym s) (Cons 39 (chars_of_sym s)))
+    ((LStr bs) (dm_bytes bs))))
+(fn dm_bytes ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil "(Nil)")
+    ((Cons b r) (append "(Cons " (append (show_int b) (append " " (append (dm_bytes r) ")")))))))
+
+(fn dm_short ((n Name)) (List Int)
+  (match n ((Str _ s) (chars_of_sym s)) ((Num _ k) (show_int k)) (Anon "anon")))
+
+;; bytewise sort (merge)
+(fn dm_sort ((xs (List (List Int)))) (List (List Int))
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons x Nil) (list x))
+    (_ (match (dm_split xs Nil Nil) ((Pair a b) (dm_merge (dm_sort a) (dm_sort b)))))))
+(fn dm_split ((xs (List (List Int))) (a (List (List Int))) (b (List (List Int)))) (Pair (List (List Int)) (List (List Int)))
+  (measure (struct xs))
+  (match xs
+    (Nil (Pair a b))
+    ((Cons x Nil) (Pair (Cons x a) b))
+    ((Cons x (Cons y r)) (dm_split r (Cons x a) (Cons y b)))))
+(fn dm_merge ((a (List (List Int))) (b (List (List Int)))) (List (List Int))
+  (measure (+ (len a) (len b)))
+  (match a
+    (Nil b)
+    ((Cons x ar)
+     (match b
+       (Nil a)
+       ((Cons y br) (if (int_list_lt y x) (Cons y (dm_merge a br)) (Cons x (dm_merge ar b))))))))

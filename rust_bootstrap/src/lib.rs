@@ -13,6 +13,7 @@
 //! the proof-checker plumbing, and a way to drive the kernel.
 
 pub mod ast;
+pub mod dump;
 pub mod eval;
 pub mod load;
 pub mod prim;

@@ -112,13 +112,18 @@
 ;; visible in it, itself included), whether the Init prefix is visible in it
 ;; a view's module also keeps its fork point (§6.6) for the implementation
 ;; check, which may come after a consumer loaded the view
-(type Mod (Mod Name (List Int) Int (List Name) Bool (Option ForkPt)))
-(fn mod_path ((m Mod)) Name (match m ((Mod p _ _ _ _ _) p)))
-(fn mod_file ((m Mod)) (List Int) (match m ((Mod _ f _ _ _ _) f)))
-(fn mod_hash ((m Mod)) Int (match m ((Mod _ _ h _ _ _) h)))
-(fn mod_closure ((m Mod)) (List Name) (match m ((Mod _ _ _ c _ _) c)))
-(fn mod_init ((m Mod)) Bool (match m ((Mod _ _ _ _ i _) i)))
-(fn mod_fork ((m Mod)) (Option ForkPt) (match m ((Mod _ _ _ _ _ f) f)))
+(type Mod (Mod Name (List Int) Int (List Name) Bool (Option ForkPt) Bool))   ; path, file, hash, closure, Init seen, fork point, loaded (False: its loading failed — a later import fails the same way, never re-reads it)
+(fn mod_path ((m Mod)) Name (match m ((Mod p _ _ _ _ _ _) p)))
+(fn mod_file ((m Mod)) (List Int) (match m ((Mod _ f _ _ _ _ _) f)))
+(fn mod_hash ((m Mod)) Int (match m ((Mod _ _ h _ _ _ _) h)))
+(fn mod_closure ((m Mod)) (List Name) (match m ((Mod _ _ _ c _ _ _) c)))
+(fn mod_init ((m Mod)) Bool (match m ((Mod _ _ _ _ i _ _) i)))
+(fn mod_fork ((m Mod)) (Option ForkPt) (match m ((Mod _ _ _ _ _ f _) f)))
+(fn mod_ok ((m Mod)) Bool (match m ((Mod _ _ _ _ _ _ ok) ok)))
+;; a file whose loading failed after its heads were pre-registered: recorded so that a
+;; later import of it reports import_failed instead of re-reading it into duplicate_name
+(fn ld_add_failed ((l Load) (mp Name) (rel (List (List Int)))) Load
+  (ld_add_mod l (Mod mp (join_path rel) 0 Nil False None False)))
 
 ;; the Init stream: the import run (its tables persist across chunks), the
 ;; rest of the current chunk, the chunk files still unread, the prefix
@@ -570,7 +575,7 @@
   (measure fuel)
   (match (ld_find_mod (ld_mods l) mp)
     ((Some m)
-     (if (int_list_eq (mod_file m) (join_path rel)) (Pair (Pair l None) w)
+     (if (int_list_eq (mod_file m) (join_path rel)) (Pair (Pair l None) w)   ; loaded, or failed: the importer reads mod_ok
        (Pair (Pair (ld_rec l (RLoadErr (join_path rel) (quote module_collision) (append (show_name mp) (append " is already " (mod_file m))))) None) w)))
     (None
      (if (mem_name mp (ld_stack l)) (Pair (Pair (ld_rec l (RLoadErr (join_path rel) (quote import_cycle) (show_name mp))) None) w)
@@ -584,22 +589,22 @@
            (match (split_directives forms Nil)
              ((Pair dirs rest)
               (match (pre_register_file l (Fx mp rel Nil (list mp) False Nil (hash_name mp) view (is_profile rel)) rest)
-                ((Pair None l0) (Pair (Pair l0 None) w1))
+                ((Pair None l0) (Pair (Pair (ld_add_failed l0 mp rel) None) w1))
                 ((Pair (Some f0) l0)
               (match (load_forms (ld_with_stack l0 (Cons mp (ld_stack l))) f0 dirs fuel w1)
-                ((Pair (Pair l1 None) w2) (Pair (Pair (ld_with_stack l1 (ld_stack l)) None) w2))
+                ((Pair (Pair l1 None) w2) (Pair (Pair (ld_add_failed (ld_with_stack l1 (ld_stack l)) mp rel) None) w2))
                 ((Pair (Pair l1a (Some f1)) w2)
                  (match (pre_register_late l1a f1 rest)
-                 ((Pair None l1) (Pair (Pair (ld_with_stack l1 (ld_stack l)) None) w2))
+                 ((Pair None l1) (Pair (Pair (ld_add_failed (ld_with_stack l1 (ld_stack l)) mp rel) None) w2))
                  ((Pair (Some _) l1)
                  (match (load_forms l1 f1 rest fuel w2)
                    ((Pair (Pair l2 (Some f)) w3)
                     (let ((fp (if view (Some (ForkPt (ld_with_stack l1 (ld_stack l)) f1 rest)) None)))
-                      (Pair (Pair (ld_rec (ld_add_mod (ld_with_stack l2 (ld_stack l)) (Mod mp (join_path rel) (fx_hash f) (fx_vis f) (fx_init f) fp))
+                      (Pair (Pair (ld_rec (ld_add_mod (ld_with_stack l2 (ld_stack l)) (Mod mp (join_path rel) (fx_hash f) (fx_vis f) (fx_init f) fp True))
                                           (RModule mp (join_path rel) (fx_hash f) (fx_vis f)))
                                   fp)
                             w3)))
-                   ((Pair (Pair l2 None) w3) (Pair (Pair (ld_with_stack l2 (ld_stack l)) None) w3))))))))))))))))))))
+                   ((Pair (Pair l2 None) w3) (Pair (Pair (ld_add_failed (ld_with_stack l2 (ld_stack l)) mp rel) None) w3))))))))))))))))))))
 ;; the realize heads, once the directives made their targets visible (§7.5)
 (fn pre_register_late ((l Load) (f Fx) (forms (List SExpr))) (Pair (Option Fx) Load)
   (if (fx_profile f) (Pair (Some f) l)
@@ -922,7 +927,10 @@
      (match (import_target rel)
        ((Some mp)
         (match (ld_find_mod (ld_mods l1) mp)
-          ((Some m) (Pair (Pair l1 (Some (fx_see f (mod_closure m) (mod_init m)))) w1))
+          ((Some m)
+           (if (mod_ok m)
+             (Pair (Pair l1 (Some (fx_see f (mod_closure m) (mod_init m)))) w1)
+             (Pair (Pair (ld_rec l1 (RLoadErr (fx_file f) (quote import_failed) (join_path rel))) None) w1)))
           (None (Pair (Pair (ld_rec l1 (RLoadErr (fx_file f) (quote import_failed) (join_path rel))) None) w1))))
        (None (Pair (Pair (ld_rec l1 (RLoadErr (fx_file f) (quote import_failed) (join_path rel))) None) w1))))))
 ;; the module an import path names: a file's path, a view's directory, a directory's

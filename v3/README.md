@@ -266,7 +266,35 @@ the L identity), 21 `ev_test` cases for the Nat set (56 in all). **CI
 in 47 s on the runner, the full-export replay on compiled K in 2,458 s
 at a 31.0 GB peak, all 20 candidates pinned, closures identical,
 byte-ties identical (engine 193 s, corpus 1,479 s, v3 3,234 s; the
-pipeline 3,428 s).
+pipeline 3,428 s). **Slice 6 (2026-09-13): calc's program half under
+`ev`, frontend parity, the seal deferred** — `LANGUAGE.md` §10 items 1
+and 2 built. `v3/examples/calc/` is the program half in S, one file
+per old file (51 functions, 9 types; the claims a header line each,
+phase 3), under Init's `Int` from a second fixture
+(`kernel/test/fixtures/init_prefix_int.ndjson`, the export through the
+`Int` inductive, 17,812 lines); the differential runs the port under
+`ev` from `kernel/test/calc_harness.shard` (values built as data,
+since an S program names no wire cell at phase 2) against the old
+tree's tower over `examples/calc/calc_differential.shard`, one shared
+input set, 34 cases per line and 13 folds: **byte-identical, 727 lines
+a side** (`kernel/test/calc_test.sh`; the port in 7 s, the old tree in
+154 s). Frontend parity: `kernel/dump.shard` with `load.shard --dump`
+and the bootstrap's `eval dump` print one canonical text
+(`rust_bootstrap/src/dump.rs`; the bootstrap's parallel `let`
+converted to the sequential indices), compared over every toolchain
+closure by `kernel/test/parity_test.sh`: **byte-identical, 18
+closures, 61,080 declaration lines, 37 s** — which retires TCB
+bring-up item 2 (`docs/TCB.md`). Its one finding: the driver's own
+closure had never been classified, and `realize.shard`'s
+`rz_open_ctor` had its wildcard arm one match too deep (a real
+non-exhaustive match; fixed). Two rules from the port: an E-type
+position takes the type when a citation resolves to both a type and
+its same-named constructor (§13 item 28; v2's `(type World (World
+Int))`), and a file whose loading failed is loaded once (§3.3). The
+seal of `CheckedEnv` is **deferred to the phase-3 opener** with its
+analysis (§6.6, §13 item 26): the boundary is K, not `kernel/env`, and
+no client outside `kernel/` exists before `meta/`. 19 entrypoints,
+0 failed, 237 s.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
@@ -291,9 +319,14 @@ each closes on its named gate:
   loose variable, a claimed-absent fvar, a stale hash, snapshot forks,
   independent construction, no trace after a failure). **Still open:**
   the toolchain profile exposes `CheckedEnv`'s constructor (the
-  battery builds one); it is sealed when `kernel/env` has a view
-  (`LANGUAGE.md` §6.5, slice 4) and the toolchain loads under it.
-  Raw-API callers are reviewed toolchain code until then.
+  battery builds one). **Deferred to the phase-3 opener (2026-09-13,
+  slice 6):** `kernel/env`'s view is not the boundary — the operations
+  `add`, `tc` and `import` build environments with would have to be
+  exported — K is, and sealing K (a directory module of fifteen files,
+  a view of 87 signatures, a bootstrap resolver change, a
+  `private_module` rule) waits for its first client outside `kernel/`,
+  `meta/` (`LANGUAGE.md` §6.6, §13 item 26). Raw-API callers are
+  reviewed toolchain code until then.
 - **The Stage-0 `fn` gap** — a `fn` has an E body and no L meaning, no
   totality check, and nothing in L cites it, until phase 3's Stage 1
   (`LANGUAGE.md` §0, §12.6); the driver says so per declaration since
@@ -307,9 +340,8 @@ each closes on its named gate:
   replay is preceded by the byte-tie on a prefix.
 - **§3.5's sealed checked environment** — the ingestion half landed
   at slice 3 (R43 above); views landed at slice 4 (`LANGUAGE.md`
-  §6.6), so the mechanism exists; the seal itself — `CheckedEnv` a
-  `sig type` of `kernel/env`'s view — lands when the toolchain's own
-  sources load under this loader (slice 6).
+  §6.6), so the mechanism exists; the seal itself — K one directory
+  module behind a view — is the phase-3 opener's (R43 above).
 
 ## The pin (2026-09-06)
 
@@ -338,5 +370,6 @@ v3/LANGUAGE.md    the V3 language — S, L and E at Stage 0 (phase 2 draft; I in
 v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K; phase 2: prog, the reader tower, ev, realize
 v3/meta/          phase 3: the elaborators, I, the goal graph, tactics
 v3/std/           phase 3: the first library under the naming law
-v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers), pins/loader/ (slices 3–5: package roots, main.shard's `;; expect:` and `;; roots:` headers; the ev_* cases are the classifier's)
+v3/examples/      the ported examples: calc/ (slice 6: the program half in S; the claims at phase 3)
+v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers), pins/loader/ (slices 3–6: package roots, main.shard's `;; expect:` and `;; roots:` headers; the ev_* cases are the classifier's)
 ```
