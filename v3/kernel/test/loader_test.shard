@@ -1,10 +1,13 @@
 ;;; v3/kernel/test/loader_test.shard — the loader's cases beyond the pins
 ;;; (loader_pins_test): what the records say, nested Init prefixes, the
 ;;; export pin, visibility across root files, the sorry obligation, the
-;;; root's location changing nothing (T8's origin-only invariance).
+;;; root's location changing nothing (T8's origin-only invariance); the
+;;; program a load yields, run under `ev` (slice 5): a consumer's fn over the
+;;; view alone is stuck at the sig fn, with the implementation it runs it.
 
 (import "reader_kit.shard")
 (import "../loader.shard")
+(import "../ev.shard")
 
 (type Case (Case (List Int) Bool))
 
@@ -18,6 +21,14 @@
     ((Some rootp)
      (match (load_all (load0 rootp chunks) files w)
        ((Pair l w1) (Pair (ld_recs l) w1))))))
+;; the E program a load yields (classify.shard's es_prog)
+(fn load_prog ((root (List Int)) (chunks (List (List Int))) (files (List (List Int))) (w World)) (Pair (Pair Prog (List Rec)) World)
+  (match (parts_of root)
+    (None (Pair (Pair (Prog Nil) Nil) w))
+    ((Some rootp)
+     (match (load_all (load0 rootp chunks) files w)
+       ((Pair l w1) (Pair (Pair (es_prog (ld_e l)) (ld_recs l)) w1))))))
+(fn main_fn ((s Symbol)) Name (Str (Str Anon (quote main)) s))
 (fn load_all ((l Load) (files (List (List Int))) (w World)) (Pair Load World)
   (measure (struct files))
   (match files
@@ -81,6 +92,12 @@
                             ((Pair view w9)
                              (match (load_case "v3/pins/loader/view_basic" (list (fixture)) (list "v3/pins/loader/view_basic/lib") w9)
                                ((Pair impl w10)
+                             (match (load_prog "v3/pins/loader/view_basic" (list (fixture)) (list "v3/pins/loader/view_basic/main.shard") w10)
+                               ((Pair (Pair prog_view _) w11)
+                             (match (load_prog "v3/pins/loader/view_basic" (list (fixture)) (list "v3/pins/loader/view_basic/main.shard" "v3/pins/loader/view_basic/lib") w11)
+                               ((Pair (Pair prog_impl _) w12)
+                             (match (load_prog "v3/pins/loader/ev_basic" (list (fixture)) (list "v3/pins/loader/ev_basic/main.shard") w12)
+                               ((Pair (Pair prog_basic recs_basic) w13)
                           (Pair
                             (list
                               (Case "basic: 7 declarations accepted in two modules" (int_eq (count_accepts basic) 7))
@@ -105,8 +122,19 @@
                               (Case "views: the directory as a root discharges every parameter — type, fn, fn, proved" (int_eq (count_kind impl (quote discharge)) 4))
                               (Case "views: the implementation's own declarations are recorded under IMPL" (lt 0 (count_kind impl (quote impl))))
                               (Case "views: the fork's environment is not the consumer's — the view's parameters stay parameters after the check"
-                                (has_rec impl "PARAM lib.stack_refl requirement")))
-                            w10))))))))))))))))))))))
+                                (has_rec impl "PARAM lib.stack_refl requirement"))
+                              (Case "ev: a consumer's fn over the view alone is stuck unlinked at the sig fn"
+                                (match (ev prog_view (main_fn (quote fresh)) Nil 1000)
+                                  ((EvStuck r n) (bool_and (sym_eq r (quote unlinked)) (int_list_eq (show_name n) "lib.empty")))
+                                  (_ False)))
+                              (Case "ev: with the implementation checked, the same fn runs it — the substitution is the link (T5)"
+                                (match (ev prog_impl (main_fn (quote fresh)) Nil 1000)
+                                  ((EvOk (VCtor c (Cons (VInt 2) Nil))) (int_list_eq (show_name c) "lib.Stack.mk"))
+                                  (_ False)))
+                              (Case "ev: an S program — match, let, if, the bare and naming-law primitives — runs (R45: RUNNABLE, no L meaning)"
+                                (bool_and (has_rec recs_basic "RUNNABLE fn main.main")
+                                  (match (ev prog_basic (main_fn (quote main)) (list (VInt 1)) 1000) ((EvOk (VInt 3)) True) (_ False)))))
+                            w13))))))))))))))))))))))))))))
 
 (fn run ((cs (List Case)) (fails Int) (w World)) World
   (measure (struct cs))

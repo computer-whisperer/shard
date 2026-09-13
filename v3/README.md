@@ -186,7 +186,34 @@ consumer's theorem records the parameters it rests on; the directory
 as a root discharges every parameter); 15 entrypoints, 0 failed. **CI
 (pipeline 466, `2f7f032`):** green — 15 entrypoints, the full-export
 replay on compiled K in 2,459 s at a 31.0 GB peak, all 20 candidates
-pinned, closures identical, byte-ties identical.
+pinned, closures identical, byte-ties identical. **Slice 5
+(2026-09-12): the classifier, `ev` and route 2's byte-tie** —
+`LANGUAGE.md` §6.2–6.4 built as §6.7: `kernel/classify.shard` reads
+`fn`, `extern`, `type`, `sig fn` and `sig type` into `prog.shard`'s
+data with every head resolved to one identity and one kind through a
+suffix table over the file's pre-registered heads, saturated, the
+escape rule, exhaustiveness by the pattern matrix, the
+private-equality leak refused where the scrutinee's static type is a
+`sig type`; the toolchain profile (`kernel/`, `meta/`) read flat and E
+only; `kernel/ev.shard` runs a `Prog` as a machine with an explicit
+continuation (tags with the second-constructor bit, fuel per function
+entry, the machine stopping at an extern) and `run_prog` performs the
+host's six externs and resumes; the implementation's `fn` substituted
+under the view's `sig fn` is the link. The records gain `RUNNABLE`
+(R45's status kind: runnable, no L meaning) and the classifier's
+`REFUSE … reason: message`. K's own sources load under the profile —
+19 modules, 5,670 declarations, no refusal (one missing import found
+and fixed) — and **route 2 byte-ties route 3 on the fixture**: K
+interpreted by `ev`, hosted on the bootstrap, 184 lines identical,
+exit 0, 26 s against 0.33 s (`kernel/test/route2_test.sh`). Tests:
+`ev_test` (35 cases), 19 classifier cases in `v3/pins/loader/` (53 in
+all), three run cases in `loader_test`; 17 entrypoints, 0 failed. A
+review after the build fixed the pre-registration's count of S's
+`(T Type)` binders, made the `Nat` shifts total, and added the typed
+pass's `pattern_type` and `pattern_name` refusals and type-argument
+inference (§6.7).
+`gen_fresh` dropped; `realize` and R45's third test wait for slice 5b
+(§6.7).
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
@@ -216,8 +243,10 @@ each closes on its named gate:
   Raw-API callers are reviewed toolchain code until then.
 - **The Stage-0 `fn` gap** — a `fn` has an E body and no L meaning, no
   totality check, and nothing in L cites it, until phase 3's Stage 1
-  (`LANGUAGE.md` §0, §12.6); the driver's status kinds (R45) land at
-  slice 5.
+  (`LANGUAGE.md` §0, §12.6); the driver says so per declaration since
+  slice 5 (`RUNNABLE`, R45), and `ev_test` shows the self-recursive
+  candidate exhausting; R45's third test (a checked realization against
+  a linked function) waits for `realize` (slice 5b).
 - **The compiled route** — tested, not proved: route 1's proof is
   still to come, the interpreter stays the authority, and every full
   replay is preceded by the byte-tie on a prefix.
@@ -254,5 +283,5 @@ v3/LANGUAGE.md    the V3 language — S, L and E at Stage 0 (phase 2 draft; I in
 v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K; phase 2: prog, the reader tower, ev
 v3/meta/          phase 3: the elaborators, I, the goal graph, tactics
 v3/std/           phase 3: the first library under the naming law
-v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers), pins/loader/ (slices 3–4: package roots, main.shard's `;; expect:` and `;; roots:` headers)
+v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers), pins/loader/ (slices 3–5: package roots, main.shard's `;; expect:` and `;; roots:` headers; the ev_* cases are the classifier's)
 ```

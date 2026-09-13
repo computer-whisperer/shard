@@ -102,7 +102,9 @@
 ;; of the same arity; an ECtor's constructor belongs to an EInd and is
 ;; applied to exactly its fields; a consumer's body never names an
 ;; ESigType's constructor (the private-equality leak, refused at
-;; classification).
+;; classification); a call to an ESig is stuck (`unlinked`) — the
+;; implementation check substitutes the implementation's EFn under the
+;; same identity (LANGUAGE.md §6.6, §6.7), which is the link.
 
 (type Prog (Prog (List EDecl)))
 
@@ -140,3 +142,58 @@
   (match ds
     (Nil None)
     ((Cons d r) (if (name_eq (edecl_name d) n) (Some d) (prog_find_in r n)))))
+
+;; ---------------------------------------------------------------------
+;; THE PRIMITIVE TABLE (LANGUAGE.md §6.4): identity → (operation code,
+;; arity). The profile's bare names and the naming law's spellings where
+;; the meaning differs (`/` stuck at zero and `Int.tdiv` total are two
+;; entries); ev.shard implements the codes, classify.shard resolves heads
+;; against the identities. `gen_fresh` is not carried (§6.7).
+(type Prim (Prim Int Int))
+(fn prim_table () (List (Pair Name Prim))
+  (list (Pair (n1 (quote int_eq)) (Prim 0 2)) (Pair (n1 (quote +)) (Prim 1 2)) (Pair (n1 (quote -)) (Prim 2 2))
+        (Pair (n1 (quote lt)) (Prim 3 2)) (Pair (n1 (quote le)) (Prim 4 2)) (Pair (n1 (quote sym_eq)) (Prim 5 2))
+        (Pair (n1 (quote band)) (Prim 6 2)) (Pair (n1 (quote bshr)) (Prim 7 2))
+        (Pair (n1 (quote *)) (Prim 8 2)) (Pair (n1 (quote mod)) (Prim 9 2)) (Pair (n1 (quote /)) (Prim 10 2))
+        (Pair (n1 (quote tmod)) (Prim 11 2)) (Pair (n1 (quote ediv)) (Prim 12 2))
+        (Pair (n1 (quote bor)) (Prim 13 2)) (Pair (n1 (quote bxor)) (Prim 14 2)) (Pair (n1 (quote bshl)) (Prim 15 2))
+        (Pair (n1 (quote sym_of_chars)) (Prim 16 1)) (Pair (n1 (quote chars_of_sym)) (Prim 17 1))
+        (Pair (n2 (quote Int) (quote tdiv)) (Prim 18 2)) (Pair (n2 (quote Int) (quote tmod)) (Prim 19 2))
+        (Pair (n2 (quote Int) (quote ediv)) (Prim 20 2)) (Pair (n2 (quote Int) (quote emod)) (Prim 21 2))
+        (Pair (n2 (quote Nat) (quote sub)) (Prim 22 2))
+        (Pair (n2 (quote Nat) (quote land)) (Prim 23 2)) (Pair (n2 (quote Nat) (quote lor)) (Prim 24 2))
+        (Pair (n2 (quote Nat) (quote xor)) (Prim 25 2))
+        (Pair (n2 (quote Nat) (quote shiftLeft)) (Prim 26 2)) (Pair (n2 (quote Nat) (quote shiftRight)) (Prim 27 2))))
+(fn prim_find ((n Name)) (Option Prim) (prim_assoc (prim_table) n))
+(fn prim_assoc ((t (List (Pair Name Prim))) (n Name)) (Option Prim)
+  (measure (struct t))
+  (match t (Nil None) ((Cons (Pair k p) r) (if (name_eq k n) (Some p) (prim_assoc r n)))))
+;; the first candidate the table knows (S: the scope's candidates; the profile: the bare citation)
+(fn prim_of ((cands (List Name))) (Option (Pair Name Prim))
+  (measure (struct cands))
+  (match cands
+    (Nil None)
+    ((Cons c r) (match (prim_find c) ((Some p) (Some (Pair c p))) (None (prim_of r))))))
+;; a primitive's result type head: Bool for the decisions, Symbol, List, else Int
+(fn prim_result ((code Int)) EType
+  (if (bool_or (int_eq code 0) (bool_or (int_eq code 3) (bool_or (int_eq code 4) (int_eq code 5)))) (ETCon (prelude_bool) Nil)
+  (if (int_eq code 16) (ETCon (n1 (quote Symbol)) Nil)
+  (if (int_eq code 17) (ETCon (prelude_list) (list (ETCon (n1 (quote Int)) Nil)))
+    (ETCon (n1 (quote Int)) Nil)))))
+
+;; ---------------------------------------------------------------------
+;; THE TOOLCHAIN PRELUDE'S IDENTITIES (LANGUAGE.md §8): the wire's cells
+;; and the decisions the comparison primitives return (§6.7).
+(fn prelude_mod () Name (n2 (quote kernel) (quote prelude)))
+(fn prelude_list () Name (Str (prelude_mod) (quote List)))
+(fn prelude_bool () Name (Str (prelude_mod) (quote Bool)))
+(fn prelude_option () Name (Str (prelude_mod) (quote Option)))
+(fn prelude_pair () Name (Str (prelude_mod) (quote Pair)))
+(fn prelude_nil () Name (Str (prelude_list) (quote Nil)))
+(fn prelude_cons () Name (Str (prelude_list) (quote Cons)))
+(fn prelude_false () Name (Str (prelude_bool) (quote False)))
+(fn prelude_true () Name (Str (prelude_bool) (quote True)))
+(fn prelude_none () Name (Str (prelude_option) (quote None)))
+(fn prelude_some () Name (Str (prelude_option) (quote Some)))
+(fn prelude_mk_pair () Name (Str (prelude_pair) (quote Pair)))
+

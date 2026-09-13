@@ -1,0 +1,975 @@
+;;; v3/kernel/classify.shard — the fragment classifier (v3/LANGUAGE.md §6.3,
+;;; §6.7): the E forms `fn`, `extern`, `type`, `sig fn` and `sig type` read
+;;; into prog.shard's data with every head resolved to one identity and one
+;;; kind, saturated, no function name in argument position, every `match`
+;;; exhaustive by the pattern matrix, the private-equality leak refused where
+;;; the scrutinee's static type is a `sig type`. Phase 2, slice 5. Reading IS
+;;; classifying: nothing reaches `ev` unresolved.
+;;;
+;;; The E table (ESt) is the loader's: every E identity findable by any
+;;; suffix of its spelling (`hex_val`, `json.hex_val`, `kernel.json.hex_val`),
+;;; pre-registered from a file's forms before any body is read so that a
+;;; body may cite what its file declares later. Resolution: the visible
+;;; hits, and in S those among the scope's candidates (§3.1); the toolchain
+;;; profile is flat (§6.7). The primitive table is §6.4's, keyed on identity.
+
+(import "reader.shard")
+(import "prog.shard")
+
+;; ---- the E table ----------------------------------------------------------------------
+(type EInfo
+  (EICtor Name Int Int)      ; its inductive, its ordinal, its field count
+  (EIInd Int (List Name))    ; parameter count, constructors in order
+  (EIFn Int)                 ; parameter count
+  (EISig Int)                ; a view's sig fn: parameter count
+  (EIExt Int)                ; an extern: parameter count
+  (EISigType Int))           ; a view's sig type: arity
+(type EEnt (EEnt Name Name Name EInfo))   ; suffix, identity, module, info
+;; declarations (reversed), the suffix table, the declarations by identity.
+;; An identity registered again overrides (newest first): the implementation
+;; check's fork substitutes the implementation's fn and type under the view's
+;; sig fn and sig type (§6.6, §6.7), and its merge into the main line does the
+;; same — that substitution is the link `run` needs.
+(type ESt (ESt (List EDecl) (IntMap (List EEnt)) (IntMap (List (Pair Name EDecl)))))
+(fn es0 () ESt (ESt Nil IMEmpty IMEmpty))
+(fn es_decls ((e ESt)) (List EDecl) (match e ((ESt ds _ _) (rev ds))))
+(fn es_tbl ((e ESt)) (IntMap (List EEnt)) (match e ((ESt _ t _) t)))
+(fn es_idx ((e ESt)) (IntMap (List (Pair Name EDecl))) (match e ((ESt _ _ x) x)))
+;; the program: the declarations in order, a sig fn or sig type dropped where
+;; the implementation was substituted under its identity
+(fn es_prog ((e ESt)) Prog (Prog (live_decls e (es_decls e))))
+(fn live_decls ((e ESt) (ds (List EDecl))) (List EDecl)
+  (measure (struct ds))
+  (match ds
+    (Nil Nil)
+    ((Cons (ESig n a b c) r) (match (es_find_decl e n) ((Some (ESig _ _ _ _)) (Cons (ESig n a b c) (live_decls e r))) (_ (live_decls e r))))
+    ((Cons (ESigType n a) r) (match (es_find_decl e n) ((Some (ESigType _ _)) (Cons (ESigType n a) (live_decls e r))) (_ (live_decls e r))))
+    ((Cons d r) (Cons d (live_decls e r)))))
+
+;; a name's components as one-step names, outermost first; its suffixes on component boundaries
+(fn name_steps ((n Name)) (List Name)
+  (measure (struct n))
+  (match n
+    (Anon Nil)
+    ((Str p s) (append (name_steps p) (list (Str Anon s))))
+    ((Num p k) (append (name_steps p) (list (Num Anon k))))))
+(fn join_steps ((ss (List Name)) (acc Name)) Name
+  (measure (struct ss))
+  (match ss (Nil acc) ((Cons s r) (join_steps r (name_append acc s)))))
+(fn suffixes_of ((ss (List Name))) (List Name)
+  (measure (struct ss))
+  (match ss (Nil Nil) ((Cons _ r) (Cons (join_steps ss Anon) (suffixes_of r)))))
+(fn name_suffixes ((n Name)) (List Name) (suffixes_of (name_steps n)))
+
+;; register an identity under every suffix
+(fn es_register ((e ESt) (id Name) (m Name) (info EInfo)) ESt
+  (match e ((ESt ds t x) (ESt ds (tbl_put_all t (name_suffixes id) id m info) x))))
+(fn tbl_put_all ((t (IntMap (List EEnt))) (sufs (List Name)) (id Name) (m Name) (info EInfo)) (IntMap (List EEnt))
+  (measure (struct sufs))
+  (match sufs
+    (Nil t)
+    ((Cons s r)
+     (let ((h (name_key s)))
+       (tbl_put_all (im_insert t h (Cons (EEnt s id m info) (match (im_find t h) ((Some b) b) (None Nil)))) r id m info)))))
+;; every entry whose suffix is the citation — the newest per identity
+(fn es_hits ((e ESt) (n Name)) (List EEnt)
+  (match (im_find (es_tbl e) (name_key n)) (None Nil) ((Some b) (hits_with b n Nil))))
+(fn hits_with ((b (List EEnt)) (n Name) (seen (List Name))) (List EEnt)
+  (measure (struct b))
+  (match b
+    (Nil Nil)
+    ((Cons (EEnt s id m i) r)
+     (if (bool_and (name_eq s n) (bool_not (mem_name id seen)))
+       (Cons (EEnt s id m i) (hits_with r n (Cons id seen)))
+       (hits_with r n seen)))))
+;; the entry registered under an identity's full spelling
+(fn es_info ((e ESt) (id Name)) (Option EInfo)
+  (match (full_entry (es_hits e id) id) ((Some (EEnt _ _ _ i)) (Some i)) (None None)))
+(fn full_entry ((b (List EEnt)) (id Name)) (Option EEnt)
+  (measure (struct b))
+  (match b
+    (Nil None)
+    ((Cons (EEnt s i m x) r) (if (name_eq i id) (Some (EEnt s i m x)) (full_entry r id)))))
+(fn es_has ((e ESt) (id Name)) Bool (match (es_info e id) ((Some _) True) (None False)))
+
+;; a declaration reached: recorded, findable by identity
+(fn es_add_decl ((e ESt) (d EDecl)) ESt
+  (match e
+    ((ESt ds t x)
+     (let ((n (edecl_name d)))
+       (let ((h (name_key n)))
+         (ESt (Cons d ds) t (im_insert x h (Cons (Pair n d) (match (im_find x h) ((Some b) b) (None Nil))))))))))
+(fn es_find_decl ((e ESt) (n Name)) (Option EDecl)
+  (match (im_find (es_idx e) (name_key n)) (None None) ((Some b) (assoc_decl b n))))
+(fn assoc_decl ((b (List (Pair Name EDecl))) (n Name)) (Option EDecl)
+  (measure (struct b))
+  (match b (Nil None) ((Cons (Pair k d) r) (if (name_eq k n) (Some d) (assoc_decl r n)))))
+;; the info a declaration registers (the fork's declarations merged into the main line, §6.7)
+(fn decl_infos ((d EDecl)) (List (Pair Name EInfo))
+  (match d
+    ((EInd n np cs) (Cons (Pair n (EIInd np (ector_names cs))) (ctor_infos n cs 0)))
+    ((EFn n _ ps _ _ _) (list (Pair n (EIFn (len ps)))))
+    ((EExtern n _ ps _) (list (Pair n (EIExt (len ps)))))
+    ((ESig n _ ps _) (list (Pair n (EISig (len ps)))))
+    ((ESigType n a) (list (Pair n (EISigType a))))))
+(fn ector_names ((cs (List ECtorDef))) (List Name)
+  (measure (struct cs))
+  (match cs (Nil Nil) ((Cons (ECtorDef c _) r) (Cons c (ector_names r)))))
+(fn ctor_infos ((ind Name) (cs (List ECtorDef)) (i Int)) (List (Pair Name EInfo))
+  (measure (struct cs))
+  (match cs (Nil Nil) ((Cons (ECtorDef c fs) r) (Cons (Pair c (EICtor ind i (len fs))) (ctor_infos ind r (+ i 1))))))
+(fn es_register_all ((e ESt) (m Name) (infos (List (Pair Name EInfo)))) ESt
+  (measure (struct infos))
+  (match infos (Nil e) ((Cons (Pair n i) r) (es_register_all (es_register e n m i) m r))))
+;; the fork's state merged into the main line: its declarations the main line
+;; lacks, and its fn / type under a sig fn / sig type the main line holds (the substitution)
+(fn es_merge ((main ESt) (fork ESt)) ESt (es_merge_decls main (es_decls fork) (es_tbl fork)))
+(fn es_merge_decls ((main ESt) (ds (List EDecl)) (ftbl (IntMap (List EEnt)))) ESt
+  (measure (struct ds))
+  (match ds
+    (Nil main)
+    ((Cons d r)
+     (let ((n (edecl_name d)))
+       (if (substitutes main n d)
+         (es_merge_decls (es_add_decl (es_register_all main (entry_module ftbl n) (decl_infos d)) d) r ftbl)
+         (es_merge_decls main r ftbl))))))
+;; d takes the identity n in main: n is new, or main holds a sig fn and d is a fn, a sig type and d a type
+(fn substitutes ((main ESt) (n Name) (d EDecl)) Bool
+  (match (es_find_decl main n)
+    (None True)
+    ((Some (ESig _ _ _ _)) (match d ((EFn _ _ _ _ _ _) True) (_ False)))
+    ((Some (ESigType _ _)) (match d ((EInd _ _ _) True) (_ False)))
+    (_ False)))
+(fn entry_module ((t (IntMap (List EEnt))) (id Name)) Name
+  (match (im_find t (name_key id)) (None Anon) ((Some b) (match (full_entry b id) ((Some (EEnt _ _ m _)) m) (None Anon)))))
+
+;; ---- resolution (§6.7) ---------------------------------------------------------------------
+(type EHit (EHit Name Name EInfo))   ; identity, module, info
+(fn eresolve ((es ESt) (sc Scope) (profile Bool) (n Name)) (List EHit)
+  (hits_in_scope (es_hits es n) sc (if profile Nil (scope_candidates sc n)) profile))
+(fn hits_in_scope ((hs (List EEnt)) (sc Scope) (cands (List Name)) (profile Bool)) (List EHit)
+  (measure (struct hs))
+  (match hs
+    (Nil Nil)
+    ((Cons (EEnt _ id m i) r)
+     (if (bool_and (mod_visible sc m) (bool_or profile (mem_name id cands)))
+       (Cons (EHit id m i) (hits_in_scope r sc cands profile))
+       (hits_in_scope r sc cands profile)))))
+(fn mod_visible ((sc Scope) (m Name)) Bool
+  (match (sc_vis sc) (VisAll True) ((VisOnly mods _ _ _) (mem_name m mods))))
+(fn only_ctors ((hs (List EHit))) (List EHit)
+  (measure (struct hs))
+  (match hs
+    (Nil Nil)
+    ((Cons (EHit id m (EICtor a b c)) r) (Cons (EHit id m (EICtor a b c)) (only_ctors r)))
+    ((Cons _ r) (only_ctors r))))
+;; the hits a term position sees: constructors, functions, sig fns, externs — never a type
+(fn only_values ((hs (List EHit))) (List EHit)
+  (measure (struct hs))
+  (match hs
+    (Nil Nil)
+    ((Cons (EHit id m (EIInd a b)) r) (only_values r))
+    ((Cons (EHit id m (EISigType a)) r) (only_values r))
+    ((Cons h r) (Cons h (only_values r)))))
+(fn only_types ((hs (List EHit))) (List EHit)
+  (measure (struct hs))
+  (match hs
+    (Nil Nil)
+    ((Cons (EHit id m (EIInd a b)) r) (Cons (EHit id m (EIInd a b)) (only_types r)))
+    ((Cons (EHit id m (EISigType a)) r) (Cons (EHit id m (EISigType a)) (only_types r)))
+    ((Cons _ r) (only_types r))))
+(fn ambiguous_msg ((n Name) (a Name) (b Name)) (List Int)
+  (append (show_name n) (append ": " (append (show_name a) (append " and " (show_name b))))))
+
+;; ---- pre-registration (§6.7) ----------------------------------------------------------------
+;; a file's E heads — name, kind, arity, a type's constructors — before any body
+(type PreRes (PreOk ESt) (PreErr Symbol (List Int)))
+(fn pre_register ((es ESt) (sc Scope) (profile Bool) (forms (List SExpr))) PreRes
+  (measure (struct forms))
+  (match forms
+    (Nil (PreOk es))
+    ((Cons s r)
+     (match (pre_one es sc profile s)
+       ((PreErr e m) (PreErr e m))
+       ((PreOk es1) (pre_register es1 sc profile r))))))
+(fn pre_one ((es ESt) (sc Scope) (profile Bool) (s SExpr)) PreRes
+  (match s
+    ((SList (Cons (SSym h) args))
+     (if (sym_eq h (quote fn)) (pre_head es sc profile args (quote fn))
+     (if (sym_eq h (quote extern)) (pre_head es sc profile args (quote extern))
+     (if (sym_eq h (quote type)) (pre_type es sc args)
+     (if (sym_eq h (quote sig))
+       (match args
+         ((Cons (SSym k) rest)
+          (if (sym_eq k (quote fn)) (pre_head es sc profile rest (quote sig))
+          (if (sym_eq k (quote type)) (match rest ((Cons hd Nil) (pre_sig_type es sc hd)) (_ (PreOk es)))
+            (PreOk es))))
+         (_ (PreOk es)))
+       (PreOk es))))))
+    (_ (PreOk es))))
+;; HEAD BINDERS …: the declared name (a parameterized head in the profile) and its
+;; arity — S's `(T Type)` binders are type parameters, not arguments (read_params)
+(fn pre_head ((es ESt) (sc Scope) (profile Bool) (args (List SExpr)) (kind Symbol)) PreRes
+  (match args
+    ((Cons hd (Cons (SList bs) _))
+     (match (head_name hd)
+       (None (PreErr (quote bad_name) "a declared name is NAME or (NAME T…)"))
+       ((Some short)
+        (let ((id (qualify sc short)) (k (if profile (len bs) (value_binders bs))))
+          (if (bool_not (may_declare es id (sym_eq kind (quote fn)))) (PreErr (quote duplicate_name) (show_name id))
+            (PreOk (es_register es id (sc_module sc)
+                     (if (sym_eq kind (quote fn)) (EIFn k) (if (sym_eq kind (quote extern)) (EIExt k) (EISig k))))))))))
+    (_ (PreOk es))))
+;; an identity may be declared when it is new; a fn may take a sig fn's, a type a sig type's (§6.7)
+(fn may_declare ((es ESt) (id Name) (is_fn Bool)) Bool
+  (match (es_info es id)
+    (None True)
+    ((Some (EISig _)) is_fn)
+    (_ False)))
+(fn may_declare_type ((es ESt) (id Name)) Bool
+  (match (es_info es id) (None True) ((Some (EISigType _)) True) (_ False)))
+;; the binders that are arguments: all but `(x Type)`
+(fn value_binders ((bs (List SExpr))) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons (SList (Cons _ (Cons ty Nil))) r) (+ (if (is_type_sym ty) 0 1) (value_binders r)))
+    ((Cons _ r) (+ 1 (value_binders r)))))
+(fn head_name ((hd SExpr)) (Option Name)
+  (match hd
+    ((SSym x) (name_of_sym x))
+    ((SList (Cons (SSym x) _)) (name_of_sym x))
+    (_ None)))
+;; (type HEAD (CTOR F…)…): the inductive with its constructors' ordinals and field counts
+(fn pre_type ((es ESt) (sc Scope) (args (List SExpr))) PreRes
+  (match args
+    ((Cons hd ctors)
+     (match (type_head sc hd)
+       ((Pair None m) (PreErr (quote bad_name) m))
+       ((Pair (Some (Pair n params)) _)
+        (if (bool_not (may_declare_type es n)) (PreErr (quote duplicate_name) (show_name n))
+          (match (ctor_shapes n ctors 0 Nil)
+            (None (PreErr (quote bad_constructor) "a constructor is (CTOR FIELD-TYPE…)"))
+            ((Some shapes)
+             (PreOk (es_register_all (es_register es n (sc_module sc) (EIInd (len params) (shape_names shapes))) (sc_module sc) shapes))))))))
+    (_ (PreOk es))))
+(fn ctor_shapes ((ind Name) (cs (List SExpr)) (i Int) (acc (List (Pair Name EInfo)))) (Option (List (Pair Name EInfo)))
+  (measure (struct cs))
+  (match cs
+    (Nil (Some (rev acc)))
+    ((Cons (SList (Cons (SSym cn) fields)) r)
+     (match (name_of_sym cn)
+       (None None)
+       ((Some short) (ctor_shapes ind r (+ i 1) (Cons (Pair (name_append ind short) (EICtor ind i (len fields))) acc)))))
+    (_ None)))
+(fn shape_names ((ss (List (Pair Name EInfo)))) (List Name)
+  (measure (struct ss))
+  (match ss (Nil Nil) ((Cons (Pair n _) r) (Cons n (shape_names r)))))
+(fn pre_sig_type ((es ESt) (sc Scope) (hd SExpr)) PreRes
+  (match (type_head sc hd)
+    ((Pair None m) (PreErr (quote bad_name) m))
+    ((Pair (Some (Pair n params)) _)
+     (if (es_has es n) (PreErr (quote duplicate_name) (show_name n))
+       (PreOk (es_register es n (sc_module sc) (EISigType (len params))))))))
+
+;; ---- E-types (§4: E-type positions) ---------------------------------------------------------
+;; the type parameters are threaded: the profile auto-binds a bare name that is no type
+(type TyRes (TyOk EType (List Name)) (TyErr Symbol (List Int)))
+(fn read_ety ((es ESt) (sc Scope) (env CheckedEnv) (profile Bool) (tps (List Name)) (s SExpr)) TyRes
+  (match s
+    ((SSym x)
+     (match (name_of_sym x)
+       (None (TyErr (quote bad_type) (chars_of_sym x)))
+       ((Some n)
+        (match (index_of n tps 0)
+          ((Some i) (TyOk (ETVar i) tps))
+          (None
+           (match (type_ident es sc env profile n)
+             ((TyOk t _) (TyOk t tps))
+             ((TyErr e m)
+              (if (bool_and profile (single_step n))
+                (TyOk (ETVar (len tps)) (append tps (list n)))
+                (TyErr e m)))))))))
+    ((SList (Cons (SSym x) args))
+     (match (name_of_sym x)
+       (None (TyErr (quote bad_type) (chars_of_sym x)))
+       ((Some n)
+        (match (type_ident es sc env profile n)
+          ((TyErr e m) (TyErr e m))
+          ((TyOk (ETCon id _) _)
+           (match (read_etys es sc env profile tps args Nil)
+             ((Pair (TyErr e m) _) (TyErr e m))
+             ((Pair (TyOk _ tps1) ts) (TyOk (ETCon id ts) tps1))))
+          ((TyOk _ _) (TyErr (quote bad_type) "a type parameter takes no arguments"))))))
+    (_ (TyErr (quote bad_type) "a type is NAME or (NAME TYPE…)"))))
+;; the argument types in order; the TyRes carries the threaded parameters (its type is a placeholder)
+(fn read_etys ((es ESt) (sc Scope) (env CheckedEnv) (profile Bool) (tps (List Name)) (ss (List SExpr)) (acc (List EType))) (Pair TyRes (List EType))
+  (measure (struct ss))
+  (match ss
+    (Nil (Pair (TyOk (ETVar 0) tps) (rev acc)))
+    ((Cons s r)
+     (match (read_ety es sc env profile tps s)
+       ((TyErr e m) (Pair (TyErr e m) Nil))
+       ((TyOk t tps1) (read_etys es sc env profile tps1 r (Cons t acc)))))))
+(fn single_step ((n Name)) Bool (match n ((Str Anon _) True) (_ False)))
+;; a type name's identity: the built-in E types, an E inductive or sig type (the
+;; profile), an L constant (S: `Init`'s, a `type`, a `sig type`)
+(fn type_ident ((es ESt) (sc Scope) (env CheckedEnv) (profile Bool) (n Name)) TyRes
+  (if (bool_and profile (bool_or (name_eq n (n1 (quote Int))) (name_eq n (n1 (quote Symbol))))) (TyOk (ETCon n Nil) Nil)
+  (if profile
+    (match (only_types (eresolve es sc True n))
+      (Nil (TyErr (quote unknown_type) (show_name n)))
+      ((Cons (EHit id _ _) Nil) (TyOk (ETCon id Nil) Nil))
+      ((Cons (EHit a _ _) (Cons (EHit b _ _) _)) (TyErr (quote ambiguous_type) (ambiguous_msg n a b))))
+    (match (resolve (cx_with_etype (cx0 sc env Nil Nil) True) n)
+      ((RName k _) (TyOk (ETCon k Nil) Nil))
+      ((RAmbiguous a b) (TyErr (quote ambiguous_type) (ambiguous_msg n a b)))
+      ((RPend k) (TyErr (quote pending_obligation) (show_name k)))
+      (RNone (TyErr (quote unknown_type) (show_name n)))))))
+
+;; ---- terms (§5.4) ----------------------------------------------------------------------------
+;; the reading context: the table, the scope, the environment (S E-types), the
+;; profile flag, the bound names innermost first
+(type Rd (Rd ESt Scope CheckedEnv Bool (List Name)))
+(fn rd_es ((r Rd)) ESt (match r ((Rd e _ _ _ _) e)))
+(fn rd_sc ((r Rd)) Scope (match r ((Rd _ s _ _ _) s)))
+(fn rd_env ((r Rd)) CheckedEnv (match r ((Rd _ _ e _ _) e)))
+(fn rd_profile ((r Rd)) Bool (match r ((Rd _ _ _ p _) p)))
+(fn rd_bound ((r Rd)) (List Name) (match r ((Rd _ _ _ _ b) b)))
+(fn rd_bind ((r Rd) (n Name)) Rd (match r ((Rd e s v p b) (Rd e s v p (Cons n b)))))
+(fn rd_bind_all ((r Rd) (ns (List Name))) Rd (match r ((Rd e s v p b) (Rd e s v p (rev_onto ns b)))))
+
+(type TRes (TOk ETerm) (TErr Symbol (List Int)))
+(fn read_et ((r Rd) (s SExpr)) TRes
+  (measure (struct s))
+  (match s
+    ((SNum k) (TOk (ELit (if (rd_profile r) (LInt k) (LNat k)))))
+    ((SStr bs) (if (rd_profile r) (TOk (ELit (LStr bs))) (TErr (quote string_literal) "phase 3 (§12.6): S has no string realization at Stage 0")))
+    ((SSymU _ _) (TErr (quote bad_universe_suffix) "an E term takes no universe arguments"))
+    ((SSym x) (read_esym r x))
+    ((SList Nil) (TErr (quote empty_application) "()"))
+    ((SList (Cons (SSym h) args))
+     (if (sym_eq h (quote match)) (read_ematch r args)
+     (if (sym_eq h (quote let)) (read_elet r args)
+     (if (sym_eq h (quote if)) (read_eif r args)
+     (if (sym_eq h (quote quote))
+       (if (rd_profile r)
+         (match args ((Cons (SSym q) Nil) (TOk (ELit (LSym q)))) (_ (TErr (quote bad_shape) "(quote SYMBOL)")))
+         (TErr (quote symbol_literal) "phase 3 (§12.6): S has no symbol literal"))
+     (if (sym_eq h (quote list))
+       (if (rd_profile r) (read_elist r args) (TErr (quote list_sugar) "phase 3 (§12.6): Stage 1 adds a list literal"))
+     (read_eapp r h args)))))))
+    ((SList (Cons _ _)) (TErr (quote bad_head) "a head is a name"))))
+
+;; a bare name: bound, else a constructor without fields, else the refusal it earns
+(fn read_esym ((r Rd) (x Symbol)) TRes
+  (match (name_of_sym x)
+    (None (TErr (quote bad_name) (chars_of_sym x)))
+    ((Some n)
+     (match (index_of n (rd_bound r) 0)
+       ((Some i) (TOk (EBVar i)))
+       (None
+        (match (only_values (eresolve (rd_es r) (rd_sc r) (rd_profile r) n))
+          ((Cons (EHit id _ (EICtor _ _ k)) Nil)
+           (if (int_eq k 0) (TOk (ECtor id Nil)) (TErr (quote unsaturated) (append (show_name id) (append " takes " (append (show_nat k) " arguments"))))))
+          ((Cons (EHit id _ (EIFn _)) Nil) (TErr (quote function_value) (append (show_name id) " in argument position (law §4.3)")))
+          ((Cons (EHit id _ (EISig _)) Nil) (TErr (quote function_value) (append (show_name id) " in argument position (law §4.3)")))
+          ((Cons (EHit id _ (EIExt _)) Nil) (TErr (quote function_value) (append (show_name id) " in argument position (law §4.3)")))
+          ((Cons (EHit a _ _) (Cons (EHit b _ _) _)) (TErr (quote ambiguous_head) (ambiguous_msg n a b)))
+          (Nil
+           (match (prim_of (if (rd_profile r) (list n) (scope_candidates (rd_sc r) n)))
+             ((Some (Pair id _)) (TErr (quote function_value) (append (show_name id) " in argument position (law §4.3)")))
+             (None (TErr (quote unbound_name) (show_name n)))))
+          ((Cons (EHit id _ _) Nil) (TErr (quote unbound_name) (append (show_name id) " is a type")))))))))
+
+;; (HEAD E…): a constructor, a function or sig fn, an extern, a primitive — saturated
+(fn read_eapp ((r Rd) (h Symbol) (args (List SExpr))) TRes
+  (match (name_of_sym h)
+    (None (TErr (quote bad_name) (chars_of_sym h)))
+    ((Some n)
+     (match (index_of n (rd_bound r) 0)
+       ((Some _) (TErr (quote bad_head) (append (show_name n) " is a variable: there are no function values (law §4.3)")))
+       (None
+        (match (only_values (eresolve (rd_es r) (rd_sc r) (rd_profile r) n))
+          ((Cons (EHit id _ (EICtor _ _ k)) Nil) (read_head_args r id k args (quote ctor)))
+          ((Cons (EHit id _ (EIFn k)) Nil) (read_head_args r id k args (quote call)))
+          ((Cons (EHit id _ (EISig k)) Nil) (read_head_args r id k args (quote call)))
+          ((Cons (EHit id _ (EIExt k)) Nil) (read_head_args r id k args (quote ext)))
+          ((Cons (EHit a _ _) (Cons (EHit b _ _) _)) (TErr (quote ambiguous_head) (ambiguous_msg n a b)))
+          (Nil
+           (match (prim_of (if (rd_profile r) (list n) (scope_candidates (rd_sc r) n)))
+             ((Some (Pair id (Prim _ k))) (read_head_args r id k args (quote prim)))
+             (None (TErr (quote unknown_head) (show_name n)))))
+          ((Cons (EHit id _ _) Nil) (TErr (quote bad_head) (append (show_name id) " is a type")))))))))
+(fn read_head_args ((r Rd) (id Name) (k Int) (args (List SExpr)) (kind Symbol)) TRes
+  (if (bool_not (int_eq k (len args)))
+    (TErr (quote unsaturated) (append (show_name id) (append " takes " (append (show_nat k) (append " arguments, given " (show_nat (len args)))))))
+    (match (read_ets_list r args Nil)
+      ((Pair (Some (Pair e m)) _) (TErr e m))
+      ((Pair None ts)
+       (TOk (if (sym_eq kind (quote ctor)) (ECtor id ts)
+            (if (sym_eq kind (quote call)) (ECall id ts)
+            (if (sym_eq kind (quote ext)) (EExt id ts)
+              (EPrim id ts)))))))))
+;; the arguments in order, or the first error
+(fn read_ets_list ((r Rd) (ss (List SExpr)) (acc (List ETerm))) (Pair (Option (Pair Symbol (List Int))) (List ETerm))
+  (measure (struct ss))
+  (match ss
+    (Nil (Pair None (rev acc)))
+    ((Cons s rest)
+     (match (read_et r s)
+       ((TErr e m) (Pair (Some (Pair e m)) Nil))
+       ((TOk t) (read_ets_list r rest (Cons t acc)))))))
+
+;; (match E (PAT E)…): the first arm whose pattern matches; each arm's variables bound for its body
+(fn read_ematch ((r Rd) (args (List SExpr))) TRes
+  (match args
+    ((Cons s arms)
+     (match (read_et r s)
+       ((TErr e m) (TErr e m))
+       ((TOk t)
+        (match (read_earms r arms Nil)
+          ((Pair (Some (Pair e m)) _) (TErr e m))
+          ((Pair None as) (TOk (EMatch t as)))))))
+    (_ (TErr (quote bad_shape) "(match E (PAT E)…)"))))
+(fn read_earms ((r Rd) (arms (List SExpr)) (acc (List EArm))) (Pair (Option (Pair Symbol (List Int))) (List EArm))
+  (measure (struct arms))
+  (match arms
+    (Nil (Pair None (rev acc)))
+    ((Cons (SList (Cons p (Cons b Nil))) rest)
+     (match (read_epat r p)
+       ((PErr e m) (Pair (Some (Pair e m)) Nil))
+       ((POk pat names)
+        (match (read_et (rd_bind_all r names) b)
+          ((TErr e m) (Pair (Some (Pair e m)) Nil))
+          ((TOk body) (read_earms r rest (Cons (EArm pat body) acc)))))))
+    (_ (Pair (Some (Pair (quote bad_shape) "an arm is (PAT E)")) Nil))))
+
+;; ---- patterns: the variables in capture order (leftmost first) ------------------------------
+(type PRes (POk EPat (List Name)) (PErr Symbol (List Int)))
+(fn read_epat ((r Rd) (s SExpr)) PRes
+  (measure (struct s))
+  (match s
+    ((SNum k) (POk (PLit (if (rd_profile r) (LInt k) (LNat k))) Nil))
+    ((SStr _) (PErr (quote pattern_literal) "a string is not a pattern: match its Cons and Nil"))
+    ((SSymU _ _) (PErr (quote bad_universe_suffix) "a pattern takes no universe arguments"))
+    ((SSym x)
+     (match (name_of_sym x)
+       (None (PErr (quote bad_name) (chars_of_sym x)))
+       ((Some n)
+        (match (only_ctors (eresolve (rd_es r) (rd_sc r) (rd_profile r) n))
+          (Nil
+           (match (only_values (eresolve (rd_es r) (rd_sc r) (rd_profile r) n))
+             (Nil (POk PVar (list n)))
+             ((Cons (EHit id _ _) _) (PErr (quote pattern_name) (append (show_name id) " is a function: a pattern variable may not shadow one (it would match anything)")))))
+          ((Cons (EHit id _ (EICtor _ _ k)) Nil)
+           (if (int_eq k 0) (POk (PCtor id Nil) Nil) (PErr (quote pattern_arity) (append (show_name id) (append " has " (append (show_nat k) " fields"))))))
+          ((Cons (EHit a _ _) (Cons (EHit b _ _) _)) (PErr (quote ambiguous_head) (ambiguous_msg n a b)))
+          (_ (PErr (quote bad_pattern) (show_name n)))))))
+    ((SList (Cons (SSym h) subs))
+     (if (sym_eq h (quote quote))
+       (if (rd_profile r)
+         (match subs ((Cons (SSym q) Nil) (POk (PLit (LSym q)) Nil)) (_ (PErr (quote bad_shape) "(quote SYMBOL)")))
+         (PErr (quote symbol_literal) "phase 3 (§12.6): S has no symbol literal"))
+       (match (name_of_sym h)
+         (None (PErr (quote bad_name) (chars_of_sym h)))
+         ((Some n)
+          (match (only_ctors (eresolve (rd_es r) (rd_sc r) (rd_profile r) n))
+            (Nil (PErr (quote unknown_head) (append (show_name n) " is not a constructor")))
+            ((Cons (EHit id _ (EICtor _ _ k)) Nil)
+             (if (bool_not (int_eq k (len subs)))
+               (PErr (quote pattern_arity) (append (show_name id) (append " has " (append (show_nat k) (append " fields, the pattern " (show_nat (len subs)))))))
+               (match (read_epats r subs Nil Nil)
+                 ((Pair (Some (Pair e m)) _) (PErr e m))
+                 ((Pair None (Pair ps names)) (POk (PCtor id ps) names)))))
+            ((Cons (EHit a _ _) (Cons (EHit b _ _) _)) (PErr (quote ambiguous_head) (ambiguous_msg n a b)))
+            (_ (PErr (quote bad_pattern) (show_name n))))))))
+    (_ (PErr (quote bad_pattern) "a pattern is _, NAME, NUMERAL or (CTOR PAT…)"))))
+(fn read_epats ((r Rd) (ss (List SExpr)) (pacc (List EPat)) (nacc (List Name))) (Pair (Option (Pair Symbol (List Int))) (Pair (List EPat) (List Name)))
+  (measure (struct ss))
+  (match ss
+    (Nil (Pair None (Pair (rev pacc) nacc)))
+    ((Cons s rest)
+     (match (read_epat r s)
+       ((PErr e m) (Pair (Some (Pair e m)) (Pair Nil Nil)))
+       ((POk p names) (read_epats r rest (Cons p pacc) (append nacc names)))))))
+
+;; (let ((x E)…) E): sequential — each right-hand side sees the bindings before it
+(fn read_elet ((r Rd) (args (List SExpr))) TRes
+  (match args
+    ((Cons (SList binds) (Cons body Nil))
+     (match (read_ebinds r binds Nil)
+       ((Pair (Some (Pair e m)) _) (TErr e m))
+       ((Pair None (Pair rhss r1))
+        (match (read_et r1 body)
+          ((TErr e m) (TErr e m))
+          ((TOk b) (TOk (ELet rhss b)))))))
+    (_ (TErr (quote bad_shape) "(let ((x E)…) E)"))))
+(fn read_ebinds ((r Rd) (binds (List SExpr)) (acc (List ETerm))) (Pair (Option (Pair Symbol (List Int))) (Pair (List ETerm) Rd))
+  (measure (struct binds))
+  (match binds
+    (Nil (Pair None (Pair (rev acc) r)))
+    ((Cons (SList (Cons (SSym x) (Cons e Nil))) rest)
+     (match (name_of_sym x)
+       (None (Pair (Some (Pair (quote bad_name) (chars_of_sym x))) (Pair Nil r)))
+       ((Some n)
+        (match (read_et r e)
+          ((TErr e2 m) (Pair (Some (Pair e2 m)) (Pair Nil r)))
+          ((TOk t) (read_ebinds (rd_bind r n) rest (Cons t acc)))))))
+    (_ (Pair (Some (Pair (quote bad_shape) "a binding is (NAME E)")) (Pair Nil r)))))
+
+(fn read_eif ((r Rd) (args (List SExpr))) TRes
+  (match args
+    ((Cons c (Cons a (Cons b Nil)))
+     (match (read_et r c)
+       ((TErr e m) (TErr e m))
+       ((TOk tc)
+        (match (read_et r a)
+          ((TErr e m) (TErr e m))
+          ((TOk ta)
+           (match (read_et r b)
+             ((TErr e m) (TErr e m))
+             ((TOk tb) (TOk (EIf tc ta tb)))))))))
+    (_ (TErr (quote bad_shape) "(if E E E)"))))
+
+;; (list a b…): the prelude's Cons chain (the profile), its constructors resolved as citations
+(fn read_elist ((r Rd) (args (List SExpr))) TRes
+  (match (ctor_ident r (n1 (quote Cons)))
+    (None (TErr (quote unknown_head) "Cons: (list …) needs the prelude's List"))
+    ((Some cons_id)
+     (match (ctor_ident r (n1 (quote Nil)))
+       (None (TErr (quote unknown_head) "Nil: (list …) needs the prelude's List"))
+       ((Some nil_id)
+        (match (read_ets_list r args Nil)
+          ((Pair (Some (Pair e m)) _) (TErr e m))
+          ((Pair None ts) (TOk (cons_chain cons_id nil_id ts)))))))))
+(fn ctor_ident ((r Rd) (n Name)) (Option Name)
+  (match (only_ctors (eresolve (rd_es r) (rd_sc r) (rd_profile r) n))
+    ((Cons (EHit id _ _) Nil) (Some id))
+    (_ None)))
+(fn cons_chain ((c Name) (nl Name) (ts (List ETerm))) ETerm
+  (measure (struct ts))
+  (match ts (Nil (ECtor nl Nil)) ((Cons t r) (ECtor c (list t (cons_chain c nl r))))))
+
+;; ---- the declarations -------------------------------------------------------------------------
+(type CRes (COk EDecl) (CErr Symbol (List Int)))
+;; fn / extern / type / sig fn / sig type
+(fn classify_form ((es ESt) (sc Scope) (env CheckedEnv) (profile Bool) (s SExpr)) CRes
+  (match s
+    ((SList (Cons (SSym h) args))
+     (if (sym_eq h (quote fn)) (read_efn es sc env profile args)
+     (if (sym_eq h (quote extern)) (read_eextern es sc env profile args)
+     (if (sym_eq h (quote type)) (read_etype_decl es sc env profile args)
+     (if (sym_eq h (quote sig))
+       (match args
+         ((Cons (SSym k) rest)
+          (if (sym_eq k (quote fn)) (read_esig_fn es sc env profile rest)
+          (if (sym_eq k (quote type)) (match rest ((Cons hd Nil) (read_esig_type es sc hd)) (_ (CErr (quote bad_shape) "(sig type NAME)")))
+            (CErr (quote bad_shape) "(sig fn …) or (sig type …)"))))
+         (_ (CErr (quote bad_shape) "(sig fn …) or (sig type …)")))
+       (CErr (quote unknown_form) (chars_of_sym h)))))))
+    (_ (CErr (quote unknown_form) "a top-level form is (KEYWORD …)"))))
+
+;; HEAD: NAME, or (NAME T…) with the type parameters (the profile)
+(fn head_params ((hd SExpr) (profile Bool)) (Pair (Option Name) (List Name))
+  (match hd
+    ((SSym x) (Pair (name_of_sym x) Nil))
+    ((SList (Cons (SSym x) ts))
+     (if profile
+       (match (univ_params ts Nil) ((Some names) (Pair (name_of_sym x) names)) (None (Pair None Nil)))
+       (Pair None Nil)))
+    (_ (Pair None Nil))))
+;; ((x TYPE)…): the names and E-types in order; `(T Type)` in S declares a type parameter
+(type PmRes (PmOk (List Name) (List EType) (List Name)) (PmErr Symbol (List Int)))
+(fn read_params ((es ESt) (sc Scope) (env CheckedEnv) (profile Bool) (tps (List Name)) (bs (List SExpr)) (names (List Name)) (types (List EType))) PmRes
+  (measure (struct bs))
+  (match bs
+    (Nil (PmOk (rev names) (rev types) tps))
+    ((Cons (SList (Cons (SSym x) (Cons ty Nil))) rest)
+     (match (name_of_sym x)
+       (None (PmErr (quote bad_binder) (chars_of_sym x)))
+       ((Some n)
+        (if (bool_and (bool_not profile) (is_type_sym ty))
+          (read_params es sc env profile (append tps (list n)) rest names types)
+          (match (read_ety es sc env profile tps ty)
+            ((TyErr e m) (PmErr e m))
+            ((TyOk t tps1) (read_params es sc env profile tps1 rest (Cons n names) (Cons t types))))))))
+    (_ (PmErr (quote bad_binder) "a binder is (x TYPE)"))))
+(fn is_type_sym ((s SExpr)) Bool (match s ((SSym x) (sym_eq x (quote Type))) (_ False)))
+;; the forms after RET: BODY, or (measure M) BODY
+(fn measure_body ((rest (List SExpr))) (Pair (Option SExpr) (Option SExpr))
+  (match rest
+    ((Cons b Nil) (Pair (Some b) None))
+    ((Cons (SList (Cons (SSym m) (Cons e Nil))) (Cons b Nil)) (if (sym_eq m (quote measure)) (Pair (Some b) (Some e)) (Pair None None)))
+    (_ (Pair None None))))
+(type RcRes (RcOk ERec) (RcErr Symbol (List Int)))
+(fn read_rec ((r Rd) (pnames (List Name)) (meas (Option SExpr))) RcRes
+  (match meas
+    (None (RcOk RecNone))
+    ((Some (SList (Cons (SSym s) (Cons (SSym x) Nil))))
+     (if (sym_eq s (quote struct))
+       (match (name_of_sym x)
+         (None (RcErr (quote bad_measure) (chars_of_sym x)))
+         ((Some n) (match (index_of n pnames 0) ((Some i) (RcOk (RecStruct i))) (None (RcErr (quote bad_measure) (append (show_name n) " is not a parameter"))))))
+       (match (read_et r (SList (Cons (SSym s) (Cons (SSym x) Nil)))) ((TErr e m) (RcErr e m)) ((TOk t) (RcOk (RecMeasure t))))))
+    ((Some m) (match (read_et r m) ((TErr e m2) (RcErr e m2)) ((TOk t) (RcOk (RecMeasure t)))))))
+
+;; (fn HEAD BINDERS RET (measure M)? BODY)
+(fn read_efn ((es ESt) (sc Scope) (env CheckedEnv) (profile Bool) (args (List SExpr))) CRes
+  (match args
+    ((Cons hd (Cons (SList bs) (Cons ret rest)))
+     (match (head_params hd profile)
+       ((Pair None _) (CErr (quote bad_name) "a declared name is NAME, or (NAME T…) in the profile"))
+       ((Pair (Some short) tps0)
+        (match (read_params es sc env profile tps0 bs Nil Nil)
+          ((PmErr e m) (CErr e m))
+          ((PmOk pnames ptypes tps1)
+           (match (read_ety es sc env profile tps1 ret)
+             ((TyErr e m) (CErr e m))
+             ((TyOk rt tps2)
+              (let ((id (qualify sc short)) (r (Rd es sc env profile (rev pnames))))
+                (match (measure_body rest)
+                  ((Pair None _) (CErr (quote bad_shape) "(fn NAME ((x TYPE)…) RET (measure M)? BODY)"))
+                  ((Pair (Some body) meas)
+                   (match (read_et r body)
+                     ((TErr e m) (CErr e m))
+                     ((TOk t)
+                      (match (read_rec r pnames meas)
+                        ((RcErr e m) (CErr e m))
+                        ((RcOk rec)
+                         (match (classify_both es id (some_all (rev ptypes)) t rec)
+                           ((Some (Pair e m)) (CErr e m))
+                           (None (COk (EFn id (len tps2) ptypes rt rec t))))))))))))))))))
+    (_ (CErr (quote bad_shape) "(fn NAME ((x TYPE)…) RET (measure M)? BODY)"))))
+;; the body, then a measure term, each over the parameters (§4.4 states the correspondence over both)
+(fn classify_both ((es ESt) (id Name) (tys (List (Option EType))) (t ETerm) (rec ERec)) (Option (Pair Symbol (List Int)))
+  (match (classify_body es id tys t)
+    ((Some e) (Some e))
+    (None (match rec ((RecMeasure m) (classify_body es id tys m)) (_ None)))))
+(fn some_all ((ts (List EType))) (List (Option EType))
+  (measure (struct ts))
+  (match ts (Nil Nil) ((Cons t r) (Cons (Some t) (some_all r)))))
+
+;; (extern HEAD BINDERS RET)
+(fn read_eextern ((es ESt) (sc Scope) (env CheckedEnv) (profile Bool) (args (List SExpr))) CRes
+  (match (read_esignature es sc env profile args)
+    ((SgErr e m) (CErr e m))
+    ((SgOk id nt ps rt) (COk (EExtern id nt ps rt)))))
+(fn read_esig_fn ((es ESt) (sc Scope) (env CheckedEnv) (profile Bool) (args (List SExpr))) CRes
+  (match (read_esignature es sc env profile args)
+    ((SgErr e m) (CErr e m))
+    ((SgOk id nt ps rt) (COk (ESig id nt ps rt)))))
+(type SgRes (SgOk Name Int (List EType) EType) (SgErr Symbol (List Int)))
+(fn read_esignature ((es ESt) (sc Scope) (env CheckedEnv) (profile Bool) (args (List SExpr))) SgRes
+  (match args
+    ((Cons hd (Cons (SList bs) (Cons ret Nil)))
+     (match (head_params hd profile)
+       ((Pair None _) (SgErr (quote bad_name) "a declared name is NAME, or (NAME T…) in the profile"))
+       ((Pair (Some short) tps0)
+        (match (read_params es sc env profile tps0 bs Nil Nil)
+          ((PmErr e m) (SgErr e m))
+          ((PmOk _ ptypes tps1)
+           (match (read_ety es sc env profile tps1 ret)
+             ((TyErr e m) (SgErr e m))
+             ((TyOk rt tps2) (SgOk (qualify sc short) (len tps2) ptypes rt))))))))
+    (_ (SgErr (quote bad_shape) "NAME ((x TYPE)…) RET"))))
+(fn read_esig_type ((es ESt) (sc Scope) (hd SExpr)) CRes
+  (match (type_head sc hd)
+    ((Pair None m) (CErr (quote bad_name) m))
+    ((Pair (Some (Pair n params)) _) (COk (ESigType n (len params))))))
+
+;; (type HEAD (CTOR FIELD-TYPE…)…): the E inductive; field types over the declared parameters only
+(fn read_etype_decl ((es ESt) (sc Scope) (env CheckedEnv) (profile Bool) (args (List SExpr))) CRes
+  (match args
+    ((Cons hd ctors)
+     (match (type_head sc hd)
+       ((Pair None m) (CErr (quote bad_name) m))
+       ((Pair (Some (Pair n params)) _)
+        (match (read_ectors es sc env profile params n ctors Nil)
+          ((Pair (Some (Pair e m)) _) (CErr e m))
+          ((Pair None cs) (COk (EInd n (len params) cs)))))))
+    (_ (CErr (quote bad_shape) "(type (NAME T…) (CTOR FIELD-TYPE…)…)"))))
+(fn read_ectors ((es ESt) (sc Scope) (env CheckedEnv) (profile Bool) (params (List Name)) (ind Name) (cs (List SExpr)) (acc (List ECtorDef))) (Pair (Option (Pair Symbol (List Int))) (List ECtorDef))
+  (measure (struct cs))
+  (match cs
+    (Nil (Pair None (rev acc)))
+    ((Cons (SList (Cons (SSym cn) fields)) r)
+     (match (name_of_sym cn)
+       (None (Pair (Some (Pair (quote bad_name) (chars_of_sym cn))) Nil))
+       ((Some short)
+        (match (read_etys es sc env profile params fields Nil)
+          ((Pair (TyErr e m) _) (Pair (Some (Pair e m)) Nil))
+          ((Pair (TyOk _ tps1) fts)
+           (if (bool_not (int_eq (len tps1) (len params)))
+             (Pair (Some (Pair (quote unknown_type) (append "in " (append (show_name (name_append ind short)) ": a field names a type this file cannot see")))) Nil)
+             (read_ectors es sc env profile params ind r (Cons (ECtorDef (name_append ind short) fts) acc))))))))
+    (_ (Pair (Some (Pair (quote bad_constructor) "a constructor is (CTOR FIELD-TYPE…)")) Nil))))
+
+;; ---- the classifier's passes over a read body (§6.3 items 3 and 5) ------------------------------
+(fn classify_body ((es ESt) (id Name) (tys (List (Option EType))) (t ETerm)) (Option (Pair Symbol (List Int)))
+  (if (bool_not (c_exh es t))
+    (Some (Pair (quote nonexhaustive) (append (show_name id) ": a match does not cover its scrutinee's constructors")))
+    (match (c_leak es tys t)
+      ((Some (Leak st)) (Some (Pair (quote private_match) (append (show_name id) (append " matches a value of the sig type " (append (show_name st) " against a constructor (§6.5)"))))))
+      ((Some (Mismatch st c)) (Some (Pair (quote pattern_type) (append (show_name id) (append " matches a value of type " (append (show_name st) (append " against the constructor " (show_name c))))))))
+      (None None))))
+;; what the typed pass refuses: a sig type matched against a constructor; a constructor of another type
+(type Bad (Leak Name) (Mismatch Name Name))
+
+;; exhaustiveness: every match, by the pattern matrix
+(fn c_exh ((es ESt) (t ETerm)) Bool
+  (measure (struct t))
+  (match t
+    ((EBVar _) True)
+    ((ELit _) True)
+    ((ECtor _ as) (c_exh_all es as))
+    ((ECall _ as) (c_exh_all es as))
+    ((EPrim _ as) (c_exh_all es as))
+    ((EExt _ as) (c_exh_all es as))
+    ((EMatch s arms) (bool_and (c_exh es s) (bool_and (matrix_exh es (arm_rows arms) 1 (matrix_fuel)) (c_exh_arms es arms))))
+    ((ELet rs b) (bool_and (c_exh_all es rs) (c_exh es b)))
+    ((EIf a b c) (bool_and (c_exh es a) (bool_and (c_exh es b) (c_exh es c))))))
+(fn c_exh_all ((es ESt) (ts (List ETerm))) Bool
+  (measure (struct ts))
+  (match ts (Nil True) ((Cons t r) (bool_and (c_exh es t) (c_exh_all es r)))))
+(fn c_exh_arms ((es ESt) (arms (List EArm))) Bool
+  (measure (struct arms))
+  (match arms (Nil True) ((Cons (EArm _ b) r) (bool_and (c_exh es b) (c_exh_arms es r)))))
+(fn arm_rows ((arms (List EArm))) (List (List EPat))
+  (measure (struct arms))
+  (match arms (Nil Nil) ((Cons (EArm p _) r) (Cons (list p) (arm_rows r)))))
+(fn matrix_fuel () Int 1000000)
+;; rows of n patterns: exhaustive iff some row matches every vector of values
+(fn matrix_exh ((es ESt) (rows (List (List EPat))) (n Int) (fuel Int)) Bool
+  (measure fuel)
+  (if (lt fuel 0) False
+  (match rows
+    (Nil False)
+    (_
+     (if (int_eq n 0) True
+       (match (column_ctor rows)
+         (None (matrix_exh es (default_rows rows) (- n 1) (- fuel 1)))
+         ((Some c)
+          (match (es_info es c)
+            ((Some (EICtor ind _ _))
+             (match (es_info es ind)
+               ((Some (EIInd _ ctors)) (all_ctors_exh es rows ctors n (- fuel 1)))
+               (_ False)))
+            (_ False)))))))))
+(fn column_ctor ((rows (List (List EPat)))) (Option Name)
+  (measure (struct rows))
+  (match rows
+    (Nil None)
+    ((Cons (Cons (PCtor c _) _) _) (Some c))
+    ((Cons _ r) (column_ctor r))))
+;; the rows whose first pattern is a variable, without it
+(fn default_rows ((rows (List (List EPat)))) (List (List EPat))
+  (measure (struct rows))
+  (match rows
+    (Nil Nil)
+    ((Cons (Cons PVar tl) r) (Cons tl (default_rows r)))
+    ((Cons _ r) (default_rows r))))
+(fn all_ctors_exh ((es ESt) (rows (List (List EPat))) (ctors (List Name)) (n Int) (fuel Int)) Bool
+  (measure (struct ctors))
+  (match ctors
+    (Nil True)
+    ((Cons c r)
+     (match (es_info es c)
+       ((Some (EICtor _ _ k))
+        (bool_and (matrix_exh es (specialize rows c k) (+ (- n 1) k) fuel) (all_ctors_exh es rows r n fuel)))
+       (_ False)))))
+;; the rows specialized to constructor c with k fields: its sub-patterns, or k variables, prepended
+(fn specialize ((rows (List (List EPat))) (c Name) (k Int)) (List (List EPat))
+  (measure (struct rows))
+  (match rows
+    (Nil Nil)
+    ((Cons (Cons (PCtor d subs) tl) r) (if (name_eq c d) (Cons (append subs tl) (specialize r c k)) (specialize r c k)))
+    ((Cons (Cons PVar tl) r) (Cons (append (pvars k) tl) (specialize r c k)))
+    ((Cons _ r) (specialize r c k))))
+(fn pvars ((k Int)) (List EPat) (measure k) (if (lt k 1) Nil (Cons PVar (pvars (- k 1)))))
+
+;; the private-equality leak: a scrutinee of a sig type matched against a constructor —
+;; and, with the same types, a constructor of another type than the scrutinee's. Types
+;; are read off the binders, the fields, the callees and the primitives as far as they reach.
+(fn c_leak ((es ESt) (tys (List (Option EType))) (t ETerm)) (Option Bad)
+  (measure (struct t))
+  (match t
+    ((EBVar _) None)
+    ((ELit _) None)
+    ((ECtor _ as) (c_leak_all es tys as))
+    ((ECall _ as) (c_leak_all es tys as))
+    ((EPrim _ as) (c_leak_all es tys as))
+    ((EExt _ as) (c_leak_all es tys as))
+    ((EMatch s arms)
+     (match (c_leak es tys s)
+       ((Some x) (Some x))
+       (None
+        (let ((st (c_type es tys s)))
+          (match (sig_typed es st)
+            ((Some sn) (if (any_ctor_arm arms) (Some (Leak sn)) (c_leak_arms es tys st arms)))
+            (None
+             (match (foreign_ctor es st arms)
+               ((Some c) (Some (Mismatch (type_head_name st) c)))
+               (None (c_leak_arms es tys st arms)))))))))
+    ((ELet rs b) (c_leak_let es tys rs b))
+    ((EIf a b c)
+     (match (c_leak es tys a)
+       ((Some x) (Some x))
+       (None (match (c_leak es tys b) ((Some x) (Some x)) (None (c_leak es tys c))))))))
+(fn c_leak_all ((es ESt) (tys (List (Option EType))) (ts (List ETerm))) (Option Bad)
+  (measure (struct ts))
+  (match ts (Nil None) ((Cons t r) (match (c_leak es tys t) ((Some x) (Some x)) (None (c_leak_all es tys r))))))
+(fn c_leak_arms ((es ESt) (tys (List (Option EType))) (st (Option EType)) (arms (List EArm))) (Option Bad)
+  (measure (struct arms))
+  (match arms
+    (Nil None)
+    ((Cons (EArm p b) r)
+     (match (c_leak es (rev_onto (pat_types es st p) tys) b)
+       ((Some x) (Some x))
+       (None (c_leak_arms es tys st r))))))
+(fn c_leak_let ((es ESt) (tys (List (Option EType))) (rs (List ETerm)) (b ETerm)) (Option Bad)
+  (measure (struct rs))
+  (match rs
+    (Nil (c_leak es tys b))
+    ((Cons t r)
+     (match (c_leak es tys t)
+       ((Some x) (Some x))
+       (None (c_leak_let es (Cons (c_type es tys t) tys) r b))))))
+(fn any_ctor_arm ((arms (List EArm))) Bool
+  (measure (struct arms))
+  (match arms (Nil False) ((Cons (EArm (PCtor _ _) _) _) True) ((Cons _ r) (any_ctor_arm r))))
+;; a constructor pattern whose inductive is not the scrutinee's known type (an E inductive, Int or Symbol)
+(fn foreign_ctor ((es ESt) (st (Option EType)) (arms (List EArm))) (Option Name)
+  (measure (struct arms))
+  (match arms
+    (Nil None)
+    ((Cons (EArm (PCtor c _) _) r)
+     (match (es_info es c)
+       ((Some (EICtor ind _ _))
+        (match st
+          ((Some (ETCon n _))
+           (if (bool_or (builtin_type n) (is_ind es n))
+             (if (name_eq ind n) (foreign_ctor es st r) (Some c))
+             (foreign_ctor es st r)))
+          (_ (foreign_ctor es st r))))
+       (_ (foreign_ctor es st r))))
+    ((Cons _ r) (foreign_ctor es st r))))
+(fn builtin_type ((n Name)) Bool (bool_or (name_eq n (n1 (quote Int))) (name_eq n (n1 (quote Symbol)))))
+(fn is_ind ((es ESt) (n Name)) Bool (match (es_info es n) ((Some (EIInd _ _)) True) (_ False)))
+(fn type_head_name ((st (Option EType))) Name (match st ((Some (ETCon n _)) n) (_ Anon)))
+(fn sig_typed ((es ESt) (st (Option EType))) (Option Name)
+  (match st
+    ((Some (ETCon n _)) (match (es_info es n) ((Some (EISigType _)) (Some n)) (_ None)))
+    (_ None)))
+;; a pattern's variables' types in capture order, from the scrutinee's type
+(fn pat_types ((es ESt) (st (Option EType)) (p EPat)) (List (Option EType))
+  (measure (struct p))
+  (match p
+    (PVar (list st))
+    ((PLit _) Nil)
+    ((PCtor c subs)
+     (match (ctor_field_types es st c)
+       ((Some fts) (pat_types_all es (some_all fts) subs))
+       (None (pat_types_all es (nones (len subs)) subs))))))
+(fn pat_types_all ((es ESt) (fts (List (Option EType))) (subs (List EPat))) (List (Option EType))
+  (measure (struct subs))
+  (match subs
+    (Nil Nil)
+    ((Cons p r)
+     (match fts
+       ((Cons ft fr) (append (pat_types es ft p) (pat_types_all es fr r)))
+       (Nil (append (pat_types es None p) (pat_types_all es Nil r)))))))
+(fn nones ((k Int)) (List (Option EType)) (measure k) (if (lt k 1) Nil (Cons None (nones (- k 1)))))
+;; constructor c's field types under the scrutinee's type arguments, when its inductive is known
+(fn ctor_field_types ((es ESt) (st (Option EType)) (c Name)) (Option (List EType))
+  (match st
+    ((Some (ETCon ind args))
+     (match (es_find_decl es ind)
+       ((Some (EInd _ _ cs)) (match (fields_of cs c) ((Some fts) (Some (subst_tys args fts))) (None None)))
+       (_ None)))
+    (_ None)))
+(fn fields_of ((cs (List ECtorDef)) (c Name)) (Option (List EType))
+  (measure (struct cs))
+  (match cs (Nil None) ((Cons (ECtorDef d fts) r) (if (name_eq c d) (Some fts) (fields_of r c)))))
+(fn subst_tys ((args (List EType)) (ts (List EType))) (List EType)
+  (measure (struct ts))
+  (match ts (Nil Nil) ((Cons t r) (Cons (subst_ty args t) (subst_tys args r)))))
+(fn subst_ty ((args (List EType)) (t EType)) EType
+  (measure (struct t))
+  (match t
+    ((ETVar i) (match (nth args i) ((Some a) a) (None (ETVar i))))
+    ((ETCon n ts) (ETCon n (subst_tys args ts)))))
+;; the static E type of a term, as far as the declarations determine it
+(fn c_type ((es ESt) (tys (List (Option EType))) (t ETerm)) (Option EType)
+  (measure (struct t))
+  (match t
+    ((EBVar i) (match (nth tys i) ((Some o) o) (None None)))
+    ((ELit (LNat _)) (Some (ETCon (n1 (quote Int)) Nil)))
+    ((ELit (LInt _)) (Some (ETCon (n1 (quote Int)) Nil)))
+    ((ELit (LStr _)) (Some (ETCon (prelude_list) (list (ETCon (n1 (quote Int)) Nil)))))
+    ((ELit (LSym _)) (Some (ETCon (n1 (quote Symbol)) Nil)))
+    ((ECtor c args)
+     (match (es_info es c)
+       ((Some (EICtor ind _ _))
+        (match (es_find_decl es ind)
+          ((Some (EInd _ np cs))
+           (match (fields_of cs c)
+             ((Some fts) (Some (ETCon ind (params_from (unify_all es tys fts args Nil) np 0))))
+             (None (Some (ETCon ind Nil)))))
+          (_ (Some (ETCon ind Nil)))))
+       (_ None)))
+    ((ECall f args)
+     (match (es_find_decl es f)
+       ((Some (EFn _ _ ps rt _ _)) (Some (subst_ty (params_from (unify_all es tys ps args Nil) (tvar_count rt) 0) rt)))
+       ((Some (ESig _ _ ps rt)) (Some (subst_ty (params_from (unify_all es tys ps args Nil) (tvar_count rt) 0) rt)))
+       (_ None)))
+    ((EExt f args) (match (es_find_decl es f) ((Some (EExtern _ _ ps rt)) (Some (subst_ty (params_from (unify_all es tys ps args Nil) (tvar_count rt) 0) rt))) (_ None)))
+    ((EPrim n _) (match (prim_find n) ((Some (Prim code _)) (Some (prim_result code))) (None None)))
+    ((EMatch s arms)
+     (match arms
+       ((Cons (EArm p b) _) (c_type es (rev_onto (pat_types es (c_type es tys s) p) tys) b))
+       (Nil None)))
+    ((ELet rs b) (c_type_let es tys rs b))
+    ((EIf _ b _) (c_type es tys b))))
+;; the type parameters a head's declared types take from its arguments' static types:
+;; ETVar i bound where a declared type meets a known argument type, else left as ETVar i
+(fn unify_all ((es ESt) (tys (List (Option EType))) (decl (List EType)) (args (List ETerm)) (acc (List (Pair Int EType)))) (List (Pair Int EType))
+  (measure (struct decl))
+  (match decl
+    (Nil acc)
+    ((Cons d dr)
+     (match args
+       (Nil acc)
+       ((Cons a ar)
+        (unify_all es tys dr ar (match (c_type es tys a) ((Some at) (unify_ty d at acc)) (None acc))))))))
+(fn unify_ty ((d EType) (a EType) (acc (List (Pair Int EType)))) (List (Pair Int EType))
+  (measure (struct d))
+  (match d
+    ((ETVar i) (match (assoc_tvar i acc) ((Some _) acc) (None (Cons (Pair i a) acc))))
+    ((ETCon _ ds) (match a ((ETCon _ as) (unify_tys ds as acc)) (_ acc)))))
+(fn unify_tys ((ds (List EType)) (as (List EType)) (acc (List (Pair Int EType)))) (List (Pair Int EType))
+  (measure (struct ds))
+  (match ds
+    (Nil acc)
+    ((Cons d dr) (match as (Nil acc) ((Cons a ar) (unify_tys dr ar (unify_ty d a acc)))))))
+(fn assoc_tvar ((i Int) (acc (List (Pair Int EType)))) (Option EType)
+  (measure (struct acc))
+  (match acc (Nil None) ((Cons (Pair j t) r) (if (int_eq i j) (Some t) (assoc_tvar i r)))))
+;; the parameter list 0..n-1 from the bindings, an unbound one left as itself
+(fn params_from ((acc (List (Pair Int EType))) (n Int) (i Int)) (List EType)
+  (measure (- n i))
+  (if (le n i) Nil (Cons (match (assoc_tvar i acc) ((Some t) t) (None (ETVar i))) (params_from acc n (+ i 1)))))
+;; one more than the greatest type parameter a type names (the count a substitution needs)
+(fn tvar_count ((t EType)) Int
+  (measure (struct t))
+  (match t
+    ((ETVar i) (+ i 1))
+    ((ETCon _ ts) (tvar_count_all ts))))
+(fn tvar_count_all ((ts (List EType))) Int
+  (measure (struct ts))
+  (match ts (Nil 0) ((Cons t r) (max_int (tvar_count t) (tvar_count_all r)))))
+(fn c_type_let ((es ESt) (tys (List (Option EType))) (rs (List ETerm)) (b ETerm)) (Option EType)
+  (measure (struct rs))
+  (match rs
+    (Nil (c_type es tys b))
+    ((Cons t r) (c_type_let es (Cons (c_type es tys t) tys) r b))))

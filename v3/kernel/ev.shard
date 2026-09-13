@@ -1,0 +1,556 @@
+;;; v3/kernel/ev.shard — `ev`, the definition of "run" (v3/LANGUAGE.md §6.2,
+;;; §6.7; FOUNDATION §4.4), and `run_prog`, the effectful driver. Phase 2,
+;;; slice 5.
+;;;
+;;; `ev : Prog → Name → List Val → Int → EvRes` is pure: a Prog is linked
+;;; into this file's own representation — constructors as integer tags
+;;; whose low bit says "second constructor of its type" (§6.2's `if` rule
+;;; is one bit test), functions and externs as indices, primitives as
+;;; operation codes (prog.shard's table), literals built once — and run as
+;;; a machine with an explicit continuation: two tail-recursive steps,
+;;; `ev_term` (a term in a frame under a continuation) and `ev_ret` (a
+;;; value to a continuation), so the host's stack does not grow with the
+;;; program's recursion and the machine can stop at an extern with its
+;;; arguments and continuation in hand. Fuel is spent on function entry.
+;;; `run_prog` performs each extern through the host's own extern of the
+;;; same short name (kernel/host.shard's six) and resumes: §6.2's frontier
+;;; loop without a search. No other file sees the linked representation.
+
+(import "host.shard")
+(import "prog.shard")
+(import "intmap.shard")
+
+;; ---- the linked representation ---------------------------------------------------------
+(type IVal (IVCtor Int (List IVal)) (IVInt Int) (IVSym Symbol))
+(type LPat (LPVar) (LPCtor Int (List LPat)) (LPInt Int) (LPSym Symbol))
+(type LTerm
+  (LBVar Int)
+  (LLit IVal)
+  (LCtor Int (List LTerm))
+  (LCall Int (List LTerm))
+  (LPrim Int (List LTerm))
+  (LExt Int (List LTerm))
+  (LMatch LTerm (List LArm))
+  (LLet (List LTerm) LTerm)
+  (LIf LTerm LTerm LTerm))
+(type LArm (LArm LPat LTerm))
+(type LFn
+  (LBody Name Int LTerm)       ; a function: identity, parameter count, body
+  (LExtern Name Symbol Int)    ; an extern: identity, its short name (the host's), parameter count
+  (LUnlinked Name))            ; a sig fn no implementation was linked to
+;; the wire's tags: nil cons none some pair false true
+(type Wire (Wire Int Int Int Int Int Int Int))
+(fn wire_nil ((w Wire)) Int (match w ((Wire a _ _ _ _ _ _) a)))
+(fn wire_cons ((w Wire)) Int (match w ((Wire _ a _ _ _ _ _) a)))
+(fn wire_none ((w Wire)) Int (match w ((Wire _ _ a _ _ _ _) a)))
+(fn wire_some ((w Wire)) Int (match w ((Wire _ _ _ a _ _ _) a)))
+(fn wire_pair ((w Wire)) Int (match w ((Wire _ _ _ _ a _ _) a)))
+(fn wire_false ((w Wire)) Int (match w ((Wire _ _ _ _ _ a _) a)))
+(fn wire_true ((w Wire)) Int (match w ((Wire _ _ _ _ _ _ a) a)))
+;; functions by index, constructor tags by identity, identities by tag, function indices by identity, the wire
+(type Linked (Linked (IntMap LFn) (IntMap (List (Pair Name Int))) (IntMap Name) (IntMap (List (Pair Name Int))) Wire))
+(fn lk_fns ((l Linked)) (IntMap LFn) (match l ((Linked f _ _ _ _) f)))
+(fn lk_tags ((l Linked)) (IntMap (List (Pair Name Int))) (match l ((Linked _ t _ _ _) t)))
+(fn lk_names ((l Linked)) (IntMap Name) (match l ((Linked _ _ n _ _) n)))
+(fn lk_ids ((l Linked)) (IntMap (List (Pair Name Int))) (match l ((Linked _ _ _ i _) i)))
+(fn lk_wire ((l Linked)) Wire (match l ((Linked _ _ _ _ w) w)))
+
+;; a name-keyed map of ints (the environment's key, collisions by list)
+(fn nmap_find ((m (IntMap (List (Pair Name Int)))) (n Name)) (Option Int)
+  (match (im_find m (name_key n)) (None None) ((Some b) (assoc_int b n))))
+(fn assoc_int ((b (List (Pair Name Int))) (n Name)) (Option Int)
+  (measure (struct b))
+  (match b (Nil None) ((Cons (Pair k v) r) (if (name_eq k n) (Some v) (assoc_int r n)))))
+(fn nmap_add ((m (IntMap (List (Pair Name Int)))) (n Name) (v Int)) (IntMap (List (Pair Name Int)))
+  (let ((h (name_key n)))
+    (im_insert m h (Cons (Pair n v) (match (im_find m h) ((Some b) b) (None Nil))))))
+(fn fn_name ((lk Linked) (id Int)) Name
+  (match (im_find (lk_fns lk) id)
+    ((Some (LBody n _ _)) n)
+    ((Some (LExtern n _ _)) n)
+    ((Some (LUnlinked n)) n)
+    (None Anon)))
+(fn last_sym ((n Name)) Symbol (match n ((Str _ s) s) (_ (quote anon))))
+
+;; ---- linking ----------------------------------------------------------------------------
+(type LinkRes (LkOk Linked) (LkErr Symbol (List Int)))
+;; constructor tags: 2k for the k-th constructor interned, plus one when it is the second of its type
+(type Tags (Tags Int (IntMap (List (Pair Name Int))) (IntMap Name)))
+(fn tag_of ((k Int) (ordinal Int)) Int (+ (* 2 k) (if (int_eq ordinal 1) 1 0)))
+(fn intern_ctor ((t Tags) (c Name) (ordinal Int)) Tags
+  (match t
+    ((Tags k n2t t2n)
+     (let ((tag (tag_of k ordinal)))
+       (Tags (+ k 1) (nmap_add n2t c tag) (im_insert t2n tag c))))))
+(fn intern_ctors ((t Tags) (cs (List ECtorDef)) (i Int)) Tags
+  (measure (struct cs))
+  (match cs (Nil t) ((Cons (ECtorDef c _) r) (intern_ctors (intern_ctor t c i) r (+ i 1)))))
+(fn intern_decls ((t Tags) (ds (List EDecl))) Tags
+  (measure (struct ds))
+  (match ds
+    (Nil t)
+    ((Cons (EInd _ _ cs) r) (intern_decls (intern_ctors t cs 0) r))
+    ((Cons _ r) (intern_decls t r))))
+;; a wire name the program lacks is interned with its ordinal
+(fn intern_wire ((t Tags) (c Name) (ordinal Int)) (Pair Tags Int)
+  (match t
+    ((Tags _ n2t _)
+     (match (nmap_find n2t c)
+       ((Some tag) (Pair t tag))
+       (None (match (intern_ctor t c ordinal) ((Tags k2 nt2 t2) (Pair (Tags k2 nt2 t2) (tag_of (- k2 1) ordinal)))))))))
+(fn wire_of ((t Tags)) (Pair Tags Wire)
+  (match (intern_wire t (prelude_nil) 0)
+    ((Pair t1 nl)
+     (match (intern_wire t1 (prelude_cons) 1)
+       ((Pair t2 cs)
+        (match (intern_wire t2 (prelude_none) 0)
+          ((Pair t3 nn)
+           (match (intern_wire t3 (prelude_some) 1)
+             ((Pair t4 sm)
+              (match (intern_wire t4 (prelude_mk_pair) 0)
+                ((Pair t5 pr)
+                 (match (intern_wire t5 (prelude_false) 0)
+                   ((Pair t6 fl)
+                    (match (intern_wire t6 (prelude_true) 1)
+                      ((Pair t7 tr) (Pair t7 (Wire nl cs nn sm pr fl tr)))))))))))))))))
+;; function indices
+(fn index_fns ((ds (List EDecl)) (j Int) (ids (IntMap (List (Pair Name Int))))) (IntMap (List (Pair Name Int)))
+  (measure (struct ds))
+  (match ds
+    (Nil ids)
+    ((Cons (EFn n _ _ _ _ _) r) (index_fns r (+ j 1) (nmap_add ids n j)))
+    ((Cons (ESig n _ _ _) r) (index_fns r (+ j 1) (nmap_add ids n j)))
+    ((Cons (EExtern n _ _ _) r) (index_fns r (+ j 1) (nmap_add ids n j)))
+    ((Cons _ r) (index_fns r j ids))))
+
+(fn link ((p Prog)) LinkRes
+  (match p
+    ((Prog ds)
+     (match (wire_of (intern_decls (Tags 0 IMEmpty IMEmpty) ds))
+       ((Pair (Tags _ n2t t2n) wire)
+        (let ((ids (index_fns ds 0 IMEmpty)))
+          (let ((lk (Linked IMEmpty n2t t2n ids wire)))
+            (match (lower_decls lk ds IMEmpty)
+              ((Pair (Some (Pair e m)) _) (LkErr e m))
+              ((Pair None fns) (LkOk (Linked fns n2t t2n ids wire)))))))))))
+(fn lower_decls ((lk Linked) (ds (List EDecl)) (fns (IntMap LFn))) (Pair (Option (Pair Symbol (List Int))) (IntMap LFn))
+  (measure (struct ds))
+  (match ds
+    (Nil (Pair None fns))
+    ((Cons (EFn n _ ps _ _ body) r)
+     (match (nmap_find (lk_ids lk) n)
+       (None (Pair (Some (Pair (quote unresolved) (show_name n))) fns))
+       ((Some id)
+        (match (lower lk body)
+          ((Pair (Some (Pair e m)) _) (Pair (Some (Pair e m)) fns))
+          ((Pair None t) (lower_decls lk r (im_insert fns id (LBody n (len ps) t))))))))
+    ((Cons (ESig n _ _ _) r)
+     (match (nmap_find (lk_ids lk) n)
+       (None (Pair (Some (Pair (quote unresolved) (show_name n))) fns))
+       ((Some id) (lower_decls lk r (im_insert fns id (LUnlinked n))))))
+    ((Cons (EExtern n _ ps _) r)
+     (match (nmap_find (lk_ids lk) n)
+       (None (Pair (Some (Pair (quote unresolved) (show_name n))) fns))
+       ((Some id) (lower_decls lk r (im_insert fns id (LExtern n (last_sym n) (len ps)))))))
+    ((Cons _ r) (lower_decls lk r fns))))
+;; a term into the linked representation
+(fn lower ((lk Linked) (t ETerm)) (Pair (Option (Pair Symbol (List Int))) LTerm)
+  (measure (struct t))
+  (match t
+    ((EBVar i) (Pair None (LBVar i)))
+    ((ELit l) (Pair None (LLit (lit_val lk l))))
+    ((ECtor c args)
+     (match (nmap_find (lk_tags lk) c)
+       (None (Pair (Some (Pair (quote unresolved) (show_name c))) (LBVar 0)))
+       ((Some tag) (lower_args lk args (LCtor tag Nil) 0 tag))))
+    ((ECall f args)
+     (match (nmap_find (lk_ids lk) f)
+       (None (Pair (Some (Pair (quote unresolved) (show_name f))) (LBVar 0)))
+       ((Some id) (lower_args lk args (LCall id Nil) 1 id))))
+    ((EPrim n args)
+     (match (prim_find n)
+       (None (Pair (Some (Pair (quote unresolved) (show_name n))) (LBVar 0)))
+       ((Some (Prim code _)) (lower_args lk args (LPrim code Nil) 2 code))))
+    ((EExt f args)
+     (match (nmap_find (lk_ids lk) f)
+       (None (Pair (Some (Pair (quote unresolved) (show_name f))) (LBVar 0)))
+       ((Some id) (lower_args lk args (LExt id Nil) 3 id))))
+    ((EMatch s arms)
+     (match (lower lk s)
+       ((Pair (Some e) _) (Pair (Some e) (LBVar 0)))
+       ((Pair None ls)
+        (match (lower_arms lk arms Nil)
+          ((Pair (Some e) _) (Pair (Some e) (LBVar 0)))
+          ((Pair None las) (Pair None (LMatch ls las)))))))
+    ((ELet rs b)
+     (match (lower_list lk rs Nil)
+       ((Pair (Some e) _) (Pair (Some e) (LBVar 0)))
+       ((Pair None lrs)
+        (match (lower lk b)
+          ((Pair (Some e) _) (Pair (Some e) (LBVar 0)))
+          ((Pair None lb) (Pair None (LLet lrs lb)))))))
+    ((EIf a b c)
+     (match (lower lk a)
+       ((Pair (Some e) _) (Pair (Some e) (LBVar 0)))
+       ((Pair None la)
+        (match (lower lk b)
+          ((Pair (Some e) _) (Pair (Some e) (LBVar 0)))
+          ((Pair None lb)
+           (match (lower lk c)
+             ((Pair (Some e) _) (Pair (Some e) (LBVar 0)))
+             ((Pair None lc) (Pair None (LIf la lb lc)))))))))))
+;; the head's node over its lowered arguments (kind 0 ctor, 1 call, 2 prim, 3 ext)
+(fn lower_args ((lk Linked) (args (List ETerm)) (empty LTerm) (kind Int) (head Int)) (Pair (Option (Pair Symbol (List Int))) LTerm)
+  (match (lower_list lk args Nil)
+    ((Pair (Some e) _) (Pair (Some e) empty))
+    ((Pair None las)
+     (Pair None (if (int_eq kind 0) (LCtor head las) (if (int_eq kind 1) (LCall head las) (if (int_eq kind 2) (LPrim head las) (LExt head las))))))))
+(fn lower_list ((lk Linked) (ts (List ETerm)) (acc (List LTerm))) (Pair (Option (Pair Symbol (List Int))) (List LTerm))
+  (measure (struct ts))
+  (match ts
+    (Nil (Pair None (rev acc)))
+    ((Cons t r)
+     (match (lower lk t)
+       ((Pair (Some e) _) (Pair (Some e) Nil))
+       ((Pair None lt) (lower_list lk r (Cons lt acc)))))))
+(fn lower_arms ((lk Linked) (arms (List EArm)) (acc (List LArm))) (Pair (Option (Pair Symbol (List Int))) (List LArm))
+  (measure (struct arms))
+  (match arms
+    (Nil (Pair None (rev acc)))
+    ((Cons (EArm p b) r)
+     (match (lower_pat lk p)
+       ((Pair (Some e) _) (Pair (Some e) Nil))
+       ((Pair None lp)
+        (match (lower lk b)
+          ((Pair (Some e) _) (Pair (Some e) Nil))
+          ((Pair None lb) (lower_arms lk r (Cons (LArm lp lb) acc)))))))))
+(fn lower_pat ((lk Linked) (p EPat)) (Pair (Option (Pair Symbol (List Int))) LPat)
+  (measure (struct p))
+  (match p
+    (PVar (Pair None LPVar))
+    ((PLit (LNat k)) (Pair None (LPInt k)))
+    ((PLit (LInt k)) (Pair None (LPInt k)))
+    ((PLit (LSym s)) (Pair None (LPSym s)))
+    ((PLit (LStr _)) (Pair (Some (Pair (quote pattern_literal) "a string pattern")) LPVar))
+    ((PCtor c subs)
+     (match (nmap_find (lk_tags lk) c)
+       (None (Pair (Some (Pair (quote unresolved) (show_name c))) LPVar))
+       ((Some tag)
+        (match (lower_pats lk subs Nil)
+          ((Pair (Some e) _) (Pair (Some e) LPVar))
+          ((Pair None lps) (Pair None (LPCtor tag lps)))))))))
+(fn lower_pats ((lk Linked) (ps (List EPat)) (acc (List LPat))) (Pair (Option (Pair Symbol (List Int))) (List LPat))
+  (measure (struct ps))
+  (match ps
+    (Nil (Pair None (rev acc)))
+    ((Cons p r)
+     (match (lower_pat lk p)
+       ((Pair (Some e) _) (Pair (Some e) Nil))
+       ((Pair None lp) (lower_pats lk r (Cons lp acc)))))))
+(fn lit_val ((lk Linked) (l ELit)) IVal
+  (match l
+    ((LNat k) (IVInt k))
+    ((LInt k) (IVInt k))
+    ((LStr bs) (bytes_in lk bs))
+    ((LSym s) (IVSym s))))
+
+;; ---- the wire: the prelude's cells (§6.7) -------------------------------------------------
+(fn bytes_in ((lk Linked) (bs (List Int))) IVal
+  (measure (struct bs))
+  (match bs
+    (Nil (IVCtor (wire_nil (lk_wire lk)) Nil))
+    ((Cons b r) (IVCtor (wire_cons (lk_wire lk)) (list (IVInt b) (bytes_in lk r))))))
+(fn list_in ((lk Linked) (xs (List IVal))) IVal
+  (measure (struct xs))
+  (match xs
+    (Nil (IVCtor (wire_nil (lk_wire lk)) Nil))
+    ((Cons x r) (IVCtor (wire_cons (lk_wire lk)) (list x (list_in lk r))))))
+(fn argv_in ((lk Linked) (args (List (List Int)))) IVal
+  (measure (struct args))
+  (match args
+    (Nil (IVCtor (wire_nil (lk_wire lk)) Nil))
+    ((Cons a r) (IVCtor (wire_cons (lk_wire lk)) (list (bytes_in lk a) (argv_in lk r))))))
+;; a Cons chain of Int cells back to bytes; None when the value is not one
+(fn bytes_out ((lk Linked) (v IVal) (acc (List Int)) (fuel Int)) (Option (List Int))
+  (measure fuel)
+  (if (lt fuel 0) None
+  (match v
+    ((IVCtor tag fields)
+     (if (int_eq tag (wire_nil (lk_wire lk))) (Some (rev acc))
+     (if (int_eq tag (wire_cons (lk_wire lk)))
+       (match fields
+         ((Cons (IVInt b) (Cons rest Nil)) (bytes_out lk rest (Cons b acc) (- fuel 1)))
+         (_ None))
+       None)))
+    (_ None))))
+(fn bool_cell ((lk Linked) (b Bool)) IVal (IVCtor (if b (wire_true (lk_wire lk)) (wire_false (lk_wire lk))) Nil))
+(fn pair_cell ((lk Linked) (a IVal) (b IVal)) IVal (IVCtor (wire_pair (lk_wire lk)) (list a b)))
+(fn some_cell ((lk Linked) (a IVal)) IVal (IVCtor (wire_some (lk_wire lk)) (list a)))
+(fn none_cell ((lk Linked)) IVal (IVCtor (wire_none (lk_wire lk)) Nil))
+(fn wire_budget () Int 1000000000)
+
+;; ---- the machine (§6.7) --------------------------------------------------------------------
+(type Kont
+  (KHalt)
+  (KArg Int Int (List IVal) (List LTerm) (List IVal) Int Kont)  ; kind, head, the values so far (last first), the terms to go, env, cur, next
+  (KMatch (List LArm) (List IVal) Int Kont)
+  (KLet (List LTerm) LTerm (List IVal) Int Kont)                ; the right-hand sides to go, the body, env, cur, next
+  (KIf LTerm LTerm (List IVal) Int Kont))
+(type Halt
+  (HVal IVal)
+  (HOut Int)                            ; the function whose entry exhausted the fuel
+  (HStuck Symbol Int)                   ; the reason, the function
+  (HExt Int (List IVal) Kont Int Int))  ; an extern to perform: its index, arguments, the continuation, cur, fuel
+
+(fn ev_term ((lk Linked) (env (List IVal)) (t LTerm) (k Kont) (cur Int) (fuel Int)) Halt
+  (match t
+    ((LBVar i) (match (nth env i) ((Some v) (ev_ret lk v k cur fuel)) (None (HStuck (quote unbound) cur))))
+    ((LLit v) (ev_ret lk v k cur fuel))
+    ((LCtor tag args) (ev_args lk 0 tag Nil args env k cur fuel))
+    ((LCall id args) (ev_args lk 1 id Nil args env k cur fuel))
+    ((LPrim op args) (ev_args lk 2 op Nil args env k cur fuel))
+    ((LExt id args) (ev_args lk 3 id Nil args env k cur fuel))
+    ((LMatch s arms) (ev_term lk env s (KMatch arms env cur k) cur fuel))
+    ((LLet rhss body)
+     (match rhss
+       (Nil (ev_term lk env body k cur fuel))
+       ((Cons r1 rest) (ev_term lk env r1 (KLet rest body env cur k) cur fuel))))
+    ((LIf c a b) (ev_term lk env c (KIf a b env cur k) cur fuel))))
+;; the arguments left to right, then the head applied
+(fn ev_args ((lk Linked) (kind Int) (head Int) (done (List IVal)) (rest (List LTerm)) (env (List IVal)) (k Kont) (cur Int) (fuel Int)) Halt
+  (match rest
+    (Nil (ev_apply lk kind head done k cur fuel))
+    ((Cons a more) (ev_term lk env a (KArg kind head done more env cur k) cur fuel))))
+(fn ev_ret ((lk Linked) (v IVal) (k Kont) (cur Int) (fuel Int)) Halt
+  (match k
+    (KHalt (HVal v))
+    ((KArg kind head done rest env cur1 next) (ev_args lk kind head (Cons v done) rest env next cur1 fuel))
+    ((KMatch arms env cur1 next) (ev_match lk v arms env next cur1 fuel))
+    ((KLet rest body env cur1 next)
+     (let ((env1 (Cons v env)))
+       (match rest
+         (Nil (ev_term lk env1 body next cur1 fuel))
+         ((Cons r1 more) (ev_term lk env1 r1 (KLet more body env1 cur1 next) cur1 fuel)))))
+    ((KIf a b env cur1 next)
+     (match v
+       ((IVCtor tag _) (ev_term lk env (if (int_eq (band tag 1) 1) a b) next cur1 fuel))
+       (_ (HStuck (quote if_tag) cur1))))))
+;; a saturated head over its values (last first): a cell, a call (one unit of fuel), a primitive, an extern
+(fn ev_apply ((lk Linked) (kind Int) (head Int) (done (List IVal)) (k Kont) (cur Int) (fuel Int)) Halt
+  (if (int_eq kind 0) (ev_ret lk (IVCtor head (rev done)) k cur fuel)
+  (if (int_eq kind 1)
+    (match (im_find (lk_fns lk) head)
+      ((Some (LBody _ _ body)) (if (lt fuel 1) (HOut head) (ev_term lk done body k head (- fuel 1))))
+      ((Some (LUnlinked _)) (HStuck (quote unlinked) head))
+      (_ (HStuck (quote unknown_head) cur)))
+  (if (int_eq kind 2)
+    (match (prim_apply lk head (rev done))
+      ((Some v) (ev_ret lk v k cur fuel))
+      (None (HStuck (quote guard) cur)))
+    (HExt head (rev done) k cur fuel)))))
+(fn ev_match ((lk Linked) (v IVal) (arms (List LArm)) (env (List IVal)) (k Kont) (cur Int) (fuel Int)) Halt
+  (measure (struct arms))
+  (match arms
+    (Nil (HStuck (quote no_arm) cur))
+    ((Cons (LArm p body) rest)
+     (match (match_pat p v env)
+       ((Some env1) (ev_term lk env1 body k cur fuel))
+       (None (ev_match lk v rest env k cur fuel))))))
+;; the pattern's variables pushed in capture order: the last one bound is index 0
+(fn match_pat ((p LPat) (v IVal) (env (List IVal))) (Option (List IVal))
+  (measure (struct p))
+  (match p
+    (LPVar (Some (Cons v env)))
+    ((LPInt n) (match v ((IVInt m) (if (int_eq n m) (Some env) None)) (_ None)))
+    ((LPSym s) (match v ((IVSym t) (if (sym_eq s t) (Some env) None)) (_ None)))
+    ((LPCtor tag subs)
+     (match v
+       ((IVCtor t2 fields) (if (int_eq tag t2) (match_fields subs fields env) None))
+       (_ None)))))
+(fn match_fields ((ps (List LPat)) (vs (List IVal)) (env (List IVal))) (Option (List IVal))
+  (measure (struct ps))
+  (match ps
+    (Nil (match vs (Nil (Some env)) (_ None)))
+    ((Cons p pr)
+     (match vs
+       (Nil None)
+       ((Cons v vr) (match (match_pat p v env) ((Some env1) (match_fields pr vr env1)) (None None)))))))
+
+;; ---- the primitives (prog.shard's codes; §6.4) ----------------------------------------------
+(fn prim_apply ((lk Linked) (code Int) (args (List IVal))) (Option IVal)
+  (match args
+    ((Cons a (Cons b Nil))
+     (match a
+       ((IVInt x) (match b ((IVInt y) (prim_ii lk code x y)) (_ None)))
+       ((IVSym s) (match b ((IVSym t) (if (int_eq code 5) (Some (bool_cell lk (sym_eq s t))) None)) (_ None)))
+       (_ None)))
+    ((Cons a Nil)
+     (if (int_eq code 16)
+       (match (bytes_out lk a Nil (wire_budget)) ((Some bs) (if (all_bytes bs) (Some (IVSym (sym_of_chars bs))) None)) (None None))
+     (if (int_eq code 17)
+       (match a ((IVSym s) (Some (bytes_in lk (chars_of_sym s)))) (_ None))
+       None)))
+    (_ None)))
+(fn all_bytes ((bs (List Int))) Bool
+  (measure (struct bs))
+  (match bs (Nil True) ((Cons b r) (if (bool_and (le 0 b) (le b 255)) (all_bytes r) False))))
+(fn shift_ok ((k Int)) Bool (bool_and (le 0 k) (lt k 64)))
+(fn nonneg2 ((x Int) (y Int)) Bool (bool_and (le 0 x) (le 0 y)))
+(fn prim_ii ((lk Linked) (code Int) (x Int) (y Int)) (Option IVal)
+  (if (lt code 8)
+    (if (int_eq code 0) (Some (bool_cell lk (int_eq x y)))
+    (if (int_eq code 1) (Some (IVInt (+ x y)))
+    (if (int_eq code 2) (Some (IVInt (- x y)))
+    (if (int_eq code 3) (Some (bool_cell lk (lt x y)))
+    (if (int_eq code 4) (Some (bool_cell lk (le x y)))
+    (if (int_eq code 6) (Some (IVInt (band x y)))
+    (if (int_eq code 7) (if (shift_ok y) (Some (IVInt (bshr x y))) None)
+      None)))))))
+  (if (lt code 16)
+    (if (int_eq code 8) (Some (IVInt (* x y)))
+    (if (int_eq code 9) (if (int_eq y 0) None (Some (IVInt (mod x y))))
+    (if (int_eq code 10) (if (int_eq y 0) None (Some (IVInt (/ x y))))
+    (if (int_eq code 11) (if (int_eq y 0) None (Some (IVInt (tmod x y))))
+    (if (int_eq code 12) (if (int_eq y 0) None (Some (IVInt (ediv x y))))
+    (if (int_eq code 13) (Some (IVInt (bor x y)))
+    (if (int_eq code 14) (Some (IVInt (bxor x y)))
+      (if (shift_ok y) (Some (IVInt (bshl x y))) None))))))))
+  (if (lt code 22)
+    (if (int_eq code 18) (Some (IVInt (if (int_eq y 0) 0 (/ x y))))
+    (if (int_eq code 19) (Some (IVInt (if (int_eq y 0) x (tmod x y))))
+    (if (int_eq code 20) (Some (IVInt (if (int_eq y 0) 0 (ediv x y))))
+    (if (int_eq code 21) (Some (IVInt (if (int_eq y 0) x (mod x y))))
+      None))))
+  (if (int_eq code 22) (Some (IVInt (if (lt x y) 0 (- x y))))
+  (if (bool_not (nonneg2 x y)) None
+  (if (int_eq code 23) (Some (IVInt (band x y)))
+  (if (int_eq code 24) (Some (IVInt (bor x y)))
+  (if (int_eq code 25) (Some (IVInt (bxor x y)))
+  (if (int_eq code 26) (Some (IVInt (nat_shl x y)))
+  (if (int_eq code 27) (Some (IVInt (nat_shr x y)))
+    None)))))))))))
+;; Nat.shiftLeft n k = n · 2^k and Nat.shiftRight n k = n / 2^k, total (Lean's), in
+;; steps of 62 bits over the host's guarded shifts; a right shift stops at zero
+(fn nat_shl ((n Int) (k Int)) Int
+  (measure k)
+  (if (lt k 62) (bshl n k) (nat_shl (bshl n 62) (- k 62))))
+(fn nat_shr ((n Int) (k Int)) Int
+  (measure k)
+  (if (int_eq n 0) 0 (if (lt k 62) (bshr n k) (nat_shr (bshr n 62) (- k 62)))))
+
+;; ---- `ev` (§6.2) ----------------------------------------------------------------------------
+(fn val_in ((lk Linked) (v Val)) (Option IVal)
+  (measure (struct v))
+  (match v
+    ((VInt k) (Some (IVInt k)))
+    ((VSym s) (Some (IVSym s)))
+    ((VCtor c vs)
+     (match (nmap_find (lk_tags lk) c)
+       (None None)
+       ((Some tag) (match (vals_in lk vs Nil) (None None) ((Some ivs) (Some (IVCtor tag ivs)))))))))
+(fn vals_in ((lk Linked) (vs (List Val)) (acc (List IVal))) (Option (List IVal))
+  (measure (struct vs))
+  (match vs
+    (Nil (Some (rev acc)))
+    ((Cons v r) (match (val_in lk v) (None None) ((Some iv) (vals_in lk r (Cons iv acc)))))))
+(fn val_out ((lk Linked) (v IVal)) Val
+  (measure (struct v))
+  (match v
+    ((IVInt k) (VInt k))
+    ((IVSym s) (VSym s))
+    ((IVCtor tag vs) (VCtor (match (im_find (lk_names lk) tag) ((Some n) n) (None Anon)) (vals_out lk vs)))))
+(fn vals_out ((lk Linked) (vs (List IVal))) (List Val)
+  (measure (struct vs))
+  (match vs (Nil Nil) ((Cons v r) (Cons (val_out lk v) (vals_out lk r)))))
+(fn halt_res ((lk Linked) (h Halt)) EvRes
+  (match h
+    ((HVal v) (EvOk (val_out lk v)))
+    ((HOut _) EvOut)
+    ((HStuck r id) (EvStuck r (fn_name lk id)))
+    ((HExt _ _ _ cur _) (EvStuck (quote extern) (fn_name lk cur)))))
+;; the function f of the program p on args, under fuel: a value, out of fuel, or stuck
+(fn ev ((p Prog) (f Name) (args (List Val)) (fuel Int)) EvRes
+  (match (link p)
+    ((LkErr e _) (EvStuck e f))
+    ((LkOk lk)
+     (match (nmap_find (lk_ids lk) f)
+       (None (EvStuck (quote unknown_head) f))
+       ((Some id)
+        (match (vals_in lk args Nil)
+          (None (EvStuck (quote bad_value) f))
+          ((Some ivs) (halt_res lk (ev_apply lk 1 id (rev ivs) KHalt id fuel)))))))))
+
+;; ---- `run_prog`: the effectful driver (§6.2, §6.7) -----------------------------------------------
+(type RunRes (RunOk) (RunOut Name) (RunStuck Symbol Name) (RunLink Symbol (List Int)))
+;; f on the World with the program's arguments; every extern performed by the host's
+(fn run_prog ((p Prog) (f Name) (argv (List (List Int))) (fuel Int) (w World)) (Pair RunRes World)
+  (match (link p)
+    ((LkErr e m) (Pair (RunLink e m) w))
+    ((LkOk lk)
+     (match (nmap_find (lk_ids lk) f)
+       (None (Pair (RunLink (quote unknown_head) (show_name f)) w))
+       ((Some id)
+        (match (world_token lk p f)
+          (None (Pair (RunLink (quote bad_entry) (append (show_name f) " does not take a World")) w))
+          ((Some token) (run_loop lk (ev_apply lk 1 id (list token) KHalt id fuel) argv w))))))))
+;; the entry's World: its parameter type's first constructor, its fields zero
+(fn world_token ((lk Linked) (p Prog) (f Name)) (Option IVal)
+  (match (prog_find p f)
+    ((Some (EFn _ _ (Cons (ETCon wn _) Nil) _ _ _))
+     (match (prog_find p wn)
+       ((Some (EInd _ _ (Cons (ECtorDef c fs) _)))
+        (match (nmap_find (lk_tags lk) c) ((Some tag) (Some (IVCtor tag (zeros_iv (len fs))))) (None None)))
+       (_ None)))
+    (_ None)))
+(fn zeros_iv ((k Int)) (List IVal) (measure k) (if (lt k 1) Nil (Cons (IVInt 0) (zeros_iv (- k 1)))))
+(fn run_loop ((lk Linked) (h Halt) (argv (List (List Int))) (w World)) (Pair RunRes World)
+  (match h
+    ((HVal _) (Pair RunOk w))
+    ((HOut id) (Pair (RunOut (fn_name lk id)) w))
+    ((HStuck r id) (Pair (RunStuck r (fn_name lk id)) w))
+    ((HExt id args k cur fuel)
+     (match (im_find (lk_fns lk) id)
+       ((Some (LExtern _ short _))
+        (match (perform lk short args argv w)
+          ((Pair (Some v) w1) (run_loop lk (ev_ret lk v k cur fuel) argv w1))
+          ((Pair None w1) (Pair (RunStuck (quote extern) (fn_name lk id)) w1))))
+       (_ (Pair (RunStuck (quote extern) (fn_name lk cur)) w))))))
+;; the six host externs by short name; the program's World value passes through
+(fn perform ((lk Linked) (short Symbol) (args (List IVal)) (argv (List (List Int))) (w World)) (Pair (Option IVal) World)
+  (if (sym_eq short (quote get_args))
+    (match args ((Cons tok Nil) (Pair (Some (pair_cell lk (argv_in lk argv) tok)) w)) (_ (Pair None w)))
+  (if (sym_eq short (quote read_file))
+    (match args
+      ((Cons path (Cons tok Nil))
+       (match (bytes_out lk path Nil (wire_budget))
+         (None (Pair None w))
+         ((Some bs)
+          (match (read_file bs w)
+            ((Pair None w1) (Pair (Some (pair_cell lk (none_cell lk) tok)) w1))
+            ((Pair (Some content) w1) (Pair (Some (pair_cell lk (some_cell lk (bytes_in lk content)) tok)) w1))))))
+      (_ (Pair None w)))
+  (if (sym_eq short (quote write))
+    (match args
+      ((Cons bytes (Cons tok Nil))
+       (match (bytes_out lk bytes Nil (wire_budget)) (None (Pair None w)) ((Some bs) (Pair (Some tok) (write bs w)))))
+      (_ (Pair None w)))
+  (if (sym_eq short (quote write_line))
+    (match args
+      ((Cons bytes (Cons tok Nil))
+       (match (bytes_out lk bytes Nil (wire_budget)) (None (Pair None w)) ((Some bs) (Pair (Some tok) (write_line bs w)))))
+      (_ (Pair None w)))
+  (if (sym_eq short (quote write_file))
+    (match args
+      ((Cons path (Cons bytes (Cons tok Nil)))
+       (match (bytes_out lk path Nil (wire_budget))
+         (None (Pair None w))
+         ((Some ps)
+          (match (bytes_out lk bytes Nil (wire_budget))
+            (None (Pair None w))
+            ((Some bs) (match (write_file ps bs w) ((Pair ok w1) (Pair (Some (pair_cell lk (bool_cell lk ok) tok)) w1))))))))
+      (_ (Pair None w)))
+  (if (sym_eq short (quote exit))
+    (match args
+      ((Cons (IVInt code) (Cons tok Nil)) (Pair (Some tok) (exit code w)))
+      (_ (Pair None w)))
+    (Pair None w))))))))

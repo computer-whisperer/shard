@@ -1,0 +1,151 @@
+;;; v3/kernel/test/ev_test.shard — `ev` on hand-built programs (v3/LANGUAGE.md
+;;; §6.2, §6.7): the per-node rules, the tag rule for `if`, sequential `let`,
+;;; the primitive table's guards and totalizations, fuel (R45: a
+;;; self-recursive function exhausts and is never a value), an extern under
+;;; the pure `ev`, a sig fn linked and unlinked, deep recursion without the
+;;; host's stack. Phase 2, slice 5.
+
+(import "../host.shard")
+(import "../ev.shard")
+
+(type Case (Case (List Int) Bool))
+
+(fn nm_list () Name (Str (n2 (quote kernel) (quote prelude)) (quote List)))
+(fn nm_nil () Name (Str (nm_list) (quote Nil)))
+(fn nm_cons () Name (Str (nm_list) (quote Cons)))
+(fn nm_int () Name (n1 (quote Int)))
+(fn nm_bool () Name (Str (n2 (quote kernel) (quote prelude)) (quote Bool)))
+(fn nm_true () Name (Str (nm_bool) (quote True)))
+(fn nm_false () Name (Str (nm_bool) (quote False)))
+(fn ty_int () EType (ETCon (nm_int) Nil))
+(fn ty_list_int () EType (ETCon (nm_list) (list (ty_int))))
+(fn t () Name (n1 (quote t)))
+(fn nm ((s Symbol)) Name (n2 (quote t) s))
+
+(fn list_decl () EDecl
+  (EInd (nm_list) 1 (list (ECtorDef (nm_nil) Nil) (ECtorDef (nm_cons) (list (ETVar 0) (ETCon (nm_list) (list (ETVar 0))))))))
+(fn bool_decl () EDecl (EInd (nm_bool) 0 (list (ECtorDef (nm_false) Nil) (ECtorDef (nm_true) Nil))))
+
+;; (fn length ((xs (List Int))) Int (match xs (Nil 0) ((Cons _ t) (+ 1 (length t)))))
+(fn length_decl () EDecl
+  (EFn (nm (quote length)) 0 (list (ty_list_int)) (ty_int) (RecStruct 0)
+    (EMatch (EBVar 0)
+      (list (EArm (PCtor (nm_nil) Nil) (ELit (LInt 0)))
+            (EArm (PCtor (nm_cons) (list PVar PVar))
+                  (EPrim (n1 (quote +)) (list (ELit (LInt 1)) (ECall (nm (quote length)) (list (EBVar 0))))))))))
+;; (fn loop ((n Int)) Int (loop n)) — R45: exhausts, never a value
+(fn loop_decl () EDecl
+  (EFn (nm (quote loop)) 0 (list (ty_int)) (ty_int) RecNone (ECall (nm (quote loop)) (list (EBVar 0)))))
+;; (fn seq ((a Int)) Int (let ((b (+ a 1)) (c (* b 2))) (- c a)))  — sequential: b sees a, c sees b
+(fn seq_decl () EDecl
+  (EFn (nm (quote seq)) 0 (list (ty_int)) (ty_int) RecNone
+    (ELet (list (EPrim (n1 (quote +)) (list (EBVar 0) (ELit (LInt 1))))
+                (EPrim (n1 (quote *)) (list (EBVar 0) (ELit (LInt 2)))))
+      (EPrim (n1 (quote -)) (list (EBVar 0) (EBVar 2))))))
+;; (fn pick ((a Int) (b Int)) Int (if (lt a b) 10 20))
+(fn pick_decl () EDecl
+  (EFn (nm (quote pick)) 0 (list (ty_int) (ty_int)) (ty_int) RecNone
+    (EIf (EPrim (n1 (quote lt)) (list (EBVar 1) (EBVar 0))) (ELit (LInt 10)) (ELit (LInt 20)))))
+;; (fn bad_if ((a Int)) Int (if a 1 2)) — a non-cell condition
+(fn bad_if_decl () EDecl
+  (EFn (nm (quote bad_if)) 0 (list (ty_int)) (ty_int) RecNone (EIf (EBVar 0) (ELit (LInt 1)) (ELit (LInt 2)))))
+;; (fn six ((a Int)) Int (match a (6 1))) — no arm for anything else
+(fn six_decl () EDecl
+  (EFn (nm (quote six)) 0 (list (ty_int)) (ty_int) RecNone (EMatch (EBVar 0) (list (EArm (PLit (LInt 6)) (ELit (LInt 1)))))))
+;; (fn op2 ((a Int) (b Int)) Int (PRIM a b)) for each primitive under test
+(fn op2_decl ((name Symbol) (prim Name)) EDecl
+  (EFn (nm name) 0 (list (ty_int) (ty_int)) (ty_int) RecNone (EPrim prim (list (EBVar 1) (EBVar 0)))))
+;; (fn sym_round ((s Symbol)) Bool (sym_eq s (sym_of_chars (chars_of_sym s))))
+(fn sym_round_decl () EDecl
+  (EFn (nm (quote sym_round)) 0 (list (ETCon (n1 (quote Symbol)) Nil)) (ETCon (nm_bool) Nil) RecNone
+    (EPrim (n1 (quote sym_eq)) (list (EBVar 0) (EPrim (n1 (quote sym_of_chars)) (list (EPrim (n1 (quote chars_of_sym)) (list (EBVar 0)))))))))
+;; (fn hello () Symbol (sym_of_chars "hi"))
+(fn hello_decl () EDecl
+  (EFn (nm (quote hello)) 0 Nil (ETCon (n1 (quote Symbol)) Nil) RecNone (EPrim (n1 (quote sym_of_chars)) (list (ELit (LStr "hi"))))))
+;; (extern shout ((n Int)) Int); (fn use_ext ((n Int)) Int (shout n))
+(fn shout_decl () EDecl (EExtern (nm (quote shout)) 0 (list (ty_int)) (ty_int)))
+(fn use_ext_decl () EDecl
+  (EFn (nm (quote use_ext)) 0 (list (ty_int)) (ty_int) RecNone (EExt (nm (quote shout)) (list (EBVar 0)))))
+;; (sig fn twice ((n Int)) Int), or the implementation substituted under its identity (§6.7): (fn twice ((n Int)) Int (* n 2))
+(fn twice_sig () EDecl (ESig (nm (quote twice)) 0 (list (ty_int)) (ty_int)))
+(fn twice_impl () EDecl
+  (EFn (nm (quote twice)) 0 (list (ty_int)) (ty_int) RecNone (EPrim (n1 (quote *)) (list (EBVar 0) (ELit (LInt 2))))))
+(fn use_sig_decl () EDecl
+  (EFn (nm (quote use_sig)) 0 (list (ty_int)) (ty_int) RecNone (ECall (nm (quote twice)) (list (EBVar 0)))))
+;; (fn count ((xs (List Int)) (acc Int)) Int (match xs (Nil acc) ((Cons _ t) (count t (+ acc 1))))) — tail recursive, deep
+(fn count_decl () EDecl
+  (EFn (nm (quote count)) 0 (list (ty_list_int) (ty_int)) (ty_int) (RecStruct 0)
+    (EMatch (EBVar 1)
+      (list (EArm (PCtor (nm_nil) Nil) (EBVar 0))
+            (EArm (PCtor (nm_cons) (list PVar PVar))
+                  (ECall (nm (quote count)) (list (EBVar 0) (EPrim (n1 (quote +)) (list (EBVar 2) (ELit (LInt 1)))))))))))
+
+(fn prog ((linked Bool)) Prog
+  (Prog (append (list (list_decl) (bool_decl) (length_decl) (loop_decl) (seq_decl) (pick_decl) (bad_if_decl) (six_decl)
+                      (op2_decl (quote div) (n1 (quote /))) (op2_decl (quote tdiv) (n2 (quote Int) (quote tdiv)))
+                      (op2_decl (quote tmod_t) (n2 (quote Int) (quote tmod))) (op2_decl (quote emod) (n1 (quote mod)))
+                      (op2_decl (quote tmod) (n1 (quote tmod))) (op2_decl (quote ediv) (n1 (quote ediv)))
+                      (op2_decl (quote nsub) (n2 (quote Nat) (quote sub))) (op2_decl (quote shl) (n1 (quote bshl)))
+                      (op2_decl (quote nland) (n2 (quote Nat) (quote land)))
+                      (op2_decl (quote nshr) (n2 (quote Nat) (quote shiftRight))) (op2_decl (quote nshl) (n2 (quote Nat) (quote shiftLeft)))
+                      (sym_round_decl) (hello_decl) (shout_decl) (use_ext_decl) (if linked (twice_impl) (twice_sig)) (use_sig_decl) (count_decl))
+                Nil)))
+
+(fn vlist ((xs (List Int))) Val
+  (measure (struct xs))
+  (match xs (Nil (VCtor (nm_nil) Nil)) ((Cons x r) (VCtor (nm_cons) (list (VInt x) (vlist r))))))
+(fn ints ((n Int) (acc (List Int))) (List Int) (measure n) (if (lt n 1) acc (ints (- n 1) (Cons n acc))))
+(fn vint ((r EvRes) (k Int)) Bool (match r ((EvOk (VInt m)) (int_eq m k)) (_ False)))
+(fn vctor ((r EvRes) (c Name)) Bool (match r ((EvOk (VCtor d Nil)) (name_eq c d)) (_ False)))
+(fn stuck ((r EvRes) (reason Symbol) (subject Name)) Bool
+  (match r ((EvStuck s n) (bool_and (sym_eq s reason) (name_eq n subject))) (_ False)))
+(fn out ((r EvRes)) Bool (match r (EvOut True) (_ False)))
+(fn run1 ((f Symbol) (args (List Val))) EvRes (ev (prog False) (nm f) args 1000000))
+(fn run_fuel ((f Symbol) (args (List Val)) (fuel Int)) EvRes (ev (prog False) (nm f) args fuel))
+
+(fn cases () (List Case)
+  (list
+    (Case "length of a 3-list is 3" (vint (run1 (quote length) (list (vlist (list 7 8 9)))) 3))
+    (Case "length of Nil is 0" (vint (run1 (quote length) (list (vlist Nil))) 0))
+    (Case "let is sequential: b sees a, c sees b" (vint (run1 (quote seq) (list (VInt 5))) 7))
+    (Case "if takes the then-branch on the second constructor" (vint (run1 (quote pick) (list (VInt 1) (VInt 2))) 10))
+    (Case "if takes the else-branch on the first" (vint (run1 (quote pick) (list (VInt 2) (VInt 1))) 20))
+    (Case "if on a non-cell is stuck if_tag" (stuck (run1 (quote bad_if) (list (VInt 1))) (quote if_tag) (nm (quote bad_if))))
+    (Case "no arm is stuck no_arm in the function" (stuck (run1 (quote six) (list (VInt 5))) (quote no_arm) (nm (quote six))))
+    (Case "a literal arm matches" (vint (run1 (quote six) (list (VInt 6))) 1))
+    (Case "the profile's / is stuck at zero (guard)" (stuck (run1 (quote div) (list (VInt 7) (VInt 0))) (quote guard) (nm (quote div))))
+    (Case "the profile's / truncates" (vint (run1 (quote div) (list (VInt -7) (VInt 2))) -3))
+    (Case "Int.tdiv is total: x / 0 = 0" (vint (run1 (quote tdiv) (list (VInt 7) (VInt 0))) 0))
+    (Case "Int.tmod is total: tmod x 0 = x" (vint (run1 (quote tmod_t) (list (VInt 7) (VInt 0))) 7))
+    (Case "mod is Euclidean" (vint (run1 (quote emod) (list (VInt -7) (VInt 3))) 2))
+    (Case "tmod follows the dividend" (vint (run1 (quote tmod) (list (VInt -7) (VInt 3))) -1))
+    (Case "ediv pairs with mod" (vint (run1 (quote ediv) (list (VInt -7) (VInt 3))) -3))
+    (Case "Nat.sub saturates" (vint (run1 (quote nsub) (list (VInt 3) (VInt 5))) 0))
+    (Case "Nat.sub otherwise subtracts" (vint (run1 (quote nsub) (list (VInt 5) (VInt 3))) 2))
+    (Case "a shift by 64 is stuck (guard)" (stuck (run1 (quote shl) (list (VInt 1) (VInt 64))) (quote guard) (nm (quote shl))))
+    (Case "a shift by 63 is a value" (vint (run1 (quote shl) (list (VInt 1) (VInt 63))) 9223372036854775808))
+    (Case "Nat.land on a negative is stuck (guard)" (stuck (run1 (quote nland) (list (VInt -1) (VInt 3))) (quote guard) (nm (quote nland))))
+    (Case "Nat.land on naturals" (vint (run1 (quote nland) (list (VInt 6) (VInt 3))) 2))
+    (Case "Nat.shiftRight is total: 1 >> 64 = 0" (vint (run1 (quote nshr) (list (VInt 1) (VInt 64))) 0))
+    (Case "Nat.shiftLeft past the host's guard: 1 << 63" (vint (run1 (quote nshl) (list (VInt 1) (VInt 63))) 9223372036854775808))
+    (Case "Nat.shiftRight past the host's guard: 2^63 >> 63 = 1" (vint (run1 (quote nshr) (list (VInt 9223372036854775808) (VInt 63))) 1))
+    (Case "symbols round-trip through their bytes" (vctor (run1 (quote sym_round) (list (VSym (quote kernel.prelude)))) (nm_true)))
+    (Case "a string literal is bytes on the wire" (match (run1 (quote hello) Nil) ((EvOk (VSym s)) (sym_eq s (quote hi))) (_ False)))
+    (Case "R45: the self-recursive function exhausts its fuel" (out (run_fuel (quote loop) (list (VInt 1)) 1000)))
+    (Case "R45: it exhausts any fuel" (out (run_fuel (quote loop) (list (VInt 1)) 1)))
+    (Case "fuel is spent per function entry: length needs four" (out (run_fuel (quote length) (list (vlist (list 1 2 3))) 3)))
+    (Case "and four suffice" (vint (run_fuel (quote length) (list (vlist (list 1 2 3))) 4) 3))
+    (Case "an extern is stuck under the pure ev, in the calling function" (stuck (run1 (quote use_ext) (list (VInt 1))) (quote extern) (nm (quote use_ext))))
+    (Case "a sig fn without a link is stuck unlinked" (stuck (run1 (quote use_sig) (list (VInt 4))) (quote unlinked) (nm (quote twice))))
+    (Case "the implementation substituted under the sig fn's identity runs" (vint (ev (prog True) (nm (quote use_sig)) (list (VInt 4)) 1000) 8))
+    (Case "an unknown function is stuck unknown_head" (stuck (run1 (quote nowhere) Nil) (quote unknown_head) (nm (quote nowhere))))
+    (Case "a 200,000-deep recursion does not need the host's stack" (vint (run1 (quote length) (list (vlist (ints 200000 Nil)))) 200000))
+    (Case "and neither does a 200,000-long tail loop" (vint (run1 (quote count) (list (vlist (ints 200000 Nil)) (VInt 0))) 200000))))
+
+(fn run ((cs (List Case)) (fails Int) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil (exit fails (write_line (append "ev_test: failures = " (show_int fails)) w)))
+    ((Cons (Case name ok) r) (run r (if ok fails (+ fails 1)) (write_line (append (if ok "PASS " "FAIL ") name) w)))))
+
+(fn main ((w World)) World (run (cases) 0 w))
