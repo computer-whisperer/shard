@@ -1244,7 +1244,7 @@ is `docs/FOUNDATION.md` §5.3.
   3) and the checked entry needs the driver's argument validation (§9),
   which it does not have — phase 2 cannot close without a ruling on
   them. Tests: 19 entrypoints, 0 failed, 237 s (route 2's byte-tie 21
-  s; calc 161 s; parity 37 s).
+  s; calc 161 s; parity 37 s). **CI (pipeline 472, `e20e2ec`):** green — 19 entrypoints, the calc differential in 385 s on the runner (the port under `ev` 15 s, the old tree's tower 370 s), parity in 118 s, route 2's byte-tie in 52 s, the full-export replay on compiled K in 2,473 s at a 29.6 GB peak, all 20 candidates pinned, closures identical, byte-ties identical (engine 189 s, corpus 1,501 s, v3 3,870 s; the pipeline 4,061 s).
 
 ## 10. Related records
 
