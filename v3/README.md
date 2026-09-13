@@ -213,7 +213,7 @@ review after the build fixed the pre-registration's count of S's
 pass's `pattern_type` and `pattern_name` refusals and type-argument
 inference (§6.7).
 `gen_fresh` dropped; `realize` and R45's third test wait for slice 5b
-(§6.7).
+(§6.7). **CI (pipeline 468, `d76b7a2`):** green — 17 entrypoints, route 2's byte-tie in 46 s on the runner, the full-export replay on compiled K in 2,489 s at a 31.0 GB peak, all 20 candidates pinned, closures identical, byte-ties identical.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

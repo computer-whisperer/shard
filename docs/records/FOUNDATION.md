@@ -1089,7 +1089,7 @@ is `docs/FOUNDATION.md` §5.3.
   25 modules, 6,184 declarations) — the matrix found two non-exhaustive
   matches in the classifier's own first draft, one in `reader.shard`
   (`elab_proj` lacked the pending arm) and one in the reader kit
-  (`step_form` lacked the parameter arm).
+  (`step_form` lacked the parameter arm). **CI (pipeline 468, `d76b7a2`):** green — 17 entrypoints, route 2's byte-tie in 46 s on the runner, the full-export replay on compiled K in 2,489 s at a 31.0 GB peak, all 20 candidates pinned, closures identical, byte-ties identical.
 
 ## 10. Related records
 
