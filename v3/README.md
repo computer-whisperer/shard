@@ -376,6 +376,42 @@ are recorded under each. R52: `LANGUAGE.md` §13 item 26 carries the
 seal's completion criterion — the first `meta/` consumer behind the
 boundary, not a view file its consumers bypass. §13 gains items
 31–33. Tests: 22 entrypoints, 0 failed (parity 20 closures, 68,014 declaration lines, 43 s, every projection injective; calc 6 s and 155 s; route 2's byte-tie 21 s; the gate test's five scenarios). **CI (pipeline 477, `4699cbe`): green** — 22 entrypoints, the calc differential byte-identical in 418 s on the runner (the port under `ev` 16 s, the old tree 402 s), parity byte-identical over 20 closures and 68,014 declaration lines in 119 s with every projection injective, route 2's byte-tie in 53 s, the gate test's five scenarios, the byte-ties with both engines complete (the fixture 301 lines, chunks 0–4 3,395 lines), the full-export replay on compiled K in 2,418 s at a 30.6 GB peak, all 20 candidates pinned, closures identical (engine 147 s, corpus 1,544 s, v3 3,916 s; the pipeline 4,065 s) — R49's closure criterion E met.
+**Slice 10 (2026-09-14): the ratification memo's amendments** —
+GPT-6's review of `LANGUAGE.md` at `dabfa42` (R55–R62,
+`docs/archive/foundation-v3/SHARD_V3_LANGUAGE_RATIFICATION_MEMO_v0.1.md`;
+answered in records §4.9): three Stage-0 fixes with their pins, four
+contract amendments, and the document consolidated, the foundation
+not reopened. Four of the memo's "reasoning examples" were live and
+probed before the fixes. R56: an `if`'s condition is typed by the
+classifier — a `sig type` is `private_if` (a consumer's `if` on a
+view's opaque handle was RUNNABLE and the implementation's
+constructor order decided the branch), any other arity `if_type` (a
+three-constructor type branched by ordinal parity); the observation
+is the type's, `ev`'s tag bit its implementation (§6.2). R58: a
+pending measure is recorded once at its constant and carried by every
+realization whose body reaches it (`REALIZE … pending=ROOT`) — the
+memo's counterexample, a true equation over an increasing recursion,
+had attached with an obligation no caller saw; the derived view's
+erasure and the executor's primitives are accounted trust, not
+exemptions. R59: the entry's byte-list codecs are by identity (the
+prelude's `(List Int)`, Init's `(List Nat)` and `(List Int)`) — a
+`Tree` with the list arities had taken bytes into its fields; the
+World's identity is a stated Stage-0 limit until phase 4's handler
+contract. R55: the profile is a named, bounded bring-up mechanism
+recorded per module (`MODULE … profile=toolchain`), never a dialect
+(§8). R57: matching, linking and logical instantiation are three
+statuses; the checked instance record is the phase-3 two-instance
+gate's. R60: the Stage-1 authoring facilities are §11's row. R61:
+§3's "two modules can never collide" corrected — a collision is
+refused (`duplicate_name`, `already_declared`), never conflated, two
+pins. R62: the status preamble cut to a declaration and the seven
+internal conflicts fixed in their original paragraphs (the seal's
+boundary, one equation per leaf, the profile's flat scope,
+`gen_fresh`, "Stage 0 has no types", structural-only self-recursion,
+`ev`'s frontier loop). §13 items 1, 8, 9, 12, 13, 15, 16, 18, 22, 23
+and 29 amended or clarified in place; the ratification pass runs over
+the consolidated text. Tests: 22 entrypoints, 0 failed (parity 20
+closures, 68,076 declaration lines, 42 s, every projection injective).
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
@@ -419,6 +455,15 @@ each closes on its named gate:
   name was pinned (an authorization hole, no false theorem: K types a
   head before it reduces it); **fixed at slice 9 (2026-09-13)**,
   hostile battery 7e; **CLOSED on CI pipeline 477** (`4699cbe`, 2026-09-14): the full replay, the closures and all 20 pins under the kind check.
+- **R56, R58, R59 — the Stage-0 holes the ratification memo named
+  (2026-09-14, slice 10):** an untyped `if` condition (a view's
+  opaque type observed through the tag bit), a pending measure no
+  caller saw, a byte-list codec by constructor shape — each probed
+  live, **fixed at slice 10** with its pins (`if_private`, `if_type`,
+  `if_one`, `if_ok`; `realize_pending_via`; `entry_shape`); CI closes
+  them on the next green pipeline. Carried, not fixed: the World's
+  identity at an entry (phase 4's handler contract) and the checked
+  module instance (R57; the phase-3 two-instance gate).
 - **The Stage-0 `fn` gap** — a `fn` has an E body and no L meaning, no
   totality check, and nothing in L cites it, until phase 3's Stage 1
   (`LANGUAGE.md` §0, §12.6); the driver says so per declaration since
@@ -442,9 +487,12 @@ each closes on its named gate:
   realization fixture (`ite_self` at export line 18,116). Phase 2
   closed at slice 8 (2026-09-13, `v3/CANON.md`); the close-out ledger
   is records §9; slice 9 (2026-09-13) answered GPT-6's checkpoint
-  memo on the closed phase (R49–R54); the ratification pass over
-  `LANGUAGE.md` §13 (items 1–33) and `CANON.md` §9 (items 7–11) is
-  outstanding.
+  memo on the closed phase (R49–R54) and slice 10 (2026-09-14) its
+  ratification memo on `LANGUAGE.md` (R55–R62, records §4.9: the
+  document consolidated, nine §13 items amended in place, GPT-6's
+  recommended disposition per item recorded); the user's ratification
+  pass over `LANGUAGE.md` §13 (items 1–33) and `CANON.md` §9 (items
+  7–11) is outstanding.
 
 ## The pin (2026-09-06)
 

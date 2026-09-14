@@ -14,7 +14,9 @@
 > in §9; the seven the user ruled on 2026-09-13 are marked RULED, the
 > rest are for ratification with `v3/LANGUAGE.md` §13. GPT-6's
 > checkpoint memo (R50, 2026-09-13) added §1's execution profile and
-> its positions on the open items, recorded in §9.
+> its positions on the open items, recorded in §9; its ratification
+> memo (R56, 2026-09-14; slice 10) bounded C9's domain to the types
+> `if` may observe.
 
 The surface this document canonicalizes is `v3/LANGUAGE.md`'s: S, its
 explicit-L forms and its E forms at Stage 0. It never restates a
@@ -157,7 +159,7 @@ the three marked *recast* change under V3's semantics.
 | **C6** ground naturals are literals | **by construction**: numerals are K's `LitNat`; `Nat.succ` and `Nat.zero` in an E body are refused by the reader with the pointer to numerals (`nat_constructor`, `LANGUAGE.md` §12.1). Nothing is left for a recognizer | carried, as a reader rule |
 | **C7** no theory redexes, per ratified rule set | a rule set cites **theorems** (the old law's requirements): `(canon-rules NAME (rule THEOREM)…)` is the reserved form, the oriented rewrite read off the theorem's statement, the typed side-conditions its binder types; the escape-rule criterion sorts a set's rules before ratification; confluence is required of any set admitted while the store keys on the form. Waits for phase 3's I, when a theorem's statement is citable as a rule | carried, phase 3 |
 | **C8** arm-local scrutinee discipline | carried whole: a variable scrutinee; in an arm whose pattern binds nothing the scrutinee variable does not occur in the body; no body contains the exact rebuild of its own arm's pattern over its own binders; ground pins compose through nested destructuring | carried |
-| **C9** no match on a decision | **generalized**: `if` branches on the second constructor of any two-constructor type (`LANGUAGE.md` §6.2's tag rule), so a `match` over a two-constructor type whose arms bind nothing is a second spelling of an `if` — over `Bool`, Init's `Bool`, `Decidable`, and an `Option` matched with `_` in its `some` arm alike. The `if` is canonical, the second constructor's arm its then-branch | **recast** (RULED 2026-09-13) |
+| **C9** no match on a decision | **generalized**: `if` branches on the second constructor of any two-constructor type (`LANGUAGE.md` §6.2's tag rule), so a `match` over a two-constructor type whose arms bind nothing is a second spelling of an `if` — over `Bool`, Init's `Bool`, `Decidable`, and an `Option` matched with `_` in its `some` arm alike. The `if` is canonical, the second constructor's arm its then-branch. **Domain (GPT-6 R56, slice 10):** exactly the conditions `LANGUAGE.md` §6.2 admits — a transparent two-constructor type whose static type the declarations fix; a `sig type` scrutinee is neither matchable (`private_match`) nor a condition (`private_if`), so C9 never reaches an opaque type, and a type parameter's scrutinee is left as written at Stage 0. Dropping a payload from a pattern is not licence to drop the computation that produced it: §1's execution profile governs, as for C2 and C3 | **recast** (RULED 2026-09-13); domain bounded 2026-09-14 |
 | **C10** no vacuous control | carried: an `if` whose branches are structurally equal; a covered match whose arms ignore their binders and agree; a covered match whose arms respell the scrutinee. Coverage is the classifier's exhaustiveness | carried |
 | **C11** contextual partial evaluation | carried: a body subterm that can take one of `ev`'s steps under the arm's pins is a contextual redex; the `if` tier stays dropped, and the fold tier stays at the D19a ruling — no fold of applied ground user calls, the C7 extension the mechanism of record if written code ever accumulates them | carried |
 | **C12** no needless case split | carried as emergent: C10's constant-match rule after C11 in the rewriter's fixpoint | carried |

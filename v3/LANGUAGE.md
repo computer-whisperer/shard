@@ -1,81 +1,25 @@
 # The V3 language — S, L and E at Stage 0 (phase 2 draft)
 
-> **STATUS (2026-09-13): DRAFT — slices 1–9 of phase 2; slice 8 the phase's last, slice 9 its checkpoint maintenance (FOUNDATION
-> §12.4 item 2; `docs/records/FOUNDATION.md` §9).** Written before the
-> reader existed, as the design the reader, the loader, the views, the
-> fragment classifier and `ev` are built to. **Slice 2 built §2 and the
-> S → L half of §4–§5:** `v3/kernel/sexpr.shard` (the s-expression
-> reader, the profile's lexical rules as a flag) and
-> `v3/kernel/reader.shard` (the Stage-0 reader into K's `Declaration`:
-> terms, levels, binders, `structure` projections over `proj`, scope
-> resolution as data for the loader), with `v3/pins/reader/` as the
-> first corpus of the new tree. **Slice 3 built §3, §3.1–3.3 and §9:**
-> `v3/kernel/loader.shard` (package root, modules, `import`/`use`/
-> `trusts`, the `Init` prefix import against the pin, the per-file
-> policy, the acceptance records) with `v3/kernel/load.shard` as the
-> driver and `v3/pins/loader/` as its corpus; K's raw entry now ingests
-> what it is handed (§3.3; GPT-6 R43). **Slice 4 built §6.5 as §6.6:**
-> directory modules and their views — `sig type`, `sig fn` and
-> `requirement` as view parameters (the policy's third class), the
-> req-scope gate, the implementation checked in a fork of the loader's
-> state where the view is replayed with the implementation substituted
-> at each signature, `fulfills` proved or pending, one `DISCHARGE` per
-> parameter. **Slice 5 built §6.2–6.4 as §6.7:** `v3/kernel/classify.shard`
-> (reading a `fn` is classifying it: heads by identity and kind, saturated,
-> the escape rule, exhaustiveness by the pattern matrix, the private-equality
-> leak; the toolchain profile as read) and `v3/kernel/ev.shard` (`ev` as a
-> machine with an explicit continuation, `run_prog` performing the host's
-> externs); K's own sources load under the profile and K interpreted by `ev`
-> byte-ties route 3 on the fixture (route 2). **Slice 5b built §7 as §7.5:**
-> `v3/kernel/realize.shard` (the supplied form's equations by first-order
-> matching over the constant's telescope, the case tree compiled column by
-> column, descent and order; the derived view's erasure by roles),
-> `v3/kernel/erase.shard` (Init's inductives as E types on first citation,
-> the roles of a constant's binders), `v3/kernel/etable.shard` (the E table,
-> split out of the classifier); K's accelerated Nat set in the primitive
-> table under its identities; the `REALIZE` record; R45's third test.
-> **Slice 6 built §10's items 1 and 2:** `v3/examples/calc/` (the
-> program half ported to S, one file per old file, the claims waiting for
-> phase 3), `kernel/test/calc_harness.shard` and the old tree's
-> `examples/calc/calc_differential.shard` (the differential's two drivers
-> over one shared input set, byte-identical outputs —
-> `kernel/test/calc_test.sh`), `kernel/dump.shard` with `load.shard
-> --dump` and the bootstrap's `dump` verb (frontend parity: the canonical
-> text of §10, byte-identical over every toolchain closure —
-> `kernel/test/parity_test.sh` — retiring TCB bring-up item 2); the seal
-> of `CheckedEnv` deferred to the phase-3 opener with its analysis (§6.6,
-> §13 item 26). **Slice 7 built the phase-2 close-out:** the checked
-> entry of §9 (`run_prog` validates the driver's arguments against the
-> entry's parameters; T1's raw-versus-checked fixture), the primitive
-> suite of §10 item 2 (every table entry, three cases each), the T5
-> audit (each of the battery's eight fixtures mapped to its pin, two
-> carried to phase 3 in §11 by ruling, as T1's branch-local proof is),
-> the doc rows of law §10.5 dated phase 2, and the records' close-out
-> ledger. **Slice 8 wrote `v3/CANON.md`** — the canonical form of S
-> (law §10.5's CANON row at phase 2): shardfmt's layout law carried with
-> the V3 heads, C1–C12 recast on E's formers (C3 under sequential `let`,
-> C9 under `if`'s tag rule), eight new rules for explicit L and the file
-> header, content addressing superseded by law §8.3, the ratchet on V3
-> with the gate at phase 6, the migration baseline. **Phase 2 closes on
-> it (2026-09-13)**, pending the ratification pass over §13 below and
-> `v3/CANON.md` §9. **Slice 9 answered GPT-6's checkpoint memo on the
-> closed phase** (R49–R54, records §4.8): the accelerator matcher
-> checks the expected kind before any exemption (§13 item 31), a
-> primitive's outcome is three-valued (§6.2, §6.4, item 32), frontend
-> parity's text is a stated projection checked injective (§10 item 1,
-> item 33), `t0_full.sh`'s byte-ties require completion, `CANON.md`
-> states its execution profile, and the seal's completion criterion
-> is in item 26.
-> It supersedes `docs/LANGUAGE.md` for the `v3/`
+> **STATUS (2026-09-14): DRAFT at the phase-2 boundary — Stage 0 of
+> law §5.1 (explicit L, no inference), pending the ratification pass
+> over §13 below and `v3/CANON.md` §9.** Normative parent:
+> `docs/FOUNDATION.md`. Scope: the surface S, the executable fragment E
+> and `ev` as phase 2 built them — the reader (§2, §4–5), the loader
+> (§3), views (§6.5–6.6), the classifier and `ev` (§6.2–6.4, §6.7),
+> `realize` (§7), the toolchain profile (§8), entries (§9), conformance
+> (§10). Each semantic rule has one current statement here with its
+> Stage-0 limit beside it; a later "as built" section fixes what the
+> rule left to the implementation and never overrides it (GPT-6 R62,
+> slice 10). The build history — which slice built what, the
+> measurements, the findings — is `docs/records/FOUNDATION.md` §9; the
+> review correspondence is its §4. The proof IR **I** is phase 3's
+> chapter and is not here. What Stages 1–3 add is §11 with its phase;
+> §12 is the ledger of changes from v2, the AT RISK rows the ones to
+> watch. Decisions this draft makes beyond the law's text are §13;
+> until ratified they are the implementation's working assumptions,
+> not law. This document supersedes `docs/LANGUAGE.md` for the `v3/`
 > tree (FOUNDATION §10.5); the old document keeps describing the old
-> tree until the flip. The proof IR **I** is phase 3's chapter and is
-> not here. Everything below is **Stage 0** of the law's §5.1: explicit
-> L, no inference. What Stages 1–3 add is listed in §11 with its phase.
-> §12 is the ledger of changes from v2 — every v2 feature with its fate,
-> the AT RISK rows being the ones to watch. Decisions this draft makes
-> beyond the law's text are collected in §13
-> for ratification; until ratified they are the implementation's
-> working assumptions, not law.
+> tree until the flip.
 
 The normative contract is `docs/FOUNDATION.md`; this document
 specifies the surface and the executable fragment as phase 2 builds
@@ -163,8 +107,14 @@ declared name**, and the content hash of its L revision:
   `std/list.shard` declares `std.list.List.sum` — so a native
   declaration extends a Lean namespace by name while its identity says
   where it lives. K's environment is keyed on exactly this full name
-  (`name.shard`'s `Name`), so two modules can never collide in K and
-  `check_name` needs no help.
+  (`name.shard`'s `Name`). The construction is not collision-free —
+  `a.shard` declaring `b.c` and `a/b.shard` declaring `c` both name
+  `a.b.c` — and a collision is **detected**, never conflated: the
+  second E declaration is the load error `duplicate_name`, the second
+  L declaration K's `already_declared` (pins `qualified_collision`,
+  `qualified_collision_l`; GPT-6 R61, slice 10). Names are unique
+  within a checked environment; a durable record binds a declaration
+  to its package and import revisions (§3.2), never to a spelling.
 - **Imported declarations keep their exported names as K names**
   (`List.length`, not `Init.List.length`): their identity is **the
   pin plus the name plus the content** — the `import` form is the
@@ -325,8 +275,9 @@ them; each is a candidate for §13.
   positive id made `0 = 1` a theorem through the raw entry (hostile
   battery 16). The import's records enter through K's own lineage and
   never pay the rebuild. What remains open is the profile's exposure of
-  `CheckedEnv`'s constructor, sealed when `kernel/env` has a view
-  (§6.5) and the toolchain loads under it.
+  `CheckedEnv`'s constructor, sealed when K is one directory module
+  behind a view and its first `meta/` client loads against it (§6.6,
+  §13 item 26).
 
 ## 4. Declarations — the surface keywords, fixed at phase 2
 
@@ -488,15 +439,14 @@ classified:
 
 ### 6.2 `ev` — the definition of "run"
 
-`ev : Prog → Name → List Val → Int → EvRes`. One shard `fn` in the
-toolchain profile, structurally recursive on the fuel first and the
-term second: entering a function body costs one unit of fuel, walking
-a term costs none. **Pure**: an extern node is `EvStuck`; the
-effectful driver `run` performs externs through the host's own externs
-by the effect-frontier loop of the old tree's env machine
-(`kernel/evm.shard` `run_app`: find the innermost stuck extern, perform
-it, substitute, continue) — the explicit handler contract of law §4.7 at
-phase 2 is "the toolchain's six World externs, performed in order".
+`ev : Prog → Name → List Val → Int → EvRes`, one shard `fn` in the
+toolchain profile (`kernel/ev.shard`; the machine it is built as is
+§6.7): entering a function body costs one unit of fuel, walking a term
+costs none. **Pure**: an extern node is `EvStuck extern`; the effectful
+driver `run` performs the extern through the host's own extern of the
+same short name and resumes with its result — the explicit handler
+contract of law §4.7 at phase 2 is "the toolchain's six World externs,
+performed in order".
 
 Per node: a variable reads its frame slot; a literal is its value; a
 constructor evaluates its arguments left to right and builds the cell;
@@ -512,12 +462,26 @@ R51); `match` tries arms in
 order and the first matching pattern binds its variables, no arm
 matching is `EvStuck`; `let` evaluates its right-hand sides in order,
 each in the frame the earlier bindings extended (sequential, RULED
-2026-09-12 — R44); `if` evaluates its condition to a
-cell and takes the **then** branch iff the cell's constructor is the
-**second** constructor of its type — `Bool.true`, `Decidable.isTrue`
-and the toolchain's `True` all are, which is what "a decision tag with
-erased payload" means at run time: the tag decides, the payload is not
-there.
+2026-09-12 — R44); `if` evaluates its condition to a cell of a
+**transparent two-constructor type** — `Bool`, Init's `Bool`,
+`Decidable`, a `type` of the program's — and takes the **then** branch
+iff the cell is that type's **second** constructor: `Bool.true`,
+`Decidable.isTrue` and the toolchain's `True` all are, which is what
+"a decision tag with erased payload" means at run time: the tag
+decides, the payload is not there. The observation is the **type's**,
+supplied by its public declaration, never the cell's: a value of a
+`sig type` is not a condition through the view (`private_if`, the leak
+of §6.5), a type of one or three constructors does not inherit the rule
+(`if_type`), and the classifier refuses both wherever the declarations
+fix the condition's static type (§6.7 item 5; a type parameter is
+unchecked at Stage 0, as a match on one is). `ev`'s tag bit (§6.7)
+implements this observation on the types the classifier admits and
+does not define it — another representation may implement it by a null
+test or any justified operation (GPT-6 R56, slice 10). Before slice 10
+the condition was untyped and the bit alone decided: an `if` on a
+view's opaque handle branched on the implementation's constructor
+order, a three-constructor type by ordinal parity, a one-constructor
+type never (pins `if_private`, `if_type`, `if_one`, `if_ok`).
 
 `ev` is E at phase 2, not an L constant; its two-sided theorem and the
 reflection node are phase 4's T8, stated over this `Prog`. Cost is a
@@ -535,8 +499,10 @@ untrusted, before `ev` sees a program:
    a return position or a `let` binding — the escape rule;
 3. every `match` is exhaustive over the scrutinee's constructors as far
    as the arms' patterns determine it (a variable or `_` arm closes
-   it; Stage 0 has no types, so a scrutinee whose type is not fixed by
-   a constructor pattern is closed only by a variable arm);
+   it; Stage 0 has declared E types and §6.7's static reconstruction
+   from them, not Stage 1's typing, so a scrutinee whose type neither
+   a constructor pattern nor the declarations fix is closed only by a
+   variable arm);
 4. type parameters are static: they occur in binder types only;
 5. in a `realize` derived from an L body (§7.1), every binder and every
    argument is classified by **role** from its L type — a `Sort`-typed
@@ -555,9 +521,9 @@ One table keyed on **identity**, so the profile's `+` and the naming
 law's `+` reach the same entry and `ev`'s table matches the Rust
 bootstrap's `prim.rs` operation for operation (execution parity, §10).
 At phase 2 the table is the bootstrap's — `+ - * / mod tmod ediv band
-bor bxor bshl bshr int_eq sym_eq lt le sym_of_chars chars_of_sym` and
-the effectful `gen_fresh` (`docs/LANGUAGE.md` §8) — under their profile
-names, plus the naming-law spellings of law §10.3 as **distinct**
+bor bxor bshl bshr int_eq sym_eq lt le sym_of_chars chars_of_sym`
+(`docs/LANGUAGE.md` §8; its effectful `gen_fresh` is dropped, §12.1:
+law §4.7 has no effectful primitive) — under their profile names, plus the naming-law spellings of law §10.3 as **distinct**
 identities where the meaning differs: `Int.tdiv` and `Int.tmod` total
 with `x / 0 = 0` and `tmod x 0 = x`, `Int.ediv`/`Int.emod` likewise,
 `Nat.sub` saturating, `Nat.land lor xor shiftLeft shiftRight` on
@@ -570,8 +536,12 @@ pow beq ble` beside `Nat.sub` and the bitwise five — and the three
 decisions `Nat.decEq decLt decLe`; the naming-law entries are L
 constants under their own names (`prim_l_identity`), the profile's
 spellings have none, and an entry of the table is never `realize`d:
-K's rule is its realization. Every entry has a positive, a negative
-and a boundary case in the execution-parity suite. **Slice 9 (R51):**
+K's rule is its realization — K's reduction rule fixes the entry's
+meaning, and the executor's implementation is tied to that meaning by
+the primitive suite of §10 item 2, every entry's positive, negative and
+boundary case fixed by hand and run under `ev`: an accounted
+conformance, not an exemption from correspondence (GPT-6 R58, slice
+10). **Slice 9 (R51):**
 every entry's outcome is three-valued — a value, the guard failed, a
 resource exhausted (`nat_count`, `nat_size`) — the third decided before
 the work in K's order (the zero shortcut, the count cap, the size
@@ -602,9 +572,23 @@ checked conditions, at Stage 0:
   environment, where the implementation's `type` shadows the opaque
   twin (the old tree's structural opacity rule, carried);
 - **evidence binding**: an exported theorem's axiom closure names the
-  view parameters it rests on; linking an implementation discharges
-  exactly those, and a theorem whose closure names a parameter no
-  implementation discharged is reported, not accepted.
+  view parameters it rests on; the implementation check reports each
+  parameter's status — a `sig type` met by a `type`, a `sig fn`
+  **linked** to an E `fn` by signature (the parameter stays a
+  parameter: a `fn` has no L meaning at Stage 0, so nothing is
+  logically discharged), a `requirement` **proved** by its `fulfills`
+  or **pending** — and a theorem whose closure names a parameter no
+  implementation discharged is reported, not accepted. Matching a
+  signature, linking an implementation and establishing the logical
+  instance are three statuses, never one (GPT-6 R57, slice 10): a
+  consumer's checked result is instantiated for an implementation only
+  by a justified substitution that inherits the assumptions of the
+  evidence supplied — the `fulfills` proofs' own closures — and binds
+  the realizations selected; that construction, the checked instance
+  record, is the phase-3 two-instance gate's (§11). At Stage 0 the
+  records name the parts and compose nothing: a consumer's `params=`
+  and an implementation's `DISCHARGE` kinds are read together by hand,
+  and no record claims the composite.
 
 An interface file imports only other interfaces, bare directory
 modules and the kernel, never an implementation file — v2's req-scope
@@ -616,8 +600,10 @@ execution (T5's "with the impl linked"). A consumer that matches a
 `sig type`'s constructor or compares two values of a `sig type` for
 equality by constructor is refused at classification — the
 private-equality leak. This is the module surface phase 1 deferred to:
-`CheckedEnv` becomes a `sig type` of `kernel/env`'s view and no client
-outside `kernel` can build one (law §3.5).
+K itself becomes one directory module behind a view and no client
+outside it can build a `CheckedEnv` (law §3.5) — the boundary is K, not
+`kernel/env`, for the reason §6.6 gives; §13 item 26 carries the
+completion criterion.
 
 ### 6.6 The loader's view mechanics (slice 4, 2026-09-12)
 
@@ -665,8 +651,9 @@ preference; K sees one `std.list.List` in either environment.
   (`impl_type_arity`); `(sig fn NAME …)` matched against the
   implementation's `(fn NAME BINDERS RET …)` by the E signature read
   in the fork (`expr_eq` of the Π-types; `impl_signature`), the
-  parameter then admitted, since a `fn` has no L meaning at Stage 0
-  (§0); `(requirement NAME …)` discharged by the implementation's
+  parameter then admitted again as a parameter — `DISCHARGE NAME fn`
+  says linked, not discharged — since a `fn` has no L meaning at
+  Stage 0 (§0); `(requirement NAME …)` discharged by the implementation's
   `(fulfills NAME PROOF)` — the statement re-read in the fork, where
   the sig types are concrete, and the proof `(exact TERM)` checked as
   a theorem or `sorry` recorded pending; a view `theorem` is not
@@ -679,9 +666,9 @@ preference; K sees one `std.list.List` in either environment.
   `IMPL`, one `DISCHARGE` line per parameter.
 - **Evidence binding** at Stage 0 is by closure: an exported
   theorem's `axioms=` names the parameters it rests on; the
-  implementation check's `DISCHARGE` lines say which the implementation
-  discharged and which are pending; a consumer that links an
-  implementation at `run` is slice 5's.
+  implementation check's `DISCHARGE` lines say each parameter's status
+  — `type`, `fn` (linked), `proved`, `pending` (§6.5's three statuses);
+  a consumer that links an implementation at `run` is slice 5's.
 - **The seal of `CheckedEnv` (§6.5, law §3.5) is deferred to the
   phase-3 opener (ruled 2026-09-13, slice 6; §13 item 26).**
   `kernel/env`'s view is not the boundary: a `sig type CheckedEnv`
@@ -735,8 +722,9 @@ that is neither bound nor a constructor: `unbound_name`), two is
    specialization recursively; a column of literals, and a scrutinee no
    constructor pattern fixes, is closed only by a variable or `_` row.
    The refusal is `nonexhaustive`, naming the function;
-4. **type parameters are static** — at Stage 0 no term carries a type,
-   so this holds by construction;
+4. **type parameters are static** — at Stage 0 no term carries a
+   Stage-1 type (item 5's static types are read off declarations), so
+   this holds by construction;
 5. **the private-equality leak** — the static E type of a scrutinee is
    read off the binders, the constructor field types, the callees'
    return types and the primitives' result types as far as they reach;
@@ -744,6 +732,9 @@ that is neither bound nor a constructor: `unbound_name`), two is
    constructor pattern is `private_match`; a scrutinee whose static type
    is a known E inductive, `Int` or `Symbol` matched against another
    type's constructor is `pattern_type` (the matrix alone would pass it).
+   An `if`'s condition is typed the same way (§6.2; slice 10): a `sig
+   type` is `private_if`, an inductive of other than two constructors,
+   `Int`, `Nat` or `Symbol` is `if_type`.
    A constructor's and a callee's type arguments are inferred from their
    arguments' static types, so a sig-typed value passed through a
    polymorphic wrapper keeps its type. A scrutinee whose type is a type
@@ -759,8 +750,13 @@ runnable, no L meaning); an extern `RUNNABLE extern NAME`; a profile
 K's, and counts as one.
 
 **The profile as read.** A file is in the toolchain profile iff its
-root-relative path begins with `kernel/` or `meta/` (§8, §13 item 8).
-A profile file has **no L**: `type` declares its E inductive only,
+root-relative path begins with `kernel/` or `meta/` (§8, §13 item 8);
+the selection is recorded on the module's record (`MODULE …
+profile=toolchain`, slice 10), so a load's records say which profile
+read each file. The profile is a named, bounded source-compatibility
+mechanism for bring-up and never a dialect (§8; GPT-6 R55): placement
+under `kernel/` grants no privilege in K, and the destination of the
+toolchain's sources is ordinary S. A profile file has **no L**: `type` declares its E inductive only,
 `fn` and `extern` are E, any other declaration form is refused
 (`profile_form`); the scope is **flat** — every declaration of every
 visible module, constructors included, is citable by any suffix of its
@@ -777,8 +773,10 @@ numerals are `Nat`; an E-type name resolves as an L constant does
 **`ev` as built.** `kernel/ev.shard` links a `Prog` into its own
 representation — no other file sees it — and runs it as a machine with
 an explicit continuation: constructors are integer tags whose low bit
-says "second constructor of its type" (§6.2's `if` rule is one bit
-test), functions and externs are indices into a table, primitives are
+says "second constructor of its type" (the bit implements §6.2's
+observation on the transparent two-constructor types the classifier
+admits as conditions), functions and externs are indices into a table,
+primitives are
 operation codes, string and list literals are built once at link. Two
 tail-recursive steps (evaluate a term in a frame under a continuation;
 return a value to a continuation) with the frames for pending
@@ -789,7 +787,7 @@ the driver. `ev` (§6.2's signature, pure) reports that state as
 `EvStuck extern`; `run` performs the extern through the host's own
 extern of the same short name — `get_args read_file write write_line
 write_file exit`, the six of `kernel/host.shard` — and resumes the
-continuation with the result: §6.2's frontier loop, without a search.
+continuation with the result (§6.2's `run`).
 Fuel is spent on function entry, exhaustion is `EvOut`; the stuck
 reasons are `no_arm`, `guard` (a primitive's), `if_tag` (a non-cell
 condition), `extern` (under `ev`), `unlinked` (a `sig fn` no
@@ -799,8 +797,9 @@ prelude's `List` of `Int` cells, an argument list its `List`, a file
 read its `Option`, a pair `Pair`, a flag its `Bool` — the identities
 of `kernel/prelude.shard` (§8), interned by the linker whether or not
 the program declares them, so a program without the prelude in its
-closure cannot match a wire cell by pattern (`if` works by the bit;
-S's own story is phase 3's, §12.4); the entry's `World` argument is its
+closure cannot match a wire cell by pattern (an `if` on a
+comparison's result works: the primitive's result type is a
+two-constructor type; S's own story is phase 3's, §12.4); the entry's `World` argument is its
 parameter type's first constructor over zero fields. The comparison
 primitives return the prelude's `Bool` cells under the same rule.
 
@@ -825,7 +824,7 @@ program's `exit` is the host's. **Route 2's byte-tie**
 exit code byte-identical to route 3's — K interpreted by `ev`, hosted
 on the bootstrap.
 
-**As built (2026-09-12).** K's own sources — `kernel/t0.shard`'s
+**History (2026-09-12; records §9, slice 5).** K's own sources — `kernel/t0.shard`'s
 closure, 19 modules, 5,670 declarations — load under the profile with
 no refusal: every kernel `match` is exhaustive by the matrix, no head
 is ambiguous, and the one finding was a missing import
@@ -887,9 +886,14 @@ Refused, with the reason and the position: a body that is `brecOn` or
 definition is not readable off the kernel term — §7.3), a function
 value in a runtime position, a runtime value obtained through
 noncomputable choice, a constant without a realization. The derived
-view is exact by construction: no equations are generated, the E body
-*is* the erasure, and the correspondence is the classifier's erasure
-rule (law §4.6), stated once.
+view generates no equations: the E body *is* the erasure and its
+correspondence is the erasure rule (law §4.6), stated once — a rule
+whose **implementation** (`kernel/erase.shard`, the view half of
+`realize.shard`) is a bring-up trust dependency on the TCB's V3 roster
+until a checked translation or route 1's proof covers it, not a
+correspondence already established. A `REALIZE NAME view` record says
+which rule the body follows, never that the translation was verified
+(GPT-6 R58, slice 10).
 
 ### 7.2 The supplied body
 
@@ -898,9 +902,10 @@ The second form gives an E body whose **signature is the erasure of
 type parameter, a `Prop`-typed binder disappears, the rest are the E
 parameters in order, and RET is the erasure of the result type. The
 loader checks the correspondence positionally. The correspondence of
-the body is by **equations, one per arm of the body's outermost
-`match`** (or one for a body without a `match`): for the arm with
-pattern `(CTOR x…)` and right-hand side `r`, the L statement
+the body is by **equations, one per leaf of the case tree** that the
+body's leading matches on parameters and pattern variables form
+(§7.5; one for a body without a `match`): for a leaf reached through
+the pattern `(CTOR x…)` with right-hand side `r`, the L statement
 
 ```
 forall PARAMS, NAME PARAMS-with-(CTOR x…) = ⟦r⟧
@@ -921,7 +926,21 @@ obligation — "`f x = f x` justifies no looping implementation" (law
 §4.4) — and at Stage 0 it is discharged only for structural recursion
 on a parameter whose type is an `inductive` the classifier knows
 (`RecStruct`); a `measure` other than `struct` is a reported obligation
-until phase 3's tactics.
+until phase 3's tactics. **A realization's evidence is kept in its
+parts** (GPT-6 R58, slice 10): the equations are its correspondence,
+L facts K checked; progress is its own obligation; execution rests on
+the executor's conformance (§6.4, §10). A checked equation says nothing
+about termination — `f n = f (Nat.add n 1)` is true of the constant
+function `f n = 0` and proves by `rfl` while the body never returns and
+the measure `n` increases (pin `realize_pending_via`) — so a
+realization under a pending measure is a **retained candidate**:
+attached, runnable for development, its obligation recorded once
+(`PENDING NAME measure`) and carried by every realization whose body
+reaches it (`REALIZE … pending=NAME`, §7.5), never mistaken for a
+completed realization through a caller. A completed realization is one
+whose pending set is empty; a caller that requires the guarantee — the
+lowering, Stage 1's admission — reads the set, and nothing at Stage 0
+requires it.
 
 ### 7.3 Why both forms, on the evidence
 
@@ -1085,7 +1104,10 @@ constant's identity at all (`name_taken`, the loader): only a
 warrant — the review of this slice found a `fn append` in a module
 named `List` standing in for Lean's `List.append` in a realization's
 body, with the equations stated about Lean's. Realizations therefore
-form no cycle but self-recursion, and self-recursion is structural.
+form no cycle but self-recursion, and self-recursion is either
+structural — a completed realization — or a retained candidate under a
+pending measure (§7.2), whose obligation every later realization
+reaching it carries.
 
 **The derived view.** `(realize NAME (view))` erases NAME's value
 under the same roles: the leading lambdas are the binders (a value
@@ -1109,7 +1131,11 @@ classified as a `fn` body and attached under NAME's identity with no
 equations (§7.1).
 
 **Records and the driver.** `REALIZE NAME supplied|view
-equations=NAME.realize_1,…` counts in the new `realized` column; the
+equations=NAME.realize_1,… [pending=ROOT,…]` counts in the new
+`realized` column — `pending=` names the constants whose measure
+obligations the realization carries, its own and, transitively, its
+callees' (slice 10; R58); an obligation itself is one `PENDING ROOT
+measure` line, at its constant; the
 equations are `ACCEPT` lines; a K refusal of an equation is `REFUSE
 NAME.realize_N reason`; the classifier's refusals of the form are
 `REFUSE NAME reason: message` as a `fn`'s. The `LATER` record is
@@ -1137,7 +1163,7 @@ rule, none a semantic mode of `ev`:
 | numerals are `Int`; `-7` is a numeral | numerals are `Nat`; negatives are constructor terms |
 | `(quote X)` and `'X` are `Symbol` literals; `sym_eq`, `sym_of_chars`, `chars_of_sym` | no symbols: a name is a `Name` constructor value |
 | `(list a b c)` is list sugar | none (Stage 1 may add it) |
-| a file `import` also opens the imported module (today's flat scope) | `import` never opens; `use` does — the profile files gain `use` lines when the V3 reader first reads them (records §7: "`use` lines come in phase 2") |
+| a file `import` also opens the imported module (today's flat scope) | `import` never opens; `use` does — the profile keeps its flat scope with no `use` lines for as long as it exists (§13 item 16; slice 1's expectation of `use` lines withdrawn) |
 | the primitive names of `docs/LANGUAGE.md` §8 | the naming-law spellings, same table (§6.4) |
 | a `type` is E only; there is no L in the profile — `def`, `theorem`, `inductive` are refused (`profile_form`) | a `type` enters K and E (§4) |
 | the profile is the `kernel/` and `meta/` directories of the root (slice 5; §13 item 8) | every other file is S |
@@ -1148,6 +1174,25 @@ layout), not by a marker form: the Rust loader refuses any top-level
 form it does not know, so a `(profile toolchain)` marker would need a
 one-word bootstrap change; the parity slice (§10) may still prefer the
 marker. A ratification item (§13).
+
+**What the profile is (GPT-6 R55, slice 10).** A named, bounded
+source-compatibility mechanism for bring-up: a reader flag
+(`sexpr.shard`, `classify.shard`), selected today by the package layout
+and recorded on every module it applies to (`MODULE …
+profile=toolchain`), so a load's records say which profile read each
+file, and a later store keys a cached frontend result by it (phase 3).
+It is not a dialect and not the lasting status of the kernel and
+metaprogramming libraries: placement under `kernel/` or `meta/` grants
+no access to K's representation and waives no admission or realization
+obligation (the seal, §13 item 26); those libraries need executable
+algorithms and mathematical claims about them in the same ordinary
+module system, so the toolchain's own sources migrate to ordinary S as
+the frontend supports their constructs — their executable
+implementations stay E, as K's computational implementation does — and
+the profile is retired at the flip. Moving a file across the boundary
+changes its literals' and binders' reading (the table above) and is a
+recognized profile transition, beside the module-name change §3 already
+states.
 
 ## 9. Assumption policy and entries
 
@@ -1181,12 +1226,21 @@ inside E carrying no runtime proof.
 is a checked entry, and the driver's `-- ARG…` are validated against
 them in order before `ev` is invoked. `Int` parses a decimal with an
 optional leading `-`; `Nat` parses a decimal (a sign is refused); a
-parameter whose type is an inductive of two constructors, the first
-nullary and the second binary — the prelude's `(List Int)`, Init's
-`(List Nat)` — takes the argument's bytes as that list; any other
-parameter type is refused at the entry (`bad_entry`: no command-line
-argument supplies it), as is an entry whose last parameter is not a
-nullary-constructor type. The count must match (`argument_count`)
+parameter whose type is a **byte-list codec by identity** — the
+prelude's `(List Int)`, Init's `(List Nat)` or `(List Int)` — takes
+the argument's bytes as that list, each byte 0–255 an element (slice
+10; GPT-6 R59: before, any two-constructor type with a nullary first
+and a binary second constructor took them, so a `(type Tree (Empty)
+(Branch Tree Tree))` entry received `Branch` cells over integers — a
+value of no type, stuck at the first match on it; pin `entry_shape`,
+`entry_test`); any other parameter type is refused at the entry
+(`bad_entry`: no command-line argument supplies it), as is an entry
+whose last parameter is not a nullary-constructor type. Successful
+decoding establishes the codec's type and nothing more. **The World's
+identity is a stated Stage-0 limit:** the last parameter's type is
+taken as the World and its first constructor built over zero fields,
+whatever the type; the handler contract that names the World type and
+the capability behind it is phase 4's (`bin`, law §4.7; §11). The count must match (`argument_count`)
 once an entry has a checked parameter at all; an entry with the World
 alone takes any argument list, raw. A malformed argument is refused as
 `RunArg POSITION REASON TEXT` —
@@ -1347,6 +1401,9 @@ never compared as verdicts.
 | T5's "two validated instances of one interface" — §6.6 binds one implementation per view directory (§13 item 14) | law §8.2, T5 | 3, with item 14's `mod.req/` siblings, when a consumer needs two |
 | T5's "an imported theorem about the original still usable after a realization" with an **imported** theorem — every theorem about a realizable constant lies past the `Int` fixture (`ite_self` at export line 18,116); the native form of the fixture is pinned (`realize_theorem`) | law §4.4, T5 | 3, when the prefix grows for the `Init` realizations |
 | `CheckedEnv` sealed: K one directory module behind a view (§6.6); complete when the first `meta/` consumer is behind it (§13 item 26, R52) | §3.5, §8.2 | 3, the opener |
+| the Stage-1 authoring facilities ordinary source needs before the broad port (GPT-6 R60): list literals with expected-type-driven empty lists; a negative-numeral rule with no silent `Int → Nat`; named-field construction and update, a changed dependent field an explicit obligation, never hidden by the sugar; a `Name` literal or construction that forges no declaration, node or environment identity (§3.3); a scoped fresh-name supply in ordinary code where `gen_fresh` was; the public byte and text adapters (`ByteArray` for raw bytes, `String` for text, the prelude's cells an internal adapter) decided with the first host-facing S library — each with a first example before the port pays for its absence | §5.1 Stage 1; §12.6 | 3, before the broad migration |
+| the checked module instance (GPT-6 R57): the substitution from view parameters to implementation declarations and evidence recorded, the `fulfills` proofs' assumptions inherited by the instantiated consumer, a stricter policy refusing the result, one consumer proof used with two implementations without cloning it, revisions bound so spellings alone mix nothing | law §8.2, T5; §6.5 | 3, the two-instance gate |
+| programmatic validation (GPT-6 R61): a client that builds a `Prog` or declarations as data validates them through the public services without a source round trip — item 15's fusion is an implementation choice, the dump of §10 a conformance format, neither the representation | §9.3, T6 | 4 |
 | user notation | §5.3 departure 6 | never in v1 |
 
 ## 12. Changes from v2 — the compatibility ledger
@@ -1484,7 +1541,9 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
    imported names do not (`List.length`), the import being their
    identity. Alternative: prefix imports too (`Init.List.length` in K),
    which renames every constant in every imported term at import time
-   and changes the accelerator pins' identity hashes.
+   and changes the accelerator pins' identity hashes. **Clarified
+   (GPT-6 R61, slice 10):** the construction is not collision-free;
+   a collision is refused, never conflated (§3).
 2. **`.{u v}` universe suffix** on declared and cited names, lexed as
    a level list with the `(Sort …)` grammar. Alternative: a separate
    `(@ NAME LEVEL…)` form.
@@ -1502,10 +1561,19 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
    Stage 0; the `type` form opens its own namespace for the rest of
    its file so today's bare `Nil`/`Cons` keep working.
 8. **The toolchain profile is a property of the package layout**, not
-   of a marker form (§8).
+   of a marker form (§8). **Amended (GPT-6 R55, slice 10):** the layout
+   selects a named, bounded compatibility profile recorded per module
+   (`profile=toolchain`); placement grants no privilege in K, the
+   profile is bring-up and never a dialect, ordinary S is the
+   destination of the toolchain's sources (§8, §6.7).
 9. **`ev`'s `if` rule**: the then-branch iff the condition's cell is the
    second constructor of its type — one rule for `Bool`, `Decidable`
-   and the profile's `Bool`.
+   and the profile's `Bool`. **Amended (GPT-6 R56, slice 10):** the
+   condition's type must be a transparent two-constructor type — the
+   observation is the type's, `ev`'s tag bit its implementation — and
+   the classifier refuses a `sig type` (`private_if`) or any other
+   arity (`if_type`) wherever the declarations fix the type; a type
+   parameter is unchecked at Stage 0, stated (§6.2, §6.7).
 10. **Visibility is the transitive import closure** (§3.3, slice 3).
     Alternative: Rust-style explicit re-export, which v2 never had and
     the toolchain's own files would need lines for.
@@ -1519,10 +1587,18 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     substituted at each signature, the implementation's forms consumed
     in file order up to the implementing one. Alternative: the old
     tree's two same-named typedefs in one closure with a preferring
-    lookup, which K's one-name environment cannot carry.
+    lookup, which K's one-name environment cannot carry. **Amended
+    (GPT-6 R57, slice 10):** the fork's `DISCHARGE` kinds are three
+    statuses — a signature matched (`type`), an implementation linked
+    (`fn`: the parameter stays a parameter), a law `proved` or
+    `pending` — and none is the logical instance; that construction is
+    phase 3's (§6.5, §11).
 13. **A view's theorem is not re-checked in the fork**: checked once
     against the parameters, it is bound by its closure; the fork
-    discharges parameters, not theorems.
+    discharges parameters, not theorems. **Amended (R57):** the
+    no-recheck is warranted by the instantiation construction, whose
+    result inherits the supplied evidence's assumptions; at Stage 0
+    nothing is instantiated and the records name the parts (§6.5).
 14. **The implementation is `DIR/BASE.shard`** (the old tree's rule),
     not every file in the directory; `mod.req/` siblings wait for a
     consumer.
@@ -1532,11 +1608,16 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     declared name shadows a primitive's; exhaustiveness is the pattern
     matrix; the leak check reads static types as far as the
     declarations determine them. Alternative: a separate pass after
-    reading, which would re-walk every body.
+    reading, which would re-walk every body. **Clarified (R61):** the
+    fusion is an implementation choice; a programmatic client's
+    validation without a text round trip is T6's (§11).
 16. **The profile is the `kernel/` and `meta/` directories**, E only,
     flat scope — every visible declaration by any suffix, no `use`.
     Alternative: `use` lines in the toolchain's own files, which the
     flat rule makes unnecessary at Stage 0 (records §7 expected them).
+    **Amended (R55):** E only and flat scope are the profile's current
+    coverage, not these libraries' permanent authoring restriction
+    (§8).
 17. **`ev` is a machine with an explicit continuation** over a private
     linked representation (§6.7); the comparison primitives return the
     toolchain prelude's `Bool`, the wire's cells are the prelude's.
@@ -1547,6 +1628,9 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     link declaration, no run-time resolution. Alternative: an `ELink`
     declaration resolved by the linker, tried and removed — the fork
     already replays the view with the implementation substituted.
+    **Amended (R57):** the substitution is the operational link; the
+    checked instance record is explicit when it exists (phase 3) and
+    linkage never upgrades a parameter's logical status.
 19. **`gen_fresh` is dropped**; `realize` (both forms, §7) and R45's
     third test moved to slice 5b (§7.5, items 20–24).
 20. **The equations' types come from the classifier and K, not Stage
@@ -1565,13 +1649,20 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     its identities, plus the three decisions; an entry is never
     realized. Alternative: one entry per operator with the identity
     chosen by argument type — the mode per entry §6.4 refused.
+    **Amended (GPT-6 R58, slice 10):** an entry's meaning is K's rule;
+    the executor's correspondence is the primitive suite's conformance,
+    accounted and not exempt (§6.4).
 23. **A Stage-0 equation per leaf of the case tree**, the tree the
     body's leading matches on parameters and pattern variables
     compiled column by column; a match elsewhere and an `if` are the
     recursor with a constant motive; numeral patterns are Stage 1's.
     Descent is syntactic; a callee must be realized earlier in the
     file. Alternative: one equation per arm of the outermost match
-    only, which cannot be `rfl` for a nested pattern.
+    only, which cannot be `rfl` for a nested pattern. **Amended (GPT-6
+    R58, slice 10):** the equations are the correspondence only;
+    progress is a separate obligation, recorded once and carried by
+    every realization reaching it (`pending=`), and a retained
+    candidate is never a completed realization (§7.2, §7.5).
 24. **The `LATER` record is gone** with `realize` built; a `fulfills`
     outside an implementation check is the load error
     `fulfills_outside_impl`.
@@ -1613,13 +1704,18 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     determines, as level 0 is (§4). Alternative: refusing the idiom,
     which is v2's commonest; or a Stage-1 expected-kind resolution.
 
-29. **The checked entry's argument types are `Int`, `Nat`, any
-    two-constructor list type (the first constructor nullary, the
-    second binary) taking the bytes, and the World last** (§9, slice
-    7); the origin of a refused argument is its position and text. Alternative: a typed argument grammar (`--int N`), which the
+29. **The checked entry's argument types are `Int`, `Nat`, the
+    byte-list codecs by identity — the prelude's `(List Int)`, Init's
+    `(List Nat)` and `(List Int)` — and the World last** (§9, slice
+    7); the origin of a refused argument is its position and text.
+    Alternative: a typed argument grammar (`--int N`), which the
     entry's signature already states; or every entry reading
     `get_args` raw, which is the preconditioned kind and leaves T1's
-    checked half unbuilt.
+    checked half unbuilt. **Amended (GPT-6 R59, slice 10):** by
+    identity and element type, never by constructor shape (a `Tree`
+    with the list arities was a codec, and its entry received cells
+    over bytes); the World's identity is a stated Stage-0 limit until
+    phase 4's handler contract (§9).
 30. **`Init.NAME` cites the imported NAME explicitly** (§3.1, slice
     7): the scope adds the bare name as a candidate when the citation's
     first component is `Init` and the file sees `Init` (the reader's

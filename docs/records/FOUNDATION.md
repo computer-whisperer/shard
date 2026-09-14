@@ -387,6 +387,39 @@ slice 9 (`v3/README.md`). The user's go-ahead on the leans:
 | R54 positive conformance requires successful completion, not only equal output | accept — **landed 2026-09-13 (slice 9)** | `v3/t0_full.sh` `tie` (each engine's status captured and required 0, the tails printed on failure; a `T0:` verdict line required of each log; then `cmp`); `kernel/test/t0_gate_test.sh` (stub engines under a throwaway export: both complete and agree passes; both fail identically, one fails, identical logs without the verdict line — each fails) | the fixture's own status was already checked by `t0_fixture_test.sh`; the prefix's was not, and both ties discarded it with `\|\| true`. The full replay's status, verdict and closures were already required and are unchanged |
 
 
+### 4.9 R55–R62 (the LANGUAGE.md ratification memo, on `dabfa42`, answered 2026-09-14)
+
+The memo: `docs/archive/foundation-v3/SHARD_V3_LANGUAGE_RATIFICATION_MEMO_v0.1.md`
+("ratify most of the language direction, amend the contracts
+identified below, and distinguish the current Stage-0 profile from
+permanent language rules; continue the existing implementation plan";
+eight requests R55–R62 and a recommended disposition — ratify /
+profile / amend — for each of `LANGUAGE.md` §13's 33 items). Every
+source observation was verified against the tree; four of the memo's
+"reasoning examples, not executed" were **probed live** before
+answering (R56, R58, R59, R61 — the probes under a throwaway root,
+now pins). All eight accepted; landed as slice 10 (`v3/README.md`).
+The user's go-ahead: "agreed with your leans, proceed with the slice."
+
+| ID | disposition | where | notes |
+|---|---|---|---|
+| R55 make the bootstrap profile explicit; no directory-based authority | accept — contract text, landed 2026-09-14 (slice 10) | `LANGUAGE.md` §8 "What the profile is" (a named, bounded compatibility mechanism for bring-up; recorded per module; placement grants no privilege; ordinary S the destination; a profile transition recognized when a file crosses the boundary), §6.7's profile paragraph, §13 items 8 and 16 amended; `loader.shard` `RModule` carries the flag — `MODULE … profile=toolchain` | already the phase-3 guard ("the profile is bring-up, never a dialect"); no marker form, since §8's bootstrap reason stands; the cache test is the store's (phase 3); the "no privilege" half is item 26's seal criterion; the small ordinary-S library with an operation and a theorem is phase 3's Stage 1 (`fn` = `def` + `realize`) |
+| R56 a typed, representation-independent discriminator for `if` | accept — **FIXED 2026-09-14 (slice 10)**; probed live first | `classify.shard` `if_bad` (the condition's static type where the declarations fix it: a `sig type` is `private_if`, an inductive of other than two constructors or `Int`/`Nat`/`Symbol` is `if_type`; a type parameter unchecked at Stage 0, stated); pins `if_private`, `if_type`, `if_one`, `if_ok`; `LANGUAGE.md` §6.2 (the observation is the type's, `ev`'s bit its implementation), §6.7 item 5, §13 item 9 amended; `CANON.md` C9's domain | **live, and worse than the memo said:** a consumer's `(if h 1 0)` on a view's `sig type Handle` was RUNNABLE and the implementation's constructor order decided the branch at run time; a three-constructor type branched by ordinal parity (`Tri.B` then, `Tri.C` else); a one-constructor type never branched. The leak check covered `match` scrutinees only; the condition was never typed. The toolchain's own 20 closures classify clean under the new rule (parity 0 differ) |
+| R57 distinguish module matching, operational linkage and logical instantiation | accept the distinction as contract text; the construction deferred to the phase-3 two-instance gate | `LANGUAGE.md` §6.5 evidence binding (three statuses; the checked instance record inherits the `fulfills` proofs' assumptions; at Stage 0 the records name the parts and compose nothing), §6.6's `DISCHARGE` kinds, §11's row, §13 items 12, 13 and 18 amended; `loader_test` (the kinds `type` / `fn` / `pending` distinct; `IMPL PARAM lib.push fn` — the sig fn stays a parameter after an E match) | the records already distinguished the statuses (`DISCHARGE NAME fn` re-admits the parameter; `proved` / `pending` for a requirement); what is missing is the composite — a consumer's `params=` and an implementation's `fulfills` closures are never joined, and an extra axiom under a `fulfills` reaches no consumer's closure. That is the two-instance gate already in §11, now with the memo's acceptance tests in its row |
+| R58 separate realization evidence, progress, applicability and execution trust | accept — **FIXED 2026-09-14 (slice 10)**; probed live first | `loader.shard` `realize_roots` (a pending measure recorded once at its constant, `PENDING NAME measure`, and carried by every realization whose body reaches it: `REALIZE … pending=ROOT,…`; `Load` gains the roots table; `prog.shard` `calls_of`); pin `realize_pending_via`, `loader_test`; `LANGUAGE.md` §7.2 (a realization's evidence in its parts; a retained candidate versus a completed realization), §7.5 (the structural-only sentence corrected; the record), §7.1 (the derived view generates no equations; its implementation a bring-up trust dependency), §6.4 (the executor's correspondence is the primitive suite's conformance, not an exemption), §13 items 22 and 23 amended; `docs/TCB.md` bring-up item (7) | **live, exactly the memo's counterexample:** `def f n = 0` with the executable body `f (Nat.add n 1)` under `(measure n)` — the equation is true of the constant function, accepted by `rfl`; the realization attached with `PENDING main.f measure`; a second realization `g` calling `f` attached with no obligation at all. Now `g` and `h` (through `g`) carry `pending=main.f`. Nothing at Stage 0 requires the guarantee, so the narrower guarantee is the visible set; Stage 1's admission and the lowering read it |
+| R59 validated entry codecs and an explicit World/handler contract | accept — the codec half **FIXED 2026-09-14 (slice 10)**, probed live first; the World half a stated Stage-0 limit until phase 4 | `ev.shard` `list_ctors` by identity and element type (the prelude's `(List Int)`, Init's `(List Nat)` and `(List Int)`); pin `entry_shape`, `entry_test` (a `Tree` with the list arities and a `(List Bool)` are `bad_entry`; `(List Nat)` decodes by identity); `LANGUAGE.md` §9 (successful decoding establishes the codec's type; the World's identity a stated limit), §13 item 29 amended | **live:** `(type Tree (Empty) (Branch Tree Tree))` passed as an entry and `abc` arrived as `Branch 97 (Branch 98 (Branch 99 Empty))` — a value of no type, `stuck no_arm` at the first match on a field; a three-constructor type served as the World. The public wire (`ByteArray`/`String`) is §11's Stage-1 row with the first host-facing library (R60) |
+| R60 turn the small authoring gaps into positive Stage-1 commitments | accept — the Stage-1 plan's row, landed 2026-09-14 | `LANGUAGE.md` §11's new row (list literals, the negative-numeral rule, named-field construction and update with the dependent-field caveat, a `Name` literal that forges no identity, the scoped fresh-name supply, the byte and text adapters — each with a first example before the broad port); §12.6 unchanged as the owner table | no code now; the AT RISK rows already named the consumers and regressions; the memo adds the fresh-name supply and the dependent-update rule. Widths above 64 and `(lib …)` stay where §12.6 has them |
+| R61 keep identities and validation reusable beyond the current layout | accept with wording; the collision claim corrected, probed live first | `LANGUAGE.md` §3 (the construction is not collision-free; a collision is detected — `duplicate_name` for E, K's `already_declared` for L — never conflated), §13 items 1 and 15 clarified, §11's programmatic-validation row (T6, phase 4); pins `qualified_collision`, `qualified_collision_l` | **probed:** `a.shard` declaring `b.c` and `a/b.shard` declaring `c` both name `a.b.c`; both were already refused deterministically (the E case ends the second file, the L case refuses the second declaration and the citation resolves to the first), so the behavior stood and §3's "two modules can never collide" was false as written. `NAME.realize_N` stays a profile (item 4); the projection stays within its stated domain (item 33) |
+| R62 consolidate LANGUAGE.md into one current normative account | accept — landed 2026-09-14 (slice 10) | `LANGUAGE.md`: the status preamble cut to a declaration (revision, stage, normative parent, scope, the record's location); the seven conflicts fixed in their original paragraphs — §3.3 and §6.5 (the seal's boundary is K), §7.2 (one equation per case-tree leaf), §8's table (the profile keeps flat scope), §6.4 (`gen_fresh` out of the table), §6.3 (Stage 0 has declared E types and the static reconstruction, not Stage 1's typing), §7.5 (structural or a retained candidate), §6.2 (`ev`'s definition without the old tree's frontier loop; §6.7 is the machine); the slice-5 measurements marked history | the chronology the preamble carried is records §9's; nothing deleted, nothing upgraded. The memo's recommended disposition for each of the 33 items (eighteen ratify, seven profile, eight amend) is the ratifier's input, recorded here and not in §13, which stays the implementation's list until the user's pass |
+
+GPT-6's recommended dispositions of `LANGUAGE.md` §13, for the
+ratifier: **ratify** 2, 3, 5, 7, 11, 19, 24, 26, 28, 30, 31, 32 (and
+1 and 10 with the R61 clarifications, 15 as an implementation choice,
+23 with its amendment, 17 and 21 as ratify-or-profile); **profile**
+4, 6, 14, 20, 25, 27, 33; **amend** 8, 9, 12, 13, 16, 18, 22, 29 —
+eighteen, seven and eight; every amendment is now in the item's text
+(slice 10). My leans agreed with all 33.
+
 - **The hash-only accelerator pin (2026-09-12, GPT-6 R42; §4.7).**
   Phase 1's `pin_if_matches` enabled a shortcut on a 61-bit structural
   hash match alone, against §3.2's letter. Executed through K before the
@@ -1396,6 +1429,29 @@ is `docs/FOUNDATION.md` §5.3.
   profile (§1, §9 item 12 RULED) and GPT-6's positions on items 7–11;
   the seal's completion criterion in §13 item 26; §13 items 31–33.
   Tests: 22 entrypoints, 0 failed (parity 20 closures, 68,014 declaration lines, 43 s, every projection injective; calc 6 s and 155 s; route 2's byte-tie 21 s; the gate test's five scenarios). CI (pipeline 477, `4699cbe`, 2026-09-14): green — 22 entrypoints, calc byte-identical in 418 s, parity 119 s injective, route 2 53 s, both byte-ties complete, the full replay 2,418 s at 30.6 GB, all 20 pinned, closures identical (v3 3,916 s; the pipeline 4,065 s).
+- **2026-09-14 — slice 10: GPT-6's ratification memo on
+  `LANGUAGE.md` (R55–R62, on `dabfa42`), answered in §4.9 and
+  landed.** The user: "GPT-6 just finished it's review of LANGUAGE.md
+  -- take a look at the new memo" → the report verified every source
+  observation, found all seven rows of R62's conflict table real, and
+  probed four of the memo's "reasoning examples" live: an `if` on a
+  view's opaque type decided by the implementation's constructor order
+  (R56; a three-constructor type by ordinal parity), the increasing
+  recursion whose true equation proves while its pending measure
+  reaches no caller (R58), a `Tree` with the list arities taking bytes
+  into its fields (R59), the qualified-name collision refused but
+  documented as impossible (R61); "agreed with your leans, proceed
+  with the slice." Landed: the classifier types an `if`'s condition
+  (`private_if`, `if_type`); a pending measure is recorded once and
+  carried by every realization reaching it (`REALIZE … pending=`);
+  the entry's byte-list codecs by identity; `MODULE … profile=`;
+  eight pins; `LANGUAGE.md` consolidated under R62 with R55, R57,
+  R60 and R61 as contract text and nine §13 items amended in place;
+  `CANON.md` C9's domain; TCB's bring-up item (7); the memo archived.
+  Tests: 22 entrypoints, 0 failed (parity 20 closures, 68,076
+  declaration lines, 42 s, every projection injective — the first run
+  caught this slice's own `names_union` twin, resolved to
+  `axioms.shard`'s).
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 
@@ -1411,7 +1467,7 @@ is `docs/FOUNDATION.md` §5.3.
   | conformance 3: checker parity | routes 1 and 3 byte-tied over the whole export (phase 1) | covered |
   | conformance 4: independent pins | `t0_expected.txt`; the pins' `;; expect:` headers, fixed by hand | covered |
   | law §10.5's doc rows at phase 2 | `LANGUAGE.md` (slices 1–7), zed, the viewer's README, the CI and corpus headers, TCB (7); `v3/CANON.md` (8) | covered |
-  | `LANGUAGE.md` §13 and `CANON.md` §9, for ratification | items 1–33 (31–33 from slice 9); seven ruled and five open, GPT-6's positions on the five recorded (§4.8) | **outstanding**: the user's and GPT-6's pass at the phase boundary |
+  | `LANGUAGE.md` §13 and `CANON.md` §9, for ratification | items 1–33 (31–33 from slice 9; 1, 8, 9, 12, 13, 15, 16, 18, 22, 23, 29 amended or clarified in place at slice 10 under GPT-6's ratification memo, §4.9, which recommends a disposition for each); seven ruled and five open, GPT-6's positions on the five recorded (§4.8) | **outstanding**: the user's pass over the consolidated text |
 
 ## 10. Related records
 

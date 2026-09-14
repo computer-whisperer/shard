@@ -16,7 +16,7 @@ record that is not a module, an Init load or an acceptance:
 ;; expect: NAME refused REASON         also the classifier's refusal (slice 5): unsaturated, function_value,
 ;;                                     nonexhaustive, private_match, unknown_head, ambiguous_head, ambiguous_type, unbound_name,
 ;;                                     string_literal, list_sugar, symbol_literal, unknown_type,
-;;                                     pattern_type, pattern_name, nat_constructor, name_taken, …; a realize's (§7.5): unknown_constant,
+;;                                     pattern_type, pattern_name, nat_constructor, name_taken, private_if, if_type (slice 10), …; a realize's (§7.5): unknown_constant,
 ;;                                     realize_kind, realize_primitive, realize_signature, realize_descent, realize_recursion, realize_order, no_l_meaning,
 ;;                                     no_l_identity, untyped_subterm, equation_form, equations_count, recursion_structure,
 ;;                                     no_realization, erased_in_runtime, noncomputable; an equation K refused is

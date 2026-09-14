@@ -597,9 +597,12 @@
     (match (c_leak es tys t)
       ((Some (Leak st)) (Some (Pair (quote private_match) (append (show_name id) (append " matches a value of the sig type " (append (show_name st) " against a constructor (§6.5)"))))))
       ((Some (Mismatch st c)) (Some (Pair (quote pattern_type) (append (show_name id) (append " matches a value of type " (append (show_name st) (append " against the constructor " (show_name c))))))))
+      ((Some (IfPrivate st)) (Some (Pair (quote private_if) (append (show_name id) (append " branches on a value of the sig type " (append (show_name st) " (§6.2: the observation is the type's, not the cell's)"))))))
+      ((Some (IfType st k)) (Some (Pair (quote if_type) (append (show_name id) (append " branches on a value of type " (append (show_name st) (if (int_eq k 0) ", which is not an inductive (§6.2)" (append ", which has " (append (show_nat k) " constructors (§6.2: two)")))))))))
       (None None))))
-;; what the typed pass refuses: a sig type matched against a constructor; a constructor of another type
-(type Bad (Leak Name) (Mismatch Name Name))
+;; what the typed pass refuses: a sig type matched against a constructor; a constructor of another
+;; type; an `if` whose condition is a sig type, or a type that is not a two-constructor inductive
+(type Bad (Leak Name) (Mismatch Name Name) (IfPrivate Name) (IfType Name Int))
 
 ;; exhaustiveness: every match, by the pattern matrix
 (fn c_exh ((es ESt) (t ETerm)) Bool
@@ -700,7 +703,24 @@
     ((EIf a b c)
      (match (c_leak es tys a)
        ((Some x) (Some x))
-       (None (match (c_leak es tys b) ((Some x) (Some x)) (None (c_leak es tys c))))))))
+       (None
+        (match (if_bad es (c_type es tys a))
+          ((Some x) (Some x))
+          (None (match (c_leak es tys b) ((Some x) (Some x)) (None (c_leak es tys c))))))))))
+;; an `if`'s condition (§6.2; GPT-6 R56, slice 10): where the declarations determine its static type,
+;; that type must be a transparent two-constructor inductive — Bool, Init's Bool, Decidable, a type —
+;; whose second constructor is the observation `if` makes. A sig type is the leak (`private_if`: the
+;; tag bit would read the implementation's constructor order through the view); an inductive of
+;; another arity, or Int, Nat, Symbol, is `if_type`. A type the pass cannot fix (a type parameter)
+;; is unchecked at Stage 0, as a match on one is.
+(fn if_bad ((es ESt) (st (Option EType))) (Option Bad)
+  (match st
+    ((Some (ETCon n _))
+     (match (es_info es n)
+       ((Some (EISigType _)) (Some (IfPrivate n)))
+       ((Some (EIInd _ ctors)) (if (int_eq (len ctors) 2) None (Some (IfType n (len ctors)))))
+       (_ (if (builtin_type n) (Some (IfType n 0)) None))))
+    (_ None)))
 (fn c_leak_all ((es ESt) (tys (List (Option EType))) (ts (List ETerm))) (Option Bad)
   (measure (struct ts))
   (match ts (Nil None) ((Cons t r) (match (c_leak es tys t) ((Some x) (Some x)) (None (c_leak_all es tys r))))))

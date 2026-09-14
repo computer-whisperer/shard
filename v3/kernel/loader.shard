@@ -131,7 +131,7 @@
 (type InitSt (InitNone) (InitSt Run (List Int) (List (List Int)) Name Int))
 
 (type Rec
-  (RModule Name (List Int) Int (List Name))   ; a module loaded: path, file, hash, its closure
+  (RModule Name (List Int) Int (List Name) Bool)   ; a module loaded: path, file, hash, its closure, in the toolchain profile (§8; R55)
   (RInit Name Int)                            ; the Init prefix loaded through NAME: declarations admitted so far
   (RAccept Name Name Int (List Name) Name (List Name))  ; declaration, module, content fingerprint, axiom closure, the Init prefix at the check (Anon = none), the view parameters it rests on
   (RParam Name Symbol Int)                    ; a view parameter admitted: kind (type / fn / requirement), a sig type's arity
@@ -140,7 +140,7 @@
   (RPending Name Symbol)                      ; sorry: read, admits nothing
   (RRun Symbol Name)                          ; an E declaration classified (§6.7): kind (fn / extern / type), R45's runnable status
   (RClassify Name Symbol (List Int))          ; the classifier refused: reason, message (counts as refused)
-  (RRealize Name Symbol (List Name))          ; a realization attached (§7.5): kind (supplied / view), its equations' identities
+  (RRealize Name Symbol (List Name) (List Name))   ; a realization attached (§7.5): kind (supplied / view), its equations' identities, the pending roots it carries (R58)
   (RDischarge Name Symbol)                    ; the implementation check: a parameter discharged (type / fn / proved) or pending
   (RImplErr Name Symbol (List Int))           ; the implementation check: a parameter without its implementation, a mismatch
   (RImplRec Rec)                              ; a record of the implementation's fork (its own declarations)
@@ -150,33 +150,36 @@
 ;; root, environment, closure memo, modules, the Init stream, declaration →
 ;; module, pending names, the loading stack (cycles), records newest first,
 ;; the export chunk files the driver named, the view parameters admitted (§6.6),
-;; the E table (classify.shard: every E declaration by identity and suffix)
-(type Load (Load (List (List Int)) CheckedEnv AxMemo (List Mod) InitSt (IntMap (List (Pair Name Name))) (List Name) (List Name) (List Rec) (List (List Int)) (List Name) ESt))
+;; the E table (classify.shard: every E declaration by identity and suffix),
+;; the pending roots each realization carries (§7.5; R58)
+(type Load (Load (List (List Int)) CheckedEnv AxMemo (List Mod) InitSt (IntMap (List (Pair Name Name))) (List Name) (List Name) (List Rec) (List (List Int)) (List Name) ESt (List (Pair Name (List Name)))))
 (fn load0 ((root (List (List Int))) (chunks (List (List Int)))) Load
-  (Load root (CheckedEnv IMEmpty False Nil 0) (ax_memo_empty) Nil InitNone IMEmpty Nil Nil Nil chunks Nil (es0)))
-(fn ld_root ((l Load)) (List (List Int)) (match l ((Load r _ _ _ _ _ _ _ _ _ _ es) r)))
-(fn ld_env ((l Load)) CheckedEnv (match l ((Load _ e _ _ _ _ _ _ _ _ _ es) e)))
-(fn ld_memo ((l Load)) AxMemo (match l ((Load _ _ m _ _ _ _ _ _ _ _ es) m)))
-(fn ld_mods ((l Load)) (List Mod) (match l ((Load _ _ _ ms _ _ _ _ _ _ _ es) ms)))
-(fn ld_init ((l Load)) InitSt (match l ((Load _ _ _ _ i _ _ _ _ _ _ es) i)))
-(fn ld_tbl ((l Load)) (IntMap (List (Pair Name Name))) (match l ((Load _ _ _ _ _ t _ _ _ _ _ es) t)))
-(fn ld_pending ((l Load)) (List Name) (match l ((Load _ _ _ _ _ _ p _ _ _ _ es) p)))
-(fn ld_stack ((l Load)) (List Name) (match l ((Load _ _ _ _ _ _ _ s _ _ _ es) s)))
-(fn ld_recs ((l Load)) (List Rec) (match l ((Load _ _ _ _ _ _ _ _ rs _ _ es) (rev rs))))
-(fn ld_chunks ((l Load)) (List (List Int)) (match l ((Load _ _ _ _ _ _ _ _ _ c _ es) c)))
-(fn ld_params ((l Load)) (List Name) (match l ((Load _ _ _ _ _ _ _ _ _ _ ps es) ps)))
-(fn ld_with_env ((l Load) (e CheckedEnv) (m AxMemo)) Load (match l ((Load r _ _ ms i t p s rs c ps es) (Load r e m ms i t p s rs c ps es))))
-(fn ld_add_mod ((l Load) (md Mod)) Load (match l ((Load r e m ms i t p s rs c ps es) (Load r e m (Cons md ms) i t p s rs c ps es))))
-(fn ld_with_init ((l Load) (i InitSt)) Load (match l ((Load r e m ms _ t p s rs c ps es) (Load r e m ms i t p s rs c ps es))))
-(fn ld_with_tbl ((l Load) (t (IntMap (List (Pair Name Name))))) Load (match l ((Load r e m ms i _ p s rs c ps es) (Load r e m ms i t p s rs c ps es))))
-(fn ld_add_pending ((l Load) (n Name)) Load (match l ((Load r e m ms i t p s rs c ps es) (Load r e m ms i t (Cons n p) s rs c ps es))))
-(fn ld_with_stack ((l Load) (s (List Name))) Load (match l ((Load r e m ms i t p _ rs c ps es) (Load r e m ms i t p s rs c ps es))))
-(fn ld_rec ((l Load) (x Rec)) Load (match l ((Load r e m ms i t p s rs c ps es) (Load r e m ms i t p s (Cons x rs) c ps es))))
-(fn ld_add_param ((l Load) (n Name)) Load (match l ((Load r e m ms i t p s rs c ps es) (Load r e m ms i t p s rs c (Cons n ps) es))))
-(fn ld_e ((l Load)) ESt (match l ((Load _ _ _ _ _ _ _ _ _ _ _ es) es)))
-(fn ld_with_e ((l Load) (es ESt)) Load (match l ((Load r e m ms i t p s rs c ps _) (Load r e m ms i t p s rs c ps es))))
-(fn ld_recs_raw ((l Load)) (List Rec) (match l ((Load _ _ _ _ _ _ _ _ rs _ _ es) rs)))
-(fn ld_with_recs_raw ((l Load) (rs (List Rec))) Load (match l ((Load r e m ms i t p s _ c ps es) (Load r e m ms i t p s rs c ps es))))
+  (Load root (CheckedEnv IMEmpty False Nil 0) (ax_memo_empty) Nil InitNone IMEmpty Nil Nil Nil chunks Nil (es0) Nil))
+(fn ld_root ((l Load)) (List (List Int)) (match l ((Load r _ _ _ _ _ _ _ _ _ _ es _) r)))
+(fn ld_env ((l Load)) CheckedEnv (match l ((Load _ e _ _ _ _ _ _ _ _ _ es _) e)))
+(fn ld_memo ((l Load)) AxMemo (match l ((Load _ _ m _ _ _ _ _ _ _ _ es _) m)))
+(fn ld_mods ((l Load)) (List Mod) (match l ((Load _ _ _ ms _ _ _ _ _ _ _ es _) ms)))
+(fn ld_init ((l Load)) InitSt (match l ((Load _ _ _ _ i _ _ _ _ _ _ es _) i)))
+(fn ld_tbl ((l Load)) (IntMap (List (Pair Name Name))) (match l ((Load _ _ _ _ _ t _ _ _ _ _ es _) t)))
+(fn ld_pending ((l Load)) (List Name) (match l ((Load _ _ _ _ _ _ p _ _ _ _ es _) p)))
+(fn ld_stack ((l Load)) (List Name) (match l ((Load _ _ _ _ _ _ _ s _ _ _ es _) s)))
+(fn ld_recs ((l Load)) (List Rec) (match l ((Load _ _ _ _ _ _ _ _ rs _ _ es _) (rev rs))))
+(fn ld_chunks ((l Load)) (List (List Int)) (match l ((Load _ _ _ _ _ _ _ _ _ c _ es _) c)))
+(fn ld_params ((l Load)) (List Name) (match l ((Load _ _ _ _ _ _ _ _ _ _ ps es _) ps)))
+(fn ld_with_env ((l Load) (e CheckedEnv) (m AxMemo)) Load (match l ((Load r _ _ ms i t p s rs c ps es pm) (Load r e m ms i t p s rs c ps es pm))))
+(fn ld_add_mod ((l Load) (md Mod)) Load (match l ((Load r e m ms i t p s rs c ps es pm) (Load r e m (Cons md ms) i t p s rs c ps es pm))))
+(fn ld_with_init ((l Load) (i InitSt)) Load (match l ((Load r e m ms _ t p s rs c ps es pm) (Load r e m ms i t p s rs c ps es pm))))
+(fn ld_with_tbl ((l Load) (t (IntMap (List (Pair Name Name))))) Load (match l ((Load r e m ms i _ p s rs c ps es pm) (Load r e m ms i t p s rs c ps es pm))))
+(fn ld_add_pending ((l Load) (n Name)) Load (match l ((Load r e m ms i t p s rs c ps es pm) (Load r e m ms i t (Cons n p) s rs c ps es pm))))
+(fn ld_with_stack ((l Load) (s (List Name))) Load (match l ((Load r e m ms i t p _ rs c ps es pm) (Load r e m ms i t p s rs c ps es pm))))
+(fn ld_rec ((l Load) (x Rec)) Load (match l ((Load r e m ms i t p s rs c ps es pm) (Load r e m ms i t p s (Cons x rs) c ps es pm))))
+(fn ld_add_param ((l Load) (n Name)) Load (match l ((Load r e m ms i t p s rs c ps es pm) (Load r e m ms i t p s rs c (Cons n ps) es pm))))
+(fn ld_e ((l Load)) ESt (match l ((Load _ _ _ _ _ _ _ _ _ _ _ es _) es)))
+(fn ld_with_e ((l Load) (es ESt)) Load (match l ((Load r e m ms i t p s rs c ps _ pm) (Load r e m ms i t p s rs c ps es pm))))
+(fn ld_recs_raw ((l Load)) (List Rec) (match l ((Load _ _ _ _ _ _ _ _ rs _ _ es _) rs)))
+(fn ld_with_recs_raw ((l Load) (rs (List Rec))) Load (match l ((Load r e m ms i t p s _ c ps es pm) (Load r e m ms i t p s rs c ps es pm))))
+(fn ld_pm ((l Load)) (List (Pair Name (List Name))) (match l ((Load _ _ _ _ _ _ _ _ _ _ _ _ pm) pm)))
+(fn ld_add_pm ((l Load) (n Name) (roots (List Name))) Load (match l ((Load r e m ms i t p s rs c ps es pm) (Load r e m ms i t p s rs c ps es (Cons (Pair n roots) pm)))))
 (fn ld_find_mod ((ms (List Mod)) (p Name)) (Option Mod)
   (measure (struct ms))
   (match ms (Nil None) ((Cons m r) (if (name_eq (mod_path m) p) (Some m) (ld_find_mod r p)))))
@@ -384,8 +387,25 @@
               ((PolOut n out) (ld_rec (ld_with_env l (ld_env l) (ax_memo_empty)) (RPolicy n out)))
               ((PolOk memo1 recs)
                (let ((l1 (recs_add (ld_with_tbl (ld_with_env l env1 memo1) (tbl_add_all (ld_tbl l) (decls_declare env1 thms) (fx_module f))) recs)))
-                 (let ((l2 (ld_rec (ld_with_e l1 (es_add_decl (es_register_all es1 (fx_module f) (decl_infos d)) d)) (RRealize k (realize_kind s) (decls_declare env1 thms)))))
-                   (if pending (ld_rec l2 (RPending k (quote measure))) l2))))))))))))
+                 (let ((roots (realize_roots l1 k d pending)))
+                   (let ((l2 (ld_rec (ld_with_e (ld_add_pm l1 k roots) (es_add_decl (es_register_all es1 (fx_module f) (decl_infos d)) d)) (RRealize k (realize_kind s) (decls_declare env1 thms) roots))))
+                     (if pending (ld_rec l2 (RPending k (quote measure))) l2)))))))))))))
+;; the pending obligations a realization carries (§7.5; GPT-6 R58, slice 10): its own measure when
+;; it is not structural, and every root a callee's realization already carries — an obligation is
+;; recorded once, at its constant (PENDING), and every realization that reaches it names it
+;; (REALIZE … pending=), so a retained candidate is never mistaken for a completed realization
+;; through a caller
+(fn realize_roots ((l Load) (k Name) (d EDecl) (pending Bool)) (List Name)
+  (let ((inherited (roots_of (ld_pm l) (match d ((EFn _ _ _ _ _ body) (calls_of body)) (_ Nil)) Nil)))
+    (if pending (Cons k inherited) inherited)))
+(fn roots_of ((pm (List (Pair Name (List Name)))) (calls (List Name)) (acc (List Name))) (List Name)
+  (measure (struct calls))
+  (match calls
+    (Nil (rev acc))
+    ((Cons c r) (roots_of pm r (match (pm_find pm c) ((Some rs) (names_union acc rs)) (None acc))))))   ; axioms.shard's union
+(fn pm_find ((pm (List (Pair Name (List Name)))) (n Name)) (Option (List Name))
+  (measure (struct pm))
+  (match pm (Nil None) ((Cons (Pair k rs) r) (if (name_eq k n) (Some rs) (pm_find r n)))))
 ;; the refusal's subject: the target's identity when it resolves, else the form's name
 (fn realize_subject ((sc Scope) (env CheckedEnv) (s SExpr)) Name
   (match s
@@ -594,7 +614,7 @@
                    ((Pair (Pair l2 (Some f)) w3)
                     (let ((fp (if view (Some (ForkPt (ld_with_stack l1 (ld_stack l)) f1 rest)) None)))
                       (Pair (Pair (ld_rec (ld_add_mod (ld_with_stack l2 (ld_stack l)) (Mod mp (join_path rel) (fx_hash f) (fx_vis f) (fx_init f) fp True))
-                                          (RModule mp (join_path rel) (fx_hash f) (fx_vis f)))
+                                          (RModule mp (join_path rel) (fx_hash f) (fx_vis f) (fx_profile f)))
                                   fp)
                             w3)))
                    ((Pair (Pair l2 None) w3) (Pair (Pair (ld_add_failed (ld_with_stack l2 (ld_stack l)) mp rel) None) w3))))))))))))))))))))
@@ -941,7 +961,7 @@
 (fn show_rec ((x Rec)) (List Int)
   (measure (struct x))
   (match x
-    ((RModule m file h cl) (append "MODULE " (append (show_name m) (append " file=" (append file (append " hash=" (append (show_nat h) (append " sees=" (show_names_c cl)))))))))
+    ((RModule m file h cl pf) (append "MODULE " (append (show_name m) (append " file=" (append file (append " hash=" (append (show_nat h) (append " sees=" (append (show_names_c cl) (if pf " profile=toolchain" ""))))))))))
     ((RInit n k) (append "INIT " (append (show_name n) (append ": " (append (show_nat k) " declarations admitted")))))
     ((RAccept n m h axs pfx ps)
      (append "ACCEPT " (append (show_name n) (append " module=" (append (show_name m) (append " hash=" (append (show_nat h)
@@ -955,7 +975,7 @@
     ((RPending n r) (append "PENDING " (append (show_name n) (append " " (chars_of_sym r)))))
     ((RRun k n) (append "RUNNABLE " (append (chars_of_sym k) (append " " (show_name n)))))
     ((RClassify n e m) (append "REFUSE " (append (show_name n) (append " " (append (chars_of_sym e) (append ": " m))))))
-    ((RRealize n k eqs) (append "REALIZE " (append (show_name n) (append " " (append (chars_of_sym k) (append " equations=" (show_names_c eqs)))))))
+    ((RRealize n k eqs roots) (append "REALIZE " (append (show_name n) (append " " (append (chars_of_sym k) (append " equations=" (append (show_names_c eqs) (match roots (Nil "") (_ (append " pending=" (show_names_c roots)))))))))))
     ((RReadErr file e m) (append "READ-ERROR " (append file (append " " (append (chars_of_sym e) (append ": " m))))))
     ((RLoadErr file e m) (append "LOAD-ERROR " (append file (append " " (append (chars_of_sym e) (append ": " m))))))))
 
@@ -971,7 +991,7 @@
   (match acc
     ((Cons a (Cons b (Cons u (Cons c (Cons d (Cons e (Cons g Nil)))))))
      (match x
-       ((RModule _ _ _ _) (list (+ a 1) b u c d e g))
+       ((RModule _ _ _ _ _) (list (+ a 1) b u c d e g))
        ((RAccept _ _ _ _ _ _) (list a (+ b 1) u c d e g))
        ((RParam _ _ _) (list a (+ b 1) u c d e g))
        ((RRun _ _) (list a b (+ u 1) c d e g))
@@ -979,7 +999,7 @@
        ((RRefuse _ _) (list a b u (+ c 1) d e g))
        ((RPolicy _ _) (list a b u (+ c 1) d e g))
        ((RPending _ _) (list a b u c (+ d 1) e g))
-       ((RRealize _ _ _) (list a b u c d (+ e 1) g))
+       ((RRealize _ _ _ _) (list a b u c d (+ e 1) g))
        ((RDischarge _ _) acc)
        ((RImplErr _ _ _) (list a b u c d e (+ g 1)))
        ((RImplRec y) (rec_count y acc))
