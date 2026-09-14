@@ -375,7 +375,7 @@ and §9 item 12 rules it; GPT-6's positions on §9's open items 7–11
 are recorded under each. R52: `LANGUAGE.md` §13 item 26 carries the
 seal's completion criterion — the first `meta/` consumer behind the
 boundary, not a view file its consumers bypass. §13 gains items
-31–33. Tests: 22 entrypoints, 0 failed (parity 20 closures, 68,014 declaration lines, 43 s, every projection injective; calc 6 s and 155 s; route 2's byte-tie 21 s; the gate test's five scenarios). **CI:** pending on this commit (the full gate: the replay, the closures, the 20 pins; R49's closure criterion E).
+31–33. Tests: 22 entrypoints, 0 failed (parity 20 closures, 68,014 declaration lines, 43 s, every projection injective; calc 6 s and 155 s; route 2's byte-tie 21 s; the gate test's five scenarios). **CI (pipeline 477, `4699cbe`): green** — 22 entrypoints, the calc differential byte-identical in 418 s on the runner (the port under `ev` 16 s, the old tree 402 s), parity byte-identical over 20 closures and 68,014 declaration lines in 119 s with every projection injective, route 2's byte-tie in 53 s, the gate test's five scenarios, the byte-ties with both engines complete (the fixture 301 lines, chunks 0–4 3,395 lines), the full-export replay on compiled K in 2,418 s at a 30.6 GB peak, all 20 candidates pinned, closures identical (engine 147 s, corpus 1,544 s, v3 3,916 s; the pipeline 4,065 s) — R49's closure criterion E met.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
@@ -418,7 +418,7 @@ each closes on its named gate:
 - **R49, the matcher's kind check** — a theorem under a candidate's
   name was pinned (an authorization hole, no false theorem: K types a
   head before it reduces it); **fixed at slice 9 (2026-09-13)**,
-  hostile battery 7e; the full gate on CI pending on this commit.
+  hostile battery 7e; **CLOSED on CI pipeline 477** (`4699cbe`, 2026-09-14): the full replay, the closures and all 20 pins under the kind check.
 - **The Stage-0 `fn` gap** — a `fn` has an E body and no L meaning, no
   totality check, and nothing in L cites it, until phase 3's Stage 1
   (`LANGUAGE.md` §0, §12.6); the driver says so per declaration since
