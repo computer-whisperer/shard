@@ -326,7 +326,7 @@ phase 2: the zed extension knows the V3 keywords and forms,
 and corpus headers name the phase-2 gate, `TCB.md`'s V3 roster cites
 the conformance suites. Tests: 21 entrypoints, 0 failed, 245 s
 (parity 20 closures, 67,976 declaration lines, 43 s; calc 6 s and 155
-s; route 2's byte-tie 20 s).
+s; route 2's byte-tie 20 s). **CI (pipeline 474, `bed273c`):** green — 21 entrypoints, the calc differential byte-identical in 401 s on the runner (the port under `ev` 16 s, the old tree's tower 385 s), parity byte-identical over 20 closures and 67,976 declaration lines in 128 s, route 2's byte-tie identical in 52 s, the full-export replay on compiled K in 2,478 s at a 29.6 GB peak, all 20 candidates pinned, closures identical, byte-ties identical (engine 194 s, corpus 1,547 s, v3 3,949 s; the pipeline 4,145 s).
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
