@@ -3,7 +3,10 @@
 # gated twice: (1) the interpreter byte-tie — `eval direct` and the binary
 # print byte-identical verbose per-declaration output on the committed fixture
 # and on the export's first 100,000 lines (the authority confirming the
-# engine, FOUNDATION §9.1); (2) the verdict line of the full replay equals the
+# engine, FOUNDATION §9.1) — each engine required to EXIT 0 and to print its
+# verdict line before the logs are compared (GPT-6 R54: two engines can agree
+# on a failure, and a truncated log is not a replay; kernel/test/
+# t0_gate_test.sh drives this script with stub engines); (2) the verdict line of the full replay equals the
 # pinned line in v3/t0_expected.txt, and (3) every admitted constant's axiom
 # closure (the driver's -a lines) is identical to the oracle's (init.axioms,
 # v3/axioms.lean; v3/t0_axioms_cmp.sh), and (4) every accelerator candidate
@@ -46,17 +49,29 @@ pins_ok() {
   fi
 }
 
+# tie LABEL ARGS…: both engines over ARGS; each must exit 0 and print a verdict
+# line (`T0: …`), then the logs must be byte-identical (R54)
+tie() {
+  local label=$1; shift
+  local si=0 sn=0
+  "$RUST_EVAL" direct v3/kernel/t0.shard "$@" > "$LOG.tie_interp" 2>&1 || si=$?
+  "$K" "$@" > "$LOG.tie_native" 2>&1 || sn=$?
+  if [ "$si" -ne 0 ] || [ "$sn" -ne 0 ]; then
+    echo "BYTE-TIE FAILED ($label): interpreter exit $si, native exit $sn"
+    echo "-- interpreter:"; tail -20 "$LOG.tie_interp"; echo "-- native:"; tail -20 "$LOG.tie_native"
+    return 1
+  fi
+  for side in interp native; do
+    grep -q '^T0: ' "$LOG.tie_$side" || { echo "BYTE-TIE FAILED ($label): no verdict line in the $side log"; tail -5 "$LOG.tie_$side"; return 1; }
+  done
+  cmp "$LOG.tie_interp" "$LOG.tie_native" || { echo "BYTE-TIE FAILED ($label)"; diff "$LOG.tie_interp" "$LOG.tie_native" | head -20; return 1; }
+  echo "   $label: identical ($(wc -l < "$LOG.tie_native") lines)"
+}
 echo "== byte-tie: interpreter vs compiled K, verbose + closures, on the fixture"
-"$RUST_EVAL" direct v3/kernel/t0.shard -v -a -p "$FIX" > "$LOG.tie_interp" 2>&1 || true
-"$K" -v -a -p "$FIX" > "$LOG.tie_native" 2>&1 || true
-cmp "$LOG.tie_interp" "$LOG.tie_native" || { echo "BYTE-TIE FAILED (fixture)"; diff "$LOG.tie_interp" "$LOG.tie_native" | head -20; exit 1; }
-echo "   fixture: identical ($(wc -l < "$LOG.tie_native") lines)"
+tie fixture -v -a -p "$FIX" || exit 1
 echo "== byte-tie: chunks 0-4 (100,000 lines)"
 PRE=$(ls "$CH"/probe_000[0-4])
-"$RUST_EVAL" direct v3/kernel/t0.shard -v -a -p $PRE > "$LOG.tie_interp" 2>&1 || true
-"$K" -v -a -p $PRE > "$LOG.tie_native" 2>&1 || true
-cmp "$LOG.tie_interp" "$LOG.tie_native" || { echo "BYTE-TIE FAILED (chunks 0-4)"; diff "$LOG.tie_interp" "$LOG.tie_native" | head -20; exit 1; }
-echo "   chunks 0-4: identical ($(wc -l < "$LOG.tie_native") lines)"
+tie "chunks 0-4" -v -a -p $PRE || exit 1
 tail -1 "$LOG.tie_native"
 pins_ok "$LOG.tie_native" || exit 1
 v3/t0_axioms_cmp.sh "$LOG.tie_native" "$DIR/init.axioms" || { echo "AXIOM CLOSURES DIFFER FROM THE ORACLE (chunks 0-4)"; exit 1; }

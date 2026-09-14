@@ -15,6 +15,12 @@
 ;;; `run_prog` performs each extern through the host's own extern of the
 ;;; same short name (kernel/host.shard's six) and resumes: §6.2's frontier
 ;;; loop without a search. No other file sees the linked representation.
+;;; A primitive's outcome is three-valued (GPT-6 R51, 2026-09-13): a value, a
+;;; GUARD failure (the input outside the operation's domain: a negative Nat, a
+;;; zero divisor) or an EXHAUSTED resource (K's literal limits, `nat_size` and
+;;; `nat_count`, checked BEFORE the work as tc.shard's `nat_apply` checks them)
+;;; — distinct through `EvRes` (`EvStuck` against `EvExhausted`) and the
+;;; driver, since a result past a limit says nothing about the input's validity.
 
 (import "host.shard")
 (import "prog.shard")
@@ -316,6 +322,7 @@
   (HVal IVal)
   (HOut Int)                            ; the function whose entry exhausted the fuel
   (HStuck Symbol Int)                   ; the reason, the function
+  (HExhausted Symbol Int)               ; a primitive's resource (nat_size, nat_count), the function
   (HExt Int (List IVal) Kont Int Int))  ; an extern to perform: its index, arguments, the continuation, cur, fuel
 
 (fn ev_term ((lk Linked) (env (List IVal)) (t LTerm) (k Kont) (cur Int) (fuel Int)) Halt
@@ -361,8 +368,9 @@
       (_ (HStuck (quote unknown_head) cur)))
   (if (int_eq kind 2)
     (match (prim_apply lk head (rev done))
-      ((Some v) (ev_ret lk v k cur fuel))
-      (None (HStuck (quote guard) cur)))
+      ((PrimVal v) (ev_ret lk v k cur fuel))
+      (PrimGuard (HStuck (quote guard) cur))
+      ((PrimOut r) (HExhausted r cur)))
     (HExt head (rev done) k cur fuel)))))
 (fn ev_match ((lk Linked) (v IVal) (arms (List LArm)) (env (List IVal)) (k Kont) (cur Int) (fuel Int)) Halt
   (measure (struct arms))
@@ -393,20 +401,24 @@
        ((Cons v vr) (match (match_pat p v env) ((Some env1) (match_fields pr vr env1)) (None None)))))))
 
 ;; ---- the primitives (prog.shard's codes; §6.4) ----------------------------------------------
-(fn prim_apply ((lk Linked) (code Int) (args (List IVal))) (Option IVal)
+;; a primitive's outcome: a value; the guard failed (the input outside the operation's
+;; domain); a resource exhausted (nat_size: a result past K's literal size, nat_count: a
+;; count past 32 bits) — checked before the work, never a domain failure
+(type PrimRes (PrimVal IVal) (PrimGuard) (PrimOut Symbol))
+(fn prim_apply ((lk Linked) (code Int) (args (List IVal))) PrimRes
   (match args
     ((Cons a (Cons b Nil))
      (match a
-       ((IVInt x) (match b ((IVInt y) (prim_ii lk code x y)) (_ None)))
-       ((IVSym s) (match b ((IVSym t) (if (int_eq code 5) (Some (bool_cell lk (sym_eq s t))) None)) (_ None)))
-       (_ None)))
+       ((IVInt x) (match b ((IVInt y) (prim_ii lk code x y)) (_ PrimGuard)))
+       ((IVSym s) (match b ((IVSym t) (if (int_eq code 5) (PrimVal (bool_cell lk (sym_eq s t))) PrimGuard)) (_ PrimGuard)))
+       (_ PrimGuard)))
     ((Cons a Nil)
      (if (int_eq code 16)
-       (match (bytes_out lk a Nil (wire_budget)) ((Some bs) (if (utf8_ok bs) (Some (IVSym (sym_of_chars bs))) None)) (None None))
+       (match (bytes_out lk a Nil (wire_budget)) ((Some bs) (if (utf8_ok bs) (PrimVal (IVSym (sym_of_chars bs))) PrimGuard)) (None PrimGuard))
      (if (int_eq code 17)
-       (match a ((IVSym s) (Some (bytes_in lk (chars_of_sym s)))) (_ None))
-       None)))
-    (_ None)))
+       (match a ((IVSym s) (PrimVal (bytes_in lk (chars_of_sym s)))) (_ PrimGuard))
+       PrimGuard)))
+    (_ PrimGuard)))
 ;; sym_of_chars takes UTF-8 (the host decodes the bytes into the symbol's text): the guard is
 ;; validity — an invalid sequence is stuck, never handed to the host, whose refusal is fatal
 (fn utf8_ok ((bs (List Int))) Bool
@@ -431,66 +443,72 @@
       ((Cons b r) (if (bool_and (le lo b) (le b hi)) (utf8_tail r (- k 1) 128 191) False)))))
 (fn shift_ok ((k Int)) Bool (bool_and (le 0 k) (lt k 64)))
 (fn nonneg2 ((x Int) (y Int)) Bool (bool_and (le 0 x) (le 0 y)))
-(fn prim_ii ((lk Linked) (code Int) (x Int) (y Int)) (Option IVal)
+(fn prim_ii ((lk Linked) (code Int) (x Int) (y Int)) PrimRes
   (if (lt code 8)
-    (if (int_eq code 0) (Some (bool_cell lk (int_eq x y)))
-    (if (int_eq code 1) (Some (IVInt (+ x y)))
-    (if (int_eq code 2) (Some (IVInt (- x y)))
-    (if (int_eq code 3) (Some (bool_cell lk (lt x y)))
-    (if (int_eq code 4) (Some (bool_cell lk (le x y)))
-    (if (int_eq code 6) (Some (IVInt (band x y)))
-    (if (int_eq code 7) (if (shift_ok y) (Some (IVInt (bshr x y))) None)
-      None)))))))
+    (if (int_eq code 0) (PrimVal (bool_cell lk (int_eq x y)))
+    (if (int_eq code 1) (PrimVal (IVInt (+ x y)))
+    (if (int_eq code 2) (PrimVal (IVInt (- x y)))
+    (if (int_eq code 3) (PrimVal (bool_cell lk (lt x y)))
+    (if (int_eq code 4) (PrimVal (bool_cell lk (le x y)))
+    (if (int_eq code 6) (PrimVal (IVInt (band x y)))
+    (if (int_eq code 7) (if (shift_ok y) (PrimVal (IVInt (bshr x y))) PrimGuard)
+      PrimGuard)))))))
   (if (lt code 16)
-    (if (int_eq code 8) (Some (IVInt (* x y)))
-    (if (int_eq code 9) (if (int_eq y 0) None (Some (IVInt (mod x y))))
-    (if (int_eq code 10) (if (int_eq y 0) None (Some (IVInt (/ x y))))
-    (if (int_eq code 11) (if (int_eq y 0) None (Some (IVInt (tmod x y))))
-    (if (int_eq code 12) (if (int_eq y 0) None (Some (IVInt (ediv x y))))
-    (if (int_eq code 13) (Some (IVInt (bor x y)))
-    (if (int_eq code 14) (Some (IVInt (bxor x y)))
-      (if (shift_ok y) (Some (IVInt (bshl x y))) None))))))))
+    (if (int_eq code 8) (PrimVal (IVInt (* x y)))
+    (if (int_eq code 9) (if (int_eq y 0) PrimGuard (PrimVal (IVInt (mod x y))))
+    (if (int_eq code 10) (if (int_eq y 0) PrimGuard (PrimVal (IVInt (/ x y))))
+    (if (int_eq code 11) (if (int_eq y 0) PrimGuard (PrimVal (IVInt (tmod x y))))
+    (if (int_eq code 12) (if (int_eq y 0) PrimGuard (PrimVal (IVInt (ediv x y))))
+    (if (int_eq code 13) (PrimVal (IVInt (bor x y)))
+    (if (int_eq code 14) (PrimVal (IVInt (bxor x y)))
+      (if (shift_ok y) (PrimVal (IVInt (bshl x y))) PrimGuard))))))))
   (if (lt code 22)
-    (if (int_eq code 18) (Some (IVInt (if (int_eq y 0) 0 (/ x y))))
-    (if (int_eq code 19) (Some (IVInt (if (int_eq y 0) x (tmod x y))))
-    (if (int_eq code 20) (Some (IVInt (if (int_eq y 0) 0 (ediv x y))))
-    (if (int_eq code 21) (Some (IVInt (if (int_eq y 0) x (mod x y))))
-      None))))
-  (if (bool_not (nonneg2 x y)) None
-  (if (int_eq code 22) (Some (IVInt (if (lt x y) 0 (- x y))))
-  (if (int_eq code 23) (Some (IVInt (band x y)))
-  (if (int_eq code 24) (Some (IVInt (bor x y)))
-  (if (int_eq code 25) (Some (IVInt (bxor x y)))
-  (if (int_eq code 26) (Some (IVInt (nat_shl x y)))
-  (if (int_eq code 27) (Some (IVInt (nat_shr x y)))
+    (if (int_eq code 18) (PrimVal (IVInt (if (int_eq y 0) 0 (/ x y))))
+    (if (int_eq code 19) (PrimVal (IVInt (if (int_eq y 0) x (tmod x y))))
+    (if (int_eq code 20) (PrimVal (IVInt (if (int_eq y 0) 0 (ediv x y))))
+    (if (int_eq code 21) (PrimVal (IVInt (if (int_eq y 0) x (mod x y))))
+      PrimGuard))))
+  (if (bool_not (nonneg2 x y)) PrimGuard
+  (if (int_eq code 22) (PrimVal (IVInt (if (lt x y) 0 (- x y))))
+  (if (int_eq code 23) (PrimVal (IVInt (band x y)))
+  (if (int_eq code 24) (PrimVal (IVInt (bor x y)))
+  (if (int_eq code 25) (PrimVal (IVInt (bxor x y)))
+  (if (int_eq code 26)
+    (if (int_eq x 0) (PrimVal (IVInt 0))   ; the zero shortcut first: no count, no size, no work
+    (if (lt (count_max_ev) y) (PrimOut (quote nat_count))
+    (if (lt (ev_nat_max_size) (+ (ev_nat_bytes x) (+ (ediv y 8) 1))) (PrimOut (quote nat_size))
+      (PrimVal (IVInt (* x (nat_pow_ev 2 y)))))))
+  (if (int_eq code 27) (PrimVal (IVInt (nat_shr x y)))
     (nat_prim lk code x y))))))))))))
 ;; K's accelerated Nat set under its identities (§7.5; tc.shard's nat_apply): total where
-;; Lean's are — Nat.div x 0 = 0, Nat.mod x 0 = x — and stuck where K exhausts: a result past
-;; K's literal size (nat_max_size, 2^27 bytes), a power's exponent past its count or its
-;; size estimate
-(fn nat_prim ((lk Linked) (code Int) (x Int) (y Int)) (Option IVal)
+;; Lean's are — Nat.div x 0 = 0, Nat.mod x 0 = x — and exhausted where K exhausts: a result
+;; past K's literal size (nat_max_size, 2^27 bytes), a power's or a shift's count past 32 bits
+;; (count_max), a power's size estimate — each before the work, as K's. A sum or a product is
+;; measured after: its size is bounded by its operands', which are literals under the cap.
+(fn nat_prim ((lk Linked) (code Int) (x Int) (y Int)) PrimRes
   (if (int_eq code 28) (nat_sized (+ x y))
   (if (int_eq code 29) (nat_sized (* x y))
-  (if (int_eq code 30) (Some (IVInt (if (int_eq y 0) 0 (/ x y))))
-  (if (int_eq code 31) (Some (IVInt (if (int_eq y 0) x (mod x y))))
-  (if (int_eq code 32) (Some (IVInt (nat_gcd_ev x y)))
+  (if (int_eq code 30) (PrimVal (IVInt (if (int_eq y 0) 0 (/ x y))))
+  (if (int_eq code 31) (PrimVal (IVInt (if (int_eq y 0) x (mod x y))))
+  (if (int_eq code 32) (PrimVal (IVInt (nat_gcd_ev x y)))
   (if (int_eq code 33)
-    (if (lt 4294967295 y) None
+    (if (lt (count_max_ev) y) (PrimOut (quote nat_count))
     (if (lt y 1) (nat_sized (nat_pow_ev x y))   ; x^0 = 1; the size estimate below divides by y
-    (if (bool_and (lt 1 x) (lt (ediv (ev_nat_max_size) y) (ev_nat_bytes x))) None
+    (if (bool_and (lt 1 x) (lt (ediv (ev_nat_max_size) y) (ev_nat_bytes x))) (PrimOut (quote nat_size))
       (nat_sized (nat_pow_ev x y)))))
-  (if (int_eq code 34) (Some (init_bool_cell lk (int_eq x y)))
-  (if (int_eq code 35) (Some (init_bool_cell lk (le x y)))
-  (if (int_eq code 36) (Some (dec_cell lk (int_eq x y)))
-  (if (int_eq code 37) (Some (dec_cell lk (lt x y)))
-  (if (int_eq code 38) (Some (dec_cell lk (le x y)))
-    None))))))))))))
+  (if (int_eq code 34) (PrimVal (init_bool_cell lk (int_eq x y)))
+  (if (int_eq code 35) (PrimVal (init_bool_cell lk (le x y)))
+  (if (int_eq code 36) (PrimVal (dec_cell lk (int_eq x y)))
+  (if (int_eq code 37) (PrimVal (dec_cell lk (lt x y)))
+  (if (int_eq code 38) (PrimVal (dec_cell lk (le x y)))
+    PrimGuard))))))))))))
 (fn ev_nat_max_size () Int 134217728)
 (fn ev_nat_bytes_go ((n Int) (acc Int)) Int
   (measure n)
   (if (le n 0) acc (ev_nat_bytes_go (ediv n 256) (+ acc 1))))
 (fn ev_nat_bytes ((n Int)) Int (ev_nat_bytes_go n 0))
-(fn nat_sized ((r Int)) (Option IVal) (if (lt (ev_nat_max_size) (ev_nat_bytes r)) None (Some (IVInt r))))
+(fn count_max_ev () Int 4294967295)
+(fn nat_sized ((r Int)) PrimRes (if (lt (ev_nat_max_size) (ev_nat_bytes r)) (PrimOut (quote nat_size)) (PrimVal (IVInt r))))
 (fn nat_gcd_ev ((a Int) (b Int)) Int
   (measure b)
   (if (le b 0) a (nat_gcd_ev b (mod a b))))
@@ -499,11 +517,9 @@
   (if (le e 0) 1
     (let ((h (nat_pow_ev b (ediv e 2))))
       (if (int_eq (mod e 2) 0) (* h h) (* (* h h) b)))))
-;; Nat.shiftLeft n k = n · 2^k and Nat.shiftRight n k = n / 2^k, total (Lean's), in
-;; steps of 62 bits over the host's guarded shifts; a right shift stops at zero
-(fn nat_shl ((n Int) (k Int)) Int
-  (measure k)
-  (if (lt k 62) (bshl n k) (nat_shl (bshl n 62) (- k 62))))
+;; Nat.shiftLeft n k = n · 2^k (K's form, after the guards above) and Nat.shiftRight n k =
+;; n / 2^k, total (Lean's), the right shift in steps of 62 bits over the host's guarded
+;; shift, stopping at zero — so its work is bounded by n's size, never by k
 (fn nat_shr ((n Int) (k Int)) Int
   (measure k)
   (if (int_eq n 0) 0 (if (lt k 62) (bshr n k) (nat_shr (bshr n 62) (- k 62)))))
@@ -537,6 +553,7 @@
     ((HVal v) (EvOk (val_out lk v)))
     ((HOut _) EvOut)
     ((HStuck r id) (EvStuck r (fn_name lk id)))
+    ((HExhausted r id) (EvExhausted r (fn_name lk id)))
     ((HExt _ _ _ cur _) (EvStuck (quote extern) (fn_name lk cur)))))
 ;; the function f of the program p on args, under fuel: a value, out of fuel, or stuck
 (fn ev ((p Prog) (f Name) (args (List Val)) (fuel Int)) EvRes
@@ -551,7 +568,7 @@
           ((Some ivs) (halt_res lk (ev_apply lk 1 id (rev ivs) KHalt id fuel)))))))))
 
 ;; ---- `run_prog`: the effectful driver (§6.2, §6.7; the checked entry, §9) --------------------
-(type RunRes (RunOk) (RunOut Name) (RunStuck Symbol Name) (RunLink Symbol (List Int)) (RunArg Int Symbol (List Int)))   ; RunArg: the argument's position, the reason, its text
+(type RunRes (RunOk) (RunOut Name) (RunExhausted Symbol Name) (RunStuck Symbol Name) (RunLink Symbol (List Int)) (RunArg Int Symbol (List Int)))   ; RunExhausted: a primitive's resource; RunArg: the argument's position, the reason, its text
 ;; f on the World with the program's arguments: the parameters before the World are the checked
 ;; entry (§9) — each command-line argument validated against its parameter's E type before ev
 ;; runs — the World the last parameter's first constructor; every extern performed by the host's
@@ -649,6 +666,7 @@
     ((HVal _) (Pair RunOk w))
     ((HOut id) (Pair (RunOut (fn_name lk id)) w))
     ((HStuck r id) (Pair (RunStuck r (fn_name lk id)) w))
+    ((HExhausted r id) (Pair (RunExhausted r (fn_name lk id)) w))
     ((HExt id args k cur fuel)
      (match (im_find (lk_fns lk) id)
        ((Some (LExtern _ short _))

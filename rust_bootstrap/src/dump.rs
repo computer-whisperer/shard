@@ -18,6 +18,12 @@
 //! is neither a declared type of the closure nor `Int`/`Symbol` is a type
 //! variable, as the V3 reader auto-binds it. The measure clause is not in
 //! the AST (`load_fn_def` steps over it) and not in the text.
+//!
+//! The text is a projection (dump.shard's header; GPT-6 R53): last name
+//! components, one rendering for a constructor, a call and an extern, no
+//! measure clause, one literal kind. The parity harness checks each closure
+//! for one declaration per short name per kind before comparing, so byte
+//! agreement is evidence where the projection is injective.
 
 use crate::ast::{Expr, ExternDef, FnDef, Module, Pat, Type, TypeDef};
 use std::collections::HashSet;

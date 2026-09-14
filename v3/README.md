@@ -345,6 +345,37 @@ toolchain's 163 `let`s, 10 nested). **Phase 2 closed on it
 evidence or its ruling in records §9's ledger — pending the
 ratification pass: `LANGUAGE.md` §13's thirty items and `CANON.md` §9's
 five open ones, the user's and GPT-6's by SHA.
+**Slice 9 (2026-09-13): the checkpoint memo's maintenance** — GPT-6's
+review of `b45cc22` (R49–R54, `docs/archive/foundation-v3/
+SHARD_V3_PHASE2_CHECKPOINT_MEMO_v0.1.md`; answered in records §4.8):
+four fixes with their regressions and two contract amendments, the
+foundation not reopened. R49: the accelerator matcher dispatches on
+the expected KIND before any exemption — a theorem named `Nat.add` in
+an environment without one was pinned (never applicable, since K
+types a head before it reduces it, `function_expected` on every use;
+probed before the fix), now admitted and not pinned; hostile battery
+7e, eight cases. R51: a primitive's outcome is a value, a guard
+failure or an EXHAUSTED resource, the third checked before the work
+as K's `nat_apply` checks it — `Nat.shiftLeft` under `ev` had no count
+cap, no size preflight and no zero shortcut (16 billion steps for a
+shift of zero by 10^12), and K's own `Nat.shiftRight` computed `2^k`
+for any `k`; both fixed, `EvExhausted nat_size | nat_count` distinct
+from `EvStuck guard` through the driver (exit 3 with fuel), the
+primitive suite at 127 cases. R53: frontend parity's text is a stated
+projection and each closure is checked injective before the tie —
+the first sweep found `take_line` declared twice with different
+bodies (`json.shard`, the reader kit; the kit's is `first_line`).
+R54: `t0_full.sh`'s byte-ties require each engine to exit 0 and print
+its verdict line before the logs are compared; `test/t0_gate_test.sh`
+drives the script with stub engines through five scenarios. R50:
+`CANON.md` §1 states the execution profile under which its discarding
+rules hold (value and World trace under adequate fuel; total,
+World-threaded E — Stage 1 and phase 4, both before the phase-6 gate)
+and §9 item 12 rules it; GPT-6's positions on §9's open items 7–11
+are recorded under each. R52: `LANGUAGE.md` §13 item 26 carries the
+seal's completion criterion — the first `meta/` consumer behind the
+boundary, not a view file its consumers bypass. §13 gains items
+31–33. Tests: 22 entrypoints, 0 failed (parity 20 closures, 68,014 declaration lines, 43 s, every projection injective; calc 6 s and 155 s; route 2's byte-tie 21 s; the gate test's five scenarios). **CI:** pending on this commit (the full gate: the replay, the closures, the 20 pins; R49's closure criterion E).
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
@@ -376,7 +407,18 @@ each closes on its named gate:
   a view of 87 signatures, a bootstrap resolver change, a
   `private_module` rule) waits for its first client outside `kernel/`,
   `meta/` (`LANGUAGE.md` §6.6, §13 item 26). Raw-API callers are
-  reviewed toolchain code until then.
+  reviewed toolchain code until then. **Completion criterion (GPT-6
+  R52, slice 9):** the seal is done when the first `meta/` consumer
+  imports K's view only — never `CheckedEnv`'s constructor, `env_pin`,
+  the admission path or a session's memo state, transitively or by a
+  profile shortcut — with the forged-node fixtures exercising the
+  public entry and a raw-construction client fixture beside them; a
+  view file whose consumers still import the implementation is not
+  the seal.
+- **R49, the matcher's kind check** — a theorem under a candidate's
+  name was pinned (an authorization hole, no false theorem: K types a
+  head before it reduces it); **fixed at slice 9 (2026-09-13)**,
+  hostile battery 7e; the full gate on CI pending on this commit.
 - **The Stage-0 `fn` gap** — a `fn` has an E body and no L meaning, no
   totality check, and nothing in L cites it, until phase 3's Stage 1
   (`LANGUAGE.md` §0, §12.6); the driver says so per declaration since
@@ -399,8 +441,10 @@ each closes on its named gate:
   until §13 item 14's siblings); the imported-theorem form of T5's
   realization fixture (`ite_self` at export line 18,116). Phase 2
   closed at slice 8 (2026-09-13, `v3/CANON.md`); the close-out ledger
-  is records §9; the ratification pass over `LANGUAGE.md` §13 and
-  `CANON.md` §9 is outstanding.
+  is records §9; slice 9 (2026-09-13) answered GPT-6's checkpoint
+  memo on the closed phase (R49–R54); the ratification pass over
+  `LANGUAGE.md` §13 (items 1–33) and `CANON.md` §9 (items 7–11) is
+  outstanding.
 
 ## The pin (2026-09-06)
 

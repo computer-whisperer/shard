@@ -220,6 +220,11 @@
 ;; a reduction stick, never change a value); constructors and recursors (K
 ;; generated them from their inductive, which IS compared); quotients (K fixes
 ;; them itself); reducibility hints and `all` lists (no effect on a value).
+;; Exempt from BODY comparison is not exempt from KIND: a name the table holds
+;; as a definition, opaque, axiom or inductive must be admitted as that kind,
+;; and a root candidate must have a row (GPT-6 R49, 2026-09-13: a theorem
+;; named `Nat.add` in an environment without one was pinned — never
+;; applicable, since K types a head before it reduces it, but authorized).
 ;; Never a hash and never a name: a same-spelled `Nat.add` with a different
 ;; body, or the pinned body over a different `Nat.pred`, is admitted as an
 ;; ordinary definition and reaches no shortcut. The walk is fuel-bounded; out
@@ -227,9 +232,11 @@
 (fn ref_fuel () Int 100000)
 
 (fn pin_if_matches ((env CheckedEnv) (n Name)) CheckedEnv
-  (if (is_pin_candidate n)
+  (if (bool_and (is_pin_candidate n) (ref_rooted n))
     (if (ref_closure_ok env (Cons n Nil) Nil (ref_fuel)) (env_pin env n) env)
     env))
+;; every candidate has a reference row; one without pins nothing (R49)
+(fn ref_rooted ((n Name)) Bool (match (accel_ref n) ((Some _) True) (None False)))
 
 (fn ref_closure_ok ((env CheckedEnv) (todo (List Name)) (seen (List Name)) (fuel Int)) Bool
   (measure fuel)
@@ -262,13 +269,13 @@
     (Nil Nil)
     ((Cons c r) (append (match (env_find env c) ((Some info) (expr_consts (ci_type info))) (None Nil)) (ctor_types_consts env r)))))
 
-;; an entry against its reference row
+;; an entry against its reference row: the kind first, then (for a compared kind) the row
 (fn ref_matches ((env CheckedEnv) (c Name) (info ConstantInfo)) Bool
   (match info
-    ((ThmInfo _ _ _) True)
-    ((QuotInfo _ _) True)
-    ((CtorInfo _ _ _ _ _ _) True)
-    ((RecInfo _ _ _ _ _ _ _ _ _) True)
+    ((ThmInfo _ _ _) (ref_exempt c))
+    ((QuotInfo _ _) (ref_exempt c))
+    ((CtorInfo _ _ _ _ _ _) (ref_exempt c))
+    ((RecInfo _ _ _ _ _ _ _ _ _) (ref_exempt c))
     ((DefnInfo cv v _ _ _)
      (match (accel_ref c) ((Some (DefnDecl rcv rv _ _ _)) (bool_and (cval_eq cv rcv) (expr_eq v rv))) (_ False)))
     ((OpaqueInfo cv v _ _)
@@ -285,6 +292,11 @@
             ((Some it) (bool_and (expr_eq (cv_type cv) (it_type it)) (ctors_match env ctors (it_ctors it))))
             (None False))))))
        (_ False)))))
+
+;; an exempt kind (theorem, quotient, constructor, recursor) passes only under a name the
+;; table holds no row for — a row is a definition, opaque, axiom or inductive, and the entry
+;; must be that kind (R49)
+(fn ref_exempt ((c Name)) Bool (match (accel_ref c) (None True) ((Some _) False)))
 
 (fn cval_eq ((a ConstantVal) (b ConstantVal)) Bool
   (bool_and (name_eq (cv_name a) (cv_name b))

@@ -1,6 +1,6 @@
 # The V3 language — S, L and E at Stage 0 (phase 2 draft)
 
-> **STATUS (2026-09-13): DRAFT — slices 1–8 of phase 2, the phase's last (FOUNDATION
+> **STATUS (2026-09-13): DRAFT — slices 1–9 of phase 2; slice 8 the phase's last, slice 9 its checkpoint maintenance (FOUNDATION
 > §12.4 item 2; `docs/records/FOUNDATION.md` §9).** Written before the
 > reader existed, as the design the reader, the loader, the views, the
 > fragment classifier and `ev` are built to. **Slice 2 built §2 and the
@@ -58,7 +58,14 @@
 > header, content addressing superseded by law §8.3, the ratchet on V3
 > with the gate at phase 6, the migration baseline. **Phase 2 closes on
 > it (2026-09-13)**, pending the ratification pass over §13 below and
-> `v3/CANON.md` §9.
+> `v3/CANON.md` §9. **Slice 9 answered GPT-6's checkpoint memo on the
+> closed phase** (R49–R54, records §4.8): the accelerator matcher
+> checks the expected kind before any exemption (§13 item 31), a
+> primitive's outcome is three-valued (§6.2, §6.4, item 32), frontend
+> parity's text is a stated projection checked injective (§10 item 1,
+> item 33), `t0_full.sh`'s byte-ties require completion, `CANON.md`
+> states its execution profile, and the seal's completion criterion
+> is in item 26.
 > It supersedes `docs/LANGUAGE.md` for the `v3/`
 > tree (FOUNDATION §10.5); the old document keeps describing the old
 > tree until the flip. The proof IR **I** is phase 3's chapter and is
@@ -475,8 +482,9 @@ classified:
   is stated over (law §4.4).
 - `Val`: constructor cells, unbounded integers (the realization of
   `Nat` and `Int` alike, `v3/INVENTORY.md`), symbols (§8).
-- `EvRes`: a value, out of fuel, or stuck with a reason and the
-  subject.
+- `EvRes`: a value, out of fuel, a primitive's resource exhausted
+  (`nat_size`, `nat_count` — like out of fuel, never a refusal; slice
+  9, R51), or stuck with a reason and the subject.
 
 ### 6.2 `ev` — the definition of "run"
 
@@ -495,7 +503,12 @@ constructor evaluates its arguments left to right and builds the cell;
 a call evaluates its arguments, then the callee's body in a fresh frame
 of exactly those values, fuel less one; a primitive applies §6.4's
 table — a guard failure (division by zero for the profile's `/`, a
-shift out of range) is `EvStuck`, never a value; `match` tries arms in
+shift out of range, a negative where a `Nat` is required) is
+`EvStuck guard`, never a value, and a resource past K's literal limits
+(a count over 32 bits, a result over 2^27 bytes) is `EvExhausted`,
+checked before the work as K's `nat_apply` checks it and never
+`EvStuck`, since exhaustion says nothing about the input (slice 9,
+R51); `match` tries arms in
 order and the first matching pattern binds its variables, no arm
 matching is `EvStuck`; `let` evaluates its right-hand sides in order,
 each in the frame the earlier bindings extended (sequential, RULED
@@ -558,7 +571,16 @@ decisions `Nat.decEq decLt decLe`; the naming-law entries are L
 constants under their own names (`prim_l_identity`), the profile's
 spellings have none, and an entry of the table is never `realize`d:
 K's rule is its realization. Every entry has a positive, a negative
-and a boundary case in the execution-parity suite.
+and a boundary case in the execution-parity suite. **Slice 9 (R51):**
+every entry's outcome is three-valued — a value, the guard failed, a
+resource exhausted (`nat_count`, `nat_size`) — the third decided before
+the work in K's order (the zero shortcut, the count cap, the size
+estimate), never after building a result; `Nat.shiftLeft` had none of
+the three under `ev` and looped in 62-bit steps (a shift of zero by
+10^12 was 16 billion steps), and K's own `Nat.shiftRight` computed
+`2^k` for any `k`; both now K's `n · 2^k` and `n / 2^k` with the
+shortcuts. A sum or a product is measured after: its size is bounded
+by its operands', which are literals under the cap.
 
 ### 6.5 Views (law §8.2) at phase 2
 
@@ -793,7 +815,9 @@ it is stuck (`unlinked`).
 **The driver.** `load.shard --run MODULE.FN [--fuel N] FILE… -- ARG…`
 loads, then links and runs `FN` on the World with `ARG…` as the
 program's arguments, performing its externs; a load failure prints the
-records and exits 2 before running; out of fuel exits 3, stuck 4, a
+records and exits 2 before running; out of fuel or a primitive's
+resource exhausted exits 3 (`RUN: out of fuel in F`, `RUN: exhausted
+nat_size in F`), stuck 4, a
 link failure 5, and a program that returns without `exit` exits 0. The
 program's `exit` is the host's. **Route 2's byte-tie**
 (`kernel/test/route2_test.sh`): the T0 driver's closure loaded from
@@ -1217,7 +1241,23 @@ Four suites, agreed before any result is read:
    bring-up item 2 (`docs/TCB.md`, the V3 roster): the Rust loader
    still parses the toolchain for route 3, and the V3 reader's
    agreement is the gate that keeps it honest, as route 1's byte-tie
-   keeps compiled K.
+   keeps compiled K. **The projection's scope (slice 9; GPT-6 R53;
+   §13 item 33).** The text is a projection: a name prints as its last
+   component and a constructor, a call and an extern print alike, so
+   byte agreement is evidence exactly where the projection is
+   injective. `parity_test.sh` checks each closure for one declaration
+   per short name among the heads (`fn`, `extern`, `sig`), among the
+   types and among the constructors, and no constructor named like a
+   head, and fails a closure that is not before comparing its dumps —
+   the first sweep found one twin, `take_line` in `json.shard` and
+   `test/reader_kit.shard` with different bodies, in three closures
+   whose dumps carried both lines while every call printed the same
+   (the kit's is `first_line` now). Outside the text and stated as
+   such: the measure clause (a runtime-only comparison; recursion
+   obligations are Stage 1's) and a literal's kind (`LNat` and `LInt`
+   print alike; the bootstrap has one integer type and the profile's
+   literals are `Int` in both loaders). The text is not P, not a store
+   format and not the embedding's representation.
 2. **Execution parity.** The same `Prog` under `ev` (hosted on route 3)
    and under the Rust evaluator: K's test entrypoints and the T0
    fixture — route 2, K interpreted by `ev` — with byte-identical
@@ -1306,7 +1346,7 @@ never compared as verdicts.
 | T1's branch-local proof: a `dite` whose `h` is used only in a `Fin.mk` field — `Fin n` over erased bounds needs a **value** parameter at E, which §7.5's eligibility rule (types and propositions only) does not admit; `Fin`, `dite` and `Nat.decLt` are all inside the `Int` fixture, so the export is not what blocks it | law §4.1, §4.2 | 3, with the `Init` realizations (ruled 2026-09-13: carried as a gate item, not built early without Stage 1's typing) |
 | T5's "two validated instances of one interface" — §6.6 binds one implementation per view directory (§13 item 14) | law §8.2, T5 | 3, with item 14's `mod.req/` siblings, when a consumer needs two |
 | T5's "an imported theorem about the original still usable after a realization" with an **imported** theorem — every theorem about a realizable constant lies past the `Int` fixture (`ite_self` at export line 18,116); the native form of the fixture is pinned (`realize_theorem`) | law §4.4, T5 | 3, when the prefix grows for the `Init` realizations |
-| `CheckedEnv` sealed: K one directory module behind a view (§6.6) | §3.5, §8.2 | 3, the opener |
+| `CheckedEnv` sealed: K one directory module behind a view (§6.6); complete when the first `meta/` consumer is behind it (§13 item 26, R52) | §3.5, §8.2 | 3, the opener |
 | user notation | §5.3 departure 6 | never in v1 |
 
 ## 12. Changes from v2 — the compatibility ledger
@@ -1401,7 +1441,7 @@ row.
 | `int_eq`/`lt`/`le` return `Bool` | re-spelled | `Decidable` propositions with `decide` bridges; `==` for `Bool` values |
 | World threading with no use check | **changed at phase 4** | the well-threadedness check (law §4.7): a v2 program that uses one World token twice will be refused; the World-alias fixture lands before any effectful port |
 | the extern roster `get_args read_file read_dir read_key write write_file write_line exit` | partly carried | `kernel/host.shard` declares six; `read_dir` (the old loader, codegen) and `read_key` (snake) return when a V3 consumer needs them. **AT RISK:** the wire convention (above) |
-| evaluator errors `NoMatchArm`, `IfNonBool`, `UnknownCall`; no fuel | **changed** — landed slice 5 | `EvStuck` with a reason (`no_arm`, `if_tag`, `guard`, `extern`, `unlinked`) and the function; `EvOut` is new — v2 relied on the totality gate instead of fuel (§6.2); an unknown call is refused at load, never reached |
+| evaluator errors `NoMatchArm`, `IfNonBool`, `UnknownCall`; no fuel | **changed** — landed slice 5 | `EvStuck` with a reason (`no_arm`, `if_tag`, `guard`, `extern`, `unlinked`) and the function; `EvOut` is new — v2 relied on the totality gate instead of fuel (§6.2); `EvExhausted` (`nat_size`, `nat_count`) since slice 9 — a primitive's resource, distinct from a guard (R51); an unknown call is refused at load, never reached |
 | `(measure (struct x))` (3,175), `(measure (- …))` (29), size-function measures (about 20) | carried as `ERec` | the obligation: v2's measure gate and the offline `admit` classifier on every checked `fn` → law §4.5's tactic-discharged obligations (phase 3). **AT RISK during phase 2:** no totality check on any `fn` — exactly `eval direct`'s situation today, and only for the duration of Stage 0 |
 | mutual recursion (the measure gate's SCCs) | deferred | "mutually recursive groups need a joint well-founded argument" (law §4.4), Stage 1 |
 | a user `(type Nat …)` shadows the core one | carried by identity | two `Nat`s are two identities; no shadowing rule is needed |
@@ -1546,7 +1586,19 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     fifteen files, a view of 87 signatures, a bootstrap resolver change
     and a `private_module` rule, for no client that exists at phase 2.
     Alternative: sealing now against the 87 calls today's files make,
-    then re-cutting the view for `meta/`.
+    then re-cutting the view for `meta/`. **Completion criterion
+    (GPT-6 R52, slice 9):** the seal is done when the first `meta/`
+    consumer imports K's view only — never `CheckedEnv`'s constructor,
+    `env_pin`, the admission path or a session's memo state,
+    transitively or through a profile shortcut — with the hostile
+    battery's forged-node fixtures exercising the public entry and a
+    raw-construction client fixture beside them (a small raw
+    declaration checked, its result inspected, a second check without
+    reaching around the API); a view file whose consumers still import
+    the implementation is not the seal. `RUNNABLE`, `REALIZE` and the
+    pending obligations stay separately represented across it, and a
+    runnable self-recursive Stage-0 body discharges no totality or
+    realization obligation by terminating on one input.
 27. **Calc's differential drivers sit outside the program** (§10 item
     2): the harness calls `ev` with values built as data and renders
     the results; an S program names no wire cell at phase 2.
@@ -1574,3 +1626,33 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     `init_cited`; the E table's `eresolve`). Alternative: no explicit
     spelling, under which a same-spelled native type makes the
     imported one unnameable in that file (T5's `same_spelled`).
+31. **Accelerator authorization dispatches on the expected kind before
+    any exemption** (`kernel/add.shard`, slice 9; GPT-6 R49): a name
+    the reference table holds as a definition, opaque, axiom or
+    inductive must be admitted as that kind; an exempt kind (theorem,
+    quotient, constructor, recursor — exempt from BODY comparison)
+    passes only under a name the table has no row for; a root
+    candidate must have a row. Before: the matcher said True on a
+    theorem without consulting the row, and a theorem named `Nat.add`
+    in an environment without one was pinned — never applicable, since
+    K types a head before it reduces an application (`function_expected`
+    on every use, probed), but authorized. Alternative: refusing the
+    candidate names for other kinds; declined — the name is the
+    author's wherever the namespace policy allows it, and only the pin
+    is refused.
+32. **A primitive's outcome is three-valued** (§6.2, §6.4, slice 9;
+    GPT-6 R51): a value, a guard failure (`EvStuck guard`), a resource
+    exhausted (`EvExhausted nat_size | nat_count`; exit 3 beside fuel),
+    the third decided before the work as K's `nat_apply` decides it.
+    Alternative: exhaustion as `guard`; declined — a guard says the
+    input is outside the operation's domain, exhaustion says nothing
+    about it, and a consumer must never read a limit as invalidity
+    (law §3.3's `Exhausted`, §9.4).
+33. **Frontend parity's text is a stated projection, injective by
+    check** (§10 item 1, slice 9; GPT-6 R53): one declaration per
+    short name per kind in every compared closure, enforced by the
+    harness before the tie, and the omitted distinctions listed.
+    Alternative: full names in the text; declined — the two loaders
+    spell names differently by design (the reader root-relative, the
+    bootstrap by path), so a mapping between them would be a third
+    artifact to validate.

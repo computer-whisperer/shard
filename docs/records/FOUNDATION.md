@@ -365,7 +365,27 @@ the memo had not done. All seven accepted; R44 required a ruling.
 | R47 prefix imports and compatibility omissions as bounded bring-up mechanisms | accept — wording; landed 2026-09-12 (`LANGUAGE.md` §3, §3.1, §12.6) | `LANGUAGE.md` §3: an imported declaration's identity is the pin plus its name plus its content; the prefix is only the scope the load recorded, so enlarging it changes no earlier declaration; §12's AT RISK rows gain owner, consumer and regression | the draft had conflated the load with the declaration |
 | R48 ratified rules vs demonstrated coverage vs open obligations | accept — status text; landed 2026-09-12 (the banner; `v3/README.md` "Open obligations") | FOUNDATION's banner → a pointer to `v3/README.md`; `v3/README.md` lists the open obligations beside the phase-1 result (R42 until green on CI, R43 until enforced, the Stage-0 `fn` gap) | the banner still said phase 0 open and nothing implemented |
 
-## 5. Findings and corrections made along the way
+### 4.8 R49–R54 (checkpoint memo on the phase-2 close-out, on `b45cc22`, answered 2026-09-13)
+
+The memo: `docs/archive/foundation-v3/SHARD_V3_PHASE2_CHECKPOINT_MEMO_v0.1.md`
+("continue the implementation plan; do not reopen the foundation";
+bounded requests over admission, canonicalization and execution
+boundaries, plus positions on `v3/CANON.md` §9's five open items).
+Every source observation was verified against the tree before
+answering; R49 was **probed through K** before the fix (the memo had
+traced it in source only). Five accepted, one amended (R53); landed as
+slice 9 (`v3/README.md`). The user's go-ahead on the leans:
+"Your leans look reasonable, go ahead with the slice."
+
+| ID | disposition | where | notes |
+|---|---|---|---|
+| R49 accelerator authorization must validate the kind before exemptions | accept — **FIXED 2026-09-13 (slice 9)**; the full gate on CI pending on this commit | `add.shard` `ref_matches` (exempt kinds pass only under a name without a reference row: `ref_exempt`), `pin_if_matches` (a root must have a row: `ref_rooted`); hostile battery 7e (a theorem named `Nat.add` admitted and not pinned; a theorem head never applicable — `function_expected`; the matcher refuses a constructor, a recursor, a quotient and a theorem under `Nat.add`'s row; an exempt kind under a name without a row passes); `LANGUAGE.md` §13 item 31 | the probe before the fix: the theorem was PINNED; every use of it — a theorem `Nat.add 2 3 = 5`, one `= 6`, a definition `Nat.add 2 3 : Nat` — refused `function_expected`, since K infers a head's type before it reduces an application and a theorem's type is not a Pi. An authorization hole, not a false theorem, on this trace; recorded as the memo asked, not as a completed exploit. The candidate name stays admissible for other kinds (the memo's "do not ban the name") |
+| R50 canonicalization must preserve required evaluation | accept — contract text, landed 2026-09-13 | `v3/CANON.md` §1 "The execution profile" (the observation relation: value and World trace under adequate fuel; fuel, time and allocation unobserved; the discarding rules C2, C3, C10–C12 hold where E is total and World-threaded — Stage 1 and phase 4, both before the phase-6 gate; the advisory recognizer reports "not applicable under Stage 0"; search's representative replacement under the same scope), §4 C1's bounded outcome, the third note on scope, §8 stage 1's six fixtures, §9 item 12 (RULED) | the rules refuse source spellings, never rewrite a program, and the rewriter is untrusted — but the memo is right that refusing a dead binding or an equal-branch `if` asks the author to delete a computation, which changes behavior under strict evaluation unless that computation is total and effect-free; the linear World makes a dead binding effect-free once phase 4's check exists |
+| R51 primitive work needs budgets and distinct resource outcomes | accept — **landed 2026-09-13 (slice 9)** | `ev.shard`: `PrimRes` (`PrimVal`, `PrimGuard`, `PrimOut nat_size\|nat_count`), `HExhausted`, `EvExhausted`, `RunExhausted`; `Nat.shiftLeft` with the zero shortcut first, the count cap, the size preflight, then `n · 2^k` by squaring (K's form; the 62-bit loop gone); `Nat.pow`'s limits now exhaustion; `load.shard` prints `RUN: exhausted RESOURCE in F`, exit 3 with fuel; `tc.shard` `nat_apply` op 14: `Nat.shiftRight a b` is zero without the power when `8·bytes(a) ≤ b`; `prims_test` 127 cases (zero shift by 10^12 = 0; a count past 2^32 exhausted `nat_count`; a size past 2^27 bytes exhausted `nat_size` before any work; the negatives distinct: a negative operand `guard`), `ev_test` 57; `LANGUAGE.md` §6.1, §6.2, §6.4, §9, §12.4's row, §13 item 32; `CANON.md` C1 | verified worse than the memo said: `ev`'s `shiftLeft` had none of the three guards K's `nat_apply` has, and K's own `shiftRight` computed `2^k` for any `k` (a shift of 1 by 2^40 would ask the host for 128 GB). No cache exists in `ev`, so the memo's retry clause holds by construction; K's `Exhausted` is never cached (§9.4). A sum or product is still measured after the operation: its size is bounded by its operands', which are literals under the cap |
+| R52 make the sealed K boundary the actual phase-3 opener | accept — the completion criterion, landed 2026-09-13 | `LANGUAGE.md` §13 item 26 (the criterion: the first `meta/` consumer imports the view only, never the constructor, `env_pin`, the admission path or memo state, transitively or by a profile shortcut; the forged-node fixtures on the public entry; a raw-construction client fixture; `RUNNABLE`, `REALIZE` and pending obligations separately represented across the seal), §11's row; `v3/README.md` "Open obligations" | already the plan (slice 6's deferral, item 26); the memo's addition is the acceptance test — "not merely a new view file whose consumers still import the implementation" — now the opener's gate wording. No code before the opener |
+| R53 frontend parity must state and test its information-preserving scope | **amend** — uniqueness enforced, not a second comparison; landed 2026-09-13 | `kernel/test/parity_test.sh` (each closure checked for one declaration per short name among the heads `fn`/`extern`/`sig`, among the types, among the constructors, and no constructor named like a head — a failing closure fails the gate before its dumps are compared); `test/reader_kit.shard` `take_line` → `first_line`; `dump.shard` and `dump.rs` headers (the projection and its omissions: the measure clause, the literal's kind); `LANGUAGE.md` §10 item 1, §13 item 33 | the sweep found the memo's case live: `take_line` declared twice with different bodies (`json.shard`'s by a literal arm, the kit's by an `if`), in three closures whose dumps carried both lines while every call printed the same — so the tie could not say which the bootstrap ("first definition wins") or the reader resolved. Under the uniqueness check the `a.f`/`b.f` fixture the memo asks for is refused by construction; the amendment declines a validated identity mapping between the two loaders' name schemes as a third artifact to validate |
+| R54 positive conformance requires successful completion, not only equal output | accept — **landed 2026-09-13 (slice 9)** | `v3/t0_full.sh` `tie` (each engine's status captured and required 0, the tails printed on failure; a `T0:` verdict line required of each log; then `cmp`); `kernel/test/t0_gate_test.sh` (stub engines under a throwaway export: both complete and agree passes; both fail identically, one fails, identical logs without the verdict line — each fails) | the fixture's own status was already checked by `t0_fixture_test.sh`; the prefix's was not, and both ties discarded it with `\|\| true`. The full replay's status, verdict and closures were already required and are unchanged |
+
 
 - **The hash-only accelerator pin (2026-09-12, GPT-6 R42; §4.7).**
   Phase 1's `pin_if_matches` enabled a shortcut on a 61-bit structural
@@ -1361,6 +1381,21 @@ is `docs/FOUNDATION.md` §5.3.
   7–11 open). The phase-3 opener then states its two guards — one term
   grammar for `def` and `fn`; the profile is bring-up, never a dialect
   — and takes up the seal of K (§13 item 26).
+- **2026-09-13 — slice 9: GPT-6's checkpoint memo on the closed phase
+  (R49–R54, on `b45cc22`), answered in §4.8 and landed.** The user:
+  "New GPT-6 review memo -- take a look" → the report verified every
+  source claim, probed R49 through K (pinned; never applicable), found
+  R51 worse than stated (`shiftLeft` unguarded under `ev`; K's
+  `shiftRight` unbounded in its count) and R53's case live
+  (`take_line` twice), and proposed the dispositions; "Your leans look
+  reasonable, go ahead with the slice." Landed: the kind check in the
+  matcher with hostile 7e; the three-valued primitive outcome with the
+  guards mirrored from K and `EvExhausted` through the driver; the
+  parity harness's injectivity check and the twin renamed; `t0_full.sh`
+  requiring completion with a stub-engine test; `CANON.md`'s execution
+  profile (§1, §9 item 12 RULED) and GPT-6's positions on items 7–11;
+  the seal's completion criterion in §13 item 26; §13 items 31–33.
+  Tests: 22 entrypoints, 0 failed (parity 20 closures, 68,014 declaration lines, 43 s, every projection injective; calc 6 s and 155 s; route 2's byte-tie 21 s; the gate test's five scenarios). CI: pending on this commit.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 
@@ -1376,7 +1411,7 @@ is `docs/FOUNDATION.md` §5.3.
   | conformance 3: checker parity | routes 1 and 3 byte-tied over the whole export (phase 1) | covered |
   | conformance 4: independent pins | `t0_expected.txt`; the pins' `;; expect:` headers, fixed by hand | covered |
   | law §10.5's doc rows at phase 2 | `LANGUAGE.md` (slices 1–7), zed, the viewer's README, the CI and corpus headers, TCB (7); `v3/CANON.md` (8) | covered |
-  | `LANGUAGE.md` §13 and `CANON.md` §9, for ratification | items 1–30; six ruled and five open | **outstanding**: the user's and GPT-6's pass at the phase boundary |
+  | `LANGUAGE.md` §13 and `CANON.md` §9, for ratification | items 1–33 (31–33 from slice 9); seven ruled and five open, GPT-6's positions on the five recorded (§4.8) | **outstanding**: the user's and GPT-6's pass at the phase boundary |
 
 ## 10. Related records
 

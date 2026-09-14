@@ -3,7 +3,10 @@
 ;;; positive, a negative and a boundary case, the expected values fixed by
 ;;; hand — the guards (stuck, never a value), the totalizations of the
 ;;; naming-law entries, the cells the decisions return, the symbol round trip,
-;;; the byte guard, arithmetic past 64 bits. One fn per entry applies it to
+;;; the byte guard, arithmetic past 64 bits, and the resource outcomes (R51:
+;;; a count or a size past K's limits is EXHAUSTED, never stuck — the guard
+;;; says the input is outside the domain, exhaustion says nothing about it).
+;;; One fn per entry applies it to
 ;;; Int parameters; the table is walked so that an entry without its three
 ;;; cases fails the count (sym_of_chars has a fourth: invalid UTF-8). Values past 64 bits are written as products: the
 ;;; bootstrap reads literals up to u64 and computes past it.
@@ -12,7 +15,7 @@
 (import "../ev.shard")
 
 (type Case (Case (List Int) Bool))
-(type Exp (XInt Int) (XCtor Name) (XSym Symbol) (XBytes (List Int)) (XStuck))
+(type Exp (XInt Int) (XCtor Name) (XSym Symbol) (XBytes (List Int)) (XStuck) (XOut Symbol))
 (type PCase (PCase (List Int) Name (List Val) Exp))
 
 (fn nm_list () Name (Str (n2 (quote kernel) (quote prelude)) (quote List)))
@@ -51,7 +54,8 @@
     ((XCtor c) (match r ((EvOk (VCtor d Nil)) (name_eq c d)) (_ False)))
     ((XSym s) (match r ((EvOk (VSym u)) (sym_eq s u)) (_ False)))
     ((XBytes bs) (match r ((EvOk v) (match (vbytes v) ((Some got) (int_list_eq got bs)) (None False))) (_ False)))
-    (XStuck (match r ((EvStuck s _) (sym_eq s (quote guard))) (_ False)))))
+    (XStuck (match r ((EvStuck s _) (sym_eq s (quote guard))) (_ False)))
+    ((XOut res) (match r ((EvExhausted s _) (sym_eq s res)) (_ False)))))
 (fn run_pc ((c PCase)) Case
   (match c ((PCase name n args e) (Case name (check (ev (prog) (tname n) args 1000) e)))))
 (fn run_pcs ((cs (List PCase))) (List Case)
@@ -187,6 +191,10 @@
     (PCase "Nat.shiftLeft 1 4 = 16" (pn (quote shiftLeft)) (ii 1 4) (XInt 16))
     (PCase "Nat.shiftLeft on a negative is stuck (guard)" (pn (quote shiftLeft)) (ii -1 1) XStuck)
     (PCase "Nat.shiftLeft 1 64 = 2^64 (total past the host's 64 bits)" (pn (quote shiftLeft)) (ii 1 64) (XInt (* 4294967296 4294967296)))
+    (PCase "Nat.shiftLeft 0 by 10^12 = 0 through the zero shortcut, no work (R51)" (pn (quote shiftLeft)) (ii 0 1000000000000) (XInt 0))
+    (PCase "Nat.shiftLeft 1 by 2^32 is exhausted nat_count, not stuck (R51)" (pn (quote shiftLeft)) (ii 1 4294967296) (XOut (quote nat_count)))
+    (PCase "Nat.shiftLeft 1 by 2^31 is exhausted nat_size before any work (R51)" (pn (quote shiftLeft)) (ii 1 2147483648) (XOut (quote nat_size)))
+    (PCase "Nat.shiftLeft 1 by 2^30 - 8 is exhausted nat_size (one byte over K's 2^27-byte cap), cheaply" (pn (quote shiftLeft)) (ii 1 1073741816) (XOut (quote nat_size)))
     ;; 27 Nat.shiftRight
     (PCase "Nat.shiftRight 16 2 = 4" (pn (quote shiftRight)) (ii 16 2) (XInt 4))
     (PCase "Nat.shiftRight on a negative is stuck (guard)" (pn (quote shiftRight)) (ii 16 -2) XStuck)
@@ -215,6 +223,9 @@
     (PCase "Nat.pow 2 10 = 1024" (pn (quote pow)) (ii 2 10) (XInt 1024))
     (PCase "Nat.pow on a negative is stuck (guard)" (pn (quote pow)) (ii -2 2) XStuck)
     (PCase "Nat.pow 0 0 = 1" (pn (quote pow)) (ii 0 0) (XInt 1))
+    (PCase "Nat.pow 2 by 2^32 is exhausted nat_count, not stuck (R51)" (pn (quote pow)) (ii 2 4294967296) (XOut (quote nat_count)))
+    (PCase "Nat.pow 2 by 2^31 is exhausted nat_size before any work (R51)" (pn (quote pow)) (ii 2 2147483648) (XOut (quote nat_size)))
+    (PCase "Nat.pow 1 by 2^32 - 1 = 1 (the count at its cap; no size estimate for a base of 1)" (pn (quote pow)) (ii 1 4294967295) (XInt 1))
     ;; 34 Nat.beq
     (PCase "Nat.beq 3 3 = Bool.true" (pn (quote beq)) (ii 3 3) (btrue))
     (PCase "Nat.beq on a negative is stuck (guard)" (pn (quote beq)) (ii -3 3) XStuck)

@@ -11,8 +11,10 @@
 > phase 6's (`v3/LANGUAGE.md` §12.5); until then this is the form the
 > tree is written *toward*, measured by the sweep in §7, not refused by.
 > Decisions this rewrite makes beyond the old law's text are collected
-> in §9; the six the user ruled on 2026-09-13 are marked RULED, the rest
-> are for ratification with `v3/LANGUAGE.md` §13.
+> in §9; the seven the user ruled on 2026-09-13 are marked RULED, the
+> rest are for ratification with `v3/LANGUAGE.md` §13. GPT-6's
+> checkpoint memo (R50, 2026-09-13) added §1's execution profile and
+> its positions on the open items, recorded in §9.
 
 The surface this document canonicalizes is `v3/LANGUAGE.md`'s: S, its
 explicit-L forms and its E forms at Stage 0. It never restates a
@@ -52,6 +54,27 @@ redrawn.
 - **The depth price** (old §13's last note): a behavior's canonical
   spelling can sit one rung deeper than its shortest raw spelling; the
   size metric for budgeted tooling is the size of the canonical form.
+- **The execution profile** (new; GPT-6 R50, 2026-09-13; §9 item 12).
+  The term tier's quotient is stated over one observation relation:
+  the value a body returns under adequate fuel and the World trace its
+  externs produce. Fuel consumption is not observed — law §9.4's
+  monotonicity is the contract, a result under a budget is the result
+  under any larger one — and neither is host time or allocation. The
+  rules that discard or move an evaluation — C2, C3's dead binding,
+  C10, C11, C12 — are equalities under that relation only when the
+  discarded computation is total and effect-free, which is what E is
+  once Stage 1 has discharged every `fn`'s measure obligation (phase
+  3) and the well-threadedness check refuses a World used twice
+  (phase 4): a dead binding's extern would leave its World unused and
+  the old one used again. Under strict evaluation an unused
+  right-hand side still runs, so at Stage 0 a dead binding may loop
+  and a discarded condition may perform an effect. Hence the
+  ratchet's order (§8): the advisory recognizer REPORTS under Stage 0
+  with the caveat named — "not applicable under Stage 0" for a rule
+  whose precondition is absent, never a demand for a rewrite whose
+  premise is missing — and the gate is phase 6's, after both. The
+  same scope binds any use of the quotient by search: a representative
+  replaces a spelling only under this relation and these conditions.
 
 ## 2. The three layers of S
 
@@ -126,7 +149,7 @@ the three marked *recast* change under V3's semantics.
 
 | rule | in S | status |
 |---|---|---|
-| **C1** no ground primitive redexes | no `EPrim` whose arguments are all literals, for any entry of the primitive table (`LANGUAGE.md` §6.4) whose guard the literals pass — a value spelled the long way; the intent-carrying spelling migrates to a named `fn` plus a `theorem` about it (old D7 ruling). The recognizer consults `ev`'s own table, as the old one consulted the reducer's | carried |
+| **C1** no ground primitive redexes | no `EPrim` whose arguments are all literals, for any entry of the primitive table (`LANGUAGE.md` §6.4) whose guard the literals pass — a value spelled the long way; the intent-carrying spelling migrates to a named `fn` plus a `theorem` about it (old D7 ruling). The recognizer consults `ev`'s own table, as the old one consulted the reducer's, and inherits its bounded outcome (R51): an application the table leaves stuck or exhausted on those literals (`EvStuck guard`, `EvExhausted nat_size`) is not a redex — reported as such, never as canonical and never as invalid | carried |
 | **C2** no decided control | no `EIf` whose condition is a constructor cell, no `EMatch` whose scrutinee is a ground constructor or literal; C11's empty-pin case | carried |
 | **C3** let hygiene | **the flat sequential let is canonical**: a `let` whose body is a `let` merges into one binding list; bindings keep their written order, which is now meaning (sequential, R44); a binding the body and the later bindings never reference is refused. The old rule's "independent bindings merge into one parallel let, nesting spells dependence" is void — nesting spells nothing | **recast** (RULED 2026-09-13) |
 | **C4** match arm discipline | constructor arms in the constructors' declaration order; literal arms ascending before the catch-all; at most one catch-all, last. The classifier's pattern matrix (`LANGUAGE.md` §6.7) already holds the declaration order | carried |
@@ -139,10 +162,13 @@ the three marked *recast* change under V3's semantics.
 | **C11** contextual partial evaluation | carried: a body subterm that can take one of `ev`'s steps under the arm's pins is a contextual redex; the `if` tier stays dropped, and the fold tier stays at the D19a ruling — no fold of applied ground user calls, the C7 extension the mechanism of record if written code ever accumulates them | carried |
 | **C12** no needless case split | carried as emergent: C10's constant-match rule after C11 in the rewriter's fixpoint | carried |
 
-Two notes on scope. The profile's symbols (`'x`, `sym_eq`) and its
+Three notes on scope. The profile's symbols (`'x`, `sym_eq`) and its
 `Int` numerals are E values like any other under these rules; the
-profile's `(list …)` is sugar (§3). And a `realize`'s supplied body is
-an E body: C1–C12 apply to it; its equations are L and exempt.
+profile's `(list …)` is sugar (§3). A `realize`'s supplied body is
+an E body: C1–C12 apply to it; its equations are L and exempt. And the
+rules that discard an evaluation — C2, C3's dead binding, C10, C11,
+C12 — hold under §1's execution profile only (R50): what the
+recognizer reports while a precondition is absent is stated there.
 
 ## 5. The L layer — new rules
 
@@ -263,7 +289,12 @@ decision:
    static types, the primitive table); `v3/pins/canon/` with one
    negative fixture per rule; the census of the toolchain's own
    sources as the first output. The first step of the phase-6 fmt-gate
-   slice, or earlier on demand.
+   slice, or earlier on demand. Its reports for C2, C3, C10–C12 carry
+   §1's caveat under Stage 0, and its fixtures include R50's six: an
+   unused terminating computation, an unused Stage-0 recursion, an
+   unused extern result, equal branches under a looping or effectful
+   condition, flattened `let`s under shadowed names, a
+   resource-sensitive body — each with the report expected.
 2. **The tree canonical, pinned.** `v3/kernel` reformatted under the V3
    formatter — a printer over `kernel/sexpr.shard` — and its E bodies at
    zero advisory lines; the loader pins gain the canon cases.
@@ -281,7 +312,9 @@ kernel tree, next to the classifier.
 
 ## 9. For ratification — decisions made here beyond the old law
 
-Six were put to the user on 2026-09-13 and ruled; the rest are open.
+Seven were put to the user on 2026-09-13 and ruled; the rest are open.
+GPT-6's positions on items 7–11 (the checkpoint memo, 2026-09-13,
+records §4.8) are recorded under each for the ratification pass.
 
 1. **RULED — home.** A file of its own beside `LANGUAGE.md`, superseding
    `docs/CANON.md` for the V3 tree with a banner each way. Alternative:
@@ -305,18 +338,39 @@ Six were put to the user on 2026-09-13 and ruled; the rest are open.
 7. **OPEN — L4's normal-form levels.** Written in K's normal form, or
    as the author spells them with the store keying on the normalized
    level. Lean: normal form, since one spelling per level is the thesis
-   and `normalize` is one call.
+   and `normalize` is one call. GPT-6: accept, keeping raw K input
+   acceptance distinct from canonical P identity; an unsupported or
+   exhausted normalization is reported, never read as invalid.
 8. **OPEN — `_` for an unused variable** (L7). A syntactic rule the
    old law did not have; cheap for a recognizer, useful to a reader.
-   Lean: adopt, in the term tier and L alike.
+   Lean: adopt, in the term tier and L alike. GPT-6: accept for a
+   genuinely unused binder — one whose occurrences are counted in the
+   later types, propositions and proof terms too, not only at runtime
+   — preserving scope and index meaning.
 9. **OPEN — L8's header order.** Bytewise sorting of imports and `use`
    lines, or written order preserved. Lean: sorted, since the loader
-   reads no meaning into the order.
+   reads no meaning into the order. GPT-6: accept for the fragment
+   shown order-independent by a fixture that permutes the imports and
+   `use` lines and compares the resolved identities, the ambiguity
+   outcomes, the accepted declarations and the effective policy — not
+   by the comment alone; identical diagnostic order is not required.
 10. **OPEN — the reserved `canon-rules` form** (C7) as the phase-3
     spelling of a rule set. Lean: reserve the word now, decide the form
-    with I.
+    with I. GPT-6: the same; the form carries a rule's direction, its
+    conditions, its dependency identity and the relation that permits
+    replacement, and adds no inference rule.
 11. **OPEN — declaration order** (old D13, L8): census at stage 1
-    before any rule.
+    before any rule. GPT-6: keep deferred; the required dependency and
+    realization order is preserved and no broad reordering lands
+    without a measured need.
+12. **RULED — the execution profile** (§1; GPT-6 R50, 2026-09-13; the
+    user's go-ahead on the slice-9 dispositions). The term tier's
+    quotient is the value-and-trace relation and the discarding rules
+    apply only where E is total and World-threaded — reported, not
+    gated, under Stage 0. Alternative: an unconditional quotient ("an
+    unused value is unobservable"); rejected because under strict
+    evaluation an unused right-hand side still runs, and at Stage 0 it
+    may loop or perform an effect.
 
 ## 10. Related
 
