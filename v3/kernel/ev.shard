@@ -1,6 +1,6 @@
 ;;; v3/kernel/ev.shard — `ev`, the definition of "run" (v3/LANGUAGE.md §6.2,
-;;; §6.7; FOUNDATION §4.4), and `run_prog`, the effectful driver. Phase 2,
-;;; slice 5.
+;;; §6.7; FOUNDATION §4.4), and `run_prog`, the effectful driver with the
+;;; checked entry of §9 (slice 7). Phase 2, slice 5.
 ;;;
 ;;; `ev : Prog → Name → List Val → Int → EvRes` is pure: a Prog is linked
 ;;; into this file's own representation — constructors as integer tags
@@ -402,14 +402,33 @@
        (_ None)))
     ((Cons a Nil)
      (if (int_eq code 16)
-       (match (bytes_out lk a Nil (wire_budget)) ((Some bs) (if (all_bytes bs) (Some (IVSym (sym_of_chars bs))) None)) (None None))
+       (match (bytes_out lk a Nil (wire_budget)) ((Some bs) (if (utf8_ok bs) (Some (IVSym (sym_of_chars bs))) None)) (None None))
      (if (int_eq code 17)
        (match a ((IVSym s) (Some (bytes_in lk (chars_of_sym s)))) (_ None))
        None)))
     (_ None)))
-(fn all_bytes ((bs (List Int))) Bool
+;; sym_of_chars takes UTF-8 (the host decodes the bytes into the symbol's text): the guard is
+;; validity — an invalid sequence is stuck, never handed to the host, whose refusal is fatal
+(fn utf8_ok ((bs (List Int))) Bool
   (measure (struct bs))
-  (match bs (Nil True) ((Cons b r) (if (bool_and (le 0 b) (le b 255)) (all_bytes r) False))))
+  (match bs
+    (Nil True)
+    ((Cons b r)
+     (if (bool_and (le 0 b) (le b 127)) (utf8_ok r)
+     (if (bool_and (le 194 b) (le b 223)) (utf8_tail r 1 128 191)
+     (if (int_eq b 224) (utf8_tail r 2 160 191)
+     (if (bool_and (le 225 b) (le b 239)) (utf8_tail r 2 128 (if (int_eq b 237) 159 191))
+     (if (int_eq b 240) (utf8_tail r 3 144 191)
+     (if (bool_and (le 241 b) (le b 243)) (utf8_tail r 3 128 191)
+     (if (int_eq b 244) (utf8_tail r 3 128 143)
+       False))))))))))
+;; k continuation bytes, the first within [lo, hi], the rest 128..191; then the rest of the text
+(fn utf8_tail ((bs (List Int)) (k Int) (lo Int) (hi Int)) Bool
+  (measure k)
+  (if (le k 0) (utf8_ok bs)
+    (match bs
+      (Nil False)
+      ((Cons b r) (if (bool_and (le lo b) (le b hi)) (utf8_tail r (- k 1) 128 191) False)))))
 (fn shift_ok ((k Int)) Bool (bool_and (le 0 k) (lt k 64)))
 (fn nonneg2 ((x Int) (y Int)) Bool (bool_and (le 0 x) (le 0 y)))
 (fn prim_ii ((lk Linked) (code Int) (x Int) (y Int)) (Option IVal)
@@ -437,8 +456,8 @@
     (if (int_eq code 20) (Some (IVInt (if (int_eq y 0) 0 (ediv x y))))
     (if (int_eq code 21) (Some (IVInt (if (int_eq y 0) x (mod x y))))
       None))))
-  (if (int_eq code 22) (Some (IVInt (if (lt x y) 0 (- x y))))
   (if (bool_not (nonneg2 x y)) None
+  (if (int_eq code 22) (Some (IVInt (if (lt x y) 0 (- x y))))
   (if (int_eq code 23) (Some (IVInt (band x y)))
   (if (int_eq code 24) (Some (IVInt (bor x y)))
   (if (int_eq code 25) (Some (IVInt (bxor x y)))
@@ -457,8 +476,9 @@
   (if (int_eq code 32) (Some (IVInt (nat_gcd_ev x y)))
   (if (int_eq code 33)
     (if (lt 4294967295 y) None
-    (if (bool_and (lt 1 x) (bool_and (lt 0 y) (lt (ediv (ev_nat_max_size) y) (ev_nat_bytes x)))) None
-      (nat_sized (nat_pow_ev x y))))
+    (if (lt y 1) (nat_sized (nat_pow_ev x y))   ; x^0 = 1; the size estimate below divides by y
+    (if (bool_and (lt 1 x) (lt (ediv (ev_nat_max_size) y) (ev_nat_bytes x))) None
+      (nat_sized (nat_pow_ev x y)))))
   (if (int_eq code 34) (Some (init_bool_cell lk (int_eq x y)))
   (if (int_eq code 35) (Some (init_bool_cell lk (le x y)))
   (if (int_eq code 36) (Some (dec_cell lk (int_eq x y)))
@@ -530,9 +550,11 @@
           (None (EvStuck (quote bad_value) f))
           ((Some ivs) (halt_res lk (ev_apply lk 1 id (rev ivs) KHalt id fuel)))))))))
 
-;; ---- `run_prog`: the effectful driver (§6.2, §6.7) -----------------------------------------------
-(type RunRes (RunOk) (RunOut Name) (RunStuck Symbol Name) (RunLink Symbol (List Int)))
-;; f on the World with the program's arguments; every extern performed by the host's
+;; ---- `run_prog`: the effectful driver (§6.2, §6.7; the checked entry, §9) --------------------
+(type RunRes (RunOk) (RunOut Name) (RunStuck Symbol Name) (RunLink Symbol (List Int)) (RunArg Int Symbol (List Int)))   ; RunArg: the argument's position, the reason, its text
+;; f on the World with the program's arguments: the parameters before the World are the checked
+;; entry (§9) — each command-line argument validated against its parameter's E type before ev
+;; runs — the World the last parameter's first constructor; every extern performed by the host's
 (fn run_prog ((p Prog) (f Name) (argv (List (List Int))) (fuel Int) (w World)) (Pair RunRes World)
   (match (link p)
     ((LkErr e m) (Pair (RunLink e m) w))
@@ -540,19 +562,88 @@
      (match (nmap_find (lk_ids lk) f)
        (None (Pair (RunLink (quote unknown_head) (show_name f)) w))
        ((Some id)
-        (match (world_token lk p f)
-          (None (Pair (RunLink (quote bad_entry) (append (show_name f) " does not take a World")) w))
-          ((Some token) (run_loop lk (ev_apply lk 1 id (list token) KHalt id fuel) argv w))))))))
-;; the entry's World: its parameter type's first constructor, its fields zero
-(fn world_token ((lk Linked) (p Prog) (f Name)) (Option IVal)
+        (match (entry_shape lk p f)
+          (None (Pair (RunLink (quote bad_entry) (append (show_name f) " does not take a World last")) w))
+          ((Some (Pair params token))   ; the machine takes its arguments last first
+           (match (if (int_eq (len params) 0) (ArgsOk Nil) (args_in lk p f params argv 1 Nil))   ; a World-only entry takes the raw list through get_args (§9)
+             ((ArgsBad r) (Pair r w))
+             ((ArgsOk ivs) (run_loop lk (ev_apply lk 1 id (rev (append ivs (list token))) KHalt id fuel) argv w))))))))))
+;; the entry's parameters before its last, and the World: the last parameter's type, its first
+;; constructor with its fields zero
+(fn entry_shape ((lk Linked) (p Prog) (f Name)) (Option (Pair (List EType) IVal))
   (match (prog_find p f)
-    ((Some (EFn _ _ (Cons (ETCon wn _) Nil) _ _ _))
-     (match (prog_find p wn)
-       ((Some (EInd _ _ (Cons (ECtorDef c fs) _)))
-        (match (nmap_find (lk_tags lk) c) ((Some tag) (Some (IVCtor tag (zeros_iv (len fs))))) (None None)))
-       (_ None)))
+    ((Some (EFn _ _ ps _ _ _))
+     (match (split_last ps Nil)
+       (None None)
+       ((Some (Pair params wn))
+        (match (prog_find p wn)
+          ((Some (EInd _ _ (Cons (ECtorDef c fs) _)))
+           (match (nmap_find (lk_tags lk) c) ((Some tag) (Some (Pair params (IVCtor tag (zeros_iv (len fs)))))) (None None)))
+          (_ None)))))
     (_ None)))
+(fn split_last ((ps (List EType)) (acc (List EType))) (Option (Pair (List EType) Name))
+  (measure (struct ps))
+  (match ps
+    (Nil None)
+    ((Cons (ETCon n _) Nil) (Some (Pair (rev acc) n)))
+    ((Cons _ Nil) None)
+    ((Cons t r) (split_last r (Cons t acc)))))
 (fn zeros_iv ((k Int)) (List IVal) (measure k) (if (lt k 1) Nil (Cons (IVInt 0) (zeros_iv (- k 1)))))
+;; the checked entry (§9): the arguments against the parameters in order, i the 1-based position;
+;; an argument that does not parse is refused with its position and text, never a file span
+(type ArgsRes (ArgsOk (List IVal)) (ArgsBad RunRes))
+(type ArgRes (ArgOk IVal) (ArgBad Symbol) (ArgType (List Int)))
+(fn args_in ((lk Linked) (p Prog) (f Name) (params (List EType)) (argv (List (List Int))) (i Int) (acc (List IVal))) ArgsRes
+  (measure (struct params))
+  (match params
+    (Nil (match argv
+           (Nil (ArgsOk (rev acc)))
+           (_ (ArgsBad (RunArg i (quote argument_count) (count_msg f (- i 1) (+ (- i 1) (len argv))))))))
+    ((Cons t r)
+     (match argv
+       (Nil (ArgsBad (RunArg i (quote argument_count) (count_msg f (+ (- i 1) (len params)) (- i 1)))))
+       ((Cons a ar)
+        (match (arg_in lk p t a)
+          ((ArgOk v) (args_in lk p f r ar (+ i 1) (Cons v acc)))
+          ((ArgBad reason) (ArgsBad (RunArg i reason a)))
+          ((ArgType msg) (ArgsBad (RunLink (quote bad_entry) (append (show_name f) (append ": parameter " (append (show_nat i) (append " " msg)))))))))))))
+(fn count_msg ((f Name) (takes Int) (got Int)) (List Int)
+  (append (show_name f) (append " takes " (append (show_nat takes) (append " argument(s), got " (show_nat got))))))
+;; one argument against one parameter type: Int, Nat, or a two-constructor list type taking the bytes
+(fn arg_in ((lk Linked) (p Prog) (t EType) (a (List Int))) ArgRes
+  (match t
+    ((ETCon n _)
+     (if (name_eq n (n1 (quote Int))) (match (arg_int a) ((Some k) (ArgOk (IVInt k))) (None (ArgBad (quote not_an_int))))
+     (if (name_eq n (n1 (quote Nat))) (match (arg_nat a) ((Some k) (ArgOk (IVInt k))) (None (ArgBad (quote not_a_nat))))
+       (match (list_ctors p n)
+         ((Some (Pair nl cs))
+          (match (nmap_find (lk_tags lk) nl)
+            (None (ArgType (unsupplied n)))
+            ((Some tnl) (match (nmap_find (lk_tags lk) cs) (None (ArgType (unsupplied n))) ((Some tcs) (ArgOk (cells_in tnl tcs a)))))))
+         (None (ArgType (unsupplied n)))))))
+    (_ (ArgType "has a type variable's type, which no command-line argument supplies (§9)"))))
+(fn unsupplied ((n Name)) (List Int)
+  (append "has type " (append (show_name n) ", which no command-line argument supplies (§9: Int, Nat, a byte list)")))
+;; a two-constructor inductive, the first nullary and the second binary: its nil and cons
+(fn list_ctors ((p Prog) (n Name)) (Option (Pair Name Name))
+  (match (prog_find p n)
+    ((Some (EInd _ _ (Cons (ECtorDef nl Nil) (Cons (ECtorDef cs (Cons _ (Cons _ Nil))) Nil)))) (Some (Pair nl cs)))
+    (_ None)))
+(fn cells_in ((nl Int) (cs Int) (bs (List Int))) IVal
+  (measure (struct bs))
+  (match bs (Nil (IVCtor nl Nil)) ((Cons b r) (IVCtor cs (list (IVInt b) (cells_in nl cs r))))))
+(fn arg_nat ((a (List Int))) (Option Int)
+  (match a (Nil None) (_ (if (arg_all_digits a) (Some (arg_digits a 0)) None))))
+(fn arg_int ((a (List Int))) (Option Int)
+  (match a
+    ((Cons b r) (if (int_eq b 45) (match (arg_nat r) ((Some k) (Some (- 0 k))) (None None)) (arg_nat a)))
+    (Nil None)))
+(fn arg_all_digits ((bs (List Int))) Bool
+  (measure (struct bs))
+  (match bs (Nil True) ((Cons b r) (if (bool_and (le 48 b) (le b 57)) (arg_all_digits r) False))))
+(fn arg_digits ((bs (List Int)) (acc Int)) Int
+  (measure (struct bs))
+  (match bs (Nil acc) ((Cons b r) (arg_digits r (+ (* acc 10) (- b 48))))))
 (fn run_loop ((lk Linked) (h Halt) (argv (List (List Int))) (w World)) (Pair RunRes World)
   (match h
     ((HVal _) (Pair RunOk w))

@@ -1,0 +1,62 @@
+;;; v3/kernel/test/entry_test.shard — the checked entry (v3/LANGUAGE.md §9,
+;;; slice 7; T1's raw-versus-checked arguments): run_prog validates the
+;;; driver's arguments against the entry's parameters before ev runs — Int,
+;;; Nat, a byte list, the World last — and refuses a malformed one by its
+;;; position and text, never a file span; an entry the driver cannot serve is
+;;; bad_entry. The profile pin prints; the S pin (no wire cell at phase 2)
+;;; is checked by its result alone.
+
+(import "loader_kit.shard")
+
+(type Case (Case (List Int) Bool))
+
+(fn e_fn ((s Symbol)) Name (Str (Str (Str Anon (quote kernel)) (quote main)) s))
+(fn s_fn ((s Symbol)) Name (Str (Str Anon (quote main)) s))
+(fn res ((r (Pair RunRes World))) RunRes (match r ((Pair x _) x)))
+(fn is_ok ((r RunRes)) Bool (match r (RunOk True) (_ False)))
+(fn is_arg ((r RunRes) (i Int) (reason Symbol) (txt (List Int))) Bool
+  (match r ((RunArg j s t) (bool_and (int_eq i j) (bool_and (sym_eq reason s) (int_list_eq t txt)))) (_ False)))
+(fn is_link ((r RunRes) (e Symbol)) Bool (match r ((RunLink s _) (sym_eq e s)) (_ False)))
+(fn fuel () Int 1000000)
+
+(fn cases ((w World)) (Pair (List Case) World)
+  (match (load_prog "v3/pins/loader/entry" Nil (list "v3/pins/loader/entry/kernel/main.shard") w)
+    ((Pair (Pair pe _) w1)
+     (match (load_prog "v3/pins/loader/entry_s" (list (fixture)) (list "v3/pins/loader/entry_s/main.shard") w1)
+       ((Pair (Pair ps _) w2)
+        (Pair
+          (list
+            (Case "profile: main 21 hello runs (prints \"hello 42\") and is RunOk"
+              (is_ok (res (run_prog pe (e_fn (quote main)) (list "21" "hello") (fuel) w2))))
+            (Case "a negative Int parses"
+              (is_ok (res (run_prog pe (e_fn (quote main)) (list "-21" "neg") (fuel) w2))))
+            (Case "a malformed Int is refused by position and text, never a file span"
+              (is_arg (res (run_prog pe (e_fn (quote main)) (list "abc" "hello") (fuel) w2)) 1 (quote not_an_int) "abc"))
+            (Case "a bare minus is not an Int"
+              (is_arg (res (run_prog pe (e_fn (quote main)) (list "-" "hello") (fuel) w2)) 1 (quote not_an_int) "-"))
+            (Case "too few arguments: argument_count at the missing position"
+              (is_arg (res (run_prog pe (e_fn (quote main)) (list "21") (fuel) w2)) 2 (quote argument_count) "kernel.main.main takes 2 argument(s), got 1"))
+            (Case "too many arguments: argument_count at the first surplus"
+              (is_arg (res (run_prog pe (e_fn (quote main)) (list "21" "a" "b") (fuel) w2)) 3 (quote argument_count) "kernel.main.main takes 2 argument(s), got 3"))
+            (Case "the World alone: no checked parameter, the raw list through get_args (prints 0)"
+              (is_ok (res (run_prog pe (e_fn (quote raw)) Nil (fuel) w2))))
+            (Case "the World alone takes any argument list raw through get_args (prints 1+1+1+0) — the count rule is the checked entry's"
+              (is_ok (res (run_prog pe (e_fn (quote raw)) (list "a" "b" "c") (fuel) w2))))
+            (Case "a parameter no argument supplies is bad_entry"
+              (is_link (res (run_prog pe (e_fn (quote opt)) (list "1") (fuel) w2)) (quote bad_entry)))
+            (Case "an entry without a World last is bad_entry"
+              (is_link (res (run_prog pe (e_fn (quote noworld)) (list "1") (fuel) w2)) (quote bad_entry)))
+            (Case "S: Nat and Init's (List Nat) before the World"
+              (is_ok (res (run_prog ps (s_fn (quote main)) (list "12" "abc") (fuel) w2))))
+            (Case "S: a signed numeral is not a Nat"
+              (is_arg (res (run_prog ps (s_fn (quote main)) (list "-1" "abc") (fuel) w2)) 1 (quote not_a_nat) "-1"))
+            (Case "S: the byte list arrives as Init's List — total 1 [2 3] = 6"
+              (match (ev ps (s_fn (quote total)) (list (VInt 1) (nat_list (list 2 3))) (fuel)) ((EvOk (VInt 6)) True) (_ False))))
+          w2))))))
+
+(fn run ((cs (List Case)) (fails Int) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil (exit fails (write_line (append "entry_test: failures = " (show_int fails)) w)))
+    ((Cons (Case name ok) r) (run r (if ok fails (+ fails 1)) (write_line (append (if ok "PASS " "FAIL ") name) w)))))
+(fn main ((w World)) World (match (cases w) ((Pair cs w1) (run cs 0 w1))))

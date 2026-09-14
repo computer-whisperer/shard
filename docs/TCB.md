@@ -105,7 +105,11 @@ governs `v3/` now:
    declaration-for-declaration with identical verdicts and axiom
    closures (`v3/t0_full.sh`, `v3/t0_expected.txt`), the hostile
    battery with declarative reasons (`v3/kernel/test/hostile_test.shard`),
-   and the toolchain-profile tests (`v3/test.sh`). Differential
+   and the toolchain-profile tests (`v3/test.sh`) — since phase 2
+   (2026-09-13) also the conformance suites of `v3/LANGUAGE.md` §10
+   inside it: frontend parity, calc's differential against the old
+   tree, route 2's byte-tie, the primitive suite, the checked entry.
+   Differential
    evidence, not proof: disagreements are investigated by rule, mapping
    and resources; no winner by tool name.
 4. **Retained P** (§7.5): none yet — the first release bundle with

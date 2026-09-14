@@ -1,6 +1,6 @@
 # The V3 language — S, L and E at Stage 0 (phase 2 draft)
 
-> **STATUS (2026-09-13): DRAFT — slices 1–6 of phase 2 (FOUNDATION
+> **STATUS (2026-09-13): DRAFT — slices 1–7 of phase 2 (FOUNDATION
 > §12.4 item 2; `docs/records/FOUNDATION.md` §9).** Written before the
 > reader existed, as the design the reader, the loader, the views, the
 > fragment classifier and `ev` are built to. **Slice 2 built §2 and the
@@ -44,7 +44,15 @@
 > text of §10, byte-identical over every toolchain closure —
 > `kernel/test/parity_test.sh` — retiring TCB bring-up item 2); the seal
 > of `CheckedEnv` deferred to the phase-3 opener with its analysis (§6.6,
-> §13 item 26).
+> §13 item 26). **Slice 7 built the phase-2 close-out:** the checked
+> entry of §9 (`run_prog` validates the driver's arguments against the
+> entry's parameters; T1's raw-versus-checked fixture), the primitive
+> suite of §10 item 2 (every table entry, three cases each), the T5
+> audit (each of the battery's eight fixtures mapped to its pin, two
+> carried to phase 3 in §11 by ruling, as T1's branch-local proof is),
+> the doc rows of law §10.5 dated phase 2, and the records' close-out
+> ledger; the canonical S form (CANON's rule set for S) is slice 8, the
+> last of phase 2.
 > It supersedes `docs/LANGUAGE.md` for the `v3/`
 > tree (FOUNDATION §10.5); the old document keeps describing the old
 > tree until the flip. The proof IR **I** is phase 3's chapter and is
@@ -158,7 +166,12 @@ declared name**, and the content hash of its L revision:
   identities that only an explicit citation tells apart (T5: "two
   same-spelled nominal types not conflated"; "an attempt to identify a
   different definition by spelling refused" — there is no form that
-  identifies them).
+  identifies them). When a native declaration shadows an imported
+  bare name — `main.Bool` beside `Init`'s `Bool` — the bare citation
+  is ambiguous and each is cited in full: `main.Bool` by its module
+  path, **`Init.Bool` by the import's prefix**, which the scope
+  resolves to the bare imported name (slice 7, §13 item 30; pin
+  `same_spelled`).
 - The **content hash** is `expr.shard`'s structural hash over the L
   declaration (kind, level parameters, type, value), never over S
   text: whitespace, comments, the order of unrelated forms and the
@@ -1133,6 +1146,32 @@ on each: a malformed argument refused at a checked entry with an
 artifact origin and no fabricated file span, and a preconditioned call
 inside E carrying no runtime proof.
 
+**The checked entry as built (slice 7, 2026-09-13; §13 item 29).**
+`run_prog`'s entry takes the World **last**; every parameter before it
+is a checked entry, and the driver's `-- ARG…` are validated against
+them in order before `ev` is invoked. `Int` parses a decimal with an
+optional leading `-`; `Nat` parses a decimal (a sign is refused); a
+parameter whose type is an inductive of two constructors, the first
+nullary and the second binary — the prelude's `(List Int)`, Init's
+`(List Nat)` — takes the argument's bytes as that list; any other
+parameter type is refused at the entry (`bad_entry`: no command-line
+argument supplies it), as is an entry whose last parameter is not a
+nullary-constructor type. The count must match (`argument_count`)
+once an entry has a checked parameter at all; an entry with the World
+alone takes any argument list, raw. A malformed argument is refused as
+`RunArg POSITION REASON TEXT` —
+`not_an_int`, `not_a_nat` — its origin the argument's 1-based position
+on the command line and its text, never a file span; the driver
+prints `RUN: argument N REASON: TEXT` and exits 6. An entry with the
+World alone — the T0 driver's, with its `-a FIX` — reads the raw
+argument list through `get_args` and validates it itself: that is the entry
+declaring its own precondition, the other of §9.3's two kinds, and the
+raw list stays available to every entry. The preconditioned half of
+T1's fixture is a `realize` body's erased binders (§7.5: `BErased`
+carries no runtime value; the `REALIZE` record). Pins `entry` (the
+profile: `Int`, `(List Int)`, the World, `get_args`) and `entry_s` (S:
+`Nat`, Init's `(List Nat)`); `kernel/test/entry_test.shard`.
+
 ## 10. Conformance at phase 2 (records §4.1 B10)
 
 Four suites, agreed before any result is read:
@@ -1213,6 +1252,27 @@ Four suites, agreed before any result is read:
    the old tree in 154 s.** Left out on both sides: `calc_ndigit`'s
    `codes`, shadowed in the old tree's flat closure by
    `calc_show_run`'s (first definition wins), covered by `code`.
+   **The primitive suite (slice 7):** `kernel/test/prims_test.shard`
+   is one table over every entry of §6.4's table — the 18 profile
+   spellings and the 21 naming-law identities — with a positive, a
+   negative and a boundary case each, the expected values fixed by
+   hand: the guards (the profile's `/`, `mod`, `tmod`, `ediv` at zero;
+   a shift by 64; a `Nat` entry on a negative operand — `Nat.sub`
+   included since slice 7, which had let a negative through), the
+   totalizations (`Int.tdiv x 0 = 0`, `Int.tmod x 0 = x`, `Nat.div`,
+   `Nat.mod`, the saturating `Nat.sub`, the total `Nat.shiftLeft` past
+   64 bits), the cells (`Bool`, Init's `Bool`, `Decidable`), the
+   symbol round trip and the byte guard on `sym_of_chars`, and the
+   arithmetic past 64 bits. The test runs the table under `ev` on
+   route 3, so each entry is checked against the hand-fixed value
+   through the same host arithmetic both routes share. **Its two
+   findings (2026-09-13):** the host's refusal of a primitive call is
+   not a stuck but a fatal error (the bootstrap falls through to its
+   effect handler), so every guard is `ev`'s to check first —
+   `Nat.pow x 0` divided its size estimate by the exponent through a
+   strict `bool_and` and died, and `sym_of_chars` guarded "bytes"
+   where the host decodes UTF-8, so a lone 255 died too; now
+   `utf8_ok`, and both are stuck. The suite's 120 cases are green.
 3. **Checker parity.** Phase 1's byte-tie of routes 1 and 3, carried
    unchanged.
 4. **Independent pins.** Expected outputs fixed by hand, never
@@ -1236,7 +1296,10 @@ never compared as verdicts.
 | `bin`, `requires`, the World-use check, effect traces | §4.7 | 4 |
 | prepared handles, long-lived environments | §9.3, T6 | 4 |
 | evaluation reflection: `ev`'s theorem, the `rfl` node | §4.4, T8 | 4 |
-| the canonical S form: CANON's rule set rewritten for S | §5.1 "One canonical S", §10.5 | 2, its own slice |
+| the canonical S form: CANON's rule set rewritten for S | §5.1 "One canonical S", §10.5 | 2, slice 8 — the last phase-2 slice (ruled 2026-09-13) |
+| T1's branch-local proof: a `dite` whose `h` is used only in a `Fin.mk` field — `Fin n` over erased bounds needs a **value** parameter at E, which §7.5's eligibility rule (types and propositions only) does not admit; `Fin`, `dite` and `Nat.decLt` are all inside the `Int` fixture, so the export is not what blocks it | law §4.1, §4.2 | 3, with the `Init` realizations (ruled 2026-09-13: carried as a gate item, not built early without Stage 1's typing) |
+| T5's "two validated instances of one interface" — §6.6 binds one implementation per view directory (§13 item 14) | law §8.2, T5 | 3, with item 14's `mod.req/` siblings, when a consumer needs two |
+| T5's "an imported theorem about the original still usable after a realization" with an **imported** theorem — every theorem about a realizable constant lies past the `Int` fixture (`ite_self` at export line 18,116); the native form of the fixture is pinned (`realize_theorem`) | law §4.4, T5 | 3, when the prefix grows for the `Init` realizations |
 | `CheckedEnv` sealed: K one directory module behind a view (§6.6) | §3.5, §8.2 | 3, the opener |
 | user notation | §5.3 departure 6 | never in v1 |
 
@@ -1488,3 +1551,17 @@ and the disposition this draft intends.
     still takes the constructor. Reconstruction of what the position
     determines, as level 0 is (§4). Alternative: refusing the idiom,
     which is v2's commonest; or a Stage-1 expected-kind resolution.
+
+29. **The checked entry's argument types are `Int`, `Nat`, any
+    two-constructor list type (the first constructor nullary, the
+    second binary) taking the bytes, and the World last** (§9, slice
+    7); the origin of a refused argument is its position and text. Alternative: a typed argument grammar (`--int N`), which the
+    entry's signature already states; or every entry reading
+    `get_args` raw, which is the preconditioned kind and leaves T1's
+    checked half unbuilt.
+30. **`Init.NAME` cites the imported NAME explicitly** (§3.1, slice
+    7): the scope adds the bare name as a candidate when the citation's
+    first component is `Init` and the file sees `Init` (the reader's
+    `init_cited`; the E table's `eresolve`). Alternative: no explicit
+    spelling, under which a same-spelled native type makes the
+    imported one unnameable in that file (T5's `same_spelled`).

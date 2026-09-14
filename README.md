@@ -323,10 +323,12 @@ authority for its area:
 
 ## Live arcs
 
-- **THE FOUNDATION ARC (V3) — RATIFIED 2026-09-06, phase 0 open**:
+- **THE FOUNDATION ARC (V3) — RATIFIED 2026-09-06; phases 0–1 closed,
+  phase 2 closing (slice 7 of 8 landed 2026-09-13)**:
   [docs/FOUNDATION.md](docs/FOUNDATION.md) is the law; the tree is built
-  under [`v3/`](v3/README.md) (Lean v4.33.1 pinned). Phases 0–7 in
-  FOUNDATION §12.4; the coverage arc below is **parked** until phase 7.
+  under [`v3/`](v3/README.md) (Lean v4.33.1 pinned; `v3/LANGUAGE.md` the
+  V3 surface). Phases 0–7 in FOUNDATION §12.4; the coverage arc below is
+  **parked** until phase 7.
 - **The prune arc (2026-08, issue #24) — CLOSED 2026-08-22**: tree and
   branches, the issue tracker as the single backlog, ledger status
   banners, corpus cost instrumentation (the long pole is debt #37).

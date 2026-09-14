@@ -7,6 +7,14 @@ type, and file-doc in scope, grouped by origin **dir ⊃ file** into nested
 bounding boxes on a single committed plane. Built on the
 [damascene](https://github.com/computer-whisperer/damascene) UI library.
 
+> **V3 (2026-09-13, FOUNDATION §10.5 phase 2):** the viewer's structural
+> reader knows the old tree's heads (`fn`, `type`, `record`, `sig`, `claim`,
+> `axiom`, `requirement`, `fulfills`). Under `v3/` the toolchain profile
+> (`v3/kernel`) and the S `fn`/`type` files map as today; V3's L forms —
+> `def`, `theorem`, `inductive`, `structure`, `realize` — are not cards yet.
+> They become cards when the viewer is pointed at V3, at the flip (phase 6)
+> at the latest.
+
 ## The shape of the app
 
 There is **one view**. The application state is two values plus a camera:

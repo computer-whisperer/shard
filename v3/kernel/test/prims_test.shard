@@ -1,0 +1,248 @@
+;;; v3/kernel/test/prims_test.shard — the primitive suite (v3/LANGUAGE.md §6.4,
+;;; §10 item 2; slice 7): every entry of prog.shard's table under `ev` with a
+;;; positive, a negative and a boundary case, the expected values fixed by
+;;; hand — the guards (stuck, never a value), the totalizations of the
+;;; naming-law entries, the cells the decisions return, the symbol round trip,
+;;; the byte guard, arithmetic past 64 bits. One fn per entry applies it to
+;;; Int parameters; the table is walked so that an entry without its three
+;;; cases fails the count (sym_of_chars has a fourth: invalid UTF-8). Values past 64 bits are written as products: the
+;;; bootstrap reads literals up to u64 and computes past it.
+
+(import "../host.shard")
+(import "../ev.shard")
+
+(type Case (Case (List Int) Bool))
+(type Exp (XInt Int) (XCtor Name) (XSym Symbol) (XBytes (List Int)) (XStuck))
+(type PCase (PCase (List Int) Name (List Val) Exp))
+
+(fn nm_list () Name (Str (n2 (quote kernel) (quote prelude)) (quote List)))
+(fn nm_nil () Name (Str (nm_list) (quote Nil)))
+(fn nm_cons () Name (Str (nm_list) (quote Cons)))
+(fn nm_bool () Name (Str (n2 (quote kernel) (quote prelude)) (quote Bool)))
+(fn ty_int () EType (ETCon (n1 (quote Int)) Nil))
+(fn list_decl () EDecl
+  (EInd (nm_list) 1 (list (ECtorDef (nm_nil) Nil) (ECtorDef (nm_cons) (list (ETVar 0) (ETCon (nm_list) (list (ETVar 0))))))))
+(fn bool_decl () EDecl (EInd (nm_bool) 0 (list (ECtorDef (Str (nm_bool) (quote False)) Nil) (ECtorDef (Str (nm_bool) (quote True)) Nil))))
+;; the entry's fn: t.NAME applying the primitive to its parameters
+(fn tname ((n Name)) Name
+  (measure (struct n))
+  (match n (Anon (n1 (quote t))) ((Str p s) (Str (tname p) s)) ((Num p k) (Num (tname p) k))))
+(fn op_decl ((n Name) (arity Int)) EDecl
+  (if (int_eq arity 1)
+    (EFn (tname n) 0 (list (ty_int)) (ty_int) RecNone (EPrim n (list (EBVar 0))))
+    (EFn (tname n) 0 (list (ty_int) (ty_int)) (ty_int) RecNone (EPrim n (list (EBVar 1) (EBVar 0))))))
+(fn op_decls ((t (List (Pair Name Prim)))) (List EDecl)
+  (measure (struct t))
+  (match t (Nil Nil) ((Cons (Pair n (Prim _ arity)) r) (Cons (op_decl n arity) (op_decls r)))))
+(fn prog () Prog (Prog (Cons (list_decl) (Cons (bool_decl) (op_decls (prim_table))))))
+
+(fn vlist ((xs (List Int))) Val
+  (measure (struct xs))
+  (match xs (Nil (VCtor (nm_nil) Nil)) ((Cons x r) (VCtor (nm_cons) (list (VInt x) (vlist r))))))
+(fn vbytes ((v Val)) (Option (List Int))
+  (measure (struct v))
+  (match v
+    ((VCtor c Nil) (if (name_eq c (nm_nil)) (Some Nil) None))
+    ((VCtor c (Cons (VInt b) (Cons r Nil))) (if (name_eq c (nm_cons)) (match (vbytes r) ((Some bs) (Some (Cons b bs))) (None None)) None))
+    (_ None)))
+(fn check ((r EvRes) (e Exp)) Bool
+  (match e
+    ((XInt k) (match r ((EvOk (VInt m)) (int_eq m k)) (_ False)))
+    ((XCtor c) (match r ((EvOk (VCtor d Nil)) (name_eq c d)) (_ False)))
+    ((XSym s) (match r ((EvOk (VSym u)) (sym_eq s u)) (_ False)))
+    ((XBytes bs) (match r ((EvOk v) (match (vbytes v) ((Some got) (int_list_eq got bs)) (None False))) (_ False)))
+    (XStuck (match r ((EvStuck s _) (sym_eq s (quote guard))) (_ False)))))
+(fn run_pc ((c PCase)) Case
+  (match c ((PCase name n args e) (Case name (check (ev (prog) (tname n) args 1000) e)))))
+(fn run_pcs ((cs (List PCase))) (List Case)
+  (measure (struct cs))
+  (match cs (Nil Nil) ((Cons c r) (Cons (run_pc c) (run_pcs r)))))
+;; every entry of the table has exactly three cases
+(fn count_for ((cs (List PCase)) (n Name)) Int
+  (measure (struct cs))
+  (match cs (Nil 0) ((Cons (PCase _ m _ _) r) (+ (if (name_eq m n) 1 0) (count_for r n)))))
+(fn all_three ((t (List (Pair Name Prim))) (cs (List PCase))) Bool
+  (measure (struct t))
+  (match t (Nil True) ((Cons (Pair n _) r) (if (le 3 (count_for cs n)) (all_three r cs) False))))
+
+(fn p1 ((s Symbol)) Name (n1 s))
+(fn pn ((s Symbol)) Name (n2 (quote Nat) s))
+(fn pi ((s Symbol)) Name (n2 (quote Int) s))
+(fn ii ((a Int) (b Int)) (List Val) (list (VInt a) (VInt b)))
+(fn ptrue () Exp (XCtor (Str (nm_bool) (quote True))))
+(fn pfalse () Exp (XCtor (Str (nm_bool) (quote False))))
+(fn btrue () Exp (XCtor (n2 (quote Bool) (quote true))))
+(fn bfalse () Exp (XCtor (n2 (quote Bool) (quote false))))
+(fn dtrue () Exp (XCtor (n2 (quote Decidable) (quote isTrue))))
+(fn dfalse () Exp (XCtor (n2 (quote Decidable) (quote isFalse))))
+
+(fn cases () (List PCase)
+  (list
+    ;; 0 int_eq
+    (PCase "int_eq 3 3 = True" (p1 (quote int_eq)) (ii 3 3) (ptrue))
+    (PCase "int_eq 3 4 = False" (p1 (quote int_eq)) (ii 3 4) (pfalse))
+    (PCase "int_eq past 64 bits: 2^70 = 2^70" (p1 (quote int_eq)) (ii (* 1099511627776 1073741824) (* 1099511627776 1073741824)) (ptrue))
+    ;; 1 +
+    (PCase "+ 2 3 = 5" (p1 (quote +)) (ii 2 3) (XInt 5))
+    (PCase "+ -2 -3 = -5" (p1 (quote +)) (ii -2 -3) (XInt -5))
+    (PCase "+ past 64 bits: 2^63 + 2^63 = 2^64" (p1 (quote +)) (ii 9223372036854775808 9223372036854775808) (XInt (* 4294967296 4294967296)))
+    ;; 2 -
+    (PCase "- 5 3 = 2" (p1 (quote -)) (ii 5 3) (XInt 2))
+    (PCase "- 3 5 = -2 (Int, not saturating)" (p1 (quote -)) (ii 3 5) (XInt -2))
+    (PCase "- 0 2^63 = -2^63" (p1 (quote -)) (ii 0 9223372036854775808) (XInt -9223372036854775808))
+    ;; 3 lt
+    (PCase "lt 1 2 = True" (p1 (quote lt)) (ii 1 2) (ptrue))
+    (PCase "lt 2 1 = False" (p1 (quote lt)) (ii 2 1) (pfalse))
+    (PCase "lt 2 2 = False" (p1 (quote lt)) (ii 2 2) (pfalse))
+    ;; 4 le
+    (PCase "le 1 2 = True" (p1 (quote le)) (ii 1 2) (ptrue))
+    (PCase "le 2 1 = False" (p1 (quote le)) (ii 2 1) (pfalse))
+    (PCase "le 2 2 = True" (p1 (quote le)) (ii 2 2) (ptrue))
+    ;; 5 sym_eq
+    (PCase "sym_eq a a = True" (p1 (quote sym_eq)) (list (VSym (quote a)) (VSym (quote a))) (ptrue))
+    (PCase "sym_eq a b = False" (p1 (quote sym_eq)) (list (VSym (quote a)) (VSym (quote b))) (pfalse))
+    (PCase "sym_eq on integers is stuck (guard)" (p1 (quote sym_eq)) (ii 1 1) XStuck)
+    ;; 6 band
+    (PCase "band 12 10 = 8" (p1 (quote band)) (ii 12 10) (XInt 8))
+    (PCase "band -1 5 = 5 (two's complement)" (p1 (quote band)) (ii -1 5) (XInt 5))
+    (PCase "band 0 -1 = 0" (p1 (quote band)) (ii 0 -1) (XInt 0))
+    ;; 7 bshr
+    (PCase "bshr 16 2 = 4" (p1 (quote bshr)) (ii 16 2) (XInt 4))
+    (PCase "bshr by 64 is stuck (guard)" (p1 (quote bshr)) (ii 1 64) XStuck)
+    (PCase "bshr 2^63 63 = 1; -16 2 = -4 is arithmetic" (p1 (quote bshr)) (ii 9223372036854775808 63) (XInt 1))
+    ;; 8 *
+    (PCase "* 6 7 = 42" (p1 (quote *)) (ii 6 7) (XInt 42))
+    (PCase "* -6 7 = -42" (p1 (quote *)) (ii -6 7) (XInt -42))
+    (PCase "* past 64 bits: 2^40 * 2^40 = 2^80" (p1 (quote *)) (ii 1099511627776 1099511627776) (XInt (* 1099511627776 1099511627776)))
+    ;; 9 mod
+    (PCase "mod 7 3 = 1" (p1 (quote mod)) (ii 7 3) (XInt 1))
+    (PCase "mod by zero is stuck (guard)" (p1 (quote mod)) (ii 7 0) XStuck)
+    (PCase "mod -7 3 = 2 (Euclidean)" (p1 (quote mod)) (ii -7 3) (XInt 2))
+    ;; 10 /
+    (PCase "/ 7 2 = 3" (p1 (quote /)) (ii 7 2) (XInt 3))
+    (PCase "/ by zero is stuck (guard)" (p1 (quote /)) (ii 7 0) XStuck)
+    (PCase "/ -7 2 = -3 (truncating)" (p1 (quote /)) (ii -7 2) (XInt -3))
+    ;; 11 tmod
+    (PCase "tmod 7 3 = 1" (p1 (quote tmod)) (ii 7 3) (XInt 1))
+    (PCase "tmod by zero is stuck (guard)" (p1 (quote tmod)) (ii 7 0) XStuck)
+    (PCase "tmod -7 3 = -1 (the dividend's sign)" (p1 (quote tmod)) (ii -7 3) (XInt -1))
+    ;; 12 ediv
+    (PCase "ediv 7 2 = 3" (p1 (quote ediv)) (ii 7 2) (XInt 3))
+    (PCase "ediv by zero is stuck (guard)" (p1 (quote ediv)) (ii 7 0) XStuck)
+    (PCase "ediv -7 3 = -3 (pairs with mod: -7 = 3*-3 + 2)" (p1 (quote ediv)) (ii -7 3) (XInt -3))
+    ;; 13 bor
+    (PCase "bor 12 10 = 14" (p1 (quote bor)) (ii 12 10) (XInt 14))
+    (PCase "bor -8 5 = -3" (p1 (quote bor)) (ii -8 5) (XInt -3))
+    (PCase "bor 0 0 = 0" (p1 (quote bor)) (ii 0 0) (XInt 0))
+    ;; 14 bxor
+    (PCase "bxor 12 10 = 6" (p1 (quote bxor)) (ii 12 10) (XInt 6))
+    (PCase "bxor -1 5 = -6" (p1 (quote bxor)) (ii -1 5) (XInt -6))
+    (PCase "bxor 5 5 = 0" (p1 (quote bxor)) (ii 5 5) (XInt 0))
+    ;; 15 bshl
+    (PCase "bshl 1 4 = 16" (p1 (quote bshl)) (ii 1 4) (XInt 16))
+    (PCase "bshl by 64 is stuck (guard)" (p1 (quote bshl)) (ii 1 64) XStuck)
+    (PCase "bshl 1 63 = 2^63" (p1 (quote bshl)) (ii 1 63) (XInt 9223372036854775808))
+    ;; 16 sym_of_chars
+    (PCase "sym_of_chars \"hi\" = 'hi" (p1 (quote sym_of_chars)) (list (vlist "hi")) (XSym (quote hi)))
+    (PCase "sym_of_chars of a non-byte is stuck (guard)" (p1 (quote sym_of_chars)) (list (vlist (list 104 300))) XStuck)
+    (PCase "sym_of_chars of invalid UTF-8 (a lone 255) is stuck (guard), never the host's refusal" (p1 (quote sym_of_chars)) (list (vlist (list 255))) XStuck)
+    (PCase "sym_of_chars of the two-byte sequence 195 191 (U+00FF)" (p1 (quote sym_of_chars)) (list (vlist (list 195 191))) (XSym (sym_of_chars (list 195 191))))
+    ;; 17 chars_of_sym
+    (PCase "chars_of_sym 'hi = \"hi\"" (p1 (quote chars_of_sym)) (list (VSym (quote hi))) (XBytes "hi"))
+    (PCase "chars_of_sym of an integer is stuck (guard)" (p1 (quote chars_of_sym)) (list (VInt 1)) XStuck)
+    (PCase "chars_of_sym round-trips the two-byte sequence" (p1 (quote chars_of_sym)) (list (VSym (sym_of_chars (list 195 191)))) (XBytes (list 195 191)))
+    ;; 18 Int.tdiv
+    (PCase "Int.tdiv 7 2 = 3" (pi (quote tdiv)) (ii 7 2) (XInt 3))
+    (PCase "Int.tdiv -7 2 = -3 (truncating)" (pi (quote tdiv)) (ii -7 2) (XInt -3))
+    (PCase "Int.tdiv x 0 = 0 (total)" (pi (quote tdiv)) (ii 7 0) (XInt 0))
+    ;; 19 Int.tmod
+    (PCase "Int.tmod 7 3 = 1" (pi (quote tmod)) (ii 7 3) (XInt 1))
+    (PCase "Int.tmod -7 3 = -1" (pi (quote tmod)) (ii -7 3) (XInt -1))
+    (PCase "Int.tmod x 0 = x (total)" (pi (quote tmod)) (ii 7 0) (XInt 7))
+    ;; 20 Int.ediv
+    (PCase "Int.ediv 7 2 = 3" (pi (quote ediv)) (ii 7 2) (XInt 3))
+    (PCase "Int.ediv -7 2 = -4 (Euclidean)" (pi (quote ediv)) (ii -7 2) (XInt -4))
+    (PCase "Int.ediv x 0 = 0 (total)" (pi (quote ediv)) (ii 7 0) (XInt 0))
+    ;; 21 Int.emod
+    (PCase "Int.emod 7 3 = 1" (pi (quote emod)) (ii 7 3) (XInt 1))
+    (PCase "Int.emod -7 3 = 2 (never negative)" (pi (quote emod)) (ii -7 3) (XInt 2))
+    (PCase "Int.emod x 0 = x (total)" (pi (quote emod)) (ii 7 0) (XInt 7))
+    ;; 22 Nat.sub
+    (PCase "Nat.sub 5 3 = 2" (pn (quote sub)) (ii 5 3) (XInt 2))
+    (PCase "Nat.sub on a negative operand is stuck (guard; slice 7)" (pn (quote sub)) (ii -1 3) XStuck)
+    (PCase "Nat.sub 3 5 = 0 (saturating)" (pn (quote sub)) (ii 3 5) (XInt 0))
+    ;; 23 Nat.land
+    (PCase "Nat.land 12 10 = 8" (pn (quote land)) (ii 12 10) (XInt 8))
+    (PCase "Nat.land on a negative is stuck (guard)" (pn (quote land)) (ii -1 3) XStuck)
+    (PCase "Nat.land 0 2^70 = 0" (pn (quote land)) (ii 0 (* 1099511627776 1073741824)) (XInt 0))
+    ;; 24 Nat.lor
+    (PCase "Nat.lor 12 10 = 14" (pn (quote lor)) (ii 12 10) (XInt 14))
+    (PCase "Nat.lor on a negative is stuck (guard)" (pn (quote lor)) (ii 3 -1) XStuck)
+    (PCase "Nat.lor 0 0 = 0" (pn (quote lor)) (ii 0 0) (XInt 0))
+    ;; 25 Nat.xor
+    (PCase "Nat.xor 12 10 = 6" (pn (quote xor)) (ii 12 10) (XInt 6))
+    (PCase "Nat.xor on a negative is stuck (guard)" (pn (quote xor)) (ii -1 -1) XStuck)
+    (PCase "Nat.xor 5 5 = 0" (pn (quote xor)) (ii 5 5) (XInt 0))
+    ;; 26 Nat.shiftLeft
+    (PCase "Nat.shiftLeft 1 4 = 16" (pn (quote shiftLeft)) (ii 1 4) (XInt 16))
+    (PCase "Nat.shiftLeft on a negative is stuck (guard)" (pn (quote shiftLeft)) (ii -1 1) XStuck)
+    (PCase "Nat.shiftLeft 1 64 = 2^64 (total past the host's 64 bits)" (pn (quote shiftLeft)) (ii 1 64) (XInt (* 4294967296 4294967296)))
+    ;; 27 Nat.shiftRight
+    (PCase "Nat.shiftRight 16 2 = 4" (pn (quote shiftRight)) (ii 16 2) (XInt 4))
+    (PCase "Nat.shiftRight on a negative is stuck (guard)" (pn (quote shiftRight)) (ii 16 -2) XStuck)
+    (PCase "Nat.shiftRight 2^70 70 = 1 (in 62-bit steps)" (pn (quote shiftRight)) (ii (* 1099511627776 1073741824) 70) (XInt 1))
+    ;; 28 Nat.add
+    (PCase "Nat.add 2 3 = 5" (pn (quote add)) (ii 2 3) (XInt 5))
+    (PCase "Nat.add on a negative is stuck (guard)" (pn (quote add)) (ii -1 3) XStuck)
+    (PCase "Nat.add 2^63 2^63 = 2^64" (pn (quote add)) (ii 9223372036854775808 9223372036854775808) (XInt (* 4294967296 4294967296)))
+    ;; 29 Nat.mul
+    (PCase "Nat.mul 6 7 = 42" (pn (quote mul)) (ii 6 7) (XInt 42))
+    (PCase "Nat.mul on a negative is stuck (guard)" (pn (quote mul)) (ii 6 -7) XStuck)
+    (PCase "Nat.mul 2^40 2^40 = 2^80" (pn (quote mul)) (ii 1099511627776 1099511627776) (XInt (* 1099511627776 1099511627776)))
+    ;; 30 Nat.div
+    (PCase "Nat.div 7 2 = 3" (pn (quote div)) (ii 7 2) (XInt 3))
+    (PCase "Nat.div on a negative is stuck (guard)" (pn (quote div)) (ii -6 2) XStuck)
+    (PCase "Nat.div x 0 = 0 (total)" (pn (quote div)) (ii 7 0) (XInt 0))
+    ;; 31 Nat.mod
+    (PCase "Nat.mod 7 3 = 1" (pn (quote mod)) (ii 7 3) (XInt 1))
+    (PCase "Nat.mod on a negative is stuck (guard)" (pn (quote mod)) (ii -7 3) XStuck)
+    (PCase "Nat.mod x 0 = x (total)" (pn (quote mod)) (ii 7 0) (XInt 7))
+    ;; 32 Nat.gcd
+    (PCase "Nat.gcd 12 18 = 6" (pn (quote gcd)) (ii 12 18) (XInt 6))
+    (PCase "Nat.gcd on a negative is stuck (guard)" (pn (quote gcd)) (ii -12 18) XStuck)
+    (PCase "Nat.gcd 0 5 = 5" (pn (quote gcd)) (ii 0 5) (XInt 5))
+    ;; 33 Nat.pow
+    (PCase "Nat.pow 2 10 = 1024" (pn (quote pow)) (ii 2 10) (XInt 1024))
+    (PCase "Nat.pow on a negative is stuck (guard)" (pn (quote pow)) (ii -2 2) XStuck)
+    (PCase "Nat.pow 0 0 = 1" (pn (quote pow)) (ii 0 0) (XInt 1))
+    ;; 34 Nat.beq
+    (PCase "Nat.beq 3 3 = Bool.true" (pn (quote beq)) (ii 3 3) (btrue))
+    (PCase "Nat.beq on a negative is stuck (guard)" (pn (quote beq)) (ii -3 3) XStuck)
+    (PCase "Nat.beq 3 4 = Bool.false" (pn (quote beq)) (ii 3 4) (bfalse))
+    ;; 35 Nat.ble
+    (PCase "Nat.ble 2 3 = Bool.true" (pn (quote ble)) (ii 2 3) (btrue))
+    (PCase "Nat.ble on a negative is stuck (guard)" (pn (quote ble)) (ii -2 3) XStuck)
+    (PCase "Nat.ble 4 3 = Bool.false" (pn (quote ble)) (ii 4 3) (bfalse))
+    ;; 36 Nat.decEq
+    (PCase "Nat.decEq 3 3 = Decidable.isTrue" (pn (quote decEq)) (ii 3 3) (dtrue))
+    (PCase "Nat.decEq on a negative is stuck (guard)" (pn (quote decEq)) (ii -3 3) XStuck)
+    (PCase "Nat.decEq 3 4 = Decidable.isFalse" (pn (quote decEq)) (ii 3 4) (dfalse))
+    ;; 37 Nat.decLt
+    (PCase "Nat.decLt 2 3 = Decidable.isTrue" (pn (quote decLt)) (ii 2 3) (dtrue))
+    (PCase "Nat.decLt on a negative is stuck (guard)" (pn (quote decLt)) (ii -2 3) XStuck)
+    (PCase "Nat.decLt 3 3 = Decidable.isFalse" (pn (quote decLt)) (ii 3 3) (dfalse))
+    ;; 38 Nat.decLe
+    (PCase "Nat.decLe 2 3 = Decidable.isTrue" (pn (quote decLe)) (ii 2 3) (dtrue))
+    (PCase "Nat.decLe on a negative is stuck (guard)" (pn (quote decLe)) (ii -2 3) XStuck)
+    (PCase "Nat.decLe 4 3 = Decidable.isFalse" (pn (quote decLe)) (ii 4 3) (dfalse))))
+
+(fn run ((cs (List Case)) (fails Int) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil (exit fails (write_line (append "prims_test: failures = " (show_int fails)) w)))
+    ((Cons (Case name ok) r) (run r (if ok fails (+ fails 1)) (write_line (append (if ok "PASS " "FAIL ") name) w)))))
+(fn main ((w World)) World
+  (run (Cons (Case "the table has 39 entries" (int_eq (len (prim_table)) 39))
+             (Cons (Case "every entry has at least its three cases" (all_three (prim_table) (cases)))
+                   (run_pcs (cases))))
+       0 w))

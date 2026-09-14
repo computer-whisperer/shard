@@ -295,6 +295,38 @@ seal of `CheckedEnv` is **deferred to the phase-3 opener** with its
 analysis (§6.6, §13 item 26): the boundary is K, not `kernel/env`, and
 no client outside `kernel/` exists before `meta/`. 19 entrypoints,
 0 failed, 237 s. **CI (pipeline 472, `e20e2ec`):** green — 19 entrypoints, the calc differential in 385 s on the runner (the port under `ev` 15 s, the old tree's tower 370 s), parity in 118 s, route 2's byte-tie in 52 s, the full-export replay on compiled K in 2,473 s at a 29.6 GB peak, all 20 candidates pinned, closures identical, byte-ties identical (engine 189 s, corpus 1,501 s, v3 3,870 s; the pipeline 4,061 s).
+**Slice 7 (2026-09-13): the phase-2 close-out** — the gate of
+FOUNDATION §12.4 item 2 mapped item by item to its evidence or its
+ruling (records §9's close-out ledger). Built: the **checked entry**
+of `LANGUAGE.md` §9 — `run_prog` validates the driver's `-- ARG…`
+against the entry's parameters before the World (`Int`, `Nat`, a
+two-constructor list type taking the bytes) and refuses a malformed
+argument by its position and text, never a file span (`RUN: argument
+N REASON: TEXT`, exit 6; pins `entry`, `entry_s`;
+`kernel/test/entry_test.shard`) — T1's raw-versus-checked fixture;
+the **primitive suite** — `kernel/test/prims_test.shard`, every one of
+the table's 39 entries with a positive, a negative and a boundary case
+fixed by hand, which found two host-fatal calls in `ev` (`Nat.pow x
+0`, `sym_of_chars` on invalid UTF-8; both stuck now) and `Nat.sub`
+outside the non-negative guard; the **T5 audit** — the battery's eight
+fixtures each to a pin, two new (`same_spelled`: Init's `Bool` beside
+`main.Bool`, never conflated, each citable in full since `Init.NAME`
+now cites the imported name explicitly, §13 item 30;
+`realize_theorem`: a theorem about `List.append` stated before its
+realization cited after it), two carried to phase 3 by ruling
+(`LANGUAGE.md` §11: two validated instances of one interface; the
+imported-theorem form of the realization fixture, whose first theorem
+lies past the `Int` fixture). **Rulings (2026-09-13):** T1's
+branch-local proof is carried to phase 3 — `Fin n` needs a value
+parameter at E, not built early without Stage 1's typing (§11); the
+canonical S form (CANON's rule set for S) is **slice 8, the last of
+phase 2**; the viewer keeps a README note. Doc rows of law §10.5 at
+phase 2: the zed extension knows the V3 keywords and forms,
+`shard-viewer/README.md` says what the map shows under `v3/`, the CI
+and corpus headers name the phase-2 gate, `TCB.md`'s V3 roster cites
+the conformance suites. Tests: 21 entrypoints, 0 failed, 245 s
+(parity 20 closures, 67,976 declaration lines, 43 s; calc 6 s and 155
+s; route 2's byte-tie 20 s).
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
@@ -342,6 +374,14 @@ each closes on its named gate:
   at slice 3 (R43 above); views landed at slice 4 (`LANGUAGE.md`
   §6.6), so the mechanism exists; the seal itself — K one directory
   module behind a view — is the phase-3 opener's (R43 above).
+- **Phase 2's items carried to phase 3 by ruling (2026-09-13, slice
+  7; `LANGUAGE.md` §11):** T1's branch-local proof (`Fin n` over an
+  erased bound needs a value parameter at E); T5's two validated
+  instances of one interface (one implementation per view directory
+  until §13 item 14's siblings); the imported-theorem form of T5's
+  realization fixture (`ite_self` at export line 18,116). Phase 2
+  closes at slice 8 (CANON's rule set for S); the close-out ledger is
+  records §9.
 
 ## The pin (2026-09-06)
 
@@ -371,5 +411,5 @@ v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K; phas
 v3/meta/          phase 3: the elaborators, I, the goal graph, tactics
 v3/std/           phase 3: the first library under the naming law
 v3/examples/      the ported examples: calc/ (slice 6: the program half in S; the claims at phase 3)
-v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers), pins/loader/ (slices 3–6: package roots, main.shard's `;; expect:` and `;; roots:` headers; the ev_* cases are the classifier's)
+v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers), pins/loader/ (slices 3–7: package roots, main.shard's `;; expect:` and `;; roots:` headers; the ev_* cases are the classifier's, entry*/same_spelled/realize_theorem slice 7's)
 ```

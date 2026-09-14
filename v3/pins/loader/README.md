@@ -1,4 +1,4 @@
-# v3/pins/loader — the loader's corpus (phase 2, slices 3–6)
+# v3/pins/loader — the loader's corpus (phase 2, slices 3–7)
 
 Each directory is a **package root**; `CASE/main.shard` is the file the
 loader is given (`v3/kernel/load.shard --root v3/pins/loader/CASE …`),
@@ -14,7 +14,7 @@ record that is not a module, an Init load or an acceptance:
 ;; expect: NAME policy AXIOM…          NAME's axiom closure reaches AXIOM… outside the file's policy (§9)
 ;; expect: NAME pending sorry          read, admits nothing (a theorem's proof, or a fulfills)
 ;; expect: NAME refused REASON         also the classifier's refusal (slice 5): unsaturated, function_value,
-;;                                     nonexhaustive, private_match, unknown_head, ambiguous_head, unbound_name,
+;;                                     nonexhaustive, private_match, unknown_head, ambiguous_head, ambiguous_type, unbound_name,
 ;;                                     string_literal, list_sugar, symbol_literal, unknown_type,
 ;;                                     pattern_type, pattern_name, nat_constructor, name_taken, …; a realize's (§7.5): unknown_constant,
 ;;                                     realize_kind, realize_primitive, realize_signature, realize_descent, realize_recursion, realize_order, no_l_meaning,
@@ -40,4 +40,10 @@ A `REALIZE` record (a realization attached, §7.5) counts as accepted, as `RUNNA
 files, the wrong-pin fixture, the records' text, a loaded program run
 under `ev`). `v3/test.sh` runs both. The `ev_*` cases are the
 classifier's (slice 5); `ev_profile` has its files under `kernel/`, the
-toolchain profile; the `realize_*` cases are slice 5b's (§7.5).
+toolchain profile; the `realize_*` cases are slice 5b's (§7.5). Slice
+7's: `entry` (the profile: a checked entry with `Int`, a byte list and
+the World, run by `entry_test`) and `entry_s` (S: `Nat`, Init's `(List
+Nat)`), `same_spelled` (T5: Init's `Bool` beside `main.Bool`, the bare
+name ambiguous, `Init.Bool` the explicit citation) and
+`realize_theorem` (T5: a theorem about `List.append` stated before its
+realization, cited after).

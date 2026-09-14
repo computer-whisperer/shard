@@ -1245,6 +1245,89 @@ is `docs/FOUNDATION.md` §5.3.
   which it does not have — phase 2 cannot close without a ruling on
   them. Tests: 19 entrypoints, 0 failed, 237 s (route 2's byte-tie 21
   s; calc 161 s; parity 37 s). **CI (pipeline 472, `e20e2ec`):** green — 19 entrypoints, the calc differential in 385 s on the runner (the port under `ev` 15 s, the old tree's tower 370 s), parity in 118 s, route 2's byte-tie in 52 s, the full-export replay on compiled K in 2,473 s at a 29.6 GB peak, all 20 candidates pinned, closures identical, byte-ties identical (engine 189 s, corpus 1,501 s, v3 3,870 s; the pipeline 4,061 s).
+- **2026-09-13 — slice 7 landed: the phase-2 close-out.** The design
+  report re-derived the slice from the law (§12.4 item 2's gate: T1's
+  three fixtures, T5, T8's replay half, the four conformance suites)
+  and asked five rulings; the user: "1: defer, 2: build, 3: yes, 4:
+  slice 8, 5: we can leave the README note for now." **Built:** the
+  **checked entry** of `LANGUAGE.md` §9 — `run_prog` validates the
+  driver's `-- ARG…` against the entry's parameters before the World
+  (`Int` a signed decimal, `Nat` an unsigned one, a two-constructor
+  list type taking the bytes), refuses a malformed argument as
+  `RunArg` by its position and text (`RUN: argument N REASON: TEXT`,
+  exit 6; never a file span), an unservable parameter or a missing
+  World as `bad_entry`; an entry with the World alone still reads the
+  raw list through `get_args`, the entry declaring its own
+  precondition; pins `entry` (the profile) and `entry_s` (S),
+  `kernel/test/entry_test.shard`, 13 cases. The **primitive suite** —
+  `kernel/test/prims_test.shard`, every one of the table's 39 entries
+  with a positive, a negative and a boundary case fixed by hand, 120
+  cases — found that the host's refusal of a primitive call is fatal
+  (the bootstrap falls through to its effect handler), so every guard
+  is `ev`'s: `Nat.pow x 0` divided its size estimate by the exponent
+  through a strict `bool_and` and died; `sym_of_chars` guarded "bytes"
+  where the host decodes UTF-8, so a lone 255 died; `Nat.sub` sat
+  outside the non-negative guard. All three fixed (`utf8_ok` is the
+  new guard). **The T5 audit**, the battery's eight fixtures to their
+  evidence: the consumer over the view alone and with the
+  implementation linked (`loader_test`, slice 5); the private-equality
+  leak refused (`ev_private_match`, `ev_launder`); two same-spelled
+  nominal types never conflated — new pin `same_spelled`, Init's
+  `Bool` beside `main.Bool`, the bare citation `ambiguous_type`, each
+  citable in full, which needed one rule: **`Init.NAME` cites the
+  imported NAME explicitly** (§3.1, §13 item 30; the reader's
+  `init_cited`, the E table's `eresolve`) — the import's prefix had
+  been display only, and a shadowed imported name had no spelling at
+  all; an import identified only by declared mapping (`init`,
+  `init_nested`, `init_not_found`, the wrong-pin case); physical
+  relocation changing no identity — the root's location, whitespace,
+  comments, binder names (slice 2, `loader_test`), while a native
+  declaration moved across files is a rename by the naming law (§13
+  item 1), by design; a realization attached to an imported
+  declaration with a theorem about the original still usable — new
+  pin `realize_theorem`, a theorem about `List.append` stated before
+  its `realize` and cited after it; the **imported**-theorem form
+  waits for a prefix that reaches one (`ite_self` at export line
+  18,116, past the `Int` fixture; §11); identification by spelling
+  refused (`realize_name_taken`; §3: no form identifies two
+  identities); **two validated instances of one interface** — not
+  expressible under §6.6's one implementation per view directory (§13
+  item 14), carried to phase 3 with item 14's siblings (§11).
+  **T8's replay half:** direct P (exact-term theorems checked by K)
+  and origin-only invariance at slice 2, the route recorded on every
+  log since phase 1; the sidecar, store and migration-patch items are
+  phase 3–4 by the law's own table. **Rulings:** T1's branch-local
+  proof is carried to phase 3 — `Fin`, `dite` and `Nat.decLt` all lie
+  inside the `Int` fixture, so the export is not what blocks it; `Fin
+  n` needs a value parameter at E, which §7.5's eligibility rule
+  (types and propositions only) does not admit, and building that
+  ahead of Stage 1's typing was declined (§11); the canonical S form
+  (CANON's rule set for S) is **slice 8, the last of phase 2**; the
+  viewer keeps a README note rather than V3 cards. **Doc rows (law
+  §10.5, phase 2):** `tools/zed-shard`'s highlights and outline know
+  the V3 keywords and forms (0.3.0); `shard-viewer/README.md` says
+  what the map shows under `v3/`; `.gitlab-ci.yml` and `run_corpus.sh`
+  name the phase-2 gate; `TCB.md`'s V3 roster cites the conformance
+  suites; the root README's arc line. The loader tests share
+  `kernel/test/loader_kit.shard`. Tests: 21 entrypoints, 0 failed, 245
+  s (parity 20 closures, 67,976 declaration lines, 43 s; calc 6 s and
+  155 s; route 2's byte-tie 20 s).
+- **Phase 2 close-out ledger (2026-09-13; the phase closes at slice
+  8).** Each item of §12.4 item 2's gate, its evidence, its status:
+
+  | gate item | evidence | status |
+  |---|---|---|
+  | T1: a decision tag with erased payload | `realize_view` (`dite`, `ite` derived); `ev_test`'s `Nat.decLt` cell | covered (slice 5b) |
+  | T1: a branch-local bound proof | `Fin` inside the `Int` fixture; `Fin n`'s value parameter is not an E parameter at Stage 0 | **carried to phase 3** (ruling 2026-09-13; `LANGUAGE.md` §11) |
+  | T1: raw versus checked arguments | checked: `entry`, `entry_s`, `entry_test` (slice 7); preconditioned: a `realize`'s erased binders, the `REALIZE` record (5b) | covered (7) |
+  | T5: eight fixtures | as audited above; `same_spelled` and `realize_theorem` new | six covered; **two carried to phase 3** (§11) |
+  | T8: the replay half | direct P and origin-only invariance (2); the route recorded (phase 1) | covered |
+  | conformance 1: frontend parity | `parity_test.sh`, every toolchain closure byte-identical (6) | covered |
+  | conformance 2: execution parity | route 2's byte-tie (5); calc's differential (6); the primitive suite (7) | covered |
+  | conformance 3: checker parity | routes 1 and 3 byte-tied over the whole export (phase 1) | covered |
+  | conformance 4: independent pins | `t0_expected.txt`; the pins' `;; expect:` headers, fixed by hand | covered |
+  | law §10.5's doc rows at phase 2 | `LANGUAGE.md` (slices 1–7), zed, the viewer's README, the CI and corpus headers, TCB (7) | one row open: **CANON's rule set for S, slice 8** |
+  | `LANGUAGE.md` §13, for ratification | items 1–30 | the user's and GPT-6's pass at the phase boundary |
 
 ## 10. Related records
 

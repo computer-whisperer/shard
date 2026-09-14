@@ -6,6 +6,16 @@
 ;; (proofs, steps, eqrefs), kernel/types.shard (the native prim table).
 ;; docs/LANGUAGE.md is the prose spec.
 ;;
+;; V3 (2026-09-13, FOUNDATION §10.5 phase 2): the V3 surface keywords and
+;; forms of v3/LANGUAGE.md §4–§5 are folded in beside the old tree's —
+;; `inductive structure def abbrev opaque theorem axiom realize trusts`,
+;; the explicit-L term heads `fun forall -> Sort proj`, `exact`/`sorry`
+;; proofs, `(view)` in a realize, the binder markers — since both trees
+;; live in this repository until the flip. Dotted names whose last
+;; component is lowercase (`Nat.add`, `List.cons`) read as functions; the
+;; universe suffix `.{u}` parses as a trailing brace list under the Scheme
+;; grammar and is left uncolored.
+;;
 ;; ORDERING: Zed applies the LAST pattern that captures a node, so this
 ;; file goes generic → specific. Catch-alls (plain symbol, list head,
 ;; capitalized = type) come first; keyword / builtin / definition-name
@@ -46,6 +56,11 @@
 ;; None, Z, S, Expr, … in every position.
 ((symbol) @type
   (#match? @type "^[A-Z][A-Za-z0-9_]*$"))
+
+;; A dotted name whose last component is lowercase is a V3 namespaced
+;; function or constructor (`Nat.add`, `List.length`, `List.cons`).
+((symbol) @function
+  (#match? @function "^[A-Z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)*\\.[a-z_][A-Za-z0-9_]*$"))
 
 ;; -----------------------------------------------------------------
 ;; Constants and small enum-like operands.
@@ -88,12 +103,14 @@
 ;;   modules:      import use use-module
 ;;   artifacts:    bin lib app cli returns
 ;;   sugars:       make with refine S^ inline chain measure
+;;   V3 (v3/LANGUAGE.md §4–§5): inductive structure def abbrev opaque
+;;                 theorem realize trusts; exact; fun forall -> Sort proj
 ;; -----------------------------------------------------------------
 
 ((list
    .
    (symbol) @keyword)
-  (#match? @keyword "^(type|fn|extern|sig|record|match|let|if|quote|import|use|use-module|bin|lib|app|cli|returns|make|with|refine|S\\^|inline|chain|measure)$"))
+  (#match? @keyword "^(type|fn|extern|sig|record|match|let|if|quote|import|use|use-module|bin|lib|app|cli|returns|make|with|refine|S\\^|inline|chain|measure|inductive|structure|def|abbrev|opaque|theorem|realize|trusts|exact|fun|forall|->|Sort|proj)$"))
 
 ;; `(sig fn NAME …)` / `(sig type NAME …)` — the second word is a keyword too.
 ((list
@@ -128,9 +145,14 @@
    (symbol) @keyword)
   (#match? @keyword "^(claim|axiom|requirement|fulfills|proof-for|goal|refl|steps|induct|case-on|case|wf-induct|subterm-induct|below|refine-fact|have|fin-split|div-facts|inject|rewrite-with|exact-conv|absurd|by|admit|auto)$"))
 
-;; The bare leaf spellings: `refl`, `admit`, `auto` as a whole proof.
+;; The bare leaf spellings: `refl`, `admit`, `auto` as a whole proof; V3's
+;; `sorry` (read, admits nothing) and `Prop`/`Type` are handled by case.
 ((symbol) @keyword
-  (#match? @keyword "^(refl|admit|auto)$"))
+  (#match? @keyword "^(refl|admit|auto|sorry)$"))
+
+;; V3 binder markers: `(x TYPE implicit)`, `(x TYPE strict)`, `(x TYPE inst)`.
+((symbol) @attribute
+  (#match? @attribute "^(implicit|strict)$"))
 
 ;; Steps (inside `steps`) and equation references (what a rewrite cites).
 ((list
@@ -143,12 +165,13 @@
 ;;   bin/lib:  entry externs trusts requires exports accepts
 ;;   axiom:    kind      record: ctor      fn: measure's (struct X)
 ;;   steps:    stop at inst     certs: rows
+;;   V3:       (realize NAME (view)) — the derived view
 ;; -----------------------------------------------------------------
 
 ((list
    .
    (symbol) @attribute)
-  (#match? @attribute "^(entry|externs|trusts|requires|exports|accepts|kind|ctor|struct|stop|at|inst|rows)$"))
+  (#match? @attribute "^(entry|externs|trusts|requires|exports|accepts|kind|ctor|struct|stop|at|inst|rows|view)$"))
 
 ;; -----------------------------------------------------------------
 ;; Names being defined or cited.
@@ -161,7 +184,7 @@
    (symbol) @_def
    .
    (symbol) @function)
-  (#match? @_def "^(fn|extern|claim|axiom|requirement|fulfills|proof-for|returns|bin|lib|app|cli)$")
+  (#match? @_def "^(fn|extern|claim|axiom|requirement|fulfills|proof-for|returns|bin|lib|app|cli|def|abbrev|opaque|theorem|realize)$")
   (#match? @function "^[^A-Z]"))
 
 ;; (sig fn NAME …)
@@ -235,7 +258,7 @@
      (list
        .
        (symbol) @variable.parameter)))
-  (#match? @_fn "^(fn|extern)$"))
+  (#match? @_fn "^(fn|extern|def|abbrev|opaque|theorem|axiom|realize|inductive|structure|requirement)$"))
 
 ((list
    .
@@ -259,7 +282,7 @@
      (list
        .
        (symbol) @variable.parameter)))
-  (#match? @_form "^(goal|let)$"))
+  (#match? @_form "^(goal|let|fun|forall)$"))
 
 ((list
    .
