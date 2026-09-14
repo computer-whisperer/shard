@@ -412,6 +412,7 @@ boundary, one equation per leaf, the profile's flat scope,
 and 29 amended or clarified in place; the ratification pass runs over
 the consolidated text. Tests: 22 entrypoints, 0 failed (parity 20
 closures, 68,076 declaration lines, 42 s, every projection injective).
+**CI (pipeline 479, `db2dee3`, 2026-09-14): green** — 22 entrypoints, the calc differential byte-identical in 399 s on the runner (the port under `ev` 15 s, the old tree 384 s), parity byte-identical over 20 closures and 68,076 declaration lines in 132 s with every projection injective, route 2's byte-tie in 51 s, the gate test's five scenarios, the byte-ties with both engines complete (the fixture 301 lines, chunks 0–4 3,395 lines), the full-export replay on compiled K in 2,494 s at a 30.7 GB peak, all 20 candidates pinned, closures identical (engine 164 s, corpus 1,537 s, v3 3,938 s; the pipeline 4,104 s) — R56, R58 and R59 closed on the full gate.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
@@ -460,8 +461,9 @@ each closes on its named gate:
   opaque type observed through the tag bit), a pending measure no
   caller saw, a byte-list codec by constructor shape — each probed
   live, **fixed at slice 10** with its pins (`if_private`, `if_type`,
-  `if_one`, `if_ok`; `realize_pending_via`; `entry_shape`); CI closes
-  them on the next green pipeline. Carried, not fixed: the World's
+  `if_one`, `if_ok`; `realize_pending_via`; `entry_shape`); **CLOSED
+  on CI pipeline 479** (`db2dee3`, 2026-09-14): the 22 entrypoints,
+  parity injective, the full replay and all 20 pins. Carried, not fixed: the World's
   identity at an entry (phase 4's handler contract) and the checked
   module instance (R57; the phase-3 two-instance gate).
 - **The Stage-0 `fn` gap** — a `fn` has an E body and no L meaning, no
