@@ -1312,8 +1312,57 @@ is `docs/FOUNDATION.md` §5.3.
   `kernel/test/loader_kit.shard`. Tests: 21 entrypoints, 0 failed, 245
   s (parity 20 closures, 67,976 declaration lines, 43 s; calc 6 s and
   155 s; route 2's byte-tie 20 s). **CI (pipeline 474, `bed273c`):** green — 21 entrypoints, the calc differential byte-identical in 401 s on the runner (the port under `ev` 16 s, the old tree's tower 385 s), parity byte-identical over 20 closures and 67,976 declaration lines in 128 s, route 2's byte-tie identical in 52 s, the full-export replay on compiled K in 2,478 s at a 29.6 GB peak, all 20 candidates pinned, closures identical, byte-ties identical (engine 194 s, corpus 1,547 s, v3 3,949 s; the pipeline 4,145 s).
-- **Phase 2 close-out ledger (2026-09-13; the phase closes at slice
-  8).** Each item of §12.4 item 2's gate, its evidence, its status:
+- **2026-09-13 — slice 8 landed: the canonical form of S
+  (`v3/CANON.md`).** The design report re-derived the slice from law
+  §10.5's CANON row (the rule set rewritten for S; §7 superseded by
+  §8.3; the law carried) and §12.5 (the fmt gate on V3 at phase 6),
+  measured the tree (the old `shardfmt --check` over 210 V3 files: 109
+  canonical, 98 drifting, 3 unreadable — `v3/kernel` 1 of 30, its
+  3,103 of 17,745 lines over 80 columns; the universe suffix `Eq.{1}`
+  is "unreadable source" to the old reader; the toolchain's 163
+  `let`s, 27 multi-binding, 10 nested) and asked six rulings; the
+  user: "Your leans look reasonable, let's proceed with that." **The
+  rulings:** a file of its own beside `LANGUAGE.md`, superseding
+  `docs/CANON.md` for the V3 tree; the rule set alone, the E
+  recognizer the phase-6 slice's first step (the old law's precedent:
+  the document ratified, then its first slice); C3 recast — the flat
+  sequential `let` is canonical, a let whose body is a let merges,
+  order stays meaning, dead bindings refused; C9 generalized — a match
+  over any two-constructor type whose arms bind nothing is an `if`,
+  since `if`'s tag rule reaches every such type; no reformat now; §7's
+  Merkle spec superseded by §8.3 with the store, its within-component
+  ordering lesson kept as a note. **The document:** what carries (the
+  thesis, the architecture, the goal-position exemption — now the L
+  forms — the exclusions, the certificate taxonomy and escape-rule
+  criterion, the verification discipline, the depth price); the three
+  layers of S (layout over the text; the term tier over `ETerm`'s nine
+  formers; the L layer); shardfmt's layout law carried with a keep
+  table for the V3 heads and the reader's lexical rules (the V3
+  formatter is a printer over `kernel/sexpr.shard`); C1–C12 recast in
+  one table (C6 a reader rule by construction; C7's `canon-rules`
+  reserved for phase 3); eight new L rules (arrows for a non-dependent
+  Pi, `Prop`/`Type` over `Sort`, flat application, the universe suffix
+  in L and never in E-type positions, flat `let`, `exact`/`sorry`,
+  binders with default markers omitted, the header block's order —
+  the Init import, imports and `use` lines sorted, `trusts`); why the
+  parity text is not this form; canonical S injective into L up to the
+  quotient; the ratchet on V3 (stages 0–4, the gate at phase 6, the
+  tools per the manifest); §9's eleven decisions, six ruled and five
+  open (normal-form levels, `_` for an unused variable, the header
+  order, the reserved form, declaration order). Doc rows: the old
+  CANON's banner; `LANGUAGE.md`'s banner, §11, §12.5, §13's pointer;
+  the V3 README.
+- **PHASE 2 CLOSED (2026-09-13, slice 8) — pending the ratification
+  pass.** Every gate item of §12.4 item 2 has its evidence or its
+  ruling below; law §10.5's phase-2 doc rows are all written. What
+  remains before phase 3 opens is the pass the law's review loop
+  requires at a phase boundary: the user's and GPT-6's, by commit SHA,
+  over `v3/LANGUAGE.md` §13 (items 1–30) and `v3/CANON.md` §9 (items
+  7–11 open). The phase-3 opener then states its two guards — one term
+  grammar for `def` and `fn`; the profile is bring-up, never a dialect
+  — and takes up the seal of K (§13 item 26).
+- **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
+  item of §12.4 item 2's gate, its evidence, its status:
 
   | gate item | evidence | status |
   |---|---|---|
@@ -1326,8 +1375,8 @@ is `docs/FOUNDATION.md` §5.3.
   | conformance 2: execution parity | route 2's byte-tie (5); calc's differential (6); the primitive suite (7) | covered |
   | conformance 3: checker parity | routes 1 and 3 byte-tied over the whole export (phase 1) | covered |
   | conformance 4: independent pins | `t0_expected.txt`; the pins' `;; expect:` headers, fixed by hand | covered |
-  | law §10.5's doc rows at phase 2 | `LANGUAGE.md` (slices 1–7), zed, the viewer's README, the CI and corpus headers, TCB (7) | one row open: **CANON's rule set for S, slice 8** |
-  | `LANGUAGE.md` §13, for ratification | items 1–30 | the user's and GPT-6's pass at the phase boundary |
+  | law §10.5's doc rows at phase 2 | `LANGUAGE.md` (slices 1–7), zed, the viewer's README, the CI and corpus headers, TCB (7); `v3/CANON.md` (8) | covered |
+  | `LANGUAGE.md` §13 and `CANON.md` §9, for ratification | items 1–30; six ruled and five open | **outstanding**: the user's and GPT-6's pass at the phase boundary |
 
 ## 10. Related records
 

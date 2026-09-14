@@ -1,6 +1,6 @@
 # The V3 language — S, L and E at Stage 0 (phase 2 draft)
 
-> **STATUS (2026-09-13): DRAFT — slices 1–7 of phase 2 (FOUNDATION
+> **STATUS (2026-09-13): DRAFT — slices 1–8 of phase 2, the phase's last (FOUNDATION
 > §12.4 item 2; `docs/records/FOUNDATION.md` §9).** Written before the
 > reader existed, as the design the reader, the loader, the views, the
 > fragment classifier and `ev` are built to. **Slice 2 built §2 and the
@@ -51,8 +51,14 @@
 > audit (each of the battery's eight fixtures mapped to its pin, two
 > carried to phase 3 in §11 by ruling, as T1's branch-local proof is),
 > the doc rows of law §10.5 dated phase 2, and the records' close-out
-> ledger; the canonical S form (CANON's rule set for S) is slice 8, the
-> last of phase 2.
+> ledger. **Slice 8 wrote `v3/CANON.md`** — the canonical form of S
+> (law §10.5's CANON row at phase 2): shardfmt's layout law carried with
+> the V3 heads, C1–C12 recast on E's formers (C3 under sequential `let`,
+> C9 under `if`'s tag rule), eight new rules for explicit L and the file
+> header, content addressing superseded by law §8.3, the ratchet on V3
+> with the gate at phase 6, the migration baseline. **Phase 2 closes on
+> it (2026-09-13)**, pending the ratification pass over §13 below and
+> `v3/CANON.md` §9.
 > It supersedes `docs/LANGUAGE.md` for the `v3/`
 > tree (FOUNDATION §10.5); the old document keeps describing the old
 > tree until the flip. The proof IR **I** is phase 3's chapter and is
@@ -1296,7 +1302,7 @@ never compared as verdicts.
 | `bin`, `requires`, the World-use check, effect traces | §4.7 | 4 |
 | prepared handles, long-lived environments | §9.3, T6 | 4 |
 | evaluation reflection: `ev`'s theorem, the `rfl` node | §4.4, T8 | 4 |
-| the canonical S form: CANON's rule set rewritten for S | §5.1 "One canonical S", §10.5 | 2, slice 8 — the last phase-2 slice (ruled 2026-09-13) |
+| the canonical S form: CANON's rule set rewritten for S — **landed slice 8, `v3/CANON.md`**; its recognizer, formatter and gate | §5.1 "One canonical S", §10.5 | the rule set 2 (done); the gate 6 |
 | T1's branch-local proof: a `dite` whose `h` is used only in a `Fin.mk` field — `Fin n` over erased bounds needs a **value** parameter at E, which §7.5's eligibility rule (types and propositions only) does not admit; `Fin`, `dite` and `Nat.decLt` are all inside the `Int` fixture, so the export is not what blocks it | law §4.1, §4.2 | 3, with the `Init` realizations (ruled 2026-09-13: carried as a gate item, not built early without Stage 1's typing) |
 | T5's "two validated instances of one interface" — §6.6 binds one implementation per view directory (§13 item 14) | law §8.2, T5 | 3, with item 14's `mod.req/` siblings, when a consumer needs two |
 | T5's "an imported theorem about the original still usable after a realization" with an **imported** theorem — every theorem about a realizable constant lies past the `Int` fixture (`ite_self` at export line 18,116); the native form of the fixture is pinned (`realize_theorem`) | law §4.4, T5 | 3, when the prefix grows for the `Init` realizations |
@@ -1405,7 +1411,7 @@ row.
 | v2 | fate | note |
 |---|---|---|
 | `bin/check`, `bin/shard_check`, `bin/shard_eval`, `eval direct` | the V3 driver (`kernel/load.shard`, slice 3) replaces `check`; `eval direct` stays the bootstrap's; the compiled chain is route 1 | law §9.1; `tools/lower` ARCHIVE at the flip |
-| shardfmt and CANON's rule set | rewritten for S | law §10.5: phase 2, its own slice; the fmt gate on V3 at phase 6 |
+| shardfmt and CANON's rule set | rewritten for S — `v3/CANON.md` (slice 8, 2026-09-13) | law §10.5; the fmt gate on V3 at phase 6 (`v3/CANON.md` §8) |
 | `tools/digest`, `explain`, `prove`, `search` | new code onto law §7.3 | MANIFEST |
 | `tools/zed-shard`, `shard-viewer` keyword lists | the V3 keywords (§4) | law §10.5, phase 2 |
 
@@ -1430,6 +1436,9 @@ and the disposition this draft intends.
 | no totality check on any `fn` during Stage 0 | phase 3, Stage 1 (law §4.5) | every `fn`; calc's 51 functions, `RUNNABLE` since slice 6 with their measures reduced to terms | R45's self-recursive candidate exhausts and gains no equations (`ev_test`, landed slice 5); a `realize` is checked for structural descent and a looping body refused (`realize_loop`, landed 5b) | measure obligations discharged at Stage 1; the runnable-only status visible in the driver's output meanwhile (`RUNNABLE`, R45, landed); a `realize`'s `(measure E)` a reported obligation (`PENDING … measure`, 5b) |
 
 ## 13. For ratification — decisions made here beyond the law's text
+
+The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
+2026-09-13, five open); they ratify with these.
 
 1. **Native K names carry the module path** (`std.list.List.sum`);
    imported names do not (`List.length`), the import being their

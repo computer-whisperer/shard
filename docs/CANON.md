@@ -3,6 +3,8 @@ shard canonicalization — CANON.md
 
 > **STATUS (reset 2026-08-22): LAW.** the canonical dialect — rules, census, content addressing. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
 
+> **FOUNDATION (2026-09-13): SUPERSEDED for the V3 tree by `v3/CANON.md`** (the rule set rewritten for S — phase 2, slice 8; FOUNDATION §10.5). This document keeps describing the OLD tree until the flip, when it is archived; its §7 content addressing is superseded for V3 by FOUNDATION §8.3 (identity hashes over L and P, never S text), its architecture, exclusions and verification discipline carry, and its C3 and C9 are recast there under sequential `let` and V3's `if`.
+
 > Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
 
 STATUS: RATIFIED (user review completed 2026-07-10) — §1–§10 stand as

@@ -327,6 +327,24 @@ and corpus headers name the phase-2 gate, `TCB.md`'s V3 roster cites
 the conformance suites. Tests: 21 entrypoints, 0 failed, 245 s
 (parity 20 closures, 67,976 declaration lines, 43 s; calc 6 s and 155
 s; route 2's byte-tie 20 s). **CI (pipeline 474, `bed273c`):** green — 21 entrypoints, the calc differential byte-identical in 401 s on the runner (the port under `ev` 16 s, the old tree's tower 385 s), parity byte-identical over 20 closures and 67,976 declaration lines in 128 s, route 2's byte-tie identical in 52 s, the full-export replay on compiled K in 2,478 s at a 29.6 GB peak, all 20 candidates pinned, closures identical, byte-ties identical (engine 194 s, corpus 1,547 s, v3 3,949 s; the pipeline 4,145 s).
+**Slice 8 (2026-09-13): the canonical form of S** — `v3/CANON.md`, law
+§10.5's CANON row at phase 2, written to six rulings: a file of its own
+superseding `docs/CANON.md` for this tree; the rule set alone, its
+recognizer the phase-6 fmt-gate slice's first step; C3 recast (the
+flat sequential `let` canonical, a let whose body is a let merged);
+C9 generalized (a match over any two-constructor type whose arms bind
+nothing is an `if`); the tree's 98 drifting files left to the V3
+formatter at phase 6 (the old tool cannot lex the universe suffix);
+§7's content addressing superseded by law §8.3. New: eight rules for
+explicit L and the file header (arrows, sorts, flat application, the
+universe suffix, `let`, proofs, binders, the header block's order) and
+the migration baseline (109 of 210 files canonical under today's
+layout law; 3,103 of the kernel's 17,745 lines over 80 columns; the
+toolchain's 163 `let`s, 10 nested). **Phase 2 closed on it
+(2026-09-13)** — every gate item of FOUNDATION §12.4 item 2 has its
+evidence or its ruling in records §9's ledger — pending the
+ratification pass: `LANGUAGE.md` §13's thirty items and `CANON.md` §9's
+five open ones, the user's and GPT-6's by SHA.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
@@ -380,8 +398,9 @@ each closes on its named gate:
   instances of one interface (one implementation per view directory
   until §13 item 14's siblings); the imported-theorem form of T5's
   realization fixture (`ite_self` at export line 18,116). Phase 2
-  closes at slice 8 (CANON's rule set for S); the close-out ledger is
-  records §9.
+  closed at slice 8 (2026-09-13, `v3/CANON.md`); the close-out ledger
+  is records §9; the ratification pass over `LANGUAGE.md` §13 and
+  `CANON.md` §9 is outstanding.
 
 ## The pin (2026-09-06)
 
@@ -407,6 +426,7 @@ v3/README.md      this file: root, pins, phase status
 v3/MANIFEST.md    the port manifest — PORT / ARCHIVE / REGENERATE per family
 v3/INVENTORY.md   the shared-type inventory — imported identity, fields, view, realization
 v3/LANGUAGE.md    the V3 language — S, L and E at Stage 0 (phase 2 draft; I in phase 3)
+v3/CANON.md       the canonical form of S — layout, the term tier over E, the L layer (phase 2, slice 8; the gate at phase 6)
 v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K; phase 2: prog, the reader tower, ev, realize
 v3/meta/          phase 3: the elaborators, I, the goal graph, tactics
 v3/std/           phase 3: the first library under the naming law
