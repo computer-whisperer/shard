@@ -1536,6 +1536,69 @@ is `docs/FOUNDATION.md` §5.3.
   byte-identical, 22 entrypoints, 0 failed. Open with §13 item 7: the
   per-type `use` lines are what the flat rule was hiding; whether
   `(use M)` should open M's constructors is the ratifier's.
+- **2026-09-14 — slices 3.4 and 3.5 landed: the V3 side to the one E,
+  the documents closed.** `sexpr.shard`: the `profile` flag gone, `-7`
+  a numeral everywhere (the L reader already refused a negative in an
+  L position). `etable.shard`: `eresolve` over the scope's candidates
+  for every file. `classify.shard`: the flag gone from every signature
+  (77 sites); `type_ident` = the built-ins `Int`/`Nat`/`Symbol`, then
+  K's constants through the scope, then the E-only types of the scope;
+  no auto-bound type variables and no parameterized head; the literal
+  kind is the sign; `"…"` and `(list …)` resolve the `List` in scope
+  and take its first and second constructors by ordinal
+  (`list_in_scope`; `no_list` when none); `Rd` loses the flag.
+  `loader.shard`: `Fx` and `RModule` lose their flags, `profile_form`
+  and `is_profile` gone, `type_is_e_only` (a `type` over a built-in
+  without an L constant in scope, or another E-only type, is E only;
+  the declared type excepted), `open_types` (every `type` opens its
+  namespace at pre-registration), `read_all` without the flag.
+  `prog.shard`: `LStr` carries its `List`'s nil and cons; `ev.shard`
+  links a string as its own `List`'s cells; `dump.shard` prints the
+  chain with those constructors' short names; `erase.shard`'s scan
+  treats a string literal as a citation of `List`; `realize.shard`'s
+  messages. The prelude's `Nat` deleted. Pins: `ev_string`,
+  `ev_symbol`, `ev_list_sugar` positive; `ev_profile` migrated (`use`
+  lines, `(T Type)`); `ev_profile_form` now `read-error
+  unknown_constant` (a `def` citing `Int` without `Init`); the `entry`
+  pin's kernel-like files gain their `use` lines. **Three findings,
+  each caught by an existing gate:** (1) the first cut refused every
+  L form in a file that sees no `Init` (`no_init`) and keyed a
+  `type`'s E-only status on the same — the `basic` pin, whose
+  `a.shard` declares its own `inductive Nat` and `Eq` with no import
+  at all, killed it: L needs no `Init`, and E-only is decided per
+  `type` by its fields; (2) with the flat rule gone, a `type` opened
+  its namespace only for the rest of its file (`open_type` on the L
+  path) while heads were pre-registered for the whole file — `ev.shard`
+  cites `PrimVal` before `PrimRes` is declared — so the kernel's own
+  closures failed until every `type` opens at pre-registration, and
+  `form_name` returned `Anon` for a parenthesized head `(type (Lst T)
+  …)`, so parametric types opened nothing (`type_name` through
+  `type_head`); (3) resolving a type name through the E table before
+  K's constants found `main.Bool` alone where `Init`'s `Bool` was not
+  registered, so `same_spelled`'s ambiguity vanished — K's constants
+  are consulted first. Gates: loader pins 87 cases, loader and entry
+  tests, parity byte-identical over 21 closures and 68,075 lines (the
+  prelude's `Nat` line gone), route 2 and calc byte-identical, 22
+  entrypoints, 0 failed. **Measured:** the V3 loads run about twice as
+  long — parity 95 s against 44 s at 3.3 — with each citation now
+  checked against the candidates of fifty-odd opened prefixes
+  (`hits_in_scope`'s `mem_name` over `scope_candidates`); a prune of
+  the `use` lines to the prefixes each file cites, or an indexed
+  candidate check, is the follow-up. The profile's ten-row table, as
+  history:
+
+  | in the profile | in S | decided |
+  |---|---|---|
+  | the prelude's names `Nil Cons True False Some None Z S Pair` are the toolchain's own E types, unrelated to `Init`'s | `Init`'s `List.nil` … | unchanged; cited under `use` |
+  | type parameters by the parenthesized head or an auto-bound bare type variable | explicit `((T Type) …)` binders | explicit binders everywhere |
+  | `"…"` is the `(List Int)` of its UTF-8 bytes | K's `String` literal | the byte list of the `List` in scope, every file, until `String`'s realization |
+  | numerals are `Int`; `-7` is a numeral | numerals are `Nat`; negatives are constructor terms | any integer in E, the binder's type; L unchanged |
+  | `(quote X)` and `'X` are `Symbol` literals | no symbols | `Symbol` a built-in E type, L identity `String` |
+  | `(list a b c)` is list sugar | none | the `List` in scope's chain |
+  | a file `import` also opens the imported module | `import` never opens; `use` does | `use` lines everywhere |
+  | the primitive names of `docs/LANGUAGE.md` §8 | the naming-law spellings | one table, both spellings |
+  | a `type` is E only; `def`, `theorem`, `inductive` refused (`profile_form`) | a `type` enters K and E | per `type` by its fields; K checks any L form |
+  | the profile is the `kernel/` and `meta/` directories | every other file is S | withdrawn: one E for every file |
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

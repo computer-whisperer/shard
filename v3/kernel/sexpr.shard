@@ -1,9 +1,9 @@
 ;;; v3/kernel/sexpr.shard — the s-expression reader: S text → SExpr
 ;;; (v3/LANGUAGE.md §2). Phase 2, slice 2. Pure syntax: no name has a
-;;; meaning here. One reader serves S and the toolchain profile (§8); the
-;;; profile's lexical differences are the `profile` flag: a leading `-` makes
-;;; a numeral only there (S spells a negative integer as its constructors).
-;;; `'X` reads as `(quote X)` in both. A symbol ending in `.{` opens a level
+;;; meaning here. One reader serves every file (the one E, §8.1 rule 2;
+;;; phase 3 slice 3.4): a leading `-` makes a numeral, whose sign the L
+;;; reader refuses in an L position (K's literals are naturals, §2).
+;;; `'X` reads as `(quote X)`. A symbol ending in `.{` opens a level
 ;;; list closed by `}` — `List.{0}`, `Prod.{u v}` — kept on the symbol as
 ;;; its universe arguments (SSymU); the level terms are ordinary tokens.
 ;;; Strings decode `\n \t \r \\ \" \xHH \u{HHHH}` to UTF-8 bytes. Errors
@@ -18,7 +18,7 @@
 (use kernel.prelude.Pair)
 
 (type SExpr
-  (SNum Int)                    ; a numeral (≥ 0 in S; any Int in the profile)
+  (SNum Int)                    ; a numeral, any sign (§8.1 rule 2)
   (SSym Symbol)                 ; a symbol
   (SSymU Symbol (List SExpr))   ; a symbol with its universe list: `Name.{L…}`
   (SStr (List Int))             ; a string as UTF-8 bytes
@@ -78,26 +78,26 @@
 (fn read_budget () Int 100000000)
 
 ;; one tree from the input (whitespace and comments skipped first)
-(fn read_expr ((profile Bool) (cs0 (List Int)) (fuel Int)) SRes
+(fn read_expr ((cs0 (List Int)) (fuel Int)) SRes
   (measure fuel)
   (if (lt fuel 0) (SErr (quote reader_fuel) cs0)
   (let ((cs (skip_blank cs0)))
     (match cs
       (Nil SEnd)
       ((Cons c r)
-       (if (int_eq c 40) (read_list profile r Nil (- fuel 1))
+       (if (int_eq c 40) (read_list r Nil (- fuel 1))
        (if (int_eq c 41) (SErr (quote unexpected_close) cs)
        (if (int_eq c 34) (read_string r Nil cs)
        (if (int_eq c 39)
-         (match (read_expr profile r (- fuel 1))
+         (match (read_expr r (- fuel 1))
            ((SOk x rest) (SOk (SList (list (SSym (quote quote)) x)) rest))
            (SEnd (SErr (quote quote_at_end) cs))
            ((SErr e at) (SErr e at)))
        (if (bool_or (int_eq c 123) (int_eq c 125)) (SErr (quote stray_brace) cs)
-       (read_atom profile cs (- fuel 1))))))))))))
+       (read_atom cs (- fuel 1))))))))))))
 
 ;; after `(`: the items to the matching `)`
-(fn read_list ((profile Bool) (cs0 (List Int)) (acc (List SExpr)) (fuel Int)) SRes
+(fn read_list ((cs0 (List Int)) (acc (List SExpr)) (fuel Int)) SRes
   (measure fuel)
   (if (lt fuel 0) (SErr (quote reader_fuel) cs0)
   (let ((cs (skip_blank cs0)))
@@ -105,13 +105,13 @@
       (Nil (SErr (quote unterminated_list) cs))
       ((Cons c r)
        (if (int_eq c 41) (SOk (SList (rev acc)) r)
-         (match (read_expr profile cs (- fuel 1))
-           ((SOk x rest) (read_list profile rest (Cons x acc) (- fuel 1)))
+         (match (read_expr cs (- fuel 1))
+           ((SOk x rest) (read_list rest (Cons x acc) (- fuel 1)))
            (SEnd (SErr (quote unterminated_list) cs))
            ((SErr e at) (SErr e at)))))))))
 
 ;; a numeral or a symbol, with its universe list when the atom ends in `.` and `{` follows
-(fn read_atom ((profile Bool) (cs (List Int)) (fuel Int)) SRes
+(fn read_atom ((cs (List Int)) (fuel Int)) SRes
   (match (take_atom cs Nil)
     ((Pair a rest)
      (match a
@@ -120,13 +120,13 @@
         (if (is_digit c0)
           (if (all_digits a) (SOk (SNum (digits_val a 0)) rest) (SErr (quote bad_numeral) cs))
         (if (bool_and (int_eq c0 45) (match a ((Cons _ (Cons d _)) (is_digit d)) (_ False)))
-          ;; `-7`: a numeral in the profile, refused in S (write the constructors, §2)
-          (if (bool_and profile (all_digits (drop_first a)))
+          ;; `-7`: a numeral (§8.1 rule 2; the L reader refuses the sign in an L position)
+          (if (all_digits (drop_first a))
             (SOk (SNum (- 0 (digits_val (drop_first a) 0))) rest)
-            (if profile (SErr (quote bad_numeral) cs) (SErr (quote negative_numeral) cs)))
+            (SErr (quote bad_numeral) cs))
         (if (ends_with_dot a)
           (match rest
-            ((Cons 123 r2) (read_levels profile r2 Nil (sym_of_chars (drop_last a)) fuel))
+            ((Cons 123 r2) (read_levels r2 Nil (sym_of_chars (drop_last a)) fuel))
             (_ (SErr (quote bad_universe_suffix) cs)))
         (match rest
           ((Cons 123 _) (SErr (quote bad_universe_suffix) cs))
@@ -134,7 +134,7 @@
 (fn drop_first ((cs (List Int))) (List Int) (match cs (Nil Nil) ((Cons _ r) r)))
 
 ;; after `NAME.{`: the level terms to `}`
-(fn read_levels ((profile Bool) (cs0 (List Int)) (acc (List SExpr)) (s Symbol) (fuel Int)) SRes
+(fn read_levels ((cs0 (List Int)) (acc (List SExpr)) (s Symbol) (fuel Int)) SRes
   (measure fuel)
   (if (lt fuel 0) (SErr (quote reader_fuel) cs0)
   (let ((cs (skip_blank cs0)))
@@ -142,8 +142,8 @@
       (Nil (SErr (quote unterminated_universe_list) cs))
       ((Cons c r)
        (if (int_eq c 125) (SOk (SSymU s (rev acc)) r)
-         (match (read_expr profile cs (- fuel 1))
-           ((SOk x rest) (read_levels profile rest (Cons x acc) s (- fuel 1)))
+         (match (read_expr cs (- fuel 1))
+           ((SOk x rest) (read_levels rest (Cons x acc) s (- fuel 1)))
            (SEnd (SErr (quote unterminated_universe_list) cs))
            ((SErr e at) (SErr e at)))))))))
 
@@ -198,13 +198,13 @@
     (list (+ 240 (bshr cp 18)) (+ 128 (band (bshr cp 12) 63)) (+ 128 (band (bshr cp 6) 63)) (+ 128 (band cp 63)))))))
 
 ;; ---- a whole file -------------------------------------------------------------------
-(fn read_all ((profile Bool) (src (List Int))) RAll (read_all_go profile src (len src) Nil (read_budget)))
-(fn read_all_go ((profile Bool) (cs (List Int)) (total Int) (acc (List SExpr)) (fuel Int)) RAll
+(fn read_all ((src (List Int))) RAll (read_all_go src (len src) Nil (read_budget)))
+(fn read_all_go ((cs (List Int)) (total Int) (acc (List SExpr)) (fuel Int)) RAll
   (measure fuel)
   (if (lt fuel 0) (RAErr (quote reader_fuel) (- total (len cs)))
-  (match (read_expr profile cs fuel)
+  (match (read_expr cs fuel)
     (SEnd (RAOk (rev acc)))
-    ((SOk x rest) (read_all_go profile rest total (Cons x acc) (- fuel 1)))
+    ((SOk x rest) (read_all_go rest total (Cons x acc) (- fuel 1)))
     ((SErr e at) (RAErr e (- total (len at)))))))
 
 ;; ---- printing (tests; the parity dump of §10) --------------------------------------

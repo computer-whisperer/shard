@@ -463,10 +463,31 @@ flat scope) and explicit type binders on the 13 polymorphic functions
 of `util`, `intmap` and `nested` (the sizing's 210 had counted binders
 over declared types). Parity byte-identical over the 21 closures,
 route 2 and calc byte-identical, 22 entrypoints, 0 failed — the
-migration changes no dump line and no output. Next: 3.4 the V3 side
-(the profile flag deleted, `no_init`, the literal rules for every
-file, the prelude's `Nat`); 3.5 the documents; then the K seal (§13
-item 26), Stage 1, I.
+migration changes no dump line and no output. **Slices 3.4 and 3.5
+(2026-09-14): the V3 side to the one E, and the documents closed** —
+the `profile` flag deleted from the s-expression reader, the
+classifier, the E table and the loader; one scope rule, the literal
+rules and the built-in types for every file; `profile_form`, the
+layout rule and `MODULE … profile=` gone; the prelude's `Nat` gone;
+the three S-side refusals (`string_literal`, `symbol_literal`,
+`list_sugar`) retired and their pins turned positive; `"…"` and
+`(list …)` over the `List` in scope. Three findings on the way,
+each caught by an existing pin or gate: the first cut keyed "E only"
+on `Init` in scope and the `basic` pin (its own `inductive Nat`, no
+imports) killed it — the rule is per `type` by its fields (§13 item
+35 rewritten); a `type` opened its namespace only for the rest of its
+file while heads were pre-registered for the whole file, so the
+kernel's forward constructor citations failed — every `type` now
+opens at pre-registration (item 7 amended); and resolving a type name
+through the E table before K's constants hid the ambiguity
+`same_spelled` pins. Parity byte-identical over the 21 closures,
+route 2 and calc byte-identical, 22 entrypoints, 0 failed; the V3
+loads run about twice as long (parity 95 s against 44 s) under the
+fifty-odd opened prefixes per file — measured, to be pruned with the
+`use` lines. Documents: `LANGUAGE.md` §8 (§8.2 a pointer, §6.7's
+profile paragraph replaced, items 7, 35 and 37), `CANON.md`,
+`docs/TCB.md`, the kernel and pins READMEs, records §9. Next: the K
+seal (§13 item 26), Stage 1, I.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
@@ -490,7 +511,7 @@ each closes on its named gate:
   a pruned traversal (hostile battery 16: forged ids, a claimed-closed
   loose variable, a claimed-absent fvar, a stale hash, snapshot forks,
   independent construction, no trace after a failure). **Still open:**
-  the toolchain profile exposes `CheckedEnv`'s constructor (the
+  the kernel's own files expose `CheckedEnv`'s constructor (the
   battery builds one). **Deferred to the phase-3 opener (2026-09-13,
   slice 6):** `kernel/env`'s view is not the boundary — the operations
   `add`, `tc` and `import` build environments with would have to be

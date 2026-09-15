@@ -130,15 +130,16 @@ declaration and its signature stay on the head line, the body breaks:
 **The reader's lexical rules are the formatter's** (`LANGUAGE.md` §2):
 the universe suffix `List.{0}` is one symbol opening a level list
 closed by `}`; `'` is an identifier character and `'x` the quote macro
-only at a token's start; the toolchain profile's `-7`, `"…"`, `(quote
-X)` and `(list …)` read as the profile says. The old formatter's reader
+only at a token's start; `-7`, `"…"`, `(quote X)` and `(list …)` read
+as E's literal rule says in every file (`LANGUAGE.md` §8.1 rule 2,
+2026-09-14). The old formatter's reader
 knows none of this — `Eq.{1}` is "unreadable source" to it (§7) — so the
 V3 formatter is a printer over `kernel/sexpr.shard`'s s-expressions,
 which already lex S.
 
 **Sugar is presentation** (old D12, carried): the canonical form is
 defined on what the reader builds; the rewriter emits the maximally
-sugared surface. In the profile a byte string is written `"…"`, never
+sugared surface. In E a byte string is written `"…"`, never
 its `Cons` chain; a list literal `(list a b c)`, never its chain; a
 symbol literal `'x`, never `(quote x)` — the quote macro is lexical
 (`LANGUAGE.md` §2), so the two read alike in every position.
@@ -164,9 +165,9 @@ the three marked *recast* change under V3's semantics.
 | **C11** contextual partial evaluation | carried: a body subterm that can take one of `ev`'s steps under the arm's pins is a contextual redex; the `if` tier stays dropped, and the fold tier stays at the D19a ruling — no fold of applied ground user calls, the C7 extension the mechanism of record if written code ever accumulates them | carried |
 | **C12** no needless case split | carried as emergent: C10's constant-match rule after C11 in the rewriter's fixpoint | carried |
 
-Three notes on scope. The profile's symbols (`'x`, `sym_eq`) and its
-`Int` numerals are E values like any other under these rules; the
-profile's `(list …)` is sugar (§3). A `realize`'s supplied body is
+Three notes on scope. E's symbols (`'x`, `sym_eq`) and its negative
+numerals are E values like any other under these rules, in every file
+since the one-E ruling (`LANGUAGE.md` §8); `(list …)` is sugar (§3). A `realize`'s supplied body is
 an E body: C1–C12 apply to it; its equations are L and exempt. And the
 rules that discard an evaluation — C2, C3's dead binding, C10, C11,
 C12 — hold under §1's execution profile only (R50): what the
