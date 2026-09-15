@@ -1728,7 +1728,10 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
 6. **`(import Init NAME)`**, a dependency-ordered prefix named by its
    last declaration, as the whole import mechanism at phase 2.
    Alternative: closure imports by name set, which need an index of
-   the export and a union of closures re-ordered per load.
+   the export and a union of closures re-ordered per load. **Ratified
+   as bring-up (2026-09-15):** the prefix is a fixture technique (the
+   prefix to `Int` is 17,812 lines); the name-set alternative is
+   expected at the first library (phase 3's `v3/std/`).
 7. **Constructor citations resolve through opened prefixes only** at
    Stage 0; the `type` form opens its own namespace for the rest of
    its file so today's bare `Nil`/`Cons` keep working. **Amended
@@ -1737,8 +1740,13 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
    cites them before the declaration as it calls a later function
    (`loader.shard` `open_types`); another module's constructors are
    cited through `(use M.T)`, which the migration wrote for the
-   toolchain (1,195 lines). Open with the ratifier: whether `(use M)`
-   should open M's types' constructors too (Lean's `open` does not).
+   toolchain (1,195 lines). **RULED 2026-09-15 (the user): `(use M)`
+   does not open M's types' constructors** — as Lean's `open` does
+   not; an implicit opening would make every same-named constructor
+   pair across modules (`Nil`/`Cons` in two list types) a collision
+   that arrives with the `use` line rather than with the citation. The
+   cost is one `(use M.T)` per foreign type a file matches on; the
+   `use`-line prune reports the count.
 8. **The toolchain profile is a property of the package layout**, not
    of a marker form (§8). **Amended (GPT-6 R55, slice 10):** the layout
    selects a named, bounded compatibility profile recorded per module
@@ -1749,7 +1757,7 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
    lands the layout rule is what the loader applies.
 9. **`ev`'s `if` rule**: the then-branch iff the condition's cell is the
    second constructor of its type — one rule for `Bool`, `Decidable`
-   and the profile's `Bool`. **Amended (GPT-6 R56, slice 10):** the
+   and the prelude's `Bool`. **Amended (GPT-6 R56, slice 10):** the
    condition's type must be a transparent two-constructor type — the
    observation is the type's, `ev`'s tag bit its implementation — and
    the classifier refuses a `sig type` (`private_if`) or any other
@@ -1803,7 +1811,7 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     keyed on `Init` in scope (rule 1).
 17. **`ev` is a machine with an explicit continuation** over a private
     linked representation (§6.7); the comparison primitives return the
-    toolchain prelude's `Bool`, the wire's cells are the prelude's.
+    prelude's `Bool`, the wire's cells are the prelude's.
     Alternative: §6.2's direct recursion, which grows the host's stack
     with the program's and cannot stop at an extern.
 18. **The substitution is the link**: the implementation's `fn` and
@@ -1849,12 +1857,15 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
 24. **The `LATER` record is gone** with `realize` built; a `fulfills`
     outside an implementation check is the load error
     `fulfills_outside_impl`.
-25. **The canonical dump text and the sequential normalization** (§10
-    item 1, slice 6): the bootstrap's dump converts its parallel `let`
-    to the sequential indices; the measure clause is outside the text;
-    names print as their last component, primitives in full.
-    Alternative: the V3 printer converting to parallel indices, which
-    cannot represent a right-hand side citing an earlier binder.
+25. **The canonical dump text** (§10 item 1, slice 6): the measure
+    clause is outside the text; names print as their last component,
+    primitives in full. **Amended (slice 3.2, 2026-09-14):** both
+    loaders bind `let` sequentially (item 5; §8.1 rule 7) and the
+    bootstrap's dump prints its indices as loaded — the
+    parallel-to-sequential renumbering this item once described is
+    deleted (`dump.rs`). Alternative at the time: the V3 printer
+    converting to parallel indices, which cannot represent a
+    right-hand side citing an earlier binder.
 26. **The seal is deferred to the phase-3 opener** (§6.6): the boundary
     is K, not `kernel/env`, and sealing K is a directory module of
     fifteen files, a view of 87 signatures, a bootstrap resolver change
@@ -1872,7 +1883,11 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     the implementation is not the seal. `RUNNABLE`, `REALIZE` and the
     pending obligations stay separately represented across it, and a
     runnable self-recursive Stage-0 body discharges no totality or
-    realization obligation by terminating on one input.
+    realization obligation by terminating on one input. **Order
+    (ratified 2026-09-15):** the seal lands before the first `meta/`
+    consumer is written — Stage 1 and I are that consumer, and written
+    against the implementation first they become the reason the seal
+    never closes; it follows the `use`-line prune directly.
 27. **Calc's differential drivers sit outside the program** (§10 item
     2): the harness calls `ev` with values built as data and renders
     the results; an S program names no wire cell at phase 2.
@@ -1952,7 +1967,13 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     refused by §8's old reason (the bootstrap refuses unknown forms);
     and the first cut, "a file that sees no `Init` has no L", killed
     the same day by the loader's `basic` pin, which declares its own
-    `inductive Nat` and imports nothing.
+    `inductive Nat` and imports nothing. **The rule to watch
+    (ratified 2026-09-15):** `(type Foo (MkFoo Nat))` is E only until
+    its file gains an import that brings an L `Nat` into scope, and
+    then the same text enters K — pinned both ways (`type_e_only`: the
+    `def` citing the E-only type is `unknown_constant`; `type_flip`:
+    with `(import Init Nat.add)` the type is `ACCEPT`ed and the `def`
+    with it).
 36. **`Symbol` is a built-in E type in every file**, the interned atom,
     with L identity `String` assigned at phase 3 (§8.1 rule 1); K's
     `Name` values are built from its atoms as today. Alternative: a
@@ -1964,7 +1985,12 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     `"…"` the constructor chain of the `List` in scope over its bytes,
     carried as one literal naming that type's nil and cons, until
     `String`'s E realization flips it for every file at once; `(list
-    …)` the same `List`'s chain.
+    …)` the same `List`'s chain. **The flip is a sized slice
+    (ratified 2026-09-15):** it changes the type of every `"…"` in
+    every file from a byte list to K's `String` at once — the
+    toolchain's 1,649 string sites and the byte-oriented helpers over
+    them — and lands as its own slice with the parity and calc gates,
+    never as an automatic consequence of `String`'s realization.
     Alternative: keep S's refusals (`string_literal`, `symbol_literal`,
     `list_sugar`) and give the kernel its own rules — the dialect
     again.
@@ -1973,4 +1999,8 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     identities; the operators' L identities are assigned at phase 3
     with law §10.3's table. Alternative: rewrite the toolchain's 1,245
     operator sites to the naming-law spellings — a migration with no
-    semantic content, and `/` would still need its own entry.
+    semantic content, and `/` would still need its own entry. **Open
+    for Stage 1 (ratified 2026-09-15):** the operator spellings are
+    `Int`'s primitives (rule 5), so `+` on two `Nat` values is either
+    an `Int` operation or a type error and Stage 0 does not say which;
+    Stage 1's typing answers it.

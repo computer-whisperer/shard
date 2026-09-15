@@ -1693,6 +1693,27 @@ is `docs/FOUNDATION.md` §5.3.
   one-E ruling's slices 3.1–3.6 stand on the full gate: every reader
   of the toolchain — the bootstrap, the V3 reader and the old reader
   under route 1 — reads the one E, and the corpus is at its baseline.
+- **2026-09-15 — the user's ratification pass over `LANGUAGE.md` §13
+  items 1–38.** "Reading through the 1–38 items, this mostly sounds
+  reasonable. Are there any in particular you would call out or have
+  opinions over?" — six callouts and two stale texts, all agreed:
+  item 7 RULED — `(use M)` does not open M's types' constructors
+  (Lean's `open` does not; an implicit opening turns every same-named
+  constructor pair into a collision that arrives with the `use` line);
+  item 26 — the seal lands before the first `meta/` consumer (Stage 1
+  and I), directly after the `use`-line prune; item 37 — the string
+  flip is a sized slice with its own gates, never an automatic
+  consequence of `String`'s realization (1,649 sites); item 35 —
+  the rule to watch, pinned both ways (`type_e_only`,
+  `type_flip`: the same `(type Foo (MkFoo Nat))` E only without
+  `Init`, in K with it; 90 loader pins); item 6 — ratified as
+  bring-up, the name-set import expected at the first library; item
+  38 — `+` on two `Nat` values is Stage 1's question, recorded. Stale:
+  item 25 described the bootstrap's parallel-to-sequential renumbering
+  that slice 3.2 deleted — rewritten; items 9 and 17 said "the
+  profile's `Bool`" — the prelude's. The rest ratified as written,
+  the R57 trio (12, 13, 18) included. `CANON.md` §9 items 7–11
+  unchanged.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

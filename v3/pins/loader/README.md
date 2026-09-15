@@ -47,4 +47,8 @@ the World, run by `entry_test`) and `entry_s` (S: `Nat`, Init's `(List
 Nat)`), `same_spelled` (T5: Init's `Bool` beside `main.Bool`, the bare
 name ambiguous, `Init.Bool` the explicit citation) and
 `realize_theorem` (T5: a theorem about `List.append` stated before its
-realization, cited after).
+realization, cited after). The ratification pass's (§13 item 35,
+2026-09-15): `type_e_only` (no `Init`: `(type Foo (MkFoo Nat))` is E
+only by its field and a `def` citing it is `unknown_constant`) and
+`type_flip` (the same type with `(import Init Nat.add)` enters K, the
+`def` accepted) — the same text, decided by its file's scope.
