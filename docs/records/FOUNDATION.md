@@ -1744,6 +1744,18 @@ is `docs/FOUNDATION.md` §5.3.
   `v3/build.sh` and the compiled `t0`'s fixture tie (301 lines).
   Documents: `LANGUAGE.md` §8.1 rule 4, §8.3, §13 item 7; the V3 and
   kernel READMEs. Next: the K seal (item 26).
+- **2026-09-15 — the ratification pass and slice 3.7 green on CI.**
+  Pipeline 489 (`b83b4be`): engine 122 s, corpus 1,492 s at the
+  baseline, v3 4,005 s — 22 entrypoints, calc 375 s, parity 148 s
+  over 21 closures and 68,100 lines (the two item-35 pins among the
+  90), route 2 52 s, replay 2,569 s at a 30.6 GB peak, T0 accepted
+  57,977, 20 pinned, closures identical; the pipeline 4,129 s.
+  Pipeline 490 (`9cd81dc`, the prune): engine 147 s, corpus 1,525 s
+  at the baseline, v3 3,910 s — 22 entrypoints, calc 385 s, parity
+  161 s over 68,195 lines, route 2 53 s, route 1 built, replay
+  2,434 s at 30.6 GB, 20 pinned, closures identical; the pipeline
+  4,059 s. The pruned toolchain loads on every reader and every
+  route; the `UNUSED` record is silent on CI's closures.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

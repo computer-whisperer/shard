@@ -527,7 +527,15 @@ red on the totality obligation (the fifth); **487 (`f644ca3`) green
 end to end** — engine 305 s, corpus 1,563 s at the baseline, v3
 3,975 s: 22 entrypoints, calc 398 s, parity 138 s over 21 closures
 and 68,100 lines, route 2 in 52 s, replay 2,468 s at 30.6 GB, 20
-pinned, closures identical; the pipeline 4,283 s. Next:
+pinned, closures identical; the pipeline 4,283 s. **Pipelines 489
+(`b83b4be`, the ratification pass with the item-35 pins) and 490
+(`9cd81dc`, slice 3.7) green end to end, 2026-09-15:** 489 — corpus
+at the baseline in 1,492 s, v3 4,005 s (22 entrypoints, parity 148 s
+over 68,100 lines, route 2 52 s, replay 2,569 s at 30.6 GB, 20
+pinned); 490 — corpus 1,525 s, v3 3,910 s (22 entrypoints, parity
+161 s over 68,195 lines, route 2 53 s, route 1 built, replay 2,434 s
+at 30.6 GB, T0 accepted 57,977, 20 pinned, closures identical); the
+pipelines 4,129 s and 4,059 s. Next:
 the K seal (§13 item 26), Stage 1, I.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
