@@ -579,13 +579,20 @@ impl<'a> Lowerer<'a> {
                     .collect();
                 IExpr::Match(scrut, arms)
             }
-            // Parallel let: the RHSs are computed in flight (each sees the
-            // outer bindings past the earlier RHSs), then BECOME the
-            // bindings in place — the same slots, relabelled.
+            // Sequential let (v3/LANGUAGE.md §5.4): each right-hand side is
+            // lowered with the earlier ones on the stack AS BINDINGS — the
+            // loader scoped it so — and the values pushed are the bindings
+            // in place, the last on top (BVar 0).
             Expr::Let(rhss, body) => {
-                let rhs = self.lower_args(rhss);
                 let depth = self.layout.len();
-                self.layout.resize(depth + rhss.len(), true);
+                let rhs: Box<[IExpr]> = rhss
+                    .iter()
+                    .map(|e| {
+                        let ie = self.lower(e);
+                        self.layout.push(true);
+                        ie
+                    })
+                    .collect();
                 let body = Box::new(self.lower(body));
                 self.layout.truncate(depth);
                 IExpr::Let(rhs, body)
@@ -855,9 +862,9 @@ fn eval_loop<'a>(prog: &'a Prog, st: &mut Stack, base: usize, e0: &'a IExpr) -> 
             }
 
             IExpr::Let(rhss, body) => {
-                // Parallel let: every RHS is computed against the outer
-                // bindings (the lowerer counted the earlier RHSs as
-                // temporaries), and the values pushed ARE the bindings, the
+                // Sequential let: each RHS is computed with the earlier
+                // values already pushed (the lowerer counted them as
+                // bindings), and the values pushed ARE the bindings, the
                 // LAST one on top (= BVar 0).
                 push_args(prog, st, rhss)?;
                 e = body;

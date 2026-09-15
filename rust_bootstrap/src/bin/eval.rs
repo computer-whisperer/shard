@@ -25,9 +25,16 @@ use proving_bootstrap_v2::{ast, default_kernel_dir, eval, load};
 /// Resolve the entrypoint's import closure: each `(import "X")` is followed
 /// relative to the importing file's directory, post-order (deps before
 /// dependents), deduped by canonical path, with the entrypoint itself last.
-/// The kernel files declare no imports today, so this is one level deep; it
-/// stays correct as they gain their own. This is host-side bootstrap (the VM
-/// doesn't exist yet) — the analogue of a linker resolving a binary's deps.
+/// A directory module (v3/LANGUAGE.md §3, §6.6; phase 3 slice 3.2) is its
+/// view — `DIR/mod.req.shard` or `DIR/mod.req/mod.req.shard`, whose
+/// transparent `type`s are the module's own — and then its implementation
+/// `DIR/BASE.shard`, each with its own closure; the view's `sig` forms are
+/// skipped by the loader as before, so a consumer's call resolves flat to
+/// the implementation's `fn` of the same name (the substitution the V3
+/// loader performs by identity, §6.7 "Views at run time"). `(import Init
+/// NAME)` names no file and is not followed. This is host-side bootstrap
+/// (the VM doesn't exist yet) — the analogue of a linker resolving a
+/// binary's deps.
 fn resolve_closure(entry: &Path) -> Result<Vec<PathBuf>, String> {
     fn import_of(form: &Value) -> Option<String> {
         let items: Vec<&Value> = form.list_iter()?.collect();
@@ -55,7 +62,21 @@ fn resolve_closure(entry: &Path) -> Result<Vec<PathBuf>, String> {
                             Some(d) => d.join(&dep),
                             None => PathBuf::from(&dep),
                         };
-                        visit(&rp, order, seen)?;
+                        if rp.is_dir() {
+                            let base = rp
+                                .file_name()
+                                .and_then(|b| b.to_str())
+                                .ok_or_else(|| format!("directory import {}: no base name", rp.display()))?
+                                .to_string();
+                            let view = rp.join("mod.req.shard");
+                            let view = if view.is_file() { view } else { rp.join("mod.req").join("mod.req.shard") };
+                            if view.is_file() {
+                                visit(&view, order, seen)?;
+                            }
+                            visit(&rp.join(format!("{base}.shard")), order, seen)?;
+                        } else {
+                            visit(&rp, order, seen)?;
+                        }
                     }
                 }
                 Ok(None) => break,
@@ -108,11 +129,11 @@ fn run() -> ExitCode {
     // runs its `main` on this bootstrap evaluator — one interpretation layer
     // instead of two (the tower `eval run` pays ~100× to interpret the app
     // through eval.shard's `ev`). Host-side verb only: eval.shard never sees
-    // it. The app must be narrow (load.rs is the parser) with a FLAT import
-    // closure (this host resolver does not understand directory modules —
-    // that logic lives in loader.shard and stays there; check.shard
-    // qualifies, shardfmt does not). Semantics are identical — the tower
-    // remains the self-hosting cross-check.
+    // it. The app must be E as load.rs reads it (v3/LANGUAGE.md §8.1); its
+    // import closure is followed by `resolve_closure` above, a directory
+    // module as its view and implementation (slice 3.2; the old tree's
+    // `use-module` scoping stays loader.shard's). Semantics are identical —
+    // the tower remains the self-hosting cross-check.
     // `eval dump <file.shard>`: the file's closure loaded exactly as `direct`
     // loads it and printed as the canonical text of frontend parity
     // (v3/LANGUAGE.md §10 item 1; dump.rs) — nothing is run.

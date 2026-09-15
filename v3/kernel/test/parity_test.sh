@@ -15,8 +15,16 @@
 # constructor named like a head. A closure that fails the check fails the
 # gate before its dumps are compared: byte agreement over an ambiguous
 # name would say nothing about which declaration either loader resolved.
+#
+# Since phase 3's slice 3.2 (the one E, LANGUAGE.md §8) the bootstrap also
+# follows a directory import to the module's view and implementation, reads
+# explicit `(T Type)` binders, binds `let` sequentially, skips a file's L
+# forms and canonicalizes a dotted citation to the declared name it ends
+# in; the last block below ties one S closure with a directory module and
+# a theorem beside its E forms (v3/pins/loader/view_basic).
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
+FIX=v3/kernel/test/fixtures/init_prefix_3000.ndjson
 a=$(mktemp); b=$(mktemp); trap 'rm -f "$a" "$b"' EXIT
 n=0; decls=0; failed=0
 s=$(date +%s)
@@ -43,6 +51,16 @@ for entry in v3/kernel/load.shard v3/kernel/t0.shard v3/kernel/test/calc_harness
     echo "parity_test: $entry differs"; diff "$a" "$b" | head -6; failed=$((failed+1))
   fi
 done
+# an S closure with a directory module (the view's theorem and sig forms
+# beside the implementation's E forms; a dotted constructor citation)
+n=$((n+1))
+root=v3/pins/loader/view_basic
+if "$EVAL" dump "$root/main.shard" > "$a" 2>&1 \
+   && "$EVAL" direct v3/kernel/load.shard --root "$root" --init "$FIX" --dump "$root/main.shard" "$root/lib" > "$b" 2>&1; then
+  if cmp -s "$a" "$b"; then decls=$((decls + $(wc -l < "$a"))); else echo "parity_test: $root differs"; diff "$a" "$b" | head -6; failed=$((failed+1)); fi
+else
+  echo "parity_test: a dump failed on $root"; head -3 "$a" "$b"; failed=$((failed+1))
+fi
 e=$(date +%s)
 echo "parity_test: $n closures, $decls declarations, $failed differ, in $((e-s)) s"
 [ "$failed" -eq 0 ] && echo "parity_test: byte-identical, every closure's projection injective"

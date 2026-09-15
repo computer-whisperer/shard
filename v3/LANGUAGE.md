@@ -1217,13 +1217,40 @@ difference the old table listed is decided below, not carried.
    migration.
 7. **`let`** is sequential everywhere, the bootstrap included (§5.4's
    measurement: no existing source changes meaning).
-8. **The bootstrap reads exactly this.** Its delta from today: a
-   binder whose type is `Type` is a type parameter, not a runtime
-   parameter; `let` binds in order; a directory import is followed to
-   `DIR/BASE.shard`'s closure (§13 item 26's resolver change, needed by
-   the seal in any case); `use` stays ignored. Frontend parity (§10
-   item 1) stays the gate that keeps its parse honest, over one literal
-   kind.
+8. **The bootstrap reads exactly this — landed at slice 3.2
+   (2026-09-14).** Its delta from the profile reader, five reader rules
+   in `rust_bootstrap/src/load.rs`, `eval.rs`, `dump.rs` and
+   `bin/eval.rs`: a binder whose type is `Type` is a type parameter in
+   scope for the binders after it and the result, never a runtime
+   parameter — wherever `Type` is the sort, that is, not a declared
+   type of the closure (the old tree's `kernel/module.shard` declares a
+   data type `Type` and binds `(t Type)` runtime parameters, which the
+   first cut dropped: calc's differential, which runs the old kernel on
+   the bootstrap, caught it; the parameterized head and the auto-bound
+   bare name stay accepted for the old tree); `let` binds in order, in the loader and
+   the lowerer alike, so the dump prints indices as loaded; a directory
+   import is followed to the module's view (its transparent `type`s)
+   and then to `DIR/BASE.shard`, each with its own closure (§13 item
+   26's resolver change; the view's `sig` forms are skipped, so a
+   consumer's call resolves flat to the implementation's `fn` of the
+   same name — the substitution §6.7 performs by identity); a file's
+   L forms (`def theorem abbrev opaque inductive structure realize
+   trusts`) are skipped, since under the one E they sit beside the E
+   forms K reads; a dotted citation — `Stack.mk`, `json.hex_val` —
+   canonicalizes to the declared name it ends in, the flat mirror of
+   §6.7's suffix table (the bootstrap has no module paths), a citation
+   matching nothing kept as written. `use` stays ignored. The dump
+   prints `Nat` as a built-in beside `Int` and `Symbol` (rule 1) and a
+   type's head by its last component. Frontend parity (§10 item 1)
+   stays the gate that keeps its parse honest: 21 closures since 3.2,
+   the 21st an S closure with a directory module, a theorem beside its
+   E forms and a dotted constructor citation (`v3/pins/loader/
+   view_basic`), tied byte for byte. Not in the bootstrap: the
+   naming-law primitive identities (`Nat.add`, …; rule 5) — those are
+   `ev`'s entries, computed through the bootstrap's operator primitives
+   when `ev` runs on it; a toolchain source cites the operator
+   spellings, and one that cited `Nat.add` directly would be an unknown
+   call under `eval direct`.
 
 ### 8.2 The profile's rules while it lasts (retired by the slices below)
 
@@ -1253,11 +1280,12 @@ the toolchain's closures, so both readers agree at every commit:
 
 - **3.1 the design on disk** — this section, §13 items 34–38, the law's
   §9.2 amended, the plan in `v3/README.md` (2026-09-14).
-- **3.2 the bootstrap to the one E** — `rust_bootstrap/src/load.rs`:
+- **3.2 the bootstrap to the one E — landed 2026-09-14** (rule 8):
   `((T Type))` binders as type parameters (both forms accepted while
   the toolchain migrates), sequential `let`, a directory import
-  followed to the implementation's closure; its tests; parity over
-  one literal kind.
+  followed to the view and the implementation, the L forms skipped,
+  dotted citations canonicalized; 43 bootstrap tests; parity 21
+  closures with the directory-module case.
 - **3.3 the toolchain migrated by tool** — `use` lines and explicit
   binders in the 30 kernel files (2026-09-14 count: 210 functions with
   an auto-bound type variable; 7,710 bare constructor citations need

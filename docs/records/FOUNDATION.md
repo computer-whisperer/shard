@@ -1485,6 +1485,35 @@ is `docs/FOUNDATION.md` §5.3.
   only until the flip under rule 1, unchanged. The bootstrap's
   old-tree special forms `ty`/`tv` have no V3 use (checked) and stay
   for the old tree's `bin/check`.
+- **2026-09-14 — slice 3.2 landed: the bootstrap to the one E.**
+  `rust_bootstrap/src/load.rs`: a `(T Type)` binder is a type
+  parameter (`load_params_in_scope` returns the scope for the result
+  type; the parameterized head and the auto-bound name stay for the
+  old tree); `let` scoped sequentially; the V3 L forms skipped beside
+  `import`/`use`/`sig`; a `Scope` of declared constructors and heads
+  against which a dotted citation canonicalizes to the longest declared
+  suffix (`Stack.mk` → `mk`, `kernel.json.hex_val` → `hex_val`).
+  `eval.rs`: the `let` lowering counts the earlier right-hand sides as
+  bindings, not temporaries. `dump.rs`: the parallel-to-sequential
+  renumbering (§13 item 25's `resolve`/`print` pair) deleted as dead
+  — the printer prints indices as loaded; `Nat` a built-in beside
+  `Int`/`Symbol`; a type head by its last component. `bin/eval.rs`
+  `resolve_closure`: a directory import visits the view then
+  `DIR/BASE.shard`. Two gaps the sizing had not listed surfaced on the
+  first directory-module tie and were closed in the slice: the
+  bootstrap refused a `theorem` form (the one E puts L forms beside E
+  forms in every file), and refused `Stack.mk` in a pattern (a dotted
+  citation is ordinary under `use`). A third finding came from the
+  full suite: calc's differential runs the OLD tree's kernel on the
+  bootstrap, and the old `kernel/module.shard` declares a data type
+  named `Type` with `(t Type)` runtime parameters — the first cut of
+  the binder rule dropped them (every calc line differed); the rule
+  now applies only where `Type` is the sort, that is, not a declared
+  type of the closure (`Scope::type_is_sort`; a test). `parity_test.sh`
+  gains the directory-module case (`view_basic`: main + view + implementation,
+  tied byte for byte against `load.shard --dump` over the same roots).
+  43 bootstrap tests; parity 21 closures / 68,080 lines / 44 s; route
+  2 byte-identical; 22 entrypoints, 0 failed.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

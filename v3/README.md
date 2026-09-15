@@ -434,9 +434,28 @@ untouched under rules 1, 2 and 5); the V3 side deletes the profile
 flag (22, 77, 8 and 20 sites in `sexpr`, `classify`, `etable` and
 `loader`). **Slice 3.1 (2026-09-14): the design on disk** — this
 section, §8 as ruled, the items, the law's amendment, records §9.
-Next: 3.2 the bootstrap; 3.3 the toolchain migrated by tool under
-parity, route 2 and T0 at every file; 3.4 the V3 side; 3.5 the
-documents; then the K seal (§13 item 26), Stage 1, I.
+**Slice 3.2 (2026-09-14): the bootstrap to the one E** — five reader
+rules in `rust_bootstrap/src/{load,eval,dump}.rs` and `bin/eval.rs`
+(`LANGUAGE.md` §8.1 rule 8): a `(T Type)` binder is a type parameter
+in scope for the binders after it and the result; `let` binds
+sequentially in the loader and the lowerer, so the dump's
+parallel-to-sequential renumbering is gone; a directory import is
+followed to the module's view and then its implementation; a file's L
+forms are skipped; a dotted citation canonicalizes to the declared
+name it ends in (the flat mirror of the V3 suffix table). Three gaps
+the design's sizing missed surfaced in the slice and were closed in
+it: the L forms and the dotted citations on the first directory-module
+tie, and the old tree's own data type named `Type` — `(t Type)` is a
+runtime parameter there, so the binder rule applies only where `Type`
+is the sort — on calc's differential, which runs the old kernel on the
+bootstrap. 44 bootstrap tests (sequential `let`, type binders, the
+declared `Type`, dotted citations, each with its dump line); parity byte-
+identical over 21 closures and 68,080 declaration lines, the 21st
+an S closure with a directory module, a theorem beside its E forms
+and `Stack.mk` (`v3/pins/loader/view_basic`); route 2's byte-tie
+unchanged; 22 entrypoints, 0 failed. Next: 3.3 the toolchain migrated
+by tool under parity, route 2 and T0 at every file; 3.4 the V3 side;
+3.5 the documents; then the K seal (§13 item 26), Stage 1, I.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

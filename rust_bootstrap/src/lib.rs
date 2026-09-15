@@ -487,20 +487,85 @@ mod tests {
         assert_eq!(eval::eval(&m, &e3).unwrap(), ast::Expr::IntLit(0.into()));
     }
 
-    /// Parallel `let`: RHSs evaluated in outer scope; body sees both
-    /// bindings. Catches mis-counting of binder depth when opening
-    /// the body.
+    /// Sequential `let` (v3/LANGUAGE.md §5.4; slice 3.2): each right-hand
+    /// side sees the bindings before it, the body sees them all. Catches
+    /// mis-counting of binder depth in a right-hand side and in the body.
     #[test]
-    fn let_parallel() {
+    fn let_sequential() {
         let src = r#"
 (fn add_squares ((a Int) (b Int)) Int
   (let ((aa (* a a))
-        (bb (* b b)))
+        (bb (+ aa (* b b))))
     (+ aa bb)))
 "#;
         let m = load::module_from_str(src).expect("loads");
         let e = load::expr_from_str("(add_squares 3 4)", &m).expect("parses");
-        assert_eq!(eval::eval(&m, &e).unwrap(), ast::Expr::IntLit(25.into()));
+        assert_eq!(eval::eval(&m, &e).unwrap(), ast::Expr::IntLit(34.into()));
+        let f = m.lookup_fn("add_squares").unwrap();
+        assert_eq!(
+            dump::dump(&m),
+            "fn add_squares 0 (Int Int) Int (let ((* #1 #1) (+ #0 (* #1 #1))) (+ #1 #0))\n"
+        );
+        assert_eq!(f.params.len(), 2);
+    }
+
+    /// Where the closure declares a type named `Type` (the old tree's
+    /// kernel/module.shard), `(t Type)` stays a runtime parameter.
+    #[test]
+    fn type_as_declared_type() {
+        let src = r#"
+(type Type (TCon Int) (TVar Int))
+(fn arity_of ((t Type) (k Int)) Int (match t ((TCon n) (+ n k)) ((TVar n) n)))
+"#;
+        let m = load::module_from_str(src).expect("loads");
+        assert_eq!(m.lookup_fn("arity_of").unwrap().params.len(), 2);
+        let e = load::expr_from_str("(arity_of (TCon 2) 3)", &m).expect("parses");
+        assert_eq!(eval::eval(&m, &e).unwrap(), ast::Expr::IntLit(5.into()));
+    }
+
+    /// A dotted citation resolves to the declared name it ends in (slice
+    /// 3.2; the flat mirror of the V3 suffix table): `Stack.mk` in a term
+    /// and a pattern, `lib.push` as a call head, `lib.Stack` as a type
+    /// printed by its last component.
+    #[test]
+    fn dotted_citations() {
+        let src = r#"
+(type Stack (mk Int))
+(fn push ((n Int) (s lib.Stack)) Stack (match s ((Stack.mk k) (Stack.mk (+ k n)))))
+(fn top ((s Stack)) Int (match s ((lib.Stack.mk k) k)))
+(fn go () Int (top (lib.push 5 (Stack.mk 1))))
+"#;
+        let m = load::module_from_str(src).expect("loads");
+        let e = load::expr_from_str("(go)", &m).expect("parses");
+        assert_eq!(eval::eval(&m, &e).unwrap(), ast::Expr::IntLit(6.into()));
+        assert_eq!(
+            dump::dump(&m),
+            "fn go 0 () Int (top (push 5 (mk 1)))\nfn push 0 (Int Stack) Stack (match #0 ((mk _) (mk (+ #0 #2))))\nfn top 0 (Stack) Int (match #0 ((mk _) #0))\ntype Stack 0 (mk Int)\n"
+        );
+    }
+
+    /// `(T Type)` binders (v3/LANGUAGE.md §8.1 rule 3; slice 3.2): a type
+    /// parameter, in scope for the binders after it and the result, never
+    /// a runtime parameter; the dump numbers it by first occurrence, as the
+    /// V3 dump does.
+    #[test]
+    fn type_binders() {
+        let src = r#"
+(type (List T) (Nil) (Cons T (List T)))
+(fn first ((T Type) (xs (List T)) (d T)) T
+  (match xs (Nil d) ((Cons x _) x)))
+"#;
+        let m = load::module_from_str(src).expect("loads");
+        let f = m.lookup_fn("first").unwrap();
+        assert_eq!(f.params.len(), 2);
+        assert_eq!(f.params[1], ast::Type::TVar("T".into()));
+        assert_eq!(f.ret, ast::Type::TVar("T".into()));
+        let e = load::expr_from_str("(first (Cons 7 Nil) 0)", &m).expect("parses");
+        assert_eq!(eval::eval(&m, &e).unwrap(), ast::Expr::IntLit(7.into()));
+        assert_eq!(
+            dump::dump(&m),
+            "fn first 1 ((List ?0) ?0) ?0 (match #1 (Nil #0) ((Cons _ _) #1))\ntype List 1 (Nil) (Cons ?0 (List ?0))\n"
+        );
     }
 
     /// `match` on an `Option`-shaped value — bare zero-arg ctors AND

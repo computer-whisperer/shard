@@ -8,11 +8,29 @@
 //!   (fn   NAME ((P TY)…) RET BODY)
 //!   (extern NAME ((P TY)…) RET)
 //!
+//! A binder `(T Type)` declares a type parameter in scope for the binders
+//! after it and the result — the one E's spelling (v3/LANGUAGE.md §8.1
+//! rule 3, phase 3 slice 3.2) — wherever `Type` is the sort, that is, not
+//! a declared type of the closure: the old tree's `kernel/module.shard`
+//! declares a data type `Type` and binds `(t Type)` runtime parameters,
+//! which stay runtime parameters. The parameterized head `(fn (NAME T…)
+//! …)` and the auto-bound bare type name are the old tree's spellings and
+//! stay accepted. A `let` binds SEQUENTIALLY (§5.4, RULED 2026-09-12):
+//! each right-hand side sees the bindings before it.
+//!
 //! Within a body, identifiers resolve in this order:
 //!   1. Local binding (parameter, pattern var, let-bound) → BVar
 //!   2. Constructor name (any arity, including bare zero-arg) → Ctor
 //!   3. Anything else at the head of a list → Call
 //!   4. Anything else as a bare identifier → FVar
+//!
+//! A dotted citation — `Stack.mk`, `json.hex_val`, `kernel.json.hex_val` —
+//! resolves to the declared constructor or head it ENDS in (the longest
+//! suffix that is a declared name), the flat mirror of the V3 reader's
+//! suffix table (v3/LANGUAGE.md §6.7, §8.1 rule 4): this loader has no
+//! module paths, so a citation is canonicalized to the declared spelling
+//! at load and the evaluator sees one name per declaration. A citation
+//! that matches nothing is kept as written (a primitive, or unknown).
 //!
 //! Reserved special forms (override the head-symbol lookup):
 //!   if, match, let, quote, list, ty
@@ -130,6 +148,26 @@ pub fn module_from_str_with_base(
     if let Some(b) = base {
         ctors.extend(ctor_set(b));
     }
+    // the declared heads, so a dotted call citation canonicalizes (above)
+    let mut heads: HashSet<Symbol> = HashSet::new();
+    for v in &values {
+        let parts = as_list(v)?;
+        let h = as_symbol(parts[0])?;
+        if (h == "fn" || h == "extern") && parts.len() > 1 {
+            if let Some(n) = parts[1].as_symbol() {
+                heads.insert(n.to_string());
+            } else if let Some(mut it) = parts[1].list_iter() {
+                if let Some(n) = it.next().and_then(|x| x.as_symbol()) {
+                    heads.insert(n.to_string());
+                }
+            }
+        }
+    }
+    let mut types: HashSet<Symbol> = module.types.iter().map(|t| t.name.clone()).collect();
+    if let Some(b) = base {
+        types.extend(b.types.iter().map(|t| t.name.clone()));
+    }
+    let ctors = Scope { ctors, heads, types };
 
     // Pass 2: fns and externs. Skip types (already loaded). The proof-
     // script forms (`claim`, `import`, `use-module`) are the check
@@ -144,7 +182,7 @@ pub fn module_from_str_with_base(
         match head_sym {
             "type" => {}
             "fn" => module.fns.push(load_fn_def(&parts[1..], &ctors)?),
-            "extern" => module.externs.push(load_extern_def(&parts[1..])?),
+            "extern" => module.externs.push(load_extern_def(&parts[1..], &ctors)?),
             // `app` is the entrypoint declaration consumed by the
             // `check app` driver (state + init + update), not the module
             // loader — skip it here exactly like claim/import.
@@ -153,14 +191,70 @@ pub fn module_from_str_with_base(
             // scoping matters only to STRICT check-time resolution (host
             // dispatch is name-keyed), and the contract forms are the
             // checker driver's concern. Skipping them lets `eval direct`
-            // run apps that carry them (e.g. tools/prove).
+            // run apps that carry them (e.g. tools/prove). The V3 L forms
+            // (`def theorem abbrev opaque inductive structure realize
+            // trusts`; v3/LANGUAGE.md §4) are K's, never this executor's:
+            // under the one E (§8.1) a file holds them beside its E forms
+            // and this loader reads the E half (slice 3.2).
             "claim" | "axiom" | "import" | "use-module" | "app" | "cli" | "use"
-            | "sig" | "requirement" | "fulfills" | "bin" => {}
+            | "sig" | "requirement" | "fulfills" | "bin"
+            | "def" | "theorem" | "abbrev" | "opaque" | "inductive" | "structure"
+            | "realize" | "trusts" => {}
             other => return Err(LoadError::UnknownForm(other.into())),
         }
     }
 
     Ok(module)
+}
+
+/// The declared names a citation resolves against: the constructors and the
+/// heads (fns and externs). A dotted citation canonicalizes to the longest
+/// suffix that is declared (the module header above).
+pub struct Scope {
+    ctors: HashSet<Symbol>,
+    heads: HashSet<Symbol>,
+    types: HashSet<Symbol>,
+}
+
+impl Scope {
+    fn of_module(module: &Module) -> Scope {
+        let heads = module
+            .fns
+            .iter()
+            .map(|f| f.name.clone())
+            .chain(module.externs.iter().map(|e| e.name.clone()))
+            .collect();
+        let types = module.types.iter().map(|t| t.name.clone()).collect();
+        Scope { ctors: ctor_set(module), heads, types }
+    }
+    /// `Type` is the sort — a `(T Type)` binder is a type parameter — unless
+    /// the closure declares a type of that name (the old tree does).
+    fn type_is_sort(&self) -> bool {
+        !self.types.contains("Type")
+    }
+    /// The declared constructor a citation names, canonicalized.
+    fn ctor(&self, cit: &str) -> Option<String> {
+        resolve_in(&self.ctors, cit)
+    }
+    /// The declared head a citation names, canonicalized; a citation that
+    /// matches nothing is kept as written.
+    fn head(&self, cit: &str) -> String {
+        resolve_in(&self.heads, cit).unwrap_or_else(|| cit.to_string())
+    }
+}
+
+fn resolve_in(declared: &HashSet<Symbol>, cit: &str) -> Option<String> {
+    if declared.contains(cit) {
+        return Some(cit.to_string());
+    }
+    let mut rest = cit;
+    while let Some(i) = rest.find('.') {
+        rest = &rest[i + 1..];
+        if declared.contains(rest) {
+            return Some(rest.to_string());
+        }
+    }
+    None
 }
 
 /// Parse a single expression against a module's ctor set.
@@ -177,9 +271,9 @@ pub fn expr_from_str(src: &str, module: &Module) -> Result<Expr, LoadError> {
 /// the sexp surface (e.g., the `check` binary scanning a proof file
 /// for `(claim …)` forms).
 pub fn expr_from_value(v: &Value, module: &Module) -> Result<Expr, LoadError> {
-    let ctors = ctor_set(module);
+    let scope = Scope::of_module(module);
     let mut ctx = LoadCtx::new();
-    load_expr(v, &mut ctx, &ctors)
+    load_expr(v, &mut ctx, &scope)
 }
 
 fn parse_all(src: &str) -> Result<Vec<Value>, LoadError> {
@@ -263,7 +357,7 @@ fn load_type_def(parts: &[&Value]) -> Result<TypeDef, LoadError> {
 /// type becomes `TVar T` rather than `TCon T []`. This is what the
 /// kernel's `type_subst` needs to substitute correctly when the fn's
 /// signature is referenced by a polymorphic Goal (see do_induct).
-fn load_fn_def(parts: &[&Value], ctors: &HashSet<Symbol>) -> Result<FnDef, LoadError> {
+fn load_fn_def(parts: &[&Value], ctors: &Scope) -> Result<FnDef, LoadError> {
     // `(fn NAME PARAMS RET (measure E P…) BODY)` — the optional totality
     // clause (issue #1). Its obligations are generated and checked by the
     // in-shard gate (`check admit` / the check-mode flip); the engine only
@@ -297,8 +391,8 @@ fn load_fn_def(parts: &[&Value], ctors: &HashSet<Symbol>) -> Result<FnDef, LoadE
         }
         (n, ts)
     };
-    let (param_names, param_types) = load_params_in_scope(parts[1], &tparams)?;
-    let ret = load_type_in_scope(parts[2], &tparams)?;
+    let (param_names, param_types, tps) = load_params_in_scope(parts[1], &tparams, ctors.type_is_sort())?;
+    let ret = load_type_in_scope(parts[2], &tps)?;
 
     let mut ctx = LoadCtx::new();
     for n in &param_names {
@@ -317,7 +411,7 @@ fn load_fn_def(parts: &[&Value], ctors: &HashSet<Symbol>) -> Result<FnDef, LoadE
 /// `(extern NAME PARAMS RET)` — monomorphic.
 /// `(extern (NAME T1…) PARAMS RET)` — polymorphic. Same parameterized-
 /// head convention as `fn` and `type`.
-fn load_extern_def(parts: &[&Value]) -> Result<ExternDef, LoadError> {
+fn load_extern_def(parts: &[&Value], ctors: &Scope) -> Result<ExternDef, LoadError> {
     if parts.len() != 3 {
         return Err(LoadError::BadShape(format!(
             "extern: expected (extern NAME PARAMS RET) or \
@@ -341,8 +435,8 @@ fn load_extern_def(parts: &[&Value]) -> Result<ExternDef, LoadError> {
         }
         (n, ts)
     };
-    let (_, param_types) = load_params_in_scope(parts[1], &tparams)?;
-    let ret = load_type_in_scope(parts[2], &tparams)?;
+    let (_, param_types, tps) = load_params_in_scope(parts[1], &tparams, ctors.type_is_sort())?;
+    let ret = load_type_in_scope(parts[2], &tps)?;
     Ok(ExternDef {
         name,
         params: param_types,
@@ -350,13 +444,19 @@ fn load_extern_def(parts: &[&Value]) -> Result<ExternDef, LoadError> {
     })
 }
 
-/// `((P1 T1) (P2 T2) …)` → (names, types). Each type is parsed against
-/// the given tparams; bare symbols matching a tparam become `TVar`.
+/// `((P1 T1) (P2 T2) …)` → (names, types, type parameters). Each type is
+/// parsed against the type parameters in scope — the head's, plus every
+/// `(T Type)` binder before it (v3/LANGUAGE.md §8.1 rule 3): such a binder
+/// is a type parameter, never a runtime parameter, and bare symbols
+/// matching one become `TVar`. The returned list is the scope for the
+/// result type.
 fn load_params_in_scope(
     v: &Value,
     tparams: &[Symbol],
-) -> Result<(Vec<Symbol>, Vec<Type>), LoadError> {
+    type_is_sort: bool,
+) -> Result<(Vec<Symbol>, Vec<Type>, Vec<Symbol>), LoadError> {
     let items = as_list(v)?;
+    let mut tps: Vec<Symbol> = tparams.to_vec();
     let mut names = Vec::with_capacity(items.len());
     let mut types = Vec::with_capacity(items.len());
     for item in items {
@@ -366,10 +466,15 @@ fn load_params_in_scope(
                 "param: expected (NAME TYPE), got {pair:?}"
             )));
         }
-        names.push(as_symbol(pair[0])?.to_string());
-        types.push(load_type_in_scope(pair[1], tparams)?);
+        let name = as_symbol(pair[0])?.to_string();
+        if type_is_sort && pair[1].as_symbol() == Some("Type") {
+            tps.push(name);
+            continue;
+        }
+        names.push(name);
+        types.push(load_type_in_scope(pair[1], &tps)?);
     }
-    Ok((names, types))
+    Ok((names, types, tps))
 }
 
 /// Type expression. Bare symbol `T` → `(TCon T ())`; applied form
@@ -436,7 +541,7 @@ impl LoadCtx {
     }
 }
 
-fn load_expr(v: &Value, ctx: &mut LoadCtx, ctors: &HashSet<Symbol>) -> Result<Expr, LoadError> {
+fn load_expr(v: &Value, ctx: &mut LoadCtx, ctors: &Scope) -> Result<Expr, LoadError> {
     // Integer literal
     if let Some(n) = int_lit_of(v)? {
         return Ok(Expr::IntLit(n));
@@ -447,8 +552,8 @@ fn load_expr(v: &Value, ctx: &mut LoadCtx, ctors: &HashSet<Symbol>) -> Result<Ex
         if let Some(i) = ctx.lookup(sym) {
             return Ok(Expr::BVar(i));
         }
-        if ctors.contains(sym) {
-            return Ok(Expr::Ctor(sym.to_string(), Vec::new()));
+        if let Some(c) = ctors.ctor(sym) {
+            return Ok(Expr::Ctor(c, Vec::new()));
         }
         return Ok(Expr::FVar(sym.to_string()));
     }
@@ -485,17 +590,17 @@ fn load_expr(v: &Value, ctx: &mut LoadCtx, ctors: &HashSet<Symbol>) -> Result<Ex
             for a in &parts[1..] {
                 args.push(load_expr(a, ctx, ctors)?);
             }
-            if ctors.contains(head_sym) {
-                Ok(Expr::Ctor(head_sym.to_string(), args))
+            if let Some(c) = ctors.ctor(head_sym) {
+                Ok(Expr::Ctor(c, args))
             } else {
-                Ok(Expr::Call(head_sym.to_string(), args))
+                Ok(Expr::Call(ctors.head(head_sym), args))
             }
         }
     }
 }
 
 /// `(if C T E)`
-fn load_if(parts: &[&Value], ctx: &mut LoadCtx, ctors: &HashSet<Symbol>) -> Result<Expr, LoadError> {
+fn load_if(parts: &[&Value], ctx: &mut LoadCtx, ctors: &Scope) -> Result<Expr, LoadError> {
     if parts.len() != 3 {
         return Err(LoadError::BadShape(format!(
             "if: expected (if C T E), got {} args",
@@ -512,7 +617,7 @@ fn load_if(parts: &[&Value], ctx: &mut LoadCtx, ctors: &HashSet<Symbol>) -> Resu
 fn load_match(
     parts: &[&Value],
     ctx: &mut LoadCtx,
-    ctors: &HashSet<Symbol>,
+    ctors: &Scope,
 ) -> Result<Expr, LoadError> {
     if parts.is_empty() {
         return Err(LoadError::BadShape("match: expected (match SCRUT ARMS…)".into()));
@@ -529,7 +634,7 @@ fn load_match(
 fn load_arm(
     v: &Value,
     ctx: &mut LoadCtx,
-    ctors: &HashSet<Symbol>,
+    ctors: &Scope,
 ) -> Result<Arm, LoadError> {
     let parts = as_list(v)?;
     if parts.len() != 2 {
@@ -548,15 +653,15 @@ fn load_arm(
 fn load_pat(
     v: &Value,
     ctx: &mut LoadCtx,
-    ctors: &HashSet<Symbol>,
+    ctors: &Scope,
 ) -> Result<Pat, LoadError> {
     if let Some(n) = int_lit_of(v)? {
         return Ok(Pat::PInt(n));
     }
     if let Some(sym) = v.as_symbol() {
-        if ctors.contains(sym) {
+        if let Some(c) = ctors.ctor(sym) {
             // Bare zero-arg ctor pattern
-            return Ok(Pat::PCtor(sym.to_string(), Vec::new()));
+            return Ok(Pat::PCtor(c, Vec::new()));
         }
         // PVar — including `_`, conventionally for an ignored binding.
         ctx.push(sym.to_string());
@@ -578,49 +683,55 @@ fn load_pat(
     }
     // Constructor application with sub-patterns
     let head_sym = as_symbol(parts[0])?;
-    if !ctors.contains(head_sym) {
+    let Some(c) = ctors.ctor(head_sym) else {
         return Err(LoadError::BadShape(format!(
             "unknown ctor in pattern: {head_sym}"
         )));
-    }
+    };
     let mut sub_pats = Vec::with_capacity(parts.len() - 1);
     for p in &parts[1..] {
         sub_pats.push(load_pat(p, ctx, ctors)?);
     }
-    Ok(Pat::PCtor(head_sym.to_string(), sub_pats))
+    Ok(Pat::PCtor(c, sub_pats))
 }
 
-/// `(let ((N1 E1) (N2 E2) …) BODY)`. Parallel let: RHSs evaluated
-/// in the outer scope; body sees all bindings.
+/// `(let ((N1 E1) (N2 E2) …) BODY)`. Sequential let (v3/LANGUAGE.md §5.4,
+/// RULED 2026-09-12; the bootstrap since phase 3 slice 3.2): each
+/// right-hand side sees the bindings before it, the body sees them all,
+/// the last innermost. (The tree was measured before the ruling: no
+/// existing `let` group's meaning changes.)
 fn load_let(
     parts: &[&Value],
     ctx: &mut LoadCtx,
-    ctors: &HashSet<Symbol>,
+    ctors: &Scope,
 ) -> Result<Expr, LoadError> {
     if parts.len() != 2 {
         return Err(LoadError::BadShape("let: expected (let BINDINGS BODY)".into()));
     }
     let bindings = as_list(parts[0])?;
     let mut rhss = Vec::with_capacity(bindings.len());
-    let mut names = Vec::with_capacity(bindings.len());
+    let saved = ctx.depth();
     for b in &bindings {
         let bp = as_list(b)?;
         if bp.len() != 2 {
+            ctx.truncate(saved);
             return Err(LoadError::BadShape(
                 "let binding: expected (NAME EXPR)".into(),
             ));
         }
-        names.push(as_symbol(bp[0])?.to_string());
-        // Parallel: RHS in current (outer) scope
-        rhss.push(load_expr(bp[1], ctx, ctors)?);
+        let name = as_symbol(bp[0])?.to_string();
+        match load_expr(bp[1], ctx, ctors) {
+            Ok(rhs) => rhss.push(rhs),
+            Err(e) => {
+                ctx.truncate(saved);
+                return Err(e);
+            }
+        }
+        ctx.push(name);
     }
-    let saved = ctx.depth();
-    for n in names {
-        ctx.push(n);
-    }
-    let body = load_expr(parts[1], ctx, ctors)?;
+    let body = load_expr(parts[1], ctx, ctors);
     ctx.truncate(saved);
-    Ok(Expr::Let(rhss, Box::new(body)))
+    Ok(Expr::Let(rhss, Box::new(body?)))
 }
 
 /// `(list E1 E2 …)` → `(Cons E1 (Cons E2 (… Nil)))`. Empty list
@@ -630,7 +741,7 @@ fn load_let(
 fn load_list(
     parts: &[&Value],
     ctx: &mut LoadCtx,
-    ctors: &HashSet<Symbol>,
+    ctors: &Scope,
 ) -> Result<Expr, LoadError> {
     let mut acc = Expr::Ctor("Nil".into(), Vec::new());
     for p in parts.iter().rev() {
@@ -651,7 +762,7 @@ fn load_list(
 fn load_ty(
     parts: &[&Value],
     ctx: &mut LoadCtx,
-    ctors: &HashSet<Symbol>,
+    ctors: &Scope,
 ) -> Result<Expr, LoadError> {
     if parts.is_empty() {
         return Err(LoadError::BadShape(
@@ -679,7 +790,7 @@ fn load_ty(
 fn load_ty_arg(
     v: &Value,
     ctx: &mut LoadCtx,
-    ctors: &HashSet<Symbol>,
+    ctors: &Scope,
 ) -> Result<Expr, LoadError> {
     if let Some(sym) = v.as_symbol() {
         return Ok(Expr::Ctor(
