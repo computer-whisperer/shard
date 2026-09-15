@@ -499,7 +499,13 @@ Type)` as a runtime parameter and generated C with extra parameters
 bootstrap's rule (`Type` is the sort unless a data type `Type` is in
 scope — its constructors `TCon`/`TVar` in the constructor scope, the
 only scope of types that reader has); the local suite never builds
-route 1, so CI's build step is that gate. Next:
+route 1, so CI's build step is that gate. **A fifth, from the
+corpus (pipelines 485 and 486, 2026-09-15):** the fix's helper had
+formed a mutual SCC with `parse_param_items` without a `(struct …)`
+clause of its own, and 54 corpus targets that import the old reader
+failed `__totality__` on that one obligation; folded back in, and an
+old-tree kernel edit now needs the measure checker over one corpus
+target that imports it (records §9). Next:
 the K seal (§13 item 26), Stage 1, I.
 
 ## Open obligations (2026-09-12; GPT-6 R48)

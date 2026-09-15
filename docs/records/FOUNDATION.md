@@ -1641,6 +1641,32 @@ is `docs/FOUNDATION.md` §5.3.
   | the primitive names of `docs/LANGUAGE.md` §8 | the naming-law spellings | one table, both spellings |
   | a `type` is E only; `def`, `theorem`, `inductive` refused (`profile_form`) | a `type` enters K and E | per `type` by its fields; K checks any L form |
   | the profile is the `kernel/` and `meta/` directories | every other file is S | withdrawn: one E for every file |
+- **2026-09-15 — the route-1 fix's second finding, from CI: the
+  corpus.** Pipelines 485 (`6f0f2dc`) and 486 (`0012446`) failed their
+  corpus job on 54 targets, every one a `__totality__` failure with
+  one cause: `kernel/reader/parse_param_items FAIL: call to
+  parse_param_item has no (struct …) clause`. The fix had split the
+  binder case into a helper that called back into `parse_param_items`
+  — a mutual SCC whose new member declared no `(struct …)` clause
+  (`docs/TOTALITY.md` §4: each member declares its own; a callee
+  without one fails the site), and whose call back passed its own
+  parameter unchanged, so no clause could have verified it. Every
+  corpus target that imports the old reader carried the one
+  unverified obligation. Fixed by folding the helper back in — the
+  only recursion is the list's own descent, `type_binder` a
+  predicate on the binder's type form — reproduced and rerun on one
+  pin (`pins/proof/nested_measure.shard`: 15/1 → 15/0, both reader
+  obligations OK), `bin/rebuild.sh` (byte-tie, STUCKCTL),
+  `v3/build.sh` with the compiled `t0`'s fixture tie (301 lines),
+  `tools/canon/hash.shard` (runtime `(t Type)` parameters, 31/0) and
+  the calc differential. The gate the local checks had missed: an
+  edit to an old-tree kernel file needs the measure checker over one
+  corpus target that imports it — `bin/shard_eval run
+  kernel/check.shard pins/proof/nested_measure.shard` — beside the
+  rebuild's byte-tie, which never runs the obligations. Both
+  pipelines' `v3` jobs passed the 22 entrypoints and built route 1
+  (the reader fix's own gate, green: lower, codegen, cc, the byte-ties
+  with both engines) and were in the full replay when this landed.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 
