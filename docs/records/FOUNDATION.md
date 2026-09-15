@@ -1667,6 +1667,32 @@ is `docs/FOUNDATION.md` §5.3.
   pipelines' `v3` jobs passed the 22 entrypoints and built route 1
   (the reader fix's own gate, green: lower, codegen, cc, the byte-ties
   with both engines) and were in the full replay when this landed.
+- **2026-09-15 — phase 3's slices green on CI.** Pipeline 482
+  (`345116f`, slice 3.2): green — engine 123 s, corpus 1,778 s, v3
+  4,296 s (22 entrypoints, calc byte-identical in 395 s on the runner
+  with the port under `ev` 15 s, parity byte-identical over 21
+  closures and 68,080 lines in 130 s with every projection injective,
+  route 2's byte-tie in 53 s, route 1 built, the full-export replay on
+  compiled K in 2,564 s at a 30.6 GB peak, T0 accepted 57,977, all 20
+  candidates pinned, closures identical); the pipeline 4,422 s.
+  Pipeline 483 (`2c3de64`, slice 3.3): corpus green, v3 failed at
+  `v3/build.sh` — the fourth finding. Pipeline 484 (`16a2346`)
+  cancelled for the runner. Pipeline 485 (`6f0f2dc`, the reader fix):
+  v3 green — route 1 built (lower, codegen, cc), calc 397 s, parity
+  261 s over 68,075 lines, route 2 78 s, replay 2,559 s at 30.6 GB,
+  20 pinned, closures identical (v3 4,343 s); corpus red on 54
+  targets — the fifth finding. Pipeline 486 (`0012446`, slice 3.6):
+  v3 green — calc 448 s, parity 148 s over 68,100 lines, route 2
+  62 s, replay 2,544 s at 30.7 GB, 20 pinned (v3 4,137 s); corpus red
+  the same way. **Pipeline 487 (`f644ca3`, the totality fix): green
+  end to end** — engine 305 s, corpus 1,563 s with `CORPUS ==
+  BASELINE` and no diff lines, v3 3,975 s (22 entrypoints, calc
+  398 s, parity 138 s over 21 closures and 68,100 lines, route 2
+  52 s, route 1 built, replay 2,468 s at a 30.6 GB peak, T0 accepted
+  57,977, 20 pinned, closures identical); the pipeline 4,283 s. The
+  one-E ruling's slices 3.1–3.6 stand on the full gate: every reader
+  of the toolchain — the bootstrap, the V3 reader and the old reader
+  under route 1 — reads the one E, and the corpus is at its baseline.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

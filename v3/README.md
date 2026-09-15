@@ -505,7 +505,20 @@ formed a mutual SCC with `parse_param_items` without a `(struct …)`
 clause of its own, and 54 corpus targets that import the old reader
 failed `__totality__` on that one obligation; folded back in, and an
 old-tree kernel edit now needs the measure checker over one corpus
-target that imports it (records §9). Next:
+target that imports it (records §9). **CI (2026-09-15): phase 3's
+slices green on the full gate** — pipeline 482 (`345116f`, slice 3.2)
+green: 22 entrypoints, calc byte-identical in 395 s, parity 130 s over
+21 closures and 68,080 lines, route 2 in 53 s, the full-export replay
+on compiled K in 2,564 s at a 30.6 GB peak, all 20 candidates pinned,
+closures identical; pipeline 483 (slice 3.3) failed route 1's build
+(the fourth finding); 485 (`6f0f2dc`, the reader fix) built route 1
+and replayed in 2,559 s at 30.6 GB with the same verdicts, and 486
+(`0012446`, slice 3.6) in 2,544 s at 30.7 GB, both with the corpus
+red on the totality obligation (the fifth); **487 (`f644ca3`) green
+end to end** — engine 305 s, corpus 1,563 s at the baseline, v3
+3,975 s: 22 entrypoints, calc 398 s, parity 138 s over 21 closures
+and 68,100 lines, route 2 in 52 s, replay 2,468 s at 30.6 GB, 20
+pinned, closures identical; the pipeline 4,283 s. Next:
 the K seal (§13 item 26), Stage 1, I.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
