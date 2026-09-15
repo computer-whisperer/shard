@@ -1259,7 +1259,19 @@ carried (§8.2).
    `ev`'s entries, computed through the bootstrap's operator primitives
    when `ev` runs on it; a toolchain source cites the operator
    spellings, and one that cited `Nat.add` directly would be an unknown
-   call under `eval direct`.
+   call under `eval direct`. **Route 1 reads the same E** (2026-09-14,
+   after CI): the compiled K is built by the old tree's chain
+   (`v3/build.sh`: `tools/lower` on the compiled engine, whose front end
+   is the old `kernel/reader.shard`), so that reader carries the same
+   binder rule — `(T Type)` is a type parameter unless a data type
+   `Type` is in scope, which in that reader means its constructors
+   `TCon` and `TVar` from the old tree's `module.shard` are
+   (`parse_param_items`, `type_is_sort` over the constructor scope; a
+   first cut keyed on the current file's typedefs mis-read every other
+   old-tree file, and the Rust-hosted tower caught it where the
+   compiled engine, whose loader is compiled in, could not). The local
+   suite never builds route 1; CI's `v3/build.sh` is its gate, and it
+   caught the omission on slice 3.3's pipeline.
 
 ### 8.2 The profile, retired (2026-09-14)
 

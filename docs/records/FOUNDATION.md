@@ -1584,7 +1584,28 @@ is `docs/FOUNDATION.md` §5.3.
   checked against the candidates of fifty-odd opened prefixes
   (`hits_in_scope`'s `mem_name` over `scope_candidates`); a prune of
   the `use` lines to the prefixes each file cites, or an indexed
-  candidate check, is the follow-up. The profile's ten-row table, as
+  candidate check, is the follow-up. **A fourth finding, from CI:**
+  pipeline 483 (slice 3.3) passed the 22 entrypoints and failed at
+  `v3/build.sh` — route 1's compiled K is lowered by the old tree's
+  `tools/lower` on the compiled engine, whose front end is the old
+  `kernel/reader.shard`; it read the migrated `(T Type)` binders as
+  runtime parameters, so `s_len`, `s_append`, … took an extra C
+  parameter and every call had "too few arguments". Fixed in the old
+  reader with the bootstrap's rule — `Type` is the sort unless a data
+  type `Type` is in scope (`parse_param_items`, `type_is_sort`: that
+  reader's scope of types is its constructor set, so the test is for
+  `module.shard`'s `TCon`); `parse_externdef`'s result type sees the
+  binders too. A first cut computed the flag from the current file's
+  typedefs: the compiled engine's byte-tie passed (its loader is
+  compiled in and never ran the edited reader), the Rust-hosted tower
+  failed — every old-tree file with `(t Type)` parameters but without
+  the `Type` typedef was read with the binders dropped. Bisected with
+  the arm neutralized and the flag forced, then rewritten over the
+  constructor scope; both engines tie on the probe. The local suite (`v3/test.sh`) never builds
+  route 1 — `v3/build.sh` and `t0_full.sh` are CI's — which is why
+  three local gates were green over a broken build; the sizing had
+  listed the bootstrap and the V3 reader as the two readers of the
+  toolchain and missed the third. The profile's ten-row table, as
   history:
 
   | in the profile | in S | decided |

@@ -486,8 +486,17 @@ loads run about twice as long (parity 95 s against 44 s) under the
 fifty-odd opened prefixes per file — measured, to be pruned with the
 `use` lines. Documents: `LANGUAGE.md` §8 (§8.2 a pointer, §6.7's
 profile paragraph replaced, items 7, 35 and 37), `CANON.md`,
-`docs/TCB.md`, the kernel and pins READMEs, records §9. Next: the K
-seal (§13 item 26), Stage 1, I.
+`docs/TCB.md`, the kernel and pins READMEs, records §9. **A fourth
+finding from CI (pipeline 483, slice 3.3):** route 1 — the compiled
+K, built by the old tree's chain (`v3/build.sh`) — reads the
+toolchain through the old `kernel/reader.shard`, which took `(T
+Type)` as a runtime parameter and generated C with extra parameters
+("too few arguments" at every call). The old reader now carries the
+bootstrap's rule (`Type` is the sort unless a data type `Type` is in
+scope — its constructors `TCon`/`TVar` in the constructor scope, the
+only scope of types that reader has); the local suite never builds
+route 1, so CI's build step is that gate. Next:
+the K seal (§13 item 26), Stage 1, I.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

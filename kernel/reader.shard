@@ -984,27 +984,68 @@
     (_ None)))
 
 ;; ---- (fn …) / (extern …) parameter lists ----
-(fn parse_params ((s SExpr) (tparams (List Symbol)))
+(fn parse_params ((s SExpr) (tparams (List Symbol)) (is_sort Bool))
   (Option (Pair (List Symbol) (List Type)))
   (match s
-    ((SList items) (parse_param_items items tparams))
+    ((SList items) (parse_param_items items tparams is_sort))
     (_ None)))
 
-(fn parse_param_items ((ss (List SExpr)) (tparams (List Symbol)))
+;; `is_sort`: `Type` is the sort — a `(T Type)` binder declares a type parameter
+;; in scope for the binders after it and the result, never a runtime parameter
+;; (v3/LANGUAGE.md §8.1 rule 3: the V3 toolchain's sources, which this reader
+;; lowers for route 1) — unless the program declares a data type named `Type`,
+;; as this tree's kernel/module.shard does, where `(t Type)` is a value.
+(fn parse_param_items ((ss (List SExpr)) (tparams (List Symbol)) (is_sort Bool))
   (Option (Pair (List Symbol) (List Type)))
   (measure (struct ss))
   (match ss
     (Nil (Some (Pair Nil Nil)))
     ((Cons item rest)
      (match item
+       ((SList (Cons (SSym pname) (Cons (SSym tsym) Nil)))
+        (if is_sort
+          (if (sym_eq tsym (quote Type))
+            (parse_param_items rest (Cons pname tparams) is_sort)
+            (parse_param_item pname (SSym tsym) rest tparams is_sort))
+          (parse_param_item pname (SSym tsym) rest tparams is_sort)))
        ((SList (Cons (SSym pname) (Cons typeForm Nil)))
-        (match (parse_type typeForm tparams)
-          (None None)
-          ((Some ty)
-           (match (parse_param_items rest tparams)
-             (None None)
-             ((Some (Pair ns tys)) (Some (Pair (Cons pname ns) (Cons ty tys))))))))
+        (parse_param_item pname typeForm rest tparams is_sort))
        (_ None)))))
+(fn parse_param_item
+  ((pname Symbol)
+   (typeForm SExpr)
+   (rest (List SExpr))
+   (tparams (List Symbol))
+   (is_sort Bool))
+  (Option (Pair (List Symbol) (List Type)))
+  (match (parse_type typeForm tparams)
+    (None None)
+    ((Some ty)
+     (match (parse_param_items rest tparams is_sort)
+       (None None)
+       ((Some (Pair ns tys)) (Some (Pair (Cons pname ns) (Cons ty tys))))))))
+;; `Type` is the sort unless a data type `Type` is in scope — this reader's scope
+;; of types is its constructor set, and kernel/module.shard's `Type` is the one
+;; with constructors `TCon` and `TVar`
+(fn type_is_sort ((ctors (List Symbol))) Bool
+  (if (mem_sym (quote TCon) ctors) False True))
+;; the type parameters in scope for the result: the head's and the `(T Type)` binders'
+(fn param_tparams ((paramsForm SExpr) (tparams (List Symbol)) (is_sort Bool))
+  (List Symbol)
+  (if is_sort
+    (match paramsForm
+      ((SList items) (type_binders items tparams))
+      (_ tparams))
+    tparams))
+(fn type_binders ((ss (List SExpr)) (tparams (List Symbol))) (List Symbol)
+  (measure (struct ss))
+  (match ss
+    (Nil tparams)
+    ((Cons (SList (Cons (SSym pname) (Cons (SSym tsym) Nil))) rest)
+     (type_binders
+       rest
+       (if (sym_eq tsym (quote Type)) (Cons pname tparams) tparams)))
+    ((Cons _ rest) (type_binders rest tparams))))
 
 ;; ---- (fn …) ----
 (fn parse_fndef_core
@@ -1017,10 +1058,13 @@
   (match (parse_head nameForm)
     (None None)
     ((Some (Pair name tparams))
-     (match (parse_params paramsForm tparams)
+     (match (parse_params paramsForm tparams (type_is_sort ctors))
        (None None)
        ((Some (Pair pnames ptypes))
-        (match (parse_type retForm tparams)
+        (match
+          (parse_type
+            retForm
+            (param_tparams paramsForm tparams (type_is_sort ctors)))
           (None None)
           ((Some ret)
            ;; body sees params as BVars — push names in source order
@@ -1049,16 +1093,20 @@
     (_ None)))
 
 ;; ---- (extern …) ----
-(fn parse_externdef ((parts (List SExpr))) (Option ExternDef)
+(fn parse_externdef ((parts (List SExpr)) (ctors (List Symbol)))
+  (Option ExternDef)
   (match parts
     ((Cons nameForm (Cons paramsForm (Cons retForm Nil)))
      (match (parse_head nameForm)
        (None None)
        ((Some (Pair name tparams))
-        (match (parse_params paramsForm tparams)
+        (match (parse_params paramsForm tparams (type_is_sort ctors))
           (None None)
           ((Some (Pair _ ptypes))
-           (match (parse_type retForm tparams)
+           (match
+             (parse_type
+               retForm
+               (param_tparams paramsForm tparams (type_is_sort ctors)))
              (None None)
              ((Some ret) (Some (ExternDef (qn name) ptypes ret)))))))))
     (_ None)))
@@ -1071,10 +1119,10 @@
 ;; real `(fn NAME …)` body (which shadows this when the module is checked or
 ;; run), whereas an extern has no body anywhere and the runtime dispatches it.
 ;; The `fn` tag distinguishes this from future sig kinds (e.g. `(sig type …)`).
-(fn parse_sigdef ((tail (List SExpr))) (Option ExternDef)
+(fn parse_sigdef ((tail (List SExpr)) (ctors (List Symbol))) (Option ExternDef)
   (match tail
     ((Cons (SSym kind) parts)
-     (if (sym_eq kind (quote fn)) (parse_externdef parts) None))
+     (if (sym_eq kind (quote fn)) (parse_externdef parts ctors) None))
     (_ None)))
 
 ;; ---- top-level form helpers ----
@@ -1187,7 +1235,7 @@
                (None None)
                ((Some (Pair fns externs)) (Some (Pair (Cons fd fns) externs))))))
         (if (sym_eq hname (quote extern))
-          (match (parse_externdef (form_tail f))
+          (match (parse_externdef (form_tail f) ctors)
             (None None)
             ((Some ed)
              (match (collect_fns_externs rest ctors)
@@ -1197,7 +1245,7 @@
           (match (sig_type_of f)
             ((Some _) (collect_fns_externs rest ctors))  ; (sig type …) → a TYPE (pass 1); skip here
             (None
-              (match (parse_sigdef (form_tail f))
+              (match (parse_sigdef (form_tail f) ctors)
                 (None None)
                 ((Some ed)
                  (match (collect_fns_externs rest ctors)
@@ -1647,14 +1695,14 @@
             (None (Some f))
             ((Some _) (pd_bad_decl rest ctors)))
         (if (sym_eq h (quote extern))
-          (match (parse_externdef (form_tail f))
+          (match (parse_externdef (form_tail f) ctors)
             (None (Some f))
             ((Some _) (pd_bad_decl rest ctors)))
         (if (sym_eq h (quote sig))
           (match (sig_type_of f)
             ((Some _) (pd_bad_decl rest ctors))
             (None
-              (match (parse_sigdef (form_tail f))
+              (match (parse_sigdef (form_tail f) ctors)
                 (None (Some f))
                 ((Some _) (pd_bad_decl rest ctors)))))
         (if (sym_eq h (quote claim))
