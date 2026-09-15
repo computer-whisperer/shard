@@ -482,9 +482,13 @@ opens at pre-registration (item 7 amended); and resolving a type name
 through the E table before K's constants hid the ambiguity
 `same_spelled` pins. Parity byte-identical over the 21 closures,
 route 2 and calc byte-identical, 22 entrypoints, 0 failed; the V3
-loads run about twice as long (parity 95 s against 44 s) under the
-fifty-odd opened prefixes per file — measured, to be pruned with the
-`use` lines. Documents: `LANGUAGE.md` §8 (§8.2 a pointer, §6.7's
+loads ran about twice as long (parity 95 s against 44 s). **Slice 3.6
+(2026-09-14): the load time recovered** — the guessed cause (fifty
+candidate names built per citation) was replaced by a structural
+scope check and parity did not move; the measured cause was
+`type_ident`'s L resolution per binder, which the profile never paid
+(11 s against 6 s on one closure), needed only where `Init` is in
+scope, so it runs exactly there. Parity 53 s, every gate unchanged. Documents: `LANGUAGE.md` §8 (§8.2 a pointer, §6.7's
 profile paragraph replaced, items 7, 35 and 37), `CANON.md`,
 `docs/TCB.md`, the kernel and pins READMEs, records §9. **A fourth
 finding from CI (pipeline 483, slice 3.3):** route 1 — the compiled

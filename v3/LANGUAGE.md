@@ -1339,15 +1339,28 @@ the toolchain's closures, so both readers agree at every commit:
   table before K's constants, which hid the native-versus-imported
   ambiguity `same_spelled` pins. Parity byte-identical over the 21
   closures, route 2 and calc byte-identical, 22 entrypoints, 0
-  failed; the V3 loads run about twice as long (parity 95 s against
-  44 s), the candidate list of each citation under fifty opened
-  prefixes the likely cost — measured, to be pruned with the `use`
-  lines.
+  failed; the V3 loads ran about twice as long (parity 95 s against
+  44 s) — see 3.6.
 - **3.5 the documents closed — landed 2026-09-14** with 3.4: §8.2
   reduced to the pointer above, §6.7's profile paragraph replaced,
   §12's rows, §13 items 7 and 35 amended, `CANON.md`'s lexical note,
   `docs/TCB.md`'s bring-up item (2), the kernel README, the pins
   README, records.
+- **3.6 the load time recovered — landed 2026-09-14.** The doubling
+  was measured before it was explained: the guessed cause — fifty
+  candidate names built per citation for the scope check — was
+  replaced by a structural check on the hit's identity
+  (`etable.shard` `cited_in_scope`: the prefix above the cited suffix
+  is the module's, an opened prefix's, or empty) and parity did not
+  move (93 s); the cause was `type_ident`'s L resolution per binder
+  and field type, which the profile never paid — 11 s against 6 s on
+  one closure. The order K-first is needed only where an imported
+  type can stand beside a native one, which needs `Init` in scope, so
+  it applies exactly there (`init_seen`) and the E table goes first
+  elsewhere, with the same answers (the pins, `same_spelled` among
+  them, unchanged). Parity 53 s; the structural check stays as the
+  simpler code. The `use` lines are still the flat mirror; a prune to
+  the prefixes each file cites remains open with §13 item 7.
 
 Then the opener as planned: the K seal under item 26's criterion,
 Stage 1, I.

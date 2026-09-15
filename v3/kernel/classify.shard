@@ -230,19 +230,30 @@
 (fn single_step ((n Name)) Bool (match n ((Str Anon _) True) (_ False)))
 ;; a type name's identity (§8.1 rule 1): the built-in E types `Int`, `Nat`, `Symbol` in every
 ;; file (where Init is in scope, `Int` and `Nat` are its constants under the same bare name);
-;; then K's constants through the scope (a `type` K holds, a `sig type`, Init's inductives);
-;; then the E-only types of the scope (a `type` over E's built-ins alone)
+;; then, where Init is in scope, K's constants through the scope (a `type` K holds, a `sig
+;; type`, Init's inductives) and after them the E-only types; elsewhere the E table first —
+;; the same answer, since an ambiguity between a native and an imported type needs Init
 (fn type_ident ((es ESt) (sc Scope) (env CheckedEnv) (n Name)) TyRes
   (if (builtin_type n) (TyOk (ETCon n Nil) Nil)
-    (match (resolve (cx_with_etype (cx0 sc env Nil Nil) True) n)   ; K's constants first: an ambiguity between a native and an imported type is reported here
-      ((RName k _) (TyOk (ETCon k Nil) Nil))
-      ((RAmbiguous a b) (TyErr (quote ambiguous_type) (ambiguous_msg n a b)))
-      ((RPend k) (TyErr (quote pending_obligation) (show_name k)))
-      (RNone
-       (match (only_types (eresolve es sc n))   ; then the E-only types of the scope
-         ((Cons (EHit id _ _) Nil) (TyOk (ETCon id Nil) Nil))
-         ((Cons (EHit a _ _) (Cons (EHit b _ _) _)) (TyErr (quote ambiguous_type) (ambiguous_msg n a b)))
-         (Nil (TyErr (quote unknown_type) (show_name n))))))))
+  (if (init_seen sc)
+    (type_ident_k es sc env n)   ; K's constants first where Init is in scope: a native type beside an imported one is an ambiguity K reports
+    (type_ident_e es sc env n))))   ; else the E table first — every K type of the scope has its E twin there, and the L resolution per binder was the load's cost (slice 3.6: 11 s → 6 s on one closure)
+(fn type_ident_k ((es ESt) (sc Scope) (env CheckedEnv) (n Name)) TyRes
+  (match (resolve (cx_with_etype (cx0 sc env Nil Nil) True) n)
+    ((RName k _) (TyOk (ETCon k Nil) Nil))
+    ((RAmbiguous a b) (TyErr (quote ambiguous_type) (ambiguous_msg n a b)))
+    ((RPend k) (TyErr (quote pending_obligation) (show_name k)))
+    (RNone (type_ident_e es sc env n))))
+(fn type_ident_e ((es ESt) (sc Scope) (env CheckedEnv) (n Name)) TyRes
+  (match (only_types (eresolve es sc n))
+    ((Cons (EHit id _ _) Nil) (TyOk (ETCon id Nil) Nil))
+    ((Cons (EHit a _ _) (Cons (EHit b _ _) _)) (TyErr (quote ambiguous_type) (ambiguous_msg n a b)))
+    (Nil
+     (match (resolve (cx_with_etype (cx0 sc env Nil Nil) True) n)
+       ((RName k _) (TyOk (ETCon k Nil) Nil))
+       ((RAmbiguous a b) (TyErr (quote ambiguous_type) (ambiguous_msg n a b)))
+       ((RPend k) (TyErr (quote pending_obligation) (show_name k)))
+       (RNone (TyErr (quote unknown_type) (show_name n)))))))
 
 ;; ---- terms (§5.4) ----------------------------------------------------------------------------
 ;; the reading context: the table, the scope, the environment (S E-types), the

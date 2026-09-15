@@ -34,6 +34,7 @@
 (use kernel.prog.ECtorDef)
 (use kernel.prog.EDecl)
 (use kernel.prog.Prog)
+(use kernel.reader.Open)
 (use kernel.reader.Scope)
 (use kernel.reader.Vis)
 ;; ---- the E table ----------------------------------------------------------------------
@@ -166,16 +167,42 @@
 ;; ---- resolution (§6.7) ---------------------------------------------------------------------
 (type EHit (EHit Name Name EInfo))   ; identity, module, info
 (fn eresolve ((es ESt) (sc Scope) (n Name)) (List EHit)
-  (hits_in_scope (es_hits es (if (init_prefixed n) (drop_init n) n))   ; `Init.NAME` cites the imported NAME (§3.1)
-                 sc (scope_candidates sc n)))
-(fn hits_in_scope ((hs (List EEnt)) (sc Scope) (cands (List Name))) (List EHit)
+  (let ((cited (if (init_prefixed n) (drop_init n) n)))   ; `Init.NAME` cites the imported NAME (§3.1)
+    (hits_in_scope (es_hits es cited) sc n cited)))
+;; a hit is in scope when the citation names it under §3.1's candidates — the module's own
+;; prefix, an opened prefix, the bare name, `Init.NAME` — decided structurally on the hit's
+;; identity (its prefix above the cited suffix) rather than by building every candidate name
+;; (slice 3.6: fifty opened prefixes per toolchain file made that construction the load's cost)
+(fn hits_in_scope ((hs (List EEnt)) (sc Scope) (n Name) (cited Name)) (List EHit)
   (measure (struct hs))
   (match hs
     (Nil Nil)
     ((Cons (EEnt _ id m i) r)
-     (if (bool_and (mod_visible sc m) (mem_name id cands))
-       (Cons (EHit id m i) (hits_in_scope r sc cands))
-       (hits_in_scope r sc cands)))))
+     (if (bool_and (mod_visible sc m) (cited_in_scope sc n cited id))
+       (Cons (EHit id m i) (hits_in_scope r sc n cited))
+       (hits_in_scope r sc n cited)))))
+(fn cited_in_scope ((sc Scope) (n Name) (cited Name) (id Name)) Bool
+  (match (name_above id cited)
+    (None False)
+    ((Some pre)
+     (if (init_prefixed n)
+       (match pre (Anon True) (_ False))   ; `Init.NAME`: the bare imported name only
+       (match pre
+         (Anon True)                        ; the bare name
+         (_ (bool_or (name_eq pre (sc_module sc)) (opened_has (sc_opened sc) pre n))))))))
+;; the identity's prefix above the cited suffix: `kernel.json.hex_val` above `json.hex_val` is `kernel`
+(fn name_above ((id Name) (suffix Name)) (Option Name)
+  (measure (struct suffix))
+  (match suffix
+    (Anon (Some id))
+    ((Str sp ss) (match id ((Str ip is) (if (sym_eq is ss) (name_above ip sp) None)) (_ None)))
+    ((Num sp sk) (match id ((Num ip ik) (if (int_eq ik sk) (name_above ip sp) None)) (_ None)))))
+(fn opened_has ((ps (List Open)) (pre Name) (n Name)) Bool
+  (measure (struct ps))
+  (match ps
+    (Nil False)
+    ((Cons (OpenAll p) r) (if (name_eq p pre) True (opened_has r pre n)))
+    ((Cons (OpenSome p ms) r) (if (bool_and (name_eq p pre) (first_component_in n ms)) True (opened_has r pre n)))))
 (fn mod_visible ((sc Scope) (m Name)) Bool
   (match (sc_vis sc)
     (VisAll True)

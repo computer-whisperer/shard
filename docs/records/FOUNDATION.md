@@ -1601,7 +1601,28 @@ is `docs/FOUNDATION.md` §5.3.
   failed — every old-tree file with `(t Type)` parameters but without
   the `Type` typedef was read with the binders dropped. Bisected with
   the arm neutralized and the flag forced, then rewritten over the
-  constructor scope; both engines tie on the probe. The local suite (`v3/test.sh`) never builds
+  constructor scope; both engines tie on the probe.
+- **2026-09-14 — slice 3.6 landed: the load time recovered.** The
+  3.4 measurement (parity 95 s against 44 s) had a guessed cause —
+  `scope_candidates` building fifty names per citation for
+  `hits_in_scope`'s membership test. Replaced by `cited_in_scope`
+  (`etable.shard`: `name_above` strips the cited suffix off the hit's
+  identity and the prefix left is tested against the module, the
+  opened prefixes and the empty prefix; `Init.NAME` takes the bare
+  imported name only): byte-identical, and parity unchanged at 93 s —
+  the guess was wrong. Measured instead on one closure
+  (`loader_test`'s, 25 modules): `type_ident` with K's `resolve`
+  first, 11 s; with the E table first, 6 s. The profile never resolved
+  a binder's type through K; the one-E `type_ident` did so for every
+  binder and field. The order matters only where a native type can
+  stand beside an imported one, which needs `Init` in scope, so K goes
+  first exactly there (`init_seen`, `type_ident_k`) and the E table
+  first elsewhere (`type_ident_e`), the same answers everywhere: the
+  87 loader pins (`same_spelled`'s ambiguity included), route 2, calc,
+  parity 21 closures in 53 s. The structural check is kept as the
+  simpler code. Still open: the `use` lines are the flat mirror
+  (1,195); a prune to the prefixes each file cites, once the S reader
+  can report an unused `use`. The local suite (`v3/test.sh`) never builds
   route 1 — `v3/build.sh` and `t0_full.sh` are CI's — which is why
   three local gates were green over a broken build; the sizing had
   listed the bootstrap and the V3 reader as the two readers of the
