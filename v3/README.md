@@ -505,7 +505,16 @@ formed a mutual SCC with `parse_param_items` without a `(struct …)`
 clause of its own, and 54 corpus targets that import the old reader
 failed `__totality__` on that one obligation; folded back in, and an
 old-tree kernel edit now needs the measure checker over one corpus
-target that imports it (records §9). **CI (2026-09-15): phase 3's
+target that imports it (records §9). **Slice 3.7 (2026-09-15): the
+`use` lines pruned** — the loader records `UNUSED MODULE use=P,…` for
+a `(use P)` no symbol token of the file names a declaration under
+(the flat mirror of resolution, over tokens rather than citations, so
+it keeps and never wrongly drops), driven by the E table's suffix
+index at no measurable cost; a one-off tool ran the 20 toolchain
+closures, checked they agree file by file, and deleted 218 lines from
+38 files — 979 kept, 357 module opens and 623 `(use M.T)` type opens,
+§13 item 7's cost counted; every gate unchanged, the tool's second
+run finds nothing. **CI (2026-09-15): phase 3's
 slices green on the full gate** — pipeline 482 (`345116f`, slice 3.2)
 green: 22 entrypoints, calc byte-identical in 395 s, parity 130 s over
 21 closures and 68,080 lines, route 2 in 53 s, the full-export replay

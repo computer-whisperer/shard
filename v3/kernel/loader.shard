@@ -21,7 +21,6 @@
 (import "reader.shard")
 (import "import.shard")
 (import "realize.shard")
-(use kernel.accel_pins)
 (use kernel.add)
 (use kernel.axioms)
 (use kernel.classify)
@@ -29,6 +28,7 @@
 (use kernel.env)
 (use kernel.erase)
 (use kernel.etable)
+(use kernel.etable.EEnt)
 (use kernel.etable.EHit)
 (use kernel.expr)
 (use kernel.host)
@@ -36,9 +36,7 @@
 (use kernel.inductive)
 (use kernel.intmap)
 (use kernel.json)
-(use kernel.level)
 (use kernel.name)
-(use kernel.nested)
 (use kernel.prelude)
 (use kernel.prog)
 (use kernel.reader)
@@ -198,7 +196,8 @@
   (RImplErr Name Symbol (List Int))           ; the implementation check: a parameter without its implementation, a mismatch
   (RImplRec Rec)                              ; a record of the implementation's fork (its own declarations)
   (RReadErr (List Int) Symbol (List Int))     ; file, reason, message — the file's reading ends here
-  (RLoadErr (List Int) Symbol (List Int)))    ; file, reason, detail — the file's loading ends here
+  (RLoadErr (List Int) Symbol (List Int))     ; file, reason, detail — the file's loading ends here
+  (RUnused Name (List Name)))                 ; the file's `use` lines no citation could need (§8.1 rule 4): module, prefixes
 
 ;; root, environment, closure memo, modules, the Init stream, declaration →
 ;; module, pending names, the loading stack (cycles), records newest first,
@@ -695,7 +694,7 @@
                  (match (load_forms l1 f1 rest fuel w2)
                    ((Pair (Pair l2 (Some f)) w3)
                     (let ((fp (if view (Some (ForkPt (ld_with_stack l1 (ld_stack l)) f1 rest)) None)))
-                      (Pair (Pair (ld_rec (ld_add_mod (ld_with_stack l2 (ld_stack l)) (Mod mp (join_path rel) (fx_hash f) (fx_vis f) (fx_init f) fp True))
+                      (Pair (Pair (ld_rec (rec_unused (ld_add_mod (ld_with_stack l2 (ld_stack l)) (Mod mp (join_path rel) (fx_hash f) (fx_vis f) (fx_init f) fp True)) f dirs rest)
                                           (RModule mp (join_path rel) (fx_hash f) (fx_vis f)))
                                   fp)
                             w3)))
@@ -724,6 +723,117 @@
   (match forms
     (Nil (Pair (rev acc) Nil))
     ((Cons s r) (match (form_of s) (FDecl (Pair (rev acc) forms)) (_ (split_directives r (Cons s acc)))))))
+
+;; ---- unused use lines (§8.1 rule 4; the prune, slice 3.7) --------------------------------
+;; A `(use P)` no citation of the file could need: no symbol token of the file's forms
+;; names, under P, a declaration K or the E table holds once the file is loaded. The test
+;; is the flat mirror of resolution — a citation is a suffix of its identity and the opened
+;; prefix is what stands above it (etable.shard cited_in_scope) — over every token rather
+;; than every citation, so a binder or a pattern variable spelled like a declaration can
+;; keep a line, never drop one; a line for the file's own module is never needed. Selective
+;; opens `(use P a b)` are not judged. Recorded as UNUSED, never a refusal.
+;; Cost: the E table's suffix index answers each token with its hits, and the native K
+;; declarations are bucketed by last component once per file; only a prefix neither marks
+;; pays the token scan against K's environment (`Init`'s bare names under `(use Init.T)`,
+;; a view's parameters) — nothing in a file whose lines are all needed.
+(fn rec_unused ((l Load) (f Fx) (dirs (List SExpr)) (forms (List SExpr))) Load
+  (match (unused_uses l f dirs forms) (Nil l) (ps (ld_rec l (RUnused (fx_module f) ps)))))
+(fn unused_uses ((l Load) (f Fx) (dirs (List SExpr)) (forms (List SExpr))) (List Name)
+  (let ((toks (tok_names (form_tokens forms (Toks IMEmpty Nil)))))
+    (let ((needed (needed_k (ld_tbl l) (tok_buckets toks IMEmpty) (needed_e (ld_e l) toks IMEmpty))))
+      (unused_go l (fx_module f) (uses_of dirs) toks needed Nil))))
+(fn uses_of ((dirs (List SExpr))) (List Name)
+  (measure (struct dirs))
+  (match dirs
+    (Nil Nil)
+    ((Cons s r) (match (form_of s) ((FUse p Nil) (Cons p (uses_of r))) (_ (uses_of r))))))
+(fn unused_go ((l Load) (m Name) (ps (List Name)) (toks (List Name)) (needed (IntMap Bool)) (acc (List Name))) (List Name)
+  (measure (struct ps))
+  (match ps
+    (Nil (rev acc))
+    ((Cons p r)
+     (unused_go l m r toks needed
+       (if (name_eq p m) (Cons p acc)
+       (if (im_has needed (name_key p)) acc
+       (if (use_needed l p toks) acc (Cons p acc))))))))
+;; the fallback: some token names a declaration of K under P
+(fn use_needed ((l Load) (p Name) (toks (List Name))) Bool
+  (measure (struct toks))
+  (match toks
+    (Nil False)
+    ((Cons t r) (if (name_taken (ld_env l) (name_append p t)) True (use_needed l p r)))))
+;; E: every hit of a token by suffix marks the prefix above the token in its identity
+(fn needed_e ((es ESt) (toks (List Name)) (needed (IntMap Bool))) (IntMap Bool)
+  (measure (struct toks))
+  (match toks
+    (Nil needed)
+    ((Cons t r) (needed_e es r (mark_hits (es_hits es t) t needed)))))
+(fn mark_hits ((hs (List EEnt)) (t Name) (needed (IntMap Bool))) (IntMap Bool)
+  (measure (struct hs))
+  (match hs
+    (Nil needed)
+    ((Cons (EEnt _ id _ _) r) (mark_hits r t (mark_above id t needed)))))
+(fn mark_above ((id Name) (t Name) (needed (IntMap Bool))) (IntMap Bool)
+  (match (name_above id t) ((Some pre) (im_insert needed (name_key pre) True)) (None needed)))
+;; K: every native declaration against the tokens sharing its last component
+(fn needed_k ((tbl (IntMap (List (Pair Name Name)))) (buckets (IntMap (List Name))) (needed (IntMap Bool))) (IntMap Bool)
+  (measure (struct tbl))
+  (match tbl
+    (IMEmpty needed)
+    ((IMLeaf _ ds) (mark_decls ds buckets needed))
+    ((IMNode v c0 c1 c2 c3)
+     (needed_k c3 buckets (needed_k c2 buckets (needed_k c1 buckets (needed_k c0 buckets
+       (match v ((Some ds) (mark_decls ds buckets needed)) (None needed)))))))))
+(fn mark_decls ((ds (List (Pair Name Name))) (buckets (IntMap (List Name))) (needed (IntMap Bool))) (IntMap Bool)
+  (measure (struct ds))
+  (match ds
+    (Nil needed)
+    ((Cons (Pair id _) r)
+     (mark_decls r buckets
+       (match (im_find buckets (last_key id)) ((Some ts) (mark_tokens id ts needed)) (None needed))))))
+(fn mark_tokens ((id Name) (ts (List Name)) (needed (IntMap Bool))) (IntMap Bool)
+  (measure (struct ts))
+  (match ts
+    (Nil needed)
+    ((Cons t r) (mark_tokens id r (mark_above id t needed)))))
+;; the tokens bucketed by their last component's key
+(fn tok_buckets ((toks (List Name)) (b (IntMap (List Name)))) (IntMap (List Name))
+  (measure (struct toks))
+  (match toks
+    (Nil b)
+    ((Cons t r)
+     (let ((k (last_key t)))
+       (tok_buckets r (im_insert b k (Cons t (match (im_find b k) ((Some ts) ts) (None Nil)))))))))
+(fn last_key ((n Name)) Int
+  (match n ((Str _ s) (name_key (n1 s))) ((Num _ k) (name_key (Num Anon k))) (Anon 0)))
+;; the distinct dotted-name tokens of the forms, keyed by hash
+(type Toks (Toks (IntMap Bool) (List Name)))
+(fn tok_names ((t Toks)) (List Name) (match t ((Toks _ ns) ns)))
+(fn tok_add ((t Toks) (x Symbol)) Toks
+  (match (name_of_sym x)
+    (None t)
+    ((Some n)
+     (match t
+       ((Toks seen ns)
+        (let ((k (name_key n)))
+          (if (im_has seen k) t (Toks (im_insert seen k True) (Cons n ns)))))))))
+(fn form_tokens ((forms (List SExpr)) (t Toks)) Toks
+  (measure (struct forms))
+  (match forms
+    (Nil t)
+    ((Cons s r) (form_tokens r (sexpr_tokens s t)))))
+(fn sexpr_tokens ((s SExpr) (t Toks)) Toks
+  (measure (struct s))
+  (match s
+    ((SSym x) (tok_add t x))
+    ((SSymU x us) (tok_add (sexprs_tokens us t) x))
+    ((SList items) (sexprs_tokens items t))
+    (_ t)))
+(fn sexprs_tokens ((ss (List SExpr)) (t Toks)) Toks
+  (measure (struct ss))
+  (match ss
+    (Nil t)
+    ((Cons s r) (sexprs_tokens r (sexpr_tokens s t)))))
 
 ;; ---- directory modules (§6.5, §6.6) ------------------------------------------------------
 ;; (import "DIR"): the view — DIR/mod.req/mod.req.shard, else DIR/mod.req.shard
@@ -1048,6 +1158,7 @@
   (measure (struct x))
   (match x
     ((RModule m file h cl) (append "MODULE " (append (show_name m) (append " file=" (append file (append " hash=" (append (show_nat h) (append " sees=" (show_names_c cl)))))))))
+    ((RUnused m ps) (append "UNUSED " (append (show_name m) (append " use=" (show_names_c ps)))))
     ((RInit n k) (append "INIT " (append (show_name n) (append ": " (append (show_nat k) " declarations admitted")))))
     ((RAccept n m h axs pfx ps)
      (append "ACCEPT " (append (show_name n) (append " module=" (append (show_name m) (append " hash=" (append (show_nat h)
@@ -1091,7 +1202,8 @@
        ((RImplRec y) (rec_count y acc))
        ((RReadErr _ _ _) (list a b u c d e (+ g 1)))
        ((RLoadErr _ _ _) (list a b u c d e (+ g 1)))
-       ((RInit _ _) acc)))
+       ((RInit _ _) acc)
+       ((RUnused _ _) acc)))
     (_ acc)))
 (fn show_counts_load ((cs (List Int))) (List Int)
   (match cs

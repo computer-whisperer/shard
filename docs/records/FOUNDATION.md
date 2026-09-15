@@ -1714,6 +1714,36 @@ is `docs/FOUNDATION.md` §5.3.
   profile's `Bool`" — the prelude's. The rest ratified as written,
   the R57 trio (12, 13, 18) included. `CANON.md` §9 items 7–11
   unchanged.
+- **2026-09-15 — slice 3.7 landed: the `use` lines pruned.** The
+  loader judges each `(use P)` once its file is loaded (`loader.shard`
+  `unused_uses`, the `UNUSED MODULE use=P,…` record): unused when no
+  symbol token of the file's forms names, under P, a declaration K or
+  the E table holds. Chosen over threading a used-prefix set through
+  every resolution site (the reader's `Cx`, the classifier's `Rd`,
+  erase and realize — the profile flag's 127 sites again) and over a
+  textual guess (a re-implementation of the resolver): the token test
+  is the flat mirror of resolution, and its one inexactness — a
+  binder or pattern variable spelled like a declaration — keeps a
+  line, never drops one. A first cut scanned every prefix against
+  every token and cost 60% of a load (parity 80 s against 51 s);
+  rewritten over the E table's suffix index (each token's hits, the
+  prefix above the token in each identity marked) and a
+  last-component bucket of the native K declarations, with the K
+  scan only for a prefix neither marks — 59 s, and the tool's own
+  20 loads 45 s against 70 s. The one-off tool (scratchpad) ran the
+  20 toolchain closures, required every closure to judge each file
+  the same (50 files, 0 disagreements) and deleted the flagged lines:
+  218 from 38 files; 979 kept — 357 module opens, 623 `(use M.T)`
+  type opens (§13 item 7's cost, now counted); the rewritten check
+  reproduced the first cut's 193 flagged lines outside the two files
+  carrying code edits exactly, and a second run finds nothing. Spot
+  checks by hand: `kernel.accel_pins` flagged in `etable.shard` (none
+  of its 4,813 names appears bare there), `kernel.env` likewise.
+  Gates: 90 loader pins, parity byte-identical over 21 closures and
+  68,195 lines, route 2 and calc byte-identical, 22 entrypoints,
+  `v3/build.sh` and the compiled `t0`'s fixture tie (301 lines).
+  Documents: `LANGUAGE.md` §8.1 rule 4, §8.3, §13 item 7; the V3 and
+  kernel READMEs. Next: the K seal (item 26).
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

@@ -1204,10 +1204,15 @@ carried (§8.2).
    file; a `type` opens its own namespace for its **whole** file, its
    constructors pre-registered like the file's heads (§13 item 7 as
    amended at slice 3.4), and another module's constructors are cited
-   through `(use M.T)`. The toolchain's files carry `use` lines — one
-   per module of the transitive import closure, one per closure type
-   whose constructors they cite bare — written by the migration tool
-   (slice 3.3). The bootstrap ignores `use` and resolves flat (as it
+   through `(use M.T)`; `(use M)` opens no constructors (§13 item 7,
+   RULED 2026-09-15). The toolchain's files carry `use` lines — first
+   written by the migration tool as the flat mirror (slice 3.3), then
+   pruned to the lines a citation could need (slice 3.7): the loader
+   records `UNUSED MODULE use=P,…` for a `(use P)` no symbol token of
+   the file names a declaration under, decided against K and the E
+   table once the file is loaded — a lint, never a refusal, and the
+   prune tool deletes exactly those lines (979 kept of 1,197: 357
+   module opens, 623 type opens). The bootstrap ignores `use` and resolves flat (as it
    does today); the V3 reader enforces the scope, and frontend parity
    is the tie, as for every rule the bootstrap under-checks: the
    bootstrap is E's executor, the V3 reader its gate (§10).
@@ -1361,6 +1366,26 @@ the toolchain's closures, so both readers agree at every commit:
   them, unchanged). Parity 53 s; the structural check stays as the
   simpler code. The `use` lines are still the flat mirror; a prune to
   the prefixes each file cites remains open with §13 item 7.
+- **3.7 the `use` lines pruned — landed 2026-09-15.** The loader
+  judges each `(use P)` of a file once the file is loaded: unused
+  when no symbol token of the file's forms names, under P, a
+  declaration K or the E table holds (`loader.shard` `unused_uses`;
+  the `UNUSED` record). The test is the flat mirror of resolution —
+  a citation is a suffix of its identity and the opened prefix is
+  what stands above it — taken over every token rather than every
+  citation, so a binder spelled like a declaration keeps a line and
+  never drops one; the E table's suffix index answers each token
+  with its hits and the native K declarations are bucketed by last
+  component, so the check costs nothing measurable (parity 59 s
+  against 51 s before it, 80 s under a first cut that scanned
+  prefixes against tokens). A one-off tool ran the 20 toolchain
+  closures, checked that every closure judged each file the same
+  (50 files, 0 disagreements) and deleted the flagged lines: 218
+  from 38 files, 979 kept (357 module opens, 623 `(use M.T)` type
+  opens — item 7's cost, now counted). Gates: the 90 loader pins,
+  parity byte-identical over 21 closures, route 2 and calc, 22
+  entrypoints, `v3/build.sh` and the compiled `t0`'s fixture tie; a
+  second run of the tool finds nothing (the fixpoint).
 
 Then the opener as planned: the K seal under item 26's criterion,
 Stage 1, I.
@@ -1745,8 +1770,9 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
    not; an implicit opening would make every same-named constructor
    pair across modules (`Nil`/`Cons` in two list types) a collision
    that arrives with the `use` line rather than with the citation. The
-   cost is one `(use M.T)` per foreign type a file matches on; the
-   `use`-line prune reports the count.
+   cost is one `(use M.T)` per foreign type a file matches on: after
+   the prune (slice 3.7) the toolchain keeps 623 such lines beside
+   357 module opens, in 49 files.
 8. **The toolchain profile is a property of the package layout**, not
    of a marker form (§8). **Amended (GPT-6 R55, slice 10):** the layout
    selects a named, bounded compatibility profile recorded per module
