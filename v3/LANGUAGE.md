@@ -1286,11 +1286,31 @@ the toolchain's closures, so both readers agree at every commit:
   followed to the view and the implementation, the L forms skipped,
   dotted citations canonicalized; 43 bootstrap tests; parity 21
   closures with the directory-module case.
-- **3.3 the toolchain migrated by tool** — `use` lines and explicit
-  binders in the 30 kernel files (2026-09-14 count: 210 functions with
-  an auto-bound type variable; 7,710 bare constructor citations need
-  only the `use`), file by file under the gates; the prelude's `Nat`
-  deleted.
+- **3.3 the toolchain migrated by tool — landed 2026-09-14.** The
+  reader first: `(T Type)` is a type binder in every file (the profile
+  reader had auto-bound `Type` itself as a variable and kept `T` as an
+  argument — a silent arity error parity would have caught). Then one
+  deterministic pass over the 50 files under `v3/kernel/` (the kernel
+  and its tests; fixtures excluded), gated as a whole by parity, route
+  2 and the suite rather than file by file, since the pass is
+  mechanical: 1,195 `use` lines in 49 files — one `(use M)` per module
+  M of the file's transitive import closure and one `(use M.T)` per
+  type T of a closure module whose constructors the file cites bare
+  (§13 item 7: a constructor resolves through its type's opened
+  namespace; `Cons` needs `kernel.prelude.List` opened, `SNum` needs
+  `kernel.sexpr.SExpr`) — the exact mirror of the flat scope, every
+  visible declaration reachable; and 13 functions in three files
+  (`util`, `intmap`, `nested`) given explicit `(T Type)` binders — the
+  sizing's 210 had counted `(a A)` binders over declared types. Both
+  readers accept the result: the bootstrap ignores the `use` lines and
+  reads the binders (3.2); the profile reader reads the binders and
+  keeps resolving flat. Open for ratification with §13 item 7: whether
+  `(use M)` should also open M's types' constructors — Lean's `open`
+  does not, and the per-type lines are the honest count of what the
+  flat rule was hiding; a prune to the prefixes each file actually
+  cites is a follow-up once the S reader can report an unused `use`.
+  The prelude's `Nat` is deleted at 3.4, when `Nat` becomes a built-in
+  of the profile reader too.
 - **3.4 the V3 side to the one E** — the `profile` flag deleted from
   `sexpr`, `classify`, `etable` and `loader` (2026-09-14: 22, 77, 8
   and 20 sites), `no_init` in place of `profile_form`, rules 1–2 for

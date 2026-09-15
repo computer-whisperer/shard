@@ -1512,8 +1512,30 @@ is `docs/FOUNDATION.md` §5.3.
   type of the closure (`Scope::type_is_sort`; a test). `parity_test.sh`
   gains the directory-module case (`view_basic`: main + view + implementation,
   tied byte for byte against `load.shard --dump` over the same roots).
-  43 bootstrap tests; parity 21 closures / 68,080 lines / 44 s; route
+  44 bootstrap tests; parity 21 closures / 68,080 lines / 44 s; route
   2 byte-identical; 22 entrypoints, 0 failed.
+- **2026-09-14 — slice 3.3 landed: the toolchain migrated to the one
+  E.** `classify.shard`: `(T Type)` is a type binder in every file
+  (`read_params`, `pre_head`) — under the profile it had been read as
+  a runtime parameter typed by an auto-bound variable named `Type`, a
+  silent arity error the dump would have shown. The migration tool (a
+  deterministic pass, kept outside the tree as a one-off; its rules
+  recorded in `LANGUAGE.md` §8.3): for each of the 50 files under
+  `v3/kernel/`, `(use M)` for every module of the transitive import
+  closure and `(use M.T)` for every closure type whose constructors
+  the file cites bare, inserted after the last `import`; `(X Type)`
+  binders prepended in first-occurrence order where a binder or result
+  type cites a name that is neither a declared type of the closure nor
+  a built-in. Result: 1,195 `use` lines in 49 files (`loader` and
+  `realize` 52 each, `classify` 44; `prelude` none), 13 functions in
+  `util` (7), `intmap` (5) and `nested` (1) — the sizing's 210 had
+  counted `(a A)` binders over declared types like `inductive.shard`'s
+  `A`. Gated as a whole, not per file: parity 21 closures byte-
+  identical (the `use` lines are inert under both readers' flat
+  resolution, the binders read identically), route 2 and calc
+  byte-identical, 22 entrypoints, 0 failed. Open with §13 item 7: the
+  per-type `use` lines are what the flat rule was hiding; whether
+  `(use M)` should open M's constructors is the ratifier's.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

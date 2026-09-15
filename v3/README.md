@@ -453,9 +453,20 @@ declared `Type`, dotted citations, each with its dump line); parity byte-
 identical over 21 closures and 68,080 declaration lines, the 21st
 an S closure with a directory module, a theorem beside its E forms
 and `Stack.mk` (`v3/pins/loader/view_basic`); route 2's byte-tie
-unchanged; 22 entrypoints, 0 failed. Next: 3.3 the toolchain migrated
-by tool under parity, route 2 and T0 at every file; 3.4 the V3 side;
-3.5 the documents; then the K seal (§13 item 26), Stage 1, I.
+unchanged; 22 entrypoints, 0 failed. **Slice 3.3 (2026-09-14): the
+toolchain migrated to the one E** — the profile reader reads `(T
+Type)` binders first (it had auto-bound `Type` itself), then one
+deterministic pass over the 50 files under `kernel/`: 1,195 `use`
+lines in 49 files (one per module of the file's transitive closure and
+one per cited type's constructor namespace — the exact mirror of the
+flat scope) and explicit type binders on the 13 polymorphic functions
+of `util`, `intmap` and `nested` (the sizing's 210 had counted binders
+over declared types). Parity byte-identical over the 21 closures,
+route 2 and calc byte-identical, 22 entrypoints, 0 failed — the
+migration changes no dump line and no output. Next: 3.4 the V3 side
+(the profile flag deleted, `no_init`, the literal rules for every
+file, the prelude's `Nat`); 3.5 the documents; then the K seal (§13
+item 26), Stage 1, I.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
