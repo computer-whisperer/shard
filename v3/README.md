@@ -414,6 +414,30 @@ the consolidated text. Tests: 22 entrypoints, 0 failed (parity 20
 closures, 68,076 declaration lines, 42 s, every projection injective).
 **CI (pipeline 479, `db2dee3`, 2026-09-14): green** — 22 entrypoints, the calc differential byte-identical in 399 s on the runner (the port under `ev` 15 s, the old tree 384 s), parity byte-identical over 20 closures and 68,076 declaration lines in 132 s with every projection injective, route 2's byte-tie in 51 s, the gate test's five scenarios, the byte-ties with both engines complete (the fixture 301 lines, chunks 0–4 3,395 lines), the full-export replay on compiled K in 2,494 s at a 30.7 GB peak, all 20 candidates pinned, closures identical (engine 164 s, corpus 1,537 s, v3 3,938 s; the pipeline 4,104 s) — R56, R58 and R59 closed on the full gate.
 
+## Phase 3 status (opened 2026-09-14)
+
+Elaboration, I, the first library (FOUNDATION §12.4 item 3, as amended
+2026-09-14). **The opening ruling (the user, 2026-09-14):** the Rust
+bootstrap is built up to the whole of E first, the toolchain's own
+sources are written in the one E every file uses, and the toolchain
+profile is retired — `LANGUAGE.md` §8 (rules 1–8, the profile's table
+decided row by row, the slice order), §13 items 34–38, items 8 and 16
+withdrawn, law §9.2 amended; GPT-6's R55 dissolves with the profile.
+The sizing that ruled it (records §9): the bootstrap's delta is three
+reader rules (explicit type binders, sequential `let`, directory
+imports — its 3,549 lines already read strings, symbols, list sugar
+and any-sign numerals, and already ignore `use`); the kernel migration
+is `use` lines and explicit binders in 30 files (210 functions with an
+auto-bound type variable; the 7,710 bare constructor citations, 1,494
+symbols, 1,649 strings, 719 list literals and 1,245 operator sites are
+untouched under rules 1, 2 and 5); the V3 side deletes the profile
+flag (22, 77, 8 and 20 sites in `sexpr`, `classify`, `etable` and
+`loader`). **Slice 3.1 (2026-09-14): the design on disk** — this
+section, §8 as ruled, the items, the law's amendment, records §9.
+Next: 3.2 the bootstrap; 3.3 the toolchain migrated by tool under
+parity, route 2 and T0 at every file; 3.4 the V3 side; 3.5 the
+documents; then the K seal (§13 item 26), Stage 1, I.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

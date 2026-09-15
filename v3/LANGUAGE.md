@@ -6,8 +6,8 @@
 > `docs/FOUNDATION.md`. Scope: the surface S, the executable fragment E
 > and `ev` as phase 2 built them — the reader (§2, §4–5), the loader
 > (§3), views (§6.5–6.6), the classifier and `ev` (§6.2–6.4, §6.7),
-> `realize` (§7), the toolchain profile (§8), entries (§9), conformance
-> (§10). Each semantic rule has one current statement here with its
+> `realize` (§7), the one E and the profile it retires (§8, ruled
+> 2026-09-14), entries (§9), conformance (§10). Each semantic rule has one current statement here with its
 > Stage-0 limit beside it; a later "as built" section fixes what the
 > rule left to the implementation and never overrides it (GPT-6 R62,
 > slice 10). The build history — which slice built what, the
@@ -56,9 +56,10 @@ those files and never redraws their constructors.
 Two pipelines share one reader: **S → L → K** for the logical forms
 and **S → E → `ev`** for the executable ones. They meet at `realize`,
 which gives an admitted L constant an E body (§7). The toolchain's own
-sources — K, `ev`, the reader — are E in the *toolchain profile* (§8)
-and are read by the Rust bootstrap until frontend parity retires that
-role (§10).
+sources — K, `ev`, the reader — are E, read by the Rust bootstrap as
+E's executor and by the V3 reader as its gate (§10); until phase 3's
+opening slices land they are read under the toolchain profile §8
+retires.
 
 ## 2. Lexical syntax
 
@@ -749,8 +750,10 @@ runnable, no L meaning); an extern `RUNNABLE extern NAME`; a profile
 `type` `RUNNABLE type NAME`; a refusal is `REFUSE NAME reason` like
 K's, and counts as one.
 
-**The profile as read.** A file is in the toolchain profile iff its
-root-relative path begins with `kernel/` or `meta/` (§8, §13 item 8);
+**The profile as read (superseded 2026-09-14 by §8's one-E ruling;
+retired by phase 3's slices 3.2–3.5).** A file is in the toolchain
+profile iff its root-relative path begins with `kernel/` or `meta/`
+(§8, §13 item 8);
 the selection is recorded on the module's record (`MODULE …
 profile=toolchain`, slice 10), so a load's records say which profile
 read each file. The profile is a named, bounded source-compatibility
@@ -1146,53 +1149,132 @@ directory). R45's third test is the pair: the same body as a `fn` is
 accepted equations a theorem can cite and a body `ev` runs under the
 L identity.
 
-## 8. The toolchain profile
+## 8. One E — the executable fragment for every file (phase 3, RULED 2026-09-14)
 
-The toolchain's own sources — everything under `v3/kernel`, later
-`v3/meta` — are E in the profile the Rust bootstrap reads
-(`docs/LANGUAGE.md` narrow; law §9.2; records §7), and the V3 reader
-carries the profile so that it can re-parse them (§10). The profile is
-S's E term language (§5.4) with these differences, each a reader
-rule, none a semantic mode of `ev`:
+**The ruling.** Phase 3 opens by building the Rust bootstrap up to the
+whole of E, so that the toolchain's own sources — everything under
+`v3/kernel`, later `v3/meta` — are written in the same E as every
+other file, and the *toolchain profile* this section used to define
+is retired (the user, 2026-09-14, on the sizing in records §9; GPT-6's
+R55 dissolves with it — there is no profile left to name). Until the
+retirement lands (the phase-3 slices below) the profile's rules of
+§8.2 are what the reader applies to `kernel/` and `meta/`; the
+text here is the rule set the profile converges to, and every
+difference the old table listed is decided below, not carried.
 
-| in the profile | in S |
-|---|---|
-| the prelude's names `Nil Cons True False Some None Z S Pair` are the toolchain's own E types (`kernel/prelude.shard`), unrelated to `Init`'s | `Init`'s `List.nil` … |
-| type parameters by the parenthesized head `(fn (append T) …)` or by a bare type variable in a binder type (`(xs (List T))`), auto-bound | explicit `((T Type) …)` binders (law §5.3 departure 4) |
-| `"…"` is the `(List Int)` of its UTF-8 bytes | K's `String` literal |
-| numerals are `Int`; `-7` is a numeral | numerals are `Nat`; negatives are constructor terms |
-| `(quote X)` and `'X` are `Symbol` literals; `sym_eq`, `sym_of_chars`, `chars_of_sym` | no symbols: a name is a `Name` constructor value |
-| `(list a b c)` is list sugar | none (Stage 1 may add it) |
-| a file `import` also opens the imported module (today's flat scope) | `import` never opens; `use` does — the profile keeps its flat scope with no `use` lines for as long as it exists (§13 item 16; slice 1's expectation of `use` lines withdrawn) |
-| the primitive names of `docs/LANGUAGE.md` §8 | the naming-law spellings, same table (§6.4) |
-| a `type` is E only; there is no L in the profile — `def`, `theorem`, `inductive` are refused (`profile_form`) | a `type` enters K and E (§4) |
-| the profile is the `kernel/` and `meta/` directories of the root (slice 5; §13 item 8) | every other file is S |
+### 8.1 The rules of the one E
 
-Which files are in the profile is decided by the loader from the
-package layout (the toolchain directories, named in `v3/README.md`'s
-layout), not by a marker form: the Rust loader refuses any top-level
-form it does not know, so a `(profile toolchain)` marker would need a
-one-word bootstrap change; the parity slice (§10) may still prefer the
-marker. A ratification item (§13).
+1. **Built-in E types.** `Int`, `Nat` and `Symbol` are E types in
+   every file. Where `Init` is in scope, `Int` and `Nat` are also its
+   constants — one identity, the bare name (§3), exactly as the E table
+   keys them today. `Symbol` is the interned atom the toolchain
+   compares and prints; its L identity is `String` and its realization
+   the atom, assigned at phase 3 with `String`'s E realization (§11).
+   A file that sees no `Init` has no L: its `type` forms are E only
+   (`RUNNABLE type`, as today's profile), and `def`, `theorem`,
+   `inductive`, `structure`, `axiom`, `opaque` and `realize` in it are
+   refused `no_init` — the rule that replaces `profile_form`, keyed on
+   the file's scope, never on its directory. K's own sources see no
+   `Init` by nature (K reads the export as data) and enter L at the
+   flip, as §6.1 already says.
+2. **Literals in E.** A numeral is an integer of any sign — `-7` is a
+   numeral — and its E type is the binder's, `Int` or `Nat`; the
+   reader carries one literal kind (`LInt`; §10 item 1's omission list
+   loses one entry). In a `realize` body a numeral is K's `Nat` literal
+   in the equations and a negative one is `equation_form` (Stage 1's
+   numeral rule, §11). `"…"` is the byte list of its UTF-8 encoding as
+   the `List` in scope — the prelude's in the toolchain, `Init`'s in a
+   program that opens it — the convention of the wire (§6.7), until
+   `String`'s E realization at phase 3, when the rule flips for every
+   file at once and the toolchain migrates by tool (§11). `(quote x)`
+   and `'x` are `Symbol` literals; `(list a b c)` is the constructor
+   chain of the `List` in scope (R60's list literal: by the scope at
+   Stage 0, by the expected type at Stage 1). In L positions nothing
+   changes: a numeral is `LitNat`, a string `LitStr` (§5.3).
+3. **Binders.** Type parameters are explicit `((T Type) …)` binders in
+   every `fn`, `extern`, `sig fn` and `realize` (law §5.3 departure 4,
+   now for the toolchain too); the parenthesized head `(fn (append T)
+   …)` and the auto-bound bare type variable are gone.
+4. **Scope.** `import` never opens and `use` does (§3.1), for every
+   file. The toolchain's files carry `use` lines — one per import, one
+   per prelude type whose constructors they cite bare — written by the
+   migration tool. The bootstrap ignores `use` and resolves flat (as it
+   does today); the V3 reader enforces the scope, and frontend parity
+   is the tie, as for every rule the bootstrap under-checks: the
+   bootstrap is E's executor, the V3 reader its gate (§10).
+5. **One primitive table.** The operator spellings — `+ - * / mod tmod
+   ediv band bor bxor bshl bshr int_eq sym_eq lt le sym_of_chars
+   chars_of_sym` — are E's `Int` and `Symbol` primitives in every file
+   (§2 lexes them), beside the naming-law identities (`Nat.add`,
+   `Int.tdiv`, …; §6.4). Their L identities are assigned at phase 3
+   with law §10.3's table (`/` stuck at zero stays a distinct entry
+   from the total `Int.tdiv`, as §6.4 says); a `realize` body cites the
+   L-identified entries only (`no_l_identity`, unchanged).
+6. **The wire and the prelude.** Unchanged: `kernel/prelude.shard`'s
+   `List`, `Option`, `Bool` and `Pair` are the wire's cells, interned
+   by the linker whether or not a program declares them (§6.7); the
+   prelude's `Nat` (`Z`/`S`), which no V3 file uses, is deleted at the
+   migration.
+7. **`let`** is sequential everywhere, the bootstrap included (§5.4's
+   measurement: no existing source changes meaning).
+8. **The bootstrap reads exactly this.** Its delta from today: a
+   binder whose type is `Type` is a type parameter, not a runtime
+   parameter; `let` binds in order; a directory import is followed to
+   `DIR/BASE.shard`'s closure (§13 item 26's resolver change, needed by
+   the seal in any case); `use` stays ignored. Frontend parity (§10
+   item 1) stays the gate that keeps its parse honest, over one literal
+   kind.
 
-**What the profile is (GPT-6 R55, slice 10).** A named, bounded
-source-compatibility mechanism for bring-up: a reader flag
-(`sexpr.shard`, `classify.shard`), selected today by the package layout
-and recorded on every module it applies to (`MODULE …
-profile=toolchain`), so a load's records say which profile read each
-file, and a later store keys a cached frontend result by it (phase 3).
-It is not a dialect and not the lasting status of the kernel and
-metaprogramming libraries: placement under `kernel/` or `meta/` grants
-no access to K's representation and waives no admission or realization
-obligation (the seal, §13 item 26); those libraries need executable
-algorithms and mathematical claims about them in the same ordinary
-module system, so the toolchain's own sources migrate to ordinary S as
-the frontend supports their constructs — their executable
-implementations stay E, as K's computational implementation does — and
-the profile is retired at the flip. Moving a file across the boundary
-changes its literals' and binders' reading (the table above) and is a
-recognized profile transition, beside the module-name change §3 already
-states.
+### 8.2 The profile's rules while it lasts (retired by the slices below)
+
+| in the profile | in S | decided (§8.1) |
+|---|---|---|
+| the prelude's names `Nil Cons True False Some None Z S Pair` are the toolchain's own E types (`kernel/prelude.shard`), unrelated to `Init`'s | `Init`'s `List.nil` … | rule 6: unchanged; cited under `use` (rule 4) |
+| type parameters by the parenthesized head `(fn (append T) …)` or by a bare type variable in a binder type (`(xs (List T))`), auto-bound | explicit `((T Type) …)` binders (law §5.3 departure 4) | rule 3: explicit binders everywhere |
+| `"…"` is the `(List Int)` of its UTF-8 bytes | K's `String` literal | rule 2: the byte list in E for every file until `String`'s realization |
+| numerals are `Int`; `-7` is a numeral | numerals are `Nat`; negatives are constructor terms | rule 2: any integer, the binder's type |
+| `(quote X)` and `'X` are `Symbol` literals; `sym_eq`, `sym_of_chars`, `chars_of_sym` | no symbols: a name is a `Name` constructor value | rule 1: `Symbol` is a built-in E type, L identity `String` |
+| `(list a b c)` is list sugar | none (Stage 1 may add it) | rule 2: the `List` in scope's chain |
+| a file `import` also opens the imported module (today's flat scope) | `import` never opens; `use` does | rule 4: `use` lines everywhere |
+| the primitive names of `docs/LANGUAGE.md` §8 | the naming-law spellings, same table (§6.4) | rule 5: one table, both spellings |
+| a `type` is E only; there is no L in the profile — `def`, `theorem`, `inductive` are refused (`profile_form`) | a `type` enters K and E (§4) | rule 1: keyed on `Init` in scope (`no_init`), never on the directory |
+| the profile is the `kernel/` and `meta/` directories of the root (slice 5; §13 item 8) | every other file is S | withdrawn: one E for every file |
+
+Which files are in the profile is decided today by the loader from the
+package layout, not by a marker form (the Rust loader refuses any
+top-level form it does not know); the selection is recorded on the
+module's record (`MODULE … profile=toolchain`, slice 10). Both go with
+the profile.
+
+### 8.3 The phase-3 opening slices (the order parity allows)
+
+Every step keeps frontend parity, route 2's byte-tie and T0 green on
+the toolchain's closures, so both readers agree at every commit:
+
+- **3.1 the design on disk** — this section, §13 items 34–38, the law's
+  §9.2 amended, the plan in `v3/README.md` (2026-09-14).
+- **3.2 the bootstrap to the one E** — `rust_bootstrap/src/load.rs`:
+  `((T Type))` binders as type parameters (both forms accepted while
+  the toolchain migrates), sequential `let`, a directory import
+  followed to the implementation's closure; its tests; parity over
+  one literal kind.
+- **3.3 the toolchain migrated by tool** — `use` lines and explicit
+  binders in the 30 kernel files (2026-09-14 count: 210 functions with
+  an auto-bound type variable; 7,710 bare constructor citations need
+  only the `use`), file by file under the gates; the prelude's `Nat`
+  deleted.
+- **3.4 the V3 side to the one E** — the `profile` flag deleted from
+  `sexpr`, `classify`, `etable` and `loader` (2026-09-14: 22, 77, 8
+  and 20 sites), `no_init` in place of `profile_form`, rules 1–2 for
+  every file (`string_literal`, `symbol_literal` and `list_sugar`
+  retired; their pins turned positive or `no_init`), one literal kind
+  in the dump, `MODULE … profile=` gone.
+- **3.5 the documents closed** — §8.2 and §6.7's profile paragraph
+  removed, §12's "profile only" rows decided, `CANON.md`'s note on the
+  profile's symbols, `docs/TCB.md`'s bring-up item (2), records.
+
+Then the opener as planned: the K seal under item 26's criterion,
+Stage 1, I.
 
 ## 9. Assumption policy and entries
 
@@ -1404,6 +1486,8 @@ never compared as verdicts.
 | the Stage-1 authoring facilities ordinary source needs before the broad port (GPT-6 R60): list literals with expected-type-driven empty lists; a negative-numeral rule with no silent `Int → Nat`; named-field construction and update, a changed dependent field an explicit obligation, never hidden by the sugar; a `Name` literal or construction that forges no declaration, node or environment identity (§3.3); a scoped fresh-name supply in ordinary code where `gen_fresh` was; the public byte and text adapters (`ByteArray` for raw bytes, `String` for text, the prelude's cells an internal adapter) decided with the first host-facing S library — each with a first example before the port pays for its absence | §5.1 Stage 1; §12.6 | 3, before the broad migration |
 | the checked module instance (GPT-6 R57): the substitution from view parameters to implementation declarations and evidence recorded, the `fulfills` proofs' assumptions inherited by the instantiated consumer, a stricter policy refusing the result, one consumer proof used with two implementations without cloning it, revisions bound so spellings alone mix nothing | law §8.2, T5; §6.5 | 3, the two-instance gate |
 | programmatic validation (GPT-6 R61): a client that builds a `Prog` or declarations as data validates them through the public services without a source round trip — item 15's fusion is an implementation choice, the dump of §10 a conformance format, neither the representation | §9.3, T6 | 4 |
+| the one E (§8, RULED 2026-09-14): the bootstrap to the whole of E, the toolchain migrated by tool, the profile flag deleted — slices 3.2–3.5 | §8.3; law §9.2 as amended | 3, first |
+| `Symbol`'s L identity `String` and the flip of `"…"` from the byte list to a `String` value in E, for every file at once, the toolchain migrated by tool | §8.1 rules 1–2; INVENTORY | 3, with `String`'s E realization |
 | user notation | §5.3 departure 6 | never in v1 |
 
 ## 12. Changes from v2 — the compatibility ledger
@@ -1426,16 +1510,16 @@ migration table of law §10.3 owns the name and behavior changes of the
 |---|---|---|
 | `(type (NAME T…) (CTOR F…)…)` | carried | §4; constructors gain the identity `NAME.CTOR`; a bare constructor citation needs the declaring file or a `use` of the type's namespace (§13 item 7: `(use m.Exp)` for `Num`); a constructor bearing its type's name — `(type World (World Int))` — resolves to the type in an E-type position and to the constructor elsewhere (§13 item 28, slice 6). Since slice 5b `Init`'s E-eligible inductives (`List`, `Option`, `Bool`, `Decidable`, `Array`, …) are E types with their constructors in S (§7.5); `Nat.succ` is refused with the pointer to numerals |
 | `(fn NAME PARAMS RET BODY)` | carried as E; **changed** | §0: no L meaning at phase 2 — in v2 a `fn` was also the object of `unfold`/`simp` in proofs; restored at phase 3 |
-| polymorphic head `(fn (append T) …)`; bare type variables in binders auto-bound (`(xs (List T))`) | re-spelled in S; carried in the profile | S: explicit `((T Type) …)` binders — law §5.3 departure (4), "auto-bound implicits → explicit binders"; the profile keeps both v2 spellings (§8) |
+| polymorphic head `(fn (append T) …)`; bare type variables in binders auto-bound (`(xs (List T))`) | re-spelled | explicit `((T Type) …)` binders everywhere — law §5.3 departure (4); the profile kept both v2 spellings until the one-E ruling (§8, 2026-09-14): the toolchain migrates by tool at phase 3 |
 | `(extern NAME PARAMS RET)`, polymorphic externs | carried | §4; the roster is the host's (§12.4) |
 | return types unchecked (no load-time typing) | **changed at phase 3** | Stage 1 types every `fn` body against its signature; v2 code that runs only because nothing checked it will be refused then. At phase 2 unchanged |
 | `if` on `True`/`False` by constructor name | carried, generalized | §6.2's tag rule; v2's `(type Bool (False) (True))` has Init's constructor order |
 | `match`: first match wins, nested patterns, integer and `(quote S)` patterns, `_`, bare 0-ary constructors | carried in E | symbol patterns profile only; Stage 1's match compilation must keep first-match semantics (Lean's does) |
 | parallel `let`, no `let*` | **changed**: sequential in L and E (RULED 2026-09-12, R44) | §5.4; 0 of the tree's 30,611 `let` groups depend on parallel binding, so no source changes meaning; the bootstrap evaluator's parallel rule gives identical results on all of them until the V3 reader replaces it (slice 2) |
-| `(quote S)`, `'S`, the `Symbol` type, `sym_eq`, `sym_of_chars`, `chars_of_sym` | profile only; **AT RISK in S** — refused by name in S since slice 5 (`symbol_literal`) | S has no symbol type: a name is a `Name` value. The toolchain (ten kernel files) and the tools use symbols as tags and identifiers; whether V3 source gets a `Name` literal is a phase-3 decision |
-| `(list a b c)` (9,455 uses outside `v3/`) | profile only; **AT RISK in S** — refused by name in S since slice 5 (`list_sugar`) | Lean's `[a, b, c]` is elaborator sugar; Stage 1 should add a list literal or every ported `fn` spells `cons` chains — calc's port spells its two (slice 6) |
-| `"…"` = UTF-8 bytes as `(List Int)`, on the extern wire too | **changed** in S | K's `String` literal, its E realization phase 3 (§5.3) — in an S E body refused since slice 5 (`string_literal`). **AT RISK:** the extern wire's byte convention under the naming law (`List UInt8`? `ByteArray`?) is undecided; the profile keeps bytes, and at phase 2 the wire's cells are the toolchain prelude's `List`, `Option`, `Pair` and `Bool` (§6.7) |
-| `Int` numerals everywhere, `-7` | **changed** in S | numerals are `Nat`; negatives are constructor terms at Stage 0 (§2); the numeral rule of law §5.2 is Stage 1 and `-7` as `Neg.neg` is a Stage-3 instance — **AT RISK:** negative literals stay verbose until then unless Stage 1 special-cases `-` |
+| `(quote S)`, `'S`, the `Symbol` type, `sym_eq`, `sym_of_chars`, `chars_of_sym` | carried — **decided 2026-09-14** (§8.1 rule 1) | `Symbol` is a built-in E type in every file, the interned atom, L identity `String` at phase 3; K's `Name` values are built from its atoms as today. The S-side refusal `symbol_literal` retires at slice 3.4 |
+| `(list a b c)` (9,455 uses outside `v3/`) | carried — **decided 2026-09-14** (§8.1 rule 2) | the constructor chain of the `List` in scope, by the scope at Stage 0 and by the expected type at Stage 1 (R60); the S-side refusal `list_sugar` retires at slice 3.4 |
+| `"…"` = UTF-8 bytes as `(List Int)`, on the extern wire too | carried in E — **decided 2026-09-14** (§8.1 rule 2); **changed** at `String`'s realization | in an E body the byte list of the `List` in scope for every file (the S-side refusal `string_literal` retires at slice 3.4); in L positions K's `String` literal (§5.3). At `String`'s E realization the E rule flips for every file at once, the toolchain migrated by tool (§11). **AT RISK:** the extern wire's byte convention under the naming law (`List UInt8`? `ByteArray`?) is undecided; at phase 2 the wire's cells are the toolchain prelude's `List`, `Option`, `Pair` and `Bool` (§6.7) |
+| `Int` numerals everywhere, `-7` | carried in E — **decided 2026-09-14** (§8.1 rule 2) | in an E body a numeral is an integer of any sign whose type is the binder's; in L positions `LitNat`, negatives constructor terms (§2); a `realize` body's numeral is K's `Nat` literal, a negative one `equation_form` until Stage 1's numeral rule (law §5.2) |
 | unbound identifier = `FVar` (proof-time opened variables) | dropped | an unbound name is a resolution error; K refuses free variables; I's named context replaces the use (phase 3) |
 | primitive dispatch by name, trie-first, bodyless-name collision = stuck (`pins/lang/prim_shadow_rejects`) | **changed** — landed slice 5 | heads classified at load into four node kinds; a primitive is an identity (§6.4); a declared name shadows the table's (the scope resolves first); an unknown head is refused at load |
 | the primitive table | carried under the profile names; **changed** under the naming-law names | §6.4; `/` stuck at zero versus `Int.tdiv` total are two entries |
@@ -1445,7 +1529,7 @@ migration table of law §10.3 owns the name and behavior changes of the
 | `(record …)`, `make`, `with`, `F_of`/`with_F`, the six-law family, `NAME_eta` (21 files, 237 `with_F` sites) | re-spelled; **AT RISK** | `structure` with projections (§4): `F_of` → `NAME.F`; `NAME_eta` is K's structure eta for free; the laws are `rfl`. **No Stage-0 form for `with_F` updaters or order-free `make`**: Lean's `{ s with f := v }` is elaborator sugar — Stage 1 must add it or every update site spells the constructor |
 | `std/word` (`U8`…`I32`, opaque), `std/bytes`, `std/str` | re-spelled | `UInt*`/`BitVec`, `ByteArray`, `String` (law §10.3, INVENTORY), phase 3–5. **AT RISK:** widths beyond 64 — INVENTORY realizes `BitVec w` only for static `w ≤ 64`; the 2026-09-02 ruling kept `std/word`'s unused widths as a facility |
 | `S^`, `inline`, `chain` (2,733 / 1,851 / 320 uses) | dropped with the v2 proof language | their reason — claim statements must be literal spellings that match CBV residues — does not survive: I's `rw`/`simp_only` match terms, and Nat towers are K literals. Phase 3 confirms; **AT RISK** if some I form still needs a literal tower |
-| `(import "x.shard")` opens the file's names (flat scope) | **changed** | `import` never opens, `use` does (§3.1); the profile keeps flat scope with no `use` lines (§13 item 16 — slice 1's expectation that slice 6 adds them is withdrawn) |
+| `(import "x.shard")` opens the file's names (flat scope) | **changed** | `import` never opens, `use` does (§3.1) — for every file since the one-E ruling (§8.1 rule 4, 2026-09-14): the toolchain's files gain their `use` lines by tool at slice 3.3; the bootstrap keeps resolving flat and parity is the tie |
 | `(use (:: m *))`, selective `(use (:: m name))` (1,768 selective sites) | re-spelled | `(use m)` and `(use m name…)` (§3.1) |
 | `use-module` (2 uses) | dropped | vestigial |
 
@@ -1565,7 +1649,9 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
    selects a named, bounded compatibility profile recorded per module
    (`profile=toolchain`); placement grants no privilege in K, the
    profile is bring-up and never a dialect, ordinary S is the
-   destination of the toolchain's sources (§8, §6.7).
+   destination of the toolchain's sources (§8, §6.7). **WITHDRAWN
+   2026-09-14:** the profile is retired by item 34; until slice 3.4
+   lands the layout rule is what the loader applies.
 9. **`ev`'s `if` rule**: the then-branch iff the condition's cell is the
    second constructor of its type — one rule for `Bool`, `Decidable`
    and the profile's `Bool`. **Amended (GPT-6 R56, slice 10):** the
@@ -1617,7 +1703,9 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     flat rule makes unnecessary at Stage 0 (records §7 expected them).
     **Amended (R55):** E only and flat scope are the profile's current
     coverage, not these libraries' permanent authoring restriction
-    (§8).
+    (§8). **WITHDRAWN 2026-09-14:** item 34 — the toolchain's files
+    carry `use` lines like every file (§8.1 rule 4) and E-only is
+    keyed on `Init` in scope (rule 1).
 17. **`ev` is a machine with an explicit continuation** over a private
     linked representation (§6.7); the comparison primitives return the
     toolchain prelude's `Bool`, the wire's cells are the prelude's.
@@ -1752,3 +1840,37 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     spell names differently by design (the reader root-relative, the
     bootstrap by path), so a mapping between them would be a third
     artifact to validate.
+34. **One E for every file — RULED 2026-09-14 (the user; §8).** Phase 3
+    opens by building the Rust bootstrap up to the whole of E, the
+    toolchain's own sources are written in it, and the toolchain
+    profile is retired (items 8 and 16 withdrawn; GPT-6 R55 dissolved).
+    Alternative: the profile kept to the flip as law §9.2 had it,
+    which leaves the kernel an oddball dialect through phases 3–5 and
+    every E rule stated twice; declined on the sizing (records §9,
+    2026-09-14: the bootstrap's delta is three reader changes, the
+    migration is `use` lines and 210 binder rewrites by tool).
+35. **E-only is keyed on `Init` in scope, never on the directory** (§8.1
+    rule 1): a file that sees no `Init` has no L, its `type` forms are
+    E only, and an L form in it is `no_init`. Alternative: a marker
+    form, refused by §8's old reason (the bootstrap refuses unknown
+    forms; a marker is a bootstrap change for nothing the scope does
+    not already say).
+36. **`Symbol` is a built-in E type in every file**, the interned atom,
+    with L identity `String` assigned at phase 3 (§8.1 rule 1); K's
+    `Name` values are built from its atoms as today. Alternative: a
+    `Name` literal in place of symbols (R60's row), which is circular —
+    K's `Name` holds the atoms — and rewrites 1,494 sites for no
+    change of meaning.
+37. **E's literal rules are the profile's, for every file** (§8.1 rule
+    2): a numeral of any sign typed by its binder, `"…"` the byte list
+    of the `List` in scope until `String`'s E realization flips it for
+    every file at once, `(list …)` the `List` in scope's chain.
+    Alternative: keep S's refusals (`string_literal`, `symbol_literal`,
+    `list_sugar`) and give the kernel its own rules — the dialect
+    again.
+38. **One primitive table, both spellings** (§8.1 rule 5): the operator
+    spellings are E primitives in every file beside the naming-law
+    identities; the operators' L identities are assigned at phase 3
+    with law §10.3's table. Alternative: rewrite the toolchain's 1,245
+    operator sites to the naming-law spellings — a migration with no
+    semantic content, and `/` would still need its own entry.

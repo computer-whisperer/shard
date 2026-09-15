@@ -403,7 +403,7 @@ The user's go-ahead: "agreed with your leans, proceed with the slice."
 
 | ID | disposition | where | notes |
 |---|---|---|---|
-| R55 make the bootstrap profile explicit; no directory-based authority | accept — contract text, landed 2026-09-14 (slice 10) | `LANGUAGE.md` §8 "What the profile is" (a named, bounded compatibility mechanism for bring-up; recorded per module; placement grants no privilege; ordinary S the destination; a profile transition recognized when a file crosses the boundary), §6.7's profile paragraph, §13 items 8 and 16 amended; `loader.shard` `RModule` carries the flag — `MODULE … profile=toolchain` | already the phase-3 guard ("the profile is bring-up, never a dialect"); no marker form, since §8's bootstrap reason stands; the cache test is the store's (phase 3); the "no privilege" half is item 26's seal criterion; the small ordinary-S library with an operation and a theorem is phase 3's Stage 1 (`fn` = `def` + `realize`) |
+| R55 make the bootstrap profile explicit; no directory-based authority | accept — contract text, landed 2026-09-14 (slice 10); **DISSOLVED the same day** by the one-E ruling (§9: phase 3 opened) — the profile is retired, there is nothing left to name | `LANGUAGE.md` §8 "What the profile is" (a named, bounded compatibility mechanism for bring-up; recorded per module; placement grants no privilege; ordinary S the destination; a profile transition recognized when a file crosses the boundary), §6.7's profile paragraph, §13 items 8 and 16 amended; `loader.shard` `RModule` carries the flag — `MODULE … profile=toolchain` | already the phase-3 guard ("the profile is bring-up, never a dialect"); no marker form, since §8's bootstrap reason stands; the cache test is the store's (phase 3); the "no privilege" half is item 26's seal criterion; the small ordinary-S library with an operation and a theorem is phase 3's Stage 1 (`fn` = `def` + `realize`) |
 | R56 a typed, representation-independent discriminator for `if` | accept — **FIXED 2026-09-14 (slice 10); CLOSED on CI pipeline 479** (`db2dee3`); probed live first | `classify.shard` `if_bad` (the condition's static type where the declarations fix it: a `sig type` is `private_if`, an inductive of other than two constructors or `Int`/`Nat`/`Symbol` is `if_type`; a type parameter unchecked at Stage 0, stated); pins `if_private`, `if_type`, `if_one`, `if_ok`; `LANGUAGE.md` §6.2 (the observation is the type's, `ev`'s bit its implementation), §6.7 item 5, §13 item 9 amended; `CANON.md` C9's domain | **live, and worse than the memo said:** a consumer's `(if h 1 0)` on a view's `sig type Handle` was RUNNABLE and the implementation's constructor order decided the branch at run time; a three-constructor type branched by ordinal parity (`Tri.B` then, `Tri.C` else); a one-constructor type never branched. The leak check covered `match` scrutinees only; the condition was never typed. The toolchain's own 20 closures classify clean under the new rule (parity 0 differ) |
 | R57 distinguish module matching, operational linkage and logical instantiation | accept the distinction as contract text; the construction deferred to the phase-3 two-instance gate | `LANGUAGE.md` §6.5 evidence binding (three statuses; the checked instance record inherits the `fulfills` proofs' assumptions; at Stage 0 the records name the parts and compose nothing), §6.6's `DISCHARGE` kinds, §11's row, §13 items 12, 13 and 18 amended; `loader_test` (the kinds `type` / `fn` / `pending` distinct; `IMPL PARAM lib.push fn` — the sig fn stays a parameter after an E match) | the records already distinguished the statuses (`DISCHARGE NAME fn` re-admits the parameter; `proved` / `pending` for a requirement); what is missing is the composite — a consumer's `params=` and an implementation's `fulfills` closures are never joined, and an extra axiom under a `fulfills` reaches no consumer's closure. That is the two-instance gate already in §11, now with the memo's acceptance tests in its row |
 | R58 separate realization evidence, progress, applicability and execution trust | accept — **FIXED 2026-09-14 (slice 10); CLOSED on CI pipeline 479**; probed live first | `loader.shard` `realize_roots` (a pending measure recorded once at its constant, `PENDING NAME measure`, and carried by every realization whose body reaches it: `REALIZE … pending=ROOT,…`; `Load` gains the roots table; `prog.shard` `calls_of`); pin `realize_pending_via`, `loader_test`; `LANGUAGE.md` §7.2 (a realization's evidence in its parts; a retained candidate versus a completed realization), §7.5 (the structural-only sentence corrected; the record), §7.1 (the derived view generates no equations; its implementation a bring-up trust dependency), §6.4 (the executor's correspondence is the primitive suite's conformance, not an exemption), §13 items 22 and 23 amended; `docs/TCB.md` bring-up item (7) | **live, exactly the memo's counterexample:** `def f n = 0` with the executable body `f (Nat.add n 1)` under `(measure n)` — the equation is true of the constant function, accepted by `rfl`; the realization attached with `PENDING main.f measure`; a second realization `g` calling `f` attached with no obligation at all. Now `g` and `h` (through `g`) carry `pending=main.f`. Nothing at Stage 0 requires the guarantee, so the narrower guarantee is the visible set; Stage 1's admission and the lowering read it |
@@ -1452,6 +1452,39 @@ is `docs/FOUNDATION.md` §5.3.
   declaration lines, 42 s, every projection injective — the first run
   caught this slice's own `names_union` twin, resolved to
   `axioms.shard`'s). **CI (pipeline 479, `db2dee3`, 2026-09-14): green** — 22 entrypoints, the calc differential byte-identical in 399 s on the runner (the port under `ev` 15 s, the old tree 384 s), parity byte-identical over 20 closures and 68,076 declaration lines in 132 s with every projection injective, route 2's byte-tie in 51 s, the gate test's five scenarios, the byte-ties with both engines complete (the fixture 301 lines, chunks 0–4 3,395 lines), the full-export replay on compiled K in 2,494 s at a 30.7 GB peak, all 20 candidates pinned, closures identical (engine 164 s, corpus 1,537 s, v3 3,938 s; the pipeline 4,104 s) — R56, R58 and R59 closed on the full gate.
+- **2026-09-14 — phase 3 opened: the one-E ruling (slice 3.1, the
+  design on disk).** After slice 10 the user: "one point is that I
+  think it might be good to reschedule things so that the rust
+  bootstrap gets built up to full E sooner. If we schedule that next,
+  then we can simplify the spec and allow the kernel to use the full
+  E internally. How big of a task do you estimate that as?" The sizing
+  from the tree (2026-09-14): the bootstrap is 3,549 lines of Rust and
+  already reads strings as byte lists, symbols, `(list …)` and
+  any-sign numerals, and already skips `use`; its delta is explicit
+  `((T Type))` binders, sequential `let` and directory imports. The
+  kernel is 30 files, 17,859 lines: 210 functions with an auto-bound
+  type variable, 7,710 bare constructor citations (needing only `use`
+  lines), 1,494 symbol sites, 1,649 string literals, 719 `(list …)`,
+  1,245 operator primitive sites, one negative numeral. The V3 side
+  carries the `profile` flag at 22 + 77 + 8 + 20 sites. The estimate:
+  about five slices, the Rust part the smallest, the cost in ruling
+  four E rules the spec had left to Stage 1 (symbols, strings, list
+  sugar, operators) and in the migration under the byte-tie gates; in
+  exchange §8 and everything on the profile flag goes, and R55
+  dissolves. The user: "agreed, your leans sound reasonable, let's do
+  it." Ruled and written: `LANGUAGE.md` §8 (the one E: built-in types
+  keyed on `Init` in scope, the profile's literal rules for every
+  file, explicit binders, `use` everywhere, one primitive table with
+  both spellings, the wire unchanged, sequential `let`, the
+  bootstrap's delta; the old table decided row by row; the slice
+  order 3.2 bootstrap → 3.3 toolchain by tool → 3.4 the V3 side → 3.5
+  documents), §13 items 34–38 (items 8 and 16 withdrawn), §11 and §12
+  rows, law §9.2 amended and §12.4 item 3 reordered, the V3 README's
+  phase-3 section. The kernel imports no `Init` (the two grep hits
+  were the loader's handling of the form), so its `type` forms stay E
+  only until the flip under rule 1, unchanged. The bootstrap's
+  old-tree special forms `ty`/`tv` have no V3 use (checked) and stay
+  for the old tree's `bin/check`.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

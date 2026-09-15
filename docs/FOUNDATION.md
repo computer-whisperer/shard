@@ -900,6 +900,19 @@ tested as such); the loaded toolchain then resolves, elaborates and
 checks everything else, including its own inline proofs, which until
 then are pending claims under the reviewed host, never assumptions.
 
+> **AMENDED 2026-09-14 (ruled by the user at the phase-2 boundary;
+> `v3/LANGUAGE.md` §8, §13 item 34).** Phase 3 opens by building the
+> Rust loader up to the whole of E, so the toolchain's own sources are
+> written in the one E every file uses and the narrow profile is
+> retired. The Rust loader's role is unchanged in kind — E's executor
+> and the parse frontend parity cross-checks — and its parsing role
+> grows by three reader rules (explicit type binders, sequential
+> `let`, directory imports). Reason: a profile kept to the flip leaves
+> the kernel an oddball dialect through phases 3–5 with every E rule
+> stated twice; GPT-6's ratification memo (R55) made the case, and the
+> sizing (`docs/records/FOUNDATION.md` §9, 2026-09-14) put the
+> migration at `use` lines and 210 binder rewrites by tool.
+
 ### 9.3 Embedding boundaries
 
 Erasure moves obligations to boundaries. A host supplying raw bytes, a
@@ -1157,7 +1170,9 @@ phase 3.
    Gates: T1 (including a decision tag with erased payload, a
    branch-local proof, raw versus checked arguments), T5, T8 replay
    half, conformance.
-3. **Elaboration, I, the first library.** Stages 1–2; the I elaborator
+3. **Elaboration, I, the first library.** First (amended 2026-09-14,
+   §9.2): the Rust loader to the whole of E and the toolchain's sources
+   in it, the narrow profile retired. Then Stages 1–2; the I elaborator
    and goal graph; core tactics; certified arithmetic; the `Init`
    import with E realizations attached; `std/list`, `order`, `nat`,
    `div`, `bits`, `arith` under the naming law; the fifteen former
