@@ -28,7 +28,7 @@ FIX=v3/kernel/test/fixtures/init_prefix_3000.ndjson
 a=$(mktemp); b=$(mktemp); trap 'rm -f "$a" "$b"' EXIT
 n=0; decls=0; failed=0
 s=$(date +%s)
-for entry in v3/kernel/load.shard v3/kernel/t0.shard v3/kernel/test/calc_harness.shard v3/kernel/test/*_test.shard; do
+for entry in v3/kernel/load.shard v3/kernel/t0.shard v3/kernel/test/calc_harness.shard v3/kernel/test/*_test.shard v3/kernel/k/test/*_test.shard; do
   n=$((n+1))
   "$EVAL" dump "$entry" > "$a" 2>&1 || { echo "parity_test: eval dump failed on $entry"; head -3 "$a"; failed=$((failed+1)); continue; }
   dups=$(awk '
@@ -44,7 +44,12 @@ for entry in v3/kernel/load.shard v3/kernel/t0.shard v3/kernel/test/calc_harness
           for (n in k) if (k[n]>1) printf "ctor %s x%d; ", n, k[n]
           for (n in k) if (n in h) printf "ctor and head %s; ", n }' "$a")
   [ -z "$dups" ] || { echo "parity_test: $entry: the projection is not injective — $dups"; failed=$((failed+1)); continue; }
-  "$EVAL" direct v3/kernel/load.shard --root v3 --dump "$entry" > "$b" 2>&1 || { echo "parity_test: load --dump failed on $entry"; head -3 "$b"; failed=$((failed+1)); continue; }
+  # K's directory as a second root: the consumer sees the view, the directory's own check links the
+  # implementation (§6.6; the K seal) — as the bootstrap's flat closure holds both
+  # K's consumers only: the bootstrap's flat closure holds K's implementation (env_empty is its), a
+  # test inside the directory sees it directly, a closure without K gets no extra declarations
+  if grep -q '^fn env_empty ' "$a" && [ "${entry#v3/kernel/k/}" = "$entry" ]; then kroot=v3/kernel/k; else kroot=""; fi
+  "$EVAL" direct v3/kernel/load.shard --root v3 --dump "$entry" $kroot > "$b" 2>&1 || { echo "parity_test: load --dump failed on $entry"; head -3 "$b"; failed=$((failed+1)); continue; }
   if cmp -s "$a" "$b"; then
     decls=$((decls + $(wc -l < "$a")))
   else

@@ -1787,6 +1787,49 @@ is `docs/FOUNDATION.md` §5.3.
   loader pins, parity byte-identical over 21 closures and 68,214
   lines, route 2 and calc byte-identical, 22 entrypoints, `v3/build.sh`
   and the compiled `t0`'s fixture tie (301 lines).
+- **2026-09-17 — slice 3.8, the K seal: landing 2 of 3.** The facade
+  lean (decision 2 of the design report) failed on a fact the report
+  missed: the fork check matches a `sig type NAME` only against a form
+  declared in the implementation file under the view's identity
+  (`impl_form`, `form_name`), and `kernel.k.env.CheckedEnv` can never
+  be `kernel.k.CheckedEnv`; wrappers serve functions, not types, short
+  of boxing. Put to the user with three options; ruled: one module
+  across the sealed directory (§13 item 39). Built: `Scope` carries an
+  identity prefix beside the module tag (`sc_module`, `sc_tag`; the
+  classifier's and realize's registrations by the tag), `Fx` the same
+  (`fx_ident`, `sealed_ident`), the private files' `fn`/`type` forms
+  recorded at load (`ld_forms`), the fork check matching by lookup
+  once an import has loaded the declaration (`match_private` in
+  `discharge` and after every consumed form in `advance`), the E
+  signatures compared (`check_signature` over `classify_form`'s `ESig`
+  and the fn's `EFn`), `check_arity` by lookup; the req-scope gate
+  refined (`view_dir`); `env_empty`. The view `k/mod.req.shard`: seven
+  sig types, sixty sig fns generated from the sources for the surface
+  the non-test consumers cite (57 names), plus `env_empty`, the four
+  accessors and the name constants the outside tests use; `k/k.shard`
+  the nine imports; nine consumers rewritten to `(import "k")`, the
+  private files' sibling opens dropped, five tests moved to `k/test/`,
+  the scripts' globs. Findings, each from a gate: (1) a `sig fn` over
+  E-only types is unreadable in K (`bad_shape: unknown_constant:
+  InductiveType`) — an E parameter only, `sig_e_only` (item 40); (2)
+  landing 1's `impl_type_e_only` refusal was wrong, since K's own
+  seven types are E-only — matched by the E type's arity
+  (`impl_type_arity`), the pin flipped to `ok`; (3) `erase.shard` built
+  a `Ctx` and destructured a `Loc` by their constructors — `ctx_new`,
+  `loc_ctx`, `loc_st`, `loc_fvar` added to `tc.shard` and the view;
+  (4) parity and route 2 must give the loader `v3/kernel/k` as a
+  second root for K's consumers (the directory's check links the
+  implementation, as the bootstrap's flat closure holds it), for no
+  other closure, and never for a test inside; (5) the leak pins
+  `ev_private_match`/`ev_launder` could not survive: inside the
+  directory the type is concrete and the view's parameter for it
+  `already_declared` — retired, the seal closing the case, the
+  classifier's `private_match` kept as defense in depth. Gates: 92
+  loader pins, K's own check 67 discharges and 0 errors, parity
+  byte-identical over 21 closures and 69,031 lines, route 2 and calc
+  byte-identical, 22 entrypoints, `v3/build.sh` through the old chain
+  with `(import "k")` and the compiled `t0`'s fixture tie (301
+  lines); the prune lint quiet.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

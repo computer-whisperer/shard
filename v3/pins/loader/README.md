@@ -55,5 +55,12 @@ only by its field and a `def` citing it is `unknown_constant`) and
 seal's (slice 3.8): `private_module` (a direct import of a file inside
 a directory that has a view, from outside it, refused) and
 `private_inside` (the implementation importing its private helper from
-inside, the consumer importing the directory); `ev_private_match` and
-`ev_launder` now place their consumer inside the directory.
+inside, the consumer importing the directory); landing 2's:
+`sealed_module` (one module across the directory: the view's type and
+fn implemented in two private files, the implementation file only
+importing them), `impl_e_only` (an E-only implementation type stands
+for a sig type as an E parameter), `view_req_scope` now imports the
+view's own implementation file (a plain file outside the directory is
+allowed). `ev_private_match` and `ev_launder` are retired: the seal
+closes the case — outside, the import is refused first; inside, the
+type is concrete.

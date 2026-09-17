@@ -287,8 +287,37 @@ them; each is a candidate for §13.
   root down; the importer's own directory and its ancestors never seal
   against it (`loader.shard` `sealed_above`; pins `private_module`,
   `private_inside`). The private-equality leak's pins (`ev_private_match`,
-  `ev_launder`) now place their consumer inside the directory, the one
-  place an implementation's constructor is still nameable.
+  `ev_launder`) are retired: from outside the seal refuses the
+  import first, and inside the directory the type is concrete, so no
+  file can hold a value of the sig type and its constructor at once
+  (the classifier's `private_match` check stays as defense in depth).
+- **One module across a sealed directory (slice 3.8, landing 2,
+  2026-09-17; §13 item 39).** A file directly inside a directory that
+  has a view carries the directory's module path as the prefix of its
+  declarations: `k/tc.shard` declares `kernel.k.whnf`, the identity
+  the view's `(sig fn whnf …)` names, and the implementation file is
+  the directory's import list. The file keeps its own path as the tag
+  visibility and the E table's registration go by (`Scope` carries
+  both, `sc_module` and `sc_tag`), so a consumer that sees `kernel.k`
+  sees the view's declarations and never a private file's. A
+  subdirectory (`k/test/`) is a module under it, importing the private
+  files as any file inside may. The fork check matches a signature by
+  the identity's declaration once an import has loaded it
+  (`loader.shard` `match_private`, the private files' forms recorded
+  at load), the E signatures compared (`check_signature`).
+- **E-only view parameters (landing 2; §13 item 40).** A `sig fn`
+  whose signature names an E-only type (`Expr`, `Name`, `Declaration`:
+  K holds no constant for them, §8.1 rule 1) is an E parameter only —
+  the head `run` links to the implementation's fn, no axiom in K,
+  recorded `PARAM NAME fn` like any (`sig_e_only`); a `sig type` whose
+  implementation is E only is matched by the E type's arity, K
+  admitting the sig type as an opaque constant for L citations. K's
+  own view is such a view throughout.
+- **A view may import a plain file outside its own directory
+  (landing 2; §13 item 41)**: `k/mod.req.shard` imports `../expr.shard`
+  to state its signatures; a file of the view's own directory — its
+  implementation's side — is still `req_scope` (`view_dir`; the pin
+  `view_req_scope` now imports `lib.shard`).
 
 ## 4. Declarations — the surface keywords, fixed at phase 2
 
@@ -710,7 +739,26 @@ preference; K sees one `std.list.List` in either environment.
   directory; the internals' tests move inside the directory, the
   hostile battery stays outside as a client; the sealed-directory rule
   (§3.3). Landing 1 (2026-09-16): the move, the vocabulary split, the
-  rule and its pins; the view, the facade and the consumers follow.
+  rule and its pins. **Landing 2 (2026-09-17): the view and the
+  consumers — and the facade withdrawn.** The fork check matches a
+  `sig type` only against a declaration carrying the view's identity,
+  which a wrapper in `k/k.shard` can give a function but never a type
+  short of boxing it; ruled instead (the user, option 1 of three):
+  one module across the sealed directory (§3.3, §13 item 39), so
+  `k/k.shard` holds nine imports and nothing else, and the view
+  `k/mod.req.shard` names K's own declarations: seven sig types
+  (`CheckedEnv AxMemo Tabs Run Ctx LDecl Loc`) and sixty sig fns, the
+  toolchain's whole surface plus `env_empty` (the one way to an
+  environment from outside), `ctx_new` and the `loc_*` accessors
+  (`erase.shard` had built a `Ctx` and destructured a `Loc` by their
+  constructors) and the name constants the outside tests use. Every
+  consumer is `(import "k")` with `(use kernel.k)`; the tests of the
+  internals (`tc add inductive nested hostile`) sit at `k/test/`. The
+  view's signatures name E-only types, which K cannot read: such
+  parameters are E parameters (§3.3, item 40). Parity and route 2 give
+  the loader `v3/kernel/k` as a second root for K's consumers, the
+  directory's own check linking the implementation as the bootstrap's
+  flat closure holds it.
 
 ### 6.7 The classifier, `ev` and `run` as built (slice 5, 2026-09-12)
 
@@ -1425,6 +1473,29 @@ the toolchain's closures, so both readers agree at every commit:
   only (a built-in field with no L constant in scope) cannot stand for
   a `sig type`, and the refusal reads `bad_shape: unknown_constant`
   rather than naming the cause; noted for the view landing.
+- **3.8 the K seal — landing 2 of 3, 2026-09-17 (§13 items 39–41;
+  §6.6).** The facade withdrawn on a fact the design missed — a
+  `sig type` is matched only by a declaration with the view's
+  identity — and one module across the sealed directory ruled in its
+  place: `Scope` carries the identity prefix beside the module tag,
+  the fork check matches by lookup once an import has loaded the
+  declaration, the E signatures compared. The view `k/mod.req.shard`
+  (seven sig types, sixty sig fns), `k/k.shard` the nine imports,
+  every consumer through `(import "k")`, the internals' tests at
+  `k/test/`. Three more findings, each from a gate: a `sig fn` over
+  E-only types is unreadable in K — an E parameter (`sig_e_only`); my
+  landing-1 refusal of an E-only implementation type was wrong, since
+  K's own types are E-only — matched by the E type's arity, and the
+  pin `impl_e_only` flipped to `ok`; `erase.shard` used the
+  constructors of `Ctx` and `Loc`, which the view hides — `ctx_new`,
+  `loc_ctx`, `loc_st`, `loc_fvar`. The leak pins retired (the seal
+  closes the case structurally). Gates: 92 loader pins (K's own check
+  discharges 67 parameters, 0 errors), parity byte-identical over 21
+  closures and 69,031 lines with K's directory as the consumers'
+  second root, route 2 and calc, 22 entrypoints, `v3/build.sh` through
+  the old chain with `(import "k")` and the compiled `t0`'s fixture
+  tie. Landing 3: the hostile battery as a client through the view,
+  the R52 client fixture, the documents.
 
 Then the opener as planned: the K seal under item 26's criterion,
 Stage 1, I.
@@ -1957,7 +2028,10 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     files sealed and six data files public, `k/k.shard` a facade, a
     view may import a plain file outside its directory, the internals'
     tests inside; landing 1 (the move, `verdict.shard`, the
-    sealed-directory rule) landed.
+    sealed-directory rule) landed; landing 2 (the view, one module
+    across the directory in place of the facade — item 39 — the
+    consumers, the tests inside) landed 2026-09-17; landing 3 (the
+    hostile battery as a client, the R52 fixture) open.
 27. **Calc's differential drivers sit outside the program** (§10 item
     2): the harness calls `ev` with values built as data and renders
     the results; an S program names no wire cell at phase 2.
@@ -2074,3 +2148,29 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     `Int`'s primitives (rule 5), so `+` on two `Nat` values is either
     an `Int` operation or a type error and Stage 0 does not say which;
     Stage 1's typing answers it.
+39. **One module across a sealed directory** (§3.3; the K seal,
+    landing 2, 2026-09-17): a file directly inside a directory that
+    has a view declares under the directory's module path, keeping its
+    own path as the visibility tag, so the view's signatures name the
+    private files' declarations and the implementation file is the
+    import list. Alternatives: a facade of wrappers in `k/k.shard` —
+    the design's lean, withdrawn because the fork check matches a
+    `sig type` only against a declaration with the view's identity,
+    which a wrapper cannot give a type short of boxing it (an
+    allocation per call, every answer type crossing the box); identity
+    aliasing in the fork — two names on one declaration, against the
+    one-identity rule K's environment rests on.
+40. **E-only view parameters** (§3.3; landing 2): a `sig fn` whose
+    signature names an E-only type is an E parameter only — no axiom
+    in K, the head linked at `run` — and a `sig type` whose
+    implementation is E-only is matched by its arity, K admitting the
+    sig type as an opaque constant. Alternative: making the data
+    vocabulary K types by importing `Init` into `name`, `expr`, `decl`
+    — `Symbol`'s L identity is phase 3's later slice, and every
+    identity and the load's cost would change for no client's gain.
+41. **A view may import a plain file outside its own directory**
+    (§6.6's req-scope gate refined; landing 2): the K view states its
+    signatures over the public data files. A file of the view's own
+    directory stays `req_scope` — the implementation's side. Alternative:
+    the data files under `k/mod.req/` as req-scope siblings, which
+    moves six public files behind a path nothing else needs.

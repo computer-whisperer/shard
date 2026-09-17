@@ -520,8 +520,17 @@ files public with a new `verdict.shard` for K's answer types; a facade
 `k/k.shard`; a view may import a plain file outside its directory; the
 internals' tests inside): the nine files moved to `kernel/k/`, `Outcome`
 parametric, the sealed-directory rule (`private_module`) with its
-pins; every gate unchanged. The view, the facade and the consumers are
-landing 2; the tests, the client fixture and the documents landing 3.
+pins; every gate unchanged. **Landing 2 (2026-09-17): the view and
+the consumers, the facade withdrawn** — a `sig type` is matched only
+by a declaration with the view's identity, which a wrapper cannot give
+a type; ruled in its place: one module across the sealed directory
+(§13 item 39), the view `k/mod.req.shard` naming K's own declarations
+(seven sig types, sixty sig fns), `k/k.shard` the nine imports, every
+consumer `(import "k")`, the internals' tests at `k/test/`; a `sig fn`
+over E-only types is an E parameter (item 40), a view may import a
+plain file outside its directory (item 41). Gates unchanged, parity
+and route 2 with K's directory as a second root. Landing 3: the
+hostile battery as a client, the R52 client fixture, the documents.
 **CI (2026-09-15): phase 3's
 slices green on the full gate** — pipeline 482 (`345116f`, slice 3.2)
 green: 22 entrypoints, calc byte-identical in 395 s, parity 130 s over

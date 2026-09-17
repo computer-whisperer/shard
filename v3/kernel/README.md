@@ -39,10 +39,14 @@ in the comments are into those files at that commit.
 **The sealed directory `k/` (slice 3.8, 2026-09-16; `v3/LANGUAGE.md`
 §6.6, §13 item 26):** the nine trust files — `env tc add inductive
 nested import axioms accel_pins refgen` — live under `kernel/k/`,
-private to it once its view lands (landing 2); the data vocabulary
-stays public at `kernel/`: `name level expr decl intmap json` and
-`verdict.shard`. The rows below keep their file names; a moved file's
-path is `k/NAME.shard`.
+private to it behind its view `k/mod.req.shard` (landing 2: seven sig
+types, sixty sig fns — the one way in; `k/k.shard` the implementation's
+import list; the nine files one module `kernel.k`, §13 item 39; the
+internals' tests at `k/test/`); the data vocabulary stays public at
+`kernel/`: `name level expr decl intmap json` and `verdict.shard`. A
+consumer writes `(import "k")` and `(use kernel.k)`; `load.shard --root
+v3 v3/kernel/k` checks the implementation against the view. The rows
+below keep their file names; a moved file's path is `k/NAME.shard`.
 
 | file | declares | rules carried as comments |
 |---|---|---|
