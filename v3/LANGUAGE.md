@@ -335,7 +335,7 @@ common case).
 | `(import …)`, `(use …)` | §3.1 | the scope |
 | `(inductive NAME.{u…} BINDERS TYPE (CTOR TYPE)…)` | Lean's `inductive`: level parameters on the name, parameter binders, the type after the parameters (`(Sort …)` or a `forall` over indices), each constructor's full type after the parameters | K: `InductDecl` |
 | `(type (NAME T…) (CTOR FIELD-TYPE…)…)` | today's E data form, sugar for an `inductive` with parameters `T : Type`, result `Type`, non-dependent fields; E-eligible by construction | K (`InductDecl`) **and** E (`EInd`) |
-| `(record NAME (ctor CTOR)? (FIELD TYPE)+)` | v2's named-field product (docs/LANGUAGE.md "Records"; slice 3.9, §13 item 42): loader-level sugar expanded before any form is read — the positional `(type NAME (CTOR TYPE…))`, CTOR defaulting to `MkNAME`, an accessor `FIELD_of` and an updater `with_FIELD` (value first) per field; NAME may be `(NAME P…)`, the generated fns then binding `(P Type)` first. `(make NAME (FIELD V)…)` — every field exactly once, order-free, against the current file's records — and `(with E (FIELD V)…)` — chained updaters, a later entry outermost, purely syntactic — rewritten in every form of the file, nested values first (`kernel/record.shard`; the bootstrap's `expand_records` the twin, parity the tie). No law family at Stage 0: a fn has no L meaning; v2's laws return with Stage 1. Layout: as `type`'s until CANON's phase-6 gate | E: as the forms it expands to |
+| `(record NAME (ctor CTOR)? (FIELD TYPE)+)` | named-field products (v2's form, docs/LANGUAGE.md "Records"; slice 3.9, §13 item 42): loader-level sugar expanded before any form is read — the positional `(type NAME (CTOR TYPE…))`, CTOR defaulting to `MkNAME`, an accessor `NAME.FIELD` and an updater `NAME.with_FIELD` (value first) per field in the record's namespace, which the file opens as any type's (item 7): `(FIELD r)` bare where no other opened record has the field, `(NAME.FIELD r)` always; NAME may be `(NAME P…)`, the generated fns then binding `(P Type)` first. `(make NAME (FIELD V)…)` — every field exactly once, order-free — and `(with NAME E (FIELD V)…)` — chained updaters, a later entry outermost — both against the current file's records, rewritten in every form of the file, nested values first (`kernel/record.shard`; the bootstrap's `expand_records` the twin, parity the tie). No law family at Stage 0: a fn has no L meaning; v2's laws return with Stage 1. Layout: as `type`'s until CANON's phase-6 gate | E: as the forms it expands to |
 | `(structure NAME.{u…} BINDERS (FIELD TYPE)…)` | one constructor `NAME.mk`; projections `NAME.FIELD` generated as `def`s over `proj` (Lean's projections are `Expr.proj` definitions); fields dependent on earlier fields | K |
 | `(def NAME.{u…} BINDERS TYPE VALUE)` | an L definition; hints `regular` at height 1 + the greatest height it references | K: `DefnDecl` |
 | `(abbrev …)` | as `def` with hint `abbrev` | K |
@@ -1534,13 +1534,24 @@ the toolchain's closures, so both readers agree at every commit:
   same way; pins `record_basic` (a plain, a `(ctor …)` and a
   parametric record, `make` in any order, `with` chained) and
   `record_make` (a field missing); parity ties the closure between the
-  two readers. Found on the way: three of the new file's names
-  collided with the closure's (`fields_of`, `Rec`, `RcRes`), and one
-  with a pattern variable in the loader (`syms`, `pattern_name`) —
-  the flat bootstrap shadowed silently where the V3 gate refused.
-  Gates: 95 loader pins, parity byte-identical over 24 closures and
-  80,676 lines, 24 entrypoints. Landing b: `loader.shard`'s `Load`,
-  `Fx`, `Mod` and `Im` as records, the pilot.
+  two readers. The accessors landed first under v2's names
+  (`FIELD_of`, `with_FIELD`) and were reversed the same day at the
+  first real file: the loader's four records share four field names
+  and six of their accessor names collide with functions of the
+  closure — so the accessors live in the record's namespace
+  (`Load.env`, `Load.with_env`; `with` names the record), the dump
+  prints a head by its declared spelling (the identity beyond the
+  module tag) so the parity projection stays injective, and the
+  bootstrap resolves a bare citation of a dotted head by suffix as
+  the V3 reader's opened namespace does. Found on the way: three of
+  the new file's names collided with the closure's (`fields_of`,
+  `Rec`, `RcRes`), one with a pattern variable in the loader (`syms`,
+  `pattern_name`), and the generated patterns had bound the field
+  names, shadowing the accessors the namespace opens (`fld_FIELD`
+  now) — the flat bootstrap shadowed silently where the V3 gate
+  refused. Gates: 95 loader pins, parity byte-identical over 24
+  closures and 80,705 lines, 24 entrypoints. Landing b: `loader.shard`'s
+  `Load`, `Fx`, `Mod` and `Im` as records, the pilot.
 
 Then the opener as planned: the K seal under item 26's criterion,
 Stage 1, I.
@@ -2223,14 +2234,22 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     the data files under `k/mod.req/` as req-scope siblings, which
     moves six public files behind a path nothing else needs.
 42. **Records are v2's form, expanded at the s-expression level in
-    both readers** (§4; slice 3.9): `FIELD_of` and `with_FIELD` with
-    the value first, `MkNAME` the default constructor, `make` against
-    the current file's records, `with` purely syntactic, no law family
-    until Stage 1. Alternatives: accessors under the type's namespace
-    (`NAME.FIELD`, opened for the file as any type's is) — cleaner
-    scoping, no closure-wide accessor names, but the parity projection
-    prints a head by its last component and two records with a field
-    `env` would make it non-injective, and route 1's old reader
-    generates v2's names; kept as the direction if `FIELD_of`
-    collisions bite. The flat bootstrap resolves `make` against the
-    closure's records, a looseness the V3 gate refuses.
+    both readers, with the accessors in the record's namespace** (§4;
+    slice 3.9): `NAME.FIELD` and `NAME.with_FIELD` with the value
+    first, opened for the file as any type's namespace is (item 7);
+    `MkNAME` the default constructor; `make` and `with` name the
+    record and resolve against the current file's; no law family
+    until Stage 1. v2's `FIELD_of`/`with_FIELD` was the first cut and
+    reversed the same day on the pilot's evidence: the loader's four
+    records share `init`, `hash`, `view` and `file`, and six of their
+    accessor names (`root_of`, `env_of`, `params_of`, `module_of`,
+    `parts_of`, `closure_of`) are functions of the closure already —
+    closure-wide accessor names do not scale past one record per
+    file. The cost: the parity projection prints a head by its
+    declared spelling (the identity beyond its module tag, `dump.shard`
+    `dm_head`), the bootstrap resolves a bare citation of a dotted
+    head by suffix, and route 1's old reader, which generates v2's
+    names, cannot lower a file that uses a record until the V3
+    lowering replaces it — no such file is in `t0`'s closure. The
+    flat bootstrap resolves `make` and `with` against the closure's
+    records, a looseness the V3 gate refuses.

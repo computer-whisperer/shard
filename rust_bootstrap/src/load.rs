@@ -254,7 +254,21 @@ fn resolve_in(declared: &HashSet<Symbol>, cit: &str) -> Option<String> {
             return Some(rest.to_string());
         }
     }
-    None
+    // the other direction: a citation is a suffix of a dotted declared name
+    // (`x` of `P.x`, a record's accessor) — the V3 reader's opened namespace;
+    // one such declaration resolves, more than one is left as written (the V3
+    // gate refuses the ambiguity)
+    let tail = format!(".{}", cit);
+    let mut found: Option<&Symbol> = None;
+    for d in declared {
+        if d.ends_with(&tail) {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(d);
+        }
+    }
+    found.cloned()
 }
 
 /// Parse a single expression against a module's ctor set.
@@ -268,10 +282,12 @@ pub fn expr_from_str(src: &str, module: &Module) -> Result<Expr, LoadError> {
 /// Records (v3/LANGUAGE.md §4; kernel/record.shard is the V3 reader's twin, tied by
 /// frontend parity): `(record NAME (ctor CTOR)? (FIELD TYPE)+)` — NAME may be
 /// `(NAME P…)` — expands before any form is read into the positional type
-/// `(type NAME (CTOR TYPE…))` (CTOR defaults to MkNAME), an accessor `FIELD_of`
-/// and an updater `with_FIELD` per field; `(make NAME (FIELD V)…)` — every field
-/// exactly once — and `(with E (FIELD V)…)` — chained updaters, a later entry
-/// outermost — are rewritten in every subterm, nested values first. The V3
+/// `(type NAME (CTOR TYPE…))` (CTOR defaults to MkNAME), an accessor `NAME.FIELD`
+/// and an updater `NAME.with_FIELD` per field, in the record's namespace; `(make
+/// NAME (FIELD V)…)` — every field exactly once — and `(with NAME E (FIELD V)…)`
+/// — chained updaters, a later entry outermost — are rewritten in every subterm,
+/// nested values first. A bare citation of a dotted head resolves by suffix
+/// (`resolve_in`), as the V3 reader's opened namespace does. The V3
 /// reader resolves `make` against the current file's records; this flat loader
 /// sees the closure's, a looseness the V3 gate refuses.
 struct RecDef {
@@ -350,9 +366,11 @@ fn head_form(rc: &RecDef) -> Value {
 fn tparam_binders(rc: &RecDef) -> Vec<Value> {
     rc.params.iter().map(|p| vlist(vec![sym(p), sym("Type")])).collect()
 }
-fn pattern(rc: &RecDef) -> Value {
+/// the pattern binds the fields it uses as `fld_FIELD` (a field name itself
+/// would shadow the accessor the record's namespace opens) and wildcards the rest
+fn pattern(rc: &RecDef, f: &str, all: bool) -> Value {
     let mut items = vec![sym(&rc.ctor)];
-    items.extend(rc.fields.iter().map(|(f, _)| sym(f)));
+    items.extend(rc.fields.iter().map(|(g, _)| if all || g == f { sym(&format!("fld_{}", g)) } else { sym("_") }));
     vlist(items)
 }
 fn generate(rc: &RecDef) -> Vec<Value> {
@@ -361,29 +379,29 @@ fn generate(rc: &RecDef) -> Vec<Value> {
     ctor_form.extend(rc.fields.iter().map(|(_, t)| t.clone()));
     out.push(vlist(vec![sym("type"), head_form(rc), vlist(ctor_form)]));
     for (f, t) in &rc.fields {
-        // (fn FIELD_of ((P Type)… (r NAME)) TYPE (match r ((CTOR f…) FIELD)))
+        // (fn NAME.FIELD ((P Type)… (r NAME)) TYPE (match r ((CTOR f…) FIELD)))
         let mut binders = tparam_binders(rc);
         binders.push(vlist(vec![sym("r"), head_form(rc)]));
         out.push(vlist(vec![
             sym("fn"),
-            sym(&format!("{}_of", f)),
+            sym(&format!("{}.{}", rc.name, f)),
             vlist(binders),
             t.clone(),
-            vlist(vec![sym("match"), sym("r"), vlist(vec![pattern(rc), sym(f)])]),
+            vlist(vec![sym("match"), sym("r"), vlist(vec![pattern(rc, f, false), sym(&format!("fld_{}", f))])]),
         ]));
-        // (fn with_FIELD ((P Type)… (new_FIELD TYPE) (r NAME)) NAME (match r ((CTOR f…) (CTOR … new_FIELD …))))
+        // (fn NAME.with_FIELD ((P Type)… (new_FIELD TYPE) (r NAME)) NAME (match r ((CTOR f…) (CTOR … new_FIELD …))))
         let nv = format!("new_{}", f);
         let mut binders = tparam_binders(rc);
         binders.push(vlist(vec![sym(&nv), t.clone()]));
         binders.push(vlist(vec![sym("r"), head_form(rc)]));
         let mut build = vec![sym(&rc.ctor)];
-        build.extend(rc.fields.iter().map(|(g, _)| if g == f { sym(&nv) } else { sym(g) }));
+        build.extend(rc.fields.iter().map(|(g, _)| if g == f { sym(&nv) } else { sym(&format!("fld_{}", g)) }));
         out.push(vlist(vec![
             sym("fn"),
-            sym(&format!("with_{}", f)),
+            sym(&format!("{}.with_{}", rc.name, f)),
             vlist(binders),
             head_form(rc),
-            vlist(vec![sym("match"), sym("r"), vlist(vec![pattern(rc), vlist(build)])]),
+            vlist(vec![sym("match"), sym("r"), vlist(vec![pattern(rc, f, true), vlist(build)])]),
         ]));
     }
     out
@@ -433,17 +451,27 @@ fn rewrite(recs: &[RecDef], v: &Value) -> Result<Value, LoadError> {
             Ok(vlist(out))
         }
         Some("with") => {
-            if items1.len() < 2 {
-                return Err(bad("(with E (FIELD V)…)".into()));
+            if items1.len() < 3 {
+                return Err(bad("(with NAME E (FIELD V)…)".into()));
             }
-            let mut acc = items1[1].clone();
-            for e in &items1[2..] {
+            let n = items1[1]
+                .as_symbol()
+                .ok_or_else(|| bad("(with NAME E (FIELD V)…)".into()))?;
+            let rc = recs
+                .iter()
+                .find(|r| r.name == n)
+                .ok_or_else(|| bad(format!("with {}: no such record", n)))?;
+            let mut acc = items1[2].clone();
+            for e in &items1[3..] {
                 let e = as_list(e)?;
                 if e.len() != 2 {
-                    return Err(bad("(with E (FIELD V)…)".into()));
+                    return Err(bad("(with NAME E (FIELD V)…)".into()));
                 }
                 let f = as_symbol(e[0])?;
-                acc = vlist(vec![sym(&format!("with_{}", f)), e[1].clone(), acc]);
+                if !rc.fields.iter().any(|(g, _)| g == f) {
+                    return Err(bad(format!("with {}: no such field {}", n, f)));
+                }
+                acc = vlist(vec![sym(&format!("{}.with_{}", rc.name, f)), e[1].clone(), acc]);
             }
             Ok(acc)
         }

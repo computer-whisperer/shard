@@ -5,11 +5,15 @@
 ;;;
 ;;; expands at the s-expression level, before any form is read, into the positional
 ;;; single-constructor type `(type NAME (CTOR TYPE…))` — CTOR defaults to MkNAME — an
-;;; accessor `FIELD_of : NAME → TYPE` and an updater `with_FIELD : TYPE → NAME → NAME` (the
-;;; value first) per field; `(make NAME (FIELD V)…)` — every field exactly once, order-free,
-;;; against the records of the current file — and `(with E (FIELD V)…)` — chained updaters,
-;;; a later entry outermost, purely syntactic — are rewritten in every form of the file,
-;;; nested values first. The bootstrap expands the same way (rust_bootstrap/src/load.rs
+;;; accessor `NAME.FIELD : NAME → TYPE` and an updater `NAME.with_FIELD : TYPE → NAME → NAME`
+;;; (the value first) per field, in the record's namespace — opened for the file as any
+;;; type's is (§13 item 7), so `(FIELD r)` cites it bare where no other opened record has
+;;; the field, `(NAME.FIELD r)` always; `(make NAME (FIELD V)…)` — every field exactly once,
+;;; order-free — and `(with NAME E (FIELD V)…)` — chained updaters, a later entry outermost —
+;;; both against the records of the current file, are rewritten in every form of the file,
+;;; nested values first. Chosen over v2's `FIELD_of`/`with_FIELD` at the first real file
+;;; (§13 item 42): four records of the loader shared field names and six accessor names
+;;; collided with functions of the closure. The bootstrap expands the same way (rust_bootstrap/src/load.rs
 ;;; expand_records) and frontend parity ties the two. No law family at Stage 0: a fn has no
 ;;; L meaning yet (§0); v2's laws return with Stage 1's typing.
 
@@ -135,9 +139,6 @@
 (fn field_types ((fs (List (Pair Symbol SExpr)))) (List SExpr)
   (measure (struct fs))
   (match fs (Nil Nil) ((Cons (Pair _ t) r) (Cons t (field_types r)))))
-(fn field_syms ((fs (List (Pair Symbol SExpr)))) (List SExpr)
-  (measure (struct fs))
-  (match fs (Nil Nil) ((Cons (Pair f _) r) (Cons (SSym f) (field_syms r)))))
 ;; the type-parameter binders ((P Type) …) a generated fn starts with
 (fn tparam_binders ((ps (List Symbol))) (List SExpr)
   (measure (struct ps))
@@ -148,24 +149,36 @@
     (Nil (rev acc))
     ((Cons (Pair f t) r) (gen_fields rc r (Cons (gen_updater rc f t) (Cons (gen_accessor rc f t) acc))))))
 (fn r_sym () SExpr (SSym (quote r)))
-(fn pattern ((rc RecDef)) SExpr (SList (Cons (SSym (rec_ctor rc)) (field_syms (rec_fields rc)))))
-;; (fn FIELD_of ((P Type)… (r NAME)) TYPE (match r ((CTOR f…) FIELD)))
+;; the pattern binds the fields it uses as fld_FIELD (a field name itself would shadow the
+;; accessor the record's namespace opens — pattern_name) and wildcards the rest
+(fn fld ((f Symbol)) SExpr (SSym (sym_of_chars (append "fld_" (chars_of_sym f)))))
+(fn pattern_one ((rc RecDef) (f Symbol)) SExpr
+  (SList (Cons (SSym (rec_ctor rc)) (pat_vars (rec_fields rc) f False))))
+(fn pattern_all ((rc RecDef) (f Symbol)) SExpr
+  (SList (Cons (SSym (rec_ctor rc)) (pat_vars (rec_fields rc) f True))))
+(fn pat_vars ((fs (List (Pair Symbol SExpr))) (f Symbol) (all Bool)) (List SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (Pair g _) r) (Cons (if (bool_or all (sym_eq g f)) (fld g) (SSym (quote _))) (pat_vars r f all)))))
+;; (fn NAME.FIELD ((P Type)… (r NAME)) TYPE (match r ((CTOR f…) FIELD)))
+(fn dotted ((rc RecDef) (s (List Int))) SExpr (SSym (sym_of_chars (append (chars_of_sym (rec_name rc)) (append "." s)))))
 (fn gen_accessor ((rc RecDef) (f Symbol) (t SExpr)) SExpr
-  (SList (list (SSym (quote fn)) (SSym (sym_of_chars (append (chars_of_sym f) "_of")))
+  (SList (list (SSym (quote fn)) (dotted rc (chars_of_sym f))
                (SList (append (tparam_binders (rec_params rc)) (list (SList (list (r_sym) (head_form rc))))))
                t
-               (SList (list (SSym (quote match)) (r_sym) (SList (list (pattern rc) (SSym f))))))))
-;; (fn with_FIELD ((P Type)… (new_FIELD TYPE) (r NAME)) NAME (match r ((CTOR f…) (CTOR … new_FIELD …))))
+               (SList (list (SSym (quote match)) (r_sym) (SList (list (pattern_one rc f) (fld f))))))))
+;; (fn NAME.with_FIELD ((P Type)… (new_FIELD TYPE) (r NAME)) NAME (match r ((CTOR f…) (CTOR … new_FIELD …))))
 (fn gen_updater ((rc RecDef) (f Symbol) (t SExpr)) SExpr
   (let ((nv (SSym (sym_of_chars (append "new_" (chars_of_sym f))))))
-    (SList (list (SSym (quote fn)) (SSym (sym_of_chars (append "with_" (chars_of_sym f))))
+    (SList (list (SSym (quote fn)) (dotted rc (append "with_" (chars_of_sym f)))
                  (SList (append (tparam_binders (rec_params rc)) (list (SList (list nv t)) (SList (list (r_sym) (head_form rc))))))
                  (head_form rc)
                  (SList (list (SSym (quote match)) (r_sym)
-                              (SList (list (pattern rc) (SList (Cons (SSym (rec_ctor rc)) (replaced (rec_fields rc) f nv)))))))))))
+                              (SList (list (pattern_all rc f) (SList (Cons (SSym (rec_ctor rc)) (replaced (rec_fields rc) f nv)))))))))))
 (fn replaced ((fs (List (Pair Symbol SExpr))) (f Symbol) (nv SExpr)) (List SExpr)
   (measure (struct fs))
-  (match fs (Nil Nil) ((Cons (Pair g _) r) (Cons (if (sym_eq g f) nv (SSym g)) (replaced r f nv)))))
+  (match fs (Nil Nil) ((Cons (Pair g _) r) (Cons (if (sym_eq g f) nv (fld g)) (replaced r f nv)))))
 
 ;; ---- make and with, rewritten in every subterm, nested values first ---------------------
 (fn rewrite ((recs (List RecDef)) (s SExpr)) RwRes
@@ -176,7 +189,7 @@
        ((RlErr e m) (RwErr e m))
        ((RlOk items1)
         (if (is_head s (quote make)) (rewrite_make recs items1)
-        (if (is_head s (quote with)) (rewrite_with items1)
+        (if (is_head s (quote with)) (rewrite_with recs items1)
           (RwOk (SList items1)))))))
     (_ (RwOk s))))
 (fn rewrite_all ((recs (List RecDef)) (items (List SExpr)) (acc (List SExpr))) RlRes
@@ -219,16 +232,22 @@
 (fn lookups ((es (List (Pair Symbol SExpr))) (f Symbol) (acc (List SExpr))) (List SExpr)
   (measure (struct es))
   (match es (Nil acc) ((Cons (Pair g v) r) (lookups r f (if (sym_eq f g) (Cons v acc) acc)))))
-;; (with E (FIELD V)…) → (with_FIELDn Vn (… (with_FIELD0 V0 E))), a later entry outermost
-(fn rewrite_with ((items (List SExpr))) RwRes
+;; (with NAME E (FIELD V)…) → (NAME.with_FIELDn Vn (… (NAME.with_FIELD0 V0 E))), a later entry outermost
+(fn rewrite_with ((recs (List RecDef)) (items (List SExpr))) RwRes
   (match items
-    ((Cons _ (Cons e entries))
-     (match (entry_pairs entries Nil)
-       (None (RwErr (quote record_with) "(with E (FIELD V)…)"))
-       ((Some es) (RwOk (chain es e)))))
-    (_ (RwErr (quote record_with) "(with E (FIELD V)…)"))))
-(fn chain ((es (List (Pair Symbol SExpr))) (acc SExpr)) SExpr
+    ((Cons _ (Cons (SSym n) (Cons e entries)))
+     (match (find_record recs n)
+       (None (RwErr (quote record_with) (append (chars_of_sym n) ": no such record in this file")))
+       ((Some rc)
+        (match (entry_pairs entries Nil)
+          (None (RwErr (quote record_with) "(with NAME E (FIELD V)…)"))
+          ((Some es) (if (all_fields rc es) (RwOk (chain rc es e)) (RwErr (quote record_with) (append (chars_of_sym n) ": no such field"))))))))
+    (_ (RwErr (quote record_with) "(with NAME E (FIELD V)…)"))))
+(fn all_fields ((rc RecDef) (es (List (Pair Symbol SExpr)))) Bool
+  (measure (struct es))
+  (match es (Nil True) ((Cons (Pair f _) r) (if (field_in (rec_fields rc) f) (all_fields rc r) False))))
+(fn chain ((rc RecDef) (es (List (Pair Symbol SExpr))) (acc SExpr)) SExpr
   (measure (struct es))
   (match es
     (Nil acc)
-    ((Cons (Pair f v) r) (chain r (SList (list (SSym (sym_of_chars (append "with_" (chars_of_sym f)))) v acc))))))
+    ((Cons (Pair f v) r) (chain rc r (SList (list (dotted rc (append "with_" (chars_of_sym f))) v acc))))))

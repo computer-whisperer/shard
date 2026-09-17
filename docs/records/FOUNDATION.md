@@ -1885,7 +1885,27 @@ is `docs/FOUNDATION.md` §5.3.
   the gate worked as designed. Pins `record_basic`, `record_make`;
   parity's 24th closure. Gates: 95 loader pins, parity byte-identical
   over 24 closures and 80,676 lines, route 2 and calc, 24 entrypoints;
-  the bootstrap's 44 tests.
+  the bootstrap's 44 tests. **Reversed the same day, on the pilot's
+  evidence:** planning the loader's four records against v2's
+  `FIELD_of` names found four shared field names (`init`, `hash`,
+  `view`, `file` — duplicate accessors in one file) and six accessor
+  names already taken by functions of the closure (`root_of`,
+  `env_of`, `params_of`, `module_of`, `parts_of`, `closure_of`);
+  closure-wide accessor names do not survive one file with several
+  records. The accessors now live in the record's namespace
+  (`Load.env`, `Load.with_env`), opened for the file as any type's is,
+  and `with` names its record; the V3 reader needed nothing new
+  (dotted heads and the opened namespace already resolve them), the
+  bootstrap gained the reverse suffix rule (`resolve_in`: a bare
+  citation of a dotted declared head, one such declaration), and the
+  dump prints a head by its declared spelling — the identity beyond
+  the module tag (`dm_head`, threaded through the term printer) — so
+  the parity projection stays injective across records. The generated
+  patterns had bound the field names, which now shadowed the accessors
+  (`pattern_name` on every record): `fld_FIELD`. Item 42 rewritten
+  with the evidence. Gates: 95 loader pins, parity byte-identical over
+  24 closures and 80,705 lines, 24 entrypoints, the bootstrap's 44
+  tests.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 
