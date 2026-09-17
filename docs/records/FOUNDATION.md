@@ -1830,6 +1830,35 @@ is `docs/FOUNDATION.md` §5.3.
   byte-identical, 22 entrypoints, `v3/build.sh` through the old chain
   with `(import "k")` and the compiled `t0`'s fixture tie (301
   lines); the prune lint quiet.
+- **2026-09-17 — slice 3.8, the K seal: landing 3 of 3, the seal
+  complete (§13 item 26).** The hostile battery split at the seal:
+  the 45 cases that speak through `check` moved outside as a client
+  of the view (`e0` is `env_empty`, the budgets `limits`), the nine
+  that call the accelerator's matcher directly (7c, 7d, the five 7e
+  rows: `accel_ref`, `accel_ref_closure`, `ref_matches`) inside as
+  `k/test/accel_test.shard` with the helpers they need copied — the
+  two sides cannot share a kit, since a file that imports the view
+  and one that imports the implementation cannot meet in one
+  environment (the view's parameter and the concrete type
+  `already_declared`). The view's last additions: `Limits`,
+  `check_with`, `limits`, `nm_string`; `cv_name`, `cv_lparams`,
+  `cv_type`, `cval_eq` moved from `add.shard` to the public
+  `decl.shard` (accessors beside their data; `cv_name` and `cval_eq`
+  left the view). The R52 fixture: `kernel/test/k_client_test.shard`
+  (eight cases: the empty environment holds nothing; a raw inductive
+  checked into it; the result holds and pins Nat; a definition checked
+  over it, both held; a loose-variable declaration refused and the
+  environment untouched) and the pin `k_client_reach` (a client naming
+  `CheckedEnv`'s constructor: `unknown_head`) — the pins test gained a
+  `;; root:` header so a case's files can sit under the package root.
+  Gates: 93 loader pins, K's own check 69 discharges and 0 errors,
+  parity byte-identical over 23 closures and 80,433 lines, route 2 and
+  calc byte-identical, 24 entrypoints, `v3/build.sh` and the compiled
+  `t0`'s fixture tie (301 lines); the prune lint quiet (985 `use`
+  lines). Item 26's criterion: the structural parts built and pinned;
+  the consumer half — the first `meta/` consumer importing the view
+  only — enforced by the sealed-directory rule for every file outside
+  `k/` rather than awaited. Slice 3.8 closed; next: Stage 1, I.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

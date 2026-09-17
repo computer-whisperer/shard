@@ -63,4 +63,7 @@ for a sig type as an E parameter), `view_req_scope` now imports the
 view's own implementation file (a plain file outside the directory is
 allowed). `ev_private_match` and `ev_launder` are retired: the seal
 closes the case — outside, the import is refused first; inside, the
-type is concrete.
+type is concrete. Landing 3's `k_client_reach`: a client of K's view
+naming `CheckedEnv`'s constructor, refused `unknown_head` — the first
+case under the package root, by the `;; root:` header (the case's
+files then sit where a client of `kernel/k` must).

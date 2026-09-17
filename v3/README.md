@@ -529,8 +529,13 @@ a type; ruled in its place: one module across the sealed directory
 consumer `(import "k")`, the internals' tests at `k/test/`; a `sig fn`
 over E-only types is an E parameter (item 40), a view may import a
 plain file outside its directory (item 41). Gates unchanged, parity
-and route 2 with K's directory as a second root. Landing 3: the
-hostile battery as a client, the R52 client fixture, the documents.
+and route 2 with K's directory as a second root. **Landing 3
+(2026-09-17): the seal complete** — the hostile battery a client of
+the view (its matcher cases inside as `accel_test`), the client
+fixture `k_client_test` with the pin `k_client_reach`,
+`Limits`/`check_with` in the view (eight sig types, 61 sig fns), the
+accessors to `decl.shard`; 93 pins, 24 entrypoints, parity over 23
+closures, route 1 tied. §13 item 26 landed; next: Stage 1, I.
 **CI (2026-09-15): phase 3's
 slices green on the full gate** — pipeline 482 (`345116f`, slice 3.2)
 green: 22 entrypoints, calc byte-identical in 395 s, parity 130 s over
@@ -576,10 +581,11 @@ each closes on its named gate:
   flag a caller wrote reaches `expr_eq`'s shortcut, the memo tables or
   a pruned traversal (hostile battery 16: forged ids, a claimed-closed
   loose variable, a claimed-absent fvar, a stale hash, snapshot forks,
-  independent construction, no trace after a failure). **Still open:**
-  the kernel's own files expose `CheckedEnv`'s constructor (the
-  battery builds one). **Deferred to the phase-3 opener (2026-09-13,
-  slice 6):** `kernel/env`'s view is not the boundary — the operations
+  independent construction, no trace after a failure). **CLOSED
+  2026-09-17 (slice 3.8, the K seal):** `CheckedEnv`'s constructor is
+  behind `kernel/k`'s view; the battery is a client of the view and
+  builds none; a client naming it is refused (`k_client_reach`). The
+  history: **deferred to the phase-3 opener (2026-09-13, slice 6):** `kernel/env`'s view is not the boundary — the operations
   `add`, `tc` and `import` build environments with would have to be
   exported — K is, and sealing K (a directory module of fifteen files,
   a view of 87 signatures, a bootstrap resolver change, a
@@ -592,7 +598,9 @@ each closes on its named gate:
   profile shortcut — with the forged-node fixtures exercising the
   public entry and a raw-construction client fixture beside them; a
   view file whose consumers still import the implementation is not
-  the seal.
+  the seal. **Met 2026-09-17:** the fixtures are `hostile_test` (a
+  client) and `k_client_test` with `k_client_reach`; the consumer half
+  the sealed-directory rule enforces for every file outside `k/`.
 - **R49, the matcher's kind check** — a theorem under a candidate's
   name was pinned (an authorization hole, no false theorem: K types a
   head before it reduces it); **fixed at slice 9 (2026-09-13)**,

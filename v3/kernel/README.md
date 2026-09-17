@@ -47,6 +47,10 @@ internals' tests at `k/test/`); the data vocabulary stays public at
 consumer writes `(import "k")` and `(use kernel.k)`; `load.shard --root
 v3 v3/kernel/k` checks the implementation against the view. The rows
 below keep their file names; a moved file's path is `k/NAME.shard`.
+Landing 3 (2026-09-17): the hostile battery a client of the view
+(`test/hostile_test.shard`), its matcher cases `k/test/accel_test.shard`;
+the client fixture `test/k_client_test.shard`; `ConstantVal`'s accessors
+(`cv_name cv_lparams cv_type cval_eq`) in `decl.shard`.
 
 | file | declares | rules carried as comments |
 |---|---|---|
