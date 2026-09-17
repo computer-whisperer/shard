@@ -272,7 +272,8 @@ and 2 built. `v3/examples/calc/` is the program half in S, one file
 per old file (51 functions, 9 types; the claims a header line each,
 phase 3), under Init's `Int` from a second fixture
 (`kernel/test/fixtures/init_prefix_int.ndjson`, the export through the
-`Int` inductive, 17,812 lines); the differential runs the port under
+`Int` inductive, 17,812 lines then; through `Int.decEq`, 35,371 lines,
+since slice 3.13); the differential runs the port under
 `ev` from `kernel/test/calc_harness.shard` (values built as data,
 since an S program names no wire cell at phase 2) against the old
 tree's tower over `examples/calc/calc_differential.shard`, one shared
@@ -586,7 +587,22 @@ recursion and the operator identities by operand type, then
 course-of-values and `WellFounded.fix`, then the L-side ergonomics,
 then the R60 facilities, then I) and §8.5 (the view stance: nothing L
 crosses a view's merge, the requirements are the lemmas, the checked
-instance a substitution over P); §13 items 43–46. Next: slice 3.13.
+instance a substitution over P); §13 items 43–46. **Slice 3.13
+(2026-09-17): `fn` = `def` + `realize` built** — `kernel/define.shard`:
+a fn whose types and heads have L identities gets its definition (the
+leading case tree as recursors, the structural split at the top with
+the other parameters in the motive, an immediate-field self-call the
+induction hypothesis), its equations `NAME.eq_N` by `Eq.refl`, its E
+body attached (`DEFINE`); an obstacle leaves it `RUNNABLE … why=`; the
+operators resolve by operand type, a numeral at `Int` is `Int.ofNat`;
+a `def` may be written in the E forms; in a fork a definition displaces
+the view's parameter (`DISCHARGE … defined`) and nothing of it crosses
+to a consumer (pins `view_eq_hidden`, `view_rfl`). The first std file,
+`v3/std/list.shard` (`List.sum`, its equations, two theorems), and
+calc's first claim `eval_add` on `eval.eq_2`, both under
+`kernel/test/define_test.sh`; the Int fixture runs through `Int.decEq`.
+Gates: 103 pins, parity over 24 closures and 81,586 lines, 26
+entrypoints. Next: slice 3.14.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

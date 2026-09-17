@@ -204,7 +204,8 @@ LOAD root=DIR route=3 engine=bootstrap             ; the run: route and engine s
 INIT NAME: N declarations admitted                 ; the Init load through NAME (§3.1), so far
 ACCEPT M.x module=M hash=H axioms=a,b init=NAME    ; identity, module, fingerprint, closure, the prefix at the check
 MODULE M file=F hash=H sees=M1,M2                  ; the module done: its hash over its declarations, its closure
-RUNNABLE fn M.f | RUNNABLE extern M.e | RUNNABLE type M.T   ; an E declaration classified (§6.7; R45's status kind: runnable, no L meaning)
+RUNNABLE fn M.f why=OBSTACLE | RUNNABLE extern M.e | RUNNABLE type M.T   ; an E declaration classified (§6.7; R45's status kind: runnable, no L meaning); a fn's obstacle to a definition named (§8.4 rule 1)
+DEFINE M.f equations=M.f.eq_1,… [pending=ROOT,…]   ; a fn defined (§8.4, slice 3.13): its definition and equations ACCEPT lines, its E body attached
 REALIZE NAME supplied equations=M.NAME.realize_1,… | REALIZE NAME view equations=   ; a realization attached under NAME's identity (§7.5)
 REFUSE M.x REASON | REFUSE M.f REASON: …           ; K's refusal; the classifier's, with its message
 POLICY M.x outside the policy: a | PENDING M.x sorry | PENDING NAME measure
@@ -698,7 +699,10 @@ preference; K sees one `std.list.List` in either environment.
   parameter then admitted again as a parameter — `DISCHARGE NAME fn`
   says linked, not discharged — since a `fn` has no L meaning at
   Stage 0 (§0); under Stage 1 the implementation's definition takes
-  the parameter's place in the fork and nowhere else (§8.5); `(requirement NAME …)` discharged by the implementation's
+  the parameter's place in the fork and nowhere else (§8.5): when the
+  fork holds a definition under the parameter's identity no parameter
+  is admitted over it and the line is `DISCHARGE NAME defined`
+  (slice 3.13); `(requirement NAME …)` discharged by the implementation's
   `(fulfills NAME PROOF)` — the statement re-read in the fork, where
   the sig types are concrete, and the proof `(exact TERM)` checked as
   a theorem or `sorry` recorded pending; a view `theorem` is not
@@ -842,7 +846,9 @@ that is neither bound nor a constructor: `unbound_name`), two is
    passes as the body, beside it.
 
 A classified `fn` is recorded `RUNNABLE fn NAME` (R45's status kind:
-runnable, no L meaning); an extern `RUNNABLE extern NAME`; a profile
+runnable, no L meaning; since slice 3.13 with `why=` the obstacle to
+its definition, or `DEFINE NAME equations=…` when it has one, §8.4);
+an extern `RUNNABLE extern NAME`; a profile
 `type` `RUNNABLE type NAME`; a refusal is `REFUSE NAME reason` like
 K's, and counts as one.
 
@@ -1093,10 +1099,14 @@ be **matched** in E and never **built** there (`erased_field`): the
 proof is not there. S numerals type as `Nat` (the slice-5 pass typed
 them as `Int`).
 
-**The primitive table's L identities.** Entries 0–17 (the profile's
-spellings) have none: they are the bootstrap's Int operations and are
-refused inside a `realize` body with the pointer to the naming-law
-spelling (`no_l_identity`). Entries 18 and up are L constants under
+**The primitive table's L identities.** Entries 0–17 (the operator
+spellings) have none of their own: they are the bootstrap's Int
+operations. Since slice 3.13 an operator resolves to the naming-law
+identity by its operands' static types where `ev` and K agree (§8.4
+rule 3: `+ *` at `Nat`, `+ - *` at `Int`, the comparisons as the
+decisions), and is refused inside a `realize` body otherwise with the
+pointer to the naming-law spelling (`no_l_identity`; `- / mod` at
+`Nat` are `nat_operator`). Entries 18 and up are L constants under
 their own names. Slice 5b adds K's own accelerated `Nat` set —
 `Nat.add Nat.mul Nat.div Nat.mod Nat.gcd Nat.pow Nat.beq Nat.ble`
 beside the `Nat.sub` and bitwise entries of slice 5 (`reduce_nat`'s
@@ -1594,8 +1604,27 @@ the toolchain's closures, so both readers agree at every commit:
 - **3.12 Stage 1's design on disk, 2026-09-17 (§8.4, §8.5; §13
   items 43–46).** The two guards carried from phase 2 stated; the
   Stage-1 slices cut; the view stance ruled.
+- **3.13 `fn` = `def` + `realize`, 2026-09-17 (§8.4, §8.5; §13 items
+  43–46 as built).** `kernel/define.shard` and the loader's definition
+  path: a classified `fn` whose signature's types and body's heads
+  have L identities gets a `DefnDecl` K checks — the leading case tree
+  as nested recursors, the structural parameter's split at the top
+  with the other parameters abstracted in the motive, an
+  immediate-field self-call the induction hypothesis — then its
+  equations `NAME.eq_N` by `Eq.refl` through the realize path, the E
+  body attached, `DEFINE` recorded; an obstacle leaves it `RUNNABLE
+  … why=…`; an eligible failure refuses it. The operator identities
+  by operand type and the one `Nat → Int` coercion on numerals; a
+  `def` written in the E forms; a definition displacing the view's
+  parameter in the fork (`DISCHARGE … defined`); the translation state
+  a record. Eight pins (`define_basic`, `define_depth`,
+  `define_nat_operator`, `define_runnable`, `define_refused`,
+  `def_match`, `view_eq_hidden`, `view_rfl`; the pins stream the
+  export through `Int.decEq` now), `kernel/test/define_test.sh` over
+  `v3/std/list.shard` (the first std file: `List.sum`, its equations,
+  two theorems) and calc's `eval` with its first claim `eval_add`.
 
-Then, as planned: Stage 1 (§8.4), then I.
+Then, as planned: the rest of Stage 1 (§8.4's slices), then I.
 
 ### 8.4 Stage 1 — one grammar, one elaborator, `fn` = `def` + `realize` (phase 3, RULED 2026-09-17)
 
@@ -1646,16 +1675,35 @@ parity, route 2's byte-tie and T0 green:
    never a silent fall-back to `RUNNABLE`: a typo must not quietly
    degrade a definition to a body no theorem can cite. K's own sources
    import no `Init`, so nothing inside the seal changes at this slice
-   (their `fn`s enter L at the flip, rule 1).
+   (their `fn`s enter L at the flip, rule 1). **As built:** the
+   obstacles are `e_only_type` (a binder or result type with no L
+   identity here), `no_l_meaning` (a callee that is `RUNNABLE`, an
+   extern), `no_l_identity` (an operator with no identity at its
+   operand types, a string or symbol literal), `unknown_constant` (a
+   constructor of an E-only type; a primitive's identity past the
+   Init prefix), `measure_pending` (rule 4), `numeral_pattern` (slice
+   3.15's) and `recursion_depth` (slice 3.14's; rule 2) — `RUNNABLE fn
+   NAME why=OBSTACLE`; every other failure is `REFUSE NAME reason`
+   through the classifier's record. The equations are stated only where
+   `Eq` and `Eq.refl` are in scope (an Init prefix that ends before
+   them gives `DEFINE NAME equations=` empty: the definition alone).
+   The fn enters the E table before its definition is attempted, so a
+   self-call types statically.
 2. **The definition's value uses the recursor directly.** The binders
    are lambdas; the leading case tree (§7.5's `compile`) is nested
    `T.rec` with a constant motive, the reverse of the derived view's
    erasure of a recursor; a self-call on an **immediate** constructor
    field of the matched parameter is the induction hypothesis of the
    same recursor. A self-call on a deeper field (`List.concat` on `t`
-   under `(cons x (cons z t))`) is `recursion_depth` at this slice with
-   the pointer to a measure or to slice 3.14; a self-call not on a
-   field of a matched parameter is `realize_descent` as today. The
+   under `(cons x (cons z t))`) is `recursion_depth` at this slice —
+   an **obstacle** (`RUNNABLE … why=recursion_depth`), since it is
+   slice 3.14's shape and not an author's error (calc's `parse_rest`
+   is one); a self-call not on a field of a matched parameter is
+   `realize_descent` as today, a refusal. Nested and non-leading
+   matches split by the recursor with a constant motive and open their
+   hypotheses unused; a match on a variable whose constructor an
+   enclosing split fixed is resolved statically (the matrix knows it),
+   never a second recursor. The
    equations are `NAME.eq_N`, one per leaf as §7.5 states them, proven
    by `Eq.refl` — K unfolds the definition and iota-reduces the
    recursor on the constructor-headed left-hand side — and the body is
@@ -1673,17 +1721,31 @@ parity, route 2's byte-tie and T0 green:
    difference and `Nat.sub` truncates, and no dump could tie the two.
    `/` and `mod` at `Nat` are refused likewise (`ev`'s `/` is stuck at
    zero, `Nat.div` is total); at `Int` they have no identity (rule 5,
-   unchanged). Bitwise and symbol entries have none. The classifier's
-   static result type of the three comparisons flips from the
-   prelude's `Bool` to `Decidable` where `Init` is in scope, which is
-   what `if` accepts (item 9); `ev`'s cells are unchanged (item 17).
+   unchanged). Bitwise and symbol entries have none. **As built:** the
+   operand types are the classifier's static types, and `+ - *` on two
+   `Nat` operands type as `Nat` statically (`prim_static`), so a nested
+   `(+ n (+ n n))` resolves; the comparisons' static result type stays
+   the prelude's `Bool` — the translation of an `if` reads the
+   decision's inductive off K's type of `Nat.decLt a b`, so no flip
+   was needed (`ev`'s cells unchanged, item 17). **Numerals** (law
+   §5.2's one coercion): a non-negative numeral at an expected `Int`
+   is `Int.ofNat n` and a negative one `Int.negSucc (-n-1)`, where
+   `Init`'s `Int.ofNat` is in scope; at `Nat`, or with no expected
+   type, K's `Nat` literal as before — so `(match xs (nil 0) …)` at
+   `Int` states `Int.ofNat 0`, and a theorem about it spells the
+   coercion until slice 3.15's numeral rule in L.
 4. **A `fn` with a non-structural measure stays `RUNNABLE`** at this
    slice, reason `measure_pending`; slice 3.14 gives it
    `WellFounded.fix`.
 5. **A `def` in the E forms** is elaborated by the same `tr` with the
    declared type as the expected type; the explicit-L path is
-   unchanged and the two may mix in one body. A pin shows a `def`
-   with a `match`.
+   unchanged. **As built:** the reader's explicit-L path is tried
+   first; when it fails on a `def`, the form is read as a `fn`'s
+   signature and body by the classifier and defined the same way (the
+   definition only — no E body, no equations); when that fails too the
+   reader's own error stands. A body mixing explicit-L forms inside
+   the E forms is slice 3.15's. The pin `def_match` shows a `def` with
+   a `match`.
 
 **Not in 3.13:** nested and numeral patterns beyond the leading case
 tree (`equation_form`, as for a `realize`), mutual recursion,
@@ -2464,6 +2526,11 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     until a theorem fails to cite the function); `brecOn` from the
     first slice (Lean's encoding, needed only for deeper structural
     recursion — 3.14's). Deeper recursion and measures are 3.14's.
+    **As built (slice 3.13):** `recursion_depth` is an obstacle, not a
+    refusal — it is 3.14's shape, and calc's `parse_rest` has it; the
+    equations need `Eq` in scope; in the fork a definition displaces
+    the view's parameter (`DISCHARGE … defined`, §8.5); the fn is in
+    the E table before its definition so a self-call types.
 44. **Operator identities by operand type, only where `ev` already
     agrees with K** (§8.4 rule 3; closes item 38's open question):
     `+ *` at `Nat`, `+ - *` at `Int`, the three comparisons at both
@@ -2471,7 +2538,12 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     naming-law pointer. Alternative: resolve `-` at `Nat` to `Nat.sub`
     in the E program — the bootstrap, which has no static types,
     would compute the integer difference where K truncates, and
-    parity and route 2 could not tie the two.
+    parity and route 2 could not tie the two. **As built (3.13):**
+    `+ - *` on two `Nat` operands type as `Nat` in the static pass;
+    the comparisons keep the prelude's `Bool` statically (the
+    translation reads the decision off K); a numeral at an expected
+    `Int` is `Int.ofNat n` / `Int.negSucc (-n-1)` — law §5.2's one
+    coercion, in E only until 3.15.
 45. **One term grammar for `def` and `fn`, one elaborator** (§8.4
     guard 1, carried from the phase-2 direction checkpoint): the
     surface is the union of the explicit-L and E forms, `tr` the

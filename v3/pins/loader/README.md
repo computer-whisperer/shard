@@ -22,6 +22,9 @@ record that is not a module, an Init load or an acceptance:
 ;;                                     no_realization, erased_in_runtime, noncomputable; an equation K refused is
 ;;                                     NAME.realize_N refused conversion
 ;; expect: NAME pending measure        a realization attached under a measure other than struct (§7.2): the obligation reported
+;; expect: NAME runnable REASON       every record accepted, and the fn NAME is RUNNABLE with that obstacle to L meaning
+;;                                     named (§8.4 rule 1, slice 3.13): e_only_type, no_l_meaning, no_l_identity, unknown_constant,
+;;                                     measure_pending, numeral_pattern, recursion_depth
 ;; expect: NAME impl-error REASON      the implementation check (§6.6): impl_missing_type, impl_missing_fn,
 ;;                                     impl_missing_fulfills, impl_type_arity, impl_signature, fulfills_unknown
 ;; expect: read-error REASON           the reader refused (the file's reading ends there)
@@ -33,7 +36,13 @@ record that is not a module, an Init load or an acceptance:
 ;;                                     a directory (lib) is its view and then its implementation checked
 ```
 
-A `REALIZE` record (a realization attached, §7.5) counts as accepted, as `RUNNABLE` does.
+A `REALIZE` record (a realization attached, §7.5) counts as accepted, as `RUNNABLE` does,
+and so does `DEFINE` (a fn defined with its equations, §8.4). The cases stream the export
+through `Int.decEq` (`fixtures/init_prefix_int.ndjson`, 35,371 lines; slice 3.13) — the
+operator identities and the decisions live past the 3000-line prefix; `init_not_found`
+asks for `Int.tdiv`, past it. The slice-3.13 refusals a header may state: `nat_operator`,
+`recursion_depth` (as an obstacle), `define_matrix`, `realize_recursion` and
+`realize_descent` for a fn.
 
 `v3/kernel/test/loader_pins_test.shard` replays every case in its list;
 `loader_test.shard` holds the cases a header cannot state (two root
@@ -69,4 +78,19 @@ case under the package root, by the `;; root:` header (the case's
 files then sit where a client of `kernel/k` must). Slice 3.9's records:
 `record_basic` (a plain, a `(ctor …)` and a parametric record; `make`
 in any order; `with` chained; the closure also tied by parity) and
-`record_make` (a `make` missing a field: `record_make`).
+`record_make` (a `make` missing a field: `record_make`). Slice 3.13's
+(`fn` = `def` + `realize`, §8.4): `define_basic` (a non-recursive fn
+and a structurally recursive one defined with `eq_N`, theorems citing
+the equations, an accumulator through the abstracted motive, `+` and
+`lt` by operand type, a `let` and an `if` in tail position),
+`define_depth` (a self-call two constructors down: `RUNNABLE …
+why=recursion_depth`), `define_nat_operator` (`-` at `Nat` refused),
+`define_runnable` (the obstacles named: a `Symbol` binder, a call to
+such a fn, an extern, a measure, a numeral pattern — beside a fn that
+is defined), `define_refused` (an eligible fn refused: a self-call
+without a measure), `def_match` (a `def` in the E forms, rule 5), and
+§8.5's `view_eq_hidden` (a consumer citing `lib.step.eq_1`:
+`unknown_constant`) and `view_rfl` (a consumer's `Eq.refl` through
+the implementation's body: K's `conversion` refusal) — both with the
+directory as a second root, where the implementation's own check
+shows `DEFINE lib.step` and `DISCHARGE lib.step defined`.

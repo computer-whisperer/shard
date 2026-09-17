@@ -1,0 +1,418 @@
+;;; v3/kernel/define.shard — Stage 1's `fn` = `def` + `realize` (v3/LANGUAGE.md
+;;; §8.4; §13 items 43–45; law §4.4, §5.1). A classified E function whose
+;;; signature's types and body's heads all have L identities gets a definition
+;;; K checks: its binders as lambdas, its leading case tree as nested recursors
+;;; with a constant motive, the structural parameter's split at the top with
+;;; the other parameters abstracted in the motive so an immediate-field
+;;; self-call is the induction hypothesis applied to the call's other
+;;; arguments. The equations `NAME.eq_N` (one per leaf, by `Eq.refl`) and the
+;;; executable body then attach through realize.shard's path. A function that
+;;; cannot have L meaning here stays RUNNABLE with the obstacle named (DfSkip);
+;;; one that can, and whose definition fails, is refused (DfErr) — never a
+;;; silent fall-back. Phase 3, slice 3.13.
+(import "realize.shard")
+(import "reader.shard")
+(use kernel.k)
+(use kernel.classify)
+(use kernel.decl)
+(use kernel.erase)
+(use kernel.etable)
+(use kernel.expr)
+(use kernel.level)
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.prog)
+(use kernel.reader)
+(use kernel.realize)
+(use kernel.util)
+(use kernel.decl.ConstantVal)
+(use kernel.decl.Declaration)
+(use kernel.decl.DefinitionSafety)
+(use kernel.decl.ReducibilityHints)
+(use kernel.erase.BRole)
+(use kernel.erase.TBind)
+(use kernel.etable.EInfo)
+(use kernel.etable.ESt)
+(use kernel.expr.Expr)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.prog.EArm)
+(use kernel.prog.EDecl)
+(use kernel.prog.EPat)
+(use kernel.prog.ERec)
+(use kernel.prog.ETerm)
+(use kernel.prog.EType)
+(use kernel.reader.Scope)
+(use kernel.realize.Col)
+(use kernel.realize.EV)
+(use kernel.realize.Either2)
+(use kernel.realize.Either3)
+(use kernel.realize.Field)
+(use kernel.realize.Row)
+(use kernel.realize.TrRes)
+
+;; ---- the verdicts ----------------------------------------------------------------------------
+;; DfSkip: the fn has no L meaning here (RUNNABLE, the obstacle named); DfErr: it should, and
+;; the definition failed (refused); DfOk: the E table (Init inductives the walk registered) and
+;; the definition to admit
+(type DfRes (DfSkip Symbol (List Int)) (DfErr Symbol (List Int)) (DfOk ESt Declaration))
+;; the equations after the definition is admitted
+(type DqRes (DqErr Symbol (List Int)) (DqOk ESt (List Declaration)))
+;; the signature's locals: the type parameters, the data parameters, the result's L type
+(type DfSig (DfSig (List Expr) (List Expr) Expr))
+(type DfSigRes (DsOk Tr DfSig) (DsErr Tr Symbol (List Int)))
+;; a variable the matrix knows the constructor of: the local's id, the constructor, its fields
+(type Known (Known Int Name (List Field)))
+
+;; the obstacles: a fn with one is RUNNABLE, as before Stage 1 (§8.4 rule 1)
+(fn df_obstacle ((e Symbol)) Bool
+  (bool_or (sym_eq e (quote no_l_meaning))
+  (bool_or (sym_eq e (quote no_l_identity))
+  (bool_or (sym_eq e (quote unknown_constant))
+  (bool_or (sym_eq e (quote e_only_type))
+  (bool_or (sym_eq e (quote measure_pending))
+  (bool_or (sym_eq e (quote numeral_pattern))
+           (sym_eq e (quote recursion_depth)))))))))   ; slice 3.14's course-of-values: an obstacle until then, never an author's error
+(fn df_verdict ((e Symbol) (m (List Int))) DfRes (if (df_obstacle e) (DfSkip e m) (DfErr e m)))
+
+;; ---- the entry: the definition of an E function ------------------------------------------------
+(fn define_fn ((es ESt) (sc Scope) (env CheckedEnv) (d EDecl)) DfRes
+  (match d
+    ((EFn k ntp ptypes rt rec body)
+     (match rec
+       ((RecMeasure _) (DfSkip (quote measure_pending) "a measure other than struct: WellFounded.fix is slice 3.14"))
+       (_
+        (match (df_signature (tr_new (w0 env) es sc k Nil (def_rec (rec_pos rec) Nil ptypes False)) ntp ptypes rt)
+          ((DsErr _ e m) (df_verdict e m))
+          ((DsOk t sig)
+           (if (has_lit_pattern body) (DfSkip (quote numeral_pattern) "a numeral pattern: Stage 1's numeral rule is slice 3.15")
+           (match (check_calls es env k rec (param_flags (len ptypes) rec) body)
+             ((Some (Pair e m)) (df_verdict e m))
+             (None
+              (match (df_value t sig ptypes rt rec body)
+                ((TrErr e m) (df_verdict e m))
+                ((TrOk t1 value)
+                 (match sig
+                   ((DfSig tps params rl)
+                    (match (tr_pis t1 (append tps params) rl)
+                      ((Pair t2 ty)
+                       (DfOk (Tr.es t2) (DefnDecl (ConstantVal k Nil ty) value (HRegular (def_height env value)) Safe (list k)))))))))))))))))
+    (_ (DfSkip (quote not_a_fn) "only a fn is defined"))))
+(fn rec_pos ((rec ERec)) Int (match rec ((RecStruct i) i) (_ (- 0 1))))
+
+;; the equations, once the definition is in the environment: the leaves of the case tree as
+;; theorems NAME.eq_N proven by Eq.refl (realize.shard's equations, the self-call the constant)
+(fn define_equations ((es ESt) (sc Scope) (env CheckedEnv) (d EDecl)) DqRes
+  (match d
+    ((EFn k ntp ptypes rt rec body)
+     (if (bool_not (has_eq env)) (DqOk es Nil)   ; no Eq in scope (an Init prefix before it): the definition alone
+     (match (df_signature (tr_new (w0 env) es sc k Nil (def_rec (rec_pos rec) Nil ptypes True)) ntp ptypes rt)
+       ((DsErr _ e m) (DqErr e m))
+       ((DsOk t (DfSig tps params rl))
+        (match (equations t (df_binds tps params ptypes) Nil rl rt body rec Nil)
+          ((Pair _ (Left3 e m)) (DqErr e m))
+          ((Pair t1 (Right3 decls)) (DqOk (Tr.es t1) decls)))))))
+    (_ (DqErr (quote not_a_fn) "only a fn is defined"))))
+(fn has_eq ((env CheckedEnv)) Bool
+  (match (env_find env (nm_eq)) (None False) ((Some _) (match (env_find env (nm_eq_refl)) (None False) ((Some _) True)))))
+(fn df_binds ((tps (List Expr)) (params (List Expr)) (ptypes (List EType))) (List TBind)
+  (append (df_tbinds tps) (df_dbinds params ptypes)))
+(fn df_tbinds ((tps (List Expr))) (List TBind)
+  (measure (struct tps))
+  (match tps (Nil Nil) ((Cons fv r) (Cons (TBind (n1 (quote T)) BType fv) (df_tbinds r)))))
+(fn df_dbinds ((params (List Expr)) (ptypes (List EType))) (List TBind)
+  (measure (struct params))
+  (match params
+    (Nil Nil)
+    ((Cons fv r) (match ptypes ((Cons ety er) (Cons (TBind (n1 (quote x)) (BData ety) fv) (df_dbinds r er))) (Nil Nil)))))
+
+;; ---- the signature as locals ---------------------------------------------------------------------
+;; the type parameters at Type (E types live in Type, §4), the data parameters at their L types,
+;; the result's L type; a type with no L identity is the obstacle e_only_type
+(fn df_signature ((t Tr) (ntp Int) (ptypes (List EType)) (rt EType)) DfSigRes
+  (match (df_tparams t ntp Nil)
+    ((Pair t1 tps)
+     (let ((t2 (tr_set_tps t1 tps)))
+       (match (df_params t2 ptypes Nil)
+         ((Pair t3 None) (DsErr t3 (quote e_only_type) "a binder's type has no L identity here (an E-only type, or Nat / Int without Init)"))
+         ((Pair t3 (Some params))
+          (match (tr_type t3 rt)
+            ((Pair t4 None) (DsErr t4 (quote e_only_type) "the result type has no L identity here (an E-only type, or Nat / Int without Init)"))
+            ((Pair t4 (Some rl)) (DsOk t4 (DfSig tps params rl))))))))))
+(fn df_tparams ((t Tr) (n Int) (acc (List Expr))) (Pair Tr (List Expr))
+  (measure n)
+  (if (lt n 1) (Pair t (rev acc))
+    (match (tr_local t (n1 (quote T)) (mk_sort (level_one)))
+      ((Pair t1 fv) (df_tparams t1 (- n 1) (Cons fv acc))))))
+(fn df_params ((t Tr) (ptypes (List EType)) (acc (List Expr))) (Pair Tr (Option (List Expr)))
+  (measure (struct ptypes))
+  (match ptypes
+    (Nil (Pair t (Some (rev acc))))
+    ((Cons ety r)
+     (match (tr_type t ety)
+       ((Pair t1 None) (Pair t1 None))
+       ((Pair t1 (Some l))
+        (match (tr_local t1 (n1 (quote x)) l)
+          ((Pair t2 fv) (df_params t2 r (Cons fv acc)))))))))
+
+;; ---- the value ---------------------------------------------------------------------------------------
+(fn df_value ((t Tr) (sig DfSig) (ptypes (List EType)) (rt EType) (rec ERec) (body ETerm)) TrRes
+  (match sig
+    ((DfSig tps params rl)
+     (match rec
+       ((RecStruct i) (df_struct t tps params ptypes rt rl i body))
+       (_
+        (match (df_term t (rev (df_env params ptypes params (- 0 1) 0)) rt rl body Nil)
+          ((TrErr e m) (TrErr e m))
+          ((TrOk t1 b) (match (tr_lams t1 (append tps params) b) ((Pair t2 v) (TrOk t2 v))))))))))
+;; the parameters' variables in binder order (the caller reverses): the structural parameter
+;; (position i) flagged 2 and kept as itself, the others taken from `subst` (the motive's
+;; abstracted locals inside a minor, the parameters themselves otherwise)
+(fn df_env ((params (List Expr)) (ptypes (List EType)) (subst (List Expr)) (i Int) (k Int)) (List EV)
+  (measure (struct params))
+  (match params
+    (Nil Nil)
+    ((Cons fv r)
+     (match ptypes
+       (Nil Nil)
+       ((Cons ety er)
+        (match subst
+          (Nil Nil)
+          ((Cons sv sr)
+           (Cons (if (int_eq k i) (EV fv (Some ety) 2) (EV sv (Some ety) 0)) (df_env r er sr i (+ k 1))))))))))
+
+;; the structural split at the top (§8.4 rule 2): `(T.rec (fun _ => Π others, RET) minors x)
+;; others` — each minor λ fields ihs others . body, the body's matches on x static (the
+;; constructor known), a self-call the induction hypothesis on the call's other arguments
+(fn df_struct ((t Tr) (tps (List Expr)) (params (List Expr)) (ptypes (List EType)) (rt EType) (rl Expr) (i Int) (body ETerm)) TrRes
+  (match (nth params i)
+    (None (TrErr (quote realize_descent) "the structural parameter is not a parameter"))
+    ((Some x)
+     (match (nth ptypes i)
+       ((Some (ETCon ind eargs))
+        (match (es_info (Tr.es t) ind)
+          ((Some (EIInd _ ctors))
+           (match (scrutinee_type t x)
+             ((Pair t1 None) (TrErr (quote untyped_subterm) "K could not type the structural parameter"))
+             ((Pair t1 (Some (Pair _ (Pair ls largs))))
+              (match (rec_usable t1 ind ls)
+                ((Some (Pair e m)) (TrErr e m))
+                (None
+                 (match (df_others t1 params ptypes i 0 Nil)
+                   ((Pair t2 None) (TrErr (quote e_only_type) "a parameter's type has no L identity"))
+                   ((Pair t2 (Some others))
+                    (match (tr_pis t2 others rl)
+                      ((Pair t3 mres)
+                       (match (df_top_minors t3 params ptypes rt rl i x others mres ctors ls largs body Nil)
+                         ((Pair t4 (Left2 e m)) (TrErr e m))
+                         ((Pair t4 (Right2 (Pair minors _)))
+                          (match (rec_app t4 ind ls largs mres minors x)
+                            ((TrErr e m) (TrErr e m))
+                            ((TrOk t5 recterm)
+                             (match (tr_apps t5 recterm (without_index params i 0))
+                               ((Pair t6 b) (match (tr_lams t6 (append tps params) b) ((Pair t7 v) (TrOk t7 v))))))))))))))))))
+          (_ (TrErr (quote untyped_subterm) (append (show_name ind) " is not an E inductive")))))
+       (_ (TrErr (quote untyped_subterm) "the structural parameter's type is a type parameter"))))))
+;; fresh locals for the other parameters, the motive's binders
+(fn df_others ((t Tr) (params (List Expr)) (ptypes (List EType)) (i Int) (k Int) (acc (List Expr))) (Pair Tr (Option (List Expr)))
+  (measure (struct params))
+  (match params
+    (Nil (Pair t (Some (rev acc))))
+    ((Cons _ r)
+     (match ptypes
+       (Nil (Pair t (Some (rev acc))))
+       ((Cons ety er)
+        (if (int_eq k i) (df_others t r er i (+ k 1) acc)
+          (match (tr_type t ety)
+            ((Pair t1 None) (Pair t1 None))
+            ((Pair t1 (Some l))
+             (match (tr_local t1 (n1 (quote o)) l)
+               ((Pair t2 fv) (df_others t2 r er i (+ k 1) (Cons fv acc))))))))))))
+(fn without_index ((xs (List Expr)) (i Int) (k Int)) (List Expr)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons x r) (if (int_eq k i) (without_index r i (+ k 1)) (Cons x (without_index r i (+ k 1)))))))
+;; the substitution for df_env inside a minor: the others' locals with x at its position
+(fn with_at ((others (List Expr)) (x Expr) (i Int)) (List Expr) (append (take i others) (Cons x (drop i others))))
+(fn df_top_minors ((t Tr) (params (List Expr)) (ptypes (List EType)) (rt EType) (rl Expr) (i Int) (x Expr) (others (List Expr)) (mres Expr) (ctors (List Name)) (ls (List Level)) (largs (List Expr)) (body ETerm) (acc (List Expr))) (Pair Tr Either2)
+  (measure (struct ctors))
+  (match ctors
+    (Nil (Pair t (Right2 (Pair (rev acc) mres))))
+    ((Cons c r)
+     (match (rz_open_ctor t c ls largs)
+       ((Pair t1 None) (Pair t1 (Left2 (quote equation_form) (append (show_name c) ": K could not open the constructor"))))
+       ((Pair t1 (Some (Pair fields _)))
+        (match (open_ihs t1 fields mres Nil)
+          ((Pair t2 ihs)
+           (let ((t3 (tr_set_rec t2 (def_rec i (zip_ihs fields ihs) ptypes False)))
+                 (env (rev (df_env params ptypes (with_at others x i) i 0)))
+                 (known (list (Known (fvar_id_of x) c fields))))
+             (match (df_term t3 env rt rl body known)
+               ((TrErr e m) (Pair t3 (Left2 e m)))
+               ((TrOk t4 b)
+                (match (tr_lams t4 (append (field_fvars fields) (append ihs others)) b)
+                  ((Pair t5 minor) (df_top_minors (tr_set_rec t5 (Tr.rec t)) params ptypes rt rl i x others mres r ls largs body (Cons minor acc))))))))))))))
+(fn zip_ihs ((fields (List Field)) (ihs (List Expr))) (List (Pair Int Expr))
+  (measure (struct fields))
+  (match fields
+    (Nil Nil)
+    ((Cons (Field fv _ True) r) (match ihs ((Cons ih ir) (Cons (Pair (fvar_id_of fv) ih) (zip_ihs r ir))) (Nil Nil)))
+    ((Cons _ r) (zip_ihs r ihs))))
+
+;; ---- the term in tail position ------------------------------------------------------------------
+;; a leading match on a variable is a split of the matrix (static where the constructor is
+;; known); let and if keep their bodies in tail position; anything else is realize.shard's tr
+(fn df_term ((t Tr) (env (List EV)) (rt EType) (rl Expr) (e ETerm) (known (List Known))) TrRes
+  (match e
+    ((EMatch (EBVar j) arms)
+     (match (nth env j)
+       ((Some (EV (FVar d id) (Some (ETCon ind eargs)) flag))
+        (match (es_info (Tr.es t) ind)
+          ((Some (EIInd _ _))
+           (match (rows_of arms Nil)
+             (None (TrErr (quote numeral_pattern) "a numeral pattern (slice 3.15)"))
+             ((Some rows) (df_matrix t env rt rl (list (Col (FVar d id) (ETCon ind eargs) flag)) rows known))))
+          (_ (tr t env (Some rt) e))))
+       (_ (tr t env (Some rt) e))))
+    ((ELet rs b) (df_let t env rt rl rs b known Nil))
+    ((EIf c a b) (df_if t env rt rl c a b known))
+    (_ (tr t env (Some rt) e))))
+(fn df_let ((t Tr) (env (List EV)) (rt EType) (rl Expr) (rs (List ETerm)) (b ETerm) (known (List Known)) (fvs (List Expr))) TrRes
+  (measure (struct rs))
+  (match rs
+    (Nil
+     (match (df_term t env rt rl b known)
+       ((TrErr e m) (TrErr e m))
+       ((TrOk t1 b1) (match (tr_lams t1 (rev fvs) b1) ((Pair t2 e) (TrOk t2 e))))))
+    ((Cons v r)
+     (match (tr t env None v)
+       ((TrErr e m) (TrErr e m))
+       ((TrOk t1 v1)
+        (match (tr_infer t1 v1)
+          ((Pair t2 None) (TrErr (quote untyped_subterm) "K could not type a let binding"))
+          ((Pair t2 (Some ty))
+           (match (tr_local_val t2 (n1 (quote x)) ty v1)
+             ((Pair t3 fv) (df_let t3 (Cons (EV fv (c_type (Tr.es t3) (env_types env) v) 0) env) rt rl r b known (Cons fv fvs)))))))))))
+;; if: the condition's two-constructor inductive's recursor, the branches in tail position
+(fn df_if ((t Tr) (env (List EV)) (rt EType) (rl Expr) (c ETerm) (a ETerm) (b ETerm) (known (List Known))) TrRes
+  (match (tr t env None c)
+    ((TrErr e m) (TrErr e m))
+    ((TrOk t1 c1)
+     (match (scrutinee_type t1 c1)
+       ((Pair t2 None) (TrErr (quote untyped_subterm) "the condition of an if is not a value of a two-constructor E inductive"))
+       ((Pair t2 (Some (Pair ind (Pair ls largs))))
+        (match (ind_ctor_names t2 ind)
+          ((Cons c0 (Cons c1n Nil))
+           (match (rec_usable t2 ind ls)
+             ((Some (Pair e m)) (TrErr e m))
+             (None
+              (match (df_branches t2 env rt rl (list c0 c1n) (list b a) ls largs known Nil)
+                ((Pair t3 (Left2 e m)) (TrErr e m))
+                ((Pair t3 (Right2 (Pair minors _))) (rec_app t3 ind ls largs rl minors c1))))))
+          (_ (TrErr (quote untyped_subterm) (append (show_name ind) ": an if needs a two-constructor type")))))))))
+(fn df_branches ((t Tr) (env (List EV)) (rt EType) (rl Expr) (ctors (List Name)) (bodies (List ETerm)) (ls (List Level)) (largs (List Expr)) (known (List Known)) (acc (List Expr))) (Pair Tr Either2)
+  (measure (struct ctors))
+  (match ctors
+    (Nil (Pair t (Right2 (Pair (rev acc) rl))))
+    ((Cons c r)
+     (match bodies
+       (Nil (Pair t (Right2 (Pair (rev acc) rl))))
+       ((Cons body br)
+        (match (rz_open_ctor t c ls largs)
+          ((Pair t1 None) (Pair t1 (Left2 (quote equation_form) (append (show_name c) ": K could not open the constructor"))))
+          ((Pair t1 (Some (Pair fields _)))
+           (match (open_ihs t1 fields rl Nil)
+             ((Pair t2 ihs)
+              (match (df_term t2 env rt rl body known)
+                ((TrErr e m) (Pair t2 (Left2 e m)))
+                ((TrOk t3 b)
+                 (match (tr_lams t3 (append (field_fvars fields) ihs) b)
+                   ((Pair t4 minor) (df_branches t4 env rt rl r br ls largs known (Cons minor acc)))))))))))))))
+
+;; ---- the matrix ------------------------------------------------------------------------------------------
+;; realize.shard's rows and columns (§7.5): the first row all variables is a leaf; else the first
+;; column some row constrains splits — statically where the variable's constructor is known,
+;; by the recursor otherwise
+(fn df_matrix ((t Tr) (env (List EV)) (rt EType) (rl Expr) (cols (List Col)) (rows (List Row)) (known (List Known))) TrRes
+  (measure (struct rows))
+  (match rows
+    (Nil (TrErr (quote define_matrix) "a constructor no arm covers (the matrix is not exhaustive)"))
+    ((Cons (Row pats rhs slots n) _)
+     (match (ctor_column pats cols 0)
+       (None (df_term t (rev_onto (slot_evs (rz_bind_all pats cols slots) n 0) env) rt rl rhs known))
+       ((Some i)
+        (match (nth cols i)
+          (None (TrErr (quote define_matrix) "column"))
+          ((Some (Col v ety flag))
+           (match (known_of (fvar_id_of v) known)
+             ((Some (Pair c fields)) (df_matrix t env rt rl (split_cols cols i fields flag) (specialize_rows rows i c (len (runtime_fields fields)) (EV v (Some ety) flag) Nil) known))
+             (None (df_split t env rt rl cols rows known i v ety flag))))))))))
+(fn known_of ((id Int) (known (List Known))) (Option (Pair Name (List Field)))
+  (measure (struct known))
+  (match known
+    (Nil None)
+    ((Cons (Known j c fields) r) (if (int_eq id j) (Some (Pair c fields)) (known_of id r)))))
+(fn split_cols ((cols (List Col)) (i Int) (fields (List Field)) (flag Int)) (List Col)
+  (append (take i cols) (append (field_cols fields (if (lt 0 flag) 1 0)) (drop (+ i 1) cols))))
+;; a runtime split: the recursor over the column's inductive with a constant motive
+(fn df_split ((t Tr) (env (List EV)) (rt EType) (rl Expr) (cols (List Col)) (rows (List Row)) (known (List Known)) (i Int) (v Expr) (ety EType) (flag Int)) TrRes
+  (match ety
+    ((ETCon ind _)
+     (match (es_info (Tr.es t) ind)
+       ((Some (EIInd _ ctors))
+        (match (scrutinee_type t v)
+          ((Pair t1 None) (TrErr (quote untyped_subterm) "K could not type a matched variable"))
+          ((Pair t1 (Some (Pair _ (Pair ls largs))))
+           (match (rec_usable t1 ind ls)
+             ((Some (Pair e m)) (TrErr e m))
+             (None
+              (match (df_minors t1 env rt rl cols rows known i v ety flag ctors ls largs Nil)
+                ((Pair t2 (Left2 e m)) (TrErr e m))
+                ((Pair t2 (Right2 (Pair minors _))) (rec_app t2 ind ls largs rl minors v))))))))
+       (_ (TrErr (quote untyped_subterm) (append (show_name ind) " is not an E inductive")))))
+    (_ (TrErr (quote untyped_subterm) "a matched variable whose type is a type parameter (specialization is phase 3)"))))
+(fn df_minors ((t Tr) (env (List EV)) (rt EType) (rl Expr) (cols (List Col)) (rows (List Row)) (known (List Known)) (i Int) (v Expr) (ety EType) (flag Int) (ctors (List Name)) (ls (List Level)) (largs (List Expr)) (acc (List Expr))) (Pair Tr Either2)
+  (measure (struct ctors))
+  (match ctors
+    (Nil (Pair t (Right2 (Pair (rev acc) rl))))
+    ((Cons c r)
+     (match (rz_open_ctor t c ls largs)
+       ((Pair t1 None) (Pair t1 (Left2 (quote equation_form) (append (show_name c) ": K could not open the constructor"))))
+       ((Pair t1 (Some (Pair fields _)))
+        (match (open_ihs t1 fields rl Nil)
+          ((Pair t2 ihs)
+           (match (df_matrix t2 env rt rl (split_cols cols i fields flag) (specialize_rows rows i c (len (runtime_fields fields)) (EV v (Some ety) flag) Nil) (Cons (Known (fvar_id_of v) c fields) known))
+             ((TrErr e m) (Pair t2 (Left2 e m)))
+             ((TrOk t3 b)
+              (match (tr_lams t3 (append (field_fvars fields) ihs) b)
+                ((Pair t4 minor) (df_minors t4 env rt rl cols rows known i v ety flag r ls largs (Cons minor acc)))))))))))))
+
+;; ---- the body's numeral patterns (slice 3.15's rule) ------------------------------------------------
+(fn has_lit_pattern ((e ETerm)) Bool
+  (measure (struct e))
+  (match e
+    ((EMatch s arms) (bool_or (has_lit_pattern s) (arms_lit arms)))
+    ((ELet rs b) (bool_or (any_lit_term rs) (has_lit_pattern b)))
+    ((EIf a b c) (bool_or (has_lit_pattern a) (bool_or (has_lit_pattern b) (has_lit_pattern c))))
+    ((ECtor _ as) (any_lit_term as))
+    ((ECall _ as) (any_lit_term as))
+    ((EPrim _ as) (any_lit_term as))
+    ((EExt _ as) (any_lit_term as))
+    (_ False)))
+(fn any_lit_term ((ts (List ETerm))) Bool
+  (measure (struct ts))
+  (match ts (Nil False) ((Cons x r) (bool_or (has_lit_pattern x) (any_lit_term r)))))
+(fn arms_lit ((arms (List EArm))) Bool
+  (measure (struct arms))
+  (match arms
+    (Nil False)
+    ((Cons (EArm p b) r) (bool_or (pat_lit p) (bool_or (has_lit_pattern b) (arms_lit r))))))
+(fn pat_lit ((p EPat)) Bool
+  (measure (struct p))
+  (match p ((PLit _) True) ((PCtor _ subs) (pats_lit subs)) (_ False)))
+(fn pats_lit ((ps (List EPat))) Bool
+  (measure (struct ps))
+  (match ps (Nil False) ((Cons p r) (bool_or (pat_lit p) (pats_lit r)))))

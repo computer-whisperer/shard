@@ -2003,6 +2003,49 @@ is `docs/FOUNDATION.md` §5.3.
   welds every consumer proof to today's body). The old tree's shape,
   for sizing: 13,229 `fn`s, half non-recursive, a quarter structural,
   a quarter under a measure. Next: slice 3.13.
+- **2026-09-17 — slice 3.13, `fn` = `def` + `realize` (LANGUAGE.md §8.4,
+  §8.5 as built; §13 items 43–46).** `kernel/define.shard` (about 400
+  lines) and the loader's definition path; realize.shard's translation
+  state became a record carrying the definition context, its self-call
+  rule and typed operator identities added, its recursor application
+  and checks factored out for the new file. Found on the way, each a
+  gate's finding: the local fixtures ended at the `Int` inductive, so
+  no `Int.add` — the Int fixture now runs through `Int.decEq` (35,371
+  lines) and the pins stream it (`init_not_found` asks for `Int.tdiv`);
+  `Eq` is declared after `Nat` in the export, so a definition under a
+  prefix through `Nat` gets no equations rather than a refusal; a
+  self-call has no static type until the fn is in the E table, so it
+  enters the table before its definition is attempted, and `+ - *` on
+  two `Nat` operands type as `Nat` statically; a numeral at an
+  expected `Int` is `Int.ofNat` (law §5.2's one coercion), which
+  `List.sum`'s nil case needed; `recursion_depth` reclassified from a
+  refusal to an obstacle when calc's `parse_rest` hit it (slice 3.14's
+  shape, not an author's error); a sig type's parameter is now an E
+  type on the L-to-E side too (`l_to_etype`), so a consumer's fn over
+  a view's opaque type is defined — the `view_*` pins' consumers had
+  been refused `realize_signature`; `Nat`/`Int` need Init's constant in
+  scope on the E-to-L side (a bare `mk_const Nat` had reached K); the
+  parity injectivity check caught `SgOk`/`SgErr` twice (classify.shard
+  has them) and the flat bootstrap had hidden a `count_pis` twin inside
+  the seal; the V3 loader refused `define.shard` where the bootstrap
+  had run it — `PIdent` uncited without its `use`, and `(use
+  kernel.realize.DefRec)` opening the record's field names into
+  pattern variables (`pattern_name`) — so the file cites the accessors
+  qualified and constructs the context through `def_rec`; the
+  bootstrap cannot dump a file that matches Init's constructors, so
+  `v3/std/list.shard` is not a parity closure (define_test is its
+  gate). Twenty pins flipped on the first run, all understood: nine
+  refusals of a definition's equations without `Eq`, four consumers
+  over sig types, the toolchain-side `Int` reaching K, and three whose
+  premise was Stage 0's (`ev_no_l_meaning`, `realize_fn` now use a
+  measure as the obstacle; `realize_no_l_identity` uses `band`); three
+  loader unit cases likewise (R57's fork status is `defined`; R45's
+  third test's fn is `DEFINE`). Gates: 103 loader pins, `define_test`
+  (std/list's `List.sum` with `eq_1`/`eq_2` and two theorems; calc's
+  `eval` with `eq_1..3` and the claim `eval_add`), parity byte-identical
+  over 24 closures and 81,586 lines, route 2 and calc byte-identical,
+  K's seven clients through the V3 loader, 26 entrypoints. Next: slice
+  3.14 (course-of-values and `WellFounded.fix`).
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 
