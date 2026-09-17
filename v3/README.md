@@ -77,7 +77,7 @@ high-memory runner (first pass 2026-09-07: 43 min, 30.4 GB peak).
 **Closed out against the law (2026-09-07, late; records §8):** all 20
 accelerator pins generated (chunks 0–35), the string-literal expansion
 gated on the five identities it names; T0 now compares **axiom
-closures** as §3.6 requires — `kernel/axioms.shard` computes the
+closures** as §3.6 requires — `kernel/k/axioms.shard` computes the
 relation of Lean's `CollectAxioms` as a least fixpoint, the driver's
 `-a` prints one line per admitted constant, `v3/axioms.lean` is the
 oracle over the same environment (65,994 constants, 15 s, built by
@@ -514,7 +514,15 @@ index at no measurable cost; a one-off tool ran the 20 toolchain
 closures, checked they agree file by file, and deleted 218 lines from
 38 files — 979 kept, 357 module opens and 623 `(use M.T)` type opens,
 §13 item 7's cost counted; every gate unchanged, the tool's second
-run finds nothing. **CI (2026-09-15): phase 3's
+run finds nothing. **Slice 3.8 (2026-09-16): the K seal, landing 1 of
+3** — the four leans ruled (nine trust files sealed, the six data
+files public with a new `verdict.shard` for K's answer types; a facade
+`k/k.shard`; a view may import a plain file outside its directory; the
+internals' tests inside): the nine files moved to `kernel/k/`, `Outcome`
+parametric, the sealed-directory rule (`private_module`) with its
+pins; every gate unchanged. The view, the facade and the consumers are
+landing 2; the tests, the client fixture and the documents landing 3.
+**CI (2026-09-15): phase 3's
 slices green on the full gate** — pipeline 482 (`345116f`, slice 3.2)
 green: 22 entrypoints, calc byte-identical in 395 s, parity 130 s over
 21 closures and 68,080 lines, route 2 in 53 s, the full-export replay

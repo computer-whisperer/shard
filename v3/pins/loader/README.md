@@ -51,4 +51,9 @@ realization, cited after). The ratification pass's (§13 item 35,
 2026-09-15): `type_e_only` (no `Init`: `(type Foo (MkFoo Nat))` is E
 only by its field and a `def` citing it is `unknown_constant`) and
 `type_flip` (the same type with `(import Init Nat.add)` enters K, the
-`def` accepted) — the same text, decided by its file's scope.
+`def` accepted) — the same text, decided by its file's scope. The K
+seal's (slice 3.8): `private_module` (a direct import of a file inside
+a directory that has a view, from outside it, refused) and
+`private_inside` (the implementation importing its private helper from
+inside, the consumer importing the directory); `ev_private_match` and
+`ev_launder` now place their consumer inside the directory.

@@ -278,6 +278,17 @@ them; each is a candidate for §13.
   `CheckedEnv`'s constructor, sealed when K is one directory module
   behind a view and its first `meta/` client loads against it (§6.6,
   §13 item 26).
+- **The sealed-directory rule (slice 3.8, 2026-09-16).** A file inside
+  a directory that has a view — `DIR/mod.req.shard` or
+  `DIR/mod.req/mod.req.shard` — is private to that directory: a file
+  under `DIR` may import it, any other importer is refused with
+  `private_module` before the file is read, and `(import "DIR")` is
+  the way in. The directories above the target are tried from the
+  root down; the importer's own directory and its ancestors never seal
+  against it (`loader.shard` `sealed_above`; pins `private_module`,
+  `private_inside`). The private-equality leak's pins (`ev_private_match`,
+  `ev_launder`) now place their consumer inside the directory, the one
+  place an implementation's constructor is still nameable.
 
 ## 4. Declarations — the surface keywords, fixed at phase 2
 
@@ -686,6 +697,20 @@ preference; K sees one `std.list.List` in either environment.
   view should list what `meta/` needs rather than what today's files
   happen to call. Until then the profile exposes the constructor and
   raw-API callers are reviewed toolchain code (R43, `v3/README.md`).
+  **The seal as ruled (2026-09-16; §8.3 slice 3.8, §13 item 26):**
+  nine trust files behind the view, not fifteen — `env tc add
+  inductive nested import axioms accel_pins refgen` move to
+  `kernel/k/`, and the data vocabulary (`name level expr decl intmap
+  json`, and the new `verdict.shard`: `Reason`, `Resource`, `(Outcome
+  E)`, `Verdict`, `Failure`, `(KRes A)`, which name no sealed type)
+  stays public where it is, as Lean's `Expr` is public beside
+  `Environment.add`, the ingestion at `check` being what makes the
+  data safe; `k/k.shard` a facade of one-line wrappers matching the
+  view's signatures; a view may import a plain file outside its own
+  directory; the internals' tests move inside the directory, the
+  hostile battery stays outside as a client; the sealed-directory rule
+  (§3.3). Landing 1 (2026-09-16): the move, the vocabulary split, the
+  rule and its pins; the view, the facade and the consumers follow.
 
 ### 6.7 The classifier, `ev` and `run` as built (slice 5, 2026-09-12)
 
@@ -1386,6 +1411,20 @@ the toolchain's closures, so both readers agree at every commit:
   parity byte-identical over 21 closures, route 2 and calc, 22
   entrypoints, `v3/build.sh` and the compiled `t0`'s fixture tie; a
   second run of the tool finds nothing (the fixpoint).
+- **3.8 the K seal — landing 1 of 3, 2026-09-16 (§13 item 26 as
+  ruled; §6.6).** The nine trust files moved to `kernel/k/` and their
+  paths and `use` lines rewritten (22 files); the vocabulary of K's
+  answers split out to the public `verdict.shard` — `Outcome` made
+  parametric, `(Outcome E)`, so a client matches on it without naming
+  `CheckedEnv`; `RawEnv`, a type nothing used, deleted; the
+  sealed-directory rule in the loader with its two pins; the leak
+  pins moved inside the directory. Gates: 92 loader pins, parity
+  byte-identical (the move is invisible to the projection), route 2
+  and calc, 22 entrypoints, `v3/build.sh` and the compiled `t0`'s tie.
+  A rough edge found on the way: an implementation whose `type` is E
+  only (a built-in field with no L constant in scope) cannot stand for
+  a `sig type`, and the refusal reads `bad_shape: unknown_constant`
+  rather than naming the cause; noted for the view landing.
 
 Then the opener as planned: the K seal under item 26's criterion,
 Stage 1, I.
@@ -1913,7 +1952,12 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     (ratified 2026-09-15):** the seal lands before the first `meta/`
     consumer is written — Stage 1 and I are that consumer, and written
     against the implementation first they become the reason the seal
-    never closes; it follows the `use`-line prune directly.
+    never closes; it follows the `use`-line prune directly. **In
+    progress (2026-09-16, slice 3.8):** the four leans ruled — nine
+    files sealed and six data files public, `k/k.shard` a facade, a
+    view may import a plain file outside its directory, the internals'
+    tests inside; landing 1 (the move, `verdict.shard`, the
+    sealed-directory rule) landed.
 27. **Calc's differential drivers sit outside the program** (§10 item
     2): the harness calls `ev` with values built as data and renders
     the results; an S program names no wire cell at phase 2.
@@ -1947,7 +1991,7 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     spelling, under which a same-spelled native type makes the
     imported one unnameable in that file (T5's `same_spelled`).
 31. **Accelerator authorization dispatches on the expected kind before
-    any exemption** (`kernel/add.shard`, slice 9; GPT-6 R49): a name
+    any exemption** (`kernel/k/add.shard`, slice 9; GPT-6 R49): a name
     the reference table holds as a definition, opaque, axiom or
     inductive must be admitted as that kind; an exempt kind (theorem,
     quotient, constructor, recursor — exempt from BODY comparison)

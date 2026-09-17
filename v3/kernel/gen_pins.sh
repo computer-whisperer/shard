@@ -17,8 +17,8 @@ echo "$out" | grep -v '^REF' | tail -1 >&2
 if echo "$out" | grep -q '^REF-ERROR'; then echo "$out" | grep '^REF-ERROR' >&2; exit 1; fi
 {
   names=$(for f in "$@"; do basename "$f"; done | tr '\n' ' ')
-  sed -n '1,/^;; ---- GENERATED BELOW/p' v3/kernel/accel_pins.shard | sed "s|^;;; STATUS: .*|;;; STATUS: generated $(date +%F) from ${names}|"
+  sed -n '1,/^;; ---- GENERATED BELOW/p' v3/kernel/k/accel_pins.shard | sed "s|^;;; STATUS: .*|;;; STATUS: generated $(date +%F) from ${names}|"
   echo "$out" | sed -n 's/^REF //p'
-} > v3/kernel/accel_pins.shard.new
-mv v3/kernel/accel_pins.shard.new v3/kernel/accel_pins.shard
-echo "accel_pins.shard: $(grep -c '^(fn rd_' v3/kernel/accel_pins.shard) reference rows, $(grep -c '^(fn rn_' v3/kernel/accel_pins.shard) names"
+} > v3/kernel/k/accel_pins.shard.new
+mv v3/kernel/k/accel_pins.shard.new v3/kernel/k/accel_pins.shard
+echo "accel_pins.shard: $(grep -c '^(fn rd_' v3/kernel/k/accel_pins.shard) reference rows, $(grep -c '^(fn rn_' v3/kernel/k/accel_pins.shard) names"

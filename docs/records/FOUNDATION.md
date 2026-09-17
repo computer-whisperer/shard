@@ -1756,6 +1756,37 @@ is `docs/FOUNDATION.md` §5.3.
   2,434 s at 30.6 GB, 20 pinned, closures identical; the pipeline
   4,059 s. The pruned toolchain loads on every reader and every
   route; the `UNUSED` record is silent on CI's closures.
+- **2026-09-16 — slice 3.8, the K seal: the design ruled, landing 1 of
+  3.** The design report re-derived the surface from the pruned tree:
+  169 K names cited by the toolchain's non-test files (89 functions,
+  20 types, 60 constructors), 92 of them the data vocabulary (`name
+  level expr decl intmap json`) and the rest the trust operations. The
+  user ruled the four leans: (1) nine trust files sealed, not fifteen —
+  the data types public as Lean's `Expr` is beside `Environment.add`,
+  the ingestion at `check` being what makes them safe; (2) `k/k.shard`
+  a facade of one-line wrappers, over extending the fork check to
+  match a signature in an imported private file, and over merging;
+  (3) a view may import a plain file outside its own directory (the
+  req-scope gate refined); (4) the internals' tests move inside the
+  directory, the hostile battery stays outside as a client. Landing 1:
+  the nine files moved (`git mv`), 22 files' paths and `use` lines
+  rewritten; `verdict.shard` split out of `env` (`Resource`, `Reason`,
+  `Outcome`), `import` (`Verdict`) and `tc` (`Failure`, `KRes`) —
+  `Outcome` made parametric so the vocabulary names no sealed type;
+  `RawEnv` deleted (nothing used it); the sealed-directory rule
+  (`private_module`, `loader.shard` `sealed_above`) with pins
+  `private_module` and `private_inside`; the prune lint dropped 12
+  lines the rewrite left. Two findings: the leak pins `ev_private_match`
+  and `ev_launder` imported the implementation directly and the new
+  rule refused them first — the consumer now sits inside the
+  directory, the one place an implementation's constructor is still
+  nameable, and the leak is still refused there; and an implementation
+  whose `type` is E only cannot stand for a `sig type` (my first pin
+  used an `Int` field with no `Init`), refused as `bad_shape:
+  unknown_constant` — a message to improve at landing 2. Gates: 92
+  loader pins, parity byte-identical over 21 closures and 68,214
+  lines, route 2 and calc byte-identical, 22 entrypoints, `v3/build.sh`
+  and the compiled `t0`'s fixture tie (301 lines).
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 
