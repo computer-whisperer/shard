@@ -2046,6 +2046,43 @@ is `docs/FOUNDATION.md` §5.3.
   over 24 closures and 81,586 lines, route 2 and calc byte-identical,
   K's seven clients through the V3 loader, 26 entrypoints. Next: slice
   3.14 (course-of-values and `WellFounded.fix`).
+- **2026-09-17 — slice 3.14, course-of-values, measures and the
+  obligation class (LANGUAGE.md §8.4 rules as built; §9; §13 item
+  47).** The design's three leans (Lean's `brecOn` scheme for every
+  structural recursion, `WellFounded.fix` with the decreasing facts as
+  obligation parameters, mutual recursion deferred) ruled and built
+  the same day. Findings: the export's `List.below` and `Nat.below`
+  decode to `PProd (motive tail) tail_ih` — a single recursive field's
+  pair is the whole table, no unit terminator — so the generator and
+  the entry reader both changed from the shape first assumed; K's
+  instantiation beta-reduces the motive applications in a reduced
+  table type (`(λ x . Nat) tail` becomes `Nat`), so an entry cannot be
+  read off the type and is derived positionally from the constructor's
+  recursive fields, K's check of the definition holding the shape;
+  `Init`'s `brecOn` goes through `brecOn.go`, irrelevant to a client;
+  a native `Tree` got `Tree.below`/`Tree.brecOn` generated and a
+  depth-two recursion over it defined with three equations at the
+  first try after the shape fix; the obligations a branch collected
+  were lost when the branch's context was restored (`tr_restore`
+  keeps them); `InvImage.wf` sits at export line 100,851, past the
+  fixture through `Int.decEq`, so the Int fixture now runs through it
+  (5.2 MB, 874 KB compressed); a file without `Init`'s `PProd` cannot
+  have a table — the prelude's `List` recursions in K's own sources
+  had reached K with an unknown constant — so `PProd` reachability is
+  an obstacle; a `rec_fields` helper shadowed `record.shard`'s in the
+  flat bootstrap (the record expansion crashed with a `RecDef` in a
+  match with no arm) and `ArgsRes`/`ArgsOk` twinned `ev.shard`'s —
+  both renamed; the rewrite dropped `(use kernel.name)` and the V3
+  loader refused every `Name` in the file; the `def`-in-E-forms route
+  matched the old result shape. The mutual pin first used `Nat.succ`,
+  which is no E constructor (`nat_constructor`), and moved to lists.
+  Calc under the V3 loader: twelve functions defined (`parse_rest`,
+  `parse`, `flush`, `eval`, `eval_opt`, list's `len` and `append`, the
+  spec's accessors), thirteen `RUNNABLE` with the obstacle named
+  (`no_l_identity` for the byte predicates, `no_l_meaning` downstream).
+  Gates: 107 loader pins, `define_test`, parity byte-identical over 24
+  closures and 82,101 lines, route 2 and calc byte-identical, K's
+  clients through the V3 loader, 26 entrypoints. Next: slice 3.15.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

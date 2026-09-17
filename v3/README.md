@@ -273,7 +273,7 @@ per old file (51 functions, 9 types; the claims a header line each,
 phase 3), under Init's `Int` from a second fixture
 (`kernel/test/fixtures/init_prefix_int.ndjson`, the export through the
 `Int` inductive, 17,812 lines then; through `Int.decEq`, 35,371 lines,
-since slice 3.13); the differential runs the port under
+at slice 3.13; through `InvImage.wf`, 100,851 lines, since 3.14); the differential runs the port under
 `ev` from `kernel/test/calc_harness.shard` (values built as data,
 since an S program names no wire cell at phase 2) against the old
 tree's tower over `examples/calc/calc_differential.shard`, one shared
@@ -602,7 +602,18 @@ to a consumer (pins `view_eq_hidden`, `view_rfl`). The first std file,
 calc's first claim `eval_add` on `eval.eq_2`, both under
 `kernel/test/define_test.sh`; the Int fixture runs through `Int.decEq`.
 Gates: 103 pins, parity over 24 closures and 81,586 lines, 26
-entrypoints. Next: slice 3.14.
+entrypoints. **Slice 3.14 (2026-09-17): course-of-values, measures and
+the obligation class** — every structural recursion is `brecOn` with
+the table generalized at each split (Lean's shape, read off the
+export; a native inductive's `below`/`brecOn` generated on first
+need); a measure is `WellFounded.fix` over the parameter tuple, each
+decreasing fact an obligation `f.dec_N` admitted as `PARAM …
+obligation` (the fourth policy class), `PENDING f measure`, no
+equations until I; an `Int` measure, mutual recursion and a table
+without `PProd` in scope are obstacles. Calc's `parse_rest` is the
+first real course-of-values definition; the Int fixture runs through
+`InvImage.wf` (100,851 lines). Gates: 107 pins, parity over 24
+closures and 82,101 lines, 26 entrypoints. Next: slice 3.15.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

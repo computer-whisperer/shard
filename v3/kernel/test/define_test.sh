@@ -2,8 +2,8 @@
 # v3/kernel/test/define_test.sh — Stage 1's `fn` = `def` + `realize` on real
 # files (LANGUAGE.md §8.4, slice 3.13): the V3 loader loads v3/std/list.shard
 # and calc's spec file with the export through Int.decEq and must define the
-# named functions (DEFINE with their equations) and accept the theorems that
-# cite the equations. Exit code = the number of files that failed.
+# named functions (DEFINE with their equations; parse_rest by course-of-values,
+# slice 3.14) and accept the theorems that cite the equations. Exit code = the number of files that failed.
 set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
@@ -27,6 +27,7 @@ check v3/std/list.shard \
   'ACCEPT std.list.List.sum_cons '
 check v3/examples/calc/calc_spec.shard \
   'DEFINE examples.calc.calc.eval equations=examples.calc.calc.eval.eq_1,examples.calc.calc.eval.eq_2,examples.calc.calc.eval.eq_3' \
+  'DEFINE examples.calc.calc.parse_rest equations=' \
   'ACCEPT examples.calc.calc_spec.eval_add '
 echo "define_test: 2 files, $fail failed"
 exit "$fail"

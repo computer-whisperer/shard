@@ -206,6 +206,7 @@ ACCEPT M.x module=M hash=H axioms=a,b init=NAME    ; identity, module, fingerpri
 MODULE M file=F hash=H sees=M1,M2                  ; the module done: its hash over its declarations, its closure
 RUNNABLE fn M.f why=OBSTACLE | RUNNABLE extern M.e | RUNNABLE type M.T   ; an E declaration classified (§6.7; R45's status kind: runnable, no L meaning); a fn's obstacle to a definition named (§8.4 rule 1)
 DEFINE M.f equations=M.f.eq_1,… [pending=ROOT,…]   ; a fn defined (§8.4, slice 3.13): its definition and equations ACCEPT lines, its E body attached
+PARAM M.f.dec_1 obligation   ; a measured fn's decreasing fact admitted as a parameter of the fourth class (§8.4 slice 3.14, §9); the fn's DEFINE carries pending=M.f and PENDING M.f measure follows
 REALIZE NAME supplied equations=M.NAME.realize_1,… | REALIZE NAME view equations=   ; a realization attached under NAME's identity (§7.5)
 REFUSE M.x REASON | REFUSE M.f REASON: …           ; K's refusal; the classifier's, with its message
 POLICY M.x outside the policy: a | PENDING M.x sorry | PENDING NAME measure
@@ -1624,6 +1625,22 @@ the toolchain's closures, so both readers agree at every commit:
   `v3/std/list.shard` (the first std file: `List.sum`, its equations,
   two theorems) and calc's `eval` with its first claim `eval_add`.
 
+- **3.14 course-of-values, measures and the obligation class,
+  2026-09-17 (§8.4's slice-3.14 rules as built; §13 item 47).** Every
+  structural recursion is `brecOn` with the table generalized at each
+  split (3.13's direct recursor deleted); `Init`'s `below`/`brecOn`
+  at solved levels, a native inductive's generated on first need and
+  admitted first (`DfAux`); a measure is `WellFounded.fix` over the
+  parameter tuple under `InvImage Nat.lt_wfRel.rel m`, each self-call's
+  decreasing fact an obligation `f.dec_N` admitted as `PARAM …
+  obligation` (the fourth policy class, §9), `DEFINE f equations=
+  pending=f` and `PENDING f measure`; an `Int` measure, a table
+  without `PProd` in scope, a forward or mutual reference are
+  obstacles. Four pins (`define_below`, `define_measure`,
+  `define_measure_int`, `define_mutual`), `define_depth` now defined
+  with its third equation cited; calc's `parse_rest` and `parse`
+  defined; the Int fixture through `InvImage.wf` (100,851 lines).
+
 Then, as planned: the rest of Stage 1 (§8.4's slices), then I.
 
 ### 8.4 Stage 1 — one grammar, one elaborator, `fn` = `def` + `realize` (phase 3, RULED 2026-09-17)
@@ -1751,6 +1768,76 @@ parity, route 2's byte-tie and T0 green:
 tree (`equation_form`, as for a `realize`), mutual recursion,
 lambda lifting, any change to the reader.
 
+**The rules of slice 3.14** (the user's ruling of 2026-09-17 on the
+three leans; §13 item 47):
+
+1. **One scheme for all structural recursion, Lean's own.** A
+   structurally recursive `fn` is `T.brecOn` applied to a functional
+   `λ x below . body` whose table `below : T.below motive x` holds the
+   results at every sub-structure; every runtime split of a variable
+   that owns a table generalizes the table in the split's motive (`λ
+   x' . T.below motive x' → R`), so inside a branch the table's type
+   reduces to the pair nest and each recursive field's entry — its
+   value and its own sub-table — is a typed projection; a self-call on
+   any such field, at any depth, is the entry's value applied to the
+   call's other arguments. 3.13's direct-recursor path is deleted, not
+   kept beside it. `Init`'s inductives use `Init`'s `below` and
+   `brecOn` at solved levels; a native inductive gets `T.below` and
+   `T.brecOn` generated as monomorphic definitions on first need,
+   under Lean's names, admitted before the function (Lean generates
+   them at declaration time and only for recursive types, which is why
+   the export holds no `Option.below`). The equations stay `Eq.refl`:
+   `brecOn` unfolds to the recursor and reduces on a constructor-headed
+   argument. `recursion_depth` survives only for a self-call on a
+   variable bound outside the leading case tree. **As built:** the
+   table's shape is Lean's, read off the export's `List.below` and
+   `Nat.below` — the pairs `PProd (motive r_k) (below r_k)` over a
+   constructor's recursive fields, right-nested by `PProd` with no
+   unit, one field's pair the table itself, no field `PUnit`; a
+   field's entry is derived positionally (K's instantiation
+   beta-reduces the motive applications in the reduced table type, so
+   the field cannot be read off it), and K's check of the definition
+   is what holds the shape to Lean's. `Init`'s `brecOn` goes through a
+   `brecOn.go` helper the definition never sees. A generated pair
+   (`T.below`, `T.brecOn`) is two `ACCEPT` records before the first
+   function that needs it; a file without `Init`'s `PProd` in scope
+   cannot have a table, so its structural recursions stay `RUNNABLE`
+   (`below_unreached`) — K's own sources included, whose types are
+   E-only first anyway.
+2. **A measure becomes `WellFounded.fix`, the decreasing facts
+   admitted obligations.** `(fn f PARAMS RET (measure M) BODY)` with
+   `M` a `Nat`-valued E term over the parameters is `WellFounded.fix
+   (InvImage.wf m (WellFoundedRelation.wf Nat.lt_wfRel)) F p` over
+   the data parameters packed as a `PProd` nest `p` (a single
+   parameter is itself), `m` the measure over the tuple and `F : ∀ p,
+   (∀ q, InvImage … q p → RET) → RET` the body with each self-call
+   `rec (tuple of the arguments) f.dec_N …`. Each `f.dec_N` is an
+   **obligation**: an axiom-kind constant `∀ (the locals in scope at
+   the call), InvImage Nat.lt_wfRel.rel m (tuple) p`, admitted before
+   the definition as the **fourth policy class** beside view
+   parameters (§9) — `PARAM f.dec_N obligation`; the function's
+   record is `DEFINE f equations= pending=f` with `PENDING f measure`
+   naming the obligations, every dependent's `params=` reaches them
+   (R57/R58: nothing is claimed that is not visible), and a later
+   `(fulfills f.dec_N PROOF)` discharges one as an implementation
+   discharges a requirement (the form is I's, phase 3). No equations:
+   `WellFounded.fix` reduces through `Acc.rec` on a proof, which K
+   does not compute, so `f.eq_N` for a measured function is I's
+   (`WellFounded.fix_eq`). An `Int`-valued measure is the obstacle
+   `measure_type` with the pointer to a `Nat` measure — the law never
+   inserts `Int.toNat` (§5.2). **As built:** the obligation is
+   quantified over every local in scope at the call, in binding order
+   — the type parameters, the tuple, the fields of the enclosing
+   splits, the `let`-bound values as `let`s — and the proof term
+   applies the constant to the lambda-bound ones; the obligations a
+   branch collects survive the branch's context being restored; the
+   Int fixture runs through `InvImage.wf` so the pins reach it; a
+   prefix that does not is the obstacle `wf_unreached`.
+3. **Mutual recursion is an obstacle** (`mutual_recursion`: a callee
+   pre-registered in the file and not yet defined), taken with slice
+   3.15. A forward reference to a later-defined function is the same
+   obstacle.
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built
@@ -1816,6 +1903,10 @@ an identical proposition (T8). `(trusts NAME…)` widens the file's
 policy by name; a file that declares an `axiom` must trust it. View
 parameters (§6.5) are a third class: permitted while a consumer checks
 against the view, discharged at link, reported if never discharged.
+**Obligations** (§8.4, slice 3.14) are a fourth: a measured
+function's decreasing facts `f.dec_N`, admitted so its definition
+exists, named by `PENDING f measure` and by every dependent's
+`params=`, discharged by a proof when I exists — never by a policy.
 
 **Entries** (law §9.3): every way a value from outside enters an E
 program is **checked** or **preconditioned**. At phase 2 the entries
@@ -2557,3 +2648,23 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     type` is the module's. Alternative: exporting `eq_N` through the
     view automatically — every consumer proof would then weld to
     today's body, which is exactly what v2's weaning rule forbade.
+47. **Course-of-values, measures and the obligation class** (§8.4's
+    slice-3.14 rules; the user's ruling of 2026-09-17): every
+    structural recursion is `brecOn` with a generalized table, Lean's
+    scheme, one scheme (3.13's direct recursor deleted); a native
+    inductive's `below`/`brecOn` generated on first need under Lean's
+    names; a measure is `WellFounded.fix` over the parameter tuple
+    under `InvImage Nat.lt_wfRel.rel`, its decreasing facts admitted
+    as obligations — the fourth policy class, visible in every
+    dependent's `params=`, discharged by a later proof; no equations
+    for a measured function until I; an `Int` measure and mutual
+    recursion are obstacles. Alternatives: nested recursors with
+    paired motives (the same construction by hand per definition);
+    keeping measured functions `RUNNABLE` until Stage 2 can prove the
+    facts (a quarter of the old tree's functions uncitable meanwhile);
+    `sorry` for a decreasing fact (it admits nothing, so the
+    definition could not exist). **As built (2026-09-17):** the
+    table's shape read off the export and derived positionally; the
+    obligation over the scope's locals; `PProd` reachability an
+    obstacle; calc's `parse_rest` the first real course-of-values
+    definition; the fixture through `InvImage.wf`.

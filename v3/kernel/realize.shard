@@ -64,7 +64,15 @@
 ;; parameter's position among the data parameters (-1 when none), the induction hypotheses of
 ;; the top split by the recursive field's local, the parameter types, and whether the constant
 ;; exists yet (True while the equations are stated, after the definition is admitted)
-(record DefRec (pos Int) (ihs (List (Pair Int Expr))) (ptypes (List EType)) (defined Bool))
+(record DefRec (pos Int) (ihs (List (Pair Int Expr))) (tabs (List (Pair Int Expr))) (ptypes (List EType)) (defined Bool)
+  (below (Option BelowInfo)) (wf (Option WfInfo)) (scope (List (Pair Bool Expr))) (obls (List Declaration)))
+;; the course-of-values context (§8.4, slice 3.14): the inductive, its below constant at the
+;; solved levels, the type arguments, the top motive `λ x . Π others, RET` — a variable's table
+;; (tabs) is its `T.below motive v`, a recursive field's entry (ihs) the value projected from it
+(record BelowInfo (ind Name) (belowc Name) (ls (List Level)) (largs (List Expr)) (motive Expr))
+;; the well-founded context (slice 3.14): the functional's `rec`, the parameter tuple `p`, the
+;; measure `m` over the tuple, the relation `InvImage rel m`, the tuple's component types
+(record WfInfo (recl Expr) (p Expr) (m Expr) (rel Expr) (ltys (List Expr)))
 (fn tr_new ((w W) (es ESt) (sc Scope) (id Name) (tps (List Expr)) (rec (Option DefRec))) Tr
   (make Tr (w w) (es es) (sc sc) (id id) (tps tps) (rec rec)))
 (fn tr_set_w ((t Tr) (w W)) Tr (with Tr t (w w)))
@@ -72,9 +80,41 @@
 (fn tr_set_tps ((t Tr) (tps (List Expr))) Tr (with Tr t (tps tps)))
 (fn tr_set_rec ((t Tr) (rec (Option DefRec))) Tr (with Tr t (rec rec)))
 (fn define_mode ((t Tr)) Bool (match (Tr.rec t) ((Some _) True) (None False)))
-;; a definition context for define.shard, which cites the record's accessors qualified
-(fn def_rec ((pos Int) (ihs (List (Pair Int Expr))) (ptypes (List EType)) (defined Bool)) (Option DefRec)
-  (Some (make DefRec (pos pos) (ihs ihs) (ptypes ptypes) (defined defined))))
+;; a definition context for define.shard, which cites the record's accessors qualified and
+;; extends it through these
+(fn def_rec ((pos Int) (ptypes (List EType)) (defined Bool)) DefRec
+  (make DefRec (pos pos) (ihs Nil) (tabs Nil) (ptypes ptypes) (defined defined) (below None) (wf None) (scope Nil) (obls Nil)))
+(fn dr_with_tables ((dr DefRec) (ihs (List (Pair Int Expr))) (tabs (List (Pair Int Expr)))) DefRec (with DefRec dr (ihs ihs) (tabs tabs)))
+(fn dr_with_below ((dr DefRec) (bi BelowInfo)) DefRec (with DefRec dr (below (Some bi))))
+(fn dr_with_wf ((dr DefRec) (wi WfInfo)) DefRec (with DefRec dr (wf (Some wi))))
+(fn dr_with_scope ((dr DefRec) (scope (List (Pair Bool Expr)))) DefRec (with DefRec dr (scope scope)))
+(fn dr_push_scope ((dr DefRec) (is_let Bool) (fv Expr)) DefRec (with DefRec dr (scope (append (DefRec.scope dr) (list (Pair is_let fv))))))
+(fn dr_add_obl ((dr DefRec) (d Declaration)) DefRec (with DefRec dr (obls (Cons d (DefRec.obls dr)))))
+(fn below_info ((ind Name) (belowc Name) (ls (List Level)) (largs (List Expr)) (motive Expr)) BelowInfo
+  (make BelowInfo (ind ind) (belowc belowc) (ls ls) (largs largs) (motive motive)))
+(fn wf_info ((recl Expr) (p Expr) (m Expr) (rel Expr) (ltys (List Expr))) WfInfo
+  (make WfInfo (recl recl) (p p) (m m) (rel rel) (ltys ltys)))
+;; the context's tables and scope through the state, for define.shard's minors and lets
+(fn tr_push_scope ((t Tr) (is_let Bool) (fv Expr)) Tr
+  (match (Tr.rec t) ((Some dr) (tr_set_rec t (Some (dr_push_scope dr is_let fv)))) (None t)))
+(fn tr_push_scopes ((t Tr) (fvs (List Expr))) Tr
+  (measure (struct fvs))
+  (match fvs (Nil t) ((Cons fv r) (tr_push_scopes (tr_push_scope t False fv) r))))
+(fn tr_add_tables ((t Tr) (ihs (List (Pair Int Expr))) (tabs (List (Pair Int Expr)))) Tr
+  (match (Tr.rec t)
+    ((Some dr) (tr_set_rec t (Some (dr_with_tables dr (append ihs (DefRec.ihs dr)) (append tabs (DefRec.tabs dr))))))
+    (None t)))
+(fn tr_table_of ((t Tr) (id Int)) (Option Expr)
+  (match (Tr.rec t) ((Some dr) (assoc_int_expr id (DefRec.tabs dr))) (None None)))
+(fn tr_below ((t Tr)) (Option BelowInfo)
+  (match (Tr.rec t) ((Some dr) (DefRec.below dr)) (None None)))
+;; the context restored after a minor or a branch, the obligations collected inside it kept
+(fn tr_restore ((t Tr) (old (Option DefRec))) Tr
+  (match old
+    (None (tr_set_rec t None))
+    ((Some dro) (match (Tr.rec t) ((Some drn) (tr_set_rec t (Some (with DefRec dro (obls (DefRec.obls drn)))))) (None (tr_set_rec t old))))))
+(fn tr_obls ((t Tr)) (List Declaration)
+  (match (Tr.rec t) ((Some dr) (rev (DefRec.obls dr))) (None Nil)))
 (fn tr_env ((t Tr)) CheckedEnv (w_env (Tr.w t)))
 (type TrRes (TrOk Tr Expr) (TrErr Symbol (List Int)))
 ;; an E variable's meaning: its L term, its static E type, its descent flag
@@ -349,9 +389,82 @@
     (None (tr_self_const t env expected f args))
     ((Some dr)
      (if (DefRec.defined dr) (tr_self_const t env expected f args)
-       (match (self_ih env (DefRec.ihs dr) (nth args (DefRec.pos dr)))
-         ((Some ih) (tr_ih t env ih (DefRec.ptypes dr) (DefRec.pos dr) args 0 Nil))
-         (None (TrErr (quote recursion_depth) (append (show_name f) ": a recursive call on a field bound below the structural parameter's own pattern, or outside the leading case tree — write (measure E) (slice 3.14), or match the parameter directly"))))))))
+     (match (DefRec.wf dr)
+       ((Some wi) (tr_self_wf t env f args dr wi))
+       (None
+        (match (self_ih env (DefRec.ihs dr) (nth args (DefRec.pos dr)))
+          ((Some ih) (tr_ih t env ih (DefRec.ptypes dr) (DefRec.pos dr) args 0 Nil))
+          (None (TrErr (quote recursion_depth) (append (show_name f) ": a recursive call on a variable bound outside the leading case tree (an argument's match, a let's value) — match the parameter in tail position (§8.4 rule 1 of slice 3.14)"))))))))))
+;; a measured function's self-call (§8.4, slice 3.14): `rec (tuple of the arguments) (f.dec_N
+;; scope…)` — the decreasing fact an obligation quantified over every local in scope, admitted
+;; before the definition (its declaration collected here)
+(fn tr_self_wf ((t Tr) (env (List EV)) (f Name) (args (List ETerm)) (dr DefRec) (wi WfInfo)) TrRes
+  (match (tr_args t env (DefRec.ptypes dr) args Nil)
+    ((Pair t1 (TrArgsErr e m)) (TrErr e m))
+    ((Pair t1 (TrArgsOk largs))
+     (match (wf_tuple t1 (WfInfo.ltys wi) largs)
+       ((Pair t2 tup)
+        (match (tr_apps t2 (WfInfo.rel wi) (list tup (WfInfo.p wi)))
+          ((Pair t3 goal)
+           (match (tr_pis t3 (scope_fvars (DefRec.scope dr)) goal)
+             ((Pair t4 stmt)
+              (let ((name (name_append f (n1 (sym_of_chars (append "dec_" (show_nat (+ 1 (len (DefRec.obls dr))))))))))
+                (match (tr_apps t4 (mk_const name Nil) (scope_lambda_fvars (DefRec.scope dr)))
+                  ((Pair t5 proof)
+                   (match (tr_apps t5 (WfInfo.recl wi) (list tup proof))
+                     ((Pair t6 e) (TrOk (tr_set_rec t6 (Some (dr_add_obl dr (AxiomDecl (ConstantVal name Nil stmt) False)))) e)))))))))))))))
+(type TrArgs (TrArgsErr Symbol (List Int)) (TrArgsOk (List Expr)))
+(fn tr_args ((t Tr) (env (List EV)) (ptypes (List EType)) (args (List ETerm)) (acc (List Expr))) (Pair Tr TrArgs)
+  (measure (struct args))
+  (match args
+    (Nil (Pair t (TrArgsOk (rev acc))))
+    ((Cons a r)
+     (match (tr t env (match ptypes ((Cons p _) (Some p)) (Nil None)) a)
+       ((TrErr e m) (Pair t (TrArgsErr e m)))
+       ((TrOk t1 a1) (tr_args t1 env (drop 1 ptypes) r (Cons a1 acc)))))))
+(fn scope_fvars ((scope (List (Pair Bool Expr)))) (List Expr)
+  (measure (struct scope))
+  (match scope (Nil Nil) ((Cons (Pair _ fv) r) (Cons fv (scope_fvars r)))))
+(fn scope_lambda_fvars ((scope (List (Pair Bool Expr)))) (List Expr)
+  (measure (struct scope))
+  (match scope (Nil Nil) ((Cons (Pair True _) r) (scope_lambda_fvars r)) ((Cons (Pair False fv) r) (Cons fv (scope_lambda_fvars r)))))
+;; the parameter tuple: one parameter is itself, more a right-nested PProd (§8.4, slice 3.14)
+(fn wf_tuple ((t Tr) (ltys (List Expr)) (vals (List Expr))) (Pair Tr Expr)
+  (measure (struct vals))
+  (match vals
+    (Nil (Pair t (mk_const (nm_punit_unit) (list (level_one)))))
+    ((Cons v Nil) (Pair t v))
+    ((Cons v r)
+     (match ltys
+       ((Cons ty tr0)
+        (match (wf_tuple t tr0 r)
+          ((Pair t1 rest)
+           (match (wf_tuple_type t1 tr0)
+             ((Pair t2 restty)
+              (match (tr_apps t2 (mk_const (nm_pprod_mk) (list (level_one) (level_one))) (list ty restty v rest))
+                ((Pair t3 e) (Pair t3 e))))))))
+       (Nil (Pair t v))))))
+(fn wf_tuple_type ((t Tr) (ltys (List Expr))) (Pair Tr Expr)
+  (measure (struct ltys))
+  (match ltys
+    (Nil (Pair t (mk_const (n1 (quote PUnit)) (list (level_one)))))
+    ((Cons ty Nil) (Pair t ty))
+    ((Cons ty r)
+     (match (wf_tuple_type t r)
+       ((Pair t1 restty) (match (tr_apps t1 (mk_const (n1 (quote PProd)) (list (level_one) (level_one))) (list ty restty)) ((Pair t2 e) (Pair t2 e))))))))
+;; the k-th component of a tuple of n: (p.2)^k .1, the last (p.2)^(n-1)
+(fn wf_proj ((p Expr) (n Int) (k Int)) Expr
+  (measure k)
+  (if (int_eq n 1) p
+  (if (lt k 1) (if (int_eq n 1) p (mk_proj (n1 (quote PProd)) 0 p))
+    (wf_proj_rest (mk_proj (n1 (quote PProd)) 1 p) (- n 1) (- k 1)))))
+(fn wf_proj_rest ((p Expr) (n Int) (k Int)) Expr
+  (measure k)
+  (if (int_eq n 1) p
+  (if (lt k 1) (mk_proj (n1 (quote PProd)) 0 p)
+    (wf_proj_rest (mk_proj (n1 (quote PProd)) 1 p) (- n 1) (- k 1)))))
+(fn nm_pprod_mk () Name (n2 (quote PProd) (quote mk)))
+(fn nm_punit_unit () Name (n2 (quote PUnit) (quote unit)))
 (fn tr_self_const ((t Tr) (env (List EV)) (expected (Option EType)) (f Name) (args (List ETerm))) TrRes
   (match (env_find (tr_env t) f)
     (None (TrErr (quote no_l_meaning) (append (show_name f) ": the constant does not exist yet")))
@@ -474,9 +587,12 @@
      (match (tr_local t2 (n1 (quote x)) tyapp)
        ((Pair t3 mv)
         (match (tr_lams t3 (list mv) rty)
-          ((Pair t4 motive)
-           (match (tr_apps t4 (mk_const (Str ind (quote rec)) (Cons (level_one) ls)) (append largs (Cons motive (append minors (list major)))))
-             ((Pair t5 e) (TrOk t5 e))))))))))
+          ((Pair t4 motive) (rec_app_dep t4 (level_one) ind ls largs motive minors major))))))))
+;; the recursor applied with a given motive at the motive's universe (slice 3.14: a table
+;; generalized in the motive; below's motive into Sort 1 at universe 2)
+(fn rec_app_dep ((t Tr) (u Level) (ind Name) (ls (List Level)) (largs (List Expr)) (motive Expr) (minors (List Expr)) (major Expr)) TrRes
+  (match (tr_apps t (mk_const (Str ind (quote rec)) (Cons u ls)) (append largs (Cons motive (append minors (list major)))))
+    ((Pair t5 e) (TrOk t5 e))))
 ;; the recursor's checks tr_rec makes, for define.shard's splits
 (fn rec_usable ((t Tr) (ind Name) (ls (List Level))) (Option (Pair Symbol (List Int)))
   (match (env_find (tr_env t) (Str ind (quote rec)))

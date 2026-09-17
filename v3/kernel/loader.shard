@@ -495,16 +495,30 @@
         ((CErr e m) (Pair (ld_rec l1 (RClassify (form_name sc s) e m)) f))
         ((COk d)
          (match d
-           ((EFn k _ _ _ _ _)
-            (match (define_fn (es_add_decl (Load.etab l1) d) sc (Load.env l1) d)   ; the fn in the table first: its self-calls type statically
-              ((DfSkip why _) (Pair (ld_rec (ld_with_e l1 (es_add_decl (Load.etab l1) d)) (RRun (form_head s) k why)) f))
-              ((DfErr e m) (Pair (ld_rec l1 (RClassify k e m)) f))
-              ((DfOk es1 dd) (load_defined (ld_with_e l1 es1) f d dd))))
+           ((EFn _ _ _ _ _ _) (load_define l1 f s d 2))
            (_ (Pair (ld_rec (ld_with_e l1 (es_add_decl (Load.etab l1) d)) (RRun (form_head s) (edecl_name d) (quote none))) f))))))))
-;; a defined fn: the definition admitted and checked against the policy, then its equations
-;; the same way, then the E body attached (as a realization's is) and DEFINE recorded; a refusal
-;; anywhere leaves the environment as it was — a fn is a def plus a realization or nothing
-(fn load_defined ((l Load) (f Fx) (d EDecl) (dd Declaration)) (Pair Load Fx)
+;; a fn's definition (define.shard): the auxiliaries a native inductive needs admitted first
+;; (its below and brecOn; ACCEPT records) and the definition tried again, at most twice
+(fn load_define ((l1 Load) (f Fx) (s SExpr) (d EDecl) (fuel Int)) (Pair Load Fx)
+  (let ((sc (fx_scope l1 f)) (k (edecl_name d)))
+    (match (define_fn (es_add_decl (Load.etab l1) d) sc (Load.env l1) d)   ; the fn in the table first: its self-calls type statically
+      ((DfSkip why _) (Pair (ld_rec (ld_with_e l1 (es_add_decl (Load.etab l1) d)) (RRun (form_head s) k why)) f))
+      ((DfErr e m) (Pair (ld_rec l1 (RClassify k e m)) f))
+      ((DfAux es1 auxs)
+       (if (lt fuel 1) (Pair (ld_rec l1 (RClassify k (quote define_loop) "the auxiliaries did not settle")) f)
+         (match (admit_forms (ld_with_e l1 es1) f s auxs)
+           ((Pair l2 f2) (if (ld_last_accepted l2) (load_define l2 f2 s d (- fuel 1)) (Pair l2 f2))))))
+      ((DfOk es1 obls dd wf) (load_defined (ld_with_e l1 es1) f d obls dd wf)))))
+(fn ld_last_accepted ((l Load)) Bool
+  (match (ld_recs_head l) ((Some (RAccept _ _ _ _ _ _)) True) (_ False)))
+;; a defined fn: its obligations (a measure's decreasing facts) admitted as parameters of the
+;; fourth class, the definition admitted and checked against the policy, then its equations
+;; the same way, then the E body attached (as a realization's is) and DEFINE recorded, PENDING
+;; for a measure; a refusal anywhere leaves the environment as it was — a fn is a def plus a
+;; realization or nothing
+(fn load_defined ((l0 Load) (f0 Fx) (d EDecl) (obls (List Declaration)) (dd Declaration) (wf Bool)) (Pair Load Fx)
+  (match (admit_obligations l0 f0 obls)
+    ((Pair l f)
   (let ((k (edecl_name d)))
     (match (admit_decls (Load.env l) (list dd))
       ((AdRefused subj reason) (Pair (ld_rec l (RRefuse subj reason)) f))
@@ -525,9 +539,17 @@
                     ((PolOut n out) (Pair (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty)) (RPolicy n out)) f))
                     ((PolOk memo2 recs2)
                      (let ((l2 (recs_add (ld_with_tbl (ld_with_env l1 env2 memo2) (tbl_add_all (Load.tbl l1) (decls_declare env2 thms) (Fx.module f))) recs2)))
-                       (let ((roots (realize_roots l2 k d False)))
-                         (Pair (ld_rec (ld_with_e (ld_add_pm l2 k roots) es2) (RDefine k (decls_declare env2 thms) roots))   ; es2 holds the fn since define_fn
-                               (mix_recs (mix_recs f recs) recs2)))))))))))))))))
+                       (let ((roots (realize_roots l2 k d wf)))
+                         (let ((l3 (ld_rec (ld_with_e (ld_add_pm l2 k roots) es2) (RDefine k (decls_declare env2 thms) roots))))   ; es2 holds the fn since define_fn
+                           (Pair (if wf (ld_rec l3 (RPending k (quote measure))) l3)
+                                 (mix_recs (mix_recs f recs) recs2))))))))))))))))))))
+;; a measured fn's decreasing facts: each an axiom-kind constant, a parameter of the fourth
+;; policy class (§8.4 slice 3.14 rule 2; §9) — PARAM NAME obligation
+(fn admit_obligations ((l Load) (f Fx) (obls (List Declaration))) (Pair Load Fx)
+  (measure (struct obls))
+  (match obls
+    (Nil (Pair l f))
+    ((Cons d r) (match (admit_param l f d (quote obligation) 0) ((Pair l1 f1) (admit_obligations l1 f1 r))))))
 ;; a def whose value is written in the E forms (§8.4 rule 5, guard 1): read as a fn's body by
 ;; the classifier and defined the same way — the definition only, no E body, no equations; when
 ;; that fails too, the reader's own error stands
@@ -537,7 +559,7 @@
       ((CErr _ _) (Pair (ld_rec l (RReadErr (fx_file f) e m)) f))
       ((COk d)
        (match (define_fn (Load.etab l) sc (Load.env l) d)
-         ((DfOk es1 dd) (admit_forms (ld_with_e l es1) f s (list dd)))
+         ((DfOk es1 Nil dd False) (admit_forms (ld_with_e l es1) f s (list dd)))   ; no obligations, no measure: a def has neither
          (_ (Pair (ld_rec l (RReadErr (fx_file f) e m)) f)))))))
 (fn as_fn_form ((s SExpr)) SExpr
   (match s ((SList (Cons _ rest)) (SList (Cons (SSym (quote fn)) rest))) (_ s)))

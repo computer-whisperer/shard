@@ -38,9 +38,10 @@ record that is not a module, an Init load or an acceptance:
 
 A `REALIZE` record (a realization attached, §7.5) counts as accepted, as `RUNNABLE` does,
 and so does `DEFINE` (a fn defined with its equations, §8.4). The cases stream the export
-through `Int.decEq` (`fixtures/init_prefix_int.ndjson`, 35,371 lines; slice 3.13) — the
-operator identities and the decisions live past the 3000-line prefix; `init_not_found`
-asks for `Int.tdiv`, past it. The slice-3.13 refusals a header may state: `nat_operator`,
+through `InvImage.wf` (`fixtures/init_prefix_int.ndjson`, 100,851 lines; slice 3.13 cut it at
+`Int.decEq`, 3.14 extended it for `WellFounded.fix`'s well-foundedness) — the operator
+identities, the decisions and the well-founded constants live past the 3000-line prefix;
+`init_not_found` asks for `Int.tdiv`, past it. The slice-3.13 refusals a header may state: `nat_operator`,
 `recursion_depth` (as an obstacle), `define_matrix`, `realize_recursion` and
 `realize_descent` for a fn.
 
@@ -94,3 +95,11 @@ without a measure), `def_match` (a `def` in the E forms, rule 5), and
 the implementation's body: K's `conversion` refusal) — both with the
 directory as a second root, where the implementation's own check
 shows `DEFINE lib.step` and `DISCHARGE lib.step defined`.
+Slice 3.14's (course-of-values, measures, §8.4): `define_depth` now
+defined by `brecOn`, its third equation cited; `define_below` (a native
+`Tree` gets `Tree.below` and `Tree.brecOn` generated, two `ACCEPT`
+lines, then an immediate and a deep recursion over it, equations
+cited), `define_measure` (a measured fn: `PARAM main.count.dec_1
+obligation`, `DEFINE … pending=main.count`, `PENDING main.count
+measure`, a theorem citing it), `define_measure_int` (`RUNNABLE …
+why=measure_type`) and `define_mutual` (`why=mutual_recursion`).
