@@ -615,7 +615,10 @@ equations until I; an `Int` measure, mutual recursion and a table
 without `PProd` in scope are obstacles. Calc's `parse_rest` is the
 first real course-of-values definition; the Int fixture runs through
 `InvImage.wf` (100,851 lines). Gates: 107 pins, parity over 24
-closures and 82,101 lines, 26 entrypoints. Next: slice 3.15.
+closures and 82,101 lines, 26 entrypoints; **pipeline 505 (`9397823`)
+green end to end** — corpus 1,525 s at the baseline, v3 4,459 s (calc
+418 s, parity 207 s, route 1 built, replay 2,448 s at 30.6 GB, 20
+pinned). Next: slice 3.15.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

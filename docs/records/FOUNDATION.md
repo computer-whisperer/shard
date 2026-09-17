@@ -2089,8 +2089,16 @@ is `docs/FOUNDATION.md` §5.3.
   132 s, parity 235 s over 24 closures and 81,586 lines, route 2
   54 s, route 1 built, replay 2,408 s at a 30.6 GB peak, T0 accepted
   57,977, 20 pinned, closures identical; the pipeline 4,289 s. The
-  first Stage-1 definitions stand on the full gate; 3.14's evidence
-  is pipeline 505's.
+  first Stage-1 definitions stand on the full gate.
+- **2026-09-17 — slice 3.14 green on CI.** Pipeline 505 (`9397823`):
+  engine 147 s, corpus 1,525 s at the baseline, v3 4,459 s — 26
+  entrypoints, calc 418 s, `define_test` 2 files (calc's
+  `parse_rest` by course-of-values among them), `k_clients_test`
+  127 s, parity 207 s over 24 closures and 82,101 lines, route 2 53 s,
+  route 1 built, replay 2,448 s at a 30.6 GB peak, T0 accepted 57,977,
+  20 pinned, closures identical; the pipeline 4,608 s. Course-of-values,
+  the measured definitions and the obligation class stand on the full
+  gate.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 
