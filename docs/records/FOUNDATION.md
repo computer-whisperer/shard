@@ -1930,6 +1930,27 @@ is `docs/FOUNDATION.md` §5.3.
   network, not the tree (as with pipelines 457–460 on 2026-09-12).
   CI evidence for the seal's landings 2 and 3 and for records waits
   on the runner; the local gates stand.
+- **2026-09-17 — slice 3.10, the test kits (the second follow-up).**
+  A census of the test files' definitions found `run` and `main` in
+  19 files, `Case` in 17, and the raw builders (`u nat zero lit x_
+  val arrow type1 st0 cv nat_decl eq_decl eq_nat refl_nat nat_add`)
+  in five to eight each, byte-identical modulo the name constants.
+  Two kits under `kernel/test/`, public files both sides of the seal
+  can import: `case_kit.shard` (`Case`, `run_cases LABEL cases fails
+  w`) and `decls_kit.shard` (the builders and `env_after`, `accepted`,
+  `refused` polymorphic in the environment type, so no sealed type is
+  named; the names under the kit's own constants `nat_n zero_n succ_n
+  eq_n eq_refl_n`, since the view's `nm_nat` and tc's are two
+  identities one closure cannot hold). The migration deleted a
+  definition only where its body was the kit's exactly — 17 tests on
+  the case kit, 8 on the declarations kit — and left
+  `inductive_test`'s three variant builders, and each test's `has`,
+  `e0`, `e_nat`, `e_eq` (they call `check` and `env_find`, which are
+  the view's on one side and tc's on the other). Three tests whose
+  `main` had another shape kept calling the deleted `run` until the
+  gate said so (`unknown extern run`). Then the lint dropped 40 `use`
+  lines the deletions had orphaned. Gates: 24 entrypoints, parity
+  byte-identical over 24 closures and 81,145 lines, 95 loader pins.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

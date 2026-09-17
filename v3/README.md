@@ -541,8 +541,11 @@ s-expression level in `kernel/record.shard` and in the bootstrap alike,
 parity the tie (item 42): the accessors in the record's namespace
 (`Load.env`), a type's automatic open narrowed to its constructors
 (item 7); landing b made the loader's `Load`, `Fx`, `Mod` and `Im`
-records, their 36 hand accessors gone. Next: the public fixture kit
-and the V3-loader test mode, then Stage 1, I.
+records, their 36 hand accessors gone. **Slice 3.10 (2026-09-17): the
+test kits** — `kernel/test/case_kit.shard` (17 tests) and
+`decls_kit.shard` (8), public files both sides of the seal import;
+the copied helpers gone. Next: the V3-loader test mode, then Stage 1,
+I.
 **CI (2026-09-15): phase 3's
 slices green on the full gate** — pipeline 482 (`345116f`, slice 3.2)
 green: 22 entrypoints, calc byte-identical in 395 s, parity 130 s over

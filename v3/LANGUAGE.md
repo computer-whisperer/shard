@@ -1563,6 +1563,20 @@ the toolchain's closures, so both readers agree at every commit:
   so that open now covers constructors only (item 7 amended). Gates
   unchanged: 95 pins, parity over 24 closures and 80,900 lines, 24
   entrypoints; the lint quiet.
+- **3.10 the test kits, 2026-09-17 (the second of the four
+  follow-ups).** Two public files under `kernel/test/`, importable on
+  both sides of the seal: `case_kit.shard` (`Case` and `run_cases`,
+  the report loop seventeen tests had copied) and `decls_kit.shard`
+  (the raw declarations of K's tests — `Nat`, `Eq`, the term
+  builders, `env_after`/`accepted`/`refused` over any environment
+  type — under the kit's own name constants, since the view's
+  `nm_nat` and tc's are two identities no test may see both of).
+  17 tests on the case kit, 8 on the declarations kit; the
+  matcher test inside the seal and the battery outside now share
+  their fixtures; `inductive_test` keeps its own variants of three
+  builders. 288 lines gone, then the lint's 40 `use` lines. Gates:
+  24 entrypoints, parity byte-identical over 24 closures and 81,145
+  lines, 95 pins.
 
 Then the opener as planned: the K seal under item 26's criterion,
 Stage 1, I.
