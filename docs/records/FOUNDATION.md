@@ -2083,6 +2083,14 @@ is `docs/FOUNDATION.md` §5.3.
   Gates: 107 loader pins, `define_test`, parity byte-identical over 24
   closures and 82,101 lines, route 2 and calc byte-identical, K's
   clients through the V3 loader, 26 entrypoints. Next: slice 3.15.
+- **2026-09-17 — slice 3.13 green on CI.** Pipeline 504 (`958274f`):
+  engine 176 s, corpus 1,480 s at the baseline, v3 4,112 s — 26
+  entrypoints, calc 403 s, `define_test` 2 files, `k_clients_test`
+  132 s, parity 235 s over 24 closures and 81,586 lines, route 2
+  54 s, route 1 built, replay 2,408 s at a 30.6 GB peak, T0 accepted
+  57,977, 20 pinned, closures identical; the pipeline 4,289 s. The
+  first Stage-1 definitions stand on the full gate; 3.14's evidence
+  is pipeline 505's.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

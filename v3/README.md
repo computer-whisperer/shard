@@ -602,7 +602,9 @@ to a consumer (pins `view_eq_hidden`, `view_rfl`). The first std file,
 calc's first claim `eval_add` on `eval.eq_2`, both under
 `kernel/test/define_test.sh`; the Int fixture runs through `Int.decEq`.
 Gates: 103 pins, parity over 24 closures and 81,586 lines, 26
-entrypoints. **Slice 3.14 (2026-09-17): course-of-values, measures and
+entrypoints; **pipeline 504 (`958274f`) green end to end** — corpus
+1,480 s at the baseline, v3 4,112 s (calc 403 s, parity 235 s, route 1
+built, replay 2,408 s at 30.6 GB, 20 pinned). **Slice 3.14 (2026-09-17): course-of-values, measures and
 the obligation class** — every structural recursion is `brecOn` with
 the table generalized at each split (Lean's shape, read off the
 export; a native inductive's `below`/`brecOn` generated on first
