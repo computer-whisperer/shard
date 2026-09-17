@@ -578,7 +578,15 @@ green end to end, 2026-09-17,** after the runner outage — engine
 calc 376 s, the seven K-facing tests through the V3 loader in 141 s,
 parity 219 s over 24 closures and 81,145 lines, route 2 57 s, route 1
 built, replay 2,383 s at 30.6 GB, T0 accepted 57,977, 20 pinned,
-closures identical). Next: Stage 1, I.
+closures identical). **Slice 3.12 (2026-09-17): Stage 1's design on
+disk** — `LANGUAGE.md` §8.4 (the two guards stated: one term grammar
+and one elaborator for `def` and `fn`; the profile never a dialect;
+the slices 3.13–3.17: `fn` = `def` + `realize` with immediate-field
+recursion and the operator identities by operand type, then
+course-of-values and `WellFounded.fix`, then the L-side ergonomics,
+then the R60 facilities, then I) and §8.5 (the view stance: nothing L
+crosses a view's merge, the requirements are the lemmas, the checked
+instance a substitution over P); §13 items 43–46. Next: slice 3.13.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

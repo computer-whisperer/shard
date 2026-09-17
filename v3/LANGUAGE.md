@@ -345,7 +345,7 @@ common case).
 | `(opaque NAME.{u…} BINDERS TYPE VALUE)` | checked, never unfolded | K: `OpaqueDecl` |
 | `(theorem NAME.{u…} BINDERS PROP PROOF)` | PROOF is `(exact TERM)` or `sorry` at Stage 0; `sorry` is reported loudly, admits nothing, and every citation of the theorem is a pending obligation, never an assumption | K: `ThmDecl` |
 | `(axiom NAME.{u…} BINDERS TYPE)` | admitted only under `(trusts NAME)` in the same file (§9) | K: `AxiomDecl` |
-| `(fn NAME BINDERS RET (measure M)? BODY)` | an E function: parameters are E-types, BODY is §5.4's E term language; classified (§6.3); **no L declaration at phase 2** (§0) | E: `EFn` |
+| `(fn NAME BINDERS RET (measure M)? BODY)` | an E function: parameters are E-types, BODY is §5.4's E term language; classified (§6.3); **no L declaration at phase 2** (§0); its definition and equations at Stage 1 (§8.4) | E: `EFn`; K: `DefnDecl` + `NAME.eq_N` when eligible (§8.4) |
 | `(extern NAME BINDERS RET)` | a World extern (law §4.7) | E: `EExtern` |
 | `(sig fn NAME BINDERS RET)`, `(sig type (NAME T…))` | a view's bodyless signature and opaque type (§6.5) | E: `ESig`, `ESigType`; L: a view parameter |
 | `(requirement NAME BINDERS PROP)`, `(fulfills NAME PROOF)` | a view's promised law and its discharge in the implementation (§6.5) | L |
@@ -697,7 +697,8 @@ preference; K sees one `std.list.List` in either environment.
   in the fork (`expr_eq` of the Π-types; `impl_signature`), the
   parameter then admitted again as a parameter — `DISCHARGE NAME fn`
   says linked, not discharged — since a `fn` has no L meaning at
-  Stage 0 (§0); `(requirement NAME …)` discharged by the implementation's
+  Stage 0 (§0); under Stage 1 the implementation's definition takes
+  the parameter's place in the fork and nowhere else (§8.5); `(requirement NAME …)` discharged by the implementation's
   `(fulfills NAME PROOF)` — the statement re-read in the fork, where
   the sig types are concrete, and the proof `(exact TERM)` checked as
   a theorem or `sorry` recorded pending; a view `theorem` is not
@@ -1590,8 +1591,155 @@ the toolchain's closures, so both readers agree at every commit:
   where the sealed-directory rule, the view and the E-side visibility
   are load-bearing at test time rather than only at parity.
 
-Then the opener as planned: the K seal under item 26's criterion,
-Stage 1, I.
+- **3.12 Stage 1's design on disk, 2026-09-17 (§8.4, §8.5; §13
+  items 43–46).** The two guards carried from phase 2 stated; the
+  Stage-1 slices cut; the view stance ruled.
+
+Then, as planned: Stage 1 (§8.4), then I.
+
+### 8.4 Stage 1 — one grammar, one elaborator, `fn` = `def` + `realize` (phase 3, RULED 2026-09-17)
+
+**The two guards** carried from the phase-2 direction checkpoint
+(records §9, 2026-09-13), stated here before code as that ruling
+asked:
+
+1. **`def` and `fn` share one term grammar and one elaborator.** The
+   surface term language is the union of §5.1's explicit L forms and
+   §5.4's E forms — `match`, `let`, `if`, numerals, a bare constant
+   head with its type arguments omitted — and one elaborator turns it
+   into L: `realize.shard`'s translation (`tr`, §7.5), which already
+   solves type parameters by first-order matching against the callee's
+   telescope and states a `match` or an `if` as the recursor with a
+   constant motive. A `def` may be written in the E forms; a `fn` is a
+   `def` whose body also passes the classifier (§6.3) and whose
+   realization is attached. If phase 3 elaborated `fn` bodies and left
+   `def` bodies in explicit L there would be two dialects for real.
+2. **The toolchain profile was bring-up, never a dialect** (§8.2): its
+   spellings never gain L identities of their own. Rule 3 below
+   assigns identities to the operator spellings by the type they are
+   applied at, which is the naming-law identity under another
+   spelling, not a new one.
+
+**The slices**, in the order parity allows, each keeping frontend
+parity, route 2's byte-tie and T0 green:
+
+| slice | content | first consumer |
+|---|---|---|
+| 3.12 | this section, the guards, §8.5, §13 items 43–46 | the ratifier |
+| 3.13 | `fn` = `def` + `realize` for non-recursive bodies and immediate-field structural recursion; the operator identities by operand type; a `def` in the E forms | `examples/calc`'s first claim; `v3/std/list.shard` under the naming law (R55's small library: an operation and a theorem) |
+| 3.14 | deeper structural recursion by course-of-values (`below`/`brecOn` generated per inductive, as Lean's elaborator does); `(measure E)` to `WellFounded.fix`, the measure a reported obligation; mutual recursion | every ported `fn` with a measure — a quarter of the old tree's 13,229 |
+| 3.15 | the L-side ergonomics of law §5.1–5.2: implicit arguments, universe inference, the numeral rule with the one `Nat → Int` coercion, `noConfusion`/`injection` | `def` and `theorem` authors |
+| 3.16 | §11's R60 facilities: list literals by expected type, negative numerals, `Name` literals, the fresh-name supply, the byte and text adapters (`String`'s E realization, item 37's flip); deriving under a declared policy | the broad port |
+| 3.17+ | I: the node vocabulary (law §7.2), `elaborate(I)` to P, the goal-graph API as E functions, `by` blocks, the core tactics; then `tools/prove` and the engine as I producers | calc's 100 claims; the coverage arc's B-1c |
+
+**The rules of slice 3.13**, decided here (the user's ruling of
+2026-09-17 on the five leans; §13 item 43):
+
+1. **Eligibility is automatic and transitive, as a `type`'s is** (§8.1
+   rule 1). A `fn` gets its L half when every binder and return type
+   has an L identity and every head of its body does — a constructor
+   of an E-eligible inductive, a `fn` with a definition, a realized
+   constant, a `sig fn` with an L parameter (not an E parameter, item
+   40), a table entry with an identity under rule 3. Otherwise it stays
+   `RUNNABLE` as today and the record names the first obstacle. Once
+   eligible, a body that fails translation or K is a **refusal**,
+   never a silent fall-back to `RUNNABLE`: a typo must not quietly
+   degrade a definition to a body no theorem can cite. K's own sources
+   import no `Init`, so nothing inside the seal changes at this slice
+   (their `fn`s enter L at the flip, rule 1).
+2. **The definition's value uses the recursor directly.** The binders
+   are lambdas; the leading case tree (§7.5's `compile`) is nested
+   `T.rec` with a constant motive, the reverse of the derived view's
+   erasure of a recursor; a self-call on an **immediate** constructor
+   field of the matched parameter is the induction hypothesis of the
+   same recursor. A self-call on a deeper field (`List.concat` on `t`
+   under `(cons x (cons z t))`) is `recursion_depth` at this slice with
+   the pointer to a measure or to slice 3.14; a self-call not on a
+   field of a matched parameter is `realize_descent` as today. The
+   equations are `NAME.eq_N`, one per leaf as §7.5 states them, proven
+   by `Eq.refl` — K unfolds the definition and iota-reduces the
+   recursor on the constructor-headed left-hand side — and the body is
+   attached through the realize path, so `ev` runs it under the L
+   identity and the `REALIZE`/`PENDING` machinery (R58) is the same
+   for every function. The record is `DEFINE NAME equations=NAME.eq_1,…`
+   beside the `ACCEPT` of the definition and of each equation.
+3. **Operator spellings get L identities by operand type, only where
+   `ev` already agrees with K** (settles item 38): `+` and `*` at
+   `Nat` are `Nat.add` and `Nat.mul`; `+`, `-` and `*` at `Int` are
+   `Int.add`, `Int.sub` and `Int.mul`; `int_eq`, `lt` and `le` are
+   `Nat.decEq`/`Nat.decLt`/`Nat.decLe` at `Nat` and `Int.decEq`/
+   `Int.decLt`/`Int.decLe` at `Int`. `-` at `Nat` is refused
+   (`nat_operator`, pointer `Nat.sub`): `ev` computes the integer
+   difference and `Nat.sub` truncates, and no dump could tie the two.
+   `/` and `mod` at `Nat` are refused likewise (`ev`'s `/` is stuck at
+   zero, `Nat.div` is total); at `Int` they have no identity (rule 5,
+   unchanged). Bitwise and symbol entries have none. The classifier's
+   static result type of the three comparisons flips from the
+   prelude's `Bool` to `Decidable` where `Init` is in scope, which is
+   what `if` accepts (item 9); `ev`'s cells are unchanged (item 17).
+4. **A `fn` with a non-structural measure stays `RUNNABLE`** at this
+   slice, reason `measure_pending`; slice 3.14 gives it
+   `WellFounded.fix`.
+5. **A `def` in the E forms** is elaborated by the same `tr` with the
+   declared type as the expected type; the explicit-L path is
+   unchanged and the two may mix in one body. A pin shows a `def`
+   with a `match`.
+
+**Not in 3.13:** nested and numeral patterns beyond the leading case
+tree (`equation_form`, as for a `realize`), mutual recursion,
+lambda lifting, any change to the reader.
+
+### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
+
+The user's steer at the Stage-1 design: v2's module system was built
+so that a consumer of a `mod.req.shard` never resolved the
+implementation to reason about its surface — the requirements stood
+in for the lemmas about an opaque implementation, and a proof that
+needed to unfold a body was the signal that the surface was
+incomplete, answered by exporting the fact, never by piercing (memory
+`module-system`, the surface-discipline correction). V3 keeps that by
+construction, and Stage 1 and I are where it would be crossed, so the
+stance is stated now (§13 item 46):
+
+- **As built** (§6.6, `check_impl`): a consumer's environment holds
+  each `sig fn`, `sig type` and `requirement` as an axiom-kind
+  parameter K cannot unfold; the implementation is checked in a fork;
+  the merge carries the fork's records and its E table (so `run`
+  links bodies) and never an L declaration — the caller's environment
+  is the caller's. That is v2's mode split: bodies for execution, the
+  interface alone for reasoning.
+- **Stage 1 declares an implementing `fn`'s definition and its
+  `eq_N` in the fork only**, under the module's identity (item 39),
+  where the definition takes the parameter's place; nothing of it
+  crosses the merge. A consumer's environment holds, for anything the
+  view declares as `sig`, exactly the parameter — never a definition,
+  an equation, a realization record or a derived instance. Pins: a
+  consumer citing `DIR.f.eq_1` is `unknown_constant`; a consumer
+  theorem about `(DIR.f x)` by `Eq.refl` is K's refusal.
+- **The only lemmas about a `sig fn` or a `sig type` are the view's
+  `requirement`s and `theorem`s.** A module that wants its defining
+  equations public writes them as requirements (v2's weaning rule
+  carried: the consumer then depends on a fact the module commits to,
+  not on today's body). An automatic re-export of `eq_N` through a
+  view is a deliberate later form if ever, never the default.
+- **The checked instance (R57, §6.5) is built on P by substitution**:
+  the view parameters replaced by the implementation's declarations
+  and the `fulfills` evidence, the composite re-checked by K as terms.
+  Never by re-elaborating the consumer's source or I against the
+  implementation's environment — a proof produced against an opaque
+  parameter cannot depend on the body, so the substituted term does
+  not either, and no tactic (`rfl`, `decide`, `simp_only`, `unfold`)
+  sees a body across a view.
+- **Deriving and the constructor-structure facilities** (`noConfusion`,
+  `injection`, decidable equality) on a `sig type` are refused in a
+  consumer with the pointer to the view; the module derives and
+  exports.
+- **The E side stays as ruled** (items 18, 40): the substitution links
+  bodies for `run` only.
+- **I inherits it by construction**: `applicable(goal, env, policy)`
+  runs over the consumer's environment and can never offer an
+  unfolding of a parameter — opacity by selective loading, as v2's,
+  never by a name gate.
 
 ## 9. Assumption policy and entries
 
@@ -1785,7 +1933,7 @@ never compared as verdicts.
 | capability | law | phase |
 |---|---|---|
 | implicit arguments, first-order unification, universe inference, the numeral rule of §5.2, coercion `Nat → Int` | §5.1 Stage 1, §5.2 | 3 |
-| match compilation, structural recursion to recursors, `f.eq_N`, `noConfusion`, `WellFounded.fix` from `measure`, `fn` = `def` + `realize` | §5.1 Stage 1, §4.5 | 3 |
+| match compilation, structural recursion to recursors, `f.eq_N`, `noConfusion`, `WellFounded.fix` from `measure`, `fn` = `def` + `realize` | §5.1 Stage 1, §4.5; §8.4 | 3 — slices 3.13 (immediate-field recursion, `eq_N`), 3.14 (course-of-values, `WellFounded.fix`), 3.15 (`noConfusion`) |
 | deriving under a declared policy | §5.1 | 3 |
 | tactic blocks, the I elaborator, the goal graph, `sorry` as a hole | §5.1 Stage 2, §7 | 3 |
 | typeclasses, instances, coercions | §5.1 Stage 3 | 3 |
@@ -2250,7 +2398,8 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     for Stage 1 (ratified 2026-09-15):** the operator spellings are
     `Int`'s primitives (rule 5), so `+` on two `Nat` values is either
     an `Int` operation or a type error and Stage 0 does not say which;
-    Stage 1's typing answers it.
+    Stage 1's typing answers it. **Answered 2026-09-17 (§8.4 rule 3,
+    item 44):** by operand type, only where `ev` and K agree.
 39. **One module across a sealed directory** (§3.3; the K seal,
     landing 2, 2026-09-17): a file directly inside a directory that
     has a view declares under the directory's module path, keeping its
@@ -2301,3 +2450,38 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     type's automatic open covers its constructors only (item 7 as
     amended), or every field name would be a refused pattern variable
     of its file.
+43. **`fn` = `def` + `realize`, automatic and transitive** (§8.4,
+    slice 3.13; the user's ruling of 2026-09-17 on the five leans): a
+    `fn` enters K when its signature's types and its body's heads all
+    have L identities, and stays `RUNNABLE` with the obstacle named
+    otherwise; once eligible, a failure is a refusal. The definition's
+    value is the recursor directly (nested `T.rec`, the induction
+    hypothesis for an immediate-field self-call), the equations
+    `NAME.eq_N` by `Eq.refl`, the body attached through the realize
+    path. Alternatives: an opt-in marker per `fn` (contradicts law
+    §4.4, where `fn` requests admission and realization together); a
+    silent fall-back to `RUNNABLE` on a failed body (hides a typo
+    until a theorem fails to cite the function); `brecOn` from the
+    first slice (Lean's encoding, needed only for deeper structural
+    recursion — 3.14's). Deeper recursion and measures are 3.14's.
+44. **Operator identities by operand type, only where `ev` already
+    agrees with K** (§8.4 rule 3; closes item 38's open question):
+    `+ *` at `Nat`, `+ - *` at `Int`, the three comparisons at both
+    as the decisions; `-`, `/`, `mod` at `Nat` refused with the
+    naming-law pointer. Alternative: resolve `-` at `Nat` to `Nat.sub`
+    in the E program — the bootstrap, which has no static types,
+    would compute the integer difference where K truncates, and
+    parity and route 2 could not tie the two.
+45. **One term grammar for `def` and `fn`, one elaborator** (§8.4
+    guard 1, carried from the phase-2 direction checkpoint): the
+    surface is the union of the explicit-L and E forms, `tr` the
+    elaborator, a `fn` a `def` that also passes the classifier. At
+    3.13 the statement and one pin; the reader is unchanged.
+46. **The interface is the whole of a consumer's knowledge** (§8.5;
+    the user's steer of 2026-09-17): nothing L crosses a view's merge;
+    a `sig fn`'s definition and equations exist in the fork only; the
+    requirements are the lemmas; the checked instance is a
+    substitution over P, never a re-elaboration; deriving on a `sig
+    type` is the module's. Alternative: exporting `eq_N` through the
+    view automatically — every consumer proof would then weld to
+    today's body, which is exactly what v2's weaning rule forbade.

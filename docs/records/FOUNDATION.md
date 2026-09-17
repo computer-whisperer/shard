@@ -1978,6 +1978,31 @@ is `docs/FOUNDATION.md` §5.3.
   landing) now stands on the full gate: the one-module seal, the
   view's E-signature check, records on both readers, the kits, and
   the seven K-facing tests loaded and run by the V3 loader on CI.
+- **2026-09-17 — slice 3.12, Stage 1's design on disk (LANGUAGE.md
+  §8.4, §8.5; §13 items 43–46).** The report cut Stage 1 and I into
+  six slices against what exists — `realize.shard`'s translation is
+  already the E-to-L elaborator, lacking only the definition itself —
+  and put five leans: eligibility automatic and transitive with a
+  refusal once eligible; the recursor directly, `NAME.eq_N` by
+  `Eq.refl`, deeper recursion and measures to 3.14; operator
+  identities by operand type only where `ev` and K agree (`-`, `/`,
+  `mod` at `Nat` refused: the bootstrap has no static types, so a
+  resolution to `Nat.sub` could tie neither parity nor route 2);
+  measures `RUNNABLE` until 3.14; one grammar as a union with `tr`
+  the elaborator. The user agreed and steered on one point: v2's
+  module abstraction — a consumer never resolves the implementation
+  to reason about the surface; the requirements stand in for the
+  lemmas — deserves a stated stance in V3. Verified in the loader
+  that the line holds today (`check_impl` merges the records and the
+  E table, never an L declaration) and named the three places Stage
+  1 and I would cross it: the fork's new definitions and equations,
+  the checked instance built by re-elaboration instead of by
+  substitution over P, and deriving on a `sig type` in a consumer.
+  §8.5 states the stance; item 46 records it with the rejected
+  alternative (exporting `eq_N` through a view automatically, which
+  welds every consumer proof to today's body). The old tree's shape,
+  for sizing: 13,229 `fn`s, half non-recursive, a quarter structural,
+  a quarter under a measure. Next: slice 3.13.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 
