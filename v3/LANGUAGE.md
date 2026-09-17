@@ -335,6 +335,7 @@ common case).
 | `(import …)`, `(use …)` | §3.1 | the scope |
 | `(inductive NAME.{u…} BINDERS TYPE (CTOR TYPE)…)` | Lean's `inductive`: level parameters on the name, parameter binders, the type after the parameters (`(Sort …)` or a `forall` over indices), each constructor's full type after the parameters | K: `InductDecl` |
 | `(type (NAME T…) (CTOR FIELD-TYPE…)…)` | today's E data form, sugar for an `inductive` with parameters `T : Type`, result `Type`, non-dependent fields; E-eligible by construction | K (`InductDecl`) **and** E (`EInd`) |
+| `(record NAME (ctor CTOR)? (FIELD TYPE)+)` | v2's named-field product (docs/LANGUAGE.md "Records"; slice 3.9, §13 item 42): loader-level sugar expanded before any form is read — the positional `(type NAME (CTOR TYPE…))`, CTOR defaulting to `MkNAME`, an accessor `FIELD_of` and an updater `with_FIELD` (value first) per field; NAME may be `(NAME P…)`, the generated fns then binding `(P Type)` first. `(make NAME (FIELD V)…)` — every field exactly once, order-free, against the current file's records — and `(with E (FIELD V)…)` — chained updaters, a later entry outermost, purely syntactic — rewritten in every form of the file, nested values first (`kernel/record.shard`; the bootstrap's `expand_records` the twin, parity the tie). No law family at Stage 0: a fn has no L meaning; v2's laws return with Stage 1. Layout: as `type`'s until CANON's phase-6 gate | E: as the forms it expands to |
 | `(structure NAME.{u…} BINDERS (FIELD TYPE)…)` | one constructor `NAME.mk`; projections `NAME.FIELD` generated as `def`s over `proj` (Lean's projections are `Expr.proj` definitions); fields dependent on earlier fields | K |
 | `(def NAME.{u…} BINDERS TYPE VALUE)` | an L definition; hints `regular` at height 1 + the greatest height it references | K: `DefnDecl` |
 | `(abbrev …)` | as `def` with hint `abbrev` | K |
@@ -1524,6 +1525,22 @@ the toolchain's closures, so both readers agree at every commit:
   errors, parity byte-identical over 23 closures and 80,433 lines,
   route 2 and calc, 24 entrypoints, `v3/build.sh` and the compiled
   `t0`'s fixture tie. Next: Stage 1, I.
+- **3.9 records — the form, 2026-09-17 (§4, §13 item 42; the first of
+  the four follow-ups ruled after the seal: records, a public fixture
+  kit, K's clients through the V3 loader at test time, the phase-3
+  consolidation).** v2's `(record …)` with its `make` and `with`
+  sugar, expanded at the s-expression level in `kernel/record.shard`
+  at the loader's two read sites and in the bootstrap's `load.rs` the
+  same way; pins `record_basic` (a plain, a `(ctor …)` and a
+  parametric record, `make` in any order, `with` chained) and
+  `record_make` (a field missing); parity ties the closure between the
+  two readers. Found on the way: three of the new file's names
+  collided with the closure's (`fields_of`, `Rec`, `RcRes`), and one
+  with a pattern variable in the loader (`syms`, `pattern_name`) —
+  the flat bootstrap shadowed silently where the V3 gate refused.
+  Gates: 95 loader pins, parity byte-identical over 24 closures and
+  80,676 lines, 24 entrypoints. Landing b: `loader.shard`'s `Load`,
+  `Fx`, `Mod` and `Im` as records, the pilot.
 
 Then the opener as planned: the K seal under item 26's criterion,
 Stage 1, I.
@@ -2205,3 +2222,15 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     directory stays `req_scope` — the implementation's side. Alternative:
     the data files under `k/mod.req/` as req-scope siblings, which
     moves six public files behind a path nothing else needs.
+42. **Records are v2's form, expanded at the s-expression level in
+    both readers** (§4; slice 3.9): `FIELD_of` and `with_FIELD` with
+    the value first, `MkNAME` the default constructor, `make` against
+    the current file's records, `with` purely syntactic, no law family
+    until Stage 1. Alternatives: accessors under the type's namespace
+    (`NAME.FIELD`, opened for the file as any type's is) — cleaner
+    scoping, no closure-wide accessor names, but the parity projection
+    prints a head by its last component and two records with a field
+    `env` would make it non-injective, and route 1's old reader
+    generates v2's names; kept as the direction if `FIELD_of`
+    collisions bite. The flat bootstrap resolves `make` against the
+    closure's records, a looseness the V3 gate refuses.

@@ -535,7 +535,11 @@ the view (its matcher cases inside as `accel_test`), the client
 fixture `k_client_test` with the pin `k_client_reach`,
 `Limits`/`check_with` in the view (eight sig types, 61 sig fns), the
 accessors to `decl.shard`; 93 pins, 24 entrypoints, parity over 23
-closures, route 1 tied. §13 item 26 landed; next: Stage 1, I.
+closures, route 1 tied. §13 item 26 landed. **Slice 3.9 (2026-09-17):
+records** — v2's `(record …)` with `make` and `with`, expanded at the
+s-expression level in `kernel/record.shard` and in the bootstrap alike,
+parity the tie (item 42); landing a the form and its pins, landing b
+the loader's own records as the pilot. Next: Stage 1, I.
 **CI (2026-09-15): phase 3's
 slices green on the full gate** — pipeline 482 (`345116f`, slice 3.2)
 green: 22 entrypoints, calc byte-identical in 395 s, parity 130 s over

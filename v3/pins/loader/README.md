@@ -66,4 +66,7 @@ closes the case — outside, the import is refused first; inside, the
 type is concrete. Landing 3's `k_client_reach`: a client of K's view
 naming `CheckedEnv`'s constructor, refused `unknown_head` — the first
 case under the package root, by the `;; root:` header (the case's
-files then sit where a client of `kernel/k` must).
+files then sit where a client of `kernel/k` must). Slice 3.9's records:
+`record_basic` (a plain, a `(ctor …)` and a parametric record; `make`
+in any order; `with` chained; the closure also tied by parity) and
+`record_make` (a `make` missing a field: `record_make`).

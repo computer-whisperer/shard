@@ -66,6 +66,16 @@ if "$EVAL" dump "$root/main.shard" > "$a" 2>&1 \
 else
   echo "parity_test: a dump failed on $root"; head -3 "$a" "$b"; failed=$((failed+1))
 fi
+# an S closure with records (slice 3.9): the expansion — the type, the accessors and the
+# updaters, make and with rewritten — tied between the two readers
+n=$((n+1))
+root=v3/pins/loader/record_basic
+if "$EVAL" dump "$root/main.shard" > "$a" 2>&1 \
+   && "$EVAL" direct v3/kernel/load.shard --root "$root" --init "$FIX" --dump "$root/main.shard" > "$b" 2>&1; then
+  if cmp -s "$a" "$b"; then decls=$((decls + $(wc -l < "$a"))); else echo "parity_test: $root differs"; diff "$a" "$b" | head -6; failed=$((failed+1)); fi
+else
+  echo "parity_test: a dump failed on $root"; head -3 "$a" "$b"; failed=$((failed+1))
+fi
 e=$(date +%s)
 echo "parity_test: $n closures, $decls declarations, $failed differ, in $((e-s)) s"
 [ "$failed" -eq 0 ] && echo "parity_test: byte-identical, every closure's projection injective"

@@ -1859,6 +1859,33 @@ is `docs/FOUNDATION.md` §5.3.
   the consumer half — the first `meta/` consumer importing the view
   only — enforced by the sealed-directory rule for every file outside
   `k/` rather than awaited. Slice 3.8 closed; next: Stage 1, I.
+- **2026-09-17 — the four follow-ups after the seal, ruled; slice 3.9
+  records, landing a.** The user's question on V3's shape mid-flight
+  ("what is going well, what could be better, where should we focus
+  review attention?") was answered with an assessment (records §9 of
+  this date, in brief: the byte-tie gates and the review loop are the
+  design's strength; the triple-reader tax on K's sources, the `use`
+  ceremony, the E-only rule's reach into K's API, positional records
+  and tests that bypass the V3 loader are the costs) and four
+  build-differently items, all agreed: records with named fields in S
+  first, a public fixture kit of raw declarations, a runner mode that
+  loads K's clients through the V3 loader, a LANGUAGE.md consolidation
+  at the phase-3 close. Records, landing a: v2's form exactly
+  (`(record NAME (ctor CTOR)? (FIELD TYPE)+)`, `FIELD_of`,
+  `with_FIELD`, `make`, `with`), chosen over accessors in the type's
+  namespace (item 42's alternative) for the parity projection's sake
+  and route 1's old reader; expanded at the s-expression level —
+  `kernel/record.shard` at the loader's two read sites, `load.rs`
+  `expand_records` in the bootstrap — no law family at Stage 0. Four
+  name collisions found by the gates, none by reasoning: `fields_of`,
+  `RcRes` (the classifier's), `Rec` (the loader's record type) and
+  `syms` (a pattern variable in `use_form`, `pattern_name`); the flat
+  bootstrap had shadowed the first three silently (a `NoMatchArm` on a
+  value the wrong `fields_of` received) where the V3 loader refuses —
+  the gate worked as designed. Pins `record_basic`, `record_make`;
+  parity's 24th closure. Gates: 95 loader pins, parity byte-identical
+  over 24 closures and 80,676 lines, route 2 and calc, 24 entrypoints;
+  the bootstrap's 44 tests.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 
