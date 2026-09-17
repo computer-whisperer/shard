@@ -571,8 +571,14 @@ over 68,100 lines, route 2 52 s, replay 2,569 s at 30.6 GB, 20
 pinned); 490 — corpus 1,525 s, v3 3,910 s (22 entrypoints, parity
 161 s over 68,195 lines, route 2 53 s, route 1 built, replay 2,434 s
 at 30.6 GB, T0 accepted 57,977, 20 pinned, closures identical); the
-pipelines 4,129 s and 4,059 s. Next:
-the K seal (§13 item 26), Stage 1, I.
+pipelines 4,129 s and 4,059 s. **Pipeline 501 (`189fc5a`, slices
+3.8–3.11: the K seal, records, the test kits, the V3-loader gate)
+green end to end, 2026-09-17,** after the runner outage — engine
+145 s, corpus 1,493 s at the baseline, v3 3,923 s (25 entrypoints,
+calc 376 s, the seven K-facing tests through the V3 loader in 141 s,
+parity 219 s over 24 closures and 81,145 lines, route 2 57 s, route 1
+built, replay 2,383 s at 30.6 GB, T0 accepted 57,977, 20 pinned,
+closures identical). Next: Stage 1, I.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

@@ -1965,6 +1965,19 @@ is `docs/FOUNDATION.md` §5.3.
   suite "the gate for the toolchain profile", rewritten. Three of the
   four follow-ups landed the same day (records, the kits, this); the
   LANGUAGE.md consolidation is the phase-3 close's.
+- **2026-09-17 — the seal's landings 2 and 3, records, the kits and
+  the V3-loader gate green on CI.** Pipeline 501 (`189fc5a`, retried
+  after the runner outage: two node evictions, then no crates.io, then
+  no DNS; the user fixed the cluster twice): engine 145 s, corpus
+  1,493 s at the baseline, v3 3,923 s — 25 entrypoints, calc 376 s,
+  `k_clients_test` 7 tests in 141 s (46 s locally), parity 219 s over
+  24 closures and 81,145 lines, every projection injective, route 2
+  57 s, route 1 built, the compiled `t0`'s fixture and chunk ties,
+  replay 2,383 s at a 30.6 GB peak, T0 accepted 57,977, 20 pinned,
+  closures identical. Everything since `e19eb12` (the seal's second
+  landing) now stands on the full gate: the one-module seal, the
+  view's E-signature check, records on both readers, the kits, and
+  the seven K-facing tests loaded and run by the V3 loader on CI.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 
