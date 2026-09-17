@@ -778,7 +778,10 @@ preference; K sees one `std.list.List` in either environment.
   to the public `decl.shard`. What the criterion still names — the
   first `meta/` consumer importing the view only — the
   sealed-directory rule now enforces for every file outside `k/`,
-  transitively, rather than waiting on a review.
+  transitively, rather than waiting on a review. Since slice 3.11 K's
+  own tests run through the V3 loader at test time
+  (`k_clients_test.sh`), so the seal is exercised by every run of the
+  suite, not only by parity.
 
 ### 6.7 The classifier, `ev` and `run` as built (slice 5, 2026-09-12)
 
@@ -1577,6 +1580,15 @@ the toolchain's closures, so both readers agree at every commit:
   builders. 288 lines gone, then the lint's 40 `use` lines. Gates:
   24 entrypoints, parity byte-identical over 24 closures and 81,145
   lines, 95 pins.
+- **3.11 K's tests through the V3 loader, 2026-09-17 (the third
+  follow-up).** `kernel/test/k_clients_test.sh` loads each K-facing
+  test with the V3 loader and runs it under `ev` (`load.shard --run`):
+  the two clients outside the directory with `v3/kernel/k` as a second
+  root, the five tests inside with the implementation in their
+  closure — seven tests in 46 s. Every other entrypoint runs on the
+  bootstrap, which resolves flat and enforces no seal, so this is
+  where the sealed-directory rule, the view and the E-side visibility
+  are load-bearing at test time rather than only at parity.
 
 Then the opener as planned: the K seal under item 26's criterion,
 Stage 1, I.

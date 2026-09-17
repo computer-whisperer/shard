@@ -1951,6 +1951,20 @@ is `docs/FOUNDATION.md` §5.3.
   gate said so (`unknown extern run`). Then the lint dropped 40 `use`
   lines the deletions had orphaned. Gates: 24 entrypoints, parity
   byte-identical over 24 closures and 81,145 lines, 95 loader pins.
+- **2026-09-17 — slice 3.11, K's tests through the V3 loader (the
+  third follow-up).** Measured first: the hostile battery takes 10 s
+  through `load.shard --run` against under a second on the bootstrap;
+  the seven K-facing tests 46 s in all. `kernel/test/k_clients_test.sh`
+  runs each with the V3 loader — the two clients outside `k/` with the
+  directory as a second root, the five inside with the implementation
+  in their closure — and requires exit 0 and the `failures = 0` line;
+  an entrypoint of `v3/test.sh`'s script loop. The bootstrap's flat
+  resolution enforces no seal, so this is the first gate at which a
+  test that reached around the view fails by running, not only by
+  parity's projection. `v3/test.sh`'s header, which still called the
+  suite "the gate for the toolchain profile", rewritten. Three of the
+  four follow-ups landed the same day (records, the kits, this); the
+  LANGUAGE.md consolidation is the phase-3 close's.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

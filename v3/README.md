@@ -544,7 +544,11 @@ parity the tie (item 42): the accessors in the record's namespace
 records, their 36 hand accessors gone. **Slice 3.10 (2026-09-17): the
 test kits** — `kernel/test/case_kit.shard` (17 tests) and
 `decls_kit.shard` (8), public files both sides of the seal import;
-the copied helpers gone. Next: the V3-loader test mode, then Stage 1,
+the copied helpers gone. **Slice 3.11 (2026-09-17): K's tests through
+the V3 loader** — `kernel/test/k_clients_test.sh` loads and runs the
+seven K-facing tests under the V3 loader (46 s), so the seal is
+load-bearing at test time. Three of the four follow-ups landed; the
+LANGUAGE.md consolidation waits for the phase-3 close. Next: Stage 1,
 I.
 **CI (2026-09-15): phase 3's
 slices green on the full gate** — pipeline 482 (`345116f`, slice 3.2)
