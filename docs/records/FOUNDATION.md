@@ -1905,7 +1905,31 @@ is `docs/FOUNDATION.md` §5.3.
   (`pattern_name` on every record): `fld_FIELD`. Item 42 rewritten
   with the evidence. Gates: 95 loader pins, parity byte-identical over
   24 closures and 80,705 lines, 24 entrypoints, the bootstrap's 44
-  tests.
+  tests. **Landing b, the same day — the loader's records
+  (`624c6bf`).** `Load` (14 fields), `Fx` (9), `Mod` (7) and `Im` (6)
+  rewritten as records: `load0` and the four constructions by `make`,
+  the mutators (`ld_with_env`, `ld_rec`, `fx_open`, `im_mark`, …) by
+  `with`, the 36 hand accessors deleted and their call sites renamed
+  to `Load.env`, `Fx.parts`, `Mod.ok`, `Im.fx` across the loader,
+  `load.shard`, the loader kit and the pins test; the wrappers with a
+  meaning of their own kept (`ld_recs` reverses, `fx_file` and
+  `im_file` join). The first run refused eight functions with
+  `pattern_name`: the automatic open of a type's whole namespace had
+  turned `recs`, `pending`, `parts`, `forms`, `file` and `root` into
+  visible functions of their files, and `load.shard`'s stale `(use
+  kernel.loader.Load)` did the same there. Ruled and built: a type's
+  automatic open covers its constructors only (`open_types` with
+  `OpenSome`; item 7 amended), a record's accessors cited qualified or
+  opened by `(use M.T)`; the stale opens dropped. Gates: 95 loader
+  pins, parity byte-identical over 24 closures and 80,900 lines, route
+  2 and calc byte-identical, 24 entrypoints; the prune lint quiet at
+  994 lines. **CI (2026-09-17):** the v3 jobs of 493, 494 and 496 and
+  496's corpus were evicted by the runner's taint manager after their
+  tests had passed (a node event), and the retries failed at setup —
+  the runner cannot reach crates.io or the apt index; the cluster's
+  network, not the tree (as with pipelines 457–460 on 2026-09-12).
+  CI evidence for the seal's landings 2 and 3 and for records waits
+  on the runner; the local gates stand.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

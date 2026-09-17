@@ -247,8 +247,11 @@ them; each is a candidate for §13.
 - **`(use P a b)`** opens `P` for citations whose first component is
   `a` or `b`; `(use Init.List)` opens `List` (imported names are bare
   in K, §3); `(use Init)` opens nothing new.
-- **A `type` form opens its own namespace** for the rest of its file
-  (§13 item 7); `inductive` and `structure` do not.
+- **A `type` form opens its constructors** for the whole of its file
+  (§13 item 7, amended at slices 3.4 and 3.9) — the constructors only:
+  a record's accessors under the same prefix are cited qualified
+  (`Load.env`) or opened by `(use M.T)`; `inductive` and `structure`
+  open nothing.
 - **The export's meta line** must carry the pin's Lean githash, the
   exporter's name and version and the format version (`init_pin_*`);
   the first record is checked before any declaration streams. The
@@ -1550,8 +1553,16 @@ the toolchain's closures, so both readers agree at every commit:
   names, shadowing the accessors the namespace opens (`fld_FIELD`
   now) — the flat bootstrap shadowed silently where the V3 gate
   refused. Gates: 95 loader pins, parity byte-identical over 24
-  closures and 80,705 lines, 24 entrypoints. Landing b: `loader.shard`'s
-  `Load`, `Fx`, `Mod` and `Im` as records, the pilot.
+  closures and 80,705 lines, 24 entrypoints. **Landing b, the same
+  day: the loader's `Load` (14 fields), `Fx` (9), `Mod` (7) and `Im`
+  (6) as records** — constructions by `make`, the mutators by `with`,
+  the hand accessors gone and their 36 call-site names rewritten to
+  `Load.env`-style citations across four files. The first migration
+  hit eight `pattern_name` refusals — the automatic open of a type's
+  namespace had made every field name a reserved word of its file —
+  so that open now covers constructors only (item 7 amended). Gates
+  unchanged: 95 pins, parity over 24 closures and 80,900 lines, 24
+  entrypoints; the lint quiet.
 
 Then the opener as planned: the K seal under item 26's criterion,
 Stage 1, I.
@@ -1931,7 +1942,14 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
    cites them before the declaration as it calls a later function
    (`loader.shard` `open_types`); another module's constructors are
    cited through `(use M.T)`, which the migration wrote for the
-   toolchain (1,195 lines). **RULED 2026-09-15 (the user): `(use M)`
+   toolchain (1,195 lines). **Amended (slice 3.9, 2026-09-17):** the
+   automatic open covers the type's constructors only (`OpenSome`),
+   never every declaration under its prefix — a record's accessors
+   (`Load.env`) would otherwise make each field name a refused
+   pattern variable of the file (`pattern_name`; eight refusals in the
+   loader at the first migration); `(use M.T)` opens the whole prefix,
+   accessors included, as a file's explicit choice. **RULED 2026-09-15
+   (the user): `(use M)`
    does not open M's types' constructors** — as Lean's `open` does
    not; an implicit opening would make every same-named constructor
    pair across modules (`Nil`/`Cons` in two list types) a collision
@@ -2252,4 +2270,8 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     names, cannot lower a file that uses a record until the V3
     lowering replaces it — no such file is in `t0`'s closure. The
     flat bootstrap resolves `make` and `with` against the closure's
-    records, a looseness the V3 gate refuses.
+    records, a looseness the V3 gate refuses. The accessors are cited
+    qualified unless a file opens the record with `(use M.T)`: a
+    type's automatic open covers its constructors only (item 7 as
+    amended), or every field name would be a refused pattern variable
+    of its file.

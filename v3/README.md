@@ -538,8 +538,11 @@ accessors to `decl.shard`; 93 pins, 24 entrypoints, parity over 23
 closures, route 1 tied. §13 item 26 landed. **Slice 3.9 (2026-09-17):
 records** — v2's `(record …)` with `make` and `with`, expanded at the
 s-expression level in `kernel/record.shard` and in the bootstrap alike,
-parity the tie (item 42); landing a the form and its pins, landing b
-the loader's own records as the pilot. Next: Stage 1, I.
+parity the tie (item 42): the accessors in the record's namespace
+(`Load.env`), a type's automatic open narrowed to its constructors
+(item 7); landing b made the loader's `Load`, `Fx`, `Mod` and `Im`
+records, their 36 hand accessors gone. Next: the public fixture kit
+and the V3-loader test mode, then Stage 1, I.
 **CI (2026-09-15): phase 3's
 slices green on the full gate** — pipeline 482 (`345116f`, slice 3.2)
 green: 22 entrypoints, calc byte-identical in 395 s, parity 130 s over
