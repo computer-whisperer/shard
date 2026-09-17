@@ -1,0 +1,121 @@
+;;; v3/kernel/k/test/accel_test.shard — the accelerator's reference matcher, inside the
+;;; seal (§3.2; GPT-6 R42, R49): the reference rows replayed from the empty environment
+;;; pin, a defeq-but-different dependency does not, and the matcher refuses every exempt
+;;; kind under a rowed name — cases that call accel_ref, accel_ref_closure and
+;;; ref_matches directly, which the view does not export; the battery's other cases are
+;;; kernel/test/hostile_test.shard, a client of the view. The helpers are the battery's.
+
+(import "../../host.shard")
+(import "../add.shard")
+(use kernel.k)
+(use kernel.decl)
+(use kernel.expr)
+(use kernel.host)
+(use kernel.level)
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.util)
+(use kernel.k.CheckedEnv)
+(use kernel.decl.ConstantInfo)
+(use kernel.decl.ConstantVal)
+(use kernel.decl.Constructor)
+(use kernel.decl.Declaration)
+(use kernel.decl.InductiveType)
+(use kernel.decl.QuotKind)
+(use kernel.verdict)
+(use kernel.verdict.Outcome)
+(use kernel.expr.BinderInfo)
+(use kernel.expr.Literal)
+(use kernel.expr.St)
+(use kernel.host.World)
+(use kernel.intmap.IntMap)
+(use kernel.level.Level)
+(use kernel.name.Name)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+
+(type Case (Case (List Int) Bool))
+(fn u () Level (LParam (n1 (quote u))))
+(fn nat () Expr (mk_const (nm_nat) Nil))
+(fn zero () Expr (mk_const (nm_nat_zero) Nil))
+(fn lit ((k Int)) Expr (mk_lit (LitNat k)))
+(fn x_ () Name (n1 (quote x)))
+(fn val ((p (Pair St Expr))) Expr (match p ((Pair _ e) e)))
+(fn arrow ((a Expr) (b Expr)) Expr (mk_pi (x_) BDefault a (val (lift_loose_bvars (st_anon) b 0 1))))
+(fn type1 () Expr (mk_sort (LSucc LZero)))
+(fn st0 () St (st_init))
+(fn cv ((n Name) (ps (List Name)) (t Expr)) ConstantVal (ConstantVal n ps t))
+(fn e0 () CheckedEnv (CheckedEnv IMEmpty False Nil 0))
+(fn nat_decl () Declaration
+  (InductDecl Nil 0
+    (list (InductiveType (nm_nat) (type1)
+            (list (Constructor (nm_nat_zero) (nat)) (Constructor (nm_nat_succ) (mk_pi (n1 (quote n)) BDefault (nat) (nat))))))
+    False))
+(fn eq_decl () Declaration
+  (InductDecl (list (n1 (quote u))) 2
+    (list (InductiveType (nm_eq)
+            (mk_pi (n1 (quote a)) BImplicit (mk_sort (u)) (mk_pi (n1 (quote a)) BDefault (mk_bvar 0) (mk_pi (n1 (quote b)) BDefault (mk_bvar 1) (mk_sort LZero))))
+            (list (Constructor (nm_eq_refl)
+                    (mk_pi (n1 (quote a)) BImplicit (mk_sort (u)) (mk_pi (n1 (quote a)) BDefault (mk_bvar 0)
+                      (mk_app (mk_app (mk_app (mk_const (nm_eq) (list (u))) (mk_bvar 1)) (mk_bvar 0)) (mk_bvar 0))))))))
+    False))
+(fn env_after ((o (Outcome CheckedEnv)) (dflt CheckedEnv)) CheckedEnv (match o ((Accepted e) e) (_ dflt)))
+(fn e_nat () CheckedEnv (env_after (check (e0) (st0) (nat_decl)) (e0)))
+(fn e_eq () CheckedEnv (env_after (check (e_nat) (st0) (eq_decl)) (e0)))
+(fn eq_nat ((a Expr) (b Expr)) Expr (mk_app (mk_app (mk_app (mk_const (nm_eq) (list (LSucc LZero))) (nat)) a) b))
+(fn refl_nat ((a Expr)) Expr (mk_app (mk_app (mk_const (nm_eq_refl) (list (LSucc LZero))) (nat)) a))
+(fn nm_add () Name (n2 (quote Nat) (quote add)))
+(fn nat_add ((a Expr) (b Expr)) Expr (mk_app (mk_app (mk_const (n2 (quote Nat) (quote add)) Nil) a) b))
+;; 7c. the reference rows of Nat.add's identity closure (accel_pins.shard
+;;     `accel_ref_closure`), replayed from the empty environment through `check`:
+;;     the export's own declarations pin.
+;; 7d. the same replay with `Nat.add._f` re-spelled as the beta-redex
+;;     `(fun x => x) VALUE` — definitionally equal, structurally different — and
+;;     the genuine Nat.add over it: admitted, NOT pinned (a same-shaped
+;;     definition over a different dependency is a different primitive).
+(fn nm_add_f () Name (Str (nm_add) (quote _f)))
+(fn wrap_value ((d Declaration)) Declaration
+  (match d
+    ((DefnDecl v value h s all) (DefnDecl v (mk_app (mk_lam (x_) BDefault (cv_type v) (mk_bvar 0)) value) h s all))
+    (_ d)))
+(fn replay ((env CheckedEnv) (ns (List Name)) (wrap Name)) CheckedEnv
+  (measure (struct ns))
+  (match ns
+    (Nil env)
+    ((Cons n r)
+     (replay
+       (match (env_find env n)
+         ((Some _) env)
+         (None (match (accel_ref n)
+                 (None env)
+                 ((Some d) (env_after (check env (st0) (if (name_eq n wrap) (wrap_value d) d)) env)))))
+       r wrap))))
+(fn has ((env CheckedEnv) (n Name)) Bool (match (env_find env n) ((Some _) True) (None False)))
+(fn e_replay () CheckedEnv (replay (e0) (accel_ref_closure (nm_add)) Anon))
+(fn e_replay_wrapped () CheckedEnv (replay (e0) (accel_ref_closure (nm_add)) (nm_add_f)))
+(fn info_ctor ((n Name)) ConstantInfo (CtorInfo (cv n Nil (nat)) (nm_nat) 0 0 0 False))
+(fn info_rec ((n Name)) ConstantInfo (RecInfo (cv n Nil (nat)) (list (nm_nat)) 0 0 1 2 Nil False False))
+(fn info_quot ((n Name)) ConstantInfo (QuotInfo (cv n Nil (nat)) QType))
+(fn info_thm ((n Name)) ConstantInfo (ThmInfo (cv n Nil (eq_nat (zero) (zero))) (refl_nat (zero)) (list n)))
+(fn nowhere () Name (n1 (quote nowhere)))
+
+(fn cases () (List Case)
+  (list
+    (Case "7c the reference rows of Nat.add's closure, replayed from empty, pin Nat" (env_pinned (e_replay) (nm_nat)))
+    (Case "7c the replayed reference rows pin Nat.add" (env_pinned (e_replay) (nm_add)))
+    (Case "7d the genuine Nat.add over a defeq-but-different Nat.add._f: admitted" (has (e_replay_wrapped) (nm_add)))
+    (Case "7d the genuine Nat.add over a defeq-but-different Nat.add._f: not pinned" (bool_not (env_pinned (e_replay_wrapped) (nm_add))))
+    (Case "7e R49: the matcher refuses a constructor under Nat.add's row" (bool_not (ref_matches (e_eq) (nm_add) (info_ctor (nm_add)))))
+    (Case "7e R49: the matcher refuses a recursor under Nat.add's row" (bool_not (ref_matches (e_eq) (nm_add) (info_rec (nm_add)))))
+    (Case "7e R49: the matcher refuses a quotient under Nat.add's row" (bool_not (ref_matches (e_eq) (nm_add) (info_quot (nm_add)))))
+    (Case "7e R49: the matcher refuses a theorem under Nat.add's row" (bool_not (ref_matches (e_eq) (nm_add) (info_thm (nm_add)))))
+    (Case "7e R49: an exempt kind under a name without a row passes — a closure's own theorem" (ref_matches (e_eq) (nowhere) (info_thm (nowhere))))))
+
+(fn run ((cs (List Case)) (fails Int) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil (exit fails (write_line (append "accel_test: failures = " (show_int fails)) w)))
+    ((Cons (Case name ok) r) (run r (if ok fails (+ fails 1)) (write_line (append (if ok "PASS " "FAIL ") name) w)))))
+(fn main ((w World)) World (run (cases) 0 w))

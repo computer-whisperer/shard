@@ -758,7 +758,23 @@ preference; K sees one `std.list.List` in either environment.
   parameters are E parameters (§3.3, item 40). Parity and route 2 give
   the loader `v3/kernel/k` as a second root for K's consumers, the
   directory's own check linking the implementation as the bootstrap's
-  flat closure holds it.
+  flat closure holds it. **Landing 3 (2026-09-17): the clients, and
+  the seal complete.** The hostile battery is a client of the view
+  (`kernel/test/hostile_test.shard`: `env_empty`, `check`,
+  `check_with` under `limits`, the data vocabulary — R52's forged-node
+  fixtures through the public entry); its nine cases that call the
+  accelerator's matcher directly (`accel_ref`, `accel_ref_closure`,
+  `ref_matches`) sit inside, `k/test/accel_test.shard`. The
+  raw-construction client fixture is `kernel/test/k_client_test.shard`
+  (a raw inductive checked from the empty environment, the result
+  inspected, a definition checked over it, a refusal leaving the
+  environment untouched) with the pin `k_client_reach` beside it: a
+  client naming `CheckedEnv`'s constructor is refused
+  (`unknown_head`). `ConstantVal`'s accessors moved from `add.shard`
+  to the public `decl.shard`. What the criterion still names — the
+  first `meta/` consumer importing the view only — the
+  sealed-directory rule now enforces for every file outside `k/`,
+  transitively, rather than waiting on a review.
 
 ### 6.7 The classifier, `ev` and `run` as built (slice 5, 2026-09-12)
 
@@ -1496,6 +1512,18 @@ the toolchain's closures, so both readers agree at every commit:
   the old chain with `(import "k")` and the compiled `t0`'s fixture
   tie. Landing 3: the hostile battery as a client through the view,
   the R52 client fixture, the documents.
+- **3.8 the K seal — landing 3 of 3, 2026-09-17: the seal complete
+  (§13 item 26).** The hostile battery split at the seal: 45 cases
+  outside as a client of the view, the matcher's nine inside
+  (`accel_test`); `Limits`, `check_with`, `limits` and `nm_string`
+  the last additions to the view (eight sig types, 61 sig fns);
+  `ConstantVal`'s accessors to `decl.shard`; the client fixture
+  `k_client_test` and the pin `k_client_reach` (the pins test gained
+  a `;; root:` header for a case that must sit under the package
+  root). Gates: 93 loader pins, K's own check 69 discharges and 0
+  errors, parity byte-identical over 23 closures and 80,433 lines,
+  route 2 and calc, 24 entrypoints, `v3/build.sh` and the compiled
+  `t0`'s fixture tie. Next: Stage 1, I.
 
 Then the opener as planned: the K seal under item 26's criterion,
 Stage 1, I.
@@ -2031,7 +2059,10 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     sealed-directory rule) landed; landing 2 (the view, one module
     across the directory in place of the facade — item 39 — the
     consumers, the tests inside) landed 2026-09-17; landing 3 (the
-    hostile battery as a client, the R52 fixture) open.
+    hostile battery as a client, the R52 fixture) landed the same
+    day — **THE SEAL IS COMPLETE (2026-09-17):** the criterion's
+    structural parts are built and pinned, and its consumer half is
+    enforced by the sealed-directory rule for every file outside `k/`.
 27. **Calc's differential drivers sit outside the program** (§10 item
     2): the harness calls `ev` with values built as data and renders
     the results; an S program names no wire cell at phase 2.

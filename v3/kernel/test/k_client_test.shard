@@ -1,0 +1,67 @@
+;;; v3/kernel/test/k_client_test.shard — the raw-construction client fixture (GPT-6 R52; the
+;;; K seal, v3/LANGUAGE.md §13 item 26): a client that imports K's view only builds a raw
+;;; declaration from the public data, checks it from the empty environment, inspects the
+;;; result, and checks again over it — never reaching around the API (a client naming
+;;; CheckedEnv's constructor is the pin k_client_reach).
+
+(import "../host.shard")
+(import "../k")
+(use kernel.k)
+(use kernel.decl)
+(use kernel.expr)
+(use kernel.host)
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.util)
+(use kernel.decl.ConstantVal)
+(use kernel.decl.Constructor)
+(use kernel.decl.Declaration)
+(use kernel.decl.DefinitionSafety)
+(use kernel.decl.InductiveType)
+(use kernel.decl.ReducibilityHints)
+(use kernel.verdict)
+(use kernel.verdict.Outcome)
+(use kernel.expr.BinderInfo)
+(use kernel.host.World)
+(use kernel.level.Level)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+
+(type Case (Case (List Int) Bool))
+
+(fn nat () Expr (mk_const (nm_nat) Nil))
+(fn type1 () Expr (mk_sort (LSucc LZero)))
+(fn nat_decl () Declaration
+  (InductDecl Nil 0
+    (list (InductiveType (nm_nat) (type1)
+            (list (Constructor (nm_nat_zero) (nat)) (Constructor (nm_nat_succ) (mk_pi (n1 (quote n)) BDefault (nat) (nat))))))
+    False))
+(fn zero_def () Declaration
+  (DefnDecl (ConstantVal (n1 (quote z)) Nil (nat)) (mk_const (nm_nat_zero) Nil) (HRegular 1) Safe (list (n1 (quote z)))))
+(fn loose_def () Declaration
+  (DefnDecl (ConstantVal (n1 (quote loose)) Nil (nat)) (mk_bvar 0) (HRegular 1) Safe (list (n1 (quote loose)))))
+(fn accepted ((o (Outcome CheckedEnv))) Bool (match o ((Accepted _) True) (_ False)))
+(fn env_after ((o (Outcome CheckedEnv)) (dflt CheckedEnv)) CheckedEnv (match o ((Accepted e) e) (_ dflt)))
+(fn has ((env CheckedEnv) (n Name)) Bool (match (env_find env n) ((Some _) True) (None False)))
+;; the flow: the empty environment, Nat checked into it, z checked over that
+(fn e_nat () CheckedEnv (env_after (check (env_empty) (st_init) (nat_decl)) (env_empty)))
+(fn e_z () CheckedEnv (env_after (check (e_nat) (st_init) (zero_def)) (e_nat)))
+
+(fn cases () (List Case)
+  (list
+    (Case "the empty environment holds nothing" (bool_not (has (env_empty) (nm_nat))))
+    (Case "a raw inductive checked from the empty environment is accepted" (accepted (check (env_empty) (st_init) (nat_decl))))
+    (Case "the result holds it" (has (e_nat) (nm_nat)))
+    (Case "the result pins the export's Nat" (env_pinned (e_nat) (nm_nat)))
+    (Case "a second check over the result is accepted" (accepted (check (e_nat) (st_init) (zero_def))))
+    (Case "and holds both" (bool_and (has (e_z) (nm_nat)) (has (e_z) (n1 (quote z)))))
+    (Case "a raw declaration with a loose variable is refused" (bool_not (accepted (check (e_nat) (st_init) (loose_def)))))
+    (Case "a refusal leaves the environment it was given" (bool_not (has (e_nat) (n1 (quote loose)))))))
+
+(fn run ((cs (List Case)) (fails Int) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil (exit fails (write_line (append "k_client_test: failures = " (show_int fails)) w)))
+    ((Cons (Case name ok) r) (run r (if ok fails (+ fails 1)) (write_line (append (if ok "PASS " "FAIL ") name) w)))))
+(fn main ((w World)) World (run (cases) 0 w))
