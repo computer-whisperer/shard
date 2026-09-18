@@ -1,59 +1,44 @@
-;;; v3/kernel/reader.shard — the Stage-0 reader: S forms → K's `Declaration`
-;;; (v3/LANGUAGE.md §4, §5.1–5.3). Phase 2, slice 2. Elaboration is term for
-;;; term (§5.1): names bound by `fun`, `forall` and `let` become BVar indices,
-;;; unbound names resolve through the scope to `Const` with the universe
-;;; arguments written, nothing is inserted or inferred. The scope is data the
-;;; loader builds (slice 3): the module's own path and the opened prefixes.
-;;; A `fn`'s body is E and is read by the classifier (classify.shard, slice
-;;; 5); this file reads the L side and routes the E forms and the directives
-;;; to their owners. Errors are a reason symbol and a message; K's verdicts on what
-;;; this file produces are K's (add.shard).
+;;; v3/kernel/reader.shard — the reader of the L forms: S forms → K's
+;;; `Declaration` (v3/LANGUAGE.md §4, §5.1–5.3). Phase 2, slice 2; over the
+;;; elaborator since slice 3.15 (elab.shard: implicit arguments, universe
+;;; inference, the numeral rule, the one coercion — the terms are built over
+;;; K's locals and closed by K's mk_binding). The scope is data the loader
+;;; builds (scope.shard). A `fn`'s body is E and is read by the classifier
+;;; (classify.shard); this file reads the L side and routes the E forms and
+;;; the directives to their owners. Errors are a reason symbol and a message;
+;;; K's verdicts on what this file produces are K's (add.shard).
 
-(import "sexpr.shard")
-(import "k")
+(import "elab.shard")
 (use kernel.k)
 (use kernel.decl)
+(use kernel.elab)
 (use kernel.expr)
-(use kernel.intmap)
+(use kernel.kw)
 (use kernel.level)
 (use kernel.name)
 (use kernel.prelude)
+(use kernel.scope)
 (use kernel.sexpr)
 (use kernel.util)
-(use kernel.decl.ConstantInfo)
 (use kernel.decl.ConstantVal)
 (use kernel.decl.Constructor)
 (use kernel.decl.Declaration)
 (use kernel.decl.DefinitionSafety)
 (use kernel.decl.InductiveType)
 (use kernel.decl.ReducibilityHints)
+(use kernel.elab.El)
+(use kernel.elab.ERes)
+(use kernel.elab.FinRes)
 (use kernel.expr.BinderInfo)
-(use kernel.expr.Expr)
-(use kernel.expr.Literal)
 (use kernel.level.Level)
 (use kernel.name.Name)
 (use kernel.prelude.Bool)
 (use kernel.prelude.List)
 (use kernel.prelude.Option)
 (use kernel.prelude.Pair)
+(use kernel.scope.Defd)
+(use kernel.scope.Scope)
 (use kernel.sexpr.SExpr)
-
-;; the scope the loader builds (loader.shard; §3.1): the module's own path
-;; (Anon for a scratch file: declared names stay bare), the opened prefixes in
-;; order (`(use Init)` = bare names, always last), and what is visible
-(type Open
-  (OpenAll Name)                  ; (use P): P.x is citable as x
-  (OpenSome Name (List Symbol)))  ; (use P a b): only a… and b… — the citation's first component
-(type Vis
-  (VisAll)                        ; a scratch scope: everything the environment holds
-  (VisOnly (List Name) Bool (IntMap (List (Pair Name Name))) (List Name)))
-  ;; the visible modules (the file's import closure and itself), whether the
-  ;; Init prefix is visible, declaration → module for every native declaration
-  ;; (a constant absent from the table is Init's), the pending (sorry) names
-;; the module prefix a file's declarations take (the sealed directory's for a file
-;; directly inside one — the K seal, §13 item 26), the file's own module (the tag
-;; visibility and the E table's registration go by), the opened prefixes, the visible set
-(type Scope (Scope Name Name (List Open) Vis))
 
 (type RDecl
   (RDOk (List Declaration))     ; what the form declares, in admission order
@@ -62,379 +47,6 @@
   (RDParam Declaration Symbol Int)  ; a view parameter (§6.5): the axiom, its kind (type / fn / requirement), a sig type's arity
   (RDLater Symbol)              ; an E form the loader owns (fn, extern, realize: classify.shard, realize.shard; fulfills: §6.6) — the loader intercepts them before read_decl
   (RDErr Symbol (List Int)))    ; reason, message
-
-;; a term result
-(type ERes (EOk Expr) (EErr Symbol (List Int)))
-
-;; the elaboration context: scope, environment, the declaration's universe
-;; parameters, the names being declared by this form (name, universe arity)
-;; — citable before admission —, the bound names innermost first, the
-;; projection aliases (field name → index, over the bound `self`), and the
-;; E-type flag (§4: a bare polymorphic constant takes level 0 by rule there)
-(type Cx (Cx Scope CheckedEnv (List Name) (List (Pair Name Int)) (List Name) (List (Pair Name Int)) Bool))
-
-(fn cx_scope ((c Cx)) Scope (match c ((Cx s _ _ _ _ _ _) s)))
-(fn cx_env ((c Cx)) CheckedEnv (match c ((Cx _ e _ _ _ _ _) e)))
-(fn cx_lps ((c Cx)) (List Name) (match c ((Cx _ _ l _ _ _ _) l)))
-(fn cx_defining ((c Cx)) (List (Pair Name Int)) (match c ((Cx _ _ _ d _ _ _) d)))
-(fn cx_bound ((c Cx)) (List Name) (match c ((Cx _ _ _ _ b _ _) b)))
-(fn cx_aliases ((c Cx)) (List (Pair Name Int)) (match c ((Cx _ _ _ _ _ a _) a)))
-(fn cx_etype ((c Cx)) Bool (match c ((Cx _ _ _ _ _ _ t) t)))
-(fn cx_bind ((c Cx) (n Name)) Cx (match c ((Cx s e l d b a t) (Cx s e l d (Cons n b) a t))))
-(fn cx_with_etype ((c Cx) (t Bool)) Cx (match c ((Cx s e l d b a _) (Cx s e l d b a t))))
-(fn cx_with_aliases ((c Cx) (a (List (Pair Name Int)))) Cx (match c ((Cx s e l d b _ t) (Cx s e l d b a t))))
-(fn cx0 ((sc Scope) (env CheckedEnv) (lps (List Name)) (defining (List (Pair Name Int)))) Cx
-  (Cx sc env lps defining Nil Nil False))
-
-;; ---- names ---------------------------------------------------------------------------
-;; a symbol's components on `.`; an all-digit component is a Num
-(fn name_of_bytes ((bs (List Int)) (comp (List Int)) (acc Name)) (Option Name)
-  (measure (struct bs))
-  (match bs
-    (Nil (name_push acc (rev comp)))
-    ((Cons c r)
-     (if (int_eq c 46)
-       (match (name_push acc (rev comp)) ((Some n) (name_of_bytes r Nil n)) (None None))
-       (name_of_bytes r (Cons c comp) acc)))))
-(fn name_push ((acc Name) (comp (List Int))) (Option Name)
-  (match comp
-    (Nil None)
-    (_ (if (all_digits comp) (Some (Num acc (digits_val comp 0))) (Some (Str acc (sym_of_chars comp)))))))
-(fn name_of_sym ((s Symbol)) (Option Name) (name_of_bytes (chars_of_sym s) Nil Anon))
-
-;; p ++ n
-(fn name_append ((p Name) (n Name)) Name
-  (measure (struct n))
-  (match n
-    (Anon p)
-    ((Str q s) (Str (name_append p q) s))
-    ((Num q k) (Num (name_append p q) k))))
-
-(fn sc_module ((sc Scope)) Name (match sc ((Scope m _ _ _) m)))
-(fn sc_tag ((sc Scope)) Name (match sc ((Scope _ t _ _) t)))
-(fn sc_opened ((sc Scope)) (List Open) (match sc ((Scope _ _ o _) o)))
-(fn sc_vis ((sc Scope)) Vis (match sc ((Scope _ _ _ v) v)))
-;; a declared name's identity: the module path plus the name (§3)
-(fn qualify ((sc Scope) (n Name)) Name (name_append (sc_module sc) n))
-
-;; the declaration → module table (VisOnly's third field), keyed as the environment is
-(fn tbl_find ((tbl (IntMap (List (Pair Name Name)))) (k Name)) (Option Name)
-  (match (im_find tbl (env_key k)) ((Some b) (assoc_name k b)) (None None)))
-(fn tbl_add ((tbl (IntMap (List (Pair Name Name)))) (k Name) (m Name)) (IntMap (List (Pair Name Name)))
-  (let ((h (env_key k)))
-    (im_insert tbl h (Cons (Pair k m) (match (im_find tbl h) ((Some b) b) (None Nil))))))
-;; is the constant k citable from this scope? (a name being declared by the
-;; current form is, always — resolve_go asks first)
-(fn visible ((sc Scope) (k Name)) Bool
-  (match (sc_vis sc)
-    (VisAll True)
-    ((VisOnly mods init tbl _)
-     (match (tbl_find tbl k) ((Some m) (mem_name m mods)) (None init)))))
-(fn pending_name ((sc Scope) (k Name)) Bool
-  (match (sc_vis sc) (VisAll False) ((VisOnly _ _ _ p) (mem_name k p))))
-
-;; the universe arity of a citable constant: being declared here, or in the environment
-(fn const_arity ((c Cx) (n Name)) (Option Int)
-  (match (assoc_name_int n (cx_defining c))
-    ((Some k) (Some k))
-    (None (match (env_find (cx_env c) n) ((Some info) (Some (len (ci_lparams info)))) (None None)))))
-(fn assoc_name_int ((n Name) (xs (List (Pair Name Int)))) (Option Int)
-  (measure (struct xs))
-  (match xs (Nil None) ((Cons (Pair m k) r) (if (name_eq n m) (Some k) (assoc_name_int n r)))))
-
-;; resolution (§3.1): the module's own declarations, each opened prefix in
-;; order, then the bare name (`(use Init)` is implicit). Two hits = ambiguous.
-;; A candidate is a hit when it is being declared by this form or is a
-;; visible constant; a pending (sorry) candidate is the obligation itself.
-(type Resolved (RName Name Int) (RNone) (RAmbiguous Name Name) (RPend Name))
-(fn resolve ((c Cx) (n Name)) Resolved
-  (resolve_go c n (scope_candidates (cx_scope c) n) RNone))
-(fn scope_candidates ((sc Scope) (n Name)) (List Name)
-  (let ((m (sc_module sc)))
-    (append (match m (Anon Nil) (_ (list (name_append m n))))
-            (append (prefixed (sc_opened sc) n) (append (init_cited sc n) (list n))))))
-;; `Init.NAME` cites the imported NAME explicitly (§3.1, slice 7): imported names are bare in
-;; K and the loader shows them under the prefix Init, so the citation is the bare name when
-;; the scope sees Init — the spelling that tells Init's `Bool` from a native `main.Bool` (T5)
-(fn init_cited ((sc Scope) (n Name)) (List Name)
-  (if (bool_and (init_prefixed n) (init_seen sc)) (list (drop_init n)) Nil))
-(fn init_prefixed ((n Name)) Bool (match (first_component n) ((Some s) (sym_eq s (quote Init))) (None False)))
-(fn init_seen ((sc Scope)) Bool (match (sc_vis sc) (VisAll True) ((VisOnly _ init _ _) init)))
-;; the name without its leading `Init` component (`(use Init.List)` opens `List`)
-(fn drop_init ((n Name)) Name
-  (measure (struct n))
-  (match n
-    ((Str Anon s) (if (sym_eq s (quote Init)) Anon n))
-    ((Str p s) (Str (drop_init p) s))
-    ((Num p k) (Num (drop_init p) k))
-    (Anon Anon)))
-(fn prefixed ((ps (List Open)) (n Name)) (List Name)
-  (measure (struct ps))
-  (match ps
-    (Nil Nil)
-    ((Cons (OpenAll p) r) (Cons (name_append p n) (prefixed r n)))
-    ((Cons (OpenSome p ms) r)
-     (if (first_component_in n ms) (Cons (name_append p n) (prefixed r n)) (prefixed r n)))))
-(fn first_component_in ((n Name) (ms (List Symbol))) Bool
-  (match (first_component n) ((Some s) (mem_sym s ms)) (None False)))
-(fn first_component ((n Name)) (Option Symbol)
-  (measure (struct n))
-  (match n
-    (Anon None)
-    ((Str Anon s) (Some s))
-    ((Str p _) (first_component p))
-    ((Num Anon _) None)
-    ((Num p _) (first_component p))))
-(fn mem_sym ((s Symbol) (xs (List Symbol))) Bool
-  (measure (struct xs))
-  (match xs (Nil False) ((Cons y r) (if (sym_eq s y) True (mem_sym s r)))))
-(fn is_defining ((c Cx) (k Name)) Bool
-  (match (assoc_name_int k (cx_defining c)) ((Some _) True) (None False)))
-(fn resolve_go ((c Cx) (n Name) (cands (List Name)) (found Resolved)) Resolved
-  (measure (struct cands))
-  (match cands
-    (Nil found)
-    ((Cons k r)
-     (if (pending_name (cx_scope c) k) (RPend k)
-     (match (const_arity c k)
-       (None (resolve_go c n r found))
-       ((Some a)
-        (if (bool_or (is_defining c k) (visible (cx_scope c) k))
-          (match found
-            (RNone (resolve_go c n r (RName k a)))
-            ((RName f _) (if (name_eq f k) (resolve_go c n r found) (resolve_type_pick c n r found f k a)))
-            (_ found))
-          (resolve_go c n r found))))))))
-;; two candidates: ambiguous — except in an E-type position (a fn's binders and result, a
-;; type's fields), where the one that is an inductive is what the position determines
-;; (LANGUAGE.md §13 item 28): a `type` whose constructor bears its name — v2's commonest
-;; idiom, `(type World (World Int))` — opens both `World` and `World.World` for the file
-(fn resolve_type_pick ((c Cx) (n Name) (r (List Name)) (found Resolved) (f Name) (k Name) (a Int)) Resolved
-  (if (cx_etype c)
-    (match (Pair (is_inductive c f) (is_inductive c k))
-      ((Pair True False) (resolve_go c n r found))
-      ((Pair False True) (resolve_go c n r (RName k a)))
-      (_ (RAmbiguous f k)))
-    (RAmbiguous f k)))
-(fn is_inductive ((c Cx) (k Name)) Bool
-  (match (env_find (cx_env c) k) ((Some (InductInfo _ _ _ _ _ _ _ _ _)) True) (_ False)))
-
-;; ---- levels (§5.2) ---------------------------------------------------------------------
-(fn elab_level ((c Cx) (s SExpr)) (Option Level)
-  (measure (struct s))
-  (match s
-    ((SNum k) (Some (level_of_nat k)))
-    ((SSym x)
-     (match (name_of_sym x)
-       ((Some n) (if (mem_name n (cx_lps c)) (Some (LParam n)) None))
-       (None None)))
-    ((SList (Cons (SSym h) args))
-     (if (sym_eq h (quote succ))
-       (match args ((Cons a Nil) (match (elab_level c a) ((Some l) (Some (LSucc l))) (None None))) (_ None))
-     (if (sym_eq h (quote max))
-       (match args ((Cons a (Cons b Nil)) (level2 c a b True)) (_ None))
-     (if (sym_eq h (quote imax))
-       (match args ((Cons a (Cons b Nil)) (level2 c a b False)) (_ None))
-     None))))
-    (_ None)))
-(fn level2 ((c Cx) (a SExpr) (b SExpr) (is_max Bool)) (Option Level)
-  (match (elab_level c a)
-    (None None)
-    ((Some la) (match (elab_level c b) (None None) ((Some lb) (Some (if is_max (LMax la lb) (LIMax la lb))))))))
-(fn level_of_nat ((k Int)) Level (measure k) (if (lt k 1) LZero (LSucc (level_of_nat (- k 1)))))
-(fn elab_levels ((c Cx) (ss (List SExpr))) (Option (List Level))
-  (measure (struct ss))
-  (match ss
-    (Nil (Some Nil))
-    ((Cons s r) (match (elab_level c s) (None None) ((Some l) (match (elab_levels c r) (None None) ((Some ls) (Some (Cons l ls)))))))))
-(fn zeros ((k Int)) (List Level) (measure k) (if (lt k 1) Nil (Cons LZero (zeros (- k 1)))))
-
-;; ---- terms (§5.1) -----------------------------------------------------------------------
-(fn index_of ((n Name) (bs (List Name)) (i Int)) (Option Int)
-  (measure (struct bs))
-  (match bs (Nil None) ((Cons b r) (if (name_eq n b) (Some i) (index_of n r (+ i 1))))))
-
-(fn elab ((c Cx) (s SExpr)) ERes
-  (measure (struct s))
-  (match s
-    ((SNum k) (if (lt k 0) (EErr (quote negative_numeral) "a negative numeral has no L literal: K's literals are naturals (§2, §8.1 rule 2)") (EOk (mk_lit (LitNat k)))))
-    ((SStr bs) (EOk (mk_lit (LitStr bs))))
-    ((SSym x) (elab_sym c x Nil False))
-    ((SSymU x ls) (elab_sym c x ls True))
-    ((SList Nil) (EErr (quote empty_application) "()"))
-    ((SList (Cons (SSym h) args))
-     (if (sym_eq h (quote fun)) (elab_binding c args True)
-     (if (sym_eq h (quote forall)) (elab_binding c args False)
-     (if (sym_eq h (quote ->)) (elab_arrow c args)
-     (if (sym_eq h (quote let)) (elab_let c args)
-     (if (sym_eq h (quote Sort))
-       (match args ((Cons l Nil) (match (elab_level c l) ((Some u) (EOk (mk_sort u))) (None (EErr (quote bad_level) "(Sort LEVEL)")))) (_ (EErr (quote bad_shape) "(Sort LEVEL)")))
-     (if (sym_eq h (quote Type))
-       (match args ((Cons l Nil) (match (elab_level c l) ((Some u) (EOk (mk_sort (LSucc u)))) (None (EErr (quote bad_level) "(Type LEVEL)")))) (_ (EErr (quote bad_shape) "(Type LEVEL)")))
-     (if (sym_eq h (quote proj)) (elab_proj c args)
-     (elab_app c (SSym h) args)))))))))
-    ((SList (Cons h args)) (elab_app c h args))))
-
-;; a symbol: Prop / Type, a bound name, a projection alias, else a constant
-(fn elab_sym ((c Cx) (x Symbol) (ls (List SExpr)) (has_univ Bool)) ERes
-  (match (name_of_sym x)
-    (None (EErr (quote bad_name) (chars_of_sym x)))
-    ((Some n)
-     (match (index_of n (cx_bound c) 0)
-       ((Some i) (if has_univ (EErr (quote bad_universe_suffix) "a bound variable takes no universe arguments") (EOk (mk_bvar i))))
-       (None
-        (match (assoc_name_int n (cx_aliases c))
-          ((Some j)
-           (match (index_of (self_name) (cx_bound c) 0)
-             ((Some i) (EOk (mk_proj (alias_struct c) j (mk_bvar i))))
-             (None (EErr (quote bad_shape) "a projection alias outside its structure"))))
-          (None
-           (if (bool_and (bool_not has_univ) (sym_eq x (quote Prop))) (EOk (mk_sort LZero))
-           (if (bool_and (bool_not has_univ) (sym_eq x (quote Type))) (EOk (mk_sort (LSucc LZero)))
-           (elab_const c n ls has_univ))))))))))
-;; the bound name projections go through; `self.` is not a name an author can spell
-;; (nor a symbol the V3 lexer reads — a trailing dot is a universe suffix's start — so it is built from its bytes)
-(fn self_name () Name (Str Anon (sym_of_chars "self.")))
-;; the structure a projection alias projects from: the first name being declared
-(fn alias_struct ((c Cx)) Name (match (cx_defining c) ((Cons (Pair n _) _) n) (Nil Anon)))
-
-(fn elab_const ((c Cx) (n Name) (ls (List SExpr)) (has_univ Bool)) ERes
-  (match (resolve c n)
-    (RNone (EErr (quote unknown_constant) (show_name n)))
-    ((RAmbiguous a b) (EErr (quote ambiguous_name) (append (show_name n) (append ": " (append (show_name a) (append " and " (show_name b)))))))
-    ((RPend k) (EErr (quote pending_obligation) (append (show_name k) " was read with sorry: it admits nothing, and citing it is the obligation")))
-    ((RName k arity)
-     (if has_univ
-       (match (elab_levels c ls)
-         (None (EErr (quote bad_level) (show_name n)))
-         ((Some lvls)
-          (if (int_eq (len lvls) arity) (EOk (mk_const k lvls))
-            (EErr (quote universe_arity) (append (show_name k) (append " takes " (append (show_nat arity) " universe arguments")))))))
-       (if (int_eq arity 0) (EOk (mk_const k Nil))
-       (if (cx_etype c) (EOk (mk_const k (zeros arity)))
-         (EErr (quote universe_args_required) (append (show_name k) (append " is universe polymorphic: write " (append (show_name k) ".{…}"))))))))))
-
-;; application, left-nested
-(fn elab_app ((c Cx) (h SExpr) (args (List SExpr))) ERes
-  (match (elab c h)
-    ((EErr e m) (EErr e m))
-    ((EOk f) (elab_args c f args))))
-(fn elab_args ((c Cx) (f Expr) (args (List SExpr))) ERes
-  (measure (struct args))
-  (match args
-    (Nil (EOk f))
-    ((Cons a r) (match (elab c a) ((EErr e m) (EErr e m)) ((EOk x) (elab_args c (mk_app f x) r))))))
-
-;; a binder: (x TYPE) or (x TYPE implicit|strict|inst)
-(type Binder (Binder Name BinderInfo Expr))
-(fn read_binder ((c Cx) (s SExpr)) (Pair (Option Binder) (List Int))
-  (match s
-    ((SList (Cons (SSym x) (Cons ty rest)))
-     (match (name_of_sym x)
-       (None (Pair None (chars_of_sym x)))
-       ((Some n)
-        (match (binder_info rest)
-          (None (Pair None "a binder is (x TYPE) or (x TYPE implicit|strict|inst)"))
-          ((Some bi)
-           (match (elab c ty)
-             ((EErr e m) (Pair None (append (chars_of_sym e) (append ": " m))))
-             ((EOk t) (Pair (Some (Binder n bi t)) Nil))))))))
-    (_ (Pair None "a binder is (x TYPE)"))))
-(fn binder_info ((rest (List SExpr))) (Option BinderInfo)
-  (match rest
-    (Nil (Some BDefault))
-    ((Cons (SSym m) Nil)
-     (if (sym_eq m (quote implicit)) (Some BImplicit)
-     (if (sym_eq m (quote strict)) (Some BStrictImplicit)
-     (if (sym_eq m (quote inst)) (Some BInstImplicit)
-     None))))
-    (_ None)))
-
-;; (fun (BINDER…) BODY) / (forall (BINDER…) BODY): nested Lam / Pi
-(fn elab_binding ((c Cx) (args (List SExpr)) (is_lam Bool)) ERes
-  (match args
-    ((Cons (SList bs) (Cons body Nil)) (elab_binders c bs body is_lam))
-    (_ (EErr (quote bad_shape) (if is_lam "(fun ((x TYPE)…) TERM)" "(forall ((x TYPE)…) TERM)")))))
-(fn elab_binders ((c Cx) (bs (List SExpr)) (body SExpr) (is_lam Bool)) ERes
-  (measure (struct bs))
-  (match bs
-    (Nil (elab c body))
-    ((Cons b r)
-     (match (read_binder c b)
-       ((Pair None m) (EErr (quote bad_binder) m))
-       ((Pair (Some (Binder n bi t)) _)
-        (match (elab_binders (cx_bind c n) r body is_lam)
-          ((EErr e m) (EErr e m))
-          ((EOk e) (EOk (if is_lam (mk_lam n bi t e) (mk_pi n bi t e))))))))))
-
-;; (-> A … R): non-dependent Pi, right-nested; the binder is anonymous
-(fn elab_arrow ((c Cx) (args (List SExpr))) ERes
-  (measure (struct args))
-  (match args
-    (Nil (EErr (quote bad_shape) "(-> TERM… TERM)"))
-    ((Cons r Nil) (elab c r))
-    ((Cons a rest)
-     (match (elab c a)
-       ((EErr e m) (EErr e m))
-       ((EOk d)
-        (match (elab_arrow (cx_bind c Anon) rest)
-          ((EErr e m) (EErr e m))
-          ((EOk b) (EOk (mk_pi Anon BDefault d b)))))))))
-
-;; (let ((x TYPE TERM)…) BODY): sequential, one Let per binding
-(fn elab_let ((c Cx) (args (List SExpr))) ERes
-  (match args
-    ((Cons (SList bs) (Cons body Nil)) (elab_lets c bs body))
-    (_ (EErr (quote bad_shape) "(let ((x TYPE TERM)…) TERM)"))))
-(fn elab_lets ((c Cx) (bs (List SExpr)) (body SExpr)) ERes
-  (measure (struct bs))
-  (match bs
-    (Nil (elab c body))
-    ((Cons (SList (Cons (SSym x) (Cons ty (Cons v Nil)))) r)
-     (match (name_of_sym x)
-       (None (EErr (quote bad_name) (chars_of_sym x)))
-       ((Some n)
-        (match (elab c ty)
-          ((EErr e m) (EErr e m))
-          ((EOk t)
-           (match (elab c v)
-             ((EErr e m) (EErr e m))
-             ((EOk val)
-              (match (elab_lets (cx_bind c n) r body)
-                ((EErr e m) (EErr e m))
-                ((EOk b) (EOk (mk_let n t val b)))))))))))
-    (_ (EErr (quote bad_shape) "a let binding is (x TYPE TERM)"))))
-
-;; (proj S i TERM)
-(fn elab_proj ((c Cx) (args (List SExpr))) ERes
-  (match args
-    ((Cons (SSym sn) (Cons (SNum i) (Cons t Nil)))
-     (match (name_of_sym sn)
-       (None (EErr (quote bad_name) (chars_of_sym sn)))
-       ((Some n)
-        (match (resolve c n)
-          ((RName k _) (match (elab c t) ((EErr e m) (EErr e m)) ((EOk x) (EOk (mk_proj k i x)))))
-          ((RAmbiguous a b) (EErr (quote ambiguous_name) (append (show_name a) (append " and " (show_name b)))))
-          ((RPend k) (EErr (quote pending_obligation) (append (show_name k) " was read with sorry: it admits nothing, and citing it is the obligation")))
-          (RNone (EErr (quote unknown_constant) (show_name n)))))))
-    (_ (EErr (quote bad_shape) "(proj STRUCTURE INDEX TERM)"))))
-
-;; ---- binder lists and the Pi / Lam telescopes ------------------------------------------
-;; a declaration's binders, elaborated in order; the context extended with each
-(fn read_binders ((c Cx) (bs (List SExpr)) (acc (List Binder))) (Pair (Option (Pair Cx (List Binder))) (List Int))
-  (measure (struct bs))
-  (match bs
-    (Nil (Pair (Some (Pair c (rev acc))) Nil))
-    ((Cons b r)
-     (match (read_binder c b)
-       ((Pair None m) (Pair None m))
-       ((Pair (Some (Binder n bi t)) _) (read_binders (cx_bind c n) r (Cons (Binder n bi t) acc)))))))
-(fn mk_pis ((bs (List Binder)) (body Expr)) Expr
-  (measure (struct bs))
-  (match bs (Nil body) ((Cons (Binder n bi t) r) (mk_pi n bi t (mk_pis r body)))))
-(fn mk_lams ((bs (List Binder)) (body Expr)) Expr
-  (measure (struct bs))
-  (match bs (Nil body) ((Cons (Binder n bi t) r) (mk_lam n bi t (mk_lams r body)))))
 
 ;; ---- the declared name and its universe parameters ------------------------------------
 (type Head (Head Name (List Name)))
@@ -449,24 +61,17 @@
           ((Some ps) (Pair (Some (Head (qualify sc n) ps)) Nil))
           (None (Pair None "universe parameters are names: NAME.{u v}"))))))
     (_ (Pair None "a declared name is NAME or NAME.{u…}"))))
-(fn univ_params ((ls (List SExpr)) (acc (List Name))) (Option (List Name))
-  (measure (struct ls))
-  (match ls
-    (Nil (Some (rev acc)))
-    ((Cons (SSym u) r) (match (name_of_sym u) ((Some n) (univ_params r (Cons n acc))) (None None)))
-    (_ None)))
+(fn lparam_levels ((lps (List Name))) (List Level)
+  (measure (struct lps))
+  (match lps (Nil Nil) ((Cons u r) (Cons (LParam u) (lparam_levels r)))))
 
-;; ---- reducibility height (environment.cpp: 1 + the greatest height cited) -----------
-(fn def_height ((env CheckedEnv) (v Expr)) Int (+ 1 (max_height env (expr_consts v) 0)))
-(fn max_height ((env CheckedEnv) (ns (List Name)) (acc Int)) Int
-  (measure (struct ns))
-  (match ns
-    (Nil acc)
-    ((Cons n r)
-     (max_height env r
-       (match (env_find env n)
-         ((Some (DefnInfo _ _ (HRegular h) _ _)) (max_int acc h))
-         (_ acc))))))
+;; ---- closing over the binders ------------------------------------------------------------
+;; the Pi over the declaration's binders, finished (no metavariable survives)
+(fn close_pis ((e El) (fvars (List Expr)) (t Expr)) (Pair El FinRes)
+  (match (el_pis e fvars t) ((Pair e1 pi) (Pair e1 (el_finish e1 pi)))))
+(fn close_lams ((e El) (fvars (List Expr)) (v Expr)) (Pair El FinRes)
+  (match (el_lams e fvars v) ((Pair e1 lam) (Pair e1 (el_finish e1 lam)))))
+(fn rd_err ((r FinRes)) RDecl (match r ((FinErr s m) (RDErr s m)) ((FinOk _) (RDErr (quote bad_shape) "finished"))))
 
 ;; ---- the forms (§4) -----------------------------------------------------------------------
 (fn read_decl ((sc Scope) (env CheckedEnv) (s SExpr)) RDecl
@@ -503,32 +108,45 @@
      (match (read_head sc hd)
        ((Pair None m) (RDErr (quote bad_name) m))
        ((Pair (Some (Head n lps)) _)
-        (match (read_binders (cx0 sc env lps Nil) bs Nil)
+        (match (read_binders (el0 sc env lps Nil) bs Nil)
           ((Pair None m) (RDErr (quote bad_binder) m))
-          ((Pair (Some (Pair c binders)) _)
-           (match (elab c ty)
-             ((EErr e m) (RDErr e m))
-             ((EOk t)
-              (let ((cv (ConstantVal n lps (mk_pis binders t))))
-                (if (sym_eq kind (quote theorem))
-                  (read_proof c cv binders val)
-                  (match (elab c val)
-                    ((EErr e m) (RDErr e m))
-                    ((EOk v)
-                     (let ((value (mk_lams binders v)))
-                       (if (sym_eq kind (quote opaque))
-                         (RDOk (list (OpaqueDecl cv value False (list n))))
-                         (RDOk (list (DefnDecl cv value (if (sym_eq kind (quote abbrev)) HAbbrev (HRegular (def_height env value))) Safe (list n)))))))))))))))))
+          ((Pair (Some (Pair e1 fvars)) _)
+           (match (elab_type e1 ty)
+             ((EErr r m) (RDErr r m))
+             ((EOk e2 t _)
+              (if (sym_eq kind (quote theorem))
+                (read_proof e2 n lps fvars t val)
+                (match (elab e2 val (Some t))
+                  ((EErr r m) (RDErr r m))
+                  ((EOk e3 v _)
+                   (match (close_pis e3 fvars t)
+                     ((Pair _ (FinErr r m)) (RDErr r m))
+                     ((Pair e4 (FinOk T))
+                      (match (close_lams e4 fvars v)
+                        ((Pair _ (FinErr r m)) (RDErr r m))
+                        ((Pair _ (FinOk value))
+                         (let ((cv (ConstantVal n lps T)))
+                           (if (sym_eq kind (quote opaque))
+                             (RDOk (list (OpaqueDecl cv value False (list n))))
+                             (RDOk (list (DefnDecl cv value (if (sym_eq kind (quote abbrev)) HAbbrev (HRegular (def_height env value))) Safe (list n))))))))))))))))))))
     (_ (RDErr (quote bad_shape) (append "(" (append (chars_of_sym kind) " NAME ((x TYPE)…) TYPE VALUE)"))))))
 
-;; a Stage-0 proof: (exact TERM) or sorry
-(fn read_proof ((c Cx) (cv ConstantVal) (binders (List Binder)) (p SExpr)) RDecl
+;; a Stage-0 proof: (exact TERM) or sorry — TERM at the statement, over the binders
+(fn read_proof ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (p SExpr)) RDecl
   (match p
-    ((SSym s) (if (sym_eq s (quote sorry)) (RDPending (cv_name cv) (quote sorry)) (RDErr (quote bad_proof) "a Stage-0 proof is (exact TERM) or sorry")))
-    ((SList (Cons (SSym e) (Cons t Nil)))
-     (if (sym_eq e (quote exact))
-       (match (elab c t) ((EErr e2 m) (RDErr e2 m)) ((EOk v) (RDOk (list (ThmDecl cv (mk_lams binders v) (list (cv_name cv)))))))
-     (if (sym_eq e (quote by)) (RDErr (quote reserved_form) "by: phase 3 (tactics); a Stage-0 proof is (exact TERM) or sorry")
+    ((SSym s) (if (sym_eq s (quote sorry)) (RDPending n (quote sorry)) (RDErr (quote bad_proof) "a Stage-0 proof is (exact TERM) or sorry")))
+    ((SList (Cons (SSym x) (Cons pt Nil)))
+     (if (sym_eq x (quote exact))
+       (match (elab e pt (Some t))
+         ((EErr r m) (RDErr r m))
+         ((EOk e1 v _)
+          (match (close_pis e1 fvars t)
+            ((Pair _ (FinErr r m)) (RDErr r m))
+            ((Pair e2 (FinOk T))
+             (match (close_lams e2 fvars v)
+               ((Pair _ (FinErr r m)) (RDErr r m))
+               ((Pair _ (FinOk value)) (RDOk (list (ThmDecl (ConstantVal n lps T) value (list n))))))))))
+     (if (sym_eq x (quote by)) (RDErr (quote reserved_form) "by: phase 3 (tactics); a Stage-0 proof is (exact TERM) or sorry")
        (RDErr (quote bad_proof) "a Stage-0 proof is (exact TERM) or sorry"))))
     (_ (RDErr (quote bad_proof) "a Stage-0 proof is (exact TERM) or sorry"))))
 
@@ -544,7 +162,7 @@
           (match (type_head sc hd)
             ((Pair None m) (RDErr (quote bad_name) m))
             ((Pair (Some (Pair n params)) _)
-             (RDParam (AxiomDecl (ConstantVal n Nil (mk_pis (type_binders params) (mk_sort (LSucc LZero)))) False) (quote type) (len params)))))
+             (RDParam (AxiomDecl (ConstantVal n Nil (type_former_type (len params))) False) (quote type) (len params)))))
          (_ (RDErr (quote bad_shape) "(sig type NAME) or (sig type (NAME T…))")))
      (if (sym_eq k (quote fn))
        (match (read_signature sc env rest)
@@ -552,6 +170,10 @@
          ((Pair None m) (RDErr (quote bad_shape) m)))
        (RDErr (quote bad_shape) "(sig fn NAME BINDERS RET) or (sig type NAME)"))))
     (_ (RDErr (quote bad_shape) "(sig fn NAME BINDERS RET) or (sig type NAME)"))))
+;; Type → … → Type with k arrows
+(fn type_former_type ((k Int)) Expr
+  (measure k)
+  (if (lt k 1) (mk_sort (LSucc LZero)) (mk_pi Anon BDefault (mk_sort (LSucc LZero)) (type_former_type (- k 1)))))
 ;; NAME BINDERS RET …: the E signature as a Π-type — a `sig fn`'s, or a `fn`'s
 ;; head (its body and measure ignored); the qualified name with it
 (fn read_signature ((sc Scope) (env CheckedEnv) (args (List SExpr))) (Pair (Option (Pair Name Expr)) (List Int))
@@ -560,37 +182,46 @@
      (match (name_of_sym x)
        (None (Pair None (chars_of_sym x)))
        ((Some short)
-        (match (read_binders (cx_with_etype (cx0 sc env Nil Nil) True) bs Nil)
+        (match (read_binders (el_with_etype (el0 sc env Nil Nil) True) bs Nil)
           ((Pair None m) (Pair None (append "bad binder: " m)))
-          ((Pair (Some (Pair c binders)) _)
-           (match (elab c ret)
-             ((EErr e m) (Pair None (append (chars_of_sym e) (append ": " m))))
-             ((EOk t) (Pair (Some (Pair (qualify sc short) (mk_pis binders t))) Nil))))))))
+          ((Pair (Some (Pair e1 fvars)) _)
+           (match (elab_type e1 ret)
+             ((EErr r m) (Pair None (append (chars_of_sym r) (append ": " m))))
+             ((EOk e2 t _)
+              (match (close_pis e2 fvars t)
+                ((Pair _ (FinErr r m)) (Pair None (append (chars_of_sym r) (append ": " m))))
+                ((Pair _ (FinOk T)) (Pair (Some (Pair (qualify sc short) T)) Nil))))))))))
     (_ (Pair None "NAME ((x TYPE)…) RET"))))
 ;; (requirement NAME BINDERS PROP): the parameter NAME : ∀ BINDERS, PROP (L terms)
 (fn read_requirement ((sc Scope) (env CheckedEnv) (args (List SExpr))) RDecl
   (match (read_statement sc env args)
-    ((Pair (Some (Pair cv _)) _) (RDParam (AxiomDecl cv False) (quote requirement) 0))
-    ((Pair None m) (RDErr (quote bad_shape) m))))
-(fn read_statement ((sc Scope) (env CheckedEnv) (args (List SExpr))) (Pair (Option (Pair ConstantVal (Pair Cx (List Binder)))) (List Int))
+    ((RSOk _ n lps _ _ T) (RDParam (AxiomDecl (ConstantVal n lps T) False) (quote requirement) 0))
+    ((RSErr m) (RDErr (quote bad_shape) m))))
+;; a statement read: the state over the binders, the name, its universe
+;; parameters, the fvars, the open proposition, the closed one
+(type RStmt (RSOk El Name (List Name) (List Expr) Expr Expr) (RSErr (List Int)))
+(fn read_statement ((sc Scope) (env CheckedEnv) (args (List SExpr))) RStmt
   (match args
     ((Cons hd (Cons (SList bs) (Cons prop Nil)))
      (match (read_head sc hd)
-       ((Pair None m) (Pair None m))
+       ((Pair None m) (RSErr m))
        ((Pair (Some (Head n lps)) _)
-        (match (read_binders (cx0 sc env lps Nil) bs Nil)
-          ((Pair None m) (Pair None (append "bad binder: " m)))
-          ((Pair (Some (Pair c binders)) _)
-           (match (elab c prop)
-             ((EErr e m) (Pair None (append (chars_of_sym e) (append ": " m))))
-             ((EOk t) (Pair (Some (Pair (ConstantVal n lps (mk_pis binders t)) (Pair c binders))) Nil))))))))
-    (_ (Pair None "(requirement NAME ((x TYPE)…) PROP)"))))
+        (match (read_binders (el0 sc env lps Nil) bs Nil)
+          ((Pair None m) (RSErr (append "bad binder: " m)))
+          ((Pair (Some (Pair e1 fvars)) _)
+           (match (elab_type e1 prop)
+             ((EErr r m) (RSErr (append (chars_of_sym r) (append ": " m))))
+             ((EOk e2 t _)
+              (match (close_pis e2 fvars t)
+                ((Pair _ (FinErr r m)) (RSErr (append (chars_of_sym r) (append ": " m))))
+                ((Pair e3 (FinOk T)) (RSOk e3 n lps fvars t T))))))))))
+    (_ (RSErr "(requirement NAME ((x TYPE)…) PROP)"))))
 ;; (fulfills NAME PROOF) against the view's (requirement NAME BINDERS PROP), the
 ;; statement re-read in this environment: a theorem, or pending
 (fn read_fulfills ((sc Scope) (env CheckedEnv) (req_args (List SExpr)) (proof SExpr)) RDecl
   (match (read_statement sc env req_args)
-    ((Pair None m) (RDErr (quote bad_shape) m))
-    ((Pair (Some (Pair cv (Pair c binders))) _) (read_proof c cv binders proof))))
+    ((RSErr m) (RDErr (quote bad_shape) m))
+    ((RSOk e n lps fvars t _) (read_proof e n lps fvars t proof))))
 
 ;; (axiom NAME.{u…} BINDERS TYPE) — the loader admits it only under (trusts NAME) (§9)
 (fn read_axiom ((sc Scope) (env CheckedEnv) (args (List SExpr))) RDecl
@@ -599,34 +230,41 @@
      (match (read_head sc hd)
        ((Pair None m) (RDErr (quote bad_name) m))
        ((Pair (Some (Head n lps)) _)
-        (match (read_binders (cx0 sc env lps Nil) bs Nil)
+        (match (read_binders (el0 sc env lps Nil) bs Nil)
           ((Pair None m) (RDErr (quote bad_binder) m))
-          ((Pair (Some (Pair c binders)) _)
-           (match (elab c ty)
-             ((EErr e m) (RDErr e m))
-             ((EOk t) (RDOk (list (AxiomDecl (ConstantVal n lps (mk_pis binders t)) False))))))))))
+          ((Pair (Some (Pair e1 fvars)) _)
+           (match (elab_type e1 ty)
+             ((EErr r m) (RDErr r m))
+             ((EOk e2 t _)
+              (match (close_pis e2 fvars t)
+                ((Pair _ (FinErr r m)) (RDErr r m))
+                ((Pair _ (FinOk T)) (RDOk (list (AxiomDecl (ConstantVal n lps T) False))))))))))))
     (_ (RDErr (quote bad_shape) "(axiom NAME ((x TYPE)…) TYPE)"))))
 
-;; (inductive NAME.{u…} BINDERS TYPE (CTOR TYPE)…): one type, Lean's shapes
+;; (inductive NAME.{u…} BINDERS TYPE (CTOR TYPE)…): one type, Lean's shapes; the
+;; type's own name is citable in the constructors with the type it declares
 (fn read_inductive ((sc Scope) (env CheckedEnv) (args (List SExpr))) RDecl
   (match args
     ((Cons hd (Cons (SList bs) (Cons ty ctors)))
      (match (read_head sc hd)
        ((Pair None m) (RDErr (quote bad_name) m))
        ((Pair (Some (Head n lps)) _)
-        (match (read_binders (cx0 sc env lps (list (Pair n (len lps)))) bs Nil)
+        (match (read_binders (el0 sc env lps Nil) bs Nil)
           ((Pair None m) (RDErr (quote bad_binder) m))
-          ((Pair (Some (Pair c binders)) _)
-           (match (elab c ty)
-             ((EErr e m) (RDErr e m))
-             ((EOk t)
-              (match (read_ctors c n binders ctors Nil)
-                ((Pair None m) (RDErr (quote bad_constructor) m))
-                ((Pair (Some cs) _)
-                 (RDOk (list (InductDecl lps (len binders) (list (InductiveType n (mk_pis binders t) cs)) False))))))))))))
+          ((Pair (Some (Pair e1 fvars)) _)
+           (match (elab_type e1 ty)
+             ((EErr r m) (RDErr r m))
+             ((EOk e2 t _)
+              (match (close_pis e2 fvars t)
+                ((Pair _ (FinErr r m)) (RDErr r m))
+                ((Pair e3 (FinOk IT))
+                 (match (read_ctors (el_with_defining e3 (list (Defd n (len lps) IT))) n fvars ctors Nil)
+                   ((Pair None m) (RDErr (quote bad_constructor) m))
+                   ((Pair (Some cs) _)
+                    (RDOk (list (InductDecl lps (len fvars) (list (InductiveType n IT cs)) False))))))))))))))
     (_ (RDErr (quote bad_shape) "(inductive NAME ((x TYPE)…) TYPE (CTOR TYPE)…)"))))
 ;; (CTOR TYPE): the constructor's type after the parameters, in the binder context
-(fn read_ctors ((c Cx) (ind Name) (binders (List Binder)) (cs (List SExpr)) (acc (List Constructor))) (Pair (Option (List Constructor)) (List Int))
+(fn read_ctors ((e El) (ind Name) (fvars (List Expr)) (cs (List SExpr)) (acc (List Constructor))) (Pair (Option (List Constructor)) (List Int))
   (measure (struct cs))
   (match cs
     (Nil (Pair (Some (rev acc)) Nil))
@@ -634,9 +272,12 @@
      (match (name_of_sym cn)
        (None (Pair None (chars_of_sym cn)))
        ((Some short)
-        (match (elab c ty)
-          ((EErr e m) (Pair None (append (chars_of_sym e) (append ": " m))))
-          ((EOk t) (read_ctors c ind binders r (Cons (Constructor (name_append ind short) (mk_pis binders t)) acc)))))))
+        (match (elab_type e ty)
+          ((EErr r2 m) (Pair None (append (chars_of_sym r2) (append ": " m))))
+          ((EOk e1 t _)
+           (match (close_pis e1 fvars t)
+             ((Pair _ (FinErr r2 m)) (Pair None (append (chars_of_sym r2) (append ": " m))))
+             ((Pair e2 (FinOk CT)) (read_ctors e2 ind fvars r (Cons (Constructor (name_append ind short) CT) acc)))))))))
     (_ (Pair None "a constructor is (CTOR TYPE)"))))
 
 ;; (type (NAME T…) (CTOR FIELD-TYPE…)…) / (type NAME (CTOR FIELD-TYPE…)…): today's
@@ -648,34 +289,25 @@
      (match (type_head sc hd)
        ((Pair None m) (RDErr (quote bad_name) m))
        ((Pair (Some (Pair n params)) _)
-        (let ((binders (type_binders params)))
-          (let ((c (cx_with_etype (bind_all (cx0 sc env Nil (list (Pair n 0))) params) True)))
-            (let ((result (apply_params (mk_const n Nil) (len params) (len params))))
-              (match (read_fields_ctors c n binders result ctors Nil)
-                ((Pair None m) (RDErr (quote bad_constructor) m))
-                ((Pair (Some cs) _)
-                 (RDOk (list (InductDecl Nil (len params) (list (InductiveType n (mk_pis binders (mk_sort (LSucc LZero))) cs)) False)))))))))))
+        (let ((IT (type_former_type (len params))))
+          (match (type_locals (el_with_etype (el0 sc env Nil (list (Defd n 0 IT))) True) params Nil)
+            ((Pair e1 fvars)
+             (match (w_apps (el_w e1) (mk_const n Nil) fvars)
+               ((Pair w2 result)
+                (match (read_fields_ctors (el_set_w e1 w2) n fvars result ctors Nil)
+                  ((Pair None m) (RDErr (quote bad_constructor) m))
+                  ((Pair (Some cs) _)
+                   (RDOk (list (InductDecl Nil (len params) (list (InductiveType n IT cs)) False)))))))))))))
     (_ (RDErr (quote bad_shape) "(type (NAME T…) (CTOR FIELD-TYPE…)…)"))))
-(fn type_head ((sc Scope) (s SExpr)) (Pair (Option (Pair Name (List Name))) (List Int))
-  (match s
-    ((SSym x) (match (name_of_sym x) ((Some n) (Pair (Some (Pair (qualify sc n) Nil)) Nil)) (None (Pair None (chars_of_sym x)))))
-    ((SList (Cons (SSym x) ps))
-     (match (name_of_sym x)
-       (None (Pair None (chars_of_sym x)))
-       ((Some n) (match (univ_params ps Nil) ((Some names) (Pair (Some (Pair (qualify sc n) names)) Nil)) (None (Pair None "type parameters are names"))))))
-    (_ (Pair None "(type (NAME T…) …) or (type NAME …)"))))
-(fn type_binders ((ps (List Name))) (List Binder)
+;; the `(T Type)` parameters as locals — implicit in the constructors, as Lean's inductive
+;; parameters are and as E cites them (slice 3.15: `(Pair2.mk two green)` in L as in a body)
+(fn type_locals ((e El) (ps (List Name)) (acc (List Expr))) (Pair El (List Expr))
   (measure (struct ps))
-  (match ps (Nil Nil) ((Cons p r) (Cons (Binder p BDefault (mk_sort (LSucc LZero))) (type_binders r)))))
-(fn bind_all ((c Cx) (ns (List Name))) Cx
-  (measure (struct ns))
-  (match ns (Nil c) ((Cons n r) (bind_all (cx_bind c n) r))))
-;; NAME applied to its k parameters, which are the k outermost bound variables (depth d)
-(fn apply_params ((f Expr) (k Int) (d Int)) Expr
-  (measure k)
-  (if (lt k 1) f (apply_params (mk_app f (mk_bvar (- d 1))) (- k 1) (- d 1))))
+  (match ps
+    (Nil (Pair e (rev acc)))
+    ((Cons p r) (match (el_local e p (mk_sort (LSucc LZero)) BImplicit) ((Pair e1 fv) (type_locals e1 r (Cons fv acc)))))))
 ;; (CTOR FIELD-TYPE…): CTOR : (T…) → FIELD-TYPES → NAME T…
-(fn read_fields_ctors ((c Cx) (ind Name) (binders (List Binder)) (result Expr) (cs (List SExpr)) (acc (List Constructor))) (Pair (Option (List Constructor)) (List Int))
+(fn read_fields_ctors ((e El) (ind Name) (fvars (List Expr)) (result Expr) (cs (List SExpr)) (acc (List Constructor))) (Pair (Option (List Constructor)) (List Int))
   (measure (struct cs))
   (match cs
     (Nil (Pair (Some (rev acc)) Nil))
@@ -683,23 +315,24 @@
      (match (name_of_sym cn)
        (None (Pair None (chars_of_sym cn)))
        ((Some short)
-        (match (elab_fields c fields result)
-          ((EErr e m) (Pair None (append (chars_of_sym e) (append ": " m))))
-          ((EOk t) (read_fields_ctors c ind binders result r (Cons (Constructor (name_append ind short) (mk_pis binders t)) acc)))))))
+        (match (field_locals e fields Nil)
+          ((Pair None m) (Pair None m))
+          ((Pair (Some (Pair e1 flocals)) _)
+           (match (close_pis e1 (append fvars flocals) result)
+             ((Pair _ (FinErr r2 m)) (Pair None (append (chars_of_sym r2) (append ": " m))))
+             ((Pair e2 (FinOk CT)) (read_fields_ctors (el_restore e2 e) ind fvars result r (Cons (Constructor (name_append ind short) CT) acc)))))))))
     (_ (Pair None "a constructor is (CTOR FIELD-TYPE…)"))))
-;; F1 → F2 → … → RESULT, each field type in the same context, the result lifted under the anonymous binders
-(fn elab_fields ((c Cx) (fields (List SExpr)) (result Expr)) ERes
+;; each field type in the parameter context, an anonymous local per field
+(fn field_locals ((e El) (fields (List SExpr)) (acc (List Expr))) (Pair (Option (Pair El (List Expr))) (List Int))
   (measure (struct fields))
   (match fields
-    (Nil (EOk result))
+    (Nil (Pair (Some (Pair e (rev acc))) Nil))
     ((Cons f r)
-     (match (elab c f)
-       ((EErr e m) (EErr e m))
-       ((EOk t)
-        (match (elab_fields (cx_bind c Anon) r (lift1 result))
-          ((EErr e m) (EErr e m))
-          ((EOk b) (EOk (mk_pi Anon BDefault t b)))))))))
-(fn lift1 ((e Expr)) Expr (match (lift_loose_bvars (st_anon) e 0 1) ((Pair _ x) x)))
+     (match (elab_type e f)
+       ((EErr r2 m) (Pair None (append (chars_of_sym r2) (append ": " m))))
+       ((EOk e1 t _)
+        (match (el_local e1 Anon t BDefault)
+          ((Pair e2 fv) (field_locals e2 r (Cons fv acc)))))))))
 
 ;; (structure NAME.{u…} BINDERS (FIELD TYPE)…): the inductive with `NAME.mk`
 ;; (the fields as dependent binders after the parameters), then a projection
@@ -712,30 +345,38 @@
      (match (read_head sc hd)
        ((Pair None m) (RDErr (quote bad_name) m))
        ((Pair (Some (Head n lps)) _)
-        (match (read_binders (cx0 sc env lps (list (Pair n (len lps)))) bs Nil)
+        (match (read_binders (el0 sc env lps Nil) bs Nil)
           ((Pair None m) (RDErr (quote bad_binder) m))
-          ((Pair (Some (Pair c binders)) _)
-           (match (read_binders c fields Nil)
-             ((Pair None m) (RDErr (quote bad_field) m))
-             ((Pair (Some (Pair _ fs)) _)
-              (let ((self_ty (apply_params (mk_const n (lparam_levels lps)) (len binders) (len binders))))
-                (let ((ctor (Constructor (name_append n (Str Anon (quote mk))) (mk_pis binders (mk_pis fs (lift_n self_ty (len fs)))))))
-                  (match (projections c n binders fields self_ty 0 Nil Nil)
-                    ((Pair None m) (RDErr (quote bad_field) m))
-                    ((Pair (Some projs) _)
-                     (RDOk (Cons (InductDecl lps (len binders) (list (InductiveType n (mk_pis binders (mk_sort (LSucc LZero))) (list ctor))) False)
-                                 projs)))))))))))))
+          ((Pair (Some (Pair e1 params)) _)
+           (match (close_pis e1 params (mk_sort (LSucc LZero)))
+             ((Pair _ (FinErr r m)) (RDErr r m))
+             ((Pair e2 (FinOk IT))
+              (let ((e3 (el_with_defining e2 (list (Defd n (len lps) IT)))))
+                (match (w_apps (el_w e3) (mk_const n (lparam_levels lps)) params)
+                  ((Pair w4 self_ty)
+                   (match (read_binders (el_set_w e3 w4) fields Nil)
+                     ((Pair None m) (RDErr (quote bad_field) m))
+                     ((Pair (Some (Pair e5 fs)) _)
+                      (match (close_pis e5 (append params fs) self_ty)
+                        ((Pair _ (FinErr r m)) (RDErr r m))
+                        ((Pair e6 (FinOk CT))
+                         (let ((ctor (Constructor (name_append n (Str Anon (quote mk))) CT)))
+                           (match (el_local (el_restore e6 e3) (self_name) self_ty BDefault)
+                             ((Pair e7 self)
+                           (match (projections e7 n lps params self fields 0 Nil Nil)
+                             ((Pair None m) (RDErr (quote bad_field) m))
+                             ((Pair (Some projs) _)
+                              (RDOk (Cons (InductDecl lps (len params) (list (InductiveType n IT (list ctor))) False)
+                                          projs)))))))))))))))))))))
     (_ (RDErr (quote bad_shape) "(structure NAME ((x TYPE)…) (FIELD TYPE)…)"))))
-(fn lparam_levels ((lps (List Name))) (List Level)
-  (measure (struct lps))
-  (match lps (Nil Nil) ((Cons u r) (Cons (LParam u) (lparam_levels r)))))
-(fn lift_n ((e Expr) (k Int)) Expr (match (lift_loose_bvars (st_anon) e 0 k) ((Pair _ x) x)))
 
 ;; NAME.f_i : forall BINDERS (self : NAME params), T_i[f_j := (proj NAME j self)]
 ;;   := fun BINDERS self => (proj NAME i self)
 ;; T_i is re-elaborated from its source over the bound `self`, the earlier
-;; fields as aliases (elab_sym); `c` is the parameter context
-(fn projections ((c Cx) (n Name) (binders (List Binder)) (fields (List SExpr)) (self_ty Expr) (i Int) (aliases (List (Pair Name Int))) (acc (List Declaration))) (Pair (Option (List Declaration)) (List Int))
+;; fields as aliases carrying their open types (elab_sym: the structure is not
+;; in the environment yet, so K cannot type the projection); `e` holds the
+;; parameters and `self`
+(fn projections ((e El) (n Name) (lps (List Name)) (params (List Expr)) (self Expr) (fields (List SExpr)) (i Int) (aliases (List (Pair Name (Pair Int Expr)))) (acc (List Declaration))) (Pair (Option (List Declaration)) (List Int))
   (measure (struct fields))
   (match fields
     (Nil (Pair (Some (rev acc)) Nil))
@@ -743,12 +384,15 @@
      (match (name_of_sym fx)
        (None (Pair None (chars_of_sym fx)))
        ((Some f)
-        (let ((cself (cx_with_aliases (cx_bind c (self_name)) aliases)))
-          (match (elab cself fty)
-            ((EErr e m) (Pair None (append (chars_of_sym e) (append ": " m))))
-            ((EOk t)
-             (let ((cv (ConstantVal (name_append n f) (cx_lps c) (mk_pis binders (mk_pi (self_name) BDefault self_ty t)))))
-               (let ((value (mk_lams binders (mk_lam (self_name) BDefault self_ty (mk_proj n i (mk_bvar 0))))))
-                 (projections c n binders r self_ty (+ i 1) (Cons (Pair f i) aliases)
-                   (Cons (DefnDecl cv value HAbbrev Safe (list (name_append n f))) acc))))))))))
+        (match (elab_type (el_with_aliases e aliases) fty)
+          ((EErr r2 m) (Pair None (append (chars_of_sym r2) (append ": " m))))
+          ((EOk e2 t _)
+           (match (close_pis e2 (append params (list self)) t)
+             ((Pair _ (FinErr r2 m)) (Pair None (append (chars_of_sym r2) (append ": " m))))
+             ((Pair e3 (FinOk PT))
+              (match (close_lams e3 (append params (list self)) (mk_proj n i self))
+                ((Pair _ (FinErr r2 m)) (Pair None (append (chars_of_sym r2) (append ": " m))))
+                ((Pair e4 (FinOk value))
+                 (projections (el_restore e4 e) n lps params self r (+ i 1) (Cons (Pair f (Pair i (el_zonk e4 t))) aliases)
+                   (Cons (DefnDecl (ConstantVal (name_append n f) lps PT) value HAbbrev Safe (list (name_append n f))) acc)))))))))))
     (_ (Pair None "a field is (FIELD TYPE)"))))

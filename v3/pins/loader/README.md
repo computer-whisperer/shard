@@ -103,3 +103,23 @@ cited), `define_measure` (a measured fn: `PARAM main.count.dec_1
 obligation`, `DEFINE … pending=main.count`, `PENDING main.count
 measure`, a theorem citing it), `define_measure_int` (`RUNNABLE …
 why=measure_type`) and `define_mutual` (`why=mutual_recursion`).
+
+Slice 3.15's (the elaborator, §5.1, §8.4): every pin rewritten to
+Stage 1's spelling — an implicit argument never written (`(Eq a b)`,
+`(Eq.refl a)`, `(List.cons x t)`; `(len xs)` and `(Pair2.mk a b)` in
+a theorem as in a body, a `type`'s parameters and a `fn`'s type
+parameters being implicit now), a universe not written inferred,
+`@NAME` the explicit application; `refused` and `view_rfl` are
+`read-error type_mismatch` (the elaborator refuses a false theorem's
+proof, and a consumer's `Eq.refl` through a view parameter, before K).
+The new cases: `elab_implicit` (`List.append`, `List.cons`, `Eq` bare;
+`Eq.refl`'s and `Or.inl`'s implicits from the expected type; `List
+Type` at level 1; `@Eq.{1}`; `exists`), `elab_numeral` (`5` and `-3`
+at `Int`, a `Nat` coerced by `Int.ofNat` where an `Int` is expected,
+`(+ n 0)` at `Nat`, `(- n n)` at `Nat` as `Nat.sub` in a statement,
+`(+ a b)` at `Int`, `if` as `ite` with `Nat.decLt`, `(< a b)` the
+proposition), `elab_unsolved` (`(= List.nil List.nil)`: the element
+type undetermined, `unsolved_implicit`), `elab_instance` (`ite True`:
+`instance_needed`), `elab_no_decision` (`(if True …)`: `no_decision`),
+`elab_mismatch` (an `Int` where a `Nat` is expected: `type_mismatch`,
+no `Int.toNat`).

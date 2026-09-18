@@ -1,0 +1,401 @@
+;;; v3/kernel/unify.shard — metavariables and first-order unification for
+;;; the elaborator (v3/LANGUAGE.md §8.4 slice 3.15; law §5.1 Stage 1, §6).
+;;;
+;;; A metavariable is an `MVar` node (expr.shard) with a declaration here:
+;;; its type, the fvars in scope where it was made (its telescope — an
+;;; assignment may mention no other local: the scope check), the binder
+;;; name it stands for and a kind, for the refusal that names it when it
+;;; stays unsolved. Assignments live in this state, never in a term K reads:
+;;; `inst_mvars` (instantiate, Lean's instantiateMVars) replaces every
+;;; assigned metavariable, and a declaration reaches K only through it.
+;;;
+;;; `unify` is first-order (law §5.1): structural descent assigning a
+;;; metavariable on either side after an occurs check and the scope check;
+;;; levels likewise, structurally, with `is_equivalent` on two closed levels;
+;;; a closed mismatch (no metavariable on either side) is decided by K's own
+;;; is_def_eq through the view, and a mismatch under a metavariable is
+;;; retried once after K's whnf of both sides. It is transactional: a
+;;; failure returns the state it was given. An over-eager assignment can
+;;; never make a theorem — K rechecks the closed term — so incompleteness
+;;; here costs a refusal with a pointer, never soundness.
+
+(import "kw.shard")
+(use kernel.k)
+(use kernel.kw)
+(use kernel.expr)
+(use kernel.intmap)
+(use kernel.level)
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.util)
+(use kernel.expr.Expr)
+(use kernel.expr.Literal)
+(use kernel.intmap.IntMap)
+(use kernel.kw.W)
+(use kernel.level.Level)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+
+;; a metavariable's declaration: the binder name it stands for, its type, the
+;; fvar ids in scope at its creation, its kind (implicit, inst, numeral, hole)
+(type MDecl (MDecl Name Expr (List Int) Symbol))
+(fn md_name ((d MDecl)) Name (match d ((MDecl n _ _ _) n)))
+(fn md_type ((d MDecl)) Expr (match d ((MDecl _ t _ _) t)))
+(fn md_lctx ((d MDecl)) (List Int) (match d ((MDecl _ _ l _) l)))
+(fn md_kind ((d MDecl)) Symbol (match d ((MDecl _ _ _ k) k)))
+
+;; the state: next term id, next level id, the assignments, the level
+;; assignments, the declarations, the ids in creation order
+(type MCtx (MCtx Int Int (IntMap Expr) (IntMap Level) (IntMap MDecl) (List Int)))
+(fn mc0 () MCtx (MCtx 1 1 IMEmpty IMEmpty IMEmpty Nil))
+(fn mc_assigned ((mc MCtx) (i Int)) (Option Expr) (match mc ((MCtx _ _ a _ _ _) (im_find a i))))
+(fn mc_lassigned ((mc MCtx) (i Int)) (Option Level) (match mc ((MCtx _ _ _ la _ _) (im_find la i))))
+(fn mc_decl ((mc MCtx) (i Int)) (Option MDecl) (match mc ((MCtx _ _ _ _ ds _) (im_find ds i))))
+(fn mc_ids ((mc MCtx)) (List Int) (match mc ((MCtx _ _ _ _ _ ids) ids)))
+(fn mc_fresh ((mc MCtx) (n Name) (ty Expr) (lctx (List Int)) (kind Symbol)) (Pair MCtx Expr)
+  (match mc
+    ((MCtx k lk a la ds ids)
+     (Pair (MCtx (+ k 1) lk a la (im_insert ds k (MDecl n ty lctx kind)) (Cons k ids)) (mk_mvar k)))))
+(fn mc_fresh_level ((mc MCtx)) (Pair MCtx Level)
+  (match mc ((MCtx k lk a la ds ids) (Pair (MCtx k (+ lk 1) a la ds ids) (LMVar lk)))))
+(fn mc_set ((mc MCtx) (i Int) (v Expr)) MCtx
+  (match mc ((MCtx k lk a la ds ids) (MCtx k lk (im_insert a i v) la ds ids))))
+(fn mc_lset ((mc MCtx) (i Int) (l Level)) MCtx
+  (match mc ((MCtx k lk a la ds ids) (MCtx k lk a (im_insert la i l) ds ids))))
+(fn mc_set_decl ((mc MCtx) (i Int) (d MDecl)) MCtx
+  (match mc ((MCtx k lk a la ds ids) (MCtx k lk a la (im_insert ds i d) ids))))
+;; closing binders over the fvars `ids`: every unassigned metavariable loses
+;; them from its telescope, so a later assignment cannot capture a variable
+;; that is no longer in scope (Lean's delayed assignment, refused instead)
+(fn mc_drop_fvars ((mc MCtx) (ids (List Int))) MCtx (drop_fvars_go mc (mc_ids mc) ids))
+(fn drop_fvars_go ((mc MCtx) (ms (List Int)) (ids (List Int))) MCtx
+  (measure (struct ms))
+  (match ms
+    (Nil mc)
+    ((Cons m r)
+     (drop_fvars_go
+       (match (mc_assigned mc m)
+         ((Some _) mc)
+         (None (match (mc_decl mc m)
+                 ((Some (MDecl n t l k)) (mc_set_decl mc m (MDecl n t (remove_ints l ids) k)))
+                 (None mc))))
+       r ids))))
+(fn remove_ints ((xs (List Int)) (ids (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs (Nil Nil) ((Cons x r) (if (mem_int x ids) (remove_ints r ids) (Cons x (remove_ints r ids))))))
+
+;; ---- instantiation (instantiateMVars) ------------------------------------------------
+(fn inst_level ((mc MCtx) (l Level)) Level (inst_level_go mc l 1000))
+(fn inst_level_go ((mc MCtx) (l Level) (d Int)) Level
+  (measure d)
+  (if (lt d 1) l
+  (if (bool_not (level_has_mvar l)) l
+  (match l
+    ((LMVar i) (match (mc_lassigned mc i) ((Some v) (inst_level_go mc v (- d 1))) (None l)))
+    ((LSucc x) (LSucc (inst_level_go mc x (- d 1))))
+    ((LMax x y) (LMax (inst_level_go mc x (- d 1)) (inst_level_go mc y (- d 1))))
+    ((LIMax x y) (LIMax (inst_level_go mc x (- d 1)) (inst_level_go mc y (- d 1))))
+    (_ l)))))
+(fn inst_levels ((mc MCtx) (ls (List Level))) (List Level)
+  (measure (struct ls))
+  (match ls (Nil Nil) ((Cons l r) (Cons (inst_level mc l) (inst_levels mc r)))))
+(fn inst_mvars ((mc MCtx) (e Expr)) Expr (inst_go mc e 100000))
+(fn inst_go ((mc MCtx) (e Expr) (d Int)) Expr
+  (measure d)
+  (if (lt d 1) e
+  (if (bool_not (has_mvar e)) e
+  (match e
+    ((MVar _ i) (match (mc_assigned mc i) ((Some v) (inst_go mc v (- d 1))) (None e)))
+    ((Sort _ u) (mk_sort (inst_level mc u)))
+    ((Const _ n ls) (mk_const n (inst_levels mc ls)))
+    ((App _ f a) (mk_app (inst_go mc f (- d 1)) (inst_go mc a (- d 1))))
+    ((Lam _ n bi t b) (mk_lam n bi (inst_go mc t (- d 1)) (inst_go mc b (- d 1))))
+    ((Pi _ n bi t b) (mk_pi n bi (inst_go mc t (- d 1)) (inst_go mc b (- d 1))))
+    ((Let _ n t v b) (mk_let n (inst_go mc t (- d 1)) (inst_go mc v (- d 1)) (inst_go mc b (- d 1))))
+    ((Proj _ s i x) (mk_proj s i (inst_go mc x (- d 1))))
+    (_ e)))))
+(fn inst_all ((mc MCtx) (es (List Expr))) (List Expr)
+  (measure (struct es))
+  (match es (Nil Nil) ((Cons e r) (Cons (inst_mvars mc e) (inst_all mc r)))))
+
+;; ---- the unsolved ----------------------------------------------------------------------
+;; the first unassigned metavariable of an instantiated term, and the first level one
+(fn first_mvar ((e Expr)) (Option Int)
+  (measure (struct e))
+  (if (bool_not (has_mvar e)) None
+  (match e
+    ((MVar _ i) (Some i))
+    ((App _ f a) (match (first_mvar f) ((Some i) (Some i)) (None (first_mvar a))))
+    ((Lam _ _ _ t b) (match (first_mvar t) ((Some i) (Some i)) (None (first_mvar b))))
+    ((Pi _ _ _ t b) (match (first_mvar t) ((Some i) (Some i)) (None (first_mvar b))))
+    ((Let _ _ t v b) (match (first_mvar t) ((Some i) (Some i)) (None (match (first_mvar v) ((Some i) (Some i)) (None (first_mvar b))))))
+    ((Proj _ _ _ x) (first_mvar x))
+    (_ None))))
+(fn first_lmvar ((e Expr)) (Option Int)
+  (measure (struct e))
+  (if (bool_not (has_mvar e)) None
+  (match e
+    ((Sort _ u) (level_first_mvar u))
+    ((Const _ _ ls) (levels_first_mvar ls))
+    ((App _ f a) (match (first_lmvar f) ((Some i) (Some i)) (None (first_lmvar a))))
+    ((Lam _ _ _ t b) (match (first_lmvar t) ((Some i) (Some i)) (None (first_lmvar b))))
+    ((Pi _ _ _ t b) (match (first_lmvar t) ((Some i) (Some i)) (None (first_lmvar b))))
+    ((Let _ _ t v b) (match (first_lmvar t) ((Some i) (Some i)) (None (match (first_lmvar v) ((Some i) (Some i)) (None (first_lmvar b))))))
+    ((Proj _ _ _ x) (first_lmvar x))
+    (_ None))))
+(fn level_first_mvar ((l Level)) (Option Int)
+  (measure (struct l))
+  (match l
+    ((LMVar i) (Some i))
+    ((LSucc x) (level_first_mvar x))
+    ((LMax x y) (match (level_first_mvar x) ((Some i) (Some i)) (None (level_first_mvar y))))
+    ((LIMax x y) (match (level_first_mvar x) ((Some i) (Some i)) (None (level_first_mvar y))))
+    (_ None)))
+(fn levels_first_mvar ((ls (List Level))) (Option Int)
+  (measure (struct ls))
+  (match ls (Nil None) ((Cons l r) (match (level_first_mvar l) ((Some i) (Some i)) (None (levels_first_mvar r))))))
+
+;; ---- occurrence and scope ----------------------------------------------------------------
+(fn mvar_occurs ((i Int) (e Expr)) Bool
+  (measure (struct e))
+  (if (bool_not (has_mvar e)) False
+  (match e
+    ((MVar _ j) (int_eq i j))
+    ((App _ f a) (bool_or (mvar_occurs i f) (mvar_occurs i a)))
+    ((Lam _ _ _ t b) (bool_or (mvar_occurs i t) (mvar_occurs i b)))
+    ((Pi _ _ _ t b) (bool_or (mvar_occurs i t) (mvar_occurs i b)))
+    ((Let _ _ t v b) (bool_or (mvar_occurs i t) (bool_or (mvar_occurs i v) (mvar_occurs i b))))
+    ((Proj _ _ _ x) (mvar_occurs i x))
+    (_ False))))
+(fn lmvar_occurs ((i Int) (l Level)) Bool
+  (measure (struct l))
+  (match l
+    ((LMVar j) (int_eq i j))
+    ((LSucc x) (lmvar_occurs i x))
+    ((LMax x y) (bool_or (lmvar_occurs i x) (lmvar_occurs i y)))
+    ((LIMax x y) (bool_or (lmvar_occurs i x) (lmvar_occurs i y)))
+    (_ False)))
+;; the fvar ids of a term
+(fn expr_fvars ((e Expr) (acc (List Int))) (List Int)
+  (measure (struct e))
+  (if (bool_not (has_fvar e)) acc
+  (match e
+    ((FVar _ id) (Cons id acc))
+    ((App _ f a) (expr_fvars f (expr_fvars a acc)))
+    ((Lam _ _ _ t b) (expr_fvars t (expr_fvars b acc)))
+    ((Pi _ _ _ t b) (expr_fvars t (expr_fvars b acc)))
+    ((Let _ _ t v b) (expr_fvars t (expr_fvars v (expr_fvars b acc))))
+    ((Proj _ _ _ x) (expr_fvars x acc))
+    (_ acc))))
+(fn all_in ((xs (List Int)) (ys (List Int))) Bool
+  (measure (struct xs))
+  (match xs (Nil True) ((Cons x r) (if (mem_int x ys) (all_in r ys) False))))
+
+;; ---- unification -------------------------------------------------------------------------
+(type URes (UYes W MCtx) (UNo))
+
+;; transactional: a failure hands back nothing new
+(fn unify ((w W) (mc MCtx) (t Expr) (s Expr)) URes (unify_go w mc t s 64))
+
+(fn unify_go ((w W) (mc MCtx) (t0 Expr) (s0 Expr) (d Int)) URes
+  (measure d)
+  (if (lt d 1) UNo
+  (let ((t (inst_mvars mc t0)) (s (inst_mvars mc s0)))
+    (if (expr_eq t s) (UYes w mc)
+    (match t
+      ((MVar _ i) (assign w mc i s d))
+      (_
+       (match s
+         ((MVar _ j) (assign w mc j t d))
+         (_ (unify_struct w mc t s d)))))))))
+
+;; ?i := v: the same metavariable is trivial; an occurrence refuses; a local
+;; outside the telescope refuses; the assignment is typed — the value's type
+;; (K's, when the value is closed enough for K to type) against the
+;; metavariable's, which is where a universe is inferred (`?α := α` with
+;; `?α : Sort ?v` and `α : Sort u` gives `?v := u`)
+(fn assign ((w W) (mc MCtx) (i Int) (v Expr) (d Int)) URes
+  (match v
+    ((MVar _ j) (if (int_eq i j) (UYes w mc) (assign_checked w mc i v d)))
+    (_ (assign_checked w mc i v d))))
+(fn assign_checked ((w W) (mc MCtx) (i Int) (v Expr) (d Int)) URes
+  (if (mvar_occurs i v) UNo
+  (match (mc_decl mc i)
+    (None UNo)
+    ((Some dcl)
+     (if (bool_not (all_in (expr_fvars v Nil) (md_lctx dcl))) UNo
+       (match (if (has_mvar v) (infer_light w mc v) (w_infer w v))
+         ((Pair w1 None) (UYes w1 (mc_set mc i v)))
+         ((Pair w1 (Some vty))
+          (match (unify_go w1 mc vty (md_type dcl) (- d 1))
+            ((UYes w2 mc2) (UYes w2 (mc_set mc2 i v)))
+            (UNo UNo)))))))))
+
+;; the type of a term K cannot type yet (a metavariable inside): a constant,
+;; a local or a metavariable head applied to arguments, its telescope
+;; instantiated by them (Meta.inferType's shape); a sort; a literal; else None
+;; and the assignment goes untyped — K types the closed term in the end
+(fn infer_light ((w W) (mc MCtx) (e Expr)) (Pair W (Option Expr))
+  (let ((h (get_app_fn e)) (args (get_app_args e)))
+    (match (head_type w mc h)
+      ((Pair w1 None) (Pair w1 None))
+      ((Pair w1 (Some hty)) (walk_args w1 mc hty args)))))
+(fn head_type ((w W) (mc MCtx) (h Expr)) (Pair W (Option Expr))
+  (match h
+    ((Const _ n ls)
+     (match (env_find (w_env w) n)
+       (None (Pair w None))
+       ((Some info) (match (w_inst_lparams w (ci_type info) (ci_lparams info) ls) ((Pair w1 t) (Pair w1 (Some t)))))))
+    ((FVar _ id) (Pair w (w_local_type w id)))
+    ((MVar _ i) (Pair w (match (mc_decl mc i) ((Some d) (Some (inst_mvars mc (md_type d)))) (None None))))
+    ((Sort _ u) (Pair w (Some (mk_sort (LSucc u)))))
+    ((Lit _ (LitNat _)) (Pair w (Some (mk_const (nm_nat) Nil))))
+    ((Lit _ (LitStr _)) (Pair w (Some (mk_const (nm_string) Nil))))
+    (_ (Pair w None))))
+(fn walk_args ((w W) (mc MCtx) (fty Expr) (args (List Expr))) (Pair W (Option Expr))
+  (measure (struct args))
+  (match args
+    (Nil (Pair w (Some fty)))
+    ((Cons a r)
+     (match (inst_mvars mc fty)
+       ((Pi _ _ _ _ body) (match (w_inst1 w body a) ((Pair w1 b1) (walk_args w1 mc b1 r))))
+       (t
+        (match (w_whnf w t)
+          ((Pair w1 (Some (Pi _ _ _ _ body))) (match (w_inst1 w1 body a) ((Pair w2 b1) (walk_args w2 mc b1 r))))
+          ((Pair w1 _) (Pair w1 None))))))))
+
+(fn unify_struct ((w W) (mc MCtx) (t Expr) (s Expr) (d Int)) URes
+  (measure d)
+  (match t
+    ((Sort _ u) (match s ((Sort _ v) (match (unify_level mc u v 64) ((Some mc1) (UYes w mc1)) (None UNo))) (_ (unify_fallback w mc t s d))))
+    ((Const _ n ls)
+     (match s
+       ((Const _ m ms) (if (name_eq n m) (match (unify_levels mc ls ms) ((Some mc1) (UYes w mc1)) (None (unify_fallback w mc t s d))) (unify_fallback w mc t s d)))
+       (_ (unify_fallback w mc t s d))))
+    ((Lit _ a) (match s ((Lit _ b) (if (lit_eq a b) (UYes w mc) (unify_fallback w mc t s d))) (_ (unify_fallback w mc t s d))))
+    ((App _ _ _)
+     (match s
+       ((App _ _ _)
+        (let ((fa (get_app_args t)) (sa (get_app_args s)))
+          (if (int_eq (len fa) (len sa))
+            (match (unify_go w mc (get_app_fn t) (get_app_fn s) (- d 1))
+              ((UYes w1 mc1) (match (unify_args w1 mc1 fa sa (- d 1)) ((UYes w2 mc2) (UYes w2 mc2)) (UNo (unify_fallback w mc t s d))))
+              (UNo (unify_fallback w mc t s d)))
+            (unify_fallback w mc t s d))))
+       (_ (unify_fallback w mc t s d))))
+    ((Lam _ n _ d1 b1)
+     (match s
+       ((Lam _ _ _ d2 b2) (unify_binding w mc n d1 b1 d2 b2 d))
+       (_ (unify_fallback w mc t s d))))
+    ((Pi _ n _ d1 b1)
+     (match s
+       ((Pi _ _ _ d2 b2) (unify_binding w mc n d1 b1 d2 b2 d))
+       (_ (unify_fallback w mc t s d))))
+    ((Proj _ sn i x)
+     (match s
+       ((Proj _ sn2 i2 y) (if (bool_and (name_eq sn sn2) (int_eq i i2)) (match (unify_go w mc x y (- d 1)) ((UYes w1 mc1) (UYes w1 mc1)) (UNo (unify_fallback w mc t s d))) (unify_fallback w mc t s d)))
+       (_ (unify_fallback w mc t s d))))
+    (_ (unify_fallback w mc t s d))))
+
+(fn unify_args ((w W) (mc MCtx) (ts (List Expr)) (ss (List Expr)) (d Int)) URes
+  (measure (struct ts))
+  (match ts
+    (Nil (UYes w mc))
+    ((Cons a ar)
+     (match ss
+       (Nil UNo)
+       ((Cons b br)
+        (match (unify_go w mc a b d)
+          ((UYes w1 mc1) (unify_args w1 mc1 ar br d))
+          (UNo UNo)))))))
+
+;; the domains, then the bodies under one shared local (not in any
+;; metavariable's telescope: an assignment mentioning it is refused)
+(fn unify_binding ((w W) (mc MCtx) (n Name) (d1 Expr) (b1 Expr) (d2 Expr) (b2 Expr) (d Int)) URes
+  (measure d)
+  (match (unify_go w mc d1 d2 (- d 1))
+    (UNo UNo)
+    ((UYes w1 mc1)
+     (match (w_local w1 n (inst_mvars mc1 d1))
+       ((Pair w2 fv)
+        (match (w_inst1 w2 b1 fv)
+          ((Pair w3 b1i)
+           (match (w_inst1 w3 b2 fv)
+             ((Pair w4 b2i) (unify_go w4 mc1 b1i b2i (- d 1)))))))))))
+
+;; closed on both sides: K decides; else whnf both through K and retry once
+;; on a change — the retry is what unfolds a definition that hides a
+;; constructor or a Pi (`Nat.le n m` against `LE.le …` never happens here:
+;; the identities are Init's own constants)
+(fn unify_fallback ((w W) (mc MCtx) (t Expr) (s Expr) (d Int)) URes
+  (measure d)
+  (if (bool_and (bool_not (has_mvar t)) (bool_not (has_mvar s)))
+    (match (w_is_def_eq w t s)
+      ((Pair w1 (Some True)) (UYes w1 mc))
+      ((Pair _ _) UNo))
+    (match (w_whnf w t)
+      ((Pair w1 t1o)
+       (match (w_whnf w1 s)
+         ((Pair w2 s1o)
+          (let ((t1 (match t1o ((Some x) x) (None t))) (s1 (match s1o ((Some x) x) (None s))))
+            (if (bool_and (expr_eq t1 t) (expr_eq s1 s)) UNo
+              (unify_after_whnf w2 mc t1 s1 (- d 1))))))))))
+;; after whnf: only the structural cases, never the fallback again on the same shapes
+(fn unify_after_whnf ((w W) (mc MCtx) (t Expr) (s Expr) (d Int)) URes
+  (measure d)
+  (if (lt d 1) UNo
+  (if (expr_eq t s) (UYes w mc)
+  (match t
+    ((MVar _ i) (assign w mc i s d))
+    (_ (match s
+         ((MVar _ j) (assign w mc j t d))
+         (_ (match t
+              ((App _ _ _)
+               (match s
+                 ((App _ _ _)
+                  (let ((fa (get_app_args t)) (sa (get_app_args s)))
+                    (if (int_eq (len fa) (len sa))
+                      (match (unify_go w mc (get_app_fn t) (get_app_fn s) (- d 1))
+                        ((UYes w1 mc1) (unify_args w1 mc1 fa sa (- d 1)))
+                        (UNo UNo))
+                      UNo)))
+                 (_ UNo)))
+              ((Pi _ n _ d1 b1) (match s ((Pi _ _ _ d2 b2) (unify_binding w mc n d1 b1 d2 b2 d)) (_ UNo)))
+              ((Lam _ n _ d1 b1) (match s ((Lam _ _ _ d2 b2) (unify_binding w mc n d1 b1 d2 b2 d)) (_ UNo)))
+              ((Sort _ u) (match s ((Sort _ v) (match (unify_level mc u v 64) ((Some mc1) (UYes w mc1)) (None UNo))) (_ UNo)))
+              ((Const _ n ls) (match s ((Const _ m ms) (if (name_eq n m) (match (unify_levels mc ls ms) ((Some mc1) (UYes w mc1)) (None UNo)) UNo)) (_ UNo)))
+              (_ UNo)))))))))
+
+;; ---- levels ------------------------------------------------------------------------------
+(fn unify_level ((mc MCtx) (u0 Level) (v0 Level) (d Int)) (Option MCtx)
+  (measure d)
+  (if (lt d 1) None
+  (let ((u (inst_level mc u0)) (v (inst_level mc v0)))
+    (if (level_eq u v) (Some mc)
+    (match u
+      ((LMVar i) (lassign mc i v))
+      (_
+       (match v
+         ((LMVar j) (lassign mc j u))
+         (_
+          (if (bool_and (bool_not (level_has_mvar u)) (bool_not (level_has_mvar v)))
+            (if (is_equivalent u v) (Some mc) None)
+          (match u
+            ((LSucc a) (match v ((LSucc b) (unify_level mc a b (- d 1))) (_ None)))
+            ((LMax a b) (match v ((LMax a2 b2) (match (unify_level mc a a2 (- d 1)) ((Some mc1) (unify_level mc1 b b2 (- d 1))) (None None))) (_ None)))
+            ((LIMax a b) (match v ((LIMax a2 b2) (match (unify_level mc a a2 (- d 1)) ((Some mc1) (unify_level mc1 b b2 (- d 1))) (None None))) (_ None)))
+            (_ None)))))))))))
+(fn lassign ((mc MCtx) (i Int) (v Level)) (Option MCtx)
+  (match v
+    ((LMVar j) (if (int_eq i j) (Some mc) (Some (mc_lset mc i v))))
+    (_ (if (lmvar_occurs i v) None (Some (mc_lset mc i v))))))
+(fn unify_levels ((mc MCtx) (us (List Level)) (vs (List Level))) (Option MCtx)
+  (measure (struct us))
+  (match us
+    (Nil (match vs (Nil (Some mc)) (_ None)))
+    ((Cons u ur)
+     (match vs
+       (Nil None)
+       ((Cons v vr) (match (unify_level mc u v 64) ((Some mc1) (unify_levels mc1 ur vr)) (None None)))))))

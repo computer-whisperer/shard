@@ -67,11 +67,10 @@ The on-disk format is s-expressions.
 - **Whitespace** separates tokens; otherwise insignificant.
 - **Comments** begin with `;` and run to the end of the line (`;`
   trailing, `;;` line, `;;;` file and section headers — carried).
-- **Numerals**: decimal digit strings, `42`. A leading `-` is a
-  numeral only in the toolchain profile (§8); in S a negative integer
-  is written `(Int.neg (Int.ofNat 7))` or `(Int.negSucc 6)`, exactly
-  the L constructors it denotes (the law's §5.2 numeral rule is Stage
-  1).
+- **Numerals**: decimal digit strings, `42`; `-7` with a leading `-`
+  (§8.1 rule 2). In L a numeral takes the type its position expects
+  (§5.3: `Int.ofNat 7`, `Int.negSucc 6` at `Int`; `Nat` otherwise, a
+  negative one refused there) — the law's §5.2 rule, since slice 3.15.
 - **Symbols**: Lean's identifier characters — Unicode letters, digits,
   `_`, `'`, `?`, `!`, and `.` separating namespace components
   (`List.length`, `Nat.decLt`, `f.eq_1`) — plus the operator symbols
@@ -356,48 +355,115 @@ common case).
 
 **Binders** are `((x TYPE) …)`; a binder may carry an info marker,
 `(x TYPE implicit)`, `(x TYPE strict)`, `(x TYPE inst)`, recorded as
-K's `BinderInfo` (display and Stage-1 data; no rule depends on it).
-At Stage 0 every argument is passed explicitly regardless of the
-marker.
+K's `BinderInfo`. Since slice 3.15 the elaborator inserts an implicit
+binder's argument at every citation (§5.1) — `@NAME` passes them
+explicitly, Stage 0's spelling. A `type`'s parameters are implicit in
+its constructors and a `fn`'s type parameters in its L signature and
+equations, as Lean's are and as E cites them (`(Pair2.mk a b)`,
+`(len xs)` in a theorem as in a body).
 
 **Universe parameters** are declared by the `.{u v}` suffix on the
-declared name and cited by the same suffix (§2). A citation without a
-suffix is a constant with **zero** universe parameters; citing a
-polymorphic constant bare is a Stage-0 error with the pointer to write
-`List.{0}` — except in **E-type positions** (a `fn`'s binders and return
-type, a `type`'s fields, a `realize` signature), where every
+declared name and may be cited by the same suffix (§2). Since slice
+3.15 a polymorphic constant cited bare takes its levels by inference
+(§5.1); one the inputs do not determine is `unsolved_universe` with the
+pointer to write `List.{0}`. In **E-type positions** (a `fn`'s binders
+and return type, a `type`'s fields, a `realize` signature) every
 polymorphic type constructor is instantiated at level 0 by rule, since
-E-types live in `Type` (law §4.2). That is reconstruction of what the
-form determines, not inference.
+E-types live in `Type` (law §4.2) — reconstruction of what the form
+determines, not inference.
 
 ## 5. Terms
 
-### 5.1 Explicit L (the argument of `def`, `theorem`, `inductive`, `structure`, `realize`'s equations)
+### 5.1 L terms (the argument of `def`, `theorem`, `inductive`, `structure`, `realize`'s equations) — Stage 1 since slice 3.15
 
 ```
 TERM ::= NAME                          ; a bound variable (innermost binding wins), else a constant
-       | NAME.{LEVEL…}                 ; a constant with universe arguments
+       | NAME.{LEVEL…}                 ; a constant with its universe arguments written
+       | @NAME | @NAME.{LEVEL…}        ; a constant with every binder explicit (Lean's @)
        | (TERM TERM…)                  ; application, left-nested
+       | (OP TERM TERM) | (not TERM)   ; an operator spelling at the first operand's type (below)
+       | (if TERM TERM TERM)           ; ite with the decision of the condition's head; cond on a Bool
        | (fun (BINDER…) TERM)          ; lambda
        | (forall (BINDER…) TERM)       ; Pi
+       | (exists (BINDER…) TERM)       ; Exists over the lambda
        | (-> TERM… TERM)               ; non-dependent Pi, right-nested
        | (let ((x TYPE TERM)…) TERM)   ; sequential; one L Let per binding
        | (Sort LEVEL) | Prop | Type | (Type LEVEL)
-       | NUMERAL                       ; K's Nat literal
+       | NUMERAL                       ; Nat, or Int at an expected Int (§5.3)
        | "…"                           ; K's String literal
        | (proj S i TERM)               ; the i-th field of structure S (0-based)
+OP   ::= + - * / mod % lt < le <= > >= int_eq = != and or iff
 ```
 
-Elaboration is term for term into `expr.shard`'s `Expr`: names bound
-by `fun`, `forall` and `let` become `BVar` indices (locally nameless,
-0 the innermost; the binder's display name is kept on the node);
-unbound names resolve through the scope (§3.1) to `Const` with the
-universe arguments written; `Prop` is `(Sort 0)`, `Type` is `(Sort 1)`,
-`(Type u)` is `(Sort (succ u))`. A bound name shadows a constant. No
-argument is inserted, no metavariable exists, no universe is inferred:
-`(ite.{1} Nat (Nat.lt i n) (Nat.decLt i n) a b)` is what an author
-writes for `if i < n then a else b` at Stage 0. This is verbose by
-design — the machinery is the deliverable, Stage 1 is the ergonomics.
+Elaboration (`kernel/elab.shard`; law §5.1 Stage 1, §5.2) is
+**bidirectional over K's locals**: every rule takes the expected type
+its position gives it and returns the term with its type; names bound
+by `fun`, `forall`, `exists` and `let` are K locals (`mk_local`), the
+terms are built over them and closed by K's own `mk_binding`, so no
+de Bruijn arithmetic exists above K. Unbound names resolve through the
+scope (§3.1). `Prop` is `(Sort 0)`, `Type` is `(Sort 1)`, `(Type u)`
+is `(Sort (succ u))`. A bound name shadows a constant.
+
+- **Implicit arguments.** A constant's citation walks its type: each
+  binder marked `implicit` or `inst` gets a fresh metavariable
+  (`unify.shard`'s `MVar`, its telescope the locals in scope), a
+  `strict` one only before a written argument, and each written
+  argument goes to the next explicit binder — `(List.cons x t)` is
+  `@List.cons ?α x t`, a bare `List.nil` is `@List.nil ?α`. `@NAME`
+  makes every binder explicit. An argument past the type's binders,
+  after K's whnf of the type, is `function_expected`.
+- **Unification is first-order** (law §5.1): structural descent
+  assigning a metavariable on either side after an occurs check and
+  the scope check, the assignment typed (the value's type against the
+  metavariable's, which is where a universe is inferred: `?α := α`
+  with `?α : Sort ?v` and `α : Sort u` gives `?v := u`); levels
+  structurally with `is_equivalent` on closed ones; a closed mismatch
+  decided by K's own `is_def_eq` through the view; under a
+  metavariable, one retry after K's whnf of both sides. Transactional:
+  a failure hands back the state it was given.
+- **The order** (Lean's `elabApp`): the result type against the
+  expected type first, best effort; then the written arguments left
+  to right at their binders' types, **numerals last** — so
+  `(List.cons 0 nil)` at `(List Int)` reads `0` at `Int`; then the
+  term's type against the expected type, mandatory.
+- **Universe inference.** A polymorphic constant cited without `.{…}`
+  takes a level metavariable per parameter, solved by the unification
+  above; `.{…}` written is checked against the arity as before; in
+  an **E-type position** (§4) level 0 by rule, unchanged.
+- **What the inputs do not determine is a refusal**, never a default
+  (law §5.2): `unsolved_implicit` names the binder with the pointer
+  to `@`; `instance_needed` for an `inst` binder (Stage 3 resolves
+  them; the pointer is `@` with the instance written);
+  `unsolved_universe` points to `NAME.{…}`. The one default is the
+  numeral's `Nat` (§5.3).
+- **The one coercion.** Where a `Nat` meets an expected `Int` and
+  `Init`'s `Int.ofNat` is in scope, the term becomes `(Int.ofNat t)`
+  (law §5.2); every other mismatch is `type_mismatch` naming both
+  types — an `Int` at a `Nat` included (`Int.toNat` is a named
+  conversion, never inserted).
+- **The operator spellings** take the naming-law identity at the type
+  of their first operand — `+ - * / mod` at `Nat` are `Nat.add sub
+  mul div mod`, at `Int` `Int.add sub mul div emod`; `lt le` (also
+  `< <=`) `Nat.lt le` / `Int.lt le`, `> >=` the flipped ones;
+  `int_eq`/`=` is `Eq`, `!=` is `Ne`, `iff` is `Iff` (their type the
+  implicit argument); `and or not` are `And Or Not` on propositions
+  and Init's `and or not` on `Bool`s. In L nothing runs, so `-` `/`
+  `mod` at `Nat` have their identities here where E refuses them
+  (§8.4 rule 3, guard 2: a restriction of E, not a dialect).
+- **`if`** is `ite C dec T F` where `dec` is the decision of `C`'s
+  head the elaborator knows — `Nat.lt le` → `Nat.decLt decLe`,
+  `Int.lt le` → `Int.decLt decLe`, `Eq` at `Nat`/`Int`/`Bool` →
+  `Nat.decEq`/`Int.decEq`/`instDecidableEqBool` — else `no_decision`
+  with the pointer to `@ite` with the instance; a `Bool` condition is
+  `cond`. `(exists ((x T)) P)` is `Exists (fun (x : T) => P)`.
+- **What K sees** is the closed term with every metavariable
+  instantiated; K rechecks it whole (add.shard), so a wrong assignment
+  is K's refusal, a missing one this elaborator's with its pointer.
+  A type cited before its declaration is admitted (`inductive`'s own
+  name in its constructors, a `structure`'s fields through their
+  projections) is typed by the elaborator from what the form declares,
+  never by K. Stage 0's spelling with every implicit written remains
+  readable through `@`.
 
 ### 5.2 Levels
 
@@ -411,9 +477,12 @@ declared universe parameter of the enclosing declaration
 
 ### 5.3 Literals
 
-A numeral is K's `LitNat`; a string is K's `LitStr` and has type
-`String`, the pinned declaration (`v3/INVENTORY.md`); `Char` values
-are `(Char.ofNat 97)`. The toolchain profile reads both differently
+A numeral at an expected `Int` is `Int.ofNat n`, a negative one
+`Int.negSucc (-n-1)`, where `Init`'s `Int.ofNat` is in scope; at
+`Nat`, or where nothing decides, K's `LitNat` (law §5.2's rule, in L
+since slice 3.15; a negative numeral elsewhere is `negative_numeral`).
+A string is K's `LitStr` and has type `String`, the pinned declaration
+(`v3/INVENTORY.md`); `Char` values are `(Char.ofNat 97)`. The toolchain profile reads both differently
 (§8). The E realization of `String` (the validated-UTF-8 buffer) is
 phase 3; at phase 2 no E body computes with a `String` literal outside
 the toolchain profile.
@@ -1749,8 +1818,8 @@ parity, route 2's byte-tie and T0 green:
    is `Int.ofNat n` and a negative one `Int.negSucc (-n-1)`, where
    `Init`'s `Int.ofNat` is in scope; at `Nat`, or with no expected
    type, K's `Nat` literal as before — so `(match xs (nil 0) …)` at
-   `Int` states `Int.ofNat 0`, and a theorem about it spells the
-   coercion until slice 3.15's numeral rule in L.
+   `Int` states `Int.ofNat 0`; since slice 3.15 a theorem about it
+   writes `0` too (§5.3).
 4. **A `fn` with a non-structural measure stays `RUNNABLE`** at this
    slice, reason `measure_pending`; slice 3.14 gives it
    `WellFounded.fix`.
@@ -1761,8 +1830,9 @@ parity, route 2's byte-tie and T0 green:
    signature and body by the classifier and defined the same way (the
    definition only — no E body, no equations); when that fails too the
    reader's own error stands. A body mixing explicit-L forms inside
-   the E forms is slice 3.15's. The pin `def_match` shows a `def` with
-   a `match`.
+   the E forms is not 3.15's either (its §5.1 `if` and operators are
+   the L side's; a `match` in a statement stays refused). The pin
+   `def_match` shows a `def` with a `match`.
 
 **Not in 3.13:** nested and numeral patterns beyond the leading case
 tree (`equation_form`, as for a `realize`), mutual recursion,
@@ -1837,6 +1907,72 @@ three leans; §13 item 47):
    pre-registered in the file and not yet defined), taken with slice
    3.15. A forward reference to a later-defined function is the same
    obstacle.
+
+**The rules of slice 3.15** (the L-side ergonomics of law §5.1–5.2;
+the user's ruling of 2026-09-17 on the leans, §13 item 48; built
+2026-09-18):
+
+1. **Metavariables are nodes** — `MVar` in `Expr`, `LMVar` in `Level`
+   (law §6: native metavariables that K refuses). K gained refusing
+   arms only: `infer` on the node is `Malformed metavariable`
+   (type_checker.cpp l. 342), the raw entry refuses a declaration
+   carrying one (`mvar_in_type`, `mvar_in_value`, beside the fvar
+   checks), the node data carries `has_mvar` (levels included), and
+   the exporter never emits one, so the import is unchanged. The
+   first K edit since the seal (§13 item 26); hostile pins 17a–d.
+2. **The elaborator is a Meta layer above K** (`kernel/elab.shard`
+   over `unify.shard`, `scope.shard`, `kw.shard`): bidirectional, over
+   K's locals, first-order unification with typed assignments, K's
+   `whnf` and `is_def_eq` through the view for the closed residues —
+   §5.1 states the rules. The reader (`reader.shard`) reads the forms
+   over it; nothing of it crosses into K.
+3. **The spelling changes it makes** (the phase-2 pins rewritten, 45
+   files): an implicit binder's argument is inserted, never written —
+   `(Eq.{1} Nat a b)` is `(Eq a b)`, `(Eq.refl.{1} Nat a)` is
+   `(Eq.refl a)`, `(List.cons.{0} a x t)` is `(List.cons x t)`;
+   `@NAME` where the old spelling is wanted. A `type`'s parameters are
+   implicit in its constructors and a `fn`'s type parameters in its L
+   signature, equations and obligations, so a theorem cites
+   `(len xs)` and `(Pair2.mk a b)` as a body does (guard 1). A
+   universe not written is inferred. A statement's `0` at `Int` is
+   `Int.ofNat 0`, its `(+ a b)` at `Int` is `Int.add a b`, its `(= a
+   b)` is `Eq` with the type inferred (`std/list.shard`, calc's
+   `eval_add`). Two refusals moved from K to the elaborator: a false
+   theorem's proof and a universe collapse are `type_mismatch` before
+   K sees them (K's own refusals stay pinned in the hostile battery),
+   as is a consumer's `Eq.refl` through a view parameter (§8.5's
+   `view_rfl`: the unifier asks K's `is_def_eq` over the consumer's
+   environment, where the parameter is opaque). `universe_args_required`
+   is gone; `unsolved_universe` is its Stage-1 counterpart.
+4. **`if` and the operators in a statement** are §5.1's: `ite` with
+   the decision of the proposition's head, the identities by the
+   first operand's type, `-` `/` `mod` at `Nat` included in L.
+   **Not in 3.15:** a `match` inside a statement (the pointer is
+   `T.casesOn` or a helper `def`), `Bool` against `Decidable` bridging
+   (`decide`; calc's `is_digit` stays `RUNNABLE` for it, slice 3.16),
+   E's rename of `lt le int_eq` to `< <= =` (3.16 with the tool
+   migration), `UInt*`/`Fin` numerals (with their E realizations),
+   explicit holes `_`.
+5. **`noConfusion` and forward references** — this slice's remaining
+   items, stated in the as-built below as they land.
+
+**As built (2026-09-18, the elaborator):** `unify.shard` — `MCtx`
+(declarations with name, type, telescope and kind; assignments;
+`inst_mvars`/`inst_level` the instantiation; `unify` with `assign`
+typed through K's `infer` on a closed value and `infer_light` — a
+constant, local or metavariable head's telescope walked — on an open
+one; `mc_drop_fvars` at every binder close, so a metavariable that
+survives a `fun` cannot later capture its variable). `elab.shard` —
+`El` (K's world, the metavariable context, the scope context with the
+bound names and their fvars), `elab` returning term and type, `tele`
+(the telescope into slots: an inserted metavariable or a written
+argument's placeholder), `elab_args` (propagate, elaborate, numerals
+last, instantiate), `check_expected` (unify, else the coercion, else
+`type_mismatch`), `elab_op`/`op_identity`, `elab_if`/`decision_of`,
+`el_finish` (the closed term; the first unsolved metavariable named).
+The pins `elab_implicit`, `elab_numeral`, `elab_unsolved`,
+`elab_instance`, `elab_no_decision`, `elab_mismatch`; the reader pin
+`refuse_unsolved_universe`.
 
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
@@ -2085,7 +2221,7 @@ never compared as verdicts.
 
 | capability | law | phase |
 |---|---|---|
-| implicit arguments, first-order unification, universe inference, the numeral rule of §5.2, coercion `Nat → Int` | §5.1 Stage 1, §5.2 | 3 |
+| implicit arguments, first-order unification, universe inference, the numeral rule of §5.2, coercion `Nat → Int` | §5.1 Stage 1, §5.2 | 3 — **landed slice 3.15** (§5.1, §8.4) |
 | match compilation, structural recursion to recursors, `f.eq_N`, `noConfusion`, `WellFounded.fix` from `measure`, `fn` = `def` + `realize` | §5.1 Stage 1, §4.5; §8.4 | 3 — slices 3.13 (immediate-field recursion, `eq_N`), 3.14 (course-of-values, `WellFounded.fix`), 3.15 (`noConfusion`) |
 | deriving under a declared policy | §5.1 | 3 |
 | tactic blocks, the I elaborator, the goal graph, `sorry` as a hole | §5.1 Stage 2, §7 | 3 |
@@ -2136,7 +2272,7 @@ migration table of law §10.3 owns the name and behavior changes of the
 | `(quote S)`, `'S`, the `Symbol` type, `sym_eq`, `sym_of_chars`, `chars_of_sym` | carried — **decided 2026-09-14** (§8.1 rule 1) | `Symbol` is a built-in E type in every file, the interned atom, L identity `String` at phase 3; K's `Name` values are built from its atoms as today. The S-side refusal `symbol_literal` retired at slice 3.4 (2026-09-14) |
 | `(list a b c)` (9,455 uses outside `v3/`) | carried — **decided 2026-09-14** (§8.1 rule 2) | the constructor chain of the `List` in scope, by the scope at Stage 0 and by the expected type at Stage 1 (R60); the S-side refusal `list_sugar` retired at slice 3.4 (2026-09-14) |
 | `"…"` = UTF-8 bytes as `(List Int)`, on the extern wire too | carried in E — **decided 2026-09-14** (§8.1 rule 2); **changed** at `String`'s realization | in an E body the byte list of the `List` in scope for every file (the S-side refusal `string_literal` retired at slice 3.4, 2026-09-14); in L positions K's `String` literal (§5.3). At `String`'s E realization the E rule flips for every file at once, the toolchain migrated by tool (§11). **AT RISK:** the extern wire's byte convention under the naming law (`List UInt8`? `ByteArray`?) is undecided; at phase 2 the wire's cells are the toolchain prelude's `List`, `Option`, `Pair` and `Bool` (§6.7) |
-| `Int` numerals everywhere, `-7` | carried in E — **decided 2026-09-14** (§8.1 rule 2) | in an E body a numeral is an integer of any sign whose type is the binder's; in L positions `LitNat`, negatives constructor terms (§2); a `realize` body's numeral is K's `Nat` literal, a negative one `equation_form` until Stage 1's numeral rule (law §5.2) |
+| `Int` numerals everywhere, `-7` | carried in E — **decided 2026-09-14** (§8.1 rule 2); in L since slice 3.15 (§5.3) | in an E body a numeral is an integer of any sign whose type is the binder's; in L a numeral takes the type its position expects — `Int.ofNat n` / `Int.negSucc (-n-1)` at `Int`, `Nat` otherwise (law §5.2's rule) |
 | unbound identifier = `FVar` (proof-time opened variables) | dropped | an unbound name is a resolution error; K refuses free variables; I's named context replaces the use (phase 3) |
 | primitive dispatch by name, trie-first, bodyless-name collision = stuck (`pins/lang/prim_shadow_rejects`) | **changed** — landed slice 5 | heads classified at load into four node kinds; a primitive is an identity (§6.4); a declared name shadows the table's (the scope resolves first); an unknown head is refused at load |
 | the primitive table | carried under the profile names; **changed** under the naming-law names | §6.4; `/` stuck at zero versus `Int.tdiv` total are two entries |
@@ -2668,3 +2804,22 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     obligation over the scope's locals; `PProd` reachability an
     obstacle; calc's `parse_rest` the first real course-of-values
     definition; the fixture through `InvImage.wf`.
+48. **The elaborator above K** (§5.1, §8.4's slice-3.15 rules; the
+    user's ruling of 2026-09-17 on the design's leans): metavariables
+    as nodes K refuses (law §6), rather than an encoding K never sees
+    (reserved fvars or constants: no level analogue, and I's holes
+    need the node anyway); first-order unification with K's own
+    definitional equality on closed residues (an over-eager assignment
+    is K's refusal, never a theorem), rather than a second
+    definitional equality above K; "numerals last" as the whole
+    postponement discipline, rather than Lean's postponement queue;
+    every undetermined argument or universe a refusal with a pointer,
+    rather than a default; the one coercion at every check against an
+    expected type; the operator spellings' identities by the first
+    operand's type in statements, `-` `/` `mod` at `Nat` included
+    there (nothing runs) while E keeps refusing them (guard 2); `if`
+    as `ite` with a decision read off the proposition's head; a
+    `type`'s parameters and a `fn`'s type parameters implicit, so L
+    cites what E cites (guard 1). The phase-2 spelling of implicit
+    arguments is gone from the pins and stands under `@`. **As built
+    (2026-09-18):** see §8.4's as-built.

@@ -1,0 +1,713 @@
+;;; v3/kernel/elab.shard — the L elaborator (v3/LANGUAGE.md §5.1, §8.4
+;;; slice 3.15; law §5.1 Stage 1, §5.2). S terms → K's `Expr`, bidirectional:
+;;; every rule takes an expected type when the position has one and returns
+;;; the term with its type. Terms are built over K's locals (kw.shard) and
+;;; closed by K's mk_binding; a citation of a constant inserts a metavariable
+;;; at each implicit binder and a level metavariable for each universe
+;;; parameter not written, solved by first-order unification (unify.shard)
+;;; of the argument types with the binders and of the result type with the
+;;; expected type — the expected type first, the explicit arguments left to
+;;; right with numerals last, so `(List.cons 0 nil)` at `(List Int)` reads
+;;; `0` at `Int`. What the declared inputs do not determine is a refusal that
+;;; names the binder (`unsolved_implicit`, `unsolved_universe`), never a
+;;; default — except the numeral's `Nat` (law §5.2). The one coercion:
+;;; a `Nat` where an `Int` is expected becomes `Int.ofNat`. The operator
+;;; spellings take the naming-law identity at the type of their first
+;;; operand (§8.4 rule 3 on the L side: `-`, `/`, `mod` at `Nat` are
+;;; `Nat.sub`, `Nat.div`, `Nat.mod` here — nothing runs); `if` is `ite`
+;;; with the decision of its proposition's head, `cond` on a `Bool`. `@f`
+;;; is Lean's explicit application: no binder is implicit.
+;;;
+;;; Untrusted, as the law says: K rechecks every closed declaration this
+;;; produces; a wrong assignment is K's refusal, a missing one is this
+;;; file's, with its pointer.
+
+(import "scope.shard")
+(import "unify.shard")
+(use kernel.k)
+(use kernel.expr)
+(use kernel.kw)
+(use kernel.level)
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.scope)
+(use kernel.sexpr)
+(use kernel.unify)
+(use kernel.util)
+(use kernel.expr.BinderInfo)
+(use kernel.expr.Expr)
+(use kernel.expr.Literal)
+(use kernel.kw.W)
+(use kernel.level.Level)
+(use kernel.name.Name)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.scope.Cx)
+(use kernel.scope.Defd)
+(use kernel.scope.Resolved)
+(use kernel.scope.Scope)
+(use kernel.sexpr.SExpr)
+(use kernel.unify.MCtx)
+(use kernel.unify.URes)
+
+;; the elaboration state: K's world (environment, locals, checker state), the
+;; metavariable context, the scope context
+(type El (El W MCtx Cx))
+(fn el_w ((e El)) W (match e ((El w _ _) w)))
+(fn el_mc ((e El)) MCtx (match e ((El _ m _) m)))
+(fn el_cx ((e El)) Cx (match e ((El _ _ c) c)))
+(fn el_set_w ((e El) (w W)) El (match e ((El _ m c) (El w m c))))
+(fn el_set_mc ((e El) (m MCtx)) El (match e ((El w _ c) (El w m c))))
+(fn el_set_cx ((e El) (c Cx)) El (match e ((El w m _) (El w m c))))
+(fn el0 ((sc Scope) (env CheckedEnv) (lps (List Name)) (defining (List Defd))) El
+  (El (w0 env) (mc0) (cx0 sc env lps defining)))
+(fn el_env ((e El)) CheckedEnv (w_env (el_w e)))
+(fn el_with_etype ((e El) (t Bool)) El (el_set_cx e (cx_with_etype (el_cx e) t)))
+(fn el_with_defining ((e El) (d (List Defd))) El (el_set_cx e (cx_with_defining (el_cx e) d)))
+(fn el_with_aliases ((e El) (a (List (Pair Name (Pair Int Expr))))) El (el_set_cx e (cx_with_aliases (el_cx e) a)))
+
+;; a term result: the state, the term, its type
+(type ERes (EOk El Expr Expr) (EErr Symbol (List Int)))
+
+;; ---- the state's operations ---------------------------------------------------------------
+(fn el_zonk ((e El) (x Expr)) Expr (inst_mvars (el_mc e) x))
+(fn el_whnf ((e El) (x Expr)) (Pair El Expr)
+  (let ((z (el_zonk e x)))
+    (match (w_whnf (el_w e) z) ((Pair w1 (Some r)) (Pair (el_set_w e w1) r)) ((Pair w1 None) (Pair (el_set_w e w1) z)))))
+(fn el_unify ((e El) (a Expr) (b Expr)) (Option El)
+  (match (unify (el_w e) (el_mc e) a b) ((UYes w1 mc1) (Some (El w1 mc1 (el_cx e)))) (UNo None)))
+(fn el_infer ((e El) (x Expr)) (Pair El (Option Expr))
+  (match (w_infer (el_w e) (el_zonk e x)) ((Pair w1 r) (Pair (el_set_w e w1) r))))
+;; a fresh metavariable in the current scope
+(fn el_fresh ((e El) (n Name) (ty Expr) (kind Symbol)) (Pair El Expr)
+  (match (mc_fresh (el_mc e) n ty (cx_fvar_ids (el_cx e)) kind) ((Pair mc1 m) (Pair (el_set_mc e mc1) m))))
+(fn el_fresh_level ((e El)) (Pair El Level)
+  (match (mc_fresh_level (el_mc e)) ((Pair mc1 l) (Pair (el_set_mc e mc1) l))))
+(fn el_fresh_levels ((e El) (k Int)) (Pair El (List Level))
+  (measure k)
+  (if (lt k 1) (Pair e Nil)
+    (match (el_fresh_level e)
+      ((Pair e1 l) (match (el_fresh_levels e1 (- k 1)) ((Pair e2 ls) (Pair e2 (Cons l ls))))))))
+;; a local: its type instantiated first (K's local carries it as written —
+;; the binding is closed by K's mk_binding over the local's declaration)
+(fn el_local ((e El) (n Name) (ty Expr) (bi BinderInfo)) (Pair El Expr)
+  (match (w_local_bi (el_w e) n (el_zonk e ty) bi)
+    ((Pair w1 fv) (Pair (El w1 (el_mc e) (cx_bind (el_cx e) n fv)) fv))))
+(fn el_local_val ((e El) (n Name) (ty Expr) (v Expr)) (Pair El Expr)
+  (match (w_local_val (el_w e) n (el_zonk e ty) (el_zonk e v))
+    ((Pair w1 fv) (Pair (El w1 (el_mc e) (cx_bind (el_cx e) n fv)) fv))))
+;; close binders over fvars: the body instantiated, K's mk_binding, the
+;; metavariables that survive lose the closed locals from their telescopes
+(fn el_close ((e El) (fvars (List Expr)) (b Expr) (is_lam Bool)) (Pair El Expr)
+  (let ((z (el_zonk e b)))
+    (match (if is_lam (w_lams (el_w e) fvars z) (w_pis (el_w e) fvars z))
+      ((Pair w1 r) (Pair (El w1 (mc_drop_fvars (el_mc e) (fvar_ids fvars)) (el_cx e)) r)))))
+(fn el_pis ((e El) (fvars (List Expr)) (b Expr)) (Pair El Expr) (el_close e fvars b False))
+(fn el_lams ((e El) (fvars (List Expr)) (b Expr)) (Pair El Expr) (el_close e fvars b True))
+;; leave the scope of the locals opened after `saved` (the world keeps them: a
+;; closed term never mentions them)
+(fn el_restore ((e El) (saved El)) El (el_set_cx e (el_cx saved)))
+
+;; ---- finishing a declaration ----------------------------------------------------------------
+(type FinRes (FinOk Expr) (FinErr Symbol (List Int)))
+;; the term instantiated; an unsolved metavariable names its binder
+(fn el_finish ((e El) (x Expr)) FinRes
+  (let ((z (el_zonk e x)))
+    (match (first_mvar z)
+      ((Some i) (unsolved_msg e i))
+      (None
+       (match (first_lmvar z)
+         ((Some _) (FinErr (quote unsolved_universe) "a universe the declared inputs do not determine: write NAME.{…} (law §5.2)"))
+         (None (FinOk z)))))))
+(fn unsolved_msg ((e El) (i Int)) FinRes
+  (match (mc_decl (el_mc e) i)
+    (None (FinErr (quote unsolved_implicit) "an argument the declared inputs do not determine"))
+    ((Some d)
+     (if (sym_eq (md_kind d) (quote inst))
+       (FinErr (quote instance_needed) (append "the instance argument " (append (show_name (md_name d)) " has no resolution at Stage 1: write the application with @ and the instance (law §5.1 Stage 3)")))
+     (if (sym_eq (md_kind d) (quote explicit))
+       (FinErr (quote unsolved_implicit) (append "the argument " (append (show_name (md_name d)) " was not determined")))
+       (FinErr (quote unsolved_implicit) (append "the implicit argument " (append (show_name (md_name d)) " is not determined by the explicit arguments or the expected type: write the application with @ (law §5.2)"))))))))
+(fn fin_type ((e El) (x Expr)) (Pair (Option Expr) (List Int))
+  (match (el_finish e x) ((FinOk z) (Pair (Some z) Nil)) ((FinErr r m) (Pair None (append (chars_of_sym r) (append ": " m))))))
+
+;; ---- levels (§5.2) ---------------------------------------------------------------------
+(fn elab_level ((e El) (s SExpr)) (Option Level)
+  (measure (struct s))
+  (match s
+    ((SNum k) (Some (level_of_nat k)))
+    ((SSym x)
+     (match (name_of_sym x)
+       ((Some n) (if (mem_name n (cx_lps (el_cx e))) (Some (LParam n)) None))
+       (None None)))
+    ((SList (Cons (SSym h) args))
+     (if (sym_eq h (quote succ))
+       (match args ((Cons a Nil) (match (elab_level e a) ((Some l) (Some (LSucc l))) (None None))) (_ None))
+     (if (sym_eq h (quote max))
+       (match args ((Cons a (Cons b Nil)) (level2 e a b True)) (_ None))
+     (if (sym_eq h (quote imax))
+       (match args ((Cons a (Cons b Nil)) (level2 e a b False)) (_ None))
+     None))))
+    (_ None)))
+(fn level2 ((e El) (a SExpr) (b SExpr) (is_max Bool)) (Option Level)
+  (match (elab_level e a)
+    (None None)
+    ((Some la) (match (elab_level e b) (None None) ((Some lb) (Some (if is_max (LMax la lb) (LIMax la lb))))))))
+(fn level_of_nat ((k Int)) Level (measure k) (if (lt k 1) LZero (LSucc (level_of_nat (- k 1)))))
+(fn elab_levels ((e El) (ss (List SExpr))) (Option (List Level))
+  (measure (struct ss))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons s r) (match (elab_level e s) (None None) ((Some l) (match (elab_levels e r) (None None) ((Some ls) (Some (Cons l ls)))))))))
+(fn zeros ((k Int)) (List Level) (measure k) (if (lt k 1) Nil (Cons LZero (zeros (- k 1)))))
+
+;; ---- the expected type -------------------------------------------------------------------
+;; the term's type against the expected one: unify, else the one coercion
+(fn check_expected ((e El) (v Expr) (ty Expr) (expected (Option Expr))) ERes
+  (match expected
+    (None (EOk e v ty))
+    ((Some x)
+     (match (el_unify e ty x)
+       ((Some e1) (EOk e1 v (el_zonk e1 x)))
+       (None
+        (match (el_whnf e ty)
+          ((Pair e1 tyw)
+           (match (el_whnf e1 x)
+             ((Pair e2 xw)
+              (if (bool_and (is_const_named tyw (nm_nat)) (bool_and (is_const_named xw (nm_int_ty)) (int_of_nat_visible e2)))
+                (EOk e2 (mk_app (mk_const (nm_int_of_nat) Nil) v) xw)
+                (EErr (quote type_mismatch) (append "expected " (append (show_expr xw) (append ", found " (show_expr tyw)))))))))))))))
+(fn int_of_nat_visible ((e El)) Bool (match (env_find (el_env e) (nm_int_of_nat)) ((Some _) True) (None False)))
+
+;; ---- terms (§5.1) ------------------------------------------------------------------------
+(fn elab ((e El) (s SExpr) (expected (Option Expr))) ERes
+  (measure (struct s))
+  (match s
+    ((SNum k) (elab_num e k expected))
+    ((SStr bs) (check_expected e (mk_lit (LitStr bs)) (mk_const (nm_string) Nil) expected))
+    ((SSym x) (elab_sym e x Nil False expected))
+    ((SSymU x ls) (elab_sym e x ls True expected))
+    ((SList Nil) (EErr (quote empty_application) "()"))
+    ((SList (Cons (SSym h) args))
+     (if (sym_eq h (quote fun)) (elab_binding e args True expected)
+     (if (sym_eq h (quote forall)) (elab_binding e args False expected)
+     (if (sym_eq h (quote ->)) (elab_arrow e args expected)
+     (if (sym_eq h (quote let)) (elab_let e args expected)
+     (if (sym_eq h (quote Sort))
+       (match args ((Cons l Nil) (match (elab_level e l) ((Some u) (check_expected e (mk_sort u) (mk_sort (LSucc u)) expected)) (None (EErr (quote bad_level) "(Sort LEVEL)")))) (_ (EErr (quote bad_shape) "(Sort LEVEL)")))
+     (if (sym_eq h (quote Type))
+       (match args ((Cons l Nil) (match (elab_level e l) ((Some u) (check_expected e (mk_sort (LSucc u)) (mk_sort (LSucc (LSucc u))) expected)) (None (EErr (quote bad_level) "(Type LEVEL)")))) (_ (EErr (quote bad_shape) "(Type LEVEL)")))
+     (if (sym_eq h (quote proj)) (elab_proj e args expected)
+     (if (sym_eq h (quote if)) (elab_if e args expected)
+     (if (sym_eq h (quote exists)) (elab_exists e args expected)
+     (elab_app e (SSym h) args expected)))))))))))
+    ((SList (Cons h args)) (elab_app e h args expected))))
+
+;; a numeral: at an expected `Int`, `Int.ofNat n` / `Int.negSucc (-n-1)` (law §5.2's
+;; one coercion, where Init's Int.ofNat is in scope); else K's Nat literal
+(fn elab_num ((e El) (k Int) (expected (Option Expr))) ERes
+  (match expected
+    ((Some x)
+     (match (el_whnf e x)
+       ((Pair e1 xw)
+        (if (bool_and (is_const_named xw (nm_int_ty)) (int_of_nat_visible e1))
+          (if (lt k 0)
+            (EOk e1 (mk_app (mk_const (nm_int_neg_succ) Nil) (nat_lit (- (- 0 k) 1))) xw)
+            (EOk e1 (mk_app (mk_const (nm_int_of_nat) Nil) (nat_lit k)) xw))
+          (elab_nat_lit e1 k expected)))))
+    (None (elab_nat_lit e k expected))))
+(fn elab_nat_lit ((e El) (k Int) (expected (Option Expr))) ERes
+  (if (lt k 0)
+    (EErr (quote negative_numeral) "a negative numeral has an L literal at Int only: K's literals are naturals (§2, §8.1 rule 2)")
+    (check_expected e (nat_lit k) (mk_const (nm_nat) Nil) expected)))
+
+;; a symbol: Prop / Type, a bound name, a projection alias, else a constant with
+;; its implicit arguments inserted (a bare `List.nil` is `@List.nil ?α`)
+(fn elab_sym ((e El) (x Symbol) (ls (List SExpr)) (has_univ Bool) (expected (Option Expr))) ERes
+  (let ((explicit (sym_explicit x)) (x1 (sym_strip x)))
+    (match (name_of_sym x1)
+      (None (EErr (quote bad_name) (chars_of_sym x1)))
+      ((Some n)
+       (match (cx_lookup (el_cx e) n)
+         ((Some fv)
+          (if has_univ (EErr (quote bad_universe_suffix) "a bound variable takes no universe arguments")
+            (match (w_local_type (el_w e) (fvar_id_of fv))
+              ((Some ty) (check_expected e fv ty expected))
+              (None (EErr (quote bad_shape) "a bound variable without a local")))))
+         (None
+          (match (assoc_alias n (cx_aliases (el_cx e)))
+            ((Some (Pair j ty))
+             (match (cx_lookup (el_cx e) (self_name))
+               ((Some fv) (check_expected e (mk_proj (alias_struct e) j fv) ty expected))
+               (None (EErr (quote bad_shape) "a projection alias outside its structure"))))
+            (None
+             (if (bool_and (bool_not has_univ) (sym_eq x1 (quote Prop))) (check_expected e (mk_sort LZero) (mk_sort (LSucc LZero)) expected)
+             (if (bool_and (bool_not has_univ) (sym_eq x1 (quote Type))) (check_expected e (mk_sort (LSucc LZero)) (mk_sort (LSucc (LSucc LZero))) expected)
+             (match (elab_const e n ls has_univ)
+               ((EErr r m) (EErr r m))
+               ((EOk e1 c cty) (elab_args e1 c cty Nil explicit expected)))))))))))))
+;; `@f`: Lean's explicit application
+(fn sym_explicit ((x Symbol)) Bool (match (chars_of_sym x) ((Cons 64 _) True) (_ False)))
+(fn sym_strip ((x Symbol)) Symbol (match (chars_of_sym x) ((Cons 64 r) (sym_of_chars r)) (_ x)))
+(fn assoc_alias ((n Name) (xs (List (Pair Name (Pair Int Expr))))) (Option (Pair Int Expr))
+  (measure (struct xs))
+  (match xs (Nil None) ((Cons (Pair m v) r) (if (name_eq n m) (Some v) (assoc_alias n r)))))
+;; the bound name projections go through; `self.` is not a name an author can spell
+;; (nor a symbol the V3 lexer reads — a trailing dot is a universe suffix's start — so it is built from its bytes)
+(fn self_name () Name (Str Anon (sym_of_chars "self.")))
+;; the structure a projection alias projects from: the first name being declared
+(fn alias_struct ((e El)) Name (match (cx_defining (el_cx e)) ((Cons (Defd n _ _) _) n) (Nil Anon)))
+;; (proj S i x): its type is K's (the field's type past the earlier fields)
+(fn proj_term ((e El) (sn Name) (i Int) (x Expr) (expected (Option Expr))) ERes
+  (let ((p (mk_proj sn i x)))
+    (match (el_infer e p)
+      ((Pair e1 (Some ty)) (check_expected e1 p ty expected))
+      ((Pair _ None) (EErr (quote bad_projection) (append (show_name sn) (append "." (show_nat i))))))))
+
+;; a constant with its universe arguments: written, or none, or level 0 by rule
+;; in an E-type position, else a level metavariable each (universe inference)
+(fn elab_const ((e El) (n Name) (ls (List SExpr)) (has_univ Bool)) ERes
+  (match (resolve (el_cx e) n)
+    (RNone (EErr (quote unknown_constant) (show_name n)))
+    ((RAmbiguous a b) (EErr (quote ambiguous_name) (append (show_name n) (append ": " (append (show_name a) (append " and " (show_name b)))))))
+    ((RPend k) (EErr (quote pending_obligation) (append (show_name k) " was read with sorry: it admits nothing, and citing it is the obligation")))
+    ((RName k arity)
+     (if has_univ
+       (match (elab_levels e ls)
+         (None (EErr (quote bad_level) (show_name n)))
+         ((Some lvls)
+          (if (int_eq (len lvls) arity) (const_at e k lvls)
+            (EErr (quote universe_arity) (append (show_name k) (append " takes " (append (show_nat arity) " universe arguments")))))))
+       (if (int_eq arity 0) (const_at e k Nil)
+       (if (cx_etype (el_cx e)) (const_at e k (zeros arity))
+         (match (el_fresh_levels e arity) ((Pair e1 lvls) (const_at e1 k lvls)))))))))
+;; the constant and its type at these levels: a name this form declares, else the environment's
+(fn const_at ((e El) (k Name) (lvls (List Level))) ERes
+  (match (find_defd k (cx_defining (el_cx e)))
+    ((Some (Defd _ _ ty))
+     (match (w_inst_lparams (el_w e) ty (cx_lps (el_cx e)) lvls)
+       ((Pair w1 ty1) (EOk (el_set_w e w1) (mk_const k lvls) ty1))))
+    (None
+     (match (env_find (el_env e) k)
+       (None (EErr (quote unknown_constant) (show_name k)))
+       ((Some info)
+        (match (w_inst_lparams (el_w e) (ci_type info) (ci_lparams info) lvls)
+          ((Pair w1 ty1) (EOk (el_set_w e w1) (mk_const k lvls) ty1))))))))
+
+;; ---- application -----------------------------------------------------------------------
+;; an argument: source, or already elaborated (the operator and `if` paths)
+(type EArg (ASrc SExpr) (AVal Expr Expr))
+(fn elab_app ((e El) (h SExpr) (args (List SExpr)) (expected (Option Expr))) ERes
+  (match h
+    ((SSym x) (elab_app_sym e x Nil False args expected))
+    ((SSymU x ls) (elab_app_sym e x ls True args expected))
+    (_
+     (match (elab e h None)
+       ((EErr r m) (EErr r m))
+       ((EOk e1 f fty) (elab_args e1 f fty (srcs args) False expected))))))
+(fn srcs ((args (List SExpr))) (List EArg)
+  (measure (struct args))
+  (match args (Nil Nil) ((Cons a r) (Cons (ASrc a) (srcs r)))))
+;; the head a symbol: a bound name, an operator spelling, else a constant
+(fn elab_app_sym ((e El) (x Symbol) (ls (List SExpr)) (has_univ Bool) (args (List SExpr)) (expected (Option Expr))) ERes
+  (let ((explicit (sym_explicit x)) (x1 (sym_strip x)))
+    (match (name_of_sym x1)
+      (None (EErr (quote bad_name) (chars_of_sym x1)))
+      ((Some n)
+       (match (cx_lookup (el_cx e) n)
+         ((Some fv)
+          (match (w_local_type (el_w e) (fvar_id_of fv))
+            ((Some ty) (elab_args e fv ty (srcs args) True expected))
+            (None (EErr (quote bad_shape) "a bound variable without a local"))))
+         (None
+          (if (bool_and (bool_not has_univ) (is_operator x1))
+            (elab_op e x1 args expected)
+            (match (elab_const e n ls has_univ)
+              ((EErr r m) (EErr r m))
+              ((EOk e1 c cty) (elab_args e1 c cty (srcs args) explicit expected))))))))))
+
+;; a slot of the telescope: an inserted metavariable, or an explicit argument
+;; with the metavariable standing for it until it is elaborated
+(type Slot (SImp Expr) (SExp EArg Expr))
+(type TlRes (TlOk El Expr Expr (List Slot)) (TlErr Symbol (List Int)))
+;; the head applied through its telescope: a metavariable per implicit binder
+;; (a strict one only before an explicit argument, an instance one is the
+;; Stage-3 hole), a placeholder per explicit argument, the result type
+(fn tele ((e El) (f Expr) (fty Expr) (args (List EArg)) (explicit Bool) (acc (List Slot)) (d Int)) TlRes
+  (measure d)
+  (if (lt d 1) (TlErr (quote bad_shape) "an application too long")
+  (let ((ty (el_zonk e fty)))
+    (match ty
+      ((Pi _ n bi dom body)
+       (if (bool_or explicit (bool_or (bi_default bi) (bool_and (bi_strict bi) (nil_args args))))
+         (match args
+           (Nil (TlOk e f ty (rev acc)))
+           ((Cons a r)
+            (match (el_fresh e n dom (quote explicit))
+              ((Pair e1 m)
+               (match (w_inst1 (el_w e1) body m)
+                 ((Pair w2 body1) (tele (el_set_w e1 w2) (mk_app f m) body1 r explicit (Cons (SExp a m) acc) (- d 1))))))))
+         (match (el_fresh e n dom (if (bi_inst bi) (quote inst) (quote implicit)))
+           ((Pair e1 m)
+            (match (w_inst1 (el_w e1) body m)
+              ((Pair w2 body1) (tele (el_set_w e1 w2) (mk_app f m) body1 args explicit (Cons (SImp m) acc) (- d 1))))))))
+      (_
+       (match args
+         (Nil (TlOk e f ty (rev acc)))
+         (_
+          (match (el_whnf e ty)
+            ((Pair e1 tyw)
+             (if (is_pi tyw) (tele e1 f tyw args explicit acc (- d 1))
+               (TlErr (quote function_expected) (append "applied to " (append (show_nat (len args)) (append " more arguments than its type has: " (show_expr tyw)))))))))))))))
+(fn bi_default ((bi BinderInfo)) Bool (match bi (BDefault True) (_ False)))
+(fn bi_strict ((bi BinderInfo)) Bool (match bi (BStrictImplicit True) (_ False)))
+(fn bi_inst ((bi BinderInfo)) Bool (match bi (BInstImplicit True) (_ False)))
+(fn nil_args ((args (List EArg))) Bool (match args (Nil True) (_ False)))
+
+;; the application: the telescope, the expected type propagated first (best
+;; effort), the explicit arguments elaborated at their binders — numerals last
+;; — each unified with its placeholder, then the term and its type instantiated
+(fn elab_args ((e El) (f Expr) (fty Expr) (args (List EArg)) (explicit Bool) (expected (Option Expr))) ERes
+  (match (tele e f fty args explicit Nil 256)
+    ((TlErr r m) (EErr r m))
+    ((TlOk e1 fa rty slots)
+     (let ((e2 (match expected ((Some x) (match (el_unify e1 rty x) ((Some e3) e3) (None e1))) (None e1))))
+       (match (elab_slots e2 slots False)
+         ((EErr r m) (EErr r m))
+         ((EOk e3 _ _)
+          (match (elab_slots e3 slots True)
+            ((EErr r m) (EErr r m))
+            ((EOk e4 _ _) (check_expected e4 (el_zonk e4 fa) (el_zonk e4 rty) expected)))))))))
+;; the explicit slots, the numerals in the second pass
+(fn elab_slots ((e El) (slots (List Slot)) (numerals Bool)) ERes
+  (measure (struct slots))
+  (match slots
+    (Nil (EOk e (mk_sort LZero) (mk_sort LZero)))
+    ((Cons (SImp _) r) (elab_slots e r numerals))
+    ((Cons (SExp a m) r)
+     (if (bool_not (bool_eq (arg_is_numeral a) numerals)) (elab_slots e r numerals)
+       (match (elab_slot e a m)
+         ((EErr r2 m2) (EErr r2 m2))
+         ((EOk e1 _ _) (elab_slots e1 r numerals)))))))
+(fn bool_eq ((a Bool) (b Bool)) Bool (if a b (bool_not b)))
+(fn arg_is_numeral ((a EArg)) Bool (match a ((ASrc (SNum _)) True) (_ False)))
+;; one explicit argument at its binder's type (the placeholder's), then the
+;; placeholder is the argument — already assigned by the expected type, a
+;; definitional check
+(fn elab_slot ((e El) (a EArg) (m Expr)) ERes
+  (let ((dom (match (mvar_type e m) ((Some t) (el_zonk e t)) (None (mk_sort LZero)))))
+    (match (match a
+              ((ASrc s) (elab e s (Some dom)))
+              ((AVal v vty) (check_expected e v vty (Some dom))))
+      ((EErr r msg) (EErr r msg))
+      ((EOk e1 v vty)
+       (match (el_unify e1 m v)
+         ((Some e2) (EOk e2 v vty))
+         (None (EErr (quote argument_mismatch) (append "the expected type fixes this argument to " (append (show_expr (el_zonk e1 m)) (append ", found " (show_expr v)))))))))))
+(fn mvar_type ((e El) (m Expr)) (Option Expr)
+  (match m ((MVar _ i) (match (mc_decl (el_mc e) i) ((Some d) (Some (md_type d))) (None None))) (_ None)))
+
+;; ---- binders -----------------------------------------------------------------------------
+;; (x TYPE) or (x TYPE implicit|strict|inst): the type elaborated and checked to be one
+(type BRes (BOk El Expr Level) (BErr Symbol (List Int)))
+(fn read_binder ((e El) (s SExpr)) BRes
+  (match s
+    ((SList (Cons (SSym x) (Cons ty rest)))
+     (match (name_of_sym x)
+       (None (BErr (quote bad_name) (chars_of_sym x)))
+       ((Some n)
+        (match (binder_info rest)
+          (None (BErr (quote bad_binder) "a binder is (x TYPE) or (x TYPE implicit|strict|inst)"))
+          ((Some bi)
+           (match (elab_type e ty)
+             ((EErr r m) (BErr r m))
+             ((EOk e1 t s) (match (el_local e1 n t bi) ((Pair e2 fv) (BOk e2 fv (level_of_sort s)))))))))))
+    (_ (BErr (quote bad_binder) "a binder is (x TYPE)"))))
+(fn binder_info ((rest (List SExpr))) (Option BinderInfo)
+  (match rest
+    (Nil (Some BDefault))
+    ((Cons (SSym m) Nil)
+     (if (sym_eq m (quote implicit)) (Some BImplicit)
+     (if (sym_eq m (quote strict)) (Some BStrictImplicit)
+     (if (sym_eq m (quote inst)) (Some BInstImplicit)
+     None))))
+    (_ None)))
+;; a term in a type position: its type must be a Sort; a metavariable left in
+;; it is a refusal here (K's locals carry their types as written)
+(fn elab_type ((e El) (s SExpr)) ERes
+  (match (elab e s None)
+    ((EErr r m) (EErr r m))
+    ((EOk e1 t tty)
+     (match (el_finish e1 t)
+       ((FinErr r m) (EErr r m))
+       ((FinOk t1)
+        (match (el_whnf e1 tty)
+          ((Pair e2 s1)
+           (if (is_sort s1) (EOk e2 t1 s1)
+             (match s1
+               ((MVar _ _) (match (el_unify e2 s1 (mk_sort (LSucc LZero))) ((Some e3) (EOk e3 t1 (mk_sort (LSucc LZero)))) (None (EErr (quote not_a_type) (show_expr t1)))))
+               (_ (EErr (quote not_a_type) (append (show_expr t1) (append " : " (show_expr s1))))))))))))))
+;; a declaration's binders in order, each in scope for the next; the fvars in
+;; order, and the sort levels of their types (a Pi's sort is imax over them)
+(fn read_binders ((e El) (bs (List SExpr)) (acc (List Expr))) (Pair (Option (Pair El (List Expr))) (List Int))
+  (match (read_binders_lv e bs acc Nil)
+    ((Pair None m) (Pair None m))
+    ((Pair (Some (Pair e1 (Pair fvars _))) _) (Pair (Some (Pair e1 fvars)) Nil))))
+(fn read_binders_lv ((e El) (bs (List SExpr)) (acc (List Expr)) (lvs (List Level))) (Pair (Option (Pair El (Pair (List Expr) (List Level)))) (List Int))
+  (measure (struct bs))
+  (match bs
+    (Nil (Pair (Some (Pair e (Pair (rev acc) (rev lvs)))) Nil))
+    ((Cons b r)
+     (match (read_binder e b)
+       ((BErr r2 m) (Pair None (append (chars_of_sym r2) (append ": " m))))
+       ((BOk e1 fv lv) (read_binders_lv e1 r (Cons fv acc) (Cons lv lvs)))))))
+(fn level_of_sort ((s Expr)) Level (match s ((Sort _ u) u) (_ LZero)))
+;; Sort (imax u_1 (… (imax u_n v))): a Pi's sort from its binders' and its body's
+(fn pi_sort ((lvs (List Level)) (v Level)) Expr (mk_sort (imax_fold lvs v)))
+(fn imax_fold ((lvs (List Level)) (v Level)) Level
+  (measure (struct lvs))
+  (match lvs (Nil v) ((Cons u r) (LIMax u (imax_fold r v)))))
+
+;; (fun (BINDER…) BODY) / (forall (BINDER…) BODY)
+(fn elab_binding ((e El) (args (List SExpr)) (is_lam Bool) (expected (Option Expr))) ERes
+  (match args
+    ((Cons (SList bs) (Cons body Nil))
+     (match (read_binders_lv e bs Nil Nil)
+       ((Pair None m) (EErr (quote bad_binder) m))
+       ((Pair (Some (Pair e1 (Pair fvars lvs))) _)
+        (if is_lam
+          (match (elab e1 body (lam_body_expected e1 fvars expected))
+            ((EErr r m) (EErr r m))
+            ((EOk e2 v vty)
+             (match (el_lams e2 fvars v)
+               ((Pair e3 lam)
+                (match (el_pis e3 fvars vty)
+                  ((Pair e4 pi) (check_expected (el_restore e4 e) lam pi expected)))))))
+          (match (elab_type e1 body)
+            ((EErr r m) (EErr r m))
+            ((EOk e2 b s)
+             (match (el_pis e2 fvars b)
+               ((Pair e3 pi) (check_expected (el_restore e3 e) pi (pi_sort lvs (level_of_sort s)) expected)))))))))
+    (_ (EErr (quote bad_shape) (if is_lam "(fun ((x TYPE)…) TERM)" "(forall ((x TYPE)…) TERM)")))))
+;; the body's expected type under a lambda: the expected Pi's codomain at the locals
+(fn lam_body_expected ((e El) (fvars (List Expr)) (expected (Option Expr))) (Option Expr)
+  (match expected
+    (None None)
+    ((Some x) (pi_codomain_at e (el_zonk e x) fvars))))
+(fn pi_codomain_at ((e El) (x Expr) (fvars (List Expr))) (Option Expr)
+  (measure (struct fvars))
+  (match fvars
+    (Nil (Some x))
+    ((Cons fv r)
+     (match x
+       ((Pi _ _ _ _ body) (match (w_inst1 (el_w e) body fv) ((Pair _ b1) (pi_codomain_at e b1 r))))
+       (_ None)))))
+;; a closed type-level term typed by K (a Pi's sort, a projection)
+(fn typed_by_k ((e El) (t Expr) (expected (Option Expr))) ERes
+  (match (el_infer e t)
+    ((Pair e1 (Some ty)) (check_expected e1 t ty expected))
+    ((Pair _ None) (EErr (quote not_a_type) (show_expr (el_zonk e t))))))
+
+;; (-> A … R): non-dependent Pi, right-nested; the binder is anonymous
+(fn elab_arrow ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
+  (match args
+    (Nil (EErr (quote bad_shape) "(-> TERM… TERM)"))
+    ((Cons r Nil) (elab e r expected))
+    (_
+     (match (arrow_locals e args Nil Nil)
+       ((Pair None m) (EErr (quote bad_binder) m))
+       ((Pair (Some (Pair (Pair e1 fvars) (Pair b s))) _)
+        (match (el_pis e1 fvars b)
+          ((Pair e2 pi) (check_expected (el_restore e2 e) pi s expected))))))))
+;; the locals of the domains, the body with its sort
+(fn arrow_locals ((e El) (args (List SExpr)) (acc (List Expr)) (lvs (List Level))) (Pair (Option (Pair (Pair El (List Expr)) (Pair Expr Expr))) (List Int))
+  (measure (struct args))
+  (match args
+    (Nil (Pair None "(-> TERM… TERM)"))
+    ((Cons r Nil)
+     (match (elab_type e r)
+       ((EErr r2 m) (Pair None (append (chars_of_sym r2) (append ": " m))))
+       ((EOk e1 b s) (Pair (Some (Pair (Pair e1 (rev acc)) (Pair b (pi_sort (rev lvs) (level_of_sort s))))) Nil))))
+    ((Cons a rest)
+     (match (elab_type e a)
+       ((EErr r2 m) (Pair None (append (chars_of_sym r2) (append ": " m))))
+       ((EOk e1 d s)
+        (match (el_local e1 Anon d BDefault)
+          ((Pair e2 fv) (arrow_locals e2 rest (Cons fv acc) (Cons (level_of_sort s) lvs)))))))))
+
+;; (let ((x TYPE TERM)…) BODY): sequential, one Let per binding
+(fn elab_let ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
+  (match args
+    ((Cons (SList bs) (Cons body Nil)) (elab_lets e bs body expected))
+    (_ (EErr (quote bad_shape) "(let ((x TYPE TERM)…) TERM)"))))
+(fn elab_lets ((e El) (bs (List SExpr)) (body SExpr) (expected (Option Expr))) ERes
+  (measure (struct bs))
+  (match bs
+    (Nil (elab e body expected))
+    ((Cons (SList (Cons (SSym x) (Cons ty (Cons v Nil)))) r)
+     (match (name_of_sym x)
+       (None (EErr (quote bad_name) (chars_of_sym x)))
+       ((Some n)
+        (match (elab_type e ty)
+          ((EErr r2 m) (EErr r2 m))
+          ((EOk e1 t _)
+           (match (elab e1 v (Some t))
+             ((EErr r2 m) (EErr r2 m))
+             ((EOk e2 val _)
+              (match (el_finish e2 val)
+                ((FinErr r2 m) (EErr r2 m))
+                ((FinOk val1)
+                 (match (el_local_val e2 n t val1)
+                   ((Pair e3 fv)
+                    (match (elab_lets e3 r body expected)
+                      ((EErr r2 m) (EErr r2 m))
+                      ((EOk e4 b bty)
+                       (match (el_lams e4 (list fv) b)
+                         ((Pair e5 lb)
+                          (match (w_subst (el_w e5) (el_zonk e5 bty) (fvar_id_of fv) val1)
+                            ((Pair w6 bty1) (EOk (el_restore (el_set_w e5 w6) e) lb bty1))))))))))))))))))
+    (_ (EErr (quote bad_shape) "a let binding is (x TYPE TERM)"))))
+
+;; (proj S i TERM)
+(fn elab_proj ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
+  (match args
+    ((Cons (SSym sn) (Cons (SNum i) (Cons t Nil)))
+     (match (name_of_sym sn)
+       (None (EErr (quote bad_name) (chars_of_sym sn)))
+       ((Some n)
+        (match (resolve (el_cx e) n)
+          ((RName k _)
+           (match (elab e t None)
+             ((EErr r m) (EErr r m))
+             ((EOk e1 x _) (proj_term e1 k i x expected))))
+          ((RAmbiguous a b) (EErr (quote ambiguous_name) (append (show_name a) (append " and " (show_name b)))))
+          ((RPend k) (EErr (quote pending_obligation) (append (show_name k) " was read with sorry: it admits nothing, and citing it is the obligation")))
+          (RNone (EErr (quote unknown_constant) (show_name n)))))))
+    (_ (EErr (quote bad_shape) "(proj STRUCTURE INDEX TERM)"))))
+
+;; ---- the operator spellings (§8.4 rule 3, the L side) -----------------------------------
+;; the identity at the type of the first operand: Nat, Int, or a proposition /
+;; Bool for the connectives; `=` is Eq with its implicit type; `if` below
+(fn is_operator ((x Symbol)) Bool
+  (bool_or (sym_eq x (quote +)) (bool_or (sym_eq x (quote -)) (bool_or (sym_eq x (quote *)) (bool_or (sym_eq x (quote /))
+  (bool_or (sym_eq x (quote mod)) (bool_or (sym_eq x (quote %)) (bool_or (sym_eq x (quote lt)) (bool_or (sym_eq x (quote <))
+  (bool_or (sym_eq x (quote le)) (bool_or (sym_eq x (quote <=)) (bool_or (sym_eq x (quote >)) (bool_or (sym_eq x (quote >=))
+  (bool_or (sym_eq x (quote int_eq)) (bool_or (sym_eq x (quote =)) (bool_or (sym_eq x (quote !=))
+  (bool_or (sym_eq x (quote and)) (bool_or (sym_eq x (quote or)) (bool_or (sym_eq x (quote not)) (sym_eq x (quote iff)))))))))))))))))))))
+(fn elab_op ((e El) (x Symbol) (args (List SExpr)) (expected (Option Expr))) ERes
+  (if (bool_or (sym_eq x (quote =)) (sym_eq x (quote int_eq))) (op_const e (nm_eq) args expected)
+  (if (sym_eq x (quote !=)) (op_const e (n1 (quote Ne)) args expected)
+  (if (sym_eq x (quote iff)) (op_const e (n1 (quote Iff)) args expected)
+  (if (bool_or (sym_eq x (quote >)) (sym_eq x (quote >=)))
+    (match args ((Cons a (Cons b Nil)) (elab_op e (if (sym_eq x (quote >)) (quote <) (quote <=)) (list b a) expected)) (_ (EErr (quote bad_shape) "(OP a b)")))
+  (match args
+    ((Cons a Nil)
+     (if (sym_eq x (quote not))
+       (match (elab e a None)
+         ((EErr r m) (EErr r m))
+         ((EOk e1 av aty)
+          (match (el_whnf e1 aty)
+            ((Pair e2 atyw)
+             (if (is_sort atyw) (op_apply e2 (n1 (quote Not)) (list (AVal av aty)) expected)
+             (if (is_const_named atyw (n1 (quote Bool))) (op_apply e2 (n1 (quote not)) (list (AVal av aty)) expected)
+               (EErr (quote no_operator_identity) (append "not at " (show_expr atyw)))))))))
+       (EErr (quote bad_shape) "(OP a b)")))
+    ((Cons a (Cons b Nil))
+     (match (elab e a None)
+       ((EErr r m) (EErr r m))
+       ((EOk e1 av aty)
+        (match (el_whnf e1 aty)
+          ((Pair e2 atyw)
+           (match (op_identity x atyw)
+             ((Some id) (op_apply e2 id (list (AVal av aty) (ASrc b)) expected))
+             (None (EErr (quote no_operator_identity) (append (chars_of_sym x) (append " at " (append (show_expr atyw) ": no naming-law identity at this type (§8.4 rule 3)")))))))))))
+    (_ (EErr (quote bad_shape) "(OP a b)"))))))))
+;; a constant applied to source arguments (Eq, Ne, Iff: the implicit type is theirs)
+(fn op_const ((e El) (k Name) (args (List SExpr)) (expected (Option Expr))) ERes
+  (match (elab_const e k Nil False)
+    ((EErr r m) (EErr r m))
+    ((EOk e1 c cty) (elab_args e1 c cty (srcs args) False expected))))
+(fn op_apply ((e El) (k Name) (args (List EArg)) (expected (Option Expr))) ERes
+  (match (elab_const e k Nil False)
+    ((EErr r m) (EErr r m))
+    ((EOk e1 c cty) (elab_args e1 c cty args False expected))))
+;; the identity of a binary spelling at the first operand's type
+(fn op_identity ((x Symbol) (ty Expr)) (Option Name)
+  (if (is_const_named ty (nm_nat)) (op_at (quote Nat) x)
+  (if (is_const_named ty (nm_int_ty)) (op_at (quote Int) x)
+  (if (is_sort ty) (op_prop x)
+  (if (is_const_named ty (n1 (quote Bool))) (op_bool x)
+    None)))))
+(fn op_at ((t Symbol) (x Symbol)) (Option Name)
+  (if (sym_eq x (quote +)) (Some (n2 t (quote add)))
+  (if (sym_eq x (quote -)) (Some (n2 t (quote sub)))
+  (if (sym_eq x (quote *)) (Some (n2 t (quote mul)))
+  (if (sym_eq x (quote /)) (Some (n2 t (quote div)))
+  (if (bool_or (sym_eq x (quote mod)) (sym_eq x (quote %))) (Some (n2 t (if (sym_eq t (quote Int)) (quote emod) (quote mod))))
+  (if (bool_or (sym_eq x (quote lt)) (sym_eq x (quote <))) (Some (n2 t (quote lt)))
+  (if (bool_or (sym_eq x (quote le)) (sym_eq x (quote <=))) (Some (n2 t (quote le)))
+    None))))))))
+(fn op_prop ((x Symbol)) (Option Name)
+  (if (sym_eq x (quote and)) (Some (n1 (quote And)))
+  (if (sym_eq x (quote or)) (Some (n1 (quote Or)))
+    None)))
+(fn op_bool ((x Symbol)) (Option Name)
+  (if (sym_eq x (quote and)) (Some (n1 (quote and)))
+  (if (sym_eq x (quote or)) (Some (n1 (quote or)))
+    None)))
+
+;; (if C T F): `ite C dec T F` for a proposition C whose head has a decision
+;; (Nat.lt/le → Nat.decLt/decLe, Eq at Nat/Int/Bool → decEq, Int likewise),
+;; `cond C T F` for a Bool C; the branches at the expected type
+(fn elab_if ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
+  (match args
+    ((Cons c (Cons t (Cons f Nil)))
+     (match (elab e c None)
+       ((EErr r m) (EErr r m))
+       ((EOk e1 cv cty)
+        (match (el_whnf e1 cty)
+          ((Pair e2 ctyw)
+           (if (is_const_named ctyw (n1 (quote Bool)))
+             (op_apply_explicit e2 (n1 (quote cond)) (list (AVal cv cty) (ASrc t) (ASrc f)) expected)
+             (match (decision_of e2 (el_zonk e2 cv))
+               ((Pair e3 (Some dec)) (op_apply_explicit e3 (n1 (quote ite)) (list (AVal cv cty) (AVal dec (mk_app (mk_const (n1 (quote Decidable)) Nil) cv)) (ASrc t) (ASrc f)) expected))
+               ((Pair _ None) (EErr (quote no_decision) (append "the condition " (append (show_expr (el_zonk e2 cv)) " has no decision the elaborator knows: write (@ite C DEC T F) with the Decidable instance")))))))))))
+    (_ (EErr (quote bad_shape) "(if C T F)"))))
+;; the constant applied with every binder explicit but the leading implicit ones
+(fn op_apply_explicit ((e El) (k Name) (args (List EArg)) (expected (Option Expr))) ERes
+  (match (elab_const e k Nil False)
+    ((EErr r m) (EErr r m))
+    ((EOk e1 c cty)
+     (match (tele e1 c cty Nil False Nil 16)     ; the leading implicits (α, u)
+       ((TlErr r m) (EErr r m))
+       ((TlOk e2 ca cty1 _) (elab_args e2 ca cty1 args True expected))))))
+(fn decision_of ((e El) (c Expr)) (Pair El (Option Expr))
+  (let ((h (get_app_fn c)) (as (get_app_args c)))
+    (match h
+      ((Const _ n _)
+       (if (bool_or (name_eq n (n2 (quote Nat) (quote lt))) (name_eq n (n2 (quote Nat) (quote le))))
+         (Pair e (decide_with (n2 (quote Nat) (if (name_eq n (n2 (quote Nat) (quote lt))) (quote decLt) (quote decLe))) as))
+       (if (bool_or (name_eq n (n2 (quote Int) (quote lt))) (name_eq n (n2 (quote Int) (quote le))))
+         (Pair e (decide_with (n2 (quote Int) (if (name_eq n (n2 (quote Int) (quote lt))) (quote decLt) (quote decLe))) as))
+       (if (name_eq n (nm_eq))
+         (match as
+           ((Cons ty (Cons a (Cons b Nil)))
+            (match (el_whnf e ty)
+              ((Pair e1 tyw)
+               (if (is_const_named tyw (nm_nat)) (Pair e1 (Some (mk_app (mk_app (mk_const (n2 (quote Nat) (quote decEq)) Nil) a) b)))
+               (if (is_const_named tyw (nm_int_ty)) (Pair e1 (Some (mk_app (mk_app (mk_const (n2 (quote Int) (quote decEq)) Nil) a) b)))
+               (if (is_const_named tyw (n1 (quote Bool))) (Pair e1 (Some (mk_app (mk_app (mk_const (n1 (quote instDecidableEqBool)) Nil) a) b)))
+                 (Pair e1 None)))))))
+           (_ (Pair e None)))
+         (Pair e None)))))
+      (_ (Pair e None)))))
+(fn decide_with ((k Name) (as (List Expr))) (Option Expr)
+  (match as ((Cons a (Cons b Nil)) (Some (mk_app (mk_app (mk_const k Nil) a) b))) (_ None)))
+
+;; (exists ((x TYPE)) P): Exists (fun (x : TYPE) => P)
+(fn elab_exists ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
+  (match (elab_binding e args True None)
+    ((EErr r m) (EErr r m))
+    ((EOk e1 lam lty) (op_apply e1 (n1 (quote Exists)) (list (AVal lam lty)) expected))))

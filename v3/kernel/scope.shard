@@ -1,0 +1,250 @@
+;;; v3/kernel/scope.shard — names, the loader's scope and resolution
+;;; (v3/LANGUAGE.md §3.1): what a citation means in a file. Moved out of
+;;; reader.shard at slice 3.15; the elaborator (elab.shard), the classifier,
+;;; the erasure and the loader all resolve through here. The context `Cx`
+;;; carries what resolution needs beside the scope — the environment, the
+;;; declaration's universe parameters, the names the current form declares
+;;; (citable before admission, with their types) — and the elaborator's
+;;; bound names, each with its fvar (slice 3.15: terms are built over K's
+;;; locals and closed by K's mk_binding, never by de Bruijn arithmetic).
+
+(import "sexpr.shard")
+(import "k")
+(use kernel.k)
+(use kernel.expr)
+(use kernel.intmap)
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.sexpr)
+(use kernel.util)
+(use kernel.decl.ConstantInfo)
+(use kernel.decl.ConstantInfo)
+(use kernel.decl.ReducibilityHints)
+(use kernel.expr.Expr)
+(use kernel.name.Name)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.sexpr.SExpr)
+
+;; the scope the loader builds (loader.shard; §3.1): the module's own path
+;; (Anon for a scratch file: declared names stay bare), the opened prefixes in
+;; order (`(use Init)` = bare names, always last), and what is visible
+(type Open
+  (OpenAll Name)                  ; (use P): P.x is citable as x
+  (OpenSome Name (List Symbol)))  ; (use P a b): only a… and b… — the citation's first component
+(type Vis
+  (VisAll)                        ; a scratch scope: everything the environment holds
+  (VisOnly (List Name) Bool (IntMap (List (Pair Name Name))) (List Name)))
+  ;; the visible modules (the file's import closure and itself), whether the
+  ;; Init prefix is visible, declaration → module for every native declaration
+  ;; (a constant absent from the table is Init's), the pending (sorry) names
+;; the module prefix a file's declarations take (the sealed directory's for a file
+;; directly inside one — the K seal, §13 item 26), the file's own module (the tag
+;; visibility and the E table's registration go by), the opened prefixes, the visible set
+(type Scope (Scope Name Name (List Open) Vis))
+
+;; a name the current form declares: citable before admission — its universe
+;; arity and its type (the elaborator types a citation of it from here)
+(type Defd (Defd Name Int Expr))
+
+;; the elaboration context: scope, environment, the declaration's universe
+;; parameters, the names being declared by this form, the bound names innermost
+;; first with their fvars, the projection aliases (field name → index and the
+;; field's type, over the bound `self`), and the E-type flag (§4: a bare polymorphic constant takes
+;; level 0 by rule there)
+(type Cx (Cx Scope CheckedEnv (List Name) (List Defd) (List (Pair Name Expr)) (List (Pair Name (Pair Int Expr))) Bool))
+
+(fn cx_scope ((c Cx)) Scope (match c ((Cx s _ _ _ _ _ _) s)))
+(fn cx_env ((c Cx)) CheckedEnv (match c ((Cx _ e _ _ _ _ _) e)))
+(fn cx_lps ((c Cx)) (List Name) (match c ((Cx _ _ l _ _ _ _) l)))
+(fn cx_defining ((c Cx)) (List Defd) (match c ((Cx _ _ _ d _ _ _) d)))
+(fn cx_bound ((c Cx)) (List (Pair Name Expr)) (match c ((Cx _ _ _ _ b _ _) b)))
+(fn cx_aliases ((c Cx)) (List (Pair Name (Pair Int Expr))) (match c ((Cx _ _ _ _ _ a _) a)))
+(fn cx_etype ((c Cx)) Bool (match c ((Cx _ _ _ _ _ _ t) t)))
+(fn cx_bind ((c Cx) (n Name) (fv Expr)) Cx (match c ((Cx s e l d b a t) (Cx s e l d (Cons (Pair n fv) b) a t))))
+(fn cx_with_etype ((c Cx) (t Bool)) Cx (match c ((Cx s e l d b a _) (Cx s e l d b a t))))
+(fn cx_with_aliases ((c Cx) (a (List (Pair Name (Pair Int Expr))))) Cx (match c ((Cx s e l d b _ t) (Cx s e l d b a t))))
+(fn cx_with_defining ((c Cx) (d (List Defd))) Cx (match c ((Cx s e l _ b a t) (Cx s e l d b a t))))
+(fn cx0 ((sc Scope) (env CheckedEnv) (lps (List Name)) (defining (List Defd))) Cx
+  (Cx sc env lps defining Nil Nil False))
+;; the bound fvar of a name (innermost wins)
+(fn cx_lookup ((c Cx) (n Name)) (Option Expr) (assoc_name_expr n (cx_bound c)))
+(fn assoc_name_expr ((n Name) (xs (List (Pair Name Expr)))) (Option Expr)
+  (measure (struct xs))
+  (match xs (Nil None) ((Cons (Pair m e) r) (if (name_eq n m) (Some e) (assoc_name_expr n r)))))
+;; the fvar ids in scope
+(fn cx_fvar_ids ((c Cx)) (List Int) (bound_ids (cx_bound c)))
+(fn bound_ids ((bs (List (Pair Name Expr)))) (List Int)
+  (measure (struct bs))
+  (match bs (Nil Nil) ((Cons (Pair _ (FVar _ id)) r) (Cons id (bound_ids r))) ((Cons _ r) (bound_ids r))))
+
+;; ---- names ---------------------------------------------------------------------------
+;; a symbol's components on `.`; an all-digit component is a Num
+(fn name_of_bytes ((bs (List Int)) (comp (List Int)) (acc Name)) (Option Name)
+  (measure (struct bs))
+  (match bs
+    (Nil (name_push acc (rev comp)))
+    ((Cons c r)
+     (if (int_eq c 46)
+       (match (name_push acc (rev comp)) ((Some n) (name_of_bytes r Nil n)) (None None))
+       (name_of_bytes r (Cons c comp) acc)))))
+(fn name_push ((acc Name) (comp (List Int))) (Option Name)
+  (match comp
+    (Nil None)
+    (_ (if (all_digits comp) (Some (Num acc (digits_val comp 0))) (Some (Str acc (sym_of_chars comp)))))))
+(fn name_of_sym ((s Symbol)) (Option Name) (name_of_bytes (chars_of_sym s) Nil Anon))
+
+;; p ++ n
+(fn name_append ((p Name) (n Name)) Name
+  (measure (struct n))
+  (match n
+    (Anon p)
+    ((Str q s) (Str (name_append p q) s))
+    ((Num q k) (Num (name_append p q) k))))
+
+(fn sc_module ((sc Scope)) Name (match sc ((Scope m _ _ _) m)))
+(fn sc_tag ((sc Scope)) Name (match sc ((Scope _ t _ _) t)))
+(fn sc_opened ((sc Scope)) (List Open) (match sc ((Scope _ _ o _) o)))
+(fn sc_vis ((sc Scope)) Vis (match sc ((Scope _ _ _ v) v)))
+;; a declared name's identity: the module path plus the name (§3)
+(fn qualify ((sc Scope) (n Name)) Name (name_append (sc_module sc) n))
+
+;; the declaration → module table (VisOnly's third field), keyed as the environment is
+(fn tbl_find ((tbl (IntMap (List (Pair Name Name)))) (k Name)) (Option Name)
+  (match (im_find tbl (env_key k)) ((Some b) (assoc_name k b)) (None None)))
+(fn tbl_add ((tbl (IntMap (List (Pair Name Name)))) (k Name) (m Name)) (IntMap (List (Pair Name Name)))
+  (let ((h (env_key k)))
+    (im_insert tbl h (Cons (Pair k m) (match (im_find tbl h) ((Some b) b) (None Nil))))))
+;; is the constant k citable from this scope? (a name being declared by the
+;; current form is, always — resolve_go asks first)
+(fn visible ((sc Scope) (k Name)) Bool
+  (match (sc_vis sc)
+    (VisAll True)
+    ((VisOnly mods init tbl _)
+     (match (tbl_find tbl k) ((Some m) (mem_name m mods)) (None init)))))
+(fn pending_name ((sc Scope) (k Name)) Bool
+  (match (sc_vis sc) (VisAll False) ((VisOnly _ _ _ p) (mem_name k p))))
+
+;; the universe arity of a citable constant: being declared here, or in the environment
+(fn const_arity ((c Cx) (n Name)) (Option Int)
+  (match (find_defd n (cx_defining c))
+    ((Some (Defd _ k _)) (Some k))
+    (None (match (env_find (cx_env c) n) ((Some info) (Some (len (ci_lparams info)))) (None None)))))
+(fn find_defd ((n Name) (ds (List Defd))) (Option Defd)
+  (measure (struct ds))
+  (match ds (Nil None) ((Cons (Defd m k t) r) (if (name_eq n m) (Some (Defd m k t)) (find_defd n r)))))
+
+;; resolution (§3.1): the module's own declarations, each opened prefix in
+;; order, then the bare name (`(use Init)` is implicit). Two hits = ambiguous.
+;; A candidate is a hit when it is being declared by this form or is a
+;; visible constant; a pending (sorry) candidate is the obligation itself.
+(type Resolved (RName Name Int) (RNone) (RAmbiguous Name Name) (RPend Name))
+(fn resolve ((c Cx) (n Name)) Resolved
+  (resolve_go c n (scope_candidates (cx_scope c) n) RNone))
+(fn scope_candidates ((sc Scope) (n Name)) (List Name)
+  (let ((m (sc_module sc)))
+    (append (match m (Anon Nil) (_ (list (name_append m n))))
+            (append (prefixed (sc_opened sc) n) (append (init_cited sc n) (list n))))))
+;; `Init.NAME` cites the imported NAME explicitly (§3.1, slice 7): imported names are bare in
+;; K and the loader shows them under the prefix Init, so the citation is the bare name when
+;; the scope sees Init — the spelling that tells Init's `Bool` from a native `main.Bool` (T5)
+(fn init_cited ((sc Scope) (n Name)) (List Name)
+  (if (bool_and (init_prefixed n) (init_seen sc)) (list (drop_init n)) Nil))
+(fn init_prefixed ((n Name)) Bool (match (first_component n) ((Some s) (sym_eq s (quote Init))) (None False)))
+(fn init_seen ((sc Scope)) Bool (match (sc_vis sc) (VisAll True) ((VisOnly _ init _ _) init)))
+;; the name without its leading `Init` component (`(use Init.List)` opens `List`)
+(fn drop_init ((n Name)) Name
+  (measure (struct n))
+  (match n
+    ((Str Anon s) (if (sym_eq s (quote Init)) Anon n))
+    ((Str p s) (Str (drop_init p) s))
+    ((Num p k) (Num (drop_init p) k))
+    (Anon Anon)))
+(fn prefixed ((ps (List Open)) (n Name)) (List Name)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons (OpenAll p) r) (Cons (name_append p n) (prefixed r n)))
+    ((Cons (OpenSome p ms) r)
+     (if (first_component_in n ms) (Cons (name_append p n) (prefixed r n)) (prefixed r n)))))
+(fn first_component_in ((n Name) (ms (List Symbol))) Bool
+  (match (first_component n) ((Some s) (mem_sym s ms)) (None False)))
+(fn first_component ((n Name)) (Option Symbol)
+  (measure (struct n))
+  (match n
+    (Anon None)
+    ((Str Anon s) (Some s))
+    ((Str p _) (first_component p))
+    ((Num Anon _) None)
+    ((Num p _) (first_component p))))
+(fn mem_sym ((s Symbol) (xs (List Symbol))) Bool
+  (measure (struct xs))
+  (match xs (Nil False) ((Cons y r) (if (sym_eq s y) True (mem_sym s r)))))
+(fn is_defining ((c Cx) (k Name)) Bool
+  (match (find_defd k (cx_defining c)) ((Some _) True) (None False)))
+(fn resolve_go ((c Cx) (n Name) (cands (List Name)) (found Resolved)) Resolved
+  (measure (struct cands))
+  (match cands
+    (Nil found)
+    ((Cons k r)
+     (if (pending_name (cx_scope c) k) (RPend k)
+     (match (const_arity c k)
+       (None (resolve_go c n r found))
+       ((Some a)
+        (if (bool_or (is_defining c k) (visible (cx_scope c) k))
+          (match found
+            (RNone (resolve_go c n r (RName k a)))
+            ((RName f _) (if (name_eq f k) (resolve_go c n r found) (resolve_type_pick c n r found f k a)))
+            (_ found))
+          (resolve_go c n r found))))))))
+;; two candidates: ambiguous — except in an E-type position (a fn's binders and result, a
+;; type's fields), where the one that is an inductive is what the position determines
+;; (LANGUAGE.md §13 item 28): a `type` whose constructor bears its name — v2's commonest
+;; idiom, `(type World (World Int))` — opens both `World` and `World.World` for the file
+(fn resolve_type_pick ((c Cx) (n Name) (r (List Name)) (found Resolved) (f Name) (k Name) (a Int)) Resolved
+  (if (cx_etype c)
+    (match (Pair (is_inductive c f) (is_inductive c k))
+      ((Pair True False) (resolve_go c n r found))
+      ((Pair False True) (resolve_go c n r (RName k a)))
+      (_ (RAmbiguous f k)))
+    (RAmbiguous f k)))
+(fn is_inductive ((c Cx) (k Name)) Bool
+  (match (env_find (cx_env c) k) ((Some (InductInfo _ _ _ _ _ _ _ _ _)) True) (_ False)))
+
+;; the position of a name in a list (the classifier's bound names)
+(fn index_of ((n Name) (bs (List Name)) (i Int)) (Option Int)
+  (measure (struct bs))
+  (match bs (Nil None) ((Cons b r) (if (name_eq n b) (Some i) (index_of n r (+ i 1))))))
+
+;; ---- heads (the reader's and the classifier's) --------------------------------------
+(fn univ_params ((ls (List SExpr)) (acc (List Name))) (Option (List Name))
+  (measure (struct ls))
+  (match ls
+    (Nil (Some (rev acc)))
+    ((Cons (SSym u) r) (match (name_of_sym u) ((Some n) (univ_params r (Cons n acc))) (None None)))
+    (_ None)))
+
+;; (type (NAME T…) …) / (type NAME …): the qualified name and its parameters
+(fn type_head ((sc Scope) (s SExpr)) (Pair (Option (Pair Name (List Name))) (List Int))
+  (match s
+    ((SSym x) (match (name_of_sym x) ((Some n) (Pair (Some (Pair (qualify sc n) Nil)) Nil)) (None (Pair None (chars_of_sym x)))))
+    ((SList (Cons (SSym x) ps))
+     (match (name_of_sym x)
+       (None (Pair None (chars_of_sym x)))
+       ((Some n) (match (univ_params ps Nil) ((Some names) (Pair (Some (Pair (qualify sc n) names)) Nil)) (None (Pair None "type parameters are names"))))))
+    (_ (Pair None "(type (NAME T…) …) or (type NAME …)"))))
+
+;; ---- reducibility height (environment.cpp: 1 + the greatest height cited) -----------
+(fn def_height ((env CheckedEnv) (v Expr)) Int (+ 1 (max_height env (expr_consts v) 0)))
+(fn max_height ((env CheckedEnv) (ns (List Name)) (acc Int)) Int
+  (measure (struct ns))
+  (match ns
+    (Nil acc)
+    ((Cons n r)
+     (max_height env r
+       (match (env_find env n)
+         ((Some (DefnInfo _ _ (HRegular h) _ _)) (max_int acc h))
+         (_ acc))))))
+

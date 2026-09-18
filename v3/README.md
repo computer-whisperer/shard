@@ -618,7 +618,24 @@ first real course-of-values definition; the Int fixture runs through
 closures and 82,101 lines, 26 entrypoints; **pipeline 505 (`9397823`)
 green end to end** — corpus 1,525 s at the baseline, v3 4,459 s (calc
 418 s, parity 207 s, route 1 built, replay 2,448 s at 30.6 GB, 20
-pinned). Next: slice 3.15.
+pinned). **Slice 3.15 (2026-09-18): the elaborator** — the L-side
+ergonomics of law §5.1–5.2 (LANGUAGE.md §5.1, §8.4's slice-3.15
+rules, §13 item 48). Metavariables are nodes K refuses (`MVar`,
+`LMVar`; K's first edit since the seal, refusing arms only:
+`672826c`); above K a Meta layer in miniature — `kernel/unify.shard`
+(first-order unification with typed assignments, K's `whnf` and
+`is_def_eq` through the view on the closed residues, transactional)
+and `kernel/elab.shard` (bidirectional over K's locals, closed by K's
+`mk_binding`): implicit arguments inserted, universes inferred, the
+numeral rule with the one `Nat → Int` coercion, the operator spellings
+by the first operand's type in statements, `if` as `ite` with the
+decision of its proposition, `@NAME` explicit, `exists`; what the
+inputs do not determine is a refusal with a pointer, never a default.
+The phase-2 pins rewritten to the new spelling (45 files); a `type`'s
+parameters and a `fn`'s type parameters implicit, so a theorem cites
+`(len xs)` as a body does. Six pins, a reader pin; the reader split
+into `scope.shard` (resolution) and `reader.shard` (the forms), the
+K-world `W` into `kw.shard`.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
