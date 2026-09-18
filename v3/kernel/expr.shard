@@ -3,8 +3,11 @@
 ;;; Reconciled against src/kernel/expr.h, type_checker.cpp, inductive.h
 ;;; (v4.33.1). Line numbers are into type_checker.cpp unless said.
 ;;; Representation choices that are NOT rule departures:
-;;;   - no MVar: refused in inputs (l. 342 "does not support meta
-;;;     variables"); K's metavariables live in meta (FOUNDATION §6).
+;;;   - MVar is the elaborator's (FOUNDATION §6; LANGUAGE.md §8.4 slice
+;;;     3.15): a term reaching K with one is Malformed (l. 342 "does not
+;;;     support meta variables") — infer refuses the node, the raw entry
+;;;     refuses the declaration. Its assignment lives in the elaborator's
+;;;     own state (unify.shard), never in a term K reads.
 ;;;   - no MData: transparent to every rule (infer l. 339, whnf l. 742,
 ;;;     quick_is_def_eq); stripped at import (the exporter drops it).
 ;;;   - FVar is K-internal: locally nameless checking opens a binder with
@@ -29,7 +32,8 @@
 ;;;           part of a term (the export's sharing is walked once, not as
 ;;;           a tree; the measurement of records §8).
 ;;;   fvar    has_fvar (prunes abstract); lparam has_univ_param (prunes
-;;;           level instantiation).
+;;;           level instantiation); mvar has_mvar (prunes the elaborator's
+;;;           instantiation of assignments; always false in K's terms).
 ;;; Ids come from the node counter of `St` (below): `new_*` mint an id,
 ;;; `mk_*` build anonymous nodes (leaves are always anonymous: identity
 ;;; buys nothing on a leaf). A St whose node counter is negative is in
@@ -69,8 +73,8 @@
   (LitNat Int)          ; a Nat numeral (GMP); ≥ 0; size-bounded (below)
   (LitStr (List Int)))  ; a string literal as its UTF-8 bytes
 
-;; the node data (expr.h `expr_data`): id, hash, loose-bvar range, has_fvar, has_lparam
-(type D (D Int Int Int Bool Bool))
+;; the node data (expr.h `expr_data`): id, hash, loose-bvar range, has_fvar, has_lparam, has_mvar
+(type D (D Int Int Int Bool Bool Bool))
 
 (type Expr
   (BVar D Int)                        ; bound variable, de Bruijn index
@@ -82,7 +86,8 @@
   (Pi  D Name BinderInfo Expr Expr)   ; (x : A) → B
   (Let D Name Expr Expr Expr)         ; let x : A := v; b
   (Lit D Literal)
-  (Proj D Name Int Expr))             ; e.i on structure S: (Proj S i e)
+  (Proj D Name Int Expr)              ; e.i on structure S: (Proj S i e)
+  (MVar D Int))                       ; ?m — an elaboration metavariable (never in K's terms)
 
 ;; the memo tables of the pin's type_checker::state (the operations are
 ;; tc.shard's): each maps the low bits of a structural hash to a bucket of
@@ -293,7 +298,8 @@
     ((LSucc x) (mix 13 (hash_level x)))
     ((LMax a b) (mix3 17 (hash_level a) (hash_level b)))
     ((LIMax a b) (mix3 19 (hash_level a) (hash_level b)))
-    ((LParam n) (mix 23 (hash_name n)))))
+    ((LParam n) (mix 23 (hash_name n)))
+    ((LMVar i) (mix 27 i))))
 
 (fn hash_levels ((ls (List Level)) (acc Int)) Int
   (measure (struct ls))
@@ -305,25 +311,29 @@
 (fn levels_have_param ((ls (List Level))) Bool
   (measure (struct ls))
   (match ls (Nil False) ((Cons l r) (if (level_has_param l) True (levels_have_param r)))))
+(fn levels_have_mvar ((ls (List Level))) Bool
+  (measure (struct ls))
+  (match ls (Nil False) ((Cons l r) (if (level_has_mvar l) True (levels_have_mvar r)))))
 
 ;; ---- the node data ------------------------------------------------------------------
 
 (fn expr_d ((e Expr)) D
   (match e
     ((App d _ _) d) ((Const d _ _) d) ((BVar d _) d) ((Pi d _ _ _ _) d) ((Lam d _ _ _ _) d)
-    ((FVar d _) d) ((Sort d _) d) ((Lit d _) d) ((Proj d _ _ _) d) ((Let d _ _ _ _) d)))
+    ((FVar d _) d) ((Sort d _) d) ((Lit d _) d) ((Proj d _ _ _) d) ((Let d _ _ _ _) d) ((MVar d _) d)))
 
-(fn d_id ((d D)) Int (match d ((D i _ _ _ _) i)))
-(fn d_hash ((d D)) Int (match d ((D _ h _ _ _) h)))
-(fn d_range ((d D)) Int (match d ((D _ _ r _ _) r)))
+(fn d_id ((d D)) Int (match d ((D i _ _ _ _ _) i)))
+(fn d_hash ((d D)) Int (match d ((D _ h _ _ _ _) h)))
+(fn d_range ((d D)) Int (match d ((D _ _ r _ _ _) r)))
 
 (fn expr_id ((e Expr)) Int (d_id (expr_d e)))
 (fn hash_expr ((e Expr)) Int (d_hash (expr_d e)))
 ;; get_loose_bvar_range: 0 for a closed term, else 1 + the largest loose index
 (fn loose_bvar_range ((e Expr)) Int (d_range (expr_d e)))
 (fn has_loose_bvars ((e Expr)) Bool (lt 0 (loose_bvar_range e)))
-(fn has_fvar ((e Expr)) Bool (match (expr_d e) ((D _ _ _ f _) f)))
-(fn has_lparam ((e Expr)) Bool (match (expr_d e) ((D _ _ _ _ p) p)))
+(fn has_fvar ((e Expr)) Bool (match (expr_d e) ((D _ _ _ f _ _) f)))
+(fn has_lparam ((e Expr)) Bool (match (expr_d e) ((D _ _ _ _ p _) p)))
+(fn has_mvar ((e Expr)) Bool (match (expr_d e) ((D _ _ _ _ _ m) m)))
 
 ;; did a traversal keep this node? the same identified node, or (for an
 ;; anonymous node — leaves always are) structural equality, which a touched
@@ -333,35 +343,36 @@
 
 ;; ---- constructors ---------------------------------------------------------------------
 ;; leaves: always anonymous
-(fn mk_bvar ((i Int)) Expr (BVar (D 0 (mix 29 i) (+ i 1) False False) i))
-(fn mk_fvar ((i Int)) Expr (FVar (D 0 (mix 31 i) 0 True False) i))
-(fn mk_sort ((u Level)) Expr (Sort (D 0 (mix 37 (hash_level u)) 0 False (level_has_param u)) u))
+(fn mk_bvar ((i Int)) Expr (BVar (D 0 (mix 29 i) (+ i 1) False False False) i))
+(fn mk_fvar ((i Int)) Expr (FVar (D 0 (mix 31 i) 0 True False False) i))
+(fn mk_sort ((u Level)) Expr (Sort (D 0 (mix 37 (hash_level u)) 0 False (level_has_param u) (level_has_mvar u)) u))
 (fn mk_const ((n Name) (ls (List Level))) Expr
-  (Const (D 0 (mix3 41 (hash_name n) (hash_levels ls 1)) 0 False (levels_have_param ls)) n ls))
-(fn mk_lit ((l Literal)) Expr (Lit (D 0 (hash_lit l) 0 False False) l))
+  (Const (D 0 (mix3 41 (hash_name n) (hash_levels ls 1)) 0 False (levels_have_param ls) (levels_have_mvar ls)) n ls))
+(fn mk_lit ((l Literal)) Expr (Lit (D 0 (hash_lit l) 0 False False False) l))
+(fn mk_mvar ((i Int)) Expr (MVar (D 0 (mix 73 i) 0 False False True) i))
 
 ;; the D of a compound node from its children
 (fn d_app ((id Int) (f Expr) (a Expr)) D
   (match (expr_d f)
-    ((D _ hf rf ff pf)
+    ((D _ hf rf ff pf mf)
      (match (expr_d a)
-       ((D _ ha ra fa pa) (D id (mix3 43 hf ha) (max_int rf ra) (if ff True fa) (if pf True pa)))))))
+       ((D _ ha ra fa pa ma) (D id (mix3 43 hf ha) (max_int rf ra) (if ff True fa) (if pf True pa) (if mf True ma)))))))
 (fn d_bind ((id Int) (tag Int) (dm Expr) (b Expr)) D
   (match (expr_d dm)
-    ((D _ hd rd fd pd)
+    ((D _ hd rd fd pd md)
      (match (expr_d b)
-       ((D _ hb rb fb pb) (D id (mix3 tag hd hb) (max_int rd (- rb 1)) (if fd True fb) (if pd True pb)))))))
+       ((D _ hb rb fb pb mb) (D id (mix3 tag hd hb) (max_int rd (- rb 1)) (if fd True fb) (if pd True pb) (if md True mb)))))))
 (fn d_let ((id Int) (t Expr) (v Expr) (b Expr)) D
   (match (expr_d t)
-    ((D _ ht rt ft pt)
+    ((D _ ht rt ft pt mt)
      (match (expr_d v)
-       ((D _ hv rv fv pv)
+       ((D _ hv rv fv pv mv)
         (match (expr_d b)
-          ((D _ hb rb fb pb)
+          ((D _ hb rb fb pb mb)
            (D id (mix3 59 (mix ht hv) hb) (max_int (max_int rt rv) (- rb 1))
-              (if ft True (if fv True fb)) (if pt True (if pv True pb))))))))))
+              (if ft True (if fv True fb)) (if pt True (if pv True pb)) (if mt True (if mv True mb))))))))))
 (fn d_proj ((id Int) (s Name) (i Int) (x Expr)) D
-  (match (expr_d x) ((D _ hx rx fx px) (D id (mix3 71 (mix (hash_name s) i) hx) rx fx px))))
+  (match (expr_d x) ((D _ hx rx fx px mx) (D id (mix3 71 (mix (hash_name s) i) hx) rx fx px mx))))
 
 ;; anonymous compound nodes (pure)
 (fn mk_app ((f Expr) (a Expr)) Expr (App (d_app 0 f a) f a))
@@ -390,6 +401,7 @@
     ((Sort _ u) (mk_sort u))
     ((Const _ n ls) (mk_const n ls))
     ((Lit _ l) (mk_lit l))
+    ((MVar _ i) (mk_mvar i))
     ((App _ f a) (mk_app (ingest_expr f) (ingest_expr a)))
     ((Lam _ n bi dm b) (mk_lam n bi (ingest_expr dm) (ingest_expr b)))
     ((Pi _ n bi dm b) (mk_pi n bi (ingest_expr dm) (ingest_expr b)))
@@ -420,6 +432,7 @@
 (fn is_bvar ((e Expr)) Bool (match e ((BVar _ _) True) (_ False)))
 (fn is_lit ((e Expr)) Bool (match e ((Lit _ _) True) (_ False)))
 (fn is_proj ((e Expr)) Bool (match e ((Proj _ _ _ _) True) (_ False)))
+(fn is_mvar ((e Expr)) Bool (match e ((MVar _ _) True) (_ False)))
 (fn is_nat_lit ((e Expr)) Bool (match e ((Lit _ (LitNat _)) True) (_ False)))
 (fn is_string_lit ((e Expr)) Bool (match e ((Lit _ (LitStr _)) True) (_ False)))
 (fn is_const_named ((e Expr) (n Name)) Bool (match e ((Const _ c _) (name_eq c n)) (_ False)))
@@ -434,9 +447,9 @@
 ;; pin's order: pointer identity → true; hash mismatch → false; structural.
 (fn expr_eq ((a Expr) (b Expr)) Bool
   (match (expr_d a)
-    ((D ia ha _ _ _)
+    ((D ia ha _ _ _ _)
      (match (expr_d b)
-       ((D ib hb _ _ _)
+       ((D ib hb _ _ _ _)
         (if (int_eq ia ib)
           (if (lt 0 ia) True (if (int_eq ha hb) (expr_eq_core a b) False))
           (if (int_eq ha hb) (expr_eq_core a b) False)))))))
@@ -454,6 +467,7 @@
     ((Let _ _ t1 v1 b1)
      (match b ((Let _ _ t2 v2 b2) (if (expr_eq t1 t2) (if (expr_eq v1 v2) (expr_eq b1 b2) False) False)) (_ False)))
     ((Lit _ l1) (match b ((Lit _ l2) (lit_eq l1 l2)) (_ False)))
+    ((MVar _ i) (match b ((MVar _ j) (int_eq i j)) (_ False)))
     ((Proj _ s1 i1 e1) (match b ((Proj _ s2 i2 e2) (if (name_eq s1 s2) (if (int_eq i1 i2) (expr_eq e1 e2) False) False)) (_ False)))))
 
 (fn exprs_eq ((a (List Expr)) (b (List Expr))) Bool
@@ -768,6 +782,7 @@
      (append "(let " (append (chars_of_name_last n) (append " : " (append (show_expr t) (append " := " (append (show_expr v) (append "; " (append (show_expr b) ")")))))))))
     ((Lit _ (LitNat k)) (show_nat k))
     ((Lit _ (LitStr s)) (append "\"" (append s "\"")))
+    ((MVar _ i) (append "?m" (show_nat i)))
     ((Proj _ s i x) (append (show_expr x) (append "." (show_nat i))))))
 
 (fn show_levels ((ls (List Level))) (List Int)

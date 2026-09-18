@@ -1,8 +1,9 @@
 ;;; v3/kernel/level.shard — universe levels (Lean `Level`).
 ;;;
-;;; Reconciled against src/kernel/level.cpp (v4.33.1). No `mvar`
-;;; constructor: K refuses metavariables (FOUNDATION §6); the exporter
-;;; never emits them.
+;;; Reconciled against src/kernel/level.cpp (v4.33.1). `LMVar` is the
+;;; elaborator's universe metavariable (FOUNDATION §6; LANGUAGE.md §8.4
+;;; slice 3.15): an atom to every rule here, as level.cpp's mvar is, and
+;;; refused by K's `check_level` — the exporter never emits one.
 
 (import "util.shard")
 (use kernel.name)
@@ -18,7 +19,8 @@
   (LSucc Level)           ; u+1
   (LMax Level Level)      ; max u v
   (LIMax Level Level)     ; imax u v — 0 when v is 0, else max u v
-  (LParam Name))          ; a declared universe parameter
+  (LParam Name)           ; a declared universe parameter
+  (LMVar Int))            ; ?u — an elaboration metavariable (never in K's terms)
 
 ;; RULES (level.cpp):
 ;;   normalize (l. 454): write l as (base, k) with k the succ-offset;
@@ -62,7 +64,8 @@
     ((LSucc x) (match b ((LSucc y) (level_eq x y)) (_ False)))
     ((LMax x1 x2) (match b ((LMax y1 y2) (if (level_eq x1 y1) (level_eq x2 y2) False)) (_ False)))
     ((LIMax x1 x2) (match b ((LIMax y1 y2) (if (level_eq x1 y1) (level_eq x2 y2) False)) (_ False)))
-    ((LParam n) (match b ((LParam m) (name_eq n m)) (_ False)))))
+    ((LParam n) (match b ((LParam m) (name_eq n m)) (_ False)))
+    ((LMVar i) (match b ((LMVar j) (int_eq i j)) (_ False)))))
 
 (fn levels_eq ((a (List Level)) (b (List Level))) Bool
   (measure (struct a))
@@ -77,11 +80,22 @@
     ((LSucc x) (level_has_param x))
     ((LMax x y) (bool_or (level_has_param x) (level_has_param y)))
     ((LIMax x y) (bool_or (level_has_param x) (level_has_param y)))
-    ((LParam _) True)))
+    ((LParam _) True)
+    ((LMVar _) False)))
 
-;; kind order of the C++ enum: Zero < Succ < Max < IMax < Param (< MVar)
+(fn level_has_mvar ((l Level)) Bool
+  (measure (struct l))
+  (match l
+    (LZero False)
+    ((LSucc x) (level_has_mvar x))
+    ((LMax x y) (bool_or (level_has_mvar x) (level_has_mvar y)))
+    ((LIMax x y) (bool_or (level_has_mvar x) (level_has_mvar y)))
+    ((LParam _) False)
+    ((LMVar _) True)))
+
+;; kind order of the C++ enum: Zero < Succ < Max < IMax < Param < MVar
 (fn level_kind ((l Level)) Int
-  (match l (LZero 0) ((LSucc _) 1) ((LMax _ _) 2) ((LIMax _ _) 3) ((LParam _) 4)))
+  (match l (LZero 0) ((LSucc _) 1) ((LMax _ _) 2) ((LIMax _ _) 3) ((LParam _) 4) ((LMVar _) 5)))
 
 (fn is_zero ((l Level)) Bool (match l (LZero True) (_ False)))
 (fn is_one ((l Level)) Bool (match l ((LSucc LZero) True) (_ False)))
@@ -108,7 +122,8 @@
     ((LSucc x) (+ 1 (level_depth x)))
     ((LMax x y) (+ 1 (max_int (level_depth x) (level_depth y))))
     ((LIMax x y) (+ 1 (max_int (level_depth x) (level_depth y))))
-    ((LParam _) 0)))
+    ((LParam _) 0)
+    ((LMVar _) 0)))
 
 ;; mk_succ(l, k) (l. 447)
 (fn mk_succ_n ((l Level) (k Int)) Level
@@ -121,6 +136,7 @@
   (match l
     (LZero False)
     ((LParam _) False)
+    ((LMVar _) False)
     ((LSucc _) True)
     ((LMax x y) (bool_or (is_not_zero x) (is_not_zero y)))
     ((LIMax _ y) (is_not_zero y))))
@@ -131,6 +147,7 @@
   (match l
     (LZero True)
     ((LParam _) False)
+    ((LMVar _) False)
     ((LSucc _) False)
     ((LMax x y) (bool_and (normalizes_to_zero x) (normalizes_to_zero y)))
     ((LIMax _ y) (normalizes_to_zero y))))
@@ -181,6 +198,7 @@
           (lt (level_kind l1) (level_kind l2))
         (match l1
           ((LParam n) (match l2 ((LParam m) (name_lt n m)) (_ False)))
+          ((LMVar i) (match l2 ((LMVar j) (lt i j)) (_ False)))
           ((LMax x1 y1)
            (match l2
              ((LMax x2 y2) (if (level_eq x1 x2) (is_norm_lt y1 y2) (is_norm_lt x1 x2)))
@@ -227,6 +245,7 @@
      (match r
        (LZero l)
        ((LParam _) l)
+       ((LMVar _) l)
        ((LIMax a b) (mk_succ_n (mk_imax (normalize a) (normalize b)) k))
        ((LMax _ _)
         (let ((args (sort_norm (push_max_args_norm (push_max_args r Nil) Nil))))
@@ -346,7 +365,8 @@
     ((LSucc x) (LSucc (level_inst x ps ls)))
     ((LMax x y) (mk_max (level_inst x ps ls) (level_inst y ps ls)))
     ((LIMax x y) (mk_imax (level_inst x ps ls) (level_inst y ps ls)))
-    ((LParam n) (level_lookup n ps ls l))))
+    ((LParam n) (level_lookup n ps ls l))
+    ((LMVar _) l)))
 
 (fn level_lookup ((n Name) (ps (List Name)) (ls (List Level)) (dflt Level)) Level
   (measure (struct ps))
@@ -362,7 +382,8 @@
   (match xs (Nil Nil) ((Cons x r) (Cons (level_inst x ps ls) (levels_inst r ps ls)))))
 
 ;; get_undef_param (l. 324): the first parameter of l not among ps —
-;; `check_level`'s test (type_checker.cpp l. 85)
+;; `check_level`'s test (type_checker.cpp l. 85); a metavariable is
+;; reported under the name `?u` (K never accepts one: l. 342)
 (fn undef_param ((l Level) (ps (List Name))) (Option Name)
   (measure (struct l))
   (match l
@@ -370,7 +391,8 @@
     ((LSucc x) (undef_param x ps))
     ((LMax x y) (match (undef_param x ps) ((Some n) (Some n)) (None (undef_param y ps))))
     ((LIMax x y) (match (undef_param x ps) ((Some n) (Some n)) (None (undef_param y ps))))
-    ((LParam n) (if (mem_name n ps) None (Some n)))))
+    ((LParam n) (if (mem_name n ps) None (Some n)))
+    ((LMVar _) (Some (n1 (quote ?u))))))
 
 ;; rendering, for diagnostics and tests (level.cpp print, l. 361)
 (fn show_level ((l Level)) (List Int)
@@ -378,6 +400,7 @@
   (if (is_explicit l) (show_nat (level_depth l))
   (match l
     ((LParam n) (show_name n))
+    ((LMVar i) (append "?u" (show_nat i)))
     ((LSucc x) (append "(succ " (append (show_level x) ")")))
     ((LMax x y) (append "(max " (append (show_level x) (append " " (append (show_level y) ")")))))
     ((LIMax x y) (append "(imax " (append (show_level x) (append " " (append (show_level y) ")")))))
