@@ -1953,8 +1953,42 @@ the user's ruling of 2026-09-17 on the leans, §13 item 48; built
    E's rename of `lt le int_eq` to `< <= =` (3.16 with the tool
    migration), `UInt*`/`Fin` numerals (with their E realizations),
    explicit holes `_`.
-5. **`noConfusion` and forward references** — this slice's remaining
-   items, stated in the as-built below as they land.
+5. **The constructor-structure bundle is generated after a native
+   inductive's admission**, in Lean 4.33's shapes read off the export
+   (`define.shard`'s `confusion_bundle`; `loader.shard`'s
+   `bundle_after`): `T.casesOn` (the recursor with the hypotheses
+   unused, universe polymorphic) for every native inductive whose
+   recursor eliminates into every universe; and, for a type without
+   parameters, indices, universe parameters or dependent fields, where
+   `Init`'s `Eq`, `Eq.refl`, `Eq.ndrec`, `And` and `And.intro` are in
+   scope, `T.noConfusionType` (two nested `casesOn`s: the same
+   constructor gives `(∀ f_eqs, P) → P` with `Eq` on each field pair,
+   different ones `P`), `T.noConfusion` (`Eq.ndrec` over a `casesOn`
+   whose minors apply the continuation to `Eq.refl`s) and `T.c.inj`
+   per constructor with fields (`Eq (c fs) (c fs') → And …`, a term
+   proof through `noConfusion`, the fields implicit as Lean's). Each is
+   an `ACCEPT` record K checked; where the conditions fail nothing is
+   generated and the type stands (K's own sources: no `Eq`, as Lean's
+   Prelude before it). A parametric type's shape — the parameters
+   generalized twice, `HEq` on the fields, `eq_of_heq` — is a later
+   slice's; `injection` is I's tactic over these. A theorem cites
+   `(Color.noConfusion h)` at `False`, `(Tree.Node.inj h)`, or
+   `(Tree.casesOn t …)` with the motive found from the expected type
+   (a Miller pattern `?motive t` in the unifier, the bound-variable
+   arguments elaborated before the propagation as Lean's
+   `elabAsElim` orders them). Pin `elab_confusion`.
+6. **A forward reference is parked, never an obstacle** (3.14 rule 3
+   revised): a `fn` whose callee is not yet loaded (`mutual_recursion`
+   from the translation) or whose callee is itself parked
+   (`callee_pending`, the callee named) enters the E table and waits
+   with no record; after every definition the parked ones are tried
+   again to a fixpoint; at the file's end the ones still parked are
+   `RUNNABLE` with the obstacle they waited on — a true mutual pair
+   stays `mutual_recursion` (pin `define_mutual`), a fn behind a
+   `RUNNABLE` callee `no_l_meaning`. A `realize` never waits (it is
+   its own declaration's): a pending callee is `no_l_meaning` there.
+   Pin `define_forward`. Mutual structural recursion proper (Lean's
+   packed `brecOn`) has no consumer yet and stays out.
 
 **As built (2026-09-18, the elaborator):** `unify.shard` — `MCtx`
 (declarations with name, type, telescope and kind; assignments;
@@ -2222,7 +2256,7 @@ never compared as verdicts.
 | capability | law | phase |
 |---|---|---|
 | implicit arguments, first-order unification, universe inference, the numeral rule of §5.2, coercion `Nat → Int` | §5.1 Stage 1, §5.2 | 3 — **landed slice 3.15** (§5.1, §8.4) |
-| match compilation, structural recursion to recursors, `f.eq_N`, `noConfusion`, `WellFounded.fix` from `measure`, `fn` = `def` + `realize` | §5.1 Stage 1, §4.5; §8.4 | 3 — slices 3.13 (immediate-field recursion, `eq_N`), 3.14 (course-of-values, `WellFounded.fix`), 3.15 (`noConfusion`) |
+| match compilation, structural recursion to recursors, `f.eq_N`, `noConfusion`, `WellFounded.fix` from `measure`, `fn` = `def` + `realize` | §5.1 Stage 1, §4.5; §8.4 | 3 — slices 3.13 (immediate-field recursion, `eq_N`), 3.14 (course-of-values, `WellFounded.fix`), 3.15 (`casesOn`, `noConfusion`, `c.inj` for a type without parameters; the parametric `HEq` shape later) |
 | deriving under a declared policy | §5.1 | 3 |
 | tactic blocks, the I elaborator, the goal graph, `sorry` as a hole | §5.1 Stage 2, §7 | 3 |
 | typeclasses, instances, coercions | §5.1 Stage 3 | 3 |
@@ -2316,7 +2350,7 @@ row.
 | `have`, named `have`, `(premise NAME)`, `(hyp K)`, `(lemma NAME)` | `have`, the named context, `exact` | |
 | `fin-split VAR LO HI` | `decide` over a bounded `Fin`/interval, or `omega` | **AT RISK:** bounded enumeration as one primitive step |
 | `div-facts TERM D Q` | `omega` (owns the `Nat`/`Int` seam, law §5.2) | |
-| `inject`, `absurd` | `injection`, `noConfusion`/`absurd` | Stage 1 generates `noConfusion` (law §5.1) |
+| `inject`, `absurd` | `injection`, `noConfusion`/`absurd` | `T.noConfusion` and `T.c.inj` generated after a native inductive without parameters (slice 3.15, §8.4 rule 5); `injection` the tactic is I's |
 | `rewrite-with EQREF DIR SIDE (INST…) (PROOF…)` | `rw` carrying lemma identity, instantiation, direction, guarded occurrence path | law §7.2 |
 | `(by arith (list …))` — tautology, Farkas certificate (5,105 uses) | `arith` with the checked certificate as I data; `omega` as the producer | law §7.2 lists `arith` |
 | `refine-fact` | `Subtype.property` | |

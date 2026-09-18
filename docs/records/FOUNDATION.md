@@ -2099,6 +2099,44 @@ is `docs/FOUNDATION.md` §5.3.
   20 pinned, closures identical; the pipeline 4,608 s. Course-of-values,
   the measured definitions and the obligation class stand on the full
   gate.
+- **Slice 3.15 (2026-09-17 ruled, 2026-09-18 built): the elaborator
+  above K** — the L-side ergonomics of law §5.1–5.2 (`LANGUAGE.md`
+  §5.1 rewritten, §4, §5.3, §8.4's slice-3.15 rules 1–6, §13 item
+  48). Three landings: `672826c` the metavariable nodes (`MVar`,
+  `LMVar`; K's first edit since the seal, refusing arms only, hostile
+  17a–d); `1c12de8` the elaborator (`kernel/unify.shard`,
+  `kernel/elab.shard`, the reader split into `scope.shard` and
+  `reader.shard`, `W` into `kw.shard`, K's view exporting
+  `is_def_eq`): implicit arguments, universe inference, the numeral
+  rule with the one `Nat → Int` coercion, the operator spellings and
+  `if` in statements, `@`, `exists`; the phase-2 pins rewritten to the
+  spelling (45 files), a `type`'s parameters and a `fn`'s type
+  parameters implicit; the third landing the constructor-structure
+  bundle after a native inductive (`T.casesOn`, and for a type
+  without parameters `T.noConfusionType`, `T.noConfusion`, `T.c.inj`,
+  Lean 4.33's shapes decoded from the export) and forward references
+  parked and retried. Decided on the way: `-` `/` `mod` at `Nat` have
+  identities in L only; two K refusals (a false theorem, a universe
+  collapse) and §8.5's `view_rfl` now stop at the elaborator as
+  `type_mismatch`; a native inductive with universe parameters or
+  parameters gets `casesOn` alone (the `HEq` shape later); the
+  assignment of a metavariable is typed, which is where a universe is
+  inferred; a Miller pattern `?motive t` is solved, so `casesOn` works
+  from the expected type. Not in the slice: a `match` in a statement,
+  `Bool`/`Decidable` bridging (calc's `is_digit` stays `RUNNABLE`),
+  E's rename of `lt le int_eq`, `Fin`/`UInt*` numerals, holes `_`,
+  the generator's move to an `aux.shard`. Gates: 115 loader pins,
+  reader tests, define_test, parity byte-identical over 24 closures
+  and 83,436 lines, route 2 and calc byte-identical, K's clients
+  through the V3 loader, 26 entrypoints. **Pipeline 508 (`672826c`,
+  the metavariable nodes) green end to end 2026-09-18:** corpus
+  1,482 s at the baseline, v3 4,367 s (26 entrypoints, calc 420 s,
+  define_test, k_clients_test 125 s, parity 206 s over 24 closures
+  and 82,190 lines, route 2 52 s, route 1 built, the full replay
+  2,393 s at 32.2 GB peak, T0 accepted 57,977, 20 pinned, closures
+  identical) — K's terms carry the nodes and K's verdicts are
+  unchanged over the whole export. The elaborator and the bundle on
+  the full gate: the next pipeline.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

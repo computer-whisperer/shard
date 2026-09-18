@@ -366,33 +366,44 @@
 (fn bi_inst ((bi BinderInfo)) Bool (match bi (BInstImplicit True) (_ False)))
 (fn nil_args ((args (List EArg))) Bool (match args (Nil True) (_ False)))
 
-;; the application: the telescope, the expected type propagated first (best
-;; effort), the explicit arguments elaborated at their binders — numerals last
-;; — each unified with its placeholder, then the term and its type instantiated
+;; the application: the telescope; the written arguments that are bare names
+;; first (a variable or a constant: an eliminator's major premise, so the
+;; expected type then meets `?motive t` as a pattern, Lean's elabAsElim order);
+;; the expected type propagated (best effort); the other explicit arguments at
+;; their binders, numerals last — each unified with its placeholder; then the
+;; term and its type instantiated
 (fn elab_args ((e El) (f Expr) (fty Expr) (args (List EArg)) (explicit Bool) (expected (Option Expr))) ERes
   (match (tele e f fty args explicit Nil 256)
     ((TlErr r m) (EErr r m))
     ((TlOk e1 fa rty slots)
-     (let ((e2 (match expected ((Some x) (match (el_unify e1 rty x) ((Some e3) e3) (None e1))) (None e1))))
-       (match (elab_slots e2 slots False)
-         ((EErr r m) (EErr r m))
-         ((EOk e3 _ _)
-          (match (elab_slots e3 slots True)
+     (match (elab_slots e1 slots 0)
+       ((EErr r m) (EErr r m))
+       ((EOk e1b _ _)
+        (let ((e2 (match expected ((Some x) (match (el_unify e1b rty x) ((Some e3) e3) (None e1b))) (None e1b))))
+          (match (elab_slots e2 slots 1)
             ((EErr r m) (EErr r m))
-            ((EOk e4 _ _) (check_expected e4 (el_zonk e4 fa) (el_zonk e4 rty) expected)))))))))
-;; the explicit slots, the numerals in the second pass
-(fn elab_slots ((e El) (slots (List Slot)) (numerals Bool)) ERes
+            ((EOk e3 _ _)
+             (match (elab_slots e3 slots 2)
+               ((EErr r m) (EErr r m))
+               ((EOk e4 _ _) (check_expected e4 (el_zonk e4 fa) (el_zonk e4 rty) expected)))))))))))
+;; the explicit slots of one pass: 0 the bound variables and the elaborated
+;; values, 1 the rest, 2 the numerals
+(fn elab_slots ((e El) (slots (List Slot)) (pass Int)) ERes
   (measure (struct slots))
   (match slots
     (Nil (EOk e (mk_sort LZero) (mk_sort LZero)))
-    ((Cons (SImp _) r) (elab_slots e r numerals))
+    ((Cons (SImp _) r) (elab_slots e r pass))
     ((Cons (SExp a m) r)
-     (if (bool_not (bool_eq (arg_is_numeral a) numerals)) (elab_slots e r numerals)
+     (if (bool_not (int_eq (arg_pass e a) pass)) (elab_slots e r pass)
        (match (elab_slot e a m)
          ((EErr r2 m2) (EErr r2 m2))
-         ((EOk e1 _ _) (elab_slots e1 r numerals)))))))
-(fn bool_eq ((a Bool) (b Bool)) Bool (if a b (bool_not b)))
-(fn arg_is_numeral ((a EArg)) Bool (match a ((ASrc (SNum _)) True) (_ False)))
+         ((EOk e1 _ _) (elab_slots e1 r pass)))))))
+(fn arg_pass ((e El) (a EArg)) Int
+  (match a
+    ((ASrc (SNum _)) 2)
+    ((ASrc (SSym x)) (match (name_of_sym x) ((Some n) (match (cx_lookup (el_cx e) n) ((Some _) 0) (None 1))) (None 1)))
+    ((AVal _ _) 0)
+    (_ 1)))
 ;; one explicit argument at its binder's type (the placeholder's), then the
 ;; placeholder is the argument — already assigned by the expected type, a
 ;; definitional check

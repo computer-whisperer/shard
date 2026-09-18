@@ -633,9 +633,19 @@ decision of its proposition, `@NAME` explicit, `exists`; what the
 inputs do not determine is a refusal with a pointer, never a default.
 The phase-2 pins rewritten to the new spelling (45 files); a `type`'s
 parameters and a `fn`'s type parameters implicit, so a theorem cites
-`(len xs)` as a body does. Six pins, a reader pin; the reader split
-into `scope.shard` (resolution) and `reader.shard` (the forms), the
-K-world `W` into `kw.shard`.
+`(len xs)` as a body does. Then the constructor-structure bundle
+generated after a native inductive's admission in Lean's shapes
+(`T.casesOn`; for a type without parameters `T.noConfusionType`,
+`T.noConfusion`, `T.c.inj`; the parametric `HEq` shape later) and
+forward references parked and retried after every definition. Eight
+pins, a reader pin; the reader split into `scope.shard` (resolution)
+and `reader.shard` (the forms), the K-world `W` into `kw.shard`.
+**Pipeline 508 (`672826c`, the nodes) green end to end** — corpus
+1,482 s at the baseline, v3 4,367 s (calc 420 s, parity 206 s, route 1
+built, replay 2,393 s at 32.2 GB, T0 accepted 57,977, 20 pinned,
+closures identical): K's verdicts unchanged with the nodes in its
+terms. Gates at the slice's close: 115 pins, parity over 24 closures
+and 83,436 lines, 26 entrypoints.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

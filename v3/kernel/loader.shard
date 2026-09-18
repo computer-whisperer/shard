@@ -44,6 +44,7 @@
 (use kernel.define)
 (use kernel.define.DfRes)
 (use kernel.define.DqRes)
+(use kernel.decl.InductiveType)
 (use kernel.record)
 (use kernel.record.RxRes)
 (use kernel.sexpr)
@@ -214,11 +215,12 @@
   (chunks (List (List Int)))
   (params (List Name))
   (etab ESt)
+  (parked (List Parked))
   (pm (List (Pair Name (List Name))))
   (forms (IntMap (List (Pair Name (Pair Scope SExpr))))))
 (fn load0 ((root (List (List Int))) (chunks (List (List Int)))) Load
   (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods Nil) (init InitNone) (tbl IMEmpty)
-             (pending Nil) (stack Nil) (recs Nil) (chunks chunks) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty)))
+             (pending Nil) (stack Nil) (recs Nil) (chunks chunks) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil)))
 (fn ld_recs ((l Load)) (List Rec) (rev (Load.recs l)))
 (fn ld_with_env ((l Load) (e CheckedEnv) (m AxMemo)) Load (with Load l (env e) (memo m)))
 (fn ld_add_mod ((l Load) (md Mod)) Load (with Load l (mods (Cons md (Load.mods l)))))
@@ -229,6 +231,10 @@
 (fn ld_rec ((l Load) (x Rec)) Load (with Load l (recs (Cons x (Load.recs l)))))
 (fn ld_add_param ((l Load) (n Name)) Load (with Load l (params (Cons n (Load.params l)))))
 (fn ld_with_e ((l Load) (es ESt)) Load (with Load l (etab es)))
+(fn ld_with_parked ((l Load) (p (List Parked))) Load (with Load l (parked p)))
+;; a fn whose definition waits on a callee not yet defined (slice 3.15: a forward reference, or a
+;; callee itself parked): the fn, its form, its E declaration, the obstacle and the callee named
+(type Parked (Parked Name SExpr EDecl Symbol (List Int)))
 (fn ld_with_recs_raw ((l Load) (rs (List Rec))) Load (with Load l (recs rs)))
 (fn ld_add_form ((l Load) (n Name) (sc Scope) (s SExpr)) Load
   (let ((k (name_key n)) (fo (Load.forms l)))
@@ -425,15 +431,34 @@
       ((RDOk ds) (admit_forms l f s ds))))))))))
 ;; L declarations admitted, checked against the policy, recorded; a type's or a sig's E twin
 (fn admit_forms ((l Load) (f Fx) (s SExpr) (ds (List Declaration))) (Pair Load Fx)
+  (match (admit_core l f ds)
+    ((Pair l1 None) (Pair l1 f))
+    ((Pair l1 (Some recs)) (bundle_after (add_e_twin l1 f s) (mix_recs f recs) ds))))
+(fn admit_core ((l Load) (f Fx) (ds (List Declaration))) (Pair Load (Option (List Rec)))
   (match (admit_decls (Load.env l) ds)
-    ((AdRefused subj reason) (Pair (ld_rec l (RRefuse subj reason)) f))
+    ((AdRefused subj reason) (Pair (ld_rec l (RRefuse subj reason)) None))
     ((AdOk env1)
      (match (policy_pass l f env1 (Load.memo l) ds Nil)
-       ((PolBound n) (Pair (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty)) (RLoadErr (fx_file f) (quote closure_bound) (show_name n))) f))
-       ((PolOut n out) (Pair (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty)) (RPolicy n out)) f))
+       ((PolBound n) (Pair (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty)) (RLoadErr (fx_file f) (quote closure_bound) (show_name n))) None))
+       ((PolOut n out) (Pair (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty)) (RPolicy n out)) None))
        ((PolOk memo1 recs)
-        (let ((l1 (recs_add (ld_with_tbl (ld_with_env l env1 memo1) (tbl_add_all (Load.tbl l) (decls_declare env1 ds) (Fx.module f))) recs)))
-          (Pair (add_e_twin l1 f s) (mix_recs f recs))))))))
+        (Pair (recs_add (ld_with_tbl (ld_with_env l env1 memo1) (tbl_add_all (Load.tbl l) (decls_declare env1 ds) (Fx.module f))) recs) (Some recs)))))))
+;; a native inductive just admitted gets its constructor-structure bundle (define.shard's
+;; confusion_bundle, slice 3.15): casesOn, and with Init's Eq in scope noConfusionType,
+;; noConfusion and the c.inj theorems — ACCEPT records of their own, checked by K
+(fn bundle_after ((l Load) (f Fx) (ds (List Declaration))) (Pair Load Fx)
+  (match (inducts_in ds)
+    (Nil (Pair l f))
+    ((Cons ind _)
+     (match (confusion_bundle (Load.etab l) (fx_scope l f) (Load.env l) ind)
+       (Nil (Pair l f))
+       (bs (match (admit_core l f bs) ((Pair l1 None) (Pair l1 f)) ((Pair l1 (Some recs)) (Pair l1 (mix_recs f recs)))))))))
+(fn inducts_in ((ds (List Declaration))) (List Name)
+  (measure (struct ds))
+  (match ds
+    (Nil Nil)
+    ((Cons (InductDecl _ _ (Cons (InductiveType n _ _) Nil) _) r) (Cons n (inducts_in r)))
+    ((Cons _ r) (inducts_in r))))
 ;; a realization (§7.5): the E body under an admitted constant's identity; its equations admitted
 ;; as theorems through the same path as any declaration — one refused, nothing attached
 (fn load_realize ((l0 Load) (f Fx) (s SExpr)) Load
@@ -501,15 +526,61 @@
 ;; a fn's definition (define.shard): the auxiliaries a native inductive needs admitted first
 ;; (its below and brecOn; ACCEPT records) and the definition tried again, at most twice
 (fn load_define ((l1 Load) (f Fx) (s SExpr) (d EDecl) (fuel Int)) (Pair Load Fx)
-  (let ((sc (fx_scope l1 f)) (k (edecl_name d)))
-    (match (define_fn (es_add_decl (Load.etab l1) d) sc (Load.env l1) d)   ; the fn in the table first: its self-calls type statically
-      ((DfSkip why _) (Pair (ld_rec (ld_with_e l1 (es_add_decl (Load.etab l1) d)) (RRun (form_head s) k why)) f))
+  (match (define_try l1 f s d fuel True)
+    ((Pair l2 f2) (if (ld_defined_last l2) (retry_parked l2 f2 (+ 1 (len (Load.parked l2)))) (Pair l2 f2)))))
+;; one attempt; the fn enters the E table on the first (its self-calls type statically). A forward
+;; reference (mutual_recursion: the callee not loaded yet) or a callee still parked
+;; (callee_pending) parks the fn — no record yet; it is retried after every later definition and
+;; reported at the file's end if it never settles (slice 3.15; §8.4's rules). Any other obstacle
+;; is RUNNABLE at once, callee_pending on a callee that will not be defined as no_l_meaning.
+(fn define_try ((l1 Load) (f Fx) (s SExpr) (d EDecl) (fuel Int) (add Bool)) (Pair Load Fx)
+  (let ((sc (fx_scope l1 f)) (k (edecl_name d)) (es (if add (es_add_decl (Load.etab l1) d) (Load.etab l1))))
+    (match (define_fn es sc (Load.env l1) d)
+      ((DfSkip why m)
+       (let ((l2 (ld_with_e l1 es)))
+         (if (bool_or (sym_eq why (quote mutual_recursion)) (bool_and (sym_eq why (quote callee_pending)) (parked_named l2 m)))
+           (Pair (ld_with_parked l2 (append (Load.parked l2) (list (Parked k s d why m)))) f)
+           (Pair (ld_rec l2 (RRun (form_head s) k (if (sym_eq why (quote callee_pending)) (quote no_l_meaning) why))) f))))
       ((DfErr e m) (Pair (ld_rec l1 (RClassify k e m)) f))
       ((DfAux es1 auxs)
        (if (lt fuel 1) (Pair (ld_rec l1 (RClassify k (quote define_loop) "the auxiliaries did not settle")) f)
          (match (admit_forms (ld_with_e l1 es1) f s auxs)
-           ((Pair l2 f2) (if (ld_last_accepted l2) (load_define l2 f2 s d (- fuel 1)) (Pair l2 f2))))))
+           ((Pair l2 f2) (if (ld_last_accepted l2) (define_try l2 f2 s d (- fuel 1) False) (Pair l2 f2))))))
       ((DfOk es1 obls dd wf) (load_defined (ld_with_e l1 es1) f d obls dd wf)))))
+(fn parked_named ((l Load) (m (List Int))) Bool (parked_has (Load.parked l) m))
+(fn parked_has ((ps (List Parked)) (m (List Int))) Bool
+  (measure (struct ps))
+  (match ps (Nil False) ((Cons (Parked k _ _ _ _) r) (if (int_list_eq (show_name k) m) True (parked_has r m)))))
+(fn ld_defined_last ((l Load)) Bool
+  (match (ld_recs_head l) ((Some (RDefine _ _ _)) True) (_ False)))
+;; the parked fns tried again, to a fixpoint: each attempt re-parks or settles
+(fn retry_parked ((l Load) (f Fx) (fuel Int)) (Pair Load Fx)
+  (measure fuel)
+  (if (lt fuel 1) (Pair l f)
+    (let ((ps (Load.parked l)))
+      (match ps
+        (Nil (Pair l f))
+        (_
+         (match (retry_each (ld_with_parked l Nil) f ps False)
+           ((Pair (Pair l1 f1) progressed)
+            (if progressed (retry_parked l1 f1 (- fuel 1)) (Pair l1 f1)))))))))
+(fn retry_each ((l Load) (f Fx) (ps (List Parked)) (progressed Bool)) (Pair (Pair Load Fx) Bool)
+  (measure (struct ps))
+  (match ps
+    (Nil (Pair (Pair l f) progressed))
+    ((Cons (Parked _ s d _ _) r)
+     (match (define_try l f s d 2 False)
+       ((Pair l1 f1) (retry_each l1 f1 r (bool_or progressed (ld_defined_last l1))))))))
+;; the fns still parked at a file's end: RUNNABLE with the obstacle they waited on
+(fn flush_parked ((l Load)) Load
+  (let ((ps (Load.parked l)))
+    (flush_each (ld_with_parked l Nil) ps)))
+(fn flush_each ((l Load) (ps (List Parked))) Load
+  (measure (struct ps))
+  (match ps
+    (Nil l)
+    ((Cons (Parked k s _ why _) r)
+     (flush_each (ld_rec l (RRun (form_head s) k (if (sym_eq why (quote callee_pending)) (quote no_l_meaning) why))) r))))
 (fn ld_last_accepted ((l Load)) Bool
   (match (ld_recs_head l) ((Some (RAccept _ _ _ _ _ _)) True) (_ False)))
 ;; a defined fn: its obligations (a measure's decreasing facts) admitted as parameters of the
@@ -1241,7 +1312,7 @@
 (fn load_forms ((l Load) (f Fx) (forms (List SExpr)) (fuel Int) (w World)) (Pair (Pair Load (Option Fx)) World)
   (measure fuel)
   (match forms
-    (Nil (Pair (Pair l (Some f)) w))
+    (Nil (Pair (Pair (flush_parked l) (Some f)) w))   ; the fns parked on a forward reference that never came
     ((Cons s r)
      (match (form_of s)
        ((FBad e m) (Pair (Pair (ld_rec l (RLoadErr (fx_file f) e m)) None) w))

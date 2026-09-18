@@ -123,3 +123,8 @@ type undetermined, `unsolved_implicit`), `elab_instance` (`ite True`:
 `instance_needed`), `elab_no_decision` (`(if True …)`: `no_decision`),
 `elab_mismatch` (an `Int` where a `Nat` is expected: `type_mismatch`,
 no `Int.toNat`).
+`define_forward` (a fn calling one defined later in the file: parked,
+defined once the callee is, its equation cited) and `elab_confusion`
+(the constructor-structure bundle of two native types cited: `Color.
+noConfusion` at `False`, `Tree.Node.inj`, `Tree.casesOn` with the
+motive from the expected type) close slice 3.15.
