@@ -700,9 +700,26 @@ forcing run under `ev`. 125 pins, parity over 27 closures and 104,557
 lines, 29 entrypoints. **Pipelines 513 (`77baa91`) and 514 (`ca87d5f`)
 green end to end** — v3 4,941 s and 4,930 s, corpus at the baseline,
 route 1 built, the replay ~2,500 s at 32.2 GB, T0 accepted 57,977, 20
-pinned, closures identical. Next: the flip — `fn` and `realize` on the
-route, `define.shard` re-pointed, `tr` deleted, one descent obligation
-discharged.
+pinned, closures identical. **Landing 3, the flip (2026-09-19):** a
+`fn` is read once and its program is the erasure; the classifier types
+only a function whose signature has no L reading (`route=e_first`), a
+body with a symbol or string literal, or a head past the Init prefix.
+`define.shard` is rebuilt over the pre-definition in Lean's shape — the
+matcher stays a constant and its motive carries the course-of-values
+table, a self-call is found by type — and states a function's equation
+where K decides it; a `RUNNABLE` callee is a callee-local
+(`callee_runnable route=typed`); a supplied `realize` is elaborated
+against the constant's own telescope; `tr` and the tie are deleted
+(realize.shard 1,846 → 578 lines; the erasure is `kernel/erasure.shard`);
+`(fulfills f.dec_N PROOF)` discharges a descent obligation with the
+axiom closure as the acyclicity check, and `count.dec_1` is proved by
+`Nat.sub_lt`. **calc's spec file: 25 of 25 functions defined**, calc's
+differential byte-identical with the erasures as the programs, the
+twelve functions the old route defined keep their equation names;
+every `fn`'s hash moved (its value cites `NAME.match_N`). 132 pins.
+Slice 3.16 is closed pending its pipeline; next is slice 3.17, the
+porting facilities (`"…"`, symbols, `Name` literals, record update),
+which empties the E-first fallback.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

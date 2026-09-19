@@ -23,6 +23,7 @@ record that is not a module, an Init load or an acceptance:
 ;;                                     NAME.realize_N refused conversion
 ;; expect: NAME pending measure        a realization attached under a measure other than struct (§7.2): the obligation reported
 ;; expect: NAME runnable REASON       every record accepted, and the fn NAME is RUNNABLE with that obstacle to L meaning
+;; expect: NAME refuses REASON         some record refuses NAME for REASON, not necessarily the first bad one (slice 3.16: a refused discharge after a PENDING measure)
 ;;                                     named (§8.4 rule 1, slice 3.13): e_only_type, no_l_meaning, no_l_identity, unknown_constant,
 ;;                                     measure_pending, numeral_pattern, recursion_depth
 ;; expect: NAME impl-error REASON      the implementation check (§6.6): impl_missing_type, impl_missing_fn,
@@ -143,4 +144,22 @@ erased by the derived view and run by `kernel/test/project_test.shard`:
 both values of a `decide` returned, matched, stored, used as a
 condition; a matcher's chosen arm only) and `elab_bridge` (`decide`,
 `if` on a `Bool` and on a two-constructor type, an operator past a
-numeral operand, `(list …)`, an untyped `let`; the theorems `Eq.refl`).
+numeral operand, `(list …)`, an untyped `let`; the theorems `Eq.refl`). Landing 3 (the flip): `route_callee` (G8: a `RUNNABLE` callee as a
+callee-local — `callee_runnable route=typed`; `define_test.sh` compares
+the two programs' dumps), `one_meaning` (G1: one expression as a `fn`'s
+body and a `def`'s value, equal by `Eq.refl`; `-` at `Nat` and at
+`Int`), `discharge_measure` (G4: three obligations with their branch
+proof discharged by `Nat.sub_lt`, the account read in
+`define_test.sh`), `discharge_self_cycle` and `discharge_two_cycle` (G7:
+`fulfills_cycle`), `match_in_impl` (G9: a matcher generated and read
+back inside an implementation check), `define_arg_match` (a self-call
+under a `match` in an argument and a `let`; no equation where K cannot
+decide it). Moved by the flip, each with its cause in its header:
+`ev_unsaturated` and `ev_fn_value` (`type_mismatch`), `ev_nonexhaustive`
+(`match_not_exhaustive`), `ev_ambiguous` (`ambiguous_name`),
+`ev_pattern_type` (`pattern_constructor`), `k_client_reach`
+(`function_expected`), `define_nat_operator` (`ok`: rule 4),
+`define_mutual` (`callee_runnable`), `realize_order`
+(`no_realization`), `ev_no_l_meaning` and `realize_fn` (a new obstacle:
+the old one, a measure without a self-call, is now a plain
+definition).

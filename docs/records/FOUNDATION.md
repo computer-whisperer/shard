@@ -2294,6 +2294,56 @@ is `docs/FOUNDATION.md` §5.3.
   55 s, route 1 built, the replay 2,503 s at 32.2 GB, T0 accepted
   57,977, 20 pinned, closures identical). Both landings stand on the
   full gate.
+- **2026-09-19 — slice 3.16 landing 3: the flip** (`LANGUAGE.md`
+  §8.4's as-built; rules 2, 4, 6, 7, 8). A `fn` is read once
+  (`predef.shard`, now with the recursion clause and callee-locals) and
+  its program is `erase_predef`'s; the classifier types only a function
+  whose signature has no L reading, a body with a symbol or string
+  literal, or a head past the Init prefix (`route=e_first`, flagged);
+  a typed-route error is a refusal. **Decided before the deletion, and
+  written to §8.4 first:** `define.shard` is not slice 3.14's table
+  bookkeeping re-pointed but Lean's compilation — the matcher stays the
+  constant K checked and its motive carries the course-of-values table
+  (addArg), a self-call is the table's entry found by type over an
+  abstract motive (the real motive is constant, so it cannot tell
+  entries apart). It worked on the first load of `std/list.shard` and
+  lifted slice 3.14's `recursion_depth` obstacle. **Found on the way,
+  each by a gate or a probe:** (1) frontend parity caught landing 2's
+  `if`-as-a-match in `kernel.util.bool_and` — `if` on a two-constructor
+  type is now `casesOn`, erased back to `if`; (2) parity caught
+  `Nat.add` where the old front end says `+` — `Nat`'s five
+  integer-identical operations select the integer entries; (3) with a
+  short Init prefix the elaborator cited `instDecidableEqBool` without
+  checking it exists and K refused at admission — the bridge's
+  constants are checked; (4) a probe written to verify a sentence of
+  the as-built (a self-call under a `match` in an argument) was
+  refused: the definition stood but its unfold equation is not
+  `Eq.refl` at a local — a `fn`'s equation is now stated where K
+  decides it, the definition checked into the walk's environment
+  first (`define_arg_match`); (5) the survey of E-first fallbacks
+  showed the literal check running before the signature's, mislabelling
+  the toolchain's functions, and calc's trace functions falling back
+  whole behind `show_nat` — a fallback function whose signature reads
+  is a callee-local for its callers. Rule 8: `count.dec_1` is `∀ p (h :
+  ¬ p.1 = 0), …` and `Nat.sub_lt (Nat.pos_of_ne_zero h)
+  (Nat.zero_lt_succ 0)` closes it, both lemmas inside the prefix
+  through `InvImage.wf` (the named risk did not bite); the closure with
+  discharged obligations replaced is the acyclicity check, and the
+  records' account is rewritten on success. `tr`, the tie, the E-term
+  case tree and `DefRec` deleted (realize.shard 1,846 → 578 lines; the
+  erasure in `erasure.shard`). **The slice's gate met:** calc's spec
+  file 25 of 25 defined (its Init import extended to `InvImage.wf` for
+  `parse_tail`), `calc_test` byte-identical over 21 inputs with the
+  erasures as the programs, the twelve functions the old route defined
+  keep their equation names (compared against `ca87d5f`'s output),
+  every `fn`'s hash moved for one cause (its value cites
+  `NAME.match_N`). Eleven pins moved to the elaborator's reason or the
+  new outcome; seven new (G1, G4, G7 ×2, G8, G9, `define_arg_match`).
+  Gates: 132 loader pins, `define_test` (5 checks), calc, parity
+  byte-identical over 27 closures with no unused opens, route 2, K's
+  clients, the unit tests, the full suite. Not done here and named in
+  the as-built: the scrutinee equation in a measured obligation,
+  mutual recursion's definition, dependency-directed wake-up.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

@@ -1,19 +1,20 @@
-;;; v3/kernel/realize.shard — `realize` (v3/LANGUAGE.md §7, §7.5; law §4.4):
-;;; an E body attached to an existing admitted L constant under its own
-;;; identity. The supplied form reads the body as a `fn`'s, checks the E
-;;; signature against the erasure of the constant's L type (erase.shard's
-;;; roles), checks descent and callee order, and states one equation per
-;;; leaf of the body's case tree — the E body translated into L head for
-;;; head, the constant's telescope filled by first-order matching — each a
-;;; theorem `NAME.realize_N` the loader admits (proven by `Eq.refl`, or by
-;;; the `equations` clause). The derived view erases the constant's L value
-;;; into an E body by the same roles. Phase 2, slice 5b.
-(import "predef.shard")
+;;; v3/kernel/realize.shard — `realize` (v3/LANGUAGE.md §7, §7.5; §8.4 slice 3.16 rule 7;
+;;; law §4.4): an E body attached to an existing admitted L constant under its own identity.
+;;; The supplied form checks the E signature against the erasure of the constant's L type
+;;; (erase.shard's roles), binds the signature's names to the constant's own telescope,
+;;; elaborates the body once at the result's L type (elab.shard), takes its erasure as the
+;;; program (erasure.shard), checks descent and callee order on it, and states one equation
+;;; per leaf of the body's leading matchers — each a theorem `NAME.realize_N` the loader
+;;; admits (proven by `Eq.refl`, or by the `equations` clause). The derived view erases the
+;;; constant's L value. The equations' leaves are shared with define.shard's `fn`. Phase 2,
+;;; slice 5b; rebuilt over the elaborator at slice 3.16 (the upward translation `tr` deleted).
+(import "erasure.shard")
 (import "classify.shard")
 (use kernel.k)
 (use kernel.classify)
 (use kernel.decl)
 (use kernel.erase)
+(use kernel.erasure)
 (use kernel.kw)
 (use kernel.elab El el_w el0 el_set_w el_set_cx el_cx el_aux elab el_finish)
 (use kernel.elab.El)
@@ -41,18 +42,15 @@
 (use kernel.erase.Tele)
 (use kernel.erase.TeleRes)
 (use kernel.kw.W)
+(use kernel.kw.WOut)
 (use kernel.etable.EHit)
 (use kernel.etable.EInfo)
 (use kernel.etable.ESt)
 (use kernel.expr.BinderInfo)
 (use kernel.expr.Expr)
-(use kernel.expr.Literal)
-(use kernel.level.Level)
 (use kernel.matcher.MtDesc)
 (use kernel.matcher.MtInd)
 (use kernel.matcher.MtPat)
-(use kernel.predef.CalleeLocal)
-(use kernel.predef.PdRec)
 (use kernel.name.Name)
 (use kernel.prelude.Bool)
 (use kernel.prelude.List)
@@ -60,7 +58,6 @@
 (use kernel.prelude.Pair)
 (use kernel.prog.EArm)
 (use kernel.prog.EDecl)
-(use kernel.prog.ELit)
 (use kernel.prog.EPat)
 (use kernel.prog.ERec)
 (use kernel.prog.ETerm)
@@ -69,253 +66,16 @@
 (use kernel.scope.Scope)
 (use kernel.scope.Vis)
 (use kernel.sexpr.SExpr)
-
-;; ---- the walk's state -------------------------------------------------------------------
-;; the walk (environment, locals, checker state), the E table, the scope, the realized or
-;; defined constant's identity and its type parameters' locals (an ETVar of the body is one of
-;; them); for a definition (define.shard) the value once built and the descent obligations
-;; collected on the way, newest first
-(record Tr (w W) (es ESt) (sc Scope) (id Name) (tps (List Expr)) (value (Option Expr)) (obls (List Declaration)))
-(fn tr_new ((w W) (es ESt) (sc Scope) (id Name) (tps (List Expr))) Tr
-  (make Tr (w w) (es es) (sc sc) (id id) (tps tps) (value None) (obls Nil)))
-(fn tr_set_w ((t Tr) (w W)) Tr (with Tr t (w w)))
-(fn tr_set_es ((t Tr) (es ESt)) Tr (with Tr t (es es)))
-(fn tr_set_value ((t Tr) (v Expr)) Tr (with Tr t (value (Some v))))
-(fn tr_add_obl ((t Tr) (d Declaration)) Tr (with Tr t (obls (Cons d (Tr.obls t)))))
-(fn tr_obls ((t Tr)) (List Declaration) (rev (Tr.obls t)))
-(fn tr_env ((t Tr)) CheckedEnv (w_env (Tr.w t)))
-(type TrRes (TrOk Tr Expr) (TrErr Symbol (List Int)))
-;; an E variable's meaning: its L term, its static E type, its descent flag
-;; (2 the structural parameter itself, 1 a proper subterm of it, 0 other)
-(type EV (EV Expr (Option EType) Int))
-;; K through the state
-(fn tr_infer ((t Tr) (e Expr)) (Pair Tr (Option Expr))
-  (match (w_infer (Tr.w t) e) ((Pair w1 r) (Pair (tr_set_w t w1) r))))
-(fn tr_whnf ((t Tr) (e Expr)) (Pair Tr (Option Expr))
-  (match (w_whnf (Tr.w t) e) ((Pair w1 r) (Pair (tr_set_w t w1) r))))
-(fn tr_local ((t Tr) (n Name) (ty Expr)) (Pair Tr Expr)
-  (match (w_local (Tr.w t) n ty) ((Pair w1 fv) (Pair (tr_set_w t w1) fv))))
-(fn tr_local_bi ((t Tr) (n Name) (ty Expr) (bi BinderInfo)) (Pair Tr Expr)
-  (match (w_local_bi (Tr.w t) n ty bi) ((Pair w1 fv) (Pair (tr_set_w t w1) fv))))
-(fn tr_local_val ((t Tr) (n Name) (ty Expr) (v Expr)) (Pair Tr Expr)
-  (match (w_local_val (Tr.w t) n ty v) ((Pair w1 fv) (Pair (tr_set_w t w1) fv))))
-(fn tr_inst1 ((t Tr) (e Expr) (v Expr)) (Pair Tr Expr)
-  (match (w_inst1 (Tr.w t) e v) ((Pair w1 r) (Pair (tr_set_w t w1) r))))
-(fn tr_apps ((t Tr) (f Expr) (args (List Expr))) (Pair Tr Expr)
-  (match (w_apps (Tr.w t) f args) ((Pair w1 r) (Pair (tr_set_w t w1) r))))
-(fn tr_lams ((t Tr) (fvs (List Expr)) (b Expr)) (Pair Tr Expr)
-  (match (w_lams (Tr.w t) fvs b) ((Pair w1 r) (Pair (tr_set_w t w1) r))))
-(fn tr_pis ((t Tr) (fvs (List Expr)) (b Expr)) (Pair Tr Expr)
-  (match (w_pis (Tr.w t) fvs b) ((Pair w1 r) (Pair (tr_set_w t w1) r))))
-(fn tr_subst ((t Tr) (e Expr) (id Int) (v Expr)) (Pair Tr Expr)
-  (match (w_subst (Tr.w t) e id v) ((Pair w1 r) (Pair (tr_set_w t w1) r))))
-(fn tr_type_of_local ((t Tr) (fv Expr)) (Option Expr)
-  (match fv
-    ((FVar _ id) (match (lctx_find (w_lctx (Tr.w t)) id) ((Some d) (Some (ldecl_type d))) (None None)))
-    (_ None)))
-;; the telescope of a constant, its binders opened in the state
-(fn tr_tele ((t Tr) (info ConstantInfo)) (Pair Tr (Option Tele))
-  (match (tele_of (Tr.w t) (Tr.es t) (Tr.sc t) info)
-    ((TeleErr _ _) (Pair t None))
-    ((TeleOk w1 es1 tele) (Pair (with Tr t (w w1) (es es1)) (Some tele)))))
-(fn level_one () Level (LSucc LZero))
+(use kernel.erasure.ErRes)
+(use kernel.erasure.Either5r)
 (fn nm_realize_n ((k Int)) Name (n1 (sym_of_chars (append "realize_" (show_nat k)))))
 (fn nm_eq_n ((k Int)) Name (n1 (sym_of_chars (append "eq_" (show_nat k)))))
 
-;; ---- first-order matching (§7.5): a binder's declared type against an inferred one ----
+;; ---- substitution helpers of the equations' splits ---------------------------------------------
 ;; the metas are locals of the callee's telescope; a solved meta is compared structurally
 (fn assoc_int_expr ((id Int) (sub (List (Pair Int Expr)))) (Option Expr)
   (measure (struct sub))
   (match sub (Nil None) ((Cons (Pair j e) r) (if (int_eq id j) (Some e) (assoc_int_expr id r)))))
-;; the match with the term in weak-head normal form as the fallback
-
-;; ---- an E type as an L type (§7.5): the fallback for a bare constructor's type arguments ----
-
-;; ---- a constant applied through its telescope (§7.5) ----------------------------------------
-;; the runtime binders take the E arguments (translated with their expected E types), the
-;; type parameters and erased binders are metas solved by matching each runtime binder's
-;; declared type against its argument's inferred type; a type parameter still open is read
-;; off the E type argument; anything still open names the position
-(type Ap (Ap (List (Pair Bool Expr)) (List (Pair Int Expr)) (List Int)))   ; the arguments so far (reversed; True = a meta), the solutions, the metas
-(type Either (Left Symbol (List Int)) (Right Ap))
-;; the expected E types of the runtime arguments: the declared parameter types under the type arguments
-;; the arguments with every meta replaced by its solution; an unsolved meta is None
-
-;; ---- the translation of a body (§7.5) -----------------------------------------------------
-;; a numeral at an expected Int, where Init's Int is in scope: Int.ofNat n, or Int.negSucc (-n-1)
-;; the primitive's L identity applied through its telescope
-;; a constructor: its E type's arguments from the classifier as the fallback for the metas
-;; the E type arguments a constructor application has: the expected type's when it names the
-;; inductive, else the classifier's inference from the arguments
-;; a constructor's runtime field types over its inductive's type parameters
-;; apply_const with the type-parameter metas pre-solved from E types where the arguments leave them open
-;; the type-parameter binders of the telescope, in order, matched with the E type arguments: an open one takes its E type's L form
-;; a call: the realized constant itself, an L constant with a realization attached, a view's sig fn
-;; a call of the constant being realized or defined: the constant itself where it exists (a
-;; realize; a definition's equations), else the top split's induction hypothesis for the
-;; structural argument, applied to the other arguments (§8.4 rule 2) — a field bound deeper is
-;; recursion_depth (slice 3.14's course-of-values)
-;; a measured function's self-call (§8.4, slice 3.14): `rec (tuple of the arguments) (f.dec_N
-;; scope…)` — the decreasing fact an obligation quantified over every local in scope, admitted
-;; before the definition (its declaration collected here)
-(type TrArgs (TrArgsErr Symbol (List Int)) (TrArgsOk (List Expr)))
-(fn scope_fvars ((scope (List (Pair Bool Expr)))) (List Expr)
-  (measure (struct scope))
-  (match scope (Nil Nil) ((Cons (Pair _ fv) r) (Cons fv (scope_fvars r)))))
-(fn scope_lambda_fvars ((scope (List (Pair Bool Expr)))) (List Expr)
-  (measure (struct scope))
-  (match scope (Nil Nil) ((Cons (Pair True _) r) (scope_lambda_fvars r)) ((Cons (Pair False fv) r) (Cons fv (scope_lambda_fvars r)))))
-;; the parameter tuple: one parameter is itself, more a right-nested PProd (§8.4, slice 3.14)
-(fn wf_tuple ((t Tr) (ltys (List Expr)) (vals (List Expr))) (Pair Tr Expr)
-  (measure (struct vals))
-  (match vals
-    (Nil (Pair t (mk_const (nm_punit_unit) (list (level_one)))))
-    ((Cons v Nil) (Pair t v))
-    ((Cons v r)
-     (match ltys
-       ((Cons ty tr0)
-        (match (wf_tuple t tr0 r)
-          ((Pair t1 rest)
-           (match (wf_tuple_type t1 tr0)
-             ((Pair t2 restty)
-              (match (tr_apps t2 (mk_const (nm_pprod_mk) (list (level_one) (level_one))) (list ty restty v rest))
-                ((Pair t3 e) (Pair t3 e))))))))
-       (Nil (Pair t v))))))
-(fn wf_tuple_type ((t Tr) (ltys (List Expr))) (Pair Tr Expr)
-  (measure (struct ltys))
-  (match ltys
-    (Nil (Pair t (mk_const (n1 (quote PUnit)) (list (level_one)))))
-    ((Cons ty Nil) (Pair t ty))
-    ((Cons ty r)
-     (match (wf_tuple_type t r)
-       ((Pair t1 restty) (match (tr_apps t1 (mk_const (n1 (quote PProd)) (list (level_one) (level_one))) (list ty restty)) ((Pair t2 e) (Pair t2 e))))))))
-;; the k-th component of a tuple of n: (p.2)^k .1, the last (p.2)^(n-1)
-(fn wf_proj ((p Expr) (n Int) (k Int)) Expr
-  (measure k)
-  (if (int_eq n 1) p
-  (if (lt k 1) (if (int_eq n 1) p (mk_proj (n1 (quote PProd)) 0 p))
-    (wf_proj_rest (mk_proj (n1 (quote PProd)) 1 p) (- n 1) (- k 1)))))
-(fn wf_proj_rest ((p Expr) (n Int) (k Int)) Expr
-  (measure k)
-  (if (int_eq n 1) p
-  (if (lt k 1) (mk_proj (n1 (quote PProd)) 0 p)
-    (wf_proj_rest (mk_proj (n1 (quote PProd)) 1 p) (- n 1) (- k 1)))))
-(fn nm_pprod_mk () Name (n2 (quote PProd) (quote mk)))
-(fn nm_punit_unit () Name (n2 (quote PUnit) (quote unit)))
-;; the result type against the expected type binds type parameters too
-;; let: sequential, each value's type inferred
-;; if: the condition's two-constructor inductive's recursor with a constant motive
-;; a match not on a variable: the recursor over flat constructor patterns, a variable arm expanded
-;; the scrutinee's inductive, levels and parameters from its inferred type
-(fn ind_ctor_names ((t Tr) (ind Name)) (List Name)
-  (match (es_info (Tr.es t) ind) ((Some (EIInd _ cs)) cs) (_ Nil)))
-;; for each constructor in order, the first arm that covers it: a flat constructor pattern
-;; (its sub-patterns variables) or a variable arm; None for a nested or numeral pattern
-;; T.rec params motive minors major — the motive constant, each minor a lambda over the
-;; constructor's fields and induction hypotheses
-;; the recursor applied: the parameters, a constant motive over the result type, the minors, the major
-(fn rec_app ((t Tr) (ind Name) (ls (List Level)) (largs (List Expr)) (rty Expr) (minors (List Expr)) (major Expr)) TrRes
-  (match (tr_apps t (mk_const ind ls) largs)
-    ((Pair t2 tyapp)
-     (match (tr_local t2 (n1 (quote x)) tyapp)
-       ((Pair t3 mv)
-        (match (tr_lams t3 (list mv) rty)
-          ((Pair t4 motive) (rec_app_dep t4 (level_one) ind ls largs motive minors major))))))))
-;; the recursor applied with a given motive at the motive's universe (slice 3.14: a table
-;; generalized in the motive; below's motive into Sort 1 at universe 2)
-(fn rec_app_dep ((t Tr) (u Level) (ind Name) (ls (List Level)) (largs (List Expr)) (motive Expr) (minors (List Expr)) (major Expr)) TrRes
-  (match (tr_apps t (mk_const (Str ind (quote rec)) (Cons u ls)) (append largs (Cons motive (append minors (list major)))))
-    ((Pair t5 e) (TrOk t5 e))))
-;; the recursor's checks tr_rec makes, for define.shard's splits
-(fn rec_usable ((t Tr) (ind Name) (ls (List Level))) (Option (Pair Symbol (List Int)))
-  (match (env_find (tr_env t) (Str ind (quote rec)))
-    (None (Some (Pair (quote equation_form) (append (show_name ind) " has no recursor"))))
-    ((Some rinfo)
-     (match rinfo
-       ((RecInfo _ _ _ _ nmotives _ _ _ _)
-        (if (bool_not (int_eq nmotives 1)) (Some (Pair (quote equation_form) (append (show_name ind) ": a nested inductive's recursor has no Stage-0 translation")))
-        (if (bool_not (int_eq (len (ci_lparams rinfo)) (+ 1 (len ls)))) (Some (Pair (quote equation_form) (append (show_name ind) " eliminates into Prop only")))
-          None)))
-       (_ (Some (Pair (quote equation_form) (append (show_name ind) ": no recursor"))))))))
-;; the minors in constructor order; the result type from the expected E type, else inferred from
-;; the first arm's body; the induction hypotheses opened at that type after the body (unused there)
-(type Either2 (Left2 Symbol (List Int)) (Right2 (Pair (List Expr) Expr)))
-;; a constructor opened at the scrutinee's type: its fields as locals — each with its runtime
-;; E type, or None for an erased one — and the constructor term
-(type Field (Field Expr (Option EType) Bool))   ; the local, its E type (None = erased), recursive?
-(fn field_fvars ((fs (List Field))) (List Expr)
-  (measure (struct fs))
-  (match fs (Nil Nil) ((Cons (Field fv _ _) r) (Cons fv (field_fvars r)))))
-(fn rz_open_ctor ((t Tr) (c Name) (ls (List Level)) (largs (List Expr))) (Pair Tr (Option (Pair (List Field) Expr)))
-  (match (env_find (tr_env t) c)
-    ((Some info)
-     (match info
-       ((CtorInfo _ ind _ nparams _ _)
-        (match (w_inst_lparams (Tr.w t) (ci_type info) (ci_lparams info) ls)
-          ((Pair w1 cty)
-           (match (inst_params w1 cty largs)
-             ((Pair w2 None) (Pair (tr_set_w t w2) None))
-             ((Pair w2 (Some fty))
-              (match (open_fields (tr_set_w t w2) ind fty Nil (budget_depth))
-                ((Pair t1 None) (Pair t1 None))
-                ((Pair t1 (Some fields))
-                 (match (tr_apps t1 (mk_const c ls) (append largs (field_fvars fields)))
-                   ((Pair t2 cterm) (Pair t2 (Some (Pair fields cterm))))))))))))
-       (_ (Pair t None))))   ; not a constructor: the wildcard arm belongs to `info`'s match (it sat one level too deep until the parity test classified the driver's closure, slice 6)
-    (None (Pair t None))))
-(fn open_fields ((t Tr) (ind Name) (ty Expr) (acc (List Field)) (fuel Int)) (Pair Tr (Option (List Field)))
-  (measure fuel)
-  (if (lt fuel 0) (Pair t None)
-  (match (tr_whnf t ty)
-    ((Pair t1 (Some (Pi _ n _ dom body)))
-     (match (w_is_prop (Tr.w t1) dom)
-       ((Pair w2 (Some True))
-        (match (w_local w2 n dom)
-          ((Pair w3 fv) (match (w_inst1 w3 body fv) ((Pair w4 body1) (open_fields (tr_set_w t1 w4) ind body1 (Cons (Field fv None False) acc) (- fuel 1)))))))
-       ((Pair w2 _)
-        (match (l_to_etype w2 (Tr.es t1) (Tr.sc t1) dom (Tr.tps t1) Nil)
-          ((Pair (Pair w3 es3) fety)
-           (match (w_local w3 n dom)
-             ((Pair w4 fv)
-              (match (w_inst1 w4 body fv)
-                ((Pair w5 body1) (open_fields (tr_set_es (tr_set_w t1 w5) es3) ind body1 (Cons (Field fv fety (is_head_const dom ind)) acc) (- fuel 1)))))))))))
-    ((Pair t1 (Some _)) (Pair t1 (Some (rev acc))))
-    ((Pair t1 None) (Pair t1 None)))))
-(fn is_head_const ((e Expr) (n Name)) Bool (match (get_app_fn e) ((Const _ c _) (name_eq c n)) (_ False)))
-;; one induction hypothesis per recursive field: a local of the motive's (constant) result type
-(fn open_ihs ((t Tr) (fields (List Field)) (rty Expr) (acc (List Expr))) (Pair Tr (List Expr))
-  (measure (struct fields))
-  (match fields
-    (Nil (Pair t (rev acc)))
-    ((Cons (Field _ _ True) r)
-     (match (tr_local t (n1 (quote ih)) rty) ((Pair t1 fv) (open_ihs t1 r rty (Cons fv acc)))))
-    ((Cons _ r) (open_ihs t r rty acc))))
-;; the arm's variables: a constructor pattern binds the runtime fields in order, a variable arm
-;; binds the constructor term; an if's branches bind nothing
-;; the minors' shared result type: the expected E type's L form, else the first body's inferred type,
-;; which must not mention the fields
-(fn mentions_any ((e Expr) (ids (List Int))) Bool
-  (measure (struct e))
-  (if (bool_not (has_fvar e)) False
-  (match e
-    ((FVar _ id) (mem_int id ids))
-    ((App _ f a) (bool_or (mentions_any f ids) (mentions_any a ids)))
-    ((Lam _ _ _ d b) (bool_or (mentions_any d ids) (mentions_any b ids)))
-    ((Pi _ _ _ d b) (bool_or (mentions_any d ids) (mentions_any b ids)))
-    ((Let _ _ ty v b) (bool_or (mentions_any ty ids) (bool_or (mentions_any v ids) (mentions_any b ids))))
-    ((Proj _ _ _ x) (mentions_any x ids))
-    (_ False))))
-
-;; ---- the case tree (§7.5): the body's leading matches on variables, compiled column by column ----
-;; a pattern with its variables numbered in capture order
-(type NPat (NPVar Int) (NPCtor Name (List NPat)) (NPLit) (NPWild))
-;; a column: its variable's local, E type and descent flag
-;; a row: its patterns over the columns, its body, its slots bound so far, its slot count
-(type Row (Row (List NPat) ETerm (List (Pair Int EV)) Int))
-;; the leaf state: the left-hand side's arguments and result type (the specialized terms
-;; substituted), the theorem's binders (reversed), the body's environment, the body
-(type Leaf (Leaf (List Expr) Expr (List Expr) (List EV) ETerm))
-(type LeavesRes (LvOk Tr (List Leaf)) (LvErr Symbol (List Int)))
 ;; the leaves of a body under the outer environment, with the columns the leading match may split
 ;; the first row all variables: a leaf (later rows are unreachable for these shapes); else split
 ;; the first column some row constrains
@@ -355,8 +115,6 @@
   (match fvs
     (Nil Nil)
     ((Cons fv r) (if (int_eq (fvar_id_of fv) id) (without_id r id) (Cons fv (without_id r id))))))
-;; the rows specialized to constructor c at column i: its sub-patterns, or wildcards for a
-;; variable row (its slot bound to the constructor term); a row with another constructor drops
 
 ;; ---- descent and order (§7.5) --------------------------------------------------------------
 ;; flags per variable (innermost first): 2 the structural parameter, 1 a proper subterm of it, 0 other
@@ -454,7 +212,7 @@
   (if (le n k) Nil (Cons (if (int_eq k i) 2 0) (flags_upto n i (+ k 1)))))
 (fn zeros_int ((n Int)) (List Int) (measure n) (if (lt n 1) Nil (Cons 0 (zeros_int (- n 1)))))
 
-;; ---- the supplied form (§7.2, §7.5) ---------------------------------------------------------
+;; ---- the supplied form (§7.2, §7.5; slice 3.16 rule 7) ---------------------------------------
 ;; the result: the E table (Init inductives the walk registered), the EFn to attach once the
 ;; equations are admitted, the equations as theorem declarations in order, a pending measure
 (type RzRes (RzOk ESt EDecl (List Declaration) (List Declaration) Bool) (RzErr Symbol (List Int)))
@@ -487,9 +245,6 @@
         (match (data_mismatch binds ptypes 0)
           ((Some m) (Some m))
           (None (if (etype_eq ert rt) None (Some "the result type differs from the L type's erasure"))))))))))
-(fn count_types ((binds (List TBind))) Int
-  (measure (struct binds))
-  (match binds (Nil 0) ((Cons (TBind _ BType _) r) (+ 1 (count_types r))) ((Cons _ r) (count_types r))))
 (fn data_mismatch ((binds (List TBind)) (ptypes (List EType)) (i Int)) (Option (List Int))
   (measure (struct binds))
   (match binds
@@ -618,17 +373,9 @@
 ;; the realized constant as a function head of the E table, when pre-registration could not resolve it
 (fn ensure_head ((es ESt) (sc Scope) (k Name) (arity Int)) ESt
   (match (es_info es k) ((Some _) es) (None (es_register es k (sc_tag sc) (EIFn arity)))))
-(fn tbind_types ((binds (List TBind))) (List Expr)
-  (measure (struct binds))
-  (match binds (Nil Nil) ((Cons (TBind _ BType fv) r) (Cons fv (tbind_types r))) ((Cons _ r) (tbind_types r))))
+
+;; ---- the equations (§7.5; slice 3.16 landing 3) ----------------------------------------------
 (type Either3 (Left3 Symbol (List Int)) (Right3 (List Declaration)))
-;; the equations: the leaves of the case tree over the data binders, each a theorem
-(fn count_data ((binds (List TBind))) Int
-  (measure (struct binds))
-  (match binds (Nil 0) ((Cons (TBind _ (BData _) _) r) (+ 1 (count_data r))) ((Cons _ r) (count_data r))))
-(fn tbind_fvars ((binds (List TBind))) (List Expr)
-  (measure (struct binds))
-  (match binds (Nil Nil) ((Cons (TBind _ _ fv) r) (Cons fv (tbind_fvars r)))))
 ;; the data binders as the body's variables in binder order (the caller reverses), with their flags
 ;; (param_flags gives them innermost first, so they are consumed reversed)
 ;; Eq.refl, or the clause's theorem applied to the binders — at the constant's solved levels
@@ -641,8 +388,6 @@
        (if (int_eq arity 0) (match (tr_apps t (mk_const th Nil) kept) ((Pair t1 e) (Pair t1 (Some e))))
        (if (int_eq arity (len ls)) (match (tr_apps t (mk_const th ls) kept) ((Pair t1 e) (Pair t1 (Some e))))
          (Pair t None)))))))
-
-;; ---- the equations (§7.5; slice 3.16 landing 3) ----------------------------------------------------
 ;; the leaves of the body's leading matchers, read off the rows without reduction: a row
 ;; against the scrutinee term binds, clashes, or is stuck on a local — a universally quantified
 ;; one is split over its constructors, in order, the first row that does not clash deciding —
@@ -756,6 +501,16 @@
   (match es
     (Nil (Pair t (rev acc)))
     ((Cons e r) (match (subst_pairs t e pairs) ((Pair t1 e1) (pj_subst_pairs_all t1 r pairs (Cons e1 acc)))))))
+;; a fn's leaf is stated where K decides it by conversion — the definition is in the walk's
+;; environment (define.shard). A structural recursion whose leaf leaves the structural
+;; argument a local, or keeps a self-call under a matcher that is still stuck, unfolds only by
+;; a case analysis: that equation is I's, and the leaf keeps its number. A realization's
+;; equations are all stated (its clause may prove them; a wrong one is K's refusal)
+(fn pj_decided ((t Tr) (dm Bool) (lhs Expr) (rhs Expr)) (Pair Tr Bool)
+  (if (bool_not dm) (Pair t True)
+    (match (w_is_def_eq_r (Tr.w t) lhs rhs)
+      ((Pair w1 (WVal True)) (Pair (tr_set_w t w1) True))
+      ((Pair w1 _) (Pair (tr_set_w t w1) False)))))
 ;; a leaf's theorem: the self-local (a fn's) the constant; Eq.refl, or the equations clause's
 ;; theorem applied to the binders (a realize's); a fn's equation under its identity (dm), a
 ;; realization's under the realizing module (eq_name)
@@ -767,7 +522,10 @@
      (match (tr_subst t body selfid head)
        ((Pair t1 rhs)
         (match (tr_apps t1 head lhs)
-          ((Pair t2 lhs1)
+          ((Pair t2a lhs1)
+           (match (pj_decided t2a dm lhs1 rhs)
+             ((Pair t2 False) (pj_equation_decls t2 head selfid r thms dm (+ i 1) acc))
+             ((Pair t2 True)
            (match (tr_apps t2 (mk_const (nm_eq) (list (level_one))) (list rl lhs1 rhs))
              ((Pair t3 stmt)
               (match (tr_pis t3 kept stmt)
@@ -778,32 +536,9 @@
                     (match (tr_lams t5 kept proof)
                       ((Pair t6 value)
                        (let ((name (if dm (name_append (Tr.id t6) (nm_eq_n i)) (eq_name (Tr.sc t6) (Tr.id t6) False i))))
-                         (pj_equation_decls t6 head selfid r thms dm (+ i 1) (Cons (ThmDecl (ConstantVal name Nil ty) value (list name)) acc))))))))))))))))))
-;; an alternative at its variables: each lambda's body instantiated, else applied
-(fn pj_inst_lams ((t Tr) (e Expr) (vars (List Expr))) (Pair Tr Expr)
-  (measure (struct vars))
-  (match vars
-    (Nil (Pair t e))
-    ((Cons v r)
-     (match e
-       ((Lam _ _ _ _ b) (match (tr_inst1 t b v) ((Pair t1 b1) (pj_inst_lams t1 b1 r))))
-       (_ (match (tr_apps t e (list v)) ((Pair t1 e1) (pj_inst_lams t1 e1 r))))))))
+                         (pj_equation_decls t6 head selfid r thms dm (+ i 1) (Cons (ThmDecl (ConstantVal name Nil ty) value (list name)) acc))))))))))))))))))))
 
 ;; ---- the derived view (§7.1, §7.5) --------------------------------------------------------------
-;; the body's variables in the erasure: a local is a runtime variable (its E index counted among
-;; those), a static or erased one, or an induction hypothesis
-;; (slice 3.16) or a function standing for a call — the pre-definition's self-local, its
-;; identity and its binders' runtime flags
-(type EKind (EKVar) (EKStatic) (EKErased) (EKIH) (EKCall Name (List Bool)))
-(type ErEnt (ErEnt Int EKind))
-(fn er_index ((env (List ErEnt)) (id Int) (k Int)) (Option (Pair EKind Int))
-  (measure (struct env))
-  (match env
-    (Nil None)
-    ((Cons (ErEnt j kind) r)
-     (if (int_eq id j) (Some (Pair kind k))
-       (er_index r id (match kind (EKVar (+ k 1)) (_ k)))))))
-(type ErRes (ErOk Tr ETerm) (ErErr Symbol (List Int)))
 (fn realize_view ((es ESt) (sc Scope) (env CheckedEnv) (s SExpr)) RzRes
   (match s
     ((SList (Cons _ (Cons (SSym x) _)))
@@ -832,16 +567,6 @@
                                 ((Some (Pair e m)) (RzErr e m))
                                 (None (RzOk (Tr.es t2) (EFn k (count_types binds) ptypes rt RecNone ebody) Nil Nil False))))))))))))))))))))
     (_ (RzErr (quote bad_shape) "(realize NAME (view))"))))
-(fn bind_ptypes ((binds (List TBind))) (List EType)
-  (measure (struct binds))
-  (match binds (Nil Nil) ((Cons (TBind _ (BData ety) _) r) (Cons ety (bind_ptypes r))) ((Cons _ r) (bind_ptypes r))))
-;; the binders' entries, innermost first
-(fn binder_ents ((binds (List TBind))) (List ErEnt) (rev (binder_ents_fwd binds)))
-(fn binder_ents_fwd ((binds (List TBind))) (List ErEnt)
-  (measure (struct binds))
-  (match binds
-    (Nil Nil)
-    ((Cons (TBind _ role fv) r) (Cons (ErEnt (fvar_id_of fv) (match role (BType EKStatic) (BErased EKErased) ((BData _) EKVar))) (binder_ents_fwd r)))))
 ;; the value's leading lambdas instantiated with the binders' locals; fewer lambdas than binders: applied to the rest
 (fn peel_binders ((t Tr) (v Expr) (binds (List TBind))) (Pair Tr Expr)
   (measure (struct binds))
@@ -851,551 +576,3 @@
      (match v
        ((Lam _ _ _ _ body) (match (tr_inst1 t body fv) ((Pair t1 body1) (peel_binders t1 body1 r))))
        (_ (match (tr_apps t v (list fv)) ((Pair t1 v1) (peel_binders t1 v1 r))))))))
-;; the erasure of an L term in a runtime position (§7.5)
-(fn erase ((t Tr) (env (List ErEnt)) (e Expr) (fuel Int)) ErRes
-  (measure fuel)
-  (if (lt fuel 0) (ErErr (quote erased_in_runtime) "the body is too deep")
-  (match e
-    ((FVar _ id)
-     (match (er_index env id 0)
-       ((Some (Pair EKVar i)) (ErOk t (EBVar i)))
-       ((Some (Pair EKIH _)) (ErErr (quote recursion_structure) "a recursive definition's executable structure is not readable off the recursor: supply the body (§7.1, §7.3)"))
-       ((Some (Pair (EKCall c roles) _)) (match roles (Nil (ErOk t (ECall c Nil))) (_ (ErErr (quote function_value) (append (show_name c) " unapplied (law §4.3)")))))
-       ((Some (Pair _ _)) (ErErr (quote erased_in_runtime) "a type or a proof in a runtime position (law §4.2)"))
-       (None (ErErr (quote erased_in_runtime) "a variable the erasure does not know"))))
-    ((Lit _ (LitNat n)) (ErOk t (ELit (LNat n))))
-    ((Lit _ (LitStr _)) (ErErr (quote string_literal) "phase 3 (§12.6): S has no string realization at Stage 0"))
-    ((Let _ n ty v b) (erase_let t env n ty v b fuel))
-    ((Lam _ _ _ _ _) (ErErr (quote function_value) "a lambda in a runtime position (law §4.3)"))
-    ((Pi _ _ _ _ _) (ErErr (quote erased_in_runtime) "a type in a runtime position"))
-    ((Sort _ _) (ErErr (quote erased_in_runtime) "a sort in a runtime position"))
-    ((BVar _ _) (ErErr (quote erased_in_runtime) "a loose variable"))
-    ((Proj _ sn i x) (erase_proj t env sn i x fuel))
-    (_ (erase_app t env (get_app_fn e) (get_app_args e) fuel)))))
-(fn erase_all ((t Tr) (env (List ErEnt)) (es (List Expr)) (fuel Int) (acc (List ETerm))) (Pair (Option (Pair Symbol (List Int))) (Pair Tr (List ETerm)))
-  (measure (struct es))
-  (match es
-    (Nil (Pair None (Pair t (rev acc))))
-    ((Cons e r)
-     (match (erase t env e fuel)
-       ((ErErr x m) (Pair (Some (Pair x m)) (Pair t Nil)))
-       ((ErOk t1 e1) (erase_all t1 env r fuel (Cons e1 acc)))))))
-;; a let: a proposition or a type vanishes (its variable erased), a value is an E let
-(fn erase_let ((t Tr) (env (List ErEnt)) (n Name) (ty Expr) (v Expr) (b Expr) (fuel Int)) ErRes
-  (match (w_is_prop (Tr.w t) ty)
-    ((Pair w1 (Some True))
-     (match (tr_local_val (tr_set_w t w1) n ty v)
-       ((Pair t1 fv) (match (tr_inst1 t1 b fv) ((Pair t2 b1) (erase t2 (Cons (ErEnt (fvar_id_of fv) EKErased) env) b1 (- fuel 1)))))))
-    ((Pair w1 _)
-     (match (tr_whnf (tr_set_w t w1) ty)
-       ((Pair t1 (Some (Sort _ _)))
-        (match (tr_local_val t1 n ty v)
-          ((Pair t2 fv) (match (tr_inst1 t2 b fv) ((Pair t3 b1) (erase t3 (Cons (ErEnt (fvar_id_of fv) EKStatic) env) b1 (- fuel 1)))))))
-       ((Pair t1 _)
-        (match (erase t1 env v (- fuel 1))
-          ((ErErr e m) (ErErr e m))
-          ((ErOk t2 v1)
-           (match (tr_local_val t2 n ty v)
-             ((Pair t3 fv)
-              (match (tr_inst1 t3 b fv)
-                ((Pair t4 b1)
-                 (match (erase t4 (Cons (ErEnt (fvar_id_of fv) EKVar) env) b1 (- fuel 1))
-                   ((ErErr e m) (ErErr e m))
-                   ((ErOk t5 b2) (ErOk t5 (ELet (list v1) b2)))))))))))))))
-;; a projection: a match on the structure's constructor, the field's variable
-(fn erase_proj ((t Tr) (env (List ErEnt)) (sn Name) (i Int) (x Expr) (fuel Int)) ErRes
-  (match (erase t env x (- fuel 1))
-    ((ErErr e m) (ErErr e m))
-    ((ErOk t1 x1)
-     (match (ind_eligible (Tr.w t1) (Tr.es t1) (Tr.sc t1) sn Nil)
-       ((Pair (Pair w2 es2) False) (ErErr (quote no_realization) (append (show_name sn) " is not an E type")))
-       ((Pair (Pair w2 es2) True)
-        (let ((t2 (tr_set_es (tr_set_w t1 w2) es2)))
-          (match (ind_ctor_names t2 sn)
-            ((Cons c Nil)
-             (match (field_roles t2 c)
-               ((Pair t3 None) (ErErr (quote no_realization) (show_name c)))
-               ((Pair t3 (Some roles))
-                (match (runtime_index roles i 0 0)
-                  (None (ErErr (quote erased_in_runtime) (append (show_name sn) ": a projection of an erased field")))
-                  ((Some (Pair j nrt)) (ErOk t3 (EMatch x1 (list (EArm (PCtor c (pvars nrt)) (EBVar (- (- nrt 1) j)))))))))))
-            (_ (ErErr (quote no_realization) (append (show_name sn) " is not a structure"))))))))))
-;; the field roles of a constructor: True for a runtime field, False for an erased one
-(fn field_roles ((t Tr) (c Name)) (Pair Tr (Option (List Bool)))
-  (match (env_find (tr_env t) c)
-    ((Some info)
-     (match info
-       ((CtorInfo _ _ _ nparams _ _)
-        (match (tr_tele t info)
-          ((Pair t1 None) (Pair t1 None))
-          ((Pair t1 (Some (Tele _ binds _ _))) (Pair t1 (Some (data_flags (drop nparams binds)))))))
-       (_ (Pair t None))))
-    (None (Pair t None))))
-(fn data_flags ((binds (List TBind))) (List Bool)
-  (measure (struct binds))
-  (match binds (Nil Nil) ((Cons (TBind _ (BData _) _) r) (Cons True (data_flags r))) ((Cons _ r) (Cons False (data_flags r)))))
-;; field i's index among the runtime fields, and their count
-(fn runtime_index ((roles (List Bool)) (i Int) (k Int) (j Int)) (Option (Pair Int Int))
-  (measure (struct roles))
-  (match roles
-    (Nil None)
-    ((Cons rt r)
-     (if (int_eq k i)
-       (if rt (Some (Pair j (+ j (count_true roles)))) None)
-       (runtime_index r i (+ k 1) (if rt (+ j 1) j))))))
-(fn count_true ((bs (List Bool))) Int
-  (measure (struct bs))
-  (match bs (Nil 0) ((Cons True r) (+ 1 (count_true r))) ((Cons _ r) (count_true r))))
-;; an application by its head
-(fn erase_app ((t Tr) (env (List ErEnt)) (head Expr) (args (List Expr)) (fuel Int)) ErRes
-  (match head
-    ((Const _ c _) (erase_const t env c args fuel))
-    ((FVar _ id)
-     (match (er_index env id 0)
-       ((Some (Pair EKVar i)) (erase_erased_args t env (EBVar i) args fuel))
-       ((Some (Pair EKIH _)) (ErErr (quote recursion_structure) "a recursive definition's executable structure is not readable off the recursor: supply the body (§7.1, §7.3)"))
-       ((Some (Pair (EKCall c roles) _))
-        (if (bool_not (int_eq (len args) (len roles))) (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)"))
-          (match (erase_roles t env roles args fuel Nil)
-            ((Pair (Some (Pair e m)) _) (ErErr e m))
-            ((Pair None (Pair t1 as)) (ErOk t1 (ECall c as))))))
-       (_ (ErErr (quote function_value) "an application whose head is not a constant (law §4.3)"))))
-    (_ (ErErr (quote function_value) "an application whose head is not a constant (law §4.3)"))))
-;; a runtime variable applied to proofs (dite's branches): the variable itself; to anything else, a function value
-(fn erase_erased_args ((t Tr) (env (List ErEnt)) (v ETerm) (args (List Expr)) (fuel Int)) ErRes
-  (measure (struct args))
-  (match args
-    (Nil (ErOk t v))
-    ((Cons a r)
-     (match (tr_infer t a)
-       ((Pair t1 (Some aty))
-        (match (w_is_prop (Tr.w t1) aty)
-          ((Pair w2 (Some True)) (erase_erased_args (tr_set_w t1 w2) env v r fuel))
-          ((Pair w2 _) (ErErr (quote function_value) "a variable applied to a runtime value (law §4.3)"))))
-       ((Pair t1 None) (ErErr (quote function_value) "a variable applied to an argument K could not type"))))))
-(fn last_component ((n Name)) Symbol (match n ((Str _ s) s) (_ (quote anon))))
-(fn erase_const ((t Tr) (env (List ErEnt)) (c Name) (args (List Expr)) (fuel Int)) ErRes
-  (let ((lc (last_component c)))
-    (if (name_eq c (n2 (quote OfNat) (quote ofNat)))
-      (match args ((Cons (Const _ nn _) (Cons (Lit _ (LitNat n)) _)) (if (name_eq nn (nm_nat)) (ErOk t (ELit (LNat n))) (ErErr (quote no_realization) "OfNat.ofNat off Nat"))) (_ (ErErr (quote no_realization) "OfNat.ofNat")))
-    (if (name_eq c (nm_nat_zero)) (ErOk t (ELit (LNat 0)))
-    (if (name_eq c (nm_nat_succ))
-      (match args
-        ((Cons x Nil) (match (erase t env x (- fuel 1)) ((ErErr e m) (ErErr e m)) ((ErOk t1 x1) (ErOk t1 (EPrim (n2 (quote Nat) (quote add)) (list x1 (ELit (LNat 1))))))))
-        (_ (ErErr (quote function_value) "Nat.succ unapplied")))
-    (if (name_eq c (nm_int_of_nat))          ; Nat and Int share the integer (INVENTORY): the coercion is the identity
-      (match args ((Cons x Nil) (erase t env x (- fuel 1))) (_ (ErErr (quote function_value) "Int.ofNat unapplied")))
-    (if (name_eq c (nm_int_neg_succ))
-      (match args
-        ((Cons (Lit _ (LitNat n)) Nil) (ErOk t (ELit (LInt (- (- 0 n) 1)))))
-        ((Cons x Nil) (match (erase t env x (- fuel 1)) ((ErErr e m) (ErErr e m)) ((ErOk t1 x1) (ErOk t1 (EPrim (n1 (quote -)) (list (EPrim (n1 (quote -)) (list (ELit (LNat 0)) x1)) (ELit (LNat 1))))))))
-        (_ (ErErr (quote function_value) "Int.negSucc unapplied")))
-    (if (name_eq c (n2 (quote Decidable) (quote decide)))
-      ;; decide p inst: Bool and Decidable have different cells (ev.shard), so the conversion is
-      ;; explicit — (if ⟦inst⟧ true false) over Init's Bool (slice 3.16 rule 3; GPT-6 R66)
-      (match args
-        ((Cons _ (Cons inst Nil))
-         (match (erase t env inst (- fuel 1))
-           ((ErErr e m) (ErErr e m))
-           ((ErOk t1 i1)
-            (match (erase t1 env (mk_const (n2 (quote Bool) (quote true)) Nil) (- fuel 1))
-              ((ErErr e m) (ErErr e m))
-              ((ErOk t2 tt)
-               (match (erase t2 env (mk_const (n2 (quote Bool) (quote false)) Nil) (- fuel 1))
-                 ((ErErr e m) (ErErr e m))
-                 ((ErOk t3 ff) (ErOk t3 (EIf i1 tt ff)))))))))
-        (_ (ErErr (quote function_value) "Decidable.decide unapplied")))
-    (if (name_eq c (n1 (quote instDecidableEqBool)))
-      ;; the decision of `b = true` is b
-      (match args
-        ((Cons a (Cons b Nil))
-         (if (is_const_named b (n2 (quote Bool) (quote true))) (erase t env a (- fuel 1))
-         (if (is_const_named a (n2 (quote Bool) (quote true))) (erase t env b (- fuel 1))
-           (ErErr (quote no_realization) "Bool's decidable equality off `= true`: no realization yet"))))
-        (_ (ErErr (quote function_value) "instDecidableEqBool unapplied")))
-    (if (bool_or (name_eq c (n1 (quote ite))) (name_eq c (n1 (quote dite))))
-      (match args
-        ((Cons _ (Cons _ (Cons h (Cons a (Cons b Nil))))) (erase_ite t env h a b (name_eq c (n1 (quote dite))) fuel))
-        (_ (ErErr (quote function_value) "ite unapplied")))
-    (if (bool_or (sym_eq lc (quote brecOn)) (bool_or (sym_eq lc (quote below)) (bool_or (sym_eq lc (quote fix)) (sym_eq lc (quote binductionOn)))))
-      (ErErr (quote recursion_structure) (append (show_name c) ": a recursive definition's executable structure is not readable off the kernel term — supply the body (§7.1, §7.3)"))
-    (if (bool_or (name_eq c (n2 (quote Classical) (quote choice))) (bool_or (name_eq c (n2 (quote Acc) (quote rec))) (bool_or (name_eq c (nm_quot_lift)) (bool_or (name_eq c (nm_quot_mk)) (name_eq c (nm_quot_ind))))))
-      (ErErr (quote noncomputable) (append (show_name c) " in a runtime position (law §4.2)"))
-    (match (env_find (tr_env t) c)
-      (None (ErErr (quote unknown_constant) (show_name c)))
-      ((Some info)
-       (match info
-         ((CtorInfo _ ind _ nparams _ _) (erase_ctor t env c ind nparams args fuel))
-         ((RecInfo _ _ nparams _ nmotives nminors _ _ _) (erase_rec t env c nparams nmotives nminors args fuel))
-         (_
-          (if (sym_eq lc (quote casesOn))
-            (erase_cases t env c args fuel)
-            (match (if (name_eq c (Tr.id t)) (Some (ESig c 0 Nil (ETVar 0))) (es_find_decl (Tr.es t) c))   ; the realized constant calling itself: a call
-              ((Some (EFn _ _ ps _ _ _)) (erase_call t env c info args fuel))
-              ((Some (ESig _ _ ps _)) (erase_call t env c info args fuel))
-              (_
-               (match (realization_of c)
-                 ((Some p) (match (erase_all t env args fuel Nil) ((Pair (Some (Pair e m)) _) (ErErr e m)) ((Pair None (Pair t1 as)) (ErOk t1 (EPrim p as)))))
-                 (None
-                  (match (prim_l_identity c)
-                    ((Some _) (match (erase_all t env args fuel Nil) ((Pair (Some (Pair e m)) _) (ErErr e m)) ((Pair None (Pair t1 as)) (ErOk t1 (EPrim c as)))))
-                    (None
-                     (match (mt_is_matcher (tr_env t) c)
-                       ((Some desc) (erase_matcher t env c desc args fuel))
-                       (None (ErErr (quote no_realization) (append (show_name c) ": no realization attached — realize it first (§7.1)")))))))))))))))))))))))))))
-;; the realization registry's Int rows (slice 3.16 rule 4): a resolved L operation → the table's
-;; entry. ev's integer operation and K's constant agree on every input for these; the
-;; decisions answer a two-constructor cell, which is all an `if` reads (decide converts)
-(fn realization_of ((c Name)) (Option Name)
-  (if (name_eq c (n2 (quote Int) (quote add))) (Some (n1 (quote +)))
-  (if (name_eq c (n2 (quote Int) (quote sub))) (Some (n1 (quote -)))
-  (if (name_eq c (n2 (quote Int) (quote mul))) (Some (n1 (quote *)))
-  (if (name_eq c (n2 (quote Int) (quote decEq))) (Some (n1 (quote int_eq)))
-  (if (name_eq c (n2 (quote Int) (quote decLt))) (Some (n1 (quote lt)))
-  (if (name_eq c (n2 (quote Int) (quote decLe))) (Some (n1 (quote le)))
-  ;; Nat's five that are the integer entry's own operation on naturals: one entry, the
-  ;; spelling the classifier gives `+ * int_eq lt le` (frontend parity stays byte for byte);
-  ;; Nat.sub, Nat.div, Nat.mod differ from `- / mod` and keep their own entries (rule 4)
-  (if (name_eq c (n2 (quote Nat) (quote add))) (Some (n1 (quote +)))
-  (if (name_eq c (n2 (quote Nat) (quote mul))) (Some (n1 (quote *)))
-  (if (name_eq c (n2 (quote Nat) (quote decEq))) (Some (n1 (quote int_eq)))
-  (if (name_eq c (n2 (quote Nat) (quote decLt))) (Some (n1 (quote lt)))
-  (if (name_eq c (n2 (quote Nat) (quote decLe))) (Some (n1 (quote le)))
-    None))))))))))))
-
-;; ---- a matcher application (slice 3.16 rule 1) ------------------------------------------------
-;; OWNER.match_N params motive scrutinee alternatives: the E match of the rows read back off
-;; the matcher's own type (mt_is_matcher has regenerated and compared it), each alternative's
-;; lambdas the row's variables — control flow in E: the scrutinee once, then the first
-;; matching row's arm only (§6.2)
-(fn erase_matcher ((t Tr) (env (List ErEnt)) (c Name) (desc MtDesc) (args (List Expr)) (fuel Int)) ErRes
-  (match desc
-    ((MtDesc np nd rows)
-     (if (bool_not (int_eq nd 1)) (ErErr (quote no_realization) (append (show_name c) ": a match on several scrutinees has no E form"))
-     (if (bool_not (int_eq (len args) (+ np (+ 2 (len rows))))) (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)"))
-       (match (nth args (+ np 1))
-         (None (ErErr (quote function_value) (show_name c)))
-         ((Some scrut)
-          (match (erase t env scrut (- fuel 1))
-            ((ErErr e m) (ErErr e m))
-            ((ErOk t1 s1)
-             (match (erase_alts t1 env rows (drop (+ np 2) args) fuel Nil)
-               ((Pair (Some (Pair e m)) _) (ErErr e m))
-               ((Pair None (Pair t2 arms)) (ErOk t2 (EMatch s1 arms)))))))))))))
-(fn erase_alts ((t Tr) (env (List ErEnt)) (rows (List (List MtPat))) (alts (List Expr)) (fuel Int) (acc (List EArm))) (Pair (Option (Pair Symbol (List Int))) (Pair Tr (List EArm)))
-  (measure (struct rows))
-  (match rows
-    (Nil (Pair None (Pair t (rev acc))))
-    ((Cons (Cons p Nil) r)
-     (match alts
-       (Nil (Pair (Some (Pair (quote function_value) "a match with too few alternatives")) (Pair t Nil)))
-       ((Cons a ar)
-        (match (mt_epat t p True 64)
-          ((Pair t1 None) (Pair (Some (Pair (quote no_realization) "a pattern on an erased field, or on a type that is not an E type")) (Pair t1 Nil)))
-          ((Pair t1 (Some (Pair ep roles)))
-           (match (erase_alt t1 env a roles fuel)
-             ((Pair (Some (Pair e m)) _) (Pair (Some (Pair e m)) (Pair t1 Nil)))
-             ((Pair None (Pair t2 body)) (erase_alts t2 env r ar fuel (Cons (EArm (match ep ((Some q) q) (None PVar)) body) acc)))))))))
-    (_ (Pair (Some (Pair (quote no_realization) "a match on several scrutinees has no E form")) (Pair t Nil)))))
-;; a row's pattern in E and its variables' runtime flags in slot order: a variable binds a
-;; slot where its position is runtime data and vanishes where it is erased; a constructor
-;; keeps its runtime fields
-(fn mt_epat ((t Tr) (p MtPat) (runtime Bool) (fuel Int)) (Pair Tr (Option (Pair (Option EPat) (List Bool))))
-  (measure fuel)
-  (if (lt fuel 1) (Pair t None)
-  (match p
-    ((MtVar _) (Pair t (Some (Pair (if runtime (Some PVar) None) (list runtime)))))
-    ((MtCtor c subs)
-     (if (bool_not runtime) (Pair t None)
-       (match (env_find (tr_env t) c)
-         ((Some (CtorInfo _ ind _ _ _ _))
-          (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind Nil)
-            ((Pair (Pair w1 es1) False) (Pair t None))
-            ((Pair (Pair w1 es1) True)
-             (match (field_roles (tr_set_es (tr_set_w t w1) es1) c)
-               ((Pair t1 None) (Pair t1 None))
-               ((Pair t1 (Some roles))
-                (match (mt_epats t1 subs roles Nil Nil (- fuel 1))
-                  ((Pair t2 None) (Pair t2 None))
-                  ((Pair t2 (Some (Pair eps vroles))) (Pair t2 (Some (Pair (Some (PCtor c eps)) vroles))))))))))
-         (_ (Pair t None))))))))
-(fn mt_epats ((t Tr) (subs (List MtPat)) (roles (List Bool)) (eps (List EPat)) (vroles (List Bool)) (fuel Int)) (Pair Tr (Option (Pair (List EPat) (List Bool))))
-  (measure (struct subs))
-  (match subs
-    (Nil (Pair t (Some (Pair (rev eps) vroles))))
-    ((Cons p r)
-     (match roles
-       (Nil (Pair t None))
-       ((Cons rt rr)
-        (match (mt_epat t p rt fuel)
-          ((Pair t1 None) (Pair t1 None))
-          ((Pair t1 (Some (Pair ep vr)))
-           (mt_epats t1 r rr (match ep ((Some q) (Cons q eps)) (None eps)) (append vroles vr) fuel))))))))
-;; one alternative: a lambda per variable of the row, then its body
-(fn erase_alt ((t Tr) (env (List ErEnt)) (a Expr) (roles (List Bool)) (fuel Int)) (Pair (Option (Pair Symbol (List Int))) (Pair Tr ETerm))
-  (measure (struct roles))
-  (match roles
-    (Nil
-     (match (erase t env a (- fuel 1))
-       ((ErErr e msg) (Pair (Some (Pair e msg)) (Pair t (EBVar 0))))
-       ((ErOk t1 b) (Pair None (Pair t1 b)))))
-    ((Cons rt r)
-     (match (open_lam t a)
-       ((Pair t1 None) (Pair (Some (Pair (quote no_realization) "a match alternative K could not open as a function of its variables")) (Pair t1 (EBVar 0))))
-       ((Pair t1 (Some (Pair fv body))) (erase_alt t1 (Cons (ErEnt (fvar_id_of fv) (if rt EKVar EKErased)) env) body r fuel))))))
-
-;; ---- the E projection of a pre-definition (slice 3.16; predef.shard) ---------------------------
-;; the binders' roles from their locals' types, the self-local a call of the function with
-;; those roles; the body erased. The function's E signature with it
-(type PdErase (PdEraseOk ESt EDecl) (PdEraseErr Symbol (List Int)))
-(fn erase_predef ((es ESt) (sc Scope) (pd PreDef)) PdErase
-  (match (predef_binds (el_w (pd_state pd)) es sc (pd_binders pd) Nil Nil)
-    ((Pair (Pair w1 es1) None) (PdEraseErr (quote no_l_identity) "a binder whose type is not an E type"))
-    ((Pair (Pair w1 es1) (Some binds))
-     (match (predef_ret w1 es1 sc pd binds)
-       ((Pair (Pair w2 es2) None) (PdEraseErr (quote no_l_identity) "a result type that is not an E type"))
-       ((Pair (Pair w2 es2) (Some rt))
-        (let ((t (tr_new w2 es2 sc (pd_name pd) (tbind_types binds)))
-              (env (append (callee_ents (pd_callees pd)) (Cons (ErEnt (fvar_id_of (pd_self pd)) (EKCall (pd_name pd) (data_flags binds))) (binder_ents binds)))))
-          (match (predef_rec t env (pd_rec pd) binds)
-            ((Pair _ (Left5r e m)) (PdEraseErr e m))
-            ((Pair t0 (Right5r rec))
-             (match (erase t0 env (pd_body pd) (budget_depth))
-               ((ErErr e m) (PdEraseErr e m))
-               ((ErOk t1 ebody) (PdEraseOk (Tr.es t1) (EFn (pd_name pd) (count_types binds) (bind_ptypes binds) rt rec ebody))))))))))))
-;; a callee-local is a call of the callee (rule 6)
-(fn callee_ents ((cs (List CalleeLocal))) (List ErEnt)
-  (measure (struct cs))
-  (match cs (Nil Nil) ((Cons (CalleeLocal fv id flags) r) (Cons (ErEnt (fvar_id_of fv) (EKCall id flags)) (callee_ents r)))))
-;; the program's recursion clause: the structural binder's position among the data binders, a
-;; measure erased over the binders
-(type Either5r (Left5r Symbol (List Int)) (Right5r ERec))
-(fn predef_rec ((t Tr) (env (List ErEnt)) (prec PdRec) (binds (List TBind))) (Pair Tr Either5r)
-  (match prec
-    (PdNone (Pair t (Right5r RecNone)))
-    ((PdStruct x)
-     (match (fvar_index (fvar_id_of x) (data_fvars binds) 0)
-       ((Some i) (Pair t (Right5r (RecStruct i))))
-       (None (Pair t (Left5r (quote bad_measure) "the structural parameter is not a data parameter")))))
-    ((PdMeasure m)
-     (match (erase t env m (budget_depth))
-       ((ErErr e msg) (Pair t (Left5r e msg)))
-       ((ErOk t1 em) (Pair t1 (Right5r (RecMeasure em))))))))
-(fn data_fvars ((binds (List TBind))) (List Expr)
-  (measure (struct binds))
-  (match binds (Nil Nil) ((Cons (TBind _ (BData _) fv) r) (Cons fv (data_fvars r))) ((Cons _ r) (data_fvars r))))
-(fn predef_binds ((w W) (es ESt) (sc Scope) (fvs (List Expr)) (tps (List Expr)) (acc (List TBind))) (Pair (Pair W ESt) (Option (List TBind)))
-  (measure (struct fvs))
-  (match fvs
-    (Nil (Pair (Pair w es) (Some (rev acc))))
-    ((Cons fv r)
-     (match (w_local_type w (fvar_id_of fv))
-       (None (Pair (Pair w es) None))
-       ((Some ty)
-        (match (binder_role w es sc ty tps)
-          ((Pair (Pair w1 es1) None) (Pair (Pair w1 es1) None))
-          ((Pair (Pair w1 es1) (Some role))
-           (predef_binds w1 es1 sc r (match role (BType (append tps (list fv))) (_ tps)) (Cons (TBind Anon role fv) acc)))))))))
-;; the result's E type: the declared type's codomain at the binders' locals
-(fn predef_ret ((w W) (es ESt) (sc Scope) (pd PreDef) (binds (List TBind))) (Pair (Pair W ESt) (Option EType))
-  (match (mt_inst_args w (pd_type pd) (pd_binders pd))
-    ((Pair w1 None) (Pair (Pair w1 es) None))
-    ((Pair w1 (Some rt)) (l_to_etype w1 es sc rt (tbind_types binds) Nil))))
-;; a constructor: its inductive E-eligible, the static and erased arguments dropped
-(fn erase_ctor ((t Tr) (env (List ErEnt)) (c Name) (ind Name) (nparams Int) (args (List Expr)) (fuel Int)) ErRes
-  (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind Nil)
-    ((Pair (Pair w1 es1) False) (ErErr (quote no_realization) (append (show_name ind) " is not an E type (§7.5)")))
-    ((Pair (Pair w1 es1) True)
-     (let ((t1 (tr_set_es (tr_set_w t w1) es1)))
-       (match (field_roles t1 c)
-         ((Pair t2 None) (ErErr (quote no_realization) (show_name c)))
-         ((Pair t2 (Some roles))
-          (if (bool_not (int_eq (len args) (+ nparams (len roles)))) (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)"))
-            (match (erase_roles t2 env roles (drop nparams args) fuel Nil)
-              ((Pair (Some (Pair e m)) _) (ErErr e m))
-              ((Pair None (Pair t3 as)) (ErOk t3 (ECtor c as)))))))))))
-(fn erase_roles ((t Tr) (env (List ErEnt)) (roles (List Bool)) (args (List Expr)) (fuel Int) (acc (List ETerm))) (Pair (Option (Pair Symbol (List Int))) (Pair Tr (List ETerm)))
-  (measure (struct roles))
-  (match roles
-    (Nil (Pair None (Pair t (rev acc))))
-    ((Cons rt r)
-     (match args
-       (Nil (Pair (Some (Pair (quote function_value) "partially applied")) (Pair t Nil)))
-       ((Cons a ar)
-        (if rt
-          (match (erase t env a (- fuel 1))
-            ((ErErr e m) (Pair (Some (Pair e m)) (Pair t Nil)))
-            ((ErOk t1 a1) (erase_roles t1 env r ar fuel (Cons a1 acc))))
-          (erase_roles t env r ar fuel acc)))))))
-;; a call of a realized constant: its binders' roles select the runtime arguments
-(fn erase_call ((t Tr) (env (List ErEnt)) (c Name) (info ConstantInfo) (args (List Expr)) (fuel Int)) ErRes
-  (match (tr_tele t info)
-    ((Pair t1 None) (ErErr (quote no_realization) (show_name c)))
-    ((Pair t1 (Some (Tele _ binds _ _)))
-     (let ((roles (data_flags binds)))
-       (if (bool_not (int_eq (len args) (len roles))) (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)"))
-         (match (erase_roles t1 env roles args fuel Nil)
-           ((Pair (Some (Pair e m)) _) (ErErr e m))
-           ((Pair None (Pair t2 as)) (ErOk t2 (ECall c as)))))))))
-;; ite / dite: an if on the decision; dite's branches applied to their proof
-(fn erase_ite ((t Tr) (env (List ErEnt)) (h Expr) (a Expr) (b Expr) (dep Bool) (fuel Int)) ErRes
-  (match (erase t env h (- fuel 1))
-    ((ErErr e m) (ErErr e m))
-    ((ErOk t1 h1)
-     (match (erase_branch t1 env a dep fuel)
-       ((ErErr e m) (ErErr e m))
-       ((ErOk t2 a1)
-        (match (erase_branch t2 env b dep fuel)
-          ((ErErr e m) (ErErr e m))
-          ((ErOk t3 b1) (ErOk t3 (EIf h1 a1 b1)))))))))
-(fn erase_branch ((t Tr) (env (List ErEnt)) (br Expr) (dep Bool) (fuel Int)) ErRes
-  (if (bool_not dep) (erase t env br (- fuel 1))
-    (match br
-      ((Lam _ n _ dom body)
-       (match (tr_local t n dom)
-         ((Pair t1 fv) (match (tr_inst1 t1 body fv) ((Pair t2 body1) (erase t2 (Cons (ErEnt (fvar_id_of fv) EKErased) env) body1 (- fuel 1)))))))
-      (_ (erase t env br (- fuel 1))))))
-;; T.casesOn params motive major minors: a match, each minor's field lambdas the pattern's variables
-(fn erase_cases ((t Tr) (env (List ErEnt)) (c Name) (args (List Expr)) (fuel Int)) ErRes
-  (match c
-    ((Str ind _)
-     (match (env_find (tr_env t) ind)
-       ((Some (InductInfo _ nparams _ _ ctors _ _ _ _))
-        (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind Nil)
-          ((Pair (Pair w1 es1) False) (ErErr (quote no_realization) (append (show_name ind) " is not an E type (§7.5)")))
-          ((Pair (Pair w1 es1) True)
-           (let ((t1 (tr_set_es (tr_set_w t w1) es1)))
-             (if (bool_not (int_eq (len args) (+ nparams (+ 2 (len ctors))))) (ErErr (quote function_value) (append (show_name c) " partially applied"))
-               (match (nth args (+ nparams 1))
-                 (None (ErErr (quote function_value) (show_name c)))
-                 ((Some major)
-                  (match (erase t1 env major (- fuel 1))
-                    ((ErErr e m) (ErErr e m))
-                    ((ErOk t2 major1)
-                     (match (if_branches t2 ctors (drop (+ nparams 2) args))
-                       ((Some (Pair else_b then_b)) (erase_ite_bodies t2 env major1 then_b else_b fuel))
-                       (None
-                     (match (erase_minors t2 env ctors (drop (+ nparams 2) args) False fuel Nil)
-                       ((Pair (Some (Pair e m)) _) (ErErr e m))
-                       ((Pair None (Pair t3 arms)) (ErOk t3 (EMatch major1 arms)))))))))))))))
-       (_ (ErErr (quote no_realization) (show_name c)))))
-    (_ (ErErr (quote no_realization) (show_name c)))))
-;; a case analysis over a two-constructor inductive whose alternatives ignore their fields is
-;; the `if` it was written as (§6.2's tag rule: the second constructor takes the then-branch;
-;; elab.shard's elab_if_cases): the two bodies, first constructor's first
-(fn if_branches ((t Tr) (ctors (List Name)) (minors (List Expr))) (Option (Pair Expr Expr))
-  (match ctors
-    ((Cons c1 (Cons c2 Nil))
-     (match minors
-       ((Cons m1 (Cons m2 Nil))
-        (match (closed_under (tr_env t) c1 m1)
-          ((Some b1) (match (closed_under (tr_env t) c2 m2) ((Some b2) (Some (Pair b1 b2))) (None None)))
-          (None None)))
-       (_ None)))
-    (_ None)))
-;; the alternative's body under its constructor's fields' lambdas, when it cites none of them
-(fn closed_under ((env CheckedEnv) (c Name) (m Expr)) (Option Expr)
-  (match (env_find env c)
-    ((Some (CtorInfo _ _ _ _ nfields _)) (strip_unused_lams m nfields))
-    (_ None)))
-(fn strip_unused_lams ((m Expr) (k Int)) (Option Expr)
-  (measure k)
-  (if (lt k 1) (if (has_loose_bvars m) None (Some m))
-    (match m ((Lam _ _ _ _ b) (strip_unused_lams b (- k 1))) (_ None))))
-(fn erase_ite_bodies ((t Tr) (env (List ErEnt)) (c ETerm) (a Expr) (b Expr) (fuel Int)) ErRes
-  (match (erase t env a (- fuel 1))
-    ((ErErr e m) (ErErr e m))
-    ((ErOk t1 a1)
-     (match (erase t1 env b (- fuel 1))
-       ((ErErr e m) (ErErr e m))
-       ((ErOk t2 b1) (ErOk t2 (EIf c a1 b1)))))))
-;; T.rec params motive minors major with no use of an induction hypothesis: a match
-(fn erase_rec ((t Tr) (env (List ErEnt)) (c Name) (nparams Int) (nmotives Int) (nminors Int) (args (List Expr)) (fuel Int)) ErRes
-  (match c
-    ((Str ind _)
-     (if (bool_not (int_eq nmotives 1)) (ErErr (quote recursion_structure) (append (show_name c) ": a nested inductive's recursor"))
-     (match (env_find (tr_env t) ind)
-       ((Some (InductInfo _ _ _ _ ctors _ _ _ _))
-        (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind Nil)
-          ((Pair (Pair w1 es1) False) (ErErr (quote no_realization) (append (show_name ind) " is not an E type (§7.5)")))
-          ((Pair (Pair w1 es1) True)
-           (let ((t1 (tr_set_es (tr_set_w t w1) es1)))
-             (if (bool_not (int_eq (len args) (+ nparams (+ 2 nminors)))) (ErErr (quote function_value) (append (show_name c) " partially applied"))
-               (match (nth args (+ nparams (+ 1 nminors)))
-                 (None (ErErr (quote function_value) (show_name c)))
-                 ((Some major)
-                  (match (erase t1 env major (- fuel 1))
-                    ((ErErr e m) (ErErr e m))
-                    ((ErOk t2 major1)
-                     (match (erase_minors t2 env ctors (take nminors (drop (+ nparams 1) args)) True fuel Nil)
-                       ((Pair (Some (Pair e m)) _) (ErErr e m))
-                       ((Pair None (Pair t3 arms)) (ErOk t3 (EMatch major1 arms)))))))))))))
-       (_ (ErErr (quote no_realization) (show_name c))))))
-    (_ (ErErr (quote no_realization) (show_name c)))))
-;; the minors in constructor order: each a lambda over the fields (and, for a recursor, the hypotheses)
-(fn erase_minors ((t Tr) (env (List ErEnt)) (ctors (List Name)) (minors (List Expr)) (with_ihs Bool) (fuel Int) (acc (List EArm))) (Pair (Option (Pair Symbol (List Int))) (Pair Tr (List EArm)))
-  (measure (struct ctors))
-  (match ctors
-    (Nil (Pair None (Pair t (rev acc))))
-    ((Cons c r)
-     (match minors
-       (Nil (Pair (Some (Pair (quote function_value) "a case analysis with too few alternatives")) (Pair t Nil)))
-       ((Cons m mr)
-        (match (field_roles t c)
-          ((Pair t1 None) (Pair (Some (Pair (quote no_realization) (show_name c))) (Pair t1 Nil)))
-          ((Pair t1 (Some roles))
-           (match (erase_minor t1 env m roles (if with_ihs (ih_count t1 c) 0) fuel)
-             ((Pair (Some (Pair e msg)) _) (Pair (Some (Pair e msg)) (Pair t1 Nil)))
-             ((Pair None (Pair t2 body))
-              (erase_minors t2 env r mr with_ihs fuel (Cons (EArm (PCtor c (pvars (count_true roles))) body) acc)))))))))))
-;; the induction hypotheses of a constructor: one per field whose type's head is its inductive
-(fn ih_count ((t Tr) (c Name)) Int
-  (match (env_find (tr_env t) c)
-    ((Some info)
-     (match info
-       ((CtorInfo _ ind _ nparams _ _)
-        (match (tr_tele t info)
-          ((Pair _ None) 0)
-          ((Pair t1 (Some (Tele _ binds _ _))) (count_recursive t1 (drop nparams binds) ind))))
-       (_ 0)))
-    (None 0)))
-(fn count_recursive ((t Tr) (binds (List TBind)) (ind Name)) Int
-  (measure (struct binds))
-  (match binds
-    (Nil 0)
-    ((Cons (TBind _ _ fv) r)
-     (+ (match (tr_type_of_local t fv) ((Some ty) (if (is_head_const ty ind) 1 0)) (None 0)) (count_recursive t r ind)))))
-;; one minor: a lambda per field (erased fields and hypotheses as erased entries), then its body
-(fn erase_minor ((t Tr) (env (List ErEnt)) (m Expr) (roles (List Bool)) (nihs Int) (fuel Int)) (Pair (Option (Pair Symbol (List Int))) (Pair Tr ETerm))
-  (measure (struct roles))
-  (match roles
-    (Nil
-     (match (open_ihs_lams t env m nihs fuel)
-       ((Pair t1 None) (Pair (Some (Pair (quote no_realization) "a case alternative K could not open as a function of its hypotheses")) (Pair t1 (EBVar 0))))
-       ((Pair t1 (Some (Pair env1 body)))
-        (match (erase t1 env1 body (- fuel 1))
-          ((ErErr e msg) (Pair (Some (Pair e msg)) (Pair t1 (EBVar 0))))
-          ((ErOk t2 b) (Pair None (Pair t2 b)))))))
-    ((Cons rt r)
-     (match (open_lam t m)
-       ((Pair t1 None) (Pair (Some (Pair (quote no_realization) "a case alternative K could not open as a function of its fields")) (Pair t1 (EBVar 0))))
-       ((Pair t1 (Some (Pair fv body))) (erase_minor t1 (Cons (ErEnt (fvar_id_of fv) (if rt EKVar EKErased)) env) body r nihs fuel))))))
-;; a lambda's binder opened as a local (a non-lambda is applied to the local — eta)
-(fn open_lam ((t Tr) (m Expr)) (Pair Tr (Option (Pair Expr Expr)))
-  (match m
-    ((Lam _ n _ dom body)
-     (match (tr_local t n dom) ((Pair t1 fv) (match (tr_inst1 t1 body fv) ((Pair t2 body1) (Pair t2 (Some (Pair fv body1))))))))
-    (_
-     (match (tr_infer t m)
-       ((Pair t1 (Some ty))
-        (match (tr_whnf t1 ty)
-          ((Pair t2 (Some (Pi _ n _ dom _)))
-           (match (tr_local t2 n dom) ((Pair t3 fv) (match (tr_apps t3 m (list fv)) ((Pair t4 m1) (Pair t4 (Some (Pair fv m1))))))))
-          ((Pair t2 _) (Pair t2 None))))
-       ((Pair t1 None) (Pair t1 None))))))
-(fn open_ihs_lams ((t Tr) (env (List ErEnt)) (m Expr) (k Int) (fuel Int)) (Pair Tr (Option (Pair (List ErEnt) Expr)))
-  (measure k)
-  (if (lt k 1) (Pair t (Some (Pair env m)))
-    (match (open_lam t m)
-      ((Pair t1 None) (Pair t1 None))
-      ((Pair t1 (Some (Pair fv body))) (open_ihs_lams t1 (Cons (ErEnt (fvar_id_of fv) EKIH) env) body (- k 1) fuel)))))

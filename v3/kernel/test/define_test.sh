@@ -38,5 +38,11 @@ fi
 dump=$("$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" --dump v3/pins/loader/route_callee/main.shard 2>&1)
 a=$(echo "$dump" | sed -n 's/^fn a //p'); b=$(echo "$dump" | sed -n 's/^fn b //p' | sed 's/(down #1)/#1/')
 if [ -z "$a" ] || [ "$a" != "$b" ]; then echo "define_test: route_callee: b's program is not a's with the call"; echo "$dump" | grep '^fn ' | head -4; fail=$((fail+1)); fi
-echo "define_test: 4 checks, $fail failed"
+# G4 (GPT-6 R65, R69): the discharged measure's account — three DISCHARGE records, nothing PENDING,
+# and the theorem that rested on count.dec_1 rests on nothing after
+out=$("$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" v3/pins/loader/discharge_measure/main.shard 2>&1)
+if [ "$(echo "$out" | grep -c '^DISCHARGE .* proved')" -ne 3 ] || echo "$out" | grep -q '^PENDING' || ! echo "$out" | grep -q '^ACCEPT .*main.count_self .* params=$'; then
+  echo "define_test: discharge_measure: the account is not empty after the discharges"; echo "$out" | grep -E '^(DISCHARGE|PENDING|REFUSE|READ-ERROR)|count_self' | head -8; fail=$((fail+1))
+fi
+echo "define_test: 5 checks, $fail failed"
 exit "$fail"

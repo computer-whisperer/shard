@@ -465,9 +465,12 @@ is `(Sort (succ u))`. A bound name shadows a constant.
   with the pointer to `@ite` with the instance; a `Bool` condition
   `c` is the proposition `c = true` with `instDecidableEqBool` (Lean's
   own elaboration; slice 3.16 rule 3 — slice 3.15 had `cond`); a
-  condition of another two-constructor inductive is the `match` it
-  abbreviates, the second constructor taking the then-branch (§6.2's
-  tag rule). `(list a b …)` is the constructor chain of the expected
+  condition of another two-constructor inductive is `T.casesOn` with
+  a constant motive, its alternatives ignoring their fields, the
+  second constructor taking the then-branch (§6.2's tag rule; the
+  erasure reads the `if` back; a one- or three-constructor type is
+  `if_type`, a view's sig type `private_if` — §6.2's refusals, the
+  elaborator's since slice 3.16 landing 3). `(list a b …)` is the constructor chain of the expected
   type's list. `(exists ((x T)) P)` is `Exists (fun (x : T) => P)`.
 - **What K sees** is the closed term with every metavariable
   instantiated; K rechecks it whole (add.shard), so a wrong assignment
@@ -2459,50 +2462,167 @@ and as a branch; G2's forcing: the chosen arm only); pins
 through `decide` and `ite (c = true)`). G1 and G8 wait for the flip:
 today a `fn` with `(le 48 c)` has no L half to compare.
 
-**Landing 3's K projection, as designed (2026-09-19, before the old
-route is deleted).** The design's "`define.shard`'s machinery
-re-pointed" is decided as Lean's own structural compilation rather
-than a port of slice 3.14's table bookkeeping, which was written over
-E patterns and a matrix the pre-definition no longer has:
+**As built, landing 3 (2026-09-19): the flip.** A `fn` is read once and
+its program is the erasure; the classifier types no function that has
+an L reading. *Decided before the old route was deleted:* the design's
+"`define.shard`'s machinery re-pointed" is Lean's own structural
+compilation rather than a port of slice 3.14's table bookkeeping, which
+was written over E patterns and a matrix the pre-definition no longer
+has.
 
-- **The matcher stays a constant in the value; its motive carries the
-  table** (Lean's `MatcherApp.addArg`). Inside a structurally
-  recursive function, a matcher application whose scrutinee is a local
-  that a course-of-values table's type mentions is re-instantiated at
-  the motive `λ s . B[s] → motive s` (the matcher's universe recomputed
-  by K), each alternative takes the refined table `B[pattern_i]` as a
-  last binder, and the application is applied to the table. Nothing is
-  unfolded and no case tree is rebuilt: the matcher K already checked
-  is the case tree.
-- **A self-call is found by type.** Tables are kept as pairs — the
-  local, and its type over an *abstract* motive `C` (the real motive is
-  constant in its argument, so `motive r` cannot tell one entry from
-  another; `C r` can). A call `f … y …` searches the tables in scope,
-  innermost first: a type that is `C y'` with `y'` the argument is the
-  entry, a `PProd` is searched through both projections, a `T.below C
-  t` is normalized by K and searched again (it unfolds exactly when
-  `t` is a constructor application). The entry is applied to the other
-  arguments. No entry: `recursion_depth`, as today, with the argument
-  named. The shape of `below` is never assumed — K's normal form is
-  read.
-- **`ite` inside a recursive function** is `Decidable.rec` with a
-  constant motive and the proof a local of each branch (today's shape,
-  so such a value keeps its hash up to its matchers); outside one it
-  stays `ite`. A measured self-call is `rec (tuple args) (f.dec_N
-  locals…)` over every local in scope at the call — binders, pattern
-  variables, `let`s (as `let`s in the statement), branch proofs.
-- **The equations** are read off the pre-definition without K's
-  reduction: the leading matcher's rows matched first-order against
-  the scrutinee — match, clash, or *stuck on a local*, which is split
-  over its constructors, in constructor order — so the leaves and
-  their numbering are today's case tree's, a fall-through row giving
-  one equation per leaf it reaches. Each is `∀ kept, f lhs = rhs` with
-  the self-local the constant, proven by `Eq.refl`.
-- **The record** gains the recursion clause as read: none, the
-  structural binder's position, or the measure elaborated at `Nat`
-  (an `Int` measure is the obstacle `measure_type`, as today). The
-  `ERec` of the program is its erasure.
-
+- **The loader** (`load_fn`): `read_predef`, then `erase_predef`'s
+  `EFn` — the program — then `define_pd`. `DEFINE` with the
+  equations; or `RUNNABLE … why=… route=typed` when K's half cannot be
+  reached (`below_unreached`, `wf_unreached`, `measure_type`,
+  `callee_runnable`) — the program is still the erasure; or a refusal
+  (`type_mismatch`, `match_not_exhaustive`, `ambiguous_name`,
+  `pattern_constructor`, `if_type`, `private_if`, `realize_descent`,
+  `realize_recursion` …: the classifier's `unsaturated`,
+  `function_value`, `nonexhaustive`, `ambiguous_head`, `pattern_type`
+  are its own, for the sources still on its route). The `RUNNABLE`
+  record carries the route (`route=typed`, `route=e_first`, none for
+  an extern or an E-only type). The matchers a body generated are
+  admitted before their owner (`ACCEPT NAME.match_N`), the auxiliaries
+  of a native inductive before the function is read again.
+- **Rule 6 as built.** `route=e_first`, the classifier's program: a
+  signature with no L reading (`why=e_only_type` — every function of
+  `v3/kernel/**` but a handful); after the signature elaborates, a
+  `(quote S)` or a `"…"` anywhere in the body (checked on the form,
+  before the body is read), a literal pattern, a name the environment
+  lacks that is no function — an operator's identity past the Init
+  prefix (`Nat.add` under `(import Init Nat)`, `ite` under a prefix
+  that stops before it, a `casesOn` not yet generated), a toolchain
+  spelling — all `why=no_l_identity`; a callee that is an extern or
+  was itself E-first by signature, `why=no_l_meaning`. A name that is
+  nothing at all is still a refusal, the classifier's
+  (`unknown_head`). **The set in the tree today:** calc's `show_nat`
+  (a `"…"`), `kernel.define.has_eq` and `confusion_reachable` (K's
+  view's `env_find` answers an E-only type); slice 3.17 empties it. A
+  **callee-local**: a callee with a program and no K constant whose
+  signature elaborates — `RUNNABLE` on the typed route, or E-first
+  for its body alone — is bound, under the name the body writes, to a
+  local of its signature's type, the signature elaborated in the
+  callee's own scope inside the caller's walk; the body is read again
+  with it, erased with the call in it, and recorded `why=callee_runnable
+  route=typed`. calc's `show_ascii`, `step` and the trace functions
+  are such (their root `show_nat`). A callee later in the file parks
+  the function (slice 3.15's retry); at the file's end the parked
+  functions are each other's callee-locals — mutual recursion is two
+  programs by erasure and no definition (`define_mutual`).
+- **The K projection** (`define.shard`, rebuilt; the E-term matrix,
+  `Known`, the table splits and `df_*` deleted). A body that never
+  cites the self-local is the value under its binders, matchers and
+  `ite` as elaborated. **Structural:** `T.brecOn` applied to `λ x
+  below others . body'` over the binders' own locals. **The matcher
+  stays a constant and its motive carries the table** (Lean's
+  `MatcherApp.addArg`): a matcher application whose scrutinee is a
+  local that a table's type mentions is re-instantiated at `λ s .
+  B[s] → motive s` — its universe K's sort of that arrow — each
+  alternative takes the refined table `B[pattern_i]` as a last
+  binder, and the application is applied to the table; nothing is
+  unfolded. **A self-call is found by type:** each table is kept with
+  its type over an *abstract* motive `C` (the real motive is constant
+  in its argument, so `motive r` cannot tell one entry from another);
+  the search reads K's normal form — `C y'` with `y'` the argument
+  (syntactically, else by K's conversion) is the entry, a `PProd` is
+  searched through both projections, a `T.below C t` unfolds exactly
+  when `t` is a constructor application — so the shape of `below` is
+  never assumed, and a self-call under a match in an argument or a
+  `let`'s value finds its entry as one in tail position does (slice
+  3.14's `recursion_depth` obstacle is gone). No entry:
+  `realize_descent`. **Measured:**
+  `WellFounded.fix` over the data binders' tuple, the body with each
+  binder the tuple's component; a self-call `rec (tuple args)
+  (f.dec_N locals…)` over every local in scope — pattern variables,
+  `let`s (as `let`s in the statement), branch proofs; the measure's
+  type is checked (`measure_type`) before `WellFounded`'s
+  reachability (`wf_unreached`). **`ite` inside a recursive function**
+  is `Decidable.rec` with a constant motive and the proof a local of
+  each branch, wherever it stands — but only where a self-call sits
+  under it: a subterm that does not cite the self-local is left as
+  elaborated. A function with a measure clause that never calls
+  itself is a plain definition, not `PENDING`.
+- **The equations** (`realize.shard`'s `pj_equations`, shared with
+  `realize`): the leading matchers' rows against the scrutinee term —
+  bind, clash (anywhere in the row: the row is gone from the
+  specialized matrix), or stuck on a universally quantified local,
+  which is split over its constructors in order — no reduction by K.
+  The leaves and the names `f.eq_N` are slice 3.13's; the statements
+  now cite the matcher constants, so their hashes moved with the
+  definitions'. **A `fn`'s leaf is stated where K decides it by
+  conversion** (the definition is checked into the walk's environment
+  first): a structural recursion whose leaf leaves the structural
+  argument a local, or keeps a self-call under a matcher still stuck,
+  unfolds only by a case analysis — that equation is I's, the leaf
+  keeps its number, and the function is defined without it
+  (`define_arg_match`; slice 3.14 left such a function `RUNNABLE`).
+  A realization's equations are all stated (`realize_wrong` is K's
+  refusal).
+- **`if` on a two-constructor inductive is `T.casesOn`**, not a
+  matcher (landing 2's as-built reversed): the erasure reads a
+  two-constructor case analysis whose alternatives ignore their
+  fields back as `EIf`, so the toolchain's `bool_and`/`bool_or` keep
+  the old front end's program byte for byte, and the equations do not
+  split on an `if`. The elaborator refuses `if_type` and `private_if`
+  itself and checks that the `Bool` bridge's constants (`Eq`,
+  `Decidable`, `instDecidableEqBool`, `Decidable.decide`) exist
+  before it cites them (a short Init prefix is `no_l_identity`, not
+  K's refusal at admission).
+- **Rule 4 as built:** `Nat.add`, `Nat.mul`, `Nat.decEq`, `Nat.decLt`,
+  `Nat.decLe` select the integer entries `+ * int_eq lt le` — one
+  operation on naturals, and the classifier's spelling, so frontend
+  parity is byte for byte; `Nat.sub`, `Nat.div`, `Nat.mod` keep their
+  own (truncating, total) entries. `define_nat_operator` is `ok`.
+- **Rule 7:** a supplied `realize` binds its signature's names to the
+  realized constant's own telescope (an erased binder has none),
+  elaborates the body at the result's L type, takes the erasure as
+  the program, checks descent on it, and states the equations of its
+  leading matchers (`Eq.refl`, or the clause's theorem); its matchers
+  are owned by `MODULE.NAME.realize` and admitted first. A `RUNNABLE`
+  callee is `no_l_meaning`, an E primitive without an L identity
+  `no_l_identity`, a callee without a realization the erasure's
+  `no_realization` (was `realize_order`). **`tr` is deleted** with
+  what only it used — the typed application through `c_type`
+  (`arg_types`, `ctor_etargs`, `apply_const_e`, the first-order
+  matching of binder types), the E-term case tree, the old equations,
+  `DefRec`/`BelowInfo`/`WfInfo` — and the tie. The erasure is
+  `kernel/erasure.shard` (with the walk's state `Tr`);
+  `realize.shard` is the supplied form, the descent check and the
+  equations; `prim_typed_identity` and `c_type` remain the
+  classifier's own.
+- **Rule 8 as built.** `(fulfills f.dec_N PROOF)` in a file outside a
+  view: PROOF read against the obligation's statement as the theorem
+  `f.dec_N.proof`, checked by K. Every closure the loader computes
+  replaces a discharged obligation by what its proof rests on (to a
+  fixpoint), and the theorem's closure is the acyclicity check: it
+  reaches `f.dec_N` — directly, through `f` (whose value cites it),
+  through a theorem, or through an obligation discharged earlier by a
+  proof that rests on this one — `fulfills_cycle`, nothing admitted.
+  On success `DISCHARGE f.dec_N proved`, and the account is
+  recomputed in the records: every `ACCEPT` that named the obligation
+  names the proof's own account instead, and a function with no open
+  obligation is no longer `PENDING` nor in any `pending=`. The
+  fixture: `count.dec_1 : ∀ p (h : ¬ p.1 = 0), InvImage … ⟨p.1 - 1,
+  p.2 + 1⟩ p`, by `Nat.sub_lt (Nat.pos_of_ne_zero h)
+  (Nat.zero_lt_succ 0)` — both in the prefix through `InvImage.wf`.
+- **The gate.** calc's spec file: 25 of 25 functions defined
+  (`parse_tail` by its measure, two obligations `PENDING`; the file's
+  Init import now reaches `InvImage.wf`); `calc_test` byte-identical
+  over 21 inputs with the erasures as the programs; frontend parity
+  byte-identical over 27 closures; the equations' names unchanged.
+  **Hashes:** every `fn`'s definition and equations moved — the value
+  cites `NAME.match_N` where it held a `T.rec` tree (the cause, for
+  all of them); K's own constants and Init's are untouched (T0).
+  Fixtures: G1 `one_meaning`, G4 `discharge_measure` (+ the account
+  read in `define_test.sh`), G7 `discharge_self_cycle` and
+  `discharge_two_cycle`, G8 `route_callee` (+ the dumps compared in
+  `define_test.sh`), G9 `match_in_impl`; G2, G3, G6 are landings 1–2's;
+  G5 opens slice 3.19. Eleven pins moved to the elaborator's reason or
+  the new outcome, each with its cause in its header.
+- **Open:** a `match` on a computed scrutinee inside a measured
+  function states its obligation without `scrutinee = pattern` (rule
+  2's narrower guarantee, unchanged); mutual recursion is not
+  compiled; dependency-directed wake-up is deferred (rule 8).
 
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
@@ -2795,7 +2915,7 @@ migration table of law §10.3 owns the name and behavior changes of the
 | `(fn NAME PARAMS RET BODY)` | carried as E; **changed** | §0: no L meaning at phase 2 — in v2 a `fn` was also the object of `unfold`/`simp` in proofs; restored at phase 3 |
 | polymorphic head `(fn (append T) …)`; bare type variables in binders auto-bound (`(xs (List T))`) | re-spelled | explicit `((T Type) …)` binders everywhere — law §5.3 departure (4); the profile kept both v2 spellings until the one-E ruling (§8, 2026-09-14): the toolchain migrates by tool at phase 3 |
 | `(extern NAME PARAMS RET)`, polymorphic externs | carried | §4; the roster is the host's (§12.4) |
-| return types unchecked (no load-time typing) | **changed at phase 3** | Stage 1 types every `fn` body against its signature; v2 code that runs only because nothing checked it will be refused then. At phase 2 unchanged |
+| return types unchecked (no load-time typing) | **changed at slice 3.16** | a `fn` whose signature has an L reading is elaborated against it (§8.4 slice 3.16 rule 6): an ill-typed body is a refusal (`type_mismatch`), never an E-first success. A `fn` whose signature has no L reading — the toolchain's own sources, until they port — is still the classifier's, unchanged |
 | `if` on `True`/`False` by constructor name | carried, generalized | §6.2's tag rule; v2's `(type Bool (False) (True))` has Init's constructor order |
 | `match`: first match wins, nested patterns, integer and `(quote S)` patterns, `_`, bare 0-ary constructors | carried in E | symbol patterns profile only; Stage 1's match compilation must keep first-match semantics (Lean's does); **in L since slice 3.16** a `match` is a generated matcher (§8.4 slice 3.16 rule 1): first match wins, nested patterns, `_` and bare field-less constructors carried; an integer or `(quote S)` pattern is `literal_pattern` there until a consumer under the naming law has one |
 | parallel `let`, no `let*` | **changed**: sequential in L and E (RULED 2026-09-12, R44) | §5.4; 0 of the tree's 30,611 `let` groups depend on parallel binding, so no source changes meaning; the bootstrap evaluator's parallel rule gives identical results on all of them until the V3 reader replaces it (slice 2) |

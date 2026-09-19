@@ -42,10 +42,11 @@
 (use kernel.reader)
 (use kernel.scope)
 (use kernel.realize)
+(use kernel.erasure)
+(use kernel.erasure.PdErase)
 (use kernel.predef)
 (use kernel.predef.Callee)
 (use kernel.predef.PdRes)
-(use kernel.realize.PdErase)
 (use kernel.define)
 (use kernel.define.DfRes)
 (use kernel.decl.InductiveType)
@@ -220,10 +221,11 @@
   (parked (List Parked))
   (pm (List (Pair Name (List Name))))
   (forms (IntMap (List (Pair Name (Pair Scope SExpr)))))
+  (discharged (List (Pair Name (List Name))))   ; a descent obligation proved (slice 3.16 rule 8): the axioms and parameters its proof rests on, which stand in its place in every closure
   (typed (List (Pair Name (Pair Scope SExpr)))))   ; the fns RUNNABLE on the typed route: a later body binds one as a callee-local (slice 3.16 rule 6)
 (fn load0 ((root (List (List Int))) (chunks (List (List Int)))) Load
   (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods Nil) (init InitNone) (tbl IMEmpty)
-             (pending Nil) (stack Nil) (recs Nil) (chunks chunks) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil)))
+             (pending Nil) (stack Nil) (recs Nil) (chunks chunks) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil)))
 (fn ld_recs ((l Load)) (List Rec) (rev (Load.recs l)))
 (fn ld_with_env ((l Load) (e CheckedEnv) (m AxMemo)) Load (with Load l (env e) (memo m)))
 (fn ld_add_mod ((l Load) (md Mod)) Load (with Load l (mods (Cons md (Load.mods l)))))
@@ -382,11 +384,28 @@
      (let ((n (decl_name d)))
        (match (axioms_of env memo n)
          ((Pair memo1 None) (PolBound n))
-         ((Pair memo1 (Some axs))
+         ((Pair memo1 (Some axs0))
+          (let ((axs (discharge_axs (Load.discharged l) axs0 (+ 1 (len (Load.discharged l))))))
           (match (outside_policy (fx_scope l f) (Fx.trusts f) (Load.params l) axs)
             (Nil (policy_pass l f env memo1 r
                    (Cons (RAccept n (Fx.module f) (match (identity_hash env n) ((Some h) h) (None 0)) axs (init_prefix l) (params_of (Load.params l) axs)) acc)))
-            (out (PolOut n out)))))))))
+            (out (PolOut n out))))))))))
+;; a closure with each discharged obligation replaced by what its proof rests on (to a
+;; fixpoint: a proof may rest on another discharged obligation)
+(fn discharge_axs ((ds (List (Pair Name (List Name)))) (axs (List Name)) (fuel Int)) (List Name)
+  (measure fuel)
+  (if (lt fuel 1) axs
+    (match (first_discharged ds axs)
+      (None axs)
+      ((Some (Pair k rest)) (discharge_axs ds (names_union (names_without axs k) rest) (- fuel 1))))))
+(fn first_discharged ((ds (List (Pair Name (List Name)))) (axs (List Name))) (Option (Pair Name (List Name)))
+  (measure (struct ds))
+  (match ds
+    (Nil None)
+    ((Cons (Pair k rest) r) (if (mem_name k axs) (Some (Pair k rest)) (first_discharged r axs)))))
+(fn names_without ((ns (List Name)) (k Name)) (List Name)
+  (measure (struct ns))
+  (match ns (Nil Nil) ((Cons n r) (if (name_eq n k) (names_without r k) (Cons n (names_without r k))))))
 
 (fn mix_recs ((f Fx) (rs (List Rec))) Fx
   (measure (struct rs))
@@ -415,6 +434,9 @@
     (if (bool_or (sym_eq h (quote fn)) (sym_eq h (quote extern))) (load_e_form l f s)
     (if (bool_and (sym_eq h (quote type)) (type_is_e_only (Load.etab l) sc (Load.env l) s)) (load_e_form l f s)   ; E only (its namespace was opened at pre-registration, as every type's)
     (if (sym_eq h (quote realize)) (Pair (load_realize l f s) f)
+    (match (if (sym_eq h (quote fulfills)) (obligation_named l sc s) None)
+      ((Some (Pair k proof)) (Pair (load_discharge l f k proof) f))
+      (None
     (match (read_decl sc (Load.env l) s)
       ((RDErr e m)
        (if (bool_and (sym_eq h (quote sig)) (Fx.view f))
@@ -426,7 +448,99 @@
       ((RDParam d kind arity)
        (match (admit_param l f d kind arity)
          ((Pair l1 f1) (Pair (add_e_twin l1 f1 s) f1))))
-      ((RDOk ds) (admit_forms l f s ds))))))))))
+      ((RDOk ds) (admit_forms l f s ds))))))))))))
+
+;; ---- a descent obligation discharged (§8.4 slice 3.16 rule 8; GPT-6 R65, R69) ---------------
+;; (fulfills f.dec_N PROOF) after the function, outside a view: PROOF elaborated against the
+;; obligation's statement and checked by K as the theorem f.dec_N.proof. Its axiom closure —
+;; every discharged obligation in it already replaced by what *its* proof rests on — is the
+;; acyclicity check: a proof that reaches its own obligation, directly, through the function
+;; (whose value cites it), through a theorem or through a second obligation, is
+;; `fulfills_cycle` and closes nothing. On success DISCHARGE, and the account is recomputed:
+;; every record that named the obligation names what the proof rests on instead, and a
+;; function with no obligation left is no longer PENDING nor anyone's pending root
+(fn obligation_named ((l Load) (sc Scope) (s SExpr)) (Option (Pair Name SExpr))
+  (match s
+    ((SList (Cons _ (Cons (SSym x) (Cons proof Nil))))
+     (match (name_of_sym x)
+       (None None)
+       ((Some n)
+        (match (resolve (cx0 sc (Load.env l) Nil Nil) n)
+          ((RName k _) (if (is_obligation (Load.recs l) k) (Some (Pair k proof)) None))
+          (_ None)))))
+    (_ None)))
+(fn is_obligation ((rs (List Rec)) (k Name)) Bool
+  (measure (struct rs))
+  (match rs
+    (Nil False)
+    ((Cons (RParam n kind _) r) (if (bool_and (name_eq n k) (sym_eq kind (quote obligation))) True (is_obligation r k)))
+    ((Cons _ r) (is_obligation r k))))
+(fn load_discharge ((l Load) (f Fx) (k Name) (proof SExpr)) Load
+  (if (has_discharged (Load.discharged l) k) (ld_rec l (RClassify k (quote fulfills_twice) (append (show_name k) " is already discharged")))
+  (match (env_find (Load.env l) k)
+    (None l)
+    ((Some info)
+     (let ((thm (name_append k (n1 (quote proof)))))
+       (match (read_discharge (fx_scope l f) (Load.env l) thm (ci_type info) proof)
+         ((RDErr e m) (ld_rec l (RReadErr (fx_file f) e m)))
+         ((RDPending nn r) (ld_rec (ld_add_pending l nn) (RPending nn r)))
+         ((RDOk ds)
+          (match (admit_decls (Load.env l) ds)
+            ((AdRefused subj reason) (ld_rec l (RRefuse subj reason)))
+            ((AdOk env1)
+             (match (policy_pass l f env1 (Load.memo l) ds Nil)
+               ((PolBound n) (ld_rec l (RLoadErr (fx_file f) (quote closure_bound) (show_name n))))
+               ((PolOut n out) (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty)) (RPolicy n out)))
+               ((PolOk memo1 recs)
+                (let ((rests (thm_closure_of recs thm)))
+                  (if (mem_name k rests)
+                    (ld_rec l (RClassify k (quote fulfills_cycle) (append "the proof of " (append (show_name k) " rests on the obligation it discharges — through the function, a theorem or another obligation; nothing is closed"))))
+                    (let ((l1 (recs_add (ld_with_tbl (ld_with_env l env1 memo1) (tbl_add_all (Load.tbl l) (decls_declare env1 ds) (Fx.module f))) recs)))
+                      (settle_discharge (ld_rec (with Load l1 (discharged (Cons (Pair k rests) (Load.discharged l1)))) (RDischarge k (quote proved))) k rests)))))))))
+         (_ l)))))))
+(fn has_discharged ((ds (List (Pair Name (List Name)))) (k Name)) Bool
+  (measure (struct ds))
+  (match ds (Nil False) ((Cons (Pair n _) r) (if (name_eq n k) True (has_discharged r k)))))
+(fn thm_closure_of ((recs (List Rec)) (n Name)) (List Name)
+  (measure (struct recs))
+  (match recs
+    (Nil Nil)
+    ((Cons (RAccept m _ _ axs _ _) r) (if (name_eq m n) axs (thm_closure_of r n)))
+    ((Cons _ r) (thm_closure_of r n))))
+;; the account recomputed: k replaced in every ACCEPT record's closure and parameters; its
+;; function, once none of its obligations is open, out of every pending= and no longer PENDING
+(fn settle_discharge ((l Load) (k Name) (rests (List Name))) Load
+  (let ((rs1 (rewrite_closures (Load.recs l) k rests (Load.params l))) (g (obligation_owner k)))
+    (if (open_obligation rs1 g (Load.discharged l)) (ld_with_recs_raw l rs1)
+      (with Load (ld_with_recs_raw l (drop_root rs1 g)) (pm (pm_without (Load.pm l) g))))))
+(fn obligation_owner ((n Name)) Name (match n ((Str p _) p) ((Num p _) p) (Anon Anon)))
+(fn rewrite_closures ((rs (List Rec)) (k Name) (rests (List Name)) (params (List Name))) (List Rec)
+  (measure (struct rs))
+  (match rs
+    (Nil Nil)
+    ((Cons (RAccept n m h axs i ps) r)
+     (Cons (if (mem_name k axs) (let ((axs1 (names_union (names_without axs k) rests))) (RAccept n m h axs1 i (params_of params axs1))) (RAccept n m h axs i ps))
+           (rewrite_closures r k rests params)))
+    ((Cons x r) (Cons x (rewrite_closures r k rests params)))))
+;; an obligation of g — a parameter g.dec_N — not yet discharged
+(fn open_obligation ((rs (List Rec)) (g Name) (ds (List (Pair Name (List Name))))) Bool
+  (measure (struct rs))
+  (match rs
+    (Nil False)
+    ((Cons (RParam n kind _) r)
+     (if (bool_and (sym_eq kind (quote obligation)) (bool_and (name_eq (obligation_owner n) g) (bool_not (has_discharged ds n)))) True (open_obligation r g ds)))
+    ((Cons _ r) (open_obligation r g ds))))
+(fn drop_root ((rs (List Rec)) (g Name)) (List Rec)
+  (measure (struct rs))
+  (match rs
+    (Nil Nil)
+    ((Cons (RPending n why) r) (if (bool_and (name_eq n g) (sym_eq why (quote measure))) (drop_root r g) (Cons (RPending n why) (drop_root r g))))
+    ((Cons (RDefine n eqs roots) r) (Cons (RDefine n eqs (names_without roots g)) (drop_root r g)))
+    ((Cons (RRealize n kind eqs roots) r) (Cons (RRealize n kind eqs (names_without roots g)) (drop_root r g)))
+    ((Cons x r) (Cons x (drop_root r g)))))
+(fn pm_without ((pm (List (Pair Name (List Name)))) (g Name)) (List (Pair Name (List Name)))
+  (measure (struct pm))
+  (match pm (Nil Nil) ((Cons (Pair n roots) r) (Cons (Pair n (names_without roots g)) (pm_without r g)))))
 ;; L declarations admitted, checked against the policy, recorded; a type's or a sig's E twin
 (fn admit_forms ((l Load) (f Fx) (s SExpr) (ds (List Declaration))) (Pair Load Fx)
   (match (admit_core l f ds)
@@ -530,6 +644,13 @@
   (match (classify_form (Load.etab l1) (fx_scope l1 f) (Load.env l1) s)
     ((CErr e m) (Pair (ld_rec l1 (RClassify (form_name (fx_scope l1 f) s) e m)) f))
     ((COk d) (Pair (ld_rec (ld_with_e l1 (es_add_decl (Load.etab l1) d)) (RRun (form_head s) (edecl_name d) why route)) f))))
+;; the classifier's program for a fn whose signature did elaborate: a later body may still bind
+;; it as a callee-local and stay on the typed route (rule 6)
+(fn load_e_sig ((l1 Load) (f Fx) (s SExpr) (why Symbol)) (Pair Load Fx)
+  (match (load_e_first l1 f s why (quote e_first))
+    ((Pair l2 f2) (Pair (if (ld_last_runnable l2) (ld_add_typed l2 (form_name (fx_scope l1 f) s) (fx_scope l1 f) s) l2) f2))))
+(fn ld_last_runnable ((l Load)) Bool
+  (match (ld_recs_head l) ((Some (RRun _ _ _ _)) True) (_ False)))
 ;; one attempt at a fn. A callee that is not loaded yet or is itself parked (the elaborator's
 ;; unknown_constant on a function head of the E table without a declaration) parks the fn — no
 ;; record yet; it is retried after every later fn and settled at the file's end (slice 3.15's
@@ -542,7 +663,7 @@
   (measure cfuel)
   (let ((sc (fx_scope l1 f)) (k (form_name (fx_scope l1 f) s)))
     (match (read_predef sc (Load.env l1) s callees)
-      ((PdSkip r _) (load_e_first l1 f s (if (sym_eq r (quote no_l_identity)) r (quote e_only_type)) (quote e_first)))
+      ((PdSkip _ _) (load_e_first l1 f s (quote e_only_type) (quote e_first)))
       ((PdErr r m)
        (if (sym_eq r (quote unknown_constant))
          ;; a name the environment lacks: a function still to come parks the fn; a RUNNABLE one
@@ -552,14 +673,14 @@
          (match (callee_state l1 sc m)
            (CsPark (Pair (ld_with_parked l1 (append (Load.parked l1) (list (Parked k s (quote mutual_recursion) m)))) f))
            ((CsTyped c) (if (lt cfuel 1) (Pair (ld_rec l1 (RClassify k (quote define_loop) "the callee-locals did not settle")) f) (load_fn_with l1 f s fuel (append callees (list c)) (- cfuel 1))))
-           (CsRunnable (load_e_first l1 f s (quote no_l_meaning) (quote e_first)))
-           (CsNone (load_e_first l1 f s (quote no_l_identity) (quote e_first))))
-         (if (no_l_reading r) (load_e_first l1 f s (quote no_l_identity) (quote e_first))
+           (CsRunnable (load_e_sig l1 f s (quote no_l_meaning)))
+           (CsNone (load_e_sig l1 f s (quote no_l_identity))))
+         (if (no_l_reading r) (load_e_sig l1 f s (quote no_l_identity))
            (Pair (ld_rec l1 (RClassify k r m)) f))))
       ((PdOk pd)
        (match (erase_predef (Load.etab l1) sc pd)
          ((PdEraseErr r m)
-          (if (no_l_reading r) (load_e_first l1 f s (quote no_l_identity) (quote e_first))
+          (if (no_l_reading r) (load_e_sig l1 f s (quote no_l_identity))
             (Pair (ld_rec l1 (RClassify k r m)) f)))
          ((PdEraseOk es1 d)
           (match (define_pd es1 sc pd)

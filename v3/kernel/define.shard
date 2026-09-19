@@ -29,6 +29,9 @@
 (use kernel.prelude)
 (use kernel.scope)
 (use kernel.realize)
+(use kernel.erasure)
+(use kernel.erasure.Field)
+(use kernel.erasure.TrRes)
 (use kernel.util)
 (use kernel.elab el_w)
 (use kernel.matcher)
@@ -42,6 +45,7 @@
 (use kernel.expr.BinderInfo)
 (use kernel.expr.Expr)
 (use kernel.level.Level)
+(use kernel.name.Name)
 (use kernel.prelude.Bool)
 (use kernel.prelude.List)
 (use kernel.prelude.Option)
@@ -53,10 +57,7 @@
 (use kernel.matcher.MtPt)
 (use kernel.predef.CalleeLocal)
 (use kernel.predef.PdRec)
-(use kernel.realize.Either2)
 (use kernel.realize.Either3)
-(use kernel.realize.Field)
-(use kernel.realize.TrRes)
 
 ;; ---- the verdicts ----------------------------------------------------------------------------
 ;; DfSkip: the function has no L meaning here (RUNNABLE, the obstacle named); DfErr: it should,
@@ -113,9 +114,14 @@
                     (let ((measured (bool_and recursive (pj_is_measure (pd_rec pd))))
                           (dd (DefnDecl (ConstantVal k Nil (pd_type pd)) value (HRegular (def_height (tr_env t1) value)) Safe (list k))))
                       (if (bool_or measured (bool_not (has_eq (tr_env t1)))) (DfOk (Tr.es t1) (tr_obls t1) dd Nil measured)   ; WellFounded.fix does not compute through Acc.rec (I's); no Eq in scope: the definition alone
-                        (match (pj_equations t1 (mk_const k Nil) selfid (pd_binders pd) rl (pd_body pd) Nil True)
-                          ((Pair _ (Left3 e m)) (DfErr e m))
-                          ((Pair t2 (Right3 eqs)) (DfOk (Tr.es t2) (tr_obls t2) dd eqs measured))))))))))))))))))
+                        ;; the definition checked into the walk's environment, so each leaf's
+                        ;; equation is stated only where K decides it by conversion (pj_equation_decls)
+                        (match (w_admit (Tr.w t1) dd)
+                          ((Pair _ (Some why)) (DfErr (quote definition_refused) (append (show_name k) (append ": K refused the definition (" (append (chars_of_sym why) ")")))))
+                          ((Pair w2 None)
+                           (match (pj_equations (tr_set_w t1 w2) (mk_const k Nil) selfid (pd_binders pd) rl (pd_body pd) Nil True)
+                             ((Pair _ (Left3 e m)) (DfErr e m))
+                             ((Pair t2 (Right3 eqs)) (DfOk (Tr.es t2) (tr_obls t2) dd eqs measured))))))))))))))))))))
 (fn pj_is_measure ((r PdRec)) Bool (match r ((PdMeasure _) True) (_ False)))
 ;; the type binders (a local whose type is a sort) and the data binders, in order
 (fn pj_split_binders ((w W) (bs (List Expr)) (tps (List Expr)) (data (List Expr))) (Pair (List Expr) (List Expr))
@@ -328,6 +334,90 @@
        ((Pair t2 hty)
         (match (tr_local t2 (n1 (quote h)) hty)
           ((Pair t3 h) (match (tr_pis t3 (list q h) rl) ((Pair t4 e) (Pair t4 e))))))))))
+
+;; ---- the tuple of a measure's arguments, the recursor applied (moved from realize.shard) --------------
+(fn scope_fvars ((scope (List (Pair Bool Expr)))) (List Expr)
+  (measure (struct scope))
+  (match scope (Nil Nil) ((Cons (Pair _ fv) r) (Cons fv (scope_fvars r)))))
+(fn scope_lambda_fvars ((scope (List (Pair Bool Expr)))) (List Expr)
+  (measure (struct scope))
+  (match scope (Nil Nil) ((Cons (Pair True _) r) (scope_lambda_fvars r)) ((Cons (Pair False fv) r) (Cons fv (scope_lambda_fvars r)))))
+;; the parameter tuple: one parameter is itself, more a right-nested PProd (§8.4, slice 3.14)
+(fn wf_tuple ((t Tr) (ltys (List Expr)) (vals (List Expr))) (Pair Tr Expr)
+  (measure (struct vals))
+  (match vals
+    (Nil (Pair t (mk_const (nm_punit_unit) (list (level_one)))))
+    ((Cons v Nil) (Pair t v))
+    ((Cons v r)
+     (match ltys
+       ((Cons ty tr0)
+        (match (wf_tuple t tr0 r)
+          ((Pair t1 rest)
+           (match (wf_tuple_type t1 tr0)
+             ((Pair t2 restty)
+              (match (tr_apps t2 (mk_const (nm_pprod_mk) (list (level_one) (level_one))) (list ty restty v rest))
+                ((Pair t3 e) (Pair t3 e))))))))
+       (Nil (Pair t v))))))
+(fn wf_tuple_type ((t Tr) (ltys (List Expr))) (Pair Tr Expr)
+  (measure (struct ltys))
+  (match ltys
+    (Nil (Pair t (mk_const (n1 (quote PUnit)) (list (level_one)))))
+    ((Cons ty Nil) (Pair t ty))
+    ((Cons ty r)
+     (match (wf_tuple_type t r)
+       ((Pair t1 restty) (match (tr_apps t1 (mk_const (n1 (quote PProd)) (list (level_one) (level_one))) (list ty restty)) ((Pair t2 e) (Pair t2 e))))))))
+;; the k-th component of a tuple of n: (p.2)^k .1, the last (p.2)^(n-1)
+(fn wf_proj ((p Expr) (n Int) (k Int)) Expr
+  (measure k)
+  (if (int_eq n 1) p
+  (if (lt k 1) (if (int_eq n 1) p (mk_proj (n1 (quote PProd)) 0 p))
+    (wf_proj_rest (mk_proj (n1 (quote PProd)) 1 p) (- n 1) (- k 1)))))
+(fn wf_proj_rest ((p Expr) (n Int) (k Int)) Expr
+  (measure k)
+  (if (int_eq n 1) p
+  (if (lt k 1) (mk_proj (n1 (quote PProd)) 0 p)
+    (wf_proj_rest (mk_proj (n1 (quote PProd)) 1 p) (- n 1) (- k 1)))))
+(fn nm_pprod_mk () Name (n2 (quote PProd) (quote mk)))
+(fn nm_punit_unit () Name (n2 (quote PUnit) (quote unit)))
+;; for each constructor in order, the first arm that covers it: a flat constructor pattern
+;; (its sub-patterns variables) or a variable arm; None for a nested or numeral pattern
+;; T.rec params motive minors major — the motive constant, each minor a lambda over the
+;; constructor's fields and induction hypotheses
+;; the recursor applied: the parameters, a constant motive over the result type, the minors, the major
+(fn rec_app ((t Tr) (ind Name) (ls (List Level)) (largs (List Expr)) (rty Expr) (minors (List Expr)) (major Expr)) TrRes
+  (match (tr_apps t (mk_const ind ls) largs)
+    ((Pair t2 tyapp)
+     (match (tr_local t2 (n1 (quote x)) tyapp)
+       ((Pair t3 mv)
+        (match (tr_lams t3 (list mv) rty)
+          ((Pair t4 motive) (rec_app_dep t4 (level_one) ind ls largs motive minors major))))))))
+;; the recursor applied with a given motive at the motive's universe (slice 3.14: a table
+;; generalized in the motive; below's motive into Sort 1 at universe 2)
+(fn rec_app_dep ((t Tr) (u Level) (ind Name) (ls (List Level)) (largs (List Expr)) (motive Expr) (minors (List Expr)) (major Expr)) TrRes
+  (match (tr_apps t (mk_const (Str ind (quote rec)) (Cons u ls)) (append largs (Cons motive (append minors (list major)))))
+    ((Pair t5 e) (TrOk t5 e))))
+;; the recursor's checks tr_rec makes, for define.shard's splits
+(fn rec_usable ((t Tr) (ind Name) (ls (List Level))) (Option (Pair Symbol (List Int)))
+  (match (env_find (tr_env t) (Str ind (quote rec)))
+    (None (Some (Pair (quote equation_form) (append (show_name ind) " has no recursor"))))
+    ((Some rinfo)
+     (match rinfo
+       ((RecInfo _ _ _ _ nmotives _ _ _ _)
+        (if (bool_not (int_eq nmotives 1)) (Some (Pair (quote equation_form) (append (show_name ind) ": a nested inductive's recursor has no Stage-0 translation")))
+        (if (bool_not (int_eq (len (ci_lparams rinfo)) (+ 1 (len ls)))) (Some (Pair (quote equation_form) (append (show_name ind) " eliminates into Prop only")))
+          None)))
+       (_ (Some (Pair (quote equation_form) (append (show_name ind) ": no recursor"))))))))
+;; the minors in constructor order; the result type from the expected E type, else inferred from
+;; the first arm's body; the induction hypotheses opened at that type after the body (unused there)
+(type Either2 (Left2 Symbol (List Int)) (Right2 (Pair (List Expr) Expr)))
+;; one induction hypothesis per recursive field: a local of the motive's (constant) result type
+(fn open_ihs ((t Tr) (fields (List Field)) (rty Expr) (acc (List Expr))) (Pair Tr (List Expr))
+  (measure (struct fields))
+  (match fields
+    (Nil (Pair t (rev acc)))
+    ((Cons (Field _ _ True) r)
+     (match (tr_local t (n1 (quote ih)) rty) ((Pair t1 fv) (open_ihs t1 r rty (Cons fv acc)))))
+    ((Cons _ r) (open_ihs t r rty acc))))
 
 ;; ---- the walk over the body -------------------------------------------------------------------------
 ;; only a subterm that cites the self-local is rebuilt: a self-call by the recursion's rule; a
