@@ -29,5 +29,14 @@ check v3/examples/calc/calc_spec.shard \
   'DEFINE examples.calc.calc.eval equations=examples.calc.calc.eval.eq_1,examples.calc.calc.eval.eq_2,examples.calc.calc.eval.eq_3' \
   'DEFINE examples.calc.calc.parse_rest equations=' \
   'ACCEPT examples.calc.calc_spec.eval_add '
-echo "define_test: 2 files, $fail failed"
+# calc's spec file whole (slice 3.16's gate): every function defined, the measured one pending
+out=$("$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" v3/examples/calc/calc_spec.shard 2>&1)
+if ! echo "$out" | grep -q 'runnable 0  refused 0  pending 1  realized 0  defined 25  errors 0'; then
+  echo "define_test: calc_spec is not 25 of 25 defined"; echo "$out" | grep -E '^(RUNNABLE|REFUSE|LOAD:)' | head -8; fail=$((fail+1))
+fi
+# G8 (GPT-6 R70): a RUNNABLE callee added to a body changes the call and nothing else in the program
+dump=$("$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" --dump v3/pins/loader/route_callee/main.shard 2>&1)
+a=$(echo "$dump" | sed -n 's/^fn a //p'); b=$(echo "$dump" | sed -n 's/^fn b //p' | sed 's/(down #1)/#1/')
+if [ -z "$a" ] || [ "$a" != "$b" ]; then echo "define_test: route_callee: b's program is not a's with the call"; echo "$dump" | grep '^fn ' | head -4; fail=$((fail+1)); fi
+echo "define_test: 4 checks, $fail failed"
 exit "$fail"

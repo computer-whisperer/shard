@@ -27,6 +27,7 @@
 (use kernel.sexpr)
 (use kernel.util)
 (use kernel.elab.El)
+(use kernel.kw.W)
 (use kernel.elab.ERes)
 (use kernel.elab.FinRes)
 (use kernel.expr.BinderInfo)
@@ -42,20 +43,27 @@
 ;; `(measure M)` — M elaborated over the binders (K's projection wants a Nat: define.shard)
 (type PdRec (PdNone) (PdStruct Expr) (PdMeasure Expr))
 ;; identity, the declared type (closed), the binders' locals in order, the self-local, the
-;; body over them (finished: no metavariable), the state, the recursion clause
-(type PreDef (PreDef Name Expr (List Expr) Expr Expr El PdRec))
+;; body over them (finished: no metavariable), the state, the recursion clause, the callee-locals
+;; a RUNNABLE callee — a function with a program and no K constant — stands in a body as a
+;; local of its signature's type (rule 6): the name as the body writes it, its identity, the
+;; scope its form was read in, the form
+(type Callee (Callee Name Name Scope SExpr))
+;; a callee-local: the local, the callee's identity, its binders' runtime flags (a type binder False)
+(type CalleeLocal (CalleeLocal Expr Name (List Bool)))
+(type PreDef (PreDef Name Expr (List Expr) Expr Expr El PdRec (List CalleeLocal)))
 (type PdRes (PdOk PreDef) (PdSkip Symbol (List Int)) (PdErr Symbol (List Int)))
-(fn pd_name ((p PreDef)) Name (match p ((PreDef n _ _ _ _ _ _) n)))
-(fn pd_type ((p PreDef)) Expr (match p ((PreDef _ t _ _ _ _ _) t)))
-(fn pd_binders ((p PreDef)) (List Expr) (match p ((PreDef _ _ bs _ _ _ _) bs)))
-(fn pd_self ((p PreDef)) Expr (match p ((PreDef _ _ _ s _ _ _) s)))
-(fn pd_body ((p PreDef)) Expr (match p ((PreDef _ _ _ _ b _ _) b)))
-(fn pd_state ((p PreDef)) El (match p ((PreDef _ _ _ _ _ e _) e)))
-(fn pd_rec ((p PreDef)) PdRec (match p ((PreDef _ _ _ _ _ _ r) r)))
+(fn pd_name ((p PreDef)) Name (match p ((PreDef n _ _ _ _ _ _ _) n)))
+(fn pd_type ((p PreDef)) Expr (match p ((PreDef _ t _ _ _ _ _ _) t)))
+(fn pd_binders ((p PreDef)) (List Expr) (match p ((PreDef _ _ bs _ _ _ _ _) bs)))
+(fn pd_self ((p PreDef)) Expr (match p ((PreDef _ _ _ s _ _ _ _) s)))
+(fn pd_body ((p PreDef)) Expr (match p ((PreDef _ _ _ _ b _ _ _) b)))
+(fn pd_state ((p PreDef)) El (match p ((PreDef _ _ _ _ _ e _ _) e)))
+(fn pd_rec ((p PreDef)) PdRec (match p ((PreDef _ _ _ _ _ _ r _) r)))
+(fn pd_callees ((p PreDef)) (List CalleeLocal) (match p ((PreDef _ _ _ _ _ _ _ c) c)))
 (fn pd_aux ((p PreDef)) (List Declaration) (el_aux (pd_state p)))
 
 ;; (fn NAME BINDERS RET (measure M)? BODY)
-(fn read_predef ((sc Scope) (env CheckedEnv) (s SExpr)) PdRes
+(fn read_predef ((sc Scope) (env CheckedEnv) (s SExpr) (callees (List Callee))) PdRes
   (match s
     ((SList (Cons _ (Cons (SSym x) (Cons (SList bs) (Cons ret rest)))))
      (match (name_of_sym x)
@@ -77,7 +85,10 @@
                      ((Pair e3 (FinOk T))
                       (match (fn_rec (el_with_etype e3 False) (fn_measure rest) fvars)
                         ((Pair _ (Left5 r m)) (PdErr r m))
-                        ((Pair e3b (Right5 rec))
+                        ((Pair e3a (Right5 rec))
+                         (match (bind_callees e3a env callees Nil)
+                           ((Pair _ None) (PdErr (quote no_l_identity) "a callee's signature has no L reading"))
+                           ((Pair e3b (Some cls))
                          (match (el_local e3b short T BDefault)
                            ((Pair e4 self)
                             (match (elab e4 body (Some rt))
@@ -85,7 +96,7 @@
                               ((EOk e5 v _)
                                (match (el_finish e5 v)
                                  ((FinErr r m) (PdErr r m))
-                                 ((FinOk b) (PdOk (PreDef n T fvars self b e5 rec)))))))))))))))))))))))
+                                 ((FinOk b) (PdOk (PreDef n T fvars self b e5 rec cls)))))))))))))))))))))))))
     (_ (PdErr (quote bad_shape) "(fn NAME ((x TYPE)…) RET (measure M)? BODY)"))))
 ;; the body is the last form; a (measure …) may stand before it
 (fn fn_body ((rest (List SExpr))) (Option SExpr)
@@ -93,6 +104,32 @@
     ((Cons b Nil) (Some b))
     ((Cons (SList (Cons (SSym m) _)) (Cons b Nil)) (if (sym_eq m (quote measure)) (Some b) None))
     (_ None)))
+;; each callee's signature elaborated in its own scope — inside this walk, so its terms are
+;; this state's — and the name as written bound to a local of that type
+(fn bind_callees ((e El) (env CheckedEnv) (cs (List Callee)) (acc (List CalleeLocal))) (Pair El (Option (List CalleeLocal)))
+  (measure (struct cs))
+  (match cs
+    (Nil (Pair e (Some (rev acc))))
+    ((Cons (Callee written id csc form) r)
+     (match form
+       ((SList (Cons _ (Cons _ (Cons (SList bs) (Cons ret _)))))
+        (match (fn_binders (el_with_etype (el_set_cx e (cx0 csc env Nil Nil)) True) bs Nil)
+          ((Pair None _) (Pair e None))
+          ((Pair (Some (Pair e1 fvars)) _)
+           (match (elab_type e1 ret)
+             ((EErr _ _) (Pair e None))
+             ((EOk e2 rt _)
+              (match (close_pis e2 fvars rt)
+                ((Pair _ (FinErr _ _)) (Pair e None))
+                ((Pair e3 (FinOk T))
+                 (match (el_local (el_set_cx e3 (el_cx e)) written T BDefault)
+                   ((Pair e4 fv) (bind_callees e4 env r (Cons (CalleeLocal fv id (sort_flags (el_w e3) fvars)) acc)))))))))))
+       (_ (Pair e None))))))
+(fn sort_flags ((w W) (fvs (List Expr))) (List Bool)
+  (measure (struct fvs))
+  (match fvs
+    (Nil Nil)
+    ((Cons fv r) (Cons (match (w_local_type w (fvar_id_of fv)) ((Some (Sort _ _)) False) (_ True)) (sort_flags w r)))))
 ;; a `(quote S)` or a "…" anywhere in the body: E's Symbol and byte-list literals (slice 3.17)
 (fn has_e_literal ((s SExpr)) Bool
   (measure (struct s))

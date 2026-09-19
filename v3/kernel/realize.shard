@@ -15,7 +15,11 @@
 (use kernel.decl)
 (use kernel.erase)
 (use kernel.kw)
-(use kernel.elab el_w)
+(use kernel.elab El el_w el0 el_set_w el_set_cx el_cx el_aux elab el_finish)
+(use kernel.elab.El)
+(use kernel.elab.ERes)
+(use kernel.elab.FinRes)
+(use kernel.predef.Either5)
 (use kernel.etable)
 (use kernel.expr)
 (use kernel.level)
@@ -27,7 +31,6 @@
 (use kernel.scope)
 (use kernel.sexpr)
 (use kernel.util)
-(use kernel.classify.CRes)
 (use kernel.classify.PmRes)
 (use kernel.classify.TyRes)
 (use kernel.decl.ConstantInfo)
@@ -38,6 +41,7 @@
 (use kernel.erase.Tele)
 (use kernel.erase.TeleRes)
 (use kernel.kw.W)
+(use kernel.etable.EHit)
 (use kernel.etable.EInfo)
 (use kernel.etable.ESt)
 (use kernel.expr.BinderInfo)
@@ -45,7 +49,9 @@
 (use kernel.expr.Literal)
 (use kernel.level.Level)
 (use kernel.matcher.MtDesc)
+(use kernel.matcher.MtInd)
 (use kernel.matcher.MtPat)
+(use kernel.predef.CalleeLocal)
 (use kernel.predef.PdRec)
 (use kernel.name.Name)
 (use kernel.prelude.Bool)
@@ -59,81 +65,29 @@
 (use kernel.prog.ERec)
 (use kernel.prog.ETerm)
 (use kernel.prog.EType)
-(use kernel.prog.PrimId)
 (use kernel.scope.Resolved)
 (use kernel.scope.Scope)
 (use kernel.scope.Vis)
 (use kernel.sexpr.SExpr)
 
-;; ---- the translation state ------------------------------------------------------------
-;; the walk (environment, locals, checker state), the E table, the scope, the realized
-;; constant's identity and its type parameters' locals (an ETVar of the body is one of them)
-(record Tr (w W) (es ESt) (sc Scope) (id Name) (tps (List Expr)) (rec (Option DefRec)))
-;; the definition context of a `fn` being defined (define.shard, §8.4): the structural
-;; parameter's position among the data parameters (-1 when none), the induction hypotheses of
-;; the top split by the recursive field's local, the parameter types, and whether the constant
-;; exists yet (True while the equations are stated, after the definition is admitted)
-(record DefRec (pos Int) (ihs (List (Pair Int Expr))) (tabs (List (Pair Int Expr))) (ptypes (List EType)) (defined Bool)
-  (below (Option BelowInfo)) (wf (Option WfInfo)) (scope (List (Pair Bool Expr))) (obls (List Declaration)))
-;; the course-of-values context (§8.4, slice 3.14): the inductive, its below constant at the
-;; solved levels, the type arguments, the top motive `λ x . Π others, RET` — a variable's table
-;; (tabs) is its `T.below motive v`, a recursive field's entry (ihs) the value projected from it
-(record BelowInfo (ind Name) (belowc Name) (ls (List Level)) (largs (List Expr)) (motive Expr))
-;; the well-founded context (slice 3.14): the functional's `rec`, the parameter tuple `p`, the
-;; measure `m` over the tuple, the relation `InvImage rel m`, the tuple's component types
-(record WfInfo (recl Expr) (p Expr) (m Expr) (rel Expr) (ltys (List Expr)))
-(fn tr_new ((w W) (es ESt) (sc Scope) (id Name) (tps (List Expr)) (rec (Option DefRec))) Tr
-  (make Tr (w w) (es es) (sc sc) (id id) (tps tps) (rec rec)))
+;; ---- the walk's state -------------------------------------------------------------------
+;; the walk (environment, locals, checker state), the E table, the scope, the realized or
+;; defined constant's identity and its type parameters' locals (an ETVar of the body is one of
+;; them); for a definition (define.shard) the value once built and the descent obligations
+;; collected on the way, newest first
+(record Tr (w W) (es ESt) (sc Scope) (id Name) (tps (List Expr)) (value (Option Expr)) (obls (List Declaration)))
+(fn tr_new ((w W) (es ESt) (sc Scope) (id Name) (tps (List Expr))) Tr
+  (make Tr (w w) (es es) (sc sc) (id id) (tps tps) (value None) (obls Nil)))
 (fn tr_set_w ((t Tr) (w W)) Tr (with Tr t (w w)))
 (fn tr_set_es ((t Tr) (es ESt)) Tr (with Tr t (es es)))
-(fn tr_set_tps ((t Tr) (tps (List Expr))) Tr (with Tr t (tps tps)))
-(fn tr_set_rec ((t Tr) (rec (Option DefRec))) Tr (with Tr t (rec rec)))
-(fn define_mode ((t Tr)) Bool (match (Tr.rec t) ((Some _) True) (None False)))
-;; a definition context for define.shard, which cites the record's accessors qualified and
-;; extends it through these
-(fn def_rec ((pos Int) (ptypes (List EType)) (defined Bool)) DefRec
-  (make DefRec (pos pos) (ihs Nil) (tabs Nil) (ptypes ptypes) (defined defined) (below None) (wf None) (scope Nil) (obls Nil)))
-(fn dr_with_tables ((dr DefRec) (ihs (List (Pair Int Expr))) (tabs (List (Pair Int Expr)))) DefRec (with DefRec dr (ihs ihs) (tabs tabs)))
-(fn dr_with_below ((dr DefRec) (bi BelowInfo)) DefRec (with DefRec dr (below (Some bi))))
-(fn dr_with_wf ((dr DefRec) (wi WfInfo)) DefRec (with DefRec dr (wf (Some wi))))
-(fn dr_with_scope ((dr DefRec) (scope (List (Pair Bool Expr)))) DefRec (with DefRec dr (scope scope)))
-(fn dr_push_scope ((dr DefRec) (is_let Bool) (fv Expr)) DefRec (with DefRec dr (scope (append (DefRec.scope dr) (list (Pair is_let fv))))))
-(fn dr_add_obl ((dr DefRec) (d Declaration)) DefRec (with DefRec dr (obls (Cons d (DefRec.obls dr)))))
-(fn below_info ((ind Name) (belowc Name) (ls (List Level)) (largs (List Expr)) (motive Expr)) BelowInfo
-  (make BelowInfo (ind ind) (belowc belowc) (ls ls) (largs largs) (motive motive)))
-(fn wf_info ((recl Expr) (p Expr) (m Expr) (rel Expr) (ltys (List Expr))) WfInfo
-  (make WfInfo (recl recl) (p p) (m m) (rel rel) (ltys ltys)))
-;; the context's tables and scope through the state, for define.shard's minors and lets
-(fn tr_push_scope ((t Tr) (is_let Bool) (fv Expr)) Tr
-  (match (Tr.rec t) ((Some dr) (tr_set_rec t (Some (dr_push_scope dr is_let fv)))) (None t)))
-(fn tr_push_scopes ((t Tr) (fvs (List Expr))) Tr
-  (measure (struct fvs))
-  (match fvs (Nil t) ((Cons fv r) (tr_push_scopes (tr_push_scope t False fv) r))))
-(fn tr_add_tables ((t Tr) (ihs (List (Pair Int Expr))) (tabs (List (Pair Int Expr)))) Tr
-  (match (Tr.rec t)
-    ((Some dr) (tr_set_rec t (Some (dr_with_tables dr (append ihs (DefRec.ihs dr)) (append tabs (DefRec.tabs dr))))))
-    (None t)))
-(fn tr_table_of ((t Tr) (id Int)) (Option Expr)
-  (match (Tr.rec t) ((Some dr) (assoc_int_expr id (DefRec.tabs dr))) (None None)))
-(fn tr_below ((t Tr)) (Option BelowInfo)
-  (match (Tr.rec t) ((Some dr) (DefRec.below dr)) (None None)))
-;; the context restored after a minor or a branch, the obligations collected inside it kept
-(fn tr_restore ((t Tr) (old (Option DefRec))) Tr
-  (match old
-    (None (tr_set_rec t None))
-    ((Some dro) (match (Tr.rec t) ((Some drn) (tr_set_rec t (Some (with DefRec dro (obls (DefRec.obls drn)))))) (None (tr_set_rec t old))))))
-(fn tr_obls ((t Tr)) (List Declaration)
-  (match (Tr.rec t) ((Some dr) (rev (DefRec.obls dr))) (None Nil)))
+(fn tr_set_value ((t Tr) (v Expr)) Tr (with Tr t (value (Some v))))
+(fn tr_add_obl ((t Tr) (d Declaration)) Tr (with Tr t (obls (Cons d (Tr.obls t)))))
+(fn tr_obls ((t Tr)) (List Declaration) (rev (Tr.obls t)))
 (fn tr_env ((t Tr)) CheckedEnv (w_env (Tr.w t)))
 (type TrRes (TrOk Tr Expr) (TrErr Symbol (List Int)))
 ;; an E variable's meaning: its L term, its static E type, its descent flag
 ;; (2 the structural parameter itself, 1 a proper subterm of it, 0 other)
 (type EV (EV Expr (Option EType) Int))
-(fn evt_term ((v EV)) Expr (match v ((EV e _ _) e)))
-(fn ev_type ((v EV)) (Option EType) (match v ((EV _ t _) t)))
-(fn env_types ((env (List EV))) (List (Option EType))
-  (measure (struct env))
-  (match env (Nil Nil) ((Cons v r) (Cons (ev_type v) (env_types r)))))
 ;; K through the state
 (fn tr_infer ((t Tr) (e Expr)) (Pair Tr (Option Expr))
   (match (w_infer (Tr.w t) e) ((Pair w1 r) (Pair (tr_set_w t w1) r))))
@@ -170,77 +124,12 @@
 
 ;; ---- first-order matching (§7.5): a binder's declared type against an inferred one ----
 ;; the metas are locals of the callee's telescope; a solved meta is compared structurally
-(fn fo_match ((pat Expr) (term Expr) (metas (List Int)) (sub (List (Pair Int Expr)))) (Option (List (Pair Int Expr)))
-  (measure (struct pat))
-  (match pat
-    ((FVar _ id)
-     (if (mem_int id metas)
-       (match (assoc_int_expr id sub)
-         ((Some bound) (if (expr_eq bound term) (Some sub) None))
-         (None (Some (Cons (Pair id term) sub))))
-       (if (expr_eq pat term) (Some sub) None)))
-    ((App _ f a)
-     (match term
-       ((App _ g b) (match (fo_match f g metas sub) (None None) ((Some s1) (fo_match a b metas s1))))
-       (_ None)))
-    ((Lam _ _ _ d b)
-     (match term ((Lam _ _ _ d2 b2) (match (fo_match d d2 metas sub) (None None) ((Some s1) (fo_match b b2 metas s1)))) (_ None)))
-    ((Pi _ _ _ d b)
-     (match term ((Pi _ _ _ d2 b2) (match (fo_match d d2 metas sub) (None None) ((Some s1) (fo_match b b2 metas s1)))) (_ None)))
-    ((Let _ _ ty v b)
-     (match term
-       ((Let _ _ ty2 v2 b2)
-        (match (fo_match ty ty2 metas sub)
-          (None None)
-          ((Some s1) (match (fo_match v v2 metas s1) (None None) ((Some s2) (fo_match b b2 metas s2))))))
-       (_ None)))
-    ((Proj _ sn i x) (match term ((Proj _ sn2 i2 x2) (if (bool_and (name_eq sn sn2) (int_eq i i2)) (fo_match x x2 metas sub) None)) (_ None)))
-    (_ (if (expr_eq pat term) (Some sub) None))))
 (fn assoc_int_expr ((id Int) (sub (List (Pair Int Expr)))) (Option Expr)
   (measure (struct sub))
   (match sub (Nil None) ((Cons (Pair j e) r) (if (int_eq id j) (Some e) (assoc_int_expr id r)))))
 ;; the match with the term in weak-head normal form as the fallback
-(fn tr_match ((t Tr) (pat Expr) (term Expr) (metas (List Int)) (sub (List (Pair Int Expr)))) (Pair Tr (Option (List (Pair Int Expr))))
-  (match (fo_match pat term metas sub)
-    ((Some s1) (Pair t (Some s1)))
-    (None
-     (match (tr_whnf t term)
-       ((Pair t1 (Some term2)) (if (expr_eq term term2) (Pair t1 None) (Pair t1 (fo_match pat term2 metas sub))))
-       ((Pair t1 None) (Pair t1 None))))))
 
 ;; ---- an E type as an L type (§7.5): the fallback for a bare constructor's type arguments ----
-(fn tr_type ((t Tr) (ety EType)) (Pair Tr (Option Expr))
-  (match ety
-    ((ETVar i) (Pair t (nth (Tr.tps t) i)))
-    ((ETCon n args)
-     (if (is_nat_or_int n)   ; the built-in has an L identity only where Init's constant is in scope (§8.1 rule 1)
-       (if (bool_and (int_eq (len args) 0) (match (env_find (tr_env t) n) ((Some _) True) (None False))) (Pair t (Some (mk_const n Nil))) (Pair t None))
-       (match (env_find (tr_env t) n)
-         ((Some info)
-          (match info
-            ((InductInfo _ nparams _ _ _ _ _ _ _)
-             (if (bool_not (int_eq nparams (len args))) (Pair t None)   ; an erased parameter: not expressible from E
-               (match (solve_levels info)
-                 (None (Pair t None))
-                 ((Some ls)
-                  (match (tr_types t args Nil)
-                    ((Pair t1 None) (Pair t1 None))
-                    ((Pair t1 (Some largs)) (match (tr_apps t1 (mk_const n ls) largs) ((Pair t2 e) (Pair t2 (Some e))))))))))
-            (_
-             (if (bool_and (int_eq (len (ci_lparams info)) 0) (int_eq (count_pis (ci_type info)) (len args)))   ; a view's sig type, a type-valued constant
-               (match (tr_types t args Nil)
-                 ((Pair t1 None) (Pair t1 None))
-                 ((Pair t1 (Some largs)) (match (tr_apps t1 (mk_const n Nil) largs) ((Pair t2 e) (Pair t2 (Some e))))))
-               (Pair t None)))))
-         (None (Pair t None)))))))
-(fn count_pis ((e Expr)) Int
-  (measure (struct e))
-  (match e ((Pi _ _ _ _ b) (+ 1 (count_pis b))) (_ 0)))
-(fn tr_types ((t Tr) (ts (List EType)) (acc (List Expr))) (Pair Tr (Option (List Expr)))
-  (measure (struct ts))
-  (match ts
-    (Nil (Pair t (Some (rev acc))))
-    ((Cons x r) (match (tr_type t x) ((Pair t1 None) (Pair t1 None)) ((Pair t1 (Some e)) (tr_types t1 r (Cons e acc)))))))
 
 ;; ---- a constant applied through its telescope (§7.5) ----------------------------------------
 ;; the runtime binders take the E arguments (translated with their expected E types), the
@@ -250,187 +139,26 @@
 (type Ap (Ap (List (Pair Bool Expr)) (List (Pair Int Expr)) (List Int)))   ; the arguments so far (reversed; True = a meta), the solutions, the metas
 (type Either (Left Symbol (List Int)) (Right Ap))
 ;; the expected E types of the runtime arguments: the declared parameter types under the type arguments
-(fn expected_of ((etargs (List EType)) (eptypes (List EType))) (List EType) (subst_tys etargs eptypes))
-(fn apply_binds ((t Tr) (env (List EV)) (head Name) (binds (List TBind)) (eargs (List ETerm)) (exps (List EType)) (ap Ap) (i Int)) (Pair Tr Either)
-  (measure (struct binds))
-  (match binds
-    (Nil (match eargs (Nil (Pair t (Right ap))) (_ (Pair t (Left (quote unsaturated) (append (show_name head) " is given too many arguments"))))))
-    ((Cons (TBind n role fv) rest)
-     (match ap
-       ((Ap rargs sub metas)
-        (match role
-          ((BData _)
-           (match eargs
-             (Nil (Pair t (Left (quote unsaturated) (append (show_name head) " is given too few arguments"))))
-             ((Cons a ar)
-              (match (tr t env (expected_at exps i) a)
-                ((TrErr e m) (Pair t (Left e m)))
-                ((TrOk t1 a1)
-                 (match (tr_infer t1 a1)
-                   ((Pair t2 None) (Pair t2 (Left (quote untyped_subterm) (append (show_name head) ": K could not type an argument"))))
-                   ((Pair t2 (Some aty))
-                    (match (tr_type_of_local t2 fv)
-                      (None (Pair t2 (Left (quote realize_signature) (show_name head))))
-                      ((Some pat)
-                       (match (tr_match t2 pat aty metas sub)
-                         ((Pair t3 None) (Pair t3 (Left (quote untyped_subterm) (append (show_name head) (append ": the argument for " (append (show_name n) " has another type than the binder's"))))))
-                         ((Pair t3 (Some sub1)) (apply_binds t3 env head rest ar exps (Ap (Cons (Pair False a1) rargs) sub1 metas) (+ i 1)))))))))))))
-          (_ (apply_binds t env head rest eargs exps (Ap (Cons (Pair True fv) rargs) sub (Cons (fvar_id_of fv) metas)) i))))))))
-(fn expected_at ((exps (List EType)) (i Int)) (Option EType) (nth exps i))
 ;; the arguments with every meta replaced by its solution; an unsolved meta is None
-(fn fill_metas ((t Tr) (head Name) (args (List (Pair Bool Expr))) (sub (List (Pair Int Expr))) (acc (List Expr)) (i Int)) (Pair Tr (Option (List Expr)))
-  (measure (struct args))
-  (match args
-    (Nil (Pair t (Some (rev acc))))
-    ((Cons (Pair is_meta a) r)
-     (if is_meta
-       (match (assoc_int_expr (fvar_id_of a) sub)
-         ((Some v) (fill_metas t head r sub (Cons v acc) (+ i 1)))
-         (None (Pair t None)))
-       (fill_metas t head r sub (Cons a acc) (+ i 1))))))
 
 ;; ---- the translation of a body (§7.5) -----------------------------------------------------
-(fn tr ((t Tr) (env (List EV)) (expected (Option EType)) (e ETerm)) TrRes
-  (measure (struct e))
-  (match e
-    ((EBVar i) (match (nth env i) ((Some v) (TrOk t (evt_term v))) (None (TrErr (quote unbound_name) "a variable the translation does not know"))))
-    ((ELit (LNat n)) (if (expects_int t expected) (tr_int_lit t (mk_const (nm_int_of_nat) Nil) n) (TrOk t (nat_lit n))))   ; the one coercion, Nat → Int (law §5.2; §8.4 rule 3)
-    ((ELit (LInt n)) (if (expects_int t expected) (tr_int_lit t (mk_const (nm_int_neg_succ) Nil) (- (- 0 n) 1)) (TrErr (quote no_l_identity) "a negative numeral has an L identity at Int only (Int.negSucc; §8.4 rule 3)")))
-    ((ELit _) (TrErr (quote no_l_identity) "a string or a symbol literal has no L identity at Stage 0 (§8.1 rule 2)"))
-    ((ECtor c args) (tr_ctor t env expected c args))
-    ((ECall f args) (tr_call t env expected f args))
-    ((EPrim n args)
-     (match (prim_l_identity n)
-       (None
-        (match (prim_typed_identity n (arg_types (Tr.es t) env args))
-          ((PIdent ident) (tr_prim t env ident args))
-          ((PRefuse e m) (TrErr e m))
-          (PNone (TrErr (quote no_l_identity) (append (show_name n) ": the operator spelling has no L identity at this type (§8.1 rule 5, §8.4 rule 3) — write the naming-law spelling (Nat.add, Int.tdiv, Nat.decLt, …; §6.4, §7.5)")))))
-       ((Some ident) (tr_prim t env ident args))))
-    ((EExt f _) (TrErr (quote no_l_meaning) (append (show_name f) ": an extern has no L meaning")))
-    ((ELet rs b) (tr_let t env expected rs b Nil))
-    ((EIf c a b) (tr_if t env expected c a b))
-    ((EMatch s arms) (tr_match_rec t env expected s arms))))
 ;; a numeral at an expected Int, where Init's Int is in scope: Int.ofNat n, or Int.negSucc (-n-1)
-(fn expects_int ((t Tr) (expected (Option EType))) Bool
-  (match expected
-    ((Some (ETCon i Nil)) (bool_and (name_eq i (nm_int_ty)) (match (env_find (tr_env t) (nm_int_of_nat)) ((Some _) True) (None False))))
-    (_ False)))
-(fn tr_int_lit ((t Tr) (ctor Expr) (n Int)) TrRes
-  (match (tr_apps t ctor (list (nat_lit n))) ((Pair t1 e) (TrOk t1 e))))
 ;; the primitive's L identity applied through its telescope
-(fn tr_prim ((t Tr) (env (List EV)) (ident Name) (args (List ETerm))) TrRes
-  (match (env_find (tr_env t) ident)
-    (None (TrErr (quote unknown_constant) (append (show_name ident) ": the Init prefix does not reach the primitive's L identity")))
-    ((Some info) (apply_const_e t env ident info args Nil Nil))))
-(fn arg_types ((es ESt) (env (List EV)) (args (List ETerm))) (List (Option EType))
-  (measure (struct args))
-  (match args (Nil Nil) ((Cons a r) (Cons (c_type es (env_types env) a) (arg_types es env r)))))
 ;; a constructor: its E type's arguments from the classifier as the fallback for the metas
-(fn tr_ctor ((t Tr) (env (List EV)) (expected (Option EType)) (c Name) (args (List ETerm))) TrRes
-  (match (env_find (tr_env t) c)
-    ((Some info)
-     (match info
-       ((CtorInfo _ ind _ _ _ _)
-        (apply_const_e t env c info args (ctor_etargs t env expected c args ind) (ctor_eptypes t c ind)))
-       (_ (TrErr (quote unknown_head) (show_name c)))))
-    (None (TrErr (quote unknown_constant) (show_name c)))))
 ;; the E type arguments a constructor application has: the expected type's when it names the
 ;; inductive, else the classifier's inference from the arguments
-(fn ctor_etargs ((t Tr) (env (List EV)) (expected (Option EType)) (c Name) (args (List ETerm)) (ind Name)) (List EType)
-  (match expected
-    ((Some (ETCon n eargs)) (if (name_eq n ind) eargs (etargs_inferred t env c args)))
-    (_ (etargs_inferred t env c args))))
-(fn etargs_inferred ((t Tr) (env (List EV)) (c Name) (args (List ETerm))) (List EType)
-  (match (c_type (Tr.es t) (env_types env) (ECtor c args))
-    ((Some (ETCon _ eargs)) eargs)
-    (_ Nil)))
 ;; a constructor's runtime field types over its inductive's type parameters
-(fn ctor_eptypes ((t Tr) (c Name) (ind Name)) (List EType)
-  (match (es_find_decl (Tr.es t) ind)
-    ((Some (EInd _ _ cs)) (match (fields_of cs c) ((Some fts) fts) (None Nil)))
-    (_ Nil)))
 ;; apply_const with the type-parameter metas pre-solved from E types where the arguments leave them open
-(fn apply_const_e ((t Tr) (env (List EV)) (head Name) (info ConstantInfo) (eargs (List ETerm)) (etargs (List EType)) (eptypes (List EType))) TrRes
-  (match (tr_tele t info)
-    ((Pair t1 None) (TrErr (quote realize_signature) (append (show_name head) ": its type is not an E signature")))
-    ((Pair t1 (Some (Tele ls binds _ _)))
-     (match (apply_binds t1 env head binds eargs (expected_of etargs eptypes) (Ap Nil Nil Nil) 0)
-       ((Pair t2 (Left e m)) (TrErr e m))
-       ((Pair t2 (Right (Ap rargs sub metas)))
-        (match (presolve_types t2 binds etargs sub)
-          ((Pair t3 sub1)
-           (match (fill_metas t3 head (rev rargs) sub1 Nil 0)
-             ((Pair t4 None) (TrErr (quote untyped_subterm) (append (show_name head) ": a type parameter no argument determines — annotate the binder or match on a typed value")))
-             ((Pair t4 (Some args)) (match (tr_apps t4 (mk_const head ls) args) ((Pair t5 e) (TrOk t5 e))))))))))))
 ;; the type-parameter binders of the telescope, in order, matched with the E type arguments: an open one takes its E type's L form
-(fn presolve_types ((t Tr) (binds (List TBind)) (etargs (List EType)) (sub (List (Pair Int Expr)))) (Pair Tr (List (Pair Int Expr)))
-  (measure (struct binds))
-  (match binds
-    (Nil (Pair t sub))
-    ((Cons (TBind _ BType fv) rest)
-     (match etargs
-       (Nil (Pair t sub))
-       ((Cons ety er)
-        (match (assoc_int_expr (fvar_id_of fv) sub)
-          ((Some _) (presolve_types t rest er sub))
-          (None
-           (match (tr_type t ety)
-             ((Pair t1 None) (presolve_types t1 rest er sub))
-             ((Pair t1 (Some l)) (presolve_types t1 rest er (Cons (Pair (fvar_id_of fv) l) sub)))))))))
-    ((Cons _ rest) (presolve_types t rest etargs sub))))
 ;; a call: the realized constant itself, an L constant with a realization attached, a view's sig fn
-(fn tr_call ((t Tr) (env (List EV)) (expected (Option EType)) (f Name) (args (List ETerm))) TrRes
-  (if (name_eq f (Tr.id t)) (tr_self t env expected f args)
-  (match (env_find (tr_env t) f)
-    (None (TrErr (quote no_l_meaning) (append (show_name f) ": a fn has no L meaning (RUNNABLE, §0) — realize it, or make it a def")))
-    ((Some info)
-     (match (es_find_decl (Tr.es t) f)
-       ((Some (EFn _ _ ps _ _ _)) (apply_const_e t env f info args (call_etargs t env expected f args) ps))
-       ((Some (ESig _ _ ps _)) (apply_const_e t env f info args (call_etargs t env expected f args) ps))
-       (_ (TrErr (quote realize_order) (append (show_name f) ": cited before its realization is attached (§7.5)"))))))))
 ;; a call of the constant being realized or defined: the constant itself where it exists (a
 ;; realize; a definition's equations), else the top split's induction hypothesis for the
 ;; structural argument, applied to the other arguments (§8.4 rule 2) — a field bound deeper is
 ;; recursion_depth (slice 3.14's course-of-values)
-(fn tr_self ((t Tr) (env (List EV)) (expected (Option EType)) (f Name) (args (List ETerm))) TrRes
-  (match (Tr.rec t)
-    (None (tr_self_const t env expected f args))
-    ((Some dr)
-     (if (DefRec.defined dr) (tr_self_const t env expected f args)
-     (match (DefRec.wf dr)
-       ((Some wi) (tr_self_wf t env f args dr wi))
-       (None
-        (match (self_ih env (DefRec.ihs dr) (nth args (DefRec.pos dr)))
-          ((Some ih) (tr_ih t env ih (DefRec.ptypes dr) (DefRec.pos dr) args 0 Nil))
-          (None (TrErr (quote recursion_depth) (append (show_name f) ": a recursive call on a variable bound outside the leading case tree (an argument's match, a let's value) — match the parameter in tail position (§8.4 rule 1 of slice 3.14)"))))))))))
 ;; a measured function's self-call (§8.4, slice 3.14): `rec (tuple of the arguments) (f.dec_N
 ;; scope…)` — the decreasing fact an obligation quantified over every local in scope, admitted
 ;; before the definition (its declaration collected here)
-(fn tr_self_wf ((t Tr) (env (List EV)) (f Name) (args (List ETerm)) (dr DefRec) (wi WfInfo)) TrRes
-  (match (tr_args t env (DefRec.ptypes dr) args Nil)
-    ((Pair t1 (TrArgsErr e m)) (TrErr e m))
-    ((Pair t1 (TrArgsOk largs))
-     (match (wf_tuple t1 (WfInfo.ltys wi) largs)
-       ((Pair t2 tup)
-        (match (tr_apps t2 (WfInfo.rel wi) (list tup (WfInfo.p wi)))
-          ((Pair t3 goal)
-           (match (tr_pis t3 (scope_fvars (DefRec.scope dr)) goal)
-             ((Pair t4 stmt)
-              (let ((name (name_append f (n1 (sym_of_chars (append "dec_" (show_nat (+ 1 (len (DefRec.obls dr))))))))))
-                (match (tr_apps t4 (mk_const name Nil) (scope_lambda_fvars (DefRec.scope dr)))
-                  ((Pair t5 proof)
-                   (match (tr_apps t5 (WfInfo.recl wi) (list tup proof))
-                     ((Pair t6 e) (TrOk (tr_set_rec t6 (Some (dr_add_obl dr (AxiomDecl (ConstantVal name Nil stmt) False)))) e)))))))))))))))
 (type TrArgs (TrArgsErr Symbol (List Int)) (TrArgsOk (List Expr)))
-(fn tr_args ((t Tr) (env (List EV)) (ptypes (List EType)) (args (List ETerm)) (acc (List Expr))) (Pair Tr TrArgs)
-  (measure (struct args))
-  (match args
-    (Nil (Pair t (TrArgsOk (rev acc))))
-    ((Cons a r)
-     (match (tr t env (match ptypes ((Cons p _) (Some p)) (Nil None)) a)
-       ((TrErr e m) (Pair t (TrArgsErr e m)))
-       ((TrOk t1 a1) (tr_args t1 env (drop 1 ptypes) r (Cons a1 acc)))))))
 (fn scope_fvars ((scope (List (Pair Bool Expr)))) (List Expr)
   (measure (struct scope))
   (match scope (Nil Nil) ((Cons (Pair _ fv) r) (Cons fv (scope_fvars r)))))
@@ -474,121 +202,17 @@
     (wf_proj_rest (mk_proj (n1 (quote PProd)) 1 p) (- n 1) (- k 1)))))
 (fn nm_pprod_mk () Name (n2 (quote PProd) (quote mk)))
 (fn nm_punit_unit () Name (n2 (quote PUnit) (quote unit)))
-(fn tr_self_const ((t Tr) (env (List EV)) (expected (Option EType)) (f Name) (args (List ETerm))) TrRes
-  (match (env_find (tr_env t) f)
-    (None (TrErr (quote no_l_meaning) (append (show_name f) ": the constant does not exist yet")))
-    ((Some info) (apply_const_e t env f info args (call_etargs t env expected f args) Nil))))
-(fn self_ih ((env (List EV)) (ihs (List (Pair Int Expr))) (arg (Option ETerm))) (Option Expr)
-  (match arg
-    ((Some (EBVar j)) (match (nth env j) ((Some (EV (FVar _ id) _ _)) (assoc_int_expr id ihs)) (_ None)))
-    (_ None)))
-(fn tr_ih ((t Tr) (env (List EV)) (ih Expr) (ptypes (List EType)) (pos Int) (args (List ETerm)) (i Int) (acc (List Expr))) TrRes
-  (measure (struct args))
-  (match args
-    (Nil (match (tr_apps t ih (rev acc)) ((Pair t1 e) (TrOk t1 e))))
-    ((Cons a r)
-     (if (int_eq i pos) (tr_ih t env ih ptypes pos r (+ i 1) acc)
-       (match (tr t env (nth ptypes i) a)
-         ((TrErr e m) (TrErr e m))
-         ((TrOk t1 a1) (tr_ih t1 env ih ptypes pos r (+ i 1) (Cons a1 acc))))))))
-(fn call_etargs ((t Tr) (env (List EV)) (expected (Option EType)) (f Name) (args (List ETerm))) (List EType)
-  (match (es_find_decl (Tr.es t) f)
-    ((Some (EFn _ _ ps rt _ _)) (params_from (unify_all (Tr.es t) (env_types env) ps args (expect_binding expected rt)) (max_int (tvar_count rt) (tvar_count_all ps)) 0))
-    ((Some (ESig _ _ ps rt)) (params_from (unify_all (Tr.es t) (env_types env) ps args (expect_binding expected rt)) (max_int (tvar_count rt) (tvar_count_all ps)) 0))
-    (_ Nil)))
 ;; the result type against the expected type binds type parameters too
-(fn expect_binding ((expected (Option EType)) (rt EType)) (List (Pair Int EType))
-  (match expected ((Some ety) (unify_ty rt ety Nil)) (None Nil)))
 ;; let: sequential, each value's type inferred
-(fn tr_let ((t Tr) (env (List EV)) (expected (Option EType)) (rs (List ETerm)) (b ETerm) (fvs (List Expr))) TrRes
-  (measure (struct rs))
-  (match rs
-    (Nil
-     (match (tr t env expected b)
-       ((TrErr e m) (TrErr e m))
-       ((TrOk t1 b1) (match (tr_lams t1 (rev fvs) b1) ((Pair t2 e) (TrOk t2 e))))))
-    ((Cons v r)
-     (match (tr t env None v)
-       ((TrErr e m) (TrErr e m))
-       ((TrOk t1 v1)
-        (match (tr_infer t1 v1)
-          ((Pair t2 None) (TrErr (quote untyped_subterm) "K could not type a let binding"))
-          ((Pair t2 (Some ty))
-           (match (tr_local_val t2 (n1 (quote x)) ty v1)
-             ((Pair t3 fv) (tr_let t3 (Cons (EV fv (c_type (Tr.es t3) (env_types env) v) 0) env) expected r b (Cons fv fvs)))))))))))
 ;; if: the condition's two-constructor inductive's recursor with a constant motive
-(fn tr_if ((t Tr) (env (List EV)) (expected (Option EType)) (c ETerm) (a ETerm) (b ETerm)) TrRes
-  (match (tr t env None c)
-    ((TrErr e m) (TrErr e m))
-    ((TrOk t1 c1)
-     (match (scrutinee_type t1 c1)
-       ((Pair t2 None) (TrErr (quote untyped_subterm) "the condition of an if is not a value of a two-constructor E inductive"))
-       ((Pair t2 (Some (Pair ind (Pair ls largs))))
-        (match (ind_ctor_names t2 ind)
-          ((Cons c0 (Cons c1n Nil))
-           (tr_rec t2 env expected ind ls largs c1 (list (Pair c0 (EArm PVar b)) (Pair c1n (EArm PVar a))) (quote if)))
-          (_ (TrErr (quote untyped_subterm) (append (show_name ind) ": an if needs a two-constructor type")))))))))
 ;; a match not on a variable: the recursor over flat constructor patterns, a variable arm expanded
-(fn tr_match_rec ((t Tr) (env (List EV)) (expected (Option EType)) (s ETerm) (arms (List EArm))) TrRes
-  (match (tr t env None s)
-    ((TrErr e m) (TrErr e m))
-    ((TrOk t1 s1)
-     (match (scrutinee_type t1 s1)
-       ((Pair t2 None) (TrErr (quote untyped_subterm) "the scrutinee of a match is not a value of an E inductive"))
-       ((Pair t2 (Some (Pair ind (Pair ls largs))))
-        (match (arms_by_ctor arms (ind_ctor_names t2 ind) Nil)
-          (None (TrErr (quote equation_form) "a nested or numeral pattern in a match the recursor states: lift it into the leading case tree or its own realization (§7.5)"))
-          ((Some by_ctor) (tr_rec t2 env expected ind ls largs s1 by_ctor (quote match)))))))))
 ;; the scrutinee's inductive, levels and parameters from its inferred type
-(fn scrutinee_type ((t Tr) (s Expr)) (Pair Tr (Option (Pair Name (Pair (List Level) (List Expr)))))
-  (match (tr_infer t s)
-    ((Pair t1 None) (Pair t1 None))
-    ((Pair t1 (Some ty))
-     (match (tr_whnf t1 ty)
-       ((Pair t2 None) (Pair t2 None))
-       ((Pair t2 (Some ty1))
-        (match (get_app_fn ty1)
-          ((Const _ ind ls)
-           (match (es_info (Tr.es t2) ind)
-             ((Some (EIInd _ _)) (Pair t2 (Some (Pair ind (Pair ls (get_app_args ty1))))))
-             (_ (Pair t2 None))))
-          (_ (Pair t2 None))))))))
 (fn ind_ctor_names ((t Tr) (ind Name)) (List Name)
   (match (es_info (Tr.es t) ind) ((Some (EIInd _ cs)) cs) (_ Nil)))
 ;; for each constructor in order, the first arm that covers it: a flat constructor pattern
 ;; (its sub-patterns variables) or a variable arm; None for a nested or numeral pattern
-(fn arms_by_ctor ((arms (List EArm)) (ctors (List Name)) (acc (List (Pair Name EArm)))) (Option (List (Pair Name EArm)))
-  (measure (struct ctors))
-  (match ctors
-    (Nil (Some (rev acc)))
-    ((Cons c r)
-     (match (first_arm arms c)
-       (None None)
-       ((Some arm) (arms_by_ctor arms r (Cons (Pair c arm) acc)))))))
-(fn first_arm ((arms (List EArm)) (c Name)) (Option EArm)
-  (measure (struct arms))
-  (match arms
-    (Nil None)
-    ((Cons (EArm (PCtor d subs) b) r) (if (name_eq c d) (if (all_pvars subs) (Some (EArm (PCtor d subs) b)) None) (first_arm r c)))
-    ((Cons (EArm PVar b) _) (Some (EArm PVar b)))
-    ((Cons (EArm (PLit _) _) _) None)))
-(fn all_pvars ((ps (List EPat))) Bool
-  (measure (struct ps))
-  (match ps (Nil True) ((Cons PVar r) (all_pvars r)) (_ False)))
 ;; T.rec params motive minors major — the motive constant, each minor a lambda over the
 ;; constructor's fields and induction hypotheses
-(fn tr_rec ((t Tr) (env (List EV)) (expected (Option EType)) (ind Name) (ls (List Level)) (largs (List Expr)) (major Expr) (by_ctor (List (Pair Name EArm))) (what Symbol)) TrRes
-  (match (env_find (tr_env t) (Str ind (quote rec)))
-    (None (TrErr (quote equation_form) (append (show_name ind) " has no recursor")))
-    ((Some rinfo)
-     (match rinfo
-       ((RecInfo _ _ _ _ nmotives _ _ _ _)
-        (if (bool_not (int_eq nmotives 1)) (TrErr (quote equation_form) (append (show_name ind) ": a nested inductive's recursor has no Stage-0 translation"))
-        (if (bool_not (int_eq (len (ci_lparams rinfo)) (+ 1 (len ls)))) (TrErr (quote equation_form) (append (show_name ind) " eliminates into Prop only"))
-          (match (tr_minors t env expected ind ls largs by_ctor Nil None what)
-            ((Pair t1 (Left2 e m)) (TrErr e m))
-            ((Pair t1 (Right2 (Pair minors rty))) (rec_app t1 ind ls largs rty minors major))))))
-       (_ (TrErr (quote equation_form) (append (show_name ind) ": no recursor")))))))
 ;; the recursor applied: the parameters, a constant motive over the result type, the minors, the major
 (fn rec_app ((t Tr) (ind Name) (ls (List Level)) (largs (List Expr)) (rty Expr) (minors (List Expr)) (major Expr)) TrRes
   (match (tr_apps t (mk_const ind ls) largs)
@@ -615,28 +239,7 @@
        (_ (Some (Pair (quote equation_form) (append (show_name ind) ": no recursor"))))))))
 ;; the minors in constructor order; the result type from the expected E type, else inferred from
 ;; the first arm's body; the induction hypotheses opened at that type after the body (unused there)
-(fn tr_minors ((t Tr) (env (List EV)) (expected (Option EType)) (ind Name) (ls (List Level)) (largs (List Expr)) (by_ctor (List (Pair Name EArm))) (acc (List Expr)) (rty (Option Expr)) (what Symbol)) (Pair Tr Either2)
-  (measure (struct by_ctor))
-  (match by_ctor
-    (Nil (match rty ((Some r) (Pair t (Right2 (Pair (rev acc) r)))) (None (Pair t (Left2 (quote equation_form) "a match without arms")))))
-    ((Cons (Pair c arm) r)
-     (match (rz_open_ctor t c ls largs)
-       ((Pair t1 None) (Pair t1 (Left2 (quote equation_form) (append (show_name c) ": K could not open the constructor"))))
-       ((Pair t1 (Some (Pair fields cterm)))
-        (match (arm_env t1 env arm fields cterm ind what)
-          ((Pair t2 env1)
-           (match (tr t2 env1 expected (arm_body arm))
-             ((TrErr e m) (Pair t2 (Left2 e m)))
-             ((TrOk t3 body)
-              (match (minor_result t3 expected body fields rty)
-                ((Pair t4 None) (Pair t4 (Left2 (quote untyped_subterm) "the arms' result type depends on the pattern's variables")))
-                ((Pair t4 (Some rty1))
-                 (match (open_ihs t4 fields rty1 Nil)
-                   ((Pair t5 ihs)
-                    (match (tr_lams t5 (append (field_fvars fields) ihs) body)
-                      ((Pair t6 minor) (tr_minors t6 env expected ind ls largs r (Cons minor acc) (Some rty1) what))))))))))))))))
 (type Either2 (Left2 Symbol (List Int)) (Right2 (Pair (List Expr) Expr)))
-(fn arm_body ((a EArm)) ETerm (match a ((EArm _ b) b)))
 ;; a constructor opened at the scrutinee's type: its fields as locals — each with its runtime
 ;; E type, or None for an erased one — and the constructor term
 (type Field (Field Expr (Option EType) Bool))   ; the local, its E type (None = erased), recursive?
@@ -689,33 +292,8 @@
     ((Cons _ r) (open_ihs t r rty acc))))
 ;; the arm's variables: a constructor pattern binds the runtime fields in order, a variable arm
 ;; binds the constructor term; an if's branches bind nothing
-(fn arm_env ((t Tr) (env (List EV)) (arm EArm) (fields (List Field)) (cterm Expr) (ind Name) (what Symbol)) (Pair Tr (List EV))
-  (if (sym_eq what (quote if)) (Pair t env)
-  (match arm
-    ((EArm (PCtor _ _) _) (Pair t (rev_onto (runtime_evs fields) env)))
-    ((EArm _ _) (Pair t (Cons (EV cterm (match (es_find_decl (Tr.es t) ind) ((Some (EInd _ np _)) (Some (ETCon ind (params_from Nil np 0)))) (_ None)) 0) env))))))
-(fn runtime_evs ((fields (List Field))) (List EV)
-  (measure (struct fields))
-  (match fields
-    (Nil Nil)
-    ((Cons (Field fv (Some ety) _) r) (Cons (EV fv (Some ety) 0) (runtime_evs r)))
-    ((Cons _ r) (runtime_evs r))))
 ;; the minors' shared result type: the expected E type's L form, else the first body's inferred type,
 ;; which must not mention the fields
-(fn minor_result ((t Tr) (expected (Option EType)) (body Expr) (fields (List Field)) (rty (Option Expr))) (Pair Tr (Option Expr))
-  (match rty
-    ((Some r) (Pair t (Some r)))
-    (None
-     (match expected
-       ((Some ety)
-        (match (tr_type t ety)
-          ((Pair t1 (Some r)) (Pair t1 (Some r)))
-          ((Pair t1 None) (infer_result t1 body fields))))
-       (None (infer_result t body fields))))))
-(fn infer_result ((t Tr) (body Expr) (fields (List Field))) (Pair Tr (Option Expr))
-  (match (tr_infer t body)
-    ((Pair t1 None) (Pair t1 None))
-    ((Pair t1 (Some r)) (if (mentions_any r (fvar_ids (field_fvars fields))) (Pair t1 None) (Pair t1 (Some r))))))
 (fn mentions_any ((e Expr) (ids (List Int))) Bool
   (measure (struct e))
   (if (bool_not (has_fvar e)) False
@@ -731,19 +309,7 @@
 ;; ---- the case tree (§7.5): the body's leading matches on variables, compiled column by column ----
 ;; a pattern with its variables numbered in capture order
 (type NPat (NPVar Int) (NPCtor Name (List NPat)) (NPLit) (NPWild))
-(fn annotate ((p EPat) (k Int)) (Pair NPat Int)
-  (measure (struct p))
-  (match p
-    (PVar (Pair (NPVar k) (+ k 1)))
-    ((PLit _) (Pair NPLit k))
-    ((PCtor c subs) (match (annotate_all subs k Nil) ((Pair nsubs k1) (Pair (NPCtor c nsubs) k1))))))
-(fn annotate_all ((ps (List EPat)) (k Int) (acc (List NPat))) (Pair (List NPat) Int)
-  (measure (struct ps))
-  (match ps
-    (Nil (Pair (rev acc) k))
-    ((Cons p r) (match (annotate p k) ((Pair np k1) (annotate_all r k1 (Cons np acc)))))))
 ;; a column: its variable's local, E type and descent flag
-(type Col (Col Expr EType Int))
 ;; a row: its patterns over the columns, its body, its slots bound so far, its slot count
 (type Row (Row (List NPat) ETerm (List (Pair Int EV)) Int))
 ;; the leaf state: the left-hand side's arguments and result type (the specialized terms
@@ -751,135 +317,17 @@
 (type Leaf (Leaf (List Expr) Expr (List Expr) (List EV) ETerm))
 (type LeavesRes (LvOk Tr (List Leaf)) (LvErr Symbol (List Int)))
 ;; the leaves of a body under the outer environment, with the columns the leading match may split
-(fn leaves ((t Tr) (env (List EV)) (body ETerm) (lhs (List Expr)) (rl Expr) (kept (List Expr))) LeavesRes
-  (match body
-    ((EMatch (EBVar j) arms)
-     (match (nth env j)
-       ((Some (EV (FVar d id) (Some (ETCon ind eargs)) flag))
-        (match (es_info (Tr.es t) ind)
-          ((Some (EIInd _ _))
-           (match (rows_of arms Nil)
-             (None (LvErr (quote equation_form) "a numeral pattern has no Stage-0 equation (§7.5)"))
-             ((Some rows) (compile t env (list (Col (FVar d id) (ETCon ind eargs) flag)) rows lhs rl kept Nil))))
-          (_ (LvOk t (list (Leaf lhs rl kept env body))))))
-       (_ (LvOk t (list (Leaf lhs rl kept env body))))))
-    (_ (LvOk t (list (Leaf lhs rl kept env body))))))
-(fn rows_of ((arms (List EArm)) (acc (List Row))) (Option (List Row))
-  (measure (struct arms))
-  (match arms
-    (Nil (Some (rev acc)))
-    ((Cons (EArm p b) r)
-     (match (annotate p 0)
-       ((Pair np k) (if (has_lit np) None (rows_of r (Cons (Row (list np) b Nil k) acc))))))))
-(fn has_lit ((p NPat)) Bool
-  (measure (struct p))
-  (match p (NPLit True) ((NPCtor _ subs) (any_lit subs)) (_ False)))
-(fn any_lit ((ps (List NPat))) Bool
-  (measure (struct ps))
-  (match ps (Nil False) ((Cons p r) (bool_or (has_lit p) (any_lit r)))))
 ;; the first row all variables: a leaf (later rows are unreachable for these shapes); else split
 ;; the first column some row constrains
-(fn compile ((t Tr) (env (List EV)) (cols (List Col)) (rows (List Row)) (lhs (List Expr)) (rl Expr) (kept (List Expr)) (acc (List Leaf))) LeavesRes
-  (measure (struct rows))
-  (match rows
-    (Nil (LvErr (quote equation_form) "a constructor no arm covers (the matrix is not exhaustive)"))
-    ((Cons (Row pats rhs slots n) _)
-     (match (ctor_column pats cols 0)
-       (None
-        (let ((slots1 (rz_bind_all pats cols slots)))
-          (let ((env1 (rev_onto (slot_evs slots1 n 0) env)))
-            (match (leaves t env1 rhs lhs rl kept)
-              ((LvErr e m) (LvErr e m))
-              ((LvOk t1 ls) (LvOk t1 (append acc ls)))))))
-       ((Some i)
-        (match (nth cols i)
-          (None (LvErr (quote equation_form) "column"))
-          ((Some (Col v ety flag))
-           (match ety
-             ((ETCon ind eargs)
-              (match (es_info (Tr.es t) ind)
-                ((Some (EIInd _ ctors))
-                 (match (scrutinee_type t v)
-                   ((Pair t1 None) (LvErr (quote untyped_subterm) "K could not type a matched variable"))
-                   ((Pair t1 (Some (Pair _ (Pair ls largs))))
-                    (split t1 env cols rows lhs rl kept acc i (Col v ety flag) ctors ls largs))))
-                (_ (LvErr (quote untyped_subterm) (append (show_name ind) " is not an E inductive")))))
-             (_ (LvErr (quote untyped_subterm) "a matched variable whose type is a type parameter (specialization is phase 3)"))))))))))
 ;; the first column index at which some row has a constructor pattern
-(fn ctor_column ((pats (List NPat)) (cols (List Col)) (i Int)) (Option Int)
-  (measure (struct pats))
-  (match pats
-    (Nil None)
-    ((Cons (NPCtor _ _) _) (Some i))
-    ((Cons _ r) (ctor_column r (drop 1 cols) (+ i 1)))))
 ;; every column bound to the row's variable at it
-(fn rz_bind_all ((pats (List NPat)) (cols (List Col)) (slots (List (Pair Int EV)))) (List (Pair Int EV))
-  (measure (struct pats))
-  (match pats
-    (Nil slots)
-    ((Cons (NPVar s) r) (match cols ((Cons (Col v ety flag) cr) (rz_bind_all r cr (Cons (Pair s (EV v (Some ety) flag)) slots))) (Nil slots)))
-    ((Cons _ r) (rz_bind_all r (drop 1 cols) slots))))
 ;; the slots as the body's variables: slot 0 outermost, slot n-1 innermost — capture order
-(fn slot_evs ((slots (List (Pair Int EV))) (n Int) (i Int)) (List EV)
-  (measure (- n i))
-  (if (le n i) Nil
-    (Cons (match (assoc_slot i slots) ((Some v) v) (None (EV (mk_const Anon Nil) None 0))) (slot_evs slots n (+ i 1)))))
-(fn assoc_slot ((i Int) (slots (List (Pair Int EV)))) (Option EV)
-  (measure (struct slots))
-  (match slots (Nil None) ((Cons (Pair j v) r) (if (int_eq i j) (Some v) (assoc_slot i r)))))
 ;; column i split over the constructors of its inductive
-(fn split ((t Tr) (env (List EV)) (cols (List Col)) (rows (List Row)) (lhs (List Expr)) (rl Expr) (kept (List Expr)) (acc (List Leaf)) (i Int) (col Col) (ctors (List Name)) (ls (List Level)) (largs (List Expr))) LeavesRes
-  (measure (struct ctors))
-  (match ctors
-    (Nil (LvOk t acc))
-    ((Cons c r)
-     (match col
-       ((Col v ety flag)
-        (match (rz_open_ctor t c ls largs)
-          ((Pair t1 None) (LvErr (quote equation_form) (append (show_name c) ": K could not open the constructor")))
-          ((Pair t1 (Some (Pair fields cterm)))
-           (let ((vid (fvar_id_of v)) (fflag (if (lt 0 flag) 1 0)))
-             (match (subst_all t1 lhs vid cterm Nil)
-               ((Pair t2 lhs1)
-                (match (tr_subst t2 rl vid cterm)
-                  ((Pair t3 rl1)
-                   (match (subst_rows t3 rows vid cterm Nil)
-                     ((Pair t4 rows1)
-                      (match (subst_env t4 env vid cterm Nil)
-                        ((Pair t5 env1)
-                         (match (refresh_kept t5 (without_id kept vid) vid cterm Nil Nil)
-                           ((Pair t6 (Pair kept0 pairs))
-                            (match (apply_pairs t6 pairs lhs1 rl1 rows1 env1)
-                              ((Pair t7 (Pair (Pair lhs2 rl2) (Pair rows3 env2)))
-                               (let ((kept1 (append kept0 (field_fvars fields)))
-                                     (cols1 (append (take i cols) (append (field_cols fields fflag) (drop (+ i 1) cols))))
-                                     (rows2 (specialize_rows rows3 i c (len (runtime_fields fields)) (EV cterm (Some ety) flag) Nil)))
-                                 (match (compile t7 env2 cols1 rows2 lhs2 rl2 kept1 acc)
-                                   ((LvErr e m) (LvErr e m))
-                                   ((LvOk t8 acc1) (split t8 env cols rows lhs rl kept acc1 i col r ls largs))))))))))))))))))))))))
 (fn subst_all ((t Tr) (es (List Expr)) (id Int) (v Expr) (acc (List Expr))) (Pair Tr (List Expr))
   (measure (struct es))
   (match es
     (Nil (Pair t (rev acc)))
     ((Cons e r) (match (tr_subst t e id v) ((Pair t1 e1) (subst_all t1 r id v (Cons e1 acc)))))))
-(fn subst_rows ((t Tr) (rows (List Row)) (id Int) (v Expr) (acc (List Row))) (Pair Tr (List Row))
-  (measure (struct rows))
-  (match rows
-    (Nil (Pair t (rev acc)))
-    ((Cons (Row pats rhs slots n) r)
-     (match (subst_slots t slots id v Nil)
-       ((Pair t1 slots1) (subst_rows t1 r id v (Cons (Row pats rhs slots1 n) acc)))))))
-(fn subst_slots ((t Tr) (slots (List (Pair Int EV))) (id Int) (v Expr) (acc (List (Pair Int EV)))) (Pair Tr (List (Pair Int EV)))
-  (measure (struct slots))
-  (match slots
-    (Nil (Pair t (rev acc)))
-    ((Cons (Pair s (EV e ety flag)) r)
-     (match (tr_subst t e id v) ((Pair t1 e1) (subst_slots t1 r id v (Cons (Pair s (EV e1 ety flag)) acc)))))))
-(fn subst_env ((t Tr) (env (List EV)) (id Int) (v Expr) (acc (List EV))) (Pair Tr (List EV))
-  (measure (struct env))
-  (match env
-    (Nil (Pair t (rev acc)))
-    ((Cons (EV e ety flag) r) (match (tr_subst t e id v) ((Pair t1 e1) (subst_env t1 r id v (Cons (EV e1 ety flag) acc)))))))
 ;; a kept binder whose type mentions the split variable (an erased binder over a data parameter)
 ;; is re-opened at the substituted type; the pairs (old id, new local) apply to everything after
 (fn refresh_kept ((t Tr) (kept (List Expr)) (vid Int) (cterm Expr) (acc (List Expr)) (pairs (List (Pair Int Expr)))) (Pair Tr (Pair (List Expr) (List (Pair Int Expr))))
@@ -902,54 +350,13 @@
   (match pairs
     (Nil (Pair t e))
     ((Cons (Pair id v) r) (match (tr_subst t e id v) ((Pair t1 e1) (subst_pairs t1 e1 r))))))
-(fn apply_pairs ((t Tr) (pairs (List (Pair Int Expr))) (lhs (List Expr)) (rl Expr) (rows (List Row)) (env (List EV))) (Pair Tr (Pair (Pair (List Expr) Expr) (Pair (List Row) (List EV))))
-  (measure (struct pairs))
-  (match pairs
-    (Nil (Pair t (Pair (Pair lhs rl) (Pair rows env))))
-    ((Cons (Pair id v) r)
-     (match (subst_all t lhs id v Nil)
-       ((Pair t1 lhs1)
-        (match (tr_subst t1 rl id v)
-          ((Pair t2 rl1)
-           (match (subst_rows t2 rows id v Nil)
-             ((Pair t3 rows1)
-              (match (subst_env t3 env id v Nil)
-                ((Pair t4 env1) (apply_pairs t4 r lhs1 rl1 rows1 env1))))))))))))
 (fn without_id ((fvs (List Expr)) (id Int)) (List Expr)
   (measure (struct fvs))
   (match fvs
     (Nil Nil)
     ((Cons fv r) (if (int_eq (fvar_id_of fv) id) (without_id r id) (Cons fv (without_id r id))))))
-(fn runtime_fields ((fields (List Field))) (List Field)
-  (measure (struct fields))
-  (match fields
-    (Nil Nil)
-    ((Cons (Field fv (Some ety) rc) r) (Cons (Field fv (Some ety) rc) (runtime_fields r)))
-    ((Cons _ r) (runtime_fields r))))
-(fn field_cols ((fields (List Field)) (flag Int)) (List Col)
-  (measure (struct fields))
-  (match fields
-    (Nil Nil)
-    ((Cons (Field fv (Some ety) _) r) (Cons (Col fv ety flag) (field_cols r flag)))
-    ((Cons _ r) (field_cols r flag))))
 ;; the rows specialized to constructor c at column i: its sub-patterns, or wildcards for a
 ;; variable row (its slot bound to the constructor term); a row with another constructor drops
-(fn specialize_rows ((rows (List Row)) (i Int) (c Name) (k Int) (bound EV) (acc (List Row))) (List Row)
-  (measure (struct rows))
-  (match rows
-    (Nil (rev acc))
-    ((Cons (Row pats rhs slots n) r)
-     (match (nth pats i)
-       ((Some (NPCtor d subs))
-        (if (name_eq c d)
-          (specialize_rows r i c k bound (Cons (Row (append (take i pats) (append subs (drop (+ i 1) pats))) rhs slots n) acc))
-          (specialize_rows r i c k bound acc)))
-       ((Some (NPVar s))
-        (specialize_rows r i c k bound (Cons (Row (append (take i pats) (append (wilds k) (drop (+ i 1) pats))) rhs (Cons (Pair s bound) slots) n) acc)))
-       ((Some NPWild)
-        (specialize_rows r i c k bound (Cons (Row (append (take i pats) (append (wilds k) (drop (+ i 1) pats))) rhs slots n) acc)))
-       (_ (specialize_rows r i c k bound acc))))))
-(fn wilds ((k Int)) (List NPat) (measure k) (if (lt k 1) Nil (Cons NPWild (wilds (- k 1)))))
 
 ;; ---- descent and order (§7.5) --------------------------------------------------------------
 ;; flags per variable (innermost first): 2 the structural parameter, 1 a proper subterm of it, 0 other
@@ -1050,7 +457,7 @@
 ;; ---- the supplied form (§7.2, §7.5) ---------------------------------------------------------
 ;; the result: the E table (Init inductives the walk registered), the EFn to attach once the
 ;; equations are admitted, the equations as theorem declarations in order, a pending measure
-(type RzRes (RzOk ESt EDecl (List Declaration) Bool) (RzErr Symbol (List Int)))
+(type RzRes (RzOk ESt EDecl (List Declaration) (List Declaration) Bool) (RzErr Symbol (List Int)))
 ;; NAME's identity resolved through the scope: a definition of the environment
 (type RtRes (RtOk Name ConstantInfo) (RtErr Symbol (List Int)))
 (fn realize_target ((sc Scope) (env CheckedEnv) (n Name)) RtRes
@@ -1153,19 +560,61 @@
                  (match (signature_matches es1 sc env binds rt bs ret)
                    ((Some m) (RzErr (quote realize_signature) (append (show_name k) (append ": " m))))
                    (None
-                    (match (read_fn_rest (ensure_head es1 sc k (count_data binds)) sc env k Nil bs ret rest)
-                      ((CErr e m) (RzErr e m))
-                      ((COk d)
-                       (match d
-                         ((EFn _ ntp ptypes ert rec body)
-                          (match (pending_as_runnable (check_calls es1 env k rec (param_flags (len ptypes) rec) body))
-                            ((Some (Pair e m)) (RzErr e m))
-                            (None
-                             (match (equations (tr_new w1 es1 sc k (tbind_types binds) None) binds ls rl rt body rec thms)
-                               ((Pair _ (Left3 e m)) (RzErr e m))
-                               ((Pair t1 (Right3 decls)) (RzOk (Tr.es t1) d decls (match rec ((RecMeasure _) True) (_ False))))))))
-                         (_ (RzErr (quote bad_shape) "realize"))))))))))))))))
+                    (realize_body (ensure_head es1 sc k (count_data binds)) sc env k w1 ls binds rt rl bs rest thms))))))))))))
     (_ (RzErr (quote bad_shape) "(realize NAME ((x TYPE)…) RET (measure M)? BODY (equations THM…)?) or (realize NAME (view))"))))
+;; the body, elaborated once against the constant's own telescope (slice 3.16 rule 7): the
+;; signature's names bound to the telescope's locals — a type or data binder each, an erased
+;; binder none —, the body at the result's L type; its program the erasure, its equations the
+;; leaves of its leading matchers, the matchers it generated admitted before them
+(fn realize_body ((es ESt) (sc Scope) (env CheckedEnv) (k Name) (w W) (ls (List Level)) (binds (List TBind)) (rt EType) (rl Expr) (bs (List SExpr)) (rest (List SExpr)) (thms (List Name))) RzRes
+  (match (fn_body rest)
+    (None (RzErr (quote bad_shape) "(realize NAME ((x TYPE)…) RET (measure M)? BODY (equations THM…)?)"))
+    ((Some body)
+     (let ((e0 (bind_tele (el_set_w (el0 sc env Nil Nil (qualify sc (name_append k (n1 (quote realize))))) w) binds bs)))
+       (match (fn_rec e0 (fn_measure rest) (tbind_fvars binds))
+         ((Pair _ (Left5 r m)) (RzErr r m))
+         ((Pair e1 (Right5 prec))
+          (match (elab e1 body (Some rl))
+            ((EErr r m) (if (sym_eq r (quote unknown_constant)) (unknown_in_body es sc m) (RzErr r m)))
+            ((EOk e2 v _)
+             (match (el_finish e2 v)
+               ((FinErr r m) (RzErr r m))
+               ((FinOk b)
+                (let ((t (tr_new (el_w e2) es sc k (tbind_types binds))) (ents (binder_ents binds)))
+                  (match (predef_rec t ents prec binds)
+                    ((Pair _ (Left5r r m)) (RzErr r m))
+                    ((Pair t0 (Right5r rec))
+                     (match (erase t0 ents b (budget_depth))
+                       ((ErErr r m) (RzErr r m))
+                       ((ErOk t1 ebody)
+                        (match (pending_as_runnable (check_calls (Tr.es t1) env k rec (param_flags (count_data binds) rec) ebody))
+                          ((Some (Pair r m)) (RzErr r m))
+                          (None
+                           (match (pj_equations t1 (mk_const k ls) (- 0 1) (tbind_fvars binds) rl b thms False)
+                             ((Pair _ (Left3 r m)) (RzErr r m))
+                             ((Pair t2 (Right3 decls))
+                              (RzOk (Tr.es t2) (EFn k (count_types binds) (bind_ptypes binds) rt rec ebody) (el_aux e2) decls (match rec ((RecMeasure _) True) (_ False))))))))))))))))))))))
+;; a name the environment lacks, in a realization's body: a RUNNABLE function has no L meaning
+;; (a realization cannot wait for it, §7.5); an E primitive has no L identity (§6.4)
+(fn unknown_in_body ((es ESt) (sc Scope) (m (List Int))) RzRes
+  (match (name_of_sym (sym_of_chars m))
+    (None (RzErr (quote unknown_constant) m))
+    ((Some n)
+     (match (only_values (eresolve es sc n))
+       ((Cons (EHit id _ _) _) (RzErr (quote no_l_meaning) (append (show_name id) ": a fn has no L meaning (RUNNABLE, §0) — realize it, or make it a def")))
+       (Nil (match (prim_find n)
+              ((Some _) (RzErr (quote no_l_identity) (append m ": an E primitive with no L identity (§6.4) — cite the L constant")))
+              (None (RzErr (quote unknown_constant) m))))))))
+(fn bind_tele ((e El) (binds (List TBind)) (bs (List SExpr))) El
+  (measure (struct binds))
+  (match binds
+    (Nil e)
+    ((Cons (TBind _ BErased _) r) (bind_tele e r bs))
+    ((Cons (TBind _ _ fv) r)
+     (match bs
+       ((Cons (SList (Cons (SSym x) _)) br)
+        (bind_tele (match (name_of_sym x) ((Some n) (el_set_cx e (cx_bind (el_cx e) n fv))) (None e)) r br))
+       (_ e)))))
 ;; the realized constant as a function head of the E table, when pre-registration could not resolve it
 (fn ensure_head ((es ESt) (sc Scope) (k Name) (arity Int)) ESt
   (match (es_info es k) ((Some _) es) (None (es_register es k (sc_tag sc) (EIFn arity)))))
@@ -1174,16 +623,6 @@
   (match binds (Nil Nil) ((Cons (TBind _ BType fv) r) (Cons fv (tbind_types r))) ((Cons _ r) (tbind_types r))))
 (type Either3 (Left3 Symbol (List Int)) (Right3 (List Declaration)))
 ;; the equations: the leaves of the case tree over the data binders, each a theorem
-(fn equations ((t Tr) (binds (List TBind)) (ls (List Level)) (rl Expr) (rt EType) (body ETerm) (rec ERec) (thms (List Name))) (Pair Tr Either3)
-  (let ((env (rev (data_evs binds (param_flags (count_data binds) rec) 0)))
-        (lhs (tbind_fvars binds))
-        (kept (tbind_fvars binds)))
-    (match (leaves t env body lhs rl kept)
-      ((LvErr e m) (Pair t (Left3 e m)))
-      ((LvOk t1 lvs)
-       (if (bool_and (lt 0 (len thms)) (bool_not (int_eq (len thms) (len lvs))))
-         (Pair t1 (Left3 (quote equations_count) (append "the body has " (append (show_nat (len lvs)) (append " equations, the clause names " (show_nat (len thms)))))))
-         (equation_decls t1 ls rt lvs thms 1 Nil))))))
 (fn count_data ((binds (List TBind))) Int
   (measure (struct binds))
   (match binds (Nil 0) ((Cons (TBind _ (BData _) _) r) (+ 1 (count_data r))) ((Cons _ r) (count_data r))))
@@ -1192,33 +631,6 @@
   (match binds (Nil Nil) ((Cons (TBind _ _ fv) r) (Cons fv (tbind_fvars r)))))
 ;; the data binders as the body's variables in binder order (the caller reverses), with their flags
 ;; (param_flags gives them innermost first, so they are consumed reversed)
-(fn data_evs ((binds (List TBind)) (flags (List Int)) (i Int)) (List EV)
-  (measure (struct binds))
-  (match binds
-    (Nil Nil)
-    ((Cons (TBind _ (BData ety) fv) r) (Cons (EV fv (Some ety) (flag_at (rev flags) i)) (data_evs r flags (+ i 1))))
-    ((Cons _ r) (data_evs r flags i))))
-(fn equation_decls ((t Tr) (ls (List Level)) (rt EType) (lvs (List Leaf)) (thms (List Name)) (i Int) (acc (List Declaration))) (Pair Tr Either3)
-  (measure (struct lvs))
-  (match lvs
-    (Nil (Pair t (Right3 (rev acc))))
-    ((Cons (Leaf lhs rl kept env body) r)
-     (match (tr t env (Some rt) body)
-       ((TrErr e m) (Pair t (Left3 e m)))
-       ((TrOk t1 rhs)
-        (match (tr_apps t1 (mk_const (Tr.id t1) ls) lhs)
-          ((Pair t2 lhs1)
-           (match (tr_apps t2 (mk_const (nm_eq) (list (level_one))) (list rl lhs1 rhs))
-             ((Pair t3 stmt)
-              (match (tr_pis t3 kept stmt)
-                ((Pair t4 ty)
-                 (let ((name (eq_name (Tr.sc t4) (Tr.id t4) (define_mode t4) i)))
-                   (match (proof_of t4 kept rl lhs1 (nth thms (- i 1)) ls)
-                     ((Pair t5 None) (Pair t5 (Left3 (quote universe_arity) "a theorem of the equations clause takes neither no universe arguments nor the constant's")))
-                     ((Pair t5 (Some proof))
-                      (match (tr_lams t5 kept proof)
-                        ((Pair t6 value)
-                         (equation_decls t6 ls rt r thms (+ i 1) (Cons (ThmDecl (ConstantVal name Nil ty) value (list name)) acc))))))))))))))))))
 ;; Eq.refl, or the clause's theorem applied to the binders — at the constant's solved levels
 ;; when it has as many universe parameters, at none when it has none
 (fn proof_of ((t Tr) (kept (List Expr)) (rl Expr) (lhs Expr) (thm (Option Name)) (ls (List Level))) (Pair Tr (Option Expr))
@@ -1229,6 +641,153 @@
        (if (int_eq arity 0) (match (tr_apps t (mk_const th Nil) kept) ((Pair t1 e) (Pair t1 (Some e))))
        (if (int_eq arity (len ls)) (match (tr_apps t (mk_const th ls) kept) ((Pair t1 e) (Pair t1 (Some e))))
          (Pair t None)))))))
+
+;; ---- the equations (§7.5; slice 3.16 landing 3) ----------------------------------------------------
+;; the leaves of the body's leading matchers, read off the rows without reduction: a row
+;; against the scrutinee term binds, clashes, or is stuck on a local — a universally quantified
+;; one is split over its constructors, in order, the first row that does not clash deciding —
+;; so the leaves and their numbering are the case tree's, a fall-through row one equation per
+;; leaf it reaches. `∀ kept, f lhs = rhs`, the self-local the constant, by Eq.refl
+(type PjLeaf (PjLeaf (List Expr) (List Expr) Expr Expr))   ; the left-hand side's arguments, the binders, the result type, the body
+(type PjFo (FoBind (List (Pair Int Expr))) (FoClash) (FoStuck Int))
+(fn pj_equations ((t Tr) (head Expr) (selfid Int) (binders (List Expr)) (rl Expr) (body Expr) (thms (List Name)) (dm Bool)) (Pair Tr Either3)
+  (match (pj_leaves t binders binders rl body 256 Nil)
+    ((Pair t1 None) (Pair t1 (Left3 (quote equation_form) "a constructor no row covers")))
+    ((Pair t1 (Some lvs))
+     (if (bool_and (lt 0 (len thms)) (bool_not (int_eq (len thms) (len lvs))))
+       (Pair t1 (Left3 (quote equations_count) (append "the body has " (append (show_nat (len lvs)) (append " equations, the clause names " (show_nat (len thms)))))))
+       (pj_equation_decls t1 head selfid (rev lvs) thms dm 1 Nil)))))
+(fn pj_leaves ((t Tr) (lhs (List Expr)) (kept (List Expr)) (rl Expr) (body Expr) (fuel Int) (acc (List PjLeaf))) (Pair Tr (Option (List PjLeaf)))
+  (measure fuel)
+  (if (lt fuel 1) (Pair t None)
+  (match (get_app_fn body)
+    ((Const _ c _)
+     (match (mt_is_matcher (tr_env t) c)
+       ((Some (MtDesc np 1 rows))
+        (let ((args (get_app_args body)))
+          (if (bool_not (int_eq (len args) (+ np (+ 2 (len rows))))) (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc)))
+            (match (nth args (+ np 1))
+              (None (Pair t None))
+              ((Some s) (pj_rows t lhs kept rl body s rows (drop (+ np 2) args) fuel acc))))))
+       (_ (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc))))))
+    (_ (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc)))))))
+(fn pj_rows ((t Tr) (lhs (List Expr)) (kept (List Expr)) (rl Expr) (body Expr) (s Expr) (rows (List (List MtPat))) (alts (List Expr)) (fuel Int) (acc (List PjLeaf))) (Pair Tr (Option (List PjLeaf)))
+  (measure (struct rows))
+  (match rows
+    (Nil (Pair t None))
+    ((Cons row rr)
+     (match alts
+       (Nil (Pair t None))
+       ((Cons alt ar)
+        (match (pj_fo_all (tr_env t) row (list s) (FoBind Nil))
+          (FoClash (pj_rows t lhs kept rl body s rr ar fuel acc))
+          ((FoBind binds)
+           (match (pj_inst_lams t alt (pj_slot_args binds (len binds) 0))
+             ((Pair t1 b1) (pj_leaves t1 lhs kept rl b1 (- fuel 1) acc))))
+          ((FoStuck vid)
+           (if (bool_not (mem_int vid (fvar_ids kept))) (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc)))
+             (pj_split t lhs kept rl body vid fuel acc)))))))))
+(fn pj_slot_args ((binds (List (Pair Int Expr))) (n Int) (i Int)) (List Expr)
+  (measure (- n i))
+  (if (le n i) Nil
+    (Cons (match (assoc_int_expr i binds) ((Some v) v) (None (mk_const Anon Nil))) (pj_slot_args binds n (+ i 1)))))
+;; a row's patterns against terms: a clash anywhere decides (the row is gone from the
+;; specialized matrix), else the first stuck local, else the bindings
+(fn pj_fo_all ((env CheckedEnv) (ps (List MtPat)) (ts (List Expr)) (st PjFo)) PjFo
+  (measure (struct ps))
+  (match ps
+    (Nil st)
+    ((Cons p pr)
+     (match ts
+       (Nil st)
+       ((Cons x xr)
+        (match (pj_fo env p x st)
+          (FoClash FoClash)
+          (st1 (pj_fo_all env pr xr st1))))))))
+(fn pj_fo ((env CheckedEnv) (p MtPat) (x Expr) (st PjFo)) PjFo
+  (measure (struct p))
+  (match p
+    ((MtVar slot) (match st ((FoBind binds) (FoBind (Cons (Pair slot x) binds))) (other other)))
+    ((MtCtor c subs)
+     (match (get_app_fn x)
+       ((FVar _ id) (match st ((FoBind _) (FoStuck id)) (other other)))
+       ((Const _ c2 _)
+        (if (name_eq c c2) (pj_fo_all env subs (drop (- (len (get_app_args x)) (len subs)) (get_app_args x)) st)
+          (if (pj_is_ctor env c2) FoClash (match st ((FoBind _) (FoStuck (- 0 1))) (other other)))))
+       (_ (match st ((FoBind _) (FoStuck (- 0 1))) (other other)))))))
+(fn pj_is_ctor ((env CheckedEnv) (c Name)) Bool
+  (match (env_find env c) ((Some (CtorInfo _ _ _ _ _ _)) True) (_ False)))
+;; the local split over its inductive's constructors: the constructor term for it in the
+;; left-hand side, the result type and the body, its fields new binders
+(fn pj_split ((t Tr) (lhs (List Expr)) (kept (List Expr)) (rl Expr) (body Expr) (vid Int) (fuel Int) (acc (List PjLeaf))) (Pair Tr (Option (List PjLeaf)))
+  (match (w_local_type (Tr.w t) vid)
+    (None (Pair t None))
+    ((Some vty)
+     (match (mt_ind_of (Tr.w t) vty)
+       ((Pair _ (MtNoInd _ _)) (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc))))
+       ((Pair w1 (MtInd _ ls largs ctors)) (pj_split_ctors (tr_set_w t w1) lhs kept rl body vid ctors ls largs fuel acc))))))
+(fn pj_split_ctors ((t Tr) (lhs (List Expr)) (kept (List Expr)) (rl Expr) (body Expr) (vid Int) (ctors (List Name)) (ls (List Level)) (largs (List Expr)) (fuel Int) (acc (List PjLeaf))) (Pair Tr (Option (List PjLeaf)))
+  (measure (struct ctors))
+  (match ctors
+    (Nil (Pair t (Some acc)))
+    ((Cons c r)
+     (match (rz_open_ctor t c ls largs)
+       ((Pair t1 None) (Pair t1 None))
+       ((Pair t1 (Some (Pair fields cterm)))
+        (match (subst_all t1 lhs vid cterm Nil)
+          ((Pair t2 lhs1)
+           (match (tr_subst t2 rl vid cterm)
+             ((Pair t3 rl1)
+              (match (tr_subst t3 body vid cterm)
+                ((Pair t4 body1)
+                 (match (refresh_kept t4 (without_id kept vid) vid cterm Nil Nil)
+                   ((Pair t5 (Pair kept0 pairs))
+                    (match (pj_subst_pairs_all t5 lhs1 pairs Nil)
+                      ((Pair t6 lhs2)
+                       (match (subst_pairs t6 rl1 pairs)
+                         ((Pair t7 rl2)
+                          (match (subst_pairs t7 body1 pairs)
+                            ((Pair t8 body2)
+                             (match (pj_leaves t8 lhs2 (append kept0 (field_fvars fields)) rl2 body2 (- fuel 1) acc)
+                               ((Pair t9 None) (Pair t9 None))
+                               ((Pair t9 (Some acc1)) (pj_split_ctors t9 lhs kept rl body vid r ls largs fuel acc1))))))))))))))))))))))
+(fn pj_subst_pairs_all ((t Tr) (es (List Expr)) (pairs (List (Pair Int Expr))) (acc (List Expr))) (Pair Tr (List Expr))
+  (measure (struct es))
+  (match es
+    (Nil (Pair t (rev acc)))
+    ((Cons e r) (match (subst_pairs t e pairs) ((Pair t1 e1) (pj_subst_pairs_all t1 r pairs (Cons e1 acc)))))))
+;; a leaf's theorem: the self-local (a fn's) the constant; Eq.refl, or the equations clause's
+;; theorem applied to the binders (a realize's); a fn's equation under its identity (dm), a
+;; realization's under the realizing module (eq_name)
+(fn pj_equation_decls ((t Tr) (head Expr) (selfid Int) (lvs (List PjLeaf)) (thms (List Name)) (dm Bool) (i Int) (acc (List Declaration))) (Pair Tr Either3)
+  (measure (struct lvs))
+  (match lvs
+    (Nil (Pair t (Right3 (rev acc))))
+    ((Cons (PjLeaf lhs kept rl body) r)
+     (match (tr_subst t body selfid head)
+       ((Pair t1 rhs)
+        (match (tr_apps t1 head lhs)
+          ((Pair t2 lhs1)
+           (match (tr_apps t2 (mk_const (nm_eq) (list (level_one))) (list rl lhs1 rhs))
+             ((Pair t3 stmt)
+              (match (tr_pis t3 kept stmt)
+                ((Pair t4 ty)
+                 (match (proof_of t4 kept rl lhs1 (nth thms (- i 1)) (match head ((Const _ _ ls) ls) (_ Nil)))
+                   ((Pair t5 None) (Pair t5 (Left3 (quote universe_arity) "a theorem of the equations clause takes neither no universe arguments nor the constant's")))
+                   ((Pair t5 (Some proof))
+                    (match (tr_lams t5 kept proof)
+                      ((Pair t6 value)
+                       (let ((name (if dm (name_append (Tr.id t6) (nm_eq_n i)) (eq_name (Tr.sc t6) (Tr.id t6) False i))))
+                         (pj_equation_decls t6 head selfid r thms dm (+ i 1) (Cons (ThmDecl (ConstantVal name Nil ty) value (list name)) acc))))))))))))))))))
+;; an alternative at its variables: each lambda's body instantiated, else applied
+(fn pj_inst_lams ((t Tr) (e Expr) (vars (List Expr))) (Pair Tr Expr)
+  (measure (struct vars))
+  (match vars
+    (Nil (Pair t e))
+    ((Cons v r)
+     (match e
+       ((Lam _ _ _ _ b) (match (tr_inst1 t b v) ((Pair t1 b1) (pj_inst_lams t1 b1 r))))
+       (_ (match (tr_apps t e (list v)) ((Pair t1 e1) (pj_inst_lams t1 e1 r))))))))
 
 ;; ---- the derived view (§7.1, §7.5) --------------------------------------------------------------
 ;; the body's variables in the erasure: a local is a runtime variable (its E index counted among
@@ -1262,7 +821,7 @@
                 ((Some v0)
                  (match (w_inst_lparams w1 v0 (ci_lparams info) ls)
                    ((Pair w2 v)
-                    (let ((t (tr_new w2 es1 sc k (tbind_types binds) None)))
+                    (let ((t (tr_new w2 es1 sc k (tbind_types binds))))
                       (match (peel_binders t v binds)
                         ((Pair t1 body)
                          (match (erase t1 (binder_ents binds) body (budget_depth))
@@ -1271,7 +830,7 @@
                             (let ((ptypes (bind_ptypes binds)))
                               (match (classify_both (Tr.es t2) k (some_all (rev ptypes)) ebody RecNone)
                                 ((Some (Pair e m)) (RzErr e m))
-                                (None (RzOk (Tr.es t2) (EFn k (count_types binds) ptypes rt RecNone ebody) Nil False))))))))))))))))))))
+                                (None (RzOk (Tr.es t2) (EFn k (count_types binds) ptypes rt RecNone ebody) Nil Nil False))))))))))))))))))))
     (_ (RzErr (quote bad_shape) "(realize NAME (view))"))))
 (fn bind_ptypes ((binds (List TBind))) (List EType)
   (measure (struct binds))
@@ -1471,7 +1030,7 @@
          (_
           (if (sym_eq lc (quote casesOn))
             (erase_cases t env c args fuel)
-            (match (es_find_decl (Tr.es t) c)
+            (match (if (name_eq c (Tr.id t)) (Some (ESig c 0 Nil (ETVar 0))) (es_find_decl (Tr.es t) c))   ; the realized constant calling itself: a call
               ((Some (EFn _ _ ps _ _ _)) (erase_call t env c info args fuel))
               ((Some (ESig _ _ ps _)) (erase_call t env c info args fuel))
               (_
@@ -1596,19 +1155,23 @@
      (match (predef_ret w1 es1 sc pd binds)
        ((Pair (Pair w2 es2) None) (PdEraseErr (quote no_l_identity) "a result type that is not an E type"))
        ((Pair (Pair w2 es2) (Some rt))
-        (let ((t (tr_new w2 es2 sc (pd_name pd) (tbind_types binds) None))
-              (env (Cons (ErEnt (fvar_id_of (pd_self pd)) (EKCall (pd_name pd) (data_flags binds))) (binder_ents binds))))
-          (match (predef_rec t env pd binds)
+        (let ((t (tr_new w2 es2 sc (pd_name pd) (tbind_types binds)))
+              (env (append (callee_ents (pd_callees pd)) (Cons (ErEnt (fvar_id_of (pd_self pd)) (EKCall (pd_name pd) (data_flags binds))) (binder_ents binds)))))
+          (match (predef_rec t env (pd_rec pd) binds)
             ((Pair _ (Left5r e m)) (PdEraseErr e m))
             ((Pair t0 (Right5r rec))
              (match (erase t0 env (pd_body pd) (budget_depth))
                ((ErErr e m) (PdEraseErr e m))
                ((ErOk t1 ebody) (PdEraseOk (Tr.es t1) (EFn (pd_name pd) (count_types binds) (bind_ptypes binds) rt rec ebody))))))))))))
+;; a callee-local is a call of the callee (rule 6)
+(fn callee_ents ((cs (List CalleeLocal))) (List ErEnt)
+  (measure (struct cs))
+  (match cs (Nil Nil) ((Cons (CalleeLocal fv id flags) r) (Cons (ErEnt (fvar_id_of fv) (EKCall id flags)) (callee_ents r)))))
 ;; the program's recursion clause: the structural binder's position among the data binders, a
 ;; measure erased over the binders
 (type Either5r (Left5r Symbol (List Int)) (Right5r ERec))
-(fn predef_rec ((t Tr) (env (List ErEnt)) (pd PreDef) (binds (List TBind))) (Pair Tr Either5r)
-  (match (pd_rec pd)
+(fn predef_rec ((t Tr) (env (List ErEnt)) (prec PdRec) (binds (List TBind))) (Pair Tr Either5r)
+  (match prec
     (PdNone (Pair t (Right5r RecNone)))
     ((PdStruct x)
      (match (fvar_index (fvar_id_of x) (data_fvars binds) 0)

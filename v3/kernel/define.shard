@@ -42,7 +42,6 @@
 (use kernel.expr.BinderInfo)
 (use kernel.expr.Expr)
 (use kernel.level.Level)
-(use kernel.name.Name)
 (use kernel.prelude.Bool)
 (use kernel.prelude.List)
 (use kernel.prelude.Option)
@@ -51,8 +50,8 @@
 (use kernel.kw.WOut)
 (use kernel.matcher.MtDesc)
 (use kernel.matcher.MtInd)
-(use kernel.matcher.MtPat)
 (use kernel.matcher.MtPt)
+(use kernel.predef.CalleeLocal)
 (use kernel.predef.PdRec)
 (use kernel.realize.Either2)
 (use kernel.realize.Either3)
@@ -92,10 +91,14 @@
   (match fvs (Nil cx) ((Cons fv r) (pj_push (with PjCx cx (scope (append (PjCx.scope cx) (list (Pair is_let fv))))) is_let r))))
 
 (fn define_pd ((es ESt) (sc Scope) (pd PreDef)) DfRes
+  (match (pd_callees pd)
+    ((Cons (CalleeLocal _ id _) _) (DfSkip (quote callee_runnable) (append (show_name id) ": a callee with a program and no K constant — this function has its program and no definition (rule 6)")))
+    (Nil (define_pd_go es sc pd))))
+(fn define_pd_go ((es ESt) (sc Scope) (pd PreDef)) DfRes
   (let ((w (el_w (pd_state pd))) (k (pd_name pd)) (selfid (fvar_id_of (pd_self pd))))
     (match (pj_split_binders w (pd_binders pd) Nil Nil)
       ((Pair tps data)
-       (let ((t (tr_new w es sc k tps (Some (def_rec (- 0 1) Nil False)))))
+       (let ((t (tr_new w es sc k tps)))
          (match (mt_inst_args (Tr.w t) (pd_type pd) (pd_binders pd))
            ((Pair _ None) (DfErr (quote define_matrix) "the declared type does not take the binders"))
            ((Pair w1 (Some rl))
@@ -104,13 +107,13 @@
                 ((AuxErr _ e m) (df_verdict e m))
                 ((AuxOk t1 auxs)
                  (if (lt 0 (len auxs)) (DfAux (Tr.es t1) auxs)
-                 (match (df_value_term t1)
+                 (match (Tr.value t1)
                    (None (DfErr (quote define_matrix) "no value"))
                    ((Some value)
                     (let ((measured (bool_and recursive (pj_is_measure (pd_rec pd))))
                           (dd (DefnDecl (ConstantVal k Nil (pd_type pd)) value (HRegular (def_height (tr_env t1) value)) Safe (list k))))
                       (if (bool_or measured (bool_not (has_eq (tr_env t1)))) (DfOk (Tr.es t1) (tr_obls t1) dd Nil measured)   ; WellFounded.fix does not compute through Acc.rec (I's); no Eq in scope: the definition alone
-                        (match (pj_equations t1 pd rl selfid)
+                        (match (pj_equations t1 (mk_const k Nil) selfid (pd_binders pd) rl (pd_body pd) Nil True)
                           ((Pair _ (Left3 e m)) (DfErr e m))
                           ((Pair t2 (Right3 eqs)) (DfOk (Tr.es t2) (tr_obls t2) dd eqs measured))))))))))))))))))
 (fn pj_is_measure ((r PdRec)) Bool (match r ((PdMeasure _) True) (_ False)))
@@ -123,16 +126,12 @@
      (match (w_local_type w (fvar_id_of fv))
        ((Some (Sort _ _)) (pj_split_binders w r (Cons fv tps) data))
        (_ (pj_split_binders w r tps (Cons fv data)))))))
-;; the value threads through the state's context: kept in the tables under id -1 so AuxOk
-;; carries the declarations alone
-(fn df_value_term ((t Tr)) (Option Expr) (tr_table_of t (- 0 1)))
-(fn df_set_value ((t Tr) (v Expr)) Tr (tr_add_tables t Nil (list (Pair (- 0 1) v))))
 (fn has_eq ((env CheckedEnv)) Bool
   (match (env_find env (nm_eq)) (None False) ((Some _) (match (env_find env (nm_eq_refl)) (None False) ((Some _) True)))))
 
 (fn pj_value ((t Tr) (pd PreDef) (tps (List Expr)) (data (List Expr)) (rl Expr) (selfid Int) (recursive Bool)) TrAux
   (if (bool_not recursive)
-    (match (tr_lams t (pd_binders pd) (pd_body pd)) ((Pair t1 v) (AuxOk (df_set_value t1 v) Nil)))
+    (match (tr_lams t (pd_binders pd) (pd_body pd)) ((Pair t1 v) (AuxOk (tr_set_value t1 v) Nil)))
     (match (pd_rec pd)
       (PdNone (AuxErr t (quote realize_recursion) (append (show_name (pd_name pd)) " calls itself without a measure")))
       ((PdStruct x) (pj_struct t pd tps data rl selfid x))
@@ -192,7 +191,7 @@
                                        (match (tr_apps t11 brec others)
                                          ((Pair t12 b2)
                                           (match (tr_lams t12 (pd_binders pd) b2)
-                                            ((Pair t13 v) (AuxOk (df_set_value t13 v) Nil))))))))))))))))))))))))))))))
+                                            ((Pair t13 v) (AuxOk (tr_set_value t13 v) Nil))))))))))))))))))))))))))))))
 (fn without_index ((xs (List Expr)) (i Int) (k Int)) (List Expr)
   (measure (struct xs))
   (match xs
@@ -243,6 +242,10 @@
 ;; (λ p rec . body') (tuple data)` — the body with each data binder the tuple's component, a
 ;; self-call `rec (tuple args) (f.dec_N locals…)`, the decreasing fact an obligation
 (fn pj_wf ((t Tr) (pd PreDef) (tps (List Expr)) (data (List Expr)) (rl Expr) (selfid Int) (m Expr)) TrAux
+  (match (measure_is_nat t m)
+    ((Pair t0 False) (AuxErr t0 (quote measure_type) "the measure must be a Nat (an Int measure: write a Nat one; the law inserts no Int.toNat)"))
+    ((Pair t0 True) (pj_wf_go t0 pd tps data rl selfid m))))
+(fn pj_wf_go ((t Tr) (pd PreDef) (tps (List Expr)) (data (List Expr)) (rl Expr) (selfid Int) (m Expr)) TrAux
   (if (bool_not (wf_reachable t)) (AuxErr t (quote wf_unreached) "WellFounded.fix, InvImage.wf or Nat.lt_wfRel is past the Init prefix in scope")
   (match (local_types t data Nil)
     ((Pair t1 ltys)
@@ -251,10 +254,7 @@
         (match (tr_local t2 (n1 (quote p)) alpha)
           ((Pair t3 pm)
            (match (pj_subst_projs t3 m data pm (len data) 0)
-             ((Pair t4 ml)
-              (match (measure_is_nat t4 ml)
-                ((Pair t5 False) (AuxErr t5 (quote measure_type) "the measure must be a Nat (an Int measure: write a Nat one; the law inserts no Int.toNat)"))
-                ((Pair t5 True)
+             ((Pair t5 ml)
                  (match (tr_lams t5 (list pm) ml)
                    ((Pair t6 mfn)
                     (match (wf_relation t6 alpha mfn)
@@ -282,7 +282,7 @@
                                                     (match (tr_apps t16 (mk_const (n2 (quote WellFounded) (quote fix)) (list (level_one) (level_one))) (list alpha cmot rel hwf fnl tup))
                                                       ((Pair t17 fixed)
                                                        (match (tr_lams t17 (pd_binders pd) fixed)
-                                                         ((Pair t18 v) (AuxOk (df_set_value t18 v) Nil))))))))))))))))))))))))))))))))))))))))
+                                                         ((Pair t18 v) (AuxOk (tr_set_value t18 v) Nil))))))))))))))))))))))))))))))))))))))
 ;; e with the k-th data binder the k-th component of the tuple p
 (fn pj_subst_projs ((t Tr) (e Expr) (data (List Expr)) (p Expr) (n Int) (k Int)) (Pair Tr Expr)
   (measure (struct data))
@@ -416,13 +416,11 @@
                  ((Pair t3 goal)
                   (match (tr_pis t3 (scope_fvars (PjCx.scope cx)) goal)
                     ((Pair t4 stmt)
-                     (let ((dr (dr_of t4)))
-                       (let ((name (name_append (Tr.id t4) (n1 (sym_of_chars (append "dec_" (show_nat (+ 1 (len (DefRec.obls dr))))))))))
+                       (let ((name (name_append (Tr.id t4) (n1 (sym_of_chars (append "dec_" (show_nat (+ 1 (len (Tr.obls t4))))))))))
                          (match (tr_apps t4 (mk_const name Nil) (scope_lambda_fvars (PjCx.scope cx)))
                            ((Pair t5 proof)
                             (match (tr_apps t5 recl (Cons tup (Cons proof (drop n dargs))))
-                              ((Pair t6 r) (TrOk (tr_set_rec t6 (Some (dr_add_obl dr (AxiomDecl (ConstantVal name Nil stmt) False)))) r)))))))))))))))))))))))
-(fn dr_of ((t Tr)) DefRec (match (Tr.rec t) ((Some dr) dr) (None (def_rec (- 0 1) Nil False))))
+                              ((Pair t6 r) (TrOk (tr_add_obl t6 (AxiomDecl (ConstantVal name Nil stmt) False)) r))))))))))))))))))))))
 (fn pj_exprs_eq ((as (List Expr)) (bs (List Expr))) Bool
   (measure (struct as))
   (match as
@@ -559,147 +557,6 @@
                          (match (tr_lams t3 (append vars (firsts_of tlocals)) b)
                            ((Pair t4 alt1) (pj_alts t4 cx gen sid dty rr ar fuel (Cons alt1 acc))))))))))))))
           (_ (Pair t (Left2 (quote define_matrix) "a matcher row over several scrutinees")))))))))
-;; an alternative at its variables: each lambda's body instantiated, else applied
-(fn pj_inst_lams ((t Tr) (e Expr) (vars (List Expr))) (Pair Tr Expr)
-  (measure (struct vars))
-  (match vars
-    (Nil (Pair t e))
-    ((Cons v r)
-     (match e
-       ((Lam _ _ _ _ b) (match (tr_inst1 t b v) ((Pair t1 b1) (pj_inst_lams t1 b1 r))))
-       (_ (match (tr_apps t e (list v)) ((Pair t1 e1) (pj_inst_lams t1 e1 r))))))))
-
-;; ---- the equations (§7.5; slice 3.16 landing 3) ----------------------------------------------------
-;; the leaves of the body's leading matchers, read off the rows without reduction: a row
-;; against the scrutinee term binds, clashes, or is stuck on a local — a universally quantified
-;; one is split over its constructors, in order, the first row that does not clash deciding —
-;; so the leaves and their numbering are the case tree's, a fall-through row one equation per
-;; leaf it reaches. `∀ kept, f lhs = rhs`, the self-local the constant, by Eq.refl
-(type PjLeaf (PjLeaf (List Expr) (List Expr) Expr Expr))   ; the left-hand side's arguments, the binders, the result type, the body
-(type PjFo (FoBind (List (Pair Int Expr))) (FoClash) (FoStuck Int))
-(fn pj_equations ((t Tr) (pd PreDef) (rl Expr) (selfid Int)) (Pair Tr Either3)
-  (match (pj_leaves t (pd_binders pd) (pd_binders pd) rl (pd_body pd) 256 Nil)
-    ((Pair t1 None) (Pair t1 (Left3 (quote equation_form) "a constructor no row covers")))
-    ((Pair t1 (Some lvs)) (pj_equation_decls t1 selfid (rev lvs) 1 Nil))))
-(fn pj_leaves ((t Tr) (lhs (List Expr)) (kept (List Expr)) (rl Expr) (body Expr) (fuel Int) (acc (List PjLeaf))) (Pair Tr (Option (List PjLeaf)))
-  (measure fuel)
-  (if (lt fuel 1) (Pair t None)
-  (match (get_app_fn body)
-    ((Const _ c _)
-     (match (mt_is_matcher (tr_env t) c)
-       ((Some (MtDesc np 1 rows))
-        (let ((args (get_app_args body)))
-          (if (bool_not (int_eq (len args) (+ np (+ 2 (len rows))))) (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc)))
-            (match (nth args (+ np 1))
-              (None (Pair t None))
-              ((Some s) (pj_rows t lhs kept rl body s rows (drop (+ np 2) args) fuel acc))))))
-       (_ (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc))))))
-    (_ (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc)))))))
-(fn pj_rows ((t Tr) (lhs (List Expr)) (kept (List Expr)) (rl Expr) (body Expr) (s Expr) (rows (List (List MtPat))) (alts (List Expr)) (fuel Int) (acc (List PjLeaf))) (Pair Tr (Option (List PjLeaf)))
-  (measure (struct rows))
-  (match rows
-    (Nil (Pair t None))
-    ((Cons row rr)
-     (match alts
-       (Nil (Pair t None))
-       ((Cons alt ar)
-        (match (pj_fo_all (tr_env t) row (list s) (FoBind Nil))
-          (FoClash (pj_rows t lhs kept rl body s rr ar fuel acc))
-          ((FoBind binds)
-           (match (pj_inst_lams t alt (pj_slot_args binds (len binds) 0))
-             ((Pair t1 b1) (pj_leaves t1 lhs kept rl b1 (- fuel 1) acc))))
-          ((FoStuck vid)
-           (if (bool_not (mem_int vid (fvar_ids kept))) (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc)))
-             (pj_split t lhs kept rl body vid fuel acc)))))))))
-(fn pj_slot_args ((binds (List (Pair Int Expr))) (n Int) (i Int)) (List Expr)
-  (measure (- n i))
-  (if (le n i) Nil
-    (Cons (match (assoc_int_expr i binds) ((Some v) v) (None (mk_const Anon Nil))) (pj_slot_args binds n (+ i 1)))))
-;; a row's patterns against terms: a clash anywhere decides (the row is gone from the
-;; specialized matrix), else the first stuck local, else the bindings
-(fn pj_fo_all ((env CheckedEnv) (ps (List MtPat)) (ts (List Expr)) (st PjFo)) PjFo
-  (measure (struct ps))
-  (match ps
-    (Nil st)
-    ((Cons p pr)
-     (match ts
-       (Nil st)
-       ((Cons x xr)
-        (match (pj_fo env p x st)
-          (FoClash FoClash)
-          (st1 (pj_fo_all env pr xr st1))))))))
-(fn pj_fo ((env CheckedEnv) (p MtPat) (x Expr) (st PjFo)) PjFo
-  (measure (struct p))
-  (match p
-    ((MtVar slot) (match st ((FoBind binds) (FoBind (Cons (Pair slot x) binds))) (other other)))
-    ((MtCtor c subs)
-     (match (get_app_fn x)
-       ((FVar _ id) (match st ((FoBind _) (FoStuck id)) (other other)))
-       ((Const _ c2 _)
-        (if (name_eq c c2) (pj_fo_all env subs (drop (- (len (get_app_args x)) (len subs)) (get_app_args x)) st)
-          (if (pj_is_ctor env c2) FoClash (match st ((FoBind _) (FoStuck (- 0 1))) (other other)))))
-       (_ (match st ((FoBind _) (FoStuck (- 0 1))) (other other)))))))
-(fn pj_is_ctor ((env CheckedEnv) (c Name)) Bool
-  (match (env_find env c) ((Some (CtorInfo _ _ _ _ _ _)) True) (_ False)))
-;; the local split over its inductive's constructors: the constructor term for it in the
-;; left-hand side, the result type and the body, its fields new binders
-(fn pj_split ((t Tr) (lhs (List Expr)) (kept (List Expr)) (rl Expr) (body Expr) (vid Int) (fuel Int) (acc (List PjLeaf))) (Pair Tr (Option (List PjLeaf)))
-  (match (w_local_type (Tr.w t) vid)
-    (None (Pair t None))
-    ((Some vty)
-     (match (mt_ind_of (Tr.w t) vty)
-       ((Pair _ (MtNoInd _ _)) (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc))))
-       ((Pair w1 (MtInd _ ls largs ctors)) (pj_split_ctors (tr_set_w t w1) lhs kept rl body vid ctors ls largs fuel acc))))))
-(fn pj_split_ctors ((t Tr) (lhs (List Expr)) (kept (List Expr)) (rl Expr) (body Expr) (vid Int) (ctors (List Name)) (ls (List Level)) (largs (List Expr)) (fuel Int) (acc (List PjLeaf))) (Pair Tr (Option (List PjLeaf)))
-  (measure (struct ctors))
-  (match ctors
-    (Nil (Pair t (Some acc)))
-    ((Cons c r)
-     (match (rz_open_ctor t c ls largs)
-       ((Pair t1 None) (Pair t1 None))
-       ((Pair t1 (Some (Pair fields cterm)))
-        (match (subst_all t1 lhs vid cterm Nil)
-          ((Pair t2 lhs1)
-           (match (tr_subst t2 rl vid cterm)
-             ((Pair t3 rl1)
-              (match (tr_subst t3 body vid cterm)
-                ((Pair t4 body1)
-                 (match (refresh_kept t4 (without_id kept vid) vid cterm Nil Nil)
-                   ((Pair t5 (Pair kept0 pairs))
-                    (match (pj_subst_pairs_all t5 lhs1 pairs Nil)
-                      ((Pair t6 lhs2)
-                       (match (subst_pairs t6 rl1 pairs)
-                         ((Pair t7 rl2)
-                          (match (subst_pairs t7 body1 pairs)
-                            ((Pair t8 body2)
-                             (match (pj_leaves t8 lhs2 (append kept0 (field_fvars fields)) rl2 body2 (- fuel 1) acc)
-                               ((Pair t9 None) (Pair t9 None))
-                               ((Pair t9 (Some acc1)) (pj_split_ctors t9 lhs kept rl body vid r ls largs fuel acc1))))))))))))))))))))))
-(fn pj_subst_pairs_all ((t Tr) (es (List Expr)) (pairs (List (Pair Int Expr))) (acc (List Expr))) (Pair Tr (List Expr))
-  (measure (struct es))
-  (match es
-    (Nil (Pair t (rev acc)))
-    ((Cons e r) (match (subst_pairs t e pairs) ((Pair t1 e1) (pj_subst_pairs_all t1 r pairs (Cons e1 acc)))))))
-(fn pj_equation_decls ((t Tr) (selfid Int) (lvs (List PjLeaf)) (i Int) (acc (List Declaration))) (Pair Tr Either3)
-  (measure (struct lvs))
-  (match lvs
-    (Nil (Pair t (Right3 (rev acc))))
-    ((Cons (PjLeaf lhs kept rl body) r)
-     (let ((self (mk_const (Tr.id t) Nil)))
-       (match (tr_subst t body selfid self)
-         ((Pair t1 rhs)
-          (match (tr_apps t1 self lhs)
-            ((Pair t2 lhs1)
-             (match (tr_apps t2 (mk_const (nm_eq) (list (level_one))) (list rl lhs1 rhs))
-               ((Pair t3 stmt)
-                (match (tr_pis t3 kept stmt)
-                  ((Pair t4 ty)
-                   (match (tr_apps t4 (mk_const (nm_eq_refl) (list (level_one))) (list rl lhs1))
-                     ((Pair t5 proof)
-                      (match (tr_lams t5 kept proof)
-                        ((Pair t6 value)
-                         (let ((name (name_append (Tr.id t6) (nm_eq_n i))))   ; a fn's identity is its module's already
-                           (pj_equation_decls t6 selfid r (+ i 1) (Cons (ThmDecl (ConstantVal name Nil ty) value (list name)) acc)))))))))))))))))))
 
 ;; ---- below and brecOn (slice 3.14 rule 1) ----------------------------------------------------------
 ;; Init's under Lean's names at solved levels; a native inductive's generated once, monomorphic,
@@ -991,7 +848,7 @@
      (match (rec_level env ind)
        (None Nil)
        ((Some u)
-        (let ((t (tr_new (w0 env) es sc ind Nil None)))
+        (let ((t (tr_new (w0 env) es sc ind Nil)))
           (match (gen_cases_on t ind u nparams ctors)
             ((AuxErr _ _ _) Nil)
             ((AuxOk t1 cds)
