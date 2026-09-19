@@ -662,6 +662,17 @@ constant — projected to E by erasure and to K by the 3.13–3.14
 compilation; `tr` deleted; the E-first route kept for the toolchain's
 own sources until they port. The slices after it renumbered: 3.17 the
 porting facilities, 3.18 bytes, text and deriving, I from 3.19.
+**Revision 2 the same day, after GPT-6's single-frontend memo
+(R63–R71, records §4.10):** the pre-definition a named record;
+matcher descriptions bound by regeneration; `decide` erased to an
+explicit conversion (`Bool` and `Decidable` have different cells —
+revision 1 was wrong there); `ite` compiled dependently in a recursive
+function so a descent obligation keeps its branch fact; `Nat.sub` and
+its kin selected once resolved; a `RUNNABLE` callee a local, so a
+fallback never re-resolves; one descent obligation (`count.dec_1`)
+discharged with an acyclicity check; K's outcomes kept through the
+wrappers; contextual holes across binders deferred to I's opener;
+fixtures G1–G9.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

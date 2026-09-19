@@ -420,6 +420,45 @@ ratifier: **ratify** 2, 3, 5, 7, 11, 19, 24, 26, 28, 30, 31, 32 (and
 eighteen, seven and eight; every amendment is now in the item's text
 (slice 10). My leans agreed with all 33.
 
+### 4.10 R63–R71 (the single-frontend memo, on `3062f23`, answered 2026-09-18)
+
+The memo: `docs/archive/foundation-v3/SHARD_V3_SINGLE_FRONTEND_REVIEW_MEMO_v0.1.md`
+("proceed with the 3.16 single-frontend refactor; do not replace the
+logical foundation again; strengthen the construction, erasure and
+partial-result contracts while the refactor is still small"; nine
+requests on slice 3.16's design, revision 1). Its source observations
+checked against the tree before answering: `Bool` and `Decidable`
+have separate cells in `ev.shard` (`init_bool_cell`, `dec_cell`) —
+**revision 1's rule 3 was wrong** beyond an `if` condition; an `if`
+in a `fn` is `Decidable.rec` today with the proof field in scope, so
+`count`'s obligation has its hypothesis, and **revision 1's plain
+`ite` would have dropped it**; revision 1's unchanged-hash gate
+contradicted that same rule; `assign_checked` installs an assignment
+when type inference gives nothing, deliberately for a value with a
+metavariable inside and also, not deliberately, when K refuses a
+closed value; `Nat.sub`, `Nat.div`, `Nat.mod` are in the primitive
+table already. Not verified (the memo ran no reproducer either): the
+`df_branches`/`tr_minors` scope asymmetry — that code is deleted by
+the slice, and rule 2 states the contract for its replacement. The
+user's ruling: "Agreed on all three leans, revise the design" (the
+discharge path inside 3.16; R68 at I's opener; the flagged E-first
+fallback until 3.17). Landed as the design's revision 2
+(`LANGUAGE.md` §8.4, §13 item 49).
+
+| ID | disposition | where | fixture |
+|---|---|---|---|
+| R63 the pre-definition a contextual construction object | accept | §8.4 slice 3.16 "the shape": the `PreDef` record, never an admitted declaration; the invariant adopted in the memo's wording; the erasure's implementation a stated trust (§7.1) — landing 1 | G1, G9 |
+| R64 matcher descriptions as lowering inputs; forcing | accept, **stronger** — the description is bound by regenerating the matcher from it and comparing with the admitted value (the generator is deterministic: a check, not a trust); forcing is `EMatch`'s and `EIf`'s rule, now stated and tested | rule 1 — landings 1–2 | G2, G9 |
+| R65 branch facts in every position; one descent proof completed | accept — `ite` compiled dependently inside a recursive function; obligations closed over every local at the call in any position; `(fulfills f.dec_N PROOF)` for `count`. Narrower guarantee stated: no `scrutinee = pattern` equation for a computed scrutinee yet | rules 2, 8 — landing 3 | G4 |
+| R66 realization-directed erasure; the `Bool`/`Decidable` bridge | accept — the explicit conversion `(if ⟦inst⟧ true false)`, identity only where the entry returns a `Bool` cell; the table as a realization registry; `Nat.sub`/`div`/`mod` selected once resolved (revision 1's refusal reversed) | rules 3–4 — landing 2 | G1, G3 |
+| R67 partial outcomes; tentative against validated assignments | accept at the shared boundary — K's outcome through `kw.shard`; `UStuck`, `UExhausted`; typed/tentative assignments; a closed value K refuses is `UNo` | rule 9 — landing 1 | G6 |
+| R68 a hole's context across binder closure | **defer** to I's opener (slice 3.19) — narrower guarantee: incomplete, never unsound; no API outside `elab.shard` takes an `MCtx` across a binder close until then | rule 10 | G5 at 3.19 |
+| R69 contextual obligations, acyclic discharge, dependency scheduling | accept the discharge and its acyclicity (the closure instrument over the proof's constants; `fulfills_cycle`); **defer** dependency-directed wake-up (the retry fixpoint stands while loads are small) | rule 8 — landing 3 | G4, G7 |
+| R70 a fallback may weaken guarantees, not reinterpret | **amend** — a `RUNNABLE` callee is a local of its signature type, so the body elaborates once and erases (`route=typed`); the E-first fallback stays, flagged `route=e_first`, only for a body head without an L identity until slice 3.17 empties that set; a typed-route error is always a refusal; the E-first route's named consumers are `v3/kernel/**` and the old tree's ports | rule 6 — landing 3 | G8 |
+| R71 semantic gates, not frozen hashes | accept — exact agreement is the migration alarm; a moved hash is listed with its cause; the next three consumers share `PreDef`, the branch scopes and the outcomes | "Landings and gates", rule 11 | the battery |
+
+## 5. Findings and corrections made along the way
+
 - **The hash-only accelerator pin (2026-09-12, GPT-6 R42; §4.7).**
   Phase 1's `pin_if_matches` enabled a shortcut on a 61-bit structural
   hash match alone, against §3.2's letter. Executed through K before the
