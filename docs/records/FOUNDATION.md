@@ -2282,7 +2282,18 @@ is `docs/FOUNDATION.md` §5.3.
   with the tie armed, `project_test` (8), `matcher_test`, `unify_test`,
   define_test, calc byte-identical over 21 inputs, parity
   byte-identical over 27 closures and 104,557 lines, route 2, K's
-  clients, the T0 fixture, 29 entrypoints.
+  clients, the T0 fixture, 29 entrypoints. **Pipelines 513
+  (`77baa91`, landing 1) and 514 (`ca87d5f`, landing 2) green end to
+  end 2026-09-19:** 513 — engine 177 s, corpus 1,525 s at the
+  baseline, v3 4,941 s (28 entrypoints, calc 420 s, k_clients_test
+  123 s, parity 258 s over 26 closures and 97,077 lines, route 2 54 s,
+  route 1 built, the full replay 2,564 s at 32.2 GB peak, T0 accepted
+  57,977, 20 pinned, closures identical); 514 — engine 134 s, corpus
+  1,565 s, v3 4,930 s (29 entrypoints, calc 416 s, k_clients_test
+  124 s, parity 291 s over 27 closures and 104,557 lines, route 2
+  55 s, route 1 built, the replay 2,503 s at 32.2 GB, T0 accepted
+  57,977, 20 pinned, closures identical). Both landings stand on the
+  full gate.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

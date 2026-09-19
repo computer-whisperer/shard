@@ -697,7 +697,10 @@ all 125 pins, and found one real two-resolver difference on the way
 (calc's `append` against Init's `List.append`; the sources now open
 `Init.List` selectively). `Bool` beyond an `if` and chosen-arm-only
 forcing run under `ev`. 125 pins, parity over 27 closures and 104,557
-lines, 29 entrypoints. Next: the flip — `fn` and `realize` on the
+lines, 29 entrypoints. **Pipelines 513 (`77baa91`) and 514 (`ca87d5f`)
+green end to end** — v3 4,941 s and 4,930 s, corpus at the baseline,
+route 1 built, the replay ~2,500 s at 32.2 GB, T0 accepted 57,977, 20
+pinned, closures identical. Next: the flip — `fn` and `realize` on the
 route, `define.shard` re-pointed, `tr` deleted, one descent obligation
 discharged.
 
