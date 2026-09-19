@@ -649,6 +649,19 @@ green end to end** — corpus 1,512 s, v3 4,510 s (26 entrypoints, calc
 444 s, parity 211 s over 24 closures and 83,436 lines, route 1 built,
 replay 2,433 s at 32.2 GB, T0 accepted 57,977, 20 pinned, closures
 identical): the slice stands on the full gate, 115 pins.
+**Slice 3.16's design on disk (2026-09-18)** — `LANGUAGE.md` §8.4,
+§13 item 49: one front end. A `fn` body still went through the
+classifier's E typing and `realize.shard`'s upward translation, the
+reverse of the law's direction, and calc's spec file stood at 12
+functions defined and 13 `RUNNABLE` for it. After a probe (the derived
+view's erasure against the classifier's program: byte-identical on a
+flat `match`, refused on `brecOn`, a case tree on nested patterns) the
+ruling is Lean's shape: S elaborated once into a pre-definition — an L
+term with the self-name a local and each `match` a generated matcher
+constant — projected to E by erasure and to K by the 3.13–3.14
+compilation; `tr` deleted; the E-first route kept for the toolchain's
+own sources until they port. The slices after it renumbered: 3.17 the
+porting facilities, 3.18 bytes, text and deriving, I from 3.19.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

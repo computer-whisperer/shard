@@ -1744,8 +1744,10 @@ parity, route 2's byte-tie and T0 green:
 | 3.13 | `fn` = `def` + `realize` for non-recursive bodies and immediate-field structural recursion; the operator identities by operand type; a `def` in the E forms | `examples/calc`'s first claim; `v3/std/list.shard` under the naming law (R55's small library: an operation and a theorem) |
 | 3.14 | deeper structural recursion by course-of-values (`below`/`brecOn` generated per inductive, as Lean's elaborator does); `(measure E)` to `WellFounded.fix`, the measure a reported obligation; mutual recursion | every ported `fn` with a measure — a quarter of the old tree's 13,229 |
 | 3.15 | the L-side ergonomics of law §5.1–5.2: implicit arguments, universe inference, the numeral rule with the one `Nat → Int` coercion, `noConfusion`/`injection` | `def` and `theorem` authors |
-| 3.16 | §11's R60 facilities: list literals by expected type, negative numerals, `Name` literals, the fresh-name supply, the byte and text adapters (`String`'s E realization, item 37's flip); deriving under a declared policy | the broad port |
-| 3.17+ | I: the node vocabulary (law §7.2), `elaborate(I)` to P, the goal-graph API as E functions, `by` blocks, the core tactics; then `tools/prove` and the engine as I producers | calc's 100 claims; the coverage arc's B-1c |
+| 3.16 | one front end (reordered 2026-09-18; the design below): a `fn` body through the elaborator into a pre-definition, its E program by erasure and its K value by the 3.13–3.14 compilation; matchers, so a `match` in a statement; `Bool` against `Decidable`; constructors by expected type; list literals | calc's spec file wholly defined (13 of its 25 functions are `RUNNABLE` at the slice's opening) |
+| 3.17 | the porting facilities of §11's R60 row: record update and order-free construction, `Name` literals, symbols and `"…"` in a body, the fresh-name convention, E's rename of `lt le int_eq` with the tool migration | the broad port |
+| 3.18 | the byte and text adapters (`String`'s E realization, item 37's flip; the wire's type ruled first); deriving under a declared policy | the first host-facing S library |
+| 3.19+ | I: the node vocabulary (law §7.2), `elaborate(I)` to P, the goal-graph API as E functions, `by` blocks, the core tactics; then `tools/prove` and the engine as I producers | calc's 100 claims; the coverage arc's B-1c |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -1950,7 +1952,7 @@ the user's ruling of 2026-09-17 on the leans, §13 item 48; built
    **Not in 3.15:** a `match` inside a statement (the pointer is
    `T.casesOn` or a helper `def`), `Bool` against `Decidable` bridging
    (`decide`; calc's `is_digit` stays `RUNNABLE` for it, slice 3.16),
-   E's rename of `lt le int_eq` to `< <= =` (3.16 with the tool
+   E's rename of `lt le int_eq` to `< <= =` (3.17 with the tool
    migration), `UInt*`/`Fin` numerals (with their E realizations),
    explicit holes `_`.
 5. **The constructor-structure bundle is generated after a native
@@ -2007,6 +2009,172 @@ last, instantiate), `check_expected` (unify, else the coercion, else
 The pins `elab_implicit`, `elab_numeral`, `elab_unsolved`,
 `elab_instance`, `elab_no_decision`, `elab_mismatch`; the reader pin
 `refuse_unsolved_universe`.
+
+**Slice 3.16 — one front end: the pre-definition and its two
+projections** (DESIGN, 2026-09-18; the user's ruling of that day on
+the reorder and on the shape; §13 item 49; built in landings, each
+with its as-built below).
+
+*Why.* Slice 3.15 built the elaborator law §5.1 describes, and left a
+`fn`'s body on the older route: the classifier types it with E's own
+first-order typing (`c_type`), and `realize.shard`'s `tr` translates
+the E term **up** into L. The law's direction is the other one (§2,
+§4: E is a fragment of L; the classifier is the *fragment*
+classifier, a Stage-1 item after elaboration). The upward route
+exists because the Stage-0 ruling of 2026-09-07 made `fn` E-only, so
+E needed a reader and a typing before any L existed for it. Guard 1
+above was written against `tr` and was met in wording only. The
+symptoms are two type systems and two resolvers: at the slice's
+opening calc's spec file has 12 functions defined and 13 `RUNNABLE`,
+from three roots — `is_digit` and `is_ws` (a comparison is a `Bool`
+in E and a proposition in L), `digit_val` (`(- c 48)`: a literal has
+no type in `c_type`, so the operator finds no identity) — and `Add`
+names calc's constructor in a `fn` body and is `ambiguous_name` with
+Init's class in a `def`.
+
+*The probe* (2026-09-18; a scratch file through the loader with
+`--dump`, each function once as a `fn` and once as a `def` with the
+derived view of §7.1). A non-recursive `match` (`flush`): the two E
+programs byte-identical, the two L values one hash. Structural
+recursion: K's value is `brecOn` and §7.1 refuses it, as §7.3 said it
+must (Lean compiles its pre-definition, never the kernel term); the
+hand-written pre-definition — `casesOn`, the self-call a constant —
+erases to the classifier's program up to the primitive's spelling
+(`Nat.add` for `+`). At `Int` the erasure refuses `Int.add`: the
+operator table has no inverse. Nested patterns (`parse_rest`): the
+erased `casesOn` tree means the same by reading (not run) and is not
+the program — four arms become a tree with the fall-through eight
+times. So neither extreme: E cannot be read off K's finished term,
+and L should not be translated up from E.
+
+*The shape.* S is elaborated **once**, by `elab.shard`, into a
+**pre-definition**: an ordinary L term over K's locals in which the
+function's own name is a local of its declared type and every `match`
+is the application of a generated **matcher** constant. Two
+projections leave it:
+
+- **toward E** — erasure (§7.1's rule, generalized): types, proofs
+  and erased binders dropped, a matcher application back to the
+  `EMatch` with the patterns as written, the self-local to an `ECall`
+  of the function, a decision to its primitive. This **is** the
+  function's program: for a function on this route the classifier's
+  typing and `tr` do not run.
+- **toward K** — the matchers expanded to their `casesOn` trees and
+  the recursion compiled exactly as slices 3.13–3.14 ruled (`T.rec`
+  with a constant motive, `T.brecOn` with the table generalized at
+  each split, `WellFounded.fix` with the `f.dec_N` obligations),
+  `define.shard`'s machinery re-pointed from E terms and E types to
+  the pre-definition and K's types. A definition's value, its
+  `f.eq_N` and their names are what they are today.
+
+The classifier becomes what the law calls it: a check on the
+elaborated term that it lies in the fragment (§6.3's refusals — a
+function value in a runtime position, a noncomputable head, a callee
+without a realization — raised by the erasure), not a second type
+system. There is no new term language: the pre-definition is `Expr`.
+
+**The rules of slice 3.16:**
+
+1. **Matchers.** A `match` elaborates to `OWNER.match_N` applied to a
+   motive, the scrutinees and one alternative per row (Lean's shape:
+   `(motive : D… → Sort v) → (d : D)… → (alt_i : ∀ pattern
+   variables, motive pattern_i)… → motive d…`; an alternative without
+   variables is `motive pattern_i`, no `Unit` thunk — nothing in L is
+   lazy and the erasure takes the arm directly). The matcher is a
+   definition K checks, admitted before its owner with an `ACCEPT`
+   record as the bundle's constants are: a `casesOn` tree by
+   first-match column splitting (the compilation `df_matrix` does
+   today, stated over K's types), a fall-through row's alternative
+   applied at every leaf it reaches. A side table keeps each
+   matcher's pattern matrix for the two projections. The elaborator
+   cites it with the motive from the expected type (the Miller
+   pattern of slice 3.15 rule 5 gives the constant motive); a
+   dependent motive is a later slice. **A `match` in a statement or a
+   `def` is the same form** — slice 3.15's "not in the slice" item
+   closes here. Literal patterns (an integer, a symbol) are the
+   obstacle `literal_pattern` until a consumer under the naming law
+   has one (the toolchain's sources are on the E-first route, rule 6).
+2. **The self-local.** A `fn` with a `(measure …)` is elaborated with
+   its name bound to a local of its Pi type; the pre-definition's
+   value mentions it. Erasure maps it to the `ECall`; the K
+   projection replaces each applied occurrence as 3.13–3.14 rule. A
+   callee not yet defined parks the function as slice 3.15 rule 6
+   has it; a true mutual pair still ends `RUNNABLE`.
+3. **`Bool` and propositions meet in the elaborator, Lean's way.** A
+   proposition where a `Bool` is expected is `Decidable.decide p`
+   with the decision `decision_of` finds (else `no_decision`); a
+   `Bool` where a proposition is expected — an `if`'s condition — is
+   `c = true` with `Bool`'s `decEq`. This **changes slice 3.15 rule
+   4**: `if` on a `Bool` is `ite (c = true) …`, not `cond` (Lean's
+   own elaboration; `cond` sits at export line 151,585, past every
+   fixture). Erasure: `decide p inst` is the erasure of `inst`;
+   `Nat.decLt`/`decLe`/`decEq` and `Int`'s are the table's
+   comparisons; the decision of `c = true` is `c`.
+4. **The operator table gains its inverse.** Erasure maps `Int.add`,
+   `Int.sub`, `Int.mul` and the six decisions back to the entries
+   §8.4 rule 3 maps from. The `Nat` identities stay entries under
+   their own names. `-` `/` `mod` at `Nat` have L identities and no E
+   realization still (guard 2): in a `fn` body the elaborator accepts
+   them and the erasure refuses, the record naming the operator
+   (`nat_operator`, as today).
+5. **One resolver.** A `fn` body's names resolve as a `def`'s do
+   (`scope.shard`). Where a bare name is ambiguous and exactly one
+   candidate is a constructor of the expected type's head inductive,
+   that constructor is meant (§3.1's "Stage 1 resolves constructors
+   by expected type", now built) — `Add` in calc's bodies and in its
+   theorem alike.
+6. **Which route.** A function takes this route when its signature
+   elaborates (every binder and return type has an L identity). Then
+   an *obstacle* in the body — a head without an L identity (a
+   symbol literal, a toolchain-prelude spelling), a callee that is
+   `RUNNABLE` — sends it back to the E-first route whole: the
+   classifier's program, `RUNNABLE` with the obstacle named, as
+   today. Anything else that fails is a **refusal** (`type_mismatch`
+   and the rest of §5.1's): a `fn` body is typed against its
+   signature from this slice on (§12.1's "return types unchecked"
+   row). A function whose signature has no L reading — every
+   function of the toolchain's own sources, which name the prelude's
+   types — never enters the route; the E-first path is theirs until
+   they port under the naming law, and is deleted then (guard 2).
+   Frontend parity and route 2's byte-tie are over those sources and
+   do not move.
+7. **`realize` with a supplied body** takes the same route: the body
+   elaborated against the realized constant's type, its program the
+   erasure, its equations per leaf as §7.5 has them. With rules 1–6
+   `tr` has no caller and is **deleted**, with `c_type`'s use as a
+   typing for L (`arg_types`, `prim_typed_identity`, `ctor_etargs`).
+   The derived view is the E projection applied to a constant's
+   value, unchanged in what it accepts.
+8. **The facilities that are small once there is one place for
+   them:** `(list a b c)` by the expected type's `List` (no expected
+   type: `unsolved_implicit`, never a default element type); a
+   negative numeral is already §5.3's. `"…"` in a `fn` body, symbols,
+   `Name` literals, record update, the fresh-name convention and E's
+   rename of `lt le int_eq` are slice 3.17; the byte and text
+   adapters and deriving are slice 3.18, the wire's type ruled first.
+
+**Landings and gates.** (1) Matchers and `match` in L terms; the
+constructor-by-expected-type rule; pins. (2) The E projection
+generalized (matcher, self-local, `decide`, the inverse table,
+`Bool`'s `if`) with a **tie test**: for every function defined today
+in calc's files and `v3/std/list.shard`, the erasure of the
+pre-definition against the classifier's program, byte for byte up to
+rule 4's spellings. (3) The flip: `fn` and supplied `realize` on the
+route, `define.shard` re-pointed, `tr` deleted; then `(list …)`.
+Every landing keeps the loader pins, parity, route 2, K's clients and
+T0 green. **The slice's gate:** calc's spec file with all 25
+functions defined; `calc_test` byte-identical against the old tree
+with the programs now the erasures; the equations' names and the
+values' hashes of the functions defined today unchanged.
+
+**Risks named before code.** The table generalization of slice 3.14
+was written over E patterns and E types; re-pointing it is the
+largest piece and the landing where a full context window may go.
+A matcher's universe (`Sort v`) is one more level for the elaborator
+to infer at each `match`. Erasing through a matcher depends on the
+side table surviving a view's fork (§6.6). If the tie test of
+landing 2 fails on a shape the probe did not cover, the design
+returns here before landing 3.
 
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
@@ -2857,3 +3025,22 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     cites what E cites (guard 1). The phase-2 spelling of implicit
     arguments is gone from the pins and stands under `@`. **As built
     (2026-09-18):** see §8.4's as-built.
+49. **One front end: the pre-definition and its two projections**
+    (§8.4's slice-3.16 design; the user's ruling of 2026-09-18 on the
+    reorder and the shape, after the probe recorded there): S
+    elaborated once into an L term with the self-name a local and
+    every `match` a generated matcher constant, rather than the
+    classifier's E term translated up (`tr`, deleted) or the E
+    program read off K's finished value (it loses the recursion and
+    the patterns — §7.3); matchers as constants K checks, Lean's
+    shape, rather than a second term language with a `match` node
+    (the pre-definition stays `Expr`, and a `match` in a statement is
+    the same form); the erasure **is** the program for a function on
+    the route, rather than a tie kept beside the classifier's (two
+    resolvers would remain); `if` on a `Bool` as `ite (c = true)`,
+    reversing slice 3.15's `cond` (rejected because: not Lean's
+    elaboration, and past every fixture); an obstacle sends a
+    function back to the E-first route whole while a type error is a
+    refusal; the E-first route stays for the toolchain's sources
+    until they port. Slices 3.17–3.18 take the rest of R60's row; I
+    is 3.19+.

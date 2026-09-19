@@ -2142,6 +2142,41 @@ is `docs/FOUNDATION.md` §5.3.
   closures and 83,436 lines, route 2 53 s, route 1 built, the full
   replay 2,433 s at 32.2 GB peak, T0 accepted 57,977, 20 pinned,
   closures identical). The slice stands on the full gate.
+- **2026-09-18 — slice 3.16 reordered and designed: one front end**
+  (`LANGUAGE.md` §8.4's slice-3.16 design, §13 item 49). Scoping the
+  planned 3.16 (R60's facilities) against calc's spec file — 12
+  functions defined, 13 `RUNNABLE`, from three roots: two `Bool`-valued
+  comparisons and `(- c 48)`, whose literal has no type in the
+  classifier's typing — showed that slice 3.15 left a `fn`'s body on
+  the phase-2 route: E typed by `c_type`, then translated **up** into
+  L by `tr`. The user asked whether that was a surface issue or
+  something missed at V3's start. Answer recorded: the concept stands
+  (the checkpoint of 2026-09-13 above; law §2, §4, §5.1 put the
+  classifier after elaboration), the build order reversed it (the
+  Stage-0 ruling made E need its own reader and typing first), and
+  guard 1 was written at slice 3.12 against `tr` — met in wording,
+  missed in substance, and not flagged when 3.15 built the real
+  elaborator. A probe before the design (each function as a `fn` and
+  as a `def` with the derived view, the two `--dump`s compared):
+  `flush` byte-identical with one L hash; a recursive value is
+  `brecOn` and refused, as §7.3 said; a hand-written pre-definition
+  erases to the classifier's program up to `Nat.add` for `+`;
+  `Int.add` refused (no inverse in the operator table); `parse_rest`'s
+  nested patterns come back as a case tree with the fall-through eight
+  times (same meaning by reading; not run). Also found: `Add` resolves
+  to calc's constructor in a `fn` body and is ambiguous in a `def` —
+  two resolvers. Ruled: Lean's shape — a pre-definition in `Expr`
+  with matcher constants and the self-name a local, erased to E and
+  compiled to K; `tr` deleted; the E-first route for the toolchain's
+  sources until they port; `if` on a `Bool` as `ite (c = true)`
+  (slice 3.15's `cond` reversed: not Lean's elaboration and past
+  every fixture). Rejected: keeping `tr`'s skeleton with the
+  elaborator called at the leaves (a third hybrid); reading E off K's
+  finished value (loses recursion and patterns); a second term
+  language with a `match` node (E with types again). The order after
+  it: 3.17 the porting facilities, 3.18 bytes, text and deriving, I
+  from 3.19. Cleanup seen and left for the slice: `define.shard`
+  opens `kernel.level.Level` twice.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 
