@@ -14,7 +14,6 @@
 (use kernel.elab)
 (use kernel.expr)
 (use kernel.kw)
-(use kernel.level)
 (use kernel.name)
 (use kernel.prelude)
 (use kernel.scope)
@@ -61,9 +60,6 @@
           ((Some ps) (Pair (Some (Head (qualify sc n) ps)) Nil))
           (None (Pair None "universe parameters are names: NAME.{u v}"))))))
     (_ (Pair None "a declared name is NAME or NAME.{u…}"))))
-(fn lparam_levels ((lps (List Name))) (List Level)
-  (measure (struct lps))
-  (match lps (Nil Nil) ((Cons u r) (Cons (LParam u) (lparam_levels r)))))
 
 ;; ---- closing over the binders ------------------------------------------------------------
 ;; the Pi over the declaration's binders, finished (no metavariable survives)
@@ -71,6 +67,10 @@
   (match (el_pis e fvars t) ((Pair e1 pi) (Pair e1 (el_finish e1 pi)))))
 (fn close_lams ((e El) (fvars (List Expr)) (v Expr)) (Pair El FinRes)
   (match (el_lams e fvars v) ((Pair e1 lam) (Pair e1 (el_finish e1 lam)))))
+
+;; what a form declares after the matchers its terms generated (elab.shard's el_aux: already
+;; checked into the walk's environment, admitted by the loader before their owner)
+(fn rd_ok ((e El) (ds (List Declaration))) RDecl (RDOk (append (el_aux e) ds)))
 (fn rd_err ((r FinRes)) RDecl (match r ((FinErr s m) (RDErr s m)) ((FinOk _) (RDErr (quote bad_shape) "finished"))))
 
 ;; ---- the forms (§4) -----------------------------------------------------------------------
@@ -108,7 +108,7 @@
      (match (read_head sc hd)
        ((Pair None m) (RDErr (quote bad_name) m))
        ((Pair (Some (Head n lps)) _)
-        (match (read_binders (el0 sc env lps Nil) bs Nil)
+        (match (read_binders (el0 sc env lps Nil n) bs Nil)
           ((Pair None m) (RDErr (quote bad_binder) m))
           ((Pair (Some (Pair e1 fvars)) _)
            (match (elab_type e1 ty)
@@ -124,11 +124,11 @@
                      ((Pair e4 (FinOk T))
                       (match (close_lams e4 fvars v)
                         ((Pair _ (FinErr r m)) (RDErr r m))
-                        ((Pair _ (FinOk value))
+                        ((Pair e5 (FinOk value))
                          (let ((cv (ConstantVal n lps T)))
                            (if (sym_eq kind (quote opaque))
-                             (RDOk (list (OpaqueDecl cv value False (list n))))
-                             (RDOk (list (DefnDecl cv value (if (sym_eq kind (quote abbrev)) HAbbrev (HRegular (def_height env value))) Safe (list n))))))))))))))))))))
+                             (rd_ok e5 (list (OpaqueDecl cv value False (list n))))
+                             (rd_ok e5 (list (DefnDecl cv value (if (sym_eq kind (quote abbrev)) HAbbrev (HRegular (def_height (el_env e5) value))) Safe (list n))))))))))))))))))))
     (_ (RDErr (quote bad_shape) (append "(" (append (chars_of_sym kind) " NAME ((x TYPE)…) TYPE VALUE)"))))))
 
 ;; a Stage-0 proof: (exact TERM) or sorry — TERM at the statement, over the binders
@@ -145,7 +145,7 @@
             ((Pair e2 (FinOk T))
              (match (close_lams e2 fvars v)
                ((Pair _ (FinErr r m)) (RDErr r m))
-               ((Pair _ (FinOk value)) (RDOk (list (ThmDecl (ConstantVal n lps T) value (list n))))))))))
+               ((Pair e3 (FinOk value)) (rd_ok e3 (list (ThmDecl (ConstantVal n lps T) value (list n))))))))))
      (if (sym_eq x (quote by)) (RDErr (quote reserved_form) "by: phase 3 (tactics); a Stage-0 proof is (exact TERM) or sorry")
        (RDErr (quote bad_proof) "a Stage-0 proof is (exact TERM) or sorry"))))
     (_ (RDErr (quote bad_proof) "a Stage-0 proof is (exact TERM) or sorry"))))
@@ -182,7 +182,7 @@
      (match (name_of_sym x)
        (None (Pair None (chars_of_sym x)))
        ((Some short)
-        (match (read_binders (el_with_etype (el0 sc env Nil Nil) True) bs Nil)
+        (match (read_binders (el_with_etype (el0 sc env Nil Nil (qualify sc short)) True) bs Nil)
           ((Pair None m) (Pair None (append "bad binder: " m)))
           ((Pair (Some (Pair e1 fvars)) _)
            (match (elab_type e1 ret)
@@ -195,7 +195,10 @@
 ;; (requirement NAME BINDERS PROP): the parameter NAME : ∀ BINDERS, PROP (L terms)
 (fn read_requirement ((sc Scope) (env CheckedEnv) (args (List SExpr))) RDecl
   (match (read_statement sc env args)
-    ((RSOk _ n lps _ _ T) (RDParam (AxiomDecl (ConstantVal n lps T) False) (quote requirement) 0))
+    ((RSOk e n lps _ _ T)
+     (match (el_aux e)
+       (Nil (RDParam (AxiomDecl (ConstantVal n lps T) False) (quote requirement) 0))
+       (_ (RDErr (quote match_in_requirement) "a requirement's statement with a match needs its matcher in the view: state it over a def (LANGUAGE.md §8.4 slice 3.16 rule 1)"))))
     ((RSErr m) (RDErr (quote bad_shape) m))))
 ;; a statement read: the state over the binders, the name, its universe
 ;; parameters, the fvars, the open proposition, the closed one
@@ -206,7 +209,7 @@
      (match (read_head sc hd)
        ((Pair None m) (RSErr m))
        ((Pair (Some (Head n lps)) _)
-        (match (read_binders (el0 sc env lps Nil) bs Nil)
+        (match (read_binders (el0 sc env lps Nil n) bs Nil)
           ((Pair None m) (RSErr (append "bad binder: " m)))
           ((Pair (Some (Pair e1 fvars)) _)
            (match (elab_type e1 prop)
@@ -230,7 +233,7 @@
      (match (read_head sc hd)
        ((Pair None m) (RDErr (quote bad_name) m))
        ((Pair (Some (Head n lps)) _)
-        (match (read_binders (el0 sc env lps Nil) bs Nil)
+        (match (read_binders (el0 sc env lps Nil n) bs Nil)
           ((Pair None m) (RDErr (quote bad_binder) m))
           ((Pair (Some (Pair e1 fvars)) _)
            (match (elab_type e1 ty)
@@ -238,7 +241,7 @@
              ((EOk e2 t _)
               (match (close_pis e2 fvars t)
                 ((Pair _ (FinErr r m)) (RDErr r m))
-                ((Pair _ (FinOk T)) (RDOk (list (AxiomDecl (ConstantVal n lps T) False))))))))))))
+                ((Pair e3 (FinOk T)) (rd_ok e3 (list (AxiomDecl (ConstantVal n lps T) False))))))))))))
     (_ (RDErr (quote bad_shape) "(axiom NAME ((x TYPE)…) TYPE)"))))
 
 ;; (inductive NAME.{u…} BINDERS TYPE (CTOR TYPE)…): one type, Lean's shapes; the
@@ -249,7 +252,7 @@
      (match (read_head sc hd)
        ((Pair None m) (RDErr (quote bad_name) m))
        ((Pair (Some (Head n lps)) _)
-        (match (read_binders (el0 sc env lps Nil) bs Nil)
+        (match (read_binders (el0 sc env lps Nil n) bs Nil)
           ((Pair None m) (RDErr (quote bad_binder) m))
           ((Pair (Some (Pair e1 fvars)) _)
            (match (elab_type e1 ty)
@@ -290,7 +293,7 @@
        ((Pair None m) (RDErr (quote bad_name) m))
        ((Pair (Some (Pair n params)) _)
         (let ((IT (type_former_type (len params))))
-          (match (type_locals (el_with_etype (el0 sc env Nil (list (Defd n 0 IT))) True) params Nil)
+          (match (type_locals (el_with_etype (el0 sc env Nil (list (Defd n 0 IT)) n) True) params Nil)
             ((Pair e1 fvars)
              (match (w_apps (el_w e1) (mk_const n Nil) fvars)
                ((Pair w2 result)
@@ -345,7 +348,7 @@
      (match (read_head sc hd)
        ((Pair None m) (RDErr (quote bad_name) m))
        ((Pair (Some (Head n lps)) _)
-        (match (read_binders (el0 sc env lps Nil) bs Nil)
+        (match (read_binders (el0 sc env lps Nil n) bs Nil)
           ((Pair None m) (RDErr (quote bad_binder) m))
           ((Pair (Some (Pair e1 params)) _)
            (match (close_pis e1 params (mk_sort (LSucc LZero)))

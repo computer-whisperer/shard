@@ -1,0 +1,69 @@
+;;; v3/kernel/test/matcher_test.shard — a matcher's type is its description (LANGUAGE.md §8.4
+;;; slice 3.16 rule 1; GPT-6 R64, fixture G2): mt_is_matcher reads the rows back off an admitted
+;;; constant's type, regenerates the definition and compares — the generated matchers of the
+;;; pins are recognized with their rows, an ordinary definition and an imposter of the right
+;;; type are not.
+;;; Run: ./rust_bootstrap/target/release/eval direct v3/kernel/test/matcher_test.shard
+;;; Exit code = number of failures.
+
+(import "loader_kit.shard")
+(import "case_kit.shard")
+(use kernel.k)
+(use kernel.host)
+(use kernel.loader)
+(use kernel.matcher)
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.test.loader_kit)
+(use kernel.util)
+(use kernel.host.World)
+(use kernel.matcher.MtDesc)
+(use kernel.matcher.MtPat)
+(use kernel.name.Name)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.test.case_kit)
+(use kernel.test.case_kit.Case)
+
+(fn env_after ((root (List Int)) (w World)) (Pair CheckedEnv World)
+  (match (parts_of root)
+    (None (Pair (env_empty) w))
+    ((Some rootp)
+     (match (load_all (load0 rootp (list (fixture_int))) (list (append root "/main.shard")) w)
+       ((Pair l w1) (Pair (Load.env l) w1))))))
+(fn nm3 ((a Symbol) (b Symbol) (c Symbol)) Name (Str (Str (Str Anon a) b) c))
+(fn nm4 ((a Symbol) (b Symbol) (c Symbol) (d Symbol)) Name (Str (nm3 a b c) d))
+;; nparams, nscrutinees, rows of a recognized matcher; (-1 -1 -1) otherwise
+(fn shape ((d (Option MtDesc))) (List Int)
+  (match d ((Some (MtDesc np nd rows)) (list np nd (len rows))) (None (list (- 0 1) (- 0 1) (- 0 1)))))
+(fn is_none ((d (Option MtDesc))) Bool (match d (None True) ((Some _) False)))
+;; the first row's one pattern is a constructor pattern with this many sub-patterns
+(fn row_ctor_arity ((d (Option MtDesc)) (i Int)) Int
+  (match d
+    ((Some (MtDesc _ _ rows)) (match (nth rows i) ((Some (Cons (MtCtor _ subs) Nil)) (len subs)) ((Some (Cons (MtVar _) Nil)) (- 0 1)) (_ (- 0 2))))
+    (None (- 0 3))))
+
+(fn cases ((w World)) (Pair (List Case) World)
+  (match (env_after "v3/pins/loader/match_def" w)
+    ((Pair env w1)
+     (match (env_after "v3/pins/loader/match_poly" w1)
+       ((Pair penv w2)
+        (match (env_after "v3/pins/loader/match_imposter" w2)
+          ((Pair ienv w3)
+           (Pair
+             (list
+               (Case "flush's matcher: no parameters, one scrutinee, two rows" (int_list_eq (shape (mt_is_matcher env (nm3 (quote main) (quote flush) (quote match_1)))) (list 0 1 2)))
+               (Case "parse1's matcher: four rows, as written" (int_list_eq (shape (mt_is_matcher env (nm3 (quote main) (quote parse1) (quote match_1)))) (list 0 1 4)))
+               (Case "parse1's second row is cons on two sub-patterns" (int_eq (row_ctor_arity (mt_is_matcher env (nm3 (quote main) (quote parse1) (quote match_1))) 1) 2))
+               (Case "parse1's last row is the variable row" (int_eq (row_ctor_arity (mt_is_matcher env (nm3 (quote main) (quote parse1) (quote match_1))) 3) (- 0 1)))
+               (Case "an ordinary definition is no matcher" (is_none (mt_is_matcher env (Str (Str Anon (quote main)) (quote flush)))))
+               (Case "a recursor's casesOn is no matcher" (is_none (mt_is_matcher env (Str (Str Anon (quote List)) (quote casesOn)))))
+               (Case "head_or's matcher has the type parameter as its one parameter" (int_list_eq (shape (mt_is_matcher penv (nm3 (quote main) (quote head_or) (quote match_1)))) (list 1 1 2)))
+               (Case "a hand-written matcher that is the generated one is a matcher" (int_list_eq (shape (mt_is_matcher ienv (nm3 (quote main) (quote pick) (quote match_1)))) (list 0 1 2)))
+               (Case "an imposter of a matcher's type and name is none" (is_none (mt_is_matcher ienv (nm3 (quote main) (quote fake) (quote match_1))))))
+             w3))))))))
+
+(fn main ((w World)) World
+  (match (cases w) ((Pair cs w1) (run_cases "matcher_test" cs 0 w1))))

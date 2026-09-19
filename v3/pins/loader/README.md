@@ -128,3 +128,14 @@ defined once the callee is, its equation cited) and `elab_confusion`
 (the constructor-structure bundle of two native types cited: `Color.
 noConfusion` at `False`, `Tree.Node.inj`, `Tree.casesOn` with the
 motive from the expected type) close slice 3.15.
+Slice 3.16 landing 1 (matchers; §8.4 rule 1, 5): `match_def` (a `match`
+in a `def` as a generated matcher admitted before its owner; nested
+patterns with a fall-through row; the theorems `Eq.refl` through it),
+`match_statement` (the same form in a statement, the theorem owning
+the matcher), `match_poly` (the matcher abstracts the type parameter
+its scrutinee's type mentions), `match_imposter` (a hand-written
+matcher and an imposter of the same type, for
+`kernel/test/matcher_test.shard`), `match_not_exhaustive`,
+`match_literal` (`literal_pattern`), `match_motive` (the type not
+determined at the position), `ctor_expected` (`Add` at an expected
+`Exp` beside Init's class).

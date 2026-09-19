@@ -16,7 +16,14 @@
 ;;; operand (§8.4 rule 3 on the L side: `-`, `/`, `mod` at `Nat` are
 ;;; `Nat.sub`, `Nat.div`, `Nat.mod` here — nothing runs); `if` is `ite`
 ;;; with the decision of its proposition's head, `cond` on a `Bool`. `@f`
-;;; is Lean's explicit application: no binder is implicit.
+;;; is Lean's explicit application: no binder is implicit. `(match t (PAT
+;;; BODY)…)` is the application of a generated matcher (matcher.shard; slice
+;;; 3.16 rule 1): the matcher is checked into the walk's environment as it is
+;;; made and handed to the reader with the declaration (`el_aux`), so K admits
+;;; it before its owner. A bare name that is ambiguous is the constructor of
+;;; the expected type's inductive when exactly that settles it (rule 5).
+;;; Unification's outcomes are kept apart (rule 9): a blocked or exhausted
+;;; attempt is `unify_stuck` / `unify_exhausted`, never `type_mismatch`.
 ;;;
 ;;; Untrusted, as the law says: K rechecks every closed declaration this
 ;;; produces; a wrong assignment is K's refusal, a missing one is this
@@ -24,21 +31,28 @@
 
 (import "scope.shard")
 (import "unify.shard")
+(import "matcher.shard")
 (use kernel.k)
 (use kernel.expr)
 (use kernel.kw)
 (use kernel.level)
+(use kernel.matcher)
 (use kernel.name)
 (use kernel.prelude)
 (use kernel.scope)
 (use kernel.sexpr)
 (use kernel.unify)
+(use kernel.decl)
 (use kernel.util)
+(use kernel.decl.ConstantInfo)
 (use kernel.expr.BinderInfo)
 (use kernel.expr.Expr)
 (use kernel.expr.Literal)
 (use kernel.kw.W)
 (use kernel.level.Level)
+(use kernel.matcher.MtGen)
+(use kernel.matcher.MtInd)
+(use kernel.matcher.MtPat)
 (use kernel.name.Name)
 (use kernel.prelude.Bool)
 (use kernel.prelude.List)
@@ -53,16 +67,26 @@
 (use kernel.unify.URes)
 
 ;; the elaboration state: K's world (environment, locals, checker state), the
-;; metavariable context, the scope context
-(type El (El W MCtx Cx))
-(fn el_w ((e El)) W (match e ((El w _ _) w)))
-(fn el_mc ((e El)) MCtx (match e ((El _ m _) m)))
-(fn el_cx ((e El)) Cx (match e ((El _ _ c) c)))
-(fn el_set_w ((e El) (w W)) El (match e ((El _ m c) (El w m c))))
-(fn el_set_mc ((e El) (m MCtx)) El (match e ((El w _ c) (El w m c))))
-(fn el_set_cx ((e El) (c Cx)) El (match e ((El w m _) (El w m c))))
-(fn el0 ((sc Scope) (env CheckedEnv) (lps (List Name)) (defining (List Defd))) El
-  (El (w0 env) (mc0) (cx0 sc env lps defining)))
+;; metavariable context, the scope context, the generated declarations
+(type El (El W MCtx Cx Gen))
+;; what elaboration generates beside the term: the owner the names hang under, the next
+;; matcher's number, the declarations made so far in admission order (already checked into
+;; the walk's environment; the reader hands them to the loader before the owner)
+(type Gen (Gen Name Int (List Declaration)))
+(fn el_w ((e El)) W (match e ((El w _ _ _) w)))
+(fn el_mc ((e El)) MCtx (match e ((El _ m _ _) m)))
+(fn el_cx ((e El)) Cx (match e ((El _ _ c _) c)))
+(fn el_gen ((e El)) Gen (match e ((El _ _ _ g) g)))
+(fn el_set_w ((e El) (w W)) El (match e ((El _ m c g) (El w m c g))))
+(fn el_set_mc ((e El) (m MCtx)) El (match e ((El w _ c g) (El w m c g))))
+(fn el_set_cx ((e El) (c Cx)) El (match e ((El w m _ g) (El w m c g))))
+(fn el_aux ((e El)) (List Declaration) (match (el_gen e) ((Gen _ _ ds) ds)))
+(fn el_owner ((e El)) Name (match (el_gen e) ((Gen o _ _) o)))
+(fn el_next_matcher ((e El)) Int (match (el_gen e) ((Gen _ k _) k)))
+(fn el_add_aux ((e El) (d Declaration)) El
+  (match e ((El w m c (Gen o k ds)) (El w m c (Gen o (+ k 1) (append ds (list d)))))))
+(fn el0 ((sc Scope) (env CheckedEnv) (lps (List Name)) (defining (List Defd)) (owner Name)) El
+  (El (w0 env) (mc0) (cx0 sc env lps defining) (Gen owner 1 Nil)))
 (fn el_env ((e El)) CheckedEnv (w_env (el_w e)))
 (fn el_with_etype ((e El) (t Bool)) El (el_set_cx e (cx_with_etype (el_cx e) t)))
 (fn el_with_defining ((e El) (d (List Defd))) El (el_set_cx e (cx_with_defining (el_cx e) d)))
@@ -76,8 +100,24 @@
 (fn el_whnf ((e El) (x Expr)) (Pair El Expr)
   (let ((z (el_zonk e x)))
     (match (w_whnf (el_w e) z) ((Pair w1 (Some r)) (Pair (el_set_w e w1) r)) ((Pair w1 None) (Pair (el_set_w e w1) z)))))
+;; unification with its outcome (rule 9); `el_unify` where any failure is one "no"
+(type EU (EUOk El) (EUNo) (EUStuck Int) (EUExhausted Symbol))
+(fn el_unify_r ((e El) (a Expr) (b Expr)) EU
+  (match (unify (el_w e) (el_mc e) a b)
+    ((UYes w1 mc1) (EUOk (El w1 mc1 (el_cx e) (el_gen e))))
+    (UNo EUNo)
+    ((UStuck i) (EUStuck i))
+    ((UExhausted site) (EUExhausted site))))
 (fn el_unify ((e El) (a Expr) (b Expr)) (Option El)
-  (match (unify (el_w e) (el_mc e) a b) ((UYes w1 mc1) (Some (El w1 mc1 (el_cx e)))) (UNo None)))
+  (match (el_unify_r e a b) ((EUOk e1) (Some e1)) (_ None)))
+;; the refusal of a blocked or an exhausted unification, naming what it waits for
+(fn eu_refusal ((e El) (u EU) (otherwise ERes)) ERes
+  (match u
+    ((EUStuck i)
+     (EErr (quote unify_stuck)
+       (append "blocked on " (append (match (mc_decl (el_mc e) i) ((Some d) (show_name (md_name d))) (None "a metavariable")) ": an argument the elaborator cannot solve first-order — write the application with @ (law §5.1)"))))
+    ((EUExhausted site) (EErr (quote unify_exhausted) (append "unification ran out at " (chars_of_sym site))))
+    (_ otherwise)))
 (fn el_infer ((e El) (x Expr)) (Pair El (Option Expr))
   (match (w_infer (el_w e) (el_zonk e x)) ((Pair w1 r) (Pair (el_set_w e w1) r))))
 ;; a fresh metavariable in the current scope
@@ -94,16 +134,16 @@
 ;; the binding is closed by K's mk_binding over the local's declaration)
 (fn el_local ((e El) (n Name) (ty Expr) (bi BinderInfo)) (Pair El Expr)
   (match (w_local_bi (el_w e) n (el_zonk e ty) bi)
-    ((Pair w1 fv) (Pair (El w1 (el_mc e) (cx_bind (el_cx e) n fv)) fv))))
+    ((Pair w1 fv) (Pair (El w1 (el_mc e) (cx_bind (el_cx e) n fv) (el_gen e)) fv))))
 (fn el_local_val ((e El) (n Name) (ty Expr) (v Expr)) (Pair El Expr)
   (match (w_local_val (el_w e) n (el_zonk e ty) (el_zonk e v))
-    ((Pair w1 fv) (Pair (El w1 (el_mc e) (cx_bind (el_cx e) n fv)) fv))))
+    ((Pair w1 fv) (Pair (El w1 (el_mc e) (cx_bind (el_cx e) n fv) (el_gen e)) fv))))
 ;; close binders over fvars: the body instantiated, K's mk_binding, the
 ;; metavariables that survive lose the closed locals from their telescopes
 (fn el_close ((e El) (fvars (List Expr)) (b Expr) (is_lam Bool)) (Pair El Expr)
   (let ((z (el_zonk e b)))
     (match (if is_lam (w_lams (el_w e) fvars z) (w_pis (el_w e) fvars z))
-      ((Pair w1 r) (Pair (El w1 (mc_drop_fvars (el_mc e) (fvar_ids fvars)) (el_cx e)) r)))))
+      ((Pair w1 r) (Pair (El w1 (mc_drop_fvars (el_mc e) (fvar_ids fvars)) (el_cx e) (el_gen e)) r)))))
 (fn el_pis ((e El) (fvars (List Expr)) (b Expr)) (Pair El Expr) (el_close e fvars b False))
 (fn el_lams ((e El) (fvars (List Expr)) (b Expr)) (Pair El Expr) (el_close e fvars b True))
 ;; leave the scope of the locals opened after `saved` (the world keeps them: a
@@ -115,12 +155,16 @@
 ;; the term instantiated; an unsolved metavariable names its binder
 (fn el_finish ((e El) (x Expr)) FinRes
   (let ((z (el_zonk e x)))
-    (match (first_mvar z)
-      ((Some i) (unsolved_msg e i))
-      (None
-       (match (first_lmvar z)
-         ((Some _) (FinErr (quote unsolved_universe) "a universe the declared inputs do not determine: write NAME.{…} (law §5.2)"))
-         (None (FinOk z)))))))
+    (match (tentative_bad (el_w e) (el_mc e))
+      ((Some i) (FinErr (quote tentative_assignment) (append "the value unification chose for " (append (match (mc_decl (el_mc e) i) ((Some d) (show_name (md_name d))) (None "a metavariable")) " does not have its type: write the application with @ (law §5.1)"))))
+      (None (el_finish_term e z)))))
+(fn el_finish_term ((e El) (z Expr)) FinRes
+  (match (first_mvar z)
+    ((Some i) (unsolved_msg e i))
+    (None
+     (match (first_lmvar z)
+       ((Some _) (FinErr (quote unsolved_universe) "a universe the declared inputs do not determine: write NAME.{…} (law §5.2)"))
+       (None (FinOk z))))))
 (fn unsolved_msg ((e El) (i Int)) FinRes
   (match (mc_decl (el_mc e) i)
     (None (FinErr (quote unsolved_implicit) "an argument the declared inputs do not determine"))
@@ -169,9 +213,11 @@
   (match expected
     (None (EOk e v ty))
     ((Some x)
-     (match (el_unify e ty x)
-       ((Some e1) (EOk e1 v (el_zonk e1 x)))
-       (None
+     (match (el_unify_r e ty x)
+       ((EUOk e1) (EOk e1 v (el_zonk e1 x)))
+       ((EUStuck i) (eu_refusal e (EUStuck i) (EErr (quote type_mismatch) "blocked")))
+       ((EUExhausted site) (eu_refusal e (EUExhausted site) (EErr (quote type_mismatch) "exhausted")))
+       (EUNo
         (match (el_whnf e ty)
           ((Pair e1 tyw)
            (match (el_whnf e1 x)
@@ -201,8 +247,9 @@
        (match args ((Cons l Nil) (match (elab_level e l) ((Some u) (check_expected e (mk_sort (LSucc u)) (mk_sort (LSucc (LSucc u))) expected)) (None (EErr (quote bad_level) "(Type LEVEL)")))) (_ (EErr (quote bad_shape) "(Type LEVEL)")))
      (if (sym_eq h (quote proj)) (elab_proj e args expected)
      (if (sym_eq h (quote if)) (elab_if e args expected)
+     (if (sym_eq h (quote match)) (elab_match e args expected)
      (if (sym_eq h (quote exists)) (elab_exists e args expected)
-     (elab_app e (SSym h) args expected)))))))))))
+     (elab_app e (SSym h) args expected))))))))))))
     ((SList (Cons h args)) (elab_app e h args expected))))
 
 ;; a numeral: at an expected `Int`, `Int.ofNat n` / `Int.negSucc (-n-1)` (law §5.2's
@@ -245,7 +292,7 @@
             (None
              (if (bool_and (bool_not has_univ) (sym_eq x1 (quote Prop))) (check_expected e (mk_sort LZero) (mk_sort (LSucc LZero)) expected)
              (if (bool_and (bool_not has_univ) (sym_eq x1 (quote Type))) (check_expected e (mk_sort (LSucc LZero)) (mk_sort (LSucc (LSucc LZero))) expected)
-             (match (elab_const e n ls has_univ)
+             (match (elab_const e n ls has_univ expected)
                ((EErr r m) (EErr r m))
                ((EOk e1 c cty) (elab_args e1 c cty Nil explicit expected)))))))))))))
 ;; `@f`: Lean's explicit application
@@ -268,12 +315,26 @@
 
 ;; a constant with its universe arguments: written, or none, or level 0 by rule
 ;; in an E-type position, else a level metavariable each (universe inference)
-(fn elab_const ((e El) (n Name) (ls (List SExpr)) (has_univ Bool)) ERes
+(fn elab_const ((e El) (n Name) (ls (List SExpr)) (has_univ Bool) (expected (Option Expr))) ERes
   (match (resolve (el_cx e) n)
     (RNone (EErr (quote unknown_constant) (show_name n)))
-    ((RAmbiguous a b) (EErr (quote ambiguous_name) (append (show_name n) (append ": " (append (show_name a) (append " and " (show_name b)))))))
+    ((RAmbiguous a b)
+     (match (expected_ctor e n expected)
+       ((Some k) (elab_const_at e n k (match (const_arity (el_cx e) k) ((Some ar) ar) (None 0)) ls has_univ))
+       (None (EErr (quote ambiguous_name) (append (show_name n) (append ": " (append (show_name a) (append " and " (show_name b)))))))))
     ((RPend k) (EErr (quote pending_obligation) (append (show_name k) " was read with sorry: it admits nothing, and citing it is the obligation")))
-    ((RName k arity)
+    ((RName k arity) (elab_const_at e n k arity ls has_univ))))
+;; an ambiguous bare name at an expected inductive type: its constructor of that name (rule 5)
+(fn expected_ctor ((e El) (n Name) (expected (Option Expr))) (Option Name)
+  (match expected
+    (None None)
+    ((Some x)
+     (match (el_whnf e x)
+       ((Pair e1 xw)
+        (match (get_app_fn xw)
+          ((Const _ ind _) (match (env_find (el_env e1) ind) ((Some (InductInfo _ _ _ _ _ _ _ _ _)) (resolve_ctor (el_cx e1) n ind)) (_ None)))
+          (_ None)))))))
+(fn elab_const_at ((e El) (n Name) (k Name) (arity Int) (ls (List SExpr)) (has_univ Bool)) ERes
      (if has_univ
        (match (elab_levels e ls)
          (None (EErr (quote bad_level) (show_name n)))
@@ -282,7 +343,7 @@
             (EErr (quote universe_arity) (append (show_name k) (append " takes " (append (show_nat arity) " universe arguments")))))))
        (if (int_eq arity 0) (const_at e k Nil)
        (if (cx_etype (el_cx e)) (const_at e k (zeros arity))
-         (match (el_fresh_levels e arity) ((Pair e1 lvls) (const_at e1 k lvls)))))))))
+         (match (el_fresh_levels e arity) ((Pair e1 lvls) (const_at e1 k lvls)))))))
 ;; the constant and its type at these levels: a name this form declares, else the environment's
 (fn const_at ((e El) (k Name) (lvls (List Level))) ERes
   (match (find_defd k (cx_defining (el_cx e)))
@@ -324,7 +385,7 @@
          (None
           (if (bool_and (bool_not has_univ) (is_operator x1))
             (elab_op e x1 args expected)
-            (match (elab_const e n ls has_univ)
+            (match (elab_const e n ls has_univ expected)
               ((EErr r m) (EErr r m))
               ((EOk e1 c cty) (elab_args e1 c cty (srcs args) explicit expected))))))))))
 
@@ -414,9 +475,9 @@
               ((AVal v vty) (check_expected e v vty (Some dom))))
       ((EErr r msg) (EErr r msg))
       ((EOk e1 v vty)
-       (match (el_unify e1 m v)
-         ((Some e2) (EOk e2 v vty))
-         (None (EErr (quote argument_mismatch) (append "the expected type fixes this argument to " (append (show_expr (el_zonk e1 m)) (append ", found " (show_expr v)))))))))))
+       (match (el_unify_r e1 m v)
+         ((EUOk e2) (EOk e2 v vty))
+         (u (eu_refusal e1 u (EErr (quote argument_mismatch) (append "the expected type fixes this argument to " (append (show_expr (el_zonk e1 m)) (append ", found " (show_expr v))))))))))))
 (fn mvar_type ((e El) (m Expr)) (Option Expr)
   (match m ((MVar _ i) (match (mc_decl (el_mc e) i) ((Some d) (Some (md_type d))) (None None))) (_ None)))
 
@@ -579,7 +640,29 @@
                          ((Pair e5 lb)
                           (match (w_subst (el_w e5) (el_zonk e5 bty) (fvar_id_of fv) val1)
                             ((Pair w6 bty1) (EOk (el_restore (el_set_w e5 w6) e) lb bty1))))))))))))))))))
-    (_ (EErr (quote bad_shape) "a let binding is (x TYPE TERM)"))))
+    ((Cons (SList (Cons (SSym x) (Cons v Nil))) r)     ; (x TERM): the type is the term's (a body's let, §5.4)
+     (match (name_of_sym x)
+       (None (EErr (quote bad_name) (chars_of_sym x)))
+       ((Some n)
+        (match (elab e v None)
+          ((EErr r2 m) (EErr r2 m))
+          ((EOk e1 val vty)
+           (match (el_finish e1 vty)
+             ((FinErr r2 m) (EErr r2 m))
+             ((FinOk t)
+              (match (el_finish e1 val)
+                ((FinErr r2 m) (EErr r2 m))
+                ((FinOk val1)
+                 (match (el_local_val e1 n t val1)
+                   ((Pair e3 fv)
+                    (match (elab_lets e3 r body expected)
+                      ((EErr r2 m) (EErr r2 m))
+                      ((EOk e4 b bty)
+                       (match (el_lams e4 (list fv) b)
+                         ((Pair e5 lb)
+                          (match (w_subst (el_w e5) (el_zonk e5 bty) (fvar_id_of fv) val1)
+                            ((Pair w6 bty1) (EOk (el_restore (el_set_w e5 w6) e) lb bty1))))))))))))))))))
+    (_ (EErr (quote bad_shape) "a let binding is (x TYPE TERM) or (x TERM)"))))
 
 ;; (proj S i TERM)
 (fn elab_proj ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
@@ -637,11 +720,11 @@
     (_ (EErr (quote bad_shape) "(OP a b)"))))))))
 ;; a constant applied to source arguments (Eq, Ne, Iff: the implicit type is theirs)
 (fn op_const ((e El) (k Name) (args (List SExpr)) (expected (Option Expr))) ERes
-  (match (elab_const e k Nil False)
+  (match (elab_const e k Nil False None)
     ((EErr r m) (EErr r m))
     ((EOk e1 c cty) (elab_args e1 c cty (srcs args) False expected))))
 (fn op_apply ((e El) (k Name) (args (List EArg)) (expected (Option Expr))) ERes
-  (match (elab_const e k Nil False)
+  (match (elab_const e k Nil False None)
     ((EErr r m) (EErr r m))
     ((EOk e1 c cty) (elab_args e1 c cty args False expected))))
 ;; the identity of a binary spelling at the first operand's type
@@ -688,7 +771,7 @@
     (_ (EErr (quote bad_shape) "(if C T F)"))))
 ;; the constant applied with every binder explicit but the leading implicit ones
 (fn op_apply_explicit ((e El) (k Name) (args (List EArg)) (expected (Option Expr))) ERes
-  (match (elab_const e k Nil False)
+  (match (elab_const e k Nil False None)
     ((EErr r m) (EErr r m))
     ((EOk e1 c cty)
      (match (tele e1 c cty Nil False Nil 16)     ; the leading implicits (α, u)
@@ -716,6 +799,152 @@
       (_ (Pair e None)))))
 (fn decide_with ((k Name) (as (List Expr))) (Option Expr)
   (match as ((Cons a (Cons b Nil)) (Some (mk_app (mk_app (mk_const k Nil) a) b))) (_ None)))
+
+;; ---- match (slice 3.16 rule 1) -------------------------------------------------------------
+;; (match T (PAT BODY)…): the matcher generated for the rows at T's type, checked into the
+;; walk's environment, applied to the constant motive `λ _. RET`, T and an alternative per
+;; row (its body under its pattern's variables). RET is the position's expected type
+(fn elab_match ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
+  (match args
+    ((Cons scrut arms)
+     (match (match_ret e expected)
+       (None (EErr (quote match_motive) "a match takes its type from its position: write it where the type is known — a definition's value, an argument, (let ((r TYPE (match …))) r)"))
+       ((Some ret)
+        (match (elab e scrut None)
+          ((EErr r m) (EErr r m))
+          ((EOk e1 sv sty)
+           (match (el_finish e1 sty)
+             ((FinErr r m) (EErr (quote match_scrutinee) (append "the scrutinee's type is not determined: " m)))
+             ((FinOk dty)
+              (match (el_infer e1 ret)
+                ((Pair _ None) (EErr (quote not_a_type) (show_expr ret)))
+                ((Pair e2 (Some rs))
+                 (match (el_whnf e2 rs)
+                   ((Pair e3 (Sort _ l)) (match_arms e3 dty ret l sv arms Nil Nil expected))
+                   ((Pair _ other) (EErr (quote not_a_type) (append (show_expr ret) (append " : " (show_expr other)))))))))))))))
+    (Nil (EErr (quote bad_shape) "(match TERM (PATTERN BODY)…)"))))
+;; the expected type, when nothing in it is still to be solved
+(fn match_ret ((e El) (expected (Option Expr))) (Option Expr)
+  (match expected
+    (None None)
+    ((Some x) (match (el_finish e x) ((FinOk r) (Some r)) ((FinErr _ _) None)))))
+(fn match_arms ((e El) (dty Expr) (ret Expr) (l Level) (sv Expr) (arms (List SExpr)) (rows (List (List MtPat))) (alts (List Expr)) (expected (Option Expr))) ERes
+  (measure (struct arms))
+  (match arms
+    (Nil (match_close e dty ret l sv (rev rows) (rev alts) expected))
+    ((Cons (SList (Cons pat (Cons body Nil))) r)
+     (match (el_pat e pat dty 0 Nil 256)
+       ((PtErr x m) (EErr x m))
+       ((PtOk e1 mp _ _ vars)
+        (match (elab e1 body (Some ret))
+          ((EErr x m) (EErr x m))
+          ((EOk e2 v _)
+           (match (el_lams e2 vars v)
+             ((Pair e3 alt) (match_arms (el_restore e3 e) dty ret l sv r (Cons (list mp) rows) (Cons alt alts) expected))))))))
+    (_ (EErr (quote bad_shape) "a match arm is (PATTERN BODY)"))))
+(fn match_close ((e El) (dty Expr) (ret Expr) (l Level) (sv Expr) (rows (List (List MtPat))) (alts (List Expr)) (expected (Option Expr))) ERes
+  (match (match_params e dty)
+    (None (EErr (quote match_scope) "the scrutinee's type mentions a local that is not a binder in scope"))
+    ((Some params)
+     (let ((name (mt_name (el_owner e) (el_next_matcher e))) (lps (cx_lps (el_cx e))))
+       (let ((v (mt_level_name lps)))
+         (match (mt_generate (el_w e) name lps v params (list dty) rows)
+           ((MtGenErr x m) (EErr x m))
+           ((MtGenOk _ decl)
+            (match (w_admit (el_w e) decl)
+              ((Pair _ (Some why)) (EErr (quote matcher_refused) (append (show_name name) (append ": K refused the generated matcher (" (append (chars_of_sym why) ")")))))
+              ((Pair w1 None)
+               (match (w_local w1 (n1 (quote d)) dty)
+                 ((Pair w2 d)
+                  (match (w_lams w2 (list d) ret)
+                    ((Pair w3 motive)
+                     (check_expected (el_add_aux (el_set_w e w3) decl)
+                       (mk_app_n (mk_const name (Cons l (lparam_levels lps))) (append params (append (list motive (el_zonk e sv)) alts)))
+                       ret expected))))))))))))))
+(fn lparam_levels ((lps (List Name))) (List Level)
+  (measure (struct lps))
+  (match lps (Nil Nil) ((Cons u r) (Cons (LParam u) (lparam_levels r)))))
+;; the binders in scope the type mentions, with those their types mention, outermost first
+(fn match_params ((e El) (dty Expr)) (Option (List Expr))
+  (let ((ids (fvar_closure e (expr_fvars dty Nil) Nil 256)) (bound (cx_fvar_ids (el_cx e))))
+    (if (all_in ids bound) (Some (fvars_among (rev (bound_fvars (cx_bound (el_cx e)))) ids)) None)))
+(fn fvar_closure ((e El) (todo (List Int)) (seen (List Int)) (fuel Int)) (List Int)
+  (measure fuel)
+  (if (lt fuel 1) seen
+    (match todo
+      (Nil seen)
+      ((Cons id r)
+       (if (mem_int id seen) (fvar_closure e r seen (- fuel 1))
+         (fvar_closure e (append (match (w_local_type (el_w e) id) ((Some t) (expr_fvars (el_zonk e t) Nil)) (None Nil)) r) (Cons id seen) (- fuel 1)))))))
+(fn bound_fvars ((bs (List (Pair Name Expr)))) (List Expr)
+  (measure (struct bs))
+  (match bs (Nil Nil) ((Cons (Pair _ fv) r) (Cons fv (bound_fvars r)))))
+(fn fvars_among ((fvs (List Expr)) (ids (List Int))) (List Expr)
+  (measure (struct fvs))
+  (match fvs
+    (Nil Nil)
+    ((Cons fv r) (if (mem_int (fvar_id_of fv) ids) (Cons fv (fvars_among r (remove_ints ids (list (fvar_id_of fv))))) (fvars_among r ids)))))
+
+;; a pattern at its type: `_`, a name — the constructor of the type's inductive it names when
+;; that constructor has no fields, else a variable bound for the body —, or a constructor on
+;; its fields' patterns. The state with the variables bound, the pattern, its term, the next
+;; slot, the variables' locals in slot order
+(type PtRes (PtOk El MtPat Expr Int (List Expr)) (PtErr Symbol (List Int)))
+(fn el_pat ((e El) (s SExpr) (ty Expr) (slot Int) (vars (List Expr)) (fuel Int)) PtRes
+  (measure fuel)
+  (if (lt fuel 1) (PtErr (quote match_depth) "a pattern too deep")
+  (match s
+    ((SSym x)
+     (if (sym_eq x (quote _))
+       (match (w_local (el_w e) (n1 (quote _)) (el_zonk e ty)) ((Pair w1 fv) (PtOk (el_set_w e w1) (MtVar slot) fv (+ slot 1) (append vars (list fv)))))
+       (match (name_of_sym x)
+         (None (PtErr (quote bad_name) (chars_of_sym x)))
+         ((Some n)
+          (match (pat_ctor e n ty)
+            ((Some (Pair c (Pair 0 head))) (PtOk e (MtCtor c Nil) head slot vars))
+            (_ (match (el_local e n ty BDefault) ((Pair e1 fv) (PtOk e1 (MtVar slot) fv (+ slot 1) (append vars (list fv)))))))))))
+    ((SList (Cons (SSym h) subs))
+     (if (sym_eq h (quote quote)) (PtErr (quote literal_pattern) "a symbol pattern has no L form yet (slice 3.17): compare with an if")
+       (match (name_of_sym h)
+         (None (PtErr (quote bad_name) (chars_of_sym h)))
+         ((Some n)
+          (match (pat_ctor_type e n ty)
+            (None (PtErr (quote pattern_constructor) (append (show_name n) (append " is not a constructor of " (show_expr (el_zonk e ty))))))
+            ((Some (Pair c (Pair (Pair cty nfields) head)))
+             (if (bool_not (int_eq (len subs) nfields))
+               (PtErr (quote pattern_arity) (append (show_name c) (append " has " (append (show_nat nfields) " fields"))))
+               (el_pat_fields e subs cty c head Nil slot vars (- fuel 1)))))))))
+    ((SNum _) (PtErr (quote literal_pattern) "a numeral pattern has no L form yet: compare with an if (LANGUAGE.md §8.4 slice 3.16 rule 1)"))
+    (_ (PtErr (quote literal_pattern) "a literal pattern has no L form yet: compare with an if (LANGUAGE.md §8.4 slice 3.16 rule 1)")))))
+(fn el_pat_fields ((e El) (subs (List SExpr)) (cty Expr) (c Name) (acc Expr) (ps (List MtPat)) (slot Int) (vars (List Expr)) (fuel Int)) PtRes
+  (measure (struct subs))
+  (match subs
+    (Nil (PtOk e (MtCtor c (rev ps)) acc slot vars))
+    ((Cons p r)
+     (match cty
+       ((Pi _ _ _ dom body)
+        (match (el_pat e p dom slot vars fuel)
+          ((PtErr x m) (PtErr x m))
+          ((PtOk e1 mp t slot1 vars1)
+           (match (w_inst1 (el_w e1) body t)
+             ((Pair w2 b) (el_pat_fields (el_set_w e1 w2) r b c (mk_app acc t) (Cons mp ps) slot1 vars1 fuel))))))
+       (_ (PtErr (quote pattern_arity) (show_name c)))))))
+;; the constructor a pattern head names at this type: its identity, its fields' telescope at
+;; the type's levels and parameters with their number, and the constructor applied to the parameters
+(fn pat_ctor_type ((e El) (n Name) (ty Expr)) (Option (Pair Name (Pair (Pair Expr Int) Expr)))
+  (match (mt_ind_of (el_w e) (el_zonk e ty))
+    ((Pair _ (MtNoInd _ _)) None)
+    ((Pair w1 (MtInd ind ls params _))
+     (match (resolve_ctor (el_cx e) n ind)
+       (None None)
+       ((Some c)
+        (match (mt_ctor_type w1 c ls params)
+          ((Pair _ None) None)
+          ((Pair _ (Some tn)) (Some (Pair c (Pair tn (mk_app_n (mk_const c ls) params)))))))))))
+(fn pat_ctor ((e El) (n Name) (ty Expr)) (Option (Pair Name (Pair Int Expr)))
+  (match (pat_ctor_type e n ty)
+    ((Some (Pair c (Pair (Pair _ nfields) head))) (Some (Pair c (Pair nfields head))))
+    (None None)))
 
 ;; (exists ((x TYPE)) P): Exists (fun (x : TYPE) => P)
 (fn elab_exists ((e El) (args (List SExpr)) (expected (Option Expr))) ERes

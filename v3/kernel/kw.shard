@@ -2,10 +2,15 @@
 ;;; environment, a local context and the checker state, with K's procedures
 ;;; through the view (whnf, infer, is_def_eq, is_prop, mk_local, mk_binding).
 ;;; Every translator and the elaborator build terms over fvars with these and
-;;; close them with K's own mk_binding; a failure of a K procedure (exhaustion,
-;;; an ill-typed term, a metavariable K refuses) is None here — the caller's
-;;; refusal names it. Moved out of erase.shard at slice 3.15, when the L
-;;; elaborator (elab.shard) became its third client.
+;;; close them with K's own mk_binding. K's outcome survives this first
+;;; wrapper (slice 3.16 rule 9, GPT-6 R67): `w_infer_r`, `w_whnf_r`,
+;;; `w_is_def_eq_r` answer a value or K's own failure — a refusal with its
+;;; reason, or exhaustion — and the unifier and the elaborator read those; the
+;;; Option forms below them are the erasure's and the translators', where any
+;;; failure is one refusal the caller names. `w_admit` checks a generated
+;;; declaration into the walk's environment (a matcher, slice 3.16 rule 1).
+;;; Moved out of erase.shard at slice 3.15, when the L elaborator (elab.shard)
+;;; became its third client.
 
 (import "k")
 (use kernel.k)
@@ -14,6 +19,8 @@
 (use kernel.name)
 (use kernel.prelude)
 (use kernel.util)
+(use kernel.verdict)
+(use kernel.decl)
 (use kernel.decl.DefinitionSafety)
 (use kernel.expr.BinderInfo)
 (use kernel.expr.Expr)
@@ -22,7 +29,10 @@
 (use kernel.prelude.List)
 (use kernel.prelude.Option)
 (use kernel.prelude.Pair)
+(use kernel.verdict.Failure)
 (use kernel.verdict.KRes)
+(use kernel.verdict.Outcome)
+(use kernel.verdict.Reason)
 
 (type W (W CheckedEnv (List LDecl) St))
 (fn w_env ((w W)) CheckedEnv (match w ((W e _ _) e)))
@@ -43,23 +53,44 @@
 ;; the type of a local by its fvar id
 (fn w_local_type ((w W) (id Int)) (Option Expr)
   (match (lctx_find (w_lctx w) id) ((Some d) (Some (ldecl_type d))) (None None)))
-;; K's procedures; a failure (exhaustion, an ill-typed term) is None
-(fn w_whnf ((w W) (e Expr)) (Pair W (Option Expr))
+;; K's procedures with K's outcome: a value, or K's failure (FRej reason / FOut resource site)
+(type (WOut A) (WVal A) (WFail Failure))
+(fn w_whnf_r ((w W) (e Expr)) (Pair W (WOut Expr))
   (match (whnf (w_ctx w) (w_st w) (budget_depth) e)
-    ((KOk st r) (Pair (w_set_st w st) (Some r)))
-    ((KFail _) (Pair w None))))
-(fn w_infer ((w W) (e Expr)) (Pair W (Option Expr))
+    ((KOk st r) (Pair (w_set_st w st) (WVal r)))
+    ((KFail f) (Pair w (WFail f)))))
+(fn w_infer_r ((w W) (e Expr)) (Pair W (WOut Expr))
   (match (infer (w_ctx w) (w_st w) (budget_depth) e True)
-    ((KOk st r) (Pair (w_set_st w st) (Some r)))
-    ((KFail _) (Pair w None))))
+    ((KOk st r) (Pair (w_set_st w st) (WVal r)))
+    ((KFail f) (Pair w (WFail f)))))
+(fn w_is_def_eq_r ((w W) (a Expr) (b Expr)) (Pair W (WOut Bool))
+  (match (is_def_eq (w_ctx w) (w_st w) (budget_depth) a b)
+    ((KOk st r) (Pair (w_set_st w st) (WVal r)))
+    ((KFail f) (Pair w (WFail f)))))
+;; exhaustion against refusal: the site of a spent resource, None for a refusal
+(fn failure_spent ((f Failure)) (Option Symbol) (match f ((FOut _ site) (Some site)) ((FRej _) None)))
+;; the Option forms: any failure is None
+(fn w_whnf ((w W) (e Expr)) (Pair W (Option Expr))
+  (match (w_whnf_r w e) ((Pair w1 (WVal r)) (Pair w1 (Some r))) ((Pair w1 (WFail _)) (Pair w1 None))))
+(fn w_infer ((w W) (e Expr)) (Pair W (Option Expr))
+  (match (w_infer_r w e) ((Pair w1 (WVal r)) (Pair w1 (Some r))) ((Pair w1 (WFail _)) (Pair w1 None))))
 (fn w_is_prop ((w W) (e Expr)) (Pair W (Option Bool))
   (match (is_prop (w_ctx w) (w_st w) (budget_depth) e)
     ((KOk st r) (Pair (w_set_st w st) (Some r)))
     ((KFail _) (Pair w None))))
-(fn w_is_def_eq ((w W) (a Expr) (b Expr)) (Pair W (Option Bool))
-  (match (is_def_eq (w_ctx w) (w_st w) (budget_depth) a b)
-    ((KOk st r) (Pair (w_set_st w st) (Some r)))
-    ((KFail _) (Pair w None))))
+;; a generated declaration checked into the walk's environment: K's check seeded above this
+;; walk's node ids (st_seed), the walk's ids then raised above the new environment's, so no
+;; node of the walk shares an id with one of the environment (the memo tables key on them)
+(fn w_admit ((w W) (d Declaration)) (Pair W (Option Symbol))
+  (match (check (w_env w) (w_st w) d)
+    ((Accepted env1) (Pair (W env1 (w_lctx w) (st_above (w_st w) (st_node (st_for env1)))) None))
+    ((Rejected reason _) (Pair w (Some (reason_of reason))))
+    ((Exhausted _ site) (Pair w (Some site)))))
+(fn reason_of ((r Reason)) Symbol
+  (match r
+    ((Malformed t) t) ((RuleViolation t) t) ((Unsupported t) t) ((UnresolvedObligation t) t)
+    (ConversionNotEstablished (quote conversion))))
+(fn st_above ((st St) (k Int)) St (match st ((St g t n m) (St g t (max_int n k) m))))
 (fn w_inst1 ((w W) (e Expr) (v Expr)) (Pair W Expr)
   (match (instantiate1 (w_st w) e v) ((Pair st r) (Pair (w_set_st w st) r))))
 (fn w_apps ((w W) (f Expr) (args (List Expr))) (Pair W Expr)

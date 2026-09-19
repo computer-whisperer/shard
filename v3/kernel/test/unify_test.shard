@@ -1,0 +1,67 @@
+;;; v3/kernel/test/unify_test.shard — the unifier's outcomes (LANGUAGE.md §8.4 slice 3.16
+;;; rule 9; GPT-6 R67, fixture G6): exhaustion, blocking, a tentative assignment and a
+;;; refusal are distinguishable, a larger budget resumes what a smaller one exhausted, and
+;;; a failure leaves the context it was given.
+;;; Run: ./rust_bootstrap/target/release/eval direct v3/kernel/test/unify_test.shard
+;;; Exit code = number of failures.
+
+(import "../host.shard")
+(import "../unify.shard")
+(import "case_kit.shard")
+(use kernel.k)
+(use kernel.expr)
+(use kernel.host)
+(use kernel.kw)
+(use kernel.prelude)
+(use kernel.unify)
+(use kernel.util)
+(use kernel.expr.Expr)
+(use kernel.host.World)
+(use kernel.level.Level)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.test.case_kit)
+(use kernel.test.case_kit.Case)
+(use kernel.unify.MCtx)
+(use kernel.unify.URes)
+
+(fn c1 () Expr (mk_const (n1 (quote c1)) Nil))
+(fn c2 () Expr (mk_const (n1 (quote c2)) Nil))
+(fn ty0 () Expr (mk_sort (LSucc LZero)))
+;; one metavariable ?m : Type in the empty scope
+(fn mc1 () (Pair MCtx Expr) (mc_fresh (mc0) (n1 (quote m)) (ty0) Nil (quote implicit)))
+(fn the_mc () MCtx (match (mc1) ((Pair mc _) mc)))
+(fn the_m () Expr (match (mc1) ((Pair _ m) m)))
+(fn wz () W (w0 (env_empty)))
+
+(fn is_yes ((r URes)) Bool (match r ((UYes _ _) True) (_ False)))
+(fn is_no ((r URes)) Bool (match r (UNo True) (_ False)))
+(fn is_stuck_on ((r URes) (i Int)) Bool (match r ((UStuck j) (int_eq i j)) (_ False)))
+(fn is_exhausted ((r URes)) Bool (match r ((UExhausted _) True) (_ False)))
+(fn mvar_id ((m Expr)) Int (match m ((MVar _ i) i) (_ (- 0 1))))
+(fn tentative_after ((r URes)) (List Int) (match r ((UYes _ mc) (mc_tentative mc)) (_ Nil)))
+(fn bad_after ((r URes)) Bool (match r ((UYes w mc) (match (tentative_bad w mc) ((Some _) True) (None False))) (_ True)))
+
+;; (c1 ?m) against (c1 c2): the heads, then ?m := c2
+(fn lhs () Expr (mk_app (c1) (the_m)))
+(fn rhs () Expr (mk_app (c1) (c2)))
+
+(fn cases () (List Case)
+  (list
+    (Case "depth 1 exhausts" (is_exhausted (unify_depth (wz) (the_mc) (lhs) (rhs) 1)))
+    (Case "the same problem at depth 64 succeeds: exhaustion was never a refusal" (is_yes (unify (wz) (the_mc) (lhs) (rhs))))
+    (Case "c2 is not in the environment, so K cannot type it yet: the assignment is tentative"
+      (mem_int (mvar_id (the_m)) (tentative_after (unify (wz) (the_mc) (lhs) (rhs)))))
+    (Case "a tentative value citing an undeclared constant is left to the declaration's admission"
+      (bool_not (bad_after (unify (wz) (the_mc) (lhs) (rhs)))))
+    (Case "two distinct constants: refused" (is_no (unify (wz) (the_mc) (c1) (c2))))
+    (Case "?m applied to a constant against a sort: blocked on ?m, not refused"
+      (is_stuck_on (unify (wz) (the_mc) (mk_app (the_m) (c1)) (ty0)) (mvar_id (the_m))))
+    (Case "a closed value K refuses to type is not installed (Sort 1 applied to itself)"
+      (bool_not (is_yes (unify (wz) (the_mc) (the_m) (mk_app (ty0) (ty0))))))
+    (Case "the failure left the context as given: ?m is still unassigned"
+      (match (mc_assigned (the_mc) (mvar_id (the_m))) (None True) ((Some _) False)))))
+
+(fn main ((w World)) World (run_cases "unify_test" (cases) 0 w))

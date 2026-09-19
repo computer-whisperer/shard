@@ -387,12 +387,14 @@ TERM ::= NAME                          ; a bound variable (innermost binding win
        | (forall (BINDER…) TERM)       ; Pi
        | (exists (BINDER…) TERM)       ; Exists over the lambda
        | (-> TERM… TERM)               ; non-dependent Pi, right-nested
-       | (let ((x TYPE TERM)…) TERM)   ; sequential; one L Let per binding
+       | (let ((x TYPE TERM)…) TERM)   ; sequential; one L Let per binding; (x TERM) takes the term's type
+       | (match TERM (PAT TERM)…)      ; a generated matcher applied (§8.4 slice 3.16 rule 1)
        | (Sort LEVEL) | Prop | Type | (Type LEVEL)
        | NUMERAL                       ; Nat, or Int at an expected Int (§5.3)
        | "…"                           ; K's String literal
        | (proj S i TERM)               ; the i-th field of structure S (0-based)
 OP   ::= + - * / mod % lt < le <= > >= int_eq = != and or iff
+PAT  ::= _ | NAME | (CTOR PAT…)        ; NAME is the scrutinee type's constructor of that name when it has no fields, else a variable
 ```
 
 Elaboration (`kernel/elab.shard`; law §5.1 Stage 1, §5.2) is
@@ -1834,7 +1836,12 @@ parity, route 2's byte-tie and T0 green:
    reader's own error stands. A body mixing explicit-L forms inside
    the E forms is not 3.15's either (its §5.1 `if` and operators are
    the L side's; a `match` in a statement stays refused). The pin
-   `def_match` shows a `def` with a `match`.
+   `def_match` shows a `def` with a `match`. **Superseded at slice
+   3.16 landing 1 (2026-09-19):** the elaborator reads `match`, `if`
+   and a body's untyped `let` itself, so the fall-back through the
+   classifier is **deleted** (`def_e_forms`; it had begun to hide the
+   reader's own error behind a second reading) and `def_match` goes
+   through a matcher.
 
 **Not in 3.13:** nested and numeral patterns beyond the leading case
 tree (`equation_form`, as for a `realize`), mutual recursion,
@@ -2107,14 +2114,17 @@ system. There is no new term language: the body is `Expr`.
    (the compilation `df_matrix` does today, stated over K's types), a
    fall-through row's alternative applied at every leaf it reaches.
    The **description** — the scrutinee types, the rows' patterns in
-   order, each alternative's telescope — is what the generator
-   consumed, kept with the matcher's name and the hash of its admitted
-   value, in the pre-definition and in the loader's state through a
-   view's fork (§6.6). A projection that meets a matcher application
-   **regenerates** the matcher from the description and compares it
-   with the admitted value; a missing description, a hash from another
-   revision or a regeneration that differs is `matcher_description`,
-   never a name-based guess and never an eager call. The generator is
+   order, each alternative's telescope — **is the matcher's type**
+   (as built, landing 1; the design's side table dropped): each
+   alternative's type spells its row's patterns as a term over its
+   variables, so the rows are read back off the admitted declaration
+   (`mt_describe`) and nothing beside it can go stale, be lost in a
+   view's fork (§6.6) or be trusted by a name's spelling. A projection
+   that meets a matcher application **regenerates** the definition
+   from the rows read back and compares it with the admitted value
+   (`mt_is_matcher`); a constant that fails the comparison is not a
+   matcher — `matcher_description` to a projection, never a
+   name-based guess and never an eager call. The generator is
    deterministic, so the binding is a check, not a trust.
    **Forcing:** the E program evaluates the scrutinees once, left to
    right, then the first matching row's arm only — `EMatch`'s rule
@@ -2330,6 +2340,59 @@ The slice is larger than revision 1 by rules 8 and 9 and the
 fixtures; landing 3 may split in two. If the tie test of landing 2
 fails on a shape the probe did not cover, the design returns here
 before landing 3.
+
+**As built, landing 1 (2026-09-19): matchers, `match` in L terms, the
+constructor by expected type, the outcomes.** `kernel/matcher.shard` —
+`MtPat` (a variable with its slot, a constructor on its fields),
+`mt_generate` (the motive, the scrutinees and the alternatives as K
+locals; `mt_compile`, the `casesOn` tree by first-match column
+splitting — a row with a variable at the split column kept under every
+constructor with the variable bound to the constructor term, and at a
+leaf every variable bound before a later split **refined** by it, so
+the alternative's argument is the term the motive's argument has
+there; `match_not_exhaustive`, `match_indexed`, `match_eliminator`),
+the definition an `abbrev` over the owner's universe parameters and
+one more for the motive; `mt_describe`/`mt_is_matcher` (rule 1's
+read-back and regeneration check). `elab.shard` — `elab_match` (the
+constant motive from the expected type, which must be determined:
+`match_motive` otherwise, with the pointer), `el_pat` (a pattern at its
+type: `_`, a name — the type's field-less constructor of that name,
+else a variable —, a constructor on its sub-patterns;
+`literal_pattern`, `pattern_constructor`, `pattern_arity`), the
+matcher's parameters the binders in scope its scrutinee's type
+mentions, the matcher **checked into the walk's environment as it is
+made** (`kw.shard`'s `w_admit`: K's `check` seeded above the walk's
+node ids, the walk's then raised above the new environment's) and
+handed to the reader with the declaration (`El`'s `Gen`, `el_aux`,
+`reader.shard`'s `rd_ok`), so the loader admits `OWNER.match_N` before
+its owner with an `ACCEPT` record of its own. A `match` in a
+requirement's statement is `match_in_requirement` (a view parameter is
+one declaration); in an inductive's or a structure's types K's
+`unknown_constant` answers (no consumer). Rule 5: `scope.shard`'s
+`resolve_ctor` (the name under the inductive's own prefix first, then
+the scope's candidates) — every pattern head, and a term's head where
+the plain resolution is ambiguous and the expected type's head is an
+inductive. A body's untyped `let` binding `(x TERM)` is read. Rule 9:
+`kw.shard`'s `w_infer_r`, `w_whnf_r`, `w_is_def_eq_r` answer `WVal` or
+`WFail` with K's `Failure`; `unify.shard`'s `URes` has `UStuck` (a
+failure under an unassigned metavariable applied to what is no
+pattern) and `UExhausted` (the depth, or a spent resource of K's);
+an assignment is typed or **tentative** (`mc_tentative`,
+`tentative_bad` asked by `el_finish`: `tentative_assignment`); a
+closed value K refuses is no longer installed — except one citing a
+constant the form is still declaring (`cites_undeclared`: an
+inductive's name in its constructors, a structure's in its
+projections), which K cannot type before the admission and the
+admission checks; `check_expected` and `elab_slot` report
+`unify_stuck` / `unify_exhausted` apart from `type_mismatch`. **Not
+in landing 1:** the `PreDef` record (its first consumer is landing
+2's erasure). Tests: `kernel/test/unify_test.shard` (G6),
+`kernel/test/matcher_test.shard` (G2's identity half: the pins'
+matchers recognized with their rows, a hand-written equal one
+recognized, an imposter of the same type and name not); pins
+`match_def`, `match_statement`, `match_poly`, `match_imposter`,
+`match_not_exhaustive`, `match_literal`, `match_motive`,
+`ctor_expected` (G1's constructor half).
 
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
@@ -2624,7 +2687,7 @@ migration table of law §10.3 owns the name and behavior changes of the
 | `(extern NAME PARAMS RET)`, polymorphic externs | carried | §4; the roster is the host's (§12.4) |
 | return types unchecked (no load-time typing) | **changed at phase 3** | Stage 1 types every `fn` body against its signature; v2 code that runs only because nothing checked it will be refused then. At phase 2 unchanged |
 | `if` on `True`/`False` by constructor name | carried, generalized | §6.2's tag rule; v2's `(type Bool (False) (True))` has Init's constructor order |
-| `match`: first match wins, nested patterns, integer and `(quote S)` patterns, `_`, bare 0-ary constructors | carried in E | symbol patterns profile only; Stage 1's match compilation must keep first-match semantics (Lean's does) |
+| `match`: first match wins, nested patterns, integer and `(quote S)` patterns, `_`, bare 0-ary constructors | carried in E | symbol patterns profile only; Stage 1's match compilation must keep first-match semantics (Lean's does); **in L since slice 3.16** a `match` is a generated matcher (§8.4 slice 3.16 rule 1): first match wins, nested patterns, `_` and bare field-less constructors carried; an integer or `(quote S)` pattern is `literal_pattern` there until a consumer under the naming law has one |
 | parallel `let`, no `let*` | **changed**: sequential in L and E (RULED 2026-09-12, R44) | §5.4; 0 of the tree's 30,611 `let` groups depend on parallel binding, so no source changes meaning; the bootstrap evaluator's parallel rule gives identical results on all of them until the V3 reader replaces it (slice 2) |
 | `(quote S)`, `'S`, the `Symbol` type, `sym_eq`, `sym_of_chars`, `chars_of_sym` | carried — **decided 2026-09-14** (§8.1 rule 1) | `Symbol` is a built-in E type in every file, the interned atom, L identity `String` at phase 3; K's `Name` values are built from its atoms as today. The S-side refusal `symbol_literal` retired at slice 3.4 (2026-09-14) |
 | `(list a b c)` (9,455 uses outside `v3/`) | carried — **decided 2026-09-14** (§8.1 rule 2) | the constructor chain of the `List` in scope, by the scope at Stage 0 and by the expected type at Stage 1 (R60); the S-side refusal `list_sugar` retired at slice 3.4 (2026-09-14) |

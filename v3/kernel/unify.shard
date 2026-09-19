@@ -18,6 +18,17 @@
 ;;; failure returns the state it was given. An over-eager assignment can
 ;;; never make a theorem — K rechecks the closed term — so incompleteness
 ;;; here costs a refusal with a pointer, never soundness.
+;;;
+;;; Outcomes (slice 3.16 rule 9, GPT-6 R67): `UYes`; `UNo` — this attempt
+;;; failed, which is never inequality; `UStuck i` — blocked on the unassigned
+;;; metavariable i (a non-pattern application of it), to retry after it is
+;;; assigned; `UExhausted site` — the depth here or a resource of K's. An
+;;; assignment is typed when its value's type was unified with the
+;;; metavariable's, **tentative** when the value has a metavariable inside
+;;; and no type could be given yet: the id is kept and `tentative_bad`
+;;; validates it once the value has closed (el_finish asks). A closed value
+;;; K refuses to type is never installed — unless it cites a constant the
+;;; form is still declaring, which K cannot type before the admission.
 
 (import "kw.shard")
 (use kernel.k)
@@ -32,6 +43,7 @@
 (use kernel.expr.Literal)
 (use kernel.intmap.IntMap)
 (use kernel.kw.W)
+(use kernel.kw.WOut)
 (use kernel.level.Level)
 (use kernel.prelude.Bool)
 (use kernel.prelude.List)
@@ -47,25 +59,29 @@
 (fn md_kind ((d MDecl)) Symbol (match d ((MDecl _ _ _ k) k)))
 
 ;; the state: next term id, next level id, the assignments, the level
-;; assignments, the declarations, the ids in creation order
-(type MCtx (MCtx Int Int (IntMap Expr) (IntMap Level) (IntMap MDecl) (List Int)))
-(fn mc0 () MCtx (MCtx 1 1 IMEmpty IMEmpty IMEmpty Nil))
-(fn mc_assigned ((mc MCtx) (i Int)) (Option Expr) (match mc ((MCtx _ _ a _ _ _) (im_find a i))))
-(fn mc_lassigned ((mc MCtx) (i Int)) (Option Level) (match mc ((MCtx _ _ _ la _ _) (im_find la i))))
-(fn mc_decl ((mc MCtx) (i Int)) (Option MDecl) (match mc ((MCtx _ _ _ _ ds _) (im_find ds i))))
-(fn mc_ids ((mc MCtx)) (List Int) (match mc ((MCtx _ _ _ _ _ ids) ids)))
+;; assignments, the declarations, the ids in creation order, the tentatively
+;; assigned ids
+(type MCtx (MCtx Int Int (IntMap Expr) (IntMap Level) (IntMap MDecl) (List Int) (List Int)))
+(fn mc0 () MCtx (MCtx 1 1 IMEmpty IMEmpty IMEmpty Nil Nil))
+(fn mc_assigned ((mc MCtx) (i Int)) (Option Expr) (match mc ((MCtx _ _ a _ _ _ _) (im_find a i))))
+(fn mc_lassigned ((mc MCtx) (i Int)) (Option Level) (match mc ((MCtx _ _ _ la _ _ _) (im_find la i))))
+(fn mc_decl ((mc MCtx) (i Int)) (Option MDecl) (match mc ((MCtx _ _ _ _ ds _ _) (im_find ds i))))
+(fn mc_ids ((mc MCtx)) (List Int) (match mc ((MCtx _ _ _ _ _ ids _) ids)))
 (fn mc_fresh ((mc MCtx) (n Name) (ty Expr) (lctx (List Int)) (kind Symbol)) (Pair MCtx Expr)
   (match mc
-    ((MCtx k lk a la ds ids)
-     (Pair (MCtx (+ k 1) lk a la (im_insert ds k (MDecl n ty lctx kind)) (Cons k ids)) (mk_mvar k)))))
+    ((MCtx k lk a la ds ids tn)
+     (Pair (MCtx (+ k 1) lk a la (im_insert ds k (MDecl n ty lctx kind)) (Cons k ids) tn) (mk_mvar k)))))
 (fn mc_fresh_level ((mc MCtx)) (Pair MCtx Level)
-  (match mc ((MCtx k lk a la ds ids) (Pair (MCtx k (+ lk 1) a la ds ids) (LMVar lk)))))
+  (match mc ((MCtx k lk a la ds ids tn) (Pair (MCtx k (+ lk 1) a la ds ids tn) (LMVar lk)))))
 (fn mc_set ((mc MCtx) (i Int) (v Expr)) MCtx
-  (match mc ((MCtx k lk a la ds ids) (MCtx k lk (im_insert a i v) la ds ids))))
+  (match mc ((MCtx k lk a la ds ids tn) (MCtx k lk (im_insert a i v) la ds ids tn))))
 (fn mc_lset ((mc MCtx) (i Int) (l Level)) MCtx
-  (match mc ((MCtx k lk a la ds ids) (MCtx k lk a (im_insert la i l) ds ids))))
+  (match mc ((MCtx k lk a la ds ids tn) (MCtx k lk a (im_insert la i l) ds ids tn))))
+(fn mc_tentative ((mc MCtx)) (List Int) (match mc ((MCtx _ _ _ _ _ _ tn) tn)))
+(fn mc_set_tentative ((mc MCtx) (i Int) (v Expr)) MCtx
+  (match mc ((MCtx k lk a la ds ids tn) (MCtx k lk (im_insert a i v) la ds ids (Cons i tn)))))
 (fn mc_set_decl ((mc MCtx) (i Int) (d MDecl)) MCtx
-  (match mc ((MCtx k lk a la ds ids) (MCtx k lk a la (im_insert ds i d) ids))))
+  (match mc ((MCtx k lk a la ds ids tn) (MCtx k lk a la (im_insert ds i d) ids tn))))
 ;; closing binders over the fvars `ids`: every unassigned metavariable loses
 ;; them from its telescope, so a later assignment cannot capture a variable
 ;; that is no longer in scope (Lean's delayed assignment, refused instead)
@@ -194,14 +210,15 @@
   (match xs (Nil True) ((Cons x r) (if (mem_int x ys) (all_in r ys) False))))
 
 ;; ---- unification -------------------------------------------------------------------------
-(type URes (UYes W MCtx) (UNo))
+(type URes (UYes W MCtx) (UNo) (UStuck Int) (UExhausted Symbol))
 
 ;; transactional: a failure hands back nothing new
 (fn unify ((w W) (mc MCtx) (t Expr) (s Expr)) URes (unify_go w mc t s 64))
+(fn unify_depth ((w W) (mc MCtx) (t Expr) (s Expr) (d Int)) URes (unify_go w mc t s d))
 
 (fn unify_go ((w W) (mc MCtx) (t0 Expr) (s0 Expr) (d Int)) URes
   (measure d)
-  (if (lt d 1) UNo
+  (if (lt d 1) (UExhausted (quote unify_depth))
   (let ((t (inst_mvars mc t0)) (s (inst_mvars mc s0)))
     (if (expr_eq t s) (UYes w mc)
     (match t
@@ -215,7 +232,15 @@
             (None
              (match (pattern_of s)
                ((Some (Pair j ys)) (assign_pattern w mc j ys t d))
-               (None (unify_struct w mc t s d)))))))))))))
+               (None (stuck_or (unify_struct w mc t s d) t s)))))))))))))
+;; a failure under an unassigned metavariable applied to something that is no pattern is
+;; blocked on it, not refuted
+(fn stuck_or ((r URes) (t Expr) (s Expr)) URes
+  (match r
+    (UNo (match (flex_head t) ((Some i) (UStuck i)) (None (match (flex_head s) ((Some i) (UStuck i)) (None UNo)))))
+    (other other)))
+(fn flex_head ((e Expr)) (Option Int)
+  (match e ((App _ _ _) (match (get_app_fn e) ((MVar _ i) (Some i)) (_ None))) (_ None)))
 
 ;; a Miller pattern: a metavariable applied to distinct locals — `?motive t` against `Bool`
 ;; assigns `?motive := λ t. Bool` (the case a recursor's implicit motive needs, from the
@@ -245,7 +270,10 @@
 ;; outside the telescope refuses; the assignment is typed — the value's type
 ;; (K's, when the value is closed enough for K to type) against the
 ;; metavariable's, which is where a universe is inferred (`?α := α` with
-;; `?α : Sort ?v` and `α : Sort u` gives `?v := u`)
+;; `?α : Sort ?v` and `α : Sort u` gives `?v := u`). A closed value K refuses
+;; is refused here; one K cannot type *yet* — a metavariable inside, or a
+;; constant the form is still declaring — is typed by the light walk, else
+;; installed tentatively
 (fn assign ((w W) (mc MCtx) (i Int) (v Expr) (d Int)) URes
   (match v
     ((MVar _ j) (if (int_eq i j) (UYes w mc) (assign_checked w mc i v d)))
@@ -256,17 +284,72 @@
     (None UNo)
     ((Some dcl)
      (if (bool_not (all_in (expr_fvars v Nil) (md_lctx dcl))) UNo
-       (match (if (has_mvar v) (infer_light w mc v) (w_infer w v))
-         ((Pair w1 None) (UYes w1 (mc_set mc i v)))
-         ((Pair w1 (Some vty))
-          (match (unify_go w1 mc vty (md_type dcl) (- d 1))
-            ((UYes w2 mc2) (UYes w2 (mc_set mc2 i v)))
-            (UNo UNo)))))))))
+     (if (has_mvar v) (assign_light w mc i v dcl d)
+       (match (w_infer_r w v)
+         ((Pair w1 (WVal vty)) (assign_typed w1 mc i v vty dcl d))
+         ((Pair w1 (WFail f))
+          (match (failure_spent f)
+            ((Some site) (UExhausted site))
+            (None (if (cites_undeclared w1 v) (assign_light w1 mc i v dcl d) UNo)))))))))))
+(fn assign_light ((w W) (mc MCtx) (i Int) (v Expr) (dcl MDecl) (d Int)) URes
+  (match (infer_light w mc v)
+    ((Pair w1 None) (UYes w1 (mc_set_tentative mc i v)))
+    ((Pair w1 (Some vty)) (assign_typed w1 mc i v vty dcl d))))
+(fn assign_typed ((w W) (mc MCtx) (i Int) (v Expr) (vty Expr) (dcl MDecl) (d Int)) URes
+  (match (unify_go w mc vty (md_type dcl) (- d 1))
+    ((UYes w2 mc2) (UYes w2 (mc_set mc2 i v)))
+    (other other)))
+;; does the term cite a constant the environment does not hold — directly, as a projection's
+;; structure, or in the type of one of its locals? Then the form is still declaring it (an
+;; inductive's own name in its constructors, a structure's in its projections) and K's
+;; refusal to type the term says nothing yet: the declaration's admission checks it
+(fn cites_undeclared ((w W) (v Expr)) Bool
+  (bool_or (undeclared_in w v 4096) (undeclared_locals w (expr_fvars v Nil))))
+(fn undeclared_locals ((w W) (ids (List Int))) Bool
+  (measure (struct ids))
+  (match ids
+    (Nil False)
+    ((Cons id r) (if (match (w_local_type w id) ((Some t) (undeclared_in w t 4096)) (None False)) True (undeclared_locals w r)))))
+(fn undeclared_in ((w W) (e Expr) (fuel Int)) Bool
+  (measure fuel)
+  (if (lt fuel 1) False
+  (match e
+    ((Const _ n _) (match (env_find (w_env w) n) ((Some _) False) (None True)))
+    ((App _ f a) (bool_or (undeclared_in w f (- fuel 1)) (undeclared_in w a (- fuel 1))))
+    ((Lam _ _ _ t b) (bool_or (undeclared_in w t (- fuel 1)) (undeclared_in w b (- fuel 1))))
+    ((Pi _ _ _ t b) (bool_or (undeclared_in w t (- fuel 1)) (undeclared_in w b (- fuel 1))))
+    ((Let _ _ t x b) (bool_or (undeclared_in w t (- fuel 1)) (bool_or (undeclared_in w x (- fuel 1)) (undeclared_in w b (- fuel 1)))))
+    ((Proj _ sn _ x) (bool_or (match (env_find (w_env w) sn) ((Some _) False) (None True)) (undeclared_in w x (- fuel 1))))
+    (_ False))))
+
+;; the tentative assignments validated (el_finish asks): each whose value has closed is typed
+;; by K against its metavariable's type; the first that fails, by id. One K cannot type for a
+;; constant still being declared stays the declaration's admission's to check
+(fn tentative_bad ((w W) (mc MCtx)) (Option Int) (tentative_go w mc (mc_tentative mc)))
+(fn tentative_go ((w W) (mc MCtx) (ids (List Int))) (Option Int)
+  (measure (struct ids))
+  (match ids
+    (Nil None)
+    ((Cons i r)
+     (match (mc_assigned mc i)
+       (None (tentative_go w mc r))
+       ((Some v0)
+        (let ((v (inst_mvars mc v0)))
+          (if (has_mvar v) (tentative_go w mc r)
+            (match (w_infer_r w v)
+              ((Pair w1 (WFail _)) (if (cites_undeclared w1 v) (tentative_go w1 mc r) (Some i)))
+              ((Pair w1 (WVal vty))
+               (match (mc_decl mc i)
+                 (None (Some i))
+                 ((Some dcl)
+                  (match (unify_go w1 mc vty (md_type dcl) 64)
+                    ((UYes _ _) (tentative_go w1 mc r))
+                    (_ (Some i))))))))))))))
 
 ;; the type of a term K cannot type yet (a metavariable inside): a constant,
 ;; a local or a metavariable head applied to arguments, its telescope
 ;; instantiated by them (Meta.inferType's shape); a sort; a literal; else None
-;; and the assignment goes untyped — K types the closed term in the end
+;; and the assignment is tentative
 (fn infer_light ((w W) (mc MCtx) (e Expr)) (Pair W (Option Expr))
   (let ((h (get_app_fn e)) (args (get_app_args e)))
     (match (head_type w mc h)
@@ -296,6 +379,10 @@
           ((Pair w1 (Some (Pi _ _ _ _ body))) (match (w_inst1 w1 body a) ((Pair w2 b1) (walk_args w2 mc b1 r))))
           ((Pair w1 _) (Pair w1 None))))))))
 
+;; a structural failure falls back (K on a closed pair, else whnf and one retry); a blocked
+;; or exhausted sub-problem is the answer
+(fn or_fallback ((r URes) (w W) (mc MCtx) (t Expr) (s Expr) (d Int)) URes
+  (match r (UNo (unify_fallback w mc t s d)) (other other)))
 (fn unify_struct ((w W) (mc MCtx) (t Expr) (s Expr) (d Int)) URes
   (measure d)
   (match t
@@ -311,8 +398,8 @@
         (let ((fa (get_app_args t)) (sa (get_app_args s)))
           (if (int_eq (len fa) (len sa))
             (match (unify_go w mc (get_app_fn t) (get_app_fn s) (- d 1))
-              ((UYes w1 mc1) (match (unify_args w1 mc1 fa sa (- d 1)) ((UYes w2 mc2) (UYes w2 mc2)) (UNo (unify_fallback w mc t s d))))
-              (UNo (unify_fallback w mc t s d)))
+              ((UYes w1 mc1) (or_fallback (unify_args w1 mc1 fa sa (- d 1)) w mc t s d))
+              (other (or_fallback other w mc t s d)))
             (unify_fallback w mc t s d))))
        (_ (unify_fallback w mc t s d))))
     ((Lam _ n _ d1 b1)
@@ -325,7 +412,7 @@
        (_ (unify_fallback w mc t s d))))
     ((Proj _ sn i x)
      (match s
-       ((Proj _ sn2 i2 y) (if (bool_and (name_eq sn sn2) (int_eq i i2)) (match (unify_go w mc x y (- d 1)) ((UYes w1 mc1) (UYes w1 mc1)) (UNo (unify_fallback w mc t s d))) (unify_fallback w mc t s d)))
+       ((Proj _ sn2 i2 y) (if (bool_and (name_eq sn sn2) (int_eq i i2)) (or_fallback (unify_go w mc x y (- d 1)) w mc t s d) (unify_fallback w mc t s d)))
        (_ (unify_fallback w mc t s d))))
     (_ (unify_fallback w mc t s d))))
 
@@ -339,32 +426,32 @@
        ((Cons b br)
         (match (unify_go w mc a b d)
           ((UYes w1 mc1) (unify_args w1 mc1 ar br d))
-          (UNo UNo)))))))
+          (other other)))))))
 
 ;; the domains, then the bodies under one shared local (not in any
 ;; metavariable's telescope: an assignment mentioning it is refused)
 (fn unify_binding ((w W) (mc MCtx) (n Name) (d1 Expr) (b1 Expr) (d2 Expr) (b2 Expr) (d Int)) URes
   (measure d)
   (match (unify_go w mc d1 d2 (- d 1))
-    (UNo UNo)
     ((UYes w1 mc1)
      (match (w_local w1 n (inst_mvars mc1 d1))
        ((Pair w2 fv)
         (match (w_inst1 w2 b1 fv)
           ((Pair w3 b1i)
            (match (w_inst1 w3 b2 fv)
-             ((Pair w4 b2i) (unify_go w4 mc1 b1i b2i (- d 1)))))))))))
+             ((Pair w4 b2i) (unify_go w4 mc1 b1i b2i (- d 1)))))))))
+    (other other)))
 
-;; closed on both sides: K decides; else whnf both through K and retry once
-;; on a change — the retry is what unfolds a definition that hides a
-;; constructor or a Pi (`Nat.le n m` against `LE.le …` never happens here:
-;; the identities are Init's own constants)
+;; closed on both sides: K decides — its refusal or `false` is UNo (never inequality: §3.3),
+;; its exhaustion UExhausted; else whnf both through K and retry once on a change — the
+;; retry is what unfolds a definition that hides a constructor or a Pi
 (fn unify_fallback ((w W) (mc MCtx) (t Expr) (s Expr) (d Int)) URes
   (measure d)
   (if (bool_and (bool_not (has_mvar t)) (bool_not (has_mvar s)))
-    (match (w_is_def_eq w t s)
-      ((Pair w1 (Some True)) (UYes w1 mc))
-      ((Pair _ _) UNo))
+    (match (w_is_def_eq_r w t s)
+      ((Pair w1 (WVal True)) (UYes w1 mc))
+      ((Pair _ (WVal False)) UNo)
+      ((Pair _ (WFail f)) (match (failure_spent f) ((Some site) (UExhausted site)) (None UNo))))
     (match (w_whnf w t)
       ((Pair w1 t1o)
        (match (w_whnf w1 s)
@@ -375,7 +462,7 @@
 ;; after whnf: only the structural cases, never the fallback again on the same shapes
 (fn unify_after_whnf ((w W) (mc MCtx) (t Expr) (s Expr) (d Int)) URes
   (measure d)
-  (if (lt d 1) UNo
+  (if (lt d 1) (UExhausted (quote unify_depth))
   (if (expr_eq t s) (UYes w mc)
   (match t
     ((MVar _ i) (assign w mc i s d))
@@ -389,7 +476,7 @@
                     (if (int_eq (len fa) (len sa))
                       (match (unify_go w mc (get_app_fn t) (get_app_fn s) (- d 1))
                         ((UYes w1 mc1) (unify_args w1 mc1 fa sa (- d 1)))
-                        (UNo UNo))
+                        (other other))
                       UNo)))
                  (_ UNo)))
               ((Pi _ n _ d1 b1) (match s ((Pi _ _ _ d2 b2) (unify_binding w mc n d1 b1 d2 b2 d)) (_ UNo)))

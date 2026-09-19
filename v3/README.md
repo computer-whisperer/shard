@@ -673,6 +673,18 @@ fallback never re-resolves; one descent obligation (`count.dec_1`)
 discharged with an acyclicity check; K's outcomes kept through the
 wrappers; contextual holes across binders deferred to I's opener;
 fixtures G1–G9.
+**Landing 1 (2026-09-19): matchers.** `kernel/matcher.shard` — a
+`match` in a `def`, a theorem or a statement is the application of a
+generated `OWNER.match_N` K checks (nested patterns, a fall-through
+row applied at every leaf it reaches), admitted before its owner. A
+matcher's type is its own description: the rows are read back off it
+and the definition regenerated and compared, so nothing is trusted by
+name and no side table exists. A bare name that is ambiguous is the
+expected type's constructor. The unifier answers stuck and exhausted
+apart from refused, assignments are typed or tentative, and a closed
+value K refuses is not installed. The `def` fall-back through the
+classifier is deleted. 123 pins, parity over 26 closures and 97,077
+lines, 28 entrypoints.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

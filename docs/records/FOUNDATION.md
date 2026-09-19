@@ -2216,6 +2216,41 @@ is `docs/FOUNDATION.md` §5.3.
   it: 3.17 the porting facilities, 3.18 bytes, text and deriving, I
   from 3.19. Cleanup seen and left for the slice: `define.shard`
   opens `kernel.level.Level` twice.
+- **2026-09-19 — slice 3.16 landing 1: matchers, `match` in L terms,
+  the constructor by expected type, the outcomes** (`LANGUAGE.md`
+  §8.4's as-built; rules 1, 5, 9). `kernel/matcher.shard` generates a
+  matcher in Lean's shape by first-match column splitting and K checks
+  it; the elaborator checks it into its walk's environment as it is
+  made and the reader hands it to the loader before its owner. **The
+  design's side table was dropped on the way:** a matcher's type
+  already spells every row's patterns, so the description is read back
+  off the admitted declaration and the binding R64 asks for is
+  `mt_is_matcher` — regenerate from the rows read back, compare with
+  the admitted value. Nothing to lose in a view's fork, which retires
+  that named risk. Found while building: a variable bound at one split
+  must be **refined** by the later splits on its fields, or the
+  fall-through alternative's argument is not the motive's
+  (`app_type_mismatch` from K on the first nested-pattern matcher; the
+  leaf now applies the splits in order); slice 3.13's fall-back of a
+  `def` through the classifier **hid that refusal** behind a second
+  successful reading — exactly R70's hazard, met a landing early — and
+  is deleted (`def_e_forms`; the elaborator reads `match`, `if` and an
+  untyped `let` itself); K's refusal to type a projection whose
+  structure is still being declared is `invalid_projection`, not
+  `unknown_constant`, so "K cannot type it yet" is decided by whether
+  the value cites an undeclared constant (`cites_undeclared`), which
+  is what keeps a structure's dependent field readable now that a
+  closed value K refuses is no longer installed; a pattern variable
+  named like a constructor of K's data (`D`) is a constructor pattern
+  to the bootstrap — the elaborator's own sources avoid the capital.
+  Deferred inside the landing: the `PreDef` record, to its first
+  consumer (landing 2). Cleanup: `scope.shard` opened
+  `kernel.decl.ConstantInfo` twice; `reason_of` moved from the loader
+  to `kw.shard` with the loader's two opens it no longer needs.
+  Gates: 123 loader pins, reader tests, `unify_test` (8), `matcher_test`
+  (9), define_test, parity byte-identical over 26 closures and 97,077
+  lines with no unused opens, route 2 byte-identical, K's clients
+  through the V3 loader, the T0 fixture, 28 entrypoints.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

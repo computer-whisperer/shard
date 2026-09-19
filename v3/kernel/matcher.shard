@@ -1,0 +1,422 @@
+;;; v3/kernel/matcher.shard — matchers (v3/LANGUAGE.md §8.4 slice 3.16 rule 1;
+;;; law §5.1 Stage 1 "match compilation"). A `match` elaborates to the
+;;; application of a generated constant in Lean's shape,
+;;;
+;;;   OWNER.match_N.{v, us} : ∀ params (motive : D… → Sort v) (d : D)…
+;;;                             (h_i : ∀ pattern variables, motive pattern_i)…, motive d…
+;;;
+;;; defined by a `casesOn` tree: first-match column splitting, the first
+;;; column the first row constrains, a row with a variable there kept under
+;;; every constructor — so a fall-through alternative is *applied* at every
+;;; leaf it reaches, never copied. K checks the definition like any other.
+;;;
+;;; The matcher's type **is** its description: each alternative's type spells
+;;; its row's patterns as a term over its variables, in row order. `mt_rows`
+;;; reads the rows back off an admitted type and `mt_is_matcher` regenerates
+;;; the definition from them and compares it with the admitted value — the
+;;; binding GPT-6 R64 asks for, as a check: no side table to go stale, to lose
+;;; in a view's fork or to trust by a name's spelling.
+;;;
+;;; Untrusted (above K). Slice 3.16, landing 1.
+
+(import "kw.shard")
+(import "scope.shard")
+(use kernel.k)
+(use kernel.decl)
+(use kernel.expr)
+(use kernel.kw)
+(use kernel.level)
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.scope)
+(use kernel.util)
+(use kernel.decl.ConstantInfo)
+(use kernel.decl.ConstantVal)
+(use kernel.decl.Declaration)
+(use kernel.decl.DefinitionSafety)
+(use kernel.decl.ReducibilityHints)
+(use kernel.expr.BinderInfo)
+(use kernel.expr.Expr)
+(use kernel.kw.W)
+(use kernel.level.Level)
+(use kernel.name.Name)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+
+;; a pattern: a variable with its slot among the alternative's variables (left to right in
+;; the pattern; -1 for the wildcards a split introduces), or a constructor on its fields
+(type MtPat (MtVar Int) (MtCtor Name (List MtPat)))
+;; a row in compilation: the patterns by column, the alternative's index, the variables
+;; bound so far (slot → value)
+(type MtRow (MtRow (List MtPat) Int (List (Pair Int Expr))))
+(type MtRes (MtOk W Expr) (MtErr Symbol (List Int)))
+(type MtGen (MtGenOk W Declaration) (MtGenErr Symbol (List Int)))
+
+(fn nm_motive () Name (n1 (quote motive)))
+(fn mt_alt_name ((i Int)) Name (n1 (sym_of_chars (append "h_" (show_nat (+ i 1))))))
+(fn mt_name ((owner Name) (k Int)) Name (Str owner (sym_of_chars (append "match_" (show_nat k)))))
+;; a universe name no parameter of the owner bears
+(fn mt_level_name ((lps (List Name))) Name (mt_level_go lps 0 64))
+(fn mt_level_go ((lps (List Name)) (k Int) (fuel Int)) Name
+  (measure fuel)
+  (let ((n (n1 (sym_of_chars (if (int_eq k 0) "v" (append "v_" (show_nat k)))))))
+    (if (bool_or (lt fuel 1) (bool_not (mem_name n lps))) n (mt_level_go lps (+ k 1) (- fuel 1)))))
+
+;; ---- an inductive type at its arguments --------------------------------------------------
+;; the head inductive of a type, its levels and its parameters (no indices at this slice)
+(type MtInd (MtInd Name (List Level) (List Expr) (List Name)) (MtNoInd Symbol (List Int)))
+(fn mt_ind_of ((w W) (ty Expr)) (Pair W MtInd)
+  (match (w_whnf w ty)
+    ((Pair w1 None) (Pair w1 (MtNoInd (quote match_scrutinee) (append "K could not normalize the type " (show_expr ty)))))
+    ((Pair w1 (Some tyw))
+     (match (get_app_fn tyw)
+       ((Const _ ind ls)
+        (match (env_find (w_env w1) ind)
+          ((Some (InductInfo _ nparams nindices _ ctors _ _ _ _))
+           (if (lt 0 nindices)
+             (Pair w1 (MtNoInd (quote match_indexed) (append (show_name ind) ": a match on an indexed family needs a dependent motive (a later slice)")))
+             (Pair w1 (MtInd ind ls (take nparams (get_app_args tyw)) ctors))))
+          (_ (Pair w1 (MtNoInd (quote match_scrutinee) (append (show_expr tyw) " is not an inductive type"))))))
+       (_ (Pair w1 (MtNoInd (quote match_scrutinee) (append (show_expr tyw) " is not an inductive type"))))))))
+;; a constructor's type at the inductive's levels and parameters: the fields' telescope
+(fn mt_ctor_type ((w W) (c Name) (ls (List Level)) (params (List Expr))) (Pair W (Option (Pair Expr Int)))
+  (match (env_find (w_env w) c)
+    ((Some (CtorInfo cv _ _ _ nfields _))
+     (match (w_inst_lparams w (cv_type cv) (cv_lparams cv) ls)
+       ((Pair w1 t) (match (mt_inst_args w1 t params) ((Pair w2 (Some t1)) (Pair w2 (Some (Pair t1 nfields)))) ((Pair w2 None) (Pair w2 None))))))
+    (_ (Pair w None))))
+(fn mt_inst_args ((w W) (t Expr) (args (List Expr))) (Pair W (Option Expr))
+  (measure (struct args))
+  (match args
+    (Nil (Pair w (Some t)))
+    ((Cons a r) (match t ((Pi _ _ _ _ body) (match (w_inst1 w body a) ((Pair w1 b) (mt_inst_args w1 b r)))) (_ (Pair w None))))))
+;; the fields of a constructor as fresh locals, each typed past the earlier ones
+(fn mt_open_fields ((w W) (t Expr) (k Int) (acc (List (Pair Expr Expr)))) (Pair W (Option (List (Pair Expr Expr))))
+  (measure k)
+  (if (lt k 1) (Pair w (Some (rev acc)))
+    (match t
+      ((Pi _ n _ dom body)
+       (match (w_local w n dom)
+         ((Pair w1 fv) (match (w_inst1 w1 body fv) ((Pair w2 b) (mt_open_fields w2 b (- k 1) (Cons (Pair fv dom) acc)))))))
+      (_ (Pair w None)))))
+(fn mt_firsts ((xs (List (Pair Expr Expr)))) (List Expr)
+  (measure (struct xs))
+  (match xs (Nil Nil) ((Cons (Pair a _) r) (Cons a (mt_firsts r)))))
+
+;; ---- a pattern as a term over fresh variables --------------------------------------------
+;; the pattern at its type: the term, and the variables' locals in slot order
+(type MtPt (MtPtOk W Expr (List Expr)) (MtPtErr Symbol (List Int)))
+(fn mt_pat_term ((w W) (p MtPat) (ty Expr) (vars (List Expr)) (fuel Int)) MtPt
+  (measure fuel)
+  (if (lt fuel 1) (MtPtErr (quote match_depth) "a pattern too deep")
+  (match p
+    ((MtVar _) (match (w_local w (n1 (quote x)) ty) ((Pair w1 fv) (MtPtOk w1 fv (append vars (list fv))))))
+    ((MtCtor c subs)
+     (match (mt_ind_of w ty)
+       ((Pair _ (MtNoInd e m)) (MtPtErr e m))
+       ((Pair w1 (MtInd _ ls params _))
+        (match (mt_ctor_type w1 c ls params)
+          ((Pair _ None) (MtPtErr (quote match_constructor) (show_name c)))
+          ((Pair w2 (Some (Pair cty nfields)))
+           (if (bool_not (int_eq (len subs) nfields))
+             (MtPtErr (quote pattern_arity) (append (show_name c) (append " has " (append (show_nat nfields) " fields"))))
+             (mt_pat_fields w2 subs cty (mk_app_n (mk_const c ls) params) vars (- fuel 1)))))))))))
+(fn mt_pat_fields ((w W) (subs (List MtPat)) (cty Expr) (acc Expr) (vars (List Expr)) (fuel Int)) MtPt
+  (measure (struct subs))
+  (match subs
+    (Nil (MtPtOk w acc vars))
+    ((Cons p r)
+     (match cty
+       ((Pi _ _ _ dom body)
+        (match (mt_pat_term w p dom vars fuel)
+          ((MtPtErr e m) (MtPtErr e m))
+          ((MtPtOk w1 t vars1) (match (w_inst1 w1 body t) ((Pair w2 b) (mt_pat_fields w2 r b (mk_app acc t) vars1 fuel))))))
+       (_ (MtPtErr (quote match_constructor) "a constructor's type ran out of fields"))))))
+(fn mk_app_n ((f Expr) (args (List Expr))) Expr
+  (measure (struct args))
+  (match args (Nil f) ((Cons a r) (mk_app_n (mk_app f a) r))))
+(fn mt_pat_terms ((w W) (ps (List MtPat)) (tys (List Expr)) (acc (List Expr)) (vars (List Expr))) (Pair W (Option (Pair (List Expr) (List Expr))))
+  (measure (struct ps))
+  (match ps
+    (Nil (Pair w (Some (Pair (rev acc) vars))))
+    ((Cons p r)
+     (match tys
+       (Nil (Pair w None))
+       ((Cons ty tr)
+        (match (mt_pat_term w p ty vars 256)
+          ((MtPtErr _ _) (Pair w None))
+          ((MtPtOk w1 t vars1) (mt_pat_terms w1 r tr (Cons t acc) vars1))))))))
+
+;; ---- the definition ----------------------------------------------------------------------
+;; params: the outer locals the scrutinee types mention, in dependency order (the caller's);
+;; dtys: the scrutinee types; rows: the patterns per row, by column
+(fn mt_generate ((w W) (name Name) (lps (List Name)) (v Name) (params (List Expr)) (dtys (List Expr)) (rows (List (List MtPat)))) MtGen
+  (match (mt_locals w dtys (n1 (quote d)) Nil)
+    ((Pair w1 ds)
+     (match (w_pis w1 ds (mk_sort (LParam v)))
+       ((Pair w2 mty)
+        (match (w_local w2 (nm_motive) mty)
+          ((Pair w3 M)
+           (match (mt_locals w3 dtys (n1 (quote t)) Nil)
+             ((Pair w4 xs)
+              (match (mt_alts w4 M dtys rows 0 Nil)
+                ((Pair _ (MtAltsErr e m)) (MtGenErr e m))
+                ((Pair w5 (MtAltsOk alts))
+                 (match (mt_compile w5 (* 64 (+ 1 (len rows))) v M (mt_zip xs dtys) xs (mt_rows0 rows 0) alts Nil)
+                   ((MtErr e m) (MtGenErr e m))
+                   ((MtOk w6 body)
+                    (let ((binders (append params (append (list M) (append xs alts)))))
+                      (match (w_lams w6 binders body)
+                        ((Pair w7 value)
+                         (match (w_pis w7 binders (mk_app_n M xs))
+                           ((Pair w8 ty)
+                            (MtGenOk w8 (DefnDecl (ConstantVal name (Cons v lps) ty) value HAbbrev Safe (list name)))))))))))))))))))))
+(type MtAlts (MtAltsErr Symbol (List Int)) (MtAltsOk (List Expr)))
+(fn mt_locals ((w W) (tys (List Expr)) (n Name) (acc (List Expr))) (Pair W (List Expr))
+  (measure (struct tys))
+  (match tys
+    (Nil (Pair w (rev acc)))
+    ((Cons ty r) (match (w_local w n ty) ((Pair w1 fv) (mt_locals w1 r n (Cons fv acc)))))))
+(fn mt_zip ((xs (List Expr)) (tys (List Expr))) (List (Pair Expr Expr))
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons x r) (match tys ((Cons t tr) (Cons (Pair x t) (mt_zip r tr))) (Nil Nil)))))
+(fn mt_rows0 ((rows (List (List MtPat))) (i Int)) (List MtRow)
+  (measure (struct rows))
+  (match rows (Nil Nil) ((Cons ps r) (Cons (MtRow ps i Nil) (mt_rows0 r (+ i 1))))))
+;; the alternatives' locals: h_i : ∀ variables, motive pattern_i
+(fn mt_alts ((w W) (M Expr) (dtys (List Expr)) (rows (List (List MtPat))) (i Int) (acc (List Expr))) (Pair W MtAlts)
+  (measure (struct rows))
+  (match rows
+    (Nil (Pair w (MtAltsOk (rev acc))))
+    ((Cons ps r)
+     (match (mt_pat_terms w ps dtys Nil Nil)
+       ((Pair w1 None) (Pair w1 (MtAltsErr (quote match_pattern) (append "row " (append (show_nat (+ i 1)) ": a pattern does not fit its scrutinee's type")))))
+       ((Pair w1 (Some (Pair terms vars)))
+        (match (w_pis w1 vars (mk_app_n M terms))
+          ((Pair w2 aty)
+           (match (w_local w2 (mt_alt_name i) aty)
+             ((Pair w3 h) (mt_alts w3 M dtys r (+ i 1) (Cons h acc)))))))))))
+
+;; the case tree: cols are (local, type); targs the motive's arguments as refined so far;
+;; substs the splits made on the way down (local := constructor term, in order) — a variable
+;; bound before a later split is refined by it at the leaf, so the alternative's argument is
+;; the term the motive's argument has there
+(fn mt_compile ((w W) (fuel Int) (v Name) (M Expr) (cols (List (Pair Expr Expr))) (targs (List Expr)) (rows (List MtRow)) (alts (List Expr)) (substs (List (Pair Int Expr)))) MtRes
+  (measure fuel)
+  (if (lt fuel 1) (MtErr (quote match_depth) "the case tree is too deep")
+  (match rows
+    (Nil (MtErr (quote match_not_exhaustive) "a constructor no row covers: add the case or a `_` row"))
+    ((Cons (MtRow pats i binds) _)
+     (match (mt_ctor_col pats 0)
+       (None
+        (match (nth alts i)
+          (None (MtErr (quote match_pattern) "alternative"))
+          ((Some h)
+           (match (mt_refine_all w (mt_slot_args (mt_bind_cols pats cols binds) 0 256) substs Nil)
+             ((Pair w1 args) (MtOk w1 (mk_app_n h args)))))))
+       ((Some j)
+        (match (nth cols j)
+          (None (MtErr (quote match_pattern) "column"))
+          ((Some (Pair x xty))
+           (match (mt_ind_of w xty)
+             ((Pair _ (MtNoInd e m)) (MtErr e m))
+             ((Pair w1 (MtInd ind ls params ctors))
+              (match (mt_cases_levels w1 ind ls v)
+                (None (MtErr (quote match_eliminator) (append (show_name ind) ".casesOn is missing or eliminates into Prop only")))
+                ((Some cls)
+                 (match (w_local w1 (n1 (quote y)) xty)
+                   ((Pair w2 y)
+                    (match (mt_subst_all w2 targs (fvar_id_of x) y Nil)
+                      ((Pair w3 targs_y)
+                       (match (w_lams w3 (list y) (mk_app_n M targs_y))
+                         ((Pair w4 motive)
+                          (match (mt_minors w4 (- fuel 1) v M cols targs rows alts substs j x ls params ctors Nil)
+                            ((Pair _ (MtAltsErr e m)) (MtErr e m))
+                            ((Pair w5 (MtAltsOk minors))
+                             (MtOk w5 (mk_app_n (mk_const (name_append ind (n1 (quote casesOn))) cls)
+                                        (append params (append (list motive x) minors))))))))))))))))))))))))
+;; casesOn's levels: the motive's universe first, then the inductive's (a large eliminator)
+(fn mt_cases_levels ((w W) (ind Name) (ls (List Level)) (v Name)) (Option (List Level))
+  (match (env_find (w_env w) (name_append ind (n1 (quote casesOn))))
+    ((Some info) (if (int_eq (len (ci_lparams info)) (+ 1 (len ls))) (Some (Cons (LParam v) ls)) None))
+    (None None)))
+(fn mt_ctor_col ((pats (List MtPat)) (i Int)) (Option Int)
+  (measure (struct pats))
+  (match pats (Nil None) ((Cons (MtCtor _ _) _) (Some i)) ((Cons _ r) (mt_ctor_col r (+ i 1)))))
+;; a leaf: every remaining pattern is a variable, bound to its column's local
+(fn mt_bind_cols ((pats (List MtPat)) (cols (List (Pair Expr Expr))) (binds (List (Pair Int Expr)))) (List (Pair Int Expr))
+  (measure (struct pats))
+  (match pats
+    (Nil binds)
+    ((Cons p r)
+     (match cols
+       (Nil binds)
+       ((Cons (Pair x _) cr)
+        (mt_bind_cols r cr (match p ((MtVar s) (if (lt s 0) binds (Cons (Pair s x) binds))) (_ binds))))))))
+(fn mt_slot_args ((binds (List (Pair Int Expr))) (s Int) (fuel Int)) (List Expr)
+  (measure fuel)
+  (if (lt fuel 1) Nil
+    (match (mt_slot binds s) (None Nil) ((Some e) (Cons e (mt_slot_args binds (+ s 1) (- fuel 1)))))))
+(fn mt_refine_all ((w W) (es (List Expr)) (substs (List (Pair Int Expr))) (acc (List Expr))) (Pair W (List Expr))
+  (measure (struct es))
+  (match es
+    (Nil (Pair w (rev acc)))
+    ((Cons e r) (match (mt_refine w e substs) ((Pair w1 e1) (mt_refine_all w1 r substs (Cons e1 acc)))))))
+(fn mt_refine ((w W) (e Expr) (substs (List (Pair Int Expr)))) (Pair W Expr)
+  (measure (struct substs))
+  (match substs
+    (Nil (Pair w e))
+    ((Cons (Pair id ct) r) (match (w_subst w e id ct) ((Pair w1 e1) (mt_refine w1 e1 r))))))
+(fn mt_slot ((binds (List (Pair Int Expr))) (s Int)) (Option Expr)
+  (measure (struct binds))
+  (match binds (Nil None) ((Cons (Pair k e) r) (if (int_eq k s) (Some e) (mt_slot r s)))))
+(fn mt_subst_all ((w W) (es (List Expr)) (id Int) (val Expr) (acc (List Expr))) (Pair W (List Expr))
+  (measure (struct es))
+  (match es
+    (Nil (Pair w (rev acc)))
+    ((Cons e r) (match (w_subst w e id val) ((Pair w1 e1) (mt_subst_all w1 r id val (Cons e1 acc)))))))
+;; one minor premise per constructor: λ fields. the tree over the specialized rows
+(fn mt_minors ((w W) (fuel Int) (v Name) (M Expr) (cols (List (Pair Expr Expr))) (targs (List Expr)) (rows (List MtRow)) (alts (List Expr)) (substs (List (Pair Int Expr))) (j Int) (x Expr) (ls (List Level)) (params (List Expr)) (ctors (List Name)) (acc (List Expr))) (Pair W MtAlts)
+  (measure (struct ctors))
+  (match ctors
+    (Nil (Pair w (MtAltsOk (rev acc))))
+    ((Cons c r)
+     (match (mt_ctor_type w c ls params)
+       ((Pair w1 None) (Pair w1 (MtAltsErr (quote match_constructor) (show_name c))))
+       ((Pair w1 (Some (Pair cty nfields)))
+        (match (mt_open_fields w1 cty nfields Nil)
+          ((Pair w2 None) (Pair w2 (MtAltsErr (quote match_constructor) (show_name c))))
+          ((Pair w2 (Some fields))
+           (let ((ct (mk_app_n (mk_app_n (mk_const c ls) params) (mt_firsts fields))))
+             (match (mt_subst_all w2 targs (fvar_id_of x) ct Nil)
+               ((Pair w3 targs_c)
+                (match (mt_compile w3 fuel v M (append (take j cols) (append fields (drop (+ j 1) cols))) targs_c (mt_specialize rows j c nfields ct) alts (append substs (list (Pair (fvar_id_of x) ct))))
+                  ((MtErr e m) (Pair w3 (MtAltsErr e m)))
+                  ((MtOk w4 body)
+                   (match (w_lams w4 (mt_firsts fields) body)
+                     ((Pair w5 minor) (mt_minors w5 fuel v M cols targs rows alts substs j x ls params r (Cons minor acc))))))))))))))))
+;; the rows under constructor c at column j: a row with c there gives its sub-patterns, one
+;; with a variable there stays (the variable bound to the constructor term), another goes
+(fn mt_specialize ((rows (List MtRow)) (j Int) (c Name) (nfields Int) (ct Expr)) (List MtRow)
+  (measure (struct rows))
+  (match rows
+    (Nil Nil)
+    ((Cons (MtRow pats i binds) r)
+     (match (nth pats j)
+       ((Some (MtCtor c2 subs))
+        (if (name_eq c c2)
+          (Cons (MtRow (append (take j pats) (append subs (drop (+ j 1) pats))) i binds) (mt_specialize r j c nfields ct))
+          (mt_specialize r j c nfields ct)))
+       ((Some (MtVar s))
+        (Cons (MtRow (append (take j pats) (append (mt_wilds nfields) (drop (+ j 1) pats))) i (if (lt s 0) binds (Cons (Pair s ct) binds)))
+              (mt_specialize r j c nfields ct)))
+       (None (mt_specialize r j c nfields ct))))))
+(fn mt_wilds ((k Int)) (List MtPat) (measure k) (if (lt k 1) Nil (Cons (MtVar (- 0 1)) (mt_wilds (- k 1)))))
+
+;; ---- the description read back (R64) -----------------------------------------------------
+;; the rows of a matcher's type: past `nparams` binders the motive, its arity the number of
+;; scrutinees, then an alternative per row whose type ends in `motive pattern…`
+(type MtDesc (MtDesc Int Int (List (List MtPat))))   ; nparams, nscrutinees, rows
+(fn mt_describe ((env CheckedEnv) (ty Expr)) (Option MtDesc) (mt_find_motive env ty 0 256))
+(fn mt_find_motive ((env CheckedEnv) (ty Expr) (k Int) (fuel Int)) (Option MtDesc)
+  (measure fuel)
+  (if (lt fuel 1) None
+    (match ty
+      ((Pi _ n _ dom body)
+       (if (bool_and (name_eq n (nm_motive)) (mt_ends_in_sort dom 64))
+         (let ((nd (mt_pi_arity dom 0 64)))
+           (match (mt_skip_pis body nd)
+             (None None)
+             ((Some rest) (match (mt_desc_rows env rest nd 0 Nil 256) ((Some rows) (Some (MtDesc k nd rows))) (None None)))))
+         (mt_find_motive env body (+ k 1) (- fuel 1))))
+      (_ None))))
+(fn mt_ends_in_sort ((t Expr) (fuel Int)) Bool
+  (measure fuel)
+  (if (lt fuel 1) False (match t ((Pi _ _ _ _ b) (mt_ends_in_sort b (- fuel 1))) ((Sort _ _) True) (_ False))))
+(fn mt_pi_arity ((t Expr) (k Int) (fuel Int)) Int
+  (measure fuel)
+  (if (lt fuel 1) k (match t ((Pi _ _ _ _ b) (mt_pi_arity b (+ k 1) (- fuel 1))) (_ k))))
+(fn mt_skip_pis ((t Expr) (k Int)) (Option Expr)
+  (measure k)
+  (if (lt k 1) (Some t) (match t ((Pi _ _ _ _ b) (mt_skip_pis b (- k 1))) (_ None))))
+;; the alternatives: each a Pi until the result `motive d…`; depth = binders passed since the motive
+(fn mt_desc_rows ((env CheckedEnv) (t Expr) (nd Int) (nalts Int) (acc (List (List MtPat))) (fuel Int)) (Option (List (List MtPat)))
+  (measure fuel)
+  (if (lt fuel 1) None
+    (match t
+      ((Pi _ _ _ dom body)
+       (match (mt_alt_pats env dom 0 64)
+         (None None)
+         ((Some pats) (if (int_eq (len pats) nd) (mt_desc_rows env body nd (+ nalts 1) (Cons pats acc) (- fuel 1)) None))))
+      (_ (Some (rev acc))))))
+;; an alternative's type: ∀ variables, motive p…; a bound variable k under nv binders is slot nv-1-k
+(fn mt_alt_pats ((env CheckedEnv) (t Expr) (nv Int) (fuel Int)) (Option (List MtPat))
+  (measure fuel)
+  (if (lt fuel 1) None
+    (match t
+      ((Pi _ _ _ _ body) (mt_alt_pats env body (+ nv 1) (- fuel 1)))
+      (_ (mt_pats_of env (get_app_args t) nv Nil 64)))))
+(fn mt_pats_of ((env CheckedEnv) (es (List Expr)) (nv Int) (acc (List MtPat)) (fuel Int)) (Option (List MtPat))
+  (measure (struct es))
+  (match es
+    (Nil (Some (rev acc)))
+    ((Cons e r) (match (mt_pat_of env e nv fuel) ((Some p) (mt_pats_of env r nv (Cons p acc) fuel)) (None None)))))
+;; a variable of the alternative, or a constructor on its fields (its parameters dropped)
+(fn mt_pat_of ((env CheckedEnv) (e Expr) (nv Int) (fuel Int)) (Option MtPat)
+  (measure fuel)
+  (if (lt fuel 1) None
+    (match e
+      ((BVar _ k) (if (lt k nv) (Some (MtVar (- (- nv 1) k))) None))
+      (_
+       (match (get_app_fn e)
+         ((Const _ c _)
+          (match (env_find env c)
+            ((Some (CtorInfo _ _ _ nparams nfields _))
+             (let ((fields (drop nparams (get_app_args e))))
+               (if (int_eq (len fields) nfields)
+                 (match (mt_pats_of env fields nv Nil (- fuel 1)) ((Some ps) (Some (MtCtor c ps))) (None None))
+                 None)))
+            (_ None)))
+         (_ None))))))
+
+;; is this admitted constant a matcher, and which? Its type read back, the definition
+;; regenerated from the rows at the same name and universe parameters, the two values
+;; compared: a constant that merely looks like one is not one
+(fn mt_is_matcher ((env CheckedEnv) (name Name)) (Option MtDesc)
+  (match (env_find env name)
+    ((Some (DefnInfo cv value _ _ _))
+     (match (mt_describe env (cv_type cv))
+       (None None)
+       ((Some (MtDesc np nd rows))
+        (match (cv_lparams cv)
+          (Nil None)
+          ((Cons v lps)
+           (match (mt_open_params (w0 env) (cv_type cv) np Nil)
+             ((Pair _ None) None)
+             ((Pair w1 (Some (Pair params rest)))
+              (match (mt_motive_doms rest)
+                (None None)
+                ((Some dtys)
+                 (match (mt_generate w1 name lps v params dtys rows)
+                   ((MtGenErr _ _) None)
+                   ((MtGenOk _ (DefnDecl _ value2 _ _ _)) (if (expr_eq value value2) (Some (MtDesc np nd rows)) None))
+                   ((MtGenOk _ _) None)))))))))))
+    (_ None)))
+;; the parameters as fresh locals; what is left starts at the motive
+(fn mt_open_params ((w W) (t Expr) (k Int) (acc (List Expr))) (Pair W (Option (Pair (List Expr) Expr)))
+  (measure k)
+  (if (lt k 1) (Pair w (Some (Pair (rev acc) t)))
+    (match t
+      ((Pi _ n _ dom body)
+       (match (w_local w n dom) ((Pair w1 fv) (match (w_inst1 w1 body fv) ((Pair w2 b) (mt_open_params w2 b (- k 1) (Cons fv acc)))))))
+      (_ (Pair w None)))))
+;; the scrutinee types: the motive's domains (non-dependent at this slice)
+(fn mt_motive_doms ((t Expr)) (Option (List Expr))
+  (match t ((Pi _ _ _ mty _) (Some (mt_doms mty 64))) (_ None)))
+(fn mt_doms ((t Expr) (fuel Int)) (List Expr)
+  (measure fuel)
+  (if (lt fuel 1) Nil (match t ((Pi _ _ _ dom b) (Cons dom (mt_doms b (- fuel 1)))) (_ Nil))))
