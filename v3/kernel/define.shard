@@ -1,24 +1,24 @@
-;;; v3/kernel/define.shard — Stage 1's `fn` = `def` + `realize` (v3/LANGUAGE.md
-;;; §8.4; §13 items 43–45, 47; law §4.4, §5.1). A classified E function whose
-;;; signature's types and body's heads all have L identities gets a definition
-;;; K checks: its binders as lambdas, its leading case tree as nested recursors
-;;; with a constant motive; a structurally recursive one is `T.brecOn` applied
-;;; to a functional whose table holds the results at every sub-structure —
-;;; each runtime split of a variable owning a table generalizes the table in
-;;; the split's motive, so a recursive field's entry is a typed projection and
-;;; a self-call on it, at any depth, is the entry applied to the other
-;;; arguments (slice 3.14; a native inductive's `below` and `brecOn` generated
-;;; on first need); a measured one is `WellFounded.fix` over the parameter
-;;; tuple, each self-call's decreasing fact an obligation admitted before the
-;;; definition. The equations `NAME.eq_N` (one per leaf, by `Eq.refl`; none for
-;;; a measured function) and the executable body then attach through
-;;; realize.shard's path. A function that cannot have L meaning here stays
-;;; RUNNABLE with the obstacle named (DfSkip); one that can, and whose
-;;; definition fails, is refused (DfErr) — never a silent fall-back. Phase 3,
-;;; slices 3.13–3.14.
+;;; v3/kernel/define.shard — Stage 1's `fn` = `def` + `realize`: the K projection
+;;; of a pre-definition (v3/LANGUAGE.md §8.4, slices 3.13–3.14 and 3.16; §13 items
+;;; 43–45, 47, 49; law §4.4, §5.1). predef.shard read the `fn` once into an L body
+;;; over the binders' locals and the self-local; here it becomes a definition K
+;;; checks. A body that never cites the self-local is the value under its binders.
+;;; A structurally recursive one is `T.brecOn` applied to a functional: a matcher
+;;; on a local the course-of-values table's type mentions takes the table through
+;;; its motive (Lean's addArg — the matcher stays the constant K checked), and a
+;;; self-call is the table's entry, found by type over an abstract motive (a
+;;; native inductive's `below` and `brecOn` generated on first need). A measured
+;;; one is `WellFounded.fix` over the data binders' tuple, each self-call's
+;;; decreasing fact an obligation `f.dec_N` over every local in scope, an `ite`
+;;; compiled as `Decidable.rec` so the branch's proof is one of them. The
+;;; equations `NAME.eq_N` (one per leaf of the leading matchers, by `Eq.refl`;
+;;; none for a measured function) come with it. What K's projection cannot reach
+;;; here leaves the function RUNNABLE with the obstacle named (DfSkip); a
+;;; definition that should exist and fails is refused (DfErr) — never a silent
+;;; fall-back. Also here: a native inductive's `below`/`brecOn` and its
+;;; constructor-structure bundle (slice 3.15).
 (import "realize.shard")
 (use kernel.k)
-(use kernel.classify)
 (use kernel.decl)
 (use kernel.erase)
 (use kernel.kw)
@@ -27,277 +27,679 @@
 (use kernel.level)
 (use kernel.name)
 (use kernel.prelude)
-(use kernel.prog)
 (use kernel.scope)
 (use kernel.realize)
 (use kernel.util)
+(use kernel.elab el_w)
+(use kernel.matcher)
+(use kernel.predef)
 (use kernel.decl.ConstantInfo)
 (use kernel.decl.ConstantVal)
 (use kernel.decl.Declaration)
 (use kernel.decl.DefinitionSafety)
 (use kernel.decl.ReducibilityHints)
-(use kernel.erase.BRole)
-(use kernel.erase.TBind)
-(use kernel.etable.EInfo)
 (use kernel.etable.ESt)
 (use kernel.expr.BinderInfo)
 (use kernel.expr.Expr)
 (use kernel.level.Level)
-(use kernel.level.Level)
+(use kernel.name.Name)
 (use kernel.prelude.Bool)
 (use kernel.prelude.List)
 (use kernel.prelude.Option)
 (use kernel.prelude.Pair)
-(use kernel.prog.EArm)
-(use kernel.prog.EDecl)
-(use kernel.prog.EPat)
-(use kernel.prog.ERec)
-(use kernel.prog.ETerm)
-(use kernel.prog.EType)
 (use kernel.scope.Scope)
-(use kernel.realize.Col)
-(use kernel.realize.EV)
+(use kernel.kw.WOut)
+(use kernel.matcher.MtDesc)
+(use kernel.matcher.MtInd)
+(use kernel.matcher.MtPat)
+(use kernel.matcher.MtPt)
+(use kernel.predef.PdRec)
 (use kernel.realize.Either2)
 (use kernel.realize.Either3)
 (use kernel.realize.Field)
-(use kernel.realize.Row)
 (use kernel.realize.TrRes)
 
 ;; ---- the verdicts ----------------------------------------------------------------------------
-;; DfSkip: the fn has no L meaning here (RUNNABLE, the obstacle named); DfErr: it should, and
-;; the definition failed (refused); DfAux: declarations to admit first (a native inductive's
-;; below and brecOn), then try again; DfOk: the E table (Init inductives the walk registered),
-;; the obligations to admit as parameters, the definition, whether a measure is pending
-(type DfRes (DfSkip Symbol (List Int)) (DfErr Symbol (List Int)) (DfAux ESt (List Declaration)) (DfOk ESt (List Declaration) Declaration Bool))
-;; the equations after the definition is admitted
-(type DqRes (DqErr Symbol (List Int)) (DqOk ESt (List Declaration)))
-;; the signature's locals: the type parameters, the data parameters, the result's L type
-(type DfSig (DfSig (List Expr) (List Expr) Expr))
-(type DfSigRes (DsOk Tr DfSig) (DsErr Tr Symbol (List Int)))
-;; a variable the matrix knows the constructor of: the local's id, the constructor, its fields
-(type Known (Known Int Name (List Field)))
+;; DfSkip: the function has no L meaning here (RUNNABLE, the obstacle named); DfErr: it should,
+;; and the definition failed (refused); DfAux: declarations to admit first (a native inductive's
+;; below and brecOn), then read and try again; DfOk: the E table, the obligations to admit as
+;; parameters, the definition, its equations, whether a measure is pending
+(type DfRes (DfSkip Symbol (List Int)) (DfErr Symbol (List Int)) (DfAux ESt (List Declaration)) (DfOk ESt (List Declaration) Declaration (List Declaration) Bool))
 ;; a value's result with the state: declarations to admit first, or the error
 (type TrAux (AuxOk Tr (List Declaration)) (AuxErr Tr Symbol (List Int)))
 
-;; the obstacles: a fn with one is RUNNABLE, as before Stage 1 (§8.4 rule 1)
+;; what K's projection cannot reach here and the program does not need: RUNNABLE, named
 (fn df_obstacle ((e Symbol)) Bool
-  (bool_or (sym_eq e (quote no_l_meaning))
-  (bool_or (sym_eq e (quote no_l_identity))
-  (bool_or (sym_eq e (quote unknown_constant))
-  (bool_or (sym_eq e (quote e_only_type))
   (bool_or (sym_eq e (quote measure_type))
-  (bool_or (sym_eq e (quote numeral_pattern))
-  (bool_or (sym_eq e (quote recursion_depth))
   (bool_or (sym_eq e (quote below_unreached))
-  (bool_or (sym_eq e (quote wf_unreached))
-  (bool_or (sym_eq e (quote callee_pending))
-           (sym_eq e (quote mutual_recursion)))))))))))))
-;; a callee pre-registered in the file and not yet defined — a forward reference or mutual
-;; recursion — reaches the translation as realize_order: an obstacle here (§8.4, 3.14 rule 3)
+           (sym_eq e (quote wf_unreached)))))
 (fn df_verdict ((e Symbol) (m (List Int))) DfRes
-  (if (sym_eq e (quote realize_order)) (DfSkip (quote mutual_recursion) m)
-    (if (df_obstacle e) (DfSkip e m) (DfErr e m))))
+  (if (df_obstacle e) (DfSkip e m) (DfErr e m)))
 
-;; ---- the entry: the definition of an E function ------------------------------------------------
-(fn define_fn ((es ESt) (sc Scope) (env CheckedEnv) (d EDecl)) DfRes
-  (match d
-    ((EFn k ntp ptypes rt rec body)
-     (match (df_signature (tr_new (w0 env) es sc k Nil (Some (def_rec (rec_pos rec) ptypes False))) ntp ptypes rt)
-       ((DsErr _ e m) (df_verdict e m))
-       ((DsOk t sig)
-        (if (has_lit_pattern body) (DfSkip (quote numeral_pattern) "a numeral pattern: Stage 1's numeral rule is slice 3.15")
-        (match (check_calls es env k rec (param_flags (len ptypes) rec) body)
-          ((Some (Pair e m)) (df_verdict e m))
-          (None
-           (match (df_value t sig ptypes rt rec body)
-             ((AuxErr _ e m) (df_verdict e m))
-             ((AuxOk t1 auxs)
-              (if (lt 0 (len auxs)) (DfAux (Tr.es t1) auxs)
-              (match (df_value_term t1)
-                (None (DfErr (quote define_matrix) "no value"))
-                ((Some value)
-                 (match sig
-                   ((DfSig tps params rl)
-                    (match (tr_pis t1 (append tps params) rl)
-                      ((Pair t2 ty)
-                       (DfOk (Tr.es t2) (tr_obls t2) (DefnDecl (ConstantVal k Nil ty) value (HRegular (def_height env value)) Safe (list k)) (is_measure rec)))))))))))))))))
-    (_ (DfSkip (quote not_a_fn) "only a fn is defined"))))
-(fn rec_pos ((rec ERec)) Int (match rec ((RecStruct i) i) (_ (- 0 1))))
-(fn is_measure ((rec ERec)) Bool (match rec ((RecMeasure _) True) (_ False)))
+;; ---- the entry: the K projection of a pre-definition ---------------------------------------------
+;; the body is an L term over the binders' locals and the self-local (predef.shard). A body
+;; that never cites the self-local is the value under its binders, matchers and `ite` as
+;; elaborated. One that does is compiled by its recursion clause: structural — `T.brecOn`, each
+;; self-call the table's entry found by type (pj_find); measured — `WellFounded.fix`, each
+;; self-call `rec (tuple args) f.dec_N`. The equations come with it (pj_equations).
+(type PjKind (PkStruct Int Int) (PkWf Expr Expr Expr (List Expr)))   ; C's id, the structural position among the data arguments; rec, the tuple, the relation, the components' types
+;; the lexical context of the walk: the self-local's id, the type binders (fixed in a
+;; self-call), the recursion, the tables in scope innermost first — a local with its type over
+;; the abstract motive —, every local in scope outermost first (True = a let)
+(record PjCx (self Int) (tps (List Expr)) (kind PjKind) (tables (List (Pair Expr Expr))) (scope (List (Pair Bool Expr))))
+(fn pj_push ((cx PjCx) (is_let Bool) (fvs (List Expr))) PjCx
+  (measure (struct fvs))
+  (match fvs (Nil cx) ((Cons fv r) (pj_push (with PjCx cx (scope (append (PjCx.scope cx) (list (Pair is_let fv))))) is_let r))))
+
+(fn define_pd ((es ESt) (sc Scope) (pd PreDef)) DfRes
+  (let ((w (el_w (pd_state pd))) (k (pd_name pd)) (selfid (fvar_id_of (pd_self pd))))
+    (match (pj_split_binders w (pd_binders pd) Nil Nil)
+      ((Pair tps data)
+       (let ((t (tr_new w es sc k tps (Some (def_rec (- 0 1) Nil False)))))
+         (match (mt_inst_args (Tr.w t) (pd_type pd) (pd_binders pd))
+           ((Pair _ None) (DfErr (quote define_matrix) "the declared type does not take the binders"))
+           ((Pair w1 (Some rl))
+            (let ((t0 (tr_set_w t w1)) (recursive (mentions_any (pd_body pd) (list selfid))))
+              (match (pj_value t0 pd tps data rl selfid recursive)
+                ((AuxErr _ e m) (df_verdict e m))
+                ((AuxOk t1 auxs)
+                 (if (lt 0 (len auxs)) (DfAux (Tr.es t1) auxs)
+                 (match (df_value_term t1)
+                   (None (DfErr (quote define_matrix) "no value"))
+                   ((Some value)
+                    (let ((measured (bool_and recursive (pj_is_measure (pd_rec pd))))
+                          (dd (DefnDecl (ConstantVal k Nil (pd_type pd)) value (HRegular (def_height (tr_env t1) value)) Safe (list k))))
+                      (if (bool_or measured (bool_not (has_eq (tr_env t1)))) (DfOk (Tr.es t1) (tr_obls t1) dd Nil measured)   ; WellFounded.fix does not compute through Acc.rec (I's); no Eq in scope: the definition alone
+                        (match (pj_equations t1 pd rl selfid)
+                          ((Pair _ (Left3 e m)) (DfErr e m))
+                          ((Pair t2 (Right3 eqs)) (DfOk (Tr.es t2) (tr_obls t2) dd eqs measured))))))))))))))))))
+(fn pj_is_measure ((r PdRec)) Bool (match r ((PdMeasure _) True) (_ False)))
+;; the type binders (a local whose type is a sort) and the data binders, in order
+(fn pj_split_binders ((w W) (bs (List Expr)) (tps (List Expr)) (data (List Expr))) (Pair (List Expr) (List Expr))
+  (measure (struct bs))
+  (match bs
+    (Nil (Pair (rev tps) (rev data)))
+    ((Cons fv r)
+     (match (w_local_type w (fvar_id_of fv))
+       ((Some (Sort _ _)) (pj_split_binders w r (Cons fv tps) data))
+       (_ (pj_split_binders w r tps (Cons fv data)))))))
 ;; the value threads through the state's context: kept in the tables under id -1 so AuxOk
 ;; carries the declarations alone
 (fn df_value_term ((t Tr)) (Option Expr) (tr_table_of t (- 0 1)))
 (fn df_set_value ((t Tr) (v Expr)) Tr (tr_add_tables t Nil (list (Pair (- 0 1) v))))
-
-;; the equations, once the definition is in the environment: the leaves of the case tree as
-;; theorems NAME.eq_N proven by Eq.refl (realize.shard's equations, the self-call the constant);
-;; none for a measured function (WellFounded.fix does not compute through Acc.rec — I's)
-(fn define_equations ((es ESt) (sc Scope) (env CheckedEnv) (d EDecl)) DqRes
-  (match d
-    ((EFn k ntp ptypes rt rec body)
-     (if (bool_or (is_measure rec) (bool_not (has_eq env))) (DqOk es Nil)   ; no Eq in scope (an Init prefix before it): the definition alone
-     (match (df_signature (tr_new (w0 env) es sc k Nil (Some (def_rec (rec_pos rec) ptypes True))) ntp ptypes rt)
-       ((DsErr _ e m) (DqErr e m))
-       ((DsOk t (DfSig tps params rl))
-        (match (equations t (df_binds tps params ptypes) Nil rl rt body rec Nil)
-          ((Pair _ (Left3 e m)) (DqErr e m))
-          ((Pair t1 (Right3 decls)) (DqOk (Tr.es t1) decls)))))))
-    (_ (DqErr (quote not_a_fn) "only a fn is defined"))))
 (fn has_eq ((env CheckedEnv)) Bool
   (match (env_find env (nm_eq)) (None False) ((Some _) (match (env_find env (nm_eq_refl)) (None False) ((Some _) True)))))
-(fn df_binds ((tps (List Expr)) (params (List Expr)) (ptypes (List EType))) (List TBind)
-  (append (df_tbinds tps) (df_dbinds params ptypes)))
-(fn df_tbinds ((tps (List Expr))) (List TBind)
-  (measure (struct tps))
-  (match tps (Nil Nil) ((Cons fv r) (Cons (TBind (n1 (quote T)) BType fv) (df_tbinds r)))))
-(fn df_dbinds ((params (List Expr)) (ptypes (List EType))) (List TBind)
-  (measure (struct params))
-  (match params
-    (Nil Nil)
-    ((Cons fv r) (match ptypes ((Cons ety er) (Cons (TBind (n1 (quote x)) (BData ety) fv) (df_dbinds r er))) (Nil Nil)))))
 
-;; ---- the signature as locals ---------------------------------------------------------------------
-;; the type parameters at Type (E types live in Type, §4) — implicit, as Lean's are and as E
-;; cites them (slice 3.15: `(len xs)` in a theorem as in a body) —, the data parameters at
-;; their L types, the result's L type; a type with no L identity is the obstacle e_only_type
-(fn df_signature ((t Tr) (ntp Int) (ptypes (List EType)) (rt EType)) DfSigRes
-  (match (df_tparams t ntp Nil)
-    ((Pair t1 tps)
-     (let ((t2 (tr_push_scopes (tr_set_tps t1 tps) tps)))
-       (match (df_params t2 ptypes Nil)
-         ((Pair t3 None) (DsErr t3 (quote e_only_type) "a binder's type has no L identity here (an E-only type, or Nat / Int without Init)"))
-         ((Pair t3 (Some params))
-          (match (tr_type t3 rt)
-            ((Pair t4 None) (DsErr t4 (quote e_only_type) "the result type has no L identity here (an E-only type, or Nat / Int without Init)"))
-            ((Pair t4 (Some rl)) (DsOk t4 (DfSig tps params rl))))))))))
-(fn df_tparams ((t Tr) (n Int) (acc (List Expr))) (Pair Tr (List Expr))
-  (measure n)
-  (if (lt n 1) (Pair t (rev acc))
-    (match (tr_local_bi t (n1 (quote T)) (mk_sort (level_one)) BImplicit)
-      ((Pair t1 fv) (df_tparams t1 (- n 1) (Cons fv acc))))))
-(fn df_params ((t Tr) (ptypes (List EType)) (acc (List Expr))) (Pair Tr (Option (List Expr)))
-  (measure (struct ptypes))
-  (match ptypes
-    (Nil (Pair t (Some (rev acc))))
-    ((Cons ety r)
-     (match (tr_type t ety)
-       ((Pair t1 None) (Pair t1 None))
-       ((Pair t1 (Some l))
-        (match (tr_local t1 (n1 (quote x)) l)
-          ((Pair t2 fv) (df_params t2 r (Cons fv acc)))))))))
+(fn pj_value ((t Tr) (pd PreDef) (tps (List Expr)) (data (List Expr)) (rl Expr) (selfid Int) (recursive Bool)) TrAux
+  (if (bool_not recursive)
+    (match (tr_lams t (pd_binders pd) (pd_body pd)) ((Pair t1 v) (AuxOk (df_set_value t1 v) Nil)))
+    (match (pd_rec pd)
+      (PdNone (AuxErr t (quote realize_recursion) (append (show_name (pd_name pd)) " calls itself without a measure")))
+      ((PdStruct x) (pj_struct t pd tps data rl selfid x))
+      ((PdMeasure m) (pj_wf t pd tps data rl selfid m)))))
 
-;; ---- the value ---------------------------------------------------------------------------------------
-;; the result is in the state (df_set_value); AuxOk's list holds declarations that must be
-;; admitted before the definition can be built (a native inductive's below and brecOn)
-(fn df_value ((t Tr) (sig DfSig) (ptypes (List EType)) (rt EType) (rec ERec) (body ETerm)) TrAux
-  (match sig
-    ((DfSig tps params rl)
-     (match rec
-       ((RecStruct i) (df_struct t tps params ptypes rt rl i body))
-       ((RecMeasure m) (df_wf t tps params ptypes rt rl m body))
-       (_
-        (match (df_term t (rev (df_env params ptypes params (- 0 1) 0)) rt rl body Nil)
-          ((TrErr e m) (AuxErr t e m))
-          ((TrOk t1 b) (match (tr_lams t1 (append tps params) b) ((Pair t2 v) (AuxOk (df_set_value t2 v) Nil))))))))))
-;; the parameters' variables in binder order (the caller reverses): the structural parameter
-;; (position i) flagged 2, every parameter taken from `subst` (the functional's locals inside
-;; it, the parameters themselves otherwise)
-(fn df_env ((params (List Expr)) (ptypes (List EType)) (subst (List Expr)) (i Int) (k Int)) (List EV)
-  (measure (struct params))
-  (match params
-    (Nil Nil)
-    ((Cons _ r)
-     (match ptypes
-       (Nil Nil)
-       ((Cons ety er)
-        (match subst
-          (Nil Nil)
-          ((Cons sv sr)
-           (Cons (if (int_eq k i) (EV sv (Some ety) 2) (EV sv (Some ety) 0)) (df_env r er sr i (+ k 1))))))))))
-
-;; ---- structural recursion: brecOn (§8.4, slice 3.14 rule 1) ---------------------------------------
-;; `λ tps params . (T.brecOn largs (λ x . Π others, RET) x (λ x' below others' . body')) others`
-;; — the body's leading match on x' is a runtime split generalizing `below` (df_split_tab)
-(fn df_struct ((t Tr) (tps (List Expr)) (params (List Expr)) (ptypes (List EType)) (rt EType) (rl Expr) (i Int) (body ETerm)) TrAux
-  (match (nth params i)
-    (None (AuxErr t (quote realize_descent) "the structural parameter is not a parameter"))
-    ((Some x)
-     (match (nth ptypes i)
-       ((Some (ETCon ind _))
-        (match (es_info (Tr.es t) ind)
-          ((Some (EIInd _ _))
-           (match (scrutinee_type t x)
-             ((Pair t1 None) (AuxErr t1 (quote untyped_subterm) "K could not type the structural parameter"))
-             ((Pair t1 (Some (Pair _ (Pair ls largs))))
-              (match (rec_usable t1 ind ls)
-                ((Some (Pair e m)) (AuxErr t1 e m))
-                (None
-                 (match (ensure_below t1 ind ls)
-                   ((AuxErr t2 e m) (AuxErr t2 e m))
-                   ((AuxOk t2 auxs)
-                    (if (lt 0 (len auxs)) (AuxOk t2 auxs)
-                    (match (below_names t2 ind)
-                      ((Pair t3 None) (AuxErr t3 (quote below_unreached) (append (show_name ind) ": its below and brecOn are not in scope")))
-                      ((Pair t3 (Some (Pair (Pair belowc brecc) lsb)))
-                       (df_brec t3 tps params ptypes rt rl i x ind ls largs belowc brecc lsb body)))))))))))
-          (_ (AuxErr t (quote untyped_subterm) (append (show_name ind) " is not an E inductive")))))
-       (_ (AuxErr t (quote untyped_subterm) "the structural parameter's type is a type parameter"))))))
-(fn df_brec ((t Tr) (tps (List Expr)) (params (List Expr)) (ptypes (List EType)) (rt EType) (rl Expr) (i Int) (x Expr) (ind Name) (ls (List Level)) (largs (List Expr)) (belowc Name) (brecc Name) (lsb (List Level)) (body ETerm)) TrAux
-  (match (df_others t params ptypes i 0 Nil)
-    ((Pair t1 None) (AuxErr t1 (quote e_only_type) "a parameter's type has no L identity"))
-    ((Pair t1 (Some others))
-     (match (tr_pis t1 others rl)
-       ((Pair t2 mres)
-        (match (tr_apps t2 (mk_const ind ls) largs)
-          ((Pair t3 tyapp)
-           (match (tr_local t3 (n1 (quote x)) tyapp)
-             ((Pair t4 xm)
-              (match (tr_lams t4 (list xm) mres)
-                ((Pair t5 motive)
-                 (match (tr_local t5 (n1 (quote x)) tyapp)
-                   ((Pair t6 xp)
-                    (match (tr_apps t6 (mk_const belowc lsb) (append largs (list motive xp)))
-                      ((Pair t7 belowty)
-                       (match (tr_local t7 (n1 (quote below)) belowty)
-                         ((Pair t8 below)
-                          (let ((t9 (tr_add_tables (tr_set_rec t8 (Some (dr_with_below (dr_of t8) (below_info ind belowc lsb largs motive)))) Nil (list (Pair (fvar_id_of xp) below))))
-                                (env (rev (df_env params ptypes (with_at others xp i) i 0))))
-                            (match (df_term (tr_push_scopes t9 (Cons xp others)) env rt rl body Nil)
-                              ((TrErr e m) (AuxErr t9 e m))
-                              ((TrOk t10 b)
-                               (match (tr_lams t10 others b)
-                                 ((Pair t11 b1)
-                                  (match (tr_lams t11 (list xp below) b1)
-                                    ((Pair t12 fnl)
-                                     (match (tr_apps t12 (mk_const brecc lsb) (append largs (list motive x fnl)))
-                                       ((Pair t13 brec)
-                                        (match (tr_apps t13 brec (without_index params i 0))
-                                          ((Pair t14 b2)
-                                           (match (tr_lams t14 (append tps params) b2)
-                                             ((Pair t15 v) (AuxOk (df_set_value t15 v) Nil)))))))))))))))))))))))))))))))
-(fn dr_of ((t Tr)) DefRec (match (Tr.rec t) ((Some dr) dr) (None (def_rec (- 0 1) Nil False))))
-;; fresh locals for the other parameters, the motive's binders
-(fn df_others ((t Tr) (params (List Expr)) (ptypes (List EType)) (i Int) (k Int) (acc (List Expr))) (Pair Tr (Option (List Expr)))
-  (measure (struct params))
-  (match params
-    (Nil (Pair t (Some (rev acc))))
-    ((Cons _ r)
-     (match ptypes
-       (Nil (Pair t (Some (rev acc))))
-       ((Cons ety er)
-        (if (int_eq k i) (df_others t r er i (+ k 1) acc)
-          (match (tr_type t ety)
-            ((Pair t1 None) (Pair t1 None))
-            ((Pair t1 (Some l))
-             (match (tr_local t1 (n1 (quote o)) l)
-               ((Pair t2 fv) (df_others t2 r er i (+ k 1) (Cons fv acc))))))))))))
+;; ---- structural recursion: brecOn (§8.4, slice 3.14 rule 1; slice 3.16 landing 3) -------------------
+;; `λ binders . T.brecOn largs (λ x . Π others, RET) x (λ x below others . body') others` — the
+;; functional over the binders' own locals (closed before the outer lambdas bind them again)
+(fn pj_struct ((t Tr) (pd PreDef) (tps (List Expr)) (data (List Expr)) (rl Expr) (selfid Int) (x Expr)) TrAux
+  (match (fvar_index (fvar_id_of x) data 0)
+    (None (AuxErr t (quote realize_descent) "the structural parameter is not a data parameter"))
+    ((Some pos)
+     (match (tr_type_of_local t x)
+       (None (AuxErr t (quote untyped_subterm) "the structural parameter has no type"))
+       ((Some xty)
+        (match (mt_ind_of (Tr.w t) xty)
+          ((Pair _ (MtNoInd _ _)) (AuxErr t (quote untyped_subterm) "the structural parameter's type is not an inductive type"))
+          ((Pair w1 (MtInd ind ls largs _))
+           (let ((t1 (tr_set_w t w1)))
+             (match (rec_usable t1 ind ls)
+               ((Some (Pair e m)) (AuxErr t1 e m))
+               (None
+                (match (ensure_below t1 ind ls)
+                  ((AuxErr t2 e m) (AuxErr t2 e m))
+                  ((AuxOk t2 auxs)
+                   (if (lt 0 (len auxs)) (AuxOk t2 auxs)
+                   (match (below_names t2 ind)
+                     ((Pair t3 None) (AuxErr t3 (quote below_unreached) (append (show_name ind) ": its below and brecOn are not in scope")))
+                     ((Pair t3 (Some (Pair (Pair belowc brecc) lsb)))
+                      (pj_brec t3 pd tps data rl selfid x pos xty largs belowc brecc lsb))))))))))))))))
+(fn pj_brec ((t Tr) (pd PreDef) (tps (List Expr)) (data (List Expr)) (rl Expr) (selfid Int) (x Expr) (pos Int) (xty Expr) (largs (List Expr)) (belowc Name) (brecc Name) (lsb (List Level))) TrAux
+  (let ((others (without_index data pos 0)))
+    (match (tr_pis t others rl)
+      ((Pair t1 mres)
+       (match (tr_lams t1 (list x) mres)
+         ((Pair t2 motive)
+          (match (tr_local t2 (n1 (quote x)) xty)
+            ((Pair t3 x0)
+             (match (tr_pis t3 (list x0) (mk_sort (level_one)))
+               ((Pair t4 cty)
+                (match (tr_local t4 (n1 (quote C)) cty)
+                  ((Pair t5 cfv)
+                   (match (tr_apps t5 (mk_const belowc lsb) (append largs (list motive x)))
+                     ((Pair t6 belowty)
+                      (match (tr_apps t6 (mk_const belowc lsb) (append largs (list cfv x)))
+                        ((Pair t7 belowabs)
+                         (match (tr_local t7 (n1 (quote below)) belowty)
+                           ((Pair t8 below)
+                            (let ((cx (make PjCx (self selfid) (tps tps) (kind (PkStruct (fvar_id_of cfv) pos)) (tables (list (Pair below belowabs))) (scope Nil))))
+                              (match (pj_term t8 cx (pd_body pd) (budget_depth))
+                                ((TrErr e m) (AuxErr t8 e m))
+                                ((TrOk t9 b)
+                                 (match (tr_lams t9 (Cons x (Cons below others)) b)
+                                   ((Pair t10 fnl)
+                                    (match (tr_apps t10 (mk_const brecc lsb) (append largs (list motive x fnl)))
+                                      ((Pair t11 brec)
+                                       (match (tr_apps t11 brec others)
+                                         ((Pair t12 b2)
+                                          (match (tr_lams t12 (pd_binders pd) b2)
+                                            ((Pair t13 v) (AuxOk (df_set_value t13 v) Nil))))))))))))))))))))))))))))))
 (fn without_index ((xs (List Expr)) (i Int) (k Int)) (List Expr)
   (measure (struct xs))
   (match xs
     (Nil Nil)
     ((Cons x r) (if (int_eq k i) (without_index r i (+ k 1)) (Cons x (without_index r i (+ k 1)))))))
-;; the substitution for df_env inside the functional: the others' locals with x at its position
-(fn with_at ((others (List Expr)) (x Expr) (i Int)) (List Expr) (append (take i others) (Cons x (drop i others))))
+
+;; the entry for a self-call's structural argument: the tables innermost first, each searched by
+;; its type over the abstract motive C — `C y'` with y' the argument is the entry; a PProd is
+;; searched through both projections; anything else is normalized by K once (a `T.below C t`
+;; unfolds exactly when t is a constructor application) and searched again
+(fn pj_find ((t Tr) (tables (List (Pair Expr Expr))) (cid Int) (y Expr)) (Pair Tr (Option Expr))
+  (measure (struct tables))
+  (match tables
+    (Nil (Pair t None))
+    ((Cons (Pair term ty) r)
+     (match (pj_search t term ty cid y 64)
+       ((Pair t1 (Some e)) (Pair t1 (Some e)))
+       ((Pair t1 None) (pj_find t1 r cid y))))))
+(fn pj_search ((t Tr) (term Expr) (ty Expr) (cid Int) (y Expr) (fuel Int)) (Pair Tr (Option Expr))
+  (measure fuel)
+  (if (lt fuel 1) (Pair t None)
+  (match (tr_whnf t ty)
+    ((Pair t1 None) (Pair t1 None))
+    ((Pair t1 (Some ty1))
+     (match (get_app_fn ty1)
+       ((FVar _ id)
+        (if (bool_not (int_eq id cid)) (Pair t1 None)
+          (match (get_app_args ty1)
+            ((Cons y1 Nil) (pj_same t1 term y1 y))
+            (_ (Pair t1 None)))))
+       ((Const _ c _)
+        (if (bool_not (name_eq c (n1 (quote PProd)))) (Pair t1 None)
+          (match (get_app_args ty1)
+            ((Cons a (Cons b Nil))
+             (match (pj_search t1 (mk_proj (n1 (quote PProd)) 0 term) a cid y (- fuel 1))
+               ((Pair t2 (Some e)) (Pair t2 (Some e)))
+               ((Pair t2 None) (pj_search t2 (mk_proj (n1 (quote PProd)) 1 term) b cid y (- fuel 1)))))
+            (_ (Pair t1 None)))))
+       (_ (Pair t1 None)))))))
+(fn pj_same ((t Tr) (term Expr) (y1 Expr) (y Expr)) (Pair Tr (Option Expr))
+  (if (expr_eq y1 y) (Pair t (Some term))
+    (match (w_is_def_eq_r (Tr.w t) y1 y)
+      ((Pair w1 (WVal True)) (Pair (tr_set_w t w1) (Some term)))
+      ((Pair w1 _) (Pair (tr_set_w t w1) None)))))
+
+;; ---- a measure: WellFounded.fix (§8.4, slice 3.14 rule 2) -------------------------------------------
+;; `λ binders . WellFounded.fix α (λ _ . RET) (InvImage rel m) (InvImage.wf m Nat.lt_wfRel.wf)
+;; (λ p rec . body') (tuple data)` — the body with each data binder the tuple's component, a
+;; self-call `rec (tuple args) (f.dec_N locals…)`, the decreasing fact an obligation
+(fn pj_wf ((t Tr) (pd PreDef) (tps (List Expr)) (data (List Expr)) (rl Expr) (selfid Int) (m Expr)) TrAux
+  (if (bool_not (wf_reachable t)) (AuxErr t (quote wf_unreached) "WellFounded.fix, InvImage.wf or Nat.lt_wfRel is past the Init prefix in scope")
+  (match (local_types t data Nil)
+    ((Pair t1 ltys)
+     (match (wf_tuple_type t1 ltys)
+       ((Pair t2 alpha)
+        (match (tr_local t2 (n1 (quote p)) alpha)
+          ((Pair t3 pm)
+           (match (pj_subst_projs t3 m data pm (len data) 0)
+             ((Pair t4 ml)
+              (match (measure_is_nat t4 ml)
+                ((Pair t5 False) (AuxErr t5 (quote measure_type) "the measure must be a Nat (an Int measure: write a Nat one; the law inserts no Int.toNat)"))
+                ((Pair t5 True)
+                 (match (tr_lams t5 (list pm) ml)
+                   ((Pair t6 mfn)
+                    (match (wf_relation t6 alpha mfn)
+                      ((Pair t7 (Pair rel hwf))
+                       (match (tr_local t7 (n1 (quote p)) alpha)
+                         ((Pair t8 p)
+                          (match (wf_rec_type t8 alpha rel p rl)
+                            ((Pair t9 rty)
+                             (match (tr_local t9 (n1 (quote rec)) rty)
+                               ((Pair t10 recl)
+                                (match (pj_subst_projs t10 (pd_body pd) data p (len data) 0)
+                                  ((Pair t11 body1)
+                                   (let ((cx (make PjCx (self selfid) (tps tps) (kind (PkWf recl p rel ltys)) (tables Nil) (scope (list (Pair False p))))))
+                                     (match (pj_term t11 cx body1 (budget_depth))
+                                       ((TrErr e m2) (AuxErr t11 e m2))
+                                       ((TrOk t12 b)
+                                        (match (tr_lams t12 (list p recl) b)
+                                          ((Pair t13 fnl)
+                                           (match (tr_local t13 (n1 (quote x)) alpha)
+                                             ((Pair t14 xc)
+                                              (match (tr_lams t14 (list xc) rl)
+                                                ((Pair t15 cmot)
+                                                 (match (wf_tuple t15 ltys data)
+                                                   ((Pair t16 tup)
+                                                    (match (tr_apps t16 (mk_const (n2 (quote WellFounded) (quote fix)) (list (level_one) (level_one))) (list alpha cmot rel hwf fnl tup))
+                                                      ((Pair t17 fixed)
+                                                       (match (tr_lams t17 (pd_binders pd) fixed)
+                                                         ((Pair t18 v) (AuxOk (df_set_value t18 v) Nil))))))))))))))))))))))))))))))))))))))))
+;; e with the k-th data binder the k-th component of the tuple p
+(fn pj_subst_projs ((t Tr) (e Expr) (data (List Expr)) (p Expr) (n Int) (k Int)) (Pair Tr Expr)
+  (measure (struct data))
+  (match data
+    (Nil (Pair t e))
+    ((Cons fv r) (match (tr_subst t e (fvar_id_of fv) (wf_proj p n k)) ((Pair t1 e1) (pj_subst_projs t1 e1 r p n (+ k 1)))))))
+(fn wf_reachable ((t Tr)) Bool
+  (bool_and (has_const t (n2 (quote WellFounded) (quote fix)))
+  (bool_and (has_const t (n2 (quote InvImage) (quote wf)))
+  (bool_and (has_const t (n2 (quote Nat) (quote lt_wfRel)))
+  (bool_and (has_const t (n2 (quote WellFoundedRelation) (quote wf)))
+            (has_const t (n2 (quote PProd) (quote mk))))))))
+(fn has_const ((t Tr) (n Name)) Bool (match (env_find (tr_env t) n) ((Some _) True) (None False)))
+(fn local_types ((t Tr) (fvs (List Expr)) (acc (List Expr))) (Pair Tr (List Expr))
+  (measure (struct fvs))
+  (match fvs
+    (Nil (Pair t (rev acc)))
+    ((Cons fv r) (match (tr_type_of_local t fv) ((Some ty) (local_types t r (Cons ty acc))) (None (local_types t r acc))))))
+;; the measure's L type is Nat
+(fn measure_is_nat ((t Tr) (ml Expr)) (Pair Tr Bool)
+  (match (tr_infer t ml)
+    ((Pair t1 None) (Pair t1 False))
+    ((Pair t1 (Some ty))
+     (match (tr_whnf t1 ty)
+       ((Pair t2 (Some (Const _ n _))) (Pair t2 (name_eq n (nm_nat))))
+       ((Pair t2 _) (Pair t2 False))))))
+;; the relation `InvImage Nat.lt_wfRel.rel m` and its well-foundedness `InvImage.wf m Nat.lt_wfRel.wf`
+(fn wf_relation ((t Tr) (alpha Expr) (mfn Expr)) (Pair Tr (Pair Expr Expr))
+  (let ((nat (mk_const (nm_nat) Nil)) (wfrel (mk_const (n2 (quote Nat) (quote lt_wfRel)) Nil)))
+    (match (tr_apps t (mk_const (n2 (quote WellFoundedRelation) (quote rel)) (list (level_one))) (list nat wfrel))
+      ((Pair t1 rnat)
+       (match (tr_apps t1 (mk_const (n1 (quote InvImage)) (list (level_one) (level_one))) (list alpha nat rnat mfn))
+         ((Pair t2 rel)
+          (match (tr_apps t2 (mk_const (n2 (quote WellFoundedRelation) (quote wf)) (list (level_one))) (list nat wfrel))
+            ((Pair t3 hnat)
+             (match (tr_apps t3 (mk_const (n2 (quote InvImage) (quote wf)) (list (level_one) (level_one))) (list alpha nat rnat mfn hnat))
+               ((Pair t4 hwf) (Pair t4 (Pair rel hwf))))))))))))
+;; ∀ (q : α), rel q p → RET
+(fn wf_rec_type ((t Tr) (alpha Expr) (rel Expr) (p Expr) (rl Expr)) (Pair Tr Expr)
+  (match (tr_local t (n1 (quote q)) alpha)
+    ((Pair t1 q)
+     (match (tr_apps t1 rel (list q p))
+       ((Pair t2 hty)
+        (match (tr_local t2 (n1 (quote h)) hty)
+          ((Pair t3 h) (match (tr_pis t3 (list q h) rl) ((Pair t4 e) (Pair t4 e))))))))))
+
+;; ---- the walk over the body -------------------------------------------------------------------------
+;; only a subterm that cites the self-local is rebuilt: a self-call by the recursion's rule; a
+;; matcher application with its alternatives' variables in scope, its motive carrying the
+;; tables its scrutinee refines (pj_match); `ite` as `Decidable.rec` with the branch's proof a
+;; local (rule 2: wherever it stands); a let and a lambda with their local in scope
+(fn pj_term ((t Tr) (cx PjCx) (e Expr) (fuel Int)) TrRes
+  (measure fuel)
+  (if (lt fuel 1) (TrErr (quote define_depth) "a body too deep")
+  (if (bool_not (mentions_any e (list (PjCx.self cx)))) (TrOk t e)
+  (match e
+    ((Lam _ n _ dom b)
+     (match (tr_local t n dom)
+       ((Pair t1 fv)
+        (match (tr_inst1 t1 b fv)
+          ((Pair t2 b1)
+           (match (pj_term t2 (pj_push cx False (list fv)) b1 (- fuel 1))
+             ((TrErr x m) (TrErr x m))
+             ((TrOk t3 b2) (match (tr_lams t3 (list fv) b2) ((Pair t4 r) (TrOk t4 r))))))))))
+    ((Let _ n ty v b)
+     (match (pj_term t cx v (- fuel 1))
+       ((TrErr x m) (TrErr x m))
+       ((TrOk t1 v1)
+        (match (tr_local_val t1 n ty v1)
+          ((Pair t2 fv)
+           (match (tr_inst1 t2 b fv)
+             ((Pair t3 b1)
+              (match (pj_term t3 (pj_push cx True (list fv)) b1 (- fuel 1))
+                ((TrErr x m) (TrErr x m))
+                ((TrOk t4 b2) (match (tr_lams t4 (list fv) b2) ((Pair t5 r) (TrOk t5 r))))))))))))
+    ((Proj _ s i x)
+     (match (pj_term t cx x (- fuel 1)) ((TrErr y m) (TrErr y m)) ((TrOk t1 x1) (TrOk t1 (mk_proj s i x1)))))
+    ((Pi _ _ _ _ _) (TrErr (quote function_value) "the function's own name in a type"))
+    (_ (pj_app t cx (get_app_fn e) (get_app_args e) (- fuel 1)))))))
+(fn pj_app ((t Tr) (cx PjCx) (head Expr) (args (List Expr)) (fuel Int)) TrRes
+  (measure fuel)
+  (if (lt fuel 1) (TrErr (quote define_depth) "a body too deep")
+  (match head
+    ((FVar _ id) (if (int_eq id (PjCx.self cx)) (pj_self t cx args fuel) (pj_plain t cx head args fuel)))
+    ((Const _ c ls)
+     (if (bool_and (name_eq c (n1 (quote ite))) (le 5 (len args))) (pj_ite t cx args fuel)
+       (match (mt_is_matcher (tr_env t) c)
+         ((Some (MtDesc np 1 rows)) (if (le (+ np (+ 2 (len rows))) (len args)) (pj_match t cx c ls np rows args fuel) (pj_plain t cx head args fuel)))
+         (_ (pj_plain t cx head args fuel)))))
+    (_
+     (match (pj_term t cx head (- fuel 1))
+       ((TrErr x m) (TrErr x m))
+       ((TrOk t1 h1) (pj_plain t1 cx h1 args fuel)))))))
+(fn pj_plain ((t Tr) (cx PjCx) (head Expr) (args (List Expr)) (fuel Int)) TrRes
+  (match (pj_terms t cx args fuel Nil)
+    ((Pair _ (Left2 x m)) (TrErr x m))
+    ((Pair t1 (Right2 (Pair args1 _))) (match (tr_apps t1 head args1) ((Pair t2 r) (TrOk t2 r))))))
+(fn pj_terms ((t Tr) (cx PjCx) (es (List Expr)) (fuel Int) (acc (List Expr))) (Pair Tr Either2)
+  (measure (struct es))
+  (match es
+    (Nil (Pair t (Right2 (Pair (rev acc) (mk_sort (level_one))))))
+    ((Cons e r)
+     (match (pj_term t cx e (- fuel 1))
+       ((TrErr x m) (Pair t (Left2 x m)))
+       ((TrOk t1 e1) (pj_terms t1 cx r fuel (Cons e1 acc)))))))
+
+;; a self-call: the type arguments the function's own (no polymorphic recursion), then by the
+;; recursion — the table's entry for the structural argument applied to the others, or `rec`
+;; at the arguments' tuple with the obligation f.dec_N over every local in scope
+(fn pj_self ((t Tr) (cx PjCx) (args (List Expr)) (fuel Int)) TrRes
+  (let ((nt (len (PjCx.tps cx))))
+    (if (bool_not (pj_exprs_eq (take nt args) (PjCx.tps cx))) (TrErr (quote realize_descent) (append (show_name (Tr.id t)) ": a recursive call at other type arguments (polymorphic recursion)"))
+    (match (pj_terms t cx (drop nt args) fuel Nil)
+      ((Pair _ (Left2 x m)) (TrErr x m))
+      ((Pair t1 (Right2 (Pair dargs _)))
+       (match (PjCx.kind cx)
+         ((PkStruct cid pos)
+          (match (nth dargs pos)
+            (None (TrErr (quote function_value) (append (show_name (Tr.id t1)) ": its own name is not applied to its structural argument (no function values, §4)")))
+            ((Some y)
+             (match (pj_find t1 (PjCx.tables cx) cid y)
+               ((Pair _ None) (TrErr (quote realize_descent) (append (show_name (Tr.id t1)) (append ": a recursive call does not pass a proper subterm of the structural parameter — " (show_expr y)))))
+               ((Pair t2 (Some entry)) (match (tr_apps t2 entry (without_index dargs pos 0)) ((Pair t3 r) (TrOk t3 r))))))))
+         ((PkWf recl p rel ltys)
+          (let ((n (len ltys)))
+            (if (lt (len dargs) n) (TrErr (quote function_value) (append (show_name (Tr.id t1)) ": its own name is not applied to all its arguments (no function values, §4)"))
+            (if (pj_own_params (take n dargs) p n 0) (TrErr (quote realize_descent) (append (show_name (Tr.id t1)) " calls itself on its own parameters — no measure decreases (§7.5)"))
+            (match (wf_tuple t1 ltys (take n dargs))
+              ((Pair t2 tup)
+               (match (tr_apps t2 rel (list tup p))
+                 ((Pair t3 goal)
+                  (match (tr_pis t3 (scope_fvars (PjCx.scope cx)) goal)
+                    ((Pair t4 stmt)
+                     (let ((dr (dr_of t4)))
+                       (let ((name (name_append (Tr.id t4) (n1 (sym_of_chars (append "dec_" (show_nat (+ 1 (len (DefRec.obls dr))))))))))
+                         (match (tr_apps t4 (mk_const name Nil) (scope_lambda_fvars (PjCx.scope cx)))
+                           ((Pair t5 proof)
+                            (match (tr_apps t5 recl (Cons tup (Cons proof (drop n dargs))))
+                              ((Pair t6 r) (TrOk (tr_set_rec t6 (Some (dr_add_obl dr (AxiomDecl (ConstantVal name Nil stmt) False)))) r)))))))))))))))))))))))
+(fn dr_of ((t Tr)) DefRec (match (Tr.rec t) ((Some dr) dr) (None (def_rec (- 0 1) Nil False))))
+(fn pj_exprs_eq ((as (List Expr)) (bs (List Expr))) Bool
+  (measure (struct as))
+  (match as
+    (Nil (match bs (Nil True) (_ False)))
+    ((Cons a r) (match bs ((Cons b br) (if (expr_eq a b) (pj_exprs_eq r br) False)) (Nil False)))))
+(fn pj_own_params ((args (List Expr)) (p Expr) (n Int) (k Int)) Bool
+  (measure (struct args))
+  (match args
+    (Nil True)
+    ((Cons a r) (if (expr_eq a (wf_proj p n k)) (pj_own_params r p n (+ k 1)) False))))
+
+;; `ite c inst a b` inside a recursive function: `Decidable.rec` with a constant motive, the
+;; proof of ¬c a local of the else-branch and of c the then-branch's (rule 2; slice 3.14's shape)
+(fn pj_ite ((t Tr) (cx PjCx) (args (List Expr)) (fuel Int)) TrRes
+  (match args
+    ((Cons alpha (Cons c (Cons inst (Cons a (Cons b extra)))))
+     (match (pj_term t cx inst (- fuel 1))
+       ((TrErr x m) (TrErr x m))
+       ((TrOk t1 inst1)
+        (match (pj_branch t1 cx (n2 (quote Decidable) (quote isFalse)) c b fuel)
+          ((TrErr x m) (TrErr x m))
+          ((TrOk t2 mf)
+           (match (pj_branch t2 cx (n2 (quote Decidable) (quote isTrue)) c a fuel)
+             ((TrErr x m) (TrErr x m))
+             ((TrOk t3 mt)
+              (match (rec_app t3 (n1 (quote Decidable)) Nil (list c) alpha (list mf mt) inst1)
+                ((TrErr x m) (TrErr x m))
+                ((TrOk t4 r) (pj_plain t4 cx r extra fuel))))))))))
+    (_ (TrErr (quote define_matrix) "ite"))))
+(fn pj_branch ((t Tr) (cx PjCx) (ctor Name) (c Expr) (body Expr) (fuel Int)) TrRes
+  (match (rz_open_ctor t ctor Nil (list c))
+    ((Pair _ None) (TrErr (quote equation_form) (append (show_name ctor) ": K could not open the constructor")))
+    ((Pair t1 (Some (Pair fields _)))
+     (match (pj_term t1 (pj_push cx False (field_fvars fields)) body (- fuel 1))
+       ((TrErr x m) (TrErr x m))
+       ((TrOk t2 b) (match (tr_lams t2 (field_fvars fields) b) ((Pair t3 r) (TrOk t3 r))))))))
+
+;; a matcher application `match_N params motive s alt…`: each alternative rebuilt under its
+;; row's variables. Where s is a local that tables' types mention (a structural recursion),
+;; the motive becomes `λ s' . B[s'] → motive s'` at the universe K infers, each alternative
+;; takes the refined tables `B[pattern]` as its last binders, and the application is applied to
+;; the tables (Lean's MatcherApp.addArg): the matcher K checked is the case tree, never unfolded
+(fn pj_match ((t Tr) (cx PjCx) (c Name) (ls (List Level)) (np Int) (rows (List (List MtPat))) (args (List Expr)) (fuel Int)) TrRes
+  (let ((params (take np args)) (nalts (len rows)))
+    (match (drop np args)
+      ((Cons motive (Cons s rest))
+       (match motive
+         ((Lam _ _ _ dty mbody)
+          (match (pj_term t cx s (- fuel 1))
+            ((TrErr x m) (TrErr x m))
+            ((TrOk t1 s1)
+             (let ((gen (pj_tables_on (PjCx.tables cx) s1)))
+               (match (pj_motive t1 gen s1 dty mbody ls)
+                 ((Pair _ None) (TrErr (quote define_matrix) "K could not type a matcher's generalized motive"))
+                 ((Pair t2 (Some (Pair motive1 ls1)))
+                  (match (pj_alts t2 cx gen (fvar_id_of s1) dty rows (take nalts rest) fuel Nil)
+                    ((Pair _ (Left2 x m)) (TrErr x m))
+                    ((Pair t3 (Right2 (Pair alts1 _)))
+                     (match (tr_apps t3 (mk_const c ls1) (append params (Cons motive1 (Cons s1 (append alts1 (firsts_of gen))))))
+                       ((Pair t4 r) (pj_plain t4 cx r (drop nalts rest) fuel)))))))))))
+         (_ (TrErr (quote define_matrix) "a matcher's motive is not a lambda"))))
+      (_ (TrErr (quote define_matrix) "a matcher without its scrutinee")))))
+;; the tables whose type (over the abstract motive) mentions the scrutinee, when it is a local
+(fn pj_tables_on ((tables (List (Pair Expr Expr))) (s Expr)) (List (Pair Expr Expr))
+  (measure (struct tables))
+  (match s
+    ((FVar _ id)
+     (match tables
+       (Nil Nil)
+       ((Cons (Pair b ty) r) (if (mentions_any ty (list id)) (Cons (Pair b ty) (pj_tables_on r s)) (pj_tables_on r s)))))
+    (_ Nil)))
+(fn firsts_of ((ps (List (Pair Expr Expr)))) (List Expr)
+  (measure (struct ps))
+  (match ps (Nil Nil) ((Cons (Pair a _) r) (Cons a (firsts_of r)))))
+;; the motive and the matcher's levels: unchanged without tables; else generalized, its universe
+;; K's sort of the generalized result
+(fn pj_motive ((t Tr) (gen (List (Pair Expr Expr))) (s Expr) (dty Expr) (mbody Expr) (ls (List Level))) (Pair Tr (Option (Pair Expr (List Level))))
+  (match (tr_local t (n1 (quote x)) dty)
+    ((Pair t1 s0)
+     (match (tr_inst1 t1 mbody s0)
+       ((Pair t2 ret0)
+        (match gen
+          (Nil (match (tr_lams t2 (list s0) ret0) ((Pair t3 m1) (Pair t3 (Some (Pair m1 ls))))))
+          (_
+           (match (pj_table_locals t2 gen (fvar_id_of s) s0 Nil)
+             ((Pair t3 glocals)
+              (match (tr_pis t3 (firsts_of glocals) ret0)
+                ((Pair t4 pi)
+                 (match (tr_infer t4 pi)
+                   ((Pair t5 None) (Pair t5 None))
+                   ((Pair t5 (Some srt))
+                    (match (tr_whnf t5 srt)
+                      ((Pair t6 (Some (Sort _ l)))
+                       (match (tr_lams t6 (list s0) pi)
+                         ((Pair t7 m1) (Pair t7 (Some (Pair m1 (Cons l (drop 1 ls))))))))
+                      ((Pair t6 _) (Pair t6 None))))))))))))))))
+;; for each table a fresh local at its real type with the scrutinee replaced, paired with its
+;; abstract type replaced the same way
+(fn pj_table_locals ((t Tr) (gen (List (Pair Expr Expr))) (sid Int) (v Expr) (acc (List (Pair Expr Expr)))) (Pair Tr (List (Pair Expr Expr)))
+  (measure (struct gen))
+  (match gen
+    (Nil (Pair t (rev acc)))
+    ((Cons (Pair b babs) r)
+     (match (tr_type_of_local t b)
+       (None (pj_table_locals t r sid v acc))
+       ((Some breal)
+        (match (tr_subst t breal sid v)
+          ((Pair t1 breal1)
+           (match (tr_subst t1 babs sid v)
+             ((Pair t2 babs1)
+              (match (tr_local t2 (n1 (quote below)) breal1)
+                ((Pair t3 fv) (pj_table_locals t3 r sid v (Cons (Pair fv babs1) acc)))))))))))))
+(fn pj_alts ((t Tr) (cx PjCx) (gen (List (Pair Expr Expr))) (sid Int) (dty Expr) (rows (List (List MtPat))) (alts (List Expr)) (fuel Int) (acc (List Expr))) (Pair Tr Either2)
+  (measure (struct rows))
+  (match rows
+    (Nil (Pair t (Right2 (Pair (rev acc) dty))))
+    ((Cons row rr)
+     (match alts
+       (Nil (Pair t (Left2 (quote define_matrix) "a matcher with fewer alternatives than rows")))
+       ((Cons alt ar)
+        (match row
+          ((Cons pat Nil)
+           (match (mt_pat_term (Tr.w t) pat dty Nil 256)
+             ((MtPtErr x m) (Pair t (Left2 x m)))
+             ((MtPtOk w1 pterm vars)
+              (match (pj_inst_lams (tr_set_w t w1) alt vars)
+                ((Pair t1 body)
+                 (match (pj_table_locals t1 gen sid pterm Nil)
+                   ((Pair t2 tlocals)
+                    (let ((cx1 (pj_push (with PjCx cx (tables (append tlocals (PjCx.tables cx)))) False (append vars (firsts_of tlocals)))))
+                      (match (pj_term t2 cx1 body (- fuel 1))
+                        ((TrErr x m) (Pair t2 (Left2 x m)))
+                        ((TrOk t3 b)
+                         (match (tr_lams t3 (append vars (firsts_of tlocals)) b)
+                           ((Pair t4 alt1) (pj_alts t4 cx gen sid dty rr ar fuel (Cons alt1 acc))))))))))))))
+          (_ (Pair t (Left2 (quote define_matrix) "a matcher row over several scrutinees")))))))))
+;; an alternative at its variables: each lambda's body instantiated, else applied
+(fn pj_inst_lams ((t Tr) (e Expr) (vars (List Expr))) (Pair Tr Expr)
+  (measure (struct vars))
+  (match vars
+    (Nil (Pair t e))
+    ((Cons v r)
+     (match e
+       ((Lam _ _ _ _ b) (match (tr_inst1 t b v) ((Pair t1 b1) (pj_inst_lams t1 b1 r))))
+       (_ (match (tr_apps t e (list v)) ((Pair t1 e1) (pj_inst_lams t1 e1 r))))))))
+
+;; ---- the equations (§7.5; slice 3.16 landing 3) ----------------------------------------------------
+;; the leaves of the body's leading matchers, read off the rows without reduction: a row
+;; against the scrutinee term binds, clashes, or is stuck on a local — a universally quantified
+;; one is split over its constructors, in order, the first row that does not clash deciding —
+;; so the leaves and their numbering are the case tree's, a fall-through row one equation per
+;; leaf it reaches. `∀ kept, f lhs = rhs`, the self-local the constant, by Eq.refl
+(type PjLeaf (PjLeaf (List Expr) (List Expr) Expr Expr))   ; the left-hand side's arguments, the binders, the result type, the body
+(type PjFo (FoBind (List (Pair Int Expr))) (FoClash) (FoStuck Int))
+(fn pj_equations ((t Tr) (pd PreDef) (rl Expr) (selfid Int)) (Pair Tr Either3)
+  (match (pj_leaves t (pd_binders pd) (pd_binders pd) rl (pd_body pd) 256 Nil)
+    ((Pair t1 None) (Pair t1 (Left3 (quote equation_form) "a constructor no row covers")))
+    ((Pair t1 (Some lvs)) (pj_equation_decls t1 selfid (rev lvs) 1 Nil))))
+(fn pj_leaves ((t Tr) (lhs (List Expr)) (kept (List Expr)) (rl Expr) (body Expr) (fuel Int) (acc (List PjLeaf))) (Pair Tr (Option (List PjLeaf)))
+  (measure fuel)
+  (if (lt fuel 1) (Pair t None)
+  (match (get_app_fn body)
+    ((Const _ c _)
+     (match (mt_is_matcher (tr_env t) c)
+       ((Some (MtDesc np 1 rows))
+        (let ((args (get_app_args body)))
+          (if (bool_not (int_eq (len args) (+ np (+ 2 (len rows))))) (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc)))
+            (match (nth args (+ np 1))
+              (None (Pair t None))
+              ((Some s) (pj_rows t lhs kept rl body s rows (drop (+ np 2) args) fuel acc))))))
+       (_ (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc))))))
+    (_ (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc)))))))
+(fn pj_rows ((t Tr) (lhs (List Expr)) (kept (List Expr)) (rl Expr) (body Expr) (s Expr) (rows (List (List MtPat))) (alts (List Expr)) (fuel Int) (acc (List PjLeaf))) (Pair Tr (Option (List PjLeaf)))
+  (measure (struct rows))
+  (match rows
+    (Nil (Pair t None))
+    ((Cons row rr)
+     (match alts
+       (Nil (Pair t None))
+       ((Cons alt ar)
+        (match (pj_fo_all (tr_env t) row (list s) (FoBind Nil))
+          (FoClash (pj_rows t lhs kept rl body s rr ar fuel acc))
+          ((FoBind binds)
+           (match (pj_inst_lams t alt (pj_slot_args binds (len binds) 0))
+             ((Pair t1 b1) (pj_leaves t1 lhs kept rl b1 (- fuel 1) acc))))
+          ((FoStuck vid)
+           (if (bool_not (mem_int vid (fvar_ids kept))) (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc)))
+             (pj_split t lhs kept rl body vid fuel acc)))))))))
+(fn pj_slot_args ((binds (List (Pair Int Expr))) (n Int) (i Int)) (List Expr)
+  (measure (- n i))
+  (if (le n i) Nil
+    (Cons (match (assoc_int_expr i binds) ((Some v) v) (None (mk_const Anon Nil))) (pj_slot_args binds n (+ i 1)))))
+;; a row's patterns against terms: a clash anywhere decides (the row is gone from the
+;; specialized matrix), else the first stuck local, else the bindings
+(fn pj_fo_all ((env CheckedEnv) (ps (List MtPat)) (ts (List Expr)) (st PjFo)) PjFo
+  (measure (struct ps))
+  (match ps
+    (Nil st)
+    ((Cons p pr)
+     (match ts
+       (Nil st)
+       ((Cons x xr)
+        (match (pj_fo env p x st)
+          (FoClash FoClash)
+          (st1 (pj_fo_all env pr xr st1))))))))
+(fn pj_fo ((env CheckedEnv) (p MtPat) (x Expr) (st PjFo)) PjFo
+  (measure (struct p))
+  (match p
+    ((MtVar slot) (match st ((FoBind binds) (FoBind (Cons (Pair slot x) binds))) (other other)))
+    ((MtCtor c subs)
+     (match (get_app_fn x)
+       ((FVar _ id) (match st ((FoBind _) (FoStuck id)) (other other)))
+       ((Const _ c2 _)
+        (if (name_eq c c2) (pj_fo_all env subs (drop (- (len (get_app_args x)) (len subs)) (get_app_args x)) st)
+          (if (pj_is_ctor env c2) FoClash (match st ((FoBind _) (FoStuck (- 0 1))) (other other)))))
+       (_ (match st ((FoBind _) (FoStuck (- 0 1))) (other other)))))))
+(fn pj_is_ctor ((env CheckedEnv) (c Name)) Bool
+  (match (env_find env c) ((Some (CtorInfo _ _ _ _ _ _)) True) (_ False)))
+;; the local split over its inductive's constructors: the constructor term for it in the
+;; left-hand side, the result type and the body, its fields new binders
+(fn pj_split ((t Tr) (lhs (List Expr)) (kept (List Expr)) (rl Expr) (body Expr) (vid Int) (fuel Int) (acc (List PjLeaf))) (Pair Tr (Option (List PjLeaf)))
+  (match (w_local_type (Tr.w t) vid)
+    (None (Pair t None))
+    ((Some vty)
+     (match (mt_ind_of (Tr.w t) vty)
+       ((Pair _ (MtNoInd _ _)) (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc))))
+       ((Pair w1 (MtInd _ ls largs ctors)) (pj_split_ctors (tr_set_w t w1) lhs kept rl body vid ctors ls largs fuel acc))))))
+(fn pj_split_ctors ((t Tr) (lhs (List Expr)) (kept (List Expr)) (rl Expr) (body Expr) (vid Int) (ctors (List Name)) (ls (List Level)) (largs (List Expr)) (fuel Int) (acc (List PjLeaf))) (Pair Tr (Option (List PjLeaf)))
+  (measure (struct ctors))
+  (match ctors
+    (Nil (Pair t (Some acc)))
+    ((Cons c r)
+     (match (rz_open_ctor t c ls largs)
+       ((Pair t1 None) (Pair t1 None))
+       ((Pair t1 (Some (Pair fields cterm)))
+        (match (subst_all t1 lhs vid cterm Nil)
+          ((Pair t2 lhs1)
+           (match (tr_subst t2 rl vid cterm)
+             ((Pair t3 rl1)
+              (match (tr_subst t3 body vid cterm)
+                ((Pair t4 body1)
+                 (match (refresh_kept t4 (without_id kept vid) vid cterm Nil Nil)
+                   ((Pair t5 (Pair kept0 pairs))
+                    (match (pj_subst_pairs_all t5 lhs1 pairs Nil)
+                      ((Pair t6 lhs2)
+                       (match (subst_pairs t6 rl1 pairs)
+                         ((Pair t7 rl2)
+                          (match (subst_pairs t7 body1 pairs)
+                            ((Pair t8 body2)
+                             (match (pj_leaves t8 lhs2 (append kept0 (field_fvars fields)) rl2 body2 (- fuel 1) acc)
+                               ((Pair t9 None) (Pair t9 None))
+                               ((Pair t9 (Some acc1)) (pj_split_ctors t9 lhs kept rl body vid r ls largs fuel acc1))))))))))))))))))))))
+(fn pj_subst_pairs_all ((t Tr) (es (List Expr)) (pairs (List (Pair Int Expr))) (acc (List Expr))) (Pair Tr (List Expr))
+  (measure (struct es))
+  (match es
+    (Nil (Pair t (rev acc)))
+    ((Cons e r) (match (subst_pairs t e pairs) ((Pair t1 e1) (pj_subst_pairs_all t1 r pairs (Cons e1 acc)))))))
+(fn pj_equation_decls ((t Tr) (selfid Int) (lvs (List PjLeaf)) (i Int) (acc (List Declaration))) (Pair Tr Either3)
+  (measure (struct lvs))
+  (match lvs
+    (Nil (Pair t (Right3 (rev acc))))
+    ((Cons (PjLeaf lhs kept rl body) r)
+     (let ((self (mk_const (Tr.id t) Nil)))
+       (match (tr_subst t body selfid self)
+         ((Pair t1 rhs)
+          (match (tr_apps t1 self lhs)
+            ((Pair t2 lhs1)
+             (match (tr_apps t2 (mk_const (nm_eq) (list (level_one))) (list rl lhs1 rhs))
+               ((Pair t3 stmt)
+                (match (tr_pis t3 kept stmt)
+                  ((Pair t4 ty)
+                   (match (tr_apps t4 (mk_const (nm_eq_refl) (list (level_one))) (list rl lhs1))
+                     ((Pair t5 proof)
+                      (match (tr_lams t5 kept proof)
+                        ((Pair t6 value)
+                         (let ((name (name_append (Tr.id t6) (nm_eq_n i))))   ; a fn's identity is its module's already
+                           (pj_equation_decls t6 selfid r (+ i 1) (Cons (ThmDecl (ConstantVal name Nil ty) value (list name)) acc)))))))))))))))))))
 
 ;; ---- below and brecOn (slice 3.14 rule 1) ----------------------------------------------------------
 ;; Init's under Lean's names at solved levels; a native inductive's generated once, monomorphic,
@@ -573,331 +975,6 @@
                          ((Pair t5 e)
                           (match (tr_apps t5 (pprod_ty) (list ak restty))
                             ((Pair t6 ety) (Pair t6 (Pair e ety)))))))))))))))))))))
-;; ---- a measure: WellFounded.fix (§8.4, slice 3.14 rule 2) -------------------------------------------
-;; `λ tps params . WellFounded.fix α (λ _ . RET) (InvImage rel m) (InvImage.wf m Nat.lt_wfRel.wf)
-;; (λ p rec . body') (tuple params)` — the body over the tuple's components, a self-call `rec
-;; (tuple args) f.dec_N` with the decreasing fact an obligation (realize.shard's tr_self_wf)
-(fn df_wf ((t Tr) (tps (List Expr)) (params (List Expr)) (ptypes (List EType)) (rt EType) (rl Expr) (m ETerm) (body ETerm)) TrAux
-  (if (bool_not (wf_reachable t)) (AuxErr t (quote wf_unreached) "WellFounded.fix, InvImage.wf or Nat.lt_wfRel is past the Init prefix in scope")
-  (match (local_types t params Nil)
-    ((Pair t1 ltys)
-     (match (wf_tuple_type t1 ltys)
-       ((Pair t2 alpha)
-        (match (tr_local t2 (n1 (quote p)) alpha)
-          ((Pair t3 pm)
-           (match (tr t3 (rev (df_env params ptypes (tuple_projs pm (len params) 0) (- 0 1) 0)) (Some (ETCon (nm_nat) Nil)) m)
-             ((TrErr _ m2) (AuxErr t3 (quote measure_type) (append "the measure is not a Nat-valued E term over the parameters: " m2)))
-             ((TrOk t4 ml)
-              (match (measure_is_nat t4 ml)
-                ((Pair t5 False) (AuxErr t5 (quote measure_type) "the measure must be a Nat (an Int measure: write a Nat one; the law inserts no Int.toNat)"))
-                ((Pair t5 True)
-                 (match (tr_lams t5 (list pm) ml)
-                   ((Pair t6 mfn)
-                    (match (wf_relation t6 alpha mfn)
-                      ((Pair t7 (Pair rel hwf))
-                       (match (tr_local t7 (n1 (quote p)) alpha)
-                         ((Pair t8 p)
-                          (match (wf_rec_type t8 alpha rel p rl)
-                            ((Pair t9 rty)
-                             (match (tr_local t9 (n1 (quote rec)) rty)
-                               ((Pair t10 recl)
-                                (let ((t11 (tr_push_scope (tr_set_rec t10 (Some (dr_with_wf (dr_of t10) (wf_info recl p mfn rel ltys)))) False p))
-                                      (env (rev (df_env params ptypes (tuple_projs p (len params) 0) (- 0 1) 0))))
-                                  (match (df_term t11 env rt rl body Nil)
-                                    ((TrErr e m2) (AuxErr t11 e m2))
-                                    ((TrOk t12 b)
-                                     (match (tr_lams t12 (list p recl) b)
-                                       ((Pair t13 fnl)
-                                        (match (tr_local t13 (n1 (quote x)) alpha)
-                                          ((Pair t14 xc)
-                                           (match (tr_lams t14 (list xc) rl)
-                                             ((Pair t15 cmot)
-                                              (match (wf_tuple t15 ltys params)
-                                                ((Pair t16 tup)
-                                                 (match (tr_apps t16 (mk_const (n2 (quote WellFounded) (quote fix)) (list (level_one) (level_one))) (list alpha cmot rel hwf fnl tup))
-                                                   ((Pair t17 fixed)
-                                                    (match (tr_lams t17 (append tps params) fixed)
-                                                      ((Pair t18 v) (AuxOk (df_set_value t18 v) Nil))))))))))))))))))))))))))))))))))))))
-(fn wf_reachable ((t Tr)) Bool
-  (bool_and (has_const t (n2 (quote WellFounded) (quote fix)))
-  (bool_and (has_const t (n2 (quote InvImage) (quote wf)))
-  (bool_and (has_const t (n2 (quote Nat) (quote lt_wfRel)))
-  (bool_and (has_const t (n2 (quote WellFoundedRelation) (quote wf)))
-            (has_const t (n2 (quote PProd) (quote mk))))))))
-(fn has_const ((t Tr) (n Name)) Bool (match (env_find (tr_env t) n) ((Some _) True) (None False)))
-(fn local_types ((t Tr) (fvs (List Expr)) (acc (List Expr))) (Pair Tr (List Expr))
-  (measure (struct fvs))
-  (match fvs
-    (Nil (Pair t (rev acc)))
-    ((Cons fv r) (match (tr_type_of_local t fv) ((Some ty) (local_types t r (Cons ty acc))) (None (local_types t r acc))))))
-;; the components of a tuple local, in parameter order
-(fn tuple_projs ((p Expr) (n Int) (k Int)) (List Expr)
-  (measure (- n k))
-  (if (le n k) Nil (Cons (wf_proj p n k) (tuple_projs p n (+ k 1)))))
-;; the measure's L type is Nat
-(fn measure_is_nat ((t Tr) (ml Expr)) (Pair Tr Bool)
-  (match (tr_infer t ml)
-    ((Pair t1 None) (Pair t1 False))
-    ((Pair t1 (Some ty))
-     (match (tr_whnf t1 ty)
-       ((Pair t2 (Some (Const _ n _))) (Pair t2 (name_eq n (nm_nat))))
-       ((Pair t2 _) (Pair t2 False))))))
-;; the relation `InvImage Nat.lt_wfRel.rel m` and its well-foundedness `InvImage.wf m Nat.lt_wfRel.wf`
-(fn wf_relation ((t Tr) (alpha Expr) (mfn Expr)) (Pair Tr (Pair Expr Expr))
-  (let ((nat (mk_const (nm_nat) Nil)) (wfrel (mk_const (n2 (quote Nat) (quote lt_wfRel)) Nil)))
-    (match (tr_apps t (mk_const (n2 (quote WellFoundedRelation) (quote rel)) (list (level_one))) (list nat wfrel))
-      ((Pair t1 rnat)
-       (match (tr_apps t1 (mk_const (n1 (quote InvImage)) (list (level_one) (level_one))) (list alpha nat rnat mfn))
-         ((Pair t2 rel)
-          (match (tr_apps t2 (mk_const (n2 (quote WellFoundedRelation) (quote wf)) (list (level_one))) (list nat wfrel))
-            ((Pair t3 hnat)
-             (match (tr_apps t3 (mk_const (n2 (quote InvImage) (quote wf)) (list (level_one) (level_one))) (list alpha nat rnat mfn hnat))
-               ((Pair t4 hwf) (Pair t4 (Pair rel hwf))))))))))))
-;; ∀ (q : α), rel q p → RET
-(fn wf_rec_type ((t Tr) (alpha Expr) (rel Expr) (p Expr) (rl Expr)) (Pair Tr Expr)
-  (match (tr_local t (n1 (quote q)) alpha)
-    ((Pair t1 q)
-     (match (tr_apps t1 rel (list q p))
-       ((Pair t2 hty)
-        (match (tr_local t2 (n1 (quote h)) hty)
-          ((Pair t3 h) (match (tr_pis t3 (list q h) rl) ((Pair t4 e) (Pair t4 e))))))))))
-
-;; ---- the term in tail position ------------------------------------------------------------------
-;; a leading match on a variable is a split of the matrix (static where the constructor is
-;; known); let and if keep their bodies in tail position; anything else is realize.shard's tr
-(fn df_term ((t Tr) (env (List EV)) (rt EType) (rl Expr) (e ETerm) (known (List Known))) TrRes
-  (match e
-    ((EMatch (EBVar j) arms)
-     (match (nth env j)
-       ((Some (EV (FVar d id) (Some (ETCon ind eargs)) flag))
-        (match (es_info (Tr.es t) ind)
-          ((Some (EIInd _ _))
-           (match (rows_of arms Nil)
-             (None (TrErr (quote numeral_pattern) "a numeral pattern (slice 3.15)"))
-             ((Some rows) (df_matrix t env rt rl (list (Col (FVar d id) (ETCon ind eargs) flag)) rows known))))
-          (_ (tr t env (Some rt) e))))
-       (_ (tr t env (Some rt) e))))
-    ((ELet rs b) (df_let t env rt rl rs b known Nil))
-    ((EIf c a b) (df_if t env rt rl c a b known))
-    (_ (tr t env (Some rt) e))))
-(fn df_let ((t Tr) (env (List EV)) (rt EType) (rl Expr) (rs (List ETerm)) (b ETerm) (known (List Known)) (fvs (List Expr))) TrRes
-  (measure (struct rs))
-  (match rs
-    (Nil
-     (match (df_term t env rt rl b known)
-       ((TrErr e m) (TrErr e m))
-       ((TrOk t1 b1) (match (tr_lams t1 (rev fvs) b1) ((Pair t2 e) (TrOk t2 e))))))
-    ((Cons v r)
-     (match (tr t env None v)
-       ((TrErr e m) (TrErr e m))
-       ((TrOk t1 v1)
-        (match (tr_infer t1 v1)
-          ((Pair t2 None) (TrErr (quote untyped_subterm) "K could not type a let binding"))
-          ((Pair t2 (Some ty))
-           (match (tr_local_val t2 (n1 (quote x)) ty v1)
-             ((Pair t3 fv) (df_let (tr_push_scope t3 True fv) (Cons (EV fv (c_type (Tr.es t3) (env_types env) v) 0) env) rt rl r b known (Cons fv fvs)))))))))))
-;; if: the condition's two-constructor inductive's recursor, the branches in tail position
-(fn df_if ((t Tr) (env (List EV)) (rt EType) (rl Expr) (c ETerm) (a ETerm) (b ETerm) (known (List Known))) TrRes
-  (match (tr t env None c)
-    ((TrErr e m) (TrErr e m))
-    ((TrOk t1 c1)
-     (match (scrutinee_type t1 c1)
-       ((Pair t2 None) (TrErr (quote untyped_subterm) "the condition of an if is not a value of a two-constructor E inductive"))
-       ((Pair t2 (Some (Pair ind (Pair ls largs))))
-        (match (ind_ctor_names t2 ind)
-          ((Cons c0 (Cons c1n Nil))
-           (match (rec_usable t2 ind ls)
-             ((Some (Pair e m)) (TrErr e m))
-             (None
-              (match (df_branches t2 env rt rl (list c0 c1n) (list b a) ls largs known Nil)
-                ((Pair t3 (Left2 e m)) (TrErr e m))
-                ((Pair t3 (Right2 (Pair minors _))) (rec_app t3 ind ls largs rl minors c1))))))
-          (_ (TrErr (quote untyped_subterm) (append (show_name ind) ": an if needs a two-constructor type")))))))))
-(fn df_branches ((t Tr) (env (List EV)) (rt EType) (rl Expr) (ctors (List Name)) (bodies (List ETerm)) (ls (List Level)) (largs (List Expr)) (known (List Known)) (acc (List Expr))) (Pair Tr Either2)
-  (measure (struct ctors))
-  (match ctors
-    (Nil (Pair t (Right2 (Pair (rev acc) rl))))
-    ((Cons c r)
-     (match bodies
-       (Nil (Pair t (Right2 (Pair (rev acc) rl))))
-       ((Cons body br)
-        (match (rz_open_ctor t c ls largs)
-          ((Pair t1 None) (Pair t1 (Left2 (quote equation_form) (append (show_name c) ": K could not open the constructor"))))
-          ((Pair t1 (Some (Pair fields _)))
-           (match (open_ihs t1 fields rl Nil)
-             ((Pair t2 ihs)
-              (match (df_term (tr_push_scopes t2 (field_fvars fields)) env rt rl body known)
-                ((TrErr e m) (Pair t2 (Left2 e m)))
-                ((TrOk t3 b)
-                 (match (tr_lams t3 (append (field_fvars fields) ihs) b)
-                   ((Pair t4 minor) (df_branches (tr_restore t4 (Tr.rec t)) env rt rl r br ls largs known (Cons minor acc)))))))))))))))
-
-;; ---- the matrix ------------------------------------------------------------------------------------------
-;; realize.shard's rows and columns (§7.5): the first row all variables is a leaf; else the first
-;; column some row constrains splits — statically where the variable's constructor is known,
-;; by the recursor otherwise, the recursor generalizing the variable's table when it owns one
-(fn df_matrix ((t Tr) (env (List EV)) (rt EType) (rl Expr) (cols (List Col)) (rows (List Row)) (known (List Known))) TrRes
-  (measure (struct rows))
-  (match rows
-    (Nil (TrErr (quote define_matrix) "a constructor no arm covers (the matrix is not exhaustive)"))
-    ((Cons (Row pats rhs slots n) _)
-     (match (ctor_column pats cols 0)
-       (None (df_term t (rev_onto (slot_evs (rz_bind_all pats cols slots) n 0) env) rt rl rhs known))
-       ((Some i)
-        (match (nth cols i)
-          (None (TrErr (quote define_matrix) "column"))
-          ((Some (Col v ety flag))
-           (match (known_of (fvar_id_of v) known)
-             ((Some (Pair c fields)) (df_matrix t env rt rl (split_cols cols i fields flag) (specialize_rows rows i c (len (runtime_fields fields)) (EV v (Some ety) flag) Nil) known))
-             (None (df_split t env rt rl cols rows known i v ety flag))))))))))
-(fn known_of ((id Int) (known (List Known))) (Option (Pair Name (List Field)))
-  (measure (struct known))
-  (match known
-    (Nil None)
-    ((Cons (Known j c fields) r) (if (int_eq id j) (Some (Pair c fields)) (known_of id r)))))
-(fn split_cols ((cols (List Col)) (i Int) (fields (List Field)) (flag Int)) (List Col)
-  (append (take i cols) (append (field_cols fields (if (lt 0 flag) 1 0)) (drop (+ i 1) cols))))
-;; a runtime split: the recursor over the column's inductive — a constant motive, or the
-;; variable's table generalized (slice 3.14)
-(fn df_split ((t Tr) (env (List EV)) (rt EType) (rl Expr) (cols (List Col)) (rows (List Row)) (known (List Known)) (i Int) (v Expr) (ety EType) (flag Int)) TrRes
-  (match ety
-    ((ETCon ind _)
-     (match (es_info (Tr.es t) ind)
-       ((Some (EIInd _ ctors))
-        (match (scrutinee_type t v)
-          ((Pair t1 None) (TrErr (quote untyped_subterm) "K could not type a matched variable"))
-          ((Pair t1 (Some (Pair _ (Pair ls largs))))
-           (match (rec_usable t1 ind ls)
-             ((Some (Pair e m)) (TrErr e m))
-             (None
-              (match (tr_table_of t1 (fvar_id_of v))
-                ((Some tab) (df_split_tab t1 env rt rl cols rows known i v ety flag ctors ls largs tab))
-                (None
-                 (match (df_minors t1 env rt rl cols rows known i v ety flag ctors ls largs Nil)
-                   ((Pair t2 (Left2 e m)) (TrErr e m))
-                   ((Pair t2 (Right2 (Pair minors _))) (rec_app t2 ind ls largs rl minors v))))))))))
-       (_ (TrErr (quote untyped_subterm) (append (show_name ind) " is not an E inductive")))))
-    (_ (TrErr (quote untyped_subterm) "a matched variable whose type is a type parameter (specialization is phase 3)"))))
-(fn df_minors ((t Tr) (env (List EV)) (rt EType) (rl Expr) (cols (List Col)) (rows (List Row)) (known (List Known)) (i Int) (v Expr) (ety EType) (flag Int) (ctors (List Name)) (ls (List Level)) (largs (List Expr)) (acc (List Expr))) (Pair Tr Either2)
-  (measure (struct ctors))
-  (match ctors
-    (Nil (Pair t (Right2 (Pair (rev acc) rl))))
-    ((Cons c r)
-     (match (rz_open_ctor t c ls largs)
-       ((Pair t1 None) (Pair t1 (Left2 (quote equation_form) (append (show_name c) ": K could not open the constructor"))))
-       ((Pair t1 (Some (Pair fields _)))
-        (match (open_ihs t1 fields rl Nil)
-          ((Pair t2 ihs)
-           (match (df_matrix (tr_push_scopes t2 (field_fvars fields)) env rt rl (split_cols cols i fields flag) (specialize_rows rows i c (len (runtime_fields fields)) (EV v (Some ety) flag) Nil) (Cons (Known (fvar_id_of v) c fields) known))
-             ((TrErr e m) (Pair t2 (Left2 e m)))
-             ((TrOk t3 b)
-              (match (tr_lams t3 (append (field_fvars fields) ihs) b)
-                ((Pair t4 minor) (df_minors (tr_restore t4 (Tr.rec t)) env rt rl cols rows known i v ety flag r ls largs (Cons minor acc)))))))))))))
-;; the split of a variable owning a table (slice 3.14): motive `λ v' . T.below motive v' → R`,
-;; each minor `λ fields ihs below' . body` with the recursive fields' entries read off below',
-;; the recursor's result applied to the variable's table
-(fn df_split_tab ((t Tr) (env (List EV)) (rt EType) (rl Expr) (cols (List Col)) (rows (List Row)) (known (List Known)) (i Int) (v Expr) (ety EType) (flag Int) (ctors (List Name)) (ls (List Level)) (largs (List Expr)) (tab Expr)) TrRes
-  (match (tr_below t)
-    (None (TrErr (quote define_matrix) "a table without a course-of-values context"))
-    ((Some bi)
-     (match (tr_apps t (mk_const (BelowInfo.ind bi) ls) largs)
-       ((Pair t0 tyapp)
-        (match (tr_local t0 (n1 (quote x)) tyapp)
-          ((Pair t1 vm)
-           (match (below_type t1 bi vm)
-             ((Pair t2 bty)
-              (match (tr_local t2 (n1 (quote b)) bty)
-                ((Pair t3 bl)
-                 (match (tr_pis t3 (list bl) rl)
-                   ((Pair t4 arrow)
-                    (match (tr_lams t4 (list vm) arrow)
-                      ((Pair t5 motive)
-                       (match (tab_minors t5 env rt rl cols rows known i v ety flag ctors ls largs bi Nil)
-                         ((Pair t6 (Left2 e m)) (TrErr e m))
-                         ((Pair t6 (Right2 (Pair minors _)))
-                          (match (rec_app_dep t6 (level_one) (BelowInfo.ind bi) ls largs motive minors v)
-                            ((TrErr e m) (TrErr e m))
-                            ((TrOk t7 recv) (match (tr_apps t7 recv (list tab)) ((Pair t8 e) (TrOk t8 e))))))))))))))))))))))
-;; T.below largs motive v
-(fn below_type ((t Tr) (bi BelowInfo) (v Expr)) (Pair Tr Expr)
-  (tr_apps t (mk_const (BelowInfo.belowc bi) (BelowInfo.ls bi)) (append (BelowInfo.largs bi) (list (BelowInfo.motive bi) v))))
-(fn tab_minors ((t Tr) (env (List EV)) (rt EType) (rl Expr) (cols (List Col)) (rows (List Row)) (known (List Known)) (i Int) (v Expr) (ety EType) (flag Int) (ctors (List Name)) (ls (List Level)) (largs (List Expr)) (bi BelowInfo) (acc (List Expr))) (Pair Tr Either2)
-  (measure (struct ctors))
-  (match ctors
-    (Nil (Pair t (Right2 (Pair (rev acc) rl))))
-    ((Cons c r)
-     (match (rz_open_ctor t c ls largs)
-       ((Pair t1 None) (Pair t1 (Left2 (quote equation_form) (append (show_name c) ": K could not open the constructor"))))
-       ((Pair t1 (Some (Pair fields cterm)))
-        (match (tab_ihs t1 bi (recursive_fields fields) rl Nil)
-          ((Pair t2 ihs)
-           (match (below_type t2 bi cterm)
-             ((Pair t3 bcty)
-              (match (tr_local t3 (n1 (quote below)) bcty)
-                ((Pair t4 bl)
-                 (match (table_entries (recursive_fields fields) bl Nil Nil)
-                   ((Pair ihs1 tabs1)
-                    (match (df_matrix (tr_push_scopes (tr_add_tables t4 ihs1 tabs1) (field_fvars fields)) env rt rl (split_cols cols i fields flag) (specialize_rows rows i c (len (runtime_fields fields)) (EV v (Some ety) flag) Nil) (Cons (Known (fvar_id_of v) c fields) known))
-                      ((TrErr e m) (Pair t4 (Left2 e m)))
-                      ((TrOk t6 b)
-                       (match (tr_lams t6 (append (field_fvars fields) (append ihs (list bl))) b)
-                         ((Pair t7 minor) (tab_minors (tr_restore t7 (Tr.rec t)) env rt rl cols rows known i v ety flag r ls largs bi (Cons minor acc)))))))))))))))))))
-;; the recursor's hypotheses under the generalized motive: ih : T.below motive r → R
-(fn tab_ihs ((t Tr) (bi BelowInfo) (rs (List Expr)) (rl Expr) (acc (List Expr))) (Pair Tr (List Expr))
-  (measure (struct rs))
-  (match rs
-    (Nil (Pair t (rev acc)))
-    ((Cons r rr)
-     (match (below_type t bi r)
-       ((Pair t1 bty)
-        (match (tr_local t1 (n1 (quote b)) bty)
-          ((Pair t2 bl)
-           (match (tr_pis t2 (list bl) rl)
-             ((Pair t3 arrow)
-              (match (tr_local t3 (n1 (quote ih)) arrow)
-                ((Pair t4 ih) (tab_ihs t4 bi rr rl (Cons ih acc)))))))))))))
-;; the entries of a table `below' : T.below motive (c fields)` — Lean's shape (read off the
-;; export's List.below and Nat.below), the generated one's too: the pairs `PProd (motive r_k)
-;; (below r_k)` over the recursive fields in order, right-nested by PProd with no unit, a single
-;; field's pair the table itself, no field PUnit — the k-th field's pair `(below'.2^k).1` (the
-;; last `below'.2^k`), its value `pair.1`, its table `pair.2` (K checks the definition, so a
-;; shape that differed would refuse it)
-(fn table_entries ((rs (List Expr)) (term Expr) (ihs (List (Pair Int Expr))) (tabs (List (Pair Int Expr)))) (Pair (List (Pair Int Expr)) (List (Pair Int Expr)))
-  (measure (struct rs))
-  (match rs
-    (Nil (Pair ihs tabs))
-    ((Cons r rr)
-     (let ((pair (match rr (Nil term) (_ (mk_proj (n1 (quote PProd)) 0 term)))) (fid (fvar_id_of r)))
-       (table_entries rr (mk_proj (n1 (quote PProd)) 1 term)
-         (Cons (Pair fid (mk_proj (n1 (quote PProd)) 0 pair)) ihs)
-         (Cons (Pair fid (mk_proj (n1 (quote PProd)) 1 pair)) tabs))))))
-;; ---- the body's numeral patterns (slice 3.15's rule) ------------------------------------------------
-(fn has_lit_pattern ((e ETerm)) Bool
-  (measure (struct e))
-  (match e
-    ((EMatch s arms) (bool_or (has_lit_pattern s) (arms_lit arms)))
-    ((ELet rs b) (bool_or (any_lit_term rs) (has_lit_pattern b)))
-    ((EIf a b c) (bool_or (has_lit_pattern a) (bool_or (has_lit_pattern b) (has_lit_pattern c))))
-    ((ECtor _ as) (any_lit_term as))
-    ((ECall _ as) (any_lit_term as))
-    ((EPrim _ as) (any_lit_term as))
-    ((EExt _ as) (any_lit_term as))
-    (_ False)))
-(fn any_lit_term ((ts (List ETerm))) Bool
-  (measure (struct ts))
-  (match ts (Nil False) ((Cons x r) (bool_or (has_lit_pattern x) (any_lit_term r)))))
-(fn arms_lit ((arms (List EArm))) Bool
-  (measure (struct arms))
-  (match arms
-    (Nil False)
-    ((Cons (EArm p b) r) (bool_or (pat_lit p) (bool_or (has_lit_pattern b) (arms_lit r))))))
-(fn pat_lit ((p EPat)) Bool
-  (measure (struct p))
-  (match p ((PLit _) True) ((PCtor _ subs) (pats_lit subs)) (_ False)))
-(fn pats_lit ((ps (List EPat))) Bool
-  (measure (struct ps))
-  (match ps (Nil False) ((Cons p r) (bool_or (pat_lit p) (pats_lit r)))))
-
 ;; ---- the constructor-structure bundle (slice 3.15; LANGUAGE.md §8.4's slice-3.15 rules) ----------
 ;; After a native inductive is admitted: T.casesOn (its recursor with the hypotheses unused, universe
 ;; polymorphic as Lean's), and for a type without parameters and indices whose recursor eliminates

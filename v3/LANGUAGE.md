@@ -2459,6 +2459,51 @@ and as a branch; G2's forcing: the chosen arm only); pins
 through `decide` and `ite (c = true)`). G1 and G8 wait for the flip:
 today a `fn` with `(le 48 c)` has no L half to compare.
 
+**Landing 3's K projection, as designed (2026-09-19, before the old
+route is deleted).** The design's "`define.shard`'s machinery
+re-pointed" is decided as Lean's own structural compilation rather
+than a port of slice 3.14's table bookkeeping, which was written over
+E patterns and a matrix the pre-definition no longer has:
+
+- **The matcher stays a constant in the value; its motive carries the
+  table** (Lean's `MatcherApp.addArg`). Inside a structurally
+  recursive function, a matcher application whose scrutinee is a local
+  that a course-of-values table's type mentions is re-instantiated at
+  the motive `λ s . B[s] → motive s` (the matcher's universe recomputed
+  by K), each alternative takes the refined table `B[pattern_i]` as a
+  last binder, and the application is applied to the table. Nothing is
+  unfolded and no case tree is rebuilt: the matcher K already checked
+  is the case tree.
+- **A self-call is found by type.** Tables are kept as pairs — the
+  local, and its type over an *abstract* motive `C` (the real motive is
+  constant in its argument, so `motive r` cannot tell one entry from
+  another; `C r` can). A call `f … y …` searches the tables in scope,
+  innermost first: a type that is `C y'` with `y'` the argument is the
+  entry, a `PProd` is searched through both projections, a `T.below C
+  t` is normalized by K and searched again (it unfolds exactly when
+  `t` is a constructor application). The entry is applied to the other
+  arguments. No entry: `recursion_depth`, as today, with the argument
+  named. The shape of `below` is never assumed — K's normal form is
+  read.
+- **`ite` inside a recursive function** is `Decidable.rec` with a
+  constant motive and the proof a local of each branch (today's shape,
+  so such a value keeps its hash up to its matchers); outside one it
+  stays `ite`. A measured self-call is `rec (tuple args) (f.dec_N
+  locals…)` over every local in scope at the call — binders, pattern
+  variables, `let`s (as `let`s in the statement), branch proofs.
+- **The equations** are read off the pre-definition without K's
+  reduction: the leading matcher's rows matched first-order against
+  the scrutinee — match, clash, or *stuck on a local*, which is split
+  over its constructors, in constructor order — so the leaves and
+  their numbering are today's case tree's, a fall-through row giving
+  one equation per leaf it reaches. Each is `∀ kept, f lhs = rhs` with
+  the self-local the constant, proven by `Eq.refl`.
+- **The record** gains the recursion clause as read: none, the
+  structural binder's position, or the measure elaborated at `Nat`
+  (an `Int` measure is the obstacle `measure_type`, as today). The
+  `ERec` of the program is its erasure.
+
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built

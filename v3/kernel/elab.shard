@@ -227,16 +227,28 @@
               (if (bool_and (is_prop_sort tyw) (is_const_named xw (nm_bool)))
                 (prop_as_bool e2 v xw)
               (if (bool_and (is_const_named tyw (nm_bool)) (is_prop_sort xw))
-                (EOk e2 (bool_is_true v) xw)
+                (match (first_missing e2 (list (nm_eq)))
+                  ((Some k) (EErr (quote unknown_constant) (show_name k)))
+                  (None (EOk e2 (bool_is_true v) xw)))
                 (EErr (quote type_mismatch) (append "expected " (append (show_expr xw) (append ", found " (show_expr tyw)))))))))))))))))
 ;; a proposition where a Bool is expected: `Decidable.decide p inst` with the decision its
 ;; head has (slice 3.16 rule 3), else no_decision
 (fn is_prop_sort ((t Expr)) Bool (match t ((Sort _ LZero) True) (_ False)))
 (fn prop_as_bool ((e El) (p Expr) (xw Expr)) ERes
   (let ((pz (el_zonk e p)))
+    (match (first_missing e (list (n2 (quote Decidable) (quote decide))))
+      ((Some k) (EErr (quote unknown_constant) (show_name k)))
+      (None
     (match (decision_of e pz)
       ((Pair e1 (Some dec)) (EOk e1 (mk_app (mk_app (mk_const (n2 (quote Decidable) (quote decide)) Nil) pz) dec) xw))
-      ((Pair _ None) (EErr (quote no_decision) (append "a Bool is expected and the proposition " (append (show_expr pz) " has no decision the elaborator knows: write (@Decidable.decide P DEC)")))))))
+      ((Pair _ None) (EErr (quote no_decision) (append "a Bool is expected and the proposition " (append (show_expr pz) " has no decision the elaborator knows: write (@Decidable.decide P DEC)")))))))))
+;; the first of these constants the environment lacks (an Init prefix that stops before it): the
+;; elaborator builds the Bool bridge from them by name, and K would refuse the term later
+(fn first_missing ((e El) (ks (List Name))) (Option Name)
+  (measure (struct ks))
+  (match ks
+    (Nil None)
+    ((Cons k r) (match (env_find (el_env e) k) ((Some _) (first_missing e r)) (None (Some k))))))
 (fn int_of_nat_visible ((e El)) Bool (match (env_find (el_env e) (nm_int_of_nat)) ((Some _) True) (None False)))
 
 ;; ---- terms (§5.1) ------------------------------------------------------------------------
@@ -790,18 +802,90 @@
         (match (el_whnf e1 cty)
           ((Pair e2 ctyw)
            (if (is_const_named ctyw (nm_bool))
+             (match (first_missing e2 (list (nm_eq) (n1 (quote Decidable)) (n1 (quote instDecidableEqBool))))
+               ((Some k) (EErr (quote unknown_constant) (show_name k)))
+               (None
              (let ((p (bool_is_true cv)))
-               (op_apply_explicit e2 (n1 (quote ite)) (list (AVal p (mk_sort LZero)) (AVal (bool_decision cv) (mk_app (mk_const (n1 (quote Decidable)) Nil) p)) (ASrc t) (ASrc f)) expected))
+               (op_apply_explicit e2 (n1 (quote ite)) (list (AVal p (mk_sort LZero)) (AVal (bool_decision cv) (mk_app (mk_const (n1 (quote Decidable)) Nil) p)) (ASrc t) (ASrc f)) expected))))
              (match (two_ctors e2 ctyw)
                ((Some (Pair c1 c2))
                 ;; a value of a two-constructor inductive (§6.2's tag rule, CANON C9): the second
                 ;; constructor takes the then-branch — the match it abbreviates
-                (elab_match e2 (list c (SList (list (ctor_pattern c1) f)) (SList (list (ctor_pattern c2) t))) expected))
+                (elab_if_cases e2 (el_zonk e2 cv) ctyw c1 c2 t f expected))
+               (None
+             (match (if_refusal e2 ctyw)
+               ((Some (Pair r m)) (EErr r m))
                (None
              (match (decision_of e2 (el_zonk e2 cv))
                ((Pair e3 (Some dec)) (op_apply_explicit e3 (n1 (quote ite)) (list (AVal cv cty) (AVal dec (mk_app (mk_const (n1 (quote Decidable)) Nil) cv)) (ASrc t) (ASrc f)) expected))
-               ((Pair _ None) (EErr (quote no_decision) (append "the condition " (append (show_expr (el_zonk e2 cv)) " has no decision the elaborator knows: write (@ite C DEC T F) with the Decidable instance")))))))))))))
+               ((Pair _ None) (EErr (quote no_decision) (append "the condition " (append (show_expr (el_zonk e2 cv)) " has no decision the elaborator knows: write (@ite C DEC T F) with the Decidable instance")))))))))))))))
     (_ (EErr (quote bad_shape) "(if C T F)"))))
+;; a condition that is a value, not a proposition, and not of a Bool or a two-constructor
+;; inductive (§6.2; GPT-6 R56): a sig type's observation is the type's to export (private_if),
+;; any other type has no binary rule to inherit (if_type)
+(fn if_refusal ((e El) (ctyw Expr)) (Option (Pair Symbol (List Int)))
+  (match (get_app_fn ctyw)
+    ((Const _ st _)
+     (match (env_find (el_env e) st)
+       ((Some (AxiomInfo _ _)) (Some (Pair (quote private_if) (append "an if branches on a value of the sig type " (append (show_name st) " (§6.2: the observation is the type's, not the cell's)")))))
+       ((Some (InductInfo _ _ _ _ ctors _ _ _ _)) (Some (Pair (quote if_type) (append "an if branches on a value of type " (append (show_name st) (append ", which has " (append (show_nat (len ctors)) " constructors (§6.2: two)")))))))
+       (_ None)))
+    (_ None)))
+;; an `if` on a value of a two-constructor inductive (§6.2's tag rule, CANON C9): `T.casesOn`
+;; with a constant motive, the first constructor's alternative the else-branch and the second's
+;; the then-branch, each ignoring its fields — not a matcher, so the erasure reads the `if`
+;; back (realize.shard's erase_cases) and the equations do not split on it
+(fn elab_if_cases ((e El) (cv Expr) (ctyw Expr) (c1 (Pair Name Int)) (c2 (Pair Name Int)) (t SExpr) (f SExpr) (expected (Option Expr))) ERes
+  (match (if_ret e t expected)
+    ((Pair _ None) (EErr (quote match_motive) "an if takes its type from its position or its then-branch, and neither is determined"))
+    ((Pair e1 (Some ret))
+     (match (el_infer e1 ret)
+       ((Pair _ None) (EErr (quote not_a_type) (show_expr ret)))
+       ((Pair e2 (Some rs))
+        (match (el_whnf e2 rs)
+          ((Pair e3 (Sort _ l))
+           (match (get_app_fn ctyw)
+             ((Const _ ind ls)
+              (match (env_find (el_env e3) (name_append ind (n1 (quote casesOn))))
+                (None (EErr (quote match_eliminator) (append (show_name ind) ".casesOn is missing")))
+                ((Some info)
+                 (if (bool_not (int_eq (len (ci_lparams info)) (+ 1 (len ls)))) (EErr (quote match_eliminator) (append (show_name ind) ".casesOn eliminates into Prop only"))
+                 (match (if_minor e3 (match c1 ((Pair k _) k)) ls (get_app_args ctyw) f ret)
+                   ((EErr r m) (EErr r m))
+                   ((EOk e4 m1 _)
+                    (match (if_minor e4 (match c2 ((Pair k _) k)) ls (get_app_args ctyw) t ret)
+                      ((EErr r m) (EErr r m))
+                      ((EOk e5 m2 _)
+                       (match (w_local (el_w e5) (n1 (quote d)) ctyw)
+                         ((Pair w1 d)
+                          (match (w_lams w1 (list d) ret)
+                            ((Pair w2 motive)
+                             (check_expected (el_set_w e5 w2)
+                               (mk_app_n (mk_const (name_append ind (n1 (quote casesOn))) (Cons l ls)) (append (get_app_args ctyw) (list motive cv m1 m2)))
+                               ret expected)))))))))))))
+             (_ (EErr (quote if_type) "an if on a value whose type is not an inductive"))))
+          ((Pair _ other) (EErr (quote not_a_type) (show_expr other)))))))))
+;; the if's type: the position's when determined, else the then-branch's own
+(fn if_ret ((e El) (t SExpr) (expected (Option Expr))) (Pair El (Option Expr))
+  (match (match_ret e expected)
+    ((Some r) (Pair e (Some r)))
+    (None
+     (match (elab e t None)
+       ((EErr _ _) (Pair e None))
+       ((EOk e1 _ ty) (match (el_finish e1 ty) ((FinOk r) (Pair e (Some r))) ((FinErr _ _) (Pair e None))))))))
+;; `λ fields . BRANCH` at the result type
+(fn if_minor ((e El) (c Name) (ls (List Level)) (params (List Expr)) (br SExpr) (ret Expr)) ERes
+  (match (elab e br (Some ret))
+    ((EErr r m) (EErr r m))
+    ((EOk e1 v _)
+     (match (mt_ctor_type (el_w e1) c ls params)
+       ((Pair _ None) (EErr (quote match_constructor) (show_name c)))
+       ((Pair w1 (Some (Pair cty nfields)))
+        (match (mt_open_fields w1 cty nfields Nil)
+          ((Pair _ None) (EErr (quote match_constructor) (show_name c)))
+          ((Pair w2 (Some fields))
+           (match (w_lams w2 (mt_firsts fields) (el_zonk e1 v))
+             ((Pair w3 m) (EOk (el_set_w e1 w3) m ret))))))))))
 ;; the two constructors of a type that is an inductive with exactly two, each with its fields' number
 (fn two_ctors ((e El) (tyw Expr)) (Option (Pair (Pair Name Int) (Pair Name Int)))
   (match (get_app_fn tyw)
@@ -815,12 +899,6 @@
     (_ None)))
 (fn ctor_nfields ((e El) (c Name)) (Option Int)
   (match (env_find (el_env e) c) ((Some (CtorInfo _ _ _ _ nf _)) (Some nf)) (_ None)))
-;; (C _ … _) under the constructor's full name
-(fn ctor_pattern ((c (Pair Name Int))) SExpr
-  (match c
-    ((Pair n nf)
-     (if (int_eq nf 0) (SSym (sym_of_chars (show_name n)))
-       (SList (Cons (SSym (sym_of_chars (show_name n))) (wild_syms nf)))))))
 (fn wild_syms ((k Int)) (List SExpr) (measure k) (if (lt k 1) Nil (Cons (SSym (quote _)) (wild_syms (- k 1)))))
 
 ;; (list a b …): the constructor chain of the expected type's list — an inductive with a

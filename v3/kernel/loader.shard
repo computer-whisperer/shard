@@ -42,9 +42,11 @@
 (use kernel.reader)
 (use kernel.scope)
 (use kernel.realize)
+(use kernel.predef)
+(use kernel.predef.PdRes)
+(use kernel.realize.PdErase)
 (use kernel.define)
 (use kernel.define.DfRes)
-(use kernel.define.DqRes)
 (use kernel.decl.InductiveType)
 (use kernel.record)
 (use kernel.record.RxRes)
@@ -185,7 +187,7 @@
   (RRefuse Name Symbol)                       ; K refused
   (RPolicy Name (List Name))                  ; outside the file's policy: the axioms it reaches that the policy lacks
   (RPending Name Symbol)                      ; sorry: read, admits nothing
-  (RRun Symbol Name Symbol)                   ; an E declaration classified (§6.7): kind (fn / extern / type), R45's runnable status; a fn's obstacle to L meaning (§8.4 rule 1; none = not applicable)
+  (RRun Symbol Name Symbol Symbol)            ; an E declaration without a definition (§6.7): kind (fn / extern / type), R45's runnable status; a fn's obstacle to L meaning (§8.4 rule 1; none = not applicable); its route (slice 3.16 rule 6: typed — the program the erasure —, e_first — the classifier's —, none)
   (RDefine Name (List Name) (List Name))      ; a fn defined (§8.4): its equations' identities, the pending roots it carries (R58)
   (RClassify Name Symbol (List Int))          ; the classifier refused: reason, message (counts as refused)
   (RRealize Name Symbol (List Name) (List Name))   ; a realization attached (§7.5): kind (supplied / view), its equations' identities, the pending roots it carries (R58)
@@ -233,7 +235,7 @@
 (fn ld_with_parked ((l Load) (p (List Parked))) Load (with Load l (parked p)))
 ;; a fn whose definition waits on a callee not yet defined (slice 3.15: a forward reference, or a
 ;; callee itself parked): the fn, its form, its E declaration, the obstacle and the callee named
-(type Parked (Parked Name SExpr EDecl Symbol (List Int)))
+(type Parked (Parked Name SExpr Symbol (List Int)))
 (fn ld_with_recs_raw ((l Load) (rs (List Rec))) Load (with Load l (recs rs)))
 (fn ld_add_form ((l Load) (n Name) (sc Scope) (s SExpr)) Load
   (let ((k (name_key n)) (fo (Load.forms l)))
@@ -503,53 +505,91 @@
   (match s
     ((SList (Cons _ (Cons _ (Cons (SList (Cons (SSym v) Nil)) Nil)))) (if (sym_eq v (quote view)) (quote view) (quote supplied)))
     (_ (quote supplied))))
-;; an E declaration (fn / extern; an E-only type): classified; a fn then tries its definition
-;; (define.shard, §8.4 rule 1) — DEFINE with its equations, RUNNABLE with the obstacle named,
-;; or refused; an extern or a type is RUNNABLE as before
+;; an E declaration. An extern or an E-only type is classified and RUNNABLE. A `fn` is read
+;; once as a pre-definition (predef.shard; §8.4 slice 3.16): its program is the erasure, its
+;; definition K's projection — DEFINE with its equations, RUNNABLE `route=typed` with the
+;; obstacle named when K's half cannot be reached, or refused. A `fn` whose signature has no L
+;; reading never enters the route: the classifier's program, `route=e_first` (rule 6)
 (fn load_e_form ((l Load) (f Fx) (s SExpr)) (Pair Load Fx)
   (let ((sc (fx_scope l f)) (l1 (scan_form l f s)))
     (if (name_taken (Load.env l1) (form_name sc s))
       (Pair (ld_rec l1 (RClassify (form_name sc s) (quote name_taken) (append (show_name (form_name sc s)) " is an admitted constant: realize it, or declare another name (§7.5)"))) f)
-      (match (classify_form (Load.etab l1) sc (Load.env l1) s)
-        ((CErr e m) (Pair (ld_rec l1 (RClassify (form_name sc s) e m)) f))
-        ((COk d)
-         (match d
-           ((EFn _ _ _ _ _ _) (load_define l1 f s d 2))
-           (_ (Pair (ld_rec (ld_with_e l1 (es_add_decl (Load.etab l1) d)) (RRun (form_head s) (edecl_name d) (quote none))) f))))))))
-;; a fn's definition (define.shard): the auxiliaries a native inductive needs admitted first
-;; (its below and brecOn; ACCEPT records) and the definition tried again, at most twice
-(fn load_define ((l1 Load) (f Fx) (s SExpr) (d EDecl) (fuel Int)) (Pair Load Fx)
-  (match (define_try l1 f s d fuel True)
-    ((Pair l2 f2) (if (ld_defined_last l2) (retry_parked l2 f2 (+ 1 (len (Load.parked l2)))) (Pair l2 f2)))))
-;; one attempt; the fn enters the E table on the first (its self-calls type statically). A forward
-;; reference (mutual_recursion: the callee not loaded yet) or a callee still parked
-;; (callee_pending) parks the fn — no record yet; it is retried after every later definition and
-;; reported at the file's end if it never settles (slice 3.15; §8.4's rules). Any other obstacle
-;; is RUNNABLE at once, callee_pending on a callee that will not be defined as no_l_meaning.
-(fn define_try ((l1 Load) (f Fx) (s SExpr) (d EDecl) (fuel Int) (add Bool)) (Pair Load Fx)
-  (let ((sc (fx_scope l1 f)) (k (edecl_name d)) (es (if add (es_add_decl (Load.etab l1) d) (Load.etab l1))))
-    (match (define_fn es sc (Load.env l1) d)
-      ((DfSkip why m)
-       (let ((l2 (ld_with_e l1 es)))
-         (if (bool_or (sym_eq why (quote mutual_recursion)) (bool_and (sym_eq why (quote callee_pending)) (parked_named l2 m)))
-           (Pair (ld_with_parked l2 (append (Load.parked l2) (list (Parked k s d why m)))) f)
-           (Pair (ld_rec l2 (RRun (form_head s) k (if (sym_eq why (quote callee_pending)) (quote no_l_meaning) why))) f))))
-      ((DfErr e m) (Pair (ld_rec l1 (RClassify k e m)) f))
-      ((DfAux es1 auxs)
-       (if (lt fuel 1) (Pair (ld_rec l1 (RClassify k (quote define_loop) "the auxiliaries did not settle")) f)
-         (match (admit_forms (ld_with_e l1 es1) f s auxs)
-           ((Pair l2 f2) (if (ld_last_accepted l2) (define_try l2 f2 s d (- fuel 1) False) (Pair l2 f2))))))
-      ((DfOk es1 obls dd wf)
-       ;; landing 2's alarm (slice 3.16): the erasure of the pre-definition against the program
-       (match (tie_check es1 sc (Load.env l1) s d)
-         ((Some m) (Pair (ld_rec l1 (RClassify k (quote tie_differs) m)) f))
-         (None (load_defined (ld_with_e l1 es1) f d obls dd wf)))))))
-(fn parked_named ((l Load) (m (List Int))) Bool (parked_has (Load.parked l) m))
-(fn parked_has ((ps (List Parked)) (m (List Int))) Bool
-  (measure (struct ps))
-  (match ps (Nil False) ((Cons (Parked k _ _ _ _) r) (if (int_list_eq (show_name k) m) True (parked_has r m)))))
-(fn ld_defined_last ((l Load)) Bool
-  (match (ld_recs_head l) ((Some (RDefine _ _ _)) True) (_ False)))
+      (if (sym_eq (form_head s) (quote fn))
+        (match (load_fn l1 f s 2)
+          ((Pair l2 f2) (if (int_eq (len (Load.parked l2)) (len (Load.parked l1))) (retry_parked l2 f2 (+ 1 (len (Load.parked l2)))) (Pair l2 f2))))
+        (load_e_first l1 f s (quote none) (quote none))))))
+;; the classifier's program alone
+(fn load_e_first ((l1 Load) (f Fx) (s SExpr) (why Symbol) (route Symbol)) (Pair Load Fx)
+  (match (classify_form (Load.etab l1) (fx_scope l1 f) (Load.env l1) s)
+    ((CErr e m) (Pair (ld_rec l1 (RClassify (form_name (fx_scope l1 f) s) e m)) f))
+    ((COk d) (Pair (ld_rec (ld_with_e l1 (es_add_decl (Load.etab l1) d)) (RRun (form_head s) (edecl_name d) why route)) f))))
+;; one attempt at a fn. A callee that is not loaded yet or is itself parked (the elaborator's
+;; unknown_constant on a function head of the E table without a declaration) parks the fn — no
+;; record yet; it is retried after every later fn and settled at the file's end (slice 3.15's
+;; retry, rule 6). The auxiliaries a native inductive needs (its below and brecOn; ACCEPT
+;; records) are admitted first and the fn read again, at most twice
+(fn load_fn ((l1 Load) (f Fx) (s SExpr) (fuel Int)) (Pair Load Fx)
+  (let ((sc (fx_scope l1 f)) (k (form_name (fx_scope l1 f) s)))
+    (match (read_predef sc (Load.env l1) s)
+      ((PdSkip r _) (load_e_first l1 f s (if (sym_eq r (quote no_l_identity)) r (quote e_only_type)) (quote e_first)))
+      ((PdErr r m)
+       (if (sym_eq r (quote unknown_constant))
+         ;; a name the environment lacks: a function still to come parks the fn; a RUNNABLE one
+         ;; or an extern has no L meaning; anything else — an operator's identity past the Init
+         ;; prefix, a toolchain spelling — has no L identity, and a name that is nothing at all
+         ;; is the classifier's refusal
+         (match (callee_state l1 sc m)
+           ((Some True) (Pair (ld_with_parked l1 (append (Load.parked l1) (list (Parked k s (quote mutual_recursion) m)))) f))
+           ((Some False) (load_e_first l1 f s (quote no_l_meaning) (quote e_first)))
+           (None (load_e_first l1 f s (quote no_l_identity) (quote e_first))))
+         (if (no_l_reading r) (load_e_first l1 f s (quote no_l_identity) (quote e_first))
+           (Pair (ld_rec l1 (RClassify k r m)) f))))
+      ((PdOk pd)
+       (match (erase_predef (Load.etab l1) sc pd)
+         ((PdEraseErr r m)
+          (if (no_l_reading r) (load_e_first l1 f s (quote no_l_identity) (quote e_first))
+            (Pair (ld_rec l1 (RClassify k r m)) f)))
+         ((PdEraseOk es1 d)
+          (match (define_pd es1 sc pd)
+            ((DfSkip why _) (Pair (ld_rec (ld_with_e l1 (es_add_decl es1 d)) (RRun (quote fn) k why (quote typed))) f))
+            ((DfErr e m) (Pair (ld_rec l1 (RClassify k e m)) f))
+            ((DfAux es2 auxs)
+             (if (lt fuel 1) (Pair (ld_rec l1 (RClassify k (quote define_loop) "the auxiliaries did not settle")) f)
+               (match (admit_forms (ld_with_e l1 es2) f s auxs)
+                 ((Pair l2 f2) (if (ld_last_accepted l2) (load_fn l2 f2 s (- fuel 1)) (Pair l2 f2))))))
+            ((DfOk es2 obls dd eqs wf)
+             (match (admit_matchers (ld_with_e l1 (es_add_decl es2 d)) f s (pd_aux pd))
+               ((Pair l2 (Some f2)) (load_defined l2 f2 d obls dd eqs wf))
+               ((Pair l2 None) (Pair l2 f)))))))))))
+;; the body's heads that have no L reading before slice 3.17 — a symbol, a literal pattern,
+;; a toolchain spelling: the function falls to the E-first route whole, flagged (rule 6)
+(fn no_l_reading ((r Symbol)) Bool
+  (bool_or (sym_eq r (quote no_l_identity))
+  (bool_or (sym_eq r (quote literal_pattern))
+  (bool_or (sym_eq r (quote unknown_head))
+  (bool_or (sym_eq r (quote match_eliminator))
+           (sym_eq r (quote no_realization)))))))
+;; the name the elaborator did not find, as a function head of the E table: Some True — no
+;; declaration yet (later in the file, or parked); Some False — RUNNABLE, no constant; None —
+;; not a function at all
+(fn callee_state ((l Load) (sc Scope) (m (List Int))) (Option Bool)
+  (match (name_of_sym (sym_of_chars m))
+    (None None)
+    ((Some n) (callee_hits (Load.etab l) (only_values (eresolve (Load.etab l) sc n))))))
+(fn callee_hits ((es ESt) (hs (List EHit))) (Option Bool)
+  (measure (struct hs))
+  (match hs
+    (Nil None)
+    ((Cons (EHit id _ (EIFn _)) r) (match (es_find_decl es id) ((Some _) (Some False)) (None (Some True))))
+    ((Cons (EHit _ _ (EIExt _)) r) (Some False))
+    ((Cons _ r) (callee_hits es r))))
+;; the matchers a body generated, admitted before their owner (ACCEPT records; rule 1)
+(fn admit_matchers ((l Load) (f Fx) (s SExpr) (ds (List Declaration))) (Pair Load (Option Fx))
+  (match ds
+    (Nil (Pair l (Some f)))
+    (_ (match (admit_core l f ds)
+         ((Pair l1 None) (Pair l1 None))
+         ((Pair l1 (Some recs)) (Pair l1 (Some (mix_recs f recs))))))))
 ;; the parked fns tried again, to a fixpoint: each attempt re-parks or settles
 (fn retry_parked ((l Load) (f Fx) (fuel Int)) (Pair Load Fx)
   (measure fuel)
@@ -565,53 +605,40 @@
   (measure (struct ps))
   (match ps
     (Nil (Pair (Pair l f) progressed))
-    ((Cons (Parked _ s d _ _) r)
-     (match (define_try l f s d 2 False)
-       ((Pair l1 f1) (retry_each l1 f1 r (bool_or progressed (ld_defined_last l1))))))))
-;; the fns still parked at a file's end: RUNNABLE with the obstacle they waited on
-(fn flush_parked ((l Load)) Load
+    ((Cons (Parked _ s _ _) r)
+     (match (load_fn l f s 2)
+       ((Pair l1 f1) (retry_each l1 f1 r (bool_or progressed (int_eq (len (Load.parked l1)) (len (Load.parked l))))))))))
+;; the fns still parked at a file's end — a forward reference that never settled, mutual
+;; recursion: the classifier's program, the obstacle they waited on named
+(fn flush_parked ((l Load) (f Fx)) Load
   (let ((ps (Load.parked l)))
-    (flush_each (ld_with_parked l Nil) ps)))
-(fn flush_each ((l Load) (ps (List Parked))) Load
+    (flush_each (ld_with_parked l Nil) f ps)))
+(fn flush_each ((l Load) (f Fx) (ps (List Parked))) Load
   (measure (struct ps))
   (match ps
     (Nil l)
-    ((Cons (Parked k s _ why _) r)
-     (flush_each (ld_rec l (RRun (form_head s) k (if (sym_eq why (quote callee_pending)) (quote no_l_meaning) why))) r))))
+    ((Cons (Parked _ s why _) r)
+     (match (load_e_first l f s why (quote e_first)) ((Pair l1 _) (flush_each l1 f r))))))
 (fn ld_last_accepted ((l Load)) Bool
   (match (ld_recs_head l) ((Some (RAccept _ _ _ _ _ _)) True) (_ False)))
 ;; a defined fn: its obligations (a measure's decreasing facts) admitted as parameters of the
 ;; fourth class, the definition admitted and checked against the policy, then its equations
-;; the same way, then the E body attached (as a realization's is) and DEFINE recorded, PENDING
-;; for a measure; a refusal anywhere leaves the environment as it was — a fn is a def plus a
-;; realization or nothing
-(fn load_defined ((l0 Load) (f0 Fx) (d EDecl) (obls (List Declaration)) (dd Declaration) (wf Bool)) (Pair Load Fx)
+;; the same way, the program (the erasure, already in the E table) its realization; DEFINE
+;; recorded, PENDING for a measure
+(fn load_defined ((l0 Load) (f0 Fx) (d EDecl) (obls (List Declaration)) (dd Declaration) (thms (List Declaration)) (wf Bool)) (Pair Load Fx)
   (match (admit_obligations l0 f0 obls)
     ((Pair l f)
-  (let ((k (edecl_name d)))
-    (match (admit_decls (Load.env l) (list dd))
-      ((AdRefused subj reason) (Pair (ld_rec l (RRefuse subj reason)) f))
-      ((AdOk env1)
-       (match (policy_pass l f env1 (Load.memo l) (list dd) Nil)
-         ((PolBound n) (Pair (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty)) (RLoadErr (fx_file f) (quote closure_bound) (show_name n))) f))
-         ((PolOut n out) (Pair (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty)) (RPolicy n out)) f))
-         ((PolOk memo1 recs)
-          (let ((l1 (recs_add (ld_with_tbl (ld_with_env l env1 memo1) (tbl_add_all (Load.tbl l) (decls_declare env1 (list dd)) (Fx.module f))) recs)))
-            (match (define_equations (Load.etab l1) (fx_scope l1 f) env1 d)   ; the scope after the definition's registration: its equations carry its module once
-              ((DqErr e m) (Pair (ld_rec l (RClassify k e m)) f))
-              ((DqOk es2 thms)
-               (match (admit_decls env1 thms)
-                 ((AdRefused subj reason) (Pair (ld_rec l (RRefuse subj reason)) f))
-                 ((AdOk env2)
-                  (match (policy_pass l1 f env2 memo1 thms Nil)
-                    ((PolBound n) (Pair (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty)) (RLoadErr (fx_file f) (quote closure_bound) (show_name n))) f))
-                    ((PolOut n out) (Pair (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty)) (RPolicy n out)) f))
-                    ((PolOk memo2 recs2)
-                     (let ((l2 (recs_add (ld_with_tbl (ld_with_env l1 env2 memo2) (tbl_add_all (Load.tbl l1) (decls_declare env2 thms) (Fx.module f))) recs2)))
-                       (let ((roots (realize_roots l2 k d wf)))
-                         (let ((l3 (ld_rec (ld_with_e (ld_add_pm l2 k roots) es2) (RDefine k (decls_declare env2 thms) roots))))   ; es2 holds the fn since define_fn
-                           (Pair (if wf (ld_rec l3 (RPending k (quote measure))) l3)
-                                 (mix_recs (mix_recs f recs) recs2))))))))))))))))))))
+     (let ((k (edecl_name d)))
+       (match (admit_core l f (list dd))
+         ((Pair l1 None) (Pair l1 f))
+         ((Pair l1 (Some recs))
+          (match (admit_core l1 (mix_recs f recs) thms)
+            ((Pair l2 None) (Pair l2 f))
+            ((Pair l2 (Some recs2))
+             (let ((roots (realize_roots l2 k d wf)))
+               (let ((l3 (ld_rec (ld_add_pm l2 k roots) (RDefine k (decls_declare (Load.env l2) thms) roots))))
+                 (Pair (if wf (ld_rec l3 (RPending k (quote measure))) l3)
+                       (mix_recs (mix_recs f recs) recs2))))))))))))
 ;; a measured fn's decreasing facts: each an axiom-kind constant, a parameter of the fourth
 ;; policy class (§8.4 slice 3.14 rule 2; §9) — PARAM NAME obligation
 (fn admit_obligations ((l Load) (f Fx) (obls (List Declaration))) (Pair Load Fx)
@@ -1296,7 +1323,7 @@
 (fn load_forms ((l Load) (f Fx) (forms (List SExpr)) (fuel Int) (w World)) (Pair (Pair Load (Option Fx)) World)
   (measure fuel)
   (match forms
-    (Nil (Pair (Pair (flush_parked l) (Some f)) w))   ; the fns parked on a forward reference that never came
+    (Nil (Pair (Pair (flush_parked l f) (Some f)) w))   ; the fns parked on a forward reference that never came
     ((Cons s r)
      (match (form_of s)
        ((FBad e m) (Pair (Pair (ld_rec l (RLoadErr (fx_file f) e m)) None) w))
@@ -1418,7 +1445,7 @@
     ((RRefuse n r) (append "REFUSE " (append (show_name n) (append " " (chars_of_sym r)))))
     ((RPolicy n out) (append "POLICY " (append (show_name n) (append " outside the policy: " (show_names_c out)))))
     ((RPending n r) (append "PENDING " (append (show_name n) (append " " (chars_of_sym r)))))
-    ((RRun k n why) (append "RUNNABLE " (append (chars_of_sym k) (append " " (append (show_name n) (if (sym_eq why (quote none)) "" (append " why=" (chars_of_sym why))))))))
+    ((RRun k n why route) (append "RUNNABLE " (append (chars_of_sym k) (append " " (append (show_name n) (append (if (sym_eq why (quote none)) "" (append " why=" (chars_of_sym why))) (if (sym_eq route (quote none)) "" (append " route=" (chars_of_sym route)))))))))
     ((RDefine n eqs roots) (append "DEFINE " (append (show_name n) (append " equations=" (append (show_names_c eqs) (match roots (Nil "") (_ (append " pending=" (show_names_c roots)))))))))
     ((RClassify n e m) (append "REFUSE " (append (show_name n) (append " " (append (chars_of_sym e) (append ": " m))))))
     ((RRealize n k eqs roots) (append "REALIZE " (append (show_name n) (append " " (append (chars_of_sym k) (append " equations=" (append (show_names_c eqs) (match roots (Nil "") (_ (append " pending=" (show_names_c roots)))))))))))
@@ -1440,7 +1467,7 @@
        ((RModule _ _ _ _) (list (+ a 1) b u c d e f g))
        ((RAccept _ _ _ _ _ _) (list a (+ b 1) u c d e f g))
        ((RParam _ _ _) (list a (+ b 1) u c d e f g))
-       ((RRun _ _ _) (list a b (+ u 1) c d e f g))
+       ((RRun _ _ _ _) (list a b (+ u 1) c d e f g))
        ((RClassify _ _ _) (list a b u (+ c 1) d e f g))
        ((RRefuse _ _) (list a b u (+ c 1) d e f g))
        ((RPolicy _ _) (list a b u (+ c 1) d e f g))
