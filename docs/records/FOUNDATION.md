@@ -2251,6 +2251,38 @@ is `docs/FOUNDATION.md` §5.3.
   (9), define_test, parity byte-identical over 26 closures and 97,077
   lines with no unused opens, route 2 byte-identical, K's clients
   through the V3 loader, the T0 fixture, 28 entrypoints.
+- **2026-09-19 — slice 3.16 landing 2: the pre-definition, the E
+  projection, the tie** (`LANGUAGE.md` §8.4's as-built; rules 3, 4,
+  11 and "the shape"). `kernel/predef.shard` reads a `fn` once into a
+  `PreDef` (the self-name a local); the erasure learned the matcher
+  application, the self-call, `decide` as an explicit conversion, the
+  `Int` rows of the realization registry; and for this landing every
+  function the old route defines is **also** read and erased on the
+  new one and the two programs compared (`tie_differs` a refusal).
+  **The tie holds** for every function defined in calc's files,
+  `v3/std/list.shard` and the 125 pins — nested patterns,
+  course-of-values and measured functions included — after what it
+  found: (1) `if` on a value of a two-constructor type of the
+  program's (`kernel.util.bool_and` over the prelude's `Bool`, a
+  pin's `Dec`) had no L reading in the elaborator — now the `match` it
+  abbreviates; (2) `(list …)` — now by the expected type; (3) **a real
+  two-resolver difference**: `append` in calc's `apply_action` named
+  calc's own function to the classifier (Init's `List.append` has no
+  E realization, so it was never a candidate) and is ambiguous to the
+  one resolver, as the law's §3.1 says and as Lean would say — the
+  three calc files now open `Init.List` selectively (`cons nil`);
+  calc's differential byte-identical after. Decided on the way:
+  `decide` erases to the conversion **always** (`ev` has three
+  two-valued cells — the scope's `Bool`, Init's, `Decidable`'s — and
+  no consumer needs the identity case yet); an operator's identity is
+  the type of its first operand that is not a numeral; a bound head
+  inserts its implicits. The erasure stays in `realize.shard` until
+  `tr` goes (it shares `Tr`). G2's forcing half and G3 run under `ev`
+  (`project_test`); G1 and G8 need the flip. Gates: 125 loader pins
+  with the tie armed, `project_test` (8), `matcher_test`, `unify_test`,
+  define_test, calc byte-identical over 21 inputs, parity
+  byte-identical over 27 closures and 104,557 lines, route 2, K's
+  clients, the T0 fixture, 29 entrypoints.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

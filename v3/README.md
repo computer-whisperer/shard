@@ -685,6 +685,21 @@ apart from refused, assignments are typed or tentative, and a closed
 value K refuses is not installed. The `def` fall-back through the
 classifier is deleted. 123 pins, parity over 26 closures and 97,077
 lines, 28 entrypoints.
+**Landing 2 (2026-09-19): the pre-definition and the E projection.**
+`kernel/predef.shard` reads a `fn` once into a record with its own
+name a local; the erasure turns a matcher application back into the
+`match` as written, the self-local into a call, `decide` into an
+explicit conversion (`Bool` and `Decidable` have different cells) and
+`Int`'s operations into the table's entries. For this landing every
+function the old route defines is also read and erased on the new one
+and the programs compared: the tie holds over calc, the std list and
+all 125 pins, and found one real two-resolver difference on the way
+(calc's `append` against Init's `List.append`; the sources now open
+`Init.List` selectively). `Bool` beyond an `if` and chosen-arm-only
+forcing run under `ev`. 125 pins, parity over 27 closures and 104,557
+lines, 29 entrypoints. Next: the flip — `fn` and `realize` on the
+route, `define.shard` re-pointed, `tr` deleted, one descent obligation
+discharged.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

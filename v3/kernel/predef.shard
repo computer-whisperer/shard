@@ -1,0 +1,101 @@
+;;; v3/kernel/predef.shard — the pre-definition (v3/LANGUAGE.md §8.4 slice 3.16 "the
+;;; shape"; GPT-6 R63). A `fn` form elaborated **once**, by elab.shard, into a named
+;;; record: the declared identity and type, the binders' locals, the **self-local** — the
+;;; function's own name bound to a local of the declared type, so a body that calls itself
+;;; is an ordinary L term —, the body over them, and the elaboration state that made it
+;;; (the walk with the locals and the matchers already checked into its environment, which
+;;; the projections continue in). Its two projections consume the record and re-read
+;;; nothing: the erasure toward E (realize.shard's `erase_predef`), the compilation toward
+;;; K (define.shard; landing 3).
+;;;
+;;; A PreDef is never an admitted declaration: a body well typed *assuming* a local for its
+;;; own name is provisional until the K projection admits it, and nothing here produces a
+;;; `Declaration` for the owner — only the matchers it generated (`pd_aux`), which K has
+;;; checked. `PdSkip` is a signature with no L reading (the function never enters the
+;;; route; rule 6); `PdErr` is a refusal on the route.
+
+(import "reader.shard")
+(use kernel.k)
+(use kernel.decl)
+(use kernel.elab)
+(use kernel.expr)
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.reader)
+(use kernel.scope)
+(use kernel.sexpr)
+(use kernel.util)
+(use kernel.elab.El)
+(use kernel.elab.ERes)
+(use kernel.elab.FinRes)
+(use kernel.expr.BinderInfo)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.scope.Scope)
+(use kernel.sexpr.SExpr)
+
+;; identity, the declared type (closed), the binders' locals in order, the self-local, the
+;; body over them (finished: no metavariable), the state
+(type PreDef (PreDef Name Expr (List Expr) Expr Expr El))
+(type PdRes (PdOk PreDef) (PdSkip Symbol (List Int)) (PdErr Symbol (List Int)))
+(fn pd_name ((p PreDef)) Name (match p ((PreDef n _ _ _ _ _) n)))
+(fn pd_type ((p PreDef)) Expr (match p ((PreDef _ t _ _ _ _) t)))
+(fn pd_binders ((p PreDef)) (List Expr) (match p ((PreDef _ _ bs _ _ _) bs)))
+(fn pd_self ((p PreDef)) Expr (match p ((PreDef _ _ _ s _ _) s)))
+(fn pd_body ((p PreDef)) Expr (match p ((PreDef _ _ _ _ b _) b)))
+(fn pd_state ((p PreDef)) El (match p ((PreDef _ _ _ _ _ e) e)))
+(fn pd_aux ((p PreDef)) (List Declaration) (el_aux (pd_state p)))
+
+;; (fn NAME BINDERS RET (measure M)? BODY)
+(fn read_predef ((sc Scope) (env CheckedEnv) (s SExpr)) PdRes
+  (match s
+    ((SList (Cons _ (Cons (SSym x) (Cons (SList bs) (Cons ret rest)))))
+     (match (name_of_sym x)
+       (None (PdErr (quote bad_name) (chars_of_sym x)))
+       ((Some short)
+        (match (fn_body rest)
+          (None (PdErr (quote bad_shape) "(fn NAME ((x TYPE)…) RET (measure M)? BODY)"))
+          ((Some body)
+           (let ((n (qualify sc short)))
+             (match (fn_binders (el_with_etype (el0 sc env Nil Nil n) True) bs Nil)
+               ((Pair None (Pair r m)) (PdSkip r m))
+               ((Pair (Some (Pair e1 fvars)) _)
+                (match (elab_type e1 ret)
+                  ((EErr r m) (PdSkip r m))
+                  ((EOk e2 rt _)
+                   (match (close_pis e2 fvars rt)
+                     ((Pair _ (FinErr r m)) (PdSkip r m))
+                     ((Pair e3 (FinOk T))
+                      (match (el_local (el_with_etype e3 False) short T BDefault)
+                        ((Pair e4 self)
+                         (match (elab e4 body (Some rt))
+                           ((EErr r m) (PdErr r m))
+                           ((EOk e5 v _)
+                            (match (el_finish e5 v)
+                              ((FinErr r m) (PdErr r m))
+                              ((FinOk b) (PdOk (PreDef n T fvars self b e5))))))))))))))))))))
+    (_ (PdErr (quote bad_shape) "(fn NAME ((x TYPE)…) RET (measure M)? BODY)"))))
+;; the body is the last form; a (measure …) may stand before it
+(fn fn_body ((rest (List SExpr))) (Option SExpr)
+  (match rest
+    ((Cons b Nil) (Some b))
+    ((Cons (SList (Cons (SSym m) _)) (Cons b Nil)) (if (sym_eq m (quote measure)) (Some b) None))
+    (_ None)))
+;; a fn's binders: a `(T Type)` binder is implicit in the L signature, as a `type`'s
+;; parameters are in its constructors (slice 3.15), the data binders explicit
+(fn fn_binders ((e El) (bs (List SExpr)) (acc (List Expr))) (Pair (Option (Pair El (List Expr))) (Pair Symbol (List Int)))
+  (measure (struct bs))
+  (match bs
+    (Nil (Pair (Some (Pair e (rev acc))) (Pair (quote none) Nil)))
+    ((Cons (SList (Cons (SSym x) (Cons ty Nil))) r)
+     (match (name_of_sym x)
+       (None (Pair None (Pair (quote bad_name) (chars_of_sym x))))
+       ((Some n)
+        (match (elab_type e ty)
+          ((EErr r2 m) (Pair None (Pair r2 m)))
+          ((EOk e1 t _)
+           (match (el_local e1 n t (if (is_sort t) BImplicit BDefault))
+             ((Pair e2 fv) (fn_binders e2 r (Cons fv acc)))))))))
+    (_ (Pair None (Pair (quote bad_binder) "a fn's binder is (x TYPE)")))))

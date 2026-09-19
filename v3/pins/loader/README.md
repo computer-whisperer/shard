@@ -138,4 +138,9 @@ matcher and an imposter of the same type, for
 `kernel/test/matcher_test.shard`), `match_not_exhaustive`,
 `match_literal` (`literal_pattern`), `match_motive` (the type not
 determined at the position), `ctor_expected` (`Add` at an expected
-`Exp` beside Init's class).
+`Exp` beside Init's class). Landing 2: `project_bool` (definitions
+erased by the derived view and run by `kernel/test/project_test.shard`:
+both values of a `decide` returned, matched, stored, used as a
+condition; a matcher's chosen arm only) and `elab_bridge` (`decide`,
+`if` on a `Bool` and on a two-constructor type, an operator past a
+numeral operand, `(list …)`, an untyped `let`; the theorems `Eq.refl`).

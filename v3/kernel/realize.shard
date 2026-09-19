@@ -8,16 +8,20 @@
 ;;; theorem `NAME.realize_N` the loader admits (proven by `Eq.refl`, or by
 ;;; the `equations` clause). The derived view erases the constant's L value
 ;;; into an E body by the same roles. Phase 2, slice 5b.
+(import "predef.shard")
 (import "classify.shard")
 (use kernel.k)
 (use kernel.classify)
 (use kernel.decl)
 (use kernel.erase)
 (use kernel.kw)
+(use kernel.elab el_w)
 (use kernel.etable)
 (use kernel.expr)
 (use kernel.level)
+(use kernel.matcher)
 (use kernel.name)
+(use kernel.predef)
 (use kernel.prelude)
 (use kernel.prog)
 (use kernel.scope)
@@ -40,6 +44,9 @@
 (use kernel.expr.Expr)
 (use kernel.expr.Literal)
 (use kernel.level.Level)
+(use kernel.matcher.MtDesc)
+(use kernel.matcher.MtPat)
+(use kernel.predef.PdRes)
 (use kernel.name.Name)
 (use kernel.prelude.Bool)
 (use kernel.prelude.List)
@@ -52,6 +59,7 @@
 (use kernel.prog.ERec)
 (use kernel.prog.ETerm)
 (use kernel.prog.EType)
+(use kernel.prog.Prim)
 (use kernel.prog.PrimId)
 (use kernel.scope.Resolved)
 (use kernel.scope.Scope)
@@ -1226,7 +1234,9 @@
 ;; ---- the derived view (§7.1, §7.5) --------------------------------------------------------------
 ;; the body's variables in the erasure: a local is a runtime variable (its E index counted among
 ;; those), a static or erased one, or an induction hypothesis
-(type EKind (EKVar) (EKStatic) (EKErased) (EKIH))
+;; (slice 3.16) or a function standing for a call — the pre-definition's self-local, its
+;; identity and its binders' runtime flags
+(type EKind (EKVar) (EKStatic) (EKErased) (EKIH) (EKCall Name (List Bool)))
 (type ErEnt (ErEnt Int EKind))
 (fn er_index ((env (List ErEnt)) (id Int) (k Int)) (Option (Pair EKind Int))
   (measure (struct env))
@@ -1292,6 +1302,7 @@
      (match (er_index env id 0)
        ((Some (Pair EKVar i)) (ErOk t (EBVar i)))
        ((Some (Pair EKIH _)) (ErErr (quote recursion_structure) "a recursive definition's executable structure is not readable off the recursor: supply the body (§7.1, §7.3)"))
+       ((Some (Pair (EKCall c roles) _)) (match roles (Nil (ErOk t (ECall c Nil))) (_ (ErErr (quote function_value) (append (show_name c) " unapplied (law §4.3)")))))
        ((Some (Pair _ _)) (ErErr (quote erased_in_runtime) "a type or a proof in a runtime position (law §4.2)"))
        (None (ErErr (quote erased_in_runtime) "a variable the erasure does not know"))))
     ((Lit _ (LitNat n)) (ErOk t (ELit (LNat n))))
@@ -1385,6 +1396,11 @@
      (match (er_index env id 0)
        ((Some (Pair EKVar i)) (erase_erased_args t env (EBVar i) args fuel))
        ((Some (Pair EKIH _)) (ErErr (quote recursion_structure) "a recursive definition's executable structure is not readable off the recursor: supply the body (§7.1, §7.3)"))
+       ((Some (Pair (EKCall c roles) _))
+        (if (bool_not (int_eq (len args) (len roles))) (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)"))
+          (match (erase_roles t env roles args fuel Nil)
+            ((Pair (Some (Pair e m)) _) (ErErr e m))
+            ((Pair None (Pair t1 as)) (ErOk t1 (ECall c as))))))
        (_ (ErErr (quote function_value) "an application whose head is not a constant (law §4.3)"))))
     (_ (ErErr (quote function_value) "an application whose head is not a constant (law §4.3)"))))
 ;; a runtime variable applied to proofs (dite's branches): the variable itself; to anything else, a function value
@@ -1409,6 +1425,36 @@
       (match args
         ((Cons x Nil) (match (erase t env x (- fuel 1)) ((ErErr e m) (ErErr e m)) ((ErOk t1 x1) (ErOk t1 (EPrim (n2 (quote Nat) (quote add)) (list x1 (ELit (LNat 1))))))))
         (_ (ErErr (quote function_value) "Nat.succ unapplied")))
+    (if (name_eq c (nm_int_of_nat))          ; Nat and Int share the integer (INVENTORY): the coercion is the identity
+      (match args ((Cons x Nil) (erase t env x (- fuel 1))) (_ (ErErr (quote function_value) "Int.ofNat unapplied")))
+    (if (name_eq c (nm_int_neg_succ))
+      (match args
+        ((Cons (Lit _ (LitNat n)) Nil) (ErOk t (ELit (LInt (- (- 0 n) 1)))))
+        ((Cons x Nil) (match (erase t env x (- fuel 1)) ((ErErr e m) (ErErr e m)) ((ErOk t1 x1) (ErOk t1 (EPrim (n1 (quote -)) (list (EPrim (n1 (quote -)) (list (ELit (LNat 0)) x1)) (ELit (LNat 1))))))))
+        (_ (ErErr (quote function_value) "Int.negSucc unapplied")))
+    (if (name_eq c (n2 (quote Decidable) (quote decide)))
+      ;; decide p inst: Bool and Decidable have different cells (ev.shard), so the conversion is
+      ;; explicit — (if ⟦inst⟧ true false) over Init's Bool (slice 3.16 rule 3; GPT-6 R66)
+      (match args
+        ((Cons _ (Cons inst Nil))
+         (match (erase t env inst (- fuel 1))
+           ((ErErr e m) (ErErr e m))
+           ((ErOk t1 i1)
+            (match (erase t1 env (mk_const (n2 (quote Bool) (quote true)) Nil) (- fuel 1))
+              ((ErErr e m) (ErErr e m))
+              ((ErOk t2 tt)
+               (match (erase t2 env (mk_const (n2 (quote Bool) (quote false)) Nil) (- fuel 1))
+                 ((ErErr e m) (ErErr e m))
+                 ((ErOk t3 ff) (ErOk t3 (EIf i1 tt ff)))))))))
+        (_ (ErErr (quote function_value) "Decidable.decide unapplied")))
+    (if (name_eq c (n1 (quote instDecidableEqBool)))
+      ;; the decision of `b = true` is b
+      (match args
+        ((Cons a (Cons b Nil))
+         (if (is_const_named b (n2 (quote Bool) (quote true))) (erase t env a (- fuel 1))
+         (if (is_const_named a (n2 (quote Bool) (quote true))) (erase t env b (- fuel 1))
+           (ErErr (quote no_realization) "Bool's decidable equality off `= true`: no realization yet"))))
+        (_ (ErErr (quote function_value) "instDecidableEqBool unapplied")))
     (if (bool_or (name_eq c (n1 (quote ite))) (name_eq c (n1 (quote dite))))
       (match args
         ((Cons _ (Cons _ (Cons h (Cons a (Cons b Nil))))) (erase_ite t env h a b (name_eq c (n1 (quote dite))) fuel))
@@ -1432,7 +1478,138 @@
               (_
                (match (prim_l_identity c)
                  ((Some _) (match (erase_all t env args fuel Nil) ((Pair (Some (Pair e m)) _) (ErErr e m)) ((Pair None (Pair t1 as)) (ErOk t1 (EPrim c as)))))
-                 (None (ErErr (quote no_realization) (append (show_name c) ": no realization attached — realize it first (§7.1)")))))))))))))))))))
+                 (None
+                  (match (realization_of c)
+                    ((Some p) (match (erase_all t env args fuel Nil) ((Pair (Some (Pair e m)) _) (ErErr e m)) ((Pair None (Pair t1 as)) (ErOk t1 (EPrim p as)))))
+                    (None
+                     (match (mt_is_matcher (tr_env t) c)
+                       ((Some desc) (erase_matcher t env c desc args fuel))
+                       (None (ErErr (quote no_realization) (append (show_name c) ": no realization attached — realize it first (§7.1)")))))))))))))))))))))))))))
+;; the realization registry's Int rows (slice 3.16 rule 4): a resolved L operation → the table's
+;; entry. ev's integer operation and K's constant agree on every input for these; the
+;; decisions answer a two-constructor cell, which is all an `if` reads (decide converts)
+(fn realization_of ((c Name)) (Option Name)
+  (if (name_eq c (n2 (quote Int) (quote add))) (Some (n1 (quote +)))
+  (if (name_eq c (n2 (quote Int) (quote sub))) (Some (n1 (quote -)))
+  (if (name_eq c (n2 (quote Int) (quote mul))) (Some (n1 (quote *)))
+  (if (name_eq c (n2 (quote Int) (quote decEq))) (Some (n1 (quote int_eq)))
+  (if (name_eq c (n2 (quote Int) (quote decLt))) (Some (n1 (quote lt)))
+  (if (name_eq c (n2 (quote Int) (quote decLe))) (Some (n1 (quote le)))
+    None)))))))
+
+;; ---- a matcher application (slice 3.16 rule 1) ------------------------------------------------
+;; OWNER.match_N params motive scrutinee alternatives: the E match of the rows read back off
+;; the matcher's own type (mt_is_matcher has regenerated and compared it), each alternative's
+;; lambdas the row's variables — control flow in E: the scrutinee once, then the first
+;; matching row's arm only (§6.2)
+(fn erase_matcher ((t Tr) (env (List ErEnt)) (c Name) (desc MtDesc) (args (List Expr)) (fuel Int)) ErRes
+  (match desc
+    ((MtDesc np nd rows)
+     (if (bool_not (int_eq nd 1)) (ErErr (quote no_realization) (append (show_name c) ": a match on several scrutinees has no E form"))
+     (if (bool_not (int_eq (len args) (+ np (+ 2 (len rows))))) (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)"))
+       (match (nth args (+ np 1))
+         (None (ErErr (quote function_value) (show_name c)))
+         ((Some scrut)
+          (match (erase t env scrut (- fuel 1))
+            ((ErErr e m) (ErErr e m))
+            ((ErOk t1 s1)
+             (match (erase_alts t1 env rows (drop (+ np 2) args) fuel Nil)
+               ((Pair (Some (Pair e m)) _) (ErErr e m))
+               ((Pair None (Pair t2 arms)) (ErOk t2 (EMatch s1 arms)))))))))))))
+(fn erase_alts ((t Tr) (env (List ErEnt)) (rows (List (List MtPat))) (alts (List Expr)) (fuel Int) (acc (List EArm))) (Pair (Option (Pair Symbol (List Int))) (Pair Tr (List EArm)))
+  (measure (struct rows))
+  (match rows
+    (Nil (Pair None (Pair t (rev acc))))
+    ((Cons (Cons p Nil) r)
+     (match alts
+       (Nil (Pair (Some (Pair (quote function_value) "a match with too few alternatives")) (Pair t Nil)))
+       ((Cons a ar)
+        (match (mt_epat t p True 64)
+          ((Pair t1 None) (Pair (Some (Pair (quote no_realization) "a pattern on an erased field, or on a type that is not an E type")) (Pair t1 Nil)))
+          ((Pair t1 (Some (Pair ep roles)))
+           (match (erase_alt t1 env a roles fuel)
+             ((Pair (Some (Pair e m)) _) (Pair (Some (Pair e m)) (Pair t1 Nil)))
+             ((Pair None (Pair t2 body)) (erase_alts t2 env r ar fuel (Cons (EArm (match ep ((Some q) q) (None PVar)) body) acc)))))))))
+    (_ (Pair (Some (Pair (quote no_realization) "a match on several scrutinees has no E form")) (Pair t Nil)))))
+;; a row's pattern in E and its variables' runtime flags in slot order: a variable binds a
+;; slot where its position is runtime data and vanishes where it is erased; a constructor
+;; keeps its runtime fields
+(fn mt_epat ((t Tr) (p MtPat) (runtime Bool) (fuel Int)) (Pair Tr (Option (Pair (Option EPat) (List Bool))))
+  (measure fuel)
+  (if (lt fuel 1) (Pair t None)
+  (match p
+    ((MtVar _) (Pair t (Some (Pair (if runtime (Some PVar) None) (list runtime)))))
+    ((MtCtor c subs)
+     (if (bool_not runtime) (Pair t None)
+       (match (env_find (tr_env t) c)
+         ((Some (CtorInfo _ ind _ _ _ _))
+          (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind Nil)
+            ((Pair (Pair w1 es1) False) (Pair t None))
+            ((Pair (Pair w1 es1) True)
+             (match (field_roles (tr_set_es (tr_set_w t w1) es1) c)
+               ((Pair t1 None) (Pair t1 None))
+               ((Pair t1 (Some roles))
+                (match (mt_epats t1 subs roles Nil Nil (- fuel 1))
+                  ((Pair t2 None) (Pair t2 None))
+                  ((Pair t2 (Some (Pair eps vroles))) (Pair t2 (Some (Pair (Some (PCtor c eps)) vroles))))))))))
+         (_ (Pair t None))))))))
+(fn mt_epats ((t Tr) (subs (List MtPat)) (roles (List Bool)) (eps (List EPat)) (vroles (List Bool)) (fuel Int)) (Pair Tr (Option (Pair (List EPat) (List Bool))))
+  (measure (struct subs))
+  (match subs
+    (Nil (Pair t (Some (Pair (rev eps) vroles))))
+    ((Cons p r)
+     (match roles
+       (Nil (Pair t None))
+       ((Cons rt rr)
+        (match (mt_epat t p rt fuel)
+          ((Pair t1 None) (Pair t1 None))
+          ((Pair t1 (Some (Pair ep vr)))
+           (mt_epats t1 r rr (match ep ((Some q) (Cons q eps)) (None eps)) (append vroles vr) fuel))))))))
+;; one alternative: a lambda per variable of the row, then its body
+(fn erase_alt ((t Tr) (env (List ErEnt)) (a Expr) (roles (List Bool)) (fuel Int)) (Pair (Option (Pair Symbol (List Int))) (Pair Tr ETerm))
+  (measure (struct roles))
+  (match roles
+    (Nil
+     (match (erase t env a (- fuel 1))
+       ((ErErr e msg) (Pair (Some (Pair e msg)) (Pair t (EBVar 0))))
+       ((ErOk t1 b) (Pair None (Pair t1 b)))))
+    ((Cons rt r)
+     (match (open_lam t a)
+       ((Pair t1 None) (Pair (Some (Pair (quote no_realization) "a match alternative K could not open as a function of its variables")) (Pair t1 (EBVar 0))))
+       ((Pair t1 (Some (Pair fv body))) (erase_alt t1 (Cons (ErEnt (fvar_id_of fv) (if rt EKVar EKErased)) env) body r fuel))))))
+
+;; ---- the E projection of a pre-definition (slice 3.16; predef.shard) ---------------------------
+;; the binders' roles from their locals' types, the self-local a call of the function with
+;; those roles; the body erased. The function's E signature with it
+(type PdErase (PdEraseOk ESt EDecl) (PdEraseErr Symbol (List Int)))
+(fn erase_predef ((es ESt) (sc Scope) (pd PreDef) (rec ERec)) PdErase
+  (match (predef_binds (el_w (pd_state pd)) es sc (pd_binders pd) Nil Nil)
+    ((Pair (Pair w1 es1) None) (PdEraseErr (quote no_l_identity) "a binder whose type is not an E type"))
+    ((Pair (Pair w1 es1) (Some binds))
+     (match (predef_ret w1 es1 sc pd binds)
+       ((Pair (Pair w2 es2) None) (PdEraseErr (quote no_l_identity) "a result type that is not an E type"))
+       ((Pair (Pair w2 es2) (Some rt))
+        (let ((t (tr_new w2 es2 sc (pd_name pd) (tbind_types binds) None)))
+          (match (erase t (Cons (ErEnt (fvar_id_of (pd_self pd)) (EKCall (pd_name pd) (data_flags binds))) (binder_ents binds)) (pd_body pd) (budget_depth))
+            ((ErErr e m) (PdEraseErr e m))
+            ((ErOk t1 ebody) (PdEraseOk (Tr.es t1) (EFn (pd_name pd) (count_types binds) (bind_ptypes binds) rt rec ebody))))))))))
+(fn predef_binds ((w W) (es ESt) (sc Scope) (fvs (List Expr)) (tps (List Expr)) (acc (List TBind))) (Pair (Pair W ESt) (Option (List TBind)))
+  (measure (struct fvs))
+  (match fvs
+    (Nil (Pair (Pair w es) (Some (rev acc))))
+    ((Cons fv r)
+     (match (w_local_type w (fvar_id_of fv))
+       (None (Pair (Pair w es) None))
+       ((Some ty)
+        (match (binder_role w es sc ty tps)
+          ((Pair (Pair w1 es1) None) (Pair (Pair w1 es1) None))
+          ((Pair (Pair w1 es1) (Some role))
+           (predef_binds w1 es1 sc r (match role (BType (append tps (list fv))) (_ tps)) (Cons (TBind Anon role fv) acc)))))))))
+;; the result's E type: the declared type's codomain at the binders' locals
+(fn predef_ret ((w W) (es ESt) (sc Scope) (pd PreDef) (binds (List TBind))) (Pair (Pair W ESt) (Option EType))
+  (match (mt_inst_args w (pd_type pd) (pd_binders pd))
+    ((Pair w1 None) (Pair (Pair w1 es) None))
+    ((Pair w1 (Some rt)) (l_to_etype w1 es sc rt (tbind_types binds) Nil))))
 ;; a constructor: its inductive E-eligible, the static and erased arguments dropped
 (fn erase_ctor ((t Tr) (env (List ErEnt)) (c Name) (ind Name) (nparams Int) (args (List Expr)) (fuel Int)) ErRes
   (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind Nil)
@@ -1599,3 +1776,71 @@
     (match (open_lam t m)
       ((Pair t1 None) (Pair t1 None))
       ((Pair t1 (Some (Pair fv body))) (open_ihs_lams t1 (Cons (ErEnt (fvar_id_of fv) EKIH) env) body (- k 1) fuel)))))
+
+;; ---- the tie (slice 3.16 landing 2; gone at landing 3, when the erasure is the program) -------
+;; the classifier's program for a function against the erasure of its pre-definition: None
+;; when they agree — term for term, a primitive by the operation it performs (`+` and
+;; `Nat.add` are one addition of naturals: rule 4's entries) — else what differs or which
+;; stage of the new route failed
+(fn tie_check ((es ESt) (sc Scope) (env CheckedEnv) (s SExpr) (d EDecl)) (Option (List Int))
+  (match d
+    ((EFn _ _ _ _ rec body)
+     (match (read_predef sc env s)
+       ((PdSkip r m) (Some (append "the signature did not elaborate (" (append (chars_of_sym r) (append "): " m)))))
+       ((PdErr r m) (Some (append "the body did not elaborate (" (append (chars_of_sym r) (append "): " m)))))
+       ((PdOk pd)
+        (match (erase_predef es sc pd rec)
+          ((PdEraseErr r m) (Some (append "the pre-definition did not erase (" (append (chars_of_sym r) (append "): " m)))))
+          ((PdEraseOk _ (EFn _ _ _ _ _ body2)) (if (tie_term body body2) None (Some "the erasure differs from the classifier's program")))
+          ((PdEraseOk _ _) (Some "the erasure is not a function"))))))
+    (_ None)))
+(fn tie_term ((a ETerm) (b ETerm)) Bool
+  (measure (struct a))
+  (match a
+    ((EBVar i) (match b ((EBVar j) (int_eq i j)) (_ False)))
+    ((ELit x) (match b ((ELit y) (tie_lit x y)) (_ False)))
+    ((ECtor c xs) (match b ((ECtor c2 ys) (bool_and (name_eq c c2) (tie_terms xs ys))) (_ False)))
+    ((ECall c xs) (match b ((ECall c2 ys) (bool_and (name_eq c c2) (tie_terms xs ys))) (_ False)))
+    ((EPrim c xs) (match b ((EPrim c2 ys) (bool_and (int_eq (tie_prim c) (tie_prim c2)) (tie_terms xs ys))) (_ False)))
+    ((EExt c xs) (match b ((EExt c2 ys) (bool_and (name_eq c c2) (tie_terms xs ys))) (_ False)))
+    ((EMatch x arms) (match b ((EMatch y arms2) (bool_and (tie_term x y) (tie_arms arms arms2))) (_ False)))
+    ((ELet xs x) (match b ((ELet ys y) (bool_and (tie_terms xs ys) (tie_term x y))) (_ False)))
+    ((EIf c x y)
+     (match b
+       ((EIf c2 x2 y2) (bool_and (tie_term c c2) (bool_and (tie_term x x2) (tie_term y y2))))
+       ;; an if on a two-constructor type is the match it abbreviates: the second constructor the then-branch
+       ((EMatch c2 (Cons (EArm (PCtor _ Nil) y2) (Cons (EArm (PCtor _ Nil) x2) Nil))) (bool_and (tie_term c c2) (bool_and (tie_term x x2) (tie_term y y2))))
+       (_ False)))))
+(fn tie_terms ((xs (List ETerm)) (ys (List ETerm))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil (match ys (Nil True) (_ False)))
+    ((Cons x r) (match ys ((Cons y s) (bool_and (tie_term x y) (tie_terms r s))) (Nil False)))))
+(fn tie_arms ((xs (List EArm)) (ys (List EArm))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil (match ys (Nil True) (_ False)))
+    ((Cons (EArm p x) r) (match ys ((Cons (EArm q y) s) (bool_and (tie_pat p q) (bool_and (tie_term x y) (tie_arms r s)))) (Nil False)))))
+(fn tie_pat ((p EPat) (q EPat)) Bool
+  (measure (struct p))
+  (match p
+    (PVar (match q (PVar True) (_ False)))
+    ((PCtor c ps) (match q ((PCtor c2 qs) (bool_and (name_eq c c2) (tie_pats ps qs))) (_ False)))
+    ((PLit x) (match q ((PLit y) (tie_lit x y)) (_ False)))))
+(fn tie_pats ((ps (List EPat)) (qs (List EPat))) Bool
+  (measure (struct ps))
+  (match ps
+    (Nil (match qs (Nil True) (_ False)))
+    ((Cons p r) (match qs ((Cons q s) (bool_and (tie_pat p q) (tie_pats r s))) (Nil False)))))
+;; numerals by value (a natural and a non-negative integer are one integer at run time)
+(fn tie_lit ((x ELit) (y ELit)) Bool
+  (match (Pair (lit_int x) (lit_int y))
+    ((Pair (Some i) (Some j)) (int_eq i j))
+    (_ False)))
+(fn lit_int ((x ELit)) (Option Int) (match x ((LNat n) (Some n)) ((LInt n) (Some n)) (_ None)))
+;; a primitive by its operation: the operator spellings' codes, the Nat identities folded onto them
+(fn tie_prim ((c Name)) Int
+  (match (prim_find c)
+    ((Some (Prim code _))
+     (if (int_eq code 28) 1 (if (int_eq code 29) 8 (if (int_eq code 36) 0 (if (int_eq code 37) 3 (if (int_eq code 38) 4 code))))))
+    (None (- 0 1))))

@@ -389,6 +389,7 @@ TERM ::= NAME                          ; a bound variable (innermost binding win
        | (-> TERM… TERM)               ; non-dependent Pi, right-nested
        | (let ((x TYPE TERM)…) TERM)   ; sequential; one L Let per binding; (x TERM) takes the term's type
        | (match TERM (PAT TERM)…)      ; a generated matcher applied (§8.4 slice 3.16 rule 1)
+       | (list TERM…)                  ; the constructor chain of the expected type's list
        | (Sort LEVEL) | Prop | Type | (Type LEVEL)
        | NUMERAL                       ; Nat, or Int at an expected Int (§5.3)
        | "…"                           ; K's String literal
@@ -443,8 +444,13 @@ is `(Sort (succ u))`. A bound name shadows a constant.
   (law §5.2); every other mismatch is `type_mismatch` naming both
   types — an `Int` at a `Nat` included (`Int.toNat` is a named
   conversion, never inserted).
+- **`Bool` and propositions** (slice 3.16 rule 3, Lean's way). A
+  proposition where a `Bool` is expected is `Decidable.decide p dec`
+  with the decision `if` would find (else `no_decision`); a `Bool`
+  where a proposition is expected is `b = true`.
 - **The operator spellings** take the naming-law identity at the type
-  of their first operand — `+ - * / mod` at `Nat` are `Nat.add sub
+  of their first operand — of the first that is not a numeral, so
+  `(le 48 c)` is `c`'s (slice 3.16) — `+ - * / mod` at `Nat` are `Nat.add sub
   mul div mod`, at `Int` `Int.add sub mul div emod`; `lt le` (also
   `< <=`) `Nat.lt le` / `Int.lt le`, `> >=` the flipped ones;
   `int_eq`/`=` is `Eq`, `!=` is `Ne`, `iff` is `Iff` (their type the
@@ -456,8 +462,13 @@ is `(Sort (succ u))`. A bound name shadows a constant.
   head the elaborator knows — `Nat.lt le` → `Nat.decLt decLe`,
   `Int.lt le` → `Int.decLt decLe`, `Eq` at `Nat`/`Int`/`Bool` →
   `Nat.decEq`/`Int.decEq`/`instDecidableEqBool` — else `no_decision`
-  with the pointer to `@ite` with the instance; a `Bool` condition is
-  `cond`. `(exists ((x T)) P)` is `Exists (fun (x : T) => P)`.
+  with the pointer to `@ite` with the instance; a `Bool` condition
+  `c` is the proposition `c = true` with `instDecidableEqBool` (Lean's
+  own elaboration; slice 3.16 rule 3 — slice 3.15 had `cond`); a
+  condition of another two-constructor inductive is the `match` it
+  abbreviates, the second constructor taking the then-branch (§6.2's
+  tag rule). `(list a b …)` is the constructor chain of the expected
+  type's list. `(exists ((x T)) P)` is `Exists (fun (x : T) => P)`.
 - **What K sees** is the closed term with every metavariable
   instantiated; K rechecks it whole (add.shard), so a wrong assignment
   is K's refusal, a missing one this elaborator's with its pointer.
@@ -2393,6 +2404,60 @@ recognized, an imposter of the same type and name not); pins
 `match_def`, `match_statement`, `match_poly`, `match_imposter`,
 `match_not_exhaustive`, `match_literal`, `match_motive`,
 `ctor_expected` (G1's constructor half).
+
+**As built, landing 2 (2026-09-19): the pre-definition, the E
+projection, the tie.** `kernel/predef.shard` — `PreDef` (identity,
+declared type, the binders' locals, the **self-local**, the finished
+body, the elaboration state with the matchers already in its
+environment) and `read_predef` (a `fn` form read once: a `(T Type)`
+binder implicit, the function's short name bound to a local of the
+declared type, the body at the result type; `PdSkip` a signature with
+no L reading, `PdErr` a refusal on the route); never a `Declaration`
+for the owner. The erasure (still in `realize.shard` beside `tr`,
+which it shares its state with; its own file when `tr` goes, landing
+3) gained: a **matcher application** → the `EMatch` of the rows
+`mt_is_matcher` read back and checked, each alternative's lambdas the
+row's variables, an erased field's variable dropped (`erase_matcher`,
+`mt_epat`); the **self-local** → `ECall` with the binders' runtime
+flags (`EKCall`); `Decidable.decide p inst` → `(if ⟦inst⟧ true false)`
+over Init's `Bool` — always, no identity case yet (rule 3's "where the
+entry returns a `Bool` cell" waits for a consumer: `ev` has three
+two-valued cells, the scope's `Bool`, Init's and `Decidable`'s);
+`instDecidableEqBool c true` → `⟦c⟧`; `Int.ofNat n` → `⟦n⟧` and
+`Int.negSucc` of a literal → the negative literal (one integer at run
+time); rule 4's `Int` rows (`realization_of`: `Int.add`/`sub`/`mul`,
+`Int.decEq`/`decLt`/`decLe` → `+ - * int_eq lt le`). `erase_predef` —
+the binders' roles from their locals' types, the body erased, the
+function's `EFn`. In the elaborator: a proposition where a `Bool` is
+expected is `decide` with `decision_of`'s decision, a `Bool` where a
+proposition is expected is `c = true` (both in `check_expected`,
+beside the `Nat → Int` coercion); `if` on a `Bool` is `ite (c = true)`
+with `instDecidableEqBool`; **`if` on a value of a two-constructor
+inductive of the program's is the `match` it abbreviates** (§6.2's tag
+rule in L: the second constructor takes the then-branch — found by
+the tie, on `kernel.util.bool_and` over the prelude's `Bool`); an
+operator whose first operand is a numeral takes its identity from the
+other operand's type (`(le 48 c)` at `c`'s `Int` — slice 3.15 rule 3's
+"first operand" amended: the first that is not a numeral); `(list a
+b …)` is the constructor chain of the expected type's list (an
+inductive with a field-less and a two-field constructor; no expected
+type: `unsolved_implicit`); a bound head inserts its implicit binders
+as a constant does (a polymorphic self-call). **The tie** (the
+loader's `define_try`, `realize.shard`'s `tie_check`; gone at landing
+3): every function the old route defines is also read as a
+pre-definition and erased, and the erasure compared with the
+classifier's program term for term — a primitive by the operation it
+performs (`+` and `Nat.add` one addition), an `if` on a two-constructor
+type equal to the match it abbreviates; a difference, or a stage of
+the new route failing, is the refusal `tie_differs`. **It holds for
+every function defined in calc's files, `v3/std/list.shard` and all
+125 loader pins**, nested patterns, course-of-values and measured
+functions included. Tests: `kernel/test/project_test.shard` (G3: both
+values of a `decide` returned, matched, stored, used as a condition
+and as a branch; G2's forcing: the chosen arm only); pins
+`project_bool`, `elab_bridge` (`is_digit 53 = true` by `Eq.refl`
+through `decide` and `ite (c = true)`). G1 and G8 wait for the flip:
+today a `fn` with `(le 48 c)` has no L half to compare.
 
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 

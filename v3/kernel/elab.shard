@@ -224,7 +224,19 @@
              ((Pair e2 xw)
               (if (bool_and (is_const_named tyw (nm_nat)) (bool_and (is_const_named xw (nm_int_ty)) (int_of_nat_visible e2)))
                 (EOk e2 (mk_app (mk_const (nm_int_of_nat) Nil) v) xw)
-                (EErr (quote type_mismatch) (append "expected " (append (show_expr xw) (append ", found " (show_expr tyw)))))))))))))))
+              (if (bool_and (is_prop_sort tyw) (is_const_named xw (nm_bool)))
+                (prop_as_bool e2 v xw)
+              (if (bool_and (is_const_named tyw (nm_bool)) (is_prop_sort xw))
+                (EOk e2 (bool_is_true v) xw)
+                (EErr (quote type_mismatch) (append "expected " (append (show_expr xw) (append ", found " (show_expr tyw)))))))))))))))))
+;; a proposition where a Bool is expected: `Decidable.decide p inst` with the decision its
+;; head has (slice 3.16 rule 3), else no_decision
+(fn is_prop_sort ((t Expr)) Bool (match t ((Sort _ LZero) True) (_ False)))
+(fn prop_as_bool ((e El) (p Expr) (xw Expr)) ERes
+  (let ((pz (el_zonk e p)))
+    (match (decision_of e pz)
+      ((Pair e1 (Some dec)) (EOk e1 (mk_app (mk_app (mk_const (n2 (quote Decidable) (quote decide)) Nil) pz) dec) xw))
+      ((Pair _ None) (EErr (quote no_decision) (append "a Bool is expected and the proposition " (append (show_expr pz) " has no decision the elaborator knows: write (@Decidable.decide P DEC)")))))))
 (fn int_of_nat_visible ((e El)) Bool (match (env_find (el_env e) (nm_int_of_nat)) ((Some _) True) (None False)))
 
 ;; ---- terms (§5.1) ------------------------------------------------------------------------
@@ -248,8 +260,9 @@
      (if (sym_eq h (quote proj)) (elab_proj e args expected)
      (if (sym_eq h (quote if)) (elab_if e args expected)
      (if (sym_eq h (quote match)) (elab_match e args expected)
+     (if (sym_eq h (quote list)) (elab_list e args expected)
      (if (sym_eq h (quote exists)) (elab_exists e args expected)
-     (elab_app e (SSym h) args expected))))))))))))
+     (elab_app e (SSym h) args expected)))))))))))))
     ((SList (Cons h args)) (elab_app e h args expected))))
 
 ;; a numeral: at an expected `Int`, `Int.ofNat n` / `Int.negSucc (-n-1)` (law §5.2's
@@ -380,7 +393,7 @@
        (match (cx_lookup (el_cx e) n)
          ((Some fv)
           (match (w_local_type (el_w e) (fvar_id_of fv))
-            ((Some ty) (elab_args e fv ty (srcs args) True expected))
+            ((Some ty) (elab_args e fv ty (srcs args) False expected))
             (None (EErr (quote bad_shape) "a bound variable without a local"))))
          (None
           (if (bool_and (bool_not has_univ) (is_operator x1))
@@ -705,10 +718,21 @@
           (match (el_whnf e1 aty)
             ((Pair e2 atyw)
              (if (is_sort atyw) (op_apply e2 (n1 (quote Not)) (list (AVal av aty)) expected)
-             (if (is_const_named atyw (n1 (quote Bool))) (op_apply e2 (n1 (quote not)) (list (AVal av aty)) expected)
+             (if (is_const_named atyw (nm_bool)) (op_apply e2 (n1 (quote not)) (list (AVal av aty)) expected)
                (EErr (quote no_operator_identity) (append "not at " (show_expr atyw)))))))))
        (EErr (quote bad_shape) "(OP a b)")))
     ((Cons a (Cons b Nil))
+     (if (bool_and (is_numeral a) (bool_not (is_numeral b)))
+       ;; the identity is the first operand's type's — of the first that is not a numeral
+       ;; (`(le 48 c)` at c's Int; slice 3.16): the numeral is then read at the binder
+       (match (elab e b None)
+         ((EErr r m) (EErr r m))
+         ((EOk e1 bv bty)
+          (match (el_whnf e1 bty)
+            ((Pair e2 btyw)
+             (match (op_identity x btyw)
+               ((Some id) (op_apply e2 id (list (ASrc a) (AVal bv bty)) expected))
+               (None (EErr (quote no_operator_identity) (append (chars_of_sym x) (append " at " (append (show_expr btyw) ": no naming-law identity at this type (§8.4 rule 3)"))))))))))
      (match (elab e a None)
        ((EErr r m) (EErr r m))
        ((EOk e1 av aty)
@@ -716,8 +740,9 @@
           ((Pair e2 atyw)
            (match (op_identity x atyw)
              ((Some id) (op_apply e2 id (list (AVal av aty) (ASrc b)) expected))
-             (None (EErr (quote no_operator_identity) (append (chars_of_sym x) (append " at " (append (show_expr atyw) ": no naming-law identity at this type (§8.4 rule 3)")))))))))))
+             (None (EErr (quote no_operator_identity) (append (chars_of_sym x) (append " at " (append (show_expr atyw) ": no naming-law identity at this type (§8.4 rule 3)"))))))))))))
     (_ (EErr (quote bad_shape) "(OP a b)"))))))))
+(fn is_numeral ((s SExpr)) Bool (match s ((SNum _) True) (_ False)))
 ;; a constant applied to source arguments (Eq, Ne, Iff: the implicit type is theirs)
 (fn op_const ((e El) (k Name) (args (List SExpr)) (expected (Option Expr))) ERes
   (match (elab_const e k Nil False None)
@@ -753,8 +778,9 @@
     None)))
 
 ;; (if C T F): `ite C dec T F` for a proposition C whose head has a decision
-;; (Nat.lt/le → Nat.decLt/decLe, Eq at Nat/Int/Bool → decEq, Int likewise),
-;; `cond C T F` for a Bool C; the branches at the expected type
+;; (Nat.lt/le → Nat.decLt/decLe, Eq at Nat/Int/Bool → decEq, Int likewise); a Bool C is the
+;; proposition `C = true` with Bool's decidable equality (Lean's own elaboration; slice 3.16
+;; rule 3 — slice 3.15's `cond` reversed); the branches at the expected type
 (fn elab_if ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
   (match args
     ((Cons c (Cons t (Cons f Nil)))
@@ -763,12 +789,57 @@
        ((EOk e1 cv cty)
         (match (el_whnf e1 cty)
           ((Pair e2 ctyw)
-           (if (is_const_named ctyw (n1 (quote Bool)))
-             (op_apply_explicit e2 (n1 (quote cond)) (list (AVal cv cty) (ASrc t) (ASrc f)) expected)
+           (if (is_const_named ctyw (nm_bool))
+             (let ((p (bool_is_true cv)))
+               (op_apply_explicit e2 (n1 (quote ite)) (list (AVal p (mk_sort LZero)) (AVal (bool_decision cv) (mk_app (mk_const (n1 (quote Decidable)) Nil) p)) (ASrc t) (ASrc f)) expected))
+             (match (two_ctors e2 ctyw)
+               ((Some (Pair c1 c2))
+                ;; a value of a two-constructor inductive (§6.2's tag rule, CANON C9): the second
+                ;; constructor takes the then-branch — the match it abbreviates
+                (elab_match e2 (list c (SList (list (ctor_pattern c1) f)) (SList (list (ctor_pattern c2) t))) expected))
+               (None
              (match (decision_of e2 (el_zonk e2 cv))
                ((Pair e3 (Some dec)) (op_apply_explicit e3 (n1 (quote ite)) (list (AVal cv cty) (AVal dec (mk_app (mk_const (n1 (quote Decidable)) Nil) cv)) (ASrc t) (ASrc f)) expected))
-               ((Pair _ None) (EErr (quote no_decision) (append "the condition " (append (show_expr (el_zonk e2 cv)) " has no decision the elaborator knows: write (@ite C DEC T F) with the Decidable instance")))))))))))
+               ((Pair _ None) (EErr (quote no_decision) (append "the condition " (append (show_expr (el_zonk e2 cv)) " has no decision the elaborator knows: write (@ite C DEC T F) with the Decidable instance")))))))))))))
     (_ (EErr (quote bad_shape) "(if C T F)"))))
+;; the two constructors of a type that is an inductive with exactly two, each with its fields' number
+(fn two_ctors ((e El) (tyw Expr)) (Option (Pair (Pair Name Int) (Pair Name Int)))
+  (match (get_app_fn tyw)
+    ((Const _ ind _)
+     (match (env_find (el_env e) ind)
+       ((Some (InductInfo _ _ _ _ (Cons c1 (Cons c2 Nil)) _ _ _ _))
+        (match (Pair (ctor_nfields e c1) (ctor_nfields e c2))
+          ((Pair (Some n1f) (Some n2f)) (Some (Pair (Pair c1 n1f) (Pair c2 n2f))))
+          (_ None)))
+       (_ None)))
+    (_ None)))
+(fn ctor_nfields ((e El) (c Name)) (Option Int)
+  (match (env_find (el_env e) c) ((Some (CtorInfo _ _ _ _ nf _)) (Some nf)) (_ None)))
+;; (C _ … _) under the constructor's full name
+(fn ctor_pattern ((c (Pair Name Int))) SExpr
+  (match c
+    ((Pair n nf)
+     (if (int_eq nf 0) (SSym (sym_of_chars (show_name n)))
+       (SList (Cons (SSym (sym_of_chars (show_name n))) (wild_syms nf)))))))
+(fn wild_syms ((k Int)) (List SExpr) (measure k) (if (lt k 1) Nil (Cons (SSym (quote _)) (wild_syms (- k 1)))))
+
+;; (list a b …): the constructor chain of the expected type's list — an inductive with a
+;; field-less constructor and a two-field one (slice 3.16 rule 11). No expected type, no
+;; literal: the element type is never defaulted
+(fn elab_list ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
+  (match expected
+    (None (EErr (quote unsolved_implicit) "a list literal takes its type from its position: write it where the type is known"))
+    ((Some x)
+     (match (el_whnf e x)
+       ((Pair e1 xw)
+        (match (two_ctors e1 xw)
+          ((Some (Pair (Pair nil 0) (Pair cons 2))) (elab e1 (list_chain args (sym_of_chars (show_name nil)) (sym_of_chars (show_name cons))) expected))
+          (_ (EErr (quote type_mismatch) (append "a list literal where " (append (show_expr xw) " is expected"))))))))))
+(fn list_chain ((args (List SExpr)) (nil Symbol) (cons Symbol)) SExpr
+  (measure (struct args))
+  (match args
+    (Nil (SSym nil))
+    ((Cons a r) (SList (list (SSym cons) a (list_chain r nil cons))))))
 ;; the constant applied with every binder explicit but the leading implicit ones
 (fn op_apply_explicit ((e El) (k Name) (args (List EArg)) (expected (Option Expr))) ERes
   (match (elab_const e k Nil False None)
@@ -797,6 +868,12 @@
            (_ (Pair e None)))
          (Pair e None)))))
       (_ (Pair e None)))))
+(fn nm_bool () Name (n1 (quote Bool)))
+;; `c = true` and its decision
+(fn bool_is_true ((c Expr)) Expr
+  (mk_app (mk_app (mk_app (mk_const (nm_eq) (list (LSucc LZero))) (mk_const (nm_bool) Nil)) c) (mk_const (n2 (quote Bool) (quote true)) Nil)))
+(fn bool_decision ((c Expr)) Expr
+  (mk_app (mk_app (mk_const (n1 (quote instDecidableEqBool)) Nil) c) (mk_const (n2 (quote Bool) (quote true)) Nil)))
 (fn decide_with ((k Name) (as (List Expr))) (Option Expr)
   (match as ((Cons a (Cons b Nil)) (Some (mk_app (mk_app (mk_const k Nil) a) b))) (_ None)))
 
