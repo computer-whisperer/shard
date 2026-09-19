@@ -644,8 +644,11 @@ and `reader.shard` (the forms), the K-world `W` into `kw.shard`.
 1,482 s at the baseline, v3 4,367 s (calc 420 s, parity 206 s, route 1
 built, replay 2,393 s at 32.2 GB, T0 accepted 57,977, 20 pinned,
 closures identical): K's verdicts unchanged with the nodes in its
-terms. Gates at the slice's close: 115 pins, parity over 24 closures
-and 83,436 lines, 26 entrypoints.
+terms. **Pipeline 509 (`dc6d654`, the elaborator and the bundle)
+green end to end** — corpus 1,512 s, v3 4,510 s (26 entrypoints, calc
+444 s, parity 211 s over 24 closures and 83,436 lines, route 1 built,
+replay 2,433 s at 32.2 GB, T0 accepted 57,977, 20 pinned, closures
+identical): the slice stands on the full gate, 115 pins.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

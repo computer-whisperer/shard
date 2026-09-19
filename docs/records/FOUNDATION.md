@@ -2135,8 +2135,13 @@ is `docs/FOUNDATION.md` §5.3.
   and 82,190 lines, route 2 52 s, route 1 built, the full replay
   2,393 s at 32.2 GB peak, T0 accepted 57,977, 20 pinned, closures
   identical) — K's terms carry the nodes and K's verdicts are
-  unchanged over the whole export. The elaborator and the bundle on
-  the full gate: the next pipeline.
+  unchanged over the whole export. **Pipeline 509 (`dc6d654`, the
+  elaborator and the bundle) green end to end 2026-09-18:** engine
+  162 s, corpus 1,512 s at the baseline, v3 4,510 s (26 entrypoints,
+  calc 444 s, define_test, k_clients_test 118 s, parity 211 s over 24
+  closures and 83,436 lines, route 2 53 s, route 1 built, the full
+  replay 2,433 s at 32.2 GB peak, T0 accepted 57,977, 20 pinned,
+  closures identical). The slice stands on the full gate.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 
