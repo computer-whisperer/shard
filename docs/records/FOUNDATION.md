@@ -2344,6 +2344,27 @@ is `docs/FOUNDATION.md` §5.3.
   clients, the unit tests, the full suite. Not done here and named in
   the as-built: the scrutinee equation in a measured obligation,
   mutual recursion's definition, dependency-directed wake-up.
+- **2026-09-19 — slice 3.17's design, scoped by probes** (`LANGUAGE.md`
+  §8.4, §13 item 50; no code). Five scratch files through the loader
+  under the pins' prefix. A record with `make` out of order and `with`:
+  6 functions defined, `(= (Pt.x (Pt.with_x v p)) v)` by `Eq.refl`
+  over a local `p` — v2's law family needs no generator. `lt` and `<`:
+  one hash. A literal pattern at `Nat` and at `Int`: `no_l_identity
+  route=e_first` (0 rows in `v3/`, 53 in the old tree). `Symbol`:
+  `e_only_type`; 2,905 `(quote …)` sites in `v3/`, all in functions
+  E-first by signature; `String` in the prefix, `String.decEq` past
+  it. calc's `show_nat`: **the as-built's cause was wrong** — it holds
+  no `"…"`; `Int.ediv` lies past `(import Init Int.decEq)`. Under
+  `Int.emod` (1,142 declarations) it is `measure_type`; with
+  `(measure (Int.natAbs n))` it falls back again because the measure
+  is erased and `Int.natAbs` has no program (`(realize Int.natAbs
+  (view))`: `no_realization`). `has_eq`/`confusion_reachable`: their
+  callee `env_find` has no L reading — the port's, and recorded
+  `no_l_identity` where the as-built says `no_l_meaning`. The rename:
+  943 sites in 60 files of `v3/`; the v2 chain that compiles
+  `v3/kernel/**` on route 1 names the three primitives at 73 sites in
+  10 files of `kernel/` and 3 in `codegen.shard`. Leans and the three
+  rulings wanted are in the design.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

@@ -2496,8 +2496,12 @@ has.
   was itself E-first by signature, `why=no_l_meaning`. A name that is
   nothing at all is still a refusal, the classifier's
   (`unknown_head`). **The set in the tree today:** calc's `show_nat`
-  (a `"…"`), `kernel.define.has_eq` and `confusion_reachable` (K's
-  view's `env_find` answers an E-only type); slice 3.17 empties it. A
+  (`Int.ediv` and `Int.emod` lie past its file's Init prefix — the
+  first cut of this sentence said a `"…"`, which the function does not
+  contain; corrected 2026-09-19 at slice 3.17's scoping),
+  `kernel.define.has_eq` and `confusion_reachable` (K's view's
+  `env_find` answers an E-only type); slice 3.17's design below says
+  what empties it and what does not. A
   **callee-local**: a callee with a program and no K constant whose
   signature elaborates — `RUNNABLE` on the typed route, or E-first
   for its body alone — is bound, under the name the body writes, to a
@@ -2623,6 +2627,125 @@ has.
   function states its obligation without `scrutinee = pattern` (rule
   2's narrower guarantee, unchanged); mutual recursion is not
   compiled; dependency-directed wake-up is deferred (rule 8).
+
+**Slice 3.17 — the porting facilities** (DESIGN for ruling,
+2026-09-19; scoped by probes through the loader before any code; §13
+item 50). The slices table gives this slice R60's row (§11): record
+update and order-free construction, `Name` literals, symbols and `"…"`
+in a body, the fresh-name convention, E's rename of `lt le int_eq`.
+Measured against the tree after slice 3.16, the row splits into what
+already works, what is small, and two entries that do not belong here.
+
+*What the probes found* (scratch files, the pins' Init prefix):
+
+- **Records work on the typed route today.** `(record Pt (x Nat) (y
+  Nat))` with `make` out of order and `with`: six functions `DEFINE`d,
+  a `def` using `make` accepted, and v2's law family needs no
+  generator — `(= (Pt.x (Pt.with_x v p)) v)` and `(= (Pt.y (bump p))
+  (Pt.y p))` over a *local* `p` are `Eq.refl` (K unfolds a structure's
+  recursor on a local through its projections, Lean's rule). What is
+  left of R60's entry is its caveat — a changed dependent field an
+  explicit obligation — which no `record` can state (its fields are
+  positional, non-dependent types); it becomes real when `make`/`with`
+  reach a `structure`.
+- **`lt le int_eq` and `< <= =` already elaborate to one term**
+  (`lt3` and `lt3b`: one hash). The classifier knows only the old
+  spellings (`unknown_head: =` in an E-first function).
+- **A literal pattern** (`(match n (0 1) (_ 2))`, at `Nat` and at
+  `Int`) is `no_l_identity route=e_first`. 0 rows in `v3/`, 53 in the
+  old tree.
+- **`Symbol` has no L reading** (`e_only_type`); 2,905 `(quote …)`
+  sites in `v3/`, every one in a function that is E-first by its
+  signature anyway (K's sources see no `Init`, so `Int` has no L
+  constant there). Outside the toolchain the old tree names `Symbol`
+  in 4 files. `String` is in the pins' prefix and `"zero"` is a
+  `String` in a `def`; `String.decEq` is past the prefix.
+- **The E-first-by-body set is not what landing 3's as-built said.**
+  calc's `show_nat` has no `"…"`: `Int.ediv`/`Int.emod` lie past
+  `(import Init Int.decEq)`; with `(import Init Int.emod)` it is on the
+  typed route (`measure_type`: its measure is an `Int`). `has_eq` and
+  `confusion_reachable` call `env_find`, whose signature has no L
+  reading until K's sources port — no facility of this slice changes
+  that, and their record should read `no_l_meaning`, as the as-built
+  describes that case, not `no_l_identity`.
+- **The rename reaches the v2 chain.** `v3/kernel/**` is hosted by the
+  Rust bootstrap (one evaluator for both trees) and compiled on route
+  1 by `tools/lower` and `tools/codegen`, which read it with the old
+  tree's kernel: 73 sites in 10 files of `kernel/` and 3 in
+  `codegen.shard` name the three primitives, and `=` there is the
+  claim language's equality. 943 sites in 60 files of `v3/` would
+  move.
+
+*The proposed rules* (each a lean; the rulings wanted are 1, 2 and 5):
+
+1. **`"…"` in a `fn` body moves to slice 3.18, with the flip.** Since
+   slice 3.16 a `fn` body is an L position, and in an L position
+   `"…"` is already `LitStr : String` (§5.3). Reading it as the byte
+   list in a `fn` and a `String` in a `def` is two meanings for one
+   text under one elaborator — guard 1. It keeps `no_l_identity
+   route=e_first` until item 37's flip gives it the one meaning
+   everywhere. Rejected: list-literal sugar over the bytes by the
+   expected type (twenty lines, and wrong for exactly one slice).
+2. **Symbols move to slice 3.18 too.** Item 36 rules `Symbol`'s L
+   identity `String`. Assigned now, a `String` binder erases to the
+   atom cell; at 3.18 `"…"` is a `String` as well, so the atom would
+   have to *be* `String`'s E representation — the wire's ruling made
+   by a side effect. No function in the tree would change route by
+   it. `Name` literals go with them (K's `Name` holds the atoms; a
+   literal over an E-only type helps no typed function), stated there
+   as loader-level sugar over the `Name` in scope — plain data, no
+   node, declaration or environment identity to forge (`name.shard`
+   carries none). Rejected: a native `structure Symbol` (reverses
+   item 36 for no consumer).
+3. **Literal patterns on the typed route.** At `Nat` a numeral
+   pattern is the constructor pattern Lean reads it as (`0` =
+   `Nat.zero`, `k+1` = `succ`), through the matcher as any pattern; at
+   `Int` and any type with a decision, a row is the `ite` on the
+   decision before the rows below it. The erasure reads both back as
+   E's literal row, so the program is the classifier's. Exhaustiveness
+   needs a catch-all row (`match_not_exhaustive` otherwise).
+4. **Records: the first example is the deliverable.** A pin
+   (`record_laws`) with the three probes above as theorems; `make` and
+   `with` over a `structure` whose later field's type mentions an
+   earlier one: updating the earlier field without the later is the
+   refusal `dependent_update`, naming the fields to supply — never an
+   inserted cast.
+5. **The rename, staged by who reads the file.** E's table takes `<
+   <= =` as the primitives' names and the classifier accepts them; the
+   Rust bootstrap accepts both spellings (it hosts the old tree); the
+   files no v2 tool reads — `v3/std`, `v3/examples`, `v3/pins` —
+   migrate by tool now, and the old spellings are refused there.
+   `v3/kernel/**` migrates when route 1's chain is V3's own, since
+   until then the old tree's kernel reads it: teaching the v2 kernel
+   an alias whose `=` collides with the claim language is a change to
+   the old trusted base for a spelling. Rejected: a rewriting shim in
+   `build.sh` (a derived source between the text and the compiler);
+   the full migration now (route 1 is testable only on CI).
+6. **The fresh-name convention** is a library, not a form:
+   `v3/std/fresh.shard` — a `Fresh` record (a prefix and a counter),
+   `Fresh.next` returning the name and the advanced supply — with a
+   theorem that two successive names differ, and the convention
+   (§12.1's `gen_fresh` row) that a function needing names takes and
+   returns the supply.
+7. **The E-first-by-body set.** calc's app file imports through
+   `Int.emod`, which puts `show_nat` on the typed route as
+   `measure_type`. Its definition needs a `Nat` measure, and the
+   probe found the gap: the measure is erased with the body, the
+   prefix holds `Int.natAbs` (not `Int.toNat`), and `Int.natAbs` has
+   no program — `(realize Int.natAbs (view))` is `no_realization`,
+   its value matching on `Int`'s constructors, which E's `Int` does
+   not have. The lean: a realization-registry row for `Int.natAbs`
+   (and `Int.toNat` where the prefix holds it) as an E expression over
+   the existing primitives — no new primitive — so `show_nat` is
+   defined with its obligations `PENDING`. A callee whose signature
+   has no L reading is recorded `no_l_meaning` and is the port's, not
+   this slice's; rule 6's bullet stays for `"…"` and symbols until
+   3.18 and is deleted there.
+
+*Gates:* the loader pins with the new ones (`literal_pattern`,
+`record_laws`, `dependent_update`, `rename_refused`), `define_test`
+with calc's app file added, calc's differential and frontend parity
+byte-identical, the full suite, CI for route 1.
 
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
@@ -3514,3 +3637,18 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     in landing 1, no consumer in this slice); value hashes an alarm
     to explain, not a gate (revision 1's unchanged-hash gate
     contradicted its own `ite` rule).
+50. **Slice 3.17's scope, for ruling (DESIGN 2026-09-19; §8.4).**
+    Measured by probes before code: records and their laws already
+    work on the typed route; `< <= =` already elaborate. The leans:
+    `"…"`, symbols and `Name` literals move to slice 3.18 with the
+    flip (a `fn` body is an L position, where `"…"` is already a
+    `String`; `Symbol` as `String` now would settle the wire's cell
+    by a side effect) — *this narrows the slices table's row and is
+    the user's to rule*; literal patterns on the typed route; the
+    rename for the files no v2 tool reads, `v3/kernel/**` when route
+    1's chain is V3's own (rejected: an alias in the old trusted
+    kernel, where `=` is the claim language's; a rewriting shim in
+    `build.sh`); the fresh-name supply a library; `dependent_update`
+    a refusal; a registry row for `Int.natAbs` so calc's `show_nat`
+    is defined. Landing 3's as-built misnamed `show_nat`'s cause (no
+    `"…"`: `Int.ediv` past the prefix) — corrected in place.

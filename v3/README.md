@@ -717,9 +717,17 @@ axiom closure as the acyclicity check, and `count.dec_1` is proved by
 differential byte-identical with the erasures as the programs, the
 twelve functions the old route defined keep their equation names;
 every `fn`'s hash moved (its value cites `NAME.match_N`). 132 pins.
-Slice 3.16 is closed pending its pipeline; next is slice 3.17, the
-porting facilities (`"…"`, symbols, `Name` literals, record update),
-which empties the E-first fallback.
+Slice 3.16 is closed pending its pipeline.
+
+**Slice 3.17's design on disk, for ruling (2026-09-19)** —
+`LANGUAGE.md` §8.4, §13 item 50. Probes first: records and their laws
+already work on the typed route (`Eq.refl` over a local), `< <= =`
+already elaborate, a literal pattern does not, and landing 3's
+as-built misnamed calc's `show_nat` (no `"…"`: `Int.ediv` past its
+Init prefix; corrected). The leans: `"…"`, symbols and `Name` literals
+move to slice 3.18 with the flip; literal patterns; the rename for the
+files no v2 tool reads, `v3/kernel/**` later; a fresh-name library;
+`dependent_update`; a registry row for `Int.natAbs`. No code yet.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
