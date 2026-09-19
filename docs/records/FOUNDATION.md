@@ -2344,6 +2344,16 @@ is `docs/FOUNDATION.md` §5.3.
   clients, the unit tests, the full suite. Not done here and named in
   the as-built: the scrutinee equation in a measured obligation,
   mutual recursion's definition, dependency-directed wake-up.
+- **2026-09-19 — pipeline 515 green on `087001d`: slice 3.16's landing
+  3 on the full gate.** Engine 133 s, corpus 1,535 s at the baseline,
+  v3 5,168 s: 29 entrypoints with 0 failed, `define_test` 5 checks,
+  parity byte-identical over 27 closures and 104,060 declarations in
+  322 s with every projection injective, route 1's `v3/bin/t0` built
+  from the rebuilt `define.shard`, `erasure.shard` and `realize.shard`
+  (the local suite never builds it), the byte-tie on the fixture, the
+  full replay 2,449 s at 32.2 GB — T0 accepted 57,977, closures
+  identical against the oracle, all 20 accelerator candidates pinned.
+  Slice 3.16 is closed.
 - **2026-09-19 — slice 3.17's design, scoped by probes** (`LANGUAGE.md`
   §8.4, §13 item 50; no code). Five scratch files through the loader
   under the pins' prefix. A record with `make` out of order and `with`:

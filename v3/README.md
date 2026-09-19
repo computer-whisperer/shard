@@ -717,7 +717,11 @@ axiom closure as the acyclicity check, and `count.dec_1` is proved by
 differential byte-identical with the erasures as the programs, the
 twelve functions the old route defined keep their equation names;
 every `fn`'s hash moved (its value cites `NAME.match_N`). 132 pins.
-Slice 3.16 is closed pending its pipeline.
+Slice 3.16 is closed: **pipeline 515 green on `087001d`** (landing 3
+on the full gate, route 1's native build of the rebuilt projection
+included) — v3 5,168 s, 29 entrypoints, `define_test` 5 checks, parity
+byte-identical over 27 closures in 322 s, replay 2,449 s at 32.2 GB,
+T0 accepted 57,977, 20 pinned, closures identical.
 
 **Slice 3.17's design on disk, for ruling (2026-09-19)** —
 `LANGUAGE.md` §8.4, §13 item 50. Probes first: records and their laws
