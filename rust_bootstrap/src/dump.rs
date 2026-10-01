@@ -22,7 +22,9 @@
 //!
 //! The text is a projection (dump.shard's header; GPT-6 R53): last name
 //! components, one rendering for a constructor, a call and an extern, no
-//! measure clause, one literal kind. The parity harness checks each closure
+//! measure clause, one literal kind, the comparison primitives under V3's
+//! spelling (`= < <=`; the toolchain's sources still write `int_eq lt le`,
+//! v3/LANGUAGE.md §8.4 slice 3.17 rule 5). The parity harness checks each closure
 //! for one declaration per short name per kind before comparing, so byte
 //! agreement is evidence where the projection is injective.
 
@@ -122,7 +124,9 @@ fn print(e: &Expr) -> String {
         Expr::IntLit(n) => n.to_string(),
         Expr::SymLit(s) => format!("'{}", s),
         Expr::Ctor(n, args) | Expr::Call(n, args) => {
-            let mut s = format!("({}", n);
+            // a comparison primitive prints under V3's spelling, as the V3
+            // reader's table names it, whichever the source wrote
+            let mut s = format!("({}", crate::prim::canonical_prim(n));
             for a in args {
                 s.push(' ');
                 s.push_str(&print(a));

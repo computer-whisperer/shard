@@ -14,8 +14,17 @@
 ;;; nested values first. Chosen over v2's `FIELD_of`/`with_FIELD` at the first real file
 ;;; (§13 item 42): four records of the loader shared field names and six accessor names
 ;;; collided with functions of the closure. The bootstrap expands the same way (rust_bootstrap/src/load.rs
-;;; expand_records) and frontend parity ties the two. No law family at Stage 0: a fn has no
-;;; L meaning yet (§0); v2's laws return with Stage 1's typing.
+;;; expand_records) and frontend parity ties the two. No law family is generated: since
+;;; Stage 1 the accessors and updaters are definitions, and v2's laws are `Eq.refl` over a
+;;; local (pin record_laws; §8.4 slice 3.17 rule 4).
+;;;
+;;; `make` and `with` also reach a `(structure NAME () (FIELD TYPE)…)` of the file — the L
+;;; form whose later fields' types may mention earlier ones: `make` is `NAME.mk` on the
+;;; values in field order, `with` is `NAME.mk` on each field's entry or its projection of E.
+;;; A field kept whose type mentions an updated one is the refusal `dependent_update`,
+;;; naming the field to supply — never an inserted cast (GPT-6 R60). A structure with
+;;; parameters is out of the sugar's reach (its constructor takes them): `record_make` /
+;;; `record_with` with that pointer. The bootstrap reads no `structure` (an L form).
 
 (import "sexpr.shard")
 (import "util.shard")
@@ -28,12 +37,15 @@
 (use kernel.sexpr.SExpr)
 (use kernel.util)
 
-;; a record: its name, its type parameters, its constructor, its fields in order
-(type RecDef (RecDef Symbol (List Symbol) Symbol (List (Pair Symbol SExpr))))
-(fn rec_name ((r RecDef)) Symbol (match r ((RecDef n _ _ _) n)))
-(fn rec_params ((r RecDef)) (List Symbol) (match r ((RecDef _ ps _ _) ps)))
-(fn rec_ctor ((r RecDef)) Symbol (match r ((RecDef _ _ c _) c)))
-(fn rec_fields ((r RecDef)) (List (Pair Symbol SExpr)) (match r ((RecDef _ _ _ fs) fs)))
+;; a record: its name, its type parameters, its constructor, its fields in order, its kind —
+;; a `record`, or a `structure` of the file (with parameters or without)
+(type RecKind (KRecord) (KStruct Bool))
+(type RecDef (RecDef Symbol (List Symbol) Symbol (List (Pair Symbol SExpr)) RecKind))
+(fn rec_name ((r RecDef)) Symbol (match r ((RecDef n _ _ _ _) n)))
+(fn rec_params ((r RecDef)) (List Symbol) (match r ((RecDef _ ps _ _ _) ps)))
+(fn rec_ctor ((r RecDef)) Symbol (match r ((RecDef _ _ c _ _) c)))
+(fn rec_fields ((r RecDef)) (List (Pair Symbol SExpr)) (match r ((RecDef _ _ _ fs _) fs)))
+(fn rec_kind ((r RecDef)) RecKind (match r ((RecDef _ _ _ _ k) k)))
 
 (type RxRes (RxOk (List SExpr)) (RxErr Symbol (List Int)))
 (type RdRes (RdOk (List RecDef)) (RdErr Symbol (List Int)))
@@ -59,7 +71,23 @@
        (match (parse_record s)
          ((RdErr e m) (RdErr e m))
          ((RdOk rs) (collect_records r (append rs acc))))
-       (collect_records r acc)))))
+       (if (is_head s (quote structure))
+         (match (parse_structure s) ((Some rc) (collect_records r (Cons rc acc))) (None (collect_records r acc)))
+         (collect_records r acc))))))
+;; a structure of the file, for make and with: its constructor NAME.mk, its fields with their
+;; types' source. A shape this does not read is the reader's refusal, not this table's
+(fn parse_structure ((s SExpr)) (Option RecDef)
+  (match s
+    ((SList (Cons _ (Cons hd (Cons (SList bs) fields))))
+     (match (structure_name hd)
+       (None None)
+       ((Some n)
+        (match (rec_entries fields Nil)
+          (None None)
+          ((Some fs) (Some (RecDef n Nil (sym_of_chars (append (chars_of_sym n) ".mk")) fs (KStruct (match bs (Nil False) (_ True))))))))))
+    (_ None)))
+(fn structure_name ((hd SExpr)) (Option Symbol)
+  (match hd ((SSym n) (Some n)) ((SSymU n _) (Some n)) (_ None)))
 (fn parse_record ((s SExpr)) RdRes
   (match s
     ((SList (Cons _ (Cons hd entries)))
@@ -90,7 +118,7 @@
     (None (RdErr (quote record_form) (append (chars_of_sym n) ": a field is (FIELD TYPE), FIELD a symbol other than ctor, at least one")))
     ((Some fs)
      (if (dup_field fs) (RdErr (quote record_form) (append (chars_of_sym n) ": a field twice"))
-       (RdOk (list (RecDef n ps ctor fs)))))))
+       (RdOk (list (RecDef n ps ctor fs KRecord)))))))
 (fn rec_entries ((entries (List SExpr)) (acc (List (Pair Symbol SExpr)))) (Option (List (Pair Symbol SExpr)))
   (measure (struct entries))
   (match entries
@@ -203,6 +231,7 @@
     ((Cons _ (Cons (SSym n) entries))
      (match (find_record recs n)
        (None (RwErr (quote record_make) (append (chars_of_sym n) ": no such record in this file")))
+       ((Some (RecDef _ _ _ _ (KStruct True))) (RwErr (quote record_make) (append (chars_of_sym n) ": a structure with parameters — apply its constructor to them and the fields")))
        ((Some rc)
         (match (entry_pairs entries Nil)
           (None (RwErr (quote record_make) (append (chars_of_sym n) ": an entry is (FIELD V)")))
@@ -238,11 +267,61 @@
     ((Cons _ (Cons (SSym n) (Cons e entries)))
      (match (find_record recs n)
        (None (RwErr (quote record_with) (append (chars_of_sym n) ": no such record in this file")))
+       ((Some (RecDef _ _ _ _ (KStruct True))) (RwErr (quote record_with) (append (chars_of_sym n) ": a structure with parameters — apply its constructor to them and the fields")))
        ((Some rc)
         (match (entry_pairs entries Nil)
           (None (RwErr (quote record_with) "(with NAME E (FIELD V)…)"))
-          ((Some es) (if (all_fields rc es) (RwOk (chain rc es e)) (RwErr (quote record_with) (append (chars_of_sym n) ": no such field"))))))))
+          ((Some es)
+           (if (bool_not (all_fields rc es)) (RwErr (quote record_with) (append (chars_of_sym n) ": no such field"))
+             (match (rec_kind rc)
+               (KRecord (RwOk (chain rc es e)))
+               ((KStruct _) (struct_with rc e es)))))))))
     (_ (RwErr (quote record_with) "(with NAME E (FIELD V)…)"))))
+;; (with NAME E (FIELD V)…) over a structure → (NAME.mk A…): a field's entry, else its
+;; projection of E — E bound once when it is not a name. A field kept whose type mentions an
+;; updated one would need a cast, which the sugar never inserts: dependent_update
+(fn struct_with ((rc RecDef) (e SExpr) (es (List (Pair Symbol SExpr)))) RwRes
+  (if (dup_field es) (RwErr (quote record_with) (append (chars_of_sym (rec_name rc)) ": a field twice"))
+    (match (stale_field (rec_fields rc) es)
+      ((Some (Pair g f))
+       (RwErr (quote dependent_update)
+         (append (chars_of_sym (rec_name rc)) (append ": the type of " (append (chars_of_sym g) (append " mentions the updated " (append (chars_of_sym f)
+           (append " — supply " (append (chars_of_sym g) " too: no cast is inserted (LANGUAGE.md §8.4 slice 3.17 rule 4)")))))))))
+      (None
+       (match e
+         ((SSym _) (RwOk (SList (Cons (SSym (rec_ctor rc)) (struct_args rc (rec_fields rc) es e)))))
+         (_ (RwOk (SList (list (SSym (quote let)) (SList (list (SList (list (with_subject) e))))
+                               (SList (Cons (SSym (rec_ctor rc)) (struct_args rc (rec_fields rc) es (with_subject)))))))))))))
+;; the updated value's name where E is bound: no source symbol holds a space
+(fn with_subject () SExpr (SSym (sym_of_chars "with subject")))
+(fn struct_args ((rc RecDef) (fs (List (Pair Symbol SExpr))) (es (List (Pair Symbol SExpr))) (e SExpr)) (List SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (Pair f _) r)
+     (Cons (match (lookup_once es f) ((Some v) v) (None (SList (list (dotted rc (chars_of_sym f)) e))))
+           (struct_args rc r es e)))))
+;; the first field kept whose type's source names an updated field, with that field
+(fn stale_field ((fs (List (Pair Symbol SExpr))) (es (List (Pair Symbol SExpr)))) (Option (Pair Symbol Symbol))
+  (measure (struct fs))
+  (match fs
+    (Nil None)
+    ((Cons (Pair g t) r)
+     (if (field_in es g) (stale_field r es)
+       (match (field_mentioned es t) ((Some f) (Some (Pair g f))) (None (stale_field r es)))))))
+(fn field_mentioned ((es (List (Pair Symbol SExpr))) (t SExpr)) (Option Symbol)
+  (measure (struct es))
+  (match es (Nil None) ((Cons (Pair f _) r) (if (sexpr_mentions t f) (Some f) (field_mentioned r t)))))
+(fn sexpr_mentions ((t SExpr) (f Symbol)) Bool
+  (measure (struct t))
+  (match t
+    ((SSym x) (sym_eq x f))
+    ((SSymU x _) (sym_eq x f))
+    ((SList xs) (any_mentions xs f))
+    (_ False)))
+(fn any_mentions ((xs (List SExpr)) (f Symbol)) Bool
+  (measure (struct xs))
+  (match xs (Nil False) ((Cons x r) (if (sexpr_mentions x f) True (any_mentions r f)))))
 (fn all_fields ((rc RecDef) (es (List (Pair Symbol SExpr)))) Bool
   (measure (struct es))
   (match es (Nil True) ((Cons (Pair f _) r) (if (field_in (rec_fields rc) f) (all_fields rc r) False))))

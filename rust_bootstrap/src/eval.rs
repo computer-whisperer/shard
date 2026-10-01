@@ -511,9 +511,9 @@ impl<'a> Lowerer<'a> {
                     Some(&i) => IExpr::CallFn(i, largs),
                     None => {
                         let tag = match n.as_str() {
-                            "int_eq" => PrimTag::IntEq,
-                            "le" => PrimTag::Le,
-                            "lt" => PrimTag::Lt,
+                            "int_eq" | "=" => PrimTag::IntEq,
+                            "le" | "<=" => PrimTag::Le,
+                            "lt" | "<" => PrimTag::Lt,
                             "+" => PrimTag::Add,
                             "-" => PrimTag::Sub,
                             "*" => PrimTag::Mul,
@@ -536,9 +536,9 @@ impl<'a> Lowerer<'a> {
                 if let Expr::Call(n, args) = &**c {
                     if args.len() == 2 && !self.fnidx.contains_key(n.as_str()) {
                         let tag = match n.as_str() {
-                            "int_eq" => Some(PrimTag::IntEq),
-                            "lt" => Some(PrimTag::Lt),
-                            "le" => Some(PrimTag::Le),
+                            "int_eq" | "=" => Some(PrimTag::IntEq),
+                            "lt" | "<" => Some(PrimTag::Lt),
+                            "le" | "<=" => Some(PrimTag::Le),
                             "sym_eq" => Some(PrimTag::SymEq),
                             _ => None,
                         };

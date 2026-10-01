@@ -723,15 +723,36 @@ included) — v3 5,168 s, 29 entrypoints, `define_test` 5 checks, parity
 byte-identical over 27 closures in 322 s, replay 2,449 s at 32.2 GB,
 T0 accepted 57,977, 20 pinned, closures identical.
 
-**Slice 3.17's design on disk, for ruling (2026-09-19)** —
-`LANGUAGE.md` §8.4, §13 item 50. Probes first: records and their laws
-already work on the typed route (`Eq.refl` over a local), `< <= =`
-already elaborate, a literal pattern does not, and landing 3's
-as-built misnamed calc's `show_nat` (no `"…"`: `Int.ediv` past its
-Init prefix; corrected). The leans: `"…"`, symbols and `Name` literals
-move to slice 3.18 with the flip; literal patterns; the rename for the
-files no v2 tool reads, `v3/kernel/**` later; a fresh-name library;
-`dependent_update`; a registry row for `Int.natAbs`. No code yet.
+**Slice 3.17 landed (2026-10-01) — the porting facilities**
+(`LANGUAGE.md` §8.4's as-built, §13 item 50; design 2026-09-19, scoped
+by probes; the user ruled the three leans the same day it was built).
+`"…"`, symbols and `Name` literals in a `fn` body moved to slice 3.18
+with the flip. What landed:
+
+- **Numeral rows on the typed route** — `(match n (0 a) (5 b) (_ c))`
+  at `Nat` and `Int` is the `if` chain on the type's decision, the
+  scrutinee once; defined, and the rows compute in K. Built
+  differently from the design's text (which read a `Nat` numeral as a
+  constructor pattern); the law records why.
+- **Records** — v2's law family is `Eq.refl` with no generator (pin
+  `record_laws`); `make` and `with` reach a parameterless `structure`,
+  and a dependent field kept across an update is refused
+  (`dependent_update`).
+- **E's comparisons are `= < <=`** — refused under the old spellings
+  (`renamed_primitive`) outside the toolchain's own sources; `v3/std`,
+  `v3/examples` and `v3/pins` migrated by `v3/tools/rename_cmp.py` (27
+  sites, 16 files); `v3/kernel/**` keeps `int_eq lt le` until route
+  1's chain is V3's own. The bootstrap reads both and dumps one.
+- **`v3/std/fresh.shard`** — the fresh-name supply where `gen_fresh`
+  was: `Fresh.next`, and two successive names differ.
+- **calc's app file wholly defined** — `Int.natAbs` has a registry
+  row, so `show_nat` is defined by its `Nat` measure with one pending
+  descent obligation; 17 of 17, nothing `RUNNABLE`.
+
+Local gates: 146 loader pins, `define_test` 7 checks, calc
+byte-identical over 21 inputs, parity byte-identical over 27 closures
+(104,232 declarations), the full suite's 29 entrypoints, the
+bootstrap's 46 unit tests. Route 1 is CI's.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

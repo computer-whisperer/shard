@@ -10,6 +10,14 @@
 //! Bool". A future module-header directive will let the bool ctor
 //! names be configurable.
 //!
+//! `=`, `<`, `<=` are V3's spellings of `int_eq`, `lt`, `le`
+//! (v3/LANGUAGE.md §8.4, slice 3.17 rule 5): this host runs both trees,
+//! so it reads both. They are native-only names — kernel/reduce.shard's
+//! table does not carry them, and no old-tree `fn` body writes them
+//! (`=` there is the claim language's, which this table never sees).
+//! lib.rs's `NATIVE_ALIASES` is their spec list, swept against the names
+//! they stand for. `canonical_prim` is the one spelling `eval dump` prints.
+//!
 //! `gen_fresh` is the documented effectful primitive — REVISIT.md,
 //! "Fresh-symbol generation as an effectful primitive". Implemented
 //! with a global atomic counter; sequential and unique within a
@@ -20,6 +28,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use num_traits::{Signed, ToPrimitive, Zero};
 
 use crate::ast::{Expr, IntLit as Int, Symbol};
+
+/// The spelling `eval dump` prints for a comparison primitive: V3's
+/// (the E table's identity), whichever the source wrote.
+pub fn canonical_prim(name: &str) -> &str {
+    match name {
+        "int_eq" => "=",
+        "lt" => "<",
+        "le" => "<=",
+        other => other,
+    }
+}
 
 /// Try to apply a primitive to fully-reduced args. Returns `Some(e)`
 /// if `name` is a known primitive and the args fit the expected
@@ -64,10 +83,10 @@ pub fn try_apply(name: &str, args: &[Expr]) -> Option<Expr> {
         ("bshr", [IntLit(a), IntLit(b)]) if shift_amount(b).is_some() => Some(IntLit(a >> shift_amount(b)?)),
 
         // Equality / comparison — return user-defined `Bool` ctor.
-        ("int_eq", [IntLit(a), IntLit(b)]) => Some(bool_ctor(a == b)),
+        ("int_eq" | "=", [IntLit(a), IntLit(b)]) => Some(bool_ctor(a == b)),
         ("sym_eq", [SymLit(a), SymLit(b)]) => Some(bool_ctor(a == b)),
-        ("lt",     [IntLit(a), IntLit(b)]) => Some(bool_ctor(a < b)),
-        ("le",     [IntLit(a), IntLit(b)]) => Some(bool_ctor(a <= b)),
+        ("lt" | "<",   [IntLit(a), IntLit(b)]) => Some(bool_ctor(a < b)),
+        ("le" | "<=",  [IntLit(a), IntLit(b)]) => Some(bool_ctor(a <= b)),
 
         // Fresh symbol generation. Zero-arity; each call yields a
         // unique Symbol of the form "_fresh<N>". Effectful.

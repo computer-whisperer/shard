@@ -2375,6 +2375,54 @@ is `docs/FOUNDATION.md` §5.3.
   `v3/kernel/**` on route 1 names the three primitives at 73 sites in
   10 files of `kernel/` and 3 in `codegen.shard`. Leans and the three
   rulings wanted are in the design.
+- **2026-10-01 — slice 3.17 ruled and built: the porting facilities**
+  (`LANGUAGE.md` §8.4's as-built, §13 item 50). The user agreed with
+  the three leans (`"…"`, symbols and `Name` literals to slice 3.18;
+  the rename staged). Built in one session, each part probed through
+  the loader before its pin was written:
+  - *Numeral rows.* `elab_match_lit` rewrites a match with a numeral
+    row to the `if` chain over the scrutinee's name. Probe: `code`,
+    `kind` (`Nat`), `of_sum` (a computed scrutinee, bound by a `let`)
+    `DEFINE`d; `(= (code 9) 30)` and four more by `Eq.refl`; dumps
+    `(if (= #0 0) 10 (if (= #0 5) 20 30))`. **Reversed from the
+    design's text** (a `Nat` numeral as a constructor pattern through
+    the matcher, read back as E's literal row): a `succ` chain as deep
+    as the numeral, nothing E can run, and a read-back that is shape
+    recognition. Refusals: `match_not_exhaustive`, `literal_rows`,
+    `pattern_type` — the last a tightening: `(match b (0 1) (_ 2))` at
+    a `Bool` was `RUNNABLE` (the classifier never typed a literal row)
+    and is refused where the signature reads.
+  - *Records.* The five laws by `Eq.refl` (pin `record_laws`).
+    `make`/`with` over a `structure`: `Span` with `ok : lo ≤ hi` —
+    `(with Span s (hi h) (ok p))` accepted and `Span.lo` of it is the
+    subject's by `Eq.refl`; `(with Span s (hi h))` is `dependent_update`
+    naming `ok`. A structure with parameters: `record_make` (limit).
+  - *The rename.* E's table is `= < <=`; 27 sites in 16 files migrated
+    by `v3/tools/rename_cmp.py`; `renamed_primitive` from both routes
+    (pins `rename_refused`, `rename_refused_e`); modules under
+    `kernel` keep the old spellings. The bootstrap: `prim.rs` and
+    `eval.rs` read both, `eval dump` prints V3's. **Found:** the
+    native table is tied to `kernel/reduce.shard`'s by a conformance
+    sweep whose name lists are the spec — the new names are
+    native-only, so they got their own spec list (`NATIVE_ALIASES`)
+    and a sweep against the names they stand for over the full pair
+    matrix (`docs/TCB.md` item 5). The old kernel is untouched.
+  - *Fresh names.* `v3/std/fresh.shard`, generic in the prefix type:
+    14 functions defined, `Fresh.next_ne` accepted with no axiom on
+    the first load (import through `Nat.succ_ne_self`, 1,445
+    declarations).
+  - *The E-first-by-body set.* `Int.natAbs` as a registry expression
+    row; calc's app file imports through `InvImage.wf`: 17 of 17
+    defined, `show_nat.dec_1` pending. `has_eq` is `no_l_meaning`
+    (a view's `sig fn` hit was falling through to "not a function");
+    `confusion_reachable` stays `no_l_identity` — it quotes symbols,
+    which the scoping entry above missed.
+  - *Gates, local:* 146 loader pins (14 new; `match_literal`
+    narrowed), `define_test` 7 checks, calc byte-identical over 21
+    inputs (port 18 s, old tree 154 s), parity byte-identical over 27
+    closures and 104,232 declarations in 132 s, route 2, K's clients
+    (7 in 55 s), the suite's 29 entrypoints with 0 failed, the
+    bootstrap's 46 unit tests. Route 1 and the corpus are CI's.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

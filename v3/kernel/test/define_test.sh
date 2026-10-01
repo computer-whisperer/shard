@@ -44,5 +44,17 @@ out=$("$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" v3/pins/loader
 if [ "$(echo "$out" | grep -c '^DISCHARGE .* proved')" -ne 3 ] || echo "$out" | grep -q '^PENDING' || ! echo "$out" | grep -q '^ACCEPT .*main.count_self .* params=$'; then
   echo "define_test: discharge_measure: the account is not empty after the discharges"; echo "$out" | grep -E '^(DISCHARGE|PENDING|REFUSE|READ-ERROR)|count_self' | head -8; fail=$((fail+1))
 fi
-echo "define_test: 5 checks, $fail failed"
+# calc's app file (slice 3.17 rule 7): show_nat defined by its Nat measure through Int.natAbs — the
+# registry's expression row erases the measure —, its descent the one pending obligation; nothing RUNNABLE
+out=$("$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" v3/examples/calc/calc_app.shard 2>&1)
+if ! echo "$out" | grep -q '^DEFINE examples.calc.calc_app.show_nat equations= pending=examples.calc.calc_app.show_nat$' \
+   || ! echo "$out" | grep -q 'runnable 0  refused 0  pending 1  realized 0  defined 17  errors 0'; then
+  echo "define_test: calc_app is not 17 of 17 defined with show_nat pending"; echo "$out" | grep -E '^(RUNNABLE|REFUSE|PENDING|READ-ERROR|LOAD:)' | head -8; fail=$((fail+1))
+fi
+# the fresh-name supply (slice 3.17 rule 6): every function defined, two successive names differ
+check v3/std/fresh.shard \
+  'DEFINE std.fresh.Fresh.next equations=std.fresh.Fresh.next.eq_1' \
+  'ACCEPT std.fresh.Fresh.next_ne .* axioms= ' \
+  'runnable 0  refused 0  pending 0  realized 0  defined 14  errors 0'
+echo "define_test: 7 checks, $fail failed"
 exit "$fail"

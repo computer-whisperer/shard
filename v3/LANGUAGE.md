@@ -339,7 +339,7 @@ common case).
 | `(import …)`, `(use …)` | §3.1 | the scope |
 | `(inductive NAME.{u…} BINDERS TYPE (CTOR TYPE)…)` | Lean's `inductive`: level parameters on the name, parameter binders, the type after the parameters (`(Sort …)` or a `forall` over indices), each constructor's full type after the parameters | K: `InductDecl` |
 | `(type (NAME T…) (CTOR FIELD-TYPE…)…)` | today's E data form, sugar for an `inductive` with parameters `T : Type`, result `Type`, non-dependent fields; E-eligible by construction | K (`InductDecl`) **and** E (`EInd`) |
-| `(record NAME (ctor CTOR)? (FIELD TYPE)+)` | named-field products (v2's form, docs/LANGUAGE.md "Records"; slice 3.9, §13 item 42): loader-level sugar expanded before any form is read — the positional `(type NAME (CTOR TYPE…))`, CTOR defaulting to `MkNAME`, an accessor `NAME.FIELD` and an updater `NAME.with_FIELD` (value first) per field in the record's namespace, which the file opens as any type's (item 7): `(FIELD r)` bare where no other opened record has the field, `(NAME.FIELD r)` always; NAME may be `(NAME P…)`, the generated fns then binding `(P Type)` first. `(make NAME (FIELD V)…)` — every field exactly once, order-free — and `(with NAME E (FIELD V)…)` — chained updaters, a later entry outermost — both against the current file's records, rewritten in every form of the file, nested values first (`kernel/record.shard`; the bootstrap's `expand_records` the twin, parity the tie). No law family at Stage 0: a fn has no L meaning; v2's laws return with Stage 1. Layout: as `type`'s until CANON's phase-6 gate | E: as the forms it expands to |
+| `(record NAME (ctor CTOR)? (FIELD TYPE)+)` | named-field products (v2's form, docs/LANGUAGE.md "Records"; slice 3.9, §13 item 42): loader-level sugar expanded before any form is read — the positional `(type NAME (CTOR TYPE…))`, CTOR defaulting to `MkNAME`, an accessor `NAME.FIELD` and an updater `NAME.with_FIELD` (value first) per field in the record's namespace, which the file opens as any type's (item 7): `(FIELD r)` bare where no other opened record has the field, `(NAME.FIELD r)` always; NAME may be `(NAME P…)`, the generated fns then binding `(P Type)` first. `(make NAME (FIELD V)…)` — every field exactly once, order-free — and `(with NAME E (FIELD V)…)` — chained updaters, a later entry outermost — both against the current file's records, rewritten in every form of the file, nested values first (`kernel/record.shard`; the bootstrap's `expand_records` the twin, parity the tie). No law family is generated: since Stage 1 the accessors and updaters are definitions and v2's laws are `Eq.refl` over a local (pin `record_laws`). `make` and `with` also reach a parameterless `(structure NAME () (FIELD TYPE)…)` of the file — `NAME.mk` on the values in field order, on each field's entry or its projection of `E` for `with`; a field kept whose type mentions an updated one is the refusal `dependent_update` (§8.4 slice 3.17 rule 4). Layout: as `type`'s until CANON's phase-6 gate | E: as the forms it expands to |
 | `(structure NAME.{u…} BINDERS (FIELD TYPE)…)` | one constructor `NAME.mk`; projections `NAME.FIELD` generated as `def`s over `proj` (Lean's projections are `Expr.proj` definitions); fields dependent on earlier fields | K |
 | `(def NAME.{u…} BINDERS TYPE VALUE)` | an L definition; hints `regular` at height 1 + the greatest height it references | K: `DefnDecl` |
 | `(abbrev …)` | as `def` with hint `abbrev` | K |
@@ -394,7 +394,7 @@ TERM ::= NAME                          ; a bound variable (innermost binding win
        | NUMERAL                       ; Nat, or Int at an expected Int (§5.3)
        | "…"                           ; K's String literal
        | (proj S i TERM)               ; the i-th field of structure S (0-based)
-OP   ::= + - * / mod % lt < le <= > >= int_eq = != and or iff
+OP   ::= + - * / mod % < <= > >= = != and or iff   ; `lt le int_eq` for `< <= =` in the toolchain's own sources only (§8.4 slice 3.17 rule 5)
 PAT  ::= _ | NAME | (CTOR PAT…)        ; NAME is the scrutinee type's constructor of that name when it has no fields, else a variable
 ```
 
@@ -450,10 +450,10 @@ is `(Sort (succ u))`. A bound name shadows a constant.
   where a proposition is expected is `b = true`.
 - **The operator spellings** take the naming-law identity at the type
   of their first operand — of the first that is not a numeral, so
-  `(le 48 c)` is `c`'s (slice 3.16) — `+ - * / mod` at `Nat` are `Nat.add sub
-  mul div mod`, at `Int` `Int.add sub mul div emod`; `lt le` (also
-  `< <=`) `Nat.lt le` / `Int.lt le`, `> >=` the flipped ones;
-  `int_eq`/`=` is `Eq`, `!=` is `Ne`, `iff` is `Iff` (their type the
+  `(<= 48 c)` is `c`'s (slice 3.16) — `+ - * / mod` at `Nat` are `Nat.add sub
+  mul div mod`, at `Int` `Int.add sub mul div emod`; `< <=` are
+  `Nat.lt le` / `Int.lt le`, `> >=` the flipped ones;
+  `=` is `Eq`, `!=` is `Ne`, `iff` is `Iff` (their type the
   implicit argument); `and or not` are `And Or Not` on propositions
   and Init's `and or not` on `Bool`s. In L nothing runs, so `-` `/`
   `mod` at `Nat` have their identities here where E refuses them
@@ -654,7 +654,8 @@ bootstrap's `prim.rs` operation for operation (execution parity, §10).
 At phase 2 the table is the bootstrap's — `+ - * / mod tmod ediv band
 bor bxor bshl bshr int_eq sym_eq lt le sym_of_chars chars_of_sym`
 (`docs/LANGUAGE.md` §8; its effectful `gen_fresh` is dropped, §12.1:
-law §4.7 has no effectful primitive) — under their profile names, plus the naming-law spellings of law §10.3 as **distinct**
+law §4.7 has no effectful primitive) — under their profile names
+(the three comparisons are `= < <=` since slice 3.17, §8.4), plus the naming-law spellings of law §10.3 as **distinct**
 identities where the meaning differs: `Int.tdiv` and `Int.tmod` total
 with `x / 0 = 0` and `tmod x 0 = x`, `Int.ediv`/`Int.emod` likewise,
 `Nat.sub` saturating, `Nat.land lor xor shiftLeft shiftRight` on
@@ -1410,8 +1411,9 @@ carried (§8.2).
    is the tie, as for every rule the bootstrap under-checks: the
    bootstrap is E's executor, the V3 reader its gate (§10).
 5. **One primitive table.** The operator spellings — `+ - * / mod tmod
-   ediv band bor bxor bshl bshr int_eq sym_eq lt le sym_of_chars
-   chars_of_sym` — are E's `Int` and `Symbol` primitives in every file
+   ediv band bor bxor bshl bshr = sym_eq < <= sym_of_chars
+   chars_of_sym` (`int_eq lt le` before slice 3.17, and still in the
+   toolchain's own sources; §8.4) — are E's `Int` and `Symbol` primitives in every file
    (§2 lexes them), beside the naming-law identities (`Nat.add`,
    `Int.tdiv`, …; §6.4). Their L identities are assigned at phase 3
    with law §10.3's table (`/` stuck at zero stays a distinct entry
@@ -1761,8 +1763,8 @@ parity, route 2's byte-tie and T0 green:
 | 3.14 | deeper structural recursion by course-of-values (`below`/`brecOn` generated per inductive, as Lean's elaborator does); `(measure E)` to `WellFounded.fix`, the measure a reported obligation; mutual recursion | every ported `fn` with a measure — a quarter of the old tree's 13,229 |
 | 3.15 | the L-side ergonomics of law §5.1–5.2: implicit arguments, universe inference, the numeral rule with the one `Nat → Int` coercion, `noConfusion`/`injection` | `def` and `theorem` authors |
 | 3.16 | one front end (reordered 2026-09-18; the design below): a `fn` body through the elaborator into a pre-definition, its E program by erasure and its K value by the 3.13–3.14 compilation; matchers, so a `match` in a statement; `Bool` against `Decidable`; constructors by expected type; list literals | calc's spec file wholly defined (13 of its 25 functions are `RUNNABLE` at the slice's opening) |
-| 3.17 | the porting facilities of §11's R60 row: record update and order-free construction, `Name` literals, symbols and `"…"` in a body, the fresh-name convention, E's rename of `lt le int_eq` with the tool migration | the broad port |
-| 3.18 | the byte and text adapters (`String`'s E realization, item 37's flip; the wire's type ruled first); deriving under a declared policy | the first host-facing S library |
+| 3.17 | the porting facilities of §11's R60 row (narrowed by ruling 2026-10-01, item 50): the record laws and `make`/`with` over a `structure` with the dependent-update refusal, numeral rows on the typed route, the fresh-name supply, E's rename of `lt le int_eq` to `< <= =` staged by the tool (the files no v2 tool reads now, `v3/kernel/**` with route 1's chain) | the broad port |
+| 3.18 | the byte and text adapters (`String`'s E realization, item 37's flip; the wire's type ruled first); with the flip, `"…"`, symbols and `Name` literals in a `fn` body (moved from 3.17); deriving under a declared policy | the first host-facing S library |
 | 3.19+ | I: the node vocabulary (law §7.2), `elaborate(I)` to P, the goal-graph API as E functions, `by` blocks, the core tactics; then `tools/prove` and the engine as I producers | calc's 100 claims; the coverage arc's B-1c |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
@@ -1818,7 +1820,8 @@ parity, route 2's byte-tie and T0 green:
 3. **Operator spellings get L identities by operand type, only where
    `ev` already agrees with K** (settles item 38): `+` and `*` at
    `Nat` are `Nat.add` and `Nat.mul`; `+`, `-` and `*` at `Int` are
-   `Int.add`, `Int.sub` and `Int.mul`; `int_eq`, `lt` and `le` are
+   `Int.add`, `Int.sub` and `Int.mul`; `int_eq`, `lt` and `le`
+   (`=`, `<`, `<=` since slice 3.17) are
    `Nat.decEq`/`Nat.decLt`/`Nat.decLe` at `Nat` and `Int.decEq`/
    `Int.decLt`/`Int.decLe` at `Int`. `-` at `Nat` is refused
    (`nat_operator`, pointer `Nat.sub`): `ev` computes the integer
@@ -2298,10 +2301,11 @@ system. There is no new term language: the body is `Expr`.
 11. **The facilities that are small once there is one place for
     them:** `(list a b c)` by the expected type's `List` (no expected
     type: `unsolved_implicit`, never a default element type); a
-    negative numeral is already §5.3's. `"…"` in a `fn` body, symbols,
-    `Name` literals, record update, the fresh-name convention and E's
-    rename of `lt le int_eq` are slice 3.17; the byte and text
-    adapters and deriving are slice 3.18, the wire's type ruled first.
+    negative numeral is already §5.3's. Record update, the fresh-name
+    convention and E's rename of `lt le int_eq` are slice 3.17; the
+    byte and text adapters, deriving and — moved there by item 50's
+    ruling — `"…"` in a `fn` body, symbols and `Name` literals are
+    slice 3.18, the wire's type ruled first.
     The three consumers after it — a branch-local refinement, a
     dependent-safe record update, a contextual proof step — use the
     `PreDef` record, the branch scopes of rule 2 and the outcomes of
@@ -2500,8 +2504,10 @@ has.
   first cut of this sentence said a `"…"`, which the function does not
   contain; corrected 2026-09-19 at slice 3.17's scoping),
   `kernel.define.has_eq` and `confusion_reachable` (K's view's
-  `env_find` answers an E-only type); slice 3.17's design below says
-  what empties it and what does not. A
+  `env_find` answers an E-only type); slice 3.17 below says
+  what empties it and what does not (as built there: `show_nat` is
+  defined; `has_eq` reads `no_l_meaning`; `confusion_reachable`
+  quotes symbols and stays `no_l_identity` until slice 3.18). A
   **callee-local**: a callee with a program and no K constant whose
   signature elaborates — `RUNNABLE` on the typed route, or E-first
   for its body alone — is bound, under the name the body writes, to a
@@ -2628,9 +2634,10 @@ has.
   2's narrower guarantee, unchanged); mutual recursion is not
   compiled; dependency-directed wake-up is deferred (rule 8).
 
-**Slice 3.17 — the porting facilities** (DESIGN for ruling,
-2026-09-19; scoped by probes through the loader before any code; §13
-item 50). The slices table gives this slice R60's row (§11): record
+**Slice 3.17 — the porting facilities** (design 2026-09-19, scoped by
+probes through the loader before any code; RULED 2026-10-01 — the
+user agreed with the three leans, rules 1, 2 and 5; built the same
+day, the as-built below; §13 item 50). The slices table gives this slice R60's row (§11): record
 update and order-free construction, `Name` literals, symbols and `"…"`
 in a body, the fresh-name convention, E's rename of `lt le int_eq`.
 Measured against the tree after slice 3.16, the row splits into what
@@ -2676,7 +2683,9 @@ already works, what is small, and two entries that do not belong here.
   claim language's equality. 943 sites in 60 files of `v3/` would
   move.
 
-*The proposed rules* (each a lean; the rulings wanted are 1, 2 and 5):
+*The rules* (the design's leans, ruled 2026-10-01; rule 3 was built
+differently from this text and is rewritten in place, the first
+reading kept as rejected):
 
 1. **`"…"` in a `fn` body moves to slice 3.18, with the flip.** Since
    slice 3.16 a `fn` body is an L position, and in an L position
@@ -2697,13 +2706,22 @@ already works, what is small, and two entries that do not belong here.
    node, declaration or environment identity to forge (`name.shard`
    carries none). Rejected: a native `structure Symbol` (reverses
    item 36 for no consumer).
-3. **Literal patterns on the typed route.** At `Nat` a numeral
-   pattern is the constructor pattern Lean reads it as (`0` =
-   `Nat.zero`, `k+1` = `succ`), through the matcher as any pattern; at
-   `Int` and any type with a decision, a row is the `ite` on the
-   decision before the rows below it. The erasure reads both back as
-   E's literal row, so the program is the classifier's. Exhaustiveness
-   needs a catch-all row (`match_not_exhaustive` otherwise).
+3. **Numeral rows on the typed route** are Lean's value patterns, one
+   mechanism at `Nat` and at `Int`: the scrutinee once, then `(if (= x
+   K) BODY …)` per row in order — the `ite` on the type's decision, as
+   any `if` is read — and the last row `_` or a name for the
+   scrutinee. No matcher is generated, and the erasure is the `if`
+   chain (`(if (= #0 0) 10 (if (= #0 5) 20 30))`), the scrutinee
+   bound by a `let` when it is not a local. A match of numeral rows
+   with no last row is `match_not_exhaustive`. *Rejected, the design's
+   first reading:* a numeral at `Nat` as the constructor pattern
+   through the matcher, both types read back as E's literal row —
+   because a numeral is then a `succ` chain as deep as its value (48
+   nested `casesOn` for an ASCII code, against the pattern reader's
+   depth), E has no successor pattern so the constructor reading buys
+   a program nothing, and reading an `ite` chain back as a literal
+   row is recognition of a shape a user also writes by hand. The
+   classifier's literal rows stay what an E-first function runs.
 4. **Records: the first example is the deliverable.** A pin
    (`record_laws`) with the three probes above as theorems; `make` and
    `with` over a `structure` whose later field's type mentions an
@@ -2746,6 +2764,89 @@ already works, what is small, and two entries that do not belong here.
 `record_laws`, `dependent_update`, `rename_refused`), `define_test`
 with calc's app file added, calc's differential and frontend parity
 byte-identical, the full suite, CI for route 1.
+
+**Slice 3.17 as built** (2026-10-01):
+
+- **Rule 3.** `elab.shard`'s `elab_match_lit`: a `match` with a
+  numeral row is rewritten to the `if` chain over the scrutinee's name
+  — a local is its own name, anything else is bound once under a name
+  no source symbol can spell — and elaborated as any term, in a `fn`
+  and in a `def` alike. Refusals on the route: `match_not_exhaustive`
+  (no last row), `literal_rows` (a row after the catch-all, a
+  constructor row beside the numerals), `pattern_type` (a numeral row
+  at a type other than `Nat` or `Int` — the classifier never checked a
+  literal against the scrutinee's type, so `(match b (0 1) (_ 2))` at
+  a `Bool` was `RUNNABLE` before this slice and is refused now where
+  the signature has an L reading). `literal_pattern` stays the
+  E-first fallback for a numeral *under a constructor* and for a
+  symbol pattern (the old tree has 53 numeral rows and one nested
+  numeral). A `fn` whose body is a literal match has one equation,
+  as a body `if` does; the rows compute in K (`Eq.refl`).
+- **Rule 4.** Pin `record_laws`: get after set, get of another field,
+  set after set, a field through a `with` in a function, a field of a
+  `make` — five theorems, each `Eq.refl`. `make` and `with` reach a
+  `structure` of the file (`record.shard`, at the s-expression level
+  as for a record): `make` is `NAME.mk` on the values in field order;
+  `with` is `NAME.mk` on each field's entry or its projection of the
+  subject, the subject bound once when it is not a name.
+  `dependent_update` is syntactic and conservative: a field kept whose
+  type's *source* names an updated field (a binder inside the type
+  that reuses the field's name is refused too). It is a read error,
+  like `record_make`: the expansion precedes the reading. **Limit:**
+  a structure with parameters is out of the sugar's reach — its
+  constructor takes them — and `make`/`with` on it are
+  `record_make`/`record_with` with that pointer. The bootstrap reads
+  no `structure` (an L form), so parity is untouched.
+- **Rule 5.** E's table names the three entries `= < <=`
+  (`prog.shard`); the erasure's registry rows emit them. The
+  spellings before the rename are read as those entries in a module
+  whose identity begins with `kernel` (`scope.shard`'s
+  `toolchain_scope` — the toolchain's sources, the one tree route 1's
+  v2 chain compiles) and are refused everywhere else as
+  `renamed_primitive` with the new spelling, by the elaborator on the
+  typed route and by the classifier on the E-first one; they stay
+  reserved there, not free names, until the toolchain migrates. The
+  Rust bootstrap reads both (`prim.rs`, `eval.rs`) and `eval dump`
+  prints the V3 spelling whichever the source wrote, so frontend
+  parity compares one name. **Found while building:** the bootstrap's
+  native table and `kernel/reduce.shard`'s object table are tied by a
+  conformance sweep (`lib.rs`); `= < <=` are native-only names, which
+  the old kernel's table does not carry — no old-tree `fn` body
+  writes them, and `=` there is a claim's head, which neither table
+  sees. Stated in `prim.rs`; the sweep's lists are unchanged. The
+  tool is `v3/tools/rename_cmp.py` (a list head only, never inside a
+  string, a comment or a `quote`; `--check` for a migrated tree): 27
+  sites in 16 files of `v3/std`, `v3/examples` and `v3/pins`. By its
+  count `v3/kernel` has 665 sites in 52 files still to move (the
+  scoping's 943 in 60 was a grep that also counted comments, strings
+  and quoted symbols).
+- **Rule 6.** `v3/std/fresh.shard`: the records `FreshName`, `Fresh`
+  and `Minted`, `Fresh.start`, `Fresh.next`, and `Fresh.next_ne` —
+  the names of two successive steps differ, through
+  `Nat.succ_ne_self` and `congrArg` on the index (no axiom). The
+  prefix's type is a parameter `P`, not the design's unstated one:
+  text has no L reading before slice 3.18, and the toolchain's port
+  will instantiate it with K's `Name`. 14 functions defined.
+- **Rule 7.** The registry has expression rows (`erasure.shard`'s
+  `realization_expr`): `Int.natAbs a` erases to `(let (a) (if (< #0 0)
+  (- 0 #0) #0))`. calc's app file imports through `InvImage.wf` and
+  `show_nat` takes the measure `(Int.natAbs n)`: 17 of 17 functions
+  defined, `show_nat.dec_1` the one pending obligation, nothing
+  `RUNNABLE`. `Int.toNat` is not in the export chunks and has no row.
+  A callee that is a view's `sig fn` the environment lacks is
+  `no_l_meaning` (`loader.shard`'s `callee_hits`; pin
+  `route_sig_callee`): `has_eq` reads so now. `confusion_reachable`
+  stays `no_l_identity`, correctly — its body quotes symbols; the
+  scoping note above named it beside `has_eq` for the callee alone.
+- **Gates run:** 146 loader pins (14 new: `literal_pattern`,
+  `literal_open`, `literal_type`, `literal_rows`, `literal_nested`,
+  `rename_refused`, `rename_refused_e`, `rename_ok`, `record_laws`,
+  `struct_make`, `dependent_update`, `struct_params`,
+  `measure_natabs`, `route_sig_callee`; `match_literal` narrowed to
+  the nested numeral), `define_test` (7 checks: calc's app file and
+  the fresh-name library added), calc's differential byte-identical
+  over 21 inputs, the full suite and the bootstrap's unit tests
+  (records §9 for the figures). Route 1 is CI's.
 
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
@@ -3049,10 +3150,10 @@ migration table of law §10.3 owns the name and behavior changes of the
 | unbound identifier = `FVar` (proof-time opened variables) | dropped | an unbound name is a resolution error; K refuses free variables; I's named context replaces the use (phase 3) |
 | primitive dispatch by name, trie-first, bodyless-name collision = stuck (`pins/lang/prim_shadow_rejects`) | **changed** — landed slice 5 | heads classified at load into four node kinds; a primitive is an identity (§6.4); a declared name shadows the table's (the scope resolves first); an unknown head is refused at load |
 | the primitive table | carried under the profile names; **changed** under the naming-law names | §6.4; `/` stuck at zero versus `Int.tdiv` total are two entries |
-| `gen_fresh`, the one effectful primitive | **dropped** (slice 5) | law §4.7 has no effectful primitives: pure `ev` refuses reachable externs. No V3 file calls it and the table does not carry it; a ported source that needs fresh names threads a counter (ten old-tree kernel files: types, canon, sequent, reduce, tactics, proof_reader, proof, trace, the two lowered twins) |
+| `gen_fresh`, the one effectful primitive | **dropped** (slice 5) | law §4.7 has no effectful primitives: pure `ev` refuses reachable externs. No V3 file calls it and the table does not carry it; a ported source that needs fresh names threads a supply — `v3/std/fresh.shard` since slice 3.17: `Fresh.next` returns the name and the advanced supply, two successive names differ (ten old-tree kernel files: types, canon, sequent, reduce, tactics, proof_reader, proof, trace, the two lowered twins) |
 | `Nat` former: `Z`/`S` packed to literals, patterns match literals by view, proof-facing normalizers never pack, bare literals do not type as `Nat` | **changed** | `Nat` is Init's; K's literal rules (offset, `Nat.zero` ≡ `0`, accelerators) replace the former; numerals type as `Nat` by rule (§5.3). The profile keeps the prelude's `Nat` for measures; `ev` does not carry the bootstrap's `Z`/`S` view over integer literals (no V3 file matches on them; a literal matches `Z` never) |
 | `(refine BASE PRED)`, `refine_val`, `refine_try`, `refine-fact`, `(returns …)` (37 types, 43 `refine-fact` sites) | re-spelled; deferred | `Subtype` over any `Prop` (law §4.1): `refine_val` → `Subtype.val`, `refine_try` → a `decide`-bridged constructor, `refine-fact` → `Subtype.property`; the return obligation is a Stage-1 elaboration obligation. Phase 3 (REFINEMENT.md superseded) |
-| `(record …)`, `make`, `with`, `F_of`/`with_F`, the six-law family, `NAME_eta` (21 files, 237 `with_F` sites) | re-spelled; **AT RISK** | `structure` with projections (§4): `F_of` → `NAME.F`; `NAME_eta` is K's structure eta for free; the laws are `rfl`. **No Stage-0 form for `with_F` updaters or order-free `make`**: Lean's `{ s with f := v }` is elaborator sugar — Stage 1 must add it or every update site spells the constructor |
+| `(record …)`, `make`, `with`, `F_of`/`with_F`, the six-law family, `NAME_eta` (21 files, 237 `with_F` sites) | re-spelled; **AT RISK** | `structure` with projections (§4): `F_of` → `NAME.F`; `NAME_eta` is K's structure eta for free; the laws are `rfl`. **No Stage-0 form for `with_F` updaters or order-free `make`**: Lean's `{ s with f := v }` is elaborator sugar — Stage 1 must add it or every update site spells the constructor. **Carried since:** `record`/`make`/`with` at slice 3.9 (item 42); at slice 3.17 the laws are `Eq.refl` with no generator (pin `record_laws`) and `make`/`with` reach a parameterless `structure`, a dependent field kept across an update refused (`dependent_update`) |
 | `std/word` (`U8`…`I32`, opaque), `std/bytes`, `std/str` | re-spelled | `UInt*`/`BitVec`, `ByteArray`, `String` (law §10.3, INVENTORY), phase 3–5. **AT RISK:** widths beyond 64 — INVENTORY realizes `BitVec w` only for static `w ≤ 64`; the 2026-09-02 ruling kept `std/word`'s unused widths as a facility |
 | `S^`, `inline`, `chain` (2,733 / 1,851 / 320 uses) | dropped with the v2 proof language | their reason — claim statements must be literal spellings that match CBV residues — does not survive: I's `rw`/`simp_only` match terms, and Nat towers are K literals. Phase 3 confirms; **AT RISK** if some I form still needs a literal tower |
 | `(import "x.shard")` opens the file's names (flat scope) | **changed** | `import` never opens, `use` does (§3.1) — for every file since the one-E ruling (§8.1 rule 4, 2026-09-14): the toolchain's files gain their `use` lines by tool at slice 3.3; the bootstrap keeps resolving flat and parity is the tie |
@@ -3105,7 +3206,7 @@ row.
 | division by zero stuck | **changed** under the naming law: `x / 0 = 0`, `x % 0 = x` | law §10.4; the profile's `/` stays stuck (§6.4) |
 | bitwise ops on `Int` premised `0 ≤` | re-spelled | `Nat.land` … (law §10.3) |
 | sizes and indices `Int` | **changed** | `Nat` where a size, saturating subtraction — the migration tool's typed class, reviewed per use (law §10.2) |
-| `int_eq`/`lt`/`le` return `Bool` | re-spelled | `Decidable` propositions with `decide` bridges; `==` for `Bool` values |
+| `int_eq`/`lt`/`le` return `Bool` | re-spelled | `Decidable` propositions with `decide` bridges; `==` for `Bool` values. E's names are `= < <=` since slice 3.17: the old spellings are `renamed_primitive` outside the toolchain's own sources, which migrate with route 1's chain (`v3/tools/rename_cmp.py`) |
 | World threading with no use check | **changed at phase 4** | the well-threadedness check (law §4.7): a v2 program that uses one World token twice will be refused; the World-alias fixture lands before any effectful port |
 | the extern roster `get_args read_file read_dir read_key write write_file write_line exit` | partly carried | `kernel/host.shard` declares six; `read_dir` (the old loader, codegen) and `read_key` (snake) return when a V3 consumer needs them. **AT RISK:** the wire convention (above) |
 | evaluator errors `NoMatchArm`, `IfNonBool`, `UnknownCall`; no fuel | **changed** — landed slice 5 | `EvStuck` with a reason (`no_arm`, `if_tag`, `guard`, `extern`, `unlinked`) and the function; `EvOut` is new — v2 relied on the totality gate instead of fuel (§6.2); `EvExhausted` (`nat_size`, `nat_count`) since slice 9 — a primitive's resource, distinct from a guard (R51); an unknown call is refused at load, never reached |
@@ -3134,7 +3235,7 @@ and the disposition this draft intends.
 | `(list a b c)` | phase 3, Stage 1 | every ported `fn` (9,455 sites); calc's program half, ported to S at slice 6, spells its list literals as constructor chains | `(list 1 2)` under the V3 reader refused by name | a list literal at Stage 1 |
 | the extern wire's bytes | slice 5 (`ev`'s extern boundary — **bytes as the prelude's cells, landed**); phase 3 for the L type | `sha256sum`'s bin; calc's app step — an S program names no wire cell at phase 2, so calc's differential keeps its drivers outside the program (slice 6, §10) | `write_line` of a literal round-trips its bytes through the driver (route 2's byte-tie) | bytes at phase 2; `ByteArray` or `List UInt8` decided with §5.3's `String` realization |
 | negative numerals | phase 3, Stage 1 | calc (negative `Int` results); `std/div` | `-7` under the V3 reader = the constructor term at Stage 0; calc's port (slice 6) writes no negative literal and computes its negative results from `-` at run time, its `Nat` numerals running as integers | Stage 1 special-cases `-` on a numeral; ruled then |
-| `gen_fresh` | **decided slice 5: dropped** | the ten old-tree kernel files (canon, tactics) as they port | a `fn` citing `gen_fresh` is refused at load (`unknown_head`) | a threaded counter in the ported toolchain |
+| `gen_fresh` | **decided slice 5: dropped** | the ten old-tree kernel files (canon, tactics) as they port | a `fn` citing `gen_fresh` is refused at load (`unknown_head`) | a threaded supply in the ported toolchain (`v3/std/fresh.shard`, slice 3.17) |
 | `with_F` updaters, order-free `make` | phase 3, Stage 1 | 237 sites (`models/imp`, the tools) | `(with_F s v)` refused by name until the update form exists | Stage 1 record-update sugar (Lean's `{ s with f := v }`) |
 | `std/word` widths beyond 64 | phase 5 (the word/float line) | none today (the 2026-09-02 ruling kept the widths as a facility) | INVENTORY's static `w ≤ 64` bound on `BitVec w` | static `w ≤ 64` unless a consumer appears |
 | `S^`, `inline`, `chain` | phase 3 (I) | the PORT theorem corpus | a claim whose statement needs a literal tower under I's `rw` | dropped; phase 3 confirms |
@@ -3494,7 +3595,8 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     first, opened for the file as any type's namespace is (item 7);
     `MkNAME` the default constructor; `make` and `with` name the
     record and resolve against the current file's; no law family
-    until Stage 1. v2's `FIELD_of`/`with_FIELD` was the first cut and
+    until Stage 1 (none generated since: the laws are `Eq.refl`,
+    slice 3.17). v2's `FIELD_of`/`with_FIELD` was the first cut and
     reversed the same day on the pilot's evidence: the loader's four
     records share `init`, `hash`, `view` and `file`, and six of their
     accessor names (`root_of`, `env_of`, `params_of`, `module_of`,
@@ -3637,7 +3739,8 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     in landing 1, no consumer in this slice); value hashes an alarm
     to explain, not a gate (revision 1's unchanged-hash gate
     contradicted its own `ite` rule).
-50. **Slice 3.17's scope, for ruling (DESIGN 2026-09-19; §8.4).**
+50. **Slice 3.17's scope (design 2026-09-19; RULED 2026-10-01 — the
+    user agreed with the leans; built the same day, §8.4's as-built).**
     Measured by probes before code: records and their laws already
     work on the typed route; `< <= =` already elaborate. The leans:
     `"…"`, symbols and `Name` literals move to slice 3.18 with the
@@ -3652,3 +3755,11 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     a refusal; a registry row for `Int.natAbs` so calc's `show_nat`
     is defined. Landing 3's as-built misnamed `show_nat`'s cause (no
     `"…"`: `Int.ediv` past the prefix) — corrected in place.
+    **Built differently from the design, each with its reason in
+    §8.4:** numeral rows are the `ite` on the decision at `Nat` too
+    (rejected: the constructor reading through the matcher — a `succ`
+    chain as deep as the numeral, and nothing E can run); the
+    fresh-name records take the prefix's type as a parameter;
+    `make`/`with` reach a parameterless `structure` only; the
+    bootstrap's `= < <=` are native-only names beside the old
+    kernel's table.

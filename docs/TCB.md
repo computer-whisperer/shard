@@ -54,6 +54,13 @@ A shard acceptance verdict ultimately rests on, in order:
    sweep them against each other over a value matrix; the spec lists
    (`SHARED_INT2` / `OBJECT_ONLY_*`) in lib.rs are the prim-set source
    of truth.
+   `=`, `<`, `<=` are V3's spellings of `int_eq`, `lt`, `le` and are
+   **native-only names** (`NATIVE_ALIASES` in lib.rs; v3/LANGUAGE.md
+   §8.4 slice 3.17 rule 5): the bootstrap hosts both trees, the object
+   table does not carry them, and the sweep checks each alias against
+   the name it stands for over the same matrix. No old-tree `fn` body
+   writes them (`=` there is a claim's head, which neither table
+   sees).
 
    **Table conformance is only half of it — WHICH terms reach the table
    is the other half, and it is a soundness question.** Every reducer is

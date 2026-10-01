@@ -163,3 +163,22 @@ decide it). Moved by the flip, each with its cause in its header:
 (`no_realization`), `ev_no_l_meaning` and `realize_fn` (a new obstacle:
 the old one, a measure without a self-call, is now a plain
 definition).
+
+Slice 3.17's (§8.4, the porting facilities): `literal_pattern` (numeral
+rows at `Int` and `Nat` on the typed route, in a `fn` and a `def`, the
+rows computing in K), `literal_open` (`match_not_exhaustive`: no last
+row), `literal_type` (`pattern_type`: a numeral row at a `Bool`),
+`literal_rows` (a row after the catch-all), `literal_nested` (a numeral
+under a constructor: E-first, `no_l_identity`); `match_literal` is
+narrowed to that nested case in a `def`. `rename_ok` (`< <= =` on both
+routes), `rename_refused` and `rename_refused_e` (`renamed_primitive`
+from the elaborator and from the classifier: `lt le int_eq` outside the
+toolchain's own sources). `record_laws` (v2's law family as `Eq.refl`),
+`struct_make` (`make` and `with` over a structure, the dependent field
+supplied), `dependent_update` (it is not: a read error naming the field),
+`struct_params` (a structure with parameters: `record_make`).
+`measure_natabs` (a measure through `Int.natAbs`, erased by the
+registry's expression row; `pending measure`). `route_sig_callee` (a
+view's `sig fn` with no L reading as a callee: `no_l_meaning`). A header
+may now also state `renamed_primitive`, `literal_rows`, `pattern_type`
+(the elaborator's) and `read-error dependent_update`.

@@ -409,7 +409,9 @@
             (None (EErr (quote bad_shape) "a bound variable without a local"))))
          (None
           (if (bool_and (bool_not has_univ) (is_operator x1))
-            (elab_op e x1 args expected)
+            (match (if (toolchain_scope (cx_scope (el_cx e))) None (renamed_prim x1))
+              ((Some new) (EErr (quote renamed_primitive) (renamed_msg x1 new)))
+              (None (elab_op e x1 args expected)))
             (match (elab_const e n ls has_univ expected)
               ((EErr r m) (EErr r m))
               ((EOk e1 c cty) (elab_args e1 c cty (srcs args) explicit expected))))))))))
@@ -634,6 +636,16 @@
         (match (el_local e1 Anon d BDefault)
           ((Pair e2 fv) (arrow_locals e2 rest (Cons fv acc) (Cons (level_of_sort s) lvs)))))))))
 
+;; a let's body, elaborated under the local `fv := val`, closed over it as a Let; the
+;; context restored to e0's
+(fn let_close ((e0 El) (fv Expr) (val Expr) (res ERes)) ERes
+  (match res
+    ((EErr r m) (EErr r m))
+    ((EOk e4 b bty)
+     (match (el_lams e4 (list fv) b)
+       ((Pair e5 lb)
+        (match (w_subst (el_w e5) (el_zonk e5 bty) (fvar_id_of fv) val)
+          ((Pair w6 bty1) (EOk (el_restore (el_set_w e5 w6) e0) lb bty1))))))))
 ;; (let ((x TYPE TERM)…) BODY): sequential, one Let per binding
 (fn elab_let ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
   (match args
@@ -657,14 +669,7 @@
                 ((FinErr r2 m) (EErr r2 m))
                 ((FinOk val1)
                  (match (el_local_val e2 n t val1)
-                   ((Pair e3 fv)
-                    (match (elab_lets e3 r body expected)
-                      ((EErr r2 m) (EErr r2 m))
-                      ((EOk e4 b bty)
-                       (match (el_lams e4 (list fv) b)
-                         ((Pair e5 lb)
-                          (match (w_subst (el_w e5) (el_zonk e5 bty) (fvar_id_of fv) val1)
-                            ((Pair w6 bty1) (EOk (el_restore (el_set_w e5 w6) e) lb bty1))))))))))))))))))
+                   ((Pair e3 fv) (let_close e fv val1 (elab_lets e3 r body expected)))))))))))))
     ((Cons (SList (Cons (SSym x) (Cons v Nil))) r)     ; (x TERM): the type is the term's (a body's let, §5.4)
      (match (name_of_sym x)
        (None (EErr (quote bad_name) (chars_of_sym x)))
@@ -679,14 +684,7 @@
                 ((FinErr r2 m) (EErr r2 m))
                 ((FinOk val1)
                  (match (el_local_val e1 n t val1)
-                   ((Pair e3 fv)
-                    (match (elab_lets e3 r body expected)
-                      ((EErr r2 m) (EErr r2 m))
-                      ((EOk e4 b bty)
-                       (match (el_lams e4 (list fv) b)
-                         ((Pair e5 lb)
-                          (match (w_subst (el_w e5) (el_zonk e5 bty) (fvar_id_of fv) val1)
-                            ((Pair w6 bty1) (EOk (el_restore (el_set_w e5 w6) e) lb bty1))))))))))))))))))
+                   ((Pair e3 fv) (let_close e fv val1 (elab_lets e3 r body expected)))))))))))))
     (_ (EErr (quote bad_shape) "a let binding is (x TYPE TERM) or (x TERM)"))))
 
 ;; (proj S i TERM)
@@ -736,7 +734,7 @@
     ((Cons a (Cons b Nil))
      (if (bool_and (is_numeral a) (bool_not (is_numeral b)))
        ;; the identity is the first operand's type's — of the first that is not a numeral
-       ;; (`(le 48 c)` at c's Int; slice 3.16): the numeral is then read at the binder
+       ;; (`(<= 48 c)` at c's Int; slice 3.16): the numeral is then read at the binder
        (match (elab e b None)
          ((EErr r m) (EErr r m))
          ((EOk e1 bv bty)
@@ -962,6 +960,7 @@
 (fn elab_match ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
   (match args
     ((Cons scrut arms)
+     (if (has_numeral_row arms) (elab_match_lit e scrut arms expected)
      (match (match_ret e expected)
        (None (EErr (quote match_motive) "a match takes its type from its position: write it where the type is known — a definition's value, an argument, (let ((r TYPE (match …))) r)"))
        ((Some ret)
@@ -976,8 +975,70 @@
                 ((Pair e2 (Some rs))
                  (match (el_whnf e2 rs)
                    ((Pair e3 (Sort _ l)) (match_arms e3 dty ret l sv arms Nil Nil expected))
-                   ((Pair _ other) (EErr (quote not_a_type) (append (show_expr ret) (append " : " (show_expr other)))))))))))))))
+                   ((Pair _ other) (EErr (quote not_a_type) (append (show_expr ret) (append " : " (show_expr other))))))))))))))))
     (Nil (EErr (quote bad_shape) "(match TERM (PATTERN BODY)…)"))))
+;; ---- a literal match (slice 3.17 rule 3) ----------------------------------------------------
+;; (match T (K BODY)… (CATCH BODY)) with numeral rows, at Nat or Int: Lean's value patterns —
+;; the scrutinee once, then `if (= x K) BODY …` in row order, the last row `_` or a name for
+;; the scrutinee. No matcher: the rows are the `ite`s on the type's decision, read as any
+;; `if` is. A numeral under a constructor stays el_pat's refusal
+(fn has_numeral_row ((arms (List SExpr))) Bool
+  (measure (struct arms))
+  (match arms
+    (Nil False)
+    ((Cons (SList (Cons (SNum _) _)) _) True)
+    ((Cons _ r) (has_numeral_row r))))
+;; the scrutinee's name in the rows' conditions: no source symbol holds a space
+(fn lit_scrut () Symbol (sym_of_chars "match scrutinee"))
+(fn lit_chain ((arms (List SExpr))) (Option SExpr)
+  (measure (struct arms))
+  (match arms
+    ((Cons (SList (Cons (SSym v) (Cons body Nil))) Nil)
+     (if (sym_eq v (quote _)) (Some body)
+       (Some (SList (list (SSym (quote let)) (SList (list (SList (list (SSym v) (SSym (lit_scrut)))))) body)))))
+    ((Cons (SList (Cons (SNum k) (Cons body Nil))) r)
+     (match (lit_chain r)
+       (None None)
+       ((Some rest) (Some (SList (list (SSym (quote if)) (SList (list (SSym (quote =)) (SSym (lit_scrut)) (SNum k))) body rest))))))
+    (_ None)))
+(fn all_numeral_rows ((arms (List SExpr))) Bool
+  (measure (struct arms))
+  (match arms
+    (Nil True)
+    ((Cons (SList (Cons (SNum _) (Cons _ Nil))) r) (all_numeral_rows r))
+    (_ False)))
+(fn elab_match_lit ((e El) (scrut SExpr) (arms (List SExpr)) (expected (Option Expr))) ERes
+  (match (lit_chain arms)
+    (None
+     (if (all_numeral_rows arms)
+       (EErr (quote match_not_exhaustive) "numeral rows cover no type: close the match with a `_` row or a name (§8.4 slice 3.17 rule 3)")
+       (EErr (quote literal_rows) "a literal match is numeral rows closed by one last row, `_` or a name: no constructor row beside them, no row after the catch-all (§8.4 slice 3.17 rule 3)")))
+    ((Some chain)
+     (match (elab e scrut None)
+       ((EErr r m) (EErr r m))
+       ((EOk e1 sv sty)
+        (match (el_finish e1 sty)
+          ((FinErr r m) (EErr (quote match_scrutinee) (append "the scrutinee's type is not determined: " m)))
+          ((FinOk dty)
+           (match (el_whnf e1 dty)
+             ((Pair e2 dtyw)
+              (if (bool_not (bool_or (is_const_named dtyw (nm_nat)) (is_const_named dtyw (nm_int_ty))))
+                (EErr (quote pattern_type) (append "a numeral row matches a value of type " (append (show_expr dtyw) ": literal rows are read at Nat and Int (§8.4 slice 3.17 rule 3)")))
+                (match (el_finish e2 sv)
+                  ((FinErr r m) (EErr r m))
+                  ((FinOk sv1)
+                   (match (name_of_sym (lit_scrut))
+                     (None (EErr (quote bad_name) (chars_of_sym (lit_scrut))))
+                     ((Some x)
+                      (match sv1
+                        ;; a local scrutinee is its own name in the conditions; anything else is bound once
+                        ((FVar _ _)
+                         (match (elab (el_set_cx e2 (cx_bind (el_cx e2) x sv1)) chain expected)
+                           ((EErr r m) (EErr r m))
+                           ((EOk e3 b bty) (EOk (el_restore e3 e) b bty))))
+                        (_
+                         (match (el_local_val e2 x dty sv1)
+                           ((Pair e3 fv) (let_close e fv sv1 (elab e3 chain expected))))))))))))))))))))
 ;; the expected type, when nothing in it is still to be solved
 (fn match_ret ((e El) (expected (Option Expr))) (Option Expr)
   (match expected
@@ -1059,7 +1120,7 @@
             ((Some (Pair c (Pair 0 head))) (PtOk e (MtCtor c Nil) head slot vars))
             (_ (match (el_local e n ty BDefault) ((Pair e1 fv) (PtOk e1 (MtVar slot) fv (+ slot 1) (append vars (list fv)))))))))))
     ((SList (Cons (SSym h) subs))
-     (if (sym_eq h (quote quote)) (PtErr (quote literal_pattern) "a symbol pattern has no L form yet (slice 3.17): compare with an if")
+     (if (sym_eq h (quote quote)) (PtErr (quote literal_pattern) "a symbol pattern has no L form before slice 3.18 (LANGUAGE.md §8.4 slice 3.17 rule 2)")
        (match (name_of_sym h)
          (None (PtErr (quote bad_name) (chars_of_sym h)))
          ((Some n)
@@ -1069,8 +1130,8 @@
              (if (bool_not (int_eq (len subs) nfields))
                (PtErr (quote pattern_arity) (append (show_name c) (append " has " (append (show_nat nfields) " fields"))))
                (el_pat_fields e subs cty c head Nil slot vars (- fuel 1)))))))))
-    ((SNum _) (PtErr (quote literal_pattern) "a numeral pattern has no L form yet: compare with an if (LANGUAGE.md §8.4 slice 3.16 rule 1)"))
-    (_ (PtErr (quote literal_pattern) "a literal pattern has no L form yet: compare with an if (LANGUAGE.md §8.4 slice 3.16 rule 1)")))))
+    ((SNum _) (PtErr (quote literal_pattern) "a numeral under a constructor or beside constructor rows has no L form: bind the field and compare with an if (a row that is a numeral is read: LANGUAGE.md §8.4 slice 3.17 rule 3)"))
+    (_ (PtErr (quote literal_pattern) "a string pattern has no L form: compare with an if (LANGUAGE.md §8.4 slice 3.17 rule 3)")))))
 (fn el_pat_fields ((e El) (subs (List SExpr)) (cty Expr) (c Name) (acc Expr) (ps (List MtPat)) (slot Int) (vars (List Expr)) (fuel Int)) PtRes
   (measure (struct subs))
   (match subs

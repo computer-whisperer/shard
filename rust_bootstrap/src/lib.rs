@@ -388,6 +388,23 @@ mod tests {
         assert_eq!(eval_str(m, "(le 6 5)"),     false_v());
     }
 
+    /// V3's spellings of the three comparisons (v3/LANGUAGE.md §8.4,
+    /// slice 3.17 rule 5): the same operations, in a call and as an
+    /// `if` condition (the fused-compare path).
+    #[test]
+    fn prim_v3_comparison_spellings() {
+        let m = "(fn pick ((a Int) (b Int)) Int (if (< a b) 1 (if (= a b) 2 (if (<= b a) 3 4))))";
+        assert_eq!(eval_str(m, "(= 3 3)"),  true_v());
+        assert_eq!(eval_str(m, "(= 3 4)"),  false_v());
+        assert_eq!(eval_str(m, "(< 1 2)"),  true_v());
+        assert_eq!(eval_str(m, "(< 2 2)"),  false_v());
+        assert_eq!(eval_str(m, "(<= 5 5)"), true_v());
+        assert_eq!(eval_str(m, "(<= 6 5)"), false_v());
+        assert_eq!(eval_str(m, "(pick 1 2)"), ast::Expr::IntLit(1.into()));
+        assert_eq!(eval_str(m, "(pick 2 2)"), ast::Expr::IntLit(2.into()));
+        assert_eq!(eval_str(m, "(pick 3 2)"), ast::Expr::IntLit(3.into()));
+    }
+
     #[test]
     fn prim_in_user_fn() {
         assert_eq!(
@@ -1069,6 +1086,37 @@ mod tests {
             (got, want) => panic!(
                 "fast path vs table at ({name} {args:?}): evaluator {got:?}, table {want:?}"
             ),
+        }
+    }
+
+    /// V3's spellings of the three comparisons (v3/LANGUAGE.md §8.4, slice
+    /// 3.17 rule 5): NATIVE-ONLY names — the object table does not carry
+    /// them, since this host runs both trees and the old one never writes
+    /// them in a `fn` body. Each is the operation of the shared name it
+    /// stands for.
+    const NATIVE_ALIASES: &[(&str, &str)] = &[("=", "int_eq"), ("<", "lt"), ("<=", "le")];
+
+    /// Each alias agrees with its shared name on the full pair matrix, in
+    /// the table and on the evaluator's fast arms.
+    #[test]
+    fn prim_conformance_native_aliases() {
+        let m = ast::Module::default();
+        let vals = int_matrix();
+        for (alias, name) in NATIVE_ALIASES {
+            for a in &vals {
+                for b in &vals {
+                    let args = [
+                        ast::Expr::IntLit(a.clone()),
+                        ast::Expr::IntLit(b.clone()),
+                    ];
+                    assert_eq!(
+                        prim::try_apply(alias, &args),
+                        prim::try_apply(name, &args),
+                        "alias drift: ({alias} {args:?}) vs {name}"
+                    );
+                    fast_path_point(&m, alias, &args);
+                }
+            }
         }
     }
 
