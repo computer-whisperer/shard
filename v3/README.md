@@ -752,7 +752,15 @@ with the flip. What landed:
 Local gates: 146 loader pins, `define_test` 7 checks, calc
 byte-identical over 21 inputs, parity byte-identical over 27 closures
 (104,232 declarations), the full suite's 29 entrypoints, the
-bootstrap's 46 unit tests. Route 1 is CI's.
+bootstrap's 46 unit tests.
+
+Slice 3.17 is closed: **pipeline 535 green on `62ffe94`** — engine
+39 s, corpus 1,667 s at the baseline (the bootstrap's two new
+spellings move nothing in the old tree), v3 5,468 s: 29 entrypoints,
+`define_test` 7 checks, parity byte-identical over 27 closures in
+325 s, route 1's native build of the kernel with this slice's sources
+(`v3/bin/t0`), replay 2,403 s at 32.2 GB, T0 accepted 57,977, 20
+pinned, closures identical.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

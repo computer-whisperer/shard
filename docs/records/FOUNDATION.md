@@ -2423,6 +2423,24 @@ is `docs/FOUNDATION.md` §5.3.
     closures and 104,232 declarations in 132 s, route 2, K's clients
     (7 in 55 s), the suite's 29 entrypoints with 0 failed, the
     bootstrap's 46 unit tests. Route 1 and the corpus are CI's.
+- **2026-10-01 — pipeline 535 green on `62ffe94`: slice 3.17 on the
+  full gate.** engine 39 s; corpus 1,667 s, the FAIL set at the
+  baseline — the bootstrap reading `= < <=` moves nothing in the old
+  tree; v3 5,468 s: 29 entrypoints with 0 failed, `define_test` 7
+  checks, parity byte-identical over 27 closures and 104,232
+  declarations in 325 s, **route 1's native build** of the kernel
+  sources this slice changed (`v3/build.sh`: lowered, generated,
+  compiled, `OK: v3/bin/t0` — the gate no local run reaches), the
+  fixture byte-tie, replay 2,403 s at 32.2 GB peak, T0 accepted
+  57,977 with 0 rejected, closures identical to the oracle, all 20
+  accelerator candidates pinned. Slice 3.17 is closed. *CI itself:*
+  GitLab created no pipeline for the push for over two hours (its
+  background queue lagged: the push event of 17:57 UTC was recorded
+  at 19:49); 535 was started by hand (`glab ci run -b main`) and sat
+  `waiting_for_resource` on a free resource group until the queue
+  drained at about 20:24. The late push pipeline 536, a duplicate on
+  the same commit running a second replay beside the first, was
+  cancelled.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 
