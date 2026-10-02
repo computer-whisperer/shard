@@ -809,6 +809,74 @@ Local gates: 156 loader pins (10 new: `row_types`, `row_e_first`, `row_e_match`,
 
 Slice 3.18 is closed: **pipeline 538 green on `682c20f`** — engine 35 s; corpus 1,471 s, job succeeded; v3 6,112 s: 32 entrypoints with 0 failed, `define_test` 9 checks, `wire_test` 15 checks, calc's host program byte-identical to the model world, parity byte-identical over 28 closures and 111,681 declarations in 356 s, route 1's native build of the kernel with this slice's sources (`OK: v3/bin/t0`), the fixture and the 100,000-line byte-ties identical, replay 2,458 s at 32.2 GB peak, T0 accepted 57,977 with 0 rejected, closures identical to the oracle, all 20 accelerator candidates pinned.
 
+**Slice 3.19 landed (2026-10-02) — deriving under a declared policy**
+(`LANGUAGE.md` §8.4's design and as-built, §13 item 52; law §5.1). The
+user ruled five leans the same day: a derivation table for the use
+site, one policy (`structural`) written at the derivation, an ordering
+without laws, a rendering in bytes, types without parameters plus
+Init's `List`, `Option` and `Prod` at closed arguments. What landed:
+
+- **`(derive TYPE CAPABILITY…)`** — `eq`, `(ord structural)`,
+  `render`. A derivation writes `fn` source and the loader reads it as
+  the file's own (`kernel/derive.shard`): K checks each definition and
+  its equations, the program is the erasure, nothing is trusted.
+  `T.decEq : (a b : T) → Decidable (a = b)` has a row per pair of
+  constructors; `T.compare` compares fields left to right and
+  constructors by their index, so the declaration order is in the
+  value; `T.render` prints canonical S. Each instantiation of a
+  container is its own derivation — `(derive (List Card) eq)` gives
+  `List_Card.decEq` — because E has no function values.
+- **The derivation table**: one entry per type and capability, visible
+  where its procedure is. `(if (= a b) …)` at a derived type takes the
+  entry's decision; the `DERIVE` record names the procedures each
+  derivation selected for its fields. `(CAPABILITY by NAME)` registers
+  a hand-written procedure after checking its type — also a view's
+  exported `sig fn`, which is how a derivation crosses a view.
+- **The library** (`v3/std/derive.shard`): `Bool`'s ordering and
+  rendering derived; `UInt8`, `ByteArray` and `String`'s equality and
+  ordering written over their one runtime field and tied to the type by
+  Init's lemmas; decimal `Nat` and `Int`, quoted `String`. Fourteen
+  procedures, no pending obligation, no axiom of its own (`propext`
+  reaches the decimal renderer through Init's `Nat` lemmas).
+- **The example** (`v3/examples/derive/`): a hand of cards compared in
+  an `if`, sorted by the derived ordering and printed on the host as
+  source would write it; `convention.shard` shows two types with the
+  same constructors in opposite order comparing oppositely, and a type
+  over a hand-written ordering recording the procedure it selected.
+- **General rules the slice needed**: a `match` on a local its expected
+  type mentions generalizes it, so a proof by cases is a match and a
+  result typed by its scrutinee is written row by row; an operator in a
+  `fn`'s type takes its levels by unification.
+- **Found and fixed on the way**: an `if` whose condition is a
+  self-call was refused by K (`fvar_in_value`); under a measure the
+  same call asked for two proofs of one fact (an obligation is named
+  once per statement now); `and`, `or`, `not` on `Bool`s cited
+  constants Lean 4.33 does not have (`Bool.and`, `Bool.or`, `Bool.not`
+  now, each with its program); `=` at an inductive in an E-first body
+  was accepted and stuck at run (`prim_type` now); a refusal after an
+  unreadable signature named the classifier's symptom, not the cause.
+- **Found by a second reader over the diff, each reproduced, fixed and
+  pinned**: a registry row spoke for any constant bearing its name, so
+  a module's own `Bool.or` ran as Init's while K proved the module's;
+  a `Decidable` value had two runtime representations (older than the
+  slice) — a match by constructor on `(Nat.decEq a b)` took the wrong
+  row — and is now the bare test only where an `if` reads it; a
+  derivation took a hand-written `T.ctorIdx` or `T.compare` for its
+  own under a record that said `structural`; a registered entry's
+  visibility depended on load order; the new match rule broke rows
+  with a `_` sub-pattern and proofs that used a hypothesis about the
+  scrutinee; `eq` at a container of a `Prod` failed on an unnormalized
+  universe level.
+
+Not built, and stated in the law: Lean's instance constants (Stage 3
+writes them over these functions); the ordering's laws; user types with
+parameters and two constructors or more, nested and mutual types — the
+toolchain's `SExpr` and `Expr` are nested, so their derivations wait.
+One elaborator limit found and left: an explicit numeral argument is
+still unassigned when a later argument's type is checked.
+
+Local gates: 176 loader pins (20 new), `define_test` (12 checks), `derive_test` (14 checks: the library, the example's ten lines on the host, the convention file), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 112,857 declarations, route 2, K's clients, the full suite's 33 entrypoints. None of the files route 1 compiles changed (its closure is K's own), so the native build is the one pipeline 538 gated; the full replay and the corpus are CI's.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until
@@ -922,6 +990,6 @@ v3/CANON.md       the canonical form of S — layout, the term tier over E, the 
 v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K; phase 2: prog, the reader tower, ev, realize
 v3/meta/          phase 3: the elaborators, I, the goal graph, tactics
 v3/std/           phase 3: the first library under the naming law
-v3/examples/      the ported examples: calc/ (slice 6: the program half in S; the claims at phase 3)
+v3/examples/      the ported examples: calc/ (slice 6: the program half in S; the claims at phase 3); derive/ (slice 3.19: derived equality, ordering and rendering in use)
 v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers), pins/loader/ (slices 3–7: package roots, main.shard's `;; expect:` and `;; roots:` headers; the ev_* cases are the classifier's, entry*/same_spelled/realize_theorem slice 7's)
 ```

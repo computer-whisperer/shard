@@ -351,6 +351,7 @@ common case).
 | `(sig fn NAME BINDERS RET)`, `(sig type (NAME T…))` | a view's bodyless signature and opaque type (§6.5) | E: `ESig`, `ESigType`; L: a view parameter |
 | `(requirement NAME BINDERS PROP)`, `(fulfills NAME PROOF)` | a view's promised law and its discharge in the implementation (§6.5) | L |
 | `(realize NAME …)` | an E body for an admitted L constant (§7) | E: `EFn`; L: the equations |
+| `(derive TYPE CAPABILITY…)` | since slice 3.19 (§8.4): equality, an ordering and a rendering for a closed inductive type — `eq`, `(ord structural)`, `render` generated as `fn` forms the loader reads at that point; `(CAPABILITY by NAME)` registers a procedure of the file's. Never in a view | the generated `fn`s as any `fn`; the derivation table (`DERIVE`) |
 | `(trusts AXIOM…)` | widens this file's assumption policy (§9) | policy |
 
 **Binders** are `((x TYPE) …)`; a binder may carry an info marker,
@@ -455,14 +456,18 @@ is `(Sort (succ u))`. A bound name shadows a constant.
   `Nat.lt le` / `Int.lt le`, `> >=` the flipped ones;
   `=` is `Eq`, `!=` is `Ne`, `iff` is `Iff` (their type the
   implicit argument); `and or not` are `And Or Not` on propositions
-  and Init's `and or not` on `Bool`s. In L nothing runs, so `-` `/`
+  and Init's `Bool.and`, `Bool.or`, `Bool.not` on `Bool`s (Lean
+  4.33's names; the elaborator cited `and or not`, which the export
+  does not have, until slice 3.19). In L nothing runs, so `-` `/`
   `mod` at `Nat` have their identities here where E refuses them
   (§8.4 rule 3, guard 2: a restriction of E, not a dialect).
 - **`if`** is `ite C dec T F` where `dec` is the decision of `C`'s
   head the elaborator knows — `Nat.lt le` → `Nat.decLt decLe`,
   `Int.lt le` → `Int.decLt decLe`, `Eq` at `Nat`/`Int`/`Bool` →
-  `Nat.decEq`/`Int.decEq`/`instDecidableEqBool` — else `no_decision`
-  with the pointer to `@ite` with the instance; a `Bool` condition
+  `Nat.decEq`/`Int.decEq`/`instDecidableEqBool`, `Eq` at any other
+  type the derivation table's one visible `eq` entry (§8.4 slice 3.19
+  rule 7; two are `ambiguous_decision`) — else `no_decision`
+  with the pointer to `@ite` with the instance, or to derive; a `Bool` condition
   `c` is the proposition `c = true` with `instDecidableEqBool` (Lean's
   own elaboration; slice 3.16 rule 3 — slice 3.15 had `cond`); a
   condition of another two-constructor inductive is `T.casesOn` with
@@ -471,7 +476,10 @@ is `(Sort (succ u))`. A bound name shadows a constant.
   erasure reads the `if` back; a one- or three-constructor type is
   `if_type`, a view's sig type `private_if` — §6.2's refusals, the
   elaborator's since slice 3.16 landing 3). `(list a b …)` is the constructor chain of the expected
-  type's list. `(exists ((x T)) P)` is `Exists (fun (x : T) => P)`.
+  type's list. A **`match`** takes its type from its position; where
+  its scrutinee is a local that type mentions, the motive generalizes
+  it and each row is read at the type with its pattern (§8.4 slice
+  3.19 rule 9) — a proof by cases, a result typed by its scrutinee. `(exists ((x T)) P)` is `Exists (fun (x : T) => P)`.
 - **What K sees** is the closed term with every metavariable
   instantiated; K rechecks it whole (add.shard), so a wrong assignment
   is K's refusal, a missing one this elaborator's with its pointer.
@@ -1783,7 +1791,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.16 | one front end (reordered 2026-09-18; the design below): a `fn` body through the elaborator into a pre-definition, its E program by erasure and its K value by the 3.13–3.14 compilation; matchers, so a `match` in a statement; `Bool` against `Decidable`; constructors by expected type; list literals | calc's spec file wholly defined (13 of its 25 functions are `RUNNABLE` at the slice's opening) |
 | 3.17 | the porting facilities of §11's R60 row (narrowed by ruling 2026-10-01, item 50): the record laws and `make`/`with` over a `structure` with the dependent-update refusal, numeral rows on the typed route, the fresh-name supply, E's rename of `lt le int_eq` to `< <= =` staged by the tool (the files no v2 tool reads now, `v3/kernel/**` with route 1's chain) | the broad port |
 | 3.18 | bytes and text (narrowed by ruling 2026-10-01, item 51; the design and the as-built below): the registry's type rows — `String`, `ByteArray`, `UInt8` and the structures under them, each represented by its one runtime field —, a projection function as its projection, item 37's flip staged (every file but the toolchain's own), the wire read by declared type and the externs over `ByteArray`; symbols and `Name` literals deferred to the toolchain's port | the first host-facing S library (`v3/std/host.shard`, `v3/std/bytes.shard`); calc's loop against the host |
-| 3.19 | deriving under a declared policy (law §5.1; split from 3.18 by the same ruling) | a new type usable in an `if`, as a key and in a message |
+| 3.19 | deriving under a declared policy (law §5.1; split from 3.18 by the same ruling; ruled 2026-10-02, item 52; the design and the as-built below): `(derive TYPE CAPABILITY…)` — equality, an ordering under the one policy `structural`, a rendering in canonical S — generated as `fn` source and found through a derivation table; a hand-written procedure registered with `(CAPABILITY by NAME)` | a new type usable in an `if`, as a key and in a message (`v3/examples/derive/`); `v3/std/derive.shard` |
 | 3.20+ | I: the node vocabulary (law §7.2), `elaborate(I)` to P, the goal-graph API as E functions, `by` blocks, the core tactics; then `tools/prove` and the engine as I producers | calc's 100 claims; the coverage arc's B-1c |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
@@ -2167,7 +2175,9 @@ system. There is no new term language: the body is `Expr`.
    (§6.2); an alternative is control flow in E and an argument only in
    L, where nothing runs. The elaborator cites a matcher with the
    motive from the expected type (slice 3.15 rule 5's Miller pattern
-   gives the constant motive); a dependent motive is a later slice.
+   gives the constant motive); a dependent motive is a later slice —
+   slice 3.19 (rule 9) for a scrutinee that is a local the expected
+   type mentions.
    **A `match` in a statement or a `def` is the same form** — slice
    3.15's open item closes here. Literal patterns are the obstacle
    `literal_pattern` until a consumer under the naming law has one.
@@ -2210,7 +2220,11 @@ system. There is no new term language: the body is `Expr`.
    operator table is the first form of a small static realization
    registry: a resolved L operation at its instantiated types → the
    executable entry, its result cell (an integer, a `Bool` cell, a
-   `Decidable` cell) and its stated trust. `Int.add`, `Int.sub`,
+   `Decidable` cell) and its stated trust. (Since slice 3.19 a
+   decision's entry is its *test*, read where the decision is an
+   `if`'s condition; as a value the decision is `(if TEST isTrue
+   isFalse)`, `Decidable`'s own cells — a match by constructor on the
+   bare test took the wrong row.) `Int.add`, `Int.sub`,
    `Int.mul`, `Int`'s and `Nat`'s decisions map to the entries §8.4
    rule 3 maps from; the `Nat` identities to the entries under their
    own names. **Once `-` `/` `mod` at `Nat` have resolved to
@@ -3117,6 +3131,350 @@ a packed buffer; deriving (slice 3.19).
   trusted with it (§7.1).
 - **Gates run:** 156 loader pins (10 new: `row_types`, `row_e_first`, `row_e_match`, `struct_proj`, `str_e_first`, `str_no_string`, `str_bad_utf8`, `wire_s`, `wire_bad`, `wire_bad_result`; `ev_string` rewritten), `rows_test` (10 values under `ev`), `wire_test` (15 checks against the host), `calc_main_test` (byte-identical to the model world over 21 inputs), `define_test` (9 checks: the two libraries added), calc's differential byte-identical over 21 inputs, parity byte-identical over 28 closures and 111,681 declarations, route 2, K's clients, the full suite's 32 entrypoints with 0 failed. `v3/build.sh` built these sources into a scratch binary that byte-ties the interpreter on the 3,000-line fixture.
 
+**Slice 3.19 — deriving under a declared policy** (the user's ruling
+of 2026-10-02 on five leans, the design the same day; §13 item 52).
+Law §5.1 gives a new type decidable equality, an ordering and a
+diagnostic rendering without a hand-written instance, as *generation
+under a declared policy*. Before this slice `(if (= a b) …)` at a
+type of the program's was `no_decision`: the elaborator's lookup knew
+`Nat`, `Int` and `Bool`.
+
+*The ruling.* (1) **A use site finds a derived operation through a
+derivation table**: one entry per type and capability, no search, a
+second visible entry a refusal; `=` in an `if` or where a `Bool` is
+expected consults it. Rejected: named functions only (the type is
+not "usable in an `if`", and every site is rewritten at Stage 3);
+instance resolution pulled forward (Stage 3 is a slice of its own).
+(2) **One named policy, `structural`, written at the derivation** —
+constructors in declaration order, fields left to right,
+lexicographic: Lean's own `deriving Ord`. Rejected: a package default
+(V3 has no package-level form, and one policy needs no default).
+(3) **The ordering is `compare`, returning Init's `Ordering`, with no
+laws.** Rejected: the laws now — each is a proof term over the squared
+or cubed constructor cases without I, an ordinary tactic proof with
+it; they come with the first verified keyed map. (4) **The rendering
+is bytes in canonical S** — `(TPair (TNum 3) TPlus)`. Rejected:
+Lean's `Repr` (a pretty-printer document type and its layout engine);
+a `String` (a computed `String` needs `String.append`, whose equation
+is I's); deferring it. (5) **Supported now: a type without
+parameters, directly recursive or not, and Init's `List`, `Option`
+and `Prod` at closed arguments.** Rejected: user types with
+parameters and types nested through `List` now (the constructor-
+structure bundle of a parametric type and recursion through a nested
+recursor first — the toolchain's `SExpr` and `Expr` wait for them).
+
+*The rules.*
+
+1. **The form.** `(derive TYPE CAPABILITY…)`, a declaration of the
+   file it stands in. TYPE is a closed type: a name, or an inductive
+   applied to closed types — `Tok`, `(List Tok)`, `(Prod Nat Tok)`.
+   A capability is `eq`, `(ord structural)` or `render`, each
+   generated; or `(eq by NAME)`, `(ord by NAME)`, `(render by NAME)`,
+   each registering a procedure written by hand, after its type is
+   checked (`derive_by`) — at any closed type, since it needs no
+   constructor. The generated functions live in the
+   deriving module under the type's mangled name — its head's last
+   component, then its arguments' — so `Tok.decEq`, `List_Tok.compare`.
+2. **Generation is source.** A derivation writes `fn` forms and the
+   loader reads them as if the file held them at that point: the one
+   front end elaborates them, K checks the definitions and their
+   equations, the programs are their erasures, and each has its
+   ordinary `DEFINE` record. Nothing is trusted and no second route
+   to a program exists (guard 1). What the generator reads of the
+   type it reads from K's environment — the constructors and their
+   fields' types at the type's arguments.
+3. **`eq`** is `NS.decEq ((a T) (b T)) (Decidable (= a b))`: a match
+   on `a`, then on `b`, a row for every pair of constructors. The
+   same constructor decides its fields left to right by their
+   procedures — `Nat.decEq`, `Int.decEq`, `instDecidableEqBool`, the
+   table's entry, or the function itself on a recursive field —
+   through `dite`, the result `isTrue` by congruence from the fields'
+   equations and `isFalse` by the constructor's injectivity (its
+   `C.inj`, or the projections of a one-constructor type); two
+   different constructors are `isFalse` through `NS.ctorIdx`, the
+   constructor's index, generated beside it (Lean 4.33 gives every
+   inductive one) as a derivation of its own, `cap=idx`, which later
+   derivations at the type share through the table. The rows are
+   quadratic in the constructors, as Lean's handler was before its
+   index rewrite. A generated variable is no symbol a source can
+   write (`x 1`), so no constructor of a field's type captures it.
+4. **`(ord structural)`** is `NS.compare ((a T) (b T)) Ordering`:
+   the same constructor compares its fields left to right, the first
+   that is not `eq` decides; different constructors compare by
+   `NS.ctorIdx`. A `Nat` or `Int` field is
+   `(if (< x y) lt (if (= x y) eq gt))`, which is Init's `compare`
+   there unfolded; any other field its table entry. The declaration
+   order *is* the convention: it is in the value (the indices), so
+   reordering the constructors changes the function, its hash and
+   every theorem that rests on it.
+5. **`render`** is `NS.renderOnto ((a T) (rest (List Nat))) (List Nat)`
+   — the value's text before `rest`, linear in its size — and
+   `NS.render ((a T)) ByteArray`, which is `Bytes.ofNats` of it on
+   the empty rest (`v3/std/bytes.shard`; without the library in scope
+   the derivation is `derive_needs`). A constructor with fields is
+   `(NAME F…)`, one without is `NAME`, the name its last component. A
+   field renders by its table entry; `Nat`, `Int`, `UInt8` and
+   `String` have theirs in the library. A field that is erased — a
+   proof, a type — or whose type is a view's opaque type prints `_`
+   (law §5.1: "an opaque placeholder rather than claim to inspect
+   every value").
+6. **The table.** An entry is (type, capability, procedure, deriving
+   module); its policy is in its record. The type is keyed in normal
+   form — a definition that stands for a type is the type. An entry
+   is visible in a file exactly when its deriving module and its
+   procedure are — both in the file's import closure, whatever was
+   loaded before the file — so it resolves as a name does and
+   crosses no view (§8.5). A view exports a
+   capability as what it is, a `sig fn` of the capability's type, and
+   a consumer registers it: `(derive lib.Handle (eq by
+   lib.Handle.same))`. `eq` at `Nat`, `Int` and `Bool` are the
+   elaborator's own rows, as before; `ord` at `Nat` and `Int` is
+   rule 4's expression. Everything else is an entry a `derive` made:
+   the library derives `Bool`, registers `UInt8`, `ByteArray` and
+   `String`'s hand-written procedures and the renderers of `Nat` and
+   `Int` (`v3/std/derive.shard`); a program derives its own types and
+   the instantiations it uses — `(derive (List Tok) eq)` — because E
+   has no function values: `List`'s equality cannot take its
+   element's as an argument, so each instantiation is its own
+   first-order function. Each derivation is recorded: `DERIVE PROC
+   type=T cap=C policy=P fields=PROC,…` — the field procedures it
+   selected, which the definition also cites, so they are in its
+   dependencies and its hash (law §5.2: a selection is recorded,
+   never rediscovered).
+7. **The use site.** `(if (= a b) …)` and `(= a b)` where a `Bool`
+   is expected, at a type with a visible `eq` entry, take the entry's
+   procedure as the decision; two visible entries are
+   `ambiguous_decision`; none is `no_decision`, now with the pointer
+   to `(derive T eq)`. `compare` and `render` have no operator
+   spelling: a program calls `Tok.compare` and `Tok.render` by name
+   until Stage 3 resolves them.
+8. **Refusals**, the type untouched in every case (law §5.1):
+   `derive_type` — TYPE is not a closed inductive type visible here
+   (a view's sig type has nothing to generate from: the module derives
+   and exports, the consumer registers, §8.5), or it is a
+   proposition, `Nat` or `Int` (the integer), or an inductive applied
+   to a value, `(Fin 3)`;
+   `derive_shape` — an indexed or mutual type, a type without
+   constructors, a type nested through another (a field `(List T)`
+   of `T`), a field whose type depends on
+   an earlier one, an erased field under `eq` or `ord`; `derive_field`
+   — a field's type has no entry for the capability, naming the
+   constructor, the type and the form to write; a function-valued
+   field (no decidable equality; and the type has no program to
+   render); `derive_needs` — a constant the generated source cites is
+   not in the environment (`Decidable`, `Ordering`, `congrArg`, a
+   constructor's `inj` for a type with parameters, the library);
+   `derive_duplicate` — an entry for the type and capability is
+   already visible; `derive_by` — the named procedure's type is not
+   the capability's; `name_taken` with `derive_failed` — a constant
+   already bears a name the derivation generates: it is never taken
+   for the derivation's, and nothing is registered.
+9. **What the elaborator gains for it**, each a general rule. A
+   `match` on a local the expected type mentions generalizes it —
+   the motive `λ d. RET[d]`, each row read at RET with its pattern
+   (Lean's rule for the expected type; the motive was constant
+   before, so a result typed by its scrutinee could not be written) —
+   which is how `decEq`'s `Decidable (= a b)` is refined row by row.
+   A hypothesis about the scrutinee is not generalized (Lean reverts
+   those too): a match whose rows cannot be read at the generalized
+   type is read with the constant motive, as before. An operator inside an
+   E-type position — a `fn`'s `(Decidable (= a b))` — takes its
+   levels by unification, not the position's level 0.
+
+**Slice 3.19 as built** (2026-10-02):
+
+- **Rules 1, 2 and 6.** `kernel/derive.shard` is the generator: it
+  reads the form, elaborates TYPE, opens each constructor at the
+  type's arguments through K, selects a procedure per capability and
+  field, and writes the `fn` forms as s-expressions.
+  `loader.shard`'s `load_derive` hands each to `load_decl` — the path
+  of a form of the file — after registering its head as the file's
+  own heads were (an E-first body finds the function too), and
+  registers the entry once K has the definition: the table is
+  `Load.derived`, carried to the elaborator in the scope's visible set
+  (`scope.shard` `Derived`, `derived_for`), the record `DERIVE`. A
+  generated function that was not defined registers nothing
+  (`derive_failed`, beside its own record). The generated source cites
+  every constant by its identity — an imported one under `Init.` —
+  and the type the same way, so it reads the same whatever the file
+  opened: a type whose constructor bears its name
+  (`(type Card (Card …))`) is ambiguous written bare in a term. A
+  `derive` stands before its first use; all its capabilities are
+  analysed before anything is generated, so one refused field refuses
+  the form.
+- **Rule 3.** As designed; `(derive Tok eq)` at
+  `(type Tok (TNum Nat) (TPlus) (TPair Tok Tok))` erases to the match
+  on both arguments an author would write, `(if (Tok.decEq #3 #1) (if
+  (Tok.decEq #2 #0) (isTrue) (isFalse)) (isFalse))` under the pair's
+  row. Distinct constructors: `Nat.ne_of_beq_eq_false` at the two
+  index terms, `congrArg NS.ctorIdx h` its premise — no `noConfusion`,
+  so Init's parametric types need none of the bundle. Injectivity:
+  `C.inj` where the environment has it (the bundle's, Init's
+  `List.cons.inj` and `Option.some.inj`), else the projections of a
+  one-constructor type (`Prod`, whose `Prod.mk.inj` lies at line
+  1,985,485 of the export). **Wider than the ruling's fifth lean:** a
+  one-constructor type with parameters derives through its
+  projections (pin `derive_params`'s `Wrap`); with two constructors it
+  is `derive_needs`, naming the missing `inj`. Init's own
+  parameterless types derive as the program's do (`Bool`, `Ordering`).
+- **Rule 4.** As designed; the wildcard row of a constructor that is
+  neither first nor last compares `(NS.ctorIdx b)` with its own index.
+  `Ordering.casesOn` is among the constants the generated source needs
+  (line 172,785 of the export).
+- **Rule 5.** As designed. A list renders by its constructors,
+  `(cons a (cons b nil))`, not as `(list a b)`. **Narrower than the
+  ruling's fourth lean:** a function-valued field is refused
+  (`derive_field`), not printed `_` — a type that holds a function is
+  not an E type, so it has no program and no value to render.
+- **Rule 7.** As designed, and one refusal the design did not have:
+  on the E-first route — a body that calls an extern, until phase 4's
+  World — `=` is the classifier's integer primitive, and at an
+  inductive it was accepted and stuck at run. It is `prim_type` now,
+  with the pointer to call the decision by name (pin
+  `derive_e_first`).
+- **The library** (`v3/std/derive.shard`, importing through
+  `UInt8.toNat`): `Bool`'s ordering and rendering derived; `UInt8`'s
+  equality by its bit vector's number (`BitVec.eq_of_toNat_eq` and K's
+  structure eta), `ByteArray`'s by its list's — `(derive (List UInt8)
+  eq (ord structural))` — and `String`'s by its bytes'
+  (`String.toByteArray_inj`), each with its ordering, registered by
+  `(CAPABILITY by NAME)`; the renderers of `Nat` (decimal, its measure
+  discharged by a term over `Nat.div_lt_self`), `Int`, `UInt8` and
+  `String` (quoted, the reader's escapes). Fourteen procedures and
+  one constructor index, 26 functions defined, no pending obligation
+  and no axiom of the library's — `propext` reaches the decimal
+  renderer and its two callers through Init's `Nat` lemmas in the
+  descent's proof. **Wider than the
+  lean**, which gave these three types equality only. `ByteArray` has
+  no renderer.
+- **Not built.** Lean's instance constants: `T.decEq` has `DecidableEq
+  T`'s type unfolded and is the constant Stage 3 registers; `instOrdT
+  : Ord T` would hold a function, has no program and no reader before
+  Stage 3, which writes it in one line over `T.compare` — the lean
+  said the generated constants would have Lean's instance types, and
+  for the ordering that waits. The ordering's laws (the ruling). An
+  entry crossing a view by itself: the view states the procedure and
+  the consumer registers it (below). Types with parameters and two
+  constructors or more, nested and mutual types (the ruling). A
+  package default for the policy. Operator spellings for `compare`
+  and `render`. **The toolchain's own sources cannot derive yet**:
+  the bootstrap reads their E half and generates nothing (`derive` is
+  its `UnknownForm`), so `v3/kernel/**` keeps its hand-written
+  `*_eq` and `show_*` until route 1's chain is V3's own — as the flip
+  and the rename wait (items 37, 50).
+- **Found while building.** (a) *An `if` whose condition is a
+  self-call was refused*: `(if (f x) …)` is `ite (f x = true) inst …`,
+  and `define.shard`'s `pj_ite` rewrote the decision and left the
+  proposition holding the self-local — `K refused the definition
+  (fvar_in_value)`. Both go through the walk now (pin `if_rec_call`).
+  (b) *Under a measure that call asked for two proofs of one fact* —
+  it stands in the proposition and in the decision: an obligation is
+  named once per statement (`obl_stating`), so `f.dec_2` no longer
+  duplicates `f.dec_1`, nor do two identical calls in one scope (pin
+  `measure_if_call`). (c) *`and`, `or`, `not` on `Bool`s cited
+  constants the export does not have*: Lean 4.33's are `Bool.and`,
+  `Bool.or`, `Bool.not`; a `def` was `unknown_constant: and`, a `fn`
+  `unknown_head: and`. The elaborator cites the real names and the
+  registry has their rows — `(if a b false)`, `(if a true b)`, `(if a
+  false true)`, the `if` each definition is — and `a = b` at `Bool`
+  in general position, the test `(if a b (if b false true))`, which a
+  derived equality's `Bool` field needs (it was `no_realization` off
+  `= true`). Evidence as the registry's other
+  rows have it: every row by `Eq.refl` on K's side (pin `bool_ops`),
+  the programs run by `derive_test.sh`. (d) *A `fn`'s result
+  `(Decidable (= a b))` could not be read*: an operator inside an
+  E-type position took the position's level 0 for `Eq` (rule 9). (e)
+  *The refusal for (d) named the wrong thing*: a signature with no L
+  reading falls to the classifier, whose `unknown_type: =` hid the
+  cause; a classifier refusal after a skipped signature now carries
+  what the signature's reading met (`load_e_skipped`), as slice 3.18
+  did for a body; so does one after an unknown constant that is no
+  function — `(or a b)` under a prefix that stops before `Bool.or`
+  was `unknown_head: and` and now names `unknown_constant: Bool.or`. (f) *An explicit numeral argument is still
+  unassigned when a later argument is checked* (§5.1's "numerals
+  last"): `(@Nat.ne_of_beq_eq_false 0 1 (Eq.refl false) h)` is
+  `type_mismatch` at the third argument. **Left as it is**; the
+  generator writes the index terms, which are closed.
+- **Across a view** (rule 6; §8.5's "the module derives and
+  exports", pin `derive_sig`): the implementation derives its type
+  and defines `Handle.same` as the derived decision; the view states
+  `(sig fn Handle.same ((a Handle) (b Handle)) (Decidable (= a b)))`;
+  the consumer registers it with `(eq by lib.Handle.same)` — a
+  parameter there, accepted as any constant of the capability's type —
+  and its own `Job` over a `Handle` derives through the entry, its
+  decision calling the parameter. For the view to hold that signature
+  the classifier's type reader takes `(Decidable P)` as the type's two
+  cells, its proposition unread (the erasure's reading; it was
+  `unknown_type: =`).
+- **Rule 9** is general: a proof by cases is a `match` in S now (pin
+  `match_dependent`: `not (not b) = b`, one row per constructor).
+- **Found by a second reader over the diff**, each reproduced, fixed
+  and pinned. (a) *A registry row spoke for any constant bearing its
+  name*: a module `Bool` declaring `or` under a prefix that stops
+  before Init's ran as the row's `(if a true b)` while K proved the
+  module's function — a clean load, a program that disagreed with
+  its definition. The name-keyed rows now hold for a constant that is
+  not a native declaration (`erase_const`'s `k`; pin
+  `registry_native`). (b) *A `Decidable` had two runtime
+  representations, since before the slice*: the registry's decisions
+  erased to the bare test in every position, so a match by
+  constructor on `(Nat.decEq a b)` took the catch-all row while K
+  proved the other; the slice made such values ordinary (a `fn` may
+  return one). A decision is now its test only where an `if` reads it
+  — `ite`, `dite`, `decide`, a `casesOn` read back as an `if`
+  (`erase_cond`) — and `(if TEST isTrue isFalse)` as a value; the
+  programs of every existing `if` are unchanged (pin
+  `decidable_cells`, run on the host against K's theorems). (c) *A
+  derivation took a constant that bore its name for its own*: a
+  hand-written `T.ctorIdx` or `T.compare` was reused or registered
+  under `policy=structural`. A generated name that is taken is
+  `name_taken`, the index is shared through the table only, and a
+  failed form registers nothing (pin `derive_name_taken`). (d) *An
+  entry registered by `(CAPABILITY by NAME)` was visible wherever the
+  procedure was*, so a file's reading depended on what the loader had
+  been given before it; an entry carries its deriving module (pin
+  `derive_visible`). (e) *Rule 9 broke rows it should read and proofs
+  that loaded before*: a `_` sub-pattern's local was outside the
+  scope a metavariable's value may mention (it is bound now, under a
+  name no source spells); a row that used a hypothesis about the
+  scrutinee no longer typed (the constant motive is the fallback).
+  (f) *`eq` at a container of a `Prod` was refused by its own
+  source*: `(@List.nil (Prod Nat Nat))` asks `Type ?u` of `Sort (max
+  1 1)`, and level unification compared a closed level unnormalized —
+  older than the slice, fixed in `unify_level`. (g) *A self-call in a
+  branch under a self-call condition, under a measure*: its
+  obligation quantified the branch's hypothesis, which states the
+  function's own value (`dec_2 fvar_in_type`); the obligation is
+  stated without such locals. (h) What had no derivation was refused
+  late or obscurely: a type without constructors, a proposition, an
+  argument that is a value, `Nat` — each refused up front with its
+  reason (pin `derive_refusals`); a generated variable could be read
+  as a constructor of the field's type; the table's key was not
+  normalized. **Left, and known:** a let bound to a self-call under
+  a measure still leaves a later call's obligation open-termed
+  (`fvar_in_type`, as before the slice); a measured function whose
+  result type depends on its arguments is `app_type_mismatch` with no
+  pointer; `erase_bool_eq` writes its second operand's code twice
+  (one path runs).
+- **Cleanup.** `realize.shard` opened `kernel.prog.EType` and used
+  none of its constructors since slice 3.18 moved `etype_eq` (the
+  loader's `UNUSED` record said so on every load); removed.
+- **Gates run.** 176 loader pins (20 new: `derive_eq`,
+  `derive_containers`, `derive_field`, `derive_nested`,
+  `derive_params`, `derive_policy`, `derive_duplicate`, `derive_by`,
+  `derive_needs`, `derive_e_first`, `derive_sig`, `derive_name_taken`,
+  `derive_refusals`, `derive_visible`, `registry_native`,
+  `decidable_cells`, `match_dependent`, `if_rec_call`,
+  `measure_if_call`, `bool_ops`); `define_test.sh` (12 checks);
+  `derive_test.sh` (14 checks: the library's 14 procedures, the
+  example program's ten lines on the host — every row of Init's Bool
+  connectives and of `Bool`'s equality among them, the same list K
+  decides; `v3/examples/derive/derive_main.shard` — and
+  `convention.shard`: two types with the same constructors in
+  opposite order compare oppositely, and a type over a hand-written
+  ordering records the procedure it selected, T1's fixture); the
+  gates of every slice (records §9 for the figures).
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built
@@ -3161,7 +3519,9 @@ stance is stated now (§13 item 46):
 - **Deriving and the constructor-structure facilities** (`noConfusion`,
   `injection`, decidable equality) on a `sig type` are refused in a
   consumer with the pointer to the view; the module derives and
-  exports.
+  exports. Since slice 3.19 the export is a `sig fn` of the
+  capability's type and the consumer registers it with
+  `(CAPABILITY by NAME)` (§8.4 slice 3.19 rule 6; pin `derive_sig`).
 - **The E side stays as ruled** (items 18, 40): the substitution links
   bodies for `run` only.
 - **I inherits it by construction**: `applicable(goal, env, policy)`
@@ -3368,7 +3728,7 @@ never compared as verdicts.
 |---|---|---|
 | implicit arguments, first-order unification, universe inference, the numeral rule of §5.2, coercion `Nat → Int` | §5.1 Stage 1, §5.2 | 3 — **landed slice 3.15** (§5.1, §8.4) |
 | match compilation, structural recursion to recursors, `f.eq_N`, `noConfusion`, `WellFounded.fix` from `measure`, `fn` = `def` + `realize` | §5.1 Stage 1, §4.5; §8.4 | 3 — slices 3.13 (immediate-field recursion, `eq_N`), 3.14 (course-of-values, `WellFounded.fix`), 3.15 (`casesOn`, `noConfusion`, `c.inj` for a type without parameters; the parametric `HEq` shape later) |
-| deriving under a declared policy | §5.1 | 3 |
+| deriving under a declared policy | §5.1 | 3 — **landed slice 3.19** (§8.4): a type without parameters and Init's `List`, `Option`, `Prod` at closed arguments; types with parameters, nested and mutual types, the ordering's laws and the instance constants later |
 | tactic blocks, the I elaborator, the goal graph, `sorry` as a hole | §5.1 Stage 2, §7 | 3 |
 | typeclasses, instances, coercions | §5.1 Stage 3 | 3 |
 | the `Init` import with E realizations attached; `String`, `Array`, `ByteArray` representations (Init's E-eligible inductives are E types since slice 5b, §7.5; a `realize` attaches a body per constant) — **the byte-list representations landed at slice 3.18** (§8.4: `String`, `ByteArray`, `Array`, `UInt8`, `BitVec`, `Fin`); the packed buffers are the lowering's, behind the same types | §4.4, INVENTORY | 3 |
@@ -4067,3 +4427,39 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     names the obstacle. **Not built:** the checked decoder — no
     consumer turns input bytes into a `String`, and its proof is I's;
     until then text enters a program as its literals.
+52. **Slice 3.19's ruling and scope (RULED 2026-10-02 — the user
+    agreed with five leans; built the same day, §8.4's design and
+    as-built).** Deriving under a declared policy, law §5.1. (1) A use
+    site finds a derived operation through **a derivation table** —
+    one entry per type and capability, visible where its procedure
+    is, no search; `=` in an `if` consults it. Rejected: named
+    functions only; instance resolution pulled forward. (2) **One
+    named policy, `structural`, written at the derivation.** Rejected:
+    a package default. (3) **The ordering is `compare` into Init's
+    `Ordering`, without laws.** Rejected: the laws before I. (4) **The
+    rendering is bytes in canonical S.** Rejected: Lean's `Repr`; a
+    `String` before `String.append` has its equation; deferring it.
+    (5) **Supported: a type without parameters and Init's `List`,
+    `Option`, `Prod` at closed arguments** — each instantiation its
+    own derivation, E having no function values. Rejected: types with
+    parameters and nested types now. **Decided in the design:** the
+    form `(derive TYPE CAPABILITY…)` with `(CAPABILITY by NAME)` for a
+    hand-written procedure; generation as `fn` source through the one
+    front end; the mangled namespace (`List_Tok.decEq`). **Departures
+    from the leans as built, each in §8.4:** Lean's instance constants
+    are not generated (`T.decEq`'s type is `DecidableEq T` unfolded;
+    `Ord T` holds a function and waits for Stage 3); a function-valued
+    field is refused under `render`, not printed `_`; wider than
+    asked — a one-constructor type with parameters derives, and the
+    library gives `UInt8`, `ByteArray` and `String` their orderings
+    and (but `ByteArray`) renderings beside equality. **Built beyond
+    the leans:** a `match` generalizes a local scrutinee in its
+    expected type (rule 9); the registry's `Bool` rows; an
+    obligation named once per statement; `prim_type`, the
+    classifier's refusal of an integer comparison at an inductive.
+    **Found by a second reader and fixed (§8.4's as-built):** a
+    registry row spoke for any constant bearing its name; a
+    `Decidable` value had two runtime representations (older than
+    the slice) — a decision is its test only as an `if`'s condition;
+    a derivation took a same-named constant for its own; a registered
+    entry's visibility depended on load order.

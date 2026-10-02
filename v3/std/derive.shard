@@ -1,0 +1,84 @@
+;;; v3/std/derive.shard — the derivations the library ships (LANGUAGE.md §8.4, slice 3.19;
+;;; law §5.1). A program derives equality, an ordering and a rendering for its own types
+;;; with `(derive TYPE CAPABILITY…)`; a field's procedure is the derivation table's entry at
+;;; the field's type. `Nat`, `Int` and `Bool` have the elaborator's own rows for equality, and
+;;; `Nat` and `Int` for the ordering; everything else those types and Init's bytes and text
+;;; need is here: `Bool`'s ordering and rendering (derived), `UInt8`, `ByteArray` and
+;;; `String`'s procedures — hand-written over their one runtime field, registered with
+;;; `(CAPABILITY by NAME)` — and the renderers of `Nat` and `Int`. A file that renders
+;;; imports this one: the generated `T.render` writes its bytes with `Bytes.ofNats`.
+;;;
+;;; A rendering is canonical S as codes before a rest (`T.renderOnto x rest`), so a value
+;;; prints in time linear in its text: a number in decimal, a text quoted with the reader's
+;;; escapes. The orderings here are the structural policy's at these types: numbers by `<`,
+;;; bytes and texts byte by byte, a prefix first — on valid UTF-8 the order of code points.
+(import "bytes.shard")
+(import Init UInt8.toNat)
+(use std.bytes)
+
+;; ---- Bool ------------------------------------------------------------------------------------
+(derive Bool (ord structural) render)
+
+;; ---- numbers ---------------------------------------------------------------------------------
+;; decimal digits, the most significant first
+(fn Nat.renderOnto ((n Nat) (rest (List Nat))) (List Nat)
+  (measure n)
+  (if (< n 10) (List.cons (+ 48 n) rest)
+    (Nat.renderOnto (Nat.div n 10) (List.cons (+ 48 (Nat.mod n 10)) rest))))
+(fulfills Nat.renderOnto.dec_1
+  (exact (fun ((p (PProd.{1 1} Nat (List Nat))) (h (Not (< (proj PProd 0 p) 10))))
+    (Nat.div_lt_self (Nat.lt_of_lt_of_le (Nat.zero_lt_succ 9) (Nat.le_of_not_lt h)) (Nat.succ_lt_succ (Nat.zero_lt_succ 8))))))
+(fn Int.renderOnto ((n Int) (rest (List Nat))) (List Nat)
+  (if (< n 0) (List.cons 45 (Nat.renderOnto (Int.natAbs n) rest))
+    (Nat.renderOnto (Int.natAbs n) rest)))
+(derive Nat (render by Nat.renderOnto))
+(derive Int (render by Int.renderOnto))
+
+;; ---- a byte ----------------------------------------------------------------------------------
+;; equal numbers are equal bytes: a bit vector by its number (Init's BitVec.eq_of_toNat_eq),
+;; the byte by K's structure eta
+(fn Byte.decEq ((a UInt8) (b UInt8)) (Decidable (= a b))
+  (@dite (Decidable (= a b)) (= (BitVec.toNat (UInt8.toBitVec a)) (BitVec.toNat (UInt8.toBitVec b)))
+    (Nat.decEq (BitVec.toNat (UInt8.toBitVec a)) (BitVec.toNat (UInt8.toBitVec b)))
+    (fun ((e (= (BitVec.toNat (UInt8.toBitVec a)) (BitVec.toNat (UInt8.toBitVec b)))))
+      (Decidable.isTrue (congrArg UInt8.ofBitVec (BitVec.eq_of_toNat_eq e))))
+    (fun ((n (Not (= (BitVec.toNat (UInt8.toBitVec a)) (BitVec.toNat (UInt8.toBitVec b))))))
+      (Decidable.isFalse (fun ((h (= a b))) (n (congrArg UInt8.toNat h)))))))
+(fn Byte.compare ((a UInt8) (b UInt8)) Ordering
+  (if (< (UInt8.toNat a) (UInt8.toNat b)) Ordering.lt
+    (if (= (UInt8.toNat a) (UInt8.toNat b)) Ordering.eq Ordering.gt)))
+(fn Byte.renderOnto ((b UInt8) (rest (List Nat))) (List Nat) (Nat.renderOnto (UInt8.toNat b) rest))
+(derive UInt8 (eq by Byte.decEq) (ord by Byte.compare) (render by Byte.renderOnto))
+
+;; ---- a byte array: its list's -------------------------------------------------------------------
+(derive (List UInt8) eq (ord structural))
+(fn Bytes.decEq ((a ByteArray) (b ByteArray)) (Decidable (= a b))
+  (@dite (Decidable (= a b)) (= (Bytes.toList a) (Bytes.toList b)) (List_UInt8.decEq (Bytes.toList a) (Bytes.toList b))
+    (fun ((e (= (Bytes.toList a) (Bytes.toList b)))) (Decidable.isTrue (congrArg Bytes.ofList e)))
+    (fun ((n (Not (= (Bytes.toList a) (Bytes.toList b)))))
+      (Decidable.isFalse (fun ((h (= a b))) (n (congrArg Bytes.toList h)))))))
+(fn Bytes.compare ((a ByteArray) (b ByteArray)) Ordering (List_UInt8.compare (Bytes.toList a) (Bytes.toList b)))
+(derive ByteArray (eq by Bytes.decEq) (ord by Bytes.compare))
+
+;; ---- a text: its bytes' ------------------------------------------------------------------------
+(fn Text.decEq ((a String) (b String)) (Decidable (= a b))
+  (@dite (Decidable (= a b)) (= (String.toByteArray a) (String.toByteArray b)) (Bytes.decEq (String.toByteArray a) (String.toByteArray b))
+    (fun ((e (= (String.toByteArray a) (String.toByteArray b)))) (Decidable.isTrue (Iff.mp (@String.toByteArray_inj a b) e)))
+    (fun ((n (Not (= (String.toByteArray a) (String.toByteArray b)))))
+      (Decidable.isFalse (fun ((h (= a b))) (n (congrArg String.toByteArray h)))))))
+(fn Text.compare ((a String) (b String)) Ordering (Bytes.compare (String.toByteArray a) (String.toByteArray b)))
+;; quoted, with the reader's escapes for the quote, the backslash, newline, tab and return
+(fn Text.escOnto ((c Nat) (rest (List Nat))) (List Nat)
+  (if (= c 34) (List.cons 92 (List.cons 34 rest))
+  (if (= c 92) (List.cons 92 (List.cons 92 rest))
+  (if (= c 10) (List.cons 92 (List.cons 110 rest))
+  (if (= c 9) (List.cons 92 (List.cons 116 rest))
+  (if (= c 13) (List.cons 92 (List.cons 114 rest))
+    (List.cons c rest)))))))
+(fn Text.quoteOnto ((bs (List UInt8)) (rest (List Nat))) (List Nat) (measure (struct bs))
+  (match bs
+    (List.nil (List.cons 34 rest))
+    ((List.cons b t) (Text.escOnto (UInt8.toNat b) (Text.quoteOnto t rest)))))
+(fn Text.renderOnto ((s String) (rest (List Nat))) (List Nat)
+  (List.cons 34 (Text.quoteOnto (Bytes.toList (String.toByteArray s)) rest)))
+(derive String (eq by Text.decEq) (ord by Text.compare) (render by Text.renderOnto))

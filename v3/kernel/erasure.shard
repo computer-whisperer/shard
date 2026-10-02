@@ -382,28 +382,33 @@
           ((Pair w2 _) (ErErr (quote function_value) "a variable applied to a runtime value (law §4.3)"))))
        ((Pair t1 None) (ErErr (quote function_value) "a variable applied to an argument K could not type"))))))
 (fn last_component ((n Name)) Symbol (match n ((Str _ s) s) (_ (quote anon))))
+;; `k`: the constant where a row of the registry may speak for it — Init's; a native declaration
+;; that bears a row's name (a module `Bool` declaring `or` under a prefix that stops before
+;; Init's) is its own program, never the row's (slice 3.19: the second reader's probe)
 (fn erase_const ((t Tr) (env (List ErEnt)) (c Name) (args (List Expr)) (fuel Int)) ErRes
+  (erase_const_at t env c (if (native_decl (Tr.sc t) c) Anon c) args fuel))
+(fn erase_const_at ((t Tr) (env (List ErEnt)) (c Name) (k Name) (args (List Expr)) (fuel Int)) ErRes
   (let ((lc (last_component c)))
-    (if (name_eq c (n2 (quote OfNat) (quote ofNat)))
+    (if (name_eq k (n2 (quote OfNat) (quote ofNat)))
       (match args ((Cons (Const _ nn _) (Cons (Lit _ (LitNat n)) _)) (if (name_eq nn (nm_nat)) (ErOk t (ELit (LNat n))) (ErErr (quote no_realization) "OfNat.ofNat off Nat"))) (_ (ErErr (quote no_realization) "OfNat.ofNat")))
-    (if (name_eq c (nm_nat_zero)) (ErOk t (ELit (LNat 0)))
-    (if (name_eq c (nm_nat_succ))
+    (if (name_eq k (nm_nat_zero)) (ErOk t (ELit (LNat 0)))
+    (if (name_eq k (nm_nat_succ))
       (match args
         ((Cons x Nil) (match (erase t env x (- fuel 1)) ((ErErr e m) (ErErr e m)) ((ErOk t1 x1) (ErOk t1 (EPrim (n2 (quote Nat) (quote add)) (list x1 (ELit (LNat 1))))))))
         (_ (ErErr (quote function_value) "Nat.succ unapplied")))
-    (if (name_eq c (nm_int_of_nat))          ; Nat and Int share the integer (INVENTORY): the coercion is the identity
+    (if (name_eq k (nm_int_of_nat))          ; Nat and Int share the integer (INVENTORY): the coercion is the identity
       (match args ((Cons x Nil) (erase t env x (- fuel 1))) (_ (ErErr (quote function_value) "Int.ofNat unapplied")))
-    (if (name_eq c (nm_int_neg_succ))
+    (if (name_eq k (nm_int_neg_succ))
       (match args
         ((Cons (Lit _ (LitNat n)) Nil) (ErOk t (ELit (LInt (- (- 0 n) 1)))))
         ((Cons x Nil) (match (erase t env x (- fuel 1)) ((ErErr e m) (ErErr e m)) ((ErOk t1 x1) (ErOk t1 (EPrim (n1 (quote -)) (list (EPrim (n1 (quote -)) (list (ELit (LNat 0)) x1)) (ELit (LNat 1))))))))
         (_ (ErErr (quote function_value) "Int.negSucc unapplied")))
-    (if (name_eq c (n2 (quote Decidable) (quote decide)))
+    (if (name_eq k (n2 (quote Decidable) (quote decide)))
       ;; decide p inst: Bool and Decidable have different cells (ev.shard), so the conversion is
       ;; explicit — (if ⟦inst⟧ true false) over Init's Bool (slice 3.16 rule 3; GPT-6 R66)
       (match args
         ((Cons _ (Cons inst Nil))
-         (match (erase t env inst (- fuel 1))
+         (match (erase_cond t env inst (- fuel 1))
            ((ErErr e m) (ErErr e m))
            ((ErOk t1 i1)
             (match (erase t1 env (mk_const (n2 (quote Bool) (quote true)) Nil) (- fuel 1))
@@ -413,21 +418,20 @@
                  ((ErErr e m) (ErErr e m))
                  ((ErOk t3 ff) (ErOk t3 (EIf i1 tt ff)))))))))
         (_ (ErErr (quote function_value) "Decidable.decide unapplied")))
-    (if (name_eq c (n1 (quote instDecidableEqBool)))
-      ;; the decision of `b = true` is b
+    (if (name_eq k (n1 (quote instDecidableEqBool)))
+      ;; a value here: Decidable's cells (where an `if` reads it, erase_cond gives the test)
       (match args
-        ((Cons a (Cons b Nil))
-         (if (is_const_named b (n2 (quote Bool) (quote true))) (erase t env a (- fuel 1))
-         (if (is_const_named a (n2 (quote Bool) (quote true))) (erase t env b (- fuel 1))
-           (ErErr (quote no_realization) "Bool's decidable equality off `= true`: no realization yet"))))
+        ((Cons a (Cons b Nil)) (erase_bool_eq t env a b fuel))
         (_ (ErErr (quote function_value) "instDecidableEqBool unapplied")))
-    (if (bool_or (name_eq c (n1 (quote ite))) (name_eq c (n1 (quote dite))))
+    (if (bool_or (name_eq k (n1 (quote ite))) (name_eq k (n1 (quote dite))))
       (match args
-        ((Cons _ (Cons _ (Cons h (Cons a (Cons b Nil))))) (erase_ite t env h a b (name_eq c (n1 (quote dite))) fuel))
+        ((Cons _ (Cons _ (Cons h (Cons a (Cons b Nil))))) (erase_ite t env h a b (name_eq k (n1 (quote dite))) fuel))
         (_ (ErErr (quote function_value) "ite unapplied")))
+    (if (bool_or (name_eq k (n2 (quote Bool) (quote and))) (bool_or (name_eq k (n2 (quote Bool) (quote or))) (name_eq k (n2 (quote Bool) (quote not)))))
+      (erase_bool_op t env c args fuel)
     (if (bool_or (sym_eq lc (quote brecOn)) (bool_or (sym_eq lc (quote below)) (bool_or (sym_eq lc (quote fix)) (sym_eq lc (quote binductionOn)))))
       (ErErr (quote recursion_structure) (append (show_name c) ": a recursive definition's executable structure is not readable off the kernel term — supply the body (§7.1, §7.3)"))
-    (if (bool_or (name_eq c (n2 (quote Classical) (quote choice))) (bool_or (name_eq c (n2 (quote Acc) (quote rec))) (bool_or (name_eq c (nm_quot_lift)) (bool_or (name_eq c (nm_quot_mk)) (name_eq c (nm_quot_ind))))))
+    (if (bool_or (name_eq k (n2 (quote Classical) (quote choice))) (bool_or (name_eq k (n2 (quote Acc) (quote rec))) (bool_or (name_eq k (nm_quot_lift)) (bool_or (name_eq k (nm_quot_mk)) (name_eq k (nm_quot_ind))))))
       (ErErr (quote noncomputable) (append (show_name c) " in a runtime position (law §4.2)"))
     (match (env_find (tr_env t) c)
       (None (ErErr (quote unknown_constant) (show_name c)))
@@ -442,17 +446,20 @@
               ((Some (EFn _ _ ps _ _ _)) (erase_call t env c info args fuel))
               ((Some (ESig _ _ ps _)) (erase_call t env c info args fuel))
               (_
-               (match (realization_of c)
-                 ((Some p) (match (erase_all t env args fuel Nil) ((Pair (Some (Pair e m)) _) (ErErr e m)) ((Pair None (Pair t1 as)) (ErOk t1 (EPrim p as)))))
+               (match (realization_of k)
+                 ((Some p)
+                  (match (erase_all t env args fuel Nil)
+                    ((Pair (Some (Pair e m)) _) (ErErr e m))
+                    ((Pair None (Pair t1 as)) (if (is_decision k) (erase_dec_value t1 env (EPrim p as) fuel) (ErOk t1 (EPrim p as))))))
                  (None
-                  (match (realization_expr c)
+                  (match (realization_expr k)
                     ((Some body)
                      (match (erase_all t env args fuel Nil)
                        ((Pair (Some (Pair e m)) _) (ErErr e m))
                        ((Pair None (Pair t1 (Cons a Nil))) (ErOk t1 (ELet (list a) body)))
                        ((Pair None _) (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)")))))
                     (None
-                  (match (prim_l_identity c)
+                  (match (prim_l_identity k)
                     ((Some _) (match (erase_all t env args fuel Nil) ((Pair (Some (Pair e m)) _) (ErErr e m)) ((Pair None (Pair t1 as)) (ErOk t1 (EPrim c as)))))
                     (None
                      (match (mt_is_matcher (tr_env t) c)
@@ -460,7 +467,66 @@
                        (None
                         (match (proj_fn_app info args)
                           ((Some (Pair (Pair sn i) x)) (erase_proj t env sn i x fuel))
-                          (None (ErErr (quote no_realization) (append (show_name c) ": no realization attached — realize it first (§7.1)")))))))))))))))))))))))))))))))
+                          (None (ErErr (quote no_realization) (append (show_name c) ": no realization attached — realize it first (§7.1)"))))))))))))))))))))))))))))))))
+;; ---- decisions: a value and a condition (slice 3.19) -------------------------------------------
+;; A `Decidable` value is one of the type's two cells — a match by constructor reads it, a
+;; function returns it, a derived decision is built of them. The registry's decisions answer a
+;; test instead (the integer comparison's cell, a Bool), which is all an `if` reads: so where a
+;; decision is an `if`'s condition — `ite`, `dite`, `decide`, a `casesOn` read back as an `if` —
+;; erase_cond gives the bare test, and everywhere else the constant erases to
+;; (if TEST isTrue isFalse). Before this slice the bare test stood in every position, and a
+;; match on `(Nat.decEq a b)` by constructor took the wrong row (the second reader's probe)
+(fn erase_dec_value ((t Tr) (env (List ErEnt)) (test ETerm) (fuel Int)) ErRes
+  (let ((tt (mk_const (n1 (quote True)) Nil)) (pf (mk_const (n2 (quote True) (quote intro)) Nil)))
+    (match (erase_all t env (list (mk_app (mk_app (mk_const (n2 (quote Decidable) (quote isTrue)) Nil) tt) pf)
+                                 (mk_app (mk_app (mk_const (n2 (quote Decidable) (quote isFalse)) Nil) tt) pf)) fuel Nil)   ; the proofs are erased unread: only the cells are wanted
+      ((Pair (Some (Pair e m)) _) (ErErr e m))
+      ((Pair None (Pair t1 (Cons yes (Cons no Nil)))) (ErOk t1 (EIf test yes no)))
+      ((Pair None _) (ErErr (quote no_realization) "Decidable's cells")))))
+(fn is_decision ((c Name)) Bool
+  (let ((lc (last_component c)))
+    (bool_or (sym_eq lc (quote decEq)) (bool_or (sym_eq lc (quote decLt)) (sym_eq lc (quote decLe))))))
+;; `a = b` at Bool: the test is `a` where b is `true` (and symmetrically), else
+;; (if a b (if b false true)) over Init's Bool cells — b read once on either path
+(fn bool_eq_test ((t Tr) (env (List ErEnt)) (a Expr) (b Expr) (fuel Int)) ErRes
+  (if (is_const_named b (n2 (quote Bool) (quote true))) (erase t env a (- fuel 1))
+  (if (is_const_named a (n2 (quote Bool) (quote true))) (erase t env b (- fuel 1))
+    (match (erase_all t env (list a b (mk_const (n2 (quote Bool) (quote true)) Nil) (mk_const (n2 (quote Bool) (quote false)) Nil)) fuel Nil)
+      ((Pair (Some (Pair e m)) _) (ErErr e m))
+      ((Pair None (Pair t1 (Cons a1 (Cons b1 (Cons tt (Cons ff Nil)))))) (ErOk t1 (EIf a1 b1 (EIf b1 ff tt))))
+      ((Pair None _) (ErErr (quote no_realization) "Bool's decidable equality"))))))
+(fn erase_bool_eq ((t Tr) (env (List ErEnt)) (a Expr) (b Expr) (fuel Int)) ErRes
+  (match (bool_eq_test t env a b fuel)
+    ((ErErr e m) (ErErr e m))
+    ((ErOk t1 test) (erase_dec_value t1 env test fuel))))
+;; a decision where an `if` reads it
+(fn erase_cond ((t Tr) (env (List ErEnt)) (h Expr) (fuel Int)) ErRes
+  (match (get_app_fn h)
+    ((Const _ c _)
+     (if (native_decl (Tr.sc t) c) (erase t env h fuel)
+       (let ((args (get_app_args h)))
+         (if (name_eq c (n1 (quote instDecidableEqBool)))
+           (match args
+             ((Cons a (Cons b Nil)) (bool_eq_test t env a b fuel))
+             (_ (erase t env h fuel)))
+         (if (bool_and (is_decision c) (match (es_find_decl (Tr.es t) c) ((Some _) False) (None True)))
+           (match (realization_of c)
+             ((Some p) (match (erase_all t env args fuel Nil) ((Pair (Some (Pair e m)) _) (ErErr e m)) ((Pair None (Pair t1 as)) (ErOk t1 (EPrim p as)))))
+             (None (erase t env h fuel)))
+           (erase t env h fuel))))))
+    (_ (erase t env h fuel))))
+;; the registry's Bool rows (slice 3.19): Init's connectives as the `if` their definitions are —
+;; `Bool.and a b` is (if a b false), `Bool.or a b` (if a true b), `Bool.not a` (if a false true),
+;; the second operand not evaluated where the first decides (Init marks them macro_inline)
+(fn erase_bool_op ((t Tr) (env (List ErEnt)) (c Name) (args (List Expr)) (fuel Int)) ErRes
+  (match (erase_all t env (append args (list (mk_const (n2 (quote Bool) (quote true)) Nil) (mk_const (n2 (quote Bool) (quote false)) Nil))) fuel Nil)
+    ((Pair (Some (Pair e m)) _) (ErErr e m))
+    ((Pair None (Pair t1 (Cons a (Cons tt (Cons ff Nil))))) (if (name_eq c (n2 (quote Bool) (quote not))) (ErOk t1 (EIf a ff tt)) (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)"))))
+    ((Pair None (Pair t1 (Cons a (Cons b (Cons tt (Cons ff Nil))))))
+     (if (name_eq c (n2 (quote Bool) (quote and))) (ErOk t1 (EIf a b ff))
+     (if (name_eq c (n2 (quote Bool) (quote or))) (ErOk t1 (EIf a tt b))
+       (ErErr (quote function_value) (append (show_name c) " over-applied")))))
+    ((Pair None _) (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)")))))
 ;; the realization registry's Int rows (slice 3.16 rule 4): a resolved L operation → the table's
 ;; entry. ev's integer operation and K's constant agree on every input for these; the
 ;; decisions answer a two-constructor cell, which is all an `if` reads (decide converts)
@@ -684,7 +750,7 @@
            ((Pair None (Pair t2 as)) (ErOk t2 (ECall c as)))))))))
 ;; ite / dite: an if on the decision; dite's branches applied to their proof
 (fn erase_ite ((t Tr) (env (List ErEnt)) (h Expr) (a Expr) (b Expr) (dep Bool) (fuel Int)) ErRes
-  (match (erase t env h (- fuel 1))
+  (match (erase_cond t env h (- fuel 1))
     ((ErErr e m) (ErErr e m))
     ((ErOk t1 h1)
      (match (erase_branch t1 env a dep fuel)
@@ -715,15 +781,18 @@
                (match (nth args (+ nparams 1))
                  (None (ErErr (quote function_value) (show_name c)))
                  ((Some major)
-                  (match (erase t1 env major (- fuel 1))
-                    ((ErErr e m) (ErErr e m))
-                    ((ErOk t2 major1)
-                     (match (if_branches t2 ctors (drop (+ nparams 2) args))
-                       ((Some (Pair else_b then_b)) (erase_ite_bodies t2 env major1 then_b else_b fuel))
-                       (None
-                     (match (erase_minors t2 env ctors (drop (+ nparams 2) args) False fuel Nil)
-                       ((Pair (Some (Pair e m)) _) (ErErr e m))
-                       ((Pair None (Pair t3 arms)) (ErOk t3 (EMatch major1 arms))))))))))))))))
+                  (match (if_branches t1 ctors (drop (+ nparams 2) args))
+                    ((Some (Pair else_b then_b))
+                     (match (erase_cond t1 env major (- fuel 1))
+                       ((ErErr e m) (ErErr e m))
+                       ((ErOk t2 major1) (erase_ite_bodies t2 env major1 then_b else_b fuel))))
+                    (None
+                     (match (erase t1 env major (- fuel 1))
+                       ((ErErr e m) (ErErr e m))
+                       ((ErOk t2 major1)
+                        (match (erase_minors t2 env ctors (drop (+ nparams 2) args) False fuel Nil)
+                          ((Pair (Some (Pair e m)) _) (ErErr e m))
+                          ((Pair None (Pair t3 arms)) (ErOk t3 (EMatch major1 arms))))))))))))))))
        (_ (ErErr (quote no_realization) (show_name c)))))
     (_ (ErErr (quote no_realization) (show_name c)))))
 ;; a case analysis of a row of the registry's types: its one alternative with the runtime

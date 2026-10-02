@@ -72,5 +72,22 @@ done
 check v3/std/host.shard \
   'RUNNABLE extern std.host.get_args' \
   'runnable 6  refused 0  pending 0  realized 0  defined 0  errors 0'
-echo "define_test: 9 checks, $fail failed"
+# slice 3.19, the second reader's findings: a registry row never speaks for a native
+# declaration that bears its name; a Decidable value is the type's cells off an `if`'s
+# condition (the program agrees with K's theorems on all three entries); the refusals of
+# what has no derivation, each with its reason
+R=v3/pins/loader/registry_native
+dump=$("$EVAL" direct v3/kernel/load.shard --root $R --init "$FIX" --dump $R/main.shard 2>&1)
+echo "$dump" | grep -q '^fn f 0 (Bool Bool) Bool (or #1 #0)$' || { echo "define_test: registry_native: f is not the call of the native or"; echo "$dump" | grep '^fn ' | head -3; fail=$((fail+1)); }
+R=v3/pins/loader/decidable_cells
+for e in main_bool:10 main_nat:10 main_nat_eq:11; do
+  "$EVAL" direct v3/kernel/load.shard --root $R --init "$FIX" --run main.${e%%:*} $R/main.shard > /dev/null 2>&1; rc=$?
+  [ "$rc" -eq "${e##*:}" ] || { echo "define_test: decidable_cells: ${e%%:*} exits $rc, K proves ${e##*:}"; fail=$((fail+1)); }
+done
+R=v3/pins/loader/derive_refusals
+out=$("$EVAL" direct v3/kernel/load.shard --root $R --init "$FIX" $R/main.shard 2>&1)
+for pat in 'derive_shape: main.Void' 'derive_type: True is a proposition' 'derive_type: Nat is the integer' 'derive_type: (Fin 3): an argument that is a value' 'derive_type: Nope is not a type here'; do
+  echo "$out" | grep -q -- "$pat" || { echo "define_test: derive_refusals lacks '$pat'"; fail=$((fail+1)); }
+done
+echo "define_test: 12 checks, $fail failed"
 exit "$fail"

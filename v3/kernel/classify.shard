@@ -204,9 +204,13 @@
         (match (type_ident es sc env n)
           ((TyErr e m) (TyErr e m))
           ((TyOk (ETCon id _) _)
+           ;; `(Decidable P)`: the parameter is a proposition, nothing of it is in E — the type
+           ;; is its two cells, as the erasure has it (slice 3.19: a view's sig fn that exports
+           ;; a decision states its result this way)
+           (if (name_eq id (n1 (quote Decidable))) (TyOk (ETCon id Nil) tps)
            (match (read_etys es sc env tps args Nil)
              ((Pair (TyErr e m) _) (TyErr e m))
-             ((Pair (TyOk _ tps1) ts) (TyOk (ETCon id ts) tps1))))
+             ((Pair (TyOk _ tps1) ts) (TyOk (ETCon id ts) tps1)))))
           ((TyOk _ _) (TyErr (quote bad_type) "a type parameter takes no arguments"))))))
     (_ (TyErr (quote bad_type) "a type is NAME or (NAME TYPE…)"))))
 ;; the argument types in order; the TyRes carries the threaded parameters (its type is a placeholder)
@@ -658,11 +662,13 @@
       ((Some (Leak st)) (Some (Pair (quote private_match) (append (show_name id) (append " matches a value of the sig type " (append (show_name st) " against a constructor (§6.5)"))))))
       ((Some (Mismatch st c)) (Some (Pair (quote pattern_type) (append (show_name id) (append " matches a value of type " (append (show_name st) (append " against the constructor " (show_name c))))))))
       ((Some (IfPrivate st)) (Some (Pair (quote private_if) (append (show_name id) (append " branches on a value of the sig type " (append (show_name st) " (§6.2: the observation is the type's, not the cell's)"))))))
+      ((Some (PrimType st op)) (Some (Pair (quote prim_type) (append (show_name id) (append " compares a value of type " (append (show_name st) (append " with " (append (show_name op) ": the comparison primitives are the integers' — an E-first body calls the type's derived decision by name, (T.decEq a b) (§8.4 slice 3.19 rule 7)"))))))))
       ((Some (IfType st k)) (Some (Pair (quote if_type) (append (show_name id) (append " branches on a value of type " (append (show_name st) (if (int_eq k 0) ", which is not an inductive (§6.2)" (append ", which has " (append (show_nat k) " constructors (§6.2: two)")))))))))
       (None None))))
 ;; what the typed pass refuses: a sig type matched against a constructor; a constructor of another
-;; type; an `if` whose condition is a sig type, or a type that is not a two-constructor inductive
-(type Bad (Leak Name) (Mismatch Name Name) (IfPrivate Name) (IfType Name Int))
+;; type; an `if` whose condition is a sig type, or a type that is not a two-constructor inductive;
+;; a comparison primitive at an inductive or a row's type (it would be stuck at run: slice 3.19)
+(type Bad (Leak Name) (Mismatch Name Name) (IfPrivate Name) (IfType Name Int) (PrimType Name Name))
 
 ;; exhaustiveness: every match, by the pattern matrix
 (fn c_exh ((es ESt) (t ETerm)) Bool
@@ -745,7 +751,10 @@
     ((ELit _) None)
     ((ECtor _ as) (c_leak_all es tys as))
     ((ECall _ as) (c_leak_all es tys as))
-    ((EPrim _ as) (c_leak_all es tys as))
+    ((EPrim n as)
+     (match (c_leak_all es tys as)
+       ((Some x) (Some x))
+       (None (if (cmp_prim n) (match (cmp_bad es tys as) ((Some st) (Some (PrimType st n))) (None None)) None))))
     ((EExt _ as) (c_leak_all es tys as))
     ((EMatch s arms)
      (match (c_leak es tys s)
@@ -780,6 +789,22 @@
        ((Some (EIInd _ ctors)) (if (int_eq (len ctors) 2) None (Some (IfType n (len ctors)))))
        (_ (if (bool_or (builtin_type n) (rep_row n)) (Some (IfType n 0)) None))))   ; a row of the registry's types has no tag an E-first body may read (slice 3.18 rule 1)
     (_ None)))
+;; `= < <=` compare integers: an operand whose static type is an inductive or one of the
+;; registry's rows — a derived equality's type, a String — has no primitive comparison. On the
+;; typed route the elaborator never produces one (it resolves `=` by the operand's type); an
+;; E-first body that wrote one would be stuck at run
+(fn cmp_prim ((n Name)) Bool
+  (bool_or (name_eq n (n1 (quote =))) (bool_or (name_eq n (n1 (quote <))) (name_eq n (n1 (quote <=))))))
+(fn cmp_bad ((es ESt) (tys (List (Option EType))) (as (List ETerm))) (Option Name)
+  (measure (struct as))
+  (match as
+    (Nil None)
+    ((Cons a r)
+     (match (c_type es tys a)
+       ((Some (ETCon t _))
+        (if (rep_row t) (Some t)
+          (match (es_info es t) ((Some (EIInd _ _)) (Some t)) (_ (cmp_bad es tys r)))))
+       (_ (cmp_bad es tys r))))))
 (fn c_leak_all ((es ESt) (tys (List (Option EType))) (ts (List ETerm))) (Option Bad)
   (measure (struct ts))
   (match ts (Nil None) ((Cons t r) (match (c_leak es tys t) ((Some x) (Some x)) (None (c_leak_all es tys r))))))

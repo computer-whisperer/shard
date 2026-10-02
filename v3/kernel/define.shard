@@ -504,13 +504,39 @@
               ((Pair t2 tup)
                (match (tr_apps t2 rel (list tup p))
                  ((Pair t3 goal)
-                  (match (tr_pis t3 (scope_fvars (PjCx.scope cx)) goal)
+                  (match (tr_pis t3 (scope_fvars (pj_obl_scope t3 (PjCx.scope cx) (fvar_id_of recl))) goal)
                     ((Pair t4 stmt)
-                       (let ((name (name_append (Tr.id t4) (n1 (sym_of_chars (append "dec_" (show_nat (+ 1 (len (Tr.obls t4))))))))))
-                         (match (tr_apps t4 (mk_const name Nil) (scope_lambda_fvars (PjCx.scope cx)))
+                       (let ((had (obl_stating (Tr.obls t4) stmt)))
+                       (let ((name (match had ((Some k) k) (None (name_append (Tr.id t4) (n1 (sym_of_chars (append "dec_" (show_nat (+ 1 (len (Tr.obls t4))))))))))))
+                         (match (tr_apps t4 (mk_const name Nil) (scope_lambda_fvars (pj_obl_scope t4 (PjCx.scope cx) (fvar_id_of recl))))
                            ((Pair t5 proof)
                             (match (tr_apps t5 recl (Cons tup (Cons proof (drop n dargs))))
-                              ((Pair t6 r) (TrOk (tr_add_obl t6 (AxiomDecl (ConstantVal name Nil stmt) False)) r))))))))))))))))))))))
+                              ((Pair t6 r) (TrOk (match had ((Some _) t6) (None (tr_add_obl t6 (AxiomDecl (ConstantVal name Nil stmt) False)))) r)))))))))))))))))))))))
+;; the locals an obligation is stated over: every local in scope at the call but those that
+;; state the function's own value — the hypothesis `f x = true` of a branch under a self-call
+;; condition — whose type cites the recursor's local, which a closed statement cannot. The
+;; obligation is asked without them: a stronger statement, never a weaker one (slice 3.19;
+;; `(if (f a) (f b) …)` under a measure was dec_2 fvar_in_type). A let bound to a self-call
+;; is not dropped (its value is K's to read): a later call in its scope is still refused
+(fn pj_obl_scope ((t Tr) (scope (List (Pair Bool Expr))) (recid Int)) (List (Pair Bool Expr))
+  (measure (struct scope))
+  (match scope
+    (Nil Nil)
+    ((Cons (Pair letb fv) r)
+     (if (pj_local_cites t fv recid) (pj_obl_scope t r recid) (Cons (Pair letb fv) (pj_obl_scope t r recid))))))
+(fn pj_local_cites ((t Tr) (fv Expr) (recid Int)) Bool
+  (match (lctx_find (w_lctx (Tr.w t)) (fvar_id_of fv))
+    ((Some d) (mentions_any (ldecl_type d) (list recid)))
+    (None False)))
+;; the obligation already stating this fact: one call written once and read twice (an `if`'s
+;; condition is in its proposition and in its decision), or the same call twice in one scope,
+;; is one obligation
+(fn obl_stating ((obls (List Declaration)) (stmt Expr)) (Option Name)
+  (measure (struct obls))
+  (match obls
+    (Nil None)
+    ((Cons (AxiomDecl (ConstantVal k _ ty) _) r) (if (expr_eq ty stmt) (Some k) (obl_stating r stmt)))
+    ((Cons _ r) (obl_stating r stmt))))
 (fn pj_exprs_eq ((as (List Expr)) (bs (List Expr))) Bool
   (measure (struct as))
   (match as
@@ -523,11 +549,16 @@
     ((Cons a r) (if (expr_eq a (wf_proj p n k)) (pj_own_params r p n (+ k 1)) False))))
 
 ;; `ite c inst a b` inside a recursive function: `Decidable.rec` with a constant motive, the
-;; proof of ¬c a local of the else-branch and of c the then-branch's (rule 2; slice 3.14's shape)
+;; proof of ¬c a local of the else-branch and of c the then-branch's (rule 2; slice 3.14's shape).
+;; The condition goes through the walk as its decision does: a self-call in it — `(if (f x) …)`
+;; is `f x = true` — is in the proposition and in the instance both
 (fn pj_ite ((t Tr) (cx PjCx) (args (List Expr)) (fuel Int)) TrRes
   (match args
-    ((Cons alpha (Cons c (Cons inst (Cons a (Cons b extra)))))
-     (match (pj_term t cx inst (- fuel 1))
+    ((Cons alpha (Cons c0 (Cons inst (Cons a (Cons b extra)))))
+     (match (pj_term t cx c0 (- fuel 1))
+       ((TrErr x m) (TrErr x m))
+       ((TrOk t0 c)
+     (match (pj_term t0 cx inst (- fuel 1))
        ((TrErr x m) (TrErr x m))
        ((TrOk t1 inst1)
         (match (pj_branch t1 cx (n2 (quote Decidable) (quote isFalse)) c b fuel)
@@ -538,7 +569,7 @@
              ((TrOk t3 mt)
               (match (rec_app t3 (n1 (quote Decidable)) Nil (list c) alpha (list mf mt) inst1)
                 ((TrErr x m) (TrErr x m))
-                ((TrOk t4 r) (pj_plain t4 cx r extra fuel))))))))))
+                ((TrOk t4 r) (pj_plain t4 cx r extra fuel))))))))))))
     (_ (TrErr (quote define_matrix) "ite"))))
 (fn pj_branch ((t Tr) (cx PjCx) (ctor Name) (c Expr) (body Expr) (fuel Int)) TrRes
   (match (rz_open_ctor t ctor Nil (list c))

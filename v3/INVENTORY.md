@@ -50,3 +50,12 @@ Notes recorded at drafting:
   decoder not being built. The layouts in the table's realization
   column stay the lowering's, behind the same types. `Char` and the
   wider `UInt`s have no row.
+- **As built at slice 3.19 (2026-10-02; `LANGUAGE.md` §8.4):**
+  `UInt8`, `ByteArray` and `String` have decidable equality and an
+  ordering in `v3/std/derive.shard` — hand-written over the one
+  runtime field (a byte by its number, a byte array by its list, a
+  text by its bytes: on valid UTF-8 the order of code points), each
+  tied to the type's identity by a term over Init's own lemmas —
+  registered in the derivation table; `UInt8` and `String` have a
+  rendering. Init's `String.decEq` (line 1,218,988 of the export) is
+  not imported.

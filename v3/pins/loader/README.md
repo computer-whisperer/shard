@@ -46,6 +46,24 @@ identities, the decisions and the well-founded constants live past the 3000-line
 `recursion_depth` (as an obstacle), `define_matrix`, `realize_recursion` and
 `realize_descent` for a fn.
 
+Slice 3.19's cases (deriving, `LANGUAGE.md` §8.4): `derive_eq` and `derive_containers`
+(equality generated and used by an `if`; Init's `List`, `Option`, `Prod` at closed
+arguments), the refusals `derive_field`, `derive_nested` (`derive_shape`), `derive_params`
+(`derive_needs`), `derive_policy`, `derive_duplicate`, `derive_by`, `derive_needs`,
+`derive_sig` (`derive_type`: a view's sig type in a consumer, after the decision its view
+exports is registered and used) — each stated as
+`main.derive refused REASON` — and `derive_e_first` (`prim_type`: an integer comparison at
+an inductive in an E-first body); `match_dependent` (a match generalizes a local
+scrutinee in its expected type), `if_rec_call` and `measure_if_call` (an `if` whose
+condition is a self-call; one obligation per statement), `bool_ops` (`and`, `not` on
+`Bool`s). From the second reader's findings: `registry_native` (a registry row never
+speaks for a native declaration bearing its name), `decidable_cells` (a `Decidable` value
+is the type's cells off an `if`'s condition; `define_test.sh` runs it), `derive_name_taken`
+(`NAME refused name_taken`), `derive_refusals` (what has no derivation; `define_test.sh`
+reads its five records), `derive_visible` (an entry is visible where its deriving module
+is; two roots). Orderings and renderings need Init past this fixture and the library:
+`kernel/test/derive_test.sh`.
+
 `v3/kernel/test/loader_pins_test.shard` replays every case in its list;
 `loader_test.shard` holds the cases a header cannot state (two root
 files, the wrong-pin fixture, the records' text, a loaded program run

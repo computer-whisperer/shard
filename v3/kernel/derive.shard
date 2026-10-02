@@ -1,0 +1,619 @@
+;;; v3/kernel/derive.shard — deriving under a declared policy (v3/LANGUAGE.md §8.4 slice
+;;; 3.19; §13 item 52; law §5.1, §5.2). `(derive TYPE CAPABILITY…)` gives a closed
+;;; inductive type decidable equality (`eq`), an ordering (`(ord structural)`) and a
+;;; diagnostic rendering (`render`) — or registers a procedure the file wrote
+;;; (`(CAPABILITY by NAME)`).
+;;;
+;;; Generation is source: a derivation is `fn` forms, s-expressions the loader then reads as
+;;; if the file held them (one front end, guard 1) — K checks the definitions and their
+;;; equations, the programs are their erasures, nothing here is trusted. What this file
+;;; reads of the type it reads from K's environment: the constructors and their fields'
+;;; types at the type's arguments. Per capability and field it selects a procedure — the
+;;; elaborator's own rows at Nat, Int and Bool, the function itself on a recursive field,
+;;; else the derivation table's one visible entry (scope.shard `derived_for`) — and what it
+;;; selected is in the generated source by name, so in the definition's dependencies.
+;;;
+;;;   NS.ctorIdx   the constructor's index (two constructors or more)
+;;;   NS.decEq     (a b : T) → Decidable (a = b): a row per pair of constructors; the same
+;;;                constructor decides its fields left to right through `dite`, isTrue by
+;;;                congruence, isFalse by injectivity; two constructors differ by their indices
+;;;   NS.compare   T → T → Ordering: fields left to right, the first not `eq` decides;
+;;;                different constructors by their indices — the declaration order is the
+;;;                convention, and it is in the value
+;;;   NS.renderOnto, NS.render   the value in canonical S before a rest; its bytes
+;;;
+;;; NS is the type's mangled name: its head's last component, then its arguments'.
+
+(import "elab.shard")
+(use kernel.k)
+(use kernel.kw)
+(use kernel.elab)
+(use kernel.level)
+(use kernel.name)
+(use kernel.expr)
+(use kernel.matcher)
+(use kernel.prelude)
+(use kernel.scope)
+(use kernel.sexpr)
+(use kernel.unify)
+(use kernel.util)
+(use kernel.decl.ConstantInfo)
+(use kernel.elab.ERes)
+(use kernel.expr.Expr)
+(use kernel.matcher.MtInd)
+(use kernel.name.Name)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.scope.Resolved)
+(use kernel.scope.Scope)
+(use kernel.kw.WOut)
+(use kernel.sexpr.SExpr)
+
+;; ---- what a derivation is --------------------------------------------------------------------
+;; a field as K gives it: the type itself, erased (a proof, a type), a function, one whose type
+;; mentions an earlier field, or a value at a closed type
+(type DvRaw (DvRSelf) (DvRErased) (DvRFun) (DvRDep) (DvRAt Expr))
+;; a field as a capability handles it: the function's own call, the elaborator's rows, the
+;; table's procedure, or — a renderer's — the placeholder
+(type DvField (DvSelf) (DvNat) (DvInt) (DvBool) (DvProc Name) (DvBlank))
+;; how a constructor's injectivity is proven: its `inj` theorem, or the projections of a
+;; one-constructor type; none needed without fields
+(type DvInj (DvInjThm Name) (DvInjProj) (DvInjNone))
+(type DvCtor (DvCtor Name (List DvField) DvInj))
+;; one capability's derivation: the type, the capability, the procedure's identity, the policy
+;; (structural, by), the field procedures selected, the forms to load before it is registered
+(type DvGen (DvGen Expr Symbol Name Symbol (List Name) (List SExpr)))
+(type DvRes (DvOk (List DvGen)) (DvErr Symbol (List Int)))
+(type DvCap (DvCapOk (List DvGen) Bool) (DvCapErr Symbol (List Int)))
+(type DvCs (DvCsOk (List DvCtor)) (DvCsErr Symbol (List Int)))
+(type DvFs (DvFsOk (List DvField)) (DvFsErr Symbol (List Int)))
+;; the type and its arguments as the generated source cites them, the type as K has it, its
+;; inductive, its mangled name, its constructors with their raw fields
+(record DvCx (sc Scope) (env CheckedEnv) (tys SExpr) (targs (List SExpr)) (ty Expr) (ind Name) (ns (List Int)) (raws (List (Pair Name (List DvRaw)))))
+
+;; ---- the entry -------------------------------------------------------------------------------
+(fn derive_form ((sc Scope) (env CheckedEnv) (s SExpr)) DvRes
+  (match s
+    ((SList (Cons _ (Cons tys (Cons c1 caps))))
+     (match (elab_type (el_with_etype (el0 sc env Nil Nil (qualify sc (n1 (quote derive)))) True) tys)
+       ((EErr r m) (DvErr (quote derive_type) (append (show_sexpr tys) (append " is not a type here — " (append (chars_of_sym r) (append ": " m))))))
+       ((EOk e1 ty0 _)
+        (match (w_norm_ty (el_w e1) ty0 16)
+          ((Pair w1 ty)
+           ;; procedures the file wrote need no constructor: any closed type takes them — a
+           ;; view's sig type in a consumer, whose module exports the procedure (§8.5)
+           (if (dv_all_by (Cons c1 caps))
+             (dv_caps (make DvCx (sc sc) (env env) (tys (dv_ty_s sc ty)) (targs Nil) (ty ty) (ind Anon) (ns (dv_mangle ty)) (raws Nil))
+                      (Cons c1 caps) False Nil Nil)
+           (if (bool_or (is_const_named ty (n1 (quote Nat))) (is_const_named ty (n1 (quote Int))))
+             (DvErr (quote derive_type) (append (show_expr ty) " is the integer (§7.5): its equality and its ordering are the elaborator's own rows, and nothing is generated from its constructors — register a procedure with (CAPABILITY by NAME)"))
+           (match (dv_is_prop w1 ty)
+             ((Pair w1p True) (DvErr (quote derive_type) (append (dv_show_ty ty) " is a proposition: its proofs are all equal and none is a value")))
+             ((Pair w1p False)
+           (match (mt_ind_of w1p ty)
+             ((Pair _ (MtNoInd r _))
+              (if (sym_eq r (quote match_indexed)) (DvErr (quote derive_shape) (append (show_expr ty) ": an indexed family"))
+                (DvErr (quote derive_type) (append (show_expr ty) " is not an inductive type visible here — a view's sig type is derived by its module: register the procedure it exports, (derive TYPE (CAPABILITY by NAME)) (§8.5)"))))
+             ((Pair w2 (MtInd ind ls params ctors))
+              (match (env_find env ind)
+                ((Some (InductInfo _ _ _ all _ nnested _ _ _))
+                 (if (bool_not (int_eq (len all) 1)) (DvErr (quote derive_shape) (append (show_name ind) ": a mutual type"))
+                 (if (lt 0 nnested) (DvErr (quote derive_shape) (append (show_name ind) ": a type nested through another (a field whose type applies another type to it)"))
+                 (if (lt (len ctors) 1) (DvErr (quote derive_shape) (append (show_name ind) ": a type without constructors has no value to compare or render"))
+                 (if (lt 0 (len (expr_fvars ty Nil))) (DvErr (quote derive_type) (append (show_expr ty) " is not closed"))
+                 (match (dv_type_args w2 params)
+                   ((Pair _ False) (DvErr (quote derive_type) (append (dv_show_ty ty) ": an argument that is a value — a derivation is at an inductive applied to closed types")))
+                   ((Pair w3 True)
+                   (match (dv_raw_ctors w3 ty ctors ls params Nil)
+                     ((Pair _ None) (DvErr (quote derive_shape) (append (show_name ind) ": K could not open a constructor")))
+                     ((Pair _ (Some raws))
+                      (dv_caps (make DvCx (sc sc) (env env) (tys (dv_ty_s sc ty)) (targs (dv_tys_s sc (get_app_args ty))) (ty ty) (ind ind) (ns (dv_mangle ty)) (raws raws))
+                               (Cons c1 caps) False Nil Nil))))))))))
+                (_ (DvErr (quote derive_type) (append (show_expr ty) " is not an inductive type")))))))))))))))
+    (_ (DvErr (quote bad_shape) "(derive TYPE CAPABILITY…): eq, (ord structural), render, or (CAPABILITY by NAME)"))))
+;; the type is a proposition (K's is_prop; False where K cannot say)
+(fn dv_is_prop ((w W) (ty Expr)) (Pair W Bool)
+  (match (w_is_prop w ty) ((Pair w1 (Some True)) (Pair w1 True)) ((Pair w1 _) (Pair w1 False))))
+;; every argument of the type is itself a type
+(fn dv_type_args ((w W) (args (List Expr))) (Pair W Bool)
+  (measure (struct args))
+  (match args
+    (Nil (Pair w True))
+    ((Cons a r)
+     (match (w_infer w a)
+       ((Pair w1 None) (Pair w1 False))
+       ((Pair w1 (Some s))
+        (match (w_whnf w1 s)
+          ((Pair w2 (Some (Sort _ _))) (dv_type_args w2 r))
+          ((Pair w2 _) (Pair w2 False))))))))
+;; every capability is `(CAPABILITY by NAME)`
+(fn dv_all_by ((caps (List SExpr))) Bool
+  (measure (struct caps))
+  (match caps
+    (Nil True)
+    ((Cons (SList (Cons (SSym _) (Cons (SSym by) (Cons (SSym _) Nil)))) r) (if (sym_eq by (quote by)) (dv_all_by r) False))
+    ((Cons _ _) False)))
+;; the type as a derivation writes it: identities, no universe lists
+(fn dv_show_ty ((t Expr)) (List Int)
+  (match (get_app_args t)
+    (Nil (match t ((Const _ n _) (show_name n)) (_ (show_expr t))))
+    (args (append "(" (append (dv_show_ty (get_app_fn t)) (append (dv_show_args args) ")"))))))
+(fn dv_show_args ((args (List Expr))) (List Int)
+  (measure (struct args))
+  (match args (Nil Nil) ((Cons a r) (Cons 32 (append (dv_show_ty a) (dv_show_args r))))))
+;; the type as the generated source cites it: every constant by its identity (an imported
+;; one under Init), so a type whose constructor bears its name — `(type Card (Card …))`, bare
+;; `Card` ambiguous in a term — is cited the same in a binder and in a term
+(fn dv_ty_s ((sc Scope) (t Expr)) SExpr
+  (match (get_app_args t)
+    (Nil (match t ((Const _ n _) (dv_cite_in sc n)) (_ (dv_s (show_expr t)))))
+    (args (SList (Cons (dv_ty_s sc (get_app_fn t)) (dv_tys_s sc args))))))
+(fn dv_tys_s ((sc Scope) (ts (List Expr))) (List SExpr)
+  (measure (struct ts))
+  (match ts (Nil Nil) ((Cons t r) (Cons (dv_ty_s sc t) (dv_tys_s sc r)))))
+;; the mangled name: `Tok`, `List_Tok`, `Prod_Nat_Tok` — prefix notation over fixed arities
+(fn dv_mangle ((ty Expr)) (List Int)
+  (match (get_app_fn ty)
+    ((Const _ n _) (dv_mangle_args (chars_of_name_last n) (get_app_args ty)))
+    (_ "T")))
+(fn dv_mangle_args ((acc (List Int)) (args (List Expr))) (List Int)
+  (measure (struct args))
+  (match args
+    (Nil acc)
+    ((Cons a r) (dv_mangle_args (append acc (Cons 95 (dv_mangle a))) r))))
+
+;; ---- the constructors' fields as K gives them ------------------------------------------------
+(fn dv_raw_ctors ((w W) (ty Expr) (ctors (List Name)) (ls (List Level)) (params (List Expr)) (acc (List (Pair Name (List DvRaw))))) (Pair W (Option (List (Pair Name (List DvRaw)))))
+  (measure (struct ctors))
+  (match ctors
+    (Nil (Pair w (Some (rev acc))))
+    ((Cons c r)
+     (match (mt_ctor_type w c ls params)
+       ((Pair w1 None) (Pair w1 None))
+       ((Pair w1 (Some (Pair ct nf)))
+        (match (mt_open_fields w1 ct nf Nil)
+          ((Pair w2 None) (Pair w2 None))
+          ((Pair w2 (Some fs))
+           (match (dv_raw_fields w2 ty fs Nil Nil)
+             ((Pair w3 raws) (dv_raw_ctors w3 ty r ls params (Cons (Pair c raws) acc)))))))))))
+(fn dv_raw_fields ((w W) (ty Expr) (fs (List (Pair Expr Expr))) (seen (List Int)) (acc (List DvRaw))) (Pair W (List DvRaw))
+  (measure (struct fs))
+  (match fs
+    (Nil (Pair w (rev acc)))
+    ((Cons (Pair fv dom) r)
+     (match (dv_raw w ty dom seen)
+       ((Pair w1 raw) (dv_raw_fields w1 ty r (Cons (fvar_id_of fv) seen) (Cons raw acc)))))))
+(fn dv_raw ((w W) (ty Expr) (dom Expr) (seen (List Int))) (Pair W DvRaw)
+  (match (w_is_prop w dom)
+    ((Pair w1 (Some True)) (Pair w1 DvRErased))
+    ((Pair w1 _)
+     (match (w_norm_ty w1 dom 16)
+       ((Pair w2 dw)
+        (match dw
+          ((Sort _ _) (Pair w2 DvRErased))
+          ((Pi _ _ _ _ _) (Pair w2 DvRFun))
+          (_ (if (expr_eq dw ty) (Pair w2 DvRSelf)
+             (if (dv_any_in (expr_fvars dw Nil) seen) (Pair w2 DvRDep)
+               (Pair w2 (DvRAt dw)))))))))))
+(fn dv_any_in ((xs (List Int)) (ys (List Int))) Bool
+  (measure (struct xs))
+  (match xs (Nil False) ((Cons x r) (if (mem_int x ys) True (dv_any_in r ys)))))
+
+;; ---- the capabilities of one form ------------------------------------------------------------
+;; `idx`: NS.ctorIdx is already among the forms of an earlier capability
+(fn dv_caps ((cx DvCx) (caps (List SExpr)) (idx Bool) (done (List Symbol)) (acc (List DvGen))) DvRes
+  (measure (struct caps))
+  (match caps
+    (Nil (DvOk (rev acc)))
+    ((Cons c r)
+     (match (dv_cap cx c idx done)
+       ((DvCapErr e m) (DvErr e m))
+       ((DvCapOk gs idx1) (dv_caps cx r idx1 (append (dv_gen_caps gs) done) (rev_onto gs acc)))))))
+(fn dv_gen_caps ((gs (List DvGen))) (List Symbol)
+  (measure (struct gs))
+  (match gs (Nil Nil) ((Cons (DvGen _ c _ _ _ _) r) (Cons c (dv_gen_caps r)))))
+(fn dv_is_cap ((k Symbol)) Bool (bool_or (sym_eq k (quote eq)) (bool_or (sym_eq k (quote ord)) (sym_eq k (quote render)))))
+(fn dv_bad_cap ((c SExpr)) DvCap
+  (DvCapErr (quote bad_shape) (append (show_sexpr c) ": a capability is eq, (ord structural), render, or (CAPABILITY by NAME)")))
+(fn dv_cap ((cx DvCx) (c SExpr) (idx Bool) (done (List Symbol))) DvCap
+  (match c
+    ((SSym k)
+     (if (sym_eq k (quote ord)) (DvCapErr (quote derive_policy) "an ordering is a convention (law §5.1, §5.2): write (ord structural), or (ord by NAME) for a procedure of the file's")
+     (if (dv_is_cap k) (dv_fresh cx k idx done) (dv_bad_cap c))))
+    ((SList (Cons (SSym k) (Cons (SSym p) Nil)))
+     (if (sym_eq k (quote ord))
+       (if (sym_eq p (quote structural)) (dv_fresh cx k idx done)
+         (DvCapErr (quote derive_policy) (append (chars_of_sym p) ": structural is the one policy — constructors in declaration order, fields left to right")))
+       (dv_bad_cap c)))
+    ((SList (Cons (SSym k) (Cons (SSym by) (Cons (SSym nm) Nil))))
+     (if (bool_and (sym_eq by (quote by)) (dv_is_cap k))
+       (match (dv_dup cx k done) ((Some m) (DvCapErr (quote derive_duplicate) m)) (None (dv_by cx k nm idx)))
+       (dv_bad_cap c)))
+    (_ (dv_bad_cap c))))
+;; an entry for the type and capability already visible, or earlier in this form
+(fn dv_dup ((cx DvCx) (k Symbol) (done (List Symbol))) (Option (List Int))
+  (if (mem_sym k done) (Some (append (chars_of_sym k) " twice in one derivation"))
+    (match (derived_for (DvCx.sc cx) (DvCx.ty cx) k)
+      ((Cons p _) (Some (append (chars_of_sym k) (append " at " (append (dv_show_ty (DvCx.ty cx)) (append " is already derived: " (show_name p)))))))
+      (Nil None))))
+(fn dv_fresh ((cx DvCx) (k Symbol) (idx Bool) (done (List Symbol))) DvCap
+  (match (dv_dup cx k done)
+    ((Some m) (DvCapErr (quote derive_duplicate) m))
+    (None
+     (if (sym_eq k (quote eq)) (dv_eq cx idx)
+     (if (sym_eq k (quote ord)) (dv_ord cx idx)
+       (dv_render cx idx))))))
+
+;; ---- a procedure the file wrote: its type is the capability's ----------------------------------
+(fn dv_by_type ((cx DvCx) (k Symbol)) SExpr
+  (let ((t (DvCx.tys cx)))
+    (if (sym_eq k (quote eq))
+      (dv_l3 (dv_s "forall") (SList (list (dv_bind "a" t) (dv_bind "b" t))) (dv_ap (dv_init "Decidable") (list (dv_l3 (dv_s "=") (dv_s "a") (dv_s "b")))))
+    (if (sym_eq k (quote ord))
+      (dv_l3 (dv_s "forall") (SList (list (dv_bind "a" t) (dv_bind "b" t))) (dv_init "Ordering"))
+      (dv_l3 (dv_s "forall") (SList (list (dv_bind "a" t) (dv_bind "rest" (dv_codes_ty)))) (dv_codes_ty))))))
+(fn dv_by ((cx DvCx) (k Symbol) (nm Symbol) (idx Bool)) DvCap
+  (match (name_of_sym nm)
+    (None (DvCapErr (quote bad_name) (chars_of_sym nm)))
+    ((Some n)
+     (match (resolve (cx0 (DvCx.sc cx) (DvCx.env cx) Nil Nil) n)
+       ((RName p _)
+        (match (env_find (DvCx.env cx) p)
+          ((Some info)
+           (match (elab_type (el_with_etype (el0 (DvCx.sc cx) (DvCx.env cx) Nil Nil (qualify (DvCx.sc cx) (n1 (quote derive)))) True) (dv_by_type cx k))
+             ((EErr _ m) (DvCapErr (quote derive_needs) (append "the capability's type could not be read: " m)))
+             ((EOk e1 want _)
+              (match (w_is_def_eq_r (el_w e1) want (ci_type info))
+                ((Pair _ (WVal True))
+                 (match (ci_lparams info)
+                   (Nil (DvCapOk (list (DvGen (DvCx.ty cx) k p (quote by) Nil Nil)) idx))
+                   (_ (DvCapErr (quote derive_by) (append (show_name p) " has universe parameters: a procedure is cited at none")))))
+                (_ (DvCapErr (quote derive_by) (append (show_name p) (append " : " (append (show_expr (ci_type info)) (append " — the capability's type is " (show_expr want)))))))))))
+          (None (DvCapErr (quote derive_by) (append (show_name p) " is not a constant")))))
+       (_ (DvCapErr (quote derive_by) (append (chars_of_sym nm) " names no one visible constant")))))))
+
+;; ---- source, written ---------------------------------------------------------------------------
+(fn dv_s ((cs (List Int))) SExpr (SSym (sym_of_chars cs)))
+(fn dv_ap ((h SExpr) (args (List SExpr))) SExpr (SList (Cons h args)))
+(fn dv_l3 ((a SExpr) (b SExpr) (c SExpr)) SExpr (SList (list a b c)))
+(fn dv_bind ((x (List Int)) (t SExpr)) SExpr (SList (list (dv_s x) t)))
+;; an imported constant is cited under Init, a native one by its identity: neither spelling
+;; depends on what the file opened
+(fn dv_init ((cs (List Int))) SExpr (dv_s (append "Init." cs)))
+(fn dv_cite_in ((sc Scope) (n Name)) SExpr
+  (if (native_decl sc n) (dv_s (show_name n)) (dv_init (show_name n))))
+(fn dv_cite ((cx DvCx) (n Name)) SExpr (dv_cite_in (DvCx.sc cx) n))
+(fn dv_at_cite ((cx DvCx) (n Name)) SExpr
+  (dv_s (append "@" (if (native_decl (DvCx.sc cx) n) (show_name n) (append "Init." (show_name n))))))
+;; a generated variable: `x 1` — a space, which no source symbol holds, so no constructor of a
+;; field's type bears its name (a pattern's bare symbol is a constructor where one exists)
+(fn dv_vname ((p (List Int)) (i Int)) (List Int) (append p (Cons 32 (show_nat i))))
+(fn dv_var ((p (List Int)) (i Int)) SExpr (dv_s (dv_vname p i)))
+;; p_i … p_k
+(fn dv_vars ((p (List Int)) (k Int) (i Int)) (List SExpr)
+  (measure (- (+ k 1) i))
+  (if (lt k i) Nil (Cons (dv_var p i) (dv_vars p k (+ i 1)))))
+(fn dv_blanks ((k Int)) (List SExpr)
+  (measure k)
+  (if (lt k 1) Nil (Cons (dv_s "_") (dv_blanks (- k 1)))))
+;; the generated functions' names as the form declares them, and their identities
+(fn dv_short ((cx DvCx) (f (List Int))) (List Int) (append (DvCx.ns cx) (Cons 46 f)))
+(fn dv_ident ((cx DvCx) (f (List Int))) Name
+  (match (name_of_sym (sym_of_chars (dv_short cx f))) ((Some n) (qualify (DvCx.sc cx) n)) (None (qualify (DvCx.sc cx) (n1 (sym_of_chars f))))))
+;; a constructor applied: every argument written when the type has arguments
+(fn dv_ctor_term ((cx DvCx) (c Name) (args (List SExpr))) SExpr
+  (match (DvCx.targs cx)
+    (Nil (match args (Nil (dv_cite cx c)) (_ (dv_ap (dv_cite cx c) args))))
+    (ts (dv_ap (dv_at_cite cx c) (append ts args)))))
+;; a constructor as a function of its fields
+(fn dv_ctor_fn ((cx DvCx) (c Name)) SExpr
+  (match (DvCx.targs cx) (Nil (dv_cite cx c)) (ts (dv_ap (dv_at_cite cx c) ts))))
+(fn dv_pat ((cx DvCx) (c Name) (vars (List SExpr))) SExpr
+  (match vars (Nil (dv_cite cx c)) (_ (dv_ap (dv_cite cx c) vars))))
+(fn dv_eqn ((a SExpr) (b SExpr)) SExpr (dv_l3 (dv_s "=") a b))
+;; (fn NAME BINDERS RET (measure (struct a))? BODY)
+(fn dv_fn ((cx DvCx) (f (List Int)) (binders (List SExpr)) (ret SExpr) (recursive Bool) (body SExpr)) SExpr
+  (SList (append (list (dv_s "fn") (dv_s (dv_short cx f)) (SList binders) ret)
+                 (append (if recursive (list (SList (list (dv_s "measure") (SList (list (dv_s "struct") (dv_s "a")))))) Nil) (list body)))))
+(fn dv_match ((s SExpr) (rows (List SExpr))) SExpr (SList (Cons (dv_s "match") (Cons s rows))))
+(fn dv_row ((p SExpr) (b SExpr)) SExpr (SList (list p b)))
+
+;; ---- the fields per capability -----------------------------------------------------------------
+(fn dv_ctors ((cx DvCx) (cap Symbol) (raws (List (Pair Name (List DvRaw)))) (acc (List DvCtor))) DvCs
+  (measure (struct raws))
+  (match raws
+    (Nil (DvCsOk (rev acc)))
+    ((Cons (Pair c fs) r)
+     (match (dv_fields cx cap c fs Nil)
+       ((DvFsErr e m) (DvCsErr e m))
+       ((DvFsOk fields)
+        (match (dv_inj cx cap c fields)
+          (None (DvCsErr (quote derive_needs) (append (show_name c) ".inj is not in the environment — a type with parameters has no constructor-structure bundle yet (§8.4 slice 3.15)")))
+          ((Some inj) (dv_ctors cx cap r (Cons (DvCtor c fields inj) acc)))))))))
+(fn dv_inj ((cx DvCx) (cap Symbol) (c Name) (fields (List DvField))) (Option DvInj)
+  (if (bool_or (bool_not (sym_eq cap (quote eq))) (lt (len fields) 1)) (Some DvInjNone)
+    (let ((thm (name_append c (n1 (quote inj)))))
+      (if (dv_has cx thm) (Some (DvInjThm thm))
+        (if (int_eq (len (DvCx.raws cx)) 1) (Some DvInjProj) None)))))
+(fn dv_fields ((cx DvCx) (cap Symbol) (c Name) (fs (List DvRaw)) (acc (List DvField))) DvFs
+  (measure (struct fs))
+  (match fs
+    (Nil (DvFsOk (rev acc)))
+    ((Cons raw r)
+     (match (dv_field cx cap c raw)
+       ((Pair (Some fd) _) (dv_fields cx cap c r (Cons fd acc)))
+       ((Pair None (Pair e m)) (DvFsErr e m))))))
+(fn dv_field_err ((e Symbol) (c Name) (m (List Int))) (Pair (Option DvField) (Pair Symbol (List Int)))
+  (Pair None (Pair e (append (show_name c) (append ": " m)))))
+(fn dv_field_ok ((f DvField)) (Pair (Option DvField) (Pair Symbol (List Int))) (Pair (Some f) (Pair (quote none) Nil)))
+(fn dv_field ((cx DvCx) (cap Symbol) (c Name) (raw DvRaw)) (Pair (Option DvField) (Pair Symbol (List Int)))
+  (let ((render (sym_eq cap (quote render))))
+    (match raw
+      (DvRSelf (dv_field_ok DvSelf))
+      (DvRErased (if render (dv_field_ok DvBlank) (dv_field_err (quote derive_shape) c "a field that is a proof or a type — supply the procedure: (CAPABILITY by NAME)")))
+      (DvRFun (dv_field_err (quote derive_field) c (if render "a function-valued field: the type has no program, so no value to render" "a function-valued field has no decidable equality and no ordering")))
+      (DvRDep (dv_field_err (quote derive_shape) c "a field whose type depends on an earlier field — supply the procedure: (CAPABILITY by NAME)"))
+      ((DvRAt t)
+       (if (bool_and (bool_not render) (is_const_named t (n1 (quote Nat)))) (dv_field_ok DvNat)
+       (if (bool_and (bool_not render) (is_const_named t (n1 (quote Int)))) (dv_field_ok DvInt)
+       (if (bool_and (sym_eq cap (quote eq)) (is_const_named t (n1 (quote Bool)))) (dv_field_ok DvBool)
+         (match (derived_for (DvCx.sc cx) t cap)
+           ((Cons p Nil) (dv_field_ok (DvProc p)))
+           ((Cons p (Cons q _)) (dv_field_err (quote derive_field) c (append "two derivations of " (append (chars_of_sym cap) (append " at " (append (dv_show_ty t) (append " are visible: " (append (show_name q) (append " and " (show_name p))))))))))
+           (Nil
+            (if (bool_and render (bool_not (dv_inductive cx t))) (dv_field_ok DvBlank)
+              (dv_field_err (quote derive_field) c (append "no " (append (chars_of_sym cap) (append " at its field's type " (append (dv_show_ty t) (append ": derive it first — (derive " (append (dv_show_ty t) (append " " (append (dv_cap_text cap) ")")))))))))))))))))))
+(fn dv_cap_text ((cap Symbol)) (List Int) (if (sym_eq cap (quote ord)) "(ord structural)" (chars_of_sym cap)))
+(fn dv_inductive ((cx DvCx) (t Expr)) Bool
+  (match (get_app_fn t)
+    ((Const _ n _) (match (env_find (DvCx.env cx) n) ((Some (InductInfo _ _ _ _ _ _ _ _ _)) True) (_ False)))
+    (_ False)))
+;; a constant the generated source cites: in the environment and visible here
+(fn dv_has ((cx DvCx) (n Name)) Bool
+  (match (env_find (DvCx.env cx) n) ((Some _) (visible (DvCx.sc cx) n)) (None False)))
+(fn dv_first_missing ((cx DvCx) (ns (List Name))) (Option Name)
+  (measure (struct ns))
+  (match ns (Nil None) ((Cons n r) (if (dv_has cx n) (dv_first_missing cx r) (Some n)))))
+(fn dv_needs ((n Name)) DvCap
+  (DvCapErr (quote derive_needs) (append (show_name n) " is not in the environment here: the generated source cites it (import Init through it, or the library)")))
+(fn dv_recursive ((cs (List DvCtor))) Bool
+  (measure (struct cs))
+  (match cs (Nil False) ((Cons (DvCtor _ fs _) r) (if (dv_has_self fs) True (dv_recursive r)))))
+(fn dv_has_self ((fs (List DvField))) Bool
+  (measure (struct fs))
+  (match fs (Nil False) ((Cons DvSelf _) True) ((Cons _ r) (dv_has_self r))))
+;; the procedures the fields selected, each once, in order
+(fn dv_procs ((cap Symbol) (cs (List DvCtor)) (acc (List Name))) (List Name)
+  (measure (struct cs))
+  (match cs (Nil (rev acc)) ((Cons (DvCtor _ fs _) r) (dv_procs cap r (dv_procs_of cap fs acc)))))
+(fn dv_procs_of ((cap Symbol) (fs (List DvField)) (acc (List Name))) (List Name)
+  (measure (struct fs))
+  (match fs
+    (Nil acc)
+    ((Cons f r)
+     (dv_procs_of cap r
+       (match (dv_proc_name cap f)
+         ((Some p) (if (mem_name p acc) acc (Cons p acc)))
+         (None acc))))))
+(fn dv_proc_name ((cap Symbol) (f DvField)) (Option Name)
+  (match f
+    ((DvProc p) (Some p))
+    (DvNat (Some (if (sym_eq cap (quote eq)) (n2 (quote Nat) (quote decEq)) (n2 (quote Nat) (quote lt)))))
+    (DvInt (Some (if (sym_eq cap (quote eq)) (n2 (quote Int) (quote decEq)) (n2 (quote Int) (quote lt)))))
+    (DvBool (Some (n1 (quote instDecidableEqBool))))
+    (_ None)))
+
+;; ---- NS.ctorIdx --------------------------------------------------------------------------------
+;; its own derivation (capability `idx`), generated with the first capability that cites it and
+;; shared through the table: a later derivation at the type — in this module or one that sees
+;; it — cites the registered function, never a constant that merely bears the name
+(fn dv_idx_name ((cx DvCx)) Name
+  (match (derived_for (DvCx.sc cx) (DvCx.ty cx) (quote idx)) ((Cons p _) p) (Nil (dv_ident cx "ctorIdx"))))
+(fn dv_idx_gens ((cx DvCx) (idx Bool)) (List DvGen)
+  (if idx Nil
+    (match (derived_for (DvCx.sc cx) (DvCx.ty cx) (quote idx))
+      ((Cons _ _) Nil)
+      (Nil
+       (list (DvGen (DvCx.ty cx) (quote idx) (dv_ident cx "ctorIdx") (quote structural) Nil
+               (list (dv_fn cx "ctorIdx" (list (dv_bind "a" (DvCx.tys cx))) (dv_init "Nat") False
+                       (dv_match (dv_s "a") (dv_idx_rows cx (DvCx.raws cx) 0))))))))))
+(fn dv_idx_rows ((cx DvCx) (raws (List (Pair Name (List DvRaw)))) (i Int)) (List SExpr)
+  (measure (struct raws))
+  (match raws
+    (Nil Nil)
+    ((Cons (Pair c fs) r) (Cons (dv_row (dv_pat cx c (dv_blanks (len fs))) (SNum i)) (dv_idx_rows cx r (+ i 1))))))
+(fn dv_idx_of ((cx DvCx) (t SExpr)) SExpr (dv_ap (dv_cite cx (dv_idx_name cx)) (list t)))
+
+;; ---- eq ----------------------------------------------------------------------------------------
+(fn dv_eq ((cx DvCx) (idx Bool)) DvCap
+  (match (dv_ctors cx (quote eq) (DvCx.raws cx) Nil)
+    ((DvCsErr e m) (DvCapErr e m))
+    ((DvCsOk cs)
+     (let ((many (lt 1 (len cs))))
+       (match (dv_first_missing cx (append (list (n1 (quote Decidable)) (n1 (quote dite)) (n1 (quote rfl)) (n1 (quote congrArg)) (n1 (quote congr)) (n1 (quote Not)) (n2 (quote And) (quote left)) (n2 (quote And) (quote right)))
+                                       (append (if many (list (n2 (quote Nat) (quote ne_of_beq_eq_false))) Nil) (dv_procs (quote eq) cs Nil))))
+         ((Some n) (dv_needs n))
+         (None
+          (DvCapOk (append (if many (dv_idx_gens cx idx) Nil)
+                     (list (DvGen (DvCx.ty cx) (quote eq) (dv_ident cx "decEq") (quote structural) (dv_procs (quote eq) cs Nil)
+                             (list (dv_fn cx "decEq" (list (dv_bind "a" (DvCx.tys cx)) (dv_bind "b" (DvCx.tys cx)))
+                                     (dv_ap (dv_init "Decidable") (list (dv_eqn (dv_s "a") (dv_s "b"))))
+                                     (dv_recursive cs)
+                                     (dv_match (dv_s "a") (dv_eq_rows cx cs cs)))))))
+                   (bool_or idx many))))))))
+;; a row per constructor of a, and under it a row per constructor of b
+(fn dv_eq_rows ((cx DvCx) (all (List DvCtor)) (cs (List DvCtor))) (List SExpr)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons (DvCtor c fs inj) r)
+     (Cons (dv_row (dv_pat cx c (dv_vars "x" (len fs) 1)) (dv_match (dv_s "b") (dv_eq_inner cx c fs inj all)))
+           (dv_eq_rows cx all r)))))
+(fn dv_eq_inner ((cx DvCx) (c Name) (fs (List DvField)) (inj DvInj) (others (List DvCtor))) (List SExpr)
+  (measure (struct others))
+  (match others
+    (Nil Nil)
+    ((Cons (DvCtor d ds _) r)
+     (let ((tx (dv_ctor_term cx c (dv_vars "x" (len fs) 1))) (ty (dv_ctor_term cx d (dv_vars "y" (len ds) 1))))
+       (Cons (dv_row (dv_pat cx d (dv_vars "y" (len ds) 1))
+                     (if (name_eq c d) (dv_eq_same cx c fs inj (dv_eqn tx ty) 1 fs) (dv_eq_differ cx tx ty)))
+             (dv_eq_inner cx c fs inj r))))))
+;; two constructors: their indices differ, and the index is a function
+(fn dv_eq_differ ((cx DvCx) (tx SExpr) (ty SExpr)) SExpr
+  (dv_ap (dv_init "Decidable.isFalse")
+    (list (dv_l3 (dv_s "fun") (SList (list (dv_bind "h" (dv_eqn tx ty))))
+            (dv_ap (dv_s "@Init.Nat.ne_of_beq_eq_false")
+              (list (dv_idx_of cx tx) (dv_idx_of cx ty)
+                    (dv_ap (dv_init "Eq.refl") (list (dv_init "Bool.false")))
+                    (dv_ap (dv_init "congrArg") (list (dv_cite cx (dv_idx_name cx)) (dv_s "h")))))))))
+;; one constructor: field m decides, the rest under its equation; `goal` is the row's equation
+(fn dv_eq_same ((cx DvCx) (c Name) (fs (List DvField)) (inj DvInj) (goal SExpr) (m Int) (rest (List DvField))) SExpr
+  (measure (struct rest))
+  (match rest
+    (Nil (dv_ap (dv_init "Decidable.isTrue") (list (dv_eq_cong cx c (len fs)))))
+    ((Cons f r)
+     (let ((x (dv_var "x" m)) (y (dv_var "y" m)))
+       (dv_ap (dv_s "@Init.dite")
+         (list (dv_ap (dv_init "Decidable") (list goal))
+               (dv_eqn x y)
+               (dv_eq_dec cx f x y)
+               (dv_l3 (dv_s "fun") (SList (list (dv_bind (dv_vname "e" m) (dv_eqn x y))))
+                 (dv_eq_same cx c fs inj goal (+ m 1) r))
+               (dv_l3 (dv_s "fun") (SList (list (dv_bind (dv_vname "n" m) (dv_ap (dv_init "Not") (list (dv_eqn x y))))))
+                 (dv_ap (dv_init "Decidable.isFalse")
+                   (list (dv_l3 (dv_s "fun") (SList (list (dv_bind "h" goal)))
+                           (dv_ap (dv_var "n" m) (list (dv_eq_inj cx c inj (len fs) m)))))))))))))
+(fn dv_eq_dec ((cx DvCx) (f DvField) (x SExpr) (y SExpr)) SExpr
+  (match f
+    (DvSelf (dv_ap (dv_s (dv_short cx "decEq")) (list x y)))
+    (DvNat (dv_ap (dv_init "Nat.decEq") (list x y)))
+    (DvInt (dv_ap (dv_init "Int.decEq") (list x y)))
+    (DvBool (dv_ap (dv_init "instDecidableEqBool") (list x y)))
+    ((DvProc p) (dv_ap (dv_cite cx p) (list x y)))
+    (DvBlank (dv_s "_"))))
+;; C x… = C y… from e1 … ek: congrArg on the first, congr on each further one
+(fn dv_eq_cong ((cx DvCx) (c Name) (k Int)) SExpr
+  (if (lt k 1) (dv_init "rfl")
+    (dv_eq_cong_go 2 k (dv_ap (dv_init "congrArg") (list (dv_ctor_fn cx c) (dv_var "e" 1))))))
+(fn dv_eq_cong_go ((m Int) (k Int) (acc SExpr)) SExpr
+  (measure (- (+ k 1) m))
+  (if (lt k m) acc
+    (dv_eq_cong_go (+ m 1) k (dv_ap (dv_init "congr") (list acc (dv_var "e" m))))))
+;; x_m = y_m from h : C x… = C y…
+(fn dv_eq_inj ((cx DvCx) (c Name) (inj DvInj) (k Int) (m Int)) SExpr
+  (match inj
+    ((DvInjThm thm)
+     (let ((base (dv_ap (dv_cite cx thm) (list (dv_s "h")))))
+       (if (int_eq k 1) base
+         (if (lt m k) (dv_ap (dv_init "And.left") (list (dv_rights base (- m 1))))
+           (dv_rights base (- k 1))))))
+    (_ (dv_ap (dv_init "congrArg")
+         (list (dv_l3 (dv_s "fun") (SList (list (dv_bind "t" (DvCx.tys cx))))
+                 (SList (list (dv_s "proj") (dv_cite cx (DvCx.ind cx)) (SNum (- m 1)) (dv_s "t"))))
+               (dv_s "h"))))))
+(fn dv_rights ((base SExpr) (k Int)) SExpr
+  (measure k)
+  (if (lt k 1) base (dv_rights (dv_ap (dv_init "And.right") (list base)) (- k 1))))
+
+;; ---- ord ---------------------------------------------------------------------------------------
+(fn dv_ord ((cx DvCx) (idx Bool)) DvCap
+  (match (dv_ctors cx (quote ord) (DvCx.raws cx) Nil)
+    ((DvCsErr e m) (DvCapErr e m))
+    ((DvCsOk cs)
+     (let ((n (len cs)))
+       (match (dv_first_missing cx (Cons (n1 (quote Ordering)) (Cons (n2 (quote Ordering) (quote casesOn)) (dv_procs (quote ord) cs Nil))))
+         ((Some m) (dv_needs m))
+         (None
+          (DvCapOk (append (if (lt 2 n) (dv_idx_gens cx idx) Nil)
+                     (list (DvGen (DvCx.ty cx) (quote ord) (dv_ident cx "compare") (quote structural) (dv_procs (quote ord) cs Nil)
+                             (list (dv_fn cx "compare" (list (dv_bind "a" (DvCx.tys cx)) (dv_bind "b" (DvCx.tys cx)))
+                                     (dv_init "Ordering") (dv_recursive cs)
+                                     (dv_match (dv_s "a") (dv_ord_rows cx cs n 0)))))))
+                   (bool_or idx (lt 2 n)))))))))
+(fn dv_ordering ((k (List Int))) SExpr (dv_init (append "Ordering." k)))
+(fn dv_ord_rows ((cx DvCx) (cs (List DvCtor)) (n Int) (i Int)) (List SExpr)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons (DvCtor c fs _) r)
+     (Cons (dv_row (dv_pat cx c (dv_vars "x" (len fs) 1))
+                   (dv_match (dv_s "b")
+                     (Cons (dv_row (dv_pat cx c (dv_vars "y" (len fs) 1)) (dv_ord_chain cx 1 fs))
+                           (dv_ord_other cx n i))))
+           (dv_ord_rows cx r n (+ i 1))))))
+;; another constructor: the first is below every other, the last above; between them the index
+(fn dv_ord_other ((cx DvCx) (n Int) (i Int)) (List SExpr)
+  (if (lt n 2) Nil
+    (list (dv_row (dv_s "_")
+            (if (lt i 1) (dv_ordering "lt")
+            (if (int_eq i (- n 1)) (dv_ordering "gt")
+              (SList (list (dv_s "if") (dv_l3 (dv_s "<") (dv_idx_of cx (dv_s "b")) (SNum i)) (dv_ordering "gt") (dv_ordering "lt")))))))))
+(fn dv_ord_chain ((cx DvCx) (m Int) (fs (List DvField))) SExpr
+  (measure (struct fs))
+  (match fs
+    (Nil (dv_ordering "eq"))
+    ((Cons f Nil) (dv_ord_cmp cx f (dv_var "x" m) (dv_var "y" m)))
+    ((Cons f r)
+     (dv_match (dv_ord_cmp cx f (dv_var "x" m) (dv_var "y" m))
+       (list (dv_row (dv_ordering "lt") (dv_ordering "lt"))
+             (dv_row (dv_ordering "eq") (dv_ord_chain cx (+ m 1) r))
+             (dv_row (dv_ordering "gt") (dv_ordering "gt")))))))
+(fn dv_ord_cmp ((cx DvCx) (f DvField) (x SExpr) (y SExpr)) SExpr
+  (match f
+    (DvSelf (dv_ap (dv_s (dv_short cx "compare")) (list x y)))
+    ((DvProc p) (dv_ap (dv_cite cx p) (list x y)))
+    (_ (SList (list (dv_s "if") (dv_l3 (dv_s "<") x y) (dv_ordering "lt")
+                (SList (list (dv_s "if") (dv_eqn x y) (dv_ordering "eq") (dv_ordering "gt"))))))))
+
+;; ---- render ------------------------------------------------------------------------------------
+(fn dv_codes_ty () SExpr (dv_ap (dv_init "List") (list (dv_init "Nat"))))
+(fn dv_bytes_of_nats () Name (Str (Str (Str (Str Anon (quote std)) (quote bytes)) (quote Bytes)) (quote ofNats)))
+(fn dv_render ((cx DvCx) (idx Bool)) DvCap
+  (match (dv_ctors cx (quote render) (DvCx.raws cx) Nil)
+    ((DvCsErr e m) (DvCapErr e m))
+    ((DvCsOk cs)
+     (match (dv_first_missing cx (append (list (n1 (quote List)) (n1 (quote ByteArray)) (dv_bytes_of_nats)) (dv_procs (quote render) cs Nil)))
+       ((Some m) (dv_needs m))
+       (None
+        (DvCapOk (list (DvGen (DvCx.ty cx) (quote render) (dv_ident cx "renderOnto") (quote structural) (dv_procs (quote render) cs Nil)
+                   (list (dv_fn cx "renderOnto" (list (dv_bind "a" (DvCx.tys cx)) (dv_bind "rest" (dv_codes_ty))) (dv_codes_ty) (dv_recursive cs)
+                           (dv_match (dv_s "a") (dv_render_rows cx cs)))
+                         (dv_fn cx "render" (list (dv_bind "a" (DvCx.tys cx))) (dv_init "ByteArray") False
+                           (dv_ap (dv_s (show_name (dv_bytes_of_nats)))
+                             (list (dv_ap (dv_s (show_name (dv_ident cx "renderOnto"))) (list (dv_s "a") (dv_init "List.nil")))))))))
+                 idx))))))
+;; `NAME` for a constructor without fields, `(NAME F…)` with: the name's bytes, a space before
+;; each field, the fields left to right, each before what follows it
+(fn dv_render_rows ((cx DvCx) (cs (List DvCtor))) (List SExpr)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons (DvCtor c fs _) r)
+     (Cons (dv_row (dv_pat cx c (dv_render_vars fs 1))
+                   (match fs
+                     (Nil (dv_codes (chars_of_name_last c) (dv_s "rest")))
+                     (_ (dv_code 40 (dv_codes (chars_of_name_last c) (dv_render_fields cx 1 fs))))))
+           (dv_render_rows cx r)))))
+(fn dv_render_vars ((fs (List DvField)) (m Int)) (List SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons DvBlank r) (Cons (dv_s "_") (dv_render_vars r (+ m 1))))
+    ((Cons _ r) (Cons (dv_var "x" m) (dv_render_vars r (+ m 1))))))
+(fn dv_render_fields ((cx DvCx) (m Int) (fs (List DvField))) SExpr
+  (measure (struct fs))
+  (match fs
+    (Nil (dv_code 41 (dv_s "rest")))
+    ((Cons f r)
+     (let ((next (dv_render_fields cx (+ m 1) r)))
+       (dv_code 32
+         (match f
+           (DvSelf (dv_ap (dv_s (dv_short cx "renderOnto")) (list (dv_var "x" m) next)))
+           ((DvProc p) (dv_ap (dv_cite cx p) (list (dv_var "x" m) next)))
+           (_ (dv_code 95 next))))))))
+(fn dv_code ((c Int) (tail SExpr)) SExpr (dv_l3 (dv_init "List.cons") (SNum c) tail))
+(fn dv_codes ((bs (List Int)) (tail SExpr)) SExpr
+  (measure (struct bs))
+  (match bs (Nil tail) ((Cons b r) (dv_code b (dv_codes r tail)))))

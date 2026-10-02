@@ -2471,6 +2471,67 @@ is `docs/FOUNDATION.md` §5.3.
   signature. *Gates:* 156 loader pins (10 new: `row_types`, `row_e_first`, `row_e_match`, `struct_proj`, `str_e_first`, `str_no_string`, `str_bad_utf8`, `wire_s`, `wire_bad`, `wire_bad_result`; `ev_string` rewritten), `rows_test` (10 values under `ev`), `wire_test` (15 checks against the host), `calc_main_test` (byte-identical to the model world over 21 inputs), `define_test` (9 checks: the two libraries added), calc's differential byte-identical over 21 inputs, parity byte-identical over 28 closures and 111,681 declarations, route 2, K's clients, the full suite's 32 entrypoints with 0 failed. `v3/build.sh` built these sources into a scratch binary that byte-ties the interpreter on the 3,000-line fixture. The full replay and the corpus are CI's.
 - **2026-10-02 — pipeline 538 green on `682c20f`: slice 3.18 on the
   full gate.** engine 35 s; corpus 1,471 s, job succeeded; v3 6,112 s: 32 entrypoints with 0 failed, `define_test` 9 checks, `wire_test` 15 checks, calc's host program byte-identical to the model world, parity byte-identical over 28 closures and 111,681 declarations in 356 s, route 1's native build of the kernel with this slice's sources (`OK: v3/bin/t0`), the fixture and the 100,000-line byte-ties identical, replay 2,458 s at 32.2 GB peak, T0 accepted 57,977 with 0 rejected, closures identical to the oracle, all 20 accelerator candidates pinned. Slice 3.18 is closed. The v3 job is 644 s longer than pipeline 535's: the three tests that load the libraries through line 263,515 of the export, and calc's differential on a slower runner (364 s for the old tree's side, 220 s locally).
+- **2026-10-02 — slice 3.19 ruled and built: deriving under a
+  declared policy** (`LANGUAGE.md` §8.4's design and as-built, §13
+  item 52; law §5.1). *The ruling (the user on five leans):* a
+  derivation table for the use site (rejected: named functions only;
+  instance resolution pulled forward); one policy, `structural`,
+  written at the derivation (rejected: a package default); the
+  ordering `compare` without laws (rejected: laws generated before
+  I); the rendering as bytes in canonical S (rejected: Lean's `Repr`,
+  a `String`, deferring it); types without parameters and Init's
+  `List`, `Option`, `Prod` at closed arguments (rejected: parametric
+  and nested types now). *Built:* `(derive TYPE CAPABILITY…)` —
+  `kernel/derive.shard` writes `fn` source the loader reads as the
+  file's own (`NS.ctorIdx`, `NS.decEq`, `NS.compare`,
+  `NS.renderOnto`/`NS.render`); the table in the scope's visible set,
+  consulted by the elaborator's decision lookup; `(CAPABILITY by
+  NAME)` for a hand-written procedure, at any closed type — a view
+  exports a decision as a `sig fn` and its consumer registers it;
+  `v3/std/derive.shard` (fourteen entries: `Bool` derived; `UInt8`,
+  `ByteArray`, `String` by hand over Init's lemmas; `Nat`'s and
+  `Int`'s renderers), `v3/examples/derive/`. *General rules the slice
+  needed:* a `match` generalizes a local scrutinee in its expected
+  type; an operator in an E-type position takes its levels by
+  unification; the classifier reads `(Decidable P)` as the type's two
+  cells. *Found while building, each fixed and pinned:* an `if` whose
+  condition is a self-call left the self-local in the proposition (K:
+  `fvar_in_value`); under a measure the same call was two obligations
+  (one per statement now); `and`, `or`, `not` on `Bool`s cited
+  constants the export does not have (`Bool.and`, `Bool.or`,
+  `Bool.not`, each with a registry row; `Bool`'s equality in general
+  position likewise); `=` at an inductive in an E-first body was
+  accepted and stuck at run (`prim_type`); a refusal after an
+  unreadable signature hid the cause. *Found and left:* an explicit
+  numeral argument is unassigned when a later argument is checked.
+  *Found by a second reader over the kernel's diff, each reproduced,
+  fixed and pinned:* a registry row spoke for any constant bearing
+  its name (a module's `Bool.or` ran as Init's while K proved the
+  module's: `registry_native`); a `Decidable` value had two runtime
+  representations, since before the slice — a match by constructor on
+  `(Nat.decEq a b)` took the wrong row; a decision is its test only
+  where an `if` reads it and `(if TEST isTrue isFalse)` as a value
+  (`decidable_cells`); a derivation took a hand-written `T.ctorIdx`
+  or `T.compare` for its own (`derive_name_taken`); a `by` entry's
+  visibility depended on load order (`derive_visible`); the match
+  rule broke `_` sub-patterns and proofs over a hypothesis about the
+  scrutinee (the local bound in scope; the constant motive as
+  fallback); `(@List.nil (Prod Nat Nat))` failed on an unnormalized
+  level (older; `unify_level`); a self-call in a branch under a
+  self-call condition under a measure (`dec_2 fvar_in_type`); late
+  refusals for a type without constructors, a proposition, a value
+  argument, `Nat` (`derive_refusals`). The same reader checked the
+  generated `decEq`, `compare` and `renderOnto` on 1- to 5-constructor
+  types on the host against K and found them correct.
+  *Departures from the leans:* no instance constants (`Ord T` holds a
+  function: Stage 3's); a function-valued field refused under
+  `render`; wider — a one-constructor type with parameters derives,
+  the library's three types have orderings and two of them renderings.
+  *Not built:* the ordering's laws; parametric types with two
+  constructors, nested and mutual types (the toolchain's `SExpr` and
+  `Expr`); deriving in the toolchain's own sources (the bootstrap
+  generates nothing: with route 1's chain). *Cleanup:* an unused open
+  in `realize.shard` left by slice 3.18. *Gates:* 176 loader pins (20 new), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs, its host program byte-identical to the model world, parity byte-identical over 28 closures and 112,857 declarations, route 2, K's clients, the full suite's 33 entrypoints; route 1's closure is K's own and none of its files changed. The full replay and the corpus are CI's.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

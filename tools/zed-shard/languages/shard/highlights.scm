@@ -8,7 +8,7 @@
 ;;
 ;; V3 (2026-09-13, FOUNDATION §10.5 phase 2): the V3 surface keywords and
 ;; forms of v3/LANGUAGE.md §4–§5 are folded in beside the old tree's —
-;; `inductive structure def abbrev opaque theorem axiom realize trusts`,
+;; `inductive structure def abbrev opaque theorem axiom realize derive trusts`,
 ;; the explicit-L term heads `fun forall -> Sort proj`, `exact`/`sorry`
 ;; proofs, `(view)` in a realize, the binder markers — since both trees
 ;; live in this repository until the flip. Dotted names whose last
@@ -104,13 +104,13 @@
 ;;   artifacts:    bin lib app cli returns
 ;;   sugars:       make with refine S^ inline chain measure
 ;;   V3 (v3/LANGUAGE.md §4–§5): inductive structure def abbrev opaque
-;;                 theorem realize trusts; exact; fun forall -> Sort proj
+;;                 theorem realize derive trusts; exact; fun forall -> Sort proj
 ;; -----------------------------------------------------------------
 
 ((list
    .
    (symbol) @keyword)
-  (#match? @keyword "^(type|fn|extern|sig|record|match|let|if|quote|import|use|use-module|bin|lib|app|cli|returns|make|with|refine|S\\^|inline|chain|measure|inductive|structure|def|abbrev|opaque|theorem|realize|trusts|exact|fun|forall|->|Sort|proj)$"))
+  (#match? @keyword "^(type|fn|extern|sig|record|match|let|if|quote|import|use|use-module|bin|lib|app|cli|returns|make|with|refine|S\\^|inline|chain|measure|inductive|structure|def|abbrev|opaque|theorem|realize|derive|trusts|exact|fun|forall|->|Sort|proj)$"))
 
 ;; `(sig fn NAME …)` / `(sig type NAME …)` — the second word is a keyword too.
 ((list

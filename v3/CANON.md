@@ -122,6 +122,7 @@ declaration and its signature stay on the head line, the body breaks:
 | `structure` | 2 | name, binders |
 | `realize` | 3 | name, binders, result (`(realize NAME (view))`: 2) |
 | `requirement` | 2 | name, binders |
+| `derive` | all | one line: the type, then the capabilities (`LANGUAGE.md` §8.4 slice 3.19) |
 | `import`, `use`, `trusts` | all | one line each, atoms fill |
 | `measure` | 1 | the measure term |
 | `fun`, `forall` | 1 | the binders |

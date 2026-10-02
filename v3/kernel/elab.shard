@@ -241,7 +241,7 @@
       (None
     (match (decision_of e pz)
       ((Pair e1 (Some dec)) (EOk e1 (mk_app (mk_app (mk_const (n2 (quote Decidable) (quote decide)) Nil) pz) dec) xw))
-      ((Pair _ None) (EErr (quote no_decision) (append "a Bool is expected and the proposition " (append (show_expr pz) " has no decision the elaborator knows: write (@Decidable.decide P DEC)")))))))))
+      ((Pair _ None) (no_decision e pz (append "a Bool is expected and the proposition " (append (show_expr pz) " has no decision the elaborator knows: write (@Decidable.decide P DEC)")))))))))
 ;; the first of these constants the environment lacks (an Init prefix that stops before it): the
 ;; elaborator builds the Bool bridge from them by name, and K would refuse the term later
 (fn first_missing ((e El) (ks (List Name))) (Option Name)
@@ -715,12 +715,20 @@
   (bool_or (sym_eq x (quote le)) (bool_or (sym_eq x (quote <=)) (bool_or (sym_eq x (quote >)) (bool_or (sym_eq x (quote >=))
   (bool_or (sym_eq x (quote int_eq)) (bool_or (sym_eq x (quote =)) (bool_or (sym_eq x (quote !=))
   (bool_or (sym_eq x (quote and)) (bool_or (sym_eq x (quote or)) (bool_or (sym_eq x (quote not)) (sym_eq x (quote iff)))))))))))))))))))))
+;; an operator is a term: inside an E-type position — a fn's `(Decidable (= a b))` — its
+;; constants take their levels by unification, not the position's level 0 (slice 3.19)
 (fn elab_op ((e El) (x Symbol) (args (List SExpr)) (expected (Option Expr))) ERes
+  (if (cx_etype (el_cx e))
+    (match (elab_op_at (el_with_etype e False) x args expected)
+      ((EErr r m) (EErr r m))
+      ((EOk e1 v t) (EOk (el_with_etype e1 True) v t)))
+    (elab_op_at e x args expected)))
+(fn elab_op_at ((e El) (x Symbol) (args (List SExpr)) (expected (Option Expr))) ERes
   (if (bool_or (sym_eq x (quote =)) (sym_eq x (quote int_eq))) (op_const e (nm_eq) args expected)
   (if (sym_eq x (quote !=)) (op_const e (n1 (quote Ne)) args expected)
   (if (sym_eq x (quote iff)) (op_const e (n1 (quote Iff)) args expected)
   (if (bool_or (sym_eq x (quote >)) (sym_eq x (quote >=)))
-    (match args ((Cons a (Cons b Nil)) (elab_op e (if (sym_eq x (quote >)) (quote <) (quote <=)) (list b a) expected)) (_ (EErr (quote bad_shape) "(OP a b)")))
+    (match args ((Cons a (Cons b Nil)) (elab_op_at e (if (sym_eq x (quote >)) (quote <) (quote <=)) (list b a) expected)) (_ (EErr (quote bad_shape) "(OP a b)")))
   (match args
     ((Cons a Nil)
      (if (sym_eq x (quote not))
@@ -730,7 +738,7 @@
           (match (el_whnf e1 aty)
             ((Pair e2 atyw)
              (if (is_sort atyw) (op_apply e2 (n1 (quote Not)) (list (AVal av aty)) expected)
-             (if (is_const_named atyw (nm_bool)) (op_apply e2 (n1 (quote not)) (list (AVal av aty)) expected)
+             (if (is_const_named atyw (nm_bool)) (op_apply e2 (n2 (quote Bool) (quote not)) (list (AVal av aty)) expected)
                (EErr (quote no_operator_identity) (append "not at " (show_expr atyw)))))))))
        (EErr (quote bad_shape) "(OP a b)")))
     ((Cons a (Cons b Nil))
@@ -784,9 +792,11 @@
   (if (sym_eq x (quote and)) (Some (n1 (quote And)))
   (if (sym_eq x (quote or)) (Some (n1 (quote Or)))
     None)))
+;; Init's Bool connectives under their Lean 4.33 names (`and`, `or`, `not` are not constants
+;; of the export — slice 3.19 found the elaborator citing them)
 (fn op_bool ((x Symbol)) (Option Name)
-  (if (sym_eq x (quote and)) (Some (n1 (quote and)))
-  (if (sym_eq x (quote or)) (Some (n1 (quote or)))
+  (if (sym_eq x (quote and)) (Some (n2 (quote Bool) (quote and)))
+  (if (sym_eq x (quote or)) (Some (n2 (quote Bool) (quote or)))
     None)))
 
 ;; (if C T F): `ite C dec T F` for a proposition C whose head has a decision
@@ -818,7 +828,7 @@
                (None
              (match (decision_of e2 (el_zonk e2 cv))
                ((Pair e3 (Some dec)) (op_apply_explicit e3 (n1 (quote ite)) (list (AVal cv cty) (AVal dec (mk_app (mk_const (n1 (quote Decidable)) Nil) cv)) (ASrc t) (ASrc f)) expected))
-               ((Pair _ None) (EErr (quote no_decision) (append "the condition " (append (show_expr (el_zonk e2 cv)) " has no decision the elaborator knows: write (@ite C DEC T F) with the Decidable instance")))))))))))))))
+               ((Pair _ None) (no_decision e2 (el_zonk e2 cv) (append "the condition " (append (show_expr (el_zonk e2 cv)) " has no decision the elaborator knows: write (@ite C DEC T F) with the Decidable instance")))))))))))))))
     (_ (EErr (quote bad_shape) "(if C T F)"))))
 ;; a condition that is a value, not a proposition, and not of a Bool or a two-constructor
 ;; inductive (§6.2; GPT-6 R56): a sig type's observation is the type's to export (private_if),
@@ -942,10 +952,34 @@
                (if (is_const_named tyw (nm_nat)) (Pair e1 (Some (mk_app (mk_app (mk_const (n2 (quote Nat) (quote decEq)) Nil) a) b)))
                (if (is_const_named tyw (nm_int_ty)) (Pair e1 (Some (mk_app (mk_app (mk_const (n2 (quote Int) (quote decEq)) Nil) a) b)))
                (if (is_const_named tyw (n1 (quote Bool))) (Pair e1 (Some (mk_app (mk_app (mk_const (n1 (quote instDecidableEqBool)) Nil) a) b)))
-                 (Pair e1 None)))))))
+                 ;; a type of the program's: the derivation table's one visible entry (slice 3.19 rule 7)
+                 (match (el_norm_ty e1 tyw)
+                   ((Pair e2 key)
+                    (match (derived_for (cx_scope (el_cx e2)) key (quote eq))
+                      ((Cons p Nil) (Pair e2 (Some (mk_app (mk_app (mk_const p Nil) a) b))))
+                      (_ (Pair e2 None)))))))))))
            (_ (Pair e None)))
          (Pair e None)))))
       (_ (Pair e None)))))
+;; a type as the derivation table keys it (kw.shard w_norm_ty)
+(fn el_norm_ty ((e El) (t Expr)) (Pair El Expr)
+  (match (w_norm_ty (el_w e) (el_zonk e t) 16) ((Pair w1 r) (Pair (el_set_w e w1) r))))
+;; no decision: at an equation whose type has two visible derivations it is the ambiguity; at
+;; one with none, the pointer to the derivation (slice 3.19 rule 7)
+(fn no_decision ((e El) (c Expr) (m (List Int))) ERes
+  (match (get_app_fn c)
+    ((Const _ n _)
+     (if (name_eq n (nm_eq))
+       (match (get_app_args c)
+         ((Cons ty _)
+          (match (el_norm_ty e ty)
+            ((Pair e1 tyw)
+             (match (derived_for (cx_scope (el_cx e1)) tyw (quote eq))
+               ((Cons p (Cons q _)) (EErr (quote ambiguous_decision) (append "two derivations of equality at " (append (show_expr tyw) (append " are visible: " (append (show_name q) (append " and " (show_name p))))))))
+               (_ (EErr (quote no_decision) (append m ", or its derived equality — a (derive TYPE eq) before this form")))))))
+         (_ (EErr (quote no_decision) m)))
+       (EErr (quote no_decision) m)))
+    (_ (EErr (quote no_decision) m))))
 (fn nm_bool () Name (n1 (quote Bool)))
 ;; `c = true` and its decision
 (fn bool_is_true ((c Expr)) Expr
@@ -957,8 +991,14 @@
 
 ;; ---- match (slice 3.16 rule 1) -------------------------------------------------------------
 ;; (match T (PAT BODY)…): the matcher generated for the rows at T's type, checked into the
-;; walk's environment, applied to the constant motive `λ _. RET`, T and an alternative per
-;; row (its body under its pattern's variables). RET is the position's expected type
+;; walk's environment, applied to the motive, T and an alternative per row (its body under
+;; its pattern's variables). RET is the position's expected type and the motive `λ _. RET` —
+;; unless T is a local RET mentions: then the motive is `λ d. RET[d/T]` and a row's body is
+;; read at RET with its pattern for T (Lean's generalization of the discriminant; slice 3.19),
+;; so a result whose type depends on the scrutinee is written row by row. Only RET is
+;; generalized, not a hypothesis about T in scope (Lean reverts those too): where a row
+;; cannot be read at the generalized type — `(match t (_ h))` with `h : P t` — the match is
+;; read again with the constant motive, and what it then refuses is the first reading's error
 (fn elab_match ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
   (match args
     ((Cons scrut arms)
@@ -976,7 +1016,17 @@
                 ((Pair _ None) (EErr (quote not_a_type) (show_expr ret)))
                 ((Pair e2 (Some rs))
                  (match (el_whnf e2 rs)
-                   ((Pair e3 (Sort _ l)) (match_arms e3 dty ret l sv arms Nil Nil expected))
+                   ((Pair e3 (Sort _ l))
+                    (let ((gen (match_gen (el_zonk e3 sv) ret)))
+                      (match (match_arms e3 dty ret l sv gen arms Nil Nil expected)
+                        ((EOk e4 v vt) (EOk e4 v vt))
+                        ((EErr r m)
+                         (match gen
+                           (None (EErr r m))
+                           ((Some _)
+                            (match (match_arms e3 dty ret l sv None arms Nil Nil expected)
+                              ((EOk e4 v vt) (EOk e4 v vt))
+                              ((EErr _ _) (EErr r m)))))))))
                    ((Pair _ other) (EErr (quote not_a_type) (append (show_expr ret) (append " : " (show_expr other))))))))))))))))
     (Nil (EErr (quote bad_shape) "(match TERM (PATTERN BODY)…)"))))
 ;; ---- a literal match (slice 3.17 rule 3) ----------------------------------------------------
@@ -1046,21 +1096,31 @@
   (match expected
     (None None)
     ((Some x) (match (el_finish e x) ((FinOk r) (Some r)) ((FinErr _ _) None)))))
-(fn match_arms ((e El) (dty Expr) (ret Expr) (l Level) (sv Expr) (arms (List SExpr)) (rows (List (List MtPat))) (alts (List Expr)) (expected (Option Expr))) ERes
+;; the local the motive generalizes: the scrutinee, when it is a local the expected type mentions
+(fn match_gen ((sv Expr) (ret Expr)) (Option Int)
+  (match sv ((FVar _ id) (if (mem_int id (expr_fvars ret Nil)) (Some id) None)) (_ None)))
+;; the expected type with a term for the generalized local
+(fn match_ret_at ((e El) (ret Expr) (gen (Option Int)) (v Expr)) (Pair El Expr)
+  (match gen
+    (None (Pair e ret))
+    ((Some id) (match (w_subst (el_w e) ret id v) ((Pair w1 r) (Pair (el_set_w e w1) r))))))
+(fn match_arms ((e El) (dty Expr) (ret Expr) (l Level) (sv Expr) (gen (Option Int)) (arms (List SExpr)) (rows (List (List MtPat))) (alts (List Expr)) (expected (Option Expr))) ERes
   (measure (struct arms))
   (match arms
-    (Nil (match_close e dty ret l sv (rev rows) (rev alts) expected))
+    (Nil (match_close e dty ret l sv gen (rev rows) (rev alts) expected))
     ((Cons (SList (Cons pat (Cons body Nil))) r)
      (match (el_pat e pat dty 0 Nil 256)
        ((PtErr x m) (EErr x m))
-       ((PtOk e1 mp _ _ vars)
-        (match (elab e1 body (Some ret))
+       ((PtOk e1 mp pt _ vars)
+        (match (match_ret_at e1 ret gen pt)
+          ((Pair e1a ret1)
+        (match (elab e1a body (Some ret1))
           ((EErr x m) (EErr x m))
           ((EOk e2 v _)
            (match (el_lams e2 vars v)
-             ((Pair e3 alt) (match_arms (el_restore e3 e) dty ret l sv r (Cons (list mp) rows) (Cons alt alts) expected))))))))
+             ((Pair e3 alt) (match_arms (el_restore e3 e) dty ret l sv gen r (Cons (list mp) rows) (Cons alt alts) expected))))))))))
     (_ (EErr (quote bad_shape) "a match arm is (PATTERN BODY)"))))
-(fn match_close ((e El) (dty Expr) (ret Expr) (l Level) (sv Expr) (rows (List (List MtPat))) (alts (List Expr)) (expected (Option Expr))) ERes
+(fn match_close ((e El) (dty Expr) (ret Expr) (l Level) (sv Expr) (gen (Option Int)) (rows (List (List MtPat))) (alts (List Expr)) (expected (Option Expr))) ERes
   (match (match_params e dty)
     (None (EErr (quote match_scope) "the scrutinee's type mentions a local that is not a binder in scope"))
     ((Some params)
@@ -1074,11 +1134,13 @@
               ((Pair w1 None)
                (match (w_local w1 (n1 (quote d)) dty)
                  ((Pair w2 d)
-                  (match (w_lams w2 (list d) ret)
+                  (match (match_ret_at (el_set_w e w2) ret gen d)
+                    ((Pair e2 retd)
+                  (match (w_lams (el_w e2) (list d) retd)
                     ((Pair w3 motive)
                      (check_expected (el_add_aux (el_set_w e w3) decl)
                        (mk_app_n (mk_const name (Cons l (lparam_levels lps))) (append params (append (list motive (el_zonk e sv)) alts)))
-                       ret expected))))))))))))))
+                       ret expected))))))))))))))))
 (fn lparam_levels ((lps (List Name))) (List Level)
   (measure (struct lps))
   (match lps (Nil Nil) ((Cons u r) (Cons (LParam u) (lparam_levels r)))))
@@ -1114,7 +1176,9 @@
   (match s
     ((SSym x)
      (if (sym_eq x (quote _))
-       (match (w_local (el_w e) (n1 (quote _)) (el_zonk e ty)) ((Pair w1 fv) (PtOk (el_set_w e w1) (MtVar slot) fv (+ slot 1) (append vars (list fv)))))
+       ;; bound under a name no source spells: a term a later metavariable takes may mention it
+       ;; (a refined row's type does: `(TNum _)` at a type that mentions the scrutinee)
+       (match (el_local e (n1 (sym_of_chars "_ wildcard")) ty BDefault) ((Pair e1 fv) (PtOk e1 (MtVar slot) fv (+ slot 1) (append vars (list fv)))))
        (match (name_of_sym x)
          (None (PtErr (quote bad_name) (chars_of_sym x)))
          ((Some n)
