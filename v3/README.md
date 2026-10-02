@@ -877,6 +877,8 @@ still unassigned when a later argument's type is checked.
 
 Local gates: 176 loader pins (20 new), `define_test` (12 checks), `derive_test` (14 checks: the library, the example's ten lines on the host, the convention file), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 112,857 declarations, route 2, K's clients, the full suite's 33 entrypoints. None of the files route 1 compiles changed (its closure is K's own), so the native build is the one pipeline 538 gated; the full replay and the corpus are CI's.
 
+Slice 3.19 is closed: **pipeline 540 green on `fdd1429`** — engine 31 s; corpus 1,476 s at the baseline; v3 6,936 s: 33 entrypoints with 0 failed, `define_test` 12 checks, `derive_test` 14 checks, `wire_test` 15 checks, calc's host program byte-identical to the model world, parity byte-identical over 28 closures and 112,857 declarations in 453 s, route 1's native build of the kernel (`OK: v3/bin/t0`), the fixture and the 100,000-line byte-ties identical, replay 2,474 s at 32.2 GB peak, T0 accepted 57,977 with 0 rejected, closures identical to the oracle, all 20 accelerator candidates pinned.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

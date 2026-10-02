@@ -2532,6 +2532,8 @@ is `docs/FOUNDATION.md` §5.3.
   `Expr`); deriving in the toolchain's own sources (the bootstrap
   generates nothing: with route 1's chain). *Cleanup:* an unused open
   in `realize.shard` left by slice 3.18. *Gates:* 176 loader pins (20 new), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs, its host program byte-identical to the model world, parity byte-identical over 28 closures and 112,857 declarations, route 2, K's clients, the full suite's 33 entrypoints; route 1's closure is K's own and none of its files changed. The full replay and the corpus are CI's.
+- **2026-10-02 — pipeline 540 green on `fdd1429`: slice 3.19 on the
+  full gate.** engine 31 s; corpus 1,476 s at the baseline; v3 6,936 s: 33 entrypoints with 0 failed, `define_test` 12 checks, `derive_test` 14 checks, `wire_test` 15 checks, calc's host program byte-identical to the model world, parity byte-identical over 28 closures and 112,857 declarations in 453 s, route 1's native build of the kernel (`OK: v3/bin/t0`), the fixture and the 100,000-line byte-ties identical, replay 2,474 s at 32.2 GB peak, T0 accepted 57,977 with 0 rejected, closures identical to the oracle, all 20 accelerator candidates pinned. Slice 3.19 is closed. The v3 job is 824 s longer than pipeline 538's, 806 s of it in the test suite (3,841 s against 3,035 s): `derive_test` is new at 387 s, the `.shard` entrypoints (the loader pins among them, 20 new) take 253 s more, parity 97 s more, `define_test` 55 s more, K's clients 18 s more.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 
