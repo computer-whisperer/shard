@@ -1,0 +1,65 @@
+;;; v3/kernel/test/rows_test.shard — the registry's type rows at run time (v3/LANGUAGE.md
+;;; §8.4 slice 3.18 rules 1 to 3): the pins' programs under `ev`, their values compared.
+;;; A row's type is represented by its one runtime field, so a String literal is Init's
+;;; List cells over its UTF-8 bytes, a ByteArray the list it was packed from, a UInt8 an
+;;; integer below 256, a Fin its value; a structure's projection function reads the field
+;;; of the constructor's cell (rule 2).
+
+(import "loader_kit.shard")
+(import "case_kit.shard")
+(use kernel.ev)
+(use kernel.host)
+(use kernel.prelude)
+(use kernel.prog)
+(use kernel.test.loader_kit)
+(use kernel.util)
+(use kernel.host.World)
+(use kernel.name.Name)
+(use kernel.prelude.List)
+(use kernel.prelude.Pair)
+(use kernel.prog.EvRes)
+(use kernel.prog.Prog)
+(use kernel.prog.Val)
+(use kernel.test.case_kit)
+(use kernel.test.case_kit.Case)
+
+(fn row_fuel () Int 100000)
+;; the value of FN on ARGS as a list of numbers, "?" when it is not one; an integer in decimal
+(fn row_list ((p Prog) (f Symbol) (args (List Val))) (List Int)
+  (match (ev p (main_fn f) args (row_fuel)) ((EvOk v) (match v ((VCtor _ Nil) "empty") (_ (show_nat_list v)))) (_ "?")))
+(fn row_int ((p Prog) (f Symbol) (args (List Val))) (List Int)
+  (match (ev p (main_fn f) args (row_fuel)) ((EvOk (VInt k)) (show_int k)) (_ "?")))
+(fn span_cell ((lo Int) (hi Int)) Val (VCtor (Str (Str (Str Anon (quote main)) (quote Span)) (quote mk)) (list (VInt lo) (VInt hi))))
+
+(fn cases ((w World)) (Pair (List Case) World)
+  (match (load_prog "v3/pins/loader/ev_string" (list (fixture_int)) (list "v3/pins/loader/ev_string/main.shard") w)
+    ((Pair (Pair ps _) w1)
+     (match (load_prog "v3/pins/loader/row_types" (list (fixture_int)) (list "v3/pins/loader/row_types/main.shard") w1)
+       ((Pair (Pair pr _) w2)
+        (match (load_prog "v3/pins/loader/struct_proj" (list (fixture_int)) (list "v3/pins/loader/struct_proj/main.shard") w2)
+          ((Pair (Pair pp _) w3)
+           (Pair
+             (list
+               (Case "rule 3: a String literal is its UTF-8 bytes as Init's List cells — g = 97 98 99"
+                 (int_list_eq (row_list ps (quote g) Nil) "97 98 99"))
+               (Case "rule 1: String.toByteArray, ByteArray.mk and Array.toList are the identity — bytes \"abc\" is the same list"
+                 (int_list_eq (row_list ps (quote bytes) (list (nat_list (list 97 98 99)))) "97 98 99"))
+               (Case "the program over the literal runs: size = 3"
+                 (int_list_eq (row_int ps (quote size) Nil) "3"))
+               (Case "rule 1: a ByteArray is the list it was packed from — pack [1 2 255] = 1 2 255"
+                 (int_list_eq (row_list pr (quote pack) (list (nat_list (list 1 2 255)))) "1 2 255"))
+               (Case "rule 1: a constructor pattern binds the field to the scrutinee — unpack [7 8] = 7 8"
+                 (int_list_eq (row_list pr (quote unpack) (list (nat_list (list 7 8)))) "7 8"))
+               (Case "rule 1: three constructors and a proof are one integer — byte 300 = 44"
+                 (int_list_eq (row_int pr (quote byte) (list (VInt 300))) "44"))
+               (Case "rule 1: byte 255 = 255"
+                 (int_list_eq (row_int pr (quote byte) (list (VInt 255))) "255"))
+               (Case "rule 1: a Fin is its value, the bound dropped — val 2 = 2"
+                 (int_list_eq (row_int pr (quote val) (list (VInt 2))) "2"))
+               (Case "rule 2: a projection function is its projection — lo2 (Span.mk 3 9 _) = 3 (the proof field has no cell)"
+                 (int_list_eq (row_int pp (quote lo2) (list (span_cell 3 9))) "3"))
+               (Case "rule 2: two projections in one body — width (Span.mk 3 9 _) = 6"
+                 (int_list_eq (row_int pp (quote width) (list (span_cell 3 9))) "6")))
+             w3))))))))
+
+(fn main ((w World)) World (match (cases w) ((Pair cs w1) (run_cases "rows_test" cs 0 w1))))

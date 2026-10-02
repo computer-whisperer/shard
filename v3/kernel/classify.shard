@@ -464,10 +464,12 @@
              ((TOk tb) (TOk (EIf tc ta tb)))))))))
     (_ (TErr (quote bad_shape) "(if E E E)"))))
 
-;; (list a b…) and "…" (§8.1 rule 2): the constructor chain of the `List` in scope — the
+;; (list a b…) (§8.1 rule 2): the constructor chain of the `List` in scope — the
 ;; two-constructor type `List` resolves to (the toolchain prelude's, Init's), its first
-;; constructor nil and its second cons; a string is that chain over its bytes, carried
-;; as one literal the linker builds once (prog.shard LStr)
+;; constructor nil and its second cons. "…" (§8.4 slice 3.18 rule 3): a String — its UTF-8
+;; bytes as Init's List cells, String's representation — carried as one literal the linker
+;; builds once (prog.shard LStr); in the toolchain's own sources still the chain of the List
+;; in scope over its bytes, until they migrate
 (fn read_elist ((r Rd) (args (List SExpr))) TRes
   (match (list_in_scope r)
     (None (TErr (quote no_list) "(list …) needs a two-constructor List in scope (§8.1 rule 2)"))
@@ -476,9 +478,15 @@
        ((Pair (Some (Pair e m)) _) (TErr e m))
        ((Pair None ts) (TOk (cons_chain cons_id nil_id ts)))))))
 (fn read_estr ((r Rd) (bs (List Int))) TRes
-  (match (list_in_scope r)
-    (None (TErr (quote no_list) "\"…\" needs a two-constructor List in scope (§8.1 rule 2)"))
-    ((Some (Pair nil_id cons_id)) (TOk (ELit (LStr nil_id cons_id bs))))))
+  (if (toolchain_scope (rd_sc r))
+    (match (list_in_scope r)
+      (None (TErr (quote no_list) "\"…\" needs a two-constructor List in scope (§8.1 rule 2)"))
+      ((Some (Pair nil_id cons_id)) (TOk (ELit (LStr nil_id cons_id bs)))))
+    (match (env_find (rd_env r) (nm_string))
+      (None (TErr (quote no_string) "\"…\" is a String: (import Init String) (§8.4 slice 3.18 rule 3)"))
+      ((Some _)
+       (if (utf8_ok bs) (TOk (ELit (LStr (nm_list_nil) (nm_list_cons) bs)))
+         (TErr (quote bad_string) "a string literal's bytes are not UTF-8 (§8.4 slice 3.18 rule 3)"))))))
 (fn list_in_scope ((r Rd)) (Option (Pair Name Name))
   (match (type_ident (rd_es r) (rd_sc r) (rd_env r) (n1 (quote List)))
     ((TyOk (ETCon id _) _)
@@ -770,7 +778,7 @@
      (match (es_info es n)
        ((Some (EISigType _)) (Some (IfPrivate n)))
        ((Some (EIInd _ ctors)) (if (int_eq (len ctors) 2) None (Some (IfType n (len ctors)))))
-       (_ (if (builtin_type n) (Some (IfType n 0)) None))))
+       (_ (if (bool_or (builtin_type n) (rep_row n)) (Some (IfType n 0)) None))))   ; a row of the registry's types has no tag an E-first body may read (slice 3.18 rule 1)
     (_ None)))
 (fn c_leak_all ((es ESt) (tys (List (Option EType))) (ts (List ETerm))) (Option Bad)
   (measure (struct ts))
@@ -794,7 +802,9 @@
 (fn any_ctor_arm ((arms (List EArm))) Bool
   (measure (struct arms))
   (match arms (Nil False) ((Cons (EArm (PCtor _ _) _) _) True) ((Cons _ r) (any_ctor_arm r))))
-;; a constructor pattern whose inductive is not the scrutinee's known type (an E inductive, Int or Symbol)
+;; a constructor pattern whose inductive is not the scrutinee's known type (an E inductive, Int or
+;; Symbol, or a row of the registry's types — whose representation no E-first body takes apart:
+;; every constructor pattern on it is foreign; §8.4 slice 3.18 rule 1)
 (fn foreign_ctor ((es ESt) (st (Option EType)) (arms (List EArm))) (Option Name)
   (measure (struct arms))
   (match arms
@@ -804,7 +814,7 @@
        ((Some (EICtor ind _ _))
         (match st
           ((Some (ETCon n _))
-           (if (bool_or (builtin_type n) (is_ind es n))
+           (if (bool_or (builtin_type n) (bool_or (is_ind es n) (rep_row n)))
              (if (name_eq ind n) (foreign_ctor es st r) (Some c))
              (foreign_ctor es st r)))
           (_ (foreign_ctor es st r))))
@@ -862,10 +872,11 @@
     ((EBVar i) (match (nth tys i) ((Some o) o) (None None)))
     ((ELit (LNat _)) (Some (ETCon (nm_nat) Nil)))
     ((ELit (LInt _)) (Some (ETCon (n1 (quote Int)) Nil)))
-    ((ELit (LStr nl _ _))   ; the List in scope over its element type: the prelude's over Int, Init's over Nat
-     (match (es_info es nl)
-       ((Some (EICtor ind _ _)) (Some (ETCon ind (list (ETCon (if (name_eq ind (prelude_list)) (n1 (quote Int)) (nm_nat)) Nil)))))
-       (_ None)))
+    ((ELit (LStr nl _ _))   ; a String (Init's cells: slice 3.18 rule 3); in the toolchain's sources the prelude's List over Int
+     (if (name_eq nl (nm_list_nil)) (Some (ETCon (nm_string) Nil))
+       (match (es_info es nl)
+         ((Some (EICtor ind _ _)) (Some (ETCon ind (list (ETCon (n1 (quote Int)) Nil)))))
+         (_ None))))
     ((ELit (LSym _)) (Some (ETCon (n1 (quote Symbol)) Nil)))
     ((ECtor c args)
      (match (es_info es c)

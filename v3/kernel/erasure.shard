@@ -5,7 +5,10 @@
 ;;; two-constructor case analysis that ignores its fields as the `if` it was written as;
 ;;; `ite`/`dite` as an if on the decision; a matcher application as the match of the rows read
 ;;; back off its type (matcher.shard); `Decidable.decide` as the explicit conversion; a
-;;; resolved operation as its entry of the realization registry. Two callers: a constant's
+;;; resolved operation as its entry of the realization registry; a row of the registry's
+;;; types (erase.shard's rep_row) as its one runtime field — the constructor its argument,
+;;; the projection its subject —, a projection function as its projection, a string literal
+;;; as its bytes (slice 3.18). Two callers: a constant's
 ;;; derived view (realize.shard) and a pre-definition (predef.shard), whose erasure **is** the
 ;;; function's program — the self-local and a callee-local a call. The walk's state `Tr` and
 ;;; its K procedures are here, under the three files that build terms over it (this one,
@@ -234,7 +237,9 @@
        ((Some (Pair _ _)) (ErErr (quote erased_in_runtime) "a type or a proof in a runtime position (law §4.2)"))
        (None (ErErr (quote erased_in_runtime) "a variable the erasure does not know"))))
     ((Lit _ (LitNat n)) (ErOk t (ELit (LNat n))))
-    ((Lit _ (LitStr _)) (ErErr (quote string_literal) "phase 3 (§12.6): S has no string realization at Stage 0"))
+    ((Lit _ (LitStr bs))   ; String's representation is its bytes (rule 1 of slice 3.18): Init's List cells, built once at link
+     (if (utf8_ok bs) (ErOk t (ELit (LStr (nm_list_nil) (nm_list_cons) bs)))
+       (ErErr (quote bad_string) "a string literal's bytes are not UTF-8: K reads the literal by decoding it (§8.4 slice 3.18 rule 3)")))
     ((Let _ n ty v b) (erase_let t env n ty v b fuel))
     ((Lam _ _ _ _ _) (ErErr (quote function_value) "a lambda in a runtime position (law §4.3)"))
     ((Pi _ _ _ _ _) (ErErr (quote erased_in_runtime) "a type in a runtime position"))
@@ -272,11 +277,19 @@
                  (match (erase t4 (Cons (ErEnt (fvar_id_of fv) EKVar) env) b1 (- fuel 1))
                    ((ErErr e m) (ErErr e m))
                    ((ErOk t5 b2) (ErOk t5 (ELet (list v1) b2)))))))))))))))
-;; a projection: a match on the structure's constructor, the field's variable
+;; a projection: a match on the structure's constructor, the field's variable; of a row of the
+;; registry's types, the subject itself
 (fn erase_proj ((t Tr) (env (List ErEnt)) (sn Name) (i Int) (x Expr) (fuel Int)) ErRes
   (match (erase t env x (- fuel 1))
     ((ErErr e m) (ErErr e m))
     ((ErOk t1 x1)
+     (if (rep_row sn)
+       (match (row_field t1 sn)
+         ((Pair t2 None) (ErErr (quote no_realization) (append (show_name sn) ": the registry's row does not describe this structure (one constructor, one runtime field)")))
+         ((Pair t2 (Some (Pair _ roles)))
+          (match (runtime_index roles i 0 0)
+            (None (ErErr (quote erased_in_runtime) (append (show_name sn) ": a projection of an erased field")))
+            ((Some _) (ErOk t2 x1)))))
      (match (ind_eligible (Tr.w t1) (Tr.es t1) (Tr.sc t1) sn Nil)
        ((Pair (Pair w2 es2) False) (ErErr (quote no_realization) (append (show_name sn) " is not an E type")))
        ((Pair (Pair w2 es2) True)
@@ -289,7 +302,32 @@
                 (match (runtime_index roles i 0 0)
                   (None (ErErr (quote erased_in_runtime) (append (show_name sn) ": a projection of an erased field")))
                   ((Some (Pair j nrt)) (ErOk t3 (EMatch x1 (list (EArm (PCtor c (pvars nrt)) (EBVar (- (- nrt 1) j)))))))))))
-            (_ (ErErr (quote no_realization) (append (show_name sn) " is not a structure"))))))))))
+            (_ (ErErr (quote no_realization) (append (show_name sn) " is not a structure")))))))))))
+;; a row's constructor and its fields' roles, when the structure is what the row says: one
+;; constructor, exactly one runtime field (§8.4 slice 3.18 rule 1)
+(fn row_field ((t Tr) (ind Name)) (Pair Tr (Option (Pair Name (List Bool))))
+  (match (env_find (tr_env t) ind)
+    ((Some (InductInfo _ _ _ _ (Cons c Nil) _ _ _ _))
+     (match (field_roles t c)
+       ((Pair t1 (Some roles)) (if (int_eq (count_true roles) 1) (Pair t1 (Some (Pair c roles))) (Pair t1 None)))
+       ((Pair t1 None) (Pair t1 None))))
+    (_ (Pair t None))))
+;; a projection function — a constant whose value is λ params self. self.i —, fully applied:
+;; the structure, the field and the subject (rule 2)
+(fn proj_fn_app ((info ConstantInfo) (args (List Expr))) (Option (Pair (Pair Name Int) Expr))
+  (match info
+    ((DefnInfo _ v _ _ _)
+     (match (under_lams v (len args))
+       ((Some (Proj _ sn i (BVar _ 0))) (match (last_of args) ((Some x) (Some (Pair (Pair sn i) x))) (None None)))
+       (_ None)))
+    (_ None)))
+(fn under_lams ((e Expr) (k Int)) (Option Expr)
+  (measure k)
+  (if (lt k 1) (match e ((Lam _ _ _ _ _) None) (_ (Some e)))
+    (match e ((Lam _ _ _ _ b) (under_lams b (- k 1))) (_ None))))
+(fn last_of ((xs (List Expr))) (Option Expr)
+  (measure (struct xs))
+  (match xs (Nil None) ((Cons x Nil) (Some x)) ((Cons _ r) (last_of r))))
 ;; the field roles of a constructor: True for a runtime field, False for an erased one
 (fn field_roles ((t Tr) (c Name)) (Pair Tr (Option (List Bool)))
   (match (env_find (tr_env t) c)
@@ -419,7 +457,10 @@
                     (None
                      (match (mt_is_matcher (tr_env t) c)
                        ((Some desc) (erase_matcher t env c desc args fuel))
-                       (None (ErErr (quote no_realization) (append (show_name c) ": no realization attached — realize it first (§7.1)")))))))))))))))))))))))))))))
+                       (None
+                        (match (proj_fn_app info args)
+                          ((Some (Pair (Pair sn i) x)) (erase_proj t env sn i x fuel))
+                          (None (ErErr (quote no_realization) (append (show_name c) ": no realization attached — realize it first (§7.1)")))))))))))))))))))))))))))))))
 ;; the realization registry's Int rows (slice 3.16 rule 4): a resolved L operation → the table's
 ;; entry. ev's integer operation and K's constant agree on every input for these; the
 ;; decisions answer a two-constructor cell, which is all an `if` reads (decide converts)
@@ -495,6 +536,13 @@
      (if (bool_not runtime) (Pair t None)
        (match (env_find (tr_env t) c)
          ((Some (CtorInfo _ ind _ _ _ _))
+          (if (rep_row ind)   ; a row's constructor pattern is its one runtime field's pattern, on the scrutinee itself
+            (match (row_field t ind)
+              ((Pair t1 None) (Pair t1 None))
+              ((Pair t1 (Some (Pair _ roles)))
+               (match (mt_epats t1 subs roles Nil Nil (- fuel 1))
+                 ((Pair t2 (Some (Pair (Cons q Nil) vroles))) (Pair t2 (Some (Pair (Some q) vroles))))
+                 ((Pair t2 _) (Pair t2 None)))))
           (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind Nil)
             ((Pair (Pair w1 es1) False) (Pair t None))
             ((Pair (Pair w1 es1) True)
@@ -503,7 +551,7 @@
                ((Pair t1 (Some roles))
                 (match (mt_epats t1 subs roles Nil Nil (- fuel 1))
                   ((Pair t2 None) (Pair t2 None))
-                  ((Pair t2 (Some (Pair eps vroles))) (Pair t2 (Some (Pair (Some (PCtor c eps)) vroles))))))))))
+                  ((Pair t2 (Some (Pair eps vroles))) (Pair t2 (Some (Pair (Some (PCtor c eps)) vroles)))))))))))
          (_ (Pair t None))))))))
 (fn mt_epats ((t Tr) (subs (List MtPat)) (roles (List Bool)) (eps (List EPat)) (vroles (List Bool)) (fuel Int)) (Pair Tr (Option (Pair (List EPat) (List Bool))))
   (measure (struct subs))
@@ -591,6 +639,15 @@
 ;; ---- constructors, calls, decisions, case analyses ---------------------------------------------
 ;; a constructor: its inductive E-eligible, the static and erased arguments dropped
 (fn erase_ctor ((t Tr) (env (List ErEnt)) (c Name) (ind Name) (nparams Int) (args (List Expr)) (fuel Int)) ErRes
+  (if (rep_row ind)   ; a row's constructor is its one runtime argument
+    (match (row_field t ind)
+      ((Pair t1 None) (ErErr (quote no_realization) (append (show_name ind) ": the registry's row does not describe this structure (one constructor, one runtime field)")))
+      ((Pair t1 (Some (Pair _ roles)))
+       (if (bool_not (int_eq (len args) (+ nparams (len roles)))) (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)"))
+         (match (erase_roles t1 env roles (drop nparams args) fuel Nil)
+           ((Pair (Some (Pair e m)) _) (ErErr e m))
+           ((Pair None (Pair t2 (Cons a Nil))) (ErOk t2 a))
+           ((Pair None _) (ErErr (quote no_realization) (show_name c)))))))
   (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind Nil)
     ((Pair (Pair w1 es1) False) (ErErr (quote no_realization) (append (show_name ind) " is not an E type (§7.5)")))
     ((Pair (Pair w1 es1) True)
@@ -601,7 +658,7 @@
           (if (bool_not (int_eq (len args) (+ nparams (len roles)))) (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)"))
             (match (erase_roles t2 env roles (drop nparams args) fuel Nil)
               ((Pair (Some (Pair e m)) _) (ErErr e m))
-              ((Pair None (Pair t3 as)) (ErOk t3 (ECtor c as)))))))))))
+              ((Pair None (Pair t3 as)) (ErOk t3 (ECtor c as))))))))))))
 (fn erase_roles ((t Tr) (env (List ErEnt)) (roles (List Bool)) (args (List Expr)) (fuel Int) (acc (List ETerm))) (Pair (Option (Pair Symbol (List Int))) (Pair Tr (List ETerm)))
   (measure (struct roles))
   (match roles
@@ -649,6 +706,7 @@
     ((Str ind _)
      (match (env_find (tr_env t) ind)
        ((Some (InductInfo _ nparams _ _ ctors _ _ _ _))
+        (if (rep_row ind) (erase_row_cases t env c ind (nth args (+ nparams 1)) (nth args (+ nparams 2)) (int_eq (len args) (+ nparams 3)) fuel)
         (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind Nil)
           ((Pair (Pair w1 es1) False) (ErErr (quote no_realization) (append (show_name ind) " is not an E type (§7.5)")))
           ((Pair (Pair w1 es1) True)
@@ -665,9 +723,25 @@
                        (None
                      (match (erase_minors t2 env ctors (drop (+ nparams 2) args) False fuel Nil)
                        ((Pair (Some (Pair e m)) _) (ErErr e m))
-                       ((Pair None (Pair t3 arms)) (ErOk t3 (EMatch major1 arms)))))))))))))))
+                       ((Pair None (Pair t3 arms)) (ErOk t3 (EMatch major1 arms))))))))))))))))
        (_ (ErErr (quote no_realization) (show_name c)))))
     (_ (ErErr (quote no_realization) (show_name c)))))
+;; a case analysis of a row of the registry's types: its one alternative with the runtime
+;; field bound to the scrutinee, a let (rule 1 of slice 3.18)
+(fn erase_row_cases ((t Tr) (env (List ErEnt)) (c Name) (ind Name) (major (Option Expr)) (minor (Option Expr)) (saturated Bool) (fuel Int)) ErRes
+  (match (Pair major minor)
+    ((Pair (Some mj) (Some mn))
+     (if (bool_not saturated) (ErErr (quote function_value) (append (show_name c) " partially applied"))
+       (match (row_field t ind)
+         ((Pair t1 None) (ErErr (quote no_realization) (append (show_name ind) ": the registry's row does not describe this structure (one constructor, one runtime field)")))
+         ((Pair t1 (Some (Pair _ roles)))
+          (match (erase t1 env mj (- fuel 1))
+            ((ErErr e m) (ErErr e m))
+            ((ErOk t2 mj1)
+             (match (erase_minor t2 env mn roles 0 fuel)
+               ((Pair (Some (Pair e m)) _) (ErErr e m))
+               ((Pair None (Pair t3 body)) (ErOk t3 (ELet (list mj1) body))))))))))
+    (_ (ErErr (quote function_value) (append (show_name c) " partially applied")))))
 ;; a case analysis over a two-constructor inductive whose alternatives ignore their fields is
 ;; the `if` it was written as (§6.2's tag rule: the second constructor takes the then-branch;
 ;; elab.shard's elab_if_cases): the two bodies, first constructor's first
@@ -704,6 +778,7 @@
      (if (bool_not (int_eq nmotives 1)) (ErErr (quote recursion_structure) (append (show_name c) ": a nested inductive's recursor"))
      (match (env_find (tr_env t) ind)
        ((Some (InductInfo _ _ _ _ ctors _ _ _ _))
+        (if (rep_row ind) (erase_row_cases t env c ind (nth args (+ nparams 2)) (nth args (+ nparams 1)) (bool_and (int_eq nminors 1) (int_eq (len args) (+ nparams 3))) fuel)
         (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind Nil)
           ((Pair (Pair w1 es1) False) (ErErr (quote no_realization) (append (show_name ind) " is not an E type (§7.5)")))
           ((Pair (Pair w1 es1) True)
@@ -717,7 +792,7 @@
                     ((ErOk t2 major1)
                      (match (erase_minors t2 env ctors (take nminors (drop (+ nparams 1) args)) True fuel Nil)
                        ((Pair (Some (Pair e m)) _) (ErErr e m))
-                       ((Pair None (Pair t3 arms)) (ErOk t3 (EMatch major1 arms)))))))))))))
+                       ((Pair None (Pair t3 arms)) (ErOk t3 (EMatch major1 arms))))))))))))))
        (_ (ErErr (quote no_realization) (show_name c))))))
     (_ (ErErr (quote no_realization) (show_name c)))))
 ;; the minors in constructor order: each a lambda over the fields (and, for a recursor, the hypotheses)

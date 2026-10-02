@@ -452,7 +452,7 @@ fallback until 3.17). Landed as the design's revision 2
 | R65 branch facts in every position; one descent proof completed | accept — `ite` compiled dependently inside a recursive function; obligations closed over every local at the call in any position; `(fulfills f.dec_N PROOF)` for `count`. Narrower guarantee stated: no `scrutinee = pattern` equation for a computed scrutinee yet | rules 2, 8 — landing 3 | G4 |
 | R66 realization-directed erasure; the `Bool`/`Decidable` bridge | accept — the explicit conversion `(if ⟦inst⟧ true false)`, identity only where the entry returns a `Bool` cell; the table as a realization registry; `Nat.sub`/`div`/`mod` selected once resolved (revision 1's refusal reversed) | rules 3–4 — landing 2 | G1, G3 |
 | R67 partial outcomes; tentative against validated assignments | accept at the shared boundary — K's outcome through `kw.shard`; `UStuck`, `UExhausted`; typed/tentative assignments; a closed value K refuses is `UNo` | rule 9 — landing 1 | G6 |
-| R68 a hole's context across binder closure | **defer** to I's opener (slice 3.19) — narrower guarantee: incomplete, never unsound; no API outside `elab.shard` takes an `MCtx` across a binder close until then | rule 10 | G5 at 3.19 |
+| R68 a hole's context across binder closure | **defer** to I's opener (slice 3.20; 3.19 when written — deriving took that number on 2026-10-01) — narrower guarantee: incomplete, never unsound; no API outside `elab.shard` takes an `MCtx` across a binder close until then | rule 10 | G5 at 3.19 |
 | R69 contextual obligations, acyclic discharge, dependency scheduling | accept the discharge and its acyclicity (the closure instrument over the proof's constants; `fulfills_cycle`); **defer** dependency-directed wake-up (the retry fixpoint stands while loads are small) | rule 8 — landing 3 | G4, G7 |
 | R70 a fallback may weaken guarantees, not reinterpret | **amend** — a `RUNNABLE` callee is a local of its signature type, so the body elaborates once and erases (`route=typed`); the E-first fallback stays, flagged `route=e_first`, only for a body head without an L identity until slice 3.17 empties that set; a typed-route error is always a refusal; the E-first route's named consumers are `v3/kernel/**` and the old tree's ports | rule 6 — landing 3 | G8 |
 | R71 semantic gates, not frozen hashes | accept — exact agreement is the migration alarm; a moved hash is listed with its cause; the next three consumers share `PreDef`, the branch scopes and the outcomes | "Landings and gates", rule 11 | the battery |
@@ -2441,6 +2441,34 @@ is `docs/FOUNDATION.md` §5.3.
   drained at about 20:24. The late push pipeline 536, a duplicate on
   the same commit running a second replay beside the first, was
   cancelled.
+- **2026-10-02 — slice 3.18 ruled and built: bytes and text**
+  (`LANGUAGE.md` §8.4's design and as-built, §13 item 51). *The
+  ruling (2026-10-01, the user on five leans):* `String`, `ByteArray`
+  and `UInt8` run as the byte list (rejected: a packed buffer now —
+  two executors and a table of trusted primitives for the lowering's
+  benefit; the interned atom — every string interned for good);
+  `ByteArray` on all six externs (rejected: `List UInt8`, `String`
+  for paths); symbols and `Name` literals deferred to the toolchain's
+  port (item 36 amended); the flip staged like the rename (item 37
+  amended); deriving split to slice 3.19, I to 3.20+. *Built:* six
+  type rows of the realization registry (`Fin`, `BitVec`, `UInt8`,
+  `Array`, `ByteArray`, `String`, each its one runtime field, never an
+  E inductive); a projection function as its projection; the literal's
+  bytes as `Init`'s `List` cells with `bad_string` and `no_string`;
+  the driver's extern codec by declared type; `v3/std/bytes.shard`,
+  `v3/std/host.shard`, `v3/examples/calc/calc_main.shard`. *Found
+  while building:* a structure's projection in a `fn` body was
+  refused before this slice; the E-first fallback reported the
+  classifier's refusal and hid the typed route's obstacle (now
+  carried); a second reader over the kernel's diff found that an
+  E-first body could take a row's value apart with the
+  representation's constructors and that `write` and `write_line`
+  ignored their declared result — both reproduced, fixed and pinned
+  (`row_e_match`, `wire_bad_result`); slice 3.17's as-built said `Int.toNat` was absent from the
+  export (it is at line 552,397; corrected in place). *Not built:*
+  the checked decoder `String.fromUTF8?` (its proof is I's); rows for
+  `Char` and the wider `UInt`s; a link-time check of an extern's
+  signature. *Gates:* 156 loader pins (10 new: `row_types`, `row_e_first`, `row_e_match`, `struct_proj`, `str_e_first`, `str_no_string`, `str_bad_utf8`, `wire_s`, `wire_bad`, `wire_bad_result`; `ev_string` rewritten), `rows_test` (10 values under `ev`), `wire_test` (15 checks against the host), `calc_main_test` (byte-identical to the model world over 21 inputs), `define_test` (9 checks: the two libraries added), calc's differential byte-identical over 21 inputs, parity byte-identical over 28 closures and 111,681 declarations, route 2, K's clients, the full suite's 32 entrypoints with 0 failed. `v3/build.sh` built these sources into a scratch binary that byte-ties the interpreter on the 3,000-line fixture. The full replay and the corpus are CI's.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

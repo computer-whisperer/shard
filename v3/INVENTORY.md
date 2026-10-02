@@ -39,3 +39,14 @@ Notes recorded at drafting:
   conversion (§4.4), never by name.
 - Nothing here is executable yet; the realizations are proposals for
   phase 2–3 and become law when T1's fixtures pass.
+- **As built at slice 3.18 (2026-10-02; `LANGUAGE.md` §8.4):** `Fin`,
+  `BitVec`, `UInt8`, `Array`, `ByteArray` and `String` are each
+  represented by their one runtime field — rows of the realization
+  registry. A `UInt8` is the unbounded integer, below 256 by its
+  erased proof (not yet a machine word); an `Array` and a `ByteArray`
+  are `Init`'s `List` cells (not yet a buffer); a `String` is its
+  UTF-8 bytes, `isValidUTF8` erased and checked nowhere at run time —
+  an S program builds a `String` from a literal only, the boundary's
+  decoder not being built. The layouts in the table's realization
+  column stay the lowering's, behind the same types. `Char` and the
+  wider `UInt`s have no row.

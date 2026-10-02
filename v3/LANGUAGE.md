@@ -980,7 +980,12 @@ of `kernel/prelude.shard` (§8), interned by the linker whether or not
 the program declares them, so a program without the prelude in its
 closure cannot match a wire cell by pattern (an `if` on a
 comparison's result works: the primitive's result type is a
-two-constructor type; S's own story is phase 3's, §12.4); the entry's `World` argument is its
+two-constructor type). **Since slice 3.18 the wire is read by declared
+type** (§8.4 slice 3.18 rule 4): each value of an extern is built and
+read by the E type the program declared — these cells under the
+toolchain's signatures, `ByteArray` and `Init`'s `List`, `Option`,
+`Prod` and `Bool` under the naming law (`v3/std/host.shard`); `Init`'s
+cells are interned as the prelude's are; the entry's `World` argument is its
 parameter type's first constructor over zero fields. The comparison
 primitives return the prelude's `Bool` cells under the same rule.
 
@@ -1074,7 +1079,10 @@ whose **implementation** (`kernel/erase.shard`, the view half of
 until a checked translation or route 1's proof covers it, not a
 correspondence already established. A `REALIZE NAME view` record says
 which rule the body follows, never that the translation was verified
-(GPT-6 R58, slice 10).
+(GPT-6 R58, slice 10). The realization registry's rows are lines of
+that implementation and trusted with it: an operation's entry (slice
+3.16 rule 4), an expression (3.17 rule 7), a type's representation and
+a string literal's bytes (3.18 rules 1 and 3).
 
 ### 7.2 The supplied body
 
@@ -1180,8 +1188,10 @@ check and `ev` treat them as any `type`. `Decidable` is E-eligible
 with no type parameter and two field-less constructors: a decision
 tag with erased payload (§6.2); `Prod` and `Sum`, whose result sort is
 a `max` the binders already solve, are; `Fin n` is not — a value
-parameter — so §7.1's `Fin.mk` example waits for the reserved
-type-representation form (phase 3). A constructor with an erased field can
+parameter —; since slice 3.18 it is a **row of the registry's types**
+with `BitVec`, `UInt8`, `Array`, `ByteArray` and `String` (§8.4 slice
+3.18 rule 1): represented by its one runtime field, an E type under
+its own name, never an E inductive. A constructor with an erased field can
 be **matched** in E and never **built** there (`erased_field`): the
 proof is not there. S numerals type as `Nat` (the slice-5 pass typed
 them as `Int`).
@@ -1305,7 +1315,9 @@ the numeral), `T.casesOn` or `T.rec` of an E-eligible `T` (a `match`,
 each minor's field lambdas the pattern's variables; a minor that uses
 an induction hypothesis is `recursion_structure`), `ite` or `dite`
 (an `if`; `dite`'s branches applied to their erased proof); a
-projection is a `match` on the structure's constructor; a `let` whose
+projection is a `match` on the structure's constructor (the subject
+itself for a row of the registry's types; a projection *function*,
+fully applied, is that projection — slice 3.18 rules 1 and 2); a `let` whose
 value is a proposition or a type vanishes, any other is an E `let`; a
 variable of erased role in a runtime position is `erased_in_runtime`,
 a lambda or an unknown-headed application `function_value`,
@@ -1383,9 +1395,12 @@ carried (§8.2).
    once; a string literal counts as a citation of `List` (an `Init`
    inductive registers on it), and a scope without a two-constructor
    `List` refuses the literal (`no_list`). This is the wire's
-   convention (§6.7) until `String`'s E realization at phase 3, when
-   the rule flips for every file at once and the toolchain migrates by
-   tool (§11). `(quote x)` and `'x` are `Symbol` literals; `(list a b
+   convention (§6.7) until `String`'s E realization at phase 3, when the rule flips for every file at once and the toolchain migrates by
+   tool (§11). **Flipped at slice 3.18, staged** (§8.4 slice 3.18 rule
+   3; §13 item 37 as amended): outside the toolchain's own sources
+   `"…"` is a `String` in every position, its E value its UTF-8 bytes
+   as `Init`'s `List` cells; the rule above holds in a module whose
+   identity begins with `kernel` until route 1's chain is V3's own. `(quote x)` and `'x` are `Symbol` literals; `(list a b
    c)` is the same `List`'s constructor chain (R60's list literal: by
    the scope at Stage 0, by the expected type at Stage 1). In L
    positions nothing changes: a numeral is `LitNat` and a negative one
@@ -1423,7 +1438,10 @@ carried (§8.2).
    `List`, `Option`, `Bool` and `Pair` are the wire's cells, interned
    by the linker whether or not a program declares them (§6.7); the
    prelude's `Nat` (`Z`/`S`), which no V3 file used, is deleted (slice
-   3.4) — `Nat` is a built-in (rule 1).
+   3.4) — `Nat` is a built-in (rule 1). Since slice 3.18 these are the
+   cells of the toolchain's signatures: a program under the naming law
+   declares its externs over `ByteArray` and `Init`'s types, and the
+   driver reads either by the declared type (§8.4 slice 3.18 rule 4).
 7. **`let`** is sequential everywhere, the bootstrap included (§5.4's
    measurement: no existing source changes meaning).
 8. **The bootstrap reads exactly this — landed at slice 3.2
@@ -1764,8 +1782,9 @@ parity, route 2's byte-tie and T0 green:
 | 3.15 | the L-side ergonomics of law §5.1–5.2: implicit arguments, universe inference, the numeral rule with the one `Nat → Int` coercion, `noConfusion`/`injection` | `def` and `theorem` authors |
 | 3.16 | one front end (reordered 2026-09-18; the design below): a `fn` body through the elaborator into a pre-definition, its E program by erasure and its K value by the 3.13–3.14 compilation; matchers, so a `match` in a statement; `Bool` against `Decidable`; constructors by expected type; list literals | calc's spec file wholly defined (13 of its 25 functions are `RUNNABLE` at the slice's opening) |
 | 3.17 | the porting facilities of §11's R60 row (narrowed by ruling 2026-10-01, item 50): the record laws and `make`/`with` over a `structure` with the dependent-update refusal, numeral rows on the typed route, the fresh-name supply, E's rename of `lt le int_eq` to `< <= =` staged by the tool (the files no v2 tool reads now, `v3/kernel/**` with route 1's chain) | the broad port |
-| 3.18 | the byte and text adapters (`String`'s E realization, item 37's flip; the wire's type ruled first); with the flip, `"…"`, symbols and `Name` literals in a `fn` body (moved from 3.17); deriving under a declared policy | the first host-facing S library |
-| 3.19+ | I: the node vocabulary (law §7.2), `elaborate(I)` to P, the goal-graph API as E functions, `by` blocks, the core tactics; then `tools/prove` and the engine as I producers | calc's 100 claims; the coverage arc's B-1c |
+| 3.18 | bytes and text (narrowed by ruling 2026-10-01, item 51; the design and the as-built below): the registry's type rows — `String`, `ByteArray`, `UInt8` and the structures under them, each represented by its one runtime field —, a projection function as its projection, item 37's flip staged (every file but the toolchain's own), the wire read by declared type and the externs over `ByteArray`; symbols and `Name` literals deferred to the toolchain's port | the first host-facing S library (`v3/std/host.shard`, `v3/std/bytes.shard`); calc's loop against the host |
+| 3.19 | deriving under a declared policy (law §5.1; split from 3.18 by the same ruling) | a new type usable in an `if`, as a key and in a message |
+| 3.20+ | I: the node vocabulary (law §7.2), `elaborate(I)` to P, the goal-graph API as E functions, `by` blocks, the core tactics; then `tools/prove` and the engine as I producers | calc's 100 claims; the coverage arc's B-1c |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -2287,7 +2306,7 @@ system. There is no new term language: the body is `Expr`.
    for I and search to share; private `Option` helpers below the
    boundary stay.
 10. **Holes across a binder: the narrower guarantee, stated** (R68,
-    **deferred to I's opener**, slice 3.19). Today `mc_drop_fvars`
+    **deferred to I's opener**, slice 3.20 — 3.19 when written; deriving took that number at item 51). Today `mc_drop_fvars`
     removes a closing binder's local from every unsolved
     metavariable's telescope, so a hole cannot be filled with that
     variable after its binder closes. That is **incomplete, never
@@ -2345,7 +2364,7 @@ not); and the boundary fixtures:
 | G8 no reinterpretation | a `RUNNABLE` callee added to a body changes the record and no resolved operator, literal or constructor in the dump; a typed-route error stays a refusal | R70 |
 | G9 descriptions through a view | a function with a `match` defined inside an implementation check: projected in the fork, the description present | R63, R64 |
 
-G5 (contextual delayed filling) is rule 10's and opens slice 3.19.
+G5 (contextual delayed filling) is rule 10's and opens slice 3.20 (I's opener).
 
 **Risks named before code.** The table generalization of slice 3.14
 was written over E patterns and E types; re-pointing it is the
@@ -2627,7 +2646,7 @@ has.
   read in `define_test.sh`), G7 `discharge_self_cycle` and
   `discharge_two_cycle`, G8 `route_callee` (+ the dumps compared in
   `define_test.sh`), G9 `match_in_impl`; G2, G3, G6 are landings 1–2's;
-  G5 opens slice 3.19. Eleven pins moved to the elaborator's reason or
+  G5 opens slice 3.20 (I's opener). Eleven pins moved to the elaborator's reason or
   the new outcome, each with its cause in its header.
 - **Open:** a `match` on a computed scrutinee inside a measured
   function states its obligation without `scrutinee = pattern` (rule
@@ -2832,7 +2851,9 @@ byte-identical, the full suite, CI for route 1.
   (- 0 #0) #0))`. calc's app file imports through `InvImage.wf` and
   `show_nat` takes the measure `(Int.natAbs n)`: 17 of 17 functions
   defined, `show_nat.dec_1` the one pending obligation, nothing
-  `RUNNABLE`. `Int.toNat` is not in the export chunks and has no row.
+  `RUNNABLE`. `Int.toNat` has no row: it lies at line 552,397 of the export,
+  far past the test prefix (corrected at slice 3.18 — this said it was
+  not in the export).
   A callee that is a view's `sig fn` the environment lacks is
   `no_l_meaning` (`loader.shard`'s `callee_hits`; pin
   `route_sig_callee`): `has_eq` reads so now. `confusion_reachable`
@@ -2847,6 +2868,254 @@ byte-identical, the full suite, CI for route 1.
   the fresh-name library added), calc's differential byte-identical
   over 21 inputs, the full suite and the bootstrap's unit tests
   (records §9 for the figures). Route 1 is CI's.
+
+**Slice 3.18 — bytes and text: the wire's type, `String`'s
+realization, the flip** (the user's ruling of 2026-10-01 on five
+leans, the design the same day; §13 item 51). The slices table gave
+this slice the byte and text adapters, item 37's flip, the literals
+moved from 3.17 and deriving, "the wire's type ruled first".
+
+*The ruling.* (1) **The representation is the byte list**: `UInt8`
+runs as an integer, a `ByteArray` as the list of them, a `String` as
+its `ByteArray` with the validity proof erased — no executor gains a
+kind of value. Rejected: a packed buffer now (a fourth value in the
+bootstrap and in `ev`, and a table of primitives each *trusted* to
+match Lean's function; its benefit is the lowering's, behind the same
+types); the interned atom (item 36's reading taken literally: every
+string ever built interned, a file's contents included). (2) **The
+externs carry `ByteArray`**, all six; text leaves by its bytes and
+enters by a checked decoder. Rejected: `List UInt8` (list cells in the
+host contract for good), `String` for paths and arguments (UTF-8
+validation inside the boundary). (3) **Symbols are deferred** — they
+and `Name` literals stay out of a `fn` body; item 36 is amended.
+(4) **The flip is staged like the rename** — every file outside the
+toolchain's own sources now, `v3/kernel/**` with route 1's chain; item
+37's "at once" is amended. (5) **Deriving is its own slice**, 3.19; I
+moves to 3.20.
+
+*What the probes found* (scratch files; the pins' prefix and a longer
+one cut from the export):
+
+- **In a `def`, `"…"` is already a `String`**; a `fn` whose signature
+  names `String`, `ByteArray` or `UInt8` is `no_l_identity
+  route=e_first`. The obstacle is one binder: `UInt8` is a structure
+  over `BitVec 8`, `BitVec w` over `Fin (2 ^ w)`, and a *value*
+  parameter is neither a type nor a proposition, so §7.5's eligibility
+  refuses `BitVec` and everything built on it.
+- **A structure's projection in a `fn` body is refused today**:
+  `(fn lo2 ((s Span)) Nat (Span.lo s))` is `REFUSE unknown_head:
+  Span.lo` — the erasure has no realization for the projection
+  function, the function falls to the classifier, and the classifier
+  knows no L constant. Slice 3.17's structures were reachable from a
+  `fn` by constructor and by pattern only.
+- **An import costs its position in the export.** `(import Init
+  NAME)` admits the prefix through NAME: `String` is line 9,848 (277
+  declarations), `String.toByteArray` 78,604 — both inside the pins'
+  prefix (100,851 lines, 5 s). `ByteArray.data` is 169,395,
+  `UInt8.toBitVec` 250,325, `String.casesOn` 250,602, `String.append`
+  253,597, `UInt8.casesOn` 263,243, `UInt8.toNat` 263,515: a load
+  through there admits 3,400 declarations in 40 s on the bootstrap.
+  `ByteArray.validateUTF8` is line 2,619,670 of 6,490,422.
+- **Init's operations on these types have no derived view**: they are
+  stated through instance projections (`HMod.hMod`, `++`) and loops
+  the erasure refuses (`recursion_structure`). `UInt8.ofNat n` is
+  `⟨BitVec.ofNat 8 n⟩`, which unfolds to `⟨⟨⟨n % 2 ^ 8, _⟩⟩⟩`.
+- **The driver performs an extern by its short name alone**
+  (`ev.shard`'s `perform`): prelude cells whatever the program
+  declared.
+- **Outside the toolchain's sources one function holds a string
+  literal** (the pin `ev_string`); `v3/std` and `v3/examples` hold
+  none.
+
+*The rules:*
+
+1. **Type realizations: six rows of the registry.** `Fin`, `BitVec`,
+   `UInt8`, `Array`, `ByteArray` and `String` are **represented by
+   their one runtime field** (law §4.4, "a runtime representation
+   different from the constructors"; the simulation is the identity on
+   that field, the erased fields its invariant). In E: the type keeps
+   its name (`ByteArray`, not `(List UInt8)` — the lowering may give
+   it another layout behind the same signatures), its type arguments
+   kept and its value arguments dropped (`Fin n` is `Fin`); the
+   constructor is its runtime argument, the field's projection its
+   subject, a case analysis or a constructor pattern binds the field
+   to the scrutinee. So a `UInt8` is an integer below 256, a
+   `ByteArray` and an `Array α` are `Init`'s `List` cells, a `String`
+   is its UTF-8 bytes. A row's type is **never an E inductive**: the
+   classifier cannot cite its constructor (`unknown_head`), so the
+   typed route and the E-first route cannot disagree on the cells.
+   The erasure checks the shape at each use — one constructor, exactly
+   one runtime field — and is `no_realization` otherwise; a row cannot
+   misdescribe its type. No row for an **operation**: an operation is
+   an S function over the constructors and projections, tied to
+   Init's by a theorem where one is wanted. Rejected: the rule for
+   every one-field structure (a native `structure` or `type` would
+   change cells under the E-first functions that build it); rows by
+   operation (`UInt8.ofNat` ↦ `mod`, each a trusted line).
+2. **A projection function is its projection**, for every structure:
+   a constant whose value is `λ params self. self.i`, fully applied,
+   erases as that projection of its last argument — the match on the
+   constructor for an E inductive, the subject for a row of rule 1.
+3. **The literal.** Outside the toolchain's sources `"…"` is a
+   `String` in every position. On the typed route it is K's literal,
+   erased to its bytes as `Init`'s `List` cells — one literal, built
+   once at link; in an E-first body the same literal, its static type
+   `String`; `no_string` where the environment has no `String`. A
+   literal whose bytes are not UTF-8 is `bad_string`: K reads a
+   literal by decoding it, and only on valid bytes is the encoding of
+   the decoded text the bytes written. In a module whose identity
+   begins with `kernel` the rule before the flip holds (the byte list
+   of the `List` in scope; a body holding one stays E-first), until
+   route 1's chain is V3's own and the tool migrates the toolchain.
+4. **The wire by declared type.** The driver builds and reads each
+   value of an extern by the E type the program declared — a codec by
+   identity, as §9's entry is: bytes at the prelude's `(List Int)` or
+   at `ByteArray`, a list at the prelude's `List` or `Init`'s, an
+   option, a pair (`Pair` or `Prod`), a flag (either `Bool`). The
+   toolchain's signatures are `kernel/host.shard`'s, unchanged; a
+   program under the naming law declares
+   `get_args : World → Prod (List ByteArray) World`,
+   `read_file : ByteArray → World → Prod (Option ByteArray) World`,
+   `write`, `write_line : ByteArray → World → World`,
+   `write_file : ByteArray → ByteArray → World → Prod Bool World`,
+   `exit : Int → World → World`. A declared type the host's value
+   does not fit is stuck (`extern`), as a value that was no byte list
+   is today. The checked entry takes a `ByteArray` parameter.
+5. **Symbols.** `(quote x)` in a function whose signature has an L
+   reading keeps `no_l_identity route=e_first`. The direction, for
+   the ruling that the toolchain's port will need: `Symbol` its own
+   type over `String`, represented by the atom — a seventh row whose
+   simulation is interning — rather than `String` itself, which rule
+   1 makes a byte list.
+6. **The libraries and the consumer.** `v3/std/bytes.shard` (bytes
+   and numbers, a byte array and its list), `v3/std/text.shard` (a
+   text's bytes; built into `bytes.shard`, the as-built below),
+   `v3/std/host.shard` (the `World` and the six
+   externs of rule 4), and calc's loop closed against the host:
+   `v3/examples/calc/calc_main.shard`, an S program that reads its
+   arguments and prints each line's result — the consumer §12.6 names
+   ("calc's app step"). Its gate: its output on the differential's
+   inputs is the model world's (`run_world`, which the differential
+   already ties to the old tree), byte for byte.
+
+*Not in this slice:* the checked decoder (`String.fromUTF8?` needs a
+validator with its proof; no consumer turns input bytes into a
+`String`, and the proof is I's); rows for `Char` and the wider
+`UInt`s; `String`'s own operations (append, length, the decision);
+a packed buffer; deriving (slice 3.19).
+
+**Slice 3.18 as built** (2026-10-02):
+
+- **Rule 1.** `erase.shard`'s `rep_row` names the six types.
+  `l_to_etype` gives a row its own name over its type arguments
+  (`row_param_roles`: a value or a proposition parameter dropped) and
+  `ind_eligible` answers no for it, so the E table never holds its
+  constructor. `erasure.shard`: the constructor is its runtime
+  argument, a `Proj` its subject, `T.casesOn` and `T.rec` a `let` of
+  the scrutinee (`erase_row_cases`), a constructor pattern in a
+  matcher's row its field's pattern — `row_field` checking at each use
+  that the structure has one constructor and one runtime field. The
+  classifier's pass treats a row's type as a known type with no
+  constructor of its own: a constructor pattern on it is
+  `pattern_type`, an `if` on it `if_type` (pin `row_e_match`) — an
+  E-first body may pass a row's value on, never read its cells. As
+  dumped: `(UInt8.ofBitVec (BitVec.ofFin (Fin.mk (Nat.mod n 256)
+  PROOF)))` is `(Nat.mod #0 256)`; `ByteArray.mk (Array.mk l)`, its
+  pattern and `String.toByteArray s` are `#0`. `Array` was an E
+  inductive with a `mk` cell since slice 5b and is a row now (pin
+  `realize_view`: `Array.toList` and `Array.push` by their views, as
+  before).
+- **Rule 2.** `proj_fn_app`: a definition whose value under exactly
+  as many lambdas as it has arguments is `self.i`. `(Span.lo s)` in a
+  `fn` is `(match #0 ((mk _ _) #1))` and the function is defined (pin
+  `struct_proj`). The rule is also what lets a body call Init's
+  `String.toByteArray`, `Array.toList`, `Fin.val` and
+  `ByteArray.data` with no `realize`.
+- **Rule 3.** A `LitStr` erases to the one literal over `List.nil` and
+  `List.cons`. A literal whose bytes are not UTF-8 is `bad_string` at
+  the **elaborator**, in a `def` as in a `fn` (one text, one meaning;
+  `utf8_ok`, moved from `ev.shard` to `util.shard`), and the erasure
+  keeps the check for the bytes it emits; the classifier reads `"…"`
+  the same way outside the toolchain's sources, `no_string` without a
+  `String` in the environment; the linker interns Init's
+  cells whether or not the program declares them. The pre-definition
+  keeps a string-holding body E-first in the toolchain's sources only.
+  No file of the toolchain changed meaning and the bootstrap is
+  untouched: parity compares what it compared. Migrated: the pin
+  `ev_string`, the one function outside the toolchain that held a
+  literal (it was `(fn g () (List Nat) "abc")`, `type_mismatch` now).
+- **Rule 4.** `ev.shard`: a linked extern carries its declared types
+  and `perform` builds and reads each value by them (`wb_tags` for
+  bytes, `wl_tags`, `wo_tags`, `wp_first`, `wf_tags`); the result's
+  type is decided **before the host is asked** — its codec, and the
+  World's token returned at the type it was passed at (the extern's
+  last parameter's): a `write_file` whose declared result has no
+  codec writes nothing, a `write_line` declared to return a pair
+  prints nothing. An extern whose declared type does not fit is
+  stuck, `RUN: stuck extern in main.write_line` (pins `wire_bad`,
+  `wire_bad_result`). The checked entry takes a `ByteArray` (pin
+  `wire_s`'s `copy`). **Not built: a check at link.** An extern's
+  signature is checked where it is performed, because `ev` is pure and
+  stops at any extern — a program may declare one the host does not
+  have (`define_runnable`'s `read_byte`, `ev_test`'s `shout`).
+- **Rule 5.** As designed; the elaborator's and the pre-definition's
+  messages name the deferral.
+- **Rule 6, built as two libraries, not three.** `v3/std/bytes.shard`
+  holds text's one adapter too (`Bytes.ofString`): a `text.shard` of
+  one function was a file for its name. In it: Init's `BitVec.toNat`
+  and `UInt8.toNat` by their derived views (`(fn UInt8.toNat 0 (UInt8)
+  Nat (BitVec.toNat 8 #0))` — the width is an argument of Init's
+  function and stays one); `Byte.ofNat`, with `Byte.ofNat_eq :
+  Byte.ofNat n = UInt8.ofNat n` and `Byte.toNat_ofNat`, both
+  `Eq.refl` (K unfolds Init's instance projections, which the erasure
+  cannot follow); `Bytes.ofList` and `Bytes.toList` with both round
+  trips (`ofList_toList` is K's structure eta); `Bytes.ofNats`,
+  `Bytes.toNats`. Two realized, eight defined, four theorems, no
+  axiom. `v3/std/host.shard`: the `World` and the six externs.
+  `v3/examples/calc/calc_main.shard`: `codes_of` and `bytes_of`
+  defined, `drive_host` typed with a callee-local, `perform` and
+  `main` `no_l_meaning`. Run with the differential's 21 lines as its
+  arguments it prints the model world's lines, byte for byte
+  (`kernel/test/calc_main_test.sh` decodes `run_world`'s value from the
+  harness).
+- **Found by review** (a second reader over the kernel's diff, its
+  probes re-run before the fixes). *An E-first body could take a row
+  apart*: `(match b (List.nil 0) ((List.cons h t) h))` on a
+  `ByteArray` was `RUNNABLE`, the classifier's pass skipping a type
+  it had no entry for — the cells agreed, so nothing ran wrong, but
+  the layout was no longer the registry's to change. *`write` and
+  `write_line` ignored the declared result*: declared to return a
+  pair, the line was printed and the program stuck at the next
+  `match`; and a pair's second component was never compared with the
+  World's type. Both closed as above. Left as it was, and older than
+  this slice: an E-first body is not checked against its declared
+  result (§12.1's "return types unchecked" row), so one can return a
+  `(List Nat)` as a `ByteArray` and `write` emits each number's low
+  byte.
+- **Found while building.**
+  *The fallback hid the obstacle.* `(fn cat … (ByteArray.mk (Array.mk
+  (List.append a b))))` was `REFUSE unknown_head: ByteArray.mk`: the
+  typed route's obstacle was `List.append` with no realization, the
+  function fell to the classifier, and the classifier's refusal — a
+  row's constructor — was true and beside the point. A classifier
+  refusal after a typed-route obstacle now carries it (`loader.shard`'s
+  `load_e_after`): `… — read E-first after the typed route's
+  no_realization: List.append: no realization attached`.
+  *An import costs its position.* The libraries import through
+  `UInt8.toNat` (40 s a load on the bootstrap, against 5 s): the test
+  prefix has a second chunk, `fixtures/init_prefix_str_tail.ndjson`
+  (lines 100,852 to 263,515 of the export, 8.6 MB), given after the
+  first by the three tests that load them; the pins stay on the first.
+- **Open, stated.** The checked decoder (`String.fromUTF8?`: a
+  validator and its proof against `ByteArray.IsValidUTF8`, with I).
+  Rows for `Char`, the wider `UInt`s and `USize`. `String`'s own
+  operations. A `realize` by a proven-equal S function, so that a body
+  calls Init's name (`UInt8.ofNat`) rather than a sibling
+  (`Byte.ofNat`) — the supplied form's body is E and cannot build a
+  row's value. The toolchain's flip and symbols, with route 1's chain.
+  The six rows and the literal's bytes are lines of the erasure and
+  trusted with it (§7.1).
+- **Gates run:** 156 loader pins (10 new: `row_types`, `row_e_first`, `row_e_match`, `struct_proj`, `str_e_first`, `str_no_string`, `str_bad_utf8`, `wire_s`, `wire_bad`, `wire_bad_result`; `ev_string` rewritten), `rows_test` (10 values under `ev`), `wire_test` (15 checks against the host), `calc_main_test` (byte-identical to the model world over 21 inputs), `define_test` (9 checks: the two libraries added), calc's differential byte-identical over 21 inputs, parity byte-identical over 28 closures and 111,681 declarations, route 2, K's clients, the full suite's 32 entrypoints with 0 failed. `v3/build.sh` built these sources into a scratch binary that byte-ties the interpreter on the 3,000-line fixture.
 
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
@@ -2937,7 +3206,9 @@ is a checked entry, and the driver's `-- ARG…` are validated against
 them in order before `ev` is invoked. `Int` parses a decimal with an
 optional leading `-`; `Nat` parses a decimal (a sign is refused); a
 parameter whose type is a **byte-list codec by identity** — the
-prelude's `(List Int)`, Init's `(List Nat)` or `(List Int)` — takes
+prelude's `(List Int)`, Init's `(List Nat)` or `(List Int)`, and since
+slice 3.18 `ByteArray`, whose representation is Init's `List` cells —
+takes
 the argument's bytes as that list, each byte 0–255 an element (slice
 10; GPT-6 R59: before, any two-constructor type with a nullary first
 and a binary second constructor took them, so a `(type Tree (Empty)
@@ -3100,7 +3371,7 @@ never compared as verdicts.
 | deriving under a declared policy | §5.1 | 3 |
 | tactic blocks, the I elaborator, the goal graph, `sorry` as a hole | §5.1 Stage 2, §7 | 3 |
 | typeclasses, instances, coercions | §5.1 Stage 3 | 3 |
-| the `Init` import with E realizations attached; `String`, `Array`, `ByteArray` representations (Init's E-eligible inductives are E types since slice 5b, §7.5; a `realize` attaches a body per constant) | §4.4, INVENTORY | 3 |
+| the `Init` import with E realizations attached; `String`, `Array`, `ByteArray` representations (Init's E-eligible inductives are E types since slice 5b, §7.5; a `realize` attaches a body per constant) — **the byte-list representations landed at slice 3.18** (§8.4: `String`, `ByteArray`, `Array`, `UInt8`, `BitVec`, `Fin`); the packed buffers are the lowering's, behind the same types | §4.4, INVENTORY | 3 |
 | lambda lifting, templates, specialization | §4.3 | 3–4 |
 | `bin`, `requires`, the World-use check, effect traces | §4.7 | 4 |
 | prepared handles, long-lived environments | §9.3, T6 | 4 |
@@ -3143,9 +3414,9 @@ migration table of law §10.3 owns the name and behavior changes of the
 | `if` on `True`/`False` by constructor name | carried, generalized | §6.2's tag rule; v2's `(type Bool (False) (True))` has Init's constructor order |
 | `match`: first match wins, nested patterns, integer and `(quote S)` patterns, `_`, bare 0-ary constructors | carried in E | symbol patterns profile only; Stage 1's match compilation must keep first-match semantics (Lean's does); **in L since slice 3.16** a `match` is a generated matcher (§8.4 slice 3.16 rule 1): first match wins, nested patterns, `_` and bare field-less constructors carried; an integer or `(quote S)` pattern is `literal_pattern` there until a consumer under the naming law has one |
 | parallel `let`, no `let*` | **changed**: sequential in L and E (RULED 2026-09-12, R44) | §5.4; 0 of the tree's 30,611 `let` groups depend on parallel binding, so no source changes meaning; the bootstrap evaluator's parallel rule gives identical results on all of them until the V3 reader replaces it (slice 2) |
-| `(quote S)`, `'S`, the `Symbol` type, `sym_eq`, `sym_of_chars`, `chars_of_sym` | carried — **decided 2026-09-14** (§8.1 rule 1) | `Symbol` is a built-in E type in every file, the interned atom, L identity `String` at phase 3; K's `Name` values are built from its atoms as today. The S-side refusal `symbol_literal` retired at slice 3.4 (2026-09-14) |
+| `(quote S)`, `'S`, the `Symbol` type, `sym_eq`, `sym_of_chars`, `chars_of_sym` | carried — **decided 2026-09-14** (§8.1 rule 1) | `Symbol` is a built-in E type in every file, the interned atom; its L identity is **deferred to the toolchain's port** (§8.4 slice 3.18 rule 5, item 36 as amended: `String` is a byte list since that slice, so the atom is not its representation); K's `Name` values are built from its atoms as today. The S-side refusal `symbol_literal` retired at slice 3.4 (2026-09-14) |
 | `(list a b c)` (9,455 uses outside `v3/`) | carried — **decided 2026-09-14** (§8.1 rule 2) | the constructor chain of the `List` in scope, by the scope at Stage 0 and by the expected type at Stage 1 (R60); the S-side refusal `list_sugar` retired at slice 3.4 (2026-09-14) |
-| `"…"` = UTF-8 bytes as `(List Int)`, on the extern wire too | carried in E — **decided 2026-09-14** (§8.1 rule 2); **changed** at `String`'s realization | in an E body the byte list of the `List` in scope for every file (the S-side refusal `string_literal` retired at slice 3.4, 2026-09-14); in L positions K's `String` literal (§5.3). At `String`'s E realization the E rule flips for every file at once, the toolchain migrated by tool (§11). **AT RISK:** the extern wire's byte convention under the naming law (`List UInt8`? `ByteArray`?) is undecided; at phase 2 the wire's cells are the toolchain prelude's `List`, `Option`, `Pair` and `Bool` (§6.7) |
+| `"…"` = UTF-8 bytes as `(List Int)`, on the extern wire too | carried in E — **decided 2026-09-14** (§8.1 rule 2); **changed** at `String`'s realization | in an E body the byte list of the `List` in scope for every file (the S-side refusal `string_literal` retired at slice 3.4, 2026-09-14); in L positions K's `String` literal (§5.3). **Changed at slice 3.18** (§8.4 slice 3.18 rules 1, 3 and 4; decided 2026-10-01): outside the toolchain's own sources `"…"` is a `String` in every position, represented by its UTF-8 bytes as `Init`'s `List` cells, and a v2 program that built text as `(List Int)` converts through `v3/std/bytes.shard`; the toolchain's sources keep the byte list until route 1's chain is V3's own, then migrate by tool. The wire under the naming law is `ByteArray`; the toolchain's signatures keep the prelude's cells (§6.7) |
 | `Int` numerals everywhere, `-7` | carried in E — **decided 2026-09-14** (§8.1 rule 2); in L since slice 3.15 (§5.3) | in an E body a numeral is an integer of any sign whose type is the binder's; in L a numeral takes the type its position expects — `Int.ofNat n` / `Int.negSucc (-n-1)` at `Int`, `Nat` otherwise (law §5.2's rule) |
 | unbound identifier = `FVar` (proof-time opened variables) | dropped | an unbound name is a resolution error; K refuses free variables; I's named context replaces the use (phase 3) |
 | primitive dispatch by name, trie-first, bodyless-name collision = stuck (`pins/lang/prim_shadow_rejects`) | **changed** — landed slice 5 | heads classified at load into four node kinds; a primitive is an identity (§6.4); a declared name shadows the table's (the scope resolves first); an unknown head is refused at load |
@@ -3208,7 +3479,7 @@ row.
 | sizes and indices `Int` | **changed** | `Nat` where a size, saturating subtraction — the migration tool's typed class, reviewed per use (law §10.2) |
 | `int_eq`/`lt`/`le` return `Bool` | re-spelled | `Decidable` propositions with `decide` bridges; `==` for `Bool` values. E's names are `= < <=` since slice 3.17: the old spellings are `renamed_primitive` outside the toolchain's own sources, which migrate with route 1's chain (`v3/tools/rename_cmp.py`) |
 | World threading with no use check | **changed at phase 4** | the well-threadedness check (law §4.7): a v2 program that uses one World token twice will be refused; the World-alias fixture lands before any effectful port |
-| the extern roster `get_args read_file read_dir read_key write write_file write_line exit` | partly carried | `kernel/host.shard` declares six; `read_dir` (the old loader, codegen) and `read_key` (snake) return when a V3 consumer needs them. **AT RISK:** the wire convention (above) |
+| the extern roster `get_args read_file read_dir read_key write write_file write_line exit` | partly carried | `kernel/host.shard` declares six; `read_dir` (the old loader, codegen) and `read_key` (snake) return when a V3 consumer needs them. the wire under the naming law is `v3/std/host.shard`'s, over `ByteArray` (slice 3.18; decided 2026-10-01) |
 | evaluator errors `NoMatchArm`, `IfNonBool`, `UnknownCall`; no fuel | **changed** — landed slice 5 | `EvStuck` with a reason (`no_arm`, `if_tag`, `guard`, `extern`, `unlinked`) and the function; `EvOut` is new — v2 relied on the totality gate instead of fuel (§6.2); `EvExhausted` (`nat_size`, `nat_count`) since slice 9 — a primitive's resource, distinct from a guard (R51); an unknown call is refused at load, never reached |
 | `(measure (struct x))` (3,175), `(measure (- …))` (29), size-function measures (about 20) | carried as `ERec` | the obligation: v2's measure gate and the offline `admit` classifier on every checked `fn` → law §4.5's tactic-discharged obligations (phase 3). **AT RISK during phase 2:** no totality check on any `fn` — exactly `eval direct`'s situation today, and only for the duration of Stage 0 |
 | mutual recursion (the measure gate's SCCs) | deferred | "mutually recursive groups need a joint well-founded argument" (law §4.4), Stage 1 |
@@ -3231,9 +3502,9 @@ and the disposition this draft intends.
 
 | row | owner | first consumer | regression | intended disposition |
 |---|---|---|---|---|
-| symbols in S (`quote`, `Symbol`, `sym_eq`) | phase 3, Stage 1 (the reader) | the toolchain's own sources (ten kernel files) when they port to L | a `fn` using `(quote x)` and `sym_eq` under the V3 reader is refused with a named reason until decided | a `Name` literal, or symbols stay profile-only |
+| symbols in S (`quote`, `Symbol`, `sym_eq`) | phase 3, Stage 1 (the reader) | the toolchain's own sources (ten kernel files) when they port to L | a `fn` using `(quote x)` and `sym_eq` under the V3 reader is refused with a named reason until decided | a `Name` literal, or symbols stay profile-only — **deferred at slice 3.18** (rule 5): E-only until the toolchain ports; the direction a type of its own over `String`, represented by the atom |
 | `(list a b c)` | phase 3, Stage 1 | every ported `fn` (9,455 sites); calc's program half, ported to S at slice 6, spells its list literals as constructor chains | `(list 1 2)` under the V3 reader refused by name | a list literal at Stage 1 |
-| the extern wire's bytes | slice 5 (`ev`'s extern boundary — **bytes as the prelude's cells, landed**); phase 3 for the L type | `sha256sum`'s bin; calc's app step — an S program names no wire cell at phase 2, so calc's differential keeps its drivers outside the program (slice 6, §10) | `write_line` of a literal round-trips its bytes through the driver (route 2's byte-tie) | bytes at phase 2; `ByteArray` or `List UInt8` decided with §5.3's `String` realization |
+| the extern wire's bytes | slice 5 (`ev`'s extern boundary — **bytes as the prelude's cells, landed**); phase 3 for the L type | `sha256sum`'s bin; calc's app step — an S program names no wire cell at phase 2, so calc's differential keeps its drivers outside the program (slice 6, §10) | `write_line` of a literal round-trips its bytes through the driver (route 2's byte-tie) | bytes at phase 2; **decided 2026-10-01: `ByteArray`**, represented by `Init`'s `List` cells, each extern read by its declared type (slice 3.18 rule 4; `kernel/test/wire_test.sh`, `calc_main_test.sh`) |
 | negative numerals | phase 3, Stage 1 | calc (negative `Int` results); `std/div` | `-7` under the V3 reader = the constructor term at Stage 0; calc's port (slice 6) writes no negative literal and computes its negative results from `-` at run time, its `Nat` numerals running as integers | Stage 1 special-cases `-` on a numeral; ruled then |
 | `gen_fresh` | **decided slice 5: dropped** | the ten old-tree kernel files (canon, tactics) as they port | a `fn` citing `gen_fresh` is refused at load (`unknown_head`) | a threaded supply in the ported toolchain (`v3/std/fresh.shard`, slice 3.17) |
 | `with_F` updaters, order-free `make` | phase 3, Stage 1 | 237 sites (`models/imp`, the tools) | `(with_F s v)` refused by name until the update form exists | Stage 1 record-update sugar (Lean's `{ s with f := v }`) |
@@ -3537,7 +3808,12 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     `Name` values are built from its atoms as today. Alternative: a
     `Name` literal in place of symbols (R60's row), which is circular —
     K's `Name` holds the atoms — and rewrites 1,494 sites for no
-    change of meaning.
+    change of meaning. **Amended 2026-10-01 (item 51):** the L identity
+    is not assigned at slice 3.18. `String`'s representation is its
+    bytes (§8.4 slice 3.18 rule 1), which an atom is not, and one type
+    has one representation; symbols stay E-only until the toolchain's
+    port needs them, the direction recorded there (rule 5): a type of
+    its own over `String`, represented by the atom.
 37. **E's literal rules are the profile's, for every file** (§8.1 rule
     2): a numeral of any sign typed by its binder, its kind the sign;
     `"…"` the constructor chain of the `List` in scope over its bytes,
@@ -3549,6 +3825,11 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     toolchain's 1,649 string sites and the byte-oriented helpers over
     them — and lands as its own slice with the parity and calc gates,
     never as an automatic consequence of `String`'s realization.
+    **Amended 2026-10-01 (item 51): staged, as the rename was.** The
+    flip landed at slice 3.18 for every file but the toolchain's own
+    sources — `v3/kernel/**` is compiled on route 1 by the v2 chain,
+    which reads `"…"` as a byte list and is not changed —, which flip
+    when route 1's chain is V3's own.
     Alternative: keep S's refusals (`string_literal`, `symbol_literal`,
     `list_sugar`) and give the kernel its own rules — the dialect
     again.
@@ -3716,7 +3997,7 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     function back to the E-first route whole while a type error is a
     refusal; the E-first route stays for the toolchain's sources
     until they port. Slices 3.17–3.18 take the rest of R60's row; I
-    is 3.19+.
+    is 3.20+ (3.19 is deriving, since item 51).
     **Revision 2 (2026-09-18, GPT-6 R63–R71, records §4.10; the
     user's ruling on the three leans):** the pre-definition a named
     record, never an admitted declaration; matcher descriptions bound
@@ -3763,3 +4044,26 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     `make`/`with` reach a parameterless `structure` only; the
     bootstrap's `= < <=` are native-only names beside the old
     kernel's table.
+51. **Slice 3.18's ruling and scope (RULED 2026-10-01 — the user
+    agreed with five leans; built 2026-10-02, §8.4's as-built).** The
+    wire's type, which the slices table put first. (1) `String`,
+    `ByteArray` and `UInt8` run as **the byte list**: each of `Fin`,
+    `BitVec`, `UInt8`, `Array`, `ByteArray`, `String` represented by
+    its one runtime field (the registry's type rows), no executor
+    changed. Rejected: a packed buffer now (a fourth value in two
+    executors and a table of primitives trusted to match Lean's
+    functions, for a benefit that is the lowering's); the interned
+    atom (item 36 read literally: every string built is interned for
+    good). (2) The externs carry `ByteArray`. Rejected: `List UInt8`
+    (list cells in the host contract), `String` for paths and
+    arguments (validation inside the boundary). (3) Symbols and `Name`
+    literals are **deferred** to the toolchain's port — item 36
+    amended; the slices table's row loses them. (4) The flip is
+    **staged**, as the rename was — item 37 amended. (5) Deriving is
+    slice 3.19; I is 3.20+. **Built beyond the leans, each in §8.4:**
+    a projection function is its projection (a structure's field was
+    refused in a `fn` body); the driver reads an extern by its
+    declared type; a classifier refusal after a typed-route obstacle
+    names the obstacle. **Not built:** the checked decoder — no
+    consumer turns input bytes into a `String`, and its proof is I's;
+    until then text enters a program as its literals.

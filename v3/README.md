@@ -762,6 +762,51 @@ spellings move nothing in the old tree), v3 5,468 s: 29 entrypoints,
 (`v3/bin/t0`), replay 2,403 s at 32.2 GB, T0 accepted 57,977, 20
 pinned, closures identical.
 
+**Slice 3.18 landed (2026-10-02) — bytes and text** (`LANGUAGE.md`
+§8.4's design and as-built, §13 item 51). The user ruled five leans on
+2026-10-01: the byte list as the representation, `ByteArray` on the
+wire, symbols deferred to the toolchain's port, the flip staged like
+the rename, deriving its own slice — 3.19, with I at 3.20. What
+landed:
+
+- **Six type rows in the realization registry** — `Fin`, `BitVec`,
+  `UInt8`, `Array`, `ByteArray`, `String`, each represented by its one
+  runtime field: a byte is an integer below 256, a byte array and an
+  array are `Init`'s `List` cells, a text is its UTF-8 bytes. The
+  constructor and the projection are the identity in E and K keeps
+  them; no executor changed. A row's type is never an E inductive, so
+  the two routes cannot disagree on the cells.
+- **A projection function is its projection** — a structure's field
+  in a `fn` body was refused (`unknown_head: Span.lo`); it is defined
+  now, and Init's `String.toByteArray`, `Array.toList`, `Fin.val` are
+  callable with no `realize`.
+- **`"…"` is a `String`** in every position outside the toolchain's
+  own sources, its program its bytes; a literal that is not UTF-8 is
+  `bad_string`. `v3/kernel/**` keeps the byte list until route 1's
+  chain is V3's own (item 37 amended); the bootstrap is untouched.
+- **The wire by declared type** — the driver builds and reads each
+  extern's values by the type the program declared: the prelude's
+  cells under `kernel/host.shard`'s signatures, `ByteArray` and
+  `Init`'s `List`, `Option`, `Prod`, `Bool` under the naming law. The
+  checked entry takes a `ByteArray`.
+- **`v3/std/bytes.shard` and `v3/std/host.shard`** — bytes and
+  numbers, a byte array and its list, a text's bytes (two of Init's
+  functions by their derived views, eight functions defined, four
+  theorems by `Eq.refl`, no axiom); the `World` and the six externs.
+- **calc on the host** — `v3/examples/calc/calc_main.shard` reads its
+  arguments and prints each line's result: over the differential's 21
+  inputs its output is the model world's (`run_world`), byte for
+  byte.
+
+Not built, and stated in the law: the checked decoder from bytes to a
+`String` (a validator and its proof, with I — until then a program's
+text is its literals); rows for `Char` and the wider `UInt`s;
+`String`'s own operations; symbols. The import the libraries need
+reaches line 263,515 of the export (40 s a load on the bootstrap), so
+the test prefix has a second chunk.
+
+Local gates: 156 loader pins (10 new: `row_types`, `row_e_first`, `row_e_match`, `struct_proj`, `str_e_first`, `str_no_string`, `str_bad_utf8`, `wire_s`, `wire_bad`, `wire_bad_result`; `ev_string` rewritten), `rows_test` (10 values under `ev`), `wire_test` (15 checks against the host), `calc_main_test` (byte-identical to the model world over 21 inputs), `define_test` (9 checks: the two libraries added), calc's differential byte-identical over 21 inputs, parity byte-identical over 28 closures and 111,681 declarations, route 2, K's clients, the full suite's 32 entrypoints with 0 failed. `v3/build.sh` built these sources into a scratch binary that byte-ties the interpreter on the 3,000-line fixture. The full replay and the corpus are CI's.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

@@ -5,8 +5,10 @@
 ;;; the roles of a constant's binders (a type parameter, erased evidence,
 ;;; runtime data with its E type), which the supplied `realize` checks a
 ;;; signature against and the derived view erases a body by. `Nat` and
-;;; `Int` are never E inductives: their realization is the integer.
-;;; Phase 2, slice 5b.
+;;; `Int` are never E inductives: their realization is the integer. Nor are
+;;; the registry's type rows (`rep_row`; slice 3.18): `Fin`, `BitVec`,
+;;; `UInt8`, `Array`, `ByteArray`, `String`, each represented by its one
+;;; runtime field. Phase 2, slice 5b.
 (import "etable.shard")
 (import "kw.shard")
 (use kernel.decl)
@@ -45,6 +47,19 @@
     (VisAll (init_module))
     ((VisOnly _ _ tbl _) (match (tbl_find tbl n) ((Some m) m) (None (init_module))))))
 (fn is_nat_or_int ((n Name)) Bool (bool_or (name_eq n (nm_nat)) (name_eq n (nm_int_ty))))
+;; the realization registry's type rows (law §4.4; §8.4 slice 3.18 rule 1): a structure
+;; represented by its one runtime field — in E its constructor is that argument and the
+;; field's projection its subject (erasure.shard), its E type its own name over its type
+;; arguments. A UInt8 is an integer below 256, a ByteArray and an Array Init's List cells, a
+;; String its UTF-8 bytes. Never an E inductive: no E-first body cites a row's constructor,
+;; so the two routes cannot disagree on the cells
+(fn rep_row ((n Name)) Bool
+  (bool_or (name_eq n (n1 (quote Fin)))
+  (bool_or (name_eq n (n1 (quote BitVec)))
+  (bool_or (name_eq n (n1 (quote UInt8)))
+  (bool_or (name_eq n (n1 (quote Array)))
+  (bool_or (name_eq n (n1 (quote ByteArray)))
+           (name_eq n (nm_string))))))))
 
 ;; ---- levels (§7.5): a constant's level parameters solved so that its Sort binders are Type ----
 (fn solve_levels ((info ConstantInfo)) (Option (List Level))
@@ -103,7 +118,7 @@
 ;; `pending` holds the inductives under examination (a field of the type itself, or a
 ;; nested occurrence, counts as eligible while its own check runs).
 (fn ind_eligible ((w W) (es ESt) (sc Scope) (n Name) (pending (List Name))) (Pair (Pair W ESt) Bool)
-  (if (is_nat_or_int n) (Pair (Pair w es) False)
+  (if (bool_or (is_nat_or_int n) (rep_row n)) (Pair (Pair w es) False)
   (if (mem_name n pending) (Pair (Pair w es) True)
   (match (es_info es n)
     ((Some (EIInd _ _)) (Pair (Pair w es) True))
@@ -176,6 +191,29 @@
         (match (w_local w2 n dom)
           ((Pair w3 fv) (match (w_inst1 w3 body fv) ((Pair w4 body1) (param_roles w4 body1 (- k 1) (Cons is_type acc)))))))))
     ((Pair w1 _) (Pair w1 None)))))
+;; a row's parameters (rule 1): True for a type parameter, False for anything else — a
+;; proposition, or a value (`Fin n`, `BitVec w`), which the E type drops
+(fn row_param_roles ((w W) (n Name)) (Pair W (Option (List Bool)))
+  (match (env_find (w_env w) n)
+    ((Some info)
+     (match info
+       ((InductInfo _ nparams nindices _ (Cons _ Nil) _ _ _ _)
+        (if (bool_not (int_eq nindices 0)) (Pair w None)
+          (match (type_at_levels w info)
+            ((Pair w1 None) (Pair w1 None))
+            ((Pair w1 (Some (Pair _ ty))) (row_roles w1 ty nparams Nil)))))
+       (_ (Pair w None))))
+    (None (Pair w None))))
+(fn row_roles ((w W) (ty Expr) (k Int) (acc (List Bool))) (Pair W (Option (List Bool)))
+  (measure k)
+  (if (le k 0) (Pair w (Some (rev acc)))
+  (match (w_whnf w ty)
+    ((Pair w1 (Some (Pi _ n _ dom body)))
+     (match (sort_role w1 dom)
+       ((Pair w2 r)
+        (match (w_local w2 n dom)
+          ((Pair w3 fv) (match (w_inst1 w3 body fv) ((Pair w4 body1) (row_roles w4 body1 (- k 1) (Cons (match r ((Some True) True) (_ False)) acc)))))))))
+    ((Pair w1 _) (Pair w1 None)))))
 ;; each constructor's runtime field types over the type parameters
 (fn ind_ctors ((w W) (es ESt) (sc Scope) (ind Name) (cs (List Name)) (ls (List Level)) (fvs (List Expr)) (tps (List Expr)) (pending (List Name)) (acc (List ECtorDef))) (Pair (Pair W ESt) (Option (List ECtorDef)))
   (measure (struct cs))
@@ -225,7 +263,8 @@
 
 ;; ---- an L type as an E type (§7.5) --------------------------------------------------------
 ;; over the type parameters' locals: a local is its ETVar, `Nat` and `Int` are themselves, an
-;; E-eligible inductive applied to its parameters keeps the type arguments and drops the erased ones
+;; E-eligible inductive applied to its parameters keeps the type arguments and drops the erased
+;; ones, and so does a row of the registry (rep_row), which is no inductive of E
 (fn l_to_etype ((w W) (es ESt) (sc Scope) (e Expr) (tps (List Expr)) (pending (List Name))) (Pair (Pair W ESt) (Option EType))
   (match (w_whnf w e)
     ((Pair w1 None) (Pair (Pair w1 es) None))
@@ -237,6 +276,14 @@
           ((Const _ n _)
            (if (is_nat_or_int n)
              (if (int_eq (get_app_num_args e1) 0) (Pair (Pair w1 es) (Some (ETCon n Nil))) (Pair (Pair w1 es) None))
+           (if (rep_row n)
+             (match (row_param_roles w1 n)
+               ((Pair w2 None) (Pair (Pair w2 es) None))
+               ((Pair w2 (Some roles))
+                (if (bool_not (int_eq (len roles) (get_app_num_args e1))) (Pair (Pair w2 es) None)
+                  (match (etype_args w2 es sc roles (get_app_args e1) tps pending Nil)
+                    ((Pair (Pair w3 es3) None) (Pair (Pair w3 es3) None))
+                    ((Pair (Pair w3 es3) (Some args)) (Pair (Pair w3 es3) (Some (ETCon n args))))))))
            (match (es_info es n)
              ((Some (EISigType a))   ; a view's sig type: the parameter applied to its type arguments (§6.5; slice 3.13)
               (if (bool_not (int_eq a (get_app_num_args e1))) (Pair (Pair w1 es) None)
@@ -253,7 +300,7 @@
                    (if (bool_not (int_eq (len roles) (get_app_num_args e1))) (Pair (Pair w3 es2) None)
                      (match (etype_args w3 es2 sc roles (get_app_args e1) tps pending Nil)
                        ((Pair (Pair w4 es4) None) (Pair (Pair w4 es4) None))
-                       ((Pair (Pair w4 es4) (Some args)) (Pair (Pair w4 es4) (Some (ETCon n args))))))))))))))
+                       ((Pair (Pair w4 es4) (Some args)) (Pair (Pair w4 es4) (Some (ETCon n args)))))))))))))))
           (_ (Pair (Pair w1 es) None))))))))
 (fn trues ((n Int)) (List Bool) (measure n) (if (lt n 1) Nil (Cons True (trues (- n 1)))))
 (fn etype_args ((w W) (es ESt) (sc Scope) (roles (List Bool)) (args (List Expr)) (tps (List Expr)) (pending (List Name)) (acc (List EType))) (Pair (Pair W ESt) (Option (List EType)))
@@ -345,7 +392,7 @@
   (match s
     ((SSym x) (scan_name w es sc x))
     ((SSymU x _) (scan_name w es sc x))
-    ((SStr _) (scan_name w es sc (quote List)))   ; "…" is the List in scope's chain (§8.1 rule 2)
+    ((SStr _) (scan_name w es sc (quote List)))   ; "…" is List cells: a String's bytes (Init's; slice 3.18 rule 3), in the toolchain's sources the chain of the List in scope
     ((SList xs) (scan_list w es sc xs))
     (_ (Pair w es))))
 (fn scan_list ((w W) (es ESt) (sc Scope) (xs (List SExpr))) (Pair W ESt)

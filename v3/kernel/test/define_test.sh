@@ -56,5 +56,21 @@ check v3/std/fresh.shard \
   'DEFINE std.fresh.Fresh.next equations=std.fresh.Fresh.next.eq_1' \
   'ACCEPT std.fresh.Fresh.next_ne .* axioms= ' \
   'runnable 0  refused 0  pending 0  realized 0  defined 14  errors 0'
-echo "define_test: 7 checks, $fail failed"
+# bytes and text (slice 3.18 rule 6): Init's UInt8.toNat by its derived view, the S operations defined,
+# Byte.ofNat tied to Init's UInt8.ofNat and the two round trips, each Eq.refl with no axiom. The
+# import reaches line 263,515 of the export: the pins' prefix and its continuation
+out=$("$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" --init v3/kernel/test/fixtures/init_prefix_str_tail.ndjson v3/std/bytes.shard 2>&1)
+for pat in '^REALIZE UInt8.toNat view' \
+           '^DEFINE std.bytes.Byte.ofNat equations=std.bytes.Byte.ofNat.eq_1' \
+           '^ACCEPT std.bytes.Byte.ofNat_eq .* axioms= ' \
+           '^ACCEPT std.bytes.Bytes.ofList_toList .* axioms= ' \
+           '^ACCEPT std.bytes.Bytes.toList_ofList .* axioms= ' \
+           'runnable 0  refused 0  pending 0  realized 2  defined 8  errors 0'; do
+  if ! echo "$out" | grep -q -- "$pat"; then echo "define_test: v3/std/bytes.shard lacks '$pat'"; echo "$out" | grep -E '^(REALIZE|DEFINE|RUNNABLE|REFUSE|READ-ERROR|LOAD:)' | head -8; fail=$((fail+1)); fi
+done
+# the host under the naming law (rule 4): six externs, nothing refused
+check v3/std/host.shard \
+  'RUNNABLE extern std.host.get_args' \
+  'runnable 6  refused 0  pending 0  realized 0  defined 0  errors 0'
+echo "define_test: 9 checks, $fail failed"
 exit "$fail"

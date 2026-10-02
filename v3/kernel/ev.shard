@@ -66,7 +66,7 @@
 (type LArm (LArm LPat LTerm))
 (type LFn
   (LBody Name Int LTerm)       ; a function: identity, parameter count, body
-  (LExtern Name Symbol Int)    ; an extern: identity, its short name (the host's), parameter count
+  (LExtern Name Symbol Int (List EType) EType)    ; an extern: identity, its short name (the host's), parameter count, the declared types (the wire's codec reads them)
   (LUnlinked Name))            ; a sig fn no implementation was linked to
 ;; the wire's tags: nil cons none some pair false true — and, for the table's Nat set
 ;; (§7.5), Init's Bool.false Bool.true and Decidable.isFalse Decidable.isTrue
@@ -102,7 +102,7 @@
 (fn fn_name ((lk Linked) (id Int)) Name
   (match (im_find (lk_fns lk) id)
     ((Some (LBody n _ _)) n)
-    ((Some (LExtern n _ _)) n)
+    ((Some (LExtern n _ _ _ _)) n)
     ((Some (LUnlinked n)) n)
     (None Anon)))
 (fn last_sym ((n Name)) Symbol (match n ((Str _ s) s) (_ (quote anon))))
@@ -133,8 +133,20 @@
      (match (nmap_find n2t c)
        ((Some tag) (Pair t tag))
        (None (match (intern_ctor t c ordinal) ((Tags k2 nt2 t2) (Pair (Tags k2 nt2 t2) (tag_of (- k2 1) ordinal)))))))))
-(fn wire_of ((t Tags)) (Pair Tags Wire)
-  (match (intern_wire t (prelude_nil) 0)
+;; Init's cells, which the wire builds for a program under the naming law (§6.7; §8.4 slice
+;; 3.18 rule 4) and a string literal is made of: interned like the prelude's, found by name
+(fn init_nil () Name (n2 (quote List) (quote nil)))
+(fn init_cons () Name (n2 (quote List) (quote cons)))
+(fn init_none () Name (n2 (quote Option) (quote none)))
+(fn init_some () Name (n2 (quote Option) (quote some)))
+(fn init_prod_mk () Name (n2 (quote Prod) (quote mk)))
+(fn intern_init ((t Tags)) Tags
+  (intern_each t (list (Pair (init_nil) 0) (Pair (init_cons) 1) (Pair (init_none) 0) (Pair (init_some) 1) (Pair (init_prod_mk) 0))))
+(fn intern_each ((t Tags) (cs (List (Pair Name Int)))) Tags
+  (measure (struct cs))
+  (match cs (Nil t) ((Cons (Pair c o) r) (match (intern_wire t c o) ((Pair t1 _) (intern_each t1 r))))))
+(fn wire_of ((t0 Tags)) (Pair Tags Wire)
+  (match (intern_wire (intern_init t0) (prelude_nil) 0)
     ((Pair t1 nl)
      (match (intern_wire t1 (prelude_cons) 1)
        ((Pair t2 cs)
@@ -191,10 +203,10 @@
      (match (nmap_find (lk_ids lk) n)
        (None (Pair (Some (Pair (quote unresolved) (show_name n))) fns))
        ((Some id) (lower_decls lk r (im_insert fns id (LUnlinked n))))))
-    ((Cons (EExtern n _ ps _) r)
+    ((Cons (EExtern n _ ps rt) r)
      (match (nmap_find (lk_ids lk) n)
        (None (Pair (Some (Pair (quote unresolved) (show_name n))) fns))
-       ((Some id) (lower_decls lk r (im_insert fns id (LExtern n (last_sym n) (len ps)))))))
+       ((Some id) (lower_decls lk r (im_insert fns id (LExtern n (last_sym n) (len ps) ps rt))))))
     ((Cons _ r) (lower_decls lk r fns))))
 ;; a term into the linked representation
 (fn lower ((lk Linked) (t ETerm)) (Pair (Option (Pair Symbol (List Int))) LTerm)
@@ -294,38 +306,31 @@
   (match l
     ((LNat k) (IVInt k))
     ((LInt k) (IVInt k))
-    ((LStr nl cs bs)   ; the List in scope's cells (§8.1 rule 2); its constructors are interned with the program's
+    ((LStr nl cs bs)   ; the cells the literal names: Init's List for a String (§8.4 slice 3.18 rule 3), the List in scope's in the toolchain's sources (§8.1 rule 2)
      (match (nmap_find (lk_tags lk) nl)
        (None (bytes_in lk bs))
        ((Some tnl) (match (nmap_find (lk_tags lk) cs) (None (bytes_in lk bs)) ((Some tcs) (cells_in tnl tcs bs))))))
     ((LSym s) (IVSym s))))
 
-;; ---- the wire: the prelude's cells (§6.7) -------------------------------------------------
+;; ---- the primitives' cells: the prelude's (§6.7); the externs' are read by declared type, below ----
 (fn bytes_in ((lk Linked) (bs (List Int))) IVal
   (measure (struct bs))
   (match bs
     (Nil (IVCtor (wire_nil (lk_wire lk)) Nil))
     ((Cons b r) (IVCtor (wire_cons (lk_wire lk)) (list (IVInt b) (bytes_in lk r))))))
-(fn list_in ((lk Linked) (xs (List IVal))) IVal
-  (measure (struct xs))
-  (match xs
-    (Nil (IVCtor (wire_nil (lk_wire lk)) Nil))
-    ((Cons x r) (IVCtor (wire_cons (lk_wire lk)) (list x (list_in lk r))))))
-(fn argv_in ((lk Linked) (args (List (List Int)))) IVal
-  (measure (struct args))
-  (match args
-    (Nil (IVCtor (wire_nil (lk_wire lk)) Nil))
-    ((Cons a r) (IVCtor (wire_cons (lk_wire lk)) (list (bytes_in lk a) (argv_in lk r))))))
 ;; a Cons chain of Int cells back to bytes; None when the value is not one
 (fn bytes_out ((lk Linked) (v IVal) (acc (List Int)) (fuel Int)) (Option (List Int))
+  (cells_out (wire_nil (lk_wire lk)) (wire_cons (lk_wire lk)) v acc fuel))
+;; a chain of integer cells under the tags nl and cs
+(fn cells_out ((nl Int) (cs Int) (v IVal) (acc (List Int)) (fuel Int)) (Option (List Int))
   (measure fuel)
   (if (lt fuel 0) None
   (match v
     ((IVCtor tag fields)
-     (if (int_eq tag (wire_nil (lk_wire lk))) (Some (rev acc))
-     (if (int_eq tag (wire_cons (lk_wire lk)))
+     (if (int_eq tag nl) (Some (rev acc))
+     (if (int_eq tag cs)
        (match fields
-         ((Cons (IVInt b) (Cons rest Nil)) (bytes_out lk rest (Cons b acc) (- fuel 1)))
+         ((Cons (IVInt b) (Cons rest Nil)) (cells_out nl cs rest (Cons b acc) (- fuel 1)))
          (_ None))
        None)))
     (_ None))))
@@ -333,9 +338,6 @@
 ;; Init's Bool and Decidable cells: what the table's Nat set returns (§7.5)
 (fn init_bool_cell ((lk Linked) (b Bool)) IVal (IVCtor (if b (wire_btrue (lk_wire lk)) (wire_bfalse (lk_wire lk))) Nil))
 (fn dec_cell ((lk Linked) (b Bool)) IVal (IVCtor (if b (wire_dtrue (lk_wire lk)) (wire_dfalse (lk_wire lk))) Nil))
-(fn pair_cell ((lk Linked) (a IVal) (b IVal)) IVal (IVCtor (wire_pair (lk_wire lk)) (list a b)))
-(fn some_cell ((lk Linked) (a IVal)) IVal (IVCtor (wire_some (lk_wire lk)) (list a)))
-(fn none_cell ((lk Linked)) IVal (IVCtor (wire_none (lk_wire lk)) Nil))
 (fn wire_budget () Int 1000000000)
 
 ;; ---- the machine (§6.7) --------------------------------------------------------------------
@@ -447,27 +449,8 @@
        PrimGuard)))
     (_ PrimGuard)))
 ;; sym_of_chars takes UTF-8 (the host decodes the bytes into the symbol's text): the guard is
-;; validity — an invalid sequence is stuck, never handed to the host, whose refusal is fatal
-(fn utf8_ok ((bs (List Int))) Bool
-  (measure (struct bs))
-  (match bs
-    (Nil True)
-    ((Cons b r)
-     (if (bool_and (le 0 b) (le b 127)) (utf8_ok r)
-     (if (bool_and (le 194 b) (le b 223)) (utf8_tail r 1 128 191)
-     (if (int_eq b 224) (utf8_tail r 2 160 191)
-     (if (bool_and (le 225 b) (le b 239)) (utf8_tail r 2 128 (if (int_eq b 237) 159 191))
-     (if (int_eq b 240) (utf8_tail r 3 144 191)
-     (if (bool_and (le 241 b) (le b 243)) (utf8_tail r 3 128 191)
-     (if (int_eq b 244) (utf8_tail r 3 128 143)
-       False))))))))))
-;; k continuation bytes, the first within [lo, hi], the rest 128..191; then the rest of the text
-(fn utf8_tail ((bs (List Int)) (k Int) (lo Int) (hi Int)) Bool
-  (measure k)
-  (if (le k 0) (utf8_ok bs)
-    (match bs
-      (Nil False)
-      ((Cons b r) (if (bool_and (le lo b) (le b hi)) (utf8_tail r (- k 1) 128 191) False)))))
+;; validity (util.shard's utf8_ok) — an invalid sequence is stuck, never handed to the host,
+;; whose refusal is fatal
 (fn shift_ok ((k Int)) Bool (bool_and (le 0 k) (lt k 64)))
 (fn nonneg2 ((x Int) (y Int)) Bool (bool_and (le 0 x) (le 0 y)))
 (fn prim_ii ((lk Linked) (code Int) (x Int) (y Int)) PrimRes
@@ -667,9 +650,10 @@
          (None (ArgType (unsupplied n)))))))
     (_ (ArgType "has a type variable's type, which no command-line argument supplies (§9)"))))
 (fn unsupplied ((n Name)) (List Int)
-  (append "has type " (append (show_name n) ", which no command-line argument supplies (§9: Int, Nat, the prelude's (List Int), Init's (List Nat) or (List Int))")))
+  (append "has type " (append (show_name n) ", which no command-line argument supplies (§9: Int, Nat, the prelude's (List Int), Init's (List Nat) or (List Int), ByteArray)")))
 ;; the byte-list codecs, by identity and element type (§9; GPT-6 R59, slice 10): the prelude's
-;; (List Int), Init's (List Nat) and (List Int) — never a shape. Before: any two-constructor
+;; (List Int), Init's (List Nat) and (List Int), and ByteArray, whose representation is Init's
+;; List cells (§8.4 slice 3.18 rule 1) — never a shape. Before: any two-constructor
 ;; type with a nullary first and a binary second constructor took the bytes, so a
 ;; `(type Tree (Empty) (Branch Tree Tree))` entry received Branch cells with integers in its
 ;; Tree fields — a value of no type, stuck at the first match on it.
@@ -678,8 +662,9 @@
     ((ETCon n (Cons (ETCon e Nil) Nil))
      (if (bool_and (name_eq n (prelude_list)) (name_eq e (n1 (quote Int)))) (Some (Pair (prelude_nil) (prelude_cons)))
      (if (bool_and (name_eq n (n1 (quote List))) (bool_or (name_eq e (n1 (quote Nat))) (name_eq e (n1 (quote Int)))))
-       (Some (Pair (n2 (quote List) (quote nil)) (n2 (quote List) (quote cons))))
+       (Some (Pair (init_nil) (init_cons)))
        None)))
+    ((ETCon n Nil) (if (name_eq n (n1 (quote ByteArray))) (Some (Pair (init_nil) (init_cons))) None))
     (_ None)))
 (fn cells_in ((nl Int) (cs Int) (bs (List Int))) IVal
   (measure (struct bs))
@@ -704,47 +689,141 @@
     ((HExhausted r id) (Pair (RunExhausted r (fn_name lk id)) w))
     ((HExt id args k cur fuel)
      (match (im_find (lk_fns lk) id)
-       ((Some (LExtern _ short _))
-        (match (perform lk short args argv w)
+       ((Some (LExtern _ short _ ps rt))
+        (match (perform lk short ps rt args argv w)
           ((Pair (Some v) w1) (run_loop lk (ev_ret lk v k cur fuel) argv w1))
           ((Pair None w1) (Pair (RunStuck (quote extern) (fn_name lk id)) w1))))
        (_ (Pair (RunStuck (quote extern) (fn_name lk cur)) w))))))
-;; the six host externs by short name; the program's World value passes through
-(fn perform ((lk Linked) (short Symbol) (args (List IVal)) (argv (List (List Int))) (w World)) (Pair (Option IVal) World)
+;; ---- the wire by declared type (§6.7; §8.4 slice 3.18 rule 4) --------------------------------
+;; each value of an extern is built and read by the E type the program declared — a codec by
+;; identity, as the entry's is: the prelude's cells under the toolchain's signatures
+;; (host.shard), Init's under the naming law. A declared type the host's value does not fit
+;; yields no value (the extern is stuck), decided before the host is asked — the result's type
+;; too: the World's token is returned at the type it was passed at (the extern's last parameter's)
+(fn tags2 ((lk Linked) (a Name) (b Name)) (Option (Pair Int Int))
+  (match (nmap_find (lk_tags lk) a)
+    (None None)
+    ((Some ta) (match (nmap_find (lk_tags lk) b) (None None) ((Some tb) (Some (Pair ta tb)))))))
+;; a byte type's nil and cons: the prelude's (List Int), or ByteArray
+(fn wb_tags ((lk Linked) (t EType)) (Option (Pair Int Int))
+  (match t
+    ((ETCon n (Cons (ETCon e Nil) Nil))
+     (if (bool_and (name_eq n (prelude_list)) (name_eq e (n1 (quote Int)))) (tags2 lk (prelude_nil) (prelude_cons)) None))
+    ((ETCon n Nil) (if (name_eq n (n1 (quote ByteArray))) (tags2 lk (init_nil) (init_cons)) None))
+    (_ None)))
+;; a list type's nil and cons, and its element type
+(fn wl_tags ((lk Linked) (t EType)) (Option (Pair (Pair Int Int) EType))
+  (match t
+    ((ETCon n (Cons e Nil))
+     (match (if (name_eq n (prelude_list)) (tags2 lk (prelude_nil) (prelude_cons))
+            (if (name_eq n (n1 (quote List))) (tags2 lk (init_nil) (init_cons)) None))
+       (None None)
+       ((Some tg) (Some (Pair tg e)))))
+    (_ None)))
+;; an option type's none and some, and its element type
+(fn wo_tags ((lk Linked) (t EType)) (Option (Pair (Pair Int Int) EType))
+  (match t
+    ((ETCon n (Cons e Nil))
+     (match (if (name_eq n (prelude_option)) (tags2 lk (prelude_none) (prelude_some))
+            (if (name_eq n (n1 (quote Option))) (tags2 lk (init_none) (init_some)) None))
+       (None None)
+       ((Some tg) (Some (Pair tg e)))))
+    (_ None)))
+;; a pair type's constructor and its first component's type; the second is the World's (wt)
+(fn wp_first ((lk Linked) (t EType) (wt EType)) (Option (Pair Int EType))
+  (match t
+    ((ETCon n (Cons a (Cons b Nil)))
+     (if (bool_not (etype_eq b wt)) None
+       (match (nmap_find (lk_tags lk) (if (name_eq n (prelude_pair)) (prelude_mk_pair) (if (name_eq n (n1 (quote Prod))) (init_prod_mk) Anon)))
+         (None None)
+         ((Some tg) (Some (Pair tg a))))))
+    (_ None)))
+;; a flag type's false and true
+(fn wf_tags ((lk Linked) (t EType)) (Option (Pair Int Int))
+  (match t
+    ((ETCon n Nil)
+     (if (name_eq n (prelude_bool)) (tags2 lk (prelude_false) (prelude_true))
+     (if (name_eq n (n1 (quote Bool))) (tags2 lk (n2 (quote Bool) (quote false)) (n2 (quote Bool) (quote true))) None)))
+    (_ None)))
+;; the host's data as values of the declared types
+(fn w_bytes ((lk Linked) (t EType) (bs (List Int))) (Option IVal)
+  (match (wb_tags lk t) (None None) ((Some (Pair nl cs)) (Some (cells_in nl cs bs)))))
+(fn w_argv ((lk Linked) (t EType) (args (List (List Int)))) (Option IVal)
+  (match (wl_tags lk t)
+    (None None)
+    ((Some (Pair (Pair nl cs) et))
+     (match (wb_tags lk et) (None None) ((Some (Pair bn bc)) (Some (argv_cells nl cs bn bc args)))))))
+(fn argv_cells ((nl Int) (cs Int) (bn Int) (bc Int) (args (List (List Int)))) IVal
+  (measure (struct args))
+  (match args (Nil (IVCtor nl Nil)) ((Cons a r) (IVCtor cs (list (cells_in bn bc a) (argv_cells nl cs bn bc r))))))
+(fn w_opt_bytes ((lk Linked) (t EType) (o (Option (List Int)))) (Option IVal)
+  (match (wo_tags lk t)
+    (None None)
+    ((Some (Pair (Pair nn sm) et))
+     (match (w_bytes lk et (match o ((Some bs) bs) (None Nil)))
+       (None None)
+       ((Some v) (Some (match o ((Some _) (IVCtor sm (list v))) (None (IVCtor nn Nil)))))))))
+(fn w_flag ((lk Linked) (t EType) (b Bool)) (Option IVal)
+  (match (wf_tags lk t) (None None) ((Some (Pair fl tr)) (Some (IVCtor (if b tr fl) Nil)))))
+;; the first component's type of a pair-typed result, and the pair of a value with the World's token
+(fn w_first_type ((lk Linked) (t EType) (wt EType)) (Option EType)
+  (match (wp_first lk t wt) (None None) ((Some (Pair _ a)) (Some a))))
+(fn w_paired ((lk Linked) (t EType) (wt EType) (a (Option IVal)) (tok IVal)) (Option IVal)
+  (match (wp_first lk t wt)
+    (None None)
+    ((Some (Pair pt _)) (match a (None None) ((Some v) (Some (IVCtor pt (list v tok))))))))
+;; a program's byte value read back, by the type of the parameter it was passed at
+(fn r_bytes_at ((lk Linked) (ps (List EType)) (i Int) (v IVal)) (Option (List Int))
+  (match (nth ps i)
+    (None None)
+    ((Some t) (match (wb_tags lk t) (None None) ((Some (Pair nl cs)) (cells_out nl cs v Nil (wire_budget)))))))
+;; the World's type as the extern declares it: its last parameter's
+(fn ext_world ((ps (List EType))) (Option EType)
+  (measure (struct ps))
+  (match ps (Nil None) ((Cons t Nil) (Some t)) ((Cons _ r) (ext_world r))))
+;; the six host externs by short name, each value by its declared type; the program's World
+;; value passes through, at its own type
+(fn perform ((lk Linked) (short Symbol) (ps (List EType)) (rt EType) (args (List IVal)) (argv (List (List Int))) (w World)) (Pair (Option IVal) World)
+  (match (ext_world ps)
+    (None (Pair None w))
+    ((Some wt) (perform_at lk short ps wt rt args argv w))))
+(fn perform_at ((lk Linked) (short Symbol) (ps (List EType)) (wt EType) (rt EType) (args (List IVal)) (argv (List (List Int))) (w World)) (Pair (Option IVal) World)
   (if (sym_eq short (quote get_args))
-    (match args ((Cons tok Nil) (Pair (Some (pair_cell lk (argv_in lk argv) tok)) w)) (_ (Pair None w)))
+    (match args
+      ((Cons tok Nil) (Pair (w_paired lk rt wt (match (w_first_type lk rt wt) ((Some at) (w_argv lk at argv)) (None None)) tok) w))
+      (_ (Pair None w)))
   (if (sym_eq short (quote read_file))
     (match args
       ((Cons path (Cons tok Nil))
-       (match (bytes_out lk path Nil (wire_budget))
-         (None (Pair None w))
-         ((Some bs)
-          (match (read_file bs w)
-            ((Pair None w1) (Pair (Some (pair_cell lk (none_cell lk) tok)) w1))
-            ((Pair (Some content) w1) (Pair (Some (pair_cell lk (some_cell lk (bytes_in lk content)) tok)) w1))))))
+       (match (Pair (r_bytes_at lk ps 0 path) (w_first_type lk rt wt))
+         ((Pair (Some bs) (Some ot))
+          (match (w_opt_bytes lk ot None)
+            (None (Pair None w))
+            ((Some _) (match (read_file bs w) ((Pair content w1) (Pair (w_paired lk rt wt (w_opt_bytes lk ot content) tok) w1))))))
+         (_ (Pair None w))))
       (_ (Pair None w)))
   (if (sym_eq short (quote write))
     (match args
       ((Cons bytes (Cons tok Nil))
-       (match (bytes_out lk bytes Nil (wire_budget)) (None (Pair None w)) ((Some bs) (Pair (Some tok) (write bs w)))))
+       (match (if (etype_eq rt wt) (r_bytes_at lk ps 0 bytes) None) (None (Pair None w)) ((Some bs) (Pair (Some tok) (write bs w)))))
       (_ (Pair None w)))
   (if (sym_eq short (quote write_line))
     (match args
       ((Cons bytes (Cons tok Nil))
-       (match (bytes_out lk bytes Nil (wire_budget)) (None (Pair None w)) ((Some bs) (Pair (Some tok) (write_line bs w)))))
+       (match (if (etype_eq rt wt) (r_bytes_at lk ps 0 bytes) None) (None (Pair None w)) ((Some bs) (Pair (Some tok) (write_line bs w)))))
       (_ (Pair None w)))
   (if (sym_eq short (quote write_file))
     (match args
       ((Cons path (Cons bytes (Cons tok Nil)))
-       (match (bytes_out lk path Nil (wire_budget))
-         (None (Pair None w))
-         ((Some ps)
-          (match (bytes_out lk bytes Nil (wire_budget))
+       (match (Pair (r_bytes_at lk ps 0 path) (Pair (r_bytes_at lk ps 1 bytes) (w_first_type lk rt wt)))
+         ((Pair (Some pbs) (Pair (Some bs) (Some ft)))
+          (match (w_flag lk ft False)
             (None (Pair None w))
-            ((Some bs) (match (write_file ps bs w) ((Pair ok w1) (Pair (Some (pair_cell lk (bool_cell lk ok) tok)) w1))))))))
+            ((Some _) (match (write_file pbs bs w) ((Pair ok w1) (Pair (w_paired lk rt wt (w_flag lk ft ok) tok) w1))))))
+         (_ (Pair None w))))
       (_ (Pair None w)))
   (if (sym_eq short (quote exit))
     (match args
-      ((Cons (IVInt code) (Cons tok Nil)) (Pair (Some tok) (exit code w)))
+      ((Cons (IVInt code) (Cons tok Nil)) (if (etype_eq rt wt) (Pair (Some tok) (exit code w)) (Pair None w)))
       (_ (Pair None w)))
     (Pair None w))))))))

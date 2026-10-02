@@ -1,0 +1,51 @@
+;;; v3/examples/calc/calc_main.shard — calc's loop closed against the host (LANGUAGE.md
+;;; §8.4, slice 3.18 rule 6; §12.6's "calc's app step"): an S program that takes one line per
+;;; command-line argument and prints each line's result, the state threaded through
+;;; `calc_app.shard`'s pure `step` and each `Action` performed on the host's World
+;;; (`v3/std/host.shard`). The port's `run_world` is the same loop against a world *datum*;
+;;; `kernel/test/calc_main_test.sh` ties this program's output to that model's, byte for
+;;; byte. The line's bytes become calc's codes and back through `v3/std/bytes.shard`.
+;;; `perform`, `drive_host` and `main` call externs: programs without a definition
+;;; (`no_l_meaning`) until phase 4's World.
+;;;
+;;;   load.shard --root v3 --init … --run examples.calc.calc_main.main v3/examples/calc/calc_main.shard -- "1+2" "10 - 3"
+
+(import "calc_app.shard")
+(import "../../std/bytes.shard")
+(import "../../std/host.shard")
+(use examples.calc.calc_app)
+(use std.bytes)
+(use std.host)
+(use Init.List cons nil)
+(use Init.Option)
+(use examples.calc.calc_app.Action)
+(use examples.calc.calc_app.CalcState)
+(use examples.calc.calc_app.Step)
+
+;; a line's bytes as calc's codes
+(fn codes_of ((bs (List UInt8))) (List Int) (measure (struct bs))
+  (match bs
+    (nil nil)
+    ((cons b t) (cons (Int.ofNat (UInt8.toNat b)) (codes_of t)))))
+;; codes as bytes (calc prints digits, `-` and `?`: every code is a byte)
+(fn bytes_of ((cs (List Int))) (List UInt8) (measure (struct cs))
+  (match cs
+    (nil nil)
+    ((cons c t) (cons (Byte.ofNat (Int.natAbs c)) (bytes_of t)))))
+
+;; one Action on the host
+(fn perform ((a Action) (w World)) World
+  (match a
+    ((Print cs) (write_line (Bytes.ofList (bytes_of cs)) w))
+    ((Exit n) (exit n w))
+    (Nop w)))
+;; the loop: each line stepped, its action performed, the state carried
+(fn drive_host ((s CalcState) (lines (List ByteArray)) (w World)) World (measure (struct lines))
+  (match lines
+    (nil w)
+    ((cons l rest)
+     (match (step s (codes_of (Bytes.toList l)))
+       ((Step s1 a) (drive_host s1 rest (perform a w)))))))
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Prod.mk lines w1) (drive_host (CalcState none) lines w1))))

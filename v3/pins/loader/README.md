@@ -181,4 +181,20 @@ supplied), `dependent_update` (it is not: a read error naming the field),
 registry's expression row; `pending measure`). `route_sig_callee` (a
 view's `sig fn` with no L reading as a callee: `no_l_meaning`). A header
 may now also state `renamed_primitive`, `literal_rows`, `pattern_type`
-(the elaborator's) and `read-error dependent_update`.
+(the elaborator's) and `read-error dependent_update`. Slice 3.18's:
+`row_types` (the registry's type rows: a constructor its argument, a
+projection its subject, a constructor pattern binding the field),
+`row_e_first` and `row_e_match` (an E-first body cannot cite a row's
+constructor, `unknown_head`, nor take its value apart with the
+representation's, `pattern_type`), `struct_proj` (a projection function is its
+projection), `ev_string` rewritten (a literal is a `String`, its
+program its bytes), `str_e_first` (the same literal in an E-first
+body), `str_no_string` and `str_bad_utf8` (`no_string`; `read-error
+bad_string`), `wire_s`, `wire_bad` and `wire_bad_result` (the externs under
+the naming law; one declared over a type the wire has no codec for;
+two with a result the extern does not return; run by
+`kernel/test/wire_test.sh`). `kernel/test/rows_test.shard` runs
+`ev_string`, `row_types` and `struct_proj` under `ev` and compares
+the values. The cases stay on the first chunk of the prefix; the
+libraries' tests add `fixtures/init_prefix_str_tail.ndjson` (the
+export's lines 100,852 to 263,515, through `UInt8.toNat`).
