@@ -2566,6 +2566,39 @@ is `docs/FOUNDATION.md` §5.3.
   README for the figures).
 - **2026-10-06 — pipeline 542 green on `7238cd3`: slice 3.20 on the
   full gate.** engine 41 s; corpus 1,460 s at the baseline; v3 8,138 s: 34 entrypoints with 0 failed, `tactic_test` 48 checks, `define_test` 12 checks, `derive_test` 14 checks, `wire_test` 15 checks, calc's host program byte-identical to the model world, parity byte-identical over 28 closures and 114,377 declarations in 476 s, route 1's native build of the kernel (`OK: v3/bin/t0`), the fixture byte-tie identical, replay 2,514 s at 32.2 GB peak, T0 accepted 57,977 with 0 rejected, closures identical to the oracle, all 20 accelerator candidates pinned. Slice 3.20 is closed. The v3 job is 1,202 s longer than pipeline 540's, 1,157 s of it in the test suite (4,998 s against 3,841 s): the `.shard` entrypoints take 685 s more (the loader pins among them, 18 new, each now streaming the second fixture), `tactic_test` is new at 238 s, calc's two tests take 184 s more (`calc_spec.shard` imports through `WellFounded.fix_eq`), parity 23 s more. The job's limit is 3 h (10,800 s).
+- **2026-10-06 — slice 3.21 built: `arith` and `simp_only`, and calc's
+  100 claims** (`LANGUAGE.md` §8.4's design and as-built, §13 item
+  54; law §7; under the ruling of 2026-10-05). *Designed here:*
+  `arith` is a Farkas certificate over stated rows — the goal
+  negated, the context's linear hypotheses, the facts given, the rows
+  the atoms bring (a `Nat` atom's `0 ≤ ↑a`; a literal quotient's two
+  bounds, the remainder as `x - k * (x / k)`) —, carried by the node
+  (`(farkas K…)`) or reconstructed by Fourier–Motzkin elimination
+  over the rows (bounded; item 53's second lean: a function of the
+  node and the goal), P from `Lean.Omega`'s lemmas with K's conversion
+  the arithmetic on closed data; `simp_only` rewrites to a fixpoint
+  over its rule list, premises by assumption, nothing implicit; one
+  spelling — a goal's statement and a lemma's equation enter in the
+  source's spelling of Init's class methods. *Found by the consumer
+  and built:* **a matcher under a measure carries its equation** —
+  `parse_tail`'s two descent obligations quantified the pattern's
+  variables freely, false as stated, so the function could never be
+  total and slice 3.20's theorems over it stood on two parameters; the
+  obligation is stated under `skip_ws cs = cons c rest` now and the
+  equations over the same shape. `reduce` takes a decided case
+  analysis one step and leaves a proposition; a type's name wins over
+  its constructor's where a type is expected; the pending record
+  shows the sorried goals. *The consumer:* calc's 100 claims are
+  theorems, the capstone `run cs = spec_run cs` under no parameter,
+  the three measured functions discharged. *Found by a second reader, fixed:* `simp_only`
+  under a self-feeding rule did not end (`simp_self`); `Ne` at the
+  wrong universe; a descent obligation is the comparison at `Nat`
+  under the source's names now, where it printed every variable `x`
+  over the relation's instance. *Left, stated:* Init's
+  visibility is the load's; obligations over the arguments' tuple;
+  `reduce_stuck` on a normal target; no cuts, no case splits, no
+  `only`. *The test runner:* `v3/test.sh` runs its entrypoints eight
+  at a time. Gates: 212 loader pins (18 new), `tactic_test` (110 checks: calc's 100 claims by name, the four descents discharged), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,127 declarations, route 2, K's clients, the full suite's 34 entrypoints (the last full run had 33 pass and parity refuse one missing open in `define.shard`; parity and K's clients were rerun green after it). `v3/test.sh` runs the entrypoints eight at a time now (they are independent processes; the output is printed in the list's order): the suite's wall clock is its longest entrypoint's, the loader pins' (1,161 s here). None of the files route 1 compiles changed; the full replay and the corpus are CI's.
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

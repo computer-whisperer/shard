@@ -1,11 +1,13 @@
 ;;; v3/examples/calc/calc_equiv.shard — examples/calc/calc_equiv.shard at
 ;;; slice 6: the spec-equivalence proof, run = spec_run (28 claims, the
 ;;; capstone run_eq_spec); its two helper functions are the program here,
-;;; and thirteen of the claims are blocks since slice 3.20 (below) — the
-;;; rest wait for 3.21's arith.
+;;; thirteen of the claims are blocks since slice 3.20 and the rest since
+;;; slice 3.21 (below, with six small lemmas the old proof inlined).
 
 (import "calc_spec.shard")
+(import "list.shard")
 (use examples.calc.calc)
+(use examples.calc.list)
 (use examples.calc.calc_spec)
 (use Init.List)
 (use Init.Option)
@@ -50,13 +52,13 @@
   (by (unfold is_digit) (rw (if_neg h)) rfl))
 (theorem lex_plus_head ((c Int) (rst (List Int)) (h1 (= (is_digit c) false)) (h2 (= c 43)))
   (= (lex_go (cons c rst) none) (cons TPlus (lex_go rst none)))
-  (by (reduce lhs) (rw h1) (reduce lhs) (rw (if_pos h2)) (reduce lhs) rfl))
+  (by (reduce lhs) (rw h1) (reduce lhs) (rw (if_pos h2)) rfl))
 (theorem lex_minus_head ((c Int) (rst (List Int)) (h1 (= (is_digit c) false)) (h2 (Not (= c 43))) (h3 (= c 45)))
   (= (lex_go (cons c rst) none) (cons TMinus (lex_go rst none)))
-  (by (reduce lhs) (rw h1) (reduce lhs) (rw (if_neg h2)) (rw (if_pos h3)) (reduce lhs) rfl))
+  (by (reduce lhs) (rw h1) (reduce lhs) (simp_only (if_neg h2) (if_pos h3)) rfl))
 (theorem lex_bad_head ((c Int) (rst (List Int)) (h1 (= (is_digit c) false)) (h2 (Not (= c 43))) (h3 (Not (= c 45))) (h4 (= (is_ws c) false)))
   (= (lex_go (cons c rst) none) (cons TBad (lex_go rst none)))
-  (by (reduce lhs) (rw h1) (reduce lhs) (rw (if_neg h2)) (rw (if_neg h3)) (rw h4) (reduce lhs) rfl))
+  (by (reduce lhs) (rw h1) (reduce lhs) (simp_only (if_neg h2) (if_neg h3) h4) (reduce lhs) rfl))
 (theorem skip_ws_idem ((cs (List Int))) (= (skip_ws (skip_ws cs)) (skip_ws cs))
   (by (induction cs
         ((nil () (reduce) rfl)
@@ -75,3 +77,173 @@
   (by (show (= (head_is_ws (cons d rrr)) false)) (rw (<- h)) (exact (head_skipws_false cs))))
 (theorem parse_tail_nil_test ((e Exp) (cs (List Int)) (h (= (skip_ws cs) nil))) (= (parse_tail e cs) (some (ExpR e nil)))
   (by (unfold parse_tail) (rw h) (reduce) rfl))
+
+;;; Slice 3.21: the arithmetic, the whitespace lemmas and the capstone. A comparison in an `if`
+;;; is split on its decision (`(cases (Int.decEq c 43) …)`); the loop's two operator arms are
+;;; `arm_plus` and `arm_minus`, which take the lexer through one operator and one number, so
+;;; `loop_eq` splits on parse_num's result and its hypothesis is cited under `ptd`, the fact
+;;; that discharges parse_tail's own descent.
+(theorem le32_le48_false ((c Int) (h (<= c 32))) (Not (<= 48 c)) (by arith))
+(theorem le32_not_43 ((c Int) (h (<= c 32))) (Not (= c 43)) (by arith))
+(theorem le32_not_45 ((c Int) (h (<= c 32))) (Not (= c 45)) (by arith))
+(theorem le32_not_digit ((c Int) (h (<= c 32))) (= (is_digit c) false)
+  (by (exact (is_digit_false_lo c (le32_le48_false c h)))))
+(theorem is_ws_true ((c Int) (h (<= c 32))) (= (is_ws c) true)
+  (by (unfold is_ws) (exact (Init.decide_eq_true h))))
+(theorem is_ws_false ((c Int) (h (Not (<= c 32)))) (= (is_ws c) false)
+  (by (unfold is_ws) (exact (Init.decide_eq_false h))))
+(theorem lex_ws_none ((c Int) (rest (List Int)) (h (<= c 32))) (= (lex_go (cons c rest) none) (lex_go rest none))
+  (by (reduce lhs) (rw (le32_not_digit c h)) (reduce lhs)
+      (simp_only (if_neg (le32_not_43 c h)) (if_neg (le32_not_45 c h)) (is_ws_true c h))
+      (reduce lhs) rfl))
+;; the lexer does not see leading whitespace
+(theorem ws_lex ((cs (List Int))) (= (lex_go cs none) (lex_go (skip_ws cs) none))
+  (by (induction cs
+        ((nil () (reduce) rfl)
+         (cons (c rest ih)
+           (reduce rhs)
+           (cases (Int.decLe c 32)
+             ((isFalse (hgt) (rw (is_ws_false c hgt)) (reduce rhs) rfl)
+              (isTrue (hle) (rw (is_ws_true c hle)) (reduce rhs) (rw (lex_ws_none c rest hle)) (exact ih)))))))))
+(theorem digit_lo ((c Int) (h (= (is_digit c) true))) (<= 48 c)
+  (by (cases (Int.decLe 48 c)
+        ((isFalse (hn) (exact (absurd h (ne_true_of_eq_false (is_digit_false_lo c hn)))))
+         (isTrue (hp) (exact hp))))))
+(theorem ge48_not_43 ((c Int) (h (<= 48 c))) (Not (= c 43)) (by arith))
+(theorem ge48_not_45 ((c Int) (h (<= 48 c))) (Not (= c 45)) (by arith))
+(theorem digit_not_43 ((c Int) (h (= (is_digit c) true))) (Not (= c 43))
+  (by (exact (ge48_not_43 c (digit_lo c h)))))
+(theorem digit_not_45 ((c Int) (h (= (is_digit c) true))) (Not (= c 45))
+  (by (exact (ge48_not_45 c (digit_lo c h)))))
+(theorem lex_skipnum ((rst (List Int)) (d Int) (rrr (List Int)) (hs (= (skip_ws rst) (cons d rrr))) (hd (= (is_digit d) true)))
+  (= (lex_go rst none) (cons (TNum (numr_val (take_digits rrr (digit_val d)))) (lex_go (numr_rest (take_digits rrr (digit_val d))) none)))
+  (by (rw (ws_lex rst)) (rw hs) (exact (lex_digit_head d rrr hd))))
+(theorem loop_decrease ((rrr (List Int)) (d Int) (rst (List Int)) (rest (List Int))
+                        (h1 (<= (+ 1 (len rrr)) (len rst))) (h2 (<= (+ 1 (len rst)) (len rest)))
+                        (h3 (<= (len (numr_rest (take_digits rrr (digit_val d)))) (len rrr))))
+  (< (len (numr_rest (take_digits rrr (digit_val d)))) (len rest))
+  (by arith))
+
+;; parse_rest on an operator followed by anything but a number is none
+(theorem pr_plus_none ((t Token) (r (List Token)) (e Exp)) (= (parse_rest (cons t (cons TPlus r)) e) none)
+  (by (cases t ((TNum (n) (reduce) rfl) (TPlus () (reduce) rfl) (TMinus () (reduce) rfl) (TBad () (reduce) rfl)))))
+(theorem pr_minus_none ((t Token) (r (List Token)) (e Exp)) (= (parse_rest (cons t (cons TMinus r)) e) none)
+  (by (cases t ((TNum (n) (reduce) rfl) (TPlus () (reduce) rfl) (TMinus () (reduce) rfl) (TBad () (reduce) rfl)))))
+(theorem pr_bad_none ((t Token) (r (List Token)) (e Exp)) (= (parse_rest (cons t (cons TBad r)) e) none)
+  (by (cases t ((TNum (n) (reduce) rfl) (TPlus () (reduce) rfl) (TMinus () (reduce) rfl) (TBad () (reduce) rfl)))))
+;; … and the lexer's first token at a character that is neither a digit nor whitespace is no number
+(theorem nonnum_none ((d Int) (rrr (List Int)) (t Token) (e Exp) (hd (= (is_digit d) false)) (hw (= (is_ws d) false)))
+  (= (parse_rest (cons t (lex_go (cons d rrr) none)) e) none)
+  (by (cases (Int.decEq d 43)
+        ((isFalse (h43)
+           (cases (Int.decEq d 45)
+             ((isFalse (h45) (rw (lex_bad_head d rrr hd h43 h45 hw)) (exact (pr_bad_none t (lex_go rrr none) e)))
+              (isTrue (h45) (rw (lex_minus_head d rrr hd h43 h45)) (exact (pr_minus_none t (lex_go rrr none) e))))))
+         (isTrue (h43) (rw (lex_plus_head d rrr hd h43)) (exact (pr_plus_none t (lex_go rrr none) e)))))))
+;; one operator and one number through the lexer, against the spec's parse_num
+(theorem arm_plus ((rst (List Int)) (e Exp))
+  (= (parse_rest (cons TPlus (lex_go rst none)) e)
+     (match (parse_num (skip_ws rst))
+       (none none)
+       ((some (NumR n r2)) (parse_rest (lex_go r2 none) (Exp.Add e (Exp.Num n))))))
+  (by (rw (ws_lex rst))
+      (cases (skip_ws rst) hs
+        ((nil () (reduce) rfl)
+         (cons (d rrr)
+           (reduce rhs)
+           (cases (is_digit d) hd
+             ((false () (reduce rhs) (exact (nonnum_none d rrr TPlus e hd (skipws_head_nonws rst d rrr hs))))
+              (true ()
+                (rw (lex_digit_head d rrr hd))
+                (rw (numr_eta (take_digits rrr (digit_val d))))
+                (reduce) rfl))))))))
+(theorem arm_minus ((rst (List Int)) (e Exp))
+  (= (parse_rest (cons TMinus (lex_go rst none)) e)
+     (match (parse_num (skip_ws rst))
+       (none none)
+       ((some (NumR n r2)) (parse_rest (lex_go r2 none) (Exp.Sub e (Exp.Num n))))))
+  (by (rw (ws_lex rst))
+      (cases (skip_ws rst) hs
+        ((nil () (reduce) rfl)
+         (cons (d rrr)
+           (reduce rhs)
+           (cases (is_digit d) hd
+             ((false () (reduce rhs) (exact (nonnum_none d rrr TMinus e hd (skipws_head_nonws rst d rrr hs))))
+              (true ()
+                (rw (lex_digit_head d rrr hd))
+                (rw (numr_eta (take_digits rrr (digit_val d))))
+                (reduce) rfl))))))))
+
+;; the loop: the token parser over the lexer's output is the spec's tail parser, stripped —
+;; by well-founded induction on the input's length, the accumulated expression quantified
+(theorem loop_eq ((rest (List Int))) (forall ((e Exp)) (= (parse_rest (lex_go rest none) e) (strip (parse_tail e rest))))
+  (by (wf rest (len rest) ih
+        (intro e)
+        (rw (ws_lex rest))
+        (rw (parse_tail.eq_1 e rest))
+        (cases (skip_ws rest) hs
+          ((nil () (reduce) rfl)
+           (cons (c rst)
+             (reduce rhs)
+             (cases (is_digit c) hd
+               ((false ()
+                  (cases (Int.decEq c 43)
+                    ((isFalse (h43)
+                       (cases (Int.decEq c 45)
+                         ((isFalse (h45)
+                            (rw (lex_bad_head c rst hd h43 h45 (skipws_head_nonws rest c rst hs)))
+                            (simp_only (if_neg h43) (if_neg h45)) (reduce) rfl)
+                          (isTrue (h45)
+                            (rw (lex_minus_head c rst hd h43 h45))
+                            (simp_only (if_neg h43) (if_pos h45))
+                            (rw (arm_minus rst e))
+                            (cases (parse_num (skip_ws rst)) hp
+                              ((none () (reduce) rfl)
+                               (some (r)
+                                 (have hsome (= (pn_some (parse_num (skip_ws rst))) true) (rw hp) (reduce) rfl)
+                                 (have e2 (= (pn_rest (parse_num (skip_ws rst))) (numr_rest r)) (rw hp) (reduce) rfl)
+                                 (have hlt (< (len (numr_rest r)) (len rest)) (rw (<- e2)) (exact (ptd rest c rst hs hsome)))
+                                 (rw (numr_eta r)) (reduce)
+                                 (exact (ih (numr_rest r) hlt (Exp.Sub e (Exp.Num (numr_val r))))))))))))
+                     (isTrue (h43)
+                       (rw (lex_plus_head c rst hd h43))
+                       (simp_only (if_pos h43))
+                       (rw (arm_plus rst e))
+                       (cases (parse_num (skip_ws rst)) hp
+                         ((none () (reduce) rfl)
+                          (some (r)
+                            (have hsome (= (pn_some (parse_num (skip_ws rst))) true) (rw hp) (reduce) rfl)
+                            (have e2 (= (pn_rest (parse_num (skip_ws rst))) (numr_rest r)) (rw hp) (reduce) rfl)
+                            (have hlt (< (len (numr_rest r)) (len rest)) (rw (<- e2)) (exact (ptd rest c rst hs hsome)))
+                            (rw (numr_eta r)) (reduce)
+                            (exact (ih (numr_rest r) hlt (Exp.Add e (Exp.Num (numr_val r))))))))))))
+                (true ()
+                  (rw (lex_digit_head c rst hd))
+                  (simp_only (if_neg (digit_not_43 c hd)) (if_neg (digit_not_45 c hd)))
+                  (reduce) rfl)))))))))
+
+;; the two parsers agree on every input …
+(theorem CORE ((cs (List Int))) (= (parse (lex cs)) (parse_expr cs))
+  (by (unfold lex) (rw (ws_lex cs)) (unfold parse_expr)
+      (cases (skip_ws cs) hs
+        ((nil () (reduce) rfl)
+         (cons (c rst)
+           (reduce rhs)
+           (cases (is_digit c) hd
+             ((false ()
+                (reduce rhs)
+                (cases (Int.decEq c 43)
+                  ((isFalse (h43)
+                     (cases (Int.decEq c 45)
+                       ((isFalse (h45) (rw (lex_bad_head c rst hd h43 h45 (skipws_head_nonws cs c rst hs))) (reduce lhs) rfl)
+                        (isTrue (h45) (rw (lex_minus_head c rst hd h43 h45)) (reduce lhs) rfl))))
+                   (isTrue (h43) (rw (lex_plus_head c rst hd h43)) (reduce lhs) rfl))))
+              (true ()
+                (rw (lex_digit_head c rst hd))
+                (reduce lhs)
+                (rw (loop_eq (numr_rest (take_digits rst (digit_val c))) (Exp.Num (numr_val (take_digits rst (digit_val c))))))
+                (rw (numr_eta (take_digits rst (digit_val c))))
+                (reduce) rfl))))))))
+;; … so the implementation is the requirement: run cs = spec_run cs for every cs
+(theorem run_eq_spec ((cs (List Int))) (= (run cs) (spec_run cs))
+  (by (unfold run) (rw (CORE cs)) (unfold spec_run) rfl))

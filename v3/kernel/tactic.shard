@@ -17,10 +17,18 @@
 ;;; `tac_prove` instantiates the root. `sorry` leaves its goal unassigned
 ;;; and the theorem pending.
 ;;;
+;;; Slice 3.21: `arith` (a Farkas certificate over the goal's rows, arith.shard)
+;;; and `simp_only` (a bounded rewriter over a rule list); every new goal's
+;;; statement and every lemma's equation enter in the source's spelling of
+;;; Init's class methods (`ar_canon`), so a rewrite and an assumption match
+;;; across the two.
+;;;
 ;;; Untrusted, as the elaborator is: K rechecks the closed term.
 
 (import "elab.shard")
+(import "arith.shard")
 (use kernel.k)
+(use kernel.arith)
 (use kernel.elab)
 (use kernel.expr)
 (use kernel.kw)
@@ -33,14 +41,17 @@
 (use kernel.util)
 (use kernel.decl)
 (use kernel.matcher)
+(use kernel.arith.ARel)
+(use kernel.arith.ARes)
+(use kernel.arith.Lin)
 (use kernel.elab.El)
 (use kernel.elab.ERes)
 (use kernel.elab.EU)
 (use kernel.elab.FinRes)
+(use kernel.matcher.MtDesc)
 (use kernel.expr.BinderInfo)
 (use kernel.expr.Expr)
 (use kernel.expr.Literal)
-(use kernel.kw.W)
 (use kernel.kw.WOut)
 (use kernel.decl.ConstantInfo)
 (use kernel.decl.ConstantVal)
@@ -51,7 +62,6 @@
 (use kernel.prelude.Option)
 (use kernel.prelude.Pair)
 (use kernel.sexpr.SExpr)
-(use kernel.unify.MDecl)
 (use kernel.unify.URes)
 
 ;; ---- I's data (rule 10) ------------------------------------------------------------------
@@ -78,6 +88,8 @@
   (NReduce Symbol)                            ; (reduce), (reduce lhs), (reduce rhs)
   (NRw Bool SExpr Int (List Node))            ; (rw LEMMA | (<- LEMMA)) (occ K)? (STEP…)…: K = 0 is every occurrence
   (NSorry)                                    ; sorry
+  (NArith (List SExpr) (List (List Int)))     ; (arith FACT… (farkas K…)?): the facts, the certificates given (two for an equation)
+  (NSimp (List (Pair Bool SExpr)))            ; (simp_only RULE…): each a lemma and whether it is reversed
   (NBlock (List Node))                        ; a child block of apply or rw
   (NArm Name (List Name) (List Node)))        ; an arm of cases or induction
 
@@ -100,7 +112,8 @@
      (if (sym_eq x (quote sorry)) (NROk (NSorry))
      (if (sym_eq x (quote decide)) (NROk (NDecide))
      (if (sym_eq x (quote reduce)) (NROk (NReduce (quote both)))
-       (NRErr (quote unknown_step) (append (chars_of_sym x) ": not a form of I (rfl, sorry, decide, reduce, or a list)")))))))
+     (if (sym_eq x (quote arith)) (NROk (NArith Nil Nil))
+       (NRErr (quote unknown_step) (append (chars_of_sym x) ": not a form of I (rfl, sorry, decide, reduce, arith, or a list)"))))))))
     ((SList (Cons (SSym h) args))
      (if (sym_eq h (quote intro)) (read_names args Nil (quote intro))
      (if (sym_eq h (quote exact)) (match args ((Cons t Nil) (NROk (NExact t))) (_ (NRErr (quote bad_step) "(exact TERM)")))
@@ -116,7 +129,9 @@
      (if (sym_eq h (quote unfold)) (read_names args Nil (quote unfold))
      (if (sym_eq h (quote reduce)) (read_reduce args)
      (if (sym_eq h (quote rw)) (read_rw args)
-       (NRErr (quote unknown_step) (append (chars_of_sym h) ": not a form of I (slice 3.20: intro exact rfl have show apply cases induction wf decide unfold reduce rw sorry)")))))))))))))))))
+     (if (sym_eq h (quote arith)) (read_arith args Nil Nil)
+     (if (sym_eq h (quote simp_only)) (read_simp args Nil)
+       (NRErr (quote unknown_step) (append (chars_of_sym h) ": not a form of I (intro exact rfl have show apply cases induction wf decide unfold reduce rw simp_only arith sorry)")))))))))))))))))))
     (_ (NRErr (quote bad_step) "a step is a symbol or (FORM …)"))))
 (fn read_names ((ss (List SExpr)) (acc (List Name)) (form Symbol)) NodeRes
   (measure (struct ss))
@@ -164,7 +179,7 @@
        ((BROk b) (read_blocks r (Cons (NBlock b) acc)))))
     (_ (BRErr (quote bad_step) "a premise's block is (STEP…)"))))
 (fn tac_form_head ((h Symbol)) Bool
-  (mem_sym h (list (quote intro) (quote exact) (quote rfl) (quote have) (quote show) (quote apply) (quote cases) (quote induction) (quote wf) (quote decide) (quote unfold) (quote reduce) (quote rw) (quote sorry))))
+  (mem_sym h (list (quote intro) (quote exact) (quote rfl) (quote have) (quote show) (quote apply) (quote cases) (quote induction) (quote wf) (quote decide) (quote unfold) (quote reduce) (quote rw) (quote simp_only) (quote arith) (quote sorry))))
 
 (fn read_cases ((args (List SExpr)) (ind Bool)) NodeRes
   (match args
@@ -231,6 +246,37 @@
              (match (read_blocks rest Nil) ((BRErr e m) (NRErr e m)) ((BROk bs) (NROk (NRw rev1 t 0 bs))))))
           (_ (match (read_blocks rest Nil) ((BRErr e m) (NRErr e m)) ((BROk bs) (NROk (NRw rev1 t 0 bs)))))))))
     (_ (NRErr (quote bad_step) "(rw LEMMA (occ K)? (STEP…)…) or (rw (<- LEMMA) …)"))))
+;; (arith FACT… (farkas K…)…): the facts, then the certificates
+(fn read_arith ((args (List SExpr)) (facts (List SExpr)) (certs (List (List Int)))) NodeRes
+  (measure (struct args))
+  (match args
+    (Nil (NROk (NArith (rev facts) (rev certs))))
+    ((Cons (SList (Cons (SSym h) ks)) r)
+     (if (sym_eq h (quote farkas))
+       (match (read_ints ks Nil)
+         (None (NRErr (quote bad_step) "(farkas K…): a weight is an integer"))
+         ((Some ws) (read_arith r facts (Cons ws certs))))
+       (match certs
+         (Nil (read_arith r (Cons (SList (Cons (SSym h) ks)) facts) certs))
+         (_ (NRErr (quote bad_step) "(arith FACT… (farkas K…)): the certificate comes after the facts")))))
+    ((Cons t r)
+     (match certs
+       (Nil (read_arith r (Cons t facts) certs))
+       (_ (NRErr (quote bad_step) "(arith FACT… (farkas K…)): the certificate comes after the facts"))))))
+(fn read_ints ((ss (List SExpr)) (acc (List Int))) (Option (List Int))
+  (measure (struct ss))
+  (match ss
+    (Nil (Some (rev acc)))
+    ((Cons (SNum k) r) (read_ints r (Cons k acc)))
+    (_ None)))
+;; (simp_only RULE…): each rule a lemma or (<- LEMMA)
+(fn read_simp ((args (List SExpr)) (acc (List (Pair Bool SExpr)))) NodeRes
+  (measure (struct args))
+  (match args
+    (Nil (match acc
+           (Nil (NRErr (quote bad_step) "(simp_only RULE…) names at least one rule"))
+           (_ (NROk (NSimp (rev acc))))))
+    ((Cons t r) (read_simp r (Cons (rw_lemma t) acc)))))
 ;; (<- LEMMA) reverses the equation
 (fn rw_lemma ((s SExpr)) (Pair Bool SExpr)
   (match s
@@ -253,14 +299,18 @@
             ((Pair w2 body1) (tac_open_go (el_set_w e1 w2) body1 (- k 1) (Cons fv acc)))))))
       (_ (Opened e (rev acc) t)))))
 ;; a new goal over the locals `ctx` with the target: its metavariable has the closed statement
-;; as its type and no telescope; its occurrence is the metavariable applied to `ctx`
+;; as its type and no telescope; its occurrence is the metavariable applied to `ctx`. The
+;; statement enters in the one spelling (slice 3.21 rule 3: a hypothesis or a premise that came
+;; from one of Init's lemmas reads `Int.lt n 10` as the source's do, so a rewrite and an
+;; assumption match it; K converts the occurrence)
 (type Made (Made El Goal Expr))
 (fn tac_goal ((e El) (ctx (List Expr)) (target Expr)) Made
   (match (el_pis e ctx target)
-    ((Pair e1 stmt)
+    ((Pair e1 stmt0)
+     (let ((stmt (ar_canon (el_zonk e1 stmt0))))
      (match (el_fresh e1 (n1 (quote goal)) stmt (quote goal))
        ((Pair e2 (MVar _ i)) (Made e2 (Goal i stmt (len ctx)) (mk_app_n (mk_mvar i) ctx)))
-       ((Pair e2 m) (Made e2 (Goal 0 stmt (len ctx)) m))))))
+       ((Pair e2 m) (Made e2 (Goal 0 stmt (len ctx)) m)))))))
 ;; the context without the local `x`, when no other local's type mentions it (a split or an
 ;; induction replaces it by its cases; a dependent would be left speaking of the old local, so
 ;; then it stays); the occurrence of a goal over the smaller context still closes, K's
@@ -294,9 +344,16 @@
   (if (lt k 1) (append "⊢ " (tc_show t names))
     (match t
       ((Pi _ n _ dom body)
-       (let ((nm (chars_of_name_last n)))
+       (let ((nm (tc_binder n)))
          (append "(" (append nm (append " : " (append (tc_show dom names) (append ") " (show_goal_go body (- k 1) (Cons nm names)))))))))
       (_ (append "⊢ " (tc_show t names))))))
+;; a binder's name as a goal shows it: its last component, a generated one (a number) as `xN`
+;; so it does not read as a literal
+(fn tc_binder ((n Name)) (List Int)
+  (let ((nm (chars_of_name_last n)))
+    (match nm
+      ((Cons c _) (if (bool_and (le 48 c) (le c 57)) (Cons 120 nm) nm))
+      (Nil "x"))))
 ;; a term in S, bound variables by their binder names, locals by `?f`, Eq and the
 ;; comparisons under their operator spellings
 (fn tc_show ((t Expr) (names (List (List Int)))) (List Int)
@@ -309,15 +366,15 @@
     ((Const _ n _) (show_name n))
     ((App _ _ _) (tc_show_app (get_app_fn t) (get_app_args t) names))
     ((Lam _ n _ dom body)
-     (let ((nm (chars_of_name_last n)))
+     (let ((nm (tc_binder n)))
        (append "(fun (" (append nm (append " : " (append (tc_show dom names) (append ") " (append (tc_show body (Cons nm names)) ")"))))))))
     ((Pi _ n _ dom body)
      (if (has_loose_bvar body 0)
-       (let ((nm (chars_of_name_last n)))
+       (let ((nm (tc_binder n)))
          (append "(forall (" (append nm (append " : " (append (tc_show dom names) (append ") " (append (tc_show body (Cons nm names)) ")")))))))
        (append "(-> " (append (tc_show dom names) (append " " (append (tc_show body (Cons "_" names)) ")"))))))
     ((Let _ n ty v body)
-     (let ((nm (chars_of_name_last n)))
+     (let ((nm (tc_binder n)))
        (append "(let ((" (append nm (append " " (append (tc_show v names) (append ")) " (append (tc_show body (Cons nm names)) ")"))))))))
     ((Lit _ (LitNat k)) (show_nat k))
     ((Lit _ (LitStr s)) (append "\"" (append s "\"")))
@@ -327,10 +384,21 @@
     ((Const _ n _)
      (if (name_eq n (nm_eq))
        (match args ((Cons _ rest) (tc_show_args "(=" rest names)) (_ (tc_show_args (append "(" (show_name n)) args names)))
+     (match (tc_int_literal n args)
+       ((Some lit) lit)
+       (None
      (match (tc_op_spelling n)
        ((Some sp) (tc_show_args (append "(" sp) args names))
-       (None (tc_show_args (append "(" (show_name n)) args names)))))
+       (None (tc_show_args (append "(" (show_name n)) args names)))))))
     (_ (tc_show_args (append "(" (tc_show f names)) args names))))
+;; an Int literal as source writes it: Int.ofNat 48 is 48, Int.negSucc 0 is -1
+(fn tc_int_literal ((n Name) (args (List Expr))) (Option (List Int))
+  (match args
+    ((Cons (Lit _ (LitNat k)) Nil)
+     (if (name_eq n (nm_int_of_nat)) (Some (show_nat k))
+     (if (name_eq n (nm_int_neg_succ)) (Some (append "-" (show_nat (+ k 1))))
+       None)))
+    (_ None)))
 (fn tc_show_args ((acc (List Int)) (args (List Expr)) (names (List (List Int)))) (List Int)
   (measure (struct args))
   (match args
@@ -339,13 +407,16 @@
 (fn tc_op_spelling ((n Name)) (Option (List Int))
   (if (bool_or (name_eq n (n2 (quote Nat) (quote lt))) (name_eq n (n2 (quote Int) (quote lt)))) (Some "<")
   (if (bool_or (name_eq n (n2 (quote Nat) (quote le))) (name_eq n (n2 (quote Int) (quote le)))) (Some "<=")
-    None)))
+  (if (bool_or (name_eq n (n2 (quote Nat) (quote add))) (name_eq n (n2 (quote Int) (quote add)))) (Some "+")
+  (if (bool_or (name_eq n (n2 (quote Nat) (quote mul))) (name_eq n (n2 (quote Int) (quote mul)))) (Some "*")
+  (if (name_eq n (n2 (quote Int) (quote sub))) (Some "-")
+    None))))))
 (fn level_is_zero ((u Level)) Bool (match u (LZero True) (_ False)))
 
 ;; the forms whose precondition the goal meets (rule 10's applicable; not a completeness
 ;; claim): intro at a Pi, rfl and rw at an equation, cases/induction/wf where a local has an
-;; inductive type, decide where the target has a decision; exact, apply, have, show, unfold,
-;; reduce and sorry always
+;; inductive type, decide where the target has a decision, arith where the target is a linear
+;; comparison; exact, apply, have, show, unfold, reduce, simp_only and sorry always
 (fn applicable ((e El) (g Goal)) (List Symbol)
   (match (tac_open e g)
     ((Opened e1 ctx target)
@@ -355,7 +426,8 @@
         (append (match (eq_sides tw) ((Some _) (list (quote rfl) (quote rw))) (None Nil))
         (append (if (ctx_has_inductive e2 ctx) (list (quote cases) (quote induction) (quote wf)) Nil)
         (append (match (decision_of e2 (el_zonk e2 target)) ((Pair _ (Some _)) (list (quote decide))) (_ Nil))
-                (list (quote exact) (quote apply) (quote have) (quote show) (quote unfold) (quote reduce) (quote sorry)))))))))))
+        (append (match (ar_rel (ar_canon (el_zonk e2 target))) ((ARNone) Nil) (_ (list (quote arith))))
+                (list (quote exact) (quote apply) (quote have) (quote show) (quote unfold) (quote reduce) (quote simp_only) (quote sorry))))))))))))
 (fn ctx_has_inductive ((e El) (ctx (List Expr))) Bool
   (measure (struct ctx))
   (match ctx
@@ -392,6 +464,8 @@
        ((NUnfold ns) (step_unfold e1 ctx target ns))
        ((NReduce side) (step_reduce e1 ctx target side))
        ((NRw rv lem occ bs) (step_rw e1 ctx target rv lem occ bs))
+       ((NArith facts certs) (step_arith e1 ctx target facts certs))
+       ((NSimp rules) (step_simp e1 ctx target rules))
        (_ (StepErr (quote bad_step) "an arm or a block is not a step"))))))
 
 ;; a sequential step's answer: the continuation goal over `ctx` at `target`, the filling its
@@ -487,7 +561,7 @@
   (measure k)
   (if (lt k 1) (tc_show t names)
     (match t
-      ((Pi _ n _ _ body) (show_body_go body (- k 1) (Cons (chars_of_name_last n) names)))
+      ((Pi _ n _ _ body) (show_body_go body (- k 1) (Cons (tc_binder n) names)))
       (_ (tc_show t names)))))
 
 ;; (have NAME PROP STEP…): the cut — the child goal PROP over ctx, the continuation with
@@ -579,6 +653,10 @@
   (if (int_eq (len gs) nblocks) None
     (Some (Pair (sym_of_chars (append (chars_of_sym who) "_goals"))
                 (append (chars_of_sym who) (append " opens " (append (show_nat (len gs)) (append " goal(s) and the step gives " (append (show_nat nblocks) (append " block(s): " (goals_list gs)))))))))))
+;; the sorried goals of a pending theorem, in its record (rule 9): ` [GOAL] [GOAL]`
+(fn goals_bracketed ((gs (List Goal))) (List Int)
+  (measure (struct gs))
+  (match gs (Nil "") ((Cons g r) (append " [" (append (goal_of g) (append "]" (goals_bracketed r)))))))
 (fn goals_list ((gs (List Goal))) (List Int)
   (measure (struct gs))
   (match gs (Nil "") ((Cons g r) (append "[" (append (goal_of g) (append "] " (goals_list r)))))))
@@ -928,10 +1006,11 @@
      (match (open_mvars e1 v ty k Nil)
        ((OpenedM e2 v1 concl ms)
         (match (if (is_app concl) (Pair e2 concl) (el_whnf e2 concl))
-          ((Pair e3 cw)
+          ((Pair e3 cw0)
+           (let ((cw (ar_canon (el_zonk e3 cw0))))   ; the sides in the one spelling: the target's
            (match (eq_sides cw)
              ((Some (Pair u (Pair a (Pair l r)))) (EqOk e3 v1 u a l r ms))
-             (None (EqErr (quote rw_not_eq) (append "the lemma is not an equation: " (tc_show (el_zonk e3 cw) Nil))))))))))))
+             (None (EqErr (quote rw_not_eq) (append "the lemma is not an equation: " (tc_show (el_zonk e3 cw) Nil)))))))))))))
 
 ;; syntactic matching of a pattern with metavariables against a term: structural descent,
 ;; a metavariable assigned (typed, unify.shard's assign), levels structurally — never K's
@@ -1202,14 +1281,17 @@
         (if (bool_and (bool_not (int_eq (len only) 0)) (bool_not (mem_name f only))) (find_redex e r only)
           (match (equations_of e f)
             (Nil
-             (if (bool_and (int_eq (len only) 0) (bool_not (reducible_head e f)))
+             (if (bool_and (int_eq (len only) 0) (bool_or (bool_not (reducible_head e f)) (is_proposition e s)))
                (find_redex e r only)
-               (match (whnf_progress e s)
+               (match (alt_step e s)
+                 ((Pair e0 (Some t)) (FoundOk e0 (Redex s t None False)))
+                 ((Pair e0 None)
+               (match (whnf_progress e0 s)
                  ((Pair e1 (Some t)) (FoundOk e1 (Redex s t None False)))
                  ((Pair e1 None)
                   (match (delta_once e1 s)
                     ((Pair e2 (Some t)) (FoundOk e2 (Redex s t None False)))
-                    ((Pair e2 None) (find_redex e2 r only)))))))
+                    ((Pair e2 None) (find_redex e2 r only)))))))))
             (eqns
              (match (try_equations e s eqns (bool_not (int_eq (len only) 0)))
                ((FoundOk e1 rd) (FoundOk e1 rd))
@@ -1220,6 +1302,60 @@
             ((Pair e1 (Some t)) (FoundOk e1 (Redex s t None False)))
             ((Pair e1 None) (find_redex e1 r only)))
           (find_redex e r only)))))))
+;; a case analysis at a decided scrutinee takes one step, to its alternative (slice 3.21). K's
+;; whnf goes on into the alternative's body — an `ite` on an open condition there is a stuck
+;; Decidable.rec, which whnf_progress reads as no progress — so the alternatives (an `ite`'s
+;; branches, a matcher's rows) are masked by locals while K picks one, and the one picked is
+;; applied to the fields K gave it (and to the equation a measured function's matcher carries)
+(fn alt_step ((e El) (s Expr)) (Pair El (Option Expr))
+  (match (get_app_fn s)
+    ((Const _ f _)
+     (match (alt_positions e f (len (get_app_args s)))
+       (Nil (Pair e None))
+       (ps
+        (match (alt_mask e (get_app_args s) ps 0 Nil Nil)
+          ((Pair e1 (Pair margs masks))
+           (match (w_whnf_r (el_w e1) (mk_app_n (get_app_fn s) margs))
+             ((Pair w1 (WVal r0))
+              (match (get_app_fn r0)
+                ((FVar _ id)
+                 (if (mask_has masks id)
+                   (match (tac_beta (el_set_w e1 w1) (unmask masks r0)) ((Pair e3 r) (Pair e3 (Some r))))
+                   (Pair (el_set_w e1 w1) None)))
+                (_ (Pair (el_set_w e1 w1) None))))
+             ((Pair w1 _) (Pair (el_set_w e1 w1) None))))))))
+    (_ (Pair e None))))
+(fn alt_positions ((e El) (f Name) (nargs Int)) (List Int)
+  (if (bool_or (name_eq f (n1 (quote ite))) (name_eq f (n1 (quote dite)))) (if (lt 4 nargs) (list 3 4) Nil)
+    (match (mt_is_matcher (el_env e) f)
+      ((Some (MtDesc np 1 rows)) (if (lt (+ np (+ 1 (len rows))) nargs) (range_from (+ np 2) (len rows)) Nil))
+      (_ Nil))))
+(fn range_from ((a Int) (n Int)) (List Int)
+  (measure n)
+  (if (lt n 1) Nil (Cons a (range_from (+ a 1) (- n 1)))))
+(fn alt_mask ((e El) (args (List Expr)) (ps (List Int)) (i Int) (acc (List Expr)) (masks (List (Pair Expr Expr)))) (Pair El (Pair (List Expr) (List (Pair Expr Expr))))
+  (measure (struct args))
+  (match args
+    (Nil (Pair e (Pair (rev acc) masks)))
+    ((Cons a r)
+     (if (mem_int i ps)
+       (match (el_infer e a)
+         ((Pair e1 None) (alt_mask e1 r ps (+ i 1) (Cons a acc) masks))
+         ((Pair e1 (Some ty))
+          (match (el_local e1 (n1 (quote alt)) ty BDefault)
+            ((Pair e2 fv) (alt_mask e2 r ps (+ i 1) (Cons fv acc) (Cons (Pair fv a) masks))))))
+       (alt_mask e r ps (+ i 1) (Cons a acc) masks)))))
+(fn mask_has ((masks (List (Pair Expr Expr))) (id Int)) Bool
+  (measure (struct masks))
+  (match masks
+    (Nil False)
+    ((Cons (Pair (FVar _ j) _) r) (if (int_eq j id) True (mask_has r id)))
+    ((Cons _ r) (mask_has r id))))
+;; a proposition is no computation: reduce leaves `a < b` as it is (Nat.lt's value is Nat.le
+;; at the successor, Int.le's a predicate of the difference — unfolded, neither reads as the
+;; comparison nor is one to arith); unfold by name still unfolds it
+(fn is_proposition ((e El) (s Expr)) Bool
+  (match (w_is_prop (el_w e) s) ((Pair _ (Some True)) True) (_ False)))
 ;; one delta step by hand, for a definition K's whnf takes past the one step wanted (`double x`
 ;; to `x + x`, which K then unfolds to a stuck recursor): the value at the constant's levels,
 ;; head-beta-reduced on the arguments; kept where the result is neither a lambda nor stuck
@@ -1354,6 +1490,161 @@
         (match (get_app_fn (el_zonk e1 v))
           ((Const _ c _) (resolve_consts e1 r (Cons c acc)))
           (_ (Pair e1 (Pair None (append (show_name n) " is not a constant"))))))))))
+
+;; ---- arith and simp_only (slice 3.21) ------------------------------------------------------
+;; the facts elaborated: each term and its type
+(type FactsRes (FactsOk El (List (Pair Expr Expr))) (FactsErr Symbol (List Int)))
+(fn arith_facts ((e El) (facts (List SExpr)) (acc (List (Pair Expr Expr)))) FactsRes
+  (measure (struct facts))
+  (match facts
+    (Nil (FactsOk e (rev acc)))
+    ((Cons t r)
+     (match (elab e t None)
+       ((EErr x m) (FactsErr x m))
+       ((EOk e1 v ty)
+        (match (tac_unsolved e1 v)
+          ((Some (Pair x m)) (FactsErr x m))
+          (None (arith_facts e1 r (Cons (Pair (el_zonk e1 v) (el_zonk e1 ty)) acc)))))))))
+;; the context's locals with their types (arith keeps the comparisons)
+(fn arith_ctx ((e El) (ctx (List Expr)) (acc (List (Pair Expr Expr)))) (List (Pair Expr Expr))
+  (measure (struct ctx))
+  (match ctx
+    (Nil (rev acc))
+    ((Cons (FVar d id) r)
+     (match (w_local_type (el_w e) id)
+       ((Some ty) (arith_ctx e r (Cons (Pair (FVar d id) (el_zonk e ty)) acc)))
+       (None (arith_ctx e r acc))))
+    ((Cons _ r) (arith_ctx e r acc))))
+;; (arith FACT… (farkas K…)?): linear arithmetic over the goal's rows (arith.shard); K reads
+;; the term before it is the goal's filling, so a refusal names the step
+(fn step_arith ((e El) (ctx (List Expr)) (target Expr) (facts (List SExpr)) (certs (List (List Int)))) TStep
+  (match (arith_facts e facts Nil)
+    ((FactsErr x m) (StepErr x m))
+    ((FactsOk e1 fs)
+     (match (ar_prove e1 (el_zonk e1 target) (arith_ctx e1 ctx Nil) fs certs)
+       ((ARErr x m atoms rows) (StepErr x (append m (arith_show e1 ctx atoms rows))))
+       ((AROk e2 p)
+        (match (el_infer e2 p)
+          ((Pair e3 None) (StepErr (quote arith_internal) "K could not type the proof arith built"))
+          ((Pair e3 (Some pty))
+           (match (w_is_def_eq_r (el_w e3) pty (el_zonk e3 target))
+             ((Pair w4 (WVal True)) (step_close (el_set_w e3 w4) ctx p Nil Nil))
+             ((Pair w4 _) (StepErr (quote arith_internal) (append "the proof arith built has the type " (tc_show_closed (el_set_w e3 w4) ctx pty))))))))))))
+;; the rows in normal form, for a refusal: [0 <= 3 + 1*(len rest) + -1*x]
+(fn arith_show ((e El) (ctx (List Expr)) (atoms (List Expr)) (rows (List (Pair Bool Lin)))) (List Int)
+  (match rows (Nil "") (_ (append " — rows: " (arith_show_rows e ctx atoms rows)))))
+(fn arith_show_rows ((e El) (ctx (List Expr)) (atoms (List Expr)) (rows (List (Pair Bool Lin)))) (List Int)
+  (measure (struct rows))
+  (match rows
+    (Nil "")
+    ((Cons (Pair q (Lin c ks)) r)
+     (append "[" (append (if q "0 = " "0 <= ") (append (show_int c) (append (arith_show_terms e ctx atoms ks) (append "] " (arith_show_rows e ctx atoms r)))))))))
+(fn arith_show_terms ((e El) (ctx (List Expr)) (atoms (List Expr)) (ks (List Int))) (List Int)
+  (measure (struct ks))
+  (match ks
+    (Nil "")
+    ((Cons k r)
+     (match atoms
+       (Nil "")
+       ((Cons a ar)
+        (if (int_eq k 0) (arith_show_terms e ctx ar r)
+          (append " + " (append (show_int k) (append "*" (append (tc_show_closed e ctx a) (arith_show_terms e ctx ar r)))))))))))
+
+;; (simp_only RULE…): until no rule applies, the first rule in list order with a match whose
+;; premises the context states is applied as rw applies it; budget 256
+(fn step_simp ((e El) (ctx (List Expr)) (target0 Expr) (rules (List (Pair Bool SExpr)))) TStep
+  (let ((target (el_zonk e target0)))
+    (match (tac_goal e ctx target)
+      ((Made e1 g0 occ0)
+       (match (tac_close e1 ctx occ0)
+         ((Pair e2 filling0)
+          (match (simp_loop e2 ctx g0 target rules 256 0)
+            ((LoopErr x m) (StepErr x m))
+            ((LoopOk e3 g) (StepOk e3 filling0 Nil Nil (Some g))))))))))
+(fn simp_loop ((e El) (ctx (List Expr)) (cur Goal) (target Expr) (rules (List (Pair Bool SExpr))) (budget Int) (made Int)) Loop
+  (measure budget)
+  (if (lt budget 1) (LoopErr (quote simp_budget) (append "256 rewrites did not reach a fixpoint (a rule rewrites its own result): " (tc_show_closed e ctx target)))
+    (match (simp_rules e ctx cur target rules 1)
+      ((RaErr x m) (LoopErr x m))
+      ((RaOk e1 cur1 target1)
+       (if (expr_eq target1 target)
+         (if (int_eq made 0)
+           (LoopErr (quote simp_no_progress) (append "no rule rewrites the target (a rule with a premise applies where a hypothesis states it): " (tc_show_closed e1 ctx target)))
+           (loop_end e1 ctx cur target))
+         (simp_loop e1 ctx cur1 target1 rules (- budget 1) (+ made 1)))))))
+;; the first rule that applies, applied: the continuation goal and its target; the target
+;; unchanged where none does
+(fn simp_rules ((e El) (ctx (List Expr)) (cur Goal) (target Expr) (rules (List (Pair Bool SExpr))) (idx Int)) RdApp
+  (measure (struct rules))
+  (match rules
+    (Nil (RaOk e cur target))
+    ((Cons (Pair rv lem) r)
+     (match (elab e lem None)
+       ((EErr x m) (RaErr x (append "rule " (append (show_nat idx) (append ": " m)))))
+       ((EOk e1 v ty)
+        (match (eq_of_lemma e1 v ty)
+          ((EqErr x m) (RaErr x (append "rule " (append (show_nat idx) (append ": " m)))))
+          ((EqOk e2 v1 u a l rr ms)
+           (let ((pat (if rv rr l)) (rhs (if rv l rr)))
+             (match (simp_match e2 ctx pat ms (rev (tc_subterms target Nil)))
+               (None (simp_rules e ctx cur target r (+ idx 1)))
+               ((Some e3)
+                (let ((pz (el_zonk e3 pat)) (rz (el_zonk e3 rhs)) (az (el_zonk e3 a)) (hz (el_zonk e3 v1)))
+                  (if (bool_or (expr_eq pz rz) (match (tac_unsolved e3 hz) ((Some _) True) (None False)))
+                    (simp_rules e ctx cur target r (+ idx 1))
+                  ;; a rule whose right side holds its left at this instance rewrites its own result,
+                  ;; twice over where it holds it twice (the target doubles and no budget of rewrites
+                  ;; is reached): `r = mk (fst r) (snd r)` given without its argument
+                  (if (lt 0 (tc_count rz pz))
+                    (RaErr (quote simp_self) (append "rule " (append (show_nat idx) (append " rewrites " (append (tc_show_closed e3 ctx pz) (append " to a term that holds it, " (append (tc_show_closed e3 ctx rz) ": no fixpoint — give the rule its arguments, or use rw for one step")))))))
+                    (let ((heq (if rv (mk_app_n (mk_const (n2 (quote Eq) (quote symm)) (list u)) (list az (el_zonk e3 l) (el_zonk e3 rr) hz)) hz)))
+                      (match (rewrite_by e3 ctx target az pz rz heq 0)
+                        ((TRwErr _ _) (simp_rules e ctx cur target r (+ idx 1)))
+                        ((TRwOk e5 g target1 term)
+                         (match (tac_close e5 ctx term)
+                           ((Pair e6 filling) (RaOk (el_set_mc e6 (mc_set (el_mc e6) (goal_id cur) filling)) g target1)))))))))))))))))))
+;; the first subterm the pattern matches with every premise stated by the context
+(fn simp_match ((e El) (ctx (List Expr)) (pat Expr) (ms (List Expr)) (subs (List Expr))) (Option El)
+  (measure (struct subs))
+  (match subs
+    (Nil None)
+    ((Cons s r)
+     (match (tac_match e pat s)
+       (None (simp_match e ctx pat ms r))
+       ((Some e1)
+        (match (simp_premises e1 ctx ms)
+          ((Some e2) (Some e2))
+          (None (simp_match e ctx pat ms r))))))))
+;; each premise left open after the match: a proposition a hypothesis of the context states
+(fn simp_premises ((e El) (ctx (List Expr)) (ms (List Expr))) (Option El)
+  (measure (struct ms))
+  (match ms
+    (Nil (Some e))
+    ((Cons (MVar _ i) r)
+     (match (mc_assigned (el_mc e) i)
+       ((Some _) (simp_premises e ctx r))
+       (None
+        (match (mc_decl (el_mc e) i)
+          (None None)
+          ((Some d)
+           (let ((ty (ar_canon (el_zonk e (md_type d)))))
+             (if (has_mvar ty) None
+               (match (w_is_prop (el_w e) ty)
+                 ((Pair w1 (Some True))
+                  (match (assumption_of (el_set_w e w1) ctx ty)
+                    ((Some h) (simp_premises (el_set_mc (el_set_w e w1) (mc_set (el_mc e) i h)) ctx r))
+                    (None None)))
+                 (_ None)))))))))
+    ((Cons _ r) (simp_premises e ctx r))))
+(fn assumption_of ((e El) (ctx (List Expr)) (ty Expr)) (Option Expr)
+  (measure (struct ctx))
+  (match ctx
+    (Nil None)
+    ((Cons (FVar d id) r)
+     (match (w_local_type (el_w e) id)
+       ((Some t) (if (expr_eq (el_zonk e t) ty) (Some (FVar d id)) (assumption_of e r ty)))
+       (None (assumption_of e r ty))))
+    ((Cons _ r) (assumption_of e r ty))))
 
 ;; ---- the block runner and the entry (rules 1, 3 and 9) ------------------------------------
 ;; the blocks of apply's and rw's premises

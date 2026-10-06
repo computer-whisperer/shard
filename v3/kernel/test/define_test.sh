@@ -30,10 +30,12 @@ check v3/examples/calc/calc_spec.shard \
   'DEFINE examples.calc.calc.eval equations=examples.calc.calc.eval.eq_1,examples.calc.calc.eval.eq_2,examples.calc.calc.eval.eq_3' \
   'DEFINE examples.calc.calc.parse_rest equations=' \
   'ACCEPT examples.calc.calc_spec.eval_add '
-# calc's spec file whole (slice 3.16's gate): every function defined, the measured one pending
+# calc's spec file whole (slice 3.16's gate): every function defined; the measured one's two
+# descents discharged (slice 3.21: each stated under its matchers' equations), so nothing pending
 out=$("$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" --init "$TAIL" v3/examples/calc/calc_spec.shard 2>&1)
-if ! echo "$out" | grep -q 'runnable 0  refused 0  pending 1  realized 0  defined 25  errors 0'; then
-  echo "define_test: calc_spec is not 25 of 25 defined"; echo "$out" | grep -E '^(RUNNABLE|REFUSE|LOAD:)' | head -8; fail=$((fail+1))
+if ! echo "$out" | grep -q 'runnable 0  refused 0  pending 0  realized 0  defined 25  errors 0' \
+   || [ "$(echo "$out" | grep -c '^DISCHARGE examples.calc.calc_spec.parse_tail.dec_[12] proved')" -ne 2 ]; then
+  echo "define_test: calc_spec is not 25 of 25 defined with parse_tail's descents discharged"; echo "$out" | grep -E '^(RUNNABLE|REFUSE|PENDING|READ-ERROR|LOAD:)' | head -8; fail=$((fail+1))
 fi
 # G8 (GPT-6 R70): a RUNNABLE callee added to a body changes the call and nothing else in the program
 dump=$("$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" --dump v3/pins/loader/route_callee/main.shard 2>&1)
@@ -46,11 +48,13 @@ if [ "$(echo "$out" | grep -c '^DISCHARGE .* proved')" -ne 3 ] || echo "$out" | 
   echo "define_test: discharge_measure: the account is not empty after the discharges"; echo "$out" | grep -E '^(DISCHARGE|PENDING|REFUSE|READ-ERROR)|count_self' | head -8; fail=$((fail+1))
 fi
 # calc's app file (slice 3.17 rule 7): show_nat defined by its Nat measure through Int.natAbs — the
-# registry's expression row erases the measure —, its descent the one pending obligation; nothing RUNNABLE
+# registry's expression row erases the measure —, its descent discharged by arith over the
+# quotient's rows (slice 3.21) and its equation by WellFounded.fix_eq; nothing RUNNABLE, nothing pending
 out=$("$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" --init "$TAIL" v3/examples/calc/calc_app.shard 2>&1)
-if ! echo "$out" | grep -q '^DEFINE examples.calc.calc_app.show_nat equations= pending=examples.calc.calc_app.show_nat$' \
-   || ! echo "$out" | grep -q 'runnable 0  refused 0  pending 1  realized 0  defined 17  errors 0'; then
-  echo "define_test: calc_app is not 17 of 17 defined with show_nat pending"; echo "$out" | grep -E '^(RUNNABLE|REFUSE|PENDING|READ-ERROR|LOAD:)' | head -8; fail=$((fail+1))
+if ! echo "$out" | grep -q '^DEFINE examples.calc.calc_app.show_nat equations=examples.calc.calc_app.show_nat.eq_1$' \
+   || ! echo "$out" | grep -q '^DISCHARGE examples.calc.calc_app.show_nat.dec_1 proved' \
+   || ! echo "$out" | grep -q 'runnable 0  refused 0  pending 0  realized 0  defined 17  errors 0'; then
+  echo "define_test: calc_app is not 17 of 17 defined with show_nat's descent discharged"; echo "$out" | grep -E '^(RUNNABLE|REFUSE|PENDING|READ-ERROR|DEFINE .*show_nat|LOAD:)' | head -8; fail=$((fail+1))
 fi
 # the fresh-name supply (slice 3.17 rule 6): every function defined, two successive names differ
 check v3/std/fresh.shard \

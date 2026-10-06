@@ -10,9 +10,10 @@
 ;;; native inductive's `below` and `brecOn` generated on first need). A measured
 ;;; one is `WellFounded.fix` over the data binders' tuple, each self-call's
 ;;; decreasing fact an obligation `f.dec_N` over every local in scope, an `ite`
-;;; compiled as `Decidable.rec` so the branch's proof is one of them. The
-;;; equations `NAME.eq_N` (one per leaf of the leading matchers, by `Eq.refl`;
-;;; none for a measured function) come with it. What K's projection cannot reach
+;;; compiled as `Decidable.rec` so the branch's proof is one of them and a
+;;; matcher carrying its equation so a row's is one too (slice 3.21). The
+;;; equations `NAME.eq_N` (one per leaf of the leading matchers: by `Eq.refl`,
+;;; a measured function's by `WellFounded.fix_eq`) come with it. What K's projection cannot reach
 ;;; here leaves the function RUNNABLE with the obstacle named (DfSkip); a
 ;;; definition that should exist and fails is refused (DfErr) — never a silent
 ;;; fall-back. Also here: a native inductive's `below`/`brecOn` and its
@@ -33,7 +34,7 @@
 (use kernel.erasure.Field)
 (use kernel.erasure.TrRes)
 (use kernel.util)
-(use kernel.elab el_w)
+(use kernel.elab el_w el_cx)
 (use kernel.matcher)
 (use kernel.predef)
 (use kernel.decl.ConstantInfo)
@@ -82,7 +83,9 @@
 ;; elaborated. One that does is compiled by its recursion clause: structural — `T.brecOn`, each
 ;; self-call the table's entry found by type (pj_find); measured — `WellFounded.fix`, each
 ;; self-call `rec (tuple args) f.dec_N`. The equations come with it (pj_equations).
-(type PjKind (PkStruct Int Int) (PkWf Expr Expr Expr (List Expr)))   ; C's id, the structural position among the data arguments; rec, the tuple, the relation, the components' types
+(type PjKind (PkStruct Int Int) (PkWf Expr Expr (List Expr) Expr (List Expr)) (PkEqn))   ; C's id, the structural position among the data arguments; rec, the tuple, the components' types, the measure over the data binders, the data binders; the statement of a measured function's equations (a self-call stays a call, a matcher carries its equation as under PkWf)
+(fn pj_carries_eq ((k PjKind)) Bool (match k ((PkStruct _ _) False) (_ True)))
+(fn pj_is_eqn ((k PjKind)) Bool (match k ((PkEqn) True) (_ False)))
 ;; the lexical context of the walk: the self-local's id, the type binders (fixed in a
 ;; self-call), the recursion, the tables in scope innermost first — a local with its type over
 ;; the abstract motive —, every local in scope outermost first (True = a let)
@@ -120,9 +123,15 @@
                         (match (w_admit_after (Tr.w t1) (if measured (tr_obls t1) Nil) dd)
                           ((Pair _ (Some why)) (DfErr (quote definition_refused) (append (show_name k) (append ": K refused the definition (" (append (chars_of_sym why) ")")))))
                           ((Pair w2 None)
-                           (match (pj_equations (tr_set_w t1 w2) (mk_const k Nil) selfid (pd_binders pd) rl (pd_body pd) Nil True (if measured (Some value) None))
+                           ;; a measured function's equations are stated over the body as the value has it:
+                           ;; each matcher with its equation (pj_match_eq), so K converts F's body to the leaf's
+                           (match (if measured (pj_term (tr_set_w t1 w2) (make PjCx (self selfid) (tps tps) (kind (PkEqn)) (tables Nil) (scope Nil)) (pd_body pd) (budget_depth))
+                                    (TrOk (tr_set_w t1 w2) (pd_body pd)))
+                             ((TrErr e m) (DfErr e m))
+                             ((TrOk t1b eqbody)
+                           (match (pj_equations t1b (mk_const k Nil) selfid (pd_binders pd) rl eqbody Nil True (if measured (Some value) None))
                              ((Pair _ (Left3 e m)) (DfErr e m))
-                             ((Pair t2 (Right3 eqs)) (DfOk (Tr.es t2) (tr_obls t2) dd eqs measured))))))))))))))))))))
+                             ((Pair t2 (Right3 eqs)) (DfOk (Tr.es t2) (tr_obls t2) dd eqs measured))))))))))))))))))))))
 (fn pj_is_measure ((r PdRec)) Bool (match r ((PdMeasure _) True) (_ False)))
 ;; the type binders (a local whose type is a sort) and the data binders, in order
 (fn pj_split_binders ((w W) (bs (List Expr)) (tps (List Expr)) (data (List Expr))) (Pair (List Expr) (List Expr))
@@ -277,7 +286,7 @@
                    ((Pair t6 mfn)
                     (match (wf_relation t6 alpha mfn)
                       ((Pair t7 (Pair rel hwf))
-                       (match (tr_local t7 (n1 (quote p)) alpha)
+                       (match (tr_local t7 (pj_tuple_name pd data) alpha)
                          ((Pair t8 p)
                           (match (wf_rec_type t8 alpha rel p rl)
                             ((Pair t9 rty)
@@ -285,7 +294,7 @@
                                ((Pair t10 recl)
                                 (match (pj_subst_projs t10 (pd_body pd) data p (len data) 0)
                                   ((Pair t11 body1)
-                                   (let ((cx (make PjCx (self selfid) (tps tps) (kind (PkWf recl p rel ltys)) (tables Nil) (scope (list (Pair False p))))))
+                                   (let ((cx (make PjCx (self selfid) (tps tps) (kind (PkWf recl p ltys m data)) (tables Nil) (scope (list (Pair False p))))))
                                      (match (pj_term t11 cx body1 (budget_depth))
                                        ((TrErr e m2) (AuxErr t11 e m2))
                                        ((TrOk t12 b)
@@ -470,7 +479,7 @@
   (match head
     ((FVar _ id) (if (int_eq id (PjCx.self cx)) (pj_self t cx args fuel) (pj_plain t cx head args fuel)))
     ((Const _ c ls)
-     (if (bool_and (name_eq c (n1 (quote ite))) (le 5 (len args))) (pj_ite t cx args fuel)
+     (if (bool_and (bool_and (name_eq c (n1 (quote ite))) (le 5 (len args))) (bool_not (pj_is_eqn (PjCx.kind cx)))) (pj_ite t cx args fuel)
        (match (mt_is_matcher (tr_env t) c)
          ((Some (MtDesc np 1 rows)) (if (le (+ np (+ 2 (len rows))) (len args)) (pj_match t cx c ls np rows args fuel) (pj_plain t cx head args fuel)))
          (_ (pj_plain t cx head args fuel)))))
@@ -501,6 +510,7 @@
       ((Pair _ (Left2 x m)) (TrErr x m))
       ((Pair t1 (Right2 (Pair dargs _)))
        (match (PjCx.kind cx)
+         ((PkEqn) (match (tr_apps t1 (mk_fvar (PjCx.self cx)) (append (take nt args) dargs)) ((Pair t2 r) (TrOk t2 r))))
          ((PkStruct cid pos)
           (match (nth dargs pos)
             (None (TrErr (quote function_value) (append (show_name (Tr.id t1)) ": its own name is not applied to its structural argument (no function values, §4)")))
@@ -508,13 +518,13 @@
              (match (pj_find t1 (PjCx.tables cx) cid y)
                ((Pair _ None) (TrErr (quote realize_descent) (append (show_name (Tr.id t1)) (append ": a recursive call does not pass a proper subterm of the structural parameter — " (show_expr y)))))
                ((Pair t2 (Some entry)) (match (tr_apps t2 entry (without_index dargs pos 0)) ((Pair t3 r) (TrOk t3 r))))))))
-         ((PkWf recl p rel ltys)
+         ((PkWf recl p ltys m data)
           (let ((n (len ltys)))
             (if (lt (len dargs) n) (TrErr (quote function_value) (append (show_name (Tr.id t1)) ": its own name is not applied to all its arguments (no function values, §4)"))
             (if (pj_own_params (take n dargs) p n 0) (TrErr (quote realize_descent) (append (show_name (Tr.id t1)) " calls itself on its own parameters — no measure decreases (§7.5)"))
             (match (wf_tuple t1 ltys (take n dargs))
               ((Pair t2 tup)
-               (match (tr_apps t2 rel (list tup p))
+               (match (pj_descent t2 m data (take n dargs) p n)
                  ((Pair t3 goal)
                   (match (tr_pis t3 (scope_fvars (pj_obl_scope t3 (PjCx.scope cx) (fvar_id_of recl))) goal)
                     ((Pair t4 stmt)
@@ -524,6 +534,45 @@
                            ((Pair t5 proof)
                             (match (tr_apps t5 recl (Cons tup (Cons proof (drop n dargs))))
                               ((Pair t6 r) (TrOk (match had ((Some _) t6) (None (tr_add_obl t6 (AxiomDecl (ConstantVal name Nil stmt) False)))) r)))))))))))))))))))))))
+;; the descent fact as the comparison it is, `measure[arguments] < measure[parameters]` at Nat
+;; (slice 3.21): K converts the relation's instance `InvImage … (tuple arguments) p` to it, and
+;; an author — and arith — reads a comparison. The body's arguments are over the tuple's
+;; components already, so the data binders are substituted one after the other
+(fn pj_descent ((t Tr) (m Expr) (data (List Expr)) (args (List Expr)) (p Expr) (n Int)) (Pair Tr Expr)
+  (match (pj_subst_list t m data args)
+    ((Pair t1 ma)
+     (match (pj_subst_projs t1 m data p n 0)
+       ((Pair t2 mp) (Pair t2 (mk_app (mk_app (mk_const (n2 (quote Nat) (quote lt)) Nil) ma) mp)))))))
+(fn pj_subst_list ((t Tr) (e Expr) (olds (List Expr)) (news (List Expr))) (Pair Tr Expr)
+  (measure (struct olds))
+  (match olds
+    (Nil (Pair t e))
+    ((Cons o r)
+     (match news
+       (Nil (Pair t e))
+       ((Cons v vr) (match (tr_subst t e (fvar_id_of o) v) ((Pair t1 e1) (pj_subst_list t1 e1 r vr))))))))
+;; the tuple's local: under the binder's own name where the function has one data binder (the
+;; tuple is that binder, and its obligations read `∀ n, …`), else `p`
+(fn pj_tuple_name ((pd PreDef) (data (List Expr))) Name
+  (match data
+    ((Cons (FVar _ id) Nil) (pj_bound_name (cx_bound (el_cx (pd_state pd))) id))
+    (_ (n1 (quote p)))))
+(fn pj_bound_name ((bs (List (Pair Name Expr))) (id Int)) Name
+  (measure (struct bs))
+  (match bs
+    (Nil (n1 (quote p)))
+    ((Cons (Pair n (FVar _ j)) r) (if (int_eq id j) n (pj_bound_name r id)))
+    ((Cons _ r) (pj_bound_name r id))))
+;; an alternative's first k binders opened under their own names — the row's variables as the
+;; source wrote them, so an obligation reads `skip_ws cs = cons c rest`
+(fn pj_open_named ((t Tr) (e Expr) (k Int) (acc (List Expr))) (Pair Tr (Pair (List Expr) Expr))
+  (measure k)
+  (if (lt k 1) (Pair t (Pair (rev acc) e))
+    (match e
+      ((Lam _ n _ dom b)
+       (match (tr_local t n dom)
+         ((Pair t1 fv) (match (tr_inst1 t1 b fv) ((Pair t2 b1) (pj_open_named t2 b1 (- k 1) (Cons fv acc)))))))
+      (_ (Pair t (Pair (rev acc) e))))))
 ;; the locals an obligation is stated over: every local in scope at the call but those that
 ;; state the function's own value — the hypothesis `f x = true` of a branch under a self-call
 ;; condition — whose type cites the recursor's local, which a closed statement cannot. The
@@ -605,6 +654,7 @@
           (match (pj_term t cx s (- fuel 1))
             ((TrErr x m) (TrErr x m))
             ((TrOk t1 s1)
+             (if (pj_carries_eq (PjCx.kind cx)) (pj_match_eq t1 cx c ls params s1 dty mbody rows (take nalts rest) (drop nalts rest) fuel)
              (let ((gen (pj_tables_on (PjCx.tables cx) s1)))
                (match (pj_motive t1 gen s1 dty mbody ls)
                  ((Pair _ None) (TrErr (quote define_matrix) "K could not type a matcher's generalized motive"))
@@ -613,9 +663,76 @@
                     ((Pair _ (Left2 x m)) (TrErr x m))
                     ((Pair t3 (Right2 (Pair alts1 _)))
                      (match (tr_apps t3 (mk_const c ls1) (append params (Cons motive1 (Cons s1 (append alts1 (firsts_of gen))))))
-                       ((Pair t4 r) (pj_plain t4 cx r (drop nalts rest) fuel)))))))))))
+                       ((Pair t4 r) (pj_plain t4 cx r (drop nalts rest) fuel))))))))))))
          (_ (TrErr (quote define_matrix) "a matcher's motive is not a lambda"))))
       (_ (TrErr (quote define_matrix) "a matcher without its scrutinee")))))
+;; under a measure a matcher carries its equation (slice 3.21): the motive `λ s' . s = s' →
+;; motive s'`, each alternative's last binder `h : s = pattern`, the application applied to
+;; `Eq.refl s` — Lean's `match h : s with`, by addArg on the matcher K checked. A descent
+;; obligation in an arm is then stated under the fact that the scrutinee is the pattern
+;; (`skip_ws cs = cons c rest`): without it the obligation of a call on a pattern variable is
+;; about an arbitrary value and no proof exists. The equations of the function are stated over
+;; the same shape (PkEqn), so a matcher at a constructor still computes: `alt fields (Eq.refl _)`
+(fn pj_match_eq ((t Tr) (cx PjCx) (c Name) (ls (List Level)) (params (List Expr)) (s1 Expr) (dty Expr) (mbody Expr) (rows (List (List MtPat))) (alts (List Expr)) (extra (List Expr)) (fuel Int)) TrRes
+  (match (tr_infer t dty)
+    ((Pair _ None) (TrErr (quote define_matrix) "K could not type a matcher's scrutinee type"))
+    ((Pair t0 (Some srt))
+     (match (tr_whnf t0 srt)
+       ((Pair t1 (Some (Sort _ u)))
+        (match (tr_local t1 (n1 (quote x)) dty)
+          ((Pair t2 s0)
+           (match (tr_inst1 t2 mbody s0)
+             ((Pair t3 ret0)
+              (match (tr_local t3 (n1 (quote h)) (mk_app_n (mk_const (nm_eq) (list u)) (list dty s1 s0)))
+                ((Pair t4 h0)
+                 (match (tr_pis t4 (list h0) ret0)
+                   ((Pair t5 pi)
+                    (match (tr_infer t5 pi)
+                      ((Pair _ None) (TrErr (quote define_matrix) "K could not type a matcher's motive under its equation"))
+                      ((Pair t6 (Some psrt))
+                       (match (tr_whnf t6 psrt)
+                         ((Pair t7 (Some (Sort _ l)))
+                          (match (tr_lams t7 (list s0) pi)
+                            ((Pair t8 motive1)
+                             (match (pj_alts_eq t8 cx s1 dty u rows alts fuel Nil)
+                               ((Pair _ (Left2 x m)) (TrErr x m))
+                               ((Pair t9 (Right2 (Pair alts1 _)))
+                                (match (tr_apps t9 (mk_const c (Cons l (drop 1 ls)))
+                                         (append params (Cons motive1 (Cons s1 (append alts1 (list (mk_app_n (mk_const (nm_eq_refl) (list u)) (list dty s1))))))))
+                                  ((Pair t10 r) (pj_plain t10 cx r extra fuel))))))))
+                         ((Pair _ _) (TrErr (quote define_matrix) "a matcher's motive under its equation is not a type"))))))))))))))
+       ((Pair _ _) (TrErr (quote define_matrix) "a matcher's scrutinee type is not a type"))))))
+(fn pj_alts_eq ((t Tr) (cx PjCx) (s1 Expr) (dty Expr) (u Level) (rows (List (List MtPat))) (alts (List Expr)) (fuel Int) (acc (List Expr))) (Pair Tr Either2)
+  (measure (struct rows))
+  (match rows
+    (Nil (Pair t (Right2 (Pair (rev acc) dty))))
+    ((Cons row rr)
+     (match alts
+       (Nil (Pair t (Left2 (quote define_matrix) "a matcher with fewer alternatives than rows")))
+       ((Cons alt ar)
+        (match row
+          ((Cons pat Nil)
+           (match (mt_pat_term (Tr.w t) pat dty Nil 256)
+             ((MtPtErr x m) (Pair t (Left2 x m)))
+             ((MtPtOk w1 pterm0 vars0)
+              (match (pj_row_open (tr_set_w t w1) alt vars0 pterm0)
+                ((Pair t1 (Pair vars (Pair body pterm)))
+                 (match (tr_local t1 (n1 (quote h)) (mk_app_n (mk_const (nm_eq) (list u)) (list dty s1 pterm)))
+                   ((Pair t2 h)
+                    (match (pj_term t2 (pj_push cx False (append vars (list h))) body (- fuel 1))
+                      ((TrErr x m) (Pair t2 (Left2 x m)))
+                      ((TrOk t3 b)
+                       (match (tr_lams t3 (append vars (list h)) b)
+                         ((Pair t4 alt1) (pj_alts_eq t4 cx s1 dty u rr ar fuel (Cons alt1 acc)))))))))))))
+          (_ (Pair t (Left2 (quote define_matrix) "a matcher row over several scrutinees")))))))))
+;; a row opened: its variables under the alternative's own binder names with the pattern over
+;; them (an alternative with fewer binders than the row has variables keeps the pattern's own)
+(fn pj_row_open ((t Tr) (alt Expr) (vars (List Expr)) (pterm Expr)) (Pair Tr (Pair (List Expr) (Pair Expr Expr)))
+  (match (pj_open_named t alt (len vars) Nil)
+    ((Pair t1 (Pair nvars body))
+     (if (int_eq (len nvars) (len vars))
+       (match (pj_subst_list t1 pterm vars nvars) ((Pair t2 pterm1) (Pair t2 (Pair nvars (Pair body pterm1)))))
+       (match (pj_inst_lams t alt vars) ((Pair t3 body3) (Pair t3 (Pair vars (Pair body3 pterm)))))))))
 ;; the tables whose type (over the abstract motive) mentions the scrutinee, when it is a local
 (fn pj_tables_on ((tables (List (Pair Expr Expr))) (s Expr)) (List (Pair Expr Expr))
   (measure (struct tables))

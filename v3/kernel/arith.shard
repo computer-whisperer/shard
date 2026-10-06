@@ -1,0 +1,869 @@
+;;; v3/kernel/arith.shard — linear arithmetic over Int and Nat by a Farkas
+;;; certificate (v3/LANGUAGE.md §8.4 slice 3.21; law §7). `arith` closes a goal
+;;; that follows from its rows — the goal negated, the context's linear
+;;; hypotheses, the facts given, and what the atoms bring — under one integer
+;;; per row: the rows so weighted sum to a constant inequality that is false.
+;;; The certificate is the node's (`(farkas K…)`) or the default
+;;; reconstruction's (Fourier–Motzkin elimination in atom order, bounded); P is
+;;; built from Lean.Omega's lemmas either way: each side `t` of a row gets a
+;;; linear combination `l` (closed data) and a proof `t = l.eval v` over the
+;;; atom list `v`, a row is `Constraint.addInequality_sat`/`addEquality_sat`,
+;;; the weighted sum a fold of `combo_sat'`, the contradiction
+;;; `not_sat'_of_isImpossible` after `normalize_sat`. K's conversion does the
+;;; arithmetic on the closed data; every intermediate combination is stated as
+;;; a literal, so one step is one bounded computation.
+;;;
+;;; Untrusted, as the elaborator is: K rechecks the term.
+
+(import "elab.shard")
+(use kernel.k)
+(use kernel.elab)
+(use kernel.expr)
+(use kernel.kw)
+(use kernel.level)
+(use kernel.matcher)
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.util)
+(use kernel.elab.El)
+(use kernel.expr.BinderInfo)
+(use kernel.expr.Expr)
+(use kernel.expr.Literal)
+(use kernel.level.Level)
+(use kernel.name.Name)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+
+;; ---- names and literal terms ------------------------------------------------------------
+(fn ar_om ((a Symbol)) Name (Str (n2 (quote Lean) (quote Omega)) a))
+(fn ar_om2 ((a Symbol) (b Symbol)) Name (Str (ar_om a) b))
+(fn ar_c ((n Name)) Expr (mk_const n Nil))
+(fn ar_i2 ((a Symbol)) Expr (mk_const (n2 (quote Int) a) Nil))
+(fn ar_n2 ((a Symbol)) Expr (mk_const (n2 (quote Nat) a) Nil))
+(fn ar_int () Expr (mk_const (nm_int_ty) Nil))
+(fn ar_nat () Expr (mk_const (nm_nat) Nil))
+(fn ar_one () Level (LSucc LZero))
+(fn ar_xint ((k Int)) Expr
+  (if (lt k 0) (mk_app (ar_c (nm_int_neg_succ)) (mk_lit (LitNat (- (- 0 k) 1))))
+    (mk_app (ar_c (nm_int_of_nat)) (mk_lit (LitNat k)))))
+(fn ar_xlist ((xs (List Expr))) Expr
+  (measure (struct xs))
+  (match xs
+    (Nil (mk_app (mk_const (n2 (quote List) (quote nil)) (list LZero)) (ar_int)))
+    ((Cons x r) (mk_app_n (mk_const (n2 (quote List) (quote cons)) (list LZero)) (list (ar_int) x (ar_xlist r))))))
+(fn ar_xints ((ks (List Int)) (acc (List Expr))) (List Expr)
+  (measure (struct ks))
+  (match ks (Nil (rev acc)) ((Cons k r) (ar_xints r (Cons (ar_xint k) acc)))))
+(fn ar_xopt ((o (Option Int))) Expr
+  (match o
+    (None (mk_app (mk_const (n2 (quote Option) (quote none)) (list LZero)) (ar_int)))
+    ((Some k) (mk_app_n (mk_const (n2 (quote Option) (quote some)) (list LZero)) (list (ar_int) (ar_xint k))))))
+(fn ar_xcon ((lo (Option Int)) (hi (Option Int))) Expr
+  (mk_app_n (ar_c (ar_om2 (quote Constraint) (quote mk))) (list (ar_xopt lo) (ar_xopt hi))))
+(fn ar_bin ((op Symbol) (a Expr) (b Expr)) Expr (mk_app_n (ar_i2 op) (list a b)))
+(fn ar_cast ((n Expr)) Expr (mk_app (ar_c (nm_int_of_nat)) n))
+(fn ar_eq_at ((ty Expr) (a Expr) (b Expr)) Expr (mk_app_n (mk_const (nm_eq) (list (ar_one))) (list ty a b)))
+(fn ar_eq ((a Expr) (b Expr)) Expr (ar_eq_at (ar_int) a b))
+(fn ar_refl ((a Expr)) Expr (mk_app_n (mk_const (nm_eq_refl) (list (ar_one))) (list (ar_int) a)))
+;; p : a = b and q : b = c
+(fn ar_trans ((a Expr) (b Expr) (c Expr) (p Expr) (q Expr)) Expr
+  (mk_app_n (mk_const (n2 (quote Eq) (quote trans)) (list (ar_one))) (list (ar_int) a b c p q)))
+;; p : a = b, the result b = a
+(fn ar_symm ((a Expr) (b Expr) (p Expr)) Expr
+  (mk_app_n (mk_const (n2 (quote Eq) (quote symm)) (list (ar_one))) (list (ar_int) a b p)))
+(fn ar_not ((p Expr)) Expr (mk_app (ar_c (n1 (quote Not))) p))
+(fn ar_iff_mp ((p Expr) (q Expr) (iff Expr) (h Expr)) Expr
+  (mk_app_n (ar_c (n2 (quote Iff) (quote mp))) (list p q iff h)))
+
+;; ---- linear combinations, as Lean.Omega computes them -----------------------------------
+;; a constant and the coefficients by atom index; the operations mirror LinearCombo's and
+;; IntList's (zipWithAll: the longer list's length, a missing entry 0), so the literal stated
+;; for a combination is what K computes
+(type Lin (Lin Int (List Int)))
+(fn lin_const ((l Lin)) Int (match l ((Lin c _) c)))
+(fn lin_coeffs ((l Lin)) (List Int) (match l ((Lin _ ks) ks)))
+(fn lin_zip ((xs (List Int)) (ys (List Int)) (ka Int) (kb Int)) (List Int)
+  (measure (+ (len xs) (len ys)))
+  (match xs
+    (Nil (match ys (Nil Nil) ((Cons y yr) (Cons (* kb y) (lin_zip Nil yr ka kb)))))
+    ((Cons x xr)
+     (match ys
+       (Nil (Cons (* ka x) (lin_zip xr Nil ka kb)))
+       ((Cons y yr) (Cons (+ (* ka x) (* kb y)) (lin_zip xr yr ka kb)))))))
+(fn lin_add ((a Lin) (b Lin)) Lin (Lin (+ (lin_const a) (lin_const b)) (lin_zip (lin_coeffs a) (lin_coeffs b) 1 1)))
+(fn lin_sub ((a Lin) (b Lin)) Lin (Lin (- (lin_const a) (lin_const b)) (lin_zip (lin_coeffs a) (lin_coeffs b) 1 (- 0 1))))
+(fn lin_neg ((a Lin)) Lin (Lin (- 0 (lin_const a)) (lin_zip (lin_coeffs a) Nil (- 0 1) 0)))
+;; LinearCombo.mul l1 l2 = l2.const * l1 + l1.const * l2 - {const := l1.const * l2.const}
+(fn lin_mul ((a Lin) (b Lin)) Lin
+  (Lin (* (lin_const a) (lin_const b)) (lin_zip (lin_coeffs a) (lin_coeffs b) (lin_const b) (lin_const a))))
+(fn lin_coord ((i Int)) Lin (Lin 0 (lin_unit i)))
+(fn lin_unit ((i Int)) (List Int)
+  (measure i)
+  (if (lt i 1) (list 1) (Cons 0 (lin_unit (- i 1)))))
+(fn lin_all_zero ((xs (List Int))) Bool
+  (measure (struct xs))
+  (match xs (Nil True) ((Cons x r) (if (int_eq x 0) (lin_all_zero r) False))))
+;; the same combination: the constants and the coefficients, a missing entry 0
+(fn lin_same ((a Lin) (b Lin)) Bool
+  (bool_and (int_eq (lin_const a) (lin_const b)) (lin_all_zero (lin_zip (lin_coeffs a) (lin_coeffs b) 1 (- 0 1)))))
+(fn ar_xlin ((l Lin)) Expr
+  (mk_app_n (ar_c (ar_om2 (quote LinearCombo) (quote mk))) (list (ar_xint (lin_const l)) (ar_xlist (ar_xints (lin_coeffs l) Nil)))))
+(fn ar_xeval ((l Lin) (v Expr)) Expr
+  (mk_app_n (ar_c (ar_om2 (quote LinearCombo) (quote eval))) (list (ar_xlin l) v)))
+
+;; ---- one spelling (rule 3) ----------------------------------------------------------------
+;; a class method at Int or Nat under Init's instance is its function, throughout the term:
+;; HAdd.hAdd Int Int Int _ a b is Int.add a b, OfNat.ofNat Int 5 _ is Int.ofNat 5, Nat.cast n is
+;; Int.ofNat n, GE.ge a b is the ≤ reversed, Ne a b is Not (a = b). K's conversion proves the two
+;; one where the term is used (the instances unfold; Init's are the only instances until Stage
+;; 3's classes). A term with no class method in it comes back as it is
+(fn ar_canon ((t Expr)) Expr
+  (measure (struct t))
+  (match t
+    ((App _ _ _) (ar_canon_app (ar_canon (get_app_fn t)) (ar_canon_list (get_app_args t) Nil)))
+    ((Lam _ n bi d b) (mk_lam n bi (ar_canon d) (ar_canon b)))
+    ((Pi _ n bi d b) (mk_pi n bi (ar_canon d) (ar_canon b)))
+    ((Let _ n ty v b) (mk_let n (ar_canon ty) (ar_canon v) (ar_canon b)))
+    ((Proj _ sn i x) (mk_proj sn i (ar_canon x)))
+    (_ t)))
+(fn ar_canon_list ((ts (List Expr)) (acc (List Expr))) (List Expr)
+  (measure (struct ts))
+  (match ts (Nil (rev acc)) ((Cons x r) (ar_canon_list r (Cons (ar_canon x) acc)))))
+(fn ar_carrier ((ty Expr)) (Option Symbol)
+  (match ty
+    ((Const _ n _) (if (name_eq n (nm_int_ty)) (Some (quote Int)) (if (name_eq n (nm_nat)) (Some (quote Nat)) None)))
+    (_ None)))
+(fn ar_canon_app ((f Expr) (args (List Expr))) Expr
+  (match f
+    ((Const _ n ls)
+     (match (ar_class_op n)
+       (None (mk_app_n f args))
+       ((Some (Pair op k))
+        (match (if (ar_inst_closed op k args) (ar_canon_op op k ls args) None)
+          ((Some r) r)
+          (None (mk_app_n f args))))))
+    (_ (mk_app_n f args))))
+;; a class method: the function it names and the number of arguments before its operands
+(fn ar_class_op ((n Name)) (Option (Pair Symbol Int))
+  (match n
+    ((Str (Str Anon c) m)
+     (let ((cs (chars_of_sym c)) (ms (chars_of_sym m)))
+       (if (bool_and (int_list_eq cs "HAdd") (int_list_eq ms "hAdd")) (Some (Pair (quote add) 4))
+       (if (bool_and (int_list_eq cs "HSub") (int_list_eq ms "hSub")) (Some (Pair (quote sub) 4))
+       (if (bool_and (int_list_eq cs "HMul") (int_list_eq ms "hMul")) (Some (Pair (quote mul) 4))
+       (if (bool_and (int_list_eq cs "HDiv") (int_list_eq ms "hDiv")) (Some (Pair (quote div) 4))
+       (if (bool_and (int_list_eq cs "HMod") (int_list_eq ms "hMod")) (Some (Pair (quote mod) 4))
+       (if (bool_and (int_list_eq cs "Add") (int_list_eq ms "add")) (Some (Pair (quote add) 2))
+       (if (bool_and (int_list_eq cs "Sub") (int_list_eq ms "sub")) (Some (Pair (quote sub) 2))
+       (if (bool_and (int_list_eq cs "Mul") (int_list_eq ms "mul")) (Some (Pair (quote mul) 2))
+       (if (bool_and (int_list_eq cs "Div") (int_list_eq ms "div")) (Some (Pair (quote div) 2))
+       (if (bool_and (int_list_eq cs "Mod") (int_list_eq ms "mod")) (Some (Pair (quote mod) 2))
+       (if (bool_and (int_list_eq cs "Neg") (int_list_eq ms "neg")) (Some (Pair (quote neg) 2))
+       (if (bool_and (int_list_eq cs "LE") (int_list_eq ms "le")) (Some (Pair (quote le) 2))
+       (if (bool_and (int_list_eq cs "LT") (int_list_eq ms "lt")) (Some (Pair (quote lt) 2))
+       (if (bool_and (int_list_eq cs "GE") (int_list_eq ms "ge")) (Some (Pair (quote ge) 2))
+       (if (bool_and (int_list_eq cs "GT") (int_list_eq ms "gt")) (Some (Pair (quote gt) 2))
+       (if (bool_and (int_list_eq cs "OfNat") (int_list_eq ms "ofNat")) (Some (Pair (quote lit) 1))
+       (if (bool_and (int_list_eq cs "Nat") (int_list_eq ms "cast")) (Some (Pair (quote cast) 2))
+       (if (bool_and (int_list_eq cs "NatCast") (int_list_eq ms "natCast")) (Some (Pair (quote cast) 2))
+         None))))))))))))))))))))
+    ((Str Anon c) (if (int_list_eq (chars_of_sym c) "Ne") (Some (Pair (quote ne) 1)) None))
+    (_ None)))
+;; the instance a class method is applied at is Init's: a closed term — a local instance (a
+;; theorem quantified over an `Add Nat`) is no arithmetic, and the method stays as written
+(fn ar_inst_closed ((op Symbol) (k Int) (args (List Expr))) Bool
+  (if (sym_eq op (quote ne)) True
+    (match (nth args (if (sym_eq op (quote lit)) 2 (- k 1)))
+      ((Some inst) (bool_not (has_fvar inst)))
+      (None False))))
+;; `ls`: the method's own universe levels (Ne.{u} α a b is Not (Eq.{u} α a b), at any sort)
+(fn ar_canon_op ((op Symbol) (k Int) (ls (List Level)) (args (List Expr))) (Option Expr)
+  (match args
+    (Nil None)
+    ((Cons ty _)
+     (if (sym_eq op (quote ne))
+       (match args
+         ((Cons t1 (Cons a (Cons b Nil))) (Some (ar_not (mk_app_n (mk_const (nm_eq) ls) (list t1 a b)))))
+         (_ None))
+       (match (ar_carrier ty)
+         (None None)
+         ((Some car)
+          (match (drop k args)
+            ((Cons a (Cons b Nil))
+             (if (sym_eq op (quote lit)) (if (is_lit a) (Some (if (sym_eq car (quote Int)) (ar_cast a) a)) None)
+             (if (sym_eq op (quote add)) (Some (ar_car2 car (quote add) a b))
+             (if (sym_eq op (quote sub)) (Some (ar_car2 car (quote sub) a b))
+             (if (sym_eq op (quote mul)) (Some (ar_car2 car (quote mul) a b))
+             (if (sym_eq op (quote div)) (Some (ar_car2 car (if (sym_eq car (quote Int)) (quote ediv) (quote div)) a b))
+             (if (sym_eq op (quote mod)) (Some (ar_car2 car (if (sym_eq car (quote Int)) (quote emod) (quote mod)) a b))
+             (if (sym_eq op (quote le)) (Some (ar_car2 car (quote le) a b))
+             (if (sym_eq op (quote lt)) (Some (ar_car2 car (quote lt) a b))
+             (if (sym_eq op (quote ge)) (Some (ar_car2 car (quote le) b a))
+             (if (sym_eq op (quote gt)) (Some (ar_car2 car (quote lt) b a))
+               None)))))))))))
+            ((Cons a Nil)
+             (if (bool_and (sym_eq op (quote neg)) (sym_eq car (quote Int))) (Some (mk_app (ar_i2 (quote neg)) a))
+             (if (bool_and (sym_eq op (quote cast)) (sym_eq car (quote Int))) (Some (ar_cast a))
+               None)))
+            (_ None))))))))
+(fn ar_car2 ((car Symbol) (op Symbol) (a Expr) (b Expr)) Expr (mk_app_n (mk_const (n2 car op) Nil) (list a b)))
+
+;; ---- the shape of a term (rule 2) ----------------------------------------------------------
+;; the value of a closed numeral term: a literal, or +, -, * and unary - of such
+(fn ar_num ((t Expr)) (Option Int)
+  (measure (struct t))
+  (match (get_app_fn t)
+    ((Const _ n _)
+     (match (get_app_args t)
+       ((Cons (Lit _ (LitNat k)) Nil)
+        (if (name_eq n (nm_int_of_nat)) (Some k)
+        (if (name_eq n (nm_int_neg_succ)) (Some (- (- 0 k) 1)) None)))
+       ((Cons a Nil)
+        (if (name_eq n (n2 (quote Int) (quote neg)))
+          (match (ar_num a) ((Some x) (Some (- 0 x))) (None None))
+          None))
+       ((Cons a (Cons b Nil))
+        (if (name_eq n (n2 (quote Int) (quote add))) (ar_num2 (quote add) (ar_num a) (ar_num b))
+        (if (name_eq n (n2 (quote Int) (quote sub))) (ar_num2 (quote sub) (ar_num a) (ar_num b))
+        (if (name_eq n (n2 (quote Int) (quote mul))) (ar_num2 (quote mul) (ar_num a) (ar_num b))
+          None))))
+       (_ None)))
+    (_ None)))
+(fn ar_num2 ((op Symbol) (x (Option Int)) (y (Option Int))) (Option Int)
+  (match x
+    (None None)
+    ((Some a)
+     (match y
+       (None None)
+       ((Some b) (Some (if (sym_eq op (quote add)) (+ a b) (if (sym_eq op (quote sub)) (- a b) (* a b)))))))))
+(fn ar_pos_num ((t Expr)) Bool (match (ar_num t) ((Some k) (lt 0 k)) (None False)))
+(type ArShape
+  (AsNum Int) (AsAdd Expr Expr) (AsSub Expr Expr) (AsNeg Expr) (AsMulL Expr Expr) (AsMulR Expr Expr)
+  (AsCast Expr) (AsMod Expr Expr) (AsDiv Expr Expr) (AsAtom))
+(fn ar_shape ((t Expr)) ArShape
+  (match (ar_num t)
+    ((Some c) (AsNum c))
+    (None
+     (match (get_app_fn t)
+       ((Const _ n _)
+        (match (get_app_args t)
+          ((Cons a (Cons b Nil))
+           (if (name_eq n (n2 (quote Int) (quote add))) (AsAdd a b)
+           (if (name_eq n (n2 (quote Int) (quote sub))) (AsSub a b)
+           (if (name_eq n (n2 (quote Int) (quote mul)))
+             (match (ar_num a) ((Some _) (AsMulL a b)) (None (match (ar_num b) ((Some _) (AsMulR a b)) (None (AsAtom)))))
+           (if (name_eq n (n2 (quote Int) (quote emod))) (if (ar_pos_num b) (AsMod a b) (AsAtom))
+           (if (name_eq n (n2 (quote Int) (quote ediv))) (if (ar_pos_num b) (AsDiv a b) (AsAtom))
+             (AsAtom)))))))
+          ((Cons a Nil)
+           (if (name_eq n (n2 (quote Int) (quote neg))) (AsNeg a)
+           (if (name_eq n (nm_int_of_nat)) (AsCast a)
+             (AsAtom))))
+          (_ (AsAtom))))
+       (_ (AsAtom))))))
+;; a Nat term under the cast: a sum (Nat.succ x is x + 1: K converts the two), a product with
+;; a literal side, or an atom
+(type ArCast (AcAdd Expr Expr) (AcMul Expr Expr) (AcAtom))
+(fn ar_cast_shape ((n Expr)) ArCast
+  (match (get_app_fn n)
+    ((Const _ f _)
+     (match (get_app_args n)
+       ((Cons a Nil) (if (name_eq f (n2 (quote Nat) (quote succ))) (AcAdd a (mk_lit (LitNat 1))) (AcAtom)))
+       ((Cons a (Cons b Nil))
+        (if (name_eq f (n2 (quote Nat) (quote add))) (AcAdd a b)
+        (if (bool_and (name_eq f (n2 (quote Nat) (quote mul))) (bool_or (is_lit a) (is_lit b))) (AcMul a b)
+          (AcAtom))))
+       (_ (AcAtom))))
+    (_ (AcAtom))))
+;; x % k as x - k * (x / k) (Int.emod_def)
+(fn ar_mod_form ((x Expr) (k Expr)) Expr (ar_bin (quote sub) x (ar_bin (quote mul) k (ar_bin (quote ediv) x k))))
+
+;; ---- atoms ---------------------------------------------------------------------------------
+;; the atoms in order of first occurrence, each with its kind: plain, nat (a Nat atom under the
+;; cast: it brings 0 ≤ ↑a) or div (x / k, k a positive literal: it brings the two bounds)
+(fn ar_atom_index ((t Expr) (atoms (List (Pair Expr Symbol))) (i Int)) (Option Int)
+  (measure (struct atoms))
+  (match atoms
+    (Nil None)
+    ((Cons (Pair a _) r) (if (expr_eq a t) (Some i) (ar_atom_index t r (+ i 1))))))
+(fn ar_atom_add ((t Expr) (kind Symbol) (atoms (List (Pair Expr Symbol)))) (List (Pair Expr Symbol))
+  (match (ar_atom_index t atoms 0)
+    ((Some _) atoms)
+    (None (append atoms (list (Pair t kind))))))
+(fn ar_collect ((t Expr) (atoms (List (Pair Expr Symbol))) (fuel Int)) (List (Pair Expr Symbol))
+  (measure fuel)
+  (if (lt fuel 1) atoms
+    (match (ar_shape t)
+      ((AsNum _) atoms)
+      ((AsAdd a b) (ar_collect b (ar_collect a atoms (- fuel 1)) (- fuel 1)))
+      ((AsSub a b) (ar_collect b (ar_collect a atoms (- fuel 1)) (- fuel 1)))
+      ((AsNeg a) (ar_collect a atoms (- fuel 1)))
+      ((AsMulL a b) (ar_collect b atoms (- fuel 1)))
+      ((AsMulR a b) (ar_collect a atoms (- fuel 1)))
+      ((AsCast n)
+       (match (ar_cast_shape n)
+         ((AcAdd x y) (ar_collect (ar_cast y) (ar_collect (ar_cast x) atoms (- fuel 1)) (- fuel 1)))
+         ((AcMul x y) (ar_collect (ar_cast y) (ar_collect (ar_cast x) atoms (- fuel 1)) (- fuel 1)))
+         ((AcAtom) (ar_atom_add t (quote nat) atoms))))
+      ((AsMod x k) (ar_collect (ar_mod_form x k) atoms (- fuel 1)))
+      ((AsDiv x k) (ar_collect x (ar_atom_add t (quote div) atoms) (- fuel 1)))
+      ((AsAtom) (ar_atom_add t (quote plain) atoms)))))
+(fn ar_atom_terms ((atoms (List (Pair Expr Symbol))) (acc (List Expr))) (List Expr)
+  (measure (struct atoms))
+  (match atoms (Nil (rev acc)) ((Cons (Pair a _) r) (ar_atom_terms r (Cons a acc)))))
+
+;; ---- t = l.eval v (rule 5) ------------------------------------------------------------------
+(type ArLin (ArLinOk Lin Expr) (ArLinErr Symbol (List Int)))
+;; Lean.Omega.Int.NM {a b c d} (h₁ : a = b) (h₂ : c = d) : a op c = b op d
+(fn ar_congr2 ((nm Symbol) (a Expr) (ea Expr) (b Expr) (eb Expr) (pa Expr) (pb Expr)) Expr
+  (mk_app_n (ar_c (ar_om2 (quote Int) nm)) (list a ea b eb pa pb)))
+(fn ar_eval2 ((nm Symbol) (la Lin) (lb Lin) (v Expr)) Expr
+  (mk_app_n (ar_c (ar_om2 (quote LinearCombo) nm)) (list (ar_xlin la) (ar_xlin lb) v)))
+;; y ∈ [] at Int, and the proof that every coefficient of an empty list is zero
+(fn ar_mem_nil ((y Expr)) Expr
+  (mk_app_n (mk_const (n2 (quote Membership) (quote mem)) (list LZero LZero))
+    (list (ar_int)
+          (mk_app (mk_const (n1 (quote List)) (list LZero)) (ar_int))
+          (mk_app (mk_const (n2 (quote List) (quote instMembership)) (list LZero)) (ar_int))
+          (mk_app (mk_const (n2 (quote List) (quote nil)) (list LZero)) (ar_int))
+          y)))
+(fn ar_zero_proof () Expr
+  (mk_lam (n1 (quote y)) BDefault (ar_int)
+    (mk_lam (n1 (quote h)) BDefault (ar_mem_nil (mk_bvar 0))
+      (mk_app_n (mk_const (n1 (quote absurd)) (list LZero))
+        (list (ar_mem_nil (mk_bvar 1)) (ar_eq (mk_bvar 1) (ar_xint 0)) (mk_bvar 0)
+              (mk_app_n (mk_const (n2 (quote List) (quote not_mem_nil)) (list LZero)) (list (ar_int) (mk_bvar 1))))))))
+(fn ar_has ((env CheckedEnv) (n Name)) Bool (match (env_find env n) ((Some _) True) (None False)))
+(fn ar_lin ((env CheckedEnv) (atoms (List (Pair Expr Symbol))) (v Expr) (t Expr) (fuel Int)) ArLin
+  (measure fuel)
+  (if (lt fuel 1) (ArLinErr (quote arith_depth) "the term is deeper than 4000 nodes")
+    (match (ar_shape t)
+      ((AsNum c) (ArLinOk (Lin c Nil) (ar_refl t)))
+      ((AsAdd a b) (ar_lin_bin env atoms v t a b (quote add) (- fuel 1)))
+      ((AsSub a b) (ar_lin_bin env atoms v t a b (quote sub) (- fuel 1)))
+      ((AsMulL a b) (ar_lin_bin env atoms v t a b (quote mul_left) (- fuel 1)))
+      ((AsMulR a b) (ar_lin_bin env atoms v t a b (quote mul_right) (- fuel 1)))
+      ((AsNeg a)
+       (match (ar_lin env atoms v a (- fuel 1))
+         ((ArLinErr x m) (ArLinErr x m))
+         ((ArLinOk la pa)
+          (let ((l (lin_neg la)) (ea (ar_xeval la v)))
+            (let ((el (ar_xeval l v)) (mid (mk_app (ar_i2 (quote neg)) ea)))
+              (ArLinOk l
+                (ar_trans t mid el
+                  (mk_app_n (mk_const (n1 (quote congrArg)) (list (ar_one) (ar_one))) (list (ar_int) (ar_int) a ea (ar_i2 (quote neg)) pa))
+                  (ar_symm el mid (mk_app_n (ar_c (ar_om2 (quote LinearCombo) (quote neg_eval))) (list (ar_xlin la) v))))))))))
+      ((AsCast n)
+       (match (ar_cast_shape n)
+         ((AcAdd x y) (ar_lin_via env atoms v t (ar_bin (quote add) (ar_cast x) (ar_cast y)) (mk_app_n (ar_i2 (quote natCast_add)) (list x y)) (- fuel 1)))
+         ((AcMul x y) (ar_lin_via env atoms v t (ar_bin (quote mul) (ar_cast x) (ar_cast y)) (mk_app_n (ar_i2 (quote natCast_mul)) (list x y)) (- fuel 1)))
+         ((AcAtom) (ar_lin_atom atoms v t))))
+      ((AsMod x k) (ar_lin_via env atoms v t (ar_mod_form x k) (mk_app_n (ar_i2 (quote emod_def)) (list x k)) (- fuel 1)))
+      ((AsDiv _ _) (ar_lin_atom atoms v t))
+      ((AsAtom) (ar_lin_atom atoms v t)))))
+;; an atom: (coordinate i).eval v = v.get i, K converting v.get i to the atom
+(fn ar_lin_atom ((atoms (List (Pair Expr Symbol))) (v Expr) (t Expr)) ArLin
+  (match (ar_atom_index t atoms 0)
+    (None (ArLinErr (quote arith_internal) "an atom is missing from the table"))
+    ((Some i)
+     (let ((l (lin_coord i)))
+       (ArLinOk l
+         (ar_symm (ar_xeval l v) t
+           (mk_app_n (ar_c (ar_om2 (quote LinearCombo) (quote coordinate_eval))) (list (mk_lit (LitNat i)) v))))))))
+;; t = inner by the lemma `step`, inner = l.eval v by its own structure
+(fn ar_lin_via ((env CheckedEnv) (atoms (List (Pair Expr Symbol))) (v Expr) (t Expr) (inner Expr) (step Expr) (fuel Int)) ArLin
+  (match (ar_lin env atoms v inner fuel)
+    ((ArLinErr x m) (ArLinErr x m))
+    ((ArLinOk l p) (ArLinOk l (ar_trans t inner (ar_xeval l v) step p)))))
+(fn ar_lin_bin ((env CheckedEnv) (atoms (List (Pair Expr Symbol))) (v Expr) (t Expr) (a Expr) (b Expr) (op Symbol) (fuel Int)) ArLin
+  (match (ar_lin env atoms v a fuel)
+    ((ArLinErr x m) (ArLinErr x m))
+    ((ArLinOk la pa)
+     (match (ar_lin env atoms v b fuel)
+       ((ArLinErr x m) (ArLinErr x m))
+       ((ArLinOk lb pb)
+        (let ((ea (ar_xeval la v)) (eb (ar_xeval lb v)))
+          (if (sym_eq op (quote add))
+            (let ((l (lin_add la lb)) (mid (ar_bin (quote add) ea eb)))
+              (ArLinOk l (ar_trans t mid (ar_xeval l v) (ar_congr2 (quote add_congr) a ea b eb pa pb)
+                           (ar_symm (ar_xeval l v) mid (ar_eval2 (quote add_eval) la lb v)))))
+          (if (sym_eq op (quote sub))
+            (let ((l (lin_sub la lb)) (mid (ar_bin (quote sub) ea eb)))
+              (ArLinOk l (ar_trans t mid (ar_xeval l v) (ar_congr2 (quote sub_congr) a ea b eb pa pb)
+                           (ar_symm (ar_xeval l v) mid (ar_eval2 (quote sub_eval) la lb v)))))
+            (let ((lemma (if (sym_eq op (quote mul_left)) (quote mul_eval_of_const_left) (quote mul_eval_of_const_right))))
+              (if (bool_not (bool_and (ar_has env (ar_om2 (quote LinearCombo) lemma)) (ar_has env (n2 (quote List) (quote not_mem_nil)))))
+                (ArLinErr (quote arith_unreached) "a product with a literal needs Lean.Omega.LinearCombo.mul_eval_of_const_right, past the Init prefix in scope: import Init through it (line 271,501 of the export), or through Int.lt_mul_ediv_self_add for the quotient as well")
+                (let ((l (lin_mul la lb)) (mid (ar_bin (quote mul) ea eb)))
+                  (ArLinOk l (ar_trans t mid (ar_xeval l v) (ar_congr2 (quote mul_congr) a ea b eb pa pb)
+                               (ar_symm (ar_xeval l v) mid
+                                 (mk_app_n (ar_c (ar_om2 (quote LinearCombo) lemma)) (list (ar_xlin la) (ar_xlin lb) v (ar_zero_proof)))))))))))))))))
+
+;; ---- rows (rules 1, 2, 4) ---------------------------------------------------------------------
+;; a statement read as a comparison: its relation (le, lt, eq), its carrier (Int, Nat), whether
+;; it is negated, its sides
+(type ARel (ARel Symbol Symbol Bool Expr Expr) (ARFalse) (ARNone))
+(fn ar_rel ((t Expr)) ARel
+  (match (get_app_fn t)
+    ((Const _ n _)
+     (match (get_app_args t)
+       (Nil (if (name_eq n (n1 (quote False))) (ARFalse) (ARNone)))
+       ((Cons p Nil)
+        (if (name_eq n (n1 (quote Not)))
+          (match (ar_rel p) ((ARel op car False a b) (ARel op car True a b)) (_ (ARNone)))
+          (ARNone)))
+       ((Cons a (Cons b Nil))
+        (if (name_eq n (n2 (quote Int) (quote le))) (ARel (quote le) (quote Int) False a b)
+        (if (name_eq n (n2 (quote Int) (quote lt))) (ARel (quote lt) (quote Int) False a b)
+        (if (name_eq n (n2 (quote Nat) (quote le))) (ARel (quote le) (quote Nat) False a b)
+        (if (name_eq n (n2 (quote Nat) (quote lt))) (ARel (quote lt) (quote Nat) False a b)
+          (ARNone))))))
+       ((Cons ty (Cons a (Cons b Nil)))
+        (if (name_eq n (nm_eq))
+          (match (ar_carrier ty) ((Some car) (ARel (quote eq) car False a b)) (None (ARNone)))
+          (ARNone)))
+       (_ (ARNone))))
+    (_ (ARNone))))
+;; the statement of a comparison, in the one spelling
+(fn ar_rel_term ((op Symbol) (car Symbol) (a Expr) (b Expr)) Expr
+  (if (sym_eq op (quote eq)) (ar_eq_at (if (sym_eq car (quote Int)) (ar_int) (ar_nat)) a b)
+    (ar_car2 car op a b)))
+;; a row before its normal form: an equation or an inequality at Int, the sides, the proof
+(type ArRaw (ArRaw Bool Expr Expr Expr))
+(fn ar_le_raw ((a Expr) (b Expr) (h Expr)) ArRaw (ArRaw False a b h))
+;; h : a < b at Int is a + 1 ≤ b
+(fn ar_lt_raw ((a Expr) (b Expr) (h Expr)) ArRaw
+  (ArRaw False (ar_bin (quote add) a (ar_xint 1)) b (mk_app_n (ar_i2 (quote add_one_le_of_lt)) (list a b h))))
+(fn ar_raw_of ((r ARel) (h Expr)) (Option ArRaw)
+  (match r
+    ((ARel op car neg a b)
+     (if (sym_eq car (quote Int))
+       (if (sym_eq op (quote eq)) (if neg None (Some (ArRaw True a b h)))
+       (if (sym_eq op (quote le))
+         (if neg (Some (ar_lt_raw b a (mk_app_n (ar_i2 (quote lt_of_not_ge)) (list a b h))))
+           (Some (ar_le_raw a b h)))
+         (if neg (Some (ar_le_raw b a (ar_iff_mp (ar_not (ar_bin (quote lt) a b)) (ar_bin (quote le) b a) (mk_app_n (ar_i2 (quote not_lt)) (list a b)) h)))
+           (Some (ar_lt_raw a b h)))))
+       ;; Nat: the comparison cast into Int
+       (if (sym_eq op (quote eq))
+         (if neg None
+           (Some (ArRaw True (ar_cast a) (ar_cast b)
+                   (mk_app_n (mk_const (n1 (quote congrArg)) (list (ar_one) (ar_one))) (list (ar_nat) (ar_int) a b (ar_c (nm_int_of_nat)) h)))))
+       (if (sym_eq op (quote le))
+         (if neg (Some (ar_nat_lt b a (ar_iff_mp (ar_not (ar_car2 (quote Nat) (quote le) a b)) (ar_car2 (quote Nat) (quote lt) b a) (mk_app_n (ar_n2 (quote not_le)) (list a b)) h)))
+           (Some (ar_nat_le a b h)))
+         (if neg (Some (ar_nat_le b a (ar_iff_mp (ar_not (ar_car2 (quote Nat) (quote lt) a b)) (ar_car2 (quote Nat) (quote le) b a) (mk_app_n (ar_n2 (quote not_lt)) (list a b)) h)))
+           (Some (ar_nat_lt a b h)))))))
+    (_ None)))
+(fn ar_nat_le ((a Expr) (b Expr) (h Expr)) ArRaw
+  (ar_le_raw (ar_cast a) (ar_cast b) (mk_app_n (ar_c (ar_om2 (quote Int) (quote ofNat_le_of_le))) (list a b h))))
+(fn ar_nat_lt ((a Expr) (b Expr) (h Expr)) ArRaw
+  (ar_lt_raw (ar_cast a) (ar_cast b) (mk_app_n (ar_c (ar_om2 (quote Int) (quote ofNat_lt_of_lt))) (list a b h))))
+;; the rows of the hypotheses: a context hypothesis that is no comparison is skipped, a fact
+;; that is none is the refusal
+(type ArRaws (ArRawsOk (List ArRaw)) (ArRawsErr Symbol (List Int)))
+(fn ar_hyp_rows ((hs (List (Pair Expr Expr))) (strict Bool) (acc (List ArRaw))) ArRaws
+  (measure (struct hs))
+  (match hs
+    (Nil (ArRawsOk (rev acc)))
+    ((Cons (Pair h ty) r)
+     (match (ar_raw_of (ar_rel (ar_canon ty)) h)
+       ((Some raw) (ar_hyp_rows r strict (Cons raw acc)))
+       (None
+        (if strict (ArRawsErr (quote arith_fact) "a fact's statement is not a linear comparison over Int or Nat (≤, <, = and the negations of ≤ and <; a ≠ is no row)")
+          (ar_hyp_rows r strict acc)))))))
+(fn ar_collect_raws ((raws (List ArRaw)) (atoms (List (Pair Expr Symbol)))) (List (Pair Expr Symbol))
+  (measure (struct raws))
+  (match raws
+    (Nil atoms)
+    ((Cons (ArRaw _ a b _) r) (ar_collect_raws r (ar_collect b (ar_collect a atoms 4000) 4000)))))
+;; decide's proof of a closed comparison: of_decide_eq_true p inst (Eq.refl true)
+(fn ar_decided ((p Expr) (inst Expr)) Expr
+  (mk_app_n (ar_c (n1 (quote of_decide_eq_true)))
+    (list p inst (mk_app_n (mk_const (nm_eq_refl) (list (ar_one))) (list (ar_c (n1 (quote Bool))) (ar_c (n2 (quote Bool) (quote true))))))))
+;; the rows the atoms bring (rule 4), in atom order
+(fn ar_auto_rows ((atoms (List (Pair Expr Symbol))) (acc (List ArRaw))) (List ArRaw)
+  (measure (struct atoms))
+  (match atoms
+    (Nil (rev acc))
+    ((Cons (Pair a kind) r)
+     (if (sym_eq kind (quote nat))
+       (match (get_app_args a)
+         ((Cons n Nil) (ar_auto_rows r (Cons (ar_le_raw (ar_xint 0) a (mk_app (ar_i2 (quote natCast_nonneg)) n)) acc)))
+         (_ (ar_auto_rows r acc)))
+     (if (sym_eq kind (quote div))
+       (match (get_app_args a)
+         ((Cons x (Cons k Nil))
+          (let ((kq (ar_bin (quote mul) k a)) (zero (ar_xint 0)))
+            (let ((ne (ar_not (ar_eq k zero))) (pos (ar_bin (quote lt) zero k)))
+              (ar_auto_rows r
+                (Cons (ar_lt_raw x (ar_bin (quote add) kq k)
+                        (mk_app_n (ar_i2 (quote lt_mul_ediv_self_add)) (list x k (ar_decided pos (mk_app_n (ar_i2 (quote decLt)) (list zero k))))))
+                (Cons (ar_le_raw kq x
+                        (mk_app_n (ar_i2 (quote mul_ediv_self_le))
+                          (list x k (ar_decided ne (mk_app_n (ar_c (n1 (quote instDecidableNot))) (list (ar_eq k zero) (mk_app_n (ar_i2 (quote decEq)) (list k zero))))))))
+                      acc))))))
+         (_ (ar_auto_rows r acc)))
+       (ar_auto_rows r acc))))))
+(fn ar_has_div ((atoms (List (Pair Expr Symbol)))) Bool
+  (measure (struct atoms))
+  (match atoms (Nil False) ((Cons (Pair _ kind) r) (if (sym_eq kind (quote div)) True (ar_has_div r)))))
+
+;; a row in normal form: an equation or an inequality, its combination, and the proof that its
+;; constraint holds of its coefficients at v
+(type ArRow (ArRow Bool Lin Expr))
+(type ArRows (ArRowsOk (List ArRow)) (ArRowsErr Symbol (List Int)))
+(fn ar_rows ((env CheckedEnv) (atoms (List (Pair Expr Symbol))) (v Expr) (raws (List ArRaw)) (acc (List ArRow))) ArRows
+  (measure (struct raws))
+  (match raws
+    (Nil (ArRowsOk (rev acc)))
+    ((Cons (ArRaw iseq a b h) r)
+     (let ((d (if iseq (ar_bin (quote sub) a b) (ar_bin (quote sub) b a))))
+       (match (ar_lin env atoms v d 4000)
+         ((ArLinErr x m) (ArRowsErr x m))
+         ((ArLinOk l p)
+          (let ((el (ar_xeval l v)) (zero (ar_xint 0)) (c (ar_xint (lin_const l))) (xs (ar_xlist (ar_xints (lin_coeffs l) Nil))))
+            (if iseq
+              ;; h : a = b; a - b = 0; l.eval v = 0
+              (let ((w (ar_trans el d zero (ar_symm d el p) (mk_app_n (ar_i2 (quote sub_eq_zero_of_eq)) (list a b h)))))
+                (ar_rows env atoms v r
+                  (Cons (ArRow True l (mk_app_n (ar_c (ar_om2 (quote Constraint) (quote addEquality_sat))) (list c xs v w))) acc)))
+              ;; h : a ≤ b; 0 ≤ b - a; 0 ≤ l.eval v
+              (let ((w (mk_app_n (mk_const (n2 (quote Eq) (quote mp)) (list LZero))
+                         (list (ar_bin (quote le) zero d) (ar_bin (quote le) zero el)
+                               (mk_app_n (mk_const (n1 (quote congrArg)) (list (ar_one) (ar_one)))
+                                 (list (ar_int) (mk_sort LZero) d el
+                                       (mk_lam (n1 (quote z)) BDefault (ar_int) (ar_bin (quote le) zero (mk_bvar 0)))
+                                       p))
+                               (mk_app_n (ar_i2 (quote sub_nonneg_of_le)) (list b a h))))))
+                (ar_rows env atoms v r
+                  (Cons (ArRow False l (mk_app_n (ar_c (ar_om2 (quote Constraint) (quote addInequality_sat))) (list c xs v w))) acc)))))))))))
+(fn ar_row_eq ((r ArRow)) Bool (match r ((ArRow q _ _) q)))
+(fn ar_row_lin ((r ArRow)) Lin (match r ((ArRow _ l _) l)))
+(fn ar_row_proof ((r ArRow)) Expr (match r ((ArRow _ _ p) p)))
+
+;; ---- the certificate (rule 1) ------------------------------------------------------------------
+;; the weighted sum of the rows: its constant, its coefficients, whether an inequality has a
+;; positive weight, and whether every weight has a sign its row admits
+(type ArSum (ArSum Int (List Int) Bool Bool Int))
+(fn ar_sum ((rows (List ArRow)) (ks (List Int)) (acc ArSum)) ArSum
+  (measure (struct rows))
+  (match rows
+    (Nil acc)
+    ((Cons row r)
+     (match ks
+       (Nil acc)
+       ((Cons k kr)
+        (match acc
+          ((ArSum c xs ineq ok active)
+           (if (int_eq k 0) (ar_sum r kr acc)
+             (ar_sum r kr
+               (ArSum (+ c (* k (lin_const (ar_row_lin row)))) (lin_zip xs (lin_coeffs (ar_row_lin row)) 1 k)
+                      (bool_or ineq (bool_not (ar_row_eq row)))
+                      (bool_and ok (bool_or (ar_row_eq row) (lt 0 k)))
+                      (+ active 1)))))))))))
+;; whether the weights refute the rows: every coefficient cancels and the constant is false —
+;; negative, or nonzero where every weighted row is an equation
+(fn ar_refutes ((s ArSum)) Bool
+  (match s
+    ((ArSum c xs ineq ok active)
+     (bool_and ok (bool_and (lt 0 active) (bool_and (lin_all_zero xs) (if ineq (lt c 0) (bool_not (int_eq c 0)))))))))
+
+;; ---- the default reconstruction: Fourier–Motzkin elimination ------------------------------
+;; a derived row: an equation or an inequality 0 ≤ c + xs·v, and its weights over the rows given
+(type FmRow (FmRow Bool Int (List Int) (List Int)))
+(type FmOut (FmFound (List Int)) (FmNone) (FmBudget))
+(fn ar_abs ((x Int)) Int (if (lt x 0) (- 0 x) x))
+(fn ar_gcd ((a Int) (b Int)) Int
+  (measure (ar_abs b))
+  (if (int_eq b 0) (ar_abs a) (ar_gcd b (mod (ar_abs a) (ar_abs b)))))
+(fn ar_gcd_list ((xs (List Int)) (g Int)) Int
+  (measure (struct xs))
+  (match xs (Nil g) ((Cons x r) (if (int_eq g 1) 1 (ar_gcd_list r (ar_gcd g x))))))
+(fn ar_div_list ((xs (List Int)) (g Int) (acc (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs (Nil (rev acc)) ((Cons x r) (ar_div_list r g (Cons (ediv x g) acc)))))
+(fn ar_nth0 ((xs (List Int)) (i Int)) Int (match (nth xs i) ((Some x) x) (None 0)))
+;; a·r + b·s, reduced by the gcd of everything in it
+(fn fm_comb ((a Int) (r FmRow) (b Int) (s FmRow)) FmRow
+  (match r
+    ((FmRow rq rc rxs rms)
+     (match s
+       ((FmRow sq sc sxs sms)
+        (let ((c (+ (* a rc) (* b sc))) (xs (lin_zip rxs sxs a b)) (ms (lin_zip rms sms a b)))
+          (let ((g (ar_gcd_list ms (ar_gcd_list xs (ar_abs c)))))
+            (if (lt g 2) (FmRow (bool_and rq sq) c xs ms)
+              (FmRow (bool_and rq sq) (ediv c g) (ar_div_list xs g Nil) (ar_div_list ms g Nil))))))))))
+(fn fm_init ((rows (List ArRow)) (i Int) (acc (List FmRow))) (List FmRow)
+  (measure (struct rows))
+  (match rows
+    (Nil (rev acc))
+    ((Cons row r) (fm_init r (+ i 1) (Cons (FmRow (ar_row_eq row) (lin_const (ar_row_lin row)) (lin_coeffs (ar_row_lin row)) (lin_unit i)) acc)))))
+(fn fm_first_nz ((xs (List Int)) (i Int)) (Option Int)
+  (measure (struct xs))
+  (match xs (Nil None) ((Cons x r) (if (int_eq x 0) (fm_first_nz r (+ i 1)) (Some i)))))
+;; a row that is a false constant: its weights
+(fn fm_contra ((rows (List FmRow))) (Option (List Int))
+  (measure (struct rows))
+  (match rows
+    (Nil None)
+    ((Cons (FmRow q c xs ms) r)
+     (if (bool_and (lin_all_zero xs) (if q (bool_not (int_eq c 0)) (lt c 0))) (Some ms) (fm_contra r)))))
+;; the first equation with a coefficient: it, the atom, the rows before and after
+(fn fm_pick_eq ((rows (List FmRow)) (before (List FmRow))) (Option (Pair FmRow (Pair Int (List FmRow))))
+  (measure (struct rows))
+  (match rows
+    (Nil None)
+    ((Cons (FmRow q c xs ms) r)
+     (if q
+       (match (fm_first_nz xs 0)
+         ((Some j) (Some (Pair (FmRow q c xs ms) (Pair j (append (rev before) r)))))
+         (None (fm_pick_eq r (Cons (FmRow q c xs ms) before))))
+       (fm_pick_eq r (Cons (FmRow q c xs ms) before))))))
+(fn fm_coeff ((r FmRow) (j Int)) Int (match r ((FmRow _ _ xs _) (ar_nth0 xs j))))
+;; the equation e solved for atom j and substituted into every row
+(fn fm_subst ((e FmRow) (j Int) (rows (List FmRow)) (acc (List FmRow))) (List FmRow)
+  (measure (struct rows))
+  (match rows
+    (Nil (rev acc))
+    ((Cons r rest)
+     (let ((rj (fm_coeff r j)) (ej (fm_coeff e j)))
+       (if (int_eq rj 0) (fm_subst e j rest (Cons r acc))
+         (fm_subst e j rest (Cons (fm_comb (ar_abs ej) r (if (lt 0 ej) (- 0 rj) rj) e) acc)))))))
+(fn fm_eqs ((rows (List FmRow)) (fuel Int)) (List FmRow)
+  (measure fuel)
+  (if (lt fuel 1) rows
+    (match (fm_pick_eq rows Nil)
+      (None rows)
+      ((Some (Pair e (Pair j others))) (fm_eqs (fm_subst e j others Nil) (- fuel 1))))))
+;; the inequalities, an equation dropped (those left have no coefficient)
+(fn fm_ineqs_of ((rows (List FmRow)) (acc (List FmRow))) (List FmRow)
+  (measure (struct rows))
+  (match rows
+    (Nil (rev acc))
+    ((Cons (FmRow q c xs ms) r) (if q (fm_ineqs_of r acc) (fm_ineqs_of r (Cons (FmRow q c xs ms) acc))))))
+;; the rows by the sign of atom j's coefficient
+(type FmParts (FmParts (List FmRow) (List FmRow) (List FmRow)))
+(fn fm_split ((rows (List FmRow)) (j Int) (pos (List FmRow)) (neg (List FmRow)) (zero (List FmRow))) FmParts
+  (measure (struct rows))
+  (match rows
+    (Nil (FmParts (rev pos) (rev neg) (rev zero)))
+    ((Cons r rest)
+     (let ((rj (fm_coeff r j)))
+       (if (int_eq rj 0) (fm_split rest j pos neg (Cons r zero))
+       (if (lt 0 rj) (fm_split rest j (Cons r pos) neg zero)
+         (fm_split rest j pos (Cons r neg) zero)))))))
+(fn fm_trivial ((r FmRow)) Bool (match r ((FmRow _ c xs _) (bool_and (lin_all_zero xs) (bool_not (lt c 0))))))
+(fn fm_cross1 ((p FmRow) (j Int) (negs (List FmRow)) (acc (List FmRow))) (List FmRow)
+  (measure (struct negs))
+  (match negs
+    (Nil acc)
+    ((Cons n r)
+     (let ((x (fm_comb (- 0 (fm_coeff n j)) p (fm_coeff p j) n)))
+       (fm_cross1 p j r (if (fm_trivial x) acc (Cons x acc)))))))
+(fn fm_cross ((poss (List FmRow)) (j Int) (negs (List FmRow)) (acc (List FmRow))) (List FmRow)
+  (measure (struct poss))
+  (match poss
+    (Nil acc)
+    ((Cons p r) (fm_cross r j negs (fm_cross1 p j negs acc)))))
+(fn fm_elim ((rows (List FmRow)) (j Int) (natoms Int)) FmOut
+  (measure (- natoms j))
+  (match (fm_contra rows)
+    ((Some ms) (FmFound ms))
+    (None
+     (if (bool_not (lt j natoms)) (FmNone)
+       (match (fm_split rows j Nil Nil Nil)
+         ((FmParts pos neg zero)
+          (let ((next (append zero (rev (fm_cross pos j neg Nil)))))
+            (if (lt 512 (len next)) (FmBudget) (fm_elim next (+ j 1) natoms)))))))))
+(fn fm_find ((rows (List ArRow)) (natoms Int)) FmOut
+  (let ((solved (fm_eqs (fm_init rows 0 Nil) 256)))
+    (match (fm_contra solved)
+      ((Some ms) (FmFound ms))
+      (None (fm_elim (fm_ineqs_of solved Nil) 0 natoms)))))
+
+;; ---- P: the weighted sum and the contradiction (rule 5) ----------------------------------
+;; Constraint.scale and Constraint.add on literal bounds, for a weight that is not zero
+(fn ar_omul ((k Int) (o (Option Int))) (Option Int) (match o (None None) ((Some x) (Some (* k x)))))
+(fn ar_oadd ((a (Option Int)) (b (Option Int))) (Option Int)
+  (match a (None None) ((Some x) (match b (None None) ((Some y) (Some (+ x y)))))))
+(fn ar_scale_lo ((k Int) (lo (Option Int)) (hi (Option Int))) (Option Int) (if (lt 0 k) (ar_omul k lo) (ar_omul k hi)))
+(fn ar_scale_hi ((k Int) (lo (Option Int)) (hi (Option Int))) (Option Int) (if (lt 0 k) (ar_omul k hi) (ar_omul k lo)))
+;; the constraint a row states of its coefficients: -c ≤ xs·v, and ≤ -c for an equation
+(fn ar_row_lo ((r ArRow)) (Option Int) (Some (- 0 (lin_const (ar_row_lin r)))))
+(fn ar_row_hi ((r ArRow)) (Option Int) (if (ar_row_eq r) (Some (- 0 (lin_const (ar_row_lin r)))) None))
+;; the sum so far: its bounds, its coefficients, the proof that the bounds hold of them at v
+(type ArAcc (ArAcc (Option Int) (Option Int) (List Int) Expr))
+(fn ar_acc_of ((r ArRow)) ArAcc (ArAcc (ar_row_lo r) (ar_row_hi r) (lin_coeffs (ar_row_lin r)) (ar_row_proof r)))
+;; combo_sat' s t a x b y v wx wy : (Constraint.combo a s b t).sat' (Coeffs.combo a x b y) v
+(fn ar_combo ((v Expr) (a Int) (s ArAcc) (b Int) (t ArAcc)) ArAcc
+  (match s
+    ((ArAcc slo shi sxs sw)
+     (match t
+       ((ArAcc tlo thi txs tw)
+        (ArAcc (ar_oadd (ar_scale_lo a slo shi) (ar_scale_lo b tlo thi))
+               (ar_oadd (ar_scale_hi a slo shi) (ar_scale_hi b tlo thi))
+               (lin_zip sxs txs a b)
+               (mk_app_n (ar_c (ar_om (sym_of_chars "combo_sat'")))
+                 (list (ar_xcon slo shi) (ar_xcon tlo thi) (ar_xint a) (ar_xlist (ar_xints sxs Nil)) (ar_xint b) (ar_xlist (ar_xints txs Nil)) v sw tw))))))))
+;; the rows with a weight, in order
+(fn ar_active ((rows (List ArRow)) (ks (List Int)) (acc (List (Pair Int ArRow)))) (List (Pair Int ArRow))
+  (measure (struct rows))
+  (match rows
+    (Nil (rev acc))
+    ((Cons row r)
+     (match ks
+       (Nil (rev acc))
+       ((Cons k kr) (ar_active r kr (if (int_eq k 0) acc (Cons (Pair k row) acc))))))))
+(fn ar_fold ((v Expr) (acc ArAcc) (rest (List (Pair Int ArRow)))) ArAcc
+  (measure (struct rest))
+  (match rest
+    (Nil acc)
+    ((Cons (Pair k row) r) (ar_fold v (ar_combo v 1 acc k (ar_acc_of row)) r))))
+;; False from the rows under the weights (the weights refute them: ar_refutes)
+(fn ar_false ((v Expr) (rows (List ArRow)) (ks (List Int))) (Option Expr)
+  (match (ar_active rows ks Nil)
+    (Nil None)
+    ((Cons (Pair k1 r1) Nil) (Some (ar_contra v (ar_acc_of r1))))
+    ((Cons (Pair k1 r1) (Cons (Pair k2 r2) rest))
+     (Some (ar_contra v (ar_fold v (ar_combo v k1 (ar_acc_of r1) k2 (ar_acc_of r2)) rest))))))
+;; not_sat'_of_isImpossible (c := normalizeConstraint s x) (Eq.refl true) (normalize_sat w)
+(fn ar_contra ((v Expr) (acc ArAcc)) Expr
+  (match acc
+    ((ArAcc lo hi xs w)
+     (let ((s (ar_xcon lo hi)) (x (ar_xlist (ar_xints xs Nil))))
+       (mk_app_n (ar_c (ar_om2 (quote Constraint) (sym_of_chars "not_sat'_of_isImpossible")))
+         (list (mk_app_n (ar_c (ar_om (quote normalizeConstraint))) (list s x))
+               (mk_app_n (mk_const (nm_eq_refl) (list (ar_one))) (list (ar_c (n1 (quote Bool))) (ar_c (n2 (quote Bool) (quote true)))))
+               (mk_app_n (ar_c (ar_om (quote normalizeCoeffs))) (list s x))
+               v
+               (mk_app_n (ar_c (ar_om (quote normalize_sat))) (list s x v w))))))))
+
+;; ---- the entry -------------------------------------------------------------------------------
+;; the proof of the target, or the refusal with the atoms and the rows in normal form (the
+;; caller renders them: the goal's printer is the block runner's)
+(type ARes (AROk El Expr) (ARErr Symbol (List Int) (List Expr) (List (Pair Bool Lin))))
+(fn ar_err ((x Symbol) (m (List Int))) ARes (ARErr x m Nil Nil))
+(fn ar_show_rows ((rows (List ArRow)) (acc (List (Pair Bool Lin)))) (List (Pair Bool Lin))
+  (measure (struct rows))
+  (match rows (Nil (rev acc)) ((Cons r rest) (ar_show_rows rest (Cons (Pair (ar_row_eq r) (ar_row_lin r)) acc)))))
+;; the first constant of the kit the environment lacks
+(fn ar_kit_missing ((env CheckedEnv) (ns (List Name))) (Option Name)
+  (measure (struct ns))
+  (match ns (Nil None) ((Cons n r) (if (ar_has env n) (ar_kit_missing env r) (Some n)))))
+(fn ar_kit () (List Name)
+  (list (ar_om2 (quote LinearCombo) (quote coordinate_eval)) (ar_om2 (quote LinearCombo) (quote add_eval))
+        (ar_om2 (quote LinearCombo) (quote sub_eval)) (ar_om2 (quote LinearCombo) (quote neg_eval))
+        (ar_om2 (quote Int) (quote add_congr)) (ar_om2 (quote Int) (quote sub_congr))
+        (ar_om2 (quote Constraint) (quote addInequality_sat)) (ar_om2 (quote Constraint) (quote addEquality_sat))
+        (ar_om (sym_of_chars "combo_sat'")) (ar_om (quote normalize_sat))
+        (ar_om2 (quote Constraint) (sym_of_chars "not_sat'_of_isImpossible"))
+        (n2 (quote Int) (quote sub_nonneg_of_le)) (n2 (quote Int) (quote sub_eq_zero_of_eq))
+        (n2 (quote Int) (quote add_one_le_of_lt)) (n2 (quote Int) (quote lt_of_not_ge))
+        (n2 (quote Int) (quote not_lt)) (n2 (quote Int) (quote not_le)) (n2 (quote Int) (quote le_antisymm))
+        (n2 (quote Int) (quote natCast_add)) (n2 (quote Int) (quote natCast_mul)) (n2 (quote Int) (quote natCast_nonneg))
+        (ar_om2 (quote Int) (quote ofNat_le_of_le)) (ar_om2 (quote Int) (quote ofNat_lt_of_lt))
+        (n2 (quote Nat) (quote not_lt)) (n2 (quote Nat) (quote not_le)) (n2 (quote Nat) (quote le_antisymm))
+        (n2 (quote Eq) (quote mp)) (n1 (quote congrArg)) (n2 (quote Iff) (quote mp))))
+(fn ar_div_kit () (List Name)
+  (list (n2 (quote Int) (quote emod_def)) (n2 (quote Int) (quote mul_ediv_self_le)) (n2 (quote Int) (quote lt_mul_ediv_self_add))
+        (n1 (quote of_decide_eq_true)) (n1 (quote instDecidableNot))))
+;; False from the rows: `row0` the goal's negation when it has one, then the hypotheses' rows,
+;; then what the atoms bring; under the certificate given, or the elimination's
+(fn ar_refute ((e El) (row0 (Option ArRaw)) (raws (List ArRaw)) (cert (Option (List Int)))) ARes
+  (let ((given (match row0 ((Some r0) (Cons r0 raws)) (None raws))))
+    (let ((atoms (ar_collect_raws given Nil)))
+      (match (ar_kit_missing (el_env e) (if (ar_has_div atoms) (append (ar_kit) (ar_div_kit)) (ar_kit)))
+        ((Some n) (ar_err (quote arith_unreached) (append (show_name n) " is past the Init prefix in scope: arith builds its proof from Lean.Omega's lemmas — import Init through Lean.Omega.Int.ofNat_lt_of_lt (line 91,131 of the export), or through Int.lt_mul_ediv_self_add (line 274,616) where a row has a product or a quotient")))
+        (None
+         (let ((v (ar_xlist (ar_atom_terms atoms Nil))))
+           (match (ar_rows (el_env e) atoms v (append given (ar_auto_rows atoms Nil)) Nil)
+             ((ArRowsErr x m) (ar_err x m))
+             ((ArRowsOk rows)
+              (match cert
+                ((Some ks)
+                 (if (lt (len rows) (len ks))
+                   (ARErr (quote arith_certificate) (append "the certificate has " (append (show_nat (len ks)) (append " weights and the goal has " (append (show_nat (len rows)) " rows")))) (ar_atom_terms atoms Nil) (ar_show_rows rows Nil))
+                   (if (ar_refutes (ar_sum rows ks (ArSum 0 Nil False True 0)))
+                     (match (ar_false v rows ks) ((Some f) (AROk e f)) (None (ar_err (quote arith_internal) "no weighted row")))
+                     (ARErr (quote arith_certificate) "the weights do not refute the rows: the coefficients must cancel and the constant be negative, no inequality's weight negative (a zero leaves its row out)" (ar_atom_terms atoms Nil) (ar_show_rows rows Nil)))))
+                (None
+                 (match (fm_find rows (len atoms))
+                   ((FmFound ks)
+                    (if (ar_refutes (ar_sum rows ks (ArSum 0 Nil False True 0)))
+                      (match (ar_false v rows ks) ((Some f) (AROk e f)) (None (ar_err (quote arith_internal) "no weighted row")))
+                      (ar_err (quote arith_internal) "the elimination's weights do not refute the rows")))
+                   ((FmBudget) (ARErr (quote arith_budget) "the elimination passed 512 derived rows: give the certificate — (arith … (farkas K…)), a weight per row in the order shown" (ar_atom_terms atoms Nil) (ar_show_rows rows Nil)))
+                   ((FmNone) (ARErr (quote arith_failed) "no weighting of the rows refutes them (linear arithmetic over the rationals with integer-tight strictness: no cut, no case split, a ≠ hypothesis is no row) — a fact is missing, or the goal is not linear in these atoms" (ar_atom_terms atoms Nil) (ar_show_rows rows Nil))))))))))))))
+;; a comparison that is not an equation, by the refutation of its negation
+(fn ar_prove_cmp ((e El) (op Symbol) (car Symbol) (a Expr) (b Expr) (raws (List ArRaw)) (cert (Option (List Int)))) ARes
+  (let ((neg_op (if (sym_eq op (quote le)) (quote lt) (quote le))))
+    (let ((negp (ar_car2 car neg_op b a)))
+      (match (el_local e (n1 (quote h)) negp BDefault)
+        ((Pair e1 hn)
+         (match (ar_raw_of (ARel neg_op car False b a) hn)
+           (None (ar_err (quote arith_internal) "the negated goal is no row"))
+           ((Some r0)
+            (match (ar_refute e1 (Some r0) raws cert)
+              ((ARErr x m as rs) (ARErr x m as rs))
+              ((AROk e2 f)
+               (match (el_lams e2 (list hn) f)
+                 ((Pair e3 lam)
+                  ;; ¬ b < a ↔ a ≤ b (not_lt at b a), ¬ b ≤ a ↔ a < b (not_le at b a)
+                  (AROk e3
+                    (ar_iff_mp (ar_not negp) (ar_car2 car op a b)
+                      (mk_app_n (mk_const (n2 car (if (sym_eq op (quote le)) (quote not_lt) (quote not_le))) Nil) (list b a))
+                      lam)))))))))))))
+(fn ar_cert ((certs (List (List Int))) (i Int)) (Option (List Int)) (nth certs i))
+(fn ar_prove ((e El) (target0 Expr) (ctxh (List (Pair Expr Expr))) (facts (List (Pair Expr Expr))) (certs (List (List Int)))) ARes
+  (match (ar_hyp_rows ctxh False Nil)
+    ((ArRawsErr x m) (ar_err x m))
+    ((ArRawsOk craws)
+     (match (ar_hyp_rows facts True Nil)
+       ((ArRawsErr x m) (ar_err x m))
+       ((ArRawsOk fraws)
+        (let ((raws (append craws fraws)))
+          (match (ar_rel (ar_canon target0))
+            ((ARFalse) (ar_refute e None raws (ar_cert certs 0)))
+            ((ARNone) (ar_err (quote arith_goal) "the target is not a linear comparison over Int or Nat (≤, <, =, a negation of one, or False)"))
+            ((ARel op car True a b)
+             ;; ¬ P: P's row and the refutation
+             (let ((p (ar_rel_term op car a b)))
+               (match (el_local e (n1 (quote h)) p BDefault)
+                 ((Pair e1 hp)
+                  (match (ar_raw_of (ARel op car False a b) hp)
+                    (None (ar_err (quote arith_internal) "the goal's statement is no row"))
+                    ((Some r0)
+                     (match (ar_refute e1 (Some r0) raws (ar_cert certs 0))
+                       ((ARErr x m as rs) (ARErr x m as rs))
+                       ((AROk e2 f) (match (el_lams e2 (list hp) f) ((Pair e3 lam) (AROk e3 lam)))))))))))
+            ((ARel op car False a b)
+             (if (sym_eq op (quote eq))
+               (ar_prove_eq e car a b raws certs)
+               (ar_prove_cmp e op car a b raws (ar_cert certs 0)))))))))))
+;; an equation: the two sides' evaluations where they have one normal form, else ≤ both ways
+(fn ar_prove_eq ((e El) (car Symbol) (a Expr) (b Expr) (raws (List ArRaw)) (certs (List (List Int)))) ARes
+  (let ((ai (if (sym_eq car (quote Int)) a (ar_cast a))) (bi (if (sym_eq car (quote Int)) b (ar_cast b))))
+    (let ((atoms (ar_collect bi (ar_collect ai Nil 4000) 4000)))
+      (let ((v (ar_xlist (ar_atom_terms atoms Nil))))
+        (match (ar_lin (el_env e) atoms v ai 4000)
+          ((ArLinErr x m) (ar_err x m))
+          ((ArLinOk la pa)
+           (match (ar_lin (el_env e) atoms v bi 4000)
+             ((ArLinErr x m) (ar_err x m))
+             ((ArLinOk lb pb)
+              (if (lin_same la lb)
+                (match (ar_kit_missing (el_env e) (ar_kit))
+                  ((Some n) (ar_err (quote arith_unreached) (append (show_name n) " is past the Init prefix in scope: import Init through Lean.Omega.Int.ofNat_lt_of_lt (line 91,131 of the export)")))
+                  (None
+                   ;; ai = la.eval v, bi = lb.eval v, and K converts the two evaluations
+                   (let ((p (ar_trans ai (ar_xeval la v) bi pa (ar_symm bi (ar_xeval la v) pb))))
+                     (AROk e (if (sym_eq car (quote Int)) p (mk_app_n (mk_const (Str (n2 (quote Int) (quote ofNat)) (quote inj)) Nil) (list a b p)))))))
+                (match (ar_prove_cmp e (quote le) car a b raws (ar_cert certs 0))
+                  ((ARErr x m as rs) (ARErr x m as rs))
+                  ((AROk e1 p1)
+                   (match (ar_prove_cmp e1 (quote le) car b a raws (ar_cert certs 1))
+                     ((ARErr x m as rs) (ARErr x m as rs))
+                     ((AROk e2 p2) (AROk e2 (mk_app_n (mk_const (n2 car (quote le_antisymm)) Nil) (list a b p1 p2))))))))))))))))

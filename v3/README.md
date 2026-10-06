@@ -803,7 +803,7 @@ Not built, and stated in the law: the checked decoder from bytes to a
 text is its literals); rows for `Char` and the wider `UInt`s;
 `String`'s own operations; symbols. The import the libraries need
 reaches line 263,515 of the export (40 s a load on the bootstrap), so
-the test prefix has a second chunk.
+the test prefix has a second chunk (to line 274,616 since slice 3.21).
 
 Local gates: 156 loader pins (10 new: `row_types`, `row_e_first`, `row_e_match`, `struct_proj`, `str_e_first`, `str_no_string`, `str_bad_utf8`, `wire_s`, `wire_bad`, `wire_bad_result`; `ev_string` rewritten), `rows_test` (10 values under `ev`), `wire_test` (15 checks against the host), `calc_main_test` (byte-identical to the model world over 21 inputs), `define_test` (9 checks: the two libraries added), calc's differential byte-identical over 21 inputs, parity byte-identical over 28 closures and 111,681 declarations, route 2, K's clients, the full suite's 32 entrypoints with 0 failed. `v3/build.sh` built these sources into a scratch binary that byte-ties the interpreter on the 3,000-line fixture. The full replay and the corpus are CI's.
 
@@ -930,7 +930,8 @@ claims by hand; a sequential API at the opener. What landed:
   shared with the loader's shadowed them under the bootstrap's flat
   resolution (every name checked against the closure).
 - **Found by a second reader over the diff, each reproduced and
-  fixed** (their pins come with slice 3.21's): `(cases X H …)` on a local dropped `X` from the arm's
+  fixed** (pinned at slice 3.21 but for the last: `by_cases_local_eq`,
+  `by_induction_eq`, `by_rw_occ_spine`, the calc proofs): `(cases X H …)` on a local dropped `X` from the arm's
   context while `H` named it; `unfold` of a plain `def` was refused
   (one delta step by hand now); `(occ K)` counted spine prefixes;
   `reduce` at a closed occurrence whose condition nothing decides ran
@@ -946,6 +947,72 @@ own theorems stay on `exact` until route 1's chain is V3's own.
 Local gates: 194 loader pins (18 new), `tactic_test` (48 checks), `define_test` (12 checks), `derive_test` (14 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
 
 Slice 3.20 is closed: **pipeline 542 green on `7238cd3`** — engine 41 s; corpus 1,460 s at the baseline; v3 8,138 s: 34 entrypoints with 0 failed, `tactic_test` 48 checks, `define_test` 12 checks, `derive_test` 14 checks, `wire_test` 15 checks, calc's host program byte-identical to the model world, parity byte-identical over 28 closures and 114,377 declarations in 476 s, route 1's native build of the kernel (`OK: v3/bin/t0`), the fixture byte-tie identical, replay 2,514 s at 32.2 GB peak, T0 accepted 57,977 with 0 rejected, closures identical to the oracle, all 20 accelerator candidates pinned. The v3 job is 1,202 s longer than pipeline 540's, 1,157 s of it in the test suite (4,998 s against 3,841 s): the `.shard` entrypoints take 685 s more (the loader pins among them, 18 new, each now streaming the second fixture), `tactic_test` is new at 238 s, calc's two tests take 184 s more (`calc_spec.shard` imports through `WellFounded.fix_eq`), parity 23 s more. The job's limit is 3 h (10,800 s).
+
+**Slice 3.21 landed (2026-10-06) — `arith` and `simp_only`; calc's 100 claims**
+(`LANGUAGE.md` §8.4's design and as-built, §13 item 54; law §7). The
+second of the three slices ruled on 2026-10-05. What landed:
+
+- **`(arith FACT… (farkas K…)?)`** (`kernel/arith.shard`): linear
+  arithmetic over `Int` and `Nat` by a Farkas certificate. The rows are
+  the goal negated, the context's linear hypotheses, the facts given
+  (terms) and what the atoms bring (`0 ≤ ↑a` for a `Nat` atom; the two
+  bounds of `x / k` for a positive literal `k`, `x % k` as `x - k * (x
+  / k)`); the certificate is one integer per row under which the rows
+  sum to a false constant. The node carries it, or names the default
+  reconstruction — Fourier–Motzkin elimination over the rows, bounded
+  — and both go through one builder: P from `Lean.Omega`'s lemmas
+  (`t = l.eval v` on the term's structure, a fold of `combo_sat'`,
+  `not_sat'_of_isImpossible`), K's conversion doing the arithmetic on
+  closed data. No cut, no case split: those are a producer's (3.22).
+- **`(simp_only RULE…)`**: the first rule in list order with a match is
+  applied as `rw` applies it, to a fixpoint under a budget of 256; a
+  rule's premises are discharged by assumption. Nothing implicit.
+- **One spelling.** Init's lemmas speak `HAdd.hAdd Int Int Int _ a b`
+  and `LT.lt`; the source writes `Int.add a b` and `Int.lt`. Every new
+  goal's statement and every lemma's equation enter in the source's
+  spelling, so a rewrite, an assumption and `arith`'s atoms match
+  across the two; K's conversion is the proof that they are one.
+- **A matcher under a measure carries its equation** (`define.shard`):
+  the descent obligation of a call in a row of `(match (skip_ws cs)
+  …)` is stated under `skip_ws cs = cons c rest`. Before, it
+  quantified the pattern's variables freely — `parse_tail`'s two
+  obligations were false as stated and the function could not leave
+  `PENDING measure`. Its equations are stated over the same shape.
+- **Calc's 100 claims are theorems**, file for file
+  (`kernel/test/tactic_test.sh`, 110 checks over five loads), with the
+  capstone `run_eq_spec : run cs = spec_run cs`; `parse_tail`, `show`
+  and `show_nat` have their descents discharged, so no claim stands on
+  a parameter. 45 steps are `arith`, 18 `simp_only`; twelve lemmas the
+  old proofs inlined or took from `std` are stated beside them.
+- **Found on the way, fixed:** `reduce` took a matcher at a
+  constructor whose row is an open `if` for no progress (the
+  alternatives are masked while K picks one) and unfolded `a < b` to
+  `Nat.le (Nat.succ a) b` (a proposition is no computation); a type
+  and its constructor under one name were `ambiguous_name` in a
+  theorem's binder; the pending record gave the count of sorried goals
+  and not the goals.
+- **Found by a second reader over the diff, each reproduced and
+  fixed:** `simp_only` under a rule whose right side holds its left
+  doubled the target at every step and did not end (`simp_self` now);
+  `Ne` was rewritten at universe 1 whatever its own (K refused a
+  statement over `Ne Nat Int`); a descent obligation printed every
+  pattern variable as `x` and its fact as the relation's instance —
+  it is `∀ xs x r, xs = cons x r → len3 r < len3 xs` now, under the
+  source's names, a comparison `arith` reads; a generated binder's
+  name printed as a bare number; a class method at a local instance
+  was rewritten as Init's.
+- **Found on the way, left:** Init's names are visible as far as any
+  loaded module imported, so an open (`(use Init.Bool)`) can turn
+  ambiguous when another file imports further; a measured function of
+  several binders has its obligations stated over the arguments'
+  tuple; `reduce_stuck` on an already normal target ties a proof to how
+  far the step before went.
+
+Not built, named in the design's rule 8: an `only` restriction of
+`arith`'s context rows, cuts and case splits, `Nat` subtraction,
+`simp_only` at a hypothesis; the producers and the store (3.22).
+
+Local gates: 212 loader pins (18 new), `tactic_test` (110 checks: calc's 100 claims by name, the four descents discharged), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,127 declarations, route 2, K's clients, the full suite's 34 entrypoints (the last full run had 33 pass and parity refuse one missing open in `define.shard`; parity and K's clients were rerun green after it). `v3/test.sh` runs the entrypoints eight at a time now (they are independent processes; the output is printed in the list's order): the suite's wall clock is its longest entrypoint's, the loader pins' (1,161 s here). None of the files route 1 compiles changed; the full replay and the corpus are CI's.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
@@ -1060,6 +1127,6 @@ v3/CANON.md       the canonical form of S — layout, the term tier over E, the 
 v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K; phase 2: prog, the reader tower, ev, realize
 v3/meta/          phase 3: the elaborators, I, the goal graph, tactics
 v3/std/           phase 3: the first library under the naming law
-v3/examples/      the ported examples: calc/ (slice 6: the program half in S; 44 claims as blocks at slice 3.20, the rest at 3.21); derive/ (slice 3.19: derived equality, ordering and rendering in use)
+v3/examples/      the ported examples: calc/ (slice 6: the program half in S; its 100 claims theorems since slices 3.20 and 3.21); derive/ (slice 3.19: derived equality, ordering and rendering in use)
 v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers), pins/loader/ (slices 3–7: package roots, main.shard's `;; expect:` and `;; roots:` headers; the ev_* cases are the classifier's, entry*/same_spelled/realize_theorem slice 7's)
 ```

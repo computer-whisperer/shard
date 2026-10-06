@@ -60,6 +60,15 @@ Notes recorded at drafting:
   rendering. Init's `String.decEq` (line 1,218,988 of the export) is
   not imported.
 
+- **As built at slice 3.21 (2026-10-06; `LANGUAGE.md` §8.4):** `arith`
+  reads `Int` and `Nat` comparisons in Init's spelling and the source's
+  as one (`LE.le Int _ a b` is `Int.le a b`), casts a `Nat` row into
+  `Int` under `Int.ofNat`, and takes `Int.ediv`/`Int.emod` by a positive
+  literal as linear; its proofs are over `Lean.Omega.LinearCombo` and
+  `Lean.Omega.Constraint` (the export through line 91,131; line 274,616
+  with a product or a quotient). A function under a measure states its
+  descent obligations under each enclosing match's equation; `show`
+  and `show_nat` take the measure `(Int.natAbs n)`, discharged.
 - **As built at slice 3.20 (2026-10-06; `LANGUAGE.md` §8.4):** a
   `theorem`'s proof may be `(by STEP…)` — I's opener, `kernel/tactic.shard`
   — and a measured `fn` has its equations by `WellFounded.fix_eq`

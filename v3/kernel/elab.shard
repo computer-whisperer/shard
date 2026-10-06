@@ -348,7 +348,10 @@
     ((RAmbiguous a b)
      (match (expected_ctor e n expected)
        ((Some k) (elab_const_at e n k (match (const_arity (el_cx e) k) ((Some ar) ar) (None 0)) ls has_univ))
-       (None (EErr (quote ambiguous_name) (append (show_name n) (append ": " (append (show_name a) (append " and " (show_name b)))))))))
+       (None
+        (match (if (expects_sort e expected) (type_of_pair e a b) None)
+          ((Some k) (elab_const_at e n k (match (const_arity (el_cx e) k) ((Some ar) ar) (None 0)) ls has_univ))
+          (None (EErr (quote ambiguous_name) (append (show_name n) (append ": " (append (show_name a) (append " and " (show_name b)))))))))))
     ((RPend k) (EErr (quote pending_obligation) (append (show_name k) " was read with sorry: it admits nothing, and citing it is the obligation")))
     ((RName k arity) (elab_const_at e n k arity ls has_univ))))
 ;; an ambiguous bare name at an expected inductive type: its constructor of that name (rule 5)
@@ -361,6 +364,32 @@
         (match (get_app_fn xw)
           ((Const _ ind _) (match (env_find (el_env e1) ind) ((Some (InductInfo _ _ _ _ _ _ _ _ _)) (resolve_ctor (el_cx e1) n ind)) (_ None)))
           (_ None)))))))
+;; a type and its own constructor under one name (`(type CalcState (CalcState …))`): where a
+;; type is expected the name is the type's — a binder's type, an argument at a sort (slice 3.21;
+;; a `fn`'s signature read types already, a `theorem`'s binder was ambiguous_name)
+(fn type_of_pair ((e El) (a Name) (b Name)) (Option Name)
+  (if (ctor_of_type e b a) (Some a) (if (ctor_of_type e a b) (Some b) None)))
+(fn ctor_of_type ((e El) (c Name) (t Name)) Bool
+  (match (env_find (el_env e) c)
+    ((Some (CtorInfo _ ind _ _ _ _)) (name_eq ind t))
+    (_ False)))
+(fn expects_sort ((e El) (expected (Option Expr))) Bool
+  (match expected
+    (None False)
+    ((Some x) (match (el_whnf e x) ((Pair _ (Sort _ _)) True) (_ False)))))
+;; the head of a type expression read as a type: `CalcState`, `(Step CalcState Action)`
+(fn type_position ((e El) (s SExpr)) SExpr
+  (match s
+    ((SSym x) (SSym (type_sym e x)))
+    ((SList (Cons (SSym x) args)) (SList (Cons (SSym (type_sym e x)) args)))
+    (_ s)))
+(fn type_sym ((e El) (x Symbol)) Symbol
+  (match (name_of_sym x)
+    (None x)
+    ((Some n)
+     (match (resolve (el_cx e) n)
+       ((RAmbiguous a b) (match (type_of_pair e a b) ((Some k) (sym_of_chars (show_name k))) (None x)))
+       (_ x)))))
 (fn elab_const_at ((e El) (n Name) (k Name) (arity Int) (ls (List SExpr)) (has_univ Bool)) ERes
      (if has_univ
        (match (elab_levels e ls)
@@ -538,7 +567,7 @@
 ;; a term in a type position: its type must be a Sort; a metavariable left in
 ;; it is a refusal here (K's locals carry their types as written)
 (fn elab_type ((e El) (s SExpr)) ERes
-  (match (elab e s None)
+  (match (elab e (type_position e s) None)
     ((EErr r m) (EErr r m))
     ((EOk e1 t tty)
      (match (el_finish e1 t)

@@ -78,7 +78,25 @@ the graph's), `by_cases_rows`, `by_cases_fields` (`induction_fields`), `by_rw_no
 (syntactic matching: `a + b` finds no `b + a`), `by_rw_occ` (`(occ K)` past the count),
 `by_unfold_stuck`, `by_decide_failed`, `by_show_mismatch`, `by_reduce` (`reduce_stuck`: an
 unfolding equation is not a computation rule). The consumer is `kernel/test/tactic_test.sh`
-over calc's five files.
+over calc's files.
+
+Slice 3.21's cases (`arith` and `simp_only`, `LANGUAGE.md` §8.4): `arith_core` (`Int` and
+`Nat` rows, a certificate given and one reconstructed, an equation by one normal form and by
+`≤` both ways, a goal `¬ P` and `False`, a fact as a term, Init's spelling), `arith_div` (a
+product with a literal, the quotient and the remainder by one: the second fixture to its
+end), and the refusals `arith_failed` (the rows shown in normal form), `arith_certificate`,
+`arith_goal`, `arith_fact`, `arith_unreached` (the product's lemma past the prefix);
+`simp_core` (list order, premises by assumption, a hypothesis and its reverse as rules),
+`simp_no_progress`, `simp_budget`. What 3.20's second reader found, pinned: 
+`by_cases_local_eq`, `by_induction_eq` (`induction_eq`), `by_rw_occ_spine`. What calc's
+claims needed: `by_case_step` (a matcher at a constructor whose row is an open `if`; a
+comparison left as it is by `reduce`), `define_match_eq` (a measured function's matcher
+carries its equation: the descent obligation under `tail2 xs = cons x r`, discharged, and a
+ground run by `reduce`), `type_ctor_theorem` (a type and its constructor of one name in a
+theorem's binder). `by_sorry`'s record carries the sorried goals. What the slice's own second
+reader found: `simp_self` (a rule whose right side holds its left never reaches a fixpoint),
+`by_ne_level` (`Ne` at a universe other than 1), and `define_match_eq`'s second function (a
+descent obligation as the comparison at `Nat` under the source's names).
 
 `v3/kernel/test/loader_pins_test.shard` replays every case in its list;
 `loader_test.shard` holds the cases a header cannot state (two root
@@ -231,4 +249,5 @@ two with a result the extern does not return; run by
 `ev_string`, `row_types` and `struct_proj` under `ev` and compares
 the values. The cases stay on the first chunk of the prefix; the
 libraries' tests add `fixtures/init_prefix_str_tail.ndjson` (the
-export's lines 100,852 to 263,515, through `UInt8.toNat`).
+export's lines 100,852 to 274,616: through `UInt8.toNat`, line 263,515, for the libraries,
+and on through `Int.lt_mul_ediv_self_add` for `arith`'s product and quotient).

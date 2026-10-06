@@ -105,13 +105,13 @@
 ;;   sugars:       make with refine S^ inline chain measure
 ;;   V3 (v3/LANGUAGE.md §4–§5): inductive structure def abbrev opaque
 ;;                 theorem realize derive trusts; exact; fun forall -> Sort proj;
-;;                 I's forms (slice 3.20): by intro rfl have show apply cases induction wf decide unfold reduce rw occ
+;;                 I's forms (slices 3.20, 3.21): by intro rfl have show apply cases induction wf decide unfold reduce rw occ simp_only arith farkas
 ;; -----------------------------------------------------------------
 
 ((list
    .
    (symbol) @keyword)
-  (#match? @keyword "^(type|fn|extern|sig|record|match|let|if|quote|import|use|use-module|bin|lib|app|cli|returns|make|with|refine|S\\^|inline|chain|measure|inductive|structure|def|abbrev|opaque|theorem|realize|derive|trusts|exact|fun|forall|->|Sort|proj|intro|rfl|have|show|apply|cases|induction|wf|decide|unfold|reduce|rw|occ)$"))
+  (#match? @keyword "^(type|fn|extern|sig|record|match|let|if|quote|import|use|use-module|bin|lib|app|cli|returns|make|with|refine|S\\^|inline|chain|measure|inductive|structure|def|abbrev|opaque|theorem|realize|derive|trusts|exact|fun|forall|->|Sort|proj|intro|rfl|have|show|apply|cases|induction|wf|decide|unfold|reduce|rw|occ|simp_only|arith|farkas)$"))
 
 ;; `(sig fn NAME …)` / `(sig type NAME …)` — the second word is a keyword too.
 ((list

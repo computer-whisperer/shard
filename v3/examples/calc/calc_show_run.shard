@@ -1,16 +1,19 @@
 ;;; v3/examples/calc/calc_show_run.shard — the digit spec over Int values,
 ;;; examples/calc/calc_show_run.shard ported to S at slice 6: `codes` maps
-;;; digit values to codepoints; of the seventeen claims building toward
-;;;   run (codes (show n) ++ "+" ++ codes (show m)) = some (n + m)
-;;; five are blocks since slice 3.20 (below); the rest wait for 3.21's arith.
+;;; digit values to codepoints, and the file's seventeen claims build to
+;;;   0 <= n, 0 <= m |- run (codes (show n) ++ "+" ++ codes (show m)) = some (n + m)
+;;; — five structural ones since slice 3.20, the rest since slice 3.21.
 
 (import "calc_show.shard")
 (import "calc_proof.shard")
 (use examples.calc.calc_show)
+(use examples.calc.calc_proof)
+(use examples.calc.natabs)
 (use examples.calc.calc)
 (use examples.calc.list)
 (use Init.List cons nil)
 (use Init.Option)
+(use Init.Bool)
 (use examples.calc.calc.Token)
 
 ;; digit-value list -> codepoint list
@@ -20,8 +23,8 @@
     (nil nil)
     ((cons d rest) (cons (+ 48 d) (codes rest)))))
 
-;;; Slice 3.20: the claims whose lemma closure needs no arithmetic, as blocks
-;;; (the rest wait for 3.21's arith). A structural function computes by its
+;;; Slice 3.20: the claims whose lemma closure needs no arithmetic, as blocks.
+;;; A structural function computes by its
 ;;; equations under `reduce`; `lex_go` under `(some v)` at a nil input flushes.
 (theorem lex_nil ((v Int)) (= (lex_go nil (some v)) (cons (TNum v) nil))
   (by (reduce lhs) rfl))
@@ -35,3 +38,82 @@
   (by (induction xs
         ((nil () (reduce) rfl)
          (cons (x r ih) (reduce) (rw ih) rfl)))))
+
+;;; Slice 3.21: the arithmetic and the run. The two lexer lemmas over `show` are well-founded
+;;; inductions on n with the rest of the input (and the accumulator) quantified, so the
+;;; hypothesis is cited at the quotient with a longer rest; an `if` on n < 10 is split on its
+;;; decision; arith proves the bounds of the quotient and the remainder from its own rows.
+(theorem mul_comm10 ((a Int)) (= (* a 10) (* 10 a)) (by arith))
+(theorem digit_val_id ((d Int)) (= (digit_val (+ 48 d)) d) (by (unfold digit_val) arith))
+(theorem lex_go_digit ((d Int) (cs (List Int)) (acc Int) (h (= (is_digit (+ 48 d)) true)))
+  (= (lex_go (cons (+ 48 d) cs) (some acc)) (lex_go cs (some (+ (* 10 acc) d))))
+  (by (reduce lhs) (rw h) (reduce lhs) (simp_only digit_val_id mul_comm10) rfl))
+(theorem lt10_le9 ((n Int) (h (< n 10))) (<= n 9) (by arith))
+(theorem show_lt ((n Int) (h (< n 10))) (= (show n) (cons n nil))
+  (by (rw (show.eq_1 n)) (rw (if_pos h)) rfl))
+(theorem show_ge ((n Int) (h (Not (< n 10)))) (= (show n) (append (show (Int.ediv n 10)) (cons (Int.emod n 10) nil)))
+  (by (rw (show.eq_1 n)) (rw (if_neg h)) rfl))
+(theorem lex_show_run ((n Int))
+  (forall ((rest (List Int)) (acc Int)) (-> (<= 0 n) (= (lex_go (append (codes (show n)) rest) (some acc)) (lex_go rest (some (valI_go (show n) acc))))))
+  (by (wf n (Int.natAbs n) ih
+        (intro rest acc h)
+        (cases (Int.decLt n 10)
+          ((isFalse (hn)
+             (rw (show_ge n hn))
+             (rw (codes_append (show (Int.ediv n 10)) (cons (Int.emod n 10) nil)))
+             (rw (append_assoc Int (codes (show (Int.ediv n 10))) (codes (cons (Int.emod n 10) nil)) rest))
+             (have hq (<= 0 (Int.ediv n 10)) (arith))
+             (have hd (< (Int.natAbs (Int.ediv n 10)) (Int.natAbs n)) (apply (natAbs_lt (Int.ediv n 10) n) (exact hq) (arith)))
+             (rw (ih (Int.ediv n 10) hd (append (codes (cons (Int.emod n 10) nil)) rest) acc hq))
+             (have m0 (<= 0 (Int.emod n 10)) (arith))
+             (have m1 (<= (Int.emod n 10) 9) (arith))
+             (simp_only codes_cons append_int_cons)
+             (rw (lex_go_digit (Int.emod n 10) (append (codes nil) rest) (valI_go (show (Int.ediv n 10)) acc) (is_digit_of_digit (Int.emod n 10) m0 m1)))
+             (rw (valI_go_snoc (show (Int.ediv n 10)) (Int.emod n 10) acc))
+             (reduce lhs) rfl)
+           (isTrue (hp)
+             (rw (show_lt n hp))
+             (simp_only codes_cons append_int_cons)
+             (rw (lex_go_digit n (append (codes nil) rest) acc (is_digit_of_digit n h (lt10_le9 n hp))))
+             (reduce) rfl))))))
+(theorem add_zero ((a Int)) (= (+ 0 a) a) (by arith))
+(theorem lex_go_digit_none ((d Int) (cs (List Int)) (h (= (is_digit (+ 48 d)) true)))
+  (= (lex_go (cons (+ 48 d) cs) none) (lex_go cs (some d)))
+  (by (reduce lhs) (rw h) (reduce lhs) (rw (digit_val_id d)) rfl))
+(theorem lex_show_run_none ((n Int))
+  (forall ((rest (List Int))) (-> (<= 0 n) (= (lex_go (append (codes (show n)) rest) none) (lex_go rest (some (valI (show n)))))))
+  (by (wf n (Int.natAbs n) ih
+        (intro rest h)
+        (cases (Int.decLt n 10)
+          ((isFalse (hn)
+             (rw (show_ge n hn))
+             (rw (codes_append (show (Int.ediv n 10)) (cons (Int.emod n 10) nil)))
+             (rw (append_assoc Int (codes (show (Int.ediv n 10))) (codes (cons (Int.emod n 10) nil)) rest))
+             (have hq (<= 0 (Int.ediv n 10)) (arith))
+             (have hd (< (Int.natAbs (Int.ediv n 10)) (Int.natAbs n)) (apply (natAbs_lt (Int.ediv n 10) n) (exact hq) (arith)))
+             (rw (ih (Int.ediv n 10) hd (append (codes (cons (Int.emod n 10) nil)) rest) hq))
+             (have m0 (<= 0 (Int.emod n 10)) (arith))
+             (have m1 (<= (Int.emod n 10) 9) (arith))
+             (simp_only codes_cons append_int_cons)
+             (rw (lex_go_digit (Int.emod n 10) (append (codes nil) rest) (valI (show (Int.ediv n 10))) (is_digit_of_digit (Int.emod n 10) m0 m1)))
+             (rw (valI_snoc (show (Int.ediv n 10)) (Int.emod n 10)))
+             (reduce lhs) rfl)
+           (isTrue (hp)
+             (rw (show_lt n hp))
+             (simp_only codes_cons append_int_cons)
+             (rw (lex_go_digit_none n (append (codes nil) rest) (is_digit_of_digit n h (lt10_le9 n hp))))
+             (have e (= (valI (cons n nil)) n) (unfold valI) (reduce) (arith))
+             (rw e) (reduce lhs) rfl))))))
+(theorem lex_two ((n Int) (m Int) (hn (<= 0 n)) (hm (<= 0 m)))
+  (= (lex (append (codes (show n)) (cons 43 (codes (show m))))) (list (TNum (valI (show n))) TPlus (TNum (valI (show m)))))
+  (by (unfold lex)
+      (rw (lex_show_run_none n (cons 43 (codes (show m))) hn))
+      (rw (lex_plus (valI (show n)) (codes (show m))))
+      (rw (<- (append_nil_right Int (codes (show m)))))
+      (rw (lex_show_run_none m nil hm))
+      (rw (lex_nil (valI (show m))))
+      rfl))
+;; the headline: the calculator adds two non-negative numbers written in decimal
+(theorem run_show_adds ((n Int) (m Int) (hn (<= 0 n)) (hm (<= 0 m)))
+  (= (run (append (codes (show n)) (cons 43 (codes (show m))))) (some (+ n m)))
+  (by (unfold run) (rw (lex_two n m hn hm)) (reduce lhs) (rw (show_correct n hn)) (rw (show_correct m hm)) rfl))

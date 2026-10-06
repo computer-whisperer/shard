@@ -1,13 +1,16 @@
 ;;; v3/examples/calc/calc_show.shard — show : Int -> digit values and its
 ;;; Horner inverse, examples/calc/calc_show.shard ported to S at slice 6
-;;; (LANGUAGE.md §10 item 2). The round trip 0 <= n |- valI (show n) = n
-;;; and the file's four claims wait for phase 3. `show` recurses on the
-;;; quotient: at Stage 0 the measure is a reported term (§12.6).
+;;; (LANGUAGE.md §10 item 2); its four claims since slice 3.21, the round
+;;; trip 0 <= n |- valI (show n) = n among them. `show` recurses on the
+;;; quotient under the measure (Int.natAbs n): its descent obligation is
+;;; discharged below by natabs.shard's lemma and arith.
 
 (import "calc.shard")
 (import "list.shard")
+(import "natabs.shard")
 (use examples.calc.calc)
 (use examples.calc.list)
+(use examples.calc.natabs)
 (use Init.List cons nil)   ; selectively: `append` is this example's own (list.shard), not Init's List.append
 (use Init.Bool)
 
@@ -22,5 +25,35 @@
 
 ;; show n: decimal digit-VALUE list, most-significant first
 (fn show ((n Int)) (List Int)
-  (measure n)
+  (measure (Int.natAbs n))
   (if (< n 10) (cons n nil) (append (show (Int.ediv n 10)) (cons (Int.emod n 10) nil))))
+(fulfills show.dec_1
+  (by (intro n h) (apply (natAbs_lt (Int.ediv n 10) n) (arith) (arith))))
+
+;;; Slice 3.21: the claims. An `if` on a comparison is split on its decision
+;;; (`(cases (Int.decLt n 10) …)`: each arm has the comparison or its negation
+;;; as a hypothesis); the well-founded induction's hypothesis is cited at the
+;;; quotient with its two premises proven by arith.
+(theorem lt10f_pos ((n Int) (h (Not (< n 10)))) (< 0 n) (by arith))
+;; appending a digit shifts the accumulated value by 10 and adds it
+(theorem valI_go_snoc ((ds (List Int)) (d Int))
+  (forall ((acc Int)) (= (valI_go (append ds (cons d nil)) acc) (+ (* 10 (valI_go ds acc)) d)))
+  (by (induction ds
+        ((nil () (intro acc) (reduce) rfl)
+         (cons (x r ih) (intro acc) (reduce) (rw (ih (+ (* 10 acc) x))) rfl)))))
+(theorem valI_snoc ((ds (List Int)) (d Int)) (= (valI (append ds (cons d nil))) (+ (* 10 (valI ds)) d))
+  (by (unfold valI) (exact (valI_go_snoc ds d 0))))
+;; the round trip: 0 <= n |- valI (show n) = n
+(theorem show_correct ((n Int)) (-> (<= 0 n) (= (valI (show n)) n))
+  (by (wf n (Int.natAbs n) ih
+        (intro h)
+        (cases (Int.decLt n 10)
+          ((isFalse (hn)
+             (unfold show) (rw (if_neg hn))
+             (rw (valI_snoc (show (Int.ediv n 10)) (Int.emod n 10)))
+             (have hq (<= 0 (Int.ediv n 10)) (arith))
+             (have hd (< (Int.natAbs (Int.ediv n 10)) (Int.natAbs n)) (apply (natAbs_lt (Int.ediv n 10) n) (exact hq) (arith)))
+             (rw (ih (Int.ediv n 10) hd hq))
+             (arith))
+           (isTrue (hp)
+             (unfold show) (rw (if_pos hp)) (unfold valI) (reduce) (arith)))))))

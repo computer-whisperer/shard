@@ -1793,7 +1793,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.18 | bytes and text (narrowed by ruling 2026-10-01, item 51; the design and the as-built below): the registry's type rows — `String`, `ByteArray`, `UInt8` and the structures under them, each represented by its one runtime field —, a projection function as its projection, item 37's flip staged (every file but the toolchain's own), the wire read by declared type and the externs over `ByteArray`; symbols and `Name` literals deferred to the toolchain's port | the first host-facing S library (`v3/std/host.shard`, `v3/std/bytes.shard`); calc's loop against the host |
 | 3.19 | deriving under a declared policy (law §5.1; split from 3.18 by the same ruling; ruled 2026-10-02, item 52; the design and the as-built below): `(derive TYPE CAPABILITY…)` — equality, an ordering under the one policy `structural`, a rendering in canonical S — generated as `fn` source and found through a derivation table; a hand-written procedure registered with `(CAPABILITY by NAME)` | a new type usable in an `if`, as a key and in a message (`v3/examples/derive/`); `v3/std/derive.shard` |
 | 3.20 | I's opener (ruled 2026-10-05, item 53; the design and the as-built below; **landed 2026-10-06**): I's data and `(by STEP…)` in a `theorem`, `elaborate(I)` to P, the forms with no engine behind them — `intro exact rfl have show apply cases induction wf decide unfold reduce rw sorry` — and `goal_of`/`applicable`/`step` as E functions over one derivation | calc's claims whose lemma closure needs no arithmetic (52 of 100; 44 landed as blocks in five files, `kernel/test/tactic_test.sh`) |
-| 3.21 | the two forms that carry an engine: `simp_only` (a bounded rewriter over a lemma list) and `arith` (the Farkas certificate elaborated through `Lean.Omega`'s lemmas, in the export at line 76,223) | calc's 100 claims closed |
+| 3.21 | the two forms that carry an engine (the design and the as-built below, item 54; **landed 2026-10-06**): `simp_only` (a bounded rewriter over a lemma list) and `arith` (the Farkas certificate elaborated through `Lean.Omega`'s lemmas, in the export at line 76,223; reconstructed by elimination where the node gives none) | calc's 100 claims as theorems, the capstone `run_eq_spec` among them (`kernel/test/tactic_test.sh`) |
 | 3.22 | the producers: `tools/prove` re-pointed at I, the sidecar and the pin store (law §7.5), the engine; the transactional goal graph of law §6 | the coverage arc's B-1c |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
@@ -1953,7 +1953,9 @@ three leans; §13 item 47):
    inserts `Int.toNat` (§5.2). **As built:** the obligation is
    quantified over every local in scope at the call, in binding order
    — the type parameters, the tuple, the fields of the enclosing
-   splits, the `let`-bound values as `let`s — and the proof term
+   splits (each split's equation `scrutinee = pattern` after its
+   fields, since slice 3.21: a matcher under a measure carries it),
+   the `let`-bound values as `let`s — and the proof term
    applies the constant to the lambda-bound ones; the obligations a
    branch collects survive the branch's context being restored; the
    Int fixture runs through `InvImage.wf` so the pins reach it; a
@@ -3120,7 +3122,8 @@ a packed buffer; deriving (slice 3.19).
   *An import costs its position.* The libraries import through
   `UInt8.toNat` (40 s a load on the bootstrap, against 5 s): the test
   prefix has a second chunk, `fixtures/init_prefix_str_tail.ndjson`
-  (lines 100,852 to 263,515 of the export, 8.6 MB), given after the
+  (lines 100,852 to 263,515 of the export, 8.6 MB; to line 274,616
+  since slice 3.21, for `arith`'s product and quotient), given after the
   first by the three tests that load them; the pins stay on the first.
 - **Open, stated.** The checked decoder (`String.fromUTF8?`: a
   validator and its proof against `ByteArray.IsValidUTF8`, with I).
@@ -3828,6 +3831,243 @@ store comes with the producers.
   ruling's fifth lean is these five, one claim of each shape among
   them.
 
+**Slice 3.21 — the two forms that carry an engine: `arith` and
+`simp_only`** (under the ruling of 2026-10-05, item 53's first lean;
+the design 2026-10-06; §13 item 54). Slice 3.20 left calc's claims
+that need arithmetic (48 of 100) and every chain of rewrites written
+one step at a time. Law §7.1 draws the line this slice works on:
+whatever searches is a producer of I and what it emits is the result;
+replay computes and matches, and K checks P.
+
+*The rules.*
+
+1. **`arith` is a Farkas certificate over stated rows.** `(arith
+   FACT…)` closes a goal that follows from linear arithmetic over
+   `Int` and `Nat`. Its **rows**, in order: the goal negated; each
+   hypothesis of the goal's context whose statement is linear (rule
+   2), in context order; each FACT — a term, a hypothesis' name or a
+   lemma applied — whose type is linear (`arith_fact` otherwise); and
+   the rows the atoms bring (rule 4). A certificate is one integer per
+   row — non-negative on an inequality, any sign on an equation —
+   under which the rows sum to a constant inequality that is false
+   (`0 ≤ -1`). `(arith FACT… (farkas K…))` carries the certificate (a
+   row past the list's end has multiplier 0): replay checks the sum
+   and builds P, no elimination runs (`arith_certificate` shows the
+   sum that is left). Without the clause the node names the
+   **default reconstruction** (item 53's second lean): Fourier–Motzkin
+   elimination over the rows in atom order under a budget of 512
+   derived rows (`arith_budget`), the equations eliminated first by
+   substitution; what it finds is the certificate, and the two forms
+   elaborate through the same builder. `arith_failed` shows the rows
+   in normal form. The elimination is exact over the rationals and
+   integer-tight only in the strict comparisons (`a < b` is `a + 1 ≤
+   b`): no cut, no case split — `2x = 1` is not refuted, a `≠`
+   hypothesis is no row. Those are a producer's (`omega`, 3.22),
+   which emits this node.
+2. **Linear statements.** `a ≤ b`, `a < b`, `a = b` and their
+   negations at `Int` or `Nat`, under V3's spellings (`Int.le`,
+   `Nat.lt`, `Eq`) and Init's (`LE.le`, `LT.lt`, `GE.ge`, `GT.gt`,
+   `Ne`, `Not`), where the sides are built from `+`, `-` (at `Int`),
+   unary `-`, `*` with a literal on one side, literals, and **atoms**
+   — any other term, two atoms the same when they are the same term
+   after the spellings of rule 3 are made one. `False` as a goal has
+   no negation row. A goal `a = b` is two certificates (`a ≤ b` and `b
+   ≤ a`, `Int.le_antisymm`) unless the sides have one normal form,
+   when it is their two evaluations composed and no certificate; a
+   goal `¬ P` is P's row and the certificate.
+3. **One spelling.** Init's lemmas speak `HAdd.hAdd Int Int Int _ a
+   b`, `OfNat.ofNat Int 5 _`, `Nat.cast n`; V3 writes `Int.add a b`,
+   `Int.ofNat 5`. `arith` reads both: a class method at `Int` or `Nat`
+   under Init's instance is its function, throughout a row — inside
+   an atom too — and K's conversion is the proof that the two are one
+   (the instances unfold). So `(arith (Int.emod_nonneg n h))` and a
+   row from the context meet on the same atoms.
+4. **What an atom brings.** A `Nat` term enters the integers under
+   `Int.ofNat` (`Int.natCast_add`, `Int.natCast_mul` push the cast to
+   the atoms), and each `Nat` atom `a` brings the row `0 ≤ ↑a`. `x /
+   k` at `Int` with `k` a positive literal is an atom that brings `k *
+   (x / k) ≤ x` and `x < k * (x / k) + k` (`Int.mul_ediv_self_le`,
+   `Int.lt_mul_ediv_self_add`), and `x % k` is `x - k * (x / k)`
+   (`Int.emod_def`): the quotient and the remainder by a literal are
+   linear arithmetic, as in `omega` and as v2's `div-facts` gave
+   them. `Nat` subtraction, division at `Nat`, `min`, `max`, `natAbs`
+   and `toNat` are atoms. These rows come after the facts, in the
+   order the atoms first occur.
+5. **P is `Lean.Omega`'s.** The atoms are a list `v`; each side `t`
+   gets a linear combination `l` (a constant and a coefficient list,
+   closed data) and a proof `t = l.eval v` built on the term's
+   structure from `LinearCombo.coordinate_eval`, `add_eval`,
+   `sub_eval`, `neg_eval`, `mul_eval_of_const_left/right` and the
+   congruences of `Lean.Omega.Int`; a row `0 ≤ l.eval v` or `l.eval v
+   = 0` is `Constraint.addInequality_sat` or `addEquality_sat`; the
+   certificate is a fold of `combo_sat'`; the false constant is
+   `normalize_sat` and `Constraint.not_sat'_of_isImpossible (Eq.refl
+   true)`. K's conversion does the arithmetic on the closed data
+   (each intermediate combination is stated as a literal, so one step
+   is one bounded computation) and nothing else: no ring normalizer,
+   no reflection of the terms. The kit lies in the export through
+   line 91,131 but for the product (`mul_eval_of_const_left`, line
+   271,373) and the quotient's bounds (line 274,616): a file whose
+   rows have neither imports as before; one that has them imports
+   through `Int.lt_mul_ediv_self_add` (`arith_unreached` names the
+   constant and the line). The second fixture grows to that line.
+6. **`simp_only` is a bounded rewriter over a lemma list.**
+   `(simp_only RULE…)`, a RULE a LEMMA or `(<- LEMMA)` as `rw` takes
+   them: until no rule applies, the first rule in list order with a
+   match in the target is applied as `rw` applies it — the first
+   match in the traversal, every occurrence of that instance — under
+   a budget of 256 rewrites (`simp_budget`: a rule that rewrites its
+   own result). A rule's premises are discharged by **assumption** —
+   a hypothesis of the context with the premise's statement — and a
+   rule with a premise no hypothesis states does not apply there
+   (law §7.2's side-condition policy: stated, not searched). No rule
+   applies at the start is `simp_no_progress`. Nothing is implicit:
+   no lemma set, no arithmetic, no computation — `(reduce)` before or
+   after is its own node. A function's name is no rule (`unfold`, or
+   name its equation `f.eq_N`).
+7. **`applicable`** lists `arith` where the target is linear and
+   `simp_only` always; a premise's one-step block may be either.
+8. **Not in 3.21**, each named: an `only` restriction of `arith`'s
+   context rows (a budget refusal is the signal); cuts and case
+   splits; `Nat` subtraction; non-literal products; `simp_only` at a
+   hypothesis, with side selectors or with a discharger other than
+   assumption; the producers (3.22).
+
+**Slice 3.21 as built** (2026-10-06):
+
+- **Rules 1, 2 and 5.** As designed. `kernel/arith.shard` is the
+  arithmetic — the spelling (rule 3), the rows, the certificate's
+  check, the elimination, and P from `Lean.Omega`'s lemmas —, and
+  `tactic.shard` holds the node (`NArith`: the facts as S terms, the
+  certificates) and the step, which elaborates the facts, hands the
+  context's locals over (a local whose statement is no comparison is
+  passed by) and has K type the term before it is the goal's filling
+  (`arith_internal` would name the step; none has been seen). The
+  kit's last lemma in the plain case is `Lean.Omega.Int.ofNat_lt_of_lt`
+  (line 91,131 of the export), inside the pins' first fixture. An
+  equation goal takes a `(farkas …)` clause per direction, the `≤`
+  first (a direction without one is reconstructed); a weight of zero
+  leaves its row out. A refusal shows the rows in normal form over the atoms: `[0 <= -1 +
+  -1*x + 1*y] [0 <= 0 + -1*x + 1*y]`.
+- **Rule 3, wider than designed: one spelling is the proof layer's.**
+  The first `(rw (if_neg hn))` after `(cases (Int.decLt n 10) …)`
+  found no match: the hypothesis the split brings is Init's `¬ (LT.lt
+  Int Int.instLTInt n 10)` and the target's condition is `Int.lt n
+  10`. So every **new goal's statement** enters in the source's
+  spelling (`tac_goal`: the context and the target, K converting the
+  occurrence), and so do the two sides of **a lemma's equation** in
+  `rw`, `simp_only` and `reduce` (`eq_of_lemma`) and a premise
+  `simp_only` looks up. The 3.20 note that a rewrite by one of Init's
+  arithmetic lemmas "needs a `show` first" no longer holds.
+- **Rule 4.** As designed, and `Nat.succ x` under the cast is `x + 1`
+  (K converts the two; `Nat.lt a b` unfolds to it).
+- **Rule 6.** As designed: `NSimp`, `simp_loop`; a match whose
+  premise no hypothesis states is passed by and the next subterm is
+  tried; a rule whose match leaves an argument unassigned, changes
+  nothing or has a motive K does not type is passed by for the next
+  rule.
+- **Rule 7.** As designed.
+- **A matcher under a measure carries its equation** (`define.shard`,
+  `realize.shard`; not in the design — calc's `parse_tail` could not
+  be made total without it). Slice 3.14 stated a self-call's descent
+  obligation over every local in scope; in a row of `(match (skip_ws
+  cs) …)` the locals are the pattern's variables and nothing ties them
+  to the scrutinee, so `parse_tail.dec_1` read `∀ p c rest, … → ∀ n
+  rest2, len rest2 < len p.2` — false, and `parse_tail` could never
+  leave `PENDING measure` (v2 gave each site the premise `skip_ws cs =
+  Cons c rest`). Now, in a measured function, a matcher's motive is `λ
+  s' . s = s' → motive s'`, each row's last binder `h : s = pattern`,
+  and the application is applied to `Eq.refl s` — Lean's `match h : s
+  with`, by `addArg` on the matcher K checked (`pj_match_eq`) — so `h`
+  is a local in scope and the obligation is stated under it — and as
+  the comparison it is, `measure[arguments] < measure[parameters]` at
+  `Nat`, where slice 3.14 stated the relation's instance `InvImage …
+  (tuple) p`; the rows' variables carry the source's names and a
+  function of one binder its binder's: `∀ xs x r, xs = cons x r → ∀ y
+  s, r = cons y s → len3 s < len3 xs`. The
+  function's equations are stated over the same shape (`PkEqn`: the
+  body walked once more with self-calls left as calls, so K converts
+  `F t (λ y _. fix y)` to the leaf's body as before); the leaf walker
+  reads the extra argument, so a leading matcher on a binder still
+  gives one equation per constructor. The program is untouched (it is
+  the erasure of the body as written). `parse_tail`, `show` (now under
+  `(measure (Int.natAbs n))`) and `show_nat` are `DISCHARGE … proved`:
+  **nothing a claim of calc's cites is pending.** Slice 3.20's
+  theorems over `parse_tail` had been accepted under those two
+  parameters.
+- **`reduce`, two repairs** the capstone's proofs needed. (1) A case
+  analysis at a decided scrutinee takes one step: a matcher at `cons c
+  rst` whose row is an `if` on an open condition was no progress (K's
+  whnf goes on into the row and ends at a stuck `Decidable.rec`); the
+  alternatives — an `ite`'s branches, a matcher's rows — are masked by
+  locals while K picks one (`alt_step`). (2) A proposition is no
+  computation: `reduce` unfolded `Nat.lt a b` to `Nat.le (Nat.succ a)
+  b`; it leaves a comparison as it is now (`unfold` by name still
+  unfolds one). Three of 3.20's proofs lost a last `(reduce lhs)` that
+  had nothing left to do — `reduce_stuck` on an already normal target
+  makes a proof depend on how far the step before went (*noted*).
+- **A type and its constructor under one name** (`(type CalcState
+  (CalcState …))`, §13 item 28) were `ambiguous_name` in a theorem's
+  binder; where a type is expected — a binder's type, an argument at a
+  sort — the name is the type's (`elab.shard`).
+- **The pending record shows its goals** (slice 3.20's rule 9, which
+  that slice left at the count): `PENDING main.t sorry goals=2 [(n :
+  Nat) ⊢ (= n n)] [(n : Nat) ⊢ (= 1 1)]`. It is how a block is
+  written: a `sorry`, a load, the goal. Goals print `Int` literals and
+  `+ - *` as the source writes them.
+- **The fixture.** `init_prefix_str_tail.ndjson` grows by 11,101
+  lines, to line 274,616 of the export (`Int.lt_mul_ediv_self_add`).
+- **The consumer: calc's 100 claims are theorems**, file for file
+  (`kernel/test/tactic_test.sh`: five loads cover the fourteen files,
+  110 checks), with the capstone `run_eq_spec : run cs = spec_run cs`
+  under no parameter. Re-spelled in V3's idiom: a hypothesis is a
+  proposition (`(<= c 32)`, `(Not (= c 43))`); an induction's
+  statement quantifies what its hypothesis must vary over and `intro`
+  follows the split; an `if` on a comparison is split on its decision
+  (`(cases (Int.decEq c 43) ((isFalse (h) …) (isTrue (h) …)))`); a
+  hypothesis about a split term is an implication introduced after
+  the split. `loop_eq` is restructured around `parse_num`'s result
+  (`arm_plus`, `arm_minus` take the lexer through one operator and one
+  number), so its hypothesis is cited under `ptd`, the fact that
+  discharges `parse_tail`'s own descent. Twelve lemmas the old proofs
+  inlined or took from `std` are stated: `append_nil_right`,
+  `append_assoc` (`list.shard`), `natAbs_of_nonneg`, `natAbs_lt`
+  (`natabs.shard`: Init's are at line 672,885, past the fixtures),
+  `is_ws_true`, `is_ws_false`, three `pr_*_none`, `nonnum_none`, the
+  two arms. 45 steps are `arith`, none with a certificate written,
+  and 18 are `simp_only`.
+- **Found on the way, not changed.** Init's names are visible as far
+  as *any* loaded module imported: `calc_proof.shard`'s
+  `decide_eq_true` became `ambiguous_name` (with
+  `Bool.decide_eq_true`) once another file in the load imported
+  further; it cites `Init.decide_eq_true` now. A measured function of
+  several binders has its obligations stated over the arguments'
+  tuple `p` (`len rest2 < len (proj PProd 1 p)`; `PProd.snd` is at
+  line 2,429,884). There is no `by_cases`: the
+  split on a decision instance serves.
+- **Found by a second reader over the diff, each reproduced and
+  fixed, the first three pinned.** `simp_only` with a rule whose right
+  side holds its left (`r = mk (fst r) (snd r)` given without its
+  argument) put the term back twice at every step: the target doubled,
+  no budget of rewrites was reached and the load did not end — it is
+  refused at once (`simp_self`). `Ne a b` was rewritten to `Not
+  (Eq.{1} …)` whatever Ne's universe, and `intro` then built a term K
+  refused (a statement over `Ne Nat Int`; `by_ne_level`). A descent
+  obligation printed every pattern variable as `x` and its fact as the
+  relation's instance, where `reduce` stepped into the relation and
+  `arith` read no comparison (the bullet above; `define_match_eq`). A
+  generated binder's name printed as a bare number (`(fun (20 : Nat)
+  …)`: `x20` now). A class method at a local instance was rewritten
+  as Init's (it stays as written). `v3/test.sh`'s fallback for a
+  missing result printed the shell's error. *Noted, not changed:* a
+  type and its constructor of one name are still ambiguous where
+  nothing is expected (the first operand of `=`); a compound literal
+  as a first operand elaborates at `Nat` (`(<= (- 0 5) x)` — the
+  elaborator's, older than the slice).
+- **Not built**, as rule 8 lists; and no pin for 3.20's fifth finding
+  (a ground occurrence under an opaque constant): a pin has no way to
+  declare one.
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built
@@ -4173,10 +4413,10 @@ row.
 | `wf-induct MEASURE`, `subterm-induct`, `(below)` | `wf` over `WellFounded` / `sizeOf` | **AT RISK:** the strong IH citable at any proper subterm with `(below)` discharging the `⊰` premise syntactically — Lean has `sizeOf`-based termination; whether I keeps a subterm-order rule is a phase-3 decision |
 | `have`, named `have`, `(premise NAME)`, `(hyp K)`, `(lemma NAME)` | `have`, the named context, `exact` | |
 | `fin-split VAR LO HI` | `decide` over a bounded `Fin`/interval, or `omega` | **AT RISK:** bounded enumeration as one primitive step |
-| `div-facts TERM D Q` | `omega` (owns the `Nat`/`Int` seam, law §5.2) | |
+| `div-facts TERM D Q` | `arith`: the quotient and the remainder by a positive literal bring their rows (slice 3.21, §8.4 rule 4); `omega` for what needs a cut (owns the `Nat`/`Int` seam, law §5.2) | |
 | `inject`, `absurd` | `injection`, `noConfusion`/`absurd` | `T.noConfusion` and `T.c.inj` generated after a native inductive without parameters (slice 3.15, §8.4 rule 5); `injection` the tactic is I's |
 | `rewrite-with EQREF DIR SIDE (INST…) (PROOF…)` | `rw` carrying lemma identity, instantiation, direction, guarded occurrence path | law §7.2 |
-| `(by arith (list …))` — tautology, Farkas certificate (5,105 uses) | `arith` with the checked certificate as I data; `omega` as the producer | law §7.2 lists `arith` |
+| `(by arith (list …))` — tautology, Farkas certificate (5,105 uses) | `arith` with the checked certificate as I data; `omega` as the producer | law §7.2 lists `arith`; slice 3.21: `(arith FACT… (farkas K…))` over the goal negated, the context's linear hypotheses and the facts — the old list's order but for the context's; without the clause the weights are reconstructed |
 | `refine-fact` | `Subtype.property` | |
 | `(admit)` truncation | `sorry`, reported loudly, never accepted | law §7.5 |
 | `.auto.shard` sidecars, `(proof-for NAME PROOF)` (1,495), the `auto` delegation | the sidecar and the pin store keyed by the resolved requirement; engine-authored I | law §7.5; T8's stale-pin rule |
@@ -4849,3 +5089,36 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     (`define.shard`), which the design did not list and calc's
     `parse_tail` needed. Not built: a witness goal, `rw` at a
     hypothesis, the `PROOF` record (`ACCEPT` serves).
+54. **Slice 3.21's design (under item 53's ruling; the design and the
+    as-built 2026-10-06, §8.4) — for ratification.** The second of
+    the three slices: `arith` and `simp_only`. *Decided here beyond
+    the ruling:* (a) **`arith` takes the context's linear hypotheses
+    and the facts given**, as `omega` does; a certificate indexes the
+    rows in that order. Rejected for now: the facts alone (`linarith
+    only`) — an `only` restriction waits for a budget refusal that
+    needs it. (b) **An omitted certificate names a reconstruction**
+    (item 53's second lean): Fourier–Motzkin over the stated rows in
+    atom order, bounded at 512 derived rows — a function of the node
+    and the goal, no table consulted; cuts and case splits stay a
+    producer's. (c) **P through `Lean.Omega`'s lemma kit**, the
+    arithmetic K's conversion on closed data; no reflection of terms.
+    (d) **The quotient and the remainder by a positive literal are
+    linear** (v2's `div-facts`; §12.3's row). (e) **One spelling**: a
+    goal's statement and a lemma's equation enter in the source's
+    spelling of Init's class methods at `Int` and `Nat`, for every
+    form. (f) **`simp_only` discharges a rule's premises by
+    assumption** and has nothing implicit. *Built beyond the design:*
+    (g) **a matcher under a measure carries its equation** — slice
+    3.14's obligations ("over every local in scope") are now stated
+    under `scrutinee = pattern` for each enclosing row and as the
+    comparison `measure[arguments] < measure[parameters]` at `Nat`,
+    and a measured function's equations show the matcher applied to
+    `Eq.refl`; (h)
+    `reduce` leaves a proposition as it is and takes a decided case
+    analysis one step; (i) a type's name wins over its constructor's
+    where a type is expected (item 28); (j) the pending record carries
+    the sorried goals (slice 3.20's rule 9). *Left open, stated:*
+    Init's visibility is the load's, not the module's (an open can
+    turn ambiguous when another file imports further); a measured
+    function's obligations are stated over the arguments' tuple;
+    `reduce_stuck` on an already normal target.

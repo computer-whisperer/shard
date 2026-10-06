@@ -1,10 +1,10 @@
 ;;; v3/examples/calc/calc_spec.shard — THE REQUIREMENT: the reference
 ;;; recursive-descent parser over the raw input, examples/calc/calc_spec.shard
 ;;; ported to S at slice 6 (LANGUAGE.md §10 item 2). The requirement itself,
-;;; run cs = spec_run cs for every cs, and this file's six claims wait for
-;;; phase 3's I. `parse_tail` recurses on a strict suffix, total by the length
-;;; measure: at Stage 0 the measure is a reported term, its descent proof a
-;;; phase-3 obligation (§12.6, totality).
+;;; run cs = spec_run cs for every cs, is calc_equiv.shard's capstone; this
+;;; file's six claims bound the lengths (slice 3.21). `parse_tail` recurses on
+;;; a strict suffix, total by the length measure: its two descent obligations
+;;; are discharged below by `ptd`.
 ;;;
 ;;;   expr   ::=  ws* number ( ws* ('+'|'-') ws* number )* ws*
 ;;;   number ::=  digit+
@@ -81,6 +81,62 @@
     (none nil)
     ((some r) (numr_rest r))))
 
+;;; Slice 3.21: the six length claims and parse_tail's descent. `len` is Nat-valued, so the
+;;; claims are comparisons at Nat and arith casts them; a hypothesis about a split term is
+;;; stated as an implication and introduced after the split.
+(theorem len_skipws_le ((cs (List Int))) (<= (len (skip_ws cs)) (len cs))
+  (by (induction cs
+        ((nil () (reduce) (arith))
+         (cons (c rest ih) (reduce)
+           (cases (is_ws c)
+             ((false () (reduce) (arith))
+              (true () (reduce) (arith)))))))))
+;; take_digits' leftover never grows the list
+(theorem len_takedigits_le ((cs (List Int))) (forall ((acc Int)) (<= (len (numr_rest (take_digits cs acc))) (len cs)))
+  (by (induction cs
+        ((nil () (intro acc) (reduce) (arith))
+         (cons (c rest ih) (intro acc) (reduce)
+           (cases (is_digit c)
+             ((false () (reduce) (arith))
+              (true () (reduce) (arith (ih (+ (* acc 10) (digit_val c))))))))))))
+;; a number starting with a digit leaves a strictly shorter suffix
+(theorem len_takedigits_lt ((c Int) (rest (List Int)) (h (= (is_digit c) true)))
+  (< (len (numr_rest (take_digits rest (digit_val c)))) (len (cons c rest)))
+  (by (reduce) (arith (len_takedigits_le rest (digit_val c)))))
+;; skip_ws cs = cons h t  =>  1 + len t <= len cs
+(theorem skipcons_len_le ((cs (List Int)) (h Int) (t (List Int)) (hs (= (skip_ws cs) (cons h t)))) (<= (+ 1 (len t)) (len cs))
+  (by (have e (= (len (skip_ws cs)) (+ 1 (len t))) (rw hs) (reduce) rfl)
+      (arith (len_skipws_le cs))))
+;; parse_num returns a strictly shorter suffix when it succeeds
+(theorem pn_rest_lt ((cs (List Int))) (-> (= (pn_some (parse_num cs)) true) (< (len (pn_rest (parse_num cs))) (len cs)))
+  (by (cases cs
+        ((nil () (intro h) (exact (absurd h (ne_true_of_eq_false (Eq.refl false)))))
+         (cons (c rest) (reduce)
+           (cases (is_digit c) hd
+             ((false () (intro h) (reduce) (arith))
+              (true () (intro h) (reduce) (exact (len_takedigits_lt c rest hd))))))))))
+;; the parse_tail descent, bundled: a skip-cons followed by a successful parse_num∘skip_ws
+;; leaves a strictly shorter remaining input than cs
+(theorem ptd ((cs (List Int)) (c Int) (rest (List Int)) (h0 (= (skip_ws cs) (cons c rest))) (h1 (= (pn_some (parse_num (skip_ws rest))) true)))
+  (< (len (pn_rest (parse_num (skip_ws rest)))) (len cs))
+  (by (arith (pn_rest_lt (skip_ws rest) h1) (len_skipws_le rest) (skipcons_len_le cs c rest h0))))
+;; parse_tail's two descents (the - arm's, then the + arm's): each recursive call is in an arm of
+;; `match (skip_ws cs)` and of `match (parse_num (skip_ws rest))`, so its obligation is stated
+;; under both equations and reads len rest2 < len cs (slice 3.21), cs the second component of the
+;; arguments' tuple `p`; ptd is the fact
+(fulfills parse_tail.dec_1
+  (by (intro p c rest hs hn43 h45 n rest2 hp)
+      (have e (= (pn_rest (parse_num (skip_ws rest))) rest2) (rw hp) (reduce) rfl)
+      (have hsome (= (pn_some (parse_num (skip_ws rest))) true) (rw hp) (reduce) rfl)
+      (rw (<- e))
+      (exact (ptd (proj PProd 1 p) c rest hs hsome))))
+(fulfills parse_tail.dec_2
+  (by (intro p c rest hs h43 n rest2 hp)
+      (have e (= (pn_rest (parse_num (skip_ws rest))) rest2) (rw hp) (reduce) rfl)
+      (have hsome (= (pn_some (parse_num (skip_ws rest))) true) (rw hp) (reduce) rfl)
+      (rw (<- e))
+      (exact (ptd (proj PProd 1 p) c rest hs hsome))))
+
 (fn parse_expr ((cs (List Int))) (Option Exp)
   (match (parse_num (skip_ws cs))
     (none none)
@@ -95,7 +151,7 @@
 (fn spec_run ((cs (List Int))) (Option Int) (eval_opt (parse_expr cs)))
 
 ;; calc's first claim on V3 (LANGUAGE.md §8.4, slice 3.13): eval's second equation, cited as a
-;; theorem — the claims proper wait for I (§0)
+;; theorem
 (theorem eval_add ((a Exp) (b Exp))
   (= (eval (Exp.Add a b)) (+ (eval a) (eval b)))   ; Exp.Add: the bare Add is Init's class here; + at Int is Int.add (§8.4 rule 3)
   (exact (eval.eq_2 a b)))
