@@ -2534,6 +2534,36 @@ is `docs/FOUNDATION.md` §5.3.
   in `realize.shard` left by slice 3.18. *Gates:* 176 loader pins (20 new), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs, its host program byte-identical to the model world, parity byte-identical over 28 closures and 112,857 declarations, route 2, K's clients, the full suite's 33 entrypoints; route 1's closure is K's own and none of its files changed. The full replay and the corpus are CI's.
 - **2026-10-02 — pipeline 540 green on `fdd1429`: slice 3.19 on the
   full gate.** engine 31 s; corpus 1,476 s at the baseline; v3 6,936 s: 33 entrypoints with 0 failed, `define_test` 12 checks, `derive_test` 14 checks, `wire_test` 15 checks, calc's host program byte-identical to the model world, parity byte-identical over 28 closures and 112,857 declarations in 453 s, route 1's native build of the kernel (`OK: v3/bin/t0`), the fixture and the 100,000-line byte-ties identical, replay 2,474 s at 32.2 GB peak, T0 accepted 57,977 with 0 rejected, closures identical to the oracle, all 20 accelerator candidates pinned. Slice 3.19 is closed. The v3 job is 824 s longer than pipeline 538's, 806 s of it in the test suite (3,841 s against 3,035 s): `derive_test` is new at 387 s, the `.shard` entrypoints (the loader pins among them, 20 new) take 253 s more, parity 97 s more, `define_test` 55 s more, K's clients 18 s more.
+- **2026-10-06 — slice 3.20 ruled (2026-10-05) and built: I's opener, the
+  certificate core** (`LANGUAGE.md` §8.4's design and as-built, §13
+  item 53; law §7). *The ruling (the user on six leans):* three
+  slices — 3.20 the core, 3.21 `simp_only` and `arith`, 3.22 the
+  producers (rejected: one slice; the forms before the API); the
+  tactic block in source is I (rejected: a tactic surface distinct
+  from I); no subterm order — `induction` carries its recursor, `wf`
+  is `WellFounded.fix` over a measure with every descent fact a goal
+  (rejected: v2's `subterm-induct` and `(below)`; the porting cost
+  accepted); computation is conversion — `reduce` a `show` of the
+  computed normal form (rejected: implicit lemma sets); calc's claims
+  by hand (rejected: the migration tool first); the API sequential at
+  the opener (rejected: the transactional graph now). *Built:*
+  `kernel/tactic.shard` — `(by STEP…)` for a theorem and a fulfills,
+  I's data `Node`, a goal a metavariable over the closed statement
+  (R68 settled by construction), the forms `intro exact rfl have show
+  apply cases induction wf decide unfold reduce rw sorry`, `goal_of`
+  and `applicable`; a measured function's equations by
+  `WellFounded.fix_eq` (`define.shard`); 44 of calc's 100 claims as
+  blocks in five files. *Found:* matching by conversion is useless
+  (syntactic now); a spine's prefix whnf's to a lambda; K's whnf
+  reduces past one step (function applications masked); the
+  recursor's argument order; seven name collisions with other kernel
+  files under flat resolution. *Found by a second reader, fixed:*
+  `cases X H` on a local dropped X from the arm's context; `unfold` of a
+  plain `def` refused (one delta step by hand); `(occ K)` counted spine
+  prefixes; `reduce` at a closed occurrence with an opaque condition ran
+  unbounded (ground occurrences only, 64 unfoldings); doubled goal text.
+  18 pins, `tactic_test.sh` (48 checks); the gates of every slice (the
+  README for the figures).
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 

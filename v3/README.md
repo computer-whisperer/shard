@@ -661,7 +661,7 @@ term with the self-name a local and each `match` a generated matcher
 constant — projected to E by erasure and to K by the 3.13–3.14
 compilation; `tr` deleted; the E-first route kept for the toolchain's
 own sources until they port. The slices after it renumbered: 3.17 the
-porting facilities, 3.18 bytes, text and deriving, I from 3.19.
+porting facilities, 3.18 bytes and text, 3.19 deriving, I from 3.20.
 **Revision 2 the same day, after GPT-6's single-frontend memo
 (R63–R71, records §4.10):** the pre-definition a named record;
 matcher descriptions bound by regeneration; `decide` erased to an
@@ -879,6 +879,72 @@ Local gates: 176 loader pins (20 new), `define_test` (12 checks), `derive_test` 
 
 Slice 3.19 is closed: **pipeline 540 green on `fdd1429`** — engine 31 s; corpus 1,476 s at the baseline; v3 6,936 s: 33 entrypoints with 0 failed, `define_test` 12 checks, `derive_test` 14 checks, `wire_test` 15 checks, calc's host program byte-identical to the model world, parity byte-identical over 28 closures and 112,857 declarations in 453 s, route 1's native build of the kernel (`OK: v3/bin/t0`), the fixture and the 100,000-line byte-ties identical, replay 2,474 s at 32.2 GB peak, T0 accepted 57,977 with 0 rejected, closures identical to the oracle, all 20 accelerator candidates pinned.
 
+**Slice 3.20 landed (2026-10-06) — I's opener: the certificate core**
+(`LANGUAGE.md` §8.4's design and as-built, §13 item 53; law §7). The
+user ruled six leans on 2026-10-05: three slices (3.20 the core, 3.21
+`simp_only` and `arith`, 3.22 the producers); the tactic block in
+source is I; no subterm order; computation is conversion; calc's
+claims by hand; a sequential API at the opener. What landed:
+
+- **`(by STEP…)`** as a `theorem`'s or a `fulfills`'s proof
+  (`kernel/tactic.shard`): I's concrete syntax read into `Node`,
+  elaborated to one closed term K checks, no search. A goal is a
+  metavariable whose type is the statement closed over the named
+  context; a step opens the context as K locals, acts on the target
+  and closes its filling over them — R68's delayed filling never
+  arises. A block is a sequence on one goal; a branching node carries
+  its children's blocks inline, so a derivation is a tree.
+- **The forms:** `intro exact rfl have show apply cases induction wf
+  decide unfold reduce rw sorry`. `cases`/`induction` take their arms
+  in one list and may name the equation (`(cases (is_digit c) hd
+  (ARM…))`); `wf` opens the strong hypothesis over a `Nat` measure;
+  `apply` and `rw` take their premises as positional blocks, a
+  one-step block written as the step; `rw` matches syntactically and
+  rewrites by `Eq.mpr (congrArg motive h)`, with `(<- LEMMA)` and
+  `(occ K)`; `reduce` is a `show` of the normal form — a `fn` by its
+  equations, the rest by K's whnf where it progresses (function
+  applications masked meanwhile), a measured function's unfolding
+  only at a closed occurrence; `unfold` once per occurrence; `decide`
+  through the elaborator's lookup or the derivation table. `sorry`
+  leaves the theorem pending with the count of its goals.
+- **A measured function has its equations** (`define.shard`): each
+  leaf's, proven by `WellFounded.fix_eq` at the instance, K converting
+  the two sides; `calc_spec.shard` imports through it and
+  `parse_tail` has `eq_1`. The descent obligations may be discharged
+  by blocks (`by_wf`).
+- **The E functions** of law §7.3: `goal_of`, `applicable`,
+  `tac_step` (step), `tac_prove` (elaborate) — all `fn`s, for an
+  engine in E to compose.
+- **The consumer:** 44 of calc's 100 claims are theorems by blocks in
+  five files — the nine ground spec tests and eleven reconciliation
+  tests by `(reduce) rfl`, the lexer's structural lemmas (`lex_num`
+  by induction with the split's equation named, the head lemmas by
+  `if_pos`/`if_neg`), the digit type's ten-way split closed by
+  `decide`, `codes_append` by induction (`kernel/test/tactic_test.sh`,
+  45 checks).
+- **Found on the way:** `rw` by K's conversion made `app nil ?ys` an
+  instance of `app (cons x r) nil` (syntactic matching now); a prefix
+  of an application's spine, whnf'd, is a lambda (whole spines only);
+  K's whnf reduces past the one step wanted (masking); a recursor
+  takes its major after the minors, `casesOn` before; five names
+  shared with the loader's shadowed them under the bootstrap's flat
+  resolution (every name checked against the closure).
+- **Found by a second reader over the diff, each reproduced, fixed and
+  pinned**: `(cases X H …)` on a local dropped `X` from the arm's
+  context while `H` named it; `unfold` of a plain `def` was refused
+  (one delta step by hand now); `(occ K)` counted spine prefixes;
+  `reduce` at a closed occurrence whose condition nothing decides ran
+  for minutes (an unfolding applies to a ground occurrence only, under
+  a budget of 64); a refusal showed its goal twice.
+
+Not built, named in the design's rule 12 and the as-built: a witness
+goal (`apply Eq.trans` without its middle term), `rw` at a hypothesis,
+`induction … generalizing` (quantify the statement), `simp_only` and
+`arith` (3.21), the producers and the store (3.22); the toolchain's
+own theorems stay on `exact` until route 1's chain is V3's own.
+
+Local gates: 194 loader pins (18 new), `tactic_test` (45 checks), `define_test` (12 checks), `derive_test` (14 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until
@@ -992,6 +1058,6 @@ v3/CANON.md       the canonical form of S — layout, the term tier over E, the 
 v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K; phase 2: prog, the reader tower, ev, realize
 v3/meta/          phase 3: the elaborators, I, the goal graph, tactics
 v3/std/           phase 3: the first library under the naming law
-v3/examples/      the ported examples: calc/ (slice 6: the program half in S; the claims at phase 3); derive/ (slice 3.19: derived equality, ordering and rendering in use)
+v3/examples/      the ported examples: calc/ (slice 6: the program half in S; 44 claims as blocks at slice 3.20, the rest at 3.21); derive/ (slice 3.19: derived equality, ordering and rendering in use)
 v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers), pins/loader/ (slices 3–7: package roots, main.shard's `;; expect:` and `;; roots:` headers; the ev_* cases are the classifier's, entry*/same_spelled/realize_theorem slice 7's)
 ```

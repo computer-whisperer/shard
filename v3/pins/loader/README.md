@@ -64,6 +64,22 @@ reads its five records), `derive_visible` (an entry is visible where its derivin
 is; two roots). Orderings and renderings need Init past this fixture and the library:
 `kernel/test/derive_test.sh`.
 
+Slice 3.20's cases (I's opener, `LANGUAGE.md` §8.4): `by_core` (every form on a small type
+and two list functions: the plain forms, `apply` with a premise block and with the middle
+term given through the first premise, `cases` with its arms in one list, `unfold` and
+`reduce`, `induction` with the hypothesis rewritten in, `decide`, `cases` on a term, a
+reversed `rw` and an occurrence selector, a conditional lemma's premise as a block),
+`by_wf` (a measured function's equation by `WellFounded.fix_eq`, the theorem by `wf` with
+the hypothesis at `n - 1`, the descent obligation discharged by a block — the export's
+second fixture, which holds `fix_eq`), `by_sorry` (`NAME pending sorry goals=2`), and the
+refusals, each `read-error REASON`: `by_goal_open`, `by_goal_closed`, `by_unknown_step`,
+`by_intro_no_pi`, `by_rfl_failed`, `by_apply_goals`, `by_apply_unsolved` (a witness goal is
+the graph's), `by_cases_rows`, `by_cases_fields` (`induction_fields`), `by_rw_no_match`
+(syntactic matching: `a + b` finds no `b + a`), `by_rw_occ` (`(occ K)` past the count),
+`by_unfold_stuck`, `by_decide_failed`, `by_show_mismatch`, `by_reduce` (`reduce_stuck`: an
+unfolding equation is not a computation rule). The consumer is `kernel/test/tactic_test.sh`
+over calc's five files.
+
 `v3/kernel/test/loader_pins_test.shard` replays every case in its list;
 `loader_test.shard` holds the cases a header cannot state (two root
 files, the wrong-pin fixture, the records' text, a loaded program run

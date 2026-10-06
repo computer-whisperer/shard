@@ -1,7 +1,8 @@
 ;;; v3/examples/calc/calc_equiv.shard — examples/calc/calc_equiv.shard at
 ;;; slice 6: the spec-equivalence proof, run = spec_run (28 claims, the
-;;; capstone run_eq_spec), waits for phase 3's I; its two helper functions
-;;; are the program here.
+;;; capstone run_eq_spec); its two helper functions are the program here,
+;;; and thirteen of the claims are blocks since slice 3.20 (below) — the
+;;; rest wait for 3.21's arith.
 
 (import "calc_spec.shard")
 (use examples.calc.calc)
@@ -10,6 +11,8 @@
 (use Init.Option)
 (use Init.Bool)
 (use examples.calc.calc_spec.ExpRes)
+(use examples.calc.calc_spec.NumRes)
+(use examples.calc.calc.Token)
 
 (fn strip ((oe (Option ExpRes))) (Option Exp)
   (match oe
@@ -23,3 +26,52 @@
   (match xs
     (nil false)
     ((cons d rest) (is_ws d))))
+
+;;; Slice 3.20: the claims whose lemma closure needs no arithmetic, as blocks.
+;;; A Bool hypothesis `(= (is_digit c) true)` is rewritten into the `cond`;
+;;; an Int comparison in an `if` is decided by `if_pos`/`if_neg` with the
+;;; hypothesis; the induction's statement quantifies the accumulator so the
+;;; hypothesis holds at any (`intro` after the split).
+(theorem numr_eta ((r NumRes)) (= r (NumR (numr_val r) (numr_rest r)))
+  (by (cases r ((NumR (v rst) rfl)))))
+(theorem lex_num ((cs (List Int))) (forall ((acc Int)) (= (lex_go cs (some acc)) (cons (TNum (numr_val (take_digits cs acc))) (lex_go (numr_rest (take_digits cs acc)) none))))
+  (by (induction cs
+        ((nil () (intro acc) (reduce) rfl)
+         (cons (c rest ih) (intro acc) (reduce)
+           (cases (is_digit c) hd
+             ((false () (reduce) (rw hd) (reduce) rfl)
+              (true () (reduce) (rw (ih (+ (* acc 10) (digit_val c)))) rfl))))))))
+(theorem lex_num_check () (= (lex_go (list 50 43) (some 1)) (cons (TNum (numr_val (take_digits (list 50 43) 1))) (lex_go (numr_rest (take_digits (list 50 43) 1)) none)))
+  (by (reduce) rfl))
+(theorem lex_digit_head ((d Int) (rrr (List Int)) (h (= (is_digit d) true)))
+  (= (lex_go (cons d rrr) none) (cons (TNum (numr_val (take_digits rrr (digit_val d)))) (lex_go (numr_rest (take_digits rrr (digit_val d))) none)))
+  (by (reduce lhs) (rw h) (reduce lhs) (rw (lex_num rrr (digit_val d))) rfl))
+(theorem is_digit_false_lo ((c Int) (h (Not (<= 48 c)))) (= (is_digit c) false)
+  (by (unfold is_digit) (rw (if_neg h)) rfl))
+(theorem lex_plus_head ((c Int) (rst (List Int)) (h1 (= (is_digit c) false)) (h2 (= c 43)))
+  (= (lex_go (cons c rst) none) (cons TPlus (lex_go rst none)))
+  (by (reduce lhs) (rw h1) (reduce lhs) (rw (if_pos h2)) (reduce lhs) rfl))
+(theorem lex_minus_head ((c Int) (rst (List Int)) (h1 (= (is_digit c) false)) (h2 (Not (= c 43))) (h3 (= c 45)))
+  (= (lex_go (cons c rst) none) (cons TMinus (lex_go rst none)))
+  (by (reduce lhs) (rw h1) (reduce lhs) (rw (if_neg h2)) (rw (if_pos h3)) (reduce lhs) rfl))
+(theorem lex_bad_head ((c Int) (rst (List Int)) (h1 (= (is_digit c) false)) (h2 (Not (= c 43))) (h3 (Not (= c 45))) (h4 (= (is_ws c) false)))
+  (= (lex_go (cons c rst) none) (cons TBad (lex_go rst none)))
+  (by (reduce lhs) (rw h1) (reduce lhs) (rw (if_neg h2)) (rw (if_neg h3)) (rw h4) (reduce lhs) rfl))
+(theorem skip_ws_idem ((cs (List Int))) (= (skip_ws (skip_ws cs)) (skip_ws cs))
+  (by (induction cs
+        ((nil () (reduce) rfl)
+         (cons (a tl ih) (reduce)
+           (cases (is_ws a) hw
+             ((false () (reduce) (rw hw) (reduce) rfl)
+              (true () (reduce) (exact ih)))))))))
+(theorem head_skipws_false ((cs (List Int))) (= (head_is_ws (skip_ws cs)) false)
+  (by (induction cs
+        ((nil () (reduce) rfl)
+         (cons (a tl ih) (reduce)
+           (cases (is_ws a) hw
+             ((false () (reduce) (exact hw))
+              (true () (reduce) (exact ih)))))))))
+(theorem skipws_head_nonws ((cs (List Int)) (d Int) (rrr (List Int)) (h (= (skip_ws cs) (cons d rrr)))) (= (is_ws d) false)
+  (by (show (= (head_is_ws (cons d rrr)) false)) (rw (<- h)) (exact (head_skipws_false cs))))
+(theorem parse_tail_nil_test ((e Exp) (cs (List Int)) (h (= (skip_ws cs) nil))) (= (parse_tail e cs) (some (ExpR e nil)))
+  (by (unfold parse_tail) (rw h) (reduce) rfl))

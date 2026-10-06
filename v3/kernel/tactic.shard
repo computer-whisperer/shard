@@ -1,0 +1,1418 @@
+;;; v3/kernel/tactic.shard — I's opener: the certificate core (v3/LANGUAGE.md
+;;; §8.4 slice 3.20; law §7). A `theorem`'s proof may be `(by STEP…)`: the
+;;; block is I's concrete syntax, read into `Node` (one constructor per form)
+;;; and elaborated to P — one closed proof term K checks as the theorem's
+;;; value — without search: every step is a function of its node, the goal
+;;; and the environment.
+;;;
+;;; A goal is a metavariable whose type is the goal's statement closed over
+;;; its named context (`Goal`: the id, the closed statement, the context's
+;;; size); an occurrence of a goal in a term is the metavariable applied to
+;;; the context's locals, so closing a binder abstracts the occurrence's
+;;; arguments and never the hole — R68's contextual hole, by construction.
+;;; `tac_step` opens the context as K locals, acts on the target and answers
+;;; the goal's filling (a closed term over the subgoals' occurrences) with
+;;; the subgoals; `tac_block` runs a block's nodes on one goal, the children
+;;; of a branching node inline, depth-first, and assigns each filling;
+;;; `tac_prove` instantiates the root. `sorry` leaves its goal unassigned
+;;; and the theorem pending.
+;;;
+;;; Untrusted, as the elaborator is: K rechecks the closed term.
+
+(import "elab.shard")
+(use kernel.k)
+(use kernel.elab)
+(use kernel.expr)
+(use kernel.kw)
+(use kernel.level)
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.scope)
+(use kernel.sexpr)
+(use kernel.unify)
+(use kernel.util)
+(use kernel.decl)
+(use kernel.matcher)
+(use kernel.elab.El)
+(use kernel.elab.ERes)
+(use kernel.elab.EU)
+(use kernel.elab.FinRes)
+(use kernel.expr.BinderInfo)
+(use kernel.expr.Expr)
+(use kernel.expr.Literal)
+(use kernel.kw.W)
+(use kernel.kw.WOut)
+(use kernel.decl.ConstantInfo)
+(use kernel.decl.ConstantVal)
+(use kernel.level.Level)
+(use kernel.name.Name)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.sexpr.SExpr)
+(use kernel.unify.MDecl)
+(use kernel.unify.URes)
+
+;; ---- I's data (rule 10) ------------------------------------------------------------------
+;; a goal: its metavariable, its statement closed over the named context, the context's size
+(type Goal (Goal Int Expr Int))
+(fn goal_id ((g Goal)) Int (match g ((Goal i _ _) i)))
+(fn goal_stmt ((g Goal)) Expr (match g ((Goal _ s _) s)))
+(fn goal_nctx ((g Goal)) Int (match g ((Goal _ _ n) n)))
+
+;; a node of I: the forms of rule 4, their arguments as data; a branching node carries its
+;; children's blocks inline — an arm is a node of its own kind, never read at a block's head
+(type Node
+  (NIntro (List Name))                        ; (intro NAME…)
+  (NExact SExpr)                              ; (exact TERM)
+  (NRfl)                                      ; rfl
+  (NHave Name SExpr (List Node))              ; (have NAME PROP STEP…)
+  (NShow SExpr)                               ; (show PROP)
+  (NApply SExpr (List Node))                  ; (apply TERM (STEP…)…): the premises' blocks as NBlock
+  (NCases SExpr (Option Name) (List Node))    ; (cases X H? ((CTOR (NAME…) STEP…)…)): arms as NArm; H names the equation X = CTOR … in each arm
+  (NInduction SExpr (Option Name) (List Node)) ; (induction X H? ((CTOR (NAME… IH…) STEP…)…))
+  (NWf SExpr SExpr Name (List Node))          ; (wf LOCAL MEASURE IH STEP…)
+  (NDecide)                                   ; decide
+  (NUnfold (List Name))                       ; (unfold NAME…)
+  (NReduce Symbol)                            ; (reduce), (reduce lhs), (reduce rhs)
+  (NRw Bool SExpr Int (List Node))            ; (rw LEMMA | (<- LEMMA)) (occ K)? (STEP…)…: K = 0 is every occurrence
+  (NSorry)                                    ; sorry
+  (NBlock (List Node))                        ; a child block of apply or rw
+  (NArm Name (List Name) (List Node)))        ; an arm of cases or induction
+
+;; ---- reading a block (rule 1) --------------------------------------------------------------
+(type NodeRes (NROk Node) (NRErr Symbol (List Int)))
+(type BlockRes (BROk (List Node)) (BRErr Symbol (List Int)))
+(fn read_block ((ss (List SExpr))) BlockRes (read_block_go ss Nil))
+(fn read_block_go ((ss (List SExpr)) (acc (List Node))) BlockRes
+  (measure (struct ss))
+  (match ss
+    (Nil (BROk (rev acc)))
+    ((Cons s r)
+     (match (read_node s)
+       ((NRErr x m) (BRErr x m))
+       ((NROk nd) (read_block_go r (Cons nd acc)))))))
+(fn read_node ((s SExpr)) NodeRes
+  (match s
+    ((SSym x)
+     (if (sym_eq x (quote rfl)) (NROk (NRfl))
+     (if (sym_eq x (quote sorry)) (NROk (NSorry))
+     (if (sym_eq x (quote decide)) (NROk (NDecide))
+     (if (sym_eq x (quote reduce)) (NROk (NReduce (quote both)))
+       (NRErr (quote unknown_step) (append (chars_of_sym x) ": not a form of I (rfl, sorry, decide, reduce, or a list)")))))))
+    ((SList (Cons (SSym h) args))
+     (if (sym_eq h (quote intro)) (read_names args Nil (quote intro))
+     (if (sym_eq h (quote exact)) (match args ((Cons t Nil) (NROk (NExact t))) (_ (NRErr (quote bad_step) "(exact TERM)")))
+     (if (sym_eq h (quote rfl)) (match args (Nil (NROk (NRfl))) (_ (NRErr (quote bad_step) "rfl takes no argument")))
+     (if (sym_eq h (quote decide)) (match args (Nil (NROk (NDecide))) (_ (NRErr (quote bad_step) "decide takes no argument")))
+     (if (sym_eq h (quote sorry)) (match args (Nil (NROk (NSorry))) (_ (NRErr (quote bad_step) "sorry takes no argument")))
+     (if (sym_eq h (quote show)) (match args ((Cons t Nil) (NROk (NShow t))) (_ (NRErr (quote bad_step) "(show PROP)")))
+     (if (sym_eq h (quote have)) (read_have args)
+     (if (sym_eq h (quote apply)) (read_apply args)
+     (if (sym_eq h (quote cases)) (read_cases args False)
+     (if (sym_eq h (quote induction)) (read_cases args True)
+     (if (sym_eq h (quote wf)) (read_wf args)
+     (if (sym_eq h (quote unfold)) (read_names args Nil (quote unfold))
+     (if (sym_eq h (quote reduce)) (read_reduce args)
+     (if (sym_eq h (quote rw)) (read_rw args)
+       (NRErr (quote unknown_step) (append (chars_of_sym h) ": not a form of I (slice 3.20: intro exact rfl have show apply cases induction wf decide unfold reduce rw sorry)")))))))))))))))))
+    (_ (NRErr (quote bad_step) "a step is a symbol or (FORM …)"))))
+(fn read_names ((ss (List SExpr)) (acc (List Name)) (form Symbol)) NodeRes
+  (measure (struct ss))
+  (match ss
+    (Nil (match acc
+           (Nil (NRErr (quote bad_step) (append "(" (append (chars_of_sym form) " NAME…) names at least one"))))
+           (_ (if (sym_eq form (quote intro)) (NROk (NIntro (rev acc))) (NROk (NUnfold (rev acc)))))))
+    ((Cons (SSym x) r)
+     (match (name_of_sym x)
+       ((Some n) (read_names r (Cons n acc) form))
+       (None (NRErr (quote bad_step) (append (chars_of_sym x) ": not a name")))))
+    (_ (NRErr (quote bad_step) (append "(" (append (chars_of_sym form) " NAME…): a name is a symbol"))))))
+(fn read_have ((args (List SExpr))) NodeRes
+  (match args
+    ((Cons (SSym x) (Cons prop steps))
+     (match (name_of_sym x)
+       (None (NRErr (quote bad_step) (append (chars_of_sym x) ": not a name")))
+       ((Some n)
+        (match steps
+          (Nil (NRErr (quote bad_step) "(have NAME PROP STEP…): the block that proves PROP is empty"))
+          (_ (match (read_block steps)
+               ((BRErr e m) (NRErr e m))
+               ((BROk b) (NROk (NHave n prop b)))))))))
+    (_ (NRErr (quote bad_step) "(have NAME PROP STEP…)"))))
+(fn read_apply ((args (List SExpr))) NodeRes
+  (match args
+    ((Cons t blocks)
+     (match (read_blocks blocks Nil)
+       ((BRErr e m) (NRErr e m))
+       ((BROk bs) (NROk (NApply t bs)))))
+    (_ (NRErr (quote bad_step) "(apply TERM (STEP…)…)"))))
+;; the child blocks of apply and rw: each a list of steps, as NBlock; a list headed by a form's
+;; name is one step (`(exact h)`), so a one-step block needs no second parenthesis
+(fn read_blocks ((ss (List SExpr)) (acc (List Node))) BlockRes
+  (measure (struct ss))
+  (match ss
+    (Nil (BROk (rev acc)))
+    ((Cons (SList (Cons (SSym h) rest)) r)
+     (match (read_block (if (tac_form_head h) (list (SList (Cons (SSym h) rest))) (Cons (SSym h) rest)))
+       ((BRErr e m) (BRErr e m))
+       ((BROk b) (read_blocks r (Cons (NBlock b) acc)))))
+    ((Cons (SList steps) r)
+     (match (read_block steps)
+       ((BRErr e m) (BRErr e m))
+       ((BROk b) (read_blocks r (Cons (NBlock b) acc)))))
+    (_ (BRErr (quote bad_step) "a premise's block is (STEP…)"))))
+(fn tac_form_head ((h Symbol)) Bool
+  (mem_sym h (list (quote intro) (quote exact) (quote rfl) (quote have) (quote show) (quote apply) (quote cases) (quote induction) (quote wf) (quote decide) (quote unfold) (quote reduce) (quote rw) (quote sorry))))
+
+(fn read_cases ((args (List SExpr)) (ind Bool)) NodeRes
+  (match args
+    ((Cons t (Cons (SList arms) Nil))
+     (match (read_arms arms Nil)
+       ((BRErr e m) (NRErr e m))
+       ((BROk as) (if ind (NROk (NInduction t None as)) (NROk (NCases t None as))))))
+    ((Cons t (Cons (SSym hn) (Cons (SList arms) Nil)))
+     (match (name_of_sym hn)
+       (None (NRErr (quote bad_step) (append (chars_of_sym hn) ": not a name")))
+       ((Some h)
+        (match (read_arms arms Nil)
+          ((BRErr e m) (NRErr e m))
+          ((BROk as) (if ind (NROk (NInduction t (Some h) as)) (NROk (NCases t (Some h) as))))))))
+    (_ (NRErr (quote bad_step) "(cases X ((CTOR (NAME…) STEP…)…)) or (cases X H ((CTOR …)…)) — the arms in one list, H the name of the equation X = CTOR … in each arm"))))
+(fn read_arms ((ss (List SExpr)) (acc (List Node))) BlockRes
+  (measure (struct ss))
+  (match ss
+    (Nil (BROk (rev acc)))
+    ((Cons (SList (Cons (SSym c) (Cons (SList vars) steps))) r)
+     (match (name_of_sym c)
+       (None (BRErr (quote bad_step) (append (chars_of_sym c) ": not a constructor name")))
+       ((Some cn)
+        (match (read_arm_names vars Nil)
+          (None (BRErr (quote bad_step) "an arm's names are symbols"))
+          ((Some ns)
+           (match (read_block steps)
+             ((BRErr e m) (BRErr e m))
+             ((BROk b) (read_arms r (Cons (NArm cn ns b) acc)))))))))
+    (_ (BRErr (quote bad_step) "an arm is (CTOR (NAME…) STEP…), with the names in a list"))))
+(fn read_arm_names ((ss (List SExpr)) (acc (List Name))) (Option (List Name))
+  (measure (struct ss))
+  (match ss
+    (Nil (Some (rev acc)))
+    ((Cons (SSym x) r) (match (name_of_sym x) ((Some n) (read_arm_names r (Cons n acc))) (None None)))
+    (_ None)))
+(fn read_wf ((args (List SExpr))) NodeRes
+  (match args
+    ((Cons x (Cons m (Cons (SSym ih) steps)))
+     (match (name_of_sym ih)
+       (None (NRErr (quote bad_step) (append (chars_of_sym ih) ": not a name")))
+       ((Some ihn)
+        (match (read_block steps)
+          ((BRErr e mm) (NRErr e mm))
+          ((BROk b) (NROk (NWf x m ihn b)))))))
+    (_ (NRErr (quote bad_step) "(wf LOCAL MEASURE IH STEP…)"))))
+(fn read_reduce ((args (List SExpr))) NodeRes
+  (match args
+    (Nil (NROk (NReduce (quote both))))
+    ((Cons (SSym side) Nil)
+     (if (bool_or (sym_eq side (quote lhs)) (sym_eq side (quote rhs))) (NROk (NReduce side))
+       (NRErr (quote bad_step) "(reduce), (reduce lhs) or (reduce rhs)")))
+    (_ (NRErr (quote bad_step) "(reduce), (reduce lhs) or (reduce rhs)"))))
+(fn read_rw ((args (List SExpr))) NodeRes
+  (match args
+    ((Cons lem rest)
+     (match (rw_lemma lem)
+       ((Pair rev1 t)
+        (match rest
+          ((Cons (SList (Cons (SSym o) (Cons (SNum k) Nil))) blocks)
+           (if (sym_eq o (quote occ))
+             (if (lt k 1) (NRErr (quote bad_step) "(occ K): K counts from 1")
+               (match (read_blocks blocks Nil) ((BRErr e m) (NRErr e m)) ((BROk bs) (NROk (NRw rev1 t k bs)))))
+             (match (read_blocks rest Nil) ((BRErr e m) (NRErr e m)) ((BROk bs) (NROk (NRw rev1 t 0 bs))))))
+          (_ (match (read_blocks rest Nil) ((BRErr e m) (NRErr e m)) ((BROk bs) (NROk (NRw rev1 t 0 bs)))))))))
+    (_ (NRErr (quote bad_step) "(rw LEMMA (occ K)? (STEP…)…) or (rw (<- LEMMA) …)"))))
+;; (<- LEMMA) reverses the equation
+(fn rw_lemma ((s SExpr)) (Pair Bool SExpr)
+  (match s
+    ((SList (Cons (SSym a) (Cons t Nil))) (if (sym_eq a (quote <-)) (Pair True t) (Pair False s)))
+    (_ (Pair False s))))
+
+;; ---- goals: open, close, make, show (rules 2 and 10) -------------------------------------
+;; the context of a goal as K locals and its target: the first `nctx` binders of the
+;; statement, each a fresh local under its binder's name
+(type Opened (Opened El (List Expr) Expr))
+(fn tac_open ((e El) (g Goal)) Opened (tac_open_go e (goal_stmt g) (goal_nctx g) Nil))
+(fn tac_open_go ((e El) (t Expr) (k Int) (acc (List Expr))) Opened
+  (measure k)
+  (if (lt k 1) (Opened e (rev acc) t)
+    (match t
+      ((Pi _ n bi dom body)
+       (match (el_local e n dom bi)
+         ((Pair e1 fv)
+          (match (w_inst1 (el_w e1) body fv)
+            ((Pair w2 body1) (tac_open_go (el_set_w e1 w2) body1 (- k 1) (Cons fv acc)))))))
+      (_ (Opened e (rev acc) t)))))
+;; a new goal over the locals `ctx` with the target: its metavariable has the closed statement
+;; as its type and no telescope; its occurrence is the metavariable applied to `ctx`
+(type Made (Made El Goal Expr))
+(fn tac_goal ((e El) (ctx (List Expr)) (target Expr)) Made
+  (match (el_pis e ctx target)
+    ((Pair e1 stmt)
+     (match (el_fresh e1 (n1 (quote goal)) stmt (quote goal))
+       ((Pair e2 (MVar _ i)) (Made e2 (Goal i stmt (len ctx)) (mk_app_n (mk_mvar i) ctx)))
+       ((Pair e2 m) (Made e2 (Goal 0 stmt (len ctx)) m))))))
+;; the context without the local `x`, when no other local's type mentions it (a split or an
+;; induction replaces it by its cases; a dependent would be left speaking of the old local, so
+;; then it stays); the occurrence of a goal over the smaller context still closes, K's
+;; mk_binding abstracting only what the term mentions
+(fn ctx_without ((e El) (ctx (List Expr)) (x Expr)) (List Expr)
+  (match x
+    ((FVar _ id) (if (ctx_depends e ctx id) ctx (remove_local ctx id)))
+    (_ ctx)))
+(fn ctx_depends ((e El) (ctx (List Expr)) (id Int)) Bool
+  (measure (struct ctx))
+  (match ctx
+    (Nil False)
+    ((Cons (FVar _ j) r)
+     (if (int_eq j id) (ctx_depends e r id)
+       (match (w_local_type (el_w e) j)
+         ((Some ty) (if (mem_int id (expr_fvars ty Nil)) True (ctx_depends e r id)))
+         (None (ctx_depends e r id)))))
+    ((Cons _ r) (ctx_depends e r id))))
+(fn remove_local ((ctx (List Expr)) (id Int)) (List Expr)
+  (measure (struct ctx))
+  (match ctx
+    (Nil Nil)
+    ((Cons (FVar d j) r) (if (int_eq j id) r (Cons (FVar d j) (remove_local r id))))
+    ((Cons o r) (Cons o (remove_local r id)))))
+;; the filling of a goal: the term over its context, closed
+(fn tac_close ((e El) (ctx (List Expr)) (t Expr)) (Pair El Expr) (el_lams e ctx t))
+;; the goal's named context and target, rendered (rule 10's goal_of)
+(fn goal_of ((g Goal)) (List Int) (show_goal_go (goal_stmt g) (goal_nctx g) Nil))
+(fn show_goal_go ((t Expr) (k Int) (names (List (List Int)))) (List Int)
+  (measure k)
+  (if (lt k 1) (append "⊢ " (tc_show t names))
+    (match t
+      ((Pi _ n _ dom body)
+       (let ((nm (chars_of_name_last n)))
+         (append "(" (append nm (append " : " (append (tc_show dom names) (append ") " (show_goal_go body (- k 1) (Cons nm names)))))))))
+      (_ (append "⊢ " (tc_show t names))))))
+;; a term in S, bound variables by their binder names, locals by `?f`, Eq and the
+;; comparisons under their operator spellings
+(fn tc_show ((t Expr) (names (List (List Int)))) (List Int)
+  (measure (struct t))
+  (match t
+    ((BVar _ i) (match (nth names i) ((Some nm) nm) (None (append "#" (show_nat i)))))
+    ((FVar _ i) (append "?f" (show_nat i)))
+    ((MVar _ i) (append "?" (show_nat i)))
+    ((Sort _ u) (if (level_is_zero u) "Prop" (append "(Sort " (append (show_level u) ")"))))
+    ((Const _ n _) (show_name n))
+    ((App _ _ _) (tc_show_app (get_app_fn t) (get_app_args t) names))
+    ((Lam _ n _ dom body)
+     (let ((nm (chars_of_name_last n)))
+       (append "(fun (" (append nm (append " : " (append (tc_show dom names) (append ") " (append (tc_show body (Cons nm names)) ")"))))))))
+    ((Pi _ n _ dom body)
+     (if (has_loose_bvar body 0)
+       (let ((nm (chars_of_name_last n)))
+         (append "(forall (" (append nm (append " : " (append (tc_show dom names) (append ") " (append (tc_show body (Cons nm names)) ")")))))))
+       (append "(-> " (append (tc_show dom names) (append " " (append (tc_show body (Cons "_" names)) ")"))))))
+    ((Let _ n ty v body)
+     (let ((nm (chars_of_name_last n)))
+       (append "(let ((" (append nm (append " " (append (tc_show v names) (append ")) " (append (tc_show body (Cons nm names)) ")"))))))))
+    ((Lit _ (LitNat k)) (show_nat k))
+    ((Lit _ (LitStr s)) (append "\"" (append s "\"")))
+    ((Proj _ _ i x) (append "(proj " (append (show_nat i) (append " " (append (tc_show x names) ")")))))))
+(fn tc_show_app ((f Expr) (args (List Expr)) (names (List (List Int)))) (List Int)
+  (match f
+    ((Const _ n _)
+     (if (name_eq n (nm_eq))
+       (match args ((Cons _ rest) (tc_show_args "(=" rest names)) (_ (tc_show_args (append "(" (show_name n)) args names)))
+     (match (tc_op_spelling n)
+       ((Some sp) (tc_show_args (append "(" sp) args names))
+       (None (tc_show_args (append "(" (show_name n)) args names)))))
+    (_ (tc_show_args (append "(" (tc_show f names)) args names))))
+(fn tc_show_args ((acc (List Int)) (args (List Expr)) (names (List (List Int)))) (List Int)
+  (measure (struct args))
+  (match args
+    (Nil (append acc ")"))
+    ((Cons a r) (tc_show_args (append acc (append " " (tc_show a names))) r names))))
+(fn tc_op_spelling ((n Name)) (Option (List Int))
+  (if (bool_or (name_eq n (n2 (quote Nat) (quote lt))) (name_eq n (n2 (quote Int) (quote lt)))) (Some "<")
+  (if (bool_or (name_eq n (n2 (quote Nat) (quote le))) (name_eq n (n2 (quote Int) (quote le)))) (Some "<=")
+    None)))
+(fn level_is_zero ((u Level)) Bool (match u (LZero True) (_ False)))
+
+;; the forms whose precondition the goal meets (rule 10's applicable; not a completeness
+;; claim): intro at a Pi, rfl and rw at an equation, cases/induction/wf where a local has an
+;; inductive type, decide where the target has a decision; exact, apply, have, show, unfold,
+;; reduce and sorry always
+(fn applicable ((e El) (g Goal)) (List Symbol)
+  (match (tac_open e g)
+    ((Opened e1 ctx target)
+     (match (el_whnf e1 target)
+       ((Pair e2 tw)
+        (append (if (is_pi tw) (list (quote intro)) Nil)
+        (append (match (eq_sides tw) ((Some _) (list (quote rfl) (quote rw))) (None Nil))
+        (append (if (ctx_has_inductive e2 ctx) (list (quote cases) (quote induction) (quote wf)) Nil)
+        (append (match (decision_of e2 (el_zonk e2 target)) ((Pair _ (Some _)) (list (quote decide))) (_ Nil))
+                (list (quote exact) (quote apply) (quote have) (quote show) (quote unfold) (quote reduce) (quote sorry)))))))))))
+(fn ctx_has_inductive ((e El) (ctx (List Expr))) Bool
+  (measure (struct ctx))
+  (match ctx
+    (Nil False)
+    ((Cons (FVar _ id) r)
+     (match (w_local_type (el_w e) id)
+       ((Some ty) (match (ind_of_type e ty) ((IndOf _ _ _ _ _ _ _) True) (_ (ctx_has_inductive e r))))
+       (None (ctx_has_inductive e r))))
+    ((Cons _ r) (ctx_has_inductive e r))))
+
+;; ---- the steps (rules 3 and 4) ---------------------------------------------------------------
+;; a step's answer: the state, the goal's filling (closed), the child goals with their blocks
+;; (one each, in the goals' order), the continuation goal of a sequential step
+(type TStep (StepOk El Expr (List Goal) (List (List Node)) (Option Goal)) (StepErr Symbol (List Int)))
+(fn step_err ((x Symbol) (m (List Int))) TStep (StepErr x m))
+;; the elaborator's refusal, carried
+(fn step_eerr ((r ERes)) TStep (match r ((EErr x m) (StepErr x m)) (_ (StepErr (quote bad_shape) "no refusal"))))
+
+(fn tac_step ((e El) (g Goal) (nd Node)) TStep
+  (match (tac_open e g)
+    ((Opened e1 ctx target)
+     (match nd
+       ((NIntro ns) (step_intro e1 ctx target ns))
+       ((NExact t) (step_exact e1 ctx target t))
+       ((NRfl) (step_rfl e1 ctx target))
+       ((NHave n p b) (step_have e1 ctx target n p b))
+       ((NShow p) (step_show e1 ctx target p))
+       ((NSorry) (step_sorry e1 ctx target))
+       ((NApply t bs) (step_apply e1 ctx target t bs))
+       ((NCases t hn arms) (step_cases e1 ctx target t hn arms False))
+       ((NInduction t hn arms) (step_cases e1 ctx target t hn arms True))
+       ((NWf x m ih b) (step_wf e1 ctx target x m ih b))
+       ((NDecide) (step_decide e1 ctx target))
+       ((NUnfold ns) (step_unfold e1 ctx target ns))
+       ((NReduce side) (step_reduce e1 ctx target side))
+       ((NRw rv lem occ bs) (step_rw e1 ctx target rv lem occ bs))
+       (_ (StepErr (quote bad_step) "an arm or a block is not a step"))))))
+
+;; a sequential step's answer: the continuation goal over `ctx` at `target`, the filling its
+;; occurrence — the parent's statement and the continuation's are K-convertible
+(fn step_continue ((e El) (ctx (List Expr)) (target Expr) (children (List Goal)) (blocks (List (List Node)))) TStep
+  (match (tac_goal e ctx target)
+    ((Made e1 g occ)
+     (match (tac_close e1 ctx occ)
+       ((Pair e2 filling) (StepOk e2 filling children blocks (Some g)))))))
+;; a closing step's answer
+(fn step_close ((e El) (ctx (List Expr)) (t Expr) (children (List Goal)) (blocks (List (List Node)))) TStep
+  (match (tac_close e ctx t) ((Pair e1 filling) (StepOk e1 filling children blocks None))))
+
+;; (intro NAME…): the target a Pi after whnf, one local per name
+(fn step_intro ((e El) (ctx (List Expr)) (target Expr) (ns (List Name))) TStep
+  (match (intro_go e ctx target ns)
+    ((Pair (Some (Opened e1 ctx1 target1)) _) (step_continue e1 ctx1 target1 Nil Nil))
+    ((Pair None m) (StepErr (quote intro_no_pi) m))))
+(fn intro_go ((e El) (ctx (List Expr)) (target Expr) (ns (List Name))) (Pair (Option Opened) (List Int))
+  (measure (struct ns))
+  (match ns
+    (Nil (Pair (Some (Opened e ctx target)) Nil))
+    ((Cons n r)
+     (match (el_whnf e target)
+       ((Pair e1 (Pi _ _ bi dom body))
+        (match (el_local e1 n dom bi)
+          ((Pair e2 fv)
+           (match (w_inst1 (el_w e2) body fv)
+             ((Pair w3 body1) (intro_go (el_set_w e2 w3) (append ctx (list fv)) body1 r))))))
+       ((Pair e1 _) (Pair None "the target is not a forall or an implication after whnf"))))))
+
+;; (exact TERM): the term at the target
+(fn step_exact ((e El) (ctx (List Expr)) (target Expr) (t SExpr)) TStep
+  (match (elab e t (Some target))
+    ((EErr x m) (StepErr x m))
+    ((EOk e1 v _)
+     (match (tac_unsolved e1 v)
+       ((Some (Pair x m)) (StepErr x m))
+       (None (step_close e1 ctx (el_zonk e1 v) Nil Nil))))))
+;; a metavariable of the step's own left open (a goal's is not)
+(fn tac_unsolved ((e El) (v Expr)) (Option (Pair Symbol (List Int)))
+  (match (first_open_mvar e (el_zonk e v))
+    (None None)
+    ((Some i) (match (unsolved_msg e i) ((FinErr x m) (Some (Pair x m))) ((FinOk _) None)))))
+(fn first_open_mvar ((e El) (v Expr)) (Option Int) (first_open_go e (mvars_of v Nil)))
+(fn first_open_go ((e El) (is (List Int))) (Option Int)
+  (measure (struct is))
+  (match is
+    (Nil None)
+    ((Cons i r)
+     (match (mc_decl (el_mc e) i)
+       ((Some d) (if (sym_eq (md_kind d) (quote goal)) (first_open_go e r) (Some i)))
+       (None (first_open_go e r))))))
+(fn mvars_of ((t Expr) (acc (List Int))) (List Int)
+  (measure (struct t))
+  (if (bool_not (has_mvar t)) acc
+    (match t
+      ((MVar _ i) (if (mem_int i acc) acc (Cons i acc)))
+      ((App _ f a) (mvars_of a (mvars_of f acc)))
+      ((Lam _ _ _ d b) (mvars_of b (mvars_of d acc)))
+      ((Pi _ _ _ d b) (mvars_of b (mvars_of d acc)))
+      ((Let _ _ ty v b) (mvars_of b (mvars_of v (mvars_of ty acc))))
+      ((Proj _ _ _ x) (mvars_of x acc))
+      (_ acc))))
+
+;; rfl: Eq.refl at `a = b`, the sides K-convertible
+(fn step_rfl ((e El) (ctx (List Expr)) (target Expr)) TStep
+  (match (el_whnf e target)
+    ((Pair e1 tw)
+     (match (eq_sides tw)
+       (None (StepErr (quote rfl_not_eq) (append "rfl closes an equation; the target is " (tc_show_closed e1 ctx tw))))
+       ((Some (Pair u (Pair ty (Pair a b))))
+        (match (el_unify_r e1 a b)
+          ((EUOk e2) (step_close e2 ctx (mk_app (mk_app (mk_const (nm_eq_refl) (list u)) ty) a) Nil Nil))
+          ((EUStuck i) (match (eu_refusal e1 (EUStuck i) (EErr (quote rfl_failed) "")) ((EErr x m) (StepErr x m)) (_ (StepErr (quote rfl_failed) ""))))
+          ((EUExhausted s) (StepErr (quote unify_exhausted) (append "unification ran out at " (chars_of_sym s))))
+          (EUNo (StepErr (quote rfl_failed) (append "the sides are not convertible: " (append (tc_show_closed e1 ctx a) (append " and " (tc_show_closed e1 ctx b))))))))))))
+;; `@Eq.{u} ty a b` taken apart
+(fn eq_sides ((t Expr)) (Option (Pair Level (Pair Expr (Pair Expr Expr))))
+  (match (get_app_fn t)
+    ((Const _ n (Cons u Nil))
+     (if (name_eq n (nm_eq))
+       (match (get_app_args t)
+         ((Cons ty (Cons a (Cons b Nil))) (Some (Pair u (Pair ty (Pair a b)))))
+         (_ None))
+       None))
+    (_ None)))
+;; a term over the step's locals, rendered as the goal would show it: the term alone, its
+;; locals by their names (closed over the context, the binders walked for the names)
+(fn tc_show_closed ((e El) (ctx (List Expr)) (t Expr)) (List Int)
+  (match (el_pis e ctx (el_zonk e t)) ((Pair _ c) (show_body_go c (len ctx) Nil))))
+(fn show_body_go ((t Expr) (k Int) (names (List (List Int)))) (List Int)
+  (measure k)
+  (if (lt k 1) (tc_show t names)
+    (match t
+      ((Pi _ n _ _ body) (show_body_go body (- k 1) (Cons (chars_of_name_last n) names)))
+      (_ (tc_show t names)))))
+
+;; (have NAME PROP STEP…): the cut — the child goal PROP over ctx, the continuation with
+;; NAME : PROP; the filling applies the continuation's lambda to the child's occurrence
+(fn step_have ((e El) (ctx (List Expr)) (target Expr) (n Name) (p SExpr) (b (List Node))) TStep
+  (match (elab_type e p)
+    ((EErr x m) (StepErr x m))
+    ((EOk e1 prop _)
+     (match (tac_unsolved e1 prop)
+       ((Some (Pair x m)) (StepErr x m))
+       (None
+        (match (tac_goal e1 ctx (el_zonk e1 prop))
+          ((Made e2 child cocc)
+           (match (el_local e2 n (el_zonk e2 prop) BDefault)
+             ((Pair e3 h)
+              (match (tac_goal e3 (append ctx (list h)) target)
+                ((Made e4 cont kocc)
+                 (match (el_lams e4 (list h) kocc)
+                   ((Pair e5 lam)
+                    (match (tac_close e5 ctx (mk_app lam cocc))
+                      ((Pair e6 filling) (StepOk e6 filling (list child) (list b) (Some cont)))))))))))))))))
+
+;; (show PROP): the target replaced where K's conversion agrees
+(fn step_show ((e El) (ctx (List Expr)) (target Expr) (p SExpr)) TStep
+  (match (elab_type e p)
+    ((EErr x m) (StepErr x m))
+    ((EOk e1 prop _)
+     (match (tac_unsolved e1 prop)
+       ((Some (Pair x m)) (StepErr x m))
+       (None
+        (match (w_is_def_eq_r (el_w e1) (el_zonk e1 prop) (el_zonk e1 target))
+          ((Pair w2 (WVal True)) (step_continue (el_set_w e1 w2) ctx (el_zonk e1 prop) Nil Nil))
+          ((Pair w2 _) (StepErr (quote show_mismatch) (append "not convertible to the target: " (tc_show_closed (el_set_w e1 w2) ctx prop))))))))))
+
+;; sorry: the goal stays open (the theorem is pending); the filling is its own occurrence
+(fn step_sorry ((e El) (ctx (List Expr)) (target Expr)) TStep
+  (match (tac_goal e ctx target)
+    ((Made e1 g occ)
+     (match (tac_close e1 ctx occ)
+       ((Pair e2 filling) (StepOk e2 filling (list g) Nil None))))))
+
+;; ---- apply, cases, induction, wf, decide (rule 4) ---------------------------------------------
+;; the number of binders of a type, whnf at each
+(fn tac_arity ((e El) (t Expr) (fuel Int)) (Pair El Int)
+  (measure fuel)
+  (if (lt fuel 1) (Pair e 0)
+    (match (el_whnf e t)
+      ((Pair e1 (Pi _ _ _ _ body)) (match (tac_arity e1 body (- fuel 1)) ((Pair e2 k) (Pair e2 (+ k 1)))))
+      ((Pair e1 _) (Pair e1 0)))))
+;; a type's first k binders opened with fresh metavariables: the term applied, the type left,
+;; the metavariables; the whnf is taken only where the type is not a Pi already
+(type OpenedM (OpenedM El Expr Expr (List Expr)))
+(fn open_mvars ((e El) (v Expr) (t Expr) (k Int) (acc (List Expr))) OpenedM
+  (measure k)
+  (if (lt k 1) (OpenedM e v t (rev acc))
+    (match (if (is_pi t) (Pair e t) (el_whnf e t))
+      ((Pair e1 (Pi _ n bi dom body))
+       (match (el_fresh e1 n dom (if (bi_default bi) (quote explicit) (if (bi_inst bi) (quote inst) (quote implicit))))
+         ((Pair e2 m)
+          (match (w_inst1 (el_w e2) body m)
+            ((Pair w3 body1) (open_mvars (el_set_w e2 w3) (mk_app v m) body1 (- k 1) (Cons m acc)))))))
+      ((Pair e1 t1) (OpenedM e1 v t1 (rev acc))))))
+;; the metavariables of an opening left unassigned: each a proposition is a child goal over ctx,
+;; assigned its occurrence; anything else is the refusal `WHO_unsolved`
+(type Premises (PrOk El (List Goal)) (PrErr Symbol (List Int)))
+(fn premise_goals ((e El) (ctx (List Expr)) (ms (List Expr)) (who Symbol) (acc (List Goal))) Premises
+  (measure (struct ms))
+  (match ms
+    (Nil (PrOk e (rev acc)))
+    ((Cons (MVar _ i) r)
+     (match (mc_assigned (el_mc e) i)
+       ((Some _) (premise_goals e ctx r who acc))
+       (None
+        (match (mc_decl (el_mc e) i)
+          (None (PrErr (quote bad_shape) "a metavariable without a declaration"))
+          ((Some d)
+           (let ((ty (el_zonk e (md_type d))))
+             (if (has_mvar ty)
+               (PrErr (sym_of_chars (append (chars_of_sym who) "_unsolved")) (append "the premise " (append (show_name (md_name d)) " mentions an argument the goal does not determine (a witness goal is the graph's, after slice 3.20): give that argument in the term — (apply (Eq.trans h1)) names the middle term through h1")))
+               (match (w_is_prop (el_w e) ty)
+                 ((Pair w1 (Some True))
+                  (match (tac_goal (el_set_w e w1) ctx ty)
+                    ((Made e2 g occ) (premise_goals (el_set_mc e2 (mc_set (el_mc e2) i occ)) ctx r who (Cons g acc)))))
+                 ((Pair w1 _)
+                  (PrErr (sym_of_chars (append (chars_of_sym who) "_unsolved")) (append "the argument " (append (show_name (md_name d)) (append " : " (append (tc_show_closed (el_set_w e w1) ctx ty) " is not determined by the goal (a witness goal is the graph's, after slice 3.20): write the application with @"))))))))))))))
+    ((Cons _ r) (premise_goals e ctx r who acc))))
+;; the children against the node's blocks
+(fn blocks_match ((who Symbol) (gs (List Goal)) (nblocks Int)) (Option (Pair Symbol (List Int)))
+  (if (int_eq (len gs) nblocks) None
+    (Some (Pair (sym_of_chars (append (chars_of_sym who) "_goals"))
+                (append (chars_of_sym who) (append " opens " (append (show_nat (len gs)) (append " goal(s) and the step gives " (append (show_nat nblocks) (append " block(s): " (goals_list gs)))))))))))
+(fn goals_list ((gs (List Goal))) (List Int)
+  (measure (struct gs))
+  (match gs (Nil "") ((Cons g r) (append "[" (append (goal_of g) (append "] " (goals_list r)))))))
+
+;; (apply TERM BLOCK…): TERM's conclusion after arity(TERM) - arity(target) binders unified with
+;; the target; each premise left open a child goal in binder order
+(fn step_apply ((e El) (ctx (List Expr)) (target Expr) (t SExpr) (bs (List Node))) TStep
+  (match (elab e t None)
+    ((EErr x m) (StepErr x m))
+    ((EOk e1 v ty)
+     (match (tac_arity e1 ty 64)
+       ((Pair e2 at)
+        (match (tac_arity e2 target 64)
+          ((Pair e3 ag)
+           (match (open_mvars e3 v ty (max_int (- at ag) 0) Nil)
+             ((OpenedM e4 v1 concl ms)
+              (match (el_unify_r e4 concl target)
+                ((EUOk e5)
+                 (match (premise_goals e5 ctx ms (quote apply) Nil)
+                   ((PrErr x m) (StepErr x m))
+                   ((PrOk e6 gs)
+                    (match (blocks_match (quote apply) gs (len bs))
+                      ((Some (Pair x m)) (StepErr x m))
+                      (None
+                       (match (tac_unsolved e6 v1)
+                         ((Some (Pair x m)) (StepErr x m))
+                         (None (step_close e6 ctx (el_zonk e6 v1) gs (blocks_of bs Nil)))))))))
+                (EUNo (StepErr (quote apply_mismatch) (append "the conclusion " (append (tc_show_closed e4 ctx concl) (append " does not unify with the target " (tc_show_closed e4 ctx target))))))
+                (u (match (eu_refusal e4 u (EErr (quote apply_mismatch) "")) ((EErr x m) (StepErr x m)) (_ (StepErr (quote apply_mismatch) ""))))))))))))))
+
+;; the inductive of a type: its name, levels, arguments, parameter and index counts, ctors
+(type IndOf (IndOf El Name (List Level) (List Expr) Int Int (List Name)) (IndNone El (List Int)))
+(fn ind_of_type ((e El) (ty Expr)) IndOf
+  (match (el_whnf e ty)
+    ((Pair e1 tw)
+     (match (get_app_fn tw)
+       ((Const _ n ls)
+        (match (env_find (el_env e1) n)
+          ((Some (InductInfo _ nparams nindices _ ctors _ _ _ _)) (IndOf e1 n ls (get_app_args tw) nparams nindices ctors))
+          (_ (IndNone e1 (append (show_name n) " is not an inductive type")))))
+       (_ (IndNone e1 (append "not an inductive type: " (tc_show tw Nil))))))))
+;; a head-beta step: (fun x => b) a… to b[a]…
+(fn tac_beta ((e El) (t Expr)) (Pair El Expr)
+  (match (get_app_fn t)
+    ((Lam _ _ _ _ _)
+     (match (beta_head (w_st (el_w e)) (get_app_fn t) (get_app_args t))
+       ((Pair st r) (Pair (el_set_w e (w_set_st (el_w e) st)) r))))
+    (_ (Pair e t))))
+;; the target with the scrutinee generalized: a local by its id, a term by its occurrences
+(fn generalize ((e El) (target Expr) (x Expr) (d Expr)) (Pair El Expr)
+  (match x
+    ((FVar _ id) (match (w_subst (el_w e) target id d) ((Pair w1 r) (Pair (el_set_w e w1) r))))
+    (_ (Pair e (tc_replace target x d 0)))))
+
+;; (cases X ARM…) and (induction X ARM…): the eliminator applied to the generalized motive
+;; with an equation name, the motive is `λ d. x = d → target[d]` and the eliminator's result is
+;; applied to Eq.refl x, so each arm has `H : x = CTOR fields` (Lean's `cases h : x`)
+(fn step_cases ((e El) (ctx (List Expr)) (target Expr) (t SExpr) (hn (Option Name)) (arms (List Node)) (ind Bool)) TStep
+  (match (elab e t None)
+    ((EErr x m) (StepErr x m))
+    ((EOk e1 x0 xty)
+     (let ((x (el_zonk e1 x0)))
+     (match (tac_unsolved e1 x)
+       ((Some (Pair xx m)) (StepErr xx m))
+       (None
+        (match (ind_of_type e1 xty)
+          ((IndNone e2 m) (StepErr (quote cases_type) m))
+          ((IndOf e2 iname ils iargs nparams nindices ctors)
+           (if (lt 0 nindices) (StepErr (quote cases_indexed) (append (show_name iname) " is an indexed family: cases on it is a later form (injection, subst)"))
+           (if (bool_and ind (match hn ((Some _) True) (None False))) (StepErr (quote induction_eq) "induction takes no equation name: the hypotheses would be guarded by it (Lean has none either); name the equation under cases, or state the equation and induct on the local")
+           (let ((elim (name_append iname (n1 (if ind (quote rec) (quote casesOn))))))
+             (match (env_find (el_env e2) elim)
+               (None (StepErr (quote cases_type) (append (show_name elim) " is not in the environment")))
+               ((Some einfo)
+                (let ((levels (if (lt (len ils) (len (ci_lparams einfo))) (Cons LZero ils) ils)))
+                  (match (el_local e2 (n1 (quote d)) (el_zonk e2 xty) BDefault)
+                    ((Pair e3 d)
+                     (match (generalize e3 (el_zonk e3 target) x d)
+                       ((Pair e4a body0)
+                        (match (cases_eq_motive e4a hn xty x d body0)
+                          ((Pair e4 body)
+                        (match (el_lams e4 (list d) body)
+                          ((Pair e5 motive)
+                           ;; casesOn takes the major before its minors, rec after them
+                           (let ((head (mk_app_n (mk_const elim levels) (append (take nparams iargs) (if ind (list motive) (list motive x))))))
+                             (match (el_infer e5 head)
+                               ((Pair e6 None) (StepErr (quote cases_type) (append "K could not type " (append (show_name elim) " at this motive"))))
+                               ((Pair e6 (Some hty))
+                                (match (cases_minors e6 (match hn ((Some _) ctx) (None (ctx_without e6 ctx x))) hty ctors arms hn Nil Nil Nil (if ind (quote induction) (quote cases)))
+                                  ((MinErr xx m) (StepErr xx m))
+                                  ((MinOk e7 minors gs bls)
+                                   (step_close e7 ctx
+                                     (mk_app_n (mk_app_n head (if ind (append minors (list x)) minors))
+                                       (match hn ((Some _) (list (mk_app_n (mk_const (nm_eq_refl) (list (sort_level_of e7 xty))) (list (el_zonk e7 xty) x)))) (None Nil)))
+                                     gs bls))))))))))))))))))))))))))))
+;; the motive's body under an equation name: `(= x d) -> body`
+(fn cases_eq_motive ((e El) (hn (Option Name)) (xty Expr) (x Expr) (d Expr) (body Expr)) (Pair El Expr)
+  (match hn
+    (None (Pair e body))
+    ((Some _)
+     (match (el_local e (n1 (quote h)) (mk_app_n (mk_const (nm_eq) (list (sort_level_of e xty))) (list (el_zonk e xty) x d)) BDefault)
+       ((Pair e1 h) (el_pis e1 (list h) body))))))
+(fn sort_level_of ((e El) (ty Expr)) Level
+  (match (tac_sort_level e ty) ((Pair _ (Some u)) u) ((Pair _ None) (LSucc LZero))))
+;; one minor premise per constructor: its telescope opened under the arm's names, its result
+;; the child goal (with the equation hypothesis opened after the fields, under its name)
+(type Minors (MinOk El (List Expr) (List Goal) (List (List Node))) (MinErr Symbol (List Int)))
+(fn cases_minors ((e El) (ctx (List Expr)) (hty Expr) (ctors (List Name)) (arms (List Node)) (hn (Option Name)) (macc (List Expr)) (gacc (List Goal)) (bacc (List (List Node))) (who Symbol)) Minors
+  (measure (struct ctors))
+  (match ctors
+    (Nil (match arms
+           (Nil (MinOk e (rev macc) (rev gacc) (rev bacc)))
+           ((Cons (NArm c _ _) _) (MinErr (sym_of_chars (append (chars_of_sym who) "_rows")) (append (show_name c) " is not a constructor of the type, or is named twice")))
+           (_ (MinErr (quote bad_step) "an arm is (CTOR (NAME…) STEP…)"))))
+    ((Cons c cr)
+     (match (take_arm c arms Nil)
+       (None (MinErr (sym_of_chars (append (chars_of_sym who) "_rows")) (append "no arm for the constructor " (show_name c))))
+       ((Some (Pair (NArm _ names ablock) rest))
+        (match (el_whnf e hty)
+          ((Pair e1 (Pi _ _ _ mty body))
+           (match (tac_fields_open e1 (el_zonk e1 mty) names Nil)
+             ((Pair _ (Opened e2a fields0 res0))
+              (match (open_eq_hyp e2a hn fields0 res0)
+               ((Opened e2 fields res)
+              (if (bool_not (int_eq (minor_binders (el_zonk e1 mty) 64) (len names)))
+                (MinErr (sym_of_chars (append (chars_of_sym who) "_fields")) (append (show_name c) (append "'s arm names " (append (show_nat (len names)) (append " binder(s) and its case has " (append (show_nat (len fields)) (append ": " (fields_list e2 ctx fields))))))))
+                (match (tac_goal e2 (append ctx fields) res)
+                  ((Made e3 g occ)
+                   (match (el_lams e3 fields occ)
+                     ((Pair e4 minor)
+                      (match (w_inst1 (el_w e4) body minor)
+                        ((Pair w5 hty1) (cases_minors (el_set_w e4 w5) ctx hty1 cr rest hn (Cons minor macc) (Cons g gacc) (Cons ablock bacc) who)))))))))))))
+          ((Pair e1 _) (MinErr (quote cases_type) "the eliminator's type has fewer minor premises than constructors"))))
+       ((Some _) (MinErr (quote bad_step) "an arm is (CTOR (NAME…) STEP…)"))))))
+;; the arm named after the constructor (by its last component or in full), and the rest
+(fn take_arm ((c Name) (arms (List Node)) (acc (List Node))) (Option (Pair Node (List Node)))
+  (measure (struct arms))
+  (match arms
+    (Nil None)
+    ((Cons (NArm n ns b) r)
+     (if (bool_or (name_eq n c) (int_list_eq (chars_of_name_last n) (chars_of_name_last c)))
+       (Some (Pair (NArm n ns b) (append (rev acc) r)))
+       (take_arm c r (Cons (NArm n ns b) acc))))
+    ((Cons o r) (take_arm c r (Cons o acc)))))
+;; a minor premise's binders as locals under the names given — as many as the names, every
+;; binder's type head-beta reduced (the motive applied); the result head-beta reduced
+(fn tac_fields_open ((e El) (t Expr) (names (List Name)) (acc (List Expr))) (Pair Bool Opened)
+  (measure (struct names))
+  (match names
+    (Nil (match (tac_beta e t) ((Pair e1 r) (Pair True (Opened e1 (rev acc) r)))))
+    ((Cons n r)
+     (match t
+       ((Pi _ _ bi dom body)
+        (match (tac_beta e dom)
+          ((Pair e1 dom1)
+           (match (el_local e1 n dom1 bi)
+             ((Pair e2 fv)
+              (match (w_inst1 (el_w e2) body fv)
+                ((Pair w3 body1) (tac_fields_open (el_set_w e2 w3) body1 r (Cons fv acc)))))))))
+       (_ (match (tac_beta e t) ((Pair e1 r1) (Pair False (Opened e1 (rev acc) r1)))))))))
+;; the binders of a minor premise's type: its own, before the equation's (the type is a Pi
+;; telescope ending in the motive applied)
+(fn minor_binders ((t Expr) (fuel Int)) Int
+  (measure fuel)
+  (if (lt fuel 1) 0 (match t ((Pi _ _ _ _ body) (+ 1 (minor_binders body (- fuel 1)))) (_ 0))))
+;; the equation hypothesis after the fields: the minor's result is `(= x (C fields)) -> target`
+(fn open_eq_hyp ((e El) (hn (Option Name)) (fields (List Expr)) (res Expr)) Opened
+  (match hn
+    (None (Opened e fields res))
+    ((Some h)
+     (match res
+       ((Pi _ _ bi dom body)
+        (match (el_local e h dom bi)
+          ((Pair e1 fv)
+           (match (w_inst1 (el_w e1) body fv)
+             ((Pair w2 body1) (Opened (el_set_w e1 w2) (append fields (list fv)) body1))))))
+       (_ (Opened e fields res))))))
+(fn fields_list ((e El) (ctx (List Expr)) (fields (List Expr))) (List Int)
+  (match (el_pis e (append ctx fields) (mk_sort LZero))
+    ((Pair _ c) (show_goal_go c (+ (len ctx) (len fields)) Nil))))
+
+;; (wf X MEASURE IH STEP…): WellFounded.fix over (measure MEASURE) with the target as motive
+(fn step_wf ((e El) (ctx (List Expr)) (target Expr) (xs SExpr) (ms SExpr) (ihn Name) (b (List Node))) TStep
+  (match (elab e xs None)
+    ((EErr x m) (StepErr x m))
+    ((EOk e1 x0 alpha0)
+     (match (el_zonk e1 x0)
+       ((FVar dd xid)
+        (let ((x (FVar dd xid)) (alpha (el_zonk e1 alpha0)))
+        (match (elab e1 ms (Some (mk_const (nm_nat) Nil)))
+          ((EErr xx m) (StepErr xx m))
+          ((EOk e2 mz _)
+           (match (tac_unsolved e2 mz)
+             ((Some (Pair xx m)) (StepErr xx m))
+             (None
+              (let ((mt (el_zonk e2 mz)))
+              (if (bool_not (wf_in_scope e2)) (StepErr (quote wf_unreached) "WellFounded.fix, InvImage.wf or Nat.lt_wfRel is past the Init prefix in scope")
+              (match (tac_sort_level e2 alpha)
+                ((Pair e3 None) (StepErr (quote wf_local) "the local's type is not a type"))
+                ((Pair e3 (Some u))
+                 (match (el_local e3 (n1 (quote x)) alpha BDefault)
+                   ((Pair e4 xa)
+                    (match (w_subst (el_w e4) mt xid xa)
+                      ((Pair w5 ma)
+                       (match (w_lams w5 (list xa) ma)
+                         ((Pair w6 mfn)
+                          (match (w_subst w6 (el_zonk e4 target) xid xa)
+                            ((Pair w7 ta)
+                             (match (w_lams w7 (list xa) ta)
+                               ((Pair w8 motive)
+                                (match (wf_rel (el_set_w e4 w8) u alpha mfn)
+                                  ((Pair e5 (Pair rel hwf))
+                                   ;; the hypothesis: x' with the target's name, ih : ∀ y, m[y] < m[x'] → target[y]
+                                   (match (el_local e5 (local_name e5 xid) alpha BDefault)
+                                     ((Pair e6 xp)
+                                      (match (ih_type e6 alpha mt xid xp target)
+                                        ((Pair e7 ihty)
+                                         (match (el_local e7 ihn ihty BDefault)
+                                           ((Pair e8 ih)
+                                            (match (w_subst (el_w e8) (el_zonk e8 target) xid xp)
+                                              ((Pair w9 tp)
+                                               (match (tac_goal (el_set_w e8 w9) (append (ctx_without e8 ctx x) (list xp ih)) tp)
+                                                 ((Made e9 g occ)
+                                                  (match (el_lams e9 (list xp ih) occ)
+                                                    ((Pair e10 F)
+                                                     (step_close e10 ctx
+                                                       (mk_app_n (mk_const (n2 (quote WellFounded) (quote fix)) (list u LZero)) (list alpha motive rel hwf F x))
+                                                       (list g) (list b))))))))))))))))))))))))))))))))))))
+       (_ (StepErr (quote wf_local) "wf takes a local of the context (a variable, not a term)"))))))
+(fn wf_in_scope ((e El)) Bool
+  (bool_and (has_env_const e (n2 (quote WellFounded) (quote fix)))
+  (bool_and (has_env_const e (n2 (quote InvImage) (quote wf)))
+  (bool_and (has_env_const e (n2 (quote Nat) (quote lt_wfRel)))
+            (has_env_const e (n2 (quote WellFoundedRelation) (quote wf)))))))
+(fn has_env_const ((e El) (n Name)) Bool (match (env_find (el_env e) n) ((Some _) True) (None False)))
+;; the level of a type's sort
+(fn tac_sort_level ((e El) (ty Expr)) (Pair El (Option Level))
+  (match (el_infer e ty)
+    ((Pair e1 None) (Pair e1 None))
+    ((Pair e1 (Some s))
+     (match (el_whnf e1 s)
+       ((Pair e2 (Sort _ u)) (Pair e2 (Some u)))
+       ((Pair e2 _) (Pair e2 None))))))
+(fn local_name ((e El) (id Int)) Name (bound_name (cx_bound (el_cx e)) id))
+(fn bound_name ((bs (List (Pair Name Expr))) (id Int)) Name
+  (measure (struct bs))
+  (match bs
+    (Nil (n1 (quote x)))
+    ((Cons (Pair n (FVar _ j)) r) (if (int_eq id j) n (bound_name r id)))
+    ((Cons _ r) (bound_name r id))))
+;; InvImage Nat.lt_wfRel.rel m and InvImage.wf m Nat.lt_wfRel.wf, as define.shard builds them
+(fn wf_rel ((e El) (u Level) (alpha Expr) (mfn Expr)) (Pair El (Pair Expr Expr))
+  (let ((nat (mk_const (nm_nat) Nil)) (wfrel (mk_const (n2 (quote Nat) (quote lt_wfRel)) Nil)) (one (LSucc LZero)))
+    (let ((rnat (mk_app_n (mk_const (n2 (quote WellFoundedRelation) (quote rel)) (list one)) (list nat wfrel)))
+          (hnat (mk_app_n (mk_const (n2 (quote WellFoundedRelation) (quote wf)) (list one)) (list nat wfrel))))
+      (Pair e (Pair (mk_app_n (mk_const (n1 (quote InvImage)) (list u one)) (list alpha nat rnat mfn))
+                    (mk_app_n (mk_const (n2 (quote InvImage) (quote wf)) (list u one)) (list alpha nat rnat mfn hnat)))))))
+;; ∀ (y : α), (< m[y] m[x']) → target[y]
+(fn ih_type ((e El) (alpha Expr) (mt Expr) (xid Int) (xp Expr) (target Expr)) (Pair El Expr)
+  (match (el_local e (n1 (quote y)) alpha BDefault)
+    ((Pair e1 y)
+     (match (w_subst (el_w e1) mt xid y)
+       ((Pair w2 my)
+        (match (w_subst w2 mt xid xp)
+          ((Pair w3 mx)
+           (match (el_local (el_set_w e1 w3) (n1 (quote h)) (mk_app_n (mk_const (n2 (quote Nat) (quote lt)) Nil) (list my mx)) BDefault)
+             ((Pair e4 h)
+              (match (w_subst (el_w e4) (el_zonk e4 target) xid y)
+                ((Pair w5 ty)
+                 (match (w_pis w5 (list y h) ty)
+                   ((Pair w6 r) (Pair (el_set_w e4 w6) r))))))))))))))
+
+;; decide: of_decide_eq_true at the target's decision, K's conversion the work
+(fn step_decide ((e El) (ctx (List Expr)) (target Expr)) TStep
+  (let ((tz (el_zonk e target)))
+    (match (decision_of e tz)
+      ((Pair e1 None)
+       (match (no_decision e1 tz "decide: the target has no decision") ((EErr x m) (StepErr x m)) (_ (StepErr (quote no_decision) "decide: the target has no decision"))))
+      ((Pair e1 (Some inst))
+       (let ((dec (mk_app_n (mk_const (n2 (quote Decidable) (quote decide)) Nil) (list tz inst))) (tru (mk_const (n2 (quote Bool) (quote true)) Nil)))
+         (match (w_is_def_eq_r (el_w e1) dec tru)
+           ((Pair w2 (WVal True))
+            (step_close (el_set_w e1 w2) ctx
+              (mk_app_n (mk_const (n1 (quote of_decide_eq_true)) Nil)
+                (list tz inst (mk_app_n (mk_const (nm_eq_refl) (list (LSucc LZero))) (list (mk_const (n1 (quote Bool)) Nil) tru))))
+              Nil Nil))
+           ((Pair w2 _) (StepErr (quote decide_failed) (append "the decision does not evaluate to true: " (tc_show_closed (el_set_w e1 w2) ctx tz))))))))))
+
+;; ---- rewriting (rules 5, 6, 7) ---------------------------------------------------------------
+;; t with every occurrence of `pat` (or the sel-th, counting from 1) replaced by `r`: pre-order,
+;; left to right, the function before its arguments; a subterm under a binder is compared as it
+;; stands (`pat` is closed, so no occurrence mentions a bound variable)
+(fn tc_replace ((t Expr) (pat Expr) (r Expr) (sel Int)) Expr
+  (match (tc_replace_go t pat r sel 0) ((Pair t1 _) t1)))
+(fn tc_replace_go ((t Expr) (pat Expr) (r Expr) (sel Int) (seen Int)) (Pair Expr Int)
+  (measure (struct t))
+  (if (expr_eq t pat)
+    (if (bool_or (int_eq sel 0) (int_eq sel (+ seen 1))) (Pair r (+ seen 1)) (Pair t (+ seen 1)))
+    (match t
+      ((App _ _ _)   ; the whole spine is one occurrence: its head and arguments are visited, never a prefix
+       (match (tc_replace_go (get_app_fn t) pat r sel seen)
+         ((Pair f1 s1) (match (tc_replace_args (get_app_args t) pat r sel s1 Nil) ((Pair as s2) (Pair (mk_app_n f1 as) s2))))))
+      ((Lam _ n bi d b)
+       (match (tc_replace_go d pat r sel seen)
+         ((Pair d1 s1) (match (tc_replace_go b pat r sel s1) ((Pair b1 s2) (Pair (mk_lam n bi d1 b1) s2))))))
+      ((Pi _ n bi d b)
+       (match (tc_replace_go d pat r sel seen)
+         ((Pair d1 s1) (match (tc_replace_go b pat r sel s1) ((Pair b1 s2) (Pair (mk_pi n bi d1 b1) s2))))))
+      ((Let _ n ty v b)
+       (match (tc_replace_go ty pat r sel seen)
+         ((Pair ty1 s1)
+          (match (tc_replace_go v pat r sel s1)
+            ((Pair v1 s2) (match (tc_replace_go b pat r sel s2) ((Pair b1 s3) (Pair (mk_let n ty1 v1 b1) s3))))))))
+      ((Proj _ sn i x) (match (tc_replace_go x pat r sel seen) ((Pair x1 s1) (Pair (mk_proj sn i x1) s1))))
+      (_ (Pair t seen)))))
+(fn tc_replace_args ((args (List Expr)) (pat Expr) (r Expr) (sel Int) (seen Int) (acc (List Expr))) (Pair (List Expr) Int)
+  (measure (struct args))
+  (match args
+    (Nil (Pair (rev acc) seen))
+    ((Cons a rest) (match (tc_replace_go a pat r sel seen) ((Pair a1 s1) (tc_replace_args rest pat r sel s1 (Cons a1 acc)))))))
+(fn tc_count ((t Expr) (pat Expr)) Int (match (tc_replace_go t pat pat 0 0) ((Pair _ k) k)))
+
+;; the subterms of t without loose bound variables, pre-order, left to right, the function
+;; before its arguments (rule 7's traversal); an application is one subterm with its whole
+;; spine — a prefix of the spine (`ite α c h t` without its `e`) is no subterm, since K's whnf
+;; of it is a lambda and a rewrite of it would leave a redex
+(fn tc_subterms ((t Expr) (acc (List Expr))) (List Expr)
+  (measure (struct t))
+  (let ((acc1 (if (has_loose_bvars t) acc (Cons t acc))))
+    (match t
+      ((App _ _ _) (tc_subterms_list (get_app_args t) (tc_subterms (get_app_fn t) acc1)))
+      ((Lam _ _ _ d b) (tc_subterms b (tc_subterms d acc1)))
+      ((Pi _ _ _ d b) (tc_subterms b (tc_subterms d acc1)))
+      ((Let _ _ ty v b) (tc_subterms b (tc_subterms v (tc_subterms ty acc1))))
+      ((Proj _ _ _ x) (tc_subterms x acc1))
+      (_ acc1))))
+(fn tc_subterms_list ((ts (List Expr)) (acc (List Expr))) (List Expr)
+  (measure (struct ts))
+  (match ts (Nil acc) ((Cons x r) (tc_subterms_list r (tc_subterms x acc)))))
+
+;; the equation of a lemma: its term applied to fresh metavariables for every binder, the sides,
+;; the metavariables
+(type EqOf (EqOk El Expr Level Expr Expr Expr (List Expr)) (EqErr Symbol (List Int)))
+(fn eq_of_lemma ((e El) (v Expr) (ty Expr)) EqOf
+  (match (tac_arity e ty 64)
+    ((Pair e1 k)
+     (match (open_mvars e1 v ty k Nil)
+       ((OpenedM e2 v1 concl ms)
+        (match (if (is_app concl) (Pair e2 concl) (el_whnf e2 concl))
+          ((Pair e3 cw)
+           (match (eq_sides cw)
+             ((Some (Pair u (Pair a (Pair l r)))) (EqOk e3 v1 u a l r ms))
+             (None (EqErr (quote rw_not_eq) (append "the lemma is not an equation: " (tc_show (el_zonk e3 cw) Nil))))))))))))
+
+;; syntactic matching of a pattern with metavariables against a term: structural descent,
+;; a metavariable assigned (typed, unify.shard's assign), levels structurally — never K's
+;; conversion, which would unfold a definition to make an instance (`app nil ?ys` against
+;; `app (cons x r) nil` by computing both sides: a match, and a useless one)
+(fn tac_match ((e El) (p Expr) (t Expr)) (Option El) (tac_match_go e p t 256))
+(fn tac_match_go ((e El) (p0 Expr) (t0 Expr) (d Int)) (Option El)
+  (measure d)
+  (if (lt d 1) None
+  (let ((p (el_zonk e p0)) (t (el_zonk e t0)))
+    (if (expr_eq p t) (Some e)
+    (match p
+      ((MVar _ i)
+       (match (assign (el_w e) (el_mc e) i t 32)
+         ((UYes w1 mc1) (Some (El w1 mc1 (el_cx e) (el_gen e))))
+         (_ None)))
+      ((App _ pf pa)
+       (match t
+         ((App _ tf ta) (match (tac_match_go e pf tf (- d 1)) ((Some e1) (tac_match_go e1 pa ta (- d 1))) (None None)))
+         (_ None)))
+      ((Const _ n ls)
+       (match t
+         ((Const _ m ms) (if (name_eq n m) (match (unify_levels (el_mc e) ls ms) ((Some mc1) (Some (el_set_mc e mc1))) (None None)) None))
+         (_ None)))
+      ((Sort _ u) (match t ((Sort _ v) (match (unify_level (el_mc e) u v 32) ((Some mc1) (Some (el_set_mc e mc1))) (None None))) (_ None)))
+      ((Lam _ _ _ pd pb) (match t ((Lam _ _ _ td tb) (match (tac_match_go e pd td (- d 1)) ((Some e1) (tac_match_go e1 pb tb (- d 1))) (None None))) (_ None)))
+      ((Pi _ _ _ pd pb) (match t ((Pi _ _ _ td tb) (match (tac_match_go e pd td (- d 1)) ((Some e1) (tac_match_go e1 pb tb (- d 1))) (None None))) (_ None)))
+      ((Let _ _ pty pv pb)
+       (match t
+         ((Let _ _ tty tv tb)
+          (match (tac_match_go e pty tty (- d 1))
+            ((Some e1) (match (tac_match_go e1 pv tv (- d 1)) ((Some e2) (tac_match_go e2 pb tb (- d 1))) (None None)))
+            (None None)))
+         (_ None)))
+      ((Proj _ ps pidx px) (match t ((Proj _ ts ti tx) (if (bool_and (name_eq ps ts) (int_eq pidx ti)) (tac_match_go e px tx (- d 1)) None)) (_ None)))
+      (_ None))))))
+;; the first subterm of `t` the pattern matches: the state after the match
+(fn first_match ((e El) (pat Expr) (subs (List Expr))) (Option El)
+  (measure (struct subs))
+  (match subs
+    (Nil None)
+    ((Cons s r)
+     (match (tac_match e pat s)
+       ((Some e1) (Some e1))
+       (None (first_match e pat r))))))
+
+;; one rewrite of the target by heq : a = b (instantiated, closed over the step's locals):
+;; the continuation goal at target[b] and the term Eq.mpr (congrArg motive heq) (its occurrence)
+(type Rewritten (TRwOk El Goal Expr Expr) (TRwErr Symbol (List Int)))
+(fn rewrite_by ((e El) (ctx (List Expr)) (target Expr) (ty Expr) (a Expr) (b Expr) (heq Expr) (sel Int)) Rewritten
+  (match (tac_sort_level e ty)
+    ((Pair e1 None) (TRwErr (quote rw_motive) "the equation's type is not a type"))
+    ((Pair e1 (Some u))
+     (match (el_local e1 (n1 (quote x)) ty BDefault)
+       ((Pair e2 d)
+        (let ((body (tc_replace target a d sel)))
+          (match (el_lams e2 (list d) body)
+            ((Pair e3 motive)
+             (match (el_infer e3 motive)
+               ((Pair e4 None) (TRwErr (quote rw_motive) (append "the motive is not type correct (the occurrence is under a dependency): " (tc_show_closed e3 ctx body))))
+               ((Pair e4 (Some _))
+                (let ((target1 (tc_replace target a b sel)))
+                  (match (tac_goal e4 ctx target1)
+                    ((Made e5 g occ)
+                     (TRwOk e5 g target1
+                       (mk_app_n (mk_const (n2 (quote Eq) (quote mpr)) (list LZero))
+                         (list target target1
+                               (mk_app_n (mk_const (n1 (quote congrArg)) (list u (LSucc LZero))) (list ty (mk_sort LZero) a b motive heq))
+                               occ))))))))))))))))
+
+;; (rw LEMMA (occ K)? BLOCK…): the lemma's left side matched against the target's subterms, every
+;; occurrence of the instance rewritten; the premises left open are child goals
+(fn step_rw ((e El) (ctx (List Expr)) (target Expr) (rv Bool) (lem SExpr) (sel Int) (bs (List Node))) TStep
+  (match (elab e lem None)
+    ((EErr x m) (StepErr x m))
+    ((EOk e1 v ty)
+     (match (eq_of_lemma e1 v ty)
+       ((EqErr x m) (StepErr x m))
+       ((EqOk e2 v1 u a l r ms)
+        (let ((pat (if rv r l)) (rhs (if rv l r)))
+          (match (first_match e2 pat (rev (tc_subterms target Nil)))
+            (None (StepErr (quote rw_no_match) (append "no subterm of the target matches " (append (tc_show_closed e2 ctx pat) (append " in " (tc_show_closed e2 ctx target))))))
+            ((Some e3)
+             (match (premise_goals e3 ctx ms (quote rw) Nil)
+               ((PrErr x m) (StepErr x m))
+               ((PrOk e4 gs)
+                (match (blocks_match (quote rw) gs (len bs))
+                  ((Some (Pair x m)) (StepErr x m))
+                  (None
+                   (let ((pz (el_zonk e4 pat)) (rz (el_zonk e4 rhs)) (az (el_zonk e4 a)) (hz (el_zonk e4 v1)))
+                     (match (tac_unsolved e4 hz)
+                       ((Some (Pair x m)) (StepErr x m))
+                       (None
+                        (if (bool_and (lt 0 sel) (lt (tc_count target pz) sel))
+                          (StepErr (quote rw_no_match) (append "the target has " (append (show_nat (tc_count target pz)) (append " occurrence(s) of " (tc_show_closed e4 ctx pz)))))
+                          (let ((heq (if rv (mk_app_n (mk_const (n2 (quote Eq) (quote symm)) (list u)) (list az (el_zonk e4 l) (el_zonk e4 r) hz)) hz)))
+                            (match (rewrite_by e4 ctx (el_zonk e4 target) az pz rz heq sel)
+                              ((TRwErr x m) (StepErr x m))
+                              ((TRwOk e5 g _ term)
+                               (match (tac_close e5 ctx term)
+                                 ((Pair e6 filling) (StepOk e6 filling gs (blocks_of bs Nil) (Some g)))))))))))))))))))))))
+
+;; ---- unfold and reduce (rule 6) --------------------------------------------------------------
+;; a redex found in the target: the subterm, its replacement, and the equation that justifies it
+;; when the replacement is not K-convertible (None: by conversion)
+(type Redex (Redex Expr Expr (Option (Pair Expr (Pair Expr Expr))) Bool))   ; subterm, replacement, (ty, heq, —) when propositional, whether an unfolding at a closed occurrence
+(type Found (FoundOk El Redex) (FoundNone El) (FoundErr Symbol (List Int)))
+
+;; the equations of a constant, in order, until one is missing
+(fn equations_of ((e El) (f Name)) (List Name) (equations_go e f 1 Nil))
+(fn equations_go ((e El) (f Name) (k Int) (acc (List Name))) (List Name)
+  (measure (- 64 k))
+  (if (lt 64 k) (rev acc)
+    (let ((n (name_append f (n1 (sym_of_chars (append "eq_" (show_nat k)))))))
+      (match (env_find (el_env e) n)
+        ((Some _) (equations_go e f (+ k 1) (Cons n acc)))
+        (None (rev acc))))))
+;; an equation applied to a subterm: its instantiated right side, and whether the equation's
+;; proof is Eq.refl (then the replacement is by conversion)
+(fn try_equation ((e El) (s Expr) (eqn Name)) Found
+  (match (env_find (el_env e) eqn)
+    (None (FoundNone e))
+    ((Some info)
+     (match (el_fresh_levels e (len (ci_lparams info)))
+       ((Pair e1 ls)
+        (match (w_inst_lparams (el_w e1) (ci_type info) (ci_lparams info) ls)
+          ((Pair w2 ty)
+           (match (eq_of_lemma (el_set_w e1 w2) (mk_const eqn ls) ty)
+             ((EqErr _ _) (FoundNone e))
+             ((EqOk e3 v1 _ a l r _)
+              (match (tac_match e3 l s)
+                ((Some e4)
+                 (let ((rz (el_zonk e4 r)))
+                   (if (has_mvar rz) (FoundNone e)
+                     (let ((unf (bool_not (computes e eqn))))
+                       (if (eqn_definitional info) (FoundOk e4 (Redex s rz None unf))
+                         (FoundOk e4 (Redex s rz (Some (Pair (el_zonk e4 a) (Pair (el_zonk e4 v1) rz))) unf)))))))
+                (_ (FoundNone e))))))))))))
+(fn eqn_definitional ((info ConstantInfo)) Bool
+  (match (ci_value info)
+    ((Some v) (is_const_named (get_app_fn v) (nm_eq_refl)))
+    (None False)))
+(fn try_equations ((e El) (s Expr) (eqns (List Name)) (any Bool)) Found
+  (measure (struct eqns))
+  (match eqns
+    (Nil (FoundNone e))
+    ((Cons q r)
+     (if (bool_and (bool_not any) (bool_and (bool_not (computes e q)) (bool_not (ground_term e s)))) (try_equations e s r any)
+       (match (try_equation e s q)
+         ((FoundOk e1 rd) (FoundOk e1 rd))
+         (_ (try_equations e s r any)))))))
+;; a computation rule: an equation whose left side has a constructor or a literal among its
+;; arguments — `f (cons x r) ys = …`. `f n = ite …` (a measured function's one leaf) is an
+;; unfolding, which `reduce` applies only to a ground occurrence (a ground computation ends,
+;; the budget bounding it) — at a variable it would apply to its own result without end — and
+;; `unfold` applies once per occurrence. Ground: no local, no metavariable, and every constant
+;; a definition, a constructor, a recursor, an inductive or a quotient — an opaque constant, an
+;; axiom or a parameter (a pending obligation) never reduces, so nothing under it ends
+(fn ground_term ((e El) (s Expr)) Bool
+  (if (bool_or (has_fvar s) (has_mvar s)) False (consts_reduce e (expr_consts s))))
+(fn consts_reduce ((e El) (ns (List Name))) Bool
+  (measure (struct ns))
+  (match ns
+    (Nil True)
+    ((Cons n r)
+     (match (env_find (el_env e) n)
+       ((Some (DefnInfo _ _ _ _ _)) (consts_reduce e r))
+       ((Some (CtorInfo _ _ _ _ _ _)) (consts_reduce e r))
+       ((Some (RecInfo _ _ _ _ _ _ _ _ _)) (consts_reduce e r))
+       ((Some (InductInfo _ _ _ _ _ _ _ _ _)) (consts_reduce e r))
+       ((Some (QuotInfo _ _)) (consts_reduce e r))
+       (_ False)))))
+(fn computes ((e El) (eqn Name)) Bool
+  (match (env_find (el_env e) eqn)
+    (None False)
+    ((Some info) (lhs_has_ctor (el_env e) (pi_body (ci_type info) 64)))))
+(fn pi_body ((t Expr) (fuel Int)) Expr
+  (measure fuel)
+  (if (lt fuel 1) t (match t ((Pi _ _ _ _ b) (pi_body b (- fuel 1))) (_ t))))
+(fn lhs_has_ctor ((env CheckedEnv) (stmt Expr)) Bool
+  (match (eq_sides stmt)
+    ((Some (Pair _ (Pair _ (Pair l _)))) (args_have_ctor env (get_app_args l)))
+    (None False)))
+(fn args_have_ctor ((env CheckedEnv) (args (List Expr))) Bool
+  (measure (struct args))
+  (match args
+    (Nil False)
+    ((Cons a r) (if (ctor_shaped env a) True (args_have_ctor env r)))))
+(fn ctor_shaped ((env CheckedEnv) (a Expr)) Bool
+  (match (get_app_fn a)
+    ((Const _ n _) (match (env_find env n) ((Some (CtorInfo _ _ _ _ _ _)) True) (_ False)))
+    ((Lit _ _) True)
+    (_ False)))
+;; whether a head stands for a stuck eliminator: no progress by whnf there — a recursor, a
+;; case analysis, course-of-values recursion and its helpers (`List.brecOn.go`), a matcher,
+;; well-founded fixpoints; a projection of a stuck term is stuck
+(fn stuck_head ((t Expr)) Bool
+  (match (get_app_fn t)
+    ((Const _ n _) (stuck_name n))
+    ((Proj _ _ _ x) (stuck_head x))
+    (_ False)))
+(fn stuck_name ((n Name)) Bool
+  (match n
+    ((Str p c)
+     (let ((cs (chars_of_sym c)))
+       (if (bool_or (int_list_eq cs "rec")
+           (bool_or (int_list_eq cs "casesOn")
+           (bool_or (int_list_eq cs "brecOn")
+           (bool_or (int_list_eq cs "binductionOn")
+           (bool_or (int_list_eq cs "below")
+           (bool_or (int_list_eq cs "ibelow")
+           (bool_or (int_list_eq cs "fix")
+                    (starts_match cs "match_"))))))))
+         True
+         (stuck_name p))))
+    ((Num p _) (stuck_name p))
+    (Anon False)))
+(fn starts_match ((s (List Int)) (p (List Int))) Bool (match (starts_with_lit p s) ((Some _) True) (None False)))
+;; a whnf step that makes progress: the result (its head beta-reduced) differs and its head is
+;; neither a stuck eliminator nor a lambda (a function constant's value is no reduction of it).
+;; K's whnf reduces the head as far as it goes, past the one step wanted — an `ite` on a
+;; decided condition to its branch, then that branch's `fn` unfolded to its recursor form —
+;; so every application of a constant with equations inside `s` is masked by a local first (K
+;; cannot unfold a local) and restored after
+(fn whnf_progress ((e El) (s Expr)) (Pair El (Option Expr))
+  (match (mask_fns e (rev (tc_subterms s Nil)) s Nil)
+    ((Pair e1 (Pair sm masks))
+     (match (w_whnf_r (el_w e1) sm)
+       ((Pair w1 (WVal r0))
+        (match (tac_beta (el_set_w e1 w1) r0)
+          ((Pair e2 rm)
+           (let ((r (unmask masks rm)))
+             (if (bool_or (expr_eq r s) (bool_or (stuck_head r) (is_lambda (get_app_fn r)))) (Pair e2 None) (Pair e2 (Some r)))))))
+       ((Pair w1 _) (Pair (el_set_w e1 w1) None))))))
+;; the applications (whole spines) of constants with equations among the subterms, each
+;; replaced by a fresh local of its type: the masked term and the (local, subterm) pairs
+(fn mask_fns ((e El) (subs (List Expr)) (t Expr) (acc (List (Pair Expr Expr)))) (Pair El (Pair Expr (List (Pair Expr Expr))))
+  (measure (struct subs))
+  (match subs
+    (Nil (Pair e (Pair t acc)))
+    ((Cons s r)
+     (if (bool_not (is_app s)) (mask_fns e r t acc)
+       (match (get_app_fn s)
+         ((Const _ f _)
+          (if (bool_or (int_eq (len (equations_of e f)) 0) (int_eq (tc_count t s) 0))
+            (mask_fns e r t acc)
+            (match (el_infer e s)
+              ((Pair e1 None) (mask_fns e1 r t acc))
+              ((Pair e1 (Some ty))
+               (match (el_local e1 (n1 (quote fn)) ty BDefault)
+                 ((Pair e2 fv) (mask_fns e2 r (tc_replace t s fv 0) (Cons (Pair fv s) acc))))))))
+         (_ (mask_fns e r t acc)))))))
+(fn unmask ((masks (List (Pair Expr Expr))) (t Expr)) Expr
+  (measure (struct masks))
+  (match masks
+    (Nil t)
+    ((Cons (Pair fv s) r) (unmask r (tc_replace t fv s 0)))))
+;; the first redex among the subterms (pre-order): a `fn` by its equations only, a stuck
+;; eliminator never, anything else by K's whnf where it progresses; `only` restricts to the
+;; named constants (unfold)
+(fn find_redex ((e El) (subs (List Expr)) (only (List Name))) Found
+  (measure (struct subs))
+  (match subs
+    (Nil (FoundNone e))
+    ((Cons s r)
+     (match (get_app_fn s)
+       ((Const _ f _)
+        (if (bool_and (bool_not (int_eq (len only) 0)) (bool_not (mem_name f only))) (find_redex e r only)
+          (match (equations_of e f)
+            (Nil
+             (if (bool_and (int_eq (len only) 0) (bool_not (reducible_head e f)))
+               (find_redex e r only)
+               (match (whnf_progress e s)
+                 ((Pair e1 (Some t)) (FoundOk e1 (Redex s t None False)))
+                 ((Pair e1 None)
+                  (match (delta_once e1 s)
+                    ((Pair e2 (Some t)) (FoundOk e2 (Redex s t None False)))
+                    ((Pair e2 None) (find_redex e2 r only)))))))
+            (eqns
+             (match (try_equations e s eqns (bool_not (int_eq (len only) 0)))
+               ((FoundOk e1 rd) (FoundOk e1 rd))
+               (_ (find_redex e r only)))))))
+       (_
+        (if (int_eq (len only) 0)
+          (match (whnf_progress e s)
+            ((Pair e1 (Some t)) (FoundOk e1 (Redex s t None False)))
+            ((Pair e1 None) (find_redex e1 r only)))
+          (find_redex e r only)))))))
+;; one delta step by hand, for a definition K's whnf takes past the one step wanted (`double x`
+;; to `x + x`, which K then unfolds to a stuck recursor): the value at the constant's levels,
+;; head-beta-reduced on the arguments; kept where the result is neither a lambda nor stuck
+(fn delta_once ((e El) (s Expr)) (Pair El (Option Expr))
+  (match (get_app_fn s)
+    ((Const _ f ls)
+     (match (env_find (el_env e) f)
+       ((Some (DefnInfo (ConstantVal _ lps _) v _ _ _))
+        (match (w_inst_lparams (el_w e) v lps ls)
+          ((Pair w1 v1)
+           (match (beta_head (w_st w1) v1 (get_app_args s))
+             ((Pair st2 r)
+              (let ((e2 (el_set_w e (w_set_st w1 st2))))
+                (if (bool_or (expr_eq r s) (bool_or (stuck_head r) (is_lambda (get_app_fn r)))) (Pair e2 None) (Pair e2 (Some r)))))))))
+       (_ (Pair e None))))
+    (_ (Pair e None))))
+;; a head K's whnf may unfold under reduce: a definition (not a theorem, an axiom, an inductive
+;; or a constructor — whose applications are values)
+(fn reducible_head ((e El) (f Name)) Bool
+  (match (env_find (el_env e) f)
+    ((Some (DefnInfo _ _ _ _ _)) True)
+    ((Some (RecInfo _ _ _ _ _ _ _ _ _)) True)
+    ((Some (QuotInfo _ _)) True)
+    (_ False)))
+
+;; one redex applied: by conversion where it is definitional (the target changes, no term), by
+;; rule 5 where it is an equation (a continuation goal made, the current one assigned)
+(type RdApp (RaOk El Goal Expr) (RaErr Symbol (List Int)))
+(fn redex_apply ((e El) (ctx (List Expr)) (cur Goal) (target Expr) (rd Redex)) RdApp
+  (match rd
+    ((Redex s t None _) (RaOk e cur (tc_replace target s t 0)))
+    ((Redex s t (Some (Pair ty (Pair heq _))) _)
+     (match (rewrite_by e ctx target ty s t heq 0)
+       ((TRwErr x m) (RaErr x m))
+       ((TRwOk e2 g target1 term)
+        (match (tac_close e2 ctx term)
+          ((Pair e3 filling) (RaOk (el_set_mc e3 (mc_set (el_mc e3) (goal_id cur) filling)) g target1))))))))
+;; the loop's end: the current goal assigned its continuation at the final target
+(type Loop (LoopOk El Goal) (LoopErr Symbol (List Int)))
+(fn loop_end ((e El) (ctx (List Expr)) (cur Goal) (target Expr)) Loop
+  (match (tac_goal e ctx target)
+    ((Made e2 g occ)
+     (match (tac_close e2 ctx occ)
+       ((Pair e3 filling) (LoopOk (el_set_mc e3 (mc_set (el_mc e3) (goal_id cur) filling)) g))))))
+;; reduce: the first redex of the target (or of one side), to a fixpoint under a budget of 2000
+;; rewrites and 64 unfoldings of a function at closed arguments (a ground computation deeper
+;; than that — a condition no reduction decides, a long recursion — is the author's to unfold,
+;; until evaluation reflection)
+(fn reduce_loop ((e El) (ctx (List Expr)) (cur Goal) (target Expr) (side Symbol) (budget Int) (unfolds Int) (made Int)) Loop
+  (measure budget)
+  (if (lt budget 1) (LoopErr (quote reduce_budget) "the normalization ran out of budget (2000 rewrites)")
+  (if (lt 64 unfolds) (LoopErr (quote reduce_budget) (append "64 unfoldings of a function at closed arguments did not end the computation: " (tc_show_closed e ctx target)))
+    (match (find_redex e (rev (tc_subterms (side_of target side) Nil)) Nil)
+      ((FoundErr x m) (LoopErr x m))
+      ((FoundNone e1)
+       (if (int_eq made 0)
+         (LoopErr (quote reduce_stuck) (append "nothing reduces in " (tc_show_closed e1 ctx target)))
+         (loop_end e1 ctx cur target)))
+      ((FoundOk e1 rd)
+       (match (redex_apply e1 ctx cur target rd)
+         ((RaErr x m) (LoopErr x m))
+         ((RaOk e2 cur1 target1) (reduce_loop e2 ctx cur1 target1 side (- budget 1) (if (redex_unfolds rd) (+ unfolds 1) unfolds) (+ made 1)))))))))
+(fn redex_unfolds ((rd Redex)) Bool (match rd ((Redex _ _ _ u) u)))
+;; unfold: the occurrences of the named constants present when the step starts, each
+;; rewritten once by the first of its equations that matches (an unfolding equation among
+;; them), or delta-reduced; never the occurrences a rewrite introduces
+(fn unfold_loop ((e El) (ctx (List Expr)) (cur Goal) (target Expr) (only (List Name)) (occs (List Expr)) (made Int)) Loop
+  (measure (struct occs))
+  (match occs
+    (Nil
+     (if (int_eq made 0)
+       (LoopErr (quote unfold_stuck) (append "no occurrence of the named constant unfolds — no equation of it matches (cases on its argument first), or its one delta step is a stuck recursor: " (tc_show_closed e ctx target)))
+       (loop_end e ctx cur target)))
+    ((Cons s r)
+     (if (int_eq (tc_count target s) 0) (unfold_loop e ctx cur target only r made)
+       (match (find_redex e (list s) only)
+         ((FoundErr x m) (LoopErr x m))
+         ((FoundNone e1) (unfold_loop e1 ctx cur target only r made))
+         ((FoundOk e1 rd)
+          (match (redex_apply e1 ctx cur target rd)
+            ((RaErr x m) (LoopErr x m))
+            ((RaOk e2 cur1 target1) (unfold_loop e2 ctx cur1 target1 only r (+ made 1))))))))))
+;; the subterms headed by one of the names, pre-order, each once
+(fn headed_by ((subs (List Expr)) (only (List Name)) (acc (List Expr))) (List Expr)
+  (measure (struct subs))
+  (match subs
+    (Nil (rev acc))
+    ((Cons s r)
+     (match (get_app_fn s)
+       ((Const _ f _) (if (bool_and (mem_name f only) (bool_not (tac_mem_expr s acc))) (headed_by r only (Cons s acc)) (headed_by r only acc)))
+       (_ (headed_by r only acc))))))
+(fn tac_mem_expr ((x Expr) (xs (List Expr))) Bool
+  (measure (struct xs))
+  (match xs (Nil False) ((Cons y r) (if (expr_eq x y) True (tac_mem_expr x r)))))
+;; the side of an equation reduce works in
+(fn side_of ((target Expr) (side Symbol)) Expr
+  (if (sym_eq side (quote both)) target
+    (match (eq_sides target)
+      ((Some (Pair _ (Pair _ (Pair l r)))) (if (sym_eq side (quote lhs)) l r))
+      (None target))))
+;; each loop starts on a goal of its own, so the step's goal is assigned like any other
+(fn step_reduce ((e El) (ctx (List Expr)) (target0 Expr) (side Symbol)) TStep
+  (let ((target (el_zonk e target0)))
+    (match (tac_goal e ctx target)
+      ((Made e1 g0 occ0)
+       (match (tac_close e1 ctx occ0)
+         ((Pair e2 filling0)
+          (match (reduce_loop e2 ctx g0 target side 2000 0 0)
+            ((LoopErr x m) (StepErr x m))
+            ((LoopOk e3 g) (StepOk e3 filling0 Nil Nil (Some g))))))))))
+;; (unfold NAME…): the names resolved as constants of the scope
+(fn step_unfold ((e El) (ctx (List Expr)) (target0 Expr) (ns (List Name))) TStep
+  (let ((target (el_zonk e target0)))
+    (match (resolve_consts e ns Nil)
+      ((Pair e1 (Pair None m)) (StepErr (quote unknown_constant) m))
+      ((Pair e1 (Pair (Some cs) _))
+       (match (tac_goal e1 ctx target)
+         ((Made e2 g0 occ0)
+          (match (tac_close e2 ctx occ0)
+            ((Pair e3 filling0)
+             (match (unfold_loop e3 ctx g0 target cs (headed_by (rev (tc_subterms target Nil)) cs Nil) 0)
+               ((LoopErr x m) (StepErr x m))
+               ((LoopOk e4 g) (StepOk e4 filling0 Nil Nil (Some g))))))))))))
+(fn resolve_consts ((e El) (ns (List Name)) (acc (List Name))) (Pair El (Pair (Option (List Name)) (List Int)))
+  (measure (struct ns))
+  (match ns
+    (Nil (Pair e (Pair (Some (rev acc)) Nil)))
+    ((Cons n r)
+     (match (elab e (SSym (sym_of_chars (show_name n))) None)
+       ((EErr _ m) (Pair e (Pair None m)))
+       ((EOk e1 v _)
+        (match (get_app_fn (el_zonk e1 v))
+          ((Const _ c _) (resolve_consts e1 r (Cons c acc)))
+          (_ (Pair e1 (Pair None (append (show_name n) " is not a constant"))))))))))
+
+;; ---- the block runner and the entry (rules 1, 3 and 9) ------------------------------------
+;; the blocks of apply's and rw's premises
+(fn blocks_of ((bs (List Node)) (acc (List (List Node)))) (List (List Node))
+  (measure (struct bs))
+  (match bs (Nil (rev acc)) ((Cons (NBlock b) r) (blocks_of r (Cons b acc))) ((Cons _ r) (blocks_of r acc))))
+
+(type TacRes (TacOk El (List Goal)) (TacErr Symbol (List Int)))
+(fn tac_fail ((g Goal) (idx Int) (x Symbol) (m (List Int))) TacRes
+  (TacErr x (append "step " (append (show_nat idx) (append ": " (append m (append " — the goal: " (goal_of g))))))))
+;; a block on one goal: each node a step, its children's blocks run, the continuation the rest
+(fn tac_block ((e El) (g Goal) (nodes (List Node)) (idx Int) (sorried (List Goal)) (fuel Int)) TacRes
+  (measure fuel)
+  (if (lt fuel 1) (TacErr (quote tactic_budget) "the derivation is deeper than 100000 nodes")
+  (match nodes
+    (Nil (TacErr (quote goal_open) (append "the block ends with the goal open: " (goal_of g))))
+    ((Cons nd rest)
+     (match (tac_step e g nd)
+       ((StepErr x m) (tac_fail g idx x m))
+       ((StepOk e1 filling children blocks cont)
+        (let ((e2 (el_set_mc e1 (mc_set (el_mc e1) (goal_id g) filling))))
+          (match nd
+            ((NSorry) (tac_after e2 g rest idx cont (append sorried children) (- fuel 1)))
+            (_
+             (match (tac_children e2 children blocks sorried (- fuel 1))
+               ((TacErr x m) (TacErr x m))
+               ((TacOk e3 sorried1) (tac_after e3 g rest idx cont sorried1 (- fuel 1)))))))))))))
+(fn tac_after ((e El) (g Goal) (rest (List Node)) (idx Int) (cont (Option Goal)) (sorried (List Goal)) (fuel Int)) TacRes
+  (match cont
+    ((Some g1) (tac_block e g1 rest (+ idx 1) sorried fuel))
+    (None (match rest
+            (Nil (TacOk e sorried))
+            (_ (TacErr (quote goal_closed) (append "step " (append (show_nat idx) " closed the goal and steps follow it"))))))))
+(fn tac_children ((e El) (gs (List Goal)) (blocks (List (List Node))) (sorried (List Goal)) (fuel Int)) TacRes
+  (measure (struct gs))
+  (match gs
+    (Nil (TacOk e sorried))
+    ((Cons g r)
+     (match blocks
+       (Nil (TacErr (quote goal_open) (append "a child goal has no block: " (goal_of g))))
+       ((Cons b br)
+        (match (tac_block e g b 1 sorried fuel)
+          ((TacErr x m) (TacErr x m))
+          ((TacOk e1 sorried1) (tac_children e1 r br sorried1 fuel))))))))
+
+;; the entry: the statement closed over the theorem's binders (`nctx` of them), the block; the
+;; value instantiated, or the sorried goals, or the refusal
+(type ProveRes (ProveOk El Expr) (ProvePending El (List Goal)) (ProveErr Symbol (List Int)))
+(fn tac_prove ((e El) (stmt Expr) (nctx Int) (steps (List SExpr))) ProveRes
+  (match (read_block steps)
+    ((BRErr x m) (ProveErr x m))
+    ((BROk nodes)
+     (match (el_fresh e (n1 (quote goal)) stmt (quote goal))
+       ((Pair e1 (MVar _ i))
+        (match (tac_block e1 (Goal i stmt nctx) nodes 1 Nil 100000)
+          ((TacErr x m) (ProveErr x m))
+          ((TacOk e2 Nil)
+           (match (el_finish e2 (mk_mvar i))
+             ((FinErr x m) (ProveErr x m))
+             ((FinOk v) (ProveOk e2 v))))
+          ((TacOk e2 sorried) (ProvePending e2 sorried))))
+       ((Pair e1 _) (ProveErr (quote bad_shape) "no metavariable"))))))

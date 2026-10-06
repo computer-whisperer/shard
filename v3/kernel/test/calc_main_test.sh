@@ -26,7 +26,7 @@ e=$(date +%s)
 [ "$rc" -eq 0 ] || { echo "calc_main_test: the program failed (exit $rc)"; head -5 "$got"; exit 1; }
 echo "calc_main_test: the program on the host in $((e-s)) s, $(wc -l < "$got") lines"
 
-"$EVAL" direct v3/kernel/test/calc_harness.shard "$FIX" "$INPUTS" > "$model" 2>&1 || { echo "calc_main_test: the harness failed"; head -5 "$model"; exit 1; }
+"$EVAL" direct v3/kernel/test/calc_harness.shard "$FIX" "$INPUTS" "$TAIL" > "$model" 2>&1 || { echo "calc_main_test: the harness failed"; head -5 "$model"; exit 1; }
 # the model world's lines: after CalcWorld, an outer Cons opens a line, an inner Cons is
 # followed by a code, an inner Nil ends the line, the outer Nil ends the list
 grep '^\* run_world: ' "$model" | tr '()' '  ' | awk '

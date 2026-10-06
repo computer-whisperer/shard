@@ -9,6 +9,7 @@
 ;;; K's verdicts on what this file produces are K's (add.shard).
 
 (import "elab.shard")
+(import "tactic.shard")
 (use kernel.k)
 (use kernel.decl)
 (use kernel.elab)
@@ -28,6 +29,8 @@
 (use kernel.elab.El)
 (use kernel.elab.ERes)
 (use kernel.elab.FinRes)
+(use kernel.tactic)
+(use kernel.tactic.ProveRes)
 (use kernel.expr.BinderInfo)
 (use kernel.level.Level)
 (use kernel.name.Name)
@@ -95,11 +98,10 @@
        (None (RDErr (quote unknown_form) (chars_of_sym h)))))))))))))))))
     (_ (RDErr (quote unknown_form) "a top-level form is (KEYWORD …)"))))
 (fn reserved_phase ((h Symbol)) (Option (List Int))
-  (if (sym_eq h (quote by)) (Some "phase 3 (tactics); a Stage-0 proof is (exact TERM) or sorry")
   (if (bool_or (sym_eq h (quote instance)) (sym_eq h (quote class))) (Some "phase 3 (Stage 3)")
   (if (bool_or (sym_eq h (quote bin)) (bool_or (sym_eq h (quote requires)) (sym_eq h (quote app)))) (Some "phase 4")
   (if (bool_or (sym_eq h (quote namespace)) (bool_or (sym_eq h (quote section)) (sym_eq h (quote variable)))) (Some "undecided; declare the dotted name")
-  None)))))
+  None))))
 
 ;; (def NAME.{u…} BINDERS TYPE VALUE); abbrev, opaque; (theorem … PROP PROOF)
 (fn read_def ((sc Scope) (env CheckedEnv) (args (List SExpr)) (kind Symbol)) RDecl
@@ -131,12 +133,13 @@
                              (rd_ok e5 (list (DefnDecl cv value (if (sym_eq kind (quote abbrev)) HAbbrev (HRegular (def_height (el_env e5) value))) Safe (list n))))))))))))))))))))
     (_ (RDErr (quote bad_shape) (append "(" (append (chars_of_sym kind) " NAME ((x TYPE)…) TYPE VALUE)"))))))
 
-;; a Stage-0 proof: (exact TERM) or sorry — TERM at the statement, over the binders
+;; a proof: (exact TERM) — TERM at the statement, over the binders; sorry; (by STEP…) — I's
+;; block on the statement closed over the binders (tactic.shard, slice 3.20)
 (fn read_proof ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (p SExpr)) RDecl
   (match p
-    ((SSym s) (if (sym_eq s (quote sorry)) (RDPending n (quote sorry)) (RDErr (quote bad_proof) "a Stage-0 proof is (exact TERM) or sorry")))
-    ((SList (Cons (SSym x) (Cons pt Nil)))
-     (if (sym_eq x (quote exact))
+    ((SSym s) (if (sym_eq s (quote sorry)) (RDPending n (quote sorry)) (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…) or sorry")))
+    ((SList (Cons (SSym x) (Cons pt rest)))
+     (if (bool_and (sym_eq x (quote exact)) (int_eq (len rest) 0))
        (match (elab e pt (Some t))
          ((EErr r m) (RDErr r m))
          ((EOk e1 v _)
@@ -146,9 +149,16 @@
              (match (close_lams e2 fvars v)
                ((Pair _ (FinErr r m)) (RDErr r m))
                ((Pair e3 (FinOk value)) (rd_ok e3 (list (ThmDecl (ConstantVal n lps T) value (list n))))))))))
-     (if (sym_eq x (quote by)) (RDErr (quote reserved_form) "by: phase 3 (tactics); a Stage-0 proof is (exact TERM) or sorry")
-       (RDErr (quote bad_proof) "a Stage-0 proof is (exact TERM) or sorry"))))
-    (_ (RDErr (quote bad_proof) "a Stage-0 proof is (exact TERM) or sorry"))))
+     (if (sym_eq x (quote by))
+       (match (close_pis e fvars t)
+         ((Pair _ (FinErr r m)) (RDErr r m))
+         ((Pair e1 (FinOk T))
+          (match (tac_prove e1 T (len fvars) (Cons pt rest))
+            ((ProveErr r m) (RDErr r m))
+            ((ProvePending _ gs) (RDPending n (sym_of_chars (append "sorry goals=" (show_nat (len gs))))))
+            ((ProveOk e2 value) (rd_ok e2 (list (ThmDecl (ConstantVal n lps T) value (list n))))))))
+       (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…) or sorry"))))
+    (_ (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…) or sorry"))))
 
 ;; ---- views (§6.5, §6.6) ---------------------------------------------------------------
 ;; (sig type NAME) / (sig type (NAME T…)): the parameter NAME : Type → … → Type

@@ -334,7 +334,7 @@
                         (match (pending_as_runnable (check_calls (Tr.es t1) env k rec (param_flags (count_data binds) rec) ebody))
                           ((Some (Pair r m)) (RzErr r m))
                           (None
-                           (match (pj_equations t1 (mk_const k ls) (- 0 1) (tbind_fvars binds) rl b thms False)
+                           (match (pj_equations t1 (mk_const k ls) (- 0 1) (tbind_fvars binds) rl b thms False None)
                              ((Pair _ (Left3 r m)) (RzErr r m))
                              ((Pair t2 (Right3 decls))
                               (RzOk (Tr.es t2) (EFn k (count_types binds) (bind_ptypes binds) rt rec ebody) (el_aux e2) decls (match rec ((RecMeasure _) True) (_ False))))))))))))))))))))))
@@ -384,13 +384,16 @@
 ;; leaf it reaches. `∀ kept, f lhs = rhs`, the self-local the constant, by Eq.refl
 (type PjLeaf (PjLeaf (List Expr) (List Expr) Expr Expr))   ; the left-hand side's arguments, the binders, the result type, the body
 (type PjFo (FoBind (List (Pair Int Expr))) (FoClash) (FoStuck Int))
-(fn pj_equations ((t Tr) (head Expr) (selfid Int) (binders (List Expr)) (rl Expr) (body Expr) (thms (List Name)) (dm Bool)) (Pair Tr Either3)
+;; `wfv`: a measured definition's value, `λ binders. WellFounded.fix α C r hwf F (tuple data)` —
+;; then every leaf is an equation and its proof is Lean's `WellFounded.fix_eq` at the
+;; instance (slice 3.20: K decides `F t (λ y _. fix y)` against the leaf's body by conversion)
+(fn pj_equations ((t Tr) (head Expr) (selfid Int) (binders (List Expr)) (rl Expr) (body Expr) (thms (List Name)) (dm Bool) (wfv (Option Expr))) (Pair Tr Either3)
   (match (pj_leaves t binders binders rl body 256 Nil)
     ((Pair t1 None) (Pair t1 (Left3 (quote equation_form) "a constructor no row covers")))
     ((Pair t1 (Some lvs))
      (if (bool_and (lt 0 (len thms)) (bool_not (int_eq (len thms) (len lvs))))
        (Pair t1 (Left3 (quote equations_count) (append "the body has " (append (show_nat (len lvs)) (append " equations, the clause names " (show_nat (len thms)))))))
-       (pj_equation_decls t1 head selfid (rev lvs) thms dm 1 Nil)))))
+       (pj_equation_decls t1 head selfid (rev lvs) thms dm wfv 1 Nil)))))
 (fn pj_leaves ((t Tr) (lhs (List Expr)) (kept (List Expr)) (rl Expr) (body Expr) (fuel Int) (acc (List PjLeaf))) (Pair Tr (Option (List PjLeaf)))
   (measure fuel)
   (if (lt fuel 1) (Pair t None)
@@ -503,7 +506,7 @@
 ;; a leaf's theorem: the self-local (a fn's) the constant; Eq.refl, or the equations clause's
 ;; theorem applied to the binders (a realize's); a fn's equation under its identity (dm), a
 ;; realization's under the realizing module (eq_name)
-(fn pj_equation_decls ((t Tr) (head Expr) (selfid Int) (lvs (List PjLeaf)) (thms (List Name)) (dm Bool) (i Int) (acc (List Declaration))) (Pair Tr Either3)
+(fn pj_equation_decls ((t Tr) (head Expr) (selfid Int) (lvs (List PjLeaf)) (thms (List Name)) (dm Bool) (wfv (Option Expr)) (i Int) (acc (List Declaration))) (Pair Tr Either3)
   (measure (struct lvs))
   (match lvs
     (Nil (Pair t (Right3 (rev acc))))
@@ -512,20 +515,34 @@
        ((Pair t1 rhs)
         (match (tr_apps t1 head lhs)
           ((Pair t2a lhs1)
-           (match (pj_decided t2a dm lhs1 rhs)
-             ((Pair t2 False) (pj_equation_decls t2 head selfid r thms dm (+ i 1) acc))
+           (match (match wfv ((Some _) (Pair t2a True)) (None (pj_decided t2a dm lhs1 rhs)))
+             ((Pair t2 False) (pj_equation_decls t2 head selfid r thms dm wfv (+ i 1) acc))
              ((Pair t2 True)
            (match (tr_apps t2 (mk_const (nm_eq) (list (level_one))) (list rl lhs1 rhs))
              ((Pair t3 stmt)
               (match (tr_pis t3 kept stmt)
                 ((Pair t4 ty)
-                 (match (proof_of t4 kept rl lhs1 (nth thms (- i 1)) (match head ((Const _ _ ls) ls) (_ Nil)))
+                 (match (match wfv ((Some v) (fix_eq_proof t4 v lhs)) (None (proof_of t4 kept rl lhs1 (nth thms (- i 1)) (match head ((Const _ _ ls) ls) (_ Nil)))))
                    ((Pair t5 None) (Pair t5 (Left3 (quote universe_arity) "a theorem of the equations clause takes neither no universe arguments nor the constant's")))
                    ((Pair t5 (Some proof))
                     (match (tr_lams t5 kept proof)
                       ((Pair t6 value)
                        (let ((name (if dm (name_append (Tr.id t6) (nm_eq_n i)) (eq_name (Tr.sc t6) (Tr.id t6) False i))))
-                         (pj_equation_decls t6 head selfid r thms dm (+ i 1) (Cons (ThmDecl (ConstantVal name Nil ty) value (list name)) acc))))))))))))))))))))
+                         (pj_equation_decls t6 head selfid r thms dm wfv (+ i 1) (Cons (ThmDecl (ConstantVal name Nil ty) value (list name)) acc))))))))))))))))))))
+;; the measured definition's value at the leaf's arguments is `WellFounded.fix α C r hwf F t`;
+;; `WellFounded.fix_eq α C r hwf F t : fix … t = F t (λ y _. fix … y)` is the equation's proof,
+;; its two sides K-convertible to the leaf's (the left by delta, the right by beta, the tuple's
+;; projections and the matcher at a constructor, each self-call `f args` delta to `fix … (tuple args)`)
+(fn fix_eq_proof ((t Tr) (v Expr) (lhs (List Expr))) (Pair Tr (Option Expr))
+  (match (beta_head (w_st (Tr.w t)) v lhs)
+    ((Pair st1 inst)
+     (let ((t1 (tr_set_w t (w_set_st (Tr.w t) st1))))
+       (match (get_app_fn inst)
+         ((Const _ n ls)
+          (if (name_eq n (n2 (quote WellFounded) (quote fix)))
+            (Pair t1 (Some (mk_app_n (mk_const (n2 (quote WellFounded) (quote fix_eq)) ls) (get_app_args inst))))
+            (Pair t1 None)))
+         (_ (Pair t1 None)))))))
 
 ;; ---- the derived view (§7.1, §7.5) --------------------------------------------------------------
 (fn realize_view ((es ESt) (sc Scope) (env CheckedEnv) (s SExpr)) RzRes

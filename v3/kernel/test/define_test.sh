@@ -8,11 +8,12 @@ set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
 FIX=v3/kernel/test/fixtures/init_prefix_int.ndjson
+TAIL=v3/kernel/test/fixtures/init_prefix_str_tail.ndjson   # WellFounded.fix_eq: a measured definition's equations (slice 3.20)
 fail=0
 check() {
   local f=$1; shift
   local out rc
-  out=$("$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" "$f" 2>&1); rc=$?
+  out=$("$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" --init "$TAIL" "$f" 2>&1); rc=$?
   if [ "$rc" -ne 0 ]; then
     echo "define_test: $f exit $rc"; echo "$out" | grep -E 'REFUSE|ERROR|POLICY' | head -5; fail=$((fail+1)); return
   fi
@@ -30,7 +31,7 @@ check v3/examples/calc/calc_spec.shard \
   'DEFINE examples.calc.calc.parse_rest equations=' \
   'ACCEPT examples.calc.calc_spec.eval_add '
 # calc's spec file whole (slice 3.16's gate): every function defined, the measured one pending
-out=$("$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" v3/examples/calc/calc_spec.shard 2>&1)
+out=$("$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" --init "$TAIL" v3/examples/calc/calc_spec.shard 2>&1)
 if ! echo "$out" | grep -q 'runnable 0  refused 0  pending 1  realized 0  defined 25  errors 0'; then
   echo "define_test: calc_spec is not 25 of 25 defined"; echo "$out" | grep -E '^(RUNNABLE|REFUSE|LOAD:)' | head -8; fail=$((fail+1))
 fi
@@ -46,7 +47,7 @@ if [ "$(echo "$out" | grep -c '^DISCHARGE .* proved')" -ne 3 ] || echo "$out" | 
 fi
 # calc's app file (slice 3.17 rule 7): show_nat defined by its Nat measure through Int.natAbs — the
 # registry's expression row erases the measure —, its descent the one pending obligation; nothing RUNNABLE
-out=$("$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" v3/examples/calc/calc_app.shard 2>&1)
+out=$("$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" --init "$TAIL" v3/examples/calc/calc_app.shard 2>&1)
 if ! echo "$out" | grep -q '^DEFINE examples.calc.calc_app.show_nat equations= pending=examples.calc.calc_app.show_nat$' \
    || ! echo "$out" | grep -q 'runnable 0  refused 0  pending 1  realized 0  defined 17  errors 0'; then
   echo "define_test: calc_app is not 17 of 17 defined with show_nat pending"; echo "$out" | grep -E '^(RUNNABLE|REFUSE|PENDING|READ-ERROR|LOAD:)' | head -8; fail=$((fail+1))

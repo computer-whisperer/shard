@@ -59,3 +59,10 @@ Notes recorded at drafting:
   registered in the derivation table; `UInt8` and `String` have a
   rendering. Init's `String.decEq` (line 1,218,988 of the export) is
   not imported.
+
+- **As built at slice 3.20 (2026-10-06; `LANGUAGE.md` §8.4):** a
+  `theorem`'s proof may be `(by STEP…)` — I's opener, `kernel/tactic.shard`
+  — and a measured `fn` has its equations by `WellFounded.fix_eq`
+  (`define.shard`); 44 of calc's 100 claims are theorems by blocks in
+  `v3/examples/calc/` (the ground tests, the lexer's structural lemmas,
+  the digit type's).

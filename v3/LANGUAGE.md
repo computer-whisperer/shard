@@ -1792,7 +1792,9 @@ parity, route 2's byte-tie and T0 green:
 | 3.17 | the porting facilities of §11's R60 row (narrowed by ruling 2026-10-01, item 50): the record laws and `make`/`with` over a `structure` with the dependent-update refusal, numeral rows on the typed route, the fresh-name supply, E's rename of `lt le int_eq` to `< <= =` staged by the tool (the files no v2 tool reads now, `v3/kernel/**` with route 1's chain) | the broad port |
 | 3.18 | bytes and text (narrowed by ruling 2026-10-01, item 51; the design and the as-built below): the registry's type rows — `String`, `ByteArray`, `UInt8` and the structures under them, each represented by its one runtime field —, a projection function as its projection, item 37's flip staged (every file but the toolchain's own), the wire read by declared type and the externs over `ByteArray`; symbols and `Name` literals deferred to the toolchain's port | the first host-facing S library (`v3/std/host.shard`, `v3/std/bytes.shard`); calc's loop against the host |
 | 3.19 | deriving under a declared policy (law §5.1; split from 3.18 by the same ruling; ruled 2026-10-02, item 52; the design and the as-built below): `(derive TYPE CAPABILITY…)` — equality, an ordering under the one policy `structural`, a rendering in canonical S — generated as `fn` source and found through a derivation table; a hand-written procedure registered with `(CAPABILITY by NAME)` | a new type usable in an `if`, as a key and in a message (`v3/examples/derive/`); `v3/std/derive.shard` |
-| 3.20+ | I: the node vocabulary (law §7.2), `elaborate(I)` to P, the goal-graph API as E functions, `by` blocks, the core tactics; then `tools/prove` and the engine as I producers | calc's 100 claims; the coverage arc's B-1c |
+| 3.20 | I's opener (ruled 2026-10-05, item 53; the design and the as-built below; **landed 2026-10-06**): I's data and `(by STEP…)` in a `theorem`, `elaborate(I)` to P, the forms with no engine behind them — `intro exact rfl have show apply cases induction wf decide unfold reduce rw sorry` — and `goal_of`/`applicable`/`step` as E functions over one derivation | calc's claims whose lemma closure needs no arithmetic (52 of 100; 44 landed as blocks in five files, `kernel/test/tactic_test.sh`) |
+| 3.21 | the two forms that carry an engine: `simp_only` (a bounded rewriter over a lemma list) and `arith` (the Farkas certificate elaborated through `Lean.Omega`'s lemmas, in the export at line 76,223) | calc's 100 claims closed |
+| 3.22 | the producers: `tools/prove` re-pointed at I, the sidecar and the pin store (law §7.5), the engine; the transactional goal graph of law §6 | the coverage arc's B-1c |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -3475,6 +3477,357 @@ recursor first — the toolchain's `SExpr` and `Expr` wait for them).
   ordering records the procedure it selected, T1's fixture); the
   gates of every slice (records §9 for the figures).
 
+**Slice 3.20 — I's opener: the certificate core** (the user's ruling
+of 2026-10-05 on six leans, the design 2026-10-06; §13 item 53). Law
+§7 fixes the shape: I is a certificate language, replay elaborates it
+to P without search and K checks P; §7.2 names the vocabulary and the
+replay contract; §7.3 wants the elaborator exposed as E functions.
+Before this slice a `theorem`'s proof was `(exact TERM)` or `sorry`
+(131 theorems in V3, every one an explicit term) and `by` was
+`reserved_form`.
+
+*The ruling.* (1) **Three slices**, a gate between each: 3.20 I's
+data, `(by …)` in a `theorem`, `elaborate(I)` to P, the forms with no
+engine behind them, and `goal_of`/`step` as E functions over one
+derivation; 3.21 the two forms that carry an engine — `simp_only` (a
+bounded rewriter over a lemma list) and `arith` (the Farkas
+certificate through `Lean.Omega`'s lemmas) — and calc's 100 claims
+closed; 3.22 the producers — `tools/prove` re-pointed at I, the
+sidecar and the pin store (law §7.5), the engine. Rejected: one slice
+(no gate for a full window or more); the forms before the API (the
+API is cheap when I's data is shaped for it from the start). (2) **The
+tactic block in source is I.** What an author writes inside `(by …)`
+is I's concrete syntax; a node that omits a consequential choice
+names the versioned default reconstruction (`(rw LEMMA)` with no
+occurrence: the first match in the traversal of rule 7, every
+occurrence of it), and the pin records what was written. Rejected: a
+tactic surface distinct from I, translated down (two languages, two
+versions). The user's condition — "if it doesn't invite too many
+compromises" — is rule 2's test: a form is in I only if its elaboration
+is a function of the node and the goal. (3) **No subterm order.**
+`induction` carries its recursor; `wf` is `WellFounded.fix` over
+`(measure f)` through `InvImage.wf`, the strong hypothesis stated as
+`∀ y, f y < f x → P y`, every descent fact a goal. Rejected: v2's
+`subterm-induct` and `(below)` (a V3-only logical rule in a
+Lean-rule-exact target; `(below)` discharged `⊰` syntactically, which K
+cannot check). Porting cost accepted by the user: 52 `(below)` and 8
+`subterm-induct` sites re-spell at port time. (4) **Computation is
+conversion.** `reduce` is a `show` of the normal form the elaborator
+computes, checked by K's conversion — no `Eq.refl` chain, no
+reflection until phase 4; `unfold f` is `rw` by `f`'s equations;
+`decide` is `of_decide_eq_true (Eq.refl true)` with the decision the
+derivation table or the elaborator's lookup gives. Rejected: a `simp`
+with implicit lemma sets (search at replay). Porting cost accepted:
+v2's `reduce`/`simp`/`compute` (38,000 sites) are one node here.
+(5) **Calc's claims by hand**, re-spelled in V3's idiom — Prop
+hypotheses `(<= 0 x)` where v2 wrote `(= (le 0 x) True)` — as the
+worked-examples set; §12.3's migration tool waits for the 4,900-claim
+port and is calibrated on `std`. (6) **The API is sequential at the
+opener**: I's data has the law's graph shape (explicit child goals,
+scope-safe locals, display names aside), the API is `goal_of`,
+`applicable`, `step`, `elaborate` over one derivation; the
+transactional `attempt`/`commit`, snapshots, owners and parallel
+regions of law §6 wait for the engine's slice, where they have a
+caller; nothing is stored — K checks P at every build, the content
+store comes with the producers.
+
+*The rules.*
+
+1. **The form.** A `theorem`'s proof is `(exact TERM)`, `sorry`, or
+   `(by STEP…)`; a `fulfills` takes the same three. A block is a
+   sequence of steps on **one goal**: each step but the last turns the
+   goal into one goal; the last closes it. A step that opens several
+   goals carries each one's block inline, so a derivation is a tree
+   whose children are explicit (law §7.3): `(cases x ((zero STEP…)
+   (succ (n) STEP…)))`. A block that ends with the goal open is
+   `goal_open`; a step after a closing one is `goal_closed`. Every
+   refusal names the step by its index in its block and shows the goal
+   it faced, as `goal_of` renders it (rule 10).
+2. **A goal is a closed proposition.** `Goal` is a metavariable whose
+   type is the goal's statement closed over its named context — `∀
+   (x : Nat) (h : x = 1), P x` — and an occurrence of a goal in a term
+   is the metavariable applied to the context's locals (R68, rule 10
+   of slice 3.16: the stable creation telescope, each occurrence an
+   instantiation). Closing a binder over a goal then abstracts the
+   occurrence's arguments, never the hole, so a goal is filled after
+   its binders closed with no delayed assignment: the filling is a
+   lambda over the telescope, beta-reduced at instantiation. The
+   named context is the Pi's binders; display names are the binders'
+   names and identity is the fvar a step opens them as. The theorem's
+   own binders are in the first goal's context, as Lean's are.
+3. **A step is a function of the node and the goal.** `step(goal,
+   node)` opens the goal's context as locals, acts on the target, and
+   answers `StepDone(term)` — the goal's filling, a closed term over
+   the subgoals' metavariables applied to their telescopes (the
+   construction record of law §7.3, as data) — with the subgoals in
+   order, or a refusal. `elaborate(I)` runs `step` on each node of
+   the tree depth-first and instantiates; the result is P, one closed
+   proof term K checks as the theorem's value. No node consults a
+   changing table or runs a search: `rw`'s match, `apply`'s
+   unification and `reduce`'s normal form are deterministic in the
+   node, the goal and the environment.
+4. **The vocabulary of 3.20.** `(intro NAME…)` — the target is a Pi
+   after whnf, each name takes one binder (`intro_no_pi`). `(exact
+   TERM)` — the term at the target; `rfl` — `Eq.refl` at `a = b` by
+   K's conversion (`rfl_failed` shows both sides after whnf); `(have
+   NAME PROP STEP…)` — the cut: PROP a proposition, its block a child
+   goal under the current context, the rest of the block continues
+   with `NAME : PROP` in the context; `(show PROP)` — the target
+   replaced by PROP where K's conversion agrees (`show_mismatch`);
+   `(apply TERM STEP-BLOCK…)` — TERM elaborated without an expected
+   type, its type's Pi-telescope opened with a metavariable per
+   binder for exactly arity(TERM) − arity(target) binders after whnf,
+   the conclusion unified with the target; each metavariable still
+   unassigned whose type is a proposition is a child goal in binder
+   order, its block the next in the list (`apply_goals` names the
+   count and the premises when the list is short or long); a
+   non-proposition left unassigned is `apply_unsolved` (a witness
+   goal is the graph's, after 3.20); `(cases TERM ((CTOR (NAME…)
+   STEP…)…))` — TERM a local of an inductive type without indices
+   (`cases_indexed` otherwise: `injection`/`subst` are later forms),
+   the motive the target generalized over it (slice 3.19's rule 9),
+   `T.casesOn` applied, each minor premise's telescope opened under
+   the names given (`cases_fields` on a count mismatch), one block
+   per constructor in declaration order, each constructor named once
+   (`cases_rows`); `(induction TERM ((CTOR (NAME… IH…) STEP…)…))` —
+   the same over `T.rec`, the recursive fields' hypotheses named
+   after the fields; `(wf MEASURE TERM IH STEP…)` — TERM a local, the
+   measure a term over it into `Nat`, `WellFounded.fix (InvImage.wf
+   MEASURE Nat.lt_wfRel.wf)` with the target as motive, the block
+   under `IH : ∀ y, MEASURE[y] < MEASURE[TERM] → target[y]`;
+   `(decide)` — the target's decision through the table of slice 3.19
+   or the elaborator's lookup at `Nat`, `Int`, `Bool`, the term
+   `of_decide_eq_true (Eq.refl true)`, K's conversion the work
+   (`decide_failed`, `no_decision`); `(unfold NAME…)`, `(reduce
+   SIDE?)` and `(rw …)` — rules 6 and 7; `sorry` — rule 9.
+5. **Rewriting is `Eq.mpr`.** A rewrite of the target by `h : a = b`
+   abstracts every chosen occurrence of `a` into a motive `λ x.
+   target[x]` and fills the goal with `Eq.mpr (congrArg motive h)
+   ?g'` where `?g' : target[b]`; the occurrence path is the motive —
+   the law's guarded path is a position in a term view with its
+   expected subterm, and the motive carries both. `congrArg` and
+   `Eq.mpr` are Init's (lines 3,464 and 14,083 of the export, inside
+   the test prefix). A rewrite at a hypothesis (`(rw LEMMA (at H))`)
+   is Eq.mp on the hypothesis under a `have` of the same name (later
+   in 3.20 if calc needs it; otherwise 3.21).
+6. **`unfold` and `reduce`.** `(unfold f)` rewrites each occurrence of
+   `f` at full arity by the first of `f`'s equations (`f.eq_N`, slice
+   3.13) whose left side matches it first-order, to a fixpoint under a
+   budget; an equation proven by `Eq.refl` is applied by conversion
+   and contributes no term, an equation that is propositional (a
+   measured `fn`'s, slice 3.14) is a rewrite by rule 5; a `def` with
+   no equations is delta-reduced by conversion. No match anywhere is
+   `unfold_stuck`, with the pointer "no equation of f matches; cases
+   on its argument first". `(reduce)`, `(reduce lhs)`, `(reduce rhs)`
+   — the whole target or one side of an equation replaced by its
+   normal form: K's whnf at every position (beta, iota, projections,
+   `Nat` literals through K's accelerators), every `fn` by its
+   equations as `unfold` applies them (never by delta: a `fn`'s value
+   is the recursor form, the equations are its meaning), every `def`
+   and `abbrev` by delta, to a fixpoint under a budget
+   (`reduce_budget`). The normal form is `show`n; a propositional
+   equation on the way makes the step a rewrite of rule 5 and the
+   `show` follows. This is one node for v2's `reduce`, `simp` and
+   `compute`, whose distinction was the old evaluator's.
+7. **`rw`.** `(rw LEMMA)`, `(rw (<- LEMMA))`: LEMMA a term — a name,
+   or a name applied to arguments — elaborated without an expected
+   type; its type after whnf opened as `apply` opens, to an equation
+   `a = b` (or `b = a` under `<-`; `rw_not_eq` otherwise). `a`, with
+   its metavariables, is matched first-order against the target's
+   subterms in **pre-order, left to right, the function before its
+   arguments**, the first match instantiating the metavariables, and
+   every occurrence of the instantiated `a` is rewritten (Lean's
+   `rw`), by rule 5. `(rw LEMMA (occ K))` rewrites the K-th matching
+   occurrence only. The lemma's premises left unassigned are child
+   goals, positional blocks as `apply`'s: `(rw LEMMA (occ K)? STEP-BLOCK…)`.
+   `rw_no_match` shows the pattern and the target. A rewrite whose
+   result is `a = a` is not closed by `rw` (Lean's `rw` tries `rfl`;
+   here the author writes it — one node, one meaning).
+8. **Universes and levels.** A goal's statement is a `Prop`; a
+   motive over a Pi into `Prop`; `congrArg`'s levels come from the
+   types of `a` and the target by unification, as any constant's do
+   (slice 3.15).
+9. **`sorry` in a block** closes its goal and makes the theorem
+   pending (`PENDING NAME sorry`), as a top-level `sorry` does:
+   nothing is declared, every citation is a pending obligation. The
+   block is elaborated whole, so every other step is checked, and the
+   record shows each sorried goal as `goal_of` renders it.
+10. **The E functions** (`kernel/tactic.shard`, exported through the
+    loader's module): `goal_of : Goal → the context (name, type)
+    list and the target`, rendered in S by the dumper; `applicable :
+    Goal → the node heads whose precondition holds` (a Pi target
+    admits `intro`, an equation admits `rfl` and `rw`, an inductive
+    local admits `cases`…; not a completeness claim); `step : Goal →
+    Node → StepRes`; `elaborate : Goal → I → P or refusal`. All are
+    `fn`s, so an engine in E can compose them (3.22). `Node` is I's
+    data type: one constructor per form of rule 4 with its arguments
+    as data (names, S terms, child blocks), read from the S form by
+    `read_node` — the concrete syntax of rule 1 and nothing else.
+11. **Records.** `PROOF NAME nodes=N` on an accepted theorem proven by
+    a block (the ACCEPT record stands); `PENDING NAME sorry goals=K`
+    with the goals under it. The DEFINE/REALIZE records are unchanged.
+12. **Not in 3.20**, each named: `simp_only`, `arith` (3.21);
+    `injection`, `subst`, `cases` on an indexed family or on `Eq`;
+    `exists`/`constructor`/`left`/`right` (an `exact` with the
+    constructor serves); `intro` through a `let`; `wf` over a measure
+    into `Int` or over a lexicographic pair; a witness goal (data
+    hole); `rw` under binders where the motive would capture
+    (`rw_motive`: Lean's "motive is not type correct"); `by` inside a
+    term (`(by …)` as an L term); the Rust bootstrap reads `by` as
+    `UnknownForm`, so a theorem under `v3/kernel/**` stays on
+    `exact` until route 1's chain is V3's own.
+
+**Slice 3.20 as built** (2026-10-06):
+
+- **Rules 1 and 10.** `kernel/tactic.shard` is the opener: `Node` is
+  I's data (one constructor per form, the arms and the premise blocks
+  nodes of their own kinds), `read_block` reads `(by STEP…)`,
+  `tac_step` runs one node on one goal, `tac_block` runs a block's
+  nodes depth-first — the children of a branching node from the
+  blocks the step pairs with them, in the goals' order — and
+  `tac_prove` instantiates the root; `reader.shard`'s `read_proof`
+  hands a `by` to it, for a `theorem` and for a `fulfills` alike.
+  `goal_of` renders a goal (`(x : Nat) (h : (= x 1)) ⊢ (= x 1)` —
+  bound names from the binders, `Eq` and the comparisons under their
+  operator spellings); `applicable` lists the forms whose
+  precondition the goal meets. A refusal names the step's index in
+  its block and shows the goal it faced. **A premise's one-step block
+  may be written as the step:** `(apply Eq.symm (exact h))` — a list
+  headed by a form's name is one step, so the common case needs no
+  second parenthesis. The arms of `cases` and `induction` come in one
+  list, `(cases x ((zero STEP…) (succ (n) STEP…)))`, and may name the
+  equation: `(cases (is_digit c) hd (ARM…))` gives each arm `hd :
+  (= (is_digit c) false)` and so on — the motive is `λ d. x = d →
+  target[d]` and the eliminator's result is applied to `Eq.refl x`
+  (Lean's `cases h : x`); calc's lexer lemmas need it where the split
+  term reappears under the unfolding of a function. The record of
+  rule 11 was not added: `ACCEPT` stands for a theorem proven by a
+  block as for one proven by a term, and the pending record carries
+  the count (`PENDING NAME sorry goals=2`).
+- **Rule 2.** As designed. The goal's metavariable has the closed
+  statement as its type and no telescope; a step opens the first
+  `nctx` binders as K locals under the binders' names, acts on the
+  target and closes the filling over them, so every assignment is a
+  closed term and R68's delayed filling never arises. A split or an
+  induction on a local drops it from the children's context when no
+  other local's type mentions it.
+- **Rules 3 and 4.** As designed, with these shapes: `(wf X MEASURE IH
+  STEP…)` — X the local first, the measure a `Nat` term over it, the
+  hypothesis `IH : ∀ y, (< MEASURE[y] MEASURE[X']) → target[y]` stated
+  with `Nat.lt` so it reads as the arithmetic a descent fact proves;
+  `WellFounded.fix.{u,0}` at `InvImage.wf MEASURE Nat.lt_wfRel.wf`
+  as `define.shard` builds it for a function. `apply` opens exactly
+  arity(TERM) − arity(target) binders and refuses a premise whose
+  statement mentions an argument the target leaves open
+  (`apply_unsolved`, with the pointer: give it through the first
+  premise — `(apply (Eq.trans h1) (exact h2))`); `decide` builds
+  `of_decide_eq_true` at the decision the elaborator's lookup or the
+  derivation table gives and checks `Decidable.decide` against
+  `true` by K's conversion before K sees the theorem.
+- **Rule 5.** As designed. `rw` matches the lemma's side
+  **syntactically** (`tac_match`: structural descent, a metavariable
+  assigned through unify.shard's typed `assign`, levels structurally)
+  — never by K's conversion, which would make `app nil ?ys` an
+  instance of `app (cons x r) nil` by computing both sides, a match
+  and a useless one. An application is matched with its whole spine;
+  a prefix of a spine is no subterm. A rewrite at a hypothesis (`(rw
+  LEMMA (at H))`) was not built: calc's one need (`skipws_head_nonws`)
+  is met by `show` of the convertible target and a reversed rewrite.
+- **Rule 6, and the equations of a measured function.** `reduce`
+  finds the first redex of the target in pre-order: an application of
+  a constant with equations by the first equation that matches; any
+  other application, a projection or a redex by K's whnf where it
+  progresses — the result differs, its head is neither a stuck
+  eliminator (a recursor, a case analysis, `brecOn` and its helpers,
+  a matcher, a fixpoint, a projection of one) nor a lambda (a
+  function constant's value is no reduction of it) — and never an
+  inductive's or a constructor's application, a theorem's, or a
+  proposition's. K's whnf reduces a head as far as it goes, past the
+  one step wanted — an `ite` on a decided condition to its branch,
+  then the branch's function unfolded to its recursor form — so every
+  application of a constant with equations inside the subterm is
+  masked by a local during the whnf and restored after. **Two kinds
+  of equation:** a computation rule has a constructor or a literal in
+  its left side (`app (cons x r) ys = …`) and `reduce` applies it
+  anywhere; an unfolding (`count_down n = ite …`, a measured
+  function's one leaf) `reduce` applies only to a closed occurrence —
+  a ground computation ends, the budget bounding it — and `unfold`
+  applies once to each occurrence present when the step starts, never
+  to one a rewrite introduces. A definitional equation (by `Eq.refl`)
+  is applied by conversion and contributes no term; a propositional
+  one is a rewrite of rule 5 with a continuation goal, the previous
+  goal assigned. **A measured function now has its equations:**
+  `define.shard` states each leaf's as before and proves it by
+  `WellFounded.fix_eq` at the instance — the definition's value at the
+  leaf's arguments is `WellFounded.fix α C r hwf F t`, and `fix_eq`
+  there has the type `fix … t = F t (λ y _. fix … y)`, whose sides K
+  converts to the leaf's (the left by delta, the right by beta, the
+  tuple's projections and the matcher at a constructor, each self-call
+  by delta); the descent obligations are admitted into the walk before
+  the definition. `WellFounded.fix_eq` lies at line 107,407 of the
+  export, past the pins' prefix, so the pins test and the files that
+  need it stream the second fixture; `calc_spec.shard` imports through
+  it, and `parse_tail` has `eq_1`.
+- **Rule 7.** As designed: `(rw LEMMA)`, `(rw (<- LEMMA))`, `(occ K)`
+  with the count in the refusal, the premises as positional blocks
+  (`(rw if_pos (exact h))`; `if_pos`'s instance argument is assigned
+  by the match). The traversal is pre-order with the function before
+  its arguments over whole applications.
+- **Rules 8 and 9.** As designed.
+- **Rule 12.** As listed; `cases` on a term that is not a local
+  generalizes its occurrences in the target (an `if`'s condition,
+  after `reduce` has exposed it).
+- **Not built, found on the way:** a witness goal (`apply Eq.trans`
+  without the middle term); `rw` at a hypothesis; `induction …
+  generalizing` (the statement quantifies what the hypothesis must
+  vary over, and `intro` follows the split — `lex_num`); `show`'s
+  display of a stuck `Decidable.rec` is long where a `Bool` decision
+  is unfolded by hand; the elaborator's refusal of an unsolved
+  universe inside a block carries no step index.
+- **Found by the probes:** the recursor takes its major after the
+  minors and `casesOn` before them; a name shared with another kernel
+  file's (`form_head`, `open_fields`, `sort_level`, `StepRes`, `RwOk`,
+  `mem_expr`, `RdOk`) shadows it under the bootstrap's flat resolution
+  and fails far from the collision — every name in `tactic.shard` is
+  checked against the closure.
+- **Found by a second reader over the diff, each reproduced and
+  fixed:** `(cases X H …)` on a local dropped `X` from the arm's
+  context while `H` still named it (K: `fvar_in_value`, no step index)
+  — the local stays when an equation is named; `(induction X H …)`
+  would guard every hypothesis by the equation, so it is
+  `induction_eq`; `unfold` and `reduce` of a `def` with no equations
+  were refused where rule 6 promised delta — K's whnf takes `double
+  x` past `x + x` to a stuck recursor, so one delta step is made by
+  hand (`delta_once`) where whnf makes no progress; `(occ K)` counted
+  prefixes of application spines the traversal never offers — an
+  occurrence is a whole spine now; `reduce` on a closed occurrence
+  whose condition no reduction decides (`count_down (g 5)` with `g`
+  opaque) ran for minutes — an unfolding applies only to a **ground**
+  occurrence (no local, every constant a definition, a constructor, a
+  recursor, an inductive or a quotient), under a budget of 64
+  unfoldings; a refusal rendered its goal twice and a term as a
+  sequent. Two pin comments were wrong. *Noted, not changed:* `(occ
+  K)` counts the occurrences of the **first** instance, as Lean's `rw`
+  does; Init's arithmetic lemmas speak `HAdd.hAdd` where V3 writes
+  `Nat.add`, so a rewrite by them needs a `show` first — syntactic
+  matching by design; `(by)` with no step is `bad_proof`.
+- **The consumer.** 44 of calc's 100 claims are theorems by blocks in
+  five files (`tactic_test.sh`): the nine ground spec tests and the
+  eleven reconciliation tests by `(reduce) rfl` (parse_tail, measured,
+  by its `fix_eq` equation at closed arguments — 20 s for the nine
+  under the bootstrap, against K's own conversion through `Acc.rec`
+  before the equation existed); the lexer's structural lemmas
+  (`lex_num` by induction with the accumulator quantified and the
+  split's equation named, `lex_digit_head`, the three head lemmas by
+  `if_pos`/`if_neg`, `skip_ws_idem`, `head_skipws_false`,
+  `skipws_head_nonws`, `parse_tail_nil_test`); the digit type's
+  (`is_digit_code` a ten-way split closed by `decide`); `codes_append`
+  by induction. Of the 52 whose lemma closure needs no arithmetic the
+  rest wait on `show`'s `Int` measure, Init's inequality lemmas or
+  3.21; the 48 others need `arith`. The worked-examples file of the
+  ruling's fifth lean is these five, one claim of each shape among
+  them.
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built
@@ -4463,3 +4816,36 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     the slice) — a decision is its test only as an `if`'s condition;
     a derivation took a same-named constant for its own; a registered
     entry's visibility depended on load order.
+53. **Slice 3.20's ruling and scope (RULED 2026-10-05 — the user
+    agreed with six leans; the design 2026-10-06, §8.4).** I's
+    opener. (1) **Three slices** — 3.20 the certificate core, 3.21
+    `simp_only` and `arith`, 3.22 the producers. Rejected: one slice;
+    the forms before the API. (2) **The tactic block in source is I**:
+    `(by …)` holds I's concrete syntax, a node omitting a consequential
+    choice names the versioned default reconstruction, the pin records
+    what was written. Rejected: a tactic surface distinct from I.
+    (3) **No subterm order**: `induction` carries its recursor, `wf` is
+    `WellFounded.fix` over `(measure f)` with every descent fact a
+    goal. Rejected: v2's `subterm-induct` and `(below)`; the porting
+    cost (60 sites) accepted. (4) **Computation is conversion**:
+    `reduce` is a `show` of the computed normal form, `unfold` is `rw`
+    by the equations, `decide` is `of_decide_eq_true (Eq.refl true)`.
+    Rejected: a `simp` with implicit lemma sets. (5) **Calc's claims by
+    hand** as the worked-examples set; the migration tool with the
+    broad port. (6) **The API is sequential at the opener**, I's data
+    in the graph's shape; the transactional graph and the store wait
+    for the producers. *Designed beyond the leans:* a goal is a
+    closed proposition and an occurrence is the hole applied to its
+    telescope, which settles R68 (slice 3.16 rule 10) by construction;
+    a block is a sequence on one goal with children inline (§8.4 rule
+    1); v2's `reduce`, `simp` and `compute` are one node. *Built
+    2026-10-06 (§8.4's as-built):* as designed, with `(wf X MEASURE IH
+    …)`, the arms of a split in one list with an optional equation
+    name (`(cases X H (ARM…))`), a one-step premise block written as
+    the step, `rw` matching syntactically, `reduce` applying an
+    unfolding equation only to a closed occurrence and `unfold` once
+    per occurrence, the applications of functions masked under K's
+    whnf; **a measured function's equations** by `WellFounded.fix_eq`
+    (`define.shard`), which the design did not list and calc's
+    `parse_tail` needed. Not built: a witness goal, `rw` at a
+    hypothesis, the `PROOF` record (`ACCEPT` serves).
