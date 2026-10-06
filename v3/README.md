@@ -921,7 +921,7 @@ claims by hand; a sequential API at the opener. What landed:
   by induction with the split's equation named, the head lemmas by
   `if_pos`/`if_neg`), the digit type's ten-way split closed by
   `decide`, `codes_append` by induction (`kernel/test/tactic_test.sh`,
-  45 checks).
+  48 checks).
 - **Found on the way:** `rw` by K's conversion made `app nil ?ys` an
   instance of `app (cons x r) nil` (syntactic matching now); a prefix
   of an application's spine, whnf'd, is a lambda (whole spines only);
@@ -929,8 +929,8 @@ claims by hand; a sequential API at the opener. What landed:
   takes its major after the minors, `casesOn` before; five names
   shared with the loader's shadowed them under the bootstrap's flat
   resolution (every name checked against the closure).
-- **Found by a second reader over the diff, each reproduced, fixed and
-  pinned**: `(cases X H …)` on a local dropped `X` from the arm's
+- **Found by a second reader over the diff, each reproduced and
+  fixed** (their pins come with slice 3.21's): `(cases X H …)` on a local dropped `X` from the arm's
   context while `H` named it; `unfold` of a plain `def` was refused
   (one delta step by hand now); `(occ K)` counted spine prefixes;
   `reduce` at a closed occurrence whose condition nothing decides ran
@@ -943,7 +943,9 @@ goal (`apply Eq.trans` without its middle term), `rw` at a hypothesis,
 `arith` (3.21), the producers and the store (3.22); the toolchain's
 own theorems stay on `exact` until route 1's chain is V3's own.
 
-Local gates: 194 loader pins (18 new), `tactic_test` (45 checks), `define_test` (12 checks), `derive_test` (14 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+Local gates: 194 loader pins (18 new), `tactic_test` (48 checks), `define_test` (12 checks), `derive_test` (14 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+
+Slice 3.20 is closed: **pipeline 542 green on `7238cd3`** — engine 41 s; corpus 1,460 s at the baseline; v3 8,138 s: 34 entrypoints with 0 failed, `tactic_test` 48 checks, `define_test` 12 checks, `derive_test` 14 checks, `wire_test` 15 checks, calc's host program byte-identical to the model world, parity byte-identical over 28 closures and 114,377 declarations in 476 s, route 1's native build of the kernel (`OK: v3/bin/t0`), the fixture byte-tie identical, replay 2,514 s at 32.2 GB peak, T0 accepted 57,977 with 0 rejected, closures identical to the oracle, all 20 accelerator candidates pinned. The v3 job is 1,202 s longer than pipeline 540's, 1,157 s of it in the test suite (4,998 s against 3,841 s): the `.shard` entrypoints take 685 s more (the loader pins among them, 18 new, each now streaming the second fixture), `tactic_test` is new at 238 s, calc's two tests take 184 s more (`calc_spec.shard` imports through `WellFounded.fix_eq`), parity 23 s more. The job's limit is 3 h (10,800 s).
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
