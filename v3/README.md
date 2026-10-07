@@ -1053,6 +1053,8 @@ What landed:
 
 Local gates: 215 loader pins (3 new; `one_meaning` restated, `by_reduce`'s expectation changed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,229 declarations, route 2, K's clients, the full suite's 34 entrypoints (33 passed; the pins test refused `one_meaning`'s old statement of the truncating reading — the one meaning change the rule makes in the closure —, and was rerun green after the pin's restatement). None of the files route 1 compiles changed; the full replay and the corpus are CI's.
 
+Slice 3.21b is closed: **pipeline 546 green on `408a73c`** — engine 28 s; corpus 1,485 s at the baseline; v3 6,259 s: 34 entrypoints with 0 failed, `tactic_test` 110 checks (the 100 claims), `define_test` 12 checks, `derive_test` 14 checks, `wire_test` 15 checks, calc's host program byte-identical to the model world, parity byte-identical over 28 closures and 116,229 declarations in 606 s, route 1's native build of the kernel (`OK: v3/bin/t0`), the fixture byte-tie identical, replay 2,514 s at 32.2 GB peak, T0 accepted 57,977 with 0 rejected, closures identical to the oracle, all 20 accelerator candidates pinned. The v3 job is 204 s longer than pipeline 544's, 185 s of it the loader pins' entrypoint (3,137 s against 2,952 s: three pins more, each streaming the second fixture), which is the suite's wall clock.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until
