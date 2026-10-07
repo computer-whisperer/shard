@@ -40,11 +40,13 @@
 (type Derived (Derived Expr Symbol Name Name))
 (type Vis
   (VisAll)                        ; a scratch scope: everything the environment holds
-  (VisOnly (List Name) Bool (IntMap (List (Pair Name Name))) (List Name) (List Derived)))
-  ;; the visible modules (the file's import closure and itself), whether the
-  ;; Init prefix is visible, declaration → module for every native declaration
-  ;; (a constant absent from the table is Init's), the pending (sorry) names,
-  ;; the derivation table (slice 3.19)
+  (VisOnly (List Name) Int (IntMap (List (Pair Name Name))) (List Name) (List Derived) (IntMap (List (Pair Name Int)))))
+  ;; the visible modules (the file's import closure and itself), the module's Init
+  ;; horizon (the count of declarations admitted at its farthest import, -1 where it
+  ;; imports none; slice 3.21b rule 2), declaration → module for every native
+  ;; declaration (a constant absent from the table is Init's), the pending (sorry)
+  ;; names, the derivation table (slice 3.19), declaration → ordinal for every
+  ;; imported declaration (visible below the horizon)
 ;; the module prefix a file's declarations take (the sealed directory's for a file
 ;; directly inside one — the K seal, §13 item 26), the file's own module (the tag
 ;; visibility and the E table's registration go by), the opened prefixes, the visible set
@@ -127,14 +129,26 @@
 (fn visible ((sc Scope) (k Name)) Bool
   (match (sc_vis sc)
     (VisAll True)
-    ((VisOnly mods init tbl _ _)
-     (match (tbl_find tbl k) ((Some m) (mem_name m mods)) (None init)))))
+    ((VisOnly mods init tbl _ _ ords)
+     (match (tbl_find tbl k) ((Some m) (mem_name m mods)) (None (init_within ords init k))))))
+;; an imported declaration is visible below the module's horizon; a constant with no
+;; ordinal (K's own, admitted with the environment) wherever Init is
+(fn init_within ((ords (IntMap (List (Pair Name Int)))) (horizon Int) (k Name)) Bool
+  (match (ords_find ords k) ((Some o) (lt o horizon)) (None (bool_not (lt horizon 0)))))
+(fn ords_find ((ords (IntMap (List (Pair Name Int)))) (k Name)) (Option Int)
+  (match (im_find ords (env_key k)) ((Some b) (ords_assoc k b)) (None None)))
+(fn ords_assoc ((k Name) (b (List (Pair Name Int)))) (Option Int)
+  (measure (struct b))
+  (match b (Nil None) ((Cons (Pair n o) r) (if (name_eq k n) (Some o) (ords_assoc k r)))))
+(fn ords_add ((ords (IntMap (List (Pair Name Int)))) (k Name) (o Int)) (IntMap (List (Pair Name Int)))
+  (let ((h (env_key k)))
+    (im_insert ords h (Cons (Pair k o) (match (im_find ords h) ((Some b) b) (None Nil))))))
 ;; the visible procedures derived for a capability at a type: none, the one, or — two modules
 ;; of the closure each derived it — several
 (fn derived_for ((sc Scope) (ty Expr) (cap Symbol)) (List Name)
   (match (sc_vis sc)
     (VisAll Nil)
-    ((VisOnly mods _ _ _ ds) (derived_among sc mods ds ty cap Nil))))
+    ((VisOnly mods _ _ _ ds _) (derived_among sc mods ds ty cap Nil))))
 (fn derived_among ((sc Scope) (mods (List Name)) (ds (List Derived)) (ty Expr) (cap Symbol) (acc (List Name))) (List Name)
   (measure (struct ds))
   (match ds
@@ -146,9 +160,9 @@
 (fn native_decl ((sc Scope) (k Name)) Bool
   (match (sc_vis sc)
     (VisAll False)
-    ((VisOnly _ _ tbl _ _) (match (tbl_find tbl k) ((Some _) True) (None False)))))
+    ((VisOnly _ _ tbl _ _ _) (match (tbl_find tbl k) ((Some _) True) (None False)))))
 (fn pending_name ((sc Scope) (k Name)) Bool
-  (match (sc_vis sc) (VisAll False) ((VisOnly _ _ _ p _) (mem_name k p))))
+  (match (sc_vis sc) (VisAll False) ((VisOnly _ _ _ p _ _) (mem_name k p))))
 
 ;; the universe arity of a citable constant: being declared here, or in the environment
 (fn const_arity ((c Cx) (n Name)) (Option Int)
@@ -189,7 +203,7 @@
 (fn renamed_msg ((old Symbol) (new Symbol)) (List Int)
   (append (chars_of_sym old) (append " is spelled " (append (chars_of_sym new) " since slice 3.17 (LANGUAGE.md §8.4)"))))
 (fn init_prefixed ((n Name)) Bool (match (first_component n) ((Some s) (sym_eq s (quote Init))) (None False)))
-(fn init_seen ((sc Scope)) Bool (match (sc_vis sc) (VisAll True) ((VisOnly _ init _ _ _) init)))
+(fn init_seen ((sc Scope)) Bool (match (sc_vis sc) (VisAll True) ((VisOnly _ init _ _ _ _) (bool_not (lt init 0)))))
 ;; the name without its leading `Init` component (`(use Init.List)` opens `List`)
 (fn drop_init ((n Name)) Name
   (measure (struct n))

@@ -1016,6 +1016,43 @@ Local gates: 212 loader pins (18 new), `tactic_test` (110 checks: calc's 100 cla
 
 Slice 3.21 is closed: **pipeline 544 green on `a299187`** — engine 28 s; corpus 1,509 s at the baseline; v3 6,055 s: 34 entrypoints with 0 failed, `tactic_test` 110 checks (the 100 claims), `define_test` 12 checks, `derive_test` 14 checks, `wire_test` 15 checks, calc's host program byte-identical to the model world, parity byte-identical over 28 closures and 116,127 declarations in 608 s, route 1's native build of the kernel (`OK: v3/bin/t0`), the fixture byte-tie identical, replay 2,483 s at 32.1 GB peak, T0 accepted 57,977 with 0 rejected, closures identical to the oracle, all 20 accelerator candidates pinned. The v3 job is 2,083 s shorter than pipeline 542's, the test suite 2,046 s of it (2,952 s against 4,998 s) under the runner of eight: the suite's wall clock is the loader pins' entrypoint's (2,952 s for the 212 pins in one process, against 1,161 s on the development machine), so a wider runner gains nothing and the next cut is that entrypoint's. The entrypoints of 30 s and more sum to 6,177 s of process time: beside the pins, calc's two tests 951 s, parity 608 s, `define_test` 547 s, `derive_test` 422 s, `wire_test` 187 s, K's clients 171 s, `tactic_test` 157 s. The job's limit is 3 h (10,800 s).
 
+**Slice 3.21b landed (2026-10-06) — the trajectory review's findings 1–3**
+(`LANGUAGE.md` §8.4's design and as-built, §13 item 55; records §4.11
+answers the review's six findings as R72–R77; the review is
+`docs/archive/foundation-v3/SHARD_V3_TRAJECTORY_REVIEW_2026-10-06.md`).
+What landed:
+
+- **The expected type decides an arithmetic operator** (`elab.shard`):
+  under an expected `Nat` or `Int`, `+ - * / mod %` take that type's
+  identity and read both operands at it, a `Nat` local under `Int`
+  cast at the leaf, as Lean's `binop%` does. Before, the operation was
+  chosen from an operand and the result coerced: `(- 1 2)` at `Int` was
+  `Int.ofNat (Nat.sub 1 2)` = 0, and K proved `inferred = 0` — a
+  specification and its implementation would inherit one wrong reading
+  while both proofs check. A comparison's operands decide by the first
+  that is not numeric-closed (`(<= (- 0 5) x)` at x's `Int`).
+- **Init's visibility is the module's horizon** (`scope.shard`,
+  `loader.shard`): each imported declaration carries its admission
+  ordinal; a module sees Init below the farthest of its own `(import
+  Init NAME)` and its imports' — the load's order no longer changes a
+  module's meaning (the review loaded two independent roots in both
+  orders; one order was `ambiguous_name`). No measurable load cost.
+- **`reduce` succeeds unchanged where nothing reduces**
+  (`tactic.shard`): `reduce_stuck` retired; a proof is no longer tied
+  to how far the step before it went.
+- **Carried to 3.22's design** by the same ruling: a stored certificate
+  keyed by its rows' statements, not their positions (the review's
+  finding 3: an irrelevant `have` shifted a `(farkas …)`'s weights);
+  the dependent witness goal. Findings 4 (feedback cost: a checked
+  snapshot of the Init prefix as the first lever) and 5 (the connected
+  path of law §12.4 before migration) are weighed at the boundary
+  after 3.22; finding 6 names its workload.
+- Pins: `op_expected`, `init_horizon`, `init_horizon_beyond`;
+  `by_reduce` expects `ok`. `LANGUAGE.md`'s status block refreshed (it
+  said I was absent).
+
+Local gates: 215 loader pins (3 new; `one_meaning` restated, `by_reduce`'s expectation changed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,229 declarations, route 2, K's clients, the full suite's 34 entrypoints (33 passed; the pins test refused `one_meaning`'s old statement of the truncating reading — the one meaning change the rule makes in the closure —, and was rerun green after the pin's restatement). None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

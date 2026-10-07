@@ -31,6 +31,9 @@ The GPT-6 documents (archived under `docs/archive/foundation-v3/` — named `fou
 `SHARD_FOUNDATION_INTEGRATION_REVIEW_v0.1.md` (R17–R28, on v0.4);
 `SHARD_FOUNDATION_FINAL_CLARIFICATIONS_v0.1.md` (R29–R34, on v0.5);
 `SHARD_FOUNDATION_PRERATIFICATION_TWEAKS_v0.1.md` (R35–R41, on v0.7).
+The phase-2 and phase-3 memos are listed at their sections (§4.7–4.11);
+the last, `SHARD_V3_TRAJECTORY_REVIEW_2026-10-06.md` (R72–R77, on
+`7e99261`), is a trajectory review rather than a memo on one slice.
 The user points GPT-6 at each commit by SHA; positions are answered by
 ID so the documents read side by side.
 
@@ -456,6 +459,39 @@ fallback until 3.17). Landed as the design's revision 2
 | R69 contextual obligations, acyclic discharge, dependency scheduling | accept the discharge and its acyclicity (the closure instrument over the proof's constants; `fulfills_cycle`); **defer** dependency-directed wake-up (the retry fixpoint stands while loads are small) | rule 8 — landing 3 | G4, G7 |
 | R70 a fallback may weaken guarantees, not reinterpret | **amend** — a `RUNNABLE` callee is a local of its signature type, so the body elaborates once and erases (`route=typed`); the E-first fallback stays, flagged `route=e_first`, only for a body head without an L identity until slice 3.17 empties that set; a typed-route error is always a refusal; the E-first route's named consumers are `v3/kernel/**` and the old tree's ports | rule 6 — landing 3 | G8 |
 | R71 semantic gates, not frozen hashes | accept — exact agreement is the migration alarm; a moved hash is listed with its cause; the next three consumers share `PreDef`, the branch scopes and the outcomes | "Landings and gates", rule 11 | the battery |
+
+### 4.11 R72–R77 (the trajectory review, on `7e99261`, answered 2026-10-06)
+
+The review: `docs/archive/foundation-v3/SHARD_V3_TRAJECTORY_REVIEW_2026-10-06.md`
+("V3 is moving toward a useful system. Confidence in its logical
+foundation has grown faster than confidence in its authoring
+experience"; six findings over the tree at slice 3.21's close, four
+reproductions through route 3 — a numeric reading, a load-order
+dependence, a redundant `reduce`, an irrelevant row under an explicit
+certificate — and an authoring assessment; "keep the core
+architecture"). Three of its findings are the three items slice 3.21's
+as-built left open (the compound literal at `Nat`, Init's visibility
+per load, `reduce_stuck` on a normal target); the review adds the
+order-dependence demonstration, the observation that a specification
+and its implementation inherit one wrong numeric reading while both
+proofs check, and the positional certificate's fragility. Its script
+was not executed here (the session's permission classifier refused
+code from an outside document); each observation was checked against
+the code's mechanism, and the slice's pins reproduce findings 1–3.
+The user's ruling: "Agreed with your leans … proceed with 3.21b"
+(2026-10-06): findings 1, 2 and the `reduce` policy as a short slice
+before 3.22; content-keyed certificates and witness goals into 3.22's
+design; findings 4 and 5 weighed at the next arc boundary; finding 6
+nothing to decide now.
+
+| ID | disposition | where | fixture |
+|---|---|---|---|
+| R72 elaboration establishes a meaning the author did not intend (`(- 1 2)` at `Int` is 0) | **accept, fixed** — an arithmetic operator under an expected `Nat` or `Int` takes that type's identity and reads both operands at it, as Lean's `binop%` does; a comparison's operands decide by the first that is not numeric-closed; an author's boundary (`Int.ofNat (- 1 2)`) holds. An elaborator defect against law §5.2's order, not a design change | §8.4 slice 3.21b rule 1 | `op_expected` |
+| R73 a module's meaning depends on what else has been loaded | **accept, fixed** — each imported declaration carries its admission ordinal; a module's horizon is the farthest of its own `(import Init NAME)` and its imports'; resolution sees Init below the horizon only. The checked environment stays shared; indexed dependencies (the review's eventual step) not taken | rule 2 | `init_horizon`, `init_horizon_beyond` |
+| R74 authored proof scripts and certificate IR have different maintenance needs | **accept in part** — `reduce` succeeds unchanged where nothing reduces (the refusal `reduce_stuck` retired; `reduce_budget` stays); a stored certificate is keyed by its rows' statements, not their positions — 3.22's design, with the dependent witness goal (`apply Eq.trans` without its middle term). The ruling that the source block is I stands: the review's "authored node against resolved certificate" is the sidecar's contract, one grammar | rule 3; 3.22 | `by_reduce` (expect changed) |
+| R75 feedback cost is a primary language-design constraint | **accept the priority, defer the work** — a load that streams the second fixture pays ~16 s on the development machine before any check (37 s on the review's); the loader pins pay it 212 times (CI's suite is that entrypoint). A checked snapshot of the Init prefix is the cheaper first lever, the persistent session (T9) after it; weighed at the arc boundary after 3.22. `LANGUAGE.md`'s status block refreshed (I is §8.4's since 3.20; items 1–38 ratified 2026-09-15); `docs/LEAN.md` is phase 3's deliverable by §10.5, not yet written | — | — |
+| R76 composition through execution and representation boundaries | **accept the sequencing** — the connected path of law §12.4 before broad migration; at the boundary after 3.22 | — | — |
+| R77 first-order residual execution needs a source-composition workload | **noted** — the discriminating experiment (two callback-using libraries and a third-party composition) is the reopening condition's workload; nothing to decide now | law §4.3 | — |
 
 ## 5. Findings and corrections made along the way
 
@@ -2599,6 +2635,19 @@ is `docs/FOUNDATION.md` §5.3.
   `reduce_stuck` on a normal target; no cuts, no case splits, no
   `only`. *The test runner:* `v3/test.sh` runs its entrypoints eight
   at a time. Gates: 212 loader pins (18 new), `tactic_test` (110 checks: calc's 100 claims by name, the four descents discharged), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,127 declarations, route 2, K's clients, the full suite's 34 entrypoints (the last full run had 33 pass and parity refuse one missing open in `define.shard`; parity and K's clients were rerun green after it). `v3/test.sh` runs the entrypoints eight at a time now (they are independent processes; the output is printed in the list's order): the suite's wall clock is its longest entrypoint's, the loader pins' (1,161 s here). None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-06 — slice 3.21b built: GPT-6's trajectory review, findings
+  1–3 (`LANGUAGE.md` §8.4's design and as-built, §13 item 55; §4.11).**
+  An arithmetic operator under an expected `Nat` or `Int` takes that
+  type's identity and reads both operands at it — `(- 1 2)` at `Int`
+  was `Int.ofNat (Nat.sub 1 2)` = 0 and K proved it so; a comparison's
+  operands decide by the first that is not numeric-closed (`(<= (- 0 5)
+  x)` at x's `Int`). Each imported declaration carries its admission
+  ordinal and a module sees Init below its own horizon — the farthest
+  of its `(import Init NAME)` and its imports' — so a module's meaning
+  no longer depends on the load's order (the review loaded two
+  independent roots in both orders; one order was `ambiguous_name`).
+  `reduce` succeeds unchanged where nothing reduces. Gates: 215 loader pins (3 new; `one_meaning` restated, `by_reduce`'s expectation changed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,229 declarations, route 2, K's clients, the full suite's 34 entrypoints (33 passed; the pins test refused `one_meaning`'s old statement of the truncating reading — the one meaning change the rule makes in the closure —, and was rerun green after the pin's restatement). None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+  The review filed under `docs/archive/foundation-v3/`.
 - **2026-10-06 — pipeline 544 green on `a299187`: slice 3.21 on the
   full gate.** engine 28 s; corpus 1,509 s at the baseline; v3 6,055 s: 34 entrypoints with 0 failed, `tactic_test` 110 checks (the 100 claims), `define_test` 12 checks, `derive_test` 14 checks, `wire_test` 15 checks, calc's host program byte-identical to the model world, parity byte-identical over 28 closures and 116,127 declarations in 608 s, route 1's native build of the kernel (`OK: v3/bin/t0`), the fixture byte-tie identical, replay 2,483 s at 32.1 GB peak, T0 accepted 57,977 with 0 rejected, closures identical to the oracle, all 20 accelerator candidates pinned. Slice 3.21 is closed. The v3 job is 2,083 s shorter than pipeline 542's, the test suite 2,046 s of it (2,952 s against 4,998 s) under the runner of eight: the suite's wall clock is the loader pins' entrypoint's (2,952 s for the 212 pins in one process, against 1,161 s on the development machine), so a wider runner gains nothing and the next cut is that entrypoint's. The entrypoints of 30 s and more sum to 6,177 s of process time: beside the pins, calc's two tests 951 s, parity 608 s, `define_test` 547 s, `derive_test` 422 s, `wire_test` 187 s, K's clients 171 s, `tactic_test` 157 s. The job's limit is 3 h (10,800 s).
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each

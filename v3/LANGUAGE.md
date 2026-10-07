@@ -1,8 +1,8 @@
 # The V3 language — S, L and E at Stage 0 (phase 2 draft)
 
-> **STATUS (2026-09-14): DRAFT at the phase-2 boundary — Stage 0 of
-> law §5.1 (explicit L, no inference), pending the ratification pass
-> over §13 below and `v3/CANON.md` §9.** Normative parent:
+> **STATUS (2026-10-06): the design of S, L, E and I as phase 3 builds
+> them — §13 items 1–38 ratified 2026-09-15, each later item for
+> ratification as its slice lands.** Normative parent:
 > `docs/FOUNDATION.md`. Scope: the surface S, the executable fragment E
 > and `ev` as phase 2 built them — the reader (§2, §4–5), the loader
 > (§3), views (§6.5–6.6), the classifier and `ev` (§6.2–6.4, §6.7),
@@ -12,8 +12,8 @@
 > rule left to the implementation and never overrides it (GPT-6 R62,
 > slice 10). The build history — which slice built what, the
 > measurements, the findings — is `docs/records/FOUNDATION.md` §9; the
-> review correspondence is its §4. The proof IR **I** is phase 3's
-> chapter and is not here. What Stages 1–3 add is §11 with its phase;
+> review correspondence is its §4. The proof IR **I** is §8.4's since
+> slice 3.20 (law §7). What Stages 1–3 add is §11 with its phase;
 > §12 is the ledger of changes from v2, the AT RISK rows the ones to
 > watch. Decisions this draft makes beyond the law's text are §13;
 > until ratified they are the implementation's working assumptions,
@@ -1794,6 +1794,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.19 | deriving under a declared policy (law §5.1; split from 3.18 by the same ruling; ruled 2026-10-02, item 52; the design and the as-built below): `(derive TYPE CAPABILITY…)` — equality, an ordering under the one policy `structural`, a rendering in canonical S — generated as `fn` source and found through a derivation table; a hand-written procedure registered with `(CAPABILITY by NAME)` | a new type usable in an `if`, as a key and in a message (`v3/examples/derive/`); `v3/std/derive.shard` |
 | 3.20 | I's opener (ruled 2026-10-05, item 53; the design and the as-built below; **landed 2026-10-06**): I's data and `(by STEP…)` in a `theorem`, `elaborate(I)` to P, the forms with no engine behind them — `intro exact rfl have show apply cases induction wf decide unfold reduce rw sorry` — and `goal_of`/`applicable`/`step` as E functions over one derivation | calc's claims whose lemma closure needs no arithmetic (52 of 100; 44 landed as blocks in five files, `kernel/test/tactic_test.sh`) |
 | 3.21 | the two forms that carry an engine (the design and the as-built below, item 54; **landed 2026-10-06**): `simp_only` (a bounded rewriter over a lemma list) and `arith` (the Farkas certificate elaborated through `Lean.Omega`'s lemmas, in the export at line 76,223; reconstructed by elimination where the node gives none) | calc's 100 claims as theorems, the capstone `run_eq_spec` among them (`kernel/test/tactic_test.sh`) |
+| 3.21b | GPT-6's trajectory review, findings 1–3 (ruled 2026-10-06, item 55; the design and the as-built below; **landed 2026-10-06**): the expected type decides an arithmetic operator; Init's visibility is the module's horizon; `reduce` succeeds unchanged where nothing reduces | three pins; `op_expected` proves `(- 1 2) = -1` at `Int` |
 | 3.22 | the producers: `tools/prove` re-pointed at I, the sidecar and the pin store (law §7.5), the engine; the transactional goal graph of law §6 | the coverage arc's B-1c |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
@@ -4068,6 +4069,85 @@ replay computes and matches, and K checks P.
   (a ground occurrence under an opaque constant): a pin has no way to
   declare one.
 
+**Slice 3.21b — the trajectory review's findings 1–3** (GPT-6's
+review of 2026-10-06 over the tree at `7e99261`, records §4.11; the
+user's ruling 2026-10-06 on the leans; §13 item 55). Three of the
+review's six findings are the three items slice 3.21's as-built left
+open, with what the review added: a specification and its
+implementation inherit one unintended numeric reading while both
+proofs check; a module's meaning depends on the load's order; a proof
+is tied to how far the step before it went.
+
+*The rules.*
+
+1. **The expected type decides an arithmetic operator.** Where `+ - *
+   / mod %` is read at an expected type whose normal form is `Nat` or
+   `Int`, the operator's identity is that type's and both operands are
+   read at it — a `Nat` local under `Int` is cast at the leaf
+   (`Int.add (Int.ofNat n) 1`), as Lean's `binop%` reads `(n + 1 :
+   Int)`. Where the expected type decides nothing — none, a
+   metavariable, not numeric, a comparison's operands — the identity
+   is the first operand's that is not **numeric-closed** (a numeral, or
+   an arithmetic operator over numeric-closed operands), the other
+   operand read at it; all numeric-closed is law §5.2's default,
+   `Nat`. A boundary the author writes holds: `(Int.ofNat (- 1 2))` is
+   `Nat`'s subtraction, 0. Before, the operation was chosen from the
+   first operand that was not a numeral and the result coerced:
+   `(- 1 2)` at `Int` was `Int.ofNat (Nat.sub 1 2)`, 0, and `(<= (- 0
+   5) x)` read at `Nat` against x's `Int`. The rule is an elaborator
+   fix under law §5.2's order (constraints before defaulting), not a
+   design change.
+2. **Init's visibility is the module's horizon.** Each imported
+   declaration carries its ordinal at admission (the loader's
+   declaration → ordinal table, keyed as the environment is). A
+   module's horizon is the count admitted at the farthest of its own
+   `(import Init NAME)` and its imports' horizons; a module that imports
+   no Init has none. Resolution sees an imported declaration below the
+   horizon only — whatever else the load admitted, in whatever order —
+   and a constant with no ordinal (K's own, admitted with the
+   environment) wherever Init is. The checked environment stays one and
+   shared; what changes is what a scope sees of it. The slice-3.21
+   workaround (`Init.decide_eq_true` in calc_proof) stays as written.
+3. **`reduce` is a normalization: it succeeds unchanged where nothing
+   reduces.** The refusal `reduce_stuck` is retired; `reduce_budget`
+   stays. No step requires progress today, so none is given a
+   progress-requiring variant (the review's "separate operation" waits
+   for a procedure that needs the contract).
+
+**Slice 3.21b as built** (2026-10-06):
+
+- **Rule 1.** `elab.shard`: `op_expected` (the identity from the
+  expected type, for an arithmetic operator), `is_arith_op`,
+  `is_num_closed`/`all_num_closed` (in `is_numeral`'s place in the
+  operand rule). The pin `op_expected`: `(- 1 2)` at `Int` is `Int.sub
+  1 2` and equals `-1`; `(+ n 1)` at `Int` with `n : Nat` is `Int.add
+  (Int.ofNat n) 1`; `(<= (- 0 5) x)` is `Int.le (Int.sub 0 5) x`;
+  `(Int.ofNat (- 1 2))` is `Int.ofNat (Nat.sub 1 2)` and equals 0;
+  `(- n 1)` at `Nat` is `Nat.sub n 1`. One file of the closure changed
+  meaning under the rule, and the full suite found it: the pin
+  `one_meaning` (slice 3.16's G1) stated `(+ a (- n 1))` at `Int` with
+  `n : Nat` as a truncating `Nat` difference cast after (2 at `n = 0`);
+  it is `a + (↑n - 1)` now (1), as Lean reads it, and the pin says so.
+  Parity byte-identical, calc's 100 claims and 21 inputs as before.
+- **Rule 2.** `scope.shard`: `VisOnly`'s second field is the horizon
+  (an `Int`; `-1` none) and a sixth field the ordinal table;
+  `init_within`, `ords_find`, `ords_add`. `loader.shard`: `Load.inits`
+  filled at each accepted record of the stream (`ld_add_inits`, the
+  record's constants at the record's ordinal), `init_horizon` (the
+  ordinal past the import's target, or the count admitted where the
+  target has none), `Fx.init` and `Mod.init` the horizon, `fx_see`
+  taking the farther. A tail-fixture load measured at 16.1 s with the
+  table against 16.4 s without: no cost. The pins `init_horizon` (two
+  roots, the wider loaded first — the review's failing order) and
+  `init_horizon_beyond` (a declaration past the module's horizon,
+  admitted by another module, is `unknown_constant`).
+- **Rule 3.** `tactic.shard`'s `reduce_loop` ends at a target with no
+  redex; its `made` count is gone. The pin `by_reduce` expects `ok`
+  now (reduce at a variable leaves the target; the proof closes by
+  `rfl`).
+- **Not built**: a per-module Init prefix held as the review's
+  "indexed declaration dependencies"; a progress-requiring `reduce`.
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built
@@ -5119,6 +5199,20 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     where a type is expected (item 28); (j) the pending record carries
     the sorried goals (slice 3.20's rule 9). *Left open, stated:*
     Init's visibility is the load's, not the module's (an open can
-    turn ambiguous when another file imports further); a measured
-    function's obligations are stated over the arguments' tuple;
-    `reduce_stuck` on an already normal target.
+    turn ambiguous when another file imports further; **closed by item
+    55**); a measured function's obligations are stated over the
+    arguments' tuple; `reduce_stuck` on an already normal target
+    (**closed by item 55**).
+55. **Slice 3.21b (ruled 2026-10-06 on GPT-6's trajectory review,
+    records §4.11; the design and the as-built, §8.4) — for
+    ratification with item 54.** (a) **The expected type decides an
+    arithmetic operator** (rule 1): an elaborator fix under law §5.2's
+    order; the review's finding 1, where `(- 1 2)` at `Int` was 0 and
+    K proved it. (b) **Init's visibility is the module's horizon**
+    (rule 2): a module's meaning is independent of the load's order;
+    the review's finding 2. (c) **`reduce` succeeds unchanged where
+    nothing reduces** (rule 3): item 54's left-open `reduce_stuck`,
+    reversed on the review's finding 3 — a proof was tied to how far
+    the step before it went. *Carried to 3.22's design, by the same
+    ruling:* a stored certificate keyed by its rows' statements, not
+    their positions; the dependent witness goal.

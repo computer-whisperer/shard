@@ -174,7 +174,7 @@
 ;; visible in it, itself included), whether the Init prefix is visible in it
 ;; a view's module also keeps its fork point (§6.6) for the implementation
 ;; check, which may come after a consumer loaded the view
-(record Mod (path Name) (file (List Int)) (hash Int) (closure (List Name)) (init Bool) (fork (Option ForkPt)) (ok Bool))
+(record Mod (path Name) (file (List Int)) (hash Int) (closure (List Name)) (init Int) (fork (Option ForkPt)) (ok Bool))
   ;; ok False: its loading failed — a later import fails the same way, never re-reads it
 ;; a file whose loading failed after its heads were pre-registered: recorded so that a
 ;; later import of it reports import_failed instead of re-reading it into duplicate_name
@@ -218,6 +218,7 @@
   (mods (List Mod))
   (init InitSt)
   (tbl (IntMap (List (Pair Name Name))))
+  (inits (IntMap (List (Pair Name Int))))   ; declaration → ordinal for every imported declaration (slice 3.21b rule 2)
   (pending (List Name))
   (stack (List Name))
   (recs (List Rec))
@@ -231,13 +232,21 @@
   (typed (List (Pair Name (Pair Scope SExpr))))   ; the fns RUNNABLE on the typed route: a later body binds one as a callee-local (slice 3.16 rule 6)
   (derived (List Derived)))   ; the derivation table (slice 3.19 rule 6): an entry is visible where its procedure is
 (fn load0 ((root (List (List Int))) (chunks (List (List Int)))) Load
-  (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods Nil) (init InitNone) (tbl IMEmpty)
+  (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods Nil) (init InitNone) (tbl IMEmpty) (inits IMEmpty)
              (pending Nil) (stack Nil) (recs Nil) (chunks chunks) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil) (derived Nil)))
 (fn ld_recs ((l Load)) (List Rec) (rev (Load.recs l)))
 (fn ld_with_env ((l Load) (e CheckedEnv) (m AxMemo)) Load (with Load l (env e) (memo m)))
 (fn ld_add_mod ((l Load) (md Mod)) Load (with Load l (mods (Cons md (Load.mods l)))))
 (fn ld_with_init ((l Load) (i InitSt)) Load (with Load l (init i)))
 (fn ld_with_tbl ((l Load) (t (IntMap (List (Pair Name Name))))) Load (with Load l (tbl t)))
+(fn ld_add_inits ((l Load) (ns (List Name)) (o Int)) Load
+  (measure (struct ns))
+  (match ns (Nil l) ((Cons n r) (ld_add_inits (with Load l (inits (ords_add (Load.inits l) n o))) r o))))
+;; a module's horizon through NAME: the ordinal past NAME's (the count admitted at the import)
+(fn init_horizon ((l Load) (target Name)) Int
+  (match (ords_find (Load.inits l) target)
+    ((Some o) (+ o 1))
+    (None (match (Load.init l) (InitNone 0) ((InitSt _ _ _ _ n) n)))))
 (fn ld_add_pending ((l Load) (n Name)) Load (with Load l (pending (Cons n (Load.pending l)))))
 (fn ld_with_stack ((l Load) (s (List Name))) Load (with Load l (stack s)))
 (fn ld_rec ((l Load) (x Rec)) Load (with Load l (recs (Cons x (Load.recs l)))))
@@ -265,20 +274,20 @@
 (fn init_prefix ((l Load)) Name (match (Load.init l) (InitNone Anon) ((InitSt _ _ _ p _) p)))
 
 ;; the file being loaded: module, root-relative parts, opened prefixes, the
-;; visible modules (itself included), Init visible?, trusted names, hash so
+;; visible modules (itself included), the Init horizon (-1: none), trusted names, hash so
 ;; far, whether it is a view (§6.6: the forms it may hold, the req-scope gate)
-(record Fx (module Name) (ident Name) (parts (List (List Int))) (opened (List Open)) (vis (List Name)) (init Bool) (trusts (List Name)) (hash Int) (view Bool))
+(record Fx (module Name) (ident Name) (parts (List (List Int))) (opened (List Open)) (vis (List Name)) (init Int) (trusts (List Name)) (hash Int) (view Bool))
 ;; the prefix the file's declarations take: its module, or the sealed directory's for a file
 ;; directly inside one (the K seal: one module across the directory's files, §13 item 26)
 (fn fx_private ((f Fx)) Bool (bool_not (name_eq (Fx.ident f) (Fx.module f))))
 (fn fx_file ((f Fx)) (List Int) (join_path (Fx.parts f)))
 (fn fx_open ((f Fx) (o Open)) Fx (with Fx f (opened (append (Fx.opened f) (list o)))))
-(fn fx_see ((f Fx) (mods (List Name)) (init Bool)) Fx (with Fx f (vis (names_union (Fx.vis f) mods)) (init (bool_or (Fx.init f) init))))
+(fn fx_see ((f Fx) (mods (List Name)) (init Int)) Fx (with Fx f (vis (names_union (Fx.vis f) mods)) (init (if (lt (Fx.init f) init) init (Fx.init f)))))
 (fn fx_trust ((f Fx) (ns (List Name))) Fx (with Fx f (trusts (append (Fx.trusts f) ns))))
 (fn fx_mix ((f Fx) (x Int)) Fx (with Fx f (hash (mix (Fx.hash f) x))))
 (fn fx_as_impl ((f Fx)) Fx (with Fx f (view False)))
 (fn fx_scope ((l Load) (f Fx)) Scope
-  (Scope (Fx.ident f) (Fx.module f) (Fx.opened f) (VisOnly (Fx.vis f) (Fx.init f) (Load.tbl l) (Load.pending l) (Load.derived l))))
+  (Scope (Fx.ident f) (Fx.module f) (Fx.opened f) (VisOnly (Fx.vis f) (Fx.init f) (Load.tbl l) (Load.pending l) (Load.derived l) (Load.inits l))))
 
 ;; ---- the forms -------------------------------------------------------------------------
 (type Form
@@ -877,7 +886,7 @@
 (fn name_taken ((env CheckedEnv) (n Name)) Bool (match (env_find env n) ((Some _) True) (None False)))
 ;; an S form's citations of the environment's E-eligible inductives enter the E table first (§7.5)
 (fn scan_form ((l Load) (f Fx) (s SExpr)) Load
-  (if (bool_not (Fx.init f)) l (ld_with_e l (es_scan_init (Load.etab l) (fx_scope l f) (Load.env l) s))))   ; an optimization: Init's inductives are citable only where Init is visible
+  (if (lt (Fx.init f) 0) l (ld_with_e l (es_scan_init (Load.etab l) (fx_scope l f) (Load.env l) s))))   ; an optimization: Init's inductives are citable only where Init is visible
 ;; a `type` enters K when its field types are L types (§4); it is E only when a field cites a
 ;; built-in E type with no L constant in scope — Int or Nat without Init, Symbol until its String
 ;; identity (phase 3) — or another E-only type, transitively (§8.1 rule 1; §13 item 35). Never
@@ -1033,9 +1042,11 @@
              (match v
                (VSkip (init_stream l run1 rest files target n (- fuel 1) w))
                ((VAccept _)
-                (if (mem_name target (record_constants (run_tabs run1) j v))
-                  (Pair (Pair (ld_rec (init_save l run1 rest files target (+ n 1)) (RInit target (+ n 1))) True) w)
-                  (init_stream l run1 rest files target (+ n 1) (- fuel 1) w)))
+                (let ((cs (record_constants (run_tabs run1) j v)))
+                  (let ((l1 (ld_add_inits l cs n)))
+                    (if (mem_name target cs)
+                      (Pair (Pair (ld_rec (init_save l1 run1 rest files target (+ n 1)) (RInit target (+ n 1))) True) w)
+                      (init_stream l1 run1 rest files target (+ n 1) (- fuel 1) w)))))
                (_ (Pair (init_err (init_save l run1 rest files (init_prefix l) n) "Init" (quote init_refused) (match (show_verdict v) ((Some t) t) (None "?"))) w))))))))))))
 
 ;; ---- files and modules -----------------------------------------------------------------------
@@ -1089,7 +1100,7 @@
             ((Pair ip w1s)
            (match (split_directives forms Nil)
              ((Pair dirs rest)
-              (match (pre_register_file l (make Fx (module mp) (ident ip) (parts rel) (opened Nil) (vis (list mp)) (init False) (trusts Nil) (hash (hash_name mp)) (view view)) rest)
+              (match (pre_register_file l (make Fx (module mp) (ident ip) (parts rel) (opened Nil) (vis (list mp)) (init -1) (trusts Nil) (hash (hash_name mp)) (view view)) rest)
                 ((Pair None l0) (Pair (Pair (ld_add_failed l0 mp rel) None) w1))
                 ((Pair (Some f0) l0)
               (match (load_forms (ld_with_stack l0 (Cons mp (Load.stack l))) f0 dirs fuel w1s)
@@ -1557,7 +1568,7 @@
        ((FTrusts ns) (load_forms l (fx_trust f ns) r fuel w))
        ((FImportInit n)
         (match (init_through l n w)
-          ((Pair (Pair l1 True) w1) (load_forms l1 (fx_see f Nil True) r fuel w1))
+          ((Pair (Pair l1 True) w1) (load_forms l1 (fx_see f Nil (init_horizon l1 n)) r fuel w1))
           ((Pair (Pair l1 False) w1) (Pair (Pair l1 None) w1))))
        ((FImportFile p)
         (match (import_file l f p (- fuel 1) w)

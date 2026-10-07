@@ -98,6 +98,15 @@ reader found: `simp_self` (a rule whose right side holds its left never reaches 
 `by_ne_level` (`Ne` at a universe other than 1), and `define_match_eq`'s second function (a
 descent obligation as the comparison at `Nat` under the source's names).
 
+Slice 3.21b (GPT-6's trajectory review, findings 1–3): `op_expected` (an arithmetic
+operator under an expected `Nat` or `Int` takes that type's identity — `(- 1 2)` at `Int` is
+`Int.sub 1 2`, -1, where it was `Int.ofNat (Nat.sub 1 2)`, 0 — and a comparison's operands
+decide by the first that is not numeric-closed), `init_horizon` (a module sees Init below
+its own horizon whatever an earlier root admitted: the review's failing load order),
+`init_horizon_beyond` (a declaration past the horizon, admitted by another module, is
+`unknown_constant`); `by_reduce` expects `ok` (reduce leaves a target with nothing to
+reduce as it is).
+
 `v3/kernel/test/loader_pins_test.shard` replays every case in its list;
 `loader_test.shard` holds the cases a header cannot state (two root
 files, the wrong-pin fixture, the records' text, a loaded program run
@@ -199,8 +208,8 @@ condition; a matcher's chosen arm only) and `elab_bridge` (`decide`,
 numeral operand, `(list …)`, an untyped `let`; the theorems `Eq.refl`). Landing 3 (the flip): `route_callee` (G8: a `RUNNABLE` callee as a
 callee-local — `callee_runnable route=typed`; `define_test.sh` compares
 the two programs' dumps), `one_meaning` (G1: one expression as a `fn`'s
-body and a `def`'s value, equal by `Eq.refl`; `-` at `Nat` and at
-`Int`), `discharge_measure` (G4: three obligations with their branch
+body and a `def`'s value, equal by `Eq.refl`; `-` at `Int` with a
+`Nat` operand cast at the leaf since slice 3.21b), `discharge_measure` (G4: three obligations with their branch
 proof discharged by `Nat.sub_lt`, the account read in
 `define_test.sh`), `discharge_self_cycle` and `discharge_two_cycle` (G7:
 `fulfills_cycle`), `match_in_impl` (G9: a matcher generated and read

@@ -771,10 +771,14 @@
                (EErr (quote no_operator_identity) (append "not at " (show_expr atyw)))))))))
        (EErr (quote bad_shape) "(OP a b)")))
     ((Cons a (Cons b Nil))
-     (if (bool_and (is_numeral a) (bool_not (is_numeral b)))
-       ;; the identity is the first operand's type's — of the first that is not a numeral
-       ;; (`(<= 48 c)` at c's Int; slice 3.16): the numeral is then read at the binder
-       (match (elab e b None)
+     (match (op_expected e x expected)
+       ((Pair e0 (Some id)) (op_apply e0 id (list (ASrc a) (ASrc b)) expected))
+       ((Pair e0 None)
+     (if (bool_and (is_num_closed a) (bool_not (is_num_closed b)))
+       ;; the identity is the first operand's type's — of the first that is not numeric-closed
+       ;; (`(<= 48 c)` at c's Int, slice 3.16; `(<= (- 0 5) x)` at x's, slice 3.21b): the
+       ;; closed operand is then read at the binder
+       (match (elab e0 b None)
          ((EErr r m) (EErr r m))
          ((EOk e1 bv bty)
           (match (el_whnf e1 bty)
@@ -782,16 +786,43 @@
              (match (op_identity x btyw)
                ((Some id) (op_apply e2 id (list (ASrc a) (AVal bv bty)) expected))
                (None (EErr (quote no_operator_identity) (append (chars_of_sym x) (append " at " (append (show_expr btyw) ": no naming-law identity at this type (§8.4 rule 3)"))))))))))
-     (match (elab e a None)
+     (match (elab e0 a None)
        ((EErr r m) (EErr r m))
        ((EOk e1 av aty)
         (match (el_whnf e1 aty)
           ((Pair e2 atyw)
            (match (op_identity x atyw)
              ((Some id) (op_apply e2 id (list (AVal av aty) (ASrc b)) expected))
-             (None (EErr (quote no_operator_identity) (append (chars_of_sym x) (append " at " (append (show_expr atyw) ": no naming-law identity at this type (§8.4 rule 3)"))))))))))))
+             (None (EErr (quote no_operator_identity) (append (chars_of_sym x) (append " at " (append (show_expr atyw) ": no naming-law identity at this type (§8.4 rule 3)"))))))))))))))
     (_ (EErr (quote bad_shape) "(OP a b)"))))))))
-(fn is_numeral ((s SExpr)) Bool (match s ((SNum _) True) (_ False)))
+;; an arithmetic operator under an expected type that is Nat or Int takes that type's identity
+;; and reads both operands at it — `(- 1 2)` at Int is Int.sub, a Nat local under Int is cast
+;; at the leaf — as Lean's binop% reads `(n + 1 : Int)` (slice 3.21b rule 1; before, the
+;; operation was chosen from an operand and the result coerced: `(- 1 2)` at Int was 0)
+(fn op_expected ((e El) (x Symbol) (expected (Option Expr))) (Pair El (Option Name))
+  (if (bool_not (is_arith_op x)) (Pair e None)
+    (match expected
+      (None (Pair e None))
+      ((Some ty)
+       (match (el_whnf e ty)
+         ((Pair e1 tyw)
+          (if (is_const_named tyw (nm_nat)) (Pair e1 (op_at (quote Nat) x))
+          (if (is_const_named tyw (nm_int_ty)) (Pair e1 (op_at (quote Int) x))
+            (Pair e1 None)))))))))
+(fn is_arith_op ((x Symbol)) Bool
+  (bool_or (sym_eq x (quote +)) (bool_or (sym_eq x (quote -)) (bool_or (sym_eq x (quote *)) (bool_or (sym_eq x (quote /))
+  (bool_or (sym_eq x (quote mod)) (sym_eq x (quote %))))))))
+;; numeric-closed: a numeral, or an arithmetic operator over numeric-closed operands — an
+;; operand that decides no identity by itself
+(fn is_num_closed ((s SExpr)) Bool
+  (measure (struct s))
+  (match s
+    ((SNum _) True)
+    ((SList (Cons (SSym h) args)) (bool_and (is_arith_op h) (all_num_closed args)))
+    (_ False)))
+(fn all_num_closed ((xs (List SExpr))) Bool
+  (measure (struct xs))
+  (match xs (Nil True) ((Cons x r) (bool_and (is_num_closed x) (all_num_closed r)))))
 ;; a constant applied to source arguments (Eq, Ne, Iff: the implicit type is theirs)
 (fn op_const ((e El) (k Name) (args (List SExpr)) (expected (Option Expr))) ERes
   (match (elab_const e k Nil False None)
