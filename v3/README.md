@@ -1083,6 +1083,8 @@ What landed:
 
 Local gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
 
+Landing 1 is closed: **pipeline 548 green on `2be8a72`** — engine 56 s; corpus 1,431 s at the baseline; v3 6,537 s: 34 entrypoints with 0 failed, `tactic_test` 110 checks (the 100 claims), `define_test` 12 checks, `derive_test` 14 checks, `wire_test` 15 checks, calc's host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations in 600 s, route 1's native build of the kernel (`OK: v3/bin/t0`), the fixture byte-tie identical, replay 2,438 s at 32.7 GB peak, T0 accepted 57,977 with 0 rejected, closures identical to the oracle, all 20 accelerator candidates pinned. The v3 job is 278 s longer than pipeline 546's, 161 s of it the loader pins' entrypoint (3,298 s: six pins more), the suite's wall clock.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until
