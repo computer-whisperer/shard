@@ -9,8 +9,9 @@
 # measured functions (parse_tail, show, show_nat) have their descent obligations
 # discharged, so nothing a claim cites is pending.
 # Five loads cover the fourteen files (a leaf of the import graph loads its closure):
-# each loads with no error and nothing pending, every claim of the old tree is accepted
-# under its name, and the descents are DISCHARGE records.
+# each loads with no error and nothing pending, every claim of the old tree (the list in
+# calc_claims.txt, shared with engine_test.sh) is accepted under its name, and the descents
+# are DISCHARGE records.
 # Exit code = the number of checks that failed.
 set -u
 cd "$(dirname "$0")/../../.."
@@ -43,17 +44,10 @@ checks=5
 for f in calc_app_world calc_show_run calc_ndigit calc_spec_tests calc_reconcile_tests; do
   grep -q 'pending 0 .*errors 0$' "$OUT/$f.txt" || fail=$((fail+1))
 done
-names calc_app_world calc_spec len_skipws_le len_takedigits_le len_takedigits_lt skipcons_len_le pn_rest_lt ptd
-names calc_app_world calc_equiv lex_num le32_le48_false le32_not_43 le32_not_45 le32_not_digit lex_ws_none ws_lex lex_num_check numr_eta lex_digit_head skip_ws_idem is_digit_false_lo digit_lo ge48_not_43 ge48_not_45 digit_not_43 digit_not_45 lex_plus_head lex_minus_head head_skipws_false skipws_head_nonws parse_tail_nil_test lex_bad_head lex_skipnum loop_decrease loop_eq CORE run_eq_spec
-names calc_app_world calc_app_spec step_eq_spec
-names calc_app_world calc_app_trace next_state_eq_spec emitted_eq_spec run_state_eq_spec run_trace_eq_spec drive_eq_spec
-names calc_app_world calc_app_world run_eq_spec_world
-names calc_show_run calc_proof digit_val_of_digit digit_ge_lo digit_le_hi is_digit_of_digit lex_xy run_xy_adds
-names calc_show_run calc_show lt10f_pos valI_go_snoc valI_snoc show_correct
-names calc_show_run calc_show_run codes_cons append_int_cons codes_append mul_comm10 digit_val_id lex_go_digit lt10_le9 show_lt show_ge lex_show_run add_zero lex_go_digit_none lex_show_run_none lex_plus lex_nil lex_two run_show_adds
-names calc_ndigit calc_ndigit codes_cons append_int_cons value_go_cons digit_val_code is_digit_code lex_go_digit lex_go_digit0 lex_digit_run value_cons lex_plus lex_ndigit run_ndigit_adds
-names calc_spec_tests calc_spec_tests t_1plus2 t_ws t_sub t_chain t_garbage t_leadop t_empty t_trailop t_twonum
-names calc_reconcile_tests calc_reconcile_tests r_1plus2 r_ws r_sub r_chain r_garbage r_garbage2 r_leadop r_empty r_trailop r_twonum r_tabnl
+while read -r leaf mod name; do
+  case $leaf in \#*|'') continue;; esac
+  names "$leaf" "$mod" "$name"
+done < v3/kernel/test/calc_claims.txt
 discharged calc_app_world calc_spec.parse_tail.dec_1
 discharged calc_app_world calc_spec.parse_tail.dec_2
 discharged calc_app_world calc_app.show_nat.dec_1

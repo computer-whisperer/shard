@@ -1,0 +1,170 @@
+;;; v3/kernel/prove.shard — the producer's driver (v3/LANGUAGE.md §8.4 slice 3.22 rule 6;
+;;; law §7.5):
+;;;   eval direct v3/kernel/prove.shard --root DIR [--init CHUNK]… FILE…
+;;;   eval direct v3/kernel/prove.shard --root DIR [--init CHUNK]… --measure FILE…
+;;; loads each FILE as load.shard does, under the mode `solve`: an `auto` theorem (a
+;;; fulfills, a discharge) without a valid sidecar entry is the engine's (engine.shard),
+;;; and the block it finds is replayed before it is accepted. Then the sidecar of every
+;;; file that gained a block is rewritten whole — FILE.auto.shard, machine-owned: the
+;;; entries it held that were not superseded, then the new ones in the file's order, one
+;;; `(proof-for NAME FINGERPRINT (by STEP…))` per theorem, under a header naming the
+;;; engine's version. The records are printed as the loader's are (PROVED NAME fp=N (by
+;;; …) for each solved theorem; an unsolved one stays PENDING auto_unsolved with its goal),
+;;; then the counts; the exit code is refused + errors + the theorems left unsolved. No
+;;; source file is written (law §7.5).
+;;; `--measure` (the slice's third ruling): the files load under the mode `measure` —
+;;; every hand-written proof is read as the build reads it and the engine is also run on
+;;; its statement, unaided — and the ENGINE records are printed with the count
+;;; (`ENGINE: solved S of N`); nothing is written.
+
+(import "loader.shard")
+(use kernel.engine)
+(use kernel.host)
+(use kernel.loader)
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.reader)
+(use kernel.scope)
+(use kernel.sexpr)
+(use kernel.util)
+(use kernel.host.World)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.loader.Rec)
+(use kernel.name.Name)
+(use kernel.sexpr.RAll)
+(use kernel.reader.Auto)
+
+(type PArgs (PArgs (List Int) (List (List Int)) (List (List Int)) Bool))   ; root, chunks, files, measure
+(fn parse_pargs ((args (List (List Int))) (a PArgs)) PArgs
+  (measure (struct args))
+  (match a
+    ((PArgs root chunks files measure)
+     (match args
+       (Nil (PArgs root (rev chunks) (rev files) measure))
+       ((Cons x r)
+        (if (int_list_eq x "--root") (match r ((Cons v r2) (parse_pargs r2 (PArgs v chunks files measure))) (Nil (parse_pargs Nil a)))
+        (if (int_list_eq x "--init") (match r ((Cons v r2) (parse_pargs r2 (PArgs root (Cons v chunks) files measure))) (Nil (parse_pargs Nil a)))
+        (if (int_list_eq x "--measure") (parse_pargs r (PArgs root chunks files True))
+          (parse_pargs r (PArgs root chunks (Cons x files) measure))))))))))
+
+(fn prove_files ((l Load) (files (List (List Int))) (w World)) (Pair Load World)
+  (measure (struct files))
+  (match files
+    (Nil (Pair l w))
+    ((Cons f r) (match (load_root_file l f w) ((Pair l1 w1) (prove_files l1 r w1))))))
+(fn print_precs ((rs (List Rec)) (w World)) World
+  (measure (struct rs))
+  (match rs (Nil w) ((Cons x r) (print_precs r (write_line (show_rec x) w)))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match (parse_pargs args (PArgs Nil Nil Nil False))
+       ((PArgs root chunks files measure)
+        (match (parts_of root)
+          (None (exit 2 (write_line "prove: --root DIR is required" w1)))
+          ((Some rootp)
+           (if (int_eq (len rootp) 0)
+             (exit 2 (write_line "prove: --root DIR is required" w1))
+             (if measure (main_measure rootp chunks files w1) (main_solve rootp chunks files w1))))))))))
+
+;; ---- solve -------------------------------------------------------------------------------------
+(fn main_solve ((rootp (List (List Int))) (chunks (List (List Int))) (files (List (List Int))) (w World)) World
+  (match (prove_files (ld_with_mode (load0 rootp chunks) (quote solve)) files (write_line (append "PROVE root=" (append (join_path rootp) (append " engine_version=" (show_nat (engine_version))))) w))
+    ((Pair l w2)
+     (let ((cs (rec_counts (ld_recs l) (zero_counts))))
+       (match (write_sidecars l (proved_by_file l (ld_recs l) Nil) w2)
+         ((Pair written w3)
+          (exit (+ (load_failures cs) (unsolved (ld_recs l)))
+            (write_line (append "PROVE: " (append (show_counts_load cs) (append "  proved " (append (show_nat (proved (ld_recs l))) (append "  unsolved " (append (show_nat (unsolved (ld_recs l))) (append "  sidecars written " (show_nat written))))))))
+              (print_precs (ld_recs l) w3)))))))))
+(fn proved ((rs (List Rec))) Int
+  (measure (struct rs))
+  (match rs (Nil 0) ((Cons (RProved _ _ _) r) (+ 1 (proved r))) ((Cons _ r) (proved r))))
+;; the theorems the engine did not close: PENDING auto_unsolved
+(fn unsolved ((rs (List Rec))) Int
+  (measure (struct rs))
+  (match rs
+    (Nil 0)
+    ((Cons (RPending _ why) r) (+ (if (starts_with (chars_of_sym why) "auto_unsolved") 1 0) (unsolved r)))
+    ((Cons _ r) (unsolved r))))
+(fn starts_with ((s (List Int)) (p (List Int))) Bool (int_list_eq (take (len p) s) p))
+
+;; the PROVED records grouped by the file their theorem's module was loaded from: (file, entries)
+(fn proved_by_file ((l Load) (rs (List Rec)) (acc (List (Pair (List Int) (List Auto))))) (List (Pair (List Int) (List Auto)))
+  (measure (struct rs))
+  (match rs
+    (Nil (rev_groups acc Nil))
+    ((Cons (RProved n fp steps) r)
+     (match (file_of_decl l n)
+       ((Some file) (proved_by_file l r (group_add acc file (Auto (decl_short n) fp steps))))
+       (None (proved_by_file l r acc))))
+    ((Cons _ r) (proved_by_file l r acc))))
+(fn group_add ((acc (List (Pair (List Int) (List Auto)))) (file (List Int)) (a Auto)) (List (Pair (List Int) (List Auto)))
+  (measure (struct acc))
+  (match acc
+    (Nil (list (Pair file (list a))))
+    ((Cons (Pair f as) r) (if (int_list_eq f file) (Cons (Pair f (Cons a as)) r) (Cons (Pair f as) (group_add r file a))))))
+(fn rev_groups ((gs (List (Pair (List Int) (List Auto)))) (acc (List (Pair (List Int) (List Auto))))) (List (Pair (List Int) (List Auto)))
+  (measure (struct gs))
+  (match gs (Nil (rev acc)) ((Cons (Pair f as) r) (rev_groups r (Cons (Pair f (rev as)) acc)))))
+;; a declaration's file: through its module (the declaration → module table, then the module's record)
+(fn file_of_decl ((l Load) (n Name)) (Option (List Int))
+  (match (tbl_find (Load.tbl l) n)
+    (None None)
+    ((Some m) (match (ld_find_mod (Load.mods l) m) ((Some md) (Some (Mod.file md))) (None None)))))
+;; the name as the entry writes it: without its module prefix (the entry is read under the module's scope)
+(fn decl_short ((n Name)) Name
+  (match n
+    ((Str _ s) (n1 s))
+    ((Num p k) (Num Anon k))
+    (Anon Anon)))
+
+;; the sidecars rewritten: each file's existing entries not superseded, then the new ones
+(fn write_sidecars ((l Load) (groups (List (Pair (List Int) (List Auto)))) (w World)) (Pair Int World)
+  (measure (struct groups))
+  (match groups
+    (Nil (Pair 0 w))
+    ((Cons (Pair file news) r)
+     (let ((path (append (drop_shard_suffix (join_path (append (Load.root l) (match (parts_of file) ((Some ps) ps) (None Nil))))) ".auto.shard")))
+       (match (read_file path w)
+         ((Pair bytes w1)
+          (let ((olds (match bytes ((Some src) (match (read_all src) ((RAOk es) (match (sidecar_entries es Nil) ((Pair (Some as) _) as) (_ Nil))) (_ Nil))) (None Nil))))
+            (match (write_file path (render_sidecar (append (not_superseded olds news) news)) w1)
+              ((Pair ok w2)
+               (match (write_sidecars l r w2)
+                 ((Pair k w3) (Pair (+ k (if ok 1 0)) (if ok w3 (write_line (append "PROVE: could not write " path) w3))))))))))))))
+(fn not_superseded ((olds (List Auto)) (news (List Auto))) (List Auto)
+  (measure (struct olds))
+  (match olds
+    (Nil Nil)
+    ((Cons (Auto n fp steps) r) (if (names_has news n) (not_superseded r news) (Cons (Auto n fp steps) (not_superseded r news))))))
+(fn names_has ((as (List Auto)) (n Name)) Bool
+  (measure (struct as))
+  (match as (Nil False) ((Cons (Auto m _ _) r) (if (name_eq m n) True (names_has r n)))))
+(fn render_sidecar ((as (List Auto))) (List Int)
+  (append ";; machine-owned: written by v3/kernel/prove.shard (engine version " (append (show_nat (engine_version)) (append "); one entry per theorem, the fingerprint of the statement it proves\n" (render_entries as)))))
+(fn render_entries ((as (List Auto))) (List Int)
+  (measure (struct as))
+  (match as
+    (Nil Nil)
+    ((Cons (Auto n fp steps) r)
+     (append "(proof-for " (append (show_name n) (append " " (append (show_int fp) (append " (by " (append (show_sexprs steps) (append "))\n" (render_entries r)))))))))))
+
+;; ---- measure -----------------------------------------------------------------------------------
+(fn main_measure ((rootp (List (List Int))) (chunks (List (List Int))) (files (List (List Int))) (w World)) World
+  (match (prove_files (ld_with_mode (load0 rootp chunks) (quote measure)) files (write_line (append "MEASURE root=" (append (join_path rootp) (append " engine_version=" (show_nat (engine_version))))) w))
+    ((Pair l w2)
+     (let ((cs (rec_counts (ld_recs l) (zero_counts))))
+       (exit (load_failures cs)
+         (write_line (append "ENGINE: solved " (append (show_nat (engine_solved (ld_recs l))) (append " of " (show_nat (engine_tried (ld_recs l))))))
+           (write_line (append "LOAD: " (show_counts_load cs)) (print_precs (ld_recs l) w2))))))))
+(fn engine_solved ((rs (List Rec))) Int
+  (measure (struct rs))
+  (match rs (Nil 0) ((Cons (REngine _ ok) r) (+ (if ok 1 0) (engine_solved r))) ((Cons _ r) (engine_solved r))))
+(fn engine_tried ((rs (List Rec))) Int
+  (measure (struct rs))
+  (match rs (Nil 0) ((Cons (REngine _ _) r) (+ 1 (engine_tried r))) ((Cons _ r) (engine_tried r))))

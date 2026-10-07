@@ -205,6 +205,8 @@
   (RReadErr (List Int) Symbol (List Int))     ; file, reason, message — the file's reading ends here
   (RLoadErr (List Int) Symbol (List Int))     ; file, reason, detail — the file's loading ends here
   (RUnused Name (List Name))                  ; the file's `use` lines no citation could need (§8.1 rule 4): module, prefixes
+  (RProved Name Int (List SExpr))              ; mode solve (slice 3.22 rule 6): the engine's block for an auto theorem, with the statement's fingerprint — what the sidecar's entry holds
+  (REngine Name Bool)                         ; mode measure: the engine closes the statement unaided, or not
   (RDerive Name Expr Symbol Symbol (List Name)))   ; a derivation registered (§8.4 slice 3.19): the procedure, the type, the capability, the policy, the field procedures it selected
 
 ;; root, environment, closure memo, modules, the Init stream, declaration →
@@ -220,6 +222,7 @@
   (init InitSt)
   (tbl (IntMap (List (Pair Name Name))))
   (inits (IntMap (List (Pair Name Int))))   ; declaration → ordinal for every imported declaration (slice 3.21b rule 2)
+  (mode Symbol)                             ; the proofs' mode (slice 3.22 rule 6): off (the build), solve (prove), measure
   (pending (List Name))
   (stack (List Name))
   (recs (List Rec))
@@ -233,13 +236,20 @@
   (typed (List (Pair Name (Pair Scope SExpr))))   ; the fns RUNNABLE on the typed route: a later body binds one as a callee-local (slice 3.16 rule 6)
   (derived (List Derived)))   ; the derivation table (slice 3.19 rule 6): an entry is visible where its procedure is
 (fn load0 ((root (List (List Int))) (chunks (List (List Int)))) Load
-  (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods Nil) (init InitNone) (tbl IMEmpty) (inits IMEmpty)
+  (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods Nil) (init InitNone) (tbl IMEmpty) (inits IMEmpty) (mode (quote off))
              (pending Nil) (stack Nil) (recs Nil) (chunks chunks) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil) (derived Nil)))
 (fn ld_recs ((l Load)) (List Rec) (rev (Load.recs l)))
 (fn ld_with_env ((l Load) (e CheckedEnv) (m AxMemo)) Load (with Load l (env e) (memo m)))
 (fn ld_add_mod ((l Load) (md Mod)) Load (with Load l (mods (Cons md (Load.mods l)))))
 (fn ld_with_init ((l Load) (i InitSt)) Load (with Load l (init i)))
 (fn ld_with_tbl ((l Load) (t (IntMap (List (Pair Name Name))))) Load (with Load l (tbl t)))
+(fn ld_with_mode ((l Load) (m Symbol)) Load (with Load l (mode m)))
+;; an RDSolved or RDMeasured read: its record, and the plain RDOk
+(fn rd_plain ((l Load) (rd RDecl)) (Pair Load RDecl)
+  (match rd
+    ((RDSolved n fp steps ds) (Pair (ld_rec l (RProved n fp steps)) (RDOk ds)))
+    ((RDMeasured n ok ds) (Pair (ld_rec l (REngine n ok)) (RDOk ds)))
+    (_ (Pair l rd))))
 (fn ld_add_inits ((l Load) (ns (List Name)) (o Int)) Load
   (measure (struct ns))
   (match ns (Nil l) ((Cons n r) (ld_add_inits (with Load l (inits (ords_add (Load.inits l) n o))) r o))))
@@ -502,7 +512,9 @@
     (match (if (sym_eq h (quote fulfills)) (obligation_named l sc s) None)
       ((Some (Pair k proof)) (Pair (load_discharge l f k proof) f))
       (None
-    (match (read_decl_autos sc (Load.env l) s (Fx.autos f))
+    (match (rd_plain l (read_decl_autos sc (Load.env l) s (Fx.autos f) (Load.mode l)))
+     ((Pair l rd)
+    (match rd
       ((RDErr e m)
        (if (bool_and (sym_eq h (quote sig)) (Fx.view f))
          (sig_e_only l f s e m)
@@ -513,7 +525,8 @@
       ((RDParam d kind arity)
        (match (admit_param l f d kind arity)
          ((Pair l1 f1) (Pair (add_e_twin l1 f1 s) f1))))
-      ((RDOk ds) (admit_forms l f s ds)))))))))))))
+      ((RDOk ds) (admit_forms l f s ds))
+      (_ (Pair (ld_rec l (RLoadErr (fx_file f) (quote bad_directive) "an unhandled reading")) f)))))))))))))))
 
 ;; ---- a derivation (§8.4 slice 3.19; derive.shard) -----------------------------------------------
 ;; the forms a capability generated are loaded as the file's own at this point — the one front
@@ -590,7 +603,9 @@
     (None l)
     ((Some info)
      (let ((thm (name_append k (n1 (quote proof)))))
-       (match (read_discharge (fx_scope l f) (Load.env l) thm (ci_type info) proof (Fx.autos f))
+       (match (rd_plain l (read_discharge (fx_scope l f) (Load.env l) thm (ci_type info) proof (Fx.autos f) (Load.mode l)))
+        ((Pair l rd)
+       (match rd
          ((RDErr e m) (ld_rec l (RReadErr (fx_file f) e m)))
          ((RDPending nn r) (ld_rec (ld_add_pending l nn) (RPending nn r)))
          ((RDOk ds)
@@ -606,7 +621,7 @@
                     (ld_rec l (RClassify k (quote fulfills_cycle) (append "the proof of " (append (show_name k) " rests on the obligation it discharges — through the function, a theorem or another obligation; nothing is closed"))))
                     (let ((l1 (recs_add (ld_with_tbl (ld_with_env l env1 memo1) (tbl_add_all (Load.tbl l) (decls_declare env1 ds) (Fx.module f))) recs)))
                       (settle_discharge (ld_rec (with Load l1 (discharged (Cons (Pair k rests) (Load.discharged l1)))) (RDischarge k (quote proved))) k rests)))))))))
-         (_ l)))))))
+         (_ l)))))))))
 (fn has_discharged ((ds (List (Pair Name (List Name)))) (k Name)) Bool
   (measure (struct ds))
   (match ds (Nil False) ((Cons (Pair n _) r) (if (name_eq n k) True (has_discharged r k)))))
@@ -1591,7 +1606,9 @@
 ;; (fulfills NAME PROOF): the requirement's statement here, the proof a theorem or pending
 (fn fulfil ((l Load) (im Im) (n Name) (rargs (List SExpr)) (proof SExpr)) (Pair Load Im)
   (let ((sc (fx_scope l (Im.fx im))))
-    (match (read_fulfills sc (Load.env l) rargs proof (Fx.autos (Im.fx im)))
+    (match (rd_plain l (read_fulfills sc (Load.env l) rargs proof (Fx.autos (Im.fx im)) (Load.mode l)))
+     ((Pair l rd)
+    (match rd
       ((RDErr e m) (Pair (ld_rec l (RReadErr (im_file im) e m)) im))
       ((RDPending nn r) (Pair (ld_rec (ld_rec (ld_add_pending l nn) (RPending nn r)) (RDischarge n (quote pending))) (im_mark im (quote requirement) n)))
       ((RDOk ds)
@@ -1604,7 +1621,7 @@
             ((PolOk memo1 recs)
              (Pair (ld_rec (recs_add (ld_with_tbl (ld_with_env l env1 memo1) (tbl_add_all (Load.tbl l) (decls_declare env1 ds) (Fx.module (Im.fx im)))) recs) (RDischarge n (quote proved)))
                    (im_mark (im_with_fx im (mix_recs (Im.fx im) recs)) (quote requirement) n)))))))
-      (_ (Pair l im)))))
+      (_ (Pair l im)))))))
 
 ;; the forms in order; None when the file's loading ended in an error
 (fn load_forms ((l Load) (f Fx) (forms (List SExpr)) (fuel Int) (w World)) (Pair (Pair Load (Option Fx)) World)
@@ -1738,6 +1755,8 @@
     ((RRealize n k eqs roots) (append "REALIZE " (append (show_name n) (append " " (append (chars_of_sym k) (append " equations=" (append (show_names_c eqs) (match roots (Nil "") (_ (append " pending=" (show_names_c roots)))))))))))
     ((RReadErr file e m) (append "READ-ERROR " (append file (append " " (append (chars_of_sym e) (append ": " m))))))
     ((RLoadErr file e m) (append "LOAD-ERROR " (append file (append " " (append (chars_of_sym e) (append ": " m))))))
+    ((RProved n fp steps) (append "PROVED " (append (show_name n) (append " fp=" (append (show_int fp) (append " (by " (append (show_sexprs steps) ")")))))))
+    ((REngine n ok) (append "ENGINE " (append (show_name n) (if ok " solved" " unsolved"))))
     ((RDerive p ty cap policy procs)
      (append "DERIVE " (append (show_name p) (append " type=" (append (dv_show_ty ty) (append " cap=" (append (chars_of_sym cap)
        (append " policy=" (append (chars_of_sym policy) (append " fields=" (show_names_c procs)))))))))))))
@@ -1771,6 +1790,8 @@
        ((RLoadErr _ _ _) (list a b u c d e f (+ g 1)))
        ((RInit _ _) acc)
        ((RUnused _ _) acc)
+       ((RProved _ _ _) acc)
+       ((REngine _ _) acc)
        ((RDerive _ _ _ _ _) acc)))
     (_ acc)))
 (fn show_counts_load ((cs (List Int))) (List Int)

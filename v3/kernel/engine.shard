@@ -1,0 +1,387 @@
+;;; v3/kernel/engine.shard — the engine: a producer of I as an ordinary E library over the
+;;; fixed API (v3/LANGUAGE.md §8.4 slice 3.22 rule 5; law §7.3). It composes `tac_open`,
+;;; `applicable` and `tac_step` into a ladder, cheapest first, and answers a block of nodes
+;;; — every node confirmed by `tac_step` as it is chosen, so what it emits replays — or
+;;; nothing. The ladder on a goal: `intro` over every leading binder; `rfl`; `(reduce)` then
+;;; `rfl`; `decide`; `(arith only FACT…)` over the context's comparisons and the lemmas
+;;; given, the certificate written as `arith` found it; `(simp_only EQN…)` over the
+;;; equations of the functions in the target, the context's equations (an induction
+;;; hypothesis among them) and the lemmas, then `rfl` or `arith`; `induction` on the
+;;; hinted local, then on each local of an inductive type in turn, each arm by the same
+;;; ladder one level down. Hints accelerate and add no language: `(induct X)`,
+;;; `(lemmas NAME…)`, `(budget N)`. A failed attempt leaves nothing: the elaborator's state
+;;; is a value and the attempt's is dropped (law §6's transactional invariant, without an
+;;; API). The budget counts steps tried.
+;;;
+;;; Untrusted, as the elaborator is: the block it emits is replayed and K checks P.
+
+(import "tactic.shard")
+(use kernel.k)
+(use kernel.arith)
+(use kernel.elab)
+(use kernel.expr)
+(use kernel.kw)
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.scope)
+(use kernel.sexpr)
+(use kernel.tactic)
+(use kernel.unify)
+(use kernel.util)
+(use kernel.arith.ARel)
+(use kernel.arith.ARes)
+(use kernel.elab.El)
+(use kernel.elab.ERes)
+(use kernel.expr.Expr)
+(use kernel.name.Name)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.sexpr.SExpr)
+(use kernel.tactic.Goal)
+(use kernel.tactic.Node)
+(use kernel.tactic.TStep)
+(use kernel.tactic.Opened)
+(use kernel.tactic.IndOf)
+(use kernel.tactic.FactsRes)
+
+;; the engine's version: stamped on every entry it writes (law §7.2: a reconstruction version)
+(fn engine_version () Int 1)
+
+;; ---- hints ---------------------------------------------------------------------------------
+;; (induct X), (lemmas NAME…), (budget N); anything else is refused by the reader of the hints
+(type Hints (Hints (Option SExpr) (List SExpr) Int))
+(fn hints_induct ((h Hints)) (Option SExpr) (match h ((Hints x _ _) x)))
+(fn hints_lemmas ((h Hints)) (List SExpr) (match h ((Hints _ ls _) ls)))
+(fn hints_budget ((h Hints)) Int (match h ((Hints _ _ b) b)))
+(fn default_budget () Int 400)
+(type HintsRes (HintsOk Hints) (HintsErr (List Int)))
+(fn read_hints ((ss (List SExpr)) (h Hints)) HintsRes
+  (measure (struct ss))
+  (match ss
+    (Nil (HintsOk h))
+    ((Cons (SList (Cons (SSym k) args)) r)
+     (if (sym_eq k (quote induct))
+       (match args ((Cons x Nil) (read_hints r (Hints (Some x) (hints_lemmas h) (hints_budget h)))) (_ (HintsErr "(induct X)")))
+     (if (sym_eq k (quote lemmas)) (read_hints r (Hints (hints_induct h) (append (hints_lemmas h) args) (hints_budget h)))
+     (if (sym_eq k (quote budget))
+       (match args ((Cons (SNum n) Nil) (read_hints r (Hints (hints_induct h) (hints_lemmas h) n))) (_ (HintsErr "(budget N)")))
+       (HintsErr (append (chars_of_sym k) ": a hint is (induct X), (lemmas NAME…) or (budget N)"))))))
+    ((Cons _ _) (HintsErr "a hint is (induct X), (lemmas NAME…) or (budget N)"))))
+
+;; ---- the result --------------------------------------------------------------------------------
+;; solved: the state and the block; or not, with the budget left and the last goal tried
+(type EngRes (EngOk El (List Node) Int) (EngNo Int (List Int)))
+
+;; the entry: the goal (the theorem's statement closed over its binders, made by tac_prove's
+;; opener), the hints; the block, or the refusal's text
+(type Produced (Produced (List Node)) (NotProduced (List Int)))
+(fn engine_prove ((e El) (stmt Expr) (nctx Int) (hints (List SExpr))) Produced
+  (match (read_hints hints (Hints None Nil (default_budget)))
+    ((HintsErr m) (NotProduced m))
+    ((HintsOk h)
+     (match (el_fresh e (n1 (quote goal)) stmt (quote goal))
+       ((Pair e1 (MVar _ i))
+        (match (eng_solve e1 (Goal i stmt nctx) h (hints_budget h) 3)
+          ((EngOk _ nodes _) (Produced nodes))
+          ((EngNo _ m) (NotProduced m))))
+       ((Pair _ _) (NotProduced "no metavariable"))))))
+
+;; ---- the ladder ------------------------------------------------------------------------------
+(fn eng_solve ((e El) (g Goal) (h Hints) (budget Int) (depth Int)) EngRes
+  (measure depth)
+  (if (lt depth 1) (EngNo budget (append "the search is deeper than its limit at " (goal_of g)))
+  (if (lt budget 1) (EngNo budget (append "the budget is spent at " (goal_of g)))
+    (match (eng_intro e g)
+      ((Some (Pair (Pair e1 g1) nd))
+       (match (eng_solve e1 g1 h (- budget 1) depth)
+         ((EngOk e2 nodes b) (EngOk e2 (Cons nd nodes) b))
+         ((EngNo b _) (eng_induct e g h b depth))))   ; the binders kept in the target: an induction's hypothesis quantifies them (`generalizing`)
+      (None
+       (match (eng_close e g h budget)
+         ((EngOk e1 nodes b) (EngOk e1 nodes b))
+         ((EngNo b1 _)
+          (match (eng_simp_close e g h b1)
+            ((EngOk e1 nodes b) (EngOk e1 nodes b))
+            ((EngNo b2 _) (eng_induct e g h b2 depth))))))))))
+
+;; intro: every leading binder of the target, named after the binder or h1, h2, … where it
+;; has no name of its own
+(fn eng_intro ((e El) (g Goal)) (Option (Pair (Pair El Goal) Node))
+  (match (tac_open e g)
+    ((Opened e1 ctx target)
+     (match (el_whnf e1 target)
+       ((Pair e2 tw)
+        (if (bool_not (is_pi tw)) None
+          (let ((names (pi_names e2 tw (len ctx) Nil)))
+            (match (tac_step e g (NIntro names))
+              ((StepOk e3 _ _ _ (Some g1)) (Some (Pair (Pair (eng_commit e3 g g1) g1) (NIntro names))))
+              (_ None)))))))))
+(fn pi_names ((e El) (t Expr) (k Int) (acc (List Name))) (List Name)
+  (measure (struct t))
+  (match t
+    ((Pi _ n _ _ body) (pi_names e body (+ k 1) (Cons (binder_name n k) acc)))
+    (_ (rev acc))))
+(fn binder_name ((n Name) (k Int)) Name
+  (match n
+    ((Str Anon s) (if (all_digits (chars_of_sym s)) (n1 (sym_of_chars (append "h" (show_nat (+ k 1))))) n))
+    (_ (n1 (sym_of_chars (append "h" (show_nat (+ k 1))))))))
+
+;; a step's state kept: the goal's filling assigned, as tac_block does
+(fn eng_commit ((e El) (g Goal) (g1 Goal)) El e)
+
+;; the closing steps, cheapest first: rfl; (reduce) rfl; decide; arith only over the context's
+;; comparisons and the lemmas
+(fn eng_close ((e El) (g Goal) (h Hints) (budget Int)) EngRes
+  (match (eng_try_close e g (NRfl) budget)
+    ((EngOk e1 ns b) (EngOk e1 ns b))
+    ((EngNo b1 _)
+     (match (eng_try_then e g (NReduce (quote both)) (NRfl) b1)
+       ((EngOk e1 ns b) (EngOk e1 ns b))
+       ((EngNo b2 _)
+        (match (eng_try_close e g (NDecide) b2)
+          ((EngOk e1 ns b) (EngOk e1 ns b))
+          ((EngNo b3 _) (eng_arith e g h b3))))))))
+;; one closing node tried
+(fn eng_try_close ((e El) (g Goal) (nd Node) (budget Int)) EngRes
+  (if (lt budget 1) (EngNo budget "budget")
+    (match (tac_step e g nd)
+      ((StepOk e1 filling Nil Nil None) (EngOk (el_set_mc e1 (mc_set (el_mc e1) (goal_id g) filling)) (list nd) (- budget 1)))
+      ((StepOk _ _ _ _ _) (EngNo (- budget 1) "the step left goals"))
+      ((StepErr _ m) (EngNo (- budget 1) m)))))
+;; a sequential node, then a closing one on its continuation
+(fn eng_try_then ((e El) (g Goal) (nd Node) (closer Node) (budget Int)) EngRes
+  (if (lt budget 1) (EngNo budget "budget")
+    (match (tac_step e g nd)
+      ((StepOk e1 filling Nil Nil (Some g1))
+       (match (eng_try_close (el_set_mc e1 (mc_set (el_mc e1) (goal_id g) filling)) g1 closer (- budget 1))
+         ((EngOk e2 ns b) (EngOk e2 (Cons nd ns) b))
+         ((EngNo b m) (EngNo b m))))
+      ((StepOk _ _ _ _ _) (EngNo (- budget 1) "the step left goals"))
+      ((StepErr _ m) (EngNo (- budget 1) m)))))
+
+;; arith only: the facts are the context's comparisons by name and the lemmas; the certificate
+;; `arith` finds is written into the node, and the node is confirmed by the step
+(fn eng_arith ((e El) (g Goal) (h Hints) (budget Int)) EngRes
+  (if (lt budget 1) (EngNo budget "budget")
+    (match (tac_open e g)
+      ((Opened e1 ctx target)
+       (if (match (ar_rel (ar_canon (el_zonk e1 target))) ((ARNone) True) (_ False)) (EngNo budget "not a comparison")
+         (let ((facts (append (ctx_facts e1 ctx (quote cmp) Nil) (hints_lemmas h))))
+           (match (arith_facts e1 facts Nil)
+             ((FactsErr _ m) (EngNo (- budget 1) m))
+             ((FactsOk e2 fs)
+              (match (ar_prove e2 (el_zonk e2 target) Nil fs Nil)
+                ((ARErr _ m _ _) (EngNo (- budget 1) m))
+                ((AROk _ _ certs) (eng_try_close e g (NArith True facts certs) (- budget 1))))))))))))
+;; a local's type under a test: a comparison, an equation, an inductive type
+(fn ctx_test ((e El) (kind Symbol) (ty Expr)) Bool
+  (if (sym_eq kind (quote cmp)) (match (ar_rel (ar_canon ty)) ((ARNone) False) (_ True))
+  (if (sym_eq kind (quote eq)) (match (eq_sides (pi_result ty)) ((Some _) True) (None False))   ; a quantified equation (an induction hypothesis over a generalized binder) is a rule too
+    (match (ind_of_type e ty) ((IndOf _ _ _ _ _ _ _) True) (_ False)))))
+;; the context's locals whose type passes the test, each as the symbol of its name
+(fn ctx_facts ((e El) (ctx (List Expr)) (kind Symbol) (acc (List SExpr))) (List SExpr)
+  (measure (struct ctx))
+  (match ctx
+    (Nil (rev acc))
+    ((Cons (FVar d id) r)
+     (match (w_local_type (el_w e) id)
+       ((Some ty)
+        (if (ctx_test e kind (el_zonk e ty))
+          (ctx_facts e r kind (Cons (SSym (sym_of_chars (show_name (local_name e id)))) acc))
+          (ctx_facts e r kind acc)))
+       (None (ctx_facts e r kind acc))))
+    ((Cons _ r) (ctx_facts e r kind acc))))
+
+;; simp_only over the equations of the functions in the target, the context's equations and
+;; the lemmas, then rfl or arith on what is left; nothing to rewrite with is nothing tried
+(fn eng_simp_close ((e El) (g Goal) (h Hints) (budget Int)) EngRes
+  (if (lt budget 1) (EngNo budget "budget")
+    (match (tac_open e g)
+      ((Opened e1 ctx target)
+       (let ((rules (append (fn_equations e1 (names_dedup (expr_consts (el_zonk e1 target)) Nil) Nil) (append (ctx_facts e1 ctx (quote eq) Nil) (hints_lemmas h)))))
+         (match rules
+           (Nil (EngNo budget "no rule"))
+           (_
+            (let ((nd (NSimp (as_rules rules Nil))))
+              (match (tac_step e g nd)
+                ((StepOk e2 filling Nil Nil (Some g1))
+                 (let ((e3 (el_set_mc e2 (mc_set (el_mc e2) (goal_id g) filling))))
+                   (match (eng_try_close e3 g1 (NRfl) (- budget 1))
+                     ((EngOk e4 ns b) (EngOk e4 (Cons nd ns) b))
+                     ((EngNo b1 _)
+                      (match (eng_arith e3 g1 h b1)
+                        ((EngOk e4 ns b) (EngOk e4 (Cons nd ns) b))
+                        ((EngNo b2 m) (EngNo b2 m)))))))
+                ((StepOk _ _ _ _ _) (EngNo (- budget 1) "the step left goals"))
+                ((StepErr _ m) (EngNo (- budget 1) m)))))))))))
+(fn as_rules ((ss (List SExpr)) (acc (List (Pair Bool SExpr)))) (List (Pair Bool SExpr))
+  (measure (struct ss))
+  (match ss (Nil (rev acc)) ((Cons s r) (as_rules r (Cons (Pair False s) acc)))))
+;; the equations of each constant that has any, cited relative to the module
+(fn fn_equations ((e El) (cs (List Name)) (acc (List SExpr))) (List SExpr)
+  (measure (struct cs))
+  (match cs
+    (Nil (rev acc))
+    ((Cons c r) (fn_equations e r (cite_all e (safe_equations e c (equations_of e c) Nil) acc)))))
+;; the equations a rewriter may run to a fixpoint: one whose left side has a pattern (a
+;; constructor, a literal — anything but the bound variables), or whose right side does not
+;; mention the function; an unfolding equation of a measured function (`show n = … show (n / 10)
+;; …`, every argument a variable) matches its own result without end
+(fn safe_equations ((e El) (f Name) (ns (List Name)) (acc (List Name))) (List Name)
+  (measure (struct ns))
+  (match ns
+    (Nil (rev acc))
+    ((Cons n r)
+     (match (env_find (el_env e) n)
+       ((Some info)
+        (match (eq_sides (pi_result (ci_type info)))
+          ((Some (Pair _ (Pair _ (Pair lhs rhs))))
+           (if (bool_or (bool_not (all_bvars (get_app_args lhs))) (bool_not (mem_name f (expr_consts rhs))))
+             (safe_equations e f r (Cons n acc))
+             (safe_equations e f r acc)))
+          (None (safe_equations e f r acc))))
+       (None (safe_equations e f r acc))))))
+(fn all_bvars ((xs (List Expr))) Bool
+  (measure (struct xs))
+  (match xs (Nil True) ((Cons (BVar _ _) r) (all_bvars r)) ((Cons _ _) False)))
+(fn names_dedup ((ns (List Name)) (acc (List Name))) (List Name)
+  (measure (struct ns))
+  (match ns (Nil (rev acc)) ((Cons n r) (names_dedup r (if (mem_name n acc) acc (Cons n acc))))))
+(fn cite_all ((e El) (ns (List Name)) (acc (List SExpr))) (List SExpr)
+  (measure (struct ns))
+  (match ns (Nil acc) ((Cons n r) (cite_all e r (Cons (SSym (sym_of_chars (cite e n))) acc)))))
+;; a constant's citation: its name without the module's prefix where the module's is one
+(fn cite ((e El) (n Name)) (List Int)
+  (let ((full (show_name n)) (pre (append (show_name (sc_module (cx_scope (el_cx e)))) ".")))
+    (if (bool_and (lt (len pre) (+ (len full) 1)) (int_list_eq (take (len pre) full) pre)) (drop (len pre) full) full)))
+
+;; induction: on the hinted local first, then on each local of an inductive type in context
+;; order; the arms named after the constructors' fields with `ih_FIELD` for a recursive one,
+;; each arm's goal by the ladder one level down
+(fn eng_induct ((e El) (g Goal) (h Hints) (budget Int) (depth Int)) EngRes
+  (if (lt budget 1) (EngNo budget "budget")
+    (match (tac_open e g)
+      ((Opened e1 ctx target)
+       (let ((cands (append (match (hints_induct h) ((Some x) (list x)) (None Nil)) (ctx_facts e1 (in_target e1 ctx (expr_fvars (el_zonk e1 target) Nil) Nil) (quote inductive) Nil))))
+         (eng_induct_each e g h budget depth cands))))))
+;; the locals the target mentions: an induction on another changes nothing
+(fn in_target ((e El) (ctx (List Expr)) (ids (List Int)) (acc (List Expr))) (List Expr)
+  (measure (struct ctx))
+  (match ctx
+    (Nil (rev acc))
+    ((Cons (FVar d id) r) (in_target e r ids (if (mem_int id ids) (Cons (FVar d id) acc) acc)))
+    ((Cons _ r) (in_target e r ids acc))))
+(fn eng_induct_each ((e El) (g Goal) (h Hints) (budget Int) (depth Int) (cands (List SExpr))) EngRes
+  (measure (struct cands))
+  (match cands
+    (Nil (EngNo budget (append "nothing closes " (goal_of g))))
+    ((Cons x r)
+     (match (eng_induct_on e g h budget depth x)
+       ((EngOk e1 ns b) (EngOk e1 ns b))
+       ((EngNo b _) (eng_induct_each e g h b depth r))))))
+(fn eng_induct_on ((e El) (g Goal) (h Hints) (budget Int) (depth Int) (x SExpr)) EngRes
+  (match (tac_open e g)
+    ((Opened e1 ctx target)
+     (match (elab e1 x None)
+       ((EErr _ m) (EngNo budget m))
+       ((EOk e2 _ xty)
+        (match (ind_of_type e2 xty)
+          ((IndNone _ m) (EngNo budget m))
+          ((IndOf e3 iname _ _ nparams _ ctors)
+           (let ((arms (arm_shells e3 iname nparams ctors Nil)))
+             (match (tac_step e g (NInduction x None arms))
+               ((StepErr _ m) (EngNo (- budget 1) m))
+               ((StepOk e4 filling children _ None)
+                (match (eng_children (el_set_mc e4 (mc_set (el_mc e4) (goal_id g) filling)) children h (- budget 1) (- depth 1) Nil)
+                  ((Pair (Some (Pair e5 blocks)) b) (EngOk e5 (list (NInduction x None (arms_with arms blocks Nil))) b))
+                  ((Pair None b) (EngNo b (append "an arm of the induction on " (append (show_sexpr x) " does not close"))))))
+               ((StepOk _ _ _ _ _) (EngNo (- budget 1) "the induction left a continuation")))))))))))
+;; the arms with empty blocks: the names a constructor's minor premise binds
+(fn arm_shells ((e El) (iname Name) (nparams Int) (ctors (List Name)) (acc (List Node))) (List Node)
+  (measure (struct ctors))
+  (match ctors
+    (Nil (rev acc))
+    ((Cons c r)
+     (match (env_find (el_env e) c)
+       ((Some info) (arm_shells e iname nparams r (Cons (NArm (n1 (sym_of_chars (chars_of_name_last c))) (minor_names (drop_pis (ci_type info) nparams) iname Nil Nil) Nil) acc)))
+       (None (arm_shells e iname nparams r acc))))))
+(fn drop_pis ((t Expr) (k Int)) Expr
+  (measure k)
+  (if (lt k 1) t (match t ((Pi _ _ _ _ body) (drop_pis body (- k 1))) (_ t))))
+;; the fields' names, then ih_FIELD for each field whose type is the inductive itself
+(fn minor_names ((t Expr) (iname Name) (fields (List Name)) (ihs (List Name))) (List Name)
+  (measure (struct t))
+  (match t
+    ((Pi _ n _ dom body)
+     (let ((fname (field_name n (len fields))))
+       (minor_names body iname (Cons fname fields)
+         (if (is_const_named (get_app_fn (pi_result dom)) iname) (Cons (n1 (sym_of_chars (append "ih_" (show_name fname)))) ihs) ihs))))
+    (_ (append (rev fields) (rev ihs)))))
+(fn pi_result ((t Expr)) Expr (measure (struct t)) (match t ((Pi _ _ _ _ body) (pi_result body)) (_ t)))
+(fn field_name ((n Name) (k Int)) Name
+  (match n
+    ((Str Anon s) (if (all_digits (chars_of_sym s)) (n1 (sym_of_chars (append "f" (show_nat (+ k 1))))) n))
+    (_ (n1 (sym_of_chars (append "f" (show_nat (+ k 1))))))))
+;; the children solved in order; the blocks, or none
+(fn eng_children ((e El) (gs (List Goal)) (h Hints) (budget Int) (depth Int) (acc (List (List Node)))) (Pair (Option (Pair El (List (List Node)))) Int)
+  (measure (struct gs))
+  (match gs
+    (Nil (Pair (Some (Pair e (rev acc))) budget))
+    ((Cons g r)
+     (match (eng_solve e g h budget depth)
+       ((EngOk e1 ns b) (eng_children e1 r h b depth (Cons ns acc)))
+       ((EngNo b _) (Pair None b))))))
+(fn arms_with ((arms (List Node)) (blocks (List (List Node))) (acc (List Node))) (List Node)
+  (measure (struct arms))
+  (match arms
+    (Nil (rev acc))
+    ((Cons (NArm c ns _) r)
+     (match blocks
+       ((Cons b br) (arms_with r br (Cons (NArm c ns b) acc)))
+       (Nil (arms_with r Nil (Cons (NArm c ns Nil) acc)))))
+    ((Cons o r) (arms_with r blocks (Cons o acc)))))
+
+;; ---- rendering: a block as I's concrete syntax, what the sidecar holds ------------------------
+(fn nodes_sx ((ns (List Node))) (List SExpr)
+  (measure (struct ns))
+  (match ns (Nil Nil) ((Cons n r) (Cons (node_sx n) (nodes_sx r)))))
+(fn node_sx ((n Node)) SExpr
+  (measure (struct n))
+  (match n
+    ((NIntro ns) (SList (Cons (SSym (quote intro)) (names_sx ns))))
+    ((NExact t) (SList (list (SSym (quote exact)) t)))
+    ((NRfl) (SSym (quote rfl)))
+    ((NHave nm p b) (SList (Cons (SSym (quote have)) (Cons (name_sx nm) (Cons p (nodes_sx b))))))
+    ((NShow p) (SList (list (SSym (quote show)) p)))
+    ((NApply t bs) (SList (Cons (SSym (quote apply)) (Cons t (nodes_sx bs)))))
+    ((NCases t hn arms) (SList (Cons (SSym (quote cases)) (Cons t (append (opt_name_sx hn) (list (SList (nodes_sx arms))))))))
+    ((NInduction t hn arms) (SList (Cons (SSym (quote induction)) (Cons t (append (opt_name_sx hn) (list (SList (nodes_sx arms))))))))
+    ((NWf x m ih b) (SList (Cons (SSym (quote wf)) (Cons x (Cons m (Cons (name_sx ih) (nodes_sx b)))))))
+    ((NDecide) (SSym (quote decide)))
+    ((NUnfold ns) (SList (Cons (SSym (quote unfold)) (names_sx ns))))
+    ((NReduce side) (if (sym_eq side (quote both)) (SList (list (SSym (quote reduce)))) (SList (list (SSym (quote reduce)) (SSym side)))))
+    ((NRw rv t k bs)
+     (SList (Cons (SSym (quote rw)) (Cons (if rv (SList (list (SSym (quote <-)) t)) t)
+       (append (if (int_eq k 0) Nil (list (SList (list (SSym (quote occ)) (SNum k))))) (nodes_sx bs))))))
+    ((NSorry) (SSym (quote sorry)))
+    ((NArith only facts certs)
+     (SList (Cons (SSym (quote arith)) (append (if only (list (SSym (quote only))) Nil) (append facts (certs_sx certs))))))
+    ((NSimp rules) (SList (Cons (SSym (quote simp_only)) (rules_sx rules))))
+    ((NBlock b) (SList (nodes_sx b)))
+    ((NArm c ns b) (SList (Cons (name_sx c) (Cons (SList (names_sx ns)) (nodes_sx b)))))))
+(fn names_sx ((ns (List Name))) (List SExpr)
+  (measure (struct ns))
+  (match ns (Nil Nil) ((Cons n r) (Cons (name_sx n) (names_sx r)))))
+(fn name_sx ((n Name)) SExpr (SSym (sym_of_chars (show_name n))))
+(fn opt_name_sx ((hn (Option Name))) (List SExpr) (match hn ((Some n) (list (name_sx n))) (None Nil)))
+(fn certs_sx ((cs (List (List Int)))) (List SExpr)
+  (measure (struct cs))
+  (match cs (Nil Nil) ((Cons ks r) (Cons (SList (Cons (SSym (quote farkas)) (ints_sx ks))) (certs_sx r)))))
+(fn ints_sx ((ks (List Int))) (List SExpr)
+  (measure (struct ks))
+  (match ks (Nil Nil) ((Cons k r) (Cons (SNum k) (ints_sx r)))))
+(fn rules_sx ((rs (List (Pair Bool SExpr)))) (List SExpr)
+  (measure (struct rs))
+  (match rs (Nil Nil) ((Cons (Pair rv s) r) (Cons (if rv (SList (list (SSym (quote <-)) s)) s) (rules_sx r)))))

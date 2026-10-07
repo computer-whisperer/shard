@@ -9,7 +9,7 @@
 ;;; K's verdicts on what this file produces are K's (add.shard).
 
 (import "elab.shard")
-(import "tactic.shard")
+(import "engine.shard")
 (use kernel.k)
 (use kernel.decl)
 (use kernel.elab)
@@ -30,6 +30,8 @@
 (use kernel.elab.ERes)
 (use kernel.elab.FinRes)
 (use kernel.tactic)
+(use kernel.engine)
+(use kernel.engine.Produced)
 (use kernel.tactic.ProveRes)
 (use kernel.expr.BinderInfo)
 (use kernel.level.Level)
@@ -48,6 +50,8 @@
   (RDDirective SExpr)           ; import / use / trusts: the loader's
   (RDParam Declaration Symbol Int)  ; a view parameter (§6.5): the axiom, its kind (type / fn / requirement), a sig type's arity
   (RDLater Symbol)              ; an E form the loader owns (fn, extern, realize: classify.shard, realize.shard; fulfills: §6.6) — the loader intercepts them before read_decl
+  (RDSolved Name Int (List SExpr) (List Declaration))   ; an `auto` proof the engine produced under mode `solve` (slice 3.22 rule 6): the theorem, the fingerprint, the block, what it declares
+  (RDMeasured Name Bool (List Declaration))   ; mode `measure`: a hand-written proof read as usual, and whether the engine closes the statement unaided
   (RDErr Symbol (List Int)))    ; reason, message
 
 ;; ---- the declared name and its universe parameters ------------------------------------
@@ -80,14 +84,17 @@
 ;; a sidecar entry (slice 3.22 rule 1): the theorem's name as its source writes it, the
 ;; fingerprint of the statement the entry was made for, the block's steps
 (type Auto (Auto Name Int (List SExpr)))
-(fn read_decl ((sc Scope) (env CheckedEnv) (s SExpr)) RDecl (read_decl_autos sc env s Nil))
-(fn read_decl_autos ((sc Scope) (env CheckedEnv) (s SExpr) (autos (List Auto))) RDecl
+;; the load's mode for proofs (slice 3.22 rule 6): `off` — the build, nothing searches; `solve` — an
+;; `auto` without a valid entry is the engine's, RDSolved; `measure` — every hand-written proof is
+;; read as usual and the engine is also run on the statement, RDMeasured (the count over calc)
+(fn read_decl ((sc Scope) (env CheckedEnv) (s SExpr)) RDecl (read_decl_autos sc env s Nil (quote off)))
+(fn read_decl_autos ((sc Scope) (env CheckedEnv) (s SExpr) (autos (List Auto)) (mode Symbol)) RDecl
   (match s
     ((SList (Cons (SSym h) args))
-     (if (sym_eq h (quote def)) (read_def sc env args (quote def) Nil)
-     (if (sym_eq h (quote abbrev)) (read_def sc env args (quote abbrev) Nil)
-     (if (sym_eq h (quote opaque)) (read_def sc env args (quote opaque) Nil)
-     (if (sym_eq h (quote theorem)) (read_def sc env args (quote theorem) autos)
+     (if (sym_eq h (quote def)) (read_def sc env args (quote def) Nil mode)
+     (if (sym_eq h (quote abbrev)) (read_def sc env args (quote abbrev) Nil mode)
+     (if (sym_eq h (quote opaque)) (read_def sc env args (quote opaque) Nil mode)
+     (if (sym_eq h (quote theorem)) (read_def sc env args (quote theorem) autos mode)
      (if (sym_eq h (quote axiom)) (read_axiom sc env args)
      (if (sym_eq h (quote inductive)) (read_inductive sc env args)
      (if (sym_eq h (quote type)) (read_type sc env args)
@@ -108,7 +115,7 @@
   None))))
 
 ;; (def NAME.{u…} BINDERS TYPE VALUE); abbrev, opaque; (theorem … PROP PROOF)
-(fn read_def ((sc Scope) (env CheckedEnv) (args (List SExpr)) (kind Symbol) (autos (List Auto))) RDecl
+(fn read_def ((sc Scope) (env CheckedEnv) (args (List SExpr)) (kind Symbol) (autos (List Auto)) (mode Symbol)) RDecl
   (match args
     ((Cons hd (Cons (SList bs) (Cons ty (Cons val Nil))))
      (match (read_head sc hd)
@@ -121,7 +128,7 @@
              ((EErr r m) (RDErr r m))
              ((EOk e2 t _)
               (if (sym_eq kind (quote theorem))
-                (read_proof e2 n lps fvars t val (auto_entry sc autos n))
+                (read_proof e2 n lps fvars t val (auto_entry sc autos n) mode)
                 (match (elab e2 val (Some t))
                   ((EErr r m) (RDErr r m))
                   ((EOk e3 v _)
@@ -150,15 +157,17 @@
 ;; (auto HINT…) — the sidecar's block for the theorem, replayed as (by …) when the entry's
 ;; fingerprint is the statement's (slice 3.22 rules 1–2): no entry is pending auto_missing,
 ;; another statement's entry pending auto_stale; the hints are the producer's, unread here
-(fn read_proof ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (p SExpr) (entry (Option (Pair Int (List SExpr))))) RDecl
+(fn read_proof ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (p SExpr) (entry (Option (Pair Int (List SExpr)))) (mode Symbol)) RDecl
+  (if (sym_eq mode (quote measure)) (read_measured e n lps fvars t p entry) (read_proof_go e n lps fvars t p entry mode)))
+(fn read_proof_go ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (p SExpr) (entry (Option (Pair Int (List SExpr)))) (mode Symbol)) RDecl
   (match p
     ((SSym s)
      (if (sym_eq s (quote sorry)) (RDPending n (quote sorry))
-     (if (sym_eq s (quote auto)) (read_auto e n lps fvars t entry)
+     (if (sym_eq s (quote auto)) (read_auto e n lps fvars t entry Nil mode)
        (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…), auto or sorry"))))
-    ((SList (Cons (SSym x) Nil)) (if (sym_eq x (quote auto)) (read_auto e n lps fvars t entry) (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…), auto or sorry")))
+    ((SList (Cons (SSym x) Nil)) (if (sym_eq x (quote auto)) (read_auto e n lps fvars t entry Nil mode) (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…), auto or sorry")))
     ((SList (Cons (SSym x) (Cons pt rest)))
-     (if (sym_eq x (quote auto)) (read_auto e n lps fvars t entry)
+     (if (sym_eq x (quote auto)) (read_auto e n lps fvars t entry (Cons pt rest) mode)
      (if (bool_and (sym_eq x (quote exact)) (int_eq (len rest) 0))
        (match (elab e pt (Some t))
          ((EErr r m) (RDErr r m))
@@ -179,18 +188,44 @@
             ((ProveOk e2 value) (rd_ok e2 (list (ThmDecl (ConstantVal n lps T) value (list n))))))))
        (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…), auto or sorry")))))
     (_ (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…), auto or sorry"))))
-(fn read_auto ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (entry (Option (Pair Int (List SExpr))))) RDecl
+(fn read_auto ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (entry (Option (Pair Int (List SExpr)))) (hints (List SExpr)) (mode Symbol)) RDecl
   (match (close_pis e fvars t)
     ((Pair _ (FinErr r m)) (RDErr r m))
     ((Pair e1 (FinOk T))
-     (match entry
-       (None (RDPending n (sym_of_chars (append "auto_missing fp=" (show_int (hash_expr T))))))
-       ((Some (Pair fp steps))
-        (if (bool_not (int_eq fp (hash_expr T))) (RDPending n (sym_of_chars (append "auto_stale fp=" (show_int (hash_expr T)))))
-          (match (tac_prove e1 T (len fvars) steps)
-            ((ProveErr r m) (RDErr r m))
-            ((ProvePending _ gs) (RDPending n (sym_of_chars (append "sorry goals=" (append (show_nat (len gs)) (goals_bracketed gs))))))
-            ((ProveOk e2 value) (rd_ok e2 (list (ThmDecl (ConstantVal n lps T) value (list n))))))))))))
+     (match (auto_valid entry (hash_expr T))
+       ((Some steps) (read_block_proof e1 n lps fvars T steps))
+       (None
+        (if (sym_eq mode (quote solve))
+          ;; the engine's block, replayed as an entry's would be before it is one
+          (match (engine_prove e1 T (len fvars) hints)
+            ((NotProduced m) (RDPending n (sym_of_chars (append "auto_unsolved fp=" (append (show_int (hash_expr T)) (append " " m))))))
+            ((Produced nodes)
+             (let ((steps (nodes_sx nodes)))
+               (match (read_block_proof e1 n lps fvars T steps)
+                 ((RDOk ds) (RDSolved n (hash_expr T) steps ds))
+                 (other other)))))
+          (RDPending n (sym_of_chars (append (match entry (None "auto_missing fp=") (_ "auto_stale fp=")) (show_int (hash_expr T)))))))))))
+;; the entry's block when its fingerprint is the statement's
+(fn auto_valid ((entry (Option (Pair Int (List SExpr)))) (fp Int)) (Option (List SExpr))
+  (match entry
+    (None None)
+    ((Some (Pair efp steps)) (if (int_eq efp fp) (Some steps) None))))
+;; a block on the closed statement: the theorem, pending with its goals, or the refusal
+(fn read_block_proof ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (T Expr) (steps (List SExpr))) RDecl
+  (match (tac_prove e T (len fvars) steps)
+    ((ProveErr r m) (RDErr r m))
+    ((ProvePending _ gs) (RDPending n (sym_of_chars (append "sorry goals=" (append (show_nat (len gs)) (goals_bracketed gs))))))
+    ((ProveOk e2 value) (rd_ok e2 (list (ThmDecl (ConstantVal n lps T) value (list n)))))))
+;; mode `measure`: the proof as written, and whether the engine closes the statement unaided —
+;; the engine's count (slice 3.22's third ruling); an `auto` here is read as the build reads it
+(fn read_measured ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (p SExpr) (entry (Option (Pair Int (List SExpr))))) RDecl
+  (match (read_proof_go e n lps fvars t p entry (quote off))
+    ((RDOk ds)
+     (match (close_pis e fvars t)
+       ((Pair _ (FinErr r m)) (RDOk ds))
+       ((Pair e1 (FinOk T))
+        (RDMeasured n (match (engine_prove e1 T (len fvars) Nil) ((Produced _) True) ((NotProduced _) False)) ds))))
+    (other other)))
 
 ;; ---- views (§6.5, §6.6) ---------------------------------------------------------------
 ;; (sig type NAME) / (sig type (NAME T…)): the parameter NAME : Type → … → Type
@@ -263,15 +298,15 @@
     (_ (RSErr "(requirement NAME ((x TYPE)…) PROP)"))))
 ;; (fulfills NAME PROOF) against the view's (requirement NAME BINDERS PROP), the
 ;; statement re-read in this environment: a theorem, or pending
-(fn read_fulfills ((sc Scope) (env CheckedEnv) (req_args (List SExpr)) (proof SExpr) (autos (List Auto))) RDecl
+(fn read_fulfills ((sc Scope) (env CheckedEnv) (req_args (List SExpr)) (proof SExpr) (autos (List Auto)) (mode Symbol)) RDecl
   (match (read_statement sc env req_args)
     ((RSErr m) (RDErr (quote bad_shape) m))
-    ((RSOk e n lps fvars t _) (read_proof e n lps fvars t proof (auto_entry sc autos n)))))
+    ((RSOk e n lps fvars t _) (read_proof e n lps fvars t proof (auto_entry sc autos n) mode))))
 
 ;; (fulfills f.dec_N PROOF) outside a view (§8.4 slice 3.16 rule 8): PROOF against the
 ;; obligation's own statement, a theorem under `thm`
-(fn read_discharge ((sc Scope) (env CheckedEnv) (thm Name) (stmt Expr) (proof SExpr) (autos (List Auto))) RDecl
-  (read_proof (el0 sc env Nil Nil thm) thm Nil Nil stmt proof (auto_entry_as sc autos thm (n1 (quote proof)))))
+(fn read_discharge ((sc Scope) (env CheckedEnv) (thm Name) (stmt Expr) (proof SExpr) (autos (List Auto)) (mode Symbol)) RDecl
+  (read_proof (el0 sc env Nil Nil thm) thm Nil Nil stmt proof (auto_entry_as sc autos thm (n1 (quote proof))) mode))
 
 ;; (axiom NAME.{u…} BINDERS TYPE) — the loader admits it only under (trusts NAME) (§9)
 (fn read_axiom ((sc Scope) (env CheckedEnv) (args (List SExpr))) RDecl

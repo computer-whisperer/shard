@@ -1795,7 +1795,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.20 | I's opener (ruled 2026-10-05, item 53; the design and the as-built below; **landed 2026-10-06**): I's data and `(by STEP…)` in a `theorem`, `elaborate(I)` to P, the forms with no engine behind them — `intro exact rfl have show apply cases induction wf decide unfold reduce rw sorry` — and `goal_of`/`applicable`/`step` as E functions over one derivation | calc's claims whose lemma closure needs no arithmetic (52 of 100; 44 landed as blocks in five files, `kernel/test/tactic_test.sh`) |
 | 3.21 | the two forms that carry an engine (the design and the as-built below, item 54; **landed 2026-10-06**): `simp_only` (a bounded rewriter over a lemma list) and `arith` (the Farkas certificate elaborated through `Lean.Omega`'s lemmas, in the export at line 76,223; reconstructed by elimination where the node gives none) | calc's 100 claims as theorems, the capstone `run_eq_spec` among them (`kernel/test/tactic_test.sh`) |
 | 3.21b | GPT-6's trajectory review, findings 1–3 (ruled 2026-10-06, item 55; the design and the as-built below; **landed 2026-10-06**): the expected type decides an arithmetic operator; Init's visibility is the module's horizon; `reduce` succeeds unchanged where nothing reduces | three pins; `op_expected` proves `(- 1 2) = -1` at `Int` |
-| 3.22 | the producers (ruled 2026-10-07, item 56; the design and the as-built below; **landing 1 landed 2026-10-07**): `auto` with sidecar replay at build and search only in `prove`; `(arith only …)` and the witness goal; the engine as an E library over the fixed API; the pin store in K's export format with `verify_release` | the engine's count over calc's 100 claims; `v3/examples/auto/` with a machine-owned sidecar; calc's release bundle verified on CI |
+| 3.22 | the producers (ruled 2026-10-07, item 56; the design and the as-built below; **landings 1 and 2 landed 2026-10-07**): `auto` with sidecar replay at build and search only in `prove`; `(arith only …)` and the witness goal; the engine as an E library over the fixed API; the pin store in K's export format with `verify_release` | the engine's count over calc's 100 claims; `v3/examples/auto/` with a machine-owned sidecar; calc's release bundle verified on CI |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -4266,6 +4266,68 @@ calc). 3: rule 7 (the store and `verify_release` on calc, in CI).
   left open is `instance_needed`, as before.
 - **Found on the way:** `(apply Eq.trans sorry sorry)` reads `sorry`
   where a premise's block must be a list: `(sorry)`.
+
+**Slice 3.22 as built, landing 2** (2026-10-07):
+
+- **Rule 5.** `kernel/engine.shard`: `engine_prove` takes the closed
+  statement and the hints and answers a block or a refusal's text;
+  `eng_solve` is the ladder — `eng_intro` over every leading binder
+  (named after the binder, `hK` where it has none), `eng_close` (`rfl`;
+  `(reduce)` then `rfl`; `decide`; `eng_arith`: `(arith only FACT…)`
+  with the context's comparisons as the facts and the certificate
+  `ar_prove` found written — `ARes` carries the certificates now),
+  `eng_simp_close` (`(simp_only EQN… HYP… LEMMA…)` then `rfl` or
+  `arith`), `eng_induct` on the hinted local then on each local of an
+  inductive type the target mentions, the arms named after the
+  constructors' fields with `ih_FIELD` for a recursive one, each arm
+  by the ladder one level down (three levels). Two decisions beyond
+  the design, each from a case: *the induction is tried before the
+  introductions as well* — `len (rev_onto xs acc) = len xs + len acc`
+  quantifies the accumulator, and introducing it first left a
+  hypothesis too weak, so the binders are kept in the target and the
+  hypothesis quantifies them (Lean's `generalizing`); *the rule set
+  excludes an unfolding equation whose right side mentions the
+  function* — `show n = … show (n / 10) …`, every argument a variable,
+  matched its own result without end and calc_show's measurement did
+  not finish (an equation with a constructor pattern, `len (cons x r)
+  = 1 + len r`, stays: it stops at a variable). A quantified
+  hypothesis is a rule too. Every node is confirmed by `tac_step` as
+  it is chosen; `node_sx` renders the block.
+- **Rule 6.** `kernel/prove.shard`: the loader's mode (`Load.mode`:
+  `off`, `solve`, `measure`; `read_decl_autos` and the reader's proof
+  path take it). Under `solve` an `auto` without a valid entry is the
+  engine's and its block is replayed through `tac_prove` before the
+  theorem is accepted (`RDSolved` → the record `PROVED NAME fp=N (by
+  …)`); unsolved is `PENDING NAME auto_unsolved fp=N GOAL`. The
+  sidecars are rewritten whole (`write_sidecars`: the file's existing
+  entries not superseded, then the new ones in the file's order, under
+  a header with the engine's version), the exit code refused + errors
+  + unsolved. Under `measure` every hand-written proof is read as the
+  build reads it and the engine is also run on the statement (`ENGINE
+  NAME solved|unsolved`, `ENGINE: solved S of N`).
+- **The example.** `v3/examples/auto/auto.shard`: twelve theorems,
+  every proof `auto`, one with the hint `(induct xs)`; eleven closed
+  (`rfl`, `decide`, `arith only` with the certificate, three
+  inductions with `simp_only` over the equations and the hypothesis,
+  the generalized accumulator), `beyond` (`x ≤ x * x`) pending
+  `auto_missing` at build with the fingerprint an entry needs. The
+  sidecar `auto.auto.shard` is committed; `kernel/test/engine_test.sh`
+  replays it under `load.shard` (no `PROVED` record: the build does
+  not search), regenerates it into a scratch copy and requires the
+  blocks byte-identical (the fingerprints masked: a statement's
+  fingerprint carries its module's name, and the copy is another
+  module — found by the test).
+- **The count over calc** (the third ruling): the engine closes
+  **54 of calc's 100 claims** unaided (`engine_calc.txt` lists them;
+  `engine_test.sh` requires that exact set, so a change in the
+  engine's reach is a report, not a drift). What it does not close:
+  the lemmas over `show`'s well-founded recursion, the case analyses
+  that need an equation name, the chains of rewrites with lemmas the
+  statement does not mention, the descent obligations. The claim list
+  `calc_claims.txt` is shared with `tactic_test.sh`.
+- **Not built:** `(lemmas …)` beyond the facts and rules it adds
+  (no instantiation); a `cases` form in the ladder; an engine-written
+  `fulfills` in the example.
 
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
