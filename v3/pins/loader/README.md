@@ -73,8 +73,8 @@ reversed `rw` and an occurrence selector, a conditional lemma's premise as a blo
 the hypothesis at `n - 1`, the descent obligation discharged by a block — the export's
 second fixture, which holds `fix_eq`), `by_sorry` (`NAME pending sorry goals=2`), and the
 refusals, each `read-error REASON`: `by_goal_open`, `by_goal_closed`, `by_unknown_step`,
-`by_intro_no_pi`, `by_rfl_failed`, `by_apply_goals`, `by_apply_unsolved` (a witness goal is
-the graph's), `by_cases_rows`, `by_cases_fields` (`induction_fields`), `by_rw_no_match`
+`by_intro_no_pi`, `by_rfl_failed`, `by_apply_goals`, `by_witness` (`by_apply_unsolved` until
+slice 3.22: the witness goal is built, the pin expects `ok`), `by_cases_rows`, `by_cases_fields` (`induction_fields`), `by_rw_no_match`
 (syntactic matching: `a + b` finds no `b + a`), `by_rw_occ` (`(occ K)` past the count),
 `by_unfold_stuck`, `by_decide_failed`, `by_show_mismatch`, `by_reduce` (`reduce_stuck`: an
 unfolding equation is not a computation rule). The consumer is `kernel/test/tactic_test.sh`
@@ -106,6 +106,17 @@ its own horizon whatever an earlier root admitted: the review's failing load ord
 `init_horizon_beyond` (a declaration past the horizon, admitted by another module, is
 `unknown_constant`); `by_reduce` expects `ok` (reduce leaves a target with nothing to
 reduce as it is).
+
+Slice 3.22, landing 1 (the producers' ground): `arith_only` (`(arith only FACT… (farkas K…))`:
+the rows are the goal and the facts named — the review's probe, an unrelated `have` before an
+explicit certificate, and a context hypothesis that is no row until named), `by_witness`
+(`apply Eq.trans` with its middle term assigned by the first premise's `exact`) and
+`by_witness_open` (both premises sorried: `witness_open` names the argument), `auto_core` (a
+theorem whose proof is `auto` or `(auto HINT…)` replays the block of `main.auto.shard`'s
+entry for it), `auto_stale` (an entry made for another statement: `pending auto_stale
+fp=…`, the fingerprint an entry needs), `auto_missing` (no sidecar: `pending auto_missing
+fp=…`), `auto_malformed` (a form of another shape in the sidecar: the file's
+`sidecar_malformed`, the theorem pending). The build never searches.
 
 `v3/kernel/test/loader_pins_test.shard` replays every case in its list;
 `loader_test.shard` holds the cases a header cannot state (two root

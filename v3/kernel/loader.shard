@@ -77,6 +77,7 @@
 (use kernel.prog.EDecl)
 (use kernel.scope.Open)
 (use kernel.reader.RDecl)
+(use kernel.reader.Auto)
 (use kernel.scope.Resolved)
 (use kernel.scope.Scope)
 (use kernel.scope.Vis)
@@ -243,6 +244,51 @@
   (measure (struct ns))
   (match ns (Nil l) ((Cons n r) (ld_add_inits (with Load l (inits (ords_add (Load.inits l) n o))) r o))))
 ;; a module's horizon through NAME: the ordinal past NAME's (the count admitted at the import)
+;; the sidecar FILE.auto.shard beside a file whose forms hold an `auto` proof (slice 3.22 rule 1):
+;; its (proof-for NAME FINGERPRINT (by STEP…)) forms as entries; absent = no entries; a sidecar
+;; that does not read, or a form of another shape, is the file's load error and no entries
+(fn read_sidecar ((l Load) (rel (List (List Int))) (forms (List SExpr)) (w World)) (Pair (Pair Load (List Auto)) World)
+  (if (bool_not (forms_want_auto forms)) (Pair (Pair l Nil) w)
+    (let ((path (append (drop_shard_suffix (join_path (append (Load.root l) rel))) ".auto.shard")))
+      (match (read_file path w)
+        ((Pair None w1) (Pair (Pair l Nil) w1))
+        ((Pair (Some src) w1)
+         (match (read_all src)
+           ((RAErr e off) (Pair (Pair (ld_rec l (RLoadErr (join_path rel) (quote sidecar_malformed) (append path (append ": " (append (chars_of_sym e) (append " at byte " (show_nat off))))))) Nil) w1))
+           ((RAOk es)
+            (match (sidecar_entries es Nil)
+              ((Pair (Some autos) _) (Pair (Pair l autos) w1))
+              ((Pair None m) (Pair (Pair (ld_rec l (RLoadErr (join_path rel) (quote sidecar_malformed) (append path (append ": " m)))) Nil) w1))))))))))
+;; FILE.shard → FILE (the sidecar is FILE.auto.shard); another suffix is kept
+(fn drop_shard_suffix ((path (List Int))) (List Int)
+  (let ((n (len path)))
+    (if (bool_and (lt 6 n) (int_list_eq (drop (- n 6) path) ".shard")) (take (- n 6) path) path)))
+(fn forms_want_auto ((forms (List SExpr))) Bool
+  (measure (struct forms))
+  (match forms
+    (Nil False)
+    ((Cons (SList (Cons (SSym h) args)) r)
+     (if (bool_and (sym_eq h (quote theorem)) (proof_is_auto args)) True (forms_want_auto r)))
+    ((Cons _ r) (forms_want_auto r))))
+(fn proof_is_auto ((args (List SExpr))) Bool
+  (match args
+    ((Cons _ (Cons _ (Cons _ (Cons p Nil))))
+     (match p
+       ((SSym x) (sym_eq x (quote auto)))
+       ((SList (Cons (SSym x) _)) (sym_eq x (quote auto)))
+       (_ False)))
+    (_ False)))
+(fn sidecar_entries ((es (List SExpr)) (acc (List Auto))) (Pair (Option (List Auto)) (List Int))
+  (measure (struct es))
+  (match es
+    (Nil (Pair (Some (rev acc)) Nil))
+    ((Cons (SList (Cons (SSym h) (Cons (SSym nm) (Cons (SNum fp) (Cons (SList (Cons (SSym by) steps)) Nil))))) r)
+     (if (bool_and (sym_eq h (quote proof-for)) (sym_eq by (quote by)))
+       (match (name_of_sym nm)
+         ((Some n) (sidecar_entries r (Cons (Auto n fp steps) acc)))
+         (None (Pair None (append "not a name: " (chars_of_sym nm)))))
+       (Pair None "an entry is (proof-for NAME FINGERPRINT (by STEP…))")))
+    ((Cons _ r) (Pair None "an entry is (proof-for NAME FINGERPRINT (by STEP…))"))))
 (fn init_horizon ((l Load) (target Name)) Int
   (match (ords_find (Load.inits l) target)
     ((Some o) (+ o 1))
@@ -275,8 +321,10 @@
 
 ;; the file being loaded: module, root-relative parts, opened prefixes, the
 ;; visible modules (itself included), the Init horizon (-1: none), trusted names, hash so
+;; far, whether it is a view (§6.6: the forms it may hold, the req-scope gate), the sidecar's
+;; entries (slice 3.22 rule 1: FILE.auto.shard beside the file, read when a theorem says auto)
 ;; far, whether it is a view (§6.6: the forms it may hold, the req-scope gate)
-(record Fx (module Name) (ident Name) (parts (List (List Int))) (opened (List Open)) (vis (List Name)) (init Int) (trusts (List Name)) (hash Int) (view Bool))
+(record Fx (module Name) (ident Name) (parts (List (List Int))) (opened (List Open)) (vis (List Name)) (init Int) (trusts (List Name)) (hash Int) (view Bool) (autos (List Auto)))
 ;; the prefix the file's declarations take: its module, or the sealed directory's for a file
 ;; directly inside one (the K seal: one module across the directory's files, §13 item 26)
 (fn fx_private ((f Fx)) Bool (bool_not (name_eq (Fx.ident f) (Fx.module f))))
@@ -454,7 +502,7 @@
     (match (if (sym_eq h (quote fulfills)) (obligation_named l sc s) None)
       ((Some (Pair k proof)) (Pair (load_discharge l f k proof) f))
       (None
-    (match (read_decl sc (Load.env l) s)
+    (match (read_decl_autos sc (Load.env l) s (Fx.autos f))
       ((RDErr e m)
        (if (bool_and (sym_eq h (quote sig)) (Fx.view f))
          (sig_e_only l f s e m)
@@ -542,7 +590,7 @@
     (None l)
     ((Some info)
      (let ((thm (name_append k (n1 (quote proof)))))
-       (match (read_discharge (fx_scope l f) (Load.env l) thm (ci_type info) proof)
+       (match (read_discharge (fx_scope l f) (Load.env l) thm (ci_type info) proof (Fx.autos f))
          ((RDErr e m) (ld_rec l (RReadErr (fx_file f) e m)))
          ((RDPending nn r) (ld_rec (ld_add_pending l nn) (RPending nn r)))
          ((RDOk ds)
@@ -1100,10 +1148,12 @@
             ((Pair ip w1s)
            (match (split_directives forms Nil)
              ((Pair dirs rest)
-              (match (pre_register_file l (make Fx (module mp) (ident ip) (parts rel) (opened Nil) (vis (list mp)) (init -1) (trusts Nil) (hash (hash_name mp)) (view view)) rest)
+              (match (read_sidecar l rel rest w1s)
+               ((Pair (Pair l0a autos) w1s2)
+              (match (pre_register_file l0a (make Fx (module mp) (ident ip) (parts rel) (opened Nil) (vis (list mp)) (init -1) (trusts Nil) (hash (hash_name mp)) (view view) (autos autos)) rest)
                 ((Pair None l0) (Pair (Pair (ld_add_failed l0 mp rel) None) w1))
                 ((Pair (Some f0) l0)
-              (match (load_forms (ld_with_stack l0 (Cons mp (Load.stack l))) f0 dirs fuel w1s)
+              (match (load_forms (ld_with_stack l0 (Cons mp (Load.stack l))) f0 dirs fuel w1s2)
                 ((Pair (Pair l1 None) w2) (Pair (Pair (ld_add_failed (ld_with_stack l1 (Load.stack l)) mp rel) None) w2))
                 ((Pair (Pair l1a (Some f1)) w2)
                  (match (pre_register_late l1a f1 rest)
@@ -1116,7 +1166,7 @@
                                           (RModule mp (join_path rel) (Fx.hash f) (Fx.vis f)))
                                   fp)
                             w3)))
-                   ((Pair (Pair l2 None) w3) (Pair (Pair (ld_add_failed (ld_with_stack l2 (Load.stack l)) mp rel) None) w3))))))))))))))))))))))))
+                   ((Pair (Pair l2 None) w3) (Pair (Pair (ld_add_failed (ld_with_stack l2 (Load.stack l)) mp rel) None) w3))))))))))))))))))))))))))
 ;; the prefix a file's declarations take: its own module, or the sealed directory's for a file
 ;; directly inside a directory that has a view (one module across the directory's files; the
 ;; view and the implementation already carry it)
@@ -1541,7 +1591,7 @@
 ;; (fulfills NAME PROOF): the requirement's statement here, the proof a theorem or pending
 (fn fulfil ((l Load) (im Im) (n Name) (rargs (List SExpr)) (proof SExpr)) (Pair Load Im)
   (let ((sc (fx_scope l (Im.fx im))))
-    (match (read_fulfills sc (Load.env l) rargs proof)
+    (match (read_fulfills sc (Load.env l) rargs proof (Fx.autos (Im.fx im)))
       ((RDErr e m) (Pair (ld_rec l (RReadErr (im_file im) e m)) im))
       ((RDPending nn r) (Pair (ld_rec (ld_rec (ld_add_pending l nn) (RPending nn r)) (RDischarge n (quote pending))) (im_mark im (quote requirement) n)))
       ((RDOk ds)

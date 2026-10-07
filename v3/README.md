@@ -1055,6 +1055,34 @@ Local gates: 215 loader pins (3 new; `one_meaning` restated, `by_reduce`'s expec
 
 Slice 3.21b is closed: **pipeline 546 green on `408a73c`** — engine 28 s; corpus 1,485 s at the baseline; v3 6,259 s: 34 entrypoints with 0 failed, `tactic_test` 110 checks (the 100 claims), `define_test` 12 checks, `derive_test` 14 checks, `wire_test` 15 checks, calc's host program byte-identical to the model world, parity byte-identical over 28 closures and 116,229 declarations in 606 s, route 1's native build of the kernel (`OK: v3/bin/t0`), the fixture byte-tie identical, replay 2,514 s at 32.2 GB peak, T0 accepted 57,977 with 0 rejected, closures identical to the oracle, all 20 accelerator candidates pinned. The v3 job is 204 s longer than pipeline 544's, 185 s of it the loader pins' entrypoint (3,137 s against 2,952 s: three pins more, each streaming the second fixture), which is the suite's wall clock.
 
+**Slice 3.22, landing 1 landed (2026-10-07) — the producers' ground**
+(`LANGUAGE.md` §8.4's design, ruled 2026-10-07 on three leans, §13 item
+56; law §7.5). The third slice ruled on 2026-10-05, in three landings.
+What landed:
+
+- **`auto` with sidecar replay** (`reader.shard`, `loader.shard`): a
+  theorem's proof may be `auto` or `(auto HINT…)`; the loader reads
+  `FILE.auto.shard` beside the file and replays the entry's `(by …)`
+  block as a hand-written one when the entry's fingerprint is the
+  statement's. No entry is `PENDING NAME auto_missing fp=N`, another
+  statement's `auto_stale fp=N`, a malformed sidecar the file's
+  `sidecar_malformed`. The build never searches (T8). A `fulfills` and
+  a descent's discharge may be `auto` too.
+- **`(arith only FACT… (farkas K…))`** (`tactic.shard`): the rows are
+  the goal and the facts named, nothing from the context — the
+  review's finding 3, a certificate's positions survive a changed
+  context. The engine's output form (landing 2).
+- **The witness goal** (`tactic.shard`): `apply Eq.trans` without its
+  middle term opens the premises with the middle term a closed
+  metavariable over the context; the first premise's `exact` assigns
+  it by pattern unification and the second reads it; a witness no
+  block assigned is `witness_open`.
+- Pins: `arith_only`, `by_witness` (was `by_apply_unsolved`),
+  `by_witness_open`, `auto_core`, `auto_stale`, `auto_missing`,
+  `auto_malformed`.
+
+Local gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

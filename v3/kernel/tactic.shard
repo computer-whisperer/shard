@@ -88,7 +88,7 @@
   (NReduce Symbol)                            ; (reduce), (reduce lhs), (reduce rhs)
   (NRw Bool SExpr Int (List Node))            ; (rw LEMMA | (<- LEMMA)) (occ K)? (STEP…)…: K = 0 is every occurrence
   (NSorry)                                    ; sorry
-  (NArith (List SExpr) (List (List Int)))     ; (arith FACT… (farkas K…)?): the facts, the certificates given (two for an equation)
+  (NArith Bool (List SExpr) (List (List Int))) ; (arith only? FACT… (farkas K…)?): only (no context row; slice 3.22 rule 3), the facts, the certificates given (two for an equation)
   (NSimp (List (Pair Bool SExpr)))            ; (simp_only RULE…): each a lemma and whether it is reversed
   (NBlock (List Node))                        ; a child block of apply or rw
   (NArm Name (List Name) (List Node)))        ; an arm of cases or induction
@@ -112,7 +112,7 @@
      (if (sym_eq x (quote sorry)) (NROk (NSorry))
      (if (sym_eq x (quote decide)) (NROk (NDecide))
      (if (sym_eq x (quote reduce)) (NROk (NReduce (quote both)))
-     (if (sym_eq x (quote arith)) (NROk (NArith Nil Nil))
+     (if (sym_eq x (quote arith)) (NROk (NArith False Nil Nil))
        (NRErr (quote unknown_step) (append (chars_of_sym x) ": not a form of I (rfl, sorry, decide, reduce, arith, or a list)"))))))))
     ((SList (Cons (SSym h) args))
      (if (sym_eq h (quote intro)) (read_names args Nil (quote intro))
@@ -248,20 +248,24 @@
     (_ (NRErr (quote bad_step) "(rw LEMMA (occ K)? (STEP…)…) or (rw (<- LEMMA) …)"))))
 ;; (arith FACT… (farkas K…)…): the facts, then the certificates
 (fn read_arith ((args (List SExpr)) (facts (List SExpr)) (certs (List (List Int)))) NodeRes
+  (match args
+    ((Cons (SSym o) r) (if (sym_eq o (quote only)) (read_arith_go r True facts certs) (read_arith_go args False facts certs)))
+    (_ (read_arith_go args False facts certs))))
+(fn read_arith_go ((args (List SExpr)) (only Bool) (facts (List SExpr)) (certs (List (List Int)))) NodeRes
   (measure (struct args))
   (match args
-    (Nil (NROk (NArith (rev facts) (rev certs))))
+    (Nil (NROk (NArith only (rev facts) (rev certs))))
     ((Cons (SList (Cons (SSym h) ks)) r)
      (if (sym_eq h (quote farkas))
        (match (read_ints ks Nil)
          (None (NRErr (quote bad_step) "(farkas K…): a weight is an integer"))
-         ((Some ws) (read_arith r facts (Cons ws certs))))
+         ((Some ws) (read_arith_go r only facts (Cons ws certs))))
        (match certs
-         (Nil (read_arith r (Cons (SList (Cons (SSym h) ks)) facts) certs))
+         (Nil (read_arith_go r only (Cons (SList (Cons (SSym h) ks)) facts) certs))
          (_ (NRErr (quote bad_step) "(arith FACT… (farkas K…)): the certificate comes after the facts")))))
     ((Cons t r)
      (match certs
-       (Nil (read_arith r (Cons t facts) certs))
+       (Nil (read_arith_go r only (Cons t facts) certs))
        (_ (NRErr (quote bad_step) "(arith FACT… (farkas K…)): the certificate comes after the facts"))))))
 (fn read_ints ((ss (List SExpr)) (acc (List Int))) (Option (List Int))
   (measure (struct ss))
@@ -287,7 +291,7 @@
 ;; the context of a goal as K locals and its target: the first `nctx` binders of the
 ;; statement, each a fresh local under its binder's name
 (type Opened (Opened El (List Expr) Expr))
-(fn tac_open ((e El) (g Goal)) Opened (tac_open_go e (goal_stmt g) (goal_nctx g) Nil))
+(fn tac_open ((e El) (g Goal)) Opened (tac_open_go e (el_zonk e (goal_stmt g)) (goal_nctx g) Nil))   ; zonked: a witness assigned by an earlier block shows (slice 3.22 rule 4)
 (fn tac_open_go ((e El) (t Expr) (k Int) (acc (List Expr))) Opened
   (measure k)
   (if (lt k 1) (Opened e (rev acc) t)
@@ -464,7 +468,7 @@
        ((NUnfold ns) (step_unfold e1 ctx target ns))
        ((NReduce side) (step_reduce e1 ctx target side))
        ((NRw rv lem occ bs) (step_rw e1 ctx target rv lem occ bs))
-       ((NArith facts certs) (step_arith e1 ctx target facts certs))
+       ((NArith only facts certs) (step_arith e1 ctx target only facts certs))
        ((NSimp rules) (step_simp e1 ctx target rules))
        (_ (StepErr (quote bad_step) "an arm or a block is not a step"))))))
 
@@ -505,7 +509,7 @@
      (match (tac_unsolved e1 v)
        ((Some (Pair x m)) (StepErr x m))
        (None (step_close e1 ctx (el_zonk e1 v) Nil Nil))))))
-;; a metavariable of the step's own left open (a goal's is not)
+;; a metavariable of the step's own left open (a goal's is not, nor a witness's: a later block assigns it)
 (fn tac_unsolved ((e El) (v Expr)) (Option (Pair Symbol (List Int)))
   (match (first_open_mvar e (el_zonk e v))
     (None None)
@@ -517,7 +521,7 @@
     (Nil None)
     ((Cons i r)
      (match (mc_decl (el_mc e) i)
-       ((Some d) (if (sym_eq (md_kind d) (quote goal)) (first_open_go e r) (Some i)))
+       ((Some d) (if (bool_or (sym_eq (md_kind d) (quote goal)) (sym_eq (md_kind d) (quote witness))) (first_open_go e r) (Some i)))
        (None (first_open_go e r))))))
 (fn mvars_of ((t Expr) (acc (List Int))) (List Int)
   (measure (struct t))
@@ -625,29 +629,65 @@
             ((Pair w3 body1) (open_mvars (el_set_w e2 w3) (mk_app v m) body1 (- k 1) (Cons m acc)))))))
       ((Pair e1 t1) (OpenedM e1 v t1 (rev acc))))))
 ;; the metavariables of an opening left unassigned: each a proposition is a child goal over ctx,
-;; assigned its occurrence; anything else is the refusal `WHO_unsolved`
+;; assigned its occurrence; a datum is a witness (slice 3.22 rule 4) — closed over ctx as a goal
+;; is, its occurrence the closed metavariable applied to ctx, so a block that opens the context
+;; afresh assigns it by pattern unification and the assignment closes; an instance argument is
+;; the refusal `instance_needed` as everywhere
 (type Premises (PrOk El (List Goal)) (PrErr Symbol (List Int)))
 (fn premise_goals ((e El) (ctx (List Expr)) (ms (List Expr)) (who Symbol) (acc (List Goal))) Premises
+  (match (witness_close e ctx ms)
+    ((PrErr x m) (PrErr x m))
+    ((PrOk e1 _) (premise_goals_go e1 ctx ms who acc))))
+(fn witness_close ((e El) (ctx (List Expr)) (ms (List Expr))) Premises
   (measure (struct ms))
   (match ms
-    (Nil (PrOk e (rev acc)))
+    (Nil (PrOk e Nil))
     ((Cons (MVar _ i) r)
      (match (mc_assigned (el_mc e) i)
-       ((Some _) (premise_goals e ctx r who acc))
+       ((Some _) (witness_close e ctx r))
        (None
         (match (mc_decl (el_mc e) i)
           (None (PrErr (quote bad_shape) "a metavariable without a declaration"))
           ((Some d)
            (let ((ty (el_zonk e (md_type d))))
-             (if (has_mvar ty)
-               (PrErr (sym_of_chars (append (chars_of_sym who) "_unsolved")) (append "the premise " (append (show_name (md_name d)) " mentions an argument the goal does not determine (a witness goal is the graph's, after slice 3.20): give that argument in the term — (apply (Eq.trans h1)) names the middle term through h1")))
-               (match (w_is_prop (el_w e) ty)
-                 ((Pair w1 (Some True))
-                  (match (tac_goal (el_set_w e w1) ctx ty)
-                    ((Made e2 g occ) (premise_goals (el_set_mc e2 (mc_set (el_mc e2) i occ)) ctx r who (Cons g acc)))))
-                 ((Pair w1 _)
-                  (PrErr (sym_of_chars (append (chars_of_sym who) "_unsolved")) (append "the argument " (append (show_name (md_name d)) (append " : " (append (tc_show_closed (el_set_w e w1) ctx ty) " is not determined by the goal (a witness goal is the graph's, after slice 3.20): write the application with @"))))))))))))))
-    ((Cons _ r) (premise_goals e ctx r who acc))))
+             (match (w_is_prop (el_w e) ty)
+               ((Pair w1 (Some True)) (witness_close (el_set_w e w1) ctx r))
+               ((Pair w1 _)
+                (if (sym_eq (md_kind d) (quote inst))
+                  (match (unsolved_msg (el_set_w e w1) i) ((FinErr x m) (PrErr x m)) ((FinOk _) (PrErr (quote bad_shape) "an instance")))
+                  (match (el_pis (el_set_w e w1) ctx ty)
+                    ((Pair e1 tyc)
+                     (match (el_fresh e1 (md_name d) tyc (quote witness))
+                       ((Pair e2 (MVar _ j)) (witness_close (el_set_mc e2 (mc_set (el_mc e2) i (mk_app_n (mk_mvar j) ctx))) ctx r))
+                       ((Pair e2 _) (PrErr (quote bad_shape) "no metavariable"))))))))))))))
+    ((Cons _ r) (witness_close e ctx r))))
+(fn premise_goals_go ((e El) (ctx (List Expr)) (ms (List Expr)) (who Symbol) (acc (List Goal))) Premises
+  (measure (struct ms))
+  (match ms
+    (Nil (PrOk e (rev acc)))
+    ((Cons (MVar _ i) r)
+     (match (mc_assigned (el_mc e) i)
+       ((Some _) (premise_goals_go e ctx r who acc))
+       (None
+        (match (mc_decl (el_mc e) i)
+          (None (PrErr (quote bad_shape) "a metavariable without a declaration"))
+          ((Some d)
+           (match (tac_goal e ctx (el_zonk e (md_type d)))
+             ((Made e2 g occ) (premise_goals_go (el_set_mc e2 (mc_set (el_mc e2) i occ)) ctx r who (Cons g acc)))))))))
+    ((Cons _ r) (premise_goals_go e ctx r who acc))))
+;; a witness left open when the step's blocks have run (slice 3.22 rule 4)
+(fn mvar_terms ((is (List Int))) (List Expr)
+  (measure (struct is))
+  (match is (Nil Nil) ((Cons i r) (Cons (mk_mvar i) (mvar_terms r)))))
+(fn witness_open ((e El) (v Expr)) (Option (List Int)) (witness_open_go e (mvars_of (el_zonk e v) Nil)))
+(fn witness_open_go ((e El) (is (List Int))) (Option (List Int))
+  (measure (struct is))
+  (match is
+    (Nil None)
+    ((Cons i r)
+     (match (mc_decl (el_mc e) i)
+       ((Some d) (if (sym_eq (md_kind d) (quote witness)) (Some (show_name (md_name d))) (witness_open_go e r)))
+       (None (witness_open_go e r))))))
 ;; the children against the node's blocks
 (fn blocks_match ((who Symbol) (gs (List Goal)) (nblocks Int)) (Option (Pair Symbol (List Int)))
   (if (int_eq (len gs) nblocks) None
@@ -675,7 +715,10 @@
              ((OpenedM e4 v1 concl ms)
               (match (el_unify_r e4 concl target)
                 ((EUOk e5)
-                 (match (premise_goals e5 ctx ms (quote apply) Nil)
+                 (match (witness_close e5 ctx (mvar_terms (mvars_of (el_zonk e5 v1) Nil)))   ; the implicit arguments the elaborator inserted are not among ms
+                   ((PrErr x m) (StepErr x m))
+                   ((PrOk e5w _)
+                 (match (premise_goals e5w ctx ms (quote apply) Nil)
                    ((PrErr x m) (StepErr x m))
                    ((PrOk e6 gs)
                     (match (blocks_match (quote apply) gs (len bs))
@@ -683,7 +726,7 @@
                       (None
                        (match (tac_unsolved e6 v1)
                          ((Some (Pair x m)) (StepErr x m))
-                         (None (step_close e6 ctx (el_zonk e6 v1) gs (blocks_of bs Nil)))))))))
+                         (None (step_close e6 ctx (el_zonk e6 v1) gs (blocks_of bs Nil)))))))))))
                 (EUNo (StepErr (quote apply_mismatch) (append "the conclusion " (append (tc_show_closed e4 ctx concl) (append " does not unify with the target " (tc_show_closed e4 ctx target))))))
                 (u (match (eu_refusal e4 u (EErr (quote apply_mismatch) "")) ((EErr x m) (StepErr x m)) (_ (StepErr (quote apply_mismatch) ""))))))))))))))
 
@@ -1512,13 +1555,15 @@
        ((Some ty) (arith_ctx e r (Cons (Pair (FVar d id) (el_zonk e ty)) acc)))
        (None (arith_ctx e r acc))))
     ((Cons _ r) (arith_ctx e r acc))))
-;; (arith FACT… (farkas K…)?): linear arithmetic over the goal's rows (arith.shard); K reads
-;; the term before it is the goal's filling, so a refusal names the step
-(fn step_arith ((e El) (ctx (List Expr)) (target Expr) (facts (List SExpr)) (certs (List (List Int)))) TStep
+;; (arith only? FACT… (farkas K…)?): linear arithmetic over the goal's rows (arith.shard); under
+;; `only` the context brings no row (slice 3.22 rule 3: an engine names its facts, so a
+;; certificate's positions survive a changed context); K reads the term before it is the
+;; goal's filling, so a refusal names the step
+(fn step_arith ((e El) (ctx (List Expr)) (target Expr) (only Bool) (facts (List SExpr)) (certs (List (List Int)))) TStep
   (match (arith_facts e facts Nil)
     ((FactsErr x m) (StepErr x m))
     ((FactsOk e1 fs)
-     (match (ar_prove e1 (el_zonk e1 target) (arith_ctx e1 ctx Nil) fs certs)
+     (match (ar_prove e1 (el_zonk e1 target) (if only Nil (arith_ctx e1 ctx Nil)) fs certs)
        ((ARErr x m atoms rows) (StepErr x (append m (arith_show e1 ctx atoms rows))))
        ((AROk e2 p)
         (match (el_infer e2 p)
@@ -1668,7 +1713,10 @@
             (_
              (match (tac_children e2 children blocks sorried (- fuel 1))
                ((TacErr x m) (TacErr x m))
-               ((TacOk e3 sorried1) (tac_after e3 g rest idx cont sorried1 (- fuel 1)))))))))))))
+               ((TacOk e3 sorried1)
+                (match (witness_open e3 filling)
+                  ((Some nm) (tac_fail g idx (quote witness_open) (append "the argument " (append nm " is not determined by the goal and no block assigned it: give it through a premise's exact"))))
+                  (None (tac_after e3 g rest idx cont sorried1 (- fuel 1)))))))))))))))
 (fn tac_after ((e El) (g Goal) (rest (List Node)) (idx Int) (cont (Option Goal)) (sorried (List Goal)) (fuel Int)) TacRes
   (match cont
     ((Some g1) (tac_block e g1 rest (+ idx 1) sorried fuel))

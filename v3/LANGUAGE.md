@@ -1795,7 +1795,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.20 | I's opener (ruled 2026-10-05, item 53; the design and the as-built below; **landed 2026-10-06**): I's data and `(by STEP…)` in a `theorem`, `elaborate(I)` to P, the forms with no engine behind them — `intro exact rfl have show apply cases induction wf decide unfold reduce rw sorry` — and `goal_of`/`applicable`/`step` as E functions over one derivation | calc's claims whose lemma closure needs no arithmetic (52 of 100; 44 landed as blocks in five files, `kernel/test/tactic_test.sh`) |
 | 3.21 | the two forms that carry an engine (the design and the as-built below, item 54; **landed 2026-10-06**): `simp_only` (a bounded rewriter over a lemma list) and `arith` (the Farkas certificate elaborated through `Lean.Omega`'s lemmas, in the export at line 76,223; reconstructed by elimination where the node gives none) | calc's 100 claims as theorems, the capstone `run_eq_spec` among them (`kernel/test/tactic_test.sh`) |
 | 3.21b | GPT-6's trajectory review, findings 1–3 (ruled 2026-10-06, item 55; the design and the as-built below; **landed 2026-10-06**): the expected type decides an arithmetic operator; Init's visibility is the module's horizon; `reduce` succeeds unchanged where nothing reduces | three pins; `op_expected` proves `(- 1 2) = -1` at `Int` |
-| 3.22 | the producers: `tools/prove` re-pointed at I, the sidecar and the pin store (law §7.5), the engine; the transactional goal graph of law §6 | the coverage arc's B-1c |
+| 3.22 | the producers (ruled 2026-10-07, item 56; the design and the as-built below; **landing 1 landed 2026-10-07**): `auto` with sidecar replay at build and search only in `prove`; `(arith only …)` and the witness goal; the engine as an E library over the fixed API; the pin store in K's export format with `verify_release` | the engine's count over calc's 100 claims; `v3/examples/auto/` with a machine-owned sidecar; calc's release bundle verified on CI |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -4148,6 +4148,125 @@ is tied to how far the step before it went.
 - **Not built**: a per-module Init prefix held as the review's
   "indexed declaration dependencies"; a progress-requiring `reduce`.
 
+**Slice 3.22 — the producers: `auto`, the sidecar, the engine and the
+store** (the user's ruling of 2026-10-07 on three leans; §13 item 56;
+law §7.3, §7.5, §6). The third of the slices ruled on 2026-10-05. Law
+§7.5 fixes the shape: sources carry tactic blocks or an `auto`
+delegation; the build elaborates I to P and K checks P; engine-written
+I lives in the sidecar and the pin store, keyed by the resolved
+requirement; no tool writes into a source file; a stale pin is a
+pending obligation, never re-searched at verification (T8). Two items
+carried from GPT-6's trajectory review (item 55): a stored certificate
+keyed by its rows' statements, and the dependent witness goal.
+
+*The ruling.* (1) **The engine's output is `(arith only FACT… (farkas
+K…))`, the certificate written**: the rows are the goal and the named
+facts in list order, nothing from the context, so an unrelated `have`
+added later shifts no weight. Rejected: emitting `(arith)` and
+reconstructing at every replay — cheaper to write, but it moves a
+consequential choice into the reconstruction (law §7.2 carries such
+choices). (2) **The store is a CI artifact, not committed**: the build
+writes it when asked, CI verifies the bundle, the repository holds
+sidecars only. Rejected: committing P (megabytes that change at every
+kernel edit). (3) **The engine's reach is measured over calc's 100
+claim statements**, the hand proofs staying as the worked examples;
+this replaces the slice table's B-1c consumer, the old tree's
+generator.
+
+*The rules.*
+
+1. **`auto` is a delegation; the build never searches.** A `theorem`'s
+   proof may be `auto` or `(auto HINT…)`. The loader reads the sidecar
+   `FILE.auto.shard` beside the source — `(proof-for NAME FINGERPRINT
+   (by STEP…))` forms, the file machine-owned and rewritten whole by
+   `prove` — and replays the entry's block as it would a hand-written
+   one, under the same reader and the same checks. No entry is
+   `PENDING NAME auto_missing`; an entry whose fingerprint is not the
+   theorem's is `PENDING NAME auto_stale`; a block that fails is the
+   refusal it would be inline. Nothing in the loader searches, and no
+   tool writes into a source file (law §7.5).
+2. **The key is the resolved requirement.** The entry's FINGERPRINT is
+   the theorem's content fingerprint — the elaborated statement closed
+   over its binders, as the ACCEPT record carries it — so a changed
+   numeric reading, coercion or parameter is a different requirement
+   and a changed proof strategy is not.
+3. **`(arith only FACT… (farkas K…))`.** The rows are the goal negated,
+   then each FACT in list order, then the rows the atoms bring (slice
+   3.21 rule 4); the context's hypotheses enter only as facts named. A
+   certificate indexes those rows. Everything else is slice 3.21's
+   `arith`.
+4. **The witness goal.** In `(apply TERM (STEP…)…)`, a premise whose
+   statement holds an unassigned metavariable is a witness goal: the
+   premises' blocks run in the order given, `exact` and `rfl` assign
+   through unification, and a metavariable still open when the step's
+   blocks have run is `witness_open`. `apply Eq.trans` without its
+   middle term has it assigned by the first premise's `exact`.
+5. **The engine is an E library over the fixed API.**
+   `kernel/engine.shard` composes `goal_of`, `applicable` and `step`
+   (law §7.3) into a ladder, cheapest first: `intro`; `rfl`; `(reduce)
+   rfl`; `decide`; `(arith only …)` over the context's comparisons;
+   `(simp_only EQN…)` over the equations of the functions in the goal,
+   then `rfl` or `arith`; `induction` on each inductive parameter in
+   turn, the arms closed by the same ladder with the hypothesis among
+   the rules. Hints accelerate and add no language: `(induct X)`,
+   `(lemmas NAME…)`, `(budget N)`. A failed attempt leaves nothing: the
+   elaborator's state is a value, so the transactional invariant of
+   law §6 holds without an `attempt`/`commit` API, which waits for a
+   concurrent caller.
+6. **`prove` is a driver.** `kernel/prove.shard` loads the module as
+   `load.shard` does, runs the engine on each `auto` theorem without a
+   valid entry, rewrites the sidecar whole (entries it did not solve
+   kept, unsolved theorems left pending), and prints a record per
+   theorem: `PROVED NAME` with the block, or `UNSOLVED NAME` with the
+   last goal. The entry carries the engine's version; a version other
+   than the current is reported, not refused (law §7.2).
+7. **The store is K's export format.** `load.shard --store DIR` writes
+   each accepted declaration as records in the format K ingests
+   (`kernel/k/import.shard`), one file per declaration named by its
+   content fingerprint, deduplicated; `verify_release DIR` is K
+   replaying the store's records after the pinned Init export with no
+   elaborator loaded — the T0 machinery over a second stream.
+
+*Landings.* 1: rules 1–4 (`only`, the witness goal, `auto` with
+sidecar replay, the pending reasons); gate: the pins and the
+hand-written calc claims unchanged. 2: rules 5–6 (the engine, `prove`,
+`v3/examples/auto/` with its machine-owned sidecar, the count over
+calc). 3: rule 7 (the store and `verify_release` on calc, in CI).
+
+**Slice 3.22 as built, landing 1** (2026-10-07):
+
+- **Rule 1.** `reader.shard`: a proof is `(exact TERM)`, `(by STEP…)`,
+  `auto`, `(auto HINT…)` or `sorry` (`read_auto`); `read_decl_autos`
+  takes the file's entries, `read_fulfills` and `read_discharge` too —
+  a `fulfills` and a descent's discharge may be `auto` (the entry for
+  a discharge names the obligation, `f.dec_1`). `loader.shard` reads
+  `FILE.auto.shard` once per file whose forms hold an `auto` proof
+  (`read_sidecar`; `Fx.autos`); a sidecar that does not read or holds
+  a form of another shape is the file's `sidecar_malformed`, the
+  theorem pending. The pending reasons carry the fingerprint an entry
+  needs: `auto_missing fp=N`, `auto_stale fp=N`.
+- **Rule 2.** The fingerprint is `hash_expr` of the closed statement —
+  what `identity_hash` gives a theorem, so the ACCEPT record and the
+  sidecar agree.
+- **Rule 3.** `NArith` carries `only`; under it `step_arith` hands no
+  context row to `ar_prove`. The pin `arith_only` is the review's
+  probe D with the certificate kept across the unrelated `have`.
+- **Rule 4.** `premise_goals` closes each unassigned datum
+  metavariable over the context as a goal is closed (`witness_close`:
+  the closed metavariable of kind `witness`, the original assigned its
+  application to the context), then makes the proposition premises
+  goals — their statements may hold the witness's application now;
+  the implicit arguments the elaborator inserted (`Eq.trans`'s `{b}`)
+  are not among the opened binders and are closed from the applied
+  term; `tac_open` zonks a goal's statement, so a block after the
+  assigning one reads the witness's value; `tac_block` refuses
+  `witness_open` after a step's child blocks have run. A pattern
+  (`?B x1 … xn` against a term over the opened locals) is what the
+  unifier assigns, and the assignment closes. An instance argument
+  left open is `instance_needed`, as before.
+- **Found on the way:** `(apply Eq.trans sorry sorry)` reads `sorry`
+  where a premise's block must be a list: `(sorry)`.
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built
@@ -5216,3 +5335,16 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     the step before it went. *Carried to 3.22's design, by the same
     ruling:* a stored certificate keyed by its rows' statements, not
     their positions; the dependent witness goal.
+56. **Slice 3.22's design (ruled 2026-10-07 on three leans; §8.4) —
+    for ratification.** The producers. (a) **The engine emits `(arith
+    only FACT… (farkas K…))`, the certificate written** — the rows named,
+    nothing from the context; rejected: reconstruction at every replay.
+    (b) **The store is a CI artifact**, the repository holds sidecars;
+    rejected: committing P. (c) **The engine's reach is measured over
+    calc's 100 claims**, the hand proofs kept; replaces the B-1c
+    consumer. *Decided in the rules beyond the leans:* the sidecar's
+    key is the ACCEPT fingerprint (rule 2); a witness goal is a premise
+    with an open metavariable, blocks in order, `witness_open` at the
+    step's end (rule 4); no `attempt`/`commit` API until a concurrent
+    caller (rule 5); the store in K's export format and
+    `verify_release` as T0's replay over it (rule 7).
