@@ -1795,7 +1795,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.20 | I's opener (ruled 2026-10-05, item 53; the design and the as-built below; **landed 2026-10-06**): I's data and `(by STEP…)` in a `theorem`, `elaborate(I)` to P, the forms with no engine behind them — `intro exact rfl have show apply cases induction wf decide unfold reduce rw sorry` — and `goal_of`/`applicable`/`step` as E functions over one derivation | calc's claims whose lemma closure needs no arithmetic (52 of 100; 44 landed as blocks in five files, `kernel/test/tactic_test.sh`) |
 | 3.21 | the two forms that carry an engine (the design and the as-built below, item 54; **landed 2026-10-06**): `simp_only` (a bounded rewriter over a lemma list) and `arith` (the Farkas certificate elaborated through `Lean.Omega`'s lemmas, in the export at line 76,223; reconstructed by elimination where the node gives none) | calc's 100 claims as theorems, the capstone `run_eq_spec` among them (`kernel/test/tactic_test.sh`) |
 | 3.21b | GPT-6's trajectory review, findings 1–3 (ruled 2026-10-06, item 55; the design and the as-built below; **landed 2026-10-06**): the expected type decides an arithmetic operator; Init's visibility is the module's horizon; `reduce` succeeds unchanged where nothing reduces | three pins; `op_expected` proves `(- 1 2) = -1` at `Int` |
-| 3.22 | the producers (ruled 2026-10-07, item 56; the design and the as-built below; **landings 1 and 2 landed 2026-10-07**): `auto` with sidecar replay at build and search only in `prove`; `(arith only …)` and the witness goal; the engine as an E library over the fixed API; the pin store in K's export format with `verify_release` | the engine's count over calc's 100 claims; `v3/examples/auto/` with a machine-owned sidecar; calc's release bundle verified on CI |
+| 3.22 | the producers (ruled 2026-10-07, item 56; the design and the as-built below; **landed in three landings, 2026-10-07/08**): `auto` with sidecar replay at build and search only in `prove`; `(arith only …)` and the witness goal; the engine as an E library over the fixed API; the pin store in K's export format with `verify_release` | the engine's count over calc's 100 claims; `v3/examples/auto/` with a machine-owned sidecar; calc's release bundle verified on CI |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -4329,6 +4329,71 @@ calc). 3: rule 7 (the store and `verify_release` on calc, in CI).
   (no instantiation); a `cases` form in the ladder; an engine-written
   `fulfills` in the example.
 
+**Slice 3.22 as built, landing 3** (2026-10-08):
+
+- **Rule 7, the store.** `kernel/store.shard` renders an admitted
+  constant of K's environment as the records K ingests — lean4export's
+  NDJSON, format 3.1.0, field for field what `k/import.shard` reads:
+  the name, level and expression tables the declaration cites,
+  numbered from 1 in first-use order (0 is `anonymous` and `zero`, as
+  the exporter's), then the declaration record. Table nodes are shared
+  by *strict* structural identity (binder names and infos compared,
+  which `expr_eq` ignores), so a record carries the term as elaborated
+  and two runs over one elaboration write one text. An inductive type
+  is written as its block — every type, constructor and recursor K
+  generated for it (`T.rec`, then `MAIN.rec_1…` for the nested
+  auxiliaries), with the fields the import validates against K's own
+  regeneration, T0's validation a second time. `load.shard --store
+  DIR`: after a clean load, each ACCEPT's constant and each PARAM K
+  holds (a view's parameter, the axiom K admitted for it) is written
+  in admission order — `DIR/ID.ndjson` per declaration, `DIR/order`
+  listing `ID NAME`. ID is the content fingerprint (`identity_hash`,
+  a report's fingerprint, never an authority), or `FP-K` for the
+  first free K when a file of that name holds another text; a file
+  already holding the text is shared and listed once; `order` is
+  appended, never rewritten, so several loads fill one store in
+  sequence and a shared module's declarations come from the first
+  load that admitted them. A failed load writes nothing; nothing in
+  the loader changed, the writer reads the records and the
+  environment after the load.
+- **Rule 7, `verify_release`.** `kernel/verify_release.shard [-v] DIR
+  CHUNK…` imports K, the host and the JSON reader and nothing else:
+  the Init chunks replay as one stream (the T0 machinery), then each
+  store file in `order`'s order as *its own stream over the
+  environment so far* — fresh tables, as the file was written, so a
+  record a file lacks is MALFORMED there and never read from an
+  earlier file's table (found by the test: with the tables persisting
+  across files a dropped expression record resolved to the previous
+  file's node). Each accepted declaration is held to its order line:
+  the name and the content fingerprint must be the line's, else
+  MISTIED — a dropped name record lands a theorem under a shorter
+  name, the import reading a missing table index as anonymous. The
+  gate's guarantee is K's acceptance; the tie says the bundle is the
+  build's. `RELEASE: declarations N  accepted A  rejected … malformed
+  X  mistied Y  missing Z`; the exit code is the declarations not
+  accepted + malformed + mistied + missing + the chunks' failures.
+- **The gate.** `kernel/test/store_test.sh` (the suite's 36th
+  entrypoint): the example's 23 declarations stored once, a second
+  load sharing all 23, K alone accepting them after the Init fixture;
+  a theorem whose value is replaced by its statement REJECTED, an
+  expression record removed MALFORMED, a file removed MISSING, a name
+  record removed MISTIED, each with a non-zero exit; then calc's five
+  leaves stored in sequence into `v3/release/calc` and replayed —
+  **376 declarations, every one accepted by K alone**, 3.5 MB. The
+  store is the v3 job's artifact (`.gitlab-ci.yml`), ignored by git,
+  never committed (the ruling's second lean).
+- **Found on the way:** three matchers of the example share a
+  fingerprint (`len.match_1`, `app.match_1`, `rev_onto.match_1` are
+  one term under three names — the hash covers the type and the value,
+  not the name), so the collision suffix is exercised on the first
+  store written.
+- **Not built:** the implementation forks of views (§6.6) are checked
+  and recorded under IMPL but not stored — their constants live in
+  the fork, not the load's environment, and a linear stream cannot
+  redeclare a parameter's name as its implementation; a store over
+  forks is a branch per view, open until a consumer needs it. The
+  store is per root; a release across roots is not a case yet.
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built
@@ -5409,4 +5474,10 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     with an open metavariable, blocks in order, `witness_open` at the
     step's end (rule 4); no `attempt`/`commit` API until a concurrent
     caller (rule 5); the store in K's export format and
-    `verify_release` as T0's replay over it (rule 7).
+    `verify_release` as T0's replay over it (rule 7). *Landed in three
+    landings (2026-10-07/08; the as-built sections of §8.4).* Decided at
+    landing 3: each store file is its own stream over the environment so
+    far, and the gate ties each accepted declaration to its order line's
+    name and fingerprint — K's acceptance is the guarantee, the tie says
+    the bundle is the build's; the implementation forks of views are not
+    stored (open until a consumer needs it).

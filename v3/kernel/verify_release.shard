@@ -1,0 +1,155 @@
+;;; v3/kernel/verify_release.shard — the release gate (LANGUAGE.md §8.4 slice 3.22
+;;; rule 7; law §7.5): `eval direct v3/kernel/verify_release.shard [-v] DIR CHUNK…`
+;;; K replays the store DIR holds (store.shard: DIR/order lists `ID NAME` in
+;;; admission order, DIR/ID.ndjson the declaration's records) after the pinned
+;;; Init export's CHUNKs, in order, with no elaborator loaded — this file imports
+;;; K, the host and the JSON reader alone: the T0 machinery over a second stream.
+;;; Every non-ACCEPT verdict prints (ACCEPT too with -v), then
+;;; `INIT: counts` after the chunks and `RELEASE: declarations N  accepted A
+;;; rejected … malformed X  mistied Y  missing Z` for the store — mistied: a
+;;; declaration accepted under a name or with a content fingerprint other than
+;;; its order line's (a dropped name record lands a theorem under a shorter name:
+;;; the import reads a missing table index as anonymous); each file is its own
+;;; stream, fresh tables over the environment so far, as it was written. The
+;;; exit code is the declarations not accepted + malformed + mistied + missing +
+;;; the chunks' failures.
+
+(import "host.shard")
+(import "json.shard")
+(import "k")
+(use kernel.k)
+(use kernel.host)
+(use kernel.json)
+(use kernel.prelude)
+(use kernel.util)
+(use kernel.host.World)
+(use kernel.json.JRes)
+(use kernel.name)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.verdict.Verdict)
+
+;; the records of one stream, each through K: the run, the malformed count and the
+;; mistied count — a declaration accepted under a name other than WANT's (empty: any
+;; name) or with a content fingerprint other than FP (0: any), which a dropped name
+;; record produces (the import reads a missing table index as anonymous) and which
+;; ties a replayed constant to the build's ACCEPT record (identity_hash is the
+;; report's fingerprint, never an authority: K's acceptance is the gate's guarantee,
+;; the tie says the bundle is the build's)
+(type VL (VL Run Int Int))
+(fn vr_lines ((v VL) (bs0 (List Int)) (verbose Bool) (want (List Int)) (fp Int) (w World)) (Pair VL World)
+  (measure (struct bs0))
+  (let ((bs (skip_ws bs0)))
+    (match bs
+      (Nil (Pair v w))
+      (_
+       (match v
+         ((VL r bad wrong)
+          (match (json_parse bs)
+            (JErr (Pair (VL r (+ bad 1) wrong) (write_line "MALFORMED json (stream)" w)))
+            ((JRes j rest)
+             (match (process_record r j)
+               ((Pair r1 vd)
+                (match vd
+                  ((VMalformed k) (vr_lines (VL r1 (+ bad 1) wrong) rest verbose want fp (write_line (append "MALFORMED " k) w)))
+                  ((VAccept n)
+                   (if (bool_and (bool_or (int_eq (len want) 0) (int_list_eq want (show_name n)))
+                                 (bool_or (int_eq fp 0) (vr_fp_is (run_env r1) n fp)))
+                     (vr_lines (VL r1 bad wrong) rest verbose want fp (if verbose (write_line (append "ACCEPT " (show_name n)) w) w))
+                     (vr_lines (VL r1 bad (+ wrong 1)) rest verbose want fp
+                       (write_line (append "MISTIED " (append want (append " accepted as " (append (show_name n) (append " fp=" (vr_fp_text (run_env r1) n)))))) w))))
+                  (VSkip (vr_lines (VL r1 bad wrong) rest verbose want fp w))
+                  (_ (vr_lines (VL r1 bad wrong) rest verbose want fp (match (show_verdict vd) ((Some x) (write_line x w)) (None w)))))))))))))))
+(fn vr_fp_is ((env CheckedEnv) (n Name) (fp Int)) Bool
+  (match (identity_hash env n) ((Some h) (int_eq h fp)) (None False)))
+(fn vr_fp_text ((env CheckedEnv) (n Name)) (List Int)
+  (match (identity_hash env n) ((Some h) (show_nat h)) (None "none")))
+
+;; the Init chunks in order, one stream
+(fn vr_chunks ((v VL) (files (List (List Int))) (verbose Bool) (w World)) (Pair VL World)
+  (measure (struct files))
+  (match files
+    (Nil (Pair v w))
+    ((Cons f rest)
+     (match (read_file f w)
+       ((Pair None w1) (match v ((VL r bad wrong) (vr_chunks (VL r (+ bad 1) wrong) rest verbose (write_line (append "cannot read " f) w1)))))
+       ((Pair (Some bs) w1)
+        (match (vr_lines v bs verbose Nil 0 w1)
+          ((Pair v1 w2) (vr_chunks v1 rest verbose w2))))))))
+
+;; the store's declarations in order, each file its own stream over the environment
+;; so far — fresh tables, as a file is written (store.shard): a record a file lacks is
+;; malformed there, never read from an earlier file's table. The state: the
+;; environment, K's five counts summed, declarations, malformed, mistied, missing.
+(type VR (VR CheckedEnv (List Int) Int Int Int Int))
+(fn vr_store ((v VR) (dir (List Int)) (order (List Int)) (verbose Bool) (w World)) (Pair VR World)
+  (measure (struct order))
+  (match order
+    (Nil (Pair v w))
+    (_
+     (match (take_line order Nil)
+       ((Pair ln rest)
+        (match (vr_id ln)
+          (Nil (vr_store v dir rest verbose w))
+          (fid
+           (match v
+             ((VR env counts n bad wrong missing)
+              (match (read_file (append dir (Cons 47 (append fid ".ndjson"))) w)
+                ((Pair None w1) (vr_store (VR env counts (+ n 1) bad wrong (+ missing 1)) dir rest verbose (write_line (append "MISSING " ln) w1)))
+                ((Pair (Some bs) w1)
+                 (match (vr_lines (VL (run_with_env (empty_run False False) env (st_for env)) 0 0) bs verbose (vr_name ln) (vr_digits fid 0) w1)
+                   ((Pair (VL r1 bad1 wrong1) w2)
+                    (vr_store (VR (run_env r1) (vr_sum counts (run_counts r1)) (+ n 1) (+ bad bad1) (+ wrong wrong1) missing) dir rest verbose w2))))))))))))))
+;; an order line's name: what follows the first space
+(fn vr_name ((ln (List Int))) (List Int)
+  (measure (struct ln))
+  (match ln (Nil Nil) ((Cons 32 r) r) ((Cons _ r) (vr_name r))))
+;; an id's fingerprint: its leading digits (FP, or FP-K past a collision)
+(fn vr_digits ((bs (List Int)) (acc Int)) Int
+  (measure (struct bs))
+  (match bs
+    ((Cons c r) (if (bool_and (le 48 c) (le c 57)) (vr_digits r (+ (* acc 10) (- c 48))) acc))
+    (Nil acc)))
+(fn vr_sum ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil Nil)
+    ((Cons x r) (match b ((Cons y r2) (Cons (+ x y) (vr_sum r r2))) (Nil (Cons x (vr_sum r Nil)))))))
+(fn vr_id ((ln (List Int))) (List Int)
+  (measure (struct ln))
+  (match ln (Nil Nil) ((Cons 32 _) Nil) ((Cons c r) (Cons c (vr_id r)))))
+
+(fn vr_failures ((r Run)) Int (match (run_counts r) ((Cons _ (Cons b (Cons c (Cons d _)))) (+ b (+ c d))) (_ 0)))
+
+(fn vr_args ((args (List (List Int))) (verbose Bool)) (Pair Bool (List (List Int)))
+  (measure (struct args))
+  (match args
+    ((Cons x r) (if (int_list_eq x "-v") (vr_args r True) (Pair verbose args)))
+    (Nil (Pair verbose Nil))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match (vr_args args False)
+       ((Pair verbose (Cons dir chunks))
+        (match (vr_chunks (VL (empty_run False False) 0 0) chunks verbose w1)
+          ((Pair (VL r0 bad0 _) w2)
+           (let ((w3 (write_line (append "INIT: " (show_counts r0)) w2)))
+             (match (read_file (append dir "/order") w3)
+               ((Pair None w4) (exit 2 (write_line (append "verify_release: cannot read " (append dir "/order")) w4)))
+               ((Pair (Some order) w4)
+                (match (vr_store (VR (run_env r0) (list 0 0 0 0 0) 0 0 0 0) dir order verbose w4)
+                  ((Pair (VR _ counts n bad wrong missing) w5)
+                   (let ((accepted (nth_int counts 0)))
+                     (exit (+ (- n accepted) (+ bad (+ wrong (+ missing (+ bad0 (vr_failures r0))))))
+                       (write_line (append "RELEASE: declarations " (append (show_nat n) (append "  accepted " (append (show_nat accepted)
+                                     (append "  rejected " (append (show_nat (nth_int counts 1)) (append "  exhausted " (append (show_nat (nth_int counts 2))
+                                     (append "  mismatched " (append (show_nat (nth_int counts 3)) (append "  unsupported " (append (show_nat (nth_int counts 4))
+                                     (append "  malformed " (append (show_nat bad) (append "  mistied " (append (show_nat wrong) (append "  missing " (show_nat missing))))))))))))))))))
+                         w5)))))))))))
+       (_ (exit 2 (write_line "verify_release: [-v] DIR CHUNK…" w1)))))))
+(fn nth_int ((xs (List Int)) (i Int)) Int
+  (measure (struct xs))
+  (match xs (Nil 0) ((Cons x r) (if (int_eq i 0) x (nth_int r (- i 1))))))

@@ -1122,6 +1122,42 @@ Local gates: 221 loader pins, `engine_test` (24 checks: the example's eleven the
 
 Landing 2 is closed: **pipeline 550 green on `c98c2cd`** — engine 54 s; corpus 1,478 s at the baseline; v3 6,434 s: 35 entrypoints with 0 failed, `engine_test` 24 checks in 366 s (the example's eleven theorems from the sidecar, the regeneration byte-identical, 54 of calc's 100 claims closed unaided), `tactic_test` 110 checks, `define_test` 12 checks, `derive_test` 14 checks, `wire_test` 15 checks, calc's host program byte-identical to the model world, parity byte-identical over 28 closures and 116,957 declarations in 619 s, route 1's native build of the kernel (`OK: v3/bin/t0`), the fixture byte-tie identical, replay 2,504 s at 31.4 GB peak, T0 accepted 57,977 with 0 rejected, closures identical to the oracle, all 20 accelerator candidates pinned. The v3 job is 103 s shorter than pipeline 548's; the loader pins' entrypoint (3,318 s) is the suite's wall clock still, and `engine_test` runs inside it.
 
+**Slice 3.22, landing 3 landed (2026-10-08) — the store and `verify_release`**
+(`LANGUAGE.md` §8.4's rule 7 and as-built; law §7.5). What landed:
+
+- **The store** (`kernel/store.shard`; `load.shard --store DIR`): after
+  a clean load, every constant the load admitted to K is written as the
+  records K ingests — lean4export's NDJSON, what `k/import.shard`
+  reads —, one file per declaration named by its content fingerprint
+  (`FP-K` past a collision), `DIR/order` listing them in admission
+  order; a file already holding the text is shared, so several loads
+  fill one store in sequence. An inductive type is its whole block,
+  recursors included, for the import's validation against K's own.
+- **`verify_release`** (`kernel/verify_release.shard DIR CHUNK…`): K,
+  the host and the JSON reader, no elaborator — the Init chunks as one
+  stream, then each store file as its own stream over the environment
+  so far; each accepted declaration held to its order line's name and
+  fingerprint (MISTIED otherwise); `RELEASE: declarations N  accepted
+  A …`, the exit code everything not accepted.
+- **The gate** (`kernel/test/store_test.sh`, 36th entrypoint): the
+  example's 23 declarations stored once and accepted by K alone; a
+  forged proof REJECTED, a broken record MALFORMED, a missing file
+  MISSING, a renamed declaration MISTIED; calc's five leaves stored
+  into `v3/release/calc` — **376 declarations, every one accepted by K
+  alone** after the Init fixture, 3.5 MB — the v3 job's artifact,
+  never committed.
+- Found on the way: three matchers of the example are one term under
+  three names and share a fingerprint (the collision suffix on the
+  first store written); with the import's tables persisting across
+  files a dropped record resolved to an earlier file's node, and a
+  dropped name record landed a theorem under a shorter name — each
+  store file is its own stream now, and the gate ties the name and the
+  fingerprint.
+- Not stored: the implementation forks of views (recorded under IMPL;
+  a branch per view when a consumer needs it).
+
+Local gates: 221 loader pins, `store_test` (18 checks in 495 s: the example's 23 declarations stored once, shared on a second load and accepted by K alone; a forged proof REJECTED, a broken record MALFORMED, a missing file MISSING, a renamed declaration MISTIED; calc's 376 declarations stored into `v3/release/calc` and every one accepted by K alone in 54 s), `engine_test` (24 checks: 54 of 100), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 30 closures and 130,293 declarations in 270 s (`prove.shard` and `verify_release.shard` added as roots), route 2, K's clients, the full suite's 36 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

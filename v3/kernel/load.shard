@@ -1,5 +1,5 @@
 ;;; v3/kernel/load.shard — the loader's driver:
-;;;   eval direct v3/kernel/load.shard --root DIR [--init CHUNK]… [--route N] [--engine S] FILE…
+;;;   eval direct v3/kernel/load.shard --root DIR [--init CHUNK]… [--route N] [--engine S] [--store DIR] FILE…
 ;;;   eval direct v3/kernel/load.shard --root DIR [--init CHUNK]… [--fuel N] --run MODULE.FN FILE… [-- ARG…]
 ;;; loads each FILE (under DIR, spelled from the same base) as a module with
 ;;; its imports (loader.shard) and prints the records (LANGUAGE.md §3.2) —
@@ -22,8 +22,19 @@
 ;;; printed as dump.shard's canonical text — the V3 side of frontend parity
 ;;; (kernel/test/parity_test.sh) — and nothing else; a load failure prints the
 ;;; records and exits as above.
+;;; `--store DIR` (§8.4 slice 3.22 rule 7): after a clean load, every constant the
+;;; load admitted to K — each ACCEPT, and each PARAM K holds — is written under
+;;; DIR as the records K ingests (store.shard): one file per declaration named by
+;;; its content fingerprint, DIR/order listing the files in admission order, a
+;;; file already holding the text shared. The records print as without the flag,
+;;; then `STORE: DIR new=N shared=M`; a file that cannot be written is
+;;; `STORE: cannot write PATH`, exit 2. A failed load writes nothing. The
+;;; implementation forks of views (§6.6) are checked, recorded under IMPL and
+;;; not stored (their constants live in the fork, not the load's environment).
+;;; verify_release.shard replays a store with K alone.
 
 (import "loader.shard")
+(import "store.shard")
 (import "ev.shard")
 (import "dump.shard")
 (use kernel.dump)
@@ -34,32 +45,36 @@
 (use kernel.name)
 (use kernel.prelude)
 (use kernel.scope)
+(use kernel.store)
+(use kernel.store.StoreRes)
 (use kernel.sexpr)
 (use kernel.util)
 (use kernel.ev.RunRes)
 (use kernel.host.World)
+(use kernel.loader.Rec)
 (use kernel.prelude.Bool)
 (use kernel.prelude.List)
 (use kernel.prelude.Option)
 (use kernel.prelude.Pair)
 
-(type Args (Args (List Int) (List (List Int)) (List Int) (List Int) (List (List Int)) (Option Name) Int (List (List Int)) Bool))   ; root, chunks, route, engine, files, the entry to run, fuel, the program's arguments, dump
+(type Args (Args (List Int) (List (List Int)) (List Int) (List Int) (List (List Int)) (Option Name) Int (List (List Int)) Bool (List Int)))   ; root, chunks, route, engine, files, the entry to run, fuel, the program's arguments, dump, the store directory
 (fn parse_args ((args (List (List Int))) (a Args)) Args
   (measure (struct args))
   (match a
-    ((Args root chunks route engine files run fuel argv dump)
+    ((Args root chunks route engine files run fuel argv dump store)
      (match args
-       (Nil (Args root (rev chunks) route engine (rev files) run fuel argv dump))
+       (Nil (Args root (rev chunks) route engine (rev files) run fuel argv dump store))
        ((Cons x r)
-        (if (int_list_eq x "--") (Args root (rev chunks) route engine (rev files) run fuel r dump)
-        (if (int_list_eq x "--root") (match r ((Cons v r2) (parse_args r2 (Args v chunks route engine files run fuel argv dump))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--init") (match r ((Cons v r2) (parse_args r2 (Args root (Cons v chunks) route engine files run fuel argv dump))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--route") (match r ((Cons v r2) (parse_args r2 (Args root chunks v engine files run fuel argv dump))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--engine") (match r ((Cons v r2) (parse_args r2 (Args root chunks route v files run fuel argv dump))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--run") (match r ((Cons v r2) (parse_args r2 (Args root chunks route engine files (name_of_sym (sym_of_chars v)) fuel argv dump))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--fuel") (match r ((Cons v r2) (parse_args r2 (Args root chunks route engine files run (digits_val v 0) argv dump))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--dump") (parse_args r (Args root chunks route engine files run fuel argv True))
-          (parse_args r (Args root chunks route engine (Cons x files) run fuel argv dump)))))))))))))))
+        (if (int_list_eq x "--") (Args root (rev chunks) route engine (rev files) run fuel r dump store)
+        (if (int_list_eq x "--root") (match r ((Cons v r2) (parse_args r2 (Args v chunks route engine files run fuel argv dump store))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--init") (match r ((Cons v r2) (parse_args r2 (Args root (Cons v chunks) route engine files run fuel argv dump store))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--route") (match r ((Cons v r2) (parse_args r2 (Args root chunks v engine files run fuel argv dump store))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--engine") (match r ((Cons v r2) (parse_args r2 (Args root chunks route v files run fuel argv dump store))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--run") (match r ((Cons v r2) (parse_args r2 (Args root chunks route engine files (name_of_sym (sym_of_chars v)) fuel argv dump store))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--fuel") (match r ((Cons v r2) (parse_args r2 (Args root chunks route engine files run (digits_val v 0) argv dump store))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--dump") (parse_args r (Args root chunks route engine files run fuel argv True store))
+        (if (int_list_eq x "--store") (match r ((Cons v r2) (parse_args r2 (Args root chunks route engine files run fuel argv dump v))) (Nil (parse_args Nil a)))
+          (parse_args r (Args root chunks route engine (Cons x files) run fuel argv dump store))))))))))))))))
 (fn default_fuel () Int 1000000000000)
 
 (fn load_files ((l Load) (files (List (List Int))) (w World)) (Pair Load World)
@@ -75,8 +90,8 @@
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
-     (match (parse_args args (Args Nil Nil "3" "bootstrap" Nil None (default_fuel) Nil False))
-       ((Args root chunks route engine files run fuel argv dump)
+     (match (parse_args args (Args Nil Nil "3" "bootstrap" Nil None (default_fuel) Nil False Nil))
+       ((Args root chunks route engine files run fuel argv dump store)
         (match (parts_of root)
           (None (exit 2 (write_line "load: --root DIR is required" w1)))
           ((Some rootp)
@@ -84,7 +99,7 @@
              (exit 2 (write_line "load: --root DIR is required" w1))
              (if dump (main_dump rootp chunks files w1)
              (match run
-               (None (main_records rootp chunks route engine files w1))
+               (None (main_records rootp chunks route engine files store w1))
                ((Some entry) (main_run rootp chunks files entry argv fuel w1))))))))))))
 ;; a clean load, then the canonical text of the program it yielded (§10 item 1)
 (fn main_dump ((rootp (List (List Int))) (chunks (List (List Int))) (files (List (List Int))) (w World)) World
@@ -97,12 +112,26 @@
 (fn print_lines ((ls (List (List Int))) (w World)) World
   (measure (struct ls))
   (match ls (Nil w) ((Cons x r) (print_lines r (write_line x w)))))
-;; the records and the counts; the exit code is refused + errors
-(fn main_records ((rootp (List (List Int))) (chunks (List (List Int))) (route (List Int)) (engine (List Int)) (files (List (List Int))) (w World)) World
+;; the records and the counts; the exit code is refused + errors; then the store, after a clean load
+(fn main_records ((rootp (List (List Int))) (chunks (List (List Int))) (route (List Int)) (engine (List Int)) (files (List (List Int))) (store (List Int)) (w World)) World
   (match (load_files (load0 rootp chunks) files (write_line (append "LOAD root=" (append (join_path rootp) (append " route=" (append route (append " engine=" engine))))) w))
     ((Pair l w2)
      (let ((cs (rec_counts (ld_recs l) (zero_counts))))
-       (exit (load_failures cs) (write_line (append "LOAD: " (show_counts_load cs)) (print_recs (ld_recs l) w2)))))))
+       (let ((w3 (write_line (append "LOAD: " (show_counts_load cs)) (print_recs (ld_recs l) w2))))
+         (if (bool_or (lt 0 (load_failures cs)) (int_eq (len store) 0))
+           (exit (load_failures cs) w3)
+           (match (store_write (Load.env l) store (stored_names (ld_recs l)) w3)
+             ((Pair (StoreOk new shared) w4)
+              (exit 0 (write_line (append "STORE: " (append store (append " new=" (append (show_nat new) (append " shared=" (show_nat shared)))))) w4)))
+             ((Pair (StoreFail path) w4) (exit 2 (write_line (append "STORE: cannot write " path) w4))))))))))
+;; the constants the load admitted, in admission order: every ACCEPT and PARAM record's
+(fn stored_names ((rs (List Rec))) (List Name)
+  (measure (struct rs))
+  (match rs
+    (Nil Nil)
+    ((Cons (RAccept n _ _ _ _ _) r) (Cons n (stored_names r)))
+    ((Cons (RParam n _ _) r) (Cons n (stored_names r)))
+    ((Cons _ r) (stored_names r))))
 ;; a clean load, then the program run from the entry; a failed load prints its records and exits 2
 (fn main_run ((rootp (List (List Int))) (chunks (List (List Int))) (files (List (List Int))) (entry Name) (argv (List (List Int))) (fuel Int) (w World)) World
   (match (load_files (load0 rootp chunks) files w)

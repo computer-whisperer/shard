@@ -28,7 +28,7 @@ FIX=v3/kernel/test/fixtures/init_prefix_3000.ndjson
 a=$(mktemp); b=$(mktemp); trap 'rm -f "$a" "$b"' EXIT
 n=0; decls=0; failed=0
 s=$(date +%s)
-for entry in v3/kernel/load.shard v3/kernel/t0.shard v3/kernel/test/calc_harness.shard v3/kernel/test/*_test.shard v3/kernel/k/test/*_test.shard; do
+for entry in v3/kernel/load.shard v3/kernel/t0.shard v3/kernel/prove.shard v3/kernel/verify_release.shard v3/kernel/test/calc_harness.shard v3/kernel/test/*_test.shard v3/kernel/k/test/*_test.shard; do
   n=$((n+1))
   "$EVAL" dump "$entry" > "$a" 2>&1 || { echo "parity_test: eval dump failed on $entry"; head -3 "$a"; failed=$((failed+1)); continue; }
   dups=$(awk '
