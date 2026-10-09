@@ -1198,6 +1198,8 @@ after 3.22: the feedback-cost lever first, shallow, the connected path
 
 The 221 loader pins pass byte-identical under the receipt in 809 s on the development machine (beside parity and the define test; 1,361 s without the receipt beside the full suite — the clean comparison is pipeline 553's against 552's 3,327 s on the runner); parity byte-identical over 30 closures and 130,445 declarations; route 1's native driver, rebuilt locally, ties the interpreter on the first chunk and writes the receipt; the full suite's 36 entrypoints 0 failed in 927 s, the pins entrypoint its wall clock still.
 
+Slice 3.23 is closed: **pipeline 554 green on `7ad18a6`: engine 55 s; corpus 1,479 s at the baseline; v3 5,455 s of a 3 h limit — 939 s shorter than pipeline 552's 6,394 s: 36 entrypoints with 0 failed, the loader pins' entrypoint 2,188 s against 3,327 s under the receipt, `store_test` 1,156 s against 1,349 s, `engine_test` 263 s against 357 s, parity byte-identical over 30 closures and 130,445 declarations in 712 s, route 1's native build of the kernel, the replay 2,518 s at 32.4 GB; T0 accepted 57,977, 20 pinned, closures identical. The pins' entrypoint is the suite's wall clock still.**
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

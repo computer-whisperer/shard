@@ -2660,6 +2660,7 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-09 — pipeline 554 green on `7ad18a6`: engine 55 s; corpus 1,479 s at the baseline; v3 5,455 s of a 3 h limit — 939 s shorter than pipeline 552's 6,394 s: 36 entrypoints with 0 failed, the loader pins' entrypoint 2,188 s against 3,327 s under the receipt, `store_test` 1,156 s against 1,349 s, `engine_test` 263 s against 357 s, parity byte-identical over 30 closures and 130,445 declarations in 712 s, route 1's native build of the kernel, the replay 2,518 s at 32.4 GB; T0 accepted 57,977, 20 pinned, closures identical. The pins' entrypoint is the suite's wall clock still. Slice 3.23 is closed.**
 - **2026-10-08 — slice 3.23 built: the Init cache (`LANGUAGE.md` §8.4
   slice 3.23; §13 item 57; GPT-6's R75, §4.11).** Ruled at the boundary
   after 3.22 (items 54–56 ratified the same day): the feedback-cost
