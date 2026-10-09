@@ -2660,6 +2660,7 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-09 — pipeline 556 green on `d0dfb7b`: engine 56 s; corpus 1,487 s at the baseline; v3 5,501 s of a 3 h limit (37 entrypoints with 0 failed; `path_test` 18 checks in 792 s — the path composes on the runner: load 52 s, run 51 s, store 50 s, verify by K alone 134 s —; the loader pins' entrypoint 2,227 s with 225 cases; `store_test` 1,163 s; `engine_test` 265 s; parity byte-identical over 30 closures and 130,489 declarations in 697 s; route 1's native build of the kernel; the replay 2,534 s at 32.4 GB); T0 accepted 57,977, 20 pinned, closures identical. Slice 3.24 is closed.**
 - **2026-10-09 — slice 3.24 built: the connected path (`LANGUAGE.md`
   §8.4 slice 3.24; §13 item 58; GPT-6's R76, §4.11).** The second
   boundary item after 3.22, ruled as one slice. `(dif h C T F)` is the

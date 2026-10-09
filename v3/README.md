@@ -1237,6 +1237,8 @@ assembled, the branch-local proof joint built, each joint broken**
 
 Gates: the 225 loader pins (four new) byte-identical in 783 s under the receipt, parity byte-identical over 30 closures and 130,489 declarations in 265 s, K's clients 7 of 7, `path_test` 18 checks in 279 s, the full suite's 37 entrypoints 0 failed (855 s).
 
+Slice 3.24 is closed: **pipeline 556 green on `d0dfb7b`: engine 56 s; corpus 1,487 s at the baseline; v3 5,501 s of a 3 h limit (37 entrypoints with 0 failed; `path_test` 18 checks in 792 s — the path composes on the runner: load 52 s, run 51 s, store 50 s, verify by K alone 134 s —; the loader pins' entrypoint 2,227 s with 225 cases; `store_test` 1,163 s; `engine_test` 265 s; parity byte-identical over 30 closures and 130,489 declarations in 697 s; route 1's native build of the kernel; the replay 2,534 s at 32.4 GB); T0 accepted 57,977, 20 pinned, closures identical.**
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until
