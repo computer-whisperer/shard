@@ -1293,6 +1293,8 @@ the unit is the line, and a load reads what it cites.
 
 Gates: `index_test` 10 checks in 125 s, parity byte-identical over 31 closures and 130,579 declarations in 338 s, the full suite's 38 entrypoints with 0 failed in 613 s.
 
+Landing 1 holds on the full gate: **pipeline 561 green on `97009cc`: engine 437 s — the native engine rebuilt, `tools/codegen/rt.h` and the codegen table being in its stamp and both carrying `read_range` now; corpus 1,455 s at the baseline; v3 4,626 s of a 3 h limit, 16 s over pipeline 559's 4,610 (38 entrypoints with 0 failed in 1,518 s; `index_test` 164 s, the fixtures' index built in 70 s on the runner; `store_test` 1,160 s; `path_test` 788 s; parity byte-identical over 31 closures and 130,762 declarations in 701 s; `engine_test` 267 s; route 1's native build of the kernel 422 s; the export 122 s; the replay 2,493 s at 32.4 GB); T0 accepted 57,977, 20 pinned, closures identical.**
+
 Landings 2 (the loader on demand, the fixtures deleted) and 3 (the
 receipt over the export, CI reordered) follow.
 
