@@ -1,12 +1,14 @@
 ;;; v3/kernel/load.shard — the loader's driver:
-;;;   eval direct v3/kernel/load.shard --root DIR [--init CHUNK]… [--init-receipt FILE] [--route N] [--engine S] [--store DIR] FILE…
-;;;   eval direct v3/kernel/load.shard --root DIR [--init CHUNK]… [--fuel N] --run MODULE.FN FILE… [-- ARG…]
+;;;   eval direct v3/kernel/load.shard --root DIR [--init EXPORT --init-index INDEX] [--init-receipt FILE] [--route N] [--engine S] [--store DIR] FILE…
+;;;   eval direct v3/kernel/load.shard --root DIR [--init EXPORT --init-index INDEX] [--fuel N] --run MODULE.FN FILE… [-- ARG…]
 ;;; loads each FILE (under DIR, spelled from the same base) as a module with
 ;;; its imports (loader.shard) and prints the records (LANGUAGE.md §3.2) —
 ;;; one line per module, Init load and declaration — then the counts; the
-;;; exit code is refused + errors. `--init` names the export chunks in
-;;; order (v3/README.md's pin; `(import Init NAME)` streams them through
-;;; NAME); `--route`/`--engine` stamp the header line with the route the
+;;; exit code is refused + errors. `--init` names the pinned export in one
+;;; file and `--init-index` its index (kernel/test/init_index.sh; §8.4 slice
+;;; 3.26): `(import Init NAME)` sets a module's horizon to NAME's ordinal and
+;;; the declarations it cites are loaded from the export on demand;
+;;; `--route`/`--engine` stamp the header line with the route the
 ;;; driver runs on (3 the bootstrap, 1 compiled K) and the engine.
 ;;; `--run` (§6.7): after a clean load, the program the load yielded is run
 ;;; from MODULE.FN on the World with ARG… as its arguments, its externs
@@ -33,14 +35,13 @@
 ;;; not stored (their constants live in the fork, not the load's environment).
 ;;; verify_release.shard replays a store with K alone.
 ;;; `--init-receipt FILE` (§8.4 slice 3.23, the Init cache): FILE is what
-;;; `t0.shard --receipt` wrote after a run that accepted every record of its
-;;; chunks — `PATH BYTES` per chunk. A chunk listed with its byte count streams
-;;; in ADMIT mode (loader.shard, k/add.shard): the typing judgments of its
-;;; axioms, definitions, theorems and opaques skipped, the inductive blocks and
-;;; the quotient checked as always; the records and counts print as without the
-;;; flag. A chunk not listed, or listed with another byte count, is refused
-;;; (`init_receipt_stale`). The suite and CI regenerate the receipt
-;;; (kernel/test/init_receipt.sh); verify_release never takes one.
+;;; `t0.shard --receipt` wrote after a run that accepted every record of the
+;;; export — `PATH BYTES`. The export listed with its byte count loads in ADMIT
+;;; mode (loader.shard, k/add.shard): the typing judgments of its axioms,
+;;; definitions, theorems and opaques skipped, the inductive blocks and the
+;;; quotient checked as always; the records and counts print as without the
+;;; flag. An export not listed, or listed with another byte count, is refused
+;;; (`init_receipt_stale`). verify_release never takes one.
 
 (import "loader.shard")
 (import "store.shard")
@@ -66,25 +67,26 @@
 (use kernel.prelude.Option)
 (use kernel.prelude.Pair)
 
-(type Args (Args (List Int) (List (List Int)) (List Int) (List Int) (List (List Int)) (Option Name) Int (List (List Int)) Bool (List Int) (List Int)))   ; root, chunks, route, engine, files, the entry to run, fuel, the program's arguments, dump, the store directory, the Init receipt
+(type Args (Args (List Int) (List Int) (List Int) (List Int) (List Int) (List (List Int)) (Option Name) Int (List (List Int)) Bool (List Int) (List Int)))   ; root, the export, its index, route, engine, files, the entry to run, fuel, the program's arguments, dump, the store directory, the Init receipt
 (fn parse_args ((args (List (List Int))) (a Args)) Args
   (measure (struct args))
   (match a
-    ((Args root chunks route engine files run fuel argv dump store rcpt)
+    ((Args root export index route engine files run fuel argv dump store rcpt)
      (match args
-       (Nil (Args root (rev chunks) route engine (rev files) run fuel argv dump store rcpt))
+       (Nil (Args root export index route engine (rev files) run fuel argv dump store rcpt))
        ((Cons x r)
-        (if (int_list_eq x "--") (Args root (rev chunks) route engine (rev files) run fuel r dump store rcpt)
-        (if (int_list_eq x "--root") (match r ((Cons v r2) (parse_args r2 (Args v chunks route engine files run fuel argv dump store rcpt))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--init") (match r ((Cons v r2) (parse_args r2 (Args root (Cons v chunks) route engine files run fuel argv dump store rcpt))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--route") (match r ((Cons v r2) (parse_args r2 (Args root chunks v engine files run fuel argv dump store rcpt))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--engine") (match r ((Cons v r2) (parse_args r2 (Args root chunks route v files run fuel argv dump store rcpt))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--run") (match r ((Cons v r2) (parse_args r2 (Args root chunks route engine files (name_of_sym (sym_of_chars v)) fuel argv dump store rcpt))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--fuel") (match r ((Cons v r2) (parse_args r2 (Args root chunks route engine files run (digits_val v 0) argv dump store rcpt))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--dump") (parse_args r (Args root chunks route engine files run fuel argv True store rcpt))
-        (if (int_list_eq x "--store") (match r ((Cons v r2) (parse_args r2 (Args root chunks route engine files run fuel argv dump v rcpt))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--init-receipt") (match r ((Cons v r2) (parse_args r2 (Args root chunks route engine files run fuel argv dump store v))) (Nil (parse_args Nil a)))
-          (parse_args r (Args root chunks route engine (Cons x files) run fuel argv dump store rcpt)))))))))))))))))
+        (if (int_list_eq x "--") (Args root export index route engine (rev files) run fuel r dump store rcpt)
+        (if (int_list_eq x "--root") (match r ((Cons v r2) (parse_args r2 (Args v export index route engine files run fuel argv dump store rcpt))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--init") (match r ((Cons v r2) (parse_args r2 (Args root v index route engine files run fuel argv dump store rcpt))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--init-index") (match r ((Cons v r2) (parse_args r2 (Args root export v route engine files run fuel argv dump store rcpt))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--route") (match r ((Cons v r2) (parse_args r2 (Args root export index v engine files run fuel argv dump store rcpt))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--engine") (match r ((Cons v r2) (parse_args r2 (Args root export index route v files run fuel argv dump store rcpt))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--run") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files (name_of_sym (sym_of_chars v)) fuel argv dump store rcpt))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--fuel") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run (digits_val v 0) argv dump store rcpt))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--dump") (parse_args r (Args root export index route engine files run fuel argv True store rcpt))
+        (if (int_list_eq x "--store") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump v rcpt))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--init-receipt") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store v))) (Nil (parse_args Nil a)))
+          (parse_args r (Args root export index route engine (Cons x files) run fuel argv dump store rcpt))))))))))))))))))
 (fn default_fuel () Int 1000000000000)
 
 (fn load_files ((l Load) (files (List (List Int))) (w World)) (Pair Load World)
@@ -100,14 +102,14 @@
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
-     (match (parse_args args (Args Nil Nil "3" "bootstrap" Nil None (default_fuel) Nil False Nil Nil))
-       ((Args root chunks route engine files run fuel argv dump store rcpt)
+     (match (parse_args args (Args Nil Nil Nil "3" "bootstrap" Nil None (default_fuel) Nil False Nil Nil))
+       ((Args root export index route engine files run fuel argv dump store rcpt)
         (match (parts_of root)
           (None (exit 2 (write_line "load: --root DIR is required" w1)))
           ((Some rootp)
            (if (int_eq (len rootp) 0)
              (exit 2 (write_line "load: --root DIR is required" w1))
-             (match (load_with_receipt rootp chunks rcpt w1)
+             (match (load_with_receipt rootp export index rcpt w1)
                ((Pair None w2) (exit 2 (write_line (append "load: cannot read the receipt " rcpt) w2)))
                ((Pair (Some l0) w2)
                 (if dump (main_dump l0 files w2)

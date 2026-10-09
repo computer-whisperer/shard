@@ -14,10 +14,11 @@
 set -u
 cd "$(dirname "$0")/.."
 export EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
-# the Init receipt once (kernel/test/init_receipt.sh; slice 3.23): the drivers below
-# stream Init under it — every chunk a T0 run accepted enters in admit mode
-INIT_RECEIPT=$(v3/kernel/test/init_receipt.sh) || { echo "v3/test.sh: no Init receipt"; exit 1; }
-export INIT_RECEIPT
+# the Init index once (kernel/test/init_index.sh; slice 3.26): the drivers below load
+# Init on demand from the pinned export through it. A receipt (slice 3.23) is a speed
+# lever a T0 run over the export writes; set INIT_RECEIPT to use one
+read _ _ < <(v3/kernel/test/init_index.sh) || { echo "v3/test.sh: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
+export INIT_RECEIPT=${INIT_RECEIPT:-}
 JOBS=${V3_TEST_JOBS:-8}
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
@@ -25,7 +26,7 @@ run_one() {   # ENTRYPOINT INDEX: its output, exit code and seconds under $OUT
   local t=$1 i=$2 s rc
   s=$(date +%s)
   case $t in
-    */loader_pins_test.shard) "$EVAL" direct "$t" --init-receipt "$INIT_RECEIPT" > "$OUT/$i.out" 2>&1; rc=$? ;;
+    */loader_pins_test.shard) "$EVAL" direct "$t" ${INIT_RECEIPT:+--init-receipt "$INIT_RECEIPT"} > "$OUT/$i.out" 2>&1; rc=$? ;;
     *.shard) "$EVAL" direct "$t" > "$OUT/$i.out" 2>&1; rc=$? ;;
     *)       "$t" > "$OUT/$i.out" 2>&1; rc=$? ;;
   esac

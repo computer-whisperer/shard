@@ -40,11 +40,10 @@ record that is not a module, an Init load or an acceptance:
 ```
 
 A `REALIZE` record (a realization attached, §7.5) counts as accepted, as `RUNNABLE` does,
-and so does `DEFINE` (a fn defined with its equations, §8.4). The cases stream the export
-through `InvImage.wf` (`fixtures/init_prefix_int.ndjson`, 100,851 lines; slice 3.13 cut it at
-`Int.decEq`, 3.14 extended it for `WellFounded.fix`'s well-foundedness) — the operator
-identities, the decisions and the well-founded constants live past the 3000-line prefix;
-`init_not_found` asks for `Int.tdiv`, past it. The slice-3.13 refusals a header may state: `nat_operator`,
+and so does `DEFINE` (a fn defined with its equations, §8.4). The cases load Init on demand
+from the pinned export and its index (slice 3.26): a case's `(import Init NAME)` sets its
+horizon to NAME's ordinal and what it cites below that is loaded, once in the run;
+`init_not_found` asks for a name the export does not declare. The slice-3.13 refusals a header may state: `nat_operator`,
 `recursion_depth` (as an obstacle), `define_matrix`, `realize_recursion` and
 `realize_descent` for a fn.
 
@@ -271,7 +270,7 @@ the naming law; one declared over a type the wire has no codec for;
 two with a result the extern does not return; run by
 `kernel/test/wire_test.sh`). `kernel/test/rows_test.shard` runs
 `ev_string`, `row_types` and `struct_proj` under `ev` and compares
-the values. The cases stay on the first chunk of the prefix; the
-libraries' tests add `fixtures/init_prefix_str_tail.ndjson` (the
-export's lines 100,852 to 274,616: through `UInt8.toNat`, line 263,515, for the libraries,
-and on through `Int.lt_mul_ediv_self_add` for `arith`'s product and quotient).
+the values. Every test reads the one export through its index; a
+case's horizon (through `UInt8.toNat` for the libraries, through
+`Int.lt_mul_ediv_self_add` for `arith`'s product and quotient) is its
+import's, and its demand is loaded on it.

@@ -1295,8 +1295,46 @@ Gates: `index_test` 10 checks in 125 s, parity byte-identical over 31 closures a
 
 Landing 1 holds on the full gate: **pipeline 561 green on `97009cc`: engine 437 s — the native engine rebuilt, `tools/codegen/rt.h` and the codegen table being in its stamp and both carrying `read_range` now; corpus 1,455 s at the baseline; v3 4,626 s of a 3 h limit, 16 s over pipeline 559's 4,610 (38 entrypoints with 0 failed in 1,518 s; `index_test` 164 s, the fixtures' index built in 70 s on the runner; `store_test` 1,160 s; `path_test` 788 s; parity byte-identical over 31 closures and 130,762 declarations in 701 s; `engine_test` 267 s; route 1's native build of the kernel 422 s; the export 122 s; the replay 2,493 s at 32.4 GB); T0 accepted 57,977, 20 pinned, closures identical.**
 
-Landings 2 (the loader on demand, the fixtures deleted) and 3 (the
-receipt over the export, CI reordered) follow.
+**Slice 3.26 landing 2 (2026-10-09) — the loader on demand, the
+fixtures deleted** (`LANGUAGE.md` §8.4 "as built, landing 2"; item 60
+amended). `kernel/initload.shard` opens the export by its index, looks
+names up by binary search, walks the closure of a set of records by
+range reads — the blocks highest first, each read once and scanned from
+its record line back; a cited constant found by its name id through the
+**declaration table**, a third table added to the index for it — and
+feeds K the lines in export order, checked. A file's demand, after its
+directives: every token's candidates (resolution's, pruned of prefixes
+the export declares nothing under), each gate's kit (`el_kit`,
+`tc_kit`, `ar_all_kit`, `dv_kit`, `df_kit`, K's and the pins' in the
+loader), an inductive name's satellites; the names below the horizon,
+their closure through K. K's run of Init alone persists in the Init
+state and is carried across a process's roots, each demand checked into
+it once and admitted into the loader's environment beside the natives.
+`name_taken` reads the table under the file's identity; the release
+gate (`verify_release.shard [-v] DIR EXPORT INDEX`) demands what the
+store cites and refuses a stored name the export declares. The three
+prefix fixtures and `init_receipt.sh` are gone; `init_index.sh` prints
+the export and the index for every consumer.
+
+Found on the way: the `List.sum` collision item 59(c) was reopened on
+is no collision — `v3/std/list.shard` declares `std.list.List.sum`
+(§3.1), K holds both; the live shape is `registry_native`'s module
+`Bool`, which the driver now refuses as the gate does (ledger corrected).
+Three kit gaps found by refusal: `Lean.Omega.Int.mul_congr`, a token's
+`@` sigil, the `init_not_found` pin's premise. The first form of the
+landing re-rooted every pin from the state before any demand and
+re-checked every closure: 1,761 s; carrying K's Init run, 42 s.
+
+Measured (bootstrap, checked, in parallel): calc 12 s (its demand 667
+records), calc_spec 29 s, calc_app 28 s, natabs 26 s, calc_proof 34 s
+(1,274 records), auto 24 s, std/bytes 24 s (1,305), std/list 10 s,
+std/derive 26 s, examples/path 22 s (1,155); the loader pins' 225
+cases 42 s checked against 33 s admitted; `index_test` 9 s against
+125 s; the index 19.2 MB, built natively in 36 s and verified in 36 s.
+
+Gates: the full suite's 38 entrypoints with 0 failed in 455 s against 613 s at landing 1 (parity byte-identical over 31 closures and 133,465 declarations in 267 s; `store_test` 350 s, the suite's wall clock; `path_test` 228 s; `define_test` 230 s; `calc_test` 215 s; `k_clients_test` 69 s; the loader pins' entrypoint 42 s).
+
+Landing 3 (the receipt over the export, CI reordered) follows.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

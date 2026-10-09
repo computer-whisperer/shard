@@ -857,7 +857,16 @@ fn eval_loop<'a>(prog: &'a Prog, st: &mut Stack, base: usize, e0: &'a IExpr) -> 
                 }
                 match next {
                     Some(body) => e = body,
-                    None => return fail(EvalError::NoMatchArm(format!("{:?}", val_to_expr(&v)))),
+                    None => {
+                        // the scrutinee rendered, truncated: a value the size of an environment
+                        // once produced a 3.2 GB error line (slice 3.26 landing 2)
+                        let mut shown = format!("{:?}", val_to_expr(&v));
+                        if shown.len() > 4000 {
+                            shown.truncate(4000);
+                            shown.push_str("… [truncated]");
+                        }
+                        return fail(EvalError::NoMatchArm(shown));
+                    }
                 }
             }
 

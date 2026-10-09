@@ -1,0 +1,558 @@
+;;; v3/kernel/initload.shard — the Init load on demand (LANGUAGE.md §8.4 slice 3.26
+;;; rules 2–5): the export opened by its index (index.shard), names looked up, the
+;;; closure of a set of declarations walked by range reads and fed to K as a sub-stream
+;;; in export order. The walk: the demanded records' ordinals are pending; the blocks
+;;; to read are scheduled highest first; a block is read once, its lines scanned from
+;;; its record line backwards, and every pending line parsed — its name, level and
+;;; expression ids pushed (a child always precedes its parent: in the same block it
+;;; comes later in the scan, in an earlier block it schedules that block), a constant
+;;; it cites resolved by its name id through the declaration table to the record
+;;; declaring it, which is pushed. What was extracted comes out newest first — export
+;;; order reversed when no push went upward, sorted by offset otherwise — and goes
+;;; through K's process_record: node lines into K's tables (sparse: the ids stay the
+;;; export's), records checked, or admitted when the run admits (the receipt). K's
+;;; tables and the environment persist across loads in a process (the loader's
+;;; InitSt), as does the record of what was fed (OdDone), so a line is fed once.
+;;; The export's meta line is checked against the pin before anything is read; an
+;;; index whose header names another byte count is refused.
+
+(import "host.shard")
+(import "json.shard")
+(import "intmap.shard")
+(import "name.shard")
+(import "util.shard")
+(import "index.shard")
+(import "k")
+(use kernel.k)
+(use kernel.host)
+(use kernel.json)
+(use kernel.intmap)
+(use kernel.index)
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.util)
+(use kernel.host.World)
+(use kernel.index.IxHdr)
+(use kernel.index.IxRow)
+(use kernel.json.JRes)
+(use kernel.intmap.IntMap)
+(use kernel.name.Name)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.verdict.Verdict)
+
+;; ---- the pin (v3/README.md): the export's meta line must say so --------------------------
+(fn init_pin_githash () (List Int) "819816b2e0a3bf405af45ae5c7af2491d8f5bee6")
+(fn init_pin_exporter () (List Int) "lean4export")
+(fn init_pin_exporter_version () (List Int) "3.1.0")
+(fn init_pin_format () (List Int) "3.1.0")
+;; the first record must be the meta line matching the pin: None, or what differs
+(fn od_check_meta ((bs (List Int))) (Option (List Int))
+  (match (json_parse bs)
+    (JErr (Some "the export's first record is not JSON"))
+    ((JRes j _)
+     (match (jget j "meta")
+       (None (Some "the export's first record is not its meta line"))
+       ((Some m)
+        (let ((githash (od_jpath m "lean" "githash"))
+              (exporter (od_jpath m "exporter" "name"))
+              (exv (od_jpath m "exporter" "version"))
+              (fmt (od_jpath m "format" "version")))
+          (if (bool_not (od_opt_str_eq githash (init_pin_githash))) (Some (append "lean githash " (append (od_show_opt_str githash) (append ", the pin is " (init_pin_githash)))))
+          (if (bool_not (od_opt_str_eq exporter (init_pin_exporter))) (Some (append "exporter " (od_show_opt_str exporter)))
+          (if (bool_not (od_opt_str_eq exv (init_pin_exporter_version))) (Some (append "exporter version " (append (od_show_opt_str exv) (append ", the pin is " (init_pin_exporter_version)))))
+          (if (bool_not (od_opt_str_eq fmt (init_pin_format))) (Some (append "format version " (append (od_show_opt_str fmt) (append ", the pin is " (init_pin_format)))))
+            None))))))))))
+(fn od_jpath ((j Json) (a (List Int)) (b (List Int))) (Option (List Int))
+  (match (jget j a) ((Some x) (match (jget x b) ((Some y) (jstr y)) (None None))) (None None)))
+(fn od_opt_str_eq ((o (Option (List Int))) (s (List Int))) Bool (match o ((Some x) (int_list_eq x s)) (None False)))
+(fn od_show_opt_str ((o (Option (List Int)))) (List Int) (match o ((Some x) x) (None "(missing)")))
+
+;; ---- the export opened ------------------------------------------------------------------------
+;; the export's path, the index's path and header, the record-table rows read so far (by
+;; ordinal), the lookups made (by key: the name and its ordinal, -1 for none), the name rows
+;; the search's top levels read (by row), whether the export declares anything under a prefix
+(type OdIx (OdIx (List Int) (List Int) IxHdr (IntMap IxRow) (IntMap (List (Pair Name Int))) (IntMap (List Int)) (IntMap (List (Pair Name Bool)))))
+(fn odx_export ((x OdIx)) (List Int) (match x ((OdIx a _ _ _ _ _ _) a)))
+(fn odx_index ((x OdIx)) (List Int) (match x ((OdIx _ a _ _ _ _ _) a)))
+(fn odx_hdr ((x OdIx)) IxHdr (match x ((OdIx _ _ a _ _ _ _) a)))
+(fn odx_rows ((x OdIx)) (IntMap IxRow) (match x ((OdIx _ _ _ a _ _ _) a)))
+(fn odx_memo ((x OdIx)) (IntMap (List (Pair Name Int))) (match x ((OdIx _ _ _ _ a _ _) a)))
+(fn odx_nrows ((x OdIx)) (IntMap (List Int)) (match x ((OdIx _ _ _ _ _ a _) a)))
+(fn odx_pmemo ((x OdIx)) (IntMap (List (Pair Name Bool))) (match x ((OdIx _ _ _ _ _ _ a) a)))
+(fn odx_set_export ((x OdIx) (v (List Int))) OdIx (match x ((OdIx _ f1 f2 f3 f4 f5 f6) (OdIx v f1 f2 f3 f4 f5 f6))))
+(fn odx_set_index ((x OdIx) (v (List Int))) OdIx (match x ((OdIx f0 _ f2 f3 f4 f5 f6) (OdIx f0 v f2 f3 f4 f5 f6))))
+(fn odx_set_hdr ((x OdIx) (v IxHdr)) OdIx (match x ((OdIx f0 f1 _ f3 f4 f5 f6) (OdIx f0 f1 v f3 f4 f5 f6))))
+(fn odx_set_rows ((x OdIx) (v (IntMap IxRow))) OdIx (match x ((OdIx f0 f1 f2 _ f4 f5 f6) (OdIx f0 f1 f2 v f4 f5 f6))))
+(fn odx_set_memo ((x OdIx) (v (IntMap (List (Pair Name Int))))) OdIx (match x ((OdIx f0 f1 f2 f3 _ f5 f6) (OdIx f0 f1 f2 f3 v f5 f6))))
+(fn odx_set_nrows ((x OdIx) (v (IntMap (List Int)))) OdIx (match x ((OdIx f0 f1 f2 f3 f4 _ f6) (OdIx f0 f1 f2 f3 f4 v f6))))
+(fn odx_set_pmemo ((x OdIx) (v (IntMap (List (Pair Name Bool))))) OdIx (match x ((OdIx f0 f1 f2 f3 f4 f5 _) (OdIx f0 f1 f2 f3 f4 f5 v))))
+(fn odx0 ((export (List Int)) (index (List Int)) (h IxHdr)) OdIx (OdIx export index h IMEmpty IMEmpty IMEmpty IMEmpty))
+(fn odx_records ((x OdIx)) Int (ix_hdr_records (odx_hdr x)))
+;; what K has been fed: the name, level and expression ids and the record ordinals
+(type OdDone (OdDone (IntMap Bool) (IntMap Bool) (IntMap Bool) (IntMap Bool)))
+(fn odd_names ((x OdDone)) (IntMap Bool) (match x ((OdDone a _ _ _) a)))
+(fn odd_levels ((x OdDone)) (IntMap Bool) (match x ((OdDone _ a _ _) a)))
+(fn odd_exprs ((x OdDone)) (IntMap Bool) (match x ((OdDone _ _ a _) a)))
+(fn odd_recs ((x OdDone)) (IntMap Bool) (match x ((OdDone _ _ _ a) a)))
+(fn odd_set_names ((x OdDone) (v (IntMap Bool))) OdDone (match x ((OdDone _ f1 f2 f3) (OdDone v f1 f2 f3))))
+(fn odd_set_levels ((x OdDone) (v (IntMap Bool))) OdDone (match x ((OdDone f0 _ f2 f3) (OdDone f0 v f2 f3))))
+(fn odd_set_exprs ((x OdDone) (v (IntMap Bool))) OdDone (match x ((OdDone f0 f1 _ f3) (OdDone f0 f1 v f3))))
+(fn odd_set_recs ((x OdDone) (v (IntMap Bool))) OdDone (match x ((OdDone f0 f1 f2 _) (OdDone f0 f1 f2 v))))
+(fn odd0 () OdDone (OdDone IMEmpty IMEmpty IMEmpty IMEmpty))
+(fn odd_has ((d OdDone) (kind Int) (id Int)) Bool
+  (if (int_eq kind 0) (im_has (odd_names d) id)
+  (if (int_eq kind 1) (im_has (odd_levels d) id)
+  (if (int_eq kind 2) (im_has (odd_exprs d) id)
+    (im_has (odd_recs d) id)))))
+(fn odd_add ((d OdDone) (kind Int) (id Int)) OdDone
+  (if (int_eq kind 0) (odd_set_names d (im_insert (odd_names d) id True))
+  (if (int_eq kind 1) (odd_set_levels d (im_insert (odd_levels d) id True))
+  (if (int_eq kind 2) (odd_set_exprs d (im_insert (odd_exprs d) id True))
+    (odd_set_recs d (im_insert (odd_recs d) id True))))))
+
+(type OdOpen (OdOpened OdIx) (OdOpenErr Symbol (List Int)))
+;; the export and its index opened: the meta line against the pin, the index's header,
+;; the export's size the header's
+(fn od_open ((export (List Int)) (index (List Int)) (w World)) (Pair OdOpen World)
+  (match (read_range export 0 4096 w)
+    ((Pair None w1) (Pair (OdOpenErr (quote missing_file) "the export") w1))
+    ((Pair (Some bs) w1)
+     (match (od_check_meta bs)
+       ((Some msg) (Pair (OdOpenErr (quote export_pin_mismatch) msg) w1))
+       (None
+        (match (ix_read_header index w1)
+          ((Pair None w2) (Pair (OdOpenErr (quote init_index_stale) (append "no index at " (append index " (kernel/test/init_index.sh)"))) w2))
+          ((Pair (Some h) w2)
+           (match (ix_verify_size export (ix_hdr_bytes h) w2)
+             ((Pair False w3) (Pair (OdOpenErr (quote init_index_stale) (append "the index is over an export of " (append (show_nat (ix_hdr_bytes h)) " bytes; rebuild it (kernel/test/init_index.sh)"))) w3))
+             ((Pair True w3) (Pair (OdOpened (odx0 export index h)) w3))))))))))
+
+;; a name's ordinal in the export, None when Init declares no such constant; memoized, the
+;; binary search's top ten levels of name rows cached (the rows every search reads)
+(fn od_lookup ((x OdIx) (nm Name) (w World)) (Pair (Pair OdIx (Option Int)) World)
+  (let ((k (name_key nm)))
+    (match (od_memo_find (match (im_find (odx_memo x) k) ((Some b) b) (None Nil)) nm)
+      ((Some o) (Pair (Pair x (if (lt o 0) None (Some o))) w))
+      (None
+       (match (od_search x (ix_pad (show_name nm) (ix_name_w)) 0 (- (ix_hdr_names (odx_hdr x)) 1) 0 64 w)
+         ((Pair (Pair x1 r) w1)
+          (let ((o (match r ((Some v) v) (None -1))))
+            (Pair (Pair (odx_set_memo x1 (im_insert (odx_memo x1) k (Cons (Pair nm o) (match (im_find (odx_memo x1) k) ((Some b) b) (None Nil))))) r) w1))))))))
+(fn od_memo_find ((b (List (Pair Name Int))) (nm Name)) (Option Int)
+  (measure (struct b))
+  (match b (Nil None) ((Cons (Pair n o) r) (if (name_eq n nm) (Some o) (od_memo_find r nm)))))
+(fn od_nrow ((x OdIx) (k Int) (cache Bool) (w World)) (Pair (Pair OdIx (Option (List Int))) World)
+  (match (im_find (odx_nrows x) k)
+    ((Some row) (Pair (Pair x (Some row)) w))
+    (None
+     (match (ix_read_nrow (odx_index x) (odx_hdr x) k w)
+       ((Pair None w1) (Pair (Pair x None) w1))
+       ((Pair (Some row) w1) (Pair (Pair (if cache (odx_set_nrows x (im_insert (odx_nrows x) k row)) x) (Some row)) w1))))))
+(fn od_search ((x OdIx) (key (List Int)) (lo Int) (hi Int) (depth Int) (fuel Int) (w World)) (Pair (Pair OdIx (Option Int)) World)
+  (measure fuel)
+  (if (bool_or (le fuel 0) (lt hi lo)) (Pair (Pair x None) w)
+    (let ((mid (/ (+ lo hi) 2)))
+      (match (od_nrow x mid (lt depth 10) w)
+        ((Pair (Pair x1 None) w1) (Pair (Pair x1 None) w1))
+        ((Pair (Pair x1 (Some row)) w1)
+         (let ((k (take (ix_name_w) row)))
+           (if (int_list_eq k key) (Pair (Pair x1 (ix_field row (+ (ix_name_w) 1) 8)) w1)
+             (if (int_list_lt k key)
+               (od_search x1 key (+ mid 1) hi (+ depth 1) (- fuel 1) w1)
+               (od_search x1 key lo (- mid 1) (+ depth 1) (- fuel 1) w1)))))))))
+;; does the export declare anything under the prefix (a name rendering as `P.…`)? memoized
+(fn od_has_under ((x OdIx) (p Name) (w World)) (Pair (Pair OdIx Bool) World)
+  (let ((k (name_key p)))
+    (match (od_pmemo_find (match (im_find (odx_pmemo x) k) ((Some b) b) (None Nil)) p)
+      ((Some b) (Pair (Pair x b) w))
+      (None
+       (let ((prefix (append (show_name p) ".")))
+         (match (ix_lower (odx_index x) (odx_hdr x) prefix 0 (ix_hdr_names (odx_hdr x)) 64 w)
+           ((Pair i w1)
+            (match (ix_read_nrow (odx_index x) (odx_hdr x) i w1)
+              ((Pair row w2)
+               (let ((b (match row ((Some r) (ix_starts r prefix)) (None False))))
+                 (Pair (Pair (odx_set_pmemo x (im_insert (odx_pmemo x) k (Cons (Pair p b) (match (im_find (odx_pmemo x) k) ((Some bb) bb) (None Nil))))) b) w2)))))))))))
+(fn od_pmemo_find ((b (List (Pair Name Bool))) (nm Name)) (Option Bool)
+  (measure (struct b))
+  (match b (Nil None) ((Cons (Pair n v) r) (if (name_eq n nm) (Some v) (od_pmemo_find r nm)))))
+;; a rendered name's ordinal — the name table is keyed by the rendering — or None
+(fn od_lookup_text ((x OdIx) (text (List Int)) (w World)) (Pair (Pair OdIx (Option Int)) World)
+  (od_search x (ix_pad text (ix_name_w)) 0 (- (ix_hdr_names (odx_hdr x)) 1) 0 64 w))
+;; every declared name rendering with the prefix, as rendered
+(fn od_names_under ((x OdIx) (prefix (List Int)) (w World)) (Pair (List (List Int)) World)
+  (ix_names_under (odx_index x) (odx_hdr x) prefix w))
+;; record row k, cached
+(fn od_row ((x OdIx) (k Int) (w World)) (Pair (Pair OdIx (Option IxRow)) World)
+  (match (im_find (odx_rows x) k)
+    ((Some r) (Pair (Pair x (Some r)) w))
+    (None
+     (match (ix_read_row (odx_index x) (odx_hdr x) k w)
+       ((Pair None w1) (Pair (Pair x None) w1))
+       ((Pair (Some r) w1) (Pair (Pair (odx_set_rows x (im_insert (odx_rows x) k r)) (Some r)) w1))))))
+;; the kind byte of ordinal k's record: a d t o i q, 0 when there is no such row
+(fn od_kind_of ((x OdIx) (k Int) (w World)) (Pair (Pair OdIx Int) World)
+  (match (od_row x k w)
+    ((Pair (Pair x1 (Some r)) w1) (Pair (Pair x1 (ix_row_kind r)) w1))
+    ((Pair (Pair x1 None) w1) (Pair (Pair x1 0) w1))))
+;; the ordinal of the block holding the id (which: 0 name, 1 level, 2 expression): the last
+;; row whose first id is at most it, the rows cached
+(fn od_block_of ((x OdIx) (which Int) (id Int) (w World)) (Pair (Pair OdIx (Option Int)) World)
+  (od_block_search x which id 0 (- (odx_records x) 1) -1 64 w))
+(fn od_block_search ((x OdIx) (which Int) (id Int) (lo Int) (hi Int) (best Int) (fuel Int) (w World)) (Pair (Pair OdIx (Option Int)) World)
+  (measure fuel)
+  (if (bool_or (le fuel 0) (lt hi lo)) (Pair (Pair x (if (lt best 0) None (Some best))) w)
+    (let ((mid (/ (+ lo hi) 2)))
+      (match (od_row x mid w)
+        ((Pair (Pair x1 None) w1) (Pair (Pair x1 None) w1))
+        ((Pair (Pair x1 (Some row)) w1)
+         (if (le (ix_row_first row which) id)
+           (od_block_search x1 which id (+ mid 1) hi mid (- fuel 1) w1)
+           (od_block_search x1 which id lo (- mid 1) best (- fuel 1) w1)))))))
+
+;; ---- the walk ----------------------------------------------------------------------------------
+;; a line extracted: its byte offset, the ordinal of the record it is (-1: a node line), its bytes
+(type OdLine (OdLine Int Int (List Int)))
+;; the pending name, level and expression ids and record ordinals (not yet extracted), the
+;; blocks scheduled (descending, no duplicate), the lines extracted newest first, the last
+;; offset extracted, whether the offsets came out descending, the first failure
+(type OdWalk (OdWalk (IntMap Bool) (IntMap Bool) (IntMap Bool) (IntMap Bool) (List Int) (List OdLine) Int Bool (List Int)))
+(fn odw_pn ((x OdWalk)) (IntMap Bool) (match x ((OdWalk a _ _ _ _ _ _ _ _) a)))
+(fn odw_pl ((x OdWalk)) (IntMap Bool) (match x ((OdWalk _ a _ _ _ _ _ _ _) a)))
+(fn odw_pe ((x OdWalk)) (IntMap Bool) (match x ((OdWalk _ _ a _ _ _ _ _ _) a)))
+(fn odw_pr ((x OdWalk)) (IntMap Bool) (match x ((OdWalk _ _ _ a _ _ _ _ _) a)))
+(fn odw_sched ((x OdWalk)) (List Int) (match x ((OdWalk _ _ _ _ a _ _ _ _) a)))
+(fn odw_out ((x OdWalk)) (List OdLine) (match x ((OdWalk _ _ _ _ _ a _ _ _) a)))
+(fn odw_last ((x OdWalk)) Int (match x ((OdWalk _ _ _ _ _ _ a _ _) a)))
+(fn odw_sorted ((x OdWalk)) Bool (match x ((OdWalk _ _ _ _ _ _ _ a _) a)))
+(fn odw_bad ((x OdWalk)) (List Int) (match x ((OdWalk _ _ _ _ _ _ _ _ a) a)))
+(fn odw_set_pn ((x OdWalk) (v (IntMap Bool))) OdWalk (match x ((OdWalk _ f1 f2 f3 f4 f5 f6 f7 f8) (OdWalk v f1 f2 f3 f4 f5 f6 f7 f8))))
+(fn odw_set_pl ((x OdWalk) (v (IntMap Bool))) OdWalk (match x ((OdWalk f0 _ f2 f3 f4 f5 f6 f7 f8) (OdWalk f0 v f2 f3 f4 f5 f6 f7 f8))))
+(fn odw_set_pe ((x OdWalk) (v (IntMap Bool))) OdWalk (match x ((OdWalk f0 f1 _ f3 f4 f5 f6 f7 f8) (OdWalk f0 f1 v f3 f4 f5 f6 f7 f8))))
+(fn odw_set_pr ((x OdWalk) (v (IntMap Bool))) OdWalk (match x ((OdWalk f0 f1 f2 _ f4 f5 f6 f7 f8) (OdWalk f0 f1 f2 v f4 f5 f6 f7 f8))))
+(fn odw_set_sched ((x OdWalk) (v (List Int))) OdWalk (match x ((OdWalk f0 f1 f2 f3 _ f5 f6 f7 f8) (OdWalk f0 f1 f2 f3 v f5 f6 f7 f8))))
+(fn odw_set_out ((x OdWalk) (v (List OdLine))) OdWalk (match x ((OdWalk f0 f1 f2 f3 f4 _ f6 f7 f8) (OdWalk f0 f1 f2 f3 f4 v f6 f7 f8))))
+(fn odw_set_last ((x OdWalk) (v Int)) OdWalk (match x ((OdWalk f0 f1 f2 f3 f4 f5 _ f7 f8) (OdWalk f0 f1 f2 f3 f4 f5 v f7 f8))))
+(fn odw_set_sorted ((x OdWalk) (v Bool)) OdWalk (match x ((OdWalk f0 f1 f2 f3 f4 f5 f6 _ f8) (OdWalk f0 f1 f2 f3 f4 f5 f6 v f8))))
+(fn odw_set_bad ((x OdWalk) (v (List Int))) OdWalk (match x ((OdWalk f0 f1 f2 f3 f4 f5 f6 f7 _) (OdWalk f0 f1 f2 f3 f4 f5 f6 f7 v))))
+(fn odw0 () OdWalk (OdWalk IMEmpty IMEmpty IMEmpty IMEmpty Nil Nil 1000000000000 True Nil))
+(fn odw_pending ((wk OdWalk) (kind Int) (id Int)) Bool
+  (if (int_eq kind 0) (im_has (odw_pn wk) id)
+  (if (int_eq kind 1) (im_has (odw_pl wk) id)
+  (if (int_eq kind 2) (im_has (odw_pe wk) id)
+    (im_has (odw_pr wk) id)))))
+(fn odw_mark ((wk OdWalk) (kind Int) (id Int) (v Bool)) OdWalk
+  (if (int_eq kind 0) (odw_set_pn wk (im_insert (odw_pn wk) id v))
+  (if (int_eq kind 1) (odw_set_pl wk (im_insert (odw_pl wk) id v))
+  (if (int_eq kind 2) (odw_set_pe wk (im_insert (odw_pe wk) id v))
+    (odw_set_pr wk (im_insert (odw_pr wk) id v))))))
+(fn odw_fail ((wk OdWalk) (msg (List Int))) OdWalk
+  (match (odw_bad wk) ((Cons _ _) wk) (Nil (odw_set_bad wk msg))))
+;; a block scheduled: descending, once
+(fn odw_schedule ((wk OdWalk) (b Int)) OdWalk (odw_set_sched wk (od_sched_add (odw_sched wk) b)))
+(fn od_sched_add ((s (List Int)) (b Int)) (List Int)
+  (measure (struct s))
+  (match s
+    (Nil (list b))
+    ((Cons x r) (if (int_eq x b) s (if (lt x b) (Cons b s) (Cons x (od_sched_add r b)))))))
+;; a line extracted: newest first; the offsets descending unless a push went upward
+(fn odw_extract ((wk OdWalk) (ln OdLine)) OdWalk
+  (match ln
+    ((OdLine off _ _)
+     (odw_set_sorted (odw_set_last (odw_set_out wk (Cons ln (odw_out wk))) off) (bool_and (odw_sorted wk) (lt off (odw_last wk)))))))
+(fn od_kind_name ((kind Int)) (List Int)
+  (if (int_eq kind 0) "name" (if (int_eq kind 1) "level" (if (int_eq kind 2) "expression" "record"))))
+
+;; the ids a line refers to: names, levels, expressions, and the names of the constants it
+;; cites (whose declarations are needed)
+(type OdRefs (OdRefs (List Int) (List Int) (List Int) (List Int)))
+(fn od_int ((o Json) (key (List Int))) (List Int)
+  (match (jget o key) ((Some v) (match (jint v) ((Some i) (list i)) (None Nil))) (None Nil)))
+(fn od_ints ((o Json) (key (List Int))) (List Int)
+  (match (jget o key) ((Some v) (match (jarr v) ((Some xs) (od_int_list xs Nil)) (None Nil))) (None Nil)))
+(fn od_int_list ((xs (List Json)) (acc (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs (Nil (rev acc)) ((Cons x r) (od_int_list r (match (jint x) ((Some i) (Cons i acc)) (None acc))))))
+(fn od_sub_int ((j Json) (k1 (List Int)) (k2 (List Int))) (List Int)
+  (match (jget j k1) ((Some o) (od_int o k2)) (None Nil)))
+(fn od_sub_ints ((j Json) (k1 (List Int)) (k2 (List Int))) (List Int)
+  (match (jget j k1) ((Some o) (od_ints o k2)) (None Nil)))
+(fn od_objs ((o Json) (key (List Int))) (List Json)
+  (match (jget o key) ((Some v) (match (jarr v) ((Some xs) xs) (None Nil))) (None Nil)))
+;; the key's int or ints in each object
+(fn od_each ((xs (List Json)) (key (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs (Nil Nil) ((Cons x r) (append (od_int x key) (append (od_ints x key) (od_each r key))))))
+(fn od_rules ((rs (List Json)) (key (List Int))) (List Int)
+  (measure (struct rs))
+  (match rs (Nil Nil) ((Cons x r) (append (od_each (od_objs x "rules") key) (od_rules r key)))))
+;; a record line's references
+(fn od_record_refs ((j Json)) (Option OdRefs)
+  (match (jkind_of_record j)
+    (None None)
+    ((Some kind)
+     (if (int_list_eq kind "inductive")
+       (match (jget j "inductive")
+         (None None)
+         ((Some o)
+          (let ((ts (od_objs o "types")) (cs (od_objs o "ctors")) (rs (od_objs o "recs")))
+            (Some (OdRefs (append (od_each ts "name") (append (od_each ts "all") (append (od_each ts "ctors") (append (od_each ts "levelParams")
+                           (append (od_each cs "name") (append (od_each cs "induct") (append (od_each cs "levelParams")
+                           (append (od_each rs "name") (append (od_each rs "all") (append (od_each rs "levelParams") (od_rules rs "ctor")))))))))))
+                          Nil
+                          (append (od_each ts "type") (append (od_each cs "type") (append (od_each rs "type") (od_rules rs "rhs"))))
+                          Nil)))))
+       (match (jget j kind)
+         (None None)
+         ((Some o)
+          (Some (OdRefs (append (od_int o "name") (append (od_ints o "levelParams") (od_ints o "all")))
+                        Nil
+                        (append (od_int o "type") (od_int o "value"))
+                        Nil))))))))
+;; a node line's references by its kind (0 name, 1 level, 2 expression)
+(fn od_node_refs ((kind Int) (j Json)) OdRefs
+  (if (int_eq kind 0)
+    (OdRefs (append (od_sub_int j "str" "pre") (od_sub_int j "num" "pre")) Nil Nil Nil)
+  (if (int_eq kind 1)
+    (OdRefs (od_int j "param") (append (od_ints j "max") (append (od_ints j "imax") (od_int j "succ"))) Nil Nil)
+    (let ((c (append (od_sub_int j "const" "name") (od_sub_int j "proj" "typeName"))))
+      (OdRefs (append c (append (od_sub_int j "forallE" "name") (append (od_sub_int j "lam" "name") (od_sub_int j "letE" "name"))))
+              (append (od_int j "sort") (od_sub_ints j "const" "us"))
+              (append (od_sub_int j "app" "fn") (append (od_sub_int j "app" "arg")
+               (append (od_sub_int j "forallE" "type") (append (od_sub_int j "forallE" "body")
+               (append (od_sub_int j "lam" "type") (append (od_sub_int j "lam" "body")
+               (append (od_sub_int j "letE" "type") (append (od_sub_int j "letE" "value") (append (od_sub_int j "letE" "body")
+               (od_sub_int j "proj" "struct"))))))))))
+              c)))))
+;; a node line's kind and id, read without parsing
+(fn od_line_id ((line (List Int))) (Option (Pair Int Int))
+  (match (ix_id_in line "in")
+    ((Some i) (Some (Pair 0 i)))
+    (None
+     (match (ix_id_in line "il")
+       ((Some i) (Some (Pair 1 i)))
+       (None (match (ix_id_in line "ie") ((Some i) (Some (Pair 2 i))) (None None)))))))
+
+;; an id pushed: nothing when fed already or pending; in this block (its first id at most
+;; the id) pending for the scan to reach; in an earlier block, that block scheduled
+(fn od_push ((x OdIx) (wk OdWalk) (done OdDone) (row IxRow) (kind Int) (id Int) (w World)) (Pair (Pair OdIx OdWalk) World)
+  (if (bool_and (lt kind 2) (int_eq id 0)) (Pair (Pair x wk) w)   ; the anonymous name, level zero: no line
+  (if (bool_or (odd_has done kind id) (odw_pending wk kind id)) (Pair (Pair x wk) w)
+  (if (le (ix_row_first row kind) id) (Pair (Pair x (odw_mark wk kind id True)) w)
+    (match (od_block_of x kind id w)
+      ((Pair (Pair x1 None) w1) (Pair (Pair x1 (odw_fail wk (append "no block holds " (append (od_kind_name kind) (append " id " (show_nat id)))))) w1))
+      ((Pair (Pair x1 (Some b)) w1) (Pair (Pair x1 (odw_schedule (odw_mark wk kind id True) b)) w1)))))))
+(fn od_push_ids ((x OdIx) (wk OdWalk) (done OdDone) (row IxRow) (kind Int) (ids (List Int)) (w World)) (Pair (Pair OdIx OdWalk) World)
+  (measure (struct ids))
+  (match ids
+    (Nil (Pair (Pair x wk) w))
+    ((Cons i r) (match (od_push x wk done row kind i w) ((Pair (Pair x1 wk1) w1) (od_push_ids x1 wk1 done row kind r w1))))))
+;; a record pushed by its ordinal: its block is itself
+(fn od_push_rec ((wk OdWalk) (done OdDone) (o Int)) OdWalk
+  (if (bool_or (odd_has done 3 o) (odw_pending wk 3 o)) wk (odw_schedule (odw_mark wk 3 o True) o)))
+(fn od_push_recs ((wk OdWalk) (done OdDone) (os (List Int))) OdWalk
+  (measure (struct os))
+  (match os (Nil wk) ((Cons o r) (od_push_recs (od_push_rec wk done o) done r))))
+;; the constants cited: each name id to the record declaring it
+(fn od_push_consts ((x OdIx) (wk OdWalk) (done OdDone) (ids (List Int)) (w World)) (Pair (Pair OdIx OdWalk) World)
+  (measure (struct ids))
+  (match ids
+    (Nil (Pair (Pair x wk) w))
+    ((Cons i r)
+     (match (ix_decl_of (odx_index x) (odx_hdr x) i w)
+       ((Pair None w1) (Pair (Pair x (odw_fail wk (append "a constant with no declaration: name id " (show_nat i)))) w1))
+       ((Pair (Some o) w1) (od_push_consts x (od_push_rec wk done o) done r w1))))))
+(fn od_push_refs ((x OdIx) (wk OdWalk) (done OdDone) (row IxRow) (refs OdRefs) (w World)) (Pair (Pair OdIx OdWalk) World)
+  (match refs
+    ((OdRefs ns ls es cs)
+     (match (od_push_ids x wk done row 0 ns w)
+       ((Pair (Pair x1 wk1) w1)
+        (match (od_push_ids x1 wk1 done row 1 ls w1)
+          ((Pair (Pair x2 wk2) w2)
+           (match (od_push_ids x2 wk2 done row 2 es w2)
+             ((Pair (Pair x3 wk3) w3) (od_push_consts x3 wk3 done cs w3))))))))))
+
+;; a block's lines with their offsets, the record line first (the block reversed)
+(fn od_block_lines ((bs (List Int)) (pos Int) (acc (List (Pair Int (List Int))))) (List (Pair Int (List Int)))
+  (measure (struct bs))
+  (match bs
+    (Nil acc)
+    (_ (match (take_line bs Nil)
+         ((Pair line rest) (od_block_lines rest (+ pos (+ (len line) 1)) (Cons (Pair pos line) acc)))))))
+;; the scan of one block from its record line back: a pending line is parsed, its references
+;; pushed, the line extracted
+(fn od_scan ((x OdIx) (wk OdWalk) (done OdDone) (row IxRow) (lines (List (Pair Int (List Int)))) (first Bool) (w World)) (Pair (Pair OdIx (Pair OdWalk OdDone)) World)
+  (measure (struct lines))
+  (match lines
+    (Nil (Pair (Pair x (Pair wk done)) w))
+    ((Cons (Pair off line) rest)
+     (if first
+       (if (odw_pending wk 3 (ix_row_ord row))
+         (match (json_parse line)
+           (JErr (Pair (Pair x (Pair (odw_fail wk (append "a record is not JSON at byte " (show_nat off))) done)) w))
+           ((JRes j _)
+            (match (od_record_refs j)
+              (None (Pair (Pair x (Pair (odw_fail wk (append "a malformed record at byte " (show_nat off))) done)) w))
+              ((Some refs)
+               (match (od_push_refs x wk done row refs w)
+                 ((Pair (Pair x1 wk1) w1)
+                  (od_scan x1 (odw_extract (odw_mark wk1 3 (ix_row_ord row) False) (OdLine off (ix_row_ord row) line)) (odd_add done 3 (ix_row_ord row)) row rest False w1)))))))
+         (od_scan x wk done row rest False w))
+       (match (od_line_id line)
+         (None (if (int_eq (len line) 0) (od_scan x wk done row rest False w)
+                 (Pair (Pair x (Pair (odw_fail wk (append "a line without an id at byte " (show_nat off))) done)) w)))
+         ((Some (Pair kind id))
+          (if (odw_pending wk kind id)
+            (match (json_parse line)
+              (JErr (Pair (Pair x (Pair (odw_fail wk (append "a line is not JSON at byte " (show_nat off))) done)) w))
+              ((JRes j _)
+               (match (od_push_refs x wk done row (od_node_refs kind j) w)
+                 ((Pair (Pair x1 wk1) w1)
+                  (od_scan x1 (odw_extract (odw_mark wk1 kind id False) (OdLine off -1 line)) (odd_add done kind id) row rest False w1)))))
+            (od_scan x wk done row rest False w))))))))
+;; the walk: the highest scheduled block read and scanned, until none is scheduled
+(fn od_walk ((x OdIx) (wk OdWalk) (done OdDone) (fuel Int) (w World)) (Pair (Pair OdIx (Pair OdWalk OdDone)) World)
+  (measure fuel)
+  (if (le fuel 0) (Pair (Pair x (Pair (odw_fail wk "the block budget") done)) w)
+    (match (odw_bad wk)
+      ((Cons _ _) (Pair (Pair x (Pair wk done)) w))
+      (Nil
+       (match (odw_sched wk)
+         (Nil (Pair (Pair x (Pair wk done)) w))
+         ((Cons b rest)
+          (match (od_row x b w)
+            ((Pair (Pair x1 None) w1) (Pair (Pair x1 (Pair (odw_fail wk (append "no record row " (show_nat b))) done)) w1))
+            ((Pair (Pair x1 (Some row)) w1)
+             (match (read_range (odx_export x1) (ix_row_off row) (ix_row_len row) w1)
+               ((Pair None w2) (Pair (Pair x1 (Pair (odw_fail wk (append "cannot read " (odx_export x1))) done)) w2))
+               ((Pair (Some bs) w2)
+                (match (od_scan x1 (odw_set_sched wk rest) done row (od_block_lines bs (ix_row_off row) Nil) True w2)
+                  ((Pair (Pair x2 (Pair wk2 done2)) w3) (od_walk x2 wk2 done2 (- fuel 1) w3)))))))))))))
+
+;; the lines in export order: extracted highest offset first and consed, they stand ascending
+;; unless a push went upward, when they are sorted
+(fn od_ordered ((wk OdWalk)) (List OdLine)
+  (if (odw_sorted wk) (odw_out wk) (od_sort_lines (odw_out wk))))
+(fn od_line_off ((ln OdLine)) Int (match ln ((OdLine off _ _) off)))
+(fn od_sort_lines ((xs (List OdLine))) (List OdLine)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons x Nil) (list x))
+    (_ (match (od_split_lines xs Nil Nil) ((Pair a b) (od_merge_lines (od_sort_lines a) (od_sort_lines b)))))))
+(fn od_split_lines ((xs (List OdLine)) (a (List OdLine)) (b (List OdLine))) (Pair (List OdLine) (List OdLine))
+  (measure (struct xs))
+  (match xs
+    (Nil (Pair a b))
+    ((Cons x Nil) (Pair (Cons x a) b))
+    ((Cons x (Cons y r)) (od_split_lines r (Cons x a) (Cons y b)))))
+(fn od_merge_lines ((a (List OdLine)) (b (List OdLine))) (List OdLine)
+  (measure (+ (len a) (len b)))
+  (match a
+    (Nil b)
+    ((Cons x ar)
+     (match b
+       (Nil a)
+       ((Cons y br)
+        (if (lt (od_line_off y) (od_line_off x)) (Cons y (od_merge_lines a br)) (Cons x (od_merge_lines ar b))))))))
+
+;; ---- the sub-stream through K --------------------------------------------------------------------
+;; the run after the lines, the constants admitted with their ordinals, the records fed; or
+;; the first verdict that is not an acceptance
+(type OdFed (OdFed Run (List (Pair Name Int)) Int) (OdFedErr (List Int)))
+(fn od_feed ((run Run) (ls (List OdLine)) (acc (List (Pair Name Int))) (n Int)) OdFed
+  (measure (struct ls))
+  (match ls
+    (Nil (OdFed run (rev acc) n))
+    ((Cons (OdLine off o line) r)
+     (match (json_parse line)
+       (JErr (OdFedErr (append "a line is not JSON at byte " (show_nat off))))
+       ((JRes j _)
+        (match (process_record run j)
+          ((Pair run1 v)
+           (match v
+             (VSkip (od_feed run1 r acc n))
+             ((VAccept _) (od_feed run1 r (od_with_ordinal (record_constants (run_tabs run1) j v) o acc) (+ n 1)))
+             (_ (OdFedErr (match (show_verdict v) ((Some t) t) (None "?"))))))))))))
+(fn od_with_ordinal ((ns (List Name)) (o Int) (acc (List (Pair Name Int)))) (List (Pair Name Int))
+  (measure (struct ns))
+  (match ns (Nil acc) ((Cons nm r) (od_with_ordinal r o (Cons (Pair nm o) acc)))))
+
+;; the load: the records' closure walked and fed to the run — the constants admitted with
+;; their ordinals, the records fed, and the lines, for a second environment to admit (the
+;; loader's, which holds native declarations beside Init's: od_admit). On a failure the run
+;; and the record of what was fed are the ones given — nothing of a partial feed persists
+(type OdLoad (OdLoaded OdIx Run OdDone (List (Pair Name Int)) Int (List OdLine)) (OdLoadErr OdIx Symbol (List Int)))
+(fn od_load ((x OdIx) (run Run) (done OdDone) (ords (List Int)) (w World)) (Pair OdLoad World)
+  (match (od_walk x (od_push_recs (odw0) done ords) done 10000000 w)
+    ((Pair (Pair x1 (Pair wk done1)) w1)
+     (match (odw_bad wk)
+       ((Cons _ _) (Pair (OdLoadErr x1 (quote init_malformed) (odw_bad wk)) w1))
+       (Nil
+        (let ((ls (od_ordered wk)))
+          (match (od_feed run ls Nil 0)
+            ((OdFed run1 cs n) (Pair (OdLoaded x1 run1 done1 cs n ls) w1))
+            ((OdFedErr msg) (Pair (OdLoadErr x1 (quote init_refused) msg) w1)))))))))
+;; the lines a load fed admitted into another environment over the run's tables (the run
+;; that checked them): the records enter without the typing judgments, as under a receipt
+(fn od_admit ((run Run) (env CheckedEnv) (ls (List OdLine))) (Option CheckedEnv)
+  (match (od_feed (run_admitting (run_with_env run env (st_for env)) True) ls Nil 0)
+    ((OdFed run1 _ _) (Some (run_env run1)))
+    ((OdFedErr _) None)))
+
+;; ---- a stream's citations (the release gate's demand) ------------------------------------------
+;; the constants a stream's expression lines cite, by name: its own name lines resolve them
+(fn od_consts_of_stream ((bs (List Int))) (List Name)
+  (match (od_stream_consts bs IMEmpty IMEmpty Nil 100000000)
+    ((Pair _ ns) (rev ns))))
+(fn od_stream_consts ((bs0 (List Int)) (names (IntMap Name)) (seen (IntMap Bool)) (acc (List Name)) (fuel Int)) (Pair (IntMap Bool) (List Name))
+  (measure fuel)
+  (if (le fuel 0) (Pair seen acc)
+    (let ((bs (skip_ws bs0)))
+      (match bs
+        (Nil (Pair seen acc))
+        (_
+         (match (json_parse bs)
+           (JErr (Pair seen acc))
+           ((JRes j rest)
+            (match (od_line_id_j j)
+              ((Some (Pair 0 i))
+               (od_stream_consts rest (match (od_name_of names j) ((Some nm) (im_insert names i nm)) (None names)) seen acc (- fuel 1)))
+              ((Some (Pair 2 _))
+               (match (od_stream_cited names seen acc (append (od_sub_int j "const" "name") (od_sub_int j "proj" "typeName")))
+                 ((Pair seen1 acc1) (od_stream_consts rest names seen1 acc1 (- fuel 1)))))
+              (_ (od_stream_consts rest names seen acc (- fuel 1)))))))))))
+(fn od_stream_cited ((names (IntMap Name)) (seen (IntMap Bool)) (acc (List Name)) (ids (List Int))) (Pair (IntMap Bool) (List Name))
+  (measure (struct ids))
+  (match ids
+    (Nil (Pair seen acc))
+    ((Cons i r)
+     (if (im_has seen i) (od_stream_cited names seen acc r)
+       (match (im_find names i)
+         ((Some nm) (od_stream_cited names (im_insert seen i True) (Cons nm acc) r))
+         (None (od_stream_cited names seen acc r)))))))
+(fn od_line_id_j ((j Json)) (Option (Pair Int Int))
+  (match (od_int j "in")
+    ((Cons i _) (Some (Pair 0 i)))
+    (Nil (match (od_int j "il") ((Cons i _) (Some (Pair 1 i))) (Nil (match (od_int j "ie") ((Cons i _) (Some (Pair 2 i))) (Nil None)))))))
+(fn od_name_of ((names (IntMap Name)) (j Json)) (Option Name)
+  (match (jget j "str")
+    ((Some o)
+     (match (od_int o "pre")
+       ((Cons pre _)
+        (match (jget o "str")
+          ((Some sv) (match (jstr sv) ((Some s) (match (od_name_at names pre) ((Some p) (Some (Str p (sym_of_chars s)))) (None None))) (None None)))
+          (None None)))
+       (Nil None)))
+    (None
+     (match (jget j "num")
+       ((Some o)
+        (match (od_int o "pre")
+          ((Cons pre _) (match (od_int o "i") ((Cons k _) (match (od_name_at names pre) ((Some p) (Some (Num p k))) (None None))) (Nil None)))
+          (Nil None)))
+       (None None)))))
+(fn od_name_at ((names (IntMap Name)) (i Int)) (Option Name)
+  (if (int_eq i 0) (Some Anon) (im_find names i)))

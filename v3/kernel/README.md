@@ -68,8 +68,9 @@ the client fixture `test/k_client_test.shard`; `ConstantVal`'s accessors
 | `tactic.shard` | `Goal Node NodeRes BlockRes Opened Made TStep OpenedM Premises IndOf Minors EqOf Rewritten Redex Found RdApp Loop FactsRes TacRes ProveRes` | **slice 3.21:** `arith` (`step_arith` over `arith.shard`), `simp_only` (`simp_loop`: the first rule with a match whose premises the context states), one spelling for every goal (`tac_goal`) and lemma (`eq_of_lemma`), `alt_step` (a decided case analysis in one step), the sorried goals in the pending record (`goals_bracketed`). **phase 3, slice 3.20 (2026-10-06):** I's opener (`v3/LANGUAGE.md` §8.4, §13 item 53; law §7): `read_block` reads `(by STEP…)` into `Node`, `tac_step` runs a node on a goal (a metavariable over the statement closed over its context: `tac_open`, `tac_goal`, `tac_close`), `tac_block` a block depth-first, `tac_prove` instantiates the root; the forms `intro exact rfl have show apply cases induction wf decide unfold reduce rw sorry`; the syntactic matcher `tac_match`, the rewriter `rewrite_by` (`Eq.mpr (congrArg motive h)`), the normalizer `find_redex`/`reduce_loop`/`unfold_loop` (equations and K's whnf with function applications masked); `goal_of`, `applicable` | the reader's `read_proof`; the pins `by_*`; `kernel/test/tactic_test.sh` |
 | `engine.shard` | `Hints HintsRes EngRes Produced` | **phase 3, slice 3.22, landing 2 (2026-10-07):** the engine, a producer of I as an ordinary E library over the fixed API (`v3/LANGUAGE.md` §8.4 slice 3.22 rule 5; law §7.3): `engine_prove` composes `tac_open`, `applicable` and `tac_step` into a ladder, cheapest first — `intro`, `rfl`, `(reduce) rfl`, `decide`, `(arith only …)` over the context's comparisons with the certificate `arith` found written, `(simp_only …)` over the functions' equations and the context's equations then `rfl` or `arith`, `induction` on the hinted local then on each local of an inductive type the target mentions (before the introductions too, so the hypothesis quantifies the binders) —, every node confirmed by `tac_step` as it is chosen; the hints `(induct X)`, `(lemmas NAME…)`, `(budget N)`; `node_sx` renders a block as I's concrete syntax |
 | `store.shard` | `SW StoreSt StoreRes` | **phase 3, slice 3.22, landing 3 (2026-10-08):** the store writer (`v3/LANGUAGE.md` §8.4 slice 3.22 rule 7; law §7.5): `store_records` renders an admitted constant of K's environment as the records K ingests — lean4export's NDJSON, field for field what `k/import.shard` reads: the tables the declaration cites numbered from 1 in first-use order, shared by strict structural identity (binder names and infos compared), then the declaration record; an inductive type as its block with the recursors K generated —; `store_write` places each declaration under `DIR/FP.ndjson` (`FP-K` past a collision), shares a file already holding the text, and appends `DIR/order` (`ID NAME`, admission order). Never trusted: K re-checks every record (verify_release.shard) |
-| `index.shard` | `IxRow IxHdr IxSt IxOut` | **phase 3, slice 3.26, landing 1 (2026-10-09):** the Init index (`v3/LANGUAGE.md` §8.4 slice 3.26 rule 1) — the record table (a 62-byte row per record: kind, its block's byte offset and length, the block's first name, level and expression id) and the name table (a 218-byte row per declaration name, sorted) over the export, built by one pass (`ix_build`) and read by range (`ix_read_row`, `ix_lookup`, `ix_block_of_id`), never loaded whole; `ix_verify` reads both back against the export |
-| `initindex.shard` | — | the index's driver: `eval direct v3/kernel/initindex.shard EXPORT INDEX NAMES` builds the tables, `--verify EXPORT INDEX NAMES` reads them back; `test/init_index.sh` keeps `v3/.cache/init.index` and `init.names` current |
+| `index.shard` | `IxRow IxHdr IxSt IxOut` | **phase 3, slice 3.26, landings 1–2 (2026-10-09):** the Init index (`v3/LANGUAGE.md` §8.4 slice 3.26 rule 1) — one file: a 128-byte header, the record table (a 62-byte row per record: kind, its block's byte offset and length, the block's first name, level and expression id), the name table (a 218-byte row per declaration name, sorted) and the declaration table (a 9-byte row per name id: the ordinal of the record declaring that name) over the export, built by one pass (`ix_build`) and read by range (`ix_read_row`, `ix_lookup`, `ix_names_under`, `ix_decl_of`, `ix_block_of_id`), never loaded whole; `ix_verify` reads all three back against the export |
+| `initindex.shard` | — | the index's driver: `eval direct v3/kernel/initindex.shard EXPORT INDEX` builds the index, `--verify EXPORT INDEX` reads it back; `test/init_index.sh` keeps `v3/.cache/init.index` current and prints `EXPORT INDEX` |
+| `initload.shard` | `OdIx OdDone OdOpen OdWalk OdLine OdRefs OdFed OdLoad` | **slice 3.26, landing 2 (2026-10-09):** the Init load on demand (rules 2–5) — the export opened by its index (`od_open`: the meta line against the pin), a name's ordinal by binary search (`od_lookup`, memoized, the top rows cached), the names under a prefix (`od_names_under`), the closure of a set of records walked by range reads and fed to K in export order (`od_load`: blocks highest first, each scanned from its record line back, a cited constant by its name id through the declaration table; what was fed persists in `OdDone`), the same lines admitted into a second environment (`od_admit`), a stream's cited constants (`od_consts_of_stream`, the release gate's demand) |
 | `verify_release.shard` | `VL VR` | the release gate (rule 7): `eval direct v3/kernel/verify_release.shard [-v] DIR CHUNK…` — K, the host and the JSON reader, no elaborator; the Init CHUNKs as one stream, then each store file in `order`'s order as its own stream over the environment so far (fresh tables: a record a file lacks is MALFORMED there); each accepted declaration held to its order line's name and content fingerprint (MISTIED otherwise); `RELEASE: declarations N  accepted A  rejected … malformed X  mistied Y  missing Z`, exit = the declarations not accepted + malformed + mistied + missing + the chunks' failures |
 | `prove.shard` | `PArgs` | the producer's driver (slice 3.22 rule 6): `eval direct v3/kernel/prove.shard --root DIR [--init CHUNK]… FILE…` loads under the mode `solve` — an `auto` without a valid entry is the engine's, replayed before it is accepted — and rewrites each gaining file's sidecar whole (`FILE.auto.shard`, machine-owned: the entries not superseded, then the new ones); `--measure` runs the engine on every hand-written theorem's statement and prints the count (`ENGINE: solved S of N`); no source file is written |
 | `derive.shard` | `DvRaw DvField DvInj DvCtor DvGen DvRes DvCap DvCx` | **phase 3, slice 3.19 (2026-10-02):** deriving under a declared policy (`v3/LANGUAGE.md` §8.4, §13 item 52; law §5.1): `derive_form` reads `(derive TYPE CAPABILITY…)`, opens the type's constructors at its arguments through K, selects a procedure per capability and field (the elaborator's rows at `Nat`, `Int`, `Bool`; the function itself on a recursive field; else the derivation table's one visible entry, `scope.shard` `derived_for`) and writes `fn` forms as s-expressions — `NS.ctorIdx` (its own derivation, shared through the table), `NS.decEq`, `NS.compare`, `NS.renderOnto`/`NS.render` — which `loader.shard` `load_derive` loads as the file's own and registers (`DERIVE`), unless a constant already bears a generated name. `(CAPABILITY by NAME)` registers a hand-written procedure of the capability's type at any closed type. Generation only: K checks every definition, the programs are their erasures |
@@ -83,7 +84,7 @@ the client fixture `test/k_client_test.shard`; `ConstantVal`'s accessors
 | `reader.shard` | `RDecl Head RStmt` | **phase 2, slice 2; over the elaborator since slice 3.15:** the reader of the L forms, S forms → K's `Declaration` (§4): binders as K locals, the type and value elaborated at their expected types and closed over the locals; `structure` → the inductive plus abbrev projections over `proj`, the fields' types over one `self` local with the earlier fields as typed aliases; `inductive`'s own name citable in its constructors with the type it declares (`Defd`); a `type`'s parameters implicit in its constructors; `theorem` proofs `(exact TERM)` at the statement or `sorry` (pending, admits nothing); reserved forms refused with their phase; `import use trusts` and the E forms routed to their owners; `sig type`/`sig fn`/`requirement` as view parameters (`RDParam`), `read_signature` for a `fn`'s head, `read_fulfills` against a requirement's statement; **slice 3.16:** `rd_ok` hands the matchers a form's terms generated to the loader before the form's own declarations |
 | `predef.shard` | `PreDef PdRes PdRec Callee CalleeLocal` | **slice 3.16 landing 2 (§8.4 "the shape"; GPT-6 R63):** the pre-definition — a `fn` form elaborated once into a record (identity, declared type, the binders' locals, the self-local, the finished body, the elaboration state), never a `Declaration` for its owner; `read_predef` (`PdSkip`: a signature with no L reading; `PdErr`: a refusal on the route). Its E projection is `realize.shard`'s `erase_predef`; its K projection is landing 3 **Landing 3:** the recursion clause as read (`PdRec`: none, the structural binder's local, the measure elaborated over the binders); callee-locals (`Callee` → `CalleeLocal`: a `RUNNABLE` callee's signature elaborated in its own scope inside the walk, the name as written bound to a local of that type); a `(quote S)` or `"…"` in the body is `PdErr no_l_identity` after the signature elaborates (rule 6) |
 | `loader.shard` | `Mod InitSt Rec Load Fx Form ForkPt Im` | **phase 2, slices 3–4 (2026-09-12):** the loader (`v3/LANGUAGE.md` §3, §3.1–3.3, §6.6, §9) — a package root and its files as modules; `import` once, cycles refused, the imported closure visible and nothing opened; `(import Init NAME)` streaming the pinned export through NAME against the pin's meta line, nested prefixes loaded once; `use` and selective `use`; `trusts` as the file's policy over each admitted declaration's axiom closure; `sorry` pending; directory modules: the view (`mod.req.shard`, the dir form) with `sig type`/`sig fn`/`requirement` as view parameters, the req-scope gate, and the implementation `DIR/BASE.shard` checked in a fork from the view's fork point (replay with substitution, `fulfills`, `DISCHARGE` per parameter); the acceptance records (`Rec`). **Slice 5b:** `load_realize` — the equations admitted through the same path as any declaration, one refused and nothing attached; the `REALIZE` record and the `realized` count; a `fulfills` outside an implementation check refused (`fulfills_outside_impl`); each S form scanned for Init's E-eligible inductives before classification. **Slice 6:** a file whose loading failed after its heads were pre-registered is recorded (`Mod`'s loaded flag), so a later import of it reports `import_failed` instead of re-reading it into `duplicate_name`. **Slice 10:** `Load` carries each realization's pending roots — a pending measure recorded once (`PENDING`) and carried by every realization whose body reaches it (`REALIZE … pending=`, `realize_roots`; R58). **Slice 3.4 (the one E):** the profile flag, `profile_form` and the layout rule gone; a `type` over E's built-ins alone is E only (`type_is_e_only`, §8.1 rule 1), every `type` opens its namespace at pre-registration (`open_types`, §13 item 7). **Slice 3.7:** the `UNUSED` record — a file's `(use P)` lines no symbol token names a declaration under, judged against K and the E table once the file is loaded (`unused_uses`; the E table's suffix index, the native K declarations bucketed by last component, the K scan as the fallback); a lint the prune tool acts on, never a refusal. **Slice 3.15:** `bundle_after` — a native inductive's constructor-structure bundle admitted right after it (`admit_core` the admission without the E twin); `define_try`/`retry_parked`/`flush_parked` — a fn whose callee is not yet defined is parked (`Parked` in `Load`), retried after every definition to a fixpoint, reported `RUNNABLE` at the file's end if it never settles |
-| `load.shard` | — | the loader's driver: `eval direct v3/kernel/load.shard --root DIR [--init CHUNK]… [--route N] [--engine S] FILE…`; prints the records and the counts; exit = refused + errors. **Slice 5:** `--run MODULE.FN [--fuel N] FILE… [-- ARG…]` runs the program a clean load yields from FN on the World (ev.shard's `run_prog`), the program's externs performed; a load failure exits 2 with the records, out of fuel 3, stuck 4, a link failure 5. **Slice 6:** `--dump FILE…` prints the program a clean load yields as dump.shard's canonical text; **slice 7:** `--run MODULE.FN FILE… -- ARG…` validates ARG… against the entry's parameters before the World (§9) and refuses a malformed one as `RUN: argument N REASON: TEXT`, exit 6; **slice 3.22 landing 3:** `--store DIR` writes every constant a clean load admitted to K as the records K ingests (store.shard), `STORE: DIR new=N shared=M`; a file that cannot be written exits 2 **Slice 3.23:** `--init-receipt FILE` — the chunks a T0 run accepted (`t0.shard --receipt`) stream in admit mode, a chunk not listed at its byte count refused (`init_receipt_stale`); the records print as without the flag. |
+| `load.shard` | — | the loader's driver: `eval direct v3/kernel/load.shard --root DIR [--init EXPORT --init-index INDEX] [--route N] [--engine S] FILE…`; prints the records and the counts; exit = refused + errors. **Slice 5:** `--run MODULE.FN [--fuel N] FILE… [-- ARG…]` runs the program a clean load yields from FN on the World (ev.shard's `run_prog`), the program's externs performed; a load failure exits 2 with the records, out of fuel 3, stuck 4, a link failure 5. **Slice 6:** `--dump FILE…` prints the program a clean load yields as dump.shard's canonical text; **slice 7:** `--run MODULE.FN FILE… -- ARG…` validates ARG… against the entry's parameters before the World (§9) and refuses a malformed one as `RUN: argument N REASON: TEXT`, exit 6; **slice 3.22 landing 3:** `--store DIR` writes every constant a clean load admitted to K as the records K ingests (store.shard), `STORE: DIR new=N shared=M`; a file that cannot be written exits 2 **Slice 3.23:** `--init-receipt FILE` — the chunks a T0 run accepted (`t0.shard --receipt`) stream in admit mode, a chunk not listed at its byte count refused (`init_receipt_stale`); the records print as without the flag. |
 | `dump.shard` | — | **slice 6 (2026-09-13; `v3/LANGUAGE.md` §10 item 1):** a `Prog` as the canonical text of frontend parity — one line per declaration, sorted bytewise; names by their last component, primitives in full, type variables `?i` by first occurrence, terms at the sequential indices, strings and list sugar as the constructor chains both loaders build, the measure clause outside the text — the same text `rust_bootstrap/src/dump.rs` prints for the bootstrap's Module (`eval dump FILE`); `test/parity_test.sh` compares the two over every toolchain closure |
 | `etable.shard` | `EInfo EEnt ESt EHit` | **slice 5b:** the E table split out of the classifier — every E identity by every suffix, pre-registered per file; resolution = the visible hits among the scope's candidates, for every file (slice 3.4), decided structurally on the hit's identity (`cited_in_scope`, `name_above`; slice 3.6); an entry registered under `Init` is visible where the Init prefix is |
 | `erase.shard` | `BRole TBind Tele TeleRes` | **slice 5b (`v3/LANGUAGE.md` §7.5):** roles and levels over K's environment (over kw.shard's `W` since slice 3.15) — a constant's level parameters solved so its Sort binders are `Type`, its telescope walked with K's locals and each binder classified (type parameter, erased, runtime data with its E type; a Pi over propositions erases to its codomain); Init's inductives E-eligible (no indices, not in Prop, parameters types or propositions, fields E types or propositions; `Nat`/`Int` never) and registered with their constructors on first citation — each S form is scanned for its names before it is classified |
@@ -122,51 +123,56 @@ every test) as one canonical text from both readers, `eval dump` and
 61,080 declaration lines at slice 6; 20 closures, 67,976 lines since
 slice 7); this is what retired TCB bring-up item 2 —
 and **calc's differential** — `test/calc_test.sh` runs the S port
-under `ev` (`test/calc_harness.shard`, the Init prefix through `Int`
-from `test/fixtures/init_prefix_int.ndjson`) and the old tree's tower
+under `ev` (`test/calc_harness.shard`, Init on demand from the export
+and its index) and the old tree's tower
 over `examples/calc/calc_differential.shard` on the one input set
 `test/fixtures/calc_inputs.txt`, 34 cases per line and 13 folds, and
 compares the outputs byte for byte (727 lines a side).
 
 **The Init receipt** (slice 3.23, 2026-10-08; `v3/LANGUAGE.md` §8.4):
-`v3/test.sh` runs `test/init_receipt.sh` once before the entrypoints
-and exports `INIT_RECEIPT`; the shell tests that load through the
-fixture add `--init-receipt` to `load.shard` and `prove.shard`, and the
-loader pins test takes the same argument. The helper keeps
-`v3/.cache/init.receipt` (ignored by git) current against a hash of
-K's sources and the fixture, regenerating it by one T0 run
-(`t0.shard --receipt`, written only when every record was accepted).
-Under the receipt a load admits the fixture's axioms, definitions,
-theorems and opaques without the typing judgments; its records are
-byte-identical to a checked load's, which the 212 loader pins hold.
+`load.shard --init-receipt FILE` (and `prove.shard`, the loader pins
+test) admits the export's axioms, definitions, theorems and opaques
+without the typing judgments when FILE, what `t0.shard --receipt`
+writes after a run that accepted every record, lists the export at its
+byte count; the records are byte-identical to a checked load's. Since
+slice 3.26 landing 2 no test needs one (a load checks the closure it
+cites, seconds); `v3/test.sh` passes `INIT_RECEIPT` through when set,
+and landing 3 gives the receipt its writer over the export.
 `verify_release` and `t0_full.sh` take no receipt.
 
 **The shared Init load** (slice 3.25, 2026-10-09; `v3/LANGUAGE.md`
-§8.4): `loader.shard`'s `init_all` streams the export to its end and
-`ld_reroot` starts a fresh root load from a load's Init state, so a
-process loading many roots streams once; `test/loader_pins_test.shard`
-does (225 cases in 33 s under the receipt, from 783 s). What Init a
-module sees is its horizon alone: every availability gate asks the
-scope (`elab.shard` `el_sees`), an `(import Init NAME)` is answered
-from the ordinal table, and a declaration named as an Init constant is
-refused wherever the environment holds it (`name_taken`, K's
-`already_declared`).
+§8.4; recast at 3.26): `ld_reroot` starts a fresh root load from a
+load's Init state — since landing 2 K's run of Init alone, carried with
+the export and index handle — so a process loading many roots loads
+each record once; `test/loader_pins_test.shard` does (225 cases in 42
+s, every record checked). What Init a module sees is its horizon
+alone: every availability gate asks the scope (`elab.shard` `el_sees`),
+an `(import Init NAME)` is answered from the name table, and a
+declaration named as an Init constant is refused wherever it loads
+(`name_taken` from the table under the file's identity; K's
+`already_declared` behind it).
 
-**The Init index** (slice 3.26 landing 1, 2026-10-09; `v3/LANGUAGE.md`
-§8.4): `index.shard` writes two tables over the export, read by
-`read_range` and never loaded whole — a 62-byte row per record (its
-kind, its block's offset and length, the block's first ids, so the
-block holding an id is the last row whose first id is at most it) and a
-218-byte row per declaration name, sorted, so a name is a binary
-search. `initindex.shard` builds them (952 s over the export's 57,977
-records on the bootstrap) and reads them back (`--verify`, 866 s);
-`test/init_index.sh` keeps `v3/.cache/init.index` and `init.names`
-current, stamped by the export and the index's sources, not by K.
-Compiled by route 1 (`v3/build.sh v3/kernel/initindex.shard
-v3/bin/initindex`) the driver indexes the export in 68 s and verifies
-it in 71 s, the tables byte-identical to the bootstrap's.
-Landing 2 makes the loader read the closure of what a module cites from
-these tables instead of streaming a prefix; the fixtures go then.
+**The Init index and the load on demand** (slice 3.26 landings 1–2,
+2026-10-09; `v3/LANGUAGE.md` §8.4): `index.shard` writes one file of
+three tables over the export, read by `read_range` and never loaded
+whole — a 62-byte row per record (its kind, its block's offset and
+length, the block's first ids, so the block holding an id is the last
+row whose first id is at most it), a 218-byte row per declaration
+name, sorted, so a name is a binary search, and a 9-byte row per name
+id, the ordinal of the record declaring it, so a cited constant is one
+read. `initindex.shard` builds it and reads it back (`--verify`);
+`test/init_index.sh` keeps `v3/.cache/init.index` current, stamped by
+the export and the index's sources, not by K, and prints the export's
+and the index's paths. Compiled by route 1 (`v3/build.sh
+v3/kernel/initindex.shard v3/bin/initindex`) the driver indexes the
+export in 36 s and verifies it in 36 s. `initload.shard` is the load:
+the closure of what a file cites walked by range reads and fed to K in
+export order, checked; `loader.shard` demands, after a file's
+directives, its tokens' candidates, the gates' kits and an inductive
+name's satellites below the horizon, keeps K's run of Init alone and
+admits each demand into its own environment beside the natives. No
+test loads a prefix fixture; every consumer reads the export and its
+index.
 
 **The connected path** (slice 3.24, 2026-10-09; `v3/LANGUAGE.md` §8.4;
 law §12.4): `v3/examples/path/` is the path on one program — two Init
@@ -218,9 +224,8 @@ CheckedEnv) — and the driver's `-a` prints it (`AX name: …`); the
 oracle is `v3/axioms.lean` over Lean's own environment (the same
 relation as a Kleene fixpoint, not `collectAxioms`'s order-dependent
 memo; records §8), joined by `v3/t0_axioms_cmp.sh`. The fixture test
-asserts it on the committed prefix against
-`test/fixtures/init_prefix_3000.axioms`; `v3/t0_full.sh` on the whole
-export.
+asserts it on the export's first 3,000 lines against the oracle;
+`v3/t0_full.sh` on the whole export.
 
 ## The reconciliation ledger — what the pinned kernel has beyond the thesis
 

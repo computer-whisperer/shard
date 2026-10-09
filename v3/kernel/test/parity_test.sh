@@ -24,7 +24,8 @@
 # a theorem beside its E forms (v3/pins/loader/view_basic).
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
-FIX=v3/kernel/test/fixtures/init_prefix_3000.ndjson
+read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "parity_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
+INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
 a=$(mktemp); b=$(mktemp); trap 'rm -f "$a" "$b"' EXIT
 n=0; decls=0; failed=0
 s=$(date +%s)
@@ -61,7 +62,7 @@ done
 n=$((n+1))
 root=v3/pins/loader/view_basic
 if "$EVAL" dump "$root/main.shard" > "$a" 2>&1 \
-   && "$EVAL" direct v3/kernel/load.shard --root "$root" --init "$FIX" --dump "$root/main.shard" "$root/lib" > "$b" 2>&1; then
+   && "$EVAL" direct v3/kernel/load.shard --root "$root" $INIT --dump "$root/main.shard" "$root/lib" > "$b" 2>&1; then
   if cmp -s "$a" "$b"; then decls=$((decls + $(wc -l < "$a"))); else echo "parity_test: $root differs"; diff "$a" "$b" | head -6; failed=$((failed+1)); fi
 else
   echo "parity_test: a dump failed on $root"; head -3 "$a" "$b"; failed=$((failed+1))
@@ -71,7 +72,7 @@ fi
 n=$((n+1))
 root=v3/pins/loader/record_basic
 if "$EVAL" dump "$root/main.shard" > "$a" 2>&1 \
-   && "$EVAL" direct v3/kernel/load.shard --root "$root" --init "$FIX" --dump "$root/main.shard" > "$b" 2>&1; then
+   && "$EVAL" direct v3/kernel/load.shard --root "$root" $INIT --dump "$root/main.shard" > "$b" 2>&1; then
   if cmp -s "$a" "$b"; then decls=$((decls + $(wc -l < "$a"))); else echo "parity_test: $root differs"; diff "$a" "$b" | head -6; failed=$((failed+1)); fi
 else
   echo "parity_test: a dump failed on $root"; head -3 "$a" "$b"; failed=$((failed+1))

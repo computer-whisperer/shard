@@ -16,16 +16,16 @@
 set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
-FIX=v3/kernel/test/fixtures/init_prefix_int.ndjson
-RCPT=${INIT_RECEIPT:+--init-receipt $INIT_RECEIPT}   # the Init receipt (init_receipt.sh), set by v3/test.sh
-TAIL=v3/kernel/test/fixtures/init_prefix_str_tail.ndjson
+read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "tactic_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
+INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
+RCPT=${INIT_RECEIPT:+--init-receipt $INIT_RECEIPT}   # the Init receipt (slice 3.23), set by v3/test.sh when one exists
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 fail=0; checks=0; claims=0
 bad() { echo "tactic_test: $*"; fail=$((fail+1)); }
 load() {   # LEAF: its closure loads clean, nothing pending
   local f=$1
-  "$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" --init "$TAIL" $RCPT "v3/examples/calc/$f.shard" > "$OUT/$f.txt" 2>&1
+  "$EVAL" direct v3/kernel/load.shard --root v3 $INIT $RCPT "v3/examples/calc/$f.shard" > "$OUT/$f.txt" 2>&1
   checks=$((checks+1))
   if ! grep -q 'pending 0 .*errors 0$' "$OUT/$f.txt"; then bad "$f does not load clean"; grep -E 'ERROR|REFUSE|PENDING|^LOAD:' "$OUT/$f.txt" | head -4 | cut -c1-400; fi
 }

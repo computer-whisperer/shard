@@ -2,9 +2,10 @@
 ;;; Phase 2, slice 3. A package root and its files: each file is a module
 ;;; named by its path from the root; `import` loads a file once (a cycle is
 ;;; refused) and makes the imported module's closure visible, opening
-;;; nothing; `(import Init NAME)` streams the pinned export through NAME
-;;; into K, checking the export's meta line against the pin, the larger of
-;;; two nested prefixes loaded once; `use` opens a prefix for the rest of
+;;; nothing; `(import Init NAME)` sets the module's Init horizon to NAME's
+;;; ordinal in the pinned export, whose declarations the module cites are
+;;; loaded on demand from the export's index (initload.shard; §8.4 slice
+;;; 3.26), the meta line checked against the pin; `use` opens a prefix for the rest of
 ;;; the file; `trusts` widens the file's assumption policy; every declared
 ;;; form goes through the reader (reader.shard) into K's raw entry
 ;;; (add.shard `check`, which ingests), and an admitted declaration's
@@ -24,6 +25,10 @@
 (import "define.shard")
 (import "record.shard")
 (import "derive.shard")
+(import "initload.shard")
+(import "elab.shard")
+(import "tactic.shard")
+(import "arith.shard")
 (use kernel.k)
 (use kernel.kw)
 (use kernel.classify)
@@ -56,6 +61,13 @@
 (use kernel.derive)
 (use kernel.derive.DvGen)
 (use kernel.derive.DvRes)
+(use kernel.arith)
+(use kernel.elab)
+(use kernel.index)
+(use kernel.initload)
+(use kernel.tactic)
+(use kernel.initload.OdLoad)
+(use kernel.initload.OdOpen)
 (use kernel.scope.Derived)
 (use kernel.sexpr)
 (use kernel.util)
@@ -66,9 +78,7 @@
 (use kernel.verdict.Outcome)
 (use kernel.etable.ESt)
 (use kernel.host.World)
-(use kernel.verdict.Verdict)
 (use kernel.intmap.IntMap)
-(use kernel.json.JRes)
 (use kernel.name.Name)
 (use kernel.prelude.Bool)
 (use kernel.prelude.List)
@@ -182,15 +192,15 @@
 (fn ld_add_failed ((l Load) (mp Name) (rel (List (List Int)))) Load
   (ld_add_mod l (make Mod (path mp) (file (join_path rel)) (hash 0) (closure Nil) (init False) (fork None) (ok False))))
 
-;; the Init stream: the import run (its tables persist across chunks), the
-;; rest of the current chunk, the chunk files still unread, the prefix
-;; reached (the last target), declarations admitted so far
-(type InitSt (InitNone) (InitSt Run (List Int) (List (List Int)) Name Int))
+;; the Init load (§8.4 slice 3.26): none given; the export and its index the driver
+;; named, opened at the first need; opened — K's run (its tables and environment persist
+;; across loads in the process), the export and index handle, what K has been fed
+(type InitSt (InitNone) (InitPaths (List Int) (List Int)) (InitSt Run OdIx OdDone))
 
 (type Rec
   (RModule Name (List Int) Int (List Name))   ; a module loaded: path, file, hash, its closure
-  (RInit Name Int)                            ; the Init prefix loaded through NAME: declarations admitted so far
-  (RAccept Name Name Int (List Name) Name (List Name))  ; declaration, module, content fingerprint, axiom closure, the Init prefix at the check (Anon = none), the view parameters it rests on
+  (RInit Name Int Int)                        ; the Init load (slice 3.26): the file's import target (Anon: the horizon inherited), its horizon, the declarations its demand admitted
+  (RAccept Name Name Int (List Name) Int (List Name))   ; declaration, module, content fingerprint, axiom closure, the module's Init horizon at the check (-1: none), the view parameters it rests on
   (RParam Name Symbol Int)                    ; a view parameter admitted: kind (type / fn / requirement), a sig type's arity
   (RRefuse Name Symbol)                       ; K refused
   (RPolicy Name (List Name))                  ; outside the file's policy: the axioms it reaches that the policy lacks
@@ -209,9 +219,9 @@
   (REngine Name Bool)                         ; mode measure: the engine closes the statement unaided, or not
   (RDerive Name Expr Symbol Symbol (List Name)))   ; a derivation registered (§8.4 slice 3.19): the procedure, the type, the capability, the policy, the field procedures it selected
 
-;; root, environment, closure memo, modules, the Init stream, declaration →
+;; root, environment, closure memo, modules, the Init load, declaration →
 ;; module, pending names, the loading stack (cycles), records newest first,
-;; the export chunk files the driver named, the view parameters admitted (§6.6),
+;; the view parameters admitted (§6.6),
 ;; the E table (classify.shard: every E declaration by identity and suffix),
 ;; the pending roots each realization carries (§7.5; R58)
 (record Load
@@ -226,7 +236,6 @@
   (pending (List Name))
   (stack (List Name))
   (recs (List Rec))
-  (chunks (List (List Int)))
   (params (List Name))
   (etab ESt)
   (parked (List Parked))
@@ -235,15 +244,16 @@
   (discharged (List (Pair Name (List Name))))   ; a descent obligation proved (slice 3.16 rule 8): the axioms and parameters its proof rests on, which stand in its place in every closure
   (typed (List (Pair Name (Pair Scope SExpr))))   ; the fns RUNNABLE on the typed route: a later body binds one as a callee-local (slice 3.16 rule 6)
   (derived (List Derived))   ; the derivation table (slice 3.19 rule 6): an entry is visible where its procedure is
-  (receipt (List (Pair (List Int) Int))))   ; the Init receipt (slice 3.23): the export chunks a T0 run accepted, by path and byte count; empty = every chunk checked
-(fn load0 ((root (List (List Int))) (chunks (List (List Int)))) Load
+  (receipt (List (Pair (List Int) Int))))   ; the Init receipt (slice 3.23): the export a T0 run accepted, by path and byte count; empty = checked
+(fn load0 ((root (List (List Int)))) Load
   (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods Nil) (init InitNone) (tbl IMEmpty) (inits IMEmpty) (mode (quote off))
-             (pending Nil) (stack Nil) (recs Nil) (chunks chunks) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil) (derived Nil) (receipt Nil)))
+             (pending Nil) (stack Nil) (recs Nil) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil) (derived Nil) (receipt Nil)))
 (fn ld_with_receipt ((l Load) (r (List (Pair (List Int) Int)))) Load (with Load l (receipt r)))
-;; a fresh root load from a load's Init state (slice 3.25 rule 1): the environment, the stream,
-;; the ordinals, the chunks and the receipt carried; everything of the old root reset to load0's
+;; a fresh root load from a load's Init state (slice 3.25 rule 1): the Init load carried — K's
+;; environment of Init alone (the run's), the ordinals, the export and index handle, the
+;; receipt; everything of the old root reset to load0's, the old root's own declarations gone
 (fn ld_reroot ((l Load) (root (List (List Int)))) Load
-  (with Load (load0 root (Load.chunks l)) (env (Load.env l)) (init (Load.init l)) (inits (Load.inits l)) (receipt (Load.receipt l))))
+  (with Load (load0 root) (env (match (Load.init l) ((InitSt run _ _) (run_env run)) (_ (Load.env l)))) (init (Load.init l)) (inits (Load.inits l)) (receipt (Load.receipt l))))
 (fn ld_recs ((l Load)) (List Rec) (rev (Load.recs l)))
 (fn ld_with_env ((l Load) (e CheckedEnv) (m AxMemo)) Load (with Load l (env e) (memo m)))
 (fn ld_add_mod ((l Load) (md Mod)) Load (with Load l (mods (Cons md (Load.mods l)))))
@@ -256,10 +266,9 @@
     ((RDSolved n fp steps ds) (Pair (ld_rec l (RProved n fp steps)) (RDOk ds)))
     ((RDMeasured n ok ds) (Pair (ld_rec l (REngine n ok)) (RDOk ds)))
     (_ (Pair l rd))))
-(fn ld_add_inits ((l Load) (ns (List Name)) (o Int)) Load
-  (measure (struct ns))
-  (match ns (Nil l) ((Cons n r) (ld_add_inits (with Load l (inits (ords_add (Load.inits l) n o))) r o))))
-;; a module's horizon through NAME: the ordinal past NAME's (the count admitted at the import)
+(fn ld_add_inits ((l Load) (cs (List (Pair Name Int)))) Load
+  (measure (struct cs))
+  (match cs (Nil l) ((Cons (Pair n o) r) (ld_add_inits (with Load l (inits (ords_add (Load.inits l) n o))) r))))
 ;; the sidecar FILE.auto.shard beside a file whose forms hold an `auto` proof (slice 3.22 rule 1):
 ;; its (proof-for NAME FINGERPRINT (by STEP…)) forms as entries; absent = no entries; a sidecar
 ;; that does not read, or a form of another shape, is the file's load error and no entries
@@ -305,10 +314,6 @@
          (None (Pair None (append "not a name: " (chars_of_sym nm)))))
        (Pair None "an entry is (proof-for NAME FINGERPRINT (by STEP…))")))
     ((Cons _ r) (Pair None "an entry is (proof-for NAME FINGERPRINT (by STEP…))"))))
-(fn init_horizon ((l Load) (target Name)) Int
-  (match (ords_find (Load.inits l) target)
-    ((Some o) (+ o 1))
-    (None -1)))   ; not Init's (slice 3.25 rule 2): the module's horizon is unchanged
 (fn ld_add_pending ((l Load) (n Name)) Load (with Load l (pending (Cons n (Load.pending l)))))
 (fn ld_with_stack ((l Load) (s (List Name))) Load (with Load l (stack s)))
 (fn ld_rec ((l Load) (x Rec)) Load (with Load l (recs (Cons x (Load.recs l)))))
@@ -333,14 +338,14 @@
 (fn ld_find_mod ((ms (List Mod)) (p Name)) (Option Mod)
   (measure (struct ms))
   (match ms (Nil None) ((Cons m r) (if (name_eq (Mod.path m) p) (Some m) (ld_find_mod r p)))))
-(fn init_prefix ((l Load)) Name (match (Load.init l) (InitNone Anon) ((InitSt _ _ _ p _) p)))
 
 ;; the file being loaded: module, root-relative parts, opened prefixes, the
 ;; visible modules (itself included), the Init horizon (-1: none), trusted names, hash so
 ;; far, whether it is a view (§6.6: the forms it may hold, the req-scope gate), the sidecar's
-;; entries (slice 3.22 rule 1: FILE.auto.shard beside the file, read when a theorem says auto)
-;; far, whether it is a view (§6.6: the forms it may hold, the req-scope gate)
-(record Fx (module Name) (ident Name) (parts (List (List Int))) (opened (List Open)) (vis (List Name)) (init Int) (trusts (List Name)) (hash Int) (view Bool) (autos (List Auto)))
+;; entries (slice 3.22 rule 1: FILE.auto.shard beside the file, read when a theorem says auto),
+;; its own Init import's target (Anon: none), the names of Init under its identity, which
+;; none of its declarations may take (slice 3.26 rule 5)
+(record Fx (module Name) (ident Name) (parts (List (List Int))) (opened (List Open)) (vis (List Name)) (init Int) (trusts (List Name)) (hash Int) (view Bool) (autos (List Auto)) (initname Name) (taken (List (List Int))))
 ;; the prefix the file's declarations take: its module, or the sealed directory's for a file
 ;; directly inside one (the K seal: one module across the directory's files, §13 item 26)
 (fn fx_private ((f Fx)) Bool (bool_not (name_eq (Fx.ident f) (Fx.module f))))
@@ -468,7 +473,7 @@
           (let ((axs (discharge_axs (Load.discharged l) axs0 (+ 1 (len (Load.discharged l))))))
           (match (outside_policy (fx_scope l f) (Fx.trusts f) (Load.params l) axs)
             (Nil (policy_pass l f env memo1 r
-                   (Cons (RAccept n (Fx.module f) (match (identity_hash env n) ((Some h) h) (None 0)) axs (init_prefix l) (params_of (Load.params l) axs)) acc)))
+                   (Cons (RAccept n (Fx.module f) (match (identity_hash env n) ((Some h) h) (None 0)) axs (Fx.init f) (params_of (Load.params l) axs)) acc)))
             (out (PolOut n out))))))))))
 ;; a closure with each discharged obligation replaced by what its proof rests on (to a
 ;; fixpoint: a proof may rest on another discharged obligation)
@@ -572,7 +577,7 @@
     (Nil (Pair (Pair l f) True))
     ((Cons s r)
      (let ((k (form_name (fx_scope l f) s)))
-       (if (name_taken (Load.env l) k)
+       (if (name_taken l f k)
          (Pair (Pair (ld_rec l (RClassify k (quote name_taken) (append (show_name k) " is already declared: a derivation generates this name"))) f) False)
          (match (pre_register (Load.etab l) (fx_scope l f) (Load.env l) (list s))
            ((PreErr e m) (Pair (Pair (ld_rec l (RClassify k e m)) f) False))
@@ -763,7 +768,7 @@
 ;; reading never enters the route: the classifier's program, `route=e_first` (rule 6)
 (fn load_e_form ((l Load) (f Fx) (s SExpr)) (Pair Load Fx)
   (let ((sc (fx_scope l f)) (l1 (scan_form l f s)))
-    (if (name_taken (Load.env l1) (form_name sc s))
+    (if (name_taken l1 f (form_name sc s))
       (Pair (ld_rec l1 (RClassify (form_name sc s) (quote name_taken) (append (show_name (form_name sc s)) " is an admitted constant: realize it, or declare another name (§7.5)"))) f)
       (if (sym_eq (form_head s) (quote fn))
         (match (load_fn l1 f s 2)
@@ -952,7 +957,14 @@
     ((Cons d r) (match (admit_param l f d (quote obligation) 0) ((Pair l1 f1) (admit_obligations l1 f1 r))))))
 ;; a fn or extern may not take an admitted constant's identity (§7.5): only a realize attaches
 ;; an E body under one, and the equations are its warrant
-(fn name_taken ((env CheckedEnv) (n Name)) Bool (match (env_find env n) ((Some _) True) (None False)))
+;; a name a declaration of the file may not take (slice 3.26 rule 5): an Init constant's the
+;; name table holds under the file's identity (Fx.taken), or one the environment holds
+(fn name_taken ((l Load) (f Fx) (n Name)) Bool
+  (if (env_has (Load.env l) n) True (taken_has (Fx.taken f) (show_name n))))
+(fn env_has ((env CheckedEnv) (n Name)) Bool (match (env_find env n) ((Some _) True) (None False)))
+(fn taken_has ((ts (List (List Int))) (s (List Int))) Bool
+  (measure (struct ts))
+  (match ts (Nil False) ((Cons t r) (if (int_list_eq t s) True (taken_has r s)))))
 ;; an S form's citations of the environment's E-eligible inductives enter the E table first (§7.5)
 (fn scan_form ((l Load) (f Fx) (s SExpr)) Load
   (if (lt (Fx.init f) 0) l (ld_with_e l (es_scan_init (Load.etab l) (fx_scope l f) (Load.env l) s))))   ; an optimization: Init's inductives are citable only where Init is visible
@@ -1032,129 +1044,183 @@
       ((Rejected reason subject) (Pair (ld_rec l (RRefuse subject (reason_of reason))) f))
       ((Exhausted _ _) (Pair (ld_rec l (RRefuse n (quote exhausted))) f)))))
 
-;; ---- the Init prefix (§3.1) ----------------------------------------------------------------
-;; the pin (v3/README.md): the export's meta line must say so
-(fn init_pin_githash () (List Int) "819816b2e0a3bf405af45ae5c7af2491d8f5bee6")
-(fn init_pin_exporter () (List Int) "lean4export")
-(fn init_pin_exporter_version () (List Int) "3.1.0")
-(fn init_pin_format () (List Int) "3.1.0")
-(fn init_budget () Int 100000000)
-
-;; the first record must be the meta line matching the pin; the rest of the chunk follows
-(fn check_meta ((bs (List Int))) (Pair (Option (List Int)) (List Int))
-  (match (json_parse bs)
-    (JErr (Pair None "the export's first record is not JSON"))
-    ((JRes j rest)
-     (match (jget j "meta")
-       (None (Pair None "the export's first record is not its meta line"))
-       ((Some m)
-        (let ((githash (jpath m "lean" "githash"))
-              (exporter (jpath m "exporter" "name"))
-              (exv (jpath m "exporter" "version"))
-              (fmt (jpath m "format" "version")))
-          (if (bool_not (opt_str_eq githash (init_pin_githash))) (Pair None (append "lean githash " (append (show_opt_str githash) (append ", the pin is " (init_pin_githash)))))
-          (if (bool_not (opt_str_eq exporter (init_pin_exporter))) (Pair None (append "exporter " (show_opt_str exporter)))
-          (if (bool_not (opt_str_eq exv (init_pin_exporter_version))) (Pair None (append "exporter version " (append (show_opt_str exv) (append ", the pin is " (init_pin_exporter_version)))))
-          (if (bool_not (opt_str_eq fmt (init_pin_format))) (Pair None (append "format version " (append (show_opt_str fmt) (append ", the pin is " (init_pin_format)))))
-            (Pair (Some rest) Nil)))))))))))
-(fn jpath ((j Json) (a (List Int)) (b (List Int))) (Option (List Int))
-  (match (jget j a) ((Some x) (match (jget x b) ((Some y) (jstr y)) (None None))) (None None)))
-(fn opt_str_eq ((o (Option (List Int))) (s (List Int))) Bool (match o ((Some x) (int_list_eq x s)) (None False)))
-(fn show_opt_str ((o (Option (List Int)))) (List Int) (match o ((Some x) x) (None "(missing)")))
-
-;; the Init stream saved: its environment becomes the loader's
-(fn init_save ((l Load) (run Run) (rest (List Int)) (files (List (List Int))) (pfx Name) (n Int)) Load
-  (ld_with_init (ld_with_env l (run_env run) (Load.memo l)) (InitSt run rest files pfx n)))
-(fn init_err ((l Load) (file (List Int)) (reason Symbol) (detail (List Int))) (Pair Load Bool)
-  (Pair (ld_rec l (RLoadErr file reason detail)) False))
-
-;; load the export through `target`: already admitted = within the loaded
-;; prefix (two nested prefixes, the larger once); else stream on from where
-;; the last import stopped
-;; the whole export at once (slice 3.25 rule 1): every chunk streamed to its end, the
-;; record INIT (all); a process loading many roots streams once and re-roots (ld_reroot)
-(fn init_all ((l Load) (w World)) (Pair (Pair Load Bool) World) (init_through l Anon w))
-(fn init_through ((l Load) (target Name) (w World)) (Pair (Pair Load Bool) World)
-  (match (ords_find (Load.inits l) target)   ; admitted from the stream (slice 3.25 rule 2: the table, not the environment)
-    ((Some _) (Pair (Pair l True) w))
-    (None
-     (match (Load.init l)
-       (InitNone
-        (match (Load.chunks l)
-          (Nil (Pair (init_err l "Init" (quote init_unavailable) "no export chunks were given (load.shard --init CHUNK…)") w))
-          ((Cons f rest)
-           (match (read_file f w)
-             ((Pair None w1) (Pair (init_err l f (quote missing_file) "the export chunk") w1))
-             ((Pair (Some bs) w1)
-              (match (check_meta bs)
-                ((Pair None msg) (Pair (init_err l f (quote export_pin_mismatch) msg) w1))
-                ((Pair (Some after) _)
-                 (match (receipt_mode (Load.receipt l) f bs)
-                   (None (Pair (init_err l f (quote init_receipt_stale) (receipt_detail bs)) w1))
-                   ((Some ad)
-                    (init_stream l (run_admitting (run_with_env (empty_run False False) (Load.env l) (st_for (Load.env l))) ad) after rest target 0 (init_budget) w1))))))))))
-       ((InitSt run rest files _ n)
-        (init_stream l (run_with_env run (Load.env l) (st_for (Load.env l))) rest files target n (init_budget) w))))))
-
-(fn init_stream ((l Load) (run Run) (bs0 (List Int)) (files (List (List Int))) (target Name) (n Int) (fuel Int) (w World)) (Pair (Pair Load Bool) World)
-  (measure fuel)
-  (if (lt fuel 0) (Pair (init_err (init_save l run bs0 files (init_prefix l) n) "Init" (quote init_budget) "the record budget") w)
-  (let ((bs (skip_ws bs0)))
-    (match bs
-      (Nil
-       (match files
-         (Nil (match target
-                (Anon (Pair (Pair (ld_rec (init_save l run Nil Nil Anon n) (RInit Anon n)) True) w))   ; init_all: the end is the target
-                (_ (Pair (init_err (init_save l run Nil Nil (init_prefix l) n) "Init" (quote init_name_not_found) (append (show_name target) " is not in the export chunks given")) w))))
-         ((Cons f rest)
-          (match (read_file f w)
-            ((Pair None w1) (Pair (init_err (init_save l run Nil rest (init_prefix l) n) f (quote missing_file) "the export chunk") w1))
-            ((Pair (Some bs2) w1)
-             (match (receipt_mode (Load.receipt l) f bs2)
-               (None (Pair (init_err (init_save l run Nil rest (init_prefix l) n) f (quote init_receipt_stale) (receipt_detail bs2)) w1))
-               ((Some ad) (init_stream l (run_admitting run ad) bs2 rest target n (- fuel 1) w1))))))))
-      (_
-       (match (json_parse bs)
-         (JErr (Pair (init_err (init_save l run Nil files (init_prefix l) n) "Init" (quote init_malformed) "a record is not JSON") w))
-         ((JRes j rest)
-          (match (process_record run j)
-            ((Pair run1 v)
-             (match v
-               (VSkip (init_stream l run1 rest files target n (- fuel 1) w))
-               ((VAccept _)
-                (let ((cs (record_constants (run_tabs run1) j v)))
-                  (let ((l1 (ld_add_inits l cs n)))
-                    (if (mem_name target cs)
-                      (Pair (Pair (ld_rec (init_save l1 run1 rest files target (+ n 1)) (RInit target (+ n 1))) True) w)
-                      (init_stream l1 run1 rest files target (+ n 1) (- fuel 1) w)))))
-               (_ (Pair (init_err (init_save l run1 rest files (init_prefix l) n) "Init" (quote init_refused) (match (show_verdict v) ((Some t) t) (None "?"))) w))))))))))))
+;; ---- the Init load on demand (§3.1; §8.4 slice 3.26) --------------------------------------
+;; The export and its index are opened at the first need from the paths the driver gave
+;; (initload.shard od_open: the meta line against the pin, the index's header, the export's
+;; size the header's). K's run holds Init alone — its environment never a native
+;; declaration's — so a process loading many roots carries it (ld_reroot); the loader's own
+;; environment holds Init beside the natives, and every demand enters both (init_load)
+(fn init_opened ((l Load) (w World)) (Pair (Pair Load (Option (Pair Symbol (List Int)))) World)
+  (match (Load.init l)
+    ((InitSt _ _ _) (Pair (Pair l None) w))
+    (InitNone (Pair (Pair l (Some (Pair (quote init_unavailable) "no export was given (load.shard --init EXPORT --init-index INDEX)"))) w))
+    ((InitPaths export index)
+     (match (od_open export index w)
+       ((Pair (OdOpenErr e m) w1) (Pair (Pair l (Some (Pair e m))) w1))
+       ((Pair (OdOpened x) w1)
+        (Pair (Pair (ld_with_init l (InitSt (empty_run False False) x (odd0))) None) w1))))))
+(fn init_err ((l Load) (file (List Int)) (reason Symbol) (detail (List Int))) Load
+  (ld_rec l (RLoadErr file reason detail)))
+;; `(import Init NAME)`: NAME's ordinal from the name table, the module's horizon the ordinal
+;; past it (slice 3.21b rule 2); a name the export does not declare is init_name_not_found
+(fn init_through ((l Load) (target Name) (w World)) (Pair (Pair Load (Option Int)) World)
+  (match (init_opened l w)
+    ((Pair (Pair l1 (Some (Pair e m))) w1) (Pair (Pair (init_err l1 "Init" e m) None) w1))
+    ((Pair (Pair l1 None) w1)
+     (match (Load.init l1)
+       ((InitSt run x done)
+        (match (od_lookup x target w1)
+          ((Pair (Pair x1 None) w2) (Pair (Pair (init_err (ld_with_init l1 (InitSt run x1 done)) "Init" (quote init_name_not_found) (append (show_name target) " is not a declaration of the export")) None) w2))
+          ((Pair (Pair x1 (Some o)) w2) (Pair (Pair (ld_with_init l1 (InitSt run x1 done)) (Some (+ o 1))) w2))))
+       (_ (Pair (Pair l1 None) w1))))))
+;; a file prepared after its directives (slice 3.26 rules 3 and 5): the names of Init under
+;; its identity, which none of its declarations may take; then, where it sees Init, its
+;; demand loaded — every token of its forms under the candidates resolution tries
+;; (scope_candidates), the gates' kits, an inductive block's names with their satellites —
+;; the names the table places below its horizon, their closure through K. None: the file
+;; fails here, its record says why
+(fn init_prepare ((l Load) (f Fx) (forms (List SExpr)) (w World)) (Pair (Pair Load (Option Fx)) World)
+  (match (Load.init l)
+    (InitNone (Pair (Pair l (Some f)) w))
+    (_
+     (match (init_opened l w)
+       ((Pair (Pair l1 (Some (Pair e m))) w1) (Pair (Pair (init_err l1 (fx_file f) e m) None) w1))
+       ((Pair (Pair l1 None) w1)
+        (match (init_taken l1 f w1)
+          ((Pair f2 w2)
+           (if (lt (Fx.init f2) 0) (Pair (Pair l1 (Some f2)) w2)
+             (init_demand l1 f2 forms w2)))))))))
+(fn init_taken ((l Load) (f Fx) (w World)) (Pair Fx World)
+  (match (Load.init l)
+    ((InitSt _ x _)
+     (match (od_names_under x (append (show_name (Fx.ident f)) ".") w)
+       ((Pair ns w1) (Pair (with Fx f (taken ns)) w1))))
+    (_ (Pair f w))))
+(fn init_demand ((l Load) (f Fx) (forms (List SExpr)) (w World)) (Pair (Pair Load (Option Fx)) World)
+  (match (Load.init l)
+    ((InitSt run x done)
+     (let ((horizon (Fx.init f)))
+       (match (init_empty x (init_prefixes f) Nil w)
+         ((Pair (Pair xe empty) we)
+       (match (init_resolve xe (append (init_candidates (fx_scope l f) (tok_names (form_tokens forms (Toks IMEmpty Nil))) empty Nil) (init_kit)) horizon Nil Nil we)
+         ((Pair (Pair x1 (Pair ords inds)) w1)
+          (match (init_resolve x1 (init_satellites inds Nil) horizon ords Nil w1)
+            ((Pair (Pair x2 (Pair ords2 _)) w2)
+             (match (init_load (ld_with_init l (InitSt run x2 done)) ords2 w2)
+               ((Pair (Pair l1 (Some n)) w3) (Pair (Pair (ld_rec l1 (RInit (Fx.initname f) horizon n)) (Some f)) w3))
+               ((Pair (Pair l1 None) w3) (Pair (Pair l1 None) w3)))))))))))
+    (_ (Pair (Pair l (Some f)) w))))
+;; every candidate of every token (its `@` sigil of an explicit application dropped), except
+;; those under a prefix the export declares nothing under (the file's own identity, an
+;; opened native module): resolution's candidates, pruned
+(fn init_candidates ((sc Scope) (toks (List Name)) (empty (List (List Int))) (acc (List Name))) (List Name)
+  (measure (struct toks))
+  (match toks (Nil acc) ((Cons t r) (init_candidates sc r empty (init_prune (scope_candidates sc (init_strip_at t)) empty acc)))))
+(fn init_strip_at ((t Name)) Name
+  (match (show_name t)
+    ((Cons 64 r) (match (name_of_sym (sym_of_chars r)) ((Some n) n) (None t)))
+    (_ t)))
+(fn init_prune ((cs (List Name)) (empty (List (List Int))) (acc (List Name))) (List Name)
+  (measure (struct cs))
+  (match cs (Nil acc) ((Cons c r) (init_prune r empty (if (init_under_any (show_name c) empty) acc (Cons c acc))))))
+(fn init_under_any ((s (List Int)) (ps (List (List Int)))) Bool
+  (measure (struct ps))
+  (match ps (Nil False) ((Cons p r) (if (ix_starts s p) True (init_under_any s r)))))
+;; the prefixes resolution puts above a token here: the file's identity, the opened ones
+(fn init_prefixes ((f Fx)) (List Name) (Cons (Fx.ident f) (init_open_prefixes (Fx.opened f))))
+(fn init_open_prefixes ((os (List Open))) (List Name)
+  (measure (struct os))
+  (match os (Nil Nil) ((Cons (OpenAll p) r) (Cons p (init_open_prefixes r))) ((Cons (OpenSome p _) r) (Cons p (init_open_prefixes r)))))
+;; those of them the export declares nothing under, rendered with their dot
+(fn init_empty ((x OdIx) (ps (List Name)) (acc (List (List Int))) (w World)) (Pair (Pair OdIx (List (List Int))) World)
+  (measure (struct ps))
+  (match ps
+    (Nil (Pair (Pair x acc) w))
+    ((Cons p r)
+     (match (od_has_under x p w)
+       ((Pair (Pair x1 True) w1) (init_empty x1 r acc w1))
+       ((Pair (Pair x1 False) w1) (init_empty x1 r (Cons (append (show_name p) ".") acc) w1))))))
+;; the ordinals the table places below the horizon, and the names among them of inductive
+;; blocks (kind i)
+(fn init_resolve ((x OdIx) (ns (List Name)) (horizon Int) (acc (List Int)) (inds (List Name)) (w World)) (Pair (Pair OdIx (Pair (List Int) (List Name))) World)
+  (measure (struct ns))
+  (match ns
+    (Nil (Pair (Pair x (Pair acc inds)) w))
+    ((Cons n r)
+     (match (od_lookup x n w)
+       ((Pair (Pair x1 None) w1) (init_resolve x1 r horizon acc inds w1))
+       ((Pair (Pair x1 (Some o)) w1)
+        (if (le horizon o) (init_resolve x1 r horizon acc inds w1)
+          (match (od_kind_of x1 o w1)
+            ((Pair (Pair x2 k) w2)
+             (init_resolve x2 r horizon (Cons o acc) (if (int_eq k 105) (Cons n inds) inds) w2)))))))))
+;; what the elaborator, the tactics and the definer construct from an inductive name: its
+;; case analysis, no-confusion, below, brecOn, a constructor's injectivity
+(fn init_satellites ((ns (List Name)) (acc (List Name))) (List Name)
+  (measure (struct ns))
+  (match ns
+    (Nil acc)
+    ((Cons n r) (init_satellites r (append (list (nm_cases_on n) (nm_nct n) (nm_nc n) (name_append n (n1 (quote below))) (name_append n (n1 (quote brecOn))) (name_append n (n1 (quote inj)))) acc)))))
+;; the names the gates construct (slice 3.26 rule 3): K's own and the pins, the elaborator's,
+;; the tactics', arith's, the derivations', the definer's — demanded wherever a module sees
+;; Init, loaded where the table places them below its horizon
+(fn init_kit () (List Name)
+  (append (k_kit) (append (el_kit) (append (tc_kit) (append (ar_all_kit) (append (dv_kit) (df_kit)))))))
+(fn k_kit () (List Name)
+  (append (pin_candidates)
+    (list (nm_nat) (nm_nat_zero) (nm_nat_succ) (nm_string) (n2 (quote String) (quote ofList)) (n1 (quote Char)) (n2 (quote Char) (quote ofNat))
+          (n1 (quote Bool)) (n2 (quote Bool) (quote true)) (n2 (quote Bool) (quote false)) (n1 (quote eagerReduce))
+          (n2 (quote Lean) (quote reduceBool)) (n2 (quote Lean) (quote reduceNat)) (nm_list) (nm_list_cons) (nm_list_nil)
+          (nm_eq) (nm_eq_refl) (n1 (quote Quot)) (nm_quot_mk) (nm_quot_lift) (nm_quot_ind) (n2 (quote Quot) (quote sound))
+          (nm_int_ty) (nm_int_of_nat) (nm_int_neg_succ))))
+;; the demanded records' closure through K (initload.shard od_load): into the Init run,
+;; checked, or admitted under a receipt listing the export at its byte count; then into the
+;; loader's environment, admitted (od_admit: the same records, checked a moment ago); every
+;; constant admitted entered in the ordinal table with its ordinal
+(fn init_load ((l Load) (ords (List Int)) (w World)) (Pair (Pair Load (Option Int)) World)
+  (match (Load.init l)
+    ((InitSt run x done)
+     (match (receipt_mode (Load.receipt l) (odx_export x) (ix_hdr_bytes (odx_hdr x)))
+       (None (Pair (Pair (init_err l "Init" (quote init_receipt_stale) (receipt_detail (ix_hdr_bytes (odx_hdr x)))) None) w))
+       ((Some ad)
+        (match (od_load x (run_admitting run ad) done ords w)
+          ((Pair (OdLoadErr x1 e m) w1) (Pair (Pair (init_err (ld_with_init l (InitSt run x1 done)) "Init" e m) None) w1))
+          ((Pair (OdLoaded x1 run1 done1 cs n ls) w1)
+           (match (od_admit run1 (Load.env l) ls)
+             (None (Pair (Pair (init_err (ld_with_init l (InitSt run x1 done)) "Init" (quote init_refused) "a record checked into Init's environment was not admitted into the loader's") None) w1))
+             ((Some env1)
+              (Pair (Pair (ld_add_inits (ld_with_init (ld_with_env l env1 (Load.memo l)) (InitSt run1 x1 done1)) cs) (Some n)) w1))))))))
+    (_ (Pair (Pair l (Some 0)) w))))
 
 ;; ---- the Init receipt (slice 3.23) ----------------------------------------------------------
 ;; `t0.shard --receipt FILE` writes, after a run that accepted every record of
-;; its chunks, one line per chunk: `PATH BYTES`; a line starting with `#` is the
-;; writer's (the suite's K hash) and is not read here. A chunk listed with its
+;; its input, one line per file: `PATH BYTES`; a line starting with `#` is the
+;; writer's (the suite's K hash) and is not read here. The export listed with its
 ;; byte count enters in ADMIT mode (k/add.shard admit_decl_pinning): its axioms,
 ;; definitions, theorems and opaques inserted without the typing judgments, the
-;; inductive blocks and the quotient checked as always. With a receipt set, a
-;; chunk not listed, or listed with another byte count, is refused —
-;; `init_receipt_stale` — never checked silently. No receipt: every chunk checked.
-(fn receipt_mode ((rcpt (List (Pair (List Int) Int))) (f (List Int)) (bs (List Int))) (Option Bool)
+;; inductive blocks and the quotient checked as always. With a receipt set, an
+;; export not listed, or listed with another byte count, is refused —
+;; `init_receipt_stale` — never checked silently. No receipt: every record checked.
+(fn receipt_mode ((rcpt (List (Pair (List Int) Int))) (path (List Int)) (bytes Int)) (Option Bool)
   (match rcpt
     (Nil (Some False))
-    (_ (if (receipt_lists rcpt f (len bs)) (Some True) None))))
+    (_ (if (receipt_lists rcpt path bytes) (Some True) None))))
 (fn receipt_lists ((rcpt (List (Pair (List Int) Int))) (f (List Int)) (n Int)) Bool
   (measure (struct rcpt))
   (match rcpt
     (Nil False)
     ((Cons (Pair path bytes) r) (if (int_list_eq path f) (if (int_eq bytes n) True (receipt_lists r f n)) (receipt_lists r f n)))))
-(fn receipt_detail ((bs (List Int))) (List Int)
-  (append "the chunk is not in the receipt at its byte count (" (append (show_nat (len bs)) " bytes); regenerate it (t0.shard --receipt)")))
-;; the load a driver starts from: with a receipt FILE named (`--init-receipt`), read and set; None = unreadable
-(fn load_with_receipt ((rootp (List (List Int))) (chunks (List (List Int))) (rcpt (List Int)) (w World)) (Pair (Option Load) World)
-  (if (int_eq (len rcpt) 0) (Pair (Some (load0 rootp chunks)) w)
-    (match (read_file rcpt w)
-      ((Pair None w1) (Pair None w1))
-      ((Pair (Some bs) w1) (Pair (Some (ld_with_receipt (load0 rootp chunks) (receipt_parse bs))) w1)))))
+(fn receipt_detail ((bytes Int)) (List Int)
+  (append "the export is not in the receipt at its byte count (" (append (show_nat bytes) " bytes); regenerate it (t0.shard --receipt)")))
+;; the load a driver starts from: the export and its index named (`--init EXPORT --init-index
+;; INDEX`; neither: no Init), with a receipt FILE named (`--init-receipt`) read and set; None =
+;; the receipt is unreadable
+(fn load_with_receipt ((rootp (List (List Int))) (export (List Int)) (index (List Int)) (rcpt (List Int)) (w World)) (Pair (Option Load) World)
+  (let ((l0 (if (int_eq (len export) 0) (load0 rootp) (ld_with_init (load0 rootp) (InitPaths export index)))))
+    (if (int_eq (len rcpt) 0) (Pair (Some l0) w)
+      (match (read_file rcpt w)
+        ((Pair None w1) (Pair None w1))
+        ((Pair (Some bs) w1) (Pair (Some (ld_with_receipt l0 (receipt_parse bs))) w1))))))
 ;; the receipt's text: `PATH BYTES` per line, `#` lines skipped
 (fn receipt_parse ((bs (List Int))) (List (Pair (List Int) Int))
   (measure (struct bs))
@@ -1227,10 +1293,13 @@
              ((Pair dirs rest)
               (match (read_sidecar l rel rest w1s)
                ((Pair (Pair l0a autos) w1s2)
-              (match (pre_register_file l0a (make Fx (module mp) (ident ip) (parts rel) (opened Nil) (vis (list mp)) (init -1) (trusts Nil) (hash (hash_name mp)) (view view) (autos autos)) rest)
+              (match (pre_register_file l0a (make Fx (module mp) (ident ip) (parts rel) (opened Nil) (vis (list mp)) (init -1) (trusts Nil) (hash (hash_name mp)) (view view) (autos autos) (initname Anon) (taken Nil)) rest)
                 ((Pair None l0) (Pair (Pair (ld_add_failed l0 mp rel) None) w1))
                 ((Pair (Some f0) l0)
               (match (load_forms (ld_with_stack l0 (Cons mp (Load.stack l))) f0 dirs fuel w1s2)
+                ((Pair (Pair l1 None) w2) (Pair (Pair (ld_add_failed (ld_with_stack l1 (Load.stack l)) mp rel) None) w2))
+                ((Pair (Pair l1p (Some f1p)) w2p)
+                 (match (init_prepare l1p f1p rest w2p)   ; the Init demand of the file's forms, its taken names (slice 3.26)
                 ((Pair (Pair l1 None) w2) (Pair (Pair (ld_add_failed (ld_with_stack l1 (Load.stack l)) mp rel) None) w2))
                 ((Pair (Pair l1a (Some f1)) w2)
                  (match (pre_register_late l1a f1 rest)
@@ -1243,7 +1312,7 @@
                                           (RModule mp (join_path rel) (Fx.hash f) (Fx.vis f)))
                                   fp)
                             w3)))
-                   ((Pair (Pair l2 None) w3) (Pair (Pair (ld_add_failed (ld_with_stack l2 (Load.stack l)) mp rel) None) w3))))))))))))))))))))))))))
+                   ((Pair (Pair l2 None) w3) (Pair (Pair (ld_add_failed (ld_with_stack l2 (Load.stack l)) mp rel) None) w3))))))))))))))))))))))))))))
 ;; the prefix a file's declarations take: its own module, or the sealed directory's for a file
 ;; directly inside a directory that has a view (one module across the directory's files; the
 ;; view and the implementation already carry it)
@@ -1330,7 +1399,7 @@
   (measure (struct toks))
   (match toks
     (Nil False)
-    ((Cons t r) (if (name_taken (Load.env l) (name_append p t)) True (use_needed l p r)))))
+    ((Cons t r) (if (env_has (Load.env l) (name_append p t)) True (use_needed l p r)))))
 ;; E: every hit of a token by suffix marks the prefix above the token in its identity
 (fn needed_e ((es ESt) (toks (List Name)) (needed (IntMap Bool))) (IntMap Bool)
   (measure (struct toks))
@@ -1697,8 +1766,8 @@
        ((FTrusts ns) (load_forms l (fx_trust f ns) r fuel w))
        ((FImportInit n)
         (match (init_through l n w)
-          ((Pair (Pair l1 True) w1) (load_forms l1 (fx_see f Nil (init_horizon l1 n)) r fuel w1))
-          ((Pair (Pair l1 False) w1) (Pair (Pair l1 None) w1))))
+          ((Pair (Pair l1 (Some h)) w1) (load_forms l1 (with Fx (fx_see f Nil h) (initname n)) r fuel w1))
+          ((Pair (Pair l1 None) w1) (Pair (Pair l1 None) w1))))
        ((FImportFile p)
         (match (import_file l f p (- fuel 1) w)
           ((Pair (Pair l1 (Some f1)) w1) (load_forms l1 f1 r fuel w1))
@@ -1800,10 +1869,10 @@
   (match x
     ((RModule m file h cl) (append "MODULE " (append (show_name m) (append " file=" (append file (append " hash=" (append (show_nat h) (append " sees=" (show_names_c cl)))))))))
     ((RUnused m ps) (append "UNUSED " (append (show_name m) (append " use=" (show_names_c ps)))))
-    ((RInit n k) (append "INIT " (append (match n (Anon "(all)") (_ (show_name n))) (append ": " (append (show_nat k) " declarations admitted")))))
+    ((RInit n h k) (append "INIT " (append (match n (Anon "-") (_ (show_name n))) (append ": horizon " (append (show_nat h) (append ", " (append (show_nat k) " declarations admitted")))))))
     ((RAccept n m h axs pfx ps)
      (append "ACCEPT " (append (show_name n) (append " module=" (append (show_name m) (append " hash=" (append (show_nat h)
-       (append " axioms=" (append (show_names_c axs) (append " init=" (append (match pfx (Anon "-") (_ (show_name pfx))) (append " params=" (show_names_c ps)))))))))))))
+       (append " axioms=" (append (show_names_c axs) (append " init=" (append (if (lt pfx 0) "-" (show_nat pfx)) (append " params=" (show_names_c ps)))))))))))))
     ((RParam n k a) (append "PARAM " (append (show_name n) (append " " (append (chars_of_sym k) (if (sym_eq k (quote type)) (append " arity=" (show_nat a)) Nil))))))
     ((RDischarge n k) (append "DISCHARGE " (append (show_name n) (append " " (chars_of_sym k)))))
     ((RImplErr n e m) (append "IMPL-ERROR " (append (show_name n) (append " " (append (chars_of_sym e) (append ": " m))))))
@@ -1850,7 +1919,7 @@
        ((RImplRec y) (rec_count y acc))
        ((RReadErr _ _ _) (list a b u c d e f (+ g 1)))
        ((RLoadErr _ _ _) (list a b u c d e f (+ g 1)))
-       ((RInit _ _) acc)
+       ((RInit _ _ _) acc)
        ((RUnused _ _) acc)
        ((RProved _ _ _) acc)
        ((REngine _ _) acc)

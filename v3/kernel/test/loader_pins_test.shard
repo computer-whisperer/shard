@@ -1,9 +1,11 @@
 ;;; v3/kernel/test/loader_pins_test.shard — replays v3/pins/loader/CASE/main.shard
 ;;; (the list below) as a package rooted at CASE through the loader and
 ;;; compares the load's outcome with the file's `;; expect:` header
-;;; (v3/pins/loader/README.md). The two export fixtures are streamed once
-;;; for the whole run (slice 3.25); each case's root loads fresh on that
-;;; Init state, its `(import Init NAME)` answered from the ordinal table.
+;;; (v3/pins/loader/README.md). The export and its index are opened once
+;;; for the whole run and Init's load carried from case to case (slices 3.25
+;;; and 3.26): each case's root loads fresh on K's environment of Init alone,
+;;; its `(import Init NAME)` answered from the name table, what it cites
+;;; loaded on demand — once in the process.
 ;;; The `realize_*` cases are slice 5b's (§7.5); `entry`, `entry_s`,
 ;;; `same_spelled` and `realize_theorem` are slice 7's (§9, T5).
 
@@ -84,7 +86,7 @@
 (fn rec_ok ((x Rec)) Bool
   (measure (struct x))
   (match x
-    ((RModule _ _ _ _) True) ((RInit _ _) True) ((RAccept _ _ _ _ _ _) True) ((RUnused _ _) True) ((RDerive _ _ _ _ _) True)
+    ((RModule _ _ _ _) True) ((RInit _ _ _) True) ((RAccept _ _ _ _ _ _) True) ((RUnused _ _) True) ((RDerive _ _ _ _ _) True)
     ((RParam _ _ _) True) ((RDischarge _ _) True) ((RRun _ _ _ _) True) ((RRealize _ _ _ _) True) ((RDefine _ _ _) True)
     ((RImplRec y) (rec_ok y))
     (_ False)))
@@ -148,9 +150,10 @@
 (fn prefix_all ((p (List Int)) (ws (List (List Int)))) (List (List Int))
   (measure (struct ws))
   (match ws (Nil Nil) ((Cons w r) (Cons (append p w) (prefix_all p r)))))
-;; every case starts from one load of the whole export (slice 3.25 rule 3): Init streamed once
-;; in this process, the case's root fresh on it (ld_reroot) — a case's records are those of its
-;; own load, since a module's Init horizon is its imports' (rule 2)
+;; every case starts from one Init load of this process (slice 3.25 rule 3; slice 3.26: the
+;; export and its index opened once, the records a case demands loaded once), the case's root
+;; fresh on it (ld_reroot) — a case's records are those of its own load, since a module's Init
+;; horizon is its imports' (rule 2)
 (fn run ((cs (List (List Int))) (l0 Load) (fails Int) (w World)) World
   (measure (struct cs))
   (match cs
@@ -165,15 +168,14 @@
               (None (run r l0 (+ fails 1) (write_line (append "FAIL bad root " c) w1)))
               ((Some rootp)
                (match (load_all (ld_reroot l0 rootp) (root_files c src) w1)
-                 ((Pair l w2)
+                 ((Pair l w2)   ; the next case re-roots from this one: Init's load carried, the case's own declarations not
                   (if (matches ws (ld_recs l))
-                    (run r l0 fails (write_line (append "PASS " (append c (append " — " (show_words ws)))) w2))
-                    (run r l0 (+ fails 1) (write_line (append "FAIL " (append c (append " expected " (append (show_words ws) (append " got " (match (first_bad (ld_recs l)) ((Some x) (show_rec x)) (None "all accepted"))))))) w2))))))))))))))
-;; the one load of the whole export every case starts from; the stream's own records printed
+                    (run r l fails (write_line (append "PASS " (append c (append " — " (show_words ws)))) w2))
+                    (run r l (+ fails 1) (write_line (append "FAIL " (append c (append " expected " (append (show_words ws) (append " got " (match (first_bad (ld_recs l)) ((Some x) (show_rec x)) (None "all accepted"))))))) w2))))))))))))))
+;; the one Init load every case starts from: the export and its index named, opened by the
+;; first case that imports Init
 (fn run_all ((rcpt (List (Pair (List Int) Int))) (w World)) World
-  (match (init_all (ld_with_receipt (load0 (list "v3" "pins") (list (fixture_int) (fixture_tail))) rcpt) w)
-    ((Pair (Pair l0 True) w1) (run (cases) l0 0 (write (show_recs (ld_recs l0)) w1)))
-    ((Pair (Pair l0 False) w1) (exit 2 (write (show_recs (ld_recs l0)) (write_line "loader_pins_test: the export did not load" w1))))))
+  (run (cases) (ld_with_receipt (kit_load0 (list "v3" "pins") True) rcpt) 0 w))
 ;; `--init-receipt FILE` (slice 3.23): every case's load under the receipt — the records must not change
 (fn main ((w World)) World
   (match (get_args w)

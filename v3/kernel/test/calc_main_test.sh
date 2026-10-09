@@ -12,9 +12,9 @@
 set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
-FIX=v3/kernel/test/fixtures/init_prefix_int.ndjson
-RCPT=${INIT_RECEIPT:+--init-receipt $INIT_RECEIPT}   # the Init receipt (init_receipt.sh), set by v3/test.sh
-TAIL=v3/kernel/test/fixtures/init_prefix_str_tail.ndjson
+read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "calc_main_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
+INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
+RCPT=${INIT_RECEIPT:+--init-receipt $INIT_RECEIPT}   # the Init receipt (slice 3.23), set by v3/test.sh when one exists
 INPUTS=v3/kernel/test/fixtures/calc_inputs.txt
 got=$(mktemp); want=$(mktemp); model=$(mktemp); trap 'rm -f "$got" "$want" "$model"' EXIT
 
@@ -22,12 +22,12 @@ lines=()
 while IFS= read -r line || [ -n "$line" ]; do lines+=("$line"); done < "$INPUTS"
 
 s=$(date +%s)
-"$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" --init "$TAIL" $RCPT --run examples.calc.calc_main.main v3/examples/calc/calc_main.shard -- "${lines[@]}" > "$got" 2>&1; rc=$?
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT $RCPT --run examples.calc.calc_main.main v3/examples/calc/calc_main.shard -- "${lines[@]}" > "$got" 2>&1; rc=$?
 e=$(date +%s)
 [ "$rc" -eq 0 ] || { echo "calc_main_test: the program failed (exit $rc)"; head -5 "$got"; exit 1; }
 echo "calc_main_test: the program on the host in $((e-s)) s, $(wc -l < "$got") lines"
 
-"$EVAL" direct v3/kernel/test/calc_harness.shard "$FIX" "$INPUTS" "$TAIL" > "$model" 2>&1 || { echo "calc_main_test: the harness failed"; head -5 "$model"; exit 1; }
+"$EVAL" direct v3/kernel/test/calc_harness.shard "$EXPORT" "$INDEX" "$INPUTS" > "$model" 2>&1 || { echo "calc_main_test: the harness failed"; head -5 "$model"; exit 1; }
 # the model world's lines: after CalcWorld, an outer Cons opens a line, an inner Cons is
 # followed by a code, an inner Nil ends the line, the outer Nil ends the list
 grep '^\* run_world: ' "$model" | tr '()' '  ' | awk '

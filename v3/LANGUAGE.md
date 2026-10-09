@@ -1800,7 +1800,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.23 | the Init cache (ruled 2026-10-08 on GPT-6's R75, the feedback cost; item 57; the design and the as-built below; **landed 2026-10-08; closed on pipeline 554**): the loader admits the pinned export under a T0 run's receipt, the typing judgments skipped — K's verdict cached, no second format, the release gate untouched | a load's Init cost and the loader pins' wall clock |
 | 3.24 | the connected path (ruled 2026-10-09 on GPT-6's R76; item 58; the design and the as-built below; **landed 2026-10-09; closed on pipeline 556**): `(dif h C T F)`, the dependent if with its hypothesis named — the branch-local proof joint; `examples/path`, law §12.4's first connected path assembled as one test and broken at each joint; its cost measured | the one phase-3 joint still missing; the composition cost before the broad port |
 | 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built below; **landed 2026-10-09; closed on pipeline 559**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s | the suite's wall clock before the library arc multiplies the pins |
-| 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landing 1 landed 2026-10-09, green on pipeline 561; landings 2–3 open**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
+| 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landings 1–2 landed 2026-10-09 (1 green on pipeline 561); landing 3 open**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -4623,9 +4623,13 @@ many roots has no reason to read it more than once. Three rules:
    constant under a name (`already_declared`) and the release gate
    holds the whole export; a driver whose lazy stream stopped short
    accepts what the gate refuses — the one place the lazy stream and the
-   gate disagree, stated, closed at the gate (and found live the same
-   day in `v3/std/list.shard`'s `List.sum`, an Init definition past
-   every fixture: item 59 reopens the name index on it).
+   gate disagree, stated, closed at the gate. (The claim made the same
+   day that `v3/std/list.shard`'s `List.sum` was such a case was wrong:
+   that file declares `std.list.List.sum`, as §3.1 says every declared
+   name carries the module path, and K holds it beside Init's
+   `List.sum`; the live shape is a module named as an Init namespace —
+   the pin `registry_native`'s `Bool` — which slice 3.26 rule 5 refuses
+   from the name table wherever it loads.)
 3. **The loader pins' entrypoint streams once.** The two fixtures are
    streamed to their end under the receipt, each case loaded fresh on
    that state by `ld_reroot`; a case's records are its own module's,
@@ -4797,6 +4801,103 @@ range read, as rules 1 and 2.
   found by its key, not its position; the fixtures' records are 3,523
   as K counts them, and the quotient's four records each name their own
   constant.
+
+**Slice 3.26 as built, landing 2** (2026-10-09): the loader on demand,
+as rules 3–6; the fixtures deleted.
+
+- **Rule 3, the walk** (`kernel/initload.shard`): the export and its
+  index opened at a process's first need (`od_open`: the meta line
+  against the pin, the index's header, the export's size the header's);
+  a name's ordinal by binary search, memoized, the search's top ten
+  levels of rows cached (`od_lookup`); the closure of a set of
+  demanded records walked by range reads (`od_load`): the blocks
+  scheduled highest first, a block read once and scanned from its
+  record line backwards, every pending line parsed and its name, level
+  and expression ids pushed — a child precedes its parent, so in the
+  same block it comes later in the scan and in an earlier block it
+  schedules that block — and a constant an expression cites resolved by
+  its name id through the **declaration table** (the third table, 9
+  bytes a name id, added here: without it a constant's record is found
+  only by rendering its name, which needs the name's ancestors, which
+  come later in the walk) to the record declaring it, which is pushed.
+  The lines come out ascending (sorted only when a push went upward)
+  and go through K's `process_record`: node lines into K's tables,
+  sparse, the ids the export's; records checked, or admitted under a
+  receipt. What K has been fed persists (`OdDone`), so a line is fed
+  once in a process. **The demand** (`loader.shard` `init_prepare`,
+  after a file's directives): every token of its forms under
+  resolution's candidates (`scope_candidates`, the token's `@` sigil
+  dropped, the candidates under a prefix the export declares nothing
+  under skipped — the file's own identity, an opened native module),
+  the gates' kits — K's and the pins' (`k_kit`), the elaborator's
+  (`el_kit`), the tactics' (`tc_kit`), arith's (`ar_all_kit`), the
+  derivations' (`dv_kit`), the definer's (`df_kit`) — and, for an
+  inductive block's names among them, their satellites; the names the
+  table places below the horizon, their closure through K. `(import
+  Init NAME)` takes NAME's ordinal from the name table (`init_through`;
+  a name the export does not declare is `init_name_not_found`) and the
+  record reads `INIT NAME: horizon H, N declarations admitted`.
+- **K's run of Init alone.** The loader's Init state holds K's run fed
+  Init's records and nothing else; each demand is checked into it
+  (`od_load`) and then admitted into the loader's own environment,
+  which holds the natives beside Init (`od_admit`: the same lines over
+  the run's tables, without the typing judgments, as under a receipt).
+  `ld_reroot` starts a fresh root on that run's environment, so a
+  process loading many roots loads each record once: the loader pins'
+  entrypoint runs its 225 cases in 42 s, every record checked, against
+  33 s admitted under the receipt and 57 s checked at slice 3.25; the
+  first form of this landing, re-rooting from the state before any
+  demand, took 1,761 s.
+- **Rule 4.** Unchanged in code: `init_within` on the true ordinals
+  (`ld_add_inits` enters each admitted constant with its ordinal);
+  `ACCEPT … init=H` carries the module's horizon. Three constructed
+  names the kits lacked were found as the law says, by a refusal:
+  `Lean.Omega.Int.mul_congr` (arith composes it from the operator;
+  `calc_app`'s descent proof and the `arith_div` pin), the `@` sigil
+  on a token (`std/derive.shard`'s `@String.toByteArray_inj`), and the
+  `init_not_found` pin, which asked for `Int.tdiv` past the fixture's
+  end and now asks for a name the export lacks.
+- **Rule 5** (`name_taken`): a file's `Fx.taken` is every name the
+  export declares under the file's identity (`od_names_under`, one
+  search and a forward read), and a declaration — the file's own, a
+  derivation's — bearing one is refused `name_taken`; the release gate
+  looks each stored name up in the table and refuses it as `TAKEN`.
+  Found running it: the `List.sum` case item 59(c) was reopened on is
+  no case — `v3/std/list.shard` declares `std.list.List.sum` (§3.1), K
+  holds both — and the live shape is `registry_native`'s module `Bool`;
+  `define_test` now requires that refusal where it used to read the
+  lazy driver's acceptance.
+- **Rule 6.** The three prefix fixtures and `init_receipt.sh` are
+  deleted; every consumer reads the export and its index (`test/
+  init_index.sh` prints both paths; `v3/test.sh` keeps the index
+  current where it kept the receipt): the shell tests through
+  `--init EXPORT --init-index INDEX`, the loader kit's tests through
+  `kit_load0`, `calc_harness.shard EXPORT INDEX INPUTS`,
+  `verify_release.shard [-v] DIR EXPORT INDEX` (its demand: every
+  constant the store's records cite, resolved through the index and
+  checked, never admitted), `route2_test` and `t0_fixture_test` on the
+  export's first 3,000 lines against the full oracle, `index_test` on
+  its first 20,000 (519 records, 691 names, 3,153 name ids; 9 s
+  against 125 s). The receipt stays a flag (`--init-receipt`, the
+  export listed at its byte count), with no writer until landing 3.
+- **Measured** (bootstrap, checked, no receipt; the loads in parallel):
+  `examples/calc/calc.shard` 12 s (its demand through `Int.decEq`: 667
+  records), `calc_spec` 29 s, `calc_app` 28 s, `natabs` 26 s,
+  `calc_proof` 34 s (through `Lean.Omega.Int.ofNat_lt_of_lt`: 1,274
+  records), `examples/auto` 24 s, `std/bytes` 24 s (through
+  `UInt8.toNat`: 1,305), `std/list` 10 s, `std/derive` 26 s,
+  `examples/path` 22 s (through `List.get?Internal`: 1,155); the
+  nested-import pin 1 s. The index is one file of 19,208,769 bytes,
+  built by the route-1 driver in 36 s and verified in 36 s (the two
+  tables of landing 1: 68 s and 71 s).
+- **Gates run:** the 225 loader pins 0 failed in 42 s, `loader_test`
+  0 failed, the full suite's 38 entrypoints with 0 failed in 455 s against 613 s at landing 1 (parity byte-identical over 31 closures and 133,465 declarations in 267 s; `store_test` 350 s, the suite's wall clock; `path_test` 228 s; `define_test` 230 s; `calc_test` 215 s; `k_clients_test` 69 s; the loader pins' entrypoint 42 s). None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **Found on the way:** K's `unknown_constant` refusal names the
+  declaration, not the constant it lacks (a kit's defect was found by
+  instrumenting a scratch copy of K to carry the name) — a diagnostic
+  worth K's refusal carrying it, deferred; the block offset of landing
+  1's record table was the newline before a block's first line (one
+  byte early, the verify tolerating it), fixed with the format.
 
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
@@ -5936,12 +6037,15 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     release gate always does; a lazy driver that stopped short accepts
     what the gate refuses — stated as the one disagreement, closed at
     the gate. A name index of the export for the driver (a second file
-    beside the receipt) was rejected at the build and is **reopened the
-    same day on evidence**: `v3/std/list.shard` (slice 3.13) declares
-    `(fn List.sum …)`, and `List.sum` is an Init definition (export line
-    882,911) that no lazy stream of the fixtures reaches — the driver
-    accepts a file the release gate refuses, inside the repository's own
-    library; the library arc's first landing settles the index. (d)
+    beside the receipt) was rejected at the build and reopened the same
+    day on what was taken for evidence — `v3/std/list.shard`'s `(fn
+    List.sum …)` against Init's `List.sum` — and that reading was wrong
+    (found at slice 3.26 landing 2, by running it): the file declares
+    `std.list.List.sum`, every declared name carrying the module path
+    (§3.1), and K holds both. The index stands on its own ground
+    instead: slice 3.26 rule 5, the driver and the gate refusing from
+    the name table alike, closes (c) for the one live shape, a module
+    named as an Init namespace (`registry_native`'s `Bool`). (d)
     **The loader pins' entrypoint streams once** — 783 s to 33 s — and
     the three pins that leaned on the stream stopping short are
     restated, one of them (`registry_native`) now the refusal of (c).
@@ -5963,3 +6067,20 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     statement, the loader native, a serialized environment. *Measured
     at the ruling:* line-level closures under one percent of the
     export; block-level closures up to a third (the unit is the line).
+    *Amended at landing 2 (2026-10-09, as built):* (a) the index is
+    one file of three tables — the record table, the name table and a
+    **declaration table** (9 bytes a name id: the ordinal of the record
+    declaring the constant of that name), which the walk needs when an
+    expression line cites a constant by its name id; (b) K's run of
+    Init alone persists in the loader's Init state and is carried
+    across the roots of a process (`ld_reroot`), each demand checked
+    once into it and admitted once into the loader's own environment,
+    which holds the natives beside Init — the alternative, re-rooting
+    from the state before any demand, re-checked every case's closure
+    (the loader pins: 1,761 s against 42 s); (c) the kit lists are each
+    gate's own (`el_kit`, `tc_kit`, `ar_all_kit`, `dv_kit`, `df_kit`,
+    K's and the pins' in the loader) and an inductive block's names
+    demand their satellites (`casesOn`, `noConfusionType`,
+    `noConfusion`, `below`, `brecOn`, a constructor's `inj`); (d) item
+    59(c)'s `List.sum` evidence was a misreading (the declared name is
+    `std.list.List.sum`): rule 5 stands on `registry_native`'s shape.

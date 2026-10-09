@@ -2660,6 +2660,39 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-09 — slice 3.26 landing 2 built: the loader on demand, the
+  fixtures deleted (`LANGUAGE.md` §8.4 "as built, landing 2"; item 60
+  amended).** `kernel/initload.shard`: the export opened by its index,
+  names by binary search, the closure of the demanded records walked by
+  range reads — blocks highest first, each read once and scanned from
+  its record line back, a cited constant resolved by its name id through
+  a third table, the declaration table, added to the index for it — and
+  fed to K in export order, checked; what K was fed persists. The loader
+  demands, after a file's directives, every token's candidates
+  (resolution's, pruned of prefixes the export declares nothing under),
+  the gates' kits — each gate's own now — and an inductive name's
+  satellites, below the horizon; K's run of Init alone persists in the
+  Init state and is carried across the roots of a process, each demand
+  checked into it once and admitted into the loader's environment, which
+  holds the natives too (the first form, re-rooting from the state before
+  any demand, re-checked every pin's closure: 1,761 s against 42 s).
+  `name_taken` from the table under the file's identity; the release gate
+  demands what the store cites and refuses a stored name the export
+  declares (`TAKEN`). Found running it: the `List.sum` collision item
+  59(c) was reopened on is no collision — `v3/std/list.shard` declares
+  `std.list.List.sum`, every declared name carrying the module path
+  (§3.1 says so), K holds both — and the live shape is a module named as
+  an Init namespace (`registry_native`'s `Bool`): the ledger corrected in
+  item 59(c), slice 3.25's text and here; three names the kits lacked
+  found by refusal (`Lean.Omega.Int.mul_congr`; a token's `@` sigil; the
+  `init_not_found` pin asking for a name the fixture lacked, not the
+  export). Measured: the loads of calc's five files, auto, bytes, list,
+  derive and path 10–34 s each on the bootstrap, checked, in parallel;
+  the loader pins 225 cases in 42 s checked (33 s admitted at 3.25);
+  `index_test` 9 s against 125 s; the index one file of 19.2 MB, built
+  natively in 36 s. Gates: the full suite's 38 entrypoints with 0 failed in 455 s against 613 s at landing 1 (parity byte-identical over 31 closures and 133,465 declarations in 267 s; `store_test` 350 s, the suite's wall clock; `path_test` 228 s; `define_test` 230 s; `calc_test` 215 s; `k_clients_test` 69 s; the loader pins' entrypoint 42 s). None of the files route 1 compiles
+  changed but host.shard at landing 1; the full replay and the corpus are
+  CI's.
 - **2026-10-09 — pipeline 561 green on `97009cc`: engine 437 s — the native engine rebuilt, `tools/codegen/rt.h` and the codegen table being in its stamp and both carrying `read_range` now; corpus 1,455 s at the baseline; v3 4,626 s of a 3 h limit, 16 s over pipeline 559's 4,610 (38 entrypoints with 0 failed in 1,518 s; `index_test` 164 s, the fixtures' index built in 70 s on the runner; `store_test` 1,160 s; `path_test` 788 s; parity byte-identical over 31 closures and 130,762 declarations in 701 s; `engine_test` 267 s; route 1's native build of the kernel 422 s; the export 122 s; the replay 2,493 s at 32.4 GB); T0 accepted 57,977, 20 pinned, closures identical. Landing 1 of slice 3.26 holds on the full gate; landings 2 and 3 are open.**
 - **2026-10-09 — slice 3.26 ruled and landing 1 built: Init on demand
   (`LANGUAGE.md` §8.4 slice 3.26; §13 item 60).** At the boundary after
@@ -2723,12 +2756,13 @@ is `docs/FOUNDATION.md` §5.3.
   speaks for a native declaration bearing its name) stands for a lazy
   driver and `define_test.sh` reads that dump. Drivers stream lazily as
   before; `path_test`'s four loads are four processes, out of reach.
-  Found the same day, reading the export for the library arc's design:
-  `v3/std/list.shard` declares `(fn List.sum …)` and `List.sum` is an
-  Init definition at export line 882,911, past every fixture — the
-  driver accepts what the gate would refuse, in the repository's own
-  library; item 59(c)'s rejected name index is reopened on it, for the
-  library arc's first landing.
+  Found the same day, reading the export for the library arc's design,
+  and taken for a live case: `v3/std/list.shard` declares `(fn List.sum
+  …)` and `List.sum` is an Init definition at export line 882,911 —
+  item 59(c)'s rejected name index was reopened on it. Corrected at
+  slice 3.26 landing 2 by running it: the file declares
+  `std.list.List.sum`, every declared name carrying the module path
+  (§3.1), and K holds both; the index stands on rule 5 instead.
 - **2026-10-09 — items 57 and 58 ratified by the user** (the Init cache's
   five decisions, the connected path's three), without reservation;
   `LANGUAGE.md`'s status block carries them. Every §13 item through 58 is

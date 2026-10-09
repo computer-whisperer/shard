@@ -4,7 +4,7 @@
 # v3/examples/path: the program loads (two imported Init functions realized with their
 # equations proved, the caller `at` with its branch-local proof, the two claims through I);
 # the entry runs on a raw argument; the load's constants are stored; K alone replays the
-# store after the Init fixture. Then the law's five breaks, each required to fail by name:
+# store after the closure of Init it cites. Then the law's five breaks, each required to fail by name:
 # a wrong executable body in a realize (the equation refused), missing bound evidence (the
 # hypothesis cited outside its branch, or dropped from the Fin.mk), a mismatched revision
 # (the store's order line naming another declaration — MISTIED), a tampered result (a stored
@@ -14,16 +14,16 @@
 set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
-FIX=v3/kernel/test/fixtures/init_prefix_int.ndjson
-RCPT=${INIT_RECEIPT:+--init-receipt $INIT_RECEIPT}   # the Init receipt (init_receipt.sh), set by v3/test.sh
-TAIL=v3/kernel/test/fixtures/init_prefix_str_tail.ndjson
+read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "path_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
+INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
+RCPT=${INIT_RECEIPT:+--init-receipt $INIT_RECEIPT}   # the Init receipt (slice 3.23), set by v3/test.sh when one exists
 OUT=$(mktemp -d)
 SCRATCH=$(mktemp -d -p v3 path_scratch_XXXXXX)
 STORE=$(mktemp -d -p v3 path_store_XXXXXX)
 trap 'rm -rf "$OUT" "$SCRATCH" "$STORE"' EXIT
 fail=0; checks=0
 bad() { echo "path_test: $*"; fail=$((fail+1)); }
-load() { "$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" --init "$TAIL" $RCPT "$@"; }
+load() { "$EVAL" direct v3/kernel/load.shard --root v3 $INIT $RCPT "$@"; }
 MAIN=v3/examples/path/path_main.shard
 ENTRY=examples.path.path_main.main
 secs() { echo $(( $(date +%s) - $1 )); }
@@ -41,7 +41,7 @@ checks=$((checks+1)); [ "$(load --run $ENTRY "$MAIN" -- 7 2>&1 | tail -1)" = "6"
 checks=$((checks+1)); [ "$(load --run $ENTRY "$MAIN" -- 8 2>&1 | tail -1)" = "-" ] || bad "read past the end is not -"
 s=$(date +%s); load --store "$STORE" "$MAIN" > "$OUT/store.txt" 2>&1; t_store=$(secs $s)
 checks=$((checks+1)); grep -q "^STORE: $STORE new=56 shared=0$" "$OUT/store.txt" || { bad "the store did not take 56 declarations"; grep '^STORE' "$OUT/store.txt"; }
-s=$(date +%s); "$EVAL" direct v3/kernel/verify_release.shard "$STORE" "$FIX" "$TAIL" > "$OUT/verify.txt" 2>&1; rc=$?; t_verify=$(secs $s)
+s=$(date +%s); "$EVAL" direct v3/kernel/verify_release.shard "$STORE" "$EXPORT" "$INDEX" > "$OUT/verify.txt" 2>&1; rc=$?; t_verify=$(secs $s)
 checks=$((checks+1)); [ "$rc" = 0 ] && grep -q '^RELEASE: declarations 56  accepted 56 ' "$OUT/verify.txt" || { bad "K alone did not accept the 56 declarations (exit $rc)"; grep -v '^ACCEPT' "$OUT/verify.txt" | tail -3 | cut -c1-300; }
 echo "path_test: the path composes — load $t_load s, run $t_run s, store $t_store s, verify $t_verify s"
 
@@ -60,13 +60,13 @@ checks=$((checks+1)); [ "$rc" != 0 ] && grep -q "^REFUSE .*\.at " "$OUT/b2b.txt"
 # 3. a mismatched revision: the order line of at_some names another declaration
 cp -r "$STORE" "$SCRATCH/mistied"
 sed -i 's/ examples\.path\.path\.at_some$/ examples.path.path.at_other/' "$SCRATCH/mistied/order"
-"$EVAL" direct v3/kernel/verify_release.shard "$SCRATCH/mistied" "$FIX" "$TAIL" > "$OUT/b3.txt" 2>&1; rc=$?
+"$EVAL" direct v3/kernel/verify_release.shard "$SCRATCH/mistied" "$EXPORT" "$INDEX" > "$OUT/b3.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" != 0 ] && grep -q '^MISTIED' "$OUT/b3.txt" && grep -q 'mistied 1 ' "$OUT/b3.txt" || { bad "the mismatched order line was not MISTIED (exit $rc)"; grep -v '^ACCEPT' "$OUT/b3.txt" | tail -3 | cut -c1-300; }
 # 4. a tampered result: at_some's proof replaced by its statement
 cp -r "$STORE" "$SCRATCH/tampered"
 f=$(grep ' examples\.path\.path\.at_some$' "$STORE/order" | cut -d' ' -f1)
 sed -i -E 's/"type":([0-9]+),"value":[0-9]+/"type":\1,"value":\1/' "$SCRATCH/tampered/$f.ndjson"
-"$EVAL" direct v3/kernel/verify_release.shard "$SCRATCH/tampered" "$FIX" "$TAIL" > "$OUT/b4.txt" 2>&1; rc=$?
+"$EVAL" direct v3/kernel/verify_release.shard "$SCRATCH/tampered" "$EXPORT" "$INDEX" > "$OUT/b4.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" != 0 ] && grep -q '^REJECT' "$OUT/b4.txt" && grep -q 'rejected 1 ' "$OUT/b4.txt" || { bad "the tampered proof was not REJECTED (exit $rc)"; grep -v '^ACCEPT' "$OUT/b4.txt" | tail -3 | cut -c1-300; }
 # 5. an invalid raw argument
 load --run $ENTRY "$MAIN" -- x > "$OUT/b5.txt" 2>&1; rc=$?

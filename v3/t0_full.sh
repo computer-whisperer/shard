@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # v3/t0_full.sh [LOG] — T0 over the WHOLE export on compiled K (v3/build.sh),
 # gated twice: (1) the interpreter byte-tie — `eval direct` and the binary
-# print byte-identical verbose per-declaration output on the committed fixture
+# print byte-identical verbose per-declaration output on the export's first chunks
 # and on the export's first 100,000 lines (the authority confirming the
 # engine, FOUNDATION §9.1) — each engine required to EXIT 0 and to print its
 # verdict line before the logs are compared (GPT-6 R54: two engines can agree
@@ -33,7 +33,6 @@ if [ ! -d "$CH" ] || [ -z "$(ls "$CH" 2>/dev/null)" ]; then
   mkdir -p "$CH"
   (cd "$CH" && split -l 20000 -d -a 4 "$DIR/init.ndjson" probe_)
 fi
-FIX=v3/kernel/test/fixtures/init_prefix_3000.ndjson
 
 # the driver's -p line: every candidate present in the environment pinned (its
 # identity closure matched accel_pins.shard's reference rows — FOUNDATION §3.2,
@@ -67,8 +66,6 @@ tie() {
   cmp "$LOG.tie_interp" "$LOG.tie_native" || { echo "BYTE-TIE FAILED ($label)"; diff "$LOG.tie_interp" "$LOG.tie_native" | head -20; return 1; }
   echo "   $label: identical ($(wc -l < "$LOG.tie_native") lines)"
 }
-echo "== byte-tie: interpreter vs compiled K, verbose + closures, on the fixture"
-tie fixture -v -a -p "$FIX" || exit 1
 echo "== byte-tie: chunks 0-4 (100,000 lines)"
 PRE=$(ls "$CH"/probe_000[0-4])
 tie "chunks 0-4" -v -a -p $PRE || exit 1

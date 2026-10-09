@@ -1,26 +1,31 @@
-;;; v3/kernel/index.shard — the Init index (LANGUAGE.md §8.4 slice 3.26 rule 1):
-;;; two tables over the export, built by one pass and read by range, never loaded
-;;; whole. The RECORD TABLE is a 62-byte header row and one 62-byte row per
-;;; record in export order — `ORDINAL KIND OFFSET LENGTH IN IL IE`: the ordinal
-;;; (8 digits), the kind (one byte: a axiom, d definition, t theorem, o opaque,
-;;; i inductive block, q quotient), the byte offset (12) and length (10) of the
-;;; record's block (the lines it emits before its own line, then its line), and
-;;; the first name, level and expression id (8 each) the block holds — holding
-;;; none, the next id the export assigns — so the block holding an id is the
-;;; LAST row whose first id is at most it (ids are assigned in emission order).
-;;; The NAME TABLE is a 218-byte header row and one 218-byte row per declaration
-;;; name (a definition's, a theorem's, an axiom's, an opaque's, a quotient's; an
-;;; inductive block's types, constructors and recursors), sorted bytewise: the
-;;; name as show_name renders it padded with spaces to 208 bytes, a space, the
-;;; ordinal (8 digits); a name is a binary search of range reads. Every row ends
-;;; in a newline. The header rows carry the export's byte count (an index over
-;;; another export is refused), the record and name counts and the meta line's
-;;; length (block 0 begins after it). The pass refuses two names rendering
-;;; alike (the table would be ambiguous) and a name past the row's width.
-;;; `ix_verify` reads both tables back against the export: every record line
-;;; at the row's offset and length with the row's kind and first ids, every
-;;; name of it found at its ordinal, the name table sorted without a duplicate.
-;;; The driver is initindex.shard; the loader reads the tables (slice 3.26 rule 3).
+;;; v3/kernel/index.shard — the Init index (LANGUAGE.md §8.4 slice 3.26 rule 1, the
+;;; declaration table added at landing 2): three tables over the export in one file,
+;;; built by one pass and read by range, never loaded whole. A 128-byte HEADER row,
+;;; `#INDEX records=R bytes=B meta=M names=N decls=D`: the record count, the export's
+;;; byte count (an index over another export is refused), the meta line's length (block
+;;; 0 begins after it), the name rows and the declaration rows. Then the RECORD TABLE:
+;;; one 62-byte row per record in export order, `ORDINAL KIND OFFSET LENGTH IN IL IE` —
+;;; the ordinal (8 digits), the kind (one byte: a axiom, d definition, t theorem, o
+;;; opaque, i inductive block, q quotient), the byte offset (12) and length (10) of the
+;;; record's block (the lines it emits before its own line, then its line), and the
+;;; first name, level and expression id (8 each) the block holds — holding none, the
+;;; next id the export assigns — so the block holding an id is the LAST row whose first
+;;; id is at most it (ids are assigned in emission order). Then the NAME TABLE: one
+;;; 218-byte row per declaration name (a definition's, a theorem's, an axiom's, an
+;;; opaque's, a quotient's; an inductive block's types, constructors and recursors),
+;;; sorted bytewise: the name as show_name renders it padded with spaces to 208 bytes, a
+;;; space, the ordinal (8 digits); a name is a binary search of range reads, the names
+;;; under a prefix one search and a forward read. Then the DECLARATION TABLE: one 9-byte
+;;; row per name id the export assigns, the ordinal (8 digits) of the record declaring
+;;; the constant of that name, blank for a name that is no declaration's — a constant an
+;;; expression line cites by its name id finds its record in one read (initload.shard's
+;;; walk). Every row ends in a newline. The pass refuses two names rendering alike (the
+;;; name table would be ambiguous) and a name past the row's width.
+;;; `ix_verify` reads the tables back against the export: every record line at the row's
+;;; offset and length with the row's kind and first ids, every name of it at its ordinal
+;;; in the name table and in the declaration table, the name table sorted without a
+;;; duplicate, the file's size the header's. The driver is initindex.shard; the loader
+;;; reads the tables through initload.shard (slice 3.26 rule 3).
 
 (import "host.shard")
 (import "json.shard")
@@ -44,16 +49,29 @@
 
 ;; ---- the formats ----------------------------------------------------------------------
 
+(fn ix_hdr_w () Int 128)       ; the header row
 (fn ix_row_w () Int 62)        ; a record row
 (fn ix_name_w () Int 208)      ; the name field of a name row
 (fn ix_nrow_w () Int 218)      ; a name row: the name, a space, the ordinal, a newline
+(fn ix_drow_w () Int 9)        ; a declaration row: the ordinal, a newline
 (fn ix_window () Int 4000000)  ; the pass reads the export in windows of this many bytes
 
 ;; a record row parsed: ordinal, kind byte, block offset, block length, first name, level
 ;; and expression id
 (type IxRow (IxRow Int Int Int Int Int Int Int))
-;; the record table's header parsed: records, the export's bytes, the meta line's length
-(type IxHdr (IxHdr Int Int Int))
+;; the header parsed: records, the export's bytes, the meta line's length, name rows,
+;; declaration rows
+(type IxHdr (IxHdr Int Int Int Int Int))
+(fn ix_hdr_records ((h IxHdr)) Int (match h ((IxHdr a _ _ _ _) a)))
+(fn ix_hdr_bytes ((h IxHdr)) Int (match h ((IxHdr _ a _ _ _) a)))
+(fn ix_hdr_meta ((h IxHdr)) Int (match h ((IxHdr _ _ a _ _) a)))
+(fn ix_hdr_names ((h IxHdr)) Int (match h ((IxHdr _ _ _ a _) a)))
+(fn ix_hdr_decls ((h IxHdr)) Int (match h ((IxHdr _ _ _ _ a) a)))
+;; where the tables sit: record row k, name row k, declaration row k, the file's size
+(fn ix_rec_at ((h IxHdr) (k Int)) Int (+ (ix_hdr_w) (* (ix_row_w) k)))
+(fn ix_nrow_at ((h IxHdr) (k Int)) Int (+ (ix_rec_at h (ix_hdr_records h)) (* (ix_nrow_w) k)))
+(fn ix_drow_at ((h IxHdr) (k Int)) Int (+ (ix_nrow_at h (ix_hdr_names h)) (* (ix_drow_w) k)))
+(fn ix_total ((h IxHdr)) Int (ix_drow_at h (ix_hdr_decls h)))
 
 (fn ix_zeros ((n Int)) (List Int)
   (measure n)
@@ -78,12 +96,14 @@
           (append (ix_num a 8) (Cons 32
             (append (ix_num b 8) (Cons 32
               (append (ix_num c 8) (list 10)))))))))))))))
-(fn ix_header ((records Int) (bytes Int) (meta Int)) (List Int)
-  (ix_pad_nl (append "#INDEX records=" (append (ix_num records 8) (append " bytes=" (append (ix_num bytes 12) (append " meta=" (ix_num meta 8)))))) (ix_row_w)))
-(fn ix_nheader ((rows Int)) (List Int)
-  (ix_pad_nl (append "#NAMES rows=" (append (ix_num rows 8) " width=208")) (ix_nrow_w)))
+(fn ix_header ((records Int) (bytes Int) (meta Int) (names Int) (decls Int)) (List Int)
+  (ix_pad_nl (append "#INDEX records=" (append (ix_num records 8) (append " bytes=" (append (ix_num bytes 12)
+               (append " meta=" (append (ix_num meta 8) (append " names=" (append (ix_num names 8) (append " decls=" (ix_num decls 8))))))))))
+             (ix_hdr_w)))
 (fn ix_render_nrow ((key (List Int)) (o Int)) (List Int)
   (append key (Cons 32 (append (ix_num o 8) (list 10)))))
+(fn ix_render_drow ((o Int)) (List Int) (append (ix_num o 8) (list 10)))
+(fn ix_blank_drow () (List Int) (append (ix_spaces 8) (list 10)))
 
 ;; the digits at start, width wide, as a number
 (fn ix_field ((bs (List Int)) (start Int) (width Int)) (Option Int)
@@ -120,54 +140,93 @@
          ((Some b)
           (match (ix_field bs 48 8)
             (None None)
-            ((Some m) (Some (IxHdr r b m))))))))))
-(fn ix_parse_nheader ((bs (List Int))) (Option Int)
-  (if (bool_not (int_list_eq (take 12 bs) "#NAMES rows=")) None (ix_field bs 12 8)))
+            ((Some m)
+             (match (ix_field bs 63 8)
+               (None None)
+               ((Some nn)
+                (match (ix_field bs 78 8)
+                  (None None)
+                  ((Some d) (Some (IxHdr r b m nn d))))))))))))))
 
 ;; ---- reading the tables (the loader's side) ----------------------------------------------
 
 (fn ix_read_header ((index (List Int)) (w World)) (Pair (Option IxHdr) World)
-  (match (read_range index 0 (ix_row_w) w)
+  (match (read_range index 0 (ix_hdr_w) w)
     ((Pair None w1) (Pair None w1))
     ((Pair (Some bs) w1) (Pair (ix_parse_header bs) w1))))
-(fn ix_read_nheader ((names (List Int)) (w World)) (Pair (Option Int) World)
-  (match (read_range names 0 (ix_nrow_w) w)
-    ((Pair None w1) (Pair None w1))
-    ((Pair (Some bs) w1) (Pair (ix_parse_nheader bs) w1))))
 ;; record row k
-(fn ix_read_row ((index (List Int)) (k Int) (w World)) (Pair (Option IxRow) World)
-  (match (read_range index (* (ix_row_w) (+ k 1)) (ix_row_w) w)
-    ((Pair None w1) (Pair None w1))
-    ((Pair (Some bs) w1) (Pair (ix_parse_row bs) w1))))
-;; a name's ordinal: the binary search of the name table (rows = its header's count)
-(fn ix_lookup ((names (List Int)) (rows Int) (nm Name) (w World)) (Pair (Option Int) World)
-  (ix_search names (ix_pad (show_name nm) (ix_name_w)) 0 (- rows 1) 64 w))
-(fn ix_search ((names (List Int)) (key (List Int)) (lo Int) (hi Int) (fuel Int) (w World)) (Pair (Option Int) World)
+(fn ix_read_row ((index (List Int)) (h IxHdr) (k Int) (w World)) (Pair (Option IxRow) World)
+  (if (bool_or (lt k 0) (le (ix_hdr_records h) k)) (Pair None w)
+    (match (read_range index (ix_rec_at h k) (ix_row_w) w)
+      ((Pair None w1) (Pair None w1))
+      ((Pair (Some bs) w1) (Pair (ix_parse_row bs) w1)))))
+;; name row k, raw
+(fn ix_read_nrow ((index (List Int)) (h IxHdr) (k Int) (w World)) (Pair (Option (List Int)) World)
+  (if (bool_or (lt k 0) (le (ix_hdr_names h) k)) (Pair None w)
+    (match (read_range index (ix_nrow_at h k) (ix_nrow_w) w)
+      ((Pair None w1) (Pair None w1))
+      ((Pair (Some bs) w1) (if (int_eq (len bs) (ix_nrow_w)) (Pair (Some bs) w1) (Pair None w1))))))
+;; a name's ordinal: the binary search of the name table
+(fn ix_lookup ((index (List Int)) (h IxHdr) (nm Name) (w World)) (Pair (Option Int) World)
+  (ix_search index h (ix_pad (show_name nm) (ix_name_w)) 0 (- (ix_hdr_names h) 1) 64 w))
+(fn ix_search ((index (List Int)) (h IxHdr) (key (List Int)) (lo Int) (hi Int) (fuel Int) (w World)) (Pair (Option Int) World)
   (measure fuel)
   (if (bool_or (le fuel 0) (lt hi lo)) (Pair None w)
     (let ((mid (/ (+ lo hi) 2)))
-      (match (read_range names (* (ix_nrow_w) (+ mid 1)) (ix_nrow_w) w)
+      (match (ix_read_nrow index h mid w)
         ((Pair None w1) (Pair None w1))
         ((Pair (Some row) w1)
          (let ((k (take (ix_name_w) row)))
            (if (int_list_eq k key) (Pair (ix_field row (+ (ix_name_w) 1) 8) w1)
              (if (int_list_lt k key)
-               (ix_search names key (+ mid 1) hi (- fuel 1) w1)
-               (ix_search names key lo (- mid 1) (- fuel 1) w1)))))))))
+               (ix_search index h key (+ mid 1) hi (- fuel 1) w1)
+               (ix_search index h key lo (- mid 1) (- fuel 1) w1)))))))))
+;; every name rendering with the prefix, as rendered: the first row at or past the prefix,
+;; then forward while the prefix holds
+(fn ix_names_under ((index (List Int)) (h IxHdr) (prefix (List Int)) (w World)) (Pair (List (List Int)) World)
+  (match (ix_lower index h prefix 0 (ix_hdr_names h) 64 w)
+    ((Pair k w1) (ix_prefix_rows index h prefix k 1000000 Nil w1))))
+;; the first row in [lo, hi) whose key is at or past key; hi when none
+(fn ix_lower ((index (List Int)) (h IxHdr) (key (List Int)) (lo Int) (hi Int) (fuel Int) (w World)) (Pair Int World)
+  (measure fuel)
+  (if (bool_or (le fuel 0) (le hi lo)) (Pair lo w)
+    (let ((mid (/ (+ lo hi) 2)))
+      (match (ix_read_nrow index h mid w)
+        ((Pair None w1) (Pair hi w1))
+        ((Pair (Some row) w1)
+         (if (int_list_lt (take (ix_name_w) row) key)
+           (ix_lower index h key (+ mid 1) hi (- fuel 1) w1)
+           (ix_lower index h key lo mid (- fuel 1) w1)))))))
+(fn ix_prefix_rows ((index (List Int)) (h IxHdr) (prefix (List Int)) (k Int) (fuel Int) (acc (List (List Int))) (w World)) (Pair (List (List Int)) World)
+  (measure fuel)
+  (if (bool_or (le fuel 0) (le (ix_hdr_names h) k)) (Pair (rev acc) w)
+    (match (ix_read_nrow index h k w)
+      ((Pair None w1) (Pair (rev acc) w1))
+      ((Pair (Some row) w1)
+       (if (ix_starts row prefix)
+         (ix_prefix_rows index h prefix (+ k 1) (- fuel 1) (Cons (ix_trim (take (ix_name_w) row)) acc) w1)
+         (Pair (rev acc) w1))))))
+;; the ordinal of the record declaring the constant with name id i; None for a name that
+;; is no declaration's, or past the table
+(fn ix_decl_of ((index (List Int)) (h IxHdr) (i Int) (w World)) (Pair (Option Int) World)
+  (if (bool_or (lt i 0) (le (ix_hdr_decls h) i)) (Pair None w)
+    (match (read_range index (ix_drow_at h i) (ix_drow_w) w)
+      ((Pair None w1) (Pair None w1))
+      ((Pair (Some bs) w1) (Pair (ix_field bs 0 8) w1)))))
 ;; the row whose block holds the id: the last row whose first id (which: 0 name, 1 level,
 ;; 2 expression) is at most it — a binary search over the record table
-(fn ix_block_of_id ((index (List Int)) (records Int) (which Int) (id Int) (w World)) (Pair (Option IxRow) World)
-  (ix_block_search index which id 0 (- records 1) None 64 w))
-(fn ix_block_search ((index (List Int)) (which Int) (id Int) (lo Int) (hi Int) (best (Option IxRow)) (fuel Int) (w World)) (Pair (Option IxRow) World)
+(fn ix_block_of_id ((index (List Int)) (h IxHdr) (which Int) (id Int) (w World)) (Pair (Option IxRow) World)
+  (ix_block_search index h which id 0 (- (ix_hdr_records h) 1) None 64 w))
+(fn ix_block_search ((index (List Int)) (h IxHdr) (which Int) (id Int) (lo Int) (hi Int) (best (Option IxRow)) (fuel Int) (w World)) (Pair (Option IxRow) World)
   (measure fuel)
   (if (bool_or (le fuel 0) (lt hi lo)) (Pair best w)
     (let ((mid (/ (+ lo hi) 2)))
-      (match (ix_read_row index mid w)
+      (match (ix_read_row index h mid w)
         ((Pair None w1) (Pair None w1))
         ((Pair (Some row) w1)
          (if (le (ix_row_first row which) id)
-           (ix_block_search index which id (+ mid 1) hi (Some row) (- fuel 1) w1)
-           (ix_block_search index which id lo (- mid 1) best (- fuel 1) w1)))))))
+           (ix_block_search index h which id (+ mid 1) hi (Some row) (- fuel 1) w1)
+           (ix_block_search index h which id lo (- mid 1) best (- fuel 1) w1)))))))
 (fn ix_row_first ((row IxRow) (which Int)) Int
   (match row ((IxRow _ _ _ _ a b c) (if (int_eq which 0) a (if (int_eq which 1) b c)))))
 (fn ix_row_ord ((row IxRow)) Int (match row ((IxRow o _ _ _ _ _ _) o)))
@@ -175,15 +234,13 @@
 (fn ix_row_off ((row IxRow)) Int (match row ((IxRow _ _ off _ _ _ _) off)))
 (fn ix_row_len ((row IxRow)) Int (match row ((IxRow _ _ _ n _ _ _) n)))
 
-;; ---- the pass ------------------------------------------------------------------------------
-
-;; the pass's state: the names so far (id → name), the next ordinal, the current block's
-;; first byte and first ids (-1 = none yet), the last ids seen, the rows rendered newest
-;; first, the name rows (the padded name, the ordinal) newest first, the meta line's
-;; length, the export's bytes once the end is read, the first failure's message (Nil =
-;; none); mode 0 builds, mode 1 verifies against the tables named (their name rows counted)
-;; (a plain type with accessors, as K's Run: route 1's chain compiles no record sugar)
-(type IxSt (IxSt (IntMap Name) Int Int Int Int Int Int Int Int (List (List Int)) (List (Pair (List Int) Int)) Int Int (List Int) Int (List Int) (List Int) Int Int))
+;; ---- the pass ---------------------------------------------------------------------------------
+;; its state: the names so far (by id), the next ordinal, the block's offset, the block's first
+;; name, level and expression id (-1: none yet), the last of each, the record rows (newest
+;; first), the name rows (padded name, ordinal), the declaration pairs (name id, ordinal), the
+;; meta line's length, the export's size, the first failure, the mode (0 build, 1 verify), the
+;; index verified against and its header, the names checked
+(type IxSt (IxSt (IntMap Name) Int Int Int Int Int Int Int Int (List (List Int)) (List (Pair (List Int) Int)) (List (Pair Int Int)) Int Int (List Int) Int (List Int) IxHdr Int))
 (fn ixs_names ((st IxSt)) (IntMap Name) (match st ((IxSt a _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _) a)))
 (fn ixs_ord ((st IxSt)) Int (match st ((IxSt _ a _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _) a)))
 (fn ixs_boff ((st IxSt)) Int (match st ((IxSt _ _ a _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _) a)))
@@ -195,40 +252,53 @@
 (fn ixs_lie ((st IxSt)) Int (match st ((IxSt _ _ _ _ _ _ _ _ a _ _ _ _ _ _ _ _ _ _) a)))
 (fn ixs_rows ((st IxSt)) (List (List Int)) (match st ((IxSt _ _ _ _ _ _ _ _ _ a _ _ _ _ _ _ _ _ _) a)))
 (fn ixs_nrows ((st IxSt)) (List (Pair (List Int) Int)) (match st ((IxSt _ _ _ _ _ _ _ _ _ _ a _ _ _ _ _ _ _ _) a)))
-(fn ixs_meta ((st IxSt)) Int (match st ((IxSt _ _ _ _ _ _ _ _ _ _ _ a _ _ _ _ _ _ _) a)))
-(fn ixs_size ((st IxSt)) Int (match st ((IxSt _ _ _ _ _ _ _ _ _ _ _ _ a _ _ _ _ _ _) a)))
-(fn ixs_bad ((st IxSt)) (List Int) (match st ((IxSt _ _ _ _ _ _ _ _ _ _ _ _ _ a _ _ _ _ _) a)))
-(fn ixs_mode ((st IxSt)) Int (match st ((IxSt _ _ _ _ _ _ _ _ _ _ _ _ _ _ a _ _ _ _) a)))
-(fn ixs_vindex ((st IxSt)) (List Int) (match st ((IxSt _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ a _ _ _) a)))
-(fn ixs_vnames ((st IxSt)) (List Int) (match st ((IxSt _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ a _ _) a)))
-(fn ixs_vrows ((st IxSt)) Int (match st ((IxSt _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ a _) a)))
+(fn ixs_drows ((st IxSt)) (List (Pair Int Int)) (match st ((IxSt _ _ _ _ _ _ _ _ _ _ _ a _ _ _ _ _ _ _) a)))
+(fn ixs_meta ((st IxSt)) Int (match st ((IxSt _ _ _ _ _ _ _ _ _ _ _ _ a _ _ _ _ _ _) a)))
+(fn ixs_size ((st IxSt)) Int (match st ((IxSt _ _ _ _ _ _ _ _ _ _ _ _ _ a _ _ _ _ _) a)))
+(fn ixs_bad ((st IxSt)) (List Int) (match st ((IxSt _ _ _ _ _ _ _ _ _ _ _ _ _ _ a _ _ _ _) a)))
+(fn ixs_mode ((st IxSt)) Int (match st ((IxSt _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ a _ _ _) a)))
+(fn ixs_vindex ((st IxSt)) (List Int) (match st ((IxSt _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ a _ _) a)))
+(fn ixs_vhdr ((st IxSt)) IxHdr (match st ((IxSt _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ a _) a)))
 (fn ixs_checked ((st IxSt)) Int (match st ((IxSt _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ a) a)))
-(fn ix_st0 ((mode Int) (vindex (List Int)) (vnames (List Int)) (vrows Int)) IxSt
-  (IxSt IMEmpty 0 0 -1 -1 -1 -1 -1 -1 Nil Nil 0 0 Nil mode vindex vnames vrows 0))
+(fn ixs_set_names ((st IxSt) (v (IntMap Name))) IxSt (match st ((IxSt _ f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18) (IxSt v f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18))))
+(fn ixs_set_ord ((st IxSt) (v Int)) IxSt (match st ((IxSt f0 _ f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18) (IxSt f0 v f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18))))
+(fn ixs_set_boff ((st IxSt) (v Int)) IxSt (match st ((IxSt f0 f1 _ f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18) (IxSt f0 f1 v f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18))))
+(fn ixs_set_fin ((st IxSt) (v Int)) IxSt (match st ((IxSt f0 f1 f2 _ f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18) (IxSt f0 f1 f2 v f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18))))
+(fn ixs_set_fil ((st IxSt) (v Int)) IxSt (match st ((IxSt f0 f1 f2 f3 _ f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18) (IxSt f0 f1 f2 f3 v f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18))))
+(fn ixs_set_fie ((st IxSt) (v Int)) IxSt (match st ((IxSt f0 f1 f2 f3 f4 _ f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18) (IxSt f0 f1 f2 f3 f4 v f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18))))
+(fn ixs_set_lin ((st IxSt) (v Int)) IxSt (match st ((IxSt f0 f1 f2 f3 f4 f5 _ f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18) (IxSt f0 f1 f2 f3 f4 f5 v f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18))))
+(fn ixs_set_lil ((st IxSt) (v Int)) IxSt (match st ((IxSt f0 f1 f2 f3 f4 f5 f6 _ f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18) (IxSt f0 f1 f2 f3 f4 f5 f6 v f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18))))
+(fn ixs_set_lie ((st IxSt) (v Int)) IxSt (match st ((IxSt f0 f1 f2 f3 f4 f5 f6 f7 _ f9 f10 f11 f12 f13 f14 f15 f16 f17 f18) (IxSt f0 f1 f2 f3 f4 f5 f6 f7 v f9 f10 f11 f12 f13 f14 f15 f16 f17 f18))))
+(fn ixs_set_rows ((st IxSt) (v (List (List Int)))) IxSt (match st ((IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 _ f10 f11 f12 f13 f14 f15 f16 f17 f18) (IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 v f10 f11 f12 f13 f14 f15 f16 f17 f18))))
+(fn ixs_set_nrows ((st IxSt) (v (List (Pair (List Int) Int)))) IxSt (match st ((IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 _ f11 f12 f13 f14 f15 f16 f17 f18) (IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 v f11 f12 f13 f14 f15 f16 f17 f18))))
+(fn ixs_set_drows ((st IxSt) (v (List (Pair Int Int)))) IxSt (match st ((IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 _ f12 f13 f14 f15 f16 f17 f18) (IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 v f12 f13 f14 f15 f16 f17 f18))))
+(fn ixs_set_meta ((st IxSt) (v Int)) IxSt (match st ((IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 _ f13 f14 f15 f16 f17 f18) (IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 v f13 f14 f15 f16 f17 f18))))
+(fn ixs_set_size ((st IxSt) (v Int)) IxSt (match st ((IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 _ f14 f15 f16 f17 f18) (IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 v f14 f15 f16 f17 f18))))
+(fn ixs_set_bad ((st IxSt) (v (List Int))) IxSt (match st ((IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 _ f15 f16 f17 f18) (IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 v f15 f16 f17 f18))))
+(fn ixs_set_mode ((st IxSt) (v Int)) IxSt (match st ((IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 _ f16 f17 f18) (IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 v f16 f17 f18))))
+(fn ixs_set_vindex ((st IxSt) (v (List Int))) IxSt (match st ((IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 _ f17 f18) (IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 v f17 f18))))
+(fn ixs_set_vhdr ((st IxSt) (v IxHdr)) IxSt (match st ((IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 _ f18) (IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 v f18))))
+(fn ixs_set_checked ((st IxSt) (v Int)) IxSt (match st ((IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 _) (IxSt f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 v))))
+
+(fn ix_st0 ((mode Int) (vindex (List Int)) (vhdr IxHdr)) IxSt
+  (IxSt IMEmpty 0 0 -1 -1 -1 -1 -1 -1 Nil Nil Nil 0 0 Nil mode vindex vhdr 0))
 ;; a name line entered: the names, the block's first name id, the last
 (fn ixs_name_in ((st IxSt) (i Int) (nm Name)) IxSt
-  (match st ((IxSt a b c fin e f _ h i2 j k l m n o p q r s2)
-    (IxSt (im_insert a i nm) b c (if (lt fin 0) i fin) e f i h i2 j k l m n o p q r s2))))
+  (ixs_set_lin (ixs_set_fin (ixs_set_names st (im_insert (ixs_names st) i nm)) (if (lt (ixs_fin st) 0) i (ixs_fin st))) i))
 (fn ixs_level ((st IxSt) (i Int)) IxSt
-  (match st ((IxSt a b c d fil f g _ i2 j k l m n o p q r s2) (IxSt a b c d (if (lt fil 0) i fil) f g i i2 j k l m n o p q r s2))))
+  (ixs_set_lil (ixs_set_fil st (if (lt (ixs_fil st) 0) i (ixs_fil st))) i))
 (fn ixs_expr ((st IxSt) (i Int)) IxSt
-  (match st ((IxSt a b c d e fie g h _ j k l m n o p q r s2) (IxSt a b c d e (if (lt fie 0) i fie) g h i j k l m n o p q r s2))))
+  (ixs_set_lie (ixs_set_fie st (if (lt (ixs_fie st) 0) i (ixs_fie st))) i))
 ;; the meta line of n bytes: block 0 begins after it
-(fn ixs_meta_line ((st IxSt) (n Int)) IxSt
-  (match st ((IxSt a b _ d e f g h i2 j k _ m nn o p q r s2) (IxSt a b n d e f g h i2 j k n m nn o p q r s2))))
-;; a record closed: the next ordinal, the next block from the record line's end, no first ids
+(fn ixs_meta_line ((st IxSt) (n Int)) IxSt (ixs_set_meta (ixs_set_boff st n) n))
+;; a record closed: the next ordinal, the next block from the byte after the record line's newline, no first ids
 (fn ixs_close ((st IxSt) (boff Int)) IxSt
-  (match st ((IxSt a b _ _ _ _ g h i2 j k l m n o p q r s2) (IxSt a (+ b 1) boff -1 -1 -1 g h i2 j k l m n o p q r s2))))
-(fn ixs_rows_add ((st IxSt) (row (List Int)) (nrs (List (Pair (List Int) Int)))) IxSt
-  (match st ((IxSt a b c d e f g h i2 j k l m n o p q r s2) (IxSt a b c d e f g h i2 (Cons row j) (append nrs k) l m n o p q r s2))))
-(fn ixs_with_size ((st IxSt) (size Int)) IxSt
-  (match st ((IxSt a b c d e f g h i2 j k l _ n o p q r s2) (IxSt a b c d e f g h i2 j k l size n o p q r s2))))
-(fn ixs_with_bad ((st IxSt) (msg (List Int))) IxSt
-  (match st ((IxSt a b c d e f g h i2 j k l m _ o p q r s2) (IxSt a b c d e f g h i2 j k l m msg o p q r s2))))
-(fn ixs_checked_one ((st IxSt)) IxSt
-  (match st ((IxSt a b c d e f g h i2 j k l m n o p q r s2) (IxSt a b c d e f g h i2 j k l m n o p q r (+ s2 1)))))
+  (ixs_set_fie (ixs_set_fil (ixs_set_fin (ixs_set_boff (ixs_set_ord st (+ (ixs_ord st) 1)) boff) -1) -1) -1))
+(fn ixs_rows_add ((st IxSt) (row (List Int)) (nrs (List (Pair (List Int) Int))) (drs (List (Pair Int Int)))) IxSt
+  (ixs_set_drows (ixs_set_nrows (ixs_set_rows st (Cons row (ixs_rows st))) (append nrs (ixs_nrows st))) (append drs (ixs_drows st))))
+(fn ixs_checked_one ((st IxSt)) IxSt (ixs_set_checked st (+ (ixs_checked st) 1)))
 (fn ix_fail ((st IxSt) (msg (List Int))) IxSt
-  (match (ixs_bad st) ((Cons _ _) st) (Nil (ixs_with_bad st msg))))
+  (match (ixs_bad st) ((Cons _ _) st) (Nil (ixs_set_bad st msg))))
 
 ;; windows of the export from off; carry = the partial last line of the window before
 (fn ix_scan ((path (List Int)) (off Int) (carry (List Int)) (st IxSt) (fuel Int) (w World)) (Pair IxSt World)
@@ -241,32 +311,33 @@
          ((Pair None w1) (Pair (ix_fail st (append "cannot read " path)) w1))
          ((Pair (Some Nil) w1)
           (match carry
-            (Nil (Pair (ixs_with_size st off) w1))
+            (Nil (Pair (ixs_set_size st off) w1))
             (_ (match (ix_line st (- off (len carry)) carry w1)   ; a last line without its newline
-                 ((Pair st1 w2) (Pair (ixs_with_size st1 off) w2))))))
+                 ((Pair st1 w2) (Pair (ixs_set_size st1 off) w2))))))
          ((Pair (Some bs) w1)
           (match (ix_lines st (append carry bs) (- off (len carry)) (+ (len bs) (+ (len carry) 1)) w1)
             ((Pair (Pair st1 rest) w2) (ix_scan path (+ off (len bs)) rest st1 (- fuel 1) w2)))))))))
 ;; every complete line of buf, the first at byte pos; the remainder returned
 (fn ix_lines ((st IxSt) (buf (List Int)) (pos Int) (fuel Int) (w World)) (Pair (Pair IxSt (List Int)) World)
   (measure fuel)
-  (if (le fuel 0) (Pair (Pair (ix_fail st "the line budget") buf) w)
+  (if (le fuel 0) (Pair (Pair (ix_fail st "the line budget") Nil) w)
     (match (ixs_bad st)
-      ((Cons _ _) (Pair (Pair st buf) w))
+      ((Cons _ _) (Pair (Pair st Nil) w))
       (Nil
        (match (ix_take_line buf Nil)
          (None (Pair (Pair st buf) w))
          ((Some (Pair line rest))
-          (match (ix_line st pos (append line (list 10)) w)
+          (match (ix_line st pos line w)
             ((Pair st1 w1) (ix_lines st1 rest (+ pos (+ (len line) 1)) (- fuel 1) w1)))))))))
+;; the line before the first newline (without it) and the rest; None when no newline
 (fn ix_take_line ((bs (List Int)) (acc (List Int))) (Option (Pair (List Int) (List Int)))
   (measure (struct bs))
   (match bs
     (Nil None)
-    ((Cons c r) (if (int_eq c 10) (Some (Pair (rev acc) r)) (ix_take_line r (Cons c acc))))))
-
-;; one line of n bytes at byte pos: a name line, a level or expression line, the meta
-;; line, or a record
+    ((Cons 10 r) (Some (Pair (rev acc) r)))
+    ((Cons c r) (ix_take_line r (Cons c acc)))))
+;; one line at byte pos, n bytes long: a name, level or expression line by its id key, the
+;; meta line at the start, else a record
 (fn ix_line ((st IxSt) (pos Int) (line (List Int)) (w World)) (Pair IxSt World)
   (let ((n (len line)))
     (match (ix_id_in line "in")
@@ -278,13 +349,11 @@
           (match (ix_id_in line "ie")
             ((Some i) (Pair (ixs_expr st i) w))
             (None
-             (if (int_list_eq (take 8 line) "{\"meta\":")
-               (Pair (if (int_eq pos 0) (ixs_meta_line st n) (ix_fail st "a meta line past the first")) w)
+             (if (int_eq pos 0) (Pair (ixs_meta_line st (+ n 1)) w)
                (match (json_parse line)
-                 (JErr (Pair (ix_fail st (append "not JSON at byte " (show_nat pos))) w))
+                 (JErr (Pair (ix_fail st (append "a record is not JSON at byte " (show_nat pos))) w))
                  ((JRes j _) (ix_record st j pos n w))))))))))))
-;; the number after `"KEY":` in a compact line, where the key is a top-level id (the
-;; export writes `{"in":N,…}`, `{…,"ie":N}`, `{"il":N,…}` / `{…,"il":N}` with no spaces)
+;; the id under KEY — `"in":N` at the line's start or after a comma — read without parsing
 (fn ix_id_in ((line (List Int)) (key (List Int))) (Option Int)
   (ix_find_key line (append (Cons 34 key) "\":") (len line)))
 (fn ix_find_key ((bs (List Int)) (pat (List Int)) (fuel Int)) (Option Int)
@@ -356,27 +425,30 @@
                            (ix_first (ixs_fin st) (ixs_lin st)) (ix_first (ixs_fil st) (ixs_lil st)) (ix_first (ixs_fie st) (ixs_lie st)))))
             (match (if (int_eq (ixs_mode st) 0) (Pair (ix_record_build st row ns) w) (ix_record_check st row ns w))
               ((Pair st1 w1)
-               (Pair (ixs_close st1 (+ pos n)) w1))))))))))
+               (Pair (ixs_close st1 (+ (+ pos n) 1)) w1))))))))))
 (fn ix_first ((f Int) (l Int)) Int (if (lt f 0) (+ l 1) f))
 (fn ix_kind_code ((kind (List Int))) Int (match kind ((Cons c _) c) (Nil 63)))
-(fn ix_record_build ((st IxSt) (row IxRow) (ns (List Name))) IxSt
+(fn ix_record_build ((st IxSt) (row IxRow) (ns (List (Pair Int Name)))) IxSt
   (match (ix_name_rows ns (ix_row_ord row) Nil)
     (None (ix_fail st (append "a name past the row's width at ordinal " (show_nat (ix_row_ord row)))))
     ((Some nrs)
      (match row
        ((IxRow o k off n a b c)
-        (ixs_rows_add st (ix_render_row o k off n a b c) nrs))))))
-(fn ix_name_rows ((ns (List Name)) (o Int) (acc (List (Pair (List Int) Int)))) (Option (List (Pair (List Int) Int)))
+        (ixs_rows_add st (ix_render_row o k off n a b c) nrs (ix_decl_pairs ns o Nil)))))))
+(fn ix_name_rows ((ns (List (Pair Int Name))) (o Int) (acc (List (Pair (List Int) Int)))) (Option (List (Pair (List Int) Int)))
   (measure (struct ns))
   (match ns
     (Nil (Some acc))
-    ((Cons nm r)
+    ((Cons (Pair _ nm) r)
      (let ((s (show_name nm)))
        (if (lt (ix_name_w) (len s)) None (ix_name_rows r o (Cons (Pair (ix_pad s (ix_name_w)) o) acc)))))))
+(fn ix_decl_pairs ((ns (List (Pair Int Name))) (o Int) (acc (List (Pair Int Int)))) (List (Pair Int Int))
+  (measure (struct ns))
+  (match ns (Nil acc) ((Cons (Pair i _) r) (ix_decl_pairs r o (Cons (Pair i o) acc)))))
 ;; verify: the table's row for this ordinal is this row, and every name of the record is
-;; at this ordinal in the name table
-(fn ix_record_check ((st IxSt) (row IxRow) (ns (List Name)) (w World)) (Pair IxSt World)
-  (match (ix_read_row (ixs_vindex st) (ix_row_ord row) w)
+;; at this ordinal in the name table and in the declaration table
+(fn ix_record_check ((st IxSt) (row IxRow) (ns (List (Pair Int Name))) (w World)) (Pair IxSt World)
+  (match (ix_read_row (ixs_vindex st) (ixs_vhdr st) (ix_row_ord row) w)
     ((Pair None w1) (Pair (ix_fail st (append "no row at ordinal " (show_nat (ix_row_ord row)))) w1))
     ((Pair (Some have) w1)
      (if (bool_not (ix_row_eq have row))
@@ -391,19 +463,25 @@
           (bool_and (int_eq x xb) (bool_and (int_eq y yb) (int_eq z zb))))))))))))
 (fn ix_show_row ((r IxRow)) (List Int)
   (match r ((IxRow o k off n a b c) (take 61 (ix_render_row o k off n a b c)))))
-(fn ix_names_check ((st IxSt) (ns (List Name)) (o Int) (w World)) (Pair IxSt World)
+(fn ix_names_check ((st IxSt) (ns (List (Pair Int Name))) (o Int) (w World)) (Pair IxSt World)
   (measure (struct ns))
   (match ns
     (Nil (Pair st w))
-    ((Cons nm r)
-     (match (ix_lookup (ixs_vnames st) (ixs_vrows st) nm w)
+    ((Cons (Pair i nm) r)
+     (match (ix_lookup (ixs_vindex st) (ixs_vhdr st) nm w)
        ((Pair (Some found) w1)
-        (if (int_eq found o)
-          (ix_names_check (ixs_checked_one st) r o w1)
-          (Pair (ix_fail st (append (show_name nm) (append " is at ordinal " (append (show_nat found) (append ", the export says " (show_nat o)))))) w1)))
+        (if (bool_not (int_eq found o))
+          (Pair (ix_fail st (append (show_name nm) (append " is at ordinal " (append (show_nat found) (append ", the export says " (show_nat o)))))) w1)
+          (match (ix_decl_of (ixs_vindex st) (ixs_vhdr st) i w1)
+            ((Pair (Some d) w2)
+             (if (int_eq d o) (ix_names_check (ixs_checked_one st) r o w2)
+               (Pair (ix_fail st (append (show_name nm) (append " declares ordinal " (append (show_nat d) (append " by its name id, the export says " (show_nat o)))))) w2)))
+            ((Pair None w2) (Pair (ix_fail st (append (show_name nm) " has no declaration row")) w2)))))
        ((Pair None w1) (Pair (ix_fail st (append (show_name nm) " is not in the name table")) w1))))))
 
-(fn ix_record_names ((st IxSt) (j Json) (kind (List Int))) (Option (List Name))
+;; the names a record declares, with their ids: an inductive block's types, constructors
+;; and recursors; every other record its one name
+(fn ix_record_names ((st IxSt) (j Json) (kind (List Int))) (Option (List (Pair Int Name)))
   (if (int_list_eq kind "inductive")
     (match (jget j "inductive")
       (None None)
@@ -419,20 +497,20 @@
                ((Some rs) (Some (append ts (append cs rs)))))))))))
     (match (jget j kind)
       (None None)
-      ((Some o) (match (ix_name_field st o) (None None) ((Some nm) (Some (list nm))))))))
-(fn ix_names_in ((st IxSt) (o Json) (key (List Int))) (Option (List Name))
+      ((Some o) (match (ix_name_field st o) (None None) ((Some p) (Some (list p))))))))
+(fn ix_names_in ((st IxSt) (o Json) (key (List Int))) (Option (List (Pair Int Name)))
   (match (jget o key)
     (None (Some Nil))
     ((Some v) (match (jarr v) (None None) ((Some xs) (ix_names_of st xs Nil))))))
-(fn ix_names_of ((st IxSt) (xs (List Json)) (acc (List Name))) (Option (List Name))
+(fn ix_names_of ((st IxSt) (xs (List Json)) (acc (List (Pair Int Name)))) (Option (List (Pair Int Name)))
   (measure (struct xs))
   (match xs
     (Nil (Some (rev acc)))
-    ((Cons x r) (match (ix_name_field st x) (None None) ((Some nm) (ix_names_of st r (Cons nm acc)))))))
-(fn ix_name_field ((st IxSt) (o Json)) (Option Name)
-  (match (ix_int_field o "name") (None None) ((Some i) (ix_name_at st i))))
+    ((Cons x r) (match (ix_name_field st x) (None None) ((Some p) (ix_names_of st r (Cons p acc)))))))
+(fn ix_name_field ((st IxSt) (o Json)) (Option (Pair Int Name))
+  (match (ix_int_field o "name") (None None) ((Some i) (match (ix_name_at st i) (None None) ((Some nm) (Some (Pair i nm)))))))
 
-;; ---- the name table sorted -----------------------------------------------------------------
+;; ---- the name table sorted, the declaration table laid out -----------------------------------
 
 (fn ix_sort ((xs (List (Pair (List Int) Int)))) (List (Pair (List Int) Int))
   (measure (struct xs))
@@ -463,6 +541,38 @@
     ((Cons _ Nil) None)
     ((Cons (Pair ka _) (Cons (Pair kb vb) r))
      (if (int_list_eq ka kb) (Some ka) (ix_dup (Cons (Pair kb vb) r))))))
+;; the declaration pairs sorted by name id
+(fn ix_dsort ((xs (List (Pair Int Int)))) (List (Pair Int Int))
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons x Nil) (list x))
+    (_ (match (ix_dsplit xs Nil Nil) ((Pair a b) (ix_dmerge (ix_dsort a) (ix_dsort b)))))))
+(fn ix_dsplit ((xs (List (Pair Int Int))) (a (List (Pair Int Int))) (b (List (Pair Int Int)))) (Pair (List (Pair Int Int)) (List (Pair Int Int)))
+  (measure (struct xs))
+  (match xs
+    (Nil (Pair a b))
+    ((Cons x Nil) (Pair (Cons x a) b))
+    ((Cons x (Cons y r)) (ix_dsplit r (Cons x a) (Cons y b)))))
+(fn ix_dmerge ((a (List (Pair Int Int))) (b (List (Pair Int Int)))) (List (Pair Int Int))
+  (measure (+ (len a) (len b)))
+  (match a
+    (Nil b)
+    ((Cons (Pair ka va) ar)
+     (match b
+       (Nil a)
+       ((Cons (Pair kb vb) br)
+        (if (lt kb ka) (Cons (Pair kb vb) (ix_dmerge a br)) (Cons (Pair ka va) (ix_dmerge ar b))))))))
+;; the declaration rows 0..d-1 from the sorted pairs, newest first
+(fn ix_decl_rows ((ps (List (Pair Int Int))) (k Int) (d Int) (acc (List (List Int)))) (List (List Int))
+  (measure (+ (- d k) (len ps)))
+  (if (le d k) acc
+    (match ps
+      ((Cons (Pair i o) r)
+       (if (int_eq i k) (ix_decl_rows r (+ k 1) d (Cons (ix_render_drow o) acc))
+       (if (lt i k) (ix_decl_rows r k d acc)
+         (ix_decl_rows ps (+ k 1) d (Cons (ix_blank_drow) acc)))))
+      (Nil (ix_decl_rows Nil (+ k 1) d (Cons (ix_blank_drow) acc))))))
 ;; rows newest first, concatenated oldest first
 (fn ix_cat ((rows (List (List Int))) (acc (List Int))) (List Int)
   (measure (struct rows))
@@ -473,10 +583,10 @@
 
 ;; ---- build and verify -------------------------------------------------------------------------
 
-;; the two tables' bytes — the record table, the name table, the counts — or a message
-(type IxOut (IxTables (List Int) (List Int) Int Int) (IxBad (List Int)))
+;; the index's bytes with its counts — records, names, declaration rows — or a message
+(type IxOut (IxTables (List Int) Int Int Int) (IxBad (List Int)))
 (fn ix_build ((export (List Int)) (w World)) (Pair IxOut World)
-  (match (ix_scan export 0 Nil (ix_st0 0 Nil Nil 0) 100000000 w)
+  (match (ix_scan export 0 Nil (ix_st0 0 Nil (IxHdr 0 0 0 0 0)) 100000000 w)
     ((Pair st w1)
      (match (ixs_bad st)
        ((Cons _ _) (Pair (IxBad (ixs_bad st)) w1))
@@ -485,51 +595,55 @@
           (match (ix_dup sorted)
             ((Some k) (Pair (IxBad (append "two names render alike: " (ix_trim k))) w1))
             (None
-             (Pair (IxTables (append (ix_header (ixs_ord st) (ixs_size st) (ixs_meta st)) (ix_cat (ixs_rows st) Nil))
-                             (append (ix_nheader (len sorted)) (ix_cat (ix_cat_names sorted Nil) Nil))
-                             (ixs_ord st) (len sorted))
-                   w1)))))))))
+             (let ((decls (+ (ixs_lin st) 1)))
+               (Pair (IxTables (append (ix_header (ixs_ord st) (ixs_size st) (ixs_meta st) (len sorted) decls)
+                                 (append (ix_cat (ixs_rows st) Nil)
+                                   (append (ix_cat (ix_cat_names sorted Nil) Nil)
+                                     (ix_cat (ix_decl_rows (ix_dsort (ixs_drows st)) 0 decls Nil) Nil))))
+                               (ixs_ord st) (len sorted) decls)
+                     w1))))))))))
 (fn ix_trim ((s (List Int))) (List Int) (rev (ix_trim_sp (rev s))))
 (fn ix_trim_sp ((s (List Int))) (List Int)
   (measure (struct s))
   (match s ((Cons 32 r) (ix_trim_sp r)) (_ s)))
 
-;; the tables against the export: the export's bytes as the header says, every record's
-;; row and names, the name table sorted without a duplicate
-(fn ix_verify ((export (List Int)) (index (List Int)) (names (List Int)) (w World)) (Pair (Option (List Int)) World)
+;; the tables against the export: the export's bytes as the header says, the index's size
+;; the header's, every record's row and names, the name table sorted without a duplicate
+(fn ix_verify ((export (List Int)) (index (List Int)) (w World)) (Pair (Option (List Int)) World)
   (match (ix_read_header index w)
-    ((Pair None w1) (Pair (Some "the record table has no header") w1))
-    ((Pair (Some (IxHdr records bytes meta)) w1)
-     (match (ix_read_nheader names w1)
-       ((Pair None w2) (Pair (Some "the name table has no header") w2))
-       ((Pair (Some rows) w2)
-        (match (ix_verify_size export bytes w2)
-          ((Pair False w3) (Pair (Some (append "the export is not " (append (show_nat bytes) " bytes"))) w3))
+    ((Pair None w1) (Pair (Some "the index has no header") w1))
+    ((Pair (Some h) w1)
+     (match (ix_verify_size export (ix_hdr_bytes h) w1)
+       ((Pair False w2) (Pair (Some (append "the export is not " (append (show_nat (ix_hdr_bytes h)) " bytes"))) w2))
+       ((Pair True w2)
+        (match (ix_verify_size index (ix_total h) w2)
+          ((Pair False w3) (Pair (Some (append "the index is not " (append (show_nat (ix_total h)) " bytes"))) w3))
           ((Pair True w3)
-           (match (ix_scan export 0 Nil (ix_st0 1 index names rows) 100000000 w3)
+           (match (ix_scan export 0 Nil (ix_st0 1 index h) 100000000 w3)
              ((Pair st w4)
               (match (ixs_bad st)
                 ((Cons _ _) (Pair (Some (ixs_bad st)) w4))
                 (Nil
-                 (if (bool_not (int_eq (ixs_ord st) records)) (Pair (Some (append "the export has " (append (show_nat (ixs_ord st)) (append " records, the table " (show_nat records))))) w4)
-                 (if (bool_not (int_eq (ixs_meta st) meta)) (Pair (Some "the meta line's length differs") w4)
-                 (if (bool_not (int_eq (ixs_checked st) rows)) (Pair (Some (append "the export declares " (append (show_nat (ixs_checked st)) (append " names, the table holds " (show_nat rows))))) w4)
-                   (ix_verify_sorted names rows 0 Nil w4)))))))))))))))
+                 (if (bool_not (int_eq (ixs_ord st) (ix_hdr_records h))) (Pair (Some (append "the export has " (append (show_nat (ixs_ord st)) (append " records, the table " (show_nat (ix_hdr_records h)))))) w4)
+                 (if (bool_not (int_eq (ixs_meta st) (ix_hdr_meta h))) (Pair (Some "the meta line's length differs") w4)
+                 (if (bool_not (int_eq (ixs_checked st) (ix_hdr_names h))) (Pair (Some (append "the export declares " (append (show_nat (ixs_checked st)) (append " names, the table holds " (show_nat (ix_hdr_names h)))))) w4)
+                 (if (bool_not (int_eq (+ (ixs_lin st) 1) (ix_hdr_decls h))) (Pair (Some (append "the export assigns " (append (show_nat (+ (ixs_lin st) 1)) (append " name ids, the declaration table has " (show_nat (ix_hdr_decls h)))))) w4)
+                   (ix_verify_sorted index h 0 Nil w4))))))))))))))))
 ;; the file is exactly `bytes` long: a byte at bytes - 1, none at bytes
-(fn ix_verify_size ((export (List Int)) (bytes Int) (w World)) (Pair Bool World)
-  (match (read_range export bytes 1 w)
+(fn ix_verify_size ((path (List Int)) (bytes Int) (w World)) (Pair Bool World)
+  (match (read_range path bytes 1 w)
     ((Pair (Some Nil) w1)
-     (match (read_range export (- bytes 1) 1 w1)
+     (match (read_range path (- bytes 1) 1 w1)
        ((Pair (Some (Cons _ Nil)) w2) (Pair True w2))
        ((Pair _ w2) (Pair False w2))))
     ((Pair _ w1) (Pair False w1))))
-(fn ix_verify_sorted ((names (List Int)) (rows Int) (k Int) (prev (List Int)) (w World)) (Pair (Option (List Int)) World)
-  (measure (- rows k))
-  (if (le rows k) (Pair None w)
-    (match (read_range names (* (ix_nrow_w) (+ k 1)) (ix_nrow_w) w)
+(fn ix_verify_sorted ((index (List Int)) (h IxHdr) (k Int) (prev (List Int)) (w World)) (Pair (Option (List Int)) World)
+  (measure (- (ix_hdr_names h) k))
+  (if (le (ix_hdr_names h) k) (Pair None w)
+    (match (ix_read_nrow index h k w)
       ((Pair None w1) (Pair (Some (append "no name row " (show_nat k))) w1))
       ((Pair (Some row) w1)
        (let ((key (take (ix_name_w) row)))
          (if (bool_and (lt 0 k) (bool_not (int_list_lt prev key)))
            (Pair (Some (append "the name table is not sorted at row " (show_nat k))) w1)
-           (ix_verify_sorted names rows (+ k 1) key w1)))))))
+           (ix_verify_sorted index h (+ k 1) key w1)))))))

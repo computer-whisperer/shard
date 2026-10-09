@@ -8,14 +8,14 @@
 # order; a disagreement is a finding, never a rendering to patch around.
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
-FIX=v3/kernel/test/fixtures/init_prefix_int.ndjson
-TAIL=v3/kernel/test/fixtures/init_prefix_str_tail.ndjson
+read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "calc_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
+INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
 INPUTS=v3/kernel/test/fixtures/calc_inputs.txt
 OLD=examples/calc/calc_differential.shard
 v3out=$(mktemp); oldout=$(mktemp); trap 'rm -f "$v3out" "$oldout"' EXIT
 
 s=$(date +%s)
-"$EVAL" direct v3/kernel/test/calc_harness.shard "$FIX" "$INPUTS" "$TAIL" > "$v3out" 2>&1; rc=$?
+"$EVAL" direct v3/kernel/test/calc_harness.shard "$EXPORT" "$INDEX" "$INPUTS" > "$v3out" 2>&1; rc=$?
 e=$(date +%s)
 [ "$rc" -eq 0 ] || { echo "calc_test: the harness failed (exit $rc)"; head -20 "$v3out"; exit 1; }
 echo "calc_test: the port under ev in $((e-s)) s, $(wc -l < "$v3out") lines"
