@@ -139,6 +139,17 @@ theorems and opaques without the typing judgments; its records are
 byte-identical to a checked load's, which the 212 loader pins hold.
 `verify_release` and `t0_full.sh` take no receipt.
 
+**The shared Init load** (slice 3.25, 2026-10-09; `v3/LANGUAGE.md`
+§8.4): `loader.shard`'s `init_all` streams the export to its end and
+`ld_reroot` starts a fresh root load from a load's Init state, so a
+process loading many roots streams once; `test/loader_pins_test.shard`
+does (225 cases in 33 s under the receipt, from 783 s). What Init a
+module sees is its horizon alone: every availability gate asks the
+scope (`elab.shard` `el_sees`), an `(import Init NAME)` is answered
+from the ordinal table, and a declaration named as an Init constant is
+refused wherever the environment holds it (`name_taken`, K's
+`already_declared`).
+
 **The connected path** (slice 3.24, 2026-10-09; `v3/LANGUAGE.md` §8.4;
 law §12.4): `v3/examples/path/` is the path on one program — two Init
 functions realized with their equations proved, `at` building an index

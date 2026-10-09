@@ -2,8 +2,10 @@
 
 Each directory is a **package root**; `CASE/main.shard` is the file the
 loader is given (`v3/kernel/load.shard --root v3/pins/loader/CASE …`),
-its imports resolve under that root, and `(import Init NAME)` streams
-the 3000-line export fixture (`v3/kernel/test/fixtures/`). The header
+its imports resolve under that root, and `(import Init NAME)` reaches
+into the export fixtures (`v3/kernel/test/fixtures/`), which the test
+streams once for every case (slice 3.25) — a module sees Init below its
+own horizon, whatever the process has streamed. The header
 line of `main.shard` states the load's expected outcome — the first
 record that is not a module, an Init load or an acceptance:
 
@@ -57,7 +59,9 @@ an inductive in an E-first body); `match_dependent` (a match generalizes a local
 scrutinee in its expected type), `if_rec_call` and `measure_if_call` (an `if` whose
 condition is a self-call; one obligation per statement), `bool_ops` (`and`, `not` on
 `Bool`s). From the second reader's findings: `registry_native` (a registry row never
-speaks for a native declaration bearing its name), `decidable_cells` (a `Decidable` value
+speaks for a native declaration bearing its name — under this test's one load of the whole
+export the declaration is the refusal `Bool.or refused name_taken`, Init's names being
+Init's, slice 3.25 rule 2; `define_test.sh`'s lazy load reads the finding's dump), `decidable_cells` (a `Decidable` value
 is the type's cells off an `if`'s condition; `define_test.sh` runs it), `derive_name_taken`
 (`NAME refused name_taken`), `derive_refusals` (what has no derivation; `define_test.sh`
 reads its five records), `derive_visible` (an entry is visible where its deriving module

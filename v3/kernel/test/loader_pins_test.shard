@@ -1,9 +1,11 @@
 ;;; v3/kernel/test/loader_pins_test.shard — replays v3/pins/loader/CASE/main.shard
 ;;; (the list below) as a package rooted at CASE through the loader and
 ;;; compares the load's outcome with the file's `;; expect:` header
-;;; (v3/pins/loader/README.md). `(import Init NAME)` streams the 3000-line
-;;; export fixture. The `realize_*` cases are slice 5b's (§7.5); `entry`,
-;;; `entry_s`, `same_spelled` and `realize_theorem` are slice 7's (§9, T5).
+;;; (v3/pins/loader/README.md). The two export fixtures are streamed once
+;;; for the whole run (slice 3.25); each case's root loads fresh on that
+;;; Init state, its `(import Init NAME)` answered from the ordinal table.
+;;; The `realize_*` cases are slice 5b's (§7.5); `entry`, `entry_s`,
+;;; `same_spelled` and `realize_theorem` are slice 7's (§9, T5).
 
 (import "loader_kit.shard")
 (use kernel.host)
@@ -146,29 +148,32 @@
 (fn prefix_all ((p (List Int)) (ws (List (List Int)))) (List (List Int))
   (measure (struct ws))
   (match ws (Nil Nil) ((Cons w r) (Cons (append p w) (prefix_all p r)))))
-(fn load_roots ((l Load) (files (List (List Int))) (w World)) (Pair Load World)
-  (measure (struct files))
-  (match files
-    (Nil (Pair l w))
-    ((Cons f r) (match (load_root_file l f w) ((Pair l1 w1) (load_roots l1 r w1))))))
-(fn run ((cs (List (List Int))) (rcpt (List (Pair (List Int) Int))) (fails Int) (w World)) World
+;; every case starts from one load of the whole export (slice 3.25 rule 3): Init streamed once
+;; in this process, the case's root fresh on it (ld_reroot) — a case's records are those of its
+;; own load, since a module's Init horizon is its imports' (rule 2)
+(fn run ((cs (List (List Int))) (l0 Load) (fails Int) (w World)) World
   (measure (struct cs))
   (match cs
     (Nil (exit fails (write_line (append "loader_pins_test: failures = " (show_int fails)) w)))
     ((Cons c r)
      (let ((main (append (case_root c) "/main.shard")))
        (match (read_file main w)
-         ((Pair None w1) (run r rcpt (+ fails 1) (write_line (append "FAIL cannot read " main) w1)))
+         ((Pair None w1) (run r l0 (+ fails 1) (write_line (append "FAIL cannot read " main) w1)))
          ((Pair (Some src) w1)
           (let ((ws (expect_words src)))
             (match (parts_of (root_of c src))
-              (None (run r rcpt (+ fails 1) (write_line (append "FAIL bad root " c) w1)))
+              (None (run r l0 (+ fails 1) (write_line (append "FAIL bad root " c) w1)))
               ((Some rootp)
-               (match (load_roots (ld_with_receipt (load0 rootp (list (fixture_int) (fixture_tail))) rcpt) (root_files c src) w1)
+               (match (load_all (ld_reroot l0 rootp) (root_files c src) w1)
                  ((Pair l w2)
                   (if (matches ws (ld_recs l))
-                    (run r rcpt fails (write_line (append "PASS " (append c (append " — " (show_words ws)))) w2))
-                    (run r rcpt (+ fails 1) (write_line (append "FAIL " (append c (append " expected " (append (show_words ws) (append " got " (match (first_bad (ld_recs l)) ((Some x) (show_rec x)) (None "all accepted"))))))) w2))))))))))))))
+                    (run r l0 fails (write_line (append "PASS " (append c (append " — " (show_words ws)))) w2))
+                    (run r l0 (+ fails 1) (write_line (append "FAIL " (append c (append " expected " (append (show_words ws) (append " got " (match (first_bad (ld_recs l)) ((Some x) (show_rec x)) (None "all accepted"))))))) w2))))))))))))))
+;; the one load of the whole export every case starts from; the stream's own records printed
+(fn run_all ((rcpt (List (Pair (List Int) Int))) (w World)) World
+  (match (init_all (ld_with_receipt (load0 (list "v3" "pins") (list (fixture_int) (fixture_tail))) rcpt) w)
+    ((Pair (Pair l0 True) w1) (run (cases) l0 0 (write (show_recs (ld_recs l0)) w1)))
+    ((Pair (Pair l0 False) w1) (exit 2 (write (show_recs (ld_recs l0)) (write_line "loader_pins_test: the export did not load" w1))))))
 ;; `--init-receipt FILE` (slice 3.23): every case's load under the receipt — the records must not change
 (fn main ((w World)) World
   (match (get_args w)
@@ -176,7 +181,7 @@
      (if (int_list_eq flag "--init-receipt")
        (match (read_file f w1)
          ((Pair None w2) (exit 2 (write_line (append "loader_pins_test: cannot read the receipt " f) w2)))
-         ((Pair (Some bs) w2) (run (cases) (receipt_parse bs) 0 w2)))
+         ((Pair (Some bs) w2) (run_all (receipt_parse bs) w2)))
        (exit 2 (write_line (append "loader_pins_test: unknown argument " flag) w1))))
-    ((Pair Nil w1) (run (cases) Nil 0 w1))
+    ((Pair Nil w1) (run_all Nil w1))
     ((Pair (Cons x _) w1) (exit 2 (write_line (append "loader_pins_test: unknown argument " x) w1)))))

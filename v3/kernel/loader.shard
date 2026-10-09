@@ -240,6 +240,10 @@
   (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods Nil) (init InitNone) (tbl IMEmpty) (inits IMEmpty) (mode (quote off))
              (pending Nil) (stack Nil) (recs Nil) (chunks chunks) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil) (derived Nil) (receipt Nil)))
 (fn ld_with_receipt ((l Load) (r (List (Pair (List Int) Int)))) Load (with Load l (receipt r)))
+;; a fresh root load from a load's Init state (slice 3.25 rule 1): the environment, the stream,
+;; the ordinals, the chunks and the receipt carried; everything of the old root reset to load0's
+(fn ld_reroot ((l Load) (root (List (List Int)))) Load
+  (with Load (load0 root (Load.chunks l)) (env (Load.env l)) (init (Load.init l)) (inits (Load.inits l)) (receipt (Load.receipt l))))
 (fn ld_recs ((l Load)) (List Rec) (rev (Load.recs l)))
 (fn ld_with_env ((l Load) (e CheckedEnv) (m AxMemo)) Load (with Load l (env e) (memo m)))
 (fn ld_add_mod ((l Load) (md Mod)) Load (with Load l (mods (Cons md (Load.mods l)))))
@@ -304,7 +308,7 @@
 (fn init_horizon ((l Load) (target Name)) Int
   (match (ords_find (Load.inits l) target)
     ((Some o) (+ o 1))
-    (None (match (Load.init l) (InitNone 0) ((InitSt _ _ _ _ n) n)))))
+    (None -1)))   ; not Init's (slice 3.25 rule 2): the module's horizon is unchanged
 (fn ld_add_pending ((l Load) (n Name)) Load (with Load l (pending (Cons n (Load.pending l)))))
 (fn ld_with_stack ((l Load) (s (List Name))) Load (with Load l (stack s)))
 (fn ld_rec ((l Load) (x Rec)) Load (with Load l (recs (Cons x (Load.recs l)))))
@@ -1067,8 +1071,11 @@
 ;; load the export through `target`: already admitted = within the loaded
 ;; prefix (two nested prefixes, the larger once); else stream on from where
 ;; the last import stopped
+;; the whole export at once (slice 3.25 rule 1): every chunk streamed to its end, the
+;; record INIT (all); a process loading many roots streams once and re-roots (ld_reroot)
+(fn init_all ((l Load) (w World)) (Pair (Pair Load Bool) World) (init_through l Anon w))
 (fn init_through ((l Load) (target Name) (w World)) (Pair (Pair Load Bool) World)
-  (match (env_find (Load.env l) target)
+  (match (ords_find (Load.inits l) target)   ; admitted from the stream (slice 3.25 rule 2: the table, not the environment)
     ((Some _) (Pair (Pair l True) w))
     (None
      (match (Load.init l)
@@ -1096,7 +1103,9 @@
     (match bs
       (Nil
        (match files
-         (Nil (Pair (init_err (init_save l run Nil Nil (init_prefix l) n) "Init" (quote init_name_not_found) (append (show_name target) " is not in the export chunks given")) w))
+         (Nil (match target
+                (Anon (Pair (Pair (ld_rec (init_save l run Nil Nil Anon n) (RInit Anon n)) True) w))   ; init_all: the end is the target
+                (_ (Pair (init_err (init_save l run Nil Nil (init_prefix l) n) "Init" (quote init_name_not_found) (append (show_name target) " is not in the export chunks given")) w))))
          ((Cons f rest)
           (match (read_file f w)
             ((Pair None w1) (Pair (init_err (init_save l run Nil rest (init_prefix l) n) f (quote missing_file) "the export chunk") w1))
@@ -1791,7 +1800,7 @@
   (match x
     ((RModule m file h cl) (append "MODULE " (append (show_name m) (append " file=" (append file (append " hash=" (append (show_nat h) (append " sees=" (show_names_c cl)))))))))
     ((RUnused m ps) (append "UNUSED " (append (show_name m) (append " use=" (show_names_c ps)))))
-    ((RInit n k) (append "INIT " (append (show_name n) (append ": " (append (show_nat k) " declarations admitted")))))
+    ((RInit n k) (append "INIT " (append (match n (Anon "(all)") (_ (show_name n))) (append ": " (append (show_nat k) " declarations admitted")))))
     ((RAccept n m h axs pfx ps)
      (append "ACCEPT " (append (show_name n) (append " module=" (append (show_name m) (append " hash=" (append (show_nat h)
        (append " axioms=" (append (show_names_c axs) (append " init=" (append (match pfx (Anon "-") (_ (show_name pfx))) (append " params=" (show_names_c ps)))))))))))))

@@ -1228,7 +1228,8 @@ assembled, the branch-local proof joint built, each joint broken**
 - **The cost** (R76's number, under the Init receipt): load 18 s, run
   23 s, store 18 s, verify 47 s — the Init stream four times over, the
   path's own work seconds. The interfaces compose; the cost is the
-  stream, which the persistent session (T9) is to remove.
+  stream, once per process (slice 3.25 shares it across a process's
+  roots).
 - **Found, open:** `List.get`'s own realization needs a match that
   generalizes a local whose type mentions the scrutinee (slice 3.13
   rule 2's narrower guarantee has its consumer); a `(view)` of an Init
@@ -1238,6 +1239,30 @@ assembled, the branch-local proof joint built, each joint broken**
 Gates: the 225 loader pins (four new) byte-identical in 783 s under the receipt, parity byte-identical over 30 closures and 130,489 declarations in 265 s, K's clients 7 of 7, `path_test` 18 checks in 279 s, the full suite's 37 entrypoints 0 failed (855 s).
 
 Slice 3.24 is closed: **pipeline 556 green on `d0dfb7b`: engine 56 s; corpus 1,487 s at the baseline; v3 5,501 s of a 3 h limit (37 entrypoints with 0 failed; `path_test` 18 checks in 792 s — the path composes on the runner: load 52 s, run 51 s, store 50 s, verify by K alone 134 s —; the loader pins' entrypoint 2,227 s with 225 cases; `store_test` 1,163 s; `engine_test` 265 s; parity byte-identical over 30 closures and 130,489 declarations in 697 s; route 1's native build of the kernel; the replay 2,534 s at 32.4 GB); T0 accepted 57,977, 20 pinned, closures identical.**
+
+**Slice 3.25 landed (2026-10-09) — the shared Init load** (`LANGUAGE.md`
+§8.4 slice 3.25; §13 item 59). Ruled at the boundary after R75 and R76
+as item 57's stated lever: the loader pins' entrypoint re-streamed Init
+once per case, 2,227 s of the v3 job on the runner and the suite's wall
+clock.
+
+- **The stream replayable:** `loader.shard` `init_all` streams the
+  export to its end; `ld_reroot` starts a fresh root load from a load's
+  Init state. The pins' entrypoint streams the two fixtures once and
+  loads its 225 cases on that state: 33 s under the receipt, from
+  783 s; 57 s with the stream checked. Drivers stream lazily as before.
+- **The horizon the module's:** every gate that asks whether an Init
+  constant is available asks the module's scope (`el_sees`), never the
+  environment; an `(import Init NAME)` is answered from the ordinal
+  table. Three pins had leaned on the stream stopping short:
+  `str_no_string` and `arith_unreached` hold by the horizon;
+  `registry_native` is now the refusal that **Init's names are
+  Init's** — a declaration named as an Init constant is refused
+  wherever the environment holds it, as the release gate always does; a
+  lazy driver that stopped short accepts what the gate refuses, stated.
+
+Gates: the 225 loader pins 0 failed in 33 s under the receipt and 57 s without, parity byte-identical over 30 closures and 130,551 declarations in 259 s, the full suite's 37 entrypoints in 597 s (store_test's 427 s its wall clock now; one failure, the calc harness's pattern variable shadowing the kit's `fixture` after it took the kit's `load_all` — renamed, parity and the two calc entrypoints rerun byte-identical).
+
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

@@ -1799,6 +1799,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.22 | the producers (ruled 2026-10-07, item 56; the design and the as-built below; **landed in three landings, 2026-10-07/08; closed on pipeline 552**): `auto` with sidecar replay at build and search only in `prove`; `(arith only …)` and the witness goal; the engine as an E library over the fixed API; the pin store in K's export format with `verify_release` | the engine's count over calc's 100 claims; `v3/examples/auto/` with a machine-owned sidecar; calc's release bundle verified on CI |
 | 3.23 | the Init cache (ruled 2026-10-08 on GPT-6's R75, the feedback cost; item 57; the design and the as-built below; **landed 2026-10-08; closed on pipeline 554**): the loader admits the pinned export under a T0 run's receipt, the typing judgments skipped — K's verdict cached, no second format, the release gate untouched | a load's Init cost and the loader pins' wall clock |
 | 3.24 | the connected path (ruled 2026-10-09 on GPT-6's R76; item 58; the design and the as-built below; **landed 2026-10-09; closed on pipeline 556**): `(dif h C T F)`, the dependent if with its hypothesis named — the branch-local proof joint; `examples/path`, law §12.4's first connected path assembled as one test and broken at each joint; its cost measured | the one phase-3 joint still missing; the composition cost before the broad port |
+| 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built below; **landed 2026-10-09**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s | the suite's wall clock before the library arc multiplies the pins |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -4573,8 +4574,9 @@ path found.
   receipt: load 18 s, load and run 23 s, load and store 18 s, verify
   by K alone 47 s (45 s of it the Init fixture's replay, the 56
   declarations the rest); the test 279 s. The path composes; its cost
-  is the Init stream four times over, which slice 3.23 halved and the
-  persistent session (T9) is to remove.
+  is the Init stream four times over, which slice 3.23 halved and a
+  load shared across a process's roots (slice 3.25) removes for the
+  pins; a driver pays it once per load.
 - **Found on the way, open:** `List.get`'s own realization — the
   access with the `Fin` as its argument — needs a match that
   generalizes a local whose type mentions the scrutinee (`i : Fin
@@ -4588,6 +4590,78 @@ path found.
   (`Option.getD`) is refused for want of the matcher's realization —
   Lean's `Option.getD.match_1` is not what K regenerates from its
   type — so the example writes its own `or_zero`.
+
+**Slice 3.25 — the shared Init load: the stream replayable, the
+horizon the module's, Init's names Init's** (ruled 2026-10-09 at the
+boundary after R75 and R76, the lever item 57 stated; §13 item 59). The
+loader pins' entrypoint re-streamed Init once per case in one process:
+2,227 s of the v3 job's 5,501 s on the runner, 783 s locally, the
+suite's wall clock since slice 3.20 and the first cost the library arc
+would multiply. The export is one fixed library; a process that loads
+many roots has no reason to read it more than once. Three rules:
+
+1. **The Init stream is a prefix of a load and replayable.** `init_all`
+   streams every chunk to its end (the record `INIT (all): N
+   declarations admitted`); `ld_reroot` starts a fresh root load from a
+   load's Init state — the checked environment, the stream's state, the
+   ordinal table, the chunks and the receipt carried, everything of the
+   old root reset to `load0`'s. A driver's lazy stream is unchanged: a
+   program pays the prefix its imports reach, once.
+2. **The horizon is the module's, never the stream's.** `(import Init
+   NAME)` is answered from the ordinal table — NAME admitted = NAME in
+   the table — and a module's horizon is its imports' ordinals and its
+   imported modules' horizons (slice 3.21b rule 2), with no fall-back
+   to how far the process happened to stream. Every gate that asks
+   whether an Init constant is available to a module asks the scope
+   (`visible`: below the module's horizon), not the environment: the
+   elaborator's `first_missing` (an `if`'s `Decidable`, `dite`, `Not`,
+   `Int.ofNat`), `arith`'s kit, the measure's `WellFounded` kit, a
+   `"…"` literal's `String`. **Init's names are Init's:** a declaration
+   bearing the name of an Init constant is refused (`name_taken`)
+   wherever the environment holds that constant, as K admits no second
+   constant under a name (`already_declared`) and the release gate
+   holds the whole export; a driver whose lazy stream stopped short
+   accepts what the gate refuses — the one place the lazy stream and the
+   gate disagree, stated, closed at the gate.
+3. **The loader pins' entrypoint streams once.** The two fixtures are
+   streamed to their end under the receipt, each case loaded fresh on
+   that state by `ld_reroot`; a case's records are its own module's,
+   by rule 2. The three cases that leaned on the stream stopping short
+   are restated: `str_no_string` and `arith_unreached` hold by the
+   horizon, `registry_native` is the refusal of rule 2 (the finding it
+   pinned stands for a lazy driver, `define_test.sh` reads that dump).
+
+**Slice 3.25 as built** (2026-10-09): as the rules.
+
+- **Rule 1.** `kernel/loader.shard`: `init_all` is `init_through` with
+  the target `Anon`, which the stream's end answers; `ld_reroot l root`
+  is `load0` with the environment, the Init state, the ordinals and the
+  receipt of `l`. Nothing of a driver changed (`load.shard`,
+  `prove.shard` stream lazily as before).
+- **Rule 2.** `init_through` consults `ords_find` on the ordinal table,
+  not `env_find`; `init_horizon` has no fall-back (a name not in the
+  table leaves the module's horizon). `elab.shard` `el_sees` (in the
+  environment and `visible` from the module's scope) is the one
+  availability test: `first_missing` and `int_of_nat_visible` through
+  it, `tactic.shard`'s `has_env_const` replaced by it, `arith.shard`'s
+  `ar_has` and the linearization's environment parameter replaced by
+  the elaborator state, `classify.shard`'s `read_estr` asking
+  `visible` before the environment. `derive.shard`'s `dv_has` already
+  asked both. The loader's `name_taken` stays the environment's: K's
+  rule.
+- **Rule 3.** `kernel/test/loader_pins_test.shard` builds one load of
+  the two fixtures under the receipt, streams it by `init_all` (its
+  records printed first, `INIT (all): 3523 declarations admitted`),
+  and runs each case on `ld_reroot` of it through the kit's
+  `load_all`; the three pins restated as rule 3 says. The entrypoint:
+  225 cases in 33 s under the receipt against 783 s (the Init stream
+  18 s of it; the cases 15 s), and 57 s without a receipt, the
+  checked stream once.
+- **Not changed, stated:** the shell tests are one load each and stay
+  lazy; `path_test`'s four loads of the Init stream (slice 3.24 rule
+  4) are four processes, which a shared load in one process does not
+  reach — the persistent session of law §9.3's prepared handle is
+  phase 4's.
 
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
@@ -5715,3 +5789,19 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     the consumer `List.get`'s realization; a view of an Init
     definition whose matcher K does not regenerate (`Option.getD`).
     **Ratified 2026-10-09.**
+59. **Slice 3.25, the shared Init load (ruled 2026-10-09 at the
+    boundary after R75 and R76; §8.4) — for ratification.** (a) **The
+    Init stream is replayable**: streamed once to its end, every root
+    of a process loaded fresh on it (`init_all`, `ld_reroot`); a
+    driver's lazy stream unchanged. (b) **The horizon is the module's,
+    never the stream's**: every availability gate asks the scope, and
+    an `(import Init NAME)` is answered from the ordinal table. (c)
+    **Init's names are Init's**: a declaration named as an Init
+    constant is refused wherever the environment holds it, which the
+    release gate always does; a lazy driver that stopped short accepts
+    what the gate refuses — stated as the one disagreement, closed at
+    the gate; rejected: a name index of the export for the driver (a
+    second file beside the receipt, for a case the gate catches). (d)
+    **The loader pins' entrypoint streams once** — 783 s to 33 s — and
+    the three pins that leaned on the stream stopping short are
+    restated, one of them (`registry_native`) now the refusal of (c).

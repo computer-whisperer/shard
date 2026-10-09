@@ -2660,6 +2660,28 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-09 — slice 3.25 built: the shared Init load (`LANGUAGE.md`
+  §8.4 slice 3.25; §13 item 59).** Ruled at the boundary after R75 and
+  R76 (item 57's stated lever, the user: "Agreed with A first, then C's
+  design"). `loader.shard` `init_all` streams the export to its end and
+  `ld_reroot` starts a fresh root load from a load's Init state; the
+  loader pins' entrypoint streams the two fixtures once and runs its 225
+  cases on it — 33 s under the receipt from 783 s (the stream 18 s, the
+  cases 15 s), 57 s with the stream checked. The shared environment
+  exposed three pins that had leaned on the stream stopping short, and
+  the rule behind them: a module's Init horizon is the only measure of
+  what it sees — every availability gate now asks the scope (`elab.shard`
+  `el_sees`; `arith`'s kit, the `WellFounded` kit, a `"…"` literal's
+  `String`), an `(import Init NAME)` is answered from the ordinal table
+  with no fall-back to the stream's count — and Init's names are Init's:
+  a declaration named as an Init constant is refused wherever the
+  environment holds it (`name_taken`; K's `already_declared`), which the
+  release gate always does; a lazy driver that stopped short accepts
+  what the gate refuses, the one disagreement, stated. `registry_native`
+  is that refusal now; the finding it pinned (a registry row never
+  speaks for a native declaration bearing its name) stands for a lazy
+  driver and `define_test.sh` reads that dump. Drivers stream lazily as
+  before; `path_test`'s four loads are four processes, out of reach.
 - **2026-10-09 — items 57 and 58 ratified by the user** (the Init cache's
   five decisions, the connected path's three), without reservation;
   `LANGUAGE.md`'s status block carries them. Every §13 item through 58 is
