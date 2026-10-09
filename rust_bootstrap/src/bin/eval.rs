@@ -204,7 +204,7 @@ fn run() -> ExitCode {
 /// The World effect handler: performs the real I/O for each stuck extern call.
 /// World = (World clock); it is each extern's LAST argument, returned bumped by
 /// one (matching the `*_ticks` clock axioms). Covers the eval app's surface —
-/// get_args / read_file / write / exit.
+/// get_args / read_file / read_range / write / exit.
 ///
 /// The extern boundary speaks RAW BYTES (issue #2 Phase 3): every `(List Int)`
 /// payload is a byte sequence (each element 0..256), not Unicode codepoints.
@@ -234,6 +234,30 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
                 Ok(contents) => Ok(ctor("Pair", vec![ctor("Some", vec![byte_list(&contents)]), w1])),
                 Err(_) => Ok(ctor("Pair", vec![ctor("None", vec![]), w1])),
             },
+            // a byte range of a file: at most n bytes from offset off, as
+            // (Some bytes) — fewer at the file's end, an empty list past it —
+            // or None on any read error or a negative offset or count
+            // (v3/kernel/host.shard read_range; LANGUAGE.md §8.4 slice 3.26).
+            "read_range" => {
+                let off = match &args[1] { ast::Expr::IntLit(n) => n.to_u64(), _ => None };
+                let n = match &args[2] { ast::Expr::IntLit(n) => n.to_usize(), _ => None };
+                let got = match (off, n) {
+                    (Some(off), Some(n)) => {
+                        use std::io::{Read as _, Seek as _};
+                        std::fs::File::open(path_of_bytes(&args[0])).and_then(|mut f| {
+                            f.seek(std::io::SeekFrom::Start(off))?;
+                            let mut buf = Vec::new();
+                            f.take(n as u64).read_to_end(&mut buf)?;
+                            Ok(buf)
+                        }).ok()
+                    }
+                    _ => None,
+                };
+                Ok(match got {
+                    Some(bytes) => ctor("Pair", vec![ctor("Some", vec![byte_list(&bytes)]), w1]),
+                    None => ctor("Pair", vec![ctor("None", vec![]), w1]),
+                })
+            }
             // directory entries as (Some (List (Pair is_dir name))), or None if
             // the path is not a readable directory. Each entry is a
             // (Pair Bool (List Int)): the is-directory flag plus the entry's
@@ -319,7 +343,7 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
                 std::process::exit(code);
             }
             other => Err(format!(
-                "unknown extern `{}` (eval handler: get_args/read_file/read_dir/write/write_file/write_line/emit/read_key/exit)",
+                "unknown extern `{}` (eval handler: get_args/read_file/read_range/read_dir/write/write_file/write_line/emit/read_key/exit)",
                 other
             )),
         }

@@ -2660,6 +2660,45 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-09 — slice 3.26 ruled and landing 1 built: Init on demand
+  (`LANGUAGE.md` §8.4 slice 3.26; §13 item 60).** At the boundary after
+  3.25 the library arc's design was discussed: citing Init wherever
+  Init has the statement costs a far lemma's position in the export
+  under the prefix stream, and the closure-fixture cutter proposed for
+  it was rejected by the user as a workaround ("What is stopping us
+  from ingesting the whole thing in a timely manner, or caching it such
+  that we only need to ingest it once in a given environment?"). The
+  answer measured: the loader parses the export in shard at 0.8 MB/s;
+  the whole export checked under the interpreter is 76 min and 8 GB;
+  the receipt caches K's verdict, not the environment. Three designs
+  weighed — an environment image (Lean's `.olean`), a session server,
+  demand-driven loading from an indexed export — and the third ruled
+  ("C sounds like the reasonable approach, compounded with faster base
+  operation once we regularly compile K"), after a kill-test on the
+  loading unit: a declaration's line-level closure is under one
+  percent of the export (`Int.ediv_emod_unique` 690 records / 35,076
+  lines; `Nat.and_comm` 746 / 42,468; `List.sum` 25 / 686), a
+  block-level closure a third of it (15,482 blocks / 2,240,409 lines
+  for the same lemma; a shared node lives in whichever block first
+  needed it); a theorem admitted by its statement alone would be five
+  to ten times smaller again (143 / 3,098) and is deferred as a K
+  change. Landing 1: `kernel/index.shard` and `initindex.shard` (the
+  record table and the name table, built by one pass, read by range,
+  verified by a second pass), `host.shard`'s `read_range` in the
+  bootstrap and the chain's runtime, `test/init_index.sh`,
+  `test/index_test.sh` (the 38th entrypoint). The export's 57,977
+  records and 59,433 names (347,714,179 bytes) index in 952 s and verify in
+  866 s on the bootstrap; the fixtures' in 46 s and 63 s. Compiled by
+  route 1 (`v3/build.sh v3/kernel/initindex.shard v3/bin/initindex`,
+  4 s; the pass's state rewritten as a plain type with accessors when the
+  chain refused the record sugar) the driver indexes the export in 68 s
+  and verifies it in 71 s, the tables byte-identical to the bootstrap's. Found: the
+  export's keys are alphabetical within a line, so an id is found by
+  its key; the driver's first parity run refused a pattern variable
+  shadowing `n2` and an unused open, fixed. Gates: `index_test` 10
+  checks in 125 s, parity byte-identical over 31 closures and 130,579
+  declarations in 338 s, the full suite's 38 entrypoints with 0 failed
+  in 613 s.
 - **2026-10-09 — pipeline 559 green on `d0ee4f3`: engine 53 s; corpus 1,448 s at the baseline; v3 4,610 s of a 3 h limit — 891 s shorter than pipeline 556's 5,501 s (37 entrypoints with 0 failed in 1,491 s; the loader pins' entrypoint 87 s with 225 cases against 2,227 s; `store_test` 1,157 s, the suite's wall clock now; `path_test` 774 s; parity byte-identical over 30 closures and 130,551 declarations in 704 s; `engine_test` 254 s; route 1's native build of the kernel; the replay 2,498 s at 32.4 GB); T0 accepted 57,977, 20 pinned, closures identical. Slice 3.25 is closed.**
 - **2026-10-09 — slice 3.25 built: the shared Init load (`LANGUAGE.md`
   §8.4 slice 3.25; §13 item 59).** Ruled at the boundary after R75 and

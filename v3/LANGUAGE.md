@@ -1800,6 +1800,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.23 | the Init cache (ruled 2026-10-08 on GPT-6's R75, the feedback cost; item 57; the design and the as-built below; **landed 2026-10-08; closed on pipeline 554**): the loader admits the pinned export under a T0 run's receipt, the typing judgments skipped — K's verdict cached, no second format, the release gate untouched | a load's Init cost and the loader pins' wall clock |
 | 3.24 | the connected path (ruled 2026-10-09 on GPT-6's R76; item 58; the design and the as-built below; **landed 2026-10-09; closed on pipeline 556**): `(dif h C T F)`, the dependent if with its hypothesis named — the branch-local proof joint; `examples/path`, law §12.4's first connected path assembled as one test and broken at each joint; its cost measured | the one phase-3 joint still missing; the composition cost before the broad port |
 | 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built below; **landed 2026-10-09; closed on pipeline 559**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s | the suite's wall clock before the library arc multiplies the pins |
+| 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landing 1 landed 2026-10-09; landings 2–3 open**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -4665,6 +4666,138 @@ many roots has no reason to read it more than once. Three rules:
   reach — the persistent session of law §9.3's prepared handle is
   phase 4's.
 
+**Slice 3.26 — Init on demand: the export indexed, a module's closure
+read by range, no fixture** (ruled 2026-10-09 at the boundary after
+slice 3.25, on the library arc's first question; §13 item 60). The
+library arc cites Init wherever Init has the statement, and an import
+costs its position in the export (slice 3.17's measurement above): a
+far lemma such as `Int.ediv_emod_unique` at line 3,409,839 would admit
+half the export. The loader parses the export in shard under the
+bootstrap at 0.8 MB/s (the two fixtures, 14.3 MB, in 18 s under the
+receipt); the export is 333 MB; the whole of it checked under the
+interpreter is 76 minutes and 8 GB resident; and the receipt caches
+K's verdict, not the environment. Measured on the export: the closure
+of `Int.ediv_emod_unique` — every line its type and value reach,
+through the hash-consed nodes — is 690 records and 35,076 lines, under
+one percent of the export; `Nat.and_comm` 746 and 42,468; `List.sum`
+25 and 686. A closure cut at the granularity of a record's block (the
+lines a record emits before its own) is 15,482 blocks and 2,240,409
+lines for the same lemma, a third of the export: a shared node lives in
+whichever block first needed it. So the unit is the line, and a load
+reads what it cites. Six rules:
+
+1. **The index.** One pass over the export (`kernel/index.shard`;
+   `initindex.shard EXPORT INDEX NAMES`) writes two tables beside the
+   receipt, never loaded whole: the record table — one fixed-width row
+   per record in export order: its kind, the byte offset and length of
+   its block, and the first name, level and expression id the block
+   holds (or, holding none, the next id the export assigns), so the
+   block holding an id is the last row whose first id is at most it —
+   and the name table, one fixed-width row per declaration name as
+   `show_name` renders it, sorted bytewise with its ordinal, so a name
+   is a binary search of range reads. Node ids are the export's,
+   assigned in emission order (checked over the export), which is what
+   makes a row per record enough. The header rows carry the export's
+   byte count; an index over another export is refused. The pass
+   refuses an ambiguous rendering (two names rendering alike) and a
+   name past the row's width.
+2. **The range read.** `host.shard` gains `read_range path off n`: at
+   most n bytes from off, fewer at the file's end, `None` where the
+   file cannot be read — beside `read_file`, in the bootstrap's handler
+   and the chain's runtime. The loader reads the export itself
+   (`init.ndjson`); the 20,000-line chunks stay the replay's.
+3. **The load.** `(import Init NAME)` takes NAME's ordinal from the
+   name table as the module's horizon (slice 3.21b rule 2 unchanged).
+   A module's demand is every identifier of its forms under the
+   candidates resolution tries (`scope_candidates`: the module's
+   prefix, the opened prefixes, `Init.NAME`, the bare name) and the kit
+   lists the gates hold (the elaborator's `first_missing` lists, the
+   `WellFounded` kit, `arith`'s kit, the derivations', `String`),
+   filtered to the names the table places below the horizon. The
+   loader walks each demanded declaration's closure by range reads —
+   its record line, the nodes its type and value reach, their names
+   and levels, the records of the constants they name — sorts the
+   lines into export order and feeds K that sub-stream through the
+   path the prefix stream took (`process_record`): checked without a
+   receipt, admitted under one. Node ids stay the export's; K's tables
+   are sparse; the records are byte-identical to the stream's.
+4. **The law unchanged.** Visibility is the ordinal below the horizon
+   (`init_within`); a materialized record carries its true ordinal, so
+   a far name one module pulled in stays invisible to a module with a
+   nearer horizon. Resolution asks the environment first
+   (`const_arity`), so a name not materialized is simply absent; a
+   name the elaborator constructs that no kit list names is a refusal
+   by that name (`unknown_constant`) and a defect of the list, which
+   frontend parity finds. No materialize-and-retry: one mechanism.
+5. **Init's names are Init's, from the index.** A native declaration
+   bearing a name the name table holds is refused (`name_taken`)
+   wherever it loads — the driver and the release gate agree; §13 item
+   59(c)'s index, as reopened on `List.sum`.
+6. **No fixture.** The prefix fixtures (`init_prefix_int.ndjson`,
+   `init_prefix_str_tail.ndjson`, `init_prefix_3000.ndjson`) and their
+   dependents go to the export, which `v3/export.sh` provides on every
+   machine; a closure checked costs seconds (K's check about 7 ms a
+   record: the fixture's 24 s over 3,523), so no test needs the
+   receipt, which stays a speed lever; `init_index.sh` keeps the index
+   current as `init_receipt.sh` keeps the receipt.
+
+Three landings: (1) the index, the range read, a test that reads every
+record back by its offset and every name by its search; (2) the loader
+on demand — the prefix stream, the stream state and the chunk list
+deleted, the demand set, the walk and the sub-stream, `name_taken` from
+the table, the fixtures deleted — under the loader pins, parity and the
+suite; (3) the receipt over the export, CI in the order export, build,
+index, suite, replay. Weighed and deferred, each with the consumer that
+would reopen it: a theorem admitted by its statement alone (its closure
+five to ten times smaller — 143 records and 3,098 lines for
+`Int.ediv_emod_unique` — but a change to K's admit path, which builds
+the declaration from the node tables); the loader native (its files are
+not route 1's); a serialized environment (Lean's `.olean`), whose only
+consumer, the replay, checks. Rejected: a native parse primitive (a
+second JSON reader for a second per load), a materialize-and-retry loop
+(a second mechanism), the exporter emitting the index (upstream at a
+pinned commit; offsets are a property of the text held here).
+
+**Slice 3.26 as built, landing 1** (2026-10-09): the index and the
+range read, as rules 1 and 2.
+
+- **Rule 1.** `kernel/index.shard` is the library — the two formats,
+  the pass (`ix_build`: windows of the export by range, every line
+  placed, the name lines entered, the record rows rendered, the name
+  rows sorted), the readers the loader will use (`ix_read_header`,
+  `ix_read_row`, `ix_lookup`: the binary search of the name table;
+  `ix_block_of_id`: the last row whose first id is at most the id) and
+  the check (`ix_verify`: a second pass over the export comparing every
+  record's row and looking every name of it up, the export's byte count
+  against the header's, the name table's order). `kernel/initindex.shard`
+  is the driver, `test/init_index.sh` keeps `v3/.cache/init.index` and
+  `init.names` current over the export (stamped by the export's pin and
+  size and the index's sources: a kernel edit does not stale it).
+  Measured: the two fixtures (3,523 records, 3,985 names, 14.3 MB)
+  build in 46 s and verify in 63 s; the export (347,714,179 bytes, 57,977
+  records, 59,433 names) builds in 952 s and verifies in 866 s on the
+  bootstrap — once per environment. Compiled by route 1 (`v3/build.sh v3/kernel/initindex.shard
+  v3/bin/initindex`, 4 s with `bin/shard_eval` booting the chain; the
+  pass's state is a plain type with accessors, as K's `Run`, since the
+  chain compiles no record sugar) the driver indexes the export in 68 s
+  and verifies it in 71 s, the tables byte-identical to the bootstrap's;
+  `init_index.sh` prefers the binary when it is newer than the sources. The index is 62 bytes a record and
+  218 a name: 3.6 MB and 13 MB over the export.
+- **Rule 2.** `read_range` in `host.shard`, the bootstrap's handler
+  (`eval.rs`) and the chain's runtime (`tools/codegen/rt.h`,
+  `rt_read_range`); the export's single file is read, never a chunk.
+- **The test.** `test/index_test.sh` (the suite's 38th entrypoint) builds
+  the fixtures' index, verifies it, requires the record count K's stream
+  admits and the name rows of a definition, an inductive block's type
+  and its recursor, and refuses three tampered inputs by name: a name
+  row's ordinal changed, a record row's length changed, the export a
+  byte longer than the header says. The driver is in parity's closures.
+- **Found on the way:** export lines carry their keys in alphabetical
+  order, so an expression line reads `{"app":…,"ie":N}` and the id is
+  found by its key, not its position; the fixtures' records are 3,523
+  as K counts them, and the quotient's four records each name their own
+  constant.
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built
@@ -5812,3 +5945,21 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     **The loader pins' entrypoint streams once** — 783 s to 33 s — and
     the three pins that leaned on the stream stopping short are
     restated, one of them (`registry_native`) now the refusal of (c).
+60. **Slice 3.26, Init on demand (ruled 2026-10-09 at the boundary
+    after slice 3.25; §8.4) — for ratification.** (a) **The export is
+    indexed, never streamed, by a load**: a record table and a name
+    table built once per environment, read by `read_range`, the
+    export's node ids kept. (b) **A module materializes the closure of
+    what it cites**: its identifiers' candidates and the gates' kit
+    lists below the horizon, walked by range reads, fed to K as a
+    sub-stream in export order; checked without a receipt, admitted
+    under one. (c) **The horizon law stands**: visibility is the
+    ordinal below the horizon; a name not materialized is absent to
+    resolution; a constructed name missing from a kit list is a refusal
+    by name and a defect of the list, found by parity — no retry. (d)
+    **Init's names are Init's from the name table**, closing item
+    59(c). (e) **The fixtures go**; the receipt stays a speed lever.
+    (f) **Deferred with consumers named**: a theorem admitted by its
+    statement, the loader native, a serialized environment. *Measured
+    at the ruling:* line-level closures under one percent of the
+    export; block-level closures up to a third (the unit is the line).

@@ -1266,6 +1266,36 @@ Gates: the 225 loader pins 0 failed in 33 s under the receipt and 57 s without, 
 Slice 3.25 is closed: **pipeline 559 green on `d0ee4f3`: engine 53 s; corpus 1,448 s at the baseline; v3 4,610 s of a 3 h limit — 891 s shorter than pipeline 556's 5,501 s (37 entrypoints with 0 failed in 1,491 s; the loader pins' entrypoint 87 s with 225 cases against 2,227 s; `store_test` 1,157 s, the suite's wall clock now; `path_test` 774 s; parity byte-identical over 30 closures and 130,551 declarations in 704 s; `engine_test` 254 s; route 1's native build of the kernel; the replay 2,498 s at 32.4 GB); T0 accepted 57,977, 20 pinned, closures identical.**
 
 
+**Slice 3.26 landing 1 (2026-10-09) — Init on demand: the index and
+the range read** (`LANGUAGE.md` §8.4 slice 3.26; §13 item 60). Ruled at
+the boundary after 3.25 on the library arc's first question — citing
+Init wherever Init has the statement would cost a far lemma's position
+in the export — and against the measurement that a declaration's
+closure is under one percent of the export (`Int.ediv_emod_unique`:
+690 records, 35,076 lines) while a block-level cut is a third of it:
+the unit is the line, and a load reads what it cites.
+
+- **The index** (`kernel/index.shard`, `initindex.shard`): a record
+  table (62 bytes a record: kind, block offset and length, the block's
+  first ids) and a name table (218 bytes a name, sorted) over the
+  export, read by range and never loaded whole; `--verify` reads both
+  back against the export. The export's 57,977 records and 59,433 names
+  index in 952 s and verify in 866 s on the bootstrap, once per
+  environment (`test/init_index.sh`). Compiled by route 1 (`v3/build.sh
+  v3/kernel/initindex.shard v3/bin/initindex`) the driver indexes the
+  export in 68 s and verifies it in 71 s, the tables byte-identical to
+  the bootstrap's.
+- **The range read** (`host.shard` `read_range`): in the bootstrap's
+  handler and the chain's runtime.
+- **The test** (`test/index_test.sh`, the 38th entrypoint): the
+  fixtures' index built (46 s) and verified (63 s), the record count
+  K's stream admits, three tampered inputs refused by name.
+
+Gates: `index_test` 10 checks in 125 s, parity byte-identical over 31 closures and 130,579 declarations in 338 s, the full suite's 38 entrypoints with 0 failed in 613 s.
+
+Landings 2 (the loader on demand, the fixtures deleted) and 3 (the
+receipt over the export, CI reordered) follow.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

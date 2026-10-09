@@ -806,6 +806,26 @@ static value_t rt_read_file(value_t path, value_t w) {
   free(buf);
   return rt_pair(rt_some(acc), w);
 }
+/* a byte range of a file: at most n bytes from offset off as (Some bytes) —
+ * fewer at the file's end, an empty list past it — or None on an I/O error or
+ * a negative offset or count. Mirrors eval.rs read_range (v3/kernel/host.shard;
+ * LANGUAGE.md §8.4 slice 3.26). */
+static value_t rt_read_range(value_t path, value_t off, value_t n, value_t w) {
+  int64_t o = rt_untag(off), k = rt_untag(n);
+  if (o < 0 || k < 0) return rt_pair(rt_none_, w);
+  char *p = rt_cstr(path, 0);
+  FILE *f = fopen(p, "rb"); free(p);
+  if (!f) return rt_pair(rt_none_, w);
+  if (fseek(f, (long)o, SEEK_SET) != 0) { fclose(f); return rt_pair(rt_none_, w); }
+  unsigned char *buf = malloc((size_t)k + 1);
+  size_t got = k > 0 ? fread(buf, 1, (size_t)k, f) : 0;
+  if (ferror(f)) { fclose(f); free(buf); return rt_pair(rt_none_, w); }
+  fclose(f);
+  value_t acc = rt_nil_;
+  for (size_t i = got; i > 0; i--) acc = rt_cons(rt_tag_int(buf[i-1]), acc);
+  free(buf);
+  return rt_pair(rt_some(acc), w);
+}
 /* directory entries as (Some (List (Pair is_dir name))), or None if the path
  * is not a readable directory. Mirrors eval.rs read_dir: each entry is a
  * (Pair Bool (List Int)) of the is-directory flag and the basename bytes,
